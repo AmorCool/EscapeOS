@@ -349,6 +349,35 @@
     return nil;
 }
 
+- (BOOL)uninstallAppWithBundleId:(NSString *)bundleId error:(NSError **)error {
+    if (!bundleId || bundleId.length == 0) {
+        if (error) *error = [self _error:@"Bundle identifier is empty." code:-1];
+        return NO;
+    }
+    // Make sure the pairing-file + LocalDevVPN tunnel is up.
+    if (![self ensureHeartbeatWithError:error]) {
+        return NO;
+    }
+    if (_adapter && _handshake) {
+        NSString *errStr = nil;
+        BOOL ok = uninstall_app(_adapter, _handshake, bundleId, &errStr);
+        if (!ok && error) {
+            *error = [self _error:(errStr ?: @"Uninstall over RPPairing tunnel failed.") code:-17];
+        }
+        return ok;
+    }
+    if (_provider) {
+        NSString *errStr = nil;
+        BOOL ok = uninstall_app_from_provider(_provider, bundleId, &errStr);
+        if (!ok && error) {
+            *error = [self _error:(errStr ?: @"Uninstall over lockdown tunnel failed.") code:-17];
+        }
+        return ok;
+    }
+    if (error) *error = [self _error:@"Tunnel not connected. Import a pairing file and enable LocalDevVPN." code:-1];
+    return NO;
+}
+
 - (void)dealloc {
     [self _freeTunnelHandles];
 }

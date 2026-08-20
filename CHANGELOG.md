@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.2] - 2026-08-20
+
+### Fixed
+
+- **Apps tab · 卸载在 iOS 26 上真正可用**. v0.2.1 在进程内通过 `dlopen("/usr/lib/libmis.dylib")` 直接调用 `MobileInstallationUninstall`。`installd`（该调用经 XPC 转发的目标）以调用方权限校验拒绝：EscapeOS 仅有 `get-task-allow`，没有 `com.apple.private.mobileinstallation.allow-uninstall`，于是返回 `-1`，界面表现为「卸载目标应用失败」。现在卸载改走 **配对文件 + LocalDevVPN 隧道**（`TunnelContext` → `installation_proxy_uninstall`，iOS 26.4+ 走 RPPairing、iOS 18 走 lockdown），与应用列表走的是同一套经配对文件认证的通道。`installd` 因信任的配对文件而放行，无需进程内私有 entitlement。iOS 仍可能弹出系统「删除 App」确认框，属正常，按成功处理。
+
 ## [0.2.1] - 2026-08-20
 
 ### Added
@@ -15,18 +21,6 @@
 ### Versioning
 
 > This version is `0.2.1` (not `0.4.0` / `0.3.1`) following the project's no-jump convention — feature increments stay within the same minor (`0.2.x`) until a milestone justifies a minor bump.
-
-## [0.3.0] - 2026-08-20
-
-### Added
-
-- **Extract app icon from the Apps list**: long-press any app → "提取图标" → iOS share sheet lets the user save the PNG to Photos / Files / AirDrop. The share sheet materializes a temporary file with a meaningful name (e.g. `Filza Mod 图标.png`) so the destination path is sensible.
-- **LiveClean UUID display**: each LiveClean row now shows the container UUID beneath the subtitle (monospaced, single line, truncated). The Reclaim screen for that guest shows the same UUID under the app name (also selectable for copy).
-- **UUID search**: the LiveClean `.searchable` box now matches on the container UUID in addition to display name / bundle id / host name.
-
-### Fixed
-
-- **Shared apps invisible to LiveClean**: apps that were "Shared" via LiveContainer's Share App flow store their container under `Documents/Shared/Data/Application/<UUID>/` instead of the private `Documents/Data/Application/<UUID>/`. Discovery now walks both trees and labels unmatched shared guests as `<LiveContainer> (共享)`.
 
 ## [0.2.0] - 2026-08-20
 

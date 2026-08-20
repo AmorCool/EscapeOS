@@ -92,7 +92,9 @@ final class AppListViewModel: ObservableObject {
     }
 
     /// Sequentially uninstall a batch of user apps. Each call goes through
-    /// `MobileInstallationUninstall` via the installd XPC bridge. Failures
+    /// the pairing-file + LocalDevVPN tunnel (`TunnelContext` →
+    /// `installation_proxy_uninstall`), authenticated by the trusted pairing
+    /// file so `installd` accepts it without a private entitlement. Failures
     /// are collected and surfaced in `uninstallStatus` once the batch
     /// completes — we keep going rather than aborting, so the user gets
     /// partial progress even when one bundle id rejects.
@@ -127,8 +129,8 @@ final class AppListViewModel: ObservableObject {
 }
 
 /// Scrollable list of installed user apps, with search, A–Z jump index,
-/// and a multi-select mode that uninstalls chosen apps through
-/// `MobileInstallationUninstall`.
+/// and a multi-select mode that uninstalls chosen apps through the
+/// pairing-file + LocalDevVPN tunnel (`installation_proxy_uninstall`).
 struct AppListView: View {
     @ObservedObject var viewModel: AppListViewModel
     @State private var searchText = ""

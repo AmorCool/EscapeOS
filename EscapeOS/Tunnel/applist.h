@@ -21,4 +21,13 @@ NSDictionary *getAllAppsInfoFromProvider(struct IdeviceProviderHandle *provider,
 UIImage *getAppIconFromProvider(struct IdeviceProviderHandle *provider, NSString *bundleID, NSString **error);
 id plist_to_objc_object(plist_t plist);
 
+/// Uninstall a user app through the RPPairing/RSD tunnel. The pairing file
+/// authenticates the operation with `installd`, so no in-process
+/// `com.apple.private.mobileinstallation.allow-uninstall` entitlement is
+/// needed. Returns YES on success; on failure fills `error` and returns NO.
+BOOL uninstall_app(struct AdapterHandle *adapter, struct RsdHandshakeHandle *handshake, NSString *bundleID, NSString **error);
+
+/// Same as `uninstall_app`, but over the classic lockdown tunnel (iOS 18).
+BOOL uninstall_app_from_provider(struct IdeviceProviderHandle *provider, NSString *bundleID, NSString **error);
+
 #endif /* APPLIST_H */

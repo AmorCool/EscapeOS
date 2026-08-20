@@ -45,6 +45,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// Fetch an app's SpringBoard icon PNG.
 - (nullable UIImage *)getAppIconWithBundleId:(NSString *)bundleId error:(NSError **)error;
 
+/// Uninstall a user app through the active tunnel (RPPairing on iOS 26.4+,
+/// lockdown on iOS 18). The pairing file authenticates the operation with
+/// `installd`, so no in-process `com.apple.private.mobileinstallation.allow-uninstall`
+/// entitlement is required (EscapeOS only carries `get-task-allow`).
+/// Returns YES on success; on failure fills `error`.
+- (BOOL)uninstallAppWithBundleId:(NSString *)bundleId error:(NSError **)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -297,6 +297,42 @@ UIImage *getAppIconFromProvider(struct IdeviceProviderHandle *provider, NSString
     return icon;
 }
 
+BOOL uninstall_app(struct AdapterHandle *adapter, struct RsdHandshakeHandle *handshake, NSString *bundleID, NSString **error) {
+    InstallationProxyClientHandle *client = NULL;
+    struct IdeviceFfiError *err = installation_proxy_connect_rsd(adapter, handshake, &client);
+    if (err) {
+        if (error) *error = [NSString stringWithFormat:@"无法连接安装代理（RPPairing）：%s", err->message];
+        idevice_error_free(err);
+        return NO;
+    }
+    err = installation_proxy_uninstall(client, [bundleID UTF8String], NULL);
+    installation_proxy_client_free(client);
+    if (err) {
+        if (error) *error = [NSString stringWithFormat:@"卸载失败（RPPairing）：%s", err->message];
+        idevice_error_free(err);
+        return NO;
+    }
+    return YES;
+}
+
+BOOL uninstall_app_from_provider(struct IdeviceProviderHandle *provider, NSString *bundleID, NSString **error) {
+    InstallationProxyClientHandle *client = NULL;
+    struct IdeviceFfiError *err = installation_proxy_connect(provider, &client);
+    if (err) {
+        if (error) *error = [NSString stringWithFormat:@"无法连接安装代理（lockdown）：%s", err->message];
+        idevice_error_free(err);
+        return NO;
+    }
+    err = installation_proxy_uninstall(client, [bundleID UTF8String], NULL);
+    installation_proxy_client_free(client);
+    if (err) {
+        if (error) *error = [NSString stringWithFormat:@"卸载失败（lockdown）：%s", err->message];
+        idevice_error_free(err);
+        return NO;
+    }
+    return YES;
+}
+
 id plist_to_objc_object(plist_t plist) {
     switch (plist_get_node_type(plist)) {
         case PLIST_NONE: {
