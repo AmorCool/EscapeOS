@@ -34,7 +34,7 @@ struct FileBrowserView: View {
     var body: some View {
         Group {
             if vm.isLoading && vm.items.isEmpty {
-                ProgressView("Opening container…")
+                ProgressView("正在打开容器…")
             } else if let error = vm.errorMessage, vm.items.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle")
@@ -43,7 +43,7 @@ struct FileBrowserView: View {
                     Text(error)
                         .multilineTextAlignment(.center)
                         .padding()
-                    Button("Retry") { vm.open(vm.currentPath) }
+                    Button("重试") { vm.open(vm.currentPath) }
                 }
             } else {
                 fileList
@@ -51,11 +51,11 @@ struct FileBrowserView: View {
         }
         .navigationTitle(selecting ? selectionTitle : vm.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, prompt: "Filter this folder")
+        .searchable(text: $searchText, prompt: "筛选此目录")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if selecting {
-                    Button(allVisibleSelected ? "Deselect All" : "Select All") {
+                    Button(allVisibleSelected ? "全部取消选择" : "全选") {
                         if allVisibleSelected {
                             selected.removeAll()
                         } else {
@@ -63,7 +63,7 @@ struct FileBrowserView: View {
                         }
                     }
                     .disabled(visibleItems.isEmpty)
-                    Button("Done") { exitSelection() }
+                    Button("完成") { exitSelection() }
                 } else {
                     if !clipboard.isEmpty {
                         Button {
@@ -74,7 +74,7 @@ struct FileBrowserView: View {
                         .disabled(vm.isPasting)
                         .accessibilityLabel(clipboard.pasteTitle)
                     }
-                    Button("Select") { enterSelection() }
+                    Button("选择") { enterSelection() }
                     Menu {
                         if !clipboard.isEmpty {
                             Button {
@@ -83,26 +83,26 @@ struct FileBrowserView: View {
                                 Label(clipboard.pasteTitle, systemImage: "doc.on.clipboard")
                             }
                             .disabled(vm.isPasting)
-                            Button("Clear Clipboard", role: .destructive) {
+                            Button("清空剪贴板", role: .destructive) {
                                 clipboard.clear()
                             }
                         }
                         Button {
-                            createName = "New File.txt"
+                            createName = "新文件.txt"
                             createKind = .file
                         } label: {
-                            Label("New File", systemImage: "doc.badge.plus")
+                            Label("新建文件", systemImage: "doc.badge.plus")
                         }
                         Button {
-                            createName = "New Folder"
+                            createName = "新建文件夹"
                             createKind = .folder
                         } label: {
-                            Label("New Folder", systemImage: "folder.badge.plus")
+                            Label("新建文件夹", systemImage: "folder.badge.plus")
                         }
                         Button {
                             showImporter = true
                         } label: {
-                            Label("Import from Files", systemImage: "square.and.arrow.down")
+                            Label("从文件导入", systemImage: "square.and.arrow.down")
                         }
                     } label: {
                         Image(systemName: "plus")
@@ -152,23 +152,23 @@ struct FileBrowserView: View {
             ActivityShareView(url: payload.url)
         }
         .alert(item: $vm.exportError) { err in
-            Alert(title: Text("Could not share file"), message: Text(err.message), dismissButton: .default(Text("OK")))
+            Alert(title: Text("无法分享文件"), message: Text(err.message), dismissButton: .default(Text("好")))
         }
         .alert(item: $vm.operationError) { err in
-            Alert(title: Text("File Operation Failed"), message: Text(err.message), dismissButton: .default(Text("OK")))
+            Alert(title: Text("文件操作失败"), message: Text(err.message), dismissButton: .default(Text("好")))
         }
-        .alert("Archive Password", isPresented: Binding(
+        .alert("压缩包密码", isPresented: Binding(
             get: { vm.unzipPasswordItem != nil },
             set: { if !$0 { vm.clearUnzipPasswordPrompt() } }
         )) {
-            SecureField("Password", text: $archivePassword)
+            SecureField("密码", text: $archivePassword)
                 .disableAutocorrection(true)
                 .autocapitalization(.none)
-            Button("Cancel", role: .cancel) {
+            Button("取消", role: .cancel) {
                 archivePassword = ""
                 vm.clearUnzipPasswordPrompt()
             }
-            Button("Extract") {
+            Button("解压") {
                 if let item = vm.unzipPasswordItem {
                     vm.unzip(item: item, password: archivePassword)
                 }
@@ -177,30 +177,30 @@ struct FileBrowserView: View {
         } message: {
             Text(vm.unzipPasswordMessage)
         }
-        .alert("New \(createKind == .folder ? "Folder" : "File")", isPresented: Binding(
+        .alert("新建 \(createKind == .folder ? "文件夹" : "文件")", isPresented: Binding(
             get: { createKind != nil },
             set: { if !$0 { createKind = nil } }
         )) {
-            TextField("Name", text: $createName)
+            TextField("名称", text: $createName)
                 .disableAutocorrection(true)
                 .autocapitalization(.none)
-            Button("Cancel", role: .cancel) { createKind = nil }
-            Button("Create") {
+            Button("取消", role: .cancel) { createKind = nil }
+            Button("创建") {
                 if let kind = createKind {
                     vm.create(name: createName, kind: kind)
                 }
                 createKind = nil
             }
         }
-        .alert("Rename", isPresented: Binding(
+        .alert("重命名", isPresented: Binding(
             get: { renameItem != nil },
             set: { if !$0 { renameItem = nil } }
         )) {
-            TextField("New name", text: $renameName)
+            TextField("新名称", text: $renameName)
                 .disableAutocorrection(true)
                 .autocapitalization(.none)
-            Button("Cancel", role: .cancel) { renameItem = nil }
-            Button("Rename") {
+            Button("取消", role: .cancel) { renameItem = nil }
+            Button("重命名") {
                 if let item = renameItem {
                     vm.rename(item: item, to: renameName)
                 }
@@ -211,14 +211,14 @@ struct FileBrowserView: View {
             get: { !pendingDelete.isEmpty },
             set: { if !$0 { pendingDelete = [] } }
         )) {
-            Button("Cancel", role: .cancel) { pendingDelete = [] }
-            Button("Delete", role: .destructive) {
+            Button("取消", role: .cancel) { pendingDelete = [] }
+            Button("删除", role: .destructive) {
                 vm.delete(items: pendingDelete)
                 selected.subtract(pendingDelete.map(\.path))
                 pendingDelete = []
             }
         } message: {
-            Text("This cannot be undone. Close the target app first if the file might be in use.")
+            Text("此操作不可撤销。若文件可能被占用，请先关闭目标应用。")
         }
         .sheet(item: $propertiesItem) { item in
             FilePropertiesView(app: app, item: item)
@@ -253,15 +253,15 @@ struct FileBrowserView: View {
 
     private var selectionTitle: String {
         let n = selectedItems.count
-        if n == 0 { return "Select Items" }
-        return n == 1 ? "1 Selected" : "\(n) Selected"
+        if n == 0 { return "选择项目" }
+        return n == 1 ? "已选 1 项" : "已选 \(n) 项"
     }
 
     private var deleteTitle: String {
         let items = pendingDelete
-        if items.count == 1 { return "Delete \(items[0].name)?" }
-        if items.isEmpty { return "Delete?" }
-        return "Delete \(items.count) items?"
+        if items.count == 1 { return "删除 \(items[0].name)？" }
+        if items.isEmpty { return "删除？" }
+        return "删除 \(items.count) 项？"
     }
 
     private var fileList: some View {
@@ -337,35 +337,35 @@ struct FileBrowserView: View {
         VStack(spacing: 0) {
             Divider()
             HStack(spacing: 0) {
-                selectionAction("Copy", "doc.on.doc", enabled: !selectedItems.isEmpty) {
+                selectionAction("复制", "doc.on.doc", enabled: !selectedItems.isEmpty) {
                     FileClipboard.shared.copy(selectedItems, containerPath: app.containerPath)
                 }
-                selectionAction("Cut", "scissors", enabled: !selectedItems.isEmpty) {
+                selectionAction("剪切", "scissors", enabled: !selectedItems.isEmpty) {
                     FileClipboard.shared.cut(selectedItems, containerPath: app.containerPath)
                 }
-                selectionAction("Paste", "doc.on.clipboard", enabled: !clipboard.isEmpty && !vm.isPasting) {
+                selectionAction("粘贴", "doc.on.clipboard", enabled: !clipboard.isEmpty && !vm.isPasting) {
                     vm.paste()
                 }
                 Menu {
                     Button {
                         vm.zip(items: selectedItems)
                     } label: {
-                        Label(selectedItems.count == 1 ? "Compress" : "Compress to Zip", systemImage: "doc.zipper")
+                        Label(selectedItems.count == 1 ? "压缩" : "打包为 Zip", systemImage: "doc.zipper")
                     }
                     .disabled(selectedItems.isEmpty || vm.isZipping)
                     Button {
                         vm.duplicate(items: selectedItems)
                     } label: {
-                        Label("Duplicate", systemImage: "plus.square.on.square")
+                        Label("复制副本", systemImage: "plus.square.on.square")
                     }
                     .disabled(selectedItems.isEmpty)
                     Button {
                         FileClipboard.copyText(
                             selectedItems.map(\.path).joined(separator: "\n"),
-                            confirmation: selectedItems.count == 1 ? "Copied Path" : "Copied Paths"
+                            confirmation: selectedItems.count == 1 ? "已复制路径" : "已复制路径"
                         )
                     } label: {
-                        Label(selectedItems.count == 1 ? "Copy Path" : "Copy Paths", systemImage: "list.clipboard")
+                        Label(selectedItems.count == 1 ? "复制路径" : "复制路径", systemImage: "list.clipboard")
                     }
                     .disabled(selectedItems.isEmpty)
                     if selectedItems.count == 1, let item = selectedItems.first {
@@ -373,25 +373,25 @@ struct FileBrowserView: View {
                             renameName = item.name
                             renameItem = item
                         } label: {
-                            Label("Rename", systemImage: "pencil")
+                            Label("重命名", systemImage: "pencil")
                         }
                         Button {
                             propertiesItem = item
                         } label: {
-                            Label("Properties", systemImage: "info.circle")
+                            Label("属性", systemImage: "info.circle")
                         }
                         if !item.isDirectory {
                             Button {
                                 vm.export(item: item)
                             } label: {
-                                Label("Share / Save to Files", systemImage: "square.and.arrow.up")
+                                Label("分享 / 保存到文件", systemImage: "square.and.arrow.up")
                             }
                             .disabled(vm.isExporting || vm.isZipping)
                         } else {
                             Button {
                                 vm.export(item: item)
                             } label: {
-                                Label("Share Zip", systemImage: "square.and.arrow.up")
+                                Label("打包分享", systemImage: "square.and.arrow.up")
                             }
                             .disabled(vm.isExporting || vm.isZipping)
                         }
@@ -400,14 +400,14 @@ struct FileBrowserView: View {
                     VStack(spacing: 4) {
                         Image(systemName: "ellipsis.circle")
                             .font(.title3)
-                        Text("More")
+                        Text("更多")
                             .font(.caption2)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                 }
                 .disabled(selectedItems.isEmpty)
-                selectionAction("Delete", "trash", enabled: !selectedItems.isEmpty, destructive: true) {
+                selectionAction("删除", "trash", enabled: !selectedItems.isEmpty, destructive: true) {
                     requestDelete(selectedItems)
                 }
             }
@@ -463,34 +463,34 @@ struct FileBrowserView: View {
                     Button {
                         vm.unzip(item: item)
                     } label: {
-                        Label("Extract", systemImage: "archivebox")
+                        Label("解压", systemImage: "archivebox")
                     }
                     .disabled(vm.isZipping)
                     Button {
                         openRequest = OpenRequest(item: item, mode: .hex)
                     } label: {
-                        Label("Open as Hex", systemImage: "number")
+                        Label("以十六进制打开", systemImage: "number")
                     }
                 } else {
                     Button {
                         openRequest = OpenRequest(item: item, mode: .auto)
                     } label: {
-                        Label("Open", systemImage: "eye")
+                        Label("打开", systemImage: "eye")
                     }
                     Button {
                         openRequest = OpenRequest(item: item, mode: .preview)
                     } label: {
-                        Label("Preview", systemImage: "doc.viewfinder")
+                        Label("预览", systemImage: "doc.viewfinder")
                     }
                     Button {
                         openRequest = OpenRequest(item: item, mode: .text)
                     } label: {
-                        Label("Open as Text", systemImage: "doc.plaintext")
+                        Label("以文本打开", systemImage: "doc.plaintext")
                     }
                     Button {
                         openRequest = OpenRequest(item: item, mode: .hex)
                     } label: {
-                        Label("Open as Hex", systemImage: "number")
+                        Label("以十六进制打开", systemImage: "number")
                     }
                 }
             }
@@ -498,7 +498,7 @@ struct FileBrowserView: View {
                 vm.export(item: item)
             } label: {
                 Label(
-                    item.isDirectory ? "Share Zip" : "Share / Save to Files",
+                    item.isDirectory ? "打包分享" : "分享 / 保存到文件",
                     systemImage: "square.and.arrow.up"
                 )
             }
@@ -506,7 +506,7 @@ struct FileBrowserView: View {
             Button {
                 vm.zip(items: [item])
             } label: {
-                Label("Compress", systemImage: "doc.zipper")
+                Label("压缩", systemImage: "doc.zipper")
             }
             .disabled(vm.isZipping)
         }
@@ -514,43 +514,43 @@ struct FileBrowserView: View {
             Button {
                 enterSelection(preselect: item)
             } label: {
-                Label("Select", systemImage: "checkmark.circle")
+                Label("选择", systemImage: "checkmark.circle")
             }
             Button {
                 FileClipboard.shared.copy([item], containerPath: app.containerPath)
             } label: {
-                Label("Copy", systemImage: "doc.on.doc")
+                Label("复制", systemImage: "doc.on.doc")
             }
             Button {
                 FileClipboard.shared.cut([item], containerPath: app.containerPath)
             } label: {
-                Label("Cut", systemImage: "scissors")
+                Label("剪切", systemImage: "scissors")
             }
             Button {
-                FileClipboard.copyText(item.path, confirmation: "Copied Path")
+                FileClipboard.copyText(item.path, confirmation: "已复制路径")
             } label: {
-                Label("Copy Path", systemImage: "list.clipboard")
+                Label("复制路径", systemImage: "list.clipboard")
             }
             Button {
                 vm.duplicate(item: item)
             } label: {
-                Label("Duplicate", systemImage: "plus.square.on.square")
+                Label("复制副本", systemImage: "plus.square.on.square")
             }
             Button {
                 propertiesItem = item
             } label: {
-                Label("Properties", systemImage: "info.circle")
+                Label("属性", systemImage: "info.circle")
             }
             Button {
                 renameName = item.name
                 renameItem = item
             } label: {
-                Label("Rename", systemImage: "pencil")
+                Label("重命名", systemImage: "pencil")
             }
             Button(role: .destructive) {
                 requestDelete([item])
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label("删除", systemImage: "trash")
             }
         }
     }
@@ -634,11 +634,11 @@ final class FileBrowserViewModel: ObservableObject {
     @Published var isExporting = false
     @Published var isZipping = false
     @Published var isPasting = false
-    @Published var busyTitle = "Working…"
+    @Published var busyTitle = "处理中…"
     @Published var exportError: IdentifiedError?
     @Published var operationError: IdentifiedError?
     @Published var unzipPasswordItem: FileItem?
-    @Published var unzipPasswordMessage = "This archive is password-protected. Enter the password to extract it."
+    @Published var unzipPasswordMessage = "该压缩包已加密，请输入密码后解压。"
 
     var isBusy: Bool { isZipping || isExporting || isPasting }
 
@@ -689,7 +689,7 @@ final class FileBrowserViewModel: ObservableObject {
 
     func create(name: String, kind: CreateKind) {
         guard let safe = FileNameRules.sanitize(name) else {
-            operationError = IdentifiedError(message: "Enter a file name without slashes.")
+            operationError = IdentifiedError(message: "请输入不含斜杠的文件名。")
             return
         }
         let dest = (currentPath as NSString).appendingPathComponent(safe)
@@ -704,7 +704,7 @@ final class FileBrowserViewModel: ObservableObject {
 
     func rename(item: FileItem, to newName: String) {
         guard let safe = FileNameRules.sanitize(newName) else {
-            operationError = IdentifiedError(message: "Enter a file name without slashes.")
+            operationError = IdentifiedError(message: "请输入不含斜杠的文件名。")
             return
         }
         mutate {
@@ -728,7 +728,7 @@ final class FileBrowserViewModel: ObservableObject {
     func paste() {
         guard let clip = FileClipboard.shared.payload, !clip.items.isEmpty else { return }
         isPasting = true
-        busyTitle = "Pasting…"
+        busyTitle = "粘贴中…"
         let destDir = currentPath
         let destContainer = app.containerPath
         DispatchQueue.global(qos: .userInitiated).async {
@@ -753,7 +753,7 @@ final class FileBrowserViewModel: ObservableObject {
     private func paste(_ clip: FileClipboard.Payload, into destDir: String, destContainer: String) throws {
         for item in clip.items {
             if Self.wouldNest(source: item.path, inside: destDir) {
-                throw FileServiceError.operationFailed("Can't paste a folder into itself.")
+                throw FileServiceError.operationFailed("无法将文件夹粘贴到自身内部。")
             }
         }
         if clip.containerPath == destContainer {
@@ -838,7 +838,7 @@ final class FileBrowserViewModel: ObservableObject {
     func importFiles(from urls: [URL]) {
         guard !urls.isEmpty else { return }
         isZipping = true
-        busyTitle = urls.count == 1 ? "Importing…" : "Importing \(urls.count) items…"
+        busyTitle = urls.count == 1 ? "正在导入…" : "正在导入 \(urls.count) 项…"
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try self.escape.withHandle(for: self.app.containerPath) { _ in
@@ -868,7 +868,7 @@ final class FileBrowserViewModel: ObservableObject {
 
     func export(item: FileItem) {
         isExporting = true
-        busyTitle = "Preparing…"
+        busyTitle = "准备中…"
         exportError = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -905,7 +905,7 @@ final class FileBrowserViewModel: ObservableObject {
     func zip(items: [FileItem]) {
         guard !items.isEmpty, !isZipping else { return }
         isZipping = true
-        busyTitle = items.count == 1 ? "Compressing…" : "Compressing \(items.count) items…"
+        busyTitle = items.count == 1 ? "正在压缩…" : "正在压缩 \(items.count) 项…"
         operationError = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -929,7 +929,7 @@ final class FileBrowserViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     self.isZipping = false
                     let name = (destPath as NSString).lastPathComponent
-                    CopyFeedback.shared.show("Created “\(name)”")
+                    CopyFeedback.shared.show("已创建「\(name)」")
                     self.open(self.currentPath)
                 }
             } catch {
@@ -943,13 +943,13 @@ final class FileBrowserViewModel: ObservableObject {
 
     func clearUnzipPasswordPrompt() {
         unzipPasswordItem = nil
-        unzipPasswordMessage = "This archive is password-protected. Enter the password to extract it."
+        unzipPasswordMessage = "该压缩包已加密，请输入密码后解压。"
     }
 
     func unzip(item: FileItem, password: String? = nil) {
         guard !isZipping else { return }
         isZipping = true
-        busyTitle = "Extracting…"
+        busyTitle = "正在解压…"
         operationError = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -962,7 +962,7 @@ final class FileBrowserViewModel: ObservableObject {
                     let preferred = ArchiveExtractor.folderName(from: item.name)
                     let dest = self.files.uniqueDestination(
                         in: self.currentPath,
-                        preferredName: preferred.isEmpty ? "Archive" : preferred
+                        preferredName: preferred.isEmpty ? "归档" : preferred
                     )
                     do {
                         try ArchiveExtractor.extract(
@@ -981,19 +981,19 @@ final class FileBrowserViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     self.isZipping = false
                     self.clearUnzipPasswordPrompt()
-                    CopyFeedback.shared.show("Extracted to “\(destName)”")
+                    CopyFeedback.shared.show("已解压到「\(destName)」")
                     self.open(self.currentPath)
                 }
             } catch ZipReaderError.passwordRequired {
                 DispatchQueue.main.async {
                     self.isZipping = false
-                    self.unzipPasswordMessage = "This archive is password-protected. Enter the password to extract it."
+                    self.unzipPasswordMessage = "该压缩包已加密，请输入密码后解压。"
                     self.unzipPasswordItem = item
                 }
             } catch ZipReaderError.wrongPassword {
                 DispatchQueue.main.async {
                     self.isZipping = false
-                    self.unzipPasswordMessage = "Wrong password. Try again."
+                    self.unzipPasswordMessage = "密码错误，请重试。"
                     self.unzipPasswordItem = item
                 }
             } catch {
@@ -1010,11 +1010,11 @@ final class FileBrowserViewModel: ObservableObject {
             let name = items[0].name
             let ns = name as NSString
             if ns.pathExtension.lowercased() == "zip" {
-                return "\(ns.deletingPathExtension) archive.zip"
+                return "\(ns.deletingPathExtension) 归档.zip"
             }
             return "\(name).zip"
         }
-        return "Archive.zip"
+        return "归档.zip"
     }
 
     private static func shareName(for item: FileItem) -> String {

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.9] - 2026-08-20
+
+### Fixed
+
+- **LiveClean guests still showed the UUID**: the v0.1.8 join used the `appIdentifier` field from `LCContainerInfo.plist`, but that field stores the container UUID in some LiveContainer builds, so the join against `.app` Info.plist never matched. Discovery is now driven from the `.app` side: it enumerates `Documents/Applications/*.app/`, reads `Info.plist` for the real `CFBundleDisplayName` + `CFBundleIdentifier` + icon, and reads each `.app/LCAppInfo.plist` for `LCDataUUID` (plus the `LCContainers` array for per-account extras) to join back to `Documents/Data/Application/<UUID>/`. `LCContainerInfo.plist` is kept as a fallback for fork layouts that don't carry `LCAppInfo`.
+
+### Changed
+
+- **Chinese localization (FileBrowserView)**: all menus, / selection bar, / context menus, / alerts (rename / new file/folder / password / delete), / share + compress + import progress copy are now Simplified Chinese.
+
 ## [0.1.8] - 2026-08-20
 
 ### Added
