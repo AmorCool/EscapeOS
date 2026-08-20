@@ -55,16 +55,13 @@ final class UninstallService {
             throw UninstallServiceError.notConfigured
         }
         // `uninstallAppWithBundleId:error:` is imported as a throwing method
-        // `uninstallApp(withBundleId:)` (same pattern as
-        // `getAppIconWithBundleId:error:` -> `getAppIcon(withBundleId:)`).
-        let ok: Bool
+        // `uninstallApp(withBundleId:)` that returns Void (the BOOL result is
+        // folded into the throw — a non-throwing return means success). Same
+        // pattern as `getAppIconWithBundleId:error:` -> `getAppIcon(withBundleId:)`.
         do {
-            ok = try tunnel.uninstallApp(withBundleId: bundleId)
+            try tunnel.uninstallApp(withBundleId: bundleId)
         } catch {
             throw UninstallServiceError.callFailed(error.localizedDescription)
-        }
-        if !ok {
-            throw UninstallServiceError.callFailed("卸载失败（隧道返回 NO，未返回错误详情）。")
         }
     }
 }
