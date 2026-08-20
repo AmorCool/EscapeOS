@@ -39,6 +39,7 @@ EscapeOS_FILES = \
 	EscapeOS/Engine/ArchiveExtractor.swift \
 	EscapeOS/Engine/ReclaimService.swift \
 	EscapeOS/Engine/LiveContainerDiscovery.swift \
+	EscapeOS/Engine/UninstallService.swift \
 	EscapeOS/Engine/zip_crypto.c \
 	EscapeOS/Engine/bad_query.c \
 	EscapeOS/Tunnel/TunnelContext.m \

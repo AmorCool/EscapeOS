@@ -19,6 +19,7 @@ struct ReclaimTabView: View {
     @ObservedObject var appList: AppListViewModel
     @StateObject private var vm = ReclaimTabViewModel()
     @State private var selecting = false
+    @State private var searchText = ""
 
     var body: some View {
         Group {
@@ -40,6 +41,7 @@ struct ReclaimTabView: View {
         .onAppear {
             vm.refreshRanksFromCache()
         }
+        .searchable(text: $searchText, prompt: "搜索应用")
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 if selecting {
@@ -130,12 +132,17 @@ struct ReclaimTabView: View {
     }
 
     private var rankedList: some View {
-        List {
+        let visible = filteredRows
+        return List {
             if !vm.progressText.isEmpty && vm.isScanning {
                 Text(vm.progressText)
                     .foregroundColor(.secondary)
             }
-            ForEach(vm.rows) { row in
+            if visible.isEmpty && !vm.isScanning {
+                Text(searchText.isEmpty ? "" : "没有匹配 “\(searchText)” 的应用。")
+                    .foregroundColor(.secondary)
+            }
+            ForEach(visible) { row in
                 if selecting {
                     Button {
                         if vm.selected.contains(row.id) {
@@ -155,6 +162,15 @@ struct ReclaimTabView: View {
             }
         }
         .listStyle(.insetGrouped)
+    }
+
+    private var filteredRows: [ReclaimAppRank] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return vm.rows }
+        return vm.rows.filter { row in
+            row.app.name.localizedCaseInsensitiveContains(query)
+                || row.app.bundleIdentifier.localizedCaseInsensitiveContains(query)
+        }
     }
 
     private func rankRow(_ row: ReclaimAppRank, selected: Bool) -> some View {

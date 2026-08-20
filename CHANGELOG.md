@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.1] - 2026-08-20
+
+### Added
+
+- **Apps tab · batch uninstall**. A new `选择` button enters multi-select mode (matches the Reclaim tab UX). Long-press a row to toggle; `全选` selects everything in the current search filter; a bottom bar shows the count and a destructive `卸载` button. Confirm + `AppListViewModel.uninstallBatch` → `UninstallService.uninstall(bundleId:)`, which calls `MobileInstallationUninstall` in `/usr/lib/libmis.dylib` (loaded with `dlopen`/`dlsym` at runtime so no private SDK is needed). The pairing file already places EscapeOS in `misagent`'s trust list — `installd` accepts the call and surfaces the system "Delete App" alert only when iOS requires explicit consent. Failures keep going through the batch and are summarized in one alert.
+- **Search bar in Reclaim**. `ReclaimTabView` now has a `.searchable` box matching app name + bundle id (and a `没有匹配 "<q>" 的应用。` placeholder). It sits next to the existing 选择 batch UI.
+- **Shared-app explanation banner in LiveClean**. LiveContainer's shared apps live under `AppGroup/LiveContainer/Shared/...` — a different iOS sandbox that EscapeOS's `bad_query` cannot escape into from inside LiveContainer's own Data container. The list now shows a `person.2.slash` banner explaining the workaround (Convert to Private inside LC → revisit), instead of pretending the apps are missing.
+
+### Removed
+
+- **Misleading `Documents/Shared/Data/` walk**. The previous build added a second fallback path at `Documents/Shared/Data/` — but LiveContainer stores its shared guests under **AppGroup**, not Documents. The path returned nothing and the host name "(共享)" leaked into the UI without identifying any apps. Discovery now walks only the private `Documents/Data` tree, exactly as the public LiveContainer source (`LCSharedUtils.m`) defines.
+
+### Versioning
+
+> This version is `0.2.1` (not `0.4.0` / `0.3.1`) following the project's no-jump convention — feature increments stay within the same minor (`0.2.x`) until a milestone justifies a minor bump.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added

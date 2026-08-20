@@ -8,15 +8,20 @@ final class AppListViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var needsPairing = false
     @Published var icons: [String: UIImage] = [:]
+    @Published var uninstallStatus: String?
 
     private let discovery = AppDiscovery()
+    private let uninstaller = UninstallService.shared
 
     var hasPairingFile: Bool { discovery.hasPairingFile }
+
+    var canUninstall: Bool { discovery.canUninstallApps() }
 
     func reload() {
         isLoading = true
         errorMessage = nil
         needsPairing = false
+        uninstallStatus = nil
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             do {
@@ -85,18 +90,67 @@ final class AppListViewModel: ObservableObject {
             }
         }
     }
+
+    /// Sequentially uninstall a batch of user apps. Each call goes through
+    /// `MobileInstallationUninstall` via the installd XPC bridge. Failures
+    /// are collected and surfaced in `uninstallStatus` once the batch
+    /// completes — we keep going rather than aborting, so the user gets
+    /// partial progress even when one bundle id rejects.
+    func uninstallBatch(_ targets: [InstalledApp], completion: @escaping ([InstalledApp], [(InstalledApp, Error)]) -> Void) {
+        guard canUninstall else {
+            completion([], targets.map { ($0, UninstallServiceError.callFailed("尚未导入配对文件")) })
+            return
+        }
+        var successes: [InstalledApp] = []
+        var failures: [(InstalledApp, Error)] = []
+        let queue = DispatchQueue(label: "escapeos.uninstall", qos: .userInitiated)
+        queue.async {
+            for app in targets {
+                DispatchQueue.main.async {
+                    self.uninstallStatus = "正在卸载 \(app.name) (\(successes.count + failures.count + 1) / \(targets.count))…"
+                }
+                do {
+                    try self.uninstaller.uninstall(bundleId: app.bundleIdentifier)
+                    successes.append(app)
+                } catch {
+                    failures.append((app, error))
+                }
+            }
+            DispatchQueue.main.async {
+                self.uninstallStatus = nil
+                completion(successes, failures)
+                // Refresh app list so system apps-removed / leftover apps reflect.
+                self.reload()
+            }
+        }
+    }
 }
 
-/// Scrollable list of installed user apps, with search and A–Z jump index.
+/// Scrollable list of installed user apps, with search, A–Z jump index,
+/// and a multi-select mode that uninstalls chosen apps through
+/// `MobileInstallationUninstall`.
 struct AppListView: View {
     @ObservedObject var viewModel: AppListViewModel
     @State private var searchText = ""
     @State private var iconShare: IconSharePayload?
+    @State private var selecting = false
+    @State private var selected: Set<String> = []
+    @State private var pendingUninstall: [InstalledApp] = []
+    @State private var uninstallResult: UninstallResultNotice?
 
     var body: some View {
         let visible = filteredApps
         ScrollViewReader { proxy in
             List {
+                if let status = viewModel.uninstallStatus {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.85)
+                        Text(status)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
                 if visible.isEmpty {
                     Text(emptyListMessage)
                         .foregroundColor(.secondary)
@@ -104,21 +158,19 @@ struct AppListView: View {
                     ForEach(sections(in: visible), id: \.letter) { section in
                         Section(header: Text(section.letter).id(section.letter)) {
                             ForEach(section.apps) { app in
-                                NavigationLink(destination: AppDetailView(app: app, viewModel: viewModel)) {
-                                    HStack(spacing: 12) {
-                                        AppIconView(icon: viewModel.icons[app.bundleIdentifier])
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(app.name)
-                                                .font(.body)
-                                            Text(app.bundleIdentifier)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                                .contextMenu {
+                                if selecting {
                                     Button {
+                                        toggleSelection(app.bundleIdentifier)
+                                    } label: {
+                                        appRow(app, mode: .select(isSelected: selected.contains(app.bundleIdentifier)))
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    NavigationLink(destination: AppDetailView(app: app, viewModel: viewModel)) {
+                                        appRow(app, mode: .normal)
+                                    }
+                                    .contextMenu {
+                                        Button {
                                             FileClipboard.copyText(
                                                 app.bundleIdentifier,
                                                 confirmation: "已复制 Bundle ID"
@@ -139,6 +191,7 @@ struct AppListView: View {
                                             }
                                         }
                                     }
+                                }
                             }
                         }
                     }
@@ -146,16 +199,150 @@ struct AppListView: View {
             }
             .scrollIndicators(.hidden)
             .overlay(alignment: .trailing) {
-                if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                if !selecting, searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    visible.count > 8 {
                     sectionIndex(letters: sections(in: visible).map(\.letter), proxy: proxy)
                 }
             }
         }
         .searchable(text: $searchText, prompt: "搜索应用")
+        .toolbar {
+            if selecting {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("取消") {
+                        selecting = false
+                        selected.removeAll()
+                    }
+                    .disabled(viewModel.uninstallStatus != nil)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(selectingAllVisible ? "取消全选" : "全选") {
+                        toggleSelectAll(visible: visible)
+                    }
+                    .disabled(viewModel.uninstallStatus != nil || visible.isEmpty)
+                }
+            } else {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("选择") {
+                        selected.removeAll()
+                        selecting = true
+                    }
+                    .disabled(viewModel.apps.isEmpty)
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if selecting {
+                selectionBar
+            }
+        }
+        .alert("卸载选中应用？", isPresented: Binding(
+            get: { !pendingUninstall.isEmpty },
+            set: { if !$0 { pendingUninstall = [] } }
+        )) {
+            Button("取消", role: .cancel) { pendingUninstall = [] }
+            Button("卸载", role: .destructive) { startUninstall() }
+        } message: {
+            Text(uninstallConfirmMessage)
+        }
+        .alert(item: $uninstallResult) { notice in
+            Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("好")))
+        }
         .sheet(item: $iconShare) { payload in
             IconShareSheet(image: payload.image, fileName: payload.suggestedName)
         }
+    }
+
+    // MARK: - Selection helpers
+
+    private func toggleSelection(_ bundleId: String) {
+        if selected.contains(bundleId) {
+            selected.remove(bundleId)
+        } else {
+            selected.insert(bundleId)
+        }
+    }
+
+    private var selectingAllVisible: Bool {
+        !filteredApps.isEmpty && filteredApps.allSatisfy { selected.contains($0.bundleIdentifier) }
+    }
+
+    private func toggleSelectAll(visible: [InstalledApp]) {
+        if selectingAllVisible {
+            for app in visible {
+                selected.remove(app.bundleIdentifier)
+            }
+        } else {
+            for app in visible {
+                selected.insert(app.bundleIdentifier)
+            }
+        }
+    }
+
+    private var selectionBar: some View {
+        let apps = filteredApps.filter { selected.contains($0.bundleIdentifier) }
+        return HStack {
+            Text("已选 \(apps.count) 项")
+                .font(.subheadline)
+            Spacer()
+            Button(role: .destructive) {
+                pendingUninstall = apps
+            } label: {
+                Label("卸载", systemImage: "trash")
+            }
+            .disabled(apps.isEmpty || !viewModel.canUninstall || viewModel.uninstallStatus != nil)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private var uninstallConfirmMessage: String {
+        let n = pendingUninstall.count
+        let prefix = "将卸载 \(n) 个应用。iOS 可能会弹出系统确认对话框。"
+        if !viewModel.canUninstall {
+            return prefix + "（⚠️ 配对文件未导入 — 请先在「设置」重置后再导入配对文件。）"
+        }
+        return prefix
+    }
+
+    private func startUninstall() {
+        let toRemove = pendingUninstall
+        pendingUninstall = []
+        viewModel.uninstallBatch(toRemove) { _, failures in
+            // Successful apps are removed by installd; we just refresh.
+            let succeeded = toRemove.count - failures.count
+            var msg = "已卸载 \(succeeded) 个应用。"
+            if !failures.isEmpty {
+                let names = failures.map { "\($0.0.name)（\($0.1.localizedDescription)）" }.joined(separator: "\n")
+                msg += "\n失败 \(failures.count) 个：\n\(names)"
+            }
+            uninstallResult = UninstallResultNotice(title: "卸载完成", message: msg)
+            selected.removeAll()
+            selecting = false
+        }
+    }
+
+    // MARK: - Row layout
+
+    private enum RowMode { case normal, select(isSelected: Bool) }
+
+    private func appRow(_ app: InstalledApp, mode: RowMode) -> some View {
+        HStack(spacing: 12) {
+            if case let .select(checked) = mode {
+                Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(checked ? .accentColor : .secondary)
+            }
+            AppIconView(icon: viewModel.icons[app.bundleIdentifier])
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.name).font(.body)
+                Text(app.bundleIdentifier)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 
     private var emptyListMessage: String {
@@ -232,6 +419,13 @@ struct AppListView: View {
         let clamped = min(max(index, 0), letters.count - 1)
         proxy.scrollTo(letters[clamped], anchor: .top)
     }
+}
+
+/// Local `Identifiable` wrapper for showing the post-batch uninstall summary.
+struct UninstallResultNotice: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
 }
 
 /// Payload passed to `IconShareSheet` when sharing an extracted app icon.

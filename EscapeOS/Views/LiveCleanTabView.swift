@@ -157,6 +157,9 @@ struct LiveCleanTabView: View {
     private var rankedList: some View {
         let visible = filteredRows
         return List {
+            Section {
+                SharedAppLimitBanner()
+            }
             if !vm.progressText.isEmpty && vm.isScanning {
                 Text(vm.progressText)
                     .foregroundColor(.secondary)
@@ -246,6 +249,31 @@ struct GuestIcon: View {
                     .foregroundColor(.secondary)
             }
         }
+    }
+}
+
+/// In-list banner explaining why shared apps don't appear here. LiveContainer
+/// stores shared guest apps under `AppGroup/LiveContainer/Shared/...` — that
+/// is a separate iOS sandbox EscapeOS's bad_query cannot reach from inside
+/// LiveContainer's own Data container. We show the workaround instead of
+/// silently failing.
+struct SharedAppLimitBanner: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "person.2.slash")
+                .font(.title3)
+                .foregroundColor(.orange)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("看不到转为共享的应用？")
+                    .font(.subheadline.weight(.semibold))
+                Text("共享 app 的数据存放在 AppGroup 沙盒里，不在当前 LiveContainer 容器内。在 LiveContainer 内长按该应用 → Convert to Private，等数据回迁到 Documents 后再回这里扫描。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 6)
     }
 }
 

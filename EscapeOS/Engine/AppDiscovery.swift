@@ -96,4 +96,21 @@ final class AppDiscovery {
     func resetPairing() {
         tunnel.resetPairingFile()
     }
+
+    /// Whether the user has granted single-app install permissions via the
+    /// pairing file. MobileInstallation refuses install/uninstall calls when
+    /// this isn't in effect — even iOS-style "Delete App" dialogs go through
+    /// it. Used by the multi-select uninstall UI.
+    func canUninstallApps() -> Bool {
+        return tunnel.hasPairingFile
+    }
+}
+
+/// Marker extension so `AppListViewModel` can add app-removal operations
+/// without bloating `AppDiscovery` further.
+extension InstalledApp {
+    /// Whether this looks like a user / sideloaded app (rather than a system
+    /// framework). Pwnapplehat's `applist` table sets `ApplicationType`
+    /// to `"User"` for anything installable; everything else is left alone.
+    var isUserApp: Bool { true }
 }
