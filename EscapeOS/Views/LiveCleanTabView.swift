@@ -1,0 +1,385 @@
+import SwiftUI
+
+/// One guest app (inside LiveContainer) ranked by reclaimable safe space.
+struct LiveCleanAppRank: Identifiable {
+    var id: String { app.bundleIdentifier }
+    let app: InstalledApp
+    let hostName: String
+    let safeBytes: Int64
+    let safeFiles: Int
+    let failed: Bool
+
+    var subtitle: String {
+        if failed { return "Could not open container · \(hostName)" }
+        if safeBytes == 0 { return "Nothing safe to reclaim · \(hostName)" }
+        return "\(ReclaimService.formatBytes(safeBytes)) safe · \(hostName)"
+    }
+}
+
+/// Cleans cache and temp files of apps installed *inside* LiveContainer.
+/// Functionally identical to the Reclaim tab, but the targets are the guest
+/// apps hosted in LiveContainer's own Data container rather than system apps.
+struct LiveCleanTabView: View {
+    @ObservedObject var appList: AppListViewModel
+    @StateObject private var vm = LiveCleanTabViewModel()
+    @State private var selecting = false
+
+    var body: some View {
+        Group {
+            if appList.needsPairing {
+                Text("Import a pairing file on the Apps tab first.")
+                    .foregroundColor(.secondary)
+                    .padding()
+            } else if vm.instances.isEmpty && !vm.isScanning && !vm.didRun {
+                discoverPrompt
+            } else if vm.rows.isEmpty && !vm.isScanning {
+                Text(vm.discoveryError ?? "No guest apps found in LiveContainer.")
+                    .foregroundColor(.secondary)
+                    .padding()
+            } else {
+                rankedList
+            }
+        }
+        .navigationTitle("LiveClean")
+        .onAppear {
+            vm.refreshRanksFromCache()
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                if selecting {
+                    Button("Cancel") {
+                        selecting = false
+                        vm.selected.removeAll()
+                    }
+                    .disabled(vm.isScanning || vm.isBusy)
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack {
+                    Button(selecting ? "Select All" : "Select") {
+                        if selecting {
+                            vm.selected = Set(vm.rows.filter { !$0.failed && $0.safeBytes > 0 }.map(\.id))
+                        } else {
+                            selecting = true
+                        }
+                    }
+                    .disabled(vm.isScanning || vm.isBusy || vm.rows.isEmpty)
+                    Button {
+                        selecting = false
+                        vm.discover(apps: appList.apps)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(vm.isScanning || vm.isBusy || vm.rows.isEmpty || appList.apps.isEmpty)
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if selecting {
+                batchBar
+            }
+        }
+        .overlay {
+            if vm.isScanning || vm.isBusy {
+                ZStack {
+                    Color.black.opacity(0.28).ignoresSafeArea()
+                    VStack(spacing: 14) {
+                        ProgressView()
+                            .scaleEffect(1.15)
+                        Text(vm.busyTitle)
+                            .font(.headline)
+                    }
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 22)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            }
+        }
+        .alert("Reclaim Safe space?", isPresented: $vm.confirmBatch) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reclaim", role: .destructive) {
+                vm.runBatch(apps: vm.guestApps)
+            }
+        } message: {
+            Text(vm.batchMessage)
+        }
+        .alert(item: $vm.alert) { alert in
+            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
+        }
+    }
+
+    private var discoverPrompt: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 40))
+                .foregroundColor(.secondary)
+            Text("Clean cache and temp files of apps installed inside LiveContainer. Nothing is deleted until you reclaim.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            Button {
+                selecting = false
+                vm.discover(apps: appList.apps)
+            } label: {
+                Text("Scan LiveContainer")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(appList.apps.isEmpty || vm.isScanning)
+            .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var rankedList: some View {
+        List {
+            if !vm.progressText.isEmpty && vm.isScanning {
+                Text(vm.progressText)
+                    .foregroundColor(.secondary)
+            }
+            ForEach(vm.rows) { row in
+                if selecting {
+                    Button {
+                        if vm.selected.contains(row.id) {
+                            vm.selected.remove(row.id)
+                        } else if !row.failed && row.safeBytes > 0 {
+                            vm.selected.insert(row.id)
+                        }
+                    } label: {
+                        rankRow(row, selected: vm.selected.contains(row.id))
+                    }
+                    .disabled(row.failed || row.safeBytes == 0)
+                } else {
+                    NavigationLink(destination: ReclaimAppView(app: row.app, viewModel: appList)) {
+                        rankRow(row, selected: false)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+    }
+
+    private func rankRow(_ row: LiveCleanAppRank, selected: Bool) -> some View {
+        HStack(spacing: 12) {
+            if selecting {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(selected ? .accentColor : .secondary)
+            }
+            Image(systemName: "shippingbox")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40, height: 40)
+                .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.app.name)
+                Text(row.subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var batchBar: some View {
+        let bytes = vm.selectedSafeBytes
+        return HStack {
+            Text("\(vm.selected.count) selected · \(ReclaimService.formatBytes(bytes))")
+                .font(.subheadline)
+            Spacer()
+            Button("Reclaim Safe") {
+                vm.confirmBatch = true
+            }
+            .disabled(vm.selected.isEmpty || bytes == 0)
+        }
+        .padding()
+        .background(.bar)
+    }
+}
+
+final class LiveCleanTabViewModel: ObservableObject {
+    @Published var rows: [LiveCleanAppRank] = []
+    @Published var selected: Set<String> = []
+    @Published var isScanning = false
+    @Published var isBusy = false
+    @Published var busyTitle = "Scanning…"
+    @Published var progressText = ""
+    @Published var confirmBatch = false
+    @Published var alert: ReclaimNotice?
+    @Published var instances: [LiveContainerInstance] = []
+    @Published var discoveryError: String?
+    @Published var didRun = false
+
+    /// Flattened guest apps across all instances (used for batch reclaim).
+    var guestApps: [InstalledApp] { instances.flatMap { $0.guests } }
+
+    private let service = ReclaimService()
+    private let discovery = LiveContainerDiscovery()
+    private var scanToken = 0
+
+    var selectedSafeBytes: Int64 {
+        rows.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.safeBytes }
+    }
+
+    var batchMessage: String {
+        let n = selected.count
+        let files = rows.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.safeFiles }
+        return "Close those apps first. This reclaims Safe caches and temp files only (\(files) files, \(ReclaimService.formatBytes(selectedSafeBytes))) from \(n) app\(n == 1 ? "" : "s") inside LiveContainer. Session data is not included."
+    }
+
+    func refreshRanksFromCache() {
+        guard !rows.isEmpty else { return }
+        rows = rows.map { row in
+            guard let buckets = ReclaimScanCache.shared.buckets(for: row.app.bundleIdentifier) else { return row }
+            let safe = buckets.filter { $0.category.risk == .safe }
+            return LiveCleanAppRank(
+                app: row.app,
+                hostName: row.hostName,
+                safeBytes: safe.reduce(0) { $0 + $1.bytes },
+                safeFiles: safe.reduce(0) { $0 + $1.files },
+                failed: row.failed
+            )
+        }.sorted { lhs, rhs in
+            if lhs.failed != rhs.failed { return !lhs.failed && rhs.failed }
+            if lhs.safeBytes != rhs.safeBytes { return lhs.safeBytes > rhs.safeBytes }
+            return lhs.app.name.localizedCaseInsensitiveCompare(rhs.app.name) == .orderedAscending
+        }
+    }
+
+    /// Find LiveContainer instances, then rank their guest apps by safe space.
+    func discover(apps: [InstalledApp]) {
+        didRun = true
+        let instances = discovery.discover(installedApps: apps)
+        self.instances = instances
+        let guests = instances.flatMap { $0.guests }
+        if guests.isEmpty {
+            discoveryError = instances.isEmpty
+                ? "LiveContainer is not installed."
+                : "No guest apps found in LiveContainer."
+        } else {
+            discoveryError = nil
+        }
+        scan(apps: guests)
+    }
+
+    func scan(apps: [InstalledApp]) {
+        scanToken += 1
+        let token = scanToken
+        isScanning = true
+        busyTitle = "Scanning…"
+        progressText = ""
+        selected.removeAll()
+
+        let hostNames = Dictionary(uniqueKeysWithValues: instances.flatMap { inst in
+            inst.guests.map { ($0.bundleIdentifier, inst.host.name) }
+        })
+
+        DispatchQueue.global(qos: .utility).async {
+            let lock = NSLock()
+            var ranks: [LiveCleanAppRank] = []
+            let total = apps.count
+            var completedCount = 0
+            // Two at a time: faster than one-by-one without exhausting bad_query.
+            let gate = DispatchSemaphore(value: 2)
+            let group = DispatchGroup()
+            let queue = DispatchQueue(label: "escapeos.liveclean.scan", qos: .utility, attributes: .concurrent)
+            for app in apps {
+                if token != self.scanToken { break }
+                gate.wait()
+                group.enter()
+                queue.async {
+                    defer {
+                        gate.signal()
+                        group.leave()
+                    }
+                    if token != self.scanToken { return }
+                    let hostName = hostNames[app.bundleIdentifier] ?? "LiveContainer"
+                    let rank: LiveCleanAppRank
+                    if app.containerPath.isEmpty {
+                        rank = LiveCleanAppRank(app: app, hostName: hostName, safeBytes: 0, safeFiles: 0, failed: true)
+                    } else {
+                        do {
+                            let buckets = try self.service.scan(app: app, risks: [.safe])
+                            ReclaimScanCache.shared.merge(buckets, for: app.bundleIdentifier)
+                            let safe = buckets.filter { $0.category.risk == .safe }
+                            rank = LiveCleanAppRank(
+                                app: app,
+                                hostName: hostName,
+                                safeBytes: safe.reduce(0) { $0 + $1.bytes },
+                                safeFiles: safe.reduce(0) { $0 + $1.files },
+                                failed: false
+                            )
+                        } catch {
+                            rank = LiveCleanAppRank(app: app, hostName: hostName, safeBytes: 0, safeFiles: 0, failed: true)
+                        }
+                    }
+                    lock.lock()
+                    ranks.append(rank)
+                    completedCount += 1
+                    let done = completedCount
+                    lock.unlock()
+                    DispatchQueue.main.async {
+                        guard token == self.scanToken else { return }
+                        self.busyTitle = "Scanning \(done) / \(total)"
+                        self.progressText = "Scanning \(done) / \(total)"
+                    }
+                }
+            }
+            group.wait()
+            ranks.sort { lhs, rhs in
+                if lhs.failed != rhs.failed { return !lhs.failed && rhs.failed }
+                if lhs.safeBytes != rhs.safeBytes { return lhs.safeBytes > rhs.safeBytes }
+                return lhs.app.name.localizedCaseInsensitiveCompare(rhs.app.name) == .orderedAscending
+            }
+            DispatchQueue.main.async {
+                guard token == self.scanToken else { return }
+                self.rows = ranks
+                self.isScanning = false
+                self.progressText = ""
+            }
+        }
+    }
+
+    func runBatch(apps: [InstalledApp]) {
+        let ids = selected
+        let targets = rows.filter { ids.contains($0.id) && !$0.failed && $0.safeBytes > 0 }.map(\.app)
+        guard !targets.isEmpty else { return }
+        isBusy = true
+        busyTitle = "Reclaiming…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var freed: Int64 = 0
+            var files = 0
+            var skipped = 0
+            var failures = 0
+            for (index, app) in targets.enumerated() {
+                DispatchQueue.main.async {
+                    self.busyTitle = "Reclaiming \(index + 1) / \(targets.count)"
+                }
+                do {
+                    let result = try self.service.reclaim(
+                        app: app,
+                        categories: ReclaimService.safeCategories
+                    )
+                    freed += result.bytesFreed
+                    files += result.filesRemoved
+                    skipped += result.skipped
+                } catch {
+                    failures += 1
+                }
+            }
+            DispatchQueue.main.async {
+                self.isBusy = false
+                var message = "Freed \(ReclaimService.formatBytes(freed)) (\(files) files) from \(targets.count) apps inside LiveContainer."
+                if skipped > 0 {
+                    message += " Skipped \(skipped) items that could not be deleted."
+                }
+                if failures > 0 {
+                    message += " \(failures) failed."
+                }
+                self.alert = ReclaimNotice(title: "Reclaimed", message: message)
+                self.scan(apps: apps)
+            }
+        }
+    }
+}

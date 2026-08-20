@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 private enum MainTab: Hashable {
     case apps
     case reclaim
+    case liveclean
     case backups
     case settings
 }
@@ -45,6 +46,15 @@ struct RootView: View {
                 Label("Reclaim", systemImage: "internaldrive")
             }
             .tag(MainTab.reclaim)
+
+            NavigationView {
+                LiveCleanTabView(appList: viewModel)
+                    .navigationBarTitleDisplayMode(.large)
+            }
+            .tabItem {
+                Label("LiveClean", systemImage: "shippingbox")
+            }
+            .tag(MainTab.liveclean)
 
             NavigationView {
                 BackupsListView(appList: viewModel)
