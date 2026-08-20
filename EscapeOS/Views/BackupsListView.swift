@@ -1,11 +1,23 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// Lists backup archives and drives restore confirmation + progress.
 struct BackupsListView: View {
     @ObservedObject var appList: AppListViewModel
     @StateObject private var vm = BackupsListViewModel()
     @State private var shareTarget: ShareTarget?
+
+    /// Batch-select-delete mode.
+    @State private var selecting = false
+    @State private var selected: Set<String> = []
+    /// Custom restore (top-left "恢复"): pick a zip, then choose a target app.
+    @State private var showingPicker = false
+    @State private var importRecord: BackupRecord?
+    @State private var customSession: RestoreSession?
+    @State private var customGuest: LiveContainerGuest?
+    @State private var showDeleteConfirm = false
+    @State private var importError: IdentifiedAlert?
 
     var body: some View {
         Group {
@@ -41,21 +53,40 @@ struct BackupsListView: View {
             } else {
                 List {
                     ForEach(vm.records) { record in
-                        BackupRow(
-                            record: record,
-                            icon: record.metadata.iconData.flatMap { UIImage(data: $0) }
-                                ?? appList.icons[record.metadata.bundleIdentifier],
-                            eligibility: vm.eligibility(for: record, apps: appList.apps)
-                        ) {
-                            vm.beginRestore(record: record, apps: appList.apps)
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        let rowIcon = record.metadata.iconData.flatMap { UIImage(data: $0) }
+                            ?? appList.icons[record.metadata.bundleIdentifier]
+                        if selecting {
                             Button {
-                                shareTarget = ShareTarget(url: record.archiveURL)
+                                toggleSelection(record)
                             } label: {
-                                Label("分享", systemImage: "square.and.arrow.up")
+                                HStack(spacing: 10) {
+                                    Image(systemName: selected.contains(record.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(selected.contains(record.id) ? .accentColor : .secondary)
+                                    BackupRow(
+                                        record: record,
+                                        icon: rowIcon,
+                                        eligibility: vm.eligibility(for: record, apps: appList.apps),
+                                        selecting: true
+                                    ) {}
+                                }
                             }
-                            .tint(.blue)
+                            .buttonStyle(.plain)
+                        } else {
+                            BackupRow(
+                                record: record,
+                                icon: rowIcon,
+                                eligibility: vm.eligibility(for: record, apps: appList.apps)
+                            ) {
+                                vm.beginRestore(record: record, apps: appList.apps)
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button {
+                                    shareTarget = ShareTarget(url: record.archiveURL)
+                                } label: {
+                                    Label("分享", systemImage: "square.and.arrow.up")
+                                }
+                                .tint(.blue)
+                            }
                         }
                     }
                     .onDelete { offsets in
@@ -70,13 +101,46 @@ struct BackupsListView: View {
         }
         .navigationTitle("备份")
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .navigationBarLeading) {
                 Button {
-                    vm.reload()
+                    showingPicker = true
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    Label("恢复", systemImage: "arrow.down.doc.fill")
                 }
-                .disabled(vm.isLoading)
+                .disabled(selecting)
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if selecting {
+                    Button("取消") {
+                        selecting = false
+                        selected.removeAll()
+                    }
+                } else {
+                    HStack {
+                        Button("选择") { selecting = true }
+                        Button {
+                            vm.reload()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(vm.isLoading)
+                    }
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if selecting {
+                HStack {
+                    Text("已选 \(selected.count) 项")
+                        .font(.subheadline)
+                    Spacer()
+                    Button("删除", role: .destructive) {
+                        showDeleteConfirm = true
+                    }
+                    .disabled(selected.isEmpty)
+                }
+                .padding()
+                .background(.bar)
             }
         }
         .onAppear {
@@ -85,8 +149,67 @@ struct BackupsListView: View {
         .sheet(item: $vm.activeRestore) { session in
             RestoreView(session: session, appList: appList)
         }
+        .sheet(isPresented: $showingPicker) {
+            BackupImportPicker(onPick: handlePickedZip)
+        }
+        .sheet(item: $importRecord) { record in
+            CustomRestoreSheet(record: record, appList: appList) { session, guest in
+                importRecord = nil
+                customSession = session
+                customGuest = guest
+            }
+        }
+        .sheet(item: $customSession) { session in
+            RestoreView(session: session, appList: appList, preselectedGuest: customGuest)
+        }
         .alert(item: $vm.alertError) { error in
             Alert(title: Text("无法开始恢复"), message: Text(error.message), dismissButton: .default(Text("好")))
+        }
+        .alert(item: $importError) { error in
+            Alert(title: Text("无法读取备份"), message: Text(error.message), dismissButton: .default(Text("好")))
+        }
+        .alert("删除选中的备份？", isPresented: $showDeleteConfirm) {
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive) {
+                performBatchDelete()
+            }
+        } message: {
+            Text("将永久删除 \(selected.count) 个备份归档，此操作不可撤销。")
+        }
+    }
+
+    private func toggleSelection(_ record: BackupRecord) {
+        if selected.contains(record.id) {
+            selected.remove(record.id)
+        } else {
+            selected.insert(record.id)
+        }
+    }
+
+    private func performBatchDelete() {
+        let targets = vm.records.filter { selected.contains($0.id) }
+        vm.deleteSelected(targets)
+        selected.removeAll()
+        selecting = false
+    }
+
+    /// Copy the picked (security-scoped) zip into an app-owned temp file, then
+    /// validate it as an EscapeOS backup. On success, open the target picker.
+    private func handlePickedZip(_ url: URL) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        defer { showingPicker = false }
+        do {
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent(url.lastPathComponent)
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: url, to: dest)
+            let record = try BackupCatalog().loadRecord(at: dest)
+            importRecord = record
+        } catch {
+            importError = IdentifiedAlert(message: "该文件不是有效的 EscapeOS 备份（缺少 backup.json），或读取失败：\(error.localizedDescription)")
         }
     }
 }
@@ -95,6 +218,7 @@ private struct BackupRow: View {
     let record: BackupRecord
     let icon: UIImage?
     let eligibility: RestoreEligibility
+    var selecting: Bool = false
     let onRestore: () -> Void
 
     var body: some View {
@@ -134,25 +258,27 @@ private struct BackupRow: View {
                 }
             }
 
-            switch eligibility {
-            case .ready:
-                Button(action: onRestore) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.counterclockwise.circle.fill")
-                        Text("恢复到设备")
+            if !selecting {
+                switch eligibility {
+                case .ready:
+                    Button(action: onRestore) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.counterclockwise.circle.fill")
+                            Text("恢复到设备")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
                     }
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                case .appNotInstalled(_, let appName):
+                    Label("\(appName) 未安装", systemImage: "app.badge.checkmark.fill")
+                        .font(.footnote)
+                        .foregroundColor(.orange)
+                case .invalidArchive(let message):
+                    Label(message, systemImage: "xmark.octagon.fill")
+                        .font(.footnote)
+                        .foregroundColor(.red)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-            case .appNotInstalled(_, let appName):
-                Label("\(appName) 未安装", systemImage: "app.badge.checkmark.fill")
-                    .font(.footnote)
-                    .foregroundColor(.orange)
-            case .invalidArchive(let message):
-                Label(message, systemImage: "xmark.octagon.fill")
-                    .font(.footnote)
-                    .foregroundColor(.red)
             }
         }
         .padding(.vertical, 6)
@@ -203,10 +329,195 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
+/// Extract the guest bundle id (middle segment) from a synthetic
+/// `host::guestBundleId::uuid` id. Returns the input unchanged when it doesn't
+/// follow that shape.
+private func guestBundleId(from synthetic: String) -> String {
+    let parts = synthetic.components(separatedBy: "::")
+    return parts.count == 3 ? parts[1] : synthetic
+}
+
+/// Document picker restricted to `.zip` archives, used by the custom-restore
+/// entry point to let the user choose an external backup to restore.
+struct BackupImportPicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.zip])
+        picker.allowsMultipleSelection = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            onPick(url)
+        }
+    }
+}
+
+/// Picker shown after the user selects an external backup zip: choose which
+/// installed app (normal apps and LiveContainer guests, listed in two clearly
+/// separated sections) to restore it into.
+struct CustomRestoreSheet: View {
+    let record: BackupRecord
+    @ObservedObject var appList: AppListViewModel
+    let onConfirm: (RestoreSession, LiveContainerGuest?) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var normalApps: [InstalledApp] = []
+    @State private var guestApps: [LiveContainerGuest] = []
+    @State private var isLoading = true
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if isLoading {
+                    ProgressView("正在加载应用列表…")
+                } else if normalApps.isEmpty && guestApps.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "app.dashed")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text("未找到可恢复的目标应用。")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text("请先在「应用」页导入配对文件并扫描到 LiveContainer。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
+                    .padding()
+                } else {
+                    List {
+                        if !normalApps.isEmpty {
+                            Section("应用") {
+                                ForEach(normalApps) { app in
+                                    targetRow(
+                                        title: app.name,
+                                        subtitle: app.bundleIdentifier,
+                                        icon: appList.icons[app.bundleIdentifier],
+                                        isContainer: false
+                                    ) {
+                                        confirmTarget(app: app, guest: nil)
+                                    }
+                                }
+                            }
+                        }
+                        if !guestApps.isEmpty {
+                            Section("容器应用") {
+                                ForEach(guestApps) { guest in
+                                    targetRow(
+                                        title: guest.displayName,
+                                        subtitle: guest.bundleIdentifier,
+                                        icon: guest.iconData.flatMap { UIImage(data: $0) },
+                                        isContainer: true
+                                    ) {
+                                        confirmTarget(app: guest.installedApp, guest: guest)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("选择恢复目标")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .onAppear { loadTargets() }
+        }
+    }
+
+    private func targetRow(
+        title: String,
+        subtitle: String,
+        icon: UIImage?,
+        isContainer: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                AppIconView(icon: icon, size: 40)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(title).font(.headline)
+                        if isContainer {
+                            Text("容器")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.15))
+                                .foregroundColor(.orange)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+    }
+
+    private func confirmTarget(app: InstalledApp, guest: LiveContainerGuest?) {
+        let session = RestoreSession(
+            record: record,
+            eligibility: .ready(app: app, metadata: record.metadata, warnings: customWarnings(for: app, guest: guest))
+        )
+        onConfirm(session, guest)
+    }
+
+    private func customWarnings(for app: InstalledApp, guest: LiveContainerGuest?) -> [String] {
+        var warnings: [String] = []
+        let meta = record.metadata
+        if meta.isContainerApp {
+            let targetId = guestBundleId(from: app.bundleIdentifier)
+            if targetId != guestBundleId(from: meta.bundleIdentifier) {
+                warnings.append("备份来自「\(meta.appName)」，与目标容器应用不一致，强制恢复可能覆盖目标数据。")
+            }
+        } else if app.bundleIdentifier != meta.bundleIdentifier {
+            warnings.append("备份来自「\(meta.appName)」，与目标应用不一致，强制恢复可能覆盖目标数据。")
+        }
+        warnings.append("关闭 \(app.name) 后再恢复。应用运行时打开的数据库可能无法完整恢复。")
+        return warnings
+    }
+
+    private func loadTargets() {
+        isLoading = true
+        let apps = appList.apps
+        DispatchQueue.global(qos: .userInitiated).async {
+            let guests = LiveContainerDiscovery().discover(installedApps: apps).flatMap { $0.guests }
+            DispatchQueue.main.async {
+                self.normalApps = apps
+                self.guestApps = guests
+                self.isLoading = false
+            }
+        }
+    }
+}
+
 /// Confirmation + progress sheet for restoring a backup.
 struct RestoreView: View {
     let session: RestoreSession
     @ObservedObject var appList: AppListViewModel
+    /// When set (custom restore), the chosen container sandbox is pre-selected
+    /// so the user isn't forced to re-pick it.
+    var preselectedGuest: LiveContainerGuest? = nil
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = RestoreViewModel()
 
@@ -279,7 +590,7 @@ struct RestoreView: View {
                 }
             }
             .onAppear {
-                vm.prepare(session: session, installedApps: appList.apps)
+                vm.prepare(session: session, installedApps: appList.apps, preselectedGuest: preselectedGuest)
             }
         }
     }
@@ -483,6 +794,16 @@ final class BackupsListViewModel: ObservableObject {
         }
         records.remove(atOffsets: offsets)
     }
+
+    /// Batch delete of the given (selected) records.
+    func deleteSelected(_ records: [BackupRecord]) {
+        guard !records.isEmpty else { return }
+        for record in records {
+            try? catalog.delete(record: record)
+        }
+        let ids = Set(records.map { $0.id })
+        self.records.removeAll { ids.contains($0.id) }
+    }
 }
 
 final class RestoreViewModel: ObservableObject {
@@ -503,9 +824,16 @@ final class RestoreViewModel: ObservableObject {
     private let service = RestoreService()
     private var cancelled = false
 
-    func prepare(session: RestoreSession, installedApps: [InstalledApp]) {
+    func prepare(session: RestoreSession, installedApps: [InstalledApp], preselectedGuest: LiveContainerGuest? = nil) {
         cancelled = false
         state = .confirm
+        if let guest = preselectedGuest {
+            // Custom restore: the user already chose the exact sandbox, so skip
+            // the discovery / re-picker and restore straight into it.
+            selectedSandbox = guest
+            sandboxCandidates = [guest]
+            return
+        }
         selectedSandbox = nil
         sandboxCandidates = nil
         if case .ready(_, let metadata, _) = session.eligibility, metadata.isContainerApp {
