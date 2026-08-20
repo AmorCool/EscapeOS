@@ -414,16 +414,6 @@ struct CustomRestoreSheet: View {
                             .padding(.horizontal)
                     }
                     .padding()
-                } else if filteredNormalApps.isEmpty && filteredGuestApps.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 40))
-                            .foregroundColor(.secondary)
-                        Text("未找到匹配「\(searchText)」的应用。")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding()
                 } else {
                     List {
                         if !filteredNormalApps.isEmpty {
@@ -452,6 +442,23 @@ struct CustomRestoreSheet: View {
                                         confirmTarget(app: guest.installedApp, guest: guest)
                                     }
                                 }
+                            }
+                        }
+                        if filteredNormalApps.isEmpty && filteredGuestApps.isEmpty {
+                            Section {
+                                HStack {
+                                    Spacer()
+                                    VStack(spacing: 16) {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 40))
+                                            .foregroundColor(.secondary)
+                                        Text("未找到匹配「\(searchText)」的应用。")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 60)
                             }
                         }
                     }
