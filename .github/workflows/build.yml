@@ -1,0 +1,88 @@
+name: Build IPA
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install GNU make, ldid, dpkg
+        run: |
+          brew install make ldid dpkg
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Set up Theos
+        run: |
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Point Theos at the Xcode iPhoneOS SDK
+        # libidevice_ffi.a links QUICKit/AFFoundation, which only exist in the
+        # Xcode iPhoneOS SDK (>= 18), not in theos/sdks (max 16.5). Symlink the
+        # real Xcode SDK into $THEOS/sdks so Theos finds a complete SDK.
+        run: |
+          set -euo pipefail
+          XCODE_SDK="$(xcrun -sdk iphoneos -show-sdk-path)"
+          SDK_NAME="$(basename "$XCODE_SDK")"
+          mkdir -p "$THEOS/sdks"
+          ln -sfn "$XCODE_SDK" "$THEOS/sdks/$SDK_NAME"
+          SDK_VER="$(echo "$SDK_NAME" | sed -E 's/iPhoneOS([0-9.]+)\.sdk/\1/')"
+          echo "SDK_VER=$SDK_VER" >> "$GITHUB_ENV"
+          echo "Using Xcode SDK $SDK_NAME ($XCODE_SDK) -> TARGET iphone:clang:${SDK_VER}:18.0"
+
+      - name: Download libidevice_ffi.a
+        run: |
+          set -euo pipefail
+          curl -L -o libidevice_ffi.a "https://github.com/pwnapplehat/EscapeOS/releases/download/v0.1.5/libidevice_ffi.a"
+          mkdir -p EscapeOS/Tunnel
+          mv libidevice_ffi.a EscapeOS/Tunnel/libidevice_ffi.a
+          ls -la EscapeOS/Tunnel/libidevice_ffi.a
+
+      - name: Build package (Theos)
+        run: |
+          set -euo pipefail
+          make clean
+          make package TARGET="iphone:clang:${{ env.SDK_VER }}:18.0"
+
+      - name: Convert .deb to IPA
+        run: |
+          set -euo pipefail
+          DEB="$(ls -1 packages/*.deb | head -n1)"
+          echo "Built deb: $DEB"
+          rm -rf /tmp/ipa && mkdir -p /tmp/ipa/Payload
+          dpkg-deb -x "$DEB" /tmp/ipa/extract
+          mv /tmp/ipa/extract/Applications/EscapeOS.app /tmp/ipa/Payload/
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          (cd /tmp/ipa && zip -r "$GITHUB_WORKSPACE/EscapeOS-$VERSION.ipa" Payload)
+          ls -la "$GITHUB_WORKSPACE/EscapeOS-$VERSION.ipa"
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          PREV="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then
+            git log "${PREV}..HEAD" --pretty=format:"- %s" > RELEASE_NOTES.md
+          else
+            git log --pretty=format:"- %s" -n 30 > RELEASE_NOTES.md
+          fi
+          cat RELEASE_NOTES.md
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: EscapeOS-*.ipa
+          body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: true
