@@ -19,7 +19,7 @@ final class BackupViewModel: ObservableObject {
         return false
     }
 
-    func start(app: InstalledApp, isContainerApp: Bool = false, onFinished: (() -> Void)? = nil) {
+    func start(app: InstalledApp, isContainerApp: Bool = false, iconData: Data? = nil, onFinished: (() -> Void)? = nil) {
         cancelled = false
         state = .running(files: 0, bytes: 0, current: "开始备份…")
         DispatchQueue.global(qos: .userInitiated).async {
@@ -27,6 +27,7 @@ final class BackupViewModel: ObservableObject {
                 let result = try self.service.exportBackup(
                     for: app,
                     isContainerApp: isContainerApp,
+                    iconData: iconData,
                     progress: { files, bytes, current in
                         DispatchQueue.main.async {
                             self.state = .running(files: files, bytes: bytes, current: current)

@@ -1,9 +1,11 @@
 import SwiftUI
+import UIKit
 
 /// Lists backup archives and drives restore confirmation + progress.
 struct BackupsListView: View {
     @ObservedObject var appList: AppListViewModel
     @StateObject private var vm = BackupsListViewModel()
+    @State private var shareTarget: ShareTarget?
 
     var body: some View {
         Group {
@@ -41,10 +43,19 @@ struct BackupsListView: View {
                     ForEach(vm.records) { record in
                         BackupRow(
                             record: record,
-                            icon: appList.icons[record.metadata.bundleIdentifier],
+                            icon: record.metadata.iconData.flatMap { UIImage(data: $0) }
+                                ?? appList.icons[record.metadata.bundleIdentifier],
                             eligibility: vm.eligibility(for: record, apps: appList.apps)
                         ) {
                             vm.beginRestore(record: record, apps: appList.apps)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button {
+                                shareTarget = ShareTarget(url: record.archiveURL)
+                            } label: {
+                                Label("分享", systemImage: "square.and.arrow.up")
+                            }
+                            .tint(.blue)
                         }
                     }
                     .onDelete { offsets in
@@ -52,6 +63,9 @@ struct BackupsListView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .sheet(item: $shareTarget) { target in
+                    ShareSheet(items: [target.url])
+                }
             }
         }
         .navigationTitle("备份")
@@ -107,6 +121,11 @@ private struct BackupRow: View {
                     Text(record.displaySubtitle)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                    Text(record.archiveFileName)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     if let modified = record.modified {
                         Text(BackupPaths.displayStamp.string(from: modified))
                             .font(.caption2)
@@ -164,6 +183,24 @@ struct AppIconView: View {
         .frame(width: size, height: size)
         .cornerRadius(size * 0.22)
     }
+}
+
+/// Identifiable wrapper for a file URL we want to share.
+struct ShareTarget: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// System share sheet (`UIActivityViewController`) for exporting a backup zip
+/// via AirDrop, Files, etc.
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 /// Confirmation + progress sheet for restoring a backup.
@@ -242,7 +279,7 @@ struct RestoreView: View {
                 }
             }
             .onAppear {
-                vm.prepare(session: session)
+                vm.prepare(session: session, installedApps: appList.apps)
             }
         }
     }
@@ -251,8 +288,12 @@ struct RestoreView: View {
     private var confirmContent: some View {
         if case .ready(let app, let metadata, let warnings) = session.eligibility {
             VStack(spacing: 16) {
-                AppIconView(icon: appList.icons[app.bundleIdentifier], size: 64)
-                    .padding(.top, 24)
+                AppIconView(
+                    icon: session.record.metadata.iconData.flatMap { UIImage(data: $0) }
+                        ?? appList.icons[app.bundleIdentifier],
+                    size: 64
+                )
+                .padding(.top, 24)
 
                 Text("恢复到 \(app.name)？")
                     .font(.title3).bold()
@@ -270,6 +311,13 @@ struct RestoreView: View {
                 .cornerRadius(12)
                 .padding(.horizontal)
 
+                // Container-app backups may have several UUID sandboxes of the
+                // same guest app. When more than one exists, let the user pick
+                // which sandbox to restore into before confirming.
+                if metadata.isContainerApp {
+                    sandboxPickerSection
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(warnings, id: \.self) { warning in
                         Label(warning, systemImage: "exclamationmark.triangle.fill")
@@ -283,7 +331,11 @@ struct RestoreView: View {
                 .padding(.horizontal)
 
                 Button {
-                    vm.start(session: session)
+                    if let guest = vm.selectedSandbox {
+                        vm.start(session: session, targetGuest: guest)
+                    } else {
+                        vm.start(session: session)
+                    }
                 } label: {
                     Text("恢复备份")
                         .frame(maxWidth: .infinity)
@@ -291,10 +343,61 @@ struct RestoreView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .padding(.horizontal)
+                .disabled(
+                    metadata.isContainerApp
+                    && (vm.sandboxCandidates?.count ?? 0) > 1
+                    && vm.selectedSandbox == nil
+                )
             }
         } else {
             Text("此备份无法恢复。")
                 .foregroundColor(.secondary)
+        }
+    }
+
+    /// Shown only for container-app backups that have more than one current
+    /// UUID sandbox. The user must choose a target before restoring.
+    @ViewBuilder
+    private var sandboxPickerSection: some View {
+        switch vm.sandboxCandidates {
+        case .none:
+            HStack(spacing: 8) {
+                ProgressView().scaleEffect(0.7)
+                Text("正在查找可用沙盒…")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal)
+        case .some(let candidates) where candidates.count > 1:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("选择恢复到哪个沙盒")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(candidates) { guest in
+                    Button {
+                        vm.selectedSandbox = guest
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: vm.selectedSandbox?.id == guest.id
+                                  ? "checkmark.circle.fill" : "circle")
+                                .foregroundColor(vm.selectedSandbox?.id == guest.id
+                                                 ? .accentColor : .secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(guest.displayName)
+                                Text((guest.containerPath as NSString).lastPathComponent)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                    }
+                }
+            }
+            .padding()
+            .background(Color.secondary.opacity(0.08))
+            .cornerRadius(12)
+            .padding(.horizontal)
+        default:
+            EmptyView()
         }
     }
 
@@ -392,16 +495,38 @@ final class RestoreViewModel: ObservableObject {
     }
 
     @Published var state: State = .confirm
+    /// Current LiveContainer guest sandboxes matching a container-app backup.
+    /// `nil` until discovery finishes, an empty array means none present.
+    @Published var sandboxCandidates: [LiveContainerGuest]? = nil
+    /// The sandbox the user chose to restore into (when more than one exists).
+    @Published var selectedSandbox: LiveContainerGuest? = nil
     private let service = RestoreService()
     private var cancelled = false
 
-    func prepare(session: RestoreSession) {
+    func prepare(session: RestoreSession, installedApps: [InstalledApp]) {
         cancelled = false
         state = .confirm
+        selectedSandbox = nil
+        sandboxCandidates = nil
+        if case .ready(_, let metadata, _) = session.eligibility, metadata.isContainerApp {
+            let record = session.record
+            DispatchQueue.global(qos: .userInitiated).async {
+                let candidates = self.service.candidateSandboxes(for: record, installedApps: installedApps)
+                DispatchQueue.main.async {
+                    self.sandboxCandidates = candidates
+                }
+            }
+        }
     }
 
-    func start(session: RestoreSession) {
-        guard case .ready(let app, _, _) = session.eligibility else { return }
+    func start(session: RestoreSession, targetGuest: LiveContainerGuest? = nil) {
+        let app: InstalledApp
+        if let targetGuest = targetGuest {
+            app = targetGuest.installedApp
+        } else {
+            guard case .ready(let readyApp, _, _) = session.eligibility else { return }
+            app = readyApp
+        }
         cancelled = false
         state = .running(current: "Starting…", done: 0, total: session.record.metadata.fileCount)
 

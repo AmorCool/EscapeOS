@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.5] - 2026-08-20
+
+### Added
+
+- **备份标签页 · 容器应用显示图标**. `BackupMetadata` 新增可空的 `iconData` 字段，容器备份在导出时把 guest 的预解码图标（`LiveContainerGuest.iconData`）一并写入 `backup.json`。`BackupsListView` 的行图标优先渲染归档内 `iconData`，否则回退到系统图标缓存，解决容器应用备份显示灰色占位符的问题。`RestoreService.restore` 对容器备份改为按 guest bundle id（synthetic id 中间段）匹配，允许把备份恢复到**不同 UUID 沙盒**的同款应用。
+- **备份标签页 · 备份文件名小字**. 每条备份记录下方新增一行 `caption2` 次级文本，显示归档文件全名（如 `应用名_backup_20260820_154501.zip`），便于核对。
+- **备份标签页 · 右滑分享**. 备份行新增 `swipeActions`（trailing）的「分享」操作，通过 `UIActivityViewController` 把 `.zip` 归档通过隔空投送 / 文件 App 等导出。
+- **容器备份 · 多 UUID 沙盒选择弹窗**. 恢复容器应用备份时，`RestoreService.candidateSandboxes` 按 host + guest bundle id 找出当前设备上该应用的所有 UUID 沙盒；当超过一个时，`RestoreView` 的确认页会列出这些沙盒（显示应用名 + UUID 目录名）并强制先选择目标，再写入对应沙盒的 `Documents/Data/Application/<UUID>/`。
+
 ## [0.2.4] - 2026-08-20
 
 ### Fixed

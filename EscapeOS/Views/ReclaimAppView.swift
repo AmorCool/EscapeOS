@@ -105,7 +105,7 @@ struct ReclaimAppView: View {
                 .disabled(!access.isGranted)
 
                 Button {
-                    backup.start(app: app, isContainerApp: true)
+                    backup.start(app: app, isContainerApp: true, iconData: guestIcon)
                 } label: {
                     Label("备份数据", systemImage: "externaldrive.fill.badge.plus")
                 }
@@ -203,7 +203,7 @@ struct ReclaimAppView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Button("重试") {
-                    backup.start(app: app, isContainerApp: true)
+                    backup.start(app: app, isContainerApp: true, iconData: guestIcon)
                 }
             }
         }

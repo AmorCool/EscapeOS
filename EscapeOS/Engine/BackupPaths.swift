@@ -14,6 +14,10 @@ struct BackupMetadata: Codable, Hashable {
     /// a system-installed app. Defaults to `false` for archives created before
     /// v0.2.4.
     let isContainerApp: Bool
+    /// Pre-decoded icon bytes for the backed-up app, embedded so container-app
+    /// backups (whose synthetic bundle id isn't in the system icon cache) still
+    /// show their icon in the Backups list. `nil` for pre-v0.2.5 archives.
+    let iconData: Data?
 
     init(
         bundleIdentifier: String,
@@ -24,7 +28,8 @@ struct BackupMetadata: Codable, Hashable {
         totalBytes: Int64,
         manifestSHA256: String,
         escapeOSVersion: String,
-        isContainerApp: Bool = false
+        isContainerApp: Bool = false,
+        iconData: Data? = nil
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.appName = appName
@@ -35,6 +40,7 @@ struct BackupMetadata: Codable, Hashable {
         self.manifestSHA256 = manifestSHA256
         self.escapeOSVersion = escapeOSVersion
         self.isContainerApp = isContainerApp
+        self.iconData = iconData
     }
 
     init(from decoder: Decoder) throws {
@@ -48,11 +54,12 @@ struct BackupMetadata: Codable, Hashable {
         manifestSHA256 = try c.decode(String.self, forKey: .manifestSHA256)
         escapeOSVersion = try c.decode(String.self, forKey: .escapeOSVersion)
         isContainerApp = try c.decodeIfPresent(Bool.self, forKey: .isContainerApp) ?? false
+        iconData = try c.decodeIfPresent(Data.self, forKey: .iconData)
     }
 
     private enum CodingKeys: String, CodingKey {
         case bundleIdentifier, appName, containerPath, createdAt
-        case fileCount, totalBytes, manifestSHA256, escapeOSVersion, isContainerApp
+        case fileCount, totalBytes, manifestSHA256, escapeOSVersion, isContainerApp, iconData
     }
 }
 

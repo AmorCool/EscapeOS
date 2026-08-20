@@ -102,10 +102,23 @@ final class RestoreService {
 
         let metadataData = try reader.readEntry(named: BackupPaths.metadataFileName)
         let metadata = try JSONDecoder().decode(BackupMetadata.self, from: metadataData)
-        guard metadata.bundleIdentifier == app.bundleIdentifier else {
-            throw BackupError.restoreBlocked(
-                "Backup bundle ID \(metadata.bundleIdentifier) does not match \(app.bundleIdentifier)."
-            )
+        if metadata.isContainerApp {
+            // Container backups carry a synthetic bundle id
+            // (`host::guestBundleId::uuid`). Restoring into a *different* UUID
+            // sandbox of the same guest app is the whole point of the sandbox
+            // picker, so we match on the guest bundle id (middle segment)
+            // rather than the full synthetic id.
+            guard guestBundleId(from: metadata.bundleIdentifier) == guestBundleId(from: app.bundleIdentifier) else {
+                throw BackupError.restoreBlocked(
+                    "Backup app (\(guestBundleId(from: metadata.bundleIdentifier))) does not match target (\(guestBundleId(from: app.bundleIdentifier)))."
+                )
+            }
+        } else {
+            guard metadata.bundleIdentifier == app.bundleIdentifier else {
+                throw BackupError.restoreBlocked(
+                    "Backup bundle ID \(metadata.bundleIdentifier) does not match \(app.bundleIdentifier)."
+                )
+            }
         }
 
         let manifestData = try reader.readEntry(named: BackupPaths.manifestFileName)
@@ -179,5 +192,39 @@ final class RestoreService {
         guard let root, BackupService.backupRoots.contains(root) else {
             throw BackupError.restoreBlocked("Backup path outside allowed roots: \(path)")
         }
+    }
+
+    /// Extract the guest bundle id (middle segment) from a synthetic
+    /// `host::guestBundleId::uuid` id. Returns the input unchanged when it
+    /// doesn't follow that shape.
+    private func guestBundleId(from synthetic: String) -> String {
+        let parts = synthetic.components(separatedBy: "::")
+        return parts.count == 3 ? parts[1] : synthetic
+    }
+
+    /// For a container-app backup, return the LiveContainer guest sandboxes
+    /// currently present on the device that match the backed-up app (same host
+    /// + same guest bundle id). Empty when the app is no longer hosted or when
+    /// discovery fails. Used by the restore flow to offer a sandbox picker when
+    /// more than one sandbox exists for the same guest app.
+    func candidateSandboxes(for record: BackupRecord, installedApps: [InstalledApp]) -> [LiveContainerGuest] {
+        guard record.metadata.isContainerApp else { return [] }
+        let parts = record.metadata.bundleIdentifier.components(separatedBy: "::")
+        guard parts.count == 3 else { return [] }
+        let hostBundleId = parts[0]
+        let guestBundleId = parts[1]
+        let discovery = LiveContainerDiscovery()
+        let instances = discovery.discover(installedApps: installedApps)
+        var matches: [LiveContainerGuest] = []
+        for instance in instances {
+            for guest in instance.guests {
+                let guestParts = guest.id.components(separatedBy: "::")
+                let guestHost = guestParts.first ?? ""
+                if guestHost == hostBundleId && guest.bundleIdentifier == guestBundleId {
+                    matches.append(guest)
+                }
+            }
+        }
+        return matches
     }
 }

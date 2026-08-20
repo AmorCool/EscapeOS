@@ -53,6 +53,7 @@ final class BackupService {
     func exportBackup(
         for app: InstalledApp,
         isContainerApp: Bool = false,
+        iconData: Data? = nil,
         progress: BackupProgress? = nil,
         isCancelled: @escaping () -> Bool = { false }
     ) throws -> BackupResult {
@@ -137,7 +138,8 @@ final class BackupService {
             totalBytes: totalBytes,
             manifestSHA256: manifestHash,
             escapeOSVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
-            isContainerApp: isContainerApp
+            isContainerApp: isContainerApp,
+            iconData: iconData
         )
         let metadataData = try encoder.encode(metadata)
         try zip.addFile(name: BackupPaths.metadataFileName, data: metadataData)
