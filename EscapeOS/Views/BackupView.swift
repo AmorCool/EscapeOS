@@ -21,7 +21,7 @@ final class BackupViewModel: ObservableObject {
 
     func start(app: InstalledApp, onFinished: (() -> Void)? = nil) {
         cancelled = false
-        state = .running(files: 0, bytes: 0, current: "Starting…")
+        state = .running(files: 0, bytes: 0, current: "开始备份…")
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let result = try self.service.exportBackup(

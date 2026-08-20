@@ -23,9 +23,9 @@ struct ReclaimBucketStat: Identifiable, Hashable {
     let available: Bool
 
     var summary: String {
-        guard available else { return "Not found" }
-        if files == 0 && bytes == 0 { return "Empty" }
-        return "\(files) files · \(ReclaimService.formatBytes(bytes))"
+        guard available else { return "未找到" }
+        if files == 0 && bytes == 0 { return "为空" }
+        return "\(files) 个文件 · \(ReclaimService.formatBytes(bytes))"
     }
 }
 
@@ -41,7 +41,7 @@ enum ReclaimError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .nothingSelected:
-            return "Nothing selected to reclaim."
+            return "未选择任何要回收的内容。"
         }
     }
 }
@@ -87,35 +87,35 @@ final class ReclaimService {
     static let categories: [ReclaimCategory] = [
         ReclaimCategory(
             id: "tmp",
-            title: "Temporary files",
-            detail: "tmp — scratch files the app can rebuild",
+            title: "临时文件",
+            detail: "tmp — 应用的临时文件，可由应用自行重建",
             relativePath: "tmp",
             risk: .safe
         ),
         ReclaimCategory(
             id: "caches",
-            title: "Caches",
-            detail: "Library/Caches — images, WebKit disk cache, Metal",
+            title: "缓存",
+            detail: "Library/Caches — 图片、WebKit 磁盘缓存、Metal 缓存",
             relativePath: "Library/Caches",
             risk: .safe
         ),
         ReclaimCategory(
             id: "logs",
-            title: "Logs",
+            title: "日志",
             detail: "Library/Logs",
             relativePath: "Library/Logs",
             risk: .safe
         ),
         ReclaimCategory(
             id: "splash",
-            title: "Launch snapshots",
+            title: "启动快照",
             detail: "Library/SplashBoard",
             relativePath: "Library/SplashBoard",
             risk: .safe
         ),
         ReclaimCategory(
             id: "gpucache",
-            title: "GPU cache",
+            title: "GPU 缓存",
             detail: "Library/GPUCache",
             relativePath: "Library/GPUCache",
             risk: .safe
@@ -123,27 +123,27 @@ final class ReclaimService {
         ReclaimCategory(
             id: "cookies",
             title: "Cookies",
-            detail: "Library/Cookies — may sign out of in-app web",
+            detail: "Library/Cookies — 可能导致应用内网页登录态失效",
             relativePath: "Library/Cookies",
             risk: .session
         ),
         ReclaimCategory(
             id: "http",
-            title: "HTTP storage",
-            detail: "Library/HTTPStorages — URL session caches and cookies",
+            title: "HTTP 存储",
+            detail: "Library/HTTPStorages — URL Session 缓存与 Cookie",
             relativePath: "Library/HTTPStorages",
             risk: .session
         ),
         ReclaimCategory(
             id: "webkit",
-            title: "WebKit data",
-            detail: "Library/WebKit — site data for in-app browsers",
+            title: "WebKit 数据",
+            detail: "Library/WebKit — 应用内浏览器站点数据",
             relativePath: "Library/WebKit",
             risk: .session
         ),
         ReclaimCategory(
             id: "savedstate",
-            title: "Saved application state",
+            title: "应用状态存档",
             detail: "Library/Saved Application State",
             relativePath: "Library/Saved Application State",
             risk: .session
@@ -151,21 +151,21 @@ final class ReclaimService {
         ReclaimCategory(
             id: "documents",
             title: "Documents",
-            detail: "User files — never reclaimed automatically",
+            detail: "用户文件 — 自动回收时不会触碰",
             relativePath: "Documents",
             risk: .kept
         ),
         ReclaimCategory(
             id: "preferences",
             title: "Preferences",
-            detail: "Library/Preferences — settings and login tokens",
+            detail: "Library/Preferences — 设置与登录 token",
             relativePath: "Library/Preferences",
             risk: .kept
         ),
         ReclaimCategory(
             id: "appsupport",
             title: "Application Support",
-            detail: "Library/Application Support — databases and saves",
+            detail: "Library/Application Support — 数据库与存档",
             relativePath: "Library/Application Support",
             risk: .kept
         )

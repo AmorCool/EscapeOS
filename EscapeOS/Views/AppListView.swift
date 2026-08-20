@@ -120,15 +120,15 @@ struct AppListView: View {
                                     Button {
                                         FileClipboard.copyText(
                                             app.bundleIdentifier,
-                                            confirmation: "Copied Bundle ID"
+                                            confirmation: "已复制 Bundle ID"
                                         )
                                     } label: {
-                                        Label("Copy Bundle ID", systemImage: "doc.on.doc")
+                                        Label("复制 Bundle ID", systemImage: "doc.on.doc")
                                     }
                                     Button {
-                                        FileClipboard.copyText(app.name, confirmation: "Copied Name")
+                                        FileClipboard.copyText(app.name, confirmation: "已复制名称")
                                     } label: {
-                                        Label("Copy Name", systemImage: "character.cursor.ibeam")
+                                        Label("复制名称", systemImage: "character.cursor.ibeam")
                                     }
                                 }
                             }
@@ -144,15 +144,15 @@ struct AppListView: View {
                 }
             }
         }
-        .searchable(text: $searchText, prompt: "Search apps")
+        .searchable(text: $searchText, prompt: "搜索应用")
     }
 
     private var emptyListMessage: String {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
-            return "No apps found."
+            return "未找到应用。"
         }
-        return "No apps match “\(query)”."
+        return "没有匹配 “\(query)” 的应用。"
     }
 
     private var filteredApps: [InstalledApp] {

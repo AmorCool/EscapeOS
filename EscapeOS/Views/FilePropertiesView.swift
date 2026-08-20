@@ -12,43 +12,43 @@ struct FilePropertiesView: View {
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text("Name")) {
+                Section(header: Text("名称")) {
                     Text(item.name)
                 }
-                Section(header: Text("Path")) {
+                Section(header: Text("路径")) {
                     Text(item.path)
                         .font(.footnote)
                         .textSelection(.enabled)
                     Button {
-                        FileClipboard.copyText(item.path, confirmation: "Copied Path")
+                        FileClipboard.copyText(item.path, confirmation: "已复制路径")
                     } label: {
-                        Label("Copy Path", systemImage: "doc.on.doc")
+                        Label("复制路径", systemImage: "doc.on.doc")
                     }
                 }
-                Section(header: Text("Details")) {
-                    row("Kind", kindLabel)
-                    row("Size", formatBytes(item.size))
+                Section(header: Text("详情")) {
+                    row("类型", kindLabel)
+                    row("大小", formatBytes(item.size))
                     if let modified = item.modified {
-                        row("Modified", BackupPaths.displayStamp.string(from: modified))
+                        row("修改时间", BackupPaths.displayStamp.string(from: modified))
                     }
-                    row("Readable", item.isReadable ? "Yes" : "No")
-                    row("Writable", item.isWritable ? "Yes" : "No")
+                    row("可读", item.isReadable ? "是" : "否")
+                    row("可写", item.isWritable ? "是" : "否")
                 }
                 if !item.isDirectory {
                     Section(header: Text("SHA-256")) {
                         if vm.isHashing {
                             HStack {
                                 ProgressView()
-                                Text("Computing…")
+                                Text("计算中…")
                             }
                         } else if let hash = vm.sha256 {
                             Text(hash)
                                 .font(.system(size: 12, design: .monospaced))
                                 .textSelection(.enabled)
                             Button {
-                                FileClipboard.copyText(hash, confirmation: "Copied SHA-256")
+                                FileClipboard.copyText(hash, confirmation: "已复制 SHA-256")
                             } label: {
-                                Label("Copy SHA-256", systemImage: "doc.on.doc")
+                                Label("复制 SHA-256", systemImage: "doc.on.doc")
                             }
                         } else if let error = vm.errorMessage {
                             Text(error).foregroundColor(.red)
@@ -56,11 +56,11 @@ struct FilePropertiesView: View {
                     }
                 }
             }
-            .navigationTitle("Properties")
+            .navigationTitle("属性")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("完成") { dismiss() }
                 }
             }
             .onAppear {

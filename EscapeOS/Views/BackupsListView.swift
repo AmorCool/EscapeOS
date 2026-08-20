@@ -8,7 +8,7 @@ struct BackupsListView: View {
     var body: some View {
         Group {
             if vm.isLoading && vm.records.isEmpty {
-                ProgressView("Loading backups…")
+                ProgressView("正在加载备份…")
             } else if let error = vm.errorMessage, vm.records.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -18,7 +18,7 @@ struct BackupsListView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
-                    Button("Retry") { vm.reload() }
+                    Button("重试") { vm.reload() }
                         .buttonStyle(.bordered)
                 }
                 .padding()
@@ -27,9 +27,9 @@ struct BackupsListView: View {
                     Image(systemName: "tray.full")
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
-                    Text("No Backups Yet")
+                    Text("暂无备份")
                         .font(.headline)
-                    Text("Export a backup from any app under Apps → Backup Data. Archives are saved to Files → On My iPhone → EscapeOS → Backups.")
+                    Text("可在「应用」页进入任意应用，再点击「备份数据」导出备份。归档文件保存在「文件 → 我的iPhone → EscapeOS → Backups」。")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -54,7 +54,7 @@ struct BackupsListView: View {
                 .listStyle(.insetGrouped)
             }
         }
-        .navigationTitle("Backups")
+        .navigationTitle("备份")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
@@ -72,7 +72,7 @@ struct BackupsListView: View {
             RestoreView(session: session, appList: appList)
         }
         .alert(item: $vm.alertError) { error in
-            Alert(title: Text("Could Not Start Restore"), message: Text(error.message), dismissButton: .default(Text("OK")))
+            Alert(title: Text("无法开始恢复"), message: Text(error.message), dismissButton: .default(Text("好")))
         }
     }
 }
@@ -109,14 +109,14 @@ private struct BackupRow: View {
                 Button(action: onRestore) {
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.counterclockwise.circle.fill")
-                        Text("Restore to Device")
+                        Text("恢复到设备")
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
             case .appNotInstalled(_, let appName):
-                Label("\(appName) is not installed", systemImage: "app.badge.checkmark.fill")
+                Label("\(appName) 未安装", systemImage: "app.badge.checkmark.fill")
                     .font(.footnote)
                     .foregroundColor(.orange)
             case .invalidArchive(let message):
@@ -171,13 +171,13 @@ struct RestoreView: View {
                 case .running(let current, let done, let total):
                     VStack(spacing: 12) {
                         ProgressView()
-                        Text("\(done) of \(total) files")
+                        Text("\(done) / \(total) 个文件")
                         Text(current)
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        Button("Cancel", role: .destructive) {
+                        Button("取消", role: .destructive) {
                             vm.cancel()
                         }
                     }
@@ -187,12 +187,12 @@ struct RestoreView: View {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 48))
                             .foregroundColor(.green)
-                        Text("Restore Complete")
+                        Text("恢复完成")
                             .font(.headline)
-                        Text("\(result.filesRestored) files restored to \(result.targetApp.name)")
+                        Text("已恢复 \(result.filesRestored) 个文件到 \(result.targetApp.name)")
                             .font(.subheadline)
                             .multilineTextAlignment(.center)
-                        Button("Done") { dismiss() }
+                        Button("完成") { dismiss() }
                             .buttonStyle(.borderedProminent)
                     }
                     .padding()
@@ -201,32 +201,32 @@ struct RestoreView: View {
                         Image(systemName: "xmark.octagon.fill")
                             .font(.system(size: 48))
                             .foregroundColor(.red)
-                        Text("Restore Failed")
+                        Text("恢复失败")
                             .font(.headline)
                         Text(message)
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
-                        Button("Close") { dismiss() }
+                        Button("关闭") { dismiss() }
                     }
                     .padding()
                 case .cancelled:
                     VStack(spacing: 12) {
-                        Text("Restore Cancelled")
+                        Text("恢复已取消")
                             .font(.headline)
-                        Button("Close") { dismiss() }
+                        Button("关闭") { dismiss() }
                     }
                     .padding()
                 }
                 Spacer()
             }
-            .navigationTitle("Restore Backup")
+            .navigationTitle("恢复备份")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     if case .confirm = vm.state {
-                        Button("Cancel") { dismiss() }
+                        Button("取消") { dismiss() }
                     }
                 }
             }
@@ -243,15 +243,15 @@ struct RestoreView: View {
                 AppIconView(icon: appList.icons[app.bundleIdentifier], size: 64)
                     .padding(.top, 24)
 
-                Text("Restore to \(app.name)?")
+                Text("恢复到 \(app.name)？")
                     .font(.title3).bold()
 
                 VStack(alignment: .leading, spacing: 8) {
-                    detailRow("App", app.name)
+                    detailRow("应用", app.name)
                     detailRow("Bundle ID", app.bundleIdentifier)
-                    detailRow("Files", "\(metadata.fileCount)")
-                    detailRow("Data", formatBytes(metadata.totalBytes))
-                    detailRow("Backup", session.record.archiveFileName)
+                    detailRow("文件数", "\(metadata.fileCount)")
+                    detailRow("数据大小", formatBytes(metadata.totalBytes))
+                    detailRow("备份文件", session.record.archiveFileName)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
@@ -265,7 +265,7 @@ struct RestoreView: View {
                             .font(.footnote)
                             .foregroundColor(.orange)
                     }
-                    Text("Existing files in Documents, Library, and tmp will be overwritten. Keychain data is never restored.")
+                    Text("将覆盖 Documents、Library 和 tmp 中现有的同名文件。Keychain 数据不会被恢复。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
@@ -274,7 +274,7 @@ struct RestoreView: View {
                 Button {
                     vm.start(session: session)
                 } label: {
-                    Text("Restore Backup")
+                    Text("恢复备份")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -282,7 +282,7 @@ struct RestoreView: View {
                 .padding(.horizontal)
             }
         } else {
-            Text("This backup cannot be restored.")
+            Text("此备份无法恢复。")
                 .foregroundColor(.secondary)
         }
     }
@@ -356,7 +356,7 @@ final class BackupsListViewModel: ObservableObject {
         case .ready:
             activeRestore = RestoreSession(record: record, eligibility: eligibility)
         case .appNotInstalled(_, let appName):
-            alertError = IdentifiedAlert(message: "\(appName) is not installed. Install the app before restoring this backup.")
+            alertError = IdentifiedAlert(message: "\(appName) 未安装。请先安装该应用后再恢复此备份。")
         case .invalidArchive(let message):
             alertError = IdentifiedAlert(message: message)
         }

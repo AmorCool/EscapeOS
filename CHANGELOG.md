@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.8] - 2026-08-20
+
+### Added
+
+- **Real guest app name + icon in LiveClean**: the list now shows each LiveContainer guest's `CFBundleDisplayName` (from `Documents/Applications/<name>.app/Info.plist`) and its pre-decoded icon, instead of the raw UUID + shippingbox placeholder. Discovery tries `LCContainerInfo.plist` `name` first, then falls back to the guest `.app`'s `Info.plist`. Icons are loaded once inside the sandbox extension and shipped to the UI as `Data` so they survive handle release.
+
+### Changed
+
+- **Chinese localization**: App 列表、空间回收（含安全/会话/保留分区与汇总）、回收空间（ReclaimAppView）、备份列表、恢复确认、属性面板、十六进制编辑、文本查看、备份视图、应用详情（容器访问、容器内容、备份/恢复、重置应用数据）等均改为 Simplified Chinese。FileBrowserView 的菜单/对话框留给下一轮。
+
 ## [0.1.7] - 2026-08-20
 
 ### Fixed

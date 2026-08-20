@@ -19,11 +19,11 @@ enum AppDiscoveryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noPairingFile:
-            return "No pairing file imported. Pairing is required to list apps on-device."
+            return "尚未导入配对文件。需要配对文件才能列出设备上的应用。"
         case .heartbeatFailed(let m):
-            return "Could not connect to the local tunnel: \(m). Enable LocalDevVPN on its default 10.7.0.1 IPs, stay on Wi-Fi, and use a pairing file from iPASide."
+            return "无法连接本地隧道：\(m)。请将 LocalDevVPN 的设备 IP / 隧道 IP 保持默认（10.7.0.1），保持 Wi-Fi 连接，并使用 iPASide 生成的配对文件。"
         case .enumerationFailed(let m):
-            return "Failed to enumerate apps: \(m)"
+            return "枚举应用失败：\(m)"
         }
     }
 }

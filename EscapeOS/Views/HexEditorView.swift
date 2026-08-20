@@ -11,7 +11,7 @@ struct HexEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             if vm.truncated {
-                Text("Showing the first 512 KB as a hex dump. Save is disabled for files larger than this.")
+                Text("仅显示前 512 KB 的十六进制预览。超过此大小的文件不可保存。")
                     .font(.caption)
                     .foregroundColor(.orange)
                     .padding(8)
@@ -39,18 +39,18 @@ struct HexEditorView: View {
             }
         }
         .background(Color(UIColor.systemBackground))
-        .alert("Edit Byte", isPresented: Binding(
+        .alert("编辑字节", isPresented: Binding(
             get: { editOffset != nil },
             set: { if !$0 { editOffset = nil } }
         )) {
             TextField("00–FF", text: $editValue)
                 .autocapitalization(.allCharacters)
                 .disableAutocorrection(true)
-            Button("Cancel", role: .cancel) { editOffset = nil }
-            Button("Set") { applyEdit() }
+            Button("取消", role: .cancel) { editOffset = nil }
+            Button("设置") { applyEdit() }
         } message: {
             if let offset = editOffset {
-                Text("Offset \(String(format: "0x%08X", offset))")
+                Text("偏移 \(String(format: "0x%08X", offset))")
             }
         }
     }

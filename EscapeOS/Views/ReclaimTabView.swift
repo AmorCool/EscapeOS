@@ -8,9 +8,9 @@ struct ReclaimAppRank: Identifiable {
     let failed: Bool
 
     var subtitle: String {
-        if failed { return "Could not open container" }
-        if safeBytes == 0 { return "Nothing safe to reclaim" }
-        return "\(ReclaimService.formatBytes(safeBytes)) safe"
+        if failed { return "无法打开容器" }
+        if safeBytes == 0 { return "没有可安全回收的内容" }
+        return "可回收 \(ReclaimService.formatBytes(safeBytes))"
     }
 }
 
@@ -23,11 +23,11 @@ struct ReclaimTabView: View {
     var body: some View {
         Group {
             if appList.needsPairing {
-                Text("Import a pairing file on the Apps tab first.")
+                Text("请先在「应用」页导入配对文件。")
                     .foregroundColor(.secondary)
                     .padding()
             } else if appList.apps.isEmpty && !appList.isLoading {
-                Text("No apps to scan.")
+                Text("没有可扫描的应用。")
                     .foregroundColor(.secondary)
                     .padding()
             } else if vm.rows.isEmpty && !vm.isScanning {
@@ -36,14 +36,14 @@ struct ReclaimTabView: View {
                 rankedList
             }
         }
-        .navigationTitle("Reclaim")
+        .navigationTitle("空间回收")
         .onAppear {
             vm.refreshRanksFromCache()
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 if selecting {
-                    Button("Cancel") {
+                    Button("取消") {
                         selecting = false
                         vm.selected.removeAll()
                     }
@@ -52,7 +52,7 @@ struct ReclaimTabView: View {
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack {
-                    Button(selecting ? "Select All" : "Select") {
+                    Button(selecting ? "全选" : "选择") {
                         if selecting {
                             vm.selected = Set(vm.rows.filter { !$0.failed && $0.safeBytes > 0 }.map(\.id))
                         } else {
@@ -91,16 +91,16 @@ struct ReclaimTabView: View {
                 }
             }
         }
-        .alert("Reclaim Safe space?", isPresented: $vm.confirmBatch) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reclaim", role: .destructive) {
+        .alert("回收安全空间？", isPresented: $vm.confirmBatch) {
+            Button("取消", role: .cancel) {}
+            Button("回收", role: .destructive) {
                 vm.runBatch(apps: appList.apps)
             }
         } message: {
             Text(vm.batchMessage)
         }
         .alert(item: $vm.alert) { alert in
-            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
+            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("好")))
         }
     }
 
@@ -109,7 +109,7 @@ struct ReclaimTabView: View {
             Image(systemName: "internaldrive")
                 .font(.system(size: 40))
                 .foregroundColor(.secondary)
-            Text("Measure cache and temp files in each app. Nothing is deleted until you reclaim.")
+            Text("扫描每个应用的缓存与临时文件。确认回收前不会删除任何内容。")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -118,7 +118,7 @@ struct ReclaimTabView: View {
                 selecting = false
                 vm.scan(apps: appList.apps)
             } label: {
-                Text("Scan Now")
+                Text("立即扫描")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -177,10 +177,10 @@ struct ReclaimTabView: View {
     private var batchBar: some View {
         let bytes = vm.selectedSafeBytes
         return HStack {
-            Text("\(vm.selected.count) selected · \(ReclaimService.formatBytes(bytes))")
+            Text("已选 \(vm.selected.count) 项 · \(ReclaimService.formatBytes(bytes))")
                 .font(.subheadline)
             Spacer()
-            Button("Reclaim Safe") {
+            Button("回收安全项") {
                 vm.confirmBatch = true
             }
             .disabled(vm.selected.isEmpty || bytes == 0)
@@ -195,7 +195,7 @@ final class ReclaimTabViewModel: ObservableObject {
     @Published var selected: Set<String> = []
     @Published var isScanning = false
     @Published var isBusy = false
-    @Published var busyTitle = "Scanning…"
+    @Published var busyTitle = "扫描中…"
     @Published var progressText = ""
     @Published var confirmBatch = false
     @Published var alert: ReclaimNotice?
@@ -210,7 +210,7 @@ final class ReclaimTabViewModel: ObservableObject {
     var batchMessage: String {
         let n = selected.count
         let files = rows.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.safeFiles }
-        return "Close those apps first. This reclaims Safe caches and temp files only (\(files) files, \(ReclaimService.formatBytes(selectedSafeBytes))) from \(n) app\(n == 1 ? "" : "s"). Session data is not included."
+        return "请先关闭这些应用。本次仅回收 \(n) 个应用的安全缓存与临时文件（\(files) 个文件，\(ReclaimService.formatBytes(selectedSafeBytes))）。不包含会话数据。"
     }
 
     func refreshRanksFromCache() {
@@ -235,7 +235,7 @@ final class ReclaimTabViewModel: ObservableObject {
         scanToken += 1
         let token = scanToken
         isScanning = true
-        busyTitle = "Scanning…"
+        busyTitle = "扫描中…"
         progressText = ""
         selected.removeAll()
         DispatchQueue.global(qos: .utility).async {
@@ -283,8 +283,8 @@ final class ReclaimTabViewModel: ObservableObject {
                     lock.unlock()
                     DispatchQueue.main.async {
                         guard token == self.scanToken else { return }
-                        self.busyTitle = "Scanning \(done) / \(total)"
-                        self.progressText = "Scanning \(done) / \(total)"
+                        self.busyTitle = "扫描 \(done) / \(total)"
+                        self.progressText = "扫描 \(done) / \(total)"
                     }
                 }
             }
@@ -308,7 +308,7 @@ final class ReclaimTabViewModel: ObservableObject {
         let targets = rows.filter { ids.contains($0.id) && !$0.failed && $0.safeBytes > 0 }.map(\.app)
         guard !targets.isEmpty else { return }
         isBusy = true
-        busyTitle = "Reclaiming…"
+        busyTitle = "回收中…"
         DispatchQueue.global(qos: .userInitiated).async {
             var freed: Int64 = 0
             var files = 0
@@ -316,7 +316,7 @@ final class ReclaimTabViewModel: ObservableObject {
             var failures = 0
             for (index, app) in targets.enumerated() {
                 DispatchQueue.main.async {
-                    self.busyTitle = "Reclaiming \(index + 1) / \(targets.count)"
+                    self.busyTitle = "回收 \(index + 1) / \(targets.count)"
                 }
                 do {
                     let result = try self.service.reclaim(
@@ -332,14 +332,14 @@ final class ReclaimTabViewModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.isBusy = false
-                var message = "Freed \(ReclaimService.formatBytes(freed)) (\(files) files) from \(targets.count) apps."
+                var message = "已释放 \(ReclaimService.formatBytes(freed))（\(files) 个文件），来自 \(targets.count) 个应用。"
                 if skipped > 0 {
-                    message += " Skipped \(skipped) items that could not be deleted."
+                    message += " 跳过 \(skipped) 个无法删除的项目。"
                 }
                 if failures > 0 {
-                    message += " \(failures) failed."
+                    message += " \(failures) 个失败。"
                 }
-                self.alert = ReclaimNotice(title: "Reclaimed", message: message)
+                self.alert = ReclaimNotice(title: "已回收", message: message)
                 self.scan(apps: apps)
             }
         }

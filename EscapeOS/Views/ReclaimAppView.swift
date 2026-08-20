@@ -20,24 +20,24 @@ struct ReclaimAppView: View {
                 }
             }
 
-            Section(header: Text("Safe"), footer: Text("These folders are caches and temp files. The app can usually rebuild them.")) {
+            Section(header: Text("安全"), footer: Text("这些是缓存与临时文件目录，应用通常可以自行重建。")) {
                 ForEach(vm.buckets.filter { $0.category.risk == .safe }) { bucket in
                     bucketRow(bucket)
                 }
             }
 
-            Section(header: Text("Session"), footer: Text("May sign you out of in-app browsers. Off until you turn a bucket on.")) {
+            Section(header: Text("会话"), footer: Text("可能导致应用内网页登录态丢失。默认关闭，需要时可手动开启。")) {
                 if vm.isFilling && vm.buckets.filter({ $0.category.risk == .session }).isEmpty {
-                    Text("Measuring…").foregroundColor(.secondary)
+                    Text("测量中…").foregroundColor(.secondary)
                 }
                 ForEach(vm.buckets.filter { $0.category.risk == .session }) { bucket in
                     bucketRow(bucket)
                 }
             }
 
-            Section(header: Text("Kept"), footer: Text("Documents, Preferences, and Application Support are never reclaimed here.")) {
+            Section(header: Text("保留"), footer: Text("Documents、Preferences 与 Application Support 在此面板中不会被回收。")) {
                 if vm.isFilling && vm.buckets.filter({ $0.category.risk == .kept }).isEmpty {
-                    Text("Measuring…").foregroundColor(.secondary)
+                    Text("测量中…").foregroundColor(.secondary)
                 }
                 ForEach(vm.buckets.filter { $0.category.risk == .kept }) { bucket in
                     HStack(alignment: .top) {
@@ -56,16 +56,16 @@ struct ReclaimAppView: View {
                 }
             }
 
-            Section(footer: Text("Close \(app.name) first. This does not delete Documents, Preferences, or Application Support.")) {
+            Section(footer: Text("请先关闭 \(app.name)。不会删除 Documents、Preferences 或 Application Support。")) {
                 Button {
                     vm.confirmReclaim = true
                 } label: {
-                    Label("Reclaim \(ReclaimService.formatBytes(vm.selectedBytes))", systemImage: "internaldrive")
+                    Label("回收 \(ReclaimService.formatBytes(vm.selectedBytes))", systemImage: "internaldrive")
                 }
                 .disabled(vm.selectedBytes == 0 || vm.isBusy || vm.isLoading)
             }
         }
-        .navigationTitle("Reclaim Space")
+        .navigationTitle("回收空间")
         .navigationBarTitleDisplayMode(.inline)
         .overlay {
             if vm.isBusy || vm.isLoading {
@@ -74,7 +74,7 @@ struct ReclaimAppView: View {
                     VStack(spacing: 14) {
                         ProgressView()
                             .scaleEffect(1.15)
-                        Text(vm.isLoading ? "Measuring…" : vm.busyTitle)
+                        Text(vm.isLoading ? "测量中…" : vm.busyTitle)
                             .font(.headline)
                     }
                     .padding(.horizontal, 28)
@@ -88,21 +88,21 @@ struct ReclaimAppView: View {
             vm.load(app: app)
         }
         .alert(vm.confirmTitle, isPresented: $vm.confirmReclaim) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reclaim", role: .destructive) {
+            Button("取消", role: .cancel) {}
+            Button("回收", role: .destructive) {
                 vm.run(app: app)
             }
         } message: {
             Text(vm.confirmMessage(appName: app.name))
         }
         .alert(item: $vm.alert) { alert in
-            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
+            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("好")))
         }
     }
 
     private var selectedSummary: String {
-        if vm.isLoading { return "Measuring folders…" }
-        return "\(ReclaimService.formatBytes(vm.selectedBytes)) selected"
+        if vm.isLoading { return "测量目录中…" }
+        return "已选 \(ReclaimService.formatBytes(vm.selectedBytes))"
     }
 
     private func bucketRow(_ bucket: ReclaimBucketStat) -> some View {
@@ -137,7 +137,7 @@ final class ReclaimAppViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var isFilling = false
     @Published var isBusy = false
-    @Published var busyTitle = "Reclaiming…"
+    @Published var busyTitle = "回收中…"
     @Published var confirmReclaim = false
     @Published var alert: ReclaimNotice?
 
@@ -153,14 +153,14 @@ final class ReclaimAppViewModel: ObservableObject {
     }
 
     var confirmTitle: String {
-        selectedHasSession ? "Reclaim including session data?" : "Reclaim this space?"
+        selectedHasSession ? "回收包含会话数据吗？" : "回收这些空间？"
     }
 
     func confirmMessage(appName: String) -> String {
         let count = buckets.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.files }
-        var text = "Close \(appName) first. This removes \(count) files (\(ReclaimService.formatBytes(selectedBytes)))."
+        var text = "请先关闭 \(appName)。本次将删除 \(count) 个文件（\(ReclaimService.formatBytes(selectedBytes))）。"
         if selectedHasSession {
-            text += " Session buckets can sign you out of in-app web."
+            text += " 会话类数据可能导致应用内网页登录态丢失。"
         }
         return text
     }
@@ -235,7 +235,7 @@ final class ReclaimAppViewModel: ObservableObject {
         loadToken += 1
         let token = loadToken
         isBusy = true
-        busyTitle = "Reclaiming…"
+        busyTitle = "回收中…"
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let result = try self.service.reclaim(app: app, categories: cats) { title in
@@ -247,16 +247,16 @@ final class ReclaimAppViewModel: ObservableObject {
                     self.isBusy = false
                     self.apply(refreshed, resetSelection: true)
                     ReclaimScanCache.shared.merge(refreshed, for: app.bundleIdentifier)
-                    var message = "Freed \(ReclaimService.formatBytes(result.bytesFreed)) (\(result.filesRemoved) files)."
+                    var message = "已释放 \(ReclaimService.formatBytes(result.bytesFreed))（\(result.filesRemoved) 个文件）。"
                     if result.skipped > 0 {
-                        message += " Skipped \(result.skipped) items that could not be deleted."
+                        message += " 跳过 \(result.skipped) 个无法删除的项目。"
                     }
-                    self.alert = ReclaimNotice(title: "Reclaimed", message: message)
+                    self.alert = ReclaimNotice(title: "已回收", message: message)
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.isBusy = false
-                    self.alert = ReclaimNotice(title: "Reclaim Failed", message: error.localizedDescription)
+                    self.alert = ReclaimNotice(title: "回收失败", message: error.localizedDescription)
                 }
             }
         }

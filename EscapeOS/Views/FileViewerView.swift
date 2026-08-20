@@ -15,7 +15,7 @@ struct FileViewerView: View {
     var body: some View {
         Group {
             if vm.isLoading {
-                ProgressView("Opening…")
+                ProgressView("正在打开…")
             } else if let error = vm.errorMessage {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle")
@@ -34,13 +34,13 @@ struct FileViewerView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if vm.canSave {
-                    Button("Save") { vm.save() }
+                    Button("保存") { vm.save() }
                         .disabled(vm.isSaving)
                 }
             }
         }
         .alert(item: $vm.saveAlert) { alert in
-            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
+            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("好")))
         }
         .onAppear {
             vm.load(app: app, item: item, mode: mode)
@@ -169,7 +169,7 @@ final class FileViewerViewModel: ObservableObject {
             } catch {
                 DispatchQueue.main.async {
                     self.isSaving = false
-                    self.saveAlert = NamedAlert(title: "Save Failed", message: error.localizedDescription)
+                    self.saveAlert = NamedAlert(title: "保存失败", message: error.localizedDescription)
                 }
             }
         }
@@ -273,7 +273,7 @@ struct TextFileEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             if vm.truncated {
-                Text("File is larger than 2 MB. Showing the first 2 MB as read-only.")
+                Text("文件大于 2 MB，仅显示前 2 MB 且以只读方式打开。")
                     .font(.caption)
                     .foregroundColor(.orange)
                     .padding(8)

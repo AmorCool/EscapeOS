@@ -2,18 +2,20 @@ import SwiftUI
 
 /// One guest app (inside LiveContainer) ranked by reclaimable safe space.
 struct LiveCleanAppRank: Identifiable {
-    var id: String { app.bundleIdentifier }
-    let app: InstalledApp
-    let hostName: String
+    var id: String { guest.id }
+    let guest: LiveContainerGuest
     let safeBytes: Int64
     let safeFiles: Int
     let failed: Bool
 
     var subtitle: String {
-        if failed { return "无法打开容器 · \(hostName)" }
-        if safeBytes == 0 { return "没有可安全清理的内容 · \(hostName)" }
-        return "可安全清理 \(ReclaimService.formatBytes(safeBytes)) · \(hostName)"
+        if failed { return "无法打开容器 · \(guest.hostName)" }
+        if safeBytes == 0 { return "没有可安全清理的内容 · \(guest.hostName)" }
+        return "可安全清理 \(ReclaimService.formatBytes(safeBytes)) · \(guest.hostName)"
     }
+
+    /// Convenience accessor for `ReclaimService` (needs an `InstalledApp`).
+    var installedApp: InstalledApp { guest.installedApp }
 }
 
 /// Cleans cache and temp files of apps installed *inside* LiveContainer.
@@ -98,7 +100,7 @@ struct LiveCleanTabView: View {
         .alert("清理安全空间？", isPresented: $vm.confirmBatch) {
             Button("取消", role: .cancel) {}
             Button("清理", role: .destructive) {
-                vm.runBatch(apps: vm.guestApps)
+                vm.runBatch(guests: vm.guests)
             }
         } message: {
             Text(vm.batchMessage)
@@ -152,7 +154,7 @@ struct LiveCleanTabView: View {
                     }
                     .disabled(row.failed || row.safeBytes == 0)
                 } else {
-                    NavigationLink(destination: ReclaimAppView(app: row.app, viewModel: appList)) {
+                    NavigationLink(destination: ReclaimAppView(app: row.installedApp, viewModel: appList)) {
                         rankRow(row, selected: false)
                     }
                 }
@@ -167,13 +169,10 @@ struct LiveCleanTabView: View {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .foregroundColor(selected ? .accentColor : .secondary)
             }
-            Image(systemName: "shippingbox")
-                .resizable()
-                .scaledToFit()
+            GuestIcon(data: row.guest.iconData)
                 .frame(width: 40, height: 40)
-                .foregroundColor(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.app.name)
+                Text(row.guest.displayName)
                 Text(row.subtitle)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -198,6 +197,28 @@ struct LiveCleanTabView: View {
     }
 }
 
+/// Renders a LiveContainer guest icon from pre-decoded `Data`, with a
+/// shippingbox placeholder when the guest bundle shipped no icon.
+struct GuestIcon: View {
+    let data: Data?
+
+    var body: some View {
+        Group {
+            if let data, !data.isEmpty, let img = UIImage(data: data) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                Image(systemName: "shippingbox")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
 final class LiveCleanTabViewModel: ObservableObject {
     @Published var rows: [LiveCleanAppRank] = []
     @Published var selected: Set<String> = []
@@ -212,7 +233,10 @@ final class LiveCleanTabViewModel: ObservableObject {
     @Published var didRun = false
 
     /// Flattened guest apps across all instances (used for batch reclaim).
-    var guestApps: [InstalledApp] { instances.flatMap { $0.guests } }
+    var guests: [LiveContainerGuest] { instances.flatMap { $0.guests } }
+
+    /// Legacy accessor kept for the batch alert copy.
+    var guestApps: [InstalledApp] { guests.map(\.installedApp) }
 
     private let service = ReclaimService()
     private let discovery = LiveContainerDiscovery()
@@ -231,11 +255,10 @@ final class LiveCleanTabViewModel: ObservableObject {
     func refreshRanksFromCache() {
         guard !rows.isEmpty else { return }
         rows = rows.map { row in
-            guard let buckets = ReclaimScanCache.shared.buckets(for: row.app.bundleIdentifier) else { return row }
+            guard let buckets = ReclaimScanCache.shared.buckets(for: row.guest.id) else { return row }
             let safe = buckets.filter { $0.category.risk == .safe }
             return LiveCleanAppRank(
-                app: row.app,
-                hostName: row.hostName,
+                guest: row.guest,
                 safeBytes: safe.reduce(0) { $0 + $1.bytes },
                 safeFiles: safe.reduce(0) { $0 + $1.files },
                 failed: row.failed
@@ -243,7 +266,7 @@ final class LiveCleanTabViewModel: ObservableObject {
         }.sorted { lhs, rhs in
             if lhs.failed != rhs.failed { return !lhs.failed && rhs.failed }
             if lhs.safeBytes != rhs.safeBytes { return lhs.safeBytes > rhs.safeBytes }
-            return lhs.app.name.localizedCaseInsensitiveCompare(rhs.app.name) == .orderedAscending
+            return lhs.guest.displayName.localizedCaseInsensitiveCompare(rhs.guest.displayName) == .orderedAscending
         }
     }
 
@@ -262,10 +285,10 @@ final class LiveCleanTabViewModel: ObservableObject {
         } else {
             discoveryError = nil
         }
-        scan(apps: guests)
+        scan(guests: guests)
     }
 
-    func scan(apps: [InstalledApp]) {
+    func scan(guests: [LiveContainerGuest]) {
         scanToken += 1
         let token = scanToken
         isScanning = true
@@ -274,19 +297,19 @@ final class LiveCleanTabViewModel: ObservableObject {
         selected.removeAll()
 
         let hostNames = Dictionary(uniqueKeysWithValues: instances.flatMap { inst in
-            inst.guests.map { ($0.bundleIdentifier, inst.host.name) }
+            inst.guests.map { ($0.id, inst.host.name) }
         })
 
         DispatchQueue.global(qos: .utility).async {
             let lock = NSLock()
             var ranks: [LiveCleanAppRank] = []
-            let total = apps.count
+            let total = guests.count
             var completedCount = 0
             // Two at a time: faster than one-by-one without exhausting bad_query.
             let gate = DispatchSemaphore(value: 2)
             let group = DispatchGroup()
             let queue = DispatchQueue(label: "escapeos.liveclean.scan", qos: .utility, attributes: .concurrent)
-            for app in apps {
+            for guest in guests {
                 if token != self.scanToken { break }
                 gate.wait()
                 group.enter()
@@ -296,24 +319,24 @@ final class LiveCleanTabViewModel: ObservableObject {
                         group.leave()
                     }
                     if token != self.scanToken { return }
-                    let hostName = hostNames[app.bundleIdentifier] ?? "LiveContainer"
+                    let hostName = hostNames[guest.id] ?? guest.hostName
+                    let installed = guest.installedApp
                     let rank: LiveCleanAppRank
-                    if app.containerPath.isEmpty {
-                        rank = LiveCleanAppRank(app: app, hostName: hostName, safeBytes: 0, safeFiles: 0, failed: true)
+                    if installed.containerPath.isEmpty {
+                        rank = LiveCleanAppRank(guest: guest, safeBytes: 0, safeFiles: 0, failed: true)
                     } else {
                         do {
-                            let buckets = try self.service.scan(app: app, risks: [.safe])
-                            ReclaimScanCache.shared.merge(buckets, for: app.bundleIdentifier)
+                            let buckets = try self.service.scan(app: installed, risks: [.safe])
+                            ReclaimScanCache.shared.merge(buckets, for: guest.id)
                             let safe = buckets.filter { $0.category.risk == .safe }
                             rank = LiveCleanAppRank(
-                                app: app,
-                                hostName: hostName,
+                                guest: guest,
                                 safeBytes: safe.reduce(0) { $0 + $1.bytes },
                                 safeFiles: safe.reduce(0) { $0 + $1.files },
                                 failed: false
                             )
                         } catch {
-                            rank = LiveCleanAppRank(app: app, hostName: hostName, safeBytes: 0, safeFiles: 0, failed: true)
+                            rank = LiveCleanAppRank(guest: guest, safeBytes: 0, safeFiles: 0, failed: true)
                         }
                     }
                     lock.lock()
@@ -332,7 +355,7 @@ final class LiveCleanTabViewModel: ObservableObject {
             ranks.sort { lhs, rhs in
                 if lhs.failed != rhs.failed { return !lhs.failed && rhs.failed }
                 if lhs.safeBytes != rhs.safeBytes { return lhs.safeBytes > rhs.safeBytes }
-                return lhs.app.name.localizedCaseInsensitiveCompare(rhs.app.name) == .orderedAscending
+                return lhs.guest.displayName.localizedCaseInsensitiveCompare(rhs.guest.displayName) == .orderedAscending
             }
             DispatchQueue.main.async {
                 guard token == self.scanToken else { return }
@@ -343,20 +366,21 @@ final class LiveCleanTabViewModel: ObservableObject {
         }
     }
 
-    func runBatch(apps: [InstalledApp]) {
+    func runBatch(guests: [LiveContainerGuest]) {
         let ids = selected
-        let targets = rows.filter { ids.contains($0.id) && !$0.failed && $0.safeBytes > 0 }.map(\.app)
+        let targets = rows.filter { ids.contains($0.id) && !$0.failed && $0.safeBytes > 0 }.map { $0.guest }
         guard !targets.isEmpty else { return }
         isBusy = true
         busyTitle = "清理中…"
+        let installedTargets = targets.map(\.installedApp)
         DispatchQueue.global(qos: .userInitiated).async {
             var freed: Int64 = 0
             var files = 0
             var skipped = 0
             var failures = 0
-            for (index, app) in targets.enumerated() {
+            for (index, app) in installedTargets.enumerated() {
                 DispatchQueue.main.async {
-                    self.busyTitle = "清理 \(index + 1) / \(targets.count)"
+                    self.busyTitle = "清理 \(index + 1) / \(installedTargets.count)"
                 }
                 do {
                     let result = try self.service.reclaim(
@@ -372,7 +396,7 @@ final class LiveCleanTabViewModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.isBusy = false
-                var message = "已释放 \(ReclaimService.formatBytes(freed))（\(files) 个文件），来自 LiveContainer 内 \(targets.count) 个应用。"
+                var message = "已释放 \(ReclaimService.formatBytes(freed))（\(files) 个文件），来自 LiveContainer 内 \(installedTargets.count) 个应用。"
                 if skipped > 0 {
                     message += " 跳过 \(skipped) 个无法删除的项目。"
                 }
@@ -380,7 +404,7 @@ final class LiveCleanTabViewModel: ObservableObject {
                     message += " \(failures) 个失败。"
                 }
                 self.alert = ReclaimNotice(title: "已清理", message: message)
-                self.scan(apps: apps)
+                self.scan(guests: guests)
             }
         }
     }

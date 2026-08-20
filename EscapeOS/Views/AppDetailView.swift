@@ -24,27 +24,27 @@ struct AppDetailView: View {
                         Text(app.name).font(.headline)
                         Text(app.bundleIdentifier).font(.caption).foregroundColor(.secondary)
                         if let version = app.version {
-                            Text("Version \(version)").font(.caption2).foregroundColor(.secondary)
+                            Text("版本 \(version)").font(.caption2).foregroundColor(.secondary)
                         }
                     }
                     Spacer()
                 }
                 .contextMenu {
                     Button {
-                        FileClipboard.copyText(app.bundleIdentifier, confirmation: "Copied Bundle ID")
+                        FileClipboard.copyText(app.bundleIdentifier, confirmation: "已复制 Bundle ID")
                     } label: {
-                        Label("Copy Bundle ID", systemImage: "doc.on.doc")
+                        Label("复制 Bundle ID", systemImage: "doc.on.doc")
                     }
                     Button {
-                        FileClipboard.copyText(app.name, confirmation: "Copied Name")
+                        FileClipboard.copyText(app.name, confirmation: "已复制名称")
                     } label: {
-                        Label("Copy Name", systemImage: "character.cursor.ibeam")
+                        Label("复制名称", systemImage: "character.cursor.ibeam")
                     }
                     if !app.containerPath.isEmpty {
                         Button {
-                            FileClipboard.copyText(app.containerPath, confirmation: "Copied Path")
+                            FileClipboard.copyText(app.containerPath, confirmation: "已复制路径")
                         } label: {
-                            Label("Copy Container Path", systemImage: "folder")
+                            Label("复制容器路径", systemImage: "folder")
                         }
                     }
                 }
@@ -52,21 +52,21 @@ struct AppDetailView: View {
 
             Section {
                 Button {
-                    FileClipboard.copyText(app.bundleIdentifier, confirmation: "Copied Bundle ID")
+                    FileClipboard.copyText(app.bundleIdentifier, confirmation: "已复制 Bundle ID")
                 } label: {
-                    Label("Copy Bundle ID", systemImage: "doc.on.doc")
+                    Label("复制 Bundle ID", systemImage: "doc.on.doc")
                 }
             }
 
-            Section(header: Text("Access")) {
+            Section(header: Text("访问权限")) {
                 switch access.state {
                 case .unknown, .checking:
                     HStack {
                         ProgressView()
-                        Text("Checking container access…").foregroundColor(.secondary)
+                        Text("正在检查容器访问…").foregroundColor(.secondary)
                     }
                 case .granted:
-                    Label("Container accessible", systemImage: "checkmark.shield.fill")
+                    Label("容器可访问", systemImage: "checkmark.shield.fill")
                         .foregroundColor(.green)
                 case .denied(let reason):
                     Label(reason, systemImage: "xmark.shield.fill")
@@ -75,14 +75,14 @@ struct AppDetailView: View {
             }
 
             if access.isGranted {
-                Section(header: Text("Container")) {
+                Section(header: Text("容器内容")) {
                     if inventory.isLoading && inventory.roots.isEmpty {
                         HStack {
                             ProgressView()
-                            Text("Counting files…").foregroundColor(.secondary)
+                            Text("正在统计文件…").foregroundColor(.secondary)
                         }
                     } else if inventory.roots.isEmpty {
-                        Text("No Documents, Library, or tmp visible.")
+                        Text("未找到 Documents、Library 或 tmp。")
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(inventory.roots) { root in
@@ -98,14 +98,14 @@ struct AppDetailView: View {
                 }
             }
 
-            Section(footer: Text("Saves Documents, Library, and tmp into Files → On My iPhone → EscapeOS → Backups. Keychain is never included. Close \(app.name) first for a consistent snapshot.")) {
+            Section(footer: Text("将 Documents、Library 与 tmp 备份到「文件 → 我的iPhone → EscapeOS → Backups」。不包含 Keychain。请先关闭 \(app.name) 以获得一致快照。")) {
                 NavigationLink(destination: FileBrowserView(app: app)) {
-                    Label("Browse Files", systemImage: "folder.fill")
+                    Label("浏览文件", systemImage: "folder.fill")
                 }
                 .disabled(!access.isGranted)
 
                 NavigationLink(destination: ReclaimAppView(app: app, viewModel: viewModel)) {
-                    Label("Reclaim Space", systemImage: "internaldrive")
+                    Label("回收空间", systemImage: "internaldrive")
                 }
                 .disabled(!access.isGranted)
 
@@ -114,34 +114,34 @@ struct AppDetailView: View {
                         appBackups.reload(bundleIdentifier: app.bundleIdentifier)
                     }
                 } label: {
-                    Label("Backup Data", systemImage: "externaldrive.fill.badge.plus")
+                    Label("备份数据", systemImage: "externaldrive.fill.badge.plus")
                 }
                 .disabled(!access.isGranted || backup.isBusy)
 
                 backupStatus
             }
 
-            Section(footer: Text("Wipes Documents, Library, and tmp for this app. Close \(app.name) first. Logins and saves in those folders are gone. Keychain and App Groups are not touched.")) {
+            Section(footer: Text("清空该应用的 Documents、Library 与 tmp。请先关闭 \(app.name)。这些目录中的登录态与存档将丢失。Keychain 与 App Group 不受影响。")) {
                 Button(role: .destructive) {
                     confirmReset = true
                 } label: {
-                    Label("Reset App Data", systemImage: "trash.fill")
+                    Label("重置应用数据", systemImage: "trash.fill")
                         .foregroundColor(.red)
                 }
                 .disabled(!access.isGranted || isResetting)
             }
 
             Section(
-                header: Text(appBackups.records.isEmpty ? "Backups" : "Backups (\(appBackups.records.count))"),
-                footer: Text("Restore writes into this app's current container. Close the app first.")
+                header: Text(appBackups.records.isEmpty ? "备份" : "备份 (\(appBackups.records.count))"),
+                footer: Text("恢复操作将写入该应用当前容器。请先关闭应用。")
             ) {
                 if appBackups.isLoading && appBackups.records.isEmpty {
                     HStack {
                         ProgressView()
-                        Text("Loading backups…").foregroundColor(.secondary)
+                        Text("正在加载备份…").foregroundColor(.secondary)
                     }
                 } else if appBackups.records.isEmpty {
-                    Text("No backups for \(app.name) yet.")
+                    Text("暂无 \(app.name) 的备份。")
                         .foregroundColor(.secondary)
                 } else {
                     ForEach(appBackups.records) { record in
@@ -168,18 +168,18 @@ struct AppDetailView: View {
             RestoreView(session: session, appList: viewModel)
         }
         .alert(item: $restoreAlert) { error in
-            Alert(title: Text("Could Not Start Restore"), message: Text(error.message), dismissButton: .default(Text("OK")))
+            Alert(title: Text("无法开始恢复"), message: Text(error.message), dismissButton: .default(Text("好")))
         }
-        .alert("Reset all app data?", isPresented: $confirmReset) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset App Data", role: .destructive) {
+        .alert("重置全部应用数据？", isPresented: $confirmReset) {
+            Button("取消", role: .cancel) {}
+            Button("重置应用数据", role: .destructive) {
                 resetAppData()
             }
         } message: {
             Text(resetConfirmMessage)
         }
         .alert(item: $resetNotice) { notice in
-            Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("OK")))
+            Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("好")))
         }
         .overlay {
             if isResetting {
@@ -188,7 +188,7 @@ struct AppDetailView: View {
                     VStack(spacing: 14) {
                         ProgressView()
                             .scaleEffect(1.15)
-                        Text("Resetting…")
+                        Text("重置中…")
                             .font(.headline)
                     }
                     .padding(.horizontal, 28)
@@ -200,9 +200,9 @@ struct AppDetailView: View {
     }
 
     private var resetConfirmMessage: String {
-        var text = "Close \(app.name) first. This empties Documents, Library, and tmp. You will need to sign in and set the app up again. Keychain is not deleted."
+        var text = "请先关闭 \(app.name)。本次将清空 Documents、Library 与 tmp，之后需要重新登录并设置。Keychain 不会被删除。"
         if app.bundleIdentifier == Bundle.main.bundleIdentifier {
-            text += " This is EscapeOS — the pairing file in Documents will be deleted too."
+            text += " 当前选中的是的是它本身——Documents 中的配对文件也将被删除。"
         }
         return text
     }
@@ -215,19 +215,19 @@ struct AppDetailView: View {
                 DispatchQueue.main.async {
                     self.isResetting = false
                     self.inventory.load(app: app)
-                    var message = "Documents, Library, and tmp are empty."
+                    var message = "Documents、Library 与 tmp 已清空。"
                     if skipped > 0 {
-                        message = "Cleared what we could. Skipped \(skipped) items that could not be deleted."
+                        message = "已尽可能清理。跳过 \(skipped) 个无法删除的项目。"
                     }
                     self.resetNotice = ReclaimNotice(
-                        title: "App Data Reset",
+                        title: "应用数据已重置",
                         message: message
                     )
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.isResetting = false
-                    self.resetNotice = ReclaimNotice(title: "Reset Failed", message: error.localizedDescription)
+                    self.resetNotice = ReclaimNotice(title: "重置失败", message: error.localizedDescription)
                 }
             }
         }
@@ -241,37 +241,37 @@ struct AppDetailView: View {
         case .running(let files, let bytes, let current):
             VStack(alignment: .leading, spacing: 6) {
                 ProgressView()
-                Text("\(files) files · \(formatBytes(bytes))")
+                Text("\(files) 个文件 · \(formatBytes(bytes))")
                     .font(.subheadline)
                 Text(current)
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Button("Cancel", role: .destructive) {
+                Button("取消", role: .destructive) {
                     backup.cancel()
                 }
             }
             .padding(.vertical, 4)
         case .done(let result):
             VStack(alignment: .leading, spacing: 4) {
-                Label("Backup complete", systemImage: "checkmark.circle.fill")
+                Label("备份完成", systemImage: "checkmark.circle.fill")
                     .foregroundColor(.green)
-                Text("\(result.fileCount) files · \(formatBytes(result.totalBytes))")
+                Text("\(result.fileCount) 个文件 · \(formatBytes(result.totalBytes))")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text("Saved to EscapeOS → Backups")
+                Text("已保存到 EscapeOS → Backups")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
         case .failed(let message):
             VStack(alignment: .leading, spacing: 6) {
-                Label("Backup failed", systemImage: "xmark.octagon.fill")
+                Label("备份失败", systemImage: "xmark.octagon.fill")
                     .foregroundColor(.red)
                 Text(message)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Button("Try Again") {
+                Button("重试") {
                     backup.start(app: app) {
                         appBackups.reload(bundleIdentifier: app.bundleIdentifier)
                     }
@@ -286,7 +286,7 @@ struct AppDetailView: View {
         case .ready:
             activeRestore = RestoreSession(record: record, eligibility: eligibility)
         case .appNotInstalled(_, let name):
-            restoreAlert = IdentifiedAlert(message: "\(name) is not installed.")
+            restoreAlert = IdentifiedAlert(message: "\(name) 未安装。")
         case .invalidArchive(let message):
             restoreAlert = IdentifiedAlert(message: message)
         }
@@ -315,7 +315,7 @@ private struct AppBackupRow: View {
             Button(action: onRestore) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.counterclockwise.circle.fill")
-                    Text("Restore")
+                    Text("恢复")
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
             }
@@ -352,10 +352,10 @@ struct ContainerRootStat: Identifiable {
     let available: Bool
 
     var summary: String {
-        guard available else { return "Not found" }
+        guard available else { return "未找到" }
         let f = ByteCountFormatter()
         f.countStyle = .file
-        return "\(files) files · \(f.string(fromByteCount: bytes))"
+        return "\(files) 个文件 · \(f.string(fromByteCount: bytes))"
     }
 }
 
