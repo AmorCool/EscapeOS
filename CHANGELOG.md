@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.10] - 2026-08-20
+
+### Fixed
+
+- **设置页版本号显示错误**. `Resources/Info.plist` 中的 `CFBundleShortVersionString`/`CFBundleVersion` 长期停留在 `0.1.5 (5)`，与 `control` 不同步，导致「关于」行显示旧版本。本次同步为 `0.2.10 (10)`，避免用户误以为没装上新版本。
+
+### Changed
+
+- **诊断结果可滚动 + 支持分享**. v0.2.9 的诊断结果以固定高度 `Text` 展示，长报告会被截断、用户无法看到下方 C/D 策略与枚举结果。现在把结果文本包进 `ScrollView(.vertical)` 并固定高度 360pt，可上下滑动查看完整报告；同时在结果下方新增「分享结果」按钮，把当前探测文本写入临时 `.txt` 文件（命名 `EscapeOS-AppGroup-Probe-<时间戳>.txt`），调用系统分享面板导出到文件 App / 隔空投送 / 微信等。
+
 ## [0.2.9] - 2026-08-20
 
 ### Added

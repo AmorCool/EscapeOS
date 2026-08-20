@@ -296,6 +296,7 @@ struct SettingsForm: View {
 
     @State private var isProbing = false
     @State private var probeResult: String?
+    @State private var shareTarget: ShareTarget?
 
     var body: some View {
         Form {
@@ -339,12 +340,23 @@ struct SettingsForm: View {
                 .disabled(isProbing)
 
                 if let result = probeResult {
-                    Text(result)
-                        .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxHeight: 360)
+                    ScrollView {
+                        Text(result)
+                            .font(.system(.footnote, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                    .frame(height: 360)
+
+                    Button {
+                        shareProbeResult(result)
+                    } label: {
+                        Label("分享结果", systemImage: "square.and.arrow.up")
+                    }
                 }
             }
+        }
+        .sheet(item: $shareTarget) { target in
+            ShareSheet(items: [target.url])
         }
     }
 
@@ -360,6 +372,24 @@ struct SettingsForm: View {
                 isProbing = false
             }
         }
+    }
+
+    private func shareProbeResult(_ text: String) {
+        let fileName = "EscapeOS-AppGroup-Probe-\(isoTimestamp()).txt"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+            try text.data(using: .utf8)?.write(to: url, options: .atomic)
+            shareTarget = ShareTarget(url: url)
+        } catch {
+            probeResult? += "\n\n分享失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func isoTimestamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd_HHmmss"
+        f.locale = Locale(identifier: "zh_Hans_CN")
+        return f.string(from: Date())
     }
 
     private static var aboutLine: String {
