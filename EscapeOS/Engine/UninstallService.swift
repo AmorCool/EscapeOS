@@ -54,13 +54,17 @@ final class UninstallService {
         guard tunnel.hasPairingFile else {
             throw UninstallServiceError.notConfigured
         }
-        var err: NSError?
-        let ok = tunnel.uninstallApp(withBundleId: bundleId, error: &err)
+        // `uninstallAppWithBundleId:error:` is imported as a throwing method
+        // `uninstallApp(withBundleId:)` (same pattern as
+        // `getAppIconWithBundleId:error:` -> `getAppIcon(withBundleId:)`).
+        let ok: Bool
+        do {
+            ok = try tunnel.uninstallApp(withBundleId: bundleId)
+        } catch {
+            throw UninstallServiceError.callFailed(error.localizedDescription)
+        }
         if !ok {
-            if let e = err {
-                throw UninstallServiceError.callFailed(e.localizedDescription)
-            }
-            throw UninstallServiceError.callFailed("未知错误（隧道未返回详细信息）。")
+            throw UninstallServiceError.callFailed("卸载失败（隧道返回 NO，未返回错误详情）。")
         }
     }
 }
