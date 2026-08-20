@@ -139,7 +139,6 @@ struct AppListView: View {
                                             }
                                         }
                                     }
-                                }
                             }
                         }
                     }
