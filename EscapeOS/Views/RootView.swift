@@ -20,7 +20,7 @@ struct RootView: View {
         TabView(selection: $selectedTab) {
             NavigationView {
                 appsContent
-                    .navigationTitle("Apps")
+                    .navigationTitle("应用")
                     .navigationBarTitleDisplayMode(.large)
                     .toolbar {
                         ToolbarItem(placement: .navigationBarTrailing) {
@@ -34,7 +34,7 @@ struct RootView: View {
                     }
             }
             .tabItem {
-                Label("Apps", systemImage: "square.grid.2x2.fill")
+                Label("应用", systemImage: "square.grid.2x2.fill")
             }
             .tag(MainTab.apps)
 
@@ -43,7 +43,7 @@ struct RootView: View {
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Reclaim", systemImage: "internaldrive")
+                Label("空间回收", systemImage: "internaldrive")
             }
             .tag(MainTab.reclaim)
 
@@ -52,7 +52,7 @@ struct RootView: View {
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("LiveClean", systemImage: "shippingbox")
+                Label("容器清理", systemImage: "shippingbox")
             }
             .tag(MainTab.liveclean)
 
@@ -61,7 +61,7 @@ struct RootView: View {
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Backups", systemImage: "externaldrive.fill.badge.timemachine")
+                Label("备份", systemImage: "externaldrive.fill.badge.timemachine")
             }
             .tag(MainTab.backups)
 
@@ -70,11 +70,11 @@ struct RootView: View {
                     viewModel.resetPairing()
                     selectedTab = .apps
                 })
-                .navigationTitle("Settings")
+                .navigationTitle("设置")
                 .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Settings", systemImage: "gearshape.fill")
+                Label("设置", systemImage: "gearshape.fill")
             }
             .tag(MainTab.settings)
         }
@@ -103,13 +103,13 @@ struct RootView: View {
     @ViewBuilder
     private var appsContent: some View {
         if viewModel.isLoading && viewModel.apps.isEmpty && !viewModel.needsPairing {
-            ProgressView("Loading apps…")
+            ProgressView("正在加载应用…")
         } else if viewModel.needsPairing {
             PairingSetupView(viewModel: viewModel)
         } else if let error = viewModel.errorMessage, viewModel.apps.isEmpty {
             ErrorStateView(message: error, onRetry: { viewModel.reload() })
         } else if viewModel.apps.isEmpty {
-            EmptyStateView(diagnostics: "No user apps returned by the device.")
+            EmptyStateView(diagnostics: "设备未返回任何用户应用。")
         } else {
             AppListView(viewModel: viewModel)
         }
@@ -131,24 +131,24 @@ struct PairingSetupView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 24)
 
-                Text("One-Time Setup")
+                Text("一次性设置")
                     .font(.title2).bold()
                     .frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 14) {
-                    SetupStep(number: 1, title: "Install LocalDevVPN",
-                               text: "Install LocalDevVPN from the App Store. Leave Device IP / Tunnel IP on the defaults (10.7.0.1) and connect it, with Wi-Fi on.")
-                    SetupStep(number: 2, title: "Get a pairing file",
-                               text: "Sideload with iPASide on Windows. It creates the same kind of pairing file as iLoader (USB trust keys plus Remote Pairing keys) and places pairingFile.plist automatically. You can also import an iLoader file here. After that, unplug — EscapeOS talks to this iPhone over LocalDevVPN, not over USB. On iOS 26.4+ the Remote Pairing keys are required; on iOS 18 the USB-trust half is enough.")
-                    SetupStep(number: 3, title: "Load apps",
-                               text: "EscapeOS then lists your installed apps so you can browse or back up their data.")
+                    SetupStep(number: 1, title: "安装 LocalDevVPN",
+                               text: "从 App Store 安装 LocalDevVPN，保持设备 IP / 隧道 IP 为默认值（10.7.0.1），连接它并开启 Wi-Fi。")
+                    SetupStep(number: 2, title: "获取配对文件",
+                               text: "在 Windows 上用 iPASide 侧载。它会生成与 iLoader 相同类型的配对文件（USB 信任密钥 + 远程配对密钥），并自动放置 pairingFile.plist。也可以在这里导入 iLoader 文件。之后即可拔线——EscapeOS 通过 LocalDevVPN 与本机通信，不走 USB。iOS 26.4+ 需要远程配对密钥；iOS 18 只需要 USB 信任部分。")
+                    SetupStep(number: 3, title: "加载应用",
+                               text: "EscapeOS 随后列出你已安装的应用，可浏览或备份其数据。")
                 }
                 .padding(.horizontal)
 
                 Button {
                     showImporter = true
                 } label: {
-                    Label("Import Pairing File", systemImage: "doc.badge.plus")
+                    Label("导入配对文件", systemImage: "doc.badge.plus")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -162,7 +162,7 @@ struct PairingSetupView: View {
                         .padding(.horizontal)
                 }
 
-                Button("I already did this — Retry") {
+                Button("我已经完成了 — 重试") {
                     viewModel.reload()
                 }
                 .font(.footnote)
@@ -201,7 +201,7 @@ struct PairingSetupView: View {
                         throw NSError(
                             domain: "EscapeOS",
                             code: -2,
-                            userInfo: [NSLocalizedDescriptionKey: "Could not read that pairing file."]
+                            userInfo: [NSLocalizedDescriptionKey: "无法读取该配对文件。"]
                         )
                     }
                     try viewModel.importPairingFile(contents)
@@ -248,7 +248,7 @@ struct ErrorStateView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
                 .foregroundColor(.orange)
-            Text("Something went wrong")
+            Text("出现问题")
                 .font(.headline)
             Text(message)
                 .font(.subheadline)
@@ -256,13 +256,13 @@ struct ErrorStateView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             if message.contains("tunnel") || message.contains("LocalDevVPN") || message.contains("Heartbeat") {
-                Text("Tip: reset LocalDevVPN to its default 10.7.0.1 addresses, stay on Wi-Fi, and let iPASide place a pairing file (or import one here). Custom LAN IPs are not required on iOS 26.5.")
+                Text("提示：将 LocalDevVPN 重置为默认的 10.7.0.1 地址，保持 Wi-Fi 连接，并让 iPASide 放置配对文件（或在此导入）。iOS 26.5 上不需要自定义局域网 IP。")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
             }
-            Button("Retry", action: onRetry)
+            Button("重试", action: onRetry)
                 .buttonStyle(.bordered)
         }
         .padding()
@@ -278,7 +278,7 @@ struct EmptyStateView: View {
             Image(systemName: "shippingbox")
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
-            Text("No Apps Found")
+            Text("未找到应用")
                 .font(.headline)
             Text(diagnostics)
                 .font(.subheadline)
@@ -296,20 +296,20 @@ struct SettingsForm: View {
 
     var body: some View {
         Form {
-            Section(header: Text("Local Tunnel"), footer: Text("Must match LocalDevVPN's Tunnel/Device IP. Keep the default 10.7.0.1 unless you changed LocalDevVPN.")) {
-                TextField("Device IP (default 10.7.0.1)", text: $tunnelIP)
+            Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致。保持默认的 10.7.0.1，除非你修改过 LocalDevVPN。")) {
+                TextField("设备 IP（默认 10.7.0.1）", text: $tunnelIP)
                     .keyboardType(.numbersAndPunctuation)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
             }
 
             Section {
-                Button("Reset Pairing File", role: .destructive) {
+                Button("重置配对文件", role: .destructive) {
                     onResetPairing()
                 }
             }
 
-            Section(header: Text("Limits")) {
+            Section(header: Text("限制")) {
                 Text(ProductLimits.title)
                     .font(.headline)
                 Text(ProductLimits.body)
@@ -317,7 +317,7 @@ struct SettingsForm: View {
                     .foregroundColor(.secondary)
             }
 
-            Section(header: Text("About")) {
+            Section(header: Text("关于")) {
                 Text(Self.aboutLine)
                     .font(.footnote)
                     .foregroundColor(.secondary)
