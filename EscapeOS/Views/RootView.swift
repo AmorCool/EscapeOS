@@ -294,6 +294,9 @@ struct SettingsForm: View {
     var onResetPairing: () -> Void
     @AppStorage("TunnelDeviceIP") private var tunnelIP: String = "10.7.0.1"
 
+    @State private var isProbing = false
+    @State private var probeResult: String?
+
     var body: some View {
         Form {
             Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致。保持默认的 10.7.0.1，除非你修改过 LocalDevVPN。")) {
@@ -321,6 +324,40 @@ struct SettingsForm: View {
                 Text(Self.aboutLine)
                     .font(.footnote)
                     .foregroundColor(.secondary)
+            }
+
+            Section(header: Text("诊断（调试用）"), footer: Text("仅用于验证 AppGroup 共享 App 沙盒逃逸是否在本机可用，普通用户无需理会。")) {
+                Button {
+                    runProbe()
+                } label: {
+                    if isProbing {
+                        Label("探测中…", systemImage: "hourglass")
+                    } else {
+                        Label("AppGroup 探测", systemImage: "waveform")
+                    }
+                }
+                .disabled(isProbing)
+
+                if let result = probeResult {
+                    Text(result)
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxHeight: 360)
+                }
+            }
+        }
+    }
+
+    // MARK: - AppGroup 探测（诊断）
+
+    private func runProbe() {
+        isProbing = true
+        probeResult = nil
+        Task {
+            let report = await Task.detached { AppGroupProbe.run() }.value
+            await MainActor.run {
+                probeResult = report
+                isProbing = false
             }
         }
     }

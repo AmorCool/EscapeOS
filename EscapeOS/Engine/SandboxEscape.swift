@@ -55,19 +55,21 @@ final class SandboxEscape {
     ///   - path: Absolute path inside another app's container.
     ///   - groupIdentifier: Optional app-group identifier (iOS 26 App Group route).
     ///   - isGroup: Whether the target is an App Group container.
+    ///   - create: When `true`, skip the existence (`lstat`) pre-check. Used by
+    ///     diagnostics that probe paths whose UUID is not yet known.
     /// - Returns: A `Handle` that must later be passed to `release(_:)`.
     /// - Throws: `SandboxEscapeError` on failure.
-    func consume(path: String, groupIdentifier: String? = nil, isGroup: Bool = false) throws -> Handle {
+    func consume(path: String, groupIdentifier: String? = nil, isGroup: Bool = false, create: Bool = false) throws -> Handle {
         var cPath = Array(path.utf8CString)
         var cGroup = groupIdentifier.map { Array($0.utf8CString) }
 
         let raw: Int64 = cPath.withUnsafeMutableBufferPointer { pathPtr in
             if cGroup != nil {
                 return cGroup!.withUnsafeMutableBufferPointer { groupPtr in
-                    bad_query(pathPtr.baseAddress, false, groupPtr.baseAddress, isGroup)
+                    bad_query(pathPtr.baseAddress, create, groupPtr.baseAddress, isGroup)
                 }
             }
-            return bad_query(pathPtr.baseAddress, false, nil, isGroup)
+            return bad_query(pathPtr.baseAddress, create, nil, isGroup)
         }
 
         guard raw >= 0 else {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.9] - 2026-08-20
+
+### Added
+
+- **设置 · 隐藏的 AppGroup 探测按钮（诊断用）**. 在「设置」底部新增「诊断（调试用）」区块，含一个「AppGroup 探测」按钮：点按后通过 `bad_query` 的 App Group 路由（class 7 + `is_group` + `create=true`，绕过 lstat 存在性检查）尝试消费 LiveContainer 共享 App 沙盒（`AppGroup/LiveContainer/Shared/Data/Application`）的沙盒扩展，并直接列举该目录。探测同时尝试「直接路径假设」与「枚举 AppGroup 父目录后逐个 group 子目录下探」两种策略，把每个候选路径的「沙盒扩展是否成功 / 目录能否列举」结果以等宽字体显示出来。目的是在**无越狱真机**上一次点按拿到 AppGroup 共享 App 管理是否可行的实锤证据；普通用户无需理会。
+
 ## [0.2.8] - 2026-08-20
 
 ### Fixed
