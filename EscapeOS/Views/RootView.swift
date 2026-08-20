@@ -52,7 +52,7 @@ struct RootView: View {
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("容器清理", systemImage: "shippingbox")
+                Label("容器管理", systemImage: "shippingbox")
             }
             .tag(MainTab.liveclean)
 

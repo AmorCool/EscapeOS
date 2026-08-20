@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.4] - 2026-08-20
+
+### Fixed
+
+- **中文名应用备份文件名丢失前缀**. `BackupService.exportBackup` 原本用 `[^A-Za-z0-9_-]` 过滤文件名，会把中文（CJK）字符全部替换为 `_`，导致例如「抖音」变成 `__backup_...zip`。现在改用 `[^\p{L}\p{N}_-]` 保留所有 Unicode 字母/数字，中文应用正常显示为 `应用名_backup_...zip`；如果应用名过滤后为空则回退到 bundle id。
+
+### Added
+
+- **容器清理改名为容器管理**. `RootView` tab 与 `LiveCleanTabView` 导航标题统一改为「容器管理」，以涵盖浏览文件、备份等新增能力。
+- **容器管理 · guest 应用支持备份数据**. `ReclaimAppView` 新增与「应用」页一致的「备份数据」按钮，走 `BackupViewModel` → `BackupService.exportBackup(isContainerApp: true)`。备份元数据新增 `isContainerApp` 标记，LiveContainer guest 以 synthetic `bundleIdentifier`（`host::bundleId::uuid`）+ `containerPath` 归档，与普通应用互不影响。
+- **备份板块支持恢复容器应用并带小胶囊区分**. `RestoreService.eligibility` 识别 `metadata.isContainerApp`：不再去系统应用列表匹配 bundle id，而是校验记录的 `containerPath` 是否仍可通过 `SandboxEscape().withHandle` 访问，并构造合成 `InstalledApp` 作为恢复目标。`BackupsListView` 的备份行在标题旁显示橙色「容器」胶囊，空状态文案也提到「容器管理」页。
+
 ## [0.2.3] - 2026-08-20
 
 ### Added

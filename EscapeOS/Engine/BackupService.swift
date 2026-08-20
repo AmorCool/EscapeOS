@@ -52,16 +52,30 @@ final class BackupService {
     /// Export the given app's container to a zip inside Documents/Backups.
     func exportBackup(
         for app: InstalledApp,
+        isContainerApp: Bool = false,
         progress: BackupProgress? = nil,
         isCancelled: @escaping () -> Bool = { false }
     ) throws -> BackupResult {
         let backupsDir = try BackupPaths.ensureBackupsDirectory()
         let stamp = BackupPaths.fileTimestamp()
-        let safeName = app.name.replacingOccurrences(
-            of: "[^A-Za-z0-9_-]",
+        // Preserve Unicode letters/numbers (including CJK) plus `_` and `-`;
+        // replace filesystem-unsafe characters with `_`. Falls back to the
+        // bundle identifier if the app name sanitizes to nothing.
+        var safeName = app.name.replacingOccurrences(
+            of: "[^\\p{L}\\p{N}_\\-]",
             with: "_",
             options: .regularExpression
         )
+        if safeName.isEmpty {
+            safeName = app.bundleIdentifier.replacingOccurrences(
+                of: "[^\\p{L}\\p{N}_\\-]",
+                with: "_",
+                options: .regularExpression
+            )
+        }
+        if safeName.isEmpty {
+            safeName = "App"
+        }
         let outURL = backupsDir.appendingPathComponent("\(safeName)_backup_\(stamp).zip")
 
         var manifest: [BackupManifestEntry] = []
@@ -122,7 +136,8 @@ final class BackupService {
             fileCount: manifest.count,
             totalBytes: totalBytes,
             manifestSHA256: manifestHash,
-            escapeOSVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+            escapeOSVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
+            isContainerApp: isContainerApp
         )
         let metadataData = try encoder.encode(metadata)
         try zip.addFile(name: BackupPaths.metadataFileName, data: metadataData)

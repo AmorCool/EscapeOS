@@ -29,7 +29,7 @@ struct BackupsListView: View {
                         .foregroundColor(.secondary)
                     Text("暂无备份")
                         .font(.headline)
-                    Text("可在「应用」页进入任意应用，再点击「备份数据」导出备份。归档文件保存在「文件 → 我的iPhone → EscapeOS → Backups」。")
+                    Text("可在「应用」或「容器管理」页进入任意应用，再点击「备份数据」导出备份。归档文件保存在「文件 → 我的iPhone → EscapeOS → Backups」。")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -88,8 +88,19 @@ private struct BackupRow: View {
             HStack(spacing: 12) {
                 AppIconView(icon: icon, size: 44)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(record.displayTitle)
-                        .font(.headline)
+                    HStack(spacing: 8) {
+                        Text(record.displayTitle)
+                            .font(.headline)
+                        if record.metadata.isContainerApp {
+                            Text("容器")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.15))
+                                .foregroundColor(.orange)
+                                .clipShape(Capsule())
+                        }
+                    }
                     Text(record.metadata.bundleIdentifier)
                         .font(.caption)
                         .foregroundColor(.secondary)

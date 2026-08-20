@@ -36,6 +36,36 @@ final class RestoreService {
     /// Evaluate whether a backup can be restored right now.
     func eligibility(for record: BackupRecord, installedApps: [InstalledApp]) -> RestoreEligibility {
         let metadata = record.metadata
+
+        // Container apps (LiveContainer guests) are not in the system app list.
+        // Eligibility is based on whether the recorded container path still exists
+        // and is reachable through the sandbox extension.
+        if metadata.isContainerApp {
+            let app = InstalledApp(
+                bundleIdentifier: metadata.bundleIdentifier,
+                name: metadata.appName,
+                containerPath: metadata.containerPath,
+                version: nil
+            )
+            var warnings: [String] = []
+            do {
+                try escape.withHandle(for: app.containerPath) { _ in
+                    if !files.isDirectory(at: app.containerPath) {
+                        throw BackupError.appNotInstalled(
+                            "Container path is no longer reachable: \(app.containerPath)"
+                        )
+                    }
+                }
+            } catch {
+                return .appNotInstalled(
+                    bundleIdentifier: metadata.bundleIdentifier,
+                    appName: metadata.appName
+                )
+            }
+            warnings.append("关闭 \(app.name) 后再恢复。应用运行时打开的数据库可能无法完整恢复。")
+            return .ready(app: app, metadata: metadata, warnings: warnings)
+        }
+
         guard let app = installedApps.first(where: { $0.bundleIdentifier == metadata.bundleIdentifier }) else {
             return .appNotInstalled(
                 bundleIdentifier: metadata.bundleIdentifier,
@@ -46,10 +76,10 @@ final class RestoreService {
         var warnings: [String] = []
         if app.containerPath != metadata.containerPath {
             warnings.append(
-                "The app's container path changed since this backup was taken. Restore will target the current container."
+                "备份时的容器路径与当前不一致，恢复将写入当前容器。"
             )
         }
-        warnings.append("Close \(app.name) before restoring. Open databases may not restore cleanly while the app is running.")
+        warnings.append("关闭 \(app.name) 后再恢复。应用运行时打开的数据库可能无法完整恢复。")
 
         return .ready(app: app, metadata: metadata, warnings: warnings)
     }

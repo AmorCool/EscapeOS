@@ -110,7 +110,7 @@ struct AppDetailView: View {
                 .disabled(!access.isGranted)
 
                 Button {
-                    backup.start(app: app) {
+                    backup.start(app: app, isContainerApp: false) {
                         appBackups.reload(bundleIdentifier: app.bundleIdentifier)
                     }
                 } label: {
@@ -272,7 +272,7 @@ struct AppDetailView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Button("重试") {
-                    backup.start(app: app) {
+                    backup.start(app: app, isContainerApp: false) {
                         appBackups.reload(bundleIdentifier: app.bundleIdentifier)
                     }
                 }

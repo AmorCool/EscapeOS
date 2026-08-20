@@ -10,6 +10,50 @@ struct BackupMetadata: Codable, Hashable {
     let totalBytes: Int64
     let manifestSHA256: String
     let escapeOSVersion: String
+    /// Whether this backup was created from a LiveContainer guest app rather than
+    /// a system-installed app. Defaults to `false` for archives created before
+    /// v0.2.4.
+    let isContainerApp: Bool
+
+    init(
+        bundleIdentifier: String,
+        appName: String,
+        containerPath: String,
+        createdAt: String,
+        fileCount: Int,
+        totalBytes: Int64,
+        manifestSHA256: String,
+        escapeOSVersion: String,
+        isContainerApp: Bool = false
+    ) {
+        self.bundleIdentifier = bundleIdentifier
+        self.appName = appName
+        self.containerPath = containerPath
+        self.createdAt = createdAt
+        self.fileCount = fileCount
+        self.totalBytes = totalBytes
+        self.manifestSHA256 = manifestSHA256
+        self.escapeOSVersion = escapeOSVersion
+        self.isContainerApp = isContainerApp
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        bundleIdentifier = try c.decode(String.self, forKey: .bundleIdentifier)
+        appName = try c.decode(String.self, forKey: .appName)
+        containerPath = try c.decode(String.self, forKey: .containerPath)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        fileCount = try c.decode(Int.self, forKey: .fileCount)
+        totalBytes = try c.decode(Int64.self, forKey: .totalBytes)
+        manifestSHA256 = try c.decode(String.self, forKey: .manifestSHA256)
+        escapeOSVersion = try c.decode(String.self, forKey: .escapeOSVersion)
+        isContainerApp = try c.decodeIfPresent(Bool.self, forKey: .isContainerApp) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bundleIdentifier, appName, containerPath, createdAt
+        case fileCount, totalBytes, manifestSHA256, escapeOSVersion, isContainerApp
+    }
 }
 
 /// A backup archive on disk with parsed metadata.

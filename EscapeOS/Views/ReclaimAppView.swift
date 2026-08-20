@@ -15,6 +15,8 @@ struct ReclaimAppView: View {
     /// Mirrors `AppDetailView`: checks the container is reachable through the
     /// sandbox extension before exposing the file browser.
     @StateObject private var access = ContainerAccessModel()
+    /// Drives the backup action for this app (normal or LiveContainer guest).
+    @StateObject private var backup = BackupViewModel()
 
     var body: some View {
         List {
@@ -96,11 +98,20 @@ struct ReclaimAppView: View {
                 }
             }
 
-            Section(header: Text("容器内容"), footer: Text("浏览该应用的 Documents、Library 与 tmp 中的文件，可查看、复制、导出或删除。")) {
+            Section(header: Text("容器内容"), footer: Text("浏览或备份该应用的 Documents、Library 与 tmp。备份会保存到「文件 → 我的iPhone → EscapeOS → Backups」，不包含 Keychain。请先关闭 \(app.name) 以获得一致快照。")) {
                 NavigationLink(destination: FileBrowserView(app: app)) {
                     Label("浏览文件", systemImage: "folder.fill")
                 }
                 .disabled(!access.isGranted)
+
+                Button {
+                    backup.start(app: app, isContainerApp: true)
+                } label: {
+                    Label("备份数据", systemImage: "externaldrive.fill.badge.plus")
+                }
+                .disabled(!access.isGranted || backup.isBusy)
+
+                backupStatus
             }
 
             Section(footer: Text("请先关闭 \(app.name)。不会删除 Documents、Preferences 或 Application Support。")) {
@@ -151,6 +162,51 @@ struct ReclaimAppView: View {
     private var selectedSummary: String {
         if vm.isLoading { return "测量目录中…" }
         return "已选 \(ReclaimService.formatBytes(vm.selectedBytes))"
+    }
+
+    @ViewBuilder
+    private var backupStatus: some View {
+        switch backup.state {
+        case .idle:
+            EmptyView()
+        case .running(let files, let bytes, let current):
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView()
+                Text("\(files) 个文件 · \(ReclaimService.formatBytes(bytes))")
+                    .font(.subheadline)
+                Text(current)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button("取消", role: .destructive) {
+                    backup.cancel()
+                }
+            }
+            .padding(.vertical, 4)
+        case .done(let result):
+            VStack(alignment: .leading, spacing: 4) {
+                Label("备份完成", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                Text("\(result.fileCount) 个文件 · \(ReclaimService.formatBytes(result.totalBytes))")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("已保存到 EscapeOS → Backups")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                Label("备份失败", systemImage: "xmark.octagon.fill")
+                    .foregroundColor(.red)
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Button("重试") {
+                    backup.start(app: app, isContainerApp: true)
+                }
+            }
+        }
     }
 
     private func bucketRow(_ bucket: ReclaimBucketStat) -> some View {

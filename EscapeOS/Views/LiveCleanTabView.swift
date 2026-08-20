@@ -60,7 +60,7 @@ struct LiveCleanTabView: View {
                 rankedList
             }
         }
-        .navigationTitle("容器清理")
+        .navigationTitle("容器管理")
         .onAppear {
             vm.refreshRanksFromCache()
         }
