@@ -111,9 +111,14 @@ struct BackupsListView: View {
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 if selecting {
-                    Button("取消") {
-                        selecting = false
-                        selected.removeAll()
+                    HStack {
+                        Button(allSelected ? "取消全选" : "全选") {
+                            toggleSelectAll()
+                        }
+                        Button("取消") {
+                            selecting = false
+                            selected.removeAll()
+                        }
                     }
                 } else {
                     HStack {
@@ -183,6 +188,18 @@ struct BackupsListView: View {
             selected.remove(record.id)
         } else {
             selected.insert(record.id)
+        }
+    }
+
+    private var allSelected: Bool {
+        !vm.records.isEmpty && selected.count == vm.records.count
+    }
+
+    private func toggleSelectAll() {
+        if allSelected {
+            selected.removeAll()
+        } else {
+            selected = Set(vm.records.map { $0.id })
         }
     }
 
@@ -375,6 +392,7 @@ struct CustomRestoreSheet: View {
     @State private var normalApps: [InstalledApp] = []
     @State private var guestApps: [LiveContainerGuest] = []
     @State private var isLoading = true
+    @State private var searchText = ""
 
     var body: some View {
         NavigationView {
@@ -396,11 +414,21 @@ struct CustomRestoreSheet: View {
                             .padding(.horizontal)
                     }
                     .padding()
+                } else if filteredNormalApps.isEmpty && filteredGuestApps.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text("未找到匹配「\(searchText)」的应用。")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
                 } else {
                     List {
-                        if !normalApps.isEmpty {
+                        if !filteredNormalApps.isEmpty {
                             Section("应用") {
-                                ForEach(normalApps) { app in
+                                ForEach(filteredNormalApps) { app in
                                     targetRow(
                                         title: app.name,
                                         subtitle: app.bundleIdentifier,
@@ -412,9 +440,9 @@ struct CustomRestoreSheet: View {
                                 }
                             }
                         }
-                        if !guestApps.isEmpty {
+                        if !filteredGuestApps.isEmpty {
                             Section("容器应用") {
-                                ForEach(guestApps) { guest in
+                                ForEach(filteredGuestApps) { guest in
                                     targetRow(
                                         title: guest.displayName,
                                         subtitle: guest.bundleIdentifier,
@@ -428,6 +456,7 @@ struct CustomRestoreSheet: View {
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .searchable(text: $searchText, prompt: "搜索应用名或 Bundle ID")
                 }
             }
             .navigationTitle("选择恢复目标")
@@ -438,6 +467,24 @@ struct CustomRestoreSheet: View {
                 }
             }
             .onAppear { loadTargets() }
+        }
+    }
+
+    private var filteredNormalApps: [InstalledApp] {
+        guard !searchText.isEmpty else { return normalApps }
+        let q = searchText.localizedLowercase
+        return normalApps.filter {
+            $0.name.localizedCaseInsensitiveContains(q)
+            || $0.bundleIdentifier.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    private var filteredGuestApps: [LiveContainerGuest] {
+        guard !searchText.isEmpty else { return guestApps }
+        let q = searchText.localizedLowercase
+        return guestApps.filter {
+            $0.displayName.localizedCaseInsensitiveContains(q)
+            || $0.bundleIdentifier.localizedCaseInsensitiveContains(q)
         }
     }
 
