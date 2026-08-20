@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0] - 2026-08-20
+
+### Fixed
+
+- **Duplicate LiveClean rows**: the same guest appeared twice because the primary `.app`/LCAppInfo pass and the fallback `LCContainerInfo.plist` pass each inserted a row for the same UUID. Discovery now keeps a single `[uuid: LiveContainerGuest]` map across both passes.
+- **Icon missing on the per-guest Reclaim screen**: `ReclaimAppView` only knew about SpringBoard icons from `AppListViewModel.icons`, which doesn't include LiveContainer guests (their `bundleIdentifier` is the synthetic `host::bundleId::uuid`). It now accepts a `guestIcon: Data?` parameter, and `LiveCleanTabView` passes the guest's pre-decoded icon bytes through.
+
+### Added
+
+- **LiveClean search bar**: filter the LiveClean list by display name, bundle id, or host name via `.searchable`.
+
 ## [0.1.9] - 2026-08-20
 
 ### Fixed

@@ -25,6 +25,17 @@ struct LiveCleanTabView: View {
     @ObservedObject var appList: AppListViewModel
     @StateObject private var vm = LiveCleanTabViewModel()
     @State private var selecting = false
+    @State private var searchText = ""
+
+    private var filteredRows: [LiveCleanAppRank] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return vm.rows }
+        return vm.rows.filter { row in
+            row.guest.displayName.localizedCaseInsensitiveContains(query)
+                || row.guest.bundleIdentifier.localizedCaseInsensitiveContains(query)
+                || row.guest.hostName.localizedCaseInsensitiveContains(query)
+        }
+    }
 
     var body: some View {
         Group {
@@ -46,6 +57,7 @@ struct LiveCleanTabView: View {
         .onAppear {
             vm.refreshRanksFromCache()
         }
+        .searchable(text: $searchText, prompt: "搜索 LiveContainer 应用")
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 if selecting {
@@ -136,12 +148,18 @@ struct LiveCleanTabView: View {
     }
 
     private var rankedList: some View {
-        List {
+        let visible = filteredRows
+        return List {
             if !vm.progressText.isEmpty && vm.isScanning {
                 Text(vm.progressText)
                     .foregroundColor(.secondary)
             }
-            ForEach(vm.rows) { row in
+            if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && visible.isEmpty && !vm.rows.isEmpty {
+                Text("没有匹配「\(searchText)」的应用。")
+                    .foregroundColor(.secondary)
+            }
+            ForEach(visible) { row in
                 if selecting {
                     Button {
                         if vm.selected.contains(row.id) {
@@ -154,7 +172,7 @@ struct LiveCleanTabView: View {
                     }
                     .disabled(row.failed || row.safeBytes == 0)
                 } else {
-                    NavigationLink(destination: ReclaimAppView(app: row.installedApp, viewModel: appList)) {
+                    NavigationLink(destination: ReclaimAppView(app: row.installedApp, viewModel: appList, guestIcon: row.guest.iconData)) {
                         rankRow(row, selected: false)
                     }
                 }

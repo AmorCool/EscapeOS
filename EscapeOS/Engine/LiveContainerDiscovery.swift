@@ -89,38 +89,32 @@ final class LiveContainerDiscovery {
                     let appsRoot = (host.containerPath as NSString).appendingPathComponent("Documents/Applications")
                     let dataRoot = (host.containerPath as NSString).appendingPathComponent("Documents/Data")
 
-                    var guestsByKey: [String: LiveContainerGuest] = [:]
+                    // Dedupe by guest UUID across both the primary (.app + LCAppInfo)
+                    // and fallback (LCContainerInfo.plist) passes.
+                    var guestsByUUID: [String: LiveContainerGuest] = [:]
 
-                    // Primary path: enumerate `.app` bundles and join them to
+                    func makeKey(bundleId: String, uuid: String) -> String {
+                        return "\(host.bundleIdentifier)::\(bundleId)::\(uuid)"
+                    }
+
+                    // Primary pass: enumerate `.app` bundles and join them to
                     // guest containers through `.app/LCAppInfo.plist`.
                     for bundle in enumerateGuestBundles(root: appsRoot) {
-                        for uuid in bundle.dataUUIDs {
-                            let containerPath = (dataRoot as NSString)
-                                .appendingPathComponent("Application/\(uuid)")
-                            guard files.isDirectory(at: containerPath) else { continue }
-                            let key = "\(host.bundleIdentifier)::\(bundle.bundleId)::\(uuid)"
-                            if guestsByKey[key] != nil { continue }
-                            guestsByKey[key] = LiveContainerGuest(
-                                id: key,
-                                bundleIdentifier: bundle.bundleId,
-                                displayName: bundle.displayName,
-                                containerPath: containerPath,
-                                iconData: bundle.iconData,
-                                hostName: host.name
-                            )
-                        }
+                        var bundleUUIDs = bundle.dataUUIDs
                         // Some LiveContainer versions name the `.app` directory
                         // after the UUID instead of the display name. In that
                         // case `LCAppInfo.plist` is missing and `dataUUIDs` is
-                        // empty — try matching the `.app` folder name as a UUID
-                        // before giving up.
-                        if bundle.dataUUIDs.isEmpty,
-                           looksLikeUUID(bundle.folderName),
-                           files.isDirectory(at: (dataRoot as NSString).appendingPathComponent("Application/\(bundle.folderName)")) {
-                            let uuid = bundle.folderName
-                            let containerPath = (dataRoot as NSString).appendingPathComponent("Application/\(uuid)")
-                            let key = "\(host.bundleIdentifier)::\(bundle.bundleId)::\(uuid)"
-                            guestsByKey[key] = LiveContainerGuest(
+                        // empty — try matching the `.app` folder name as a UUID.
+                        if bundleUUIDs.isEmpty, looksLikeUUID(bundle.folderName) {
+                            bundleUUIDs = [bundle.folderName]
+                        }
+                        for uuid in bundleUUIDs {
+                            let containerPath = (dataRoot as NSString)
+                                .appendingPathComponent("Application/\(uuid)")
+                            guard files.isDirectory(at: containerPath) else { continue }
+                            guard guestsByUUID[uuid] == nil else { continue }
+                            let key = makeKey(bundleId: bundle.bundleId, uuid: uuid)
+                            guestsByUUID[uuid] = LiveContainerGuest(
                                 id: key,
                                 bundleIdentifier: bundle.bundleId,
                                 displayName: bundle.displayName,
@@ -136,23 +130,25 @@ final class LiveContainerDiscovery {
                     var walked: [String] = []
                     for (uuidPath, dict) in collectGuestInfoPlists(in: dataRoot, depth: 0, visited: &walked) {
                         let uuid = (uuidPath as NSString).lastPathComponent
-                        let key = "\(host.bundleIdentifier)::unknown::\(uuid)"
-                        guard guestsByKey[key] == nil else { continue }
+                        // Dedupe against the primary pass — same UUID = same guest.
+                        guard guestsByUUID[uuid] == nil else { continue }
                         let plistName = nameFromContainerInfo(dict)
                         // Try to find a matching `.app` via the LCAppInfo.plist
                         // folderName → app link (some LC forks keep this).
                         let appRef = lookupAppByUUID(uuid, in: appsRoot)
-                        guestsByKey[key] = LiveContainerGuest(
+                        let bundleId = appRef?.bundleId ?? uuid
+                        let displayName = plistName ?? appRef?.displayName ?? uuid
+                        let key = makeKey(bundleId: bundleId, uuid: uuid)
+                        guestsByUUID[uuid] = LiveContainerGuest(
                             id: key,
-                            bundleIdentifier: appRef?.bundleId ?? uuid,
-                            displayName: plistName ?? appRef?.displayName ?? uuid,
+                            bundleIdentifier: bundleId,
+                            displayName: displayName,
                             containerPath: uuidPath,
                             iconData: appRef?.iconData,
                             hostName: host.name
                         )
                     }
-
-                    return Array(guestsByKey.values).sorted {
+                    return Array(guestsByUUID.values).sorted {
                         $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
                     }
                 }

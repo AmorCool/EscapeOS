@@ -4,13 +4,25 @@ import SwiftUI
 struct ReclaimAppView: View {
     let app: InstalledApp
     @ObservedObject var viewModel: AppListViewModel
+    /// Optional pre-decoded icon bytes (e.g. LiveContainer guest apps whose
+    /// bundle id isn't in the system app list). Falls back to the
+    /// SpringBoard icon cache.
+    var guestIcon: Data? = nil
     @StateObject private var vm = ReclaimAppViewModel()
 
     var body: some View {
         List {
             Section {
                 HStack(spacing: 12) {
-                    AppIconView(icon: viewModel.icons[app.bundleIdentifier], size: 44)
+                    if let data = guestIcon, let img = UIImage(data: data) {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 44, height: 44)
+                            .cornerRadius(44 * 0.22)
+                    } else {
+                        AppIconView(icon: viewModel.icons[app.bundleIdentifier], size: 44)
+                    }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(app.name).font(.headline)
                         Text(selectedSummary)
