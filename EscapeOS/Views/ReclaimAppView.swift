@@ -12,6 +12,9 @@ struct ReclaimAppView: View {
     /// guests). Pass `LiveCleanAppRank.containerUUID` from the caller.
     var containerUUID: String? = nil
     @StateObject private var vm = ReclaimAppViewModel()
+    /// Mirrors `AppDetailView`: checks the container is reachable through the
+    /// sandbox extension before exposing the file browser.
+    @StateObject private var access = ContainerAccessModel()
 
     var body: some View {
         List {
@@ -38,6 +41,22 @@ struct ReclaimAppView: View {
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
+                }
+            }
+
+            Section(header: Text("访问权限")) {
+                switch access.state {
+                case .unknown, .checking:
+                    HStack {
+                        ProgressView()
+                        Text("正在检查容器访问…").foregroundColor(.secondary)
+                    }
+                case .granted:
+                    Label("容器可访问", systemImage: "checkmark.shield.fill")
+                        .foregroundColor(.green)
+                case .denied(let reason):
+                    Label(reason, systemImage: "xmark.shield.fill")
+                        .foregroundColor(.red)
                 }
             }
 
@@ -77,6 +96,13 @@ struct ReclaimAppView: View {
                 }
             }
 
+            Section(header: Text("容器内容"), footer: Text("浏览该应用的 Documents、Library 与 tmp 中的文件，可查看、复制、导出或删除。")) {
+                NavigationLink(destination: FileBrowserView(app: app)) {
+                    Label("浏览文件", systemImage: "folder.fill")
+                }
+                .disabled(!access.isGranted)
+            }
+
             Section(footer: Text("请先关闭 \(app.name)。不会删除 Documents、Preferences 或 Application Support。")) {
                 Button {
                     vm.confirmReclaim = true
@@ -106,6 +132,7 @@ struct ReclaimAppView: View {
         }
         .onAppear {
             viewModel.ensureIcon(for: app.bundleIdentifier)
+            access.check(app: app)
             vm.load(app: app)
         }
         .alert(vm.confirmTitle, isPresented: $vm.confirmReclaim) {

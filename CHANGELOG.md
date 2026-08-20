@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.3] - 2026-08-20
+
+### Added
+
+- **容器清理 · 目标应用支持浏览文件**. 进入任一 LiveContainer guest 的详情（`ReclaimAppView`）后，新增与「应用」页一致的 **浏览文件** 入口：先用 `ContainerAccessModel` 校验容器可达（配对文件隧道 + `SandboxEscape().withHandle`），通过后再打开 `FileBrowserView(app:)`，可查看 / 复制 / 导出 / 删除该 guest 的 Documents、Library、tmp。该入口与回收空间共用同一权限闸门，guest 的 `containerPath`（即 `Documents/Data/Application/<UUID>/`）作为浏览根目录。顺带，「回收空间」页（系统应用与 guest 共用 `ReclaimAppView`）也获得了同样的浏览文件能力。
+
 ## [0.2.2] - 2026-08-20
 
 ### Fixed
