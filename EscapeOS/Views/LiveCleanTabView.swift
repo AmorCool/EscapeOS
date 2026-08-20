@@ -14,6 +14,12 @@ struct LiveCleanAppRank: Identifiable {
         return "可安全清理 \(ReclaimService.formatBytes(safeBytes)) · \(guest.hostName)"
     }
 
+    /// The UUID directory this guest's data lives in. Always populated so the
+    /// UI can show it under the app name and the search box can match on it.
+    var containerUUID: String {
+        (guest.containerPath as NSString).lastPathComponent
+    }
+
     /// Convenience accessor for `ReclaimService` (needs an `InstalledApp`).
     var installedApp: InstalledApp { guest.installedApp }
 }
@@ -34,6 +40,7 @@ struct LiveCleanTabView: View {
             row.guest.displayName.localizedCaseInsensitiveContains(query)
                 || row.guest.bundleIdentifier.localizedCaseInsensitiveContains(query)
                 || row.guest.hostName.localizedCaseInsensitiveContains(query)
+                || row.containerUUID.localizedCaseInsensitiveContains(query)
         }
     }
 
@@ -172,7 +179,7 @@ struct LiveCleanTabView: View {
                     }
                     .disabled(row.failed || row.safeBytes == 0)
                 } else {
-                    NavigationLink(destination: ReclaimAppView(app: row.installedApp, viewModel: appList, guestIcon: row.guest.iconData)) {
+                    NavigationLink(destination: ReclaimAppView(app: row.installedApp, viewModel: appList, guestIcon: row.guest.iconData, containerUUID: row.containerUUID)) {
                         rankRow(row, selected: false)
                     }
                 }
@@ -194,6 +201,11 @@ struct LiveCleanTabView: View {
                 Text(row.subtitle)
                     .font(.caption)
                     .foregroundColor(.secondary)
+                Text("UUID: \(row.containerUUID)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary.opacity(0.8))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
         .contentShape(Rectangle())

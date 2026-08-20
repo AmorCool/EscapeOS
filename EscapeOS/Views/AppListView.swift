@@ -91,6 +91,7 @@ final class AppListViewModel: ObservableObject {
 struct AppListView: View {
     @ObservedObject var viewModel: AppListViewModel
     @State private var searchText = ""
+    @State private var iconShare: IconSharePayload?
 
     var body: some View {
         let visible = filteredApps
@@ -118,17 +119,25 @@ struct AppListView: View {
                                 }
                                 .contextMenu {
                                     Button {
-                                        FileClipboard.copyText(
-                                            app.bundleIdentifier,
-                                            confirmation: "已复制 Bundle ID"
-                                        )
-                                    } label: {
-                                        Label("复制 Bundle ID", systemImage: "doc.on.doc")
-                                    }
-                                    Button {
-                                        FileClipboard.copyText(app.name, confirmation: "已复制名称")
-                                    } label: {
-                                        Label("复制名称", systemImage: "character.cursor.ibeam")
+                                            FileClipboard.copyText(
+                                                app.bundleIdentifier,
+                                                confirmation: "已复制 Bundle ID"
+                                            )
+                                        } label: {
+                                            Label("复制 Bundle ID", systemImage: "doc.on.doc")
+                                        }
+                                        Button {
+                                            FileClipboard.copyText(app.name, confirmation: "已复制名称")
+                                        } label: {
+                                            Label("复制名称", systemImage: "character.cursor.ibeam")
+                                        }
+                                        if let icon = viewModel.icons[app.bundleIdentifier] {
+                                            Button {
+                                                iconShare = IconSharePayload(image: icon, suggestedName: "\(app.name) 图标.png")
+                                            } label: {
+                                                Label("提取图标", systemImage: "square.and.arrow.down")
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -145,6 +154,9 @@ struct AppListView: View {
             }
         }
         .searchable(text: $searchText, prompt: "搜索应用")
+        .sheet(item: $iconShare) { payload in
+            IconShareSheet(image: payload.image, fileName: payload.suggestedName)
+        }
     }
 
     private var emptyListMessage: String {
@@ -221,4 +233,32 @@ struct AppListView: View {
         let clamped = min(max(index, 0), letters.count - 1)
         proxy.scrollTo(letters[clamped], anchor: .top)
     }
+}
+
+/// Payload passed to `IconShareSheet` when sharing an extracted app icon.
+struct IconSharePayload: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let suggestedName: String
+}
+
+/// Wraps `UIActivityViewController` to share an extracted app icon. The user
+/// can save it to the Photos library, Files, AirDrop, etc.
+struct IconShareSheet: UIViewControllerRepresentable {
+    let image: UIImage
+    let fileName: String
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        // Materialize the PNG into a temp file so "Save to Files" gives the
+        // icon a meaningful name. `UIActivityViewController` will copy the
+        // file when the user chooses a file destination.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        try? FileManager.default.removeItem(at: url)
+        if let data = image.pngData() {
+            try? data.write(to: url, options: .atomic)
+        }
+        return UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

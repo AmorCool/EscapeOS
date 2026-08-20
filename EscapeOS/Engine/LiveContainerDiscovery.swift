@@ -127,26 +127,35 @@ final class LiveContainerDiscovery {
 
                     // Fallback: scan LCContainerInfo.plist files we might have
                     // missed (older / fork layouts that don't carry LCAppInfo).
+                    // We walk both the private `Documents/Data/...` tree and the
+                    // `Documents/Shared/Data/...` tree (LiveContainer stores
+                    // shared-guest containers under Shared/) so apps that were
+                    // "Shared" via LiveContainer's Share App flow still surface.
+                    let sharedRoot = (host.containerPath as NSString)
+                        .appendingPathComponent("Documents/Shared/Data")
                     var walked: [String] = []
-                    for (uuidPath, dict) in collectGuestInfoPlists(in: dataRoot, depth: 0, visited: &walked) {
-                        let uuid = (uuidPath as NSString).lastPathComponent
-                        // Dedupe against the primary pass — same UUID = same guest.
-                        guard guestsByUUID[uuid] == nil else { continue }
-                        let plistName = nameFromContainerInfo(dict)
-                        // Try to find a matching `.app` via the LCAppInfo.plist
-                        // folderName → app link (some LC forks keep this).
-                        let appRef = lookupAppByUUID(uuid, in: appsRoot)
-                        let bundleId = appRef?.bundleId ?? uuid
-                        let displayName = plistName ?? appRef?.displayName ?? uuid
-                        let key = makeKey(bundleId: bundleId, uuid: uuid)
-                        guestsByUUID[uuid] = LiveContainerGuest(
-                            id: key,
-                            bundleIdentifier: bundleId,
-                            displayName: displayName,
-                            containerPath: uuidPath,
-                            iconData: appRef?.iconData,
-                            hostName: host.name
-                        )
+                    for root in [dataRoot, sharedRoot] {
+                        for (uuidPath, dict) in collectGuestInfoPlists(in: root, depth: 0, visited: &walked) {
+                            let uuid = (uuidPath as NSString).lastPathComponent
+                            // Dedupe against the primary pass — same UUID = same guest.
+                            guard guestsByUUID[uuid] == nil else { continue }
+                            let plistName = nameFromContainerInfo(dict)
+                            // Try to find a matching `.app` via the LCAppInfo.plist
+                            // folderName → app link (some LC forks keep this).
+                            let appRef = lookupAppByUUID(uuid, in: appsRoot)
+                            let bundleId = appRef?.bundleId ?? uuid
+                            let displayName = plistName ?? appRef?.displayName ?? uuid
+                            let key = makeKey(bundleId: bundleId, uuid: uuid)
+                            let sharedTag = root == sharedRoot && appRef == nil
+                            guestsByUUID[uuid] = LiveContainerGuest(
+                                id: key,
+                                bundleIdentifier: bundleId,
+                                displayName: displayName,
+                                containerPath: uuidPath,
+                                iconData: appRef?.iconData,
+                                hostName: sharedTag ? "\(host.name) (共享)" : host.name
+                            )
+                        }
                     }
                     return Array(guestsByUUID.values).sorted {
                         $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending

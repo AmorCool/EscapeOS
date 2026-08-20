@@ -8,6 +8,9 @@ struct ReclaimAppView: View {
     /// bundle id isn't in the system app list). Falls back to the
     /// SpringBoard icon cache.
     var guestIcon: Data? = nil
+    /// Optional container UUID shown beneath the app name (LiveContainer
+    /// guests). Pass `LiveCleanAppRank.containerUUID` from the caller.
+    var containerUUID: String? = nil
     @StateObject private var vm = ReclaimAppViewModel()
 
     var body: some View {
@@ -25,6 +28,12 @@ struct ReclaimAppView: View {
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(app.name).font(.headline)
+                        if let uuid = containerUUID {
+                            Text("UUID: \(uuid)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                        }
                         Text(selectedSummary)
                             .font(.subheadline)
                             .foregroundColor(.secondary)

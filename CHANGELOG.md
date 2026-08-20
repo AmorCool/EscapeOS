@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0] - 2026-08-20
+
+### Added
+
+- **Extract app icon from the Apps list**: long-press any app → "提取图标" → iOS share sheet lets the user save the PNG to Photos / Files / AirDrop. The share sheet materializes a temporary file with a meaningful name (e.g. `Filza Mod 图标.png`) so the destination path is sensible.
+- **LiveClean UUID display**: each LiveClean row now shows the container UUID beneath the subtitle (monospaced, single line, truncated). The Reclaim screen for that guest shows the same UUID under the app name (also selectable for copy).
+- **UUID search**: the LiveClean `.searchable` box now matches on the container UUID in addition to display name / bundle id / host name.
+
+### Fixed
+
+- **Shared apps invisible to LiveClean**: apps that were "Shared" via LiveContainer's Share App flow store their container under `Documents/Shared/Data/Application/<UUID>/` instead of the private `Documents/Data/Application/<UUID>/`. Discovery now walks both trees and labels unmatched shared guests as `<LiveContainer> (共享)`.
+
 ## [0.2.0] - 2026-08-20
 
 ### Fixed
