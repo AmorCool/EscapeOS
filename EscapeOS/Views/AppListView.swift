@@ -3,9 +3,9 @@ import UIKit
 
 /// App-list scope split requested by the user: All / System / Third-party.
 private enum AppListScope: String, CaseIterable, Identifiable {
-    case all = "全部"
-    case system = "系统"
-    case thirdParty = "三方"
+    case all = "全部应用"
+    case system = "系统应用"
+    case thirdParty = "三方应用"
     var id: String { rawValue }
 }
 
