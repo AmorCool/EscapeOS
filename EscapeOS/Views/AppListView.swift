@@ -315,7 +315,7 @@ struct AppListView: View {
 
     private var selectingAllVisible: Bool {
         let selectable = filteredApps.filter { !$0.isSystem }
-        !selectable.isEmpty && selectable.allSatisfy { selected.contains($0.bundleIdentifier) }
+        return !selectable.isEmpty && selectable.allSatisfy { selected.contains($0.bundleIdentifier) }
     }
 
     private func toggleSelectAll(visible: [InstalledApp]) {
