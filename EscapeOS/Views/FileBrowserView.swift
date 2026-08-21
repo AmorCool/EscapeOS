@@ -31,7 +31,7 @@ struct FileBrowserView: View {
         _vm = StateObject(wrappedValue: FileBrowserViewModel(app: app, initialPath: initialPath))
     }
 
-    private var browserToolbar: some View {
+    private var browserToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .navigationBarTrailing) {
             if selecting {
                 Button(allVisibleSelected ? "全部取消选择" : "全选") {
@@ -90,6 +90,7 @@ struct FileBrowserView: View {
         }
     }
 
+    @ViewBuilder
     private var busyOverlayContent: some View {
         if vm.isBusy {
             ZStack {
