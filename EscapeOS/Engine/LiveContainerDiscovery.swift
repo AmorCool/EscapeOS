@@ -38,7 +38,8 @@ struct LiveContainerGuest: Identifiable {
             bundleIdentifier: id,
             name: displayName,
             containerPath: containerPath,
-            version: nil
+            version: nil,
+            applicationType: nil
         )
     }
 }

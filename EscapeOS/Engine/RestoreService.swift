@@ -45,7 +45,8 @@ final class RestoreService {
                 bundleIdentifier: metadata.bundleIdentifier,
                 name: metadata.appName,
                 containerPath: metadata.containerPath,
-                version: nil
+                version: nil,
+                applicationType: nil
             )
             var warnings: [String] = []
             do {
