@@ -21,29 +21,34 @@ struct ReclaimAppView: View {
     var body: some View {
         List {
             Section {
-                HStack(spacing: 12) {
+                HStack(spacing: 14) {
                     if let data = guestIcon, let img = UIImage(data: data) {
                         Image(uiImage: img)
                             .resizable()
                             .scaledToFit()
-                            .frame(width: 44, height: 44)
-                            .cornerRadius(44 * 0.22)
+                            .frame(width: 56, height: 56)
+                            .cornerRadius(56 * 0.22)
                     } else {
-                        AppIconView(icon: viewModel.icons[app.bundleIdentifier], size: 44)
+                        AppIconView(icon: viewModel.icons[app.bundleIdentifier], size: 56)
                     }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(app.name).font(.headline)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(app.name).font(.title3.bold())
                         if let uuid = containerUUID {
                             Text("UUID: \(uuid)")
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundColor(.secondary)
                                 .textSelection(.enabled)
                         }
-                        Text(selectedSummary)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                        HStack(spacing: 6) {
+                            Image(systemName: vm.isLoading ? "hourglass" : "internaldrive")
+                                .foregroundColor(.secondary)
+                            Text(selectedSummary)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
+                .padding(.vertical, 4)
             }
 
             Section(header: Text("访问权限")) {
@@ -121,6 +126,7 @@ struct ReclaimAppView: View {
                     Label("回收 \(ReclaimService.formatBytes(vm.selectedBytes))", systemImage: "internaldrive")
                 }
                 .disabled(vm.selectedBytes == 0 || vm.isBusy || vm.isLoading)
+                .tint(AppTheme.accent)
             }
         }
         .navigationTitle("回收空间")
@@ -210,6 +216,31 @@ struct ReclaimAppView: View {
     }
 
     private func bucketRow(_ bucket: ReclaimBucketStat) -> some View {
+        let role = bucket.category.risk
+        let content = HStack(spacing: 14) {
+            AppRowIcon(systemName: bucket.category.symbol, tint: role.tint)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(bucket.category.title)
+                    .font(.body.weight(.medium))
+                Text(bucket.summary)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer(minLength: 8)
+            if bucket.available, (bucket.files > 0 || bucket.bytes > 0) {
+                Text(role == .kept ? "保留" : ReclaimService.formatBytes(bucket.bytes))
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(role.tint)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(role.tint.opacity(0.12), in: Capsule())
+            }
+        }
+        .padding(.vertical, 3)
+
+        if role == .kept {
+            return AnyView(content)
+        }
         let enabled = Binding<Bool>(
             get: { vm.selected.contains(bucket.id) },
             set: { on in
@@ -217,15 +248,10 @@ struct ReclaimAppView: View {
                 else { vm.selected.remove(bucket.id) }
             }
         )
-        return Toggle(isOn: enabled) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(bucket.category.title)
-                Text(bucket.summary)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .disabled(!bucket.available || (bucket.files == 0 && bucket.bytes == 0))
+        return AnyView(
+            Toggle(isOn: enabled) { content }
+                .disabled(!bucket.available || (bucket.files == 0 && bucket.bytes == 0))
+        )
     }
 }
 

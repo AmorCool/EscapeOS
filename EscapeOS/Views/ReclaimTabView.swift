@@ -107,26 +107,34 @@ struct ReclaimTabView: View {
     }
 
     private var scanPrompt: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "internaldrive")
-                .font(.system(size: 40))
-                .foregroundColor(.secondary)
-            Text("扫描每个应用的缓存与临时文件。确认回收前不会删除任何内容。")
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(AppTheme.accent.opacity(0.12))
+                    .frame(width: 84, height: 84)
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 38))
+                    .foregroundColor(AppTheme.accent)
+            }
+            Text("扫描应用缓存与临时文件")
+                .font(.title3.bold())
+            Text("扫描会测量每个应用的缓存与临时文件占用。在你确认回收之前，不会删除任何内容。")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 28)
             Button {
                 selecting = false
                 vm.scan(apps: appList.apps)
             } label: {
-                Text("立即扫描")
+                Label("立即扫描", systemImage: "sparkles")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .tint(AppTheme.accent)
             .disabled(appList.apps.isEmpty || vm.isScanning)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 28)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -134,6 +142,9 @@ struct ReclaimTabView: View {
     private var rankedList: some View {
         let visible = filteredRows
         return List {
+            if !vm.isScanning {
+                summaryCard
+            }
             if !vm.progressText.isEmpty && vm.isScanning {
                 Text(vm.progressText)
                     .foregroundColor(.secondary)
@@ -164,6 +175,35 @@ struct ReclaimTabView: View {
         .listStyle(.insetGrouped)
     }
 
+    private var summaryCard: some View {
+        let reclaimable = vm.rows.filter { !$0.failed && $0.safeBytes > 0 }
+        let total = reclaimable.reduce(0) { $0 + $1.safeBytes }
+        let count = reclaimable.count
+        return HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(AppTheme.accent.opacity(0.14))
+                Image(systemName: "leaf.arrow.circlepath")
+                    .font(.system(size: 26))
+                    .foregroundColor(AppTheme.accent)
+            }
+            .frame(width: 50, height: 50)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("可回收空间")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Text(ReclaimService.formatBytes(total))
+                    .font(.title2.bold())
+                Text("来自 \(count) 个应用的安全缓存")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+        }
+        .listRowBackground(Color.clear)
+        .padding(.vertical, 4)
+    }
+
     private var filteredRows: [ReclaimAppRank] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return vm.rows }
@@ -177,29 +217,43 @@ struct ReclaimTabView: View {
         HStack(spacing: 12) {
             if selecting {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(selected ? .accentColor : .secondary)
+                    .font(.system(size: 22))
+                    .foregroundColor(selected ? AppTheme.accent : .secondary)
             }
-            AppIconView(icon: appList.icons[row.app.bundleIdentifier], size: 40)
-            VStack(alignment: .leading, spacing: 2) {
+            AppIconView(icon: appList.icons[row.app.bundleIdentifier], size: 44)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(row.app.name)
+                    .font(.headline)
                 Text(row.subtitle)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+            Spacer(minLength: 8)
+            if !selecting, !row.failed, row.safeBytes > 0 {
+                SizePill(text: ReclaimService.formatBytes(row.safeBytes))
+            }
         }
         .contentShape(Rectangle())
+        .padding(.vertical, 2)
     }
 
     private var batchBar: some View {
         let bytes = vm.selectedSafeBytes
         return HStack {
-            Text("已选 \(vm.selected.count) 项 · \(ReclaimService.formatBytes(bytes))")
-                .font(.subheadline)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("已选 \(vm.selected.count) 项")
+                    .font(.subheadline.weight(.semibold))
+                Text(ReclaimService.formatBytes(bytes))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             Spacer()
             Button("回收安全项") {
                 vm.confirmBatch = true
             }
             .disabled(vm.selected.isEmpty || bytes == 0)
+            .buttonStyle(.borderedProminent)
+            .tint(AppTheme.accent)
         }
         .padding()
         .background(.bar)
