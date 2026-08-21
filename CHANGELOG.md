@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.12] - 2026-08-21
+
+### Added
+- **应用列表 · 全部 / 系统 / 三方 分栏 + 筛选器**. 列表顶部新增分段控件（全部应用 / 系统应用 / 三方应用），配合原有搜索框按名称 / Bundle ID 过滤。系统应用此前被 `ApplicationType != "User"` 过滤掉，现已不再丢弃——底层 `installation_proxy_get_apps` 的 `application_type` 本就是 `NULL`（即 "Any"），系统应用一直都在返回数据里。系统应用行带「系统」胶囊徽标，且为只读展示（无用户 Data 容器，不提供浏览 / 回收 / 卸载）。
+
+### Changed
+- **消除「割裂感」**. 「空间回收」单 App 详情页的「浏览文件」「备份数据」按钮此前是系统默认蓝色、而「回收」是主题橙，视觉不统一。现统一套用 `AppTheme.accent`，「保留」分类也复用与「安全 / 会话」一致的 `bucketRow` 样式（带图标 + 角色色胶囊），整页配色一致。
+- **构建链接 iOS 26 SDK 以启用液态玻璃（Liquid Glass）**. CI 在构建前切到 Xcode 26.3（`/Applications/Xcode_26*.app`），使 App 链接 iOS 26 SDK，iOS 26 设备上的标签栏 / 控件会自动呈现液态玻璃效果（Apple "linked on or after" 规则）。**部署目标仍保持 18.0**，因此 iOS 18 设备仍可正常安装——并未把 `MinimumOSVersion` 提高到 26，否则会挡掉你的 iOS 18 设备。
+
 ## [0.2.11] - 2026-08-21
 
 ### Changed

@@ -1,6 +1,14 @@
 import SwiftUI
 import UIKit
 
+/// App-list scope split requested by the user: All / System / Third-party.
+private enum AppListScope: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case system = "系统"
+    case thirdParty = "三方"
+    var id: String { rawValue }
+}
+
 /// View model for the app picker.
 final class AppListViewModel: ObservableObject {
     @Published var apps: [InstalledApp] = []
@@ -134,6 +142,7 @@ final class AppListViewModel: ObservableObject {
 struct AppListView: View {
     @ObservedObject var viewModel: AppListViewModel
     @State private var searchText = ""
+    @State private var appTypeFilter: AppListScope = .all
     @State private var iconShare: IconSharePayload?
     @State private var selecting = false
     @State private var selected: Set<String> = []
@@ -144,6 +153,16 @@ struct AppListView: View {
         let visible = filteredApps
         ScrollViewReader { proxy in
             List {
+                Section {
+                    Picker("应用类型", selection: $appTypeFilter) {
+                        ForEach(AppListScope.allCases) { scope in
+                            Text(scope.rawValue).tag(scope)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
                 if let status = viewModel.uninstallStatus {
                     HStack {
                         ProgressView()
@@ -160,7 +179,34 @@ struct AppListView: View {
                     ForEach(sections(in: visible), id: \.letter) { section in
                         Section(header: Text(section.letter).id(section.letter)) {
                             ForEach(section.apps) { app in
-                                if selecting {
+                                if app.isSystem {
+                                    // System apps are shown read-only: they have no
+                                    // user Data container, so browse / reclaim / uninstall
+                                    // don't apply. Tap does nothing; only copy actions.
+                                    appRow(app, mode: .normal)
+                                        .contextMenu {
+                                            Button {
+                                                FileClipboard.copyText(
+                                                    app.bundleIdentifier,
+                                                    confirmation: "已复制 Bundle ID"
+                                                )
+                                            } label: {
+                                                Label("复制 Bundle ID", systemImage: "doc.on.doc")
+                                            }
+                                            Button {
+                                                FileClipboard.copyText(app.name, confirmation: "已复制名称")
+                                            } label: {
+                                                Label("复制名称", systemImage: "character.cursor.ibeam")
+                                            }
+                                            if let icon = viewModel.icons[app.bundleIdentifier] {
+                                                Button {
+                                                    iconShare = IconSharePayload(image: icon, suggestedName: "\(app.name) 图标.png")
+                                                } label: {
+                                                    Label("提取图标", systemImage: "square.and.arrow.down")
+                                                }
+                                            }
+                                        }
+                                } else if selecting {
                                     Button {
                                         toggleSelection(app.bundleIdentifier)
                                     } label: {
@@ -224,12 +270,14 @@ struct AppListView: View {
                     .disabled(viewModel.uninstallStatus != nil || visible.isEmpty)
                 }
             } else {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("选择") {
-                        selected.removeAll()
-                        selecting = true
+                if appTypeFilter != .system {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("选择") {
+                            selected.removeAll()
+                            selecting = true
+                        }
+                        .disabled(viewModel.apps.isEmpty)
                     }
-                    .disabled(viewModel.apps.isEmpty)
                 }
             }
         }
@@ -266,23 +314,25 @@ struct AppListView: View {
     }
 
     private var selectingAllVisible: Bool {
-        !filteredApps.isEmpty && filteredApps.allSatisfy { selected.contains($0.bundleIdentifier) }
+        let selectable = filteredApps.filter { !$0.isSystem }
+        !selectable.isEmpty && selectable.allSatisfy { selected.contains($0.bundleIdentifier) }
     }
 
     private func toggleSelectAll(visible: [InstalledApp]) {
+        let selectable = visible.filter { !$0.isSystem }
         if selectingAllVisible {
-            for app in visible {
+            for app in selectable {
                 selected.remove(app.bundleIdentifier)
             }
         } else {
-            for app in visible {
+            for app in selectable {
                 selected.insert(app.bundleIdentifier)
             }
         }
     }
 
     private var selectionBar: some View {
-        let apps = filteredApps.filter { selected.contains($0.bundleIdentifier) }
+        let apps = filteredApps.filter { selected.contains($0.bundleIdentifier) && !$0.isSystem }
         return HStack {
             Text("已选 \(apps.count) 项")
                 .font(.subheadline)
@@ -337,7 +387,17 @@ struct AppListView: View {
             }
             AppIconView(icon: viewModel.icons[app.bundleIdentifier])
             VStack(alignment: .leading, spacing: 2) {
-                Text(app.name).font(.body)
+                HStack(spacing: 6) {
+                    Text(app.name).font(.body)
+                    if app.isSystem {
+                        Text("系统")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color(.tertiarySystemFill), in: Capsule())
+                    }
+                }
                 Text(app.bundleIdentifier)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -357,8 +417,15 @@ struct AppListView: View {
 
     private var filteredApps: [InstalledApp] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return viewModel.apps }
-        return viewModel.apps.filter { app in
+        let scoped = viewModel.apps.filter { app in
+            switch appTypeFilter {
+            case .all: return true
+            case .system: return app.isSystem
+            case .thirdParty: return !app.isSystem
+            }
+        }
+        guard !query.isEmpty else { return scoped }
+        return scoped.filter { app in
             app.name.localizedCaseInsensitiveContains(query)
                 || app.bundleIdentifier.localizedCaseInsensitiveContains(query)
         }

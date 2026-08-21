@@ -1,13 +1,23 @@
 import Foundation
 import UIKit
 
-/// A single installed (user/App Store) application discoverable on-device.
+/// A single installed application discoverable on-device. Covers both
+/// user-installed (App Store / sideloaded) apps and system apps.
 struct InstalledApp: Identifiable, Hashable {
     let id = UUID()
     let bundleIdentifier: String
     let name: String
     let containerPath: String
     let version: String?
+    /// `ApplicationType` from installation_proxy: "User", "System",
+    /// "HiddenSystemApp", or nil. Used by the app list to split 全部 / 系统 / 三方.
+    let applicationType: String?
+
+    /// Whether this is a system/firmware app rather than a user-installed one.
+    var isSystem: Bool {
+        guard let t = applicationType else { return false }
+        return t == "System" || t == "HiddenSystemApp"
+    }
 }
 
 /// Errors surfaced by tunnel-based app discovery.
@@ -60,22 +70,25 @@ final class AppDiscovery {
         var apps: [InstalledApp] = []
         for (bundleId, infoRaw) in all {
             let info = infoRaw.reduce(into: [String: Any]()) { $0[$1.key.base as? String ?? ""] = $1.value }
-            // Only user-installed (App Store / sideloaded) apps.
-            if let appType = info["ApplicationType"] as? String, appType != "User" {
-                continue
-            }
+            // Return every application type. The underlying instproxy query uses
+            // `application_type = NULL` ("Any"), so system apps are already in
+            // the payload — the app list UI splits them into 全部 / 系统 / 三方
+            // tabs instead of dropping them here.
+            let appType = info["ApplicationType"] as? String
             // Resolve display name.
             let name = (info["CFBundleDisplayName"] as? String)
                 ?? (info["CFBundleName"] as? String)
                 ?? bundleId
-            // Container path (Data container).
-            guard let container = info["Container"] as? String, !container.isEmpty else { continue }
+            // Container path (Data container). System apps may not expose one;
+            // we keep them in the list (read-only) instead of dropping them.
+            let container = (info["Container"] as? String) ?? ""
             let version = info["CFBundleShortVersionString"] as? String
             apps.append(InstalledApp(
                 bundleIdentifier: bundleId,
                 name: name,
                 containerPath: container,
-                version: version
+                version: version,
+                applicationType: appType
             ))
         }
 
@@ -109,8 +122,6 @@ final class AppDiscovery {
 /// Marker extension so `AppListViewModel` can add app-removal operations
 /// without bloating `AppDiscovery` further.
 extension InstalledApp {
-    /// Whether this looks like a user / sideloaded app (rather than a system
-    /// framework). Pwnapplehat's `applist` table sets `ApplicationType`
-    /// to `"User"` for anything installable; everything else is left alone.
-    var isUserApp: Bool { true }
+    /// Whether this is a user / sideloaded app (rather than a system framework).
+    var isUserApp: Bool { !isSystem }
 }

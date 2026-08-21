@@ -21,6 +21,21 @@ jobs:
           brew install make ldid dpkg
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
 
+      - name: Select Xcode 26 (iOS 26 SDK)
+        # Liquid Glass tab bar / controls render automatically when the app is
+        # linked against the iOS 26 SDK (Apple's "linked on or after" rule).
+        # We only raise the *build* SDK — the deployment target stays at 18.0
+        # (see the make package TARGET below) so iOS 18 devices still install.
+        run: |
+          set -euo pipefail
+          XCODE_APP="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n1)"
+          if [ -z "$XCODE_APP" ]; then
+            XCODE_APP="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n1)"
+          fi
+          echo "Selecting Xcode: $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+
       - name: Set up Theos
         run: |
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"

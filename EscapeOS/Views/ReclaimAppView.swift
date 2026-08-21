@@ -87,19 +87,7 @@ struct ReclaimAppView: View {
                     Text("测量中…").foregroundColor(.secondary)
                 }
                 ForEach(vm.buckets.filter { $0.category.risk == .kept }) { bucket in
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(bucket.category.title)
-                            Text(bucket.category.detail)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Text(bucket.summary)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 2)
+                    bucketRow(bucket)
                 }
             }
 
@@ -108,6 +96,7 @@ struct ReclaimAppView: View {
                     Label("浏览文件", systemImage: "folder.fill")
                 }
                 .disabled(!access.isGranted)
+                .tint(AppTheme.accent)
 
                 Button {
                     backup.start(app: app, isContainerApp: true, iconData: guestIcon)
@@ -115,6 +104,7 @@ struct ReclaimAppView: View {
                     Label("备份数据", systemImage: "externaldrive.fill.badge.plus")
                 }
                 .disabled(!access.isGranted || backup.isBusy)
+                .tint(AppTheme.accent)
 
                 backupStatus
             }
