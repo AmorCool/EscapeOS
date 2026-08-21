@@ -31,7 +31,89 @@ struct FileBrowserView: View {
         _vm = StateObject(wrappedValue: FileBrowserViewModel(app: app, initialPath: initialPath))
     }
 
-    var body: some View {
+    private var browserToolbar: some View {
+        ToolbarItemGroup(placement: .navigationBarTrailing) {
+            if selecting {
+                Button(allVisibleSelected ? "全部取消选择" : "全选") {
+                    if allVisibleSelected {
+                        selected.removeAll()
+                    } else {
+                        selected.formUnion(visibleItems.map(\.path))
+                    }
+                }
+                .disabled(visibleItems.isEmpty)
+                Button("完成") { exitSelection() }
+            } else {
+                if !clipboard.isEmpty {
+                    Button {
+                        vm.paste()
+                    } label: {
+                        Image(systemName: clipboard.payload?.mode == .cut ? "scissors" : "doc.on.clipboard")
+                    }
+                    .disabled(vm.isPasting)
+                    .accessibilityLabel(clipboard.pasteTitle)
+                }
+                Button("选择") { enterSelection() }
+                Menu {
+                    if !clipboard.isEmpty {
+                        Button {
+                            vm.paste()
+                        } label: {
+                            Label(clipboard.pasteTitle, systemImage: "doc.on.clipboard")
+                        }
+                        .disabled(vm.isPasting)
+                        Button("清空剪贴板", role: .destructive) {
+                            clipboard.clear()
+                        }
+                    }
+                    Button {
+                        createName = "新文件.txt"
+                        createKind = .file
+                    } label: {
+                        Label("新建文件", systemImage: "doc.badge.plus")
+                    }
+                    Button {
+                        createName = "新建文件夹"
+                        createKind = .folder
+                    } label: {
+                        Label("新建文件夹", systemImage: "folder.badge.plus")
+                    }
+                    Button {
+                        showImporter = true
+                    } label: {
+                        Label("从文件导入", systemImage: "square.and.arrow.down")
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                }
+            }
+        }
+    }
+
+    private var busyOverlayContent: some View {
+        if vm.isBusy {
+            ZStack {
+                Color.black.opacity(0.28).ignoresSafeArea()
+                VStack(spacing: 14) {
+                    ProgressView()
+                        .scaleEffect(1.15)
+                    Text(vm.busyTitle)
+                        .font(.headline)
+                }
+                .padding(.horizontal, 28)
+                .padding(.vertical, 22)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(vm.busyTitle)
+        }
+    }
+
+    /// Core browser content with its navigation chrome. Split out of `body`
+    /// so the (large) expression is type-checked independently — the iOS 26
+    /// SDK's expanded SwiftUI overload set pushes a single monolithic `body`
+    /// past the compiler's type-check time budget.
+    private var contentWithChrome: some View {
         Group {
             if vm.isLoading && vm.items.isEmpty {
                 ProgressView("正在打开容器…")
@@ -52,87 +134,13 @@ struct FileBrowserView: View {
         .navigationTitle(selecting ? selectionTitle : vm.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "筛选此目录")
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if selecting {
-                    Button(allVisibleSelected ? "全部取消选择" : "全选") {
-                        if allVisibleSelected {
-                            selected.removeAll()
-                        } else {
-                            selected.formUnion(visibleItems.map(\.path))
-                        }
-                    }
-                    .disabled(visibleItems.isEmpty)
-                    Button("完成") { exitSelection() }
-                } else {
-                    if !clipboard.isEmpty {
-                        Button {
-                            vm.paste()
-                        } label: {
-                            Image(systemName: clipboard.payload?.mode == .cut ? "scissors" : "doc.on.clipboard")
-                        }
-                        .disabled(vm.isPasting)
-                        .accessibilityLabel(clipboard.pasteTitle)
-                    }
-                    Button("选择") { enterSelection() }
-                    Menu {
-                        if !clipboard.isEmpty {
-                            Button {
-                                vm.paste()
-                            } label: {
-                                Label(clipboard.pasteTitle, systemImage: "doc.on.clipboard")
-                            }
-                            .disabled(vm.isPasting)
-                            Button("清空剪贴板", role: .destructive) {
-                                clipboard.clear()
-                            }
-                        }
-                        Button {
-                            createName = "新文件.txt"
-                            createKind = .file
-                        } label: {
-                            Label("新建文件", systemImage: "doc.badge.plus")
-                        }
-                        Button {
-                            createName = "新建文件夹"
-                            createKind = .folder
-                        } label: {
-                            Label("新建文件夹", systemImage: "folder.badge.plus")
-                        }
-                        Button {
-                            showImporter = true
-                        } label: {
-                            Label("从文件导入", systemImage: "square.and.arrow.down")
-                        }
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                }
-            }
-        }
+        .toolbar { browserToolbar }
         .safeAreaInset(edge: .bottom) {
             if selecting {
                 selectionBar
             }
         }
-        .overlay {
-            if vm.isBusy {
-                ZStack {
-                    Color.black.opacity(0.28).ignoresSafeArea()
-                    VStack(spacing: 14) {
-                        ProgressView()
-                            .scaleEffect(1.15)
-                        Text(vm.busyTitle)
-                            .font(.headline)
-                    }
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 22)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(vm.busyTitle)
-            }
-        }
+        .overlay { busyOverlayContent }
         .onAppear { vm.open(vm.currentPath) }
         .background(
             NavigationLink(
@@ -148,93 +156,97 @@ struct FileBrowserView: View {
             ) { EmptyView() }
             .hidden()
         )
-        .sheet(item: $vm.sharePayload) { payload in
-            ActivityShareView(url: payload.url)
-        }
-        .alert(item: $vm.exportError) { err in
-            Alert(title: Text("无法分享文件"), message: Text(err.message), dismissButton: .default(Text("好")))
-        }
-        .alert(item: $vm.operationError) { err in
-            Alert(title: Text("文件操作失败"), message: Text(err.message), dismissButton: .default(Text("好")))
-        }
-        .alert("压缩包密码", isPresented: Binding(
-            get: { vm.unzipPasswordItem != nil },
-            set: { if !$0 { vm.clearUnzipPasswordPrompt() } }
-        )) {
-            SecureField("密码", text: $archivePassword)
-                .disableAutocorrection(true)
-                .autocapitalization(.none)
-            Button("取消", role: .cancel) {
-                archivePassword = ""
-                vm.clearUnzipPasswordPrompt()
+    }
+
+    var body: some View {
+        contentWithChrome
+            .sheet(item: $vm.sharePayload) { payload in
+                ActivityShareView(url: payload.url)
             }
-            Button("解压") {
-                if let item = vm.unzipPasswordItem {
-                    vm.unzip(item: item, password: archivePassword)
+            .alert(item: $vm.exportError) { err in
+                Alert(title: Text("无法分享文件"), message: Text(err.message), dismissButton: .default(Text("好")))
+            }
+            .alert(item: $vm.operationError) { err in
+                Alert(title: Text("文件操作失败"), message: Text(err.message), dismissButton: .default(Text("好")))
+            }
+            .alert("压缩包密码", isPresented: Binding(
+                get: { vm.unzipPasswordItem != nil },
+                set: { if !$0 { vm.clearUnzipPasswordPrompt() } }
+            )) {
+                SecureField("密码", text: $archivePassword)
+                    .disableAutocorrection(true)
+                    .autocapitalization(.none)
+                Button("取消", role: .cancel) {
+                    archivePassword = ""
+                    vm.clearUnzipPasswordPrompt()
                 }
-                archivePassword = ""
-            }
-        } message: {
-            Text(vm.unzipPasswordMessage)
-        }
-        .alert("新建 \(createKind == .folder ? "文件夹" : "文件")", isPresented: Binding(
-            get: { createKind != nil },
-            set: { if !$0 { createKind = nil } }
-        )) {
-            TextField("名称", text: $createName)
-                .disableAutocorrection(true)
-                .autocapitalization(.none)
-            Button("取消", role: .cancel) { createKind = nil }
-            Button("创建") {
-                if let kind = createKind {
-                    vm.create(name: createName, kind: kind)
+                Button("解压") {
+                    if let item = vm.unzipPasswordItem {
+                        vm.unzip(item: item, password: archivePassword)
+                    }
+                    archivePassword = ""
                 }
-                createKind = nil
+            } message: {
+                Text(vm.unzipPasswordMessage)
             }
-        }
-        .alert("重命名", isPresented: Binding(
-            get: { renameItem != nil },
-            set: { if !$0 { renameItem = nil } }
-        )) {
-            TextField("新名称", text: $renameName)
-                .disableAutocorrection(true)
-                .autocapitalization(.none)
-            Button("取消", role: .cancel) { renameItem = nil }
-            Button("重命名") {
-                if let item = renameItem {
-                    vm.rename(item: item, to: renameName)
+            .alert("新建 \(createKind == .folder ? "文件夹" : "文件")", isPresented: Binding(
+                get: { createKind != nil },
+                set: { if !$0 { createKind = nil } }
+            )) {
+                TextField("名称", text: $createName)
+                    .disableAutocorrection(true)
+                    .autocapitalization(.none)
+                Button("取消", role: .cancel) { createKind = nil }
+                Button("创建") {
+                    if let kind = createKind {
+                        vm.create(name: createName, kind: kind)
+                    }
+                    createKind = nil
                 }
-                renameItem = nil
             }
-        }
-        .alert(deleteTitle, isPresented: Binding(
-            get: { !pendingDelete.isEmpty },
-            set: { if !$0 { pendingDelete = [] } }
-        )) {
-            Button("取消", role: .cancel) { pendingDelete = [] }
-            Button("删除", role: .destructive) {
-                vm.delete(items: pendingDelete)
-                selected.subtract(pendingDelete.map(\.path))
-                pendingDelete = []
+            .alert("重命名", isPresented: Binding(
+                get: { renameItem != nil },
+                set: { if !$0 { renameItem = nil } }
+            )) {
+                TextField("新名称", text: $renameName)
+                    .disableAutocorrection(true)
+                    .autocapitalization(.none)
+                Button("取消", role: .cancel) { renameItem = nil }
+                Button("重命名") {
+                    if let item = renameItem {
+                        vm.rename(item: item, to: renameName)
+                    }
+                    renameItem = nil
+                }
             }
-        } message: {
-            Text("此操作不可撤销。若文件可能被占用，请先关闭目标应用。")
-        }
-        .sheet(item: $propertiesItem) { item in
-            FilePropertiesView(app: app, item: item)
-        }
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [.item, .data, .content, .archive, .image, .text, .sourceCode, .propertyList],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                vm.importFiles(from: urls)
-            case .failure(let error):
-                vm.operationError = IdentifiedError(message: error.localizedDescription)
+            .alert(deleteTitle, isPresented: Binding(
+                get: { !pendingDelete.isEmpty },
+                set: { if !$0 { pendingDelete = [] } }
+            )) {
+                Button("取消", role: .cancel) { pendingDelete = [] }
+                Button("删除", role: .destructive) {
+                    vm.delete(items: pendingDelete)
+                    selected.subtract(pendingDelete.map(\.path))
+                    pendingDelete = []
+                }
+            } message: {
+                Text("此操作不可撤销。若文件可能被占用，请先关闭目标应用。")
             }
-        }
+            .sheet(item: $propertiesItem) { item in
+                FilePropertiesView(app: app, item: item)
+            }
+            .fileImporter(
+                isPresented: $showImporter,
+                allowedContentTypes: [.item, .data, .content, .archive, .image, .text, .sourceCode, .propertyList],
+                allowsMultipleSelection: true
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    vm.importFiles(from: urls)
+                case .failure(let error):
+                    vm.operationError = IdentifiedError(message: error.localizedDescription)
+                }
+            }
     }
 
     private var visibleItems: [FileItem] {
