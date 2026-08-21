@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           make clean
-          make package TARGET="iphone:clang:${{ env.SDK_VER }}:18.0"
+          make package TARGET="iphone:clang:${{ env.SDK_VER }}:18.0" 2>&1 | tee /tmp/build.log
 
       - name: Convert .deb to IPA
         run: |
@@ -82,6 +82,13 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           (cd /tmp/ipa && zip -r "$GITHUB_WORKSPACE/EscapeOS-$VERSION.ipa" Payload)
           ls -la "$GITHUB_WORKSPACE/EscapeOS-$VERSION.ipa"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/build.log
 
       - name: Generate release notes
         run: |
