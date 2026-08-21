@@ -20,105 +20,14 @@ struct ReclaimAppView: View {
 
     var body: some View {
         List {
-            Section {
-                HStack(spacing: 14) {
-                    if let data = guestIcon, let img = UIImage(data: data) {
-                        Image(uiImage: img)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 56, height: 56)
-                            .cornerRadius(56 * 0.22)
-                    } else {
-                        AppIconView(icon: viewModel.icons[app.bundleIdentifier], size: 56)
-                    }
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(app.name).font(.title3.bold())
-                        if let uuid = containerUUID {
-                            Text("UUID: \(uuid)")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(.secondary)
-                                .textSelection(.enabled)
-                        }
-                        HStack(spacing: 6) {
-                            Image(systemName: vm.isLoading ? "hourglass" : "internaldrive")
-                                .foregroundColor(.secondary)
-                            Text(selectedSummary)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            Section(header: Text("访问权限")) {
-                switch access.state {
-                case .unknown, .checking:
-                    HStack {
-                        ProgressView()
-                        Text("正在检查容器访问…").foregroundColor(.secondary)
-                    }
-                case .granted:
-                    Label("容器可访问", systemImage: "checkmark.shield.fill")
-                        .foregroundColor(.green)
-                case .denied(let reason):
-                    Label(reason, systemImage: "xmark.shield.fill")
-                        .foregroundColor(.red)
-                }
-            }
-
-            Section(header: Text("安全"), footer: Text("这些是缓存与临时文件目录，应用通常可以自行重建。")) {
-                ForEach(vm.buckets.filter { $0.category.risk == .safe }) { bucket in
-                    bucketRow(bucket)
-                }
-            }
-
-            Section(header: Text("会话"), footer: Text("可能导致应用内网页登录态丢失。默认关闭，需要时可手动开启。")) {
-                if vm.isFilling && vm.buckets.filter({ $0.category.risk == .session }).isEmpty {
-                    Text("测量中…").foregroundColor(.secondary)
-                }
-                ForEach(vm.buckets.filter { $0.category.risk == .session }) { bucket in
-                    bucketRow(bucket)
-                }
-            }
-
-            Section(header: Text("保留"), footer: Text("Documents、Preferences 与 Application Support 在此面板中不会被回收。")) {
-                if vm.isFilling && vm.buckets.filter({ $0.category.risk == .kept }).isEmpty {
-                    Text("测量中…").foregroundColor(.secondary)
-                }
-                ForEach(vm.buckets.filter { $0.category.risk == .kept }) { bucket in
-                    bucketRow(bucket)
-                }
-            }
-
-            Section(header: Text("容器内容"), footer: Text("浏览或备份该应用的 Documents、Library 与 tmp。备份会保存到「文件 → 我的iPhone → EscapeOS → Backups」，不包含 Keychain。请先关闭 \(app.name) 以获得一致快照。")) {
-                NavigationLink(destination: FileBrowserView(app: app)) {
-                    Label("浏览文件", systemImage: "folder.fill")
-                }
-                .disabled(!access.isGranted)
-                .tint(AppTheme.accent)
-
-                Button {
-                    backup.start(app: app, isContainerApp: true, iconData: guestIcon)
-                } label: {
-                    Label("备份数据", systemImage: "externaldrive.fill.badge.plus")
-                }
-                .disabled(!access.isGranted || backup.isBusy)
-                .tint(AppTheme.accent)
-
-                backupStatus
-            }
-
-            Section(footer: Text("请先关闭 \(app.name)。不会删除 Documents、Preferences 或 Application Support。")) {
-                Button {
-                    vm.confirmReclaim = true
-                } label: {
-                    Label("回收 \(ReclaimService.formatBytes(vm.selectedBytes))", systemImage: "internaldrive")
-                }
-                .disabled(vm.selectedBytes == 0 || vm.isBusy || vm.isLoading)
-                .tint(AppTheme.accent)
-            }
+            appHeaderSection
+            accessSection
+            safeSection
+            sessionSection
+            keptSection
+            containerSection
         }
+        .listStyle(.insetGrouped)
         .navigationTitle("回收空间")
         .navigationBarTitleDisplayMode(.inline)
         .overlay {
@@ -142,6 +51,11 @@ struct ReclaimAppView: View {
             access.check(app: app)
             vm.load(app: app)
         }
+        .safeAreaInset(edge: .bottom) {
+            if vm.selectedBytes > 0 && !vm.isBusy && !vm.isLoading {
+                reclaimButtonBar
+            }
+        }
         .alert(vm.confirmTitle, isPresented: $vm.confirmReclaim) {
             Button("取消", role: .cancel) {}
             Button("回收", role: .destructive) {
@@ -154,6 +68,132 @@ struct ReclaimAppView: View {
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("好")))
         }
     }
+
+    // MARK: - Sections
+
+    private var appHeaderSection: some View {
+        Section {
+            HStack(spacing: 14) {
+                if let data = guestIcon, let img = UIImage(data: data) {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 56, height: 56)
+                        .cornerRadius(56 * 0.22)
+                } else {
+                    AppIconView(icon: viewModel.icons[app.bundleIdentifier], size: 56)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(app.name).font(.title3.bold())
+                    if let uuid = containerUUID {
+                        Text("UUID: \(uuid)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    HStack(spacing: 6) {
+                        Image(systemName: vm.isLoading ? "hourglass" : "internaldrive")
+                            .foregroundColor(.secondary)
+                        Text(selectedSummary)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var accessSection: some View {
+        Section(header: Text("访问权限")) {
+            switch access.state {
+            case .unknown, .checking:
+                HStack {
+                    ProgressView()
+                    Text("正在检查容器访问…").foregroundColor(.secondary)
+                }
+            case .granted:
+                Label("容器可访问", systemImage: "checkmark.shield.fill")
+                    .foregroundColor(.green)
+            case .denied(let reason):
+                Label(reason, systemImage: "xmark.shield.fill")
+                    .foregroundColor(.red)
+            }
+        }
+    }
+
+    private var safeSection: some View {
+        Section(header: Text("安全"), footer: Text("这些是缓存与临时文件目录，应用通常可以自行重建。")) {
+            ForEach(vm.buckets.filter { $0.category.risk == .safe }) { bucket in
+                bucketRow(bucket)
+            }
+        }
+    }
+
+    private var sessionSection: some View {
+        Section(header: Text("会话"), footer: Text("可能导致应用内网页登录态丢失。默认关闭，需要时可手动开启。")) {
+            if vm.isFilling && vm.buckets.filter({ $0.category.risk == .session }).isEmpty {
+                Text("测量中…").foregroundColor(.secondary)
+            }
+            ForEach(vm.buckets.filter { $0.category.risk == .session }) { bucket in
+                bucketRow(bucket)
+            }
+        }
+    }
+
+    private var keptSection: some View {
+        Section(header: Text("保留"), footer: Text("Documents、Preferences 与 Application Support 在此面板中不会被回收。")) {
+            if vm.isFilling && vm.buckets.filter({ $0.category.risk == .kept }).isEmpty {
+                Text("测量中…").foregroundColor(.secondary)
+            }
+            ForEach(vm.buckets.filter { $0.category.risk == .kept }) { bucket in
+                bucketRow(bucket)
+            }
+        }
+    }
+
+    private var containerSection: some View {
+        Section(header: Text("容器内容"), footer: Text("浏览或备份该应用的 Documents、Library 与 tmp。备份会保存到「文件 → 我的iPhone → EscapeOS → Backups」，不包含 Keychain。请先关闭 \(app.name) 以获得一致快照。")) {
+            NavigationLink(destination: FileBrowserView(app: app)) {
+                Label("浏览文件", systemImage: "folder.fill")
+                    .foregroundColor(AppTheme.accent)
+            }
+            .disabled(!access.isGranted)
+
+            Button {
+                backup.start(app: app, isContainerApp: true, iconData: guestIcon)
+            } label: {
+                Label("备份数据", systemImage: "externaldrive.fill.badge.plus")
+                    .foregroundColor(AppTheme.accent)
+            }
+            .disabled(!access.isGranted || backup.isBusy)
+
+            backupStatus
+        }
+    }
+
+    private var reclaimButtonBar: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("已选 \(ReclaimService.formatBytes(vm.selectedBytes))")
+                    .font(.subheadline.weight(.semibold))
+                Text("不会删除 Documents、Preferences 或 Application Support")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button("回收") {
+                vm.confirmReclaim = true
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(AppTheme.accent)
+        }
+        .padding()
+        .background(.bar)
+    }
+
+    // MARK: - Helpers
 
     private var selectedSummary: String {
         if vm.isLoading { return "测量目录中…" }

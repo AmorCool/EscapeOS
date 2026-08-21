@@ -194,13 +194,13 @@ struct ReclaimTabView: View {
                     .foregroundColor(.secondary)
                 Text(ReclaimService.formatBytes(total))
                     .font(.title2.bold())
+                    .foregroundColor(AppTheme.accent)
                 Text("来自 \(count) 个应用的安全缓存")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             Spacer()
         }
-        .listRowBackground(Color.clear)
         .padding(.vertical, 4)
     }
 
