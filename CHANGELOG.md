@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.14] - 2026-08-21
+
+### Changed
+
+- **项目更名 EscapeOS → EscapeSpace**. 应用名（二进制 / `CFBundleExecutable` / `CFBundleDisplayName` / `control` Name / `@main` 结构体）统一改为 EscapeSpace；设置页「关于」行、各项备份路径提示文案（「文件 → 我的iPhone → EscapeSpace → Backups」）、限制说明与错误提示中的可见产品名同步更新。Bundle ID（`com.ipaside.escapeos`）保持不变，以免破坏已建立的配对文件与备份。源码目录 `EscapeOS/` 与内部错误域、日志串、`EscapeOS-Bridging-Header.h`、持久化元数据键 `escapeOSVersion` 等有意保留，避免影响既有备份兼容性与隧道认证。
+- **移除设置页「诊断（调试用）」区块**. 删除 AppGroup 探测按钮、结果滚动视图、分享结果与相关状态 / 方法（`runProbe` / `shareProbeResult` / `isoTimestamp`），并删除引擎文件 `Engine/AppGroupProbe.swift`。该探测仅用于前期研究取证，对普通用户无意义。
+- **应用列表移除右侧 A–Z 字母跳转索引**. 删去覆盖在列表右侧的蓝色字母条与 `sectionIndex` / `jumpToLetter` 逻辑，列表恢复普通滚动（应用仍按名称分组）。
+- **更新 App 图标**. 替换为新的垃圾桶（回收）风格图标，重新生成 1024×1024 主图与全套 `Resources/AppIcon*.png` 尺寸。
+
 ## [0.2.13] - 2026-08-21
 
 ### Fixed

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>EscapeOS</string>
+	<string>EscapeSpace</string>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundlePrimaryIcon</key>
@@ -46,9 +46,9 @@
 		<string>iPhoneOS</string>
 	</array>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.13</string>
+	<string>0.2.14</string>
 	<key>CFBundleVersion</key>
-	<string>13</string>
+	<string>14</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
@@ -62,7 +62,7 @@
 	<key>MinimumOSVersion</key>
 	<string>18.0</string>
 	<key>CFBundleDisplayName</key>
-	<string>EscapeOS</string>
+	<string>EscapeSpace</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

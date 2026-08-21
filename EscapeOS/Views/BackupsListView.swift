@@ -43,7 +43,7 @@ struct BackupsListView: View {
                         .foregroundColor(.secondary)
                     Text("暂无备份")
                         .font(.headline)
-                    Text("可在「应用」或「容器管理」页进入任意应用，再点击「备份数据」导出备份。归档文件保存在「文件 → 我的iPhone → EscapeOS → Backups」。")
+                    Text("可在「应用」或「容器管理」页进入任意应用，再点击「备份数据」导出备份。归档文件保存在「文件 → 我的iPhone → EscapeSpace → Backups」。")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -226,7 +226,7 @@ struct BackupsListView: View {
             let record = try BackupCatalog().loadRecord(at: dest)
             importRecord = record
         } catch {
-            importError = IdentifiedAlert(message: "该文件不是有效的 EscapeOS 备份（缺少 backup.json），或读取失败：\(error.localizedDescription)")
+            importError = IdentifiedAlert(message: "该文件不是有效的 EscapeSpace 备份（缺少 backup.json），或读取失败：\(error.localizedDescription)")
         }
     }
 }

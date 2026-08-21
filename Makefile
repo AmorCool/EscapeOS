@@ -1,15 +1,15 @@
 TARGET = iphone:clang:16.5:18.0
 ARCHS = arm64
-INSTALL_TARGET_PROCESSES = EscapeOS
+INSTALL_TARGET_PROCESSES = EscapeSpace
 
 # Public release with iOS 26 Liquid Glass tab bar requires Xcode 26 on macOS — see docs/BUILD.md.
 # WSL/Theos uses iPhoneOS16.5.sdk because Apple SDK 18+/26+ needs Apple Clang, not Linux clang.
 
 include $(THEOS)/makefiles/common.mk
 
-APPLICATION_NAME = EscapeOS
+APPLICATION_NAME = EscapeSpace
 
-EscapeOS_FILES = \
+EscapeSpace_FILES = \
 	EscapeOS/EscapeOSApp.swift \
 	EscapeOS/Views/RootView.swift \
 	EscapeOS/Views/AppListView.swift \
@@ -40,7 +40,6 @@ EscapeOS_FILES = \
 	EscapeOS/Engine/ArchiveExtractor.swift \
 	EscapeOS/Engine/ReclaimService.swift \
 	EscapeOS/Engine/LiveContainerDiscovery.swift \
-	EscapeOS/Engine/AppGroupProbe.swift \
 	EscapeOS/Engine/UninstallService.swift \
 	EscapeOS/Engine/zip_crypto.c \
 	EscapeOS/Engine/bad_query.c \
@@ -48,17 +47,17 @@ EscapeOS_FILES = \
 	EscapeOS/Tunnel/applist.m \
 	EscapeOS/Tunnel/heartbeat.m
 
-EscapeOS_FILES += $(shell find vendor/BitByteData/Sources vendor/SWCompression/Sources -name '*.swift' \
+EscapeSpace_FILES += $(shell find vendor/BitByteData/Sources vendor/SWCompression/Sources -name '*.swift' \
 	! -name 'TarWriter.swift' ! -name 'TarReader.swift' ! -name 'TarCreateError.swift' \
 	! -name 'ZlibArchive.swift' ! -name 'ZlibError.swift' ! -name 'ZlibHeader.swift' \
 	! -name 'BigEndianByteReader.swift')
 
-EscapeOS_SWIFT_BRIDGING_HEADER = EscapeOS/Engine/EscapeOS-Bridging-Header.h
-EscapeOS_CFLAGS = -IEscapeOS/Engine -IEscapeOS/Tunnel
-EscapeOS_OBJCFLAGS = -IEscapeOS/Engine -IEscapeOS/Tunnel -fobjc-arc
+EscapeSpace_SWIFT_BRIDGING_HEADER = EscapeOS/Engine/EscapeOS-Bridging-Header.h
+EscapeSpace_CFLAGS = -IEscapeOS/Engine -IEscapeOS/Tunnel
+EscapeSpace_OBJCFLAGS = -IEscapeOS/Engine -IEscapeOS/Tunnel -fobjc-arc
 
 # Link the Rust idevice FFI static library and its system dependencies.
-EscapeOS_LDFLAGS = -LEscapeOS/Tunnel -lidevice_ffi -lresolv -framework Security -framework Network -framework SystemConfiguration -framework QuickLook -framework PDFKit -framework AVKit -framework AVFoundation
-EscapeOS_CODESIGN_FLAGS = -SEscapeOS.entitlements
+EscapeSpace_LDFLAGS = -LEscapeOS/Tunnel -lidevice_ffi -lresolv -framework Security -framework Network -framework SystemConfiguration -framework QuickLook -framework PDFKit -framework AVKit -framework AVFoundation
+EscapeSpace_CODESIGN_FLAGS = -SEscapeSpace.entitlements
 
 include $(THEOS_MAKE_PATH)/application.mk

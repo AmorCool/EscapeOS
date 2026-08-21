@@ -139,9 +139,9 @@ struct PairingSetupView: View {
                     SetupStep(number: 1, title: "安装 LocalDevVPN",
                                text: "从 App Store 安装 LocalDevVPN，保持设备 IP / 隧道 IP 为默认值（10.7.0.1），连接它并开启 Wi-Fi。")
                     SetupStep(number: 2, title: "获取配对文件",
-                               text: "在 Windows 上用 iPASide 侧载。它会生成与 iLoader 相同类型的配对文件（USB 信任密钥 + 远程配对密钥），并自动放置 pairingFile.plist。也可以在这里导入 iLoader 文件。之后即可拔线——EscapeOS 通过 LocalDevVPN 与本机通信，不走 USB。iOS 26.4+ 需要远程配对密钥；iOS 18 只需要 USB 信任部分。")
+                               text: "在 Windows 上用 iPASide 侧载。它会生成与 iLoader 相同类型的配对文件（USB 信任密钥 + 远程配对密钥），并自动放置 pairingFile.plist。也可以在这里导入 iLoader 文件。之后即可拔线——EscapeSpace 通过 LocalDevVPN 与本机通信，不走 USB。iOS 26.4+ 需要远程配对密钥；iOS 18 只需要 USB 信任部分。")
                     SetupStep(number: 3, title: "加载应用",
-                               text: "EscapeOS 随后列出你已安装的应用，可浏览或备份其数据。")
+                               text: "EscapeSpace 随后列出你已安装的应用，可浏览或备份其数据。")
                 }
                 .padding(.horizontal)
 
@@ -294,10 +294,6 @@ struct SettingsForm: View {
     var onResetPairing: () -> Void
     @AppStorage("TunnelDeviceIP") private var tunnelIP: String = "10.7.0.1"
 
-    @State private var isProbing = false
-    @State private var probeResult: String?
-    @State private var shareTarget: ShareTarget?
-
     var body: some View {
         Form {
             Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致。保持默认的 10.7.0.1，除非你修改过 LocalDevVPN。")) {
@@ -326,75 +322,12 @@ struct SettingsForm: View {
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
-
-            Section(header: Text("诊断（调试用）"), footer: Text("仅用于验证 AppGroup 共享 App 沙盒逃逸是否在本机可用，普通用户无需理会。")) {
-                Button {
-                    runProbe()
-                } label: {
-                    if isProbing {
-                        Label("探测中…", systemImage: "hourglass")
-                    } else {
-                        Label("AppGroup 探测", systemImage: "waveform")
-                    }
-                }
-                .disabled(isProbing)
-
-                if let result = probeResult {
-                    ScrollView {
-                        Text(result)
-                            .font(.system(.footnote, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
-                    .frame(height: 360)
-
-                    Button {
-                        shareProbeResult(result)
-                    } label: {
-                        Label("分享结果", systemImage: "square.and.arrow.up")
-                    }
-                }
-            }
         }
-        .sheet(item: $shareTarget) { target in
-            ShareSheet(items: [target.url])
-        }
-    }
-
-    // MARK: - AppGroup 探测（诊断）
-
-    private func runProbe() {
-        isProbing = true
-        probeResult = nil
-        Task {
-            let report = await Task.detached { AppGroupProbe.run() }.value
-            await MainActor.run {
-                probeResult = report
-                isProbing = false
-            }
-        }
-    }
-
-    private func shareProbeResult(_ text: String) {
-        let fileName = "EscapeOS-AppGroup-Probe-\(isoTimestamp()).txt"
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
-        do {
-            try text.data(using: .utf8)?.write(to: url, options: .atomic)
-            shareTarget = ShareTarget(url: url)
-        } catch {
-            probeResult? += "\n\n分享失败：\(error.localizedDescription)"
-        }
-    }
-
-    private func isoTimestamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd_HHmmss"
-        f.locale = Locale(identifier: "zh_Hans_CN")
-        return f.string(from: Date())
     }
 
     private static var aboutLine: String {
         let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        return "EscapeOS \(short) (\(build))"
+        return "EscapeSpace \(short) (\(build))"
     }
 }

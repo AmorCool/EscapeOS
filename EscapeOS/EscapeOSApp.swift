@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct EscapeOSApp: App {
+struct EscapeSpaceApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
