@@ -158,7 +158,7 @@ struct LiveCleanTabView: View {
         let visible = filteredRows
         return List {
             Section {
-                SharedAppLimitBanner()
+                SharedAppLimitBanner(supported: SandboxEscape.lcContainerExtensionsActive)
             }
             if !vm.progressText.isEmpty && vm.isScanning {
                 Text(vm.progressText)
@@ -252,25 +252,35 @@ struct GuestIcon: View {
     }
 }
 
-/// In-list banner explaining why shared apps don't appear here. LiveContainer
-/// stores shared guest apps under `AppGroup/LiveContainer/Shared/...` — that
-/// is a separate iOS sandbox EscapeOS's bad_query cannot reach from inside
-/// LiveContainer's own Data container. We show the workaround instead of
-/// silently failing.
+/// In-list banner about shared apps. When running inside the patched
+/// LiveContainer that granted container sandbox extensions, shared apps are
+/// scanned directly and we show a positive note. Otherwise we explain the old
+/// "convert to private" workaround.
 struct SharedAppLimitBanner: View {
+    /// True when the host granted container extensions (shared apps scannable).
+    var supported: Bool = false
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "person.2.slash")
+            Image(systemName: supported ? "person.2" : "person.2.slash")
                 .font(.title3)
-                .foregroundColor(.orange)
+                .foregroundColor(supported ? .green : .orange)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
-                Text("看不到转为共享的应用？")
-                    .font(.subheadline.weight(.semibold))
-                Text("共享 app 的数据存放在 AppGroup 沙盒里，不在当前 LiveContainer 容器内。在 LiveContainer 内长按该应用 → Convert to Private，等数据回迁到 Documents 后再回这里扫描。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if supported {
+                    Text("共享容器应用已支持扫描")
+                        .font(.subheadline.weight(.semibold))
+                    Text("当前运行于已打补丁的 LiveContainer，宿主已签发沙盒扩展，转为共享的应用现在可直接列出、浏览与回收。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("看不到转为共享的应用？")
+                        .font(.subheadline.weight(.semibold))
+                    Text("共享 app 的数据存放在 AppGroup 沙盒里，不在当前 LiveContainer 容器内。在 LiveContainer 内长按该应用 → Convert to Private，等数据回迁到 Documents 后再回这里扫描。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.vertical, 6)

@@ -98,6 +98,49 @@ final class SandboxEscape {
         return liveHandles.count
     }
 
+    // MARK: - LiveContainer container-management extensions
+
+    /// Set when the LiveContainer host handed us container sandbox tokens via
+    /// `ESC_LC_CONTAINER_TOKENS`. While active, `LiveContainerDiscovery` skips the
+    /// (iOS-26-blocked) `bad_query` path and reads guest containers directly, since
+    /// the consumed extensions grant access to the LC data + App Group roots.
+    static var lcContainerExtensionsActive = false
+
+    /// LC data container root, forwarded by the host as `ESC_LC_HOME`
+    /// (private guest containers live under `<this>/Documents/Data/Application`).
+    static var lcHomePath: String?
+
+    /// LC's real App Group container, forwarded by the host as `ESC_LC_APPGROUP_PATH`
+    /// (shared/"converted" guest containers live under `<this>/LiveContainer/Data/Application`).
+    static var lcAppGroupPath: String?
+
+    /// Consume the container sandbox tokens issued by the LiveContainer host.
+    /// Tokens are newline-separated in `ESC_LC_CONTAINER_TOKENS`; each is consumed
+    /// in THIS process (extensions are not inherited across the spawn boundary on
+    /// iOS 26). Also records the forwarded container root paths. Must run at app
+    /// launch so the extensions are live before any discovery/scan.
+    static func bootstrapLiveContainerExtensions() {
+        let env = ProcessInfo.processInfo.environment
+        lcHomePath = env["ESC_LC_HOME"]
+        lcAppGroupPath = env["ESC_LC_APPGROUP_PATH"]
+        guard let raw = env["ESC_LC_CONTAINER_TOKENS"], !raw.isEmpty else {
+            NSLog("[SandboxEscape] no LiveContainer container tokens in environment")
+            return
+        }
+        var consumed = 0
+        for token in raw.split(separator: "\n") where !token.isEmpty {
+            let handle = String(token).withCString { mg_consume_token($0) }
+            if handle >= 0 {
+                consumed += 1
+                NSLog("[SandboxEscape] consumed container extension handle=\(handle)")
+            } else {
+                NSLog("[SandboxEscape] container extension consume failed (handle \(handle))")
+            }
+        }
+        lcContainerExtensionsActive = consumed > 0
+        NSLog("[SandboxEscape] LiveContainer container extensions active=\(lcContainerExtensionsActive) (consumed \(consumed))")
+    }
+
     /// Convenience scoped accessor: consumes a handle, runs `body`, always releases.
     @discardableResult
     func withHandle<T>(

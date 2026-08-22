@@ -78,15 +78,32 @@ final class LiveContainerDiscovery {
     private let prefixes = ["com.kdt.livecontainer"]
 
     func discover(installedApps: [InstalledApp]) -> [LiveContainerInstance] {
-        let hosts = installedApps.filter { app in
+        var hosts = installedApps.filter { app in
             prefixes.contains(where: { app.bundleIdentifier.lowercased().hasPrefix($0) })
+        }
+        // When running *inside* LiveContainer with container extensions granted
+        // by the host, the tunnel-based app list may not surface the LC host.
+        // Synthesize a local host from the forwarded container root so discovery
+        // (and thus Reclaim/LiveClean) still works without the tunnel.
+        if hosts.isEmpty,
+           SandboxEscape.lcContainerExtensionsActive,
+           let home = SandboxEscape.lcHomePath ?? ProcessInfo.processInfo.environment["LC_HOME_PATH"] {
+            hosts = [InstalledApp(bundleIdentifier: "com.kdt.livecontainer.local",
+                                  name: "LiveContainer (本机)",
+                                  containerPath: home,
+                                  version: nil, applicationType: nil)]
         }
         guard !hosts.isEmpty else { return [] }
 
         return hosts.compactMap { host in
             let guests: [LiveContainerGuest]
             do {
-                guests = try escape.withHandle(for: host.containerPath) { _ in
+                // Build the enumeration as a standalone closure so it can run
+                // either under a (legacy) bad_query handle or — when the host
+                // granted container extensions — directly. The consumed
+                // extensions make the native FileManager calls succeed without
+                // bad_query (which iOS 26 blocks with -4).
+                let runEnumeration = { () throws -> [LiveContainerGuest] in
                     let appsRoot = (host.containerPath as NSString).appendingPathComponent("Documents/Applications")
                     let dataRoot = (host.containerPath as NSString).appendingPathComponent("Documents/Data")
 
@@ -128,13 +145,7 @@ final class LiveContainerDiscovery {
 
                     // Fallback: scan LCContainerInfo.plist files for any guest
                     // UUID the primary pass missed (older / fork layouts that
-                    // don't carry LCAppInfo.plist).
-                    //
-                    // Note: LiveContainer's *shared* apps live under
-                    // `AppGroup/LiveContainer/Shared/...` — a different iOS
-                    // sandbox we cannot escape into from here. Those don't
-                    // surface here; `LiveCleanTabView` shows a banner explaining
-                    // the workaround (Convert to Private).
+                    // don't carry LCAppInfo.plist). Private containers only.
                     var walked: [String] = []
                     for (uuidPath, dict) in collectGuestInfoPlists(in: dataRoot, depth: 0, visited: &walked) {
                         let uuid = (uuidPath as NSString).lastPathComponent
@@ -154,9 +165,43 @@ final class LiveContainerDiscovery {
                             hostName: host.name
                         )
                     }
+
+                    // Shared ("converted") guest containers live under the real
+                    // App Group: <appGroupPath>/LiveContainer/Data/Application/<folderName>.
+                    // With the host-granted extension consumed, we can now reach
+                    // this previously-inaccessible sandbox (class 14) and surface
+                    // those apps for scanning / reclaim.
+                    if SandboxEscape.lcContainerExtensionsActive,
+                       let ag = SandboxEscape.lcAppGroupPath {
+                        let sharedRoot = (ag as NSString).appendingPathComponent("LiveContainer/Data/Application")
+                        for (uuidPath, dict) in collectGuestInfoPlists(in: sharedRoot, depth: 0, visited: &walked) {
+                            let uuid = (uuidPath as NSString).lastPathComponent
+                            guard guestsByUUID[uuid] == nil else { continue }
+                            let plistName = nameFromContainerInfo(dict)
+                            let appRef = lookupAppByUUID(uuid, in: appsRoot)
+                            let bundleId = appRef?.bundleId ?? uuid
+                            let displayName = plistName ?? appRef?.displayName ?? uuid
+                            let key = makeKey(bundleId: bundleId, uuid: uuid)
+                            guestsByUUID[uuid] = LiveContainerGuest(
+                                id: key,
+                                bundleIdentifier: bundleId,
+                                displayName: displayName,
+                                containerPath: uuidPath,
+                                iconData: appRef?.iconData,
+                                hostName: host.name
+                            )
+                        }
+                    }
+
                     return Array(guestsByUUID.values).sorted {
                         $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
                     }
+                }
+
+                if SandboxEscape.lcContainerExtensionsActive {
+                    guests = try runEnumeration()
+                } else {
+                    guests = try escape.withHandle(for: host.containerPath) { _ in try runEnumeration() }
                 }
             } catch {
                 return LiveContainerInstance(host: host, guests: [], error: error.localizedDescription)

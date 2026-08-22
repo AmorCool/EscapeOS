@@ -3,6 +3,10 @@ import SwiftUI
 @main
 struct EscapeSpaceApp: App {
     init() {
+        // Consume the LiveContainer host-issued container sandbox extensions
+        // (read/write) so guest containers — including shared/"converted" App
+        // Group data — are reachable for scanning and reclaim on iOS 26.
+        SandboxEscape.bootstrapLiveContainerExtensions()
         // MHA branch: auto-detect the host process's App Group for the iOS 26
         // sacrifice route. Inside LiveContainer the app runs as the LC process,
         // so LC's App Group is inherited and used here — no separately
