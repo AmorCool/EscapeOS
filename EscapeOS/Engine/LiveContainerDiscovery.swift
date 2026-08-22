@@ -103,7 +103,7 @@ final class LiveContainerDiscovery {
                 // granted container extensions — directly. The consumed
                 // extensions make the native FileManager calls succeed without
                 // bad_query (which iOS 26 blocks with -4).
-                let runEnumeration = { () throws -> [LiveContainerGuest] in
+                let runEnumeration = { [self] () throws -> [LiveContainerGuest] in
                     let appsRoot = (host.containerPath as NSString).appendingPathComponent("Documents/Applications")
                     let dataRoot = (host.containerPath as NSString).appendingPathComponent("Documents/Data")
 
