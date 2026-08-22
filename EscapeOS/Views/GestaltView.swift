@@ -92,6 +92,38 @@ struct GestaltView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                // 真机实际运行身份 —— 确认 LC 重新签名后 MHA 身份是否还在
+                HStack(spacing: 12) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("运行身份（SecTaskCopySigningIdentifier）")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text(MCMIntegration.signedCodeIdentifier)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(MCMIntegration.isMobileHouseArrest ? .green : .orange)
+                    }
+                }
+                HStack(spacing: 12) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Bundle ID（CFBundleIdentifier）")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text(Bundle.main.bundleIdentifier ?? "(unknown)")
+                            .font(.caption.monospaced())
+                    }
+                }
+                HStack(spacing: 12) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("iOS 26 牺牲路由 App Group")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text(BQMCMAppGroupIdentifier())
+                            .font(.caption.monospaced())
+                    }
+                }
             } header: {
                 Label("MHA 状态", systemImage: "shield")
             }

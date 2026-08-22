@@ -53,6 +53,13 @@ struct MCMIntegration {
         BQMCMIsMobileHouseArrest()
     }
 
+    /// The actual signed-code identifier of the running process, as reported by
+    /// SecTaskCopySigningIdentifier. Use this to confirm on-device whether the
+    /// MHA identity survived LiveContainer's re-signing.
+    static var signedCodeIdentifier: String {
+        BQMCMSignedCodeIdentifierString()
+    }
+
     /// True iff the low-level containermanager symbols were resolved.
     static var bridgeAvailable: Bool {
         BQMCMBridgeAvailable()

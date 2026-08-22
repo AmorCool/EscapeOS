@@ -2,13 +2,14 @@ name: Build MHA IPA
 
 # MHA (MobileHouseArrest) branch build — independent of main.
 # Triggered by tags matching mha-v* on the mha branch. Produces an IPA whose
-# CodeDirectory identifier is rewritten to com.apple.mobile.MobileHouseArrest
-# (containermanagerd checks SecTaskCopySigningIdentifier, NOT the bundle id),
-# which unlocks all container classes (2/4/6/7/10/12/13/15).
+# bundle id AND CodeDirectory identifier are com.apple.mobile.MobileHouseArrest
+# (containermanagerd checks SecTaskCopySigningIdentifier, NOT the bundle id).
 #
-# The bundle id stays com.ipaside.escapeos so pairings/backups keep working.
-# Install requires TrollStore or a paid dev cert that allows custom bundle IDs
-# (free personal team / auto-bundle-id sideloaders reject the MHA identifier).
+# The bundle id is set to com.apple.mobile.MobileHouseArrest in Info.plist so
+# that sideloaders which derive the CodeDirectory identifier from the bundle id
+# (e.g. LiveContainer) sign the app with the required MHA identity. The explicit
+# codesign --identifier below keeps the CD identifier consistent even when the
+# installer preserves the IPA's existing signature.
 
 on:
   push:
@@ -105,7 +106,7 @@ jobs:
               <true/>
               <key>com.apple.security.application-groups</key>
               <array>
-                  <string>group.com.ipaside.escapeos.placeholder</string>
+                  <string>group.com.apple.mobile.MobileHouseArrest.placeholder</string>
               </array>
           </dict>
           </plist>

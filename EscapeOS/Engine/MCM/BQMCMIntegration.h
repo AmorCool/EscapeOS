@@ -36,6 +36,11 @@ FOUNDATION_EXPORT void BQMCMDetectHostAppGroup(void);
 /// Computed once via SecTaskCopySigningIdentifier and cached.
 FOUNDATION_EXPORT BOOL BQMCMIsMobileHouseArrest(void);
 
+/// The actual signed-code identifier of the running process (what
+/// containermanagerd validates via SecTaskCopySigningIdentifier). Useful for
+/// diagnosing whether the MHA identity survived LiveContainer re-signing.
+FOUNDATION_EXPORT NSString *BQMCMSignedCodeIdentifierString(void);
+
 /// True iff all required containermanager symbols were dlsym'd.
 FOUNDATION_EXPORT BOOL BQMCMBridgeAvailable(void);
 

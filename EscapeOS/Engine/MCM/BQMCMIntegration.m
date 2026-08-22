@@ -26,7 +26,7 @@ const uint64_t BQMCMReadWritePartFlags = 0x8100000000ULL;
 
 // iOS 26 App Group sacrifice route. Placeholder until the real App Group
 // registered to EscapeOS's signing identity is injected at launch.
-static NSString *gAppGroupIdentifier = @"group.com.ipaside.escapeos.placeholder";
+static NSString *gAppGroupIdentifier = @"group.com.apple.mobile.MobileHouseArrest.placeholder";
 
 void BQMCMSetAppGroupIdentifier(NSString *identifier) {
     if (identifier.length && BQMCMSafeIdentifier(identifier)) {
@@ -126,6 +126,17 @@ static NSString *BQMCMSignedCodeIdentifier(void)
 BOOL BQMCMIsMobileHouseArrest(void)
 {
     return [BQMCMSignedCodeIdentifier() isEqualToString:BQMCMRequiredIdentifier];
+}
+
+/// The actual signed-code identifier of the running process, as reported by
+/// SecTaskCopySigningIdentifier. This is what containermanagerd validates —
+/// NOT the bundle id. Exposed so the UI can show whether the MHA identity
+/// survived LiveContainer's re-signing (it derives the CD identifier from the
+/// bundle id, so changing CFBundleIdentifier to com.apple.mobile.MobileHouseArrest
+/// is what makes this return the required string inside LC).
+NSString *BQMCMSignedCodeIdentifierString(void)
+{
+    return BQMCMSignedCodeIdentifier() ?: @"(unknown)";
 }
 
 BOOL BQMCMBridgeAvailable(void) { return MCMBridgeAvailable(); }
