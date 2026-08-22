@@ -255,10 +255,10 @@ final class BQMobileGestaltModel {
         gestaltPath = path
 
         // LiveContainer (livecontainer branch) host issues a raw sandbox extension
-        // token for the MobileGestalt cache; the LiveProcess guest writes it to
-        // ~/Library/.esc_mg_token. Consume it in THIS process so in-place writes
-        // work — the extension consumed by the LiveProcess parent is not inherited
-        // by the spawned EscapeOS app on iOS 26.
+        // token for the MobileGestalt cache; the LiveProcess guest passes it through
+        // the ESC_MG_TOKEN environment variable. Consume it in THIS process so
+        // in-place writes work — the extension consumed by the LiveProcess parent is
+        // not inherited by the spawned EscapeOS app on iOS 26.
         consumeLiveContainerToken()
 
         // Get sandbox extension for the container (unless MHA already gave us one).
@@ -348,25 +348,24 @@ final class BQMobileGestaltModel {
     }
 
     /// Consume the LiveContainer-issued MobileGestalt sandbox extension token in
-    /// THIS process. The token is written to ~/Library/.esc_mg_token by the
-    /// LiveProcess guest at launch. Consuming here (not relying on the LiveProcess
-    /// parent's consumed extension) is what makes in-place writes succeed inside
-    /// LiveContainer on iOS 26.
+    /// THIS process. The LiveProcess guest passes the raw token through the
+    /// ESC_MG_TOKEN environment variable; consuming it here (not relying on the
+    /// LiveProcess parent's consumed extension) is what makes in-place writes
+    /// succeed inside LiveContainer on iOS 26.
     private func consumeLiveContainerToken() {
-        let tokenPath = (NSHomeDirectory() as NSString).appendingPathComponent("Library/.esc_mg_token")
-        guard let raw = try? String(contentsOfFile: tokenPath, encoding: .utf8),
-              !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            appendLog("no LiveContainer-issued MobileGestalt token at \(tokenPath)")
+        guard let token = ProcessInfo.processInfo.environment["ESC_MG_TOKEN"],
+              !token.isEmpty else {
+            appendLog("no LiveContainer-issued MobileGestalt token in ESC_MG_TOKEN environment")
             return
         }
-        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let handle = token.withCString { mg_consume_token($0) }
         if handle >= 0 {
+            extensionHandle = handle
+            hasExtension = true
             appendLog("consumed LiveContainer MobileGestalt sandbox extension in-process, handle=\(handle)")
         } else {
             appendLog("LiveContainer MobileGestalt token consume failed (handle \(handle))")
         }
-        try? FileManager.default.removeItem(atPath: tokenPath)
     }
 
     // MARK: - Apply
