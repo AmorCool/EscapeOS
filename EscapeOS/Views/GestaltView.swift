@@ -11,30 +11,39 @@ import SwiftUI
 struct GestaltView: View {
     @State private var model = BQMobileGestaltModel()
     @AppStorage("mha_app_group_override") private var appGroupOverride = ""
+    @State private var logPresented = false
 
     var body: some View {
         NavigationStack {
-            Group {
+            List {
+                mhaStatusSection
+
                 if !model.loaded {
-                    ContentUnavailableView {
-                        Label("MobileGestalt Editor", systemImage: "gearshape.2")
-                    } description: {
-                        Text(model.statusMessage)
-                    } actions: {
+                    Section {
                         Button("Load MobileGestalt") {
                             model.load()
                         }
                         .buttonStyle(.borderedProminent)
+                        Text(model.statusMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } header: {
+                        Label("状态", systemImage: "info.circle")
                     }
                 } else {
-                    gestaltList
-                        .navigationTitle("MobileGestalt")
+                    loadedSections
                 }
             }
+            .navigationTitle("MobileGestalt")
             .toolbar {
-                if model.loaded {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            logPresented = true
+                        } label: {
+                            Label("查看日志", systemImage: "text.alignleft")
+                        }
+                        if model.loaded {
                             Button {
                                 model.load()
                             } label: {
@@ -45,9 +54,9 @@ struct GestaltView: View {
                             } label: {
                                 Label("Refresh Extension", systemImage: "key.fill")
                             }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
                         }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
@@ -69,78 +78,97 @@ struct GestaltView: View {
                     )
                 }
             }
+            .sheet(isPresented: $logPresented) {
+                NavigationStack {
+                    ScrollView {
+                        Text(model.log.joined(separator: "\n"))
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .textSelection(.enabled)
+                    }
+                    .navigationTitle("诊断日志")
+                    .toolbar {
+                        Button("完成") { logPresented = false }
+                    }
+                }
+            }
         }
         .onAppear {
-            if !model.loaded {model.load()}
+            if !model.loaded { model.load() }
         }
     }
 
     // MARK: - Gestalt List
 
-    private var gestaltList: some View {
-        List {
-            // MHA identity status (MHA branch only unlocks full container access)
-            Section {
-                HStack(spacing: 12) {
-                    Image(systemName: MCMIntegration.isMobileHouseArrest ? "checkmark.shield.fill" : "exclamationmark.shield")
-                        .foregroundStyle(MCMIntegration.isMobileHouseArrest ? .green : .orange)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(MCMIntegration.isMobileHouseArrest ? "MHA 身份已生效" : "非 MHA 构建")
-                            .font(.subheadline).bold()
-                        Text(MCMIntegration.isMobileHouseArrest
-                             ? "已以 MobileHouseArrest 身份运行，可访问全部容器类。"
-                             : "当前以普通身份运行，只能读写 MobileGestalt 缓存（class 13）。安装 MHA 版 IPA 以解锁全部容器。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+    private var mhaStatusSection: some View {
+        Section {
+            HStack(spacing: 12) {
+                Image(systemName: MCMIntegration.isMobileHouseArrest ? "checkmark.shield.fill" : "exclamationmark.shield")
+                    .foregroundStyle(MCMIntegration.isMobileHouseArrest ? .green : .orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(MCMIntegration.isMobileHouseArrest ? "MHA 身份已生效" : "非 MHA 构建")
+                        .font(.subheadline).bold()
+                    Text(MCMIntegration.isMobileHouseArrest
+                         ? "已以 MobileHouseArrest 身份运行，可访问全部容器类。"
+                         : "当前以普通身份运行。安装 MHA 版 IPA 后 LiveContainer 会按 bundle id 派生 MHA 身份。")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                // 真机实际运行身份 —— 确认 LC 重新签名后 MHA 身份是否还在
-                HStack(spacing: 12) {
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("运行身份（SecTaskCopySigningIdentifier）")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Text(MCMIntegration.signedCodeIdentifier)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(MCMIntegration.isMobileHouseArrest ? .green : .orange)
-                    }
-                }
-                HStack(spacing: 12) {
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Bundle ID（CFBundleIdentifier）")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Text(Bundle.main.bundleIdentifier ?? "(unknown)")
-                            .font(.caption.monospaced())
-                    }
-                }
-                HStack(spacing: 12) {
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("iOS 26 牺牲路由 App Group")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Text(BQMCMAppGroupIdentifier())
-                            .font(.caption.monospaced())
-                    }
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("手动覆盖 App Group（空则使用自动探测）")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    TextField("group.com.example.app", text: $appGroupOverride)
-                        .font(.caption.monospaced())
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .onChange(of: appGroupOverride) { _, newValue in
-                            let trimmed = newValue.trimmingCharacters(in: .whitespaces)
-                            MCMIntegration.configure(appGroup: trimmed.isEmpty ? "group.com.apple.mobile.MobileHouseArrest.placeholder" : trimmed)
-                        }
-                }
-            } header: {
-                Label("MHA 状态", systemImage: "shield")
             }
+            // 真机实际运行身份 —— 确认 LC 重新签名后 MHA 身份是否还在
+            HStack(spacing: 12) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("运行身份（SecTaskCopySigningIdentifier）")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(MCMIntegration.signedCodeIdentifier)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(MCMIntegration.isMobileHouseArrest ? .green : .orange)
+                        .textSelection(.enabled)
+                }
+            }
+            HStack(spacing: 12) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Bundle ID（CFBundleIdentifier）")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(Bundle.main.bundleIdentifier ?? "(unknown)")
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+            }
+            HStack(spacing: 12) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("iOS 26 牺牲路由 App Group")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(BQMCMAppGroupIdentifier())
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("手动覆盖 App Group（空则使用自动探测）")
+                    .font(.caption2).foregroundStyle(.secondary)
+                TextField("group.com.example.app", text: $appGroupOverride)
+                    .font(.caption.monospaced())
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onChange(of: appGroupOverride) { _, newValue in
+                        let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                        MCMIntegration.configure(appGroup: trimmed.isEmpty ? "group.com.apple.mobile.MobileHouseArrest.placeholder" : trimmed)
+                    }
+            }
+        } header: {
+            Label("MHA 状态", systemImage: "shield")
+        }
+    }
 
+    private var loadedSections: some View {
+        List {
             // Warnings
             if !model.isValid || model.isEmpty {
                 Section {
@@ -355,11 +383,6 @@ struct GestaltView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                }
-                Button {
-                    model.appendLog("---")
-                } label: {
-                    Label("View Logs", systemImage: "text.alignleft")
                 }
             } header: {
                 Text("Session")

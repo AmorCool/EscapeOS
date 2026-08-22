@@ -117,6 +117,7 @@ final class BQMobileGestaltModel {
 
     /// Scan SystemGroup containers to find the MobileGestalt cache plist.
     func discoverGestaltPath() -> String? {
+        appendLog("discoverGestaltPath: MHA=\(MCMIntegration.isMobileHouseArrest) · target=\(Self.gestaltContainerName) · bridge=\(MCMIntegration.bridgeAvailable) · signed=\(MCMIntegration.signedCodeIdentifier)")
         // Route 1 (MHA): when the process presents the MobileHouseArrest signed
         // code identifier, use the real container API for class 13 instead of the
         // bad_query path-traversal PoC. This is the only iOS 26 path that does
@@ -240,6 +241,7 @@ final class BQMobileGestaltModel {
     // MARK: - Load
 
     func load() {
+        appendLog("load() start: iOS \(UIDevice.current.systemVersion) · device \(machineName()) · isDeviceGood=\(isDeviceGood()) · MHA=\(MCMIntegration.isMobileHouseArrest) · signed=\(MCMIntegration.signedCodeIdentifier) · bundle=\(Bundle.main.bundleIdentifier ?? "?")")
         // Discover path
         guard let path = discoverGestaltPath() else {
             alertInfo = MGAlertInfo(title: "Not Found", body: "MobileGestalt.plist was not found. This tool requires iOS 27 for SystemGroup access, or iOS 26 with App Group sacrifice.")
