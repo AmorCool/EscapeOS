@@ -168,7 +168,7 @@ struct GestaltView: View {
     }
 
     private var loadedSections: some View {
-        List {
+        Group {
             // Warnings
             if !model.isValid || model.isEmpty {
                 Section {
