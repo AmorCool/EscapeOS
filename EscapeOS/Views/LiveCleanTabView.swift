@@ -53,9 +53,12 @@ struct LiveCleanTabView: View {
             } else if vm.instances.isEmpty && !vm.isScanning && !vm.didRun {
                 discoverPrompt
             } else if vm.rows.isEmpty && !vm.isScanning {
-                Text(vm.discoveryError ?? "LiveContainer 内未找到已安装的应用。")
-                    .foregroundColor(.secondary)
-                    .padding()
+                VStack(spacing: 12) {
+                    Text(vm.discoveryError ?? "LiveContainer 内未找到已安装的应用。")
+                        .foregroundColor(.secondary)
+                    ContainerDiagnosticView()
+                }
+                .padding()
             } else {
                 rankedList
             }
@@ -150,6 +153,8 @@ struct LiveCleanTabView: View {
             .controlSize(.large)
             .disabled(appList.apps.isEmpty || vm.isScanning)
             .padding(.horizontal, 24)
+            ContainerDiagnosticView()
+                .padding(.horizontal, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -159,6 +164,9 @@ struct LiveCleanTabView: View {
         return List {
             Section {
                 SharedAppLimitBanner(supported: SandboxEscape.lcContainerExtensionsActive)
+            }
+            Section {
+                ContainerDiagnosticView()
             }
             if !vm.progressText.isEmpty && vm.isScanning {
                 Text(vm.progressText)
@@ -284,6 +292,43 @@ struct SharedAppLimitBanner: View {
             }
         }
         .padding(.vertical, 6)
+    }
+}
+
+/// On-device diagnostic for the LiveContainer container-scanning extension.
+/// Surfaces the host's grant decision and the per-token consume results so the
+/// failure point can be identified without a syslog (the user is often on
+/// Windows and cannot easily capture iOS logs).
+struct ContainerDiagnosticView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("容器扫描诊断", systemImage: "stethoscope")
+                .font(.subheadline.weight(.semibold))
+            let active = SandboxEscape.lcContainerExtensionsActive
+            diagRow("扩展激活", active ? "是" : "否", color: active ? .green : .red)
+            diagRow("宿主签发结论", SandboxEscape.lcContainerGrantStatus ?? "（无 / 宿主未传递）")
+            diagRow("Token 期望/消费", "\(SandboxEscape.lcContainerTokenCount) / \(SandboxEscape.lcContainerConsumedCount)")
+            diagRow("LC 主目录", SandboxEscape.lcHomePath ?? "（无）")
+            diagRow("AppGroup 路径", SandboxEscape.lcAppGroupPath ?? "（无）")
+            ForEach(SandboxEscape.lcContainerConsumeResults, id: \.self) { r in
+                Text("• \(r)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 6)
+    }
+
+    private func diagRow(_ k: String, _ v: String, color: Color? = nil) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(k + "：")
+                .foregroundColor(.secondary)
+            Text(v)
+                .foregroundColor(color ?? .primary)
+                .textSelection(.enabled)
+        }
+        .font(.system(size: 12, design: .monospaced))
     }
 }
 

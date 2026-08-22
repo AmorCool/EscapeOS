@@ -114,31 +114,67 @@ final class SandboxEscape {
     /// (shared/"converted" guest containers live under `<this>/LiveContainer/Data/Application`).
     static var lcAppGroupPath: String?
 
+    /// Host-reported grant outcome (forwarded via `ESC_LC_GRANT_STATUS`).
+    /// Possible values: "issued:N", "failed:issue_null",
+    /// "skipped:no_symbol", "skipped:not_target", optionally suffixed
+    /// with ",no_appgroup". NULL when the host never forwarded it.
+    static var lcContainerGrantStatus: String?
+
+    /// Number of tokens the host handed us (and we attempted to consume).
+    static var lcContainerTokenCount = 0
+
+    /// Number of tokens successfully consumed in this process.
+    static var lcContainerConsumedCount = 0
+
+    /// Per-token consume result strings (for on-device diagnosis).
+    static var lcContainerConsumeResults: [String] = []
+
     /// Consume the container sandbox tokens issued by the LiveContainer host.
     /// Tokens are newline-separated in `ESC_LC_CONTAINER_TOKENS`; each is consumed
     /// in THIS process (extensions are not inherited across the spawn boundary on
     /// iOS 26). Also records the forwarded container root paths. Must run at app
     /// launch so the extensions are live before any discovery/scan.
     static func bootstrapLiveContainerExtensions() {
-        let env = ProcessInfo.processInfo.environment
-        lcHomePath = env["ESC_LC_HOME"]
-        lcAppGroupPath = env["ESC_LC_APPGROUP_PATH"]
-        guard let raw = env["ESC_LC_CONTAINER_TOKENS"], !raw.isEmpty else {
+        // Read the live environment via getenv — NOT ProcessInfo.processInfo.environment,
+        // which Darwin caches lazily on first access. LiveContainer's own bootstrap
+        // (LCBootstrap) runs before EscapeOS's init and may touch it, leaving us with
+        // a stale, extension-less copy that never sees the ESC_LC_* vars set by
+        // LiveProcess. getenv always reflects the current environ.
+        let readEnv: (String) -> String? = { key in
+            guard let c = getenv(key) else { return nil }
+            let s = String(cString: c)
+            return s.isEmpty ? nil : s
+        }
+
+        lcHomePath = readEnv("ESC_LC_HOME")
+        lcAppGroupPath = readEnv("ESC_LC_APPGROUP_PATH")
+        lcContainerGrantStatus = readEnv("ESC_LC_GRANT_STATUS")
+
+        guard let raw = readEnv("ESC_LC_CONTAINER_TOKENS") else {
             NSLog("[SandboxEscape] no LiveContainer container tokens in environment")
             return
         }
+        let tokens = raw.split(separator: "\n").filter { !$0.isEmpty }
+        lcContainerTokenCount = tokens.count
         var consumed = 0
-        for token in raw.split(separator: "\n") where !token.isEmpty {
+        var results: [String] = []
+        for (i, token) in tokens.enumerated() {
             let handle = String(token).withCString { mg_consume_token($0) }
             if handle >= 0 {
                 consumed += 1
-                NSLog("[SandboxEscape] consumed container extension handle=\(handle)")
+                let msg = "token[\(i)] ok handle=\(handle)"
+                results.append(msg)
+                NSLog("[SandboxEscape] consumed container extension \(msg)")
             } else {
-                NSLog("[SandboxEscape] container extension consume failed (handle \(handle))")
+                let msg = "token[\(i)] FAILED code=\(handle)"
+                results.append(msg)
+                NSLog("[SandboxEscape] container extension \(msg)")
             }
         }
+        lcContainerConsumedCount = consumed
+        lcContainerConsumeResults = results
         lcContainerExtensionsActive = consumed > 0
-        NSLog("[SandboxEscape] LiveContainer container extensions active=\(lcContainerExtensionsActive) (consumed \(consumed))")
+        NSLog("[SandboxEscape] LiveContainer container extensions active=\(lcContainerExtensionsActive) (consumed \(consumed)/\(tokens.count))")
     }
 
     /// Convenience scoped accessor: consumes a handle, runs `body`, always releases.
