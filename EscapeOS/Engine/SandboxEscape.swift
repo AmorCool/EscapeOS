@@ -60,6 +60,15 @@ final class SandboxEscape {
     /// - Returns: A `Handle` that must later be passed to `release(_:)`.
     /// - Throws: `SandboxEscapeError` on failure.
     func consume(path: String, groupIdentifier: String? = nil, isGroup: Bool = false, create: Bool = false) throws -> Handle {
+        // When LiveContainer has already granted us a sandbox extension for the
+        // LC data/AppGroup roots, any subpath inside those roots is reachable
+        // without calling bad_query — which on iOS 26 returns -4 (kernelRejected)
+        // for arbitrary containers. Return a sentinel handle so callers can keep
+        // using withHandle() transparently.
+        if Self.isCoveredByLCContainerExtensions(path: path) {
+            return Handle(raw: -1)
+        }
+
         var cPath = Array(path.utf8CString)
         var cGroup = groupIdentifier.map { Array($0.utf8CString) }
 
@@ -84,11 +93,30 @@ final class SandboxEscape {
 
     /// Release a previously consumed handle. Safe to call multiple times.
     func release(_ handle: Handle) {
+        // Sentinel handle: the access came from the globally-active LC container
+        // extension, not from a per-call bad_query handle. Nothing to release.
+        guard handle.raw >= 0 else { return }
         lock.lock()
         let removed = liveHandles.remove(handle.raw)
         lock.unlock()
         guard removed != nil else { return }
         bad_query_release(handle.raw)
+    }
+
+    /// True when `path` lies under a LiveContainer container root for which the
+    /// host already issued and we consumed a sandbox extension.
+    private static func isCoveredByLCContainerExtensions(path: String) -> Bool {
+        guard lcContainerExtensionsActive else { return false }
+        let standardized = (path as NSString).standardizingPath
+        if let home = lcHomePath, !home.isEmpty,
+           standardized.hasPrefix((home as NSString).standardizingPath) {
+            return true
+        }
+        if let ag = lcAppGroupPath, !ag.isEmpty,
+           standardized.hasPrefix((ag as NSString).standardizingPath) {
+            return true
+        }
+        return false
     }
 
     /// Number of currently live (consumed, not yet released) handles.
