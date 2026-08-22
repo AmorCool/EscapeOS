@@ -86,6 +86,11 @@ final class BQMobileGestaltModel {
     var isApplying = false
     var isDirty = false
 
+    // Routing state
+    /// True when the current sandbox extension came from the MHA identity route
+    /// (BQMCMActivate class 13) rather than the bad_query path-traversal route.
+    var mhaRouteActive = false
+
     // Paths
     static let systemGroupRoot = "/var/containers/Shared/SystemGroup"
     static let gestaltContainerName = "systemgroup.com.apple.mobilegestaltcache"
@@ -112,18 +117,48 @@ final class BQMobileGestaltModel {
 
     /// Scan SystemGroup containers to find the MobileGestalt cache plist.
     func discoverGestaltPath() -> String? {
-        // Candidate locations across iOS versions. iOS 27 exposes the cache via
-        // the SystemGroup container; iOS 26 keeps it under /var/mobile/Library.
+        // Route 1 (MHA): when the process presents the MobileHouseArrest signed
+        // code identifier, use the real container API for class 13 instead of the
+        // bad_query path-traversal PoC. This is the only iOS 26 path that does
+        // not require a separately registered App Group.
+        if MCMIntegration.isMobileHouseArrest {
+            do {
+                let root = try MCMIntegration.activate(
+                    Self.gestaltContainerName,
+                    class: .systemGroup
+                )
+                let candidate = "\(root)/\(Self.gestaltRelativePath)"
+                if FileManager.default.fileExists(atPath: candidate) {
+                    appendLog("MHA class-13 root: \(root)")
+                    appendLog("MHA gestalt path: \(candidate)")
+                    mhaRouteActive = true
+                    hasExtension = true
+                    extensionHandle = 1  // positive sentinel; real handle lives in gLeases
+                    return candidate
+                } else {
+                    appendLog("MHA class-13 root OK but plist missing at \(candidate)")
+                }
+            } catch {
+                appendLog("MHA class-13 activate failed: \(error)")
+            }
+        } else {
+            appendLog("MHA identity not detected; skipping class-13 activation")
+        }
+
+        // Route 2 (bad_query direct): iOS 27 can reach SystemGroup directly.
+        // These fileExists checks are useless without a sandbox extension, but
+        // they are harmless and match the upstream Jade flow.
         let candidates = [
             "\(Self.systemGroupRoot)/\(Self.gestaltContainerName)/\(Self.gestaltRelativePath)",
             "/var/mobile/Library/Caches/com.apple.MobileGestalt.plist",
         ]
         for candidate in candidates where FileManager.default.fileExists(atPath: candidate) {
-            appendLog("gestalt found at \(candidate)")
+            appendLog("gestalt found at hardcoded path")
             return candidate
         }
 
-        // Scan SystemGroup root
+        // Route 3 (bad_query scan): get a sandbox extension for the SystemGroup
+        // root and enumerate to find the mobilegestaltcache container.
         guard grantExtension(for: Self.systemGroupRoot) else {
             appendLog("cannot scan SystemGroup root - no extension")
             return nil
@@ -213,12 +248,16 @@ final class BQMobileGestaltModel {
         }
         gestaltPath = path
 
-        // Get sandbox extension for the container
-        let containerPath = String(path.prefix(path.range(of: "/Library/")?.lowerBound.utf16Offset(in: path) ?? path.count))
-        guard grantExtension(for: containerPath) else {
-            alertInfo = MGAlertInfo(title: "Sandbox Escape Failed", body: "Could not get a sandbox extension for the MobileGestalt container (error \(extensionHandle)). The container may not be accessible on this iOS version.")
-            statusMessage = "Extension failed"
-            return
+        // Get sandbox extension for the container (unless MHA already gave us one).
+        if !mhaRouteActive {
+            let containerPath = String(path.prefix(path.range(of: "/Library/")?.lowerBound.utf16Offset(in: path) ?? path.count))
+            guard grantExtension(for: containerPath) else {
+                alertInfo = MGAlertInfo(title: "Sandbox Escape Failed", body: "Could not get a sandbox extension for the MobileGestalt container (error \(extensionHandle)). The container may not be accessible on this iOS version.")
+                statusMessage = "Extension failed"
+                return
+            }
+        } else {
+            appendLog("using MHA-activated class-13 lease; skipping bad_query grantExtension")
         }
 
         do {

@@ -10,6 +10,7 @@ import SwiftUI
 
 struct GestaltView: View {
     @State private var model = BQMobileGestaltModel()
+    @AppStorage("mha_app_group_override") private var appGroupOverride = ""
 
     var body: some View {
         NavigationStack {
@@ -123,6 +124,18 @@ struct GestaltView: View {
                         Text(BQMCMAppGroupIdentifier())
                             .font(.caption.monospaced())
                     }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("手动覆盖 App Group（空则使用自动探测）")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    TextField("group.com.example.app", text: $appGroupOverride)
+                        .font(.caption.monospaced())
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: appGroupOverride) { _, newValue in
+                            let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                            MCMIntegration.configure(appGroup: trimmed.isEmpty ? "group.com.apple.mobile.MobileHouseArrest.placeholder" : trimmed)
+                        }
                 }
             } header: {
                 Label("MHA 状态", systemImage: "shield")

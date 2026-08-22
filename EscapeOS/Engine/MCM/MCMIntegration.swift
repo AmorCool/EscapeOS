@@ -98,6 +98,38 @@ struct MCMIntegration {
         throw MCMError.activationFailed((error as? String) ?? "无详情")
     }
 
+    /// Scoped variant for part-domain traversal (e.g. class 13 part 3).
+    /// Use this when you need a sandbox extension for a specific subpath inside
+    /// a container rather than the whole container root.
+    static func activateScoped(_ identifier: String,
+                               class containerClass: MCMContainerClass,
+                               group: Bool = false,
+                               part: UInt64 = 0,
+                               partDomain: String? = nil,
+                               flags: UInt64 = BQMCMFlags) throws -> String {
+        guard Self.isMobileHouseArrest else { throw MCMError.notMHA }
+        guard Self.bridgeAvailable else { throw MCMError.bridgeUnavailable }
+        guard BQMCMSafeIdentifier(identifier) else { throw MCMError.invalidIdentifier }
+
+        var error: NSString?
+        let path = BQMCMActivateScoped(containerClass.rawValue,
+                                       identifier,
+                                       group,
+                                       part,
+                                       partDomain,
+                                       flags,
+                                       &error)
+        if let path = path as String? {
+            return path
+        }
+        throw MCMError.activationFailed((error as? String) ?? "无详情")
+    }
+
+    /// True iff `path` is inside a currently-active lease root.
+    static func pathHasActiveLease(_ path: String) -> Bool {
+        BQMCMPathHasActiveLease(path)
+    }
+
     /// Query-only: return the class-2 container root path WITHOUT activating
     /// the sandbox token (used for app discovery on iOS 26).
     static func queryDataContainerPath(_ identifier: String) throws -> String {
