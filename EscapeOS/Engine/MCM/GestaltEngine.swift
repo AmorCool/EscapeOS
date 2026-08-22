@@ -353,7 +353,10 @@ final class BQMobileGestaltModel {
     /// LiveProcess parent's consumed extension) is what makes in-place writes
     /// succeed inside LiveContainer on iOS 26.
     private func consumeLiveContainerToken() {
-        guard let token = ProcessInfo.processInfo.environment["ESC_MG_TOKEN"],
+        let env = ProcessInfo.processInfo.environment
+        let keys = env.keys.sorted().joined(separator: ", ")
+        appendLog("ProcessInfo.environment keys: \(keys)")
+        guard let token = env["ESC_MG_TOKEN"],
               !token.isEmpty else {
             appendLog("no LiveContainer-issued MobileGestalt token in ESC_MG_TOKEN environment")
             return
