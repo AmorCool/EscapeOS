@@ -64,6 +64,13 @@ struct MCMIntegration {
         BQMCMSetAppGroupIdentifier(appGroup)
     }
 
+    /// Auto-detect the host process's App Group(s) from its entitlements and
+    /// use the first for the iOS 26 sacrifice route. Inside LiveContainer this
+    /// borrows the host's App Group (the contained app runs as the LC process).
+    static func detectHostAppGroup() {
+        BQMCMDetectHostAppGroup()
+    }
+
     /// Activate (and cache) the container root for a bundle/group identifier.
     /// - Returns: the absolute container root path, or nil on failure.
     static func activate(_ identifier: String,

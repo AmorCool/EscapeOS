@@ -3,10 +3,12 @@ import SwiftUI
 @main
 struct EscapeSpaceApp: App {
     init() {
-        // MHA branch: configure the iOS 26 App Group sacrifice route.
-        // Replace the placeholder with the App Group registered to EscapeOS's
-        // signing identity before relying on class-7 (App Group) access.
-        MCMIntegration.configure(appGroup: "group.com.ipaside.escapeos.placeholder")
+        // MHA branch: auto-detect the host process's App Group for the iOS 26
+        // sacrifice route. Inside LiveContainer the app runs as the LC process,
+        // so LC's App Group is inherited and used here — no separately
+        // registered App Group needed. Falls back to the placeholder if the
+        // process has none (then GestaltEngine tries the InternalDaemon route).
+        MCMIntegration.detectHostAppGroup()
     }
 
     var body: some Scene {

@@ -25,6 +25,13 @@ FOUNDATION_EXPORT NSString *const BQMCMRequiredIdentifier;
 FOUNDATION_EXPORT void BQMCMSetAppGroupIdentifier(NSString *identifier);
 FOUNDATION_EXPORT NSString *BQMCMAppGroupIdentifier(void);
 
+/// Detect the host process's App Group(s) from its code-signing entitlements
+/// and install the first as the iOS 26 sacrifice route. In LiveContainer the
+/// contained app runs as the LC process, so LC's App Group is inherited — this
+/// is the "borrow the host" path for iOS 26 MobileGestalt editing without a
+/// separately registered App Group.
+FOUNDATION_EXPORT void BQMCMDetectHostAppGroup(void);
+
 /// True iff the process signed-code-identifier equals BQMCMRequiredIdentifier.
 /// Computed once via SecTaskCopySigningIdentifier and cached.
 FOUNDATION_EXPORT BOOL BQMCMIsMobileHouseArrest(void);

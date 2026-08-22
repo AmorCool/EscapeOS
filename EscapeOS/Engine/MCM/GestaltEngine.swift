@@ -112,11 +112,15 @@ final class BQMobileGestaltModel {
 
     /// Scan SystemGroup containers to find the MobileGestalt cache plist.
     func discoverGestaltPath() -> String? {
-        // Try hardcoded path first
-        let knownPath = "\(Self.systemGroupRoot)/\(Self.gestaltContainerName)/\(Self.gestaltRelativePath)"
-        if FileManager.default.fileExists(atPath: knownPath) {
-            appendLog("gestalt found at hardcoded path")
-            return knownPath
+        // Candidate locations across iOS versions. iOS 27 exposes the cache via
+        // the SystemGroup container; iOS 26 keeps it under /var/mobile/Library.
+        let candidates = [
+            "\(Self.systemGroupRoot)/\(Self.gestaltContainerName)/\(Self.gestaltRelativePath)",
+            "/var/mobile/Library/Caches/com.apple.MobileGestalt.plist",
+        ]
+        for candidate in candidates where FileManager.default.fileExists(atPath: candidate) {
+            appendLog("gestalt found at \(candidate)")
+            return candidate
         }
 
         // Scan SystemGroup root
@@ -156,16 +160,31 @@ final class BQMobileGestaltModel {
         var route = "system"
 
         if handle < 0 {
-            // Fallback: App Group sacrifice route (iOS 26)
+            // Fallback 1: App Group sacrifice route (iOS 26). Only meaningful if
+            // a real host App Group was detected — a placeholder can never work.
             let ag = BQMCMAppGroupIdentifier()
-            var cGroup = ag.utf8CString.map { Int8($0) }
-            var fallback = bad_query(&cPath, true, &cGroup, true)
-            if fallback < 0 {
-                fallback = bad_query(&cPath, true, &cGroup, false)
+            let isPlaceholder = ag.isEmpty || ag.hasSuffix(".placeholder")
+            if !isPlaceholder {
+                var cGroup = ag.utf8CString.map { Int8($0) }
+                var fallback = bad_query(&cPath, true, &cGroup, true)
+                if fallback < 0 {
+                    fallback = bad_query(&cPath, true, &cGroup, false)
+                }
+                if fallback > 0 {
+                    handle = fallback
+                    route = "app group"
+                }
             }
-            if fallback > 0 {
-                handle = fallback
-                route = "app group"
+            // Fallback 2: InternalDaemon escape base (approach D, experimental).
+            // Uses a system daemon's class-10 container (e.g. com.apple.lsd) as
+            // the traversal base on iOS 26 when neither systemgroup nor App
+            // Group routes succeed. Harmless if it also fails.
+            if handle < 0 {
+                let d = bad_query_internal_daemon(&cPath, true)
+                if d > 0 {
+                    handle = d
+                    route = "internal daemon"
+                }
             }
         }
 
