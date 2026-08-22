@@ -160,6 +160,13 @@ void bad_query_release(int64_t handle) {
     if (release_extension) release_extension(handle);
 }
 
+int64_t mg_consume_token(const char *token) {
+    if (!token) return -2;
+    sandbox_extension_consume_fn consume = (sandbox_extension_consume_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
+    if (!consume) return -3;
+    return consume(token);
+}
+
 char *bad_query_list(char *path, int64_t max_inode) {
     struct statfs sfs;
     if (statfs(path, &sfs) != 0) return NULL;
