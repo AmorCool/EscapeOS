@@ -382,7 +382,8 @@ final class BQMobileGestaltModel {
     /// result so the failure mode is capturable from this app's own (exportable) log.
     /// Returns immediately (no throw) — failure just means writes will be denied.
     private func issueAndConsumeSelfInProcess() {
-        guard let path = gestaltPath else {
+        let path = gestaltPath
+        if path.isEmpty {
             appendLog("issueAndConsumeSelfInProcess: no gestaltPath yet")
             return
         }
