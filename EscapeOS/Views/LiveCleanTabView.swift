@@ -308,6 +308,7 @@ struct ContainerDiagnosticView: View {
             diagRow("扩展激活", active ? "是" : "否", color: active ? .green : .red)
             diagRow("宿主签发结论", SandboxEscape.lcContainerGrantStatus ?? "（无 / 宿主未传递）")
             diagRow("Token 期望/消费", "\(SandboxEscape.lcContainerTokenCount) / \(SandboxEscape.lcContainerConsumedCount)")
+            diagRow("启动模式", SandboxEscape.lcContainerLaunchMode ?? "未知")
             diagRow("LC 主目录", SandboxEscape.lcHomePath ?? "（无）")
             diagRow("AppGroup 路径", SandboxEscape.lcAppGroupPath ?? "（无）")
             ForEach(SandboxEscape.lcContainerConsumeResults, id: \.self) { r in

@@ -157,6 +157,10 @@ final class SandboxEscape {
     /// Per-token consume result strings (for on-device diagnosis).
     static var lcContainerConsumeResults: [String] = []
 
+    /// How the LiveContainer host launched us: "appex" (multitask) or "classic"
+    /// (same-process). Forwarded as `ESC_LC_LAUNCH_MODE` for diagnostics.
+    static var lcContainerLaunchMode: String?
+
     /// Consume the container sandbox tokens issued by the LiveContainer host.
     /// Tokens are newline-separated in `ESC_LC_CONTAINER_TOKENS`; each is consumed
     /// in THIS process (extensions are not inherited across the spawn boundary on
@@ -177,6 +181,7 @@ final class SandboxEscape {
         lcHomePath = readEnv("ESC_LC_HOME")
         lcAppGroupPath = readEnv("ESC_LC_APPGROUP_PATH")
         lcContainerGrantStatus = readEnv("ESC_LC_GRANT_STATUS")
+        lcContainerLaunchMode = readEnv("ESC_LC_LAUNCH_MODE")
 
         guard let raw = readEnv("ESC_LC_CONTAINER_TOKENS") else {
             NSLog("[SandboxEscape] no LiveContainer container tokens in environment")

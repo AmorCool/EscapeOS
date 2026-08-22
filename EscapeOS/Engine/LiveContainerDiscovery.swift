@@ -95,7 +95,7 @@ final class LiveContainerDiscovery {
         }
         guard !hosts.isEmpty else { return [] }
 
-        return hosts.compactMap { host in
+        var instances = hosts.compactMap { host in
             let guests: [LiveContainerGuest]
             do {
                 // Build the enumeration as a standalone closure so it can run
@@ -152,9 +152,11 @@ final class LiveContainerDiscovery {
                         // Dedupe against the primary pass — same UUID = same guest.
                         guard guestsByUUID[uuid] == nil else { continue }
                         let plistName = nameFromContainerInfo(dict)
-                        let appRef = lookupAppByUUID(uuid, in: appsRoot)
-                        let bundleId = appRef?.bundleId ?? uuid
-                        let displayName = plistName ?? appRef?.displayName ?? uuid
+                        let appIdentifier = dict["appIdentifier"] as? String
+                        let appRef = appIdentifier.flatMap { lookupAppByBundleId($0, in: appsRoot) }
+                            ?? lookupAppByUUID(uuid, in: appsRoot)
+                        let bundleId = appRef?.bundleId ?? appIdentifier ?? uuid
+                        let displayName = appRef?.displayName ?? plistName ?? uuid
                         let key = makeKey(bundleId: bundleId, uuid: uuid)
                         guestsByUUID[uuid] = LiveContainerGuest(
                             id: key,
@@ -178,9 +180,11 @@ final class LiveContainerDiscovery {
                             let uuid = (uuidPath as NSString).lastPathComponent
                             guard guestsByUUID[uuid] == nil else { continue }
                             let plistName = nameFromContainerInfo(dict)
-                            let appRef = lookupAppByUUID(uuid, in: appsRoot)
-                            let bundleId = appRef?.bundleId ?? uuid
-                            let displayName = plistName ?? appRef?.displayName ?? uuid
+                            let appIdentifier = dict["appIdentifier"] as? String
+                            let appRef = appIdentifier.flatMap { lookupAppByBundleId($0, in: appsRoot) }
+                                ?? lookupAppByUUID(uuid, in: appsRoot)
+                            let bundleId = appRef?.bundleId ?? appIdentifier ?? uuid
+                            let displayName = appRef?.displayName ?? plistName ?? uuid
                             let key = makeKey(bundleId: bundleId, uuid: uuid)
                             guestsByUUID[uuid] = LiveContainerGuest(
                                 id: key,
@@ -208,6 +212,63 @@ final class LiveContainerDiscovery {
             }
             return LiveContainerInstance(host: host, guests: guests, error: nil)
         }
+
+        // The AppGroup shared container is visible to every LiveContainer instance,
+        // so the same converted app may be enumerated once per host. Keep only one
+        // representative and prefer the entry that has a real app name/icon.
+        return dedupeSharedGuestsAcrossHosts(instances)
+    }
+
+    // MARK: - Global shared-container dedupe
+
+    private func dedupeSharedGuestsAcrossHosts(_ instances: [LiveContainerInstance]) -> [LiveContainerInstance] {
+        guard instances.count > 1,
+              let agRoot = SandboxEscape.lcAppGroupPath else { return instances }
+        let sharedPrefix = (agRoot as NSString).appendingPathComponent("LiveContainer/Data/Application")
+
+        var bestByUUID: [String: (guest: LiveContainerGuest, hostIndex: Int)] = [:]
+        for (i, instance) in instances.enumerated() {
+            for guest in instance.guests where guest.containerPath.hasPrefix(sharedPrefix) {
+                let uuid = (guest.containerPath as NSString).lastPathComponent
+                if let existing = bestByUUID[uuid] {
+                    if guestHasBetterMetadata(guest, than: existing.guest) {
+                        bestByUUID[uuid] = (guest, i)
+                    }
+                } else {
+                    bestByUUID[uuid] = (guest, i)
+                }
+            }
+        }
+        guard !bestByUUID.isEmpty else { return instances }
+
+        let preferredHostIndex = bestByUUID.values.map { $0.hostIndex }.min() ?? 0
+
+        return instances.enumerated().compactMap { (i, instance) in
+            let kept: [LiveContainerGuest]
+            if i == preferredHostIndex {
+                kept = instance.guests.filter {
+                    if !$0.containerPath.hasPrefix(sharedPrefix) { return true }
+                    let uuid = ($0.containerPath as NSString).lastPathComponent
+                    return bestByUUID[uuid]?.hostIndex == i
+                }
+            } else {
+                kept = instance.guests.filter { !$0.containerPath.hasPrefix(sharedPrefix) }
+            }
+            guard !kept.isEmpty else { return nil }
+            return LiveContainerInstance(host: instance.host, guests: kept, error: instance.error)
+        }
+    }
+
+    private func guestHasBetterMetadata(_ a: LiveContainerGuest, than b: LiveContainerGuest) -> Bool {
+        let aUUID = (a.containerPath as NSString).lastPathComponent
+        let bUUID = (b.containerPath as NSString).lastPathComponent
+        let aHasRealName = a.displayName != aUUID
+        let bHasRealName = b.displayName != bUUID
+        if aHasRealName != bHasRealName { return aHasRealName }
+        let aHasIcon = a.iconData != nil && !a.iconData!.isEmpty
+        let bHasIcon = b.iconData != nil && !b.iconData!.isEmpty
+        if aHasIcon != bHasIcon { return aHasIcon }
+        return false
     }
 
     // MARK: - `.app` enumeration
@@ -252,6 +313,10 @@ final class LiveContainerDiscovery {
     private func lookupAppByUUID(_ uuid: String, in appsRoot: String) -> GuestBundle? {
         enumerateGuestBundles(root: appsRoot).first { $0.dataUUIDs.contains(uuid) }
             ?? enumerateGuestBundles(root: appsRoot).first { $0.folderName == uuid }
+    }
+
+    private func lookupAppByBundleId(_ bundleId: String, in appsRoot: String) -> GuestBundle? {
+        enumerateGuestBundles(root: appsRoot).first { $0.bundleId == bundleId }
     }
 
     /// Read `LCAppInfo.plist` and return every UUID that points at a guest
