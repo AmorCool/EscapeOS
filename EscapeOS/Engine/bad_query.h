@@ -28,4 +28,15 @@ void bad_query_release(int64_t handle);
 // which is required for in-place writes inside LiveContainer on iOS 26.
 int64_t mg_consume_token(const char *token);
 
+// Issue a raw sandbox extension for `path` in THIS process and immediately
+// consume it, returning the handle (>= 0) on success or a negative error:
+//   -1 libsystem_sandbox.dylib missing, -2 issue_file symbol missing,
+//   -3 issue_file returned NULL for both read-write and read classes
+//      (platform/entitlement policy denied), -4 consume symbol missing,
+//   -5 path is NULL.
+// Used as the primary MobileGestalt write path inside LiveContainer on iOS 26:
+// the host-issued-token handoff has proven unreliable, so we issue+consume
+// in-process where it can be diagnosed from the guest's own (capturable) log.
+int64_t mg_issue_and_consume(const char *path);
+
 #endif /* bad_query_h */

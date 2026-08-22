@@ -254,12 +254,16 @@ final class BQMobileGestaltModel {
         }
         gestaltPath = path
 
-        // LiveContainer (livecontainer branch) host issues a raw sandbox extension
-        // token for the MobileGestalt cache; the LiveProcess guest passes it through
-        // the ESC_MG_TOKEN environment variable. Consume it in THIS process so
-        // in-place writes work — the extension consumed by the LiveProcess parent is
-        // not inherited by the spawned EscapeOS app on iOS 26.
-        consumeLiveContainerToken()
+        // Primary write path (iOS 26 / LiveContainer): issue the sandbox extension
+        // and consume it IN THIS process. The host-issued-token handoff has proven
+        // unreliable (the token never reaches the guest), so we do it where it can be
+        // diagnosed from this process's own (capturable) log.
+        issueAndConsumeSelfInProcess()
+        // Fallback: consume a token the LiveContainer host may have issued and passed
+        // via ESC_MG_TOKEN (kept for compatibility; has never succeeded so far).
+        if !hasExtension {
+            consumeLiveContainerToken()
+        }
 
         // Get sandbox extension for the container (unless MHA already gave us one).
         // NOTE: grantExtension (bad_query) is best-effort ONLY. When LiveContainer grants a
@@ -368,6 +372,36 @@ final class BQMobileGestaltModel {
             appendLog("consumed LiveContainer MobileGestalt sandbox extension in-process, handle=\(handle)")
         } else {
             appendLog("LiveContainer MobileGestalt token consume failed (handle \(handle))")
+        }
+    }
+
+    /// Issue a raw sandbox extension for the MobileGestalt cache IN THIS process
+    /// and immediately consume it, so in-place writes succeed inside LiveContainer
+    /// on iOS 26. This is the supported sandbox pattern (issue+consume in the same
+    /// process) and replaces the unreliable host-issued-token handoff. Logs the exact
+    /// result so the failure mode is capturable from this app's own (exportable) log.
+    /// Returns immediately (no throw) — failure just means writes will be denied.
+    private func issueAndConsumeSelfInProcess() {
+        guard let path = gestaltPath else {
+            appendLog("issueAndConsumeSelfInProcess: no gestaltPath yet")
+            return
+        }
+        // Try the exact plist file first, then the container directory.
+        let fileHandle = path.withCString { mg_issue_and_consume($0) }
+        appendLog("in-process sandbox issue+consume (file): handle=\(fileHandle) for \(path)")
+        if fileHandle >= 0 {
+            extensionHandle = fileHandle
+            hasExtension = true
+            appendLog("in-process MobileGestalt sandbox extension ACTIVE (handle \(fileHandle))")
+            return
+        }
+        let containerPath = String(path.prefix(path.range(of: "/Library/")?.lowerBound.utf16Offset(in: path) ?? path.count))
+        let dirHandle = containerPath.withCString { mg_issue_and_consume($0) }
+        appendLog("in-process sandbox issue+consume (container): handle=\(dirHandle) for \(containerPath)")
+        if dirHandle >= 0 {
+            extensionHandle = dirHandle
+            hasExtension = true
+            appendLog("in-process MobileGestalt sandbox extension ACTIVE (handle \(dirHandle))")
         }
     }
 

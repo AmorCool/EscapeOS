@@ -167,6 +167,38 @@ int64_t mg_consume_token(const char *token) {
     return consume(token);
 }
 
+// Issue a raw sandbox extension for `path` in THIS process and immediately
+// consume it, so THIS process (not a parent/host) holds the grant. This is the
+// supported sandbox pattern; the LiveContainer host-issued-token handoff has
+// proven unreliable on iOS 26. Returns the handle (>= 0) on success, or a
+// negative code:
+//   -1 libsystem_sandbox.dylib could not be loaded
+//   -2 sandbox_extension_issue_file symbol missing
+//   -3 issue_file returned NULL for both read-write and read classes
+//        (platform / entitlement policy denied the grant — expected on a
+//         free-developer-signed app, which lacks the issuing entitlement)
+//   -4 sandbox_extension_consume symbol missing
+//   -5 path is NULL
+int64_t mg_issue_and_consume(const char *path) {
+    if (!path) return -5;
+    void *sb = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_LAZY);
+    if (!sb) sb = dlopen("libsystem_sandbox.dylib", RTLD_LAZY);
+    if (!sb) return -1;
+    typedef char *(*issue_fn)(const char *, const char *, uint32_t);
+    typedef int64_t (*consume_fn)(const char *);
+    issue_fn issue_file = (issue_fn)dlsym(sb, "sandbox_extension_issue_file");
+    consume_fn consume = (consume_fn)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
+    if (!issue_file) { dlclose(sb); return -2; }
+    if (!consume) { dlclose(sb); return -4; }
+    char *token = issue_file("com.apple.app-sandbox.read-write", path, 0);
+    if (!token) token = issue_file("com.apple.app-sandbox.read", path, 0);
+    if (!token) { dlclose(sb); return -3; }
+    int64_t handle = consume(token);
+    free(token);
+    dlclose(sb);
+    return handle;
+}
+
 char *bad_query_list(char *path, int64_t max_inode) {
     struct statfs sfs;
     if (statfs(path, &sfs) != 0) return NULL;
