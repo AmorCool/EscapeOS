@@ -251,16 +251,25 @@ final class BQMobileGestaltModel {
         gestaltPath = path
 
         // Get sandbox extension for the container (unless MHA already gave us one).
+        // NOTE: grantExtension (bad_query) is best-effort ONLY. When LiveContainer grants a
+        // real sandbox extension to this guest process (livecontainer branch patch), the direct
+        // file read/write below succeeds even if bad_query returns -4. So we must NOT gate
+        // load() on grantExtension failing.
         if !mhaRouteActive {
             let containerPath = String(path.prefix(path.range(of: "/Library/")?.lowerBound.utf16Offset(in: path) ?? path.count))
-            guard grantExtension(for: containerPath) else {
-                alertInfo = MGAlertInfo(title: "Sandbox Escape Failed", body: "Could not get a sandbox extension for the MobileGestalt container (error \(extensionHandle)). The container may not be accessible on this iOS version.")
-                statusMessage = "Extension failed"
-                return
+            if grantExtension(for: containerPath) {
+                appendLog("bad_query sandbox extension acquired (handle \(extensionHandle))")
+            } else {
+                appendLog("bad_query extension unavailable (handle \(extensionHandle)); relying on externally-granted (LiveContainer) sandbox extension for direct file access")
             }
         } else {
             appendLog("using MHA-activated class-13 lease; skipping bad_query grantExtension")
         }
+
+        // Probe whether the gestalt path is directly readable by this process. If LiveContainer
+        // granted a sandbox extension for it, this is true and the load below succeeds.
+        let directReadable = FileManager.default.isReadableFile(atPath: path)
+        appendLog("direct-access probe: readable=\(directReadable) for \(path)")
 
         do {
             let url = URL(fileURLWithPath: path)
