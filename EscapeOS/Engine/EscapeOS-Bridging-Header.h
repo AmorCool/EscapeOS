@@ -12,4 +12,8 @@
 #include "zip_crypto.h"
 #import "../Tunnel/TunnelContext.h"
 
+// MHA branch: MCM integration layer (bad_query + MobileHouseArrest)
+#import "MCM/MCMBridge.h"
+#import "MCM/BQMCMIntegration.h"
+
 #endif /* EscapeOS_Bridging_Header_h */

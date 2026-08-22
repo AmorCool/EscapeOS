@@ -5,6 +5,7 @@ private enum MainTab: Hashable {
     case apps
     case reclaim
     case liveclean
+    case gestalt
     case backups
     case settings
 }
@@ -55,6 +56,16 @@ struct RootView: View {
                 Label("容器管理", systemImage: "shippingbox")
             }
             .tag(MainTab.liveclean)
+
+            NavigationView {
+                GestaltView()
+                    .navigationTitle("Gestalt")
+                    .navigationBarTitleDisplayMode(.large)
+            }
+            .tabItem {
+                Label("Gestalt", systemImage: "gearshape.2")
+            }
+            .tag(MainTab.gestalt)
 
             NavigationView {
                 BackupsListView(appList: viewModel)

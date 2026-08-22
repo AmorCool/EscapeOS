@@ -43,6 +43,11 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/UninstallService.swift \
 	EscapeOS/Engine/zip_crypto.c \
 	EscapeOS/Engine/bad_query.c \
+	EscapeOS/Engine/MCM/MCMBridge.m \
+	EscapeOS/Engine/MCM/BQMCMIntegration.m \
+	EscapeOS/Engine/MCM/GestaltEngine.swift \
+	EscapeOS/Engine/MCM/MCMIntegration.swift \
+	EscapeOS/Views/GestaltView.swift \
 	EscapeOS/Tunnel/TunnelContext.m \
 	EscapeOS/Tunnel/applist.m \
 	EscapeOS/Tunnel/heartbeat.m
