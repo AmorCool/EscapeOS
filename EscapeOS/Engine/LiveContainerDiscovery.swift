@@ -33,7 +33,23 @@ struct LiveContainerGuest: Identifiable {
     /// True when this guest's data lives in the shared AppGroup container
     /// (`<appGroup>/LiveContainer/Data/Application/<uuid>`), i.e. the app was
     /// "converted"/shared by LiveContainer. Surfaced in the UI as a "共享" pill.
-    let isShared: Bool = false
+    let isShared: Bool
+
+    init(id: String,
+         bundleIdentifier: String,
+         displayName: String,
+         containerPath: String,
+         iconData: Data?,
+         hostName: String,
+         isShared: Bool = false) {
+        self.id = id
+        self.bundleIdentifier = bundleIdentifier
+        self.displayName = displayName
+        self.containerPath = containerPath
+        self.iconData = iconData
+        self.hostName = hostName
+        self.isShared = isShared
+    }
 
     /// Synthesized `InstalledApp` so the existing `ReclaimService.scan /
     /// .reclaim` can treat this guest exactly like a system app.
