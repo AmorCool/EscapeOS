@@ -208,7 +208,20 @@ struct LiveCleanTabView: View {
             GuestIcon(data: row.guest.iconData)
                 .frame(width: 40, height: 40)
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.guest.displayName)
+                HStack(spacing: 6) {
+                    Text(row.guest.displayName)
+                        .lineLimit(1)
+                    if row.guest.isShared {
+                        Text("共享")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.18))
+                            .foregroundColor(.green)
+                            .clipShape(Capsule())
+                    }
+                }
                 Text(row.subtitle)
                     .font(.caption)
                     .foregroundColor(.secondary)

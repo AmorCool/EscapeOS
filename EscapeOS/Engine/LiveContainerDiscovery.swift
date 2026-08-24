@@ -30,6 +30,10 @@ struct LiveContainerGuest: Identifiable {
     let iconData: Data?
     /// Display name of the LiveContainer instance that hosts this guest.
     let hostName: String
+    /// True when this guest's data lives in the shared AppGroup container
+    /// (`<appGroup>/LiveContainer/Data/Application/<uuid>`), i.e. the app was
+    /// "converted"/shared by LiveContainer. Surfaced in the UI as a "共享" pill.
+    let isShared: Bool = false
 
     /// Synthesized `InstalledApp` so the existing `ReclaimService.scan /
     /// .reclaim` can treat this guest exactly like a system app.
@@ -176,13 +180,20 @@ final class LiveContainerDiscovery {
                     if SandboxEscape.lcContainerExtensionsActive,
                        let ag = SandboxEscape.lcAppGroupPath {
                         let sharedRoot = (ag as NSString).appendingPathComponent("LiveContainer/Data/Application")
+                        // Shared/converted guest `.app` bundles live in the
+                        // AppGroup's *Applications* folder — not the host's
+                        // Documents/Applications — so look them up there for the
+                        // real display name + icon. Folder name may be the bare
+                        // bundle id without a `.app` suffix (handled by
+                        // enumerateGuestBundles).
+                        let sharedAppsRoot = (ag as NSString).appendingPathComponent("LiveContainer/Applications")
                         for (uuidPath, dict) in collectGuestInfoPlists(in: sharedRoot, depth: 0, visited: &walked) {
                             let uuid = (uuidPath as NSString).lastPathComponent
                             guard guestsByUUID[uuid] == nil else { continue }
                             let plistName = nameFromContainerInfo(dict)
                             let appIdentifier = dict["appIdentifier"] as? String
-                            let appRef = appIdentifier.flatMap { lookupAppByBundleId($0, in: appsRoot) }
-                                ?? lookupAppByUUID(uuid, in: appsRoot)
+                            let appRef = appIdentifier.flatMap { lookupAppByBundleId($0, in: sharedAppsRoot) }
+                                ?? lookupAppByUUID(uuid, in: sharedAppsRoot)
                             let bundleId = appRef?.bundleId ?? appIdentifier ?? uuid
                             let displayName = appRef?.displayName ?? plistName ?? uuid
                             let key = makeKey(bundleId: bundleId, uuid: uuid)
@@ -192,7 +203,8 @@ final class LiveContainerDiscovery {
                                 displayName: displayName,
                                 containerPath: uuidPath,
                                 iconData: appRef?.iconData,
-                                hostName: host.name
+                                hostName: host.name,
+                                isShared: true
                             )
                         }
                     }
@@ -286,9 +298,17 @@ final class LiveContainerDiscovery {
         guard files.isDirectory(at: root) else { return [] }
         let entries = (try? files.list(directory: root)) ?? []
         var bundles: [GuestBundle] = []
-        for entry in entries where entry.isDirectory && entry.name.hasSuffix(".app") {
+        for entry in entries where entry.isDirectory {
             let appPath = entry.path
-            let folderName = (entry.name as NSString).deletingPathExtension
+            // LiveContainer stores shared ("converted") guest `.app` bundles in
+            // the AppGroup's Applications folder using the bare bundle id as the
+            // folder name (no `.app` suffix), so accept any directory that
+            // carries an Info.plist as a candidate app bundle.
+            let hasAppSuffix = entry.name.hasSuffix(".app")
+            let isBundleLike = hasAppSuffix
+                || files.exists(at: (appPath as NSString).appendingPathComponent("Info.plist"))
+            guard isBundleLike else { continue }
+            let folderName = hasAppSuffix ? (entry.name as NSString).deletingPathExtension : entry.name
 
             guard let info = readPlist(at: (appPath as NSString).appendingPathComponent("Info.plist"))
             else { continue }
