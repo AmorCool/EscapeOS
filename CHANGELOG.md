@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.30] - 2026-08-24
+
+> 续接 **v0.2.28 基线**。0.2.15–0.2.28 为 MobileHouseArrest / MobileGestalt 系统路径写入方向的实验（已确认 iOS 26.6+ 平台封堵、不可行），按项目方向已放弃，故本次只保留「容器管理 / 共享应用」与 LiveContainer 的联动能力。
+
+### Changed
+
+- **包名回退为 EscapeSpace 原始 Bundle ID**. `control` 与 `Resources/Info.plist` 的 Bundle ID 由 `com.apple.mobile.MobileHouseArrest`（MHA 分支遗留）改回 `com.ipaside.escapeos`，与原始 EscapeSpace 身份一致；`EscapeSpace.entitlements` 仅含 `get-task-allow`，无需改动。版本号 `0.2.28 → 0.2.30`（`CFBundleShortVersionString` / `CFBundleVersion` 与 `control` 同步）。
+- **「容器管理」共享应用显示真实名称 + 图标 + 绿色「共享」胶囊**. 之前共享（被 LiveContainer “转换”/converted）的容器应用只显示 UUID、无名称/图标，因为 EscapeOS 只在宿主的 `Documents/Applications` 下查 `.app`；而共享 guest 的 `.app` 实际位于 **AppGroup 的 `LiveContainer/Applications`**（文件夹名可能是裸 bundle id、无 `.app` 后缀）。现已：
+  - `LiveContainerDiscovery` 在 AppGroup `LiveContainer/Applications` 下查找共享 guest 的 `.app`（放宽 `enumerateGuestBundles`：任意含 `Info.plist` 的目录均视为候选，兼容无后缀的裸 bundle id 目录），取回真实 `CFBundleDisplayName` / 图标 / Bundle ID，并标记 `isShared = true`。
+  - `LiveCleanTabView` 对共享 guest 在名称旁渲染绿色「共享」胶囊，与普通（私有）guest 区分。
+
+### Fixed
+
+- **LiveContainerGuest 显式构造器**. 给 `LiveContainerGuest` 增加显式 `init(... isShared: Bool = false)`，解决部分 Swift 工具链不合成带默认值属性的 memberwise init 导致的级联编译错误（`compactMap` 返回类型无法推断 + `extra argument 'isShared' in call`），v0.2.29 构建失败即源于此；修复后 bump 至 `0.2.30` 重新出包。
+
+### Added（LiveContainer 侧，随 LC 主分支 nightly 发布）
+
+- **LiveContainer 设置新增「Guest Container Extension」开关**. 位于设置页（默认开启），绑定到 App Group 套件 `UserDefaults` 的 `LCContainerExtensionEnabled`。关闭后，经典启动路径（`LCBootstrap`）与多任务路径（`AppSceneViewController`）都不再为 EscapeOS 签发容器沙盒扩展，并下发 `ESC_LC_GRANT_STATUS=skipped:disabled`，使 EscapeOS 诊断可见「已禁用」。
+- **多语言**. `Resources/Localizable.xcstrings` 新增 `lc.settings.containerExtension` 与 `lc.settings.containerExtensionDesc` 两键，覆盖 LC 全部 16 种 UI 语言（ar / de / en / es / fr / it / ja / ko / pl / pt-BR / ru / sv / tr / vi / zh-Hans / zh-Hant）。`LCSharedUtils` 的 `isEscapeOS` 识别同步改为 `com.ipaside.escapeos`。
+
 ## [0.2.14] - 2026-08-21
 
 ### Changed
