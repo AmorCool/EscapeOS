@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.31] - 2026-08-24
+
+### Changed
+
+- **UI 全面统一为卡片/banner 风格（图 1 方向）**. 将「容器管理」你喜欢的卡片/banner 视觉语言（图标 + 标题 + 说明）扩展到全应用主要空/错/初始状态，消除居中灰字与居中蓝色大按钮的割裂感：
+  - `LiveCleanTabView`：未扫描、扫描失败、未找到应用状态改为 `InfoActionCard`；诊断卡片与共享应用提示 banner 保留并统一卡片底色。
+  - `ReclaimTabView`：未扫描/无应用状态改为 `InfoActionCard`；可回收总量卡片继续放在列表顶部。
+  - `BackupsListView`：加载中、读取失败、暂无备份状态改为 `InfoActionCard`。
+  - `FileBrowserView`：打开目录失败状态改为 `InfoActionCard`。
+  - `CustomRestoreSheet`：未找到可恢复目标应用状态改为 `InfoActionCard`。
+  - `RootView` 的 `ErrorStateView` / `EmptyStateView`（应用页错误/空状态）改为 `InfoActionCard`。
+- **底部 tab 重构为 5 个，新增卡片式「更多」页**. 由原先的 6 tab（应用 / 空间回收 / 容器管理 / Gestalt / 备份 / 设置）改为 5 tab：
+  - 应用 / 空间回收 / 容器管理 / Gestalt 保持独立 tab（**Gestalt 未被隐藏或移除**）。
+  - 新增「更多」tab，使用卡片风格（不是简单列表）展示 备份 / 设置 两个入口，点击进入对应页面；点击「重置配对文件」后自动切回「应用」tab。
+- **新增 `DesignSystem.swift` 共享组件**：`AppTheme`（暖橙强调色）、`AppRowIcon`（圆角图标底）、`InfoActionCard`（图标 + 标题 + 说明 + 可选按钮的卡片）、`SizePill`（字节量胶囊），供上述页面复用。
+
+### Fixed
+
+- **纠正「更多」页方向**. 之前误将「更多」做成简单列表，且错误地移除了 Gestalt tab。现按截图证据恢复：保留 Gestalt，并把「更多」页也统一为卡片/banner 风格。
+
 ## [0.2.30] - 2026-08-24
 
 > 续接 **v0.2.28 基线**。0.2.15–0.2.28 为 MobileHouseArrest / MobileGestalt 系统路径写入方向的实验（已确认 iOS 26.6+ 平台封堵、不可行），按项目方向已放弃，故本次只保留「容器管理 / 共享应用」与 LiveContainer 的联动能力。
