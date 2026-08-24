@@ -20,166 +20,170 @@ struct BackupsListView: View {
     @State private var importError: IdentifiedAlert?
 
     var body: some View {
-        Group {
-            if vm.isLoading && vm.records.isEmpty {
-                ProgressView("正在加载备份…")
-            } else if let error = vm.errorMessage, vm.records.isEmpty {
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(.orange)
-                    Text(error)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                    Button("重试") { vm.reload() }
-                        .buttonStyle(.bordered)
+        mainContent
+            .navigationTitle("备份")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showingPicker = true
+                    } label: {
+                        Label("恢复", systemImage: "arrow.down.doc.fill")
+                    }
+                    .disabled(selecting)
                 }
-                .padding()
-            } else if vm.records.isEmpty {
-                VStack(spacing: 16) {
-                    Image(systemName: "tray.full")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    Text("暂无备份")
-                        .font(.headline)
-                    Text("可在「应用」或「容器管理」页进入任意应用，再点击「备份数据」导出备份。归档文件保存在「文件 → 我的iPhone → EscapeSpace → Backups」。")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
-                .padding()
-            } else {
-                List {
-                    ForEach(vm.records) { record in
-                        let rowIcon = record.metadata.iconData.flatMap { UIImage(data: $0) }
-                            ?? appList.icons[record.metadata.bundleIdentifier]
-                        if selecting {
-                            Button {
-                                toggleSelection(record)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: selected.contains(record.id) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundColor(selected.contains(record.id) ? .accentColor : .secondary)
-                                    BackupRow(
-                                        record: record,
-                                        icon: rowIcon,
-                                        eligibility: vm.eligibility(for: record, apps: appList.apps),
-                                        selecting: true
-                                    ) {}
-                                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if selecting {
+                        HStack {
+                            Button(allSelected ? "取消全选" : "全选") {
+                                toggleSelectAll()
                             }
-                            .buttonStyle(.plain)
-                        } else {
-                            BackupRow(
-                                record: record,
-                                icon: rowIcon,
-                                eligibility: vm.eligibility(for: record, apps: appList.apps)
-                            ) {
-                                vm.beginRestore(record: record, apps: appList.apps)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button {
-                                    shareTarget = ShareTarget(url: record.archiveURL)
-                                } label: {
-                                    Label("分享", systemImage: "square.and.arrow.up")
-                                }
-                                .tint(.blue)
+                            Button("取消") {
+                                selecting = false
+                                selected.removeAll()
                             }
                         }
+                    } else {
+                        HStack {
+                            Button("选择") { selecting = true }
+                            Button {
+                                vm.reload()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .disabled(vm.isLoading)
+                        }
                     }
-                    .onDelete { offsets in
-                        vm.delete(at: offsets)
-                    }
-                }
-                .listStyle(.insetGrouped)
-                .sheet(item: $shareTarget) { target in
-                    ShareSheet(items: [target.url])
                 }
             }
-        }
-        .navigationTitle("备份")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    showingPicker = true
-                } label: {
-                    Label("恢复", systemImage: "arrow.down.doc.fill")
-                }
-                .disabled(selecting)
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
+            .safeAreaInset(edge: .bottom) {
                 if selecting {
                     HStack {
-                        Button(allSelected ? "取消全选" : "全选") {
-                            toggleSelectAll()
+                        Text("已选 \(selected.count) 项")
+                            .font(.subheadline)
+                        Spacer()
+                        Button("删除", role: .destructive) {
+                            showDeleteConfirm = true
                         }
-                        Button("取消") {
-                            selecting = false
-                            selected.removeAll()
-                        }
+                        .disabled(selected.isEmpty)
                     }
-                } else {
-                    HStack {
-                        Button("选择") { selecting = true }
-                        Button {
-                            vm.reload()
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .disabled(vm.isLoading)
-                    }
+                    .padding()
+                    .background(.bar)
                 }
             }
+            .onAppear {
+                vm.reload()
+            }
+            .sheet(item: $vm.activeRestore) { session in
+                RestoreView(session: session, appList: appList)
+            }
+            .sheet(isPresented: $showingPicker) {
+                BackupImportPicker(onPick: handlePickedZip)
+            }
+            .sheet(item: $importRecord) { record in
+                CustomRestoreSheet(record: record, appList: appList) { session, guest in
+                    importRecord = nil
+                    customSession = session
+                    customGuest = guest
+                }
+            }
+            .sheet(item: $customSession) { session in
+                RestoreView(session: session, appList: appList, preselectedGuest: customGuest)
+            }
+            .alert(item: $vm.alertError) { error in
+                Alert(title: Text("无法开始恢复"), message: Text(error.message), dismissButton: .default(Text("好")))
+            }
+            .alert(item: $importError) { error in
+                Alert(title: Text("无法读取备份"), message: Text(error.message), dismissButton: .default(Text("好")))
+            }
+            .alert("删除选中的备份？", isPresented: $showDeleteConfirm) {
+                Button("取消", role: .cancel) {}
+                Button("删除", role: .destructive) {
+                    performBatchDelete()
+                }
+            } message: {
+                Text("将永久删除 \(selected.count) 个备份归档，此操作不可撤销。")
+            }
+    }
+
+    private var mainContent: some View {
+        List {
+            if vm.isLoading && vm.records.isEmpty {
+                Section {
+                    InfoActionCard(
+                        icon: "externaldrive.fill.badge.timemachine",
+                        title: "正在加载备份…",
+                        message: "读取 EscapeSpace/Backups 目录中的备份归档。"
+                    )
+                }
+            } else if let error = vm.errorMessage, vm.records.isEmpty {
+                Section {
+                    InfoActionCard(
+                        icon: "exclamationmark.triangle.fill",
+                        iconTint: .orange,
+                        title: "无法读取备份",
+                        message: error,
+                        actionTitle: "重试",
+                        action: { vm.reload() }
+                    )
+                }
+            } else if vm.records.isEmpty {
+                Section {
+                    InfoActionCard(
+                        icon: "tray.full",
+                        title: "暂无备份",
+                        message: "可在「应用」或「容器管理」页进入任意应用，再点击「备份数据」导出备份。归档文件保存在「文件 → 我的iPhone → EscapeSpace → Backups」。"
+                    )
+                }
+            } else {
+                recordsSection
+            }
         }
-        .safeAreaInset(edge: .bottom) {
+        .listStyle(.insetGrouped)
+        .sheet(item: $shareTarget) { target in
+            ShareSheet(items: [target.url])
+        }
+    }
+
+    private var recordsSection: some View {
+        ForEach(vm.records) { record in
+            let rowIcon = record.metadata.iconData.flatMap { UIImage(data: $0) }
+                ?? appList.icons[record.metadata.bundleIdentifier]
             if selecting {
-                HStack {
-                    Text("已选 \(selected.count) 项")
-                        .font(.subheadline)
-                    Spacer()
-                    Button("删除", role: .destructive) {
-                        showDeleteConfirm = true
+                Button {
+                    toggleSelection(record)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: selected.contains(record.id) ? "checkmark.circle.fill" : "circle")
+                            .foregroundColor(selected.contains(record.id) ? .accentColor : .secondary)
+                        BackupRow(
+                            record: record,
+                            icon: rowIcon,
+                            eligibility: vm.eligibility(for: record, apps: appList.apps),
+                            selecting: true
+                        ) {}
                     }
-                    .disabled(selected.isEmpty)
                 }
-                .padding()
-                .background(.bar)
+                .buttonStyle(.plain)
+            } else {
+                BackupRow(
+                    record: record,
+                    icon: rowIcon,
+                    eligibility: vm.eligibility(for: record, apps: appList.apps)
+                ) {
+                    vm.beginRestore(record: record, apps: appList.apps)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button {
+                        shareTarget = ShareTarget(url: record.archiveURL)
+                    } label: {
+                        Label("分享", systemImage: "square.and.arrow.up")
+                    }
+                    .tint(.blue)
+                }
             }
         }
-        .onAppear {
-            vm.reload()
-        }
-        .sheet(item: $vm.activeRestore) { session in
-            RestoreView(session: session, appList: appList)
-        }
-        .sheet(isPresented: $showingPicker) {
-            BackupImportPicker(onPick: handlePickedZip)
-        }
-        .sheet(item: $importRecord) { record in
-            CustomRestoreSheet(record: record, appList: appList) { session, guest in
-                importRecord = nil
-                customSession = session
-                customGuest = guest
-            }
-        }
-        .sheet(item: $customSession) { session in
-            RestoreView(session: session, appList: appList, preselectedGuest: customGuest)
-        }
-        .alert(item: $vm.alertError) { error in
-            Alert(title: Text("无法开始恢复"), message: Text(error.message), dismissButton: .default(Text("好")))
-        }
-        .alert(item: $importError) { error in
-            Alert(title: Text("无法读取备份"), message: Text(error.message), dismissButton: .default(Text("好")))
-        }
-        .alert("删除选中的备份？", isPresented: $showDeleteConfirm) {
-            Button("取消", role: .cancel) {}
-            Button("删除", role: .destructive) {
-                performBatchDelete()
-            }
-        } message: {
-            Text("将永久删除 \(selected.count) 个备份归档，此操作不可撤销。")
+        .onDelete { offsets in
+            vm.delete(at: offsets)
         }
     }
 
@@ -400,20 +404,13 @@ struct CustomRestoreSheet: View {
                 if isLoading {
                     ProgressView("正在加载应用列表…")
                 } else if normalApps.isEmpty && guestApps.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "app.dashed")
-                            .font(.system(size: 40))
-                            .foregroundColor(.secondary)
-                        Text("未找到可恢复的目标应用。")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Text("请先在「应用」页导入配对文件并扫描到 LiveContainer。")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
+                    Section {
+                        InfoActionCard(
+                            icon: "app.dashed",
+                            title: "未找到可恢复的目标应用",
+                            message: "请先在「应用」页导入配对文件并扫描到 LiveContainer。"
+                        )
                     }
-                    .padding()
                 } else {
                     List {
                         if !filteredNormalApps.isEmpty {

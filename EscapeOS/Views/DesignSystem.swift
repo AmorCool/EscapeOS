@@ -36,6 +36,44 @@ struct AppRowIcon: View {
     }
 }
 
+/// A card with a tinted icon, title, message, and optional action button.
+/// Used for empty / error / prompt states across the app so every tab shares
+/// the same visual language.
+struct InfoActionCard: View {
+    let icon: String
+    var iconTint: Color = AppTheme.accent
+    let title: String
+    let message: String
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
+    var disabled: Bool = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AppRowIcon(systemName: icon, tint: iconTint, symbolSize: 20, frameSize: 36)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let actionTitle = actionTitle, let action = action {
+                    Button(action: action) {
+                        Text(actionTitle)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(AppTheme.accent)
+                    .disabled(disabled)
+                    .padding(.top, 2)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
 /// A small pill that highlights a byte count with a tinted background.
 struct SizePill: View {
     let text: String

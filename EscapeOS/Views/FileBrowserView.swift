@@ -119,15 +119,19 @@ struct FileBrowserView: View {
             if vm.isLoading && vm.items.isEmpty {
                 ProgressView("正在打开容器…")
             } else if let error = vm.errorMessage, vm.items.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.orange)
-                    Text(error)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                    Button("重试") { vm.open(vm.currentPath) }
+                List {
+                    Section {
+                        InfoActionCard(
+                            icon: "exclamationmark.triangle.fill",
+                            iconTint: .orange,
+                            title: "无法打开目录",
+                            message: error,
+                            actionTitle: "重试",
+                            action: { vm.open(vm.currentPath) }
+                        )
+                    }
                 }
+                .listStyle(.insetGrouped)
             } else {
                 fileList
             }

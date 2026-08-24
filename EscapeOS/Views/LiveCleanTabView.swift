@@ -45,25 +45,8 @@ struct LiveCleanTabView: View {
     }
 
     var body: some View {
-        Group {
-            if appList.needsPairing {
-                Text("请先在「应用」页导入配对文件。")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else if vm.instances.isEmpty && !vm.isScanning && !vm.didRun {
-                discoverPrompt
-            } else if vm.rows.isEmpty && !vm.isScanning {
-                VStack(spacing: 12) {
-                    Text(vm.discoveryError ?? "LiveContainer 内未找到已安装的应用。")
-                        .foregroundColor(.secondary)
-                    ContainerDiagnosticView()
-                }
-                .padding()
-            } else {
-                rankedList
-            }
-        }
-        .navigationTitle("容器管理")
+        mainContent
+            .navigationTitle("容器管理")
         .onAppear {
             vm.refreshRanksFromCache()
         }
@@ -94,7 +77,7 @@ struct LiveCleanTabView: View {
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .disabled(vm.isScanning || vm.isBusy || vm.rows.isEmpty || appList.apps.isEmpty)
+                    .disabled(vm.isScanning || vm.isBusy || appList.apps.isEmpty)
                 }
             }
         }
@@ -132,42 +115,58 @@ struct LiveCleanTabView: View {
         }
     }
 
-    private var discoverPrompt: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 40))
-                .foregroundColor(.secondary)
-            Text("清理 LiveContainer 内安装的应用的缓存与临时文件。确认清理前不会删除任何内容。")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-            Button {
-                selecting = false
-                vm.discover(apps: appList.apps)
-            } label: {
-                Text("扫描 LiveContainer")
-                    .frame(maxWidth: .infinity)
+    private var mainContent: some View {
+        List {
+            if appList.needsPairing {
+                Section {
+                    InfoActionCard(
+                        icon: "network.badge.shield.half.filled",
+                        title: "需要配对文件",
+                        message: "请先在「应用」页导入配对文件，建立 LocalDevVPN 隧道后才能扫描 LiveContainer 容器。"
+                    )
+                }
+            } else {
+                Section {
+                    SharedAppLimitBanner(supported: SandboxEscape.lcContainerExtensionsActive)
+                }
+                Section {
+                    ContainerDiagnosticView()
+                }
+
+                if !vm.didRun && !vm.isScanning {
+                    Section {
+                        InfoActionCard(
+                            icon: "shippingbox",
+                            title: "扫描 LiveContainer",
+                            message: "清理 LiveContainer 内安装的应用的缓存与临时文件。确认清理前不会删除任何内容。",
+                            actionTitle: "扫描 LiveContainer",
+                            action: {
+                                selecting = false
+                                vm.discover(apps: appList.apps)
+                            },
+                            disabled: appList.apps.isEmpty || vm.isScanning
+                        )
+                    }
+                } else if vm.rows.isEmpty && !vm.isScanning {
+                    Section {
+                        InfoActionCard(
+                            icon: vm.discoveryError != nil ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+                            iconTint: vm.discoveryError != nil ? .orange : .green,
+                            title: vm.discoveryError != nil ? "扫描失败" : "未找到应用",
+                            message: vm.discoveryError ?? "LiveContainer 内未找到已安装的应用。"
+                        )
+                    }
+                } else {
+                    rowsSection
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(appList.apps.isEmpty || vm.isScanning)
-            .padding(.horizontal, 24)
-            ContainerDiagnosticView()
-                .padding(.horizontal, 24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .listStyle(.insetGrouped)
     }
 
-    private var rankedList: some View {
+    private var rowsSection: some View {
         let visible = filteredRows
-        return List {
-            Section {
-                SharedAppLimitBanner(supported: SandboxEscape.lcContainerExtensionsActive)
-            }
-            Section {
-                ContainerDiagnosticView()
-            }
+        return Group {
             if !vm.progressText.isEmpty && vm.isScanning {
                 Text(vm.progressText)
                     .foregroundColor(.secondary)
@@ -196,7 +195,6 @@ struct LiveCleanTabView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
     }
 
     private func rankRow(_ row: LiveCleanAppRank, selected: Bool) -> some View {

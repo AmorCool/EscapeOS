@@ -6,8 +6,7 @@ private enum MainTab: Hashable {
     case reclaim
     case liveclean
     case gestalt
-    case backups
-    case settings
+    case more
 }
 
 /// Top-level navigation: native SwiftUI tab bar + pairing onboarding.
@@ -68,26 +67,16 @@ struct RootView: View {
             .tag(MainTab.gestalt)
 
             NavigationView {
-                BackupsListView(appList: viewModel)
-                    .navigationBarTitleDisplayMode(.large)
-            }
-            .tabItem {
-                Label("备份", systemImage: "externaldrive.fill.badge.timemachine")
-            }
-            .tag(MainTab.backups)
-
-            NavigationView {
-                SettingsForm(onResetPairing: {
+                MoreView(appList: viewModel, onResetPairing: {
                     viewModel.resetPairing()
                     selectedTab = .apps
                 })
-                .navigationTitle("设置")
                 .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("设置", systemImage: "gearshape.fill")
+                Label("更多", systemImage: "ellipsis")
             }
-            .tag(MainTab.settings)
+            .tag(MainTab.more)
         }
         .overlay(CopyBanner(message: copyFeedback.message))
         .sheet(isPresented: Binding(
@@ -249,34 +238,28 @@ struct SetupStep: View {
     }
 }
 
-/// Generic error state with retry.
+/// Generic error state with retry, styled as a card to match the rest of the app.
 struct ErrorStateView: View {
     let message: String
     let onRetry: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48))
-                .foregroundColor(.orange)
-            Text("出现问题")
-                .font(.headline)
-            Text(message)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+        ScrollView {
+            VStack(spacing: 16) {
+                InfoActionCard(
+                    icon: "exclamationmark.triangle.fill",
+                    iconTint: .orange,
+                    title: "出现问题",
+                    message: message + (message.contains("tunnel") || message.contains("LocalDevVPN") || message.contains("Heartbeat")
+                        ? "\n\n提示：将 LocalDevVPN 重置为默认的 10.7.0.1 地址，保持 Wi-Fi 连接，并让 iPASide 放置配对文件（或在此导入）。iOS 26.5 上不需要自定义局域网 IP。"
+                        : ""),
+                    actionTitle: "重试",
+                    action: onRetry
+                )
                 .padding(.horizontal)
-            if message.contains("tunnel") || message.contains("LocalDevVPN") || message.contains("Heartbeat") {
-                Text("提示：将 LocalDevVPN 重置为默认的 10.7.0.1 地址，保持 Wi-Fi 连接，并让 iPASide 放置配对文件（或在此导入）。iOS 26.5 上不需要自定义局域网 IP。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
             }
-            Button("重试", action: onRetry)
-                .buttonStyle(.bordered)
+            .padding(.top, 24)
         }
-        .padding()
     }
 }
 
@@ -285,17 +268,16 @@ struct EmptyStateView: View {
     let diagnostics: String
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 48))
-                .foregroundColor(.secondary)
-            Text("未找到应用")
-                .font(.headline)
-            Text(diagnostics)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+        ScrollView {
+            VStack(spacing: 16) {
+                InfoActionCard(
+                    icon: "square.grid.2x2",
+                    title: "未找到应用",
+                    message: diagnostics
+                )
                 .padding(.horizontal)
+            }
+            .padding(.top, 24)
         }
     }
 }

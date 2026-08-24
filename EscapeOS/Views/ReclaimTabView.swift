@@ -22,22 +22,8 @@ struct ReclaimTabView: View {
     @State private var searchText = ""
 
     var body: some View {
-        Group {
-            if appList.needsPairing {
-                Text("请先在「应用」页导入配对文件。")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else if appList.apps.isEmpty && !appList.isLoading {
-                Text("没有可扫描的应用。")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else if vm.rows.isEmpty && !vm.isScanning {
-                scanPrompt
-            } else {
-                rankedList
-            }
-        }
-        .navigationTitle("空间回收")
+        mainContent
+            .navigationTitle("空间回收")
         .onAppear {
             vm.refreshRanksFromCache()
         }
@@ -68,7 +54,7 @@ struct ReclaimTabView: View {
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .disabled(vm.isScanning || vm.isBusy || vm.rows.isEmpty || appList.apps.isEmpty)
+                    .disabled(vm.isScanning || vm.isBusy || appList.apps.isEmpty)
                 }
             }
         }
@@ -106,42 +92,48 @@ struct ReclaimTabView: View {
         }
     }
 
-    private var scanPrompt: some View {
-        VStack(spacing: 18) {
-            ZStack {
-                Circle()
-                    .fill(AppTheme.accent.opacity(0.12))
-                    .frame(width: 84, height: 84)
-                Image(systemName: "internaldrive")
-                    .font(.system(size: 38))
-                    .foregroundColor(AppTheme.accent)
+    private var mainContent: some View {
+        List {
+            if appList.needsPairing {
+                Section {
+                    InfoActionCard(
+                        icon: "network.badge.shield.half.filled",
+                        title: "需要配对文件",
+                        message: "请先在「应用」页导入配对文件，建立 LocalDevVPN 隧道后才能扫描设备应用。"
+                    )
+                }
+            } else if appList.apps.isEmpty && !appList.isLoading {
+                Section {
+                    InfoActionCard(
+                        icon: "internaldrive",
+                        title: "没有可扫描的应用",
+                        message: "设备尚未返回任何应用。请确认 LocalDevVPN 已连接且配对文件有效。"
+                    )
+                }
+            } else if vm.rows.isEmpty && !vm.isScanning {
+                Section {
+                    InfoActionCard(
+                        icon: "internaldrive",
+                        title: "扫描应用缓存与临时文件",
+                        message: "扫描会测量每个应用的缓存与临时文件占用。在你确认回收之前，不会删除任何内容。",
+                        actionTitle: "立即扫描",
+                        action: {
+                            selecting = false
+                            vm.scan(apps: appList.apps)
+                        },
+                        disabled: appList.apps.isEmpty || vm.isScanning
+                    )
+                }
+            } else {
+                rowsSection
             }
-            Text("扫描应用缓存与临时文件")
-                .font(.title3.bold())
-            Text("扫描会测量每个应用的缓存与临时文件占用。在你确认回收之前，不会删除任何内容。")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 28)
-            Button {
-                selecting = false
-                vm.scan(apps: appList.apps)
-            } label: {
-                Label("立即扫描", systemImage: "sparkles")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(AppTheme.accent)
-            .disabled(appList.apps.isEmpty || vm.isScanning)
-            .padding(.horizontal, 28)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .listStyle(.insetGrouped)
     }
 
-    private var rankedList: some View {
+    private var rowsSection: some View {
         let visible = filteredRows
-        return List {
+        return Group {
             if !vm.isScanning {
                 summaryCard
             }
@@ -172,7 +164,6 @@ struct ReclaimTabView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
     }
 
     private var summaryCard: some View {
