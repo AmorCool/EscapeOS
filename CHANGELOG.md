@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.35] - 2026-08-25
+
+### Added
+
+- **新增「更多 → 屏蔽域名」控制台**. 参考用户提供的 `iOS-Blocker.mobileconfig`，移植其 DNS 屏蔽思路：通过 `com.apple.dnsSettings.managed` 负载把域名写入 `SupplementalMatchDomains`，并指向不可达的本地 DoH 服务器（`https://127.0.0.1/dns-query`），使这些域名解析失败从而无法访问。
+  - 默认屏蔽苹果系统更新 / 验证相关域名（`mesu.apple.com`、`gdmf.apple.com` 等共 26 个），已按用户要求移除 `www.baidu.com`；每条预设均可单独开关。
+  - 新增「自定义域名」输入框，可随时添加任意要屏蔽的域名（自动去掉协议头 / 路径 / 端口，去重并小写），左滑可删除；自定义域名持久化保存在本机，重启应用后仍保留。
+  - 点击「生成描述文件」后，将当前启用的域名清单写入 `Documents/DomainBlocker/blocked-domains.mobileconfig`，随后可「载入描述文件」通过 `UIDocumentInteractionController` 路由到系统「设置」安装，或「分享 / 保存到文件」后在「文件」App 中打开安装。
+  - 新增 `EscapeOS/Views/DomainBlockerView.swift`：含 `DomainBlockerStore`（持久化）、`buildProfileXML`（生成 plist）、`ProfileInstaller`（描述文件安装桥接）。
+
 ## [0.2.34] - 2026-08-25
 
 ### Added

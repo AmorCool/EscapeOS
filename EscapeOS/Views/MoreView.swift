@@ -26,6 +26,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: DomainBlockerView()) {
+                    MoreCard(
+                        icon: "globe.badge.xmark",
+                        title: "屏蔽域名",
+                        subtitle: "生成 DNS 描述文件，按需屏蔽任意域名（含 iOS 更新）。"
+                    )
+                }
+
                 NavigationLink(destination: BackupsListView(appList: appList)) {
                     MoreCard(
                         icon: "externaldrive.fill.badge.timemachine",
