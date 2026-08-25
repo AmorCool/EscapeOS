@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.37] - 2026-08-25
+
+### Fixed
+
+- **屏蔽域名入口图标真正显示**：上一版把图标设为 `shield.badge.xmark`，但在真机上渲染为空（该 SF Symbol 名称可能不存在或当前系统不支持）。已改为 `shield.fill`，确保在所有目标系统上都能正常显示。
+- 同步更新 `DomainBlockerView` 顶部信息卡片的图标为 `shield.fill`，保持两处一致。
+
 ## [0.2.36] - 2026-08-25
 
 ### Fixed / Improved

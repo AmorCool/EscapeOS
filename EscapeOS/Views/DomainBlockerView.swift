@@ -31,7 +31,7 @@ struct DomainBlockerView: View {
         List {
             Section {
                 InfoActionCard(
-                    icon: "shield.badge.xmark",
+                    icon: "shield.fill",
                     title: "屏蔽域名",
                     message: "将域名加入系统 DNS 屏蔽列表（指向不可达的本地解析服务），使其无法访问。默认包含 iOS 系统更新相关域名，可按需关闭或添加自定义域名。生成的描述文件需在“设置 → 通用 → VPN 与设备管理”中安装。"
                 )
