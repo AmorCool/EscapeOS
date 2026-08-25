@@ -139,8 +139,8 @@ struct DomainBlockerView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("屏蔽域名")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $installSheet, onDismiss: { installSheet = nil }) { url in
-            ProfileInstaller(url: url) { installSheet = nil }
+        .sheet(item: $installSheet, onDismiss: { installSheet = nil }) { target in
+            ProfileInstaller(url: target.url) { installSheet = nil }
         }
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
