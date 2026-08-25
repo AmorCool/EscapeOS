@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.33] - 2026-08-25
+
+### Fixed
+
+- **修复「更多」与「Gestalt」顶部重复标题**. `RootView` 给每个 tab 都包了 `NavigationView`，而 `MoreView` / `GestaltView` / `BackupsListView` 的 sheet 内部又自带导航容器，导致顶部出现两个标题。修复后：
+  - 「更多」tab 只由 `RootView` 的 `NavigationView` 承载；`MoreView` 内部不再包 `NavigationView`。
+  - 「Gestalt」tab 直接放 `GestaltView`（它自己使用 `NavigationStack` 推送 `AdvancedGestaltEditor`），`RootView` 不再额外包 `NavigationView`。
+  - 两个页面均只保留一个 inline 标题，消除大段空白和重复。
+
+### Changed
+
+- **壁纸页 UI 按 Erosion 原版风格重做，并移除空状态多余导入按钮**.
+  - 空状态卡片不再包含「导入 .tendies」按钮（底部已有悬浮胶囊导入按钮），卡片改为大圆角、纯白底、居中图标 + 标题 + 说明的简洁样式。
+  - 壁纸包网格改为大圆角白色卡片，选中态使用强调色描边 + 右上角勾选标识，分类标签使用胶囊样式。
+  - 页面背景使用 `systemGroupedBackground`，底部导入按钮改为浅色圆角胶囊（白色底 + 主色图标 + 阴影），与图 5 原版风格一致。
+  - 功能保持不变：导入、选择、应用、删除、清空、打开 PosterBoard。
+
 ## [0.2.32] - 2026-08-25
 
 ### Added
