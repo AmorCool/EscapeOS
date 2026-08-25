@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 自定义壁纸管理页：导入 .tendies 壁纸包并应用到 PosterBoard。
+/// UI 参考 Erosion 原版：大圆角卡片、浅灰背景、底部浅色胶囊按钮。
 struct WallpaperView: View {
     @AppStorage("wallpaperTendies") private var tendiesArray: [TendiesObject] = []
     @AppStorage("wallpaperPBContainerPath") private var pbContainerPath = ""
@@ -20,29 +21,21 @@ struct WallpaperView: View {
     private let sandbox = SandboxEscape()
 
     var body: some View {
-        ScrollView {
-            if tendiesArray.isEmpty {
-                emptyState
-            } else {
-                grid
+        ZStack {
+            Color(.systemGroupedBackground)
+                .ignoresSafeArea()
+
+            ScrollView {
+                if tendiesArray.isEmpty {
+                    emptyState
+                } else {
+                    grid
+                }
             }
         }
         .navigationTitle("壁纸")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { setup() }
-        .safeAreaInset(edge: .bottom) {
-            if isReady {
-                Button {
-                    showImporter = true
-                } label: {
-                    Label("导入 .tendies", systemImage: "arrow.down.doc")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding()
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -76,6 +69,33 @@ struct WallpaperView: View {
                     applySelected()
                 }
                 .disabled(!canApply)
+                .fontWeight(.semibold)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if isReady {
+                HStack {
+                    Spacer()
+                    Button {
+                        showImporter = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.down.doc")
+                            Text("导入 .tendies")
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.primary)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule()
+                                .fill(Color(.secondarySystemGroupedBackground))
+                                .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
+                        )
+                    }
+                    Spacer()
+                }
+                .padding(.bottom, 8)
             }
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item]) { result in
@@ -133,73 +153,112 @@ struct WallpaperView: View {
     // MARK: - Subviews
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
+            Spacer(minLength: 60)
+
+            VStack(spacing: 16) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 28)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                        .frame(width: 96, height: 96)
+
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 40))
+                        .foregroundStyle(AppTheme.accent)
+                }
+
+                VStack(spacing: 6) {
+                    Text("还没有导入壁纸包")
+                        .font(.title3.weight(.semibold))
+                        .foregroundColor(.primary)
+
+                    Text("导入 .tendies 文件即可开始应用自定义壁纸。\n支持 Collections、MercuryPoster 与 Videos 三类描述符。")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(2)
+                }
+            }
+            .padding(28)
+            .background(
+                RoundedRectangle(cornerRadius: 32)
+                    .fill(Color(.systemBackground))
+            )
+            .padding(.horizontal, 24)
+
             if !isReady {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     ProgressView()
                     Text("正在准备…")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(Color(.secondarySystemGroupedBackground))
-                .cornerRadius(16)
-                .padding(.horizontal)
-            } else {
-                InfoActionCard(
-                    icon: "photo.on.rectangle.angled",
-                    title: "还没有导入壁纸包",
-                    message: "导入 .tendies 文件即可开始应用自定义壁纸。支持 Collections、MercuryPoster 与 Videos 三类描述符。",
-                    actionTitle: "导入 .tendies",
-                    action: { showImporter = true }
-                )
-                .padding(.horizontal)
+                .padding(.top, 24)
             }
+
+            Spacer(minLength: 80)
         }
-        .padding(.top, 24)
     }
 
     private var grid: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
+        LazyVGrid(columns: columns, spacing: 14) {
             ForEach($tendiesArray) { $tendies in
                 Button {
                     toggleSelection(tendies)
                 } label: {
-                    VStack(spacing: 8) {
-                        Image(systemName: tendies.targetDescr == .photos ? "play.rectangle" : "photo")
-                            .imageScale(.large)
-                            .foregroundStyle(AppTheme.accent)
+                    VStack(spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 24)
+                                .fill(Color(.systemBackground))
+                                .frame(height: 110)
+                                .overlay {
+                                    if tendies.isOn {
+                                        RoundedRectangle(cornerRadius: 24)
+                                            .strokeBorder(AppTheme.accent, lineWidth: 2)
+                                    }
+                                }
+
+                            VStack(spacing: 6) {
+                                Image(systemName: tendies.targetDescr == .photos ? "play.rectangle" : "photo")
+                                    .font(.system(size: 34))
+                                    .foregroundStyle(AppTheme.accent)
+
+                                if tendies.targetDescr != .wpKit {
+                                    Text(tendies.targetDescr.displayName)
+                                        .font(.caption2.weight(.medium))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 2)
+                                        .background(AppTheme.accent.opacity(0.12))
+                                        .foregroundStyle(AppTheme.accent)
+                                        .clipShape(Capsule())
+                                }
+                            }
+
+                            if tendies.isOn {
+                                VStack {
+                                    HStack {
+                                        Spacer()
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.system(size: 22))
+                                            .foregroundStyle(AppTheme.accent)
+                                            .background(Circle().fill(Color(.systemBackground)))
+                                            .padding(8)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                        }
+
                         VStack(spacing: 2) {
                             Text(tendies.name)
                                 .lineLimit(1)
                                 .font(.subheadline.weight(.medium))
+                                .foregroundColor(.primary)
                             Text("\(tendies.descrNames.count) 张壁纸")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        if tendies.targetDescr != .wpKit {
-                            Text(tendies.targetDescr.displayName)
-                                .font(.caption2)
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(AppTheme.accent.opacity(0.12))
-                                .foregroundStyle(AppTheme.accent)
-                                .clipShape(Capsule())
-                        }
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(Color(.secondarySystemGroupedBackground))
-                            .overlay {
-                                if tendies.isOn {
-                                    RoundedRectangle(cornerRadius: 20)
-                                        .strokeBorder(AppTheme.accent, lineWidth: 2)
-                                }
-                            }
-                    )
                 }
                 .contextMenu {
                     Button {
@@ -217,8 +276,9 @@ struct WallpaperView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal)
-        .padding(.top, 8)
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
     }
 
     private var canApply: Bool {
@@ -323,7 +383,6 @@ struct WallpaperView: View {
     }
 
     private func applyObjects(_ objects: [TendiesObject]) -> Bool {
-        // 1. 为每个目标路径获取沙盒扩展。
         let targets = Set(objects.map(\.targetDescr))
         var handles: [SandboxEscape.Handle] = []
         defer {
@@ -340,7 +399,6 @@ struct WallpaperView: View {
             }
         }
 
-        // 2. 复制描述符到 PosterBoard 容器。
         for object in objects {
             let container = "\(pbContainerPath)/\(object.targetDescr.path)"
             for descr in object.descrNames {

@@ -8,38 +8,36 @@ struct MoreView: View {
     var onResetPairing: () -> Void
 
     var body: some View {
-        NavigationView {
-            List {
-                Section {
-                    NavigationLink(destination: WallpaperView()) {
-                        MoreCard(
-                            icon: "photo.fill.on.rectangle.fill",
-                            title: "壁纸",
-                            subtitle: "导入并应用自定义 .tendies 壁纸包（PosterBoard）。"
-                        )
-                    }
+        List {
+            Section {
+                NavigationLink(destination: WallpaperView()) {
+                    MoreCard(
+                        icon: "photo.fill.on.rectangle.fill",
+                        title: "壁纸",
+                        subtitle: "导入并应用自定义 .tendies 壁纸包（PosterBoard）。"
+                    )
+                }
 
-                    NavigationLink(destination: BackupsListView(appList: appList)) {
-                        MoreCard(
-                            icon: "externaldrive.fill.badge.timemachine",
-                            title: "备份",
-                            subtitle: "查看、恢复或导出已创建的 EscapeSpace 备份归档。"
-                        )
-                    }
+                NavigationLink(destination: BackupsListView(appList: appList)) {
+                    MoreCard(
+                        icon: "externaldrive.fill.badge.timemachine",
+                        title: "备份",
+                        subtitle: "查看、恢复或导出已创建的 EscapeSpace 备份归档。"
+                    )
+                }
 
-                    NavigationLink(destination: SettingsForm(onResetPairing: onResetPairing)) {
-                        MoreCard(
-                            icon: "gearshape.fill",
-                            title: "设置",
-                            subtitle: "调整隧道 IP、重置配对文件、查看版本与限制说明。"
-                        )
-                    }
+                NavigationLink(destination: SettingsForm(onResetPairing: onResetPairing)) {
+                    MoreCard(
+                        icon: "gearshape.fill",
+                        title: "设置",
+                        subtitle: "调整隧道 IP、重置配对文件、查看版本与限制说明。"
+                    )
                 }
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("更多")
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .listStyle(.insetGrouped)
+        .navigationTitle("更多")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

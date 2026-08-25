@@ -56,23 +56,17 @@ struct RootView: View {
             }
             .tag(MainTab.liveclean)
 
-            NavigationView {
-                GestaltView()
-                    .navigationTitle("Gestalt")
-                    .navigationBarTitleDisplayMode(.inline)
-            }
-            .tabItem {
-                Label("Gestalt", systemImage: "gearshape.2")
-            }
-            .tag(MainTab.gestalt)
+            GestaltView()
+                .tabItem {
+                    Label("Gestalt", systemImage: "gearshape.2")
+                }
+                .tag(MainTab.gestalt)
 
             NavigationView {
                 MoreView(appList: viewModel, onResetPairing: {
                     viewModel.resetPairing()
                     selectedTab = .apps
                 })
-                .navigationTitle("更多")
-                .navigationBarTitleDisplayMode(.inline)
             }
             .tabItem {
                 Label("更多", systemImage: "ellipsis")
