@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 private enum MainTab: Hashable {
     case apps
@@ -116,6 +117,14 @@ struct PairingSetupView: View {
     @ObservedObject var viewModel: AppListViewModel
     @State private var showImporter = false
     @State private var importError: String?
+    @State private var clipboardError: String?
+    @State private var showWirelessPending = false
+
+    /// iOS 27 introduced in-app wireless pairing (the pairing code shows inside
+    /// the app instead of via a system notification). Gate the wireless section on it.
+    private var isIOS27OrLater: Bool {
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
+    }
 
     var body: some View {
         ScrollView {
@@ -150,11 +159,59 @@ struct PairingSetupView: View {
                 .controlSize(.large)
                 .padding(.horizontal)
 
+                Button {
+                    importFromClipboard()
+                } label: {
+                    Label("从剪贴板粘贴配对文件", systemImage: "doc.on.clipboard")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .padding(.horizontal)
+
                 if let importError = importError {
                     Text(importError)
                         .font(.caption)
                         .foregroundColor(.red)
                         .padding(.horizontal)
+                }
+
+                if let clipboardError = clipboardError {
+                    Text(clipboardError)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(.horizontal)
+                }
+
+                // iOS 27 无线配对（无需电脑）：配对码直接在 App 内显示，
+                // 参考 SideInstaller 的 in-app PIN 卡片做法（原版 StikPair 用通知）。
+                // 真实配对引擎（host-pairing FFI）后续补齐，此处先展示入口与说明。
+                if isIOS27OrLater {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("iOS 27 无线配对（无需电脑）", systemImage: "wifi")
+                            .font(.headline)
+                            .foregroundStyle(.blue)
+
+                        Text("iOS 27 支持无线配对，且配对码会直接显示在 App 内（而不是系统通知）。点击「开始无线配对」后，在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并把此处显示的配对码输入到该设备即可完成。")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+
+                        Button {
+                            startWirelessPairing()
+                        } label: {
+                            Label("开始无线配对", systemImage: "lock.iphone")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .tint(.blue)
+                    }
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color(.secondarySystemGroupedBackground))
+                    )
+                    .padding(.horizontal)
                 }
 
                 Button("我已经完成了 — 重试") {
@@ -164,6 +221,11 @@ struct PairingSetupView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 4)
             }
+        }
+        .alert("iOS 27 无线配对", isPresented: $showWirelessPending) {
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text("无线配对引擎将在补齐 host-pairing FFI 后启用（需 iOS 27 真机验证）。当前仍可经「导入配对文件」或「从剪贴板粘贴」完成设置。")
         }
         .fileImporter(
             isPresented: $showImporter,
@@ -209,6 +271,39 @@ struct PairingSetupView: View {
                 importError = error.localizedDescription
             }
         }
+    }
+
+    /// Read a pairing file from the system pasteboard and import it.
+    /// Reuses the same Data→String (plist fallback) parsing as the file importer.
+    private func importFromClipboard() {
+        guard let pasted = UIPasteboard.general.string,
+              !pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            clipboardError = "剪贴板为空，或不含文本。"
+            return
+        }
+        guard let data = pasted.data(using: .utf8) else {
+            clipboardError = "剪贴板内容无法解析为配对文件。"
+            return
+        }
+        do {
+            try viewModel.importPairingFile(from: data)
+            clipboardError = nil
+            importError = nil
+            viewModel.reload()
+        } catch {
+            clipboardError = error.localizedDescription
+        }
+    }
+
+    /// Entry point for the iOS 27 wireless pairing flow.
+    ///
+    /// The real engine (host-pairing FFI) is deferred: the bundled
+    /// `libidevice_ffi.a` (v0.1.5) does not expose a wireless-pairing host
+    /// function, and iOS 27 is required to verify. When that FFI lands, call it
+    /// here and surface the PIN via `pairPinCallback` as an in-app card
+    /// (mirroring SideInstaller's `presentPin`), instead of a system notification.
+    private func startWirelessPairing() {
+        showWirelessPending = true
     }
 }
 

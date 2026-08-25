@@ -80,6 +80,27 @@ final class AppListViewModel: ObservableObject {
         try discovery.importPairingFile(contents)
     }
 
+    /// Parse raw pairing-file bytes (XML plist text, binary plist, or already-text)
+    /// and import. Shared by the file picker and the clipboard import path so both
+    /// accept exactly the same formats.
+    func importPairingFile(from data: Data) throws {
+        let contents: String
+        if let utf8 = String(data: data, encoding: .utf8), !utf8.isEmpty {
+            contents = utf8
+        } else if let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+                  let xml = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0),
+                  let text = String(data: xml, encoding: .utf8) {
+            contents = text
+        } else {
+            throw NSError(
+                domain: "EscapeOS",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "无法读取该配对文件。"]
+            )
+        }
+        try importPairingFile(contents)
+    }
+
     func resetPairing() {
         discovery.resetPairing()
         apps = []

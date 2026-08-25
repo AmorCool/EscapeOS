@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.38] - 2026-08-25
+
+### Added
+
+- **配对文件导入：剪贴板粘贴**. 在「一次性设置 / 配对导入」界面新增「从剪贴板粘贴配对文件」按钮，直接读取系统剪贴板文本（XML plist 或纯文本配对文件）并导入，与文件导入共用同一套解析逻辑（`AppListViewModel.importPairingFile(from:)`）。
+- **iOS 27 无线配对入口（UI 先行）**. 新增 iOS 27 版本检测（`ProcessInfo` major ≥ 27）；检测到 iOS 27 时，在配对界面额外显示一个「iOS 27 无线配对（无需电脑）」区块，说明配对码会直接显示在 App 内（参考 SideInstaller 的 in-app PIN 卡片做法，区别于原版 StikPair 的通知方式），并提供「开始无线配对」按钮。
+  - 真实的 host-pairing 引擎（参考 SideInstaller 的 `si_pairing_run_host` + `pairPinCallback`）**暂未实现**：当前捆绑的 `libidevice_ffi.a`（v0.1.5）未暴露无线配对主机函数，且需 iOS 27 真机验证。按钮当前弹出说明提示，待后续补齐 FFI 后启用，PIN 将以 App 内卡片形式呈现。
+  - UI 配色遵循既定浅色卡片 + 蓝色强调（无棕色 / earthy 色调）。
+
 ## [0.2.37] - 2026-08-25
 
 ### Fixed
