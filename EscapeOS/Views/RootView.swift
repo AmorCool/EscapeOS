@@ -404,8 +404,8 @@ struct PairingSetupView: View {
 
         let pairing = WirelessPairing()
         wirelessEngine = pairing // keep alive for the blocking background call
-        pairing.startPairingWithHostName(
-            "EscapeOS",
+        pairing.start(
+            withHostName: "EscapeOS",
             model: "Mac17,7",
             outPath: outPath,
             storedAltIrk: storedAltIrk ?? ""
