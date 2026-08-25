@@ -18,7 +18,7 @@ struct DomainBlockerView: View {
     @State private var generatedName = ""
     @State private var generatedCount = 0
     @State private var didGenerate = false
-    @State private var installSheet: URL?
+    @State private var installSheet: InstallTarget?
     @State private var shareTarget: ShareTarget?
     @State private var errorAlert: DomainBlockerAlert?
 
@@ -56,7 +56,6 @@ struct DomainBlockerView: View {
                     TextField("输入要屏蔽的域名，如 ads.example.com", text: $customInput)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .submitLabel(.add)
                         .onSubmit { addCustomDomain() }
                     Button("添加") { addCustomDomain() }
                         .buttonStyle(.borderedProminent)
@@ -120,7 +119,7 @@ struct DomainBlockerView: View {
                     }
 
                     Button {
-                        installSheet = url
+                        installSheet = InstallTarget(url: url)
                     } label: {
                         Label("载入描述文件（安装到设置）", systemImage: "arrow.down.doc.fill")
                     }
@@ -279,6 +278,12 @@ private struct DomainBlockerAlert: Identifiable {
     let message: String
 }
 
+/// Identifiable wrapper carrying a profile URL to the install sheet.
+private struct InstallTarget: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 /// 持久化默认域名的启用状态与自定义域名列表。
 final class DomainBlockerStore {
     static let shared = DomainBlockerStore()
@@ -380,8 +385,7 @@ struct ProfileInstaller: UIViewControllerRepresentable {
 
             // 等待 sheet 的视图进入窗口层级后再弹出，避免
             // “view is not in the window hierarchy” 警告。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                guard let self = self else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 let rect = vc.view.bounds
                 let opened = dic.presentOpenInMenu(from: rect, in: vc.view, animated: true)
                 if !opened {
