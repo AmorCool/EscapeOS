@@ -122,3 +122,23 @@ extension ReclaimCategory {
         }
     }
 }
+
+// MARK: - Sharing
+
+/// Identifiable wrapper for a file URL we want to share.
+struct ShareTarget: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// System share sheet (`UIActivityViewController`) for exporting a file
+/// via AirDrop, Files, etc.
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.34] - 2026-08-25
+
+### Added
+
+- **新增「更多 → 开发者镜像」：移植 StikDebug 的 Redownload DDI 功能**. 下载 Xcode_iOS_DDI_Personalized 的开发者镜像文件（`BuildManifest.plist`、`Image.dmg`、`Image.dmg.trustcache`）到 EscapeSpace 的 `Documents/DDI/` 目录，下载完成后自动打包为 `DMG.zip` 并弹出系统分享。
+  - 新增 `EscapeOS/Views/DDIDownloadView.swift`：显示下载进度、文件清单、分享入口；使用 `URLSession.download` 下载，使用项目内已有的 `ZipWriter` 打包。
+  - 在 `MoreView` 新增「开发者镜像」卡片入口，与「壁纸」「备份」「设置」保持统一卡片风格。
+- **Gestalt 右上角菜单新增「备份 MobileGestalt」**. 在 `GestaltView` 的 `ellipsis.circle` 菜单中新增「备份 MobileGestalt」选项，点击后将当前读取到的 `com.apple.MobileGestalt.plist` 复制为带时间戳的临时文件并弹出分享。
+  - 在 `GestaltEngine.swift` 新增 `exportShareableBackup()`，先校验 `loaded` 与可读性，再复制到 `tmp/MobileGestalt-yyyyMMdd-HHmmss.plist`。
+
+### Changed
+
+- `DesignSystem.swift` 新增可复用的 `ShareTarget` / `ShareSheet`，`BackupsListView` 中原有的私有定义已移除，避免与 DDI / Gestalt 分享功能重复定义。
+- `GestaltView` 菜单项汉化：`Reload` → `重新加载`，`Refresh Extension` → `刷新扩展`。
+
 ## [0.2.33] - 2026-08-25
 
 ### Fixed
@@ -287,7 +302,7 @@ A–Z jump is the same small index as 0.1.1 (no extra inset beside search).
 
 v0.1.0 and v0.1.1 are unchanged on GitHub.
 
-## [0.1.1] - 2026-08-16
+## [0.1.1] - 2026-08-20
 
 ### Added
 
@@ -305,4 +320,4 @@ First public sideload IPA.
 - Pairing setup names EscapeOS and iPASide. iLoader is not required; iPASide writes the same merged pairing file as iLoader and places `pairingFile.plist`.
 - README shows the app icon with transparent corners (no black frame).
 - Supported container access follows [bad_query](https://github.com/forcequitOS/bad_query): **iOS 26.0–26.6.1** and **iOS 27.0 beta 4**. Later 26.x / 27.x builds are unsupported. IPA `MinimumOSVersion` is 18.0; iOS 18 listing is in code, untested. Hardware-verified: iPhone 17, **iOS 26.5.1**.
-- Verified on iPhone 17, iOS 26.5.1, with iPASide placing the pairing file after install (list, browse, Select/copy-paste, backup).
+- Verified on iPhone 17, iOS 26.5.1, with iPASide placing the pairing file after install (list, browse, copy-paste, backup).

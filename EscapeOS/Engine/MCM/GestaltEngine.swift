@@ -106,6 +106,37 @@ final class BQMobileGestaltModel {
         return dir.appendingPathComponent("SavedGestalt.plist")
     }
 
+    /// Copy the currently loaded MobileGestalt plist to a timestamped file
+    /// in the temporary directory so it can be shared cleanly.
+    func exportShareableBackup() -> URL? {
+        guard loaded, !gestaltPath.isEmpty,
+              FileManager.default.isReadableFile(atPath: gestaltPath) else {
+            appendLog("backup share failed: not loaded or not readable")
+            return nil
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let stamp = formatter.string(from: Date())
+        let tempDir = FileManager.default.temporaryDirectory
+        let outURL = tempDir.appendingPathComponent("MobileGestalt-\(stamp).plist")
+
+        do {
+            if FileManager.default.fileExists(atPath: outURL.path) {
+                try FileManager.default.removeItem(at: outURL)
+            }
+            try FileManager.default.copyItem(
+                at: URL(fileURLWithPath: gestaltPath),
+                to: outURL
+            )
+            appendLog("backup exported for share: \(outURL.path)")
+            return outURL
+        } catch {
+            appendLog("backup export error: \(error)")
+            return nil
+        }
+    }
+
     private static let logFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"

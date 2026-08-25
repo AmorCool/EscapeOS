@@ -18,6 +18,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: DDIDownloadView()) {
+                    MoreCard(
+                        icon: "iphone.and.arrow.forward",
+                        title: "开发者镜像",
+                        subtitle: "下载 DDI / DMG 镜像并打包为 DMG.zip。"
+                    )
+                }
+
                 NavigationLink(destination: BackupsListView(appList: appList)) {
                     MoreCard(
                         icon: "externaldrive.fill.badge.timemachine",

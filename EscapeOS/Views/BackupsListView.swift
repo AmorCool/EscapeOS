@@ -332,24 +332,6 @@ struct AppIconView: View {
     }
 }
 
-/// Identifiable wrapper for a file URL we want to share.
-struct ShareTarget: Identifiable {
-    let id = UUID()
-    let url: URL
-}
-
-/// System share sheet (`UIActivityViewController`) for exporting a backup zip
-/// via AirDrop, Files, etc.
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
-}
-
 /// Extract the guest bundle id (middle segment) from a synthetic
 /// `host::guestBundleId::uuid` id. Returns the input unchanged when it doesn't
 /// follow that shape.

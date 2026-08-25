@@ -12,6 +12,8 @@ struct GestaltView: View {
     @State private var model = BQMobileGestaltModel()
     @AppStorage("mha_app_group_override") private var appGroupOverride = ""
     @State private var logPresented = false
+    @State private var shareTarget: ShareTarget?
+    @State private var backupError: String?
 
     var body: some View {
         NavigationStack {
@@ -48,12 +50,17 @@ struct GestaltView: View {
                             Button {
                                 model.load()
                             } label: {
-                                Label("Reload", systemImage: "arrow.clockwise")
+                                Label("重新加载", systemImage: "arrow.clockwise")
                             }
                             Button {
                                 model.grantExtension(for: model.gestaltPath)
                             } label: {
-                                Label("Refresh Extension", systemImage: "key.fill")
+                                Label("刷新扩展", systemImage: "key.fill")
+                            }
+                            Button {
+                                shareBackup()
+                            } label: {
+                                Label("备份 MobileGestalt", systemImage: "square.and.arrow.up")
                             }
                         }
                     } label: {
@@ -94,10 +101,31 @@ struct GestaltView: View {
                     }
                 }
             }
+            .sheet(item: $shareTarget) { target in
+                ShareSheet(items: [target.url])
+            }
+            .alert("无法备份", isPresented: Binding(
+                get: { backupError != nil },
+                set: { if !$0 { backupError = nil } }
+            )) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(backupError ?? "")
+            }
         }
         .onAppear {
             if !model.loaded { model.load() }
         }
+    }
+
+    // MARK: - Backup share
+
+    private func shareBackup() {
+        guard let url = model.exportShareableBackup() else {
+            backupError = "MobileGestalt 尚未加载，或当前路径无法读取。请先等待加载完成。"
+            return
+        }
+        shareTarget = ShareTarget(url: url)
     }
 
     // MARK: - Gestalt List
