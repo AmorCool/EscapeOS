@@ -122,7 +122,7 @@ final class ProfileHTTPServer: NSObject {
         while buffer.range(of: Data([0x0D, 0x0A, 0x0D, 0x0A])) == nil {
             let n = recv(client, &temp, temp.count, 0)
             guard n > 0 else { break }
-            buffer.append(temp[0..<n])
+            buffer.append(contentsOf: temp[0..<n])
         }
 
         // 解析请求行，例如 "GET /blocked.mobileconfig HTTP/1.1"。
