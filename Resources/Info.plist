@@ -46,9 +46,9 @@
 		<string>iPhoneOS</string>
 	</array>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.41</string>
+	<string>0.2.42</string>
 	<key>CFBundleVersion</key>
-	<string>41</string>
+	<string>42</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
@@ -94,5 +94,14 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>EscapeSpace 需要通过本地网络广播 iOS 27 无线配对服务（_remotepairing-pairable-host._tcp），以便另一台设备发现并完成配对。</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>location</string>
+	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>开启位置更新可帮助 EscapeSpace 在后台保持无线配对广播 alive，仅在配对期间按需使用。</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>开启位置更新可帮助 EscapeSpace 在后台保持无线配对广播 alive，仅在配对期间按需使用。</string>
 </dict>
 </plist>

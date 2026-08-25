@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.42] - 2026-08-26
+
+### Added
+
+- **移植 StikPair 后台保活机制到 iOS 27 无线配对页**。真机反馈 v0.2.41 广播「过一会就消失」，因此把原版 StikPair 的 **Background keep-alive** 两个开关汉化并移植到 EscapeSpace：
+  - `EscapeOS/Services/BackgroundAudioManager.swift`：持续播放 0 音量 PCM 缓冲区并占用 `AVAudioSession`，让系统认为 App「正在播放音频」，延缓 Bonjour 被 SRP sweeper 回收。
+  - `EscapeOS/Services/BackgroundLocationManager.swift`：以极低精度 + 最大距离过滤持续请求位置更新，让系统认为 App「正在使用位置服务」，同样用于后台保活。
+  - `EscapeOS/Services/WirelessKeepAlive.swift`：组合音频/位置两种机制，并申请 `beginBackgroundTask` 延长后台存活时间。
+  - 在 `RootView` 的无线配对 sheet 中新增「后台保活」卡片，含「静默音频」与「位置更新」两个开关（默认关闭，避免未授权弹窗），开关状态持久化到 `@AppStorage`。配对开始时按用户选择启动保活，配对成功 / sheet 关闭时停止。
+- **新增后台模式与权限描述**：`Resources/Info.plist` 增加 `UIBackgroundModes = [audio, location]`，并补充 `NSLocationWhenInUseUsageDescription` / `NSLocationAlwaysAndWhenInUseUsageDescription` 汉化说明。
+
+### Changed
+
+- 版本号 `0.2.41 → 0.2.42`（`control` 与 `Resources/Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion` 同步）。
+
 ## [0.2.41] - 2026-08-26
 
 ### Fixed

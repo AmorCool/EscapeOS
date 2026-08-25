@@ -124,6 +124,9 @@ struct PairingSetupView: View {
     @State private var wirelessError: String?
     @State private var wirelessDeviceName: String?
     @State private var wirelessEngine: WirelessPairing?
+    @AppStorage("keepAliveAudio") private var keepAliveAudio = false
+    @AppStorage("keepAliveLocation") private var keepAliveLocation = false
+    @State private var keepAlive = WirelessKeepAlive()
 
     // Observer tokens for `WirelessPairing`'s NSNotificationCenter callbacks.
     // We use notifications instead of block parameters because Swift's Clang
@@ -245,6 +248,7 @@ struct PairingSetupView: View {
                     // causing the "broadcast a while then disappears" symptom).
                     wirelessEngine?.stop()
                     wirelessEngine = nil
+                    keepAlive.stop()
                     cancelWirelessPairingCleanup()
                 }
         }
@@ -335,6 +339,9 @@ struct PairingSetupView: View {
         wirelessStatus = "正在广播配对服务（_remotepairing-pairable-host._tcp）…"
         showWirelessPairing = true
 
+        // 若用户开启则启动后台保活，避免 Bonjour 注册被系统 SRP 回收。
+        keepAlive.start(audio: keepAliveAudio, location: keepAliveLocation)
+
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let outPath = docs.appendingPathComponent("pairingFile.plist").path
         let storedAltIrk = UserDefaults.standard.string(forKey: "wirelessHostAltIrk")
@@ -366,6 +373,31 @@ struct PairingSetupView: View {
         wirelessError = nil
         wirelessDeviceName = nil
         wirelessStatus = "正在广播配对服务…"
+    }
+
+    /// 后台保活开关卡片（移植自 StikPair）。
+    private var keepAliveCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("后台保活")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.primary)
+
+            Toggle("静默音频", isOn: $keepAliveAudio)
+                .font(.subheadline)
+
+            Toggle("位置更新", isOn: $keepAliveLocation)
+                .font(.subheadline)
+
+            Text("若广播过一会就消失，可开启其中一个或多个选项，让系统在后台继续保留本 App 的 Bonjour 注册。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
     }
 
     // MARK: - Wireless pairing sheet content
@@ -433,6 +465,8 @@ struct PairingSetupView: View {
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
+
+                        keepAliveCard
                     }
                 }
                 Spacer(minLength: 8)
@@ -478,6 +512,7 @@ struct PairingSetupView: View {
                     UserDefaults.standard.set(hostAltIrk, forKey: "wirelessHostAltIrk")
                 }
                 self.wirelessDeviceName = deviceName.isEmpty ? "设备" : deviceName
+                self.keepAlive.stop()
             } else {
                 self.wirelessError = errorMsg.isEmpty ? "配对失败，请重试。" : errorMsg
             }
