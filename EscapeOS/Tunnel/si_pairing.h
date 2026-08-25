@@ -39,7 +39,10 @@ int si_run_host(const char *bind_addr, uint16_t port,
                 SiPairResult *out);
 
 // Frees the heap strings inside a SiPairResult previously populated by si_run_host.
-void si_result_free(SiPairResult *r);
+// The argument is `const` because Rust's `*mut` ABI matches a C `const *` and
+// it lets callers pass `&result` from a nested Objective-C block (where the
+// captured stack variable is implicitly const).
+void si_result_free(const SiPairResult *r);
 
 #ifdef __cplusplus
 }
