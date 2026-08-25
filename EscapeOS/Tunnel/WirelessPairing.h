@@ -28,7 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
                           outPath:(NSString *)outPath
                      storedAltIrk:(nullable NSString *)storedAltIrk
                       pinHandler:(void (^)(NSString *pin))pinHandler
-                    readyHandler:(void (^)(NSString *serviceID, uint16_t port, NSDictionary<NSString *,NSString *> *txt))readyHandler
+                    readyHandler:(void (^)(void))readyHandler
                        completion:(void (^)(BOOL success,
                                             NSString * _Nullable deviceName,
                                             NSString * _Nullable deviceModel,

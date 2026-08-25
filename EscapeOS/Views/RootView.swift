@@ -406,7 +406,7 @@ struct PairingSetupView: View {
                     self?.wirelessStatus = "请在另一台设备输入以下配对码："
                 }
             },
-            readyHandler: { [weak self] _, _, _ in
+            readyHandler: { [weak self] in
                 DispatchQueue.main.async {
                     self?.wirelessStatus = "配对服务已广播，正在等待设备连接…"
                 }

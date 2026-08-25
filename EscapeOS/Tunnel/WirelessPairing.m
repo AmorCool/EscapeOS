@@ -9,7 +9,7 @@
 
 @interface WirelessPairing () <NSNetServiceDelegate>
 @property (nonatomic, copy) void (^pinHandler)(NSString *pin);
-@property (nonatomic, copy) void (^readyHandler)(NSString *serviceID, uint16_t port, NSDictionary<NSString *,NSString *> *txt);
+@property (nonatomic, copy) void (^readyHandler)(void);
 @property (nonatomic, copy) void (^completion)(BOOL success, NSString *deviceName, NSString *deviceModel, NSString *deviceUdid, NSString *hostAltIrk, NSString *error);
 @property (nonatomic, strong, nullable) NSNetService *netService;
 @property (nonatomic, strong, nullable) dispatch_semaphore_t publishSem;
@@ -94,7 +94,7 @@ static void si_ready_cb(void *ctx, const char *service_id, uint16_t port,
                            dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.readyHandler) self.readyHandler(sid, port, txt);
+        if (self.readyHandler) self.readyHandler();
     });
 }
 

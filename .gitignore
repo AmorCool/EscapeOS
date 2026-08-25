@@ -24,3 +24,6 @@ vendor/**/.gitmodules
 vendor/BitByteData/benchmarks.py
 vendor/BitByteData/2-0-Plans.md
 vendor/SWCompression/utils.py
+
+# CI temp download dir
+_tmp_ci/
