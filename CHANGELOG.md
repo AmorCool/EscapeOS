@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.32] - 2026-08-25
+
+### Added
+
+- **新增「更多 → 壁纸」：移植 Erosion 的 Custom Wallpapers 功能**. 可将 `.tendies` 壁纸包导入并应用到系统 PosterBoard（支持 Collections / MercuryPoster / Videos 三类描述符）。
+  - 新增 `EscapeOS/Views/Wallpaper/WallpaperModels.swift`（`TendiesObject`、`PBPath`）。
+  - 新增 `WallpaperHandler.swift`：使用 EscapeOS 已有的 `ArchiveExtractor`/`ZipReader` 解压 `.tendies`，解析并随机化 descriptor identifier，持久化到 `Documents/Wallpapers`；通过 `bad_query_list` 自动发现 PosterBoard 容器路径。
+  - 新增 `WallpaperView.swift`：卡片网格展示已导入壁纸包，点击切换启用/禁用，底部「导入 .tendies」+ 右上角菜单（打开 PosterBoard / 清空导入），工具栏「应用」将选中的描述符写入 PosterBoard 容器。
+  - 所有 UI 与错误提示已汉化。
+  - 打开 PosterBoard 使用 runtime `NSClassFromString("LSApplicationWorkspace")` + `performSelector`，避免链接私有 framework。
+
+### Changed
+
+- **优化「更多」页顶部大空白**. `MoreView` 与 `RootView` 的「更多」tab 标题由 `.large` 改为 `.inline`，消除大标题下方的大片空白；同时新增「壁纸」入口卡片。
+- **优化 Gestalt 页顶部标题**. 移除 `GestaltView` 内部重复的「MobileGestalt」大标题，`RootView` 的 Gestalt tab 只保留一个紧凑的「Gestalt」inline 标题，界面更协调。
+
 ## [0.2.31] - 2026-08-24
 
 ### Changed
