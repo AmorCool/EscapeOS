@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Shared visual language for EscapeOS. Ported and adapted from 3105's
 /// DesignSystem: a warm accent, a tinted rounded icon, and reclaim-specific
@@ -104,6 +105,10 @@ extension ReclaimRisk {
 
 extension ReclaimCategory {
     /// SF Symbol matching each reclaim bucket, mirroring 3105's intent.
+    /// The runtime `UIImage(systemName:)` guard protects against missing
+    /// glyphs on older iOS builds (observed: `cookie` not rendering on some
+    /// iOS 18.0 devices), falling back to a safe generic icon so the row
+    /// never shows a blank tile.
     var symbol: String {
         switch id {
         case "tmp": return "clock"
@@ -111,7 +116,8 @@ extension ReclaimCategory {
         case "logs": return "doc.text"
         case "splash": return "photo"
         case "gpucache": return "cpu"
-        case "cookies": return "cookie"
+        case "cookies":
+            return safeSymbol(named: "cookie", fallback: "doc.text")
         case "http": return "globe"
         case "webkit": return "safari"
         case "savedstate": return "arrow.clockwise"
@@ -120,6 +126,10 @@ extension ReclaimCategory {
         case "appsupport": return "folder"
         default: return "questionmark"
         }
+    }
+
+    private func safeSymbol(named primary: String, fallback: String) -> String {
+        UIImage(systemName: primary) != nil ? primary : fallback
     }
 }
 

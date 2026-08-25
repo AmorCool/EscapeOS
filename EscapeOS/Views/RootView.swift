@@ -252,24 +252,10 @@ struct PairingSetupView: View {
                     cancelWirelessPairingCleanup()
                 }
         }
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [
-                .item,
-                .data,
-                .content,
-                .propertyList,
-                .xml,
-                .text,
-                UTType(filenameExtension: "mobiledevicepairing", conformingTo: .data) ?? .data
-            ]
-        ) { result in
+        .pairingFilePicker(isPresented: $showImporter) { result in
             switch result {
-            case .success(let url):
+            case .success(let data):
                 do {
-                    let accessing = url.startAccessingSecurityScopedResource()
-                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                    let data = try Data(contentsOf: url)
                     let contents: String
                     if let utf8 = String(data: data, encoding: .utf8), !utf8.isEmpty {
                         contents = utf8
@@ -293,6 +279,8 @@ struct PairingSetupView: View {
                     importError = error.localizedDescription
                 }
             case .failure(let error):
+                // Don't treat user cancellation as an error surface.
+                if (error as NSError).code == -4 { break }
                 importError = error.localizedDescription
             }
         }
@@ -601,6 +589,8 @@ struct EmptyStateView: View {
 struct SettingsForm: View {
     var onResetPairing: () -> Void
     @AppStorage("TunnelDeviceIP") private var tunnelIP: String = "10.7.0.1"
+    @State private var shareTarget: ShareTarget?
+    @State private var showNoPairingAlert = false
 
     var body: some View {
         Form {
@@ -611,7 +601,17 @@ struct SettingsForm: View {
                     .disableAutocorrection(true)
             }
 
-            Section {
+            Section(header: Text("配对文件")) {
+                Button("导出配对文件") {
+                    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                    let url = docs.appendingPathComponent("pairingFile.plist")
+                    guard FileManager.default.fileExists(atPath: url.path) else {
+                        showNoPairingAlert = true
+                        return
+                    }
+                    shareTarget = ShareTarget(url: url)
+                }
+
                 Button("重置配对文件", role: .destructive) {
                     onResetPairing()
                 }
@@ -630,6 +630,14 @@ struct SettingsForm: View {
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
+        }
+        .sheet(item: $shareTarget) { target in
+            ShareSheet(items: [target.url])
+        }
+        .alert("没有配对文件", isPresented: $showNoPairingAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("当前没有可导出的 pairingFile.plist。请先导入或生成配对文件。")
         }
     }
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.43] - 2026-08-26
+
+### Added
+
+- **「更多 → 设置」新增导出配对文件功能**. 在 `SettingsForm` 中新增「导出配对文件」按钮：如果 `Documents/pairingFile.plist` 存在，调用系统 `UIActivityViewController` 分享该文件（AirDrop / 文件 / 微信等）；不存在时提示「当前没有可导出的配对文件」。
+
+### Fixed
+
+- **借鉴 LiveContainer 修复配对文件导入失败**. 真机反馈在 LiveContainer 内只有开启 LC 的「修复文件选择器」才能导入配对文件。根因是 SwiftUI `.fileImporter` 返回的是 security-scoped 原始 URL，在 LC 沙盒中 `startAccessingSecurityScopedResource()` 会失败。新增 `EscapeOS/Views/PairingFilePicker.swift`：
+  - 使用 `UIDocumentPickerViewController` 并设置 `asCopy: true`，让系统在返回前先把文件复制到 App 沙盒，从而绕过 LC 的文件选择器 hook。
+  - 用 `pairingFilePicker(isPresented:onPicked:)` 替换 `PairingSetupView` 的 `.fileImporter`。
+  - 取消选择不再显示错误。
+- **修复「空间回收 / 容器管理」会话分类里 Cookies 图标不显示**. `DesignSystem.swift` 中 Cookies 行原本使用 `cookie` SF Symbol；在部分 iOS 18.0 真机上该符号缺失导致图标空白。改为运行时检测 `UIImage(systemName: "cookie")`，缺失时回退到 `doc.text` 作为兜底。
+
+### Changed
+
+- 版本号 `0.2.42 → 0.2.43`（`control` 与 `Resources/Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion` 同步）。
+- `Makefile` 注册新源文件 `EscapeOS/Views/PairingFilePicker.swift`。
+
 ## [0.2.42] - 2026-08-26
 
 ### Added

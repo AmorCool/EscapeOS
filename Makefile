@@ -25,6 +25,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/ReclaimTabView.swift \
 	EscapeOS/Views/LiveCleanTabView.swift \
 	EscapeOS/Views/MoreView.swift \
+	EscapeOS/Views/PairingFilePicker.swift \
 	EscapeOS/Views/DDIDownloadView.swift \
 	EscapeOS/Views/DomainBlockerView.swift \
 	EscapeOS/Views/DesignSystem.swift \
