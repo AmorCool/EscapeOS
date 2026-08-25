@@ -26,6 +26,9 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/LiveCleanTabView.swift \
 	EscapeOS/Views/MoreView.swift \
 	EscapeOS/Views/DesignSystem.swift \
+	EscapeOS/Views/Wallpaper/WallpaperModels.swift \
+	EscapeOS/Views/Wallpaper/WallpaperHandler.swift \
+	EscapeOS/Views/Wallpaper/WallpaperView.swift \
 	EscapeOS/Engine/ZipReader.swift \
 	EscapeOS/Engine/BackupPaths.swift \
 	EscapeOS/Engine/RestoreService.swift \

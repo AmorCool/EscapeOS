@@ -59,7 +59,7 @@ struct RootView: View {
             NavigationView {
                 GestaltView()
                     .navigationTitle("Gestalt")
-                    .navigationBarTitleDisplayMode(.large)
+                    .navigationBarTitleDisplayMode(.inline)
             }
             .tabItem {
                 Label("Gestalt", systemImage: "gearshape.2")
@@ -71,7 +71,8 @@ struct RootView: View {
                     viewModel.resetPairing()
                     selectedTab = .apps
                 })
-                .navigationBarTitleDisplayMode(.large)
+                .navigationTitle("更多")
+                .navigationBarTitleDisplayMode(.inline)
             }
             .tabItem {
                 Label("更多", systemImage: "ellipsis")

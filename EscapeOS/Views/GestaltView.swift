@@ -34,7 +34,8 @@ struct GestaltView: View {
                     loadedSections
                 }
             }
-            .navigationTitle("MobileGestalt")
+            .navigationTitle("Gestalt")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {

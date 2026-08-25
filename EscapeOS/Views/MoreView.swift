@@ -11,6 +11,14 @@ struct MoreView: View {
         NavigationView {
             List {
                 Section {
+                    NavigationLink(destination: WallpaperView()) {
+                        MoreCard(
+                            icon: "photo.fill.on.rectangle.fill",
+                            title: "壁纸",
+                            subtitle: "导入并应用自定义 .tendies 壁纸包（PosterBoard）。"
+                        )
+                    }
+
                     NavigationLink(destination: BackupsListView(appList: appList)) {
                         MoreCard(
                             icon: "externaldrive.fill.badge.timemachine",
@@ -30,7 +38,7 @@ struct MoreView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("更多")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }
