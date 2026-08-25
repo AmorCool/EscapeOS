@@ -125,6 +125,13 @@ struct PairingSetupView: View {
     @State private var wirelessDeviceName: String?
     @State private var wirelessEngine: WirelessPairing?
 
+    // Observer tokens for `WirelessPairing`'s NSNotificationCenter callbacks.
+    // We use notifications instead of block parameters because Swift's Clang
+    // Importer silently drops bridged methods that have block parameters in
+    // this toolchain (see WirelessPairing.h for details).
+    @State private var wirelessPinObserver: NSObjectProtocol?
+    @State private var wirelessCompleteObserver: NSObjectProtocol?
+
     /// iOS 27 introduced in-app wireless pairing (the pairing code shows inside
     /// the app instead of via a system notification). Gate the wireless section on it.
     private var isIOS27OrLater: Bool {
@@ -348,6 +355,8 @@ struct PairingSetupView: View {
                 importError = error.localizedDescription
             }
         }
+        .onAppear(perform: registerWirelessObservers)
+        .onDisappear(perform: unregisterWirelessObservers)
     }
 
     /// Read a pairing file from the system pasteboard and import it.
@@ -395,31 +404,14 @@ struct PairingSetupView: View {
 
         let pairing = WirelessPairing()
         wirelessEngine = pairing // keep alive for the blocking background call
-        pairing.startPairing(
-            withHostName: "EscapeOS",
+        pairing.startPairingWithHostName(
+            "EscapeOS",
             model: "Mac17,7",
             outPath: outPath,
-            storedAltIrk: storedAltIrk ?? "",
-            pinHandler: { [weak self] pin in
-                DispatchQueue.main.async {
-                    self?.wirelessPin = pin
-                    self?.wirelessStatus = "请在另一台设备输入以下配对码："
-                }
-            },
-            completion: { [weak self] success, deviceName, hostAltIrk, error in
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    if success {
-                        if !hostAltIrk.isEmpty {
-                            UserDefaults.standard.set(hostAltIrk, forKey: "wirelessHostAltIrk")
-                        }
-                        self.wirelessDeviceName = deviceName.isEmpty ? "设备" : deviceName
-                    } else {
-                        self.wirelessError = error.isEmpty ? "配对失败，请重试。" : error
-                    }
-                }
-            }
+            storedAltIrk: storedAltIrk ?? ""
         )
+        // PIN and completion are delivered via NSNotificationCenter; the
+        // observer handlers are wired up on `onAppear`.
     }
 
     /// Closes the wireless-pairing sheet. The underlying host listener keeps
@@ -427,6 +419,53 @@ struct PairingSetupView: View {
     /// closes the UI.
     private func cancelWirelessPairing() {
         showWirelessPairing = false
+    }
+
+    // MARK: - Wireless pairing NSNotificationCenter bridge
+
+    private func registerWirelessObservers() {
+        let center = NotificationCenter.default
+        guard wirelessPinObserver == nil else { return }
+        wirelessPinObserver = center.addObserver(
+            forName: Notification.Name("WirelessPairingDidShowPINNotification"),
+            object: nil,
+            queue: .main
+        ) { [self] note in
+            guard let pin = note.userInfo?["pin"] as? String else { return }
+            self.wirelessPin = pin
+            self.wirelessStatus = "请在另一台设备输入以下配对码："
+        }
+        wirelessCompleteObserver = center.addObserver(
+            forName: Notification.Name("WirelessPairingDidCompleteNotification"),
+            object: nil,
+            queue: .main
+        ) { [self] note in
+            guard let info = note.userInfo else { return }
+            let success = (info["success"] as? NSNumber)?.boolValue ?? false
+            let deviceName = (info["deviceName"] as? String) ?? ""
+            let hostAltIrk = (info["hostAltIrk"] as? String) ?? ""
+            let errorMsg = (info["error"] as? String) ?? ""
+            if success {
+                if !hostAltIrk.isEmpty {
+                    UserDefaults.standard.set(hostAltIrk, forKey: "wirelessHostAltIrk")
+                }
+                self.wirelessDeviceName = deviceName.isEmpty ? "设备" : deviceName
+            } else {
+                self.wirelessError = errorMsg.isEmpty ? "配对失败，请重试。" : errorMsg
+            }
+        }
+    }
+
+    private func unregisterWirelessObservers() {
+        let center = NotificationCenter.default
+        if let t = wirelessPinObserver {
+            center.removeObserver(t)
+            wirelessPinObserver = nil
+        }
+        if let t = wirelessCompleteObserver {
+            center.removeObserver(t)
+            wirelessCompleteObserver = nil
+        }
     }
 }
 

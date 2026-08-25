@@ -7,9 +7,10 @@
 #import "si_pairing.h"
 #import <dns_sd.h>
 
+NSNotificationName const WirelessPairingDidShowPINNotification = @"WirelessPairingDidShowPINNotification";
+NSNotificationName const WirelessPairingDidCompleteNotification = @"WirelessPairingDidCompleteNotification";
+
 @interface WirelessPairing () <NSNetServiceDelegate>
-@property (nonatomic, copy) void (^pinHandler)(NSString *pin);
-@property (nonatomic, copy) void (^completion)(BOOL success, NSString *deviceName, NSString *hostAltIrk, NSString *error);
 @property (nonatomic, strong, nullable) NSNetService *netService;
 @property (nonatomic, strong, nullable) dispatch_semaphore_t publishSem;
 @end
@@ -19,13 +20,7 @@
 - (void)startPairingWithHostName:(NSString *)hostName
                            model:(NSString *)model
                          outPath:(NSString *)outPath
-                     storedAltIrk:(NSString *)storedAltIrk
-                      pinHandler:(void (^)(NSString *))pinHandler
-                       completion:(void (^)(BOOL, NSString *, NSString *, NSString *))completion {
-    self.pinHandler = pinHandler;
-    self.completion = completion;
-
-    NSString *bindAddr = @"0.0.0.0";
+                     storedAltIrk:(NSString *)storedAltIrk {
     if (hostName.length == 0) hostName = @"EscapeOS";
     if (model.length == 0) model = @"Mac17,7";
 
@@ -37,10 +32,11 @@
 
         SiPairResult result;
         memset(&result, 0, sizeof(result));
-        int rc = si_run_host([bindAddr UTF8String], 0,
-                            [hostName UTF8String], [model UTF8String],
-                            [outPath UTF8String],
-                            [storedAltIrk UTF8String] ?: "",
+        const char *hostAltIrkC = storedAltIrk.UTF8String;
+        int rc = si_run_host("0.0.0.0", 0,
+                            hostName.UTF8String, model.UTF8String,
+                            outPath.UTF8String,
+                            hostAltIrkC && *hostAltIrkC ? hostAltIrkC : "",
                             si_ready_cb, si_pin_cb, (__bridge void *)strongSelf,
                             &result);
 
@@ -48,16 +44,22 @@
             __strong typeof(self) s2 = weakSelf;
             if (!s2) return;
             [s2 stopAdvertising];
+
+            NSMutableDictionary<NSString *, id> *info = [NSMutableDictionary new];
+            info[@"success"] = @(rc == 0);
             if (rc == 0) {
-                NSString *name = result.device_name ? [NSString stringWithUTF8String:result.device_name] : @"";
-                NSString *irk  = result.host_alt_irk_hex ? [NSString stringWithUTF8String:result.host_alt_irk_hex] : @"";
-                si_result_free(&result);
-                s2.completion(YES, name, irk, @"");
+                info[@"deviceName"] = result.device_name ? [NSString stringWithUTF8String:result.device_name] : @"";
+                info[@"hostAltIrk"] = result.host_alt_irk_hex ? [NSString stringWithUTF8String:result.host_alt_irk_hex] : @"";
+                info[@"error"] = @"";
             } else {
-                NSString *err = result.error ? [NSString stringWithUTF8String:result.error] : @"未知错误";
-                si_result_free(&result);
-                s2.completion(NO, @"", @"", err);
+                info[@"deviceName"] = @"";
+                info[@"hostAltIrk"] = @"";
+                info[@"error"] = result.error ? [NSString stringWithUTF8String:result.error] : @"未知错误";
             }
+            si_result_free(&result);
+            [[NSNotificationCenter defaultCenter]
+                postNotificationName:WirelessPairingDidCompleteNotification
+                              object:s2 userInfo:info];
         });
     });
 }
@@ -87,18 +89,18 @@ static void si_ready_cb(void *ctx, const char *service_id, uint16_t port,
     });
     dispatch_semaphore_wait(self.publishSem,
                            dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // Publish success/failure is reflected via the published NSNetService;
-        // the Swift UI shows progress from the moment the sheet opens.
-    });
+    // (publish outcome is reflected in the published NSNetService; no Swift
+    //  notification needed for "ready".)
 }
 
 static void si_pin_cb(const char *pin, void *ctx) {
     WirelessPairing *self = (__bridge WirelessPairing *)ctx;
     NSString *p = pin ? [NSString stringWithUTF8String:pin] : @"";
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.pinHandler) self.pinHandler(p);
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName:WirelessPairingDidShowPINNotification
+                          object:self
+                        userInfo:@{@"pin": p}];
     });
 }
 
