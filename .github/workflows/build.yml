@@ -55,6 +55,20 @@ jobs:
           echo "SDK_VER=$SDK_VER" >> "$GITHUB_ENV"
           echo "Using Xcode SDK $SDK_NAME ($XCODE_SDK) -> TARGET iphone:clang:${SDK_VER}:18.0"
 
+      - name: Cache Rust registry + build artifacts
+        # Caches Cargo registry (downloaded crate sources) and the per-target
+        # build dir. Key is keyed by the locked dependency graph so any change
+        # to Cargo.toml/Cargo.lock invalidates the cache automatically.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/idevice-ffi/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/idevice-ffi/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Build libidevice_ffi.a (Rust, aarch64-apple-ios)
         # Vendored jkcoxson/idevice-ffi (BSD-3) + our si_run_host engine, built
         # from source so the single .a also exposes the iOS 27 wireless-pairing
@@ -65,8 +79,21 @@ jobs:
           source "$HOME/.cargo/env"
           rustup target add aarch64-apple-ios
           cd rust/idevice-ffi
-          cargo build --release --target aarch64-apple-ios
+          # Belt-and-suspenders for cargo network: use the system git CLI for
+          # fetching git deps (more robust on flaky CI NATs), and retry up to
+          # 3 times with backoff in case GitHub rate-limits a single attempt.
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'CFG'
+          [net]
+          git-fetch-with-cli = true
+          retry = 3
+
+          [http]
+          multipart = false
+          CFG
           cd ../..
+          cargo --version
+          cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml
           mkdir -p EscapeOS/Tunnel
           cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" EscapeOS/Tunnel/libidevice_ffi.a
           # Header generated from the same idevice@7bd551c source as the .a above;

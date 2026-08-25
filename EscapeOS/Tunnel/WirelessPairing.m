@@ -73,7 +73,18 @@ NSNotificationName const WirelessPairingDidCompleteNotification = @"WirelessPair
 static void si_ready_cb(void *ctx, const char *service_id, uint16_t port,
                         const char **txt_keys, const char **txt_vals, size_t txt_count) {
     WirelessPairing *self = (__bridge WirelessPairing *)ctx;
-    NSString *sid = service_id ? [NSString stringWithUTF8String:service_id] : @"escapeos";
+    // The Bluetooth-style pairing manifest shown in iOS Settings → Developer
+    // Mode → Pairing Devices reads its label from the Bonjour service instance
+    // name, not from the underlying service_id (which is a UUID). Use a
+    // readable "EscapePair-<6 chars>" label so the device can identify us
+    // among multiple hosts (StikPair, iloader, etc.). The trailing 6 hex chars
+    // are the *service_id*'s last 6 hex chars — they are stable per host, so a
+    // user with two EscapeOS phones will see distinct labels.
+    NSString *sidRaw = service_id ? [NSString stringWithUTF8String:service_id] : @"unknown";
+    NSString *suffix = sidRaw.length >= 6
+        ? [sidRaw substringFromIndex:sidRaw.length - 6]
+        : sidRaw;
+    NSString *displayName = [NSString stringWithFormat:@"EscapePair-%@", suffix];
     NSMutableDictionary<NSString *,NSString *> *txt = [NSMutableDictionary new];
     for (size_t i = 0; i < txt_count; i++) {
         NSString *k = (txt_keys && txt_keys[i]) ? [NSString stringWithUTF8String:txt_keys[i]] : nil;
@@ -85,7 +96,7 @@ static void si_ready_cb(void *ctx, const char *service_id, uint16_t port,
     // delegate reports publish success/failure so the device can actually find us.
     self.publishSem = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self publishServiceWithID:sid port:port txt:txt];
+        [self publishServiceWithID:displayName port:port txt:txt];
     });
     dispatch_semaphore_wait(self.publishSem,
                            dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));

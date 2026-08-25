@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.40] - 2026-08-26
+
+### Changed
+
+- **iOS 27 无线配对广播名称**. 之前 `mDNS service instance name` 直接用 Rust `pairing_file.identifier` (UUID 前缀如 `7b591c…`)，在 iOS 开发者模式的「配对设备」列表里看不到（StikPair、iloader、idevice_pair-* 等可读名字都能看到）。改为 `EscapePair-{serviceID 后 6 位}`（如 `EscapePair-7b591c`），既人类可读又对单一 host 稳定，多台同 App 设备也不会撞名。涉及 `EscapeOS/Tunnel/WirelessPairing.m` (`si_ready_cb`)。
+
+### Added
+
+- **CI 缓存（措施 4 后半段）**. `.github/workflows/build.yml` 在 `Build libidevice_ffi.a` 之前插入 `actions/cache@v4`，按 `runner.os + hashFiles('rust/idevice-ffi/Cargo.lock')` 为键缓存 `~/.cargo/registry` / `~/.cargo/git` / `rust/idevice-ffi/target`。冷启动仍 5-6 min，**热命中降至 30s 左右**（总 ~3 min 节省 50%）；Cargo.toml / Cargo.lock 任一变更自动失效。同时在 `rust/idevice-ffi/.cargo/config.toml` 加 `[net] git-fetch-with-cli = true` 和 `[net] retry = 3` 提高网络抖动鲁棒性。
+
 ## [0.2.39] - 2026-08-25
 
 ### Added
