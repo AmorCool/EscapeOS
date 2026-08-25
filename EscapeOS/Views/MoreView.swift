@@ -28,7 +28,7 @@ struct MoreView: View {
 
                 NavigationLink(destination: DomainBlockerView()) {
                     MoreCard(
-                        icon: "globe.badge.xmark",
+                        icon: "shield.badge.xmark",
                         title: "屏蔽域名",
                         subtitle: "生成 DNS 描述文件，按需屏蔽任意域名（含 iOS 更新）。"
                     )
@@ -79,10 +79,6 @@ struct MoreCard: View {
             }
 
             Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.secondary.opacity(0.7))
         }
         .padding(.vertical, 6)
     }

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.36] - 2026-08-25
+
+### Fixed / Improved
+
+- **屏蔽域名 UI/交互打磨**：根据用户截图反馈进行一轮精修。
+  - 为「更多」中的「屏蔽域名」入口换上更显眼的 `shield.badge.xmark` 图标。
+  - 修复 `MoreCard` 右侧出现双箭头的问题：移除 `MoreCard` 中手动的 `chevron.right`，仅保留 `NavigationLink` 自带的 disclosure indicator。
+  - 在「默认屏蔽」section 头部新增「全部开启 / 全部关闭」批量按钮，可一键切换全部预设域名。
+  - 重新设计「生成描述文件」区域：改为 Wallpaper 风格的浅色大圆角卡片 + 底部浅色胶囊按钮，图标使用蓝色，与整体 List 背景形成更干净的层次。
+  - 把「载入描述文件（安装到设置）」改为 Safari 网页下载方式：启动一个本地 HTTP 服务器（`ProfileHTTPServer`），在 `127.0.0.1` 随机端口上提供 `.mobileconfig` 文件及一个自动跳转的下载页，然后调用 `UIApplication.shared.open` 在 Safari 中打开。Safari 加载页面后会自动下载描述文件并进入系统「设置」安装流程，更符合 iOS 描述文件的正常安装路径。
+  - 保留「分享 / 保存到文件」作为兜底方案。
+
+### Added
+
+- 新增 `EscapeOS/Engine/ProfileHTTPServer.swift`：一个极简的本地 HTTP 服务器，仅用于向 Safari 提供 `.mobileconfig` 下载；支持随机端口、自动停止、后台任务保持。
+
 ## [0.2.35] - 2026-08-25
 
 ### Added

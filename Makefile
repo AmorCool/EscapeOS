@@ -38,6 +38,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/FileKind.swift \
 	EscapeOS/Engine/FileClipboard.swift \
 	EscapeOS/Engine/FileService.swift \
+	EscapeOS/Engine/ProfileHTTPServer.swift \
 	EscapeOS/Engine/AppDiscovery.swift \
 	EscapeOS/Engine/BackupService.swift \
 	EscapeOS/Engine/ZipWriter.swift \

@@ -18,7 +18,6 @@ struct DomainBlockerView: View {
     @State private var generatedName = ""
     @State private var generatedCount = 0
     @State private var didGenerate = false
-    @State private var installSheet: InstallTarget?
     @State private var shareTarget: ShareTarget?
     @State private var errorAlert: DomainBlockerAlert?
 
@@ -32,7 +31,7 @@ struct DomainBlockerView: View {
         List {
             Section {
                 InfoActionCard(
-                    icon: "globe.badge.xmark",
+                    icon: "shield.badge.xmark",
                     title: "屏蔽域名",
                     message: "将域名加入系统 DNS 屏蔽列表（指向不可达的本地解析服务），使其无法访问。默认包含 iOS 系统更新相关域名，可按需关闭或添加自定义域名。生成的描述文件需在“设置 → 通用 → VPN 与设备管理”中安装。"
                 )
@@ -46,7 +45,22 @@ struct DomainBlockerView: View {
                         }
                 }
             } header: {
-                Label("默认屏蔽（iOS 系统更新相关）", systemImage: "applelogo")
+                HStack {
+                    Label("默认屏蔽（iOS 系统更新相关）", systemImage: "applelogo")
+                    Spacer()
+                    Button {
+                        let anyEnabled = presets.contains { $0.enabled }
+                        let newValue = !anyEnabled
+                        for index in presets.indices {
+                            presets[index].enabled = newValue
+                        }
+                        DomainBlockerStore.shared.savePresets(presets)
+                    } label: {
+                        Text(presets.contains { $0.enabled } ? "全部关闭" : "全部开启")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.blue)
+                    }
+                }
             } footer: {
                 Text("这些域名为 Apple 系统更新 / 验证服务，默认开启。关闭后对应域名将不再被屏蔽。")
             }
@@ -86,19 +100,9 @@ struct DomainBlockerView: View {
             }
 
             Section {
-                Button {
-                    generate()
-                } label: {
-                    HStack {
-                        Spacer()
-                        Label("生成描述文件", systemImage: "doc.badge.plus")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(AppTheme.accent)
-                .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                generateCard
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
             }
 
             if didGenerate, let url = generatedURL {
@@ -119,9 +123,9 @@ struct DomainBlockerView: View {
                     }
 
                     Button {
-                        installSheet = InstallTarget(url: url)
+                        installProfile(at: url)
                     } label: {
-                        Label("载入描述文件（安装到设置）", systemImage: "arrow.down.doc.fill")
+                        Label("在 Safari 中下载并安装", systemImage: "arrow.down.circle")
                     }
 
                     Button {
@@ -132,16 +136,13 @@ struct DomainBlockerView: View {
                 } header: {
                     Label("下一步", systemImage: "chevron.forward")
                 } footer: {
-                    Text("点击“载入描述文件”后系统会弹出“设置”以安装描述文件；也可选“分享 / 保存到文件”，在“文件” App 中打开后安装。安装后可在“设置 → 通用 → VPN 与设备管理”中移除。")
+                    Text("点击“在 Safari 中下载并安装”会跳转到 Safari 加载一个本地页面并自动下载描述文件，随后进入“设置”安装。也可选“分享 / 保存到文件”，在“文件” App 中打开后安装。安装后可在“设置 → 通用 → VPN 与设备管理”中移除。")
                 }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("屏蔽域名")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $installSheet, onDismiss: { installSheet = nil }) { target in
-            ProfileInstaller(url: target.url) { installSheet = nil }
-        }
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
         }
@@ -152,6 +153,59 @@ struct DomainBlockerView: View {
                 dismissButton: .default(Text("好"))
             )
         }
+    }
+
+    // MARK: - Subviews
+
+    /// 参考 WallpaperView 空状态的浅色大卡片 + 底部胶囊按钮风格。
+    private var generateCard: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+                    .frame(width: 96, height: 96)
+
+                Image(systemName: "doc.badge.plus")
+                    .font(.system(size: 40, weight: .medium))
+                    .foregroundStyle(.blue)
+            }
+
+            VStack(spacing: 6) {
+                Text("生成 DNS 屏蔽描述文件")
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.primary)
+
+                Text("将当前启用的域名打包为 .mobileconfig，之后可在 Safari 中下载并安装。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
+            }
+
+            Button {
+                generate()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.doc")
+                    Text("生成描述文件")
+                }
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(.primary)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(
+                    Capsule()
+                        .fill(Color(.secondarySystemGroupedBackground))
+                        .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
+                )
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(28)
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
     }
 
     // MARK: - Actions
@@ -228,6 +282,37 @@ struct DomainBlockerView: View {
         }
     }
 
+    /// 启动一个本地 HTTP 服务器，把 .mobileconfig 以 Safari 下载的方式交给系统安装。
+    private func installProfile(at url: URL) {
+        do {
+            let data = try Data(contentsOf: url)
+            let port = try ProfileHTTPServer.shared.start(payload: data, filename: url.lastPathComponent)
+            guard let openURL = URL(string: "http://127.0.0.1:\(port)/") else {
+                throw ProfileServerError.bind(errno: 0)
+            }
+
+            var bgTask = UIBackgroundTaskIdentifier.invalid
+            bgTask = UIApplication.shared.beginBackgroundTask(withName: "ProfileInstall") {
+                if bgTask != .invalid {
+                    UIApplication.shared.endBackgroundTask(bgTask)
+                    bgTask = .invalid
+                }
+            }
+
+            UIApplication.shared.open(openURL, options: [:]) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                    ProfileHTTPServer.shared.stop()
+                    if bgTask != .invalid {
+                        UIApplication.shared.endBackgroundTask(bgTask)
+                        bgTask = .invalid
+                    }
+                }
+            }
+        } catch {
+            errorAlert = DomainBlockerAlert(title: "无法启动下载", message: error.localizedDescription)
+        }
+    }
+
     // MARK: - Profile builder
 
     /// 构造与 iOS-Blocker.mobileconfig 同构的 DNS 屏蔽描述文件。
@@ -276,12 +361,6 @@ private struct DomainBlockerAlert: Identifiable {
     let id = UUID()
     let title: String
     let message: String
-}
-
-/// Identifiable wrapper carrying a profile URL to the install sheet.
-private struct InstallTarget: Identifiable {
-    let id = UUID()
-    let url: URL
 }
 
 /// 持久化默认域名的启用状态与自定义域名列表。
@@ -342,64 +421,5 @@ final class DomainBlockerStore {
 
     func saveCustom(_ custom: [String]) {
         UserDefaults.standard.set(custom, forKey: customKey)
-    }
-}
-
-// MARK: - Profile installer
-
-/// 通过 UIDocumentInteractionController 把 .mobileconfig 交给系统，
-/// 系统会将其路由到“设置”以安装描述文件。若设备未直接提供“设置”入口，
-/// 则回退为选项菜单（AirDrop / 存储到“文件”）。
-struct ProfileInstaller: UIViewControllerRepresentable {
-    let url: URL
-    var onFinished: () -> Void = {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        UIViewController()
-    }
-
-    func updateUIViewController(_ controller: UIViewController, context: Context) {
-        context.coordinator.present(from: controller)
-    }
-
-    final class Coordinator: NSObject, UIDocumentInteractionControllerDelegate {
-        let parent: ProfileInstaller
-        var dic: UIDocumentInteractionController?
-        var didPresent = false
-
-        init(_ parent: ProfileInstaller) {
-            self.parent = parent
-        }
-
-        func present(from vc: UIViewController) {
-            guard !didPresent else { return }
-            didPresent = true
-
-            let dic = UIDocumentInteractionController(url: parent.url)
-            dic.delegate = self
-            dic.uti = "com.apple.mobileconfig"
-            dic.name = parent.url.lastPathComponent
-            self.dic = dic
-
-            // 等待 sheet 的视图进入窗口层级后再弹出，避免
-            // “view is not in the window hierarchy” 警告。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                let rect = vc.view.bounds
-                let opened = dic.presentOpenInMenu(from: rect, in: vc.view, animated: true)
-                if !opened {
-                    dic.presentOptionsMenu(from: rect, in: vc.view, animated: true)
-                }
-            }
-        }
-
-        func documentInteractionControllerDidDismissOpenInMenu(_ controller: UIDocumentInteractionController) {
-            parent.onFinished()
-        }
-
-        func documentInteractionControllerDidDismissOptionsMenu(_ controller: UIDocumentInteractionController) {
-            parent.onFinished()
-        }
     }
 }
