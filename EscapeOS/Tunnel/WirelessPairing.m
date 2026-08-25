@@ -9,8 +9,7 @@
 
 @interface WirelessPairing () <NSNetServiceDelegate>
 @property (nonatomic, copy) void (^pinHandler)(NSString *pin);
-@property (nonatomic, copy) void (^readyHandler)(void);
-@property (nonatomic, copy) void (^completion)(BOOL success, NSString *deviceName, NSString *deviceModel, NSString *deviceUdid, NSString *hostAltIrk, NSString *error);
+@property (nonatomic, copy) void (^completion)(BOOL success, NSString *deviceName, NSString *hostAltIrk, NSString *error);
 @property (nonatomic, strong, nullable) NSNetService *netService;
 @property (nonatomic, strong, nullable) dispatch_semaphore_t publishSem;
 @end
@@ -20,12 +19,10 @@
 - (void)startPairingWithHostName:(NSString *)hostName
                            model:(NSString *)model
                          outPath:(NSString *)outPath
-                     storedAltIrk:(nullable NSString *)storedAltIrk
+                     storedAltIrk:(NSString *)storedAltIrk
                       pinHandler:(void (^)(NSString *))pinHandler
-                    readyHandler:(void (^)(NSString *, uint16_t, NSDictionary<NSString *,NSString *> *))readyHandler
-                       completion:(void (^)(BOOL, NSString *, NSString *, NSString *, NSString *, NSString *))completion {
+                       completion:(void (^)(BOOL, NSString *, NSString *, NSString *))completion {
     self.pinHandler = pinHandler;
-    self.readyHandler = readyHandler;
     self.completion = completion;
 
     NSString *bindAddr = @"0.0.0.0";
@@ -52,16 +49,14 @@
             if (!s2) return;
             [s2 stopAdvertising];
             if (rc == 0) {
-                NSString *name = result.device_name ? [NSString stringWithUTF8String:result.device_name] : nil;
-                NSString *mdl  = result.device_model ? [NSString stringWithUTF8String:result.device_model] : nil;
-                NSString *udid = result.device_udid ? [NSString stringWithUTF8String:result.device_udid] : nil;
-                NSString *irk  = result.host_alt_irk_hex ? [NSString stringWithUTF8String:result.host_alt_irk_hex] : nil;
+                NSString *name = result.device_name ? [NSString stringWithUTF8String:result.device_name] : @"";
+                NSString *irk  = result.host_alt_irk_hex ? [NSString stringWithUTF8String:result.host_alt_irk_hex] : @"";
                 si_result_free(&result);
-                s2.completion(YES, name, mdl, udid, irk, nil);
+                s2.completion(YES, name, irk, @"");
             } else {
                 NSString *err = result.error ? [NSString stringWithUTF8String:result.error] : @"未知错误";
                 si_result_free(&result);
-                s2.completion(NO, nil, nil, nil, nil, err);
+                s2.completion(NO, @"", @"", err);
             }
         });
     });
@@ -94,7 +89,8 @@ static void si_ready_cb(void *ctx, const char *service_id, uint16_t port,
                            dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.readyHandler) self.readyHandler();
+        // Publish success/failure is reflected via the published NSNetService;
+        // the Swift UI shows progress from the moment the sheet opens.
     });
 }
 

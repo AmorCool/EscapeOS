@@ -399,28 +399,23 @@ struct PairingSetupView: View {
             withHostName: "EscapeOS",
             model: "Mac17,7",
             outPath: outPath,
-            storedAltIrk: storedAltIrk,
+            storedAltIrk: storedAltIrk ?? "",
             pinHandler: { [weak self] pin in
                 DispatchQueue.main.async {
                     self?.wirelessPin = pin
                     self?.wirelessStatus = "请在另一台设备输入以下配对码："
                 }
             },
-            readyHandler: { [weak self] in
-                DispatchQueue.main.async {
-                    self?.wirelessStatus = "配对服务已广播，正在等待设备连接…"
-                }
-            },
-            completion: { [weak self] success, deviceName, _, _, hostAltIrk, error in
+            completion: { [weak self] success, deviceName, hostAltIrk, error in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     if success {
-                        if let irk = hostAltIrk, !irk.isEmpty {
-                            UserDefaults.standard.set(irk, forKey: "wirelessHostAltIrk")
+                        if !hostAltIrk.isEmpty {
+                            UserDefaults.standard.set(hostAltIrk, forKey: "wirelessHostAltIrk")
                         }
-                        self.wirelessDeviceName = deviceName ?? "设备"
+                        self.wirelessDeviceName = deviceName.isEmpty ? "设备" : deviceName
                     } else {
-                        self.wirelessError = error ?? "配对失败，请重试。"
+                        self.wirelessError = error.isEmpty ? "配对失败，请重试。" : error
                     }
                 }
             }
