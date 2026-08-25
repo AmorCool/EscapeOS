@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.41] - 2026-08-26
+
+### Fixed
+
+- **Bonjour 广播 "一会就消失" / 配对设备看不到 EscapePair**. 实测 iOS 18 设备开发模式里 mDNS 注册确实出现一会儿随后被系统 SRP 清理；根因是 `EscapeOS/Tunnel/WirelessPairing.m` 里 `si_ready_cb` 的 15 秒 `dispatch_semaphore_wait` 把 Rust worker thread 给阻塞了——iOS 18 上 `NSNetService.publish` 的 delegate 回调（`netServiceDidPublish:` / `didNotPublish:`）常常不触发 / 多分钟后才触发，导致后续 `listener.accept()` 永远接不到设备连接。可观测外部表现：sheet 显示「正在广播」但设备侧开发者模式短暂亮一下「StikPair/iloader/idevice_pair-XXX」之类相邻服务，EscapePair 不可见。本版修法：
+  1. **不再阻塞 Rust thread**：删掉 semaphore 等待，改成 dispatch 到主队列 publish 完就返回，Rust 持续 `accept()`。
+  2. **NSTimer 30 s 心跳**：每 30 秒调一次 `stopAdvertising` + `publish`，强制 SRP 重新注册，避免系统 SRP sweeper 回收。
+  3. **NSLog 关键节点**：在 `publish begin` / `netServiceDidPublish` / `didNotPublish` / `stopAdvertising` 处输出 `name= / port=`，Console.app 连真机可直接看 SRP 状态，方便定位再次出现的同类问题。
+  4. **Sheet 关闭可靠 teardown**：`.sheet(...) { wirelessSheetContent.onDisappear { ... } }` 显式 `wirelessEngine?.stop()` + `wirelessEngine = nil`，原来「取消 / 完成 / 关闭」按钮都只是 `showWirelessPairing = false` 靠 ARC 释放，可能不及时停止 NSNetService；现在 显式 stop 后 NSNetService 立即解注册。Sheet content 也抽出到 `wirelessSheetContent` 计算属性，便于重复用 `.onDisappear` hook。
+- **`rust/idevice-ffi/.cargo/config.toml` 漏 commit**. 上一版 commit message 自称加了 `[net] git-fetch-with-cli = true` 与重试配置，实际没写文件。这次补上在仓库根 `.cargo/config.toml`（Cargo 自动按目录就近读取），同样配置 `git-fetch-with-cli = true` + `jobs = 2`，避免 libgit2 在 macos-15 runner 上偶发 TLS 错误。
+
+### Changed
+
+- 版本号 `0.2.40 → 0.2.41`（`control` 与 `Resources/Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion` 同步）。
+
 ## [0.2.40] - 2026-08-26
 
 ### Changed

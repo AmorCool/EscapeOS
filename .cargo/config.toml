@@ -1,0 +1,16 @@
+[net]
+# Use the system `git` CLI for git-source dependencies instead of Cargo's
+# libgit2 backend. The `idevice` crate is sourced straight from GitHub
+# (jkcoxson/idevice at a pinned rev), and libgit2 has been observed to fail
+# sporadically with "tls error: received corrupt record" on macOS GitHub
+# Actions runners. Falling back to git(1) avoids those flakes without any
+# downside for builds.
+git-fetch-with-cli = true
+
+[registries.crates-io]
+# Default protocol; explicit for clarity.
+
+[build]
+# Match the CI runner CPU count to keep compile parallelism predictable.
+# The cached target/ on hits ignores this.
+jobs = 2

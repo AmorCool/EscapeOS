@@ -236,80 +236,17 @@ struct PairingSetupView: View {
             }
         }
         .sheet(isPresented: $showWirelessPairing) {
-            NavigationView {
-                VStack(spacing: 22) {
-                    Spacer(minLength: 8)
-                    if let error = wirelessError {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 44))
-                            .foregroundStyle(.red)
-                        Text("配对失败").font(.title3).bold()
-                        Text(error)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                        Button("关闭") {
-                            wirelessEngine = nil
-                            showWirelessPairing = false
-                        }
-                        .buttonStyle(.borderedProminent)
-                    } else if let name = wirelessDeviceName {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 44))
-                            .foregroundStyle(.green)
-                        Text("配对成功").font(.title3).bold()
-                        Text("已与 \(name) 建立无线配对。")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                        Button("完成") {
-                            wirelessEngine = nil
-                            showWirelessPairing = false
-                            viewModel.reload()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.blue)
-                    } else if let pin = wirelessPin {
-                        VStack(spacing: 10) {
-                            Image(systemName: "lock.iphone")
-                                .font(.system(size: 40))
-                                .foregroundStyle(.blue)
-                            Text("请输入配对码").font(.headline)
-                            Text(pin)
-                                .font(.system(size: 44, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.blue)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color(.secondarySystemGroupedBackground))
-                                )
-                            Text("在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并输入上方配对码。")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                    } else {
-                        VStack(spacing: 12) {
-                            ProgressView()
-                            Text(wirelessStatus)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
-                    Spacer(minLength: 8)
+            wirelessSheetContent
+                .onDisappear {
+                    // Reliable teardown: cancel the heartbeat timer + stop
+                    // the Bonjour publish + drop the engine so the listener
+                    // and NSNetService release deterministically (otherwise
+                    // Bonjour registration can linger after the sheet closes,
+                    // causing the "broadcast a while then disappears" symptom).
+                    wirelessEngine?.stop()
+                    wirelessEngine = nil
+                    cancelWirelessPairingCleanup()
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
-                .navigationTitle("iOS 27 无线配对")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("取消") { cancelWirelessPairing() }
-                    }
-                }
-            }
         }
         .fileImporter(
             isPresented: $showImporter,
@@ -419,6 +356,97 @@ struct PairingSetupView: View {
     /// closes the UI.
     private func cancelWirelessPairing() {
         showWirelessPairing = false
+    }
+
+    /// Reset all transient wireless-pairing state. Called from the sheet's
+    /// `.onDisappear` so the next time the user opens the sheet we get a
+    /// clean UI (no stale PIN, no leftover error message).
+    private func cancelWirelessPairingCleanup() {
+        wirelessPin = nil
+        wirelessError = nil
+        wirelessDeviceName = nil
+        wirelessStatus = "正在广播配对服务…"
+    }
+
+    // MARK: - Wireless pairing sheet content
+
+    /// Extracted from `.sheet(...)` so we can attach `.onDisappear` reliably.
+    /// NSNetService registrations on iOS 18 have been observed to linger
+    /// past the sheet's lifecycle; the cleanup hook in `.onDisappear` makes
+    /// sure the heartbeat + Bonjour publish are torn down deterministically.
+    private var wirelessSheetContent: some View {
+        NavigationView {
+            VStack(spacing: 22) {
+                Spacer(minLength: 8)
+                if let error = wirelessError {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(.red)
+                    Text("配对失败").font(.title3).bold()
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("关闭") {
+                        cancelWirelessPairing()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else if let name = wirelessDeviceName {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(.green)
+                    Text("配对成功").font(.title3).bold()
+                    Text("已与 \(name) 建立无线配对。")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("完成") {
+                        cancelWirelessPairing()
+                        viewModel.reload()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                } else if let pin = wirelessPin {
+                    VStack(spacing: 10) {
+                        Image(systemName: "lock.iphone")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.blue)
+                        Text("请输入配对码").font(.headline)
+                        Text(pin)
+                            .font(.system(size: 44, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.blue)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color(.secondarySystemGroupedBackground))
+                            )
+                        Text("在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并输入上方配对码。")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                } else {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text(wirelessStatus)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+            .navigationTitle("iOS 27 无线配对")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { cancelWirelessPairing() }
+                }
+            }
+        }
     }
 
     // MARK: - Wireless pairing NSNotificationCenter bridge

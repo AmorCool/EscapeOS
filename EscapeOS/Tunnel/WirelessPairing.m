@@ -12,7 +12,12 @@ NSNotificationName const WirelessPairingDidCompleteNotification = @"WirelessPair
 
 @interface WirelessPairing () <NSNetServiceDelegate>
 @property (nonatomic, strong, nullable) NSNetService *netService;
-@property (nonatomic, strong, nullable) dispatch_semaphore_t publishSem;
+@property (nonatomic, strong, nullable) NSTimer *keepAliveTimer;
+@property (nonatomic, assign) uint16_t listenPort;
+@property (nonatomic, copy, nullable) NSString *serviceDisplayName;
+@property (nonatomic, copy, nullable) NSDictionary<NSString *,NSString *> *serviceTxt;
+@property (nonatomic, copy, nullable) void (^pinHandler)(NSString *pin);
+@property (nonatomic, copy, nullable) void (^completion)(BOOL, NSString *, NSString *, NSString *);
 @end
 
 @implementation WirelessPairing
@@ -92,16 +97,32 @@ static void si_ready_cb(void *ctx, const char *service_id, uint16_t port,
         if (k && v) txt[k] = v;
     }
 
-    // Publish on the main runloop, then block this (worker) thread until the
-    // delegate reports publish success/failure so the device can actually find us.
-    self.publishSem = dispatch_semaphore_create(0);
+    // Publish on the main runloop asynchronously so the worker thread
+    // (which holds the TcpListener accept()) is NOT blocked on a delegate
+    // callback. iOS 18 will sometimes not invoke `netServiceDidPublish:`
+    // for minutes — the legacy 15s semaphore caused the Rust accept to
+    // never get a connection slot. The NSTimer below keeps the registration
+    // alive on a 30s heartbeat so the device-side browse stays open.
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self publishServiceWithID:displayName port:port txt:txt];
+        [self publishServiceWithName:displayName port:port txt:txt];
+        // Heartbeat: drop + re-publish every 30s. NSNetService's internal
+        // DNSServiceRegister refreshes at ~120s, but on iOS 18 ad-hoc
+        // services often get auto-collected by the system's "stale service"
+        // sweeper; a forced stop+publish resets the SRP timer.
+        self.keepAliveTimer = [NSTimer scheduledTimerWithTimeInterval:30
+                                                               repeats:YES
+                                                                 block:^(NSTimer *t) {
+            if (!self.serviceDisplayName) {
+                [t invalidate];
+                return;
+            }
+            NSLog(@"[WirelessPairing] heartbeat republish port=%u name=%@",
+                  self.listenPort, self.serviceDisplayName);
+            [self publishServiceWithName:self.serviceDisplayName
+                                     port:self.listenPort
+                                      txt:self.serviceTxt];
+        }];
     });
-    dispatch_semaphore_wait(self.publishSem,
-                           dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
-    // (publish outcome is reflected in the published NSNetService; no Swift
-    //  notification needed for "ready".)
 }
 
 static void si_pin_cb(const char *pin, void *ctx) {
@@ -117,11 +138,16 @@ static void si_pin_cb(const char *pin, void *ctx) {
 
 #pragma mark - Bonjour
 
-- (void)publishServiceWithID:(NSString *)serviceID port:(uint16_t)port txt:(NSDictionary<NSString *,NSString *> *)txt {
+- (void)publishServiceWithName:(NSString *)serviceName port:(uint16_t)port txt:(NSDictionary<NSString *,NSString *> *)txt {
     [self stopAdvertising];
+    self.listenPort = port;
+    self.serviceDisplayName = serviceName;
+    self.serviceTxt = txt;
+    NSLog(@"[WirelessPairing] publish begin name=%@ port=%u txt_keys=%lu",
+          serviceName, port, (unsigned long)txt.count);
     self.netService = [[NSNetService alloc] initWithDomain:@""
                                                      type:@"_remotepairing-pairable-host._tcp"
-                                                     name:serviceID
+                                                     name:serviceName
                                                      port:port];
     NSMutableDictionary *txtData = [NSMutableDictionary new];
     for (NSString *k in txt) {
@@ -133,31 +159,29 @@ static void si_pin_cb(const char *pin, void *ctx) {
 }
 
 - (void)stopAdvertising {
+    if (self.keepAliveTimer) {
+        [self.keepAliveTimer invalidate];
+        self.keepAliveTimer = nil;
+    }
+    self.serviceDisplayName = nil;
+    self.serviceTxt = nil;
     if (self.netService) {
+        NSLog(@"[WirelessPairing] stopAdvertising (name=%@)", self.netService.name);
         self.netService.delegate = nil;
         [self.netService stop];
         self.netService = nil;
-    }
-    if (self.publishSem) {
-        dispatch_semaphore_signal(self.publishSem);
-        self.publishSem = nil;
     }
 }
 
 #pragma mark - NSNetServiceDelegate
 
 - (void)netServiceDidPublish:(NSNetService *)sender {
-    if (self.publishSem) {
-        dispatch_semaphore_signal(self.publishSem);
-        self.publishSem = nil;
-    }
+    NSLog(@"[WirelessPairing] netServiceDidPublish name=%@ port=%u",
+          sender.name, (unsigned)sender.port);
 }
 
 - (void)netService:(NSNetService *)sender didNotPublish:(NSDictionary<NSString *,NSNumber *> *)errorDict {
-    if (self.publishSem) {
-        dispatch_semaphore_signal(self.publishSem);
-        self.publishSem = nil;
-    }
+    NSLog(@"[WirelessPairing] didNotPublish errorDict=%@", errorDict);
 }
 
 @end
