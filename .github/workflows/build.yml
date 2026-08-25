@@ -55,13 +55,24 @@ jobs:
           echo "SDK_VER=$SDK_VER" >> "$GITHUB_ENV"
           echo "Using Xcode SDK $SDK_NAME ($XCODE_SDK) -> TARGET iphone:clang:${SDK_VER}:18.0"
 
-      - name: Download libidevice_ffi.a
+      - name: Build libidevice_ffi.a (Rust, aarch64-apple-ios)
+        # Vendored jkcoxson/idevice-ffi (BSD-3) + our si_run_host engine, built
+        # from source so the single .a also exposes the iOS 27 wireless-pairing
+        # host. Replaces the prebuilt pwnapplehat v0.1.5 binary.
         run: |
           set -euo pipefail
-          curl -L -o libidevice_ffi.a "https://github.com/pwnapplehat/EscapeOS/releases/download/v0.1.5/libidevice_ffi.a"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-apple-ios
+          cd rust/idevice-ffi
+          cargo build --release --target aarch64-apple-ios
+          cd ../..
           mkdir -p EscapeOS/Tunnel
-          mv libidevice_ffi.a EscapeOS/Tunnel/libidevice_ffi.a
-          ls -la EscapeOS/Tunnel/libidevice_ffi.a
+          cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" EscapeOS/Tunnel/libidevice_ffi.a
+          # Header generated from the same idevice@7bd551c source as the .a above;
+          # keeps the ObjC/Swift side ABI-matched to the freshly built library.
+          cp "rust/idevice-ffi/idevice.h" EscapeOS/Tunnel/idevice.h
+          ls -la EscapeOS/Tunnel/libidevice_ffi.a EscapeOS/Tunnel/idevice.h
 
       - name: Build package (Theos)
         run: |

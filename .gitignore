@@ -9,6 +9,9 @@ _scratch/
 Payload/
 EscapeOS/Tunnel/libidevice_ffi.a
 
+# Rust vendored crate: keep sources + Cargo.lock, ignore build artifacts
+rust/idevice-ffi/target/
+
 # Vendored upstream: keep Sources + LICENSE, not their test/CI trees
 vendor/**/Tests/
 vendor/**/*.xcodeproj/

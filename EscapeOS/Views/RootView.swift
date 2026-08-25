@@ -118,7 +118,12 @@ struct PairingSetupView: View {
     @State private var showImporter = false
     @State private var importError: String?
     @State private var clipboardError: String?
-    @State private var showWirelessPending = false
+    @State private var showWirelessPairing = false
+    @State private var wirelessPin: String?
+    @State private var wirelessStatus = "正在广播配对服务…"
+    @State private var wirelessError: String?
+    @State private var wirelessDeviceName: String?
+    @State private var wirelessEngine: WirelessPairing?
 
     /// iOS 27 introduced in-app wireless pairing (the pairing code shows inside
     /// the app instead of via a system notification). Gate the wireless section on it.
@@ -185,7 +190,8 @@ struct PairingSetupView: View {
 
                 // iOS 27 无线配对（无需电脑）：配对码直接在 App 内显示，
                 // 参考 SideInstaller 的 in-app PIN 卡片做法（原版 StikPair 用通知）。
-                // 真实配对引擎（host-pairing FFI）后续补齐，此处先展示入口与说明。
+                // 真实配对引擎已接入：si_run_host（Rust）经 WirelessPairing 桥接到本视图，
+                // 配对文件写入 Documents/pairingFile.plist，TunnelContext 自动加载。
                 if isIOS27OrLater {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("iOS 27 无线配对（无需电脑）", systemImage: "wifi")
@@ -222,10 +228,81 @@ struct PairingSetupView: View {
                 .padding(.top, 4)
             }
         }
-        .alert("iOS 27 无线配对", isPresented: $showWirelessPending) {
-            Button("知道了", role: .cancel) {}
-        } message: {
-            Text("无线配对引擎将在补齐 host-pairing FFI 后启用（需 iOS 27 真机验证）。当前仍可经「导入配对文件」或「从剪贴板粘贴」完成设置。")
+        .sheet(isPresented: $showWirelessPairing) {
+            NavigationView {
+                VStack(spacing: 22) {
+                    Spacer(minLength: 8)
+                    if let error = wirelessError {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.red)
+                        Text("配对失败").font(.title3).bold()
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("关闭") {
+                            wirelessEngine = nil
+                            showWirelessPairing = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } else if let name = wirelessDeviceName {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.green)
+                        Text("配对成功").font(.title3).bold()
+                        Text("已与 \(name) 建立无线配对。")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("完成") {
+                            wirelessEngine = nil
+                            showWirelessPairing = false
+                            viewModel.reload()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                    } else if let pin = wirelessPin {
+                        VStack(spacing: 10) {
+                            Image(systemName: "lock.iphone")
+                                .font(.system(size: 40))
+                                .foregroundStyle(.blue)
+                            Text("请输入配对码").font(.headline)
+                            Text(pin)
+                                .font(.system(size: 44, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.blue)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color(.secondarySystemGroupedBackground))
+                                )
+                            Text("在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并输入上方配对码。")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                    } else {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text(wirelessStatus)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .navigationTitle("iOS 27 无线配对")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") { cancelWirelessPairing() }
+                    }
+                }
+            }
         }
         .fileImporter(
             isPresented: $showImporter,
@@ -295,15 +372,66 @@ struct PairingSetupView: View {
         }
     }
 
-    /// Entry point for the iOS 27 wireless pairing flow.
+    /// Entry point for the iOS 27 device-initiated wireless pairing flow.
     ///
-    /// The real engine (host-pairing FFI) is deferred: the bundled
-    /// `libidevice_ffi.a` (v0.1.5) does not expose a wireless-pairing host
-    /// function, and iOS 27 is required to verify. When that FFI lands, call it
-    /// here and surface the PIN via `pairPinCallback` as an in-app card
-    /// (mirroring SideInstaller's `presentPin`), instead of a system notification.
+    /// Drives the real host-pairing engine (`si_run_host`, Rust, bridged via
+    /// `WirelessPairing`): publishes the `_remotepairing-pairable-host._tcp`
+    /// Bonjour service, shows the 6-digit PIN as an in-app card (mirroring
+    /// SideInstaller's in-app PIN, not a system notification), and on success
+    /// writes the resulting `RpPairingFile` to `Documents/pairingFile.plist`
+    /// (the same path `TunnelContext` already loads), then reloads so the app
+    /// picks up the new tunnel. The host's `alt_irk` is persisted in
+    /// `UserDefaults` so an already-paired device keeps recognizing this host.
     private func startWirelessPairing() {
-        showWirelessPending = true
+        wirelessPin = nil
+        wirelessDeviceName = nil
+        wirelessError = nil
+        wirelessStatus = "正在广播配对服务（_remotepairing-pairable-host._tcp）…"
+        showWirelessPairing = true
+
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let outPath = docs.appendingPathComponent("pairingFile.plist").path
+        let storedAltIrk = UserDefaults.standard.string(forKey: "wirelessHostAltIrk")
+
+        let pairing = WirelessPairing()
+        wirelessEngine = pairing // keep alive for the blocking background call
+        pairing.startPairing(
+            withHostName: "EscapeOS",
+            model: "Mac17,7",
+            outPath: outPath,
+            storedAltIrk: storedAltIrk,
+            pinHandler: { [weak self] pin in
+                DispatchQueue.main.async {
+                    self?.wirelessPin = pin
+                    self?.wirelessStatus = "请在另一台设备输入以下配对码："
+                }
+            },
+            readyHandler: { [weak self] _, _, _ in
+                DispatchQueue.main.async {
+                    self?.wirelessStatus = "配对服务已广播，正在等待设备连接…"
+                }
+            },
+            completion: { [weak self] success, deviceName, _, _, hostAltIrk, error in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if success {
+                        if let irk = hostAltIrk, !irk.isEmpty {
+                            UserDefaults.standard.set(irk, forKey: "wirelessHostAltIrk")
+                        }
+                        self.wirelessDeviceName = deviceName ?? "设备"
+                    } else {
+                        self.wirelessError = error ?? "配对失败，请重试。"
+                    }
+                }
+            }
+        )
+    }
+
+    /// Closes the wireless-pairing sheet. The underlying host listener keeps
+    /// running until the device connects or the app is killed; the sheet only
+    /// closes the UI.
+    private func cancelWirelessPairing() {
+        showWirelessPairing = false
     }
 }
 

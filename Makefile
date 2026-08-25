@@ -57,7 +57,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/GestaltView.swift \
 	EscapeOS/Tunnel/TunnelContext.m \
 	EscapeOS/Tunnel/applist.m \
-	EscapeOS/Tunnel/heartbeat.m
+	EscapeOS/Tunnel/heartbeat.m \
+	EscapeOS/Tunnel/WirelessPairing.m
 
 EscapeSpace_FILES += $(shell find vendor/BitByteData/Sources vendor/SWCompression/Sources -name '*.swift' \
 	! -name 'TarWriter.swift' ! -name 'TarReader.swift' ! -name 'TarCreateError.swift' \

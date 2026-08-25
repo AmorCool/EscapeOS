@@ -1,12 +1,25 @@
 # Changelog
 
+## [0.2.39] - 2026-08-25
+
+### Added
+
+- **真实的 iOS 27 无线配对引擎（host-pairing）**. 接入设备主动发起的无线配对：App 作为 pairable-host 通过系统 Bonjour 广播 `_remotepairing-pairable-host._tcp`，设备连接后驱动 rppairing 握手，App 内直接显示 6 位配对码（参考 SideInstaller 的 in-app PIN 卡片，区别于原版 StikPair 的系统通知），配对成功后把 `RpPairingFile` 写入 `Documents/pairingFile.plist`，`TunnelContext` 自动加载建立隧道。
+  - 引擎以 Rust 重写于 `rust/idevice-ffi/src/pairable_host_run.rs`，经 cbindgen 风格的 C 接口（`si_run_host` / `si_result_free`）暴露，由 `EscapeOS/Tunnel/WirelessPairing.{h,m}` 桥接到 SwiftUI（`RootView` 的配对设置页）。mDNS 广播走系统 `NSNetService`（规避 Rust mDNS 守护进程所需的 iOS 多播 entitlement）。
+  - `libidevice_ffi.a` 改为 **Rust 源码现场编译**：CI 在 `aarch64-apple-ios` 目标用 cargo 从 `idevice` crate（jkcoxson，BSD-3，pin `7bd551c`）构建，取代原先不含无线配对主机函数的 v0.1.5 预编译包；单一 `.a` 同时提供既有 `idevice_*` 函数与新 `si_*` 引擎函数，避免重复符号。
+  - `Resources/Info.plist` 新增 `NSBonjourServices = _remotepairing-pairable-host._tcp` 与 `NSLocalNetworkUsageDescription`；host 的 `alt_irk` 持久化到 `UserDefaults`，使已配对设备下次仍能识别本机。`Pin` / 状态 / 成功 / 失败均以浅色圆角卡片 + 蓝色强调呈现（无棕色 / earthy 色调）。
+
+### Changed
+
+- 版本号 `0.2.38 → 0.2.39`（`control` 与 `Resources/Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion` 同步）。
+
 ## [0.2.38] - 2026-08-25
 
 ### Added
 
 - **配对文件导入：剪贴板粘贴**. 在「一次性设置 / 配对导入」界面新增「从剪贴板粘贴配对文件」按钮，直接读取系统剪贴板文本（XML plist 或纯文本配对文件）并导入，与文件导入共用同一套解析逻辑（`AppListViewModel.importPairingFile(from:)`）。
 - **iOS 27 无线配对入口（UI 先行）**. 新增 iOS 27 版本检测（`ProcessInfo` major ≥ 27）；检测到 iOS 27 时，在配对界面额外显示一个「iOS 27 无线配对（无需电脑）」区块，说明配对码会直接显示在 App 内（参考 SideInstaller 的 in-app PIN 卡片做法，区别于原版 StikPair 的通知方式），并提供「开始无线配对」按钮。
-  - 真实的 host-pairing 引擎（参考 SideInstaller 的 `si_pairing_run_host` + `pairPinCallback`）**暂未实现**：当前捆绑的 `libidevice_ffi.a`（v0.1.5）未暴露无线配对主机函数，且需 iOS 27 真机验证。按钮当前弹出说明提示，待后续补齐 FFI 后启用，PIN 将以 App 内卡片形式呈现。
+  - 真实的 host-pairing 引擎（参考 SideInstaller 的 `si_pairing_run_host` + `pairPinCallback`）**于 v0.2.39 落地**：重构 CI 用 Rust 源码从 `idevice` crate（jkcoxson，BSD-3，pin `7bd551c`）现场编译 `libidevice_ffi.a`（取代原先不含无线配对主机函数的 v0.1.5 预编译包），新增 `si_run_host` 引擎函数；配对文件写入 `Documents/pairingFile.plist`，`TunnelContext` 自动加载。需 iOS 27 真机验证。
   - UI 配色遵循既定浅色卡片 + 蓝色强调（无棕色 / earthy 色调）。
 
 ## [0.2.37] - 2026-08-25

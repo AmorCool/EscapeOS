@@ -16,4 +16,7 @@
 #import "MCM/MCMBridge.h"
 #import "MCM/BQMCMIntegration.h"
 
+// iOS 27 device-initiated wireless pairing host wrapper
+#import "../Tunnel/WirelessPairing.h"
+
 #endif /* EscapeOS_Bridging_Header_h */
