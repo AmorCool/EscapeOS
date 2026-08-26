@@ -300,7 +300,7 @@ struct ConfigurationsView: View {
                     Image(systemName: "eye.fill").foregroundColor(.orange)
                     Text("可读取（写入受系统限制）")
                         .font(.subheadline)
-                case .restricted(let reason):
+                case .restricted:
                     Image(systemName: "lock.fill").foregroundColor(.red)
                     Text("受限")
                         .font(.subheadline)
@@ -311,20 +311,6 @@ struct ConfigurationsView: View {
                 }
                 .font(.caption)
                 .buttonStyle(.borderless)
-            }
-            switch access {
-            case .readWrite:
-                Text("当前环境可读写系统配置目录（越狱或 iOS 27+ 形态）。修改后需要 Respring 才能生效。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            case .readable:
-                Text("iOS 26（无越狱）下无法写入系统配置目录——这是系统限制（与容器 class-13 一致）。可正常读取与备份现有配置；写入需越狱或 iOS 27+。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            case .restricted(let reason):
-                Text(reason)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
         } header: {
             Text("访问能力")
@@ -374,27 +360,43 @@ struct ConfigurationsView: View {
 
     private var footnoteSection: some View {
         Section {
-            // 简易锁屏预览
-            HStack {
-                Spacer()
-                VStack(spacing: 6) {
-                    Text(footnoteText.isEmpty ? "（未设置页脚）" : footnoteText)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                    Capsule()
-                        .fill(Color.secondary.opacity(0.4))
-                        .frame(width: 60, height: 3)
-                }
-                Spacer()
+            // 锁屏预览（与原版 Erosion 一致：solarium 图片背景 + 居中文本 + 下划线）
+            VStack(spacing: 8) {
+                Text(footnoteText.isEmpty ? "（未设置页脚）" : footnoteText)
+                    .font(.system(size: 9))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .frame(height: 10)
+                Capsule()
+                    .fill(Color.white.opacity(0.6))
+                    .frame(width: 145, height: 4)
+                    .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
             }
-            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 30)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(
+                Group {
+                    if let img = solariumImage {
+                        img.resizable().scaledToFill().offset(y: 10)
+                    } else {
+                        Color(.systemGroupedBackground)
+                    }
+                }
+            )
             TextField("自定义锁屏页脚（如设备名称）", text: $footnoteText)
         } header: {
             Text("锁屏页脚")
         } footer: {
             Text("将写入 SharedDeviceConfiguration.plist 的 LockScreenFootnote 字段。")
         }
+    }
+
+    /// solarium 锁屏背景图（Resources/solarium.jpg，随包携带）。
+    private var solariumImage: Image? {
+        guard let path = Bundle.main.path(forResource: "solarium", ofType: "jpg"),
+              let ui = UIImage(contentsOfFile: path) else { return nil }
+        return Image(uiImage: ui)
     }
 
     // MARK: - 监督
