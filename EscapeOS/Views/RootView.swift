@@ -579,6 +579,7 @@ struct EmptyStateView: View {
 struct SettingsForm: View {
     var onResetPairing: () -> Void
     @AppStorage("TunnelDeviceIP") private var tunnelIP: String = "10.7.0.1"
+    @AppStorage("AnisetteServer") private var anisetteServer: String = "https://ani.sidestore.io"
     @State private var shareTarget: ShareTarget?
     @State private var showNoPairingAlert = false
 
@@ -589,6 +590,15 @@ struct SettingsForm: View {
                     .keyboardType(.numbersAndPunctuation)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
+            }
+
+            Section(header: Text("Anisette 服务器"), footer: Text("用于「增加内存限制」功能的设备认证（Anisette Data）。默认 ani.sidestore.io，可切换 StikStore / 846969 等备用服务器。")) {
+                Picker("服务器", selection: $anisetteServer) {
+                    ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
+                        Text(MemoryLimitSettings.host(from: server)).tag(server)
+                    }
+                }
+                .pickerStyle(.menu)
             }
 
             Section(header: Text("配对文件")) {

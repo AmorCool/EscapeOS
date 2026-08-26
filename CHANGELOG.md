@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.46] - 2026-08-26
+
+### Added
+- 「更多」新增「增加内存限制」入口（移植自 GetMoreRam）：登录 Apple ID 账户、查看账号/Team ID、退出登录。
+- 设置页新增「Anisette 服务器」下拉：可选 ani.sidestore.io（默认）/ ani.stikstore.app / ani.sidestore.app / ani.846969.xyz，供「增加内存限制」功能调用。
+- 支持导入 SideStore 账户 JSON（手动输入之外的快捷登录方式）。
+- `MemoryLimitSettings` / `EscapeKeychain`：账户与服务器配置的本地存储与脱敏显示。
+
+### Changed
+- 「增加内存限制」主操作在 Apple Developer API 引擎接入前显示「功能未就绪」提示，并复用设置中的账户与 Anisette 服务器。
+
 ## [0.2.45] - 2026-08-26
 
 ### Changed

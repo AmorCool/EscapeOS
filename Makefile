@@ -26,6 +26,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/LiveCleanTabView.swift \
 	EscapeOS/Views/SpaceReclaimView.swift \
 	EscapeOS/Views/MoreView.swift \
+	EscapeOS/Views/IncreaseMemoryView.swift \
 	EscapeOS/Views/PairingFilePicker.swift \
 	EscapeOS/Views/DDIDownloadView.swift \
 	EscapeOS/Views/DomainBlockerView.swift \
@@ -63,7 +64,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Tunnel/WirelessPairing.m \
 	EscapeOS/Services/BackgroundAudioManager.swift \
 	EscapeOS/Services/BackgroundLocationManager.swift \
-	EscapeOS/Services/WirelessKeepAlive.swift
+	EscapeOS/Services/WirelessKeepAlive.swift \
+	EscapeOS/Services/MemoryLimitSettings.swift
 
 EscapeSpace_FILES += $(shell find vendor/BitByteData/Sources vendor/SWCompression/Sources -name '*.swift' \
 	! -name 'TarWriter.swift' ! -name 'TarReader.swift' ! -name 'TarCreateError.swift' \

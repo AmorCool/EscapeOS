@@ -42,6 +42,14 @@ struct MoreView: View {
                         subtitle: "查看、恢复或导出已创建的 EscapeSpace 备份归档。"
                     )
                 }
+
+                NavigationLink(destination: IncreaseMemoryView()) {
+                    MoreCard(
+                        icon: "memorychip",
+                        title: "增加内存限制",
+                        subtitle: "登录 Apple ID 并配置 Anisette，为 App 开启 INCREASED_MEMORY_LIMIT。"
+                    )
+                }
             }
         }
         .listStyle(.insetGrouped)
