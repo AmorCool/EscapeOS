@@ -151,6 +151,11 @@ struct AppleIDLoginSheet: View {
         ctrl.isAuthenticating = true
         ctrl.authError = nil
         LoginLogger.shared.log("▶ 用户点击登录: \(email.lowercased())")
+        // 登录前运行 SRP 自检（固定向量），结果写入诊断日志，便于定位 -22406 类问题
+        let selfTest = await Task.detached(priority: .utility) {
+            GSAAuth.runSelfTest()
+        }.value
+        LoginLogger.shared.log("SRP 自检: \(selfTest)")
         do {
             let anisette = try await AnisetteProvider.shared.getAnisetteData()
             LoginLogger.shared.log("✓ Anisette 获取成功，进入 GrandSlam 握手")
