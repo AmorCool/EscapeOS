@@ -57,11 +57,12 @@ struct IncreaseMemoryView: View {
                     .buttonStyle(.borderless)
                     .accessibilityLabel(showDetails ? "隐藏账号" : "显示账号")
                 }
-                if let name = settings.accountName, !name.isEmpty {
+                let accountName = settings.accountName
+                if !accountName.isEmpty {
                     HStack {
                         Text("账户名称")
                         Spacer()
-                        Text(name)
+                        Text(accountName)
                             .foregroundColor(.secondary)
                     }
                 }
@@ -222,6 +223,7 @@ final class IncreaseMemoryController: ObservableObject {
     @Published var errorMessage = ""
     private var loadedOnce = false
 
+    @MainActor
     private var session: AppleAPISession? {
         guard let dsid = MemoryLimitSettings.shared.dsid,
               let authToken = MemoryLimitSettings.shared.authToken else { return nil }
