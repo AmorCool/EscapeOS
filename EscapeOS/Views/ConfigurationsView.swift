@@ -53,7 +53,7 @@ enum ConfigurationsStore {
         let fm = FileManager.default
         let probePath = ConfigFSURL.configProfiles.appendingPathComponent(".esc_write_probe").path
         do {
-            try Data("probe".utf8).write(toFile: probePath, options: .atomic)
+            try Data("probe".utf8).write(to: URL(fileURLWithPath: probePath), options: .atomic)
             try? fm.removeItem(atPath: probePath)
             return true
         } catch {
