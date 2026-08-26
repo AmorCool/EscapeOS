@@ -206,43 +206,14 @@ struct LoginLogView: View {
                 .padding()
                 .disabled(LoginLogger.shared.fullLog().isEmpty)
             }
-            .background(ShareSheet(isPresented: $showShare, items: [logText]))
+            .sheet(isPresented: $showShare) {
+                ShareSheet(items: [logText])
+            }
             .alert("已复制", isPresented: $copied) {
                 Button("好", role: .cancel) {}
             } message: {
                 Text("日志已复制到剪贴板，可直接粘贴发给开发者。")
             }
         }
-    }
-}
-
-/// 系统分享面板（UIActivityViewController）的 SwiftUI 包装，用于导出登录日志。
-struct ShareSheet: UIViewControllerRepresentable {
-    @Binding var isPresented: Bool
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        let controller = UIViewController()
-        context.coordinator.host = controller
-        return controller
-    }
-
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        guard isPresented, context.coordinator.host != nil else { return }
-        let activity = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        if let popover = activity.popoverPresentationController {
-            popover.sourceView = uiViewController.view
-            popover.sourceRect = CGRect(x: uiViewController.view.bounds.midX, y: uiViewController.view.bounds.maxY - 60, width: 0, height: 0)
-        }
-        context.coordinator.host?.present(activity, animated: true)
-        isPresented = false
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    final class Coordinator {
-        weak var host: UIViewController?
     }
 }
