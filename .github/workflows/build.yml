@@ -135,8 +135,11 @@ jobs:
       - name: Build package (Theos)
         run: |
           set -euo pipefail
+          # -j 并行编译 Swift 源文件（macOS runner 多核），显著缩短编译时长
+          CORES="$(sysctl -n hw.ncpu)"
+          echo "Building with ${CORES} parallel jobs"
           make clean
-          make package TARGET="iphone:clang:${{ env.SDK_VER }}:18.0" 2>&1 | tee /tmp/build.log
+          make -j"${CORES}" package TARGET="iphone:clang:${{ env.SDK_VER }}:18.0" 2>&1 | tee /tmp/build.log
 
       - name: Convert .deb to IPA
         run: |

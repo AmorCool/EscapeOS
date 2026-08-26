@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.51] - 2026-08-26
+
+### Added
+- **登录诊断日志**：新增 `LoginLogger`，把认证引擎每一步（Anisette client_info / WebSocket provision 各消息 / get_headers 响应 / GrandSlam 握手 / 2FA / 错误码）记录到 `Documents/LoginLogs/login.log`。
+- **登录界面「诊断日志」入口**：登录弹窗右上角新增「诊断日志」按钮，可查看完整日志、一键复制，或通过系统分享面板导出日志文件/文本，便于把真实报错直接发给开发者排查。
+
+### Fixed
+- **错误透传真实原因**：所有 `Anisette 数据无效或已过期` 的笼统报错改为带阶段与细节的真实错误（如「Anisette client_info 失败: HTTP 403 …」「Anisette provision 失败: WebSocket 接收失败: …」「Anisette 被 Apple 拒绝(-22421): …」），登录失败弹窗直接显示真实原因。
+- Anisette v3 各 HTTP 请求（client_info / get_headers / gsa lookup / midStart / midFinish）增加状态码检查与响应内容记录，不再把「服务器 5xx/格式异常」误报成「Anisette 无效」。
+
+### Changed
+- **CI 编译加速**：`make package` 改为 `make -j$(sysctl -n hw.ncpu)` 并行编译（macOS runner 多核），Swift 多文件编译不再串行，预期编译阶段显著缩短。
+
 ## [0.2.50] - 2026-08-26
 
 ### Fixed

@@ -13,6 +13,7 @@ struct AppleIDLoginSheet: View {
     @State private var password = ""
     @State private var showImporter = false
     @State private var importError: String?
+    @State private var showLog = false
 
     var body: some View {
         NavigationView {
@@ -51,6 +52,16 @@ struct AppleIDLoginSheet: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("取消") { dismiss() }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showLog = true
+                    } label: {
+                        Label("诊断日志", systemImage: "doc.text.magnifyingglass")
+                    }
+                }
+            }
+            .sheet(isPresented: $showLog) {
+                LoginLogView()
             }
             .documentPicker(isPresented: $showImporter, allowedTypes: [.json]) { urls in
                 handleImport(urls)
@@ -91,8 +102,10 @@ struct AppleIDLoginSheet: View {
     private func signIn() async {
         ctrl.isAuthenticating = true
         ctrl.authError = nil
+        LoginLogger.shared.log("▶ 用户点击登录: \(email.lowercased())")
         do {
             let anisette = try await AnisetteProvider.shared.getAnisetteData()
+            LoginLogger.shared.log("✓ Anisette 获取成功，进入 GrandSlam 握手")
             let (account, session) = try await AppleAuthenticator.authenticate(
                 appleID: email,
                 password: password,
@@ -105,14 +118,17 @@ struct AppleIDLoginSheet: View {
                 }
             }
             MemoryLimitSettings.shared.completeSignIn(email: email, password: password, account: account, session: session)
+            LoginLogger.shared.log("✓ 登录成功，凭据已保存: \(account.appleID)")
             await MainActor.run {
                 ctrl.isAuthenticating = false
                 dismiss()
             }
         } catch {
+            let message = (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
+            LoginLogger.shared.log("❌ 登录失败: \(message)")
             await MainActor.run {
                 ctrl.isAuthenticating = false
-                ctrl.authError = (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
+                ctrl.authError = message
             }
         }
     }
@@ -139,4 +155,94 @@ final class AppleLoginController: ObservableObject {
     @Published var showTwoFactorAlert = false
     @Published var twoFactorCode = ""
     var twoFactorReply: ((String?) -> Void)?
+}
+
+/// 登录诊断日志查看与导出（复制 / 系统分享）。
+struct LoginLogView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+    @State private var showShare = false
+
+    private var logText: String {
+        LoginLogger.shared.fullLog().isEmpty ? "（暂无日志，请先尝试一次登录）" : LoginLogger.shared.fullLog()
+    }
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                Text(logText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("登录诊断日志")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("关闭") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("复制") {
+                        UIPasteboard.general.string = logText
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                    }
+                    .disabled(LoginLogger.shared.fullLog().isEmpty)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    showShare = true
+                } label: {
+                    Label("导出分享日志", systemImage: "square.and.arrow.up")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .padding()
+                .disabled(LoginLogger.shared.fullLog().isEmpty)
+            }
+            .background(ShareSheet(isPresented: $showShare, items: [logText]))
+            .alert("已复制", isPresented: $copied) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text("日志已复制到剪贴板，可直接粘贴发给开发者。")
+            }
+        }
+    }
+}
+
+/// 系统分享面板（UIActivityViewController）的 SwiftUI 包装，用于导出登录日志。
+struct ShareSheet: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let controller = UIViewController()
+        context.coordinator.host = controller
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        guard isPresented, context.coordinator.host != nil else { return }
+        let activity = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        if let popover = activity.popoverPresentationController {
+            popover.sourceView = uiViewController.view
+            popover.sourceRect = CGRect(x: uiViewController.view.bounds.midX, y: uiViewController.view.bounds.maxY - 60, width: 0, height: 0)
+        }
+        context.coordinator.host?.present(activity, animated: true)
+        isPresented = false
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        weak var host: UIViewController?
+    }
 }

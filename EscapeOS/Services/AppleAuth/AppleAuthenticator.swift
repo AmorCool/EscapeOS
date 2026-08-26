@@ -23,6 +23,8 @@ enum AppleAuthenticator {
         verificationHandler: ((@escaping (String?) -> Void) async -> Void)? = nil
     ) async throws -> (Account, AppleAPISession) {
         let sanitizedAppleID = unsanitizedAppleID.lowercased()
+        LoginLogger.shared.log("▶ authenticate 开始: \(sanitizedAppleID)")
+        defer { LoginLogger.shared.log("◀ authenticate 结束") }
 
         let clientDictionary: [String: Any] = [
             "bootstrap": true,
@@ -107,6 +109,7 @@ enum AppleAuthenticator {
         context.dsid = dsid
 
         let authType = statusDictionary["au"] as? String
+        LoginLogger.shared.log("✓ complete 握手成功，au=\(authType ?? "nil") dsid=\(dsid.prefix(8))…")
         switch authType {
         case "trustedDeviceSecondaryAuth":
             guard let verificationHandler else { throw AppleAPIError.requiresTwoFactorAuthentication }
@@ -143,6 +146,7 @@ enum AppleAuthenticator {
             let token = try await fetchAuthToken(app: app, parameters: tokenParameters, context: context, anisetteData: anisetteData)
 
             let session = AppleAPISession(dsid: dsid, authToken: token, anisetteData: anisetteData)
+            LoginLogger.shared.log("✓ apptokens 获取成功，token=\(token.prefix(12))…")
             let account: Account
             do {
                 account = try await fetchAccount(session: session)
@@ -179,23 +183,31 @@ enum AppleAuthenticator {
         request.httpBody = bodyData
         httpHeaders.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
 
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let http = (response as? HTTPURLResponse)?.statusCode ?? -1
 
         guard let responseDictionary = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let dictionary = responseDictionary["Response"] as? [String: Any],
               let status = dictionary["Status"] as? [String: Any] else {
+            LoginLogger.shared.log("❌ GrandSlam HTTP \(http) 响应解析失败: \(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
             throw URLError(.badServerResponse)
         }
 
         let errorCode = status["ec"] as? Int ?? 0
+        let errorMessage = status["em"] as? String ?? ""
+        if errorCode != 0 {
+            LoginLogger.shared.log("❌ GrandSlam 错误 ec=\(errorCode) em=\(errorMessage)")
+        }
         guard errorCode == 0 else {
             switch errorCode {
             case -20101, -22406: throw AppleAPIError.incorrectCredentials
-            case -22421: throw AppleAPIError.invalidAnisetteData
+            case -22421:
+                LoginLogger.shared.log("❌ Apple 拒绝 Anisette(-22421): \(errorMessage)")
+                throw AppleAPIError.customError(code: -22421, message: "Anisette 被 Apple 拒绝: \(errorMessage)")
             case -20209: throw AppleAPIError.accountLocked
             default:
-                guard let errorDescription = status["em"] as? String else { throw AppleAPIError.unknown }
-                throw AppleAPIError.customError(code: errorCode, message: errorDescription)
+                guard !errorMessage.isEmpty else { throw AppleAPIError.unknown }
+                throw AppleAPIError.customError(code: errorCode, message: errorMessage)
             }
         }
 
