@@ -12,6 +12,9 @@
   - 尝试 bad_query（`SandboxEscape.consume`）与 MHA 身份（`MCMIntegration.isMobileHouseArrest`）两条访问路线；iOS 27+ 保持可写兼容。
 - 操作结果 / 失败均以弹窗提示（应用后需 Respring 生效，页面内给出提示）。
 
+### Fixed
+- **v0.2.59 首版构建失败（CI run 32979035426）**：`ConfigurationsView.swift` 中三个 `Section` 误用了已废弃的 `Section(header: Text(...)) { ... } footer: { ... }` 写法，在 Xcode 26 / iOS 26 SDK 下报 `incorrect argument label in call (have 'header:_:footer:', expected 'header:footer:content:')` 与 `type '() -> Text' cannot conform to 'View'`。已统一改为 iOS 17 新语法 `Section { ... } header: { Text(...) } footer: { ... }`，重新打 tag 构建通过。
+
 ## [0.2.58] - 2026-08-26
 
 ### Added
