@@ -108,7 +108,7 @@ final class GSAAuth {
                         pwdBytes.bindMemory(to: CChar.self).baseAddress, password.count,
                         saltBytes.bindMemory(to: UInt8.self).baseAddress, salt.count,
                         CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
-                        rounds,
+                        UInt32(rounds),
                         derivedBytes.bindMemory(to: UInt8.self).baseAddress, keyLength
                     )
                 }
@@ -167,7 +167,7 @@ final class GSAAuth {
         guard [16, 24, 32].contains(keyLen) else { return nil }
         let ivBytes = iv.count >= 16 ? iv.prefix(16) : (iv + Data(repeating: 0, count: 16 - iv.count))
         var out = Data(count: data.count + kCCBlockSizeAES128)
-        var outLen: size_t = 0
+        var outLen = 0
         let status = data.withUnsafeBytes { db in
             key.withUnsafeBytes { kb in
                 ivBytes.withUnsafeBytes { ib in
