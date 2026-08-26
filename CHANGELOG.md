@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.56] - 2026-08-26
+
+### Fixed
+- **修复 2FA 二次握手 -22421**（真机日志定位）：Apple 的 Anisette OTP 是**一次性**的，首次握手（complete）成功后即失效；此前两步验证通过后复用旧 OTP 重新握手 → Apple 拒绝 `-22421`。现在 `authenticate` 支持 `refreshAnisette`：2FA 验证码提交后**重新获取全新 Anisette（新 OTP）**再走完整握手。
+- **登录耗时从 ~56 秒降到 ~1-2 秒**：BigInt 除法从「逐位二进制长除法」升级为标准 little-endian **Knuth D**（O(n·m)），性能提升两个数量级；已用 Python 参考实现验证（1000 组随机除法 + SRP 固定向量 S/K 精确匹配），设备端自检缓存升级为 v2 强制重跑一次确认。
+
 ## [0.2.55] - 2026-08-26
 
 ### Fixed

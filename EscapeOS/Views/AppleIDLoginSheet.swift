@@ -152,11 +152,12 @@ struct AppleIDLoginSheet: View {
         ctrl.authError = nil
         LoginLogger.shared.log("▶ 用户点击登录: \(email.lowercased())")
         // SRP 自检：只跑一次并缓存结果（PASS 后不再重复跑，避免每次登录的 PBKDF2 开销）
-        if UserDefaults.standard.string(forKey: "SRPTestResult") == nil {
+        // v2：BigInt 除法更换实现后强制重跑一次，验证新除法
+        if UserDefaults.standard.string(forKey: "SRPTestResult_v2") == nil {
             let selfTest = await Task.detached(priority: .utility) {
                 GSAAuth.runSelfTest()
             }.value
-            UserDefaults.standard.set(selfTest, forKey: "SRPTestResult")
+            UserDefaults.standard.set(selfTest, forKey: "SRPTestResult_v2")
             LoginLogger.shared.log("SRP 自检: \(selfTest)")
         }
         do {
@@ -172,6 +173,9 @@ struct AppleIDLoginSheet: View {
                     ctrl.twoFactorReply = reply
                     ctrl.showTwoFactorAlert = true
                 }
+            } refreshAnisette: {
+                // 2FA 通过后必须换新 OTP（一次性，首次握手已消费），否则 Apple 拒绝 -22421
+                try await AnisetteProvider.shared.getAnisetteData(refresh: true)
             }
             MemoryLimitSettings.shared.completeSignIn(email: email, password: password, account: account, session: session)
             if !rememberAccount {
