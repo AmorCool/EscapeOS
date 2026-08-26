@@ -270,7 +270,7 @@ private struct AppRowView: View {
 
 /// 「增加内存限制」页面状态：团队 / App ID 加载与开启操作。
 final class IncreaseMemoryController: ObservableObject {
-    enum LoadState {
+    enum LoadState: Equatable {
         case idle
         case loading
         case loaded
