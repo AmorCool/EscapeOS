@@ -58,7 +58,7 @@ struct BigInt: Equatable, Comparable, CustomStringConvertible {
         limbs.reserveCapacity((bytes.count + 3) / 4)
         var i = bytes.count % 4
         if i == 0 { i = 4 }
-        var chunk = 0
+        var chunk: UInt32 = 0
         var count = 0
         for b in bytes {
             chunk = (chunk << 8) | UInt32(b)
@@ -339,11 +339,11 @@ struct BigInt: Equatable, Comparable, CustomStringConvertible {
 
     private init(shiftRight e: BigInt) {
         var limbs = e.limbs
-        var carry = 0
+        var carry: UInt32 = 0
         for i in 0..<limbs.count {
             let cur = limbs[i]
             limbs[i] = (cur >> 1) | UInt32(carry << 31)
-            carry = Int(cur & 1)
+            carry = cur & 1
         }
         while limbs.count > 1 && limbs[0] == 0 { limbs.removeFirst() }
         self.neg = false
