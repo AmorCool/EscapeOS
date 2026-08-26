@@ -43,6 +43,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: ConfigurationsView()) {
+                    MoreCard(
+                        icon: "checklist",
+                        title: "配置管理",
+                        subtitle: "锁屏页脚与监督模式等系统配置（MDM），iOS 26 下支持读取与备份。"
+                    )
+                }
+
                 NavigationLink(destination: IncreaseMemoryView()) {
                     MoreCard(
                         icon: "memorychip",

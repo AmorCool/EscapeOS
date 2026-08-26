@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.59] - 2026-08-26
+
+### Added
+- **「配置管理」入口**（移植自 Erosion「Configurations」，「更多」页新增）：
+  - **锁屏页脚**：读取/设置 `SharedDeviceConfiguration.plist` 的 `LockScreenFootnote`，带简易锁屏预览。
+  - **监督模式**：切换 `CloudConfigurationDetails.plist` 的 `IsSupervised` / `OrganizationName`；MDM 已配置设备警告；支持一键恢复（删除页脚 + 取消监督）。
+- **iOS 26 适配（访问能力探测）**：
+  - 进入页面自动探测系统配置目录（`SystemGroup/systemgroup.com.apple.configurationprofiles/...`）读写能力：越狱/iOS 27+ 可读写；iOS 26（无越狱）可读取与备份、写入受限——与 bad_query/MHA class-13 的既有结论一致（iOS 26 写 systemgroup 被平台堵死）。
+  - 页内顶部显示访问状态（可读写 / 可读受限 / 完全受限 + 原因），「应用」按钮在不可写时禁用并给出明确中文提示。
+  - 尝试 bad_query（`SandboxEscape.consume`）与 MHA 身份（`MCMIntegration.isMobileHouseArrest`）两条访问路线；iOS 27+ 保持可写兼容。
+- 操作结果 / 失败均以弹窗提示（应用后需 Respring 生效，页面内给出提示）。
+
 ## [0.2.58] - 2026-08-26
 
 ### Added
