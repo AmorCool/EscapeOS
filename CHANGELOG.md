@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.52] - 2026-08-26
+
+### Fixed
+- **修复 provision 卡死根因（真机日志定位）**：`gsa.apple.com/grandslam/GsService2/lookup` 此前为**裸 GET**，Apple 返回 **HTTP 404**，导致首次登录（无 adi.pb 需配给时）必然失败。
+  - 对齐 GetMoreRam 参考实现 `buildAppleRequest`：新增 `makeAppleRequest`，为 lookup / midStartProvisioning / midFinishProvisioning 三个 Apple 端点统一附加设备头（`X-Mme-Client-Info`、`User-Agent`、`X-Apple-I-MD-LU`、`X-Mme-Device-Id`、`X-Apple-I-Client-Time`(UTC)、`X-Apple-Locale`、`X-Apple-I-TimeZone`、`Accept`）。
+  - midStart / midFinish 两个配给端点同样改为带完整头的 POST，避免下一个环节再被 Apple 拒绝。
+
+### Added
+- **登录日志「清空」功能**：诊断日志页右上角新增「清空」按钮（带二次确认），一键清除内存与文件日志。
+
 ## [0.2.51] - 2026-08-26
 
 ### Added

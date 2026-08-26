@@ -28,6 +28,31 @@ final class AnisetteProvider {
         return AppleAPIError.customError(code: -22421, message: "Anisette \(stage)失败: \(detail)")
     }
 
+    /// 构造带 Apple 设备头的请求（对齐 GetMoreRam `buildAppleRequest`）。
+    /// gsa lookup / midStartProvisioning / midFinishProvisioning 都必须带这些头，
+    /// 否则 Apple 返回 404（此前裸 GET 的根因）。
+    private func makeAppleRequest(url: URL) throws -> URLRequest {
+        guard let clientInfo, let userAgent, let mdLu, let deviceId else {
+            throw fail("provision", "缺少 client_info 字段（未先 fetchClientInfo）")
+        }
+        var request = URLRequest(url: url)
+        request.setValue(clientInfo, forHTTPHeaderField: "X-Mme-Client-Info")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue(mdLu, forHTTPHeaderField: "X-Apple-I-MD-LU")
+        request.setValue(deviceId, forHTTPHeaderField: "X-Mme-Device-Id")
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        request.setValue(formatter.string(from: Date()), forHTTPHeaderField: "X-Apple-I-Client-Time")
+        request.setValue(Locale.current.identifier, forHTTPHeaderField: "X-Apple-Locale")
+        request.setValue(TimeZone.current.abbreviation(), forHTTPHeaderField: "X-Apple-I-TimeZone")
+        return request
+    }
+
     func getAnisetteData(refresh: Bool = false) async throws -> AnisetteData {
         if refresh {
             clientInfo = nil; userAgent = nil; mdLu = nil; deviceId = nil
@@ -161,7 +186,7 @@ final class AnisetteProvider {
     private func provision() async throws -> AnisetteData {
         LoginLogger.shared.log("▶ provision 开始")
         try await fetchClientInfo()
-        let request = URLRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2/lookup")!)
+        let request = try makeAppleRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2/lookup")!)
         let (data, response) = try await session.data(for: request)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard http == 200,
@@ -269,10 +294,9 @@ final class AnisetteProvider {
     }
 
     private func fetchProvisioningData(url: URL, body: [String: Any]) async throws -> String {
-        var req = URLRequest(url: url)
+        var req = try makeAppleRequest(url: url)
         req.httpMethod = "POST"
         req.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
-        req.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await session.data(for: req)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard http == 200,
@@ -285,10 +309,9 @@ final class AnisetteProvider {
 
     private func fetchEndProvisioningData(url: URL, cpim: String) async throws -> [String: String] {
         let body: [String: Any] = ["Header": [:], "Request": ["cpim": cpim]]
-        var req = URLRequest(url: url)
+        var req = try makeAppleRequest(url: url)
         req.httpMethod = "POST"
         req.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
-        req.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await session.data(for: req)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard http == 200,

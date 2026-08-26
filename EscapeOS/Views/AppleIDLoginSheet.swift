@@ -157,14 +157,17 @@ final class AppleLoginController: ObservableObject {
     var twoFactorReply: ((String?) -> Void)?
 }
 
-/// 登录诊断日志查看与导出（复制 / 系统分享）。
+/// 登录诊断日志查看与导出（查看 / 复制 / 导出分享 / 清空）。
 struct LoginLogView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
     @State private var showShare = false
+    @State private var showClearConfirm = false
+    @State private var refreshTick = 0
 
     private var logText: String {
-        LoginLogger.shared.fullLog().isEmpty ? "（暂无日志，请先尝试一次登录）" : LoginLogger.shared.fullLog()
+        _ = refreshTick
+        return LoginLogger.shared.fullLog().isEmpty ? "（暂无日志，请先尝试一次登录）" : LoginLogger.shared.fullLog()
     }
 
     var body: some View {
@@ -184,13 +187,28 @@ struct LoginLogView: View {
                     Button("关闭") { dismiss() }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("复制") {
-                        UIPasteboard.general.string = logText
-                        copied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                    HStack {
+                        Button {
+                            showClearConfirm = true
+                        } label: {
+                            Label("清空", systemImage: "trash")
+                        }
+                        .disabled(LoginLogger.shared.fullLog().isEmpty)
+                        Button("复制") {
+                            UIPasteboard.general.string = logText
+                            copied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                        }
+                        .disabled(LoginLogger.shared.fullLog().isEmpty)
                     }
-                    .disabled(LoginLogger.shared.fullLog().isEmpty)
                 }
+            }
+            .confirmationDialog("确定清空登录日志？", isPresented: $showClearConfirm, titleVisibility: .visible) {
+                Button("清空日志", role: .destructive) {
+                    LoginLogger.shared.clear()
+                    refreshTick += 1
+                }
+                Button("取消", role: .cancel) {}
             }
             .safeAreaInset(edge: .bottom) {
                 Button {
