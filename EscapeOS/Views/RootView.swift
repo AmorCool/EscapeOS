@@ -578,27 +578,48 @@ struct EmptyStateView: View {
 /// Settings form embedded in the Settings tab.
 struct SettingsForm: View {
     var onResetPairing: () -> Void
+    @StateObject private var memorySettings = MemoryLimitSettings.shared
     @AppStorage("TunnelDeviceIP") private var tunnelIP: String = "10.7.0.1"
     @AppStorage("AnisetteServer") private var anisetteServer: String = "https://ani.sidestore.io"
     @State private var shareTarget: ShareTarget?
     @State private var showNoPairingAlert = false
+    @State private var showLoginSheet = false
 
     var body: some View {
         Form {
-            Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致。保持默认的 10.7.0.1，除非你修改过 LocalDevVPN。")) {
-                TextField("设备 IP（默认 10.7.0.1）", text: $tunnelIP)
-                    .keyboardType(.numbersAndPunctuation)
-                    .autocapitalization(.none)
-                    .disableAutocorrection(true)
+            Section(header: Text("Apple ID 账户"), footer: Text("登录后，「增加内存限制」等功能可统一调用此账户。")) {
+                if memorySettings.isLoggedIn {
+                    HStack {
+                        Text("账号")
+                        Spacer()
+                        Text(memorySettings.appleID)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                    Button("退出登录", role: .destructive) {
+                        memorySettings.signOut()
+                    }
+                } else {
+                    Button("登录 Apple ID") {
+                        showLoginSheet = true
+                    }
+                }
             }
 
-            Section(header: Text("Anisette 服务器"), footer: Text("用于「增加内存限制」功能的设备认证（Anisette Data）。默认 ani.sidestore.io，可切换 StikStore / 846969 等备用服务器。")) {
+            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）。默认 ani.sidestore.io，可切换 StikStore / 846969 等备用服务器。")) {
                 Picker("服务器", selection: $anisetteServer) {
                     ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
                         Text(MemoryLimitSettings.host(from: server)).tag(server)
                     }
                 }
                 .pickerStyle(.menu)
+            }
+
+            Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致。保持默认的 10.7.0.1，除非你修改过 LocalDevVPN。")) {
+                TextField("设备 IP（默认 10.7.0.1）", text: $tunnelIP)
+                    .keyboardType(.numbersAndPunctuation)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
             }
 
             Section(header: Text("配对文件")) {
@@ -630,6 +651,9 @@ struct SettingsForm: View {
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
+        }
+        .sheet(isPresented: $showLoginSheet) {
+            AppleIDLoginSheet()
         }
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])

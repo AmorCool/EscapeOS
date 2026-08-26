@@ -137,8 +137,7 @@ final class MemoryLimitSettings: ObservableObject {
     @AppStorage("AnisetteServer") var anisetteServer: String = "https://ani.sidestore.io"
 
     @Published private(set) var isLoggedIn: Bool = false
-    @Published private(set) var appleIDMasked: String = ""
-    @Published private(set) var teamIDMasked: String = ""
+    @Published private(set) var appleID: String = ""
 
     private let keychain = EscapeKeychain(service: "com.ipaside.escapeos.memorylimit")
 
@@ -148,16 +147,14 @@ final class MemoryLimitSettings: ObservableObject {
 
     func refresh() {
         isLoggedIn = keychain.bool(for: "isLoggedIn") ?? false
-        appleIDMasked = maskEmail(keychain.string(for: "appleID") ?? "")
-        teamIDMasked = maskString(keychain.string(for: "teamID") ?? "")
+        appleID = keychain.string(for: "appleID") ?? ""
     }
 
     // MARK: - Sign in / out
 
-    func signIn(email: String, password: String, teamID: String) {
+    func signIn(email: String, password: String) {
         keychain.set(email.trimmingCharacters(in: .whitespacesAndNewlines), for: "appleID")
         keychain.set(password, for: "applePassword")
-        keychain.set(teamID.trimmingCharacters(in: .whitespacesAndNewlines), for: "teamID")
         keychain.set(true, for: "isLoggedIn")
         refresh()
     }
@@ -165,7 +162,6 @@ final class MemoryLimitSettings: ObservableObject {
     func signOut() {
         keychain.delete("appleID")
         keychain.delete("applePassword")
-        keychain.delete("teamID")
         keychain.delete("adiPb")
         keychain.delete("identifier")
         keychain.delete("isLoggedIn")
@@ -194,22 +190,5 @@ final class MemoryLimitSettings: ObservableObject {
         keychain.set(localUser, for: "identifier")
         keychain.set(true, for: "isLoggedIn")
         refresh()
-    }
-
-    // MARK: - Masking helpers
-
-    private func maskEmail(_ email: String) -> String {
-        guard let at = email.firstIndex(of: "@") else { return maskString(email) }
-        let prefix = String(email[..<at])
-        let suffix = String(email[at...])
-        let visible = prefix.prefix(2)
-        return "\(visible)••••••••\(suffix)"
-    }
-
-    private func maskString(_ string: String) -> String {
-        guard string.count > 3 else { return string }
-        let prefix = string.prefix(2)
-        let suffix = string.suffix(1)
-        return "\(prefix)••••••••\(suffix)"
     }
 }
