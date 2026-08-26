@@ -584,20 +584,39 @@ struct SettingsForm: View {
     @State private var shareTarget: ShareTarget?
     @State private var showNoPairingAlert = false
     @State private var showLoginSheet = false
+    @State private var showAccountDetails = false
 
     var body: some View {
         Form {
-            Section(header: Text("Apple ID 账户"), footer: Text("登录后，「增加内存限制」等功能可统一调用此账户。")) {
+            Section(header: Text("Apple ID 账户"), footer: Text("登录后，「增加内存限制」等功能可统一调用此账户。点眼睛图标可临时展开/隐藏账号详情，默认以星号保护隐私。")) {
                 if memorySettings.isLoggedIn {
                     HStack {
                         Text("账号")
                         Spacer()
-                        Text(memorySettings.appleID)
+                        Text(showAccountDetails ? memorySettings.appleID : memorySettings.maskedAppleID())
                             .foregroundColor(.secondary)
                             .lineLimit(1)
+                        Button {
+                            showAccountDetails.toggle()
+                        } label: {
+                            Image(systemName: showAccountDetails ? "eye.slash.fill" : "eye.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(showAccountDetails ? "隐藏账号" : "显示账号")
+                    }
+                    if showAccountDetails {
+                        HStack {
+                            Text("凭证")
+                            Spacer()
+                            Text("Apple ID 密码已保存于钥匙串")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                                .multilineTextAlignment(.trailing)
+                        }
                     }
                     Button("退出登录", role: .destructive) {
                         memorySettings.signOut()
+                        showAccountDetails = false
                     }
                 } else {
                     Button("登录 Apple ID") {

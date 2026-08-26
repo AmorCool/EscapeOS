@@ -50,12 +50,8 @@ struct AppleIDLoginSheet: View {
                     }
                 }
             }
-            .fileImporter(
-                isPresented: $showImporter,
-                allowedContentTypes: [.json],
-                allowsMultipleSelection: false
-            ) { result in
-                handleImport(result)
+            .documentPicker(isPresented: $showImporter, allowedTypes: [.json]) { urls in
+                handleImport(urls)
             }
             .alert("导入失败", isPresented: .constant(importError != nil)) {
                 Button("好", role: .cancel) { importError = nil }
@@ -65,15 +61,10 @@ struct AppleIDLoginSheet: View {
         }
     }
 
-    private func handleImport(_ result: Result<[URL], Error>) {
+    private func handleImport(_ urls: [URL]) {
         do {
-            guard let url = try result.get().first else {
+            guard let url = urls.first else {
                 throw MemoryLimitError.missingField
-            }
-
-            let didStart = url.startAccessingSecurityScopedResource()
-            defer {
-                if didStart { url.stopAccessingSecurityScopedResource() }
             }
 
             let data = try Data(contentsOf: url)

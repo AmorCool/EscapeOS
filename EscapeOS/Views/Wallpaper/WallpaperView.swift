@@ -98,8 +98,8 @@ struct WallpaperView: View {
                 .padding(.bottom, 8)
             }
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item]) { result in
-            handleImport(result)
+        .documentPicker(isPresented: $showImporter, allowedTypes: [.item]) { urls in
+            handleImport(urls)
         }
         .alert("导入失败", isPresented: .constant(importError != nil)) {
             Button("好") { importError = nil }
@@ -322,10 +322,8 @@ struct WallpaperView: View {
         tendiesArray.filter { $0.isOn }.flatMap { $0.descrNames }.count
     }
 
-    private func handleImport(_ result: Result<URL, Error>) {
-        guard case .success(let fileURL) = result else { return }
-        let accessing = fileURL.startAccessingSecurityScopedResource()
-        defer { if accessing { fileURL.stopAccessingSecurityScopedResource() } }
+    private func handleImport(_ urls: [URL]) {
+        guard let fileURL = urls.first else { return }
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {

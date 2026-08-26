@@ -240,17 +240,12 @@ struct FileBrowserView: View {
             .sheet(item: $propertiesItem) { item in
                 FilePropertiesView(app: app, item: item)
             }
-            .fileImporter(
+            .documentPicker(
                 isPresented: $showImporter,
-                allowedContentTypes: [.item, .data, .content, .archive, .image, .text, .sourceCode, .propertyList],
+                allowedTypes: [.item, .data, .content, .archive, .image, .text, .sourceCode, .propertyList],
                 allowsMultipleSelection: true
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    vm.importFiles(from: urls)
-                case .failure(let error):
-                    vm.operationError = IdentifiedError(message: error.localizedDescription)
-                }
+            ) { urls in
+                vm.importFiles(from: urls)
             }
     }
 

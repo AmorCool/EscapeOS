@@ -150,6 +150,24 @@ final class MemoryLimitSettings: ObservableObject {
         appleID = keychain.string(for: "appleID") ?? ""
     }
 
+    /// Privacy-safe display form: keeps the first two characters of the local part
+    /// and masks the rest with bullets, preserving the domain. e.g.
+    /// `john.appleseed@icloud.com` → `jo••••••••@icloud.com`.
+    func maskedAppleID() -> String {
+        let email = appleID
+        guard !email.isEmpty else { return "" }
+        guard let at = email.firstIndex(of: "@") else {
+            let n = min(email.count, 6)
+            return String(repeating: "•", count: n)
+        }
+        let local = String(email[..<at])
+        let domain = String(email[at...])
+        let visibleCount = min(local.count, 2)
+        let visible = local.prefix(visibleCount)
+        let masked = String(repeating: "•", count: max(local.count - visibleCount, 1))
+        return "\(visible)\(masked)\(domain)"
+    }
+
     // MARK: - Sign in / out
 
     func signIn(email: String, password: String) {

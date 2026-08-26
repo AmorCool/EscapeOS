@@ -6,6 +6,7 @@ import SwiftUI
 struct IncreaseMemoryView: View {
     @StateObject private var settings = MemoryLimitSettings.shared
     @State private var showNotReadyAlert = false
+    @State private var showDetails = false
 
     var body: some View {
         List {
@@ -29,9 +30,26 @@ struct IncreaseMemoryView: View {
                 HStack {
                     Text("账号")
                     Spacer()
-                    Text(settings.appleID)
+                    Text(showDetails ? settings.appleID : settings.maskedAppleID())
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+                    Button {
+                        showDetails.toggle()
+                    } label: {
+                        Image(systemName: showDetails ? "eye.slash.fill" : "eye.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(showDetails ? "隐藏账号" : "显示账号")
+                }
+                if showDetails {
+                    HStack {
+                        Text("凭证")
+                        Spacer()
+                        Text("Apple ID 密码已保存于钥匙串")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                            .multilineTextAlignment(.trailing)
+                    }
                 }
             } else {
                 HStack {

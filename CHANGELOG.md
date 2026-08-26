@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.48] - 2026-08-26
+
+### Added
+- 统一文件导入入口 `SharedDocumentPicker`：所有文件选择（配对文件、SideStore 账户、壁纸、文件浏览器）现在走同一条 `UIDocumentPickerViewController(asCopy:true)` 路径，从根视图控制器弹出，从根本上修复 LiveContainer 沙盒内 `.fileImporter` 无法访问安全作用域 URL 的导入失败问题。
+- Apple ID 账户显示恢复隐私保护：默认以「首 2 字符 + 星号」脱敏（`john•••@icloud.com`），点眼睛图标临时展开/收起完整账号与凭证详情。
+
+### Changed
+- `PairingFilePicker` 内部改为复用 `SharedDocumentPicker`，导入机制全局统一。
+- `AppleIDLoginSheet` / `FileBrowserView` / `WallpaperView` 的 `.fileImporter` 全部替换为 `.documentPicker` 修饰符。
+
 ## [0.2.47] - 2026-08-26
 
 ### Changed

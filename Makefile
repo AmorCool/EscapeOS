@@ -29,6 +29,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/IncreaseMemoryView.swift \
 	EscapeOS/Views/AppleIDLoginSheet.swift \
 	EscapeOS/Views/PairingFilePicker.swift \
+	EscapeOS/Views/SharedDocumentPicker.swift \
 	EscapeOS/Views/DDIDownloadView.swift \
 	EscapeOS/Views/DomainBlockerView.swift \
 	EscapeOS/Views/DesignSystem.swift \
