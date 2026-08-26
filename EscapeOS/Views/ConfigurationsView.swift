@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 // MARK: - 配置管理（移植自 Erosion「Configurations」）
 
@@ -38,6 +37,8 @@ enum ConfigurationsStore {
     /// bad_query 沙盒扩展。与原版 Erosion 一致：消费后**一直持有、不释放**（进程生命周期）。
     /// 原版 `bq.grantAccess` 从不 release，之后所有写入都靠这个存活句柄；
     /// 我们旧实现探测后立即释放，导致真正写入时扩展已失效 → 「没有权限」。
+    /// 注意：此路径属于系统组（SystemGroup），不在 LiveContainer 访客容器扩展覆盖范围内，
+    /// 故走的是真实 bad_query，与原版一致；不会误用「容器管理」专用的 LC 扩展。
     private static let escape = SandboxEscape()
     private static var heldHandle: SandboxEscape.Handle?
 
@@ -187,7 +188,7 @@ enum ConfigurationsStore {
 // MARK: - 视图
 
 /// 「配置管理」：锁屏页脚 + 监督模式（MDM 配置），移植自 Erosion Configurations。
-/// 支持：读写（越狱 / iOS 27+）、读取与备份（iOS 26 受限环境）、恢复、Respring、日志记录。
+/// 支持：读写（越狱 / iOS 27+）、读取与备份（iOS 26 受限环境）、恢复。
 struct ConfigurationsView: View {
     @State private var footnoteText = ""
     @State private var supervised = false
@@ -196,15 +197,12 @@ struct ConfigurationsView: View {
     @State private var showApplyConfirm = false
     @State private var showResetConfirm = false
     @State private var resultMessage = ""
-    @State private var resultCanRespring = false
     @State private var showResult = false
     @State private var errorMessage = ""
     @State private var showError = false
     @State private var showSupervisionWarning = false
-    @State private var shouldRespring = false
     @State private var shareTarget: ShareTarget?
     @State private var isBusy = false
-    @State private var logText = ""
 
     private var isWritable: Bool {
         if case .readWrite = access { return true }
@@ -217,7 +215,6 @@ struct ConfigurationsView: View {
             backupSection
             footnoteSection
             supervisionSection
-            logSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("配置管理")
@@ -247,15 +244,6 @@ struct ConfigurationsView: View {
             footnoteText = current.footnote
             supervised = current.supervised
             orgName = current.orgName
-            refreshLog()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: EscapeLog.didChange)) { _ in
-            refreshLog()
-        }
-        .fullScreenCover(isPresented: $shouldRespring) {
-            RespringView()
-                .brightness(-1.0)
-                .ignoresSafeArea()
         }
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
@@ -273,9 +261,6 @@ struct ConfigurationsView: View {
             Text("将删除锁屏页脚并使设备取消监督状态。")
         }
         .alert("操作结果", isPresented: $showResult) {
-            if resultCanRespring {
-                Button("Respring") { shouldRespring = true }
-            }
             Button("好", role: .cancel) {}
         } message: {
             Text(resultMessage)
@@ -433,73 +418,19 @@ struct ConfigurationsView: View {
         }
     }
 
-    // MARK: - 操作日志（配置管理内嵌，参考原版 Erosion 日志面板样式）
-
-    private var logSection: some View {
-        Section {
-            ScrollView {
-                Text(logText.isEmpty ? "（暂无操作日志）" : logText)
-                    .font(.system(size: 9, weight: .regular, design: .monospaced))
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-            }
-            .frame(maxHeight: 160)
-            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-
-            NavigationLink(destination: LogView()) {
-                HStack(spacing: 10) {
-                    Image(systemName: "doc.text.monospaced")
-                        .foregroundColor(.blue)
-                        .frame(width: 30, height: 30)
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("查看完整日志 / 导出")
-                            .font(.subheadline)
-                        Text("所有操作自动记录，可在此速览，或前往完整日志面板复制 / 导出。")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.vertical, 2)
-            }
-        } header: {
-            Text("操作日志")
-        } footer: {
-            Text("探测 / 应用 / 恢复 / 备份 等关键操作均实时记录，便于排查「写入被拒」等问题。")
-        }
-    }
-
-    private func refreshLog() {
-        let all = EscapeLog.shared.output
-        let lines = all.split(separator: "\n", omittingEmptySubsequences: false)
-        let recent = lines.suffix(15).joined(separator: "\n")
-        logText = recent
-    }
-
     // MARK: - 操作
 
     private func probeAccess() {
         access = ConfigurationsStore.probe()
-        EscapeLog.shared.append("配置管理：访问能力探测 → \(access.description)")
     }
 
     private func apply() {
         do {
             try ConfigurationsStore.write(footnote: footnoteText, supervised: supervised, orgName: orgName)
-            EscapeLog.shared.append("配置管理：应用成功（页脚=\(footnoteText.isEmpty ? "空" : footnoteText)，监督=\(supervised)）")
-            resultMessage = "配置已应用。\n\nRespring 后生效。"
-            resultCanRespring = true
+            resultMessage = "配置已应用。\n\n请手动重启（Respring / 重启设备）使更改生效。"
             showResult = true
         } catch {
-            EscapeLog.shared.append("配置管理：应用失败 → \(error.localizedDescription)")
             errorMessage = "写入失败：\(error.localizedDescription)"
-            resultCanRespring = false
             showError = true
         }
     }
@@ -507,17 +438,13 @@ struct ConfigurationsView: View {
     private func reset() {
         do {
             try ConfigurationsStore.reset()
-            EscapeLog.shared.append("配置管理：恢复成功（页脚已删除、监督已关闭）")
-            resultMessage = "配置已恢复（页脚已删除、监督已关闭）。\n\nRespring 后生效。"
-            resultCanRespring = true
+            resultMessage = "配置已恢复（页脚已删除、监督已关闭）。\n\n请手动重启（Respring / 重启设备）使更改生效。"
             showResult = true
             footnoteText = ""
             supervised = false
             orgName = ""
         } catch {
-            EscapeLog.shared.append("配置管理：恢复失败 → \(error.localizedDescription)")
             errorMessage = "恢复失败：\(error.localizedDescription)"
-            resultCanRespring = false
             showError = true
         }
     }
@@ -529,13 +456,11 @@ struct ConfigurationsView: View {
                 let url = try ConfigurationsStore.backupZip()
                 DispatchQueue.main.async {
                     isBusy = false
-                    EscapeLog.shared.append("配置管理：备份已生成 → \(url.lastPathComponent)")
                     shareTarget = ShareTarget(url: url)
                 }
             } catch {
                 DispatchQueue.main.async {
                     isBusy = false
-                    EscapeLog.shared.append("配置管理：备份失败 → \(error.localizedDescription)")
                     errorMessage = "备份失败：\(error.localizedDescription)"
                     showError = true
                 }

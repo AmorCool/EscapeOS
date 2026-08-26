@@ -28,8 +28,6 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/MoreView.swift \
 	EscapeOS/Views/IncreaseMemoryView.swift \
 	EscapeOS/Views/ConfigurationsView.swift \
-	EscapeOS/Views/LogView.swift \
-	EscapeOS/Views/RespringView.swift \
 	EscapeOS/Views/AppleIDLoginSheet.swift \
 	EscapeOS/Views/PairingFilePicker.swift \
 	EscapeOS/Views/SharedDocumentPicker.swift \
@@ -43,7 +41,6 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/BackupPaths.swift \
 	EscapeOS/Engine/RestoreService.swift \
 	EscapeOS/Engine/SandboxEscape.swift \
-	EscapeOS/Engine/EscapeLog.swift \
 	EscapeOS/Engine/FileKind.swift \
 	EscapeOS/Engine/FileClipboard.swift \
 	EscapeOS/Engine/FileService.swift \

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.61] - 2026-08-26
+
+### Removed
+- **日志板块整体移除**（按用户要求，后续再设计）：
+  - 删除「更多 → 日志」独立入口与 `EscapeLog` 引擎（内存 500 条 + `Documents/escapeos.log` 持久化）、`LogView` 完整日志面板（等宽字体 / 长按复制 / 导出 / 清空）。
+  - 删除「配置管理」页内嵌的「操作日志」区与跳转入口。
+  - 对应源码：`EscapeOS/Views/LogView.swift`、`EscapeOS/Engine/EscapeLog.swift` 已移出工程（Makefile 注销）。
+- **配置管理「Respring」按钮 + 全屏黑屏覆盖层移除**：
+  - 经与原版 Erosion `Respring.swift` 逐行对照，该方案是**不可靠的"假 respring"**：用 WKWebView 堆 500 层 `backdrop-filter` + 死循环 `navigator.share`/`crypto` 去"挤爆" SpringBoard，本就不保证真重启。
+  - 原版之所以"很快"是因为其 `makeUIView` 里 `WKWebpagePreferences` 创建了却**没赋值给 `webView.configuration`**，JS 实际被禁、重载脚本根本没跑；本端移植时修正了该 bug 导致 JS 真执行 → WebKit 被拖死 + 我自加的 `.brightness(-1.0)` 全屏压黑 → 你看到的"黑屏 + 延迟"。
+  - MDM 监督模式改动本就需要**真实重启**才生效，假 respring 既黑屏又不可靠，属于减分项。
+  - 现改为：应用 / 恢复成功后弹窗明确提示「请手动重启（Respring / 重启设备）使更改生效」，干净不黑屏。移除 `EscapeOS/Views/RespringView.swift`（Makefile 注销）。
+
+### Changed
+- **明确配置管理不依赖 LiveContainer 访客容器扩展**：`SandboxEscape.consume` 对系统组路径（`/private/var/containers/Shared/SystemGroup/...`）走的是真实 `bad_query`，与原版 Erosion 一致；LC 访客容器扩展（`lcContainerExtensionsActive` / `lcHomePath` / `lcAppGroupPath`）只在「容器管理」功能覆盖 LC 私有/共享容器根时使用，配置管理未触碰。源码注释已写明此边界。
+
 ## [0.2.60] - 2026-08-26
 
 ### Fixed
