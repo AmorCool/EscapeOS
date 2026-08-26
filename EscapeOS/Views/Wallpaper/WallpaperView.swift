@@ -15,6 +15,9 @@ struct WallpaperView: View {
     @State private var showDeleteConfirm = false
     @State private var deleteTarget: TendiesObject?
     @State private var activeAlert: WallpaperAlert?
+    @State private var showExtractor = false
+    @State private var showShareSheet = false
+    @State private var extractedURL: URL?
 
     private let columns = Array(repeating: GridItem(.flexible()), count: UIDevice.current.userInterfaceIdiom == .pad ? 4 : 2)
     private let handler = WallpaperHandler()
@@ -51,6 +54,13 @@ struct WallpaperView: View {
                     } label: {
                         Label("打开 PosterBoard", systemImage: "arrow.up.right.square")
                     }
+
+                    Button {
+                        showExtractor = true
+                    } label: {
+                        Label("提取当前系统壁纸", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(pbContainerPath.isEmpty)
 
                     Divider()
 
@@ -100,6 +110,17 @@ struct WallpaperView: View {
         }
         .documentPicker(isPresented: $showImporter, allowedTypes: [.item]) { urls in
             handleImport(urls)
+        }
+        .sheet(isPresented: $showExtractor) {
+            WallpaperExtractorSheet(pbContainerPath: pbContainerPath, onShare: { url in
+                extractedURL = url
+                showShareSheet = true
+            })
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let url = extractedURL {
+                ShareSheet(items: [url])
+            }
         }
         .alert("导入失败", isPresented: .constant(importError != nil)) {
             Button("好") { importError = nil }
@@ -458,6 +479,190 @@ struct WallpaperView: View {
             actionTitle: "继续",
             action: action
         )
+    }
+}
+
+// MARK: - 提取当前系统壁纸
+
+/// 扫描 PosterBoard 容器中已安装的描述符，并导出为 .tendies 文件。
+private struct WallpaperExtractorSheet: View {
+    let pbContainerPath: String
+    let onShare: (URL) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var descriptors: [WallpaperHandler.ExtractableDescriptor] = []
+    @State private var selected = Set<WallpaperHandler.ExtractableDescriptor.ID>()
+    @State private var isLoading = true
+    @State private var isExporting = false
+    @State private var errorMessage: String?
+
+    private let handler = WallpaperHandler()
+    private let sandbox = SandboxEscape()
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if isLoading {
+                    ProgressView("正在扫描 PosterBoard…")
+                } else if descriptors.isEmpty {
+                    emptyState
+                } else {
+                    listContent
+                }
+            }
+            .navigationTitle("提取系统壁纸")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("导出") { exportSelected() }
+                        .disabled(selected.isEmpty || isExporting)
+                }
+            }
+        }
+        .onAppear(perform: load)
+        .alert("导出失败", isPresented: .constant(errorMessage != nil)) {
+            Button("好") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("未找到可提取的壁纸")
+                .font(.headline)
+            Text("PosterBoard 容器中没有已安装的自定义描述符，或当前无权限读取。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+    }
+
+    private var listContent: some View {
+        List {
+            Section {
+                Button(selected.count == descriptors.count ? "取消全选" : "全选") {
+                    if selected.count == descriptors.count {
+                        selected.removeAll()
+                    } else {
+                        selected = Set(descriptors.map(\.id))
+                    }
+                }
+                .disabled(isExporting)
+            }
+
+            ForEach(descriptors) { descriptor in
+                HStack(spacing: 12) {
+                    Image(systemName: selected.contains(descriptor.id) ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 22))
+                        .foregroundStyle(selected.contains(descriptor.id) ? AppTheme.accent : .secondary)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(descriptor.name)
+                            .font(.subheadline.weight(.medium))
+                        HStack(spacing: 6) {
+                            Text(descriptor.provider.displayName)
+                                .font(.caption2.weight(.medium))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(AppTheme.accent.opacity(0.12))
+                                .foregroundStyle(AppTheme.accent)
+                                .clipShape(Capsule())
+                            Text("\(descriptor.fileCount) 个文件")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if selected.contains(descriptor.id) {
+                        selected.remove(descriptor.id)
+                    } else {
+                        selected.insert(descriptor.id)
+                    }
+                }
+                .disabled(isExporting)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
+            if isExporting {
+                ZStack {
+                    Color.black.opacity(0.18).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("正在打包…")
+                            .font(.subheadline)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 16)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private func load() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let found = try handler.extractableDescriptors(from: pbContainerPath, using: sandbox)
+                DispatchQueue.main.async {
+                    descriptors = found
+                    isLoading = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    errorMessage = error.localizedDescription
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func exportSelected() {
+        let targets = descriptors.filter { selected.contains($0.id) }
+        guard !targets.isEmpty else { return }
+
+        isExporting = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let fm = FileManager.default
+                let exportsFolder = BackupPaths.documentsDirectory()
+                    .appendingPathComponent("TendiesExports", isDirectory: true)
+                try fm.createDirectory(at: exportsFolder, withIntermediateDirectories: true)
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
+                let fileName = "Extracted_\(dateFormatter.string(from: Date())).tendies"
+                let destination = exportsFolder.appendingPathComponent(fileName)
+
+                try handler.exportTendies(
+                    descriptors: targets,
+                    from: pbContainerPath,
+                    to: destination,
+                    using: sandbox
+                )
+
+                DispatchQueue.main.async {
+                    isExporting = false
+                    onShare(destination)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    isExporting = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 }
 

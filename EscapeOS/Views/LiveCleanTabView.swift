@@ -29,6 +29,7 @@ struct LiveCleanAppRank: Identifiable {
 /// apps hosted in LiveContainer's own Data container rather than system apps.
 struct LiveCleanTabView: View {
     @ObservedObject var appList: AppListViewModel
+    @Binding var segment: ReclaimSegment
     @StateObject private var vm = LiveCleanTabViewModel()
     @State private var selecting = false
     @State private var searchText = ""
@@ -120,6 +121,18 @@ struct LiveCleanTabView: View {
 
     private var mainContent: some View {
         List {
+            // 分段控件作为列表首项随内容滚动，避免固定在顶部遮挡列表。
+            Section {
+                Picker("清理范围", selection: $segment) {
+                    ForEach(ReclaimSegment.allCases) { s in
+                        Text(s.rawValue).tag(s)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color(.systemGroupedBackground))
+            }
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
             if appList.needsPairing {
                 Section {
                     InfoActionCard(

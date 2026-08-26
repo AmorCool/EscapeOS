@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.64] - 2026-08-27
+
+### Fixed
+- **「空间回收」顶部分段控件遮挡列表内容（真机反馈首项被压住）**：
+  - 根因：v0.2.63 误判为底部 Tab 栏遮挡，实际是我把「常规清理 / 容器管理」分段控件以固定条放在 `VStack` 顶部，子视图的 `List` 从分段控件下方开始布局；但由于 `searchable` / 大标题等导航行为干扰，首项内容被分段控件实色背景压住。
+  - 修复：分段控件不再作为固定条存在，而是作为每个子页 `List` 的第一个 `Section` 随列表内容一起滚动。切换 segment 时仍瞬时响应，列表内容从分段控件下方自然开始，彻底解决遮挡。
+
+### Added
+- **「壁纸」页支持提取当前系统壁纸并导出为 `.tendies`**：
+  - 入口：壁纸页右上角菜单 →「提取当前系统壁纸」。
+  - 自动扫描 PosterBoard 容器（`com.apple.PosterBoard`）下三个 provider 描述符目录：Collections、MercuryPoster、Videos。
+  - 列表展示每个描述符的名称、provider 类型与文件数，支持多选 / 全选。
+  - 导出为 `.tendies` 压缩包（`Documents/TendiesExports/Extracted_<时间戳>.tendies`），结构与导入器兼容（`container/.../descriptors/<name>/`）。
+  - 导出完成后直接弹出系统分享面板，可隔空投送 / 存文件 / 分享。
+  - 读取同样走 `bad_query` / 沙盒扩展消费，与「导入 / 应用」共用同一套 PosterBoard 容器访问能力。
+
 ## [0.2.63] - 2026-08-27
 
 ### Fixed

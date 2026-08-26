@@ -7,6 +7,7 @@ enum WallpaperImportError: Error, LocalizedError {
     case noDescriptors
     case extractFailed(String)
     case persistFailed(String)
+    case operationFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +19,8 @@ enum WallpaperImportError: Error, LocalizedError {
             return "解压失败：\(m)"
         case .persistFailed(let m):
             return "保存失败：\(m)"
+        case .operationFailed(let m):
+            return "操作失败：\(m)"
         }
     }
 }
@@ -30,6 +33,107 @@ final class WallpaperHandler {
     /// 壁纸包持久化根目录（Documents/Wallpapers）。
     static var wallpapersFolder: URL {
         BackupPaths.documentsDirectory().appendingPathComponent("Wallpapers", isDirectory: true)
+    }
+
+    /// 可被提取的系统描述符（来自 PosterBoard 容器）。
+    struct ExtractableDescriptor: Identifiable, Hashable {
+        let id = UUID()
+        let provider: PBPath
+        let name: String
+        let path: String
+        let fileCount: Int
+    }
+
+    /// 从 PosterBoard 容器中扫描可被提取的描述符。
+    /// - Parameters:
+    ///   - pbContainerPath: PosterBoard 容器根路径。
+    ///   - sandbox: 用于消费沙盒扩展以读取 PosterBoard 容器。
+    /// - Returns: 每个 provider 目录下找到的描述符列表。
+    func extractableDescriptors(from pbContainerPath: String, using sandbox: SandboxEscape) throws -> [ExtractableDescriptor] {
+        let handle = try sandbox.consume(path: pbContainerPath)
+        defer { sandbox.release(handle) }
+
+        let files = FileService()
+        var results: [ExtractableDescriptor] = []
+        for provider in PBPath.allCases {
+            let providerPath = "\(pbContainerPath)/\(provider.path)"
+            guard files.exists(at: providerPath), files.isDirectory(at: providerPath) else { continue }
+            let children = try files.list(directory: providerPath)
+            for child in children where child.isDirectory {
+                let count = countFiles(at: child.path, files: files)
+                results.append(ExtractableDescriptor(
+                    provider: provider,
+                    name: child.name,
+                    path: child.path,
+                    fileCount: count
+                ))
+            }
+        }
+        return results
+    }
+
+    private func countFiles(at path: String, files: FileService) -> Int {
+        guard files.isDirectory(at: path) else { return 0 }
+        guard let enumerator = FileManager.default.enumerator(atPath: path) else { return 0 }
+        var count = 0
+        for case let name as String in enumerator {
+            let full = (path as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: full, isDirectory: &isDir), !isDir.boolValue {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    /// 把选中的 PosterBoard 描述符导出为 .tendies 压缩包。
+    /// - Parameters:
+    ///   - descriptors: 要导出的描述符（可来自不同 provider）。
+    ///   - pbContainerPath: PosterBoard 容器根路径。
+    ///   - destination: 导出的 .tendies 文件目标路径。
+    ///   - sandbox: 用于消费沙盒扩展。
+    /// - Throws: 沙盒扩展失败或文件复制失败时抛出。
+    func exportTendies(
+        descriptors: [ExtractableDescriptor],
+        from pbContainerPath: String,
+        to destination: URL,
+        using sandbox: SandboxEscape
+    ) throws {
+        guard !descriptors.isEmpty else {
+            throw WallpaperImportError.operationFailed("未选择任何描述符")
+        }
+
+        let handle = try sandbox.consume(path: pbContainerPath)
+        defer { sandbox.release(handle) }
+
+        let fm = FileManager.default
+        let tempRoot = fm.temporaryDirectory
+            .appendingPathComponent("ExtractTendies_\(UUID().uuidString)")
+        let containerRoot = tempRoot.appendingPathComponent("container")
+        defer { try? fm.removeItem(at: tempRoot) }
+
+        // 重建与导入器兼容的 container/.../descriptors/<name> 目录结构。
+        for descriptor in descriptors {
+            let relativeToProvider = descriptor.path.dropFirst(pbContainerPath.count)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let destDir = containerRoot.appendingPathComponent(relativeToProvider)
+            try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+            let children = try FileService().list(directory: descriptor.path)
+            for child in children {
+                let src = child.path
+                let dst = destDir.appendingPathComponent(child.name)
+                try fm.copyItem(atPath: src, toPath: dst.path)
+            }
+        }
+
+        let writer = ZipWriter()
+        try writer.begin(at: destination)
+        let files = FileService()
+        let topItems = try files.list(directory: tempRoot.path).map {
+            FileItem(name: $0.name, path: $0.path, kind: $0.kind, size: $0.size, modified: $0.modified, isReadable: $0.isReadable, isWritable: $0.isWritable)
+        }
+        try writer.addItems(topItems, files: files, skipPath: destination.path)
+        try writer.finish()
     }
 
     /// 从 .tendies 文件创建壁纸包对象，并将描述符持久化到沙盒。

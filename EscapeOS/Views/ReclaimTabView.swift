@@ -17,6 +17,7 @@ struct ReclaimAppRank: Identifiable {
 /// Ranked reclaim across installed apps. Batch only uses Safe buckets.
 struct ReclaimTabView: View {
     @ObservedObject var appList: AppListViewModel
+    @Binding var segment: ReclaimSegment
     @StateObject private var vm = ReclaimTabViewModel()
     @State private var selecting = false
     @State private var searchText = ""
@@ -97,6 +98,18 @@ struct ReclaimTabView: View {
 
     private var mainContent: some View {
         List {
+            // 分段控件作为列表首项随内容滚动，避免固定在顶部遮挡列表。
+            Section {
+                Picker("清理范围", selection: $segment) {
+                    ForEach(ReclaimSegment.allCases) { s in
+                        Text(s.rawValue).tag(s)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color(.systemGroupedBackground))
+            }
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
             if appList.needsPairing {
                 Section {
                     InfoActionCard(
