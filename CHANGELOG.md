@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.60] - 2026-08-26
+
+### Fixed
+- **配置管理写入失败（真机报「你没有将文件 SharedDeviceConfiguration.plist 保存到 configurationprofiles 中的权限」）**：
+  - 根因：旧实现探测时消费 bad_query 沙盒扩展后**立即释放**，真正写入时扩展已失效，系统按无权限拒绝。
+  - 修复：与原版 Erosion 一致，`consume` 后**一直持有扩展到进程结束**（`heldHandle`），写入/恢复前自动确保扩展可用。
+  - 同时废弃不可靠的 POSIX `isWritableFile` 判定，改为**真实写入探测**（写临时文件再删除），避免「显示可读写却写失败」的误判；iOS 26 平台限制（写 systemgroup 被堵死）仍如实显示为「可读取」。
+
+### Added
+- **配置管理 · 备份并分享**：一键将 `SharedDeviceConfiguration.plist` / `CloudConfigurationDetails.plist` 与说明.txt 打包为 zip，通过系统分享面板导出（隔空投送 / 文件 / 微信等）；不依赖写权限，任何环境可用。
+- **配置管理 · 恢复入口**：工具栏新增「恢复」按钮（gobackward，对齐原版），确认后删除页脚并取消监督。
+- **配置管理 · Respring**：应用 / 恢复成功后弹窗提供「Respring」按钮；移植原版 Erosion 的 WKWebView 内存压力方案（@neonmodder123 / @skadz108），以全屏黑屏覆盖层触发 SpringBoard 重启，适配所有 iOS 版本。
+- **日志板块**（参考原版 Erosion 日志面板样式）：「更多 → 日志」新增入口；等宽字体滚动展示、长按菜单复制 / 导出、工具栏导出（系统分享面板）与清空。配置管理探测 / 应用 / 恢复 / 备份自动记录日志（内存 500 条 + 持久化 `Documents/escapeos.log`）。
+
+### Changed
+- 监督模式警告去掉黄色 ⚠️ 表情，改为页眉 `info.circle` 信息按钮 + 纯文本页脚，形态对齐原版 PlainToggle 的信息按钮。
+
 ## [0.2.59] - 2026-08-26
 
 ### Added

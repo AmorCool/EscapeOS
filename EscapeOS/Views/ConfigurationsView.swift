@@ -15,50 +15,77 @@ enum ConfigPlistURL {
 }
 
 /// 系统配置目录访问能力探测结果。
-enum ConfigAccess {
+enum ConfigAccess: Equatable {
     case readWrite          // 可读可写（越狱 / iOS 27+ MHA 等）
     case readable           // 可读但不可写（iOS 26 平台限制）
     case restricted(String) // 完全受限（附原因）
+
+    /// 用于备份说明文字。
+    var description: String {
+        switch self {
+        case .readWrite: return "可读写"
+        case .readable: return "可读取（写入受系统限制）"
+        case .restricted(let reason): return "受限（\(reason)）"
+        }
+    }
 }
 
-/// 配置目录访问探测 + 读写（系统组目录，需要沙盒外访问）。
+/// 配置目录访问探测 + 读写 + 备份（系统组目录，需要沙盒外访问）。
 enum ConfigurationsStore {
     static var sharedDevPath: String { ConfigPlistURL.sharedDevConfig.path }
     static var cloudPath: String { ConfigPlistURL.cloudConfig.path }
 
-    /// 探测当前系统能否读写配置目录。iOS 26（无越狱）下写 systemgroup 被平台堵死，
-    /// 与 MHA class-13 的结论一致（读可用、写需 iOS 27 或越狱）。
+    /// bad_query 沙盒扩展。与原版 Erosion 一致：消费后**一直持有、不释放**（进程生命周期）。
+    /// 原版 `bq.grantAccess` 从不 release，之后所有写入都靠这个存活句柄；
+    /// 我们旧实现探测后立即释放，导致真正写入时扩展已失效 → 「没有权限」。
+    private static let escape = SandboxEscape()
+    private static var heldHandle: SandboxEscape.Handle?
+
+    /// 确保持有配置目录的沙盒扩展（只消费一次，之后进程内一直持有）。
+    private static func ensureAccess() throws {
+        if heldHandle != nil { return }
+        heldHandle = try escape.consume(path: ConfigFSURL.configProfiles.path, isGroup: true)
+    }
+
+    /// 实测写入：在配置目录里写一个临时文件再删除。
+    /// POSIX 的 `isWritableFile` 在沙盒内不可信（权限位可写但实际被沙盒拦截），必须真实写一次。
+    private static func writeProbe() -> Bool {
+        let fm = FileManager.default
+        let probePath = ConfigFSURL.configProfiles.appendingPathComponent(".esc_write_probe").path
+        do {
+            try Data("probe".utf8).write(toFile: probePath, options: .atomic)
+            try? fm.removeItem(atPath: probePath)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 探测当前系统能否读写配置目录。
     static func probe() -> ConfigAccess {
         let fm = FileManager.default
         let dir = ConfigFSURL.configProfiles.path
         let sysVersion = UIDevice.current.systemVersion
 
-        // 1) 越狱 / 有直接权限：读写都通
-        if fm.isWritableFile(atPath: dir) {
-            return .readWrite
+        guard fm.fileExists(atPath: dir) else {
+            return .restricted("系统配置目录不存在（路径：\(dir)）")
         }
-        // 2) 目录本身可达（可读）
-        if fm.fileExists(atPath: dir) {
-            // 尝试 bad_query / MHA 扩展拿写权限（iOS 26 会失败）
-            let escape = SandboxEscape()
-            do {
-                let handle = try escape.consume(path: dir, isGroup: true)
-                defer { escape.release(handle) }
-                // bad_query 成功通常表示可读写；再验证一下目录可写
-                if fm.isWritableFile(atPath: dir) {
-                    return .readWrite
-                }
-                return .readable
-            } catch {
-                let reason = (error as? SandboxEscapeError)?.errorDescription ?? error.localizedDescription
-                if MCMIntegration.isMobileHouseArrest {
-                    return .readable  // MHA 身份下 class-13 root 可达（读/备份可用），写受限
-                }
-                return .restricted("写入系统配置目录失败：\(reason)（iOS \(sysVersion) 下 systemgroup 写操作需越狱或 iOS 27+，读取与备份不受影响）")
+        // 已持有扩展 → 直接实测写入
+        if heldHandle != nil {
+            return writeProbe() ? .readWrite : .readable
+        }
+        // 消费扩展并持有（不释放），再用真实写入判定
+        do {
+            try ensureAccess()
+            if writeProbe() { return .readWrite }
+            return .readable
+        } catch {
+            let reason = (error as? SandboxEscapeError)?.errorDescription ?? error.localizedDescription
+            if MCMIntegration.isMobileHouseArrest {
+                return .readable  // MHA 身份下 class-13 root 可达（读/备份可用），写受限
             }
+            return .restricted("获取系统配置目录访问失败：\(reason)（iOS \(sysVersion) 下 systemgroup 写操作需越狱或 iOS 27+，读取与备份不受影响）")
         }
-        // 3) 目录不存在（异常设备）
-        return .restricted("系统配置目录不存在（路径：\(dir)）")
     }
 
     /// 读取当前配置（锁屏页脚 / 监督 / 组织名称）。失败返回 nil 字段。
@@ -76,8 +103,9 @@ enum ConfigurationsStore {
         return (footnote, supervised, org)
     }
 
-    /// 写入配置。仅当访问状态允许（readWrite）；否则抛错说明平台限制。
+    /// 写入配置（页脚 + 监督）。写入前确保扩展持有。
     static func write(footnote: String, supervised: Bool, orgName: String) throws {
+        try ensureAccess()
         let fm = FileManager.default
         // 确保目录存在
         try fm.createDirectory(atPath: ConfigFSURL.configProfiles.path, withIntermediateDirectories: true)
@@ -99,6 +127,7 @@ enum ConfigurationsStore {
 
     /// 恢复出厂：删除页脚文件 + 清除监督。
     static func reset() throws {
+        try ensureAccess()
         let fm = FileManager.default
         if fm.fileExists(atPath: sharedDevPath) {
             try fm.removeItem(atPath: sharedDevPath)
@@ -109,12 +138,56 @@ enum ConfigurationsStore {
         let ccData = try PropertyListSerialization.data(fromPropertyList: ccDict, format: .binary, options: 0)
         try ccData.write(to: ConfigPlistURL.cloudConfig)
     }
+
+    /// 导出配置备份 zip（两个 plist + 说明.txt），返回 zip 路径。读取不依赖写权限，任何环境可用。
+    static func backupZip() throws -> URL {
+        let fm = FileManager.default
+        let docs = try fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let backupDir = docs.appendingPathComponent("ConfigsBackups", isDirectory: true)
+        try fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let zipURL = backupDir.appendingPathComponent("EscapeSpace-Configs-\(formatter.string(from: Date())).zip")
+
+        let writer = ZipWriter()
+        try writer.begin(at: zipURL)
+
+        if fm.fileExists(atPath: sharedDevPath),
+           let data = try? Data(contentsOf: URL(fileURLWithPath: sharedDevPath)) {
+            try writer.addFile(name: "SharedDeviceConfiguration.plist", data: data)
+        }
+        if fm.fileExists(atPath: cloudPath),
+           let data = try? Data(contentsOf: URL(fileURLWithPath: cloudPath)) {
+            try writer.addFile(name: "CloudConfigurationDetails.plist", data: data)
+        }
+
+        let current = readCurrent()
+        let note = """
+        EscapeSpace 配置备份
+
+        导出时间：\(Date())
+        设备：\(UIDevice.current.name)（iOS \(UIDevice.current.systemVersion)）
+
+        锁屏页脚：\(current.footnote.isEmpty ? "（未设置）" : current.footnote)
+        监督模式：\(current.supervised ? "启用（组织：\(current.orgName.isEmpty ? "未填写" : current.orgName)）" : "关闭")
+
+        恢复方法：将 zip 内同名 plist 放回
+        /private/var/containers/Shared/SystemGroup/systemgroup.com.apple.configurationprofiles/Library/ConfigurationProfiles/
+        目录（需越狱或 iOS 27+ 写权限）。
+        """
+        if let data = note.data(using: .utf8) {
+            try writer.addFile(name: "说明.txt", data: data)
+        }
+        try writer.finish()
+        return zipURL
+    }
 }
 
 // MARK: - 视图
 
 /// 「配置管理」：锁屏页脚 + 监督模式（MDM 配置），移植自 Erosion Configurations。
-/// iOS 26（无越狱）下写入受限——页内会显示访问能力探测结果；读取/备份可用。
+/// 支持：读写（越狱 / iOS 27+）、读取与备份（iOS 26 受限环境）、恢复、Respring、日志记录。
 struct ConfigurationsView: View {
     @State private var footnoteText = ""
     @State private var supervised = false
@@ -123,9 +196,14 @@ struct ConfigurationsView: View {
     @State private var showApplyConfirm = false
     @State private var showResetConfirm = false
     @State private var resultMessage = ""
+    @State private var resultCanRespring = false
     @State private var showResult = false
     @State private var errorMessage = ""
     @State private var showError = false
+    @State private var showSupervisionWarning = false
+    @State private var shouldRespring = false
+    @State private var shareTarget: ShareTarget?
+    @State private var isBusy = false
 
     private var isWritable: Bool {
         if case .readWrite = access { return true }
@@ -135,6 +213,7 @@ struct ConfigurationsView: View {
     var body: some View {
         List {
             accessSection
+            backupSection
             footnoteSection
             supervisionSection
         }
@@ -142,12 +221,18 @@ struct ConfigurationsView: View {
         .navigationTitle("配置管理")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button {
+                    showResetConfirm = true
+                } label: {
+                    Label("恢复", systemImage: "gobackward")
+                }
+                .disabled(!isWritable)
                 Button("应用") {
                     if isWritable {
-                        apply()
+                        showApplyConfirm = true
                     } else {
-                        errorMessage = "当前系统（iOS \(UIDevice.current.systemVersion)）无法写入系统配置目录。\n\n此操作需要越狱环境，或 iOS 27+ 的证书直装形态。已支持读取与备份。"
+                        errorMessage = "当前系统（iOS \(UIDevice.current.systemVersion)）无法写入系统配置目录。\n\n此操作需要越狱环境，或 iOS 27+ 的证书直装形态。已支持读取、备份与导出。"
                         showError = true
                     }
                 }
@@ -155,11 +240,19 @@ struct ConfigurationsView: View {
             }
         }
         .onAppear {
-            access = ConfigurationsStore.probe()
+            probeAccess()
             let current = ConfigurationsStore.readCurrent()
             footnoteText = current.footnote
             supervised = current.supervised
             orgName = current.orgName
+        }
+        .fullScreenCover(isPresented: $shouldRespring) {
+            RespringView()
+                .brightness(-1.0)
+                .ignoresSafeArea()
+        }
+        .sheet(item: $shareTarget) { target in
+            ShareSheet(items: [target.url])
         }
         .alert("应用配置", isPresented: $showApplyConfirm) {
             Button("应用", role: .destructive) { apply() }
@@ -174,6 +267,9 @@ struct ConfigurationsView: View {
             Text("将删除锁屏页脚并使设备取消监督状态。")
         }
         .alert("操作结果", isPresented: $showResult) {
+            if resultCanRespring {
+                Button("Respring") { shouldRespring = true }
+            }
             Button("好", role: .cancel) {}
         } message: {
             Text(resultMessage)
@@ -182,6 +278,11 @@ struct ConfigurationsView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(errorMessage)
+        }
+        .alert("监督模式警告", isPresented: $showSupervisionWarning) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("若设备已由 MDM 配置管理，请勿改动此开关。启用后重新启动（Respring）可能出现设置引导页，风险自负。")
         }
     }
 
@@ -206,14 +307,14 @@ struct ConfigurationsView: View {
                 }
                 Spacer()
                 Button("重新检测") {
-                    access = ConfigurationsStore.probe()
+                    probeAccess()
                 }
                 .font(.caption)
                 .buttonStyle(.borderless)
             }
             switch access {
             case .readWrite:
-                Text("当前环境可读写系统配置目录（越狱或 iOS 27+ 形态）。修改后需要重新启动（Respring）才能生效。")
+                Text("当前环境可读写系统配置目录（越狱或 iOS 27+ 形态）。修改后需要 Respring 才能生效。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             case .readable:
@@ -227,6 +328,45 @@ struct ConfigurationsView: View {
             }
         } header: {
             Text("访问能力")
+        }
+    }
+
+    // MARK: - 备份
+
+    private var backupSection: some View {
+        Section {
+            Button {
+                backupAndShare()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.and.arrow.up")
+                        .foregroundColor(.blue)
+                        .frame(width: 30, height: 30)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("备份并分享配置")
+                            .font(.subheadline)
+                        Text("导出两个 plist 为 zip（含说明），可隔空投送 / 存文件 / 分享。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    if isBusy {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .disabled(isBusy)
+        } header: {
+            Text("备份")
+        } footer: {
+            Text("备份不依赖写权限，任何环境都可导出当前已读到的配置。")
         }
     }
 
@@ -268,21 +408,41 @@ struct ConfigurationsView: View {
                 TextField("组织名称", text: $orgName)
             }
         } header: {
-            Text("监督模式")
+            HStack {
+                Text("监督模式")
+                Spacer()
+                Button {
+                    showSupervisionWarning = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
         } footer: {
-            Text("⚠️ 若设备已由 MDM 配置管理，请勿改动此开关。启用后重启可能出现设置引导页，风险自负。")
+            Text("若设备已由 MDM 配置管理，请勿改动此开关。启用后重新启动可能出现设置引导页，风险自负。")
         }
     }
 
     // MARK: - 操作
 
+    private func probeAccess() {
+        access = ConfigurationsStore.probe()
+        EscapeLog.shared.append("配置管理：访问能力探测 → \(access.description)")
+    }
+
     private func apply() {
         do {
             try ConfigurationsStore.write(footnote: footnoteText, supervised: supervised, orgName: orgName)
-            resultMessage = "配置已应用。\n\n重新启动（Respring）后生效。"
+            EscapeLog.shared.append("配置管理：应用成功（页脚=\(footnoteText.isEmpty ? "空" : footnoteText)，监督=\(supervised)）")
+            resultMessage = "配置已应用。\n\nRespring 后生效。"
+            resultCanRespring = true
             showResult = true
         } catch {
+            EscapeLog.shared.append("配置管理：应用失败 → \(error.localizedDescription)")
             errorMessage = "写入失败：\(error.localizedDescription)"
+            resultCanRespring = false
             showError = true
         }
     }
@@ -290,14 +450,39 @@ struct ConfigurationsView: View {
     private func reset() {
         do {
             try ConfigurationsStore.reset()
-            resultMessage = "配置已恢复（页脚已删除、监督已关闭）。\n\n重新启动（Respring）后生效。"
+            EscapeLog.shared.append("配置管理：恢复成功（页脚已删除、监督已关闭）")
+            resultMessage = "配置已恢复（页脚已删除、监督已关闭）。\n\nRespring 后生效。"
+            resultCanRespring = true
             showResult = true
             footnoteText = ""
             supervised = false
             orgName = ""
         } catch {
+            EscapeLog.shared.append("配置管理：恢复失败 → \(error.localizedDescription)")
             errorMessage = "恢复失败：\(error.localizedDescription)"
+            resultCanRespring = false
             showError = true
+        }
+    }
+
+    private func backupAndShare() {
+        isBusy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let url = try ConfigurationsStore.backupZip()
+                DispatchQueue.main.async {
+                    isBusy = false
+                    EscapeLog.shared.append("配置管理：备份已生成 → \(url.lastPathComponent)")
+                    shareTarget = ShareTarget(url: url)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    isBusy = false
+                    EscapeLog.shared.append("配置管理：备份失败 → \(error.localizedDescription)")
+                    errorMessage = "备份失败：\(error.localizedDescription)"
+                    showError = true
+                }
+            }
         }
     }
 }

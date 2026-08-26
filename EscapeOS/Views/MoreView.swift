@@ -51,6 +51,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: LogView()) {
+                    MoreCard(
+                        icon: "doc.text.monospaced",
+                        title: "日志",
+                        subtitle: "查看与导出 EscapeSpace 运行日志（操作记录、错误信息）。"
+                    )
+                }
+
                 NavigationLink(destination: IncreaseMemoryView()) {
                     MoreCard(
                         icon: "memorychip",
