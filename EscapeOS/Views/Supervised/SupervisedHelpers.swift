@@ -18,8 +18,8 @@ func supervisedAppIcon(_ bundleID: String) -> Image {
 /// 不需要配对文件 / 本地隧道，证书直装环境直接可用。
 /// 只返回用户安装的应用（User / Internal）——隐藏对系统 App 无效。
 func supervisedInstalledApps() -> [InstalledApp] {
-    let ws = LSApplicationWorkspace.defaultWorkspace()
-    guard let proxies = ws.allApplications as? [LSApplicationProxy] else { return [] }
+    guard let ws = LSApplicationWorkspace.default(),
+          let proxies = ws.allApplications as? [LSApplicationProxy] else { return [] }
     var result: [InstalledApp] = []
     for proxy in proxies {
         guard let bid = proxy.bundleIdentifier else { continue }
