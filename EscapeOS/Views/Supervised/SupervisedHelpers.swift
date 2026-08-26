@@ -7,7 +7,9 @@ import UIKit
 /// 需在 EscapeOS-Bridging-Header.h 中声明
 /// `+ (instancetype)_applicationIconImageForBundleIdentifier:format:scale:`。
 func supervisedAppIcon(_ bundleID: String) -> Image {
-    let img = UIImage._applicationIconImage(forBundleIdentifier: bundleID, format: 1, scale: UIScreen.main.scale)
+    guard let img = UIImage._applicationIconImage(forBundleIdentifier: bundleID, format: 1, scale: UIScreen.main.scale) else {
+        return Image(systemName: "app.dashed")
+    }
     return Image(uiImage: img)
 }
 
