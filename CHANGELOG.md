@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.57] - 2026-08-26
+
+### Added
+- **「增加内存限制」真实开启逻辑**（移植自 GetMoreRam）：登录后自动加载开发者团队（listTeams.action）→ 选择团队 → 加载 App ID 列表（ios/listAppIds.action）→ 点击「开启」调用 `PATCH /services/v1/bundleIds/<id>` 为 App ID 启用 `INCREASED_MEMORY_LIMIT` 能力。
+- 新增 `AppleDeveloperAPI`（纯原生 URLSession，移植 StosSign `AppleAPI`）：`fetchTeams` / `fetchAppIDs` / `enableIncreasedMemory`，所有请求携带 dsid + authToken + **每次全新 Anisette OTP**（避免一次性 OTP 失效）。
+- App ID 列表显示已开启状态（绿色 ✓）；操作结果与错误弹出显示服务器响应原文，并写入诊断日志。
+- `AnisetteData` 补充显式成员构造器。
+
+### Changed
+- 「增加内存限制」页替换原「功能未就绪」占位：未登录时提示去设置登录；已登录直接进入团队/App 操作流程（支持下拉刷新）。
+
 ## [0.2.56] - 2026-08-26
 
 ### Fixed

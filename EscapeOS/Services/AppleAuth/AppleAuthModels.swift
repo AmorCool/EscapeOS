@@ -17,6 +17,22 @@ struct AnisetteData: Decodable {
     let locale: Locale
     let timeZone: TimeZone
 
+    /// 显式成员构造器（定义了 init(from:) 后 memberwise init 不再自动生成）。
+    init(machineID: String, oneTimePassword: String, localUserID: String,
+         routingInfo: UInt64, deviceUniqueIdentifier: String, deviceSerialNumber: String,
+         deviceDescription: String, date: Date, locale: Locale, timeZone: TimeZone) {
+        self.machineID = machineID
+        self.oneTimePassword = oneTimePassword
+        self.localUserID = localUserID
+        self.routingInfo = routingInfo
+        self.deviceUniqueIdentifier = deviceUniqueIdentifier
+        self.deviceSerialNumber = deviceSerialNumber
+        self.deviceDescription = deviceDescription
+        self.date = date
+        self.locale = locale
+        self.timeZone = timeZone
+    }
+
     private enum CodingKeys: String, CodingKey {
         case machineID, oneTimePassword, localUserID, routingInfo, deviceUniqueIdentifier, deviceSerialNumber, deviceDescription, date, locale, timeZone
     }

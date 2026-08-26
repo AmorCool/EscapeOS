@@ -74,7 +74,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Services/AppleAuth/GSAAuth.swift \
 	EscapeOS/Services/AppleAuth/AnisetteProvider.swift \
 	EscapeOS/Services/AppleAuth/AppleAuthenticator.swift \
-	EscapeOS/Services/AppleAuth/LoginLogger.swift
+	EscapeOS/Services/AppleAuth/LoginLogger.swift \
+	EscapeOS/Services/AppleAuth/AppleDeveloperAPI.swift
 
 EscapeSpace_FILES += $(shell find vendor/BitByteData/Sources vendor/SWCompression/Sources -name '*.swift' \
 	! -name 'TarWriter.swift' ! -name 'TarReader.swift' ! -name 'TarCreateError.swift' \
