@@ -70,7 +70,7 @@ struct AppHideView: View {
                     }
                 }
             } header: {
-                Label("已登记应用", systemName: "square.fill.text.grid.1x2")
+                Label("已登记应用", systemImage: "square.fill.text.grid.1x2")
             }
         }
         .listStyle(.insetGrouped)
