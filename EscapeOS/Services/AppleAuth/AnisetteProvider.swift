@@ -1,0 +1,256 @@
+import Foundation
+import CryptoKit
+
+/// 获取 Anisette Data（Apple 设备认证数据）的 v3 流程实现。
+/// 参考 GetMoreRam / SideStore 的 Anisette v3 协议，纯原生实现（无第三方依赖）。
+///
+/// - 若钥匙串中已有 `identifier` + `adiPb`（来自 SideStore 账户导入或上一次的成功配置），
+///   直接走 `/v3/get_headers`。
+/// - 否则执行一次完整的 WebSocket 配给（provisioning）流程，把 `adiPb` 存入钥匙串后再取 headers。
+final class AnisetteProvider {
+    static let shared = AnisetteProvider()
+
+    private let keychain = EscapeKeychain(service: "com.ipaside.escapeos.memorylimit")
+    private let session = URLSession(configuration: .default)
+
+    private var url: URL? { URL(string: UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.sidestore.io") }
+
+    private var clientInfo: String?
+    private var userAgent: String?
+    private var mdLu: String?
+    private var deviceId: String?
+
+    private init() {}
+
+    func getAnisetteData(refresh: Bool = false) async throws -> AnisetteData {
+        if refresh {
+            clientInfo = nil; userAgent = nil; mdLu = nil; deviceId = nil
+        }
+        guard url != nil else { throw AppleAPIError.invalidAnisetteData }
+        if let identifier = keychain.string(for: "identifier"),
+           let adiPb = keychain.string(for: "adiPb") {
+            return try await fetchAnisetteV3(identifier: identifier, adiPb: adiPb)
+        }
+        return try await provision()
+    }
+
+    // MARK: - V3: client_info
+
+    private func fetchClientInfo() async throws {
+        guard let base = url else { throw AppleAPIError.invalidAnisetteData }
+        let clientInfoURL = base.appendingPathComponent("v3").appendingPathComponent("client_info")
+        let (data, _) = try await session.data(from: clientInfoURL)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: String],
+              let ci = json["client_info"], let ua = json["user_agent"] else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        clientInfo = ci
+        userAgent = ua
+
+        if keychain.string(for: "identifier") == nil {
+            var bytes = [UInt8](repeating: 0, count: 16)
+            guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+                throw AppleAPIError.invalidAnisetteData
+            }
+            keychain.set(Data(bytes), for: "identifier")
+        }
+        guard let identifier = keychain.string(for: "identifier"),
+              let decoded = Data(base64Encoded: identifier) else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        mdLu = Data(SHA256.hash(data: decoded)).map { String(format: "%02X", $0) }.joined()
+        let uuid = decoded.withUnsafeBytes { $0.loadUnaligned(as: UUID.self) }
+        deviceId = uuid.uuidString.uppercased()
+    }
+
+    // MARK: - V3: get_headers
+
+    func fetchAnisetteV3(identifier: String, adiPb: String) async throws -> AnisetteData {
+        try await fetchClientInfo()
+        guard let base = url else { throw AppleAPIError.invalidAnisetteData }
+        var request = URLRequest(url: base.appendingPathComponent("v3").appendingPathComponent("get_headers"))
+        request.httpMethod = "POST"
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["identifier": identifier, "adi_pb": adiPb])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.data(for: request)
+        return try extractAnisetteData(data, response as? HTTPURLResponse, v3: true)
+    }
+
+    private func extractAnisetteData(_ data: Data, _ response: HTTPURLResponse?, v3: Bool) throws -> AnisetteData {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        if v3, let result = json["result"] as? String, result == "GetHeadersError",
+           let message = json["message"] as? String {
+            if message.contains("-45061") {
+                keychain.delete("adiPb")
+                return try await provision()
+            }
+            throw AppleAPIError.customError(code: -1, message: message)
+        }
+
+        var formatted: [String: String] = ["deviceSerialNumber": "0"]
+        if let v = json["X-Apple-I-MD-M"] as? String { formatted["machineID"] = v }
+        if let v = json["X-Apple-I-MD"] as? String { formatted["oneTimePassword"] = v }
+        if let v = json["X-Apple-I-MD-RINFO"] as? String { formatted["routingInfo"] = v }
+        else if let v = json["X-Apple-I-MD-RINFO"] as? Int { formatted["routingInfo"] = String(v) }
+
+        if v3 {
+            formatted["deviceDescription"] = clientInfo ?? ""
+            formatted["localUserID"] = mdLu ?? ""
+            formatted["deviceUniqueIdentifier"] = deviceId ?? ""
+            let fmt = DateFormatter()
+            fmt.locale = Locale(identifier: "en_US_POSIX")
+            fmt.calendar = Calendar(identifier: .gregorian)
+            fmt.timeZone = TimeZone.current
+            fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+            formatted["date"] = fmt.string(from: Date())
+            formatted["locale"] = Locale.current.identifier
+            formatted["timeZone"] = TimeZone.current.abbreviation() ?? "GMT"
+        } else {
+            if let v = json["X-MMe-Client-Info"] as? String { formatted["deviceDescription"] = v }
+            if let v = json["X-Apple-I-MD-LU"] as? String { formatted["localUserID"] = v }
+            if let v = json["X-Mme-Device-Id"] as? String { formatted["deviceUniqueIdentifier"] = v }
+            if let v = json["X-Apple-I-Client-Time"] as? String { formatted["date"] = v }
+            if let v = json["X-Apple-Locale"] as? String { formatted["locale"] = v }
+            if let v = json["X-Apple-I-TimeZone"] as? String { formatted["timeZone"] = v }
+        }
+
+        guard let jsonData = try? JSONEncoder().encode(formatted),
+              let anisette = try? JSONDecoder().decode(AnisetteData.self, from: jsonData) else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        return anisette
+    }
+
+    // MARK: - V3: provisioning（首次使用、无 adi.pb 时）
+
+    private func provision() async throws -> AnisetteData {
+        try await fetchClientInfo()
+        var request = URLRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2/lookup")!)
+        let (data, _) = try await session.data(for: request)
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: [String: Any]],
+              let startStr = plist["urls"]?["midStartProvisioning"] as? String,
+              let endStr = plist["urls"]?["midFinishProvisioning"] as? String,
+              let startURL = URL(string: startStr), let endURL = URL(string: endStr) else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        let adiPb = try await startProvisioningSession(startURL: startURL, endURL: endURL)
+        keychain.set(adiPb, for: "adiPb")
+        guard let identifier = keychain.string(for: "identifier") else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        return try await fetchAnisetteV3(identifier: identifier, adiPb: adiPb)
+    }
+
+    private func startProvisioningSession(startURL: URL, endURL: URL) async throws -> String {
+        guard let base = url else { throw AppleAPIError.invalidAnisetteData }
+        var comps = URLComponents(url: base.appendingPathComponent("v3").appendingPathComponent("provisioning_session"), resolvingAgainstBaseURL: false)!
+        if comps.scheme == "https" { comps.scheme = "wss" } else if comps.scheme == "http" { comps.scheme = "ws" }
+        guard let wsURL = comps.url else { throw AppleAPIError.invalidAnisetteData }
+        var wsReq = URLRequest(url: wsURL)
+        wsReq.timeoutInterval = 30
+        let socket = session.webSocketTask(with: wsReq)
+        socket.resume()
+        return try await withCheckedThrowingContinuation { continuation in
+            receiveProvisioningMessages(from: socket, startURL: startURL, endURL: endURL, continuation: continuation)
+        }
+    }
+
+    private func receiveProvisioningMessages(from socket: URLSessionWebSocketTask,
+                                             startURL: URL, endURL: URL,
+                                             continuation: CheckedContinuation<String, Error>) {
+        socket.receive { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .failure(let err):
+                continuation.resume(throwing: err)
+                socket.cancel(with: .normalClosure, reason: nil)
+            case .success(let message):
+                switch message {
+                case .string(let str):
+                    Task {
+                        do {
+                            let done = try await self.handleProvisioningMessage(str, socket: socket,
+                                                                               startURL: startURL, endURL: endURL,
+                                                                               continuation: continuation)
+                            if !done {
+                                self.receiveProvisioningMessages(from: socket, startURL: startURL, endURL: endURL, continuation: continuation)
+                            }
+                        } catch {
+                            continuation.resume(throwing: error)
+                            socket.cancel(with: .normalClosure, reason: nil)
+                        }
+                    }
+                default:
+                    continuation.resume(throwing: AppleAPIError.invalidAnisetteData)
+                    socket.cancel(with: .normalClosure, reason: nil)
+                }
+            }
+        }
+    }
+
+    private func handleProvisioningMessage(_ str: String, socket: URLSessionWebSocketTask,
+                                           startURL: URL, endURL: URL,
+                                           continuation: CheckedContinuation<String, Error>) async throws -> Bool {
+        guard let data = str.data(using: .utf8),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? String else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        switch result {
+        case "GiveIdentifier":
+            guard let identifier = keychain.string(for: "identifier") else { throw AppleAPIError.invalidAnisetteData }
+            try await socket.send(.string(try JSONSerialization.string(withJSONObject: ["identifier": identifier])))
+            return false
+        case "GiveStartProvisioningData":
+            let spim = try await fetchProvisioningData(url: startURL, body: ["Header": [:], "Request": [:]])
+            try await socket.send(.string(try JSONSerialization.string(withJSONObject: ["spim": spim])))
+            return false
+        case "GiveEndProvisioningData":
+            guard let cpim = json["cpim"] as? String else { throw AppleAPIError.invalidAnisetteData }
+            let endData = try await fetchEndProvisioningData(url: endURL, cpim: cpim)
+            try await socket.send(.string(try JSONSerialization.string(withJSONObject: endData)))
+            return false
+        case "ProvisioningSuccess":
+            guard let adiPb = json["adi_pb"] as? String else { throw AppleAPIError.invalidAnisetteData }
+            socket.cancel(with: .normalClosure, reason: nil)
+            continuation.resume(returning: adiPb)
+            return true
+        default:
+            if result.contains("Error") || result.contains("Invalid") ||
+               result == "ClosingPerRequest" || result == "Timeout" || result == "TextOnly" {
+                throw AppleAPIError.customError(code: -1, message: result + (json["message"] as? String ?? ""))
+            }
+            return false
+        }
+    }
+
+    private func fetchProvisioningData(url: URL, body: [String: Any]) async throws -> String {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
+        req.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
+        let (data, _) = try await session.data(for: req)
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: [String: Any]],
+              let spim = plist["Response"]?["spim"] as? String else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        return spim
+    }
+
+    private func fetchEndProvisioningData(url: URL, cpim: String) async throws -> [String: String] {
+        let body: [String: Any] = ["Header": [:], "Request": ["cpim": cpim]]
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
+        req.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
+        let (data, _) = try await session.data(for: req)
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: [String: Any]],
+              let ptm = plist["Response"]?["ptm"] as? String,
+              let tk = plist["Response"]?["tk"] as? String else {
+            throw AppleAPIError.invalidAnisetteData
+        }
+        return ["ptm": ptm, "tk": tk]
+    }
+}

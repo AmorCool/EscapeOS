@@ -67,7 +67,13 @@ EscapeSpace_FILES = \
 	EscapeOS/Services/BackgroundAudioManager.swift \
 	EscapeOS/Services/BackgroundLocationManager.swift \
 	EscapeOS/Services/WirelessKeepAlive.swift \
-	EscapeOS/Services/MemoryLimitSettings.swift
+	EscapeOS/Services/MemoryLimitSettings.swift \
+	EscapeOS/Services/AppleAuth/BigInt.swift \
+	EscapeOS/Services/AppleAuth/SRP6a.swift \
+	EscapeOS/Services/AppleAuth/AppleAuthModels.swift \
+	EscapeOS/Services/AppleAuth/GSAAuth.swift \
+	EscapeOS/Services/AppleAuth/AnisetteProvider.swift \
+	EscapeOS/Services/AppleAuth/AppleAuthenticator.swift
 
 EscapeSpace_FILES += $(shell find vendor/BitByteData/Sources vendor/SWCompression/Sources -name '*.swift' \
 	! -name 'TarWriter.swift' ! -name 'TarReader.swift' ! -name 'TarCreateError.swift' \
@@ -79,7 +85,7 @@ EscapeSpace_CFLAGS = -IEscapeOS/Engine -IEscapeOS/Tunnel
 EscapeSpace_OBJCFLAGS = -IEscapeOS/Engine -IEscapeOS/Tunnel -fobjc-arc
 
 # Link the Rust idevice FFI static library and its system dependencies.
-EscapeSpace_LDFLAGS = -LEscapeOS/Tunnel -lidevice_ffi -lresolv -framework Security -framework Network -framework SystemConfiguration -framework QuickLook -framework PDFKit -framework AVKit -framework AVFoundation -framework CoreLocation
+EscapeSpace_LDFLAGS = -LEscapeOS/Tunnel -lidevice_ffi -lresolv -framework Security -framework Network -framework SystemConfiguration -framework QuickLook -framework PDFKit -framework AVKit -framework AVFoundation -framework CoreLocation -framework CommonCrypto -framework CryptoKit
 EscapeSpace_CODESIGN_FLAGS = -SEscapeSpace.entitlements
 
 include $(THEOS_MAKE_PATH)/application.mk

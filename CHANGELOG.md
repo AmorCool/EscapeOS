@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.49] - 2026-08-26
+
+### Added
+- Apple 认证引擎正式接入「登录 Apple ID」：不再只是保存凭据，而是走真实的 GrandSlam (gsa.apple.com) SRP-6a 握手 + Anisette v3 设备认证，登录成功后返回 `Account` 与 `AppleAPISession`（含 dsid / authToken），存入钥匙串供后续「增加内存限制」等功能统一调用。
+- 自研纯 Swift 引擎（无第三方 SwiftPM 依赖，可在 Theos/clang 下编译）：
+  - `BigInt.swift`：自包含大整数（Knuth 长除法 + 模幂），含 `selfTest()`。
+  - `SRP6a.swift`：RFC 5054 2048-bit 质数，Apple 变体 SRP-6a（k/H/N/g、x 派生、客户端证明 M1、服务端证明 M2）。
+  - `GSAAuth.swift`：替换 StosSign 的 GSAContext，使用原生 `CommonCrypto`(PBKDF2/AES-CBC) 与 `CryptoKit`(SHA256/HMAC/AES-GCM)。
+  - `AppleAuthenticator.swift`：完整 init→complete 握手、两步验证（受信任设备 / 短信）、`apptokens` 取令牌、拉取账户信息。
+  - `AnisetteProvider.swift`：Anisette v3 `client_info → provisioning_session(WebSocket) → get_headers`，首次登录自动配给并缓存 `adi.pb`。
+
+### Changed
+- `AppleIDLoginSheet` 改为调用 `AppleAuthenticator.authenticate(...)`；遇到两步验证时弹出验证码输入框，提交后继续完成登录。
+- 隐私脱敏与眼睛图标（v0.2.48 加入）保持不变。
+
+### Fixed
+- 延续 v0.2.48 的统一文件导入修复，本次将导入能力固化进引擎侧，无新增导入路径问题。
+
 ## [0.2.48] - 2026-08-26
 
 ### Added

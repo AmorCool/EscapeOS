@@ -182,9 +182,28 @@ final class MemoryLimitSettings: ObservableObject {
         keychain.delete("applePassword")
         keychain.delete("adiPb")
         keychain.delete("identifier")
+        keychain.delete("dsid")
+        keychain.delete("authToken")
+        keychain.delete("accountName")
         keychain.delete("isLoggedIn")
         refresh()
     }
+
+    // MARK: - 登录完成（由 Apple 认证引擎调用）
+
+    func completeSignIn(email: String, password: String, account: Account, session: AppleAPISession) {
+        keychain.set(email.trimmingCharacters(in: .whitespacesAndNewlines), for: "appleID")
+        keychain.set(password, for: "applePassword")
+        keychain.set(session.dsid, for: "dsid")
+        keychain.set(session.authToken, for: "authToken")
+        keychain.set(account.name, for: "accountName")
+        keychain.set(true, for: "isLoggedIn")
+        refresh()
+    }
+
+    var dsid: String? { keychain.string(for: "dsid") }
+    var authToken: String? { keychain.string(for: "authToken") }
+    var accountName: String { keychain.string(for: "accountName") ?? "" }
 
     // MARK: - SideStore import
 
