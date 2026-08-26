@@ -43,19 +43,20 @@ final class GSAAuth {
 
         guard let x = makeAppleX(password: password, salt: salt, iterations: iterations) else { return nil }
 
-        // S = 完整 SRP 共享密钥（对齐 AltStore/StosSign：256 字节，直接作为 AES 会话密钥）
-        // K = SHA256(S)，仅用于 M1/M2 证明计算
-        let (_, K) = SRP6a.calculateSharedSecret(
+        // 对齐原版 StosSign GSAContext：
+        // - sessionKey = S 的 256 字节（sharedSecret.bytes），用于 M2 验证与 spd 的 AES-CBC 解密
+        //   （decryptedCBC 用 HMAC(key: sessionKey) 派生，HMAC 允许任意长度 key）；
+        // - 进入 apptokens 前 sessionKey 会被 spd 里的 sk 覆盖（Apple 下发的 32 字节密钥），
+        //   checksum / GCM 解密都用那个 sk，与这里无关。
+        // - K = SHA256(S) 仅用于 M1/M2 证明（hashSharedSecret）。
+        let (S, K) = SRP6a.calculateSharedSecret(
             private: clientPrivateKey,
             x: BigInt(bytes: x),
             salt: salt.map { $0 },
             A: publicKey.map { $0 },
             B: serverPublicKey.map { $0 }
         )
-        // 会话密钥 = K = SHA256(S)（32 字节），对齐 AltStore/StosSign：
-        // - serverProof/clientProof 与 apptokens 校验和均使用 K；
-        // - decryptedGCM 直接拿 sessionKey 当 AES-GCM 密钥（必须 16/24/32 字节），256 字节的 S 会运行时崩溃。
-        sessionKey = Data(K)
+        sessionKey = Data(S.bytes(paddedTo: SRP6a.sizeN))
 
         let M1 = SRP6a.clientProof(
             username: username,
@@ -70,10 +71,12 @@ final class GSAAuth {
 
     func verifyServerVerificationMessage(_ serverProof: Data) -> Bool {
         guard let verificationMessage, let sessionKey, let publicKey, let serverPublicKey else { return false }
+        // sessionKey 当前是 S（256 字节），证明计算需要 K = SHA256(S)
+        let K = SRP6a.sha256(sessionKey.map { $0 })
         let computed = SRP6a.serverProof(
             A: publicKey.map { $0 },
             M1: verificationMessage.map { $0 },
-            K: sessionKey.map { $0 }
+            K: K
         )
         return computed == serverProof.map { $0 }
     }

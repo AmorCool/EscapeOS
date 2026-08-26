@@ -11,6 +11,8 @@ struct AppleIDLoginSheet: View {
 
     @State private var email = ""
     @State private var password = ""
+    @State private var showPassword = false
+    @State private var rememberAccount = true
     @State private var showImporter = false
     @State private var importError: String?
     @State private var showLog = false
@@ -19,11 +21,57 @@ struct AppleIDLoginSheet: View {
         NavigationView {
             Form {
                 Section(header: Text("Apple ID")) {
-                    TextField("邮箱", text: $email)
-                        .keyboardType(.emailAddress)
+                    HStack {
+                        TextField("邮箱", text: $email)
+                            .keyboardType(.emailAddress)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                        if !MemoryLimitSettings.shared.loginHistory.isEmpty {
+                            Menu {
+                                ForEach(MemoryLimitSettings.shared.loginHistory, id: \.self) { account in
+                                    Button {
+                                        fillHistory(account)
+                                    } label: {
+                                        Label(account, systemImage: "clock.arrow.circlepath")
+                                    }
+                                    Button(role: .destructive) {
+                                        MemoryLimitSettings.shared.removeLoginHistory(account)
+                                    } label: {
+                                        Label("删除 \(account)", systemImage: "xmark.circle")
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                    HStack {
+                        Group {
+                            if showPassword {
+                                TextField("密码", text: $password)
+                            } else {
+                                SecureField("密码", text: $password)
+                            }
+                        }
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
-                    SecureField("密码", text: $password)
+                        Button {
+                            showPassword.toggle()
+                        } label: {
+                            Image(systemName: showPassword ? "eye.slash" : "eye")
+                                .foregroundColor(.blue)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+
+                Section {
+                    Toggle(isOn: $rememberAccount) {
+                        Label("记住账户", systemImage: "bookmark")
+                    }
+                } footer: {
+                    Text("开启后，登录成功的账户会保存在「最近登录」列表中，之后可从下拉菜单一键登录；未开启则不记录。")
                 }
 
                 Section {
@@ -118,6 +166,9 @@ struct AppleIDLoginSheet: View {
                 }
             }
             MemoryLimitSettings.shared.completeSignIn(email: email, password: password, account: account, session: session)
+            if !rememberAccount {
+                MemoryLimitSettings.shared.removeLoginHistory(email)
+            }
             LoginLogger.shared.log("✓ 登录成功，凭据已保存: \(account.appleID)")
             await MainActor.run {
                 ctrl.isAuthenticating = false
@@ -131,6 +182,14 @@ struct AppleIDLoginSheet: View {
                 ctrl.authError = message
             }
         }
+    }
+
+    /// 从「最近登录」选择一个账户：回填邮箱与密码并立即登录。
+    private func fillHistory(_ account: String) {
+        email = account
+        password = MemoryLimitSettings.shared.password(forHistory: account) ?? ""
+        guard !password.isEmpty else { return }
+        Task { await signIn() }
     }
 
     private func handleImport(_ urls: [URL]) {

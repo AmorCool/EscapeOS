@@ -192,18 +192,58 @@ final class MemoryLimitSettings: ObservableObject {
     // MARK: - 登录完成（由 Apple 认证引擎调用）
 
     func completeSignIn(email: String, password: String, account: Account, session: AppleAPISession) {
-        keychain.set(email.trimmingCharacters(in: .whitespacesAndNewlines), for: "appleID")
+        let email = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        keychain.set(email, for: "appleID")
         keychain.set(password, for: "applePassword")
         keychain.set(session.dsid, for: "dsid")
         keychain.set(session.authToken, for: "authToken")
         keychain.set(account.name, for: "accountName")
+        keychain.set(account.firstName, for: "firstName")
+        keychain.set(account.lastName, for: "lastName")
         keychain.set(true, for: "isLoggedIn")
+        // 记住该账户（供登录历史一键登录）
+        keychain.set(password, for: "pw:" + email)
+        addLoginHistory(email)
         refresh()
     }
 
     var dsid: String? { keychain.string(for: "dsid") }
     var authToken: String? { keychain.string(for: "authToken") }
     var accountName: String { keychain.string(for: "accountName") ?? "" }
+    var firstName: String { keychain.string(for: "firstName") ?? "" }
+    var lastName: String { keychain.string(for: "lastName") ?? "" }
+
+    // MARK: - 登录历史（记住账户）
+
+    private static let historyKey = "LoginHistory"
+
+    /// 最近登录的邮箱列表（最近在前，最多 10 条）。
+    var loginHistory: [String] {
+        UserDefaults.standard.stringArray(forKey: Self.historyKey) ?? []
+    }
+
+    func addLoginHistory(_ email: String) {
+        let e = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !e.isEmpty else { return }
+        var list = loginHistory.filter { $0.lowercased() != e }
+        list.insert(e, at: 0)
+        UserDefaults.standard.set(Array(list.prefix(10)), forKey: Self.historyKey)
+    }
+
+    func removeLoginHistory(_ email: String) {
+        var list = loginHistory.filter { $0.lowercased() != email.lowercased() }
+        UserDefaults.standard.set(list, forKey: Self.historyKey)
+        keychain.delete("pw:" + email)
+    }
+
+    /// 历史账户的一键登录密码（keychain 中按邮箱单独保存；当前登录账户回退到 applePassword）。
+    func password(forHistory email: String) -> String? {
+        if let pw = keychain.string(for: "pw:" + email), !pw.isEmpty { return pw }
+        if email.lowercased() == appleID.lowercased() {
+            return keychain.string(for: "applePassword")
+        }
+        return nil
+    }
 
     // MARK: - SideStore import
 

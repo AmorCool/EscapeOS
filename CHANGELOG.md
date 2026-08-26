@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.53] - 2026-08-26
+
+### Fixed
+- **修复 GrandSlam 握手 -22406（真机日志 + 原版源码逐行对照实锤）**：
+  - 根因①：M1/M2 证明把会话密钥 `K=SHA256(S)` **再次哈希**（`sha256(K)`），而原版 swift-srp 只哈希一次（`hashSharedSecret = H(S)`），导致 M1 与 Apple 计算不符 → Apple 为安全统一返回「密码错误」-22406。
+  - 根因②：`sessionKey` 应为 **S 的 256 字节**（spd 解密用 `HMAC(S, "extra data key:")` 派生，HMAC 允许任意长度 key），此前误用 32 字节 K；apptokens 阶段 sessionKey 会被 spd 中的 `sk` 字段覆盖（原版同款流程），不受影响。
+  - 根因③：`u` 计算中 B 应使用**服务器原始字节**（对齐 swift-srp `H(A_pad256 | B_raw)`），此前 pad 到 256。
+- 全盘审计对照原版（StosSign GSAContext + swift-srp @ ce202c48 + GetMoreRam AnisetteDataHelper）确认：k / x1(PBKDF2) / x / S / M1 / M2 / spd-CBC / sk / checksum / GCM / lookup 头 / identifier 全部一致。
+
+### Added
+- **密码框小眼睛**：登录界面密码输入框右侧新增眼睛图标，点击切换明文/密文。
+- **记住账户（默认开启）**：登录成功的账户写入「最近登录」历史（最多 10 条，去重置顶），每个账户的密码按邮箱单独存入钥匙串。
+- **最近登录下拉一键登录**：邮箱输入框右侧时钟图标下拉，列出历史账户；点击自动回填邮箱+密码并立即登录；每个账户行右侧有「删除」按钮，可单独移除该账户记录（连同其保存的密码）。
+- 登录成功额外保存 `firstName` / `lastName`（对齐 SideStore 的账户信息存储）。
+
 ## [0.2.52] - 2026-08-26
 
 ### Fixed
