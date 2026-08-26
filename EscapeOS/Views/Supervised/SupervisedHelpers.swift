@@ -14,18 +14,22 @@ func supervisedAppIcon(_ bundleID: String) -> Image {
     return Image(uiImage: img)
 }
 
-/// 设备本地枚举已安装应用（LSApplicationWorkspace 私有 API）。
+/// 设备本地枚举已安装应用（LSApplicationWorkspace 私有 API，运行时反射调用，
+/// 不产生编译期类符号引用，Theos 下无需额外链接 CoreServices）。
 /// 不需要配对文件 / 本地隧道，证书直装环境直接可用。
 /// 只返回用户安装的应用（User / Internal）——隐藏对系统 App 无效。
 func supervisedInstalledApps() -> [InstalledApp] {
-    guard let ws = LSApplicationWorkspace.default(),
-          let proxies = ws.allApplications as? [LSApplicationProxy] else { return [] }
+    guard let wsClass = NSClassFromString("LSApplicationWorkspace") as AnyObject?,
+          let ws = wsClass.perform(NSSelectorFromString("defaultWorkspace"))?.takeUnretainedValue(),
+          let proxies = ws.perform(NSSelectorFromString("allApplications"))?.takeUnretainedValue() as? [NSObject] else {
+        return []
+    }
     var result: [InstalledApp] = []
     for proxy in proxies {
-        guard let bid = proxy.bundleIdentifier else { continue }
-        let type = proxy.applicationType ?? "User"
+        guard let bid = proxy.value(forKey: "bundleIdentifier") as? String else { continue }
+        let type = (proxy.value(forKey: "applicationType") as? String) ?? "User"
         if type == "System" || type == "HiddenSystemApp" { continue }
-        let nm = proxy.localizedName ?? ""
+        let nm = (proxy.value(forKey: "localizedName") as? String) ?? ""
         result.append(InstalledApp(
             bundleIdentifier: bid,
             name: nm.isEmpty ? bid : nm,
