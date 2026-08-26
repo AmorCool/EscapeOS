@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.65] - 2026-08-27
+
+### Added
+- **「配置管理」新增「监督模式工具」板块（移植自 jailbreakdotparty/Lithium，纯描述文件路线，无需任何漏洞/越狱前提）**：
+  - 前提：设备开启监督模式（通常用 Nugget 开启）后，在「设置 → VPN 与设备管理」安装生成的 `.mobileconfig` 即可生效；未开启监督模式时显示引导弹窗说明如何开启，并禁用调整入口。
+  - 双轨保留：原有「直接写入系统 plist」能力完全不动，两条路线并存。
+  - 四个工具页 + 锁屏页脚，全部中文本地化，UI 复用项目 DesignSystem（浅色大圆角卡片 / 系统语义色，无棕色系）：
+    1. **限制开关**（`com.apple.applicationaccess`）：分组开关覆盖 iOS 26 常用限制键（安装/删除 App、应用内购买、截屏、Siri/助手、相机、NFC、隔空投送、Safari、Game Center、Genmoji、写作工具、Apple 智能相关开关等），支持 iOS 26 强制延迟软件更新（最多 90 天）滑块，含系统版本门控与关键项风险提示。
+    2. **应用隐藏**（同载体 `blockedAppBundleIDs`）：从已安装 App 列表勾选隐藏（私有 API 取真实图标），也支持手动输入 Bundle ID；登记目录 JSON 持久化，可滑动删除。
+    3. **通知管理**（`com.apple.notificationsettings`）：按 App 开关通知（`NotificationsEnabled`），同样支持手动添加 Bundle ID。
+    4. **网页快捷方式**（`com.apple.webClip.managed`）：名称 / URL / 图标（相册选取 + 裁剪）/ 全屏 / 无边框，生成的 Web Clip 显示在主屏。
+    5. **锁屏页脚**（`com.apple.shareddeviceconfiguration`）：监管版锁屏消息（与直接写入版双轨并存，各自独立生效）。
+  - 每个工具页都有统一的底部「安装描述文件」按钮（复用项目已有的 `ProfileHTTPServer` 本机安装通道，与「屏蔽域名」同机制）与右上角菜单（导出描述文件 / 重置为默认）。
+  - 模板资源随包携带（`Resources/esc.*.mobileconfig`），首次进入复制到 `Documents/Profiles/` 作为可编辑副本，标识符已全部改为 EscapeSpace 命名，避免与真实 Lithium 安装的设备冲突。
+
 ## [0.2.64] - 2026-08-27
 
 ### Fixed
