@@ -151,11 +151,14 @@ struct AppleIDLoginSheet: View {
         ctrl.isAuthenticating = true
         ctrl.authError = nil
         LoginLogger.shared.log("▶ 用户点击登录: \(email.lowercased())")
-        // 登录前运行 SRP 自检（固定向量），结果写入诊断日志，便于定位 -22406 类问题
-        let selfTest = await Task.detached(priority: .utility) {
-            GSAAuth.runSelfTest()
-        }.value
-        LoginLogger.shared.log("SRP 自检: \(selfTest)")
+        // SRP 自检：只跑一次并缓存结果（PASS 后不再重复跑，避免每次登录的 PBKDF2 开销）
+        if UserDefaults.standard.string(forKey: "SRPTestResult") == nil {
+            let selfTest = await Task.detached(priority: .utility) {
+                GSAAuth.runSelfTest()
+            }.value
+            UserDefaults.standard.set(selfTest, forKey: "SRPTestResult")
+            LoginLogger.shared.log("SRP 自检: \(selfTest)")
+        }
         do {
             let anisette = try await AnisetteProvider.shared.getAnisetteData()
             LoginLogger.shared.log("✓ Anisette 获取成功，进入 GrandSlam 握手")
