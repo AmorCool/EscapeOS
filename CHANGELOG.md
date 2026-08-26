@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.63] - 2026-08-27
+
+### Fixed
+- **底部 Tab 栏压住列表内容的观感（「空间回收」页常规清理 / 容器管理两个子页）**：
+  - 根因：`SpaceReclaimView` 用 `VStack` 包住 `ReclaimTabView` / `LiveCleanTabView` 各自的 `List`，在 TabView 嵌套下，列表底部安全区失效，最后一项直接顶到 Tab 栏实色背景，产生「被压住 / 遮挡」的感觉。
+  - 修复①：给 `RootView` 的 `TabView` 显式设置 `.toolbarBackground(.visible, for: .tabBar)`，强制 Tab 栏为标准半透明毛玻璃，消除实色「板子压住」的观感。
+  - 修复②：`ReclaimTabView` / `LiveCleanTabView` 的非选择态也保留 12pt 底部 `safeAreaInset` 占位，列表最后一项与 Tab 栏之间留出呼吸间距，不再贴死。
+
+### Changed
+- PosterBoard 壁纸能力在 iOS 26 上可用（项目已有的「更多 → 壁纸」导入 / 应用 `.tendies` 功能在 iOS 26 实测可工作，路径不受 MobileGestalt 系统路径写入封堵影响）。因此「提取当前系统 `.tendies` 壁纸」在 iOS 26 上同样具备可行性（读取 + 重新打包导入），不再沿用此前过度保守的 iOS 26 不可写结论。
+
 ## [0.2.62] - 2026-08-27
 
 ### Added

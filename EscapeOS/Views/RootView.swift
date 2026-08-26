@@ -65,6 +65,7 @@ struct RootView: View {
             .tag(MainTab.more)
         }
         .overlay(CopyBanner(message: copyFeedback.message))
+        .toolbarBackground(.visible, for: .tabBar)
         .sheet(isPresented: Binding(
             get: { !hasAcknowledgedLimits },
             set: { if !$0 { hasAcknowledgedLimits = true } }

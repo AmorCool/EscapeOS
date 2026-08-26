@@ -60,6 +60,10 @@ struct ReclaimTabView: View {
         .safeAreaInset(edge: .bottom) {
             if selecting {
                 batchBar
+            } else {
+                // 留出底部间距，避免列表最后一项直接顶到 Tab 栏，
+                // 消除"Tab 栏压住内容"的观感（SpaceReclaimView 嵌套 VStack 会使默认 safe area 失效）。
+                Color.clear.frame(height: 12)
             }
         }
         .overlay {
