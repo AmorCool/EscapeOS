@@ -201,16 +201,16 @@ final class AnisetteProvider {
         switch result {
         case "GiveIdentifier":
             guard let identifier = keychain.string(for: "identifier") else { throw AppleAPIError.invalidAnisetteData }
-            try await socket.send(.string(try JSONSerialization.string(withJSONObject: ["identifier": identifier])))
+            try await socket.send(.string(String(data: try JSONSerialization.data(withJSONObject: ["identifier": identifier]), encoding: .utf8)!))
             return false
         case "GiveStartProvisioningData":
             let spim = try await fetchProvisioningData(url: startURL, body: ["Header": [:], "Request": [:]])
-            try await socket.send(.string(try JSONSerialization.string(withJSONObject: ["spim": spim])))
+            try await socket.send(.string(String(data: try JSONSerialization.data(withJSONObject: ["spim": spim]), encoding: .utf8)!))
             return false
         case "GiveEndProvisioningData":
             guard let cpim = json["cpim"] as? String else { throw AppleAPIError.invalidAnisetteData }
             let endData = try await fetchEndProvisioningData(url: endURL, cpim: cpim)
-            try await socket.send(.string(try JSONSerialization.string(withJSONObject: endData)))
+            try await socket.send(.string(String(data: try JSONSerialization.data(withJSONObject: endData), encoding: .utf8)!))
             return false
         case "ProvisioningSuccess":
             guard let adiPb = json["adi_pb"] as? String else { throw AppleAPIError.invalidAnisetteData }
