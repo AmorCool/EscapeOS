@@ -19,4 +19,11 @@
 // iOS 27 device-initiated wireless pairing host wrapper
 #import "../Tunnel/WirelessPairing.h"
 
+// 监督模式工具：通过私有 API 取已安装 App 图标（移植自 Lithium）
+@interface UIImage (EscapeOSSupervised)
++ (instancetype)_applicationIconImageForBundleIdentifier:(NSString *)bundleIdentifier
+                                                 format:(int)format
+                                                  scale:(CGFloat)scale;
+@end
+
 #endif /* EscapeOS_Bridging_Header_h */

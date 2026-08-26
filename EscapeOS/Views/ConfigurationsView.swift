@@ -206,6 +206,10 @@ struct ConfigurationsView: View {
     @State private var shareTarget: ShareTarget?
     @State private var isBusy = false
 
+    /// 监督模式工具入口是否可用（设备处于监督模式）。
+    @State private var supervisedToolsEnabled = false
+    @State private var showSuperviseHelp = false
+
     private var isWritable: Bool {
         if case .readWrite = access { return true }
         return false
@@ -217,6 +221,7 @@ struct ConfigurationsView: View {
             backupSection
             footnoteSection
             supervisionSection
+            supervisedToolsSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("配置管理")
@@ -246,6 +251,7 @@ struct ConfigurationsView: View {
             footnoteText = current.footnote
             supervised = current.supervised
             orgName = current.orgName
+            supervisedToolsEnabled = SupervisedProfileStore.isSupervised()
         }
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
@@ -286,6 +292,11 @@ struct ConfigurationsView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text("若设备已由 MDM 配置管理，请勿改动此开关。启用后重新启动（Respring）可能出现设置引导页，风险自负。")
+        }
+        .alert("如何开启监督模式", isPresented: $showSuperviseHelp) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("“监督模式工具”通过描述文件调整设备，需要设备处于监督模式。可在电脑上用 Nugget 等工具对设备开启监督（注意：iOS 27 及以上 Nugget 可能不可用）。开启后回到此处点右上角刷新按钮重新检测。")
         }
     }
 
@@ -427,6 +438,71 @@ struct ConfigurationsView: View {
             }
         } footer: {
             Text("若设备已由 MDM 配置管理，请勿改动此开关。启用后重新启动可能出现设置引导页，风险自负。")
+        }
+    }
+
+    // MARK: - 监督模式工具（描述文件双轨，移植自 Lithium）
+
+    private var supervisedToolsSection: some View {
+        Section {
+            if !supervisedToolsEnabled {
+                InfoActionCard(
+                    icon: "lock.shield",
+                    iconTint: .orange,
+                    title: "未检测到监督模式",
+                    message: "以下工具通过“描述文件”方式调整设备，无需越狱或漏洞，但要求设备处于监督模式（通常用 Nugget 开启）。未监督时不可使用。",
+                    actionTitle: "如何开启？",
+                    action: { showSuperviseHelp = true },
+                    disabled: false
+                )
+            }
+
+            ForEach(SupervisedProfileStore.Profile.allCases) { profile in
+                NavigationLink(destination: supervisedDestination(for: profile)) {
+                    HStack(spacing: 12) {
+                        AppRowIcon(systemName: profile.systemImage)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(profile.displayName)
+                                .font(.subheadline)
+                            Text(supervisedToolsEnabled ? "描述文件方式调整" : "需监督模式")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .disabled(!supervisedToolsEnabled)
+            }
+        } header: {
+            HStack {
+                Text("监督模式工具")
+                Spacer()
+                if supervisedToolsEnabled {
+                    Image(systemName: "checkmark.shield.fill")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                } else {
+                    Button {
+                        supervisedToolsEnabled = SupervisedProfileStore.isSupervised()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+        } footer: {
+            Text("与上方“直接写入系统配置”互补：此处走描述文件安装，不需写系统目录，适用于已监督但未越狱的设备。")
+        }
+    }
+
+    @ViewBuilder
+    private func supervisedDestination(for profile: SupervisedProfileStore.Profile) -> some View {
+        switch profile {
+        case .restrictions: RestrictionTweaksView()
+        case .notifications: NotificationManageView()
+        case .footnote:     SupervisedFootnoteView()
+        case .webclip:      WebClipView()
         }
     }
 

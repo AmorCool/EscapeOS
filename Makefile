@@ -35,6 +35,12 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/DDIDownloadView.swift \
 	EscapeOS/Views/DomainBlockerView.swift \
 	EscapeOS/Views/DesignSystem.swift \
+	EscapeOS/Views/Supervised/SupervisedHelpers.swift \
+	EscapeOS/Views/Supervised/RestrictionTweaksView.swift \
+	EscapeOS/Views/Supervised/AppHideView.swift \
+	EscapeOS/Views/Supervised/NotificationManageView.swift \
+	EscapeOS/Views/Supervised/WebClipView.swift \
+	EscapeOS/Views/Supervised/SupervisedFootnoteView.swift \
 	EscapeOS/Views/Wallpaper/WallpaperModels.swift \
 	EscapeOS/Views/Wallpaper/WallpaperHandler.swift \
 	EscapeOS/Views/Wallpaper/WallpaperView.swift \
@@ -46,6 +52,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/FileClipboard.swift \
 	EscapeOS/Engine/FileService.swift \
 	EscapeOS/Engine/ProfileHTTPServer.swift \
+	EscapeOS/Engine/SupervisedProfileStore.swift \
 	EscapeOS/Engine/AppDiscovery.swift \
 	EscapeOS/Engine/BackupService.swift \
 	EscapeOS/Engine/ZipWriter.swift \
