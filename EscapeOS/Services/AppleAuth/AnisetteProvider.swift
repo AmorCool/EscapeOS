@@ -73,10 +73,10 @@ final class AnisetteProvider {
         request.httpBody = try JSONSerialization.data(withJSONObject: ["identifier": identifier, "adi_pb": adiPb])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await session.data(for: request)
-        return try extractAnisetteData(data, response as? HTTPURLResponse, v3: true)
+        return try await extractAnisetteData(data, response as? HTTPURLResponse, v3: true)
     }
 
-    private func extractAnisetteData(_ data: Data, _ response: HTTPURLResponse?, v3: Bool) throws -> AnisetteData {
+    private func extractAnisetteData(_ data: Data, _ response: HTTPURLResponse?, v3: Bool) async throws -> AnisetteData {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw AppleAPIError.invalidAnisetteData
         }
@@ -127,7 +127,7 @@ final class AnisetteProvider {
 
     private func provision() async throws -> AnisetteData {
         try await fetchClientInfo()
-        var request = URLRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2/lookup")!)
+        let request = URLRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2/lookup")!)
         let (data, _) = try await session.data(for: request)
         guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: [String: Any]],
               let startStr = plist["urls"]?["midStartProvisioning"] as? String,
