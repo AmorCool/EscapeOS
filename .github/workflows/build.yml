@@ -6,6 +6,13 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# 同一 ref（tag）同时只允许一个构建：tag 推送事件被 GitHub 延迟处理、与
+# workflow_dispatch 兜底重叠时，后到的 run 自动取消先到的，杜绝同一 commit
+# 双份构建（2026-08-27 实锤：v0.2.60/61/62 各产生 1 dispatch + 1 迟到 push 双跑）。
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
