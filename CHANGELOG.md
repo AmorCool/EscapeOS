@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.50] - 2026-08-26
+
+### Fixed
+- **修复登录报「Anisette数据无效或已过期」（真机实测反馈）**：
+  - 根因：`AnisetteProvider.fetchClientInfo` 把 16 字节随机数据以**原始字节**写入钥匙串，而 `EscapeKeychain.string(for:)` 按 **UTF-8** 解码，随机字节几乎必然解码失败（返回 nil），导致首次登录必然在生成 identifier 后立即抛出 `invalidAnisetteData`。
+  - 修复：identifier 改为以 **base64 字符串** 存储；并自动检测/清除旧版本遗留的无效 identifier（解码校验 16 字节，失败则重新生成），老用户升级后无需清除应用数据即可登录。
+- 修复 v3 Anisette `date` 字段时区错误：此前用 `TimeZone.current`（如中国 +8）却打印 `'Z'`（UTC）后缀，时间戳偏差 8 小时；现强制 UTC 生成，避免被 Apple 判定时间不符（-22421）。
+
+### Changed
+- `AppleAuthenticator` 的 GrandSlam 错误码映射不变（-22421 → Anisette 无效），但 Anisette 生成侧已修复，正常首次登录不再触发。
+
 ## [0.2.49] - 2026-08-26
 
 ### Added

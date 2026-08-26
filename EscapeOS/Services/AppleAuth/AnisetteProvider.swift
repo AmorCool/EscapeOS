@@ -47,15 +47,27 @@ final class AnisetteProvider {
         clientInfo = ci
         userAgent = ua
 
-        if keychain.string(for: "identifier") == nil {
+        // identifier 必须以 base64 字符串存储（EscapeKeychain.string(for:) 用 UTF-8 解码，
+        // 存原始字节会解码失败 → 登录报「Anisette数据无效或已过期」）。
+        // 兼容清理：旧版本可能遗留了原始字节的坏数据，解码失败时重新生成。
+        var identifier: String? = nil
+        if let existing = keychain.string(for: "identifier"),
+           let decoded = Data(base64Encoded: existing),
+           decoded.count == 16 {
+            identifier = existing
+        }
+        if identifier == nil {
+            keychain.delete("identifier")
             var bytes = [UInt8](repeating: 0, count: 16)
             guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
                 throw AppleAPIError.invalidAnisetteData
             }
-            keychain.set(Data(bytes), for: "identifier")
+            let newIdentifier = Data(bytes).base64EncodedString()
+            keychain.set(newIdentifier, for: "identifier")
+            identifier = newIdentifier
         }
-        guard let identifier = keychain.string(for: "identifier"),
-              let decoded = Data(base64Encoded: identifier) else {
+        guard let identifier else { throw AppleAPIError.invalidAnisetteData }
+        guard let decoded = Data(base64Encoded: identifier) else {
             throw AppleAPIError.invalidAnisetteData
         }
         mdLu = Data(SHA256.hash(data: decoded)).map { String(format: "%02X", $0) }.joined()
@@ -102,7 +114,7 @@ final class AnisetteProvider {
             let fmt = DateFormatter()
             fmt.locale = Locale(identifier: "en_US_POSIX")
             fmt.calendar = Calendar(identifier: .gregorian)
-            fmt.timeZone = TimeZone.current
+            fmt.timeZone = TimeZone(secondsFromGMT: 0)
             fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
             formatted["date"] = fmt.string(from: Date())
             formatted["locale"] = Locale.current.identifier
