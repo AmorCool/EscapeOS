@@ -246,6 +246,8 @@ struct ReclaimTabView: View {
             .tint(AppTheme.accent)
         }
         .padding()
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity)
         .background(.bar)
     }
 }

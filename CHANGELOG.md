@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.45] - 2026-08-26
+
+### Changed
+
+- **回退 v0.2.45/v0.2.46 并重新设计**：按用户反馈回退到 v0.2.44 重新做，不再强套 Lara 风格，保持 EscapeOS 原有视觉语言。
+- **「更多」设置入口改为右上角齿轮**：`MoreView` 移除列表中的「设置」行，在导航栏右上角添加 `gearshape` 图标；点击后以 `.sheet` 弹出 `SettingsForm`（带「完成」按钮），不再 push 到新页面。
+- **「空间回收」分段控件压缩**：`SpaceReclaimView` 顶部 Picker 减少内边距，背景与列表一致，避免额外视觉层级。
+- **选择模式底部操作条抬高**：`ReclaimTabView` 与 `LiveCleanTabView` 的 `batchBar` 增加底部内边距，按钮不再贴底，避免被 tab bar / home indicator 遮挡；`LiveCleanTabView` 的清理按钮也统一为 `borderedProminent` 样式，减少两页割裂感。
+
 ## [0.2.44] - 2026-08-26
 
 ### Changed

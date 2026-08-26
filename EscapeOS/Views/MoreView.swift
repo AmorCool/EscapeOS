@@ -6,6 +6,7 @@ import SwiftUI
 struct MoreView: View {
     @ObservedObject var appList: AppListViewModel
     var onResetPairing: () -> Void
+    @State private var showSettings = false
 
     var body: some View {
         List {
@@ -41,19 +42,35 @@ struct MoreView: View {
                         subtitle: "查看、恢复或导出已创建的 EscapeSpace 备份归档。"
                     )
                 }
-
-                NavigationLink(destination: SettingsForm(onResetPairing: onResetPairing)) {
-                    MoreCard(
-                        icon: "gearshape.fill",
-                        title: "设置",
-                        subtitle: "调整隧道 IP、重置配对文件、查看版本与限制说明。"
-                    )
-                }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("更多")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .imageScale(.large)
+                }
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            NavigationView {
+                SettingsForm(onResetPairing: onResetPairing)
+                    .navigationTitle("设置")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("完成") {
+                                showSettings = false
+                            }
+                        }
+                    }
+            }
+        }
     }
 }
 

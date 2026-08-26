@@ -242,8 +242,12 @@ struct LiveCleanTabView: View {
                 vm.confirmBatch = true
             }
             .disabled(vm.selected.isEmpty || bytes == 0)
+            .buttonStyle(.borderedProminent)
+            .tint(AppTheme.accent)
         }
         .padding()
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity)
         .background(.bar)
     }
 }

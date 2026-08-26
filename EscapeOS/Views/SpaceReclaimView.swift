@@ -21,6 +21,7 @@ struct SpaceReclaimView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // 紧凑分段切换：高度压缩、与列表同背景，避免额外视觉层级。
             Picker("清理范围", selection: $segment) {
                 ForEach(ReclaimSegment.allCases) { s in
                     Text(s.rawValue).tag(s)
@@ -28,8 +29,8 @@ struct SpaceReclaimView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color(.secondarySystemGroupedBackground))
+            .padding(.vertical, 8)
+            .background(Color(.systemGroupedBackground))
 
             Divider()
 
