@@ -5,7 +5,6 @@ import UIKit
 private enum MainTab: Hashable {
     case apps
     case reclaim
-    case liveclean
     case gestalt
     case more
 }
@@ -40,22 +39,13 @@ struct RootView: View {
             .tag(MainTab.apps)
 
             NavigationView {
-                ReclaimTabView(appList: viewModel)
+                SpaceReclaimView(appList: viewModel)
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
                 Label("空间回收", systemImage: "internaldrive")
             }
             .tag(MainTab.reclaim)
-
-            NavigationView {
-                LiveCleanTabView(appList: viewModel)
-                    .navigationBarTitleDisplayMode(.large)
-            }
-            .tabItem {
-                Label("容器管理", systemImage: "shippingbox")
-            }
-            .tag(MainTab.liveclean)
 
             GestaltView()
                 .tabItem {

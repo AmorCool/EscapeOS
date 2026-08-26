@@ -36,9 +36,21 @@ jobs:
           sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
 
+      - name: Cache Theos checkout
+        # Theos itself (plus its submodules) never changes between builds, so
+        # cache the whole checkout and skip the recursive clone on cache hits.
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.HOME }}/theos
+          key: macos-theos-v1
+
       - name: Set up Theos
         run: |
-          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+          if [ -d "$HOME/theos" ]; then
+            echo "Theos cache hit — skipping clone"
+          else
+            git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+          fi
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
 
       - name: Point Theos at the Xcode iPhoneOS SDK
@@ -54,6 +66,27 @@ jobs:
           SDK_VER="$(echo "$SDK_NAME" | sed -E 's/iPhoneOS([0-9.]+)\.sdk/\1/')"
           echo "SDK_VER=$SDK_VER" >> "$GITHUB_ENV"
           echo "Using Xcode SDK $SDK_NAME ($XCODE_SDK) -> TARGET iphone:clang:${SDK_VER}:18.0"
+
+      - name: Cache Rust toolchain
+        # The Rust toolchain (rustup + std + target) is identical every build,
+        # so cache ~/.rustup and the cargo bin/env and skip the rustup install.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+            ~/.cargo/bin
+            ~/.cargo/env
+          key: macos-rust-stable-v1
+
+      - name: Install Rust toolchain
+        run: |
+          if [ -x "$HOME/.cargo/bin/rustc" ]; then
+            echo "Rust toolchain cache hit — skipping install"
+          else
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-apple-ios
 
       - name: Cache Rust registry + build artifacts
         # Caches Cargo registry (downloaded crate sources) and the per-target
@@ -75,9 +108,7 @@ jobs:
         # host. Replaces the prebuilt pwnapplehat v0.1.5 binary.
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source "$HOME/.cargo/env"
-          rustup target add aarch64-apple-ios
           cd rust/idevice-ffi
           # Belt-and-suspenders for cargo network: use the system git CLI for
           # fetching git deps (more robust on flaky CI NATs), and retry up to

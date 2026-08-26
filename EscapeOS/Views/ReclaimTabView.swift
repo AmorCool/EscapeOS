@@ -23,7 +23,6 @@ struct ReclaimTabView: View {
 
     var body: some View {
         mainContent
-            .navigationTitle("空间回收")
         .onAppear {
             vm.refreshRanksFromCache()
         }

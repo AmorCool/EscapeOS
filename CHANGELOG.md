@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.44] - 2026-08-26
+
+### Changed
+
+- **「空间回收」与「容器管理」合并为单 tab + 分段（分栏）**. 原「空间回收」tab 现承载一个分段控件：`常规清理`（原系统应用回收 `ReclaimTabView`）与 `容器管理`（原 LiveContainer 内应用 `LiveCleanTabView`）。独立的「容器管理」tab 已移除，二者共用同一份底层 `ReclaimAppView` 详情页，标题统一为「空间回收」。
+- 新增 `EscapeOS/Views/SpaceReclaimView.swift` 作为合并容器；`Makefile` 注册新源文件。
+
+### Fixed / Optimized
+
+- **CI 编译时间进一步缩短**. 在原有 Rust registry/target 缓存（方案四）基础上，新增缓存 `Theos` 全量 checkout 与 Rust 工具链（`~/.rustup` + `~/.cargo/bin`），并对克隆/安装步骤做缓存命中跳过，预计每次构建省 2–3 分钟。
+
+### Changed
+
+- 版本号 `0.2.43 → 0.2.44`（`control` 与 `Resources/Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion` 同步）。
+
 ## [0.2.43] - 2026-08-26
 
 ### Added

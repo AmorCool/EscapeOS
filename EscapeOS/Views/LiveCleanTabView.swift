@@ -46,7 +46,6 @@ struct LiveCleanTabView: View {
 
     var body: some View {
         mainContent
-            .navigationTitle("容器管理")
         .onAppear {
             vm.refreshRanksFromCache()
         }
