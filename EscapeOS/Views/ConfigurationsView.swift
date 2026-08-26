@@ -197,10 +197,12 @@ struct ConfigurationsView: View {
     @State private var showApplyConfirm = false
     @State private var showResetConfirm = false
     @State private var resultMessage = ""
+    @State private var resultCanRespring = false
     @State private var showResult = false
     @State private var errorMessage = ""
     @State private var showError = false
     @State private var showSupervisionWarning = false
+    @State private var shouldRespring = false
     @State private var shareTarget: ShareTarget?
     @State private var isBusy = false
 
@@ -248,6 +250,13 @@ struct ConfigurationsView: View {
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
         }
+        .overlay {
+            if shouldRespring {
+                RespringView()
+                    .brightness(-1.0)
+                    .ignoresSafeArea()
+            }
+        }
         .alert("应用配置", isPresented: $showApplyConfirm) {
             Button("应用", role: .destructive) { apply() }
             Button("取消", role: .cancel) {}
@@ -261,6 +270,9 @@ struct ConfigurationsView: View {
             Text("将删除锁屏页脚并使设备取消监督状态。")
         }
         .alert("操作结果", isPresented: $showResult) {
+            if resultCanRespring {
+                Button("Respring") { shouldRespring = true }
+            }
             Button("好", role: .cancel) {}
         } message: {
             Text(resultMessage)
@@ -427,10 +439,12 @@ struct ConfigurationsView: View {
     private func apply() {
         do {
             try ConfigurationsStore.write(footnote: footnoteText, supervised: supervised, orgName: orgName)
-            resultMessage = "配置已应用。\n\n请手动重启（Respring / 重启设备）使更改生效。"
+            resultMessage = "配置已应用。\n\nRespring 后生效。"
+            resultCanRespring = true
             showResult = true
         } catch {
             errorMessage = "写入失败：\(error.localizedDescription)"
+            resultCanRespring = false
             showError = true
         }
     }
@@ -438,13 +452,15 @@ struct ConfigurationsView: View {
     private func reset() {
         do {
             try ConfigurationsStore.reset()
-            resultMessage = "配置已恢复（页脚已删除、监督已关闭）。\n\n请手动重启（Respring / 重启设备）使更改生效。"
+            resultMessage = "配置已恢复（页脚已删除、监督已关闭）。\n\nRespring 后生效。"
+            resultCanRespring = true
             showResult = true
             footnoteText = ""
             supervised = false
             orgName = ""
         } catch {
             errorMessage = "恢复失败：\(error.localizedDescription)"
+            resultCanRespring = false
             showError = true
         }
     }

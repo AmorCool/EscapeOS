@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.62] - 2026-08-27
+
+### Added
+- **配置管理 · Respring 加回，改用 Mond 项目（rooootdev/mond）的实现方式**：
+  - 移植 `mond/helpers/utils.swift` 的 `RespringView`（neon 的 Web 压力方案，@neonmodder123 开发 / @skadz108 Swift 移植），与 Mond 逐字一致。
+  - 展示方式与 Mond / Erosion 完全对齐：`.overlay { RespringView().brightness(-1.0).ignoresSafeArea() }`（此前 v0.2.60 用的是 `.fullScreenCover` 模态展示，多出转场动画与独立宿主窗口，是「黑屏 + 延迟」观感的主要来源；v0.2.61 曾整体移除）。
+  - 应用 / 恢复成功弹窗恢复「Respring」按钮（仅成功时可触发），点击后黑屏执行；失败弹窗不提供该按钮。
+
+### Changed
+- 应用 / 恢复成功提示恢复为「配置已应用。Respring 后生效。」（v0.2.61 的「请手动重启」文案替换回带 Respring 按钮的方案）。
+
 ## [0.2.61] - 2026-08-26
 
 ### Removed
