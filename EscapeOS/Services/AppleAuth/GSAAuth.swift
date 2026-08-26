@@ -168,6 +168,7 @@ final class GSAAuth {
         let ivBytes = iv.count >= 16 ? iv.prefix(16) : (iv + Data(repeating: 0, count: 16 - iv.count))
         var out = Data(count: data.count + kCCBlockSizeAES128)
         var outLen = 0
+        let outCount = out.count
         let status = data.withUnsafeBytes { db in
             key.withUnsafeBytes { kb in
                 ivBytes.withUnsafeBytes { ib in
@@ -178,7 +179,7 @@ final class GSAAuth {
                             kb.bindMemory(to: UInt8.self).baseAddress, keyLen,
                             ib.bindMemory(to: UInt8.self).baseAddress,
                             db.bindMemory(to: UInt8.self).baseAddress, data.count,
-                            ob.bindMemory(to: UInt8.self).baseAddress, out.count, &outLen
+                            ob.bindMemory(to: UInt8.self).baseAddress, outCount, &outLen
                         )
                     }
                 }
