@@ -141,7 +141,7 @@ struct IncreaseMemoryView: View {
     // MARK: - App ID 列表
 
     private var appSection: some View {
-        Section(header: Text("App ID"), footer: Text("开启后需要重新安装对应 App 才能使 INCREASED_MEMORY_LIMIT 能力生效。")) {
+        Section(header: appHeader, footer: appFooter) {
             switch ctrl.appState {
             case .idle:
                 if !ctrl.teams.isEmpty {
@@ -164,39 +164,105 @@ struct IncreaseMemoryView: View {
                         .foregroundColor(.secondary)
                 } else {
                     ForEach(ctrl.apps) { app in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(app.bundleIdentifier)
-                                    .font(.subheadline)
-                                Text(app.name)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            if app.hasIncreasedMemory {
-                                Label("已开启", systemImage: "checkmark.circle.fill")
-                                    .font(.caption)
-                                    .foregroundColor(.green)
-                            } else {
-                                Button {
-                                    Task { await ctrl.enable(for: app) }
-                                } label: {
-                                    if ctrl.enablingBundleID == app.bundleIdentifier {
-                                        ProgressView().controlSize(.small)
-                                    } else {
-                                        Text("开启")
-                                    }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.blue)
-                                .disabled(ctrl.enablingBundleID != nil)
-                            }
-                        }
+                        AppRowView(
+                            app: app,
+                            isSelected: ctrl.selectedIDs.contains(app.identifier),
+                            isOperating: ctrl.operatingIDs.contains(app.identifier),
+                            skipEnabled: ctrl.skipEnabled,
+                            onToggleSelection: { ctrl.toggleSelection(app.identifier) },
+                            onEnableOne: { Task { await ctrl.enable(for: app) } }
+                        )
                     }
                 }
             }
         }
+    }
+
+    private var appHeader: some View {
+        HStack {
+            Text("App ID")
+            Spacer()
+            if ctrl.appState == .loaded, ctrl.eligibleForSelection {
+                Button(ctrl.allSelected ? "取消全选" : "全选") {
+                    ctrl.toggleSelectAll()
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private var appFooter: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("开启后需要重新安装对应 App 才能使 INCREASED_MEMORY_LIMIT 能力生效。")
+            if ctrl.appState == .loaded, !ctrl.apps.isEmpty {
+                Toggle("跳过已开启的", isOn: $ctrl.skipEnabled)
+                    .font(.caption)
+            }
+            if !ctrl.selectedIDs.isEmpty {
+                Button {
+                    Task { await ctrl.enableBatch() }
+                } label: {
+                    HStack {
+                        if ctrl.isBatchRunning {
+                            ProgressView().controlSize(.small)
+                            Text("批量开启中 \(ctrl.batchDone)/\(ctrl.batchTotal)…")
+                        } else {
+                            Image(systemName: "memorychip")
+                            Text("批量开启（\(ctrl.selectedIDs.count)）")
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .disabled(ctrl.isBatchRunning)
+            }
+        }
+    }
+}
+
+// MARK: - App 行
+
+private struct AppRowView: View {
+    let app: DeveloperAppID
+    let isSelected: Bool
+    let isOperating: Bool
+    let skipEnabled: Bool
+    let onToggleSelection: () -> Void
+    let onEnableOne: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onToggleSelection) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(isSelected ? .blue : .secondary)
+                    .imageScale(.large)
+            }
+            .buttonStyle(.borderless)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.bundleIdentifier)
+                    .font(.subheadline)
+                Text(app.name)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if app.hasIncreasedMemory {
+                Label("已开启", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            } else if isOperating {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("开启", action: onEnableOne)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                    .disabled(isOperating)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onToggleSelection() }
     }
 }
 
@@ -216,12 +282,29 @@ final class IncreaseMemoryController: ObservableObject {
     @Published var teams: [DeveloperTeam] = []
     @Published var selectedTeamID: String = ""
     @Published var apps: [DeveloperAppID] = []
-    @Published var enablingBundleID: String?
+    @Published var operatingIDs: Set<String> = []          // 当前正在开启的 App（含批量）
+    @Published var selectedIDs: Set<String> = []           // 用户勾选待批量开启
+    @Published var skipEnabled: Bool = true                // 默认跳过已开启的
+    @Published var isBatchRunning = false
+    @Published var batchDone = 0
+    @Published var batchTotal = 0
     @Published var showResult = false
     @Published var resultMessage = ""
     @Published var showError = false
     @Published var errorMessage = ""
     private var loadedOnce = false
+
+    /// 可被选中的 App（默认排除已开启的；切关「跳过已开启」后包含）
+    private var selectableApps: [DeveloperAppID] {
+        skipEnabled ? apps.filter { !$0.hasIncreasedMemory } : apps
+    }
+
+    var eligibleForSelection: Bool { !selectableApps.isEmpty }
+    var allSelected: Bool {
+        let ids = selectableApps.map(\.identifier)
+        guard !ids.isEmpty else { return false }
+        return ids.allSatisfy { selectedIDs.contains($0) }
+    }
 
     @MainActor
     private var session: AppleAPISession? {
@@ -281,8 +364,8 @@ final class IncreaseMemoryController: ObservableObject {
     @MainActor
     func enable(for app: DeveloperAppID) async {
         guard let session, let team = teams.first(where: { $0.identifier == selectedTeamID }) else { return }
-        enablingBundleID = app.bundleIdentifier
-        defer { enablingBundleID = nil }
+        operatingIDs.insert(app.identifier)
+        defer { operatingIDs.remove(app.identifier) }
         do {
             let response = try await AppleDeveloperAPI.enableIncreasedMemory(appID: app, team: team, session: session)
             resultMessage = "已为 \(app.bundleIdentifier) 开启增加内存限制。\n\n服务器响应：\n\(response.prefix(300))"
@@ -292,6 +375,58 @@ final class IncreaseMemoryController: ObservableObject {
             errorMessage = message(of: error)
             showError = true
         }
+    }
+
+    // MARK: - 批量选择 / 开启
+
+    @MainActor
+    func toggleSelection(_ id: String) {
+        if selectedIDs.contains(id) { selectedIDs.remove(id) } else { selectedIDs.insert(id) }
+    }
+
+    @MainActor
+    func toggleSelectAll() {
+        let ids = selectableApps.map(\.identifier)
+        if allSelected {
+            selectedIDs.subtract(ids)
+        } else {
+            for id in ids { selectedIDs.insert(id) }
+        }
+    }
+
+    /// 串行批量开启（每次开启都取独立 Anisette OTP，最稳）。跳过已开启的（若开启「跳过已开启」）。
+    @MainActor
+    func enableBatch() async {
+        guard let session, let team = teams.first(where: { $0.identifier == selectedTeamID }) else { return }
+        let targets = apps.filter { selectedIDs.contains($0.identifier) && (!skipEnabled || !$0.hasIncreasedMemory) }
+        guard !targets.isEmpty else { return }
+        isBatchRunning = true
+        batchDone = 0
+        batchTotal = targets.count
+        defer { isBatchRunning = false }
+        var successes: [String] = []
+        var failures: [(String, String)] = []
+        for app in targets {
+            operatingIDs.insert(app.identifier)
+            do {
+                _ = try await AppleDeveloperAPI.enableIncreasedMemory(appID: app, team: team, session: session)
+                successes.append(app.bundleIdentifier)
+            } catch {
+                failures.append((app.bundleIdentifier, message(of: error)))
+            }
+            operatingIDs.remove(app.identifier)
+            batchDone += 1
+        }
+        // 一次性汇总报告
+        var summary = "批量开启完成（\(successes.count) 成功 / \(failures.count) 失败）。\n"
+        if !successes.isEmpty { summary += "\n成功：\n" + successes.map { "• \($0)" }.joined(separator: "\n") }
+        if !failures.isEmpty {
+            summary += "\n\n失败：\n" + failures.map { "• \($0.0) —— \($0.1)" }.joined(separator: "\n")
+        }
+        resultMessage = summary
+        showResult = true
+        selectedIDs.removeAll()
+        await loadAppIDs()
     }
 
     private func message(of error: Error) -> String {
