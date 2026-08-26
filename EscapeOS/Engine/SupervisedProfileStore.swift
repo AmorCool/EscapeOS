@@ -110,7 +110,7 @@ enum SupervisedProfileStore {
         let url = savedURL(for: profile)
         let data = try Data(contentsOf: url)
         guard let dict = try PropertyListSerialization.propertyList(
-            with: data, options: [.mutableContainers], format: nil
+            from: data, options: [.mutableContainers], format: nil
         ) as? NSMutableDictionary else {
             throw StoreError.corruptProfile(profile.templateName)
         }
