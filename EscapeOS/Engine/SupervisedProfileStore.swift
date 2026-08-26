@@ -133,18 +133,18 @@ enum SupervisedProfileStore {
 
     // MARK: - 安装 / 导出
 
-    /// 通过本机 HTTP 服务把当前副本交给系统安装（与「屏蔽域名」同机制）。
-    /// 调用方需在主线程调用（内部会 `UIApplication.shared.open`）。
-    static func install(_ profile: Profile) throws {
+    /// 启动本地 HTTP 服务并返回安装页 URL。
+    /// 由视图用 app 内 SFSafariViewController 打开（保持本应用前台，服务
+    /// 不中断）；Safari 关闭后由视图调用 `ProfileHTTPServer.shared.stop()`。
+    static func installURL(_ profile: Profile) throws -> URL {
         let dict = try load(profile)
         let data = try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
         let filename = savedURL(for: profile).lastPathComponent
         let port = try ProfileHTTPServer.shared.start(payload: data, filename: filename)
-        UIApplication.shared.open(URL(string: "http://127.0.0.1:\(port)/")!)
-        // 安装完成后关闭临时服务。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-            ProfileHTTPServer.shared.stop()
+        guard let url = URL(string: "http://127.0.0.1:\(port)/") else {
+            throw StoreError.badURL
         }
+        return url
     }
 
     /// 导出当前副本到可分享的临时位置（用于隔空投送 / 存文件）。
@@ -163,11 +163,13 @@ enum SupervisedProfileStore {
     enum StoreError: LocalizedError {
         case missingTemplate(String)
         case corruptProfile(String)
+        case badURL
 
         var errorDescription: String? {
             switch self {
             case .missingTemplate(let n): return "找不到模板文件：\(n).mobileconfig（请确认已随包打包）"
             case .corruptProfile(let n): return "描述文件已损坏，无法解析：\(n).mobileconfig"
+            case .badURL: return "无法生成安装地址。"
             }
         }
     }

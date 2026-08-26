@@ -10,6 +10,7 @@ struct SupervisedFootnoteView: View {
     @State private var trailingText = ""  // AssetTagInformation
 
     @State private var shareTarget: ShareTarget?
+    @State private var safariTarget: SafariTarget?
     @State private var errorMessage = ""
     @State private var showError = false
 
@@ -89,6 +90,9 @@ struct SupervisedFootnoteView: View {
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
         }
+        .sheet(item: $safariTarget, onDismiss: { ProfileHTTPServer.shared.stop() }) { target in
+            SafariSheet(url: target.url)
+        }
         .alert("操作失败", isPresented: $showError) {
             Button("好", role: .cancel) {}
         } message: {
@@ -124,7 +128,7 @@ struct SupervisedFootnoteView: View {
             pl["IfLostReturnToMessage"] = leadingText
             pl["AssetTagInformation"] = trailingText
             try SupervisedProfileStore.save(.footnote, dict: dict)
-            try SupervisedProfileStore.install(.footnote)
+            safariTarget = SafariTarget(url: try SupervisedProfileStore.installURL(.footnote))
         } catch {
             errorMessage = error.localizedDescription
             showError = true

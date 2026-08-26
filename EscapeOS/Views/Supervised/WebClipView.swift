@@ -15,6 +15,7 @@ struct WebClipView: View {
     @State private var showPhotosPicker = false
 
     @State private var shareTarget: ShareTarget?
+    @State private var safariTarget: SafariTarget?
     @State private var errorMessage = ""
     @State private var showError = false
 
@@ -104,6 +105,9 @@ struct WebClipView: View {
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
         }
+        .sheet(item: $safariTarget, onDismiss: { ProfileHTTPServer.shared.stop() }) { target in
+            SafariSheet(url: target.url)
+        }
         .alert("操作失败", isPresented: $showError) {
             Button("好", role: .cancel) {}
         } message: {
@@ -148,7 +152,7 @@ struct WebClipView: View {
             pl["FullScreen"] = fullScreen
             pl["Precomposed"] = precomposed
             try SupervisedProfileStore.save(.webclip, dict: dict)
-            try SupervisedProfileStore.install(.webclip)
+            safariTarget = SafariTarget(url: try SupervisedProfileStore.installURL(.webclip))
         } catch {
             errorMessage = error.localizedDescription
             showError = true

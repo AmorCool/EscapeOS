@@ -1,7 +1,8 @@
 import SwiftUI
 import UIKit
+import SafariServices
 
-/// 监督模式工具共用的小组件：App 图标（私有 API）、底部安装按钮。
+/// 监督模式工具共用的小组件：App 图标（私有 API）、已安装应用枚举、底部安装按钮、app 内 Safari。
 
 /// 通过私有 API 取得已安装 App 的图标（与 Lithium 一致）。
 /// 需在 EscapeOS-Bridging-Header.h 中声明
@@ -11,6 +12,49 @@ func supervisedAppIcon(_ bundleID: String) -> Image {
         return Image(systemName: "app.dashed")
     }
     return Image(uiImage: img)
+}
+
+/// 设备本地枚举已安装应用（LSApplicationWorkspace 私有 API）。
+/// 不需要配对文件 / 本地隧道，证书直装环境直接可用。
+/// 只返回用户安装的应用（User / Internal）——隐藏对系统 App 无效。
+func supervisedInstalledApps() -> [InstalledApp] {
+    let ws = LSApplicationWorkspace.defaultWorkspace()
+    guard let proxies = ws.allApplications as? [LSApplicationProxy] else { return [] }
+    var result: [InstalledApp] = []
+    for proxy in proxies {
+        guard let bid = proxy.bundleIdentifier else { continue }
+        let type = proxy.applicationType ?? "User"
+        if type == "System" || type == "HiddenSystemApp" { continue }
+        let nm = proxy.localizedName ?? ""
+        result.append(InstalledApp(
+            bundleIdentifier: bid,
+            name: nm.isEmpty ? bid : nm,
+            containerPath: "",
+            version: nil,
+            applicationType: type
+        ))
+    }
+    return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
+
+/// app 内 Safari 的展示目标（URL 需要 Identifiable 才能用 `.sheet(item:)`）。
+struct SafariTarget: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// 用 app 内 SFSafariViewController 打开描述文件安装页。
+/// 与 Lithium 原版一致：保持本应用前台，本地 HTTP 服务器不会因进程
+/// 被挂起而失联（跳外部 Safari 时应用退后台会被 iOS 挂起，accept 线程
+/// 停摆，导致 meta refresh 后的第二次请求连不上服务器）。
+struct SafariSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        SFSafariViewController(url: url)
+    }
+
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
 /// 底部统一的「安装描述文件」按钮条。

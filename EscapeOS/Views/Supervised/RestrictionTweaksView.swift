@@ -62,6 +62,7 @@ struct RestrictionTweaksView: View {
     @State private var otaDelay = 0
 
     @State private var shareTarget: ShareTarget?
+    @State private var safariTarget: SafariTarget?
     @State private var errorMessage = ""
     @State private var showError = false
     @State private var isBusy = false
@@ -168,6 +169,9 @@ struct RestrictionTweaksView: View {
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
         }
+        .sheet(item: $safariTarget, onDismiss: { ProfileHTTPServer.shared.stop() }) { target in
+            SafariSheet(url: target.url)
+        }
         .alert("操作失败", isPresented: $showError) {
             Button("好", role: .cancel) {}
         } message: {
@@ -223,7 +227,7 @@ struct RestrictionTweaksView: View {
     private func installProfile() {
         isBusy = true
         do {
-            try SupervisedProfileStore.install(.restrictions)
+            safariTarget = SafariTarget(url: try SupervisedProfileStore.installURL(.restrictions))
         } catch {
             errorMessage = error.localizedDescription
             showError = true

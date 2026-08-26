@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.66] - 2026-08-27
+
+### Fixed
+- **监督模式工具「从已安装应用选择」列表为空（真机反馈）**：
+  - 根因：应用枚举沿用了「更多 → 应用」的 `AppDiscovery`，它依赖配对文件 + LocalDevVPN 本地隧道（installation_proxy）才能列出应用；证书直装环境没有配对文件，直接弹「未检测到配对文件」或空列表。
+  - 修复：改为设备本地 `LSApplicationWorkspace` 私有 API 直接枚举（与 Lithium 原版一致），无需配对文件 / 隧道；只列出用户安装的应用（User / Internal，隐藏对系统 App 无效），图标走已有的私有 API。应用隐藏、通知管理两个入口同步修复。
+- **安装描述文件时 Safari 报「无法连接服务器」（真机反馈）**：
+  - 根因：安装流程用 `UIApplication.shared.open` 跳到外部 Safari，应用退到后台被 iOS 挂起，本地 HTTP 服务器的 accept 线程停摆——首个 HTML 页能加载（第一次连接成功），1 秒后 meta refresh 跳到 `.mobileconfig` 时（第二次连接）握手成功但无人响应，Safari 报无法连接服务器。（「屏蔽域名」页因额外申请了后台任务才没踩到。）
+  - 修复：改为 app 内 `SFSafariViewController` 打开安装页（与 Lithium 原版一致），应用保持前台、服务不中断；Safari 关闭时自动停止本地服务。五个监督工具页统一生效。
+
 ## [0.2.65] - 2026-08-27
 
 ### Added

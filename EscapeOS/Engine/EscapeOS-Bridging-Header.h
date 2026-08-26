@@ -26,4 +26,17 @@
                                                   scale:(CGFloat)scale;
 @end
 
+// 监督模式工具：设备本地枚举已安装应用（LSApplicationWorkspace 私有 API，
+// 无需配对文件 / 本地隧道；与 Lithium 原版一致）
+@interface LSApplicationProxy : NSObject
+@property (nonatomic, readonly) NSString *bundleIdentifier;
+@property (nonatomic, readonly) NSString *localizedName;
+@property (nonatomic, readonly) NSString *applicationType;
+@end
+
+@interface LSApplicationWorkspace : NSObject
++ (instancetype)defaultWorkspace;
+- (NSArray<LSApplicationProxy *> *)allApplications;
+@end
+
 #endif /* EscapeOS_Bridging_Header_h */

@@ -24,6 +24,7 @@ struct AppHideView: View {
     @State private var isPickerLoading = false
 
     @State private var shareTarget: ShareTarget?
+    @State private var safariTarget: SafariTarget?
     @State private var errorMessage = ""
     @State private var showError = false
 
@@ -101,6 +102,9 @@ struct AppHideView: View {
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
         }
+        .sheet(item: $safariTarget, onDismiss: { ProfileHTTPServer.shared.stop() }) { target in
+            SafariSheet(url: target.url)
+        }
         .sheet(isPresented: $showPicker) {
             NavigationStack {
                 pickerSheet
@@ -149,12 +153,10 @@ struct AppHideView: View {
                         showPicker = false
                     } label: {
                         HStack(spacing: 12) {
-                            if let icon = AppDiscovery().appIcon(for: app.bundleIdentifier) {
-                                Image(uiImage: icon)
-                                    .resizable()
-                                    .frame(width: 36, height: 36)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                            }
+                            supervisedAppIcon(app.bundleIdentifier)
+                                .resizable()
+                                .frame(width: 36, height: 36)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(app.name)
                                     .font(.subheadline)
@@ -170,26 +172,15 @@ struct AppHideView: View {
     }
 
     private func openPicker() {
-        let discovery = AppDiscovery()
-        guard discovery.hasPairingFile else {
-            pickerMessage = "未检测到配对文件，无法枚举已安装应用。请直接在上方手动填写 Bundle ID（可参考「更多 → 应用」中的列表）。"
-            showPickerMessage = true
-            return
-        }
         isPickerLoading = true
         showPicker = true
         DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let apps = try discovery.fetchInstalledApps()
-                DispatchQueue.main.async {
-                    isPickerLoading = false
-                    installedApps = apps
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    isPickerLoading = false
-                    installedApps = []
-                    pickerMessage = error.localizedDescription
+            let apps = supervisedInstalledApps()
+            DispatchQueue.main.async {
+                isPickerLoading = false
+                installedApps = apps
+                if apps.isEmpty {
+                    pickerMessage = "未找到已安装的三方应用。"
                 }
             }
         }
@@ -269,7 +260,7 @@ struct AppHideView: View {
 
     private func installProfile() {
         do {
-            try SupervisedProfileStore.install(.restrictions)
+            safariTarget = SafariTarget(url: try SupervisedProfileStore.installURL(.restrictions))
         } catch {
             errorMessage = error.localizedDescription
             showError = true
