@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    # macos-latest：避免 macos-15 镜像 runner 排队饥饿（2026-08-26 实测多次 queued 卡死，
+    # 换 -latest 系列镜像后任务立即被调度执行——参见 GitHub Actions runner-images 常见问题）
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
