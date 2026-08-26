@@ -188,7 +188,7 @@ struct ConfigurationsView: View {
     // MARK: - 访问能力
 
     private var accessSection: some View {
-        Section(header: Text("访问能力")) {
+        Section {
             HStack(spacing: 10) {
                 switch access {
                 case .readWrite:
@@ -225,13 +225,15 @@ struct ConfigurationsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+        } header: {
+            Text("访问能力")
         }
     }
 
     // MARK: - 锁屏页脚
 
     private var footnoteSection: some View {
-        Section(header: Text("锁屏页脚")) {
+        Section {
             // 简易锁屏预览
             HStack {
                 Spacer()
@@ -248,6 +250,8 @@ struct ConfigurationsView: View {
             }
             .padding(.vertical, 8)
             TextField("自定义锁屏页脚（如设备名称）", text: $footnoteText)
+        } header: {
+            Text("锁屏页脚")
         } footer: {
             Text("将写入 SharedDeviceConfiguration.plist 的 LockScreenFootnote 字段。")
         }
@@ -256,13 +260,15 @@ struct ConfigurationsView: View {
     // MARK: - 监督
 
     private var supervisionSection: some View {
-        Section(header: Text("监督模式")) {
+        Section {
             Toggle(isOn: $supervised) {
                 Label("启用监督模式", systemImage: "eye.fill")
             }
             if supervised {
                 TextField("组织名称", text: $orgName)
             }
+        } header: {
+            Text("监督模式")
         } footer: {
             Text("⚠️ 若设备已由 MDM 配置管理，请勿改动此开关。启用后重启可能出现设置引导页，风险自负。")
         }
