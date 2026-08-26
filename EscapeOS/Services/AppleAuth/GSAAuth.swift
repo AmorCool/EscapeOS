@@ -45,14 +45,17 @@ final class GSAAuth {
 
         // S = 完整 SRP 共享密钥（对齐 AltStore/StosSign：256 字节，直接作为 AES 会话密钥）
         // K = SHA256(S)，仅用于 M1/M2 证明计算
-        let (S, K) = SRP6a.calculateSharedSecret(
+        let (_, K) = SRP6a.calculateSharedSecret(
             private: clientPrivateKey,
             x: BigInt(bytes: x),
             salt: salt.map { $0 },
             A: publicKey.map { $0 },
             B: serverPublicKey.map { $0 }
         )
-        sessionKey = S.bytes(paddedTo: SRP6a.sizeN)
+        // 会话密钥 = K = SHA256(S)（32 字节），对齐 AltStore/StosSign：
+        // - serverProof/clientProof 与 apptokens 校验和均使用 K；
+        // - decryptedGCM 直接拿 sessionKey 当 AES-GCM 密钥（必须 16/24/32 字节），256 字节的 S 会运行时崩溃。
+        sessionKey = Data(K)
 
         let M1 = SRP6a.clientProof(
             username: username,
@@ -102,11 +105,11 @@ final class GSAAuth {
                 salt.withUnsafeBytes { saltBytes in
                     CCKeyDerivationPBKDF(
                         CCPBKDFAlgorithm(kCCPBKDF2),
-                        pwdBytes.bindMemory(to: CChar.self).baseAddress, CC_LONG(password.count),
-                        saltBytes.bindMemory(to: UInt8.self).baseAddress, CC_LONG(salt.count),
+                        pwdBytes.bindMemory(to: CChar.self).baseAddress, password.count,
+                        saltBytes.bindMemory(to: UInt8.self).baseAddress, salt.count,
                         CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
-                        CC_LONG(rounds),
-                        derivedBytes.bindMemory(to: UInt8.self).baseAddress, CC_LONG(keyLength)
+                        rounds,
+                        derivedBytes.bindMemory(to: UInt8.self).baseAddress, keyLength
                     )
                 }
             }
