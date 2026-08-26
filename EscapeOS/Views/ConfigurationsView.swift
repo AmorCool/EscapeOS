@@ -204,6 +204,7 @@ struct ConfigurationsView: View {
     @State private var shouldRespring = false
     @State private var shareTarget: ShareTarget?
     @State private var isBusy = false
+    @State private var logText = ""
 
     private var isWritable: Bool {
         if case .readWrite = access { return true }
@@ -216,6 +217,7 @@ struct ConfigurationsView: View {
             backupSection
             footnoteSection
             supervisionSection
+            logSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("配置管理")
@@ -245,6 +247,10 @@ struct ConfigurationsView: View {
             footnoteText = current.footnote
             supervised = current.supervised
             orgName = current.orgName
+            refreshLog()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: EscapeLog.didChange)) { _ in
+            refreshLog()
         }
         .fullScreenCover(isPresented: $shouldRespring) {
             RespringView()
@@ -425,6 +431,55 @@ struct ConfigurationsView: View {
         } footer: {
             Text("若设备已由 MDM 配置管理，请勿改动此开关。启用后重新启动可能出现设置引导页，风险自负。")
         }
+    }
+
+    // MARK: - 操作日志（配置管理内嵌，参考原版 Erosion 日志面板样式）
+
+    private var logSection: some View {
+        Section {
+            ScrollView {
+                Text(logText.isEmpty ? "（暂无操作日志）" : logText)
+                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+            .frame(maxHeight: 160)
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+
+            NavigationLink(destination: LogView()) {
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.text.monospaced")
+                        .foregroundColor(.blue)
+                        .frame(width: 30, height: 30)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("查看完整日志 / 导出")
+                            .font(.subheadline)
+                        Text("所有操作自动记录，可在此速览，或前往完整日志面板复制 / 导出。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+        } header: {
+            Text("操作日志")
+        } footer: {
+            Text("探测 / 应用 / 恢复 / 备份 等关键操作均实时记录，便于排查「写入被拒」等问题。")
+        }
+    }
+
+    private func refreshLog() {
+        let all = EscapeLog.shared.output
+        let lines = all.split(separator: "\n", omittingEmptySubsequences: false)
+        let recent = lines.suffix(15).joined(separator: "\n")
+        logText = recent
     }
 
     // MARK: - 操作
