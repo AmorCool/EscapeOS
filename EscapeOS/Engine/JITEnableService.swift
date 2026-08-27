@@ -169,6 +169,49 @@ final class JITEnableService {
         return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    // MARK: - App 图标
+
+    /// 通过 SpringBoardServices 服务获取应用图标（与 StikDebug 同源）。
+    /// 设备端按 Bundle ID 返回真实图标 PNG —— 对系统应用与第三方应用均有效。
+    ///
+    /// 为什么不用进程内私有 API `UIImage._applicationIconImageForBundleIdentifier:format:scale:`：
+    /// 它读的是本机 IconServices 图标缓存，证书直装 / 侧载的第三方应用经常取不到
+    /// （图标不在该缓存可达范围）→ 列表显示灰色占位；而 SpringBoardServices 由
+    /// 设备端按 bundle id 查询，与查询方沙盒无关，任何已安装应用都能拿到。
+    func getAppIcon(bundleID: String) throws -> UIImage {
+        var tunnel = try createTunnel(hostname: "EscapeSpaceIcon")
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw makeError("隧道未建立")
+        }
+
+        var client: OpaquePointer?
+        if let ffiError = springboard_services_connect_rsd(adapter, handshake, &client) {
+            throw error(from: ffiError, fallback: "连接主屏服务失败")
+        }
+        defer { springboard_services_free(client) }
+        guard let client else { throw makeError("连接主屏服务失败") }
+
+        var rawIconData: UnsafeMutableRawPointer?
+        var rawIconLength = 0
+        if let ffiError = bundleID.withCString { cString in
+            springboard_services_get_icon(client, cString, &rawIconData, &rawIconLength)
+        } {
+            throw error(from: ffiError, fallback: "获取应用图标失败")
+        }
+        guard let rawIconData, rawIconLength > 0 else {
+            throw makeError("应用图标数据为空")
+        }
+        // Rust 侧分配（into_boxed_slice），必须用 Rust 侧释放函数。
+        defer { idevice_data_free(rawIconData.assumingMemoryBound(to: UInt8.self), UInt(rawIconLength)) }
+
+        let data = Data(bytes: rawIconData, count: rawIconLength)
+        guard let image = UIImage(data: data) else {
+            throw makeError("应用图标解码失败")
+        }
+        return image
+    }
+
     // MARK: - 拉起应用（普通启动，不调试）
 
     /// 普通启动指定应用（不启用 JIT）。
@@ -294,4 +337,75 @@ struct JITAppInfo: Identifiable {
     var id: String { bundleID }
     let bundleID: String
     let name: String
+}
+
+/// App 图标内存缓存加载器（「启用 JIT」/「拉起应用」共用）。
+///
+/// 与 StikDebug 的 AppIconRepository 同思路：icon 通过 RSD 隧道向设备端
+/// SpringBoardServices 服务获取（每次请求需建隧道，较慢），因此必须
+/// ① 内存缓存（滚动不重复建隧道）；② in-flight 去重（同一 bundle id 只建一次）；
+/// ③ 限制并发（避免一次给几十个应用同时建隧道）。
+@MainActor
+final class JITAppIconLoader {
+    static let shared = JITAppIconLoader()
+
+    private var cache: [String: UIImage] = [:]
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private let semaphore = IconFetchSemaphore(permits: 4)
+
+    private init() {}
+
+    /// 已缓存图标（同步查询，用于避免重复触发加载）。
+    func cached(for bundleID: String) -> UIImage? { cache[bundleID] }
+
+    /// 异步取图标：命中缓存直接返回；否则建隧道获取（失败返回 nil，由调用方回退占位）。
+    func load(bundleID: String) async -> UIImage? {
+        if let img = cache[bundleID] { return img }
+        if let task = inFlight[bundleID] { return await task.value }
+
+        let task = Task<UIImage?, Never> {
+            let img = await semaphore.withPermit {
+                await Task.detached(priority: .utility) {
+                    try? JITEnableService.shared.getAppIcon(bundleID: bundleID)
+                }.value
+            }
+            if let img { cache[bundleID] = img }
+            inFlight[bundleID] = nil
+            return img
+        }
+        inFlight[bundleID] = task
+        return await task.value
+    }
+}
+
+/// 简易信号量：限制同时建隧道的数量。
+private actor IconFetchSemaphore {
+    private var permits: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(permits: Int) { self.permits = permits }
+
+    func withPermit<T>(_ body: @escaping () async -> T) async -> T {
+        await acquire()
+        let value = await body()
+        release()
+        return value
+    }
+
+    private func acquire() async {
+        if permits > 0 {
+            permits -= 1
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        if let next = waiters.first {
+            waiters.removeFirst()
+            next.resume()
+        } else {
+            permits += 1
+        }
+    }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 拉起应用（Launch Apps，汉化移植自 StikDebug 的 Other / Launch 标签页）。
 /// 列出全部已安装应用（含系统应用），点击即以普通方式启动（不启用 JIT）。
@@ -111,10 +112,7 @@ struct LaunchAppsView: View {
             launch(app)
         } label: {
             HStack(spacing: 12) {
-                supervisedAppIcon(app.bundleID)
-                    .resizable()
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                JITAppIconView(bundleID: app.bundleID)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(app.name)
                         .font(.subheadline.weight(.semibold))

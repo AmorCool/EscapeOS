@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 启用 JIT（汉化移植自 StikDebug，对齐原版 Home 的列表组织）。
 /// 布局与 StikDebug 一致：导航栏常驻搜索框 + 「最近使用」分组 +
@@ -148,10 +149,7 @@ struct JITEnableView: View {
             confirmTarget = app
         } label: {
             HStack(spacing: 12) {
-                supervisedAppIcon(app.bundleID)
-                    .resizable()
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                JITAppIconView(bundleID: app.bundleID)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(app.name)
                         .font(.subheadline.weight(.semibold))
@@ -220,5 +218,41 @@ struct JITEnableView: View {
             recentBundleIDs = Array(recentBundleIDs.prefix(5))
         }
         UserDefaults.standard.set(recentBundleIDs, forKey: "escape.jitRecents")
+    }
+}
+
+/// App 图标行组件（「启用 JIT」/「拉起应用」共用）。
+///
+/// 优先用 SpringBoardServices 隧道图标（真实图标，第三方应用也能拿到），
+/// 未加载完成 / 获取失败时回退灰色占位（app.dashed）。
+/// 替换前用的进程内私有 API（supervisedAppIcon）对证书直装 / 侧载的
+/// 第三方应用经常取不到图标 → 灰图标（v0.2.71 修复）。
+struct JITAppIconView: View {
+    let bundleID: String
+    @State private var icon: UIImage?
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(uiImage: icon)
+                    .resizable()
+            } else {
+                Image(systemName: "app.dashed")
+                    .resizable()
+            }
+        }
+        .frame(width: 36, height: 36)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: bundleID) {
+            guard icon == nil else { return }
+            if let cached = JITAppIconLoader.shared.cached(for: bundleID) {
+                icon = cached
+                return
+            }
+            let img = await JITAppIconLoader.shared.load(bundleID: bundleID)
+            if !Task.isCancelled {
+                icon = img
+            }
+        }
     }
 }
