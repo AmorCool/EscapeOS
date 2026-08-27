@@ -36,6 +36,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/DomainBlockerView.swift \
 	EscapeOS/Views/DesignSystem.swift \
 	EscapeOS/Views/JITEnableView.swift \
+	EscapeOS/Views/LaunchAppsView.swift \
 	EscapeOS/Views/AppExpiryView.swift \
 	EscapeOS/Views/Supervised/SupervisedHelpers.swift \
 	EscapeOS/Views/Supervised/RestrictionTweaksView.swift \

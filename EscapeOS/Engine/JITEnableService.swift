@@ -102,8 +102,17 @@ final class JITEnableService {
 
     // MARK: - 应用列表
 
+    /// 列出全部已安装应用（含系统应用，用于「拉起应用」）。
+    func listAllApps() throws -> [JITAppInfo] {
+        try listApps(requireGetTaskAllow: false)
+    }
+
     /// 列出可启用 JIT 的应用（签名带 get-task-allow 的已安装应用）。
     func listJITCapableApps() throws -> [JITAppInfo] {
+        try listApps(requireGetTaskAllow: true)
+    }
+
+    private func listApps(requireGetTaskAllow: Bool) throws -> [JITAppInfo] {
         var tunnel = try createTunnel(hostname: "EscapeSpaceJITList")
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
@@ -146,9 +155,11 @@ final class JITEnableService {
                   let bundleID = dict["CFBundleIdentifier"] as? String,
                   !bundleID.isEmpty else { continue }
 
-            // 只看用户安装且带 get-task-allow 的应用（JIT 调试启动的前提）。
-            guard let entitlements = dict["Entitlements"] as? [String: Any],
-                  (entitlements["get-task-allow"] as? Bool) == true else { continue }
+            if requireGetTaskAllow {
+                // 只看用户安装且带 get-task-allow 的应用（JIT 调试启动的前提）。
+                guard let entitlements = dict["Entitlements"] as? [String: Any],
+                      (entitlements["get-task-allow"] as? Bool) == true else { continue }
+            }
 
             let name = (dict["CFBundleDisplayName"] as? String)
                 ?? (dict["CFBundleName"] as? String)
@@ -156,6 +167,39 @@ final class JITEnableService {
             result.append(JITAppInfo(bundleID: bundleID, name: name))
         }
         return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    // MARK: - 拉起应用（普通启动，不调试）
+
+    /// 普通启动指定应用（不启用 JIT）。
+    func launchApp(bundleID: String) throws {
+        var tunnel = try createTunnel(hostname: "EscapeSpaceLaunch")
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw makeError("隧道未建立")
+        }
+
+        var remoteServer: OpaquePointer?
+        if let ffiError = remote_server_connect_rsd(adapter, handshake, &remoteServer) {
+            throw error(from: ffiError, fallback: "连接设备服务失败")
+        }
+        defer { remote_server_free(remoteServer) }
+        guard let remoteServer else { throw makeError("连接设备服务失败") }
+
+        var processControl: OpaquePointer?
+        if let ffiError = process_control_new(remoteServer, &processControl) {
+            throw error(from: ffiError, fallback: "打开进程控制失败")
+        }
+        defer { process_control_free(processControl) }
+        guard let processControl else { throw makeError("打开进程控制失败") }
+
+        var pid: UInt64 = 0
+        if let ffiError = bundleID.withCString { bundleID in
+            process_control_launch_app(processControl, bundleID, nil, 0, nil, 0, false, true, &pid)
+        } {
+            throw error(from: ffiError, fallback: "启动应用失败（应用可能未安装）")
+        }
+        guard pid != 0 else { throw makeError("启动应用失败：未取得进程号") }
     }
 
     // MARK: - 启用 JIT

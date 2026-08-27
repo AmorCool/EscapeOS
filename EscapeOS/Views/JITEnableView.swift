@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// 启用 JIT（汉化移植自 StikDebug）。
-/// 列出签名带 get-task-allow 的应用，点击后以调试模式启动获得 JIT 权限。
+/// 启用 JIT（汉化移植自 StikDebug，对齐原版 Home 的列表组织）。
+/// 布局与 StikDebug 一致：导航栏常驻搜索框 + 「最近使用」分组 +
+/// 「Apps with get-task-allow」全部分组；行内显示 App 图标 + 名称 + Bundle ID。
 struct JITEnableView: View {
     @State private var apps: [JITAppInfo] = []
     @State private var isLoading = false
@@ -12,8 +13,23 @@ struct JITEnableView: View {
     @State private var isWorking = false
     @State private var successMessage = ""
     @State private var showSuccess = false
+    @State private var searchText = ""
+    @State private var recentBundleIDs: [String] = UserDefaults.standard.stringArray(forKey: "escape.jitRecents") ?? []
 
     private var hasPairing: Bool { TunnelContext.shared.hasPairingFile }
+
+    private var filteredApps: [JITAppInfo] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return apps }
+        return apps.filter {
+            $0.name.lowercased().contains(query) || $0.bundleID.lowercased().contains(query)
+        }
+    }
+
+    private var recentApps: [JITAppInfo] {
+        let byID = Dictionary(uniqueKeysWithValues: apps.map { ($0.bundleID, $0) })
+        return recentBundleIDs.compactMap { byID[$0] }
+    }
 
     var body: some View {
         List {
@@ -42,35 +58,34 @@ struct JITEnableView: View {
                     }
                 }
             } else {
-                Section {
-                    ForEach(apps) { app in
-                        Button {
-                            confirmTarget = app
-                        } label: {
-                            HStack(spacing: 12) {
-                                supervisedAppIcon(app.bundleID)
-                                    .resizable()
-                                    .frame(width: 36, height: 36)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(app.name)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(.primary)
-                                    Text(app.bundleID)
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "bolt.fill")
-                                    .foregroundStyle(AppTheme.accent)
-                            }
-                        }
-                        .buttonStyle(.plain)
+                if !searchText.isEmpty && filteredApps.isEmpty {
+                    Section {
+                        Text("没有匹配的应用。")
+                            .foregroundStyle(.secondary)
+                        Text("换个名称或 Bundle ID 试试。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                } header: {
-                    Label("可启用 JIT 的应用", systemImage: "bolt.badge.a.fill")
-                } footer: {
-                    Text("点击应用后将以调试模式启动它（EscapeSpace 会退到后台）。JIT 权限在应用运行期间保持；应用退出后再次使用需重新启用。")
+                } else {
+                    if !recentApps.isEmpty && searchText.isEmpty {
+                        Section {
+                            ForEach(recentApps) { app in
+                                jitRow(app)
+                            }
+                        } header: {
+                            Label("最近使用", systemImage: "clock")
+                        }
+                    }
+
+                    Section {
+                        ForEach(filteredApps) { app in
+                            jitRow(app)
+                        }
+                    } header: {
+                        Label("Apps with get-task-allow", systemImage: "bolt.badge.a.fill")
+                    } footer: {
+                        Text("点击应用后将以调试模式启动它（EscapeSpace 会退到后台）。JIT 权限在应用运行期间保持；应用退出后再次使用需重新启用。")
+                    }
                 }
 
                 if isWorking {
@@ -88,6 +103,7 @@ struct JITEnableView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("启用 JIT")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索应用或 Bundle ID")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
@@ -127,6 +143,34 @@ struct JITEnableView: View {
         }
     }
 
+    private func jitRow(_ app: JITAppInfo) -> some View {
+        Button {
+            confirmTarget = app
+        } label: {
+            HStack(spacing: 12) {
+                supervisedAppIcon(app.bundleID)
+                    .resizable()
+                    .frame(width: 36, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                    Text(app.bundleID)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "bolt.fill")
+                    .foregroundStyle(AppTheme.accent)
+            }
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
+    }
+
     private func load() async {
         isLoading = true
         defer { isLoading = false }
@@ -146,6 +190,7 @@ struct JITEnableView: View {
     private func runJIT(_ app: JITAppInfo) {
         isWorking = true
         progressText = "正在建立隧道…"
+        recordRecent(app.bundleID)
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
@@ -166,5 +211,14 @@ struct JITEnableView: View {
                 }
             }
         }
+    }
+
+    private func recordRecent(_ bundleID: String) {
+        recentBundleIDs.removeAll { $0 == bundleID }
+        recentBundleIDs.insert(bundleID, at: 0)
+        if recentBundleIDs.count > 5 {
+            recentBundleIDs = Array(recentBundleIDs.prefix(5))
+        }
+        UserDefaults.standard.set(recentBundleIDs, forKey: "escape.jitRecents")
     }
 }

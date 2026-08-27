@@ -13,6 +13,7 @@ struct AppExpiryView: View {
     @State private var isLoading = true
     @State private var loadError = ""
     @State private var showLoadError = false
+    @State private var searchText = ""
 
     // 批量模式
     @State private var isEditing = false
@@ -31,6 +32,35 @@ struct AppExpiryView: View {
 
     private var allUUIDs: [String] {
         (matchedEntries.flatMap(\.profiles) + unmatchedGroups.flatMap(\.profiles)).map(\.id)
+    }
+
+    /// 搜索过滤（匹配证书名 / 应用名 / Bundle ID / UUID / application-identifier）。
+    private var filteredMatchedEntries: [MatchedAppEntry] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return matchedEntries }
+        return matchedEntries.compactMap { entry in
+            let profiles = entry.profiles.filter { profileMatchesQuery($0, query) }
+            guard !profiles.isEmpty || entry.name.lowercased().contains(query) || entry.bundleID.lowercased().contains(query) else {
+                return nil
+            }
+            return MatchedAppEntry(name: entry.name, bundleID: entry.bundleID, profiles: profiles)
+        }
+    }
+
+    private var filteredUnmatchedGroups: [UnmatchedGroup] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return unmatchedGroups }
+        return unmatchedGroups.compactMap { group in
+            let profiles = group.profiles.filter { profileMatchesQuery($0, query) }
+            guard !profiles.isEmpty || group.appName.lowercased().contains(query) else { return nil }
+            return UnmatchedGroup(appName: group.appName, profiles: profiles)
+        }
+    }
+
+    private func profileMatchesQuery(_ profile: ProvisioningProfileStore.ProfileInfo, _ query: String) -> Bool {
+        profile.appName.lowercased().contains(query) ||
+        profile.id.lowercased().contains(query) ||
+        profile.appId.lowercased().contains(query)
     }
 
     var body: some View {
@@ -54,7 +84,7 @@ struct AppExpiryView: View {
             } else {
                 if !matchedEntries.isEmpty {
                     Section {
-                        ForEach(matchedEntries) { entry in
+                        ForEach(filteredMatchedEntries) { entry in
                             matchedAppRow(entry)
                         }
                     } header: {
@@ -66,7 +96,7 @@ struct AppExpiryView: View {
 
                 if !unmatchedGroups.isEmpty {
                     Section {
-                        ForEach(unmatchedGroups) { group in
+                        ForEach(filteredUnmatchedGroups) { group in
                             unmatchedGroupRow(group)
                         }
                     } header: {
@@ -80,6 +110,7 @@ struct AppExpiryView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("描述文件管理")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索证书名 / 名称 / UUID")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if isEditing {
@@ -198,7 +229,7 @@ struct AppExpiryView: View {
                     .foregroundStyle(AppTheme.accent)
                 Text(group.appName)
                     .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
+                    .multilineTextAlignment(.leading)
                 Spacer()
                 if let latest = group.profiles.min(by: { $0.daysRemaining < $1.daysRemaining }) {
                     Text("\(expiryLabel(latest)) · \(latest.formattedDate)")
@@ -239,7 +270,7 @@ struct AppExpiryView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
-                    .lineLimit(1)
+                    .multilineTextAlignment(.leading)
             }
 
             Spacer()

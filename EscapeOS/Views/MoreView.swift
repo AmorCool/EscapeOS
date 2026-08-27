@@ -27,6 +27,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: LaunchAppsView()) {
+                    MoreCard(
+                        icon: "arrow.up.forward.app.fill",
+                        title: "拉起应用",
+                        subtitle: "列出全部已安装应用，一键在前台拉起（普通启动，不启用 JIT）。"
+                    )
+                }
+
                 NavigationLink(destination: AppExpiryView()) {
                     MoreCard(
                         icon: "calendar.badge.clock",
