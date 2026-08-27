@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.79] - 2026-08-27
+
+### 新增
+- 「更多 → 证书管理」批量撤销：进入「选择」模式后可勾选多张证书（支持全选/取消全选），底部显示已选数量并批量吊销（带确认弹窗）。
+- 「更多 → IPA 侧载」：汉化移植 SideInstaller「安装」板块——选择 IPA（本地导入走统一文件选择调用点 / URL 直链下载）→ 登录 Apple ID（含 2FA）→ 签名（isideload，自动注册设备与描述文件）→ 通过 LocalDevVPN 隧道安装到设备（AFC 上传 + installation_proxy）。登录/签名走 isideload 纯网络+本地文件路径，不依赖原版卡点 LocalNetworkAuthorization，LiveContainer 兼容。
+- Anisette 服务器列表由 4 个扩至 15 个（合并 SideInstaller 社区列表 servers.sidestore.io 中缺失的 11 个）。
+
+### 技术说明
+- Rust 侧首次引入 isideload（Apple ID 登录 + IPA 签名），仅用 sign-only 路径（Sideloader::sign_app），与项目现有 git idevice 0.1.63 共存编译（isideload 依赖 crates.io idevice 0.1.61，SideInstaller 已验证同组合）。
+- IPA 体积增大至 22.8MB（isideload 依赖树含签名/证书库）。
+
 ## [0.2.78] - 2026-08-27
 
 ### 新增
