@@ -145,6 +145,9 @@ jobs:
         # 缓存 Theos 编译产物 + 源文件 hash 快照。恢复时把「未变化的源文件」
         # 校准为过期 mtime、删除「已变化文件」对应的 .o，让 make 只重编 diff，
         # 避免每次全量编译 Swift（编译时长随源码量线性增长）。
+        # scope: 固定作用域——GitHub Actions 缓存默认按 branch/tag 隔离，
+        # 不设 scope 时每个 tag 的缓存其他 tag 无法恢复（v0.2.70 实锤：
+        # restore-keys 前缀匹配也找不到上个 tag 的缓存，导致增量失效）。
         uses: actions/cache@v4
         with:
           path: |
@@ -153,6 +156,7 @@ jobs:
           key: theos-build-${{ github.sha }}
           restore-keys: |
             theos-build-
+          scope: escapeos-build-cache
 
       - name: Restore incremental-build state (mtime calibration)
         run: |
