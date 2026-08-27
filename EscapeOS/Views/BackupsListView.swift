@@ -76,8 +76,8 @@ struct BackupsListView: View {
             .sheet(item: $vm.activeRestore) { session in
                 RestoreView(session: session, appList: appList)
             }
-            .sheet(isPresented: $showingPicker) {
-                BackupImportPicker(onPick: handlePickedZip)
+            .documentPicker(isPresented: $showingPicker, allowedTypes: [.zip]) { urls in
+                if let url = urls.first { handlePickedZip(url) }
             }
             .sheet(item: $importRecord) { record in
                 CustomRestoreSheet(record: record, appList: appList) { session, guest in
@@ -214,12 +214,10 @@ struct BackupsListView: View {
         selecting = false
     }
 
-    /// Copy the picked (security-scoped) zip into an app-owned temp file, then
-    /// validate it as an EscapeOS backup. On success, open the target picker.
+    /// The picked zip is already copied into the app sandbox by SharedDocumentPicker
+    /// (`.documentPicker` uses `asCopy: true`), so we read it directly — no
+    /// security-scoped access dance needed (which fails inside LiveContainer guest).
     private func handlePickedZip(_ url: URL) {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        defer { showingPicker = false }
         do {
             let dest = FileManager.default.temporaryDirectory
                 .appendingPathComponent(url.lastPathComponent)
@@ -338,32 +336,6 @@ struct AppIconView: View {
 private func guestBundleId(from synthetic: String) -> String {
     let parts = synthetic.components(separatedBy: "::")
     return parts.count == 3 ? parts[1] : synthetic
-}
-
-/// Document picker restricted to `.zip` archives, used by the custom-restore
-/// entry point to let the user choose an external backup to restore.
-struct BackupImportPicker: UIViewControllerRepresentable {
-    let onPick: (URL) -> Void
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.zip])
-        picker.allowsMultipleSelection = false
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: (URL) -> Void
-        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else { return }
-            onPick(url)
-        }
-    }
 }
 
 /// Picker shown after the user selects an external backup zip: choose which
