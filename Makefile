@@ -38,6 +38,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/JITEnableView.swift \
 	EscapeOS/Views/LaunchAppsView.swift \
 	EscapeOS/Views/AppExpiryView.swift \
+	EscapeOS/Views/CertificateView.swift \
+	EscapeOS/Views/PairingInstallView.swift \
 	EscapeOS/Views/Supervised/SupervisedHelpers.swift \
 	EscapeOS/Views/Supervised/RestrictionTweaksView.swift \
 	EscapeOS/Views/Supervised/AppHideView.swift \
@@ -83,6 +85,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/SpoofSession.swift \
 	EscapeOS/Engine/JITEnableService.swift \
 	EscapeOS/Engine/ProvisioningProfileStore.swift \
+	EscapeOS/Engine/CertificateManager.swift \
+	EscapeOS/Engine/PairingInstallService.swift \
 	EscapeOS/Engine/zip_crypto.c \
 	EscapeOS/Engine/bad_query.c \
 	EscapeOS/Engine/MCM/MCMBridge.m \

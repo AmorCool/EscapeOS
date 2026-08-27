@@ -43,6 +43,22 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: CertificateView()) {
+                    MoreCard(
+                        icon: "checkmark.seal.fill",
+                        title: "证书管理",
+                        subtitle: "登录 Apple ID，查看并吊销账号下的 iOS 开发证书（纯网络操作，无需隧道）。"
+                    )
+                }
+
+                NavigationLink(destination: PairingInstallView()) {
+                    MoreCard(
+                        icon: "tray.and.arrow.down.fill",
+                        title: "配置导入",
+                        subtitle: "把配对文件写入已安装的 SideStore / LiveContainer / Feather 等应用，复用同一份配对身份。"
+                    )
+                }
+
                 NavigationLink(destination: WallpaperView()) {
                     MoreCard(
                         icon: "photo.fill.on.rectangle.fill",

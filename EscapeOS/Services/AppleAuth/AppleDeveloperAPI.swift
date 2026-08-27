@@ -20,6 +20,33 @@ struct DeveloperAppID: Identifiable, Hashable {
     var hasIncreasedMemory: Bool { enabledFeatures.contains("INCREASED_MEMORY_LIMIT") }
 }
 
+/// Apple Developer 开发证书（ios/listAllDevelopmentCerts.action），
+/// 移植自 SideInstaller 的 DevCert / isideload 的 DevelopmentCertificate。
+struct DeveloperCertificate: Identifiable, Hashable {
+    let name: String
+    let serialNumber: String
+    let machineName: String
+    let certificateId: String
+    let platform: String
+    let status: String
+    /// 过期时间（RFC3339 / plist date），Apple 可能不返回。
+    let expiration: Date?
+
+    /// 稳定标识：吊销以序列号为准，缺失时退回证书 id。
+    var id: String { serialNumber.isEmpty ? certificateId : serialNumber }
+
+    var displayName: String { name.isEmpty ? "未命名证书" : name }
+
+    /// 证书关联的机器（Apple 标记的），无则 nil。
+    var machineLabel: String? { machineName.isEmpty ? nil : machineName }
+
+    /// 是否已过期。
+    var isExpired: Bool {
+        guard let expiration else { return false }
+        return expiration < Date()
+    }
+}
+
 // MARK: - Apple Developer API
 
 /// Apple Developer 后端 API（developerservices2.apple.com），移植自 GetMoreRam / StosSign，
@@ -178,6 +205,73 @@ enum AppleDeveloperAPI {
             throw AppleAPIError.customError(code: http, message: "Apple API 请求失败（HTTP \(http)）: \(responseString.prefix(300))")
         }
         return responseString
+    }
+
+    // MARK: - 开发证书（移植自 SideInstaller 证书板块）
+
+    /// 获取团队下的 iOS 开发证书列表。
+    /// 端点与请求格式对齐 isideload 的 CertificatesApi：
+    /// POST .../ios/listAllDevelopmentCerts.action，body 含 teamId。
+    static func fetchCertificates(team: DeveloperTeam, session: AppleAPISession) async throws -> [DeveloperCertificate] {
+        LoginLogger.shared.log("▶ 获取证书列表（team=\(team.identifier)）")
+        var headers = try await makeHeaders(session: session)
+        headers["Content-Type"] = "text/x-xml-plist"
+        var body: [String: Any] = [
+            "clientId": clientID,
+            "protocolVersion": "QH65B2",
+            "requestId": UUID().uuidString.uppercased(),
+            "teamId": team.identifier
+        ]
+        let url = qhURL.appendingPathComponent("ios/listAllDevelopmentCerts.action").appendingQueryItem("clientId", clientID)
+        let data = try await post(url: url, headers: headers, plistBody: body, method: "POST")
+
+        guard let dict = plist(data),
+              let certsArray = dict["certificates"] as? [[String: Any]] else {
+            let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
+            LoginLogger.shared.log("❌ 证书列表解析失败: \(preview)")
+            throw AppleAPIError.customError(code: -1, message: "证书列表解析失败: \(preview)")
+        }
+        let certs = certsArray.compactMap { d -> DeveloperCertificate? in
+            let s = { (key: String) in (d[key] as? String) ?? "" }
+            let expiration: Date?
+            if let date = d["expirationDate"] as? Date {
+                expiration = date
+            } else if let iso = d["expirationDate"] as? String, !iso.isEmpty {
+                expiration = ISO8601DateFormatter().date(from: iso)
+            } else {
+                expiration = nil
+            }
+            return DeveloperCertificate(
+                name: s("name"),
+                serialNumber: s("serialNumber"),
+                machineName: s("machineName"),
+                certificateId: s("certificateId"),
+                platform: s("certificatePlatform"),
+                status: s("status"),
+                expiration: expiration
+            )
+        }
+        LoginLogger.shared.log("✓ 证书 \(certs.count) 个")
+        return certs
+    }
+
+    /// 吊销指定序列号的开发证书。
+    /// 端点对齐 isideload：POST .../ios/revokeDevelopmentCert.action，
+    /// body 含 teamId + serialNumber。
+    static func revokeCertificate(team: DeveloperTeam, serialNumber: String, session: AppleAPISession) async throws {
+        LoginLogger.shared.log("▶ 吊销证书（team=\(team.identifier), serial=\(serialNumber)）")
+        var headers = try await makeHeaders(session: session)
+        headers["Content-Type"] = "text/x-xml-plist"
+        let body: [String: Any] = [
+            "clientId": clientID,
+            "protocolVersion": "QH65B2",
+            "requestId": UUID().uuidString.uppercased(),
+            "teamId": team.identifier,
+            "serialNumber": serialNumber
+        ]
+        let url = qhURL.appendingPathComponent("ios/revokeDevelopmentCert.action").appendingQueryItem("clientId", clientID)
+        _ = try await post(url: url, headers: headers, plistBody: body, method: "POST")
+        LoginLogger.shared.log("✓ 吊销请求已接受")
     }
 
     // MARK: - Helpers
