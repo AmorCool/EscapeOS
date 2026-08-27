@@ -54,13 +54,15 @@ unsafe fn opt(p: *const c_char, default: &str) -> String {
 /// 构建桥接到 Swift 的 2FA 闭包（适配 isideload 0.2.25 的新回调签名：
 /// `TwoFactorCallbackParams -> TwoFactorCallbackResponse`）。
 pub(crate) fn make_2fa(cb: TwoFactorCb, ctx: TwoFaCtx) -> TwoFactorCallback {
+    // 用 Box 包装：TwoFaCtx 有 unsafe Send+Sync impl，Box<TwoFaCtx> 同样
+    // Send+Sync；闭包捕获整个 Box 变量（Deref 访问不触发字段级精确捕获），
+    // 不会退化成捕获裸指针字段 `*mut c_void`（非 Send/Sync）。
+    let ctx = Box::new(ctx);
     Box::new(move |_params: TwoFactorCallbackParams| {
-        // 解构强制闭包捕获整个 TwoFaCtx（Send+Sync），而不是只捕获
-        // 其 `*mut c_void` 字段（原始指针不是 Send/Sync）。
-        let TwoFaCtx(ctx_ptr) = ctx;
         let Some(cb) = cb else {
             return TwoFactorCallbackResponse::Abort;
         };
+        let ctx_ptr = (*ctx).0;
         let mut buf = vec![0u8; 128];
         let rc = cb(ctx_ptr, buf.as_mut_ptr() as *mut c_char, buf.len());
         if rc == 0 {
