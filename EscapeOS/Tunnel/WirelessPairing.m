@@ -9,6 +9,7 @@
 
 NSNotificationName const WirelessPairingDidShowPINNotification = @"WirelessPairingDidShowPINNotification";
 NSNotificationName const WirelessPairingDidCompleteNotification = @"WirelessPairingDidCompleteNotification";
+NSNotificationName const WirelessPairingDidFailBroadcastNotification = @"WirelessPairingDidFailBroadcastNotification";
 
 @interface WirelessPairing () <NSNetServiceDelegate>
 @property (nonatomic, strong, nullable) NSNetService *netService;
@@ -181,7 +182,15 @@ static void si_pin_cb(const char *pin, void *ctx) {
 }
 
 - (void)netService:(NSNetService *)sender didNotPublish:(NSDictionary<NSString *,NSNumber *> *)errorDict {
-    NSLog(@"[WirelessPairing] didNotPublish errorDict=%@", errorDict);
+    NSInteger code = errorDict[NSNetServicesErrorCode] ? errorDict[NSNetServicesErrorCode].integerValue : -1;
+    NSLog(@"[WirelessPairing] didNotPublish code=%ld errorDict=%@", (long)code, errorDict);
+    // v0.2.76：把 Bonjour 失败码回报给 UI（LiveContainer 共享应用 guest 等
+    // 嵌入环境 publish `_remotepairing-pairable-host._tcp` 会被系统拒绝，
+    // 之前只 NSLog 用户毫无感知）。
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:WirelessPairingDidFailBroadcastNotification
+                      object:self
+                    userInfo:@{@"code": @(code)}];
 }
 
 @end

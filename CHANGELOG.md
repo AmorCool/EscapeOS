@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.76] - 2026-08-27
+
+### Fixed
+- **iOS 27 无线配对 sheet UI 居中**：
+  - 进度态 ProgressView + 状态文字 之前和 keepAliveCard 一起被外层 Spacer 垂直居中，keepAliveCard 较高把菊花+文字重心拉下，看起来偏下不好看。改为两段式：菊花+状态文字单独居中，keepAliveCard 贴底。
+- **iOS 27 无线配对 Bonjour 广播失败回报给 UI**：
+  - `NSNetService didNotPublish` 之前只 NSLog，LiveContainer 共享应用 guest 等嵌入环境下 publish `_remotepairing-pairable-host._tcp` 被系统拒绝时用户毫无感知。v0.2.76 起把 `NSNetServicesErrorCode` 通过新通知 `WirelessPairingDidFailBroadcastNotification` 回报给 UI，在菊花下方显示「⚠️ 广播未确认（Bonjour code X）」副提示。
+  - **关于 LC 共享应用 guest 模式无法广播**：根因怀疑是 guest 进程缺失 `com.apple.developer.remotepairing` entitlement 导致 publish 被过滤/拒绝（与原版 StikDebug 在纯蜂窝 LocalDevVPN 类似的「平台/嵌入环境限制，EscapeSpace 侧无法直接修」）。本改动至少让用户能看到真因，不再静默。建议：转回普通应用或单 LC 模式。
+
 ## [0.2.75] - 2026-08-27
 
 ### Fixed

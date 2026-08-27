@@ -113,6 +113,7 @@ struct PairingSetupView: View {
     @State private var wirelessPin: String?
     @State private var wirelessStatus = "正在广播配对服务…"
     @State private var wirelessError: String?
+    @State private var wirelessBroadcastErrorCode: Int?
     @State private var wirelessDeviceName: String?
     @State private var wirelessEngine: WirelessPairing?
     @AppStorage("keepAliveAudio") private var keepAliveAudio = false
@@ -125,6 +126,7 @@ struct PairingSetupView: View {
     // this toolchain (see WirelessPairing.h for details).
     @State private var wirelessPinObserver: NSObjectProtocol?
     @State private var wirelessCompleteObserver: NSObjectProtocol?
+    @State private var wirelessBroadcastObserver: NSObjectProtocol?
 
     /// iOS 27 introduced in-app wireless pairing (the pairing code shows inside
     /// the app instead of via a system notification). Gate the wireless section on it.
@@ -350,6 +352,8 @@ struct PairingSetupView: View {
     private func cancelWirelessPairingCleanup() {
         wirelessPin = nil
         wirelessError = nil
+        wirelessBroadcastErrorCode = nil
+        wirelessBroadcastErrorCode = nil
         wirelessDeviceName = nil
         wirelessStatus = "正在广播配对服务…"
     }
@@ -438,15 +442,25 @@ struct PairingSetupView: View {
                             .multilineTextAlignment(.center)
                     }
                 } else {
+                    // 进度态：菊花 + 状态文字垂直居中，keepAliveCard 贴底
+                    //（v0.2.76 改：之前整个进度态一起被 Spacer 居中，
+                    // keepAliveCard 较高把菊花+文字重心拉下，看起来偏下）。
+                    Spacer(minLength: 8)
                     VStack(spacing: 12) {
                         ProgressView()
                         Text(wirelessStatus)
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
-
-                        keepAliveCard
+                        if let code = wirelessBroadcastErrorCode {
+                            Text("⚠️ 广播未确认（Bonjour code \(code)）")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .multilineTextAlignment(.center)
+                        }
                     }
+                    Spacer(minLength: 8)
+                    keepAliveCard
                 }
                 Spacer(minLength: 8)
             }
@@ -491,6 +505,7 @@ struct PairingSetupView: View {
                     UserDefaults.standard.set(hostAltIrk, forKey: "wirelessHostAltIrk")
                 }
                 self.wirelessDeviceName = deviceName.isEmpty ? "设备" : deviceName
+                self.wirelessBroadcastErrorCode = nil
                 self.keepAlive.stop()
             } else {
                 self.wirelessError = errorMsg.isEmpty ? "配对失败，请重试。" : errorMsg
@@ -507,6 +522,22 @@ struct PairingSetupView: View {
         if let t = wirelessCompleteObserver {
             center.removeObserver(t)
             wirelessCompleteObserver = nil
+        }
+        if let t = wirelessBroadcastObserver {
+            center.removeObserver(t)
+            wirelessBroadcastObserver = nil
+        }
+        // 监听 Bonjour 广播失败（NSNetService didNotPublish）：
+        // v0.2.76 之前只 NSLog，LiveContainer 共享应用 guest 等嵌入环境下
+        // 静默失败让用户以为广播成功却搜不到——现在把错误码回报给 UI 提示。
+        wirelessBroadcastObserver = center.addObserver(
+            forName: Notification.Name("WirelessPairingDidFailBroadcastNotification"),
+            object: nil,
+            queue: .main
+        ) { [self] note in
+            if let code = note.userInfo?["code"] as? Int {
+                self.wirelessBroadcastErrorCode = code
+            }
         }
     }
 }

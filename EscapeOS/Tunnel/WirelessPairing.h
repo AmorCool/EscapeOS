@@ -29,6 +29,12 @@ extern NSNotificationName const WirelessPairingDidShowPINNotification;
 ///   @"error"      : NSString (empty when nil)
 extern NSNotificationName const WirelessPairingDidCompleteNotification;
 
+/// Posted on the MAIN queue when NSNetService publish reports a failure
+/// (e.g. entitlement missing under LiveContainer shared-app guest mode).
+/// `userInfo[@"code"]` is the NSNetServicesErrorCode (NSNumber<NSInteger>).
+/// v0.2.76 起：之前只 NSLog，嵌入环境广播失败时用户毫无提示——现在回报给 UI。
+extern NSNotificationName const WirelessPairingDidFailBroadcastNotification;
+
 @interface WirelessPairing : NSObject
 
 /// Starts iOS 27 device-initiated wireless pairing. Returns immediately; the
