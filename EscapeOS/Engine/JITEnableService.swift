@@ -250,6 +250,13 @@ final class JITEnableService {
     /// 以调试模式启动目标应用，使其获得 JIT 权限。
     /// 调用后应用会被拉起（EscapeSpace 退到后台），JIT 保持到应用退出。
     func enableJIT(bundleID: String, progress: ((String) -> Void)? = nil) throws {
+        // 关键保活：process_control 调试启动目标应用后，本应用立即退到后台，
+        // iOS 数秒内就会挂起进程——若此时 attach/detach 流程还没跑完，
+        // 目标应用会一直停在 SIGSTOP（黑屏无反应）。持有后台租约保证
+        // 整个会话期间本应用不被挂起（对齐 StikDebug 的 DebugKeepAliveLease）。
+        let keepAliveLease = JITBackgroundLease()
+        defer { keepAliveLease.invalidate() }
+
         var tunnel = try createTunnel(hostname: "EscapeSpaceJIT")
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
@@ -414,6 +421,41 @@ private actor IconFetchSemaphore {
             next.resume()
         } else {
             permits += 1
+        }
+    }
+}
+
+/// JIT 会话后台保活租约（对齐原版 StikDebug 的 DebugKeepAliveLease）。
+///
+/// 为什么必须保活：`process_control_launch_app(debug: true)` 调试启动目标应用后，
+/// 本应用立即退到后台，iOS 数秒内就会挂起进程。若此时 QStartNoAckMode /
+/// vAttach / D（detach）流程尚未完成，目标应用会一直停在 SIGSTOP ——
+/// 表现为启动后永久黑屏无反应。持有租约期间：
+/// ① `beginBackgroundTask` 争取系统后台执行宽限（核心兜底）；
+/// ② 静音音频保活计数 +1（用户开启「静默音频」时真正生效）。
+private final class JITBackgroundLease {
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+
+    init() {
+        BackgroundAudioManager.shared.requestStart()
+        DispatchQueue.main.sync {
+            backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "EscapeSpaceJIT") { [weak self] in
+                guard let self else { return }
+                if self.backgroundTaskID != .invalid {
+                    UIApplication.shared.endBackgroundTask(self.backgroundTaskID)
+                    self.backgroundTaskID = .invalid
+                }
+            }
+        }
+    }
+
+    func invalidate() {
+        BackgroundAudioManager.shared.requestStop()
+        DispatchQueue.main.sync {
+            if backgroundTaskID != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTaskID)
+                backgroundTaskID = .invalid
+            }
         }
     }
 }
