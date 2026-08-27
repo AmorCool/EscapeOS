@@ -35,6 +35,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/DDIDownloadView.swift \
 	EscapeOS/Views/DomainBlockerView.swift \
 	EscapeOS/Views/DesignSystem.swift \
+	EscapeOS/Views/JITEnableView.swift \
+	EscapeOS/Views/AppExpiryView.swift \
 	EscapeOS/Views/Supervised/SupervisedHelpers.swift \
 	EscapeOS/Views/Supervised/RestrictionTweaksView.swift \
 	EscapeOS/Views/Supervised/AppHideView.swift \
@@ -78,6 +80,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/RouteBuilder.swift \
 	EscapeOS/Engine/KeepAliveManager.swift \
 	EscapeOS/Engine/SpoofSession.swift \
+	EscapeOS/Engine/JITEnableService.swift \
+	EscapeOS/Engine/ProvisioningProfileStore.swift \
 	EscapeOS/Engine/zip_crypto.c \
 	EscapeOS/Engine/bad_query.c \
 	EscapeOS/Engine/MCM/MCMBridge.m \

@@ -19,6 +19,22 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: JITEnableView()) {
+                    MoreCard(
+                        icon: "bolt.fill",
+                        title: "启用 JIT",
+                        subtitle: "以调试模式启动应用，为其启用 JIT 权限（需配对文件 + LocalDevVPN）。"
+                    )
+                }
+
+                NavigationLink(destination: AppExpiryView()) {
+                    MoreCard(
+                        icon: "calendar.badge.clock",
+                        title: "描述文件管理",
+                        subtitle: "查看所有描述文件的过期时间，支持按证书分组与批量删除。"
+                    )
+                }
+
                 NavigationLink(destination: WallpaperView()) {
                     MoreCard(
                         icon: "photo.fill.on.rectangle.fill",

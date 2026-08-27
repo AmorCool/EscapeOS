@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.69] - 2026-08-27
+
+### Added
+- **「更多」新增「启用 JIT」（汉化移植自 StikDebug）**：
+  - 列出签名带 get-task-allow 的已安装应用（证书直装签名默认带），点击后以**调试模式启动**该应用获得 JIT 权限（debug_proxy + process_control 调试启动，与 debugserver attach 等价，无越狱要求）。
+  - 依赖：配对文件（与应用页共用）+ LocalDevVPN；缺配对时页面给引导。
+  - 全程中文反馈：隧道建立 → 调试启动 → 附着 → 分离，成功/失败原因明确。
+- **「更多」新增「描述文件管理」（App Expiry，汉化移植自 StikDebug）**：
+  - 读取设备上**全部 provisioning profiles**（misagent 服务，物理位于设备的 `/var/mobile/Library/MobileDevice/Provisioning Profiles/`），按 AppIDName 解析出证书名 / application-identifier / UUID / 过期时间。
+  - **优化①（按用户要求）**：原版「Other Profiles」把所有未匹配描述文件挤在一个 Section；现改为**按证书名（AppIDName）分组**，每组显示软件名 + 最新过期时间 + 剩余天数颜色（红/橙/黄/绿），一眼分清属于哪个软件。
+  - **优化②（按用户要求）**：新增**批量选择删除（含全选）**——右上角「编辑」进入批量模式，行首复选框 / 底部全选 + 删除选中（N），misagent 逐个删除。
+  - 保留：单条导出（.mobileprovision）、单条删除、导入描述文件、已匹配应用分组展示。
+  - 说明：misagent 是 Apple 官方描述文件管理通道（Xcode Devices 窗口同源），走开发者隧道以配对身份访问，无需越狱。
+
 ## [0.2.68] - 2026-08-27
 
 ### Added
