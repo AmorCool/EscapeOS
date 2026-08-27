@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.82] - 2026-08-27
+
+### 修复
+- IPA 侧载真正复用「更多 → 设置」的 Apple ID 登录态（用户诉求：不要两套登录、不要每次重复 2FA，像 SideStore 一样登录一次全部复用）。
+- 根因：设置登录（AppleAuthenticator / GrandSlam）存的是 dsid + authToken（`com.apple.gs.xcode.auth` 的 app token），而 IPA 签名（isideload）之前只能走 `si_apple_signin` 完整登录（SRP + 2FA）。
+- 修复（源码实证 isideload 可跳过登录）：新增 `si_signin_with_session`——isideload 的 `DeveloperSession::new(AppToken, adsid, GrandSlam, anisette)` 可直接用已有 token + dsid 构造（GrandSlam 只需 anisette client_info，AppToken 即字符串封装）。IPA 侧载打开时优先用设置的 dsid+authToken 恢复签名会话，**免登录免 2FA**；token 过期才回退完整登录。证书管理 / 增加内存限制 / IPA 侧载现在共用同一套登录态。
+
 ## [0.2.79] - 2026-08-27
 
 ### 新增
