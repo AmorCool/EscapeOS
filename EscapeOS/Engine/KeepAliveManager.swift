@@ -46,7 +46,7 @@ final class KeepAliveManager {
 
             let wav = try Self.silentWAV()
             let p = try AVAudioPlayer(data: wav)
-            p.volume = 0
+            p.volume = 0.01
             p.numberOfLoops = -1
             p.play()
             player = p
@@ -86,7 +86,10 @@ final class KeepAliveManager {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    /// 生成 0.5 秒静音 WAV（8000 Hz 16-bit 单声道 PCM）。
+    /// 生成 0.5 秒「非零」静音 WAV（8000 Hz 16-bit 单声道 PCM）。
+    /// 数据填振幅 ±1（≈ -90 dBFS）+ 播放音量 0.01 → 实际约 -190 dBFS，
+    /// 人耳完全不可闻；但 PCM 非全零，避免某些 iOS 版本把纯静音会话
+    /// 判定为 idle 并回收（StikDebug PR #432 实锤的坑，会导致保活失效）。
     private static func silentWAV() throws -> Data {
         let sr = 8000, samples = Int(Double(sr) * 0.5)
         var w = Data("RIFF".utf8)
@@ -101,7 +104,16 @@ final class KeepAliveManager {
         w += withUnsafeBytes(of: UInt16(16).littleEndian) { Data($0) }
         w += Data("data".utf8)
         w += withUnsafeBytes(of: UInt32(samples * 2).littleEndian) { Data($0) }
-        w += Data(count: samples * 2)
+        // 非零：交替 +1（0x0001）/ -1（0xFFFF，16-bit LE），保证任意采样窗口都不全零。
+        var pcm = Data(capacity: samples * 2)
+        for index in 0..<samples {
+            if index % 2 == 0 {
+                pcm.append(0x01); pcm.append(0x00) // +1
+            } else {
+                pcm.append(0xFF); pcm.append(0xFF) // -1
+            }
+        }
+        w += pcm
         return w
     }
 }

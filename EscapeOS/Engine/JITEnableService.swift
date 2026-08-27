@@ -72,32 +72,42 @@ final class JITEnableService {
             throw makeError("隧道 IP 无效：\(deviceIP)（请检查「设置 → 本地隧道」）")
         }
 
-        var tunnel = TunnelHandles()
-        let ffiError = hostname.withCString { hostname in
-            withUnsafePointer(to: &addr) { pointer in
-                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    tunnel_create_rppairing(
-                        $0,
-                        socklen_t(MemoryLayout<sockaddr_in>.stride),
-                        hostname,
-                        pairingFile,
-                        nil,
-                        nil,
-                        &tunnel.adapter,
-                        &tunnel.handshake
-                    )
+        // 隧道建立失败自动重试（最多 3 次、短退避）：Wi-Fi↔蜂窝切换等
+        // 瞬时抖动会导致 RPPairing 握手失败，重试后通常成功
+        // （对齐 StikDebug PR #432 的隧道重试思路）。
+        var lastError: NSError?
+        for attempt in 0..<3 {
+            var tunnel = TunnelHandles()
+            let ffiError = hostname.withCString { hostname in
+                withUnsafePointer(to: &addr) { pointer in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        tunnel_create_rppairing(
+                            $0,
+                            socklen_t(MemoryLayout<sockaddr_in>.stride),
+                            hostname,
+                            pairingFile,
+                            nil,
+                            nil,
+                            &tunnel.adapter,
+                            &tunnel.handshake
+                        )
+                    }
                 }
             }
+            if let ffiError {
+                lastError = error(from: ffiError, fallback: "创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
+            } else if tunnel.adapter != nil, tunnel.handshake != nil {
+                return tunnel
+            } else {
+                var incomplete = tunnel
+                incomplete.free()
+                lastError = makeError("创建开发者隧道失败")
+            }
+            if attempt < 2 {
+                usleep(useconds_t(300_000 * (attempt + 1)))
+            }
         }
-        if let ffiError {
-            throw error(from: ffiError, fallback: "创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
-        }
-        guard tunnel.adapter != nil, tunnel.handshake != nil else {
-            var incomplete = tunnel
-            incomplete.free()
-            throw makeError("创建开发者隧道失败")
-        }
-        return tunnel
+        throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
     }
 
     // MARK: - 应用列表
@@ -425,32 +435,41 @@ private actor IconFetchSemaphore {
     }
 }
 
-/// JIT 会话后台保活租约（对齐原版 StikDebug 的 DebugKeepAliveLease）。
+/// JIT 会话后台保活租约（对齐原版 StikDebug 的 DebugKeepAliveLease 与
+/// PR #432 的续期思路）。
 ///
 /// 为什么必须保活：`process_control_launch_app(debug: true)` 调试启动目标应用后，
 /// 本应用立即退到后台，iOS 数秒内就会挂起进程。若此时 QStartNoAckMode /
 /// vAttach / D（detach）流程尚未完成，目标应用会一直停在 SIGSTOP ——
-/// 表现为启动后永久黑屏无反应。持有租约期间：
-/// ① `beginBackgroundTask` 争取系统后台执行宽限（核心兜底）；
-/// ② 静音音频保活计数 +1（用户开启「静默音频」时真正生效）。
+/// 表现为启动后永久黑屏无反应。
+///
+/// 为什么不用静音音频保活：目标应用启动时会激活自己的 AVAudioSession，
+/// 抢占/打断本应用的音频会话（KeepAliveManager 等音频保活会失效，
+/// 这是 v0.2.73 前用户开启「保持后台运行」仍黑屏的根因）。因此这里
+/// 只依赖 `beginBackgroundTask`：到期自动续期，直到 JIT 会话结束
+/// （invalidate），与用户设置、音频会话完全解耦。
 private final class JITBackgroundLease {
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    private var isActive = true
 
     init() {
-        BackgroundAudioManager.shared.requestStart()
         DispatchQueue.main.sync {
-            backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "EscapeSpaceJIT") { [weak self] in
-                guard let self else { return }
-                if self.backgroundTaskID != .invalid {
-                    UIApplication.shared.endBackgroundTask(self.backgroundTaskID)
-                    self.backgroundTaskID = .invalid
-                }
-            }
+            renew()
+        }
+    }
+
+    /// 申请后台执行宽限；到期回调里若会话仍活跃则自动续期。
+    /// 会话通常只有几秒，最多续期 1~2 次，不会触发系统惩罚。
+    private func renew() {
+        guard isActive else { return }
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "EscapeSpaceJIT") { [weak self] in
+            guard let self, self.isActive else { return }
+            self.renew()
         }
     }
 
     func invalidate() {
-        BackgroundAudioManager.shared.requestStop()
+        isActive = false
         DispatchQueue.main.sync {
             if backgroundTaskID != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTaskID)
