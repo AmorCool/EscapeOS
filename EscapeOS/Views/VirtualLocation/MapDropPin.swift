@@ -1,0 +1,74 @@
+import MapKit
+import SwiftUI
+
+/// 地图图钉：液态玻璃「移除图钉」菜单 + 长按拖动（移植自 locus-ZH）。
+struct MapDropPin: View {
+    var selected: Bool
+    var isDragging: Bool
+    var onSelect: () -> Void
+    var onRemove: () -> Void
+    var onDragBegan: () -> Void
+    var onDragMoved: (CGPoint) -> Void
+    var onDragEnded: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if selected && !isDragging {
+                Button(action: onRemove) {
+                    Label("移除图钉", systemImage: "trash.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(LocusTheme.danger)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+                .locusGlass(.regular, in: Capsule())
+                .contentShape(Capsule())
+                .transition(.scale(scale: 0.9, anchor: .bottom).combined(with: .opacity))
+            }
+
+            Image(systemName: "mappin.circle.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, LocusTheme.accentSecondary)
+                .font(.system(size: isDragging ? 44 : 36))
+                .shadow(color: .black.opacity(0.35), radius: isDragging ? 8 : 4, y: 2)
+                .scaleEffect(isDragging ? 1.12 : 1)
+        }
+        // 图钉尖端对准坐标，菜单悬在上方。
+        .padding(.bottom, 2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onSelect()
+        }
+        .gesture(dragGesture)
+        .animation(.spring(response: 0.28, dampingFraction: 0.78), value: selected)
+        .animation(.easeOut(duration: 0.15), value: isDragging)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(selected ? "已选中的图钉" : "地图图钉")
+        .accessibilityHint("轻点显示移除，长按拖动。")
+    }
+
+    private var dragGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.35)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+            .onChanged { value in
+                switch value {
+                case .first(true):
+                    break
+                case .second(true, let drag):
+                    if let drag {
+                        if !isDragging {
+                            onDragBegan()
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        }
+                        onDragMoved(drag.location)
+                    }
+                default:
+                    break
+                }
+            }
+            .onEnded { _ in
+                onDragEnded()
+            }
+    }
+}

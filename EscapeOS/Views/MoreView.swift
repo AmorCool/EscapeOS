@@ -11,6 +11,14 @@ struct MoreView: View {
     var body: some View {
         List {
             Section {
+                NavigationLink(destination: VirtualLocationView()) {
+                    MoreCard(
+                        icon: "location.fill",
+                        title: "虚拟定位",
+                        subtitle: "在地图上放置图钉或规划轨迹，模拟设备定位（需配对文件 + LocalDevVPN）。"
+                    )
+                }
+
                 NavigationLink(destination: WallpaperView()) {
                     MoreCard(
                         icon: "photo.fill.on.rectangle.fill",

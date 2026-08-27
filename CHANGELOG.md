@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.68] - 2026-08-27
+
+### Added
+- **「更多」新增「虚拟定位」入口（移植自 Bellaboy/locus-ZH，MIT）**：
+  - 原理：通过 LocalDevVPN 本机隧道 + RPPairing 配对文件，调用 Apple 开发者工具同款 DVT 定位模拟服务（Xcode「模拟位置」机制）向 locationd 注入模拟坐标——无需越狱 / 漏洞，复用 EscapeSpace 已有的 idevice FFI（Rust idevice-ffi 原生支持 location_simulation）。
+  - 功能：地图放置图钉 / 长按拖动、搜索地点（含坐标直搜）、定位模拟开/停、摇杆连续移动、出行方式（步行/跑步/骑行/驾车）、道路路线规划与轨迹运行（速度倍率、循环）、手绘轨迹、GPX 导入/导出、收藏与最近使用、中国地图 GCJ-02 坐标自动转换。
+  - **保活（离开页面也持续运行）**：会话为全局单例（`SpoofSession.shared`），返回「更多」菜单后模拟注入与 8 秒重发 / 12 秒健康检查定时器继续运行；退到后台由「静音音频保活 + 后台定位」延续（Info.plist 已有 audio/location 后台模式）。
+  - 配对文件与「应用」页共用 `Documents/pairingFile.plist`，已导入直接可用；隧道 IP 与「设置 → 本地隧道」联动。
+  - 依赖提示：需 LocalDevVPN（App Store 下载，连接后默认 10.7.0.1）+ idevice_pair 生成的 RPPairing 配对文件；页面状态栏会提示缺失项，一键打开 LocalDevVPN。
+- **「更多 → 设置」新增「保活」开关（汉化移植自 rooootdev/mond 的 keepalive.swift）**：
+  - 功能与原版一致：开启后应用关闭也会在后台保持运行（静音音频方式，`AVAudioSession` playback + 静音 WAV 循环）。
+  - 与虚拟定位联动：模拟激活时强制保活（与开关无关），停止模拟后若开关关闭则自动停止。
+
+### Changed
+- **CI 编译时间优化**：
+  - 新增 Theos 构建产物缓存（`.theos` + 源文件 hash 快照），恢复时对未变化源码校准 mtime、删除已变化文件对应的 `.o`，`make` 只增量编译 diff，不再每次 `make clean` 全量编译（Swift 源文件已近 200 个，全量耗时随版本线性增长）。
+  - 效果自 v0.2.69 起体现（首次无缓存仍全量）。
+
 ## [0.2.67] - 2026-08-27
 
 ### Fixed

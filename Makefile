@@ -44,6 +44,14 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/Wallpaper/WallpaperModels.swift \
 	EscapeOS/Views/Wallpaper/WallpaperHandler.swift \
 	EscapeOS/Views/Wallpaper/WallpaperView.swift \
+	EscapeOS/Views/VirtualLocation/Theme.swift \
+	EscapeOS/Views/VirtualLocation/MapDropPin.swift \
+	EscapeOS/Views/VirtualLocation/JoystickPad.swift \
+	EscapeOS/Views/VirtualLocation/RoutePlannerSheet.swift \
+	EscapeOS/Views/VirtualLocation/MapHomeView.swift \
+	EscapeOS/Views/VirtualLocation/VirtualLocationView.swift \
+	EscapeOS/Views/VirtualLocation/VirtualLocationSettingsView.swift \
+	EscapeOS/Views/VirtualLocation/PlacesView.swift \
 	EscapeOS/Engine/ZipReader.swift \
 	EscapeOS/Engine/BackupPaths.swift \
 	EscapeOS/Engine/RestoreService.swift \
@@ -62,6 +70,14 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/ReclaimService.swift \
 	EscapeOS/Engine/LiveContainerDiscovery.swift \
 	EscapeOS/Engine/UninstallService.swift \
+	EscapeOS/Engine/LocationEngine.swift \
+	EscapeOS/Engine/ChinaCoordinateTransform.swift \
+	EscapeOS/Engine/BackgroundKeepAlive.swift \
+	EscapeOS/Engine/SavedPlace.swift \
+	EscapeOS/Engine/LocalDevVPN.swift \
+	EscapeOS/Engine/RouteBuilder.swift \
+	EscapeOS/Engine/KeepAliveManager.swift \
+	EscapeOS/Engine/SpoofSession.swift \
 	EscapeOS/Engine/zip_crypto.c \
 	EscapeOS/Engine/bad_query.c \
 	EscapeOS/Engine/MCM/MCMBridge.m \

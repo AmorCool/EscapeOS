@@ -141,14 +141,57 @@ jobs:
           cp "rust/idevice-ffi/idevice.h" EscapeOS/Tunnel/idevice.h
           ls -la EscapeOS/Tunnel/libidevice_ffi.a EscapeOS/Tunnel/idevice.h
 
+      - name: Cache Theos build artifacts (incremental compile)
+        # 缓存 Theos 编译产物 + 源文件 hash 快照。恢复时把「未变化的源文件」
+        # 校准为过期 mtime、删除「已变化文件」对应的 .o，让 make 只重编 diff，
+        # 避免每次全量编译 Swift（编译时长随源码量线性增长）。
+        uses: actions/cache@v4
+        with:
+          path: |
+            .theos
+            .source-hashes.txt
+          key: theos-build-${{ github.sha }}
+          restore-keys: |
+            theos-build-
+
+      - name: Restore incremental-build state (mtime calibration)
+        run: |
+          set -euo pipefail
+          if [ ! -f .source-hashes.txt ]; then
+            echo "No incremental snapshot — full build"
+            exit 0
+          fi
+          # 1) hash 不一致的源文件：删除其 .o（.h 变化则删除所有依赖它的 .o）
+          while read -r hash path; do
+            [ -f "$path" ] || continue
+            cur="$(sha256sum "$path" | cut -d' ' -f1)"
+            [ "$cur" = "$hash" ] && continue
+            case "$path" in
+              *.swift|*.m|*.c)
+                obj=".theos/obj/debug/arm64/$(basename "$path" | sed -E 's/\.[^.]+$//').o"
+                rm -f "$obj"
+                ;;
+              *.h)
+                base="$(basename "$path")"
+                grep -l "$base" .theos/obj/debug/arm64/*.d 2>/dev/null | \
+                  sed -E 's/\.d$/.o/' | xargs -r rm -f
+                ;;
+            esac
+          done < .source-hashes.txt
+          # 2) 源码 mtime 拨回过去、.o 设为当前，make 判定未变文件 up-to-date
+          find EscapeOS Resources -type f \( -name "*.swift" -o -name "*.m" -o -name "*.c" -o -name "*.h" -o -name "*.plist" -o -name "*.mobileconfig" \) -exec touch -d "1 hour ago" {} +
+          find .theos -name "*.o" -exec touch {} +
+          echo "Incremental state restored"
+
       - name: Build package (Theos)
         run: |
           set -euo pipefail
           # -j 并行编译 Swift 源文件（macOS runner 多核），显著缩短编译时长
           CORES="$(sysctl -n hw.ncpu)"
           echo "Building with ${CORES} parallel jobs"
-          make clean
           make -j"${CORES}" package TARGET="iphone:clang:${{ env.SDK_VER }}:18.0" 2>&1 | tee /tmp/build.log
+          # 记录源文件 hash 快照，供下一次构建增量复用（随 .theos 一起缓存）
+          find EscapeOS Resources -type f \( -name "*.swift" -o -name "*.m" -o -name "*.c" -o -name "*.h" -o -name "*.plist" -o -name "*.mobileconfig" \) -exec sha256sum {} \; | sort > .source-hashes.txt
 
       - name: Convert .deb to IPA
         run: |

@@ -586,6 +586,7 @@ struct SettingsForm: View {
     @State private var showNoPairingAlert = false
     @State private var showLoginSheet = false
     @State private var showAccountDetails = false
+    @AppStorage(KeepAliveManager.enabledKey) private var keepAliveEnabled = false
 
     var body: some View {
         Form {
@@ -664,6 +665,17 @@ struct SettingsForm: View {
                 Text(ProductLimits.body)
                     .font(.footnote)
                     .foregroundColor(.secondary)
+            }
+
+            Section(header: Text("保活"), footer: Text("开启后，关闭本应用也会在后台保持运行（静音音频方式），让虚拟定位、无线配对广播等持续任务不中断。")) {
+                Toggle("保持后台运行", isOn: $keepAliveEnabled)
+                    .onChange(of: keepAliveEnabled) { _, enabled in
+                        if enabled {
+                            KeepAliveManager.shared.start()
+                        } else {
+                            KeepAliveManager.shared.stopIfNotRequested()
+                        }
+                    }
             }
 
             Section(header: Text("关于")) {
