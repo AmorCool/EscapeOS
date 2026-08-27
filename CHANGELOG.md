@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.78] - 2026-08-27
+
+### 新增
+- 「更多 → 证书管理」：汉化移植 SideInstaller「证书」板块。登录 Apple ID（复用现有 SRP-6a + Anisette v3 + 2FA 认证引擎）后列出账号下的 iOS 开发证书（名称 / 机器 / 序列号 / 到期时间 / 过期徽章），支持吊销（带确认弹窗）。纯开发者门户 API（listAllDevelopmentCerts / revokeDevelopmentCert），不需要隧道与本地网络权限。
+- 「更多 → 配置导入」：汉化移植 SideInstaller「配对 → 安装到应用」。扫描设备上已安装的侧载工具（SideStore / LiveContainer / Feather / StikDebug / StikTest / SparseBox 等 12 项），把当前配对文件写入目标应用的 Documents（house_arrest + AFC，读回验证字节数），支持单个写入与写入全部。链路为 LocalDevVPN 隧道，不依赖原版的本地网络权限（LiveContainer 兼容）。
+
+### 技术说明
+- 两个功能均零 Rust 改动：证书 API 复用项目现有 AppleDeveloperAPI（QH65B2 协议）；配置导入的 house_arrest / AFC 符号项目 Rust FFI 早已具备。
+- 原版 SideInstaller 的 LocalNetworkAuthorization（NWBrowser/NWListener 本地网络权限探测）未移植——那是它在生成配对文件时请求权限用的，LiveContainer guest 拿不到；我们的流程只做写入，用已有配对文件 + 系统 VPN 隧道天然绕开。
+
 ## [0.2.77] - 2026-08-27
 
 ### 修复
