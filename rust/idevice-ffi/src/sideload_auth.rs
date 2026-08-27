@@ -291,7 +291,7 @@ pub unsafe fn signin_with_session(
             .build()
             .map_err(|e| format!("failed to start runtime: {e}"))?;
 
-        let sideloader = rt.block_on(async {
+        let (sideloader, summary) = rt.block_on(async {
             tracing::info!("Session: building anisette provider ({anisette_url})");
             let provider = RemoteV3AnisetteProvider::new(
                 &anisette_url,
