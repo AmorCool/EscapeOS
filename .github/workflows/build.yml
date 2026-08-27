@@ -111,6 +111,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install sccache
+        # Rust 编译缓存（内容哈希，不受 checkout mtime 影响）。isideload 依赖树
+        # 大（首次全量 ~12 分钟），且 actions/checkout 检出源码的 mtime 总比
+        # target 缓存新 → cargo 每次全量重编。sccache 按编译单元内容哈希缓存，
+        # 改一个文件只重编那一个 crate，其余直接命中（v0.2.81 起 Rust 侧生效）。
+        run: |
+          brew install sccache || true
+          sccache --version || true
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/sccache
+          # key 固定：sccache 按内容哈希寻址，固定 key 可跨版本复用全部产物。
+          key: macos-sccache-v1
+          scope: escapeos-build-cache
+
       - name: Build libidevice_ffi.a (Rust, aarch64-apple-ios)
         # Vendored jkcoxson/idevice-ffi (BSD-3) + our si_run_host engine, built
         # from source so the single .a also exposes the iOS 27 wireless-pairing
@@ -118,6 +135,13 @@ jobs:
         run: |
           set -euo pipefail
           source "$HOME/.cargo/env"
+          # 走 sccache：内容哈希缓存编译产物，跨 run 复用（不受 mtime 影响）。
+          export RUSTC_WRAPPER="$(command -v sccache || true)"
+          export SCCACHE_CACHE_SIZE=2G
+          if [ -z "$RUSTC_WRAPPER" ]; then
+            echo "sccache unavailable — falling back to plain cargo"
+            unset RUSTC_WRAPPER
+          fi
           cd rust/idevice-ffi
           # Belt-and-suspenders for cargo network: use the system git CLI for
           # fetching git deps (more robust on flaky CI NATs), and retry up to

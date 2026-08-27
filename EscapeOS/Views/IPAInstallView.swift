@@ -24,8 +24,10 @@ struct IPAInstallView: View {
     @State private var appleID = ""
     @State private var password = ""
     @State private var showPassword = false
-    /// 是否已从「更多 → 设置」预填过凭据（避免覆盖用户手动输入）。
+    /// 是否已从「更多 → 设置」复用过凭据（避免重复触发自动登录）。
     @State private var didPrefillCredentials = false
+    /// 正在用设置里保存的 Apple ID 自动登录。
+    @State private var isAutoSigningIn = false
 
     // 2FA
     @State private var showTwoFactor = false
@@ -221,6 +223,18 @@ struct IPAInstallView: View {
                         }
                         .font(.subheadline)
                     }
+                } else if isAutoSigningIn {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("正在用「设置」里的 Apple ID 自动登录…")
+                                .font(.subheadline)
+                            Text("如需两步验证，验证码弹窗会在此显示。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
                 } else {
                     HStack {
                         Group {
@@ -336,12 +350,11 @@ struct IPAInstallView: View {
                 showTwoFactor = true
             }
             refreshSavedIPAs()
-            // 复用「更多 → 设置」已保存的 Apple ID 凭据（预填，避免重复输入）。
-            let settings = MemoryLimitSettings.shared
-            if !didPrefillCredentials, !service.isSignedIn, settings.isLoggedIn, !settings.appleID.isEmpty {
-                appleID = settings.appleID
-                password = settings.password(forHistory: settings.appleID) ?? ""
+            // 复用「更多 → 设置」已保存的 Apple ID：自动登录（无需手动输入），
+            // 失败才回退手动输入。
+            if !didPrefillCredentials {
                 didPrefillCredentials = true
+                autoSignInWithSavedCredentials()
             }
         }
         .onDisappear {
@@ -473,6 +486,32 @@ struct IPAInstallView: View {
         }
         try FileManager.default.moveItem(at: tempURL, to: dest)
         return dest
+    }
+
+    // MARK: - 自动登录（复用「更多 → 设置」的 Apple ID）
+
+    /// 用「更多 → 设置」里已保存的 Apple ID 凭据自动完成 isideload 登录
+    /// （签名需要 isideload 自己的 SignSession，必须走 si_apple_signin；
+    /// 凭据复用设置里存的邮箱+密码，用户无需再手动输入）。
+    private func autoSignInWithSavedCredentials() {
+        guard !service.isSignedIn, !isRunning else { return }
+        let settings = MemoryLimitSettings.shared
+        guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
+        let id = settings.appleID
+        let pw = settings.password(forHistory: id) ?? ""
+        guard !pw.isEmpty else { return }
+        let ani = settings.anisetteServer
+        isAutoSigningIn = true
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: ani)
+                }.value
+            } catch {
+                errorMessage = "自动登录失败：\(error.localizedDescription)"
+            }
+            isAutoSigningIn = false
+        }
     }
 
     // MARK: - 安装流程
