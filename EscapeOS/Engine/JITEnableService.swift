@@ -308,15 +308,23 @@ final class JITEnableService {
             var response: UnsafeMutablePointer<CChar>?
             let err = debug_proxy_send_command(debugProxy, cmd, &response)
             debugserver_command_free(cmd)
+            if let err {
+                if let response { idevice_string_free(response) }
+                throw error(from: err, fallback: "调试器附着失败")
+            }
             if let response {
                 let text = String(cString: response)
                 idevice_string_free(response)
-                // attach 失败（如应用已退出）时给出明确错误
-                if err == nil, !text.contains("OK") {
+                // debugserver 的 vAttach 成功时返回的是 stop reply（如
+                // `T11thread:...;...`，T11 = SIGSTOP，目标进程被暂停），**不是 "OK"**。
+                // 只有以 "E" 开头的响应（debugserver 错误包）才是真正的失败。
+                // v0.2.71 误把成功响应当失败 → throw 后 detach 未执行，目标应用
+                // 停在 SIGSTOP、连接断开后被 debugserver 终止（闪退）。
+                // 对齐 StikDebug：原版不检查 attach 响应，成功失败都继续 detach。
+                if text.hasPrefix("E") {
                     throw makeError("调试器附着失败：\(text)")
                 }
             }
-            if let err { throw error(from: err, fallback: "调试器附着失败") }
         }
 
         // 5) 分离调试器——JIT 保留，应用正常运行
