@@ -55,11 +55,14 @@ unsafe fn opt(p: *const c_char, default: &str) -> String {
 /// `TwoFactorCallbackParams -> TwoFactorCallbackResponse`）。
 pub(crate) fn make_2fa(cb: TwoFactorCb, ctx: TwoFaCtx) -> TwoFactorCallback {
     Box::new(move |_params: TwoFactorCallbackParams| {
+        // 解构强制闭包捕获整个 TwoFaCtx（Send+Sync），而不是只捕获
+        // 其 `*mut c_void` 字段（原始指针不是 Send/Sync）。
+        let TwoFaCtx(ctx_ptr) = ctx;
         let Some(cb) = cb else {
             return TwoFactorCallbackResponse::Abort;
         };
         let mut buf = vec![0u8; 128];
-        let rc = cb(ctx.0, buf.as_mut_ptr() as *mut c_char, buf.len());
+        let rc = cb(ctx_ptr, buf.as_mut_ptr() as *mut c_char, buf.len());
         if rc == 0 {
             return TwoFactorCallbackResponse::Abort;
         }
