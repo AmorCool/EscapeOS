@@ -242,7 +242,6 @@ final class IPAInstallService: ObservableObject {
         }
         installProgressHandler = progress
 
-        var error: UnsafeMutablePointer<IdeviceFfiError>?
         let installErr = remoteRoot.withCString { p in
             installation_proxy_install_with_callback(ip, p, options, progressCallback, nil)
         }
