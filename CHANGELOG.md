@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.71] - 2026-08-27
+
+### Fixed
+- **「启用 JIT」/「拉起应用」部分应用（主要是第三方应用）图标丢失、显示灰色占位**：
+  - 根因：行内图标此前用进程内私有 API `UIImage._applicationIconImageForBundleIdentifier:format:scale:`，读的是本机 IconServices 图标缓存——证书直装 / 侧载的第三方应用经常取不到（图标不在该缓存可达范围），回退为灰色 `app.dashed`；系统应用图标位于 `/System/Library` 恒可达所以正常。
+  - 修复：改用与原版 StikDebug 同源的 `springboard_services_get_icon`（RSD 隧道 → 设备端 SpringBoardServices 服务，按 Bundle ID 返回真实图标 PNG），系统应用与第三方应用均能拿到；复用现有 Rust idevice-ffi 的 springboardservices 符号（feature 早已启用），零新增依赖。
+  - 配套：新增 `JITAppIconLoader`（内存缓存 + in-flight 去重 + 4 并发信号量），滚动列表不重复建隧道；行图标改为 `JITAppIconView` 异步加载，加载中/失败才显示灰占位。
+  - 细节：icon PNG 缓冲区由 Rust 侧分配，用 `idevice_data_free` 释放（比原版直接 C `free()` 更正确）。
+
 ## [0.2.70] - 2026-08-27
 
 ### Added
