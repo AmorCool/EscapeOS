@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.77] - 2026-08-27
+
+### 修复
+- 「更多 → 备份」的「自定义恢复」导入功能在 LiveContainer 共享应用 / 证书直装环境下无法导入（报错"无法读取备份"）。
+- 根因：`BackupImportPicker` 自己实现 `UIDocumentPickerViewController`（未设 `asCopy: true`），返回 security-scoped 原始 URL，读取依赖 `startAccessingSecurityScopedResource()`——LC guest 沙盒下这一步失败。已删除该自实现，改用项目统一文件选择调用点 `SharedDocumentPicker`（默认 `asCopy: true`，文件先拷入沙盒再读），`handlePickedZip` 同步去掉 security-scoped dance。
+- 全项目 `.fileImporter` / 自实现 `UIDocumentPicker` 调用点现已全部清零，统一走 `SharedDocumentPicker`。
+
 ## [0.2.76] - 2026-08-27
 
 ### Fixed
