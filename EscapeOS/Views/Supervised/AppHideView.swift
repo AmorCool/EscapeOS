@@ -180,7 +180,7 @@ struct AppHideView: View {
                 isPickerLoading = false
                 installedApps = apps
                 if apps.isEmpty {
-                    pickerMessage = "未找到已安装的三方应用。"
+                    pickerMessage = supervisedEnumerationDiagnostic()
                 }
             }
         }

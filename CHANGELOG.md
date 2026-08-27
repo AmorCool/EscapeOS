@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.67] - 2026-08-27
+
+### Fixed
+- **「从已安装应用选择」列表仍为空（v0.2.66 修复无效，真机复测）**：
+  - 根因：v0.2.66 改用 `NSClassFromString("LSApplicationWorkspace")` 反射枚举，但 **`NSClassFromString` 只搜索「已加载」的类，不会自动加载 framework**——CoreServices 未被链接（Theos 下未链接 CoreServices 正是 v0.2.66 链接失败的原因），运行时类也不存在，`NSClassFromString` 直接返回 nil，列表依旧为空。
+  - 修复：枚举前先 `dlopen` 强制加载 CoreServices / MobileCoreServices（失败无害），再走反射枚举。
+  - 配套：空列表时显示诊断信息（区分「framework 加载失败」与「确实没有三方应用」），便于下次定位。
+
 ## [0.2.66] - 2026-08-27
 
 ### Fixed

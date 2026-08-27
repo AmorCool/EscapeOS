@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import SafariServices
+import Darwin
 
 /// 监督模式工具共用的小组件：App 图标（私有 API）、已安装应用枚举、底部安装按钮、app 内 Safari。
 
@@ -14,11 +15,26 @@ func supervisedAppIcon(_ bundleID: String) -> Image {
     return Image(uiImage: img)
 }
 
-/// 设备本地枚举已安装应用（LSApplicationWorkspace 私有 API，运行时反射调用，
-/// 不产生编译期类符号引用，Theos 下无需额外链接 CoreServices）。
-/// 不需要配对文件 / 本地隧道，证书直装环境直接可用。
+/// 设备本地枚举已安装应用（LSApplicationWorkspace 私有 API）。
+///
+/// 实现要点（Theos / 证书直装环境，三条缺一不可）：
+/// 1. **必须先 dlopen 加载 framework**：`NSClassFromString` 只搜索「已加载」的类，
+///    不会自动加载 framework。CoreServices 未被链接/加载时 NSClassFromString
+///    直接返回 nil（v0.2.66 列表仍为空的原因）。
+/// 2. 通过 `(AnyObject).perform` + KVC 反射调用，不产生编译期类符号引用，
+///    避免 `_OBJC_CLASS_$_` Undefined symbols（Theos 下未链接 CoreServices 的坑）。
+/// 3. 不需要配对文件 / 本地隧道，证书直装环境直接可用。
 /// 只返回用户安装的应用（User / Internal）——隐藏对系统 App 无效。
 func supervisedInstalledApps() -> [InstalledApp] {
+    // 先强制加载可能承载 LSApplicationWorkspace 的 framework。
+    // iOS 14+ 在 CoreServices；旧版本在 MobileCoreServices。dlopen 失败无害。
+    for path in [
+        "/System/Library/Frameworks/CoreServices.framework/CoreServices",
+        "/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices",
+    ] {
+        dlopen(path, RTLD_NOW)
+    }
+
     guard let wsClass = NSClassFromString("LSApplicationWorkspace") as AnyObject?,
           let ws = wsClass.perform(NSSelectorFromString("defaultWorkspace"))?.takeUnretainedValue(),
           let proxies = ws.perform(NSSelectorFromString("allApplications"))?.takeUnretainedValue() as? [NSObject] else {
@@ -39,6 +55,14 @@ func supervisedInstalledApps() -> [InstalledApp] {
         ))
     }
     return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
+
+/// 「从已安装应用选择」为空的诊断信息（供空列表展示，便于区分根因）。
+func supervisedEnumerationDiagnostic() -> String {
+    if NSClassFromString("LSApplicationWorkspace") == nil {
+        return "应用列表服务不可用：无法加载 LSApplicationWorkspace（framework 加载失败）。"
+    }
+    return "未找到已安装的三方应用。"
 }
 
 /// app 内 Safari 的展示目标（URL 需要 Identifiable 才能用 `.sheet(item:)`）。
