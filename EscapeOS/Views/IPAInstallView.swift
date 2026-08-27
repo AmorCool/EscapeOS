@@ -15,11 +15,17 @@ struct IPAInstallView: View {
     @State private var ipaLink = ""
     @State private var isDownloading = false
     @State private var downloadProgress: Double = 0
+    /// 「已下载的 IPA」列表（Documents/Custom 目录）。
+    @State private var savedIPAs: [SavedIPA] = []
+    /// 待确认删除的 IPA。
+    @State private var pendingDeleteIPA: SavedIPA?
 
     // Apple ID
     @State private var appleID = ""
     @State private var password = ""
     @State private var showPassword = false
+    /// 是否已从「更多 → 设置」预填过凭据（避免覆盖用户手动输入）。
+    @State private var didPrefillCredentials = false
 
     // 2FA
     @State private var showTwoFactor = false
@@ -32,6 +38,21 @@ struct IPAInstallView: View {
     @State private var successMessage: String?
     @State private var step: Step = .idle
     @State private var installProgress: Double = 0
+
+    /// 一个已下载/导入的 IPA 文件。
+    private struct SavedIPA: Identifiable {
+        let url: URL
+        let name: String
+        let size: Int64
+        let modified: Date?
+        var id: String { url.path }
+    }
+
+    /// IPA 统一存放目录（对齐 SideInstaller 的 IPALibrary.customDir）。
+    private var customDir: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Custom", isDirectory: true)
+    }
 
     private enum Step {
         case idle, signingIn, signing, installing, done
@@ -134,6 +155,56 @@ struct IPAInstallView: View {
                 Text("IPA")
             } footer: {
                 Text("导入的 IPA 会先拷贝到应用沙盒（统一文件选择调用点），可离线签名安装。")
+            }
+
+            // 已下载的 IPA
+            Section {
+                if savedIPAs.isEmpty {
+                    Text("暂无已下载的 IPA。导入或下载的 IPA 会保存在这里。")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(savedIPAs) { item in
+                        HStack(spacing: 12) {
+                            AppRowIcon(systemName: "shippingbox.fill", tint: .blue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                HStack(spacing: 8) {
+                                    Text(ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
+                                    if let modified = item.modified {
+                                        Text(modified.formatted(date: .abbreviated, time: .shortened))
+                                    }
+                                }
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if ipaURL?.path == item.url.path {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            ipaURL = item.url
+                            ipaLink = ""
+                            errorMessage = nil
+                            successMessage = nil
+                        }
+                    }
+                    .onDelete { offsets in
+                        if let idx = offsets.first {
+                            pendingDeleteIPA = savedIPAs[idx]
+                        }
+                    }
+                }
+            } header: {
+                Text("已下载的 IPA")
+            } footer: {
+                Text("点击选择为要安装的 IPA；左滑删除。")
             }
 
             // Apple ID
@@ -255,10 +326,7 @@ struct IPAInstallView: View {
         .navigationBarTitleDisplayMode(.inline)
         .documentPicker(isPresented: $showImporter, allowedTypes: [UTType(filenameExtension: "ipa") ?? .data]) { urls in
             if let url = urls.first {
-                ipaURL = url
-                ipaLink = ""
-                errorMessage = nil
-                successMessage = nil
+                importIPA(from: url)
             }
         }
         .onAppear {
@@ -267,9 +335,33 @@ struct IPAInstallView: View {
                 twoFactorReply = reply
                 showTwoFactor = true
             }
+            refreshSavedIPAs()
+            // 复用「更多 → 设置」已保存的 Apple ID 凭据（预填，避免重复输入）。
+            let settings = MemoryLimitSettings.shared
+            if !didPrefillCredentials, !service.isSignedIn, settings.isLoggedIn, !settings.appleID.isEmpty {
+                appleID = settings.appleID
+                password = settings.password(forHistory: settings.appleID) ?? ""
+                didPrefillCredentials = true
+            }
         }
         .onDisappear {
             service.twoFactorPrompt = nil
+        }
+        .alert("删除已下载的 IPA？", isPresented: Binding(
+            get: { pendingDeleteIPA != nil },
+            set: { if !$0 { pendingDeleteIPA = nil } }
+        )) {
+            Button("删除", role: .destructive) {
+                if let item = pendingDeleteIPA {
+                    deleteSavedIPA(item)
+                }
+                pendingDeleteIPA = nil
+            }
+            Button("取消", role: .cancel) { pendingDeleteIPA = nil }
+        } message: {
+            if let item = pendingDeleteIPA {
+                Text("「\(item.name)」将被永久删除，此操作不可撤销。")
+            }
         }
         .alert("两步验证", isPresented: $showTwoFactor) {
             TextField("6 位验证码", text: $twoFactorCode)
@@ -306,13 +398,65 @@ struct IPAInstallView: View {
         Task {
             do {
                 let dest = try await download(url: url)
-                ipaURL = dest
+                try FileManager.default.createDirectory(at: customDir, withIntermediateDirectories: true)
+                let name = url.lastPathComponent
+                let target = customDir.appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: target.path) {
+                    try FileManager.default.removeItem(at: target)
+                }
+                try FileManager.default.moveItem(at: dest, to: target)
+                ipaURL = target
+                refreshSavedIPAs()
                 isDownloading = false
             } catch {
                 isDownloading = false
                 errorMessage = "下载失败：\(error.localizedDescription)"
             }
         }
+    }
+
+    /// 导入的 IPA 复制到 Custom 目录（对齐 SideInstaller 的
+    /// IPALibrary.replaceCustomImport），并刷新「已下载的 IPA」列表。
+    private func importIPA(from url: URL) {
+        do {
+            try FileManager.default.createDirectory(at: customDir, withIntermediateDirectories: true)
+            let name = url.deletingPathExtension().lastPathComponent + ".ipa"
+            let target = customDir.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: target.path) {
+                try FileManager.default.removeItem(at: target)
+            }
+            try FileManager.default.copyItem(at: url, to: target)
+            ipaURL = target
+            ipaLink = ""
+            errorMessage = nil
+            successMessage = nil
+            refreshSavedIPAs()
+        } catch {
+            errorMessage = "导入失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 扫描 Custom 目录里的 IPA（最新在前）。
+    private func refreshSavedIPAs() {
+        let fm = FileManager.default
+        let names = (try? fm.contentsOfDirectory(atPath: customDir.path)) ?? []
+        let items = names.compactMap { name -> SavedIPA? in
+            guard name.lowercased().hasSuffix(".ipa") else { return nil }
+            let url = customDir.appendingPathComponent(name)
+            guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+                  let size = attrs[.size] as? Int64 else { return nil }
+            return SavedIPA(url: url, name: name, size: size,
+                            modified: attrs[.modificationDate] as? Date)
+        }
+        savedIPAs = items.sorted { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) }
+    }
+
+    private func deleteSavedIPA(_ item: SavedIPA) {
+        try? FileManager.default.removeItem(at: item.url)
+        if ipaURL?.path == item.url.path {
+            ipaURL = nil
+        }
+        refreshSavedIPAs()
     }
 
     private func download(url: URL) async throws -> URL {
