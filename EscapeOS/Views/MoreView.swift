@@ -59,6 +59,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: IPAInstallView()) {
+                    MoreCard(
+                        icon: "arrow.down.app.fill",
+                        title: "IPA 侧载",
+                        subtitle: "签名并安装 IPA 到设备（Apple ID 登录 + LocalDevVPN 隧道）。"
+                    )
+                }
+
                 NavigationLink(destination: WallpaperView()) {
                     MoreCard(
                         icon: "photo.fill.on.rectangle.fill",

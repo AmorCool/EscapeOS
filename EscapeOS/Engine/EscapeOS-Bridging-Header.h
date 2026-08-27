@@ -19,6 +19,9 @@
 // iOS 27 device-initiated wireless pairing host wrapper
 #import "../Tunnel/WirelessPairing.h"
 
+// IPA 侧载：Apple ID 登录 + 签名（isideload sign-only 路径）
+#include "../Tunnel/sideload_auth.h"
+
 // 监督模式工具：通过私有 API 取已安装 App 图标（移植自 Lithium）
 @interface UIImage (EscapeOSSupervised)
 + (instancetype)_applicationIconImageForBundleIdentifier:(NSString *)bundleIdentifier

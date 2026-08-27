@@ -108,6 +108,35 @@ final class CertificateManager: ObservableObject {
         }
     }
 
+    /// 批量吊销多张证书并刷新列表（跳过无序列号的）。
+    func batchRevoke(_ certsToRevoke: [DeveloperCertificate]) {
+        guard let session, !isWorking, revokingID == nil else { return }
+        let targets = certsToRevoke.filter { !$0.serialNumber.isEmpty }
+        guard !targets.isEmpty else {
+            lastError = "所选证书都没有序列号，无法吊销。"
+            return
+        }
+        isWorking = true
+        lastError = nil
+        Task {
+            do {
+                let teams = try await AppleDeveloperAPI.fetchTeams(session: session)
+                guard let team = teams.first else {
+                    throw AppleAPIError.customError(code: -1, message: "账号下没有可用团队")
+                }
+                for cert in targets {
+                    try await AppleDeveloperAPI.revokeCertificate(team: team, serialNumber: cert.serialNumber, session: session)
+                }
+                let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
+                certs = list
+                hasLoaded = true
+            } catch {
+                lastError = (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
+            }
+            isWorking = false
+        }
+    }
+
     /// 切换账号：清空列表（登录态由 MemoryLimitSettings 管理）。
     func reset() {
         certs = []

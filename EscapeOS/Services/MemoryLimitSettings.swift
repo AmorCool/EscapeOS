@@ -120,11 +120,26 @@ enum MemoryLimitError: LocalizedError {
 final class MemoryLimitSettings: ObservableObject {
     static let shared = MemoryLimitSettings()
 
+    /// Anisette 服务器列表：原有 4 个 + 合并 SideInstaller 社区列表
+    /// （servers.sidestore.io）中我们没有的 11 个。
     static let anisetteServers = [
+        // 原有
         "https://ani.sidestore.io",
         "https://ani.stikstore.app",
         "https://ani.sidestore.app",
-        "https://ani.846969.xyz"
+        "https://ani.846969.xyz",
+        // 合并自 SideInstaller（社区列表）
+        "https://ani.sidestore.zip",
+        "https://ani.npeg.us",
+        "http://5.249.163.88:6969",
+        "https://anisette.wedotstud.io",
+        "https://ani.xu30.top",
+        "https://ani.owoellen.rocks",
+        "https://ani.idevicehacked.com",
+        "https://ani.neoarz.com",
+        "https://ani3server.fly.dev",
+        "https://ani.jaydenha.uk",
+        "https://anisette.crystall1ne.dev"
     ]
 
     /// Strips the scheme (http/https) from an Anisette server URL for display.

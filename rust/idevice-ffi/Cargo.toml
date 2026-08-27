@@ -18,6 +18,15 @@ plist_ffi = { version = "0.1.6" }
 uuid = { version = "1.12", features = ["v4"], optional = true }
 serde_json = { version = "1", optional = true }
 mdns-sd = { version = "0.19", optional = true }
+# Apple ID 登录 + IPA 签名（IPA 侧载用）。移植自 SideInstaller 的 rust-core，
+# 仅使用其 sign-only 路径（Sideloader::sign_app，不接触设备）。
+# 注意：isideload 无条件引用 crates.io 的 idevice 0.1.61（install feature-gate
+# 不完整），与上面的 git idevice 0.1.63 作为两个独立版本共存（符号不同，
+# 无链接冲突）——SideInstaller 已验证同一组合。
+isideload = { git = "https://github.com/nab138/isideload.git", package = "isideload", default-features = false, features = [
+  "install",
+  "fs-storage",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Networking_WinSock"] }

@@ -9,6 +9,11 @@ struct CertificateView: View {
     @State private var showLogin = false
     /// 待确认吊销的证书。
     @State private var pendingRevoke: DeveloperCertificate?
+    /// 批量选择模式。
+    @State private var selecting = false
+    @State private var selected: Set<String> = []
+    /// 批量吊销确认。
+    @State private var showBatchRevokeConfirm = false
 
     var body: some View {
         List {
@@ -43,8 +48,26 @@ struct CertificateView: View {
         .navigationTitle("证书管理")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                if manager.isSignedIn && !manager.certs.isEmpty {
+                    Button(selecting ? "取消" : "选择") {
+                        selecting.toggle()
+                        if !selecting { selected.removeAll() }
+                    }
+                    .disabled(manager.isWorking)
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
-                if manager.isSignedIn {
+                if selecting {
+                    Button(allSelected ? "取消全选" : "全选") {
+                        if allSelected {
+                            selected.removeAll()
+                        } else {
+                            selected = Set(manager.certs.map(\.id))
+                        }
+                    }
+                    .disabled(manager.isWorking)
+                } else if manager.isSignedIn {
                     Button {
                         manager.loadCerts()
                     } label: {
@@ -60,11 +83,37 @@ struct CertificateView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            if selecting {
+                HStack {
+                    Text("已选 \(selected.count) 项")
+                        .font(.subheadline)
+                    Spacer()
+                    Button("吊销", role: .destructive) {
+                        showBatchRevokeConfirm = true
+                    }
+                    .disabled(selected.isEmpty || manager.isWorking)
+                }
+                .padding()
+                .background(.bar)
+            }
+        }
         .sheet(isPresented: $showLogin) {
             AppleIDLoginSheet()
         }
         .onAppear {
             manager.autoLoad()
+        }
+        .alert("吊销所选证书？", isPresented: $showBatchRevokeConfirm) {
+            Button("吊销", role: .destructive) {
+                let targets = manager.certs.filter { selected.contains($0.id) }
+                manager.batchRevoke(targets)
+                selected.removeAll()
+                selecting = false
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将吊销已选的 \(selected.count) 张证书。用这些证书签名的应用会在所有设备上停止启动，且无法撤销。")
         }
         .alert("吊销这张证书？", isPresented: Binding(
             get: { pendingRevoke != nil },
@@ -120,6 +169,11 @@ struct CertificateView: View {
 
     // MARK: - 未登录
 
+    /// 是否已全选（批量模式用）。
+    private var allSelected: Bool {
+        !manager.certs.isEmpty && selected.count == manager.certs.count
+    }
+
     private var notSignedInSection: some View {
         Section {
             InfoActionCard(
@@ -148,8 +202,22 @@ struct CertificateView: View {
 
     private func certRow(_ cert: DeveloperCertificate) -> some View {
         let revoking = manager.revokingID == cert.id
+        let isSelected = selected.contains(cert.id)
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
+                if selecting {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? Color.blue : Color.secondary)
+                        .onTapGesture {
+                            if isSelected {
+                                selected.remove(cert.id)
+                            } else {
+                                selected.insert(cert.id)
+                            }
+                        }
+                        .padding(.top, 2)
+                }
                 Image(systemName: "seal.fill")
                     .font(.title3)
                     .foregroundStyle(cert.isExpired ? Color.orange : Color.blue)
@@ -172,6 +240,16 @@ struct CertificateView: View {
                         .background(Capsule().fill(Color.orange.opacity(0.16)))
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if selecting {
+                    if isSelected {
+                        selected.remove(cert.id)
+                    } else {
+                        selected.insert(cert.id)
+                    }
+                }
+            }
 
             if cert.expiration != nil || !cert.serialNumber.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
@@ -189,25 +267,27 @@ struct CertificateView: View {
                 .foregroundColor(.secondary)
             }
 
-            Button(role: .destructive) {
-                pendingRevoke = cert
-            } label: {
-                HStack(spacing: 6) {
-                    if revoking {
-                        ProgressView().controlSize(.small)
-                        Text("吊销中")
-                    } else {
-                        Image(systemName: "trash")
-                        Text("吊销")
+            if !selecting {
+                Button(role: .destructive) {
+                    pendingRevoke = cert
+                } label: {
+                    HStack(spacing: 6) {
+                        if revoking {
+                            ProgressView().controlSize(.small)
+                            Text("吊销中")
+                        } else {
+                            Image(systemName: "trash")
+                            Text("吊销")
+                        }
                     }
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity)
                 }
-                .font(.subheadline.weight(.medium))
-                .frame(maxWidth: .infinity)
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .controlSize(.regular)
+                .disabled(revoking || manager.isWorking || manager.revokingID != nil)
             }
-            .buttonStyle(.bordered)
-            .tint(.red)
-            .controlSize(.regular)
-            .disabled(revoking || manager.isWorking || manager.revokingID != nil)
         }
         .padding(.vertical, 4)
     }
