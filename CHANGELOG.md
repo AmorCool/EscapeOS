@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.73] - 2026-08-27
+
+### Fixed
+- **「启用 JIT」后目标应用永久黑屏无反应**：
+  - 根因：`process_control_launch_app` 以调试模式启动目标应用后，EscapeSpace 立即退到后台，iOS 数秒内挂起进程——QStartNoAckMode / vAttach / D（detach）流程没跑完就停摆：attach 可能已发出（T11 stop reply 已收到），但 **detach 未执行**，目标应用一直停在 SIGSTOP → 永久黑屏。
+  - 修复（对齐原版 StikDebug 的 `DebugKeepAliveLease`，原版三管齐下：beginBackgroundTask + 静音音频 + 后台定位）：新增 `JITBackgroundLease`，`enableJIT` 全程持有——① `beginBackgroundTask` 争取系统后台执行宽限（核心兜底）；② 复用项目已有 `BackgroundAudioManager.requestStart()` 静音音频保活计数。defer 释放，确保 attach/detach 完整执行后目标应用正常恢复运行。
+
 ## [0.2.72] - 2026-08-27
 
 ### Fixed
