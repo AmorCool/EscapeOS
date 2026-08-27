@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.75] - 2026-08-27
+
+### Fixed
+- **「描述文件管理」无法导入 .mobileprovision**：
+  - 根因：导入一直用 SwiftUI `.fileImporter` + `startAccessingSecurityScopedResource()`——正是 v0.2.33 `SharedDocumentPicker` 注释里点名的 LiveContainer 沙盒失败机制（security-scoped URL 读取常失败、`.fileImporter` 在 iOS 26/证书直装环境弹出不可靠）。当时只统一了配对文件导入，描述文件管理漏网。
+  - 修复：AppExpiryView 改走 `SharedDocumentPicker` 统一入口（`.documentPicker` 修饰符，`asCopy: true` 先把文件拷入沙盒再读取，去掉 security-scoped dance）。
+  - 顺手统一：MapHomeView 虚拟定位 GPX 导入（同类隐患）；全项目 `.fileImporter` 已清零。
+
 ## [0.2.74] - 2026-08-27
 
 ### Fixed
