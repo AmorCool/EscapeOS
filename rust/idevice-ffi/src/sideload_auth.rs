@@ -80,6 +80,17 @@ pub(crate) fn make_2fa(cb: TwoFactorCb, ctx: TwoFaCtx) -> TwoFactorCallback {
     })
 }
 
+/// 在首次 TLS 使用前显式选择 rustls crypto provider。
+/// 我们的 crate 默认 ring，而 isideload 依赖链启用 aws-lc-rs —— 两个 provider
+/// feature 同时开启时 rustls 无法自动确定，运行时报
+/// "Could not automatically determine the process-level CryptoProvider"。
+/// install_default 全局幂等（重复调用返回 Err，忽略即可）。
+pub(crate) fn install_rustls_provider() {
+    use rustls::crypto::CryptoProvider;
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = CryptoProvider::get_default();
+}
+
 /// 登录 Apple ID、打开开发者会话、构建 Sideloader。返回 0 表示成功；
 /// 用 `si_sign_session_free` 释放 session。
 ///
@@ -98,6 +109,7 @@ pub unsafe fn apple_signin(
     out_summary: *mut *mut c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
+    install_rustls_provider();
     let apple_id = opt(apple_id, "");
     let password = opt(password, "");
     let anisette_url = opt(anisette_url, "https://ani.sidestore.io");
@@ -198,6 +210,7 @@ pub unsafe fn sign_ipa(
         *out_error = cstr("null session");
         return 2;
     }
+    install_rustls_provider();
     let session = &mut *session;
     let ipa_path = opt(ipa_path, "");
     let udid = opt(udid, "");
@@ -280,6 +293,7 @@ pub unsafe fn signin_with_session(
     out_summary: *mut *mut c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
+    install_rustls_provider();
     let email = opt(email, "");
     let dsid = opt(dsid, "");
     let token = opt(auth_token, "");

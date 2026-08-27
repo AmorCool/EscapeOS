@@ -27,6 +27,12 @@ isideload = { git = "https://github.com/nab138/isideload.git", package = "isidel
   "install",
   "fs-storage",
 ] }
+# rustls 显式依赖：我们的 default features 是 ring，而 isideload 依赖链
+# （reqwest 0.13 rustls-tls）会启用 aws-lc-rs —— 两个 provider feature 同时开
+# 导致 rustls 运行时报 "Could not automatically determine the process-level
+# CryptoProvider"（v0.2.83 真机实锤）。在 FFI 入口显式 install_default 选择
+# ring provider 绕过自动检测。
+rustls = { version = "0.23", features = ["ring"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Networking_WinSock"] }
