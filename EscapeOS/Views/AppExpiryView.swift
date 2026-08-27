@@ -150,12 +150,12 @@ struct AppExpiryView: View {
                 Task { await load() }
             }
         }
-        .fileImporter(
+        .documentPicker(
             isPresented: $showImporter,
-            allowedContentTypes: [UTType(filenameExtension: "mobileprovision") ?? .data],
+            allowedTypes: [UTType(filenameExtension: "mobileprovision") ?? .data],
             allowsMultipleSelection: false
-        ) { result in
-            Task { await handleImport(result: result) }
+        ) { urls in
+            Task { await handleImport(urls: urls) }
         }
         .fileExporter(
             isPresented: $showExporter,
@@ -409,14 +409,14 @@ struct AppExpiryView: View {
         return value.range(of: "^" + escaped + "$", options: .regularExpression) != nil
     }
 
-    private func handleImport(result: Result<[URL], Error>) async {
+    /// 导入描述文件（统一走 SharedDocumentPicker：asCopy 已把文件拷入沙盒，
+    /// 不再需要 security-scoped 访问——`.fileImporter` 在 LC/证书直装环境
+    /// 弹出不可靠且 security-scoped URL 读取常失败，v0.2.75 起统一）。
+    private func handleImport(urls: [URL]) async {
         do {
-            let url = try result.get().first
-            guard let url else {
+            guard let url = urls.first else {
                 throw NSError(domain: "AppExpiry", code: -1, userInfo: [NSLocalizedDescriptionKey: "未选择文件"])
             }
-            let accessing = url.startAccessingSecurityScopedResource()
-            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
             let data = try Data(contentsOf: url)
             try ProvisioningProfileStore.addProfile(data)
             infoMessage = "描述文件添加成功。"

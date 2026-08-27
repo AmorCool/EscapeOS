@@ -124,8 +124,8 @@ struct MapHomeView: View {
             guard let url = note.object as? URL else { return }
             importGPX(url)
         }
-        .fileImporter(isPresented: $showGPXImporter, allowedContentTypes: [.xml, .data], allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
+        .documentPicker(isPresented: $showGPXImporter, allowedTypes: [.xml, .data], allowsMultipleSelection: false) { urls in
+            if let url = urls.first {
                 importGPX(url)
             }
         }
