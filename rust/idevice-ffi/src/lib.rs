@@ -510,10 +510,12 @@ pub unsafe extern "C" fn si_apple_signin(
     out_summary: *mut *mut c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
-    sideload_auth::apple_signin(
-        apple_id, password, anisette_url, machine_name, storage_dir, twofa_cb, ctx,
-        out_session, out_summary, out_error,
-    )
+    unsafe {
+        sideload_auth::apple_signin(
+            apple_id, password, anisette_url, machine_name, storage_dir, twofa_cb, ctx,
+            out_session, out_summary, out_error,
+        )
+    }
 }
 
 /// 签名 IPA，把签名后的 `.app` 包路径写入 `*out_signed_path`。阻塞。
@@ -530,7 +532,9 @@ pub unsafe extern "C" fn si_sign_ipa(
     out_signed_path: *mut *mut c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
-    sideload_auth::sign_ipa(session, ipa_path, udid, device_name, out_signed_path, out_error)
+    unsafe {
+        sideload_auth::sign_ipa(session, ipa_path, udid, device_name, out_signed_path, out_error)
+    }
 }
 
 /// 释放签名会话。
@@ -539,5 +543,5 @@ pub unsafe extern "C" fn si_sign_ipa(
 /// `session` 必须为 null 或 `si_apple_signin` 返回的指针。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn si_sign_session_free(session: *mut sideload_auth::SignSession) {
-    sideload_auth::sign_session_free(session)
+    unsafe { sideload_auth::sign_session_free(session) }
 }

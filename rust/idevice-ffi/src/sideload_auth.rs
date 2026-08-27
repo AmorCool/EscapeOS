@@ -4,6 +4,7 @@
 //! si_sign_ipa），供「IPA 侧载」功能使用：登录 Apple ID 拿到
 //! `SignSession`，再用它把 IPA 签成带描述文件的 .app 包。安装本身走
 //! 我们自己的 AFC + installation_proxy 隧道（见 Swift 侧）。
+#![allow(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::{c_char, c_void, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -11,7 +12,9 @@ use std::path::PathBuf;
 
 use isideload::{
     anisette::remote_v3::RemoteV3AnisetteProvider,
-    auth::apple_account::AppleAccount,
+    auth::apple_account::{
+        AppleAccount, TwoFactorCallback, TwoFactorCallbackParams, TwoFactorCallbackResponse,
+    },
     dev::{developer_session::DeveloperSession, devices::DevicesApi},
     sideload::{builder::MaxCertsBehavior, sideloader::Sideloader, SideloaderBuilder, TeamSelection},
     util::fs_storage::FsStorage,
@@ -48,19 +51,26 @@ unsafe fn opt(p: *const c_char, default: &str) -> String {
     CStr::from_ptr(p).to_str().unwrap_or(default).to_string()
 }
 
-/// 构建桥接到 Swift 的 2FA 闭包。
-pub(crate) fn make_2fa(cb: TwoFactorCb, ctx: TwoFaCtx) -> impl Fn() -> Option<String> {
-    move || {
-        let cb = cb?;
+/// 构建桥接到 Swift 的 2FA 闭包（适配 isideload 0.2.25 的新回调签名：
+/// `TwoFactorCallbackParams -> TwoFactorCallbackResponse`）。
+pub(crate) fn make_2fa(cb: TwoFactorCb, ctx: TwoFaCtx) -> TwoFactorCallback {
+    Box::new(move |_params: TwoFactorCallbackParams| {
+        let Some(cb) = cb else {
+            return TwoFactorCallbackResponse::Abort;
+        };
         let mut buf = vec![0u8; 128];
         let rc = cb(ctx.0, buf.as_mut_ptr() as *mut c_char, buf.len());
         if rc == 0 {
-            return None;
+            return TwoFactorCallbackResponse::Abort;
         }
         let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
         let s = String::from_utf8_lossy(&buf[..end]).trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
-    }
+        if s.is_empty() {
+            TwoFactorCallbackResponse::Abort
+        } else {
+            TwoFactorCallbackResponse::SubmitCode(s)
+        }
+    })
 }
 
 /// 登录 Apple ID、打开开发者会话、构建 Sideloader。返回 0 表示成功；
@@ -256,7 +266,8 @@ pub unsafe fn sign_session_free(session: *mut SignSession) {
 /// 分配一个调用方用 `si_string_free` 释放的 C 字符串。
 pub fn cstr(s: impl Into<Vec<u8>>) -> *mut c_char {
     use std::ffi::CString;
-    CString::new(s).unwrap_or_default().into_raw()
+    let c = CString::new(s).unwrap_or_default();
+    unsafe { c.into_raw() }
 }
 
 /// 释放 `cstr` 产生的堆 C 字符串。
