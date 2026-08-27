@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.72] - 2026-08-27
+
+### Fixed
+- **「启用 JIT」目标应用打开后闪退 + 误报「调试器附着失败：T11thread:...」**：
+  - 根因：debugserver 的 `vAttach` **成功**时返回的是 stop reply 包（`T11thread:...;`，T11 = SIGSTOP，目标进程被调试器暂停），**不是 "OK"**。上一版检查 `!text.contains("OK")` 把成功当失败 → 抛错后 detach 从未执行，目标应用一直停在 SIGSTOP，debug_proxy 连接释放后设备端 debugserver 断连默认终止被调试进程 → 应用闪退 + 误报附着失败。
+  - 修复（对齐原版 StikDebug，原版不检查 attach 响应、成功失败都继续 detach）：vAttach 响应仅以 `E` 开头（debugserver 错误包）或 FFI 报错才算失败；`T`/`S`/`W` 开头的 stop reply 与空响应均视为成功，继续执行 detach，应用恢复运行、JIT 生效。
+  - 顺带修正 FFI 错误与响应同存时的释放顺序（err 优先，避免内存泄漏）。
+
 ## [0.2.71] - 2026-08-27
 
 ### Fixed
