@@ -30,6 +30,14 @@ int si_apple_signin(const char *apple_id, const char *password,
 int si_sign_ipa(SignSession *session, const char *ipa_path, const char *udid,
                 const char *device_name, char **out_signed_path, char **out_error);
 
+// Restores a signing session from an existing dsid + xcode.auth token (from the
+// app's Settings sign-in) — no login or 2FA needed. Returns 0 on success.
+int si_signin_with_session(const char *email, const char *dsid,
+                           const char *auth_token, const char *anisette_url,
+                           const char *storage_dir, const char *machine_name,
+                           SignSession **out_session, char **out_summary,
+                           char **out_error);
+
 // Frees a SignSession (NULL is a no-op).
 void si_sign_session_free(SignSession *session);
 

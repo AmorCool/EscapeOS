@@ -545,3 +545,28 @@ pub unsafe extern "C" fn si_sign_ipa(
 pub unsafe extern "C" fn si_sign_session_free(session: *mut sideload_auth::SignSession) {
     unsafe { sideload_auth::sign_session_free(session) }
 }
+
+/// 用已有的 dsid + xcode.auth token 恢复签名会话（跳过登录与 2FA）。
+///
+/// # Safety
+/// 见 `sideload_auth::signin_with_session`。
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn si_signin_with_session(
+    email: *const c_char,
+    dsid: *const c_char,
+    auth_token: *const c_char,
+    anisette_url: *const c_char,
+    storage_dir: *const c_char,
+    machine_name: *const c_char,
+    out_session: *mut *mut sideload_auth::SignSession,
+    out_summary: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    unsafe {
+        sideload_auth::signin_with_session(
+            email, dsid, auth_token, anisette_url, storage_dir, machine_name,
+            out_session, out_summary, out_error,
+        )
+    }
+}

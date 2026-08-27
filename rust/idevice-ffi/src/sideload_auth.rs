@@ -9,12 +9,14 @@
 use std::ffi::{c_char, c_void, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use isideload::{
-    anisette::remote_v3::RemoteV3AnisetteProvider,
+    anisette::{remote_v3::RemoteV3AnisetteProvider, AnisetteDataGenerator, AnisetteProvider},
     auth::apple_account::{
-        AppleAccount, TwoFactorCallback, TwoFactorCallbackParams, TwoFactorCallbackResponse,
+        AppleAccount, AppToken, TwoFactorCallback, TwoFactorCallbackParams, TwoFactorCallbackResponse,
     },
+    auth::grandslam::GrandSlam,
     dev::{developer_session::DeveloperSession, devices::DevicesApi},
     sideload::{builder::MaxCertsBehavior, sideloader::Sideloader, SideloaderBuilder, TeamSelection},
     util::fs_storage::FsStorage,
@@ -249,6 +251,117 @@ pub unsafe fn sign_ipa(
         }
         Err(_) => {
             *out_error = cstr("panic during signing");
+            2
+        }
+    }
+}
+
+/// 用已有的 dsid + xcode.auth token 恢复签名会话——**跳过登录与 2FA**。
+///
+/// 为什么可行：EscapeOS「更多 → 设置」的 Apple ID 登录（AppleAuthenticator，
+/// GrandSlam 协议）保存的 authToken 就是 `com.apple.gs.xcode.auth` 的 app token。
+/// isideload 的 `DeveloperSession::new(AppToken, adsid, GrandSlam, anisette)`
+/// 可以直接用 token + dsid 构造，无需重新走 SRP 握手/2FA。
+/// 适用于 token 未过期时的"登录一次、全部复用"；过期后请回退 `apple_signin`。
+///
+/// # Safety
+/// 所有 `*const c_char` 参数必须为 null 或合法的 C 字符串；out 指针必须有效。
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn signin_with_session(
+    email: *const c_char,
+    dsid: *const c_char,
+    auth_token: *const c_char,
+    anisette_url: *const c_char,
+    storage_dir: *const c_char,
+    machine_name: *const c_char,
+    out_session: *mut *mut SignSession,
+    out_summary: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let email = opt(email, "");
+    let dsid = opt(dsid, "");
+    let token = opt(auth_token, "");
+    let anisette_url = opt(anisette_url, "https://ani.sidestore.io");
+    let storage_dir = opt(storage_dir, ".");
+    let machine_name = opt(machine_name, "EscapeSpace");
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to start runtime: {e}"))?;
+
+        let sideloader = rt.block_on(async {
+            tracing::info!("Session: building anisette provider ({anisette_url})");
+            let provider = RemoteV3AnisetteProvider::new(
+                &anisette_url,
+                Box::new(FsStorage::new(PathBuf::from(&storage_dir))),
+                "0".to_string(),
+            )
+            .map_err(|e| format!("anisette provider: {e}"))?;
+
+            tracing::info!("Session: constructing GrandSlam client");
+            let client_info = provider
+                .get_client_info()
+                .await
+                .map_err(|e| format!("client info: {e}"))?;
+            let client = Arc::new(
+                GrandSlam::new(client_info, false)
+                    .await
+                    .map_err(|e| format!("grandslam: {e}"))?,
+            );
+
+            let dev = DeveloperSession::new(
+                AppToken {
+                    token: token.clone(),
+                    duration: 0,
+                    expiry: 0,
+                },
+                dsid.clone(),
+                client,
+                AnisetteDataGenerator::new(Arc::new(tokio::sync::RwLock::new(provider))),
+            );
+
+            let mut sideloader = SideloaderBuilder::new(dev, email.clone())
+                .team_selection(TeamSelection::First)
+                .max_certs_behavior(MaxCertsBehavior::Error)
+                .storage(Box::new(FsStorage::new(PathBuf::from(&storage_dir))))
+                .machine_name(machine_name.clone())
+                .build();
+
+            let team = sideloader
+                .get_team()
+                .await
+                .map_err(|e| format!("get_team: {e}"))?;
+            let summary = format!(
+                "team: {} ({})",
+                team.name.as_deref().unwrap_or("<unnamed>"),
+                team.team_id
+            );
+            Ok::<_, String>((sideloader, summary))
+        })?;
+
+        Ok::<_, String>((rt, sideloader, summary))
+    }));
+
+    match result {
+        Ok(Ok((rt, sideloader, summary))) => {
+            let session = Box::new(SignSession {
+                rt,
+                sideloader,
+                machine_name,
+                storage_dir: PathBuf::from(&storage_dir),
+            });
+            *out_session = Box::into_raw(session);
+            *out_summary = cstr(summary);
+            0
+        }
+        Ok(Err(e)) => {
+            *out_error = cstr(e);
+            1
+        }
+        Err(_) => {
+            *out_error = cstr("panic during session restore");
             2
         }
     }

@@ -166,6 +166,43 @@ final class IPAInstallService: ObservableObject {
         }
     }
 
+    /// 用「更多 → 设置」已保存的 dsid + authToken 恢复签名会话
+    /// （**免登录免 2FA**）。token 过期时抛错，调用方回退完整登录。
+    func signInWithSession(email: String, dsid: String, authToken: String, anisetteURL: String) throws {
+        if let session {
+            si_sign_session_free(session)
+            self.session = nil
+        }
+        var newSession: OpaquePointer?
+        var summary: UnsafeMutablePointer<CChar>?
+        var error: UnsafeMutablePointer<CChar>?
+        let rc = email.withCString { e in
+            dsid.withCString { d in
+                authToken.withCString { t in
+                    anisetteURL.withCString { a in
+                        storageDir.withCString { dir in
+                            "EscapeSpace".withCString { m in
+                                si_signin_with_session(e, d, t, a, dir, m,
+                                                       &newSession, &summary, &error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        defer {
+            if let summary { si_string_free(summary) }
+            if let error { si_string_free(error) }
+        }
+        if rc == 0, let newSession {
+            session = newSession
+            teamSummary = summary.map { String(cString: $0) }
+        } else {
+            let msg = error.map { String(cString: $0) } ?? "rc=\(rc)"
+            throw makeError(msg)
+        }
+    }
+
     // MARK: - 签名（阻塞）
 
     /// 签名 IPA，返回签名后的 .app 包路径。

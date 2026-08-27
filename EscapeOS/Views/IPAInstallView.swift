@@ -490,20 +490,37 @@ struct IPAInstallView: View {
 
     // MARK: - 自动登录（复用「更多 → 设置」的 Apple ID）
 
-    /// 用「更多 → 设置」里已保存的 Apple ID 凭据自动完成 isideload 登录
-    /// （签名需要 isideload 自己的 SignSession，必须走 si_apple_signin；
-    /// 凭据复用设置里存的邮箱+密码，用户无需再手动输入）。
+    /// 复用「更多 → 设置」已保存的 Apple ID，**不重复登录/2FA**：
+    /// 1) 优先用 dsid + authToken 恢复 isideload 签名会话（免登录免 2FA）；
+    /// 2) 恢复失败（token 过期等）才回退用邮箱+密码完整登录（可能弹 2FA）。
     private func autoSignInWithSavedCredentials() {
         guard !service.isSignedIn, !isRunning else { return }
         let settings = MemoryLimitSettings.shared
         guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
         let id = settings.appleID
-        let pw = settings.password(forHistory: id) ?? ""
-        guard !pw.isEmpty else { return }
         let ani = settings.anisetteServer
         isAutoSigningIn = true
         Task {
             do {
+                // 路径 1：已有 dsid/authToken → 免 2FA 恢复会话。
+                if let dsid = settings.dsid, let authToken = settings.authToken, !dsid.isEmpty, !authToken.isEmpty {
+                    do {
+                        try await Task.detached(priority: .userInitiated) {
+                            try IPAInstallService.shared.signInWithSession(
+                                email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)
+                        }.value
+                        isAutoSigningIn = false
+                        return
+                    } catch {
+                        // token 失效，回退完整登录。
+                    }
+                }
+                // 路径 2：邮箱+密码完整登录（2FA 走弹窗）。
+                let pw = settings.password(forHistory: id) ?? ""
+                guard !pw.isEmpty else {
+                    isAutoSigningIn = false
+                    return
+                }
                 try await Task.detached(priority: .userInitiated) {
                     try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: ani)
                 }.value
