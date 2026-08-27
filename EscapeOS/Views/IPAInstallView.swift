@@ -369,7 +369,7 @@ struct IPAInstallView: View {
                     }
                 }.value
                 step = .done
-                successMessage = "「\(signedPath.lastPathComponent)」已安装到设备。"
+                successMessage = "「\((signedPath as NSString).lastPathComponent)」已安装到设备。"
             } catch {
                 step = .idle
                 errorMessage = error.localizedDescription
