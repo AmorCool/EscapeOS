@@ -179,7 +179,12 @@ jobs:
             esac
           done < .source-hashes.txt
           # 2) 源码 mtime 拨回过去、.o 设为当前，make 判定未变文件 up-to-date
+          #    注意：GNU make 把 Makefile 视为所有目标的隐式依赖——Makefile 比
+          #    .o 新会导致全量重编（v0.2.69 实锤：改了 Makefile 后增量失效）。
+          #    所以 Makefile 也必须拨回过去；make 总是重新解析内容，改 mtime
+          #    不影响更新后的依赖列表。
           find EscapeOS Resources -type f \( -name "*.swift" -o -name "*.m" -o -name "*.c" -o -name "*.h" -o -name "*.plist" -o -name "*.mobileconfig" \) -exec touch -d "1 hour ago" {} +
+          touch -d "1 hour ago" Makefile
           find .theos -name "*.o" -exec touch {} +
           echo "Incremental state restored"
 
