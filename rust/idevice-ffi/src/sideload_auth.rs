@@ -171,8 +171,10 @@ pub unsafe fn apple_signin(
             *out_error = cstr(e);
             1
         }
-        Err(_) => {
-            *out_error = cstr("panic during Apple ID sign-in");
+        Err(panic) => {
+            // 把 panic 的真实消息传给 Swift，便于定位 isideload 内部崩溃点。
+            let msg = panic_message(&panic);
+            *out_error = cstr(format!("panic during Apple ID sign-in: {msg}"));
             2
         }
     }
@@ -360,8 +362,9 @@ pub unsafe fn signin_with_session(
             *out_error = cstr(e);
             1
         }
-        Err(_) => {
-            *out_error = cstr("panic during session restore");
+        Err(panic) => {
+            let msg = panic_message(&panic);
+            *out_error = cstr(format!("panic during session restore: {msg}"));
             2
         }
     }
@@ -380,6 +383,17 @@ pub unsafe fn sign_session_free(session: *mut SignSession) {
 // ---------------------------------------------------------------------------
 // C 字符串助手（移植自 SideInstaller 的 ffi_util.rs）
 // ---------------------------------------------------------------------------
+
+/// 提取 catch_unwind 捕获的 panic 消息（&str / String / 未知）。
+pub fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
 
 /// 分配一个调用方用 `si_string_free` 释放的 C 字符串。
 pub fn cstr(s: impl Into<Vec<u8>>) -> *mut c_char {
