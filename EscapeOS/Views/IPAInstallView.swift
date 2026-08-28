@@ -191,7 +191,12 @@ struct IPAInstallView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            ipaURL = item.url
+                            // 再次点击已选项 = 取消选择（ipaURL 置空，勾选消失）。
+                            if ipaURL?.path == item.url.path {
+                                ipaURL = nil
+                            } else {
+                                ipaURL = item.url
+                            }
                             ipaLink = ""
                             errorMessage = nil
                             successMessage = nil
@@ -206,7 +211,7 @@ struct IPAInstallView: View {
             } header: {
                 Text("已下载的 IPA")
             } footer: {
-                Text("点击选择为要安装的 IPA；左滑删除。")
+                Text("点击选择为要安装的 IPA，再次点击取消选择；左滑删除。")
             }
 
             // Apple ID
@@ -503,7 +508,9 @@ struct IPAInstallView: View {
         Task {
             do {
                 // 路径 1：已有 dsid/authToken → 免 2FA 恢复会话。
-                if let dsid = settings.dsid, let authToken = settings.authToken, !dsid.isEmpty, !authToken.isEmpty {
+                // （预热已失败过则跳过——token 大概率过期，白等一次注定失败的请求）
+                if !service.sessionRestoreFailed,
+                   let dsid = settings.dsid, let authToken = settings.authToken, !dsid.isEmpty, !authToken.isEmpty {
                     do {
                         try await Task.detached(priority: .userInitiated) {
                             try IPAInstallService.shared.signInWithSession(

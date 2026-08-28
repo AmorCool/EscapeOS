@@ -65,6 +65,16 @@ final class IPAInstallService: ObservableObject {
     @Published private(set) var isSignedIn = false
     @Published private(set) var teamSummary: String?
 
+    /// 登录/会话恢复的串行队列：Rust 调用是阻塞的，预热（app 启动后台）
+    /// 与页面内自动登录可能并发，串行化保证同一时刻只有一个登录操作在跑，
+    /// 避免两个调用同时读写 `_session` 造成竞态。
+    private let authQueue = DispatchQueue(label: "com.ipaside.escapeos.auth")
+
+    /// 「用 token 恢复会话」失败过一次（token 大概率已过期）。
+    /// 为 true 时自动登录跳过免 2FA 恢复、直接走完整登录，避免每次进页面
+    /// 都白等一次注定失败的恢复请求（实测单次失败恢复要 5~7 秒）。
+    private(set) var sessionRestoreFailed = false
+
     private(set) var session: OpaquePointer? {
         get { _session }
         set {
@@ -133,6 +143,12 @@ final class IPAInstallService: ObservableObject {
     // MARK: - 登录（阻塞，后台线程调用）
 
     func signIn(appleID: String, password: String, anisetteURL: String) throws {
+        try authQueue.sync {
+            try performSignIn(appleID: appleID, password: password, anisetteURL: anisetteURL)
+        }
+    }
+
+    private func performSignIn(appleID: String, password: String, anisetteURL: String) throws {
         if let session {
             si_sign_session_free(session)
             self.session = nil
@@ -160,6 +176,8 @@ final class IPAInstallService: ObservableObject {
         if rc == 0, let newSession {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
+            // 完整登录成功 → token 已刷新，恢复失败标志清除。
+            sessionRestoreFailed = false
         } else {
             let msg = error.map { String(cString: $0) } ?? "rc=\(rc)"
             throw makeError(msg)
@@ -169,10 +187,14 @@ final class IPAInstallService: ObservableObject {
     /// 用「更多 → 设置」已保存的 dsid + authToken 恢复签名会话
     /// （**免登录免 2FA**）。token 过期时抛错，调用方回退完整登录。
     func signInWithSession(email: String, dsid: String, authToken: String, anisetteURL: String) throws {
-        if let session {
-            si_sign_session_free(session)
-            self.session = nil
+        try authQueue.sync {
+            try performSignInWithSession(email: email, dsid: dsid, authToken: authToken, anisetteURL: anisetteURL)
         }
+    }
+
+    private func performSignInWithSession(email: String, dsid: String, authToken: String, anisetteURL: String) throws {
+        // 已有会话（预热已完成）：直接复用，不再重建。
+        if isSignedIn { return }
         var newSession: OpaquePointer?
         var summary: UnsafeMutablePointer<CChar>?
         var error: UnsafeMutablePointer<CChar>?
@@ -197,9 +219,36 @@ final class IPAInstallService: ObservableObject {
         if rc == 0, let newSession {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
+            sessionRestoreFailed = false
         } else {
+            // token 失效等恢复失败：标记，下次自动登录直接走完整登录。
+            sessionRestoreFailed = true
             let msg = error.map { String(cString: $0) } ?? "rc=\(rc)"
             throw makeError(msg)
+        }
+    }
+
+    // MARK: - 后台预热（app 启动时调用，免 2FA）
+
+    /// 用「更多 → 设置」保存的 dsid + authToken 在**后台**恢复签名会话，
+    /// 用户进入「IPA 侧载」页时通常已完成，无需再等 13~15 秒。
+    /// 只走免 2FA 的会话恢复；失败静默（标记 sessionRestoreFailed），
+    /// 由页面内自动登录回退到完整登录流程。
+    func warmUp() {
+        let settings = MemoryLimitSettings.shared
+        guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
+        guard !isSignedIn, !sessionRestoreFailed else { return }
+        guard let dsid = settings.dsid, let authToken = settings.authToken,
+              !dsid.isEmpty, !authToken.isEmpty else { return }
+        let id = settings.appleID
+        let ani = settings.anisetteServer
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            do {
+                try self.signInWithSession(email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)
+            } catch {
+                // 静默：页面内自动登录会按 sessionRestoreFailed 走完整登录。
+            }
         }
     }
 

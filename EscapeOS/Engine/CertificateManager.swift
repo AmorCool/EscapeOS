@@ -12,6 +12,10 @@ import Foundation
 @MainActor
 final class CertificateManager: ObservableObject {
 
+    /// 全局共享实例：app 启动时后台预热加载证书列表，
+    /// 进入「证书管理」页时通常已就绪，无需再等 5~7 秒。
+    static let shared = CertificateManager()
+
     @Published private(set) var certs: [DeveloperCertificate] = []
     @Published private(set) var isSignedIn = false
     @Published private(set) var teamSummary: String?
@@ -51,6 +55,12 @@ final class CertificateManager: ObservableObject {
         guard settings.isLoggedIn, settings.dsid != nil, settings.authToken != nil else { return }
         didAutoLoad = true
         loadCerts()
+    }
+
+    /// app 启动时后台预热：复用 autoLoad 的守卫（未登录/已加载/加载中都会跳过）。
+    /// 单例持有状态，预热结果在进入页面时直接可用。
+    func warmUp() {
+        autoLoad()
     }
 
     /// 登录或刷新列表。

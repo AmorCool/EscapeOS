@@ -5,7 +5,7 @@ import SwiftUI
 /// 列出并吊销 Apple ID 的 iOS 开发证书。纯开发者门户 API 调用，
 /// 不涉及设备 / 配对 / 隧道，因此不依赖 LocalDevVPN 与本地网络权限。
 struct CertificateView: View {
-    @StateObject private var manager = CertificateManager()
+    @StateObject private var manager = CertificateManager.shared
     @State private var showLogin = false
     /// 待确认吊销的证书。
     @State private var pendingRevoke: DeveloperCertificate?

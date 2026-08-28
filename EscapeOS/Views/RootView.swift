@@ -78,13 +78,25 @@ struct RootView: View {
         .onAppear {
             if hasAcknowledgedLimits {
                 viewModel.reload()
+                warmUpAutoLogin()
             }
         }
         .onChange(of: hasAcknowledgedLimits) { acknowledged in
             if acknowledged {
                 viewModel.reload()
+                warmUpAutoLogin()
             }
         }
+    }
+
+    /// app 启动后后台预热「IPA 侧载」与「证书管理」的 Apple ID 登录态，
+    /// 用户进入对应页面时无需再等十几秒的登录/列表加载。
+    /// 只走免 2FA 的会话恢复与静默加载；失败不影响 app 正常使用。
+    private func warmUpAutoLogin() {
+        let settings = MemoryLimitSettings.shared
+        guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
+        IPAInstallService.shared.warmUp()
+        CertificateManager.shared.warmUp()
     }
 
     @ViewBuilder
