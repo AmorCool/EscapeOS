@@ -12,6 +12,14 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - 跨 actor 的失败信息
+
+/// `Result` 的 `Failure` 必须遵循 `Error`，而 `String` 不遵循；包一层既满足
+/// 协议约束，又保持 Sendable（后台任务的结果要跨 actor 边界回主线程）。
+private struct DialerTaskFailure: Error {
+    let message: String
+}
+
 // MARK: - 视图模型
 
 @MainActor
@@ -60,11 +68,11 @@ final class DialerThemeViewModel: ObservableObject {
         isScanning = true
         // 闭包内只捕获 Sendable 局部值；错误在后台就地转成 String 再跨 actor。
         Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome: Result<DialerThemeStatus, String>
+            let outcome: Result<DialerThemeStatus, DialerTaskFailure>
             do {
                 outcome = .success(try DialerThemeManager.shared.discoverStatus())
             } catch {
-                outcome = .failure(error.localizedDescription)
+                outcome = .failure(DialerTaskFailure(message: error.localizedDescription))
             }
             await MainActor.run {
                 guard let self else { return }
@@ -74,11 +82,11 @@ final class DialerThemeViewModel: ObservableObject {
                     self.cachedContainerPath = status.containerPath
                     self.cachedCacheDirectory = status.cacheDirectoryName
                     self.status = status
-                case .failure(let message):
+                case .failure(let failure):
                     self.status = nil
                     self.cachedContainerPath = ""
                     self.cachedCacheDirectory = ""
-                    self.errorMessage = message
+                    self.errorMessage = failure.message
                 }
             }
         }
@@ -99,13 +107,15 @@ final class DialerThemeViewModel: ObservableObject {
             // consume / release：SandboxEscape 用实例内的 liveHandles 集合判定
             // 句柄是否有效，两个实例会让 release 空转。
             let escape = SandboxEscape()
-            var count = 0
-            if let handle = try? escape.consume(path: cachePath, create: true) {
+            // 一次性求出结果再传给主线程：在并发闭包里声明 var 再改写会触发
+            // "captured var in concurrently-executing code" 警告。
+            let count: Int = {
+                guard let handle = try? escape.consume(path: cachePath, create: true) else { return 0 }
                 defer { escape.release(handle) }
-                count = ((try? FileManager.default.contentsOfDirectory(atPath: cachePath)) ?? [])
+                return ((try? FileManager.default.contentsOfDirectory(atPath: cachePath)) ?? [])
                     .filter { $0.lowercased().hasSuffix(".png") }
                     .count
-            }
+            }()
             let hasBackup = DialerThemeManager.shared.hasBackup
             await MainActor.run {
                 guard let self else { return }
@@ -125,12 +135,12 @@ final class DialerThemeViewModel: ObservableObject {
         guard let cachePath = status?.cachePath, !isBusy else { return }
         begin("正在应用主题")
         Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome: Result<String, String>
+            let outcome: Result<String, DialerTaskFailure>
             do {
                 let count = try DialerThemeManager.shared.apply(sources: urls, cachePath: cachePath)
                 outcome = .success("已替换 \(count) 张键盘图片。重新打开电话 App 即可看到效果。")
             } catch {
-                outcome = .failure(error.localizedDescription)
+                outcome = .failure(DialerTaskFailure(message: error.localizedDescription))
             }
             await MainActor.run {
                 guard let self else { return }
@@ -143,12 +153,12 @@ final class DialerThemeViewModel: ObservableObject {
         guard let cachePath = status?.cachePath, !isBusy else { return }
         begin("正在恢复原生主题")
         Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome: Result<String, String>
+            let outcome: Result<String, DialerTaskFailure>
             do {
                 let count = try DialerThemeManager.shared.restoreOriginal(cachePath: cachePath)
                 outcome = .success("已恢复 \(count) 张原生键盘图片，重新打开电话 App 生效。")
             } catch {
-                outcome = .failure(error.localizedDescription)
+                outcome = .failure(DialerTaskFailure(message: error.localizedDescription))
             }
             await MainActor.run {
                 guard let self else { return }
@@ -161,18 +171,18 @@ final class DialerThemeViewModel: ObservableObject {
         guard let cachePath = status?.cachePath, !isBusy else { return }
         begin("正在导出主题")
         Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome: Result<URL, String>
+            let outcome: Result<URL, DialerTaskFailure>
             do {
                 outcome = .success(try DialerThemeManager.shared.exportCurrentTheme(cachePath: cachePath))
             } catch {
-                outcome = .failure(error.localizedDescription)
+                outcome = .failure(DialerTaskFailure(message: error.localizedDescription))
             }
             await MainActor.run {
                 guard let self else { return }
                 self.isBusy = false
                 switch outcome {
                 case .success(let url): self.exportedURL = url
-                case .failure(let message): self.errorMessage = message
+                case .failure(let failure): self.errorMessage = failure.message
                 }
             }
         }
@@ -186,12 +196,12 @@ final class DialerThemeViewModel: ObservableObject {
         guard !isBusy else { return }
         begin("正在重启电话 App")
         Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome: Result<String, String>
+            let outcome: Result<String, DialerTaskFailure>
             do {
                 let processes = try ProcessManagerService.shared.listProcesses()
                 let targets = processes.filter { $0.executablePath.contains("MobilePhone") }
                 if targets.isEmpty {
-                    outcome = .failure("当前没有正在运行的电话进程，直接打开电话 App 即可。")
+                    outcome = .failure(DialerTaskFailure(message: "当前没有正在运行的电话进程，直接打开电话 App 即可。"))
                 } else {
                     for process in targets {
                         try? ProcessManagerService.shared.sendSignal(.kill, toPID: process.pid)
@@ -199,7 +209,7 @@ final class DialerThemeViewModel: ObservableObject {
                     outcome = .success("已结束电话进程（\(targets.count) 个），重新打开电话 App 即可看到新主题。")
                 }
             } catch {
-                outcome = .failure("自动重启失败：\(error.localizedDescription)\n请手动上滑关闭电话 App 后重新打开。")
+                outcome = .failure(DialerTaskFailure(message: "自动重启失败：\(error.localizedDescription)\n请手动上滑关闭电话 App 后重新打开。"))
             }
             await MainActor.run {
                 guard let self else { return }
@@ -217,14 +227,14 @@ final class DialerThemeViewModel: ObservableObject {
     }
 
     /// 在主线程收尾：`refresh` 为真时顺带刷新图片数量（应用/恢复后数量会变）。
-    private func finish(_ outcome: Result<String, String>, refresh: Bool) {
+    private func finish(_ outcome: Result<String, DialerTaskFailure>, refresh: Bool) {
         isBusy = false
         switch outcome {
         case .success(let message):
             successMessage = message
             if refresh { refreshCount() }
-        case .failure(let message):
-            errorMessage = message
+        case .failure(let failure):
+            errorMessage = failure.message
         }
     }
 }
