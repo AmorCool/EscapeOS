@@ -121,10 +121,44 @@ final class DialerThemeManager {
 
     /// 去掉语言前缀后的匹配键：取第一个 "-" 之后的部分。
     /// 没有 "-" 的文件名表示不区分语言，直接用全名。
+    ///
+    /// 这是 Ketamine 原版逻辑，对标准 locale 前缀主题包（如 en-lock-mask.png / de-lock-mask.png）
+    /// 完全适用：两者都会 key 到 lock-mask.png。
     static func matchKey(for filename: String) -> String {
         let lowercased = filename.lowercased()
         guard let dash = lowercased.firstIndex(of: "-") else { return lowercased }
         return String(lowercased[lowercased.index(after: dash)...])
+    }
+
+    /// 资源名 key：去掉第一个连续 dash 组及之前的所有内容，再去掉扩展名和
+    /// 末尾的 "-bold"（设备缓存里常见，如 other-0---mask-bold.png）。
+    ///
+    /// 某些主题包不是用标准 locale 前缀，而是用 `#---mask.png`、`*---white.png`
+    /// 这种「前缀 + 多个 dash + 资源名」的格式。对这类包，用 resourceKey 可以匹配到
+    /// 设备上的 `other-0---mask-bold.png` 等资源。
+    static func resourceKey(for filename: String) -> String {
+        let lowercased = filename.lowercased()
+        // 匹配第一个连续 dash 组：优先两个及以上 "--"，否则单个 "-"。
+        guard let range = lowercased.range(of: "--+", options: .regularExpression)
+                ?? lowercased.range(of: "-", options: .regularExpression) else {
+            return (lowercased as NSString).deletingPathExtension
+        }
+        let afterDash = String(lowercased[range.upperBound...])
+        let withoutExt = (afterDash as NSString).deletingPathExtension
+        // 设备文件名常见 `-bold` 后缀（ bold / white 两种变体），主题包通常只提供一种，
+        // 匹配时把 `-bold` 剥掉，让包内的 mask.png 能同时替换 mask-bold.png / mask.png。
+        if withoutExt.hasSuffix("-bold") {
+            return String(withoutExt.dropLast(5))
+        }
+        return withoutExt
+    }
+
+    /// 同时生成两种 key：标准 locale key 与资源名 key。
+    static func candidateKeys(for filename: String) -> [String] {
+        let standard = matchKey(for: filename)
+        let resource = resourceKey(for: filename)
+        if standard == resource { return [standard] }
+        return [standard, resource]
     }
 
     // MARK: - 目录枚举
@@ -243,7 +277,8 @@ final class DialerThemeManager {
     /// - Returns: 被替换的文件数。
     @discardableResult
     func apply(sources: [URL], cachePath: String) throws -> Int {
-        // 1. 收集包内 PNG：按「去掉语言前缀」的 key 索引，同一 key 只取第一张。
+        // 1. 收集包内 PNG：用「标准 locale key」和「资源名 key」两种索引，
+        //    同一 key 只取第一张（先遇到的优先）。
         var packageByKey: [String: Data] = [:]
         var packageKeys: [String] = []
         for url in sources {
@@ -253,17 +288,19 @@ final class DialerThemeManager {
                 for name in reader.entryNames() {
                     guard name.lowercased().hasSuffix(".png") else { continue }
                     let payload = try reader.readEntry(named: name)
-                    let key = Self.matchKey(for: (name as NSString).lastPathComponent)
-                    if packageByKey[key] == nil {
-                        packageByKey[key] = payload
-                        packageKeys.append(key)
+                    for key in Self.candidateKeys(for: (name as NSString).lastPathComponent) {
+                        if packageByKey[key] == nil {
+                            packageByKey[key] = payload
+                            packageKeys.append(key)
+                        }
                     }
                 }
             } else if url.pathExtension.lowercased() == "png" {
-                let key = Self.matchKey(for: url.lastPathComponent)
-                if packageByKey[key] == nil {
-                    packageByKey[key] = data
-                    packageKeys.append(key)
+                for key in Self.candidateKeys(for: url.lastPathComponent) {
+                    if packageByKey[key] == nil {
+                        packageByKey[key] = data
+                        packageKeys.append(key)
+                    }
                 }
             } else {
                 throw DialerThemeError.notAnArchiveOrPNG
@@ -284,7 +321,8 @@ final class DialerThemeManager {
 
         var replaced = 0
         for name in liveNames {
-            guard let payload = packageByKey[Self.matchKey(for: name)] else { continue }
+            let liveKeys = Self.candidateKeys(for: name)
+            guard let payload = liveKeys.compactMap({ packageByKey[$0] }).first else { continue }
             let destination = (cachePath as NSString).appendingPathComponent(name)
             try payload.write(to: URL(fileURLWithPath: destination), options: [.atomic])
             replaced += 1
