@@ -429,59 +429,47 @@ struct ProcessManagerView: View {
     private var hasPairing: Bool { TunnelContext.shared.hasPairingFile }
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("进程管理")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(action: { viewModel.refresh() }) {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .disabled(viewModel.isRefreshing)
+        // 注意：不嵌套 NavigationStack！本页由 MoreView 的 NavigationView push 进入，
+        // 嵌套导航栈会导致导航栏高度异常、标题/按钮错位（"tab 栏往下"的真凶）。
+        // 与「描述文件管理」（AppExpiryView）同构：直接 List + navigationTitle。
+        content
+            .navigationTitle("进程管理")
+            .navigationBarTitleDisplayMode(.inline)
+            // 系统搜索栏（v0.2.90 样式）。
+            .searchable(
+                text: $viewModel.searchText,
+                placement: .navigationBarDrawer(displayMode: .always),
+                prompt: "搜索进程"
+            )
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { viewModel.refresh() }) {
+                        Image(systemName: "arrow.clockwise")
                     }
+                    .disabled(viewModel.isRefreshing)
                 }
-        }
-        .task { viewModel.startAutoRefresh() }
-        .onDisappear { viewModel.stopAutoRefresh() }
-        .alert(viewModel.actionAlertTitle, isPresented: $viewModel.showActionAlert) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(viewModel.actionAlertMessage)
-        }
-        .alert(viewModel.errorAlertTitle, isPresented: $viewModel.showErrorAlert) {
-            Button("重试") { viewModel.refresh() }
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(viewModel.errorAlertMessage)
-        }
+            }
+            // 导航栏不透明且与页面背景同色，视觉上紧贴顶部。
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(Color(.systemGroupedBackground), for: .navigationBar)
+            .task { viewModel.startAutoRefresh() }
+            .onDisappear { viewModel.stopAutoRefresh() }
+            .alert(viewModel.actionAlertTitle, isPresented: $viewModel.showActionAlert) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(viewModel.actionAlertMessage)
+            }
+            .alert(viewModel.errorAlertTitle, isPresented: $viewModel.showErrorAlert) {
+                Button("重试") { viewModel.refresh() }
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(viewModel.errorAlertMessage)
+            }
     }
 
     @ViewBuilder
     private var content: some View {
         List {
-            // 搜索栏放在列表首项：导航栏恢复标准高度（返回/标题/刷新同基线），
-            // 搜索栏紧贴导航栏下方，顶部不再有多余空白。
-            Section {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("搜索进程名、路径或 PID", text: $viewModel.searchText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    if !viewModel.searchText.isEmpty {
-                        Button {
-                            viewModel.searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-
             if viewModel.processes.isEmpty && !viewModel.isRefreshing {
                 Section {
                     if !hasPairing {
