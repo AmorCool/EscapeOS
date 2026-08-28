@@ -441,11 +441,6 @@ struct ProcessManagerView: View {
                         .disabled(viewModel.isRefreshing)
                     }
                 }
-                .searchable(
-                    text: $viewModel.searchText,
-                    placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "搜索进程名、路径或 PID"
-                )
         }
         .task { viewModel.startAutoRefresh() }
         .onDisappear { viewModel.stopAutoRefresh() }
@@ -465,6 +460,26 @@ struct ProcessManagerView: View {
     @ViewBuilder
     private var content: some View {
         List {
+            // 搜索框放在列表首项，避免导航栏抽屉搜索把内容继续下推。
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("搜索进程名、路径或 PID", text: $viewModel.searchText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if !viewModel.searchText.isEmpty {
+                        Button {
+                            viewModel.searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+
             if viewModel.processes.isEmpty && !viewModel.isRefreshing {
                 Section {
                     if !hasPairing {
