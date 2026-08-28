@@ -38,6 +38,10 @@ final class DialerThemeViewModel: ObservableObject {
 
     private static let containerPathKey = "dialerThemeContainerPath"
     private static let cacheDirectoryKey = "dialerThemeCacheDirectory"
+    /// 发现逻辑的版本号：升级后旧缓存（可能是 v0.2.94/95 的「特征目录」结果，
+    /// 存在找错容器的风险）一律作废，强制重新精确扫描。
+    private static let scanVersionKey = "dialerThemeScanVersion"
+    private static let scanVersion = 2
 
     /// 上次定位成功的电话容器路径（缓存在 UserDefaults，避免每次进页面都全量扫描容器）。
     private var cachedContainerPath: String {
@@ -53,8 +57,12 @@ final class DialerThemeViewModel: ObservableObject {
     // MARK: 定位
 
     /// `force == true` 时忽略缓存重新扫描（系统更新后容器 UUID 会变，用得上）。
+    /// 发现逻辑升级（scanVersion 变化）时同样会强制重扫 —— v0.2.94/95 的旧缓存
+    /// 是按「TelephonyUI 特征」找的容器，可能不是电话 App 本体，必须作废重扫。
     func scan(force: Bool = false) {
-        if !force, !cachedContainerPath.isEmpty, !cachedCacheDirectory.isEmpty {
+        let cachedVersion = defaults.integer(forKey: Self.scanVersionKey)
+        let needsRescan = cachedVersion != Self.scanVersion
+        if !force, !needsRescan, !cachedContainerPath.isEmpty, !cachedCacheDirectory.isEmpty {
             status = DialerThemeStatus(
                 containerPath: cachedContainerPath,
                 cacheDirectoryName: cachedCacheDirectory,
@@ -79,8 +87,15 @@ final class DialerThemeViewModel: ObservableObject {
                 self.isScanning = false
                 switch outcome {
                 case .success(let status):
+                    let oldContainerPath = self.cachedContainerPath
                     self.cachedContainerPath = status.containerPath
                     self.cachedCacheDirectory = status.cacheDirectoryName
+                    self.defaults.set(Self.scanVersion, forKey: Self.scanVersionKey)
+                    // 容器路径变了：旧备份来自旧容器（v0.2.94/95 可能是错误的容器），
+                    // 继续保留会把错容器的原图写进新容器，删掉。
+                    if !oldContainerPath.isEmpty, oldContainerPath != status.containerPath {
+                        DialerThemeManager.shared.resetBackup()
+                    }
                     self.status = status
                 case .failure(let failure):
                     self.status = nil
@@ -344,6 +359,13 @@ struct DialerThemeView: View {
                 }
                 .padding(.vertical, 2)
             } else if let status = viewModel.status {
+                LabeledContent("电话容器") {
+                    Text("…\(status.containerPath.suffix(10))")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
                 LabeledContent("缓存目录") {
                     Text(status.cacheDirectoryName)
                         .font(.subheadline)
