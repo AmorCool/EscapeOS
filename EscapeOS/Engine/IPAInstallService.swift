@@ -234,6 +234,8 @@ final class IPAInstallService: ObservableObject {
     /// 用户进入「IPA 侧载」页时通常已完成，无需再等 13~15 秒。
     /// 只走免 2FA 的会话恢复；失败静默（标记 sessionRestoreFailed），
     /// 由页面内自动登录回退到完整登录流程。
+    /// @MainActor：MemoryLimitSettings 是 MainActor 隔离类，读取其属性需在主线程。
+    @MainActor
     func warmUp() {
         let settings = MemoryLimitSettings.shared
         guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
