@@ -449,9 +449,8 @@ struct ProcessManagerView: View {
                     .disabled(viewModel.isRefreshing)
                 }
             }
-            // 导航栏不透明且与页面背景同色，视觉上紧贴顶部。
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color(.systemGroupedBackground), for: .navigationBar)
+            // 导航栏不设置 toolbarBackground，保持系统默认半透明毛玻璃效果，
+            // 与「描述文件管理」（AppExpiryView）一致，可透视下方滚动内容。
             .task { viewModel.startAutoRefresh() }
             .onDisappear { viewModel.stopAutoRefresh() }
             .alert(viewModel.actionAlertTitle, isPresented: $viewModel.showActionAlert) {
