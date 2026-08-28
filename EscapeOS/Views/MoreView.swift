@@ -83,6 +83,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: DialerThemeView()) {
+                    MoreCard(
+                        icon: "circle.grid.3x3.fill",
+                        title: "拨号器主题",
+                        subtitle: "替换电话 App 的拨号键盘图片，支持 .passthm / .zip 主题包或直接多选 PNG。"
+                    )
+                }
+
                 NavigationLink(destination: DDIDownloadView()) {
                     MoreCard(
                         icon: "iphone.and.arrow.forward",

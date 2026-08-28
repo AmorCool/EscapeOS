@@ -51,6 +51,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/Wallpaper/WallpaperModels.swift \
 	EscapeOS/Views/Wallpaper/WallpaperHandler.swift \
 	EscapeOS/Views/Wallpaper/WallpaperView.swift \
+	EscapeOS/Views/DialerTheme/DialerThemeManager.swift \
+	EscapeOS/Views/DialerTheme/DialerThemeView.swift \
 	EscapeOS/Views/VirtualLocation/Theme.swift \
 	EscapeOS/Views/VirtualLocation/MapDropPin.swift \
 	EscapeOS/Views/VirtualLocation/JoystickPad.swift \
