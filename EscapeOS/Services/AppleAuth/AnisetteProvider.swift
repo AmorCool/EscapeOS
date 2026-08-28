@@ -71,6 +71,12 @@ final class AnisetteProvider {
     // MARK: - V3: client_info
 
     private func fetchClientInfo() async throws {
+        // 内存缓存：client_info 是设备描述，基本不变。此前每次请求都重新
+        // GET /v3/client_info（多 1 次海外 RTT，证书管理/登录实测 5~7 秒的大头）。
+        // refresh=true 时 getAnisetteData 已清空缓存，这里会重新拉取。
+        if clientInfo != nil, userAgent != nil, mdLu != nil, deviceId != nil {
+            return
+        }
         guard let base = url else { throw fail("client_info", "服务器地址为空") }
         let clientInfoURL = base.appendingPathComponent("v3").appendingPathComponent("client_info")
         let (data, response) = try await session.data(from: clientInfoURL)

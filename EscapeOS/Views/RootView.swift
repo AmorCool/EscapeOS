@@ -76,15 +76,14 @@ struct RootView: View {
             .interactiveDismissDisabled()
         }
         .onAppear {
-            if hasAcknowledgedLimits {
-                viewModel.reload()
-                warmUpAutoLogin()
-            }
+            // 预热不等免责声明确认：免 2FA 的静默会话恢复，越早启动
+            // 用户进入「IPA 侧载 / 证书管理」页时越可能已完成（幂等，内部有 guard）。
+            viewModel.reload()
+            warmUpAutoLogin()
         }
         .onChange(of: hasAcknowledgedLimits) { acknowledged in
             if acknowledged {
                 viewModel.reload()
-                warmUpAutoLogin()
             }
         }
     }

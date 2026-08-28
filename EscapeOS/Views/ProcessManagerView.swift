@@ -422,7 +422,6 @@ final class ProcessManagerViewModel: ObservableObject {
 // MARK: - 视图
 
 struct ProcessManagerView: View {
-    @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel = ProcessManagerViewModel()
     @State private var killCandidate: ProcessEntry?
     @State private var killConfirmTask: Task<Void, Never>?
@@ -430,14 +429,24 @@ struct ProcessManagerView: View {
     private var hasPairing: Bool { TunnelContext.shared.hasPairingFile }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            searchBar
+        NavigationStack {
             content
+                .navigationTitle("进程管理")
+                .navigationBarTitleDisplayMode(.inline)
+                .searchable(
+                    text: $viewModel.searchText,
+                    placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "搜索进程名、路径或 PID"
+                )
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(action: { viewModel.refresh() }) {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(viewModel.isRefreshing)
+                    }
+                }
         }
-        .background(Color(.systemGroupedBackground))
-        // 自绘顶栏接管导航，隐藏系统导航栏（保留边缘滑动返回手势）。
-        .toolbar(.hidden, for: .navigationBar)
         .task { viewModel.startAutoRefresh() }
         .onDisappear { viewModel.stopAutoRefresh() }
         .alert(viewModel.actionAlertTitle, isPresented: $viewModel.showActionAlert) {
@@ -451,65 +460,6 @@ struct ProcessManagerView: View {
         } message: {
             Text(viewModel.errorAlertMessage)
         }
-    }
-
-    /// 自绘顶部栏：返回 + 标题 + 刷新按钮在同一基线，紧凑贴顶。
-    private var topBar: some View {
-        HStack(spacing: 8) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-
-            Text("进程管理")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                viewModel.refresh()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-            .disabled(viewModel.isRefreshing)
-        }
-        .padding(.horizontal, 6)
-        .frame(height: 44)
-    }
-
-    /// 固定搜索框（不随列表滚动，常驻顶栏下方）。
-    private var searchBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("搜索进程名、路径或 PID", text: $viewModel.searchText)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !viewModel.searchText.isEmpty {
-                Button {
-                    viewModel.searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .padding(.horizontal, 16)
-        .padding(.bottom, 6)
     }
 
     @ViewBuilder
