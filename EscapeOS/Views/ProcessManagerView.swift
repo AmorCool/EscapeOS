@@ -433,11 +433,6 @@ struct ProcessManagerView: View {
             content
                 .navigationTitle("进程管理")
                 .navigationBarTitleDisplayMode(.inline)
-                .searchable(
-                    text: $viewModel.searchText,
-                    placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "搜索进程名、路径或 PID"
-                )
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button(action: { viewModel.refresh() }) {
@@ -465,6 +460,28 @@ struct ProcessManagerView: View {
     @ViewBuilder
     private var content: some View {
         List {
+            // 搜索栏放在列表首项：导航栏恢复标准高度（返回/标题/刷新同基线），
+            // 搜索栏紧贴导航栏下方，顶部不再有多余空白。
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("搜索进程名、路径或 PID", text: $viewModel.searchText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if !viewModel.searchText.isEmpty {
+                        Button {
+                            viewModel.searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+
             if viewModel.processes.isEmpty && !viewModel.isRefreshing {
                 Section {
                     if !hasPairing {

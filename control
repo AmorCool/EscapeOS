@@ -1,6 +1,6 @@
 Package: com.ipaside.escapeos
 Name: EscapeSpace
-Version: 0.2.90
+Version: 0.2.91
 Architecture: iphoneos-arm
 Description: On-device app-data browser, backup, restore, and reclaim. No Keychain. No jailbreak.
 Maintainer: iPASide
