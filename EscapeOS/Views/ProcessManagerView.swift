@@ -432,10 +432,11 @@ struct ProcessManagerView: View {
         NavigationStack {
             content
                 .navigationTitle("进程管理")
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button(action: { viewModel.refresh() }) {
-                            Label("刷新", systemImage: "arrow.clockwise")
+                            Image(systemName: "arrow.clockwise")
                         }
                         .disabled(viewModel.isRefreshing)
                     }
@@ -482,12 +483,6 @@ struct ProcessManagerView: View {
                 }
             } else {
                 Section {
-                    LabeledContent("进程总数") {
-                        Text("\(viewModel.processes.count)")
-                            .font(.title2.bold())
-                    }
-                }
-                Section {
                     if viewModel.filteredProcesses.isEmpty {
                         Text("没有匹配的进程。")
                             .font(.caption)
@@ -506,13 +501,14 @@ struct ProcessManagerView: View {
                         }
                     }
                 } header: {
-                    Text("运行中的进程")
+                    Text("运行中的进程（\(viewModel.processes.count)）")
                 } footer: {
                     Text("恢复（SIGCONT）/ 挂起（SIGSTOP）/ 结束（SIGKILL）经由设备隧道下发，仅对当前设备生效。对系统关键进程发送结束信号可能因权限不足而失败。")
                 }
             }
         }
         .listStyle(.insetGrouped)
+        .listSectionSpacing(.compact)
         .refreshable { viewModel.refresh() }
     }
 

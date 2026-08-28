@@ -178,6 +178,7 @@ struct LiveCleanTabView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .listSectionSpacing(.compact)
     }
 
     private var rowsSection: some View {

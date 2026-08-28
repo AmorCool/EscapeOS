@@ -145,6 +145,7 @@ struct ReclaimTabView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .listSectionSpacing(.compact)
     }
 
     private var rowsSection: some View {
