@@ -478,7 +478,7 @@ struct ProcessManagerView: View {
                     }
                 }
             }
-            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
 
             if viewModel.processes.isEmpty && !viewModel.isRefreshing {
                 Section {
@@ -524,6 +524,8 @@ struct ProcessManagerView: View {
         }
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
+        // 移除列表顶部默认内边距，让搜索框/首项紧贴导航栏，减少「上方空旷」。
+        .contentMargins(.top, 0)
         .refreshable { viewModel.refresh() }
     }
 
