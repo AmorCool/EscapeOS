@@ -41,6 +41,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/CertificateView.swift \
 	EscapeOS/Views/PairingInstallView.swift \
 	EscapeOS/Views/IPAInstallView.swift \
+	EscapeOS/Views/ProcessManagerView.swift \
 	EscapeOS/Views/Supervised/SupervisedHelpers.swift \
 	EscapeOS/Views/Supervised/RestrictionTweaksView.swift \
 	EscapeOS/Views/Supervised/AppHideView.swift \

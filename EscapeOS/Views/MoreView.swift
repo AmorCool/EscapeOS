@@ -67,6 +67,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: ProcessManagerView()) {
+                    MoreCard(
+                        icon: "cpu",
+                        title: "进程管理",
+                        subtitle: "查看设备运行中的进程，支持挂起 / 恢复 / 结束（需配对文件 + LocalDevVPN）。"
+                    )
+                }
+
                 NavigationLink(destination: WallpaperView()) {
                     MoreCard(
                         icon: "photo.fill.on.rectangle.fill",
