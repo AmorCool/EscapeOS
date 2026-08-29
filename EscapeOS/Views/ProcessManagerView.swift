@@ -671,7 +671,11 @@ private struct ProcessRow: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .tint(isConfirming ? .green : ProcessControlAction.kill.tint)
-                        .labelStyle(isConfirming ? .titleOnly : .iconOnly)
+                        // 固定 .titleOnly：确认态 label 是 Label（只出文字「确认结束」），
+                        // 非确认态 label 是 Image（labelStyle 对 Image 无效，照常显图标）。
+                        // 不能写三元 `isConfirming ? .titleOnly : .iconOnly`——两种
+                        // LabelStyle 类型不同，编译器无法统一（v0.2.108 run 33253523553 报错）。
+                        .labelStyle(.titleOnly)
                         .disabled(isBusy)
                     }
                 }
