@@ -9,6 +9,8 @@ enum FileOpenMode: String, Hashable {
     case image
     case pdf
     case media
+    /// 结构化 plist 查看 / 编辑器（可增删改键值，见 PlistEditorView）。
+    case plist
 }
 
 /// Classifies a file by extension for icons and default open behavior.

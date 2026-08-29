@@ -4,7 +4,8 @@ import UniformTypeIdentifiers
 
 /// Filza-style file browser for a single app container.
 struct FileBrowserView: View {
-    let app: InstalledApp
+    let rootPath: String
+    let title: String
 
     @StateObject private var vm: FileBrowserViewModel
     @ObservedObject private var clipboard = FileClipboard.shared
@@ -21,14 +22,28 @@ struct FileBrowserView: View {
     @State private var pendingDelete: [FileItem] = []
     @State private var archivePassword = ""
 
+    /// 浏览某个已安装 App 的容器（原入口：App 详情 / 空间回收）。
     init(app: InstalledApp) {
-        self.app = app
-        _vm = StateObject(wrappedValue: FileBrowserViewModel(app: app))
+        self.init(rootPath: app.containerPath, title: app.name)
     }
 
     init(app: InstalledApp, initialPath: String) {
-        self.app = app
-        _vm = StateObject(wrappedValue: FileBrowserViewModel(app: app, initialPath: initialPath))
+        self.init(rootPath: app.containerPath, title: app.name, initialPath: initialPath)
+    }
+
+    /// 浏览任意路径（根级文件浏览器用）。
+    /// - Parameters:
+    ///   - rootPath: 沙盒扩展的签发锚点 —— 容器内所有读写都以它为基准申请扩展。
+    ///   - title: 根层级的显示标题（子目录会用目录名）。
+    ///   - initialPath: 起始目录，缺省即 `rootPath`。
+    init(rootPath: String, title: String, initialPath: String? = nil) {
+        self.rootPath = rootPath
+        self.title = title
+        _vm = StateObject(wrappedValue: FileBrowserViewModel(
+            rootPath: rootPath,
+            title: title,
+            initialPath: initialPath
+        ))
     }
 
     private var browserToolbar: some ToolbarContent {
@@ -151,7 +166,7 @@ struct FileBrowserView: View {
             NavigationLink(
                 destination: Group {
                     if let request = openRequest {
-                        FileViewerView(app: app, item: request.item, mode: request.mode)
+                        FileViewerView(rootPath: rootPath, item: request.item, mode: request.mode)
                     }
                 },
                 isActive: Binding(
@@ -238,7 +253,7 @@ struct FileBrowserView: View {
                 Text("此操作不可撤销。若文件可能被占用，请先关闭目标应用。")
             }
             .sheet(item: $propertiesItem) { item in
-                FilePropertiesView(app: app, item: item)
+                FilePropertiesView(rootPath: rootPath, item: item)
             }
             .documentPicker(
                 isPresented: $showImporter,
@@ -294,8 +309,8 @@ struct FileBrowserView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(selected.contains(item.path) ? Color.accentColor.opacity(0.12) : nil)
                 } else if item.isDirectory {
-                    NavigationLink(destination: FileBrowserView(app: app, initialPath: item.path)) {
-                        FileRow(item: item)
+                    NavigationLink(destination: FileBrowserView(rootPath: rootPath, title: title, initialPath: item.path)) {
+                        FileRow(item: item, subtitle: vm.containerNames[item.path])
                     }
                     .contentShape(Rectangle())
                     .contextMenu { itemMenu(for: item) }
@@ -310,7 +325,7 @@ struct FileBrowserView: View {
                     .disabled(vm.isZipping)
                     .contextMenu { itemMenu(for: item) }
                 } else {
-                    NavigationLink(destination: FileViewerView(app: app, item: item, mode: .auto)) {
+                    NavigationLink(destination: FileViewerView(rootPath: rootPath, item: item, mode: .auto)) {
                         FileRow(item: item)
                     }
                     .contentShape(Rectangle())
@@ -350,10 +365,10 @@ struct FileBrowserView: View {
             Divider()
             HStack(spacing: 0) {
                 selectionAction("复制", "doc.on.doc", enabled: !selectedItems.isEmpty) {
-                    FileClipboard.shared.copy(selectedItems, containerPath: app.containerPath)
+                    FileClipboard.shared.copy(selectedItems, containerPath: rootPath)
                 }
                 selectionAction("剪切", "scissors", enabled: !selectedItems.isEmpty) {
-                    FileClipboard.shared.cut(selectedItems, containerPath: app.containerPath)
+                    FileClipboard.shared.cut(selectedItems, containerPath: rootPath)
                 }
                 selectionAction("粘贴", "doc.on.clipboard", enabled: !clipboard.isEmpty && !vm.isPasting) {
                     vm.paste()
@@ -529,12 +544,12 @@ struct FileBrowserView: View {
                 Label("选择", systemImage: "checkmark.circle")
             }
             Button {
-                FileClipboard.shared.copy([item], containerPath: app.containerPath)
+                FileClipboard.shared.copy([item], containerPath: rootPath)
             } label: {
                 Label("复制", systemImage: "doc.on.doc")
             }
             Button {
-                FileClipboard.shared.cut([item], containerPath: app.containerPath)
+                FileClipboard.shared.cut([item], containerPath: rootPath)
             } label: {
                 Label("剪切", systemImage: "scissors")
             }
@@ -581,6 +596,8 @@ private struct OpenRequest: Identifiable {
 
 struct FileRow: View {
     let item: FileItem
+    /// 可选的补充说明：在容器根浏览时是解析出来的 App 名。
+    var subtitle: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -590,6 +607,11 @@ struct FileRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).font(.body)
                 HStack(spacing: 8) {
+                    if let subtitle {
+                        Text(subtitle)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
                     if !item.isDirectory {
                         Text(formatBytes(item.size))
                     }
@@ -654,22 +676,34 @@ final class FileBrowserViewModel: ObservableObject {
 
     var isBusy: Bool { isZipping || isExporting || isPasting }
 
-    let app: InstalledApp
+    /// 目录路径 → 解析出的容器名（App 名），仅在容器根浏览时有值。
+    @Published var containerNames: [String: String] = [:]
+
+    let rootPath: String
+    let title: String
     private let escape = SandboxEscape()
     private let files = FileService()
 
     init(app: InstalledApp, initialPath: String? = nil) {
-        self.app = app
+        self.init(rootPath: app.containerPath, title: app.name, initialPath: initialPath)
+    }
+
+    /// - Parameters:
+    ///   - rootPath: 沙盒扩展的签发锚点 —— 每个文件操作都以它为基准申请扩展。
+    ///   - title: 根层级的显示标题。
+    init(rootPath: String, title: String, initialPath: String? = nil) {
+        self.rootPath = rootPath
+        self.title = title
         if let initialPath = initialPath {
             self.currentPath = initialPath
         } else {
-            self.currentPath = app.containerPath
+            self.currentPath = rootPath
         }
     }
 
     var displayTitle: String {
         let last = (currentPath as NSString).lastPathComponent
-        return last.isEmpty ? app.name : last
+        return last.isEmpty ? title : last
     }
 
     func open(_ path: String) {
@@ -678,12 +712,13 @@ final class FileBrowserViewModel: ObservableObject {
         currentPath = path
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let listed = try self.escape.withHandle(for: self.app.containerPath) { _ in
+                let listed = try self.escape.withHandle(for: self.rootPath) { _ in
                     try self.files.list(directory: path)
                 }
                 DispatchQueue.main.async {
                     self.items = listed
                     self.isLoading = false
+                    self.resolveContainerNames()
                 }
             } catch let e as SandboxEscapeError {
                 DispatchQueue.main.async {
@@ -695,6 +730,25 @@ final class FileBrowserViewModel: ObservableObject {
                     self.errorMessage = error.localizedDescription
                     self.isLoading = false
                 }
+            }
+        }
+    }
+
+    /// 在容器根（如 /var/mobile/Containers/Data/Application）浏览时，把 UUID 目录
+    /// 解析成 App 名。每个容器都要读一次 metadata plist，故放在后台批量跑，
+    /// 结果回到主线程刷新 —— 解析完成前目录行仍显示原始目录名。
+    private func resolveContainerNames() {
+        guard FileSystemRoots.containerNameRoots.contains(currentPath) else {
+            if !containerNames.isEmpty { containerNames = [:] }
+            return
+        }
+        let paths = items.filter(\.isDirectory).map(\.path)
+        guard !paths.isEmpty else { return }
+        let resolver = ContainerNameResolver.shared
+        DispatchQueue.global(qos: .utility).async {
+            let resolved = resolver.resolveAll(containerPaths: paths)
+            DispatchQueue.main.async {
+                self.containerNames = resolved
             }
         }
     }
@@ -742,7 +796,7 @@ final class FileBrowserViewModel: ObservableObject {
         isPasting = true
         busyTitle = "粘贴中…"
         let destDir = currentPath
-        let destContainer = app.containerPath
+        let destContainer = rootPath
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try self.paste(clip, into: destDir, destContainer: destContainer)
@@ -853,7 +907,7 @@ final class FileBrowserViewModel: ObservableObject {
         busyTitle = urls.count == 1 ? "正在导入…" : "正在导入 \(urls.count) 项…"
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try self.escape.withHandle(for: self.app.containerPath) { _ in
+                try self.escape.withHandle(for: self.rootPath) { _ in
                     for url in urls {
                         let accessing = url.startAccessingSecurityScopedResource()
                         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
@@ -885,7 +939,7 @@ final class FileBrowserViewModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let dest = try Self.shareStagingURL(named: Self.shareName(for: item))
-                try self.escape.withHandle(for: self.app.containerPath) { _ in
+                try self.escape.withHandle(for: self.rootPath) { _ in
                     if item.isDirectory {
                         let zip = ZipWriter()
                         try zip.begin(at: dest)
@@ -921,7 +975,7 @@ final class FileBrowserViewModel: ObservableObject {
         operationError = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let destPath: String = try self.escape.withHandle(for: self.app.containerPath) { _ in
+                let destPath: String = try self.escape.withHandle(for: self.rootPath) { _ in
                     let dest = self.files.uniqueDestination(
                         in: self.currentPath,
                         preferredName: Self.zipName(for: items)
@@ -965,7 +1019,7 @@ final class FileBrowserViewModel: ObservableObject {
         operationError = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let destName: String = try self.escape.withHandle(for: self.app.containerPath) { _ in
+                let destName: String = try self.escape.withHandle(for: self.rootPath) { _ in
                     let bytes = try self.files.readFile(at: item.path)
                     if ArchiveExtractor.archiveNeedsPassword(bytes, name: item.name),
                        password == nil || password?.isEmpty == true {
@@ -1052,7 +1106,7 @@ final class FileBrowserViewModel: ObservableObject {
     private func mutate(_ body: @escaping () throws -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try self.escape.withHandle(for: self.app.containerPath) { _ in
+                try self.escape.withHandle(for: self.rootPath) { _ in
                     try body()
                 }
                 DispatchQueue.main.async {

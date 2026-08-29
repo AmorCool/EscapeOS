@@ -91,6 +91,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: FileBrowserRootView()) {
+                    MoreCard(
+                        icon: "folder.fill",
+                        title: "文件浏览器",
+                        subtitle: "浏览并编辑设备上的任意容器：应用数据、守护进程、App 插件、.app 包等。"
+                    )
+                }
+
                 NavigationLink(destination: DDIDownloadView()) {
                     MoreCard(
                         icon: "iphone.and.arrow.forward",

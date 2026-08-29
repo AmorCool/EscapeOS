@@ -53,6 +53,11 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/Wallpaper/WallpaperView.swift \
 	EscapeOS/Views/DialerTheme/DialerThemeManager.swift \
 	EscapeOS/Views/DialerTheme/DialerThemeView.swift \
+	EscapeOS/Views/FileBrowserRootView.swift \
+	EscapeOS/Views/PlistEditor/PlistEditorModels.swift \
+	EscapeOS/Views/PlistEditor/PlistEditorViewModel.swift \
+	EscapeOS/Views/PlistEditor/PlistEditorView.swift \
+	EscapeOS/Views/PlistEditor/PlistModifyView.swift \
 	EscapeOS/Views/VirtualLocation/Theme.swift \
 	EscapeOS/Views/VirtualLocation/MapDropPin.swift \
 	EscapeOS/Views/VirtualLocation/JoystickPad.swift \
@@ -65,6 +70,9 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/BackupPaths.swift \
 	EscapeOS/Engine/RestoreService.swift \
 	EscapeOS/Engine/SandboxEscape.swift \
+	EscapeOS/Engine/BadQueryLister.swift \
+	EscapeOS/Engine/ContainerNameResolver.swift \
+	EscapeOS/Engine/FileSystemRoots.swift \
 	EscapeOS/Engine/FileKind.swift \
 	EscapeOS/Engine/FileClipboard.swift \
 	EscapeOS/Engine/FileService.swift \

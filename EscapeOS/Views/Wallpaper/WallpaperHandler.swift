@@ -284,12 +284,7 @@ extension WallpaperHandler {
     }
 
     private static func listDirectory(_ path: String) -> [String] {
-        path.withCString { cPath in
-            guard let list = bad_query_list(UnsafeMutablePointer(mutating: cPath), 100000) else {
-                return []
-            }
-            defer { free(list) }
-            return String(cString: list).split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-        }
+        // 跨容器目录在 LiveContainer 沙盒下列不出来，走 bad_query_list。
+        BadQueryLister.paths(at: path, maxInode: 100_000)
     }
 }

@@ -73,17 +73,23 @@ final class FileService {
             throw FileServiceError.notDirectory(path)
         }
 
-        let names: [String]
-        do {
-            names = try fm.contentsOfDirectory(atPath: path)
-        } catch {
-            throw mapError(error, path: path)
-        }
+        let names = Self.entryNames(at: path)
 
         var items: [FileItem] = []
         for name in names {
             let full = (path as NSString).appendingPathComponent(name)
+            // 属性查不到时仍保留该条目（回退枚举出来的路径上 lstat 可能失败），
+            // 至少让用户看到文件存在，而不是整个目录显示为空。
             guard let attrs = try? fm.attributesOfItem(atPath: full) else {
+                items.append(FileItem(
+                    name: name,
+                    path: full,
+                    kind: .other,
+                    size: 0,
+                    modified: nil,
+                    isReadable: false,
+                    isWritable: false
+                ))
                 continue
             }
             let type = attrs[.type] as? FileAttributeType
@@ -115,6 +121,17 @@ final class FileService {
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
+    }
+
+    /// 列出目录的一级条目名。
+    ///
+    /// 优先 FileManager（调用方通常已持有沙盒扩展，快）；返回空时回退
+    /// `BadQueryLister`（bad_query_list inode 扫描）—— LiveContainer 访客沙盒下
+    /// FileManager 对跨容器目录的列表会被裁剪，实测不可信（容器根目录尤其明显）。
+    private static func entryNames(at path: String) -> [String] {
+        let fmNames = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+        if !fmNames.isEmpty { return fmNames }
+        return BadQueryLister.entryNames(at: path)
     }
 
     // MARK: - Read

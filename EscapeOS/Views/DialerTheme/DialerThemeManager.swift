@@ -182,21 +182,7 @@ final class DialerThemeManager {
         let fmNames = (try? fm.contentsOfDirectory(atPath: directory)) ?? []
         if !fmNames.isEmpty { return fmNames }
 
-        return Self.listViaBadQuery(directory, maxInode: maxInode)
-            .map { ($0 as NSString).lastPathComponent }
-    }
-
-    /// 用 bad_query_list 枚举目录（返回完整路径）。
-    static func listViaBadQuery(_ path: String, maxInode: Int64 = 200_000) -> [String] {
-        path.withCString { cPath in
-            guard let list = bad_query_list(UnsafeMutablePointer(mutating: cPath), maxInode) else {
-                return []
-            }
-            defer { free(list) }
-            return String(cString: list)
-                .split(separator: "\n", omittingEmptySubsequences: true)
-                .map(String.init)
-        }
+        return BadQueryLister.entryNames(at: directory, maxInode: maxInode)
     }
 
     // MARK: - 容器发现

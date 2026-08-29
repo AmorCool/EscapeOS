@@ -6,11 +6,22 @@ import PDFKit
 
 /// Opens a container file using Preview, text, hex, image, PDF, or media.
 struct FileViewerView: View {
-    let app: InstalledApp
+    let rootPath: String
     let item: FileItem
     let mode: FileOpenMode
 
     @StateObject private var vm = FileViewerViewModel()
+
+    /// 浏览某个已安装 App 容器里的文件（App 详情 / 空间回收入口）。
+    init(app: InstalledApp, item: FileItem, mode: FileOpenMode) {
+        self.init(rootPath: app.containerPath, item: item, mode: mode)
+    }
+
+    init(rootPath: String, item: FileItem, mode: FileOpenMode) {
+        self.rootPath = rootPath
+        self.item = item
+        self.mode = mode
+    }
 
     var body: some View {
         Group {
@@ -32,6 +43,14 @@ struct FileViewerView: View {
         .navigationTitle(item.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // plist 可以在「结构化编辑器」和「纯文本」之间来回切。
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if vm.resolvedMode == .plist {
+                    Button("文本") { vm.showAsText() }
+                } else if vm.isPlistFile {
+                    Button("结构化") { vm.showAsPlist() }
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 if vm.canSave {
                     Button("保存") { vm.save() }
@@ -43,7 +62,7 @@ struct FileViewerView: View {
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("好")))
         }
         .onAppear {
-            vm.load(app: app, item: item, mode: mode)
+            vm.load(rootPath: rootPath, item: item, mode: mode)
         }
     }
 
@@ -82,6 +101,8 @@ struct FileViewerView: View {
             }
         case .text:
             TextFileEditorView(vm: vm)
+        case .plist:
+            PlistEditorView(rootPath: rootPath, item: item, initialData: vm.originalData)
         case .hex, .auto:
             HexEditorView(vm: vm)
         }
@@ -107,10 +128,13 @@ final class FileViewerViewModel: ObservableObject {
     @Published var truncated = false
     @Published var saveAlert: NamedAlert?
     @Published var isDirty = false
+    /// 当前文件是否是 plist（决定要不要显示「结构化 / 文本」切换按钮）。
+    @Published private(set) var isPlistFile = false
 
-    private var app: InstalledApp?
+    private var rootPath: String = "/"
     private var item: FileItem?
-    private var originalData = Data()
+    /// 读进来的完整文件内容。plist 结构化编辑器直接复用它，避免二次读盘。
+    private(set) var originalData = Data()
     private let escape = SandboxEscape()
     private let files = FileService()
 
@@ -118,14 +142,14 @@ final class FileViewerViewModel: ObservableObject {
         !truncated && (resolvedMode == .text || resolvedMode == .hex) && isDirty
     }
 
-    func load(app: InstalledApp, item: FileItem, mode: FileOpenMode) {
-        self.app = app
+    func load(rootPath: String, item: FileItem, mode: FileOpenMode) {
+        self.rootPath = rootPath
         self.item = item
         isLoading = true
         errorMessage = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let data = try self.escape.withHandle(for: app.containerPath) { _ in
+                let data = try self.escape.withHandle(for: rootPath) { _ in
                     try self.files.readFile(at: item.path)
                 }
                 let kind = FileContentKind.classify(name: item.name, isDirectory: false)
@@ -134,6 +158,7 @@ final class FileViewerViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     self.originalData = data
                     self.previewURL = preview
+                    self.isPlistFile = kind == .plist
                     self.resolvedMode = resolved
                     self.apply(data: data, mode: resolved)
                     self.isLoading = false
@@ -147,8 +172,19 @@ final class FileViewerViewModel: ObservableObject {
         }
     }
 
+    /// 从结构化编辑器切回纯文本视图（保存由本页的「保存」按钮负责）。
+    func showAsText() {
+        resolvedMode = .text
+        apply(data: originalData, mode: .text)
+    }
+
+    /// 从纯文本视图切到结构化编辑器。
+    func showAsPlist() {
+        resolvedMode = .plist
+    }
+
     func save() {
-        guard let app = app, let item = item, !truncated else { return }
+        guard let item = item, !truncated else { return }
         isSaving = true
         let payload: Data
         if resolvedMode == .text {
@@ -158,7 +194,7 @@ final class FileViewerViewModel: ObservableObject {
         }
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try self.escape.withHandle(for: app.containerPath) { _ in
+                try self.escape.withHandle(for: rootPath) { _ in
                     try self.files.writeFile(data: payload, to: item.path)
                 }
                 DispatchQueue.main.async {
@@ -181,6 +217,12 @@ final class FileViewerViewModel: ObservableObject {
 
     private func resolve(mode: FileOpenMode, kind: FileContentKind, data: Data) -> FileOpenMode {
         if mode != .auto { return mode }
+        // plist 默认交给结构化编辑器（可增删改键值，比纯文本好用）；
+        // 解析不了的 plist 仍会落到文本 / 16 进制视图。
+        if kind == .plist,
+           (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) != nil {
+            return .plist
+        }
         if kind == .image, UIImage(data: data) != nil { return .image }
         if kind == .pdf { return .pdf }
         if kind == .audio || kind == .video { return .media }
@@ -220,6 +262,9 @@ final class FileViewerViewModel: ObservableObject {
         case .hex, .auto:
             truncated = data.count > Self.maxEditableBytes
             bytes = Array(data.prefix(Self.maxEditableBytes))
+        case .plist:
+            // 结构化编辑器自己持有数据，这里不需要填充文本 / 字节缓冲。
+            break
         default:
             bytes = Array(data.prefix(Self.maxEditableBytes))
         }
