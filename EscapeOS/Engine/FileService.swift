@@ -73,7 +73,17 @@ final class FileService {
             throw FileServiceError.notDirectory(path)
         }
 
-        let names = Self.entryNames(at: path)
+        // 只用 FileManager：调用方通常已持有沙盒扩展，速度快。
+        // 注意：不要在这里回退 bad_query_list —— 那会对「空目录 / 被沙盒裁剪的
+        // 目录」触发 O(maxInode) 次 fsgetpath 扫描（默认 100 万次），空间回收
+        // 递归 countTree、容器管理扫描等会因此慢到不可用（v0.2.97 实测回归）。
+        // 容器根这类跨容器路径由 listContainerRoot(at:) 显式走 bad_query_list。
+        let names: [String]
+        do {
+            names = try fm.contentsOfDirectory(atPath: path)
+        } catch {
+            throw mapError(error, path: path)
+        }
         return try buildFileItems(names: names, basePath: path, fallbackKind: .other)
     }
 
@@ -136,17 +146,6 @@ final class FileService {
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
-    }
-
-    /// 列出目录的一级条目名。
-    ///
-    /// 优先 FileManager（调用方通常已持有沙盒扩展，快）；返回空时回退
-    /// `BadQueryLister`（bad_query_list inode 扫描）—— LiveContainer 访客沙盒下
-    /// FileManager 对跨容器目录的列表会被裁剪，实测不可信（容器根目录尤其明显）。
-    private static func entryNames(at path: String) -> [String] {
-        let fmNames = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-        if !fmNames.isEmpty { return fmNames }
-        return BadQueryLister.entryNames(at: path)
     }
 
     // MARK: - Read
