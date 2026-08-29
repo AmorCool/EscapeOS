@@ -684,7 +684,8 @@ final class FileBrowserViewModel: ObservableObject {
     private let escape = SandboxEscape()
     private let files = FileService()
 
-    init(app: InstalledApp, initialPath: String? = nil) {
+    /// 兼容原调用点（App 详情 / 空间回收）。class 的委托初始化必须标记为 convenience。
+    convenience init(app: InstalledApp, initialPath: String? = nil) {
         self.init(rootPath: app.containerPath, title: app.name, initialPath: initialPath)
     }
 
