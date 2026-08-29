@@ -112,6 +112,17 @@ final class FileService {
         return try buildFileItems(names: names, basePath: path, fallbackKind: .directory)
     }
 
+    /// 直接列出目录一级条目，**不做 `isDirectory` 前置检查**。
+    ///
+    /// 用于「已通过 SandboxEscape 消费扩展」后的兜底枚举：LiveContainer 访客沙盒下
+    /// `fileExists(atPath:isDirectory:)` 对跨容器路径可能仍返回 false（导致
+    /// `list(directory:)` 误报 notDirectory），但扩展生效后 `contentsOfDirectory`
+    /// 实际可列。应用安装目录（/var/containers/Bundle/Application）等场景需要它。
+    func listDirectly(at path: String) throws -> [FileItem] {
+        let names = try fm.contentsOfDirectory(atPath: path)
+        return try buildFileItems(names: names, basePath: path, fallbackKind: .directory)
+    }
+
     private func buildFileItems(names: [String], basePath: String, fallbackKind: FileItem.Kind) throws -> [FileItem] {
         var items: [FileItem] = []
         for name in names {

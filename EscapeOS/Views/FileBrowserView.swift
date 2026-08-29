@@ -36,13 +36,15 @@ struct FileBrowserView: View {
     ///   - rootPath: 沙盒扩展的签发锚点 —— 容器内所有读写都以它为基准申请扩展。
     ///   - title: 根层级的显示标题（子目录会用目录名）。
     ///   - initialPath: 起始目录，缺省即 `rootPath`。
-    init(rootPath: String, title: String, initialPath: String? = nil) {
+    ///   - appNameIndex: bundle id → App 显示名（可选，用于容器行显示「全名 (bundle id)」）。
+    init(rootPath: String, title: String, initialPath: String? = nil, appNameIndex: [String: String] = [:]) {
         self.rootPath = rootPath
         self.title = title
         _vm = StateObject(wrappedValue: FileBrowserViewModel(
             rootPath: rootPath,
             title: title,
-            initialPath: initialPath
+            initialPath: initialPath,
+            appNameIndex: appNameIndex
         ))
     }
 
@@ -267,7 +269,14 @@ struct FileBrowserView: View {
     private var visibleItems: [FileItem] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return vm.items }
-        return vm.items.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        // 索引：目录名（UUID）+ 解析出的容器名（「全名 (bundle id)」/ group id），
+        // 让用户可以直接搜 App 名 / bundle id 定位到对应容器。
+        return vm.items.filter { item in
+            if item.name.localizedCaseInsensitiveContains(query) { return true }
+            if let resolved = vm.containerNames[item.path],
+               resolved.localizedCaseInsensitiveContains(query) { return true }
+            return false
+        }
     }
 
     private var selectedItems: [FileItem] {
@@ -691,6 +700,9 @@ final class FileBrowserViewModel: ObservableObject {
     let title: String
     /// 当前根是否是「容器根」。容器根走 `bad_query_list` 枚举，不消费沙盒扩展。
     let isContainerRoot: Bool
+    /// bundle id → App 显示名（来自已加载的 App 列表，隧道数据，安全）。
+    /// 为空时容器行只显示 bundle id（对齐 Erosion 原版）。
+    let appNameIndex: [String: String]
     private let escape = SandboxEscape()
     private let files = FileService()
 
@@ -702,10 +714,12 @@ final class FileBrowserViewModel: ObservableObject {
     /// - Parameters:
     ///   - rootPath: 沙盒扩展的签发锚点 —— 每个文件操作都以它为基准申请扩展。
     ///   - title: 根层级的显示标题。
-    init(rootPath: String, title: String, initialPath: String? = nil) {
+    ///   - appNameIndex: bundle id → App 显示名（可选）。
+    init(rootPath: String, title: String, initialPath: String? = nil, appNameIndex: [String: String] = [:]) {
         self.rootPath = rootPath
         self.title = title
         self.isContainerRoot = FileSystemRoots.badQueryListRoots.contains(rootPath)
+        self.appNameIndex = appNameIndex
         if let initialPath = initialPath {
             self.currentPath = initialPath
         } else {
@@ -751,10 +765,10 @@ final class FileBrowserViewModel: ObservableObject {
         if isContainerRoot && path == rootPath {
             let items = try files.listContainerRoot(at: path)
             if !items.isEmpty { return items }
-            // 兜底：签发扩展后用 FileManager 列出（成功则用，失败保持空列表，
-            // 不把「空目录」误报成错误）。
+            // 兜底：签发扩展后用 FileManager 直接列（绕过 isDirectory 前置检查，
+            // 沙盒下 fileExists 对跨容器路径可能误判）。成功则用，失败保持空列表。
             if let fallback = try? escape.withHandle(for: rootPath) { _ in
-                try files.list(directory: path)
+                try files.listDirectly(at: path)
             } {
                 return fallback
             }
@@ -801,13 +815,10 @@ final class FileBrowserViewModel: ObservableObject {
     }
 
     /// 在容器根（如 /var/mobile/Containers/Data/Application）浏览时，把 UUID 目录
-    /// 解析成可读标识（bundle id，对齐 Erosion 原版 folderLabel）。每个容器都要读
-    /// 一次 metadata plist，故放在后台批量跑，结果回到主线程刷新 —— 解析完成前
-    /// 目录行仍显示原始 UUID。
-    ///
-    /// 注意：容器行**只显示 bundle id**，不做 LSApplicationWorkspace 二级解析——
-    /// 私有 LaunchServices API 批量查询在该环境会闪退（v0.2.98 后台崩 / v0.2.99
-    /// 主线程延迟崩），Erosion 原版也不查。
+    /// 解析成可读标识。每个容器读一次 metadata plist 拿 bundle id（/ App Group 的
+    /// group id），再用 `appNameIndex`（来自已加载的 App 列表，隧道数据）补 App
+    /// 显示名，组合为「全名 (bundleId)」；无显示名时只显示 bundle id（对齐 Erosion）。
+    /// 解析在后台批量跑（bad_query + plist，线程安全），结果回主线程刷新。
     private func resolveContainerNames() {
         guard FileSystemRoots.containerNameRoots.contains(currentPath) else {
             if !containerNames.isEmpty { containerNames = [:] }
@@ -816,13 +827,22 @@ final class FileBrowserViewModel: ObservableObject {
         let paths = items.filter(\.isDirectory).map(\.path)
         guard !paths.isEmpty else { return }
         let resolver = ContainerNameResolver.shared
+        let nameIndex = appNameIndex
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            // 后台：bad_query + plist 读取（线程安全，无私有 API）
             let resolved = resolver.resolveAll(containerPaths: paths)
+            // bundle id → 显示名（有则组合，无则原样）
+            var display: [String: String] = [:]
+            for (path, identifier) in resolved {
+                if let name = nameIndex[identifier], !name.isEmpty {
+                    display[path] = "\(name) (\(identifier))"
+                } else {
+                    display[path] = identifier
+                }
+            }
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.containerNames = resolved
+                self.containerNames = display
             }
         }
     }

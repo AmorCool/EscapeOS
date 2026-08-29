@@ -11,12 +11,26 @@ import SwiftUI
 /// 本页面由「更多」页 push 进入 —— 不要嵌套 NavigationStack。
 struct FileBrowserRootView: View {
 
+    /// App 列表（隧道数据，bundle id → 显示名），用于容器行显示「全名 (bundle id)」。
+    /// 传 nil 时容器行只显示 bundle id。
+    var appList: AppListViewModel? = nil
+
+    /// bundle id → App 显示名索引（从已加载的 App 列表构建，无数据则为空）。
+    private var appNameIndex: [String: String] {
+        guard let apps = appList?.apps else { return [:] }
+        var index: [String: String] = [:]
+        for app in apps {
+            index[app.bundleIdentifier] = app.name
+        }
+        return index
+    }
+
     var body: some View {
         List {
             Section {
                 ForEach(FileSystemRoots.entries) { entry in
                     NavigationLink {
-                        FileBrowserView(rootPath: entry.id, title: entry.title)
+                        FileBrowserView(rootPath: entry.id, title: entry.title, appNameIndex: appNameIndex)
                     } label: {
                         RootRow(
                             icon: entry.systemImage,

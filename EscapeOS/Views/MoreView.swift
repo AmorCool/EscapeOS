@@ -91,7 +91,7 @@ struct MoreView: View {
                     )
                 }
 
-                NavigationLink(destination: FileBrowserRootView()) {
+                NavigationLink(destination: FileBrowserRootView(appList: appList)) {
                     MoreCard(
                         icon: "folder.fill",
                         title: "文件浏览器",
