@@ -27,6 +27,11 @@ final class AnisetteProvider {
     private var mdLu: String?
     private var deviceId: String?
 
+    /// 最近一次失败的阶段（`provision` / `get_headers` / `client_info` / `入口`），
+    /// 由 `fail()` 写入，供 `getAnisetteDataWithFallback` 决定"要不要换设备身份"。
+    /// v0.2.119：只有 provisioning 阶段被拒才需要换 identifier；取票据失败换服务器即可。
+    private var lastFailureStage: String?
+
     private init() {}
 
     /// 重置：signOut / 切换账号时调用。清空内存缓存并删除 keychain 里的
@@ -39,6 +44,27 @@ final class AnisetteProvider {
         keychain.delete("identifier")
         keychain.delete("adiPb")
         LoginLogger.shared.log("… AnisetteProvider 重置（identifier/adiPb 已清除）")
+    }
+
+    /// **只作废 provisioning 票据（adiPb）与内存缓存，保留设备身份 identifier。**
+    ///
+    /// v0.2.119 关键修复。此前 `getAnisetteDataWithFallback` 任何失败都调 `reset()`，
+    /// 连 identifier（"虚拟机器"身份）一起删掉 —— 后果是：
+    /// 1. Swift 侧每失败一次就换一台"虚拟机器"，Apple 端视为多设备 → 风控；
+    /// 2. identifier 被删后 `sharedMachineIdentifier` 返回 nil，
+    ///    `syncSharedAnisetteStateIfAvailable()` 直接 return，**不会更新 isideload 的
+    ///    `anisette_state`**，Rust 侧继续用已被抛弃的旧身份 → 两套实现状态彻底分裂。
+    ///    这正是「IPA 侧载一登录，证书管理/增加内存限制就卡」的传导链。
+    ///
+    /// 取票据（get_headers）失败绝大多数是单点服务器问题，换服务器重试即可，
+    /// 不该为此丢弃一个已经正常工作的设备身份。
+    func resetProvisioning() {
+        clientInfo = nil
+        userAgent = nil
+        mdLu = nil
+        deviceId = nil
+        keychain.delete("adiPb")
+        LoginLogger.shared.log("… Anisette 票据作废（保留 identifier，仅重新 provision）")
     }
 
     // MARK: - 共享机器标识（v0.2.117）
@@ -61,6 +87,7 @@ final class AnisetteProvider {
 
     /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）。
     private func fail(_ stage: String, _ detail: String) -> AppleAPIError {
+        lastFailureStage = stage
         LoginLogger.shared.log("❌ Anisette[\(stage)]: \(detail)")
         return AppleAPIError.customError(code: -22421, message: "Anisette \(stage)失败: \(detail)")
     }
@@ -152,14 +179,29 @@ final class AnisetteProvider {
         var attempt = 0
         while attempt < maxAttempts {
             do {
-                return try await getAnisetteData(refresh: refresh)
+                let data = try await getAnisetteData(refresh: refresh)
+                lastFailureStage = nil
+                return data
             } catch {
                 lastError = error
                 attempt += 1
                 let elapsed = Date().timeIntervalSince(started)
                 guard attempt < maxAttempts, elapsed < budget else { break }
-                LoginLogger.shared.log("⚠ Anisette 第 \(attempt)/\(maxAttempts) 次失败，换服务器重试")
-                reset()
+                // v0.2.119：只有 provisioning 阶段被 Apple/服务器拒绝（-45025 /
+                // -45003 / WebSocket 异常）才丢弃设备身份重新生成 identifier；
+                // get_headers / client_info 阶段失败只作废票据、保留 identifier ——
+                // 否则每失败一次就换一台"虚拟机器"，Apple 端视为多设备风控，
+                // 且 identifier 被清空后 isideload 的机器标识同步会断链，
+                // 两套实现状态分裂（v0.2.118 及之前三功能互斥的真凶）。
+                let stage = lastFailureStage
+                if stage == nil || stage == "provision" {
+                    // stage == nil：错误不是 fail() 抛出的（如 URLSession 超时），
+                    // 无法判断身份是否可用，退回原行为（换身份重来）最稳。
+                    reset()
+                } else {
+                    resetProvisioning()
+                }
+                LoginLogger.shared.log("⚠ Anisette 第 \(attempt)/\(maxAttempts) 次失败（阶段：\(stage ?? "未知")），换服务器重试")
                 rotateServer()
             }
         }

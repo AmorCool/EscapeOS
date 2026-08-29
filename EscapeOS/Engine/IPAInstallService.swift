@@ -162,16 +162,32 @@ final class IPAInstallService: ObservableObject {
     /// 无值则跳过，Rust 侧自行 provision 兜底。
     func syncSharedAnisetteStateIfAvailable() {
         let provider = AnisetteProvider.shared
-        guard let identifier = provider.sharedMachineIdentifier else { return }
-        var dict: [String: Any] = ["keychain_identifier": identifier]
-        if let adiPb = provider.sharedAdiPb {
-            dict["adi_pb"] = adiPb
+        let target = URL(fileURLWithPath: storageDir).appendingPathComponent("anisette_state")
+
+        // v0.2.119：身份与票据必须**成对**才写。
+        // 只写 identifier 不写 adi_pb 是"半截状态"—— Rust 侧 is_provisioned()
+        // 判 false 会重新 provision，等于给了它一台"身份证号对不上"的机器。
+        guard let identifier = provider.sharedMachineIdentifier,
+              let adiPb = provider.sharedAdiPb else {
+            // Swift 侧身份已重置（signOut / provision 失败 reset）→ 必须清掉
+            // isideload 里的陈旧 state，让它下次全新 provision。
+            // v0.2.118 及之前这里是直接 return，导致 Rust 一直沿用已被 Swift
+            // 抛弃的旧设备身份 —— 两套实现从此分家，互相触发 Apple 风控。
+            if FileManager.default.fileExists(atPath: target.path) {
+                try? FileManager.default.removeItem(at: target)
+                LoginLogger.shared.log("… Swift 侧无有效 Anisette 身份，已清除 IPA 侧载的陈旧机器标识（避免两套身份分裂）")
+            } else {
+                LoginLogger.shared.log("… Swift 侧暂无 Anisette 身份，IPA 侧载将自行 provision")
+            }
+            return
         }
+
+        let dict: [String: Any] = ["keychain_identifier": identifier, "adi_pb": adiPb]
         do {
             let data = try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
-            let target = URL(fileURLWithPath: storageDir).appendingPathComponent("anisette_state")
             try data.write(to: target)
-            LoginLogger.shared.log("✓ 已同步 Anisette 机器标识给 IPA 侧载（两套流程共用同一 identifier）")
+            let shortID = identifier.base64EncodedString().prefix(8)
+            LoginLogger.shared.log("✓ 已同步 Anisette 机器标识给 IPA 侧载（id=\(shortID)… 服务器=\(provider.currentServer)）")
         } catch {
             LoginLogger.shared.log("⚠ 同步 Anisette 机器标识失败：\(error.localizedDescription)")
         }
@@ -211,6 +227,44 @@ final class IPAInstallService: ObservableObject {
         }
     }
 
+    /// v0.2.119 观测点：Rust 侧登录完成后读回 `anisette_state`，核对它是否真的
+    /// 用了 Swift 共享过去的那台"虚拟机器"。
+    ///
+    /// 两套 identifier 不一致 = Apple 会当成两台设备登录同一账号 → 风控 →
+    /// 团队列表加载失败。以前只能靠猜，现在日志会直接点名谁换了身份。
+    private func verifySharedAnisetteState() {
+        let target = URL(fileURLWithPath: storageDir).appendingPathComponent("anisette_state")
+        guard let data = try? Data(contentsOf: target) else {
+            LoginLogger.shared.log("⚠ 机器标识校验：IPA 侧载未落盘 anisette_state")
+            return
+        }
+        guard let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            LoginLogger.shared.log("⚠ 机器标识校验：anisette_state 无法解析")
+            return
+        }
+        let rustIDData: Data? = {
+            if let d = dict["keychain_identifier"] as? Data { return d }
+            // 极端兜底：Rust plist 序列化若落成字节数组，手动转一次。
+            if let arr = dict["keychain_identifier"] as? [Any] {
+                return Data(arr.compactMap { ($0 as? NSNumber)?.uint8Value })
+            }
+            return nil
+        }()
+        guard let rustID = rustIDData else {
+            LoginLogger.shared.log("⚠ 机器标识校验：anisette_state 缺少 keychain_identifier（键：\(dict.keys.sorted().joined(separator: ","))）")
+            return
+        }
+        guard let swiftID = AnisetteProvider.shared.sharedMachineIdentifier else {
+            LoginLogger.shared.log("⚠ 机器标识校验：Swift 侧暂无 identifier（Rust=\(rustID.base64EncodedString().prefix(8))…）")
+            return
+        }
+        if rustID == swiftID {
+            LoginLogger.shared.log("✓ 机器标识校验一致（id=\(swiftID.base64EncodedString().prefix(8))…），两套流程同一台虚拟机器")
+        } else {
+            LoginLogger.shared.log("❌ 机器标识不一致！Swift=\(swiftID.base64EncodedString().prefix(8))… Rust=\(rustID.base64EncodedString().prefix(8))… —— 会被 Apple 当成两台设备")
+        }
+    }
+
     private func performSignIn(appleID: String, password: String, anisetteURL: String) throws {
         // v0.2.117：与 Swift 认证共用同一 Anisette 机器标识，避免 Apple 风控。
         syncSharedAnisetteStateIfAvailable()
@@ -247,6 +301,8 @@ final class IPAInstallService: ObservableObject {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
             LoginLogger.shared.log("✓ IPA 侧载登录成功: \(teamSummary ?? "（无团队摘要）")")
+            // v0.2.119：核对 Rust 是否真的复用了 Swift 共享的机器标识。
+            verifySharedAnisetteState()
             // 取出 dsid + xcode.auth token（isideload fork 暴露），供调用方
             // 持久化后免登录恢复。
             lastSessionDSID = dsidOut.map { String(cString: $0) }
@@ -298,6 +354,8 @@ final class IPAInstallService: ObservableObject {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
             LoginLogger.shared.log("✓ IPA 侧载会话恢复成功: \(teamSummary ?? "（无团队摘要）")")
+            // v0.2.119：核对 Rust 是否真的复用了 Swift 共享的机器标识。
+            verifySharedAnisetteState()
             sessionRestoreFailed = false
         } else {
             // token 失效等恢复失败：标记，下次自动登录直接走完整登录。
