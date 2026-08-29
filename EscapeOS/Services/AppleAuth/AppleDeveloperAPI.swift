@@ -60,8 +60,11 @@ enum AppleDeveloperAPI {
     // MARK: - 请求头
 
     private static func makeHeaders(session: AppleAPISession) async throws -> [String: String] {
-        // 每次调用都取全新 Anisette（新 OTP），避免一次性 OTP 失效
-        let anisette = try await AnisetteProvider.shared.getAnisetteData()
+        // 每次调用都取全新 Anisette（新 OTP），避免一次性 OTP 失效。
+        // v0.2.115：改用带重试 + 服务器轮换的入口——Anisette 服务器侧故障
+        // （-45025 / -45003 / WebSocket 断开）在此自动换服务器，不再让页面
+        // 直接报错或卡住。
+        let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback()
         let fmt = ISO8601DateFormatter()
         return [
             "User-Agent": "Xcode",

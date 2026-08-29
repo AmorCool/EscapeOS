@@ -90,6 +90,68 @@ final class AnisetteProvider {
         return try await provision()
     }
 
+    // MARK: - 服务器轮换 + 失败重试
+
+    /// 当前 Anisette 服务器地址（供日志/展示用）。
+    var currentServer: String {
+        UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.sidestore.io"
+    }
+
+    /// 切换到内置服务器列表中的下一个，并持久化到 `AnisetteServer`。
+    /// 返回切换后的地址；列表为空时返回 nil。
+    @discardableResult
+    private func rotateServer() -> String? {
+        let servers = MemoryLimitSettings.anisetteServers
+        guard !servers.isEmpty else { return nil }
+        let current = currentServer
+        let next: String
+        if let idx = servers.firstIndex(of: current) {
+            next = servers[(idx + 1) % servers.count]
+        } else {
+            next = servers[0]
+        }
+        UserDefaults.standard.set(next, forKey: "AnisetteServer")
+        LoginLogger.shared.log("… Anisette 服务器切换：\(current) → \(next)")
+        return next
+    }
+
+    /// **带重试与服务器轮换的入口**，登录 / 团队列表等场景应优先调用它。
+    ///
+    /// 背景：Anisette v3 的 provisioning 会被 Apple 或中间服务器明确拒绝，
+    /// 典型如 `unknown session (-45025)`、`invalid Trust Key (-45003)`，
+    /// 以及 WebSocket 中途 `Socket未连接`。这些**绝大多数是单个 Anisette 服务器
+    /// 的问题**（与 Apple 的 trust key 不同步、被风控、或会话过期），换一个
+    /// 服务器重试通常就能过。v0.2.114 加的超时只解决"卡死"，解决不了这类
+    /// "服务器明确拒绝"，所以这里补上重试 + 轮换。
+    ///
+    /// 每次重试前会 `reset()`：清掉内存缓存与 keychain 里的 identifier/adiPb，
+    /// 强制重新生成 identifier 并对新服务器走完整 provision，避免拿旧会话重试。
+    func getAnisetteDataWithFallback(refresh: Bool = false, maxAttempts: Int = 3) async throws -> AnisetteData {
+        var lastError: Error?
+        var attempt = 0
+        while attempt < maxAttempts {
+            do {
+                return try await getAnisetteData(refresh: refresh)
+            } catch {
+                lastError = error
+                attempt += 1
+                guard attempt < maxAttempts else { break }
+                LoginLogger.shared.log("⚠ Anisette 第 \(attempt)/\(maxAttempts) 次失败，换服务器重试")
+                reset()
+                rotateServer()
+            }
+        }
+        let detail = (lastError as? AppleAPIError)?.errorDescription
+            ?? lastError?.localizedDescription
+            ?? "未知原因"
+        LoginLogger.shared.log("❌ Anisette 已尝试 \(maxAttempts) 个服务器仍失败")
+        throw AppleAPIError.customError(
+            code: -22421,
+            message: "Anisette 连续 \(maxAttempts) 个服务器均失败（最后错误：\(detail)）。\n"
+                + "可到「更多 → 设置 → Anisette 服务器」手动换一个，或稍后重试。"
+        )
+    }
+
     // MARK: - V3: client_info
 
     private func fetchClientInfo() async throws {
@@ -329,7 +391,14 @@ final class AnisetteProvider {
         default:
             if result.contains("Error") || result.contains("Invalid") ||
                result == "ClosingPerRequest" || result == "Timeout" || result == "TextOnly" {
-                throw fail("provision", "服务端返回 \(result): \(json["message"] as? String ?? "")")
+                let raw = json["message"] as? String ?? ""
+                // -45025 unknown session / -45003 invalid Trust Key 都是**单个
+                // Anisette 服务器**与 Apple trust 不同步或其会话过期，换服务器
+                // 通常即可通过。这里打点说明，重试逻辑见 getAnisetteDataWithFallback。
+                if raw.contains("-45025") || raw.contains("-45003") || raw.contains("-45061") {
+                    LoginLogger.shared.log("… 该 Anisette 服务器被 Apple 拒绝（\(raw)），属可重试错误，将换服务器")
+                }
+                throw fail("provision", "服务端返回 \(result): \(raw)")
             }
             return false
         }

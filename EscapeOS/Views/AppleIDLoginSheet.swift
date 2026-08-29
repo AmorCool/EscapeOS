@@ -161,7 +161,10 @@ struct AppleIDLoginSheet: View {
             LoginLogger.shared.log("SRP 自检: \(selfTest)")
         }
         do {
-            let anisette = try await AnisetteProvider.shared.getAnisetteData()
+            // v0.2.115：改用带重试 + 服务器轮换的入口。清数据后首次登录要走完整
+            // provisioning，遇到服务器侧 -45025 / -45003 / WebSocket 断开时自动换
+            // 下一个 Anisette 服务器重试，而不是直接把错误抛给用户。
+            let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback()
             LoginLogger.shared.log("✓ Anisette 获取成功，进入 GrandSlam 握手")
             let (account, session) = try await AppleAuthenticator.authenticate(
                 appleID: email,
@@ -175,7 +178,7 @@ struct AppleIDLoginSheet: View {
                 }
             } refreshAnisette: {
                 // 2FA 通过后必须换新 OTP（一次性，首次握手已消费），否则 Apple 拒绝 -22421
-                try await AnisetteProvider.shared.getAnisetteData(refresh: true)
+                try await AnisetteProvider.shared.getAnisetteDataWithFallback(refresh: true)
             }
             MemoryLimitSettings.shared.completeSignIn(email: email, password: password, account: account, session: session)
             if !rememberAccount {
