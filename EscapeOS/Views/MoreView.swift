@@ -7,6 +7,7 @@ struct MoreView: View {
     @ObservedObject var appList: AppListViewModel
     var onResetPairing: () -> Void
     @State private var showSettings = false
+    @State private var showDeviceControl = false
 
     var body: some View {
         List {
@@ -144,6 +145,15 @@ struct MoreView: View {
         .navigationTitle("更多")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    showDeviceControl = true
+                } label: {
+                    Image(systemName: "power")
+                        .imageScale(.large)
+                }
+                .accessibilityLabel("设备控制")
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     showSettings = true
@@ -151,6 +161,11 @@ struct MoreView: View {
                     Image(systemName: "gearshape")
                         .imageScale(.large)
                 }
+            }
+        }
+        .sheet(isPresented: $showDeviceControl) {
+            NavigationView {
+                DeviceControlView()
             }
         }
         .sheet(isPresented: $showSettings) {

@@ -28,6 +28,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/LiveCleanTabView.swift \
 	EscapeOS/Views/SpaceReclaimView.swift \
 	EscapeOS/Views/MoreView.swift \
+	EscapeOS/Views/DeviceControlView.swift \
 	EscapeOS/Views/IncreaseMemoryView.swift \
 	EscapeOS/Views/ConfigurationsView.swift \
 	EscapeOS/Views/RespringView.swift \
@@ -75,6 +76,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/BadQueryLister.swift \
 	EscapeOS/Engine/ContainerNameResolver.swift \
 	EscapeOS/Engine/FileSystemRoots.swift \
+	EscapeOS/Engine/DeviceControlService.swift \
 	EscapeOS/Engine/FileKind.swift \
 	EscapeOS/Engine/FileClipboard.swift \
 	EscapeOS/Engine/FileService.swift \
