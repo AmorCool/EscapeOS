@@ -95,7 +95,7 @@ enum FileSystemRoots {
                     title: "System App Data",
                     subtitle: "系统应用数据容器",
                     systemImage: "internaldrive.fill",
-                    resolvesContainerNames: false,
+                    resolvesContainerNames: true,
                     listingMode: .sandboxExtension,
                     requiresRave: true
                 ),
@@ -104,7 +104,7 @@ enum FileSystemRoots {
                     title: "SystemGroup 容器",
                     subtitle: "系统级共享数据（含配置描述文件）",
                     systemImage: "lock.fill",
-                    resolvesContainerNames: false,
+                    resolvesContainerNames: true,
                     listingMode: .badQueryList,
                     requiresRave: true
                 )

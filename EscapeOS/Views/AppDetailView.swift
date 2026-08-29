@@ -12,6 +12,8 @@ struct AppDetailView: View {
     @State private var activeRestore: RestoreSession?
     @State private var restoreAlert: IdentifiedAlert?
     @State private var confirmReset = false
+    /// 系统应用重置的二次确认（防误触风险提示）。
+    @State private var confirmSystemReset = false
     @State private var isResetting = false
     @State private var resetNotice: ReclaimNotice?
 
@@ -173,10 +175,23 @@ struct AppDetailView: View {
         .alert("重置全部应用数据？", isPresented: $confirmReset) {
             Button("取消", role: .cancel) {}
             Button("重置应用数据", role: .destructive) {
-                resetAppData()
+                if app.isSystem {
+                    // 系统应用：先弹风险提示二次确认，避免误触。
+                    confirmSystemReset = true
+                } else {
+                    resetAppData()
+                }
             }
         } message: {
             Text(resetConfirmMessage)
+        }
+        .alert("再次确认：重置系统应用数据？", isPresented: $confirmSystemReset) {
+            Button("取消", role: .cancel) {}
+            Button("仍然重置", role: .destructive) {
+                resetAppData()
+            }
+        } message: {
+            Text("\(app.name) 是系统应用。重置将清空其 Documents、Library 与 tmp，可能导致系统功能异常或需要重启设备，且数据可能无法恢复。请确认已备份重要数据。")
         }
         .alert(item: $resetNotice) { notice in
             Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("好")))
@@ -203,6 +218,9 @@ struct AppDetailView: View {
         var text = "请先关闭 \(app.name)。本次将清空 Documents、Library 与 tmp，之后需要重新登录并设置。Keychain 不会被删除。"
         if app.bundleIdentifier == Bundle.main.bundleIdentifier {
             text += " 当前选中的是的是它本身——Documents 中的配对文件也将被删除。"
+        }
+        if app.isSystem {
+            text += " 警告：\(app.name) 是系统应用，重置可能导致系统功能异常或需要重启设备。"
         }
         return text
     }

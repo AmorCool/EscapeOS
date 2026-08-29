@@ -200,32 +200,34 @@ struct AppListView: View {
                         Section(header: Text(section.letter).id(section.letter)) {
                             ForEach(section.apps) { app in
                                 if app.isSystem {
-                                    // System apps are shown read-only: they have no
-                                    // user Data container, so browse / reclaim / uninstall
-                                    // don't apply. Tap does nothing; only copy actions.
-                                    appRow(app, mode: .normal)
-                                        .contextMenu {
+                                    // 系统应用同样支持进入详情页：浏览文件 / 回收空间 /
+                                    // 备份数据 / 重置应用数据（重置有额外二次风险确认，
+                                    // 见 AppDetailView）。系统应用不参与批量选择与卸载。
+                                    NavigationLink(destination: AppDetailView(app: app, viewModel: viewModel)) {
+                                        appRow(app, mode: .normal)
+                                    }
+                                    .contextMenu {
+                                        Button {
+                                            FileClipboard.copyText(
+                                                app.bundleIdentifier,
+                                                confirmation: "已复制 Bundle ID"
+                                            )
+                                        } label: {
+                                            Label("复制 Bundle ID", systemImage: "doc.on.doc")
+                                        }
+                                        Button {
+                                            FileClipboard.copyText(app.name, confirmation: "已复制名称")
+                                        } label: {
+                                            Label("复制名称", systemImage: "character.cursor.ibeam")
+                                        }
+                                        if let icon = viewModel.icons[app.bundleIdentifier] {
                                             Button {
-                                                FileClipboard.copyText(
-                                                    app.bundleIdentifier,
-                                                    confirmation: "已复制 Bundle ID"
-                                                )
+                                                iconShare = IconSharePayload(image: icon, suggestedName: "\(app.name) 图标.png")
                                             } label: {
-                                                Label("复制 Bundle ID", systemImage: "doc.on.doc")
-                                            }
-                                            Button {
-                                                FileClipboard.copyText(app.name, confirmation: "已复制名称")
-                                            } label: {
-                                                Label("复制名称", systemImage: "character.cursor.ibeam")
-                                            }
-                                            if let icon = viewModel.icons[app.bundleIdentifier] {
-                                                Button {
-                                                    iconShare = IconSharePayload(image: icon, suggestedName: "\(app.name) 图标.png")
-                                                } label: {
-                                                    Label("提取图标", systemImage: "square.and.arrow.down")
-                                                }
+                                                Label("提取图标", systemImage: "square.and.arrow.down")
                                             }
                                         }
+                                    }
                                 } else if selecting {
                                     Button {
                                         toggleSelection(app.bundleIdentifier)
