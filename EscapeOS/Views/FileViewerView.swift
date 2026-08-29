@@ -192,6 +192,8 @@ final class FileViewerViewModel: ObservableObject {
         } else {
             payload = Data(bytes)
         }
+        // 锚点路径先取到局部常量：逃逸闭包里引用 class 的实例属性必须显式 self.
+        let rootPath = self.rootPath
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try self.escape.withHandle(for: rootPath) { _ in
