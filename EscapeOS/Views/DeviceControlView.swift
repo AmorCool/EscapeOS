@@ -68,7 +68,7 @@ struct DeviceControlView: View {
     @State private var isRunning = false
     @State private var runningTitle = "处理中…"
     @State private var showWebCrash = false
-    @State private var resultNotice: IdentifiedAlert?
+    @State private var resultNotice: DeviceControlAlert?
 
     private let service = DeviceControlService.shared
 
@@ -106,14 +106,7 @@ struct DeviceControlView: View {
             }
         }
         .alert(item: $pendingAction) { action in
-            Alert(
-                title: Text(action.confirmTitle),
-                message: Text(action.confirmMessage),
-                primaryButton: .destructive(Text("确定")) {
-                    execute(action)
-                },
-                secondaryButton: .cancel(Text("取消"))
-            )
+            confirmationAlert(for: action)
         }
         .alert(item: $resultNotice) { notice in
             Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("好")))
@@ -149,27 +142,42 @@ struct DeviceControlView: View {
         }
     }
 
+    private func confirmationAlert(for action: DeviceAction) -> Alert {
+        Alert(
+            title: Text(action.confirmTitle),
+            message: Text(action.confirmMessage),
+            primaryButton: .destructive(Text("确定")) {
+                execute(action)
+            },
+            secondaryButton: .cancel(Text("取消"))
+        )
+    }
+
     private func actionRow(_ action: DeviceAction) -> some View {
         Button {
             pendingAction = action
         } label: {
-            HStack(spacing: 12) {
-                AppRowIcon(systemName: action.icon, tint: actionTint(action), symbolSize: 20, frameSize: 36)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(action.rawValue)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.primary)
-                    Text(action.subtitle)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 6)
+            actionRowLabel(action)
         }
         .buttonStyle(.plain)
         .disabled(isRunning)
+    }
+
+    private func actionRowLabel(_ action: DeviceAction) -> some View {
+        HStack(spacing: 12) {
+            AppRowIcon(systemName: action.icon, tint: actionTint(action), symbolSize: 20, frameSize: 36)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(action.rawValue)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.primary)
+                Text(action.subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 6)
     }
 
     private func actionTint(_ action: DeviceAction) -> Color {
@@ -210,7 +218,7 @@ struct DeviceControlView: View {
                 await MainActor.run {
                     self.isRunning = false
                     // 指令已送达：重启/关机/恢复模式会打断连接，无需等待回执。
-                    self.resultNotice = IdentifiedAlert(
+                    self.resultNotice = DeviceControlAlert(
                         title: "指令已发送",
                         message: "「\(action.rawValue)」指令已送达设备，请稍候。"
                     )
@@ -218,14 +226,14 @@ struct DeviceControlView: View {
             } catch {
                 await MainActor.run {
                     self.isRunning = false
-                    self.resultNotice = IdentifiedAlert(title: "操作失败", message: error.localizedDescription)
+                    self.resultNotice = DeviceControlAlert(title: "操作失败", message: error.localizedDescription)
                 }
             }
         }
     }
 }
 
-private struct IdentifiedAlert: Identifiable {
+private struct DeviceControlAlert: Identifiable {
     let id = UUID()
     let title: String
     let message: String
