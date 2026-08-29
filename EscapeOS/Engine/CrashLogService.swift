@@ -167,7 +167,8 @@ final class CrashLogService {
         defer { afc_file_close(handle) }
 
         var result = Data()
-        let chunkSize = 1 << 20
+        // afc_file_read 的 len 是 uintptr_t → Swift UInt（bytes_read 才是 size_t/Int）
+        let chunkSize: UInt = 1 << 20
         while true {
             var buffer: UnsafeMutablePointer<UInt8>?
             var got = 0
@@ -180,7 +181,7 @@ final class CrashLogService {
             }
             guard let buffer, got > 0 else { break }
             result.append(Data(bytes: buffer, count: got))
-            if got < chunkSize { break }
+            if got < Int(chunkSize) { break }
         }
         return result
     }
