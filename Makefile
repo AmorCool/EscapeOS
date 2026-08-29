@@ -104,6 +104,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/CertificateManager.swift \
 	EscapeOS/Engine/PairingInstallService.swift \
 	EscapeOS/Engine/IPAInstallService.swift \
+	EscapeOS/Engine/TwoFactorPromptCoordinator.swift \
 	EscapeOS/Engine/zip_crypto.c \
 	EscapeOS/Engine/bad_query.c \
 	EscapeOS/Engine/MCM/MCMBridge.m \

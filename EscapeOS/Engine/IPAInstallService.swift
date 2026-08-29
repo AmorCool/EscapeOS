@@ -30,7 +30,9 @@ final class IPAInstallService: ObservableObject {
     /// 不捕获局部变量，可转换为 C 函数指针。
     private let twoFactorCallback: SITwoFactorCb = { _, outBuf, bufLen in
         IPAInstallService.shared.beginTwoFactorPrompt()
-        IPAInstallService.shared.twoFactorSem.wait()
+        // 最多等 5 分钟：用户不响应（或切走 App）时自动放弃，避免后台线程
+        // 永久阻塞 —— 它占着串行登录队列，会让用户后续手动登录一起卡住。
+        _ = IPAInstallService.shared.twoFactorSem.wait(timeout: .now() + 300)
         guard let code = IPAInstallService.shared.twoFactorResult, !code.isEmpty, bufLen > 1 else {
             return 0
         }
@@ -46,9 +48,19 @@ final class IPAInstallService: ObservableObject {
 
     private func beginTwoFactorPrompt() {
         DispatchQueue.main.async {
+            // 清掉上一轮可能残留的信号：否则本次 wait() 会立即被旧信号唤醒，
+            // 拿着空的/旧的验证码往下走，表现就是"卡住后登录失败"。
+            while self.twoFactorSem.wait(timeout: .now()) == .success { }
+            self.twoFactorResult = nil
+            // 优先用页面注入的 prompt（「IPA 侧载」页自己弹窗）。
+            // 没有时（典型场景：App 启动的后台预热 warmUp，用户还没进过该页）
+            // 走全局协调器，由 RootView 统一弹出输入框 —— 否则 2FA 请求会被
+            // 静默丢弃：手机上弹了验证码，App 里却没地方输入，登录就此卡住。
             guard let handler = self.twoFactorPrompt else {
-                self.twoFactorResult = nil
-                self.twoFactorSem.signal()
+                TwoFactorPromptCoordinator.shared.requestCode(from: Self.twoFactorFeature) { code in
+                    self.twoFactorResult = code
+                    self.twoFactorSem.signal()
+                }
                 return
             }
             handler { code in
@@ -57,6 +69,9 @@ final class IPAInstallService: ObservableObject {
             }
         }
     }
+
+    /// 全局 2FA 弹窗里显示的功能名。
+    static let twoFactorFeature = "IPA 侧载"
 
     // MARK: - 会话
 

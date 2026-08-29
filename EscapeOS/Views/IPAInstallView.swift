@@ -234,7 +234,7 @@ struct IPAInstallView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("正在用「设置」里的 Apple ID 自动登录…")
                                 .font(.subheadline)
-                            Text("如需两步验证，验证码弹窗会在此显示。")
+                            Text("如需两步验证，会自动弹出验证码输入框。")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -383,10 +383,11 @@ struct IPAInstallView: View {
                 Text("「\(item.name)」将被永久删除，此操作不可撤销。")
             }
         }
-        .alert("两步验证", isPresented: $showTwoFactor) {
+        .alert("来自\(IPAInstallService.twoFactorFeature)的 Apple ID 验证请求",
+               isPresented: $showTwoFactor) {
             TextField("6 位验证码", text: $twoFactorCode)
                 .keyboardType(.numberPad)
-            Button("验证") {
+            Button("登录") {
                 showTwoFactor = false
                 let reply = twoFactorReply
                 twoFactorReply = nil
@@ -399,7 +400,7 @@ struct IPAInstallView: View {
                 reply?(nil)
             }
         } message: {
-            Text("Apple 已向你的受信任设备或短信发送验证码，请输入以完成登录。")
+            Text("输入您的 2FA 验证码以登录")
         }
     }
 

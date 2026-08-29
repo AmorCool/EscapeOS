@@ -15,6 +15,8 @@ struct RootView: View {
     @AppStorage("HasAcknowledgedLimits") private var hasAcknowledgedLimits = false
     @State private var selectedTab: MainTab = .apps
     @ObservedObject private var copyFeedback = CopyFeedback.shared
+    /// 全局 2FA 输入框：任何页面（含启动预热）触发的验证码请求都弹这里。
+    @StateObject private var twoFactor = TwoFactorPromptCoordinator.shared
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -85,6 +87,24 @@ struct RootView: View {
             if acknowledged {
                 viewModel.reload()
             }
+        }
+        // 全局 2FA 输入：后台预热 / 任何页面触发的验证码请求都在这里输入。
+        // 标题标明来自哪个功能，避免用户不知道是谁在要验证码。
+        .alert(
+            "来自\(twoFactor.pending?.feature ?? "Apple ID")的 Apple ID 验证请求",
+            isPresented: Binding(
+                get: { twoFactor.pending != nil },
+                set: { presented in
+                    if !presented { twoFactor.cancel() }
+                }
+            )
+        ) {
+            TextField("6 位验证码", text: $twoFactor.code)
+                .keyboardType(.numberPad)
+            Button("登录") { twoFactor.submit() }
+            Button("取消", role: .cancel) { twoFactor.cancel() }
+        } message: {
+            Text("输入您的 2FA 验证码以登录")
         }
     }
 
