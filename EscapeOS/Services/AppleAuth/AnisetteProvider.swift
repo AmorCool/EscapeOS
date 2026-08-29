@@ -22,6 +22,20 @@ final class AnisetteProvider {
 
     private init() {}
 
+    /// 重置：signOut / 切换账号时调用。清空内存缓存并删除 keychain 里的
+    /// identifier+adiPb，确保下一次登录重新走完整 provision 并重新生成 identifier。
+    func reset() {
+        clientInfo = nil
+        userAgent = nil
+        mdLu = nil
+        deviceId = nil
+        keychain.delete("identifier")
+        keychain.delete("adiPb")
+        LoginLogger.shared.log("… AnisetteProvider 重置（identifier/adiPb 已清除）")
+    }
+
+    /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）。
+
     /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）。
     private func fail(_ stage: String, _ detail: String) -> AppleAPIError {
         LoginLogger.shared.log("❌ Anisette[\(stage)]: \(detail)")
@@ -71,33 +85,44 @@ final class AnisetteProvider {
     // MARK: - V3: client_info
 
     private func fetchClientInfo() async throws {
-        // 内存缓存：client_info 是设备描述，基本不变。此前每次请求都重新
-        // GET /v3/client_info（多 1 次海外 RTT，证书管理/登录实测 5~7 秒的大头）。
-        // refresh=true 时 getAnisetteData 已清空缓存，这里会重新拉取。
-        if clientInfo != nil, userAgent != nil, mdLu != nil, deviceId != nil {
+        // 先检查 keychain 里的 identifier 是否仍有效。 signOut 会删 identifier，
+        // 但 AnisetteProvider 的内存缓存可能还在，此时必须重新生成 identifier，
+        // 否则 provision 到 GiveIdentifier 时会从 keychain 读不到而报 -22421。
+        let hasValidIdentifier: Bool = {
+            guard let existing = keychain.string(for: "identifier") else { return false }
+            guard let decoded = Data(base64Encoded: existing), decoded.count == 16 else { return false }
+            return true
+        }()
+
+        if clientInfo != nil, userAgent != nil, mdLu != nil, deviceId != nil, hasValidIdentifier {
             return
         }
+
         guard let base = url else { throw fail("client_info", "服务器地址为空") }
-        let clientInfoURL = base.appendingPathComponent("v3").appendingPathComponent("client_info")
-        let (data, response) = try await session.data(from: clientInfoURL)
-        let http = (response as? HTTPURLResponse)?.statusCode ?? -1
-        guard http == 200,
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: String],
-              let ci = json["client_info"], let ua = json["user_agent"] else {
-            let preview = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
-            throw fail("client_info", "HTTP \(http) 响应异常: \(preview)")
+
+        // client_info / user_agent 是设备描述，基本不变。只在内存缓存缺失时拉取。
+        if clientInfo == nil || userAgent == nil {
+            let clientInfoURL = base.appendingPathComponent("v3").appendingPathComponent("client_info")
+            let (data, response) = try await session.data(from: clientInfoURL)
+            let http = (response as? HTTPURLResponse)?.statusCode ?? -1
+            guard http == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: String],
+                  let ci = json["client_info"], let ua = json["user_agent"] else {
+                let preview = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
+                throw fail("client_info", "HTTP \(http) 响应异常: \(preview)")
+            }
+            clientInfo = ci
+            userAgent = ua
+            LoginLogger.shared.log("✓ client_info OK: \(ci) / \(ua)")
+        } else if !hasValidIdentifier {
+            LoginLogger.shared.log("… 内存缓存命中但 keychain identifier 已清除，重新生成")
         }
-        clientInfo = ci
-        userAgent = ua
-        LoginLogger.shared.log("✓ client_info OK: \(ci) / \(ua)")
 
         // identifier 必须以 base64 字符串存储（EscapeKeychain.string(for:) 用 UTF-8 解码，
         // 存原始字节会解码失败 → 登录报「Anisette数据无效或已过期」）。
         // 兼容清理：旧版本可能遗留了原始字节的坏数据，解码失败时重新生成。
         var identifier: String? = nil
-        if let existing = keychain.string(for: "identifier"),
-           let decoded = Data(base64Encoded: existing),
-           decoded.count == 16 {
+        if hasValidIdentifier, let existing = keychain.string(for: "identifier") {
             identifier = existing
         }
         if identifier == nil {

@@ -355,12 +355,14 @@ struct IPAInstallView: View {
                 showTwoFactor = true
             }
             refreshSavedIPAs()
-            // 复用「更多 → 设置」已保存的 Apple ID：自动登录（无需手动输入），
-            // 失败才回退手动输入。
-            if !didPrefillCredentials {
-                didPrefillCredentials = true
-                autoSignInWithSavedCredentials()
-            }
+            // 每次进入都尝试自动登录/刷新状态（不依赖一次性标记）。
+            // 这样用户在「设置」里重新登录后切回 IPA 侧载页能立即生效，
+            // 不需要退出页面再进一次。
+            autoSignInWithSavedCredentials()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // 从后台切回（例如去设置登录完再回来）也刷新一次登录态。
+            autoSignInWithSavedCredentials()
         }
         .onDisappear {
             service.twoFactorPrompt = nil

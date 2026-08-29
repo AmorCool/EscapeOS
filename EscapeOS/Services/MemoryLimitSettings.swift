@@ -183,23 +183,30 @@ final class MemoryLimitSettings: ObservableObject {
     }
 
     /// 自愈迁移：v0.2.111（及更早）把 isideload 的 dsid/authToken 写进了
-    /// `dsid`/`authToken` 主键。升级到 v0.2.112 后，若主键当前归属 isideload，
-    /// 就把它搬到 sideload 专用键并清掉主键，让 Swift 侧（证书管理 /
+    /// `dsid`/`authToken` 主键。升级到 v0.2.112 后，若 isideload 专用键为空而
+    /// 主键有值，就搬到专用键并清掉主键，让 Swift 侧（证书管理 /
     /// 增加内存限制）回到「未登录」状态而不是拿着异种 token 反复 1100。
+    ///
+    /// **v0.2.111 没写 `sessionOwner`**，因此不能只看归属标记；结合
+    /// `accountName` 判断：Swift 登录会写 accountName/firstName/lastName，
+    /// isideload 登录不会。没有 accountName 的主键凭据视为 isideload 污染。
     private func migrateLegacySideloadSession() {
-        guard currentOwner() == .sideload else { return }
-        guard keychain.string(for: "sideloadDSID") == nil else {
-            // 已迁移过：确保主键干净即可
+        // 已迁移过：只确保主键干净
+        if keychain.string(for: "sideloadDSID") != nil {
             keychain.delete("dsid")
             keychain.delete("authToken")
             return
         }
         let legacyDSID = keychain.string(for: "dsid") ?? ""
         let legacyToken = keychain.string(for: "authToken") ?? ""
-        if !legacyDSID.isEmpty { keychain.set(legacyDSID, for: "sideloadDSID") }
-        if !legacyToken.isEmpty { keychain.set(legacyToken, for: "sideloadAuthToken") }
+        guard !legacyDSID.isEmpty, !legacyToken.isEmpty else { return }
+        // 有 accountName 说明是 Swift 登录产生的合法会话，保留不动
+        guard keychain.string(for: "accountName")?.isEmpty ?? true else { return }
+        keychain.set(legacyDSID, for: "sideloadDSID")
+        keychain.set(legacyToken, for: "sideloadAuthToken")
         keychain.delete("dsid")
         keychain.delete("authToken")
+        keychain.set(SessionOwner.sideload.rawValue, for: "sessionOwner")
     }
 
     func refresh() {
@@ -245,7 +252,12 @@ final class MemoryLimitSettings: ObservableObject {
         keychain.delete("sideloadAuthToken")
         keychain.delete("sessionOwner")
         keychain.delete("accountName")
+        keychain.delete("firstName")
+        keychain.delete("lastName")
         keychain.delete("isLoggedIn")
+        // 清空 AnisetteProvider 的内存缓存，否则重新登录时 provision 会读到
+        // 旧的 clientInfo/mdLu/deviceId，却从 keychain 找不到 identifier 而报 -22421。
+        AnisetteProvider.shared.reset()
         refresh()
     }
 
