@@ -6,6 +6,10 @@ import SwiftUI
 /// - 重启设备 / 关机 / 进入恢复模式：经配对文件 + LocalDevVPN 隧道的 RSD 通道
 ///   （diagnostics relay / lockdownd），需要已连接隧道。
 /// - 所有危险操作均弹确认框；恢复模式额外强调风险。
+///
+/// ⚠️ 已知坑（v0.2.104 修复）：同一视图链上不要挂两个 `.alert(item:)`——
+/// 后注册的会覆盖先注册的，导致确认弹窗不弹、点击无反应。这里统一走
+/// 单个 `alertItem` 通道（确认 / 结果两种形态）。
 struct DeviceControlView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -64,11 +68,23 @@ struct DeviceControlView: View {
         }
     }
 
-    @State private var pendingAction: DeviceAction?
+    /// 统一的 alert 通道：确认弹窗（dangerous action）或结果/错误提示。
+    private enum AlertItem: Identifiable {
+        case confirm(DeviceAction)
+        case notice(title: String, message: String)
+
+        var id: String {
+            switch self {
+            case .confirm(let action): return "confirm-\(action.id)"
+            case .notice(let title, _): return "notice-\(title)"
+            }
+        }
+    }
+
+    @State private var alertItem: AlertItem?
     @State private var isRunning = false
     @State private var runningTitle = "处理中…"
     @State private var showWebCrash = false
-    @State private var resultNotice: DeviceControlAlert?
 
     private let service = DeviceControlService.shared
 
@@ -111,11 +127,8 @@ struct DeviceControlView: View {
                     .disabled(isRunning)
             }
         }
-        .alert(item: $pendingAction) { action in
-            confirmationAlert(for: action)
-        }
-        .alert(item: $resultNotice) { notice in
-            Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("好")))
+        .alert(item: $alertItem) { item in
+            alertView(for: item)
         }
         .fullScreenCover(isPresented: $showWebCrash) {
             // 黑屏 + 压力网页：SpringBoard 被挤崩后桌面自动重启。
@@ -148,24 +161,30 @@ struct DeviceControlView: View {
         }
     }
 
-    private func confirmationAlert(for action: DeviceAction) -> Alert {
-        Alert(
-            title: Text(action.confirmTitle),
-            message: Text(action.confirmMessage),
-            primaryButton: .destructive(Text("确定")) {
-                execute(action)
-            },
-            secondaryButton: .cancel(Text("取消"))
-        )
+    private func alertView(for item: AlertItem) -> Alert {
+        switch item {
+        case .confirm(let action):
+            return Alert(
+                title: Text(action.confirmTitle),
+                message: Text(action.confirmMessage),
+                primaryButton: .destructive(Text("确定")) {
+                    execute(action)
+                },
+                secondaryButton: .cancel(Text("取消"))
+            )
+        case .notice(let title, let message):
+            return Alert(title: Text(title), message: Text(message), dismissButton: .default(Text("好")))
+        }
     }
 
     private func actionRow(_ action: DeviceAction) -> some View {
         Button {
-            pendingAction = action
+            alertItem = .confirm(action)
         } label: {
             actionRowLabel(action)
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .disabled(isRunning)
     }
 
@@ -224,7 +243,7 @@ struct DeviceControlView: View {
                 await MainActor.run {
                     self.isRunning = false
                     // 指令已送达：重启/关机/恢复模式会打断连接，无需等待回执。
-                    self.resultNotice = DeviceControlAlert(
+                    self.alertItem = .notice(
                         title: "指令已发送",
                         message: "「\(action.rawValue)」指令已送达设备，请稍候。"
                     )
@@ -232,15 +251,9 @@ struct DeviceControlView: View {
             } catch {
                 await MainActor.run {
                     self.isRunning = false
-                    self.resultNotice = DeviceControlAlert(title: "操作失败", message: error.localizedDescription)
+                    self.alertItem = .notice(title: "操作失败", message: error.localizedDescription)
                 }
             }
         }
     }
-}
-
-private struct DeviceControlAlert: Identifiable {
-    let id = UUID()
-    let title: String
-    let message: String
 }
