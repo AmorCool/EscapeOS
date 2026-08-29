@@ -246,6 +246,7 @@ final class IPAInstallService: ObservableObject {
         if rc == 0, let newSession {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
+            LoginLogger.shared.log("✓ IPA 侧载登录成功: \(teamSummary ?? "（无团队摘要）")")
             // 取出 dsid + xcode.auth token（isideload fork 暴露），供调用方
             // 持久化后免登录恢复。
             lastSessionDSID = dsidOut.map { String(cString: $0) }
@@ -254,6 +255,7 @@ final class IPAInstallService: ObservableObject {
             sessionRestoreFailed = false
         } else {
             let msg = error.map { String(cString: $0) } ?? "rc=\(rc)"
+            LoginLogger.shared.log("❌ IPA 侧载登录失败: \(msg)")
             throw makeError(msg)
         }
     }
@@ -295,11 +297,13 @@ final class IPAInstallService: ObservableObject {
         if rc == 0, let newSession {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
+            LoginLogger.shared.log("✓ IPA 侧载会话恢复成功: \(teamSummary ?? "（无团队摘要）")")
             sessionRestoreFailed = false
         } else {
             // token 失效等恢复失败：标记，下次自动登录直接走完整登录。
             sessionRestoreFailed = true
             let msg = error.map { String(cString: $0) } ?? "rc=\(rc)"
+            LoginLogger.shared.log("❌ IPA 侧载会话恢复失败: \(msg)")
             throw makeError(msg)
         }
     }

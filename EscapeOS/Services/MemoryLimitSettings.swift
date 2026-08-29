@@ -149,7 +149,7 @@ final class MemoryLimitSettings: ObservableObject {
             .replacingOccurrences(of: "http://", with: "")
     }
 
-    @AppStorage("AnisetteServer") var anisetteServer: String = "https://ani.sidestore.io"
+    @AppStorage("AnisetteServer") var anisetteServer: String = "https://ani.stikstore.app"
 
     @Published private(set) var isLoggedIn: Bool = false
     @Published private(set) var appleID: String = ""

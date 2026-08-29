@@ -643,7 +643,7 @@ struct SettingsForm: View {
     var onResetPairing: () -> Void
     @StateObject private var memorySettings = MemoryLimitSettings.shared
     @AppStorage("TunnelDeviceIP") private var tunnelIP: String = "10.7.0.1"
-    @AppStorage("AnisetteServer") private var anisetteServer: String = "https://ani.sidestore.io"
+    @AppStorage("AnisetteServer") private var anisetteServer: String = "https://ani.stikstore.app"
     @State private var shareTarget: ShareTarget?
     @State private var showNoPairingAlert = false
     @State private var showLoginSheet = false
@@ -691,15 +691,15 @@ struct SettingsForm: View {
                 }
             }
 
-            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）。默认 ani.sidestore.io，可切换 StikStore / 846969 等备用服务器。请求失败时会自动轮换重试；全部失败后会还原为你在此处选择的服务器。")) {
+            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）。默认 ani.stikstore.app，可切换 Sidestore / 846969 等备用服务器。请求失败时会自动轮换重试；全部失败后会还原为你在此处选择的服务器。")) {
                 Picker("服务器", selection: $anisetteServer) {
                     ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
                         Text(MemoryLimitSettings.host(from: server)).tag(server)
                     }
                 }
                 .pickerStyle(.menu)
-                Button("恢复默认服务器（ani.sidestore.io）") {
-                    anisetteServer = "https://ani.sidestore.io"
+                Button("恢复默认服务器（ani.stikstore.app）") {
+                    anisetteServer = "https://ani.stikstore.app"
                 }
             }
 

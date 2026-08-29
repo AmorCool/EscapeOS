@@ -20,7 +20,7 @@ final class AnisetteProvider {
         return URLSession(configuration: config)
     }()
 
-    private var url: URL? { URL(string: UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.sidestore.io") }
+    private var url: URL? { URL(string: UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.stikstore.app") }
 
     private var clientInfo: String?
     private var userAgent: String?
@@ -110,7 +110,7 @@ final class AnisetteProvider {
 
     /// 当前 Anisette 服务器地址（供日志/展示用）。
     var currentServer: String {
-        UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.sidestore.io"
+        UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.stikstore.app"
     }
 
     /// 切换到内置服务器列表中的下一个，并持久化到 `AnisetteServer`。

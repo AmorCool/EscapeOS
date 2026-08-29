@@ -48,10 +48,13 @@ jobs:
       - name: Cache Theos checkout
         # Theos itself (plus its submodules) never changes between builds, so
         # cache the whole checkout and skip the recursive clone on cache hits.
+        # scope 必须显式设置：不设时缓存按 ref（tag）隔离，新 tag 拿不到旧缓存
+        # （2026-08-30 实锤：v0.2.117 前 Theos 每次重新递归克隆 ~1-2 分钟）。
         uses: actions/cache@v4
         with:
           path: ${{ env.HOME }}/theos
           key: macos-theos-v1
+          scope: escapeos-build-cache
 
       - name: Set up Theos
         run: |
@@ -101,6 +104,8 @@ jobs:
         # Caches Cargo registry (downloaded crate sources) and the per-target
         # build dir. Key is keyed by the locked dependency graph so any change
         # to Cargo.toml/Cargo.lock invalidates the cache automatically.
+        # scope 必须显式设置：不设时缓存按 tag 隔离，新 tag 拿不到上一个 tag 的
+        # cargo 缓存，导致每轮全量下载依赖（2026-08-30 实锤：6~9 分钟）。
         uses: actions/cache@v4
         with:
           path: |
@@ -110,6 +115,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('rust/idevice-ffi/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+          scope: escapeos-build-cache
 
       - name: Install sccache
         # Rust 编译缓存（内容哈希，不受 checkout mtime 影响）。isideload 依赖树
