@@ -100,6 +100,30 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: AFCBrowserView()) {
+                    MoreCard(
+                        icon: "externaldrive.fill",
+                        title: "AFC 管理",
+                        subtitle: "通过本地隧道浏览 /var/mobile/media：下载、上传、新建目录、删除（需配对文件 + LocalDevVPN）。"
+                    )
+                }
+
+                NavigationLink(destination: CrashLogView()) {
+                    MoreCard(
+                        icon: "chart.bar.doc.horizontal",
+                        title: "崩溃分析",
+                        subtitle: "查看设备崩溃与诊断日志（对应「分析与改进」），支持批量选择导出 / 删除（需配对文件 + LocalDevVPN）。"
+                    )
+                }
+
+                NavigationLink(destination: IPCCInstallView()) {
+                    MoreCard(
+                        icon: "antenna.radiowaves.left.and.right",
+                        title: "IPCC 安装",
+                        subtitle: "导入运营商配置文件（.ipcc）安装到 Carrier Bundles Overrides，重启后生效。"
+                    )
+                }
+
                 NavigationLink(destination: DDIDownloadView()) {
                     MoreCard(
                         icon: "iphone.and.arrow.forward",

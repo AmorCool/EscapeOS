@@ -57,6 +57,9 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/DialerTheme/DialerThemeManager.swift \
 	EscapeOS/Views/DialerTheme/DialerThemeView.swift \
 	EscapeOS/Views/FileBrowserRootView.swift \
+	EscapeOS/Views/AFCBrowserView.swift \
+	EscapeOS/Views/CrashLogView.swift \
+	EscapeOS/Views/IPCCInstallView.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorModels.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorViewModel.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorView.swift \
@@ -77,6 +80,9 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/ContainerNameResolver.swift \
 	EscapeOS/Engine/FileSystemRoots.swift \
 	EscapeOS/Engine/DeviceControlService.swift \
+	EscapeOS/Engine/AFCService.swift \
+	EscapeOS/Engine/CrashLogService.swift \
+	EscapeOS/Engine/IPCCInstallService.swift \
 	EscapeOS/Engine/FileKind.swift \
 	EscapeOS/Engine/FileClipboard.swift \
 	EscapeOS/Engine/FileService.swift \
