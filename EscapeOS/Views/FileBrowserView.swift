@@ -309,7 +309,15 @@ struct FileBrowserView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(selected.contains(item.path) ? Color.accentColor.opacity(0.12) : nil)
                 } else if item.isDirectory {
-                    NavigationLink(destination: FileBrowserView(rootPath: rootPath, title: title, initialPath: item.path)) {
+                    let destination: FileBrowserView = {
+                        if vm.isContainerRoot {
+                            let displayName = vm.containerNames[item.path] ?? item.name
+                            return FileBrowserView(rootPath: item.path, title: displayName)
+                        } else {
+                            return FileBrowserView(rootPath: rootPath, title: title, initialPath: item.path)
+                        }
+                    }()
+                    NavigationLink(destination: destination) {
                         FileRow(item: item, subtitle: vm.containerNames[item.path])
                     }
                     .contentShape(Rectangle())
@@ -681,6 +689,8 @@ final class FileBrowserViewModel: ObservableObject {
 
     let rootPath: String
     let title: String
+    /// 当前根是否是「容器根」。容器根走 `bad_query_list` 枚举，不消费沙盒扩展。
+    let isContainerRoot: Bool
     private let escape = SandboxEscape()
     private let files = FileService()
 
@@ -695,6 +705,7 @@ final class FileBrowserViewModel: ObservableObject {
     init(rootPath: String, title: String, initialPath: String? = nil) {
         self.rootPath = rootPath
         self.title = title
+        self.isContainerRoot = FileSystemRoots.badQueryListRoots.contains(rootPath)
         if let initialPath = initialPath {
             self.currentPath = initialPath
         } else {
@@ -704,35 +715,79 @@ final class FileBrowserViewModel: ObservableObject {
 
     var displayTitle: String {
         let last = (currentPath as NSString).lastPathComponent
-        return last.isEmpty ? title : last
+        return currentPath == rootPath ? title : (last.isEmpty ? title : last)
     }
 
     func open(_ path: String) {
         isLoading = true
         errorMessage = nil
         currentPath = path
-        DispatchQueue.global(qos: .userInitiated).async {
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
-                let listed = try self.escape.withHandle(for: self.rootPath) { _ in
-                    try self.files.list(directory: path)
-                }
-                DispatchQueue.main.async {
+                let listed = try self.list(at: self.currentPath)
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.items = listed
                     self.isLoading = false
                     self.resolveContainerNames()
                 }
-            } catch let e as SandboxEscapeError {
-                DispatchQueue.main.async {
-                    self.errorMessage = e.localizedDescription
-                    self.isLoading = false
-                }
             } catch {
-                DispatchQueue.main.async {
-                    self.errorMessage = error.localizedDescription
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.errorMessage = self.localizedOpenError(error)
                     self.isLoading = false
                 }
             }
         }
+    }
+
+    /// 根据根路径类型选择正确的枚举方式：
+    /// - 容器根：走 `bad_query_list`，不消费沙盒扩展（与 Erosion 一致）。
+    /// - 普通根 / 容器内部：先尝试用沙盒扩展；失败时退回直接 `FileManager`。
+    private func list(at path: String) throws -> [FileItem] {
+        if isContainerRoot && path == rootPath {
+            return try files.listContainerRoot(at: path)
+        }
+        do {
+            return try escape.withHandle(for: rootPath) { _ in
+                try files.list(directory: path)
+            }
+        } catch {
+            // 部分环境（如特定 LiveContainer 扩展已覆盖的路径）不需要显式签发
+            // 就能用 FileManager 直接列出，失败时退回一次直接读取。
+            return try files.list(directory: path)
+        }
+    }
+
+    private func localizedOpenError(_ error: Error) -> String {
+        if let sandboxError = error as? SandboxEscapeError {
+            switch sandboxError {
+            case .kernelRejected:
+                if let entry = FileSystemRoots.entry(for: rootPath), entry.requiresRave {
+                    return "当前系统版本无法访问「\(entry.title)」。该目录需要 iOS 27 特定预览版（24A5355q / 24A5370h / 24A5380h / 24A5390f）才支持。"
+                }
+                return "系统拒绝为此目录签发沙盒扩展，当前环境无法访问。"
+            case .notAbsolutePath:
+                return "路径格式不正确。"
+            case .targetMissing:
+                return "目标路径不存在。"
+            case .resolveFailed:
+                return "无法解析容器管理器符号。"
+            case .queryCreateFailed:
+                return "无法创建容器查询。"
+            case .outsideSandbox:
+                return "路径不在容器管理器沙盒内。"
+            case .asprintfFailed:
+                return "内部错误：构建查询字符串失败。"
+            case .invalidHandle:
+                return "沙盒句柄已失效。"
+            case .unknown(let code):
+                return "未知沙盒错误（代码 \(code)）。"
+            }
+        }
+        return error.localizedDescription
     }
 
     /// 在容器根（如 /var/mobile/Containers/Data/Application）浏览时，把 UUID 目录
@@ -746,9 +801,10 @@ final class FileBrowserViewModel: ObservableObject {
         let paths = items.filter(\.isDirectory).map(\.path)
         guard !paths.isEmpty else { return }
         let resolver = ContainerNameResolver.shared
-        DispatchQueue.global(qos: .utility).async {
+        Task.detached(priority: .utility) { [weak self] in
             let resolved = resolver.resolveAll(containerPaths: paths)
-            DispatchQueue.main.async {
+            await MainActor.run { [weak self] in
+                guard let self else { return }
                 self.containerNames = resolved
             }
         }
@@ -798,10 +854,12 @@ final class FileBrowserViewModel: ObservableObject {
         busyTitle = "粘贴中…"
         let destDir = currentPath
         let destContainer = rootPath
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
                 try self.paste(clip, into: destDir, destContainer: destContainer)
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isPasting = false
                     if clip.mode == .cut {
                         FileClipboard.shared.clear()
@@ -809,7 +867,8 @@ final class FileBrowserViewModel: ObservableObject {
                     self.open(self.currentPath)
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isPasting = false
                     self.operationError = IdentifiedError(message: error.localizedDescription)
                 }
@@ -906,7 +965,8 @@ final class FileBrowserViewModel: ObservableObject {
         guard !urls.isEmpty else { return }
         isZipping = true
         busyTitle = urls.count == 1 ? "正在导入…" : "正在导入 \(urls.count) 项…"
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
                 try self.escape.withHandle(for: self.rootPath) { _ in
                     for url in urls {
@@ -920,12 +980,14 @@ final class FileBrowserViewModel: ObservableObject {
                         try self.files.writeFile(data: data, to: dest)
                     }
                 }
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isZipping = false
                     self.open(self.currentPath)
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isZipping = false
                     self.operationError = IdentifiedError(message: error.localizedDescription)
                 }
@@ -937,7 +999,8 @@ final class FileBrowserViewModel: ObservableObject {
         isExporting = true
         busyTitle = "准备中…"
         exportError = nil
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
                 let dest = try Self.shareStagingURL(named: Self.shareName(for: item))
                 try self.escape.withHandle(for: self.rootPath) { _ in
@@ -956,12 +1019,14 @@ final class FileBrowserViewModel: ObservableObject {
                         try data.write(to: dest, options: .atomic)
                     }
                 }
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isExporting = false
                     self.sharePayload = SharePayload(url: dest)
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isExporting = false
                     self.exportError = IdentifiedError(message: error.localizedDescription)
                 }
@@ -974,7 +1039,8 @@ final class FileBrowserViewModel: ObservableObject {
         isZipping = true
         busyTitle = items.count == 1 ? "正在压缩…" : "正在压缩 \(items.count) 项…"
         operationError = nil
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
                 let destPath: String = try self.escape.withHandle(for: self.rootPath) { _ in
                     let dest = self.files.uniqueDestination(
@@ -993,14 +1059,16 @@ final class FileBrowserViewModel: ObservableObject {
                     }
                     return dest
                 }
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isZipping = false
                     let name = (destPath as NSString).lastPathComponent
                     CopyFeedback.shared.show("已创建「\(name)」")
                     self.open(self.currentPath)
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isZipping = false
                     self.operationError = IdentifiedError(message: error.localizedDescription)
                 }
@@ -1018,7 +1086,8 @@ final class FileBrowserViewModel: ObservableObject {
         isZipping = true
         busyTitle = "正在解压…"
         operationError = nil
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
                 let destName: String = try self.escape.withHandle(for: self.rootPath) { _ in
                     let bytes = try self.files.readFile(at: item.path)
@@ -1045,26 +1114,30 @@ final class FileBrowserViewModel: ObservableObject {
                     }
                     return (dest as NSString).lastPathComponent
                 }
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isZipping = false
                     self.clearUnzipPasswordPrompt()
                     CopyFeedback.shared.show("已解压到「\(destName)」")
                     self.open(self.currentPath)
                 }
             } catch ZipReaderError.passwordRequired {
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isZipping = false
                     self.unzipPasswordMessage = "该压缩包已加密，请输入密码后解压。"
                     self.unzipPasswordItem = item
                 }
             } catch ZipReaderError.wrongPassword {
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isZipping = false
                     self.unzipPasswordMessage = "密码错误，请重试。"
                     self.unzipPasswordItem = item
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.isZipping = false
                     self.operationError = IdentifiedError(message: error.localizedDescription)
                 }
@@ -1105,16 +1178,19 @@ final class FileBrowserViewModel: ObservableObject {
     }
 
     private func mutate(_ body: @escaping () throws -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
                 try self.escape.withHandle(for: self.rootPath) { _ in
                     try body()
                 }
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.open(self.currentPath)
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
                     self.operationError = IdentifiedError(message: error.localizedDescription)
                 }
             }

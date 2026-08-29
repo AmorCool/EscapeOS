@@ -28,7 +28,11 @@ struct FileBrowserRootView: View {
             } header: {
                 Text("系统目录")
             } footer: {
-                Text("读取与修改这些目录需要 bad_query 沙盒逃逸（iOS 26.0–26.6.1）。进入后如果提示签发失败，说明当前系统版本无法访问该路径。")
+                if FileSystemRoots.isRaveSupported {
+                    Text("应用数据 / 守护进程 / App 插件 / .app 包通过 bad_query_list 枚举；App Group / System App Data / SystemGroup 需要 iOS 27 特定预览版。")
+                } else {
+                    Text("当前系统版本仅支持「应用数据 / 守护进程 / App 插件 / .app 包」。App Group / System App Data / SystemGroup 需要 iOS 27 特定预览版（24A5355q / 24A5370h / 24A5380h / 24A5390f）。")
+                }
             }
 
             Section {

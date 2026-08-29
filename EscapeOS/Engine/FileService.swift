@@ -74,17 +74,32 @@ final class FileService {
         }
 
         let names = Self.entryNames(at: path)
+        return try buildFileItems(names: names, basePath: path, fallbackKind: .other)
+    }
 
+    /// 容器根目录专用枚举。
+    ///
+    /// 与 `list(directory:)` 不同，这里不先检查 `isDirectory`，也不依赖
+    /// `FileManager.contentsOfDirectory` —— 在 LiveContainer 访客沙盒下，
+    /// 后者对跨容器路径会被裁剪。这里直接用 `bad_query_list` 做 inode 扫描，
+    /// 再用 `FileManager` 取属性；属性取不到时仍然保留条目，让用户至少能看到
+    /// 目录存在。这是 Erosion 原版的实现方式。
+    func listContainerRoot(at path: String) throws -> [FileItem] {
+        let names = BadQueryLister.entryNames(at: path)
+        return try buildFileItems(names: names, basePath: path, fallbackKind: .directory)
+    }
+
+    private func buildFileItems(names: [String], basePath: String, fallbackKind: FileItem.Kind) throws -> [FileItem] {
         var items: [FileItem] = []
         for name in names {
-            let full = (path as NSString).appendingPathComponent(name)
+            let full = (basePath as NSString).appendingPathComponent(name)
             // 属性查不到时仍保留该条目（回退枚举出来的路径上 lstat 可能失败），
             // 至少让用户看到文件存在，而不是整个目录显示为空。
             guard let attrs = try? fm.attributesOfItem(atPath: full) else {
                 items.append(FileItem(
                     name: name,
                     path: full,
-                    kind: .other,
+                    kind: fallbackKind,
                     size: 0,
                     modified: nil,
                     isReadable: false,
