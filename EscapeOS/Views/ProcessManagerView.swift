@@ -371,24 +371,24 @@ final class ProcessManagerViewModel: ObservableObject {
 
     /// SIGKILL 二次验证：1.5 秒后重新枚举进程，若目标 PID 仍在则如实提示
     /// （进程受保护 / 前台 App 被 SpringBoard 自动拉起 / 权限不足）。
+    /// 注意：@MainActor 类内 `Task { }` 继承主线程隔离，self 非 Optional，
+    /// 用 `[self]` 强捕获（v0.2.105 编译修复）。
     private func verifyKill(_ targetPID: Int) {
         killVerifyTask?.cancel()
-        killVerifyTask = Task { [weak self] in
+        killVerifyTask = Task { [self] in
             try? await Task.sleep(for: .seconds(1.5))
-            guard let self else { return }
+            guard !Task.isCancelled else { return }
             let stillAlive = await Task.detached(priority: .utility) {
                 (try? ProcessManagerService.shared.listProcesses())?
                     .contains { $0.pid == targetPID } ?? false
             }.value
-            await MainActor.run {
-                guard let self, !Task.isCancelled else { return }
-                self.killVerifyTask = nil
-                self.refresh()
-                if stillAlive {
-                    self.actionAlertTitle = "进程可能仍在运行"
-                    self.actionAlertMessage = "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中。常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足。"
-                    self.showActionAlert = true
-                }
+            guard !Task.isCancelled else { return }
+            self.killVerifyTask = nil
+            self.refresh()
+            if stillAlive {
+                self.actionAlertTitle = "进程可能仍在运行"
+                self.actionAlertMessage = "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中。常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足。"
+                self.showActionAlert = true
             }
         }
     }
