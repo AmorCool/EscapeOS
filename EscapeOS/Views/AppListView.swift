@@ -73,22 +73,20 @@ final class AppListViewModel: ObservableObject {
         }
     }
 
-    /// 加载失败后自动重试（v0.2.106 优化版）：
-    /// - 间隔 4 秒，避免隧道风暴；
-    /// - 重试前先探测 LocalDevVPN 隧道端口（49152）是否可达，不可达直接等下一轮
-    ///   （不再反复建隧道 → 减少「反复刷新没连上」与 ServiceNotFound 竞争）；
+    /// 加载失败后自动重试（v0.2.107 修正）：
+    /// - 间隔 3 秒**直接重试**。v0.2.106 的「端口可达预检」在部分环境误判导致
+    ///   永不重试（LocalDevVPN 刚开启时隧道端口瞬时不可达/探测地址不符，
+    ///   RSD tunnel_create_rppairing 自带 3 次重试，直接重试更可靠）；
     /// - 配对文件缺失（needsPairing）时不重试。
     private func scheduleAutoRetry() {
         guard retryTask == nil else { return }
         retryTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(3))
                 guard let self, !Task.isCancelled else { break }
                 await MainActor.run {
                     guard !Task.isCancelled else { return }
                     self.retryTask = nil
-                    // 隧道不可达：等待下一轮（不闪断页面）。
-                    if !LocalDevVPN.isTunnelReachable() { return }
                     self.reload()
                 }
             }

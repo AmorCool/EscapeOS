@@ -563,6 +563,11 @@ struct IPAInstallView: View {
                     try await Task.detached(priority: .userInitiated) {
                         try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: anisetteURL)
                     }.value
+                    // 登录成功 → 凭据同步到「更多 → 设置」的 Apple ID 存储
+                    // （v0.2.107）：下次进 IPA 页自动登录可免手动输入；
+                    // dsid/authToken 由设置里的 Apple 认证引擎登录保存，
+                    // 用于 App 重启后的免 2FA 会话恢复。
+                    MemoryLimitSettings.shared.signIn(email: id, password: pw)
                 }
                 // 2. 签名
                 step = .signing

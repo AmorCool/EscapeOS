@@ -132,9 +132,6 @@ struct DeviceControlView: View {
         }
         .fullScreenCover(isPresented: $showWebCrash) {
             // 黑屏 + 压力网页：SpringBoard 被挤崩后桌面自动重启。
-            // v0.2.106：回退 v0.2.104 样式（WKWebView 白底默认 + 底部提示条），
-            // 去掉黑化——用户实测黑化后不好使；「左上角正方形虚线框」已通过
-            // iframe border:0 修复（见 RespringView）。
             RespringView()
                 .ignoresSafeArea()
                 .overlay(alignment: .bottom) {

@@ -370,10 +370,11 @@ final class ProcessManagerViewModel: ObservableObject {    @Published private(se
         }
     }
 
-    /// SIGKILL 二次验证：1.5 秒后重新枚举进程，若目标 PID 仍在则如实提示
-    /// （进程受保护 / 前台 App 被 SpringBoard 自动拉起 / 权限不足）。
+    /// SIGKILL 最终复核（v0.2.107）：1.5 秒后重新枚举进程，**无论结果如何都弹
+    /// 一个结论**——目标 PID 消失 → 「进程已结束」；仍在 → 「进程可能仍在运行」
+    /// （受保护 / 前台 App 被 SpringBoard 拉起 / 权限不足）。
     /// 注意：@MainActor 类内 `Task { }` 继承主线程隔离，self 非 Optional，
-    /// 用 `[self]` 强捕获（v0.2.105 编译修复）。
+    /// 用 `[self]` 强捕获。
     private func verifyKill(_ targetPID: Int) {
         killVerifyTask?.cancel()
         killVerifyTask = Task { [self] in
@@ -388,6 +389,8 @@ final class ProcessManagerViewModel: ObservableObject {    @Published private(se
             self.refresh()
             if stillAlive {
                 self.alertItem = ProcessAlert(title: "进程可能仍在运行", message: "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中。常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足。")
+            } else {
+                self.alertItem = ProcessAlert(title: "进程已结束", message: "PID \(targetPID) 已确认从进程列表中消失。")
             }
         }
     }
@@ -421,13 +424,14 @@ final class ProcessManagerViewModel: ObservableObject {    @Published private(se
                     self.controlTimeoutTask = nil
                     guard self.activeControlState?.pid == targetPID && self.activeControlState?.action == action else { return }
                     self.activeControlState = nil
-                    self.alertItem = ProcessAlert(title: action.successTitle, message: action.successMessage(for: targetPID))
                     self.refresh()
-                    // SIGKILL 二次验证：稍等后刷新列表，确认目标 PID 是否真的消失。
-                    // 前台 App 被 kill 后可能被 SpringBoard 立即拉起；系统关键进程
-                    // 可能受保护 —— 这些情况如实告知，避免"点了没用"的困惑（v0.2.105）。
                     if action == .kill {
+                        // SIGKILL：不立即弹成功，等 1.5 秒复核结果后给**一个**最终
+                        // 结论弹窗（已结束 / 可能仍在运行），保证一定有反馈
+                        // （v0.2.107：避免成功弹窗被复核弹窗覆盖导致用户看不到）。
                         self.verifyKill(targetPID)
+                    } else {
+                        self.alertItem = ProcessAlert(title: action.successTitle, message: action.successMessage(for: targetPID))
                     }
                 }
             } catch {
