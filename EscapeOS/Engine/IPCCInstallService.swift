@@ -1,56 +1,25 @@
 import Foundation
 
-/// IPCC 安装服务 —— **爱思助手同款官方通道**（v0.2.127 重写）。
+/// IPCC 安装服务 —— **爱思助手「更新 IPCC」同款通道**（v0.2.128）。
 ///
-/// 原理（参考 IPCCInstaller 逆向分析报告 + 爱思助手行为）：
-/// 1. 把 .ipcc 经 AFC 隧道（RSD，根=/var/mobile/media）上传到
-///    `/var/mobile/Media/PublicStaging/`（系统守护进程可见的公共中转目录，
-///    正好在 AFC 根内 —— 不需要任何系统权限）；
-/// 2. 进程内 dlopen CoreTelephony，调私有 C API
-///    `_CTServerConnectionCreate` + `_CTServerConnectionInstallCarrierBundle`
-///    把**绝对路径字符串**交给 CommCenter（root 守护进程）；
-/// 3. CommCenter 完成解包 / 校验 / 写入运营商配置区并触发重载 ——
-///    与 iTunes / Finder / 爱思"更新 IPCC"是同一套系统安装管线。
+/// 链路（与 ideviceinstaller / 爱思助手一致，无需越狱、无需系统级 entitlement）：
+/// 1. AFC 隧道（RSD，根 = /var/mobile/media）把 .ipcc 上传到
+///    `/PublicStaging/xxx.ipcc` —— AFC jail 内，installd / CommCenter 可读；
+/// 2. `installation_proxy` 服务的 `Install` 命令，
+///    `ClientOptions = { PackageType: "CarrierBundle" }`（.ipa 是 `Developer`），
+///    `PackagePath` 指向刚上传的路径；
+/// 3. installd → CommCenter 完成解包 / 校验 / 写入运营商配置区并广播变更。
 ///
-/// 这就是爱思在电脑端做的事（usbmuxd → lockdownd 配对 → 运营商配置更新服务），
-/// 我们设备端 App 扮演"配对主机"，用 RSD 隧道完成同样的上传 + 触发。
+/// 爱思在电脑端做的事（usbmuxd → lockdownd 配对 → installation_proxy），
+/// 我们设备端 App 扮演"配对主机"，用同一条 RSD 隧道完成同样的上传 + 命令。
 ///
-/// ⚠️ CommCenter 侧会校验调用方的签名权限；EscapeSpace 当前仅有
-/// `get-task-allow`。若被拒绝，错误码会明确告诉我们缺什么。
+/// 与巨魔 IPCCInstaller 的区别：那个是设备端直接调 CoreTelephony 私有 API
+/// （`_CTServerConnectionInstallCarrierBundle`），需要 CoreTrust 授予的系统级
+/// entitlement —— **不是我们的路子**。
 final class IPCCInstallService {
 
     static let shared = IPCCInstallService()
     private init() {}
-
-    private let afc = AFCService.shared
-
-    /// CommCenter 中转目录（AFC 相对路径，= /var/mobile/media/PublicStaging）。
-    static let stagingAFCPath = "PublicStaging"
-    /// 传给 CoreTelephony 的绝对路径前缀。
-    static let stagingAbsolutePath = "/private/var/mobile/Media/PublicStaging"
-
-    // MARK: - CoreTelephony 私有 C API（dlopen + dlsym）
-
-    private let coreTelephonyHandle: UnsafeMutableRawPointer? = {
-        dlopen("/System/Library/Frameworks/CoreTelephony.framework/CoreTelephony", RTLD_NOW)
-    }()
-
-    private typealias CTServerConnectionCreateFn =
-        @convention(c) (CFAllocator?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> OpaquePointer?
-    private typealias CTServerConnectionInstallCarrierBundleFn =
-        @convention(c) (OpaquePointer?, CFString?) -> Int32
-
-    private var createConnection: CTServerConnectionCreateFn? {
-        guard let handle = coreTelephonyHandle,
-              let sym = dlsym(handle, "_CTServerConnectionCreate") else { return nil }
-        return unsafeBitCast(sym, to: CTServerConnectionCreateFn.self)
-    }
-
-    private var installCarrierBundle: CTServerConnectionInstallCarrierBundleFn? {
-        guard let handle = coreTelephonyHandle,
-              let sym = dlsym(handle, "_CTServerConnectionInstallCarrierBundle") else { return nil }
-        return unsafeBitCast(sym, to: CTServerConnectionInstallCarrierBundleFn.self)
-    }
 
     /// 解析 .ipcc 得到的包信息。
     struct ParsedIPCC {
@@ -145,59 +114,28 @@ final class IPCCInstallService {
         return ParsedIPCC(bundleName: bundleName, identifier: identifier, version: version, prefix: prefix)
     }
 
-    // MARK: - 安装（AFC 上传 + CommCenter 官方通道）
+    // MARK: - 安装（爱思同款：installation_proxy + PackageType=CarrierBundle）
 
     /// 安装 .ipcc。
-    /// 1. 经 AFC 隧道上传到 `/var/mobile/Media/PublicStaging/`；
-    /// 2. 调 `_CTServerConnectionInstallCarrierBundle` 交给 CommCenter；
-    /// 3. 返回 0 = 已受理（CommCenter 后台解包/校验/安装，需重启或等通知生效）。
+    /// 1. 经 AFC 隧道上传到 `/PublicStaging/`（AFC jail，installd/CommCenter 可读）；
+    /// 2. `installation_proxy` 的 Install 命令 + `PackageType=CarrierBundle`
+    ///    （ideviceinstaller / 爱思助手安装 .ipcc 的标准做法）；
+    /// 3. installd → CommCenter 完成解包 / 校验 / 写入运营商配置区并触发重载。
     func install(ipccURL: URL) throws -> String {
         let parsed = try parse(ipccURL: ipccURL)
-        let data = try Data(contentsOf: ipccURL)
-        let name = ipccURL.lastPathComponent
-
-        // 1. AFC 上传到 PublicStaging（media 内，隧道直达，无系统权限要求）
-        let remotePath = Self.stagingAFCPath + "/" + name
         do {
-            try afc.batch { client in
-                _ = Self.stagingAFCPath.withCString { afc_make_directory(client, $0) }
-            }
-            // 清掉同名残留再传（爱思同款：先 remove 再 copy）
-            try? afc.removePath(remotePath)
-            try afc.writeFile(data, to: remotePath)
+            try IPAInstallService.shared.installIPCC(ipccURL.path)
+            let detail = "已通过 installation_proxy 安装（PackageType=CarrierBundle）"
+            appendRecord(InstallRecord(fileName: ipccURL.lastPathComponent,
+                                       bundleName: parsed.bundleName,
+                                       date: Date(), success: true, detail: detail))
+            return parsed.bundleName
         } catch {
-            appendRecord(InstallRecord(fileName: name, bundleName: parsed.bundleName,
-                                       date: Date(), success: false, detail: "上传失败：\(error.localizedDescription)"))
+            appendRecord(InstallRecord(fileName: ipccURL.lastPathComponent,
+                                       bundleName: parsed.bundleName,
+                                       date: Date(), success: false,
+                                       detail: "安装失败：\(error.localizedDescription)"))
             throw error
-        }
-
-        // 2. 调 CoreTelephony 私有 API，触发 CommCenter 安装
-        guard let create = createConnection, let install = installCarrierBundle else {
-            let msg = "无法加载 CoreTelephony 私有 API"
-            appendRecord(InstallRecord(fileName: name, bundleName: parsed.bundleName,
-                                       date: Date(), success: false, detail: msg))
-            throw makeError(msg)
-        }
-        guard let conn = create(kCFAllocatorDefault, nil, nil) else {
-            let msg = "创建 CTServerConnection 失败"
-            appendRecord(InstallRecord(fileName: name, bundleName: parsed.bundleName,
-                                       date: Date(), success: false, detail: msg))
-            throw makeError(msg)
-        }
-
-        let absolute = Self.stagingAbsolutePath + "/" + name
-        let ret = install(conn, absolute as CFString)
-        if ret == 0 {
-            appendRecord(InstallRecord(fileName: name, bundleName: parsed.bundleName,
-                                       date: Date(), success: true,
-                                       detail: "已交给 CommCenter 安装（\(absolute)）"))
-            return absolute
-        } else {
-            let msg = "CommCenter 拒绝安装（错误码 \(ret)）。该服务会校验调用方签名权限，"
-                + "EscapeSpace 当前只有 get-task-allow，可能需要额外的系统级 entitlement。"
-            appendRecord(InstallRecord(fileName: name, bundleName: parsed.bundleName,
-                                       date: Date(), success: false, detail: msg))
-            throw makeError(msg)
         }
     }
 }

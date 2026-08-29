@@ -1,11 +1,14 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 铃声管理：经 RSD 隧道（AFC）访问设备铃声目录，
-/// 支持用户铃声的导入 / 导出 / 删除，以及系统提示音的提取 / 导出 / 刷新。
+/// 铃声管理：经 RSD 隧道（AFC）管理 /var/mobile/media 内的铃声文件，
+/// 支持导入 / 导出 / 删除 / 刷新。
+///
+/// ⚠️ 硬限制说明（页面 footer 会展示）：系统铃声库
+/// /var/mobile/Library/Ringtones 在 AFC 根（= /var/mobile/media）之外，
+/// 隧道不可达，因此只能管理媒体目录内的铃声文件。
 struct RingtonesView: View {
-    @State private var userRingtones: [RingtonesService.Entry] = []
-    @State private var systemSounds: [RingtonesService.Entry] = []
+    @State private var ringtones: [RingtonesService.Entry] = []
     @State private var loading = false
     @State private var errorMessage: String?
     @State private var busy = false
@@ -21,6 +24,7 @@ struct RingtonesView: View {
             if let errorMessage {
                 Section {
                     Text(errorMessage)
+                        .font(.footnote)
                         .foregroundColor(.red)
                     Button("重试") { reload() }
                 }
@@ -30,14 +34,19 @@ struct RingtonesView: View {
                 if loading {
                     HStack {
                         ProgressView().controlSize(.small)
-                        Text("正在连接 AFC 服务…")
+                        Text("正在扫描铃声…")
                             .foregroundColor(.secondary)
                     }
-                } else if userRingtones.isEmpty {
-                    Text("没有用户铃声")
-                        .foregroundColor(.secondary)
+                } else if ringtones.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("没有找到铃声文件")
+                            .foregroundColor(.secondary)
+                        Text("点右上角导入 .m4r / .caf 铃声；已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 } else {
-                    ForEach(userRingtones) { entry in
+                    ForEach(ringtones) { entry in
                         row(entry)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
@@ -49,30 +58,9 @@ struct RingtonesView: View {
                     }
                 }
             } header: {
-                Text("用户铃声（/var/mobile/Library/Ringtones）")
+                Text("铃声（/var/mobile/media）")
             } footer: {
-                Text("导入 .m4r / .caf 铃声文件；点击条目可导出；滑动删除。删除后系统铃声列表需重启后刷新。")
-            }
-
-            Section {
-                if loading {
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text("正在加载…")
-                            .foregroundColor(.secondary)
-                    }
-                } else if systemSounds.isEmpty {
-                    Text("没有可提取的提示音")
-                        .foregroundColor(.secondary)
-                } else {
-                    ForEach(systemSounds) { entry in
-                        row(entry)
-                    }
-                }
-            } header: {
-                Text("系统提示音（/System/Library/Audio/UISounds）")
-            } footer: {
-                Text("只读目录。点击条目提取（下载）到 App 的 Ringtones 目录，文件 App 可见。")
+                Text("系统铃声库 /var/mobile/Library/Ringtones 在 AFC 根目录之外，隧道无法访问；本页管理的是媒体目录内的铃声文件，导入后可用「文件 App → 存储到 iPhone」再经库乐队/系统设置使用。")
             }
         }
         .listStyle(.insetGrouped)
@@ -115,8 +103,8 @@ struct RingtonesView: View {
         } message: {
             Text("删除后无法恢复。")
         }
-        .sheet(item: $shareItem) { url in
-            ActivityView(items: [url])
+        .sheet(item: $shareItem) { item in
+            ActivityView(items: [item.url])
         }
         .overlay {
             if busy {
@@ -148,7 +136,7 @@ struct RingtonesView: View {
             }
         }
         .onAppear {
-            if userRingtones.isEmpty && systemSounds.isEmpty && errorMessage == nil {
+            if ringtones.isEmpty && errorMessage == nil {
                 reload()
             }
         }
@@ -162,9 +150,15 @@ struct RingtonesView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name)
                     .font(.subheadline)
-                Text(ByteCountFormatter.string(fromByteCount: entry.size, countStyle: .file))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(ByteCountFormatter.string(fromByteCount: entry.size, countStyle: .file))
+                    Text((entry.path as NSString).deletingLastPathComponent)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
             Spacer()
             Image(systemName: "square.and.arrow.up")
@@ -185,11 +179,9 @@ struct RingtonesView: View {
         errorMessage = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let users = try service.listUserRingtones()
-                let sounds = try service.listSystemSounds()
+                let list = try service.listUserRingtones()
                 DispatchQueue.main.async {
-                    userRingtones = users
-                    systemSounds = sounds
+                    ringtones = list
                     loading = false
                 }
             } catch {
@@ -221,19 +213,12 @@ struct RingtonesView: View {
         }
     }
 
-    /// 导出 / 提取：下载到本地后弹系统分享面板。
-    /// 用户铃声走 AFC 隧道路径，系统提示音走 bad_query 路径（已授权），
-    /// 按 path 前缀区分。
+    /// 导出：下载到本地后弹系统分享面板。
     private func export(_ entry: RingtonesService.Entry) {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let local: String
-                if entry.path.hasPrefix(RingtonesService.systemSoundsRoot) {
-                    local = try service.downloadSystemSound(path: entry.path)
-                } else {
-                    local = try service.download(path: entry.path)
-                }
+                let local = try service.download(path: entry.path)
                 DispatchQueue.main.async {
                     busy = false
                     shareItem = ShareURL(url: URL(fileURLWithPath: local))

@@ -514,6 +514,70 @@ final class IPAInstallService: ObservableObject {
         }
     }
 
+    /// **IPCC（运营商包）安装 —— 爱思助手「更新 IPCC」同一条通道**（v0.2.128）。
+    ///
+    /// 链路（与 ideviceinstaller / 爱思一致）：
+    /// 1. AFC 隧道把 .ipcc 上传到 `/PublicStaging/xxx.ipcc`（AFC jail 内，
+    ///    installd / CommCenter 可读）；
+    /// 2. `installation_proxy` 的 `Install` 命令，
+    ///    **ClientOptions = { PackageType: "CarrierBundle" }**，
+    ///    `PackagePath` 指向刚才上传的路径；
+    /// 3. installd 交给 CommCenter 完成解包 / 校验 / 写入运营商配置区。
+    ///
+    /// 与 `.ipa` 安装的唯一区别是 `PackageType`（ipa = `Developer`）。
+    /// 不需要 CoreTelephony 私有 API，也不需要额外 entitlement。
+    func installIPCC(_ localPath: String, progress: ((Double) -> Void)? = nil) throws {
+        var tunnel = try createTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw makeError("隧道未建立")
+        }
+
+        var afc: OpaquePointer?
+        if let ffiError = afc_client_connect_rsd(adapter, handshake, &afc) {
+            throw error(from: ffiError, fallback: "连接 AFC 失败")
+        }
+        guard let afc else { throw makeError("AFC 客户端为空") }
+        defer { afc_client_free(afc) }
+
+        let name = (localPath as NSString).lastPathComponent
+        let remotePath = "/PublicStaging/\(name)"
+        // 先清同名残留（爱思/ideviceinstaller 同款：remove 再 copy）
+        _ = remotePath.withCString { afc_remove_path_and_contents(afc, $0) }
+        try uploadFile(afc, localPath: localPath, remotePath: remotePath)
+
+        var ip: OpaquePointer?
+        if let ffiError = installation_proxy_connect_rsd(adapter, handshake, &ip) {
+            throw error(from: ffiError, fallback: "连接安装代理失败")
+        }
+        guard let ip else { throw makeError("安装代理客户端为空") }
+        defer { installation_proxy_client_free(ip) }
+
+        // PackageType: CarrierBundle —— 让 installd 按运营商包处理（.ipcc）
+        guard let options: plist_t = plist_new_dict() else {
+            throw makeError("构建安装选项失败")
+        }
+        defer { plist_free(options) }
+        if let packageType = plist_new_string("CarrierBundle") {
+            plist_dict_set_item(options, "PackageType", packageType)
+        }
+
+        installProgressHandler = progress
+        let progressCallback: @convention(c) (UInt64, UnsafeMutableRawPointer?) -> Void = { value, ctx in
+            let current = Double(value) / 100.0
+            DispatchQueue.main.async {
+                IPAInstallService.shared.installProgressHandler?(current)
+            }
+        }
+
+        let installErr = remotePath.withCString { p in
+            installation_proxy_install_with_callback(ip, p, options, progressCallback, nil)
+        }
+        if let installErr {
+            throw error(from: installErr, fallback: "IPCC 安装失败")
+        }
+    }
+
     private var installProgressHandler: ((Double) -> Void)?
 
     /// 递归上传目录（映射读，避免大二进制撑爆内存）。

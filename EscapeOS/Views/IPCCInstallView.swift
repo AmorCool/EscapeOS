@@ -115,10 +115,10 @@ struct IPCCInstallView: View {
             guard let url = urls.first else { return }
             parse(url: url)
         }
-        .alert("已受理", isPresented: $showRespringHint) {
+        .alert("已提交安装", isPresented: $showRespringHint) {
             Button("好的") {}
         } message: {
-            Text("运营商包已交给 CommCenter 安装。建议重启设备（或「更多 → 设备控制 → 重启 SpringBoard」）后查看生效情况。")
+            Text("已通过 installation_proxy（PackageType=CarrierBundle）交给系统安装，与爱思助手「更新 IPCC」同一条通道。建议重启设备（或「更多 → 设备控制 → 重启 SpringBoard」）后查看生效情况。")
         }
         .overlay(alignment: .bottom) {
             if let toast {

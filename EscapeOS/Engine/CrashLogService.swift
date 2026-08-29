@@ -155,6 +155,9 @@ final class CrashLogService {
         }
     }
 
+    /// v0.2.128：改为 1MB 分块 `afc_file_read`。
+    /// `afc_file_read_entire` 在导出时返回 Afc(UnknownError)，分块读更稳，
+    /// 且失败时能带上"已读多少字节"便于定位。
     private func pullInternal(client: OpaquePointer, path: String) throws -> Data {
         var handle: OpaquePointer?
         if let ffiError = path.withCString({ afc_file_open(client, $0, AfcRdOnly, &handle) }) {
@@ -163,16 +166,23 @@ final class CrashLogService {
         guard let handle else { throw makeError("打开日志失败：\(path)") }
         defer { afc_file_close(handle) }
 
-        var data: UnsafeMutablePointer<UInt8>?
-        var length = 0
-        if let ffiError = afc_file_read_entire(handle, &data, &length) {
-            throw error(from: ffiError, fallback: "读取日志失败：\(path)")
+        var result = Data()
+        let chunkSize = 1 << 20
+        while true {
+            var buffer: UnsafeMutablePointer<UInt8>?
+            var got = 0
+            if let ffiError = afc_file_read(handle, &buffer, chunkSize, &got) {
+                throw error(from: ffiError,
+                            fallback: "读取日志失败（已读 \(result.count) 字节）：\(path)")
+            }
+            defer {
+                if let buffer { afc_file_read_data_free(buffer, got) }
+            }
+            guard let buffer, got > 0 else { break }
+            result.append(Data(bytes: buffer, count: got))
+            if got < chunkSize { break }
         }
-        defer {
-            if let data { afc_file_read_data_free(data, length) }
-        }
-        guard let data else { return Data() }
-        return Data(bytes: data, count: length)
+        return result
     }
 
     /// 拉取日志文件内容（.ips 是 JSON 文本）。
