@@ -194,7 +194,9 @@ final class AFCService {
                         path: full,
                         isDirectory: isDir,
                         size: Int64(info?.size ?? 0),
-                        modified: info?.modified.flatMap { Date(timeIntervalSince1970: TimeInterval($0)) }
+                        // 注意：`info?.modified.flatMap` 会被 optional chaining 当作
+                        // 链内调用（Int64 没有 flatMap → 编译错），必须用 map。
+                        modified: info.map { Date(timeIntervalSince1970: TimeInterval($0.modified)) }
                     ))
                 }
                 return result.sorted {
