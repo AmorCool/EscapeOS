@@ -500,6 +500,9 @@ struct IPAInstallView: View {
     /// 2) 恢复失败（token 过期等）才回退用邮箱+密码完整登录（可能弹 2FA）。
     private func autoSignInWithSavedCredentials() {
         guard !service.isSignedIn, !isRunning else { return }
+        // warmUp（App 启动后台恢复）正在执行：不重复联网，等它完成——
+        // 完成时 @Published isSignedIn 变化会自动刷新页面（v0.2.106 去重）。
+        guard !service.isWarmingUp else { return }
         let settings = MemoryLimitSettings.shared
         guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
         let id = settings.appleID

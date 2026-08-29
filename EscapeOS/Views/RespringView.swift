@@ -12,7 +12,9 @@ let respringDocument = """
 <html>
     <body>
         <!--  big credit to @neonmodder123  -->
-        <iframe id="frame" srcdoc="" sandbox="allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-presentation allow-scripts"></iframe>
+        <!-- iframe 无边框 + 铺满视口：默认边框就是用户看到的「左上角正方形虚线框」
+             （v0.2.106 修复）。 -->
+        <iframe id="frame" srcdoc="" style="border:0; position:fixed; top:0; left:0; width:100vw; height:100vh;" sandbox="allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-presentation allow-scripts"></iframe>
         <script>
             const frame = document.getElementById('frame');
             const respringScript = `
@@ -49,11 +51,6 @@ struct RespringView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let webView = WKWebView()
         WKWebpagePreferences().allowsContentJavaScript = true
-        // 黑化：网页崩溃场景整屏应呈黑色（等待 SpringBoard 被挤崩），
-        // 避免加载前露出白色空白 / 系统占位框（v0.2.105 视觉优化）。
-        webView.backgroundColor = .black
-        webView.isOpaque = false
-        webView.scrollView.backgroundColor = .black
         return webView
     }
 

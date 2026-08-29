@@ -80,6 +80,10 @@ final class IPAInstallService: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: Self.sessionRestoreFailedKey) }
     }
 
+    /// App 启动后台预热（warmUp）正在执行中。页面自动登录据此**去重**，
+    /// 避免 warmUp 与页面自动登录重复联网（v0.2.106 优化「每次几十秒」）。
+    @Published private(set) var isWarmingUp = false
+
     private static let sessionRestoreFailedKey = "ipaSessionRestoreFailed"
 
     private(set) var session: OpaquePointer? {
@@ -249,9 +253,12 @@ final class IPAInstallService: ObservableObject {
         guard !isSignedIn, !sessionRestoreFailed else { return }
         guard let dsid = settings.dsid, let authToken = settings.authToken,
               !dsid.isEmpty, !authToken.isEmpty else { return }
+        guard !isWarmingUp else { return }
         let id = settings.appleID
         let ani = settings.anisetteServer
+        isWarmingUp = true
         Task.detached(priority: .utility) { [weak self] in
+            defer { Task { @MainActor in self?.isWarmingUp = false } }
             guard let self else { return }
             do {
                 try self.signInWithSession(email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)

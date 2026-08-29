@@ -35,6 +35,34 @@ enum LocalDevVPN {
         return addresses.contains { $0.hasPrefix(prefix) }
     }
 
+    /// 探测隧道端口（49152，RPPairing 服务）是否可达（1 秒超时）。
+    /// 用于自动重试前的预检：隧道未起时不建 RSD 隧道，避免反复失败
+    /// 与 ServiceNotFound 竞争（v0.2.106）。
+    static func isTunnelReachable() -> Bool {
+        let ip = targetIP
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(49152).bigEndian
+        let parseResult = ip.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+        guard parseResult == 1 else { return false }
+
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+
+        // 连接超时 1 秒。
+        var tv = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
+
+        let result = withUnsafePointer(to: &addr) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.stride))
+            }
+        }
+        return result == 0
+    }
+
     static func openInstalled() {
         UIApplication.shared.open(enableURL)
     }

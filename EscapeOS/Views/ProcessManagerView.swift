@@ -20,6 +20,13 @@ import Darwin
 
 // MARK: - 进程模型
 
+/// 统一的提示弹窗数据（v0.2.106：替代原先双 alert 通道）。
+struct ProcessAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
 struct ProcessEntry: Identifiable {
     let pid: Int
     let executablePath: String
@@ -291,17 +298,13 @@ final class ProcessManagerService {
 // MARK: - 视图模型
 
 @MainActor
-final class ProcessManagerViewModel: ObservableObject {
-    @Published private(set) var processes: [ProcessEntry] = []
+final class ProcessManagerViewModel: ObservableObject {    @Published private(set) var processes: [ProcessEntry] = []
     @Published var searchText: String = ""
     @Published var isRefreshing = false
-    @Published var showErrorAlert = false
-    @Published var errorAlertTitle = ""
-    @Published var errorAlertMessage = ""
     @Published private(set) var activeControlState: (pid: Int, action: ProcessControlAction)?
-    @Published var showActionAlert = false
-    @Published var actionAlertTitle = ""
-    @Published var actionAlertMessage = ""
+    /// 统一的提示弹窗通道（操作结果 / 错误）。v0.2.106：此前双 .alert 并存，
+    /// 后注册覆盖先注册导致「进程已结束」等操作弹窗从不弹出。
+    @Published var alertItem: ProcessAlert?
 
     private var refreshTask: Task<Void, Never>?
     private var controlTimeoutTask: Task<Void, Never>?
@@ -360,9 +363,7 @@ final class ProcessManagerViewModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     guard let self else { return }
-                    self.errorAlertTitle = "加载进程失败"
-                    self.errorAlertMessage = error.localizedDescription
-                    self.showErrorAlert = true
+                    self.alertItem = ProcessAlert(title: "加载进程失败", message: error.localizedDescription)
                     self.isRefreshing = false
                 }
             }
@@ -386,18 +387,14 @@ final class ProcessManagerViewModel: ObservableObject {
             self.killVerifyTask = nil
             self.refresh()
             if stillAlive {
-                self.actionAlertTitle = "进程可能仍在运行"
-                self.actionAlertMessage = "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中。常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足。"
-                self.showActionAlert = true
+                self.alertItem = ProcessAlert(title: "进程可能仍在运行", message: "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中。常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足。")
             }
         }
     }
 
     func control(_ action: ProcessControlAction, process: ProcessEntry) {
         guard activeControlState == nil else {
-            actionAlertTitle = "操作进行中"
-            actionAlertMessage = "上一项进程操作尚未完成，请稍候。"
-            showActionAlert = true
+            alertItem = ProcessAlert(title: "操作进行中", message: "上一项进程操作尚未完成，请稍候。")
             return
         }
 
@@ -410,9 +407,7 @@ final class ProcessManagerViewModel: ObservableObject {
             if self.activeControlState?.pid == targetPID && self.activeControlState?.action == action {
                 await MainActor.run {
                     self.activeControlState = nil
-                    self.actionAlertTitle = action.timeoutTitle
-                    self.actionAlertMessage = action.timeoutMessage(for: targetPID)
-                    self.showActionAlert = true
+                    self.alertItem = ProcessAlert(title: action.timeoutTitle, message: action.timeoutMessage(for: targetPID))
                 }
             }
         }
@@ -426,9 +421,7 @@ final class ProcessManagerViewModel: ObservableObject {
                     self.controlTimeoutTask = nil
                     guard self.activeControlState?.pid == targetPID && self.activeControlState?.action == action else { return }
                     self.activeControlState = nil
-                    self.actionAlertTitle = action.successTitle
-                    self.actionAlertMessage = action.successMessage(for: targetPID)
-                    self.showActionAlert = true
+                    self.alertItem = ProcessAlert(title: action.successTitle, message: action.successMessage(for: targetPID))
                     self.refresh()
                     // SIGKILL 二次验证：稍等后刷新列表，确认目标 PID 是否真的消失。
                     // 前台 App 被 kill 后可能被 SpringBoard 立即拉起；系统关键进程
@@ -444,9 +437,7 @@ final class ProcessManagerViewModel: ObservableObject {
                     self.controlTimeoutTask = nil
                     guard self.activeControlState?.pid == targetPID && self.activeControlState?.action == action else { return }
                     self.activeControlState = nil
-                    self.actionAlertTitle = action.failureTitle
-                    self.actionAlertMessage = error.localizedDescription
-                    self.showActionAlert = true
+                    self.alertItem = ProcessAlert(title: action.failureTitle, message: error.localizedDescription)
                 }
             }
         }
@@ -487,16 +478,14 @@ struct ProcessManagerView: View {
             // 与「描述文件管理」（AppExpiryView）一致，可透视下方滚动内容。
             .task { viewModel.startAutoRefresh() }
             .onDisappear { viewModel.stopAutoRefresh() }
-            .alert(viewModel.actionAlertTitle, isPresented: $viewModel.showActionAlert) {
-                Button("好", role: .cancel) {}
-            } message: {
-                Text(viewModel.actionAlertMessage)
-            }
-            .alert(viewModel.errorAlertTitle, isPresented: $viewModel.showErrorAlert) {
-                Button("重试") { viewModel.refresh() }
-                Button("好", role: .cancel) {}
-            } message: {
-                Text(viewModel.errorAlertMessage)
+            .alert(item: $viewModel.alertItem) { item in
+                Alert(
+                    title: Text(item.title),
+                    message: Text(item.message),
+                    dismissButton: .default(Text("好"), action: {
+                        if item.title == "加载进程失败" { viewModel.refresh() }
+                    })
+                )
             }
     }
 

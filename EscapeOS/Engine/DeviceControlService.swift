@@ -109,19 +109,28 @@ final class DeviceControlService {
 
     // MARK: 进程信号
 
+    /// connect 失败自动重试（最多 3 次、短退避）。RSD 服务发现偶发
+    /// 「ServiceNotFound」——多页面并发建隧道竞争导致，重试覆盖大部分偶发失败。
     private func withAppService<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         var tunnel = try createTunnel(hostname: "EscapeSpaceDevice")
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
             throw makeError("隧道未建立")
         }
-        var appService: OpaquePointer?
-        if let ffiError = app_service_connect_rsd(adapter, handshake, &appService) {
-            throw error(from: ffiError, fallback: "连接应用服务失败")
+        var lastError: NSError?
+        for attempt in 0..<3 {
+            var appService: OpaquePointer?
+            if let ffiError = app_service_connect_rsd(adapter, handshake, &appService) {
+                lastError = error(from: ffiError, fallback: "连接应用服务失败")
+            } else if let appService {
+                defer { app_service_free(appService) }
+                return try body(appService)
+            } else {
+                lastError = makeError("连接应用服务失败")
+            }
+            if attempt < 2 { usleep(useconds_t(300_000 * (attempt + 1))) }
         }
-        guard let appService else { throw makeError("连接应用服务失败") }
-        defer { app_service_free(appService) }
-        return try body(appService)
+        throw lastError ?? makeError("连接应用服务失败")
     }
 
     /// 在设备进程列表里找 SpringBoard 的 PID（可执行路径包含 SpringBoard）。
@@ -157,10 +166,20 @@ final class DeviceControlService {
             throw makeError("隧道未建立")
         }
         var appService: OpaquePointer?
-        if let ffiError = app_service_connect_rsd(adapter, handshake, &appService) {
-            throw error(from: ffiError, fallback: "连接应用服务失败")
+        var connectError: NSError?
+        for attempt in 0..<3 {
+            var candidate: OpaquePointer?
+            if let ffiError = app_service_connect_rsd(adapter, handshake, &candidate) {
+                connectError = error(from: ffiError, fallback: "连接应用服务失败")
+            } else if let candidate {
+                appService = candidate
+                break
+            } else {
+                connectError = makeError("连接应用服务失败")
+            }
+            if attempt < 2 { usleep(useconds_t(300_000 * (attempt + 1))) }
         }
-        guard let appService else { throw makeError("连接应用服务失败") }
+        guard let appService else { throw connectError ?? makeError("连接应用服务失败") }
         defer { app_service_free(appService) }
 
         var response: UnsafeMutablePointer<SignalResponseC>?
@@ -179,13 +198,20 @@ final class DeviceControlService {
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
             throw makeError("隧道未建立")
         }
-        var client: OpaquePointer?
-        if let ffiError = diagnostics_relay_client_connect_rsd(adapter, handshake, &client) {
-            throw error(from: ffiError, fallback: "连接诊断服务失败（该功能需要配对 + LocalDevVPN）")
+        var lastError: NSError?
+        for attempt in 0..<3 {
+            var client: OpaquePointer?
+            if let ffiError = diagnostics_relay_client_connect_rsd(adapter, handshake, &client) {
+                lastError = error(from: ffiError, fallback: "连接诊断服务失败（该功能需要配对 + LocalDevVPN）")
+            } else if let client {
+                defer { diagnostics_relay_client_free(client) }
+                return try body(client)
+            } else {
+                lastError = makeError("连接诊断服务失败")
+            }
+            if attempt < 2 { usleep(useconds_t(300_000 * (attempt + 1))) }
         }
-        guard let client else { throw makeError("连接诊断服务失败") }
-        defer { diagnostics_relay_client_free(client) }
-        return try body(client)
+        throw lastError ?? makeError("连接诊断服务失败")
     }
 
     /// 重启设备。
@@ -216,10 +242,20 @@ final class DeviceControlService {
             throw makeError("隧道未建立")
         }
         var client: OpaquePointer?
-        if let ffiError = lockdownd_connect_rsd(adapter, handshake, &client) {
-            throw error(from: ffiError, fallback: "连接 lockdownd 失败")
+        var connectError: NSError?
+        for attempt in 0..<3 {
+            var candidate: OpaquePointer?
+            if let ffiError = lockdownd_connect_rsd(adapter, handshake, &candidate) {
+                connectError = error(from: ffiError, fallback: "连接 lockdownd 失败")
+            } else if let candidate {
+                client = candidate
+                break
+            } else {
+                connectError = makeError("连接 lockdownd 失败")
+            }
+            if attempt < 2 { usleep(useconds_t(300_000 * (attempt + 1))) }
         }
-        guard let client else { throw makeError("连接 lockdownd 失败") }
+        guard let client else { throw connectError ?? makeError("连接 lockdownd 失败") }
         defer { lockdownd_client_free(client) }
 
         if let ffiError = lockdownd_enter_recovery(client) {

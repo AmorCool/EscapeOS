@@ -132,12 +132,19 @@ struct DeviceControlView: View {
         }
         .fullScreenCover(isPresented: $showWebCrash) {
             // 黑屏 + 压力网页：SpringBoard 被挤崩后桌面自动重启。
-            // 容器整体纯黑，不显示任何提示条（视觉干净，v0.2.105）。
-            ZStack {
-                Color.black.ignoresSafeArea()
-                RespringView()
-                    .ignoresSafeArea()
-            }
+            // v0.2.106：回退 v0.2.104 样式（WKWebView 白底默认 + 底部提示条），
+            // 去掉黑化——用户实测黑化后不好使；「左上角正方形虚线框」已通过
+            // iframe border:0 修复（见 RespringView）。
+            RespringView()
+                .ignoresSafeArea()
+                .overlay(alignment: .bottom) {
+                    Text("正在挤压 SpringBoard… 桌面即将重启")
+                        .font(.footnote)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 14)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.bottom, 40)
+                }
         }
         .overlay {
             if isRunning {
