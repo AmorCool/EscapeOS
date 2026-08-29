@@ -95,23 +95,6 @@ final class AppListViewModel: ObservableObject {
         }
     }
 
-    /// 加载失败后每 3 秒自动重试，直到成功或页面消失（v0.2.105）：
-    /// 解决「先进入应用页、后开启 LocalDevVPN，却要手动点重试才能连上」。
-    private func scheduleAutoRetry() {
-        guard retryTask == nil else { return }
-        retryTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard let self, !Task.isCancelled else { break }
-                await MainActor.run {
-                    guard !Task.isCancelled else { return }
-                    self.retryTask = nil
-                    self.reload()
-                }
-            }
-        }
-    }
-
     /// Fetch icons concurrently and publish each one as soon as it arrives.
     private func loadIcons(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
