@@ -7,6 +7,12 @@ import SwiftUI
 /// 1. **不是单例** —— 每个 plist 文件一个实例，避免多个页面互相踩数据。
 /// 2. **读写都走 SandboxEscape + FileService** —— plist 在别的 App 容器里，
 ///    离开沙盒扩展既读不到也写不回（Erosion 是独立 App，能直接写）。
+/// `Result` 的 `Failure` 必须遵循 `Error`，而 `String` 不遵循；包一层既满足协议
+/// 约束，又是 Sendable（后台写文件的结果要跨 actor 边界回主线程）。
+private struct PlistSaveFailure: Error {
+    let message: String
+}
+
 @MainActor
 final class PlistEditorViewModel: ObservableObject {
 
@@ -112,14 +118,14 @@ final class PlistEditorViewModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             let escape = SandboxEscape()
             let files = FileService()
-            let outcome: Result<Void, String>
+            let outcome: Result<Void, PlistSaveFailure>
             do {
                 try escape.withHandle(for: rootPath) { _ in
                     try files.writeFile(data: payload, to: path)
                 }
                 outcome = .success(())
             } catch {
-                outcome = .failure(error.localizedDescription)
+                outcome = .failure(PlistSaveFailure(message: error.localizedDescription))
             }
 
             await MainActor.run {
@@ -128,8 +134,8 @@ final class PlistEditorViewModel: ObservableObject {
                 switch outcome {
                 case .success:
                     self.successMessage = "已写回文件。返回后重新打开可看到最新内容。"
-                case .failure(let message):
-                    self.errorMessage = "写入失败：\(message)"
+                case .failure(let failure):
+                    self.errorMessage = "写入失败：\(failure.message)"
                 }
             }
         }
