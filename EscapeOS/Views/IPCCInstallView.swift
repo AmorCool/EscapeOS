@@ -13,6 +13,8 @@ struct IPCCInstallView: View {
     @State private var errorMessage: String?
     @State private var toast: String?
     @State private var showRespringHint = false
+    /// v0.2.130：查看安装日志详情的记录。
+    @State private var detailRecord: IPCCInstallService.InstallRecord?
 
     private let service = IPCCInstallService.shared
 
@@ -89,6 +91,14 @@ struct IPCCInstallView: View {
                                         .lineLimit(2)
                                 }
                             }
+                            Spacer()
+                            Button {
+                                detailRecord = record
+                            } label: {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .foregroundColor(.blue)
+                            }
+                            .accessibilityLabel("查看日志")
                         }
                     }
                 }
@@ -119,6 +129,44 @@ struct IPCCInstallView: View {
             Button("好的") {}
         } message: {
             Text("已通过 installation_proxy（PackageType=CarrierBundle）交给系统安装，与爱思助手「更新 IPCC」同一条通道。建议重启设备（或「更多 → 设备控制 → 重启 SpringBoard」）后查看生效情况。")
+        }
+        .sheet(item: $detailRecord) { record in
+            NavigationView {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 6) {
+                            Image(systemName: record.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundColor(record.success ? .green : .red)
+                            Text(record.success ? "安装成功" : "安装失败")
+                                .font(.headline)
+                        }
+                        Text(record.fileName)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Divider()
+                        if record.steps.isEmpty {
+                            Text(record.detail.isEmpty ? "（无详细日志）" : record.detail)
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(Array(record.steps.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.system(.footnote, design: .monospaced))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .navigationTitle("安装日志")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("完成") { detailRecord = nil }
+                    }
+                }
+            }
         }
         .overlay(alignment: .bottom) {
             if let toast {

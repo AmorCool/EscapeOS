@@ -1,8 +1,40 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AVFoundation
+
+/// 铃声在线播放器（AVAudioPlayer 包装）。
+final class RingtonePlayer: NSObject, AVAudioPlayerDelegate, ObservableObject {
+    @Published var playingID: String?
+    private var player: AVAudioPlayer?
+
+    /// 播放内存中的音频；同一 id 再次调用则停止。
+    func play(data: Data, id: String) {
+        if playingID == id { stop(); return }
+        stop()
+        guard !data.isEmpty else { return }
+        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
+        guard let p = try? AVAudioPlayer(data: data) else { return }
+        p.delegate = self
+        p.play()
+        player = p
+        playingID = id
+    }
+
+    func stop() {
+        player?.stop()
+        player = nil
+        playingID = nil
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        self.player = nil
+        playingID = nil
+    }
+}
 
 /// 铃声管理：经 RSD 隧道（AFC）管理 /var/mobile/media 内的铃声文件，
-/// 支持导入 / 导出 / 删除 / 刷新。
+/// 支持导入 / 导出 / 删除 / 重命名 / 在线播放 / 刷新。
 ///
 /// ⚠️ 硬限制说明（页面 footer 会展示）：系统铃声库
 /// /var/mobile/Library/Ringtones 在 AFC 根（= /var/mobile/media）之外，
@@ -15,7 +47,10 @@ struct RingtonesView: View {
     @State private var showImporter = false
     @State private var toast: String?
     @State private var confirmDelete: RingtonesService.Entry?
+    @State private var renameTarget: RingtonesService.Entry?
+    @State private var renameText = ""
     @State private var shareItem: ShareURL?
+    @StateObject private var player = RingtonePlayer()
 
     private let service = RingtonesService.shared
 
@@ -103,6 +138,14 @@ struct RingtonesView: View {
         } message: {
             Text("删除后无法恢复。")
         }
+        .alert("重命名", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("新名称", text: $renameText)
+            Button("确定") { doRename() }
+            Button("取消", role: .cancel) {}
+        }
         .sheet(item: $shareItem) { item in
             ActivityView(items: [item.url])
         }
@@ -140,12 +183,16 @@ struct RingtonesView: View {
                 reload()
             }
         }
+        .onDisappear {
+            player.stop()
+        }
     }
 
     private func row(_ entry: RingtonesService.Entry) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "music.note")
-                .foregroundColor(.blue)
+        let isPlaying = player.playingID == entry.id
+        return HStack(spacing: 12) {
+            Image(systemName: isPlaying ? "speaker.wave.2.fill" : "music.note")
+                .foregroundColor(isPlaying ? .green : .blue)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name)
@@ -161,14 +208,34 @@ struct RingtonesView: View {
                 .foregroundColor(.secondary)
             }
             Spacer()
-            Image(systemName: "square.and.arrow.up")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle")
+                .font(.title3)
+                .foregroundColor(isPlaying ? .red : .secondary)
         }
         .contentShape(Rectangle())
         .onTapGesture {
             guard !busy else { return }
-            export(entry)
+            play(entry)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                confirmDelete = entry
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+            Button {
+                renameTarget = entry
+                renameText = entry.name
+            } label: {
+                Label("重命名", systemImage: "pencil")
+            }
+            .tint(.orange)
+            Button {
+                export(entry)
+            } label: {
+                Label("导出", systemImage: "square.and.arrow.up")
+            }
+            .tint(.green)
         }
     }
 
@@ -213,6 +280,29 @@ struct RingtonesView: View {
         }
     }
 
+    /// 在线播放 / 停止（v0.2.130）：AFC 拉取数据到内存，AVAudioPlayer 播放。
+    private func play(_ entry: RingtonesService.Entry) {
+        if player.playingID == entry.id {
+            player.stop()
+            return
+        }
+        busy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let data = try service.readData(path: entry.path)
+                DispatchQueue.main.async {
+                    busy = false
+                    player.play(data: data, id: entry.id)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    busy = false
+                    toast = "播放失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     /// 导出：下载到本地后弹系统分享面板。
     private func export(_ entry: RingtonesService.Entry) {
         busy = true
@@ -227,6 +317,29 @@ struct RingtonesView: View {
                 DispatchQueue.main.async {
                     busy = false
                     toast = "导出失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func doRename() {
+        guard let target = renameTarget else { return }
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        busy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try service.renameRingtone(path: target.path, to: name)
+                DispatchQueue.main.async {
+                    busy = false
+                    renameTarget = nil
+                    toast = "已重命名为 \(name)"
+                    reload()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    busy = false
+                    toast = "重命名失败：\(error.localizedDescription)"
                 }
             }
         }

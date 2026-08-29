@@ -36,6 +36,8 @@ final class IPCCInstallService {
         let date: Date
         let success: Bool
         let detail: String
+        /// v0.2.130：详细步骤日志（时间戳 + 每一步结果）。
+        let steps: [String]
         var id: String { fileName + "-" + date.timeIntervalSince1970.description }
     }
 
@@ -53,7 +55,8 @@ final class IPCCInstallService {
                 bundleName: dict["bundleName"] as? String ?? "",
                 date: (dict["date"] as? Date) ?? .distantPast,
                 success: (dict["success"] as? Bool) ?? false,
-                detail: dict["detail"] as? String ?? ""
+                detail: dict["detail"] as? String ?? "",
+                steps: dict["steps"] as? [String] ?? []
             )
         }
     }
@@ -61,11 +64,13 @@ final class IPCCInstallService {
     private func appendRecord(_ record: InstallRecord) {
         var list: [[String: Any]] = savedRecords().map { [
             "fileName": $0.fileName, "bundleName": $0.bundleName,
-            "date": $0.date, "success": $0.success, "detail": $0.detail
+            "date": $0.date, "success": $0.success, "detail": $0.detail,
+            "steps": $0.steps
         ] }
         list.insert([
             "fileName": record.fileName, "bundleName": record.bundleName,
-            "date": record.date, "success": record.success, "detail": record.detail
+            "date": record.date, "success": record.success, "detail": record.detail,
+            "steps": record.steps
         ], at: 0)
         if list.count > 30 { list.removeLast(list.count - 30) }
         if let data = try? PropertyListSerialization.data(fromPropertyList: list, format: .xml, options: 0) {
@@ -123,18 +128,30 @@ final class IPCCInstallService {
     /// 3. installd → CommCenter 完成解包 / 校验 / 写入运营商配置区并触发重载。
     func install(ipccURL: URL) throws -> String {
         let parsed = try parse(ipccURL: ipccURL)
+        var steps: [String] = []
+        let stamp = DateFormatter()
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        stamp.dateFormat = "HH:mm:ss"
+        func step(_ s: String) {
+            steps.append("[\(stamp.string(from: Date()))] \(s)")
+        }
+
+        step("开始安装 \(ipccURL.lastPathComponent)")
+        step("解析成功：bundle=\(parsed.bundleName) 标识=\(parsed.identifier.isEmpty ? "未知" : parsed.identifier)")
         do {
-            try IPAInstallService.shared.installIPCC(ipccURL.path)
+            try IPAInstallService.shared.installIPCC(ipccURL.path, log: { step($0) })
             let detail = "已通过 installation_proxy 安装（PackageType=CarrierBundle）"
+            step("✔ \(detail)")
             appendRecord(InstallRecord(fileName: ipccURL.lastPathComponent,
                                        bundleName: parsed.bundleName,
-                                       date: Date(), success: true, detail: detail))
+                                       date: Date(), success: true, detail: detail, steps: steps))
             return parsed.bundleName
         } catch {
+            step("✘ 失败：\(error.localizedDescription)")
             appendRecord(InstallRecord(fileName: ipccURL.lastPathComponent,
                                        bundleName: parsed.bundleName,
                                        date: Date(), success: false,
-                                       detail: "安装失败：\(error.localizedDescription)"))
+                                       detail: "安装失败：\(error.localizedDescription)", steps: steps))
             throw error
         }
     }

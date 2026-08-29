@@ -526,25 +526,31 @@ final class IPAInstallService: ObservableObject {
     ///
     /// 与 `.ipa` 安装的唯一区别是 `PackageType`（ipa = `Developer`）。
     /// 不需要 CoreTelephony 私有 API，也不需要额外 entitlement。
-    func installIPCC(_ localPath: String, progress: ((Double) -> Void)? = nil) throws {
+    func installIPCC(_ localPath: String, progress: ((Double) -> Void)? = nil,
+                     log: ((String) -> Void)? = nil) throws {
+        func step(_ s: String) { log?(s) }
         var tunnel = try createTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
             throw makeError("隧道未建立")
         }
 
+        step("创建 RSD 隧道成功（adapter + handshake）")
         var afc: OpaquePointer?
         if let ffiError = afc_client_connect_rsd(adapter, handshake, &afc) {
             throw error(from: ffiError, fallback: "连接 AFC 失败")
         }
         guard let afc else { throw makeError("AFC 客户端为空") }
         defer { afc_client_free(afc) }
+        step("AFC 服务连接成功")
 
         let name = (localPath as NSString).lastPathComponent
         let remotePath = "/PublicStaging/\(name)"
         // 先清同名残留（爱思/ideviceinstaller 同款：remove 再 copy）
         _ = remotePath.withCString { afc_remove_path_and_contents(afc, $0) }
+        step("已清除同名残留，开始上传 \(name) → \(remotePath)")
         try uploadFile(afc, localPath: localPath, remotePath: remotePath)
+        step("AFC 上传完成（\(remotePath)）")
 
         var ip: OpaquePointer?
         if let ffiError = installation_proxy_connect_rsd(adapter, handshake, &ip) {
@@ -552,6 +558,7 @@ final class IPAInstallService: ObservableObject {
         }
         guard let ip else { throw makeError("安装代理客户端为空") }
         defer { installation_proxy_client_free(ip) }
+        step("installation_proxy 服务连接成功")
 
         // PackageType: CarrierBundle —— 让 installd 按运营商包处理（.ipcc）
         guard let options: plist_t = plist_new_dict() else {
@@ -561,6 +568,7 @@ final class IPAInstallService: ObservableObject {
         if let packageType = plist_new_string("CarrierBundle") {
             plist_dict_set_item(options, "PackageType", packageType)
         }
+        step("构造安装选项：PackageType=CarrierBundle")
 
         installProgressHandler = progress
         let progressCallback: @convention(c) (UInt64, UnsafeMutableRawPointer?) -> Void = { value, ctx in
@@ -570,12 +578,14 @@ final class IPAInstallService: ObservableObject {
             }
         }
 
+        step("发送 Install 命令（PackagePath=\(remotePath)）…")
         let installErr = remotePath.withCString { p in
             installation_proxy_install_with_callback(ip, p, options, progressCallback, nil)
         }
         if let installErr {
             throw error(from: installErr, fallback: "IPCC 安装失败")
         }
+        step("Install 命令已受理（installd/CommCenter 后台处理中）")
     }
 
     private var installProgressHandler: ((Double) -> Void)?

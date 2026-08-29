@@ -85,6 +85,11 @@ final class RingtonesService {
         return remote
     }
 
+    /// 读取铃声文件原始数据（在线播放用）。
+    func readData(path: String) throws -> Data {
+        try afc.readFile(path)
+    }
+
     /// 下载铃声到本地导出目录，返回本地路径。
     func download(path: String) throws -> String {
         let data = try afc.readFile(path)
@@ -92,6 +97,13 @@ final class RingtonesService {
         let target = URL(fileURLWithPath: Self.exportDirectory).appendingPathComponent(name)
         try data.write(to: target)
         return target.path
+    }
+
+    /// 重命名铃声（AFC rename_path）。
+    func renameRingtone(path: String, to newName: String) throws {
+        let parent = (path as NSString).deletingLastPathComponent
+        let target = (parent == "/" ? "" : parent) + "/" + newName
+        try afc.renamePath(path, to: target)
     }
 
     /// 删除铃声。
