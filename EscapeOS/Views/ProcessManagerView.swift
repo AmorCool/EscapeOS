@@ -305,6 +305,8 @@ final class ProcessManagerViewModel: ObservableObject {
 
     private var refreshTask: Task<Void, Never>?
     private var controlTimeoutTask: Task<Void, Never>?
+    /// SIGKILL 后的二次验证任务（检查目标 PID 是否真的消失）。
+    private var killVerifyTask: Task<Void, Never>?
 
     var filteredProcesses: [ProcessEntry] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -340,6 +342,8 @@ final class ProcessManagerViewModel: ObservableObject {
         refreshTask = nil
         controlTimeoutTask?.cancel()
         controlTimeoutTask = nil
+        killVerifyTask?.cancel()
+        killVerifyTask = nil
     }
 
     func refresh() {
@@ -360,6 +364,30 @@ final class ProcessManagerViewModel: ObservableObject {
                     self.errorAlertMessage = error.localizedDescription
                     self.showErrorAlert = true
                     self.isRefreshing = false
+                }
+            }
+        }
+    }
+
+    /// SIGKILL 二次验证：1.5 秒后重新枚举进程，若目标 PID 仍在则如实提示
+    /// （进程受保护 / 前台 App 被 SpringBoard 自动拉起 / 权限不足）。
+    private func verifyKill(_ targetPID: Int) {
+        killVerifyTask?.cancel()
+        killVerifyTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self else { return }
+            let stillAlive = await Task.detached(priority: .utility) {
+                (try? ProcessManagerService.shared.listProcesses())?
+                    .contains { $0.pid == targetPID } ?? false
+            }.value
+            await MainActor.run {
+                guard let self, !Task.isCancelled else { return }
+                self.killVerifyTask = nil
+                self.refresh()
+                if stillAlive {
+                    self.actionAlertTitle = "进程可能仍在运行"
+                    self.actionAlertMessage = "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中。常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足。"
+                    self.showActionAlert = true
                 }
             }
         }
@@ -402,6 +430,12 @@ final class ProcessManagerViewModel: ObservableObject {
                     self.actionAlertMessage = action.successMessage(for: targetPID)
                     self.showActionAlert = true
                     self.refresh()
+                    // SIGKILL 二次验证：稍等后刷新列表，确认目标 PID 是否真的消失。
+                    // 前台 App 被 kill 后可能被 SpringBoard 立即拉起；系统关键进程
+                    // 可能受保护 —— 这些情况如实告知，避免"点了没用"的困惑（v0.2.105）。
+                    if action == .kill {
+                        self.verifyKill(targetPID)
+                    }
                 }
             } catch {
                 await MainActor.run {

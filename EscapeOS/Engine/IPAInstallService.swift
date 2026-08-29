@@ -73,7 +73,14 @@ final class IPAInstallService: ObservableObject {
     /// 「用 token 恢复会话」失败过一次（token 大概率已过期）。
     /// 为 true 时自动登录跳过免 2FA 恢复、直接走完整登录，避免每次进页面
     /// 都白等一次注定失败的恢复请求（实测单次失败恢复要 5~7 秒）。
-    private(set) var sessionRestoreFailed = false
+    /// **持久化到 UserDefaults**（v0.2.105）：token 失效后 App 重启也不白等；
+    /// 完整登录成功（token 刷新）时自动清零。
+    private(set) var sessionRestoreFailed: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.sessionRestoreFailedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.sessionRestoreFailedKey) }
+    }
+
+    private static let sessionRestoreFailedKey = "ipaSessionRestoreFailed"
 
     private(set) var session: OpaquePointer? {
         get { _session }

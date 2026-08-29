@@ -22,10 +22,19 @@ struct GestaltView: View {
 
                 if !model.loaded {
                     Section {
-                        Button("Load MobileGestalt") {
-                            model.load()
+                        if model.isLoading {
+                            HStack {
+                                ProgressView()
+                                Text("正在加载 MobileGestalt…")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            Button("Load MobileGestalt") {
+                                model.load()
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
                         Text(model.statusMessage)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -114,7 +123,13 @@ struct GestaltView: View {
             }
         }
         .onAppear {
-            if !model.loaded { model.load() }
+            // 首次进入：延迟一帧再加载，避免首帧渲染被 load() 的 bad_query
+            // 同步流程卡住（v0.2.105：首次进入「没反应」的元凶之一）。
+            Task {
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled, !model.loaded, !model.isLoading else { return }
+                model.load()
+            }
         }
     }
 

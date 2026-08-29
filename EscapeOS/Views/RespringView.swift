@@ -49,6 +49,11 @@ struct RespringView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let webView = WKWebView()
         WKWebpagePreferences().allowsContentJavaScript = true
+        // 黑化：网页崩溃场景整屏应呈黑色（等待 SpringBoard 被挤崩），
+        // 避免加载前露出白色空白 / 系统占位框（v0.2.105 视觉优化）。
+        webView.backgroundColor = .black
+        webView.isOpaque = false
+        webView.scrollView.backgroundColor = .black
         return webView
     }
 

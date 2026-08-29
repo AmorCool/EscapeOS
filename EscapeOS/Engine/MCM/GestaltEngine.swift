@@ -89,6 +89,9 @@ final class BQMobileGestaltModel {
     var extensionHandle: Int64 = 0
     var isApplying = false
     var isDirty = false
+    /// load() 正在执行（bad_query 首次 dlopen / 容器遍历耗时数秒，期间给出反馈，
+    /// 避免「点了没反应」的错觉；v0.2.105）。
+    var isLoading = false
 
     // Routing state
     /// True when the current sandbox extension came from the MHA identity route
@@ -276,6 +279,10 @@ final class BQMobileGestaltModel {
     // MARK: - Load
 
     func load() {
+        guard !isLoading else { return }
+        isLoading = true
+        statusMessage = "正在加载…"
+        defer { isLoading = false }
         appendLog("load() start: iOS \(UIDevice.current.systemVersion) · device \(machineName()) · isDeviceGood=\(isDeviceGood()) · MHA=\(MCMIntegration.isMobileHouseArrest) · signed=\(MCMIntegration.signedCodeIdentifier) · bundle=\(Bundle.main.bundleIdentifier ?? "?")")
         // Discover path
         guard let path = discoverGestaltPath() else {

@@ -20,10 +20,18 @@ final class AppListViewModel: ObservableObject {
 
     private let discovery = AppDiscovery()
     private let uninstaller = UninstallService.shared
+    /// 加载失败后的自动重试任务（LocalDevVPN 开启后无需手动点重试）。
+    private var retryTask: Task<Void, Never>?
 
     var hasPairingFile: Bool { discovery.hasPairingFile }
 
     var canUninstall: Bool { discovery.canUninstallApps() }
+
+    /// 停止自动重试（页面消失时调用）。
+    func stopAutoRetry() {
+        retryTask?.cancel()
+        retryTask = nil
+    }
 
     func reload() {
         isLoading = true
@@ -39,6 +47,8 @@ final class AppListViewModel: ObservableObject {
                     self.apps = found
                     self.errorMessage = nil
                     self.icons = [:]
+                    // 成功：取消自动重试。
+                    self.stopAutoRetry()
                 }
                 self.loadIcons(for: found)
             } catch let e as AppDiscoveryError {
@@ -49,11 +59,30 @@ final class AppListViewModel: ObservableObject {
                     } else {
                         self.errorMessage = e.localizedDescription
                     }
+                    self.scheduleAutoRetry()
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.isLoading = false
                     self.errorMessage = error.localizedDescription
+                    self.scheduleAutoRetry()
+                }
+            }
+        }
+    }
+
+    /// 加载失败后每 3 秒自动重试，直到成功或页面消失（v0.2.105）：
+    /// 解决「先进入应用页、后开启 LocalDevVPN，却要手动点重试才能连上」。
+    private func scheduleAutoRetry() {
+        guard retryTask == nil else { return }
+        retryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, !Task.isCancelled else { break }
+                await MainActor.run {
+                    guard !Task.isCancelled else { return }
+                    self.retryTask = nil
+                    self.reload()
                 }
             }
         }
