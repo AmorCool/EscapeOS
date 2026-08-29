@@ -127,6 +127,11 @@ final class AnisetteProvider {
     /// 每次重试前会 `reset()`：清掉内存缓存与 keychain 里的 identifier/adiPb，
     /// 强制重新生成 identifier 并对新服务器走完整 provision，避免拿旧会话重试。
     func getAnisetteDataWithFallback(refresh: Bool = false, maxAttempts: Int = 3) async throws -> AnisetteData {
+        let originalServer = currentServer
+        let started = Date()
+        // v0.2.116：整体时间预算。就算某个请求没被单条 timeout 拦住（例如 WebSocket
+        // 在握手后长时间不发消息），超预算也直接放弃，绝不把 UI 永久留在 loading。
+        let budget: TimeInterval = 75
         var lastError: Error?
         var attempt = 0
         while attempt < maxAttempts {
@@ -135,16 +140,23 @@ final class AnisetteProvider {
             } catch {
                 lastError = error
                 attempt += 1
-                guard attempt < maxAttempts else { break }
+                let elapsed = Date().timeIntervalSince(started)
+                guard attempt < maxAttempts, elapsed < budget else { break }
                 LoginLogger.shared.log("⚠ Anisette 第 \(attempt)/\(maxAttempts) 次失败，换服务器重试")
                 reset()
                 rotateServer()
             }
         }
+        // 全部失败：把服务器还原成用户原本配置的地址。
+        // 否则失败过程中轮换到的坏服务器会被固化，之后每次进页面都先撞它。
+        if currentServer != originalServer {
+            UserDefaults.standard.set(originalServer, forKey: "AnisetteServer")
+            LoginLogger.shared.log("… 已还原 Anisette 服务器为 \(originalServer)")
+        }
         let detail = (lastError as? AppleAPIError)?.errorDescription
             ?? lastError?.localizedDescription
             ?? "未知原因"
-        LoginLogger.shared.log("❌ Anisette 已尝试 \(maxAttempts) 个服务器仍失败")
+        LoginLogger.shared.log("❌ Anisette 已尝试 \(maxAttempts) 个服务器仍失败（耗时 \(Int(Date().timeIntervalSince(started)))s）")
         throw AppleAPIError.customError(
             code: -22421,
             message: "Anisette 连续 \(maxAttempts) 个服务器均失败（最后错误：\(detail)）。\n"
@@ -174,7 +186,10 @@ final class AnisetteProvider {
         if clientInfo == nil || userAgent == nil {
             let clientInfoURL = base.appendingPathComponent("v3").appendingPathComponent("client_info")
             var clientInfoRequest = URLRequest(url: clientInfoURL)
-            clientInfoRequest.timeoutInterval = 30
+            // v0.2.116：client_info 只是取设备描述字符串，正常几百毫秒就返回。
+            // 服务器不可达时 30 秒太长，会让「正在加载团队…」转很久；缩到 10 秒，
+            // 让失败快速暴露并进入换服务器重试。
+            clientInfoRequest.timeoutInterval = 10
             let (data, response) = try await session.data(for: clientInfoRequest)
             let http = (response as? HTTPURLResponse)?.statusCode ?? -1
             guard http == 200,
@@ -225,7 +240,8 @@ final class AnisetteProvider {
         guard let base = url else { throw fail("get_headers", "服务器地址为空") }
         var request = URLRequest(url: base.appendingPathComponent("v3").appendingPathComponent("get_headers"))
         request.httpMethod = "POST"
-        request.timeoutInterval = 30
+        // v0.2.116：get_headers 是一次简单 POST，15 秒足够；失败快才能快速换服务器。
+        request.timeoutInterval = 15
         request.httpBody = try JSONSerialization.data(withJSONObject: ["identifier": identifier, "adi_pb": adiPb])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         LoginLogger.shared.log("▶ get_headers POST \(base.appendingPathComponent("v3").appendingPathComponent("get_headers").absoluteString)")

@@ -103,6 +103,7 @@ final class CertificateManager: ObservableObject {
         isLoadingTeams = true
         teamState = .loading
         lastError = nil
+        scheduleTeamWatchdog()
         Task {
             do {
                 let fetched = try await AppleDeveloperAPI.fetchTeams(session: session)
@@ -118,7 +119,33 @@ final class CertificateManager: ObservableObject {
                 self.autoChainCerts = false
             }
             self.isLoadingTeams = false
+            self.cancelTeamWatchdog()
         }
+    }
+
+    // MARK: - 加载看门狗（v0.2.116）
+
+    /// 兜底：任何原因导致上面的 Task 迟迟不结束（网络栈卡住、Task 被挂起等），
+    /// 到点也强制把团队栏切到失败态，绝不让 UI 永久停在「正在加载团队…」。
+    private var teamWatchdog: DispatchWorkItem?
+
+    private func scheduleTeamWatchdog() {
+        cancelTeamWatchdog()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.isLoadingTeams else { return }
+            self.isLoadingTeams = false
+            self.autoChainCerts = false
+            self.teamState = .failed("加载超时。请检查网络后点「重试」，或到「更多 → 设置 → Anisette 服务器」换一个服务器。")
+            LoginLogger.shared.log("❌ 团队列表加载看门狗超时，已强制切失败态")
+        }
+        teamWatchdog = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: item)
+    }
+
+    private func cancelTeamWatchdog() {
+        teamWatchdog?.cancel()
+        teamWatchdog = nil
     }
 
     /// 写入团队列表并保持选中项有效。

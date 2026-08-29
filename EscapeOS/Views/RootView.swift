@@ -691,13 +691,16 @@ struct SettingsForm: View {
                 }
             }
 
-            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）。默认 ani.sidestore.io，可切换 StikStore / 846969 等备用服务器。")) {
+            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）。默认 ani.sidestore.io，可切换 StikStore / 846969 等备用服务器。请求失败时会自动轮换重试；全部失败后会还原为你在此处选择的服务器。")) {
                 Picker("服务器", selection: $anisetteServer) {
                     ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
                         Text(MemoryLimitSettings.host(from: server)).tag(server)
                     }
                 }
                 .pickerStyle(.menu)
+                Button("恢复默认服务器（ani.sidestore.io）") {
+                    anisetteServer = "https://ani.sidestore.io"
+                }
             }
 
             Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致。保持默认的 10.7.0.1，除非你修改过 LocalDevVPN。")) {

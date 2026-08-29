@@ -334,6 +334,16 @@ final class IncreaseMemoryController: ObservableObject {
         guard let session else { return }
         teamState = .loading
         appState = .idle
+        // v0.2.116 看门狗：超时强制切失败态，不让 UI 永久停在「正在加载团队…」。
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if case .loading = self.teamState {
+                self.teamState = .failed("加载超时。请下拉刷新重试，或到「更多 → 设置 → Anisette 服务器」换一个服务器。")
+                LoginLogger.shared.log("❌ 增加内存限制：团队列表加载看门狗超时")
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: watchdog)
+        defer { watchdog.cancel() }
         do {
             let fetched = try await AppleDeveloperAPI.fetchTeams(session: session)
             teams = fetched
