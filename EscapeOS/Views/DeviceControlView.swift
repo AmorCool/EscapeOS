@@ -74,22 +74,28 @@ struct DeviceControlView: View {
 
     var body: some View {
         List {
-            Section(header: Text("重启 SpringBoard")) {
+            Section {
                 actionRow(.respringKill)
                 actionRow(.webCrash)
+            } header: {
+                Text("重启 SpringBoard")
             } footer: {
                 Text("两种方式都会让桌面（主屏）重启；已打开的 App 进程不受影响。")
             }
 
-            Section(header: Text("电源管理")) {
+            Section {
                 actionRow(.restart)
                 actionRow(.shutdown)
+            } header: {
+                Text("电源管理")
             } footer: {
                 Text("需要配对文件 + LocalDevVPN 隧道；与「进程管理 / 虚拟定位」同一套通道。")
             }
 
-            Section(header: Text("恢复模式")) {
+            Section {
                 actionRow(.recovery)
+            } header: {
+                Text("恢复模式")
             } footer: {
                 Text("进入恢复模式后设备无法正常使用，退出需连接电脑。请谨慎操作。")
             }
