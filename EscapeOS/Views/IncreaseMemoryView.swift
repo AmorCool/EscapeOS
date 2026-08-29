@@ -99,7 +99,17 @@ struct IncreaseMemoryView: View {
     private var teamSection: some View {
         Section(header: Text("开发者团队")) {
             switch ctrl.teamState {
-            case .idle, .loading:
+            case .idle:
+                // v0.2.120：`.idle` 曾与 `.loading` 渲染成同一个转圈，
+                // "没发起请求"被误认为"正在加载"。现在明确区分。
+                HStack {
+                    Image(systemName: "exclamationmark.circle").foregroundColor(.orange)
+                    Text("尚未加载团队")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("加载") { Task { await ctrl.reload() } }
+                }
+            case .loading:
                 HStack {
                     ProgressView().controlSize(.small)
                     Text("正在加载团队…")
@@ -331,7 +341,16 @@ final class IncreaseMemoryController: ObservableObject {
 
     @MainActor
     func reload() async {
-        guard let session else { return }
+        // v0.2.120：以前 session 为 nil 时静默 return，teamState 停在 `.idle`，
+        // 而 UI 把 `.idle` 与 `.loading` 渲染成同一个转圈 → 永远"正在加载团队"。
+        guard let session else {
+            let reason = MemoryLimitSettings.shared.isLoggedIn
+                ? "已登录但 Swift 会话缺失（dsid/authToken 为空）"
+                : "尚未登录 Apple ID"
+            LoginLogger.shared.log("⚠ 增加内存限制：团队列表未发起 —— \(reason)")
+            teamState = .failed("\(reason)。请到「更多 → 设置」重新登录 Apple ID。")
+            return
+        }
         teamState = .loading
         appState = .idle
         // v0.2.116 看门狗：超时强制切失败态，不让 UI 永久停在「正在加载团队…」。

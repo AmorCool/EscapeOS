@@ -95,8 +95,18 @@ final class CertificateManager: ObservableObject {
 
     /// 加载团队列表（「开发者团队」栏）。失败会把原因写进 `lastError`。
     func loadTeams() {
+        // v0.2.120：这里以前只设 lastError 就 return，teamState 停在 `.idle`，
+        // 而 UI 把 `.idle` 和 `.loading` 渲染成同一个转圈 → 表现为"永远卡在
+        // 加载团队"且不打任何日志。现在必须落到 `.failed` 并写日志，
+        // 让用户看得到真实原因 + 有「重试」可点。
         guard settings.isLoggedIn, let session else {
-            lastError = "尚未登录 Apple ID。请先点右上角「登录」并完成两步验证。"
+            let reason = settings.isLoggedIn
+                ? "已登录但 Swift 会话缺失（dsid/authToken 为空）"
+                : "尚未登录 Apple ID"
+            LoginLogger.shared.log("⚠ 团队列表未发起：\(reason)")
+            let text = "\(reason)。请到「更多 → 设置」重新登录 Apple ID。"
+            lastError = text
+            teamState = .failed(text)
             return
         }
         guard !isLoadingTeams else { return }

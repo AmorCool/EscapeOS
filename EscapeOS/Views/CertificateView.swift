@@ -193,16 +193,23 @@ struct CertificateView: View {
     private var teamSection: some View {
         Section {
             switch manager.teamState {
-            case .idle, .loading:
+            case .idle:
+                // v0.2.120：`.idle` 以前和 `.loading` 渲染成同一个转圈，
+                // 导致"压根没发起请求"被误认为"正在加载"，用户永远等不到结果。
+                // 现在 `.idle` 明确显示未加载 + 给一个「加载」按钮。
+                HStack {
+                    Image(systemName: "exclamationmark.circle").foregroundColor(.orange)
+                    Text("尚未加载团队")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("加载") { manager.loadTeams() }
+                }
+                .onAppear { manager.loadTeams() }
+            case .loading:
                 HStack {
                     ProgressView().controlSize(.small)
                     Text("正在加载团队…")
                         .foregroundColor(.secondary)
-                }
-                // .idle 说明还没发起过请求（例如别处已把证书拉好、autoLoad 被
-                // hasLoaded 守卫跳过）。进页面就补一次，避免永远停在加载中。
-                .onAppear {
-                    if case .idle = manager.teamState { manager.loadTeams() }
                 }
             case .failed(let message):
                 HStack {

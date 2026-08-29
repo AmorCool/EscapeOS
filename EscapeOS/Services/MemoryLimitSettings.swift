@@ -159,6 +159,7 @@ final class MemoryLimitSettings: ObservableObject {
     private init() {
         migrateLegacySideloadSession()
         refresh()
+        logCredentialSnapshot()
     }
 
     // MARK: - 会话归属（v0.2.112：两套实现必须分开存）
@@ -190,23 +191,55 @@ final class MemoryLimitSettings: ObservableObject {
     /// **v0.2.111 没写 `sessionOwner`**，因此不能只看归属标记；结合
     /// `accountName` 判断：Swift 登录会写 accountName/firstName/lastName，
     /// isideload 登录不会。没有 accountName 的主键凭据视为 isideload 污染。
+    ///
+    /// **v0.2.120 修复（这是「证书管理/增加内存限制卡在加载团队」的真凶）**：
+    /// 原实现用 `sideloadDSID != nil` 判定"已迁移过"，然后**无条件删除
+    /// `dsid`/`authToken` 主键**。于是只要用户用过 IPA 侧载登录（写入
+    /// sideloadDSID），**每次冷启动都会把 Swift 侧的登录会话删掉**：
+    /// 设置里登录（写 dsid/authToken）→ 去 IPA 侧载登录（写 sideloadDSID）
+    /// → 下次启动 Swift 会话被清空 → `session` 为 nil → `loadTeams()` 首道
+    /// 守卫 return → 团队栏停在 `.idle`，而 UI 把 `.idle` 和 `.loading` 渲染成
+    /// 同一个转圈 → 表现为"永远卡在加载团队"，且不打任何日志。
+    ///
+    /// 正确语义：这是**一次性**的遗留数据清理，判断依据必须是"归属标记是否存在"。
     private func migrateLegacySideloadSession() {
-        // 已迁移过：只确保主键干净
-        if keychain.string(for: "sideloadDSID") != nil {
-            keychain.delete("dsid")
-            keychain.delete("authToken")
-            return
-        }
+        // 已确定归属（v0.2.112 及之后写入的会话）：主键的存废由登录流程负责，
+        // 迁移逻辑不再插手。
+        if currentOwner() != nil { return }
+
         let legacyDSID = keychain.string(for: "dsid") ?? ""
         let legacyToken = keychain.string(for: "authToken") ?? ""
         guard !legacyDSID.isEmpty, !legacyToken.isEmpty else { return }
-        // 有 accountName 说明是 Swift 登录产生的合法会话，保留不动
-        guard keychain.string(for: "accountName")?.isEmpty ?? true else { return }
+
+        // 有 accountName 说明是 Swift 登录产生的合法会话 —— 必须保留，
+        // 只补上归属标记，防止以后再被误判。
+        let accountName = keychain.string(for: "accountName") ?? ""
+        if !accountName.isEmpty || (keychain.string(for: "firstName") ?? "").isEmpty == false {
+            keychain.set(SessionOwner.swift.rawValue, for: "sessionOwner")
+            return
+        }
+
+        // 无归属标记、无 accountName → 认定为 v0.2.111 遗留的 isideload 污染，搬走。
         keychain.set(legacyDSID, for: "sideloadDSID")
         keychain.set(legacyToken, for: "sideloadAuthToken")
         keychain.delete("dsid")
         keychain.delete("authToken")
         keychain.set(SessionOwner.sideload.rawValue, for: "sessionOwner")
+    }
+
+    /// 启动时把凭据状态写进登录日志。v0.2.120：团队栏"假卡死"排查成本极高，
+    /// 这里一次性给出 Swift 会话 / isideload 凭据 / 归属标记的完整快照。
+    func logCredentialSnapshot() {
+        let owner = currentOwner()?.rawValue ?? "无"
+        let swiftOK = (keychain.string(for: "dsid") ?? "").isEmpty == false
+            && (keychain.string(for: "authToken") ?? "").isEmpty == false
+        let sideloadOK = (keychain.string(for: "sideloadDSID") ?? "").isEmpty == false
+        LoginLogger.shared.log("… 凭据快照：isLoggedIn=\(isLoggedIn) owner=\(owner) "
+            + "Swift会话=\(swiftOK ? "有" : "无") 侧载凭据=\(sideloadOK ? "有" : "无")")
+        if isLoggedIn && !swiftOK {
+            LoginLogger.shared.log("⚠ 已登录但 Swift 会话缺失 —— 证书管理/增加内存限制无法建 session。"
+                + "请在「设置」重新登录 Apple ID。")
+        }
     }
 
     func refresh() {
