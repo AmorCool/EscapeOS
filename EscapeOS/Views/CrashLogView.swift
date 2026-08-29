@@ -260,13 +260,9 @@ struct CrashLogView: View {
 
     private func open(_ entry: CrashLogService.Entry) {
         guard !busy else { return }
-        if !isFile(entry.name) {
-            // 目录：直接进入（v0.2.125：不再尝试拉取预览，避免"识别成文件"）。
-            currentDir = entry.path
-            reload()
-            return
-        }
-        // 文件：拉取内容预览；个别无后缀文件若拉取失败，退回按目录进入。
+        // v0.2.126：crashreportcopymobile 服务端是扁平结构（根就是日志列表），
+        // 对"目录"调 ls 会返回 Afc(ObjectNotFound)。因此一律按文件拉取预览，
+        // 失败时给出明确提示，不再尝试进入子目录。
         previewEntry = entry
         previewText = ""
         previewLoading = true
@@ -283,8 +279,7 @@ struct CrashLogView: View {
                 DispatchQueue.main.async {
                     previewEntry = nil
                     previewLoading = false
-                    currentDir = entry.path
-                    reload()
+                    toast = "无法打开：\(error.localizedDescription)"
                 }
             }
         }

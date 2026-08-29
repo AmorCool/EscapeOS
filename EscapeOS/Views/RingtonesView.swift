@@ -4,14 +4,14 @@ import UniformTypeIdentifiers
 /// 铃声管理：经 RSD 隧道（AFC）访问设备铃声目录，
 /// 支持用户铃声的导入 / 导出 / 删除，以及系统提示音的提取 / 导出 / 刷新。
 struct RingtonesView: View {
-    @State private var userRingtones: [AFCService.Entry] = []
-    @State private var systemSounds: [AFCService.Entry] = []
+    @State private var userRingtones: [RingtonesService.Entry] = []
+    @State private var systemSounds: [RingtonesService.Entry] = []
     @State private var loading = false
     @State private var errorMessage: String?
     @State private var busy = false
     @State private var showImporter = false
     @State private var toast: String?
-    @State private var confirmDelete: AFCService.Entry?
+    @State private var confirmDelete: RingtonesService.Entry?
     @State private var shareItem: ShareURL?
 
     private let service = RingtonesService.shared
@@ -154,7 +154,7 @@ struct RingtonesView: View {
         }
     }
 
-    private func row(_ entry: AFCService.Entry) -> some View {
+    private func row(_ entry: RingtonesService.Entry) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "music.note")
                 .foregroundColor(.blue)
@@ -222,7 +222,7 @@ struct RingtonesView: View {
     }
 
     /// 导出 / 提取：下载到本地后弹系统分享面板。
-    private func export(_ entry: AFCService.Entry) {
+    private func export(_ entry: RingtonesService.Entry) {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
             do {

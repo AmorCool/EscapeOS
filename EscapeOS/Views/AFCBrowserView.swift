@@ -2,12 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// AFC 管理：通过「配对文件 + LocalDevVPN」隧道连接本机 AFC 服务
-/// （com.apple.afc.shim.remote，根 = 整个文件系统）。
-/// 初始目录为 /var/mobile/media，可返回上级浏览全盘：
-/// 浏览、下载 / 导出（分享）、上传、新建目录、移动、重命名、删除。
+/// （com.apple.afc.shim.remote，**根 = /var/mobile/media**）。
+/// 浏览媒体目录（DCIM / Downloads / Recordings 等）：
+/// 下载 / 导出（分享）、上传、新建目录、移动、重命名、删除。
 struct AFCBrowserView: View {
-    /// AFC 服务端路径栈（初始 = /var/mobile/media，可回上级到 /）。
-    @State private var pathStack: [String] = ["/var/mobile/media"]
+    /// AFC 服务端路径栈（"/" = AFC 根 = /var/mobile/media）。
+    @State private var pathStack: [String] = ["/"]
     @State private var entries: [AFCService.Entry] = []
     @State private var loading = false
     @State private var errorMessage: String?
@@ -76,7 +76,7 @@ struct AFCBrowserView: View {
                 Text(pathText)
             } footer: {
                 if !loading && errorMessage == nil {
-                    Text("AFC 服务根目录为整个文件系统，初始进入 /var/mobile/media。支持下载 / 导出（分享）、移动、删除。")
+                    Text("AFC 根目录 = 设备的 /var/mobile/media（照片、下载、录音等）。支持下载 / 导出（分享）、移动、删除。")
                 }
             }
         }
