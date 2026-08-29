@@ -131,6 +131,17 @@ final class CrashLogService {
         entries.deallocate()
     }
 
+    /// 在串行队列上执行可能抛错的闭包（Theos 的 DispatchQueue.sync 无 throwing
+    /// 重载，用 Result 包装绕开 —— v0.2.122 实锤）。
+    private func syncOnQueue<T>(_ body: () throws -> T) throws -> T {
+        var result: Result<T, Error>!
+        queue.sync {
+            do { result = .success(try body()) }
+            catch { result = .failure(error) }
+        }
+        return try result.get()
+    }
+
     // MARK: - 列表 / 拉取 / 删除
 
     /// 列出日志。`subdirectory` 为 nil 时列服务端根目录（可能有分类子目录）。
@@ -138,7 +149,7 @@ final class CrashLogService {
     /// AdapterHandle，无法获取），且 crashreportcopymobile 的列表本身已覆盖
     /// 已落盘的日志，因此不再额外触发 flush。
     func list(subdirectory: String? = nil) throws -> [Entry] {
-        try queue.sync {
+        try syncOnQueue {
             try withClient { client in
                 var entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
                 var count = 0
@@ -169,7 +180,7 @@ final class CrashLogService {
 
     /// 拉取日志文件内容（.ips 是 JSON 文本）。
     func pull(_ path: String) throws -> Data {
-        try queue.sync {
+        try syncOnQueue {
             try withClient { client in
                 var data: UnsafeMutablePointer<UInt8>?
                 var length = 0
@@ -192,7 +203,7 @@ final class CrashLogService {
 
     /// 删除日志。
     func remove(_ path: String) throws {
-        try queue.sync {
+        try syncOnQueue {
             try withClient { client in
                 let ffiError = path.withCString { name in
                     crash_report_client_remove(client, name)
@@ -217,7 +228,7 @@ final class CrashLogService {
 
     /// 批量导出：把选中的日志拉到本机 `CrashLogs/` 目录，返回导出文件路径列表。
     func export(entries: [Entry]) throws -> [String] {
-        try queue.sync {
+        try syncOnQueue {
             var exported: [String] = []
             for entry in entries {
                 let data = try pull(entry.path)

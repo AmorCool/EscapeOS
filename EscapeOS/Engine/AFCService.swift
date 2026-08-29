@@ -145,11 +145,26 @@ final class AFCService {
         entries.deallocate()
     }
 
+    /// 在串行队列上执行可能抛错的闭包。
+    ///
+    /// 不直接用 `try afcQueue.sync { ... }`：Theos 的 GCD 桥接里
+    /// `DispatchQueue.sync` 只有非 throwing 重载，throwing 闭包会报
+    /// "invalid conversion from throwing function"（v0.2.122 实锤）。
+    /// 这里用 Result 包装绕开。
+    private func syncOnQueue<T>(_ body: () throws -> T) throws -> T {
+        var result: Result<T, Error>!
+        afcQueue.sync {
+            do { result = .success(try body()) }
+            catch { result = .failure(error) }
+        }
+        return try result.get()
+    }
+
     // MARK: - 浏览
 
     /// 列出目录内容。`path` 为空或 "/" 表示 AFC 根（= /var/mobile/media）。
     func listDirectory(_ path: String) throws -> [Entry] {
-        try afcQueue.sync {
+        try syncOnQueue {
             try withClient { client in
                 var entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
                 var count = 0
@@ -202,7 +217,7 @@ final class AFCService {
 
     /// 下载文件全部内容。
     func readFile(_ path: String) throws -> Data {
-        try afcQueue.sync {
+        try syncOnQueue {
             try withClient { client in
                 var handle: OpaquePointer?
                 if let ffiError = path.withCString({ afc_file_open(client, $0, AfcRdOnly, &handle) }) {
@@ -227,7 +242,7 @@ final class AFCService {
 
     /// 上传文件（父目录必须已存在）。
     func writeFile(_ data: Data, to path: String) throws {
-        try afcQueue.sync {
+        try syncOnQueue {
             try withClient { client in
                 var handle: OpaquePointer?
                 if let ffiError = path.withCString({ afc_file_open(client, $0, AfcWrOnly, &handle) }) {
@@ -248,7 +263,7 @@ final class AFCService {
 
     /// 新建目录。
     func makeDirectory(_ path: String) throws {
-        try afcQueue.sync {
+        try syncOnQueue {
             try withClient { client in
                 if let ffiError = path.withCString({ afc_make_directory(client, $0) }) {
                     throw error(from: ffiError, fallback: "新建目录失败：\(path)")
@@ -259,7 +274,7 @@ final class AFCService {
 
     /// 删除文件或目录（目录需为空，空目录用 `removePathAndContents`）。
     func removePath(_ path: String, includingContents: Bool = false) throws {
-        try afcQueue.sync {
+        try syncOnQueue {
             try withClient { client in
                 let ffiError: UnsafeMutablePointer<IdeviceFfiError>? = path.withCString { p in
                     if includingContents {
@@ -277,7 +292,7 @@ final class AFCService {
 
     /// 重命名 / 移动。
     func renamePath(_ source: String, to target: String) throws {
-        try afcQueue.sync {
+        try syncOnQueue {
             try withClient { client in
                 let ffiError = source.withCString { s in
                     target.withCString { t in
