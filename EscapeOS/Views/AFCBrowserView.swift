@@ -1,12 +1,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// AFC 管理：通过「配对文件 + LocalDevVPN」隧道连接本机 AFC 服务，
-/// 浏览 /var/mobile/media（AFC 根目录）下的文件：
-/// 浏览、下载到本机、上传、新建目录、重命名、删除。
+/// AFC 管理：通过「配对文件 + LocalDevVPN」隧道连接本机 AFC 服务
+/// （com.apple.afc.shim.remote，根 = 整个文件系统）。
+/// 初始目录为 /var/mobile/media，可返回上级浏览全盘：
+/// 浏览、下载 / 导出（分享）、上传、新建目录、移动、重命名、删除。
 struct AFCBrowserView: View {
-    /// AFC 服务端路径栈（"/" = AFC 根 = /var/mobile/media）。
-    @State private var pathStack: [String] = ["/"]
+    /// AFC 服务端路径栈（初始 = /var/mobile/media，可回上级到 /）。
+    @State private var pathStack: [String] = ["/var/mobile/media"]
     @State private var entries: [AFCService.Entry] = []
     @State private var loading = false
     @State private var errorMessage: String?
@@ -16,7 +17,21 @@ struct AFCBrowserView: View {
     @State private var renameTarget: AFCService.Entry?
     @State private var renameText = ""
     @State private var confirmDelete: AFCService.Entry?
+    @State private var activeSheet: SheetItem?
     @State private var toast: String?
+
+    /// 单一 sheet 入口（分享 / 移动），避免多个 .sheet 修饰符互相覆盖。
+    private enum SheetItem: Identifiable {
+        case share(ShareURL)
+        case move(AFCService.Entry)
+
+        var id: String {
+            switch self {
+            case .share(let url): return "share:\(url.id)"
+            case .move(let entry): return "move:\(entry.path)"
+            }
+        }
+    }
 
     private let service = AFCService.shared
 
@@ -28,6 +43,12 @@ struct AFCBrowserView: View {
         let dir = docs.appendingPathComponent("AFCDownloads", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.path
+    }
+
+    /// 上一级路径（用于"移动"目标选择）。
+    private var parentPath: String? {
+        guard pathStack.count > 1 else { return nil }
+        return pathStack[pathStack.count - 2]
     }
 
     var body: some View {
@@ -55,7 +76,7 @@ struct AFCBrowserView: View {
                 Text(pathText)
             } footer: {
                 if !loading && errorMessage == nil {
-                    Text("AFC 根目录对应设备的 /var/mobile/media（照片、下载、录音等）。")
+                    Text("AFC 服务根目录为整个文件系统，初始进入 /var/mobile/media。支持下载 / 导出（分享）、移动、删除。")
                 }
             }
         }
@@ -118,6 +139,14 @@ struct AFCBrowserView: View {
         } message: {
             Text("删除后无法恢复。")
         }
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .share(let item):
+                ActivityView(items: [item.url])
+            case .move(let source):
+                moveSheet(source: source)
+            }
+        }
         .overlay(alignment: .bottom) {
             if let toast {
                 Text(toast)
@@ -140,8 +169,68 @@ struct AFCBrowserView: View {
     }
 
     private var pathText: String {
-        if currentPath == "/" { return "路径：/var/mobile/media" }
-        return "路径：/var/mobile/media" + currentPath
+        "路径：\(currentPath)"
+    }
+
+    // MARK: - 移动目标选择
+
+    private func moveSheet(source: AFCService.Entry) -> some View {
+        NavigationView {
+            List {
+                Section {
+                    if let parentPath {
+                        Button {
+                            performMove(source: source, to: parentPath)
+                        } label: {
+                            Label("上一级（\(parentPath)）", systemImage: "arrow.up")
+                        }
+                    }
+                    ForEach(entries.filter(\.isDirectory)) { dir in
+                        Button {
+                            performMove(source: source, to: dir.path)
+                        } label: {
+                            Label(dir.name, systemImage: "folder.fill")
+                        }
+                    }
+                } header: {
+                    Text("目标目录（当前：\(currentPath)）")
+                }
+                if entries.filter(\.isDirectory).isEmpty && parentPath == nil {
+                    Text("没有可移动的目标目录")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("移动 \(source.name)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("取消") { activeSheet = nil }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func performMove(source: AFCService.Entry, to targetDir: String) {
+        let target = (targetDir == "/" ? "" : targetDir) + "/" + source.name
+        loading = true
+        activeSheet = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try service.renamePath(source.path, to: target)
+                DispatchQueue.main.async {
+                    toast = "已移动到 \(target)"
+                    loading = false
+                    reload()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    errorMessage = "移动失败：\(error.localizedDescription)"
+                    loading = false
+                }
+            }
+        }
     }
 
     // MARK: - 行
@@ -190,6 +279,20 @@ struct AFCBrowserView: View {
                 Label("重命名", systemImage: "pencil")
             }
             .tint(.orange)
+            Button {
+                activeSheet = .move(entry)
+            } label: {
+                Label("移动", systemImage: "arrow.right.square")
+            }
+            .tint(.blue)
+            if !entry.isDirectory {
+                Button {
+                    download(entry)
+                } label: {
+                    Label("导出", systemImage: "square.and.arrow.up")
+                }
+                .tint(.green)
+            }
         }
     }
 
@@ -239,6 +342,7 @@ struct AFCBrowserView: View {
         }
     }
 
+    /// 下载 + 导出（v0.2.125：下载后弹系统分享面板；旧版只存到 App 容器）。
     private func download(_ entry: AFCService.Entry) {
         loading = true
         DispatchQueue.global(qos: .userInitiated).async {
@@ -247,8 +351,8 @@ struct AFCBrowserView: View {
                 let target = URL(fileURLWithPath: downloadDir).appendingPathComponent(entry.name)
                 try data.write(to: target)
                 DispatchQueue.main.async {
-                    toast = "已下载到 App 的 AFCDownloads 目录（文件 App 可见）"
                     loading = false
+                    activeSheet = .share(ShareURL(url: target))
                 }
             } catch {
                 DispatchQueue.main.async {

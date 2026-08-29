@@ -182,36 +182,45 @@ final class CrashLogService {
     func pull(_ path: String) throws -> Data {
         try syncOnQueue {
             try withClient { client in
-                var data: UnsafeMutablePointer<UInt8>?
-                var length = 0
-                let ffiError = path.withCString { name in
-                    crash_report_client_pull(client, name, &data, &length)
-                }
-                if let ffiError {
-                    throw error(from: ffiError, fallback: "拉取日志失败：\(path)")
-                }
-                defer {
-                    // idevice_data_free 的 len 是 uintptr_t → Swift 导入为 UInt，
-                    // 而 crash_report_client_pull 的 size_t* 导入为 Int*，需转换。
-                    if let data { idevice_data_free(data, UInt(length)) }
-                }
-                guard let data else { return Data() }
-                return Data(bytes: data, count: length)
+                try pullInternal(client: client, path: path)
             }
         }
+    }
+
+    /// 无队列版本的拉取（供批量操作在同一连接里复用，避免嵌套 sync 死锁）。
+    private func pullInternal(client: OpaquePointer, path: String) throws -> Data {
+        var data: UnsafeMutablePointer<UInt8>?
+        var length = 0
+        let ffiError = path.withCString { name in
+            crash_report_client_pull(client, name, &data, &length)
+        }
+        if let ffiError {
+            throw error(from: ffiError, fallback: "拉取日志失败：\(path)")
+        }
+        defer {
+            // idevice_data_free 的 len 是 uintptr_t → Swift 导入为 UInt，
+            // 而 crash_report_client_pull 的 size_t* 导入为 Int*，需转换。
+            if let data { idevice_data_free(data, UInt(length)) }
+        }
+        guard let data else { return Data() }
+        return Data(bytes: data, count: length)
     }
 
     /// 删除日志。
     func remove(_ path: String) throws {
         try syncOnQueue {
             try withClient { client in
-                let ffiError = path.withCString { name in
-                    crash_report_client_remove(client, name)
-                }
-                if let ffiError {
-                    throw error(from: ffiError, fallback: "删除日志失败：\(path)")
-                }
+                try removeInternal(client: client, path: path)
             }
+        }
+    }
+
+    private func removeInternal(client: OpaquePointer, path: String) throws {
+        let ffiError = path.withCString { name in
+            crash_report_client_remove(client, name)
+        }
+        if let ffiError {
+            throw error(from: ffiError, fallback: "删除日志失败：\(path)")
         }
     }
 
@@ -226,19 +235,42 @@ final class CrashLogService {
         return dir.path
     }
 
-    /// 批量导出：把选中的日志拉到本机 `CrashLogs/` 目录，返回导出文件路径列表。
-    func export(entries: [Entry]) throws -> [String] {
+    /// 批量导出：**同一条连接**循环拉取（v0.2.125 修复：旧版在队列闭包里嵌套
+    /// 调 `pull`，内部再次 `queue.sync` → 死锁；且每个文件单独建隧道极慢）。
+    /// `progress` 回调在后台队列执行，调用方负责切主线程。
+    func export(entries: [Entry], progress: ((Int, Int) -> Void)? = nil) throws -> [String] {
         try syncOnQueue {
-            var exported: [String] = []
-            for entry in entries {
-                let data = try pull(entry.path)
-                let safeName = entry.path.replacingOccurrences(of: "/", with: "_")
-                let target = URL(fileURLWithPath: Self.exportDirectory)
-                    .appendingPathComponent(safeName)
-                try data.write(to: target)
-                exported.append(target.path)
+            try withClient { client in
+                var exported: [String] = []
+                for (index, entry) in entries.enumerated() {
+                    let data = try pullInternal(client: client, path: entry.path)
+                    let safeName = entry.path.replacingOccurrences(of: "/", with: "_")
+                    let target = URL(fileURLWithPath: Self.exportDirectory)
+                        .appendingPathComponent(safeName)
+                    try data.write(to: target)
+                    exported.append(target.path)
+                    progress?(index + 1, entries.count)
+                }
+                return exported
             }
-            return exported
+        }
+    }
+
+    /// 批量删除：**同一条连接**循环删除，返回失败数。
+    func removeBatch(_ entries: [Entry], progress: ((Int, Int) -> Void)? = nil) throws -> Int {
+        try syncOnQueue {
+            try withClient { client in
+                var failed = 0
+                for (index, entry) in entries.enumerated() {
+                    do {
+                        try removeInternal(client: client, path: entry.path)
+                    } catch {
+                        failed += 1
+                    }
+                    progress?(index + 1, entries.count)
+                }
+                return failed
+            }
         }
     }
 }

@@ -16,10 +16,16 @@ struct CrashLogView: View {
     @State private var toast: String?
     @State private var confirmDelete = false
     @State private var exporting = false
+    /// 批量操作中（导出 / 删除）：显示进度，禁用重复操作。
+    @State private var busy = false
+    /// 进度文本（如「3 / 12」）。
+    @State private var progressText: String?
 
     private let service = CrashLogService.shared
 
     /// 常见的日志文件后缀（用于区分文件与子目录）。
+    /// v0.2.125：目录名（CrashReporter / DiagnosticLogs）不带点，文件名带点
+    /// （.ips / .log），据此判断 —— 旧版把"无点=文件"当成了启发式，方向反了。
     private static let fileSuffixes = [".ips", ".log", ".txt", ".panic", ".crash", ".json", ".plist", ".synced"]
 
     private var selectedEntries: [CrashLogService.Entry] {
@@ -60,21 +66,30 @@ struct CrashLogView: View {
         .navigationTitle("崩溃分析")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItemGroup(placement: .navigationBarLeading) {
                 if isEditing {
                     Button("全选") { selectAll() }
-                } else if currentDir != nil {
+                } else {
                     Button {
-                        currentDir = nil
                         reload()
                     } label: {
-                        Image(systemName: "arrow.up")
+                        Image(systemName: "arrow.clockwise")
                     }
-                    .accessibilityLabel("返回根目录")
+                    .accessibilityLabel("刷新")
+                    .disabled(busy)
+                    if currentDir != nil {
+                        Button {
+                            currentDir = nil
+                            reload()
+                        } label: {
+                            Image(systemName: "arrow.up")
+                        }
+                        .accessibilityLabel("返回根目录")
+                    }
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                if !entries.isEmpty {
+                if !entries.isEmpty && !busy {
                     Button(isEditing ? "完成" : "选择") {
                         withAnimation { isEditing.toggle() }
                         if !isEditing { selection.removeAll() }
@@ -85,6 +100,24 @@ struct CrashLogView: View {
         .safeAreaInset(edge: .bottom) {
             if isEditing {
                 bottomBar
+            }
+        }
+        .overlay {
+            // v0.2.125：批量导出 / 删除进度遮罩（旧版无进度、且导出会闪退）。
+            if busy {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    if let progressText {
+                        Text(progressText)
+                            .font(.subheadline.weight(.medium))
+                    }
+                    Text("正在处理…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(28)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .shadow(radius: 8)
             }
         }
         .sheet(item: $previewEntry) { entry in
@@ -156,7 +189,7 @@ struct CrashLogView: View {
             } label: {
                 Label("导出", systemImage: "square.and.arrow.down")
             }
-            .disabled(selection.isEmpty || exporting)
+            .disabled(selection.isEmpty || busy)
             .buttonStyle(.borderedProminent)
 
             Button(role: .destructive) {
@@ -164,7 +197,7 @@ struct CrashLogView: View {
             } label: {
                 Label("删除", systemImage: "trash")
             }
-            .disabled(selection.isEmpty)
+            .disabled(selection.isEmpty || busy)
             .buttonStyle(.bordered)
         }
         .padding(.horizontal)
@@ -198,10 +231,12 @@ struct CrashLogView: View {
 
     // MARK: - 数据
 
+    /// v0.2.125 修正：目录名（CrashReporter / DiagnosticLogs）不带点，
+    /// 日志文件名（xxx.ips）带点。旧版「无点 = 文件」把文件夹全当成了文件。
     private func isFile(_ name: String) -> Bool {
         let lower = name.lowercased()
-        return Self.fileSuffixes.contains { lower.hasSuffix($0) }
-            || !lower.contains(".")
+        if Self.fileSuffixes.contains(where: { lower.hasSuffix($0) }) { return true }
+        return lower.contains(".")
     }
 
     private func reload() {
@@ -224,8 +259,14 @@ struct CrashLogView: View {
     }
 
     private func open(_ entry: CrashLogService.Entry) {
-        // 先尝试按文件拉取内容预览；失败（可能是目录）则尝试进入子目录。
-        // 这样不依赖文件名后缀猜测，目录 / 文件都能正确处理。
+        guard !busy else { return }
+        if !isFile(entry.name) {
+            // 目录：直接进入（v0.2.125：不再尝试拉取预览，避免"识别成文件"）。
+            currentDir = entry.path
+            reload()
+            return
+        }
+        // 文件：拉取内容预览；个别无后缀文件若拉取失败，退回按目录进入。
         previewEntry = entry
         previewText = ""
         previewLoading = true
@@ -239,7 +280,6 @@ struct CrashLogView: View {
                     previewLoading = false
                 }
             } catch {
-                // 拉取失败 → 当作子目录进入。
                 DispatchQueue.main.async {
                     previewEntry = nil
                     previewLoading = false
@@ -260,16 +300,27 @@ struct CrashLogView: View {
 
     private func exportSelected() {
         let targets = selectedEntries
+        guard !targets.isEmpty, !busy else { return }
+        busy = true
         exporting = true
+        progressText = "0 / \(targets.count)"
+        isEditing = false
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let paths = try service.export(entries: targets)
+                let paths = try service.export(entries: targets) { done, total in
+                    DispatchQueue.main.async {
+                        progressText = "\(done) / \(total)"
+                    }
+                }
                 DispatchQueue.main.async {
+                    busy = false
                     exporting = false
+                    selection.removeAll()
                     toast = "已导出 \(paths.count) 个日志到 App 的 CrashLogs 目录（文件 App 可见）"
                 }
             } catch {
                 DispatchQueue.main.async {
+                    busy = false
                     exporting = false
                     toast = "导出失败：\(error.localizedDescription)"
                 }
@@ -279,18 +330,29 @@ struct CrashLogView: View {
 
     private func deleteSelected() {
         let targets = selectedEntries
+        guard !targets.isEmpty, !busy else { return }
+        busy = true
+        progressText = "0 / \(targets.count)"
         DispatchQueue.global(qos: .userInitiated).async {
-            var failed = 0
-            for entry in targets {
-                do { try service.remove(entry.path) }
-                catch { failed += 1 }
-            }
-            DispatchQueue.main.async {
-                selection.removeAll()
-                toast = failed == 0
-                    ? "已删除 \(targets.count) 个日志"
-                    : "已删除 \(targets.count - failed) 个，失败 \(failed) 个"
-                reload()
+            do {
+                let failed = try service.removeBatch(targets) { done, total in
+                    DispatchQueue.main.async {
+                        progressText = "\(done) / \(total)"
+                    }
+                }
+                DispatchQueue.main.async {
+                    busy = false
+                    selection.removeAll()
+                    toast = failed == 0
+                        ? "已删除 \(targets.count) 个日志"
+                        : "已删除 \(targets.count - failed) 个，失败 \(failed) 个"
+                    reload()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    busy = false
+                    toast = "删除失败：\(error.localizedDescription)"
+                }
             }
         }
     }

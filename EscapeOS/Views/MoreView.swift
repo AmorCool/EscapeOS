@@ -92,6 +92,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: RingtonesView()) {
+                    MoreCard(
+                        icon: "music.note.list",
+                        title: "铃声管理",
+                        subtitle: "导入 / 导出 / 删除用户铃声，并可提取系统提示音（需配对文件 + LocalDevVPN）。"
+                    )
+                }
+
                 NavigationLink(destination: FileBrowserRootView(appList: appList)) {
                     MoreCard(
                         icon: "folder.fill",
@@ -104,7 +112,7 @@ struct MoreView: View {
                     MoreCard(
                         icon: "externaldrive.fill",
                         title: "AFC 管理",
-                        subtitle: "通过本地隧道浏览 /var/mobile/media：下载、上传、新建目录、删除（需配对文件 + LocalDevVPN）。"
+                        subtitle: "经本地隧道浏览设备文件系统（初始 /var/mobile/media）：下载导出、上传、移动、新建目录、删除（需配对文件 + LocalDevVPN）。"
                     )
                 }
 

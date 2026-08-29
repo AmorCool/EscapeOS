@@ -162,7 +162,20 @@ final class AFCService {
 
     // MARK: - 浏览
 
-    /// 列出目录内容。`path` 为空或 "/" 表示 AFC 根（= /var/mobile/media）。
+    /// 在一条 AFC 连接上执行批量操作（供 IPCC 安装 / 铃声管理复用，
+    /// 避免逐文件重建隧道）。已在串行队列内，body 里可直接调 C 函数。
+    func batch<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+        try syncOnQueue {
+            try withClient { client in
+                try body(client)
+            }
+        }
+    }
+
+    /// 列出目录内容。`path` 为空或 "/" 表示 AFC 根。
+    /// v0.2.125：`afc_client_connect_rsd` 实际连的是 `com.apple.afc.shim.remote`
+    /// （iOS 26 开发者模式远程 AFC），根是整个文件系统 —— 所以能看到
+    /// /var、/System 等完整路径，/var/mobile/media 只是其中一个子目录。
     func listDirectory(_ path: String) throws -> [Entry] {
         try syncOnQueue {
             try withClient { client in

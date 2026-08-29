@@ -1,20 +1,18 @@
 import Foundation
 
 /// IPCC 安装服务：导入运营商配置文件（.ipcc，本质是 zip），
-/// 解包出 `.bundle`（如 `46000_ipcc.bundle`），写入
-/// `/var/mobile/Library/Carrier Bundles/Overrides/`（用户数据分区，
-/// 通过 bad_query 签发沙盒扩展访问），重启后由系统加载生效。
+/// 解包出 `.bundle`，通过 **RSD 隧道（idevice 那套）** 写入
+/// `/var/mobile/Library/Carrier Bundles/Overrides/`，重启后由系统加载生效。
 ///
-/// 注意：本服务能做的只是"把 bundle 放进 Overrides 目录"。
-/// 是否真正生效取决于 iOS 版本对 Carrier Bundles 的加载策略
-/// （iOS 26 实测需要验证），安装成功后必须重启设备/SpringBoard。
+/// v0.2.125：从 bad_query 改为走 `AFCService`（`afc_client_connect_rsd` →
+/// `com.apple.afc.shim.remote`，iOS 26 开发者模式的远程 AFC，根是整个文件系统），
+/// 与 AFC 管理 / 铃声管理同一套隧道，避免 bad_query 对系统用户目录权限的不确定性。
 final class IPCCInstallService {
 
     static let shared = IPCCInstallService()
     private init() {}
 
-    private let escape = SandboxEscape()
-    private let files = FileService()
+    private let afc = AFCService.shared
 
     /// Overrides 目录（IPCC 安装目标）。
     static let overrideRoot = "/var/mobile/Library/Carrier Bundles/Overrides"
@@ -30,13 +28,9 @@ final class IPCCInstallService {
 
     /// 解析 .ipcc 得到的包信息。
     struct ParsedIPCC {
-        /// bundle 目录名（如 `46000_ipcc.bundle`）。
         let bundleName: String
-        /// Info.plist 里的 CFBundleIdentifier（如 `com.apple.CarrierBundle.46000`）。
         let identifier: String
-        /// 版本（CFBundleVersion，缺失时用空串）。
         let version: String
-        /// zip 内 bundle 前缀（`46000_ipcc.bundle/`）。
         let prefix: String
     }
 
@@ -68,7 +62,6 @@ final class IPCCInstallService {
             throw makeError("IPCC 里没有找到 .bundle 目录，不是有效的运营商包")
         }
 
-        // 读 Info.plist
         var identifier = ""
         var version = ""
         if let infoName = names.first(where: { $0 == prefix + "Info.plist" }) {
@@ -82,9 +75,9 @@ final class IPCCInstallService {
         return ParsedIPCC(bundleName: bundleName, identifier: identifier, version: version, prefix: prefix)
     }
 
-    // MARK: - 安装
+    // MARK: - 安装（走 RSD 隧道 / AFC）
 
-    /// 安装 .ipcc：解包 → 写入 Overrides（bad_query 扩展）→ 清理暂存。
+    /// 安装 .ipcc：解包 → 经 AFC 隧道写入 Overrides → 清理暂存。
     /// 返回安装到的 bundle 路径。
     func install(ipccURL: URL) throws -> String {
         let parsed = try parse(ipccURL: ipccURL)
@@ -92,10 +85,10 @@ final class IPCCInstallService {
         // 1. 解包到本地暂存目录（本容器内，无权限问题）。
         let stagingRoot = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("IPCCStaging", isDirectory: true)
-        try? files.deleteItem(at: stagingRoot.path)
-        try files.createDirectory(at: stagingRoot.path)
+        try? FileManager.default.removeItem(atPath: stagingRoot.path)
+        try FileManager.default.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
         let bundleStaging = stagingRoot.appendingPathComponent(parsed.bundleName).path
-        try files.createDirectory(at: bundleStaging)
+        try FileManager.default.createDirectory(atPath: bundleStaging, withIntermediateDirectories: true)
 
         let reader = try ZipReader(url: ipccURL)
         for name in reader.entryNames() where name.hasPrefix(parsed.prefix) {
@@ -103,50 +96,88 @@ final class IPCCInstallService {
             guard !relative.isEmpty else { continue }
             let data = try reader.readEntry(named: name)
             let target = URL(fileURLWithPath: bundleStaging).appendingPathComponent(relative).path
-            try files.writeFile(data: data, to: target)
+            try data.write(to: URL(fileURLWithPath: target))
         }
-        defer { try? files.deleteItem(at: stagingRoot.path) }
+        defer { try? FileManager.default.removeItem(atPath: stagingRoot.path) }
 
-        // 2. 对 Overrides 目录签发沙盒扩展（create: true 允许目录不存在时预创建）。
-        let handle = try escape.consume(path: Self.overrideRoot, create: true)
-        defer { escape.release(handle) }
-        // Overrides 目录可能还不存在：扩展签发后显式递归创建。
-        try files.createDirectory(at: Self.overrideRoot)
-
-        // 3. 目标：Overrides/<bundleName>；已存在则先删除旧版本。
+        // 2. 经 AFC 隧道批量上传（一条连接完成全部文件，v0.2.125）。
         let targetBundle = Self.overrideRoot + "/" + parsed.bundleName
-        if files.exists(at: targetBundle) {
-            try files.deleteItem(at: targetBundle)
+        try afc.batch { client in
+            // 确保 Overrides 存在（已存在则 afc_make_directory 报错，忽略）
+            _ = Self.overrideRoot.withCString { afc_make_directory(client, $0) }
+            // 已存在同名牌则先整体删除
+            Self.removeViaAFC(client: client, path: targetBundle)
+            // 逐文件上传（保留目录结构）
+            try Self.uploadDirectory(client: client, localDir: bundleStaging, remoteDir: targetBundle)
         }
-        try files.copyItem(at: bundleStaging, to: targetBundle)
-
         return targetBundle
+    }
+
+    // MARK: - AFC 底层辅助（batch 内使用）
+
+    private static func removeViaAFC(client: OpaquePointer, path: String) {
+        _ = path.withCString { afc_remove_path_and_contents(client, $0) }
+    }
+
+    private static func uploadDirectory(client: OpaquePointer, localDir: String, remoteDir: String) throws {
+        _ = remoteDir.withCString { afc_make_directory(client, $0) }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: localDir)) ?? []
+        for name in names {
+            let local = (localDir as NSString).appendingPathComponent(name)
+            let remote = (remoteDir as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: local, isDirectory: &isDir), isDir.boolValue {
+                try uploadDirectory(client: client, localDir: local, remoteDir: remote)
+            } else {
+                let data = try Data(contentsOf: URL(fileURLWithPath: local))
+                var file: OpaquePointer?
+                if let ffiError = remote.withCString({ afc_file_open(client, $0, AfcWrOnly, &file) }) {
+                    let msg = ffiError.pointee.message.map { String(cString: $0) } ?? "rc=\(ffiError.pointee.code)"
+                    idevice_error_free(ffiError)
+                    throw NSError(domain: "IPCCInstall", code: -1,
+                                  userInfo: [NSLocalizedDescriptionKey: "创建远程文件失败：\(remote)（\(msg)）"])
+                }
+                guard let file else {
+                    throw NSError(domain: "IPCCInstall", code: -1,
+                                  userInfo: [NSLocalizedDescriptionKey: "创建远程文件失败：\(remote)"])
+                }
+                defer { afc_file_close(file) }
+                try data.withUnsafeBytes { buffer in
+                    let base = buffer.bindMemory(to: UInt8.self).baseAddress
+                    var offset = 0
+                    while offset < data.count {
+                        let chunk = min(1_048_576, data.count - offset)
+                        if let ffiError = afc_file_write(file, base?.advanced(by: offset), chunk) {
+                            let msg = ffiError.pointee.message.map { String(cString: $0) } ?? "rc=\(ffiError.pointee.code)"
+                            idevice_error_free(ffiError)
+                            throw NSError(domain: "IPCCInstall", code: -1,
+                                          userInfo: [NSLocalizedDescriptionKey: "写入远程文件失败：\(remote)（\(msg)）"])
+                        }
+                        offset += chunk
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - 已安装列表 / 删除
 
-    /// 列出 Overrides 下已安装的 bundle（bad_query 扩展下读取 Info.plist）。
+    /// 列出 Overrides 下已安装的 bundle（经 AFC 隧道读取 Info.plist）。
     func listInstalled() -> [InstalledBundle] {
         do {
-            let handle = try escape.consume(path: Self.overrideRoot, create: true)
-            defer { escape.release(handle) }
-            guard files.isDirectory(at: Self.overrideRoot),
-                  let names = try? FileManager.default.contentsOfDirectory(atPath: Self.overrideRoot) else {
-                return []
-            }
+            let entries = try afc.listDirectory(Self.overrideRoot)
             var result: [InstalledBundle] = []
-            for name in names where name.hasSuffix(".bundle") {
-                let path = Self.overrideRoot + "/" + name
-                let infoPath = path + "/Info.plist"
+            for entry in entries where entry.name.hasSuffix(".bundle") && entry.isDirectory {
+                let path = entry.path
                 var identifier = ""
                 var version = ""
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: infoPath)),
+                if let data = try? afc.readFile(path + "/Info.plist"),
                    let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
                     identifier = plist["CFBundleIdentifier"] as? String ?? ""
                     version = plist["CFBundleVersion"] as? String
                         ?? plist["CFBundleShortVersionString"] as? String ?? ""
                 }
-                result.append(InstalledBundle(name: name, path: path,
+                result.append(InstalledBundle(name: entry.name, path: path,
                                               identifier: identifier, version: version))
             }
             return result.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -157,10 +188,6 @@ final class IPCCInstallService {
 
     /// 删除已安装的 bundle。
     func uninstall(_ bundle: InstalledBundle) throws {
-        let handle = try escape.consume(path: Self.overrideRoot, create: true)
-        defer { escape.release(handle) }
-        if files.exists(at: bundle.path) {
-            try files.deleteItem(at: bundle.path)
-        }
+        try afc.removePath(bundle.path, includingContents: true)
     }
 }
