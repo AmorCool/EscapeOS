@@ -349,6 +349,11 @@ struct AppListView: View {
         .sheet(item: $iconShare) { payload in
             IconShareSheet(image: payload.image, fileName: payload.suggestedName)
         }
+        // 用户切到后台去开 LocalDevVPN，回到前台时主动刷新一次。
+        // 与缩短后的 15s 超时配合，能更快从"开 App 后才连 VPN"的场景恢复。
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            viewModel.reload()
+        }
     }
 
     // MARK: - Selection helpers

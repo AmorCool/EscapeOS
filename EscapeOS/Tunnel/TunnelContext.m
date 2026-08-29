@@ -205,9 +205,9 @@
         });
     });
 
-    if (dispatch_semaphore_wait(firstBeat, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(20 * NSEC_PER_SEC))) != 0) {
+    if (dispatch_semaphore_wait(firstBeat, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(12 * NSEC_PER_SEC))) != 0) {
         globalHeartbeatToken++;
-        if (error) *error = [self _error:@"Timed out on the LocalDevVPN lockdown tunnel. Enable LocalDevVPN, stay on Wi-Fi, and use a pairing file from iPASide or iLoader." code:-9];
+        if (error) *error = [self _error:@"Timed out on the LocalDevVPN lockdown tunnel (12s). Enable LocalDevVPN, stay on Wi-Fi, and use a pairing file from iPASide or iLoader." code:-9];
         return NO;
     }
     if (hbCode != 0 || provider == NULL) {
@@ -279,10 +279,10 @@
         dispatch_semaphore_signal(sem);
     });
 
-    intptr_t timedOut = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(45 * NSEC_PER_SEC)));
+    intptr_t timedOut = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(15 * NSEC_PER_SEC)));
     if (timedOut && !done) {
         done = YES;
-        blockErr = [self _error:@"Timed out connecting to the local tunnel. Enable LocalDevVPN with its default Device/Tunnel IPs (10.7.0.1), stay on Wi-Fi, and use a pairing file from iPASide." code:-9];
+        blockErr = [self _error:@"Timed out connecting to the local tunnel (15s). Enable LocalDevVPN with its default Device/Tunnel IPs (10.7.0.1), stay on Wi-Fi, and use a pairing file from iPASide." code:-9];
         self->_lastTunnelError = blockErr;
     }
 

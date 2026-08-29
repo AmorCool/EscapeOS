@@ -493,11 +493,68 @@ struct IPAInstallView: View {
         return dest
     }
 
+    // MARK: - Apple ID 登录（统一走项目自带的 GrandSlam 引擎）
+
+    /// 用项目自带的 `AppleAuthenticator` 完成 Apple ID 登录，持久化
+    /// dsid/authToken 到 Keychain，再用 `si_signin_with_session` 创建
+    /// isideload 签名会话。这样 IPA 页登录也能像「设置」里登录一样
+    /// 杀后台重开后免登录复用。
+    private func authenticateWithApple(email: String, password: String) async throws {
+        let settings = MemoryLimitSettings.shared
+        let id = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ani = settings.anisetteServer
+
+        // 路径 1：已有 dsid/authToken → 免 2FA 恢复。
+        if !service.sessionRestoreFailed,
+           let dsid = settings.dsid, let authToken = settings.authToken,
+           !dsid.isEmpty, !authToken.isEmpty {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try IPAInstallService.shared.signInWithSession(
+                        email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)
+                }.value
+                return
+            } catch {
+                // token 失效，继续完整登录。
+            }
+        }
+
+        // 路径 2：完整 GrandSlam 登录（含 2FA）→ 保存 dsid/authToken。
+        let anisetteData = try await AnisetteProvider.shared.getAnisetteData()
+        let verificationHandler: (@escaping (String?) -> Void) async -> Void = { submitCode in
+            let code: String? = await withCheckedContinuation { continuation in
+                Task { @MainActor in
+                    self.twoFactorReply = { code in
+                        continuation.resume(returning: code)
+                    }
+                    self.twoFactorCode = ""
+                    self.showTwoFactor = true
+                }
+            }
+            submitCode(code)
+        }
+        let (account, session) = try await AppleAuthenticator.authenticate(
+            appleID: id,
+            password: password,
+            anisetteData: anisetteData,
+            verificationHandler: verificationHandler,
+            refreshAnisette: { try await AnisetteProvider.shared.getAnisetteData(refresh: true) }
+        )
+        await MainActor.run {
+            MemoryLimitSettings.shared.completeSignIn(
+                email: id, password: password, account: account, session: session)
+        }
+        // 用刚拿到的 dsid/authToken 创建 isideload 签名会话。
+        try await Task.detached(priority: .userInitiated) {
+            try IPAInstallService.shared.signInWithSession(
+                email: id, dsid: session.dsid, authToken: session.authToken, anisetteURL: ani)
+        }.value
+    }
+
     // MARK: - 自动登录（复用「更多 → 设置」的 Apple ID）
 
-    /// 复用「更多 → 设置」已保存的 Apple ID，**不重复登录/2FA**：
-    /// 1) 优先用 dsid + authToken 恢复 isideload 签名会话（免登录免 2FA）；
-    /// 2) 恢复失败（token 过期等）才回退用邮箱+密码完整登录（可能弹 2FA）。
+    /// 自动登录：优先用 dsid/authToken 免 2FA 恢复；没有 token 但存了密码时，
+    /// 走完整 GrandSlam 登录并在成功后保存 token（实现真正持久化）。
     private func autoSignInWithSavedCredentials() {
         guard !service.isSignedIn, !isRunning else { return }
         // warmUp（App 启动后台恢复）正在执行：不重复联网，等它完成——
@@ -506,34 +563,12 @@ struct IPAInstallView: View {
         let settings = MemoryLimitSettings.shared
         guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
         let id = settings.appleID
-        let ani = settings.anisetteServer
+        let pw = settings.password(forHistory: id) ?? ""
+        guard !pw.isEmpty else { return }
         isAutoSigningIn = true
         Task {
             do {
-                // 路径 1：已有 dsid/authToken → 免 2FA 恢复会话。
-                // （预热已失败过则跳过——token 大概率过期，白等一次注定失败的请求）
-                if !service.sessionRestoreFailed,
-                   let dsid = settings.dsid, let authToken = settings.authToken, !dsid.isEmpty, !authToken.isEmpty {
-                    do {
-                        try await Task.detached(priority: .userInitiated) {
-                            try IPAInstallService.shared.signInWithSession(
-                                email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)
-                        }.value
-                        isAutoSigningIn = false
-                        return
-                    } catch {
-                        // token 失效，回退完整登录。
-                    }
-                }
-                // 路径 2：邮箱+密码完整登录（2FA 走弹窗）。
-                let pw = settings.password(forHistory: id) ?? ""
-                guard !pw.isEmpty else {
-                    isAutoSigningIn = false
-                    return
-                }
-                try await Task.detached(priority: .userInitiated) {
-                    try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: ani)
-                }.value
+                try await authenticateWithApple(email: id, password: pw)
             } catch {
                 errorMessage = "自动登录失败：\(error.localizedDescription)"
             }
@@ -560,14 +595,7 @@ struct IPAInstallView: View {
                 // 1. 登录（如未登录）
                 if !service.isSignedIn {
                     step = .signingIn
-                    try await Task.detached(priority: .userInitiated) {
-                        try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: anisetteURL)
-                    }.value
-                    // 登录成功 → 凭据同步到「更多 → 设置」的 Apple ID 存储
-                    // （v0.2.107）：下次进 IPA 页自动登录可免手动输入；
-                    // dsid/authToken 由设置里的 Apple 认证引擎登录保存，
-                    // 用于 App 重启后的免 2FA 会话恢复。
-                    MemoryLimitSettings.shared.signIn(email: id, password: pw)
+                    try await authenticateWithApple(email: id, password: pw)
                 }
                 // 2. 签名
                 step = .signing

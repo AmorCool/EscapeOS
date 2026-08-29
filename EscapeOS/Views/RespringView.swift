@@ -3,7 +3,9 @@
 // 与 Erosion/Mond 展示方式一致：`.overlay` + `.brightness(-1.0)` + `.ignoresSafeArea()`。
 // 原理：在 WKWebView 中加载高压力 CSS（500 层 backdrop-filter 透视层）+ 持续
 // navigator.share / crypto 压力，把 SpringBoard 挤到内存不足自动重启（视觉上先黑屏）。
-// v0.2.108：iframe / WebView 均透明/0 尺寸，去掉默认占位方框。
+// v0.2.109：iframe 必须占满视口并保留极低透明度，这样 500 层 backdrop-filter
+// 才会被实际渲染、产生内存压力；如果 width/height=0 或完全透明，WebKit 会跳过
+// 渲染，导致挤崩 SpringBoard 失效。
 
 import SwiftUI
 import WebKit
@@ -15,7 +17,7 @@ let respringDocument = """
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <style>
             html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
-            iframe { position: absolute; width: 0; height: 0; border: none; opacity: 0; pointer-events: none; }
+            iframe { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; border: none; opacity: 0.01; pointer-events: none; }
         </style>
     </head>
     <body>
