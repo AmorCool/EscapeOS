@@ -23,7 +23,9 @@ struct CertificateView: View {
                 notSignedInSection
             } else {
                 teamSection
-                if let error = manager.lastError {
+                // 团队栏自己已展示失败原因，这里只在团队加载成功后补全局错误，
+                // 避免同一条消息在页面上出现两次。
+                if let error = manager.lastError, manager.teamState == .loaded {
                     Section {
                         InfoActionCard(
                             icon: manager.lastErrorIsSessionExpired ? "person.badge.key.fill" : "exclamationmark.triangle.fill",
@@ -196,6 +198,11 @@ struct CertificateView: View {
                     ProgressView().controlSize(.small)
                     Text("正在加载团队…")
                         .foregroundColor(.secondary)
+                }
+                // .idle 说明还没发起过请求（例如别处已把证书拉好、autoLoad 被
+                // hasLoaded 守卫跳过）。进页面就补一次，避免永远停在加载中。
+                .onAppear {
+                    if case .idle = manager.teamState { manager.loadTeams() }
                 }
             case .failed(let message):
                 HStack {

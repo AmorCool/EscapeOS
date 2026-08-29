@@ -160,6 +160,11 @@ final class CertificateManager: ObservableObject {
                 self.isSignedIn = true
             } catch {
                 self.setError(error)
+                // 团队列表还没拉到就失败（典型是会话过期 1100）：同步把团队栏
+                // 切到失败态，否则它会一直停在「正在加载团队…」。
+                if self.teams.isEmpty {
+                    self.teamState = .failed(self.message(of: error))
+                }
             }
             self.isWorking = false
         }
