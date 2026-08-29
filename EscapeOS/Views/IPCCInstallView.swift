@@ -1,17 +1,17 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// IPCC 安装：导入运营商配置文件（.ipcc），解包写入
-/// /var/mobile/Library/Carrier Bundles/Overrides，重启后生效。
+/// IPCC 安装：导入运营商配置文件（.ipcc），经 AFC 隧道上传到
+/// /var/mobile/Media/PublicStaging，再调 CoreTelephony 私有 API
+/// 交给 CommCenter 安装（爱思助手 / iTunes / Finder 同一条系统管线）。
 struct IPCCInstallView: View {
     @State private var showImporter = false
     @State private var parsed: IPCCInstallService.ParsedIPCC?
     @State private var parsedURL: URL?
     @State private var installing = false
-    @State private var installed: [IPCCInstallService.InstalledBundle] = []
+    @State private var records: [IPCCInstallService.InstallRecord] = []
     @State private var errorMessage: String?
     @State private var toast: String?
-    @State private var confirmUninstall: IPCCInstallService.InstalledBundle?
     @State private var showRespringHint = false
 
     private let service = IPCCInstallService.shared
@@ -21,6 +21,7 @@ struct IPCCInstallView: View {
             Section {
                 if let errorMessage {
                     Text(errorMessage)
+                        .font(.footnote)
                         .foregroundColor(.red)
                 }
                 if let parsed {
@@ -48,10 +49,10 @@ struct IPCCInstallView: View {
                         if installing {
                             HStack {
                                 ProgressView().controlSize(.small)
-                                Text("正在安装…")
+                                Text("正在上传并安装…")
                             }
                         } else {
-                            Label("安装到 Overrides", systemImage: "arrow.down.circle.fill")
+                            Label("更新 IPCC（官方通道）", systemImage: "arrow.down.circle.fill")
                         }
                     }
                     .disabled(installing)
@@ -59,43 +60,42 @@ struct IPCCInstallView: View {
             } header: {
                 Text("安装运营商包")
             } footer: {
-                Text("IPCC 是运营商配置文件（zip 格式）。安装后需要重启设备或 SpringBoard 才能生效。")
+                Text("与爱思助手 / iTunes「更新 IPCC」同一套系统管线：文件上传到 PublicStaging 后交给 CommCenter 安装。成功受理后建议重启设备生效。")
             }
 
             Section {
-                if installed.isEmpty {
-                    Text("尚未安装自定义运营商包")
+                if records.isEmpty {
+                    Text("暂无安装记录")
                         .foregroundColor(.secondary)
                 } else {
-                    ForEach(installed) { bundle in
+                    ForEach(records) { record in
                         HStack {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
-                                .foregroundColor(.blue)
+                            Image(systemName: record.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundColor(record.success ? .green : .red)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(bundle.name)
+                                Text(record.fileName)
                                     .font(.subheadline)
-                                Text(bundle.identifier.isEmpty ? "标识未知" : bundle.identifier)
+                                    .lineLimit(1)
+                                Text(record.bundleName)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                if !bundle.version.isEmpty {
-                                    Text("版本 \(bundle.version)")
+                                Text(record.date.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                if !record.detail.isEmpty {
+                                    Text(record.detail)
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                        .lineLimit(2)
                                 }
-                            }
-                            Spacer()
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                confirmUninstall = bundle
-                            } label: {
-                                Label("删除", systemImage: "trash")
                             }
                         }
                     }
                 }
             } header: {
-                Text("已安装")
+                Text("最近安装记录")
+            } footer: {
+                Text("安装后的实际 bundle 由 CommCenter 写入系统区，本机无法直接查看 / 卸载（由系统统一管理）。")
             }
         }
         .listStyle(.insetGrouped)
@@ -104,7 +104,7 @@ struct IPCCInstallView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    reloadInstalled()
+                    reloadRecords()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -115,20 +115,10 @@ struct IPCCInstallView: View {
             guard let url = urls.first else { return }
             parse(url: url)
         }
-        .confirmationDialog(
-            "删除 \(confirmUninstall?.name ?? "")？",
-            isPresented: Binding(get: { confirmUninstall != nil }, set: { if !$0 { confirmUninstall = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("删除", role: .destructive) { doUninstall() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("删除后需要重启设备或 SpringBoard 才能恢复系统默认运营商配置。")
-        }
-        .alert("安装完成", isPresented: $showRespringHint) {
+        .alert("已受理", isPresented: $showRespringHint) {
             Button("好的") {}
         } message: {
-            Text("运营商包已写入 Overrides。建议重启设备（或使用「更多 → 设备控制」重启 SpringBoard）后生效。")
+            Text("运营商包已交给 CommCenter 安装。建议重启设备（或「更多 → 设备控制 → 重启 SpringBoard」）后查看生效情况。")
         }
         .overlay(alignment: .bottom) {
             if let toast {
@@ -147,7 +137,7 @@ struct IPCCInstallView: View {
             }
         }
         .onAppear {
-            reloadInstalled()
+            reloadRecords()
         }
     }
 
@@ -183,42 +173,25 @@ struct IPCCInstallView: View {
                     installing = false
                     parsed = nil
                     self.parsedURL = nil
-                    toast = "已安装到 \(path)"
+                    toast = "已交给 CommCenter：\(path)"
                     showRespringHint = true
-                    reloadInstalled()
+                    reloadRecords()
                 }
             } catch {
                 DispatchQueue.main.async {
                     installing = false
                     errorMessage = "安装失败：\(error.localizedDescription)"
+                    reloadRecords()
                 }
             }
         }
     }
 
-    private func doUninstall() {
-        guard let target = confirmUninstall else { return }
+    private func reloadRecords() {
         DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try service.uninstall(target)
-                DispatchQueue.main.async {
-                    confirmUninstall = nil
-                    toast = "已删除 \(target.name)"
-                    reloadInstalled()
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    errorMessage = "删除失败：\(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private func reloadInstalled() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let list = service.listInstalled()
+            let list = service.savedRecords()
             DispatchQueue.main.async {
-                installed = list
+                records = list
             }
         }
     }

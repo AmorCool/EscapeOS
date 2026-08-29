@@ -1,25 +1,27 @@
 import Foundation
 
-/// 铃声管理服务：访问设备铃声目录，支持导入 / 导出 / 删除 / 提取 / 刷新。
+/// 铃声管理服务。
 ///
-/// 通道说明（v0.2.126）：v0.2.125 曾走 AFC 隧道，实测
-/// `com.apple.afc.shim.remote` 根 = /var/mobile/media，够不到
-/// /var/mobile/Library/Ringtones（全部 Afc(ObjectNotFound)）。
-/// 本版改回 **bad_query**（SandboxEscape + FileService）访问系统用户目录：
-/// - 用户铃声：`/var/mobile/Library/Ringtones`（读 / 写 / 删）
-/// - 系统提示音：`/System/Library/Audio/UISounds`（只读；iOS 26 rootless 下
-///   系统分区只读，bad_query 若能签发扩展则可读，否则该段提示不可用）
+/// 通道说明（v0.2.127）：
+/// - **用户铃声**：走 RSD 隧道（AFCService，`com.apple.afc.shim.remote`，根 =
+///   /var/mobile/media），目录用 **`iTunes_Control/Ringtones`**（= 设备
+///   /var/mobile/media/iTunes_Control/Ringtones）—— 这正是爱思助手 / iTunes
+///   同步铃声用的目录，AFC 隧道直达，**不需要任何系统权限**。
+/// - **系统提示音**：`/System/Library/Audio/UISounds` 在 media 之外，
+///   AFC 隧道不可达；**仅此处经用户明确允许使用 bad_query** 尝试访问
+///   （失败则明确报错）。
 final class RingtonesService {
 
     static let shared = RingtonesService()
     private init() {}
 
+    private let afc = AFCService.shared
     private let escape = SandboxEscape()
     private let files = FileService()
 
-    /// 用户铃声目录（可写）。
-    static let userRingtonesRoot = "/var/mobile/Library/Ringtones"
-    /// 系统提示音目录（只读）。
+    /// 用户铃声目录（AFC 相对路径，= /var/mobile/media/iTunes_Control/Ringtones）。
+    static let userRingtonesAFCPath = "iTunes_Control/Ringtones"
+    /// 系统提示音目录（仅本处允许 bad_query）。
     static let systemSoundsRoot = "/System/Library/Audio/UISounds"
 
     /// 本地导出目录（文件 App 可见）。
@@ -43,31 +45,51 @@ final class RingtonesService {
         NSError(domain: "Ringtones", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    // MARK: - 列表
+    // MARK: - 用户铃声（AFC 隧道）
 
-    /// 用户铃声列表（bad_query 扩展下用 FileManager 列出）。
+    /// 用户铃声列表（AFC 隧道，iTunes_Control/Ringtones）。
     func listUserRingtones() throws -> [Entry] {
-        let handle = try escape.consume(path: Self.userRingtonesRoot, create: true)
-        defer { escape.release(handle) }
-        guard files.isDirectory(at: Self.userRingtonesRoot),
-              let names = try? FileManager.default.contentsOfDirectory(atPath: Self.userRingtonesRoot) else {
-            return []
-        }
-        return names
-            .filter { !$0.hasPrefix(".") }
-            .compactMap { name -> Entry? in
-                let path = Self.userRingtonesRoot + "/" + name
-                var isDir: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else { return nil }
-                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-                return Entry(name: name, path: path,
-                             isDirectory: isDir.boolValue,
-                             size: (attrs?[.size] as? NSNumber)?.int64Value ?? 0)
-            }
+        let list = try afc.listDirectory(Self.userRingtonesAFCPath)
+        return list
+            .filter { !$0.isDirectory }
+            .map { Entry(name: $0.name, path: $0.path, isDirectory: false, size: $0.size) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// 系统提示音列表（bad_query 尝试签发扩展；失败时抛错由 UI 提示）。
+    /// 导入铃声（本地文件 → AFC 上传到 iTunes_Control/Ringtones）。
+    @discardableResult
+    func importRingtone(localURL: URL) throws -> String {
+        let data = try Data(contentsOf: localURL)
+        guard !data.isEmpty else {
+            throw makeError("文件为空")
+        }
+        let name = localURL.lastPathComponent
+        let remote = Self.userRingtonesAFCPath + "/" + name
+        // 确保目录存在（已存在则 mkdir 报错忽略）
+        try afc.batch { client in
+            _ = Self.userRingtonesAFCPath.withCString { afc_make_directory(client, $0) }
+        }
+        try afc.writeFile(data, to: remote)
+        return remote
+    }
+
+    /// 下载铃声到本地导出目录，返回本地路径。
+    func download(path: String) throws -> String {
+        let data = try afc.readFile(path)
+        let name = (path as NSString).lastPathComponent
+        let target = URL(fileURLWithPath: Self.exportDirectory).appendingPathComponent(name)
+        try data.write(to: target)
+        return target.path
+    }
+
+    /// 删除用户铃声。
+    func deleteRingtone(path: String) throws {
+        try afc.removePath(path)
+    }
+
+    // MARK: - 系统提示音（bad_query，用户仅允许此处）
+
+    /// 系统提示音列表。bad_query 对系统分区可能被拒，失败会明确抛错。
     func listSystemSounds() throws -> [Entry] {
         let handle = try escape.consume(path: Self.systemSoundsRoot)
         defer { escape.release(handle) }
@@ -103,39 +125,12 @@ final class RingtonesService {
         return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
-    // MARK: - 导入 / 导出 / 删除
-
-    /// 导入铃声（本地文件 → 用户 Ringtones 目录）。
-    @discardableResult
-    func importRingtone(localURL: URL) throws -> String {
-        let data = try Data(contentsOf: localURL)
-        guard !data.isEmpty else {
-            throw makeError("文件为空")
-        }
-        let name = localURL.lastPathComponent
-        let remote = Self.userRingtonesRoot + "/" + name
-        let handle = try escape.consume(path: Self.userRingtonesRoot, create: true)
-        defer { escape.release(handle) }
-        try files.createDirectory(at: Self.userRingtonesRoot)
-        try files.writeFile(data: data, to: remote)
-        return remote
-    }
-
-    /// 下载铃声到本地导出目录，返回本地路径。
-    func download(path: String) throws -> String {
+    /// 系统提示音下载（bad_query 路径下直接读文件）。
+    func downloadSystemSound(path: String) throws -> String {
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         let name = (path as NSString).lastPathComponent
         let target = URL(fileURLWithPath: Self.exportDirectory).appendingPathComponent(name)
         try data.write(to: target)
         return target.path
-    }
-
-    /// 删除用户铃声。
-    func deleteRingtone(path: String) throws {
-        let handle = try escape.consume(path: Self.userRingtonesRoot, create: true)
-        defer { escape.release(handle) }
-        if files.exists(at: path) {
-            try files.deleteItem(at: path)
-        }
     }
 }

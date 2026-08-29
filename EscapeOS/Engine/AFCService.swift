@@ -162,6 +162,69 @@ final class AFCService {
 
     // MARK: - 浏览
 
+    /// 静态辅助：在**已建立的 AFC 连接**上列出目录（供 CrashLogService 等
+    /// 使用 crashreport 转出的 AFC 客户端时复用，避免复制逻辑）。
+    static func listDirectory(client: OpaquePointer, path: String) throws -> [Entry] {
+        var entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+        var count = 0
+        let cPath = path.isEmpty ? "/" : path
+        if let ffiError = cPath.withCString({ afc_list_directory(client, $0, &entries, &count) }) {
+            let message = ffiError.pointee.message.map { String(cString: $0) } ?? "rc=\(ffiError.pointee.code)"
+            let code = Int(ffiError.pointee.code)
+            idevice_error_free(ffiError)
+            throw NSError(domain: "AFCService", code: code,
+                          userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? "列出目录失败：\(cPath)" : message])
+        }
+        defer {
+            if let entries {
+                for index in 0..<count {
+                    if let p = entries[index] { free(p) }
+                }
+                entries.deallocate()
+            }
+        }
+
+        var result: [Entry] = []
+        guard let entries else { return result }
+        for index in 0..<count {
+            guard let p = entries[index] else { continue }
+            let name = String(cString: p)
+            if name == "." || name == ".." { continue }
+            let full = (cPath == "/" ? "" : cPath) + "/" + name
+            let info = try? fileInfo(client: client, path: full)
+            let isDir: Bool
+            if let fmt = info?.st_ifmt {
+                isDir = String(cString: fmt) == "S_IFDIR"
+            } else {
+                isDir = false
+            }
+            result.append(Entry(
+                name: name,
+                path: full,
+                isDirectory: isDir,
+                size: Int64(info?.size ?? 0),
+                modified: info.map { Date(timeIntervalSince1970: TimeInterval($0.modified)) }
+            ))
+        }
+        return result.sorted {
+            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    /// 静态辅助：获取 AFC 文件信息（供复用同一连接的调用方使用）。
+    static func fileInfo(client: OpaquePointer, path: String) throws -> AfcFileInfo {
+        var info = AfcFileInfo()
+        if let ffiError = path.withCString({ afc_get_file_info(client, $0, &info) }) {
+            let message = ffiError.pointee.message.map { String(cString: $0) } ?? "rc=\(ffiError.pointee.code)"
+            let code = Int(ffiError.pointee.code)
+            idevice_error_free(ffiError)
+            throw NSError(domain: "AFCService", code: code,
+                          userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? "获取文件信息失败：\(path)" : message])
+        }
+        return info
+    }
+
     /// 在一条 AFC 连接上执行批量操作（供 IPCC 安装 / 铃声管理复用，
     /// 避免逐文件重建隧道）。已在串行队列内，body 里可直接调 C 函数。
     func batch<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
@@ -173,49 +236,14 @@ final class AFCService {
     }
 
     /// 列出目录内容。`path` 为空或 "/" 表示 AFC 根。
-    /// v0.2.125：`afc_client_connect_rsd` 实际连的是 `com.apple.afc.shim.remote`
-    /// （iOS 26 开发者模式远程 AFC），根是整个文件系统 —— 所以能看到
-    /// /var、/System 等完整路径，/var/mobile/media 只是其中一个子目录。
+    /// v0.2.126 结论：`afc_client_connect_rsd`（com.apple.afc.shim.remote）
+    /// 根目录 = /var/mobile/media（与标准 AFC1 相同，不是整个文件系统）。
+    /// 因此本服务只能访问媒体目录（DCIM / Downloads / iTunes_Control /
+    /// PublicStaging 等）；/var/mobile/Library 之外的系统路径不可达。
     func listDirectory(_ path: String) throws -> [Entry] {
         try syncOnQueue {
             try withClient { client in
-                var entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
-                var count = 0
-                let cPath = path.isEmpty ? "/" : path
-                if let ffiError = cPath.withCString({ afc_list_directory(client, $0, &entries, &count) }) {
-                    throw error(from: ffiError, fallback: "列出目录失败：\(cPath)")
-                }
-                defer { freeCStrings(entries, count) }
-
-                var result: [Entry] = []
-                guard let entries else { return result }
-                for index in 0..<count {
-                    guard let p = entries[index] else { continue }
-                    let name = String(cString: p)
-                    if name == "." || name == ".." { continue }
-                    let full = (cPath == "/" ? "" : cPath) + "/" + name
-                    let info = try? fileInfo(client: client, path: full)
-                    // st_ifmt 是 C 字符串（"S_IFDIR" 等），需转 String 再比较。
-                    let isDir: Bool
-                    if let fmt = info?.st_ifmt {
-                        isDir = String(cString: fmt) == "S_IFDIR"
-                    } else {
-                        isDir = false
-                    }
-                    result.append(Entry(
-                        name: name,
-                        path: full,
-                        isDirectory: isDir,
-                        size: Int64(info?.size ?? 0),
-                        // 注意：`info?.modified.flatMap` 会被 optional chaining 当作
-                        // 链内调用（Int64 没有 flatMap → 编译错），必须用 map。
-                        modified: info.map { Date(timeIntervalSince1970: TimeInterval($0.modified)) }
-                    ))
-                }
-                return result.sorted {
-                    if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-                    return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-                }
+                try Self.listDirectory(client: client, path: path)
             }
         }
     }
@@ -255,7 +283,8 @@ final class AFCService {
         }
     }
 
-    /// 上传文件（父目录必须已存在）。
+    /// 上传文件（父目录必须已存在）。v0.2.127：改为 1MB 分块写入，
+    /// 避免超大文件（如 .ipcc）一次性提交超出 AFC 协议包限制。
     func writeFile(_ data: Data, to path: String) throws {
         try syncOnQueue {
             try withClient { client in
@@ -266,11 +295,17 @@ final class AFCService {
                 guard let handle else { throw makeError("创建文件失败：\(path)") }
                 defer { afc_file_close(handle) }
 
-                let errorResult: UnsafeMutablePointer<IdeviceFfiError>? = data.withUnsafeBytes { buffer in
-                    afc_file_write(handle, buffer.bindMemory(to: UInt8.self).baseAddress, data.count)
-                }
-                if let errorResult {
-                    throw error(from: errorResult, fallback: "写入文件失败：\(path)")
+                let chunkSize = 1_048_576
+                try data.withUnsafeBytes { buffer in
+                    let base = buffer.bindMemory(to: UInt8.self).baseAddress
+                    var offset = 0
+                    while offset < data.count {
+                        let chunk = min(chunkSize, data.count - offset)
+                        if let ffiError = afc_file_write(handle, base?.advanced(by: offset), chunk) {
+                            throw error(from: ffiError, fallback: "写入文件失败：\(path)")
+                        }
+                        offset += chunk
+                    }
                 }
             }
         }

@@ -23,11 +23,6 @@ struct CrashLogView: View {
 
     private let service = CrashLogService.shared
 
-    /// 常见的日志文件后缀（用于区分文件与子目录）。
-    /// v0.2.125：目录名（CrashReporter / DiagnosticLogs）不带点，文件名带点
-    /// （.ips / .log），据此判断 —— 旧版把"无点=文件"当成了启发式，方向反了。
-    private static let fileSuffixes = [".ips", ".log", ".txt", ".panic", ".crash", ".json", ".plist", ".synced"]
-
     private var selectedEntries: [CrashLogService.Entry] {
         entries.filter { selection.contains($0.id) }
     }
@@ -209,14 +204,14 @@ struct CrashLogView: View {
 
     private func row(_ entry: CrashLogService.Entry) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: isFile(entry.name) ? "doc.text.fill" : "folder.fill")
-                .foregroundColor(isFile(entry.name) ? .secondary : .blue)
+            Image(systemName: entry.isDirectory ? "folder.fill" : "doc.text.fill")
+                .foregroundColor(entry.isDirectory ? .blue : .secondary)
                 .frame(width: 28)
             Text(entry.name)
                 .font(.subheadline)
                 .lineLimit(1)
             Spacer()
-            if !isEditing && isFile(entry.name) {
+            if !isEditing && !entry.isDirectory {
                 Image(systemName: "chevron.right")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -230,14 +225,6 @@ struct CrashLogView: View {
     }
 
     // MARK: - 数据
-
-    /// v0.2.125 修正：目录名（CrashReporter / DiagnosticLogs）不带点，
-    /// 日志文件名（xxx.ips）带点。旧版「无点 = 文件」把文件夹全当成了文件。
-    private func isFile(_ name: String) -> Bool {
-        let lower = name.lowercased()
-        if Self.fileSuffixes.contains(where: { lower.hasSuffix($0) }) { return true }
-        return lower.contains(".")
-    }
 
     private func reload() {
         loading = true
@@ -260,9 +247,13 @@ struct CrashLogView: View {
 
     private func open(_ entry: CrashLogService.Entry) {
         guard !busy else { return }
-        // v0.2.126：crashreportcopymobile 服务端是扁平结构（根就是日志列表），
-        // 对"目录"调 ls 会返回 Afc(ObjectNotFound)。因此一律按文件拉取预览，
-        // 失败时给出明确提示，不再尝试进入子目录。
+        // v0.2.127：AFC 视图能明确区分目录/文件 —— 目录直接进入，
+        // 文件拉取预览（爱思同款，可进入 CrashReporter / DiagnosticLogs 子目录）。
+        if entry.isDirectory {
+            currentDir = entry.path
+            reload()
+            return
+        }
         previewEntry = entry
         previewText = ""
         previewLoading = true

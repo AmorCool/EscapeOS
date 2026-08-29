@@ -222,11 +222,18 @@ struct RingtonesView: View {
     }
 
     /// 导出 / 提取：下载到本地后弹系统分享面板。
+    /// 用户铃声走 AFC 隧道路径，系统提示音走 bad_query 路径（已授权），
+    /// 按 path 前缀区分。
     private func export(_ entry: RingtonesService.Entry) {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let local = try service.download(path: entry.path)
+                let local: String
+                if entry.path.hasPrefix(RingtonesService.systemSoundsRoot) {
+                    local = try service.downloadSystemSound(path: entry.path)
+                } else {
+                    local = try service.download(path: entry.path)
+                }
                 DispatchQueue.main.async {
                     busy = false
                     shareItem = ShareURL(url: URL(fileURLWithPath: local))

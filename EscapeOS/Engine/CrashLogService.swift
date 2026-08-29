@@ -1,11 +1,14 @@
 import Foundation
 
-/// 崩溃分析服务：通过「配对文件 + LocalDevVPN 本地隧道」的 RSD 通道连接
-/// 本机崩溃报告复制服务（com.apple.crashreportcopymobile），
-/// 读取 iOS「设置 → 隐私与安全性 → 分析与改进」里展示的崩溃 / 诊断日志
-/// （.ips 等），支持列表 / 拉取内容 / 删除。
+/// 崩溃分析服务：通过「配对文件 + LocalDevVPN」隧道连接
+/// com.apple.crashreportcopymobile，再用 `crash_report_client_to_afc`
+/// 把它转成 **AFC 客户端**浏览日志目录（v0.2.127）。
 ///
-/// 走官方服务通道（crash_report_client_*），不需要文件系统权限；
+/// 为什么转 AFC：crashreportcopymobile 的 ls 对子目录参数会返回
+/// Afc(ObjectNotFound)（服务端行为），而转成的 AFC 视图是**标准文件系统
+/// 视图**（根下是 CrashReporter / DiagnosticLogs / Logs 等真实子目录），
+/// 目录 / 文件类型一目了然，进入子目录、读内容、删除全部走 AFC 协议。
+///
 /// 同样遵循 RSD 隧道并发铁律（本服务内所有操作串行）。
 final class CrashLogService {
 
@@ -14,17 +17,13 @@ final class CrashLogService {
 
     private let queue = DispatchQueue(label: "com.ipaside.escapeos.crashlog")
 
-    /// 崩溃日志条目。
+    /// 崩溃日志条目（AFC 视图路径）。
     struct Entry: Identifiable, Equatable {
-        /// 服务端文件名（拉取 / 删除都用它）。
         let name: String
-        /// 相对路径（用于显示层级）。
         let path: String
+        let isDirectory: Bool
         var id: String { path }
     }
-
-    /// 服务端目录列表（对应 CrashReporter 目录下的分类，由服务端决定）。
-    static let knownSubdirectories = ["CrashReporter", "DiagnosticLogs", "Logs"]
 
     private var pairingPath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -101,7 +100,9 @@ final class CrashLogService {
         throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
     }
 
-    private func withClient<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+    /// 连接 crashreportcopymobile → `crash_report_client_to_afc` 转 AFC 客户端。
+    /// 注意：to_afc 会**消费并释放** crashreport 客户端，之后直接使用 AFC 句柄。
+    private func withAfcClient<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         var tunnel = try createTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
@@ -109,26 +110,25 @@ final class CrashLogService {
         }
         var lastError: NSError?
         for attempt in 0..<3 {
-            var client: OpaquePointer?
-            if let ffiError = crash_report_client_connect_rsd(adapter, handshake, &client) {
+            var crashClient: OpaquePointer?
+            if let ffiError = crash_report_client_connect_rsd(adapter, handshake, &crashClient) {
                 lastError = error(from: ffiError, fallback: "连接崩溃日志服务失败")
-            } else if let client {
-                defer { crash_report_client_free(client) }
-                return try body(client)
+            } else if let crashClient {
+                var afc: OpaquePointer?
+                if let ffiError = crash_report_client_to_afc(crashClient, &afc) {
+                    lastError = error(from: ffiError, fallback: "转换崩溃日志 AFC 客户端失败")
+                } else if let afc {
+                    defer { afc_client_free(afc) }
+                    return try body(afc)
+                } else {
+                    lastError = makeError("转换崩溃日志 AFC 客户端失败")
+                }
             } else {
                 lastError = makeError("连接崩溃日志服务失败")
             }
             if attempt < 2 { usleep(useconds_t(300_000 * (attempt + 1))) }
         }
         throw lastError ?? makeError("连接崩溃日志服务失败")
-    }
-
-    private func freeCStrings(_ entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?, _ count: Int) {
-        guard let entries else { return }
-        for index in 0..<count {
-            if let p = entries[index] { free(p) }
-        }
-        entries.deallocate()
     }
 
     /// 在串行队列上执行可能抛错的闭包（Theos 的 DispatchQueue.sync 无 throwing
@@ -142,92 +142,66 @@ final class CrashLogService {
         return try result.get()
     }
 
-    // MARK: - 列表 / 拉取 / 删除
+    // MARK: - 列表 / 拉取 / 删除（AFC 视图）
 
-    /// 列出日志。`subdirectory` 为 nil 时列服务端根目录（可能有分类子目录）。
-    /// 注：crashreportmover 的 flush 需要 IdeviceProviderHandle（本服务只有
-    /// AdapterHandle，无法获取），且 crashreportcopymobile 的列表本身已覆盖
-    /// 已落盘的日志，因此不再额外触发 flush。
+    /// 列出日志目录。`subdirectory` 为 nil 时列根目录
+    /// （含 CrashReporter / DiagnosticLogs / Logs 等子目录，v0.2.127 起可进入）。
     func list(subdirectory: String? = nil) throws -> [Entry] {
         try syncOnQueue {
-            try withClient { client in
-                var entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
-                var count = 0
-                let ffiError = subdirectory?.withCString { dir in
-                    crash_report_client_ls(client, dir, &entries, &count)
-                } ?? crash_report_client_ls(client, nil, &entries, &count)
-                if let ffiError {
-                    throw error(from: ffiError, fallback: "列出日志失败")
-                }
-                defer { freeCStrings(entries, count) }
-                guard let entries else { return [] }
-
-                var result: [Entry] = []
-                for index in 0..<count {
-                    guard let p = entries[index] else { continue }
-                    let name = String(cString: p)
-                    if name == "." || name == ".." { continue }
-                    if let subdirectory, !subdirectory.isEmpty {
-                        result.append(Entry(name: name, path: subdirectory + "/" + name))
-                    } else {
-                        result.append(Entry(name: name, path: name))
-                    }
-                }
-                return result.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            try withAfcClient { afc in
+                let list = try AFCService.listDirectory(client: afc, path: subdirectory ?? "/")
+                return list.map { Entry(name: $0.name, path: $0.path, isDirectory: $0.isDirectory) }
             }
         }
     }
 
-    /// 拉取日志文件内容（.ips 是 JSON 文本）。
-    func pull(_ path: String) throws -> Data {
-        try syncOnQueue {
-            try withClient { client in
-                try pullInternal(client: client, path: path)
-            }
-        }
-    }
-
-    /// 无队列版本的拉取（供批量操作在同一连接里复用，避免嵌套 sync 死锁）。
     private func pullInternal(client: OpaquePointer, path: String) throws -> Data {
+        var handle: OpaquePointer?
+        if let ffiError = path.withCString({ afc_file_open(client, $0, AfcRdOnly, &handle) }) {
+            throw error(from: ffiError, fallback: "打开日志失败：\(path)")
+        }
+        guard let handle else { throw makeError("打开日志失败：\(path)") }
+        defer { afc_file_close(handle) }
+
         var data: UnsafeMutablePointer<UInt8>?
         var length = 0
-        let ffiError = path.withCString { name in
-            crash_report_client_pull(client, name, &data, &length)
-        }
-        if let ffiError {
-            throw error(from: ffiError, fallback: "拉取日志失败：\(path)")
+        if let ffiError = afc_file_read_entire(handle, &data, &length) {
+            throw error(from: ffiError, fallback: "读取日志失败：\(path)")
         }
         defer {
-            // idevice_data_free 的 len 是 uintptr_t → Swift 导入为 UInt，
-            // 而 crash_report_client_pull 的 size_t* 导入为 Int*，需转换。
-            if let data { idevice_data_free(data, UInt(length)) }
+            if let data { afc_file_read_data_free(data, length) }
         }
         guard let data else { return Data() }
         return Data(bytes: data, count: length)
     }
 
-    /// 删除日志。
-    func remove(_ path: String) throws {
+    /// 拉取日志文件内容（.ips 是 JSON 文本）。
+    func pull(_ path: String) throws -> Data {
         try syncOnQueue {
-            try withClient { client in
-                try removeInternal(client: client, path: path)
+            try withAfcClient { afc in
+                try pullInternal(client: afc, path: path)
             }
         }
     }
 
     private func removeInternal(client: OpaquePointer, path: String) throws {
-        let ffiError = path.withCString { name in
-            crash_report_client_remove(client, name)
-        }
-        if let ffiError {
+        if let ffiError = path.withCString({ afc_remove_path(client, $0) }) {
             throw error(from: ffiError, fallback: "删除日志失败：\(path)")
+        }
+    }
+
+    /// 删除日志（目录会连内容一起删）。
+    func remove(_ path: String) throws {
+        try syncOnQueue {
+            try withAfcClient { afc in
+                try removeInternal(client: afc, path: path)
+            }
         }
     }
 
     // MARK: - 导出
 
-    /// 导出目录（EscapeSpace 自己 Documents 下的 CrashLogs 文件夹，
-    /// 文件 App 可见，可再分享出去）。
+    /// 导出目录（EscapeSpace 自己 Documents 下的 CrashLogs 文件夹，文件 App 可见）。
     static var exportDirectory: String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("CrashLogs", isDirectory: true)
@@ -235,15 +209,14 @@ final class CrashLogService {
         return dir.path
     }
 
-    /// 批量导出：**同一条连接**循环拉取（v0.2.125 修复：旧版在队列闭包里嵌套
-    /// 调 `pull`，内部再次 `queue.sync` → 死锁；且每个文件单独建隧道极慢）。
-    /// `progress` 回调在后台队列执行，调用方负责切主线程。
+    /// 批量导出：**同一条 AFC 连接**循环拉取（v0.2.125 修复过死锁，v0.2.127 改为
+    /// AFC 视图后保留同款结构）。progress 在后台队列调用，UI 负责切主线程。
     func export(entries: [Entry], progress: ((Int, Int) -> Void)? = nil) throws -> [String] {
         try syncOnQueue {
-            try withClient { client in
+            try withAfcClient { afc in
                 var exported: [String] = []
                 for (index, entry) in entries.enumerated() {
-                    let data = try pullInternal(client: client, path: entry.path)
+                    let data = try pullInternal(client: afc, path: entry.path)
                     let safeName = entry.path.replacingOccurrences(of: "/", with: "_")
                     let target = URL(fileURLWithPath: Self.exportDirectory)
                         .appendingPathComponent(safeName)
@@ -256,14 +229,14 @@ final class CrashLogService {
         }
     }
 
-    /// 批量删除：**同一条连接**循环删除，返回失败数。
+    /// 批量删除：同一条 AFC 连接循环删除，返回失败数。
     func removeBatch(_ entries: [Entry], progress: ((Int, Int) -> Void)? = nil) throws -> Int {
         try syncOnQueue {
-            try withClient { client in
+            try withAfcClient { afc in
                 var failed = 0
                 for (index, entry) in entries.enumerated() {
                     do {
-                        try removeInternal(client: client, path: entry.path)
+                        try removeInternal(client: afc, path: entry.path)
                     } catch {
                         failed += 1
                     }
