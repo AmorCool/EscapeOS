@@ -628,6 +628,8 @@ struct SettingsForm: View {
     @State private var showNoPairingAlert = false
     @State private var showLoginSheet = false
     @State private var showAccountDetails = false
+    /// v0.2.112：左上角登录日志入口（排查Apple 登录 / Anisette 失败用）。
+    @State private var showLoginLog = false
     @AppStorage(KeepAliveManager.enabledKey) private var keepAliveEnabled = false
 
     var body: some View {
@@ -726,8 +728,23 @@ struct SettingsForm: View {
                     .foregroundColor(.secondary)
             }
         }
+        // 左上角：登录日志查询入口。右上角「完成」由外层 MoreView 的 sheet 提供，
+        // 这里只补 leading 位，两者 placement 不同不会互相覆盖。
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    showLoginLog = true
+                } label: {
+                    Label("登录日志", systemImage: "doc.text.magnifyingglass")
+                }
+                .accessibilityLabel("登录日志")
+            }
+        }
         .sheet(isPresented: $showLoginSheet) {
             AppleIDLoginSheet()
+        }
+        .sheet(isPresented: $showLoginLog) {
+            LoginLogView()
         }
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])

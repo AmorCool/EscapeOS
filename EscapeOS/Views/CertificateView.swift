@@ -6,6 +6,7 @@ import SwiftUI
 /// 不涉及设备 / 配对 / 隧道，因此不依赖 LocalDevVPN 与本地网络权限。
 struct CertificateView: View {
     @StateObject private var manager = CertificateManager.shared
+    @StateObject private var settings = MemoryLimitSettings.shared
     @State private var showLogin = false
     /// 待确认吊销的证书。
     @State private var pendingRevoke: DeveloperCertificate?
@@ -18,28 +19,39 @@ struct CertificateView: View {
     var body: some View {
         List {
             headerSection
-            if !manager.isSignedIn {
+            if !settings.isLoggedIn {
                 notSignedInSection
             } else {
+                teamSection
                 if let error = manager.lastError {
                     Section {
                         InfoActionCard(
-                            icon: "exclamationmark.triangle.fill",
-                            iconTint: .red,
-                            title: "出错了",
+                            icon: manager.lastErrorIsSessionExpired ? "person.badge.key.fill" : "exclamationmark.triangle.fill",
+                            iconTint: manager.lastErrorIsSessionExpired ? .orange : .red,
+                            title: manager.lastErrorIsSessionExpired ? "需要重新登录" : "出错了",
                             message: error
                         )
                     }
                 }
-                if manager.hasLoaded && manager.certs.isEmpty && !manager.isWorking {
-                    emptySection
-                } else if !manager.certs.isEmpty {
-                    Section {
-                        ForEach(manager.certs) { cert in
-                            certRow(cert)
+                if manager.teamState == .loaded {
+                    if manager.isWorking && manager.certs.isEmpty {
+                        Section {
+                            HStack {
+                                ProgressView().controlSize(.small)
+                                Text("正在加载证书…")
+                                    .foregroundColor(.secondary)
+                            }
                         }
-                    } header: {
-                        Text("\(manager.certs.count) 个证书")
+                    } else if manager.hasLoaded && manager.certs.isEmpty {
+                        emptySection
+                    } else if !manager.certs.isEmpty {
+                        Section {
+                            ForEach(manager.certs) { cert in
+                                certRow(cert)
+                            }
+                        } header: {
+                            Text("\(manager.certs.count) 个证书")
+                        }
                     }
                 }
             }
@@ -49,7 +61,7 @@ struct CertificateView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                if manager.isSignedIn && !manager.certs.isEmpty {
+                if settings.isLoggedIn && !manager.certs.isEmpty {
                     Button(selecting ? "取消" : "选择") {
                         selecting.toggle()
                         if !selecting { selected.removeAll() }
@@ -67,7 +79,7 @@ struct CertificateView: View {
                         }
                     }
                     .disabled(manager.isWorking)
-                } else if manager.isSignedIn {
+                } else if settings.isLoggedIn {
                     Button {
                         manager.loadCerts()
                     } label: {
@@ -102,6 +114,11 @@ struct CertificateView: View {
             AppleIDLoginSheet()
         }
         .onAppear {
+            manager.autoLoad()
+        }
+        .onChange(of: settings.appleID) { _ in
+            // 新登录 / 切换账号：清空旧团队的证书，重新拉团队列表。
+            manager.reset()
             manager.autoLoad()
         }
         .alert("吊销所选证书？", isPresented: $showBatchRevokeConfirm) {
@@ -141,7 +158,7 @@ struct CertificateView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("证书管理")
                             .font(.headline)
-                        Text(manager.isSignedIn
+                        Text(settings.isLoggedIn
                              ? (manager.teamSummary ?? "已登录 Apple ID")
                              : "管理 Apple ID 的 iOS 开发证书（列出 / 吊销）")
                             .font(.caption)
@@ -149,7 +166,7 @@ struct CertificateView: View {
                     }
                     Spacer()
                 }
-                if !manager.isSignedIn {
+                if !settings.isLoggedIn {
                     Button {
                         showLogin = true
                     } label: {
@@ -164,6 +181,54 @@ struct CertificateView: View {
                 }
             }
             .padding(.vertical, 6)
+        }
+    }
+
+    // MARK: - 开发者团队（v0.2.112：对齐「增加内存限制」的团队栏）
+
+    /// 团队选择器。与「增加内存限制」保持同一套展示语言：
+    /// 加载中 → 进度；失败 → 红字 + 重试；成功 → Picker（单团队时补一行说明）。
+    private var teamSection: some View {
+        Section {
+            switch manager.teamState {
+            case .idle, .loading:
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("正在加载团队…")
+                        .foregroundColor(.secondary)
+                }
+            case .failed(let message):
+                HStack {
+                    Text("加载失败")
+                        .foregroundColor(.red)
+                    Spacer()
+                    Button("重试") { manager.loadTeams() }
+                }
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            case .loaded:
+                if manager.teams.isEmpty {
+                    Text("账号下没有可用团队")
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker("选择团队", selection: $manager.selectedTeamID) {
+                        ForEach(manager.teams) { team in
+                            Text(team.name).tag(team.identifier)
+                        }
+                    }
+                    .onChange(of: manager.selectedTeamID) { _ in
+                        manager.loadCerts()
+                    }
+                    if manager.teams.count == 1, let only = manager.teams.first {
+                        Text("\(only.name)（\(only.identifier)）")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("开发者团队")
         }
     }
 

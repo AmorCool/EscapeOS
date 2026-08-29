@@ -132,6 +132,9 @@ enum AppleAPIError: Error {
     case invalidAnisetteData
     case accountLocked
     case customError(code: Int, message: String)
+    /// v0.2.112：Apple 返回 resultCode 1100 —— 会话已过期 / 凭据与 Anisette
+    /// 机器标识不匹配（例如被另一套认证实现覆盖）。需要重新登录。
+    case sessionExpired
 
     var errorDescription: String? {
         switch self {
@@ -144,7 +147,15 @@ enum AppleAPIError: Error {
         case .authenticationHandshakeFailed: return "与 Apple 服务器的认证握手失败"
         case .invalidAnisetteData: return "Anisette 数据无效或已过期"
         case .accountLocked: return "Apple ID 已被锁定"
+        case .sessionExpired:
+            return "Apple 会话已过期（错误 1100）。请到「更多 → 设置 → Apple ID 账户」退出并重新登录；如果在 IPA 侧载页登录过同一账号，重新登录一次即可恢复。"
         case .customError(let code, let message): return "错误 \(code)：\(message)"
         }
+    }
+
+    /// 是否「会话已过期」类错误（供调用方决定要不要清空登录态）。
+    var isSessionExpired: Bool {
+        if case .sessionExpired = self { return true }
+        return false
     }
 }

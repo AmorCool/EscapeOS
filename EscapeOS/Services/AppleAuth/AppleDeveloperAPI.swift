@@ -100,6 +100,7 @@ enum AppleDeveloperAPI {
 
         guard let dict = plist(data),
               let teamsArray = dict["teams"] as? [[String: Any]] else {
+            try throwIfSessionExpired(data)
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
             LoginLogger.shared.log("❌ 团队列表解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "团队列表解析失败: \(preview)")
@@ -135,6 +136,7 @@ enum AppleDeveloperAPI {
 
         guard let dict = plist(data),
               let appIdsArray = dict["appIds"] as? [[String: Any]] else {
+            try throwIfSessionExpired(data)
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
             LoginLogger.shared.log("❌ App ID 列表解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "App ID 列表解析失败: \(preview)")
@@ -227,6 +229,7 @@ enum AppleDeveloperAPI {
 
         guard let dict = plist(data),
               let certsArray = dict["certificates"] as? [[String: Any]] else {
+            try throwIfSessionExpired(data)
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
             LoginLogger.shared.log("❌ 证书列表解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "证书列表解析失败: \(preview)")
@@ -276,6 +279,21 @@ enum AppleDeveloperAPI {
 
     // MARK: - Helpers
 
+    /// v0.2.112：Apple 在 HTTP 200 的 plist 体里用 `resultCode` 表达业务错误。
+    /// 1100 = "Your session has expired. Please log in." —— 常见于 dsid/authToken
+    /// 与当前 Anisette 机器标识不匹配（例如被另一套认证实现的登录覆盖）。
+    /// 统一识别成 `.sessionExpired`，好让 UI 给出「重新登录」的可操作提示，
+    /// 而不是让用户对着一段 XML 原文发懵。
+    private static func throwIfSessionExpired(_ data: Data) throws {
+        guard let dict = plist(data) else { return }
+        let code: Int? = (dict["resultCode"] as? NSNumber)?.intValue
+            ?? (dict["resultCode"] as? String).flatMap { Int($0) }
+        guard code == 1100 else { return }
+        let reason = (dict["userString"] as? String) ?? "Your session has expired. Please log in."
+        LoginLogger.shared.log("❌ 会话已过期（resultCode 1100）: \(reason)")
+        throw AppleAPIError.sessionExpired
+    }
+
     private static func post(url: URL, headers: [String: String], plistBody: [String: Any], method: String = "POST") async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -287,6 +305,7 @@ enum AppleDeveloperAPI {
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
             throw AppleAPIError.customError(code: http, message: "Apple API 请求失败（HTTP \(http)）: \(preview)")
         }
+        try throwIfSessionExpired(data)
         return data
     }
 

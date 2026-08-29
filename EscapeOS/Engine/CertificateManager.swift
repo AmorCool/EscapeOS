@@ -12,6 +12,14 @@ import Foundation
 @MainActor
 final class CertificateManager: ObservableObject {
 
+    /// 团队 / 列表加载状态（与「增加内存限制」保持一致的展示语言）。
+    enum LoadState: Equatable {
+        case idle
+        case loading
+        case loaded
+        case failed(String)
+    }
+
     /// 全局共享实例：app 启动时后台预热加载证书列表，
     /// 进入「证书管理」页时通常已就绪，无需再等 5~7 秒。
     static let shared = CertificateManager()
@@ -24,8 +32,28 @@ final class CertificateManager: ObservableObject {
     /// 正在吊销的证书 id。
     @Published private(set) var revokingID: String?
     @Published var lastError: String?
+    /// 上一次错误是否为「会话已过期（1100）」，供 UI 把提示切成「需要重新登录」。
+    @Published private(set) var lastErrorIsSessionExpired = false
     /// 已成功加载过一次（区分空列表与未加载）。
     @Published private(set) var hasLoaded = false
+
+    // MARK: - 开发者团队（v0.2.112：对齐「增加内存限制」的团队栏）
+
+    /// 账号下的团队列表。
+    @Published private(set) var teams: [DeveloperTeam] = []
+    /// 当前选中的团队 id。
+    @Published var selectedTeamID: String = ""
+    /// 团队列表加载状态。
+    @Published private(set) var teamState: LoadState = .idle
+    /// 团队列表加载中（与 isWorking 分开，避免团队加载挡住证书刷新）。
+    private var isLoadingTeams = false
+    /// autoLoad 链式触发：团队拉到后自动拉一次证书。
+    private var autoChainCerts = false
+
+    /// 当前选中的团队（没选或选择失效时退回第一个）。
+    var selectedTeam: DeveloperTeam? {
+        teams.first { $0.identifier == selectedTeamID } ?? teams.first
+    }
 
     /// 进入页面时只自动加载一次，避免 2FA 被拒后每次打开都重新弹。
     private var didAutoLoad = false
@@ -50,17 +78,67 @@ final class CertificateManager: ObservableObject {
     // MARK: - 页面动作
 
     /// 页面打开时安静加载（未登录 / 已加载过则跳过）。
+    /// 先拉团队列表（填充「开发者团队」栏），成功后自动拉一次证书。
     func autoLoad() {
         guard !didAutoLoad, !hasLoaded, !isWorking, revokingID == nil else { return }
         guard settings.isLoggedIn, settings.dsid != nil, settings.authToken != nil else { return }
         didAutoLoad = true
-        loadCerts()
+        autoChainCerts = true
+        loadTeams()
     }
 
     /// app 启动时后台预热：复用 autoLoad 的守卫（未登录/已加载/加载中都会跳过）。
     /// 单例持有状态，预热结果在进入页面时直接可用。
     func warmUp() {
         autoLoad()
+    }
+
+    /// 加载团队列表（「开发者团队」栏）。失败会把原因写进 `lastError`。
+    func loadTeams() {
+        guard settings.isLoggedIn, let session else {
+            lastError = "尚未登录 Apple ID。请先点右上角「登录」并完成两步验证。"
+            return
+        }
+        guard !isLoadingTeams else { return }
+        isLoadingTeams = true
+        teamState = .loading
+        lastError = nil
+        Task {
+            do {
+                let fetched = try await AppleDeveloperAPI.fetchTeams(session: session)
+                self.applyTeams(fetched)
+                if self.autoChainCerts {
+                    self.autoChainCerts = false
+                    self.loadCerts()
+                }
+            } catch {
+                let message = self.message(of: error)
+                self.teamState = .failed(message)
+                self.setError(error)
+                self.autoChainCerts = false
+            }
+            self.isLoadingTeams = false
+        }
+    }
+
+    /// 写入团队列表并保持选中项有效。
+    private func applyTeams(_ fetched: [DeveloperTeam]) {
+        teams = fetched
+        if selectedTeamID.isEmpty || !fetched.contains(where: { $0.identifier == selectedTeamID }) {
+            selectedTeamID = fetched.first?.identifier ?? ""
+        }
+        teamState = .loaded
+    }
+
+    /// 解析出当前要用的团队：优先用已加载的选中项，没有才联网拉一次。
+    private func resolveTeam(session: AppleAPISession) async throws -> DeveloperTeam {
+        if let team = selectedTeam { return team }
+        let fetched = try await AppleDeveloperAPI.fetchTeams(session: session)
+        applyTeams(fetched)
+        guard let team = selectedTeam else {
+            throw AppleAPIError.customError(code: -1, message: "账号下没有可用团队")
+        }
+        return team
     }
 
     /// 登录或刷新列表。
@@ -74,19 +152,16 @@ final class CertificateManager: ObservableObject {
         lastError = nil
         Task {
             do {
-                let teams = try await AppleDeveloperAPI.fetchTeams(session: session)
-                guard let team = teams.first else {
-                    throw AppleAPIError.customError(code: -1, message: "账号下没有可用团队")
-                }
-                teamSummary = "团队：\(team.name)（\(team.identifier)）"
+                let team = try await self.resolveTeam(session: session)
+                self.teamSummary = "团队：\(team.name)（\(team.identifier)）"
                 let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
-                certs = list
-                hasLoaded = true
-                isSignedIn = true
+                self.certs = list
+                self.hasLoaded = true
+                self.isSignedIn = true
             } catch {
-                lastError = (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
+                self.setError(error)
             }
-            isWorking = false
+            self.isWorking = false
         }
     }
 
@@ -102,19 +177,16 @@ final class CertificateManager: ObservableObject {
         Task {
             var revoked = false
             do {
-                let teams = try await AppleDeveloperAPI.fetchTeams(session: session)
-                guard let team = teams.first else {
-                    throw AppleAPIError.customError(code: -1, message: "账号下没有可用团队")
-                }
+                let team = try await self.resolveTeam(session: session)
                 try await AppleDeveloperAPI.revokeCertificate(team: team, serialNumber: cert.serialNumber, session: session)
                 revoked = true
                 let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
-                certs = list
+                self.certs = list
             } catch {
-                lastError = (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
+                self.setError(error)
             }
-            revokingID = nil
-            if revoked { hasLoaded = true }
+            self.revokingID = nil
+            if revoked { self.hasLoaded = true }
         }
     }
 
@@ -130,30 +202,45 @@ final class CertificateManager: ObservableObject {
         lastError = nil
         Task {
             do {
-                let teams = try await AppleDeveloperAPI.fetchTeams(session: session)
-                guard let team = teams.first else {
-                    throw AppleAPIError.customError(code: -1, message: "账号下没有可用团队")
-                }
+                let team = try await self.resolveTeam(session: session)
                 for cert in targets {
                     try await AppleDeveloperAPI.revokeCertificate(team: team, serialNumber: cert.serialNumber, session: session)
                 }
                 let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
-                certs = list
-                hasLoaded = true
+                self.certs = list
+                self.hasLoaded = true
             } catch {
-                lastError = (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
+                self.setError(error)
             }
-            isWorking = false
+            self.isWorking = false
         }
     }
 
     /// 切换账号：清空列表（登录态由 MemoryLimitSettings 管理）。
     func reset() {
         certs = []
+        teams = []
+        teamState = .idle
+        selectedTeamID = ""
+        autoChainCerts = false
         hasLoaded = false
         didAutoLoad = false
         lastError = nil
+        lastErrorIsSessionExpired = false
         teamSummary = nil
         isSignedIn = false
+    }
+
+    // MARK: - 错误文案
+
+    /// 记录错误并标记是否为「会话已过期（1100）」，供 UI 切换提示标题。
+    private func setError(_ error: Error) {
+        let apiError = error as? AppleAPIError
+        lastErrorIsSessionExpired = apiError?.isSessionExpired ?? false
+        lastError = apiError?.errorDescription ?? error.localizedDescription
+    }
+
+    private func message(of error: Error) -> String {
+        (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
     }
 }

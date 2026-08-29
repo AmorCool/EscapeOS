@@ -276,8 +276,11 @@ final class IPAInstallService: ObservableObject {
         let ani = settings.anisetteServer
 
         // 路径 A：有 token → 免 2FA 恢复。
+        // v0.2.112：必须读 isideload 专用键（sideloadDSID/sideloadAuthToken）。
+        // `dsid`/`authToken` 是 Swift 认证引擎的会话，两套 Anisette 机器标识不同，
+        // 混用会导致 isideload 侧登录失败。
         if !sessionRestoreFailed,
-           let dsid = settings.dsid, let authToken = settings.authToken,
+           let dsid = settings.sideloadDSID, let authToken = settings.sideloadAuthToken,
            !dsid.isEmpty, !authToken.isEmpty {
             isWarmingUp = true
             Task.detached(priority: .utility) { [weak self] in

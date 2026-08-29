@@ -512,8 +512,11 @@ struct IPAInstallView: View {
             do {
                 // 路径 1：已有 dsid/authToken → 免 2FA 恢复会话。
                 // （预热已失败过则跳过——token 大概率过期，白等一次注定失败的请求）
+                // v0.2.112：读 isideload 专用键；`dsid`/`authToken` 属于 Swift 认证
+                // 引擎（证书管理/增加内存限制用），两套 Anisette 机器标识不同不能混用。
                 if !service.sessionRestoreFailed,
-                   let dsid = settings.dsid, let authToken = settings.authToken, !dsid.isEmpty, !authToken.isEmpty {
+                   let dsid = settings.sideloadDSID, let authToken = settings.sideloadAuthToken,
+                   !dsid.isEmpty, !authToken.isEmpty {
                     do {
                         try await Task.detached(priority: .userInitiated) {
                             try IPAInstallService.shared.signInWithSession(
