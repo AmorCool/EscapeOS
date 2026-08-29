@@ -91,11 +91,24 @@ final class FileService {
     ///
     /// 与 `list(directory:)` 不同，这里不先检查 `isDirectory`，也不依赖
     /// `FileManager.contentsOfDirectory` —— 在 LiveContainer 访客沙盒下，
-    /// 后者对跨容器路径会被裁剪。这里直接用 `bad_query_list` 做 inode 扫描，
-    /// 再用 `FileManager` 取属性；属性取不到时仍然保留条目，让用户至少能看到
-    /// 目录存在。这是 Erosion 原版的实现方式。
+    /// 后者对跨容器路径会被裁剪。这里采用三级策略（对齐 Erosion 的
+    /// `bad_query_list` 思路，但更稳健）：
+    /// 1. FileManager 快路径：部分只读系统目录（如 /var/containers/Bundle/Application）
+    ///    在部分环境可直接列出，命中即快；
+    /// 2. `bad_query_list` 默认 maxInode=1M（绝大多数容器 UUID 在此范围内）；
+    /// 3. 仍为空则提高 maxInode=2M 重试（inode 号偏大的场景，如长期使用的
+    ///    设备上后安装的 App 容器）。
+    /// 属性取不到时仍然保留条目，让用户至少能看到目录存在。
     func listContainerRoot(at path: String) throws -> [FileItem] {
-        let names = BadQueryLister.entryNames(at: path)
+        var names: [String] = []
+        if let fmNames = try? fm.contentsOfDirectory(atPath: path), !fmNames.isEmpty {
+            names = fmNames
+        } else {
+            names = BadQueryLister.entryNames(at: path)
+            if names.isEmpty {
+                names = BadQueryLister.entryNames(at: path, maxInode: 2_000_000)
+            }
+        }
         return try buildFileItems(names: names, basePath: path, fallbackKind: .directory)
     }
 

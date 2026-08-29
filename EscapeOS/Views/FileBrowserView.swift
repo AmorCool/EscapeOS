@@ -744,11 +744,21 @@ final class FileBrowserViewModel: ObservableObject {
     }
 
     /// 根据根路径类型选择正确的枚举方式：
-    /// - 容器根：走 `bad_query_list`，不消费沙盒扩展（与 Erosion 一致）。
+    /// - 容器根：走 `bad_query_list`（多级回退），不消费沙盒扩展；空结果时
+    ///   再兜底尝试签发扩展后用 FileManager 直接列（iOS 27 上部分只读目录可列）。
     /// - 普通根 / 容器内部：先尝试用沙盒扩展；失败时退回直接 `FileManager`。
     private func list(at path: String) throws -> [FileItem] {
         if isContainerRoot && path == rootPath {
-            return try files.listContainerRoot(at: path)
+            let items = try files.listContainerRoot(at: path)
+            if !items.isEmpty { return items }
+            // 兜底：签发扩展后用 FileManager 列出（成功则用，失败保持空列表，
+            // 不把「空目录」误报成错误）。
+            if let fallback = try? escape.withHandle(for: rootPath) { _ in
+                try files.list(directory: path)
+            } {
+                return fallback
+            }
+            return items
         }
         do {
             return try escape.withHandle(for: rootPath) { _ in
@@ -791,12 +801,13 @@ final class FileBrowserViewModel: ObservableObject {
     }
 
     /// 在容器根（如 /var/mobile/Containers/Data/Application）浏览时，把 UUID 目录
-    /// 解析成 App 名。每个容器都要读一次 metadata plist，故放在后台批量跑，
-    /// 结果回到主线程刷新 —— 解析完成前目录行仍显示原始目录名。
+    /// 解析成可读标识（bundle id，对齐 Erosion 原版 folderLabel）。每个容器都要读
+    /// 一次 metadata plist，故放在后台批量跑，结果回到主线程刷新 —— 解析完成前
+    /// 目录行仍显示原始 UUID。
     ///
-    /// ⚠️ 两段式线程约束（v0.2.99 修复闪退）：metadata 读取（bad_query +
-    /// NSDictionary）在后台线程；`LSApplicationWorkspace` 私有 API 查询
-    /// **必须在主线程**，v0.2.98 在后台批量 perform 导致容器根一打开就闪退。
+    /// 注意：容器行**只显示 bundle id**，不做 LSApplicationWorkspace 二级解析——
+    /// 私有 LaunchServices API 批量查询在该环境会闪退（v0.2.98 后台崩 / v0.2.99
+    /// 主线程延迟崩），Erosion 原版也不查。
     private func resolveContainerNames() {
         guard FileSystemRoots.containerNameRoots.contains(currentPath) else {
             if !containerNames.isEmpty { containerNames = [:] }
@@ -807,15 +818,11 @@ final class FileBrowserViewModel: ObservableObject {
         let resolver = ContainerNameResolver.shared
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            // 1) 后台：只读 metadata（bad_query + plist），线程安全
-            let bundleIds = resolver.resolveAllBundleIds(containerPaths: paths)
-            // 2) 主线程：bundle id → 本地化名称（LSApplicationWorkspace 私有 API）
-            let names = await MainActor.run {
-                resolver.localizeNames(bundleIds: bundleIds)
-            }
+            // 后台：bad_query + plist 读取（线程安全，无私有 API）
+            let resolved = resolver.resolveAll(containerPaths: paths)
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.containerNames = names
+                self.containerNames = resolved
             }
         }
     }
