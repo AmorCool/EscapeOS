@@ -94,6 +94,10 @@ pub(crate) fn install_rustls_provider() {
 /// 登录 Apple ID、打开开发者会话、构建 Sideloader。返回 0 表示成功；
 /// 用 `si_sign_session_free` 释放 session。
 ///
+/// 成功时除 session/summary 外，还会把本次登录拿到的 **dsid** 与
+/// **xcode.auth token** 写入 `out_dsid` / `out_auth_token`，调用方可持久化
+/// 这两个值，之后用 `si_signin_with_session` 免登录免 2FA 恢复会话。
+///
 /// # Safety
 /// 所有 `*const c_char` 参数必须为 null 或合法的 C 字符串；out 指针必须有效。
 #[allow(clippy::too_many_arguments)]
@@ -107,6 +111,8 @@ pub unsafe fn apple_signin(
     ctx: *mut c_void,
     out_session: *mut *mut SignSession,
     out_summary: *mut *mut c_char,
+    out_dsid: *mut *mut c_char,
+    out_auth_token: *mut *mut c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
     install_rustls_provider();
@@ -123,7 +129,7 @@ pub unsafe fn apple_signin(
             .build()
             .map_err(|e| format!("failed to start runtime: {e}"))?;
 
-        let sideloader = rt.block_on(async {
+        let (sideloader, summary, dsid, auth_token) = rt.block_on(async {
             tracing::info!("Apple ID: building anisette provider ({anisette_url})");
             let anisette = RemoteV3AnisetteProvider::new(
                 &anisette_url,
@@ -161,14 +167,24 @@ pub unsafe fn apple_signin(
                 team.name.as_deref().unwrap_or("<unnamed>"),
                 team.team_id
             );
-            Ok::<_, String>((sideloader, summary))
+
+            // 取出本次登录的 dsid + xcode.auth token，供调用方持久化后免登录恢复。
+            // 依赖 EscapeOS 的 isideload fork 暴露的 DeveloperSession::get_adsid /
+            // get_token（上游未公开这两个字段）。
+            let (dsid, auth_token) = {
+                let dev = sideloader.get_dev_session();
+                (dev.get_adsid().to_string(), dev.get_token().token)
+            };
+            tracing::info!("Apple ID: captured dsid for session persistence");
+
+            Ok::<_, String>((sideloader, summary, dsid, auth_token))
         })?;
 
-        Ok::<_, String>((rt, sideloader))
+        Ok::<_, String>((rt, sideloader, summary, dsid, auth_token))
     }));
 
     match result {
-        Ok(Ok((rt, (sideloader, summary)))) => {
+        Ok(Ok((rt, sideloader, summary, dsid, auth_token))) => {
             let session = Box::new(SignSession {
                 rt,
                 sideloader,
@@ -177,6 +193,8 @@ pub unsafe fn apple_signin(
             });
             *out_session = Box::into_raw(session);
             *out_summary = cstr(summary);
+            *out_dsid = cstr(dsid);
+            *out_auth_token = cstr(auth_token);
             0
         }
         Ok(Err(e)) => {

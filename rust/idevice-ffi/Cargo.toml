@@ -23,7 +23,11 @@ mdns-sd = { version = "0.19", optional = true }
 # 注意：isideload 无条件引用 crates.io 的 idevice 0.1.61（install feature-gate
 # 不完整），与上面的 git idevice 0.1.63 作为两个独立版本共存（符号不同，
 # 无链接冲突）——SideInstaller 已验证同一组合。
-isideload = { git = "https://github.com/nab138/isideload.git", rev = "86b2540abc6ff0f0fe1c27b785d6e233ee8bfa92", package = "isideload", default-features = false, features = [
+# v0.2.111+：改用 AmorCool 的 fork（上游 nab138/isideload @86b2540 + 一个提交），
+# 唯一改动是给 `DeveloperSession` 增加公开的 `get_adsid()` / `get_token()`，
+# 用于把 dsid + xcode.auth token 暴露给 Swift 持久化，实现 IPA 登录免重复登录。
+# 上游把这两个字段设为私有，无法从外部读取。
+isideload = { git = "https://github.com/AmorCool/isideload.git", rev = "8ba0ec4a6750dd0ff11e152efb2c39e6dd302632", package = "isideload", default-features = false, features = [
   "install",
   "fs-storage",
 ] }

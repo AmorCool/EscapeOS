@@ -65,6 +65,13 @@ final class IPAInstallService: ObservableObject {
     @Published private(set) var isSignedIn = false
     @Published private(set) var teamSummary: String?
 
+    /// 最近一次**完整登录**（`si_apple_signin`）拿到的 dsid 与
+    /// `com.apple.gs.xcode.auth` token。由 isideload fork 暴露（v0.2.111），
+    /// 调用方应持久化到 Keychain，下次用 `signInWithSession` 免登录恢复。
+    /// 通过 token 恢复会话时这两个值不会更新（本来就已存在）。
+    private(set) var lastSessionDSID: String?
+    private(set) var lastSessionAuthToken: String?
+
     /// 登录/会话恢复的串行队列：Rust 调用是阻塞的，预热（app 启动后台）
     /// 与页面内自动登录可能并发，串行化保证同一时刻只有一个登录操作在跑，
     /// 避免两个调用同时读写 `_session` 造成竞态。
@@ -166,6 +173,8 @@ final class IPAInstallService: ObservableObject {
         }
         var newSession: OpaquePointer?
         var summary: UnsafeMutablePointer<CChar>?
+        var dsidOut: UnsafeMutablePointer<CChar>?
+        var authTokenOut: UnsafeMutablePointer<CChar>?
         var error: UnsafeMutablePointer<CChar>?
         let rc = appleID.withCString { id in
             password.withCString { pw in
@@ -174,7 +183,8 @@ final class IPAInstallService: ObservableObject {
                         storageDir.withCString { dir in
                             si_apple_signin(id, pw, ani, machine, dir,
                                             twoFactorCallback, nil,
-                                            &newSession, &summary, &error)
+                                            &newSession, &summary,
+                                            &dsidOut, &authTokenOut, &error)
                         }
                     }
                 }
@@ -182,11 +192,17 @@ final class IPAInstallService: ObservableObject {
         }
         defer {
             if let summary { si_string_free(summary) }
+            if let dsidOut { si_string_free(dsidOut) }
+            if let authTokenOut { si_string_free(authTokenOut) }
             if let error { si_string_free(error) }
         }
         if rc == 0, let newSession {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
+            // 取出 dsid + xcode.auth token（isideload fork 暴露），供调用方
+            // 持久化后免登录恢复。
+            lastSessionDSID = dsidOut.map { String(cString: $0) }
+            lastSessionAuthToken = authTokenOut.map { String(cString: $0) }
             // 完整登录成功 → token 已刷新，恢复失败标志清除。
             sessionRestoreFailed = false
         } else {
@@ -286,9 +302,13 @@ final class IPAInstallService: ObservableObject {
             guard let self else { return }
             do {
                 try self.signIn(appleID: id, password: pw, anisetteURL: ani)
-                // 成功后把凭据同步回 settings（幂等），确保下次仍有密码可用。
+                // 成功后把凭据 + 本次登录的 dsid/authToken 一起持久化，
+                // 下次 App 启动就能走路径 A 免登录恢复。
+                let dsid = self.lastSessionDSID ?? ""
+                let authToken = self.lastSessionAuthToken ?? ""
                 await MainActor.run {
-                    MemoryLimitSettings.shared.signIn(email: id, password: pw)
+                    MemoryLimitSettings.shared.saveSessionCredentials(
+                        email: id, password: pw, dsid: dsid, authToken: authToken)
                 }
             } catch {
                 // 静默：用户进入 IPA 页时页面内自动登录会再试并展示错误。

@@ -508,12 +508,14 @@ pub unsafe extern "C" fn si_apple_signin(
     ctx: *mut c_void,
     out_session: *mut *mut sideload_auth::SignSession,
     out_summary: *mut *mut c_char,
+    out_dsid: *mut *mut c_char,
+    out_auth_token: *mut *mut c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
     unsafe {
         sideload_auth::apple_signin(
             apple_id, password, anisette_url, machine_name, storage_dir, twofa_cb, ctx,
-            out_session, out_summary, out_error,
+            out_session, out_summary, out_dsid, out_auth_token, out_error,
         )
     }
 }

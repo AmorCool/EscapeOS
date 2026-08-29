@@ -17,12 +17,20 @@ typedef struct SignSession SignSession;
 typedef int (*SITwoFactorCb)(void *ctx, char *out_buf, size_t buf_len);
 
 // Logs in, opens a developer session, and builds a signer. Blocks; twofa_cb is
-// invoked when a 2FA code is needed. Returns 0 on success (out_session/summary
-// valid), 1 on error (out_error set), 2 if out pointers invalid.
+// invoked when a 2FA code is needed. Returns 0 on success (out_session/summary/
+// out_dsid/out_auth_token valid), 1 on error (out_error set), 2 if out pointers
+// invalid.
+//
+// out_dsid / out_auth_token (v0.2.111): the dsid and the
+// `com.apple.gs.xcode.auth` token for this login. Persist them and later pass
+// them to si_signin_with_session to restore the session without logging in or
+// doing 2FA again. Free with si_string_free.
 int si_apple_signin(const char *apple_id, const char *password,
                     const char *anisette_url, const char *machine_name,
                     const char *storage_dir, SITwoFactorCb twofa_cb, void *ctx,
-                    SignSession **out_session, char **out_summary, char **out_error);
+                    SignSession **out_session, char **out_summary,
+                    char **out_dsid, char **out_auth_token,
+                    char **out_error);
 
 // Signs the IPA at ipa_path, writing the signed .app bundle's path to
 // out_signed_path. Blocks. udid is registered with the team first; pass NULL to

@@ -222,6 +222,21 @@ final class MemoryLimitSettings: ObservableObject {
         refresh()
     }
 
+    /// 保存 isideload（IPA 侧载）完整登录拿到的 dsid + `com.apple.gs.xcode.auth`
+    /// token。与 `completeSignIn` 的区别：不写账户姓名（isideload 登录不返回），
+    /// 只保证 dsid/authToken/密码都落盘，供下次 `si_signin_with_session` 免登录恢复。
+    func saveSessionCredentials(email: String, password: String, dsid: String, authToken: String) {
+        let email = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        keychain.set(email, for: "appleID")
+        keychain.set(password, for: "applePassword")
+        keychain.set(password, for: "pw:" + email)
+        if !dsid.isEmpty { keychain.set(dsid, for: "dsid") }
+        if !authToken.isEmpty { keychain.set(authToken, for: "authToken") }
+        keychain.set(true, for: "isLoggedIn")
+        addLoginHistory(email)
+        refresh()
+    }
+
     var dsid: String? { keychain.string(for: "dsid") }
     var authToken: String? { keychain.string(for: "authToken") }
     var accountName: String { keychain.string(for: "accountName") ?? "" }

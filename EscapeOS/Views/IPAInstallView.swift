@@ -534,6 +534,14 @@ struct IPAInstallView: View {
                 try await Task.detached(priority: .userInitiated) {
                     try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: ani)
                 }.value
+                // 完整登录成功 → 持久化本次拿到的 dsid/authToken，
+                // 下次进入（含 App 重启后 warmUp）即可免登录恢复。
+                let dsid = service.lastSessionDSID ?? ""
+                let authToken = service.lastSessionAuthToken ?? ""
+                await MainActor.run {
+                    MemoryLimitSettings.shared.saveSessionCredentials(
+                        email: id, password: pw, dsid: dsid, authToken: authToken)
+                }
             } catch {
                 errorMessage = "自动登录失败：\(error.localizedDescription)"
             }
@@ -563,11 +571,15 @@ struct IPAInstallView: View {
                     try await Task.detached(priority: .userInitiated) {
                         try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: anisetteURL)
                     }.value
-                    // 登录成功 → 凭据同步到「更多 → 设置」的 Apple ID 存储
-                    // （v0.2.107）：下次进 IPA 页自动登录可免手动输入；
-                    // dsid/authToken 由设置里的 Apple 认证引擎登录保存，
-                    // 用于 App 重启后的免 2FA 会话恢复。
-                    MemoryLimitSettings.shared.signIn(email: id, password: pw)
+                    // 登录成功 → 把邮箱/密码 **以及** 本次登录拿到的 dsid +
+                    // xcode.auth token 一起持久化（v0.2.111，isideload fork 暴露）。
+                    // 之后 warmUp / 自动登录都能用这两个值免登录免 2FA 恢复。
+                    let dsid = service.lastSessionDSID ?? ""
+                    let authToken = service.lastSessionAuthToken ?? ""
+                    await MainActor.run {
+                        MemoryLimitSettings.shared.saveSessionCredentials(
+                            email: id, password: pw, dsid: dsid, authToken: authToken)
+                    }
                 }
                 // 2. 签名
                 step = .signing
