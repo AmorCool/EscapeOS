@@ -192,6 +192,7 @@ enum AppleAuthenticator {
 
         var request = URLRequest(url: gsaURL)
         request.httpMethod = "POST"
+        request.timeoutInterval = 30
         request.httpBody = bodyData
         httpHeaders.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
 
@@ -250,6 +251,7 @@ enum AppleAuthenticator {
         ]
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 30
         httpHeaders.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
         return request
     }
@@ -359,6 +361,7 @@ enum AppleAuthenticator {
         let body = try PropertyListSerialization.data(fromPropertyList: parameters, format: .xml, options: 0)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 30
         request.httpBody = body
         request.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
         request.setValue("Xcode", forHTTPHeaderField: "User-Agent")

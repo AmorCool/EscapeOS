@@ -195,6 +195,7 @@ enum AppleDeveloperAPI {
         let url = v1URL.appendingPathComponent("bundleIds").appendingPathComponent(appID.identifier)
         var request = URLRequest(url: url)
         request.httpMethod = "PATCH"
+        request.timeoutInterval = 30
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         headers.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
 
@@ -297,6 +298,7 @@ enum AppleDeveloperAPI {
     private static func post(url: URL, headers: [String: String], plistBody: [String: Any], method: String = "POST") async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.timeoutInterval = 30
         request.httpBody = try PropertyListSerialization.data(fromPropertyList: plistBody, format: .xml, options: 0)
         headers.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
         let (data, response) = try await URLSession.shared.data(for: request)

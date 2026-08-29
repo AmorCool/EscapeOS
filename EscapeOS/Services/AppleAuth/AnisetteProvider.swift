@@ -11,7 +11,14 @@ final class AnisetteProvider {
     static let shared = AnisetteProvider()
 
     private let keychain = EscapeKeychain(service: "com.ipaside.escapeos.memorylimit")
-    private let session = URLSession(configuration: .default)
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        // v0.2.114：Anisette 服务器偶发无响应会导致整个页面卡在「正在加载团队…」。
+        // 给该 session 下所有请求（含 WebSocket receive）统一设 30 秒无活动超时，
+        // 作为单个请求显式 timeoutInterval 的兜底。
+        config.timeoutIntervalForRequest = 30
+        return URLSession(configuration: config)
+    }()
 
     private var url: URL? { URL(string: UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.sidestore.io") }
 
@@ -50,6 +57,7 @@ final class AnisetteProvider {
             throw fail("provision", "缺少 client_info 字段（未先 fetchClientInfo）")
         }
         var request = URLRequest(url: url)
+        request.timeoutInterval = 30
         request.setValue(clientInfo, forHTTPHeaderField: "X-Mme-Client-Info")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
@@ -103,7 +111,9 @@ final class AnisetteProvider {
         // client_info / user_agent 是设备描述，基本不变。只在内存缓存缺失时拉取。
         if clientInfo == nil || userAgent == nil {
             let clientInfoURL = base.appendingPathComponent("v3").appendingPathComponent("client_info")
-            let (data, response) = try await session.data(from: clientInfoURL)
+            var clientInfoRequest = URLRequest(url: clientInfoURL)
+            clientInfoRequest.timeoutInterval = 30
+            let (data, response) = try await session.data(for: clientInfoRequest)
             let http = (response as? HTTPURLResponse)?.statusCode ?? -1
             guard http == 200,
                   let json = try JSONSerialization.jsonObject(with: data) as? [String: String],
@@ -153,6 +163,7 @@ final class AnisetteProvider {
         guard let base = url else { throw fail("get_headers", "服务器地址为空") }
         var request = URLRequest(url: base.appendingPathComponent("v3").appendingPathComponent("get_headers"))
         request.httpMethod = "POST"
+        request.timeoutInterval = 30
         request.httpBody = try JSONSerialization.data(withJSONObject: ["identifier": identifier, "adi_pb": adiPb])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         LoginLogger.shared.log("▶ get_headers POST \(base.appendingPathComponent("v3").appendingPathComponent("get_headers").absoluteString)")
@@ -327,6 +338,7 @@ final class AnisetteProvider {
     private func fetchProvisioningData(url: URL, body: [String: Any]) async throws -> String {
         var req = try makeAppleRequest(url: url)
         req.httpMethod = "POST"
+        req.timeoutInterval = 30
         req.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
         let (data, response) = try await session.data(for: req)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -342,6 +354,7 @@ final class AnisetteProvider {
         let body: [String: Any] = ["Header": [:], "Request": ["cpim": cpim]]
         var req = try makeAppleRequest(url: url)
         req.httpMethod = "POST"
+        req.timeoutInterval = 30
         req.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
         let (data, response) = try await session.data(for: req)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
