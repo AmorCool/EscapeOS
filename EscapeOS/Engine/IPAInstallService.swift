@@ -147,6 +147,36 @@ final class IPAInstallService: ObservableObject {
         return dir.path
     }
 
+    /// **v0.2.117 根治「IPA 侧载登录后证书管理/增加内存限制全坏」**。
+    ///
+    /// 根因：Swift 认证（AnisetteProvider）与 isideload（Rust RemoteV3）各自随机
+    /// 生成自己的 keychain_identifier —— 同一 Apple ID 从两套"虚拟机器"登录，
+    /// Apple/Anisette 服务器会把它当两台设备，后续 Swift 侧的 Anisette 请求
+    /// 被风控拒绝，表现为团队列表加载失败。
+    ///
+    /// 修复：把 Swift 侧的 identifier/adiPb 预写入 isideload 的
+    /// `anisette_state`（plist 格式，isideload 读到已 provision 的 state 会
+    /// **直接跳过 provisioning 复用**），让两套流程共用同一台"虚拟机器"。
+    ///
+    /// 此方法只在 Swift 侧已有 identifier+adiPb 时写入（不主动联网 provision）；
+    /// 无值则跳过，Rust 侧自行 provision 兜底。
+    func syncSharedAnisetteStateIfAvailable() {
+        let provider = AnisetteProvider.shared
+        guard let identifier = provider.sharedMachineIdentifier else { return }
+        var dict: [String: Any] = ["keychain_identifier": identifier]
+        if let adiPb = provider.sharedAdiPb {
+            dict["adi_pb"] = adiPb
+        }
+        do {
+            let data = try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
+            let target = URL(fileURLWithPath: storageDir).appendingPathComponent("anisette_state")
+            try data.write(to: target)
+            LoginLogger.shared.log("✓ 已同步 Anisette 机器标识给 IPA 侧载（两套流程共用同一 identifier）")
+        } catch {
+            LoginLogger.shared.log("⚠ 同步 Anisette 机器标识失败：\(error.localizedDescription)")
+        }
+    }
+
     /// 从配对文件 plist 读取设备 UDID（RPPairing 记录的 identifier）。
     private var deviceUDID: String? {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: pairingPath)),
@@ -182,6 +212,8 @@ final class IPAInstallService: ObservableObject {
     }
 
     private func performSignIn(appleID: String, password: String, anisetteURL: String) throws {
+        // v0.2.117：与 Swift 认证共用同一 Anisette 机器标识，避免 Apple 风控。
+        syncSharedAnisetteStateIfAvailable()
         if let session {
             si_sign_session_free(session)
             self.session = nil
@@ -237,6 +269,8 @@ final class IPAInstallService: ObservableObject {
     private func performSignInWithSession(email: String, dsid: String, authToken: String, anisetteURL: String) throws {
         // 已有会话（预热已完成）：直接复用，不再重建。
         if isSignedIn { return }
+        // v0.2.117：与 Swift 认证共用同一 Anisette 机器标识。
+        syncSharedAnisetteStateIfAvailable()
         var newSession: OpaquePointer?
         var summary: UnsafeMutablePointer<CChar>?
         var error: UnsafeMutablePointer<CChar>?

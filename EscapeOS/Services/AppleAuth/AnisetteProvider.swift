@@ -41,6 +41,22 @@ final class AnisetteProvider {
         LoginLogger.shared.log("… AnisetteProvider 重置（identifier/adiPb 已清除）")
     }
 
+    // MARK: - 共享机器标识（v0.2.117）
+
+    /// keychain 里当前 identifier 的原始 16 字节（IPA 侧载/Rust 复用同一台
+    /// "虚拟机器"用）；无或损坏时返回 nil。
+    var sharedMachineIdentifier: Data? {
+        guard let s = keychain.string(for: "identifier"),
+              let d = Data(base64Encoded: s), d.count == 16 else { return nil }
+        return d
+    }
+
+    /// keychain 里当前 adiPb 的原始字节（base64 字符串解码）；无则 nil。
+    var sharedAdiPb: Data? {
+        guard let s = keychain.string(for: "adiPb") else { return nil }
+        return Data(base64Encoded: s)
+    }
+
     /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）。
 
     /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）。
