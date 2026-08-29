@@ -167,7 +167,13 @@ final class AFCService {
                     if name == "." || name == ".." { continue }
                     let full = (cPath == "/" ? "" : cPath) + "/" + name
                     let info = try? fileInfo(client: client, path: full)
-                    let isDir = info?.st_ifmt == "S_IFDIR"
+                    // st_ifmt 是 C 字符串（"S_IFDIR" 等），需转 String 再比较。
+                    let isDir: Bool
+                    if let fmt = info?.st_ifmt {
+                        isDir = String(cString: fmt) == "S_IFDIR"
+                    } else {
+                        isDir = false
+                    }
                     result.append(Entry(
                         name: name,
                         path: full,

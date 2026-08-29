@@ -180,7 +180,9 @@ final class CrashLogService {
                     throw error(from: ffiError, fallback: "拉取日志失败：\(path)")
                 }
                 defer {
-                    if let data { idevice_data_free(data, length) }
+                    // idevice_data_free 的 len 是 uintptr_t → Swift 导入为 UInt，
+                    // 而 crash_report_client_pull 的 size_t* 导入为 Int*，需转换。
+                    if let data { idevice_data_free(data, UInt(length)) }
                 }
                 guard let data else { return Data() }
                 return Data(bytes: data, count: length)
