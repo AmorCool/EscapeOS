@@ -201,7 +201,14 @@ int64_t mg_issue_and_consume(const char *path) {
 
 char *bad_query_list(char *path, int64_t max_inode) {
     struct statfs sfs;
-    if (statfs(path, &sfs) != 0) return NULL;
+    if (statfs(path, &sfs) != 0) {
+        // 对齐 Erosion 原版：目标路径 statfs 失败（如沙盒下部分 /var/containers
+        // 子树不可直接 statfs）时，退回用 /private/var 或 /var 的 fsid 继续扫描，
+        // 否则 fsgetpath 全部白跑、目录显示为空。
+        if (statfs("/private/var", &sfs) != 0 && statfs("/var", &sfs) != 0) {
+            return NULL;
+        }
+    }
     fsid_t fsid = sfs.f_fsid;
 
     size_t cap = 65536;

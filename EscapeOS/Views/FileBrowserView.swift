@@ -793,6 +793,10 @@ final class FileBrowserViewModel: ObservableObject {
     /// 在容器根（如 /var/mobile/Containers/Data/Application）浏览时，把 UUID 目录
     /// 解析成 App 名。每个容器都要读一次 metadata plist，故放在后台批量跑，
     /// 结果回到主线程刷新 —— 解析完成前目录行仍显示原始目录名。
+    ///
+    /// ⚠️ 两段式线程约束（v0.2.99 修复闪退）：metadata 读取（bad_query +
+    /// NSDictionary）在后台线程；`LSApplicationWorkspace` 私有 API 查询
+    /// **必须在主线程**，v0.2.98 在后台批量 perform 导致容器根一打开就闪退。
     private func resolveContainerNames() {
         guard FileSystemRoots.containerNameRoots.contains(currentPath) else {
             if !containerNames.isEmpty { containerNames = [:] }
@@ -802,10 +806,16 @@ final class FileBrowserViewModel: ObservableObject {
         guard !paths.isEmpty else { return }
         let resolver = ContainerNameResolver.shared
         Task.detached(priority: .utility) { [weak self] in
-            let resolved = resolver.resolveAll(containerPaths: paths)
+            guard let self else { return }
+            // 1) 后台：只读 metadata（bad_query + plist），线程安全
+            let bundleIds = resolver.resolveAllBundleIds(containerPaths: paths)
+            // 2) 主线程：bundle id → 本地化名称（LSApplicationWorkspace 私有 API）
+            let names = await MainActor.run {
+                resolver.localizeNames(bundleIds: bundleIds)
+            }
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.containerNames = resolved
+                self.containerNames = names
             }
         }
     }
