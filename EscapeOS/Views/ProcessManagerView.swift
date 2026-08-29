@@ -136,10 +136,23 @@ enum ProcessControlAction: String {
 
 /// 进程管理服务：复用 JITEnableService 的隧道写法，直接调用 idevice.h 暴露的
 /// `app_service_*` C 函数（经 bridging header 可见）。
+///
+/// v0.2.108 关键修复：
+/// - 所有进程操作（枚举 / 发信号）走**同一条串行队列**，禁止并发的
+///   `EscapeSpaceProcess` 隧道互相抢占/覆盖；
+/// - `app_service_connect_rsd` 与 `tunnel_create_rppairing` 一样加 3 次退避重试，
+///   覆盖 RSD 服务发现的偶发 `ServiceNotFound`；
+/// - 发信号使用 `UInt32(SIGKILL)` 直接量，与「设备控制」侧完全一致，避免
+///   `Int32 → UInt32` 转换在任何编译/平台组合下出现歧义。
 final class ProcessManagerService {
 
     static let shared = ProcessManagerService()
     private init() {}
+
+    /// 串行队列：保证 listProcesses / sendSignal 不并发建隧道。
+    /// 同一 hostname 并发 tunnel_create_rppairing 是进程管理 SIGKILL 偶发/持续
+    /// 无效的根因之一（RSD 通道竞争）。
+    private let operationQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr", qos: .userInitiated)
 
     /// EscapeSpace 的配对文件路径（与「应用」页 / 虚拟定位共用）。
     private var pairingPath: String {
@@ -198,7 +211,7 @@ final class ProcessManagerService {
             throw makeError("隧道 IP 无效：\(deviceIP)（请检查「设置 → 本地隧道」）")
         }
 
-        // 隧道建立失败自动重试（最多 3 次、短退避）：对齐 JITEnableService。
+        // 隧道建立失败自动重试（最多 3 次、短退避）：对齐 DeviceControlService。
         var lastError: NSError?
         for attempt in 0..<3 {
             var tunnel = TunnelHandles()
@@ -234,71 +247,92 @@ final class ProcessManagerService {
         throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
     }
 
+    /// 连接 app_service，失败自动重试 3 次（覆盖 ServiceNotFound）。
+    private func connectAppService(adapter: OpaquePointer, handshake: OpaquePointer) throws -> OpaquePointer {
+        var lastError: NSError?
+        for attempt in 0..<3 {
+            var appService: OpaquePointer?
+            if let ffiError = app_service_connect_rsd(adapter, handshake, &appService) {
+                lastError = error(from: ffiError, fallback: "连接应用服务失败")
+            } else if let appService {
+                return appService
+            } else {
+                lastError = makeError("连接应用服务失败")
+            }
+            if attempt < 2 { usleep(useconds_t(300_000 * (attempt + 1))) }
+        }
+        throw lastError ?? makeError("连接应用服务失败")
+    }
+
     // MARK: 枚举进程
 
     func listProcesses() throws -> [ProcessEntry] {
-        var tunnel = try createTunnel(hostname: "EscapeSpaceProcess")
-        defer { tunnel.free() }
-        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
-            throw makeError("隧道未建立")
-        }
+        try operationQueue.sync {
+            var tunnel = try createTunnel(hostname: "EscapeSpaceProcess")
+            defer { tunnel.free() }
+            guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+                throw makeError("隧道未建立")
+            }
 
-        var appService: OpaquePointer?
-        if let ffiError = app_service_connect_rsd(adapter, handshake, &appService) {
-            throw error(from: ffiError, fallback: "连接应用服务失败")
-        }
-        guard let appService else { throw makeError("连接应用服务失败") }
-        defer { app_service_free(appService) }
+            let appService = try connectAppService(adapter: adapter, handshake: handshake)
+            defer { app_service_free(appService) }
 
-        var processes: UnsafeMutablePointer<ProcessTokenC>?
-        var count = UInt(0)
-        if let ffiError = app_service_list_processes(appService, &processes, &count) {
-            throw error(from: ffiError, fallback: "枚举进程失败")
-        }
-        defer {
-            if let processes { app_service_free_process_list(processes, count) }
-        }
-        guard let processes else { return [] }
+            var processes: UnsafeMutablePointer<ProcessTokenC>?
+            var count = UInt(0)
+            if let ffiError = app_service_list_processes(appService, &processes, &count) {
+                throw error(from: ffiError, fallback: "枚举进程失败")
+            }
+            defer {
+                if let processes { app_service_free_process_list(processes, count) }
+            }
+            guard let processes else { return [] }
 
-        var result: [ProcessEntry] = []
-        result.reserveCapacity(Int(count))
-        for index in 0..<Int(count) {
-            let p = processes[index]
-            let path = p.executable_url.flatMap { String(cString: $0) } ?? "未知"
-            result.append(ProcessEntry(pid: Int(p.pid), executablePath: path))
+            var result: [ProcessEntry] = []
+            result.reserveCapacity(Int(count))
+            for index in 0..<Int(count) {
+                let p = processes[index]
+                let path = p.executable_url.flatMap { String(cString: $0) } ?? "未知"
+                result.append(ProcessEntry(pid: Int(p.pid), executablePath: path))
+            }
+            return result
         }
-        return result
     }
 
     // MARK: 发送信号
 
     func sendSignal(_ action: ProcessControlAction, toPID pid: Int) throws {
-        var tunnel = try createTunnel(hostname: "EscapeSpaceProcess")
-        defer { tunnel.free() }
-        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
-            throw makeError("隧道未建立")
-        }
+        try operationQueue.sync {
+            var tunnel = try createTunnel(hostname: "EscapeSpaceProcess")
+            defer { tunnel.free() }
+            guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+                throw makeError("隧道未建立")
+            }
 
-        var appService: OpaquePointer?
-        if let ffiError = app_service_connect_rsd(adapter, handshake, &appService) {
-            throw error(from: ffiError, fallback: "连接应用服务失败")
-        }
-        guard let appService else { throw makeError("连接应用服务失败") }
-        defer { app_service_free(appService) }
+            let appService = try connectAppService(adapter: adapter, handshake: handshake)
+            defer { app_service_free(appService) }
 
-        var response: UnsafeMutablePointer<SignalResponseC>?
-        let ffiError = app_service_send_signal(appService, UInt32(pid), UInt32(action.signal), &response)
-        if let ffiError {
-            throw error(from: ffiError, fallback: "发送信号失败")
+            var response: UnsafeMutablePointer<SignalResponseC>?
+            let signalValue: UInt32 = {
+                switch action {
+                case .resume: return UInt32(SIGCONT)
+                case .pause:  return UInt32(SIGSTOP)
+                case .kill:   return UInt32(SIGKILL)
+                }
+            }()
+            let ffiError = app_service_send_signal(appService, UInt32(pid), signalValue, &response)
+            if let ffiError {
+                throw error(from: ffiError, fallback: "发送信号失败")
+            }
+            defer { if let response { app_service_free_signal_response(response) } }
         }
-        if let response { app_service_free_signal_response(response) }
     }
 }
 
 // MARK: - 视图模型
 
 @MainActor
-final class ProcessManagerViewModel: ObservableObject {    @Published private(set) var processes: [ProcessEntry] = []
+final class ProcessManagerViewModel: ObservableObject {
+    @Published private(set) var processes: [ProcessEntry] = []
     @Published var searchText: String = ""
     @Published var isRefreshing = false
     @Published private(set) var activeControlState: (pid: Int, action: ProcessControlAction)?
@@ -627,9 +661,8 @@ private struct ProcessRow: View {
                             onKillTap(process)
                         } label: {
                             if isConfirming {
-                                Label("确认", systemImage: "checkmark.circle.fill")
-                                    .labelStyle(.iconOnly)
-                                    .font(.title3)
+                                Label("确认结束", systemImage: "checkmark.circle.fill")
+                                    .font(.caption2.weight(.semibold))
                             } else {
                                 Image(systemName: ProcessControlAction.kill.systemImage)
                                     .font(.title3)
@@ -638,7 +671,7 @@ private struct ProcessRow: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .tint(isConfirming ? .green : ProcessControlAction.kill.tint)
-                        .labelStyle(.iconOnly)
+                        .labelStyle(isConfirming ? .titleOnly : .iconOnly)
                         .disabled(isBusy)
                     }
                 }

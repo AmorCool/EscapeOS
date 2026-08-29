@@ -3,6 +3,7 @@
 // 与 Erosion/Mond 展示方式一致：`.overlay` + `.brightness(-1.0)` + `.ignoresSafeArea()`。
 // 原理：在 WKWebView 中加载高压力 CSS（500 层 backdrop-filter 透视层）+ 持续
 // navigator.share / crypto 压力，把 SpringBoard 挤到内存不足自动重启（视觉上先黑屏）。
+// v0.2.108：iframe / WebView 均透明/0 尺寸，去掉默认占位方框。
 
 import SwiftUI
 import WebKit
@@ -10,6 +11,13 @@ import WebKit
 let respringDocument = """
 <!DOCTYPE html>
 <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <style>
+            html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+            iframe { position: absolute; width: 0; height: 0; border: none; opacity: 0; pointer-events: none; }
+        </style>
+    </head>
     <body>
         <!--  big credit to @neonmodder123  -->
         <iframe id="frame" srcdoc="" sandbox="allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-presentation allow-scripts"></iframe>
@@ -17,6 +25,11 @@ let respringDocument = """
             const frame = document.getElementById('frame');
             const respringScript = `
                 <html>
+                <head>
+                    <style>
+                        html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+                    </style>
+                </head>
                 <body>
                     <script>
                         const container = document.createElement('div');
@@ -47,8 +60,18 @@ let respringDocument = """
 
 struct RespringView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView()
-        WKWebpagePreferences().allowsContentJavaScript = true
+        let config = WKWebViewConfiguration()
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+        let prefs = WKWebpagePreferences()
+        prefs.allowsContentJavaScript = true
+        config.defaultWebpagePreferences = prefs
+
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
         return webView
     }
 

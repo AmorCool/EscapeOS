@@ -73,22 +73,22 @@ final class AppListViewModel: ObservableObject {
         }
     }
 
-    /// 加载失败后自动重试（v0.2.107 修正）：
-    /// - 间隔 3 秒**直接重试**。v0.2.106 的「端口可达预检」在部分环境误判导致
-    ///   永不重试（LocalDevVPN 刚开启时隧道端口瞬时不可达/探测地址不符，
-    ///   RSD tunnel_create_rppairing 自带 3 次重试，直接重试更可靠）；
+    /// 加载失败后自动重试（v0.2.108 修正）：
+    /// - 单次调度：本次 retry 触发 reload 并等其完成后，再由 reload 的 catch
+    ///   块决定是否继续下一次。避免旧 `while` 循环在 reload 尚未完成时就调度
+    ///   下一个 Task，导致多个 retry 并发、互相覆盖甚至把 tunnel 资源耗尽。
+    /// - 间隔 3 秒。v0.2.106 的「端口可达预检」已移除；RSD tunnel_create_rppairing
+    ///   自带 3 次重试，直接重试更可靠。
     /// - 配对文件缺失（needsPairing）时不重试。
     private func scheduleAutoRetry() {
         guard retryTask == nil else { return }
         retryTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard let self, !Task.isCancelled else { break }
-                await MainActor.run {
-                    guard !Task.isCancelled else { return }
-                    self.retryTask = nil
-                    self.reload()
-                }
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self, !Task.isCancelled else { return }
+                self.retryTask = nil
+                self.reload()
             }
         }
     }

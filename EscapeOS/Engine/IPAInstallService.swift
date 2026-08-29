@@ -241,29 +241,57 @@ final class IPAInstallService: ObservableObject {
 
     // MARK: - 后台预热（app 启动时调用，免 2FA）
 
-    /// 用「更多 → 设置」保存的 dsid + authToken 在**后台**恢复签名会话，
-    /// 用户进入「IPA 侧载」页时通常已完成，无需再等 13~15 秒。
-    /// 只走免 2FA 的会话恢复；失败静默（标记 sessionRestoreFailed），
-    /// 由页面内自动登录回退到完整登录流程。
+    /// 后台预热（app 启动时调用）。
+    ///
+    /// v0.2.108：两条路径并行提升体验——
+    /// 1) 有 dsid + authToken（「设置」Apple ID 认证引擎登录过）→ 免 2FA 恢复会话；
+    /// 2) 没有 token 但存了邮箱/密码（IPA 页登录过）→ 后台完整登录。
+    ///    若使用 app 专用密码或已信任设备，可做到杀后台重开已登录；
+    ///    否则 2FA 会静默失败，进入 IPA 页后自动登录会再试一次并弹验证码。
+    /// 失败均静默，由页面内自动登录兜底。
     /// @MainActor：MemoryLimitSettings 是 MainActor 隔离类，读取其属性需在主线程。
     @MainActor
     func warmUp() {
         let settings = MemoryLimitSettings.shared
         guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
-        guard !isSignedIn, !sessionRestoreFailed else { return }
-        guard let dsid = settings.dsid, let authToken = settings.authToken,
-              !dsid.isEmpty, !authToken.isEmpty else { return }
+        guard !isSignedIn else { return }
         guard !isWarmingUp else { return }
         let id = settings.appleID
         let ani = settings.anisetteServer
+
+        // 路径 A：有 token → 免 2FA 恢复。
+        if !sessionRestoreFailed,
+           let dsid = settings.dsid, let authToken = settings.authToken,
+           !dsid.isEmpty, !authToken.isEmpty {
+            isWarmingUp = true
+            Task.detached(priority: .utility) { [weak self] in
+                defer { Task { @MainActor in self?.isWarmingUp = false } }
+                guard let self else { return }
+                do {
+                    try self.signInWithSession(email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)
+                } catch {
+                    // token 失效等：signInWithSession 内部已设 sessionRestoreFailed=true，
+                    // 页面内自动登录会回退到完整登录。
+                }
+            }
+            return
+        }
+
+        // 路径 B：无 token 但有密码 → 后台完整登录（2FA 弹窗未就绪，失败静默）。
+        let pw = settings.password(forHistory: id) ?? ""
+        guard !pw.isEmpty else { return }
         isWarmingUp = true
         Task.detached(priority: .utility) { [weak self] in
             defer { Task { @MainActor in self?.isWarmingUp = false } }
             guard let self else { return }
             do {
-                try self.signInWithSession(email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)
+                try self.signIn(appleID: id, password: pw, anisetteURL: ani)
+                // 成功后把凭据同步回 settings（幂等），确保下次仍有密码可用。
+                await MainActor.run {
+                    MemoryLimitSettings.shared.signIn(email: id, password: pw)
+                }
             } catch {
-                // 静默：页面内自动登录会按 sessionRestoreFailed 走完整登录。
+                // 静默：用户进入 IPA 页时页面内自动登录会再试并展示错误。
             }
         }
     }
