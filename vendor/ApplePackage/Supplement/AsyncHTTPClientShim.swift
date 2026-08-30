@@ -265,11 +265,10 @@ public final class HTTPClient {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = configuration.timeoutRead
         cfg.timeoutIntervalForResource = max(configuration.timeoutRead, 60)
-        // 关掉 URLSession 的缓存与自动 cookie，全部由调用方手动管理
-        // （与请求级别 `httpShouldHandleCookies = false` 双重保险）。
+        // 关掉 URLSession 的缓存（自动 cookie 已在请求级别 `httpShouldHandleCookies = false` 关闭），
+        // 全部由调用方手动管理。
         cfg.urlCache = nil
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
-        cfg.httpShouldHandleCookies = false
         self.session = URLSession(configuration: cfg,
                                   delegate: redirectDelegate,
                                   delegateQueue: nil)
@@ -374,7 +373,7 @@ public final class HTTPClient {
                 urlRequest.httpBody = body
             }
 
-            let (data, response) = try await session.data(for: urlRequest)
+            let (data, response) = try await self.session.data(for: urlRequest)
             let http = response as? HTTPURLResponse
             let code = UInt(http?.statusCode ?? 0)
 
@@ -432,12 +431,13 @@ public enum EventLoopGroupProvider {
 /// 带上调用方手动拼的 cookie / body，导致 iTunes 认证握手失败，最终服务端返回一个没有
 /// `Location` 的 302 → 报 `failed to retrieve redirect location`。
 ///
-/// 这里实现 `URLSessionTaskDelegate` 的 `willPerformHTTPRedirection`（iOS 17+ 的
-/// `decisionHandler` 变体），当配置为 `.disallow`（`max == 0`）时返回 `.doNotAllow`，
-/// 取消自动跟随、把原始 302 响应交还给调用方处理 —— 与原版 AsyncHTTPClient 行为一致。
-///
-/// 部署目标为 iOS 18.0，运行时必然支持该 API；`.follow` 则保持跟随（与原
-/// `URLSession.shared` 行为一致，不影响 Lookup / Search）。
+/// 这里实现 `URLSessionTaskDelegate` 的 `willPerformHTTPRedirection`
+/// （`completionHandler: (URLRequest?) -> Void` 变体，iOS 7+ 通用；CI 所用 SDK 的
+/// 协议要求即为此签名，不存在 `URLSession.RedirectPolicy`）。当配置为 `.disallow`
+/// （`max == 0`）时调 `completionHandler(nil)` 取消自动跟随、把原始 302 响应交还给
+/// 调用方处理 —— 与原版 AsyncHTTPClient 行为一致；`.follow` 则调
+/// `completionHandler(request)` 保持跟随（与原 `URLSession.shared` 行为一致，
+/// 不影响 Lookup / Search）。
 private final class ApplePackageRedirectDelegate: NSObject, URLSessionTaskDelegate {
     let redirectConfiguration: RedirectConfiguration
 
@@ -450,13 +450,13 @@ private final class ApplePackageRedirectDelegate: NSObject, URLSessionTaskDelega
                     task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest,
-                    decisionHandler: @escaping (URLSession.RedirectPolicy) -> Void) {
+                    completionHandler: @escaping (URLRequest?) -> Void) {
         if redirectConfiguration.max == 0 {
             // .disallow：不跟随，把 302 交还给调用方自行处理。
-            decisionHandler(.doNotAllow)
+            completionHandler(nil)
         } else {
             // .follow：按 URLSession 默认行为跟随。
-            decisionHandler(.allow)
+            completionHandler(request)
         }
     }
 }
