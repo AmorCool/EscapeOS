@@ -28,7 +28,7 @@ struct AppStoreDownloadView: View {
         List {
             accountSection
             downloadSection
-            if let errorMessage { errorSection }
+            if errorMessage != nil { errorSection }
             statusSection
         }
         .listStyle(.insetGrouped)
@@ -96,7 +96,9 @@ struct AppStoreDownloadView: View {
             }
             // 复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID：
             // 同一份邮箱 + 密码即可走 iTunes 认证拿到 AppStoreAccount，无需再单独登录一次。
-            if let settingsEmail = MemoryLimitSettings.shared.appleID, !settingsEmail.isEmpty {
+            // appleID 是非可选 String（空串表示未登录），不能用 if let 绑定。
+            let settingsEmail = MemoryLimitSettings.shared.appleID
+            if !settingsEmail.isEmpty {
                 Button {
                     useSettingsAppleID()
                 } label: {
