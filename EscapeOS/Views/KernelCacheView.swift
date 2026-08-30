@@ -35,7 +35,7 @@ struct KernelCacheView: View {
                     HStack(spacing: 10) {
                         Image(systemName: "cpu.fill")
                             .font(.title3)
-                            .foregroundStyle(AppTheme.accent)
+                            .foregroundStyle(.blue)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(deviceIdentifier) · iOS \(systemVersion)")
                                 .font(.subheadline.weight(.semibold))
@@ -67,16 +67,16 @@ struct KernelCacheView: View {
                             Label("一键下载当前系统 KernelCache", systemImage: "arrow.down.circle.fill")
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .tint(AppTheme.accent)
+                    .tint(.blue)
                     .disabled(isRunning || selectedFirmware == nil)
                 }
                 .padding(.vertical, 4)
             } header: {
                 Text("内核缓存下载")
             } footer: {
-                Text("lara 原版依赖内核漏洞（vn_fileredirect）无法在 EscapeSpace 复现，本页改用官方 IPSW 直拉方案，结果一致。")
+                Text("默认按当前机型与系统版本自动匹配；也可在下方手动切换机型/版本。")
             }
 
             // 手动选择区
@@ -103,7 +103,7 @@ struct KernelCacheView: View {
                     HStack {
                         Text("系统版本")
                         Spacer()
-                        Picker("系统版本", selection: Binding(
+                        Picker("", selection: Binding(
                             get: { selectedFirmware?.buildid ?? "" },
                             set: { newID in
                                 selectedFirmware = firmwares.first { $0.buildid == newID }
@@ -162,7 +162,7 @@ struct KernelCacheView: View {
                         HStack(spacing: 10) {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.title3)
-                                .foregroundStyle(AppTheme.accent)
+                                .foregroundStyle(.blue)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("分享下载的文件")
                                     .font(.subheadline.weight(.semibold))
