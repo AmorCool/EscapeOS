@@ -201,7 +201,7 @@ struct KernelCacheView: View {
                             }
                             Spacer()
                             Button {
-                                shareFile(URL(fileURLWithPath: (service.saveDirectory as NSString).appendingPathComponent(name)))
+                                shareFile(URL(fileURLWithPath: (KernelCacheService.saveDirectory as NSString).appendingPathComponent(name)))
                             } label: {
                                 Image(systemName: "square.and.arrow.up")
                             }
@@ -318,7 +318,7 @@ struct KernelCacheView: View {
     private func reload() {
         savedFiles = service.savedFiles()
         if let latest = savedFiles.last {
-            shareURL = ShareURL(url: URL(fileURLWithPath: (service.saveDirectory as NSString).appendingPathComponent(latest)))
+            shareURL = ShareURL(url: URL(fileURLWithPath: (KernelCacheService.saveDirectory as NSString).appendingPathComponent(latest)))
         } else {
             shareURL = nil
         }
@@ -360,9 +360,9 @@ struct KernelCacheView: View {
     }
 
     private func fileSizeText(named name: String) -> String {
-        let path = (service.saveDirectory as NSString).appendingPathComponent(name)
+        let path = (KernelCacheService.saveDirectory as NSString).appendingPathComponent(name)
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let size = attrs[.size] as? NSNumber else {
+              let size = attrs[FileAttributeKey.size] as? NSNumber else {
             return ""
         }
         return ByteCountFormatter.string(fromByteCount: size.int64Value, countStyle: .file)
