@@ -133,6 +133,7 @@ final class SignedIPAInstallView: View {
 
     private func install(mode: InstallMode) {
         guard let importedURL = self.importedURL else { return }
+        let localPath = importedURL.path
         self.busy = true
         self.progress = 0
         self.errorMessage = nil
@@ -140,11 +141,11 @@ final class SignedIPAInstallView: View {
             do {
                 switch mode {
                 case .install:
-                    try self.service.installSignedIPA(self.importedURL.path) { value in
+                    try self.service.installSignedIPA(localPath) { value in
                         DispatchQueue.main.async { self.progress = value }
                     }
                 case .upgrade:
-                    try self.service.upgradeSignedIPA(self.importedURL.path) { value in
+                    try self.service.upgradeSignedIPA(localPath) { value in
                         DispatchQueue.main.async { self.progress = value }
                     }
                 }
