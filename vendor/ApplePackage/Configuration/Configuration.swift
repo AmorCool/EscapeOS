@@ -17,7 +17,12 @@ public enum Configuration {
      **It is a must set value before any network request**
      **otherwise your account may be locked for security reason**
      */
-    public nonisolated(unsafe) static var deviceIdentifier: String = (try? DeviceIdentifier.system()) ?? "" {
+    // iOS 上原版会拿到 ""（DeviceIdentifier.system() 永远 throw），而下面的
+    // tlsConfiguration 有一条 `precondition(!deviceIdentifier.isEmpty)` ——
+    // 不设置就一调用即崩溃。这里兜底成随机值；真正的持久化值由
+    // AppStoreDownloadStore 启动时写入（见 bootstrapDeviceIdentifier()），
+    // 避免每次冷启动都换一台"机器"触发 Apple 风控。
+    public nonisolated(unsafe) static var deviceIdentifier: String = (try? DeviceIdentifier.system()) ?? DeviceIdentifier.random() {
         didSet {
             assert(!deviceIdentifier.contains(":"))
             assert(!deviceIdentifier.contains("-"))

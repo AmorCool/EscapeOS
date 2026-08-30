@@ -98,6 +98,13 @@ public struct HTTPHeaders {
     }
 
     public var all: [(name: String, value: String)] { items }
+
+    /// 兼容 `response.headers["x-set-apple-store-front"]` 这类下标访问：
+    /// HTTP 头可以重复（Set-Cookie 尤其如此），所以返回**所有**同名值。
+    public subscript(name: String) -> [String] {
+        items.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+            .map { $0.value }
+    }
 }
 
 
@@ -122,6 +129,9 @@ public struct RedirectConfiguration {
     public static func follow(max: Int, allowCycles: Bool) -> RedirectConfiguration {
         RedirectConfiguration(max: max)
     }
+    /// 不跟随重定向 —— 登录 / 购买 / 下载等接口要自己读 `Location` 头，
+    /// 由调用方决定下一步（Authenticate / Purchase / Download / Version* 都在用）。
+    public static let disallow = RedirectConfiguration(max: 0)
 }
 
 public struct TimeoutShim {
@@ -167,6 +177,43 @@ public struct HTTPClientCookie {
         self.httpOnly = httpOnly
         self.secure = secure
     }
+
+    /// 解析一条 `Set-Cookie` 响应头。
+    ///
+    /// 原版由 AsyncHTTPClient 代劳；shim 用 URLSession，需要自己解析。
+    /// Cookie 的发送则由 `[Cookie].buildCookieHeader()` 手动完成，
+    /// 所以请求里必须关掉 `httpShouldHandleCookies`，否则两边会重复处理。
+    public static func parse(_ header: String) -> HTTPClientCookie? {
+        let parts = header
+            .split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let first = parts.first else { return nil }
+        let pair = first.split(separator: "=", maxSplits: 1).map(String.init)
+        guard pair.count == 2, !pair[0].isEmpty else { return nil }
+
+        var path = "/"
+        var domain = ""
+        var maxAge: Int?
+        var httpOnly = false
+        var secure = false
+
+        for attribute in parts.dropFirst() {
+            let item = attribute.split(separator: "=", maxSplits: 1).map(String.init)
+            let key = (item.first ?? "").lowercased()
+            let value = item.count > 1 ? item[1] : ""
+            switch key {
+            case "path": path = value.isEmpty ? "/" : value
+            case "domain": domain = value
+            case "max-age": maxAge = Int(value)
+            case "httponly": httpOnly = true
+            case "secure": secure = true
+            default: break
+            }
+        }
+
+        return HTTPClientCookie(name: pair[0], value: pair[1], path: path, domain: domain,
+                                maxAge: maxAge, httpOnly: httpOnly, secure: secure)
+    }
 }
 
 // MARK: - Client
@@ -208,8 +255,12 @@ public final class HTTPClient {
         self.configuration = configuration
     }
 
-    /// 兼容原版构造签名（参数仅用于对齐调用点，实际按 URLSession 语义处理）。
-    public convenience init(eventLoopGroupProvider: Any? = nil, configuration: Configuration = Configuration()) {
+    /// 兼容原版构造签名。参数仅用于对齐调用点，实际按 URLSession 语义处理。
+    ///
+    /// 不能写成 `Any?`：调用点是 `eventLoopGroupProvider: .singleton`，
+    /// `Any?` 无法推断成员（`type 'Any?' has no member 'singleton'`，CI 实证）。
+    public convenience init(eventLoopGroupProvider: EventLoopGroupProvider = .createNew,
+                            configuration: Configuration = Configuration()) {
         self.init(configuration: configuration)
     }
 
@@ -267,6 +318,10 @@ public final class HTTPClient {
             var urlRequest = URLRequest(url: url)
             urlRequest.httpMethod = request.method.rawValue
             urlRequest.timeoutInterval = self.configuration.timeoutRead
+            // Cookie 由 [Cookie].buildCookieHeader() 手动管理（和原版一致），
+            // 必须关掉 URLSession 的自动处理，否则 Set-Cookie 会被它吞掉，
+            // response.cookies 永远为空 → 登录态无法延续。
+            urlRequest.httpShouldHandleCookies = false
             for item in request.headers.all {
                 urlRequest.setValue(item.value, forHTTPHeaderField: item.name)
             }
@@ -287,6 +342,16 @@ public final class HTTPClient {
     }
 }
 
+public extension HTTPClient.Response {
+    /// 从 `Set-Cookie` 响应头解析出的 cookie 列表。
+    ///
+    /// 原版 AsyncHTTPClient 会自动填充这个属性；shim 需要手动解析。
+    /// 登录 / 购买 / 下载流程全靠它把会话延续下去。
+    var cookies: [HTTPClientCookie] {
+        headers["Set-Cookie"].compactMap { HTTPClientCookie.parse($0) }
+    }
+}
+
 /// `EventLoopFuture<Response>.get()` 的 async 替身。
 public struct HTTPResult {
     private let body: () async throws -> HTTPClient.Response
@@ -298,6 +363,16 @@ public struct HTTPResult {
     public func get() async throws -> HTTPClient.Response {
         try await body()
     }
+}
+
+/// 兼容 AsyncHTTPClient 的 `EventLoopGroupProvider`。
+///
+/// shim 用 URLSession，没有事件循环组的概念；这里只保留调用点会用到的
+/// `.singleton`，让 `HTTPClient(eventLoopGroupProvider: .singleton, ...)`
+/// 能正常做类型推断。
+public enum EventLoopGroupProvider {
+    case singleton
+    case createNew
 }
 
 public enum ApplePackageHTTPError: Error, LocalizedError {
