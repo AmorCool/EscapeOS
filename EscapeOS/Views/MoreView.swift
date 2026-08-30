@@ -10,12 +10,7 @@ struct MoreView: View {
     @State private var showDeviceControl = false
 
     var body: some View {
-        // Liquid Glass：页面底垫一层淡光晕（让玻璃有东西可折射），
-        // 每个入口行各自是一块悬浮玻璃卡片 —— 不是铺在后面的一整块底板。
-        ZStack(alignment: .top) {
-            GlassPageBackdrop()
-
-            List {
+        List {
                 Section {
                     NavigationLink(destination: VirtualLocationView()) {
                         MoreCard(
@@ -24,7 +19,6 @@ struct MoreView: View {
                             subtitle: "在地图上放置图钉或规划轨迹，模拟设备定位（需配对文件 + LocalDevVPN）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: JITEnableView()) {
                         MoreCard(
@@ -33,7 +27,6 @@ struct MoreView: View {
                             subtitle: "以调试模式启动应用，为其启用 JIT 权限（需配对文件 + LocalDevVPN）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: LaunchAppsView()) {
                         MoreCard(
@@ -42,7 +35,6 @@ struct MoreView: View {
                             subtitle: "列出全部已安装应用，一键在前台拉起（普通启动，不启用 JIT）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: AppExpiryView()) {
                         MoreCard(
@@ -51,7 +43,6 @@ struct MoreView: View {
                             subtitle: "查看所有描述文件的过期时间，支持按证书分组与批量删除。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: CertificateView()) {
                         MoreCard(
@@ -60,7 +51,6 @@ struct MoreView: View {
                             subtitle: "登录 Apple ID，查看并吊销账号下的 iOS 开发证书（纯网络操作，无需隧道）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: PairingInstallView()) {
                         MoreCard(
@@ -69,7 +59,6 @@ struct MoreView: View {
                             subtitle: "把配对文件写入已安装的 SideStore / LiveContainer / Feather 等应用，复用同一份配对身份。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: IPAInstallView()) {
                         MoreCard(
@@ -78,7 +67,6 @@ struct MoreView: View {
                             subtitle: "签名并安装 IPA 到设备（Apple ID 登录 + LocalDevVPN 隧道）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: AppStoreDownloadView()) {
                         MoreCard(
@@ -87,7 +75,6 @@ struct MoreView: View {
                             subtitle: "登录 App Store 账户，搜索并下载正版 IPA（含历史版本），下载后交给「IPA 安装」在线安装 —— 与爱思助手同款流程。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: SignedIPAInstallView()) {
                         MoreCard(
@@ -96,7 +83,6 @@ struct MoreView: View {
                             subtitle: "在线安装已签名 IPA（App Store / Apple ID 包）：新装、覆盖升级/降级安装，爱思同款通道，无需再次签名（需 LocalDevVPN 隧道）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: ProcessManagerView()) {
                         MoreCard(
@@ -105,7 +91,6 @@ struct MoreView: View {
                             subtitle: "查看设备运行中的进程，支持挂起 / 恢复 / 结束（需配对文件 + LocalDevVPN）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: WallpaperView()) {
                         MoreCard(
@@ -114,7 +99,6 @@ struct MoreView: View {
                             subtitle: "导入并应用自定义 .tendies 壁纸包（PosterBoard）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: DialerThemeView()) {
                         MoreCard(
@@ -123,7 +107,6 @@ struct MoreView: View {
                             subtitle: "替换电话 App 的拨号键盘图片，支持 .passthm / .zip 主题包或直接多选 PNG。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: RingtonesView()) {
                         MoreCard(
@@ -132,7 +115,6 @@ struct MoreView: View {
                             subtitle: "导入 / 导出 / 删除用户铃声，并可提取系统提示音（需配对文件 + LocalDevVPN）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: FileBrowserRootView(appList: appList)) {
                         MoreCard(
@@ -141,7 +123,6 @@ struct MoreView: View {
                             subtitle: "浏览并编辑设备上的任意容器：应用数据、守护进程、App 插件、.app 包等。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: AFCBrowserView()) {
                         MoreCard(
@@ -150,7 +131,6 @@ struct MoreView: View {
                             subtitle: "经本地隧道浏览设备文件系统（初始 /var/mobile/media）：下载导出、上传、移动、新建目录、删除（需配对文件 + LocalDevVPN）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: KernelCacheView()) {
                         MoreCard(
@@ -159,16 +139,7 @@ struct MoreView: View {
                             subtitle: "从 Apple CDN 的 IPSW 中按偏移只下载 kernelcache 内核缓存文件（约 20MB，纯网络、零权限），与越狱工具从设备读取的是同一份文件。"
                         )
                     }
-                    .liquidGlassRow()
 
-                    NavigationLink(destination: LiquidGlassDemoView()) {
-                        MoreCard(
-                            icon: "sparkles",
-                            title: "Liquid Glass 效果",
-                            subtitle: "iOS 26 以下系统也能用上 Liquid Glass：Metal 着色器实现的折射 / 色散 / 边缘高光（页面内可查看运行状态自检）。"
-                        )
-                    }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: ProfileInstallView()) {
                         MoreCard(
@@ -177,7 +148,6 @@ struct MoreView: View {
                             subtitle: "导入 .mobileconfig 描述文件（屏蔽 iOS 更新、Wi-Fi、VPN 等）一键发送到本机，去「设置 → 通用 → VPN 与设备管理」安装，与爱思助手同款原理。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: CrashLogView()) {
                         MoreCard(
@@ -186,7 +156,6 @@ struct MoreView: View {
                             subtitle: "查看设备崩溃与诊断日志（对应「分析与改进」），支持批量选择导出 / 删除（需配对文件 + LocalDevVPN）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: IPCCInstallView()) {
                         MoreCard(
@@ -195,7 +164,6 @@ struct MoreView: View {
                             subtitle: "导入运营商配置文件（.ipcc）安装到 Carrier Bundles Overrides，重启后生效。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: DDIDownloadView()) {
                         MoreCard(
@@ -204,7 +172,6 @@ struct MoreView: View {
                             subtitle: "下载 DDI / DMG 镜像并打包为 DMG.zip。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: DomainBlockerView()) {
                         MoreCard(
@@ -213,7 +180,6 @@ struct MoreView: View {
                             subtitle: "生成 DNS 描述文件，按需屏蔽任意域名（含 iOS 更新）。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: BackupsListView(appList: appList)) {
                         MoreCard(
@@ -222,7 +188,6 @@ struct MoreView: View {
                             subtitle: "查看、恢复或导出已创建的 EscapeSpace 备份归档。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: ConfigurationsView()) {
                         MoreCard(
@@ -231,7 +196,6 @@ struct MoreView: View {
                             subtitle: "锁屏页脚与监督模式等系统配置（MDM），iOS 26 下支持读取与备份。"
                         )
                     }
-                    .liquidGlassRow()
 
                     NavigationLink(destination: IncreaseMemoryView()) {
                         MoreCard(
@@ -240,7 +204,6 @@ struct MoreView: View {
                             subtitle: "登录 Apple ID 并配置 Anisette，为 App 开启 INCREASED_MEMORY_LIMIT。"
                         )
                     }
-                    .liquidGlassRow()
                 }
             }
             .listStyle(.plain)
@@ -285,7 +248,6 @@ struct MoreView: View {
                         }
                 }
             }
-        }
     }
 }
 

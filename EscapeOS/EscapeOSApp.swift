@@ -18,9 +18,6 @@ struct EscapeSpaceApp: App {
            !override.trimmingCharacters(in: .whitespaces).isEmpty {
             MCMIntegration.configure(appGroup: override.trimmingCharacters(in: .whitespaces))
         }
-        // Liquid Glass 外观（标签栏 / 导航栏）。必须在任何 UI 创建之前调用：
-        // UIAppearance 代理只对之后创建的实例生效，放在 View.onAppear 里太晚。
-        LiquidGlassAppearance.apply()
     }
 
     var body: some Scene {
