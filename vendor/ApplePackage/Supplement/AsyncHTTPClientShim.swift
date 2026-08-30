@@ -294,6 +294,24 @@ public final class HTTPClient {
             self.headers = headers
             self.body = body
         }
+
+        /// 兼容原版 `Request(url: URL, ...)`：asspp 的 VersionFinder / VersionLookup
+        /// 内部用 `URL` 构造请求（CI 实证 `cannot convert value of type 'URL' to
+        /// expected argument type 'String'`），这里重载接受 `URL`，内部转成
+        /// `absoluteString`，调用点一行都不用改。
+        public init(url: URL, method: HTTPMethodShim = .GET) {
+            self.url = url.absoluteString
+            self.method = method
+            self.headers = HTTPHeaders()
+            self.body = .none
+        }
+
+        public init(url: URL, method: HTTPMethodShim, headers: HTTPHeaders, body: HTTPBodyShim) {
+            self.url = url.absoluteString
+            self.method = method
+            self.headers = headers
+            self.body = body
+        }
     }
 
     public struct Response {

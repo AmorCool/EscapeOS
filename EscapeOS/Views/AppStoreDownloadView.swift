@@ -9,6 +9,10 @@ import SwiftUI
 ///
 /// 底层走移植进来的 ApplePackage（网络层已用 URLSession 重写，ZIP 用
 /// 项目已有的 SWCompression），无需再次签名。
+///
+/// 账户登录：优先复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID
+///（同一份邮箱 + 密码走 iTunes 认证即可），无需在 App Store 下载里再登录一次；
+/// 遇到双重认证等情况时仍可手动添加账户。
 struct AppStoreDownloadView: View {
     @State private var accounts: [AppStoreAccount] = []
     @State private var selectedEmail: String = ""
@@ -90,6 +94,18 @@ struct AppStoreDownloadView: View {
                     reload()
                 }
             }
+            // 复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID：
+            // 同一份邮箱 + 密码即可走 iTunes 认证拿到 AppStoreAccount，无需再单独登录一次。
+            if let settingsEmail = MemoryLimitSettings.shared.appleID, !settingsEmail.isEmpty {
+                Button {
+                    useSettingsAppleID()
+                } label: {
+                    Label("使用「更多」已登录的 Apple ID", systemImage: "person.crop.circle.badge.checkmark")
+                }
+                .foregroundColor(.blue)
+                .disabled(busy)
+            }
+
             Button {
                 showAddAccount = true
             } label: {
@@ -99,7 +115,7 @@ struct AppStoreDownloadView: View {
         } header: {
             Text("账户")
         } footer: {
-            Text("登录的是 App Store（不是开发者后台），用于下载你已购买 / 免费入库的应用。凭据只保存在本机。")
+            Text("已登录「更多 → 设置 → Apple ID 账户」时，点上方按钮即可直接复用该 Apple ID 下载 App Store 应用，无需重复登录；遇到双重认证等情况可改用下方手动添加并填写验证码。凭据只保存在本机。")
         }
     }
 
@@ -153,5 +169,43 @@ struct AppStoreDownloadView: View {
     private func reload() {
         accounts = store.accounts
         if selectedEmail.isEmpty { selectedEmail = accounts.first?.email ?? "" }
+    }
+
+    /// 复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID（同一份邮箱 + 密码）
+    /// 走 iTunes 认证拿到 AppStoreAccount，避免用户在 App Store 下载里再登录一次。
+    ///
+    /// 注意：侧载的 GrandSlam 会话与 App Store 的 iTunes 会话**令牌不互通**，
+    /// 这里只是复用**凭据**（邮箱+密码），仍要调一次 `Authenticator.authenticate`
+    /// 走 iTunes 流程拿 `passwordToken` / `dsPersonId` / cookie。开启双重认证时
+    /// 该接口会失败，此时回退到手动添加账户并填写验证码。
+    private func useSettingsAppleID() {
+        let settings = MemoryLimitSettings.shared
+        let email = settings.appleID
+        guard !email.isEmpty,
+              let password = settings.password(forHistory: email), !password.isEmpty else {
+            errorMessage = "未找到「更多 → 设置 → Apple ID 账户」的登录凭据，请先在那里登录，或点下方手动添加。"
+            return
+        }
+        let pw = password
+        busy = true
+        status = "正在用设置中的 Apple ID 登录 App Store…"
+        Task {
+            do {
+                let account = try await Authenticator.authenticate(email: email, password: pw)
+                await MainActor.run {
+                    store.add(account)
+                    reload()
+                    selectedEmail = account.email
+                    busy = false
+                    status = "已用设置中的 Apple ID 登录"
+                    toast = "已用「更多」中的 Apple ID 登录：\(account.email)"
+                }
+            } catch {
+                await MainActor.run {
+                    busy = false
+                    errorMessage = "用设置中的 Apple ID 登录失败：\(error.localizedDescription)\n若开启了双重认证，请改用下方手动添加并填写验证码。"
+                }
+            }
+        }
     }
 }
