@@ -43,8 +43,12 @@ public enum Authenticator {
         var currentAttempt = 1
         var redirectAttempt = 0
         var lastError: Error?
+        // Apple 认证边缘对同一请求会间歇性返回 204/404/5xx（负载/限流，curl 实测
+        // 5 连发命中 200/204/301 交替）。生产实现（ipatool `retryableAuthenticationError`）
+        // 对这些状态**延迟重试**而非硬失败；asspp 系代码缺此逻辑，故真机偶发 204 即挂。
+        let maxAuthAttempts = 4
 
-        while currentAttempt <= 2, redirectAttempt <= 3 {
+        while currentAttempt <= maxAuthAttempts, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
                 let request = try makeRequest(
@@ -56,6 +60,12 @@ public enum Authenticator {
                     deviceIdentifier: deviceIdentifier
                 )
                 let response = try await client.execute(request: request).get()
+                let statusCode = Int(response.status.code)
+                if isTransientAuthStatus(statusCode), currentAttempt < maxAuthAttempts {
+                    // 瞬态响应：线性退避后重试（250ms / 500ms / 750ms）
+                    try await Task.sleep(nanoseconds: UInt64(250 * currentAttempt) * 1_000_000)
+                    continue
+                }
                 let result = try parseResponse(
                     response,
                     email: email,
@@ -87,6 +97,12 @@ public enum Authenticator {
 
         if let lastError { throw lastError }
         try ensureFailed("authentication failed for an unknown reason")
+    }
+
+    /// Apple 认证边缘的瞬态状态（ipatool `retryableAuthenticationError` 同款）：
+    /// 204 无内容 / 404 偶发 / 5xx 服务端 —— 均应延迟重试。
+    private nonisolated static func isTransientAuthStatus(_ code: Int) -> Bool {
+        code == 204 || code == 404 || code / 100 == 5
     }
 
     public nonisolated static func rotatePasswordToken(for account: inout AppStoreAccount) async throws {
@@ -176,7 +192,9 @@ public enum Authenticator {
             storeFront = first
         }
 
-        if response.status == .found {
+        // 原生 /fast 认证 host 会以 301 响应（除常见的 302 外），连同 303/307/308
+        // 一并跟随 —— 与 asspp/AssppWeb `authenticate.ts` 的 `[301, 302, 303, 307, 308]` 一致。
+        if [301, 302, 303, 307, 308].contains(Int(response.status.code)) {
             guard let location = response.headers.first(name: "location"),
                   let url = URL(string: location)
             else {
