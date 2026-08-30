@@ -72,6 +72,7 @@ struct AddAccountSheet: View {
         let password = self.password
         let code = self.code
         Task {
+            LoginLogger.shared.log("App Store 下载：手动添加账户开始认证 \(email)（含验证码：\(code.isEmpty ? "否" : "是")）")
             do {
                 let account = try await Authenticator.authenticate(
                     email: email,
@@ -83,11 +84,13 @@ struct AddAccountSheet: View {
                     onAdded(account)
                     dismiss()
                 }
+                LoginLogger.shared.log("App Store 下载：手动添加账户认证成功，store=\(account.store)")
             } catch {
                 await MainActor.run {
                     busy = false
                     errorMessage = "登录失败：\(error.localizedDescription)"
                 }
+                LoginLogger.shared.log("App Store 下载：手动添加账户认证失败 - \(error.localizedDescription)")
             }
         }
     }

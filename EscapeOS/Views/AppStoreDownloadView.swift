@@ -17,6 +17,7 @@ struct AppStoreDownloadView: View {
     @State private var accounts: [AppStoreAccount] = []
     @State private var selectedEmail: String = ""
     @State private var showAddAccount = false
+    @State private var showLoginLog = false
     @State private var busy = false
     @State private var status = ""
     @State private var errorMessage: String?
@@ -34,6 +35,18 @@ struct AppStoreDownloadView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("App Store 下载")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showLoginLog = true
+                } label: {
+                    Label("登录日志", systemImage: "doc.text.magnifyingglass")
+                }
+            }
+        }
+        .sheet(isPresented: $showLoginLog) {
+            LoginLogView()
+        }
         .sheet(isPresented: $showAddAccount) {
             AddAccountSheet { account in
                 store.add(account)
@@ -191,6 +204,7 @@ struct AppStoreDownloadView: View {
         let pw = password
         busy = true
         status = "正在用设置中的 Apple ID 登录 App Store…"
+        LoginLogger.shared.log("App Store 下载：开始用「更多」已登录的 Apple ID（\(email)）走 iTunes 认证")
         Task {
             do {
                 let account = try await Authenticator.authenticate(email: email, password: pw)
@@ -202,11 +216,13 @@ struct AppStoreDownloadView: View {
                     status = "已用设置中的 Apple ID 登录"
                     toast = "已用「更多」中的 Apple ID 登录：\(account.email)"
                 }
+                LoginLogger.shared.log("App Store 下载：iTunes 认证成功，store=\(account.store)，appleId=\(account.appleId ?? "未知")")
             } catch {
                 await MainActor.run {
                     busy = false
                     errorMessage = "用设置中的 Apple ID 登录失败：\(error.localizedDescription)\n若开启了双重认证，请改用下方手动添加并填写验证码。"
                 }
+                LoginLogger.shared.log("App Store 下载：iTunes 认证失败 - \(error.localizedDescription)")
             }
         }
     }

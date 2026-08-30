@@ -251,8 +251,28 @@ public final class HTTPClient {
 
     public let configuration: Configuration
 
+    /// 每个 client 持有独立的 URLSession：重定向策略（是否跟随）由
+    /// `configuration.redirectConfiguration` 决定，需要自定义 `URLSessionTaskDelegate`
+    /// 来精确控制（见 `ApplePackageRedirectDelegate`）。
+    private let session: URLSession
+    private let redirectDelegate: ApplePackageRedirectDelegate
+
     public init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
+        self.redirectDelegate = ApplePackageRedirectDelegate(
+            redirectConfiguration: configuration.redirectConfiguration
+        )
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = configuration.timeoutRead
+        cfg.timeoutIntervalForResource = max(configuration.timeoutRead, 60)
+        // 关掉 URLSession 的缓存与自动 cookie，全部由调用方手动管理
+        // （与请求级别 `httpShouldHandleCookies = false` 双重保险）。
+        cfg.urlCache = nil
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        cfg.httpShouldHandleCookies = false
+        self.session = URLSession(configuration: cfg,
+                                  delegate: redirectDelegate,
+                                  delegateQueue: nil)
     }
 
     /// 兼容原版构造签名。参数仅用于对齐调用点，实际按 URLSession 语义处理。
@@ -264,8 +284,15 @@ public final class HTTPClient {
         self.init(configuration: configuration)
     }
 
+    deinit {
+        // URLSession 强引用 delegate，必须 invalidate 才能释放，否则会泄漏。
+        session.invalidateAndCancel()
+    }
+
     public func shutdown() -> String {
-        // URLSession 无需显式关闭；保留方法以兼容 `defer { _ = client.shutdown() }`。
+        // 释放 session 及其强引用的 delegate（保留方法以兼容
+        // `defer { _ = client.shutdown() }`）。
+        session.invalidateAndCancel()
         return "ok"
     }
 
@@ -347,7 +374,7 @@ public final class HTTPClient {
                 urlRequest.httpBody = body
             }
 
-            let (data, response) = try await URLSession.shared.data(for: urlRequest)
+            let (data, response) = try await session.data(for: urlRequest)
             let http = response as? HTTPURLResponse
             let code = UInt(http?.statusCode ?? 0)
 
@@ -391,6 +418,47 @@ public struct HTTPResult {
 public enum EventLoopGroupProvider {
     case singleton
     case createNew
+}
+
+// MARK: - 重定向控制
+
+/// 控制 URLSession 是否跟随重定向。
+///
+/// ApplePackage 的调用方（Authenticate / Purchase / Download / Version* 等）普遍使用
+/// `redirectConfiguration: .disallow`，期望**自己**读取 302 响应的 `Location` 头并手动
+/// 构造下一步请求（要在重定向之间携带 cookie / 重发 plist body）。
+///
+/// 但 `URLSession.shared.data(for:)` 默认会**自动跟随** 302，且自动合成的后续请求不会
+/// 带上调用方手动拼的 cookie / body，导致 iTunes 认证握手失败，最终服务端返回一个没有
+/// `Location` 的 302 → 报 `failed to retrieve redirect location`。
+///
+/// 这里实现 `URLSessionTaskDelegate` 的 `willPerformHTTPRedirection`（iOS 17+ 的
+/// `decisionHandler` 变体），当配置为 `.disallow`（`max == 0`）时返回 `.doNotAllow`，
+/// 取消自动跟随、把原始 302 响应交还给调用方处理 —— 与原版 AsyncHTTPClient 行为一致。
+///
+/// 部署目标为 iOS 18.0，运行时必然支持该 API；`.follow` 则保持跟随（与原
+/// `URLSession.shared` 行为一致，不影响 Lookup / Search）。
+private final class ApplePackageRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    let redirectConfiguration: RedirectConfiguration
+
+    init(redirectConfiguration: RedirectConfiguration) {
+        self.redirectConfiguration = redirectConfiguration
+        super.init()
+    }
+
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    decisionHandler: @escaping (URLSession.RedirectPolicy) -> Void) {
+        if redirectConfiguration.max == 0 {
+            // .disallow：不跟随，把 302 交还给调用方自行处理。
+            decisionHandler(.doNotAllow)
+        } else {
+            // .follow：按 URLSession 默认行为跟随。
+            decisionHandler(.allow)
+        }
+    }
 }
 
 public enum ApplePackageHTTPError: Error, LocalizedError {

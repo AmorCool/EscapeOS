@@ -36,20 +36,22 @@ enum LiquidGlassAppearance {
         }
         let appearance = UITabBarAppearance()
         appearance.configureWithTransparentBackground()
-        appearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
-        // 提亮：纯模糊偏灰，加一层极淡白才有玻璃的通透感。
-        appearance.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-        // 顶边镜面高光 —— 液态玻璃最标志性的视觉特征。
-        appearance.shadowColor = UIColor.white.withAlphaComponent(0.50)
-        appearance.shadowImage = specularLineImage()
+        // iOS 18 没有系统级液态玻璃，用 systemChromeMaterial 毛玻璃当“玻璃”底：
+        // 自带模糊 + 通透感，是系统栏默认材质，最接近 iOS 26 的玻璃质感。
+        appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterial)
+        // 关键修正：不要叠加白色实底，否则在浅色页面上会被渲染成“实色亮条”
+        // （v0.2.149 实测的“很丑”来源）。纯毛玻璃即可透出底部内容。
+        appearance.backgroundColor = .clear
+        // 顶边不画刺眼的白色镜面高光线，保持纯净毛玻璃，对齐 iOS 26。
+        appearance.shadowImage = nil
+        appearance.shadowColor = nil
 
         let bar = UITabBar.appearance()
-        // 清掉系统默认的不透明底板，让上面的材质 + 高光透出来。
+        // 清掉系统默认的不透明底板，让上面的材质透出来。
         bar.backgroundImage = UIImage()
         bar.isTranslucent = true
         bar.standardAppearance = appearance
         bar.scrollEdgeAppearance = appearance
-        // 注意：不要在这里设 `bar.shadowImage`，它会覆盖 appearance 的高光线。
     }
 
     // MARK: - 导航栏
@@ -62,48 +64,16 @@ enum LiquidGlassAppearance {
         }
         let appearance = UINavigationBarAppearance()
         appearance.configureWithTransparentBackground()
-        appearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
-        appearance.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-        appearance.shadowColor = UIColor.white.withAlphaComponent(0.35)
-        appearance.shadowImage = specularLineImage()
+        // 与底栏一致：systemChromeMaterial 毛玻璃 + 纯透底，去掉刺眼白色高光线。
+        appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterial)
+        appearance.backgroundColor = .clear
+        appearance.shadowImage = nil
+        appearance.shadowColor = nil
 
         let bar = UINavigationBar.appearance()
         bar.isTranslucent = true
         bar.standardAppearance = appearance
         bar.scrollEdgeAppearance = appearance
         bar.compactAppearance = appearance
-    }
-
-    // MARK: - 镜面高光线
-
-    /// 1px 顶部高光线：中间最亮、两端渐隐，模拟玻璃上缘的镜面反射。
-    ///
-    /// 生成一张可拉伸的横条图，交给 `UIBarAppearance.shadowImage`。
-    private static func specularLineImage(width: CGFloat = 64) -> UIImage? {
-        let scale = UIScreen.main.scale
-        let size = CGSize(width: width, height: 1)
-        UIGraphicsBeginImageContextWithOptions(size, false, scale)
-        defer { UIGraphicsEndImageContext() }
-        guard let context = UIGraphicsGetCurrentContext() else { return nil }
-
-        let colors = [
-            UIColor.white.withAlphaComponent(0.04).cgColor,
-            UIColor.white.withAlphaComponent(0.90).cgColor,
-            UIColor.white.withAlphaComponent(0.04).cgColor
-        ] as CFArray
-        guard let gradient = CGGradient(
-            colorsSpace: CGColorSpaceCreateDeviceRGB(),
-            colors: colors,
-            locations: [0, 0.5, 1]
-        ) else { return nil }
-
-        context.drawLinearGradient(
-            gradient,
-            start: CGPoint(x: 0, y: 0),
-            end: CGPoint(x: width, y: 0),
-            options: []
-        )
-        return UIGraphicsGetImageFromCurrentImageContext()?
-            .resizableImage(withCapInsets: .zero, resizingMode: .stretch)
     }
 }
