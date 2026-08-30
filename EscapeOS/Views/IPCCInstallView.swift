@@ -17,8 +17,7 @@ struct IPCCInstallView: View {
     @State private var detailRecord: IPCCInstallService.InstallRecord?
     /// v0.2.132：清空安装记录确认。
     @State private var confirmClearRecords = false
-    /// v0.2.138：蜂窝网络维护状态。
-    @State private var cellularBusy = false
+    /// v0.2.138：蜂窝网络维护状态（v0.2.142 移除刷新信号，仅保留重启）。
     @State private var commCenterBusy = false
     @State private var confirmRestartCommCenter = false
 
@@ -125,23 +124,10 @@ struct IPCCInstallView: View {
                 Text("安装后的实际 bundle 由 CommCenter 写入系统区，本机无法直接查看 / 卸载（由系统统一管理）。")
             }
 
-            // v0.2.138：蜂窝网络维护（参考 CellularInfo 工具板块）
+            // v0.2.138：蜂窝网络维护（参考 CellularInfo 工具板块；v0.2.142
+            // 移除「刷新蜂窝网络信号」—— 无 entitlement 必被静默丢弃，保留
+            // 真正可用的「重启蜂窝网络服务」）。
             Section {
-                Button {
-                    refreshCellularConnection()
-                } label: {
-                    if cellularBusy {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("正在刷新…")
-                        }
-                    } else {
-                        Label("刷新蜂窝网络信号", systemImage: "antenna.radiowaves.left.and.right")
-                    }
-                }
-                .disabled(cellularBusy)
-                .foregroundColor(.blue)
-
                 Button {
                     confirmRestartCommCenter = true
                 } label: {
@@ -159,7 +145,7 @@ struct IPCCInstallView: View {
             } header: {
                 Text("蜂窝网络维护")
             } footer: {
-                Text("刷新信号 = 重置调制解调器（无系统级权限时可能被丢弃）；重启服务 = 经 RSD 隧道向 CommCenter 发送 SIGKILL，系统自动拉起（与爱思同款效果，无需 root）。")
+                Text("重启服务 = 经 RSD 隧道向 CommCenter 发送 SIGKILL，系统自动拉起（与爱思同款效果，无需 root）。")
             }
         }
         .listStyle(.insetGrouped)
@@ -316,26 +302,7 @@ struct IPCCInstallView: View {
         }
     }
 
-    // MARK: - 蜂窝网络维护（v0.2.138，参考 CellularInfo 工具板块）
-
-    /// 刷新蜂窝网络信号：进程内调 CoreTelephony 私有 API
-    /// `_CTServerConnectionResetModem`。无系统级权限时请求会被 CommCenter
-    /// 静默丢弃（不报错），所以结果只能提示「已发送请求」。
-    private func refreshCellularConnection() {
-        guard !cellularBusy else { return }
-        cellularBusy = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = CellularMaintenanceService.shared.sendResetModemRequest()
-            DispatchQueue.main.async {
-                cellularBusy = false
-                if result {
-                    toast = "已向 CommCenter 发送刷新信号（无系统权限时可能被丢弃，建议配合「重启蜂窝网络服务」）"
-                } else {
-                    toast = "刷新失败：无法加载 CoreTelephony 私有 API"
-                }
-            }
-        }
-    }
+    // MARK: - 蜂窝网络维护（v0.2.138；v0.2.142 移除刷新信号，仅保留重启服务）
 
     /// 重启蜂窝网络服务：走 RSD 隧道向 CommCenter 发 SIGKILL（系统自动拉起）。
     private func restartCommCenter() {

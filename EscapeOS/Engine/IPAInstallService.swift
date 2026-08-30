@@ -588,6 +588,120 @@ final class IPAInstallService: ObservableObject {
         step("Install 命令已受理（installd/CommCenter 后台处理中）")
     }
 
+    /// **在线安装已签名 IPA（App Store / Apple ID 签名包）**（v0.2.142）。
+    ///
+    /// 与爱思助手「安装应用」同一通道：
+    /// 1. AFC 上传 .ipa 到 `/PublicStaging/xxx.ipa`（AFC jail，installd 可读）；
+    /// 2. `installation_proxy` 的 `Install` 命令，`PackageType: "Application"`；
+    /// 3. installd 校验签名（已签名包直接通过）并安装。
+    ///
+    /// 适用：新安装、已存在同 bundle id 时的覆盖安装（install 命令天然覆盖）。
+    func installSignedIPA(_ localPath: String, progress: ((Double) -> Void)? = nil) throws {
+        var tunnel = try createTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw makeError("隧道未建立")
+        }
+
+        var afc: OpaquePointer?
+        if let ffiError = afc_client_connect_rsd(adapter, handshake, &afc) {
+            throw error(from: ffiError, fallback: "连接 AFC 失败")
+        }
+        guard let afc else { throw makeError("AFC 客户端为空") }
+        defer { afc_client_free(afc) }
+
+        let name = (localPath as NSString).lastPathComponent
+        let remotePath = "/PublicStaging/\(name)"
+        _ = remotePath.withCString { afc_remove_path_and_contents(afc, $0) }
+        try uploadFile(afc, localPath: localPath, remotePath: remotePath)
+
+        var ip: OpaquePointer?
+        if let ffiError = installation_proxy_connect_rsd(adapter, handshake, &ip) {
+            throw error(from: ffiError, fallback: "连接安装代理失败")
+        }
+        guard let ip else { throw makeError("安装代理客户端为空") }
+        defer { installation_proxy_client_free(ip) }
+
+        // PackageType: Application —— 已签名 IPA 的标准安装类型（爱思同款）。
+        guard let options: plist_t = plist_new_dict() else {
+            throw makeError("构建安装选项失败")
+        }
+        defer { plist_free(options) }
+        if let packageType = plist_new_string("Application") {
+            plist_dict_set_item(options, "PackageType", packageType)
+        }
+
+        installProgressHandler = progress
+        let progressCallback: @convention(c) (UInt64, UnsafeMutableRawPointer?) -> Void = { value, ctx in
+            let current = Double(value) / 100.0
+            DispatchQueue.main.async {
+                IPAInstallService.shared.installProgressHandler?(current)
+            }
+        }
+
+        let installErr = remotePath.withCString { p in
+            installation_proxy_install_with_callback(ip, p, options, progressCallback, nil)
+        }
+        if let installErr {
+            throw error(from: installErr, fallback: "IPA 在线安装失败")
+        }
+    }
+
+    /// **覆盖升级 / 降级安装已签名 IPA**（v0.2.142）。
+    ///
+    /// 与在线安装的差异仅在命令字：`Upgrade`（爱思「升级/降级」同款）。
+    /// installd 会对已存在的同 bundle id 应用做版本对比后覆盖，
+    /// **允许降级**（Apple App Store 客户端禁止降级，installation_proxy 不拦）。
+    func upgradeSignedIPA(_ localPath: String, progress: ((Double) -> Void)? = nil) throws {
+        var tunnel = try createTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw makeError("隧道未建立")
+        }
+
+        var afc: OpaquePointer?
+        if let ffiError = afc_client_connect_rsd(adapter, handshake, &afc) {
+            throw error(from: ffiError, fallback: "连接 AFC 失败")
+        }
+        guard let afc else { throw makeError("AFC 客户端为空") }
+        defer { afc_client_free(afc) }
+
+        let name = (localPath as NSString).lastPathComponent
+        let remotePath = "/PublicStaging/\(name)"
+        _ = remotePath.withCString { afc_remove_path_and_contents(afc, $0) }
+        try uploadFile(afc, localPath: localPath, remotePath: remotePath)
+
+        var ip: OpaquePointer?
+        if let ffiError = installation_proxy_connect_rsd(adapter, handshake, &ip) {
+            throw error(from: ffiError, fallback: "连接安装代理失败")
+        }
+        guard let ip else { throw makeError("安装代理客户端为空") }
+        defer { installation_proxy_client_free(ip) }
+
+        guard let options: plist_t = plist_new_dict() else {
+            throw makeError("构建安装选项失败")
+        }
+        defer { plist_free(options) }
+        if let packageType = plist_new_string("Application") {
+            plist_dict_set_item(options, "PackageType", packageType)
+        }
+
+        installProgressHandler = progress
+        let progressCallback: @convention(c) (UInt64, UnsafeMutableRawPointer?) -> Void = { value, ctx in
+            let current = Double(value) / 100.0
+            DispatchQueue.main.async {
+                IPAInstallService.shared.installProgressHandler?(current)
+            }
+        }
+
+        let upgradeErr = remotePath.withCString { p in
+            installation_proxy_upgrade_with_callback(ip, p, options, progressCallback, nil)
+        }
+        if let upgradeErr {
+            throw error(from: upgradeErr, fallback: "IPA 覆盖升级/降级安装失败")
+        }
+    }
+
     private var installProgressHandler: ((Double) -> Void)?
 
     /// 递归上传目录（映射读，避免大二进制撑爆内存）。

@@ -60,6 +60,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/AFCBrowserView.swift \
 	EscapeOS/Views/CrashLogView.swift \
 	EscapeOS/Views/IPCCInstallView.swift \
+	EscapeOS/Views/SignedIPAInstallView.swift \
 	EscapeOS/Views/KernelCacheView.swift \
 	EscapeOS/Views/ProfileInstallView.swift \
 	EscapeOS/Views/RingtonesView.swift \
@@ -86,7 +87,6 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/AFCService.swift \
 	EscapeOS/Engine/CrashLogService.swift \
 	EscapeOS/Engine/IPCCInstallService.swift \
-	EscapeOS/Engine/CellularMaintenanceService.swift \
 	EscapeOS/Engine/KernelCacheService.swift \
 	EscapeOS/Engine/RingtonesService.swift \
 	EscapeOS/Engine/FileKind.swift \

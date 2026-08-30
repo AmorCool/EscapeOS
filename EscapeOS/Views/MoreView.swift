@@ -68,6 +68,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: SignedIPAInstallView()) {
+                    MoreCard(
+                        icon: "app.badge.checkmark",
+                        title: "IPA 安装",
+                        subtitle: "在线安装已签名 IPA（App Store / Apple ID 包）：新装、覆盖升级/降级安装，爱思同款通道，无需再次签名（需 LocalDevVPN 隧道）。"
+                    )
+                }
+
                 NavigationLink(destination: ProcessManagerView()) {
                     MoreCard(
                         icon: "cpu",
