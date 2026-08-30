@@ -107,7 +107,7 @@ public final class ApplePackageArchive {
         var position: Int64 = 0
         let total = Int(uncompressedSize)
         while position < total {
-            let size = min(1 << 20, total - Int(position))
+            let size = Swift.min(1 << 20, total - Int(position))
             data.append(provider(position, size))
             position += Int64(size)
         }
@@ -212,14 +212,14 @@ public final class ApplePackageArchive {
     private func parseCentralDirectory() throws {
         let fileSize = try FileHandle(forReadingFrom: url).seekToEndOfFile()
         // 读尾部 64KB 定位 EOCD
-        let tailLength = min(UInt64(1 << 16), fileSize)
+        let tailLength = Swift.min(UInt64(1 << 16), fileSize)
         fileHandle.seek(toFileOffset: fileSize - tailLength)
         let tail = fileHandle.readData(ofLength: Int(tailLength))
-        guard let eocdRange = tail.range(of: Data([0x50, 0x4B, 0x05, 0x06]), options: .backwards) else {
+        guard let eocdRange = tail.range(of: Data([0x50, 0x4B, 0x05, 0x06]), options: Data.SearchOptions.backwards) else {
             throw ApplePackageZipError.malformed("未找到 EOCD")
         }
         let eocdOffset = fileSize - tailLength + UInt64(eocdRange.lowerBound)
-        let eocd = tail.subdata(in: eocdRange.lowerBound ..< min(eocdRange.lowerBound + 22, tail.count))
+        let eocd = tail.subdata(in: eocdRange.lowerBound ..< Swift.min(eocdRange.lowerBound + 22, tail.count))
         guard eocd.count >= 22 else { throw ApplePackageZipError.malformed("EOCD 过短") }
         let cdSize = eocd.uint32(at: 12)
         let cdOffset = eocd.uint32(at: 16)
