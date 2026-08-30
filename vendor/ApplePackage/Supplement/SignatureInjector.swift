@@ -12,7 +12,7 @@ public enum SignatureInjector {
         sinfs: [Sinf],
         into packagePath: String
     ) async throws {
-        let archive = try Archive(url: URL(fileURLWithPath: packagePath), accessMode: .update)
+        let archive = try ApplePackageArchive(url: URL(fileURLWithPath: packagePath), accessMode: .update)
 
         let bundleName = try readBundleName(from: archive)
 
@@ -27,7 +27,7 @@ public enum SignatureInjector {
         try archive.flush()
     }
 
-    private static func readBundleName(from archive: Archive) throws -> String {
+    private static func readBundleName(from archive: ApplePackageArchive) throws -> String {
         for entry in archive {
             if entry.path.contains(".app/Info.plist"), !entry.path.contains("/Watch/") {
                 let components = entry.path.split(separator: "/")
@@ -40,7 +40,7 @@ public enum SignatureInjector {
         try ensureFailed("could not read bundle name")
     }
 
-    private static func readManifestPlist(from archive: Archive) throws -> PackageManifest? {
+    private static func readManifestPlist(from archive: ApplePackageArchive) throws -> PackageManifest? {
         for entry in archive {
             if entry.path.hasSuffix(".app/SC_Info/Manifest.plist") {
                 var data = Data()
@@ -52,7 +52,7 @@ public enum SignatureInjector {
         return nil
     }
 
-    private static func readInfoPlist(from archive: Archive) throws -> PackageInfo? {
+    private static func readInfoPlist(from archive: ApplePackageArchive) throws -> PackageInfo? {
         for entry in archive {
             if entry.path.contains(".app/Info.plist") {
                 var data = Data()
@@ -66,7 +66,7 @@ public enum SignatureInjector {
 
     private static func injectFromManifest(
         _ manifest: PackageManifest,
-        into archive: Archive,
+        into archive: ApplePackageArchive,
         sinfs: [Sinf],
         bundleName: String
     ) throws {
@@ -87,7 +87,7 @@ public enum SignatureInjector {
 
     private static func injectFromInfo(
         _ info: PackageInfo,
-        into archive: Archive,
+        into archive: ApplePackageArchive,
         sinfs: [Sinf],
         bundleName: String
     ) throws {

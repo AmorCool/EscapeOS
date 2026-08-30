@@ -6,7 +6,7 @@ import Foundation
 // FairPlay 签名数据，缺它 IPA 装不上）。Theos 不能引 SwiftPM，所以这里用
 // 项目已有的 **SWCompression**（Deflate 压缩/解压）+ 一段精简的 ZIP 写入
 // 逻辑替代，保持调用点 API 形状不变：
-// - `Archive(url:accessMode:)` / `.update` / `.read`
+// - `ApplePackageArchive(url:accessMode:)` / `.update` / `.read`
 // - 遍历 `for entry in archive`、`archive[path]`
 // - `archive.extract(entry, consumer:)`
 // - `archive.addEntry(with:type:uncompressedSize:compressionMethod:provider:)`
@@ -26,7 +26,7 @@ public struct ZipEntryRef {
 
 public enum ZipAccessMode { case read, update, create }
 
-public enum ZipError: Error, LocalizedError {
+public enum ApplePackageZipError: Error, LocalizedError {
     case cannotOpen(String)
     case malformed(String)
     case entryNotFound(String)
@@ -41,7 +41,7 @@ public enum ZipError: Error, LocalizedError {
 }
 
 /// 极简 ZIP 读写器：读（遍历 / 解压）+ 追加条目（deflate）。
-public final class Archive {
+public final class ApplePackageArchive {
 
     public let url: URL
     private let fileHandle: FileHandle
@@ -53,7 +53,7 @@ public final class Archive {
     public init(url: URL, accessMode: ZipAccessMode) throws {
         self.url = url
         guard FileManager.default.fileExists(atPath: url.path) else {
-            throw ZipError.cannotOpen(url.path)
+            throw ApplePackageZipError.cannotOpen(url.path)
         }
         let handle = try FileHandle(forUpdating: url)
         self.fileHandle = handle
@@ -75,13 +75,13 @@ public final class Archive {
     public func extract(_ entry: ZipEntryRef, consumer: (Data) -> Void) throws {
         fileHandle.seek(toFileOffset: UInt64(entry.localHeaderOffset))
         let header = fileHandle.readData(ofLength: 30)
-        guard header.count == 30 else { throw ZipError.malformed("local header 过短") }
+        guard header.count == 30 else { throw ApplePackageZipError.malformed("local header 过短") }
         let nameLength = header.uint16(at: 26)
         let extraLength = header.uint16(at: 28)
         fileHandle.seek(toFileOffset: UInt64(entry.localHeaderOffset) + 30 + UInt64(nameLength) + UInt64(extraLength))
         var compressed = fileHandle.readData(ofLength: Int(entry.compressedSize))
         guard compressed.count == Int(entry.compressedSize) else {
-            throw ZipError.malformed("条目数据不完整：\(entry.path)")
+            throw ApplePackageZipError.malformed("条目数据不完整：\(entry.path)")
         }
         if entry.compressionMethod == 8 {
             compressed = try Deflate.decompress(data: compressed)
@@ -216,18 +216,18 @@ public final class Archive {
         fileHandle.seek(toFileOffset: fileSize - tailLength)
         let tail = fileHandle.readData(ofLength: Int(tailLength))
         guard let eocdRange = tail.range(of: Data([0x50, 0x4B, 0x05, 0x06]), options: .backwards) else {
-            throw ZipError.malformed("未找到 EOCD")
+            throw ApplePackageZipError.malformed("未找到 EOCD")
         }
         let eocdOffset = fileSize - tailLength + UInt64(eocdRange.lowerBound)
         let eocd = tail.subdata(in: eocdRange.lowerBound ..< min(eocdRange.lowerBound + 22, tail.count))
-        guard eocd.count >= 22 else { throw ZipError.malformed("EOCD 过短") }
+        guard eocd.count >= 22 else { throw ApplePackageZipError.malformed("EOCD 过短") }
         let cdSize = eocd.uint32(at: 12)
         let cdOffset = eocd.uint32(at: 16)
         centralDirOffset = UInt64(cdOffset)
 
         fileHandle.seek(toFileOffset: UInt64(cdOffset))
         let centralData = fileHandle.readData(ofLength: Int(cdSize))
-        guard centralData.count == Int(cdSize) else { throw ZipError.malformed("中央目录读取不完整") }
+        guard centralData.count == Int(cdSize) else { throw ApplePackageZipError.malformed("中央目录读取不完整") }
 
         var position = 0
         while position + 46 <= centralData.count {
@@ -259,7 +259,7 @@ public final class Archive {
 
 // MARK: Sequence
 
-extension Archive: Sequence {
+extension ApplePackageArchive: Sequence {
     public func makeIterator() -> IndexingIterator<[ZipEntryRef]> {
         entries.makeIterator()
     }
