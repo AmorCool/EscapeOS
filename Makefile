@@ -64,6 +64,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/KernelCacheView.swift \
 	EscapeOS/Views/ProfileInstallView.swift \
 	EscapeOS/Views/LiquidGlassDemoView.swift \
+	EscapeOS/Views/LiquidGlassPanel.swift \
+	EscapeOS/Views/LiquidGlassAppearance.swift \
 	EscapeOS/Views/RingtonesView.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorModels.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorViewModel.swift \

@@ -68,6 +68,10 @@ struct RootView: View {
         }
         .overlay(CopyBanner(message: copyFeedback.message))
         .toolbarBackground(.visible, for: .tabBar)
+        // iOS 26 的标签栏由系统自动渲染成 Liquid Glass；iOS 26 以下系统不会
+        // 变，这里给 UITabBar 配一层玻璃质感外观（半透明 + 材质模糊），
+        // 让整体视觉与页面内的 Liquid Glass 面板一致。
+        .onAppear { LiquidGlassAppearance.applyTabBarStyle() }
         .sheet(isPresented: Binding(
             get: { !hasAcknowledgedLimits },
             set: { if !$0 { hasAcknowledgedLimits = true } }

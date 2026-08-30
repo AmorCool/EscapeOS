@@ -10,6 +10,11 @@ struct MoreView: View {
     @State private var showDeviceControl = false
 
     var body: some View {
+        // Liquid Glass 样式：整页只用「一层」玻璃底 —— LiquidGlassKit 的
+        // 视图是 MTKView（逐帧渲染），若给每个 row 各套一层必然掉帧。
+        ZStack(alignment: .top) {
+            LiquidGlassPageBackground()
+
         List {
             Section {
                 NavigationLink(destination: VirtualLocationView()) {
@@ -206,6 +211,7 @@ struct MoreView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("更多")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -245,6 +251,7 @@ struct MoreView: View {
                         }
                     }
             }
+        }
         }
     }
 }
