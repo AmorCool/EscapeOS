@@ -325,7 +325,7 @@ struct IPCCInstallView: View {
         guard !cellularBusy else { return }
         cellularBusy = true
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = CellularMaintenanceService.shared.resetModem()
+            let result = CellularMaintenanceService.shared.sendResetModemRequest()
             DispatchQueue.main.async {
                 cellularBusy = false
                 if result {

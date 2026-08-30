@@ -41,7 +41,7 @@ final class CellularMaintenanceService {
     /// 发送「重置调制解调器」请求（刷新蜂窝网络信号）。
     /// 返回 true 仅代表请求已发出；是否被受理取决于进程是否具备
     /// `com.apple.CommCenter.fine-grained: spi` entitlement。
-    func resetModem() -> Bool {
+    func sendResetModemRequest() -> Bool {
         guard let create = createConnection, let reset = resetModem else { return false }
         guard let connection = create(kCFAllocatorDefault, nil, nil) else { return false }
         reset(connection, "UserTriggeredReload" as CFString)
