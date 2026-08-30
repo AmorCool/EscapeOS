@@ -95,7 +95,7 @@ struct RingtonesView: View {
             } header: {
                 Text("铃声（/var/mobile/media）")
             } footer: {
-                Text("导入任意音频（mp3/wav/m4a 等）会自动转换为 .m4r（爱思同款）；列表显示媒体目录内所有文件（不按扩展名过滤）。系统铃声库 /var/mobile/Library/Ringtones 在 AFC 根目录之外，隧道无法访问。")
+                Text("导入任意音频（mp3/wav/m4a 等）会自动转换为 .m4r（爱思同款）并上传到 iTunes_Control/Ringtones，随后发送系统同步通知刷新媒体库（爱思/iTunes 同款机制）—— 导入成功后到「设置 → 声音 → 铃声」查看。")
             }
         }
         .listStyle(.insetGrouped)
@@ -266,9 +266,22 @@ struct RingtonesView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let remote = try service.importRingtone(localURL: url)
+                // 同步通知失败不阻塞导入，但提示用户（见 footer 说明）
+                let syncFailed: String? = {
+                    do {
+                        try service.postSyncNotification("com.apple.itunes-mobdev.syncDidFinish")
+                        return nil
+                    } catch {
+                        return error.localizedDescription
+                    }
+                }()
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "已导入 \(url.lastPathComponent)"
+                    if let syncFailed {
+                        toast = "已上传 \(url.lastPathComponent)，但媒体库刷新通知失败（\(syncFailed)）"
+                    } else {
+                        toast = "已导入并通知系统同步：\(url.lastPathComponent)（可到「设置 → 声音 → 铃声」查看）"
+                    }
                     reload()
                 }
             } catch {
