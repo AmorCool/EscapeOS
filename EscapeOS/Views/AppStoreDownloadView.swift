@@ -10,7 +10,7 @@ import SwiftUI
 /// 底层走移植进来的 ApplePackage（网络层已用 URLSession 重写，ZIP 用
 /// 项目已有的 SWCompression），无需再次签名。
 struct AppStoreDownloadView: View {
-    @State private var accounts: [Account] = []
+    @State private var accounts: [AppStoreAccount] = []
     @State private var selectedEmail: String = ""
     @State private var showAddAccount = false
     @State private var busy = false

@@ -9,7 +9,7 @@ import Foundation
 
 public enum Purchase {
     public nonisolated static func purchase(
-        account: inout Account,
+        account: inout AppStoreAccount,
         app: Software
     ) async throws {
         let deviceIdentifier = Configuration.deviceIdentifier
@@ -30,7 +30,7 @@ public enum Purchase {
     }
 
     private nonisolated static func purchaseWithParams(
-        account: inout Account,
+        account: inout AppStoreAccount,
         app: Software,
         guid: String,
         pricingParameters: String
@@ -100,7 +100,7 @@ public enum Purchase {
     }
 
     private nonisolated static func makeRequest(
-        account: Account,
+        account: AppStoreAccount,
         app: Software,
         guid: String,
         pricingParameters: String

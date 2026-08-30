@@ -9,7 +9,7 @@ import Foundation
 
 public enum VersionFinder {
     public nonisolated static func list(
-        account: inout Account,
+        account: inout AppStoreAccount,
         bundleIdentifier: String
     ) async throws -> [String] {
         guard let countryCode = Configuration.countryCode(for: account.store) else {
@@ -120,7 +120,7 @@ public enum VersionFinder {
     }
 
     private nonisolated static func makeRequest(
-        account: Account,
+        account: AppStoreAccount,
         app: Software,
         url: URL,
         guid: String

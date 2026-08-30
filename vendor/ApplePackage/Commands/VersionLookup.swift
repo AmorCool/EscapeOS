@@ -9,7 +9,7 @@ import Foundation
 
 public enum VersionLookup {
     public nonisolated static func getVersionMetadata(
-        account: inout Account,
+        account: inout AppStoreAccount,
         app: Software,
         versionID: String
     ) async throws -> VersionMetadata {
@@ -108,7 +108,7 @@ public enum VersionLookup {
     }
 
     private nonisolated static func makeRequest(
-        account: Account,
+        account: AppStoreAccount,
         app: Software,
         url: URL,
         guid: String,

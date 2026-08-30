@@ -9,7 +9,7 @@ import Foundation
 
 public enum Authenticator {
     private enum LoginResponse {
-        case success(Account)
+        case success(AppStoreAccount)
         case codeRequired
         case redirect(URL)
         case retry
@@ -21,7 +21,7 @@ public enum Authenticator {
         password: String,
         code: String = "",
         cookies: [Cookie] = []
-    ) async throws -> Account {
+    ) async throws -> AppStoreAccount {
         let deviceIdentifier = Configuration.deviceIdentifier
 
         let client = HTTPClient(
@@ -89,7 +89,7 @@ public enum Authenticator {
         try ensureFailed("authentication failed for an unknown reason")
     }
 
-    public nonisolated static func rotatePasswordToken(for account: inout Account) async throws {
+    public nonisolated static func rotatePasswordToken(for account: inout AppStoreAccount) async throws {
         let newAccount = try await authenticate(
             email: account.email,
             password: account.password,
@@ -204,7 +204,7 @@ public enum Authenticator {
         let accountInfoDic = try (dic["accountInfo"] as? [String: Any]).get(failureMessage ?? "missing accountInfo")
         let addressInfoDic = try (accountInfoDic["address"] as? [String: Any]).get(failureMessage ?? "missing address")
 
-        let account = try Account(
+        let account = try AppStoreAccount(
             email: email,
             password: password,
             appleId: accountInfoDic["appleId"] as? String,

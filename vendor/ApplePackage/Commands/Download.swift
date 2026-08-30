@@ -9,7 +9,7 @@ import Foundation
 
 public enum Download {
     public nonisolated static func download(
-        account: inout Account,
+        account: inout AppStoreAccount,
         app: Software,
         externalVersionID: String? = nil
     ) async throws -> DownloadOutput {
@@ -110,7 +110,7 @@ public enum Download {
     }
 
     private nonisolated static func makeRequest(
-        account: Account,
+        account: AppStoreAccount,
         app: Software,
         guid: String,
         externalVersionID: String

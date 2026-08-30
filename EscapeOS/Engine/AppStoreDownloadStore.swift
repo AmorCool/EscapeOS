@@ -44,18 +44,18 @@ final class AppStoreDownloadStore {
             .appendingPathComponent("appstore_accounts.json")
     }
 
-    private(set) var accounts: [Account] = []
+    private(set) var accounts: [AppStoreAccount] = []
 
     func load() {
         guard let data = try? Data(contentsOf: fileURL),
-              let list = try? JSONDecoder().decode([Account].self, from: data) else {
+              let list = try? JSONDecoder().decode([AppStoreAccount].self, from: data) else {
             accounts = []
             return
         }
         accounts = list
     }
 
-    func add(_ account: Account) {
+    func add(_ account: AppStoreAccount) {
         load()
         accounts.removeAll { $0.email == account.email }
         accounts.append(account)
@@ -68,7 +68,7 @@ final class AppStoreDownloadStore {
         save()
     }
 
-    func account(for email: String) -> Account? {
+    func account(for email: String) -> AppStoreAccount? {
         if accounts.isEmpty { load() }
         return accounts.first { $0.email == email }
     }

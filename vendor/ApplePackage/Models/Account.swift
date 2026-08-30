@@ -1,5 +1,5 @@
 //
-//  Account.swift
+//  AppStoreAccount.swift
 //  ApplePackage
 //
 //  Created by qaq on 9/14/25.
@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct Account: Codable, Hashable, Equatable, Sendable {
+public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
     public var email: String
     public var password: String
 
@@ -42,7 +42,7 @@ public struct Account: Codable, Hashable, Equatable, Sendable {
     }
 }
 
-public extension Account {
+public extension AppStoreAccount {
     init(
         email: String,
         password: String,

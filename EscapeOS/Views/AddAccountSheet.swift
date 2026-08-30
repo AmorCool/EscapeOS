@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 添加 App Store 账户（邮箱 + 密码 + 可选 2FA 验证码）。
 struct AddAccountSheet: View {
-    let onAdded: (Account) -> Void
+    let onAdded: (AppStoreAccount) -> Void
 
     @State private var email = ""
     @State private var password = ""
