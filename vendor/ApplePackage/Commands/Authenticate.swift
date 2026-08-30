@@ -102,11 +102,15 @@ public enum Authenticator {
     private nonisolated static func createInitialRequestEndpoint(
         deviceIdentifier: String
     ) throws -> URL {
-        // https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate?guid=xxxxxx
+        // iTunes Store 认证端点。`auth.itunes.apple.com/auth/v1/native/fast` 已被 Apple 移除
+        // （任何方法均返回 404），改用经典的 WebObjects `wa/authenticate` 端点，请求体为
+        // form-encoded（非 plist）。响应仍是同一套 plist 结构（passwordToken/dsPersonId/
+        // accountInfo/failureType/customerMessage），parseResponse 无需改动。
+        // 参考：业界 `appstore` 库对该端点的标准用法。
         var comps = URLComponents()
         comps.scheme = "https"
-        comps.host = "auth.itunes.apple.com"
-        comps.path = "/auth/v1/native/fast"
+        comps.host = "buy.itunes.apple.com"
+        comps.path = "/WebObjects/MZFinance.woa/wa/authenticate"
         comps.queryItems = [
             URLQueryItem(name: "guid", value: deviceIdentifier),
         ]
@@ -121,22 +125,29 @@ public enum Authenticator {
         cookies: [Cookie],
         deviceIdentifier: String
     ) throws -> HTTPClient.Request {
-        let parameters: [String: String] = [
+        var parameters: [String: String] = [
             "appleId": email,
             "attempt": "\(code.isEmpty ? "4" : "2")",
             "guid": deviceIdentifier,
             "password": "\(password)\(code)",
             "rmp": "0",
             "why": "signIn",
+            "createSession": "true",
         ]
-        let data = try PropertyListSerialization.data(
-            fromPropertyList: parameters,
-            format: .xml,
-            options: 0
-        )
+        let bodyString = parameters
+            .map { key, value in
+                let escaped = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+                return "\(key)=\(escaped)"
+            }
+            .joined(separator: "&")
+        guard let data = bodyString.data(using: .utf8) else {
+            try ensureFailed("failed to encode authentication request body")
+        }
         var headers: [(String, String)] = [
             ("User-Agent", Configuration.userAgent),
-            ("Content-Type", "application/x-apple-plist"),
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Accept", "*/*"),
+            ("Accept-Language", "en-us"),
         ]
         for item in cookies.buildCookieHeader(endpoint) {
             headers.append(item)
