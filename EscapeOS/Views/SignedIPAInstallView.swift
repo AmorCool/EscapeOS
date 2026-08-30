@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 final class SignedIPAInstallView: View {
     @State private var showImporter = false
     @State private var importedURL: URL?
-    @State private var busy = false
+    @State private var self.busy = false
     @State private var progress: Double = 0
     @State private var errorMessage: String?
     @State private var toast: String?
@@ -37,7 +37,7 @@ final class SignedIPAInstallView: View {
                         Spacer()
                     }
                     Button {
-                        showImporter = true
+                        self.showImporter = true
                     } label: {
                         Label("选择已签名 IPA 文件", systemImage: "doc.badge.plus")
                     }
@@ -78,17 +78,17 @@ final class SignedIPAInstallView: View {
                 }
             }
 
-            if !busy && importedURL != nil {
+            if !self.busy && self.importedURL != nil {
                 Section {
                     Button {
-                        install(mode: .install)
+                        self.install(mode: .install)
                     } label: {
                         Label("在线安装", systemImage: "arrow.down.circle.fill")
                     }
                     .foregroundColor(.blue)
 
                     Button {
-                        install(mode: .upgrade)
+                        self.install(mode: .upgrade)
                     } label: {
                         Label("覆盖升级 / 降级安装", systemImage: "arrow.up.arrow.down.circle")
                     }
@@ -105,8 +105,8 @@ final class SignedIPAInstallView: View {
         .navigationBarTitleDisplayMode(.inline)
         .documentPicker(isPresented: $showImporter, allowedTypes: [UTType(filenameExtension: "ipa") ?? .item]) { urls in
             guard let url = urls.first else { return }
-            importedURL = url
-            errorMessage = nil
+            self.importedURL = url
+            self.errorMessage = nil
         }
         .overlay(alignment: .bottom) {
             if let toast {
@@ -132,31 +132,31 @@ final class SignedIPAInstallView: View {
     }
 
     private func install(mode: InstallMode) {
-        guard let importedURL else { return }
-        busy = true
-        progress = 0
-        errorMessage = nil
+        guard let self.importedURL else { return }
+        self.busy = true
+        self.progress = 0
+        self.errorMessage = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 switch mode {
                 case .install:
-                    try service.installSignedIPA(importedURL.path) { value in
-                        DispatchQueue.main.async { progress = value }
+                    try self.service.installSignedIPA(self.importedURL.path) { value in
+                        DispatchQueue.main.async { self.progress = value }
                     }
                 case .upgrade:
-                    try service.upgradeSignedIPA(importedURL.path) { value in
-                        DispatchQueue.main.async { progress = value }
+                    try self.service.upgradeSignedIPA(self.importedURL.path) { value in
+                        DispatchQueue.main.async { self.progress = value }
                     }
                 }
                 DispatchQueue.main.async {
-                    busy = false
-                    progress = 1
-                    toast = mode == .install ? "在线安装成功（安装中界面可能短暂重启）" : "覆盖升级/降级安装成功"
+                    self.busy = false
+                    self.progress = 1
+                    self.toast = mode == .install ? "在线安装成功（安装中界面可能短暂重启）" : "覆盖升级/降级安装成功"
                 }
             } catch {
                 DispatchQueue.main.async {
-                    busy = false
-                    errorMessage = "安装失败：\(error.localizedDescription)"
+                    self.busy = false
+                    self.errorMessage = "安装失败：\(error.localizedDescription)"
                 }
             }
         }
