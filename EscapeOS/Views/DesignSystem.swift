@@ -2,17 +2,12 @@ import SwiftUI
 import UIKit
 
 /// Shared visual language for EscapeOS. Ported and adapted from 3105's
-/// DesignSystem: a warm accent, a tinted rounded icon, and reclaim-specific
+/// DesignSystem: a blue accent, a tinted rounded icon, and reclaim-specific
 /// category styling. Uses EscapeOS's own model fields (no localization system).
 enum AppTheme {
-    /// Warm orange brand accent that adapts to light/dark mode.
-    static let accent = Color(
-        uiColor: UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 1.00, green: 0.64, blue: 0.42, alpha: 1.00)
-                : UIColor(red: 0.85, green: 0.42, blue: 0.20, alpha: 1.00)
-        }
-    )
+    /// Brand accent. System blue (semantic), adapts to light/dark mode.
+    /// 之前是暖橙，在浅色玻璃背景下显脏棕，按用户审美改为系统蓝。
+    static let accent = Color(uiColor: .systemBlue)
     static let pageInset: CGFloat = 16
     static let appIconSize: CGFloat = 44
 }
