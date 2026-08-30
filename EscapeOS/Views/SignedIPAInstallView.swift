@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 final class SignedIPAInstallView: View {
     @State private var showImporter = false
     @State private var importedURL: URL?
-    @State private var self.busy = false
+    @State private var busy = false
     @State private var progress: Double = 0
     @State private var errorMessage: String?
     @State private var toast: String?
@@ -132,7 +132,7 @@ final class SignedIPAInstallView: View {
     }
 
     private func install(mode: InstallMode) {
-        guard let self.importedURL else { return }
+        guard let importedURL = self.importedURL else { return }
         self.busy = true
         self.progress = 0
         self.errorMessage = nil
