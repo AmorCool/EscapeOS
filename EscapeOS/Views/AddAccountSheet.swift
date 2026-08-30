@@ -103,7 +103,7 @@ struct AddAccountSheet: View {
                         twoFactorCode = ""
                         showTwoFactor = true
                     } else {
-                        errorMessage = "登录失败：\(desc)"
+                        errorMessage = iTunesAuthErrorMessage(error)
                     }
                 }
                 LoginLogger.shared.log("App Store 下载：手动添加账户认证失败 - \(desc)")

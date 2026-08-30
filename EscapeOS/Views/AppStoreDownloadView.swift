@@ -13,6 +13,18 @@ import SwiftUI
 /// 账户登录：优先复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID
 ///（同一份邮箱 + 密码走 iTunes 认证即可），无需在 App Store 下载里再登录一次；
 /// 遇到双重认证等情况时仍可手动添加账户。
+
+/// 把 iTunes 认证错误转成中文可读提示，对「plist 格式异常」做专门说明。
+/// 该错误来自移植进来的 ApplePackage（`Authenticate.parseResponse` 的
+/// PropertyListSerialization 解析失败），根因需真机日志取证，这里只做清晰化。
+func iTunesAuthErrorMessage(_ error: Error) -> String {
+    let desc = error.localizedDescription
+    if desc.contains("未能读取数据") || desc.localizedCaseInsensitiveContains("property list") {
+        return "Apple 返回的认证数据格式异常（非预期 plist）。常见原因：会话 / 令牌过期、网络异常或 Anisette 失效。建议：先在「更多 → 设置 → Apple ID 账户」重新登录或检查网络；若开启双重认证，请改用手动添加账户并填验证码。"
+    }
+    return "登录失败：\(desc)"
+}
+
 struct AppStoreDownloadView: View {
     @State private var accounts: [AppStoreAccount] = []
     @State private var selectedEmail: String = ""
@@ -218,11 +230,12 @@ struct AppStoreDownloadView: View {
                 }
                 LoginLogger.shared.log("App Store 下载：iTunes 认证成功，store=\(account.store)，appleId=\(account.appleId ?? "未知")")
             } catch {
+                let desc = error.localizedDescription
                 await MainActor.run {
                     busy = false
-                    errorMessage = "用设置中的 Apple ID 登录失败：\(error.localizedDescription)\n若开启了双重认证，请改用下方手动添加并填写验证码。"
+                    errorMessage = iTunesAuthErrorMessage(error) + "\n若开启了双重认证，请改用下方手动添加并填写验证码。"
                 }
-                LoginLogger.shared.log("App Store 下载：iTunes 认证失败 - \(error.localizedDescription)")
+                LoginLogger.shared.log("App Store 下载：iTunes 认证失败 - \(desc)")
             }
         }
     }
