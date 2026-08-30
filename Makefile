@@ -61,6 +61,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/CrashLogView.swift \
 	EscapeOS/Views/IPCCInstallView.swift \
 	EscapeOS/Views/KernelCacheView.swift \
+	EscapeOS/Views/ProfileInstallView.swift \
 	EscapeOS/Views/RingtonesView.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorModels.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorViewModel.swift \

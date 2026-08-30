@@ -124,6 +124,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: ProfileInstallView()) {
+                    MoreCard(
+                        icon: "shield.lefthalf.filled",
+                        title: "发送描述文件",
+                        subtitle: "导入 .mobileconfig 描述文件（屏蔽 iOS 更新、Wi-Fi、VPN 等）一键发送到本机，去「设置 → 通用 → VPN 与设备管理」安装，与爱思助手同款原理。"
+                    )
+                }
+
                 NavigationLink(destination: CrashLogView()) {
                     MoreCard(
                         icon: "chart.bar.doc.horizontal",
