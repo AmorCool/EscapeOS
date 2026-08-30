@@ -24,6 +24,8 @@ final class RingtonesService {
     static let userRingtonesAFCPath = "iTunes_Control/Ringtones"
     /// 扫描位置（AFC 相对路径；"" 表示 media 根）。
     static let scanRoots = [userRingtonesAFCPath, "PublicStaging", "Downloads", ""]
+    /// 视为铃声的扩展名（v0.2.132 恢复过滤 —— 用户确认旧版按扩展名过滤更好）。
+    static let audioExtensions: Set<String> = ["m4r", "caf", "m4a", "aiff", "wav", "aac", "mp3"]
 
     /// 本地导出目录（文件 App 可见）。
     static var exportDirectory: String {
@@ -48,9 +50,8 @@ final class RingtonesService {
 
     // MARK: - 列表（AFC 隧道，扫描 media 内常见位置）
 
-    /// 扫描 media 内各常见位置的文件（v0.2.131：**不再按扩展名过滤** ——
-    /// 爱思/系统处理后的铃声文件名可能没有常见音频扩展名，旧版按扩展名
-    /// 过滤导致"已导入的铃声看不到"）。
+    /// 扫描 media 内各常见位置的铃声文件（v0.2.132：恢复**按扩展名过滤**，
+    /// 只显示音频文件 —— 用户确认旧版过滤逻辑更好）。
     /// 目录自动排除；扫描根全部失败时抛错，部分成功则返回成功的部分。
     func listUserRingtones() throws -> [Entry] {
         var found: [Entry] = []
@@ -60,7 +61,8 @@ final class RingtonesService {
             do {
                 let list = try afc.listDirectory(root.isEmpty ? "/" : root)
                 for item in list where !item.isDirectory {
-                    guard !seen.contains(item.path) else { continue }
+                    let ext = (item.name as NSString).pathExtension.lowercased()
+                    guard Self.audioExtensions.contains(ext), !seen.contains(item.path) else { continue }
                     seen.insert(item.path)
                     found.append(Entry(name: item.name, path: item.path,
                                        isDirectory: false, size: item.size))

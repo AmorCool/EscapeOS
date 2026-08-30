@@ -43,6 +43,11 @@ final class IPCCInstallService {
 
     private var recordsKey: String { "IPCCInstallHistory" }
 
+    /// 清空最近安装记录。
+    func clearRecords() {
+        UserDefaults.standard.removeObject(forKey: recordsKey)
+    }
+
     func savedRecords() -> [InstallRecord] {
         guard let data = UserDefaults.standard.data(forKey: recordsKey),
               let list = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [[String: Any]] else {

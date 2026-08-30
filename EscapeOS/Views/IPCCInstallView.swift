@@ -15,6 +15,8 @@ struct IPCCInstallView: View {
     @State private var showRespringHint = false
     /// v0.2.130：查看安装日志详情的记录。
     @State private var detailRecord: IPCCInstallService.InstallRecord?
+    /// v0.2.132：清空安装记录确认。
+    @State private var confirmClearRecords = false
 
     private let service = IPCCInstallService.shared
 
@@ -103,7 +105,18 @@ struct IPCCInstallView: View {
                     }
                 }
             } header: {
-                Text("最近安装记录")
+                HStack {
+                    Text("最近安装记录")
+                    Spacer()
+                    if !records.isEmpty {
+                        Button {
+                            confirmClearRecords = true
+                        } label: {
+                            Text("清空")
+                                .font(.footnote)
+                        }
+                    }
+                }
             } footer: {
                 Text("安装后的实际 bundle 由 CommCenter 写入系统区，本机无法直接查看 / 卸载（由系统统一管理）。")
             }
@@ -129,6 +142,16 @@ struct IPCCInstallView: View {
             Button("好的") {}
         } message: {
             Text("已通过 installation_proxy（PackageType=CarrierBundle）交给系统安装，与爱思助手「更新 IPCC」同一条通道。建议重启设备（或「更多 → 设备控制 → 重启 SpringBoard」）后查看生效情况。")
+        }
+        .alert("清空安装记录？", isPresented: $confirmClearRecords) {
+            Button("清空", role: .destructive) {
+                service.clearRecords()
+                records = []
+                toast = "安装记录已清空"
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除全部最近安装记录（含日志详情），不可恢复。")
         }
         .sheet(item: $detailRecord) { record in
             NavigationView {
