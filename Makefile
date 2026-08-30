@@ -60,6 +60,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/AFCBrowserView.swift \
 	EscapeOS/Views/CrashLogView.swift \
 	EscapeOS/Views/IPCCInstallView.swift \
+	EscapeOS/Views/KernelCacheView.swift \
 	EscapeOS/Views/RingtonesView.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorModels.swift \
 	EscapeOS/Views/PlistEditor/PlistEditorViewModel.swift \
@@ -84,6 +85,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/AFCService.swift \
 	EscapeOS/Engine/CrashLogService.swift \
 	EscapeOS/Engine/IPCCInstallService.swift \
+	EscapeOS/Engine/KernelCacheService.swift \
 	EscapeOS/Engine/RingtonesService.swift \
 	EscapeOS/Engine/FileKind.swift \
 	EscapeOS/Engine/FileClipboard.swift \
@@ -147,7 +149,7 @@ EscapeSpace_CFLAGS = -IEscapeOS/Engine -IEscapeOS/Tunnel
 EscapeSpace_OBJCFLAGS = -IEscapeOS/Engine -IEscapeOS/Tunnel -fobjc-arc
 
 # Link the Rust idevice FFI static library and its system dependencies.
-EscapeSpace_LDFLAGS = -LEscapeOS/Tunnel -lidevice_ffi -lresolv -framework Security -framework Network -framework SystemConfiguration -framework QuickLook -framework PDFKit -framework AVKit -framework AVFoundation -framework CoreLocation -framework CryptoKit
+EscapeSpace_LDFLAGS = -LEscapeOS/Tunnel -lidevice_ffi -lresolv -framework Security -framework Network -framework SystemConfiguration -framework QuickLook -framework PDFKit -framework AVKit -framework AVFoundation -framework Compression -framework CoreLocation -framework CryptoKit
 EscapeSpace_CODESIGN_FLAGS = -SEscapeSpace.entitlements
 
 include $(THEOS_MAKE_PATH)/application.mk

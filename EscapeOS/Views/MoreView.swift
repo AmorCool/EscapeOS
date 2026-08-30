@@ -116,6 +116,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: KernelCacheView()) {
+                    MoreCard(
+                        icon: "cpu.fill",
+                        title: "下载 KernelCache",
+                        subtitle: "从 Apple CDN 的 IPSW 中按偏移只下载 kernelcache 内核缓存文件（约 20MB，纯网络、零权限），与越狱工具从设备读取的是同一份文件。"
+                    )
+                }
+
                 NavigationLink(destination: CrashLogView()) {
                     MoreCard(
                         icon: "chart.bar.doc.horizontal",
