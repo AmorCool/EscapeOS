@@ -1,6 +1,5 @@
 import Foundation
 import UIKit
-import Compression
 import Darwin
 
 /// KernelCache 下载服务 —— **IPSW Range 直拉方案**（v0.2.133）。
@@ -25,10 +24,14 @@ final class KernelCacheService {
     private init() {}
 
     /// 已解析的固件信息。
-    struct Firmware {
+    struct Firmware: Identifiable {
         let version: String
         let buildid: String
         let url: String
+        let releasedate: String
+        var id: String { buildid }
+        /// 展示名，如 "16.3.1 (20D67)"。
+        var displayName: String { "iOS \(version)（\(buildid)）" }
     }
 
     /// 本地保存目录（文件 App 可见）。
@@ -58,9 +61,8 @@ final class KernelCacheService {
 
     // MARK: - 固件查询（ipsw.me）
 
-    /// 查询指定设备、指定版本对应的 IPSW 固件信息。
-    /// 同版本多个 build 时取 release date 最新的。
-    func findFirmware(identifier: String, version: String) async throws -> Firmware {
+    /// 查询指定设备的全部可用固件（按 release date 降序），供手动选择。
+    func listFirmwares(identifier: String) async throws -> [Firmware] {
         guard let url = URL(string: "https://api.ipsw.me/v4/device/\(identifier)") else {
             throw makeError("无法构造 ipsw.me 查询 URL")
         }
@@ -74,19 +76,24 @@ final class KernelCacheService {
               let firmwares = json["firmwares"] as? [[String: Any]] else {
             throw makeError("ipsw.me 返回数据格式异常")
         }
-        let matches = firmwares.filter { ($0["version"] as? String) == version }
-        guard !matches.isEmpty else {
-            throw makeError("未找到 \(identifier) 的 iOS \(version) 固件")
+        let list: [Firmware] = firmwares.compactMap { dict in
+            guard let version = dict["version"] as? String,
+                  let buildid = dict["buildid"] as? String,
+                  let url = dict["url"] as? String else { return nil }
+            return Firmware(version: version,
+                            buildid: buildid,
+                            url: url,
+                            releasedate: dict["releasedate"] as? String ?? "")
         }
-        let sorted = matches.sorted {
-            ($0["releasedate"] as? String ?? "") > ($1["releasedate"] as? String ?? "")
+        guard !list.isEmpty else {
+            throw makeError("未找到 \(identifier) 的固件列表")
         }
-        guard let best = sorted.first,
-              let buildid = best["buildid"] as? String,
-              let fwURL = best["url"] as? String else {
-            throw makeError("固件信息字段缺失")
-        }
-        return Firmware(version: version, buildid: buildid, url: fwURL)
+        return list.sorted { $0.releasedate > $1.releasedate }
+    }
+
+    /// 在列表中按系统版本匹配固件（同版本多个 build 取 release date 最新）。
+    func matchFirmware(in list: [Firmware], version: String) -> Firmware? {
+        list.first { $0.version == version }
     }
 
     // MARK: - 下载
@@ -101,7 +108,7 @@ final class KernelCacheService {
 
         // 1. 拉尾部 256KB，解析 ZIP64 中央目录
         let tail = try await fetchRange(url: url, range: "bytes=-262144")
-        let (cdOffset, cdSize) = try locateCentralDirectory(tail: tail, url: url)
+        let (cdOffset, cdSize) = try await locateCentralDirectory(tail: tail, url: url)
         let centralDir = try await fetchRange(url: url,
                                               range: "bytes=\(cdOffset)-\(cdOffset + cdSize - 1)")
 
@@ -135,9 +142,12 @@ final class KernelCacheService {
             await MainActor.run { progress(min(fraction, 1.0)) }
         }
 
-        // 4. raw deflate 解压
-        guard let inflated = inflateRawDeflate(compressed, expectedSize: entry.uncompressedSize) else {
-            throw makeError("kernelcache 数据解压失败")
+        // 4. raw deflate 解压（SWCompression 内置，zip method 8 无 zlib 头）
+        let inflated: Data
+        do {
+            inflated = try Deflate.decompress(data: compressed)
+        } catch {
+            throw makeError("kernelcache 数据解压失败：\(error.localizedDescription)")
         }
 
         // 5. 校验 magic（0x30 0x84 = LZSS kernelcache，与 lara 一致）
@@ -160,7 +170,7 @@ final class KernelCacheService {
     // MARK: - ZIP64 解析
 
     /// 从 IPSW 尾部数据定位 ZIP64 中央目录（返回 offset 与 size）。
-    private func locateCentralDirectory(tail: Data, url: URL) throws -> (UInt64, UInt64) {
+    private func locateCentralDirectory(tail: Data, url: URL) async throws -> (UInt64, UInt64) {
         // EOCD: PK\x05\x06（从尾部往前找，签名 0x06054b50）
         let bytes = [UInt8](tail)
         var eocdIndex: Int? = nil
@@ -263,7 +273,7 @@ final class KernelCacheService {
         return nil
     }
 
-    // MARK: - 网络 / 解压工具
+    // MARK: - 网络工具
 
     /// Range 请求：拉取指定字节区间。
     private func fetchRange(url: URL, range: String) async throws -> Data {
@@ -279,25 +289,7 @@ final class KernelCacheService {
         return data
     }
 
-    /// raw deflate 解压（zip method 8，无 zlib 头）。
-    private func inflateRawDeflate(_ data: Data, expectedSize: Int) -> Data? {
-        guard expectedSize > 0, expectedSize < 512 * 1024 * 1024 else { return nil }
-        var output = Data(count: expectedSize)
-        let decoded = output.withUnsafeMutableBytes { outBuffer -> Int in
-            guard let outPtr = outBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-            let result = data.withUnsafeBytes { inBuffer -> Int in
-                guard let inPtr = inBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-                return compression_decode_buffer(
-                    outPtr, expectedSize,
-                    inPtr, data.count,
-                    nil, COMPRESSION_RAW_DEFLATE
-                )
-            }
-            return result
-        }
-        guard decoded == expectedSize else { return nil }
-        return output
-    }
+    /// raw deflate 解压已改用 SWCompression 的 Deflate（同 target 编译，直接可用）。
 
     // MARK: - 已下载列表
 
