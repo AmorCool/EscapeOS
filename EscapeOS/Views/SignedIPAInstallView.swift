@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 /// - 在线安装：`Install` 命令（新装 / 覆盖已存在同 bundle id 应用）
 /// - 覆盖升级 / 降级安装：`Upgrade` 命令（installd 允许降级，
 ///   App Store 客户端禁止但 installation_proxy 不拦）
-final class SignedIPAInstallView: View {
+struct SignedIPAInstallView: View {
     @State private var showImporter = false
     @State private var importedURL: URL?
     @State private var busy = false
