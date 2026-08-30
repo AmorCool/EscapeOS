@@ -184,11 +184,34 @@ public enum Authenticator {
             return .failure("response body is empty")
         }
 
-        let listItem = try PropertyListSerialization.propertyList(
-            from: data,
-            options: [],
-            format: nil
-        )
+        let statusCode = response.status.code
+        let contentType = response.headers.first(name: "content-type") ?? "(unknown)"
+        let bodySnippet = String(data: data.prefix(512), encoding: .utf8) ?? "(非 UTF-8 数据，\(data.count) 字节)"
+
+        let listItem: Any
+        do {
+            listItem = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+        } catch {
+            // JSON 回退：Apple 有时用 JSON 返回结构化错误，而不是 plist
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let msg = (json["customerMessage"] as? String)
+                    ?? (json["failureType"] as? String)
+                    ?? (json["errorMessage"] as? String)
+                    ?? (json["message"] as? String) {
+                try ensureFailed("authentication failed: \(msg)")
+            }
+            // 否则把 Apple 真实返回的诊断信息透传，便于真机取证
+            let detail = """
+            iTunes 认证返回的数据不是 plist，无法解析。
+            HTTP 状态：\(statusCode)
+            Content-Type：\(contentType)
+            响应体前 512 字节：
+            \(bodySnippet)
+            原始解析错误：\(error.localizedDescription)
+            """
+            NSLog("[EscapeOS][AppStore] iTunes 认证返回非 plist：\(detail)")
+            try ensureFailed(detail)
+        }
         let dic = try (listItem as? [String: Any]).get("response is not a dictionary")
 
         if let failureType = dic["failureType"] as? String,
