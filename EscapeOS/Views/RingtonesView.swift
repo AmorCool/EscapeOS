@@ -74,9 +74,9 @@ struct RingtonesView: View {
                     }
                 } else if ringtones.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("没有找到铃声文件")
+                        Text("没有找到文件")
                             .foregroundColor(.secondary)
-                        Text("点右上角导入 .m4r / .caf 铃声；已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根。")
+                        Text("已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根。点右上角导入音频（会自动转换为 .m4r 铃声格式）。")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -95,7 +95,7 @@ struct RingtonesView: View {
             } header: {
                 Text("铃声（/var/mobile/media）")
             } footer: {
-                Text("系统铃声库 /var/mobile/Library/Ringtones 在 AFC 根目录之外，隧道无法访问；本页管理的是媒体目录内的铃声文件，导入后可用「文件 App → 存储到 iPhone」再经库乐队/系统设置使用。")
+                Text("导入任意音频（mp3/wav/m4a 等）会自动转换为 .m4r（爱思同款）；列表显示媒体目录内所有文件（不按扩展名过滤）。系统铃声库 /var/mobile/Library/Ringtones 在 AFC 根目录之外，隧道无法访问。")
             }
         }
         .listStyle(.insetGrouped)

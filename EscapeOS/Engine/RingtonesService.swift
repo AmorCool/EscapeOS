@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 /// 铃声管理服务 —— 走 RSD 隧道（AFCService，`com.apple.afc.shim.remote`，
 /// 根 = **/var/mobile/media**）。
@@ -23,8 +24,6 @@ final class RingtonesService {
     static let userRingtonesAFCPath = "iTunes_Control/Ringtones"
     /// 扫描位置（AFC 相对路径；"" 表示 media 根）。
     static let scanRoots = [userRingtonesAFCPath, "PublicStaging", "Downloads", ""]
-    /// 视为铃声的扩展名。
-    static let audioExtensions: Set<String> = ["m4r", "caf", "m4a", "aiff", "wav"]
 
     /// 本地导出目录（文件 App 可见）。
     static var exportDirectory: String {
@@ -49,40 +48,85 @@ final class RingtonesService {
 
     // MARK: - 列表（AFC 隧道，扫描 media 内常见位置）
 
-    /// 扫描 media 内各常见位置的铃声文件（一层，不深递归，避免慢）。
+    /// 扫描 media 内各常见位置的文件（v0.2.131：**不再按扩展名过滤** ——
+    /// 爱思/系统处理后的铃声文件名可能没有常见音频扩展名，旧版按扩展名
+    /// 过滤导致"已导入的铃声看不到"）。
+    /// 目录自动排除；扫描根全部失败时抛错，部分成功则返回成功的部分。
     func listUserRingtones() throws -> [Entry] {
         var found: [Entry] = []
         var seen = Set<String>()
+        var failures: [String] = []
         for root in Self.scanRoots {
-            let list = (try? afc.listDirectory(root.isEmpty ? "/" : root)) ?? []
-            for item in list where !item.isDirectory {
-                let ext = (item.name as NSString).pathExtension.lowercased()
-                guard Self.audioExtensions.contains(ext), !seen.contains(item.path) else { continue }
-                seen.insert(item.path)
-                found.append(Entry(name: item.name, path: item.path,
-                                   isDirectory: false, size: item.size))
+            do {
+                let list = try afc.listDirectory(root.isEmpty ? "/" : root)
+                for item in list where !item.isDirectory {
+                    guard !seen.contains(item.path) else { continue }
+                    seen.insert(item.path)
+                    found.append(Entry(name: item.name, path: item.path,
+                                       isDirectory: false, size: item.size))
+                }
+            } catch {
+                failures.append("\(root.isEmpty ? "/" : root)：\(error.localizedDescription)")
             }
+        }
+        if found.isEmpty && !failures.isEmpty {
+            throw makeError(failures.joined(separator: "；"))
         }
         return found.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
-    // MARK: - 导入 / 导出 / 删除
+    // MARK: - 导入（自动转 .m4r，爱思同款）/ 导出 / 删除
 
-    /// 导入铃声（本地文件 → AFC 上传到 iTunes_Control/Ringtones）。
+    /// 导入铃声：**先转成 .m4r**（AAC/m4a 容器，爱思助手同款 —— 用户观察：
+    /// "爱思助手还要转换成铃声格式 .m4r 的"），再经 AFC 上传到
+    /// iTunes_Control/Ringtones。
     @discardableResult
     func importRingtone(localURL: URL) throws -> String {
-        let data = try Data(contentsOf: localURL)
-        guard !data.isEmpty else {
-            throw makeError("文件为空")
+        // 1. 格式转换（mp3/wav/m4a 等任意音频 → .m4r）
+        let ringtoneURL: URL
+        if localURL.pathExtension.lowercased() == "m4r" {
+            ringtoneURL = localURL
+        } else {
+            ringtoneURL = try convertToM4R(localURL: localURL)
         }
-        let name = localURL.lastPathComponent
+        defer {
+            if ringtoneURL != localURL { try? FileManager.default.removeItem(at: ringtoneURL) }
+        }
+        let data = try Data(contentsOf: ringtoneURL)
+        guard !data.isEmpty else {
+            throw makeError("转换后文件为空")
+        }
+
+        // 2. AFC 上传
+        let name = ringtoneURL.lastPathComponent
         let remote = Self.userRingtonesAFCPath + "/" + name
-        // 确保目录存在（已存在则 mkdir 报错忽略）
         try afc.batch { client in
             _ = Self.userRingtonesAFCPath.withCString { afc_make_directory(client, $0) }
         }
         try afc.writeFile(data, to: remote)
         return remote
+    }
+
+    /// 用 AVAssetExportSession 把任意音频转成 .m4r（AAC，m4a 容器改扩展名）。
+    /// 输出到临时目录，调用方负责清理。
+    private func convertToM4R(localURL: URL) throws -> URL {
+        let asset = AVURLAsset(url: localURL)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw makeError("无法创建音频转换会话（不支持的格式？）")
+        }
+        let baseName = localURL.deletingPathExtension().lastPathComponent
+        let outURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(baseName + ".m4r")
+        try? FileManager.default.removeItem(at: outURL)
+        session.outputURL = outURL
+        session.outputFileType = .m4a   // .m4r 与 .m4a 同为 AAC/m4a 容器
+        let sem = DispatchSemaphore(value: 0)
+        session.exportAsynchronously { sem.signal() }
+        _ = sem.wait(timeout: .now() + 60)
+        guard session.status == .completed else {
+            throw makeError("转换失败：\(session.error?.localizedDescription ?? "未知错误")")
+        }
+        return outURL
     }
 
     /// 读取铃声文件原始数据（在线播放用）。
