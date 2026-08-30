@@ -1,14 +1,17 @@
 import SwiftUI
 
-/// 添加 App Store 账户（邮箱 + 密码 + 可选 2FA 验证码）。
+/// 添加 App Store 账户（邮箱 + 密码）。若账户开启双重认证，
+/// 登录后会弹出「来自 <邮箱> 的 2FA 验证码」输入框，填完直接返回账户，
+/// 不在账户信息里预填验证码。
 struct AddAccountSheet: View {
     let onAdded: (AppStoreAccount) -> Void
 
     @State private var email = ""
     @State private var password = ""
-    @State private var code = ""
     @State private var busy = false
     @State private var errorMessage: String?
+    @State private var showTwoFactor = false
+    @State private var twoFactorCode = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -21,13 +24,10 @@ struct AddAccountSheet: View {
                         .autocorrectionDisabled()
                     SecureField("密码", text: $password)
                         .textContentType(.password)
-                    TextField("验证码（如已收到 2FA）", text: $code)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
                 } header: {
                     Text("账户信息")
                 } footer: {
-                    Text("若账户开启双重认证，先空着点登录，收到验证码后再填一次同密码重试。")
+                    Text("若账户开启双重认证，点登录后会弹出验证码输入框，按提示填入即可。")
                 }
 
                 if let errorMessage {
@@ -61,16 +61,26 @@ struct AddAccountSheet: View {
                     Button("取消") { dismiss() }
                 }
             }
+            .alert("来自 \(email) 的 2FA 验证码", isPresented: $showTwoFactor) {
+                TextField("6 位验证码", text: $twoFactorCode)
+                    .keyboardType(.numberPad)
+                Button("验证") { verifyTwoFactor() }
+                Button("取消", role: .cancel) {
+                    showTwoFactor = false
+                    twoFactorCode = ""
+                }
+            } message: {
+                Text("请输入发送到该账户的双重认证验证码。")
+            }
         }
     }
 
-    private func login() {
+    private func login(code: String = "") {
         guard !busy else { return }
         busy = true
         errorMessage = nil
         let email = self.email
         let password = self.password
-        let code = self.code
         Task {
             LoginLogger.shared.log("App Store 下载：手动添加账户开始认证 \(email)（含验证码：\(code.isEmpty ? "否" : "是")）")
             do {
@@ -86,12 +96,25 @@ struct AddAccountSheet: View {
                 }
                 LoginLogger.shared.log("App Store 下载：手动添加账户认证成功，store=\(account.store)")
             } catch {
+                let desc = error.localizedDescription
                 await MainActor.run {
                     busy = false
-                    errorMessage = "登录失败：\(error.localizedDescription)"
+                    if desc.contains("Authentication requires verification code") {
+                        twoFactorCode = ""
+                        showTwoFactor = true
+                    } else {
+                        errorMessage = "登录失败：\(desc)"
+                    }
                 }
-                LoginLogger.shared.log("App Store 下载：手动添加账户认证失败 - \(error.localizedDescription)")
+                LoginLogger.shared.log("App Store 下载：手动添加账户认证失败 - \(desc)")
             }
         }
+    }
+
+    private func verifyTwoFactor() {
+        let code = twoFactorCode
+        showTwoFactor = false
+        twoFactorCode = ""
+        login(code: code)
     }
 }
