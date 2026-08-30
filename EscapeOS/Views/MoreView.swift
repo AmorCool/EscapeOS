@@ -132,6 +132,14 @@ struct MoreView: View {
                     )
                 }
 
+                NavigationLink(destination: LiquidGlassDemoView()) {
+                    MoreCard(
+                        icon: "sparkles",
+                        title: "Liquid Glass 效果",
+                        subtitle: "iOS 26 以下系统也能用上 Liquid Glass：Metal 着色器实现的折射 / 色散 / 边缘高光（页面内可查看运行状态自检）。"
+                    )
+                }
+
                 NavigationLink(destination: ProfileInstallView()) {
                     MoreCard(
                         icon: "shield.lefthalf.filled",
