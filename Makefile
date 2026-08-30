@@ -85,6 +85,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/AFCService.swift \
 	EscapeOS/Engine/CrashLogService.swift \
 	EscapeOS/Engine/IPCCInstallService.swift \
+	EscapeOS/Engine/CellularMaintenanceService.swift \
 	EscapeOS/Engine/KernelCacheService.swift \
 	EscapeOS/Engine/RingtonesService.swift \
 	EscapeOS/Engine/FileKind.swift \

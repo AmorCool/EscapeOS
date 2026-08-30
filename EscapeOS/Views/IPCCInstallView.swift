@@ -17,6 +17,10 @@ struct IPCCInstallView: View {
     @State private var detailRecord: IPCCInstallService.InstallRecord?
     /// v0.2.132：清空安装记录确认。
     @State private var confirmClearRecords = false
+    /// v0.2.138：蜂窝网络维护状态。
+    @State private var cellularBusy = false
+    @State private var commCenterBusy = false
+    @State private var confirmRestartCommCenter = false
 
     private let service = IPCCInstallService.shared
 
@@ -120,6 +124,43 @@ struct IPCCInstallView: View {
             } footer: {
                 Text("安装后的实际 bundle 由 CommCenter 写入系统区，本机无法直接查看 / 卸载（由系统统一管理）。")
             }
+
+            // v0.2.138：蜂窝网络维护（参考 CellularInfo 工具板块）
+            Section {
+                Button {
+                    refreshCellularConnection()
+                } label: {
+                    if cellularBusy {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("正在刷新…")
+                        }
+                    } else {
+                        Label("刷新蜂窝网络信号", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                }
+                .disabled(cellularBusy)
+                .foregroundColor(.blue)
+
+                Button {
+                    confirmRestartCommCenter = true
+                } label: {
+                    if commCenterBusy {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("正在重启…")
+                        }
+                    } else {
+                        Label("重启蜂窝网络服务", systemImage: "arrow.clockwise.circle")
+                    }
+                }
+                .disabled(commCenterBusy)
+                .foregroundColor(.blue)
+            } header: {
+                Text("蜂窝网络维护")
+            } footer: {
+                Text("刷新信号 = 重置调制解调器（无系统级权限时可能被丢弃）；重启服务 = 经 RSD 隧道向 CommCenter 发送 SIGKILL，系统自动拉起（与爱思同款效果，无需 root）。")
+            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("IPCC 安装")
@@ -152,6 +193,14 @@ struct IPCCInstallView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("将删除全部最近安装记录（含日志详情），不可恢复。")
+        }
+        .alert("重启蜂窝网络服务？", isPresented: $confirmRestartCommCenter) {
+            Button("重启", role: .destructive) {
+                restartCommCenter()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将向 CommCenter 发送终止信号，系统会自动拉起该服务，蜂窝网络会短暂断开后恢复。")
         }
         .sheet(item: $detailRecord) { record in
             NavigationView {
@@ -263,6 +312,47 @@ struct IPCCInstallView: View {
             let list = service.savedRecords()
             DispatchQueue.main.async {
                 records = list
+            }
+        }
+    }
+
+    // MARK: - 蜂窝网络维护（v0.2.138，参考 CellularInfo 工具板块）
+
+    /// 刷新蜂窝网络信号：进程内调 CoreTelephony 私有 API
+    /// `_CTServerConnectionResetModem`。无系统级权限时请求会被 CommCenter
+    /// 静默丢弃（不报错），所以结果只能提示「已发送请求」。
+    private func refreshCellularConnection() {
+        guard !cellularBusy else { return }
+        cellularBusy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = CellularMaintenanceService.shared.resetModem()
+            DispatchQueue.main.async {
+                cellularBusy = false
+                if result {
+                    toast = "已向 CommCenter 发送刷新信号（无系统权限时可能被丢弃，建议配合「重启蜂窝网络服务」）"
+                } else {
+                    toast = "刷新失败：无法加载 CoreTelephony 私有 API"
+                }
+            }
+        }
+    }
+
+    /// 重启蜂窝网络服务：走 RSD 隧道向 CommCenter 发 SIGKILL（系统自动拉起）。
+    private func restartCommCenter() {
+        guard !commCenterBusy else { return }
+        commCenterBusy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try DeviceControlService.shared.restartCommCenter()
+                DispatchQueue.main.async {
+                    commCenterBusy = false
+                    toast = "已重启 CommCenter，蜂窝网络将在数秒内恢复"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    commCenterBusy = false
+                    toast = "重启失败：\(error.localizedDescription)"
+                }
             }
         }
     }

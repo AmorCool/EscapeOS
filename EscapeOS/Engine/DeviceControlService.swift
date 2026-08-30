@@ -133,6 +133,47 @@ final class DeviceControlService {
         throw lastError ?? makeError("连接应用服务失败")
     }
 
+    /// 在设备进程列表里找 CommCenter 的 PID（可执行路径包含 CommCenter）。
+    /// 与 SpringBoard 同理（`springBoardPID`），供重启蜂窝网络服务使用。
+    func commCenterPID() throws -> Int? {
+        try withAppService { appService in
+            var processes: UnsafeMutablePointer<ProcessTokenC>?
+            var count = UInt(0)
+            if let ffiError = app_service_list_processes(appService, &processes, &count) {
+                throw error(from: ffiError, fallback: "枚举进程失败")
+            }
+            defer {
+                if let processes { app_service_free_process_list(processes, count) }
+            }
+            guard let processes else { return nil }
+            for index in 0..<Int(count) {
+                let p = processes[index]
+                if let path = p.executable_url.flatMap({ String(cString: $0) }),
+                   path.contains("CommCenter") {
+                    return Int(p.pid)
+                }
+            }
+            return nil
+        }
+    }
+
+    /// 重启蜂窝网络服务（CommCenter）：走 RSD 隧道对 CommCenter 发 SIGKILL，
+    /// 系统会自动拉起 —— 与 respringSpringBoard 同一套机制，无需 root、
+    /// 无需 entitlement（CellularInfo 需要 root helper 才能做的事，隧道版
+    /// 直接做到）。效果等同「飞行模式开关 / 重启蜂窝服务」。
+    func restartCommCenter() throws {
+        let pid = try commCenterPID()
+        guard let pid else { throw makeError("未在进程列表中找到 CommCenter") }
+        try withAppService { appService in
+            var response: UnsafeMutablePointer<SignalResponseC>?
+            let ffiError = app_service_send_signal(appService, UInt32(pid), UInt32(SIGKILL), &response)
+            if let ffiError {
+                throw error(from: ffiError, fallback: "发送 SIGKILL 给 CommCenter 失败")
+            }
+            defer { if let response { app_service_free_signal_response(response) } }
+        }
+    }
+
     /// 在设备进程列表里找 SpringBoard 的 PID（可执行路径包含 SpringBoard）。
     func springBoardPID() throws -> Int? {
         try withAppService { appService in
