@@ -49,8 +49,8 @@ final class RemoteSapSigner: SAPActionSigning {
             )
         )
         // 初始化失败 = 远程签名路径不可用 → 原样上抛给登录 UI（不回退未签名）
-        _ = try Self.request("POST", url: baseURL.appendingPathComponent("v1/init"),
-                             body: body, token: token, session: session)
+        _ = try await Self.request("POST", url: baseURL.appendingPathComponent("v1/init"),
+                                   body: body, token: token, session: session)
     }
 
     /// 对请求体字节签名，返回 base64（作为 X-Apple-ActionSignature 头）。
@@ -84,6 +84,10 @@ final class RemoteSapSigner: SAPActionSigning {
         task.resume()
         semaphore.wait()
 
+        // 信号量保证 outcome 已就绪；显式解包避免可选项歧义
+        guard let outcome else {
+            throw SAPRemoteSignerError(message: "内部错误：签名结果缺失")
+        }
         let data = try outcome.get()
         let payload = try JSONDecoder().decode([String: String].self, from: data)
         guard let signature = payload["signature"] else {
