@@ -41,7 +41,7 @@ final class SapStatusModel: ObservableObject {
             switch self {
             case .unknown: return "检测中"
             case .available: return "已启用"
-            case .unavailable: return "未启用（需 StikDebug 开启）"
+            case .unavailable: return "未启用（开启后点此重测）"
             }
         }
     }
@@ -54,6 +54,17 @@ final class SapStatusModel: ObservableObject {
     func setJIT(_ mode: JITMode) {
         DispatchQueue.main.async { [weak self] in
             self?.jitMode = mode
+        }
+    }
+
+    /// 主动探测 JIT 并更新状态（页面出现时 / 状态条点击重测时调用）。
+    /// v0.3.3 只在登录流程内探测 → 页面打开后永远显示「检测中」（真机实锤），
+    /// v0.3.6 改为进页面立即探测。
+    func probeJITNow() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let ok = SAPJITProbe.jitAvailable()
+            self?.setJIT(ok ? .available : .unavailable)
+            LoginLogger.shared.log(ok ? "SAP JIT 探测（页面）：已启用" : "SAP JIT 探测（页面）：未启用")
         }
     }
 

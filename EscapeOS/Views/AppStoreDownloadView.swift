@@ -154,20 +154,36 @@ struct AppStoreDownloadView: View {
                     }
             }
         }
-        .onAppear { reload() }
+        .onAppear {
+            reload()
+            SapStatusModel.shared.probeJITNow()
+        }
     }
 
     // MARK: - 子视图
 
-    /// v0.3.3：SAP 状态条——JIT 模式 + 资产包进度（紧凑单行，蓝色强调）。
+    /// v0.3.6：SAP 状态条——JIT 模式 + 资产包进度。JIT 行可点击重测
+    /// （StikDebug 开启 JIT 后回来点一下即更新，不再依赖登录流程内的探测）。
     private var sapStatusSection: some View {
         Section {
             HStack(spacing: 8) {
                 Image(systemName: "bolt.fill")
                     .font(.footnote)
                     .foregroundStyle(.blue)
-                Text("JIT：\(sapStatus.jitMode.text)")
-                    .font(.footnote)
+                Button {
+                    sapStatus.probeJITNow()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("JIT：\(sapStatus.jitMode.text)")
+                            .font(.footnote)
+                        if sapStatus.jitMode != .available {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.caption2)
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
                 Spacer()
                 Image(systemName: "arrow.down.circle")
                     .font(.footnote)
@@ -177,7 +193,7 @@ struct AppStoreDownloadView: View {
                     .font(.footnote)
             }
         } footer: {
-            Text("资产包仅首次登录下载（约 36MB），之后走本地缓存。JIT 未启用时以解释器模式运行。")
+            Text("登录必须开启 JIT：先在 StikDebug 里为 LiveContainer 开启，回来点 JIT 行重测。资产包仅首次下载（约 36MB）。")
         }
     }
 
