@@ -36,7 +36,10 @@ type hookState struct {
 type Hook struct {
 	mu     sync.Mutex
 	engine *Engine
-	handle uintptr
+	// uc_hook is typedef'd to size_t in the Unicorn API — an opaque INTEGER
+	// handle, not a pointer. Keep it as the C type so uc_hook_del type-checks
+	// without any unsafe.Pointer conversion (which is invalid for integers).
+	handle C.uc_hook
 	id     uintptr
 }
 
@@ -79,13 +82,13 @@ func (e *Engine) AddCodeHook(begin, end uint64, callback CodeHook) (*Hook, error
 
 	codeHookCallbacks.Store(id, callback)
 
-	eng := (*C.uc_engine)(unsafe.Pointer(&handle))
-	var hookHandle uintptr
-	// uc_hook_add is variadic and cgo cannot call variadic C functions, so this
+	// uc_hook_add is variadic (uc_engine*, uc_hook*, int type, void* callback,
+	// void* user_data, ...) and cgo cannot call variadic C functions, so this
 	// goes through the fixed-arity sap_uc_hook_add wrapper in unicorn.h.
+	var hookHandle C.uc_hook
 	if cerr := C.sap_uc_hook_add(
-		eng,
-		(*C.uc_hook)(unsafe.Pointer(&hookHandle)),
+		handle,
+		&hookHandle,
 		C.int(hookCode),
 		C.sap_hook_trampoline(),
 		unsafe.Pointer(id),
@@ -124,8 +127,7 @@ func (h *Hook) Close() error {
 	handle, done, err := engine.beginOperation()
 
 	if err == nil {
-		eng := (*C.uc_engine)(unsafe.Pointer(&handle))
-		err = engine.err(int32(C.uc_hook_del(eng, (C.uc_hook)(unsafe.Pointer(h.handle)))))
+		err = engine.err(int32(C.uc_hook_del(handle, h.handle)))
 
 		done()
 
