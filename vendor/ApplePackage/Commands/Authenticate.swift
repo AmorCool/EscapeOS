@@ -19,6 +19,13 @@
 //   AppleAuthenticator 头部集合）。同时新增健壮性分类：403 HTML / 5xx 区分为
 //   「可重试（新鲜 anisette 重试一次）/ 永久失败（明确报错，不再盲目重试）」。
 //
+// v0.2.159：修复 `native/fast/` 返回 **301 Moved Permanently 但无 Location 头** 的裸重定向
+//   （日志实证 xcradn@163.com 两次尝试均 301 无 Location → "redirect status 301 but no
+//   usable Location header"）。根因：v0.2.158 把 UA 换成 iTunes Windows 后，缺头 403 已消除，
+//   但 Apple 边缘对限流/标记/地域的客户端直接返回裸 301（不带 Location，无法跟随）。
+//   修复：30x 无 Location 单独分类为「Apple 边缘裸重定向」，首轮用全新 anisette 重试一次，
+//   否则明确报错并给出「换网络/切 Anisette 服务器/换时段」的可操作建议。
+//
 
 import Foundation
 
@@ -105,6 +112,27 @@ public enum Authenticator {
                     LoginLogger.shared.log("App Store 认证服务端 5xx(\(status.code))，可重试")
                     if currentAttempt < 2 { continue }
                     try ensureFailed("iTunes 认证服务端错误（HTTP \(status.code)），请稍后重试。")
+                }
+                // 3) Apple 边缘 30x 但无 Location：裸重定向（IP 信誉 / 风控 / 地域墙）。
+                //    `native/fast/` 在客户端被限流/标记时，Apple 边缘会返回「301 Moved
+                //    Permanently」却不带 Location 头（裸重定向），无法跟随。这是 v0.2.159
+                //    修复的阻塞项（日志实证：2 次尝试均 301 无 Location，认证失败）。
+                //    首轮用全新 anisette 重试一次（设备标识变化可能改变边缘决策）；
+                //    否则明确报错，给出可操作建议，避免无意义重试。
+                if (300...399).contains(status.code),
+                   response.headers.first(name: "location") == nil {
+                    let bodyData = response.body?.data ?? Data()
+                    let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
+                    LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code) 裸重定向（无 Location 头，疑似 IP 信誉/风控）：\(bodySnippet)")
+                    if currentAttempt < 2, anisetteProvider != nil {
+                        LoginLogger.shared.log("… 用全新 Anisette 重试一次（设备标识变化可能改变边缘决策）")
+                        continue
+                    }
+                    try ensureFailed(
+                        "iTunes 认证被 Apple 边缘裸重定向拒绝（HTTP \(status.code)，无 Location 头，无法跟随）。\n" +
+                        "常见原因：① 本机出口 IP 被 Apple 风控/限流；② 地域/网络环境触发重定向墙；③ Anisette 设备标识被标记。\n" +
+                        "建议：更换网络/代理、到「更多 → 设置 → Anisette 服务器」切换并重连后重试，或稍后更换时段再试。"
+                    )
                 }
                 let result = try parseResponse(
                     response,

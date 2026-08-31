@@ -17,6 +17,13 @@ struct AddAccountSheet: View {
     var body: some View {
         NavigationView {
             Form {
+                // 与 AppStoreDownloadView 共用同一套 2FA 弹窗（审计 Q12 单一入口）。
+                TwoFactorCodePrompt(
+                    isPresented: $showTwoFactor,
+                    code: $twoFactorCode,
+                    email: email,
+                    onVerify: verifyTwoFactor
+                )
                 Section {
                     TextField("Apple ID 邮箱", text: $email)
                         .textContentType(.emailAddress)
@@ -60,17 +67,6 @@ struct AddAccountSheet: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("取消") { dismiss() }
                 }
-            }
-            .alert("来自 \(email) 的 2FA 验证码", isPresented: $showTwoFactor) {
-                TextField("6 位验证码", text: $twoFactorCode)
-                    .keyboardType(.numberPad)
-                Button("验证") { verifyTwoFactor() }
-                Button("取消", role: .cancel) {
-                    showTwoFactor = false
-                    twoFactorCode = ""
-                }
-            } message: {
-                Text("请输入发送到该账户的双重认证验证码。")
             }
         }
     }

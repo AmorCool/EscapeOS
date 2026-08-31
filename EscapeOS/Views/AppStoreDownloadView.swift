@@ -52,6 +52,31 @@ func fetchFreshAppStoreAnisetteHeaders() async throws -> [(String, String)] {
     return buildAppStoreAnisetteHeaders(for: anisette)
 }
 
+/// 双重认证验证码输入：把 App Store 登录的 2FA 入口统一到这一个组件。
+/// `AppStoreDownloadView`（设置里已登录的 Apple ID）与 `AddAccountSheet`（手动添加）
+/// 共用，避免两处各写一套 alert（审计 Q12「2FA 弹窗双入口重构」）。
+struct TwoFactorCodePrompt: View {
+    @Binding var isPresented: Bool
+    @Binding var code: String
+    let email: String
+    let onVerify: () -> Void
+
+    var body: some View {
+        EmptyView()
+            .alert("来自 \(email) 的 2FA 验证码", isPresented: $isPresented) {
+                TextField("6 位验证码", text: $code)
+                    .keyboardType(.numberPad)
+                Button("验证") { onVerify() }
+                Button("取消", role: .cancel) {
+                    isPresented = false
+                    code = ""
+                }
+            } message: {
+                Text("请输入发送到该账户的双重认证验证码。")
+            }
+    }
+}
+
 struct AppStoreDownloadView: View {
     @State private var accounts: [AppStoreAccount] = []
     @State private var selectedEmail: String = ""
@@ -61,6 +86,12 @@ struct AppStoreDownloadView: View {
     @State private var status = ""
     @State private var errorMessage: String?
     @State private var toast: String?
+    // 2FA（双重认证）内联处理：与 AddAccountSheet 共用 TwoFactorCodePrompt（审计 Q12）。
+    @State private var showTwoFactor = false
+    @State private var twoFactorCode = ""
+    @State private var twoFactorEmail = ""
+    @State private var pendingEmail = ""
+    @State private var pendingPassword = ""
 
     private let store = AppStoreDownloadStore.shared
 
@@ -86,6 +117,14 @@ struct AppStoreDownloadView: View {
         .sheet(isPresented: $showLoginLog) {
             LoginLogView()
         }
+        .background(
+            TwoFactorCodePrompt(
+                isPresented: $showTwoFactor,
+                code: $twoFactorCode,
+                email: twoFactorEmail,
+                onVerify: verifyTwoFactor
+            )
+        )
         .sheet(isPresented: $showAddAccount) {
             AddAccountSheet { account in
                 store.add(account)
@@ -241,6 +280,8 @@ struct AppStoreDownloadView: View {
             return
         }
         let pw = password
+        pendingEmail = email
+        pendingPassword = pw
         busy = true
         status = "正在用设置中的 Apple ID 登录 App Store…"
         LoginLogger.shared.log("App Store 下载：开始用「更多」已登录的 Apple ID（\(email)）走 iTunes 认证")
@@ -264,9 +305,56 @@ struct AppStoreDownloadView: View {
                 let desc = error.localizedDescription
                 await MainActor.run {
                     busy = false
-                    errorMessage = iTunesAuthErrorMessage(error) + "\n若开启了双重认证，请改用下方手动添加并填写验证码。"
+                    // 双重认证：与原手动添加入口共用同一套 2FA 弹窗（审计 Q12 单一入口），
+                    // 不再要求用户「改用下方手动添加」，直接在设置登录流程内补全验证码。
+                    if desc.contains("Authentication requires verification code") {
+                        twoFactorEmail = email
+                        twoFactorCode = ""
+                        showTwoFactor = true
+                    } else {
+                        errorMessage = iTunesAuthErrorMessage(error)
+                    }
                 }
                 LoginLogger.shared.log("App Store 下载：iTunes 认证失败 - \(desc)")
+            }
+        }
+    }
+
+    /// 设置登录流程内的 2FA 重试：用同一份（邮箱+密码）+ 用户输入的验证码重新走 iTunes 认证。
+    private func verifyTwoFactor() {
+        let email = pendingEmail
+        let password = pendingPassword
+        let code = twoFactorCode
+        showTwoFactor = false
+        twoFactorCode = ""
+        guard !email.isEmpty, !password.isEmpty else { return }
+        busy = true
+        status = "正在验证双重认证…"
+        LoginLogger.shared.log("App Store 下载：设置登录流程内 2FA 重试 \(email)（含验证码：是）")
+        Task {
+            do {
+                let account = try await Authenticator.authenticate(
+                    email: email,
+                    password: password,
+                    code: code,
+                    anisetteProvider: { try await fetchFreshAppStoreAnisetteHeaders() }
+                )
+                await MainActor.run {
+                    store.add(account)
+                    reload()
+                    selectedEmail = account.email
+                    busy = false
+                    status = "已用设置中的 Apple ID 登录"
+                    toast = "已用「更多」中的 Apple ID 登录：\(account.email)"
+                }
+                LoginLogger.shared.log("App Store 下载：2FA 重试成功，store=\(account.store)")
+            } catch {
+                let desc = error.localizedDescription
+                await MainActor.run {
+                    busy = false
+                    errorMessage = iTunesAuthErrorMessage(error)
+                }
+                LoginLogger.shared.log("App Store 下载：2FA 重试失败 - \(desc)")
             }
         }
     }

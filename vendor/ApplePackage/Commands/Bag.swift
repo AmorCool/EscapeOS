@@ -20,8 +20,21 @@ public enum Bag {
     /// 路径**带尾斜杠**（无尾斜杠的变体被 Apple 边缘 301 到 HTML 页）。
     private static let defaultAuthEndpoint = "https://auth.itunes.apple.com/auth/v1/native/fast/"
 
+    // v0.2.159（审计 Q9）：单会话内 auth 端点基本不变，缓存上一次成功解析的端点，
+    // 避免每次 `Authenticator.authenticate` 都重新拉 bag.xml（既省耗时也减少 Apple 边缘请求次数）。
+    // 以 deviceIdentifier 为键：Anisette 重置导致标识变化时会自动失效并重拉。
+    private static var cachedAuthEndpoint: URL?
+    private static var cachedDeviceIdentifier: String = ""
+
     public static func fetchBag() async throws -> BagOutput {
         let deviceIdentifier = Configuration.deviceIdentifier
+
+        // 会话内已成功解析过、且设备标识未变 → 直接命中缓存，跳过 bag.xml 网络请求（审计 Q9）。
+        // 既能减少每次认证的耗时，也降低对 Apple 边缘的请求频率（避免触发限流）。
+        if cachedDeviceIdentifier == deviceIdentifier, let cached = cachedAuthEndpoint {
+            print("[EscapeOS][Bag] 命中会话缓存 auth endpoint: \(cached.absoluteString)")
+            return BagOutput(authEndpoint: cached)
+        }
 
         let client = Configuration.makeHTTPClient(
             redirectConfiguration: .follow(max: 8, allowCycles: false)
@@ -58,7 +71,7 @@ public enum Bag {
               let data = body.readData(length: body.readableBytes)
         else {
             print("[EscapeOS][Bag] 空响应体，回退 default auth endpoint")
-            return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
+            return fallbackEndpoint()
         }
 
         let plistData = extractPlistData(from: data)
@@ -69,7 +82,7 @@ public enum Bag {
             format: nil
         ) as? [String: Any] else {
             print("[EscapeOS][Bag] plist 解析失败，回退 default auth endpoint")
-            return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
+            return fallbackEndpoint()
         }
 
         // authenticateAccount 现在在 plist 根；老 bag 还会把它放在 urlBag dict 里 ——
@@ -82,9 +95,12 @@ public enum Bag {
               let authURL = normalizedAuthEndpoint(from: authURLString)
         else {
             print("[EscapeOS][Bag] 找不到 authenticateAccount，回退 default auth endpoint")
-            return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
+            return fallbackEndpoint()
         }
 
+        // 成功解析则更新会话缓存（下次直接命中，跳过网络）。
+        cachedDeviceIdentifier = deviceIdentifier
+        cachedAuthEndpoint = authURL
         print("[EscapeOS][Bag] 解析到 auth endpoint: \(authURL.absoluteString)")
         return BagOutput(authEndpoint: authURL)
     }
@@ -100,8 +116,18 @@ public enum Bag {
     /// shim 环境无法签名，跟随其 302 到 pod 后必挂「failed to retrieve
     /// redirect location」（v0.2.155 真机实锤）。凡 legacy 端点一律回退
     /// `defaultAuthEndpoint`（native/fast/，与 AssppWeb `defaultAuthURL` 兜底思路一致）。
-    private static func normalizedAuthEndpoint(from urlString: String) -> URL? {
-        guard var comps = URLComponents(string: urlString) else { return nil }
+    /// 兜底端点解析：优先复用会话内已成功解析的端点（审计 Q9 缓存）；
+    /// 没有缓存时才回落到硬编码的 native/fast/ 默认端点。
+    private static func fallbackEndpoint() -> BagOutput {
+        if cachedDeviceIdentifier == Configuration.deviceIdentifier,
+           let cached = cachedAuthEndpoint {
+            print("[EscapeOS][Bag] 网络/解析失败，复用会话缓存 auth endpoint")
+            return BagOutput(authEndpoint: cached)
+        }
+        return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
+    }
+
+    private static func normalizedAuthEndpoint(from urlString: String) -> URL? {        guard var comps = URLComponents(string: urlString) else { return nil }
         if comps.host == "buy.itunes.apple.com",
            comps.path.hasSuffix("/wa/authenticate") {
             print("[EscapeOS][Bag] bag.xml 给出 legacy wa/authenticate 端点（需 SAP 签名，无法使用），回退 default native/fast/")
