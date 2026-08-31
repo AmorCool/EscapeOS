@@ -32,13 +32,12 @@ if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then
     rm -rf "$UNICORN_SRC"
     git clone --depth 1 --branch "$UNICORN_TAG" https://github.com/unicorn-engine/unicorn.git "$UNICORN_SRC"
   fi
-  # v0.3.3：QEMU TCG 解释器模式（TCI）——guest 代码由纯 C 解释循环执行、不写
-  # 可执行内存，无 JIT entitlement 也能跑（iOS 侧载 / LC 访客无 JIT 是硬需求）。
-  # JIT 可用时 TCI 同样工作，只是慢 5-10x；SAP 签名是短会话，可接受。
-  # 误述更正：v0.3.0 注释里的 "Unicorn is an interpreter" 不成立，Unicorn 2.x
-  # 默认 TCG 是 JIT（Apple 平台走 pthread_jit_write_protect_np 路径）。
-  perl -pi -e 's/(--cc=\$\{CMAKE_C_COMPILER\})/$1 --enable-tcg-interpreter/' "$UNICORN_SRC/CMakeLists.txt"
-  grep -q "enable-tcg-interpreter" "$UNICORN_SRC/CMakeLists.txt" || { echo "error: TCI patch failed"; exit 1; }
+  # v0.3.3 更正：曾尝试注入 --enable-tcg-interpreter 走 QEMU TCI 纯解释器
+  #（无 JIT 也能跑），但 unicorn 2.1.0 的 configure 实际不含该选项
+  #（"ERROR: unknown option"，948 行只是上游 QEMU 遗留注释），TCI 路线不通。
+  # Unicorn 2.x 默认 TCG 就是 JIT（Apple 平台 pthread_jit_write_protect_np），
+  # 因此 SAP 签名必须有 JIT：Swift 侧 JIT 探测作硬闸门（未启用 → 不进模拟器、
+  # 明确报错引导 StikDebug），避免 TCG 在无 JIT 进程里写可执行内存直接崩。
 fi
 
 echo "==> [2/4] Building libunicorn.a for ios-arm64 (static, x86-64 guest)"

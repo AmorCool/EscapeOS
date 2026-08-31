@@ -237,13 +237,13 @@ jobs:
         run: |
           set -euo pipefail
           HIT=false
-          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-unicorn-210-tci&per_page=100" \
+          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-unicorn-210&per_page=100" \
             --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
           if [ -n "${ART_ID:-}" ]; then
             rm -rf /tmp/unicorn-cache && mkdir -p /tmp/unicorn-cache
             gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/unicorn-cache/cache.zip
             unzip -oq /tmp/unicorn-cache/cache.zip -d sapbridge
-            # artifact 结构（LCA=sapbridge）：.unicorn-build/libunicorn.a + .unicorn-src/include/ + .unicorn-build-macos/libunicorn.a
+            # artifact 结构（LCA=sapbridge）：.unicorn-build/libunicorn.a + .unicorn-src/include/
             if [ -s sapbridge/.unicorn-build/libunicorn.a ] && [ -f sapbridge/.unicorn-src/include/unicorn/unicorn.h ]; then
               HIT=true
               echo "=== Unicorn cache HIT (libunicorn.a + headers restored, skip cmake full build) ==="
@@ -296,35 +296,11 @@ jobs:
         if: steps.unicorn_cache.outputs.hit != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: escapeos-unicorn-210-tci
+          name: escapeos-unicorn-210
           path: |
             sapbridge/.unicorn-build/libunicorn.a
             sapbridge/.unicorn-src/include
-            sapbridge/.unicorn-build-macos/libunicorn.a
           if-no-files-found: ignore
-
-      - name: Validate SAP bridge TCI (macOS host smoke test)
-        # TCI 解释器是「无 JIT 可运行」的关键（v0.3.1 注释里的 "interpreter" 是上游
-        # macOS 语境误述，Unicorn 2.x 默认 TCG 是 JIT）。这里在 CI macOS host（arm64）
-        # 上用 TCI 版 libunicorn 实跑一段 x86-64 代码（mov eax,42; ret），实锤解释器
-        # 路径可用——本测试失败则禁止发版（真机会在模拟器启动时崩）。
-        run: |
-          set -euo pipefail
-          cd sapbridge
-          if [ ! -f .unicorn-build-macos/libunicorn.a ]; then
-            if [ ! -d .unicorn-src/.git ]; then
-              git clone --depth 1 --branch 2.1.0 https://github.com/unicorn-engine/unicorn.git .unicorn-src
-            fi
-            perl -pi -e 's/(--cc=\$\{CMAKE_C_COMPILER\})/$1 --enable-tcg-interpreter/' .unicorn-src/CMakeLists.txt
-            cmake -S .unicorn-src -B .unicorn-build-macos -G Ninja \
-              -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF \
-              -DUNICORN_BUILD_TESTS=OFF -DUNICORN_BUILD_SAMPLES=OFF \
-              -DUC_ARCH=x86_64 -DUC_MODE=x86_64
-            cmake --build .unicorn-build-macos -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
-          fi
-          CGO_CFLAGS="-I.unicorn-src/include" \
-          CGO_LDFLAGS="-L.unicorn-build-macos -lunicorn" \
-          go test ./internal/sap/unicorn/ -run TestTCISmoke -v
 
       - name: Package unsigned IPA
         # 对齐 Theos 出包形态：ldid 施加 entitlements（与 Makefile:157 的 -S 一致）

@@ -41,7 +41,7 @@ final class SapStatusModel: ObservableObject {
             switch self {
             case .unknown: return "检测中"
             case .available: return "已启用"
-            case .unavailable: return "未启用（解释器模式运行）"
+            case .unavailable: return "未启用（需 StikDebug 开启）"
             }
         }
     }

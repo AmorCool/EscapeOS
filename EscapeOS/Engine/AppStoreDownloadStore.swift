@@ -40,14 +40,19 @@ final class AppStoreDownloadStore {
         guard Configuration.sapSignerFactory == nil else { return }
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
         Configuration.sapSignerFactory = { config in
-            // v0.3.3：JIT 探测（状态条展示；TCI 解释器模式下不阻断）+
-            // 进度轮询（下载百分比/模拟器启动/握手，实时进状态条与登录日志）。
+            // v0.3.3：JIT 探测作硬闸门——Unicorn TCG 是 JIT（Apple 平台走
+            // pthread_jit_write_protect_np），无 JIT 进程里写可执行内存直接崩
+            // （真机闪退实锤）。未启用 → 不进模拟器、明确报错引导 StikDebug，
+            // 把闪退变成可诊断、可操作的失败。
             let jitOK = SAPJITProbe.jitAvailable()
             SapStatusModel.shared.setJIT(jitOK ? .available : .unavailable)
-            LoginLogger.shared.log(
-                jitOK ? "SAP JIT 探测：已启用（宿主可 JIT）"
-                      : "SAP JIT 探测：未启用（TCI 解释器模式运行，无需 JIT）"
-            )
+            guard jitOK else {
+                LoginLogger.shared.log("SAP JIT 探测：未启用 → 跳过 SAP 签名（避免闪退）")
+                throw SapSigner.SapError.initializationFailed(
+                    "JIT 未启用：请先用 StikDebug 为 LiveContainer 开启 JIT，再回来登录"
+                )
+            }
+            LoginLogger.shared.log("SAP JIT 探测：已启用（宿主可 JIT）")
             LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
             SapProgressPoller.shared.start()
             defer { SapProgressPoller.shared.stop() }

@@ -17,12 +17,14 @@ import (
 )
 
 // The SAP signer runs an x86-64 Unicorn emulation of Apple's private CommerceKit
-// signing session entirely in-process. libunicorn is built with QEMU's TCG
-// interpreter (TCI, --enable-tcg-interpreter): guest code runs on a pure C
-// interpreter loop that never writes executable memory, so the app works both
-// with and without host JIT (plain sideload / LiveContainer guest included).
-// v0.3.1 的 "Unicorn is an interpreter" 注释是上游 macOS 语境的误述——
-// Unicorn 2.x 默认 TCG 是 JIT（真机实锤会崩），TCI 才是 iOS 无 JIT 的正解。
+// signing session entirely in-process. Unicorn 2.x executes guest code via TCG,
+// which IS a JIT on Apple platforms (pthread_jit_write_protect_np / MAP_JIT):
+// a host JIT is REQUIRED, and without the entitlement the TCG write to
+// executable memory kills the process (v0.3.1 注释里的 "interpreter" 说法已证伪).
+// The Swift layer probes JIT (mmap MAP_JIT) BEFORE calling SapInit and refuses
+// to start the emulator without it — no-JIT users get a clear "enable JIT via
+// StikDebug" message instead of a crash. Apple mandates the SAP signature for
+// login, so there is no unsigned fallback that can succeed.
 //
 // C API (all returned C strings must be freed by the caller via SapFree):
 //
