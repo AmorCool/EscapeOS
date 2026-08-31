@@ -70,8 +70,8 @@ var requiredFiles = []fileSpec{
 	},
 }
 
-func Load(ctx context.Context) (Bundle, error) {
-	directory, err := cacheDirectory()
+func Load(ctx context.Context, overrideDirectory string) (Bundle, error) {
+	directory, err := cacheDirectory(overrideDirectory)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -187,10 +187,20 @@ func download(ctx context.Context) (Bundle, error) {
 	return bundle, nil
 }
 
-func cacheDirectory() (string, error) {
+func cacheDirectory(override string) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+
 	root, err := os.UserCacheDir()
 	if err != nil {
-		return "", fmt.Errorf("find user cache directory: %w", err)
+		// iOS app processes normally define $HOME, but LiveContainer guests may
+		// not ("$HOME is not defined" on device, 2026-09-01). Fall back to the
+		// per-app temporary directory ($TMPDIR is always set by the system).
+		root = os.TempDir()
+		if root == "" {
+			return "", fmt.Errorf("find user cache directory: %w", err)
+		}
 	}
 
 	return filepath.Join(root, "ipatool", "sap", "apple-assets-v2"), nil

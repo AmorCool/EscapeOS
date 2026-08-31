@@ -15,6 +15,10 @@ type Config struct {
 	CertificateURL string
 	Version        uint32
 	HardwareID     []byte
+	// CacheDir overrides the directory used to cache the downloaded Apple SAP
+	// assets (CommerceKit/CoreFP). Empty = platform default (os.UserCacheDir,
+	// falling back to os.TempDir when $HOME is undefined — iOS/LiveContainer).
+	CacheDir string
 }
 
 type ActionSigner interface {

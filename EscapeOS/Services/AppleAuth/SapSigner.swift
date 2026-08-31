@@ -40,7 +40,10 @@ final class SapSigner {
     ///   - certURL:    App Store bag 的 `sign-sap-setup-cert` 端点。
     ///   - version:    SAP 协议版本，通常 200。
     ///   - hardwareID: 1–20 字节的稳定设备标识；可任意取值（ipatool 用机器序列号）。
-    init(setupURL: String, certURL: String, version: Int32 = 200, hardwareID: Data) throws {
+    ///   - cacheDirectory: Apple 资产缓存目录（约 36MB，下载一次后复用）。
+    ///     宿主必须显式传 App 的 Caches 目录——LiveContainer 访客进程 `$HOME`
+    ///     未定义，Go 的 os.UserCacheDir() 会直接失败（v0.3.1 真机实锤）。
+    init(setupURL: String, certURL: String, version: Int32 = 200, hardwareID: Data, cacheDirectory: String) throws {
         let hwB64 = hardwareID.base64EncodedString()
         // Go 的 //export 把 *C.char 生成成 C 的 `char*`（非 const），
         // Swift 将其导入为 UnsafeMutablePointer<CChar>!，不会自动把 String 转过去，
@@ -48,12 +51,15 @@ final class SapSigner {
         let err = setupURL.withCString { su in
             certURL.withCString { cu in
                 hwB64.withCString { hw in
-                    SapInit(
-                        UnsafeMutablePointer(mutating: su),
-                        UnsafeMutablePointer(mutating: cu),
-                        version,
-                        UnsafeMutablePointer(mutating: hw)
-                    )
+                    cacheDirectory.withCString { cd in
+                        SapInit(
+                            UnsafeMutablePointer(mutating: su),
+                            UnsafeMutablePointer(mutating: cu),
+                            version,
+                            UnsafeMutablePointer(mutating: hw),
+                            UnsafeMutablePointer(mutating: cd)
+                        )
+                    }
                 }
             }
         }

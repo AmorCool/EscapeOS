@@ -23,6 +23,9 @@ on:
 
 permissions:
   contents: write
+  # 跨 run 产物缓存需要读 artifacts API（actions/cache 按 tag scope 隔离，
+  # tag 触发的 run 保存的缓存下一个 tag 永远取不到——2026-08-31 五连 miss 实锤）
+  actions: read
 
 jobs:
   xcode-build:
@@ -124,9 +127,45 @@ jobs:
           key: macos-sccache-v1
           scope: escapeos-build-cache
 
+      - name: Restore Rust FFI product (artifact, cross-run)
+        # actions/cache 按 branch/tag scoping 隔离：本项目只有 tag 触发构建，
+        # 上一个 tag 保存的缓存下一个 tag 永远 miss（日志实证：五步缓存全部
+        # "Cache not found"，Rust 每轮全量重编 438 crates / 458s）。
+        # artifact 没有 branch scoping：固定名 artifact 存最终产物 libidevice_ffi.a
+        # + 源码 hash，hash 一致即跳过 cargo 全量编译（Rust 源码不常变）。
+        id: rust_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CUR_HASH="${{ hashFiles('rust/idevice-ffi/**') }}"
+          echo "current rust/idevice-ffi hash: $CUR_HASH"
+          HIT=false
+          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-rust-ffi-v1&per_page=100" \
+            --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
+          if [ -n "${ART_ID:-}" ]; then
+            rm -rf /tmp/rust-ffi-cache && mkdir -p /tmp/rust-ffi-cache
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/rust-ffi-cache/cache.zip
+            unzip -oq /tmp/rust-ffi-cache/cache.zip -d /tmp/rust-ffi-cache
+            CACHED_HASH="$(cat /tmp/rust-ffi-cache/rust-hash.txt 2>/dev/null || true)"
+            if [ "${CACHED_HASH:-}" = "$CUR_HASH" ] && [ -s /tmp/rust-ffi-cache/libidevice_ffi.a ]; then
+              mkdir -p rust-libs
+              cp /tmp/rust-ffi-cache/libidevice_ffi.a rust-libs/libidevice_ffi.a
+              HIT=true
+              echo "=== Rust FFI cache HIT (skip cargo full build) ==="
+            else
+              echo "=== Rust FFI cache stale (cached=${CACHED_HASH:-empty} current=$CUR_HASH) ==="
+            fi
+          else
+            echo "=== Rust FFI cache artifact not found (first run or expired) ==="
+          fi
+          echo "hit=$HIT" >> "$GITHUB_OUTPUT"
+
       - name: Build libidevice_ffi.a (Rust, aarch64-apple-ios)
-        # 与 build.yml 完全一致：从源码编出单 .a，并拷 idevice.h 到 EscapeOS/Tunnel/。
+        # 与 build.yml 完全一致：从源码编出单 .a。idevice.h 拷贝与 xcframework
+        # 组装移到「Assemble」步骤（缓存命中时也要执行）。
         # xcodebuild 编译 Tunnel/*.m 时需要该头，故必须在 generate/build 之前完成。
+        if: steps.rust_cache.outputs.hit != 'true'
         run: |
           set -euo pipefail
           source "$HOME/.cargo/env"
@@ -153,20 +192,67 @@ jobs:
           # "built for newer 'iOS' version (26.5) than being linked (18.0)" 的 linker 警告。
           export IPHONEOS_DEPLOYMENT_TARGET=18.0
           cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml
+          mkdir -p rust-libs
+          cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" rust-libs/libidevice_ffi.a
+          # 记录产物对应的源码 hash（artifact 产物缓存的命中判据，供 Save 步骤打包）
+          echo "${{ hashFiles('rust/idevice-ffi/**') }}" > rust-hash.txt
+
+      - name: Assemble libidevice_ffi.xcframework
+        # 无论 .a 来自 cargo 还是产物缓存，都要组装 xcframework + 拷编译期桥接头。
+        run: |
+          set -euo pipefail
           mkdir -p EscapeOS/Tunnel rust-libs
-          # 方案 A #317：Rust FFI 以 xcframework 形式分发/链接（对齐 Asspp 做法，
-          # 作为预编译二进制依赖可复用、多平台切换干净）。
+          # 方案 A #317：Rust FFI 以 xcframework 形式分发/链接（对齐 Asspp 做法）。
           # 注意：.a / .xcframework 必须落在 xcodegen source 树（EscapeOS/）之外，否则 xcodegen
           # 会把它们当资源拷贝进 .app bundle（实测 114MB .a 进包）。改走 framework 依赖链接。
-          cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" rust-libs/libidevice_ffi.a
+          test -s rust-libs/libidevice_ffi.a
           xcodebuild -create-xcframework \
             -library rust-libs/libidevice_ffi.a \
             -headers rust/idevice-ffi/ \
             -output rust-libs/libidevice_ffi.xcframework
-          rm -f rust-libs/libidevice_ffi.a
           # 编译期桥接头 idevice.h 仍需（HEADER_SEARCH_PATHS 引用 EscapeOS/Tunnel），保留副本
           cp "rust/idevice-ffi/idevice.h" EscapeOS/Tunnel/idevice.h
           ls -la rust-libs/libidevice_ffi.xcframework EscapeOS/Tunnel/idevice.h
+
+      - name: Save Rust FFI product (artifact, cross-run)
+        # 固定名 artifact：libidevice_ffi.a + rust-hash.txt。后续 run 源码未变即命中
+        # Restore 步骤，458s 的 cargo 全量编译归零。
+        if: steps.rust_cache.outputs.hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: escapeos-rust-ffi-v1
+          path: |
+            rust-libs/libidevice_ffi.a
+            rust-hash.txt
+
+      - name: Restore Unicorn product (artifact, cross-run)
+        # 同 Rust：actions/cache 的 tag scope 隔离使 macos-unicorn-* 缓存永远 miss
+        # （每轮 cmake 全量重编 602 文件 ~3 分钟）。libunicorn.a 用固定名 artifact 跨 run 复用，
+        # build-sap.sh 检测到 .unicorn-build/libunicorn.a 存在即自动跳过 cmake。
+        id: unicorn_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          HIT=false
+          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-unicorn-210&per_page=100" \
+            --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
+          if [ -n "${ART_ID:-}" ]; then
+            rm -rf /tmp/unicorn-cache && mkdir -p /tmp/unicorn-cache
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/unicorn-cache/cache.zip
+            unzip -oq /tmp/unicorn-cache/cache.zip -d /tmp/unicorn-cache
+            if [ -s /tmp/unicorn-cache/libunicorn.a ]; then
+              mkdir -p sapbridge/.unicorn-build
+              cp /tmp/unicorn-cache/libunicorn.a sapbridge/.unicorn-build/libunicorn.a
+              HIT=true
+              echo "=== Unicorn cache HIT (skip cmake full build) ==="
+            else
+              echo "=== Unicorn cache artifact content missing ==="
+            fi
+          else
+            echo "=== Unicorn cache artifact not found (first run or expired) ==="
+          fi
+          echo "hit=$HIT" >> "$GITHUB_OUTPUT"
 
       - name: Generate Xcode project (xcodegen)
         run: |
@@ -201,6 +287,15 @@ jobs:
           echo "Xcode build (compile/link) succeeded"
           echo "=== located app bundles ==="
           find build -name 'EscapeSpace.app' -type d || true
+
+      - name: Save Unicorn product (artifact, cross-run)
+        # libunicorn.a 由 Build 步骤内的 preBuildScript（build-sap.sh）产出，供后续 run 复用。
+        if: steps.unicorn_cache.outputs.hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: escapeos-unicorn-210
+          path: sapbridge/.unicorn-build/libunicorn.a
+          if-no-files-found: ignore
 
       - name: Package unsigned IPA
         # 对齐 Theos 出包形态：ldid 施加 entitlements（与 Makefile:157 的 -S 一致）

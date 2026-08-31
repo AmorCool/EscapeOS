@@ -33,7 +33,7 @@ func NewSigner(ctx context.Context, config Config) (ActionSigner, error) {
 		return nil, err
 	}
 
-	bundle, err := assets.Load(ctx)
+	bundle, err := assets.Load(ctx, config.CacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("load Apple SAP assets: %w", err)
 	}

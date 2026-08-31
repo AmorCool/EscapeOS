@@ -24,7 +24,7 @@ import (
 //
 // C API (all returned C strings must be freed by the caller via SapFree):
 //
-//	SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char) *C.char
+//	SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char, cacheDir *C.char) *C.char
 //	SapSign(requestBase64 *C.char) *C.char
 //	SapLastError() *C.char
 //	SapClose()
@@ -41,7 +41,7 @@ var (
 // (sign-sap-setup / sign-sap-setup-cert). version is normally 200. hwIDBase64
 // is a base64-encoded 1-20 byte hardware identifier. Returns NULL on success or
 // a malloc'd error string (free with SapFree).
-func SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char) *C.char {
+func SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char, cacheDir *C.char) *C.char {
 	bridgeMu.Lock()
 	defer bridgeMu.Unlock()
 
@@ -59,6 +59,7 @@ func SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char) *C.ch
 		CertificateURL: C.GoString(certURL),
 		Version:        uint32(version),
 		HardwareID:     hw,
+		CacheDir:       C.GoString(cacheDir),
 	}
 
 	s, err := sap.NewSigner(context.Background(), cfg)

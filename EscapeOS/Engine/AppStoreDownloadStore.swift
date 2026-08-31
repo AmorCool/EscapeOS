@@ -38,12 +38,14 @@ final class AppStoreDownloadStore {
     /// Apple 2026 年起认证请求缺此头 → 账号校验前直接 403（无论账号真假）。
     private static func bootstrapSAPSigner() {
         guard Configuration.sapSignerFactory == nil else { return }
+        let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
         Configuration.sapSignerFactory = { config in
             try SapSigner(
                 setupURL: config.setupURL.absoluteString,
                 certURL: config.certificateURL.absoluteString,
                 version: Int32(truncatingIfNeeded: config.version),
-                hardwareID: config.hardwareID
+                hardwareID: config.hardwareID,
+                cacheDirectory: cachesDir
             )
         }
     }

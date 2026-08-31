@@ -26,14 +26,16 @@ GO="${GO:-go}"
 mkdir -p "$SAP_OUT"
 
 echo "==> [1/4] Preparing Unicorn $UNICORN_TAG source"
-if [ ! -d "$UNICORN_SRC/.git" ]; then
-  rm -rf "$UNICORN_SRC"
-  git clone --depth 1 --branch "$UNICORN_TAG" https://github.com/unicorn-engine/unicorn.git "$UNICORN_SRC"
+# 产物已存在（跨 run artifact 缓存命中）时连源码克隆都跳过——克隆仅编译需要。
+if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then
+  if [ ! -d "$UNICORN_SRC/.git" ]; then
+    rm -rf "$UNICORN_SRC"
+    git clone --depth 1 --branch "$UNICORN_TAG" https://github.com/unicorn-engine/unicorn.git "$UNICORN_SRC"
+  fi
 fi
 
 echo "==> [2/4] Building libunicorn.a for ios-arm64 (static, x86-64 guest)"
 if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then
-  rm -rf "$UNICORN_BUILD"
   mkdir -p "$UNICORN_BUILD"
   cmake -S "$UNICORN_SRC" -B "$UNICORN_BUILD" \
     -G Ninja \
