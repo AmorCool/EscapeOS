@@ -25,6 +25,33 @@ func iTunesAuthErrorMessage(_ error: Error) -> String {
     return "登录失败：\(desc)"
 }
 
+/// 把 `AnisetteData` 转成 App Store iTunes 认证（`native/fast/`）所需的设备认证请求头。
+/// 复用 Swift 认证引擎已验证可用的头部集合（X-Apple-I-MD / X-Apple-I-MD-M 等）。
+/// 缺失这些头时 Apple 边缘会直接返回 403 HTML（ipatool 机制分析已确认）。
+///
+/// - 注意：anisette OTP 一次性，调用方应在**每次认证尝试**时重新取全新 anisette 再调本函数。
+func buildAppStoreAnisetteHeaders(for data: AnisetteData) -> [(String, String)] {
+    let df = AppleAuthenticator.dateFormatter
+    return [
+        ("X-Apple-I-MD", data.oneTimePassword),
+        ("X-Apple-I-MD-M", data.machineID),
+        ("X-Mme-Device-Id", data.deviceUniqueIdentifier),
+        ("X-Apple-I-MD-LU", data.localUserID),
+        ("X-Apple-I-MD-RINFO", "\(data.routingInfo)"),
+        ("X-Apple-I-SRL-NO", data.deviceSerialNumber),
+        ("X-Apple-I-Client-Time", df.string(from: data.date)),
+        ("X-Apple-I-TimeZone", data.timeZone.abbreviation() ?? "PST"),
+        ("X-MMe-Client-Info", data.deviceDescription),
+        ("X-Apple-Locale", data.locale.identifier),
+    ]
+}
+
+/// 取一次全新 anisette 并转成 iTunes 认证头，供 `Authenticator.authenticate(anisetteProvider:)` 使用。
+func fetchFreshAppStoreAnisetteHeaders() async throws -> [(String, String)] {
+    let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback()
+    return buildAppStoreAnisetteHeaders(for: anisette)
+}
+
 struct AppStoreDownloadView: View {
     @State private var accounts: [AppStoreAccount] = []
     @State private var selectedEmail: String = ""
@@ -219,7 +246,11 @@ struct AppStoreDownloadView: View {
         LoginLogger.shared.log("App Store 下载：开始用「更多」已登录的 Apple ID（\(email)）走 iTunes 认证")
         Task {
             do {
-                let account = try await Authenticator.authenticate(email: email, password: pw)
+                let account = try await Authenticator.authenticate(
+                    email: email,
+                    password: pw,
+                    anisetteProvider: { try await fetchFreshAppStoreAnisetteHeaders() }
+                )
                 await MainActor.run {
                     store.add(account)
                     reload()

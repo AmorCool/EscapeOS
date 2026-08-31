@@ -12,6 +12,13 @@
 //   - 循环上限 currentAttempt ≤ 2（**不再**对 204/404 重试 —— 加重 Apple 边缘 IP 限流）
 //   - plist 解析失败时：JSON 回退 + HTTP 状态/Content-Type/响应体前 512B 透传诊断
 //
+// v0.2.157：修复 `auth.itunes.apple.com/auth/v1/native/fast/` 持续返回 403 HTML 的根因 ——
+//   该 vendored 移植版在 shim 化时**丢失了 anisette 设备认证头**（X-Apple-I-MD /
+//   X-Apple-I-MD-M 等），Apple 边缘对缺头请求直接 403。修复方式：由 Swift 侧通过
+//   `anisetteProvider` 闭包在每次尝试时注入**全新** anisette 头（复用已验证可用的
+//   AppleAuthenticator 头部集合）。同时新增健壮性分类：403 HTML / 5xx 区分为
+//   「可重试（新鲜 anisette 重试一次）/ 永久失败（明确报错，不再盲目重试）」。
+//
 
 import Foundation
 
@@ -28,7 +35,8 @@ public enum Authenticator {
         email: String,
         password: String,
         code: String = "",
-        cookies: [Cookie] = []
+        cookies: [Cookie] = [],
+        anisetteProvider: (() async throws -> [(String, String)])? = nil
     ) async throws -> AppStoreAccount {
         let deviceIdentifier = Configuration.deviceIdentifier
 
@@ -54,19 +62,50 @@ public enum Authenticator {
         while currentAttempt <= 2, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
+                // 每次尝试都用**全新** Anisette 设备认证头：Apple 的 anisette OTP 一次性，
+                // 重试必须用新值，否则等价于对同一个被拒请求重复打（v0.2.157 修复 403 的根因）。
+                let anisetteHeaders: [(String, String)] = try await anisetteProvider?() ?? []
                 let request = try makeRequest(
                     endpoint: requestEndpoint,
                     email: email,
                     password: password,
                     code: code,
                     cookies: cookies,
-                    deviceIdentifier: deviceIdentifier
+                    deviceIdentifier: deviceIdentifier,
+                    anisetteHeaders: anisetteHeaders
                 )
                 let response = try await client.execute(request: request).get()
                 // 用 print 不用 NSLog：iOS 26 SDK 已把 NSLog 的 variadic 形式标为 unavailable
                 // （'NSLog' is unavailable: Variadic function is unavailable），但 Swift 的
                 // 单参 print 依然受支持。
                 print("[EscapeOS][AppStore][Auth] \(requestEndpoint.host ?? "?") status=\(response.status.code)")
+                // ===== v0.2.157 健壮性：区分暂态 / 永久失败，避免无意义重试 =====
+                let status = response.status
+                // 1) Apple 边缘 403 HTML：缺失 anisette 设备头 或 出口 IP 被风控。
+                //    首轮若还能刷新 anisette，用全新 anisette 重试一次（排除 anisette 失效）；
+                //    否则（已重试过 / 无 anisette 可刷）直接明确报错，不再盲目重试。
+                if status == .forbidden,
+                   let ct = response.headers.first(name: "content-type"),
+                   ct.lowercased().contains("html") {
+                    let bodyData = response.body?.data ?? Data()
+                    let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
+                    LoginLogger.shared.log("App Store 认证被 Apple 边缘拒绝(403 HTML): \(bodySnippet)")
+                    if currentAttempt < 2, anisetteProvider != nil {
+                        LoginLogger.shared.log("… 用全新 Anisette 重试一次（排除 anisette 失效导致 403）")
+                        continue
+                    }
+                    try ensureFailed(
+                        "iTunes 认证被 Apple 拒绝（HTTP 403，返回 HTML 而非 plist）。\n" +
+                        "常见原因：① 请求缺少 Anisette 设备认证头；② 本机出口 IP 被 Apple 风控；③ 该 Apple ID 触发了额外网页验证。\n" +
+                        "建议：更换网络/代理、到「更多 → 设置 → Anisette 服务器」切换并重连，或确认 Apple ID 未开启强风控验证。"
+                    )
+                }
+                // 2) 服务端 5xx：可重试的暂时性错误，最多重试一次。
+                if (500...599).contains(status.code) {
+                    LoginLogger.shared.log("App Store 认证服务端 5xx(\(status.code))，可重试")
+                    if currentAttempt < 2 { continue }
+                    try ensureFailed("iTunes 认证服务端错误（HTTP \(status.code)），请稍后重试。")
+                }
                 let result = try parseResponse(
                     response,
                     email: email,
@@ -134,7 +173,8 @@ public enum Authenticator {
         password: String,
         code: String,
         cookies: [Cookie],
-        deviceIdentifier: String
+        deviceIdentifier: String,
+        anisetteHeaders: [(String, String)] = []
     ) throws -> HTTPClient.Request {
         let parameters: [String: String] = [
             "appleId": email,
@@ -155,6 +195,11 @@ public enum Authenticator {
         ]
         for item in cookies.buildCookieHeader(endpoint) {
             headers.append(item)
+        }
+        // v0.2.157：追加 anisette 设备认证头（X-Apple-I-* / X-Mme-*）。
+        // `native/fast/` 端点强制要求这些头，缺失会被 Apple 边缘直接 403。
+        for (name, value) in anisetteHeaders {
+            headers.append((name, value))
         }
         return try HTTPClient.Request(
             url: endpoint.absoluteString,
