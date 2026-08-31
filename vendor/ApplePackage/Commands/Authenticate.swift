@@ -286,7 +286,7 @@ public enum Authenticator {
             ("User-Agent", Configuration.userAgent),
             ("Content-Type", "application/x-apple-plist"),
         ]
-        // v0.4.0：SAP 签名 —— 对**最终发出的请求体字节**签名（ipatool client.go 同款），
+        // v0.3.1：SAP 签名 —— 对**最终发出的请求体字节**签名（ipatool client.go 同款），
         // 失败直接抛错给登录 UI（显式错误优于无头 403）。签名对象不含 HTTP 头。
         if let sapSigner {
             let signature = try sapSigner.sign(requestBody: data)
@@ -440,7 +440,7 @@ public enum Authenticator {
     }
 }
 
-// ─── v0.4.0：SAP 签名支撑 ────────────────────────────────────────────────
+// ─── v0.3.1：SAP 签名支撑 ────────────────────────────────────────────────
 
 /// SAP 硬件标识解码失败的内部错误（guid 不是合法的偶数长 hex）。
 private enum SapIdentityError: LocalizedError {
