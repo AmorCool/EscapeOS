@@ -1,8 +1,9 @@
 name: Build Xcode (Plan A dual-track)
 
 # 方案 A 双轨迁移脚手架：在不碰 Theos 的前提下，用 xcodegen + xcodebuild 验证
-# 当前源码能否在 Xcode 原生工程下编译/链接。本 job 仅做「编译/链接检查」
-# （CODE_SIGNING_ALLOWED=NO），不产出签名的 IPA；真实签名/archive 留待 Week 4。
+# 当前源码能否在 Xcode 原生工程下编译/链接，并产出与 Theos 同形态的【未签名 IPA】。
+# 出包方式对齐 Theos：ldid 施加 entitlements（Makefile:157 的 -SEscapeSpace.entitlements）
+# → 打包为 Payload/EscapeSpace.app → zip 成 .ipa。全程不依赖 Apple 证书（侧载时再签）。
 #
 # 触发：推到 migrate-xcode 分支，或手动 workflow_dispatch。
 # 与 build.yml（Theos 轨道）共享 escapeos-build-cache scope，复用已建好的
@@ -36,8 +37,9 @@ jobs:
           sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Install xcodegen and ldid
+        # ldid 用于出包时施加 entitlements（与 Theos 的 -SEscapeSpace.entitlements 等价）。
+        run: brew install xcodegen ldid
 
       - name: Cache Rust toolchain
         uses: actions/cache@v4
@@ -124,9 +126,11 @@ jobs:
           echo "=== generated files ==="
           ls -la EscapeSpace.xcodeproj/ 2>/dev/null || true
 
-      - name: Build (compile/link check, no signing)
-        # 仅验证「当前源码能在 Xcode 原生工程下编过」——不做签名/打包。
-        # CODE_SIGNING_ALLOWED=NO 跳过签名要求；真机签名留待 Week 4。
+      - name: Build (compile/link, no Apple signing)
+        # 验证「当前源码能在 Xcode 原生工程下编过」并产出未签名 .app。
+        # CODE_SIGNING_ALLOWED=NO 跳过 Apple 证书签名要求；entitlements 由后续 ldid 施加。
+        # -derivedDataPath build 把 .app 固定落到 build/Build/Products/Release-iphoneos/，
+        # 便于打包步骤稳定定位（默认 DerivedData 路径含随机 hash，不可预测）。
         run: |
           set -euo pipefail
           xcodebuild build \
@@ -135,11 +139,50 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             2>&1 | tee /tmp/xcodebuild.log
           echo "Xcode build (compile/link) succeeded"
+          echo "=== located app bundles ==="
+          find build -name 'EscapeSpace.app' -type d || true
+
+      - name: Package unsigned IPA
+        # 对齐 Theos 出包形态：ldid 施加 entitlements（与 Makefile:157 的 -S 一致）
+        # → 打包为 Payload/EscapeSpace.app → zip 成未签名 IPA（不依赖 Apple 证书）。
+        run: |
+          set -euo pipefail
+          APP="$(find build -name 'EscapeSpace.app' -type d | head -n1)"
+          if [ -z "$APP" ]; then
+            echo "ERROR: EscapeSpace.app not found under build/" >&2
+            find build -maxdepth 4 -name '*.app' -type d 2>/dev/null || true
+            exit 1
+          fi
+          echo "Found app bundle: $APP"
+          ls -la "$APP"
+
+          # 施加 entitlements（与 Theos 的 ldid -SEscapeSpace.entitlements 等价）
+          ldid -S EscapeSpace.entitlements "$APP"
+          echo "=== embedded entitlements (ldid -e) ==="
+          ldid -e "$APP" 2>/dev/null | head -20 || true
+
+          # 架构校验：应为 arm64（真机）
+          BIN="$APP/EscapeSpace"
+          if [ -f "$BIN" ]; then
+            echo "=== lipo -info ==="
+            lipo -info "$BIN" 2>/dev/null || true
+          fi
+
+          # 打包未签名 IPA（Payload/ 布局，与 Theos 出包一致）
+          VERSION="$(grep -m1 'MARKETING_VERSION' project.yml | sed -E 's/.*"([0-9.]+)".*/\1/')"
+          IPA="EscapeSpace-${VERSION}-xcode-unsigned.ipa"
+          rm -rf Payload && mkdir Payload
+          mv "$APP" Payload/
+          (cd Payload && zip -r "../$IPA" EscapeSpace.app)
+          ls -la "$IPA"
+          echo "IPA=$IPA" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Upload build log
         if: always()
@@ -149,3 +192,10 @@ jobs:
           path: |
             /tmp/xcodegen.log
             /tmp/xcodebuild.log
+
+      - name: Upload IPA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: escapeos-xcode-ipa
+          path: EscapeSpace-*.ipa
