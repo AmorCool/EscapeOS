@@ -2,9 +2,9 @@ name: Build Xcode (Plan A dual-track)
 
 # 方案 A 双轨迁移脚手架：在不碰 Theos 的前提下，用 xcodegen + xcodebuild 验证
 # 当前源码能否在 Xcode 原生工程下编译/链接，并产出与 Theos 同形态的【未签名 IPA】。
-# 出包方式对齐 Theos 链路：ldid 尽力施加 entitlements（Makefile:157 的 -SEscapeSpace.entitlements），
-# 但 brew 版 ldid 在 CI 上对部分二进制会 assert 崩溃，故 ldid 失败不退出来，退化为未签名 IPA
-# （entitlements 文件随 .app 携带，侧载时再签）。全程不依赖 Apple 证书。
+# 出包方式对齐 Theos 链路（Payload/EscapeSpace.app → zip），但 Xcode 轨道直接出【未签名 IPA】：
+# 不调用 ldid（brew 版 ldid 在 CI 上对主二进制 assert 崩溃 ldid.cpp(852)，且用户明确产物不需签名）。
+# entitlements 文件随 .app 携带，供侧载工具（Sideloadly/ESign/TrollStore）施加。全程不依赖 Apple 证书。
 #
 # 触发：推到 migrate-xcode 分支，或手动 workflow_dispatch。
 # 与 build.yml（Theos 轨道）共享 escapeos-build-cache scope，复用已建好的
@@ -173,9 +173,6 @@ jobs:
           fi
           ls -la "$APP"
 
-          echo "=== ldid version ==="
-          ldid --version 2>&1 || true
-
           # 取 .app 内真实可执行文件名（避免硬编码 PRODUCT_NAME 与实际不符）
           BIN="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null)"
           if [ ! -f "$BIN" ]; then
@@ -185,23 +182,19 @@ jobs:
           echo "BIN=$BIN"
           ls -la "$BIN"
 
-          # 对主二进制施加 entitlements（与 Theos 的 ldid -SEscapeSpace.entitlements 等价）。
-          # brew 版 ldid 在 CI 上对部分二进制会 assert 崩溃（ldid.cpp(852): _assert(): false）；
-          # 按用户「产物不签名」要求，此处 ldid 失败不致命——退化为未签名 IPA（侧载时再签）。
-          echo "=== ldid -S (main binary) ==="
-          ldid -S EscapeSpace.entitlements "$BIN" || echo "WARN: ldid failed, producing UNSIGNED IPA"
-
-          echo "=== embedded entitlements (ldid -e) ==="
-          ldid -e "$BIN" 2>/dev/null | head -20 || true
-
-          # 不论 ldid 是否成功，都把 entitlements 文件随 .app 携带，供侧载工具施加。
+          # 按用户「产物不签名」要求，Xcode 轨道出【未签名 IPA】：不调用 ldid
+          # （brew 版 ldid 在 CI 上对主二进制 assert 崩溃 ldid.cpp(852)，且用户明确产物不需签名）。
+          # 把 entitlements 文件随 .app 携带，供侧载工具（Sideloadly/ESign/TrollStore）施加。
           cp EscapeSpace.entitlements "$APP/EscapeSpace.entitlements" 2>/dev/null || true
+          echo "producing UNSIGNED IPA (entitlements bundled for sideload signing)"
 
           echo "=== lipo -info ==="
           lipo -info "$BIN" 2>/dev/null || true
 
           # 打包未签名 IPA（Payload/ 布局，与 Theos 出包一致）
-          VERSION="$(grep -m1 'MARKETING_VERSION' project.yml | sed -E 's/.*"([0-9.]+)".*/\1/')"
+          # 精确匹配 settings.base 内的 MARKETING_VERSION 行（排除头部注释里的同名词，
+          # 否则 grep -m1 会命中注释行，版本号变成乱码导致 zip 文件名含空格而失败）
+          VERSION="$(grep -m1 '^[[:space:]]*MARKETING_VERSION:' project.yml | sed -E 's/.*"([0-9.]+)".*/\1/')"
           IPA="EscapeSpace-${VERSION}-xcode-unsigned.ipa"
           rm -rf Payload && mkdir Payload
           mv "$APP" Payload/
