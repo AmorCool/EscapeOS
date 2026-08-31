@@ -6,14 +6,18 @@ name: Build Xcode (Plan A dual-track)
 # 不调用 ldid（brew 版 ldid 在 CI 上对主二进制 assert 崩溃 ldid.cpp(852)，且用户明确产物不需签名）。
 # entitlements 文件随 .app 携带，供侧载工具（Sideloadly/ESign/TrollStore）施加。全程不依赖 Apple 证书。
 #
-# 触发：推到 migrate-xcode 分支（验证用），或打 v* tag（出包/发 Release 用），或手动 workflow_dispatch。
-# 默认出包轨道：以后在 migrate-xcode 分支上开发，打 vX.Y.Z tag 即由本工作流构建未签名 IPA 并发布 Release。
+# 触发：只由 v* tag 触发（或手动 workflow_dispatch）。
+# 默认出包轨道：日常在 migrate-xcode 分支开发（不再自动构建，避免重复跑），打 vX.Y.Z tag 后
+# 由本工作流在【一条 action 内】完成「构建 → 出未签名 IPA → 发 Release」。
 # 与 build.yml（Theos 轨道）共享 escapeos-build-cache scope，复用已建好的
 # Rust/Cargo/sccache 缓存。
 
 on:
   push:
-    branches: [migrate-xcode]
+    # 只由 tag 触发：打 vX.Y.Z 即「构建 + 出包 + 发 Release」在同一条 action 内一次完成。
+    # 此前同时监听 migrate-xcode 分支，导致「先推分支、再推 tag」会跑两条内容完全相同的
+    # 构建（各 15~30 分钟），纯粹浪费 CI 且第一条失败后第二条必然同样失败。现去掉分支触发，
+    # 日常提交不再自动构建；如需临时验证用 workflow_dispatch 手动触发。
     tags: ['v*']
   workflow_dispatch:
 

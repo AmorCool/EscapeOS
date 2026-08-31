@@ -81,7 +81,9 @@ func (e *Engine) AddCodeHook(begin, end uint64, callback CodeHook) (*Hook, error
 
 	eng := (*C.uc_engine)(unsafe.Pointer(&handle))
 	var hookHandle uintptr
-	if cerr := C.uc_hook_add(
+	// uc_hook_add is variadic and cgo cannot call variadic C functions, so this
+	// goes through the fixed-arity sap_uc_hook_add wrapper in unicorn.h.
+	if cerr := C.sap_uc_hook_add(
 		eng,
 		(*C.uc_hook)(unsafe.Pointer(&hookHandle)),
 		C.int(hookCode),
