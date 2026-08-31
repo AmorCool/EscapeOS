@@ -201,7 +201,7 @@ public enum Authenticator {
         for (name, value) in anisetteHeaders {
             headers.append((name, value))
         }
-        return try HTTPClient.Request(
+        return HTTPClient.Request(
             url: endpoint.absoluteString,
             method: .POST,
             headers: HTTPHeaders(headers),

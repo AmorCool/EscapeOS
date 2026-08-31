@@ -64,7 +64,7 @@ public enum Searcher {
             limit: limit,
             entityType: entityType
         )
-        return try .init(
+        return .init(
             url: url.absoluteString,
             method: .GET,
             headers: .init([("User-Agent", Configuration.userAgent)]),

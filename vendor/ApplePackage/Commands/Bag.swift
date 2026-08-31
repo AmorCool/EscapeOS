@@ -42,7 +42,7 @@ public enum Bag {
             ("Accept", "application/xml"),
         ]
 
-        let request = try HTTPClient.Request(
+        let request = HTTPClient.Request(
             url: url.absoluteString,
             method: .GET,
             headers: HTTPHeaders(headers),

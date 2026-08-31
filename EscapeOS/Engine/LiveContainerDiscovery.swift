@@ -107,7 +107,8 @@ final class LiveContainerDiscovery {
         // (and thus Reclaim/LiveClean) still works without the tunnel.
         if hosts.isEmpty,
            SandboxEscape.lcContainerExtensionsActive,
-           let home = SandboxEscape.lcHomePath ?? ProcessInfo.processInfo.environment["LC_HOME_PATH"] {
+           let home = SandboxEscape.lcHomePath
+               ?? (getenv("LC_HOME_PATH").map { String(cString: $0) }) {
             hosts = [InstalledApp(bundleIdentifier: "com.kdt.livecontainer.local",
                                   name: "LiveContainer (本机)",
                                   containerPath: home,

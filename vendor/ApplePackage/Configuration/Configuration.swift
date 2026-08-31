@@ -31,7 +31,10 @@ public enum Configuration {
         }
     }
 
-    public nonisolated(unsafe) static var userAgent: String = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
+    // v0.2.158：由 Configurator UA 改为 iTunes Windows UA。审计 Q4 实证：
+    // Configurator UA 在 native/fast 路径被 Apple 边缘以 403/404 拒（v0.2.151 真机）；
+    // v0.2.153 curl 实测 iTunes/12.13.2 (Windows) UA 对同端点返回 200。
+    public nonisolated(unsafe) static var userAgent: String = "iTunes/12.13.2 (Windows; Microsoft Windows 11 Pro) AppleWebKit/620.1.28"
 
     public nonisolated(unsafe) static var tlsConfiguration: TLSConfiguration = {
         precondition(!deviceIdentifier.isEmpty, "deviceIdentifier must be set")

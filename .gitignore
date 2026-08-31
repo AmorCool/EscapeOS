@@ -27,3 +27,7 @@ vendor/SWCompression/utils.py
 
 # CI temp download dir
 _tmp_ci/
+
+# 本地交付物（changelog/IPA/脚本）不入库，避免仓库被 112MB 历史 IPA 撑大（审计 Q7）
+_build/
+*/_build/
