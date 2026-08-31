@@ -111,14 +111,19 @@ jobs:
           cargo --version
           cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml
           mkdir -p EscapeOS/Tunnel rust-libs
-          # .a 静态库必须放到 xcodegen source 树（EscapeOS/）之外：xcodegen 会把 source
-          # 目录下所有文件当资源拷贝进 .app bundle，实测导致 114MB 的 libidevice_ffi.a
-          # 进包、IPA 巨大且不符 Theos 出包形态。它只需通过 LIBRARY_SEARCH_PATHS +
-          # -lidevice_ffi 链接即可（对齐 Theos：只 -L 链接、不当资源）。
+          # 方案 A #317：Rust FFI 以 xcframework 形式分发/链接（对齐 Asspp 做法，
+          # 作为预编译二进制依赖可复用、多平台切换干净）。
+          # 注意：.a / .xcframework 必须落在 xcodegen source 树（EscapeOS/）之外，否则 xcodegen
+          # 会把它们当资源拷贝进 .app bundle（实测 114MB .a 进包）。改走 framework 依赖链接。
           cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" rust-libs/libidevice_ffi.a
-          # .h 桥接头需要，留在 EscapeOS/Tunnel/（.h 不会被 xcodegen 当资源拷贝进 bundle）
+          xcodebuild -create-xcframework \
+            -library rust-libs/libidevice_ffi.a \
+            -headers rust/idevice-ffi/ \
+            -output rust-libs/libidevice_ffi.xcframework
+          rm -f rust-libs/libidevice_ffi.a
+          # 编译期桥接头 idevice.h 仍需（HEADER_SEARCH_PATHS 引用 EscapeOS/Tunnel），保留副本
           cp "rust/idevice-ffi/idevice.h" EscapeOS/Tunnel/idevice.h
-          ls -la rust-libs/libidevice_ffi.a EscapeOS/Tunnel/idevice.h
+          ls -la rust-libs/libidevice_ffi.xcframework EscapeOS/Tunnel/idevice.h
 
       - name: Generate Xcode project (xcodegen)
         run: |

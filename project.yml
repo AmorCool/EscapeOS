@@ -42,14 +42,11 @@ settings:
       - "$(SRCROOT)/EscapeOS"
       - "$(SRCROOT)/EscapeOS/Engine"
       - "$(SRCROOT)/EscapeOS/Tunnel"
-    # 对齐 Theos 的 LDFLAGS：Rust FFI 静态库 + 系统 framework
-    # rust-libs/ 是 CI 构建期由 build-xcode.yml 生成的静态库落点（不在 xcodegen source 树内）
-    LIBRARY_SEARCH_PATHS:
-      - "$(SRCROOT)/rust-libs"
-      - "$(SRCROOT)/EscapeOS/Tunnel"
+    # 对齐 Theos 的 LDFLAGS：系统 framework。
+    # Rust FFI（libidevice_ffi）自 #317 起改以 xcframework 形式分发，由下方 target
+    # dependencies 的 framework 依赖链接（不再走 LIBRARY_SEARCH_PATHS + -lidevice_ffi）。
     OTHER_LDFLAGS:
       - "-lresolv"
-      - "-lidevice_ffi"
       - "-framework Security"
       - "-framework Network"
       - "-framework SystemConfiguration"
@@ -65,6 +62,13 @@ targets:
   EscapeSpace-iOS:
     type: application
     platform: iOS
+    # 方案 A #317：Rust FFI 以 xcframework 形式链接（静态库，无需 embed/runpath）。
+    # xcodegen 通过 framework 依赖类型引用 .xcframework（xcodegen 无独立 xcframework 类型）。
+    # rust-libs/libidevice_ffi.xcframework 由 build-xcode.yml 在 xcodegen generate 之前生成。
+    dependencies:
+      - framework: rust-libs/libidevice_ffi.xcframework
+        embed: false
+        link: true
     sources:
       - path: EscapeOS
       - path: vendor/BitByteData/Sources
