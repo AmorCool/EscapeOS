@@ -89,6 +89,16 @@ public enum Configuration {
     // 曾误作 Configuration 嵌套类型导致全项目 "cannot find type in scope"
     // （v0.4.0 首轮 CI 实锤）。
 
+    /// JIT 未启用（Unicorn TCG 需要 JIT，无 entitlement 进程写可执行内存会崩）。
+    /// Authenticate 捕获后**直接中止登录**并原样抛给 UI——不回退未签名请求
+    ///（Apple 必拒，回退只会用一条误导性的 403 掩盖真正原因）。
+    public struct SAPJITUnavailableError: LocalizedError {
+        public var errorDescription: String? {
+            "JIT 未启用：请先用 StikDebug 为 LiveContainer 开启 JIT，再回来登录"
+        }
+        public init() {}
+    }
+
     /// 宿主注入的签名器工厂（app 启动时设置一次后只读）。
     /// nil / 抛错 → 认证请求退回未签名行为（会被 Apple 403，保留可诊断的错误路径）。
     public nonisolated(unsafe) static var sapSignerFactory: ((SAPConfig) throws -> SAPActionSigning)?

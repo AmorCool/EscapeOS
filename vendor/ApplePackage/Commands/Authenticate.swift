@@ -86,6 +86,12 @@ public enum Authenticator {
                         "SAP 签名器就绪（version=\(bagOutput.sapVersion ?? 200)，硬件标识 \(hwID.count) 字节，与 guid 同源）"
                     )
                 } catch {
+                    // v0.3.4：JIT 闸门错误直接中止登录——未签名请求 Apple 必拒，
+                    // 回退只会用误导性的 403 掩盖「需要开 JIT」这个真正原因。
+                    if error is Configuration.SAPJITUnavailableError {
+                        LoginLogger.shared.log("SAP JIT 未启用 → 登录中止（请先开 JIT 再试）")
+                        throw error
+                    }
                     sapSigner = nil
                     LoginLogger.shared.log("SAP 签名器初始化失败，退回未签名请求：\(error.localizedDescription)")
                 }

@@ -47,10 +47,8 @@ final class AppStoreDownloadStore {
             let jitOK = SAPJITProbe.jitAvailable()
             SapStatusModel.shared.setJIT(jitOK ? .available : .unavailable)
             guard jitOK else {
-                LoginLogger.shared.log("SAP JIT 探测：未启用 → 跳过 SAP 签名（避免闪退）")
-                throw SapSigner.SapError.initializationFailed(
-                    "JIT 未启用：请先用 StikDebug 为 LiveContainer 开启 JIT，再回来登录"
-                )
+                LoginLogger.shared.log("SAP JIT 探测：未启用 → 中止登录（避免闪退），引导 StikDebug")
+                throw Configuration.SAPJITUnavailableError()
             }
             LoginLogger.shared.log("SAP JIT 探测：已启用（宿主可 JIT）")
             LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
