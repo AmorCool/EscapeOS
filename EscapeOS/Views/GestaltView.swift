@@ -14,6 +14,7 @@ struct GestaltView: View {
     @State private var logPresented = false
     @State private var shareTarget: ShareTarget?
     @State private var backupError: String?
+    @State private var showRespring = false
 
     var body: some View {
         NavigationStack {
@@ -93,6 +94,19 @@ struct GestaltView: View {
                         message: Text(info.body),
                         dismissButton: .cancel()
                     )
+                }
+            }
+            .onChange(of: model.shouldRespring) { _, newValue in
+                if newValue {
+                    showRespring = true
+                    model.shouldRespring = false
+                }
+            }
+            .overlay {
+                if showRespring {
+                    RespringView()
+                        .brightness(-1.0)
+                        .ignoresSafeArea()
                 }
             }
             .sheet(isPresented: $logPresented) {

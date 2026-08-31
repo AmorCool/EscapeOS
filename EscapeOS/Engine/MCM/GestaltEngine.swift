@@ -86,6 +86,7 @@ final class BQMobileGestaltModel {
     var lastError: String?
     var log: [String] = []
     var alertInfo: MGAlertInfo?
+    var shouldRespring = false
     var extensionHandle: Int64 = 0
     var isApplying = false
     var isDirty = false
@@ -466,13 +467,13 @@ final class BQMobileGestaltModel {
             let data = try PropertyListSerialization.data(fromPropertyList: mgDict, format: lastReadFormat, options: 0)
             try write(data)
 
-            statusMessage = "Tweaks applied — reboot to take effect"
+            statusMessage = "Tweaks applied — respring to take effect"
             appendLog("applied gestalt tweaks (\(data.count) bytes)")
             isDirty = false
             alertInfo = MGAlertInfo(
                 title: "Successfully applied Gestalt tweaks!",
-                body: "Reboot your device for changes to take effect.",
-                actionLabel: "Reboot",
+                body: "Respring your device for changes to take effect.",
+                actionLabel: "Respring",
                 action: { self.respring() }
             )
         } catch {
@@ -488,9 +489,14 @@ final class BQMobileGestaltModel {
         do {
             let backupData = try Data(contentsOf: backupURL)
             try write(backupData)
-            statusMessage = "Reverted — reboot to take effect"
+            statusMessage = "Reverted — respring to take effect"
             appendLog("reverted gestalt from backup")
-            alertInfo = MGAlertInfo(title: "Successfully reverted Gestalt tweaks!", body: "Reboot your device for changes to take effect.")
+            alertInfo = MGAlertInfo(
+                title: "Successfully reverted Gestalt tweaks!",
+                body: "Respring your device for changes to take effect.",
+                actionLabel: "Respring",
+                action: { self.respring() }
+            )
             // Reload current values
             load()
         } catch {
@@ -711,13 +717,10 @@ final class BQMobileGestaltModel {
 
     // MARK: - Respring
 
+    /// 触发「网页崩溃 respring」：由 GestaltView 监听 shouldRespring 后展示 RespringView
+    /// （WKWebView 高内存压力挤崩 SpringBoard，视觉先黑屏再重启桌面）。
+    /// 取代原先错误的 `shortcuts://run-shortcut?name=reboot`（该快捷指令不存在，点了无反应）。
     func respring() {
-        guard let url = URL(string: "shortcuts://run-shortcut?name=reboot"), UIApplication.shared.canOpenURL(url) else {
-                print("Can't Open URL: \("shortcuts://run-shortcut?name=reboot")")
-                return
-            }
-            UIApplication.shared.open(url, options: [:]) { success in
-                if !success { print("No shortcut") }
-            }
+        shouldRespring = true
     }
 }
