@@ -63,16 +63,15 @@ targets:
     sources:
       - path: EscapeOS
       - path: vendor/BitByteData/Sources
-        # 排除 vendor 的 PrivacyInfo.xcprivacy：两份占位清单内容完全相同，
-        # 且都位于 Sources 根目录，xcodegen 会把二者都复制进 app bundle 导致
-        # “Multiple commands produce .../PrivacyInfo.xcprivacy” 冲突。
-        # Theos 构建本就不会把 Sources 内的 .xcprivacy 自动打包成资源，
-        # 排除后行为与 Theos 一致（sideload 也不需要隐私清单）。
-        excluding:
-          - "**/PrivacyInfo.xcprivacy"
+        # 仅编入 swift 源文件：两 vendor 目录除 .swift 外只有占位 PrivacyInfo.xcprivacy，
+        # 用 including 白名单只收 swift，天然排除 .xcprivacy（避免 bundle 资源撞名冲突）。
+        # 注：此前用 excluding: ["**/PrivacyInfo.xcprivacy"] 实测被 xcodegen 忽略（glob 不生效），
+        # 改用 including 白名单更稳。Theos 本也不把 Sources 内 .xcprivacy 自动打包。
+        including:
+          - "**/*.swift"
       - path: vendor/SWCompression/Sources
-        excluding:
-          - "**/PrivacyInfo.xcprivacy"
+        including:
+          - "**/*.swift"
     settings:
       base:
         # 直接复用仓库已有的 Info.plist 与 entitlements（与 Theos 行为一致），
