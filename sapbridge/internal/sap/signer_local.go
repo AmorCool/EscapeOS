@@ -33,13 +33,13 @@ func NewSigner(ctx context.Context, config Config) (ActionSigner, error) {
 		return nil, err
 	}
 
-	SetProgress(ProgressPhaseDownloading, 0, 0)
-	bundle, err := assets.Load(ctx, config.CacheDir)
+	SetProgress(assets.PhaseDownloading, 0, 0)
+	bundle, err := assets.Load(ctx, config.CacheDir, SetProgress)
 	if err != nil {
 		return nil, fmt.Errorf("load Apple SAP assets: %w", err)
 	}
 
-	SetProgress(ProgressPhaseBooting, 0, 0)
+	SetProgress(assets.PhaseBooting, 0, 0)
 	guest, err := machine.Open(ctx, bundle)
 	if err != nil {
 		return nil, fmt.Errorf("start Apple SAP runtime: %w", err)
@@ -62,7 +62,7 @@ func NewSigner(ctx context.Context, config Config) (ActionSigner, error) {
 		return nil, fmt.Errorf("initialize Apple SAP session: %w", err)
 	}
 
-	SetProgress(ProgressPhaseHandshaking, 0, 0)
+	SetProgress(assets.PhaseHandshaking, 0, 0)
 	protocol := setupProtocol{client: &http.Client{Timeout: 30 * time.Second}}
 
 	certificate, err := protocol.certificate(ctx, config.CertificateURL)
@@ -97,7 +97,7 @@ func NewSigner(ctx context.Context, config Config) (ActionSigner, error) {
 		return nil, fmt.Errorf("SAP setup completed in unexpected state %d", state)
 	}
 
-	SetProgress(ProgressPhaseReady, 0, 0)
+	SetProgress(assets.PhaseReady, 0, 0)
 	complete = true
 
 	return signer, nil

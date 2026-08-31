@@ -36,6 +36,18 @@ type Bundle struct {
 	CoreFPICXS   []byte
 }
 
+// Asset-preparation phases reported via the progress callback (v0.3.3).
+// Defined here, NOT in package sap: package sap imports this package for
+// assets.Load — the reverse import would be a cycle. Package sap re-exports
+// these as its own ProgressPhase* aliases.
+const (
+	PhaseIdle        = 0
+	PhaseDownloading = 1
+	PhaseBooting     = 2
+	PhaseHandshaking = 3
+	PhaseReady       = 4
+)
+
 type fileSpec struct {
 	name   string
 	path   string
@@ -70,7 +82,7 @@ var requiredFiles = []fileSpec{
 	},
 }
 
-func Load(ctx context.Context, overrideDirectory string) (Bundle, error) {
+func Load(ctx context.Context, overrideDirectory string, progress func(phase, done, total uint64)) (Bundle, error) {
 	directory, err := cacheDirectory(overrideDirectory)
 	if err != nil {
 		return Bundle{}, err
@@ -80,7 +92,7 @@ func Load(ctx context.Context, overrideDirectory string) (Bundle, error) {
 		return bundle, nil
 	}
 
-	bundle, err := download(ctx)
+	bundle, err := download(ctx, progress)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -92,7 +104,7 @@ func Load(ctx context.Context, overrideDirectory string) (Bundle, error) {
 	return bundle, nil
 }
 
-func download(ctx context.Context) (Bundle, error) {
+func download(ctx context.Context, progress func(phase, done, total uint64)) (Bundle, error) {
 	parsed, err := url.Parse(updateURL)
 	if err != nil {
 		return Bundle{}, fmt.Errorf("parse Apple software update URL: %w", err)
@@ -149,8 +161,8 @@ func download(ctx context.Context) (Bundle, error) {
 	for _, spec := range requiredFiles {
 		wantTotal += uint64(spec.size)
 	}
-	SetProgress(ProgressPhaseDownloading, 0, wantTotal)
-	progressed := &progressCountingReader{r: archive, total: wantTotal}
+	reportProgress(progress, PhaseDownloading, 0, wantTotal)
+	progressed := &progressCountingReader{r: archive, total: wantTotal, report: progress}
 	if _, err := io.CopyN(io.Discard, archive, payloadCPIO); err != nil {
 		return Bundle{}, fmt.Errorf("seek Apple payload archive: %w", err)
 	}
@@ -400,9 +412,10 @@ func (t contextTransport) RoundTrip(request *http.Request) (*http.Response, erro
 // progressCountingReader 统计解压流的已消费字节并回报下载进度。
 // 刻意用独立锁（progress.go 的 SetProgress 内部锁），与 bridgeMu 无关。
 type progressCountingReader struct {
-	r     io.Reader
-	done  uint64
-	total uint64
+	r      io.Reader
+	done   uint64
+	total  uint64
+	report func(phase, done, total uint64)
 }
 
 func (p *progressCountingReader) Read(b []byte) (int, error) {
@@ -413,7 +426,14 @@ func (p *progressCountingReader) Read(b []byte) (int, error) {
 		if done > p.total {
 			done = p.total
 		}
-		SetProgress(ProgressPhaseDownloading, done, p.total)
+		reportProgress(p.report, PhaseDownloading, done, p.total)
 	}
 	return n, err
+}
+
+// reportProgress nil-safe 转发（回调可缺省，缺省即无进度上报）。
+func reportProgress(report func(phase, done, total uint64), phase, done, total uint64) {
+	if report != nil {
+		report(phase, done, total)
+	}
 }

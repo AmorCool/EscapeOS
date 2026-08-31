@@ -3,6 +3,8 @@ package sap
 import (
 	"fmt"
 	"sync"
+
+	"github.com/majd/ipatool/v2/internal/sap/assets"
 )
 
 // SAP 资产准备流水线的阶段常量。宿主 App 在 SapInit 阻塞自己线程的同时，
@@ -10,11 +12,11 @@ import (
 //   - 登录日志实时输出（下载进度 / 模拟器启动 / 握手）
 //   - 「App Store 下载」页状态条（JIT 模式 + 资产包进度）
 const (
-	ProgressPhaseIdle        = 0 // 未开始
-	ProgressPhaseDownloading = 1 // 下载 Apple 资产包（done/total 为解压字节）
-	ProgressPhaseBooting     = 2 // 启动 Unicorn 模拟器
-	ProgressPhaseHandshaking = 3 // SAP setup 握手（cert + exchange）
-	ProgressPhaseReady       = 4 // 就绪
+	ProgressPhaseIdle        = assets.PhaseIdle        // 未开始
+	ProgressPhaseDownloading = assets.PhaseDownloading // 下载 Apple 资产包（done/total 为解压字节）
+	ProgressPhaseBooting     = assets.PhaseBooting     // 启动 Unicorn 模拟器
+	ProgressPhaseHandshaking = assets.PhaseHandshaking // SAP setup 握手（cert + exchange）
+	ProgressPhaseReady       = assets.PhaseReady       // 就绪
 )
 
 var (
