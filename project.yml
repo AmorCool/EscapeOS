@@ -66,11 +66,13 @@ targets:
       - path: vendor/SWCompression/Sources
     info:
       path: Resources/Info.plist
-    entitlements: EscapeSpace.entitlements
+    # xcodegen 要求 entitlements 为字典（它会据此生成 .entitlements 文件），
+    # 不接受字符串路径。内容与原 EscapeSpace.entitlements 保持一致（get-task-allow）。
+    entitlements:
+      get-task-allow: true
     settings:
       base:
         INFOPLIST_FILE: Resources/Info.plist
-        CODE_SIGN_ENTITLEMENTS: EscapeSpace.entitlements
         # 应用图标当前是 Resources/ 下散装 PNG（无 .xcassets）。
         # Xcode 会告警但 build（非 archive）不会失败；Week 4 切主干前补齐 Assets.xcassets。
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
