@@ -31,7 +31,7 @@ enum SAPJITProbe {
     /// 返回 nil 表示 csops 调用失败（无法判定）。
     static func csDebuggedFlag() -> Bool? {
         var flags: UInt32 = 0
-        let result = csops(getpid(), CS_OPS_STATUS, &flags, UInt32(MemoryLayout<UInt32>.size))
+        let result = csops(getpid(), CS_OPS_STATUS, &flags, MemoryLayout<UInt32>.size)
         guard result == 0 else { return nil }
         return (flags & CS_DEBUGGED) != 0
     }
