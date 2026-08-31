@@ -32,7 +32,7 @@ final class AppStoreDownloadStore {
         Configuration.deviceIdentifier = generated
     }
 
-    /// v0.4.0：注入 SAP 签名器工厂（ApplePackage 只认 `SAPActionSigning` 抽象，
+    /// v0.3.1：注入 SAP 签名器工厂（ApplePackage 只认 `SAPActionSigning` 抽象，
     /// 实现是本 app 的 `SapSigner`——Unicorn 解释执行 Apple 私有 CommerceKit 算
     /// `X-Apple-ActionSignature`，见 sapbridge/ 与 Services/AppleAuth/SapSigner.swift）。
     /// Apple 2026 年起认证请求缺此头 → 账号校验前直接 403（无论账号真假）。
@@ -114,6 +114,6 @@ final class AppStoreDownloadStore {
     }
 }
 
-// v0.4.0：SapSigner 适配 ApplePackage 的 SAPActionSigning 抽象。
+// v0.3.1：SapSigner 适配 ApplePackage 的 SAPActionSigning 抽象。
 // sign(requestBody:) / close() 签名与 SapSigner 既有方法完全一致，直接空扩展即可。
 extension SapSigner: SAPActionSigning {}

@@ -7,7 +7,7 @@
 
 import Foundation
 
-// ─── SAP（Store Activation Protocol）签名注入点（v0.4.0）────────────────────────
+// ─── SAP（Store Activation Protocol）签名注入点（v0.3.1）────────────────────────
 //
 // Apple 2026 年起要求 App Store 认证请求携带 `X-Apple-ActionSignature` 头
 // （ipatool PR #525 实证：无此头 → 账号校验前直接 403，无论账号真假）。
@@ -76,7 +76,7 @@ public enum Configuration {
     // 仍是上面的 iTunes UA。
     public nonisolated(unsafe) static var bagUserAgent: String = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
 
-    // ─── SAP（Store Activation Protocol）签名注入点（v0.4.0）────────────────────────
+    // ─── SAP（Store Activation Protocol）签名注入点（v0.3.1）────────────────────────
     //
     // Apple 2026 年起要求 App Store 认证请求携带 `X-Apple-ActionSignature` 头
     // （ipatool PR #525 实证：无此头 → 账号校验前直接 403，无论账号真假）。
@@ -87,7 +87,7 @@ public enum Configuration {
     //
     // 注意：SAPConfig / SAPActionSigning 是**文件顶层类型**（在枚举外声明）——
     // 曾误作 Configuration 嵌套类型导致全项目 "cannot find type in scope"
-    // （v0.4.0 首轮 CI 实锤）。
+    // （v0.3.1 首轮 CI 实锤）。
 
     /// JIT 未启用（Unicorn TCG 需要 JIT，无 entitlement 进程写可执行内存会崩）。
     /// Authenticate 捕获后**直接中止登录**并原样抛给 UI——不回退未签名请求

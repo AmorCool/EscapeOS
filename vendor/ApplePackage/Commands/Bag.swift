@@ -14,7 +14,7 @@ import Foundation
 public enum Bag {
     public struct BagOutput {
         public var authEndpoint: URL
-        // v0.4.0：SAP 签名端点（bag.xml 的 sign-sap-* 键，ipatool PR #525 同款）。
+        // v0.3.1：SAP 签名端点（bag.xml 的 sign-sap-* 键，ipatool PR #525 同款）。
         // bag 解析失败 / 老缓存 / 兜底端点场景下为 nil → 认证请求退回未签名行为。
         public var sapSetupURL: URL?
         public var sapCertificateURL: URL?
@@ -32,7 +32,7 @@ public enum Bag {
     // v0.2.159（审计 Q9）：单会话内 auth 端点基本不变，缓存上一次成功解析的端点，
     // 避免每次 `Authenticator.authenticate` 都重新拉 bag.xml（既省耗时也减少 Apple 边缘请求次数）。
     // 以 deviceIdentifier 为键：Anisette 重置导致标识变化时会自动失效并重拉。
-    // v0.4.0：缓存升级为完整 BagOutput（连同 sign-sap-* 三元组一起缓存）。
+    // v0.3.1：缓存升级为完整 BagOutput（连同 sign-sap-* 三元组一起缓存）。
     private static var cachedOutput: BagOutput?
     private static var cachedDeviceIdentifier: String = ""
 
@@ -66,7 +66,7 @@ public enum Bag {
             // iTunes UA 拿到的 103KB 响应里连 authenticateAccount / sign-sap-* 都没有，
             // 无 UA 同样拿不到；只有 Configurator UA（upstream pkg/http AddHeaderTransport
             // 注入的 DefaultUserAgent）才返回完整 urlBag（authenticateAccount + sign-sap-*）。
-            // 这是 v0.4.0 真机登录 404×2 + 301 的根因：bag 缺键 → 走 default 端点 + 无签名。
+            // 这是 v0.3.1 真机登录 404×2 + 301 的根因：bag 缺键 → 走 default 端点 + 无签名。
             ("User-Agent", Configuration.bagUserAgent),
             ("Accept", "application/xml"),
         ]
@@ -107,7 +107,7 @@ public enum Bag {
         let authURLString = (plist["authenticateAccount"] as? String)
             ?? (urlBag["authenticateAccount"] as? String)
 
-        // v0.4.0：SAP 签名端点三元组（root 优先，urlBag 兜底；与 ipatool
+        // v0.3.1：SAP 签名端点三元组（root 优先，urlBag 兜底；与 ipatool
         // appstore_bag.go 的 urlBag plist 键一一对应）。缺失 → sapOutput 为 nil，
         // 认证请求退回未签名行为（Apple 现行策略下会 403，但保留旧行为不崩溃）。
         let sapSetupString = (plist["sign-sap-setup"] as? String)
