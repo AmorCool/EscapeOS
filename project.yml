@@ -71,6 +71,14 @@ targets:
         link: true
     sources:
       - path: EscapeOS
+      - path: Resources
+        # 把 Resources/ 内资源（AppIcon PNG、Supervised 的 .mobileconfig、solarium.jpg 等）
+        # 打进 .app bundle。此前漏把 Resources/ 纳入 xcodegen source 树，导致切到 Xcode 后
+        # 应用图标与这些资源全部缺失（Theos 会自动打包 Resources/）。
+        # 排除 Info.plist：它已作为 INFOPLIST_FILE 被 xcodegen 处理；若再当资源拷贝进 bundle，
+        # 会与生成的 Info.plist 冲突（Multiple commands produce Info.plist）。
+        excludes:
+          - "Info.plist"
       - path: vendor/BitByteData/Sources
         # 排除 vendor 占位 PrivacyInfo.xcprivacy：两份内容完全相同且都在 Sources 根目录，
         # xcodegen 会把二者都复制进 app bundle 导致 "Multiple commands produce .../PrivacyInfo.xcprivacy"。
@@ -89,6 +97,3 @@ targets:
         # 这里改为用 build setting 直接引用现有文件，绕过该限制。
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: EscapeSpace.entitlements
-        # 应用图标当前是 Resources/ 下散装 PNG（无 .xcassets）。
-        # Xcode 会告警但 build（非 archive）不会失败；Week 4 切主干前补齐 Assets.xcassets。
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

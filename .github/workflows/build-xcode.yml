@@ -6,17 +6,19 @@ name: Build Xcode (Plan A dual-track)
 # 不调用 ldid（brew 版 ldid 在 CI 上对主二进制 assert 崩溃 ldid.cpp(852)，且用户明确产物不需签名）。
 # entitlements 文件随 .app 携带，供侧载工具（Sideloadly/ESign/TrollStore）施加。全程不依赖 Apple 证书。
 #
-# 触发：推到 migrate-xcode 分支，或手动 workflow_dispatch。
+# 触发：推到 migrate-xcode 分支（验证用），或打 v* tag（出包/发 Release 用），或手动 workflow_dispatch。
+# 默认出包轨道：以后在 migrate-xcode 分支上开发，打 vX.Y.Z tag 即由本工作流构建未签名 IPA 并发布 Release。
 # 与 build.yml（Theos 轨道）共享 escapeos-build-cache scope，复用已建好的
 # Rust/Cargo/sccache 缓存。
 
 on:
   push:
     branches: [migrate-xcode]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   xcode-build:
@@ -109,6 +111,10 @@ jobs:
           CFG
           cd ../..
           cargo --version
+          # 钉死 Rust FFI 的部署目标为 18.0，与 app 的 IPHONEOS_DEPLOYMENT_TARGET 对齐。
+          # 否则 .a 默认按 SDK 版本(26.5)编，链接到 18.0 时会刷 ~191 条
+          # "built for newer 'iOS' version (26.5) than being linked (18.0)" 的 linker 警告。
+          export IPHONEOS_DEPLOYMENT_TARGET=18.0
           cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml
           mkdir -p EscapeOS/Tunnel rust-libs
           # 方案 A #317：Rust FFI 以 xcframework 形式分发/链接（对齐 Asspp 做法，
@@ -232,3 +238,25 @@ jobs:
         with:
           name: escapeos-xcode-ipa
           path: EscapeSpace-*.ipa
+
+      - name: Publish Release (on tag)
+        # 仅在打 v* tag 时发布 Release 并上传未签名 IPA 作为 asset。
+        # migrate-xcode 现为本项目默认出包分支：开发在 migrate-xcode，打 tag 即出包。
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${IPA:-}" ] || [ ! -f "${IPA:-}" ]; then
+            echo "IPA 未产出，跳过 Release 发布"; exit 0
+          fi
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，仅追加/覆盖 asset"
+            gh release upload "$TAG" "$IPA" --clobber
+          else
+            gh release create "$TAG" \
+              --title "EscapeSpace $TAG (Xcode native)" \
+              --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.ipaside.escapeos。" \
+              "$IPA"
+          fi

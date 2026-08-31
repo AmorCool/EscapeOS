@@ -148,14 +148,14 @@ struct MCMIntegration {
     static func enumerate(_ containerClass: MCMContainerClass, limit: Int = 4096) -> [String] {
         guard Self.isMobileHouseArrest, Self.bridgeAvailable else { return [] }
         return BQMCMEnumerateIdentifiersForClass(containerClass.rawValue,
-                                                 numericCast(limit), nil) as? [String] ?? []
+                                                 numericCast(limit), nil) ?? []
     }
 
     /// iOS 26 app-discovery fallback: parse com.apple.lsd's csstore for
     /// candidate bundle IDs.
     static func launchServicesStoreIdentifiers() -> [String] {
         guard Self.isMobileHouseArrest else { return [] }
-        return BQMCMLaunchServicesStoreIdentifiers() as? [String] ?? []
+        return BQMCMLaunchServicesStoreIdentifiers() ?? []
     }
 
     /// Release every cached lease.
