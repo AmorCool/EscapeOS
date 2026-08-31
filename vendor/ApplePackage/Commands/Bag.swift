@@ -21,9 +21,13 @@ public enum Bag {
         public var sapVersion: UInt32?
     }
 
-    /// 兜底端点 —— Bag.fetchBag() 任何一步失败都回落到这里。
-    /// 路径**带尾斜杠**（无尾斜杠的变体被 Apple 边缘 301 到 HTML 页）。
-    private static let defaultAuthEndpoint = "https://auth.itunes.apple.com/auth/v1/native/fast/"
+    /// 兜底端点 —— Bag.fetchBag() 网络失败 / 解析失败时最后回落。
+    /// v0.3.1：由 native/fast 改为 legacy wa/authenticate —— upstream ipatool
+    /// PR #525 的 validateAuthenticationEndpoint 只认这个端点（SAP 签名为它设计）；
+    /// native/fast 已被 2026-08-31 真机证实是死路（无 SAP 认证 404×2 + 301 裸重定向）。
+    /// 注意：走到兜底时 bag 的 sign-sap-* 也不可用 → 请求会未签名发出（必被拒），
+    /// 仅保证行为可预期、日志可诊断，不再伪装成「能用的路径」。
+    private static let defaultAuthEndpoint = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
 
     // v0.2.159（审计 Q9）：单会话内 auth 端点基本不变，缓存上一次成功解析的端点，
     // 避免每次 `Authenticator.authenticate` 都重新拉 bag.xml（既省耗时也减少 Apple 边缘请求次数）。
@@ -57,7 +61,12 @@ public enum Bag {
         }
 
         let headers: [(String, String)] = [
-            ("User-Agent", Configuration.userAgent),
+            // v0.4.1（真机实锤 + 实测对照）：bag.xml **只对 Configurator UA 返回完整键**——
+            // iTunes UA 拿到的 103KB 响应里连 authenticateAccount / sign-sap-* 都没有，
+            // 无 UA 同样拿不到；只有 Configurator UA（upstream pkg/http AddHeaderTransport
+            // 注入的 DefaultUserAgent）才返回完整 urlBag（authenticateAccount + sign-sap-*）。
+            // 这是 v0.4.0 真机登录 404×2 + 301 的根因：bag 缺键 → 走 default 端点 + 无签名。
+            ("User-Agent", Configuration.bagUserAgent),
             ("Accept", "application/xml"),
         ]
 
@@ -133,33 +142,31 @@ public enum Bag {
         return output
     }
 
-    /// Apple bag 给的 native auth 端点常缺 `/fast/` 子路径且无尾斜杠。
-    /// 没有 `/fast/` 的变体被 Apple 边缘 301 到 HTML 页（v0.2.151 真机 404 实锤）。
-    /// 这里强制规范成 `auth.itunes.apple.com/.../fast/` 格式。
-    ///
-    /// v0.2.156 新增 legacy 回退：2026-08-31 真机 + curl 实证（5 组 guid/UA 对照），
-    /// Configurator UA 下 bag.xml 的 `authenticateAccount` 返回 legacy
-    /// `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate` ——
-    /// 该端点 2026 年起要求 SAP 签名（`X-Apple-ActionSignature`，ipatool 实证），
-    /// shim 环境无法签名，跟随其 302 到 pod 后必挂「failed to retrieve
-    /// redirect location」（v0.2.155 真机实锤）。凡 legacy 端点一律回退
-    /// `defaultAuthEndpoint`（native/fast/，与 AssppWeb `defaultAuthURL` 兜底思路一致）。
-    /// 兜底端点解析：优先复用会话内已成功解析的端点（审计 Q9 缓存）；
-    /// 没有缓存时才回落到硬编码的 native/fast/ 默认端点。
+    /// 兜底端点解析（bag 网络/解析失败时调用）：优先复用会话内已成功解析的输出
+    /// （审计 Q9 缓存，含 sign-sap-* 三元组）；没有缓存才回落硬编码 defaultAuthEndpoint。
     private static func fallbackEndpoint() -> BagOutput {
         if cachedDeviceIdentifier == Configuration.deviceIdentifier,
            let cached = cachedOutput {
             print("[EscapeOS][Bag] 网络/解析失败，复用会话缓存 auth endpoint")
             return cached
         }
+        print("[EscapeOS][Bag] 无会话缓存，回落 defaultAuthEndpoint（legacy wa/authenticate，无 SAP 键）")
         return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
     }
 
-    private static func normalizedAuthEndpoint(from urlString: String) -> URL? {        guard var comps = URLComponents(string: urlString) else { return nil }
-        if comps.host == "buy.itunes.apple.com",
-           comps.path.hasSuffix("/wa/authenticate") {
-            print("[EscapeOS][Bag] bag.xml 给出 legacy wa/authenticate 端点（需 SAP 签名，无法使用），回退 default native/fast/")
-            return URL(string: defaultAuthEndpoint)
+    /// v0.3.1（真机实锤 + upstream 对照）撤销 v0.2.156 的 legacy 强制回退：
+    /// 当时前提是「legacy wa/authenticate 需要 SAP 签名而 shim 无法签名」——
+    /// v0.3.0 SAP 桥落地后前提已反转：**SAP 签名正是为 legacy 端点准备的**
+    /// （upstream ipatool PR #525 的 validateAuthenticationEndpoint 只认
+    /// `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate`）。
+    /// native/fast 反而被 2026-08-31 真机证实是死路：无 SAP 认证 404×2 + 301 裸重定向。
+    /// 现在信任 bag 给的端点，仅做 https 基本校验；
+    /// auth.itunes.apple.com 域名保留 /fast 规范化（Apple 给的 native 端点常缺该子路径，
+    /// v0.2.151 真机 404 实锤）。
+    private static func normalizedAuthEndpoint(from urlString: String) -> URL? {
+        guard var comps = URLComponents(string: urlString) else { return nil }
+        if comps.scheme?.lowercased() != "https" {
+            return nil
         }
         if comps.host == "auth.itunes.apple.com" {
             var path = comps.path

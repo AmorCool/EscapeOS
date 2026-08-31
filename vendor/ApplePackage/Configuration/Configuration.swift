@@ -70,6 +70,12 @@ public enum Configuration {
     // v0.2.153 curl 实测 iTunes/12.13.2 (Windows) UA 对同端点返回 200。
     public nonisolated(unsafe) static var userAgent: String = "iTunes/12.13.2 (Windows; Microsoft Windows 11 Pro) AppleWebKit/620.1.28"
 
+    // v0.4.1：bag.xml 专用 UA（= upstream ipatool pkg/http DefaultUserAgent）。
+    // 实测 2026-08-31：bag.xml 只对 Configurator UA 返回 authenticateAccount 与
+    // sign-sap-* 完整键（iTunes UA / 无 UA 均缺失）——认证请求的 UA 不受影响，
+    // 仍是上面的 iTunes UA。
+    public nonisolated(unsafe) static var bagUserAgent: String = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
+
     // ─── SAP（Store Activation Protocol）签名注入点（v0.4.0）────────────────────────
     //
     // Apple 2026 年起要求 App Store 认证请求携带 `X-Apple-ActionSignature` 头
