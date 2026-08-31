@@ -54,41 +54,50 @@ final class RemoteSapSigner: SAPActionSigning {
     }
 
     /// 对请求体字节签名，返回 base64（作为 X-Apple-ActionSignature 头）。
-    /// 协议要求同步——authenticate 在后台 Task 中调用，这里用信号量桥接。
+    /// 协议要求同步——authenticate 在后台线程调用，经典 dataTask + 信号量桥接
+    ///（v0.3.11 首版用 Task.detached + async 桥接触发编译错，改纯同步更稳）。
     func sign(requestBody: Data) throws -> String {
-        var result: Result<String, Error>?
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/sign"))
+        req.httpMethod = "POST"
+        req.httpBody = requestBody
+        req.timeoutInterval = 60
+        if let token { req.setValue(token, forHTTPHeaderField: "X-Sap-Token") }
+
+        var outcome: Result<Data, Error>?
         let semaphore = DispatchSemaphore(value: 0)
-        let baseURL = self.baseURL
-        let token = self.token
-        let session = self.session
-        Task.detached(priority: .userInitiated) {
-            do {
-                let data = try await Self.request(
-                    "POST", url: baseURL.appendingPathComponent("v1/sign"),
-                    body: requestBody, token: token, session: session
-                )
-                let payload = try JSONDecoder().decode([String: String].self, from: data)
-                guard let signature = payload["signature"] else {
-                    throw SAPRemoteSignerError(message: "服务器响应缺少 signature 字段")
-                }
-                result = .success(signature)
-            } catch {
-                result = .failure(error)
+        let task = session.dataTask(with: req) { data, response, error in
+            defer { semaphore.signal() }
+            if let error {
+                outcome = .failure(error)
+                return
             }
-            semaphore.signal()
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            guard (200..<300).contains(code), let data else {
+                let message = (try? JSONDecoder().decode([String: String].self, from: data ?? Data()))?["error"]
+                    ?? String(data: data?.prefix(200) ?? Data(), encoding: .utf8)
+                    ?? "HTTP \(code)"
+                outcome = .failure(SAPRemoteSignerError(message: message))
+                return
+            }
+            outcome = .success(data)
         }
+        task.resume()
         semaphore.wait()
-        return try result.get()
+
+        let data = try outcome.get()
+        let payload = try JSONDecoder().decode([String: String].self, from: data)
+        guard let signature = payload["signature"] else {
+            throw SAPRemoteSignerError(message: "服务器响应缺少 signature 字段")
+        }
+        return signature
     }
 
     func close() {
-        let baseURL = self.baseURL
-        let token = self.token
-        let session = self.session
-        Task.detached(priority: .utility) {
-            _ = try? Self.request("POST", url: baseURL.appendingPathComponent("v1/close"),
-                                  body: Data(), token: token, session: session)
-        }
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/close"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        if let token { req.setValue(token, forHTTPHeaderField: "X-Sap-Token") }
+        session.dataTask(with: req).resume()
     }
 
     // MARK: - HTTP
