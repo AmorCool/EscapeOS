@@ -22,6 +22,10 @@
 // IPA 侧载：Apple ID 登录 + 签名（isideload sign-only 路径）
 #include "../Tunnel/sideload_auth.h"
 
+// SAP 签名桥（纯软件 Unicorn 模拟 Apple CommerceKit，PR #525 移植）。
+// libsap.a / sap.h 由 sapbridge/build-sap.sh 在编译前生成，位于 sapbridge/build/。
+#include "sap.h"
+
 // 监督模式工具：通过私有 API 取已安装 App 图标（移植自 Lithium）
 @interface UIImage (EscapeOSSupervised)
 + (instancetype)_applicationIconImageForBundleIdentifier:(NSString *)bundleIdentifier

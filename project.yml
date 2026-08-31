@@ -42,6 +42,8 @@ settings:
       - "$(SRCROOT)/EscapeOS"
       - "$(SRCROOT)/EscapeOS/Engine"
       - "$(SRCROOT)/EscapeOS/Tunnel"
+      # SAP 签名桥（PR #525 纯软件 Unicorn 移植）：sap.h 由 build-sap.sh 在编译前生成于此
+      - "$(SRCROOT)/sapbridge/build"
     # 对齐 Theos 的 LDFLAGS：系统 framework。
     # Rust FFI（libidevice_ffi）自 #317 起改以 xcframework 形式分发，由下方 target
     # dependencies 的 framework 依赖链接（不再走 LIBRARY_SEARCH_PATHS + -lidevice_ffi）。
@@ -56,6 +58,11 @@ settings:
       - "-framework AVFoundation"
       - "-framework CoreLocation"
       - "-framework CryptoKit"
+      # SAP 签名桥（PR #525 纯软件 Unicorn 移植）：链接 Go 产出的 c-archive 与静态 Unicorn 引擎。
+      # 二者由 sapbridge/build-sap.sh 在编译前生成于 sapbridge/build/。
+      - "-L$(SRCROOT)/sapbridge/build"
+      - "-lsap"
+      - "-lunicorn"
     SWIFT_OBJC_BRIDGING_HEADER: "EscapeOS/Engine/EscapeOS-Bridging-Header.h"
 
 targets:
@@ -69,6 +76,17 @@ targets:
       - framework: rust-libs/libidevice_ffi.xcframework
         embed: false
         link: true
+    # SAP 签名桥（PR #525 纯软件 Unicorn 移植）：在任何编译/链接之前先构建
+    # libunicorn.a + libsap.a + sap.h。脚本克隆并交叉编译 Unicorn 2.1.x（ios-arm64），
+    # 再用 cgo 产出 c-archive。需要网络（拉取 Unicorn 源码与 Go 模块）与 Xcode 工具链
+    # （clang / cmake / ninja / go），由 build-xcode.yml 的侧车步骤保证。
+    preBuildScripts:
+      - name: Build SAP bridge (libunicorn + libsap)
+        script: |
+          set -e
+          cd "$SRCROOT"
+          ./sapbridge/build-sap.sh
+        shell: /bin/bash
     sources:
       - path: EscapeOS
       - path: Resources

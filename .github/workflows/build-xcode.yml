@@ -23,6 +23,8 @@ permissions:
 jobs:
   xcode-build:
     runs-on: macos-latest
+    env:
+      UNICORN_TAG: "2.1.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,6 +45,37 @@ jobs:
       - name: Install xcodegen and ldid
         # ldid 用于出包时施加 entitlements（与 Theos 的 -SEscapeSpace.entitlements 等价）。
         run: brew install xcodegen ldid
+
+      - name: Setup Go (for SAP bridge c-archive)
+        # 纯软件 Unicorn SAP 移植（PR #525）的 libsap.a 由 Go cgo 交叉编译产出，
+        # 需要 go >= 1.25（与 ipatool 上游 go.mod 对齐）。
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Install build tools (cmake, ninja)
+        # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）。
+        run: brew install cmake ninja
+
+      - name: Cache Go modules
+        # 加速 build-sap.sh 内的 `go mod tidy` / 构建。滚动 key + restore-keys 前缀。
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: macos-go-${{ hashFiles('sapbridge/go.mod') }}
+          restore-keys: |
+            macos-go-
+
+      - name: Cache Unicorn build
+        # libunicorn.a 的 cmake 构建较慢，缓存编译产物（源码克隆不缓存以省体积）。
+        uses: actions/cache@v4
+        with:
+          path: sapbridge/.unicorn-build
+          key: macos-unicorn-${{ env.UNICORN_TAG }}
+          restore-keys: |
+            macos-unicorn-
 
       - name: Cache Rust toolchain
         uses: actions/cache@v4
