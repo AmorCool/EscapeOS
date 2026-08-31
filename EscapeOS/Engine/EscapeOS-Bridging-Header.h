@@ -29,14 +29,4 @@
                                                   scale:(CGFloat)scale;
 @end
 
-// Spike（待删）：CommerceKit CKSigningSession SAP 签名探测。
-// 由 EscapeOS/Engine/CommerceKitSpike.m 实现，仅用于 P0 真机可行性验证。
-int commercekit_sap_sign(
-    const unsigned char *input,
-    size_t inputLength,
-    unsigned char **output,
-    size_t *outputLength,
-    char **errorMessage
-);
-
 #endif /* EscapeOS_Bridging_Header_h */
