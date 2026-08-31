@@ -82,11 +82,18 @@ targets:
     # （clang / cmake / ninja / go），由 build-xcode.yml 的侧车步骤保证。
     preBuildScripts:
       - name: Build SAP bridge (libunicorn + libsap)
+        # 用 `bash <script>` 而非 `./<script>` 调用：本项目在 Windows 上开发，
+        # Windows 文件系统没有可执行位，git 只记录 100644，CI 检出后 `./` 会
+        # Permission denied（v0.3.0 首次构建即因此失败）。显式走 bash 可永不
+        # 受文件模式影响。（文件本身也已补 exec 位，便于本地直接执行。）
         script: |
           set -e
           cd "$SRCROOT"
-          ./sapbridge/build-sap.sh
+          bash sapbridge/build-sap.sh
         shell: /bin/bash
+        # 该脚本自带缓存（libunicorn.a / .unicorn-src 已存在则跳过重编），
+        # 声明不参与依赖分析可消除「will be run during every build」警告。
+        basedOnDependencyAnalysis: false
     sources:
       - path: EscapeOS
       - path: Resources
