@@ -75,7 +75,7 @@ public enum Authenticator {
                     guard let hwID = Data(sapHardwareIDFromIdentifier: deviceIdentifier) else {
                         throw SapIdentityError.badIdentifier
                     }
-                    sapSigner = try sapSignerFactory(
+                    sapSigner = try await sapSignerFactory(
                         SAPConfig(
                             setupURL: setup,
                             certificateURL: cert,

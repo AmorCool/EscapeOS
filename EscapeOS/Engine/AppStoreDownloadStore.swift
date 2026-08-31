@@ -40,10 +40,22 @@ final class AppStoreDownloadStore {
         guard Configuration.sapSignerFactory == nil else { return }
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
         Configuration.sapSignerFactory = { config in
-            // v0.3.10：探测降回**警告不拦截**。csops 在 iOS 27 beta 上未经验证
-            // （用户实测：开/不开 JIT 均报未生效——要么 syscall 受限，要么
-            // StikDebug 的附加方式不设置 CS_DEBUGGED）。在不可信的判据上做硬
-            // 闸门 = 可能拦掉本可用的登录。让用户自由尝试，闪退则靠 .ips 定位。
+            // v0.3.11：双模式——①局域网 PC 签名服务（EscapeSapServer.exe，无 JIT
+            // 依赖、资产包在 PC 侧下载，绕开 iOS 磁盘配额）②本机模拟器（需 JIT）。
+            // 填了服务器地址走远程；留空走本机。
+            if let serverText = UserDefaults.standard.string(forKey: "SapServerURL"),
+               !serverText.isEmpty,
+               let serverURL = URL(string: serverText.trimmingCharacters(in: .whitespacesAndNewlines)),
+               let scheme = serverURL.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                LoginLogger.shared.log("SAP 签名走远程服务器：\(serverURL.absoluteString)")
+                LoginLogger.shared.log("远程初始化中（PC 首次需下载资产包，请耐心等待）…")
+                let remote = try await RemoteSapSigner(baseURL: serverURL, config: config)
+                LoginLogger.shared.log("远程签名器就绪")
+                return remote
+            }
+
+            // 本机模式：Unicorn TCG = JIT（Apple 平台），无有效 JIT 权限时执行
+            // 生成代码被内核签名检查杀（v0.3.8 .ips 实锤）。探测仅展示不拦截。
             let jitOK = SAPJITProbe.jitAvailable()
             SapStatusModel.shared.setJIT(jitOK ? .available : .unavailable)
             if !jitOK {

@@ -60,9 +60,10 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      - name: Install build tools (cmake, ninja)
-        # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）。
-        run: brew install cmake ninja
+      - name: Install build tools (cmake, ninja, mingw-w64)
+        # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）；
+        # build-sap-server.sh 用 mingw-w64 交叉编译 Windows 版签名服务（v0.3.11）。
+        run: brew install cmake ninja mingw-w64
 
       - name: Cache Go modules
         # 加速 build-sap.sh 内的 `go mod tidy` / 构建。滚动 key + restore-keys 前缀。
@@ -293,9 +294,14 @@ jobs:
           echo "=== located app bundles ==="
           find build -name 'EscapeSpace.app' -type d || true
 
+      - name: Build Windows SAP server (EscapeSapServer.exe)
+        # v0.3.11：局域网签名服务——PC 原生 x86 无 JIT 限制，绕开 iOS 侧
+        # StikDebug/JIT/磁盘配额全部限制。iOS 端填服务器地址即可走远程签名。
+        run: bash sapbridge/build-sap-server.sh
+
       - name: Save Unicorn product (artifact, cross-run)
-        # libunicorn.a（ios-arm64, TCI）+ include 头文件（cgo 需要）+ macos host lib
-        # （TCI 冒烟测试用）一起保存，供后续 run 跳过 cmake 全量编译与源码克隆。
+        # libunicorn.a（ios-arm64）+ include 头文件（cgo 需要）一起保存，
+        # 供后续 run 跳过 cmake 全量编译与源码克隆。
         if: steps.unicorn_cache.outputs.hit != 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -379,6 +385,14 @@ jobs:
           name: escapeos-xcode-ipa
           path: EscapeSpace-*.ipa
 
+      - name: Upload Windows SAP server
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: escapeos-sap-server
+          path: sapbridge/dist/EscapeSapServer.exe
+          if-no-files-found: ignore
+
       - name: Publish Release (on tag)
         # 仅在打 v* tag 时发布 Release 并上传未签名 IPA 作为 asset。
         # migrate-xcode 现为本项目默认出包分支：开发在 migrate-xcode，打 tag 即出包。
@@ -399,4 +413,9 @@ jobs:
               --title "EscapeSpace $TAG (Xcode native)" \
               --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.ipaside.escapeos。" \
               "$IPA"
+          fi
+          # v0.3.11：Windows 局域网签名服务一并发布（PC 上运行，App 填地址走远程签名）
+          EXE="sapbridge/dist/EscapeSapServer.exe"
+          if [ -f "$EXE" ]; then
+            gh release upload "$TAG" "$EXE" --clobber
           fi

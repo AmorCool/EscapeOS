@@ -99,9 +99,10 @@ public enum Configuration {
         public init() {}
     }
 
-    /// 宿主注入的签名器工厂（app 启动时设置一次后只读）。
-    /// nil / 抛错 → 认证请求退回未签名行为（会被 Apple 403，保留可诊断的错误路径）。
-    public nonisolated(unsafe) static var sapSignerFactory: ((SAPConfig) throws -> SAPActionSigning)?
+    /// 宿主注入的签名器工厂（app 启动时设置一次后只读）。v0.3.11 改 async：
+    /// 远程签名（局域网 PC 服务）的初始化是网络操作。nil / 抛错 → 认证请求
+    /// 退回未签名行为（会被 Apple 403，保留可诊断的错误路径）。
+    public nonisolated(unsafe) static var sapSignerFactory: ((SAPConfig) async throws -> SAPActionSigning)?
 
     public nonisolated(unsafe) static var tlsConfiguration: TLSConfiguration = {
         precondition(!deviceIdentifier.isEmpty, "deviceIdentifier must be set")

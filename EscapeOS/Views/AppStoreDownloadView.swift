@@ -98,6 +98,8 @@ struct AppStoreDownloadView: View {
     private let store = AppStoreDownloadStore.shared
     // v0.3.3：SAP 状态条（JIT 模式 + 资产包下载进度）
     @ObservedObject private var sapStatus = SapStatusModel.shared
+    // v0.3.11：局域网 PC 签名服务地址（填了走远程签名，无需 JIT；留空走本机模拟器）
+    @AppStorage("SapServerURL") private var sapServerURL = ""
 
     var body: some View {
         List {
@@ -105,6 +107,7 @@ struct AppStoreDownloadView: View {
             accountSection
             downloadSection
             if errorMessage != nil { errorSection }
+            serverSection
             statusSection
         }
         .listStyle(.insetGrouped)
@@ -156,7 +159,9 @@ struct AppStoreDownloadView: View {
         }
         .onAppear {
             reload()
-            SapStatusModel.shared.probeJITNow()
+            if sapServerURL.trimmingCharacters(in: .whitespaces).isEmpty {
+                SapStatusModel.shared.probeJITNow()
+            }
         }
     }
 
@@ -170,20 +175,25 @@ struct AppStoreDownloadView: View {
                 Image(systemName: "bolt.fill")
                     .font(.footnote)
                     .foregroundStyle(.blue)
-                Button {
-                    sapStatus.probeJITNow()
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("JIT：\(sapStatus.jitMode.text)")
-                            .font(.footnote)
-                        if sapStatus.jitMode != .available {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.caption2)
-                                .foregroundStyle(.blue)
+                if sapServerURL.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Button {
+                        sapStatus.probeJITNow()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("JIT：\(sapStatus.jitMode.text)")
+                                .font(.footnote)
+                            if sapStatus.jitMode != .available {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.caption2)
+                                    .foregroundStyle(.blue)
+                            }
                         }
                     }
+                    .buttonStyle(.plain)
+                } else {
+                    Text("签名：远程服务器")
+                        .font(.footnote)
                 }
-                .buttonStyle(.plain)
                 Spacer()
                 Image(systemName: "arrow.down.circle")
                     .font(.footnote)
@@ -193,7 +203,23 @@ struct AppStoreDownloadView: View {
                     .font(.footnote)
             }
         } footer: {
-            Text("登录需要 JIT：StikDebug → 选择 LiveContainer → Enable JIT（LC 运行中保持附加，LC 重启后需重开）。资产包仅首次下载（约 36MB）。")
+            Text("登录需要签名。二选一：① 在电脑上运行 EscapeSapServer.exe 并在下方填地址（推荐，无需 JIT）；② 本机模拟器（需 StikDebug 开 JIT）。资产包前者在电脑下载、后者仅首次下载（约 36MB）。")
+        }
+    }
+
+    /// v0.3.11：局域网 PC 签名服务地址（EscapeSapServer.exe）。
+    /// 填写后登录走远程签名（无需 JIT、资产包在 PC 下载）；留空走本机模拟器。
+    private var serverSection: some View {
+        Section {
+            TextField("http://192.168.x.x:8964（电脑上运行 EscapeSapServer.exe）", text: $sapServerURL)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.footnote)
+        } header: {
+            Text("签名服务器（可选，局域网电脑）")
+        } footer: {
+            Text("电脑运行 Release 里的 EscapeSapServer.exe，手机与电脑同一 Wi-Fi，填电脑的内网 IP 地址即可。留空 = 用本机模拟器签名（需要 JIT）。")
         }
     }
 
