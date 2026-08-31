@@ -7,6 +7,40 @@
 
 import Foundation
 
+// ─── SAP（Store Activation Protocol）签名注入点（v0.4.0）────────────────────────
+//
+// Apple 2026 年起要求 App Store 认证请求携带 `X-Apple-ActionSignature` 头
+// （ipatool PR #525 实证：无此头 → 账号校验前直接 403，无论账号真假）。
+// 签名算法在 Apple 私有 CommerceKit 的 x86-64 代码里，Swift 层无法直接实现——
+// 由宿主 app（EscapeSpace）注入签名器工厂：Unicorn 解释执行 CommerceKit
+// 产出签名（见 sapbridge/ 与 EscapeOS/Services/AppleAuth/SapSigner.swift）。
+// vendor 层只依赖这里的抽象，不 import 任何宿主类型。
+
+/// SAP 端点三元组（来自 bag.xml 的 `sign-sap-setup` / `sign-sap-setup-cert` /
+/// `sign-sap-version` 键，ipatool appstore_bag.go 同款）。
+public struct SAPConfig {
+    public var setupURL: URL
+    public var certificateURL: URL
+    public var version: UInt32
+    /// SAP 硬件标识原始字节（1–20 字节）。约定取 deviceIdentifier（大写 hex MAC）
+    /// 的原始字节，与请求体里的 guid 保持同一机器身份（对齐 ipatool machine_id.go）。
+    public var hardwareID: Data
+
+    public init(setupURL: URL, certificateURL: URL, version: UInt32, hardwareID: Data) {
+        self.setupURL = setupURL
+        self.certificateURL = certificateURL
+        self.version = version
+        self.hardwareID = hardwareID
+    }
+}
+
+/// SAP 签名器抽象。`sign(requestBody:)` 对**最终发出的请求体字节**签名并返回
+/// base64（作为 `X-Apple-ActionSignature` 头值）；`close()` 释放模拟器（可重复调用）。
+public protocol SAPActionSigning: AnyObject {
+    func sign(requestBody: Data) throws -> String
+    func close()
+}
+
 public enum Configuration {
     /*
      DeviceIdentifier is a unique identifier for your device.
@@ -44,31 +78,10 @@ public enum Configuration {
     // 由宿主 app（EscapeSpace）注入签名器工厂：Unicorn 解释执行 CommerceKit
     // 产出签名（见 sapbridge/ 与 EscapeOS/Services/AppleAuth/SapSigner.swift）。
     // vendor 层只依赖这里的抽象，不 import 任何宿主类型。
-
-    /// SAP 端点三元组（来自 bag.xml 的 `sign-sap-setup` / `sign-sap-setup-cert` /
-    /// `sign-sap-version` 键，ipatool appstore_bag.go 同款）。
-    public struct SAPConfig {
-        public var setupURL: URL
-        public var certificateURL: URL
-        public var version: UInt32
-        /// SAP 硬件标识原始字节（1–20 字节）。约定取 deviceIdentifier（大写 hex MAC）
-        /// 的原始字节，与请求体里的 guid 保持同一机器身份（对齐 ipatool machine_id.go）。
-        public var hardwareID: Data
-
-        public init(setupURL: URL, certificateURL: URL, version: UInt32, hardwareID: Data) {
-            self.setupURL = setupURL
-            self.certificateURL = certificateURL
-            self.version = version
-            self.hardwareID = hardwareID
-        }
-    }
-
-    /// SAP 签名器抽象。`sign(requestBody:)` 对**最终发出的请求体字节**签名并返回
-    /// base64（作为 `X-Apple-ActionSignature` 头值）；`close()` 释放模拟器（可重复调用）。
-    public protocol SAPActionSigning: AnyObject {
-        func sign(requestBody: Data) throws -> String
-        func close()
-    }
+    //
+    // 注意：SAPConfig / SAPActionSigning 是**文件顶层类型**（在枚举外声明）——
+    // 曾误作 Configuration 嵌套类型导致全项目 "cannot find type in scope"
+    // （v0.4.0 首轮 CI 实锤）。
 
     /// 宿主注入的签名器工厂（app 启动时设置一次后只读）。
     /// nil / 抛错 → 认证请求退回未签名行为（会被 Apple 403，保留可诊断的错误路径）。
