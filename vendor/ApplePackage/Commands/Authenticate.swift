@@ -60,9 +60,10 @@ public enum Authenticator {
         // 能直接看到 bag.xml 给了什么端点、我们实际用哪个，不再靠猜。
         LoginLogger.shared.log("Bag 解析认证端点: \(bagOutput.authEndpoint.absoluteString)")
 
-        // v0.4.0：SAP 签名（X-Apple-ActionSignature）。Apple 2026 年起在账号校验前
+        // v0.3.1：SAP 签名（X-Apple-ActionSignature）。Apple 2026 年起在账号校验前
         // 强制校验此头（ipatool PR #525 实证），缺失 → 真假账号一律 403。签名器由宿主
-        // app 注入（Unicorn 解释执行私有 CommerceKit，无需宿主 JIT）；bag 未给
+        // app 注入（Unicorn TCG 模拟执行私有 CommerceKit，**需要宿主 JIT**——
+        // v0.3.3 起 JIT 探测作硬闸门，未启用直接中止登录并引导 StikDebug）；bag 未给
         // sign-sap-* 或签名器初始化失败时退回未签名请求（保留可诊断的旧行为）。
         // 注意：首次签名前要先下载 Apple 资产包（约 36MB，仅一次，之后走本地缓存）
         // 并启动模拟器，可能耗时较长。
