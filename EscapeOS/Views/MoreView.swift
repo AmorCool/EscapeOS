@@ -8,6 +8,8 @@ struct MoreView: View {
     var onResetPairing: () -> Void
     @State private var showSettings = false
     @State private var showDeviceControl = false
+    // Spike（待删）：P0 CommerceKit SAP 签名可行性探测结果
+    @State private var spikeResult: String? = nil
 
     var body: some View {
         List {
@@ -195,6 +197,28 @@ struct MoreView: View {
                             title: "增加内存限制",
                             subtitle: "登录 Apple ID 并配置 Anisette，为 App 开启 INCREASED_MEMORY_LIMIT。"
                         )
+                    }
+
+                    // ===== Spike（待删）：P0 CommerceKit SAP 签名可行性探测 =====
+                    Section {
+                        Button {
+                            spikeResult = CommerceKitProbe.run()
+                        } label: {
+                            MoreCard(
+                                icon: "checkerboard.rectangle",
+                                title: "调试 · CommerceKit 探测（spike 待删）",
+                                subtitle: "验证 iOS 上能否调用 CommerceKit 的 CKSigningSession 签名。点此运行。"
+                            )
+                        }
+                        if let spikeResult {
+                            Text(spikeResult)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.vertical, 4)
+                        }
+                    } header: {
+                        Text("调试（待删）")
                     }
                 }
             }
