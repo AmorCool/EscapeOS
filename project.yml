@@ -3,11 +3,11 @@
 # 设计原则（来自 _build/THEOS-MIGRATION-ASSESSMENT.md）：
 #   1. 双轨期不删 Theos：本文件与 .github/workflows/build-xcode.yml 均为 ADDITIVE，
 #      不动 Makefile / control / Theos 任何文件，现有 Theos 发版照常。
-#   2. 忠实移植 Theos 单 module 行为：app + vendor(BitByteData/SWCompression/ApplePackage)
+#   2. 忠实移植 Theos 单 module 行为：app + vendor(BitByteData/SWCompression)
 #      全部编进同一个 target（app 侧无 `import ApplePackage`，证实是单 module）。
-#      ApplePackage 作为独立 SPM 模块的隔离（方案 A Week 2 收益）留待后续。
+#      ApplePackage 已随 App Store 下载功能在 v0.2.161 整体移除，此处不再编入。
 #   3. 版本号纪律不变：MARKETING_VERSION / CURRENT_PROJECT_VERSION 需与 control / Info.plist
-#      双轨同步（后续由 CI 脚本保证一致，当前先手动对齐到 v0.2.159）。
+#      双轨同步（后续由 CI 脚本保证一致，当前先手动对齐到 v0.2.161）。
 #   4. 本机（Windows）无法跑 xcodebuild，本 spec 仅保证语法正确；真实编译由 macos-15 CI 验证。
 #
 # 用法（CI 内）：xcodegen generate  →  产出 EscapeSpace.xcodeproj
@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.2.159"
-    CURRENT_PROJECT_VERSION: "159"
+    MARKETING_VERSION: "0.2.161"
+    CURRENT_PROJECT_VERSION: "161"
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     ENABLE_BITCODE: "NO"
@@ -64,11 +64,6 @@ targets:
       - path: EscapeOS
       - path: vendor/BitByteData/Sources
       - path: vendor/SWCompression/Sources
-      - path: vendor/ApplePackage
-        # 后续（#316）会把 ApplePackage 拆成独立 SPM 模块；此处先排除其 Package.swift，
-        # 避免 xcodegen 把它当源码编进主 target。
-        excludes:
-          - Package.swift
     info:
       path: Resources/Info.plist
     entitlements: EscapeSpace.entitlements
