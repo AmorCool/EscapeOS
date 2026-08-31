@@ -193,7 +193,7 @@ struct AppStoreDownloadView: View {
                     .font(.footnote)
             }
         } footer: {
-            Text("登录需要 JIT（StikDebug 开启）。资产包仅首次下载（约 36MB），之后走本地缓存。")
+            Text("登录需要 JIT：StikDebug → 选择 LiveContainer → Enable JIT（LC 运行中保持附加，LC 重启后需重开）。资产包仅首次下载（约 36MB）。")
         }
     }
 

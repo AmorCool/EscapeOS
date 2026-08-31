@@ -14,31 +14,26 @@ import Darwin
 /// - 普通侧载 / LiveContainer 访客 → 失败（EPERM）
 /// v0.3.3 起 libunicorn 为 TCI 解释器模式，JIT 与否都不阻断签名——探测仅用于展示。
 enum SAPJITProbe {
-    /// 双路径探测：①mmap MAP_JIT（标准 JIT 路径）②普通 RWX 匿名映射
-    /// （调试态进程 CS_DEBUGGED 的另一条可行路径）。任一成功即判定可用。
-    /// 探测结果仅作状态展示——实际以 SapInit 时 unicorn 的分配结果为准。
+    // csops(2) 的操作码与标志位（xnu bsd/sys/csr.h）
+    private static let CS_OPS_STATUS: UInt32 = 5
+    private static let CS_DEBUGGED: UInt32 = 0x1000_0000
+
+    /// v0.3.8：探测「调试器已附加并生效」（CS_DEBUGGED 内核标志）——这是
+    /// StikDebug 路径的权威判据。mmap MAP_JIT 探测已在 iOS 27 beta 上证伪：
+    /// mmap 成功但执行 JIT 缓冲仍被 CODESIGNING Invalid Page 杀（.ips 实锤）。
+    /// - StikDebug 附加 LC 进程成功 → CS_DEBUGGED 置位 → true
+    /// - 未附加/附加失败/重启后未重开 → false
     static func jitAvailable() -> Bool {
-        #if arch(arm64) || arch(arm64e)
-        let MAP_JIT: Int32 = 0x0800
-        let pageSize = 0x4000
+        guard let dbg = csDebuggedFlag() else { return false }
+        return dbg
+    }
 
-        // 路径 ①：MAP_JIT 匿名映射
-        let p1 = mmap(nil, pageSize, PROT_READ | PROT_WRITE, MAP_JIT | MAP_ANON | MAP_PRIVATE, -1, 0)
-        if p1 != MAP_FAILED {
-            munmap(p1, pageSize)
-            return true
-        }
-
-        // 路径 ②：普通 RWX（无 MAP_JIT）
-        let p2 = mmap(nil, pageSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0)
-        if p2 != MAP_FAILED {
-            munmap(p2, pageSize)
-            return true
-        }
-        return false
-        #else
-        return true
-        #endif
+    /// 返回 nil 表示 csops 调用失败（无法判定）。
+    static func csDebuggedFlag() -> Bool? {
+        var flags: UInt32 = 0
+        let result = csops(getpid(), CS_OPS_STATUS, &flags, UInt32(MemoryLayout<UInt32>.size))
+        guard result == 0 else { return nil }
+        return (flags & CS_DEBUGGED) != 0
     }
 }
 
@@ -55,7 +50,7 @@ final class SapStatusModel: ObservableObject {
             switch self {
             case .unknown: return "检测中"
             case .available: return "已启用"
-            case .unavailable: return "未启用"
+            case .unavailable: return "未生效（StikDebug 未附加到 LC）"
             }
         }
     }

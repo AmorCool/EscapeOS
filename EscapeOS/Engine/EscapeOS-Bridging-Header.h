@@ -10,6 +10,12 @@
 
 #include "bad_query.h"
 #include "zip_crypto.h"
+
+// v0.3.8：JIT 探测——csops 读取自身代码签名标志。CS_DEBUGGED(0x10000000) 是
+// 「调试器（StikDebug/debugserver）已附加并生效」的内核级判据，比 mmap MAP_JIT
+// 探测准确（iOS 27 beta 实锤：mmap 成功但执行仍被 CODESIGNING Invalid Page 杀）。
+#include <sys/types.h>
+int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #import "../Tunnel/TunnelContext.h"
 
 // MHA branch: MCM integration layer (bad_query + MobileHouseArrest)
