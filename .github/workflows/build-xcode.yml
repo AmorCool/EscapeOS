@@ -138,7 +138,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          CUR_HASH="${{ hashFiles('rust/idevice-ffi/**') }}"
+          CUR_HASH=${{ hashFiles('rust/idevice-ffi/Cargo.toml', 'rust/idevice-ffi/Cargo.lock', 'rust/idevice-ffi/build.rs', 'rust/idevice-ffi/src/**', 'rust/idevice-ffi/*.h') }}
           echo "current rust/idevice-ffi hash: $CUR_HASH"
           HIT=false
           ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-rust-ffi-v1&per_page=100" \
@@ -194,8 +194,10 @@ jobs:
           cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml
           mkdir -p rust-libs
           cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" rust-libs/libidevice_ffi.a
-          # 记录产物对应的源码 hash（artifact 产物缓存的命中判据，供 Save 步骤打包）
-          echo "${{ hashFiles('rust/idevice-ffi/**') }}" > rust-hash.txt
+          # 记录产物对应的源码 hash（artifact 产物缓存的命中判据，供 Save 步骤打包）。
+          # 显式列表：排除 .cargo/config.toml（Save 时已写、Restore 时未写，会让两个
+          # hash 永远不相等——v0.3.2 首个验证 run 实锤 cached!=current）。
+          echo "${{ hashFiles('rust/idevice-ffi/Cargo.toml', 'rust/idevice-ffi/Cargo.lock', 'rust/idevice-ffi/build.rs', 'rust/idevice-ffi/src/**', 'rust/idevice-ffi/*.h') }}" > rust-hash.txt
 
       - name: Assemble libidevice_ffi.xcframework
         # 无论 .a 来自 cargo 还是产物缓存，都要组装 xcframework + 拷编译期桥接头。
@@ -235,19 +237,19 @@ jobs:
         run: |
           set -euo pipefail
           HIT=false
-          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-unicorn-210&per_page=100" \
+          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-unicorn-210-tci&per_page=100" \
             --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
           if [ -n "${ART_ID:-}" ]; then
             rm -rf /tmp/unicorn-cache && mkdir -p /tmp/unicorn-cache
             gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/unicorn-cache/cache.zip
-            unzip -oq /tmp/unicorn-cache/cache.zip -d /tmp/unicorn-cache
-            if [ -s /tmp/unicorn-cache/libunicorn.a ]; then
-              mkdir -p sapbridge/.unicorn-build
-              cp /tmp/unicorn-cache/libunicorn.a sapbridge/.unicorn-build/libunicorn.a
+            unzip -oq /tmp/unicorn-cache/cache.zip -d sapbridge
+            # artifact 结构（LCA=sapbridge）：.unicorn-build/libunicorn.a + .unicorn-src/include/ + .unicorn-build-macos/libunicorn.a
+            if [ -s sapbridge/.unicorn-build/libunicorn.a ] && [ -f sapbridge/.unicorn-src/include/unicorn/unicorn.h ]; then
               HIT=true
-              echo "=== Unicorn cache HIT (skip cmake full build) ==="
+              echo "=== Unicorn cache HIT (libunicorn.a + headers restored, skip cmake full build) ==="
             else
               echo "=== Unicorn cache artifact content missing ==="
+              rm -rf sapbridge/.unicorn-build sapbridge/.unicorn-src
             fi
           else
             echo "=== Unicorn cache artifact not found (first run or expired) ==="
@@ -289,13 +291,40 @@ jobs:
           find build -name 'EscapeSpace.app' -type d || true
 
       - name: Save Unicorn product (artifact, cross-run)
-        # libunicorn.a 由 Build 步骤内的 preBuildScript（build-sap.sh）产出，供后续 run 复用。
+        # libunicorn.a（ios-arm64, TCI）+ include 头文件（cgo 需要）+ macos host lib
+        # （TCI 冒烟测试用）一起保存，供后续 run 跳过 cmake 全量编译与源码克隆。
         if: steps.unicorn_cache.outputs.hit != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: escapeos-unicorn-210
-          path: sapbridge/.unicorn-build/libunicorn.a
+          name: escapeos-unicorn-210-tci
+          path: |
+            sapbridge/.unicorn-build/libunicorn.a
+            sapbridge/.unicorn-src/include
+            sapbridge/.unicorn-build-macos/libunicorn.a
           if-no-files-found: ignore
+
+      - name: Validate SAP bridge TCI (macOS host smoke test)
+        # TCI 解释器是「无 JIT 可运行」的关键（v0.3.1 注释里的 "interpreter" 是上游
+        # macOS 语境误述，Unicorn 2.x 默认 TCG 是 JIT）。这里在 CI macOS host（arm64）
+        # 上用 TCI 版 libunicorn 实跑一段 x86-64 代码（mov eax,42; ret），实锤解释器
+        # 路径可用——本测试失败则禁止发版（真机会在模拟器启动时崩）。
+        run: |
+          set -euo pipefail
+          cd sapbridge
+          if [ ! -f .unicorn-build-macos/libunicorn.a ]; then
+            if [ ! -d .unicorn-src/.git ]; then
+              git clone --depth 1 --branch 2.1.0 https://github.com/unicorn-engine/unicorn.git .unicorn-src
+            fi
+            perl -pi -e 's/(--cc=\$\{CMAKE_C_COMPILER\})/$1 --enable-tcg-interpreter/' .unicorn-src/CMakeLists.txt
+            cmake -S .unicorn-src -B .unicorn-build-macos -G Ninja \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF \
+              -DUNICORN_BUILD_TESTS=OFF -DUNICORN_BUILD_SAMPLES=OFF \
+              -DUC_ARCH=x86_64 -DUC_MODE=x86_64
+            cmake --build .unicorn-build-macos -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+          fi
+          CGO_CFLAGS="-I.unicorn-src/include" \
+          CGO_LDFLAGS="-L.unicorn-build-macos -lunicorn" \
+          go test ./internal/sap/unicorn/ -run TestTCISmoke -v
 
       - name: Package unsigned IPA
         # 对齐 Theos 出包形态：ldid 施加 entitlements（与 Makefile:157 的 -S 一致）

@@ -17,14 +17,17 @@ import (
 )
 
 // The SAP signer runs an x86-64 Unicorn emulation of Apple's private CommerceKit
-// signing session entirely in-process. JIT is not required (Unicorn is an
-// interpreter), but the Go runtime + libunicorn must be linked into the app and
-// the process must be allowed to execute the emulated code. Under LiveContainer
-// the guest is emulated, so no host JIT entitlement is needed for the guest.
+// signing session entirely in-process. libunicorn is built with QEMU's TCG
+// interpreter (TCI, --enable-tcg-interpreter): guest code runs on a pure C
+// interpreter loop that never writes executable memory, so the app works both
+// with and without host JIT (plain sideload / LiveContainer guest included).
+// v0.3.1 的 "Unicorn is an interpreter" 注释是上游 macOS 语境的误述——
+// Unicorn 2.x 默认 TCG 是 JIT（真机实锤会崩），TCI 才是 iOS 无 JIT 的正解。
 //
 // C API (all returned C strings must be freed by the caller via SapFree):
 //
 //	SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char, cacheDir *C.char) *C.char
+//	SapGetProgress() *C.char
 //	SapSign(requestBase64 *C.char) *C.char
 //	SapLastError() *C.char
 //	SapClose()
@@ -127,6 +130,15 @@ func SapClose() {
 		signer = nil
 	}
 	lastErr = ""
+}
+
+//export SapGetProgress
+// SapGetProgress returns the current asset-preparation state as
+// "phase=<n>;done=<n>;total=<n>". The host polls this from another thread
+// while SapInit blocks its own thread (download / emulator boot / handshake).
+// Uses a dedicated lock, NOT bridgeMu (which SapInit holds for its whole run).
+func SapGetProgress() *C.char {
+	return C.CString(sap.ProgressString())
 }
 
 //export SapFree

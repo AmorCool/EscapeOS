@@ -35,5 +35,6 @@ _build/
 # SAP 签名桥（PR #525 纯软件 Unicorn 移植）构建产物——由 sapbridge/build-sap.sh 生成
 sapbridge/build/
 sapbridge/.unicorn-src/
-sapbridge/.unicorn-build/
+sapbridge/.unicorn-build
+sapbridge/.unicorn-build-macos//
 sapbridge/sapbridge

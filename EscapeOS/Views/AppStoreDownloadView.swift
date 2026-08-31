@@ -96,9 +96,12 @@ struct AppStoreDownloadView: View {
     @State private var pendingPassword = ""
 
     private let store = AppStoreDownloadStore.shared
+    // v0.3.3：SAP 状态条（JIT 模式 + 资产包下载进度）
+    @ObservedObject private var sapStatus = SapStatusModel.shared
 
     var body: some View {
         List {
+            sapStatusSection
             accountSection
             downloadSection
             if errorMessage != nil { errorSection }
@@ -155,6 +158,28 @@ struct AppStoreDownloadView: View {
     }
 
     // MARK: - 子视图
+
+    /// v0.3.3：SAP 状态条——JIT 模式 + 资产包进度（紧凑单行，蓝色强调）。
+    private var sapStatusSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                Image(systemName: "bolt.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.blue)
+                Text("JIT：\(sapStatus.jitMode.text)")
+                    .font(.footnote)
+                Spacer()
+                Image(systemName: "arrow.down.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.blue)
+                Text(sapStatus.progress.map { "资产包 \(Int($0 * 100))%（\(sapStatus.bytesText)）" }
+                     ?? "资产包：\(sapStatus.phaseText)")
+                    .font(.footnote)
+            }
+        } footer: {
+            Text("资产包仅首次登录下载（约 36MB），之后走本地缓存。JIT 未启用时以解释器模式运行。")
+        }
+    }
 
     private var accountSection: some View {
         Section {

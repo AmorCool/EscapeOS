@@ -40,13 +40,26 @@ final class AppStoreDownloadStore {
         guard Configuration.sapSignerFactory == nil else { return }
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
         Configuration.sapSignerFactory = { config in
-            try SapSigner(
+            // v0.3.3：JIT 探测（状态条展示；TCI 解释器模式下不阻断）+
+            // 进度轮询（下载百分比/模拟器启动/握手，实时进状态条与登录日志）。
+            let jitOK = SAPJITProbe.jitAvailable()
+            SapStatusModel.shared.setJIT(jitOK ? .available : .unavailable)
+            LoginLogger.shared.log(
+                jitOK ? "SAP JIT 探测：已启用（宿主可 JIT）"
+                      : "SAP JIT 探测：未启用（TCI 解释器模式运行，无需 JIT）"
+            )
+            LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
+            SapProgressPoller.shared.start()
+            defer { SapProgressPoller.shared.stop() }
+            let signer = try SapSigner(
                 setupURL: config.setupURL.absoluteString,
                 certURL: config.certificateURL.absoluteString,
                 version: Int32(truncatingIfNeeded: config.version),
                 hardwareID: config.hardwareID,
                 cacheDirectory: cachesDir
             )
+            LoginLogger.shared.log("SAP 签名器初始化成功")
+            return signer
         }
     }
 

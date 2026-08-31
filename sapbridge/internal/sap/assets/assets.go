@@ -98,8 +98,11 @@ func download(ctx context.Context) (Bundle, error) {
 		return Bundle{}, fmt.Errorf("parse Apple software update URL: %w", err)
 	}
 
+	// v0.3.3：2min → 10min。ranger 对整个 payload 走单条 ranged GET 流式读
+	// （~36MB），http.Client.Timeout 是整个请求生命周期的墙钟时间——弱网
+	// （<2.4Mbps）必然中途超时断流。iOS 侧载场景放宽到 10min（弱网安全余量）。
 	client := &http.Client{
-		Timeout:   2 * time.Minute,
+		Timeout:   10 * time.Minute,
 		Transport: contextTransport{ctx: ctx, next: http.DefaultTransport},
 	}
 
@@ -140,6 +143,14 @@ func download(ctx context.Context) (Bundle, error) {
 	compressed := io.MultiReader(bytes.NewReader([]byte{'B', 'Z', 'h', '9'}), raw)
 
 	archive := bzip2.NewReader(compressed)
+	// v0.3.3：下载进度——统计解压后已消费字节（网络压缩流的对应进度），
+	// 总量按必需文件解压尺寸合计；宿主轮询 SapGetProgress 显示百分比。
+	var wantTotal uint64
+	for _, spec := range requiredFiles {
+		wantTotal += uint64(spec.size)
+	}
+	SetProgress(ProgressPhaseDownloading, 0, wantTotal)
+	progressed := &progressCountingReader{r: archive, total: wantTotal}
 	if _, err := io.CopyN(io.Discard, archive, payloadCPIO); err != nil {
 		return Bundle{}, fmt.Errorf("seek Apple payload archive: %w", err)
 	}
@@ -150,7 +161,7 @@ func download(ctx context.Context) (Bundle, error) {
 	}
 
 	found := make(map[string][]byte, len(requiredFiles))
-	reader := cpio.NewReader(archive)
+	reader := cpio.NewReader(progressed)
 
 	for len(found) != len(wanted) {
 		if err := ctx.Err(); err != nil {
@@ -384,4 +395,25 @@ func (t contextTransport) RoundTrip(request *http.Request) (*http.Response, erro
 	}
 
 	return response, nil
+}
+
+// progressCountingReader 统计解压流的已消费字节并回报下载进度。
+// 刻意用独立锁（progress.go 的 SetProgress 内部锁），与 bridgeMu 无关。
+type progressCountingReader struct {
+	r     io.Reader
+	done  uint64
+	total uint64
+}
+
+func (p *progressCountingReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.done += uint64(n)
+		done := p.done
+		if done > p.total {
+			done = p.total
+		}
+		SetProgress(ProgressPhaseDownloading, done, p.total)
+	}
+	return n, err
 }

@@ -43,6 +43,7 @@ public enum Bag {
         // 既能减少每次认证的耗时，也降低对 Apple 边缘的请求频率（避免触发限流）。
         if cachedDeviceIdentifier == deviceIdentifier, let cached = cachedOutput {
             print("[EscapeOS][Bag] 命中会话缓存 auth endpoint: \(cached.authEndpoint.absoluteString)")
+            LoginLogger.shared.log("[Bag] 命中会话缓存 auth endpoint: \(cached.authEndpoint.absoluteString)")
             return cached
         }
 
@@ -121,6 +122,7 @@ public enum Bag {
               let authURL = normalizedAuthEndpoint(from: authURLString)
         else {
             print("[EscapeOS][Bag] 找不到 authenticateAccount，回退 default auth endpoint")
+            LoginLogger.shared.log("[Bag] bag.xml 缺 authenticateAccount，回退 default 端点（无 SAP 键）")
             return fallbackEndpoint()
         }
 
@@ -131,14 +133,17 @@ public enum Bag {
             output.sapCertificateURL = certURL
             output.sapVersion = sapVersion
             print("[EscapeOS][Bag] 解析到 SAP 端点: setup=\(sapSetupString) version=\(sapVersionString ?? "200(缺省)")")
+            LoginLogger.shared.log("[Bag] 解析到 SAP 端点: setup=\(sapSetupString) version=\(sapVersionString ?? "200(缺省)")")
         } else {
             print("[EscapeOS][Bag] bag.xml 未提供完整 sign-sap-setup/setup-cert 端点，SAP 签名不可用")
+            LoginLogger.shared.log("[Bag] bag.xml 未提供完整 sign-sap-setup/setup-cert 端点，SAP 签名不可用")
         }
 
         // 成功解析则更新会话缓存（下次直接命中，跳过网络）。
         cachedDeviceIdentifier = deviceIdentifier
         cachedOutput = output
         print("[EscapeOS][Bag] 解析到 auth endpoint: \(output.authEndpoint.absoluteString)")
+        LoginLogger.shared.log("[Bag] 解析到 auth endpoint: \(output.authEndpoint.absoluteString)")
         return output
     }
 
