@@ -191,14 +191,16 @@ jobs:
           echo "=== lipo -info ==="
           lipo -info "$BIN" 2>/dev/null || true
 
-          # 打包未签名 IPA（Payload/ 布局，与 Theos 出包一致）
+          # 打包未签名 IPA（标准 Payload/ 布局，与 Theos 出包一致）
           # 精确匹配 settings.base 内的 MARKETING_VERSION 行（排除头部注释里的同名词，
           # 否则 grep -m1 会命中注释行，版本号变成乱码导致 zip 文件名含空格而失败）
           VERSION="$(grep -m1 '^[[:space:]]*MARKETING_VERSION:' project.yml | sed -E 's/.*"([0-9.]+)".*/\1/')"
           IPA="EscapeSpace-${VERSION}-xcode-unsigned.ipa"
           rm -rf Payload && mkdir Payload
           mv "$APP" Payload/
-          (cd Payload && zip -r "../$IPA" EscapeSpace.app)
+          # 必须从 Payload 目录的【外层】打包，使 IPA 根目录为 Payload/EscapeSpace.app/...
+          # （不可 cd Payload 内再 zip，否则 IPA 缺 Payload/ 包裹，无法按标准安装）
+          zip -r "$IPA" Payload
           ls -la "$IPA"
           echo "IPA=$IPA" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
