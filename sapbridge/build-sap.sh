@@ -63,14 +63,20 @@ export GOFLAGS="${GOFLAGS:-}"
 echo "==> [4/4] Building libsap.a (c-archive, ios/arm64)"
 # Go's GOOS=ios CGO pipeline auto-configures clang/SDK; we only add the Unicorn
 # include and link paths. CGO_LDFLAGS carries -lunicorn for the final link.
+#
+# NOTE: with -buildmode=c-archive, cgo names the generated header after the
+# archive's base name — `-o libsap.a` yields libsap.a + **libsap.h**, never sap.h.
+# So emit as sap.a (giving us the sap.h that EscapeOS-Bridging-Header.h includes),
+# then rename the archive to libsap.a because -lsap looks for that exact name.
 CGO_ENABLED=1 \
 GOOS=ios GOARCH=arm64 \
 CGO_CFLAGS="-I$UNICORN_INC" \
 CGO_LDFLAGS="-L$UNICORN_BUILD -lunicorn" \
-"$GO" build -buildmode=c-archive -o "$SAP_OUT/libsap.a" .
+"$GO" build -buildmode=c-archive -o "$SAP_OUT/sap.a" .
 
-[ -f "$SAP_OUT/libsap.a" ] || { echo "error: libsap.a not produced"; exit 1; }
-[ -f "$SAP_OUT/sap.h" ]    || { echo "error: sap.h not produced"; exit 1; }
+[ -f "$SAP_OUT/sap.a" ] || { echo "error: sap.a not produced"; exit 1; }
+[ -f "$SAP_OUT/sap.h" ] || { echo "error: sap.h not produced"; exit 1; }
+mv -f "$SAP_OUT/sap.a" "$SAP_OUT/libsap.a"
 
 echo "==> Done. Artifacts in $SAP_OUT:"
 ls -la "$SAP_OUT"/libsap.a "$SAP_OUT"/sap.h "$SAP_OUT"/libunicorn.a
