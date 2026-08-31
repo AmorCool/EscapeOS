@@ -47,8 +47,10 @@ func buildAppStoreAnisetteHeaders(for data: AnisetteData) -> [(String, String)] 
 }
 
 /// 取一次全新 anisette 并转成 iTunes 认证头，供 `Authenticator.authenticate(anisetteProvider:)` 使用。
+/// - 必须传 `refresh: true`：Apple 的 anisette OTP 一次性，每次认证尝试都需要新的设备
+///   标识/头；若复用同一 OTP，Apple 边缘会静默拒绝（表现为 204/403/301 等）。
 func fetchFreshAppStoreAnisetteHeaders() async throws -> [(String, String)] {
-    let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback()
+    let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback(refresh: true)
     return buildAppStoreAnisetteHeaders(for: anisette)
 }
 

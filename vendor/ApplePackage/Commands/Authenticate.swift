@@ -26,6 +26,14 @@
 //   修复：30x 无 Location 单独分类为「Apple 边缘裸重定向」，首轮用全新 anisette 重试一次，
 //   否则明确报错并给出「换网络/切 Anisette 服务器/换时段」的可操作建议。
 //
+// v0.2.160：修复最新日志 `HTTP 204 No Content` 导致 plist 解析失败。
+//   根因：ipatool 最新主线（commit #507 16 天前）明确把 204/404 与 5xx 同列为可重试状态码；
+//   Apple 边缘在 auth 握手期间会不定期返回 204/404/301，需要配合递增 attempt + 全新 anisette
+//   重试。此前 attempt 固定为 "4" 或 "2"、重试上限仅 2 次、且 anisetteProvider 未强制 refresh，
+//   导致 OTP 复用，Apple 以 204 静默拒绝。修复：① attempt 按当前尝试次数递增；② 204/404 与
+//   5xx 一样可重试，上限提到 4 次；③ 依赖调用方 `fetchFreshAppStoreAnisetteHeaders` 传
+//   refresh=true 确保每次尝试都是全新 OTP。
+//
 
 import Foundation
 
@@ -66,14 +74,18 @@ public enum Authenticator {
         var redirectAttempt = 0
         var lastError: Error?
 
-        while currentAttempt <= 2, redirectAttempt <= 3 {
+        // v0.2.160：上限提到 4 次，对齐 ipatool 对 204/404/5xx 的重试策略。
+        while currentAttempt <= 4, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
                 // 每次尝试都用**全新** Anisette 设备认证头：Apple 的 anisette OTP 一次性，
                 // 重试必须用新值，否则等价于对同一个被拒请求重复打（v0.2.157 修复 403 的根因）。
+                // v0.2.160：每次尝试都期望调用方提供**全新** anisette（OTP 一次性）。
+                // `fetchFreshAppStoreAnisetteHeaders` 已改为 `refresh: true` 保证这一点。
                 let anisetteHeaders: [(String, String)] = try await anisetteProvider?() ?? []
                 let request = try makeRequest(
                     endpoint: requestEndpoint,
+                    attempt: currentAttempt,
                     email: email,
                     password: password,
                     code: code,
@@ -97,8 +109,8 @@ public enum Authenticator {
                     let bodyData = response.body?.data ?? Data()
                     let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
                     LoginLogger.shared.log("App Store 认证被 Apple 边缘拒绝(403 HTML): \(bodySnippet)")
-                    if currentAttempt < 2, anisetteProvider != nil {
-                        LoginLogger.shared.log("… 用全新 Anisette 重试一次（排除 anisette 失效导致 403）")
+                    if currentAttempt < 4, anisetteProvider != nil {
+                        LoginLogger.shared.log("… 用全新 Anisette 重试（attempt=\(currentAttempt)/4）")
                         continue
                     }
                     try ensureFailed(
@@ -107,11 +119,13 @@ public enum Authenticator {
                         "建议：更换网络/代理、到「更多 → 设置 → Anisette 服务器」切换并重连，或确认 Apple ID 未开启强风控验证。"
                     )
                 }
-                // 2) 服务端 5xx：可重试的暂时性错误，最多重试一次。
-                if (500...599).contains(status.code) {
-                    LoginLogger.shared.log("App Store 认证服务端 5xx(\(status.code))，可重试")
-                    if currentAttempt < 2 { continue }
-                    try ensureFailed("iTunes 认证服务端错误（HTTP \(status.code)），请稍后重试。")
+                // 2) 服务端 5xx / Apple 边缘 204/404：ipatool 最新主线把这些状态码列为
+                //    可重试（Apple auth 握手期间会不定期返回空响应或 404，需配合新 OTP
+                //    与递增 attempt 再试）。上限内继续循环，不直接报错。
+                if (500...599).contains(status.code) || status.code == 204 || status.code == 404 {
+                    LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code)（ipatool 可重试状态），attempt=\(currentAttempt)/4")
+                    if currentAttempt < 4 { continue }
+                    try ensureFailed("iTunes 认证服务端错误（HTTP \(status.code)），已重试 4 次仍未成功，请稍后重试。")
                 }
                 // 3) Apple 边缘 30x 但无 Location：裸重定向（IP 信誉 / 风控 / 地域墙）。
                 //    `native/fast/` 在客户端被限流/标记时，Apple 边缘会返回「301 Moved
@@ -124,8 +138,8 @@ public enum Authenticator {
                     let bodyData = response.body?.data ?? Data()
                     let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
                     LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code) 裸重定向（无 Location 头，疑似 IP 信誉/风控）：\(bodySnippet)")
-                    if currentAttempt < 2, anisetteProvider != nil {
-                        LoginLogger.shared.log("… 用全新 Anisette 重试一次（设备标识变化可能改变边缘决策）")
+                    if currentAttempt < 4, anisetteProvider != nil {
+                        LoginLogger.shared.log("… 用全新 Anisette 重试（attempt=\(currentAttempt)/4，设备标识变化可能改变边缘决策）")
                         continue
                     }
                     try ensureFailed(
@@ -197,6 +211,7 @@ public enum Authenticator {
 
     private static func makeRequest(
         endpoint: URL,
+        attempt: Int,
         email: String,
         password: String,
         code: String,
@@ -204,9 +219,13 @@ public enum Authenticator {
         deviceIdentifier: String,
         anisetteHeaders: [(String, String)] = []
     ) throws -> HTTPClient.Request {
+        // v0.2.160：attempt 按当前尝试次数递增，不再固定为 "4"/"2"。
+        // ipatool 主线的 204/404 重试依赖 Apple 把多次尝试视为同一认证会话；
+        // 固定 attempt 会让服务端误判为同一请求重复发送，从而触发风控/静默拒绝。
+        let attemptValue = max(1, attempt)
         let parameters: [String: String] = [
             "appleId": email,
-            "attempt": "\(code.isEmpty ? "4" : "2")",
+            "attempt": "\(attemptValue)",
             "guid": deviceIdentifier,
             "password": "\(password)\(code)",
             "rmp": "0",
