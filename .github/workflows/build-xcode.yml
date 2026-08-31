@@ -2,8 +2,9 @@ name: Build Xcode (Plan A dual-track)
 
 # 方案 A 双轨迁移脚手架：在不碰 Theos 的前提下，用 xcodegen + xcodebuild 验证
 # 当前源码能否在 Xcode 原生工程下编译/链接，并产出与 Theos 同形态的【未签名 IPA】。
-# 出包方式对齐 Theos：ldid 施加 entitlements（Makefile:157 的 -SEscapeSpace.entitlements）
-# → 打包为 Payload/EscapeSpace.app → zip 成 .ipa。全程不依赖 Apple 证书（侧载时再签）。
+# 出包方式对齐 Theos 链路：ldid 尽力施加 entitlements（Makefile:157 的 -SEscapeSpace.entitlements），
+# 但 brew 版 ldid 在 CI 上对部分二进制会 assert 崩溃，故 ldid 失败不退出来，退化为未签名 IPA
+# （entitlements 文件随 .app 携带，侧载时再签）。全程不依赖 Apple 证书。
 #
 # 触发：推到 migrate-xcode 分支，或手动 workflow_dispatch。
 # 与 build.yml（Theos 轨道）共享 escapeos-build-cache scope，复用已建好的
@@ -109,10 +110,15 @@ jobs:
           cd ../..
           cargo --version
           cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml
-          mkdir -p EscapeOS/Tunnel
-          cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" EscapeOS/Tunnel/libidevice_ffi.a
+          mkdir -p EscapeOS/Tunnel rust-libs
+          # .a 静态库必须放到 xcodegen source 树（EscapeOS/）之外：xcodegen 会把 source
+          # 目录下所有文件当资源拷贝进 .app bundle，实测导致 114MB 的 libidevice_ffi.a
+          # 进包、IPA 巨大且不符 Theos 出包形态。它只需通过 LIBRARY_SEARCH_PATHS +
+          # -lidevice_ffi 链接即可（对齐 Theos：只 -L 链接、不当资源）。
+          cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" rust-libs/libidevice_ffi.a
+          # .h 桥接头需要，留在 EscapeOS/Tunnel/（.h 不会被 xcodegen 当资源拷贝进 bundle）
           cp "rust/idevice-ffi/idevice.h" EscapeOS/Tunnel/idevice.h
-          ls -la EscapeOS/Tunnel/libidevice_ffi.a EscapeOS/Tunnel/idevice.h
+          ls -la rust-libs/libidevice_ffi.a EscapeOS/Tunnel/idevice.h
 
       - name: Generate Xcode project (xcodegen)
         run: |
@@ -179,13 +185,17 @@ jobs:
           echo "BIN=$BIN"
           ls -la "$BIN"
 
-          # 对主二进制施加 entitlements（与 Theos 的 ldid -SEscapeSpace.entitlements 等价）
+          # 对主二进制施加 entitlements（与 Theos 的 ldid -SEscapeSpace.entitlements 等价）。
+          # brew 版 ldid 在 CI 上对部分二进制会 assert 崩溃（ldid.cpp(852): _assert(): false）；
+          # 按用户「产物不签名」要求，此处 ldid 失败不致命——退化为未签名 IPA（侧载时再签）。
           echo "=== ldid -S (main binary) ==="
-          ldid -S EscapeSpace.entitlements "$BIN"
-          echo "ldid exit=$?"
+          ldid -S EscapeSpace.entitlements "$BIN" || echo "WARN: ldid failed, producing UNSIGNED IPA"
 
           echo "=== embedded entitlements (ldid -e) ==="
           ldid -e "$BIN" 2>/dev/null | head -20 || true
+
+          # 不论 ldid 是否成功，都把 entitlements 文件随 .app 携带，供侧载工具施加。
+          cp EscapeSpace.entitlements "$APP/EscapeSpace.entitlements" 2>/dev/null || true
 
           echo "=== lipo -info ==="
           lipo -info "$BIN" 2>/dev/null || true

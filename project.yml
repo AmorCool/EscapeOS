@@ -43,7 +43,9 @@ settings:
       - "$(SRCROOT)/EscapeOS/Engine"
       - "$(SRCROOT)/EscapeOS/Tunnel"
     # 对齐 Theos 的 LDFLAGS：Rust FFI 静态库 + 系统 framework
+    # rust-libs/ 是 CI 构建期由 build-xcode.yml 生成的静态库落点（不在 xcodegen source 树内）
     LIBRARY_SEARCH_PATHS:
+      - "$(SRCROOT)/rust-libs"
       - "$(SRCROOT)/EscapeOS/Tunnel"
     OTHER_LDFLAGS:
       - "-lresolv"
