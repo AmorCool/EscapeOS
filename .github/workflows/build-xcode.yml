@@ -113,7 +113,16 @@ jobs:
           ls -la EscapeOS/Tunnel/libidevice_ffi.a EscapeOS/Tunnel/idevice.h
 
       - name: Generate Xcode project (xcodegen)
-        run: xcodegen generate
+        run: |
+          set -euo pipefail
+          echo "=== project.yml head ==="
+          head -50 project.yml
+          echo "=== xcodegen version ==="
+          xcodegen version
+          echo "=== xcodegen generate ==="
+          xcodegen generate 2>&1 | tee /tmp/xcodegen.log
+          echo "=== generated files ==="
+          ls -la EscapeSpace.xcodeproj/ 2>/dev/null || true
 
       - name: Build (compile/link check, no signing)
         # 仅验证「当前源码能在 Xcode 原生工程下编过」——不做签名/打包。
