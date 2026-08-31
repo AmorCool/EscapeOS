@@ -32,7 +32,9 @@ final class LoginLogger {
         if buffer.count > maxBufferLines { buffer.removeFirst(buffer.count - maxBufferLines) }
         lock.unlock()
         appendToFile(line)
-        NSLog("[Login] %@", message)
+        // iOS 26 SDK 把 NSLog 的 variadic 形式标 unavailable，用 print 代替；
+        // print 仍然进 Apple 系统日志（Console.app 可见），仅 path 不同（用户日常习惯差异）。
+        print("[Login] \(message)")
     }
 
     func clear() {

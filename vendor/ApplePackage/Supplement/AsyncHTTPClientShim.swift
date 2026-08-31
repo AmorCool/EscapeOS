@@ -69,6 +69,8 @@ public struct HTTPResponseStatus: Equatable {
     public static let found = HTTPResponseStatus(code: 302)
     public static let movedPermanently = HTTPResponseStatus(code: 301)
     public static let seeOther = HTTPResponseStatus(code: 303)
+    public static let temporaryRedirect = HTTPResponseStatus(code: 307)
+    public static let permanentRedirect = HTTPResponseStatus(code: 308)
     public static let badRequest = HTTPResponseStatus(code: 400)
     public static let unauthorized = HTTPResponseStatus(code: 401)
     public static let forbidden = HTTPResponseStatus(code: 403)

@@ -48,6 +48,25 @@ public enum Configuration {
     public static let timeoutConnect: Int64 = 10
     public static let timeoutRead: Int64 = 30
 
+    /// 构造一个配置好的 HTTPClient。ApplePackage 全套上下游（Bag/Authenticator/Download
+    /// /VersionFinder/VersionLookup）共享同一构造入口，避免在调用点堆叠链式 .then{}。
+    /// 1.2.7 主线同款 (`Configuration.makeHTTPClient(redirectConfiguration:)`)，shim 环境
+    /// 里直接调 shim 的 HTTPClient 构造器。
+    public static func makeHTTPClient(
+        redirectConfiguration: RedirectConfiguration
+    ) -> HTTPClient {
+        HTTPClient(
+            configuration: .init(
+                tlsConfiguration: tlsConfiguration,
+                redirectConfiguration: redirectConfiguration,
+                timeout: .init(
+                    connect: .seconds(timeoutConnect),
+                    read: .seconds(timeoutRead)
+                )
+            )
+        )
+    }
+
     #if os(macOS)
         public nonisolated(unsafe) static var homePath: URL = FileManager.default
             .homeDirectoryForCurrentUser

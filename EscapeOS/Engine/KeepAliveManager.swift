@@ -57,7 +57,8 @@ final class KeepAliveManager {
                 if !p.isPlaying { p.play() }
             }
         } catch {
-            NSLog("[KeepAlive] 启动失败: %@", error.localizedDescription)
+            // iOS 26 SDK 把 NSLog 的 variadic 形式标 unavailable，用 print 代替。
+            print("[KeepAlive] 启动失败: \(error.localizedDescription)")
         }
     }
 

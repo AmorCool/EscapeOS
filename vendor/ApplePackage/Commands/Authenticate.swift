@@ -1,8 +1,16 @@
 //
 //  Authenticate.swift
+//  ApplePackage
 //
+//  Created by QAQ on 2023/10/4. (Ported from ApplePackage 1.2.7 to the shim environment;
+//  diagnosis-on-plist-failure detail layer (v0.2.151) preserved.)
 //
-//  Created by QAQ on 2023/10/4.
+// v0.2.155 起对齐 ApplePackage 1.2.7 主线（PR #84 2026-06-12）：
+//   - 通过 Bag.fetchBag() 动态发现并规范化 native auth 端点（带 /fast/ 尾斜杠）
+//   - 跟随重定向 301/302/303/307/308（不只是 302）
+//   - 提取 `pod` 响应头（Apple 分配的 store pod），给下游 Download 路由用
+//   - 循环上限 currentAttempt ≤ 2（**不再**对 204/404 重试 —— 加重 Apple 边缘 IP 限流）
+//   - plist 解析失败时：JSON 回退 + HTTP 状态/Content-Type/响应体前 512B 透传诊断
 //
 
 import Foundation
@@ -16,7 +24,7 @@ public enum Authenticator {
         case failure(String)
     }
 
-    public nonisolated static func authenticate(
+    public static func authenticate(
         email: String,
         password: String,
         code: String = "",
@@ -24,31 +32,23 @@ public enum Authenticator {
     ) async throws -> AppStoreAccount {
         let deviceIdentifier = Configuration.deviceIdentifier
 
-        let client = HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: .init(
-                tlsConfiguration: Configuration.tlsConfiguration,
-                redirectConfiguration: .disallow,
-                timeout: .init(
-                    connect: .seconds(Configuration.timeoutConnect),
-                    read: .seconds(Configuration.timeoutRead)
-                )
-            ).then { $0.httpVersion = .http1Only }
-        )
+        let bagOutput = try await Bag.fetchBag()
+
+        let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
 
-        var requestEndpoint: URL = try createInitialRequestEndpoint(deviceIdentifier: deviceIdentifier)
+        var requestEndpoint: URL = try createInitialRequestEndpoint(
+            baseURL: bagOutput.authEndpoint,
+            deviceIdentifier: deviceIdentifier
+        )
         var cookies: [Cookie] = cookies
         var storeFront = ""
+        var pod: String?
         var currentAttempt = 1
         var redirectAttempt = 0
         var lastError: Error?
-        // Apple 认证边缘对同一请求会间歇性返回 204/404/5xx（负载/限流，curl 实测
-        // 5 连发命中 200/204/301 交替）。生产实现（ipatool `retryableAuthenticationError`）
-        // 对这些状态**延迟重试**而非硬失败；asspp 系代码缺此逻辑，故真机偶发 204 即挂。
-        let maxAuthAttempts = 4
 
-        while currentAttempt <= maxAuthAttempts, redirectAttempt <= 3 {
+        while currentAttempt <= 2, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
                 let request = try makeRequest(
@@ -60,19 +60,18 @@ public enum Authenticator {
                     deviceIdentifier: deviceIdentifier
                 )
                 let response = try await client.execute(request: request).get()
-                let statusCode = Int(response.status.code)
-                if isTransientAuthStatus(statusCode), currentAttempt < maxAuthAttempts {
-                    // 瞬态响应：线性退避后重试（250ms / 500ms / 750ms）
-                    try await Task.sleep(nanoseconds: UInt64(250 * currentAttempt) * 1_000_000)
-                    continue
-                }
+                // 用 print 不用 NSLog：iOS 26 SDK 已把 NSLog 的 variadic 形式标为 unavailable
+                // （'NSLog' is unavailable: Variadic function is unavailable），但 Swift 的
+                // 单参 print 依然受支持。
+                print("[EscapeOS][AppStore][Auth] \(requestEndpoint.host ?? "?") status=\(response.status.code)")
                 let result = try parseResponse(
                     response,
                     email: email,
                     password: password,
                     code: code,
                     cookies: &cookies,
-                    storeFront: &storeFront
+                    storeFront: &storeFront,
+                    pod: &pod
                 )
                 switch result {
                 case let .success(account):
@@ -84,7 +83,11 @@ public enum Authenticator {
                     continue
                 case .codeRequired:
                     currentAttempt += 65535 // stop attempts
-                    try ensureFailed("Authentication requires verification code\nIf no verification code prompted, try logging in at https://account.apple.com to trigger the alert and fill the code in the 2FA Code here.")
+                    try ensureFailed(
+                        "Authentication requires verification code\n" +
+                        "If no verification code prompted, try logging in at https://account.apple.com " +
+                        "to trigger the alert and fill the code in the 2FA Code here."
+                    )
                 case .retry:
                     continue
                 case let .failure(string):
@@ -95,17 +98,11 @@ public enum Authenticator {
             }
         }
 
-        if let lastError { throw lastError }
+        if let lastError = lastError { throw lastError }
         try ensureFailed("authentication failed for an unknown reason")
     }
 
-    /// Apple 认证边缘的瞬态状态（ipatool `retryableAuthenticationError` 同款）：
-    /// 204 无内容 / 404 偶发 / 5xx 服务端 —— 均应延迟重试。
-    private nonisolated static func isTransientAuthStatus(_ code: Int) -> Bool {
-        code == 204 || code == 404 || code / 100 == 5
-    }
-
-    public nonisolated static func rotatePasswordToken(for account: inout AppStoreAccount) async throws {
+    public static func rotatePasswordToken(for account: inout AppStoreAccount) async throws {
         let newAccount = try await authenticate(
             email: account.email,
             password: account.password,
@@ -115,28 +112,20 @@ public enum Authenticator {
         account = newAccount
     }
 
-    private nonisolated static func createInitialRequestEndpoint(
+    private static func createInitialRequestEndpoint(
+        baseURL: URL,
         deviceIdentifier: String
     ) throws -> URL {
-        // iTunes Store 认证端点。**路径必须带尾斜杠 `/auth/v1/native/fast/`**：
-        // 无尾斜杠的变体会被 Apple 边缘以 404/301 拒绝（v0.2.151 真机 404 实锤，
-        // 见 asspp/AssppWeb normalizeAuthURL 同款处理）。请求体为 XML plist
-        // （application/x-apple-plist），响应为同一套 plist 结构
-        // （passwordToken/dsPersonId/accountInfo/failureType/customerMessage），
-        // parseResponse 无需改动。
-        // v0.2.152 曾误换到 wa/authenticate（该端点 2026 年起要求 SAP 签名
-        // X-Apple-ActionSignature，无签名返回 403 空体，参考 ipatool），已回退。
-        var comps = URLComponents()
-        comps.scheme = "https"
-        comps.host = "auth.itunes.apple.com"
-        comps.path = "/auth/v1/native/fast/"
+        guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
+            try ensureFailed("invalid auth endpoint: \(baseURL)")
+        }
         comps.queryItems = [
             URLQueryItem(name: "guid", value: deviceIdentifier),
         ]
         return try comps.url.get()
     }
 
-    private nonisolated static func makeRequest(
+    private static func makeRequest(
         endpoint: URL,
         email: String,
         password: String,
@@ -164,26 +153,27 @@ public enum Authenticator {
         for item in cookies.buildCookieHeader(endpoint) {
             headers.append(item)
         }
-        return try .init(
+        return try HTTPClient.Request(
             url: endpoint.absoluteString,
             method: .POST,
-            headers: .init(headers),
+            headers: HTTPHeaders(headers),
             body: .data(data)
         )
     }
 
-    private nonisolated static func parseResponse(
+    private static func parseResponse(
         _ response: HTTPClient.Response,
         email: String,
         password: String,
         code: String,
         cookies: inout [Cookie],
-        storeFront: inout String
+        storeFront: inout String,
+        pod: inout String?
     ) throws -> LoginResponse {
         cookies.mergeCookies(response.cookies)
 
-        let readStoreFrontValue = response
-            .headers["x-set-apple-store-front"]
+        // 提取 Apple 分配的 store front（用于地区路由）。
+        let readStoreFrontValue = response.headers["x-set-apple-store-front"]
             .filter { !$0.isEmpty }
             .compactMap { $0.components(separatedBy: "-").first }
             .filter { !$0.isEmpty }
@@ -192,9 +182,19 @@ public enum Authenticator {
             storeFront = first
         }
 
-        // 原生 /fast 认证 host 会以 301 响应（除常见的 302 外），连同 303/307/308
-        // 一并跟随 —— 与 asspp/AssppWeb `authenticate.ts` 的 `[301, 302, 303, 307, 308]` 一致。
-        if [301, 302, 303, 307, 308].contains(Int(response.status.code)) {
+        // 提取 store pod（Apple 分配的 pXX 编号）—— 给下游 Download 路由用。
+        if let podValue = response.headers.first(name: "pod"), !podValue.isEmpty {
+            pod = podValue
+        }
+
+        let redirectStatuses: [HTTPResponseStatus] = [
+            .movedPermanently, // 301
+            .found,            // 302
+            .seeOther,         // 303
+            .temporaryRedirect,// 307
+            .permanentRedirect,// 308
+        ]
+        if redirectStatuses.contains(response.status) {
             guard let location = response.headers.first(name: "location"),
                   let url = URL(string: location)
             else {
@@ -206,26 +206,35 @@ public enum Authenticator {
         guard var body = response.body,
               let data = body.readData(length: body.readableBytes)
         else {
-            return .failure("response body is empty")
+            return .failure("response body is empty (code: \(response.status.code))")
         }
 
-        let statusCode = response.status.code
-        let contentType = response.headers.first(name: "content-type") ?? "(unknown)"
-        let bodySnippet = String(data: data.prefix(512), encoding: .utf8) ?? "(非 UTF-8 数据，\(data.count) 字节)"
-
+        // ===== v0.2.151 诊断透传（保留）=====
+        // Apple 认证边缘偶尔会返回非 plist（HTML 错误页、JSON 业务错误）。1.2.7 主线
+        // 在 parseResponse 里直接 `try PropertyListSerialization...`，失败抛 NSError
+        // 但调用方看不到 HTTP 上下文。这里先尝试 JSON 业务错误，否则把 HTTP 状态/
+        // Content-Type/响应体前 512B 一起透传进 ensureFailed，让「更多 → 登录日志」
+        // 能看到 Apple 的真实返回内容。
+        let parsePlist: (Data) throws -> Any = { payload in
+            try PropertyListSerialization.propertyList(from: payload, options: [], format: nil)
+        }
         let listItem: Any
         do {
-            listItem = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+            listItem = try parsePlist(data)
         } catch {
-            // JSON 回退：Apple 有时用 JSON 返回结构化错误，而不是 plist
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let msg = (json["customerMessage"] as? String)
                     ?? (json["failureType"] as? String)
                     ?? (json["errorMessage"] as? String)
-                    ?? (json["message"] as? String) {
+                    ?? (json["message"] as? String)
+            {
+                print("[EscapeOS][AppStore][Auth] Apple 业务错误: \(msg)")
                 try ensureFailed("authentication failed: \(msg)")
             }
-            // 否则把 Apple 真实返回的诊断信息透传，便于真机取证
+            let statusCode = response.status.code
+            let contentType = response.headers.first(name: "content-type") ?? "(unknown)"
+            let bodySnippet = String(data: data.prefix(512), encoding: .utf8)
+                ?? "(非 UTF-8 数据，\(data.count) 字节)"
             let detail = """
             iTunes 认证返回的数据不是 plist，无法解析。
             HTTP 状态：\(statusCode)
@@ -234,7 +243,7 @@ public enum Authenticator {
             \(bodySnippet)
             原始解析错误：\(error.localizedDescription)
             """
-            NSLog("[EscapeOS][AppStore] iTunes 认证返回非 plist：\(detail)")
+            print("[EscapeOS][AppStore][Auth] iTunes 认证返回非 plist：\(detail)")
             try ensureFailed(detail)
         }
         let dic = try (listItem as? [String: Any]).get("response is not a dictionary")
@@ -248,9 +257,16 @@ public enum Authenticator {
             return .codeRequired
         }
 
-        let failureMessage = (dic["dialog"] as? [String: Any])?["explanation"] as? String ?? (dic["customerMessage"] as? String)
-        let accountInfoDic = try (dic["accountInfo"] as? [String: Any]).get(failureMessage ?? "missing accountInfo")
-        let addressInfoDic = try (accountInfoDic["address"] as? [String: Any]).get(failureMessage ?? "missing address")
+        if let failureType = dic["failureType"] as? String, failureType == "5005" {
+            return .failure("invalid 2FA code")
+        }
+
+        let failureMessage = (dic["dialog"] as? [String: Any])?["explanation"] as? String
+            ?? (dic["customerMessage"] as? String)
+        let accountInfoDic = try (dic["accountInfo"] as? [String: Any])
+            .get(failureMessage ?? "missing accountInfo")
+        let addressInfoDic = try (accountInfoDic["address"] as? [String: Any])
+            .get(failureMessage ?? "missing address")
 
         let account = try AppStoreAccount(
             email: email,
@@ -261,7 +277,8 @@ public enum Authenticator {
             lastName: addressInfoDic["lastName"] as? String,
             passwordToken: dic["passwordToken"] as? String,
             directoryServicesIdentifier: dic["dsPersonId"] as? String,
-            cookie: cookies
+            cookie: cookies,
+            pod: pod
         )
         return .success(account)
     }

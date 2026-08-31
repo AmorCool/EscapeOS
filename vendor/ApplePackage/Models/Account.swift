@@ -18,6 +18,10 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
     public var passwordToken: String // /passwordToken
     public var directoryServicesIdentifier: String // /dsPersonId
     public var cookie: [Cookie]
+    /// Apple 认证分配的 store pod（pXX 编号）；从认证响应的 `pod` 响应头提取，
+    /// 用于下游 download 调用路由到正确 store。ApplePackage 1.2.7 主线字段，
+    /// 老持久化的 JSON 没有此字段时 Swift Codable 会自动解码为 nil（向后兼容）。
+    public var pod: String?
 
     public init(
         email: String,
@@ -28,7 +32,8 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
         lastName: String,
         passwordToken: String,
         directoryServicesIdentifier: String,
-        cookie: [Cookie]
+        cookie: [Cookie],
+        pod: String? = nil
     ) {
         self.email = email
         self.password = password
@@ -39,6 +44,7 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
         self.passwordToken = passwordToken
         self.directoryServicesIdentifier = directoryServicesIdentifier
         self.cookie = cookie
+        self.pod = pod
     }
 }
 
@@ -52,7 +58,8 @@ public extension AppStoreAccount {
         lastName: String?,
         passwordToken: String?,
         directoryServicesIdentifier: String?,
-        cookie: [Cookie]
+        cookie: [Cookie],
+        pod: String? = nil
     ) throws {
         try ensure(!email.isEmpty, "empty email")
         try ensure(!password.isEmpty, "empty password")
@@ -67,5 +74,6 @@ public extension AppStoreAccount {
         self.passwordToken = try passwordToken.get("unable to read passwordToken")
         self.directoryServicesIdentifier = try directoryServicesIdentifier.get("unable to read dsPersonId")
         self.cookie = cookie
+        self.pod = pod
     }
 }

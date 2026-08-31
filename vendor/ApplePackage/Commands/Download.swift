@@ -3,64 +3,49 @@
 //  ApplePackage
 //
 //  Created by qaq on 9/15/25.
+//  v0.2.155: 改为调 StoreDownloadEndpoint.fetchProductWithFallback(pr #84)，
+//  不再硬编码 p25 URL —— Apple upstream 会按 account.pod 路由到 pXX。
 //
 
 import Foundation
 
 public enum Download {
-    public nonisolated static func download(
+    public static func download(
         account: inout AppStoreAccount,
         app: Software,
         externalVersionID: String? = nil
     ) async throws -> DownloadOutput {
         let deviceIdentifier = Configuration.deviceIdentifier
 
-        let client = HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: .init(
-                tlsConfiguration: Configuration.tlsConfiguration,
-                redirectConfiguration: .disallow,
-                timeout: .init(
-                    connect: .seconds(Configuration.timeoutConnect),
-                    read: .seconds(Configuration.timeoutRead)
-                )
-            ).then { $0.httpVersion = .http1Only }
-        )
+        let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
 
-        let request = try makeRequest(
-            account: account,
+        // fetchProductWithFallback 内部已经处理 302 pod 重定向 + 5002 → redownload fallback。
+        let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
+            client: client,
+            account: &account,
             app: app,
-            guid: deviceIdentifier,
+            deviceIdentifier: deviceIdentifier,
             externalVersionID: externalVersionID ?? ""
         )
-        let response = try await client.execute(request: request).get()
-
-        account.cookie.mergeCookies(response.cookies)
-
-        try ensure(response.status == .ok, "download request failed with status \(response.status.code)")
-
-        guard var body = response.body,
-              let data = body.readData(length: body.readableBytes)
-        else {
-            try ensureFailed("response body is empty")
-        }
-
-        let plist = try PropertyListSerialization.propertyList(
-            from: data,
-            options: [],
-            format: nil
-        ) as? [String: Any]
-        guard let dict = plist else { try ensureFailed("invalid response") }
 
         if let failureType = dict["failureType"] as? String {
+            let customerMessage = dict["customerMessage"] as? String
             switch failureType {
-            case "2034":
+            case "2034", "2042":
                 try ensureFailed("password token is expired")
             case "9610":
                 throw ApplePackageError.licenseRequired
+            case retryableFailureType:
+                // 已经走过 fallback 才到这里 —— 几乎不可能；保留错误路径。
+                try ensureFailed("download failed: persistent \(failureType)")
             default:
-                if let customerMessage = dict["customerMessage"] as? String {
+                if let customerMessage = customerMessage,
+                   customerMessage == "Your password has been changed"
+                {
+                    try ensureFailed("password token is expired")
+                }
+                if let customerMessage = customerMessage {
                     try ensureFailed(customerMessage)
                 }
                 try ensureFailed("download failed: \(failureType)")
@@ -76,7 +61,7 @@ public enum Download {
             try ensureFailed("missing download URL")
         }
 
-        guard let metadata = item["metadata"] as? [String: Any] else {
+        guard var metadata = item["metadata"] as? [String: Any] else {
             try ensureFailed("missing metadata")
         }
 
@@ -86,6 +71,11 @@ public enum Download {
         guard let version, let bundleVersion else {
             try ensureFailed("missing required information")
         }
+
+        // 像 asspp/AssppWeb 一样把 apple-id / userName 注入 metadata（当前
+        // DownloadOutput 模型还没加 iTunesMetadata 字段，序列化部分先不写入）。
+        metadata["apple-id"] = account.email
+        metadata["userName"] = account.email
 
         var sinfs: [Sinf] = []
         if let sinfData = item["sinfs"] as? [[String: Any]] {
@@ -106,43 +96,6 @@ public enum Download {
             sinfs: sinfs,
             bundleShortVersionString: version,
             bundleVersion: bundleVersion
-        )
-    }
-
-    private nonisolated static func makeRequest(
-        account: AppStoreAccount,
-        app: Software,
-        guid: String,
-        externalVersionID: String
-    ) throws -> HTTPClient.Request {
-        var payload: [String: Any] = [
-            "creditDisplay": "",
-            "guid": guid,
-            "salableAdamId": app.id,
-        ]
-
-        if !externalVersionID.isEmpty {
-            payload["externalVersionId"] = externalVersionID
-        }
-
-        let data = try PropertyListSerialization.data(fromPropertyList: payload, format: .xml, options: 0)
-
-        var headers: [(String, String)] = [
-            ("Content-Type", "application/x-apple-plist"),
-            ("User-Agent", Configuration.userAgent),
-            ("iCloud-DSID", account.directoryServicesIdentifier),
-            ("X-Dsid", account.directoryServicesIdentifier),
-        ]
-
-        for item in account.cookie.buildCookieHeader(URL(string: "https://p25-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct")!) {
-            headers.append(item)
-        }
-
-        return try .init(
-            url: "https://p25-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct",
-            method: .POST,
-            headers: .init(headers),
-            body: .data(data)
         )
     }
 }

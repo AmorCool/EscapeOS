@@ -100,7 +100,8 @@ final class BackgroundAudioManager {
             try engine.start()
             player.play()
         } catch {
-            NSLog("[BackgroundAudioManager] 启动失败: %@", error.localizedDescription)
+            // iOS 26 SDK 把 NSLog 的 variadic 形式标 unavailable，用 print 代替。
+            print("[BackgroundAudioManager] 启动失败: \(error.localizedDescription)")
         }
     }
 
