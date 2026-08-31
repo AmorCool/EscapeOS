@@ -33,6 +33,9 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     ENABLE_BITCODE: "NO"
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+    # 对齐 Theos：不把 Swift 运行时打进 .app（iOS 18+ 系统自带 Swift 5 ABI 稳定，
+    # 嵌入反而需要额外对 Frameworks 内 dylib 签名）。单 module 应用无需嵌入。
+    ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: "NO"
     CLANG_ENABLE_MODULES: "YES"
     # 对齐 Theos 的 -I 搜索路径（桥接头引用 bad_query.h / Tunnel/*.h / MCM/*.h）
     HEADER_SEARCH_PATHS:

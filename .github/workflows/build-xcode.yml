@@ -151,28 +151,44 @@ jobs:
       - name: Package unsigned IPA
         # 对齐 Theos 出包形态：ldid 施加 entitlements（与 Makefile:157 的 -S 一致）
         # → 打包为 Payload/EscapeSpace.app → zip 成未签名 IPA（不依赖 Apple 证书）。
+        # 全程诊断输出 tee 到 /tmp/package.log，并由「Upload package log」artifact 落盘，
+        # 即使本步骤失败也能拿到真实错误（GitHub run log 偶发 421 取不到时作为兜底）。
         run: |
           set -euo pipefail
+          exec > >(tee /tmp/package.log) 2>&1
+          echo "=== packaging start ($(date -u)) ==="
+
           APP="$(find build -name 'EscapeSpace.app' -type d | head -n1)"
+          echo "APP=$APP"
           if [ -z "$APP" ]; then
-            echo "ERROR: EscapeSpace.app not found under build/" >&2
-            find build -maxdepth 4 -name '*.app' -type d 2>/dev/null || true
+            echo "ERROR: EscapeSpace.app not found under build/"
+            find build -maxdepth 5 -name '*.app' -type d 2>/dev/null || true
             exit 1
           fi
-          echo "Found app bundle: $APP"
           ls -la "$APP"
 
-          # 施加 entitlements（与 Theos 的 ldid -SEscapeSpace.entitlements 等价）
-          ldid -S EscapeSpace.entitlements "$APP"
-          echo "=== embedded entitlements (ldid -e) ==="
-          ldid -e "$APP" 2>/dev/null | head -20 || true
+          echo "=== ldid version ==="
+          ldid --version 2>&1 || true
 
-          # 架构校验：应为 arm64（真机）
-          BIN="$APP/EscapeSpace"
-          if [ -f "$BIN" ]; then
-            echo "=== lipo -info ==="
-            lipo -info "$BIN" 2>/dev/null || true
+          # 取 .app 内真实可执行文件名（避免硬编码 PRODUCT_NAME 与实际不符）
+          BIN="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist" 2>/dev/null)"
+          if [ ! -f "$BIN" ]; then
+            # 回退：直接用 PRODUCT_NAME
+            BIN="$APP/EscapeSpace"
           fi
+          echo "BIN=$BIN"
+          ls -la "$BIN"
+
+          # 对主二进制施加 entitlements（与 Theos 的 ldid -SEscapeSpace.entitlements 等价）
+          echo "=== ldid -S (main binary) ==="
+          ldid -S EscapeSpace.entitlements "$BIN"
+          echo "ldid exit=$?"
+
+          echo "=== embedded entitlements (ldid -e) ==="
+          ldid -e "$BIN" 2>/dev/null | head -20 || true
+
+          echo "=== lipo -info ==="
+          lipo -info "$BIN" 2>/dev/null || true
 
           # 打包未签名 IPA（Payload/ 布局，与 Theos 出包一致）
           VERSION="$(grep -m1 'MARKETING_VERSION' project.yml | sed -E 's/.*"([0-9.]+)".*/\1/')"
@@ -192,6 +208,13 @@ jobs:
           path: |
             /tmp/xcodegen.log
             /tmp/xcodebuild.log
+
+      - name: Upload package log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-package-log
+          path: /tmp/package.log
 
       - name: Upload IPA
         if: always()
