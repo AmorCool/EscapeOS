@@ -1,0 +1,189 @@
+//
+//  Bag.swift
+//  ApplePackage
+//
+//  Created on 2026/2/20. (Ported from ApplePackage 1.2.7 to the shim environment)
+//
+// 通过 init.itunes.apple.com/bag.xml 拿动态 auth 端点 —— ApplePackage 1.2.7 主线
+// 做法，避免硬编码 native/fast URL（老 URL 会被 Apple 边缘以 301 拒绝到 HTML 页）。
+// 这是 PR #84 (2026-06-12) 的核心修复之一。
+//
+
+import Foundation
+
+public enum Bag {
+    public struct BagOutput {
+        public var authEndpoint: URL
+        // v0.4.0：SAP 签名端点（bag.xml 的 sign-sap-* 键，ipatool PR #525 同款）。
+        // bag 解析失败 / 老缓存 / 兜底端点场景下为 nil → 认证请求退回未签名行为。
+        public var sapSetupURL: URL?
+        public var sapCertificateURL: URL?
+        public var sapVersion: UInt32?
+    }
+
+    /// 兜底端点 —— Bag.fetchBag() 任何一步失败都回落到这里。
+    /// 路径**带尾斜杠**（无尾斜杠的变体被 Apple 边缘 301 到 HTML 页）。
+    private static let defaultAuthEndpoint = "https://auth.itunes.apple.com/auth/v1/native/fast/"
+
+    // v0.2.159（审计 Q9）：单会话内 auth 端点基本不变，缓存上一次成功解析的端点，
+    // 避免每次 `Authenticator.authenticate` 都重新拉 bag.xml（既省耗时也减少 Apple 边缘请求次数）。
+    // 以 deviceIdentifier 为键：Anisette 重置导致标识变化时会自动失效并重拉。
+    // v0.4.0：缓存升级为完整 BagOutput（连同 sign-sap-* 三元组一起缓存）。
+    private static var cachedOutput: BagOutput?
+    private static var cachedDeviceIdentifier: String = ""
+
+    public static func fetchBag() async throws -> BagOutput {
+        let deviceIdentifier = Configuration.deviceIdentifier
+
+        // 会话内已成功解析过、且设备标识未变 → 直接命中缓存，跳过 bag.xml 网络请求（审计 Q9）。
+        // 既能减少每次认证的耗时，也降低对 Apple 边缘的请求频率（避免触发限流）。
+        if cachedDeviceIdentifier == deviceIdentifier, let cached = cachedOutput {
+            print("[EscapeOS][Bag] 命中会话缓存 auth endpoint: \(cached.authEndpoint.absoluteString)")
+            return cached
+        }
+
+        let client = Configuration.makeHTTPClient(
+            redirectConfiguration: .follow(max: 8, allowCycles: false)
+        )
+        defer { _ = client.shutdown() }
+
+        var comps = URLComponents()
+        comps.scheme = "https"
+        comps.host = "init.itunes.apple.com"
+        comps.path = "/bag.xml"
+        comps.queryItems = [URLQueryItem(name: "guid", value: deviceIdentifier)]
+        guard let url = comps.url else {
+            return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
+        }
+
+        let headers: [(String, String)] = [
+            ("User-Agent", Configuration.userAgent),
+            ("Accept", "application/xml"),
+        ]
+
+        let request = HTTPClient.Request(
+            url: url.absoluteString,
+            method: .GET,
+            headers: HTTPHeaders(headers),
+            body: .none
+        )
+
+        let response = try await client.execute(request: request).get()
+        print(
+            "[EscapeOS][Bag] init.itunes.apple.com/bag.xml status=\(response.status.code) bytes=\(response.body?.readableBytes ?? 0)"
+        )
+
+        guard var body = response.body,
+              let data = body.readData(length: body.readableBytes)
+        else {
+            print("[EscapeOS][Bag] 空响应体，回退 default auth endpoint")
+            return fallbackEndpoint()
+        }
+
+        let plistData = extractPlistData(from: data)
+
+        guard let plist = try? PropertyListSerialization.propertyList(
+            from: plistData,
+            options: [],
+            format: nil
+        ) as? [String: Any] else {
+            print("[EscapeOS][Bag] plist 解析失败，回退 default auth endpoint")
+            return fallbackEndpoint()
+        }
+
+        // authenticateAccount 现在在 plist 根；老 bag 还会把它放在 urlBag dict 里 ——
+        // 1.2.7 主线 root 优先，urlBag 兜底。
+        let urlBag = plist["urlBag"] as? [String: Any] ?? [:]
+        let authURLString = (plist["authenticateAccount"] as? String)
+            ?? (urlBag["authenticateAccount"] as? String)
+
+        // v0.4.0：SAP 签名端点三元组（root 优先，urlBag 兜底；与 ipatool
+        // appstore_bag.go 的 urlBag plist 键一一对应）。缺失 → sapOutput 为 nil，
+        // 认证请求退回未签名行为（Apple 现行策略下会 403，但保留旧行为不崩溃）。
+        let sapSetupString = (plist["sign-sap-setup"] as? String)
+            ?? (urlBag["sign-sap-setup"] as? String)
+        let sapCertString = (plist["sign-sap-setup-cert"] as? String)
+            ?? (urlBag["sign-sap-setup-cert"] as? String)
+        let sapVersionString = (plist["sign-sap-version"] as? String)
+            ?? (urlBag["sign-sap-version"] as? String)
+        let sapVersion = sapVersionString.flatMap { UInt32($0) }
+
+        guard let authURLString,
+              let authURL = normalizedAuthEndpoint(from: authURLString)
+        else {
+            print("[EscapeOS][Bag] 找不到 authenticateAccount，回退 default auth endpoint")
+            return fallbackEndpoint()
+        }
+
+        var output = BagOutput(authEndpoint: authURL)
+        if let sapSetupString, let sapCertString,
+           let setupURL = URL(string: sapSetupString), let certURL = URL(string: sapCertString) {
+            output.sapSetupURL = setupURL
+            output.sapCertificateURL = certURL
+            output.sapVersion = sapVersion
+            print("[EscapeOS][Bag] 解析到 SAP 端点: setup=\(sapSetupString) version=\(sapVersionString ?? "200(缺省)")")
+        } else {
+            print("[EscapeOS][Bag] bag.xml 未提供完整 sign-sap-setup/setup-cert 端点，SAP 签名不可用")
+        }
+
+        // 成功解析则更新会话缓存（下次直接命中，跳过网络）。
+        cachedDeviceIdentifier = deviceIdentifier
+        cachedOutput = output
+        print("[EscapeOS][Bag] 解析到 auth endpoint: \(output.authEndpoint.absoluteString)")
+        return output
+    }
+
+    /// Apple bag 给的 native auth 端点常缺 `/fast/` 子路径且无尾斜杠。
+    /// 没有 `/fast/` 的变体被 Apple 边缘 301 到 HTML 页（v0.2.151 真机 404 实锤）。
+    /// 这里强制规范成 `auth.itunes.apple.com/.../fast/` 格式。
+    ///
+    /// v0.2.156 新增 legacy 回退：2026-08-31 真机 + curl 实证（5 组 guid/UA 对照），
+    /// Configurator UA 下 bag.xml 的 `authenticateAccount` 返回 legacy
+    /// `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate` ——
+    /// 该端点 2026 年起要求 SAP 签名（`X-Apple-ActionSignature`，ipatool 实证），
+    /// shim 环境无法签名，跟随其 302 到 pod 后必挂「failed to retrieve
+    /// redirect location」（v0.2.155 真机实锤）。凡 legacy 端点一律回退
+    /// `defaultAuthEndpoint`（native/fast/，与 AssppWeb `defaultAuthURL` 兜底思路一致）。
+    /// 兜底端点解析：优先复用会话内已成功解析的端点（审计 Q9 缓存）；
+    /// 没有缓存时才回落到硬编码的 native/fast/ 默认端点。
+    private static func fallbackEndpoint() -> BagOutput {
+        if cachedDeviceIdentifier == Configuration.deviceIdentifier,
+           let cached = cachedOutput {
+            print("[EscapeOS][Bag] 网络/解析失败，复用会话缓存 auth endpoint")
+            return cached
+        }
+        return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
+    }
+
+    private static func normalizedAuthEndpoint(from urlString: String) -> URL? {        guard var comps = URLComponents(string: urlString) else { return nil }
+        if comps.host == "buy.itunes.apple.com",
+           comps.path.hasSuffix("/wa/authenticate") {
+            print("[EscapeOS][Bag] bag.xml 给出 legacy wa/authenticate 端点（需 SAP 签名，无法使用），回退 default native/fast/")
+            return URL(string: defaultAuthEndpoint)
+        }
+        if comps.host == "auth.itunes.apple.com" {
+            var path = comps.path
+            while path.hasSuffix("/") {
+                path.removeLast()
+            }
+            if !path.hasSuffix("/fast") {
+                path += "/fast"
+            }
+            comps.path = path + "/"
+        }
+        return comps.url
+    }
+
+    /// Bag XML 响应把 plist 包在 `<Document><Protocol><plist>...</plist></Protocol></Document>` 里。
+    /// PropertyListSerialization 处理不了外层 XML，只能手动抽出 `<plist>...</plist>` 段。
+    /// 如果 body 已经是裸 plist，原样返回。
+    private static func extractPlistData(from data: Data) -> Data {
+        guard let xmlString = String(data: data, encoding: .utf8),
+              let startRange = xmlString.range(of: "<plist"),
+              let endRange = xmlString.range(of: "</plist>")
+        else {
+            return data
+        }
+        return Data(xmlString[startRange.lowerBound ..< endRange.upperBound].utf8)
+    }
+}

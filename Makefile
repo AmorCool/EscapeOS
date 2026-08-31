@@ -61,6 +61,9 @@ EscapeSpace_FILES = \
 	EscapeOS/Views/CrashLogView.swift \
 	EscapeOS/Views/IPCCInstallView.swift \
 	EscapeOS/Views/SignedIPAInstallView.swift \
+	EscapeOS/Views/AppStoreDownloadView.swift \
+	EscapeOS/Views/AddAccountSheet.swift \
+	EscapeOS/Views/AppStoreSearchView.swift \
 	EscapeOS/Views/KernelCacheView.swift \
 	EscapeOS/Views/ProfileInstallView.swift \
 	EscapeOS/Views/RingtonesView.swift \
@@ -89,6 +92,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/IPCCInstallService.swift \
 	EscapeOS/Engine/KernelCacheService.swift \
 	EscapeOS/Engine/RingtonesService.swift \
+	EscapeOS/Engine/AppStoreDownloadStore.swift \
 	EscapeOS/Engine/FileKind.swift \
 	EscapeOS/Engine/FileClipboard.swift \
 	EscapeOS/Engine/FileService.swift \
@@ -145,6 +149,12 @@ EscapeSpace_FILES += $(shell find vendor/BitByteData/Sources vendor/SWCompressio
 	! -name 'TarWriter.swift' ! -name 'TarReader.swift' ! -name 'TarCreateError.swift' \
 	! -name 'ZlibArchive.swift' ! -name 'ZlibError.swift' ! -name 'ZlibHeader.swift' \
 	! -name 'BigEndianByteReader.swift')
+
+# ApplePackage（移植自 asspp）：App Store 登录 / 搜索 / 下载 IPA / 历史版本。
+# v0.4.0 起恢复并接入 SAP 签名（X-Apple-ActionSignature，Unicorn 解释执行
+# CommerceKit，见 sapbridge/ 与 SapSigner.swift）。网络层为 URLSession 重写
+# （原 AsyncHTTPClient 兼容 shim），ZIP 用项目已有的 SWCompression。
+EscapeSpace_FILES += $(shell find vendor/ApplePackage -name '*.swift')
 
 
 

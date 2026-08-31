@@ -68,6 +68,14 @@ struct MoreView: View {
                         )
                     }
 
+                    NavigationLink(destination: AppStoreDownloadView()) {
+                        MoreCard(
+                            icon: "cart.fill",
+                            title: "App Store 下载",
+                            subtitle: "登录 App Store 账户，搜索并下载正版 IPA（含历史版本），下载后交给「IPA 安装」在线安装 —— 与爱思助手同款流程。"
+                        )
+                    }
+
                     NavigationLink(destination: SignedIPAInstallView()) {
                         MoreCard(
                             icon: "app.badge.checkmark",
