@@ -30,6 +30,11 @@ import (
 //
 //	SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char, cacheDir *C.char) *C.char
 //	SapGetProgress() *C.char
+//
+// All exported entry points recover Go-level panics and surface them as error
+// strings (a panic crossing the cgo boundary would abort the whole process —
+// a device crash). Native faults inside libunicorn (e.g. TCG without JIT) are
+// NOT recoverable and are gated by the Swift-side JIT probe instead.
 //	SapSign(requestBase64 *C.char) *C.char
 //	SapLastError() *C.char
 //	SapClose()
@@ -46,9 +51,19 @@ var (
 // (sign-sap-setup / sign-sap-setup-cert). version is normally 200. hwIDBase64
 // is a base64-encoded 1-20 byte hardware identifier. Returns NULL on success or
 // a malloc'd error string (free with SapFree).
-func SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char, cacheDir *C.char) *C.char {
+func SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char, cacheDir *C.char) (result *C.char) {
 	bridgeMu.Lock()
 	defer bridgeMu.Unlock()
+
+	// v0.3.5：recover Go 级 panic（如依赖库越界/空指针）——跨 cgo 边界未 recover
+	// 的 panic 会 abort 整个进程（真机闪退），这里转成错误字符串交给 Swift/UI。
+	// 注意：libunicorn 内部的原生段错误（TCG/JIT 类）不在此列，由 JIT 闸门前置拦截。
+	defer func() {
+		if r := recover(); r != nil {
+			lastErr = fmt.Sprintf("sap: panic in SapInit: %v", r)
+			result = C.CString(lastErr)
+		}
+	}()
 
 	if signer != nil {
 		return C.CString("sap: already initialized; call SapClose first")
@@ -80,9 +95,16 @@ func SapInit(setupURL, certURL *C.char, version C.int, hwIDBase64 *C.char, cache
 // SapSign signs a base64-encoded request body and returns the base64-encoded
 // signature, or NULL on error (inspect SapError). The returned string must be
 // freed with SapFree.
-func SapSign(requestBase64 *C.char) *C.char {
+func SapSign(requestBase64 *C.char) (result *C.char) {
 	bridgeMu.Lock()
 	defer bridgeMu.Unlock()
+
+	defer func() {
+		if r := recover(); r != nil {
+			lastErr = fmt.Sprintf("sap: panic in SapSign: %v", r)
+			result = nil
+		}
+	}()
 
 	lastErr = ""
 
@@ -126,6 +148,8 @@ func SapLastError() *C.char {
 func SapClose() {
 	bridgeMu.Lock()
 	defer bridgeMu.Unlock()
+
+	defer func() { _ = recover() }()
 
 	if signer != nil {
 		_ = signer.Close()
