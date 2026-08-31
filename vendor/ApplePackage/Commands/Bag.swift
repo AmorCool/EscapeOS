@@ -92,8 +92,21 @@ public enum Bag {
     /// Apple bag 给的 native auth 端点常缺 `/fast/` 子路径且无尾斜杠。
     /// 没有 `/fast/` 的变体被 Apple 边缘 301 到 HTML 页（v0.2.151 真机 404 实锤）。
     /// 这里强制规范成 `auth.itunes.apple.com/.../fast/` 格式。
+    ///
+    /// v0.2.156 新增 legacy 回退：2026-08-31 真机 + curl 实证（5 组 guid/UA 对照），
+    /// Configurator UA 下 bag.xml 的 `authenticateAccount` 返回 legacy
+    /// `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate` ——
+    /// 该端点 2026 年起要求 SAP 签名（`X-Apple-ActionSignature`，ipatool 实证），
+    /// shim 环境无法签名，跟随其 302 到 pod 后必挂「failed to retrieve
+    /// redirect location」（v0.2.155 真机实锤）。凡 legacy 端点一律回退
+    /// `defaultAuthEndpoint`（native/fast/，与 AssppWeb `defaultAuthURL` 兜底思路一致）。
     private static func normalizedAuthEndpoint(from urlString: String) -> URL? {
         guard var comps = URLComponents(string: urlString) else { return nil }
+        if comps.host == "buy.itunes.apple.com",
+           comps.path.hasSuffix("/wa/authenticate") {
+            print("[EscapeOS][Bag] bag.xml 给出 legacy wa/authenticate 端点（需 SAP 签名，无法使用），回退 default native/fast/")
+            return URL(string: defaultAuthEndpoint)
+        }
         if comps.host == "auth.itunes.apple.com" {
             var path = comps.path
             while path.hasSuffix("/") {

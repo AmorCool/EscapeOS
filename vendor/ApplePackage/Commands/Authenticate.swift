@@ -33,6 +33,9 @@ public enum Authenticator {
         let deviceIdentifier = Configuration.deviceIdentifier
 
         let bagOutput = try await Bag.fetchBag()
+        // v0.2.156：把 Bag 的端点决策写进登录日志 —— 用户在「更多 → 登录日志」
+        // 能直接看到 bag.xml 给了什么端点、我们实际用哪个，不再靠猜。
+        LoginLogger.shared.log("Bag 解析认证端点: \(bagOutput.authEndpoint.absoluteString)")
 
         let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
@@ -198,7 +201,16 @@ public enum Authenticator {
             guard let location = response.headers.first(name: "location"),
                   let url = URL(string: location)
             else {
-                return .failure("failed to retrieve redirect location")
+                // v0.2.156：诊断增强 —— 30x 却拿不到 Location 时，把状态码与响应体
+                // 摘要一并透传（v0.2.155 真机「failed to retrieve redirect location」
+                // 的直接来源；多为 legacy 端点 302 链撞 SAP 签名墙）。
+                let bodyData = response.body?.data ?? Data()
+                let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
+                let locationKeys = response.headers.all.map { $0.name }.joined(separator: ",")
+                return .failure(
+                    "redirect status \(response.status.code) but no usable Location header " +
+                    "(headers: \(locationKeys)); body: \(bodySnippet)"
+                )
             }
             return .redirect(url)
         }
