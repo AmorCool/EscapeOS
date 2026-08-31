@@ -40,17 +40,16 @@ final class AppStoreDownloadStore {
         guard Configuration.sapSignerFactory == nil else { return }
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
         Configuration.sapSignerFactory = { config in
-            // v0.3.3：JIT 探测作硬闸门——Unicorn TCG 是 JIT（Apple 平台走
-            // pthread_jit_write_protect_np），无 JIT 进程里写可执行内存直接崩
-            // （真机闪退实锤）。未启用 → 不进模拟器、明确报错引导 StikDebug，
-            // 把闪退变成可诊断、可操作的失败。
+            // v0.3.7：JIT 探测改为**仅展示**，不再硬拦截——mmap MAP_JIT 探测存在
+            // 误判可能（真机：StikDebug 已开 JIT 仍报未启用），而 unicorn 分配
+            // 失败在 QEMU 层是干净的错误返回而非必然崩溃。放行 SapInit 让引擎
+            // 自己说话：成功 → 登录；失败 → 真实错误进登录日志（比探测更权威）。
             let jitOK = SAPJITProbe.jitAvailable()
             SapStatusModel.shared.setJIT(jitOK ? .available : .unavailable)
-            guard jitOK else {
-                LoginLogger.shared.log("SAP JIT 探测：未启用 → 中止登录（避免闪退），引导 StikDebug")
-                throw Configuration.SAPJITUnavailableError()
-            }
-            LoginLogger.shared.log("SAP JIT 探测：已启用（宿主可 JIT）")
+            LoginLogger.shared.log(
+                jitOK ? "SAP JIT 探测：已启用"
+                      : "SAP JIT 探测：未启用（继续尝试初始化，以实际结果为准）"
+            )
             LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
             SapProgressPoller.shared.start()
             defer { SapProgressPoller.shared.stop() }

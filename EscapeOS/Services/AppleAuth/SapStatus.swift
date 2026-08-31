@@ -14,14 +14,28 @@ import Darwin
 /// - 普通侧载 / LiveContainer 访客 → 失败（EPERM）
 /// v0.3.3 起 libunicorn 为 TCI 解释器模式，JIT 与否都不阻断签名——探测仅用于展示。
 enum SAPJITProbe {
+    /// 双路径探测：①mmap MAP_JIT（标准 JIT 路径）②普通 RWX 匿名映射
+    /// （调试态进程 CS_DEBUGGED 的另一条可行路径）。任一成功即判定可用。
+    /// 探测结果仅作状态展示——实际以 SapInit 时 unicorn 的分配结果为准。
     static func jitAvailable() -> Bool {
         #if arch(arm64) || arch(arm64e)
         let MAP_JIT: Int32 = 0x0800
         let pageSize = 0x4000
-        let ptr = mmap(nil, pageSize, PROT_READ | PROT_WRITE, MAP_JIT | MAP_ANON | MAP_PRIVATE, -1, 0)
-        guard ptr != MAP_FAILED else { return false }
-        munmap(ptr, pageSize)
-        return true
+
+        // 路径 ①：MAP_JIT 匿名映射
+        let p1 = mmap(nil, pageSize, PROT_READ | PROT_WRITE, MAP_JIT | MAP_ANON | MAP_PRIVATE, -1, 0)
+        if p1 != MAP_FAILED {
+            munmap(p1, pageSize)
+            return true
+        }
+
+        // 路径 ②：普通 RWX（无 MAP_JIT）
+        let p2 = mmap(nil, pageSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0)
+        if p2 != MAP_FAILED {
+            munmap(p2, pageSize)
+            return true
+        }
+        return false
         #else
         return true
         #endif
@@ -41,7 +55,7 @@ final class SapStatusModel: ObservableObject {
             switch self {
             case .unknown: return "检测中"
             case .available: return "已启用"
-            case .unavailable: return "未启用（开启后点此重测）"
+            case .unavailable: return "未启用"
             }
         }
     }
