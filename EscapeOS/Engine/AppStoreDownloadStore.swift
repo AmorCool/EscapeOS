@@ -40,16 +40,19 @@ final class AppStoreDownloadStore {
         guard Configuration.sapSignerFactory == nil else { return }
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
         Configuration.sapSignerFactory = { config in
-            // v0.3.7：JIT 探测改为**仅展示**，不再硬拦截——mmap MAP_JIT 探测存在
-            // 误判可能（真机：StikDebug 已开 JIT 仍报未启用），而 unicorn 分配
-            // 失败在 QEMU 层是干净的错误返回而非必然崩溃。放行 SapInit 让引擎
-            // 自己说话：成功 → 登录；失败 → 真实错误进登录日志（比探测更权威）。
+            // v0.3.9：恢复 csops 硬闸门。v0.3.7 撤闸是因为 mmap 探测误判；v0.3.8
+            // 换 csops CS_DEBUGGED 后判据已实证准确（用户 .ips：csops 报未生效时
+            // 放行登录，在模拟器启动瞬间被 CODESIGNING Invalid Page 杀——真机
+            // 日志停在下载 100% 后、模拟器阶段日志出现前）。未生效时放行 = 必崩
+            // + 每次重试烧 36MB 下载 + ~75MB 磁盘写入（LC guest 24h 配额仅 ~1GB，
+            // 磁盘写入超限也会被杀）→ 必须拦下并给可操作引导。
             let jitOK = SAPJITProbe.jitAvailable()
             SapStatusModel.shared.setJIT(jitOK ? .available : .unavailable)
-            LoginLogger.shared.log(
-                jitOK ? "SAP JIT 探测：已启用"
-                      : "SAP JIT 探测：未启用（继续尝试初始化，以实际结果为准）"
-            )
+            guard jitOK else {
+                LoginLogger.shared.log("SAP JIT 未生效（csops 确认）→ 中止登录，引导 StikDebug")
+                throw Configuration.SAPJITUnavailableError()
+            }
+            LoginLogger.shared.log("SAP JIT 探测：已启用（CS_DEBUGGED 置位）")
             LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
             SapProgressPoller.shared.start()
             defer { SapProgressPoller.shared.stop() }
