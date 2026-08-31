@@ -1,0 +1,140 @@
+name: Build Xcode (Plan A dual-track)
+
+# 方案 A 双轨迁移脚手架：在不碰 Theos 的前提下，用 xcodegen + xcodebuild 验证
+# 当前源码能否在 Xcode 原生工程下编译/链接。本 job 仅做「编译/链接检查」
+# （CODE_SIGNING_ALLOWED=NO），不产出签名的 IPA；真实签名/archive 留待 Week 4。
+#
+# 触发：推到 migrate-xcode 分支，或手动 workflow_dispatch。
+# 与 build.yml（Theos 轨道）共享 escapeos-build-cache scope，复用已建好的
+# Rust/Cargo/sccache 缓存。
+
+on:
+  push:
+    branches: [migrate-xcode]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  xcode-build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 26 (iOS 26 SDK)
+        # 与 build.yml 一致：用 Xcode 26 SDK 链接（Liquid Glass 等 iOS 26 特性）。
+        # 部署目标仍为 18.0（Info.plist / TARGET 约束），iOS 18 设备可装。
+        run: |
+          set -euo pipefail
+          XCODE_APP="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n1)"
+          if [ -z "$XCODE_APP" ]; then
+            XCODE_APP="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n1)"
+          fi
+          echo "Selecting Xcode: $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+            ~/.cargo/bin
+            ~/.cargo/env
+          key: macos-rust-stable-v1
+
+      - name: Install Rust toolchain
+        run: |
+          if [ -x "$HOME/.cargo/bin/rustc" ]; then
+            echo "Rust toolchain cache hit — skipping install"
+          else
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-apple-ios
+
+      - name: Cache Rust registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/idevice-ffi/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/idevice-ffi/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+          scope: escapeos-build-cache
+
+      - name: Install sccache
+        run: |
+          brew install sccache || true
+          sccache --version || true
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/sccache
+          key: macos-sccache-v1
+          scope: escapeos-build-cache
+
+      - name: Build libidevice_ffi.a (Rust, aarch64-apple-ios)
+        # 与 build.yml 完全一致：从源码编出单 .a，并拷 idevice.h 到 EscapeOS/Tunnel/。
+        # xcodebuild 编译 Tunnel/*.m 时需要该头，故必须在 generate/build 之前完成。
+        run: |
+          set -euo pipefail
+          source "$HOME/.cargo/env"
+          export RUSTC_WRAPPER="$(command -v sccache || true)"
+          export SCCACHE_CACHE_SIZE=2G
+          if [ -z "$RUSTC_WRAPPER" ]; then
+            echo "sccache unavailable — falling back to plain cargo"
+            unset RUSTC_WRAPPER
+          fi
+          cd rust/idevice-ffi
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'CFG'
+          [net]
+          git-fetch-with-cli = true
+          retry = 3
+
+          [http]
+          multipart = false
+          CFG
+          cd ../..
+          cargo --version
+          cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml
+          mkdir -p EscapeOS/Tunnel
+          cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" EscapeOS/Tunnel/libidevice_ffi.a
+          cp "rust/idevice-ffi/idevice.h" EscapeOS/Tunnel/idevice.h
+          ls -la EscapeOS/Tunnel/libidevice_ffi.a EscapeOS/Tunnel/idevice.h
+
+      - name: Generate Xcode project (xcodegen)
+        run: xcodegen generate
+
+      - name: Build (compile/link check, no signing)
+        # 仅验证「当前源码能在 Xcode 原生工程下编过」——不做签名/打包。
+        # CODE_SIGNING_ALLOWED=NO 跳过签名要求；真机签名留待 Week 4。
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project EscapeSpace.xcodeproj \
+            -scheme EscapeSpace-iOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee /tmp/xcodebuild.log
+          echo "Xcode build (compile/link) succeeded"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: /tmp/xcodebuild.log
