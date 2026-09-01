@@ -37,7 +37,7 @@ final class SSHServerService: NSObject, ObservableObject {
 
     static let defaultPort = 2222
 
-    private init() {
+    private override init() {
         let savedPort = UserDefaults.standard.integer(forKey: "ssh.port")
         port = savedPort > 0 ? savedPort : Self.defaultPort
         username = UserDefaults.standard.string(forKey: "ssh.username") ?? "escape"
