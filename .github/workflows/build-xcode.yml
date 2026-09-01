@@ -60,7 +60,7 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      - name: Install build tools (cmake, ninja, mingw-w64, p7zip)
+      - name: Install build tools (cmake, ninja)
         # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）；
         # build-sap-server.sh 解压 unicorn 官方 mingw64 静态包（p7zip）并构建
         # Windows 版签名服务 EscapeSapServer.exe（链接官方 libunicorn.a）。
