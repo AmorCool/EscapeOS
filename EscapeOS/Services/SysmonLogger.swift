@@ -43,12 +43,10 @@ final class SysmonLogger {
         var fileLines: [String] = []
         if let data = try? Data(contentsOf: logFileURL),
            let text = String(data: data, encoding: .utf8) {
-            fileLines = text.components(separatedBy: "
-").filter { !$0.isEmpty }
+            fileLines = text.components(separatedBy: "\n").filter { !$0.isEmpty }
         }
         let merged = mem + fileLines.filter { !mem.contains($0) }
-        return merged.joined(separator: "
-")
+        return merged.joined(separator: "\n")
     }
 
     func clear() {
