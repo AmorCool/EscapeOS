@@ -267,8 +267,8 @@ public final class HTTPClient {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = configuration.timeoutRead
         cfg.timeoutIntervalForResource = max(configuration.timeoutRead, 60)
-        // 关掉 URLSession 的缓存（自动 cookie 已在请求级别 `httpShouldHandleCookies = false` 关闭），
-        // 全部由调用方手动管理。
+        // v0.3.21：URLSession cookie 处理已开启（httpShouldHandleCookies = true），
+        // ephemeral 配置自带独立 HTTPCookieStorage，同一 session 内自动捕获+回传。
         cfg.urlCache = nil
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: cfg,
@@ -364,10 +364,11 @@ public final class HTTPClient {
             var urlRequest = URLRequest(url: url)
             urlRequest.httpMethod = request.method.rawValue
             urlRequest.timeoutInterval = self.configuration.timeoutRead
-            // Cookie 由 [Cookie].buildCookieHeader() 手动管理（和原版一致），
-            // 必须关掉 URLSession 的自动处理，否则 Set-Cookie 会被它吞掉，
-            // response.cookies 永远为空 → 登录态无法延续。
-            urlRequest.httpShouldHandleCookies = false
+            // v0.3.21：开启 URLSession cookie 处理——SAP 认证流程中 Apple 服务器
+            // 使用 Set-Cookie 跟踪认证会话状态。之前关闭导致 204 循环（服务器
+            // 无法将 SAP 会话与 HTTP 会话关联）。TCI 路线已证此为关键缺失。
+            // 手动 cookie 传递（buildCookieHeader）仍在，两层不冲突。
+            urlRequest.httpShouldHandleCookies = true
             for item in request.headers.all {
                 urlRequest.setValue(item.value, forHTTPHeaderField: item.name)
             }
