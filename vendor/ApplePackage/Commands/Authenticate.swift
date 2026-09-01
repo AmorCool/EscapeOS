@@ -122,11 +122,10 @@ public enum Authenticator {
         while currentAttempt <= 4, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
-                // 每次尝试都用**全新** Anisette 设备认证头：Apple 的 anisette OTP 一次性，
-                // 重试必须用新值，否则等价于对同一个被拒请求重复打（v0.2.157 修复 403 的根因）。
-                // v0.2.160：每次尝试都期望调用方提供**全新** anisette（OTP 一次性）。
-                // `fetchFreshAppStoreAnisetteHeaders` 已改为 `refresh: true` 保证这一点。
-                let anisetteHeaders: [(String, String)] = try await anisetteProvider?() ?? []
+                // v0.3.19：SAP 签名模式下**不发 anisette 头**——对齐上游 ipatool
+                // PR #525（SAP 签名本身就是认证，anisette 头属于旧流程，混合发送
+                // 会让 Apple 边缘困惑）。仅当签名器不可用（未签名回退）时才带 anisette。
+                let anisetteHeaders: [(String, String)] = (sapSigner == nil) ? (try await anisetteProvider?() ?? []) : []
                 let request = try makeRequest(
                     endpoint: requestEndpoint,
                     attempt: currentAttempt,
@@ -245,13 +244,9 @@ public enum Authenticator {
         baseURL: URL,
         deviceIdentifier: String
     ) throws -> URL {
-        guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
-            try ensureFailed("invalid auth endpoint: \(baseURL)")
-        }
-        comps.queryItems = [
-            URLQueryItem(name: "guid", value: deviceIdentifier),
-        ]
-        return try comps.url.get()
+        // v0.3.19：去掉 ?guid= 查询参数——对齐上游 ipatool（URL 无查询参数，
+        // guid 只在 XML body 里）。POST 端点带意外查询参数会被 Apple 边缘 301。
+        return baseURL
     }
 
     private static func makeRequest(
