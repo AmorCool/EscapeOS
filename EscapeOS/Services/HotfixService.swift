@@ -119,34 +119,50 @@ final class HotfixService: NSObject, ObservableObject {
             print("[Hotfix][JS][\(module.id)] 异常: \(msg)")
         }
 
-        let bridge = JSValue(newObjectIn: ctx)!
-        bridge.setValue({ [weak self] (args: [Any]?) -> Void in
-            let msg = args?.first.map { "\($0)" } ?? ""
-            DispatchQueue.main.async {
-                self?.appendJSLog("[\(module.id)] \(msg)")
-            }
-        }, forKeyedSubscript: "log")
-
-        bridge.setValue({ [weak self] (args: [Any]?) -> Void in
-            guard let key = args?[0] as? String,
-                  let value = args?[1] as? Bool else { return }
-            DispatchQueue.main.async {
-                self?.featureFlags[key] = value
-            }
-        }, forKeyedSubscript: "setFlag")
-
-        bridge.setValue({ [weak self] (args: [Any]?) -> Void in
-            guard let key = args?[0] as? String,
-                  let value = args?[1] as? String else { return }
-            DispatchQueue.main.async {
-                self?.textOverrides[key] = value
-            }
-        }, forKeyedSubscript: "setOverride")
-
-        bridge.setValue(NSString(string: module.version), forKeyedSubscript: "moduleVersion")
-        bridge.setValue(NSString(string: module.id), forKeyedSubscript: "moduleId")
-
-        ctx.setObject(bridge, forKeyedSubscript: "escape")
+        // JSExport 协议桥（类型安全；闭包桥在当前 SDK 有签名解析问题）
+        let bridge = EscapeJSBridge(moduleId: module.id, moduleVersion: module.version)
+        bridge.owner = self
+        ctx.setObject(bridge, forKeyedSubscript: "escape" as NSString)
         ctx.evaluateScript(source)
+    }
+}
+
+// MARK: - JS 桥（JSExport：JS 侧 escape.log / escape.setFlag / escape.setOverride）
+
+@objc protocol EscapeJSBridgeExports: JSExport {
+    func log(_ message: String)
+    func setFlag(_ key: String, _ value: Bool)
+    func setOverride(_ key: String, _ value: String)
+    var moduleVersion: String { get }
+    var moduleId: String { get }
+}
+
+final class EscapeJSBridge: NSObject, EscapeJSBridgeExports {
+    weak var owner: HotfixService?
+    let moduleId: String
+    let moduleVersion: String
+
+    init(moduleId: String, moduleVersion: String) {
+        self.moduleId = moduleId
+        self.moduleVersion = moduleVersion
+    }
+
+    func log(_ message: String) {
+        print("[Hotfix][JS][\(moduleId)] \(message)")
+        DispatchQueue.main.async { [weak self] in
+            self?.owner?.appendJSLog("[\(moduleId)] \(message)")
+        }
+    }
+
+    func setFlag(_ key: String, _ value: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.owner?.featureFlags[key] = value
+        }
+    }
+
+    func setOverride(_ key: String, _ value: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.owner?.textOverrides[key] = value
+        }
     }
 }
