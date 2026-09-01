@@ -284,14 +284,22 @@ public enum Authenticator {
         )
         var headers: [(String, String)] = [
             ("User-Agent", Configuration.userAgent),
-            ("Content-Type", "application/x-apple-plist"),
+            // v0.3.16：Content-Type 对齐上游 ipatool（urlencoded 头 + XML body
+            // 是 Apple 容忍的组合；application/x-apple-plist 可能被边缘拒）
+            ("Content-Type", "application/x-www-form-urlencoded"),
         ]
         // v0.3.1：SAP 签名 —— 对**最终发出的请求体字节**签名（ipatool client.go 同款），
         // 失败直接抛错给登录 UI（显式错误优于无头 403）。签名对象不含 HTTP 头。
         if let sapSigner {
             let signature = try sapSigner.sign(requestBody: data)
             headers.append(("X-Apple-ActionSignature", signature))
+            LoginLogger.shared.log("SAP 签名已附加（\(signature.prefix(20))…，body \(data.count)B）")
+        } else {
+            LoginLogger.shared.log("⚠️ SAP 签名缺失——未签名请求发出（Apple 必拒）")
         }
+        // v0.3.16：出站请求诊断（对比上游 ipatool 格式）
+        let headerList = headers.map { "\($0.0): \($0.1.prefix(60))" }.joined(separator: " | ")
+        LoginLogger.shared.log("出站请求 → \(endpoint.absoluteString.prefix(80)) headers=[\(headerList)] body[0:200]=\(String(data: data.prefix(200), encoding: .utf8) ?? "(binary)")")
         for item in cookies.buildCookieHeader(endpoint) {
             headers.append(item)
         }
