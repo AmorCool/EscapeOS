@@ -107,21 +107,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         // 失效时自动回退，尽量保持 PiP 存活
         pip?.canStartPictureInPictureAutomaticallyFromInline = true
         pipController = pip
-
-        // PiP 状态跟踪
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(pipStateChange),
-            name: .AVPictureInPictureControllerDidStartPictureInPicture, object: nil)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(pipStateChange),
-            name: .AVPictureInPictureControllerDidStopPictureInPicture, object: nil)
         return pipController
-    }
-
-    @objc private func pipStateChange() {
-        DispatchQueue.main.async {
-            self.isPiPActive = self.pipController?.pictureInPictureActive ?? false
-        }
     }
 
     // MARK: 视频资产生成（AVAssetWriter 纯黑 2s）
