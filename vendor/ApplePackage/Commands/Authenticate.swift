@@ -143,11 +143,8 @@ public enum Authenticator {
                 // 单参 print 依然受支持。
                 print("[EscapeOS][AppStore][Auth] \(requestEndpoint.host ?? "?") status=\(response.status.code)")
                 // v0.3.22：记录完整响应（headers + body 前 2000B）——诊断 Apple 实际返回内容
-                let respHeaders = response.headers.all.map { "\($0.name): \($0.value.prefix(80))" }.joined(separator: "
-  ")
-                LoginLogger.shared.log("响应 status=\(response.status.code) headers=[
-  \(respHeaders)
-]")
+                let respHeaders = response.headers.all.map { "\($0.name): \($0.value.prefix(80))" }.joined(separator: " | ")
+                LoginLogger.shared.log("响应 status=\(response.status.code) headers=[\(respHeaders)]")
                 if let respBody = response.body, respBody.readableBytes > 0 {
                     let respData = respBody.readData(length: respBody.readableBytes) ?? Data()
                     let respText = String(data: respData.prefix(2000), encoding: .utf8) ?? "(binary)"
