@@ -18,22 +18,29 @@ enum SAPJITProbe {
     private static let CS_OPS_STATUS: UInt32 = 5
     private static let CS_DEBUGGED: UInt32 = 0x1000_0000
 
-    /// v0.3.8：探测「调试器已附加并生效」（CS_DEBUGGED 内核标志）——这是
-    /// StikDebug 路径的权威判据。mmap MAP_JIT 探测已在 iOS 27 beta 上证伪：
-    /// mmap 成功但执行 JIT 缓冲仍被 CODESIGNING Invalid Page 杀（.ips 实锤）。
-    /// - StikDebug 附加 LC 进程成功 → CS_DEBUGGED 置位 → true
-    /// - 未附加/附加失败/重启后未重开 → false
-    static func jitAvailable() -> Bool {
-        guard let dbg = csDebuggedFlag() else { return false }
-        return dbg
+    /// v0.3.13：探测结果三分支（已生效 / 未生效 / 无法判定）——csops 在
+    /// iOS 27 beta 上可能调用失败（EPERM 等），把「无法判定」与「确认未生效」
+    /// 分开展示，避免把探测故障误报成 JIT 未开启。StikDebug 的机制（源码实锤）：
+    /// 通过 debugserver **重新 launch 目标 app**（process_control_launch_app）
+    /// 使 CS_DEBUGGED 置位——不是对运行中进程附加。
+    enum JITProbeResult {
+        case available          // CS_DEBUGGED 置位（调试态 launch 生效）
+        case notEffective       // csops 成功但标志未置位（JIT 确实未生效）
+        case undetectable       // csops 调用失败（iOS 27 beta 权限受限等）
     }
 
-    /// 返回 nil 表示 csops 调用失败（无法判定）。
-    static func csDebuggedFlag() -> Bool? {
+    static func probe() -> JITProbeResult {
         var flags: UInt32 = 0
         let result = csops(getpid(), CS_OPS_STATUS, &flags, MemoryLayout<UInt32>.size)
-        guard result == 0 else { return nil }
-        return (flags & CS_DEBUGGED) != 0
+        guard result == 0 else {
+            LoginLogger.shared.log("SAP JIT 探测：csops 调用失败 errno=\(result)（无法判定，iOS 27 beta 可能受限）")
+            return .undetectable
+        }
+        let dbg = (flags & CS_DEBUGGED) != 0
+        LoginLogger.shared.log(
+            String(format: "SAP JIT 探测：csops flags=0x%08X → \(dbg ? "CS_DEBUGGED 已置位（已生效）" : "未置位（未生效）")", flags)
+        )
+        return dbg ? .available : .notEffective
     }
 }
 
@@ -42,15 +49,17 @@ final class SapStatusModel: ObservableObject {
     static let shared = SapStatusModel()
 
     enum JITMode: Equatable {
-        case unknown
-        case available
-        case unavailable
+        case unknown        // 页面刚打开，尚未探测
+        case available      // CS_DEBUGGED 置位（调试态 launch 已生效）
+        case notEffective   // csops 成功但标志未置位（JIT 确实未生效）
+        case undetectable   // csops 调用失败（系统受限，无法判定）
 
         var text: String {
             switch self {
             case .unknown: return "检测中"
-            case .available: return "已启用"
-            case .unavailable: return "未生效（StikDebug 未附加到 LC）"
+            case .available: return "已生效"
+            case .notEffective: return "未生效（StikDebug 需以调试方式重启 LC）"
+            case .undetectable: return "无法判定（直接尝试登录）"
             }
         }
     }
@@ -71,9 +80,15 @@ final class SapStatusModel: ObservableObject {
     /// v0.3.6 改为进页面立即探测。
     func probeJITNow() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let ok = SAPJITProbe.jitAvailable()
-            self?.setJIT(ok ? .available : .unavailable)
-            LoginLogger.shared.log(ok ? "SAP JIT 探测（页面）：已启用" : "SAP JIT 探测（页面）：未启用")
+            let result = SAPJITProbe.probe()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .available: self.jitMode = .available
+                case .notEffective: self.jitMode = .notEffective
+                case .undetectable: self.jitMode = .undetectable
+                }
+            }
         }
     }
 
