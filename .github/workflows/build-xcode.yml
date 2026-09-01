@@ -261,6 +261,19 @@ jobs:
           fi
           echo "hit=$HIT" >> "$GITHUB_OUTPUT"
 
+      - name: Sync bundled modules from module-esc
+        run: |
+          set -euo pipefail
+          # 内置模块单一数据源：module-esc 仓库（modules/<id>/module.json）
+          # 克隆到临时目录后同步进 Resources/BundledModules（folder reference 打进 bundle）。
+          # 模块 .zip 的构建/发布在 module-esc 仓库自己的 CI（edge Release）。
+          git clone --depth 1 https://github.com/AmorCool/module-esc.git _module-esc
+          mkdir -p Resources/BundledModules
+          cp -R _module-esc/modules/* Resources/BundledModules/
+          rm -rf _module-esc
+          echo "=== BundledModules ==="
+          find Resources/BundledModules -name module.json
+
       - name: Generate Xcode project (xcodegen)
         run: |
           set -euo pipefail

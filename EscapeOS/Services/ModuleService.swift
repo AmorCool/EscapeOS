@@ -104,20 +104,26 @@ final class ModuleService {
 
     private func bootstrapBundledModules() {
         // 覆盖安装不清沙盒数据（UserDefaults 保留），卸载标记跨安装残留。
-        // 检测锚点：主可执行文件 contentModificationDate——每次安装（含同版本覆盖）必变。
-        // 策略：检测到新安装且开关开 → 清空卸载记录，内置模块回归；开关关 → 维持卸载。
+        // 检测锚点（双取最大）：bundle 目录 mtime + 可执行文件 mtime。
+        // 注意 LC 场景：可执行文件 mtime 可能保留 IPA 内构建时间（同 IPA 覆盖不变），
+        // 而 bundle 目录在安装搬运时 mtime 必然刷新——两者取 max 更稳。
+        // 若两锚点都不变（同 IPA 且搬运未触目录），用户可在模块设置里点"恢复内置模块"手动回归。
+        let bundleMod = (Bundle.main.bundleURL.flatMap {
+            try? $0.resourceValues(forKeys: [.contentModificationDateKey])
+        })?.contentModificationDate?.timeIntervalSince1970 ?? 0
         let execMod = (Bundle.main.executableURL.flatMap {
             try? $0.resourceValues(forKeys: [.contentModificationDateKey])
         })?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let installAnchor = max(bundleMod, execMod)
         let recordedDate = UserDefaults.standard.double(forKey: Self.hostInstallDateKey)
         if recordedDate == 0 {
-            UserDefaults.standard.set(execMod, forKey: Self.hostInstallDateKey)
-        } else if abs(recordedDate - execMod) > 1 {
+            UserDefaults.standard.set(installAnchor, forKey: Self.hostInstallDateKey)
+        } else if abs(recordedDate - installAnchor) > 1 {
             if Self.restoreOnUpgrade {
                 UserDefaults.standard.removeObject(forKey: Self.uninstalledKey)
-                print("[Module] 检测到覆盖安装（可执行文件时间变化），恢复内置模块")
+                print("[Module] 检测到覆盖安装（安装锚点变化），恢复内置模块")
             }
-            UserDefaults.standard.set(execMod, forKey: Self.hostInstallDateKey)
+            UserDefaults.standard.set(installAnchor, forKey: Self.hostInstallDateKey)
         }
 
         guard let bundledURL = Bundle.main.url(forResource: "BundledModules", withExtension: nil) else { return }
@@ -262,6 +268,12 @@ final class ModuleService {
         } else {
             FileManager.default.createFile(atPath: marker.path, contents: nil)
         }
+    }
+
+    /// 手动恢复全部内置模块（清空卸载记录 + 重新安装缺失的）——双锚点都不变时的兜底
+    func restoreBundledModules() {
+        UserDefaults.standard.removeObject(forKey: Self.uninstalledKey)
+        bootstrapBundledModules()
     }
 
     // MARK: WebView 支持（对齐 KernelSU webroot 机制）

@@ -23,11 +23,14 @@ struct ModuleManagerView: View {
     @State private var actionMenuModule: EscapeModule? = nil
     @State private var showModuleSettings = false
     @State private var webviewModule: EscapeModule? = nil
+    @State private var searchText = ""
 
     var body: some View {
         Group {
             if modules.isEmpty {
                 emptyState
+            } else if filteredModules.isEmpty {
+                ContentUnavailableView.search(text: searchText)
             } else {
                 moduleList
             }
@@ -70,6 +73,21 @@ struct ModuleManagerView: View {
                         .tint(.blue)
                     } footer: {
                         Text("开启后，覆盖安装新版本 IPA 时内置模块自动恢复；关闭后卸载即永久卸载（重新导入 .zip 可恢复）。")
+                    }
+
+                    Section {
+                        Button {
+                            ModuleService.shared.restoreBundledModules()
+                            reload()
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.clockwise")
+                                Text("立即恢复内置模块")
+                            }
+                        }
+                        .tint(.blue)
+                    } footer: {
+                        Text("内置模块被卸载后未自动回归时（如同一安装包反复覆盖），点此手动恢复。")
                     }
                 }
                 .navigationTitle("模块设置")
@@ -189,16 +207,17 @@ struct ModuleManagerView: View {
 
     private var moduleList: some View {
         List {
-            ForEach(modules) { module in
+            ForEach(filteredModules) { module in
                 Section {
                     moduleCard(module)
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
             }
-
         }
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "搜索模块 / 作者 / 描述")
     }
 
     /// KernelSU 风格模块卡片：名称+Toggle / 版本作者 / 描述 / 动作 / 打开+卸载
@@ -292,6 +311,17 @@ struct ModuleManagerView: View {
     }
 
     // MARK: 逻辑
+
+    /// 搜索过滤：模块名 / 作者 / 描述
+    private var filteredModules: [EscapeModule] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return modules }
+        return modules.filter {
+            $0.name.localizedCaseInsensitiveContains(q) ||
+            ($0.author ?? "").localizedCaseInsensitiveContains(q) ||
+            $0.description.localizedCaseInsensitiveContains(q)
+        }
+    }
 
     private func reload() {
         modules = ModuleService.shared.listModules()
