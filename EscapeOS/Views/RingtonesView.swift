@@ -83,13 +83,6 @@ struct RingtonesView: View {
                 } else {
                     ForEach(ringtones) { entry in
                         row(entry)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    confirmDelete = entry
-                                } label: {
-                                    Label("删除", systemImage: "trash")
-                                }
-                            }
                     }
                 }
             } header: {
