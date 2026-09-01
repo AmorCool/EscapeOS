@@ -22,10 +22,14 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     @Published private(set) var isPiPActive = false
     @Published private(set) var isHidden = false
     @Published private(set) var lastError: String?
+    /// PiP 启动时刻（页面离开再回来时长不归零的关键——由 TimelineView 实时计算）
+    @Published private(set) var startedAt: Date?
 
     private var pipController: AVPictureInPictureController?
     private var contentVC: UIViewController?
-    /// 在窗口层级内的源视图（启动 PiP 的前提；PiP 启动后可离开页面）
+    /// SwiftUI 布局宿主（frame 由 SwiftUI 管）
+    private weak var hostView: UIView?
+    /// 实际 PiP 源视图（frame 由本服务管——videoCall 模式 PiP 窗口尺寸跟随它）
     private weak var sourceView: UIView?
 
     /// PiP 内容尺寸（隐藏 = 1x1，原版 preparePiPVisualSurfacesForClosing 同款）
@@ -63,9 +67,13 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
 
     // MARK: 源视图绑定
 
-    /// 绑定在窗口层级内的宿主视图（页面内的预览小窗即可）
-    func attach(sourceView: UIView) {
+    /// 绑定宿主视图 + 内部源视图（源视图 frame 归本服务控制）
+    func attach(host: UIView, sourceView: UIView) {
+        self.hostView = host
         self.sourceView = sourceView
+        // 恢复上次隐藏态的源视图尺寸
+        sourceView.frame = CGRect(origin: .zero,
+                                  size: isHidden ? Self.hiddenSize : host.bounds.size)
     }
 
     // MARK: 启停
@@ -157,11 +165,14 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     func hide() {
         guard let vc = contentVC else { return }
         UIView.performWithoutAnimation {
+            // videoCall 模式 PiP 窗口尺寸跟随源视图——源视图必须一起缩（原版 minPiPHeight 同理）
+            sourceView?.frame.size = Self.hiddenSize
             vc.preferredContentSize = Self.hiddenSize
             vc.view.backgroundColor = .clear
             vc.view.layer.backgroundColor = UIColor.clear.cgColor
             vc.view.alpha = 0.01
-            vc.view.layoutIfNeeded()
+            sourceView?.alpha = 0.01
+            hostView?.layoutIfNeeded()
             CATransaction.flush()
         }
         isHidden = true
@@ -170,10 +181,12 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     func show() {
         guard let vc = contentVC else { return }
         UIView.performWithoutAnimation {
+            sourceView?.frame.size = hostView?.bounds.size ?? Self.normalSize
             vc.preferredContentSize = Self.normalSize
             vc.view.alpha = 1
             vc.view.backgroundColor = .black
-            vc.view.layoutIfNeeded()
+            sourceView?.alpha = 1
+            hostView?.layoutIfNeeded()
         }
         isHidden = false
     }
@@ -185,11 +198,13 @@ extension PiPKeepAliveService: AVPictureInPictureControllerDelegate {
         DispatchQueue.main.async {
             self.isPiPActive = true
             self.isHidden = false
+            if self.startedAt == nil { self.startedAt = Date() }
         }
     }
     func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
         DispatchQueue.main.async {
             self.isPiPActive = false
+            self.startedAt = nil
             // 意外停止自动恢复（系统杀 PiP → 自动拉起；用户点「停止」不恢复）
             if !self.intentionalStop && self.autoRestoreRemaining > 0 {
                 self.autoRestoreRemaining -= 1

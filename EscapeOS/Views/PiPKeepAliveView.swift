@@ -14,8 +14,6 @@ import AVFoundation
 struct PiPKeepAliveView: View {
     @StateObject private var service = PiPKeepAliveService.shared
     @StateObject private var highRefresh = HighRefreshService.shared
-    @State private var elapsed: Int = 0
-    @State private var elapsedTimer: Timer?
 
     var body: some View {
         List {
@@ -54,17 +52,19 @@ struct PiPKeepAliveView: View {
                         service.stop()
                     } else {
                         service.start()
-                        startCountdown()
                     }
                 } label: {
                     HStack {
                         Image(systemName: service.isPiPActive ? "pip.exit" : "pip.enter")
                         Text(service.isPiPActive ? "停止画中画" : "启动画中画保活")
                         Spacer()
-                        if service.isPiPActive {
-                            Text(formatElapsed(elapsed))
-                                .font(.body.monospacedDigit())
-                                .foregroundColor(.secondary)
+                        if service.isPiPActive, let startedAt = service.startedAt {
+                            // 时长源在 Service（跨页面存活），TimelineView 每秒驱动
+                            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                                Text(formatElapsed(Int(ctx.date.timeIntervalSince(startedAt))))
+                                    .font(.body.monospacedDigit())
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
@@ -131,25 +131,6 @@ struct PiPKeepAliveView: View {
         }
         .navigationTitle("PiP 保活")
         .navigationBarTitleDisplayMode(.inline)
-        .onDisappear {
-            elapsedTimer?.invalidate()
-            elapsedTimer = nil
-        }
-    }
-
-    /// 运行时长计时
-    private func startCountdown() {
-        elapsedTimer?.invalidate()
-        elapsed = 0
-        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
-            if service.isPiPActive {
-                elapsed += 1
-            } else {
-                elapsed = 0
-                t.invalidate()
-                elapsedTimer = nil
-            }
-        }
     }
 
     private func formatElapsed(_ s: Int) -> String {
@@ -159,13 +140,20 @@ struct PiPKeepAliveView: View {
 
 /// UIViewRepresentable：承载 AVPlayerLayer（PiP 源视图）
 struct PlayerLayerHost: UIViewRepresentable {
+    /// 外层 = SwiftUI 布局宿主；内层 = PiP 源视图（frame 归 Service 控制，
+    /// 隐藏时缩到 1x1 不会被 SwiftUI 布局覆盖）
     func makeUIView(context: Context) -> UIView {
-        let v = UIView()
-        v.backgroundColor = .black
+        let host = UIView()
+        host.backgroundColor = .black
+        let source = UIView()
+        source.backgroundColor = .clear
+        source.frame = host.bounds
+        source.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.addSubview(source)
         DispatchQueue.main.async {
-            PiPKeepAliveService.shared.attach(sourceView: v)
+            PiPKeepAliveService.shared.attach(host: host, sourceView: source)
         }
-        return v
+        return host
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {}
