@@ -172,6 +172,12 @@ public enum Authenticator {
                 // 2) 服务端 5xx / Apple 边缘 204/404：ipatool 最新主线把这些状态码列为
                 //    可重试（Apple auth 握手期间会不定期返回空响应或 404，需配合新 OTP
                 //    与递增 attempt 再试）。上限内继续循环，不直接报错。
+                // v0.3.27：204 首次出现 → 2FA 验证码 needed（AppStorePro 实锤："204空响应通常表示需要输入验证码"）
+                // 抛带 "Authentication requires verification code" 的错误 → 触发已有的 TwoFactorCodePrompt UI
+                if status.code == 204 && attempt == 1 && code.isEmpty {
+                    LoginLogger.shared.log("Apple 返回 204 → 双重认证验证码 needed，触发 2FA 弹窗")
+                    try ensureFailed("Authentication requires verification code")
+                }
                 if (500...599).contains(status.code) || status.code == 204 || status.code == 404 {
                     LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code)（ipatool 可重试状态），attempt=\(currentAttempt)/4")
                     if currentAttempt < 4 { continue }
