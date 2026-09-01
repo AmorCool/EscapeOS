@@ -486,6 +486,12 @@ final class ProcessManagerService {
             var result: [Int32: UInt64] = [:]
             guard let procs = processes else { return result }
 
+            // physFootprint 在属性数组中的真实下标
+            guard let fpIdx = attrNames.firstIndex(of: "physFootprint") else {
+                throw makeError("属性列表中无 physFootprint")
+            }
+            SysmonLogger.shared.log("[SysmonDiag] physFootprint 下标=\(fpIdx)")
+
             var iter: plist_dict_iter? = nil
             plist_dict_new_iter(procs, &iter)
             defer { if let it = iter { free(it) } }
@@ -499,9 +505,10 @@ final class ProcessManagerService {
                 free(k)
                 guard let pid = Int32(pidStr) else { continue }
 
-                // val 是数组，第一个元素 = physFootprint
+                // val 是数组，physFootprint 在真实下标位（74 属性里它不在 0 位！
+                // 之前写死 index 0 读到 msgRecv 消息计数器 → 全是小数字的根因）
                 guard let v = val else { continue }
-                let item = plist_array_get_item(v, 0)
+                let item = plist_array_get_item(v, UInt32(fpIdx))
                 guard let footprint = item, footprint != nil else { continue }
                 var mem: UInt64 = 0
                 plist_get_uint_val(footprint, &mem)
@@ -1028,9 +1035,7 @@ struct SysmonLogView: View {
                 .disabled(SysmonLogger.shared.fullLog().isEmpty)
             }
             .sheet(isPresented: $showShare) {
-                if let url = shareURL {
-                    ActivityShareView(url: url)
-                }
+                ShareSheet(items: [logText])
             }
             .overlay {
                 if copied {
