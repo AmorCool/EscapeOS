@@ -549,15 +549,6 @@ final class ProcessManagerService {
 
 // MARK: - 视图模型
 
-@MainActor
-/// 进程列表排序模式
-enum ProcessSortMode: String, CaseIterable, Identifiable {
-    case defaultOrder = "默认"
-    case byName = "按名称"
-    case byMemory = "按内存"
-    var id: String { rawValue }
-}
-
 /// 进程列表排序模式
 enum ProcessSortMode: String, CaseIterable, Identifiable {
     case defaultOrder = "默认"
