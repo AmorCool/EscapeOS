@@ -296,11 +296,11 @@ struct ModuleRunResult {
 
 /// 模块 WebView 页（KernelSU webroot 对齐）：加载模块目录内 index.html，
 /// 读权限限定在模块目录内。
-struct ModuleWebView: UIViewControllerRepresentable {
+struct ModuleWebView: UIViewRepresentable {
     let startPage: URL
     let readAccessRoot: URL
 
-    func makeUIViewController(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
         let wv = WKWebView(frame: .zero, configuration: cfg)
         // 时间戳查询参数破缓存，保证升级模块后加载新内容
@@ -314,7 +314,7 @@ struct ModuleWebView: UIViewControllerRepresentable {
         return wv
     }
 
-    func updateUIViewController(_ uiViewController: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
 /// SharedDocumentPicker 的 SwiftUI 包装（模块导入专用，限 .zip）。
