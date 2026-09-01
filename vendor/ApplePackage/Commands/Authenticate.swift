@@ -122,9 +122,9 @@ public enum Authenticator {
         while currentAttempt <= 4, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
-                // v0.3.23：恢复 anisette——CDN 可能需要 anisette 做 IP 信誉/设备验证，
-                // SAP 签名只做请求完整性。两者不冲突（对照实验：无 anisette → 204/403/404）。
-                let anisetteHeaders: [(String, String)] = try await anisetteProvider?() ?? []
+                // v0.3.24：彻底移除 anisette——AppStorePro 二进制分析实锤：
+                // 整个二进制 0 个 anisette 相关字符串。SAP 签名替代了 anisette。
+                let anisetteHeaders: [(String, String)] = []
                 let request = try makeRequest(
                     endpoint: requestEndpoint,
                     attempt: currentAttempt,
@@ -293,9 +293,9 @@ public enum Authenticator {
         )
         var headers: [(String, String)] = [
             ("User-Agent", Configuration.userAgent),
-            // v0.3.16：Content-Type 对齐上游 ipatool（urlencoded 头 + XML body
-            // 是 Apple 容忍的组合；application/x-apple-plist 可能被边缘拒）
-            ("Content-Type", "application/x-www-form-urlencoded"),
+            // v0.3.24：Content-Type 改回 x-apple-plist——AppStorePro 二进制
+            // 字符串分析实锤（application/x-apple-plist 出现 2 次，非 urlencoded）
+            ("Content-Type", "application/x-apple-plist"),
         ]
         // v0.3.1：SAP 签名 —— 对**最终发出的请求体字节**签名（ipatool client.go 同款），
         // 失败直接抛错给登录 UI（显式错误优于无头 403）。签名对象不含 HTTP 头。
