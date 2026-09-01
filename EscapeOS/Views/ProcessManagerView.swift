@@ -339,14 +339,11 @@ final class ProcessManagerService {
             defer { sysmontap_free(sysmon) }
 
             // 3. 配置：process_attributes = ["physFootprint"]
-            let physFootprint = "physFootprint"
-            var attrPtrs: [UnsafePointer<CChar>?] = []
-            _ = physFootprint.withCString { cStr -> Void in
-                let buf = strdup(cStr)!
-                defer { } // buf 由 attrs 数组持有，在 config 调用结束后释放
-                attrPtrs.append(buf)
+            guard let attrBuf = strdup("physFootprint") else {
+                throw makeError("strdup 失败")
             }
-            attrPtrs.append(nil)
+            defer { free(UnsafeMutableRawPointer(attrBuf)) }
+            var attrPtrs: [UnsafePointer<CChar>?] = [UnsafePointer(attrBuf), nil]
 
             var config = IdeviceSysmontapConfig(
                 interval_ms: 500,
@@ -356,10 +353,8 @@ final class ProcessManagerService {
                 system_attributes_count: 0
             )
             if let err = sysmontap_set_config(sysmon, &config) {
-                free(attrPtrs[0])
                 throw error(from: err, fallback: "配置 Sysmontap 失败")
             }
-            free(attrPtrs[0])
 
             // 4. 启动
             if let err = sysmontap_start(sysmon) {
