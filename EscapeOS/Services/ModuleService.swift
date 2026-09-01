@@ -109,8 +109,8 @@ final class ModuleService {
         // 而 bundle 目录在安装搬运时 mtime 必然刷新——两者取 max 更稳。
         // 若两锚点都不变（同 IPA 且搬运未触目录），用户可在模块设置里点"恢复内置模块"手动回归。
         func modTime(_ url: URL) -> TimeInterval {
-            (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate?.timeIntervalSince1970 ?? 0
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            return values?.contentModificationDate?.timeIntervalSince1970 ?? 0
         }
         let bundleMod = modTime(Bundle.main.bundleURL)
         let execMod = modTime(Bundle.main.executableURL)
