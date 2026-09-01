@@ -60,10 +60,11 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      - name: Install build tools (cmake, ninja, mingw-w64)
+      - name: Install build tools (cmake, ninja, mingw-w64, p7zip)
         # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）；
-        # build-sap-server.sh 用 mingw-w64 交叉编译 Windows 版签名服务（v0.3.11）。
-        run: brew install cmake ninja mingw-w64
+        # build-sap-server.sh 解压 unicorn 官方 mingw64 静态包（p7zip）并构建
+        # Windows 版签名服务 EscapeSapServer.exe（链接官方 libunicorn.a）。
+        run: brew install cmake ninja mingw-w64 p7zip
 
       - name: Cache Go modules
         # 加速 build-sap.sh 内的 `go mod tidy` / 构建。滚动 key + restore-keys 前缀。
