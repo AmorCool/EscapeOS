@@ -326,27 +326,27 @@ final class ProcessManagerService {
             }
 
             // 1. RemoteServer
-            print("[SysmonDiag] step1: 创建 RemoteServer…")
+            LoginLogger.shared.log("[SysmonDiag] step1: 创建 RemoteServer…")
             var server: OpaquePointer?
             if let err = remote_server_connect_rsd(adapter, handshake, &server) {
                 let msg = error(from: err, fallback: "创建 RemoteServer 失败")
-                print("[SysmonDiag] step1 失败: \(msg.localizedDescription)")
+                LoginLogger.shared.log("[SysmonDiag] step1 失败: \(msg.localizedDescription)")
                 throw msg
             }
             guard let server else { throw makeError("RemoteServer 为空") }
-            print("[SysmonDiag] step1 成功")
+            LoginLogger.shared.log("[SysmonDiag] step1 成功")
             defer { remote_server_free(server) }
 
             // 2. SysmontapClient
-            print("[SysmonDiag] step2: 创建 SysmontapClient…")
+            LoginLogger.shared.log("[SysmonDiag] step2: 创建 SysmontapClient…")
             var sysmon: OpaquePointer?
             if let err = sysmontap_new(server, &sysmon) {
                 let msg = error(from: err, fallback: "创建 Sysmontap 失败")
-                print("[SysmonDiag] step2 失败: \(msg.localizedDescription)")
+                LoginLogger.shared.log("[SysmonDiag] step2 失败: \(msg.localizedDescription)")
                 throw msg
             }
             guard let sysmon else { throw makeError("Sysmontap 为空") }
-            print("[SysmonDiag] step2 成功")
+            LoginLogger.shared.log("[SysmonDiag] step2 成功")
             defer { sysmontap_free(sysmon) }
 
             // 3. 配置：process_attributes = ["physFootprint"]
@@ -365,18 +365,18 @@ final class ProcessManagerService {
             )
             if let err = sysmontap_set_config(sysmon, &config) {
                 let msg = error(from: err, fallback: "配置 Sysmontap 失败")
-                print("[SysmonDiag] step3 失败: \(msg.localizedDescription)")
+                LoginLogger.shared.log("[SysmonDiag] step3 失败: \(msg.localizedDescription)")
                 throw msg
             }
-            print("[SysmonDiag] step3 配置成功")
+            LoginLogger.shared.log("[SysmonDiag] step3 配置成功")
 
             // 4. 启动
             if let err = sysmontap_start(sysmon) {
                 let msg = error(from: err, fallback: "启动 Sysmontap 失败")
-                print("[SysmonDiag] step4 失败: \(msg.localizedDescription)")
+                LoginLogger.shared.log("[SysmonDiag] step4 失败: \(msg.localizedDescription)")
                 throw msg
             }
-            print("[SysmonDiag] step4 启动成功，等待样本…")
+            LoginLogger.shared.log("[SysmonDiag] step4 启动成功，等待样本…")
 
             // 5. 获取一次样本
             var processes: plist_t? = nil
@@ -395,15 +395,15 @@ final class ProcessManagerService {
                 sampleSemaphore.signal()
             }
             if sampleSemaphore.wait(timeout: .now() + 5) == .timedOut {
-                print("[SysmonDiag] step5 超时（5s 无样本）——DVT 服务可能不可达")
+                LoginLogger.shared.log("[SysmonDiag] step5 超时（5s 无样本）——DVT 服务可能不可达")
                 sysmontap_stop(sysmon)
                 return [:]  // 超时直接返回空，不抛错（保持列表可用）
             }
             if let sampleError {
-                print("[SysmonDiag] step5 失败: \(sampleError.localizedDescription)")
+                LoginLogger.shared.log("[SysmonDiag] step5 失败: \(sampleError.localizedDescription)")
                 throw sampleError
             }
-            print("[SysmonDiag] step5 样本到达！processes=\(processes != nil)")
+            LoginLogger.shared.log("[SysmonDiag] step5 样本到达！processes=\(processes != nil)")
 
             defer {
                 if let p = processes { plist_free(p) }
@@ -649,6 +649,7 @@ final class ProcessManagerViewModel: ObservableObject {
 // MARK: - 视图
 
 struct ProcessManagerView: View {
+    @State private var shareLog: URL?
     @StateObject private var viewModel = ProcessManagerViewModel()
     @State private var killCandidate: ProcessEntry?
     @State private var killConfirmTask: Task<Void, Never>?
@@ -740,6 +741,24 @@ struct ProcessManagerView: View {
         .listSectionSpacing(.compact)
         .contentMargins(.top, 0)
         .refreshable { viewModel.refresh() }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    shareLog = LoginLogger.shared.logFileURL
+                } label: {
+                    Image(systemName: "doc.text.magnifyingglass")
+                }
+                .accessibilityLabel("查看诊断日志")
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { shareLog != nil },
+            set: { if !$0 { shareLog = nil } }
+        )) {
+            if let url = shareLog {
+                ActivityShareView(url: url)
+            }
+        }
     }
 
     private func handleKillTap(for process: ProcessEntry) {

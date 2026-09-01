@@ -124,7 +124,7 @@ struct MoreView: View {
             ForEach(sections, id: \.header) { section in
                 Section {
                     ForEach(section.items) { item in
-                        NavigationLink(destination: item.destination) {
+                        NavigationLink(destination: NavigationLazyView(item.destination)) {
                             MoreCard(
                                 icon: item.icon,
                                 title: item.title,
