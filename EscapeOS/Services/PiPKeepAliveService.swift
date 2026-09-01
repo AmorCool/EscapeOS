@@ -61,7 +61,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         }
 
         if pipController == nil {
-            let vc = UIViewController()
+            let vc = AVPictureInPictureVideoCallViewController()
             vc.view.backgroundColor = .black
             vc.preferredContentSize = Self.normalSize
             let source = AVPictureInPictureController.ContentSource(

@@ -132,7 +132,7 @@ struct PlayerLayerHost: UIViewRepresentable {
         let v = UIView()
         v.backgroundColor = .black
         DispatchQueue.main.async {
-            PiPKeepAliveService.shared.attach(layerHost: v)
+            PiPKeepAliveService.shared.attach(sourceView: v)
         }
         return v
     }
