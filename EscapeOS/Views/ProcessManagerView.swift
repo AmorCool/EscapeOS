@@ -550,8 +550,28 @@ final class ProcessManagerService {
 // MARK: - 视图模型
 
 @MainActor
+/// 进程列表排序模式
+enum ProcessSortMode: String, CaseIterable, Identifiable {
+    case defaultOrder = "默认"
+    case byName = "按名称"
+    case byMemory = "按内存"
+    var id: String { rawValue }
+}
+
+/// 进程列表排序模式
+enum ProcessSortMode: String, CaseIterable, Identifiable {
+    case defaultOrder = "默认"
+    case byName = "按名称"
+    case byMemory = "按内存"
+    var id: String { rawValue }
+}
+
 final class ProcessManagerViewModel: ObservableObject {
     @Published private(set) var processes: [ProcessEntry] = []
+    /// v0.3.47：排序模式
+    @Published var sortMode: ProcessSortMode = .defaultOrder
+    /// v0.3.47：排序模式
+    @Published var sortMode: ProcessSortMode = .defaultOrder
     /// v0.3.45：内存监控开关（持久化到 UserDefaults）
     @Published var memoryWatchEnabled: Bool = UserDefaults.standard.bool(forKey: "ProcessMemoryWatch") {
         didSet { UserDefaults.standard.set(memoryWatchEnabled, forKey: "ProcessMemoryWatch") }
@@ -567,6 +587,23 @@ final class ProcessManagerViewModel: ObservableObject {
     private var controlTimeoutTask: Task<Void, Never>?
     /// SIGKILL 后的二次验证任务（检查目标 PID 是否真的消失）。
     private var killVerifyTask: Task<Void, Never>?
+
+    /// v0.3.47：排序后的进程列表（在搜索过滤基础上）
+    var sortedProcesses: [ProcessEntry] {
+        switch sortMode {
+        case .defaultOrder:
+            return filteredProcesses
+        case .byName:
+            return filteredProcesses.sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+        case .byMemory:
+            // 未上报内存（nil）排最后；其余按占用从大到小
+            return filteredProcesses.sorted {
+                ($0.memoryBytes ?? -1) > ($1.memoryBytes ?? -1)
+            }
+        }
+    }
 
     var filteredProcesses: [ProcessEntry] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -796,12 +833,12 @@ struct ProcessManagerView: View {
                 }
             } else {
                 Section {
-                    if viewModel.filteredProcesses.isEmpty {
+                    if viewModel.sortedProcesses.isEmpty {
                         Text("没有匹配的进程。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(viewModel.filteredProcesses) { process in
+                        ForEach(viewModel.sortedProcesses) { process in
                             ProcessRow(
                                 process: process,
                                 activeControl: viewModel.activeControl(for: process),
@@ -825,6 +862,15 @@ struct ProcessManagerView: View {
         .contentMargins(.top, 0)
         .refreshable { viewModel.refresh() }
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Picker("排序", selection: $viewModel.sortMode) {
+                    ForEach(ProcessSortMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(.blue)
+            }
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
                     viewModel.memoryWatchEnabled.toggle()
