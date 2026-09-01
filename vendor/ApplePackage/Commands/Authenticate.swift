@@ -109,7 +109,7 @@ public enum Authenticator {
 
         // v0.3.26：认证端点切换——AppStorePro 二进制实锤（中文日志+native/fast）：
         // SAP 认证走 auth.itunes.apple.com/auth/v1/native/fast/（硬编码，非 bag）
-        let requestEndpoint: URL = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast/")!
+        var requestEndpoint: URL = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast/")!
         var cookies: [Cookie] = cookies
         var storeFront = ""
         var pod: String?
