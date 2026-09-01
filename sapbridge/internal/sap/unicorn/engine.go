@@ -97,7 +97,10 @@ func newEngine(ctx context.Context, loadLibrary func(context.Context) (library, 
 	var major, minor C.uint
 	_ = C.uc_version(&major, &minor)
 
-	if uint32(major) != 2 || uint32(minor) != 1 {
+	// v0.3.13：放宽为 major==2 即可——官方 windows_mingw64-static 2.1.0 包的
+	// uc_version 实测返回 2.0（API 版本与包版本是两回事），旧校验 2.1 会误拒。
+	// 我们使用的 uc_* API 在 unicorn 2.x 全系稳定。
+	if uint32(major) != 2 {
 		_ = lib.close()
 
 		return nil, fmt.Errorf("unsupported Unicorn API version %d.%d", uint32(major), uint32(minor))
