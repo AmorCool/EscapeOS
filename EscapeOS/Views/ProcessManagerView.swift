@@ -312,23 +312,6 @@ final class ProcessManagerService {
 
     // MARK: 发送信号
 
-    /// v0.3.38：内存查询完全异步——独立 Task + 独立队列，绝不阻塞进程列表
-    private func fetchMemoryAsync() {
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
-            let memMap = (try? ProcessManagerService.shared.fetchMemoryUsage()) ?? [:]
-            await MainActor.run {
-                guard let self else { return }
-                guard !self.processes.isEmpty else { return }
-                for i in self.processes.indices {
-                    if let mem = memMap[Int32(self.processes[i].pid)] {
-                        self.processes[i].memoryBytes = Int64(mem)
-                    }
-                }
-            }
-        }
-    }
-
     // MARK: - 内存查询（v0.3.33：DVT sysmontap physFootprint）
 
     /// 通过 DVT sysmontap 获取每个进程的 physFootprint（物理内存占用）。
@@ -523,6 +506,23 @@ final class ProcessManagerViewModel: ObservableObject {
         controlTimeoutTask = nil
         killVerifyTask?.cancel()
         killVerifyTask = nil
+    }
+
+    /// v0.3.38：内存查询完全异步——独立 Task，绝不阻塞进程列表
+    private func fetchMemoryAsync() {
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            let memMap = (try? ProcessManagerService.shared.fetchMemoryUsage()) ?? [:]
+            await MainActor.run {
+                guard let self else { return }
+                guard !self.processes.isEmpty else { return }
+                for i in self.processes.indices {
+                    if let mem = memMap[Int32(self.processes[i].pid)] {
+                        self.processes[i].memoryBytes = Int64(mem)
+                    }
+                }
+            }
+        }
     }
 
     func refresh() {

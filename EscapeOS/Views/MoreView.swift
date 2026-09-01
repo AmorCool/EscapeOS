@@ -49,13 +49,13 @@ struct MoreView: View {
                          "签名安装 IPA",
                          IPAInstallView()),
                 MoreItem("signed-ipa", "app.badge.checkmark", "IPA 安装",
-                         "在线安装已签名 IPA",
+                         "在线 / 覆盖安装已签名 IPA",
                          SignedIPAInstallView()),
                 MoreItem("appstore", "cart.fill", "App Store 下载",
                          "搜索下载正版 IPA",
                          AppStoreDownloadView()),
                 MoreItem("pairing-install", "tray.and.arrow.down.fill", "配置导入",
-                         "配对文件写入 LC 等应用",
+                         "写入本机配对文件到应用",
                          PairingInstallView()),
             ]),
             ("文件管理", nil, [
@@ -63,7 +63,7 @@ struct MoreView: View {
                          "浏览编辑设备文件",
                          FileBrowserRootView(appList: appList)),
                 MoreItem("afc", "externaldrive.fill", "AFC 管理",
-                         "隧道浏览 / 上传下载文件",
+                         "AFC 文件浏览 / 导入导出文件",
                          AFCBrowserView()),
             ]),
             ("个性化", nil, [
@@ -74,7 +74,7 @@ struct MoreView: View {
                          "替换拨号键盘主题",
                          DialerThemeView()),
                 MoreItem("ringtones", "music.note.list", "铃声管理",
-                         "导入 / 管理 / 导出铃声",
+                         "导入 / 导出铃声",
                          RingtonesView()),
             ]),
             ("系统工具", nil, [
