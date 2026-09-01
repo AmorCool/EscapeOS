@@ -33,7 +33,10 @@ struct PiPKeepAliveView: View {
                         Circle()
                             .fill(service.isPiPActive ? Color.green : Color.secondary)
                             .frame(width: 8, height: 8)
-                        Text(service.isPiPActive ? "画中画运行中 · 后台保活生效" : "画中画未启动")
+                        Text(
+                            service.isPiPActive
+                                ? (service.isHidden ? "画中画运行中 · 已隐藏（后台保活生效）" : "画中画运行中 · 后台保活生效")
+                                : "画中画未启动")
                             .font(.subheadline)
                             .foregroundColor(service.isPiPActive ? .green : .secondary)
                     }
@@ -64,8 +67,25 @@ struct PiPKeepAliveView: View {
                     }
                 }
                 .tint(.blue)
+
+                // v0.3.50：隐藏 / 显示（原版 0.1pt 技巧——缩 preferredContentSize）
+                if service.isPiPActive {
+                    Button {
+                        if service.isHidden {
+                            service.show()
+                        } else {
+                            service.hide()
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: service.isHidden ? "eye" : "eye.slash")
+                            Text(service.isHidden ? "显示画中画窗口" : "隐藏画中画窗口（保活继续）")
+                        }
+                    }
+                    .tint(.orange)
+                }
             } footer: {
-                Text("启动后回主屏幕或锁屏，系统将以悬浮小窗维持应用活跃。此功能用于需要长时间后台运行的任务（隧道保活 / 长传输）。悬浮窗可手动关闭；关闭后保活随之结束。")
+                Text("启动后回主屏幕或锁屏，系统以悬浮小窗维持应用活跃。悬浮窗支持拖动/双指缩放；「隐藏」会把窗口缩到不可见但保活继续。用于需要长时间后台运行的任务（隧道保活 / 长传输）。")
             }
 
             Section {

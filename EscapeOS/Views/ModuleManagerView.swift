@@ -184,25 +184,23 @@ struct ModuleManagerView: View {
                 Divider()
                 ForEach(module.actions) { action in
                     Button {
-                        if let confirm = action.confirm, !confirm.isEmpty {
-                            confirmAction = (module, action)
-                        } else {
-                            run(module: module, action: action)
-                        }
+                        run(module: module, action: action)
                     } label: {
                         HStack {
                             Image(systemName: action.icon ?? "play.circle.fill")
-                                .foregroundColor(.blue)
                             Text(action.label)
-                                .foregroundColor(.primary)
                             Spacer()
                             if runningActionID == actionKey(module, action) {
                                 ProgressView()
+                            } else {
+                                Text("执行")
+                                    .font(.subheadline.weight(.semibold))
                             }
                         }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
                     .disabled(runningActionID != nil)
-                    .padding(.vertical, 2)
                 }
 
                 if let notes = module.notes, !notes.isEmpty {

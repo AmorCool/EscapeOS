@@ -83,11 +83,21 @@ final class ModuleService {
 
     // MARK: 内置模块首次安装
 
-    /// 首次启动时把 bundle 内置模块安装到 Documents/Modules（幂等：按目录存在与否）。
+    /// 用户主动卸载过的模块 id（防止内置模块重启后自动回归）
+    private static let uninstalledKey = "Module.uninstalled.ids"
+
+    private var uninstalledIds: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: Self.uninstalledKey) ?? [])
+    }
+
+    /// 首次启动时把 bundle 内置模块安装到 Documents/Modules。
+    /// 幂等：目录已存在 或 用户曾主动卸载过 → 跳过。
     private func bootstrapBundledModules() {
         guard let bundledURL = Bundle.main.url(forResource: "BundledModules", withExtension: nil) else { return }
         guard let ids = try? FileManager.default.contentsOfDirectory(atPath: bundledURL.path) else { return }
+        let uninstalled = uninstalledIds
         for id in ids where !id.hasPrefix(".") {
+            guard !uninstalled.contains(id) else { continue }
             let dest = modulesRoot.appendingPathComponent(id, isDirectory: true)
             guard !FileManager.default.fileExists(atPath: dest.path) else { continue }
             let src = bundledURL.appendingPathComponent(id, isDirectory: true)
@@ -203,6 +213,12 @@ final class ModuleService {
     func delete(id: String) {
         let dir = modulesRoot.appendingPathComponent(id, isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
+        // 若是内置模块，记录用户卸载意愿——重启后不再自动回归
+        if Bundle.main.url(forResource: "BundledModules/\(id)/module.json", withExtension: nil) != nil {
+            var ids = uninstalledIds
+            ids.insert(id)
+            UserDefaults.standard.set(Array(ids), forKey: Self.uninstalledKey)
+        }
     }
 
     // MARK: 启用 / 禁用（.disabled 标记文件，不污染 manifest）
