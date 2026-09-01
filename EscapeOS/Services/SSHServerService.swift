@@ -38,7 +38,7 @@ final class SSHServerService: NSObject, ObservableObject {
     static let defaultPort = 2222
 
     private override init() {
-        super.init()
+        // 存储属性必须全部先于 super.init() 初始化
         let savedPort = UserDefaults.standard.integer(forKey: "ssh.port")
         port = savedPort > 0 ? savedPort : Self.defaultPort
         username = UserDefaults.standard.string(forKey: "ssh.username") ?? "escape"
@@ -49,6 +49,7 @@ final class SSHServerService: NSObject, ObservableObject {
             UserDefaults.standard.set(password, forKey: "ssh.password")
         }
         lanIP = Self.detectLANIP() ?? "未连接 Wi-Fi"
+        super.init()
     }
 
     // MARK: 凭据
@@ -172,7 +173,7 @@ final class SSHServerService: NSObject, ObservableObject {
 
     // MARK: 局域网 IP
 
-    nonisolated static func detectLANIP() -> String? {
+    static func detectLANIP() -> String? {
         var address: String?
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
@@ -241,7 +242,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
 
     func start(command: String, outputHandler: ExecOutputHandler) async throws -> ExecCommandContext {
         let output = Self.execute(command)
-        outputHandler.stdoutPipe.fileHandleForWriting.write(Data(output.utf8))
+        try outputHandler.stdoutPipe.fileHandleForWriting.write(Data(output.utf8))
         outputHandler.succeed(exitCode: 0)
         return NoopExecContext()
     }
