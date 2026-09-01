@@ -155,12 +155,7 @@ struct AppStoreDownloadView: View {
                     }
             }
         }
-        .onAppear {
-            reload()
-            if sapServerURL.trimmingCharacters(in: .whitespaces).isEmpty {
-                SapStatusModel.shared.probeJITNow()
-            }
-        }
+        .onAppear { reload() }
     }
 
     // MARK: - 子视图
