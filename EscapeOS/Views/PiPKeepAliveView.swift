@@ -180,11 +180,15 @@ struct PiPHeightSlider: UIViewRepresentable {
         s.minimumValue = 0.1
         s.maximumValue = 220
         s.isContinuous = true
+        s.addTarget(context.coordinator, action: #selector(Coordinator.touchDown(_:)), for: .touchDown)
         s.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        s.addTarget(context.coordinator, action: #selector(Coordinator.ended(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         return s
     }
 
     func updateUIView(_ uiView: UISlider, context: Context) {
+        // 拖动中不回写——否则拇指和手指打架（表现：数值瞬间归 0 再跳 0.1）
+        guard !context.coordinator.isTracking else { return }
         if abs(uiView.value - Float(value)) > 0.05 {
             uiView.value = Float(value)
         }
@@ -194,11 +198,16 @@ struct PiPHeightSlider: UIViewRepresentable {
 
     final class Coordinator: NSObject {
         var parent: PiPHeightSlider
+        var isTracking = false
         init(_ parent: PiPHeightSlider) { self.parent = parent }
 
+        @objc func touchDown(_ slider: UISlider) { isTracking = true }
+
         @objc func changed(_ slider: UISlider) {
-            let stepped = (slider.value / 0.1).rounded() * 0.1
+            let stepped = (max(slider.value, 0.1) / 0.1).rounded() * 0.1
             parent.value = CGFloat(stepped)
         }
+
+        @objc func ended(_ slider: UISlider) { isTracking = false }
     }
 }

@@ -85,8 +85,9 @@ final class ModuleService {
 
     /// 用户主动卸载过的模块 id（防止内置模块重启后自动回归）
     private static let uninstalledKey = "Module.uninstalled.ids"
-    /// 卸载记录对应的宿主 build——build 变化（覆盖安装新 IPA）即清空记录
-    private static let hostBuildAtUninstallKey = "Module.uninstalled.hostBuild"
+    /// 覆盖安装检测锚点：主可执行文件的修改时间
+    /// （每次安装/覆盖安装都会刷新，同版本覆盖安装也能检测到）
+    private static let hostInstallDateKey = "Module.uninstalled.hostInstallDate"
 
     private var uninstalledIds: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: Self.uninstalledKey) ?? [])
@@ -103,18 +104,20 @@ final class ModuleService {
 
     private func bootstrapBundledModules() {
         // 覆盖安装不清沙盒数据（UserDefaults 保留），卸载标记跨安装残留。
-        // 策略：宿主 build 变化（=装了新 IPA）且开关开 → 清空卸载记录，内置模块回归；
-        //       开关关 → 记录保留，模块维持卸载状态。
-        let currentBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
-        let recordedBuild = UserDefaults.standard.string(forKey: Self.hostBuildAtUninstallKey)
-        if recordedBuild == nil {
-            UserDefaults.standard.set(currentBuild, forKey: Self.hostBuildAtUninstallKey)
-        } else if recordedBuild != currentBuild {
+        // 检测锚点：主可执行文件 contentModificationDate——每次安装（含同版本覆盖）必变。
+        // 策略：检测到新安装且开关开 → 清空卸载记录，内置模块回归；开关关 → 维持卸载。
+        let execMod = (Bundle.main.executableURL.flatMap {
+            try? $0.resourceValues(forKeys: [.contentModificationDateKey])
+        })?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let recordedDate = UserDefaults.standard.double(forKey: Self.hostInstallDateKey)
+        if recordedDate == 0 {
+            UserDefaults.standard.set(execMod, forKey: Self.hostInstallDateKey)
+        } else if abs(recordedDate - execMod) > 1 {
             if Self.restoreOnUpgrade {
                 UserDefaults.standard.removeObject(forKey: Self.uninstalledKey)
-                print("[Module] 宿主 build 变化（\(recordedBuild!) → \(currentBuild)），恢复内置模块")
+                print("[Module] 检测到覆盖安装（可执行文件时间变化），恢复内置模块")
             }
-            UserDefaults.standard.set(currentBuild, forKey: Self.hostBuildAtUninstallKey)
+            UserDefaults.standard.set(execMod, forKey: Self.hostInstallDateKey)
         }
 
         guard let bundledURL = Bundle.main.url(forResource: "BundledModules", withExtension: nil) else { return }
