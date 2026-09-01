@@ -59,7 +59,7 @@ struct IPCCInstallView: View {
                                 Text("正在上传并安装…")
                             }
                         } else {
-                            Label("更新 IPCC（官方通道）", systemImage: "arrow.down.circle.fill")
+                            Label("更新 IPCC", systemImage: "arrow.down.circle.fill")
                         }
                     }
                     .disabled(installing)
@@ -67,7 +67,7 @@ struct IPCCInstallView: View {
             } header: {
                 Text("安装运营商包")
             } footer: {
-                Text("与爱思助手 / iTunes「更新 IPCC」同一套系统管线：文件上传到 PublicStaging 后交给 CommCenter 安装。成功受理后建议重启设备生效。")
+                Text("选择IPCC文件上传到 PublicStaging 后交给 CommCenter 安装。")
             }
 
             Section {
@@ -121,7 +121,7 @@ struct IPCCInstallView: View {
                     }
                 }
             } footer: {
-                Text("安装后的实际 bundle 由 CommCenter 写入系统区，本机无法直接查看 / 卸载（由系统统一管理）。")
+                Text("查看最近安装记录，安装后的实际 bundle 由 CommCenter 写入系统区。")
             }
 
             // v0.2.138：蜂窝网络维护（参考 CellularInfo 工具板块；v0.2.142
@@ -145,7 +145,7 @@ struct IPCCInstallView: View {
             } header: {
                 Text("蜂窝网络维护")
             } footer: {
-                Text("重启服务 = 经 RSD 隧道向 CommCenter 发送 SIGKILL，系统自动拉起（与爱思同款效果，无需 root）。")
+                Text("重启服务： 经 RSD 隧道向 CommCenter 发送 SIGKILL，系统自动拉起。")
             }
         }
         .listStyle(.insetGrouped)
@@ -168,7 +168,7 @@ struct IPCCInstallView: View {
         .alert("已提交安装", isPresented: $showRespringHint) {
             Button("好的") {}
         } message: {
-            Text("已通过 installation_proxy（PackageType=CarrierBundle）交给系统安装，与爱思助手「更新 IPCC」同一条通道。建议重启设备（或「更多 → 设备控制 → 重启 SpringBoard」）后查看生效情况。")
+            Text("已通过 installation_proxy（PackageType=CarrierBundle）交给系统安装。")
         }
         .alert("清空安装记录？", isPresented: $confirmClearRecords) {
             Button("清空", role: .destructive) {

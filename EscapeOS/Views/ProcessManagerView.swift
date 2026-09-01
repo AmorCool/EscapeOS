@@ -497,9 +497,35 @@ final class ProcessManagerViewModel: ObservableObject {
         Task.detached(priority: .utility) { [weak self] in
             do {
                 let entries = try ProcessManagerService.shared.listProcesses()
+
+                // v0.3.37：带 5 秒超时的内存查询（sysmontap next_sample 是阻塞式的，
+                // 用 semaphore + background queue 防止挂死刷新流程）
+                var memMap: [Int32: UInt64] = [:]
+                let semaphore = DispatchSemaphore(value: 0)
+                DispatchQueue.global(qos: .utility).async {
+                    do {
+                        memMap = try ProcessManagerService.shared.fetchMemoryUsage()
+                    } catch {
+                        print("[ProcessManager] 内存查询失败: \(error.localizedDescription)")
+                    }
+                    semaphore.signal()
+                }
+                let timeoutResult = semaphore.wait(timeout: .now() + 5)
+                if timeoutResult == .timedOut {
+                    print("[ProcessManager] 内存查询超时（5s），跳过")
+                }
+
+                // 合并内存数据到 entries
+                var enriched = entries
+                for i in enriched.indices {
+                    if let mem = memMap[Int32(enriched[i].pid)] {
+                        enriched[i].memoryBytes = Int64(mem)
+                    }
+                }
+
                 await MainActor.run {
                     guard let self else { return }
-                    self.processes = entries
+                    self.processes = enriched
                     self.isRefreshing = false
                 }
             } catch {

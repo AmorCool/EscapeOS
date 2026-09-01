@@ -49,7 +49,7 @@ struct CrashLogView: View {
                     }
                 }
             } header: {
-                Text(currentDir.map { "目录：\($0)" } ?? "目录：根（崩溃报告 / 诊断日志）")
+                Text(currentDir.map { "目录：\($0)" } ?? "目录：/")
             } footer: {
                 if !loading && errorMessage == nil {
                     Text("对应「设置 → 隐私与安全性 → 分析与改进」。支持批量导出 / 删除。")

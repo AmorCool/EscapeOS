@@ -47,7 +47,7 @@ struct JITEnableView: View {
                     if !hasPairing {
                         Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("启用 JIT 需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接；③ 应用签名带 get-task-allow（证书直装签名默认带）。")
+                        Text("启用 JIT 需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接；③ 应用签名带 get-task-allow。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
@@ -85,7 +85,7 @@ struct JITEnableView: View {
                     } header: {
                         Label("Apps with get-task-allow", systemImage: "bolt.badge.a.fill")
                     } footer: {
-                        Text("点击应用后将以调试模式启动它（EscapeSpace 会退到后台）。JIT 权限在应用运行期间保持；应用退出后再次使用需重新启用。")
+                        Text("点击应用后将以调试模式启动它,JIT 权限在应用运行期间保持；应用退出后再次使用需重新启用。")
                     }
                 }
 
@@ -198,7 +198,7 @@ struct JITEnableView: View {
                 }.value
                 await MainActor.run {
                     isWorking = false
-                    successMessage = "「\(app.name)」已以调试模式启动，JIT 已生效。\n应用在运行期间保持 JIT；返回 EscapeSpace 可继续操作。"
+                    successMessage = "「\(app.name)」已以调试模式启动，JIT 已生效。\n应用在运行期间保持 JIT；返回可继续操作。"
                     showSuccess = true
                 }
             } catch {

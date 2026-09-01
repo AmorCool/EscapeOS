@@ -51,7 +51,7 @@ struct KernelCacheView: View {
                         }
                         Spacer()
                     }
-                    Text("从 Apple CDN 的 IPSW 中按偏移只下载 kernelcache 文件（约 20MB，无需下载整包数 GB），零权限、零漏洞，与越狱工具从设备读取的 kernelcache 是同一份文件。")
+                    Text("从 Apple CDN 的 IPSW 中按偏移只下载 kernelcache 文件（约 20MB，无需下载整包数 GB）")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -64,7 +64,7 @@ struct KernelCacheView: View {
                                 Text("下载中…")
                             }
                         } else {
-                            Label("一键下载当前系统 KernelCache", systemImage: "arrow.down.circle.fill")
+                            Label("下载当前系统 KernelCache", systemImage: "arrow.down.circle.fill")
                         }
                     }
                     .buttonStyle(.bordered)
@@ -72,9 +72,9 @@ struct KernelCacheView: View {
                     .tint(.blue)
                     .disabled(isRunning || selectedFirmware == nil)
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 2)
             } header: {
-                Text("内核缓存下载")
+                Text("内核缓存")
             } footer: {
                 Text("默认按当前机型与系统版本自动匹配；也可在下方手动切换机型/版本。")
             }

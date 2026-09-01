@@ -88,7 +88,7 @@ struct RingtonesView: View {
             } header: {
                 Text("铃声（/var/mobile/media）")
             } footer: {
-                Text("导入任意音频（mp3/wav/m4a 等）会自动转换为 .m4r（爱思同款）并上传到 iTunes_Control/Ringtones，随后发送系统同步通知刷新媒体库（爱思/iTunes 同款机制）—— 导入成功后到「设置 → 声音 → 铃声」查看。")
+                Text("导入任意音频（mp3/wav/m4a 等）会自动转换为 .m4r并上传到 iTunes_Control/Ringtones，随后发送系统同步通知刷新媒体库 —— 导入成功后到「设置 → 声音 → 铃声」查看。")
             }
         }
         .listStyle(.insetGrouped)
