@@ -45,9 +45,53 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     private var intentionalStop = false
     private var autoRestoreRemaining = 5
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var clockLabel: UILabel?
+    private var clockTimer: Timer?
 
-    static let normalSize = CGSize(width: 320, height: 180)
-    static let hiddenSize = CGSize(width: 1, height: 1)
+    private func updateClockLabel() {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        clockLabel?.text = f.string(from: Date())
+    }
+
+    // 原版高度系统常量（videoCall 路线）
+    static let textPiPWidth: CGFloat = 300
+    static let minPiPHeight: CGFloat = 0.1
+    static let maxPiPHeight: CGFloat = 220
+    static let piPHeightStep: CGFloat = 0.1
+    static let defaultPiPHeight: CGFloat = 120
+
+    static let hiddenSize = CGSize(width: textPiPWidth, height: minPiPHeight)
+    static var normalSize: CGSize { CGSize(width: textPiPWidth, height: defaultPiPHeight) }
+
+    /// 用户可调高度（0.1~220，步进 0.1，记忆到 UserDefaults）
+    @Published var pipHeight: CGFloat = {
+        let saved = UserDefaults.standard.double(forKey: "pip.height")
+        if saved >= 0.1 && saved <= 220 { return saved }
+        return defaultPiPHeight
+    }() {
+        didSet {
+            pipHeight = clampedHeight(pipHeight)
+            UserDefaults.standard.set(pipHeight, forKey: "pip.height")
+            applyCurrentSize()
+        }
+    }
+
+    private func clampedHeight(_ h: CGFloat) -> CGFloat {
+        let stepped = (h / Self.piPHeightStep).rounded() * Self.piPHeightStep
+        return min(max(stepped, Self.minPiPHeight), Self.maxPiPHeight)
+    }
+
+    private var currentSize: CGSize {
+        isHidden ? Self.hiddenSize : CGSize(width: Self.textPiPWidth, height: pipHeight)
+    }
+
+    /// 把当前尺寸同步到 contentVC + 源视图（原版 currentPiPSize 应用点）
+    private func applyCurrentSize() {
+        let size = currentSize
+        videoCallContentController?.preferredContentSize = size
+        pipSourceView?.frame.size = size
+    }
 
     private override init() {
         super.init()
@@ -69,7 +113,8 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
             hostContainer.addSubview(v)
             pipSourceView = v
         }
-        pipSourceView?.frame = CGRect(origin: .zero, size: Self.normalSize)
+        pipSourceView?.frame = CGRect(origin: .zero,
+                                      size: CGSize(width: Self.textPiPWidth, height: pipHeight))
     }
 
     // MARK: PiP 构建（原版 setupPip videoCall 分支）
@@ -91,9 +136,8 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         contentView.frame = CGRect(origin: .zero, size: Self.normalSize)
         contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         let label = UILabel()
-        label.text = "EscapeSpace · 保活中"
-        label.textColor = UIColor.white.withAlphaComponent(0.85)
-        label.font = .systemFont(ofSize: 14, weight: .medium)
+        label.textColor = UIColor.white.withAlphaComponent(0.9)
+        label.font = .monospacedDigitSystemFont(ofSize: 26, weight: .medium)
         label.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(label)
         NSLayoutConstraint.activate([
@@ -101,6 +145,15 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
             label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
         ])
         contentController.view.addSubview(contentView)
+        // 原版 clock mode：画中画内实时时钟（1s 刷新）
+        clockLabel = label
+        clockTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.updateClockLabel()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        clockTimer = timer
+        updateClockLabel()
 
         videoCallContentController = contentController
 
@@ -189,8 +242,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     func show() {
         guard let vc = videoCallContentController else { return }
         UIView.performWithoutAnimation {
-            pipSourceView?.frame.size = Self.normalSize
-            vc.preferredContentSize = Self.normalSize
+            applyCurrentSize()
             vc.view.alpha = 1
             vc.view.backgroundColor = .clear
             pipSourceView?.alpha = 1

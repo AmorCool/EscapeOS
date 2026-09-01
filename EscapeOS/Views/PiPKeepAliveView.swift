@@ -86,6 +86,25 @@ struct PiPKeepAliveView: View {
                     }
                     .tint(.primary)
                 }
+
+                // v0.3.57：悬浮窗高度调节（原版 0.1~220 步进 0.1）
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("悬浮窗高度")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(String(format: "%.1f pt", service.pipHeight))
+                            .font(.body.monospacedDigit())
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { service.pipHeight },
+                            set: { service.pipHeight = $0 }
+                        ),
+                        in: 0.1...220
+                    )
+                }
+                .disabled(!service.isPiPActive)
             } footer: {
                 Text("启动后回主屏幕或锁屏，系统以悬浮小窗维持应用活跃。悬浮窗支持拖动/双指缩放；「隐藏」会把窗口缩到不可见但保活继续。用于需要长时间后台运行的任务（隧道保活 / 长传输）。")
             }
