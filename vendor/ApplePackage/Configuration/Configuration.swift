@@ -68,7 +68,7 @@ public enum Configuration {
     // v0.2.158：由 Configurator UA 改为 iTunes Windows UA。审计 Q4 实证：
     // Configurator UA 在 native/fast 路径被 Apple 边缘以 403/404 拒（v0.2.151 真机）；
     // v0.2.153 curl 实测 iTunes/12.13.2 (Windows) UA 对同端点返回 200。
-    public nonisolated(unsafe) static var userAgent: String = "iTunes/12.13.2 (Windows; Microsoft Windows 11 Pro) AppleWebKit/620.1.28"
+    public nonisolated(unsafe) static let userAgent = "iTunes/12.12.0 (Macintosh; OS X 10.15.7) AppleWebKit/605.1.15"
 
     // v0.4.1：bag.xml 专用 UA（= upstream ipatool pkg/http DefaultUserAgent）。
     // 实测 2026-08-31：bag.xml 只对 Configurator UA 返回 authenticateAccount 与
