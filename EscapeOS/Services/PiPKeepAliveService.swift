@@ -71,9 +71,17 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         return defaultPiPHeight
     }() {
         didSet {
-            pipHeight = clampedHeight(pipHeight)
-            UserDefaults.standard.set(pipHeight, forKey: "pip.height")
-            applyCurrentSize()
+            let clamped = clampedHeight(pipHeight)
+            if clamped != pipHeight { pipHeight = clamped }
+        }
+    }
+
+    /// 滑杆/外部设置高度入口：夹紧 → 存储 → 异步应用（避开 SwiftUI 更新事务内改 UIKit）
+    func setHeight(_ h: CGFloat) {
+        pipHeight = clampedHeight(h)
+        UserDefaults.standard.set(pipHeight, forKey: "pip.height")
+        DispatchQueue.main.async { [weak self] in
+            self?.applyCurrentSize()
         }
     }
 

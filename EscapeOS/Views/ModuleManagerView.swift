@@ -21,6 +21,7 @@ struct ModuleManagerView: View {
     @State private var confirmAction: (module: EscapeModule, action: EscapeModuleAction)? = nil
     @State private var uninstallTarget: EscapeModule? = nil
     @State private var actionMenuModule: EscapeModule? = nil
+    @State private var showModuleSettings = false
     @State private var webviewModule: EscapeModule? = nil
 
     var body: some View {
@@ -35,15 +36,12 @@ struct ModuleManagerView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Menu {
-                    Toggle(isOn: Binding(
-                        get: { ModuleService.restoreOnUpgrade },
-                        set: { ModuleService.restoreOnUpgrade = $0 }
-                    )) {
-                        Label("覆盖安装后恢复内置模块", systemImage: "arrow.triangle.2.circlepath")
-                    }
+                // 对齐更多板块右上角设置：齿轮 → 弹窗设置页
+                Button {
+                    showModuleSettings = true
                 } label: {
                     Image(systemName: "gearshape")
+                        .imageScale(.large)
                 }
                 .accessibilityLabel("模块设置")
             }
@@ -54,6 +52,33 @@ struct ModuleManagerView: View {
                     Image(systemName: "square.and.arrow.down")
                 }
                 .accessibilityLabel("导入模块")
+            }
+        }
+        .sheet(isPresented: $showModuleSettings) {
+            NavigationView {
+                List {
+                    Section {
+                        Toggle(isOn: Binding(
+                            get: { ModuleService.restoreOnUpgrade },
+                            set: { ModuleService.restoreOnUpgrade = $0 }
+                        )) {
+                            HStack {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                Text("覆盖安装后恢复内置模块")
+                            }
+                        }
+                        .tint(.blue)
+                    } footer: {
+                        Text("开启后，覆盖安装新版本 IPA 时内置模块自动恢复；关闭后卸载即永久卸载（重新导入 .zip 可恢复）。")
+                    }
+                }
+                .navigationTitle("模块设置")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("完成") { showModuleSettings = false }
+                    }
+                }
             }
         }
         .onAppear(perform: reload)

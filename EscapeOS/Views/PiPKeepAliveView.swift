@@ -87,7 +87,7 @@ struct PiPKeepAliveView: View {
                     .tint(.primary)
                 }
 
-                // v0.3.57：悬浮窗高度调节（原版 0.1~220 步进 0.1）
+                // v0.3.59：悬浮窗高度调节（原版 UISlider 方案，修 SwiftUI Slider 闪退）
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("悬浮窗高度")
@@ -96,15 +96,12 @@ struct PiPKeepAliveView: View {
                         Text(String(format: "%.1f pt", service.pipHeight))
                             .font(.body.monospacedDigit())
                     }
-                    Slider(
-                        value: Binding(
-                            get: { service.pipHeight },
-                            set: { service.pipHeight = $0 }
-                        ),
-                        in: 0.1...220
-                    )
+                    PiPHeightSlider(value: Binding(
+                        get: { service.pipHeight },
+                        set: { service.setHeight($0) }
+                    ))
+                    .frame(height: 31)
                 }
-                .disabled(!service.isPiPActive)
             } footer: {
                 Text("启动后回主屏幕或锁屏，系统以悬浮小窗维持应用活跃。悬浮窗支持拖动/双指缩放；「隐藏」会把窗口缩到不可见但保活继续。用于需要长时间后台运行的任务（隧道保活 / 长传输）。")
             }
@@ -170,4 +167,38 @@ struct PlayerLayerHost: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+
+/// 原版高度滑杆：UISlider（0.1~220 连续，值变化步进 0.1）
+/// ——SwiftUI Slider 在本页面拖动即闪退，换 UIKit 控件后稳定
+struct PiPHeightSlider: UIViewRepresentable {
+    @Binding var value: CGFloat
+
+    func makeUIView(context: Context) -> UISlider {
+        let s = UISlider()
+        s.minimumValue = 0.1
+        s.maximumValue = 220
+        s.isContinuous = true
+        s.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        return s
+    }
+
+    func updateUIView(_ uiView: UISlider, context: Context) {
+        if abs(uiView.value - Float(value)) > 0.05 {
+            uiView.value = Float(value)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject {
+        var parent: PiPHeightSlider
+        init(_ parent: PiPHeightSlider) { self.parent = parent }
+
+        @objc func changed(_ slider: UISlider) {
+            let stepped = (slider.value / 0.1).rounded() * 0.1
+            parent.value = CGFloat(stepped)
+        }
+    }
 }
