@@ -108,12 +108,12 @@ final class ModuleService {
         // 注意 LC 场景：可执行文件 mtime 可能保留 IPA 内构建时间（同 IPA 覆盖不变），
         // 而 bundle 目录在安装搬运时 mtime 必然刷新——两者取 max 更稳。
         // 若两锚点都不变（同 IPA 且搬运未触目录），用户可在模块设置里点"恢复内置模块"手动回归。
-        let bundleMod = (Bundle.main.bundleURL.flatMap {
-            try? $0.resourceValues(forKeys: [.contentModificationDateKey])
-        })?.contentModificationDate?.timeIntervalSince1970 ?? 0
-        let execMod = (Bundle.main.executableURL.flatMap {
-            try? $0.resourceValues(forKeys: [.contentModificationDateKey])
-        })?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        func modTime(_ url: URL) -> TimeInterval {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate?.timeIntervalSince1970 ?? 0
+        }
+        let bundleMod = modTime(Bundle.main.bundleURL)
+        let execMod = modTime(Bundle.main.executableURL)
         let installAnchor = max(bundleMod, execMod)
         let recordedDate = UserDefaults.standard.double(forKey: Self.hostInstallDateKey)
         if recordedDate == 0 {
