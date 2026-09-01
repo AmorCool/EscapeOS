@@ -244,9 +244,16 @@ public enum Authenticator {
         baseURL: URL,
         deviceIdentifier: String
     ) throws -> URL {
-        // v0.3.19：去掉 ?guid= 查询参数——对齐上游 ipatool（URL 无查询参数，
-        // guid 只在 XML body 里）。POST 端点带意外查询参数会被 Apple 边缘 301。
-        return baseURL
+        // v0.3.20：加回 ?guid= 查询参数——v0.3.19 实锤 legacy wa/authenticate
+        // 端点需要它做路由（去掉后 404 Not Found）。上游 ipatool 虽然不加，
+        // 但上游的 HTTP 客户端与我们的不同（可能内部有其他路由机制）。
+        guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
+            try ensureFailed("invalid auth endpoint: \(baseURL)")
+        }
+        comps.queryItems = [
+            URLQueryItem(name: "guid", value: deviceIdentifier),
+        ]
+        return try comps.url.get()
     }
 
     private static func makeRequest(
