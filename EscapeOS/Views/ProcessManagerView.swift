@@ -310,6 +310,109 @@ final class ProcessManagerService {
 
     // MARK: 发送信号
 
+    // MARK: - 内存查询（v0.3.33：DVT sysmontap physFootprint）
+
+    /// 通过 DVT sysmontap 获取每个进程的 physFootprint（物理内存占用）。
+    /// 返回 [pid: bytes]，进程已退出时不出现在字典中。
+    func fetchMemoryUsage() throws -> [Int32: UInt64] {
+        try operationQueue.sync {
+            var tunnel = try createTunnel(hostname: "EscapeSpaceSysmon")
+            defer { tunnel.free() }
+            guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+                throw makeError("隧道未建立")
+            }
+
+            // 1. RemoteServer
+            var server: OpaquePointer?
+            if let err = remote_server_connect_rsd(adapter, handshake, &server) {
+                throw error(from: err, fallback: "创建 RemoteServer 失败")
+            }
+            guard let server else { throw makeError("RemoteServer 为空") }
+            defer { remote_server_free(server) }
+
+            // 2. SysmontapClient
+            var sysmon: OpaquePointer?
+            if let err = sysmontap_new(server, &sysmon) {
+                throw error(from: err, fallback: "创建 Sysmontap 失败")
+            }
+            guard let sysmon else { throw makeError("Sysmontap 为空") }
+            defer { sysmontap_free(sysmon) }
+
+            // 3. 配置：process_attributes = ["physFootprint"]
+            let physFootprint = "physFootprint"
+            var attrPtrs: [UnsafePointer<CChar>?] = []
+            _ = physFootprint.withCString { cStr -> Void in
+                let buf = strdup(cStr)!
+                defer { } // buf 由 attrs 数组持有，在 config 调用结束后释放
+                attrPtrs.append(buf)
+            }
+            attrPtrs.append(nil)
+
+            var config = IdeviceSysmontapConfig(
+                interval_ms: 500,
+                process_attributes: attrPtrs,
+                process_attributes_count: 1,
+                system_attributes: nil,
+                system_attributes_count: 0
+            )
+            if let err = sysmontap_set_config(sysmon, &config) {
+                free(attrPtrs[0])
+                throw error(from: err, fallback: "配置 Sysmontap 失败")
+            }
+            free(attrPtrs[0])
+
+            // 4. 启动
+            if let err = sysmontap_start(sysmon) {
+                throw error(from: err, fallback: "启动 Sysmontap 失败")
+            }
+
+            // 5. 获取一次样本
+            var processes: plist_t? = nil
+            var system: plist_t? = nil
+            var cpu: plist_t? = nil
+            if let err = sysmontap_next_sample(sysmon, &processes, &system, &cpu) {
+                throw error(from: err, fallback: "获取内存样本失败")
+            }
+
+            defer {
+                if let p = processes { plist_free(p) }
+                if let s = system { plist_free(s) }
+                if let c = cpu { plist_free(c) }
+            }
+
+            // 6. 停止
+            sysmontap_stop(sysmon)
+
+            // 7. 解析 processes dict → { "pid": [physFootprint_value] }
+            var result: [Int32: UInt64] = [:]
+            guard let procs = processes else { return result }
+
+            var iter: plist_dict_iter? = nil
+            plist_dict_new_iter(procs, &iter)
+            defer { if let it = iter { free(it) } }
+
+            while true {
+                var key: UnsafeMutablePointer<CChar>? = nil
+                var val: plist_t? = nil
+                plist_dict_next_item(procs, iter, &key, &val)
+                guard let k = key else { break }
+                let pidStr = String(cString: k)
+                free(k)
+                guard let pid = Int32(pidStr) else { continue }
+
+                // val 是数组，第一个元素 = physFootprint
+                guard let v = val else { continue }
+                let item = plist_array_get_item(v, 0)
+                guard let footprint = item, footprint != nil else { continue }
+                var mem: UInt64 = 0
+                plist_get_uint_val(footprint, &mem)
+                if mem > 0 { result[pid] = mem }
+            }
+
+            return result
+        }
+    }
+
     func sendSignal(_ action: ProcessControlAction, toPID pid: Int) throws {
         try operationQueue.sync {
             var tunnel = try createTunnel(hostname: "EscapeSpaceProcess")
@@ -399,9 +502,27 @@ final class ProcessManagerViewModel: ObservableObject {
         Task.detached(priority: .utility) { [weak self] in
             do {
                 let entries = try ProcessManagerService.shared.listProcesses()
+
+                // v0.3.33：查询内存占用（sysmontap physFootprint）
+                // 失败静默——不影响进程列表显示
+                var memMap: [Int32: UInt64] = [:]
+                do {
+                    memMap = try ProcessManagerService.shared.fetchMemoryUsage()
+                } catch {
+                    print("[ProcessManager] 内存查询失败: \(error.localizedDescription)")
+                }
+
+                // 合并内存数据到 entries
+                var enriched = entries
+                for i in enriched.indices {
+                    if let mem = memMap[Int32(enriched[i].pid)] {
+                        enriched[i].memoryBytes = Int64(mem)
+                    }
+                }
+
                 await MainActor.run {
                     guard let self else { return }
-                    self.processes = entries
+                    self.processes = enriched
                     self.isRefreshing = false
                 }
             } catch {
