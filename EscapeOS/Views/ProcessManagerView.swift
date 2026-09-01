@@ -445,28 +445,33 @@ final class ProcessManagerService {
             var processes: plist_t? = nil
             var system: plist_t? = nil
             var cpu: plist_t? = nil
-            // next_sample 阻塞式 → 5 秒超时保护
-            let sampleSemaphore = DispatchSemaphore(value: 0)
-            var sampleError: Error?
-            DispatchQueue.global(qos: .utility).async {
-                var p: plist_t? = nil, s: plist_t? = nil, c: plist_t? = nil
-                if let err = sysmontap_next_sample(sysmon, &p, &s, &c) {
-                    sampleError = self.error(from: err, fallback: "获取内存样本失败")
-                } else {
-                    processes = p; system = s; cpu = c
+            // next_sample 阻塞式 → 单次 2 秒超时 + 循环读样本
+            // （首几个样本可能只有 System 数据，带 Processes 的样本在后续到达）
+            for attempt in 1...8 {
+                let sampleSemaphore = DispatchSemaphore(value: 0)
+                var sampleError: Error?
+                DispatchQueue.global(qos: .utility).async {
+                    var p: plist_t? = nil, s: plist_t? = nil, c: plist_t? = nil
+                    if let err = sysmontap_next_sample(sysmon, &p, &s, &c) {
+                        sampleError = self.error(from: err, fallback: "获取内存样本失败")
+                    } else {
+                        processes = p; system = s; cpu = c
+                    }
+                    sampleSemaphore.signal()
                 }
-                sampleSemaphore.signal()
+                let waitResult = sampleSemaphore.wait(timeout: .now() + 3)
+                if waitResult == .timedOut {
+                    SysmonLogger.shared.log("[SysmonDiag] step5 第\(attempt)次读样本超时")
+                    sysmontap_stop(sysmon)
+                    return [:]
+                }
+                if let sampleError {
+                    SysmonLogger.shared.log("[SysmonDiag] step5 第\(attempt)次失败: \(sampleError.localizedDescription)")
+                    throw sampleError
+                }
+                SysmonLogger.shared.log("[SysmonDiag] step5 第\(attempt)次样本 processes=\(processes != nil)")
+                if processes != nil { break }  // 拿到进程数据，结束循环
             }
-            if sampleSemaphore.wait(timeout: .now() + 5) == .timedOut {
-                SysmonLogger.shared.log("[SysmonDiag] step5 超时（5s 无样本）——DVT 服务可能不可达")
-                sysmontap_stop(sysmon)
-                return [:]  // 超时直接返回空，不抛错（保持列表可用）
-            }
-            if let sampleError {
-                SysmonLogger.shared.log("[SysmonDiag] step5 失败: \(sampleError.localizedDescription)")
-                throw sampleError
-            }
-            SysmonLogger.shared.log("[SysmonDiag] step5 样本到达！processes=\(processes != nil)")
 
             defer {
                 if let p = processes { plist_free(p) }
@@ -619,8 +624,10 @@ final class ProcessManagerViewModel: ObservableObject {
                     self.processes = entries
                     self.isRefreshing = false
                 }
-                // 内存异步后补（不阻塞刷新流程）——需在主 actor 上调用
-                await MainActor.run { self?.fetchMemoryAsync() }
+                // 内存异步后补（不阻塞刷新流程；受监控开关控制）——需在主 actor 上调用
+                if self?.memoryWatchEnabled == true {
+                    await MainActor.run { self?.fetchMemoryAsync() }
+                }
             } catch {
                 await MainActor.run {
                     guard let self else { return }
@@ -713,6 +720,8 @@ final class ProcessManagerViewModel: ObservableObject {
 
 struct ProcessManagerView: View {
     @State private var showLogViewer = false
+    /// v0.3.45：内存监控开关——关闭后 refresh 不再触发 sysmontap 查询
+    @AppStorage("ProcessMemoryWatch") private var memoryWatchEnabled = true
     @StateObject private var viewModel = ProcessManagerViewModel()
     @State private var killCandidate: ProcessEntry?
     @State private var killConfirmTask: Task<Void, Never>?
