@@ -122,10 +122,9 @@ public enum Authenticator {
         while currentAttempt <= 4, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
-                // v0.3.19：SAP 签名模式下**不发 anisette 头**——对齐上游 ipatool
-                // PR #525（SAP 签名本身就是认证，anisette 头属于旧流程，混合发送
-                // 会让 Apple 边缘困惑）。仅当签名器不可用（未签名回退）时才带 anisette。
-                let anisetteHeaders: [(String, String)] = (sapSigner == nil) ? (try await anisetteProvider?() ?? []) : []
+                // v0.3.23：恢复 anisette——CDN 可能需要 anisette 做 IP 信誉/设备验证，
+                // SAP 签名只做请求完整性。两者不冲突（对照实验：无 anisette → 204/403/404）。
+                let anisetteHeaders: [(String, String)] = try await anisetteProvider?() ?? []
                 let request = try makeRequest(
                     endpoint: requestEndpoint,
                     attempt: currentAttempt,
