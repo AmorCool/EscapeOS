@@ -40,22 +40,8 @@ final class AppStoreDownloadStore {
         guard Configuration.sapSignerFactory == nil else { return }
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
         Configuration.sapSignerFactory = { config in
-            // v0.3.11：双模式——①局域网 PC 签名服务（EscapeSapServer.exe，无 JIT
-            // 依赖、资产包在 PC 侧下载，绕开 iOS 磁盘配额）②本机模拟器（需 JIT）。
-            // 填了服务器地址走远程；留空走本机。
-            if let serverText = UserDefaults.standard.string(forKey: "SapServerURL"),
-               !serverText.isEmpty,
-               let serverURL = URL(string: serverText.trimmingCharacters(in: .whitespacesAndNewlines)),
-               let scheme = serverURL.scheme?.lowercased(), scheme == "http" || scheme == "https" {
-                LoginLogger.shared.log("SAP 签名走远程服务器：\(serverURL.absoluteString)")
-                LoginLogger.shared.log("远程初始化中（PC 首次需下载资产包，请耐心等待）…")
-                let remote = try await RemoteSapSigner(baseURL: serverURL, config: config)
-                LoginLogger.shared.log("远程签名器就绪")
-                return remote
-            }
-
-            // 本机模式：Unicorn TCG = JIT（Apple 平台），无有效 JIT 权限时执行
-            // 生成代码被内核签名检查杀（v0.3.8 .ips 实锤）。探测仅展示不拦截。
+            // v0.3.17：本机 TCI 解释器模式（Naville/unicorn feature/tci 分支，
+            // 解释器不写可执行内存 → 无需 JIT/CODESIGNING 权限）。
             // v0.3.17：JIT 探测已移除（TCI 解释器不依赖 JIT 权限）
             LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
             SapProgressPoller.shared.start()

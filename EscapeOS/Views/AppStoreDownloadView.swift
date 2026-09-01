@@ -173,9 +173,7 @@ struct AppStoreDownloadView: View {
                 Image(systemName: "cpu.fill")
                     .font(.footnote)
                     .foregroundStyle(.blue)
-                Text(sapServerURL.trimmingCharacters(in: .whitespaces).isEmpty
-                     ? "签名引擎：本机 TCI"
-                     : "签名：远程服务器")
+                Text("签名引擎：本机 TCI")
                     .font(.footnote)
                 Spacer()
                 Image(systemName: "arrow.down.circle")

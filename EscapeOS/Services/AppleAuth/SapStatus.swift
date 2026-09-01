@@ -35,29 +35,9 @@ final class SapStatusModel: ObservableObject {
     @Published var progress: Double? = nil
     @Published var bytesText: String = ""
 
-    func setJIT(_ mode: JITMode) {
-        DispatchQueue.main.async { [weak self] in
-            self?.jitMode = mode
-        }
-    }
 
-    /// 主动探测 JIT 并更新状态（页面出现时 / 状态条点击重测时调用）。
-    /// v0.3.3 只在登录流程内探测 → 页面打开后永远显示「检测中」（真机实锤），
-    /// v0.3.6 改为进页面立即探测。
-    func probeJITNow() {
-        // v0.3.17：JIT 探测保留但状态条不再展示（TCI 不需要 JIT）
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = SAPJITProbe.probe()
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                switch result {
-                case .available: self.jitMode = .available
-                case .notEffective: self.jitMode = .notEffective
-                case .undetectable: self.jitMode = .undetectable
-                }
-            }
-        }
-    }
+
+    // v0.3.17：JIT 探测已完全移除（TCI 解释器不依赖 JIT 权限）
 
     func reset() {
         DispatchQueue.main.async { [weak self] in
