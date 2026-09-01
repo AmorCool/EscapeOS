@@ -28,9 +28,9 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     /// 在窗口层级内的源视图（启动 PiP 的前提；PiP 启动后可离开页面）
     private weak var sourceView: UIView?
 
-    /// PiP 内容尺寸（隐藏 = 0.1x0.1，原版 0.1pt 技巧）
+    /// PiP 内容尺寸（隐藏 = 1x1，原版 preparePiPVisualSurfacesForClosing 同款）
     static let normalSize = CGSize(width: 320, height: 180)
-    static let hiddenSize = CGSize(width: 0.1, height: 0.1)
+    static let hiddenSize = CGSize(width: 1, height: 1)
 
     /// 意外停止自动恢复（系统杀 PiP 时自动重启，最多 5 次）
     private var autoRestoreRemaining = 5
@@ -129,13 +129,29 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
 
     // MARK: 隐藏 / 显示（preferredContentSize 缩放 PiP 窗口，原版 0.1pt 技巧）
 
+    /// 隐藏（原版 preparePiPVisualSurfacesForClosing 同款三件套：
+    /// preferredContentSize 1x1 + 内容视图 alpha 0.01/背景清空 + 强制 layout flush）
     func hide() {
-        contentVC?.preferredContentSize = Self.hiddenSize
+        guard let vc = contentVC else { return }
+        UIView.performWithoutAnimation {
+            vc.preferredContentSize = Self.hiddenSize
+            vc.view.backgroundColor = .clear
+            vc.view.layer.backgroundColor = UIColor.clear.cgColor
+            vc.view.alpha = 0.01
+            vc.view.layoutIfNeeded()
+            CATransaction.flush()
+        }
         isHidden = true
     }
 
     func show() {
-        contentVC?.preferredContentSize = Self.normalSize
+        guard let vc = contentVC else { return }
+        UIView.performWithoutAnimation {
+            vc.preferredContentSize = Self.normalSize
+            vc.view.alpha = 1
+            vc.view.backgroundColor = .black
+            vc.view.layoutIfNeeded()
+        }
         isHidden = false
     }
 }
