@@ -138,20 +138,14 @@ struct PiPKeepAliveView: View {
     }
 }
 
-/// UIViewRepresentable：承载 AVPlayerLayer（PiP 源视图）
+/// UIViewRepresentable：为 PiP 提供真实窗口层级容器
+/// （pipSourceView 由 Service 自己创建/持有/缩放，对齐原版 view.addSubview）
 struct PlayerLayerHost: UIViewRepresentable {
-    /// 外层 = SwiftUI 布局宿主；内层 = PiP 源视图（frame 归 Service 控制，
-    /// 隐藏时缩到 1x1 不会被 SwiftUI 布局覆盖）
     func makeUIView(context: Context) -> UIView {
         let host = UIView()
         host.backgroundColor = .black
-        let source = UIView()
-        source.backgroundColor = .clear
-        source.frame = host.bounds
-        source.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        host.addSubview(source)
         DispatchQueue.main.async {
-            PiPKeepAliveService.shared.attach(host: host, sourceView: source)
+            PiPKeepAliveService.shared.attach(hostContainer: host)
         }
         return host
     }

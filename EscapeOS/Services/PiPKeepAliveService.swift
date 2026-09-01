@@ -2,13 +2,21 @@
 //  PiPKeepAliveService.swift
 //  EscapeSpace
 //
-//  PiP（画中画）保活引擎 v2（v0.3.50）——对齐 GlobalRefresh 原版方案：
-//  默认走 VideoCall ContentSource 路线（非视频）：
-//    AVPictureInPictureController.ContentSource(activeVideoCallSourceView:contentViewController:)
-//  画中画窗口内显示任意 UIView（纯黑占位），可调节/可隐藏：
-//    contentViewController.preferredContentSize = 1x1 → 窗口缩到不可见（原版 0.1pt 技巧）
-//    恢复 320x180 → 窗口还原
-//  PiP 存续期间系统不挂起宿主进程 → 后台保活。
+//  PiP（画中画）保活引擎 v3（v0.3.56）——GlobalRefresh 原版忠实移植：
+//
+//  结构（与原版 setupPiPSourceView / setupPip / requestPiPStartWhenReady 一一对应）：
+//   - pipSourceView：clear 背景 + 圆角18 + 不可交互，加入宿主层级（frame 归本服务管）
+//   - videoCallContentController：AVPictureInPictureVideoCallViewController，
+//     view 背景全 clear（原版同款），内嵌实际内容视图（原版为时钟层，此处为保活标签）
+//   - ContentSource(activeVideoCallSourceView:contentViewController:) + requiresLinearPlayback
+//     + canStartPictureInPictureAutomaticallyFromInline
+//   - 启动：原版 requestPiPStartWhenReady 同款重试循环
+//     （sourceReady = bounds 非空 && window 非空；possible 检查；最多 8 次×0.35s）
+//   - 音频会话：.playback + .mixWithOthers + setActive（原版 playbackActive：
+//     "start with active playback so PiP is possible immediately"）
+//   - 隐藏：原版 preparePiPVisualSurfacesForClosing 三件套
+//     （preferredContentSize 1x1 + view alpha 0.01/背景 clear + 源视图同步缩放）
+//   - PiP 期间持有 background task（原版 "PiPKeepAlive"）；意外停止自动恢复
 //
 
 import AVFoundation
@@ -22,30 +30,176 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     @Published private(set) var isPiPActive = false
     @Published private(set) var isHidden = false
     @Published private(set) var lastError: String?
-    /// PiP 启动时刻（页面离开再回来时长不归零的关键——由 TimelineView 实时计算）
+    /// PiP 启动时刻（运行时长由 TimelineView 据此计算，跨页面存活）
     @Published private(set) var startedAt: Date?
 
     private var pipController: AVPictureInPictureController?
-    private var contentVC: UIViewController?
-    /// SwiftUI 布局宿主（frame 由 SwiftUI 管）
-    private weak var hostView: UIView?
-    /// 实际 PiP 源视图（frame 由本服务管——videoCall 模式 PiP 窗口尺寸跟随它）
-    private weak var sourceView: UIView?
+    private var videoCallContentController: AVPictureInPictureVideoCallViewController?
+    /// 源视图（原版强持有，非 weak）
+    private var pipSourceView: UIView?
+    /// SwiftUI 布局宿主
+    private weak var hostContainer: UIView?
 
-    /// PiP 内容尺寸（隐藏 = 1x1，原版 preparePiPVisualSurfacesForClosing 同款）
+    private var possibleObservation: NSKeyValueObservation?
+    private var pendingStartWork: DispatchWorkItem?
+    private var intentionalStop = false
+    private var autoRestoreRemaining = 5
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+
     static let normalSize = CGSize(width: 320, height: 180)
     static let hiddenSize = CGSize(width: 1, height: 1)
 
-    /// 意外停止自动恢复（系统杀 PiP 时自动重启，最多 5 次）
-    private var autoRestoreRemaining = 5
-    private var intentionalStop = false
+    private override init() {
+        super.init()
+    }
 
-    /// KVO：等待 isPictureInPicturePossible（异步置 true，原版同款）
-    private var possibleObservation: NSKeyValueObservation?
-    private var startWatchdog: DispatchWorkItem?
+    // MARK: 源视图（原版 setupPiPSourceView）
 
-    /// 后台任务桥（原版 beginBackgroundTaskIfNeeded："PiPKeepAlive"）
-    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// 绑定宿主容器：把 pipSourceView 加进真实窗口层级（原版 view.addSubview 同款）
+    func attach(hostContainer: UIView) {
+        self.hostContainer = hostContainer
+        if pipSourceView == nil {
+            let v = UIView()
+            v.backgroundColor = .clear
+            v.isOpaque = false
+            v.isUserInteractionEnabled = false
+            v.layer.cornerRadius = 18
+            v.layer.cornerCurve = .continuous
+            v.clipsToBounds = true
+            host.addSubview(v)
+            pipSourceView = v
+        }
+        pipSourceView?.frame = CGRect(origin: .zero, size: Self.normalSize)
+    }
+
+    // MARK: PiP 构建（原版 setupPip videoCall 分支）
+
+    private func setupPiP() {
+        guard videoCallContentController == nil, let src = pipSourceView else { return }
+
+        let contentController = AVPictureInPictureVideoCallViewController()
+        contentController.preferredContentSize = Self.normalSize
+        contentController.view.backgroundColor = .clear
+        contentController.view.isOpaque = false
+        contentController.view.layer.backgroundColor = UIColor.clear.cgColor
+        contentController.view.layer.isOpaque = false
+        contentController.view.clipsToBounds = true
+
+        // 原版 attachCustomViewToPiPContent：contentVC 内必须有实际内容视图
+        let contentView = UIView()
+        contentView.backgroundColor = UIColor(white: 0.07, alpha: 1)
+        contentView.frame = CGRect(origin: .zero, size: Self.normalSize)
+        contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        let label = UILabel()
+        label.text = "EscapeSpace · 保活中"
+        label.textColor = UIColor.white.withAlphaComponent(0.85)
+        label.font = .systemFont(ofSize: 14, weight: .medium)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+        ])
+        contentController.view.addSubview(contentView)
+
+        videoCallContentController = contentController
+
+        let contentSource = AVPictureInPictureController.ContentSource(
+            activeVideoCallSourceView: src,
+            contentViewController: contentController
+        )
+        let pip = AVPictureInPictureController(contentSource: contentSource)
+        pip?.delegate = self
+        pip?.requiresLinearPlayback = true
+        pip?.canStartPictureInPictureAutomaticallyFromInline = true
+        pipController = pip
+    }
+
+    // MARK: 启动（原版 requestPiPStartWhenReady 重试循环）
+
+    func start() {
+        // 原版 playbackActive 路线：先激活音频会话，PiP 立即可用
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: .mixWithOthers)
+        try? AVAudioSession.sharedInstance().setActive(true)
+
+        intentionalStop = false
+        autoRestoreRemaining = 5
+        lastError = nil
+
+        guard AVPictureInPictureController.isPictureInPictureSupported() else {
+            lastError = "设备不支持画中画"
+            return
+        }
+        guard hostContainer?.window != nil else {
+            lastError = "源视图不在窗口层级——请停留在本页面后重试"
+            return
+        }
+        setupPiP()
+        requestStart(attempt: 1)
+    }
+
+    private func requestStart(attempt: Int) {
+        guard let pip = pipController, let src = pipSourceView else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let pip = self.pipController, let src = self.pipSourceView else { return }
+            // 原版同款检查：源就绪（bounds 非空 && window 非空）+ possible
+            let sourceReady = !src.bounds.isEmpty && src.window != nil
+            let canStartNow = sourceReady && pip.isPictureInPicturePossible
+            if canStartNow {
+                pip.startPictureInPicture()
+                self.beginBackgroundTaskIfNeeded()
+                return
+            }
+            if attempt <= 8 {
+                self.pendingStartWork?.cancel()
+                self.requestStart(attempt: attempt + 1)
+            } else {
+                self.lastError = "画中画暂时不可启动：possible=\(pip.isPictureInPicturePossible), sourceReady=\(sourceReady)"
+            }
+        }
+        pendingStartWork?.cancel()
+        pendingStartWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 1 ? 0.05 : 0.35), execute: work)
+    }
+
+    func stop() {
+        intentionalStop = true
+        pendingStartWork?.cancel()
+        pipController?.stopPictureInPicture()
+        endBackgroundTaskIfNeeded()
+    }
+
+    // MARK: 隐藏 / 显示（原版 preparePiPVisualSurfacesForClosing / restorePiPVisualSurfaces）
+
+    func hide() {
+        guard let vc = videoCallContentController else { return }
+        UIView.performWithoutAnimation {
+            pipSourceView?.frame.size = Self.hiddenSize
+            vc.preferredContentSize = Self.hiddenSize
+            vc.view.backgroundColor = .clear
+            vc.view.layer.backgroundColor = UIColor.clear.cgColor
+            vc.view.alpha = 0.01
+            pipSourceView?.alpha = 0.01
+            hostContainer?.layoutIfNeeded()
+            CATransaction.flush()
+        }
+        isHidden = true
+    }
+
+    func show() {
+        guard let vc = videoCallContentController else { return }
+        UIView.performWithoutAnimation {
+            pipSourceView?.frame.size = Self.normalSize
+            vc.preferredContentSize = Self.normalSize
+            vc.view.alpha = 1
+            vc.view.backgroundColor = .clear
+            pipSourceView?.alpha = 1
+            hostContainer?.layoutIfNeeded()
+        }
+        isHidden = false
+    }
+
+    // MARK: 后台任务（原版 beginBackgroundTaskIfNeeded "PiPKeepAlive"）
 
     private func beginBackgroundTaskIfNeeded() {
         guard backgroundTask == .invalid else { return }
@@ -59,153 +213,25 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid
     }
-
-    private override init() {
-        super.init()
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-    }
-
-    // MARK: 源视图绑定
-
-    /// 绑定宿主视图 + 内部源视图（源视图 frame 归本服务控制）
-    func attach(host: UIView, sourceView: UIView) {
-        self.hostView = host
-        self.sourceView = sourceView
-        // 恢复上次隐藏态的源视图尺寸
-        sourceView.frame = CGRect(origin: .zero,
-                                  size: isHidden ? Self.hiddenSize : host.bounds.size)
-    }
-
-    // MARK: 启停
-
-    func start() {
-        guard AVPictureInPictureController.isPictureInPictureSupported() else {
-            lastError = "设备不支持画中画"
-            return
-        }
-        guard let src = sourceView, src.window != nil else {
-            lastError = "源视图不在窗口层级——请停留在本页面后重试"
-            return
-        }
-
-        if pipController == nil {
-            let vc = AVPictureInPictureVideoCallViewController()
-            vc.view.backgroundColor = .black
-            vc.preferredContentSize = Self.normalSize
-            let source = AVPictureInPictureController.ContentSource(
-                activeVideoCallSourceView: src,
-                contentViewController: vc)
-            let pip = AVPictureInPictureController(contentSource: source)
-            pip.delegate = self
-            // 原版 updatePiPAutomaticStartPolicy：回后台自动进 PiP
-            pip.canStartPictureInPictureAutomaticallyFromInline = true
-            pipController = pip
-            contentVC = vc
-        }
-        guard let pip = pipController else { return }
-
-        // 原版实锤：.playback + mixWithOthers + setActive——
-        // "start with active playback so PiP is possible immediately"
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: .mixWithOthers)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        lastError = nil
-        intentionalStop = false
-
-        if pip.isPictureInPictureActive { return }
-        if pip.isPictureInPicturePossible {
-            pip.startPictureInPicture()
-            beginBackgroundTaskIfNeeded()
-            return
-        }
-
-        // KVO 等待 possible → 自动启动（6 秒看门狗）
-        possibleObservation?.invalidate()
-        possibleObservation = pip.observe(
-            \.isPictureInPicturePossible, options: [.new]
-        ) { [weak self] observed, _ in
-            guard let self, observed.isPictureInPicturePossible else { return }
-            DispatchQueue.main.async {
-                self.possibleObservation?.invalidate()
-                self.possibleObservation = nil
-                self.startWatchdog?.cancel()
-                self.startWatchdog = nil
-                if !(observed.isPictureInPictureActive) {
-                    observed.startPictureInPicture()
-                    self.beginBackgroundTaskIfNeeded()
-                }
-            }
-        }
-        startWatchdog?.cancel()
-        let watchdog = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.possibleObservation?.invalidate()
-            self.possibleObservation = nil
-            if !(self.pipController?.isPictureInPictureActive ?? false) {
-                self.lastError = "画中画 6 秒内未就绪，请重试"
-            }
-        }
-        startWatchdog = watchdog
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: watchdog)
-    }
-
-    func stop() {
-        intentionalStop = true
-        possibleObservation?.invalidate()
-        possibleObservation = nil
-        startWatchdog?.cancel()
-        startWatchdog = nil
-        pipController?.stopPictureInPicture()
-        endBackgroundTaskIfNeeded()
-    }
-
-    // MARK: 隐藏 / 显示（preferredContentSize 缩放 PiP 窗口，原版 0.1pt 技巧）
-
-    /// 隐藏（原版 preparePiPVisualSurfacesForClosing 同款三件套：
-    /// preferredContentSize 1x1 + 内容视图 alpha 0.01/背景清空 + 强制 layout flush）
-    func hide() {
-        guard let vc = contentVC else { return }
-        UIView.performWithoutAnimation {
-            // videoCall 模式 PiP 窗口尺寸跟随源视图——源视图必须一起缩（原版 minPiPHeight 同理）
-            sourceView?.frame.size = Self.hiddenSize
-            vc.preferredContentSize = Self.hiddenSize
-            vc.view.backgroundColor = .clear
-            vc.view.layer.backgroundColor = UIColor.clear.cgColor
-            vc.view.alpha = 0.01
-            sourceView?.alpha = 0.01
-            hostView?.layoutIfNeeded()
-            CATransaction.flush()
-        }
-        isHidden = true
-    }
-
-    func show() {
-        guard let vc = contentVC else { return }
-        UIView.performWithoutAnimation {
-            sourceView?.frame.size = hostView?.bounds.size ?? Self.normalSize
-            vc.preferredContentSize = Self.normalSize
-            vc.view.alpha = 1
-            vc.view.backgroundColor = .black
-            sourceView?.alpha = 1
-            hostView?.layoutIfNeeded()
-        }
-        isHidden = false
-    }
 }
 
 extension PiPKeepAliveService: AVPictureInPictureControllerDelegate {
     func pictureInPictureControllerWillStartPictureInPicture(_ c: AVPictureInPictureController) {}
+
     func pictureInPictureControllerDidStartPictureInPicture(_ c: AVPictureInPictureController) {
         DispatchQueue.main.async {
             self.isPiPActive = true
             self.isHidden = false
             if self.startedAt == nil { self.startedAt = Date() }
+            self.beginBackgroundTaskIfNeeded()
         }
     }
+
     func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
         DispatchQueue.main.async {
             self.isPiPActive = false
             self.startedAt = nil
-            // 意外停止自动恢复（系统杀 PiP → 自动拉起；用户点「停止」不恢复）
+            // 意外停止自动恢复（系统杀 PiP → 拉起；用户点「停止」不恢复）
             if !self.intentionalStop && self.autoRestoreRemaining > 0 {
                 self.autoRestoreRemaining -= 1
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
@@ -218,6 +244,7 @@ extension PiPKeepAliveService: AVPictureInPictureControllerDelegate {
             }
         }
     }
+
     func pictureInPictureController(
         _ c: AVPictureInPictureController,
         failedToStartPictureInPictureWithError error: Error
