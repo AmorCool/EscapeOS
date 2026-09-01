@@ -374,7 +374,7 @@ final class ProcessManagerService {
                         attrNames.append(String(cString: ptr))
                     }
                 }
-                device_info_string_array_free(attrs, attrCount)
+                device_info_string_array_free(attrs, UInt(attrCount))
             }
             SysmonLogger.shared.log("[SysmonDiag] step3b 属性列表(\(attrCount)): \(attrNames.joined(separator: ","))")
 
