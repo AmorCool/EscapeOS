@@ -29,8 +29,6 @@ struct ModuleManagerView: View {
         Group {
             if modules.isEmpty {
                 emptyState
-            } else if filteredModules.isEmpty {
-                ContentUnavailableView.search(text: searchText)
             } else {
                 moduleList
             }
@@ -207,11 +205,19 @@ struct ModuleManagerView: View {
 
     private var moduleList: some View {
         List {
-            ForEach(filteredModules) { module in
-                Section {
-                    moduleCard(module)
+            // 搜索无结果时也必须保留 List（.searchable 挂在上面，
+            // 切换视图会把搜索框整个卸载）
+            if filteredModules.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else {
+                ForEach(filteredModules) { module in
+                    Section {
+                        moduleCard(module)
+                    }
+                    .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
                 }
-                .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
             }
         }
         .listStyle(.insetGrouped)
