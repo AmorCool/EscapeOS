@@ -142,6 +142,17 @@ public enum Authenticator {
                 // （'NSLog' is unavailable: Variadic function is unavailable），但 Swift 的
                 // 单参 print 依然受支持。
                 print("[EscapeOS][AppStore][Auth] \(requestEndpoint.host ?? "?") status=\(response.status.code)")
+                // v0.3.22：记录完整响应（headers + body 前 2000B）——诊断 Apple 实际返回内容
+                let respHeaders = response.headers.all.map { "\($0.name): \($0.value.prefix(80))" }.joined(separator: "
+  ")
+                LoginLogger.shared.log("响应 status=\(response.status.code) headers=[
+  \(respHeaders)
+]")
+                if let respBody = response.body, respBody.readableBytes > 0 {
+                    let respData = respBody.readData(length: respBody.readableBytes) ?? Data()
+                    let respText = String(data: respData.prefix(2000), encoding: .utf8) ?? "(binary)"
+                    LoginLogger.shared.log("响应 body[0:2000]=\(respText)")
+                }
                 // ===== v0.2.157 健壮性：区分暂态 / 永久失败，避免无意义重试 =====
                 let status = response.status
                 // 1) Apple 边缘 403 HTML：缺失 anisette 设备头 或 出口 IP 被风控。
