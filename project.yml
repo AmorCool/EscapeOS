@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.62"
-    CURRENT_PROJECT_VERSION: "362"
+    MARKETING_VERSION: "0.3.63"
+    CURRENT_PROJECT_VERSION: "363"
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     ENABLE_BITCODE: "NO"
@@ -65,6 +65,11 @@ settings:
       - "-lunicorn"
     SWIFT_OBJC_BRIDGING_HEADER: "EscapeOS/Engine/EscapeOS-Bridging-Header.h"
 
+packages:
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel.git
+    from: 0.8.0
+
 targets:
   EscapeSpace-iOS:
     type: application
@@ -73,6 +78,7 @@ targets:
     # xcodegen 通过 framework 依赖类型引用 .xcframework（xcodegen 无独立 xcframework 类型）。
     # rust-libs/libidevice_ffi.xcframework 由 build-xcode.yml 在 xcodegen generate 之前生成。
     dependencies:
+      - package: Citadel
       - framework: rust-libs/libidevice_ffi.xcframework
         embed: false
         link: true

@@ -147,6 +147,8 @@ EscapeSpace_FILES = \
 	EscapeOS/Services/ModuleService.swift \
 	EscapeOS/Services/PiPKeepAliveService.swift \
 	EscapeOS/Services/HighRefreshService.swift \
+	EscapeOS/Services/SSHServerService.swift \
+	EscapeOS/Views/SSHDebugView.swift \
 	EscapeOS/Views/ModuleManagerView.swift \
 	EscapeOS/Views/PiPKeepAliveView.swift
 

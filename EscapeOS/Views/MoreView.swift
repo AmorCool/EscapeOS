@@ -46,6 +46,9 @@ struct MoreView: View {
                 MoreItem("pip-keepalive", "pip.enter", "PiP 保活",
                          "画中画保活防杀后台",
                          PiPKeepAliveView()),
+                MoreItem("ssh-debug", "terminal", "SSH 调试",
+                         "局域网无线连接诊断",
+                         SSHDebugView()),
             ]),
             ("应用安装", "签名、安装与下载", [
                 MoreItem("ipa-install", "arrow.down.app.fill", "IPA 侧载",
