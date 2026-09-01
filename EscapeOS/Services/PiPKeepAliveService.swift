@@ -66,7 +66,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
             v.layer.cornerRadius = 18
             v.layer.cornerCurve = .continuous
             v.clipsToBounds = true
-            host.addSubview(v)
+            hostContainer.addSubview(v)
             pipSourceView = v
         }
         pipSourceView?.frame = CGRect(origin: .zero, size: Self.normalSize)
@@ -109,9 +109,9 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
             contentViewController: contentController
         )
         let pip = AVPictureInPictureController(contentSource: contentSource)
-        pip?.delegate = self
-        pip?.requiresLinearPlayback = true
-        pip?.canStartPictureInPictureAutomaticallyFromInline = true
+        pip.delegate = self
+        pip.requiresLinearPlayback = true
+        pip.canStartPictureInPictureAutomaticallyFromInline = true
         pipController = pip
     }
 
