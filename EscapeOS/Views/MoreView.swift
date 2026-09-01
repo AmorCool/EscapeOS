@@ -28,12 +28,13 @@ struct MoreView: View {
         }
     }
 
+    /// 热补丁接管点：feature.<id>.hidden 标志可隐藏任意功能入口
+    private func isVisible(_ item: MoreItem) -> Bool {
+        !hotfix.isFeatureHidden(item.id)
+    }
+
     /// 分组定义（v0.3.29：22 个功能 → 7 个逻辑分区）
     private var sections: [(header: String, footer: String?, items: [MoreItem])] {
-        // 热补丁接管点：feature.<id>.hidden 标志可隐藏任意功能入口
-        func isVisible(_ item: MoreItem) -> Bool {
-            !hotfix.isFeatureHidden(item.id)
-        }
         [
             ("设备工具", "需要配对文件 + LocalDevVPN 隧道", [
                 MoreItem("virtual-location", "location.fill", "虚拟定位",

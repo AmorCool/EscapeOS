@@ -85,7 +85,7 @@ final class HotfixService: NSObject, ObservableObject {
             if hotfix.hasScript {
                 let scriptURL = module.installURL.appendingPathComponent(hotfix.scriptName)
                 if let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
-                    runScript(source, module: module, into: &flags, into: &texts)
+                    runScript(source, module: module)
                     loaded.append(module.id)
                 }
             }
@@ -99,6 +99,11 @@ final class HotfixService: NSObject, ObservableObject {
         _ = log
     }
 
+    private func appendJSLog(_ line: String) {
+        jsLog.append(line)
+        if jsLog.count > 50 { jsLog.removeFirst(jsLog.count - 50) }
+    }
+
     /// 功能隐藏查询（MoreView 集成点）：热补丁可隐藏任意功能入口
     func isFeatureHidden(_ featureId: String) -> Bool {
         featureFlags["feature.\(featureId).hidden"] == true
@@ -106,12 +111,7 @@ final class HotfixService: NSObject, ObservableObject {
 
     // MARK: JS 引擎（二期，JavaScriptCore）
 
-    private func runScript(
-        _ source: String,
-        module: EscapeModule,
-        into flags: inout [String: Bool],
-        into texts: inout [String: String]
-    ) {
+    private func runScript(_ source: String, module: EscapeModule) {
         let ctx = JSContext()!
         ctx.name = "hotfix:\(module.id)"
         ctx.exceptionHandler = { _, exception in
@@ -120,36 +120,31 @@ final class HotfixService: NSObject, ObservableObject {
         }
 
         let bridge = JSValue(newObjectIn: ctx)!
-        bridge.setValue({ [weak self] args in
+        bridge.setValue({ [weak self] (args: [Any]?) -> Void in
             let msg = args?.first.map { "\($0)" } ?? ""
-            print("[Hotfix][JS][\(module.id)] \(msg)")
             DispatchQueue.main.async {
-                guard let self else { return }
-                self.jsLog.append("[\(module.id)] \(msg)")
-                if self.jsLog.count > 50 { self.jsLog.removeFirst(self.jsLog.count - 50) }
+                self?.appendJSLog("[\(module.id)] \(msg)")
             }
         }, forKeyedSubscript: "log")
 
-        bridge.setValue({ [weak self] args in
+        bridge.setValue({ [weak self] (args: [Any]?) -> Void in
             guard let key = args?[0] as? String,
                   let value = args?[1] as? Bool else { return }
             DispatchQueue.main.async {
-                flags[key] = value
                 self?.featureFlags[key] = value
             }
         }, forKeyedSubscript: "setFlag")
 
-        bridge.setValue({ [weak self] args in
+        bridge.setValue({ [weak self] (args: [Any]?) -> Void in
             guard let key = args?[0] as? String,
                   let value = args?[1] as? String else { return }
             DispatchQueue.main.async {
-                texts[key] = value
                 self?.textOverrides[key] = value
             }
         }, forKeyedSubscript: "setOverride")
 
-        bridge.setValue(module.version, forKeyedSubscript: "moduleVersion")
-        bridge.setValue(module.id, forKeyedSubscript: "moduleId")
+        bridge.setValue(NSString(string: module.version), forKeyedSubscript: "moduleVersion")
+        bridge.setValue(NSString(string: module.id), forKeyedSubscript: "moduleId")
 
         ctx.setObject(bridge, forKeyedSubscript: "escape")
         ctx.evaluateScript(source)

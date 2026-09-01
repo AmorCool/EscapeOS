@@ -290,14 +290,14 @@ final class ModuleService {
             throw ModuleError.badSpec("规范版本不支持：\(module.spec)")
         }
 
-        // 热补丁 / 二进制模块必须携带官方签名（signature.sig = 对 module.json 的 ed25519 签名 base64）
+        // 热补丁 / 二进制模块必须携带官方签名（signature.sig = 对 module.json 的 ed25519 签名 base64 文本）
         if module.isHotfixModule || module.isBinaryModule {
-            guard let sigB64 = extractedFiles["signature.sig"],
-                  let sigData = Data(base64Encoded: sigB64.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                throw ModuleError.badSpec("热补丁/二进制模块必须包含官方签名文件 signature.sig")
-            }
-            guard HotfixService.verifySignature(manifestData: mData, signatureB64: sigB64.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                throw ModuleError.badSpec("签名校验失败——非 EscapeSpace 官方签名的热补丁已拒绝")
+            let sigB64 = extractedFiles["signature.sig"]
+                .flatMap { String(data: $0, encoding: .utf8) }?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !sigB64.isEmpty,
+                  HotfixService.verifySignature(manifestData: mData, signatureB64: sigB64) else {
+                throw ModuleError.badSpec("热补丁/二进制模块签名缺失或校验失败——仅接受 EscapeSpace 官方签名")
             }
         }
 
