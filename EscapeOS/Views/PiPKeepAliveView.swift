@@ -132,8 +132,8 @@ struct PiPKeepAliveView: View {
         .navigationTitle("PiP 保活")
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear {
-            timer?.invalidate()
-            timer = nil
+            elapsedTimer?.invalidate()
+            elapsedTimer = nil
         }
     }
 
