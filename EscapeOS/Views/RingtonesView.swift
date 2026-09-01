@@ -160,6 +160,14 @@ struct RingtonesView: View {
             Button("确定") { doRename() }
             Button("取消", role: .cancel) {}
         }
+        .sheet(isPresented: Binding(
+            get: { shareURL != nil },
+            set: { if !$0 { shareURL = nil } }
+        )) {
+            if let url = shareURL {
+                ActivityShareView(url: url)
+            }
+        }
         .sheet(item: $shareItem) { item in
             ActivityView(items: [item.url])
         }
