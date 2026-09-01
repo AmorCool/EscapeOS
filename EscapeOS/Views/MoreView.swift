@@ -1,253 +1,193 @@
 import SwiftUI
 
 /// The "More" hub gathers secondary destinations that don't need their own
-/// bottom-tab slots. It uses the same card/banner visual language as the rest
-/// of the app (shared icon tile + title + subtitle) instead of a plain list.
+/// bottom-tab slots. Features are organized into logical sections for better
+/// discoverability (v0.3.29: 22 features → 7 categorized sections).
 struct MoreView: View {
     @ObservedObject var appList: AppListViewModel
     var onResetPairing: () -> Void
     @State private var showSettings = false
     @State private var showDeviceControl = false
 
+    // MARK: - 分组数据
+
+    private struct MoreItem: Identifiable {
+        let id: String
+        let icon: String
+        let title: String
+        let subtitle: String
+        let destination: AnyView
+
+        init(_ id: String, _ icon: String, _ title: String, _ subtitle: String, _ dest: some View) {
+            self.id = id
+            self.icon = icon
+            self.title = title
+            self.subtitle = subtitle
+            self.destination = AnyView(dest)
+        }
+    }
+
+    /// 分组定义（v0.3.29：22 个功能 → 7 个逻辑分区）
+    private var sections: [(header: String, footer: String?, items: [MoreItem])] {
+        [
+            ("设备工具", "需要配对文件 + LocalDevVPN 隧道", [
+                MoreItem("virtual-location", "location.fill", "虚拟定位",
+                         "在地图上放置图钉或规划轨迹，模拟设备定位。",
+                         VirtualLocationView()),
+                MoreItem("jit", "bolt.fill", "启用 JIT",
+                         "以调试模式启动应用，为其启用 JIT 权限。",
+                         JITEnableView()),
+                MoreItem("launch-apps", "arrow.up.forward.app.fill", "拉起应用",
+                         "列出全部已安装应用，一键在前台拉起。",
+                         LaunchAppsView()),
+                MoreItem("process-manager", "cpu", "进程管理",
+                         "查看设备运行中的进程，支持挂起 / 恢复 / 结束。",
+                         ProcessManagerView()),
+            ]),
+            ("应用安装", "签名、安装与下载", [
+                MoreItem("ipa-install", "arrow.down.app.fill", "IPA 侧载",
+                         "签名并安装 IPA 到设备。",
+                         IPAInstallView()),
+                MoreItem("signed-ipa", "app.badge.checkmark", "IPA 安装",
+                         "在线安装已签名 IPA：新装、覆盖升级/降级。",
+                         SignedIPAInstallView()),
+                MoreItem("appstore", "cart.fill", "App Store 下载",
+                         "登录账户搜索并下载正版 IPA（含历史版本）。",
+                         AppStoreDownloadView()),
+                MoreItem("pairing-install", "tray.and.arrow.down.fill", "配置导入",
+                         "把配对文件写入 SideStore / LC / Feather 等应用。",
+                         PairingInstallView()),
+            ]),
+            ("文件管理", nil, [
+                MoreItem("file-browser", "folder.fill", "文件浏览器",
+                         "浏览并编辑设备上的任意容器与目录。",
+                         FileBrowserRootView(appList: appList)),
+                MoreItem("afc", "externaldrive.fill", "AFC 管理",
+                         "经本地隧道浏览设备文件系统：导出、上传、删除。",
+                         AFCBrowserView()),
+            ]),
+            ("个性化", nil, [
+                MoreItem("wallpaper", "photo.fill.on.rectangle.fill", "壁纸",
+                         "导入并应用自定义 .tendies 壁纸包。",
+                         WallpaperView()),
+                MoreItem("dialer", "circle.grid.3x3.fill", "拨号器主题",
+                         "替换电话 App 拨号键盘，支持主题包或 PNG。",
+                         DialerThemeView()),
+                MoreItem("ringtones", "music.note.list", "铃声管理",
+                         "导入 / 导出 / 删除用户铃声。",
+                         RingtonesView()),
+            ]),
+            ("系统工具", nil, [
+                MoreItem("app-expiry", "calendar.badge.clock", "描述文件管理",
+                         "查看描述文件过期时间，按证书分组与批量删除。",
+                         AppExpiryView()),
+                MoreItem("profile-install", "shield.lefthalf.filled", "发送描述文件",
+                         "导入 .mobileconfig 描述文件一键发送到本机。",
+                         ProfileInstallView()),
+                MoreItem("ipcc", "antenna.radiowaves.left.and.right", "IPCC 安装",
+                         "导入运营商配置文件（.ipcc），重启生效。",
+                         IPCCInstallView()),
+                MoreItem("ddi", "iphone.and.arrow.forward", "开发者镜像",
+                         "下载 DDI / DMG 镜像并打包。",
+                         DDIDownloadView()),
+                MoreItem("kernelcache", "cpu.fill", "下载 KernelCache",
+                         "从 Apple CDN 下载内核缓存文件。",
+                         KernelCacheView()),
+                MoreItem("domain-blocker", "shield.fill", "屏蔽域名",
+                         "生成 DNS 描述文件，屏蔽任意域名。",
+                         DomainBlockerView()),
+            ]),
+            ("账户与安全", nil, [
+                MoreItem("certificates", "checkmark.seal.fill", "证书管理",
+                         "查看并吊销 Apple ID 下的开发证书。",
+                         CertificateView()),
+                MoreItem("memory", "memorychip", "增加内存限制",
+                         "为 App 开启 INCREASED_MEMORY_LIMIT。",
+                         IncreaseMemoryView()),
+            ]),
+            ("数据与诊断", nil, [
+                MoreItem("backups", "externaldrive.fill.badge.timemachine", "备份",
+                         "查看、恢复或导出备份归档。",
+                         BackupsListView(appList: appList)),
+                MoreItem("crash-logs", "chart.bar.doc.horizontal", "崩溃分析",
+                         "查看设备崩溃与诊断日志，批量导出/删除。",
+                         CrashLogView()),
+                MoreItem("configurations", "checklist", "配置管理",
+                         "锁屏页脚与监督模式等系统配置。",
+                         ConfigurationsView()),
+            ]),
+        ]
+    }
+
     var body: some View {
         List {
+            ForEach(sections, id: \.header) { section in
                 Section {
-                    NavigationLink(destination: VirtualLocationView()) {
-                        MoreCard(
-                            icon: "location.fill",
-                            title: "虚拟定位",
-                            subtitle: "在地图上放置图钉或规划轨迹，模拟设备定位（需配对文件 + LocalDevVPN）。"
-                        )
+                    ForEach(section.items) { item in
+                        NavigationLink(destination: item.destination) {
+                            MoreCard(
+                                icon: item.icon,
+                                title: item.title,
+                                subtitle: item.subtitle
+                            )
+                        }
                     }
-
-                    NavigationLink(destination: JITEnableView()) {
-                        MoreCard(
-                            icon: "bolt.fill",
-                            title: "启用 JIT",
-                            subtitle: "以调试模式启动应用，为其启用 JIT 权限（需配对文件 + LocalDevVPN）。"
-                        )
-                    }
-
-                    NavigationLink(destination: LaunchAppsView()) {
-                        MoreCard(
-                            icon: "arrow.up.forward.app.fill",
-                            title: "拉起应用",
-                            subtitle: "列出全部已安装应用，一键在前台拉起（普通启动，不启用 JIT）。"
-                        )
-                    }
-
-                    NavigationLink(destination: AppExpiryView()) {
-                        MoreCard(
-                            icon: "calendar.badge.clock",
-                            title: "描述文件管理",
-                            subtitle: "查看所有描述文件的过期时间，支持按证书分组与批量删除。"
-                        )
-                    }
-
-                    NavigationLink(destination: CertificateView()) {
-                        MoreCard(
-                            icon: "checkmark.seal.fill",
-                            title: "证书管理",
-                            subtitle: "登录 Apple ID，查看并吊销账号下的 iOS 开发证书（纯网络操作，无需隧道）。"
-                        )
-                    }
-
-                    NavigationLink(destination: PairingInstallView()) {
-                        MoreCard(
-                            icon: "tray.and.arrow.down.fill",
-                            title: "配置导入",
-                            subtitle: "把配对文件写入已安装的 SideStore / LiveContainer / Feather 等应用，复用同一份配对身份。"
-                        )
-                    }
-
-                    NavigationLink(destination: IPAInstallView()) {
-                        MoreCard(
-                            icon: "arrow.down.app.fill",
-                            title: "IPA 侧载",
-                            subtitle: "签名并安装 IPA 到设备（Apple ID 登录 + LocalDevVPN 隧道）。"
-                        )
-                    }
-
-                    NavigationLink(destination: AppStoreDownloadView()) {
-                        MoreCard(
-                            icon: "cart.fill",
-                            title: "App Store 下载",
-                            subtitle: "登录 App Store 账户，搜索并下载正版 IPA（含历史版本），下载后交给「IPA 安装」在线安装 —— 与爱思助手同款流程。"
-                        )
-                    }
-
-                    NavigationLink(destination: SignedIPAInstallView()) {
-                        MoreCard(
-                            icon: "app.badge.checkmark",
-                            title: "IPA 安装",
-                            subtitle: "在线安装已签名 IPA（App Store / Apple ID 包）：新装、覆盖升级/降级安装，爱思同款通道，无需再次签名（需 LocalDevVPN 隧道）。"
-                        )
-                    }
-
-                    NavigationLink(destination: ProcessManagerView()) {
-                        MoreCard(
-                            icon: "cpu",
-                            title: "进程管理",
-                            subtitle: "查看设备运行中的进程，支持挂起 / 恢复 / 结束（需配对文件 + LocalDevVPN）。"
-                        )
-                    }
-
-                    NavigationLink(destination: WallpaperView()) {
-                        MoreCard(
-                            icon: "photo.fill.on.rectangle.fill",
-                            title: "壁纸",
-                            subtitle: "导入并应用自定义 .tendies 壁纸包（PosterBoard）。"
-                        )
-                    }
-
-                    NavigationLink(destination: DialerThemeView()) {
-                        MoreCard(
-                            icon: "circle.grid.3x3.fill",
-                            title: "拨号器主题",
-                            subtitle: "替换电话 App 的拨号键盘图片，支持 .passthm / .zip 主题包或直接多选 PNG。"
-                        )
-                    }
-
-                    NavigationLink(destination: RingtonesView()) {
-                        MoreCard(
-                            icon: "music.note.list",
-                            title: "铃声管理",
-                            subtitle: "导入 / 导出 / 删除用户铃声，并可提取系统提示音（需配对文件 + LocalDevVPN）。"
-                        )
-                    }
-
-                    NavigationLink(destination: FileBrowserRootView(appList: appList)) {
-                        MoreCard(
-                            icon: "folder.fill",
-                            title: "文件浏览器",
-                            subtitle: "浏览并编辑设备上的任意容器：应用数据、守护进程、App 插件、.app 包等。"
-                        )
-                    }
-
-                    NavigationLink(destination: AFCBrowserView()) {
-                        MoreCard(
-                            icon: "externaldrive.fill",
-                            title: "AFC 管理",
-                            subtitle: "经本地隧道浏览设备文件系统（初始 /var/mobile/media）：下载导出、上传、移动、新建目录、删除（需配对文件 + LocalDevVPN）。"
-                        )
-                    }
-
-                    NavigationLink(destination: KernelCacheView()) {
-                        MoreCard(
-                            icon: "cpu.fill",
-                            title: "下载 KernelCache",
-                            subtitle: "从 Apple CDN 的 IPSW 中按偏移只下载 kernelcache 内核缓存文件（约 20MB，纯网络、零权限），与越狱工具从设备读取的是同一份文件。"
-                        )
-                    }
-
-
-                    NavigationLink(destination: ProfileInstallView()) {
-                        MoreCard(
-                            icon: "shield.lefthalf.filled",
-                            title: "发送描述文件",
-                            subtitle: "导入 .mobileconfig 描述文件（屏蔽 iOS 更新、Wi-Fi、VPN 等）一键发送到本机，去「设置 → 通用 → VPN 与设备管理」安装，与爱思助手同款原理。"
-                        )
-                    }
-
-                    NavigationLink(destination: CrashLogView()) {
-                        MoreCard(
-                            icon: "chart.bar.doc.horizontal",
-                            title: "崩溃分析",
-                            subtitle: "查看设备崩溃与诊断日志（对应「分析与改进」），支持批量选择导出 / 删除（需配对文件 + LocalDevVPN）。"
-                        )
-                    }
-
-                    NavigationLink(destination: IPCCInstallView()) {
-                        MoreCard(
-                            icon: "antenna.radiowaves.left.and.right",
-                            title: "IPCC 安装",
-                            subtitle: "导入运营商配置文件（.ipcc）安装到 Carrier Bundles Overrides，重启后生效。"
-                        )
-                    }
-
-                    NavigationLink(destination: DDIDownloadView()) {
-                        MoreCard(
-                            icon: "iphone.and.arrow.forward",
-                            title: "开发者镜像",
-                            subtitle: "下载 DDI / DMG 镜像并打包为 DMG.zip。"
-                        )
-                    }
-
-                    NavigationLink(destination: DomainBlockerView()) {
-                        MoreCard(
-                            icon: "shield.fill",
-                            title: "屏蔽域名",
-                            subtitle: "生成 DNS 描述文件，按需屏蔽任意域名（含 iOS 更新）。"
-                        )
-                    }
-
-                    NavigationLink(destination: BackupsListView(appList: appList)) {
-                        MoreCard(
-                            icon: "externaldrive.fill.badge.timemachine",
-                            title: "备份",
-                            subtitle: "查看、恢复或导出已创建的 EscapeSpace 备份归档。"
-                        )
-                    }
-
-                    NavigationLink(destination: ConfigurationsView()) {
-                        MoreCard(
-                            icon: "checklist",
-                            title: "配置管理",
-                            subtitle: "锁屏页脚与监督模式等系统配置（MDM），iOS 26 下支持读取与备份。"
-                        )
-                    }
-
-                    NavigationLink(destination: IncreaseMemoryView()) {
-                        MoreCard(
-                            icon: "memorychip",
-                            title: "增加内存限制",
-                            subtitle: "登录 Apple ID 并配置 Anisette，为 App 开启 INCREASED_MEMORY_LIMIT。"
-                        )
+                } header: {
+                    Text(section.header)
+                        .font(.footnote.weight(.semibold))
+                        .textCase(nil)
+                        .foregroundColor(.secondary)
+                } footer: {
+                    if let footer = section.footer {
+                        Text(footer)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .navigationTitle("更多")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showDeviceControl = true
-                    } label: {
-                        Image(systemName: "power")
-                            .imageScale(.large)
-                    }
-                    .accessibilityLabel("设备控制")
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .navigationTitle("更多")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    showDeviceControl = true
+                } label: {
+                    Image(systemName: "power")
+                        .imageScale(.large)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .imageScale(.large)
-                    }
+                .accessibilityLabel("设备控制")
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .imageScale(.large)
                 }
             }
-            .sheet(isPresented: $showDeviceControl) {
-                NavigationView {
-                    DeviceControlView()
-                }
+        }
+        .sheet(isPresented: $showDeviceControl) {
+            NavigationView {
+                DeviceControlView()
             }
-            .sheet(isPresented: $showSettings) {
-                NavigationView {
-                    SettingsForm(onResetPairing: onResetPairing)
-                        .navigationTitle("设置")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .navigationBarTrailing) {
-                                Button("完成") {
-                                    showSettings = false
-                                }
+        }
+        .sheet(isPresented: $showSettings) {
+            NavigationView {
+                SettingsForm(onResetPairing: onResetPairing)
+                    .navigationTitle("设置")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("完成") {
+                                showSettings = false
                             }
                         }
-                }
+                    }
             }
+        }
     }
 }
 
@@ -270,11 +210,11 @@ struct MoreCard: View {
                 Text(subtitle)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
 
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 6)
     }
 }

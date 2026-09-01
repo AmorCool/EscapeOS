@@ -2,6 +2,20 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+/// 延迟创建 NavigationLink destination —— 修复"闪退回上级"：
+/// destination 在 list 渲染时就被 eager 创建，父级 state 刷新会重建
+/// destination 导致 navigation stack 重置。包装后 destination 只在
+/// 用户实际点击 push 时才创建一次，父级刷新不再影响子级。
+struct NavigationLazyView<Content: View>: View {
+    let build: () -> Content
+    init(_ build: @autoclosure @escaping () -> Content) {
+        self.build = build
+    }
+    var body: some View {
+        build()
+    }
+}
+
 /// Filza-style file browser for a single app container.
 struct FileBrowserView: View {
     let rootPath: String
@@ -318,15 +332,15 @@ struct FileBrowserView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(selected.contains(item.path) ? Color.accentColor.opacity(0.12) : nil)
                 } else if item.isDirectory {
-                    let destination: FileBrowserView = {
-                        if vm.isContainerRoot {
-                            let displayName = vm.containerNames[item.path] ?? item.name
-                            return FileBrowserView(rootPath: item.path, title: displayName)
-                        } else {
-                            return FileBrowserView(rootPath: rootPath, title: title, initialPath: item.path)
-                        }
-                    }()
-                    NavigationLink(destination: destination) {
+                    NavigationLink(destination: NavigationLazyView(
+                        vm.isContainerRoot
+                            ? AnyView(FileBrowserView(rootPath: item.path,
+                                                      title: vm.containerNames[item.path] ?? item.name,
+                                                      appNameIndex: vm.appNameIndex))
+                            : AnyView(FileBrowserView(rootPath: rootPath, title: title,
+                                                      initialPath: item.path,
+                                                      appNameIndex: vm.appNameIndex))
+                    )) {
                         FileRow(item: item, subtitle: vm.containerNames[item.path])
                     }
                     .contentShape(Rectangle())
@@ -342,7 +356,9 @@ struct FileBrowserView: View {
                     .disabled(vm.isZipping)
                     .contextMenu { itemMenu(for: item) }
                 } else {
-                    NavigationLink(destination: FileViewerView(rootPath: rootPath, item: item, mode: .auto)) {
+                    NavigationLink(destination: NavigationLazyView(
+                        FileViewerView(rootPath: rootPath, item: item, mode: .auto)
+                    )) {
                         FileRow(item: item)
                     }
                     .contentShape(Rectangle())
