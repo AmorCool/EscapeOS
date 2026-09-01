@@ -349,26 +349,62 @@ final class ProcessManagerService {
             SysmonLogger.shared.log("[SysmonDiag] step2 成功")
             defer { sysmontap_free(sysmon) }
 
-            // 3. 配置：process_attributes = ["physFootprint"]
-            guard let attrBuf = strdup("physFootprint") else {
-                throw makeError("strdup 失败")
+            // 3. 查询设备支持的 sysmon 属性名（iOS 27 beta 可能不叫 physFootprint）
+            SysmonLogger.shared.log("[SysmonDiag] step3a: 查询设备 sysmon 属性列表…")
+            var devInfo: OpaquePointer?
+            if let err = device_info_new(server, &devInfo) {
+                let msg = error(from: err, fallback: "创建 DeviceInfo 失败")
+                SysmonLogger.shared.log("[SysmonDiag] step3a 失败: \(msg.localizedDescription)")
+                throw msg
             }
-            defer { free(UnsafeMutableRawPointer(attrBuf)) }
-            var attrPtrs: [UnsafePointer<CChar>?] = [UnsafePointer(attrBuf), nil]
+            defer { device_info_free(devInfo) }
+            guard let devInfo else { throw makeError("DeviceInfo 为空") }
+
+            var attrs: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>? = nil
+            var attrCount: Int = 0
+            if let err = device_info_sysmon_process_attributes(devInfo, &attrs, &attrCount) {
+                let msg = error(from: err, fallback: "查询属性列表失败")
+                SysmonLogger.shared.log("[SysmonDiag] step3b 查询失败: \(msg.localizedDescription)")
+                throw msg
+            }
+            var attrNames: [String] = []
+            if let attrs, attrCount > 0 {
+                for i in 0..<attrCount {
+                    if let ptr = attrs[i] {
+                        attrNames.append(String(cString: ptr))
+                    }
+                }
+                device_info_string_array_free(attrs, attrCount)
+            }
+            SysmonLogger.shared.log("[SysmonDiag] step3b 属性列表(\(attrCount)): \(attrNames.joined(separator: ","))")
+
+            guard !attrNames.isEmpty else {
+                SysmonLogger.shared.log("[SysmonDiag] step3b 设备返回空属性列表——sysmontap 不支持此设备")
+                throw makeError("设备 sysmon 属性为空")
+            }
+
+            // 用真实属性名构建 C 数组
+            var cAttrs: [UnsafeMutablePointer<CChar>] = []
+            for name in attrNames {
+                if let buf = strdup(name) { cAttrs.append(buf) }
+            }
+            defer { for buf in cAttrs { free(UnsafeMutableRawPointer(buf)) } }
+            var attrPtrs: [UnsafePointer<CChar>?] = cAttrs.map { UnsafePointer($0) }
+            attrPtrs.append(nil)
 
             var config = IdeviceSysmontapConfig(
                 interval_ms: 500,
                 process_attributes: attrPtrs,
-                process_attributes_count: 1,
+                process_attributes_count: attrNames.count,
                 system_attributes: nil,
                 system_attributes_count: 0
             )
             if let err = sysmontap_set_config(sysmon, &config) {
                 let msg = error(from: err, fallback: "配置 Sysmontap 失败")
-                SysmonLogger.shared.log("[SysmonDiag] step3 失败: \(msg.localizedDescription)")
+                SysmonLogger.shared.log("[SysmonDiag] step3c 失败: \(msg.localizedDescription)")
                 throw msg
             }
-            SysmonLogger.shared.log("[SysmonDiag] step3 配置成功")
+            SysmonLogger.shared.log("[SysmonDiag] step3c 配置成功(\(attrNames.count) 属性)")
 
             // 4. 启动
             if let err = sysmontap_start(sysmon) {
