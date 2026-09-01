@@ -395,7 +395,7 @@ final class ProcessManagerService {
             var config = IdeviceSysmontapConfig(
                 interval_ms: 500,
                 process_attributes: attrPtrs,
-                process_attributes_count: attrNames.count,
+                process_attributes_count: UInt(attrNames.count),
                 system_attributes: nil,
                 system_attributes_count: 0
             )
