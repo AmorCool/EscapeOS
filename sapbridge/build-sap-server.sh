@@ -42,9 +42,15 @@ echo "==> [S2/3] Building EscapeSapServer.exe (GOOS=windows, cgo + official libu
 export CGO_ENABLED=1
 export GOOS=windows
 export GOARCH=amd64
+# v0.3.13 修复：CC 必须显式指向 mingw gcc——缺失时 go 默认 CC=host clang
+# （macOS 的 gcc 别名），收到 Go 注入的 windows 专用 -mthreads 直接报错
+#（v0.3.12 CI 实锤）。与官方 mingw64-static 库同族工具链。
+export CC="x86_64-w64-mingw32-gcc"
+export CC_FOR_TARGET="x86_64-w64-mingw32-gcc"
 export CGO_CFLAGS="-I$UC_INCLUDE"
 # 官方 mingw64 静态库 + 防御性系统库（unicorn 在 Windows 引用 winmm 等）
 export CGO_LDFLAGS="-L$WIN_PKG_DIR/lib -lunicorn -lwinmm -lkernel32"
+echo "=== go env: CC=$(go env CC) GOOS=$(go env GOOS) CGO_ENABLED=$(go env CGO_ENABLED) ==="
 go build -trimpath -o "$OUT_DIR/EscapeSapServer.exe" ./cmd/server
 
 ls -la "$OUT_DIR/EscapeSapServer.exe"
