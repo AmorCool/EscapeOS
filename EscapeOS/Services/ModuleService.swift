@@ -113,7 +113,8 @@ final class ModuleService {
             return values?.contentModificationDate?.timeIntervalSince1970 ?? 0
         }
         let bundleMod = modTime(Bundle.main.bundleURL)
-        let execMod = modTime(Bundle.main.executableURL)
+        // executableURL 是可选（URL?）——flatMap 解包后计算
+        let execMod = Bundle.main.executableURL.flatMap { modTime($0) } ?? 0
         let installAnchor = max(bundleMod, execMod)
         let recordedDate = UserDefaults.standard.double(forKey: Self.hostInstallDateKey)
         if recordedDate == 0 {
