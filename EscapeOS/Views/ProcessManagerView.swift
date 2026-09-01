@@ -163,6 +163,8 @@ final class ProcessManagerService {
     /// 同一 hostname 并发 tunnel_create_rppairing 是进程管理 SIGKILL 偶发/持续
     /// 无效的根因之一（RSD 通道竞争）。
     private let operationQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr", qos: .userInitiated)
+    /// v0.3.38：内存查询专用串行队列（sysmontap 阻塞式，不与其他操作争用）
+    private let memoryQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr.memory", qos: .utility)
 
     /// EscapeSpace 的配对文件路径（与「应用」页 / 虚拟定位共用）。
     private var pairingPath: String {
@@ -310,12 +312,30 @@ final class ProcessManagerService {
 
     // MARK: 发送信号
 
+    /// v0.3.38：内存查询完全异步——独立 Task + 独立队列，绝不阻塞进程列表
+    private func fetchMemoryAsync() {
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            let memMap = (try? ProcessManagerService.shared.fetchMemoryUsage()) ?? [:]
+            await MainActor.run {
+                guard let self else { return }
+                guard !self.processes.isEmpty else { return }
+                for i in self.processes.indices {
+                    if let mem = memMap[Int32(self.processes[i].pid)] {
+                        self.processes[i].memoryBytes = Int64(mem)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - 内存查询（v0.3.33：DVT sysmontap physFootprint）
 
     /// 通过 DVT sysmontap 获取每个进程的 physFootprint（物理内存占用）。
     /// 返回 [pid: bytes]，进程已退出时不出现在字典中。
     func fetchMemoryUsage() throws -> [Int32: UInt64] {
-        try operationQueue.sync {
+        // v0.3.38：不用 operationQueue.sync（sysmontap 阻塞式会卡死串行队列）
+        try memoryQueue.sync {
             var tunnel = try createTunnel(hostname: "EscapeSpaceSysmon")
             defer { tunnel.free() }
             guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
@@ -365,9 +385,23 @@ final class ProcessManagerService {
             var processes: plist_t? = nil
             var system: plist_t? = nil
             var cpu: plist_t? = nil
-            if let err = sysmontap_next_sample(sysmon, &processes, &system, &cpu) {
-                throw error(from: err, fallback: "获取内存样本失败")
+            // next_sample 阻塞式 → 5 秒超时保护
+            let sampleSemaphore = DispatchSemaphore(value: 0)
+            var sampleError: Error?
+            DispatchQueue.global(qos: .utility).async {
+                var p: plist_t? = nil, s: plist_t? = nil, c: plist_t? = nil
+                if let err = sysmontap_next_sample(sysmon, &p, &s, &c) {
+                    sampleError = self.error(from: err, fallback: "获取内存样本失败")
+                } else {
+                    processes = p; system = s; cpu = c
+                }
+                sampleSemaphore.signal()
             }
+            if sampleSemaphore.wait(timeout: .now() + 5) == .timedOut {
+                sysmontap_stop(sysmon)
+                return [:]  // 超时直接返回空，不抛错（保持列表可用）
+            }
+            if let sampleError { throw sampleError }
 
             defer {
                 if let p = processes { plist_free(p) }
@@ -496,38 +530,15 @@ final class ProcessManagerViewModel: ObservableObject {
         isRefreshing = true
         Task.detached(priority: .utility) { [weak self] in
             do {
+                // v0.3.38：先立即显示进程列表（不再等内存查询，避免几秒空白）
                 let entries = try ProcessManagerService.shared.listProcesses()
-
-                // v0.3.37：带 5 秒超时的内存查询（sysmontap next_sample 是阻塞式的，
-                // 用 semaphore + background queue 防止挂死刷新流程）
-                var memMap: [Int32: UInt64] = [:]
-                let semaphore = DispatchSemaphore(value: 0)
-                DispatchQueue.global(qos: .utility).async {
-                    do {
-                        memMap = try ProcessManagerService.shared.fetchMemoryUsage()
-                    } catch {
-                        print("[ProcessManager] 内存查询失败: \(error.localizedDescription)")
-                    }
-                    semaphore.signal()
-                }
-                let timeoutResult = semaphore.wait(timeout: .now() + 5)
-                if timeoutResult == .timedOut {
-                    print("[ProcessManager] 内存查询超时（5s），跳过")
-                }
-
-                // 合并内存数据到 entries
-                var enriched = entries
-                for i in enriched.indices {
-                    if let mem = memMap[Int32(enriched[i].pid)] {
-                        enriched[i].memoryBytes = Int64(mem)
-                    }
-                }
-
                 await MainActor.run {
                     guard let self else { return }
-                    self.processes = enriched
+                    self.processes = entries
                     self.isRefreshing = false
                 }
+                // 内存异步后补（不阻塞刷新流程）
+                self?.fetchMemoryAsync()
             } catch {
                 await MainActor.run {
                     guard let self else { return }

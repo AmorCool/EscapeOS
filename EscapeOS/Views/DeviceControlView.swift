@@ -34,11 +34,11 @@ struct DeviceControlView: View {
 
         var subtitle: String {
             switch self {
-            case .respringKill: return "向 SpringBoard 发送 SIGKILL，桌面立即重启（App 进程保留）"
-            case .webCrash: return "本机内存压力挤崩 SpringBoard，模拟真实崩溃（无需隧道）"
-            case .restart: return "发送重启指令，设备重启后需解锁（需 LocalDevVPN + 配对）"
-            case .shutdown: return "发送关机指令，需长按电源键开机（需 LocalDevVPN + 配对）"
-            case .recovery: return "设备进入恢复模式，退出需连接电脑（需 LocalDevVPN + 配对）"
+            case .respringKill: return "向 SpringBoard 发送 SIGKILL"
+            case .webCrash: return "网页崩溃 SpringBoard"
+            case .restart: return "发送重启指令"
+            case .shutdown: return "发送关机指令"
+            case .recovery: return "设备进入恢复模式"
             }
         }
 
@@ -55,15 +55,15 @@ struct DeviceControlView: View {
         var confirmMessage: String {
             switch self {
             case .respringKill:
-                return "将向 SpringBoard 发送 SIGKILL，桌面会立即重启（黑屏数秒），已打开的 App 进程保留。"
+                return "将向 SpringBoard 发送 SIGKILL 指令"
             case .webCrash:
-                return "将在本机加载高压力网页把 SpringBoard 挤到内存不足自动重启，模拟真实崩溃。"
+                return "将执行网页崩溃 SpringBoard "
             case .restart:
-                return "设备将重新启动，重启后需要解锁。请先关闭正在进行的传输与任务。"
+                return "设备将重新启动"
             case .shutdown:
-                return "设备将关机，需要长按电源键开机。请先确认重要数据已保存。"
+                return "设备将关机，需要长按电源键开机"
             case .recovery:
-                return "设备将进入恢复模式（屏幕显示连接电脑图标）。退出恢复模式需要数据线连接电脑或按键组合，操作前请确认数据已备份。"
+                return "设备将进入恢复模式"
             }
         }
     }
