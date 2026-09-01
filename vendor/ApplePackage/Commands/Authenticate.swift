@@ -174,7 +174,7 @@ public enum Authenticator {
                 //    与递增 attempt 再试）。上限内继续循环，不直接报错。
                 // v0.3.27：204 首次出现 → 2FA 验证码 needed（AppStorePro 实锤："204空响应通常表示需要输入验证码"）
                 // 抛带 "Authentication requires verification code" 的错误 → 触发已有的 TwoFactorCodePrompt UI
-                if status.code == 204 && attempt == 1 && code.isEmpty {
+                if status.code == 204 && currentAttempt == 1 && code.isEmpty {
                     LoginLogger.shared.log("Apple 返回 204 → 双重认证验证码 needed，触发 2FA 弹窗")
                     try ensureFailed("Authentication requires verification code")
                 }
