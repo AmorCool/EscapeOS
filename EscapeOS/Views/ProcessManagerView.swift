@@ -560,7 +560,6 @@ enum ProcessSortMode: String, CaseIterable, Identifiable {
 final class ProcessManagerViewModel: ObservableObject {
     @Published private(set) var processes: [ProcessEntry] = []
     /// v0.3.47：排序模式
-    @Published var sortMode: ProcessSortMode = .defaultOrder
     /// v0.3.47：排序模式
     @Published var sortMode: ProcessSortMode = .defaultOrder
     /// v0.3.45：内存监控开关（持久化到 UserDefaults）
