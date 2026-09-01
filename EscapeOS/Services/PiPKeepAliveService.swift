@@ -28,9 +28,13 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     /// 在窗口层级内的源视图（启动 PiP 的前提；PiP 启动后可离开页面）
     private weak var sourceView: UIView?
 
-    /// PiP 内容尺寸（隐藏 = 1x1）
+    /// PiP 内容尺寸（隐藏 = 0.1x0.1，原版 0.1pt 技巧）
     static let normalSize = CGSize(width: 320, height: 180)
-    static let hiddenSize = CGSize(width: 1, height: 1)
+    static let hiddenSize = CGSize(width: 0.1, height: 0.1)
+
+    /// 意外停止自动恢复（系统杀 PiP 时自动重启，最多 5 次）
+    private var autoRestoreRemaining = 5
+    private var intentionalStop = false
 
     /// KVO：等待 isPictureInPicturePossible（异步置 true，原版同款）
     private var possibleObservation: NSKeyValueObservation?
@@ -77,6 +81,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         // 音频会话激活（后台保活加成）
         try? AVAudioSession.sharedInstance().setActive(true)
         lastError = nil
+        intentionalStop = false
 
         if pip.isPictureInPictureActive { return }
         if pip.isPictureInPicturePossible {
@@ -114,6 +119,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     }
 
     func stop() {
+        intentionalStop = true
         possibleObservation?.invalidate()
         possibleObservation = nil
         startWatchdog?.cancel()
@@ -143,7 +149,18 @@ extension PiPKeepAliveService: AVPictureInPictureControllerDelegate {
         }
     }
     func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
-        DispatchQueue.main.async { self.isPiPActive = false }
+        DispatchQueue.main.async {
+            self.isPiPActive = false
+            // 意外停止自动恢复（用户手动关 PiP 视为意外——保活语义下自动拉起）
+            if !self.intentionalStop && self.autoRestoreRemaining > 0 {
+                self.autoRestoreRemaining -= 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    guard let self, !(self.pipController?.isPictureInPictureActive ?? true) else { return }
+                    print("[PiP] 意外停止，自动恢复（剩余 \(self.autoRestoreRemaining) 次）")
+                    self.start()
+                }
+            }
+        }
     }
     func pictureInPictureController(
         _ c: AVPictureInPictureController,

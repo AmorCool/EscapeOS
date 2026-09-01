@@ -20,6 +20,7 @@ struct ModuleManagerView: View {
     @State private var importError: String? = nil
     @State private var confirmAction: (module: EscapeModule, action: EscapeModuleAction)? = nil
     @State private var uninstallTarget: EscapeModule? = nil
+    @State private var actionMenuModule: EscapeModule? = nil
     @State private var webviewModule: EscapeModule? = nil
 
     var body: some View {
@@ -98,6 +99,24 @@ struct ModuleManagerView: View {
             }
             Button("取消", role: .cancel) { uninstallTarget = nil }
         }
+        .confirmationDialog(
+            "选择要执行的动作",
+            isPresented: Binding(
+                get: { actionMenuModule != nil },
+                set: { if !$0 { actionMenuModule = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            ForEach(actionMenuModule?.actions ?? []) { act in
+                Button(act.label) {
+                    if let m = actionMenuModule {
+                        run(module: m, action: act)
+                    }
+                    actionMenuModule = nil
+                }
+            }
+            Button("取消", role: .cancel) { actionMenuModule = nil }
+        }
         .sheet(isPresented: Binding(
             get: { webviewModule != nil },
             set: { if !$0 { webviewModule = nil } }
@@ -144,15 +163,17 @@ struct ModuleManagerView: View {
     }
 
     /// KernelSU 风格模块卡片：名称+Toggle / 版本作者 / 描述 / 动作 / 打开+卸载
+    /// 模块卡片（逐像素对齐截图：白卡片 / 黑粗标题 / 灰版本作者描述 / 蓝Toggle / 灰胶囊底栏）
     private func moduleCard(_ module: EscapeModule) -> some View {
         let enabled = enabledMap[module.id] ?? true
         let hasWeb = ModuleService.shared.webrootURL(for: module) != nil
 
-        return VStack(alignment: .leading, spacing: 8) {
-            // 第一行：名称 + 启用 Toggle
+        return VStack(alignment: .leading, spacing: 6) {
+            // 标题 + Toggle
             HStack(alignment: .top) {
                 Text(module.name)
-                    .font(.title3.weight(.semibold))
+                    .font(.title2.weight(.bold))
+                    .foregroundColor(.primary)
                 Spacer()
                 Toggle("", isOn: Binding(
                     get: { enabledMap[module.id] ?? true },
@@ -165,83 +186,66 @@ struct ModuleManagerView: View {
                 .tint(.blue)
             }
 
-            // 版本 / 作者
-            VStack(alignment: .leading, spacing: 2) {
-                Text("版本: v\(module.version)\(module.versionCode.map { " (\($0))" } ?? "")")
-                Text("作者: \(module.author ?? "未知")")
-            }
-            .font(.subheadline)
-            .foregroundColor(.secondary)
+            // 版本 / 作者（截图同款灰字两行）
+            Text("版本: v\(module.version)")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Text("作者: \(module.author ?? "未知")")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
 
-            // 描述
+            // 描述（灰字自动换行）
             Text(module.description)
                 .font(.subheadline)
-                .foregroundColor(.primary)
-                .lineLimit(6)
-
-            // 动作区（禁用时隐藏）
-            if enabled {
-                Divider()
-                ForEach(module.actions) { action in
-                    Button {
-                        run(module: module, action: action)
-                    } label: {
-                        HStack {
-                            Image(systemName: action.icon ?? "play.circle.fill")
-                            Text(action.label)
-                            Spacer()
-                            if runningActionID == actionKey(module, action) {
-                                ProgressView()
-                            } else {
-                                Text("执行")
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.blue)
-                    .disabled(runningActionID != nil)
-                }
-
-                if let notes = module.notes, !notes.isEmpty {
-                    Text(notes)
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
-            } else {
-                Divider()
-                Label("已禁用——启用后动作可用", systemImage: "pause.circle")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            }
+                .foregroundColor(.secondary)
 
             Divider()
 
-            // 底部操作条：打开(WebView) + 卸载
-            HStack {
-                if hasWeb && enabled {
-                    Button {
-                        webviewModule = module
-                    } label: {
-                        Label("打开", systemImage: "chevron.left.forwardslash.chevron.right")
-                            .font(.subheadline.weight(.medium))
+            // 底栏：执行 + 打开 在左，卸载在右（截图同款灰胶囊黑字）
+            HStack(spacing: 12) {
+                if enabled && !module.actions.isEmpty {
+                    pill(label: "执行", icon: "play.fill") {
+                        handleRun(module: module)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.primary)
+                }
+                if hasWeb && enabled {
+                    pill(label: "打开", icon: "chevron.left.forwardslash.chevron.right") {
+                        webviewModule = module
+                    }
                 }
                 Spacer()
-                Button {
+                pill(label: "卸载", icon: "trash") {
                     uninstallTarget = module
-                } label: {
-                    Label("卸载", systemImage: "trash")
-                        .font(.subheadline.weight(.medium))
                 }
-                .buttonStyle(.bordered)
-                .tint(.primary)
             }
-            .padding(.top, 2)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+        .opacity(enabled ? 1 : 0.55)
+    }
+
+    /// 动作分发：单动作直接跑；多动作弹选单
+    private func handleRun(module: EscapeModule) {
+        if module.actions.count == 1 {
+            run(module: module, action: module.actions[0])
+        } else {
+            actionMenuModule = module
+        }
+    }
+
+    /// 灰底胶囊（截图风格：systemGray6 底 + 黑字黑图标 + .plain）
+    private func pill(label: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                Text(label)
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundColor(.primary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
+            .background(Capsule().fill(Color(.systemGray6)))
+        }
+        .buttonStyle(.plain)
     }
 
     private func actionKey(_ module: EscapeModule, _ action: EscapeModuleAction) -> String {

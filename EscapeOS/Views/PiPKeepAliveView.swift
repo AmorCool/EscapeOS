@@ -14,8 +14,8 @@ import AVFoundation
 struct PiPKeepAliveView: View {
     @StateObject private var service = PiPKeepAliveService.shared
     @StateObject private var highRefresh = HighRefreshService.shared
-    @State private var countdown = 0
-    @State private var timer: Timer?
+    @State private var elapsed: Int = 0
+    @State private var elapsedTimer: Timer?
 
     var body: some View {
         List {
@@ -61,15 +61,16 @@ struct PiPKeepAliveView: View {
                         Image(systemName: service.isPiPActive ? "pip.exit" : "pip.enter")
                         Text(service.isPiPActive ? "停止画中画" : "启动画中画保活")
                         Spacer()
-                        if countdown > 0 && !service.isPiPActive {
-                            Text("（\(countdown)s）")
+                        if service.isPiPActive {
+                            Text(formatElapsed(elapsed))
+                                .font(.body.monospacedDigit())
                                 .foregroundColor(.secondary)
                         }
                     }
                 }
                 .tint(.blue)
 
-                // v0.3.50：隐藏 / 显示（原版 0.1pt 技巧——缩 preferredContentSize）
+                // 隐藏 / 显示（原版 0.1pt 技巧——缩 preferredContentSize 到不可见）
                 if service.isPiPActive {
                     Button {
                         if service.isHidden {
@@ -83,7 +84,7 @@ struct PiPKeepAliveView: View {
                             Text(service.isHidden ? "显示画中画窗口" : "隐藏画中画窗口（保活继续）")
                         }
                     }
-                    .tint(.orange)
+                    .tint(.primary)
                 }
             } footer: {
                 Text("启动后回主屏幕或锁屏，系统以悬浮小窗维持应用活跃。悬浮窗支持拖动/双指缩放；「隐藏」会把窗口缩到不可见但保活继续。用于需要长时间后台运行的任务（隧道保活 / 长传输）。")
@@ -136,17 +137,23 @@ struct PiPKeepAliveView: View {
         }
     }
 
-    /// 启动后有 10 秒宽限期：若 PiP 未激活则提示失败
+    /// 运行时长计时
     private func startCountdown() {
-        timer?.invalidate()
-        countdown = 10
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
-            countdown -= 1
-            if countdown <= 0 || service.isPiPActive {
+        elapsedTimer?.invalidate()
+        elapsed = 0
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
+            if service.isPiPActive {
+                elapsed += 1
+            } else {
+                elapsed = 0
                 t.invalidate()
-                timer = nil
+                elapsedTimer = nil
             }
         }
+    }
+
+    private func formatElapsed(_ s: Int) -> String {
+        String(format: "%02d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
     }
 }
 
