@@ -83,26 +83,12 @@ struct RingtonesView: View {
                 } else {
                     ForEach(ringtones) { entry in
                         row(entry)
-                            .contextMenu {
-                                Button {
-                                    // 导出到本地 → 用户可从文件 App 长按设铃声（iOS 16+）
-                                    exportToLocal(entry: entry)
-                                } label: {
-                                    Label("导出到文件 App", systemImage: "square.and.arrow.up")
-                                }
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     confirmDelete = entry
                                 } label: {
                                     Label("删除", systemImage: "trash")
                                 }
-                                Button {
-                                    exportToLocal(entry: entry)
-                                } label: {
-                                    Label("导出", systemImage: "square.and.arrow.up")
-                                }
-                                .tint(.blue)
                             }
                     }
                 }
@@ -159,14 +145,6 @@ struct RingtonesView: View {
             TextField("新名称", text: $renameText)
             Button("确定") { doRename() }
             Button("取消", role: .cancel) {}
-        }
-        .sheet(isPresented: Binding(
-            get: { shareURL != nil },
-            set: { if !$0 { shareURL = nil } }
-        )) {
-            if let url = shareURL {
-                ActivityShareView(url: url)
-            }
         }
         .sheet(item: $shareItem) { item in
             ActivityView(items: [item.url])
@@ -282,18 +260,6 @@ struct RingtonesView: View {
         }
     }
 
-    // v0.3.29：导出到本地文件 App（用户可长按 → 用作铃声，iOS 16+）
-    @State private var shareURL: URL?
-    private func exportToLocal(entry: RingtonesService.Entry) {
-        Task.detached(priority: .userInitiated) {
-            do {
-                let localURL = try RingtonesService.shared.exportToLocal(entry: entry)
-                await MainActor.run { shareURL = localURL }
-            } catch {
-                await MainActor.run { errorMessage = error.localizedDescription }
-            }
-        }
-    }
 
     private func importRingtone(url: URL) {
         busy = true
