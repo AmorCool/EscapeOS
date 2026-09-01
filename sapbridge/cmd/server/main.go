@@ -181,5 +181,4 @@ func main() {
 	if err := http.ListenAndServe(*addr, mux); err != nil {
 		log.Fatal(err)
 	}
-	_ = os.Exit(0)
 }
