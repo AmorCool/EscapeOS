@@ -120,11 +120,11 @@ final class BinaryModuleRunner: ObservableObject {
 
         // iOS SDK 上 posix_spawnattr_t()/posix_spawn_file_actions_t() 默认构造器
         // 不可用（missing argument for parameter #1）——用指针分配 + init 零填充
-        let attrPtr = UnsafeMutablePointer<posix_spawnattr_t>.allocate(capacity: 1)
+        let attrPtr = UnsafeMutablePointer<posix_spawnattr_t?>.allocate(capacity: 1)
         defer { attrPtr.deallocate() }
         posix_spawnattr_init(attrPtr)
 
-        let actionsPtr = UnsafeMutablePointer<posix_spawn_file_actions_t>.allocate(capacity: 1)
+        let actionsPtr = UnsafeMutablePointer<posix_spawn_file_actions_t?>.allocate(capacity: 1)
         posix_spawn_file_actions_init(actionsPtr)
         defer {
             posix_spawn_file_actions_destroy(actionsPtr)
