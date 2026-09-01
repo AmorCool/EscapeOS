@@ -162,8 +162,8 @@ struct ModuleManagerView: View {
             // 卸载标记绑定宿主 build——build 变化且开关开才恢复）
             Section {
                 Toggle(isOn: Binding(
-                    get: { ModuleService.shared.restoreOnUpgrade },
-                    set: { ModuleService.shared.restoreOnUpgrade = $0 }
+                    get: { ModuleService.restoreOnUpgrade },
+                    set: { ModuleService.restoreOnUpgrade = $0 }
                 )) {
                     HStack {
                         Image(systemName: "arrow.triangle.2.circlepath")
