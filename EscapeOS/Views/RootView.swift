@@ -20,7 +20,7 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            NavigationView {
+            NavigationStack {
                 appsContent
                     .navigationTitle("应用")
                     .navigationBarTitleDisplayMode(.large)
@@ -40,7 +40,7 @@ struct RootView: View {
             }
             .tag(MainTab.apps)
 
-            NavigationView {
+            NavigationStack {
                 SpaceReclaimView(appList: viewModel)
                     .navigationBarTitleDisplayMode(.large)
             }
@@ -55,7 +55,7 @@ struct RootView: View {
                 }
                 .tag(MainTab.gestalt)
 
-            NavigationView {
+            NavigationStack {
                 MoreView(appList: viewModel, onResetPairing: {
                     viewModel.resetPairing()
                     selectedTab = .apps
