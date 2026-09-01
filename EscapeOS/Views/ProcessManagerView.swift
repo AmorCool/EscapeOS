@@ -514,7 +514,7 @@ final class ProcessManagerViewModel: ObservableObject {
             guard let vm = self else { return }
             let memMap = (try? ProcessManagerService.shared.fetchMemoryUsage()) ?? [:]
             await MainActor.run {
-                guard let vm = vm else { return }
+                // vm 已在外层解包（非 Optional），直接用
                 guard !vm.processes.isEmpty else { return }
                 for i in vm.processes.indices {
                     if let mem = memMap[Int32(vm.processes[i].pid)] {
