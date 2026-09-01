@@ -31,6 +31,8 @@ final class SSHServerService: NSObject, ObservableObject {
     @Published private(set) var password: String
     /// 设备局域网 IP（en0）
     @Published private(set) var lanIP: String = "获取中…"
+    /// 首次使用必须手动设置密码
+    @Published private(set) var hasSetPassword = false
 
     private var server: Citadel.SSHServer?
     @MainActor private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -45,11 +47,15 @@ final class SSHServerService: NSObject, ObservableObject {
         if let saved = UserDefaults.standard.string(forKey: "ssh.password"), !saved.isEmpty {
             password = saved
         } else {
-            password = Self.generatePassword()
-            UserDefaults.standard.set(password, forKey: "ssh.password")
+            // super.init 前不能读取 self（@Published 包装访问）——用局部变量中转
+            let generated = Self.generatePassword()
+            password = generated
+            UserDefaults.standard.set(generated, forKey: "ssh.password")
         }
         lanIP = Self.detectLANIP() ?? "未连接 Wi-Fi"
         super.init()
+        // super.init 之后才能读 self
+        hasSetPassword = UserDefaults.standard.bool(forKey: "ssh.hasSetPassword")
     }
 
     // MARK: 凭据
@@ -60,9 +66,29 @@ final class SSHServerService: NSObject, ObservableObject {
     }
 
     func resetCredentials() {
+        // 重置 = 回到「未设置密码」状态，强制下次首启重新设置
         password = Self.generatePassword()
         UserDefaults.standard.set(password, forKey: "ssh.password")
+        UserDefaults.standard.set(false, forKey: "ssh.hasSetPassword")
+        hasSetPassword = false
     }
+
+    /// 用户手动设置密码（≥6 位），持久化并标记已设置
+    func setPassword(_ newPassword: String) {
+        let trimmed = newPassword.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 6 else {
+            lastError = "密码至少 6 位"
+            return
+        }
+        password = trimmed
+        UserDefaults.standard.set(trimmed, forKey: "ssh.password")
+        UserDefaults.standard.set(true, forKey: "ssh.hasSetPassword")
+        hasSetPassword = true
+        lastError = nil
+    }
+
+    /// 服务是否允许启动（必须已手动设置过密码）
+    var canStart: Bool { hasSetPassword }
 
     func setPort(_ newPort: Int) {
         guard (1024...65535).contains(newPort), server == nil else { return }

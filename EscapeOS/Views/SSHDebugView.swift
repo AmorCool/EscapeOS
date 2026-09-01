@@ -11,16 +11,59 @@ import SwiftUI
 
 struct SSHDebugView: View {
     @StateObject private var service = SSHServerService.shared
+    @State private var draftPassword = ""
+    @State private var draftConfirm = ""
 
     var body: some View {
         List {
+            if !service.hasSetPassword {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("首次使用请设置 SSH 密码", systemImage: "key.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.blue)
+                        SecureField("密码（至少 6 位）", text: $draftPassword)
+                            .textFieldStyle(.roundedBorder)
+                        SecureField("确认密码", text: $draftConfirm)
+                            .textFieldStyle(.roundedBorder)
+                        Button {
+                            guard draftPassword == draftConfirm else {
+                                service.lastError = "两次输入不一致"
+                                return
+                            }
+                            service.setPassword(draftPassword)
+                            draftPassword = ""
+                            draftConfirm = ""
+                        } label: {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                Text("保存密码")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                        .disabled(draftPassword.count < 6)
+                        if let err = service.lastError {
+                            Text(err).font(.caption).foregroundColor(.red)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("初始设置")
+                }
+            }
+
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(service.isRunning ? Color.green : Color.secondary)
                             .frame(width: 8, height: 8)
-                        Text(service.isRunning ? "服务运行中（局域网可达）" : "服务未启动")
+                        Text(
+                            service.isRunning ? "服务运行中（局域网可达）"
+                            : service.hasSetPassword ? "服务未启动"
+                            : "请先设置 SSH 密码")
                             .font(.subheadline)
                             .foregroundColor(service.isRunning ? .green : .secondary)
                     }
@@ -50,13 +93,14 @@ struct SSHDebugView: View {
                     }
                 }
                 .tint(.blue)
+                .disabled(!service.canStart)
 
                 Button {
                     service.resetCredentials()
                 } label: {
                     HStack {
                         Image(systemName: "key.horizontal")
-                        Text("重置密码")
+                        Text("重置密码（回到初始设置）")
                     }
                 }
                 .tint(.orange)
