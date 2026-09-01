@@ -102,8 +102,16 @@ targets:
         # 应用图标与这些资源全部缺失（Theos 会自动打包 Resources/）。
         # 排除 Info.plist：它已作为 INFOPLIST_FILE 被 xcodegen 处理；若再当资源拷贝进 bundle，
         # 会与生成的 Info.plist 冲突（Multiple commands produce Info.plist）。
+        # 排除 BundledModules：模块清单都以 module.json 命名，平铺进 bundle 根会互相冲突，
+        # 改用下方 folder reference（蓝色文件夹）保留目录结构。
         excludes:
           - "Info.plist"
+          - "BundledModules"
+      - path: Resources/BundledModules
+        # v0.3.48：内置模块清单，folder reference 保留 <id>/module.json 层级，
+        # 运行时经 Bundle.main.url(forResource: "BundledModules", withExtension: nil) 读取。
+        type: folder
+        buildPhase: resources
       - path: vendor/BitByteData/Sources
         # 排除 vendor 占位 PrivacyInfo.xcprivacy：两份内容完全相同且都在 Sources 根目录，
         # xcodegen 会把二者都复制进 app bundle 导致 "Multiple commands produce .../PrivacyInfo.xcprivacy"。
