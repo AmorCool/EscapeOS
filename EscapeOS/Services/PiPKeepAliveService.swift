@@ -68,7 +68,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
                 activeVideoCallSourceView: src,
                 contentViewController: vc)
             let pip = AVPictureInPictureController(contentSource: source)
-            pip?.delegate = self
+            pip.delegate = self
             pipController = pip
             contentVC = vc
         }
