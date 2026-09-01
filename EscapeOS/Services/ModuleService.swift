@@ -85,6 +85,8 @@ final class ModuleService {
 
     /// 用户主动卸载过的模块 id（防止内置模块重启后自动回归）
     private static let uninstalledKey = "Module.uninstalled.ids"
+    /// 卸载记录对应的宿主 build——build 变化（覆盖安装新 IPA）即清空记录
+    private static let hostBuildAtUninstallKey = "Module.uninstalled.hostBuild"
 
     private var uninstalledIds: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: Self.uninstalledKey) ?? [])
@@ -92,7 +94,29 @@ final class ModuleService {
 
     /// 首次启动时把 bundle 内置模块安装到 Documents/Modules。
     /// 幂等：目录已存在 或 用户曾主动卸载过 → 跳过。
+    /// 覆盖安装新 IPA 后是否恢复内置模块（用户可关）
+    private static let restoreOnUpgradeKey = "Module.restoreOnUpgrade"
+    static var restoreOnUpgrade: Bool {
+        get { UserDefaults.standard.object(forKey: restoreOnUpgradeKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: restoreOnUpgradeKey) }
+    }
+
     private func bootstrapBundledModules() {
+        // 覆盖安装不清沙盒数据（UserDefaults 保留），卸载标记跨安装残留。
+        // 策略：宿主 build 变化（=装了新 IPA）且开关开 → 清空卸载记录，内置模块回归；
+        //       开关关 → 记录保留，模块维持卸载状态。
+        let currentBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        let recordedBuild = UserDefaults.standard.string(forKey: Self.hostBuildAtUninstallKey)
+        if recordedBuild == nil {
+            UserDefaults.standard.set(currentBuild, forKey: Self.hostBuildAtUninstallKey)
+        } else if recordedBuild != currentBuild {
+            if Self.restoreOnUpgrade {
+                UserDefaults.standard.removeObject(forKey: Self.uninstalledKey)
+                print("[Module] 宿主 build 变化（\(recordedBuild!) → \(currentBuild)），恢复内置模块")
+            }
+            UserDefaults.standard.set(currentBuild, forKey: Self.hostBuildAtUninstallKey)
+        }
+
         guard let bundledURL = Bundle.main.url(forResource: "BundledModules", withExtension: nil) else { return }
         guard let ids = try? FileManager.default.contentsOfDirectory(atPath: bundledURL.path) else { return }
         let uninstalled = uninstalledIds

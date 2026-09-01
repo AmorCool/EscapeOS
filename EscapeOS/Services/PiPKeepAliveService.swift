@@ -40,6 +40,22 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
     private var possibleObservation: NSKeyValueObservation?
     private var startWatchdog: DispatchWorkItem?
 
+    /// 后台任务桥（原版 beginBackgroundTaskIfNeeded："PiPKeepAlive"）
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginBackgroundTaskIfNeeded() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PiPKeepAlive") { [weak self] in
+            self?.endBackgroundTaskIfNeeded()
+        }
+    }
+
+    private func endBackgroundTaskIfNeeded() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+
     private override init() {
         super.init()
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -73,12 +89,16 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
                 contentViewController: vc)
             let pip = AVPictureInPictureController(contentSource: source)
             pip.delegate = self
+            // 原版 updatePiPAutomaticStartPolicy：回后台自动进 PiP
+            pip.canStartPictureInPictureAutomaticallyFromInline = true
             pipController = pip
             contentVC = vc
         }
         guard let pip = pipController else { return }
 
-        // 音频会话激活（后台保活加成）
+        // 原版实锤：.playback + mixWithOthers + setActive——
+        // "start with active playback so PiP is possible immediately"
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: .mixWithOthers)
         try? AVAudioSession.sharedInstance().setActive(true)
         lastError = nil
         intentionalStop = false
@@ -86,6 +106,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         if pip.isPictureInPictureActive { return }
         if pip.isPictureInPicturePossible {
             pip.startPictureInPicture()
+            beginBackgroundTaskIfNeeded()
             return
         }
 
@@ -102,6 +123,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
                 self.startWatchdog = nil
                 if !(observed.isPictureInPictureActive) {
                     observed.startPictureInPicture()
+                    self.beginBackgroundTaskIfNeeded()
                 }
             }
         }
@@ -125,6 +147,7 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         startWatchdog?.cancel()
         startWatchdog = nil
         pipController?.stopPictureInPicture()
+        endBackgroundTaskIfNeeded()
     }
 
     // MARK: 隐藏 / 显示（preferredContentSize 缩放 PiP 窗口，原版 0.1pt 技巧）
@@ -167,7 +190,7 @@ extension PiPKeepAliveService: AVPictureInPictureControllerDelegate {
     func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
         DispatchQueue.main.async {
             self.isPiPActive = false
-            // 意外停止自动恢复（用户手动关 PiP 视为意外——保活语义下自动拉起）
+            // 意外停止自动恢复（系统杀 PiP → 自动拉起；用户点「停止」不恢复）
             if !self.intentionalStop && self.autoRestoreRemaining > 0 {
                 self.autoRestoreRemaining -= 1
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
@@ -175,6 +198,8 @@ extension PiPKeepAliveService: AVPictureInPictureControllerDelegate {
                     print("[PiP] 意外停止，自动恢复（剩余 \(self.autoRestoreRemaining) 次）")
                     self.start()
                 }
+            } else if self.intentionalStop {
+                self.endBackgroundTaskIfNeeded()
             }
         }
     }

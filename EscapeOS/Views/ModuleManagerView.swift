@@ -157,6 +157,25 @@ struct ModuleManagerView: View {
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
             }
+
+            // 覆盖安装后恢复内置模块的开关（UserDefaults 跨安装保留，
+            // 卸载标记绑定宿主 build——build 变化且开关开才恢复）
+            Section {
+                Toggle(isOn: Binding(
+                    get: { ModuleService.shared.restoreOnUpgrade },
+                    set: { ModuleService.shared.restoreOnUpgrade = $0 }
+                )) {
+                    HStack {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text("覆盖安装后恢复内置模块")
+                    }
+                }
+                .tint(.blue)
+            } header: {
+                Text("设置")
+            } footer: {
+                Text("关闭后，卸载内置模块即使覆盖安装新 IPA 也不会回归；开启后，安装新版本 IPA 时内置模块自动恢复。")
+            }
         }
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
