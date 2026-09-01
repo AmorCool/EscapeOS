@@ -23,6 +23,65 @@ import Foundation
 
 // MARK: - 模块模型
 
+/// 热补丁声明（hotfix.patches[]）
+struct HotfixPatch: Codable {
+    let type: String       // "feature_flag" | "text"
+    let key: String
+    var valueBool: Bool?
+    var valueText: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, key, value
+    }
+
+    init(type: String, key: String, valueBool: Bool? = nil, valueText: String? = nil) {
+        self.type = type
+        self.key = key
+        self.valueBool = valueBool
+        self.valueText = valueText
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        key = try c.decode(String.self, forKey: .key)
+        valueBool = try? c.decode(Bool.self, forKey: .value)
+        valueText = try? c.decode(String.self, forKey: .value)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(type, forKey: .type)
+        try c.encode(key, forKey: .key)
+        if let b = valueBool { try c.encode(b, forKey: .value) }
+        else if let t = valueText { try c.encode(t, forKey: .value) }
+    }
+}
+
+/// 热补丁配置（module.json "hotfix" 键）
+struct HotfixConfig: Codable {
+    var patches: [HotfixPatch]?
+    /// JS 补丁文件名（默认 hotfix.js）
+    var script: String?
+
+    var hasScript: Bool { true }  // script 字段存在即尝试加载 hotfix.js
+    var scriptName: String { script ?? "hotfix.js" }
+}
+
+/// 二进制模块配置（module.json "binary" 键）
+struct BinaryConfig: Codable {
+    /// 相对模块目录的可执行文件路径（bin/alist）
+    var executable: String
+    /// 启动参数（相对路径会在启动时自动拼接模块目录）
+    var args: [String]?
+    /// WebUI 端口
+    var port: Int?
+    /// WebUI 路径（默认 /）
+    var webPath: String?
+    /// 是否随宿主自启动
+    var autoStart: Bool?
+}
+
 struct EscapeModuleAction: Identifiable, Codable {
     let id: String
     let label: String
@@ -57,7 +116,18 @@ struct EscapeModule: Identifiable, Codable {
     /// 模块自带 WebView 界面（对齐 KernelSU 的 webroot 机制），
     /// 有此字段时模块卡片显示「打开」按钮，用内嵌 WKWebView 加载本地页。
     var webroot: String?
+    /// v1.1：可选。热补丁配置——存在即要求官方签名（signature.sig）
+    var hotfix: HotfixConfig?
+    /// v1.1：可选。二进制模块——随宿主自启动的后台服务（如 alist）
+    var binary: BinaryConfig?
+    /// 二进制模块是否随宿主自启动（默认读 binary.autoStart）
+    var autoStart: Bool?
     let actions: [EscapeModuleAction]
+
+    /// 是否热补丁模块（导入时强制验签）
+    var isHotfixModule: Bool { hotfix != nil }
+    /// 是否二进制模块
+    var isBinaryModule: Bool { binary != nil }
 
     /// 安装目录
     var installURL: URL {
@@ -138,6 +208,12 @@ final class ModuleService {
             try? FileManager.default.copyItem(at: src, to: dest)
             print("[Module] 内置模块安装: \(id)")
         }
+
+        // 启动钩子：热补丁聚合 + 二进制自启动（延迟 2s 避开启动高峰）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            HotfixService.shared.reload()
+            BinaryModuleRunner.shared.autoStartAll()
+        }
     }
 
     // MARK: 列举
@@ -179,6 +255,7 @@ final class ModuleService {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         var manifestData: Data?
+        var extractedFiles: [String: Data] = [:]   // 全部 regular 文件字节（签名校验用）
         for entry in entries {
             let name = entry.info.name
             // 跳过 macOS 垃圾与目录项
@@ -198,6 +275,7 @@ final class ModuleService {
                 if name == "module.json" || name.hasSuffix("/module.json") {
                     manifestData = d
                 }
+                extractedFiles[name] = d
             default:
                 break
             }
@@ -211,7 +289,19 @@ final class ModuleService {
         guard module.spec == "escape.module.v1" else {
             throw ModuleError.badSpec("规范版本不支持：\(module.spec)")
         }
-        guard !module.actions.isEmpty else {
+
+        // 热补丁 / 二进制模块必须携带官方签名（signature.sig = 对 module.json 的 ed25519 签名 base64）
+        if module.isHotfixModule || module.isBinaryModule {
+            guard let sigB64 = extractedFiles["signature.sig"],
+                  let sigData = Data(base64Encoded: sigB64.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                throw ModuleError.badSpec("热补丁/二进制模块必须包含官方签名文件 signature.sig")
+            }
+            guard HotfixService.verifySignature(manifestData: mData, signatureB64: sigB64.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                throw ModuleError.badSpec("签名校验失败——非 EscapeSpace 官方签名的热补丁已拒绝")
+            }
+        }
+
+        guard !module.actions.isEmpty || module.isBinaryModule else {
             throw ModuleError.badSpec("模块未声明任何 action")
         }
         // 校验动作类型（v1 只支持 signal；未知类型拒绝导入，保证向前兼容的严格性）
@@ -239,6 +329,14 @@ final class ModuleService {
         }
         try FileManager.default.copyItem(at: contentRoot, to: dest)
         print("[Module] 导入成功: \(module.id) v\(module.version)")
+
+        // 导入后钩子：热补丁聚合刷新 + 二进制模块自启动
+        DispatchQueue.main.async {
+            HotfixService.shared.reload()
+            if module.isBinaryModule, module.autoStart == true || module.binary?.autoStart == true {
+                BinaryModuleRunner.shared.start(module: module)
+            }
+        }
         return module
     }
 

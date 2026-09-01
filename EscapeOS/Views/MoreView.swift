@@ -4,6 +4,7 @@ import SwiftUI
 /// bottom-tab slots. Features are organized into logical sections for better
 /// discoverability (v0.3.29: 22 features → 7 categorized sections).
 struct MoreView: View {
+    @ObservedObject private var hotfix = HotfixService.shared
     @ObservedObject var appList: AppListViewModel
     var onResetPairing: () -> Void
     @State private var showSettings = false
@@ -29,6 +30,10 @@ struct MoreView: View {
 
     /// 分组定义（v0.3.29：22 个功能 → 7 个逻辑分区）
     private var sections: [(header: String, footer: String?, items: [MoreItem])] {
+        // 热补丁接管点：feature.<id>.hidden 标志可隐藏任意功能入口
+        func isVisible(_ item: MoreItem) -> Bool {
+            !hotfix.isFeatureHidden(item.id)
+        }
         [
             ("设备工具", "需要配对文件 + LocalDevVPN 隧道", [
                 MoreItem("virtual-location", "location.fill", "虚拟定位",
@@ -129,7 +134,7 @@ struct MoreView: View {
         List {
             ForEach(sections, id: \.header) { section in
                 Section {
-                    ForEach(section.items) { item in
+                    ForEach(section.items.filter(isVisible)) { item in
                         NavigationLink(destination: NavigationLazyView(item.destination)) {
                             MoreCard(
                                 icon: item.icon,

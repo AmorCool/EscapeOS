@@ -227,6 +227,64 @@ struct ModuleManagerView: View {
     }
 
     /// KernelSU 风格模块卡片：名称+Toggle / 版本作者 / 描述 / 动作 / 打开+卸载
+    /// 二进制模块控制区：运行状态 + WebUI + 停止/启动
+    @ViewBuilder
+    private func binaryControls(_ module: EscapeModule) -> some View {
+        let runner = BinaryModuleRunner.shared
+        let running = runner.isRunning(module: module)
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(running ? Color.green : Color.secondary)
+                    .frame(width: 8, height: 8)
+                Text(running
+                     ? "后台运行中\(runner.runningProcesses[module.id].map { " (pid \($0))" } ?? "")"
+                     : (module.autoStart == true || module.binary?.autoStart == true) ? "自启动待命" : "未运行")
+                    .font(.footnote)
+                    .foregroundColor(running ? .green : .secondary)
+                Spacer()
+                if running {
+                    if let url = runner.webURL(for: module) {
+                        Button {
+                            runner.openWebUI(module: module)
+                        } label: {
+                            Label("WebUI", systemImage: "safari")
+                                .font(.footnote.weight(.medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.blue)
+                    }
+                    Button {
+                        runner.stop(module: module)
+                    } label: {
+                        Text("停止")
+                            .font(.footnote.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                } else {
+                    Button {
+                        runner.start(module: module)
+                    } label: {
+                        Text("启动")
+                            .font(.footnote.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+                }
+            }
+
+            if let err = runner.startErrors[module.id] {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+    }
+
     /// 模块卡片（逐像素对齐截图：白卡片 / 黑粗标题 / 灰版本作者描述 / 蓝Toggle / 灰胶囊底栏）
     private func moduleCard(_ module: EscapeModule) -> some View {
         let enabled = enabledMap[module.id] ?? true
@@ -262,6 +320,18 @@ struct ModuleManagerView: View {
             Text(module.description)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
+
+            // 签名徽章（热补丁/二进制模块）
+            if module.isHotfixModule || module.isBinaryModule {
+                Label("官方签名已验证", systemImage: "checkmark.seal.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
+            // 二进制模块运行区（自启动服务：alist 等）
+            if module.isBinaryModule && enabled {
+                binaryControls(module)
+            }
 
             Divider()
 
