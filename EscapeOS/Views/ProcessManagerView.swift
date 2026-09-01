@@ -545,6 +545,10 @@ final class ProcessManagerService {
 @MainActor
 final class ProcessManagerViewModel: ObservableObject {
     @Published private(set) var processes: [ProcessEntry] = []
+    /// v0.3.45：内存监控开关（持久化到 UserDefaults）
+    @Published var memoryWatchEnabled: Bool = UserDefaults.standard.bool(forKey: "ProcessMemoryWatch") {
+        didSet { UserDefaults.standard.set(memoryWatchEnabled, forKey: "ProcessMemoryWatch") }
+    }
     @Published var searchText: String = ""
     @Published var isRefreshing = false
     @Published private(set) var activeControlState: (pid: Int, action: ProcessControlAction)?
@@ -720,8 +724,6 @@ final class ProcessManagerViewModel: ObservableObject {
 
 struct ProcessManagerView: View {
     @State private var showLogViewer = false
-    /// v0.3.45：内存监控开关——关闭后 refresh 不再触发 sysmontap 查询
-    @AppStorage("ProcessMemoryWatch") private var memoryWatchEnabled = true
     @StateObject private var viewModel = ProcessManagerViewModel()
     @State private var killCandidate: ProcessEntry?
     @State private var killConfirmTask: Task<Void, Never>?
@@ -814,6 +816,18 @@ struct ProcessManagerView: View {
         .contentMargins(.top, 0)
         .refreshable { viewModel.refresh() }
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    viewModel.memoryWatchEnabled.toggle()
+                    if viewModel.memoryWatchEnabled {
+                        viewModel.fetchMemoryAsync()
+                    }
+                } label: {
+                    Image(systemName: viewModel.memoryWatchEnabled ? "gauge.with.needle" : "gauge")
+                        .foregroundColor(viewModel.memoryWatchEnabled ? .blue : .secondary)
+                }
+                .accessibilityLabel(viewModel.memoryWatchEnabled ? "关闭内存监控" : "开启内存监控")
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     showLogViewer = true
