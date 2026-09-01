@@ -7,20 +7,20 @@
 //  免去爱思导出日志的来回折腾。
 //
 //  安全模型：
-//   - 仅监听局域网（0.0.0.0 由本地网络权限保护，外网不可达）
+//   - 仅监听局域网（本地网络权限保护，外网不可达）
 //   - 单用户密码认证（随机生成、可重置），随时可关
 //   - 受限 shell：不 spawn 任何进程，只应答内置诊断命令（status/logs/modules/ip/...）
 //
 
-import AVFoundation
+import AVKit
 import Citadel
+import CryptoKit
 import Foundation
 import NIO
 import NIOSSH
 import UIKit
 
-@MainActor
-final class SSHServerService: ObservableObject {
+final class SSHServerService: NSObject, ObservableObject {
     static let shared = SSHServerService()
 
     @Published private(set) var isRunning = false
@@ -33,7 +33,7 @@ final class SSHServerService: ObservableObject {
     @Published private(set) var lanIP: String = "获取中…"
 
     private var server: Citadel.SSHServer?
-    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    @MainActor private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     static let defaultPort = 2222
 
@@ -63,7 +63,7 @@ final class SSHServerService: ObservableObject {
     }
 
     func setPort(_ newPort: Int) {
-        guard (1024...65535).contains(newPort), !isRunning else { return }
+        guard (1024...65535).contains(newPort), server == nil else { return }
         port = newPort
         UserDefaults.standard.set(newPort, forKey: "ssh.port")
     }
@@ -71,70 +71,83 @@ final class SSHServerService: ObservableObject {
     // MARK: 启停
 
     func start() {
-        guard !isRunning else { return }
+        guard server == nil else { return }
         lastError = nil
         lanIP = Self.detectLANIP() ?? lanIP
 
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            do {
-                // 主机密钥：首次生成，持久化（否则客户端每次连接 host key 变化会告警）
-                let hostKey = try Self.loadOrCreateHostKey()
+        // 主线程捕获凭据（避免跨隔离读 @Published）
+        let port = self.port
+        let username = self.username
+        let password = self.password
 
-                let auth = PasswordAuthDelegate(username: self.username, password: self.password)
-                let exec = BuiltinCommandExecDelegate(service: self)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let hostKey = try Self.loadOrCreateHostKey()
+                let auth = PasswordAuthDelegate(username: username, password: password)
+                let exec = BuiltinCommandExecDelegate()
 
                 let server = try await Citadel.SSHServer.host(
                     host: "0.0.0.0",
-                    port: self.port,
+                    port: port,
                     hostKeys: [hostKey],
                     authenticationDelegate: auth
                 )
                 server.enableExec(withDelegate: exec)
 
+                guard let self else { return }
                 await MainActor.run {
                     self.server = server
                     self.isRunning = true
                     self.beginBackgroundTaskIfNeeded()
                 }
-                print("[SSH] 服务已启动 port=\(self.port) user=\(self.username)")
+                print("[SSH] 服务已启动 port=\(port) user=\(username)")
 
                 // 阻塞等待关闭（close 后自然返回）
                 try await server.closeFuture.get()
                 print("[SSH] 服务已关闭")
+                await MainActor.run {
+                    if self.server === server {
+                        self.server = nil
+                        self.isRunning = false
+                        self.endBackgroundTaskIfNeeded()
+                    }
+                }
             } catch {
+                guard let self else { return }
                 await MainActor.run {
                     self.lastError = "SSH 启动失败：\(error.localizedDescription)"
-                    self.isRunning = false
                     self.server = nil
+                    self.isRunning = false
                 }
             }
         }
     }
 
     func stop() {
-        intentionalClose = true
         let server = self.server
         Task.detached(priority: .userInitiated) { [weak self] in
             try? await server?.close()
             await MainActor.run {
-                self?.server = nil
-                self?.isRunning = false
+                guard let self else { return }
+                if self.server === server {
+                    self.server = nil
+                    self.isRunning = false
+                }
+                self.endBackgroundTaskIfNeeded()
+            }
+        }
+    }
+
+    @MainActor private func beginBackgroundTaskIfNeeded() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "SSHServer") { [weak self] in
+            Task { @MainActor [weak self] in
                 self?.endBackgroundTaskIfNeeded()
             }
         }
     }
 
-    private var intentionalClose = false
-
-    private func beginBackgroundTaskIfNeeded() {
-        guard backgroundTask == .invalid else { return }
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "SSHServer") { [weak self] in
-            self?.endBackgroundTaskIfNeeded()
-        }
-    }
-
-    private func endBackgroundTaskIfNeeded() {
+    @MainActor private func endBackgroundTaskIfNeeded() {
         guard backgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid
@@ -146,7 +159,8 @@ final class SSHServerService: ObservableObject {
         let url = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/ssh_host_ed25519.key")
         let key: Curve25519.Signing.PrivateKey
-        if let data = try? Data(contentsOf: url), let saved = try? Curve25519.Signing.PrivateKey(rawRepresentation: data) {
+        if let data = try? Data(contentsOf: url),
+           let saved = try? Curve25519.Signing.PrivateKey(rawRepresentation: data) {
             key = saved
         } else {
             key = Curve25519.Signing.PrivateKey()
@@ -157,7 +171,7 @@ final class SSHServerService: ObservableObject {
 
     // MARK: 局域网 IP
 
-    static func detectLANIP() -> String? {
+    nonisolated static func detectLANIP() -> String? {
         var address: String?
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
@@ -188,7 +202,7 @@ final class SSHServerService: ObservableObject {
     }
 }
 
-// MARK: - 密码认证（原版 Citadel 示例同款结构）
+// MARK: - 密码认证（Citadel README 示例同款结构）
 
 final class PasswordAuthDelegate: NIOSSHServerUserAuthenticationDelegate, @unchecked Sendable {
     let supportedAuthenticationMethods: NIOSSHAvailableUserAuthenticationMethods = [.password]
@@ -209,7 +223,8 @@ final class PasswordAuthDelegate: NIOSSHServerUserAuthenticationDelegate, @unche
         }
         switch request.request {
         case .password(let credentials):
-            responsePromise.succeed(credentials.password == password ? .success : .failure)
+            let ok = credentials.password == password
+            responsePromise.succeed(ok ? .success : .failure)
         default:
             responsePromise.succeed(.failure)
         }
@@ -219,12 +234,6 @@ final class PasswordAuthDelegate: NIOSSHServerUserAuthenticationDelegate, @unche
 // MARK: - 受限命令执行（不 spawn 任何进程，纯内置命令应答）
 
 final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
-    weak var service: SSHServerService?
-
-    init(service: SSHServerService?) {
-        self.service = service
-    }
-
     func setEnvironmentValue(_ value: String, forKey key: String) async throws {
         // 忽略环境变量设置
     }
