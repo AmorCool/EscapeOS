@@ -30,7 +30,7 @@ struct SignedIPAInstallView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("已签名 IPA 安装")
                                 .font(.subheadline.weight(.semibold))
-                            Text("无需再次签名，经隧道直接安装（爱思同款通道）")
+                            Text("无视版本，经隧道直接安装")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -50,7 +50,7 @@ struct SignedIPAInstallView: View {
             } header: {
                 Text("选择 IPA")
             } footer: {
-                Text("支持 App Store 下载包、爱思/AltStore 等已签名 .ipa。选择后可按需执行「在线安装」或「覆盖升级/降级安装」。")
+                Text("支持 App Store 下载包、AppleID 等已签名 .ipa。选择后可按需执行安装。")
             }
 
             if busy {
@@ -96,7 +96,7 @@ struct SignedIPAInstallView: View {
                 } header: {
                     Label("执行安装", systemImage: "hammer")
                 } footer: {
-                    Text("在线安装：新装或覆盖同 bundle id 应用；覆盖升级/降级：对已安装应用升级或回退版本（爱思同款，允许降级）。")
+                    Text("在线安装：新装或覆盖同 bundle id 应用；覆盖升级/降级：对已安装应用升级或回退版本。")
                 }
             }
         }
@@ -152,7 +152,7 @@ struct SignedIPAInstallView: View {
                 DispatchQueue.main.async {
                     self.busy = false
                     self.progress = 1
-                    self.toast = mode == .install ? "在线安装成功（安装中界面可能短暂重启）" : "覆盖升级/降级安装成功"
+                    self.toast = mode == .install ? "在线安装成功" : "覆盖升级/降级安装成功"
                 }
             } catch {
                 DispatchQueue.main.async {

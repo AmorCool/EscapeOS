@@ -657,7 +657,7 @@ struct SettingsForm: View {
 
     var body: some View {
         Form {
-            Section(header: Text("Apple ID 账户"), footer: Text("登录后，「增加内存限制」等功能可统一调用此账户。点眼睛图标可临时展开/隐藏账号详情，默认以星号保护隐私。")) {
+            Section(header: Text("Apple ID 账户"), footer: Text("登录后，部分功能可统一调用此账户。")) {
                 if memorySettings.isLoggedIn {
                     HStack {
                         Text("账号")
@@ -694,7 +694,7 @@ struct SettingsForm: View {
                 }
             }
 
-            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）。默认 ani.stikstore.app，可切换 Sidestore / 846969 等备用服务器。请求失败时会自动轮换重试；全部失败后会还原为你在此处选择的服务器。")) {
+            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）, 默认 ani.stikstore.app.")) {
                 Picker("服务器", selection: $anisetteServer) {
                     ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
                         Text(MemoryLimitSettings.host(from: server)).tag(server)
@@ -737,7 +737,7 @@ struct SettingsForm: View {
                     .foregroundColor(.secondary)
             }
 
-            Section(header: Text("保活"), footer: Text("开启后，关闭本应用也会在后台保持运行（静音音频方式），让虚拟定位、无线配对广播等持续任务不中断。")) {
+            Section(header: Text("保活"), footer: Text("开启后，关闭本应用也会在后台保持运行。")) {
                 Toggle("保持后台运行", isOn: $keepAliveEnabled)
                     .onChange(of: keepAliveEnabled) { _, enabled in
                         if enabled {

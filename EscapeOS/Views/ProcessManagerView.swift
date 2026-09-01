@@ -326,19 +326,27 @@ final class ProcessManagerService {
             }
 
             // 1. RemoteServer
+            print("[SysmonDiag] step1: 创建 RemoteServer…")
             var server: OpaquePointer?
             if let err = remote_server_connect_rsd(adapter, handshake, &server) {
-                throw error(from: err, fallback: "创建 RemoteServer 失败")
+                let msg = error(from: err, fallback: "创建 RemoteServer 失败")
+                print("[SysmonDiag] step1 失败: \(msg.localizedDescription)")
+                throw msg
             }
             guard let server else { throw makeError("RemoteServer 为空") }
+            print("[SysmonDiag] step1 成功")
             defer { remote_server_free(server) }
 
             // 2. SysmontapClient
+            print("[SysmonDiag] step2: 创建 SysmontapClient…")
             var sysmon: OpaquePointer?
             if let err = sysmontap_new(server, &sysmon) {
-                throw error(from: err, fallback: "创建 Sysmontap 失败")
+                let msg = error(from: err, fallback: "创建 Sysmontap 失败")
+                print("[SysmonDiag] step2 失败: \(msg.localizedDescription)")
+                throw msg
             }
             guard let sysmon else { throw makeError("Sysmontap 为空") }
+            print("[SysmonDiag] step2 成功")
             defer { sysmontap_free(sysmon) }
 
             // 3. 配置：process_attributes = ["physFootprint"]
@@ -356,13 +364,19 @@ final class ProcessManagerService {
                 system_attributes_count: 0
             )
             if let err = sysmontap_set_config(sysmon, &config) {
-                throw error(from: err, fallback: "配置 Sysmontap 失败")
+                let msg = error(from: err, fallback: "配置 Sysmontap 失败")
+                print("[SysmonDiag] step3 失败: \(msg.localizedDescription)")
+                throw msg
             }
+            print("[SysmonDiag] step3 配置成功")
 
             // 4. 启动
             if let err = sysmontap_start(sysmon) {
-                throw error(from: err, fallback: "启动 Sysmontap 失败")
+                let msg = error(from: err, fallback: "启动 Sysmontap 失败")
+                print("[SysmonDiag] step4 失败: \(msg.localizedDescription)")
+                throw msg
             }
+            print("[SysmonDiag] step4 启动成功，等待样本…")
 
             // 5. 获取一次样本
             var processes: plist_t? = nil
@@ -381,10 +395,15 @@ final class ProcessManagerService {
                 sampleSemaphore.signal()
             }
             if sampleSemaphore.wait(timeout: .now() + 5) == .timedOut {
+                print("[SysmonDiag] step5 超时（5s 无样本）——DVT 服务可能不可达")
                 sysmontap_stop(sysmon)
                 return [:]  // 超时直接返回空，不抛错（保持列表可用）
             }
-            if let sampleError { throw sampleError }
+            if let sampleError {
+                print("[SysmonDiag] step5 失败: \(sampleError.localizedDescription)")
+                throw sampleError
+            }
+            print("[SysmonDiag] step5 样本到达！processes=\(processes != nil)")
 
             defer {
                 if let p = processes { plist_free(p) }
@@ -569,7 +588,7 @@ final class ProcessManagerViewModel: ObservableObject {
             if stillAlive {
                 self.alertItem = ProcessAlert(title: "进程可能仍在运行", message: "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中。常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足。")
             } else {
-                self.alertItem = ProcessAlert(title: "进程已结束", message: "PID \(targetPID) 已确认从进程列表中消失。")
+                self.alertItem = ProcessAlert(title: "进程已结束", message: "PID \(targetPID) 已退出后台。")
             }
         }
     }
