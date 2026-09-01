@@ -2,22 +2,25 @@
 //  ModuleManagerView.swift
 //  EscapeSpace
 //
-//  模块管理主界面（v0.3.48，底栏第五个 tab）。
-//  参考 KernelSU 的模块管理形态：卡片式模块列表 + 动作按钮手动执行。
-//  模块以 .zip 导入（根目录 module.json，规范 escape.module.v1），
-//  宿主内置两个官方模块（定位缓存清理 / WLAN 刷新）。
+//  模块管理主界面（v0.3.48，底栏第五个 tab；v0.3.49 卡片化重构）。
+//  卡片风格对齐 KernelSU / 爱思模块市场：名称 + 启用 Toggle + 版本/作者 +
+//  描述 + 动作按钮 + 底部「打开(WebView) / 卸载」胶囊按钮。
 //
 
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 
 struct ModuleManagerView: View {
     @State private var modules: [EscapeModule] = []
+    @State private var enabledMap: [String: Bool] = [:]
     @State private var isImporting = false
     @State private var runningActionID: String? = nil
     @State private var resultAlert: ModuleRunResult? = nil
     @State private var importError: String? = nil
     @State private var confirmAction: (module: EscapeModule, action: EscapeModuleAction)? = nil
+    @State private var uninstallTarget: EscapeModule? = nil
+    @State private var webviewModule: EscapeModule? = nil
 
     var body: some View {
         Group {
@@ -41,7 +44,6 @@ struct ModuleManagerView: View {
         }
         .onAppear(perform: reload)
         .refreshable { reload() }
-        // .fileImporter 在 LiveContainer 客体沙盒有安全域问题——统一走 SharedDocumentPicker
         .background(
             ModuleImportPicker(isPresented: $isImporting) { urls in
                 handleImport(urls)
@@ -79,6 +81,42 @@ struct ModuleManagerView: View {
             }
             Button("取消", role: .cancel) { confirmAction = nil }
         }
+        .confirmationDialog(
+            "确定卸载模块「\(uninstallTarget?.name ?? "")」？",
+            isPresented: Binding(
+                get: { uninstallTarget != nil },
+                set: { if !$0 { uninstallTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("卸载", role: .destructive) {
+                if let m = uninstallTarget {
+                    ModuleService.shared.delete(id: m.id)
+                    reload()
+                }
+                uninstallTarget = nil
+            }
+            Button("取消", role: .cancel) { uninstallTarget = nil }
+        }
+        .sheet(isPresented: Binding(
+            get: { webviewModule != nil },
+            set: { if !$0 { webviewModule = nil } }
+        )) {
+            if let m = webviewModule, let root = ModuleService.shared.webrootURL(for: m) {
+                NavigationView {
+                    ModuleWebView(startPage: root.appendingPathComponent("index.html"),
+                                  readAccessRoot: root)
+                        .ignoresSafeArea(edges: .bottom)
+                        .navigationTitle(m.name)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                Button("关闭") { webviewModule = nil }
+                            }
+                        }
+                }
+            }
+        }
     }
 
     // MARK: 子视图
@@ -96,72 +134,116 @@ struct ModuleManagerView: View {
         List {
             ForEach(modules) { module in
                 Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 10) {
-                            Image(systemName: module.icon ?? "shippingbox.fill")
-                                .font(.title3)
-                                .foregroundColor(accentColor(module))
-                                .frame(width: 36, height: 36)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(accentColor(module).opacity(0.12))
-                                )
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(module.name)
-                                    .font(.headline)
-                                Text("v\(module.version)  ·  \(module.author ?? "未知作者")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                        }
-                        Text(module.description)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        if let notes = module.notes, !notes.isEmpty {
-                            Text(notes)
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-                    }
-                    .padding(.vertical, 2)
-
-                    ForEach(module.actions) { action in
-                        Button {
-                            if let confirm = action.confirm, !confirm.isEmpty {
-                                confirmAction = (module, action)
-                            } else {
-                                run(module: module, action: action)
-                            }
-                        } label: {
-                            HStack {
-                                Image(systemName: action.icon ?? "play.circle.fill")
-                                Text(action.label)
-                                Spacer()
-                                if runningActionID == actionKey(module, action) {
-                                    ProgressView()
-                                }
-                            }
-                        }
-                        .disabled(runningActionID != nil)
-                    }
-                } header: {
-                    Text(module.category ?? "模块")
+                    moduleCard(module)
                 }
+                .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
             }
         }
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
     }
 
-    private func accentColor(_ module: EscapeModule) -> Color {
-        switch module.accentColorName {
-        case "green": return .green
-        case "orange": return .orange
-        case "purple": return .purple
-        case "red": return .red
-        default: return .blue
+    /// KernelSU 风格模块卡片：名称+Toggle / 版本作者 / 描述 / 动作 / 打开+卸载
+    private func moduleCard(_ module: EscapeModule) -> some View {
+        let enabled = enabledMap[module.id] ?? true
+        let hasWeb = ModuleService.shared.webrootURL(for: module) != nil
+
+        return VStack(alignment: .leading, spacing: 8) {
+            // 第一行：名称 + 启用 Toggle
+            HStack(alignment: .top) {
+                Text(module.name)
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { enabledMap[module.id] ?? true },
+                    set: { newValue in
+                        ModuleService.shared.setEnabled(id: module.id, newValue)
+                        enabledMap[module.id] = newValue
+                    }
+                ))
+                .labelsHidden()
+                .tint(.blue)
+            }
+
+            // 版本 / 作者
+            VStack(alignment: .leading, spacing: 2) {
+                Text("版本: v\(module.version)\(module.versionCode.map { " (\($0))" } ?? "")")
+                Text("作者: \(module.author ?? "未知")")
+            }
+            .font(.subheadline)
+            .foregroundColor(.secondary)
+
+            // 描述
+            Text(module.description)
+                .font(.subheadline)
+                .foregroundColor(.primary)
+                .lineLimit(6)
+
+            // 动作区（禁用时隐藏）
+            if enabled {
+                Divider()
+                ForEach(module.actions) { action in
+                    Button {
+                        if let confirm = action.confirm, !confirm.isEmpty {
+                            confirmAction = (module, action)
+                        } else {
+                            run(module: module, action: action)
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: action.icon ?? "play.circle.fill")
+                                .foregroundColor(.blue)
+                            Text(action.label)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if runningActionID == actionKey(module, action) {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(runningActionID != nil)
+                    .padding(.vertical, 2)
+                }
+
+                if let notes = module.notes, !notes.isEmpty {
+                    Text(notes)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            } else {
+                Divider()
+                Label("已禁用——启用后动作可用", systemImage: "pause.circle")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+
+            Divider()
+
+            // 底部操作条：打开(WebView) + 卸载
+            HStack {
+                if hasWeb && enabled {
+                    Button {
+                        webviewModule = module
+                    } label: {
+                        Label("打开", systemImage: "chevron.left.forwardslash.chevron.right")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.primary)
+                }
+                Spacer()
+                Button {
+                    uninstallTarget = module
+                } label: {
+                    Label("卸载", systemImage: "trash")
+                        .font(.subheadline.weight(.medium))
+                }
+                .buttonStyle(.bordered)
+                .tint(.primary)
+            }
+            .padding(.top, 2)
         }
+        .padding(.vertical, 4)
     }
 
     private func actionKey(_ module: EscapeModule, _ action: EscapeModuleAction) -> String {
@@ -172,6 +254,9 @@ struct ModuleManagerView: View {
 
     private func reload() {
         modules = ModuleService.shared.listModules()
+        enabledMap = Dictionary(uniqueKeysWithValues: modules.map {
+            ($0.id, ModuleService.shared.isEnabled(id: $0.id))
+        })
     }
 
     private func handleImport(_ urls: [URL]) {
@@ -209,6 +294,29 @@ struct ModuleRunResult {
     let message: String
 }
 
+/// 模块 WebView 页（KernelSU webroot 对齐）：加载模块目录内 index.html，
+/// 读权限限定在模块目录内。
+struct ModuleWebView: UIViewControllerRepresentable {
+    let startPage: URL
+    let readAccessRoot: URL
+
+    func makeUIViewController(context: Context) -> WKWebView {
+        let cfg = WKWebViewConfiguration()
+        let wv = WKWebView(frame: .zero, configuration: cfg)
+        // 时间戳查询参数破缓存，保证升级模块后加载新内容
+        var comps = URLComponents(url: startPage, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "_t", value: String(Int(Date().timeIntervalSince1970)))]
+        if let busted = comps.url {
+            wv.loadFileURL(busted, allowingReadAccessTo: readAccessRoot)
+        } else {
+            wv.loadFileURL(startPage, allowingReadAccessTo: readAccessRoot)
+        }
+        return wv
+    }
+
+    func updateUIViewController(_ uiViewController: WKWebView, context: Context) {}
+}
+
 /// SharedDocumentPicker 的 SwiftUI 包装（模块导入专用，限 .zip）。
 struct ModuleImportPicker: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
@@ -220,7 +328,6 @@ struct ModuleImportPicker: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
         guard isPresented else { return }
-        // 延迟到下一 runloop，避免在 SwiftUI 更新事务里直接 present
         DispatchQueue.main.async {
             guard self.isPresented else { return }
             self.isPresented = false

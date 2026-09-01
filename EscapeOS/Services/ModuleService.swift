@@ -53,6 +53,10 @@ struct EscapeModule: Identifiable, Codable {
     var notes: String?
     var category: String?
     var minHostVersion: String?
+    /// v1.1：可选。zip 内相对目录名（须含 index.html）——
+    /// 模块自带 WebView 界面（对齐 KernelSU 的 webroot 机制），
+    /// 有此字段时模块卡片显示「打开」按钮，用内嵌 WKWebView 加载本地页。
+    var webroot: String?
     let actions: [EscapeModuleAction]
 
     /// 安装目录
@@ -199,6 +203,33 @@ final class ModuleService {
     func delete(id: String) {
         let dir = modulesRoot.appendingPathComponent(id, isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    // MARK: 启用 / 禁用（.disabled 标记文件，不污染 manifest）
+
+    func isEnabled(id: String) -> Bool {
+        let marker = modulesRoot.appendingPathComponent(id).appendingPathComponent(".disabled")
+        return !FileManager.default.fileExists(atPath: marker.path)
+    }
+
+    func setEnabled(id: String, _ enabled: Bool) {
+        let marker = modulesRoot.appendingPathComponent(id).appendingPathComponent(".disabled")
+        if enabled {
+            try? FileManager.default.removeItem(at: marker)
+        } else {
+            FileManager.default.createFile(atPath: marker.path, contents: nil)
+        }
+    }
+
+    // MARK: WebView 支持（对齐 KernelSU webroot 机制）
+
+    /// 模块 webroot 目录（须含 index.html）；未声明或目录缺失返回 nil。
+    func webrootURL(for module: EscapeModule) -> URL? {
+        guard let wr = module.webroot, !wr.isEmpty else { return nil }
+        let dir = module.installURL.appendingPathComponent(wr, isDirectory: true)
+        guard FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("index.html").path) else { return nil }
+        return dir
     }
 
     // MARK: 执行动作（Rust FFI 管道）

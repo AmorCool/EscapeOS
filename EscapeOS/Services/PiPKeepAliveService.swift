@@ -53,21 +53,62 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         layerHost.layer.addSublayer(layer)
     }
 
+    /// KVO：等待 isPictureInPicturePossible 变 true（原版 PiP 的关键——
+    /// layer 入窗 + item ready 后 possible 才异步置 true，不能同步判一次就放弃）
+    private var possibleObservation: NSKeyValueObservation?
+    private var startWatchdog: DispatchWorkItem?
+
     func start() {
         guard let pip = ensurePiPController() else {
             lastError = "设备不支持画中画（AVPictureInPictureController 不可用）"
             return
         }
-        guard pip.isPictureInPicturePossible else {
-            lastError = "画中画暂不可用（playerLayer 未就绪或不在窗口层级）"
+        if pip.isPictureInPictureActive { return }
+
+        // 视频先播起来（PiP 需要 item 处于播放态）
+        player?.play()
+        lastError = nil
+
+        if pip.isPictureInPicturePossible {
+            pip.startPictureInPicture()
             return
         }
-        player?.play()
-        pip.startPictureInPicture()
-        lastError = nil
+
+        // 等待 possible → 自动启动（6 秒看门狗）
+        possibleObservation?.invalidate()
+        possibleObservation = pip.observe(
+            \.isPictureInPicturePossible, options: [.new]
+        ) { [weak self] observed, _ in
+            guard let self, observed.isPictureInPicturePossible else { return }
+            DispatchQueue.main.async {
+                self.possibleObservation?.invalidate()
+                self.possibleObservation = nil
+                self.startWatchdog?.cancel()
+                self.startWatchdog = nil
+                if !(observed.isPictureInPictureActive) {
+                    self.player?.play()
+                    observed.startPictureInPicture()
+                }
+            }
+        }
+        startWatchdog?.cancel()
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.possibleObservation?.invalidate()
+            self.possibleObservation = nil
+            if !(self.pipController?.isPictureInPictureActive ?? false) {
+                self.lastError = "画中画 6 秒内未就绪——请确认本页面停留（playerLayer 需在窗口层级）后重试"
+            }
+        }
+        startWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: watchdog)
     }
 
     func stop() {
+        possibleObservation?.invalidate()
+        possibleObservation = nil
+        startWatchdog?.cancel()
+        startWatchdog = nil
         pipController?.stopPictureInPicture()
         player?.pause()
     }
@@ -117,7 +158,14 @@ final class PiPKeepAliveService: NSObject, ObservableObject {
         if FileManager.default.fileExists(atPath: url.path) { return url }
 
         let size = CGSize(width: 320, height: 180)
-        let writer = try! AVAssetWriter(outputURL: url, fileType: .mp4)
+        let writer: AVAssetWriter
+        do {
+            writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        } catch {
+            lastError = "生成保活视频失败：\(error.localizedDescription)"
+            print("[PiP] \(lastError!)")
+            return url
+        }
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: size.width,
