@@ -282,7 +282,7 @@ struct RingtonesView: View {
                 let localURL = try RingtonesService.shared.exportToLocal(entry: entry)
                 await MainActor.run { shareURL = localURL }
             } catch {
-                await MainActor.run { importError = error.localizedDescription }
+                await MainActor.run { errorMessage = error.localizedDescription }
             }
         }
     }
