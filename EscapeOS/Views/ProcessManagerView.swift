@@ -30,8 +30,18 @@ struct ProcessAlert: Identifiable {
 struct ProcessEntry: Identifiable {
     let pid: Int
     let executablePath: String
+    /// 物理内存占用（bytes）。nil = FFI 尚未返回此字段（需 idevice crate 升级）。
+    var memoryBytes: Int64? = nil
 
     var id: Int { pid }
+
+    /// 格式化内存显示（MB/KB）。
+    var memoryDisplay: String? {
+        guard let bytes = memoryBytes, bytes > 0 else { return nil }
+        let mb = Double(bytes) / 1_048_576
+        if mb >= 1 { return String(format: "%.1f MB", mb) }
+        return String(format: "%.0f KB", Double(bytes) / 1024)
+    }
 
     /// 显示名取可执行路径末段（设备不回传友好名）。
     var displayName: String {
@@ -616,6 +626,14 @@ private struct ProcessRow: View {
                 Text(process.displayName)
                     .font(.subheadline.weight(.semibold))
                 Spacer()
+                if let mem = process.memoryDisplay {
+                    Text(mem)
+                        .font(.caption2.weight(.medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(.blue))
+                }
                 Text("PID \(process.pid)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
