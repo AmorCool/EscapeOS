@@ -198,6 +198,17 @@ final class RingtonesService {
         return remote
     }
 
+    /// 导出铃声到本地文件 App（用户可长按 → 用作铃声，iOS 16+）。
+    /// 通过 AFC 读取设备上的铃声文件 → 保存到 Documents/Ringtones/。
+    func exportToLocal(entry: Entry) throws -> URL {
+        let data = try afc.readFile(entry.path)
+        guard !data.isEmpty else { throw makeError("铃声内容为空") }
+        let localDir = Self.exportDirectory
+        let localURL = URL(fileURLWithPath: localDir).appendingPathComponent(entry.name)
+        try data.write(to: localURL, options: .atomic)
+        return localURL
+    }
+
     /// 通过 RSD 隧道向 notification_proxy 服务发送 iTunes 同步通知，
     /// 让系统感知媒体库变更（铃声同步协议，未越狱设备的公开通道）。
     /// 失败静默（不影响主流程），调用方按需提示。

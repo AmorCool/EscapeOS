@@ -83,12 +83,26 @@ struct RingtonesView: View {
                 } else {
                     ForEach(ringtones) { entry in
                         row(entry)
-                            .swipeActions(edge: .trailing) {
+                            .contextMenu {
+                                Button {
+                                    // 导出到本地 → 用户可从文件 App 长按设铃声（iOS 16+）
+                                    exportToLocal(entry: entry)
+                                } label: {
+                                    Label("导出到文件 App", systemImage: "square.and.arrow.up")
+                                }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
                                     confirmDelete = entry
                                 } label: {
                                     Label("删除", systemImage: "trash")
                                 }
+                                Button {
+                                    exportToLocal(entry: entry)
+                                } label: {
+                                    Label("导出", systemImage: "square.and.arrow.up")
+                                }
+                                .tint(.blue)
                             }
                     }
                 }
@@ -256,6 +270,19 @@ struct RingtonesView: View {
                     errorMessage = "\(error.localizedDescription)"
                     loading = false
                 }
+            }
+        }
+    }
+
+    // v0.3.29：导出到本地文件 App（用户可长按 → 用作铃声，iOS 16+）
+    @State private var shareURL: URL?
+    private func exportToLocal(entry: RingtonesService.Entry) {
+        Task.detached(priority: .userInitiated) {
+            do {
+                let localURL = try RingtonesService.shared.exportToLocal(entry: entry)
+                await MainActor.run { shareURL = localURL }
+            } catch {
+                await MainActor.run { importError = error.localizedDescription }
             }
         }
     }
