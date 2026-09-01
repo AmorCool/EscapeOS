@@ -121,9 +121,8 @@ final class BinaryModuleRunner: ObservableObject {
         var attr = posix_spawnattr_t()
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
-        // 独立进程组：kill 不误伤宿主
-        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP))
-        posix_spawnattr_setpgroup(&attr, 0)
+        // v0.3.60：去掉 setflags/setpgroup（iOS SDK 类型导入问题）——
+        // 精确按 pid kill 已足够，无需进程组隔离
 
         var actionsMut = posix_spawn_file_actions_t()
         posix_spawn_file_actions_init(&actionsMut)
@@ -137,7 +136,7 @@ final class BinaryModuleRunner: ObservableObject {
 
         posix_spawn_file_actions_adddup2(&actionsMut, logFD, 1)
         posix_spawn_file_actions_adddup2(&actionsMut, logFD, 2)
-        posix_spawn_file_actions_addopen(&actionsMut, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actionsMut, 0, "/dev/null", O_RDONLY, mode_t(0))
 
         // chdir 需要 SPAWN_SETPGROUP 之外的动作：posix_spawn 无原生 chdir，
         // 用 args 里的相对路径（alist --data data 相对模块目录），进程 cwd 继承宿主。

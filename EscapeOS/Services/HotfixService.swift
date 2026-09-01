@@ -41,7 +41,7 @@ final class HotfixService: NSObject, ObservableObject {
     /// JS 运行日志（调试用，保留最近 50 条）
     @Published private(set) var jsLog: [String] = []
 
-    private init() {
+    private override init() {
         super.init()
     }
 
@@ -99,9 +99,20 @@ final class HotfixService: NSObject, ObservableObject {
         _ = log
     }
 
-    private func appendJSLog(_ line: String) {
+    /// JS 桥写日志（EscapeJSBridge 调用）
+    func appendJSLog(_ line: String) {
         jsLog.append(line)
         if jsLog.count > 50 { jsLog.removeFirst(jsLog.count - 50) }
+    }
+
+    /// JS 桥设置功能开关（EscapeJSBridge 调用；private(set) 的对外写入口）
+    func applyFlag(_ key: String, _ value: Bool) {
+        featureFlags[key] = value
+    }
+
+    /// JS 桥设置文案覆盖（EscapeJSBridge 调用）
+    func applyTextOverride(_ key: String, _ value: String) {
+        textOverrides[key] = value
     }
 
     /// 功能隐藏查询（MoreView 集成点）：热补丁可隐藏任意功能入口
@@ -156,13 +167,13 @@ final class EscapeJSBridge: NSObject, EscapeJSBridgeExports {
 
     func setFlag(_ key: String, _ value: Bool) {
         DispatchQueue.main.async { [weak self] in
-            self?.owner?.featureFlags[key] = value
+            self?.owner?.applyFlag(key, value)
         }
     }
 
     func setOverride(_ key: String, _ value: String) {
         DispatchQueue.main.async { [weak self] in
-            self?.owner?.textOverrides[key] = value
+            self?.owner?.applyTextOverride(key, value)
         }
     }
 }
