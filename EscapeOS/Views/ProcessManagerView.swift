@@ -497,27 +497,9 @@ final class ProcessManagerViewModel: ObservableObject {
         Task.detached(priority: .utility) { [weak self] in
             do {
                 let entries = try ProcessManagerService.shared.listProcesses()
-
-                // v0.3.33：查询内存占用（sysmontap physFootprint）
-                // 失败静默——不影响进程列表显示
-                var memMap: [Int32: UInt64] = [:]
-                do {
-                    memMap = try ProcessManagerService.shared.fetchMemoryUsage()
-                } catch {
-                    print("[ProcessManager] 内存查询失败: \(error.localizedDescription)")
-                }
-
-                // 合并内存数据到 entries
-                var enriched = entries
-                for i in enriched.indices {
-                    if let mem = memMap[Int32(enriched[i].pid)] {
-                        enriched[i].memoryBytes = Int64(mem)
-                    }
-                }
-
                 await MainActor.run {
                     guard let self else { return }
-                    self.processes = enriched
+                    self.processes = entries
                     self.isRefreshing = false
                 }
             } catch {
