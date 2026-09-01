@@ -13,6 +13,7 @@ import AVFoundation
 
 struct PiPKeepAliveView: View {
     @StateObject private var service = PiPKeepAliveService.shared
+    @StateObject private var highRefresh = HighRefreshService.shared
     @State private var countdown = 0
     @State private var timer: Timer?
 
@@ -92,9 +93,6 @@ struct PiPKeepAliveView: View {
                 Label("保活强度：PiP > 静默音频（自动）", systemImage: "shield.lefthalf.filled")
                     .font(.footnote)
                     .foregroundColor(.secondary)
-                Label("首次启动会生成 2 秒循环视频（约 3KB）", systemImage: "film")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
                 if let err = service.lastError {
                     Label(err, systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote)
@@ -102,6 +100,32 @@ struct PiPKeepAliveView: View {
                 }
             } header: {
                 Text("说明")
+            }
+
+            // v0.3.51：全局高刷（移植 GlobalRefresh 帧率方案）
+            Section {
+                Toggle(isOn: Binding(
+                    get: { highRefresh.isRunning },
+                    set: { $0 ? highRefresh.start() : highRefresh.stop() }
+                )) {
+                    HStack {
+                        Image(systemName: "speedometer")
+                        Text("强制 \(highRefresh.maxFPS)Hz 高刷")
+                    }
+                }
+                .tint(.blue)
+                HStack {
+                    Text("实测帧率")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                Text(highRefresh.isRunning ? "\n(highRefresh.measuredFPS) FPS" : "—")
+                        .font(.body.monospacedDigit())
+                        .foregroundColor(highRefresh.measuredFPS >= 100 ? .green : .primary)
+                }
+            } header: {
+                Text("全局高刷")
+            } footer: {
+                Text("开启后本应用活跃期间强制维持设备最高刷新率（\(highRefresh.maxFPS)Hz，CADisplayLink preferredFrameRateRange 方案）。关闭后交还系统自适应。")
             }
         }
         .navigationTitle("PiP 保活")
