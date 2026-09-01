@@ -13,6 +13,7 @@ struct SSHDebugView: View {
     @StateObject private var service = SSHServerService.shared
     @State private var draftPassword = ""
     @State private var draftConfirm = ""
+    @State private var formError: String? = nil
 
     var body: some View {
         List {
@@ -27,13 +28,18 @@ struct SSHDebugView: View {
                         SecureField("确认密码", text: $draftConfirm)
                             .textFieldStyle(.roundedBorder)
                         Button {
+                            formError = nil
                             guard draftPassword == draftConfirm else {
-                                service.lastError = "两次输入不一致"
+                                formError = "两次输入不一致"
                                 return
                             }
                             service.setPassword(draftPassword)
-                            draftPassword = ""
-                            draftConfirm = ""
+                            if service.hasSetPassword {
+                                draftPassword = ""
+                                draftConfirm = ""
+                            } else {
+                                formError = service.lastError ?? "设置失败"
+                            }
                         } label: {
                             HStack {
                                 Image(systemName: "checkmark.circle.fill")
@@ -44,7 +50,7 @@ struct SSHDebugView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(.blue)
                         .disabled(draftPassword.count < 6)
-                        if let err = service.lastError {
+                        if let err = formError {
                             Text(err).font(.caption).foregroundColor(.red)
                         }
                     }
