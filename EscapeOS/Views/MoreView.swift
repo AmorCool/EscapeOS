@@ -43,6 +43,9 @@ struct MoreView: View {
                 MoreItem("process-manager", "cpu", "进程管理",
                          "查看 / 挂起 / 结束设备进程",
                          ProcessManagerView()),
+                MoreItem("pip-keepalive", "pip.enter", "PiP 保活",
+                         "画中画保活防杀后台",
+                         PiPKeepAliveView()),
             ]),
             ("应用安装", "签名、安装与下载", [
                 MoreItem("ipa-install", "arrow.down.app.fill", "IPA 侧载",

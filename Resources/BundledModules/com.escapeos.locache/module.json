@@ -1,0 +1,26 @@
+{
+  "spec": "escape.module.v1",
+  "id": "com.escapeos.locache",
+  "name": "定位缓存清理",
+  "icon": "location.slash.fill",
+  "accent": "blue",
+  "version": "1.0.0",
+  "versionCode": 1,
+  "author": "EscapeOS Official",
+  "description": "结束系统定位服务守护进程 locationd，强制其重建并清理定位缓存数据。系统会自动重新拉起该进程，定位功能本身不受影响。",
+  "notes": "执行后首次重新定位可能稍慢（缓存冷启动）。",
+  "category": "系统维护",
+  "minHostVersion": "0.3.48",
+  "actions": [
+    {
+      "id": "clean",
+      "label": "清理定位缓存（结束 locationd）",
+      "icon": "trash.circle.fill",
+      "type": "signal",
+      "process": "locationd",
+      "signal": "SIGKILL",
+      "confirm": "确定结束 locationd？系统会自动拉起该进程。",
+      "timeoutSec": 10
+    }
+  ]
+}

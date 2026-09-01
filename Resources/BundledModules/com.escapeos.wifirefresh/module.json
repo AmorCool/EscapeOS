@@ -1,0 +1,26 @@
+{
+  "spec": "escape.module.v1",
+  "id": "com.escapeos.wifirefresh",
+  "name": "WLAN 连接刷新",
+  "icon": "wifi",
+  "accent": "green",
+  "version": "1.0.0",
+  "versionCode": 1,
+  "author": "EscapeOS Official",
+  "description": "结束 WLAN 管理守护进程 wifid，强制重建 Wi-Fi 连接栈。适用于 Wi-Fi 假连接 / DNS 异常 / 网络图标灰色的快速修复，无需开关飞行模式。",
+  "notes": "执行后 Wi-Fi 会短暂断开并在数秒内自动重连。",
+  "category": "系统维护",
+  "minHostVersion": "0.3.48",
+  "actions": [
+    {
+      "id": "refresh",
+      "label": "刷新 WLAN 连接（结束 wifid）",
+      "icon": "arrow.triangle.2.circlepath",
+      "type": "signal",
+      "process": "wifid",
+      "signal": "SIGKILL",
+      "confirm": "确定结束 wifid？Wi-Fi 将短暂断开并自动重连。",
+      "timeoutSec": 10
+    }
+  ]
+}

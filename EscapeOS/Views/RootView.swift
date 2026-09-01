@@ -5,6 +5,7 @@ import UIKit
 private enum MainTab: Hashable {
     case apps
     case reclaim
+    case modules
     case gestalt
     case more
 }
@@ -48,6 +49,17 @@ struct RootView: View {
                 Label("空间回收", systemImage: "internaldrive")
             }
             .tag(MainTab.reclaim)
+
+            // v0.3.48：模块板块（KernelSU 式模块管理，escape.module.v1 规范）
+            NavigationStack {
+                ModuleManagerView()
+                    .navigationTitle("模块")
+                    .navigationBarTitleDisplayMode(.large)
+            }
+            .tabItem {
+                Label("模块", systemImage: "shippingbox.fill")
+            }
+            .tag(MainTab.modules)
 
             GestaltView()
                 .tabItem {
