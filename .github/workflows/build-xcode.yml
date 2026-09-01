@@ -64,7 +64,7 @@ jobs:
         # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）；
         # build-sap-server.sh 解压 unicorn 官方 mingw64 静态包（p7zip）并构建
         # Windows 版签名服务 EscapeSapServer.exe（链接官方 libunicorn.a）。
-        run: brew install cmake ninja mingw-w64 p7zip
+        run: brew install cmake ninja
 
       - name: Cache Go modules
         # 加速 build-sap.sh 内的 `go mod tidy` / 构建。滚动 key + restore-keys 前缀。
@@ -295,10 +295,6 @@ jobs:
           echo "=== located app bundles ==="
           find build -name 'EscapeSpace.app' -type d || true
 
-      - name: Build Windows SAP server (EscapeSapServer.exe)
-        # v0.3.11：局域网签名服务——PC 原生 x86 无 JIT 限制，绕开 iOS 侧
-        # StikDebug/JIT/磁盘配额全部限制。iOS 端填服务器地址即可走远程签名。
-        run: bash sapbridge/build-sap-server.sh
 
       - name: Save Unicorn product (artifact, cross-run)
         # libunicorn.a（ios-arm64）+ include 头文件（cgo 需要）一起保存，
@@ -386,13 +382,6 @@ jobs:
           name: escapeos-xcode-ipa
           path: EscapeSpace-*.ipa
 
-      - name: Upload Windows SAP server
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: escapeos-sap-server
-          path: sapbridge/dist/EscapeSapServer.exe
-          if-no-files-found: ignore
 
       - name: Publish Release (on tag)
         # 仅在打 v* tag 时发布 Release 并上传未签名 IPA 作为 asset。
@@ -414,9 +403,4 @@ jobs:
               --title "EscapeSpace $TAG (Xcode native)" \
               --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.ipaside.escapeos。" \
               "$IPA"
-          fi
-          # v0.3.11：Windows 局域网签名服务一并发布（PC 上运行，App 填地址走远程签名）
-          EXE="sapbridge/dist/EscapeSapServer.exe"
-          if [ -f "$EXE" ]; then
-            gh release upload "$TAG" "$EXE" --clobber
           fi

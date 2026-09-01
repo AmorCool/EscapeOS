@@ -56,15 +56,7 @@ final class AppStoreDownloadStore {
 
             // 本机模式：Unicorn TCG = JIT（Apple 平台），无有效 JIT 权限时执行
             // 生成代码被内核签名检查杀（v0.3.8 .ips 实锤）。探测仅展示不拦截。
-            let probeResult = SAPJITProbe.probe()
-            switch probeResult {
-            case .available: SapStatusModel.shared.setJIT(.available)
-            case .notEffective: SapStatusModel.shared.setJIT(.notEffective)
-            case .undetectable: SapStatusModel.shared.setJIT(.undetectable)
-            }
-            if case .notEffective = probeResult {
-                LoginLogger.shared.log("SAP JIT 未生效（仅供参考）——继续尝试初始化；若闪退请提供 .ips")
-            }
+            // v0.3.17：JIT 探测已移除（TCI 解释器不依赖 JIT 权限）
             LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
             SapProgressPoller.shared.start()
             defer { SapProgressPoller.shared.stop() }

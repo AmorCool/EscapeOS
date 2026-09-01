@@ -9,40 +9,6 @@ import Darwin
 // AppStoreDownloadView 顶部状态条观察 SapStatusModel；阶段/进度同时节流写入
 // LoginLogger（完整日志进登录日志）。
 
-/// JIT 可用性探测：尝试 mmap 一块 MAP_JIT 匿名内存。
-/// - 调试器附加（StikDebug → CS_DEBUGGED）或宿主授予 JIT → 成功
-/// - 普通侧载 / LiveContainer 访客 → 失败（EPERM）
-/// v0.3.3 起 libunicorn 为 TCI 解释器模式，JIT 与否都不阻断签名——探测仅用于展示。
-enum SAPJITProbe {
-    // csops(2) 的操作码与标志位（xnu bsd/sys/csr.h）
-    private static let CS_OPS_STATUS: UInt32 = 5
-    private static let CS_DEBUGGED: UInt32 = 0x1000_0000
-
-    /// v0.3.13：探测结果三分支（已生效 / 未生效 / 无法判定）——csops 在
-    /// iOS 27 beta 上可能调用失败（EPERM 等），把「无法判定」与「确认未生效」
-    /// 分开展示，避免把探测故障误报成 JIT 未开启。StikDebug 的机制（源码实锤）：
-    /// 通过 debugserver **重新 launch 目标 app**（process_control_launch_app）
-    /// 使 CS_DEBUGGED 置位——不是对运行中进程附加。
-    enum JITProbeResult {
-        case available          // CS_DEBUGGED 置位（调试态 launch 生效）
-        case notEffective       // csops 成功但标志未置位（JIT 确实未生效）
-        case undetectable       // csops 调用失败（iOS 27 beta 权限受限等）
-    }
-
-    static func probe() -> JITProbeResult {
-        var flags: UInt32 = 0
-        let result = csops(getpid(), CS_OPS_STATUS, &flags, MemoryLayout<UInt32>.size)
-        guard result == 0 else {
-            LoginLogger.shared.log("SAP JIT 探测：csops 调用失败 errno=\(result)（无法判定，iOS 27 beta 可能受限）")
-            return .undetectable
-        }
-        let dbg = (flags & CS_DEBUGGED) != 0
-        LoginLogger.shared.log(
-            String(format: "SAP JIT 探测：csops flags=0x%08X → \(dbg ? "CS_DEBUGGED 已置位（已生效）" : "未置位（未生效）")", flags)
-        )
-        return dbg ? .available : .notEffective
-    }
-}
 
 /// 状态条数据模型。@Published 的变更统一经 DispatchQueue.main（轮询在后台线程）。
 final class SapStatusModel: ObservableObject {
@@ -79,6 +45,7 @@ final class SapStatusModel: ObservableObject {
     /// v0.3.3 只在登录流程内探测 → 页面打开后永远显示「检测中」（真机实锤），
     /// v0.3.6 改为进页面立即探测。
     func probeJITNow() {
+        // v0.3.17：JIT 探测保留但状态条不再展示（TCI 不需要 JIT）
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = SAPJITProbe.probe()
             DispatchQueue.main.async { [weak self] in
