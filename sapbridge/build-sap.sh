@@ -18,9 +18,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 SAP_OUT="${SAP_OUT:-$SCRIPT_DIR/build}"
-UNICORN_TAG="${UNICORN_TAG:-2.1.0}"
+# v0.4.0：换 Naville/unicorn feature/tci 分支——在 unicorn 2.x（QEMU 5.0.1）上
+# 恢复了 QEMU TCI（Tiny Code Interpreter，纯 C 解释执行 TCG 中间表示）。
+# 解释器不写可执行内存 → 无需 JIT/CODESIGNING 权限 → iOS 27 beta + 无 StikDebug
+# 也能跑（用户 .ips 实锤 TCG 路线在该环境必死）。性能慢 10-30x，SAP 短会话可接受。
+# 上游参考：Naville/unicorn feature/tci + 1rhino2/unicorn-tci（fnprint 生产使用）。
+UNICORN_REPO="${UNICORN_REPO:-https://github.com/Naville/unicorn.git}"
+UNICORN_BRANCH="${UNICORN_BRANCH:-feature/tci}"
 UNICORN_SRC="${UNICORN_SRC:-$SCRIPT_DIR/.unicorn-src}"
-UNICORN_BUILD="${UNICORN_BUILD:-$SCRIPT_DIR/.unicorn-build}"
+UNICORN_BUILD="${UNICORN_BUILD:-$SCRIPT_DIR/.unicorn-build-tci}"
 GO="${GO:-go}"
 
 mkdir -p "$SAP_OUT"
@@ -30,7 +36,7 @@ echo "==> [1/4] Preparing Unicorn $UNICORN_TAG source"
 if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then
   if [ ! -d "$UNICORN_SRC/.git" ]; then
     rm -rf "$UNICORN_SRC"
-    git clone --depth 1 --branch "$UNICORN_TAG" https://github.com/unicorn-engine/unicorn.git "$UNICORN_SRC"
+    git clone --depth 1 --branch "$UNICORN_BRANCH" "$UNICORN_REPO" "$UNICORN_SRC"
   fi
   # v0.3.3 更正：曾尝试注入 --enable-tcg-interpreter 走 QEMU TCI 纯解释器
   #（无 JIT 也能跑），但 unicorn 2.1.0 的 configure 实际不含该选项
@@ -52,6 +58,7 @@ if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then
     -DBUILD_SHARED_LIBS=OFF \
     -DUNICORN_BUILD_TESTS=OFF \
     -DUNICORN_BUILD_SAMPLES=OFF \
+    -DUNICORN_INTERPRETER=on \
     -DUC_ARCH=x86_64 \
     -DUC_MODE=x86_64
   cmake --build "$UNICORN_BUILD" -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"

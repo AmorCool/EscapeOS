@@ -36,7 +36,9 @@ _build/
 sapbridge/build/
 sapbridge/.unicorn-src/
 sapbridge/.unicorn-build
-sapbridge/.unicorn-build-macos//
+sapbridge/.unicorn-build-tci/
+sapbridge/.unicorn-build
+sapbridge/.unicorn-build-tci/-macos//
 sapbridge/sapbridge
 
 # 本地临时诊断日志（一律放 _build/ci_logs，禁止进 git）

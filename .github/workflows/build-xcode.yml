@@ -249,7 +249,7 @@ jobs:
             gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/unicorn-cache/cache.zip
             unzip -oq /tmp/unicorn-cache/cache.zip -d sapbridge
             # artifact 结构（LCA=sapbridge）：.unicorn-build/libunicorn.a + .unicorn-src/include/
-            if [ -s sapbridge/.unicorn-build/libunicorn.a ] && [ -f sapbridge/.unicorn-src/include/unicorn/unicorn.h ]; then
+            if [ -s sapbridge/.unicorn-build-tci/libunicorn.a ] && [ -f sapbridge/.unicorn-src/include/unicorn/unicorn.h ]; then
               HIT=true
               echo "=== Unicorn cache HIT (libunicorn.a + headers restored, skip cmake full build) ==="
             else
@@ -308,7 +308,7 @@ jobs:
         with:
           name: escapeos-unicorn-210
           path: |
-            sapbridge/.unicorn-build/libunicorn.a
+            sapbridge/.unicorn-build-tci/libunicorn.a
             sapbridge/.unicorn-src/include
           if-no-files-found: ignore
 
