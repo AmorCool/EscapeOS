@@ -649,7 +649,7 @@ final class ProcessManagerViewModel: ObservableObject {
 // MARK: - 视图
 
 struct ProcessManagerView: View {
-    @State private var shareLog: URL?
+    @State private var showLogViewer = false
     @StateObject private var viewModel = ProcessManagerViewModel()
     @State private var killCandidate: ProcessEntry?
     @State private var killConfirmTask: Task<Void, Never>?
@@ -744,20 +744,15 @@ struct ProcessManagerView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    shareLog = SysmonLogger.shared.logFileURL
+                    showLogViewer = true
                 } label: {
                     Image(systemName: "doc.text.magnifyingglass")
                 }
                 .accessibilityLabel("查看诊断日志")
             }
         }
-        .sheet(isPresented: Binding(
-            get: { shareLog != nil },
-            set: { if !$0 { shareLog = nil } }
-        )) {
-            if let url = shareLog {
-                ActivityShareView(url: url)
-            }
+        .sheet(isPresented: $showLogViewer) {
+            SysmonLogView()
         }
     }
 
@@ -871,5 +866,95 @@ private struct ProcessRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+
+/// 进程管理诊断日志查看与导出（查看 / 复制 / 清空 / 导出分享）。
+struct SysmonLogView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+    @State private var showShare = false
+    @State private var showClearConfirm = false
+    @State private var refreshTick = 0
+    @State private var shareURL: URL?
+
+    private var logText: String {
+        _ = refreshTick
+        return SysmonLogger.shared.fullLog().isEmpty ? "（暂无日志，请先在进程管理刷新一次）" : SysmonLogger.shared.fullLog()
+    }
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                Text(logText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("进程诊断日志")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("关闭") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack {
+                        Button {
+                            showClearConfirm = true
+                        } label: {
+                            Label("清空", systemImage: "trash")
+                        }
+                        .disabled(SysmonLogger.shared.fullLog().isEmpty)
+                        Button("复制") {
+                            UIPasteboard.general.string = logText
+                            copied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                        }
+                        .disabled(SysmonLogger.shared.fullLog().isEmpty)
+                    }
+                }
+            }
+            .confirmationDialog("确定清空进程日志？", isPresented: $showClearConfirm, titleVisibility: .visible) {
+                Button("清空日志", role: .destructive) {
+                    SysmonLogger.shared.clear()
+                    refreshTick += 1
+                }
+                Button("取消", role: .cancel) {}
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    shareURL = SysmonLogger.shared.logFileURL
+                    showShare = true
+                } label: {
+                    Label("导出分享日志", systemImage: "square.and.arrow.up")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .padding()
+                .disabled(SysmonLogger.shared.fullLog().isEmpty)
+            }
+            .sheet(isPresented: $showShare) {
+                if let url = shareURL {
+                    ActivityShareView(url: url)
+                }
+            }
+            .overlay {
+                if copied {
+                    Text("已复制")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(.black.opacity(0.7)))
+                        .transition(.opacity)
+                }
+            }
+        }
     }
 }
