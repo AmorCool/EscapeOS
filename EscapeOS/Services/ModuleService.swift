@@ -20,7 +20,6 @@
 //
 
 import Foundation
-import SWCompression
 
 // MARK: - 模块模型
 
@@ -120,7 +119,7 @@ final class ModuleService {
         let data = try Data(contentsOf: url)
         let entries: [ZipEntry]
         do {
-            entries = try ZIPContainer.open(container: data)
+            entries = try ZipContainer.open(container: data)
         } catch {
             throw ModuleError.badArchive("ZIP 解析失败：\(error.localizedDescription)")
         }
