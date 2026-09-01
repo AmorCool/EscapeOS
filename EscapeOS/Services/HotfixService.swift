@@ -159,9 +159,10 @@ final class EscapeJSBridge: NSObject, EscapeJSBridgeExports {
     }
 
     func log(_ message: String) {
-        print("[Hotfix][JS][\(moduleId)] \(message)")
+        let mid = moduleId   // 逃逸闭包捕获局部变量（避免隐式 self）
+        print("[Hotfix][JS][\(mid)] \(message)")
         DispatchQueue.main.async { [weak self] in
-            self?.owner?.appendJSLog("[\(moduleId)] \(message)")
+            self?.owner?.appendJSLog("[\(mid)] \(message)")
         }
     }
 

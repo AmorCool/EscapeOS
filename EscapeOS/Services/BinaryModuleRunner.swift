@@ -118,15 +118,18 @@ final class BinaryModuleRunner: ObservableObject {
     ) throws -> pid_t {
         var pid: pid_t = 0
 
-        var attr = posix_spawnattr_t()
-        posix_spawnattr_init(&attr)
-        defer { posix_spawnattr_destroy(&attr) }
-        // v0.3.60：去掉 setflags/setpgroup（iOS SDK 类型导入问题）——
-        // 精确按 pid kill 已足够，无需进程组隔离
+        // iOS SDK 上 posix_spawnattr_t()/posix_spawn_file_actions_t() 默认构造器
+        // 不可用（missing argument for parameter #1）——用指针分配 + init 零填充
+        let attrPtr = UnsafeMutablePointer<posix_spawnattr_t>.allocate(capacity: 1)
+        defer { attrPtr.deallocate() }
+        posix_spawnattr_init(attrPtr)
 
-        var actionsMut = posix_spawn_file_actions_t()
-        posix_spawn_file_actions_init(&actionsMut)
-        defer { posix_spawn_file_actions_destroy(&actionsMut) }
+        let actionsPtr = UnsafeMutablePointer<posix_spawn_file_actions_t>.allocate(capacity: 1)
+        posix_spawn_file_actions_init(actionsPtr)
+        defer {
+            posix_spawn_file_actions_destroy(actionsPtr)
+            actionsPtr.deallocate()
+        }
 
         let logFD = open(logFile.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
         guard logFD >= 0 else {
@@ -134,9 +137,9 @@ final class BinaryModuleRunner: ObservableObject {
         }
         defer { close(logFD) }
 
-        posix_spawn_file_actions_adddup2(&actionsMut, logFD, 1)
-        posix_spawn_file_actions_adddup2(&actionsMut, logFD, 2)
-        posix_spawn_file_actions_addopen(&actionsMut, 0, "/dev/null", O_RDONLY, mode_t(0))
+        posix_spawn_file_actions_adddup2(actionsPtr, logFD, 1)
+        posix_spawn_file_actions_adddup2(actionsPtr, logFD, 2)
+        posix_spawn_file_actions_addopen(actionsPtr, 0, "/dev/null", O_RDONLY, mode_t(0))
 
         // chdir 需要 SPAWN_SETPGROUP 之外的动作：posix_spawn 无原生 chdir，
         // 用 args 里的相对路径（alist --data data 相对模块目录），进程 cwd 继承宿主。
@@ -150,7 +153,7 @@ final class BinaryModuleRunner: ObservableObject {
         argv.append(nil)
 
         // 工作目录：把相对路径参数替换为模块目录绝对路径
-        let rc = posix_spawn(&pid, execURL.path, &actionsMut, &attr, &argv, environ)
+        let rc = posix_spawn(&pid, execURL.path, actionsPtr, attrPtr, &argv, environ)
         for p in argv where p != nil { free(p) }
 
         guard rc == 0 else {
