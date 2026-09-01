@@ -511,14 +511,14 @@ final class ProcessManagerViewModel: ObservableObject {
     /// v0.3.38：内存查询完全异步——独立 Task，绝不阻塞进程列表
     private func fetchMemoryAsync() {
         Task.detached(priority: .utility) { [weak self] in
-            guard let self = self else { return }
+            guard let vm = self else { return }
             let memMap = (try? ProcessManagerService.shared.fetchMemoryUsage()) ?? [:]
             await MainActor.run {
-                guard let self = self else { return }
-                guard !self.processes.isEmpty else { return }
-                for i in self.processes.indices {
-                    if let mem = memMap[Int32(self.processes[i].pid)] {
-                        self.processes[i].memoryBytes = Int64(mem)
+                guard let vm = vm else { return }
+                guard !vm.processes.isEmpty else { return }
+                for i in vm.processes.indices {
+                    if let mem = memMap[Int32(vm.processes[i].pid)] {
+                        vm.processes[i].memoryBytes = Int64(mem)
                     }
                 }
             }

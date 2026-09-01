@@ -96,7 +96,7 @@ struct DeviceControlView: View {
             } header: {
                 Text("重启 SpringBoard")
             } footer: {
-                Text("两种方式都会让桌面（主屏）重启；已打开的 App 进程不受影响。")
+                Text("重启 SpringBoard 方式。")
             }
 
             Section {
@@ -105,7 +105,7 @@ struct DeviceControlView: View {
             } header: {
                 Text("电源管理")
             } footer: {
-                Text("需要配对文件 + LocalDevVPN 隧道；与「进程管理 / 虚拟定位」同一套通道。")
+                Text("需要配对文件 + LocalDevVPN 隧道。")
             }
 
             Section {
