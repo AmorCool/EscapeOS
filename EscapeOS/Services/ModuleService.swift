@@ -422,14 +422,30 @@ final class ModuleService {
         }
     }
 
-    // MARK: 启用 / 禁用（.disabled 标记文件，不污染 manifest）
+    // MARK: 启用 / 禁用（.disabled 标记文件；内置原地模块存 UserDefaults——bundle 只读）
+
+    private static let disabledInPlaceKey = "Module.disabled.inplace"
+
+    private var disabledInPlace: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: Self.disabledInPlaceKey) ?? [])
+    }
 
     func isEnabled(id: String) -> Bool {
+        if inPlaceBundled[id] != nil {
+            // bundle 只读：禁用状态存 UserDefaults（修复禁用后重启自动恢复启用的 bug）
+            return !disabledInPlace.contains(id)
+        }
         let marker = modulesRoot.appendingPathComponent(id).appendingPathComponent(".disabled")
         return !FileManager.default.fileExists(atPath: marker.path)
     }
 
     func setEnabled(id: String, _ enabled: Bool) {
+        if inPlaceBundled[id] != nil {
+            var s = disabledInPlace
+            if enabled { s.remove(id) } else { s.insert(id) }
+            UserDefaults.standard.set(Array(s), forKey: Self.disabledInPlaceKey)
+            return
+        }
         let marker = modulesRoot.appendingPathComponent(id).appendingPathComponent(".disabled")
         if enabled {
             try? FileManager.default.removeItem(at: marker)

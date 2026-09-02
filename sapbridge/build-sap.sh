@@ -31,7 +31,7 @@ GO="${GO:-go}"
 
 mkdir -p "$SAP_OUT"
 
-echo "==> [1/4] Preparing Unicorn $UNICORN_TAG source"
+echo "==> [1/5] Preparing Unicorn $UNICORN_TAG source"
 # 产物已存在（跨 run artifact 缓存命中）时连源码克隆都跳过——克隆仅编译需要。
 if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then
   if [ ! -d "$UNICORN_SRC/.git" ]; then
@@ -46,7 +46,7 @@ if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then
   # 明确报错引导 StikDebug），避免 TCG 在无 JIT 进程里写可执行内存直接崩。
 fi
 
-echo "==> [2/4] Building libunicorn.a for ios-arm64 (static, x86-64 guest)"
+echo "==> [2/5] Building libunicorn.a for ios-arm64 (static, x86-64 guest)"
 if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then
   mkdir -p "$UNICORN_BUILD"
   cmake -S "$UNICORN_SRC" -B "$UNICORN_BUILD" \
@@ -70,12 +70,30 @@ UNICORN_INC="$UNICORN_SRC/include"
 [ -f "$UNICORN_INC/unicorn/unicorn.h" ] || { echo "error: unicorn headers missing at $UNICORN_INC"; exit 1; }
 cp "$UNICORN_LIB" "$SAP_OUT/libunicorn.a"
 
-echo "==> [3/4] Resolving Go module graph"
+echo "==> [3/5] Preparing OpenList source (pinned ${OPENLIST_VER:-v4.2.6}, 方案 A 单 runtime)"
+# OpenList 与 Sap* 合并为单一 Go runtime（v0.3.73）：dlopen 第二 runtime 初始化即崩
+# （run.log 实锤），改为静态链接进宿主。源码 pin 到 tag 保证可重现，前端 dist 内嵌。
+OPENLIST_SRC="${OPENLIST_SRC:-$SCRIPT_DIR/.openlist-src}"
+OPENLIST_VER="${OPENLIST_VER:-v4.2.6}"
+OPENLIST_REPO="${OPENLIST_REPO:-https://github.com/OpenListTeam/OpenList.git}"
+if [ ! -f "$OPENLIST_SRC/public/dist/index.html" ]; then
+  rm -rf "$OPENLIST_SRC"
+  git clone --depth 1 --branch "$OPENLIST_VER" "$OPENLIST_REPO" "$OPENLIST_SRC"
+  mkdir -p "$OPENLIST_SRC/public/dist"
+  curl -fsSL "https://github.com/OpenListTeam/OpenList-Frontend/releases/download/${OPENLIST_VER}/openlist-frontend-dist-${OPENLIST_VER}.tar.gz" \
+    | tar -xz -C "$OPENLIST_SRC/public/dist"
+fi
+[ -f "$OPENLIST_SRC/public/dist/index.html" ] || { echo "error: openlist frontend dist missing"; exit 1; }
+# replace 指向本地源码（嵌入 dist 必须可控）；go.sum 由下方 tidy 解析
+"$GO" mod edit -require=github.com/OpenListTeam/OpenList/v4@"$OPENLIST_VER"
+"$GO" mod edit -replace=github.com/OpenListTeam/OpenList/v4="$OPENLIST_SRC"
+
+echo "==> [4/5] Resolving Go module graph"
 export GOPROXY="${GOPROXY:-https://proxy.golang.org,direct}"
 export GOFLAGS="${GOFLAGS:-}"
 "$GO" mod tidy
 
-echo "==> [4/4] Building libsap.a (c-archive, ios/arm64)"
+echo "==> [5/5] Building libsap.a (c-archive, ios/arm64, Sap* + OpenListMain)"
 # Go's GOOS=ios CGO pipeline auto-configures clang/SDK; we only add the Unicorn
 # include and link paths. CGO_LDFLAGS carries -lunicorn for the final link.
 #
@@ -87,7 +105,9 @@ CGO_ENABLED=1 \
 GOOS=ios GOARCH=arm64 \
 CGO_CFLAGS="-I$UNICORN_INC" \
 CGO_LDFLAGS="-L$UNICORN_BUILD -lunicorn" \
-"$GO" build -buildmode=c-archive -o "$SAP_OUT/sap.a" .
+"$GO" build -buildmode=c-archive \
+  -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=${OPENLIST_VER#v}' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$OPENLIST_VER'" \
+  -o "$SAP_OUT/sap.a" .
 
 [ -f "$SAP_OUT/sap.a" ] || { echo "error: sap.a not produced"; exit 1; }
 [ -f "$SAP_OUT/sap.h" ] || { echo "error: sap.h not produced"; exit 1; }

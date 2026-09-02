@@ -58,7 +58,7 @@ jobs:
         # 需要 go >= 1.25（与 ipatool 上游 go.mod 对齐）。
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.27.x'
 
       - name: Install build tools (cmake, ninja)
         # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）；
@@ -273,18 +273,9 @@ jobs:
           mkdir -p Resources/BundledModules
           cp -R _module-esc/modules/* Resources/BundledModules/
           rm -rf _module-esc
-          # OpenList 二进制模块：仓库不含二进制（bin/.gitkeep），真 dylib 由 build-alist.yml
-          # 产出并发布到 module-esc edge Release——下载注入，随 IPA 内置分发。
-          # 下载失败不阻塞 IPA 发布（内置模块降级为无二进制，用户可从 edge 手动导入）
-          if gh release download edge -R AmorCool/module-esc \
-              -p "com.escapeos.alist-*.zip" --clobber -O /tmp/alist-module.zip; then
-            unzip -o /tmp/alist-module.zip -d /tmp/alist-module
-            cp -R /tmp/alist-module/modules/com.escapeos.alist/* Resources/BundledModules/com.escapeos.alist/
-            echo "=== OpenList dylib 注入结果 ==="
-            ls -la Resources/BundledModules/com.escapeos.alist/bin/
-          else
-            echo "⚠️ alist dylib 下载失败——本次 IPA 内置模块无二进制（可从 edge 手动导入）"
-          fi
+          # OpenList（v0.3.73 方案 A）：不再需要 bin/ 下的 dylib——OpenListMain 已与
+          # Sap* 合并为单一 Go runtime 静态链接进宿主（build-sap.sh，见 project.yml
+          # preBuildScripts）。BundledModules 只带 module.json（UI 卡片）+ signature.sig。
           echo "=== BundledModules ==="
           find Resources/BundledModules -name module.json
           ls -la Resources/BundledModules/com.escapeos.alist/bin/ || true
