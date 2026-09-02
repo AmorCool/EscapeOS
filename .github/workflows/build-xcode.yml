@@ -36,6 +36,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Restore file mtimes (make DerivedData cache usable)
+        # v0.3.85 关键修复：CI 每轮都重新 checkout，所有源文件 mtime = 当下 →
+        # 比缓存里的编译产物还新，Xcode 判定全部过期，DerivedData 缓存等于失效。
+        # 这里把每个文件的 mtime 设成「最后一次修改它的提交时间」：
+        # 未改动的文件 → mtime 早于缓存产物 → 跳过重编；本轮改过的文件 → 提交时间最新 → 正常重编。
+        run: |
+          pip install git-restore-mtime 2>/dev/null || true
+          if command -v git-restore-mtime >/dev/null; then
+            git restore-mtime
+            echo "=== mtime 已按提交历史恢复 ==="
+          else
+            echo "?? git-restore-mtime 不可用，回退到内置实现"
+            git log --pretty=format:'%ct' --name-only --no-renames | awk '
+              /^[0-9]+$/ { t=$1; next }
+              NF>0 && t && !seen[$0]++ { print t "	" $0 }
+            ' | while IFS=$'	' read -r ts f; do
+              [ -e "$f" ] && touch -d "@$ts" "$f" 2>/dev/null || true
+            done
+            echo "=== mtime 已按提交历史恢复（内置实现）==="
+          fi
+
       - name: Select Xcode 26 (iOS 26 SDK)
         # 与 build.yml 一致：用 Xcode 26 SDK 链接（Liquid Glass 等 iOS 26 特性）。
         # 部署目标仍为 18.0（Info.plist / TARGET 约束），iOS 18 设备可装。
