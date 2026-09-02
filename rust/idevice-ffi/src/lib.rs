@@ -1,3 +1,4 @@
+pub mod lua_host;
 // Jackson Coxson
 
 #[cfg(feature = "tunnel_tcp_stack")]

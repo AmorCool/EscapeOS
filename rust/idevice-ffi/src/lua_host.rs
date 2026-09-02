@@ -13,7 +13,7 @@
 //! （fs/http/module 生命周期）为后续里程碑。
 
 use mlua::{Lua, Value};
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::io::Write;
 

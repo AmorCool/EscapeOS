@@ -63,8 +63,6 @@ settings:
       - "-L$(SRCROOT)/sapbridge/build"
       - "-lsap"
       - "-lunicorn"
-      # Lua 模块宿主（v0.3.95：Rust+mlua 静态库，由 build-xcode.yml 构建后置于 sapbridge/build/）
-      - "-llua_host"
     SWIFT_OBJC_BRIDGING_HEADER: "EscapeOS/Engine/EscapeOS-Bridging-Header.h"
 
 packages:

@@ -131,7 +131,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/idevice-ffi/target
-            rust/lua-host/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('rust/idevice-ffi/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
@@ -205,6 +204,9 @@ jobs:
             echo "sccache unavailable — falling back to plain cargo"
             unset RUSTC_WRAPPER
           fi
+          export SDKROOT="$(xcrun -sdk iphoneos -show-sdk-path)"
+          export CC_aarch64_apple_ios="$(xcrun -sdk iphoneos -f clang)"
+          export CXX_aarch64_apple_ios="$(xcrun -sdk iphoneos -f clang++)"
           cd rust/idevice-ffi
           mkdir -p .cargo
           cat > .cargo/config.toml <<'CFG'
@@ -346,25 +348,6 @@ jobs:
           echo "=== BundledModules ==="
           find Resources/BundledModules -name module.json
           ls -la Resources/BundledModules/com.escapeos.alist/bin/ || true
-
-      - name: Build Lua module host (Rust + mlua, aarch64-apple-ios)
-        # v0.3.95：Rust+mlua 解释器静态库，编进 App（跟随签名，模块=纯 Lua 脚本无签名问题）。
-        # mlua vendored 要编 Lua C 源码 → cc 需指向 iOS SDK clang。
-        run: |
-          set -euo pipefail
-          source "$HOME/.cargo/env"
-          rustup target add aarch64-apple-ios 2>/dev/null || true
-          export SDKROOT="$(xcrun -sdk iphoneos -show-sdk-path)"
-          export CC_aarch64_apple_ios="$(xcrun -sdk iphoneos -f clang)"
-          export CXX_aarch64_apple_ios="$(xcrun -sdk iphoneos -f clang++)"
-          export RUSTC_WRAPPER="$(command -v sccache || true)"
-          if [ -z "$RUSTC_WRAPPER" ]; then unset RUSTC_WRAPPER; fi
-          cargo build --release --target aarch64-apple-ios --manifest-path rust/lua-host/Cargo.toml
-          mkdir -p sapbridge/build   # build-sap.sh 尚未运行，目录需先建
-          cp "rust/lua-host/target/aarch64-apple-ios/release/liblua_host.a" sapbridge/build/liblua_host.a
-          cp rust/lua-host/rust-lua-host.h sapbridge/build/rust-lua-host.h
-          ls -la sapbridge/build/liblua_host.a
-          echo "=== Lua host built ==="
 
       - name: Generate Xcode project (xcodegen)
         run: |
