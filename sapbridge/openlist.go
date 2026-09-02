@@ -47,9 +47,10 @@ func stepMark(dir, name, text string) {
 // 仅 MkdirAll + WriteFile（对照：OpenListProbe 已验证可行）
 func OpenListStep1(dirC *C.char) C.int {
 	dir := C.GoString(dirC)
+	// 注意：os.WriteFile 只返回 error（不是 (int, error)，那是 f.Write 的签名）
 	stepMark(dir, "step1.begin", "step1 begin dir="+dir)
-	n, err := os.WriteFile(filepath.Join(dir, "step1.test"), []byte("ok"), 0644)
-	stepMark(dir, "step1.done", fmt.Sprintf("step1 done n=%d err=%v", n, err))
+	err := os.WriteFile(filepath.Join(dir, "step1.test"), []byte("ok"), 0644)
+	stepMark(dir, "step1.done", fmt.Sprintf("step1 done err=%v", err))
 	return C.int(1)
 }
 
