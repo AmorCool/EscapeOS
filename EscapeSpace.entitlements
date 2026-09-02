@@ -4,5 +4,9 @@
 <dict>
 	<key>get-task-allow</key>
 	<true/>
+	<key>com.apple.wifi.manager-access</key>
+	<true/>
+	<key>com.apple.wifi.join-any</key>
+	<true/>
 </dict>
 </plist>
