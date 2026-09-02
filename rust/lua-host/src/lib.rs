@@ -29,7 +29,7 @@ fn write_out(path: &str, text: &str) {
 
 fn run(code: &str, out_path: &str, eval_mode: bool) -> c_int {
     let result = (|| -> Result<String, String> {
-        let lua = Lua::new().map_err(|e| format!("LUA_INIT_ERR {}", e))?;
+        let lua = Lua::new();
         if eval_mode {
             match lua.load(code).eval::<Value>() {
                 Ok(v) => Ok(format!("OK {}", format_value(&v))),
