@@ -223,7 +223,9 @@ func openlistRun(dataDir string) {
 	}()
 
 	trace("enter")
-	os.Args = []string{"openlist", "server", "--data", dataDir}
+	// --debug/--log-std：v0.3.84 诊断——让 OpenList 把 bootstrap 每一步日志打到
+	// stderr（宿主已把 fd 2 重定向到 <dataDir>/go_stderr.log），从而看到它死在哪一步。
+	os.Args = []string{"openlist", "server", "--data", dataDir, "--debug", "--log-std"}
 	trace("args-set")
 
 	// 不调 cmd.Execute()——它在出错时 os.Exit(1) 会杀宿主。
