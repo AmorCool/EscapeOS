@@ -35,6 +35,72 @@ var (
 	openlistStarted bool
 )
 
+// v0.3.79 二分诊断：逐步逼近崩溃点。每步先写 <dir>/stepN.begin，完成后写 stepN.done。
+// 用法（SSH）：step1 → step2 → step3 → step4，哪一步让 App 崩，凶手就在该步新增的语句里。
+
+func stepMark(dir, name, text string) {
+	_ = os.MkdirAll(dir, 0755)
+	_ = os.WriteFile(filepath.Join(dir, name), []byte(text+"\n"), 0644)
+}
+
+//export OpenListStep1
+// 仅 MkdirAll + WriteFile（对照：OpenListProbe 已验证可行）
+func OpenListStep1(dirC *C.char) C.int {
+	dir := C.GoString(dirC)
+	stepMark(dir, "step1.begin", "step1 begin dir="+dir)
+	n, err := os.WriteFile(filepath.Join(dir, "step1.test"), []byte("ok"), 0644)
+	stepMark(dir, "step1.done", fmt.Sprintf("step1 done n=%d err=%v", n, err))
+	return C.int(1)
+}
+
+//export OpenListStep2
+// step1 + 打开 stderr.log（OpenFile）
+func OpenListStep2(dirC *C.char) C.int {
+	dir := C.GoString(dirC)
+	stepMark(dir, "step2.begin", "step2 begin")
+	_ = os.MkdirAll(dir, 0755)
+	f, err := os.OpenFile(filepath.Join(dir, "stderr.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	stepMark(dir, "step2.done", fmt.Sprintf("step2 done open err=%v", err))
+	if err == nil {
+		_ = f.Close()
+	}
+	return C.int(2)
+}
+
+//export OpenListStep3
+// step2 + 替换 os.Stderr + log.SetOutput + Fprintln（不启服务）
+func OpenListStep3(dirC *C.char) C.int {
+	dir := C.GoString(dirC)
+	stepMark(dir, "step3.begin", "step3 begin")
+	_ = os.MkdirAll(dir, 0755)
+	if f, err := os.OpenFile(filepath.Join(dir, "stderr.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+		os.Stderr = f
+		log.SetOutput(f)
+		log.SetFlags(log.LstdFlags)
+	}
+	fmt.Fprintln(os.Stderr, "[step3] stderr redirected")
+	stepMark(dir, "step3.done", "step3 done")
+	return C.int(3)
+}
+
+//export OpenListStep4
+// step3 + 真正进入 cmd.RootCmd.Execute（服务启动，会长期阻塞）
+func OpenListStep4(dirC *C.char) C.int {
+	dir := C.GoString(dirC)
+	stepMark(dir, "step4.begin", "step4 begin")
+	_ = os.MkdirAll(dir, 0755)
+	if f, err := os.OpenFile(filepath.Join(dir, "stderr.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+		os.Stderr = f
+		log.SetOutput(f)
+	}
+	fmt.Fprintln(os.Stderr, "[step4] entering RootCmd.Execute")
+	stepMark(dir, "step4.pre-execute", "step4 about to Execute")
+	os.Args = []string{"openlist", "server", "--data", dir}
+	err := cmd.RootCmd.Execute()
+	stepMark(dir, "step4.done", fmt.Sprintf("step4 Execute returned err=%v", err))
+	return C.int(4)
+}
+
 //export OpenListProbe
 // OpenListProbe 最小动作：确认进程内 Go 可写文件 + runtime 正常（不启服务）。
 // 数据目录同样由参数传入（原因同 OpenListMain：Go 的 env 快照）。

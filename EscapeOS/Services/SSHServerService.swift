@@ -338,6 +338,13 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 // v0.3.76：Go 逐步打点（enter/args-set/error/panic）
                 ("data/trace.txt", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("trace.txt")),
                 ("data/probe.txt", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("probe.txt")),
+                // v0.3.79 二分诊断标记
+                ("data/step1.done", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("step1.done")),
+                ("data/step2.done", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("step2.done")),
+                ("data/step3.done", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("step3.done")),
+                ("data/step4.begin", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("step4.begin")),
+                ("data/step4.pre-execute", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("step4.pre-execute")),
+                ("data/step4.done", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("step4.done")),
             ]
             for (label, path) in sources {
                 guard let s = try? String(contentsOf: path, encoding: .utf8) else { continue }
@@ -444,6 +451,30 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             结果: \(box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）")
             下一步: runlog 看 data/trace.txt 的打点（enter/args-set/error/panic）
             """
+        case "step1", "step2", "step3", "step4":
+            // v0.3.79 二分诊断：逐步逼近 OpenListMain 的崩溃点。
+            // 每步先写 stepN.begin、完成后写 stepN.done；哪一步让 App 崩，凶手就在该步新增语句里。
+            let dir = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let step = cmd
+            let blocking = (step == "step4")
+            let box = GoCallBox { () -> Int32 in
+                dir.path.withCString { cstr in
+                    let p = UnsafeMutablePointer(mutating: cstr)
+                    switch step {
+                    case "step1": return OpenListStep1(p)
+                    case "step2": return OpenListStep2(p)
+                    case "step3": return OpenListStep3(p)
+                    default:      return OpenListStep4(p)
+                    }
+                }
+            }
+            box.run(timeout: blocking ? 4 : 3, keepAlive: blocking)
+            return """
+            \(step): 已调用（数据目录以参数传入）
+            结果: \(box.value.map { String($0) } ?? (blocking ? "（阻塞中＝服务在跑，属正常）" : "（超时/未返回）"))
+            下一步: runlog 看 \(step).begin / \(step).done 标记
+            """
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
         case "ping":
@@ -467,6 +498,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
+      step1..step4    OpenListMain 崩溃点二分诊断（逐步逼近）
       gotest          手动触发一次 Go runtime 初始化（诊断）
       probe           进程内 Go 写文件自检（写 <data>/probe.txt）
       startopenlist   远程调用 OpenListMain（配合 trace 定位）
