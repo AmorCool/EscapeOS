@@ -203,7 +203,6 @@ final class ModuleService {
             }
             UserDefaults.standard.set(installVersion, forKey: Self.hostInstallVersionKey)
         }
-        UserDefaults.standard.removeObject(forKey: Self.hostInstallDateKey) // 旧 mtime 锚点清理
 
         guard let bundledURL = Bundle.main.url(forResource: "BundledModules", withExtension: nil) else { return }
         guard let ids = try? FileManager.default.contentsOfDirectory(atPath: bundledURL.path) else { return }
