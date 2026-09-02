@@ -335,9 +335,6 @@ jobs:
           # 模块 .zip 的构建/发布在 module-esc 仓库自己的 CI（edge Release）。
           git clone --depth 1 https://github.com/AmorCool/module-esc.git _module-esc
           mkdir -p Resources/BundledModules
-          # v0.3.90 可拆卸化：OpenList 不再内置（App 瘦身），只同步两个原生 shell 模块；
-          # OpenList 模块 zip 由 module-esc edge 分发，用户经模块管理按需导入
-          rm -rf _module-esc/modules/com.escapeos.alist
           cp -R _module-esc/modules/* Resources/BundledModules/
           rm -rf _module-esc
           # OpenList（v0.3.73 方案 A）：不再需要 bin/ 下的 dylib——OpenListMain 已与

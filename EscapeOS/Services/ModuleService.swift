@@ -385,8 +385,28 @@ final class ModuleService {
         // 安装：Modules/<id>/（同 id 覆盖升级）
         let dest = modulesRoot.appendingPathComponent(module.id, isDirectory: true)
         if FileManager.default.fileExists(atPath: dest.path) {
+            // ⚠️ v0.3.91 修复：升级导入保留 data/（OpenList 的数据库/配置/日志都在
+            // 模块目录的 data/ 里，直接 removeItem 会连用户数据一起删——v0.3.90 实测清空）。
+            let dataDir = dest.appendingPathComponent("data", isDirectory: true)
+            var preserved: URL?
+            if FileManager.default.fileExists(atPath: dataDir.path) {
+                let tmp = modulesRoot.appendingPathComponent(
+                    ".preserve-\(module.id)-\(UUID().uuidString)", isDirectory: true)
+                if (try? FileManager.default.moveItem(at: dataDir, to: tmp)) != nil {
+                    preserved = tmp
+                    log?("- 检测到旧版本，覆盖升级（用户数据 data/ 已暂存）")
+                }
+            }
             try FileManager.default.removeItem(at: dest)
-            log?("- 检测到旧版本，覆盖升级")
+            if preserved == nil { log?("- 检测到旧版本，覆盖升级") }
+            // 还原用户数据（zip 打包时已排除 data/，故 copyItem 后不会有同名目录）
+            if let preserved {
+                if FileManager.default.fileExists(atPath: dataDir.path) {
+                    try? FileManager.default.removeItem(at: dataDir)   // zip 自带 data 时的兜底
+                }
+                try? FileManager.default.moveItem(at: preserved, to: dataDir)
+                log?("- 用户数据 data/ 已还原 ✓")
+            }
         }
         guard FileManager.default.fileExists(atPath: extractedRoot.appendingPathComponent("module.json").path) else {
             throw ModuleError.missingManifest("zip 内缺少合法的 module.json")

@@ -78,12 +78,33 @@ UNICORN_INC="$UNICORN_SRC/include"
 [ -f "$UNICORN_INC/unicorn/unicorn.h" ] || { echo "error: unicorn headers missing at $UNICORN_INC"; exit 1; }
 cp "$UNICORN_LIB" "$SAP_OUT/libunicorn.a"
 
-echo "==> [3/5] OpenList 已退出 App 构建（v0.3.90 可拆卸化）——跳过源码准备与标记注入"
+echo "==> [3/5] Preparing OpenList source (pinned ${OPENLIST_VER:-v4.2.6}, 方案 A 单 runtime)"
+# OpenList 与 Sap* 合并为单一 Go runtime（v0.3.73）：dlopen 第二 runtime 初始化即崩
+# （run.log 实锤），改为静态链接进宿主。源码 pin 到 tag 保证可重现，前端 dist 内嵌。
+OPENLIST_SRC="${OPENLIST_SRC:-$SCRIPT_DIR/.openlist-src}"
+OPENLIST_VER="${OPENLIST_VER:-v4.2.6}"
+OPENLIST_REPO="${OPENLIST_REPO:-https://github.com/OpenListTeam/OpenList.git}"
+if [ ! -f "$OPENLIST_SRC/public/dist/index.html" ]; then
+  rm -rf "$OPENLIST_SRC"
+  git clone --depth 1 --branch "$OPENLIST_VER" "$OPENLIST_REPO" "$OPENLIST_SRC"
+  mkdir -p "$OPENLIST_SRC/public/dist"
+  curl -fsSL "https://github.com/OpenListTeam/OpenList-Frontend/releases/download/${OPENLIST_VER}/openlist-frontend-dist-${OPENLIST_VER}.tar.gz" \
+    | tar -xz -C "$OPENLIST_SRC/public/dist"
+fi
+[ -f "$OPENLIST_SRC/public/dist/index.html" ] || { echo "error: openlist frontend dist missing"; exit 1; }
+
+echo "==> [3.5/5] Injecting bootstrap stage markers (v0.3.86 崩溃定位)"
+# 给 OpenList 源码的 bootstrap/db 各函数注入 begin/done 标记（写到模块数据目录，
+# SSH `mlog` 可读），崩溃后对照标记存在性即可函数级定位。幂等：已注入则跳过。
+python3 "$SCRIPT_DIR/patch_stages.py" "$OPENLIST_SRC" || echo "?? 标记注入失败（继续未打补丁构建）"
+"$(command -v gofmt || echo gofmt)" -w "$OPENLIST_SRC/internal/bootstrap" "$OPENLIST_SRC/internal/db" 2>/dev/null || true
+# replace 指向本地源码（嵌入 dist 必须可控）；go.sum 由下方 tidy 解析
+"$GO" mod edit -require=github.com/OpenListTeam/OpenList/v4@"$OPENLIST_VER"
+"$GO" mod edit -replace=github.com/OpenListTeam/OpenList/v4="$OPENLIST_SRC"
 
 echo "==> [4/5] Resolving Go module graph"
 export GOPROXY="${GOPROXY:-https://proxy.golang.org,direct}"
 export GOFLAGS="${GOFLAGS:-}"
-"$GO" mod edit -droprequire=github.com/OpenListTeam/OpenList/v4 -dropreplace=github.com/OpenListTeam/OpenList/v4 2>/dev/null || true
 "$GO" mod tidy
 
 echo "==> [5/5] Building libsap.a (c-archive, ios/arm64, Sap* + OpenListMain)"
@@ -99,7 +120,8 @@ GOOS=ios GOARCH=arm64 \
 CGO_CFLAGS="-I$UNICORN_INC" \
 CGO_LDFLAGS="-L$UNICORN_BUILD -lunicorn" \
 "$GO" build -buildmode=c-archive \
-  -ldflags="-s -w" \
+  -tags "sqlite_cgo_compat" \
+  -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=${OPENLIST_VER#v}' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$OPENLIST_VER'" \
   -o "$SAP_OUT/sap.a" .
 
 [ -f "$SAP_OUT/sap.a" ] || { echo "error: sap.a not produced"; exit 1; }

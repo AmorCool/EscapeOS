@@ -169,7 +169,30 @@ final class BinaryModuleRunner: ObservableObject {
         var dylibName: String?
         // ① 可拆卸 dylib 模块（zip 安装，bin/*.dylib）
         if let dylibURL = Self.findDylib(moduleDir: moduleDir) {
-            if let handle = dlopen(dylibURL.path, RTLD_NOW | RTLD_GLOBAL) {
+            var handle: UnsafeMutableRawPointer?
+            if let h = dlopen(dylibURL.path, RTLD_NOW | RTLD_GLOBAL) {
+                handle = h
+            } else {
+                // v0.3.91：签名失效（传输/导入后内容与签名失配）→ 设备端 ad-hoc 重签名 → 重试。
+                // ad-hoc 无身份，仅重建内容完整性；能否加载取决于 LC 环境的 AMFI 放行
+                // （旧 dylib 实证 ad-hoc 可加载）。失败原因写入 run.log 便于诊断。
+                let err0 = dlerror().map { String(cString: $0) } ?? "未知错误"
+                appendLog(logFile, "[host] dlopen 失败（\(err0)）→ 尝试设备端 ad-hoc 重签名")
+                do {
+                    try MachoReSign.refreshCodeSignature(at: dylibURL)
+                    appendLog(logFile, "[host] 重签名完成，重试 dlopen")
+                    if let h = dlopen(dylibURL.path, RTLD_NOW | RTLD_GLOBAL) {
+                        handle = h
+                        appendLog(logFile, "[host] 重签名后 dlopen 成功 ✓")
+                    } else {
+                        let err1 = dlerror().map { String(cString: $0) } ?? "未知错误"
+                        appendLog(logFile, "[host] 重签名后仍失败: \(err1)")
+                    }
+                } catch {
+                    appendLog(logFile, "[host] 重签名失败: \(error.localizedDescription)")
+                }
+            }
+            if let handle {
                 sym = dlsym(handle, "OpenListMain")
                 if sym != nil {
                     dylibName = dylibURL.lastPathComponent
@@ -178,9 +201,6 @@ final class BinaryModuleRunner: ObservableObject {
                 } else {
                     appendLog(logFile, "[host] dylib 缺少 OpenListMain 导出，回退内置符号")
                 }
-            } else {
-                let err = dlerror().map { String(cString: $0) } ?? "未知错误"
-                appendLog(logFile, "[host] dlopen 失败: \(err) → 回退内置符号")
             }
         }
         // ② 内置静态符号（openlist_embed 构建形态）；RTLD_DEFAULT = -2
