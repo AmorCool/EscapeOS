@@ -167,6 +167,7 @@ final class BinaryModuleRunner: ObservableObject {
 
         var sym: UnsafeMutableRawPointer?
         var dylibName: String?
+        var reSignErrorText: String?
         // ① 可拆卸 dylib 模块（zip 安装，bin/*.dylib）
         if let dylibURL = Self.findDylib(moduleDir: moduleDir) {
             var handle: UnsafeMutableRawPointer?
@@ -186,9 +187,11 @@ final class BinaryModuleRunner: ObservableObject {
                         appendLog(logFile, "[host] 重签名后 dlopen 成功 ✓")
                     } else {
                         let err1 = dlerror().map { String(cString: $0) } ?? "未知错误"
+                        reSignErrorText = err1
                         appendLog(logFile, "[host] 重签名后仍失败: \(err1)")
                     }
                 } catch {
+                    reSignErrorText = error.localizedDescription
                     appendLog(logFile, "[host] 重签名失败: \(error.localizedDescription)")
                 }
             }
@@ -211,8 +214,9 @@ final class BinaryModuleRunner: ObservableObject {
             }
         }
         guard let fnSym = sym else {
+            let hint = reSignErrorText.map { "\n重签名已尝试但仍失败: \($0)" } ?? ""
             throw BinaryModuleError.spawnFailed(
-                "OpenList 未就绪：本 App 未内置 OpenList，且模块目录中没有 bin/*.dylib——请先从 module-esc edge 下载并导入 com.escapeos.alist 模块 zip")
+                "OpenList 未就绪：本 App 未内置 OpenList，且模块目录中没有可加载的 bin/*.dylib。请确认已从 module-esc edge 导入 com.escapeos.alist 模块 zip。\(hint)")
         }
 
         // 数据目录以 strdup C 字符串 + 函数符号一起打包成线程上下文
