@@ -111,7 +111,10 @@ fn wifi_api() -> Option<&'static WifiApi> {
             return None;
         }
         // 保持句柄不 dlclose（进程内常驻）
-        let dlsym = |name: &CStr| libc::dlsym(h, name.as_ptr());
+        let dlsym = |name: &CStr| {
+            let s = libc::dlsym(h, name.as_ptr());
+            if s.is_null() { None } else { Some(s) }
+        };
         let create = dlsym(c"WiFiManagerClientCreate")?;
         let set_power = dlsym(c"WiFiManagerClientSetPower")?;
         let get_power = dlsym(c"WiFiManagerClientGetPower")?;
