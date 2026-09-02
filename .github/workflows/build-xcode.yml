@@ -272,7 +272,10 @@ jobs:
         run: |
           set -euo pipefail
           HIT=false
-          CUR_HASH="$(cat sapbridge/*.go sapbridge/go.mod sapbridge/go.sum 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+          # 注意：sapbridge 没有 go.sum（每次 tidy 现场生成），用 find 避免 cat 缺失文件
+          # 在 set -euo pipefail 下直接把步骤打挂（v0.3.77 首次运行实锤）
+          CUR_HASH="$(find sapbridge -maxdepth 1 -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+            -exec shasum -a 256 {} + 2>/dev/null | sort | shasum -a 256 | cut -d' ' -f1)"
           ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-sap-bridge-v1&per_page=100" \
             --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
           if [ -n "${ART_ID:-}" ]; then
@@ -372,8 +375,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cat sapbridge/*.go sapbridge/go.mod sapbridge/go.sum 2>/dev/null \
-            | shasum -a 256 | cut -d' ' -f1 > sapbridge/sap-hash.txt
+          # 同 Restore：find 方式，避免 go.sum 缺失导致 pipefail 打挂步骤
+          find sapbridge -maxdepth 1 -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+            -exec shasum -a 256 {} + 2>/dev/null | sort | shasum -a 256 | cut -d' ' -f1 > sapbridge/sap-hash.txt
           if [ -d sapbridge/.openlist-src ]; then
             tar -czf sapbridge/openlist-src.tar.gz -C sapbridge .openlist-src
           fi
