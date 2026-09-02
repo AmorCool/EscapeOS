@@ -224,7 +224,9 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
     /// dylib 句柄缓存（SSH 诊断命令复用；故意不 dlclose——Go runtime 必须常驻）
-    nonisolated private static var cachedOpenListHandle: UnsafeMutableRawPointer?
+    /// nonisolated(unsafe)：@MainActor 类的存储属性不能直接 nonisolated；
+    /// 访问全部经由 handleLock 保护的存取器，实际无竞争。
+    nonisolated(unsafe) private static var cachedOpenListHandle: UnsafeMutableRawPointer?
     private static let handleLock = NSLock()
     nonisolated private static func cacheOpenListHandle(_ h: UnsafeMutableRawPointer) {
         handleLock.lock()
