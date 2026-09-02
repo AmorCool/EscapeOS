@@ -120,6 +120,7 @@ GOOS=ios GOARCH=arm64 \
 CGO_CFLAGS="-I$UNICORN_INC" \
 CGO_LDFLAGS="-L$UNICORN_BUILD -lunicorn" \
 "$GO" build -buildmode=c-archive \
+  -tags "sqlite_cgo_compat" \
   -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=${OPENLIST_VER#v}' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$OPENLIST_VER'" \
   -o "$SAP_OUT/sap.a" .
 
