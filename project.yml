@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.94"
-    CURRENT_PROJECT_VERSION: "394"
+    MARKETING_VERSION: "0.3.95"
+    CURRENT_PROJECT_VERSION: "395"
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     ENABLE_BITCODE: "NO"
@@ -63,6 +63,8 @@ settings:
       - "-L$(SRCROOT)/sapbridge/build"
       - "-lsap"
       - "-lunicorn"
+      # Lua 模块宿主（v0.3.95：Rust+mlua 静态库，由 build-xcode.yml 构建后置于 sapbridge/build/）
+      - "-llua_host"
     SWIFT_OBJC_BRIDGING_HEADER: "EscapeOS/Engine/EscapeOS-Bridging-Header.h"
 
 packages:

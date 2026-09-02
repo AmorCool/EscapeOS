@@ -557,6 +557,28 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             }
             let all = s.components(separatedBy: "\n").filter { !$0.isEmpty }
             return all.isEmpty ? "（空）" : all.suffix(min(max(n, 1), 400)).joined(separator: "\n")
+        case "luaeval", "luaexec":
+            // v0.3.95：Lua 模块宿主（Rust+mlua，编进 App）。luaeval=表达式求值，luaexec=语句块。
+            let code = String(raw.dropFirst(cmd.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !code.isEmpty else { return "用法: \(cmd) <lua 表达式/代码>" }
+            let outPath = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())
+                .appendingPathComponent("lua_out.txt")
+            try? FileManager.default.createDirectory(
+                at: outPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let isEval = (cmd == "luaeval")
+            let box = GoCallBox {
+                code.withCString { c in
+                    outPath.path.withCString { o in
+                        let cp = UnsafeMutablePointer(mutating: c)
+                        let op = UnsafeMutablePointer(mutating: o)
+                        return isEval ? lua_host_eval(cp, op) : lua_host_exec(cp, op)
+                    }
+                }
+            }
+            box.run(timeout: 10)
+            let ret = box.value.map { String($0) } ?? "超时"
+            let result = (try? String(contentsOf: outPath, encoding: .utf8)) ?? "（无输出）"
+            return "Lua 返回码: \(ret)\n结果: \(result)"
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
         case "ping":

@@ -32,6 +32,9 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // libsap.a / sap.h 由 sapbridge/build-sap.sh 在编译前生成，位于 sapbridge/build/。
 #include "sap.h"
 
+// Lua 模块宿主（v0.3.95：Rust+mlua 解释器，编进 App 跟随签名，模块=纯 Lua 脚本）
+#include "rust-lua-host.h"
+
 // 监督模式工具：通过私有 API 取已安装 App 图标（移植自 Lithium）
 @interface UIImage (EscapeOSSupervised)
 + (instancetype)_applicationIconImageForBundleIdentifier:(NSString *)bundleIdentifier
