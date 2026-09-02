@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -33,6 +34,24 @@ var (
 	openlistMu      sync.Mutex
 	openlistStarted bool
 )
+
+//export OpenListProbe
+// OpenListProbe 只做最小动作：确认进程内 Go 可写文件 + runtime 正常（不启服务）。
+// 写入 <OPENLIST_DATA>/probe.txt，返回写入字节数；失败返回 -1。
+func OpenListProbe() C.int {
+	defer func() { _ = recover() }()
+	dir := os.Getenv("OPENLIST_DATA")
+	if dir == "" {
+		dir = "./data"
+	}
+	_ = os.MkdirAll(dir, 0755)
+	body := fmt.Sprintf("probe ok\ndir=%s\npid=%d\ngoversion=%s\nnumcpu=%d\n",
+		dir, os.Getpid(), runtime.Version(), runtime.NumCPU())
+	if err := os.WriteFile(filepath.Join(dir, "probe.txt"), []byte(body), 0644); err != nil {
+		return C.int(-1)
+	}
+	return C.int(len(body))
+}
 
 //export GoSelfTest
 // GoSelfTest 只触发 Go runtime 初始化并返回固定值 42——诊断用：
@@ -78,24 +97,41 @@ func OpenListMain() C.int {
 	return 0
 }
 
-// openlistRun runs the server with panic containment. Never os.Exit.
+// openlistRun runs the server with panic containment and step tracing.
+// 每步写 <dataDir>/trace.txt（append）——v0.3.76：定位进程到底死在哪一步。
+// 绝不 os.Exit。
 func openlistRun() {
+	dir := os.Getenv("OPENLIST_DATA")
+	if dir == "" {
+		dir = "./data"
+	}
+	_ = os.MkdirAll(dir, 0755)
+
+	trace := func(stage string) {
+		f, err := os.OpenFile(filepath.Join(dir, "trace.txt"),
+			os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err == nil {
+			fmt.Fprintf(f, "stage=%s time=%s\n", stage, time.Now().Format("15:04:05.000"))
+			_ = f.Close()
+		}
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "[openlist] panic recovered: %v\n", r)
+			trace("panic: " + fmt.Sprint(r))
 		}
 	}()
 
-	dataDir := os.Getenv("OPENLIST_DATA")
-	if dataDir == "" {
-		dataDir = "./data"
-	}
+	trace("enter")
+	dataDir := dir
 	os.Args = []string{"openlist", "server", "--data", dataDir}
+	trace("args-set")
 
 	// 不调 cmd.Execute()——它在出错时 os.Exit(1) 会杀宿主。
 	// 直接走 RootCmd：成功 = 阻塞服务中；失败 = 记录后返回（外层永久阻塞）。
 	if err := cmd.RootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "[openlist] server exited with error: %v\n", err)
-		fmt.Fprintln(os.Stderr, "[openlist] host kept alive (never os.Exit)")
+		trace("error: " + err.Error())
+	} else {
+		trace("execute-returned-nil")
 	}
 }

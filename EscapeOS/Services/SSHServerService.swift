@@ -330,6 +330,9 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 ("data/stderr.log", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("stderr.log")),
                 // Go runtime 初始化阶段的 fatal/throw（fd 2 重定向产物，v0.3.74+）
                 ("data/go_stderr.log", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("go_stderr.log")),
+                // v0.3.76：Go 逐步打点（enter/args-set/error/panic）
+                ("data/trace.txt", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("trace.txt")),
+                ("data/probe.txt", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("probe.txt")),
             ]
             for (label, path) in sources {
                 guard let s = try? String(contentsOf: path, encoding: .utf8) else { continue }
@@ -384,14 +387,31 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             guard let s = try? String(contentsOf: target, encoding: .utf8) else { return "非 UTF-8 文本文件" }
             return s
         case "gotest":
-            // 手动触发一次 Go runtime 初始化（返回 42 即成功）。
-            // 若这一步就闪退 → 本环境的 Go runtime 初始化本身过不去（与 OpenList 无关）。
-            let box = GoSelfTestBox()
+            // 手动触发一次 Go runtime 初始化（返回 42 即成功）
+            let box = GoCallBox { GoSelfTest() }
             box.run()
             return """
             GoSelfTest: 调用已发出
             结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
-            说明: 返回 42 = Go runtime 初始化成功；若 App 在此时闪退 → 初始化阶段被硬杀（见 runlog 的 go_stderr.log 是否为空）
+            说明: 返回 42 = Go runtime 初始化成功
+            """
+        case "probe":
+            // 进程内 Go 最小动作：写 <data>/probe.txt（不启服务）
+            let box = GoCallBox { OpenListProbe() }
+            box.run()
+            return """
+            OpenListProbe: 调用已发出
+            结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
+            说明: >=0 = 进程内 Go 可写文件（写入字节数）；-1 = 写文件失败
+            """
+        case "startopenlist":
+            // 远程触发 OpenListMain（长时间阻塞属正常），配合 trace 定位死在哪一步
+            let box = GoCallBox { OpenListMain() }
+            box.run(timeout: 3, keepAlive: true)
+            return """
+            OpenListMain: 已在 8MB 大栈后台线程调用
+            结果: \(box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）")
+            下一步: runlog 看 data/trace.txt 的打点（enter/args-set/error/panic）
             """
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
@@ -417,6 +437,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       logs [n]        登录日志末尾 n 行（默认 30）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       gotest          手动触发一次 Go runtime 初始化（诊断）
+      probe           进程内 Go 写文件自检（写 <data>/probe.txt）
+      startopenlist   远程调用 OpenListMain（配合 trace 定位）
       ls [路径]       浏览 Documents 目录（相对路径）
       cat <文件>      查看 Documents 内文本文件（≤256KB）
       ip              局域网 IP
@@ -426,30 +448,36 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     """
 }
 
-/// Go runtime 自检（后台 8MB 大栈线程 + 3s 超时读取结果）
-/// 用途：SSH `gotest` 命令手动触发一次 Go runtime 初始化，判断本环境能否完成初始化。
-final class GoSelfTestBox {
+/// 在 8MB 大栈后台线程调用 Go 导出函数（带超时读取结果）
+/// keepAlive=true 用于长期阻塞的调用（如 OpenListMain），故意不释放避免悬垂指针
+final class GoCallBox {
     private let lock = NSLock()
     private var _value: Int32?
+    private let body: () -> Int32
     var value: Int32? { lock.lock(); defer { lock.unlock() }; return _value }
 
-    func run() {
+    init(_ body: @escaping () -> Int32) { self.body = body }
+
+    func run(timeout: TimeInterval = 3, keepAlive: Bool = false) {
         var attr = pthread_attr_t()
         guard pthread_attr_init(&attr) == 0 else { return }
         pthread_attr_setstacksize(&attr, 8 * 1024 * 1024)
         var tid: pthread_t?
-        pthread_create(&tid, &attr, goSelfTestEntry, Unmanaged.passUnretained(self).toOpaque())
+        let ctx = keepAlive ? Unmanaged.passRetained(self).toOpaque()
+                            : Unmanaged.passUnretained(self).toOpaque()
+        pthread_create(&tid, &attr, goCallEntry, ctx)
         pthread_attr_destroy(&attr)
-        let deadline = Date().addingTimeInterval(3)
+        let deadline = Date().addingTimeInterval(timeout)
         while value == nil, Date() < deadline { usleep(100_000) }
     }
 
     fileprivate func set(_ v: Int32) { lock.lock(); _value = v; lock.unlock() }
+    fileprivate func call() -> Int32 { body() }
 }
 
-private let goSelfTestEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? = { ctx in
-    let v = GoSelfTest()
-    Unmanaged<GoSelfTestBox>.fromOpaque(ctx).takeUnretainedValue().set(v)
+private let goCallEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? = { ctx in
+    let box = Unmanaged<GoCallBox>.fromOpaque(ctx).takeUnretainedValue()
+    box.set(box.call())
     return nil
 }
 
