@@ -401,10 +401,12 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             说明: 返回 42 = Go runtime 初始化成功
             """
         case "probe":
-            // 进程内 Go 最小动作：写 <data>/probe.txt（不启服务）
-            // 必须先把 OPENLIST_DATA 指到模块数据目录，否则 Go 会写到相对 ./data（v0.3.77 修）
-            setenv("OPENLIST_DATA", ModuleService.shared.dataURL(for: Self.firstBinaryModuleID()).path, 1)
-            let box = GoCallBox { OpenListProbe() }
+            // 进程内 Go 最小动作：写 <data>/probe.txt（不启服务）。
+            // 数据目录以参数传入（Go env 快照问题，v0.3.78）——同时 setenv 作兜底。
+            let probeDir = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())
+            try? FileManager.default.createDirectory(at: probeDir, withIntermediateDirectories: true)
+            setenv("OPENLIST_DATA", probeDir.path, 1)
+            let box = GoCallBox { OpenListProbe(probeDir.path) }
             box.run()
             return """
             OpenListProbe: 调用已发出
@@ -416,14 +418,17 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 与正式启动路径一致：设 OPENLIST_DATA + fd2 重定向到 data/go_stderr.log，
             // 这样 OpenList 内部 log.Fatalf 的临终信息才会落盘（v0.3.77）。
             let binID = Self.firstBinaryModuleID()
-            setenv("OPENLIST_DATA", ModuleService.shared.dataURL(for: binID).path, 1)
-            let goErr = ModuleService.shared.dataURL(for: binID).appendingPathComponent("go_stderr.log")
+            let dataDir = ModuleService.shared.dataURL(for: binID)
+            try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+            setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底
+            let goErr = dataDir.appendingPathComponent("go_stderr.log")
             let efd = open(goErr.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
             if efd >= 0 {
                 dup2(efd, STDERR_FILENO)
                 close(efd)
             }
-            let box = GoCallBox { OpenListMain() }
+            // 数据目录以参数传入（Go env 快照问题，v0.3.78）
+            let box = GoCallBox { OpenListMain(dataDir.path) }
             box.run(timeout: 3, keepAlive: true)
             return """
             OpenListMain: 已在 8MB 大栈后台线程调用

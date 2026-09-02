@@ -36,11 +36,15 @@ var (
 )
 
 //export OpenListProbe
-// OpenListProbe 只做最小动作：确认进程内 Go 可写文件 + runtime 正常（不启服务）。
-// 写入 <OPENLIST_DATA>/probe.txt，返回写入字节数；失败返回 -1。
-func OpenListProbe() C.int {
+// OpenListProbe 最小动作：确认进程内 Go 可写文件 + runtime 正常（不启服务）。
+// 数据目录同样由参数传入（原因同 OpenListMain：Go 的 env 快照）。
+// 写入 <dataDir>/probe.txt，返回写入字节数；失败返回 -1。
+func OpenListProbe(dataDirC *C.char) C.int {
 	defer func() { _ = recover() }()
-	dir := os.Getenv("OPENLIST_DATA")
+	dir := C.GoString(dataDirC)
+	if dir == "" {
+		dir = os.Getenv("OPENLIST_DATA")
+	}
 	if dir == "" {
 		dir = "./data"
 	}
@@ -63,19 +67,26 @@ func GoSelfTest() C.int {
 }
 
 //export OpenListMain
-// OpenListMain starts the OpenList server in-process. It blocks forever while
-// serving and never returns via os.Exit — startup errors are logged to
-// <dataDir>/stderr.log and the thread parks (host app stays alive).
-func OpenListMain() C.int {
+// OpenListMain 启动进程内 OpenList 服务；永不返回（阻塞服务或永久 sleep）。
+//
+// 关键（v0.3.78 闪退根因修复）：数据目录必须作为 **参数** 传入，不能靠环境变量——
+// Go 在 runtime 初始化时就快照了 environ，宿主事后的 setenv 对 os.Getenv 不可见，
+// 导致此前 dataDir 恒为空 → 退回相对路径 ./data（错误位置），日志/数据全落错地方。
+//
+// 铁律：绝不 os.Exit / log.Fatal —— 进程内退出 = 杀宿主 App。
+func OpenListMain(dataDirC *C.char) C.int {
 	openlistMu.Lock()
 	if openlistStarted {
 		openlistMu.Unlock()
-		return 0 // 已启动：幂等返回（宿主侧有 runningProcesses 守卫，正常到不了这里）
+		return 0 // 幂等：已启动直接返回（宿主侧有 runningProcesses 守卫）
 	}
 	openlistStarted = true
 	openlistMu.Unlock()
 
-	dataDir := os.Getenv("OPENLIST_DATA")
+	dataDir := C.GoString(dataDirC)
+	if dataDir == "" {
+		dataDir = os.Getenv("OPENLIST_DATA") // 兜底（env 在 runtime 初始化后才设可能读不到）
+	}
 	if dataDir == "" {
 		dataDir = "./data"
 	}
@@ -86,11 +97,11 @@ func OpenListMain() C.int {
 		log.SetFlags(log.LstdFlags)
 	}
 	fmt.Fprintln(os.Stderr, "[openlist] server starting (in-process, single runtime)")
+	fmt.Fprintln(os.Stderr, "[openlist] dataDir="+dataDir)
 
-	openlistRun()
+	openlistRun(dataDir)
 
-	// openlistRun 只在 panic 被 recover 后才会走到这之后——永久阻塞，
-	// 宿主存活、错误已在 stderr.log。
+	// openlistRun 只在 panic recover 或 Execute 返回后走到这里——永久阻塞，宿主存活。
 	for {
 		time.Sleep(time.Hour)
 	}
@@ -98,17 +109,11 @@ func OpenListMain() C.int {
 }
 
 // openlistRun runs the server with panic containment and step tracing.
-// 每步写 <dataDir>/trace.txt（append）——v0.3.76：定位进程到底死在哪一步。
-// 绝不 os.Exit。
-func openlistRun() {
-	dir := os.Getenv("OPENLIST_DATA")
-	if dir == "" {
-		dir = "./data"
-	}
-	_ = os.MkdirAll(dir, 0755)
+func openlistRun(dataDir string) {
+	_ = os.MkdirAll(dataDir, 0755)
 
 	trace := func(stage string) {
-		f, err := os.OpenFile(filepath.Join(dir, "trace.txt"),
+		f, err := os.OpenFile(filepath.Join(dataDir, "trace.txt"),
 			os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err == nil {
 			fmt.Fprintf(f, "stage=%s time=%s\n", stage, time.Now().Format("15:04:05.000"))
@@ -123,7 +128,6 @@ func openlistRun() {
 	}()
 
 	trace("enter")
-	dataDir := dir
 	os.Args = []string{"openlist", "server", "--data", dataDir}
 	trace("args-set")
 
