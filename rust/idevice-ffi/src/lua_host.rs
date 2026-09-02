@@ -60,7 +60,7 @@ fn format_value(v: &Value) -> String {
 }
 
 /// 表达式求值：结果（OK <值> 或错误）写入 outPath。返回 0=OK；-1=Lua 错误。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lua_host_eval(code: *const c_char, out_path: *const c_char) -> c_int {
     if code.is_null() || out_path.is_null() { return -2; }
     let (code, out) = unsafe { (arg(code), arg(out_path)) };
@@ -68,7 +68,7 @@ pub extern "C" fn lua_host_eval(code: *const c_char, out_path: *const c_char) ->
 }
 
 /// 执行语句块：结果（OK 或错误）写入 outPath。返回 0=OK；-1=Lua 错误。
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lua_host_exec(code: *const c_char, out_path: *const c_char) -> c_int {
     if code.is_null() || out_path.is_null() { return -2; }
     let (code, out) = unsafe { (arg(code), arg(out_path)) };
