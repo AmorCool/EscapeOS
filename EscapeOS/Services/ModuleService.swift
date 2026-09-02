@@ -218,21 +218,21 @@ final class ModuleService {
                m.isBinaryModule {
                 let dataRoot = modulesRoot.appendingPathComponent(id, isDirectory: true)
                 if FileManager.default.fileExists(atPath: dest.path) {
-                    // v0.3.70 时代的落盘副本：迁移 data/ 后删除副本（省 137MB）
-                    do {
-                        try FileManager.default.createDirectory(at: dataRoot, withIntermediateDirectories: true)
-                        let oldData = dest.appendingPathComponent("data")
-                        let newData = dataRoot.appendingPathComponent("data")
-                        if FileManager.default.fileExists(atPath: oldData.path) &&
-                            !FileManager.default.fileExists(atPath: newData.path) {
-                            try FileManager.default.moveItem(at: oldData, to: newData)
+                    // 旧版落盘副本清理：只删残留的 bin/（旧 dylib，现已编译进 App）。
+                    // ⚠️ v0.3.80 修复：此前这里执行 removeItem(dest)，而 dest 与 dataRoot
+                    // 对内置原地模块是同一目录 —— 等于每次启动都把模块数据目录（日志/配置/
+                    // 数据库）整个删掉，既导致 OpenList 数据无法留存，也销毁了排障日志。
+                    let legacyBin = dest.appendingPathComponent("bin", isDirectory: true)
+                    if FileManager.default.fileExists(atPath: legacyBin.path) {
+                        do {
+                            try FileManager.default.removeItem(at: legacyBin)
+                            print("[Module] \(id) 已清理旧版落盘二进制副本 bin/（data/ 保留）")
+                        } catch {
+                            print("[Module] \(id) 清理 bin/ 失败: \(error)")
                         }
-                        try FileManager.default.removeItem(at: dest)
-                        print("[Module] \(id) 已迁移为 bundle 原地加载（数据保留在 \(newData.path)）")
-                    } catch {
-                        print("[Module] \(id) 原地加载迁移失败（保留落盘副本）: \(error)")
-                        continue
                     }
+                    try? FileManager.default.createDirectory(
+                        at: dataRoot.appendingPathComponent("data"), withIntermediateDirectories: true)
                 } else {
                     try? FileManager.default.createDirectory(
                         at: dataRoot.appendingPathComponent("data"), withIntermediateDirectories: true)
