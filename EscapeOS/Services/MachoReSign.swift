@@ -103,6 +103,20 @@ enum MachoReSign {
             throw ReSignError.ioFailure("新签名 \(blobLen)B 超出原槽 \(sigSize)B")
         }
 
+        // ★ 先把 datasize 写进 load command（LE）——它位于 Mach-O 头部第 0 页，
+        // 属于被哈希的代码区：必须先落盘再算页哈希，否则第 0 页哈希永远失配
+        // （v0.3.94 修复：此前先哈希后写 datasize，页面哈希 mismatch 第 0 页）。
+        guard let wh = try? FileHandle(forWritingTo: url) else { throw ReSignError.ioFailure("写打开失败") }
+        defer { try? wh.close() }
+        wh.seek(toFileOffset: UInt64(datasizeField))
+        var szLE = UInt32(blobLen).littleEndian
+        try? wh.write(contentsOf: Data(bytes: &szLE, count: 4))
+        try? wh.synchronize()
+
+        // 重新以只读打开（反映 datasize 落盘后的文件），供页哈希读取
+        guard let rh = try? FileHandle(forReadingFrom: url) else { throw ReSignError.ioFailure("读文件失败") }
+        defer { try? rh.close() }
+
         // ---- 组装 SuperBlob + CodeDirectory（大端）----
         var b = [UInt8]()
         func w32(_ v: Int) { b.append(UInt8((v >> 24) & 0xff)); b.append(UInt8((v >> 16) & 0xff)); b.append(UInt8((v >> 8) & 0xff)); b.append(UInt8(v & 0xff)) }
@@ -132,14 +146,14 @@ enum MachoReSign {
         w32(0)                    // teamOffset
         while b.count < 20 + hashOffset { b.append(0) }   // 对齐填充至哈希区
 
-        // 流式哈希代码页 [0, codeLimit)
-        fh.seek(toFileOffset: 0)
+        // 流式哈希代码页 [0, codeLimit)——datasize 已落盘，第 0 页哈希正确
+        rh.seek(toFileOffset: 0)
         for _ in 0..<nCodePages {
-            let remaining = codeLimit - Int(fh.offsetInFile)
+            let remaining = codeLimit - Int(rh.offsetInFile)
             guard remaining > 0 else { break }
             let toRead = min(PAGE, remaining)
-            let chunk = try fh.readData(ofLength: toRead)
-            guard chunk.count == toRead else { throw ReSignError.ioFailure("读页失败 @\(fh.offsetInFile)") }
+            let chunk = try rh.readData(ofLength: toRead)
+            guard chunk.count == toRead else { throw ReSignError.ioFailure("读页失败 @\(rh.offsetInFile)") }
             b.append(contentsOf: SHA256.hash(data: chunk))
         }
         // identifier（紧跟哈希区）
@@ -154,12 +168,7 @@ enum MachoReSign {
 
         guard b.count <= sigSize else { throw ReSignError.ioFailure("blob 尺寸异常") }
 
-        // ---- 写回 ----
-        guard let wh = try? FileHandle(forWritingTo: url) else { throw ReSignError.ioFailure("写打开失败") }
-        defer { try? wh.close() }
-        wh.seek(toFileOffset: UInt64(datasizeField))
-        var szBE = UInt32(b.count).bigEndian
-        try? wh.write(contentsOf: Data(bytes: &szBE, count: 4))
+        // ---- 写回 blob + 余量清零 ----
         wh.seek(toFileOffset: UInt64(sigOff))
         try? wh.write(contentsOf: Data(b))
         if b.count < sigSize {
