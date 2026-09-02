@@ -345,6 +345,11 @@ struct ModuleManagerView: View {
                         handleRun(module: module)
                     }
                 }
+                if enabled && module.isLuaModule {
+                    pill(label: "运行", icon: "play.fill") {
+                        runLua(module: module)
+                    }
+                }
                 if hasWeb && enabled {
                     pill(label: "打开", icon: "chevron.left.forwardslash.chevron.right") {
                         webviewModule = module
@@ -468,6 +473,21 @@ struct ModuleManagerView: View {
             await MainActor.run {
                 runningActionID = nil
                 resultAlert = result
+            }
+        }
+    }
+
+    /// Lua 模块运行（v1.2）：调用内置解释器执行入口脚本，结果弹窗展示
+    private func runLua(module: EscapeModule) {
+        runningActionID = module.id
+        Task.detached(priority: .userInitiated) {
+            let (ret, output) = ModuleService.shared.runLuaModule(module)
+            await MainActor.run {
+                runningActionID = nil
+                let message = ret == 0
+                    ? "Lua 模块运行完成\n\(output)"
+                    : "Lua 模块运行失败（码 \(ret)）\n\(output)"
+                resultAlert = ModuleRunResult(message: message)
             }
         }
     }

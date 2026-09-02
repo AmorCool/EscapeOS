@@ -82,8 +82,13 @@ struct BinaryConfig: Codable {
     var autoStart: Bool?
 }
 
-struct EscapeModuleAction: Identifiable, Codable {
-    let id: String
+/// Lua 模块配置（v1.2）：纯脚本模块，无签名要求
+struct LuaModuleConfig: Codable {
+    /// 入口脚本（相对模块目录）；默认 "main.lua"
+    var entry: String?
+}
+
+struct EscapeModuleAction: Identifiable, Codable {    let id: String
     let label: String
     var icon: String?
     let type: String            // v1: "signal"
@@ -120,6 +125,8 @@ struct EscapeModule: Identifiable, Codable {
     var hotfix: HotfixConfig?
     /// v1.1：可选。二进制模块——随宿主自启动的后台服务（如 alist）
     var binary: BinaryConfig?
+    /// v1.2：可选。Lua 模块——纯脚本（数据，无签名要求），entry 为模块目录内脚本路径
+    var lua: LuaModuleConfig?
     /// 二进制模块是否随宿主自启动（默认读 binary.autoStart）
     var autoStart: Bool?
     let actions: [EscapeModuleAction]
@@ -128,6 +135,10 @@ struct EscapeModule: Identifiable, Codable {
     var isHotfixModule: Bool { hotfix != nil }
     /// 是否二进制模块
     var isBinaryModule: Bool { binary != nil }
+    /// 是否 Lua 脚本模块
+    var isLuaModule: Bool { lua != nil }
+    /// Lua 模块入口脚本路径（相对模块目录；默认 main.lua）
+    var luaEntry: String { lua?.entry ?? "main.lua" }
 
     /// 安装目录（内置原地模块指向 bundle）
     var installURL: URL {
@@ -186,6 +197,36 @@ final class ModuleService {
     /// 模块数据目录（始终可写，与二进制分离）：<modulesRoot>/<id>/data
     func dataURL(for id: String) -> URL {
         modulesRoot.appendingPathComponent(id, isDirectory: true).appendingPathComponent("data", isDirectory: true)
+    }
+
+    // MARK: Lua 模块执行（v1.2：纯脚本模块，走内置 Rust+mlua 解释器）
+    /// 执行 Lua 模块入口脚本。返回 (返回码, 输出文本)；码 0=成功 -1=Lua 错误 -9=参数错。
+    func runLuaModule(_ module: EscapeModule,
+                      onProgress: ((String) -> Void)? = nil) -> (Int32, String) {
+        guard module.isLuaModule else { return (-9, "非 Lua 模块") }
+        let scriptURL = installURL(for: module.id).appendingPathComponent(module.luaEntry)
+        guard let code = try? String(contentsOf: scriptURL, encoding: .utf8) else {
+            return (-9, "找不到入口脚本 \(module.luaEntry)")
+        }
+        let dataDir = dataURL(for: module.id)
+        try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let outFile = dataDir.appendingPathComponent("lua_out.txt")
+        onProgress?("执行 \(module.luaEntry)（\(code.count) 字符）…")
+        var ret: Int32 = -99
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            code.withCString { c in
+                outFile.path.withCString { o in
+                    ret = lua_host_exec(
+                        UnsafeMutablePointer(mutating: c),
+                        UnsafeMutablePointer(mutating: o))
+                }
+            }
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 15)
+        let output = (try? String(contentsOf: outFile, encoding: .utf8)) ?? "（无输出）"
+        return (ret, output)
     }
 
     private func bootstrapBundledModules() {
@@ -374,7 +415,7 @@ final class ModuleService {
             log?("- 签名验证 ✓")
         }
 
-        guard !module.actions.isEmpty || module.isBinaryModule else {
+        guard !module.actions.isEmpty || module.isBinaryModule || module.isLuaModule else {
             throw ModuleError.badSpec("模块未声明任何 action")
         }
         // 校验动作类型（v1 只支持 signal；未知类型拒绝导入，保证向前兼容的严格性）

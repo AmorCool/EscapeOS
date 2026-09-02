@@ -91,7 +91,7 @@ pub extern "C" fn lua_host_exec(code: *const c_char, out_path: *const c_char) ->
 // 设备端 API）：WiFiManagerClientCreate / SetPower / GetPower。
 // dlopen 系统私有框架在进程内合法；LC/越狱环境可直调。
 
-use libc::{c_char, c_void};
+use libc::c_void;
 use std::sync::OnceLock;
 
 #[repr(C)]
