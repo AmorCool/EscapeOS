@@ -1,22 +1,3 @@
-package main
-
-/*
-#include <stdlib.h>
-*/
-import "C"
-
-import (
-	"fmt"
-	"log"
-	"os"
-	"path/filepath"
-	"runtime"
-	"sync"
-	"time"
-
-	"github.com/OpenListTeam/OpenList/v4/cmd"
-)
-
 //go:build openlist_embed
 
 // OpenList bridge（v0.3.73 方案 A：与 Sap* 共用单一 Go runtime，静态链接进宿主）。
@@ -38,6 +19,25 @@ import (
 //   - 数据目录由 **调用方以参数传入**（Go env 在 runtime 初始化时已快照，宿主事后
 //     setenv 对 os.Getenv 不可见）；Go stderr 与 std log 重定向到 <dataDir>/stderr.log。
 
+package main
+
+/*
+#include <stdlib.h>
+*/
+import "C"
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/cmd"
+)
+
 var (
 	openlistMu      sync.Mutex
 	openlistStarted bool
@@ -51,8 +51,9 @@ func stepMark(dir, name, text string) {
 	_ = os.WriteFile(filepath.Join(dir, name), []byte(text+"\n"), 0644)
 }
 
-//export OpenListStep1
 // 仅 MkdirAll + WriteFile（对照：OpenListProbe 已验证可行）
+//
+//export OpenListStep1
 func OpenListStep1(dirC *C.char) C.int {
 	dir := C.GoString(dirC)
 	// 注意：os.WriteFile 只返回 error（不是 (int, error)，那是 f.Write 的签名）
@@ -62,8 +63,9 @@ func OpenListStep1(dirC *C.char) C.int {
 	return C.int(1)
 }
 
-//export OpenListStep2
 // step1 + 打开 stderr.log（OpenFile）
+//
+//export OpenListStep2
 func OpenListStep2(dirC *C.char) C.int {
 	dir := C.GoString(dirC)
 	stepMark(dir, "step2.begin", "step2 begin")
@@ -76,8 +78,9 @@ func OpenListStep2(dirC *C.char) C.int {
 	return C.int(2)
 }
 
-//export OpenListStep3
 // step2 + 替换 os.Stderr + log.SetOutput + Fprintln（不启服务）
+//
+//export OpenListStep3
 func OpenListStep3(dirC *C.char) C.int {
 	dir := C.GoString(dirC)
 	stepMark(dir, "step3.begin", "step3 begin")
@@ -92,8 +95,9 @@ func OpenListStep3(dirC *C.char) C.int {
 	return C.int(3)
 }
 
-//export OpenListStep4
 // step3 + 真正进入 cmd.RootCmd.Execute（服务启动，会长期阻塞）
+//
+//export OpenListStep4
 func OpenListStep4(dirC *C.char) C.int {
 	dir := C.GoString(dirC)
 	stepMark(dir, "step4.begin", "step4 begin")
@@ -110,10 +114,11 @@ func OpenListStep4(dirC *C.char) C.int {
 	return C.int(4)
 }
 
-//export OpenListAdminSet
 // OpenListAdminSet 重置 OpenList 管理员密码（走官方 CLI：openlist admin set <pwd>）。
 // 返回 0=成功；-1=Execute 错误；-2=参数为空；-3=panic。
 // 服务运行中也可执行：sqlite WAL 模式允许并发写入；os.Args 此时改写安全（server 已解析完）。
+//
+//export OpenListAdminSet
 func OpenListAdminSet(pwdC, dirC *C.char) C.int {
 	pwd := C.GoString(pwdC)
 	dir := C.GoString(dirC)
@@ -139,10 +144,11 @@ func OpenListAdminSet(pwdC, dirC *C.char) C.int {
 	return ret
 }
 
-//export OpenListMemTest
 // OpenListMemTest 逐步申请 MB 级内存并触碰（提交物理页），返回成功申请的 MB 数。
 // 用途：SSH `memtest <MB>` 探测本进程的内存天花板——若申请到某个量级 App 消失，
 // 即为 iOS jetsam 硬杀（v0.3.83：用于判定 OpenList 启动期被杀是否内存所致）。
+//
+//export OpenListMemTest
 func OpenListMemTest(mbC C.int) C.int {
 	mb := int(mbC)
 	if mb <= 0 {
@@ -167,10 +173,11 @@ func OpenListMemTest(mbC C.int) C.int {
 	return C.int(got)
 }
 
-//export OpenListProbe
 // OpenListProbe 最小动作：确认进程内 Go 可写文件 + runtime 正常（不启服务）。
 // 数据目录同样由参数传入（原因同 OpenListMain：Go 的 env 快照）。
 // 写入 <dataDir>/probe.txt，返回写入字节数；失败返回 -1。
+//
+//export OpenListProbe
 func OpenListProbe(dataDirC *C.char) C.int {
 	defer func() { _ = recover() }()
 	dir := C.GoString(dataDirC)
@@ -189,16 +196,16 @@ func OpenListProbe(dataDirC *C.char) C.int {
 	return C.int(len(body))
 }
 
-//export GoSelfTest
 // GoSelfTest 只触发 Go runtime 初始化并返回固定值 42——诊断用：
 // 用 SSH 的 `gotest` 命令手动调用，判断"Go runtime 能否在本环境初始化完成"。
 // 注意：runtime 初始化会连带跑所有已链接包的 init（含 OpenList），因此它验证的是
 // 「单次 runtime 初始化」能否存活，而不是 OpenList 服务本身。
+//
+//export GoSelfTest
 func GoSelfTest() C.int {
 	return 42
 }
 
-//export OpenListMain
 // OpenListMain 启动进程内 OpenList 服务；永不返回（阻塞服务或永久 sleep）。
 //
 // 关键（v0.3.78 闪退根因修复）：数据目录必须作为 **参数** 传入，不能靠环境变量——
@@ -206,6 +213,8 @@ func GoSelfTest() C.int {
 // 导致此前 dataDir 恒为空 → 退回相对路径 ./data（错误位置），日志/数据全落错地方。
 //
 // 铁律：绝不 os.Exit / log.Fatal —— 进程内退出 = 杀宿主 App。
+//
+//export OpenListMain
 func OpenListMain(dataDirC *C.char) C.int {
 	openlistMu.Lock()
 	if openlistStarted {
