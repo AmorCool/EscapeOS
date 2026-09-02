@@ -73,17 +73,8 @@ jobs:
             brew install cmake ninja
           fi
 
-      - name: Cache Go modules
-        # 加速 build-sap.sh 内的 `go mod tidy` / 构建。滚动 key + restore-keys 前缀。
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/Library/Caches/go-build
-          key: macos-go-${{ hashFiles('sapbridge/go.mod') }}
-          restore-keys: |
-            macos-go-
-
+      # （已移除 Cache Go modules：v0.3.83 —— sapbridge 走 artifact 缓存后
+      #   该步不再被使用，而收尾上传 ~/go/pkg/mod 每轮要几分钟，纯属浪费）
       - name: Cache Unicorn build
         # libunicorn.a 的 cmake 构建较慢，缓存编译产物（源码克隆不缓存以省体积）。
         uses: actions/cache@v4
@@ -363,7 +354,7 @@ jobs:
         # key 只由「源码内容 + 工程结构（去版本号）」决定，发版改号不会击穿缓存。
         uses: actions/cache@v4
         with:
-          path: build
+          path: build/Build/Intermediates.noindex
           key: macos-deriveddata-${{ steps.src_hash.outputs.hash }}
 
       - name: Build (compile/link, no Apple signing)

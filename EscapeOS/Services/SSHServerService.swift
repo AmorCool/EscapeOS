@@ -451,6 +451,39 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             结果: \(box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）")
             下一步: runlog 看 data/trace.txt 的打点（enter/args-set/error/panic）
             """
+        case "mlog":
+            // 读模块数据目录下的任意文件（OpenList 自己的 data/log/log.log 等）。
+            // 注意：不能用通用 cat —— 它基于 FileManager.documentDirectory，而模块数据目录
+            // 在 LC 下位于 NSHomeDirectory() 之下，两者不是同一棵树（v0.3.74 实锤）。
+            let binID = Self.firstBinaryModuleID()
+            let dataDir = ModuleService.shared.dataURL(for: binID)
+            let name = parts.count > 1 ? parts[1] : "log/log.log"
+            let n = parts.count > 2 ? (Int(parts[2]) ?? 60) : 60
+            let target = dataDir.appendingPathComponent(name)
+            guard let s = try? String(contentsOf: target, encoding: .utf8) else {
+                // 文件不存在时列出数据目录，方便判断 OpenList 建了什么
+                let fm = FileManager.default
+                var listing = ["（无 \(name)；数据目录内容如下）"]
+                if let items = try? fm.contentsOfDirectory(atPath: dataDir.path) {
+                    for it in items.sorted() {
+                        var isDir: ObjCBool = false
+                        fm.fileExists(atPath: dataDir.appendingPathComponent(it).path, isDirectory: &isDir)
+                        listing.append(isDir.boolValue ? "📁 \(it)/" : "📄 \(it)")
+                    }
+                }
+                return listing.joined(separator: "\n")
+            }
+            let all = s.components(separatedBy: "\n").filter { !$0.isEmpty }
+            return all.isEmpty ? "（空）" : all.suffix(min(max(n, 1), 400)).joined(separator: "\n")
+        case "memtest":
+            // 探测本进程内存天花板（判定是否 jetsam 硬杀）
+            let mb = parts.count > 1 ? (Int(parts[1]) ?? 64) : 64
+            let box = GoCallBox { OpenListMemTest(Int32(mb)) }
+            box.run(timeout: 30)
+            return """
+            memtest: 申请 \(mb) MB
+            结果: \(box.value.map { "成功申请 \($0) MB" } ?? "（未返回＝进程被杀，说明天花板低于 \(mb) MB）")
+            """
         case "step1", "step2", "step3", "step4":
             // v0.3.79 二分诊断：逐步逼近 OpenListMain 的崩溃点。
             // 每步先写 stepN.begin、完成后写 stepN.done；哪一步让 App 崩，凶手就在该步新增语句里。

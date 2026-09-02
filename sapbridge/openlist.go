@@ -102,6 +102,34 @@ func OpenListStep4(dirC *C.char) C.int {
 	return C.int(4)
 }
 
+//export OpenListMemTest
+// OpenListMemTest 逐步申请 MB 级内存并触碰（提交物理页），返回成功申请的 MB 数。
+// 用途：SSH `memtest <MB>` 探测本进程的内存天花板——若申请到某个量级 App 消失，
+// 即为 iOS jetsam 硬杀（v0.3.83：用于判定 OpenList 启动期被杀是否内存所致）。
+func OpenListMemTest(mbC C.int) C.int {
+	mb := int(mbC)
+	if mb <= 0 {
+		mb = 64
+	}
+	if mb > 4096 {
+		mb = 4096
+	}
+	blocks := make([][]byte, 0, mb)
+	defer func() { _ = recover() }()
+	for i := 0; i < mb; i++ {
+		b := make([]byte, 1024*1024)
+		for j := range b {
+			b[j] = 1
+		}
+		blocks = append(blocks, b)
+	}
+	runtime.GC()
+	got := len(blocks)
+	blocks = nil
+	runtime.GC()
+	return C.int(got)
+}
+
 //export OpenListProbe
 // OpenListProbe 最小动作：确认进程内 Go 可写文件 + runtime 正常（不启服务）。
 // 数据目录同样由参数传入（原因同 OpenListMain：Go 的 env 快照）。
