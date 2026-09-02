@@ -460,15 +460,30 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let name = parts.count > 1 ? parts[1] : "log/log.log"
             let n = parts.count > 2 ? (Int(parts[2]) ?? 60) : 60
             let target = dataDir.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: target.path, isDirectory: &isDir), isDir.boolValue {
+                // 目录 → 列出内容（如 mlog temp 查看 stage 标记文件）
+                let fm = FileManager.default
+                var listing = ["（目录 \(name)/ 内容如下）"]
+                if let items = try? fm.contentsOfDirectory(atPath: target.path) {
+                    for it in items.sorted() {
+                        var sub: ObjCBool = false
+                        fm.fileExists(atPath: target.appendingPathComponent(it).path, isDirectory: &sub)
+                        let size = (try? fm.attributesOfItem(atPath: target.appendingPathComponent(it).path)[.size] as? Int) ?? nil
+                        listing.append(sub.boolValue ? "📁 \(it)/" : "📄 \(it)\((size.map { " (\($0)B)" }) ?? "")")
+                    }
+                }
+                return listing.joined(separator: "\n")
+            }
             guard let s = try? String(contentsOf: target, encoding: .utf8) else {
                 // 文件不存在时列出数据目录，方便判断 OpenList 建了什么
                 let fm = FileManager.default
                 var listing = ["（无 \(name)；数据目录内容如下）"]
                 if let items = try? fm.contentsOfDirectory(atPath: dataDir.path) {
                     for it in items.sorted() {
-                        var isDir: ObjCBool = false
-                        fm.fileExists(atPath: dataDir.appendingPathComponent(it).path, isDirectory: &isDir)
-                        listing.append(isDir.boolValue ? "📁 \(it)/" : "📄 \(it)")
+                        var sub: ObjCBool = false
+                        fm.fileExists(atPath: dataDir.appendingPathComponent(it).path, isDirectory: &sub)
+                        listing.append(sub.boolValue ? "📁 \(it)/" : "📄 \(it)")
                     }
                 }
                 return listing.joined(separator: "\n")

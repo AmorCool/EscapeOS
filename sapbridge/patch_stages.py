@@ -31,13 +31,13 @@ import (
 )
 
 // StageMarkLocal writes a marker file for crash localization.
-// Injected by EscapeOS build (v0.3.86); NOT part of upstream OpenList.
+// Injected by EscapeOS build (markerv:2); NOT part of upstream OpenList.
 func StageMarkLocal(name string) {
 \tdefer func() { _ = recover() }()
 \tvar dir string
 \tfunc() {
 \t\tdefer func() { _ = recover() }()
-\t\tdir = conf.Conf.DataDir
+\t\tdir = conf.Conf.TempDir
 \t}()
 \tif dir == "" {
 \t\tdir = os.TempDir()
@@ -47,6 +47,9 @@ func StageMarkLocal(name string) {
 \t\t[]byte(time.Now().Format("15:04:05.000")), 0644)
 }
 """
+
+# 标记实现版本：变更实现时递增，旧版本文件会被覆盖重写（调用处无需变更）
+MARKER_VER = "markerv:2"
 
 PKG_RE = re.compile(r"^package\s+(\w+)", re.M)
 FUNC_RE = re.compile(r"(?m)^func\s+([A-Z]\w*)\s*\(([^)]*)\)\s*([^{]*)\{\s*$")
@@ -63,9 +66,10 @@ def inject(dir_path: pathlib.Path) -> int:
         print(f"  skip (no package): {dir_path}")
         return 0
     marker = dir_path / "stagemark_local.go"
-    if marker.exists():
-        print(f"  already injected: {dir_path}")
+    if marker.exists() and MARKER_VER in marker.read_text(encoding="utf-8"):
+        print(f"  already injected (v2): {dir_path}")
         return 0
+    # 不存在或旧版本实现（如 DataDir 字段错误版）→ 覆盖重写；调用处代码保持不动
     marker.write_text(TEMPLATE.replace("__PKG__", pkg), encoding="utf-8")
     total = 0
     for f in sorted(dir_path.glob("*.go")):
