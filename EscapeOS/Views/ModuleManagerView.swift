@@ -17,7 +17,11 @@ struct ModuleManagerView: View {
     @State private var isImporting = false
     @State private var runningActionID: String? = nil
     @State private var resultAlert: ModuleRunResult? = nil
-    @State private var importError: String? = nil
+    // 安装详情（KernelSU 风格终端日志）
+    @State private var showInstallSheet = false
+    @State private var installLog: [String] = []
+    @State private var installFinished = false
+    @State private var installSucceeded = false
     @State private var confirmAction: (module: EscapeModule, action: EscapeModuleAction)? = nil
     @State private var uninstallTarget: EscapeModule? = nil
     @State private var actionMenuModule: EscapeModule? = nil
@@ -104,6 +108,15 @@ struct ModuleManagerView: View {
                 handleImport(urls)
             }
         )
+        .sheet(isPresented: $showInstallSheet, onDismiss: { installLog = [] }) {
+            ModuleInstallSheet(
+                lines: installLog,
+                finished: installFinished,
+                succeeded: installSucceeded,
+                onClose: { showInstallSheet = false }
+            )
+            .interactiveDismissDisabled(!installFinished)
+        }
         .alert("执行结果", isPresented: Binding(
             get: { resultAlert != nil },
             set: { if !$0 { resultAlert = nil } }
@@ -111,14 +124,6 @@ struct ModuleManagerView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(resultAlert?.message ?? "")
-        }
-        .alert("导入失败", isPresented: Binding(
-            get: { importError != nil },
-            set: { if !$0 { importError = nil } }
-        )) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(importError ?? "")
         }
         .confirmationDialog(
             confirmAction?.action.confirm ?? "",
@@ -408,13 +413,33 @@ struct ModuleManagerView: View {
 
     private func handleImport(_ urls: [URL]) {
         guard let url = urls.first else { return }
-        do {
-            let module = try ModuleService.shared.importZip(at: url)
-            reload()
-            resultAlert = ModuleRunResult(
-                message: "模块「\(module.name)」v\(module.version) 导入成功")
-        } catch {
-            importError = error.localizedDescription
+        // KernelSU 风格：弹出安装详情（终端日志），完成后右下角关闭
+        installLog = ["- 开始导入：\(url.lastPathComponent)"]
+        installFinished = false
+        installSucceeded = false
+        showInstallSheet = true
+        let appendLog: (String) -> Void = { line in
+            DispatchQueue.main.async { self.installLog.append(line) }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let module = try ModuleService.shared.importZip(at: url, log: appendLog)
+                DispatchQueue.main.async {
+                    self.reload()
+                    self.installLog.append("✓ 导入成功：\(module.name) v\(module.version)")
+                    if module.isBinaryModule, module.autoStart == true || module.binary?.autoStart == true {
+                        self.installLog.append("- 二进制模块随宿主自启动")
+                    }
+                    self.installFinished = true
+                    self.installSucceeded = true
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.installLog.append("! 导入失败：\(error.localizedDescription)")
+                    self.installFinished = true
+                    self.installSucceeded = false
+                }
+            }
         }
     }
 
@@ -488,5 +513,92 @@ struct ModuleImportPicker: UIViewControllerRepresentable {
                 onCancelled: nil
             )
         }
+    }
+}
+
+/// 安装详情界面（对齐 KernelSU 模块安装页）：
+/// 终端风格滚动日志 + 底部状态栏，完成后右下角「关闭」。
+struct ModuleInstallSheet: View {
+    let lines: [String]
+    let finished: Bool
+    let succeeded: Bool
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // 终端日志区（KernelSU 深色控制台风格）
+                ScrollView {
+                    ScrollViewReader { proxy in
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(Array(lines.enumerated()), id: \.offset) { idx, line in
+                                Text(line)
+                                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                                    .foregroundColor(color(for: line))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                                    .id(idx)
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .onChange(of: lines.count) { _ in
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                proxy.scrollTo(lines.count - 1, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+                .background(Color.black.opacity(0.88))
+                // 底部状态栏：左侧状态文字，右侧「关闭」
+                HStack {
+                    if finished {
+                        Image(systemName: succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(succeeded ? .green : .red)
+                        Text(succeeded ? "安装成功" : "安装失败")
+                            .fontWeight(.semibold)
+                            .foregroundColor(succeeded ? .green : .red)
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("安装中…")
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    if finished {
+                        Button {
+                            onClose()
+                        } label: {
+                            Text("关闭")
+                                .fontWeight(.semibold)
+                                .frame(minWidth: 76)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                        .controlSize(.regular)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color(.secondarySystemGroupedBackground))
+            }
+            .navigationTitle("安装模块")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if finished {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("完成") { onClose() }
+                    }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func color(for line: String) -> Color {
+        if line.hasPrefix("!") { return .red }
+        if line.hasPrefix("✓") || line.hasPrefix("- 签名") { return .green }
+        if line.hasPrefix("-") || line.hasPrefix("✓") { return .white.opacity(0.92) }
+        return .white.opacity(0.92)
     }
 }

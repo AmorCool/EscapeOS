@@ -237,16 +237,21 @@ final class ModuleService {
 
     // MARK: 导入 .zip
 
-    /// 导入 .zip 模块。zip 根目录必须包含 module.json（spec = escape.module.v1）。
+    /// 导入 .zip 模块。zip 内任意层级（含 modules/<id>/ 前缀、GitHub 源码 zip 的多层嵌套）均可识别
+    /// module.json，并安装其所在目录的内容。spec = escape.module.v1。
+    /// log：安装详情日志回调（KernelSU 风格安装界面逐行输出）。
     /// 返回解析后的模块；spec 不符 / 清单缺失会抛错。
-    func importZip(at url: URL) throws -> EscapeModule {
+    func importZip(at url: URL, log: ((String) -> Void)? = nil) throws -> EscapeModule {
+        log?("- 导入模块：\(url.lastPathComponent)")
         let data = try Data(contentsOf: url)
+        log?("- 读取 zip（\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))）")
         let entries: [ZipEntry]
         do {
             entries = try ZipContainer.open(container: data)
         } catch {
             throw ModuleError.badArchive("ZIP 解析失败：\(error.localizedDescription)")
         }
+        log?("- 解析出 \(entries.count) 个条目")
 
         // 解压到临时目录
         let tmp = FileManager.default.temporaryDirectory
@@ -255,6 +260,7 @@ final class ModuleService {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         var manifestData: Data?
+        var manifestName: String?      // module.json 在 zip 内的完整路径（推导同目录 signature.sig / 安装根）
         var extractedFiles: [String: Data] = [:]   // 全部 regular 文件字节（签名校验用）
         for entry in entries {
             let name = entry.info.name
@@ -274,6 +280,7 @@ final class ModuleService {
                 try d.write(to: dest)
                 if name == "module.json" || name.hasSuffix("/module.json") {
                     manifestData = d
+                    manifestName = name
                 }
                 extractedFiles[name] = d
             default:
@@ -284,21 +291,32 @@ final class ModuleService {
         // 校验清单
         guard let mData = manifestData,
               let module = try? JSONDecoder().decode(EscapeModule.self, from: mData) else {
-            throw ModuleError.missingManifest("zip 根目录缺少合法的 module.json")
+            throw ModuleError.missingManifest("zip 内缺少合法的 module.json")
         }
+        log?("- 清单：\(module.id) v\(module.version)（\(module.name)）")
         guard module.spec == "escape.module.v1" else {
             throw ModuleError.badSpec("规范版本不支持：\(module.spec)")
         }
+        log?("- 规范 \(module.spec) ✓")
+
+        // module.json 所在目录（"" 表示 zip 根）——signature.sig 必须与 module.json 同目录
+        let manifestDir = (manifestName as NSString?)?.deletingLastPathComponent ?? ""
+        // 安装根 = module.json 所在目录（支持任意嵌套：modules/<id>/、module-esc-main/modules/<id>/ 均可）
+        let extractedRoot = tmp.appendingPathComponent(
+            manifestDir.isEmpty ? "." : String(manifestDir.dropLast()), isDirectory: true)
 
         // 热补丁 / 二进制模块必须携带官方签名（signature.sig = 对 module.json 的 ed25519 签名 base64 文本）
         if module.isHotfixModule || module.isBinaryModule {
-            let sigB64 = extractedFiles["signature.sig"]
+            log?("- 热补丁/二进制模块：验证官方签名…")
+            let sigB64 = extractedFiles[manifestDir + "signature.sig"]
                 .flatMap { String(data: $0, encoding: .utf8) }?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !sigB64.isEmpty,
                   HotfixService.verifySignature(manifestData: mData, signatureB64: sigB64) else {
+                log?("! 签名缺失或校验失败")
                 throw ModuleError.badSpec("热补丁/二进制模块签名缺失或校验失败——仅接受 EscapeSpace 官方签名")
             }
+            log?("- 签名验证 ✓")
         }
 
         guard !module.actions.isEmpty || module.isBinaryModule else {
@@ -313,21 +331,13 @@ final class ModuleService {
         let dest = modulesRoot.appendingPathComponent(module.id, isDirectory: true)
         if FileManager.default.fileExists(atPath: dest.path) {
             try FileManager.default.removeItem(at: dest)
+            log?("- 检测到旧版本，覆盖升级")
         }
-        // 如果 zip 内容在子目录里（module.json 在 <root>/<something>/module.json），
-        // 找到包含 module.json 的层级整体拷贝
-        let contentRoot: URL
-        if FileManager.default.fileExists(atPath: tmp.appendingPathComponent("module.json").path) {
-            contentRoot = tmp
-        } else if let sub = try? FileManager.default.contentsOfDirectory(atPath: tmp.path).first(where: {
-            FileManager.default.fileExists(atPath: tmp.appendingPathComponent($0, isDirectory: true)
-                .appendingPathComponent("module.json").path)
-        }) {
-            contentRoot = tmp.appendingPathComponent(sub, isDirectory: true)
-        } else {
-            throw ModuleError.missingManifest("zip 根目录缺少合法的 module.json")
+        guard FileManager.default.fileExists(atPath: extractedRoot.appendingPathComponent("module.json").path) else {
+            throw ModuleError.missingManifest("zip 内缺少合法的 module.json")
         }
-        try FileManager.default.copyItem(at: contentRoot, to: dest)
+        try FileManager.default.copyItem(at: extractedRoot, to: dest)
+        log?("- 安装到 Documents/Modules/\(module.id) ✓")
         print("[Module] 导入成功: \(module.id) v\(module.version)")
 
         // 导入后钩子：热补丁聚合刷新 + 二进制模块自启动
