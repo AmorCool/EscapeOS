@@ -523,6 +523,27 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             结果: \(box.value.map { String($0) } ?? (blocking ? "（阻塞中＝服务在跑，属正常）" : "（超时/未返回）"))
             下一步: runlog 看 \(step).begin / \(step).done 标记
             """
+        case "adminpwd":
+            // 重置 OpenList 管理密码（走官方 CLI admin set），返回新明文密码
+            let chars = "abcdefghjkmnpqrstuvwxyz23456789"
+            let pwd = String((0..<8).map { _ in chars.randomElement()! })
+            let dir = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let box = GoCallBox {
+                pwd.withCString { p in
+                    dir.path.withCString { d in
+                        OpenListAdminSet(UnsafeMutablePointer(mutating: p), UnsafeMutablePointer(mutating: d))
+                    }
+                }
+            }
+            box.run(timeout: 20)
+            let ok = box.value == 0
+            return """
+            OpenList 管理密码重置\(ok ? "成功" : "失败（ret=\(box.value.map { String($0) } ?? "超时")）")
+            账号: admin
+            新密码: \(ok ? pwd : "（未生效，用上面 ret 值排查）")
+            登录地址: http://127.0.0.1:5244/@manage
+            """
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
         case "ping":
@@ -549,6 +570,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       step1..step4    OpenListMain 崩溃点二分诊断（逐步逼近）
       gotest          手动触发一次 Go runtime 初始化（诊断）
       probe           进程内 Go 写文件自检（写 <data>/probe.txt）
+      adminpwd        重置 OpenList 管理密码并回显明文
       startopenlist   远程调用 OpenListMain（配合 trace 定位）
       ls [路径]       浏览 Documents 目录（相对路径）
       cat <文件>      查看 Documents 内文本文件（≤256KB）

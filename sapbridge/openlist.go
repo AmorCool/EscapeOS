@@ -102,6 +102,35 @@ func OpenListStep4(dirC *C.char) C.int {
 	return C.int(4)
 }
 
+//export OpenListAdminSet
+// OpenListAdminSet 重置 OpenList 管理员密码（走官方 CLI：openlist admin set <pwd>）。
+// 返回 0=成功；-1=Execute 错误；-2=参数为空；-3=panic。
+// 服务运行中也可执行：sqlite WAL 模式允许并发写入；os.Args 此时改写安全（server 已解析完）。
+func OpenListAdminSet(pwdC, dirC *C.char) C.int {
+	pwd := C.GoString(pwdC)
+	dir := C.GoString(dirC)
+	if pwd == "" || dir == "" {
+		return C.int(-2)
+	}
+	done := make(chan struct{})
+	ret := C.int(0)
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				ret = C.int(-3)
+			}
+		}()
+		os.Args = []string{"openlist", "admin", "set", pwd, "--data", dir}
+		if err := cmd.RootCmd.Execute(); err != nil {
+			fmt.Fprintf(os.Stderr, "[openlist] admin set error: %v\n", err)
+			ret = C.int(-1)
+		}
+	}()
+	<-done
+	return ret
+}
+
 //export OpenListMemTest
 // OpenListMemTest 逐步申请 MB 级内存并触碰（提交物理页），返回成功申请的 MB 数。
 // 用途：SSH `memtest <MB>` 探测本进程的内存天花板——若申请到某个量级 App 消失，
