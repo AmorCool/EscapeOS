@@ -360,6 +360,7 @@ jobs:
           export RUSTC_WRAPPER="$(command -v sccache || true)"
           if [ -z "$RUSTC_WRAPPER" ]; then unset RUSTC_WRAPPER; fi
           cargo build --release --target aarch64-apple-ios --manifest-path rust/lua-host/Cargo.toml
+          mkdir -p sapbridge/build   # build-sap.sh 尚未运行，目录需先建
           cp "rust/lua-host/target/aarch64-apple-ios/release/liblua_host.a" sapbridge/build/liblua_host.a
           cp rust/lua-host/rust-lua-host.h sapbridge/build/rust-lua-host.h
           ls -la sapbridge/build/liblua_host.a
