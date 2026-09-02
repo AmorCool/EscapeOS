@@ -398,59 +398,126 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             }
             guard let s = try? String(contentsOf: target, encoding: .utf8) else { return "非 UTF-8 文本文件" }
             return s
-        case "gotest":
-            // 手动触发一次 Go runtime 初始化（返回 42 即成功）
-            let box = GoCallBox { GoSelfTest() }
-            box.run()
-            return """
-            GoSelfTest: 调用已发出
-            结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
-            说明: 返回 42 = Go runtime 初始化成功
-            """
-        case "probe":
-            // 进程内 Go 最小动作：写 <data>/probe.txt（不启服务）。
-            // 数据目录以参数传入（Go env 快照问题，v0.3.78）——同时 setenv 作兜底。
-            let probeDir = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())
-            try? FileManager.default.createDirectory(at: probeDir, withIntermediateDirectories: true)
-            setenv("OPENLIST_DATA", probeDir.path, 1)
-            // Go 导出签名是 char*（非 const），Swift 需显式转成可变 C 字符串指针
-            let box = GoCallBox {
-                probeDir.path.withCString { cstr in
-                    OpenListProbe(UnsafeMutablePointer(mutating: cstr))
-                }
-            }
-            box.run()
-            return """
-            OpenListProbe: 调用已发出
-            结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
-            说明: >=0 = 进程内 Go 可写文件（写入字节数）；-1 = 写文件失败
-            """
-        case "startopenlist":
-            // 远程触发 OpenListMain（长时间阻塞属正常），配合 trace 定位死在哪一步。
-            // 与正式启动路径一致：设 OPENLIST_DATA + fd2 重定向到 data/go_stderr.log，
-            // 这样 OpenList 内部 log.Fatalf 的临终信息才会落盘（v0.3.77）。
+        case "gotest", "probe", "startopenlist", "memtest", "step1", "step2", "step3", "step4", "adminpwd":
+            // v0.3.90 统一解析：这些 OpenList 导出符号可能来自可拆卸 dylib（dlopen）
+            // 或内置静态（RTLD_DEFAULT）——由 BinaryModuleRunner.resolveOpenListSymbol 决定。
+            // App 瘦身后（OpenList 不再静态编入），直接符号调用无法通过编译，必须走解析器。
             let binID = Self.firstBinaryModuleID()
+            let moduleDir = ModuleService.shared.installURL(for: binID)
             let dataDir = ModuleService.shared.dataURL(for: binID)
             try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
-            setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底
-            let goErr = dataDir.appendingPathComponent("go_stderr.log")
-            let efd = open(goErr.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-            if efd >= 0 {
-                dup2(efd, STDERR_FILENO)
-                close(efd)
-            }
-            // 数据目录以参数传入（Go env 快照问题，v0.3.78）；char* 需显式转换
-            let box = GoCallBox {
-                dataDir.path.withCString { cstr in
-                    OpenListMain(UnsafeMutablePointer(mutating: cstr))
+            setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底（dylib 场景 dlopen 前设置则可见）
+
+            typealias DirFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Int32
+            typealias NoArgFn = @convention(c) () -> Int32
+            typealias MemFn = @convention(c) (Int32) -> Int32
+            typealias AdminFn = @convention(c) (UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<CChar>?) -> Int32
+
+            switch cmd {
+            case "gotest":
+                guard let sym = BinaryModuleRunner.resolveOpenListSymbol("GoSelfTest", moduleDir: moduleDir) else {
+                    return "❌ GoSelfTest 符号未找到——请先安装 OpenList 模块 zip"
                 }
+                let box = GoCallBox { unsafeBitCast(sym, to: NoArgFn.self)() }
+                box.run()
+                return """
+                GoSelfTest: 调用已发出
+                结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
+                说明: 返回 42 = Go runtime 初始化成功
+                """
+            case "probe":
+                guard let sym = BinaryModuleRunner.resolveOpenListSymbol("OpenListProbe", moduleDir: moduleDir) else {
+                    return "❌ OpenListProbe 符号未找到——请先安装 OpenList 模块 zip"
+                }
+                let fn = unsafeBitCast(sym, to: DirFn.self)
+                let box = GoCallBox {
+                    dataDir.path.withCString { cstr in fn(UnsafeMutablePointer(mutating: cstr)) }
+                }
+                box.run()
+                return """
+                OpenListProbe: 调用已发出
+                结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
+                说明: >=0 = 进程内 Go 可写文件（写入字节数）；-1 = 写文件失败
+                """
+            case "memtest":
+                let mb = parts.count > 1 ? (Int(parts[1]) ?? 64) : 64
+                guard let sym = BinaryModuleRunner.resolveOpenListSymbol("OpenListMemTest", moduleDir: moduleDir) else {
+                    return "❌ OpenListMemTest 符号未找到——请先安装 OpenList 模块 zip"
+                }
+                let fn = unsafeBitCast(sym, to: MemFn.self)
+                let box = GoCallBox { fn(Int32(mb)) }
+                box.run(timeout: 30)
+                return """
+                memtest: 申请 \(mb) MB
+                结果: \(box.value.map { "成功申请 \($0) MB" } ?? "（未返回＝进程被杀，说明天花板低于 \(mb) MB）")
+                """
+            case "step1", "step2", "step3", "step4":
+                let step = cmd
+                let blocking = (step == "step4")
+                guard let s1 = BinaryModuleRunner.resolveOpenListSymbol("OpenListStep1", moduleDir: moduleDir),
+                      let s2 = BinaryModuleRunner.resolveOpenListSymbol("OpenListStep2", moduleDir: moduleDir),
+                      let s3 = BinaryModuleRunner.resolveOpenListSymbol("OpenListStep3", moduleDir: moduleDir),
+                      let s4 = BinaryModuleRunner.resolveOpenListSymbol("OpenListStep4", moduleDir: moduleDir) else {
+                    return "❌ OpenListStep* 符号未找到——请先安装 OpenList 模块 zip"
+                }
+                let fns = [unsafeBitCast(s1, to: DirFn.self), unsafeBitCast(s2, to: DirFn.self),
+                           unsafeBitCast(s3, to: DirFn.self), unsafeBitCast(s4, to: DirFn.self)]
+                let idx = Int(step.dropFirst(4)) ?? 1   // "step1" → 1
+                let box = GoCallBox {
+                    dataDir.path.withCString { cstr in fns[idx - 1](UnsafeMutablePointer(mutating: cstr)) }
+                }
+                box.run(timeout: blocking ? 4 : 3, keepAlive: blocking)
+                return """
+                \(step): 已调用（数据目录以参数传入）
+                结果: \(box.value.map { String($0) } ?? (blocking ? "（阻塞中＝服务在跑，属正常）" : "（超时/未返回）"))
+                下一步: runlog 看 \(step).begin / \(step).done 标记
+                """
+            case "startopenlist":
+                // 远程触发 OpenListMain（长时间阻塞属正常）+ fd2 重定向抓临终输出
+                let goErr = dataDir.appendingPathComponent("go_stderr.log")
+                let efd = open(goErr.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+                if efd >= 0 {
+                    dup2(efd, STDERR_FILENO)
+                    close(efd)
+                }
+                guard let sym = BinaryModuleRunner.resolveOpenListSymbol("OpenListMain", moduleDir: moduleDir) else {
+                    return "❌ OpenListMain 符号未找到——请先安装 OpenList 模块 zip"
+                }
+                let fn = unsafeBitCast(sym, to: DirFn.self)
+                let box = GoCallBox {
+                    dataDir.path.withCString { cstr in fn(UnsafeMutablePointer(mutating: cstr)) }
+                }
+                box.run(timeout: 3, keepAlive: true)
+                return """
+                OpenListMain: 已在 8MB 大栈后台线程调用
+                结果: \(box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）")
+                下一步: runlog 看 data/trace.txt 打点 + mlog log/log.log
+                """
+            case "adminpwd":
+                let chars = "abcdefghjkmnpqrstuvwxyz23456789"
+                let pwd = String((0..<8).map { _ in chars.randomElement()! })
+                guard let sym = BinaryModuleRunner.resolveOpenListSymbol("OpenListAdminSet", moduleDir: moduleDir) else {
+                    return "❌ OpenListAdminSet 符号未找到——请先安装 OpenList 模块 zip"
+                }
+                let fn = unsafeBitCast(sym, to: AdminFn.self)
+                let box = GoCallBox {
+                    pwd.withCString { p in
+                        dataDir.path.withCString { d in
+                            fn(UnsafeMutablePointer(mutating: p), UnsafeMutablePointer(mutating: d))
+                        }
+                    }
+                }
+                box.run(timeout: 20)
+                let ok = box.value == 0
+                return """
+                OpenList 管理密码重置\(ok ? "成功" : "失败（ret=\(box.value.map { String($0) } ?? "超时")）")
+                账号: admin
+                新密码: \(ok ? pwd : "（未生效，用 ret 值排查）")
+                登录地址: http://127.0.0.1:5244/@manage
+                """
+            default:
+                return "❌ 未知诊断命令: \(cmd)"
             }
-            box.run(timeout: 3, keepAlive: true)
-            return """
-            OpenListMain: 已在 8MB 大栈后台线程调用
-            结果: \(box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）")
-            下一步: runlog 看 data/trace.txt 的打点（enter/args-set/error/panic）
-            """
         case "mlog":
             // 读模块数据目录下的任意文件（OpenList 自己的 data/log/log.log 等）。
             // 注意：不能用通用 cat —— 它基于 FileManager.documentDirectory，而模块数据目录
@@ -490,60 +557,6 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             }
             let all = s.components(separatedBy: "\n").filter { !$0.isEmpty }
             return all.isEmpty ? "（空）" : all.suffix(min(max(n, 1), 400)).joined(separator: "\n")
-        case "memtest":
-            // 探测本进程内存天花板（判定是否 jetsam 硬杀）
-            let mb = parts.count > 1 ? (Int(parts[1]) ?? 64) : 64
-            let box = GoCallBox { OpenListMemTest(Int32(mb)) }
-            box.run(timeout: 30)
-            return """
-            memtest: 申请 \(mb) MB
-            结果: \(box.value.map { "成功申请 \($0) MB" } ?? "（未返回＝进程被杀，说明天花板低于 \(mb) MB）")
-            """
-        case "step1", "step2", "step3", "step4":
-            // v0.3.79 二分诊断：逐步逼近 OpenListMain 的崩溃点。
-            // 每步先写 stepN.begin、完成后写 stepN.done；哪一步让 App 崩，凶手就在该步新增语句里。
-            let dir = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let step = cmd
-            let blocking = (step == "step4")
-            let box = GoCallBox { () -> Int32 in
-                dir.path.withCString { cstr in
-                    let p = UnsafeMutablePointer(mutating: cstr)
-                    switch step {
-                    case "step1": return OpenListStep1(p)
-                    case "step2": return OpenListStep2(p)
-                    case "step3": return OpenListStep3(p)
-                    default:      return OpenListStep4(p)
-                    }
-                }
-            }
-            box.run(timeout: blocking ? 4 : 3, keepAlive: blocking)
-            return """
-            \(step): 已调用（数据目录以参数传入）
-            结果: \(box.value.map { String($0) } ?? (blocking ? "（阻塞中＝服务在跑，属正常）" : "（超时/未返回）"))
-            下一步: runlog 看 \(step).begin / \(step).done 标记
-            """
-        case "adminpwd":
-            // 重置 OpenList 管理密码（走官方 CLI admin set），返回新明文密码
-            let chars = "abcdefghjkmnpqrstuvwxyz23456789"
-            let pwd = String((0..<8).map { _ in chars.randomElement()! })
-            let dir = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let box = GoCallBox {
-                pwd.withCString { p in
-                    dir.path.withCString { d in
-                        OpenListAdminSet(UnsafeMutablePointer(mutating: p), UnsafeMutablePointer(mutating: d))
-                    }
-                }
-            }
-            box.run(timeout: 20)
-            let ok = box.value == 0
-            return """
-            OpenList 管理密码重置\(ok ? "成功" : "失败（ret=\(box.value.map { String($0) } ?? "超时")）")
-            账号: admin
-            新密码: \(ok ? pwd : "（未生效，用上面 ret 值排查）")
-            登录地址: http://127.0.0.1:5244/@manage
-            """
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
         case "ping":

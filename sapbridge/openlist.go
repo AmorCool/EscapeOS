@@ -17,7 +17,15 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/cmd"
 )
 
+//go:build openlist_embed
+
 // OpenList bridge（v0.3.73 方案 A：与 Sap* 共用单一 Go runtime，静态链接进宿主）。
+//
+// ★ v0.3.90 起默认**不再编进 App**（可拆卸化）：本文件带 openlist_embed 构建标签，
+// App 构建（build-sap.sh）不传该标签 → OpenList 代码完全退出 App 二进制（瘦身 ~50MB）。
+// 可拆卸形态：module-esc CI 用 `-tags "openlist_embed sqlite_cgo_compat"` 构建
+// c-shared openlist.dylib，打成模块 zip（ed25519 签名）经 edge 分发，宿主 dlopen 加载。
+// 需要恢复内置形态时：build-sap.sh 加回该标签即可（代码零改动）。
 //
 // 之前用 dlopen 加载第二个 Go runtime（openlist.dylib）——双 runtime 在进程内
 // 初始化即崩（run.log 实锤：dlopen 成功 → 调用即死，Go 代码一行未执行）。
