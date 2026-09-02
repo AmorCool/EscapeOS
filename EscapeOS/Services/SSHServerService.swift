@@ -293,6 +293,11 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
         return NoopExecContext()
     }
 
+    /// 第一个二进制模块的 id（SSH 诊断命令用）
+    static func firstBinaryModuleID() -> String {
+        ModuleService.shared.listModules().first(where: { $0.isBinaryModule })?.id ?? "com.escapeos.alist"
+    }
+
     static func execute(_ raw: String) -> String {
         let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: " ").map(String.init)
@@ -397,6 +402,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             """
         case "probe":
             // 进程内 Go 最小动作：写 <data>/probe.txt（不启服务）
+            // 必须先把 OPENLIST_DATA 指到模块数据目录，否则 Go 会写到相对 ./data（v0.3.77 修）
+            setenv("OPENLIST_DATA", ModuleService.shared.dataURL(for: Self.firstBinaryModuleID()).path, 1)
             let box = GoCallBox { OpenListProbe() }
             box.run()
             return """
@@ -405,7 +412,17 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             说明: >=0 = 进程内 Go 可写文件（写入字节数）；-1 = 写文件失败
             """
         case "startopenlist":
-            // 远程触发 OpenListMain（长时间阻塞属正常），配合 trace 定位死在哪一步
+            // 远程触发 OpenListMain（长时间阻塞属正常），配合 trace 定位死在哪一步。
+            // 与正式启动路径一致：设 OPENLIST_DATA + fd2 重定向到 data/go_stderr.log，
+            // 这样 OpenList 内部 log.Fatalf 的临终信息才会落盘（v0.3.77）。
+            let binID = Self.firstBinaryModuleID()
+            setenv("OPENLIST_DATA", ModuleService.shared.dataURL(for: binID).path, 1)
+            let goErr = ModuleService.shared.dataURL(for: binID).appendingPathComponent("go_stderr.log")
+            let efd = open(goErr.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+            if efd >= 0 {
+                dup2(efd, STDERR_FILENO)
+                close(efd)
+            }
             let box = GoCallBox { OpenListMain() }
             box.run(timeout: 3, keepAlive: true)
             return """

@@ -31,6 +31,14 @@ GO="${GO:-go}"
 
 mkdir -p "$SAP_OUT"
 
+# 跨 run artifact 缓存命中（CI 已还原 libsap.a + sap.h + .openlist-src）→ 全部跳过。
+# 省下：OpenList clone + 前端下载 + go mod tidy/依赖下载 + 167MB 归档编译 ≈ 3.5 分钟。
+if [ -f "$SAP_OUT/libsap.a" ] && [ -f "$SAP_OUT/sap.h" ]; then
+  echo "==> 缓存命中：libsap.a + sap.h 已存在，跳过 Unicorn/OpenList/Go 全部构建"
+  ls -la "$SAP_OUT/libsap.a" "$SAP_OUT/sap.h"
+  exit 0
+fi
+
 echo "==> [1/5] Preparing Unicorn $UNICORN_TAG source"
 # 产物已存在（跨 run artifact 缓存命中）时连源码克隆都跳过——克隆仅编译需要。
 if [ ! -f "$UNICORN_BUILD/libunicorn.a" ]; then

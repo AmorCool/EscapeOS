@@ -261,6 +261,43 @@ jobs:
           fi
           echo "hit=$HIT" >> "$GITHUB_OUTPUT"
 
+      - name: Restore SAP bridge product (artifact, cross-run)
+        # 同 Rust/Unicorn：actions/cache 的 tag scope 隔离使 macos-go-* 缓存永远 miss，
+        # 导致每轮重新拉 OpenList 依赖 + 编译 167MB 归档（约 3.5 分钟）。
+        # libsap.a/sap.h/.openlist-src 打包成固定名 artifact 跨 run 复用，
+        # build-sap.sh 检测到产物存在即整体跳过。
+        id: sap_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          HIT=false
+          CUR_HASH="$(cat sapbridge/*.go sapbridge/go.mod sapbridge/go.sum 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-sap-bridge-v1&per_page=100" \
+            --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
+          if [ -n "${ART_ID:-}" ]; then
+            rm -rf /tmp/sap-cache && mkdir -p /tmp/sap-cache
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/sap-cache/cache.zip
+            unzip -oq /tmp/sap-cache/cache.zip -d /tmp/sap-cache
+            CACHED_HASH="$(cat /tmp/sap-cache/sap-hash.txt 2>/dev/null || true)"
+            if [ "$CACHED_HASH" = "$CUR_HASH" ] && [ -s /tmp/sap-cache/libsap.a ] && [ -s /tmp/sap-cache/sap.h ]; then
+              mkdir -p sapbridge/build
+              cp /tmp/sap-cache/libsap.a sapbridge/build/libsap.a
+              cp /tmp/sap-cache/sap.h sapbridge/build/sap.h
+              # OpenList 源码（含内嵌前端 dist）一并复原，避免重新 clone + 下载前端
+              if [ -f /tmp/sap-cache/openlist-src.tar.gz ]; then
+                tar -xzf /tmp/sap-cache/openlist-src.tar.gz -C sapbridge || true
+              fi
+              HIT=true
+              echo "=== SAP bridge cache HIT (libsap.a + sap.h + openlist-src 还原完成) ==="
+            else
+              echo "=== SAP bridge cache stale (cached=${CACHED_HASH:-empty} current=$CUR_HASH) ==="
+            fi
+          else
+            echo "=== SAP bridge cache artifact not found (first run or expired) ==="
+          fi
+          echo "hit=$HIT" >> "$GITHUB_OUTPUT"
+
       - name: Sync bundled modules from module-esc
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -325,6 +362,34 @@ jobs:
           path: |
             sapbridge/.unicorn-build-tci/libunicorn.a
             sapbridge/.unicorn-src/include
+          if-no-files-found: ignore
+
+      - name: Save SAP bridge product (artifact, cross-run)
+        # libsap.a + sap.h + OpenList 源码（含内嵌 dist）+ 源码哈希一起保存，
+        # 供后续 run 直接还原：省掉 clone/前端下载/依赖拉取/167MB 归档编译 ≈ 3.5 分钟。
+        if: steps.sap_cache.outputs.hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat sapbridge/*.go sapbridge/go.mod sapbridge/go.sum 2>/dev/null \
+            | shasum -a 256 | cut -d' ' -f1 > sapbridge/sap-hash.txt
+          if [ -d sapbridge/.openlist-src ]; then
+            tar -czf sapbridge/openlist-src.tar.gz -C sapbridge .openlist-src
+          fi
+          ls -la sapbridge/build/libsap.a sapbridge/build/sap.h sapbridge/sap-hash.txt || true
+
+      - name: Upload SAP bridge artifact
+        if: steps.sap_cache.outputs.hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: escapeos-sap-bridge-v1
+          path: |
+            sapbridge/build/libsap.a
+            sapbridge/build/sap.h
+            sapbridge/sap-hash.txt
+            sapbridge/openlist-src.tar.gz
+          retention-days: 7
           if-no-files-found: ignore
 
       - name: Package unsigned IPA
