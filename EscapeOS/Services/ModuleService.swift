@@ -129,9 +129,9 @@ struct EscapeModule: Identifiable, Codable {
     /// 是否二进制模块
     var isBinaryModule: Bool { binary != nil }
 
-    /// 安装目录
+    /// 安装目录（内置原地模块指向 bundle）
     var installURL: URL {
-        ModuleService.shared.modulesRoot.appendingPathComponent(id, isDirectory: true)
+        ModuleService.shared.installURL(for: id)
     }
 
     var accentColorName: String { accent ?? "blue" }
@@ -172,8 +172,24 @@ final class ModuleService {
         set { UserDefaults.standard.set(newValue, forKey: restoreOnUpgradeKey) }
     }
 
-    private func bootstrapBundledModules() {
-        // 覆盖安装不清沙盒数据（UserDefaults 保留），卸载标记跨安装残留。
+    /// 内置且不落盘（bundle 原地加载）的二进制模块：id → bundle 内模块目录
+    private var inPlaceBundled: [String: URL] = [:]
+
+    /// 内置原地模块不可卸载
+    func isInPlaceBundled(_ id: String) -> Bool { inPlaceBundled[id] != nil }
+
+    /// 模块安装根：内置原地模块指向 bundle，其余在 Documents/Modules
+    func installURL(for id: String) -> URL {
+        if let url = inPlaceBundled[id] { return url }
+        return modulesRoot.appendingPathComponent(id, isDirectory: true)
+    }
+
+    /// 模块数据目录（始终可写，与二进制分离）：<modulesRoot>/<id>/data
+    func dataURL(for id: String) -> URL {
+        modulesRoot.appendingPathComponent(id, isDirectory: true).appendingPathComponent("data", isDirectory: true)
+    }
+
+    private func bootstrapBundledModules() {        // 覆盖安装不清沙盒数据（UserDefaults 保留），卸载标记跨安装残留。
         // 检测锚点（双取最大）：bundle 目录 mtime + 可执行文件 mtime。
         // 注意 LC 场景：可执行文件 mtime 可能保留 IPA 内构建时间（同 IPA 覆盖不变），
         // 而 bundle 目录在安装搬运时 mtime 必然刷新——两者取 max 更稳。
@@ -202,9 +218,38 @@ final class ModuleService {
         let uninstalled = uninstalledIds
         for id in ids where !id.hasPrefix(".") {
             guard !uninstalled.contains(id) else { continue }
-            let dest = modulesRoot.appendingPathComponent(id, isDirectory: true)
-            guard !FileManager.default.fileExists(atPath: dest.path) else { continue }
             let src = bundledURL.appendingPathComponent(id, isDirectory: true)
+            let dest = modulesRoot.appendingPathComponent(id, isDirectory: true)
+            // 二进制模块（binary 键）不落盘：直接从 bundle 原地加载（137MB 级 dylib
+            // 拷贝进 Documents 白白吃磁盘写入配额）。数据目录仍在 modulesRoot/<id>/data。
+            if let data = try? Data(contentsOf: src.appendingPathComponent("module.json")),
+               let m = try? JSONDecoder().decode(EscapeModule.self, from: data),
+               m.isBinaryModule {
+                let dataRoot = modulesRoot.appendingPathComponent(id, isDirectory: true)
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    // v0.3.70 时代的落盘副本：迁移 data/ 后删除副本（省 137MB）
+                    do {
+                        try FileManager.default.createDirectory(at: dataRoot, withIntermediateDirectories: true)
+                        let oldData = dest.appendingPathComponent("data")
+                        let newData = dataRoot.appendingPathComponent("data")
+                        if FileManager.default.fileExists(atPath: oldData.path) &&
+                            !FileManager.default.fileExists(atPath: newData.path) {
+                            try FileManager.default.moveItem(at: oldData, to: newData)
+                        }
+                        try FileManager.default.removeItem(at: dest)
+                        print("[Module] \(id) 已迁移为 bundle 原地加载（数据保留在 \(newData.path)）")
+                    } catch {
+                        print("[Module] \(id) 原地加载迁移失败（保留落盘副本）: \(error)")
+                        continue
+                    }
+                } else {
+                    try? FileManager.default.createDirectory(
+                        at: dataRoot.appendingPathComponent("data"), withIntermediateDirectories: true)
+                }
+                inPlaceBundled[id] = src
+                continue
+            }
+            guard !FileManager.default.fileExists(atPath: dest.path) else { continue }
             try? FileManager.default.copyItem(at: src, to: dest)
             print("[Module] 内置模块安装: \(id)")
         }
@@ -221,12 +266,19 @@ final class ModuleService {
     func listModules() -> [EscapeModule] {
         guard let ids = try? FileManager.default.contentsOfDirectory(atPath: modulesRoot.path) else { return [] }
         var modules: [EscapeModule] = []
+        var seen = Set<String>()
         for id in ids.sorted() where !id.hasPrefix(".") {
             let manifest = modulesRoot.appendingPathComponent(id).appendingPathComponent("module.json")
-            guard let data = try? Data(contentsOf: manifest) else { continue }
-            if let m = try? JSONDecoder().decode(EscapeModule.self, from: data) {
-                modules.append(m)
-            }
+            guard let data = try? Data(contentsOf: manifest),
+                  let m = try? JSONDecoder().decode(EscapeModule.self, from: data) else { continue }
+            modules.append(m)
+            seen.insert(id)
+        }
+        // 内置原地二进制模块（bundle 内，不落盘）
+        for (id, url) in inPlaceBundled.sorted(by: { $0.key < $1.key }) where !seen.contains(id) {
+            guard let data = try? Data(contentsOf: url.appendingPathComponent("module.json")),
+                  let m = try? JSONDecoder().decode(EscapeModule.self, from: data) else { continue }
+            modules.append(m)
         }
         return modules
     }
@@ -365,6 +417,10 @@ final class ModuleService {
     // MARK: 删除
 
     func delete(id: String) {
+        guard inPlaceBundled[id] == nil else {
+            print("[Module] \(id) 为内置原地模块，不可卸载")
+            return
+        }
         let dir = modulesRoot.appendingPathComponent(id, isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         // 若是内置模块，记录用户卸载意愿——重启后不再自动回归

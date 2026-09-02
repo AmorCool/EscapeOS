@@ -46,7 +46,7 @@
 		<string>iPhoneOS</string>
 	</array>
 <key>CFBundleShortVersionString</key>
-<string>0.3.70</string>
+<string>0.3.71</string>
 <key>CFBundleVersion</key>
 <string>366</string>
 	<key>LSRequiresIPhoneOS</key>

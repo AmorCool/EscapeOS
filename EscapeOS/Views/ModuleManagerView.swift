@@ -351,8 +351,21 @@ struct ModuleManagerView: View {
                     }
                 }
                 Spacer()
-                pill(label: "卸载", icon: "trash") {
-                    uninstallTarget = module
+                if ModuleService.shared.isInPlaceBundled(module.id) {
+                    // 内置原地模块不可卸载（用户规范：置灰）
+                    HStack(spacing: 6) {
+                        Image(systemName: "trash")
+                        Text("卸载")
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.secondary.opacity(0.4))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 9)
+                    .background(Capsule().fill(Color(.systemGray6)))
+                } else {
+                    pill(label: "卸载", icon: "trash") {
+                        uninstallTarget = module
+                    }
                 }
             }
         }

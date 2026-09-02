@@ -40,7 +40,7 @@ final class BinaryModuleRunner: ObservableObject {
         }
     }
 
-    /// 启动模块二进制
+    /// 启动模块二进制（全程后台：137MB dlopen + Go runtime 初始化都可能数秒，绝不占主线程）
     /// 模块自带 bin/*.dylib 时直接进程内 dlopen（侧载 LC 环境 posix_spawn 必被
     /// AMFI 拒 EPERM，平台级限制；进程内加载机制同 LC 加载 tweak，不受限）。
     /// 无 dylib 时走 posix_spawn（TrollStore/平台化环境仍可用），EPERM 时再回退 dylib。
@@ -48,62 +48,66 @@ final class BinaryModuleRunner: ObservableObject {
         guard let bin = module.binary else { return }
         guard runningProcesses[module.id] == nil else { return }
 
-        let workDir = module.installURL
+        let workDir = ModuleService.shared.installURL(for: module.id)
+        let dataDir = ModuleService.shared.dataURL(for: module.id)
         let logFile = workDir.appendingPathComponent("run.log")
+        try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            self.runBinaryModule(module, bin: bin, workDir: workDir, dataDir: dataDir, logFile: logFile)
+        }
+    }
+
+    /// 后台执行体（非隔离：dlopen/spawn 全在这里，状态写回走主线程）
+    nonisolated private func runBinaryModule(
+        _ module: EscapeModule, bin: BinaryConfig,
+        workDir: URL, dataDir: URL, logFile: URL
+    ) {
+        // 端口预检：端口被占时绝不加载 Go——进程内 os.Exit 会连宿主一起杀
+        if let port = bin.port, isPortInUse(UInt16(port)) {
+            appendLog(logFile, "[host] 端口 \(port) 已被占用，放弃启动（服务可能已在运行）")
+            setError(module.id, "端口 \(port) 已被占用——服务可能已在运行")
+            return
+        }
         // 1) 进程内 dylib 优先
         if let dylibURL = findDylib(moduleDir: workDir) {
             do {
-                try startInProcess(module: module, dylibURL: dylibURL, logFile: logFile)
-                inProcessModules.insert(module.id)
-                runningProcesses[module.id] = -2
-                startErrors[module.id] = nil
+                try startInProcess(module: module, dylibURL: dylibURL, dataDir: dataDir, logFile: logFile)
                 appendLog(logFile, "[host] 进程内加载 \(dylibURL.lastPathComponent) 成功（随宿主退出）")
-                print("[Binary][\(module.id)] 已进程内启动 dylib=\(dylibURL.lastPathComponent)")
+                setRunningInProcess(module.id)
                 return
             } catch {
                 appendLog(logFile, "[host] 进程内加载失败: \(error.localizedDescription) → 尝试独立进程")
-                startErrors[module.id] = nil
             }
         }
-
         // 2) 独立进程 spawn（无 dylib 或 dylib 加载失败时）
         do {
             let execURL = try prepareExecutable(module: module, relativePath: bin.executable)
-            var args = bin.args ?? []
-            // alist 惯例：--data 相对 cwd；原样透传，宿主不改写
-            do {
-                let pid = try posixSpawn(
-                    execURL: execURL,
-                    arguments: args,
-                    workingDirectory: workDir,
-                    logFile: logFile
-                )
-                runningProcesses[module.id] = pid
-                inProcessModules.remove(module.id)
-                startErrors[module.id] = nil
-                print("[Binary][\(module.id)] 已启动 pid=\(pid) cmd=\(execURL.lastPathComponent) \(args.joined(separator: " "))")
-                appendLog(logFile, "[host] posix_spawn 成功 pid=\(pid)")
-            } catch BinaryModuleError.spawnEPERM(let msg) {
-                // AMFI 拒绝 → 进程内 dylib 回退
-                appendLog(logFile, "[host] \(msg)")
-                guard let dylibURL = findDylib(moduleDir: workDir) else {
-                    startErrors[module.id] = BinaryModuleError.spawnEPERM(msg).localizedDescription
-                        + "；模块未携带 dylib，无法进程内回退"
-                    appendLog(logFile, "[host] 无 bin/*.dylib，回退失败")
-                    print("[Binary][\(module.id)] EPERM 且无 dylib 可回退")
-                    return
-                }
+            let pid = try posixSpawn(
+                execURL: execURL,
+                arguments: bin.args ?? [],
+                workingDirectory: workDir,
+                logFile: logFile
+            )
+            appendLog(logFile, "[host] posix_spawn 成功 pid=\(pid)")
+            setRunningProcess(module.id, pid)
+        } catch BinaryModuleError.spawnEPERM(let msg) {
+            // AMFI 拒绝 → 进程内 dylib 回退
+            appendLog(logFile, "[host] \(msg)")
+            if let dylibURL = findDylib(moduleDir: workDir) {
                 appendLog(logFile, "[host] EPERM → 进程内加载 \(dylibURL.lastPathComponent)")
-                try startInProcess(module: module, dylibURL: dylibURL, logFile: logFile)
-                inProcessModules.insert(module.id)
-                runningProcesses[module.id] = -2
-                startErrors[module.id] = nil
-                print("[Binary][\(module.id)] 已进程内启动 dylib=\(dylibURL.lastPathComponent)")
+                do {
+                    try startInProcess(module: module, dylibURL: dylibURL, dataDir: dataDir, logFile: logFile)
+                    setRunningInProcess(module.id)
+                } catch {
+                    setError(module.id, "启动失败: \(error.localizedDescription)")
+                }
+            } else {
+                setError(module.id, msg + "；模块未携带 dylib，无法进程内回退")
             }
         } catch {
-            startErrors[module.id] = error.localizedDescription
-            print("[Binary][\(module.id)] 启动失败: \(error.localizedDescription)")
+            setError(module.id, error.localizedDescription)
         }
     }
 
@@ -144,7 +148,7 @@ final class BinaryModuleRunner: ObservableObject {
 
     /// 二进制就绪处理：拷贝到可写目录 + chmod 755
     /// （模块目录在 Documents 下本可写，直接 chmod 源文件即可；保底做一次拷贝语义）
-    private func prepareExecutable(module: EscapeModule, relativePath: String) throws -> URL {
+    nonisolated private func prepareExecutable(module: EscapeModule, relativePath: String) throws -> URL {
         let url = module.installURL.appendingPathComponent(relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw BinaryModuleError.binaryMissing(relativePath)
@@ -157,7 +161,7 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
     /// posix_spawn（stdout/stderr → 模块 run.log，stdin → /dev/null）
-    private func posixSpawn(
+    nonisolated private func posixSpawn(
         execURL: URL,
         arguments: [String],
         workingDirectory: URL,
@@ -215,7 +219,7 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
     /// 相对路径参数 → 模块目录绝对路径（alist --data data 场景）
-    private func resolveArg(_ arg: String, moduleDir: URL) -> String {
+    nonisolated private func resolveArg(_ arg: String, moduleDir: URL) -> String {
         // 形如 "--data data" 的组合参数：最后一个 token 若是相对路径则拼接模块目录
         if arg.hasPrefix("--") {
             return arg
@@ -229,7 +233,7 @@ final class BinaryModuleRunner: ObservableObject {
     // MARK: 进程内 dylib 回退（AMFI EPERM 场景）
 
     /// 查找模块 bin/ 下第一个 .dylib（模块规范不变，宿主自动识别）
-    private func findDylib(moduleDir: URL) -> URL? {
+    nonisolated private func findDylib(moduleDir: URL) -> URL? {
         let binDir = moduleDir.appendingPathComponent("bin", isDirectory: true)
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: binDir, includingPropertiesForKeys: nil) else { return nil }
@@ -237,8 +241,8 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
     /// 进程内加载 dylib：dlopen + 调用 OpenListMain 导出（Go c-archive 产物）。
-    /// 机制等同 LC 注入 tweak——dlopen ldid 伪签名 dylib 不受 AMFI exec 限制。
-    private func startInProcess(module: EscapeModule, dylibURL: URL, logFile: URL) throws {
+    /// 机制等同 LC 注入 tweak——dlopen ldid/codesign 伪签名 dylib 不受 AMFI exec 限制。
+    nonisolated private func startInProcess(module: EscapeModule, dylibURL: URL, dataDir: URL, logFile: URL) throws {
         let handle = dlopen(dylibURL.path, RTLD_NOW | RTLD_GLOBAL)
         guard let handle else {
             let err = dlerror().map { String(cString: $0) } ?? "未知错误"
@@ -249,16 +253,33 @@ final class BinaryModuleRunner: ObservableObject {
         }
         typealias OpenListMainFn = @convention(c) () -> Int32
         let fn = unsafeBitCast(sym, to: OpenListMainFn.self)
-        // 数据目录约定：环境变量 OPENLIST_DATA（dylib 内 os.Getenv 读取）
-        setenv("OPENLIST_DATA", module.installURL.path, 1)
+        // 数据目录约定：环境变量 OPENLIST_DATA（dylib 内 os.Getenv 读取，Go stderr 也写到该目录）
+        setenv("OPENLIST_DATA", dataDir.path, 1)
         appendLog(logFile, "[host] dlopen 成功，调用 OpenListMain（进程内，随宿主退出）")
         Thread.detachNewThread {
             _ = fn()   // Go runtime 在此线程初始化并阻塞服务
         }
     }
 
+    /// 端口占用检测（本机回环，connect 立即返回）
+    nonisolated private func isPortInUse(_ port: UInt16) -> Bool {
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        let r = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return r == 0
+    }
+
     /// 追加宿主侧日志到模块 run.log（与子进程 stdout/stderr 同文件）
-    private func appendLog(_ logFile: URL, _ line: String) {
+    nonisolated private func appendLog(_ logFile: URL, _ line: String) {
         let text = "[\(DateFormatter.logStamp)] \(line)\n"
         if let fh = FileHandle(forWritingAtPath: logFile.path) {
             fh.seekToEndOfFile()
@@ -267,6 +288,24 @@ final class BinaryModuleRunner: ObservableObject {
         } else {
             try? text.data(using: .utf8)!.write(to: logFile)
         }
+    }
+
+    // MARK: 状态写回（主线程）
+    @MainActor private func setRunningInProcess(_ id: String) {
+        inProcessModules.insert(id)
+        runningProcesses[id] = -2
+        startErrors[id] = nil
+        print("[Binary][\(id)] 已进程内启动")
+    }
+    @MainActor private func setRunningProcess(_ id: String, _ pid: pid_t) {
+        runningProcesses[id] = pid
+        inProcessModules.remove(id)
+        startErrors[id] = nil
+        print("[Binary][\(id)] 已启动 pid=\(pid)")
+    }
+    @MainActor private func setError(_ id: String, _ msg: String) {
+        startErrors[id] = msg
+        print("[Binary][\(id)] \(msg)")
     }
 }
 

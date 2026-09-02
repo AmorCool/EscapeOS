@@ -298,6 +298,23 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let all = LoginLogger.shared.fullLog().components(separatedBy: "\n")
             let tail = all.suffix(max(1, min(n, 200))).joined(separator: "\n")
             return tail.isEmpty ? "（登录日志为空）" : tail
+        case "runlog":
+            // 模块运行日志：run.log（宿主+子进程）+ data/stderr.log（进程内 Go）
+            let n = Int(parts.count > 1 ? parts[1] : "40") ?? 40
+            let mods = ModuleService.shared.listModules()
+            guard let bin = mods.first(where: { $0.isBinaryModule }) else { return "（无二进制模块）" }
+            var out: [String] = []
+            let dir = ModuleService.shared.installURL(for: bin.id)
+            let sources: [(String, URL)] = [
+                ("run.log", dir.appendingPathComponent("run.log")),
+                ("data/stderr.log", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("stderr.log")),
+            ]
+            for (label, path) in sources {
+                guard let s = try? String(contentsOf: path, encoding: .utf8), !s.isEmpty else { continue }
+                out.append("=== [\(bin.id)] \(label) 末尾 \(n) 行 ===")
+                out.append(contentsOf: s.components(separatedBy: "\n").filter { !$0.isEmpty }.suffix(min(n, 200)).map(String.init))
+            }
+            return out.isEmpty ? "（暂无 \(bin.id) 运行日志）" : out.joined(separator: "\n")
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
         case "ping":
@@ -320,6 +337,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       status          运行状态总览
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30）
+      runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       ip              局域网 IP
       uptime          PiP 运行时长
       ping            连通性测试
