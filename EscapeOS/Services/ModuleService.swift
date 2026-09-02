@@ -383,36 +383,28 @@ final class ModuleService {
         }
 
         // 安装：Modules/<id>/（同 id 覆盖升级）
-        let dest = modulesRoot.appendingPathComponent(module.id, isDirectory: true)
-        if FileManager.default.fileExists(atPath: dest.path) {
-            // ⚠️ v0.3.91 修复：升级导入保留 data/（OpenList 的数据库/配置/日志都在
-            // 模块目录的 data/ 里，直接 removeItem 会连用户数据一起删——v0.3.90 实测清空）。
-            let dataDir = dest.appendingPathComponent("data", isDirectory: true)
-            var preserved: URL?
-            if FileManager.default.fileExists(atPath: dataDir.path) {
-                let tmp = modulesRoot.appendingPathComponent(
-                    ".preserve-\(module.id)-\(UUID().uuidString)", isDirectory: true)
-                if (try? FileManager.default.moveItem(at: dataDir, to: tmp)) != nil {
-                    preserved = tmp
-                    log?("- 检测到旧版本，覆盖升级（用户数据 data/ 已暂存）")
-                }
-            }
-            try FileManager.default.removeItem(at: dest)
-            if preserved == nil { log?("- 检测到旧版本，覆盖升级") }
-            // 还原用户数据（zip 打包时已排除 data/，故 copyItem 后不会有同名目录）
-            if let preserved {
-                if FileManager.default.fileExists(atPath: dataDir.path) {
-                    try? FileManager.default.removeItem(at: dataDir)   // zip 自带 data 时的兜底
-                }
-                try? FileManager.default.moveItem(at: preserved, to: dataDir)
-                log?("- 用户数据 data/ 已还原 ✓")
-            }
-        }
         guard FileManager.default.fileExists(atPath: extractedRoot.appendingPathComponent("module.json").path) else {
             throw ModuleError.missingManifest("zip 内缺少合法的 module.json")
         }
-        try FileManager.default.copyItem(at: extractedRoot, to: dest)
-        log?("- 安装到 Documents/Modules/\(module.id) ✓")
+        let dest = modulesRoot.appendingPathComponent(module.id, isDirectory: true)
+        if FileManager.default.fileExists(atPath: dest.path) {
+            // v0.3.93 升级导入：data/ 原位保留（用户数据库/配置在里面），
+            // 只清掉 data/ 以外的旧内容，再把新版本逐项并入——不做暂存/还原。
+            log?("- 检测到旧版本，覆盖升级（data/ 原位保留）")
+            let fm = FileManager.default
+            for item in try fm.contentsOfDirectory(atPath: dest.path) where item != "data" {
+                try fm.removeItem(at: dest.appendingPathComponent(item))
+            }
+            for item in try fm.contentsOfDirectory(atPath: extractedRoot.path) where item != "data" {
+                let dst = dest.appendingPathComponent(item)
+                if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
+                try fm.moveItem(at: extractedRoot.appendingPathComponent(item), to: dst)
+            }
+            log?("- 安装到 Documents/Modules/\(module.id) ✓")
+        } else {
+            try FileManager.default.moveItem(at: extractedRoot, to: dest)
+            log?("- 安装到 Documents/Modules/\(module.id) ✓")
+        }
         print("[Module] 导入成功: \(module.id) v\(module.version)")
 
         // 导入后钩子：热补丁聚合刷新 + 二进制模块自启动
