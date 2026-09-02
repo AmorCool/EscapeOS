@@ -41,17 +41,35 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
     /// 启动模块二进制
-    /// 优先 posix_spawn（独立进程）；AMFI 拒绝（EPERM/错误码 1，侧载非平台化环境的平台限制）
-    /// 时自动回退：进程内 dlopen 加载模块自带 dylib（机制同 LC 加载 tweak，不受签名执行限制）。
+    /// 模块自带 bin/*.dylib 时直接进程内 dlopen（侧载 LC 环境 posix_spawn 必被
+    /// AMFI 拒 EPERM，平台级限制；进程内加载机制同 LC 加载 tweak，不受限）。
+    /// 无 dylib 时走 posix_spawn（TrollStore/平台化环境仍可用），EPERM 时再回退 dylib。
     func start(module: EscapeModule) {
         guard let bin = module.binary else { return }
         guard runningProcesses[module.id] == nil else { return }
 
+        let workDir = module.installURL
+        let logFile = workDir.appendingPathComponent("run.log")
+
+        // 1) 进程内 dylib 优先
+        if let dylibURL = findDylib(moduleDir: workDir) {
+            do {
+                try startInProcess(module: module, dylibURL: dylibURL, logFile: logFile)
+                inProcessModules.insert(module.id)
+                runningProcesses[module.id] = -2
+                startErrors[module.id] = nil
+                appendLog(logFile, "[host] 进程内加载 \(dylibURL.lastPathComponent) 成功（随宿主退出）")
+                print("[Binary][\(module.id)] 已进程内启动 dylib=\(dylibURL.lastPathComponent)")
+                return
+            } catch {
+                appendLog(logFile, "[host] 进程内加载失败: \(error.localizedDescription) → 尝试独立进程")
+                startErrors[module.id] = nil
+            }
+        }
+
+        // 2) 独立进程 spawn（无 dylib 或 dylib 加载失败时）
         do {
             let execURL = try prepareExecutable(module: module, relativePath: bin.executable)
-            let workDir = module.installURL
-            let logFile = workDir.appendingPathComponent("run.log")
-
             var args = bin.args ?? []
             // alist 惯例：--data 相对 cwd；原样透传，宿主不改写
             do {
