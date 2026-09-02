@@ -149,7 +149,7 @@ final class BinaryModuleRunner: ObservableObject {
 // MARK: 进程内启动（方案 A：单一 Go runtime，v0.3.73）
 
 /// OpenList 进程入口（C 函数指针，供 pthread_create 使用）
-private let openlistEntry: @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? = { _ in
+private let openlistEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? = { _ in
     _ = OpenListMain()   // Go runtime 首次调用时初始化；阻塞服务，永不返回
     return nil
 }
