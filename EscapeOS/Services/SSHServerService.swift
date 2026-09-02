@@ -90,6 +90,26 @@ final class SSHServerService: NSObject, ObservableObject {
     /// 服务是否允许启动（必须已手动设置过密码）
     var canStart: Bool { hasSetPassword }
 
+    /// Debug 模式：开启后每次启动 App 自动拉起 SSH 服务（无需手动点启动），
+    /// 便于随时无线连进来排查日志。
+    static let debugModeKey = "ssh.debugMode"
+    var debugMode: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.debugModeKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Self.debugModeKey)
+            objectWillChange.send()
+            if newValue { autoStartIfNeeded() }
+        }
+    }
+
+    /// Debug 模式开启时随 App 启动自动拉起（延迟 1.5s 避开启动高峰）
+    func autoStartIfNeeded() {
+        guard debugMode, canStart, !isRunning else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.start()
+        }
+    }
+
     func setPort(_ newPort: Int) {
         guard (1024...65535).contains(newPort), server == nil else { return }
         port = newPort
@@ -312,11 +332,12 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 ("data/go_stderr.log", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("go_stderr.log")),
             ]
             for (label, path) in sources {
-                guard let s = try? String(contentsOf: path, encoding: .utf8), !s.isEmpty else { continue }
+                guard let s = try? String(contentsOf: path, encoding: .utf8) else { continue }
                 let all = s.components(separatedBy: "\n").filter { !$0.isEmpty }
                 let keep = min(max(n, 1), 200)
                 out.append("=== [\(bin.id)] \(label) 末尾 \(keep) 行 ===")
-                out.append(contentsOf: all.suffix(keep))
+                // 空文件也显式标注（v0.3.75：空/非空本身是关键判据）
+                out.append(all.isEmpty ? "（文件存在但为空）" : all.suffix(keep).joined(separator: "\n"))
             }
             return out.isEmpty ? "（暂无 \(bin.id) 运行日志）" : out.joined(separator: "\n")
         case "ls":
@@ -362,6 +383,16 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             }
             guard let s = try? String(contentsOf: target, encoding: .utf8) else { return "非 UTF-8 文本文件" }
             return s
+        case "gotest":
+            // 手动触发一次 Go runtime 初始化（返回 42 即成功）。
+            // 若这一步就闪退 → 本环境的 Go runtime 初始化本身过不去（与 OpenList 无关）。
+            let box = GoSelfTestBox()
+            box.run()
+            return """
+            GoSelfTest: 调用已发出
+            结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
+            说明: 返回 42 = Go runtime 初始化成功；若 App 在此时闪退 → 初始化阶段被硬杀（见 runlog 的 go_stderr.log 是否为空）
+            """
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
         case "ping":
@@ -385,6 +416,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
+      gotest          手动触发一次 Go runtime 初始化（诊断）
       ls [路径]       浏览 Documents 目录（相对路径）
       cat <文件>      查看 Documents 内文本文件（≤256KB）
       ip              局域网 IP
@@ -392,6 +424,33 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       ping            连通性测试
       help            本帮助
     """
+}
+
+/// Go runtime 自检（后台 8MB 大栈线程 + 3s 超时读取结果）
+/// 用途：SSH `gotest` 命令手动触发一次 Go runtime 初始化，判断本环境能否完成初始化。
+final class GoSelfTestBox {
+    private let lock = NSLock()
+    private var _value: Int32?
+    var value: Int32? { lock.lock(); defer { lock.unlock() }; return _value }
+
+    func run() {
+        var attr = pthread_attr_t()
+        guard pthread_attr_init(&attr) == 0 else { return }
+        pthread_attr_setstacksize(&attr, 8 * 1024 * 1024)
+        var tid: pthread_t?
+        pthread_create(&tid, &attr, goSelfTestEntry, Unmanaged.passUnretained(self).toOpaque())
+        pthread_attr_destroy(&attr)
+        let deadline = Date().addingTimeInterval(3)
+        while value == nil, Date() < deadline { usleep(100_000) }
+    }
+
+    fileprivate func set(_ v: Int32) { lock.lock(); _value = v; lock.unlock() }
+}
+
+private let goSelfTestEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? = { ctx in
+    let v = GoSelfTest()
+    Unmanaged<GoSelfTestBox>.fromOpaque(ctx).takeUnretainedValue().set(v)
+    return nil
 }
 
 /// 空实现上下文（内置命令瞬时完成，无进程可终止）

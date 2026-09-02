@@ -18,6 +18,8 @@ struct EscapeSpaceApp: App {
            !override.trimmingCharacters(in: .whitespaces).isEmpty {
             MCMIntegration.configure(appGroup: override.trimmingCharacters(in: .whitespaces))
         }
+        // SSH Debug 模式：开启后随 App 启动自动拉起 SSH 服务（见 SSH 调试页开关）
+        SSHServerService.shared.autoStartIfNeeded()
     }
 
     var body: some Scene {

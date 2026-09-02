@@ -86,6 +86,22 @@ struct SSHDebugView: View {
             }
 
             Section {
+                Toggle(isOn: Binding(
+                    get: { service.debugMode },
+                    set: { service.debugMode = $0 }
+                )) {
+                    HStack {
+                        Image(systemName: "ladybug.fill")
+                        Text("Debug 模式（随 App 启动）")
+                    }
+                }
+                .tint(.blue)
+                .disabled(!service.canStart)
+            } footer: {
+                Text("开启后每次启动 App 都会自动拉起 SSH 服务（延迟 1.5 秒避开启动高峰），无需手动点启动，随时可无线连进来排查日志。")
+            }
+
+            Section {
                 Button {
                     if service.isRunning {
                         service.stop()

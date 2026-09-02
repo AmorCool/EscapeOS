@@ -34,6 +34,15 @@ var (
 	openlistStarted bool
 )
 
+//export GoSelfTest
+// GoSelfTest 只触发 Go runtime 初始化并返回固定值 42——诊断用：
+// 用 SSH 的 `gotest` 命令手动调用，判断"Go runtime 能否在本环境初始化完成"。
+// 注意：runtime 初始化会连带跑所有已链接包的 init（含 OpenList），因此它验证的是
+// 「单次 runtime 初始化」能否存活，而不是 OpenList 服务本身。
+func GoSelfTest() C.int {
+	return 42
+}
+
 //export OpenListMain
 // OpenListMain starts the OpenList server in-process. It blocks forever while
 // serving and never returns via os.Exit — startup errors are logged to
