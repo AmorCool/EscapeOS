@@ -64,7 +64,14 @@ jobs:
         # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）；
         # build-sap-server.sh 解压 unicorn 官方 mingw64 静态包（p7zip）并构建
         # Windows 版签名服务 EscapeSapServer.exe（链接官方 libunicorn.a）。
-        run: brew install cmake ninja
+        # 提速（v0.3.81）：macos runner 已预装 cmake/ninja，先探测再装，
+        # 避免每轮无谓的 brew 解析/下载（省 20~40 秒）。
+        run: |
+          if command -v cmake >/dev/null && command -v ninja >/dev/null; then
+            echo "cmake/ninja 已存在，跳过 brew 安装"
+          else
+            brew install cmake ninja
+          fi
 
       - name: Cache Go modules
         # 加速 build-sap.sh 内的 `go mod tidy` / 构建。滚动 key + restore-keys 前缀。
@@ -118,8 +125,13 @@ jobs:
           scope: escapeos-build-cache
 
       - name: Install sccache
+        # 同上：仅当缺失时安装（Rust 走 artifact 缓存命中时根本用不到 sccache）
         run: |
-          brew install sccache || true
+          if command -v sccache >/dev/null; then
+            echo "sccache 已存在，跳过 brew 安装"
+          else
+            brew install sccache || true
+          fi
           sccache --version || true
 
       - name: Cache sccache
@@ -332,11 +344,30 @@ jobs:
           echo "=== generated files ==="
           ls -la EscapeSpace.xcodeproj/ 2>/dev/null || true
 
+      - name: Compute Swift source hash (DerivedData cache key)
+        id: src_hash
+        run: |
+          set -euo pipefail
+          HASH="$(find EscapeOS -type f \( -name '*.swift' -o -name '*.m' -o -name '*.mm' \
+            -o -name '*.c' -o -name '*.h' \) -print0 2>/dev/null \
+            | sort -z | xargs -0 shasum -a 256 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+          echo "hash=${HASH:-nosrc}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache DerivedData (incremental Swift build)
+        # v0.3.81 提速：Swift 源码未变时直接复用 build/，编译从全量变增量。
+        # key 由全部源码内容哈希 + project.yml 决定，源码一变自动失效。
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: macos-deriveddata-${{ steps.src_hash.outputs.hash }}-${{ hashFiles('project.yml') }}
+
       - name: Build (compile/link, no Apple signing)
         # 验证「当前源码能在 Xcode 原生工程下编过」并产出未签名 .app。
         # CODE_SIGNING_ALLOWED=NO 跳过 Apple 证书签名要求；entitlements 由后续 ldid 施加。
         # -derivedDataPath build 把 .app 固定落到 build/Build/Products/Release-iphoneos/，
         # 便于打包步骤稳定定位（默认 DerivedData 路径含随机 hash，不可预测）。
+        # DEBUG_INFORMATION_FORMAT=dwarf：CI 出的是未签名测试包，不需要单独 dSYM
+        # 产物，省掉 dSYM 生成/拷贝这一大块链接后处理时间（v0.3.81）。
         run: |
           set -euo pipefail
           xcodebuild build \
@@ -349,6 +380,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf \
+            GCC_GENERATE_DEBUGGING_SYMBOLS=NO \
             2>&1 | tee /tmp/xcodebuild.log
           echo "Xcode build (compile/link) succeeded"
           echo "=== located app bundles ==="
