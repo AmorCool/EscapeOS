@@ -194,9 +194,27 @@ func OpenListMain(dataDirC *C.char) C.int {
 	fmt.Fprintln(os.Stderr, "[openlist] server starting (in-process, single runtime)")
 	fmt.Fprintln(os.Stderr, "[openlist] dataDir="+dataDir)
 
-	openlistRun(dataDir)
+	// ★ v0.3.85 根因修复：服务逻辑必须跑在真正的 goroutine 里，不能在
+	// cgo 导出函数（C 线程）的栈上直接执行。
+	//
+	// 原因：宿主 pthread 直接调用导出函数时，Go 代码运行在 cgo 回调的受限栈上；
+	// OpenList 数据库用 modernc/sqlite（C→Go 机器翻译产物），初始化调用层次极深，
+	// 在受限栈上必然爆栈 → SIGSEGV 直接杀进程，Go 层 recover 完全抓不到，
+	// 表现为"进程无声死亡、一个字都没写出来"。
+	//
+	// goroutine 的栈从 2KB 起动态增长（上限 1GB），不会爆栈。
+	// 佐证：写文件/probe/申请 1GB 内存（调用层次浅）全部成功，
+	// 唯独深入 sqlite 初始化时必崩。
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		openlistRun(dataDir)
+	}()
+	// openlistRun 正常会永久阻塞在 Execute（服务运行中）；
+	// 若内部 panic 被 recover，done 关闭后落到下面的永久阻塞。
+	<-done
 
-	// openlistRun 只在 panic recover 或 Execute 返回后走到这里——永久阻塞，宿主存活。
+	// 兜底：永久阻塞，宿主存活。
 	for {
 		time.Sleep(time.Hour)
 	}
