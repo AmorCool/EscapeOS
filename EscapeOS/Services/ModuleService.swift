@@ -300,7 +300,14 @@ final class ModuleService {
         log?("- 规范 \(module.spec) ✓")
 
         // module.json 所在目录（"" 表示 zip 根）——signature.sig 必须与 module.json 同目录
-        let manifestDir = (manifestName as NSString?)?.deletingLastPathComponent ?? ""
+        // 用纯字符串切分（NSString.deletingLastPathComponent 返回值斜杠语义不可靠，
+        // 之前 dropLast() 掐掉真实字符导致 extractedRoot/签名 key 双双找错——v0.3.68 修复）
+        let manifestDir: String
+        if let mn = manifestName, let idx = mn.lastIndex(of: "/") {
+            manifestDir = String(mn[...idx])          // 保留末尾 "/"，如 "modules/<id>/"
+        } else {
+            manifestDir = ""                          // zip 根
+        }
         // 安装根 = module.json 所在目录（支持任意嵌套：modules/<id>/、module-esc-main/modules/<id>/ 均可）
         let extractedRoot = tmp.appendingPathComponent(
             manifestDir.isEmpty ? "." : String(manifestDir.dropLast()), isDirectory: true)
@@ -311,10 +318,15 @@ final class ModuleService {
             let sigB64 = extractedFiles[manifestDir + "signature.sig"]
                 .flatMap { String(data: $0, encoding: .utf8) }?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !sigB64.isEmpty,
-                  HotfixService.verifySignature(manifestData: mData, signatureB64: sigB64) else {
-                log?("! 签名缺失或校验失败")
-                throw ModuleError.badSpec("热补丁/二进制模块签名缺失或校验失败——仅接受 EscapeSpace 官方签名")
+            guard !sigB64.isEmpty else {
+                log?("- 签名文件查找 key：\(manifestDir)signature.sig")
+                log?("- zip 内已知文件：\(extractedFiles.keys.sorted().joined(separator: ", "))")
+                log!("! 签名缺失")
+                throw ModuleError.badSpec("热补丁/二进制模块签名缺失——zip 内未找到 \(manifestDir)signature.sig")
+            }
+            guard HotfixService.verifySignature(manifestData: mData, signatureB64: sigB64) else {
+                log!("! 签名校验失败（签名文件存在但与官方公钥不匹配）")
+                throw ModuleError.badSpec("热补丁/二进制模块签名校验失败——仅接受 EscapeSpace 官方签名")
             }
             log?("- 签名验证 ✓")
         }

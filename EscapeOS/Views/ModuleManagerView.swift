@@ -516,73 +516,47 @@ struct ModuleImportPicker: UIViewControllerRepresentable {
     }
 }
 
-/// 安装详情界面（对齐 KernelSU 模块安装页）：
-/// 终端风格滚动日志 + 底部状态栏，完成后右下角「关闭」。
+/// 安装界面（对齐 KernelSU 官方 FlashScreen Material 版）：
+/// 普通页面背景 + 等宽小字日志整页滚动 + 自动滚底，
+/// 标题随状态变化（安装中/安装成功/安装失败），完成后右下角悬浮「关闭」按钮。
 struct ModuleInstallSheet: View {
     let lines: [String]
     let finished: Bool
     let succeeded: Bool
     let onClose: () -> Void
 
+    private var title: String {
+        if !finished { return "安装中" }
+        return succeeded ? "安装成功" : "安装失败"
+    }
+
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                // 终端日志区（KernelSU 深色控制台风格）
-                ScrollView {
-                    ScrollViewReader { proxy in
-                        VStack(alignment: .leading, spacing: 3) {
-                            ForEach(Array(lines.enumerated()), id: \.offset) { idx, line in
-                                Text(line)
-                                    .font(.system(size: 12, weight: .regular, design: .monospaced))
-                                    .foregroundColor(color(for: line))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .textSelection(.enabled)
-                                    .id(idx)
-                            }
+            ScrollView {
+                ScrollViewReader { proxy in
+                    // 官方为单段 Monospace bodySmall 文本 + 8dp padding，页面默认背景
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { idx, line in
+                            Text(line)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(color(for: line))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .id(idx)
                         }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .onChange(of: lines.count) { _ in
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                proxy.scrollTo(lines.count - 1, anchor: .bottom)
-                            }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onChange(of: lines.count) { _ in
+                        // 官方：日志更新即滚到底部
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(lines.count - 1, anchor: .bottom)
                         }
                     }
                 }
-                .background(Color.black.opacity(0.88))
-                // 底部状态栏：左侧状态文字，右侧「关闭」
-                HStack {
-                    if finished {
-                        Image(systemName: succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundColor(succeeded ? .green : .red)
-                        Text(succeeded ? "安装成功" : "安装失败")
-                            .fontWeight(.semibold)
-                            .foregroundColor(succeeded ? .green : .red)
-                    } else {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("安装中…")
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    if finished {
-                        Button {
-                            onClose()
-                        } label: {
-                            Text("关闭")
-                                .fontWeight(.semibold)
-                                .frame(minWidth: 76)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.blue)
-                        .controlSize(.regular)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color(.secondarySystemGroupedBackground))
             }
-            .navigationTitle("安装模块")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if finished {
@@ -591,14 +565,30 @@ struct ModuleInstallSheet: View {
                     }
                 }
             }
+            // 官方：完成后右下角悬浮操作按钮（官方为"重启"，此处按需求为"关闭"）
+            .overlay(alignment: .bottomTrailing) {
+                if finished {
+                    Button {
+                        onClose()
+                    } label: {
+                        Label("关闭", systemImage: "xmark.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                    .controlSize(.large)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 24)
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
         }
         .navigationViewStyle(.stack)
     }
 
     private func color(for line: String) -> Color {
         if line.hasPrefix("!") { return .red }
-        if line.hasPrefix("✓") || line.hasPrefix("- 签名") { return .green }
-        if line.hasPrefix("-") || line.hasPrefix("✓") { return .white.opacity(0.92) }
-        return .white.opacity(0.92)
+        if line.hasPrefix("✓") { return .green }
+        return .primary
     }
 }
