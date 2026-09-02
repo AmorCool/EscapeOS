@@ -92,6 +92,12 @@ if [ ! -f "$OPENLIST_SRC/public/dist/index.html" ]; then
     | tar -xz -C "$OPENLIST_SRC/public/dist"
 fi
 [ -f "$OPENLIST_SRC/public/dist/index.html" ] || { echo "error: openlist frontend dist missing"; exit 1; }
+
+echo "==> [3.5/5] Injecting bootstrap stage markers (v0.3.86 崩溃定位)"
+# 给 OpenList 源码的 bootstrap/db 各函数注入 begin/done 标记（写到模块数据目录，
+# SSH `mlog` 可读），崩溃后对照标记存在性即可函数级定位。幂等：已注入则跳过。
+python3 "$SCRIPT_DIR/patch_stages.py" "$OPENLIST_SRC" || echo "?? 标记注入失败（继续未打补丁构建）"
+"$(command -v gofmt || echo gofmt)" -w "$OPENLIST_SRC/internal/bootstrap" "$OPENLIST_SRC/internal/db" 2>/dev/null || true
 # replace 指向本地源码（嵌入 dist 必须可控）；go.sum 由下方 tidy 解析
 "$GO" mod edit -require=github.com/OpenListTeam/OpenList/v4@"$OPENLIST_VER"
 "$GO" mod edit -replace=github.com/OpenListTeam/OpenList/v4="$OPENLIST_SRC"
