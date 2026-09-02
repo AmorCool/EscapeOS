@@ -26,9 +26,9 @@ import (
 // 铁律：
 //   - 绝不 os.Exit / log.Fatal —— 进程内退出 = 杀宿主。启动失败只写
 //     stderr.log 然后永久阻塞（time.Sleep 不触发死锁检测）。
-//   - 只能启动一次（sync.Once）——重复启动会导致端口冲突。
-//   - 数据目录来自环境变量 OPENLIST_DATA（Swift 侧指向 Documents/Modules/<id>/data）；
-//     Go stderr 与 std log 重定向到 <dataDir>/stderr.log，供 SSH runlog 查看。
+//   - 只能启动一次（openlistMu + openlistStarted 标志）——重复启动会导致端口冲突。
+//   - 数据目录由 **调用方以参数传入**（Go env 在 runtime 初始化时已快照，宿主事后
+//     setenv 对 os.Getenv 不可见）；Go stderr 与 std log 重定向到 <dataDir>/stderr.log。
 
 var (
 	openlistMu      sync.Mutex

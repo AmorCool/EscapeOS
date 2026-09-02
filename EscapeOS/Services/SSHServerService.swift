@@ -406,7 +406,12 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let probeDir = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())
             try? FileManager.default.createDirectory(at: probeDir, withIntermediateDirectories: true)
             setenv("OPENLIST_DATA", probeDir.path, 1)
-            let box = GoCallBox { OpenListProbe(probeDir.path) }
+            // Go 导出签名是 char*（非 const），Swift 需显式转成可变 C 字符串指针
+            let box = GoCallBox {
+                probeDir.path.withCString { cstr in
+                    OpenListProbe(UnsafeMutablePointer(mutating: cstr))
+                }
+            }
             box.run()
             return """
             OpenListProbe: 调用已发出
@@ -427,8 +432,12 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 dup2(efd, STDERR_FILENO)
                 close(efd)
             }
-            // 数据目录以参数传入（Go env 快照问题，v0.3.78）
-            let box = GoCallBox { OpenListMain(dataDir.path) }
+            // 数据目录以参数传入（Go env 快照问题，v0.3.78）；char* 需显式转换
+            let box = GoCallBox {
+                dataDir.path.withCString { cstr in
+                    OpenListMain(UnsafeMutablePointer(mutating: cstr))
+                }
+            }
             box.run(timeout: 3, keepAlive: true)
             return """
             OpenListMain: 已在 8MB 大栈后台线程调用

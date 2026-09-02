@@ -281,20 +281,20 @@ jobs:
           if [ -n "${ART_ID:-}" ]; then
             rm -rf /tmp/sap-cache && mkdir -p /tmp/sap-cache
             gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/sap-cache/cache.zip
-            unzip -oq /tmp/sap-cache/cache.zip -d /tmp/sap-cache
-            CACHED_HASH="$(cat /tmp/sap-cache/sap-hash.txt 2>/dev/null || true)"
-            if [ "$CACHED_HASH" = "$CUR_HASH" ] && [ -s /tmp/sap-cache/libsap.a ] && [ -s /tmp/sap-cache/sap.h ]; then
-              mkdir -p sapbridge/build
-              cp /tmp/sap-cache/libsap.a sapbridge/build/libsap.a
-              cp /tmp/sap-cache/sap.h sapbridge/build/sap.h
+            # 关键：upload-artifact@v4 存储的相对路径以「公共前缀 sapbridge」为根，
+            # 因此内容实际是 build/libsap.a、sap-hash.txt…——像 Unicorn 那样直接解到 sapbridge 下
+            unzip -oq /tmp/sap-cache/cache.zip -d sapbridge
+            CACHED_HASH="$(cat sapbridge/sap-hash.txt 2>/dev/null || true)"
+            if [ "$CACHED_HASH" = "$CUR_HASH" ] && [ -s sapbridge/build/libsap.a ] && [ -s sapbridge/build/sap.h ]; then
               # OpenList 源码（含内嵌前端 dist）一并复原，避免重新 clone + 下载前端
-              if [ -f /tmp/sap-cache/openlist-src.tar.gz ]; then
-                tar -xzf /tmp/sap-cache/openlist-src.tar.gz -C sapbridge || true
+              if [ -f sapbridge/openlist-src.tar.gz ]; then
+                tar -xzf sapbridge/openlist-src.tar.gz -C sapbridge || true
               fi
               HIT=true
               echo "=== SAP bridge cache HIT (libsap.a + sap.h + openlist-src 还原完成) ==="
             else
               echo "=== SAP bridge cache stale (cached=${CACHED_HASH:-empty} current=$CUR_HASH) ==="
+              rm -rf sapbridge/build sapbridge/openlist-src.tar.gz
             fi
           else
             echo "=== SAP bridge cache artifact not found (first run or expired) ==="

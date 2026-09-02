@@ -147,31 +147,13 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
 // MARK: 进程内启动（方案 A：单一 Go runtime，v0.3.73）
-
-/// OpenList 进程入口（C 函数指针，供 pthread_create 使用）
-/// 数据目录作为 **参数** 传入给 Go（Go 的 env 在 runtime 初始化时已快照，
-/// setenv 事后设置对 os.Getenv 不可见——v0.3.78 闪退根因）
-private let openlistDataDirBox = DataDirBox()
-
-final class DataDirBox {
-    private let lock = NSLock()
-    private var _path: String = ""
-    var path: String { lock.lock(); defer { lock.unlock() }; return _path }
-    func set(_ p: String) { lock.lock(); _path = p; lock.unlock() }
-}
-
-private let openlistEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? = { _ in
-    _ = OpenListMain(openlistDataDirBox.path)   // Go runtime 首次调用时初始化；阻塞服务，永不返回
-    return nil
-}
-
     /// 调用静态链接进宿主的 OpenListMain（sap.h 经桥接头暴露给 Swift，与 Sap*
-    /// 同一 Go runtime）。数据目录来自 OPENLIST_DATA；Go stderr/log 落盘 data/stderr.log；
-    /// bridge 绝不 os.Exit。
+    /// 同一 Go runtime）。数据目录以 **参数** 传给 Go（Go env 在 runtime 初始化时
+    /// 已快照，setenv 事后设置对 os.Getenv 不可见——v0.3.78 闪退根因）；
+    /// Go stderr/log 落盘 data/stderr.log；bridge 绝不 os.Exit。
     /// 跑在 8MB 大栈 pthread 上（NSThread 默认 512KB，Go runtime + 数百个包 init 链可能爆栈）。
     nonisolated private func startInProcess(dataDir: URL, logFile: URL) throws {
-        setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底（Go 可能读不到 env 快照后的值）
-        openlistDataDirBox.set(dataDir.path)        // 真正生效：作为参数传给 Go
+        setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底（Go env 快照可能读不到）
         // 关键诊断：把宿主 fd 2 重定向到文件——Go runtime 在初始化阶段的
         // throw/fatal（发生在我们任何 Go 代码之前）原本只写进程 stderr，在 LC 里
         // 直接丢失。抓下来后 SSH: cat Modules/<id>/data/go_stderr.log 即可看到真因。
@@ -188,7 +170,12 @@ private let openlistEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMut
         }
         pthread_attr_setstacksize(&attr, 8 * 1024 * 1024)
         var tid: pthread_t?
-        let rc = pthread_create(&tid, &attr, openlistEntry, nil)
+        // 数据目录以 strdup 的 C 字符串作为线程上下文传给 Go（参数传递，不走 env）
+        guard let ctx = strdup(dataDir.path) else {
+            pthread_attr_destroy(&attr)
+            throw BinaryModuleError.spawnFailed("strdup 数据目录路径失败")
+        }
+        let rc = pthread_create(&tid, &attr, openlistEntry, ctx)
         pthread_attr_destroy(&attr)
         guard rc == 0 else {
             throw BinaryModuleError.spawnFailed("pthread_create 失败：\(rc)")
@@ -255,6 +242,15 @@ private extension DateFormatter {
         f.dateFormat = "HH:mm:ss"
         return f
     }()
+}
+
+// MARK: OpenList 进程入口（C 函数指针，供 pthread_create 使用）
+// ctx = strdup 出来的数据目录 C 字符串；线程长期存活（服务阻塞），故不 free。
+// 数据目录必须走参数：Go 在 runtime 初始化时已快照 environ，事后 setenv 对
+// os.Getenv 不可见（v0.3.78 闪退根因）。
+private let openlistEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? = { ctx in
+    _ = OpenListMain(ctx.assumingMemoryBound(to: CChar.self))
+    return nil
 }
 
 enum BinaryModuleError: LocalizedError {
