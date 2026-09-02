@@ -290,22 +290,28 @@ final class BinaryModuleRunner: ObservableObject {
         }
     }
 
-    // MARK: 状态写回（主线程）
-    @MainActor private func setRunningInProcess(_ id: String) {
-        inProcessModules.insert(id)
-        runningProcesses[id] = -2
-        startErrors[id] = nil
-        print("[Binary][\(id)] 已进程内启动")
+    // MARK: 状态写回（主线程队列）
+    nonisolated private func setRunningInProcess(_ id: String) {
+        DispatchQueue.main.async {
+            self.inProcessModules.insert(id)
+            self.runningProcesses[id] = -2
+            self.startErrors[id] = nil
+            print("[Binary][\(id)] 已进程内启动")
+        }
     }
-    @MainActor private func setRunningProcess(_ id: String, _ pid: pid_t) {
-        runningProcesses[id] = pid
-        inProcessModules.remove(id)
-        startErrors[id] = nil
-        print("[Binary][\(id)] 已启动 pid=\(pid)")
+    nonisolated private func setRunningProcess(_ id: String, _ pid: pid_t) {
+        DispatchQueue.main.async {
+            self.runningProcesses[id] = pid
+            self.inProcessModules.remove(id)
+            self.startErrors[id] = nil
+            print("[Binary][\(id)] 已启动 pid=\(pid)")
+        }
     }
-    @MainActor private func setError(_ id: String, _ msg: String) {
-        startErrors[id] = msg
-        print("[Binary][\(id)] \(msg)")
+    nonisolated private func setError(_ id: String, _ msg: String) {
+        DispatchQueue.main.async {
+            self.startErrors[id] = msg
+            print("[Binary][\(id)] \(msg)")
+        }
     }
 }
 

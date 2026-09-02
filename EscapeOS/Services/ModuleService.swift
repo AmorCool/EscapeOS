@@ -155,9 +155,8 @@ final class ModuleService {
 
     /// 用户主动卸载过的模块 id（防止内置模块重启后自动回归）
     private static let uninstalledKey = "Module.uninstalled.ids"
-    /// 覆盖安装检测锚点：主可执行文件的修改时间
-    /// （每次安装/覆盖安装都会刷新，同版本覆盖安装也能检测到）
-    private static let hostInstallDateKey = "Module.uninstalled.hostInstallDate"
+    /// 覆盖安装检测锚点：CFBundleVersion（build 号，每次发版必变）
+    private static let hostInstallVersionKey = "Module.hostInstall.version"
 
     private var uninstalledIds: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: Self.uninstalledKey) ?? [])
@@ -189,29 +188,22 @@ final class ModuleService {
         modulesRoot.appendingPathComponent(id, isDirectory: true).appendingPathComponent("data", isDirectory: true)
     }
 
-    private func bootstrapBundledModules() {        // 覆盖安装不清沙盒数据（UserDefaults 保留），卸载标记跨安装残留。
-        // 检测锚点（双取最大）：bundle 目录 mtime + 可执行文件 mtime。
-        // 注意 LC 场景：可执行文件 mtime 可能保留 IPA 内构建时间（同 IPA 覆盖不变），
-        // 而 bundle 目录在安装搬运时 mtime 必然刷新——两者取 max 更稳。
-        // 若两锚点都不变（同 IPA 且搬运未触目录），用户可在模块设置里点"恢复内置模块"手动回归。
-        func modTime(_ url: URL) -> TimeInterval {
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-            return values?.contentModificationDate?.timeIntervalSince1970 ?? 0
-        }
-        let bundleMod = modTime(Bundle.main.bundleURL)
-        // executableURL 是可选（URL?）——flatMap 解包后计算
-        let execMod = Bundle.main.executableURL.flatMap { modTime($0) } ?? 0
-        let installAnchor = max(bundleMod, execMod)
-        let recordedDate = UserDefaults.standard.double(forKey: Self.hostInstallDateKey)
-        if recordedDate == 0 {
-            UserDefaults.standard.set(installAnchor, forKey: Self.hostInstallDateKey)
-        } else if abs(recordedDate - installAnchor) > 1 {
+    private func bootstrapBundledModules() {
+        // 覆盖安装检测锚点：CFBundleVersion（build 号）。
+        // 旧方案（bundle 目录/可执行文件 mtime）在 LC 环境会漂移——卸载后重启模块"复活"的 bug 根因。
+        // CFBundleVersion 每次发版必变、同版本内永远稳定（v0.3.72 修复）。
+        let installVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        let recorded = UserDefaults.standard.string(forKey: Self.hostInstallVersionKey)
+        if recorded == nil {
+            UserDefaults.standard.set(installVersion, forKey: Self.hostInstallVersionKey)
+        } else if recorded != installVersion {
             if Self.restoreOnUpgrade {
                 UserDefaults.standard.removeObject(forKey: Self.uninstalledKey)
-                print("[Module] 检测到覆盖安装（安装锚点变化），恢复内置模块")
+                print("[Module] 检测到覆盖安装（CFBundleVersion \(recorded ?? "?") → \(installVersion)），恢复内置模块")
             }
-            UserDefaults.standard.set(installAnchor, forKey: Self.hostInstallDateKey)
+            UserDefaults.standard.set(installVersion, forKey: Self.hostInstallVersionKey)
         }
+        UserDefaults.standard.removeObject(forKey: Self.hostInstallDateKey) // 旧 mtime 锚点清理
 
         guard let bundledURL = Bundle.main.url(forResource: "BundledModules", withExtension: nil) else { return }
         guard let ids = try? FileManager.default.contentsOfDirectory(atPath: bundledURL.path) else { return }

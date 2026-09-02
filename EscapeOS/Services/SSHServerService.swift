@@ -311,10 +311,55 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             ]
             for (label, path) in sources {
                 guard let s = try? String(contentsOf: path, encoding: .utf8), !s.isEmpty else { continue }
-                out.append("=== [\(bin.id)] \(label) 末尾 \(n) 行 ===")
-                out.append(contentsOf: s.components(separatedBy: "\n").filter { !$0.isEmpty }.suffix(min(n, 200)).map(String.init))
+                let all = s.components(separatedBy: "\n").filter { !$0.isEmpty }
+                let keep = min(max(n, 1), 200)
+                out.append("=== [\(bin.id)] \(label) 末尾 \(keep) 行 ===")
+                out.append(contentsOf: all.suffix(keep))
             }
             return out.isEmpty ? "（暂无 \(bin.id) 运行日志）" : out.joined(separator: "\n")
+        case "ls":
+            // 浏览 Documents 目录（仅限 Documents 内，防路径越界）
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let rel = parts.dropFirst().joined(separator: " ")
+            let target = rel.isEmpty ? docs : docs.appendingPathComponent(rel)
+            let std = target.standardizedFileURL.path
+            let docsStd = docs.standardizedFileURL.path
+            guard std == docsStd || std.hasPrefix(docsStd + "/") else {
+                return "❌ 路径越界（仅限 Documents 内）"
+            }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: std, isDirectory: &isDir) else {
+                return "不存在: \(rel)"
+            }
+            guard isDir.boolValue else { return "是文件，用 cat 查看: \(rel)" }
+            guard let items = try? FileManager.default.contentsOfDirectory(atPath: std) else {
+                return "无法读取目录: \(rel)"
+            }
+            return items.sorted().map { name -> String in
+                let p = (std as NSString).appendingPathComponent(name)
+                var d: ObjCBool = false
+                FileManager.default.fileExists(atPath: p, isDirectory: &d)
+                if d.boolValue { return "📁 \(name)/" }
+                var sz: UInt64 = 0
+                if let attr = try? FileManager.default.attributesOfItem(atPath: p),
+                   let s = attr[.size] as? UInt64 { sz = s }
+                return "📄 \(name)  (\(ByteCountFormatter.string(fromByteCount: Int64(sz), countStyle: .file)))"
+            }.joined(separator: "\n")
+        case "cat":
+            // 查看 Documents 内文本文件（限 256KB）
+            guard parts.count > 1 else { return "用法: cat <Documents 内相对路径>" }
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let rel = parts.dropFirst().joined(separator: " ")
+            let target = docs.appendingPathComponent(rel).standardizedFileURL
+            let docsStd = docs.standardizedFileURL.path
+            guard target.path.hasPrefix(docsStd + "/") else { return "❌ 路径越界（仅限 Documents 内）" }
+            guard let attr = try? FileManager.default.attributesOfItem(atPath: target.path),
+                  let size = attr[.size] as? UInt64 else { return "不存在: \(rel)" }
+            guard size <= 256 * 1024 else {
+                return "文件过大（\(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))），仅支持 ≤256KB"
+            }
+            guard let s = try? String(contentsOf: target, encoding: .utf8) else { return "非 UTF-8 文本文件" }
+            return s
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
         case "ping":
@@ -338,6 +383,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
+      ls [路径]       浏览 Documents 目录（相对路径）
+      cat <文件>      查看 Documents 内文本文件（≤256KB）
       ip              局域网 IP
       uptime          PiP 运行时长
       ping            连通性测试
