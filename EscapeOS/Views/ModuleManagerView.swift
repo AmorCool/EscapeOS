@@ -337,7 +337,7 @@ struct ModuleManagerView: View {
             HStack(spacing: 12) {
                 if enabled && module.isBinaryModule && !running {
                     pill(label: "启动", icon: "play.fill") {
-                        BinaryModuleRunner.shared.start(module: module)
+                        BinaryModuleRunner.shared.start(module: module, automatic: false)
                     }
                 }
                 if enabled && !module.actions.isEmpty {

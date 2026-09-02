@@ -44,19 +44,39 @@ final class BinaryModuleRunner: ObservableObject {
     /// 方案 A（v0.3.73）：OpenListMain 已静态链接进宿主 app（与 Sap* 共用单一 Go
     /// runtime，sap.h 直接暴露给 Swift）。进程内直接调用——无 dylib、无第二 runtime、
     /// 无 AMFI exec 限制。此前 dlopen 第二 Go runtime 的方案在初始化即崩（run.log 实锤）。
-    func start(module: EscapeModule) {
+    /// automatic=true 为自启动（受崩溃循环守卫保护）；false 为用户手动点启动（总是重试）
+    func start(module: EscapeModule, automatic: Bool = true) {
         guard let bin = module.binary else { return }
         guard runningProcesses[module.id] == nil else { return }
 
+        // 崩溃循环守卫：若上一次启动后宿主没活到清除标记（8s），判定崩溃 → 跳过自启动，
+        // 保证用户还能进 App 看日志/关模块（否则每次进入 2s 后必崩，永远改不回来）
+        let flag = Self.inFlightKey(module.id)
+        if automatic && UserDefaults.standard.bool(forKey: flag) {
+            let msg = "上次启动疑似导致崩溃，已跳过自动启动（查看日志后可手动启动）"
+            appendLog(
+                ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log"),
+                "[host] \(msg)")
+            setError(module.id, msg)
+            return
+        }
+        UserDefaults.standard.set(true, forKey: flag)
+
         let dataDir = ModuleService.shared.dataURL(for: module.id)
         let logFile = ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log")
-        try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+
+        // 撑过 8s 视为启动成功，清除崩溃标记
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            UserDefaults.standard.set(false, forKey: flag)
+        }
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             self.runBinaryModule(module, bin: bin, dataDir: dataDir, logFile: logFile)
         }
     }
+
+    private static func inFlightKey(_ id: String) -> String { "Binary.startInFlight.\(id)" }
 
     /// 后台执行体（非隔离：Go 启动全在这里，状态写回走主线程）
     nonisolated private func runBinaryModule(
@@ -67,6 +87,20 @@ final class BinaryModuleRunner: ObservableObject {
         if let port = bin.port, isPortInUse(UInt16(port)) {
             appendLog(logFile, "[host] 端口 \(port) 已被占用，放弃启动（服务可能已在运行）")
             setError(module.id, "端口 \(port) 已被占用——服务可能已在运行")
+            return
+        }
+        // 数据目录可写性门禁（v0.3.74 闪退根修）：
+        // OpenList bootstrap 在目录不可写时走 log.Fatalf → os.Exit → 连宿主一起杀。
+        // 这里先建目录 + 写探针，失败就放弃启动并把原因报给 UI（宿主永不死）。
+        do {
+            try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+            let probe = dataDir.appendingPathComponent(".write-probe")
+            try Data("ok".utf8).write(to: probe)
+            try? FileManager.default.removeItem(at: probe)
+        } catch {
+            let msg = "数据目录不可写：\(error.localizedDescription)（LiveContainer 24h 磁盘写入配额可能已满——等待重置或重启设备）"
+            appendLog(logFile, "[host] \(msg)；放弃启动以避免 os.Exit 杀宿主")
+            setError(module.id, msg)
             return
         }
         do {
@@ -112,17 +146,40 @@ final class BinaryModuleRunner: ObservableObject {
         }
     }
 
-    // MARK: 进程内启动（方案 A：单一 Go runtime，v0.3.73）
+// MARK: 进程内启动（方案 A：单一 Go runtime，v0.3.73）
+
+/// OpenList 进程入口（C 函数指针，供 pthread_create 使用）
+private let openlistEntry: @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? = { _ in
+    _ = OpenListMain()   // Go runtime 首次调用时初始化；阻塞服务，永不返回
+    return nil
+}
 
     /// 调用静态链接进宿主的 OpenListMain（sap.h 经桥接头暴露给 Swift，与 Sap*
-    /// 同一 Go runtime——此前 dlopen 第二 runtime 在初始化即崩，run.log 实锤）。
-    /// 数据目录来自 OPENLIST_DATA；Go stderr/log 落盘 data/stderr.log；
-    /// bridge 绝不 os.Exit。调用后该后台线程永久阻塞服务。
+    /// 同一 Go runtime）。数据目录来自 OPENLIST_DATA；Go stderr/log 落盘 data/stderr.log；
+    /// bridge 绝不 os.Exit。
+    /// 跑在 8MB 大栈 pthread 上（NSThread 默认 512KB，Go runtime + 数百个包 init 链可能爆栈）。
     nonisolated private func startInProcess(dataDir: URL, logFile: URL) throws {
         setenv("OPENLIST_DATA", dataDir.path, 1)
+        // 关键诊断：把宿主 fd 2 重定向到文件——Go runtime 在初始化阶段的
+        // throw/fatal（发生在我们任何 Go 代码之前）原本只写进程 stderr，在 LC 里
+        // 直接丢失。抓下来后 SSH: cat Modules/<id>/data/go_stderr.log 即可看到真因。
+        let goErr = dataDir.appendingPathComponent("go_stderr.log")
+        let fd = open(goErr.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        if fd >= 0 {
+            dup2(fd, STDERR_FILENO)
+            close(fd)
+        }
         appendLog(logFile, "[host] 调用内置 OpenListMain（进程内，随宿主退出）")
-        Thread.detachNewThread {
-            _ = OpenListMain()   // Go runtime 首次调用时初始化并阻塞服务
+        var attr = pthread_attr_t()
+        guard pthread_attr_init(&attr) == 0 else {
+            throw BinaryModuleError.spawnFailed("pthread_attr_init 失败")
+        }
+        pthread_attr_setstacksize(&attr, 8 * 1024 * 1024)
+        var tid: pthread_t?
+        let rc = pthread_create(&tid, &attr, openlistEntry, nil)
+        pthread_attr_destroy(&attr)
+        guard rc == 0 else {
+            throw BinaryModuleError.spawnFailed("pthread_create 失败：\(rc)")
         }
     }
 

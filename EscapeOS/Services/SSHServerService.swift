@@ -308,6 +308,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let sources: [(String, URL)] = [
                 ("run.log", dir.appendingPathComponent("run.log")),
                 ("data/stderr.log", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("stderr.log")),
+                // Go runtime 初始化阶段的 fatal/throw（fd 2 重定向产物，v0.3.74+）
+                ("data/go_stderr.log", ModuleService.shared.dataURL(for: bin.id).appendingPathComponent("go_stderr.log")),
             ]
             for (label, path) in sources {
                 guard let s = try? String(contentsOf: path, encoding: .utf8), !s.isEmpty else { continue }
