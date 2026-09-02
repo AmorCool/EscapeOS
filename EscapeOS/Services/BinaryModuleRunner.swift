@@ -19,10 +19,12 @@ import UIKit
 final class BinaryModuleRunner: ObservableObject {
     static let shared = BinaryModuleRunner()
 
-    /// 运行中的二进制模块：模块 id → pid
+    /// 运行中的二进制模块：模块 id → pid（-2 = 进程内 dylib 模式）
     @Published private(set) var runningProcesses: [String: pid_t] = [:]
     /// 启动错误（模块 id → 信息）
     @Published private(set) var startErrors: [String: String] = [:]
+    /// 进程内 dylib 模式的模块 id（无独立 pid，随宿主退出）
+    @Published private(set) var inProcessModules: Set<String> = []
 
     private init() {}
 
@@ -39,6 +41,8 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
     /// 启动模块二进制
+    /// 优先 posix_spawn（独立进程）；AMFI 拒绝（EPERM/错误码 1，侧载非平台化环境的平台限制）
+    /// 时自动回退：进程内 dlopen 加载模块自带 dylib（机制同 LC 加载 tweak，不受签名执行限制）。
     func start(module: EscapeModule) {
         guard let bin = module.binary else { return }
         guard runningProcesses[module.id] == nil else { return }
@@ -50,24 +54,48 @@ final class BinaryModuleRunner: ObservableObject {
 
             var args = bin.args ?? []
             // alist 惯例：--data 相对 cwd；原样透传，宿主不改写
-            let pid = try posixSpawn(
-                execURL: execURL,
-                arguments: args,
-                workingDirectory: workDir,
-                logFile: logFile
-            )
-            runningProcesses[module.id] = pid
-            startErrors[module.id] = nil
-            print("[Binary][\(module.id)] 已启动 pid=\(pid) cmd=\(execURL.lastPathComponent) \(args.joined(separator: " "))")
+            do {
+                let pid = try posixSpawn(
+                    execURL: execURL,
+                    arguments: args,
+                    workingDirectory: workDir,
+                    logFile: logFile
+                )
+                runningProcesses[module.id] = pid
+                inProcessModules.remove(module.id)
+                startErrors[module.id] = nil
+                print("[Binary][\(module.id)] 已启动 pid=\(pid) cmd=\(execURL.lastPathComponent) \(args.joined(separator: " "))")
+                appendLog(logFile, "[host] posix_spawn 成功 pid=\(pid)")
+            } catch BinaryModuleError.spawnEPERM(let msg) {
+                // AMFI 拒绝 → 进程内 dylib 回退
+                appendLog(logFile, "[host] \(msg)")
+                guard let dylibURL = findDylib(moduleDir: workDir) else {
+                    startErrors[module.id] = BinaryModuleError.spawnEPERM(msg).localizedDescription
+                        + "；模块未携带 dylib，无法进程内回退"
+                    appendLog(logFile, "[host] 无 bin/*.dylib，回退失败")
+                    print("[Binary][\(module.id)] EPERM 且无 dylib 可回退")
+                    return
+                }
+                appendLog(logFile, "[host] EPERM → 进程内加载 \(dylibURL.lastPathComponent)")
+                try startInProcess(module: module, dylibURL: dylibURL, logFile: logFile)
+                inProcessModules.insert(module.id)
+                runningProcesses[module.id] = -2
+                startErrors[module.id] = nil
+                print("[Binary][\(module.id)] 已进程内启动 dylib=\(dylibURL.lastPathComponent)")
+            }
         } catch {
             startErrors[module.id] = error.localizedDescription
             print("[Binary][\(module.id)] 启动失败: \(error.localizedDescription)")
         }
     }
 
-    /// 停止模块二进制（SIGKILL）
+    /// 停止模块二进制（SIGKILL；进程内 dylib 模式随宿主退出，无法单独停止）
     func stop(module: EscapeModule) {
         guard let pid = runningProcesses[module.id] else { return }
+        guard pid > 0 else {
+            print("[Binary][\(module.id)] 进程内 dylib 模式：随宿主退出，不支持单独停止")
+            return
+        }
         kill(pid, SIGKILL)
         runningProcesses[module.id] = nil
         print("[Binary][\(module.id)] 已停止 pid=\(pid)")
@@ -75,7 +103,8 @@ final class BinaryModuleRunner: ObservableObject {
 
     /// 运行状态查询
     func isRunning(module: EscapeModule) -> Bool {
-        guard let pid = runningProcesses[module.id] else { return false }
+        if inProcessModules.contains(module.id) { return true }
+        guard let pid = runningProcesses[module.id], pid > 0 else { return false }
         return kill(pid, 0) == 0
     }
 
@@ -157,7 +186,12 @@ final class BinaryModuleRunner: ObservableObject {
         for p in argv where p != nil { free(p) }
 
         guard rc == 0 else {
-            throw BinaryModuleError.spawnFailed("posix_spawn 错误码 \(rc)")
+            let reason = String(cString: strerror(rc))
+            if rc == 1 {
+                // EPERM：AMFI 拒绝执行（侧载非平台化环境的平台限制），调用方回退 dylib
+                throw BinaryModuleError.spawnEPERM("posix_spawn 错误码 1 (EPERM)：系统拒绝执行第三方二进制")
+            }
+            throw BinaryModuleError.spawnFailed("posix_spawn 错误码 \(rc)（\(reason)）")
         }
         return pid
     }
@@ -173,16 +207,69 @@ final class BinaryModuleRunner: ObservableObject {
         }
         return moduleDir.appendingPathComponent(arg).path
     }
+
+    // MARK: 进程内 dylib 回退（AMFI EPERM 场景）
+
+    /// 查找模块 bin/ 下第一个 .dylib（模块规范不变，宿主自动识别）
+    private func findDylib(moduleDir: URL) -> URL? {
+        let binDir = moduleDir.appendingPathComponent("bin", isDirectory: true)
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: binDir, includingPropertiesForKeys: nil) else { return nil }
+        return items.first { $0.pathExtension.lowercased() == "dylib" }
+    }
+
+    /// 进程内加载 dylib：dlopen + 调用 OpenListMain 导出（Go c-archive 产物）。
+    /// 机制等同 LC 注入 tweak——dlopen ldid 伪签名 dylib 不受 AMFI exec 限制。
+    private func startInProcess(module: EscapeModule, dylibURL: URL, logFile: URL) throws {
+        let handle = dlopen(dylibURL.path, RTLD_NOW | RTLD_GLOBAL)
+        guard let handle else {
+            let err = dlerror().map { String(cString: $0) } ?? "未知错误"
+            throw BinaryModuleError.spawnFailed("dlopen 失败: \(err)")
+        }
+        guard let sym = dlsym(handle, "OpenListMain") else {
+            throw BinaryModuleError.spawnFailed("dylib 缺少 OpenListMain 导出")
+        }
+        typealias OpenListMainFn = @convention(c) () -> Int32
+        let fn = unsafeBitCast(sym, to: OpenListMainFn.self)
+        // 数据目录约定：环境变量 OPENLIST_DATA（dylib 内 os.Getenv 读取）
+        setenv("OPENLIST_DATA", module.installURL.path, 1)
+        appendLog(logFile, "[host] dlopen 成功，调用 OpenListMain（进程内，随宿主退出）")
+        Thread.detachNewThread {
+            _ = fn()   // Go runtime 在此线程初始化并阻塞服务
+        }
+    }
+
+    /// 追加宿主侧日志到模块 run.log（与子进程 stdout/stderr 同文件）
+    private func appendLog(_ logFile: URL, _ line: String) {
+        let text = "[\(DateFormatter.logStamp)] \(line)\n"
+        if let fh = FileHandle(forWritingAtPath: logFile.path) {
+            fh.seekToEndOfFile()
+            fh.write(text.data(using: .utf8)!)
+            try? fh.close()
+        } else {
+            try? text.data(using: .utf8)!.write(to: logFile)
+        }
+    }
+}
+
+private extension DateFormatter {
+    static let logStamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
 }
 
 enum BinaryModuleError: LocalizedError {
     case binaryMissing(String)
     case spawnFailed(String)
+    case spawnEPERM(String)
 
     var errorDescription: String? {
         switch self {
         case .binaryMissing(let p): return "二进制文件缺失: \(p)"
         case .spawnFailed(let m): return "启动失败: \(m)"
+        case .spawnEPERM(let m): return "启动失败: \(m)"
         }
     }
 }

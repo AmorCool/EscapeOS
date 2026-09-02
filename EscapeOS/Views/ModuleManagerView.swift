@@ -268,16 +268,8 @@ struct ModuleManagerView: View {
                     }
                     .buttonStyle(.bordered)
                     .tint(.red)
-                } else {
-                    Button {
-                        runner.start(module: module)
-                    } label: {
-                        Text("启动")
-                            .font(.footnote.weight(.medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.blue)
                 }
+                // 启动按钮移至底栏左侧（与卸载对称，用户规范）——此处不再重复
             }
 
             if let err = runner.startErrors[module.id] {
@@ -294,6 +286,7 @@ struct ModuleManagerView: View {
     private func moduleCard(_ module: EscapeModule) -> some View {
         let enabled = enabledMap[module.id] ?? true
         let hasWeb = ModuleService.shared.webrootURL(for: module) != nil
+        let running = BinaryModuleRunner.shared.isRunning(module: module)
 
         return VStack(alignment: .leading, spacing: 6) {
             // 标题 + Toggle
@@ -340,8 +333,13 @@ struct ModuleManagerView: View {
 
             Divider()
 
-            // 底栏：执行 + 打开 在左，卸载在右（截图同款灰胶囊黑字）
+            // 底栏：启动/执行 + 打开 在左，卸载在右（截图同款灰胶囊黑字）
             HStack(spacing: 12) {
+                if enabled && module.isBinaryModule && !running {
+                    pill(label: "启动", icon: "play.fill") {
+                        BinaryModuleRunner.shared.start(module: module)
+                    }
+                }
                 if enabled && !module.actions.isEmpty {
                     pill(label: "执行", icon: "play.fill") {
                         handleRun(module: module)
@@ -563,23 +561,6 @@ struct ModuleInstallSheet: View {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("完成") { onClose() }
                     }
-                }
-            }
-            // 官方：完成后右下角悬浮操作按钮（官方为"重启"，此处按需求为"关闭"）
-            .overlay(alignment: .bottomTrailing) {
-                if finished {
-                    Button {
-                        onClose()
-                    } label: {
-                        Label("关闭", systemImage: "xmark.circle.fill")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.blue)
-                    .controlSize(.large)
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 24)
-                    .transition(.scale.combined(with: .opacity))
                 }
             }
         }
