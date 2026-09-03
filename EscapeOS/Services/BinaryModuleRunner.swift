@@ -104,7 +104,10 @@ final class BinaryModuleRunner: ObservableObject {
             return
         }
         do {
-            try startBinaryModule(dataDir: dataDir, logFile: logFile, moduleDir: ModuleService.shared.installURL(for: module.id), bundleId: module.id)
+            // entrySymbol 默认 "OpenListMain"（v0.3.111：未来可由 module.json 的 binary.entrySymbol 覆盖）
+            try startBinaryModule(moduleId: module.id, entrySymbol: "OpenListMain",
+                                  dataDir: dataDir, logFile: logFile,
+                                  moduleDir: ModuleService.shared.installURL(for: module.id))
             appendLog(logFile, "[host] 进程内启动成功（随宿主退出）")
             setRunningInProcess(module.id)
         } catch {
@@ -162,8 +165,8 @@ final class BinaryModuleRunner: ObservableObject {
         cachedUloaderImage = img
     }
 
-    nonisolated private func startBinaryModule(dataDir: URL, logFile: URL, moduleDir: URL, bundleId: String) throws {
-        setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底（dylib 场景 runtime 初始化在 dlopen 时，setenv 先于它则可见）
+    nonisolated private func startBinaryModule(moduleId: String, entrySymbol: String,
+                                          dataDir: URL, logFile: URL, moduleDir: URL) throws {
         // fd 2 重定向：Go runtime 初始化阶段的 throw/fatal（先于任何 Go 代码）原本只写
         // 进程 stderr，LC 下直接丢失——重定向到文件后 SSH `mlog go_stderr.log` 可见。
         let goErr = dataDir.appendingPathComponent("go_stderr.log")
