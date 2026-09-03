@@ -179,7 +179,7 @@ final class BinaryModuleRunner: ObservableObject {
         uloader_install_crash_probe(STDERR_FILENO)   // v0.3.120：硬故障诊断落盘
         appendLog(logFile, "[host] 调用 \(entrySymbol)（\(moduleId)模块，进程内）")
         let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        appendLog(logFile, "[App \(appVer)] 当前内存足迹 \(currentFootprintMB())MB")
+        appendLog(logFile, "[App \(appVer)] 当前内存足迹 \(Self.currentFootprintMB())MB")
         var sym: UnsafeMutableRawPointer?
         var dylibName: String?
         var reSignErrorText: String?
