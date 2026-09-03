@@ -161,8 +161,6 @@ final class BinaryModuleRunner: ObservableObject {
     /// fd 2 重定向到 data/go_stderr.log 抓 Go runtime 临终输出；8MB 大栈 pthread 承载入口。
     /// 常驻保存用户态加载的镜像句柄（不卸载：Go runtime 必须存活）
     private static let uloaderLock = NSLock()
-    private static let rebuiltCacheLock = NSLock()
-    private nonisolated(unsafe) static var cachedRebuiltURL: URL?
     private nonisolated(unsafe) static var cachedUloaderImage: UnsafeMutableRawPointer?
     nonisolated private static func cacheUloaderImage(_ img: UnsafeMutableRawPointer) {
         uloaderLock.lock(); defer { uloaderLock.unlock() }
@@ -189,28 +187,11 @@ final class BinaryModuleRunner: ObservableObject {
             if let h = dlopen(dylibURL.path, RTLD_NOW | RTLD_GLOBAL) {
                 handle = h
             } else {
-                // v0.3.91：签名失效（传输/导入后内容与签名失配）→ 设备端 ad-hoc 重签名 → 重试。
-                // ad-hoc 无身份，仅重建内容完整性；能否加载取决于 LC 环境的 AMFI 放行
-                // （旧 dylib 实证 ad-hoc 可加载）。失败原因写入 run.log 便于诊断。
-                let err0 = dlerror().map { String(cString: $0) } ?? "未知错误"
-                appendLog(logFile, "[host] dlopen 失败（\(err0)）→ 设备端重建签名到全新文件")
-                do {
-                    // v0.3.100：写到全新文件（新 vnode）——内核按 vnode 缓存校验判决，
-                    // 原地重签不失效缓存（Nyxian 同款解法：vnode_recover 到新路径）。
-                    let newURL = try MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)
-                    appendLog(logFile, "[host] 重建完成: \(newURL.lastPathComponent)，重试 dlopen")
-                    if let h = dlopen(newURL.path, RTLD_NOW | RTLD_GLOBAL) {
-                        handle = h
-                        appendLog(logFile, "[host] 重建后 dlopen 成功 ✓")
-                    } else {
-                        let err1 = dlerror().map { String(cString: $0) } ?? "未知错误"
-                        reSignErrorText = err1
-                        appendLog(logFile, "[host] 重建后仍失败: \(err1)")
-                    }
-                } catch {
-                    reSignErrorText = error.localizedDescription
-                    appendLog(logFile, "[host] 签名重建失败: \(error.localizedDescription)")
-                }
+                // v0.3.119：dlopen 必被 dyld 库校验拒绝（LC 同环境实测：ldid/zsign
+                // 签名都报 code signature invalid）→ 直接走用户态加载器（匿名内存
+                // 方案，无需有效签名——见 uloader.c 注释）。重签步骤已删。
+                reSignErrorText = dlerror().map { String(cString: $0) } ?? "未知错误"
+                appendLog(logFile, "[host] dlopen 失败（\(reSignErrorText!.prefix(120))）→ 用户态加载器")
             }
             if let handle {
                 sym = dlsym(handle, entrySymbol)
@@ -225,7 +206,7 @@ final class BinaryModuleRunner: ObservableObject {
                 // v0.3.108：dlopen 被 dyld 库校验拦下（ad-hoc 无 CMS blob 在 dyld 层必拒）→
                 // 改用自研用户态 Mach-O 加载器（移植自 Nyxian kxld）：自己 mmap + rebase + bind，
                 // 完全绕开 dyld——这是 LC / Nyxian 加载访客代码的方式。
-                let target = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)) ?? dylibURL
+                let target = dylibURL
                 var errBuf = [CChar](repeating: 0, count: 512)
                 if let img = uloader_load(target.path, &errBuf, errBuf.count) {
                     appendLog(logFile, "[host] 用户态加载器映射成功：\(target.lastPathComponent)")
@@ -331,22 +312,10 @@ final class BinaryModuleRunner: ObservableObject {
                 // v0.3.115：dlopen 被 dyld 库校验拒绝 → 走自研用户态加载器（绕开 dyld）
                 let err0 = dlerror().map { String(cString: $0) } ?? "?"
                 note("dlopen 失败：\(err0.prefix(120))")
-                // v0.3.118：与 start 路径统一——先 zsign 重签到全新文件再喂 uloader。
-                // 直接加载原始文件实测 F_ADDFILESIGS_RETURN errno=1（EPERM）：
-                // 该 vnode 此前被 dyld 拒过，内核已缓存"无效"判决，签名登记同样被拒。
-                let target: URL
-                if let cached = cachedRebuiltURL,
-                   FileManager.default.fileExists(atPath: cached.path) {
-                    target = cached
-                    note("复用已重签副本：\(cached.lastPathComponent)")
-                } else if let rebuilt = try? MachoReSign.rebuildToNewFile(at: dylib, bundleId: moduleId) {
-                    rebuiltCacheLock.lock(); cachedRebuiltURL = rebuilt; rebuiltCacheLock.unlock()
-                    target = rebuilt
-                    note("zsign 重签完成：\(rebuilt.lastPathComponent)")
-                } else {
-                    target = dylib
-                    note("zsign 重签失败，退回原始文件")
-                }
+                // v0.3.119：匿名内存方案下 uloader 不需要有效签名——直接加载原始文件
+                // （v0.3.118 实测：zsign 重签 + 全新 vnode，签名登记仍 EPERM → AMFI
+                //  拒的是 blob 本身，重签无意义）
+                let target = dylib
                 var errBuf = [CChar](repeating: 0, count: 512)
                 if let img = uloader_load(target.path, &errBuf, errBuf.count) {
                     note("用户态加载器映射成功")

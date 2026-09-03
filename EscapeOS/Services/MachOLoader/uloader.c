@@ -49,7 +49,6 @@
 #include <errno.h>
 #include <libkern/OSByteOrder.h>
 #include <stdio.h>
-#include <fcntl.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
@@ -105,9 +104,9 @@ struct uloader_image {
     uint64_t segVmAddrs[16];
     uint64_t segVmSizes[16];
     uint64_t segFileOffs[16];
+    uint32_t segInitprots[16];
     uint32_t segCount;
 
-    // 代码签名 blob（供 F_ADDFILESIGS_RETURN 登记）
     uint32_t codeSigOff, codeSigSize;
     // chained fixups（新格式）
     uint32_t chainedOff, chainedSize;
@@ -205,6 +204,7 @@ static bool uloader_map_segments(struct uloader_image *img) {
                     img->segVmAddrs[idx] = sc->vmaddr;
                     img->segVmSizes[idx] = sc->vmsize;
                     img->segFileOffs[idx] = sc->fileoff;
+                    img->segInitprots[idx] = (uint32_t)sc->initprot;
                 }
             }
         }
@@ -219,7 +219,11 @@ static bool uloader_map_segments(struct uloader_image *img) {
     if (img->base == MAP_FAILED) { set_error(img, "（映射）预留地址空间失败"); return false; }
     img->slide = (intptr_t)img->base - (intptr_t)vmStart;
 
-    // 3) 逐段 MAP_FIXED
+    // 3) 逐段匿名分配 + 读入内容（LC dyld_bypass_validation.m 同款方案）
+    //    内核只对「文件映射」的可执行内存做签名校验（登记调用在本环境必 EPERM）；
+    //    匿名内存 + memcpy 内容 + mprotect 到执行权限 = 内核无签名可言。
+    //    全段先 RW（fixups/rebase/bind 需要写 __DATA/__DATA_CONST），加载完成后再按
+    //    initprot 恢复权限（见 uloader_finalize_protections）——W^X 合规。
     ptr = img->header + sizeof(struct mach_header_64);
     for (uint32_t i = 0; i < mh->ncmds; i++) {
         const struct load_command *lc = (const struct load_command *)ptr;
@@ -227,40 +231,52 @@ static bool uloader_map_segments(struct uloader_image *img) {
             const struct segment_command_64 *sc = (const struct segment_command_64 *)ptr;
             if (sc->vmsize > 0) {
                 void *addr = (void *)(uintptr_t)(sc->vmaddr + img->slide);
-                off_t fileOff = (off_t)(img->sliceOffset + sc->fileoff);
-                int prot = 0;
-                if (sc->initprot & VM_PROT_READ)    prot |= PROT_READ;
-                if (sc->initprot & VM_PROT_WRITE)   prot |= PROT_WRITE;
-                if (sc->initprot & VM_PROT_EXECUTE) prot |= PROT_EXEC;
-                int flags = (sc->initprot & VM_PROT_WRITE)
-                            ? (MAP_PRIVATE | MAP_FIXED)
-                            : (MAP_SHARED  | MAP_FIXED);
+                size_t mapLen = (size_t)((sc->vmsize + 0x3FFFULL) & ~0x3FFFULL);
+                if (mapLen == 0) { ptr += lc->cmdsize; continue; }
 
-                if (sc->filesize > 0) {
-                    void *r = mmap(addr, sc->filesize, prot, flags, img->fd, fileOff);
-                    if (r == MAP_FAILED) {
-                        set_error(img, "（映射）段映射失败");
-                        return false;
-                    }
+                void *r = mmap(addr, mapLen, PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+                if (r == MAP_FAILED) {
+                    set_error(img, "（映射）匿名分配失败 errno=?(见上)");
+                    return false;
                 }
-                // BSS：vmsize 超出 filesize 的整页尾部
-                if (sc->vmsize > sc->filesize) {
-                    size_t pageSize = (size_t)getpagesize();
-                    uintptr_t fileEnd = (uintptr_t)addr + sc->filesize;
-                    uintptr_t bssStart = (fileEnd + pageSize - 1) & ~(uintptr_t)(pageSize - 1);
-                    uintptr_t bssEnd = ((uintptr_t)addr + sc->vmsize + pageSize - 1) & ~(uintptr_t)(pageSize - 1);
-                    if (bssEnd > bssStart) {
-                        void *r = mmap((void *)bssStart, bssEnd - bssStart, prot,
-                                       MAP_PRIVATE | MAP_FIXED | MAP_ANON, -1, 0);
-                        if (r == MAP_FAILED) {
-                            set_error(img, "（映射）BSS 映射失败");
+                if (sc->filesize > 0) {
+                    off_t fileOff = (off_t)(img->sliceOffset + sc->fileoff);
+                    size_t left = (size_t)sc->filesize;
+                    uint8_t *dst = (uint8_t *)addr;
+                    off_t pos = fileOff;
+                    while (left > 0) {
+                        ssize_t n = pread(img->fd, dst, left, pos);
+                        if (n <= 0) {
+                            set_error(img, "（映射）段内容读入失败（pread）");
                             return false;
                         }
+                        dst += n; pos += n; left -= (size_t)n;
                     }
                 }
+                // vmsize > filesize 的尾部（BSS）由匿名分配天然零填充
             }
         }
         ptr += lc->cmdsize;
+    }
+    return true;
+}
+
+// ---- 权限恢复（fixups/rebase/bind 全部完成后、跑构造器前调用）----
+static bool uloader_finalize_protections(struct uloader_image *img) {
+    for (uint32_t i = 0; i < img->segCount; i++) {
+        int prot = 0;
+        if (img->segInitprots[i] & VM_PROT_READ)    prot |= PROT_READ;
+        if (img->segInitprots[i] & VM_PROT_WRITE)   prot |= PROT_WRITE;
+        if (img->segInitprots[i] & VM_PROT_EXECUTE) prot |= PROT_EXEC;
+        size_t mapLen = (size_t)((img->segVmSizes[i] + 0x3FFFULL) & ~0x3FFFULL);
+        void *addr = (void *)(uintptr_t)(img->segVmAddrs[i] + img->slide);
+        if (mprotect(addr, mapLen, prot) != 0) {
+            snprintf(img->lastError, sizeof(img->lastError),
+                     "（权限恢复）mprotect 段%u → %o 失败 errno=%d（匿名内存转执行被拒）",
+                     i, img->segInitprots[i], errno);
+            return false;
+        }
     }
     return true;
 }
@@ -762,32 +778,6 @@ void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {
         return NULL;
     }
 
-    // ★ 映射前必须向内核登记签名（移植自 Nyxian kxld/validation.c）：
-    //   iOS 不允许以 PROT_EXEC 映射未登记签名的文件——这正是 dlopen 与裸 mmap
-    //   双双失败的根因。F_ADDFILESIGS_RETURN 把文件的 CMS blob 交给内核登记，
-    //   F_CHECK_LV 做库校验；之后 mmap(PROT_EXEC) 才会被允许。
-    {
-        fsignatures_t siginfo = {
-            .fs_file_start = img->sliceOffset,
-            .fs_blob_start = (void *)(uintptr_t)img->codeSigOff,
-            .fs_blob_size  = img->codeSigSize,
-        };
-        fchecklv_t checkInfo = { .lv_file_start = img->sliceOffset, 0 };  /* 其余置零 */
-
-        if (fcntl(img->fd, F_ADDFILESIGS_RETURN, &siginfo) == -1) {
-            snprintf(img->lastError, sizeof(img->lastError),
-                     "（签名登记）F_ADDFILESIGS_RETURN 失败 errno=%d blob=0x%x/%u%s",
-                     errno, img->codeSigOff, img->codeSigSize,
-                     errno == 1 ? "（EPERM：内核/AMFI 拒绝该 blob——vnode 或已被缓存判无效，请用 zsign 重签后的全新文件）" : "");
-            goto fail;
-        }
-        if (fcntl(img->fd, F_CHECK_LV, &checkInfo) == -1) {
-            snprintf(img->lastError, sizeof(img->lastError),
-                     "（签名登记）F_CHECK_LV 失败 errno=%d", errno);
-            goto fail;
-        }
-    }
-
     if (!uloader_map_segments(img)) goto fail;
     if (img->chainedOff != 0) {
         if (!uloader_chained_fixups(img)) goto fail;
@@ -795,6 +785,9 @@ void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {
         if (!uloader_rebase(img)) goto fail;
         if (!uloader_bind(img)) goto fail;
     }
+    // 权限恢复：__TEXT 等转为 initprot（r-x）。LC 同环境实证匿名内存可转执行。
+    if (!uloader_finalize_protections(img)) goto fail;
+
     uloader_run_initializers(img);
 
     return img;
