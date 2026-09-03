@@ -1,6 +1,6 @@
 //
 //  WirelessPairing.m
-//  EscapeOS
+//  EscapeSpace
 //
 
 #import "WirelessPairing.h"
@@ -27,7 +27,7 @@ NSNotificationName const WirelessPairingDidFailBroadcastNotification = @"Wireles
                            model:(NSString *)model
                          outPath:(NSString *)outPath
                      storedAltIrk:(NSString *)storedAltIrk {
-    if (hostName.length == 0) hostName = @"EscapeOS";
+    if (hostName.length == 0) hostName = @"EscapeSpace";
     if (model.length == 0) model = @"Mac17,7";
 
     // Keep `self` alive for the whole blocking call.
@@ -85,7 +85,7 @@ static void si_ready_cb(void *ctx, const char *service_id, uint16_t port,
     // readable "EscapePair-<6 chars>" label so the device can identify us
     // among multiple hosts (StikPair, iloader, etc.). The trailing 6 hex chars
     // are the *service_id*'s last 6 hex chars — they are stable per host, so a
-    // user with two EscapeOS phones will see distinct labels.
+    // user with two EscapeSpace phones will see distinct labels.
     NSString *sidRaw = service_id ? [NSString stringWithUTF8String:service_id] : @"unknown";
     NSString *suffix = sidRaw.length >= 6
         ? [sidRaw substringFromIndex:sidRaw.length - 6]

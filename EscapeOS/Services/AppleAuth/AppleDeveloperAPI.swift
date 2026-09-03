@@ -318,9 +318,11 @@ enum AppleDeveloperAPI {
         }
         // certContent 在 plist 响应里是 <data> 类型（解析后即 Data 对象，非字符串）；
         // 备用键 certificateContent（base64 字符串）——对齐 AltSign ALTX509Certificate 解析
+        // v0.3.129：异步签发是**正常路径**——响应无 certContent = 已受理，
+        // 证书稍后出现在列表里（由调用方轮询）。此处绝不能抛错（v0.3.128 的 bug）。
         let certDER: Data
         if let dataObj = certRequest["certContent"] as? Data {
-            certDER = dataObj
+            certDER = dataObj                                   // 同步签发（罕见）：直接拿内容
         } else if let b64 = certRequest["certificateContent"] as? String,
                   let der = Data(base64Encoded: b64) {
             certDER = der
@@ -328,8 +330,10 @@ enum AppleDeveloperAPI {
                   let der = Data(base64Encoded: b64) {
             certDER = der
         } else {
-            LoginLogger.shared.log("❌ 响应缺少 certRequest.certContent（现有键：\(certRequest.keys.joined(separator: ","))）")
-            throw AppleAPIError.customError(code: -1, message: "响应缺少 certRequest.certContent")
+            let status = (certRequest["certRequestStatusCode"] as? String)
+                ?? (certRequest["statusCode"] as? String) ?? "?"
+            LoginLogger.shared.log("⏳ CSR 已受理（异步签发，certRequestStatusCode=\(status)）→ 进入轮询")
+            certDER = Data()                                    // 空标记 = 受理成功，待轮询
         }
         LoginLogger.shared.log("✓ 开发证书创建成功（\(certDER.count) 字节）")
         return certDER

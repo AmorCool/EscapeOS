@@ -1,6 +1,6 @@
 //
 //  WirelessPairing.h
-//  EscapeOS
+//  EscapeSpace
 //
 //  iOS 27 device-initiated wireless pairing host wrapper.
 //  Bridges si_run_host() (Rust) to SwiftUI: publishes the
@@ -40,7 +40,7 @@ extern NSNotificationName const WirelessPairingDidFailBroadcastNotification;
 /// Starts iOS 27 device-initiated wireless pairing. Returns immediately; the
 /// actual work runs on a background queue and reports progress via the
 /// notifications declared above. Call `-stop` to halt.
-/// @param hostName      Name shown on the device (e.g. "EscapeOS").
+/// @param hostName      Name shown on the device (e.g. "EscapeSpace").
 /// @param model         Hardware model shown on the device (e.g. "Mac17,7").
 /// @param outPath       Path where the resulting RpPairingFile is written.
 /// @param storedAltIrk  Previously returned host_alt_irk_hex, or "" for first pairing.

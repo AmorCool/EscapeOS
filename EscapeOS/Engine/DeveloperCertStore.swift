@@ -111,18 +111,27 @@ final class DeveloperCertStore: ObservableObject {
             let machineName = (UIDevice.current.name)
             _ = try await AppleDeveloperAPI.submitSigningCertificate(
                 team: team, csrPEM: csrPem, machineName: machineName, session: session)
-            // 5) 轮询证书列表（最多 30 秒）等新证书出现并取其内容
+            // 5) 同步拿到内容则直接用；异步受理（空内容）则轮询证书列表（最多 30 秒）
             var newCert: DeveloperCertificate?
-            for attempt in 1...10 {
-                try await Task.sleep(nanoseconds: 2_000_000_000)
-                let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
-                newCert = list.first { !knownSerials.contains($0.serialNumber) && $0.certContent != nil }
-                if let c = newCert {
-                    LoginLogger.shared.log("✓ 新证书已签发（第 \(attempt) 次轮询，serial=\(c.serialNumber)）")
-                    break
+            if !certDER.isEmpty {
+                LoginLogger.shared.log("✓ 提交响应即含证书内容（同步签发）")
+            } else {
+                for attempt in 1...10 {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                    let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
+                    newCert = list.first { !knownSerials.contains($0.serialNumber) && $0.certContent != nil }
+                    if let c = newCert {
+                        LoginLogger.shared.log("✓ 新证书已签发（第 \(attempt) 次轮询，serial=\(c.serialNumber)）")
+                        break
+                    }
                 }
             }
-            guard let cert = newCert, let der = cert.certContent else {
+            let der: Data
+            if let c = newCert, let content = c.certContent {
+                der = content
+            } else if !certDER.isEmpty {
+                der = certDER
+            } else {
                 throw NSError(domain: "DeveloperCert", code: -4,
                               userInfo: [NSLocalizedDescriptionKey: "证书签发处理超时（30 秒），请稍后在「证书管理」查看并重试"])
             }
