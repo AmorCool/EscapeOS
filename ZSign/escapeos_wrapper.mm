@@ -89,39 +89,100 @@ extern "C" int zsign_gen_key_csr(char** csrPemOut, int* csrPemLen,
 }
 
 // 用真实开发证书（PEM）+ 私钥(PEM) 对 dylib 就地签名（与 SideStore 签的 App 同 TeamID → 库验证通过）
+// dbgPath：诊断日志落盘路径（zsign 全部日志 + 分步结果），可为 NULL
 extern "C" int zsign_sign_file_with_cert(const char* path,
                                          const char* bundleId,
                                          const char* certPem, int certLen,
                                          const char* keyPem, int keyLen,
-                                         const char* entXml, int entLen) {
-    if (!path || !bundleId || !certPem || !keyPem) return -2;
+                                         const char* entXml, int entLen,
+                                         const char* dbgPath) {
+    // 诊断落盘器（append，async 环境一次性调用无并发问题）
+    auto diagWrite = [dbgPath](const std::string& text) {
+        if (!dbgPath) return;
+        FILE* f = fopen(dbgPath, "a");
+        if (!f) return;
+        fwrite(text.data(), 1, text.size(), f);
+        fclose(f);
+    };
+    diagWrite("
+=== zsign 真证书签名开始 ===
+");
+    diagWrite(std::string("target=") + (path ? path : "(null)") + "
+");
+    diagWrite(std::string("bundleId=") + (bundleId ? bundleId : "(null)") + "
+");
+    if (!path || !bundleId || !certPem || !keyPem) {
+        diagWrite("FAIL: 参数为空
+");
+        return -2;
+    }
     // 写临时文件（ZSignAsset::Init 接收路径）。⚠ 不能用 /tmp——LC 访客沙盒
     // 对 /tmp 无写权限（mkstemp 必败，v0.3.130 实锤「证书/私钥不可用」），用 App 自身 tmp。
     NSString *tmpDir = NSTemporaryDirectory();
-    if (!tmpDir) return -2;
+    if (!tmpDir) { diagWrite("FAIL: NSTemporaryDirectory 为空
+"); return -2; }
     char certTpl[512], keyTpl[512];
     snprintf(certTpl, sizeof(certTpl), "%sesc-cert-XXXXXX.pem",
              tmpDir.fileSystemRepresentation);
     snprintf(keyTpl,  sizeof(keyTpl),  "%sesc-key-XXXXXX.pem",
              tmpDir.fileSystemRepresentation);
     int cfd = mkstemp(certTpl), kfd = mkstemp(keyTpl);
-    if (cfd < 0 || kfd < 0) { if (cfd>=0) close(cfd); if (kfd>=0) close(kfd); return -2; }
-    bool ok = write(cfd, certPem, certLen) == certLen
-           && write(kfd, keyPem, keyLen) == keyLen;
+    if (cfd < 0 || kfd < 0) {
+        diagWrite(std::string("FAIL: mkstemp 失败 errno=") + std::to_string(errno) + "
+");
+        if (cfd>=0) close(cfd); if (kfd>=0) close(kfd);
+        return -2;
+    }
+    bool wok = write(cfd, certPem, certLen) == certLen
+            && write(kfd, keyPem, keyLen) == keyLen;
     close(cfd); close(kfd);
-    if (!ok) { unlink(certTpl); unlink(keyTpl); return -2; }
+    if (!wok) { unlink(certTpl); unlink(keyTpl);
+        diagWrite("FAIL: 临时文件写入失败
+"); return -2; }
 
     ZLog::logs.clear();
     ZSignAsset asset;
     bool inited = asset.Init(certTpl, keyTpl, "", "", "", /*bAdhoc*/ false,
                              /*bSHA256Only*/ true, /*bSingleBinary*/ true);
-    if (inited) {
-        ZMachO* macho = new ZMachO();
-        if (!macho->Init(path)) { delete macho; unlink(certTpl); unlink(keyTpl); return -2; }
-        std::string info1, info256, res;
-        ok = macho->Sign(&asset, /*bForce*/ true, bundleId, info1, info256, res);
-        delete macho;
+    if (!inited) {
+        diagWrite("FAIL: ZSignAsset::Init 失败（读取证书/私钥）
+");
+        for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "
+");
+        unlink(certTpl); unlink(keyTpl);
+        return -1;
     }
+    diagWrite("Init ✓（证书/私钥读取成功）
+");
+    ZMachO* macho = new ZMachO();
+    if (!macho->Init(path)) {
+        delete macho;
+        diagWrite("FAIL: ZMachO::Init 失败（解析 dylib）
+");
+        for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "
+");
+        unlink(certTpl); unlink(keyTpl);
+        return -2;
+    }
+    std::string info1, info256, res;
+    ok = macho->Sign(&asset, /*bForce*/ true, bundleId, info1, info256, res);
+    if (!ok) {
+        diagWrite("FAIL: Sign 失败
+");
+        for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "
+");
+        if (!res.empty()) diagWrite("  [res] " + res + "
+");
+    } else {
+        diagWrite("Sign ✓
+");
+        for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "
+");
+    }
+    delete macho;
     unlink(certTpl); unlink(keyTpl);
-    return inited ? (ok ? 0 : -3) : -1;
+    int rc = ok ? 0 : -3;
+    diagWrite("=== 签名结束 rc=" + std::to_string(rc) + " ===
+");
+    return rc;
 }

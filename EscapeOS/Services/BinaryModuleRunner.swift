@@ -211,7 +211,10 @@ final class BinaryModuleRunner: ObservableObject {
                 if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     appendLog(logFile, "[host] 开发证书可用 → 真证书签名")
                     let signURL = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)) ?? dylibURL
-                    if DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId) {
+                    let signDbg = logFile.deletingLastPathComponent()
+                        .appendingPathComponent("data").appendingPathComponent("go_sign_debug.log")
+                    if DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId,
+                                                           debugLog: signDbg) {
                         appendLog(logFile, "[host] 真证书签名完成: \(signURL.lastPathComponent)")
                         if let h = dlopen(signURL.path, RTLD_NOW | RTLD_GLOBAL) {
                             handle = h
@@ -339,7 +342,10 @@ final class BinaryModuleRunner: ObservableObject {
                 if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     note("开发证书可用 → 真证书签名")
                     let signURL = (try? MachoReSign.rebuildToNewFile(at: dylib, bundleId: moduleId)) ?? dylib
-                    if DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId) {
+                    let signDbg = logFile.deletingLastPathComponent()
+                        .appendingPathComponent("data").appendingPathComponent("go_sign_debug.log")
+                    if DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId,
+                                                           debugLog: signDbg) {
                         note("真证书签名完成: \(signURL.lastPathComponent)")
                         if let h = dlopen(signURL.path, RTLD_NOW | RTLD_GLOBAL) {
                             cacheBinaryModuleHandle(h)
