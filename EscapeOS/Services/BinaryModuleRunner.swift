@@ -104,7 +104,7 @@ final class BinaryModuleRunner: ObservableObject {
             return
         }
         do {
-            try startOpenList(dataDir: dataDir, logFile: logFile, moduleDir: ModuleService.shared.installURL(for: module.id), bundleId: module.id)
+            try startBinaryModule(dataDir: dataDir, logFile: logFile, moduleDir: ModuleService.shared.installURL(for: module.id), bundleId: module.id)
             appendLog(logFile, "[host] 进程内启动成功（随宿主退出）")
             setRunningInProcess(module.id)
         } catch {
@@ -162,7 +162,7 @@ final class BinaryModuleRunner: ObservableObject {
         cachedUloaderImage = img
     }
 
-    nonisolated private func startOpenList(dataDir: URL, logFile: URL, moduleDir: URL, bundleId: String) throws {
+    nonisolated private func startBinaryModule(dataDir: URL, logFile: URL, moduleDir: URL, bundleId: String) throws {
         setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底（dylib 场景 runtime 初始化在 dlopen 时，setenv 先于它则可见）
         // fd 2 重定向：Go runtime 初始化阶段的 throw/fatal（先于任何 Go 代码）原本只写
         // 进程 stderr，LC 下直接丢失——重定向到文件后 SSH `mlog go_stderr.log` 可见。
@@ -172,7 +172,7 @@ final class BinaryModuleRunner: ObservableObject {
             dup2(fd, STDERR_FILENO)
             close(fd)
         }
-        appendLog(logFile, "[host] 调用 OpenListMain（进程内，随宿主退出）")
+        appendLog(logFile, "[host] 调用 \(entrySymbol)（\(moduleId)模块，进程内）")
 
         var sym: UnsafeMutableRawPointer?
         var dylibName: String?
@@ -208,13 +208,13 @@ final class BinaryModuleRunner: ObservableObject {
                 }
             }
             if let handle {
-                sym = dlsym(handle, "OpenListMain")
+                sym = dlsym(handle, entrySymbol)
                 if sym != nil {
                     dylibName = dylibURL.lastPathComponent
-                    Self.cacheOpenListHandle(handle)   // 故意不 dlclose：Go runtime 必须常驻
+                    Self.cacheBinaryModuleHandle(handle)   // 故意不 dlclose：Go runtime 必须常驻
                     appendLog(logFile, "[host] 已加载可拆卸模块 dylib: \(dylibURL.lastPathComponent)")
                 } else {
-                    appendLog(logFile, "[host] dylib 缺少 OpenListMain 导出，回退内置符号")
+                    appendLog(logFile, "[host] dylib 缺少 \(entrySymbol) 导出")
                 }
             } else {
                 // v0.3.108：dlopen 被 dyld 库校验拦下（ad-hoc 无 CMS blob 在 dyld 层必拒）→
@@ -224,15 +224,15 @@ final class BinaryModuleRunner: ObservableObject {
                 var errBuf = [CChar](repeating: 0, count: 512)
                 if let img = uloader_load(target.path, &errBuf, errBuf.count) {
                     appendLog(logFile, "[host] 用户态加载器映射成功：\(target.lastPathComponent)")
-                    let s = uloader_symbol(img, "OpenListMain")
+                    let s = uloader_symbol(img, entrySymbol)
                     if let s {
                         sym = s
                         dylibName = target.lastPathComponent
                         Self.cacheUloaderImage(img)   // 常驻，不卸载（Go runtime）
-                        appendLog(logFile, "[host] 用户态加载器解析 OpenListMain 成功 ✓")
+                        appendLog(logFile, "[host] 用户态加载器解析 \(entrySymbol) 成功 ✓")
                     } else {
-                        uloaderErrorText = "映射成功但未找到 OpenListMain（符号表可能仅 trie）"
-                    appendLog(logFile, "[host] 用户态加载器未找到 OpenListMain（符号表可能仅 trie）")
+                        uloaderErrorText = "映射成功但未找到 \(entrySymbol)（符号表可能仅 trie）"
+                    appendLog(logFile, "[host] 用户态加载器未找到 \(entrySymbol)（符号表可能仅 trie）")
                     }
                 } else {
                     let reason = String(cString: errBuf)
@@ -243,9 +243,9 @@ final class BinaryModuleRunner: ObservableObject {
         }
         // ② 内置静态符号（openlist_embed 构建形态）；RTLD_DEFAULT = -2
         if sym == nil {
-            sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "OpenListMain")
+            sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), entrySymbol)
             if sym != nil {
-                appendLog(logFile, "[host] 使用内置静态 OpenListMain")
+                appendLog(logFile, "[host] 使用内置静态 \(entrySymbol)")
             }
         }
         guard let fnSym = sym else {
@@ -266,7 +266,7 @@ final class BinaryModuleRunner: ObservableObject {
             } else {
                 parts.append("模块目录中无 bin/*.dylib——请从 module-esc edge 导入 com.escapeos.alist 模块 zip")
             }
-            parts.append("本 App 未内置 OpenList（按设计：模块化，不内置引擎）")
+            parts.append("本 App 未内置 \(moduleId) 的 \(entrySymbol)（按设计：模块化，不内置引擎）")
             throw BinaryModuleError.spawnFailed(parts.joined(separator: "\n"))
         }
 
@@ -274,8 +274,8 @@ final class BinaryModuleRunner: ObservableObject {
         guard let dirC = strdup(dataDir.path) else {
             throw BinaryModuleError.spawnFailed("strdup 数据目录路径失败")
         }
-        let ctx = OpenListLaunchCtx(sym: fnSym, dir: dirC)
-        appendLog(logFile, "[host] 调用 OpenListMain\(dylibName.map { "（dylib: \($0)）" } ?? "（内置）")")
+        let ctx = BinaryModuleLaunchCtx(sym: fnSym, dir: dirC)
+        appendLog(logFile, "[host] 调用 \(entrySymbol)\(dylibName.map { "（dylib: \($0)）" } ?? "（内置）")")
 
         var attr = pthread_attr_t()
         guard pthread_attr_init(&attr) == 0 else {
@@ -301,19 +301,19 @@ final class BinaryModuleRunner: ObservableObject {
     /// dylib 句柄缓存（SSH 诊断命令复用；故意不 dlclose——Go runtime 必须常驻）
     /// nonisolated(unsafe)：@MainActor 类的存储属性不能直接 nonisolated；
     /// 访问全部经由 handleLock 保护的存取器，实际无竞争。
-    nonisolated(unsafe) private static var cachedOpenListHandle: UnsafeMutableRawPointer?
+    nonisolated(unsafe) private static var cachedBinaryModuleHandle: UnsafeMutableRawPointer?
     private static let handleLock = NSLock()
-    nonisolated private static func cacheOpenListHandle(_ h: UnsafeMutableRawPointer) {
+    nonisolated private static func cacheBinaryModuleHandle(_ h: UnsafeMutableRawPointer) {
         handleLock.lock()
-        if cachedOpenListHandle == nil { cachedOpenListHandle = h }
+        if cachedBinaryModuleHandle == nil { cachedBinaryModuleHandle = h }
         handleLock.unlock()
     }
-    /// 供 SSH 诊断命令解析 OpenList 导出符号：优先已加载 dylib → 模块目录 dylib → 内置静态
-    nonisolated static func resolveOpenListSymbol(_ name: String, moduleDir: URL) -> UnsafeMutableRawPointer? {
-        if let h = cachedOpenListHandle, let s = dlsym(h, name) { return s }
+    /// 供 SSH 诊断命令解析任意二进制模块的导出符号：优先已加载 dylib → 模块目录 dylib → 内置静态
+    nonisolated static func resolveBinaryModuleSymbol(_ name: String, moduleDir: URL) -> UnsafeMutableRawPointer? {
+        if let h = cachedBinaryModuleHandle, let s = dlsym(h, name) { return s }
         if let dylib = findDylib(moduleDir: moduleDir),
            let h = dlopen(dylib.path, RTLD_NOW | RTLD_GLOBAL) {
-            cacheOpenListHandle(h)
+            cacheBinaryModuleHandle(h)
             if let s = dlsym(h, name) { return s }
         }
         return dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)   // RTLD_DEFAULT：内置静态
@@ -381,18 +381,18 @@ private extension DateFormatter {
     }()
 }
 
-// MARK: OpenList 进程入口（C 函数指针，供 pthread_create 使用）
+// MARK: 通用二进制模块进程入口（C 函数指针，供 pthread_create 使用）
 // ctx = strdup 出来的数据目录 C 字符串；线程长期存活（服务阻塞），故不 free。
 // 数据目录必须走参数：Go 在 runtime 初始化时已快照 environ，事后 setenv 对
 // os.Getenv 不可见（v0.3.78 闪退根因）。
-// MARK: OpenList 进程入口（C 函数指针，供 pthread_create 使用）
+// MARK: 通用二进制模块进程入口（C 函数指针，供 pthread_create 使用）
 
-/// OpenListMain 导出函数的 C 签名（Go: func OpenListMain(dataDirC *C.char) C.int）
-private typealias OpenListMainC = @convention(c) (UnsafeMutablePointer<CChar>?) -> Int32
+/// 通用二进制模块入口函数 C 签名（Go: func Main(dataDirC *C.char) C.int）
+private typealias BinaryEntryFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Int32
 
 /// pthread 线程上下文：解析好的函数符号 + strdup 的数据目录。
 /// 线程长期存活（服务阻塞），ctx 与 dir 均故意不释放。
-private final class OpenListLaunchCtx {
+private final class BinaryModuleLaunchCtx {
     let sym: UnsafeMutableRawPointer
     let dir: UnsafeMutablePointer<CChar>
     init(sym: UnsafeMutableRawPointer, dir: UnsafeMutablePointer<CChar>) {
@@ -400,13 +400,13 @@ private final class OpenListLaunchCtx {
         self.dir = dir
     }
     func call() -> Int32 {
-        let fn = unsafeBitCast(sym, to: OpenListMainC.self)
+        let fn = unsafeBitCast(sym, to: BinaryEntryFn.self)
         return fn(dir)
     }
 }
 
 private let openlistEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? = { ctx in
-    let c = Unmanaged<OpenListLaunchCtx>.fromOpaque(ctx).takeRetainedValue()
+    let c = Unmanaged<BinaryModuleLaunchCtx>.fromOpaque(ctx).takeRetainedValue()
     _ = c.call()   // Go runtime 首次调用时初始化；阻塞服务，永不返回
     return nil
 }

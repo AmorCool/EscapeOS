@@ -17,6 +17,7 @@ struct ModuleManagerView: View {
     @State private var isImporting = false
     @State private var runningActionID: String? = nil
     @State private var resultAlert: ModuleRunResult? = nil
+    @State private var showingLogFor: EscapeModule? = nil
     // 安装详情（KernelSU 风格终端日志）
     @State private var showInstallSheet = false
     @State private var installLog: [String] = []
@@ -102,6 +103,10 @@ struct ModuleManagerView: View {
             }
         }
         .onAppear(perform: reload)
+
+        .sheet(item: $showingLogFor) { mod in
+            ModuleLogView(module: mod) { showingLogFor = nil }
+        }
         .refreshable { reload() }
         .background(
             ModuleImportPicker(isPresented: $isImporting) { urls in
@@ -149,7 +154,18 @@ struct ModuleManagerView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("卸载", role: .destructive) {
+            
+                        // v0.3.111：模块日志查看器（导出/复制/清空）
+                        Button {
+                            showingLogFor = module
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                Text("日志")
+                            }
+                        }
+                        .tint(.secondary)
+                        Button("卸载", role: .destructive) {
                 if let m = uninstallTarget {
                     ModuleService.shared.delete(id: m.id)
                     reload()
@@ -604,5 +620,71 @@ struct ModuleInstallSheet: View {
         if line.hasPrefix("!") { return .red }
         if line.hasPrefix("✓") { return .green }
         return .primary
+    }
+}
+
+
+// v0.3.111：模块日志查看器（v0.3.111：每个已安装模块可查看/导出/复制/清空运行日志）
+struct ModuleLogView: View {
+    let module: EscapeModule
+    var onClose: () -> Void
+    @State private var logText: String = ""
+    @State private var showCopied = false
+    @State private var showClearConfirm = false
+
+    private var logFile: URL { ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log") }
+    private var goStderr: URL { ModuleService.shared.installURL(for: module.id).appendingPathComponent("data/go_stderr.log") }
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                Text(logText.isEmpty ? "（暂无日志）" : logText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(12)
+            }
+            .navigationTitle("\(module.name) 日志")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("关闭") { onClose() }
+                }
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button {
+                        UIPasteboard.general.string = logText
+                        showCopied = true
+                    } label: { Image(systemName: "doc.on.doc") }
+                    Menu {
+                        Button { reload() } label: { Label("刷新", systemImage: "arrow.clockwise") }
+                        ShareLink(item: logFile) { Label("导出 run.log", systemImage: "square.and.arrow.up") }
+                        ShareLink(item: goStderr) { Label("导出 go_stderr.log", systemImage: "square.and.arrow.up") }
+                        Divider()
+                        Button(role: .destructive) { showClearConfirm = true } label: {
+                            Label("清空日志", systemImage: "trash")
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                }
+            }
+            .onAppear { reload() }
+            .alert("已复制", isPresented: $showCopied) { Button("好", role: .cancel) {} }
+            .confirmationDialog("确认清空？", isPresented: $showClearConfirm) {
+                Button("清空 run.log", role: .destructive) { tryClear(target: logFile) }
+                Button("清空 go_stderr.log", role: .destructive) { tryClear(target: goStderr) }
+                Button("取消", role: .cancel) {}
+            } message: { Text("删除后不可恢复。") }
+        }
+    }
+
+    private func reload() {
+        let combined = [logFile, goStderr].map { url -> String in
+            (try? String(contentsOf: url, encoding: .utf8)).map { "[\(url.lastPathComponent)]\n\($0)\n" } ?? ""
+        }.joined()
+        logText = combined.isEmpty ? "" : combined
+    }
+
+    private func tryClear(target: URL) {
+        try? FileManager.default.removeItem(at: target)
+        reload()
     }
 }
