@@ -88,6 +88,27 @@ extern "C" int zsign_gen_key_csr(char** csrPemOut, int* csrPemLen,
     return ok ? 0 : -1;
 }
 
+// 验证证书 PEM 与私钥 PEM 是否配对（X509_check_private_key）。
+// 返回 1 = 配对，0 = 不配对/解析失败。用于签名前校验与证书创建轮询筛选。
+extern "C" int zsign_check_pair(const char* certPem, int certLen,
+                                const char* keyPem, int keyLen) {
+    if (!certPem || !keyPem || certLen <= 0 || keyLen <= 0) return 0;
+    BIO* cbio = BIO_new_mem_buf(certPem, certLen);
+    if (!cbio) return 0;
+    X509* cert = PEM_read_bio_X509(cbio, NULL, 0, NULL);
+    BIO_free(cbio);
+    if (!cert) return 0;
+    BIO* kbio = BIO_new_mem_buf(keyPem, keyLen);
+    if (!kbio) { X509_free(cert); return 0; }
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(kbio, NULL, NULL, NULL);
+    BIO_free(kbio);
+    if (!pkey) { X509_free(cert); return 0; }
+    int ok = X509_check_private_key(cert, pkey);
+    X509_free(cert);
+    EVP_PKEY_free(pkey);
+    return (ok == 1) ? 1 : 0;
+}
+
 // 用真实开发证书（PEM）+ 私钥(PEM) 对 dylib 就地签名（与 SideStore 签的 App 同 TeamID → 库验证通过）
 // dbgPath：诊断日志落盘路径（zsign 全部日志 + 分步结果），可为 NULL
 extern "C" int zsign_sign_file_with_cert(const char* path,

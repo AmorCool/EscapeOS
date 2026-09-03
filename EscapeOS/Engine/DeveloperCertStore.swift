@@ -46,8 +46,10 @@ final class DeveloperCertStore: ObservableObject {
 
     // MARK: - CSR 生成（zsign/OpenSSL，SideStore CertificatesManager.generateCSR 同款）
 
-    /// 本机生成 RSA2048 私钥 + CSR；私钥落盘，返回 CSR PEM 字符串。
-    func generateKeyAndCSR() throws -> String {
+    /// 本机生成 RSA2048 私钥 + CSR；返回 (CSR PEM, 私钥 PEM)。
+    /// v0.3.140：私钥不再立即落盘 —— 由 createCertificate 在配对验证通过后统一写入，
+    /// 避免提交失败（1100/7460 等）时 keyURL 被新私钥污染（certURL 还是旧证书 → 错位）。
+    func generateKeyAndCSR() throws -> (csrPem: String, keyPem: String) {
         var csrPtr: UnsafeMutablePointer<CChar>?
         var csrLen: Int32 = 0
         var keyPtr: UnsafeMutablePointer<CChar>?
@@ -60,10 +62,30 @@ final class DeveloperCertStore: ObservableObject {
         defer {
             free(csrPtr); free(keyPtr)
         }
-        let csrPem = String(cString: csr)
-        let keyPem = String(cString: key)
-        try keyPem.write(to: keyURL, atomically: true, encoding: .utf8)
-        return csrPem
+        return (String(cString: csr), String(cString: key))
+    }
+
+    /// DER → PEM（证书），64 字符/行标准格式
+    static func derToPEM(_ der: Data) -> String {
+        let der64 = der.base64EncodedString()
+        var pem = "-----BEGIN CERTIFICATE-----\n"
+        var idx = der64.startIndex
+        while idx < der64.endIndex {
+            let end = der64.index(idx, offsetBy: 64, limitedBy: der64.endIndex) ?? der64.endIndex
+            pem += der64[idx..<end] + "\n"
+            idx = end
+        }
+        pem += "-----END CERTIFICATE-----\n"
+        return pem
+    }
+
+    /// 证书 PEM 与私钥 PEM 是否配对（zsign X509_check_private_key）
+    static func checkPair(certPem: String, keyPem: String) -> Bool {
+        return certPem.withCString { c in
+            keyPem.withCString { k in
+                zsign_check_pair(c, Int32(strlen(c)), k, Int32(strlen(k))) == 1
+            }
+        }
     }
 
     // MARK: - 完整流程：生成 → 提交 Apple → 存储证书
@@ -107,8 +129,9 @@ final class DeveloperCertStore: ObservableObject {
             // 2) 提交前记录已有序列号（用于识别新证书）
             let before = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
             let knownSerials = Set(before.map { $0.serialNumber })
-            // 3) 本机密钥 + CSR（完整 PEM，含头尾——Apple 端点要求原样提交）
-            let csrPem = try generateKeyAndCSR()
+            // 3) 本机密钥 + CSR（完整 PEM，含头尾——Apple 端点要求原样提交）。
+            //    私钥暂存内存，配对验证通过后才落盘（v0.3.140 防错位）。
+            let (csrPem, pendingKeyPem) = try generateKeyAndCSR()
             // 4) 提交 Apple（异步受理：响应只含 certRequest 元数据，无证书内容）。
             //    7460（证书数上限，免费账号常见）→ SideStore 同款：吊销全部旧证书后重试一次。
             //    （被吊销的旧证书所属工具下次使用时会自动重建自己的证书，属正常行为）
@@ -141,11 +164,19 @@ final class DeveloperCertStore: ObservableObject {
                 for attempt in 1...10 {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                     let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
-                    newCert = list.first { !knownSerials.contains($0.serialNumber) && $0.certContent != nil }
-                    if let c = newCert {
-                        LoginLogger.shared.log("✓ 新证书已签发（第 \(attempt) 次轮询，serial=\(c.serialNumber)）")
-                        break
+                    // v0.3.140：候选逐张验证与本机私钥配对 —— Apple 异步签发有延迟，
+                    // 历史失败提交的 CSR 可能此刻才被签发，不配对的直接跳过。
+                    let candidates = list.filter { !knownSerials.contains($0.serialNumber) && $0.certContent != nil }
+                    for cand in candidates {
+                        guard let content = cand.certContent else { continue }
+                        if Self.checkPair(certPem: Self.derToPEM(content), keyPem: pendingKeyPem) {
+                            newCert = cand
+                            LoginLogger.shared.log("✓ 新证书已签发且与本地私钥配对（第 \(attempt) 次轮询，serial=\(cand.serialNumber)）")
+                            break
+                        }
+                        LoginLogger.shared.log("⚠ 跳过不配对的新证书 serial=\(cand.serialNumber)（历史提交的延迟签发）")
                     }
+                    if newCert != nil { break }
                 }
             }
             let der: Data
@@ -157,16 +188,14 @@ final class DeveloperCertStore: ObservableObject {
                 throw NSError(domain: "DeveloperCert", code: -4,
                               userInfo: [NSLocalizedDescriptionKey: "证书签发处理超时（30 秒），请稍后在「证书管理」查看并重试"])
             }
-            // 6) DER → PEM 存储
-            let der64 = der.base64EncodedString()
-            var pem = "-----BEGIN CERTIFICATE-----\n"
-            var idx = der64.startIndex
-            while idx < der64.endIndex {
-                let end = der64.index(idx, offsetBy: 64, limitedBy: der64.endIndex) ?? der64.endIndex
-                pem += der64[idx..<end] + "\n"
-                idx = end
+            // 6) DER → PEM；同步路径同样验证配对（轮询路径在候选阶段已验证）
+            let pem = Self.derToPEM(der)
+            if newCert == nil && !Self.checkPair(certPem: pem, keyPem: pendingKeyPem) {
+                throw NSError(domain: "DeveloperCert", code: -5,
+                              userInfo: [NSLocalizedDescriptionKey: "签发的证书与本机私钥不配对，请重新创建证书"])
             }
-            pem += "-----END CERTIFICATE-----\n"
+            // 7) 配对确认后统一落盘（keyURL 延迟到此刻，杜绝错位状态落盘）
+            try pendingKeyPem.write(to: keyURL, atomically: true, encoding: .utf8)
             try pem.write(to: certURL, atomically: true, encoding: .utf8)
             try team.identifier.write(to: teamURL, atomically: true, encoding: .utf8)
             await MainActor.run {
@@ -190,6 +219,18 @@ final class DeveloperCertStore: ObservableObject {
               let certData = try? Data(contentsOf: certURL),
               let keyData = try? Data(contentsOf: keyURL) else {
             LoginLogger.shared.log("❌ signDylib：cert/key 文件读取失败")
+            return false
+        }
+        // v0.3.140 前置配对校验：历史错位（证书对应旧私钥）在此给出明确指引，不让 zsign 模糊失败
+        let paired = certData.withUnsafeBytes { cbuf -> Int32 in
+            keyData.withUnsafeBytes { kbuf -> Int32 in
+                guard let cp = cbuf.baseAddress?.assumingMemoryBound(to: CChar.self),
+                      let kp = kbuf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return 0 }
+                return zsign_check_pair(cp, Int32(certData.count), kp, Int32(keyData.count))
+            }
+        }
+        if paired != 1 {
+            LoginLogger.shared.log("❌ signDylib：证书与私钥不配对（历史创建错位遗留）. 请到「更多 → 证书管理」吊销并重新创建证书")
             return false
         }
         let dbg = debugLog?.path

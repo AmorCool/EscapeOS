@@ -39,6 +39,9 @@ void uloader_install_crash_probe(int fd);
 // v0.3.122 开发证书（SideStore/AltSign 同款流程）
 // 生成 RSA2048 私钥(PEM) + CSR(PEM)；输出 buffer 用 free() 释放
 int zsign_gen_key_csr(char **csrPemOut, int *csrPemLen, char **keyPemOut, int *keyPemLen);
+// 验证证书 PEM 与私钥 PEM 是否配对（v0.3.140）；1=配对 0=不配对/解析失败
+int zsign_check_pair(const char *certPem, int certLen,
+                     const char *keyPem, int keyLen);
 // 真证书签名（cert/key 均为 PEM）；dbgPath = 诊断日志落盘路径（可为 NULL）
 int zsign_sign_file_with_cert(const char *path, const char *bundleId,
                               const char *certPem, int certLen,
