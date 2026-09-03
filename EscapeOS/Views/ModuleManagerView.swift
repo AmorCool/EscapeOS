@@ -371,11 +371,12 @@ struct ModuleManagerView: View {
                     .padding(.horizontal, 18)
                     .padding(.vertical, 9)
                     .background(Capsule().fill(Color(.systemGray6)))
-                // v0.3.111：模块日志查看器（导出/复制/清空 run.log + go_stderr.log）
-                pill(label: "日志", icon: "doc.text.magnifyingglass") {
-                    showingLogFor = module
-                }
                 } else {
+                    // v0.3.113：日志 pill（导入模块也显示；内置模块用上面的禁用 卸载 HStack）
+                    pill(label: "日志", icon: "doc.text.magnifyingglass") {
+                        showingLogFor = module
+                    }
+
                     pill(label: "卸载", icon: "trash") {
                         uninstallTarget = module
                     }

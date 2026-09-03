@@ -292,7 +292,7 @@ final class BinaryModuleRunner: ObservableObject {
             } else {
                 parts.append("模块目录中无 bin/*.dylib——请从 module-esc edge 导入 com.escapeos.alist 模块 zip")
             }
-            parts.append("本 App 未内置 \(moduleId) 的 \(entrySymbol)（按设计：模块化，不内置引擎）")
+            parts.append("本 App 未内置 \(moduleId) 的 \(entrySymbol)，外部导入属正常现象")
             throw BinaryModuleError.spawnFailed(parts.joined(separator: "\n"))
         }
 
@@ -442,7 +442,7 @@ enum BinaryModuleError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .spawnFailed(let m): return "启动失败: \(m)"
+        case .spawnFailed(let m): return m  // 不加前缀——setError 处统一加
         }
     }
 }
