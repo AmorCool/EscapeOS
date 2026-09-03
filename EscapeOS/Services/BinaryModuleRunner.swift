@@ -336,11 +336,42 @@ final class BinaryModuleRunner: ObservableObject {
     }
     /// 供 SSH 诊断命令解析任意二进制模块的导出符号：优先已加载 dylib → 模块目录 dylib → 内置静态
     nonisolated static func resolveBinaryModuleSymbol(_ name: String, moduleDir: URL) -> UnsafeMutableRawPointer? {
+        let logFile = moduleDir.appendingPathComponent("run.log")
+        func note(_ line: String) {
+            // 便于诊断：解析失败原因直接落模块的 run.log（卡片「日志」按钮可见）
+            let text = "[\(DateFormatter.logStamp)] [resolve] \(line)
+"
+            if let fh = FileHandle(forWritingAtPath: logFile.path) {
+                fh.seekToEndOfFile(); fh.write(text.data(using: .utf8)!); try? fh.close()
+            } else {
+                try? text.data(using: .utf8)?.write(to: logFile)
+            }
+        }
+
         if let h = cachedBinaryModuleHandle, let s = dlsym(h, name) { return s }
-        if let dylib = findDylib(moduleDir: moduleDir),
-           let h = dlopen(dylib.path, RTLD_NOW | RTLD_GLOBAL) {
-            cacheBinaryModuleHandle(h)
-            if let s = dlsym(h, name) { return s }
+
+        if let dylib = findDylib(moduleDir: moduleDir) {
+            if let h = dlopen(dylib.path, RTLD_NOW | RTLD_GLOBAL) {
+                cacheBinaryModuleHandle(h)
+                if let s = dlsym(h, name) { return s }
+                note("dlopen 成功但无符号 \(name)")
+            } else {
+                // v0.3.115：dlopen 被 dyld 库校验拒绝 → 走自研用户态加载器（绕开 dyld）
+                let err0 = dlerror().map { String(cString: $0) } ?? "?"
+                note("dlopen 失败：\(err0.prefix(120))")
+                var errBuf = [CChar](repeating: 0, count: 512)
+                if let img = uloader_load(dylib.path, &errBuf, errBuf.count) {
+                    note("用户态加载器映射成功")
+                    if let s = uloader_symbol(img, name) {
+                        cacheUloaderImage(img)
+                        note("用户态加载器解析到符号 \(name) ✓")
+                        return s
+                    }
+                    note("用户态加载器未找到符号 \(name)")
+                } else {
+                    note("用户态加载器失败：\(String(cString: errBuf))")
+                }
+            }
         }
         return dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)   // RTLD_DEFAULT：内置静态
     }
