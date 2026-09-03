@@ -96,7 +96,7 @@ struct DeviceControlView: View {
             } header: {
                 Text("重启 SpringBoard")
             } footer: {
-                Text("重启 SpringBoard 方式。")
+                Text("重启 SpringBoard 方式.")
             }
 
             Section {
@@ -105,7 +105,7 @@ struct DeviceControlView: View {
             } header: {
                 Text("电源管理")
             } footer: {
-                Text("需要配对文件 + LocalDevVPN 隧道。")
+                Text("需要配对文件 + LocalDevVPN 隧道.")
             }
 
             Section {
@@ -113,7 +113,7 @@ struct DeviceControlView: View {
             } header: {
                 Text("恢复模式")
             } footer: {
-                Text("进入恢复模式后设备无法正常使用，退出需连接电脑。请谨慎操作。")
+                Text("进入恢复模式后设备无法正常使用.")
             }
         }
         .listStyle(.insetGrouped)
@@ -245,7 +245,7 @@ struct DeviceControlView: View {
                     // 指令已送达：重启/关机/恢复模式会打断连接，无需等待回执。
                     self.alertItem = .notice(
                         title: "指令已发送",
-                        message: "「\(action.rawValue)」指令已送达设备，请稍候。"
+                        message: "「\(action.rawValue)」操作已执行，请稍候."
                     )
                 }
             } catch {

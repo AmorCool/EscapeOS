@@ -109,7 +109,7 @@ final class DeveloperCertStore: ObservableObject {
             let csrPem = try generateKeyAndCSR()
             // 4) 提交 Apple（异步受理：响应只含 certRequest 元数据，无证书内容）
             let machineName = (UIDevice.current.name)
-            _ = try await AppleDeveloperAPI.submitSigningCertificate(
+            let certDER = try await AppleDeveloperAPI.submitSigningCertificate(
                 team: team, csrPEM: csrPem, machineName: machineName, session: session)
             // 5) 同步拿到内容则直接用；异步受理（空内容）则轮询证书列表（最多 30 秒）
             var newCert: DeveloperCertificate?

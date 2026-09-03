@@ -150,7 +150,7 @@ struct CrashLogView: View {
             Button("删除", role: .destructive) { deleteSelected() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("删除后无法恢复。")
+            Text("删除后无法恢复.")
         }
         .overlay(alignment: .bottom) {
             if let toast {
@@ -248,7 +248,7 @@ struct CrashLogView: View {
     private func open(_ entry: CrashLogService.Entry) {
         guard !busy else { return }
         // v0.2.127：AFC 视图能明确区分目录/文件 —— 目录直接进入，
-        // 文件拉取预览（爱思同款，可进入 CrashReporter / DiagnosticLogs 子目录）。
+        // 文件拉取预览（爱思同款，可进入 CrashReporter / DiagnosticLogs 子目录）.
         if entry.isDirectory {
             currentDir = entry.path
             reload()
