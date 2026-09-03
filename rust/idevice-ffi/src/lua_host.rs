@@ -129,6 +129,9 @@ fn wifi_api() -> Option<&'static WifiApi> {
 }
 
 fn wifi_set_power(on: bool) -> String {
+    if let Some(msg) = wifi_set_power_via_tunnel(on) {
+        return msg;
+    }
     unsafe {
         let api = match wifi_api() {
             Some(a) => a,
@@ -160,4 +163,28 @@ fn wifi_get_power() -> String {
         }
         format!("{}", (api.get_power)(mgr))
     }
+}
+
+// ══════════════ 隧道 WiFi 控制（v0.3.102）══════════════════
+// Swift 注册原生 handler（RSD 隧道 MCInstall SetWiFiPowerState），
+// Lua host.wifi_power 优先调用；未注册时回退直调 MobileWiFi（无 entitlement 空操作）。
+
+use std::sync::Mutex;
+
+type WifiPowerFn = unsafe extern "C" fn(c_int) -> c_int;
+static WIFI_FN: Mutex<Option<usize>> = Mutex::new(None);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn lua_host_set_wifi_power_fn(f: Option<WifiPowerFn>) {
+    *WIFI_FN.lock().unwrap() = f.map(|f| f as usize);
+}
+
+fn wifi_set_power_via_tunnel(on: bool) -> Option<String> {
+    let f = (*WIFI_FN.lock().unwrap())?;
+    let rc = unsafe { f(if on { 1 } else { 0 }) };
+    Some(if rc == 0 {
+        format!("ok: 隧道 SetWiFiPowerState({})", on)
+    } else {
+        format!("err: 隧道 SetWiFiPowerState 失败 (code {})", rc)
+    })
 }

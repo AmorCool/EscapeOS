@@ -565,6 +565,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 .appendingPathComponent("lua_out.txt")
             try? FileManager.default.createDirectory(
                 at: outPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+            WiFiPowerBridge.shared.ensureRegistered()   // 注册隧道 wifi handler（幂等）
             let isEval = (cmd == "luaeval")
             let box = GoCallBox {
                 code.withCString { c in

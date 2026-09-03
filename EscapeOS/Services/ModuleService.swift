@@ -211,6 +211,7 @@ final class ModuleService {
         let dataDir = dataURL(for: module.id)
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
         let outFile = dataDir.appendingPathComponent("lua_out.txt")
+        WiFiPowerBridge.shared.ensureRegistered()   // 注册隧道 wifi handler（幂等）
         onProgress?("执行 \(module.luaEntry)（\(code.count) 字符）…")
         var ret: Int32 = -99
         let sem = DispatchSemaphore(value: 0)
