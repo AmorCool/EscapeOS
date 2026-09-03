@@ -711,7 +711,7 @@ struct SettingsForm: View {
             }
 
             // v0.3.122：开发证书（原生可拆卸模块的签名信任链）
-            Section(header: Text("开发证书（原生模块）"), footer: Text("用已登录 Apple ID 的开发证书给原生模块签名（同 TeamID，免 JIT 加载）。提示会话过期（1100）时，请在上方 Apple ID 账户重新登录。")) {
+            Section(header: Text("开发证书"), footer: Text("用已登录 Apple ID 的开发证书给原生模块签名.")) {
                 if certStore.hasCert {
                     Label("证书已创建\(certStore.teamId.map { " · Team \($0)" } ?? "")",
                           systemImage: "checkmark.seal.fill")
@@ -737,7 +737,7 @@ struct SettingsForm: View {
                     set: { certStore.jitFreeMode = $0 }))
             }
 
-            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）, 默认 ani.stikstore.app.")) {
+            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）.")) {
                 Picker("服务器", selection: $anisetteServer) {
                     ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
                         Text(MemoryLimitSettings.host(from: server)).tag(server)

@@ -298,16 +298,26 @@ enum AppleDeveloperAPI {
                 }
                 if resultCode == 7460 {
                     LoginLogger.shared.log("❌ 证书数量达上限（7460）")
-                    throw AppleAPIError.customError(code: 7460, message: "开发证书数量已达上限（7460）。请到「更多 → 证书管理」吊销一张过期/旧证书（别吊销 SideStore 正在用的那张），再回来重新创建")
+                    throw AppleAPIError.customError(code: 7460, message: "开发证书数量已达上限（7460）。请到「更多 → 证书管理」吊销一旧证书.")
                 }
             }
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
             LoginLogger.shared.log("❌ 证书创建响应解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "证书创建响应解析失败: \(preview)")
         }
-        guard let b64 = certRequest["certContent"] as? String,
-              let certDER = Data(base64Encoded: b64) else {
-            LoginLogger.shared.log("❌ 响应缺少 certRequest.certContent")
+        // certContent 在 plist 响应里是 <data> 类型（解析后即 Data 对象，非字符串）；
+        // 备用键 certificateContent（base64 字符串）——对齐 AltSign ALTX509Certificate 解析
+        let certDER: Data
+        if let dataObj = certRequest["certContent"] as? Data {
+            certDER = dataObj
+        } else if let b64 = certRequest["certificateContent"] as? String,
+                  let der = Data(base64Encoded: b64) {
+            certDER = der
+        } else if let b64 = certRequest["certContent"] as? String,
+                  let der = Data(base64Encoded: b64) {
+            certDER = der
+        } else {
+            LoginLogger.shared.log("❌ 响应缺少 certRequest.certContent（现有键：\(certRequest.keys.joined(separator: ","))）")
             throw AppleAPIError.customError(code: -1, message: "响应缺少 certRequest.certContent")
         }
         LoginLogger.shared.log("✓ 开发证书创建成功（\(certDER.count) 字节）")
