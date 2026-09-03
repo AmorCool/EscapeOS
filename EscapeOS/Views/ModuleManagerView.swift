@@ -310,7 +310,7 @@ struct ModuleManagerView: View {
                 .tint(.blue)
             }
 
-            // 版本 / 作者（截图同款灰字两行）
+            // 版本 / 作者（灰字两行）
             Text("版本: v\(module.version)")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
@@ -325,12 +325,12 @@ struct ModuleManagerView: View {
 
             // 签名徽章（热补丁/二进制模块）
             if module.isHotfixModule || module.isBinaryModule {
-                Label("官方签名已验证", systemImage: "checkmark.seal.fill")
+                Label("签名已验证", systemImage: "checkmark.seal.fill")
                     .font(.caption)
                     .foregroundColor(.green)
             }
 
-            // 二进制模块运行区（自启动服务：alist 等）
+            // 二进制模块运行区（自启动服务）
             if module.isBinaryModule && enabled {
                 binaryControls(module)
             }

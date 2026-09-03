@@ -161,6 +161,8 @@ final class BinaryModuleRunner: ObservableObject {
     /// fd 2 重定向到 data/go_stderr.log 抓 Go runtime 临终输出；8MB 大栈 pthread 承载入口。
     /// 常驻保存用户态加载的镜像句柄（不卸载：Go runtime 必须存活）
     private static let uloaderLock = NSLock()
+    private static let rebuiltCacheLock = NSLock()
+    private nonisolated(unsafe) static var cachedRebuiltURL: URL?
     private nonisolated(unsafe) static var cachedUloaderImage: UnsafeMutableRawPointer?
     nonisolated private static func cacheUloaderImage(_ img: UnsafeMutableRawPointer) {
         uloaderLock.lock(); defer { uloaderLock.unlock() }
@@ -308,7 +310,7 @@ final class BinaryModuleRunner: ObservableObject {
         handleLock.unlock()
     }
     /// 供 SSH 诊断命令解析任意二进制模块的导出符号：优先已加载 dylib → 模块目录 dylib → 内置静态
-    nonisolated static func resolveBinaryModuleSymbol(_ name: String, moduleDir: URL) -> UnsafeMutableRawPointer? {
+    nonisolated static func resolveBinaryModuleSymbol(_ name: String, moduleDir: URL, moduleId: String) -> UnsafeMutableRawPointer? {
         let logFile = moduleDir.appendingPathComponent("run.log")
         func note(_ line: String) {
             // 便于诊断：解析失败原因直接落模块的 run.log（卡片「日志」按钮可见）
@@ -329,8 +331,24 @@ final class BinaryModuleRunner: ObservableObject {
                 // v0.3.115：dlopen 被 dyld 库校验拒绝 → 走自研用户态加载器（绕开 dyld）
                 let err0 = dlerror().map { String(cString: $0) } ?? "?"
                 note("dlopen 失败：\(err0.prefix(120))")
+                // v0.3.118：与 start 路径统一——先 zsign 重签到全新文件再喂 uloader。
+                // 直接加载原始文件实测 F_ADDFILESIGS_RETURN errno=1（EPERM）：
+                // 该 vnode 此前被 dyld 拒过，内核已缓存"无效"判决，签名登记同样被拒。
+                let target: URL
+                if let cached = cachedRebuiltURL,
+                   FileManager.default.fileExists(atPath: cached.path) {
+                    target = cached
+                    note("复用已重签副本：\(cached.lastPathComponent)")
+                } else if let rebuilt = try? MachoReSign.rebuildToNewFile(at: dylib, bundleId: moduleId) {
+                    rebuiltCacheLock.lock(); cachedRebuiltURL = rebuilt; rebuiltCacheLock.unlock()
+                    target = rebuilt
+                    note("zsign 重签完成：\(rebuilt.lastPathComponent)")
+                } else {
+                    target = dylib
+                    note("zsign 重签失败，退回原始文件")
+                }
                 var errBuf = [CChar](repeating: 0, count: 512)
-                if let img = uloader_load(dylib.path, &errBuf, errBuf.count) {
+                if let img = uloader_load(target.path, &errBuf, errBuf.count) {
                     note("用户态加载器映射成功")
                     if let s = uloader_symbol(img, name) {
                         cacheUloaderImage(img)

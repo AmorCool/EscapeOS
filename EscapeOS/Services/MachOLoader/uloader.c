@@ -776,8 +776,9 @@ void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {
 
         if (fcntl(img->fd, F_ADDFILESIGS_RETURN, &siginfo) == -1) {
             snprintf(img->lastError, sizeof(img->lastError),
-                     "（签名登记）F_ADDFILESIGS_RETURN 失败 errno=%d blob=0x%x/%u",
-                     errno, img->codeSigOff, img->codeSigSize);
+                     "（签名登记）F_ADDFILESIGS_RETURN 失败 errno=%d blob=0x%x/%u%s",
+                     errno, img->codeSigOff, img->codeSigSize,
+                     errno == 1 ? "（EPERM：内核/AMFI 拒绝该 blob——vnode 或已被缓存判无效，请用 zsign 重签后的全新文件）" : "");
             goto fail;
         }
         if (fcntl(img->fd, F_CHECK_LV, &checkInfo) == -1) {

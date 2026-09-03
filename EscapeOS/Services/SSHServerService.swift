@@ -419,7 +419,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
             setenv("MODULE_DATA_DIR", dataDir.path, 1)   // 通用兜底：数据目录传给模块
 
-            guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol(symName, moduleDir: moduleDir) else {
+            guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol(symName, moduleDir: moduleDir, moduleId: binID) else {
                 return "❌ 符号未找到: \(symName)\n"
                      + "   模块: \(binID)\n"
                      + "   可能原因：dylib 加载失败（dyld 库校验拒绝 ad-hoc 签名）或符号未导出\n"

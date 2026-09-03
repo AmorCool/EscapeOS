@@ -37,6 +37,8 @@ struct IPAInstallView: View {
         UserDefaults.standard.object(forKey: "IPA.autoSignInEnabled") as? Bool ?? true
     /// 2FA 等待代际：每次弹窗自增；超时定时器只在代际未变时生效（防旧定时器误取消新等待）
     @State private var twoFactorGeneration = 0
+    /// 手动登录进行中（区别于自动登录，进度文案不同）
+    @State private var isManuallySigningIn = false
     @State private var twoFactorReply: ((String?) -> Void)?
 
     // 流程
@@ -233,11 +235,11 @@ struct IPAInstallView: View {
                         }
                         .font(.subheadline)
                     }
-                } else if isAutoSigningIn {
+                } else if isAutoSigningIn || isManuallySigningIn {
                     HStack(spacing: 10) {
                         ProgressView()
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("正在用「设置」里的 Apple ID 自动登录…")
+                            Text(isManuallySigningIn ? "正在登录 Apple ID…" : "正在用「设置」里的 Apple ID 自动登录…")
                                 .font(.subheadline)
                             Text("如需两步验证，会自动弹出验证码输入框。")
                                 .font(.caption)
@@ -246,17 +248,15 @@ struct IPAInstallView: View {
                         Spacer()
                     }
                 } else {
+                    // v0.3.118：邮箱恒为明文（邮箱不是机密；旧实现错误地跟随密码的
+                    // showPassword，导致小眼睛把两栏都变星号）
                     HStack {
-                        Group {
-                            if showPassword {
-                                TextField("Apple ID 邮箱", text: $appleID)
-                            } else {
-                                SecureField("Apple ID 邮箱", text: $appleID)
-                            }
-                        }
-                        .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
+                        TextField("Apple ID 邮箱", text: $appleID)
+                            .keyboardType(.emailAddress)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.next)
                     }
                     HStack {
                         Group {
@@ -268,16 +268,36 @@ struct IPAInstallView: View {
                         }
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
+                        .submitLabel(.go)
+                        .onSubmit { manualLogin() }          // v0.3.118：回车即登录
                         Button {
                             showPassword.toggle()
                         } label: {
-                            Image(systemName: showPassword ? "eye.slash" : "eye")
+                            // 图标 = 当前显示状态：eye=明文可见，eye.slash=已隐藏
+                            Image(systemName: showPassword ? "eye" : "eye.slash")
                                 .foregroundColor(.blue)
                         }
                         .buttonStyle(.borderless)
                     }
+                    Button {
+                        manualLogin()
+                    } label: {
+                        Label("登录", systemImage: "person.crop.circle.badge.checkmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(appleID.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
+                }
+            } header: {
+                Text("Apple ID")
+            } footer: {
+                Text(service.isSignedIn
+                     ? "签名会话已就绪。"
+                     : "登录用于获取签名证书与描述文件；2FA 验证码在安装时弹出。")
+            }
 
-                    // v0.3.116：自动登录总开关（避免 2FA 弹窗打断操作）+ 从「设置」手动登录入口
+            // v0.3.118：自动登录开关/从设置登录独立成区（不再和输入框挤在一起）
+            if !service.isSignedIn && !isAutoSigningIn && !isManuallySigningIn {
+                Section {
                     Toggle("自动登录（用「设置」里的 Apple ID）", isOn: $autoSignInOn)
                         .onChange(of: autoSignInOn) { newValue in
                             UserDefaults.standard.set(newValue, forKey: "IPA.autoSignInEnabled")
@@ -293,13 +313,9 @@ struct IPAInstallView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                } footer: {
+                    Text("关闭自动登录后，进入本页不再自动登录/触发 2FA。")
                 }
-            } header: {
-                Text("Apple ID")
-            } footer: {
-                Text(service.isSignedIn
-                     ? "签名会话已就绪。"
-                     : "登录用于获取签名证书与描述文件；2FA 验证码在安装时弹出。")
             }
 
             // 流程状态
@@ -564,6 +580,36 @@ struct IPAInstallView: View {
     /// 自动登录总开关（设置里可关；默认开）
     private var autoSignInEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "IPA.autoSignInEnabled") as? Bool ?? true }
+    }
+
+    /// 手动登录：用输入框里的 Apple ID + 密码（2FA 走弹窗）。
+    /// 成功后持久化凭据，下次自动登录/免 2FA 恢复可用。
+    private func manualLogin() {
+        let id = appleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pw = password
+        guard !service.isSignedIn, !id.isEmpty, !pw.isEmpty, !isRunning else { return }
+        guard !isAutoSigningIn, !isManuallySigningIn, !service.isWarmingUp else { return }
+        isManuallySigningIn = true
+        errorMessage = nil
+        Task {
+            do {
+                let ani = MemoryLimitSettings.shared.anisetteServer
+                try await Task.detached(priority: .userInitiated) {
+                    try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: ani)
+                }.value
+                let dsid = service.lastSessionDSID ?? ""
+                let authToken = service.lastSessionAuthToken ?? ""
+                await MainActor.run {
+                    MemoryLimitSettings.shared.saveSessionCredentials(
+                        email: id, password: pw, dsid: dsid, authToken: authToken)
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "登录失败：\(error.localizedDescription)"
+                }
+            }
+            await MainActor.run { isManuallySigningIn = false }
+        }
     }
 
     private func autoSignInWithSavedCredentials() {
