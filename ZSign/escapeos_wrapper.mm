@@ -52,7 +52,8 @@ extern "C" int zsign_gen_key_csr(char** csrPemOut, int* csrPemLen,
     }
     bool ok = BN_set_word(bignum, 65537) == 1
            && RSA_generate_key_ex(rsa, 2048, bignum, NULL) == 1
-           && EVP_PKEY_assign_RSA(pkey, rsa) == 1;
+           && EVP_PKEY_assign_RSA(pkey, rsa) == 1;   // ⚠ assign 转移所有权：此后 pkey 负责
+                                                      //    释放 rsa，切勿再 RSA_free（双重释放闪退）
     if (ok) {
         X509_REQ_set_version(req, 0);
         X509_NAME* name = X509_REQ_get_subject_name(req);
@@ -81,7 +82,9 @@ extern "C" int zsign_gen_key_csr(char** csrPemOut, int* csrPemLen,
         }
         BIO_free(csrBIO); BIO_free(keyBIO);
     }
-    BN_free(bignum); RSA_free(rsa); EVP_PKEY_free(pkey); X509_REQ_free(req);
+    BN_free(bignum); EVP_PKEY_free(pkey); X509_REQ_free(req);
+    // rsa 已由 EVP_PKEY_assign_RSA 移交给 pkey，EVP_PKEY_free 时一并释放——
+    // 这里绝不能再 RSA_free（双重释放 = 点击创建证书即闪退，v0.3.123 实锤）
     return ok ? 0 : -1;
 }
 
