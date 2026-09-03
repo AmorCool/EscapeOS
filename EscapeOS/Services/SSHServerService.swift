@@ -448,12 +448,20 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
         case "devcert":
             // v0.3.130：远程触发开发证书创建（诊断/自测用）。
             // 流程：生成密钥+CSR → 提交 Apple →（7460 自动吊销重试）→ 轮询取证书。
-            do {
-                try await DeveloperCertStore.shared.createCertificateWithStoredAccount()
-                return "✓ 开发证书创建成功（已存 DeveloperCert/，原生模块将用真证书签名加载）"
-            } catch {
-                return "❌ 开发证书创建失败: \((error as NSError).localizedDescription)"
+            // execute 是同步函数 → 信号量等 Task 完成（整流程最多 ~40 秒）。
+            let sem = DispatchSemaphore(value: 0)
+            var devcertResult = ""
+            Task {
+                do {
+                    try await DeveloperCertStore.shared.createCertificateWithStoredAccount()
+                    devcertResult = "✓ 开发证书创建成功（已存 DeveloperCert/，原生模块将用真证书签名加载）"
+                } catch {
+                    devcertResult = "❌ 开发证书创建失败: \((error as NSError).localizedDescription)"
+                }
+                sem.signal()
             }
+            sem.wait()
+            return "devcert: \(devcertResult)\n详情: logs"
 
         case "mlog":
             // 读模块数据目录下的任意文件。
