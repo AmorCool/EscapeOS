@@ -9,7 +9,7 @@
 //! → 手写 XML plist 帧（4B BE 长度）→ RSDCheckin 三步握手 → SetWiFiPowerState。
 
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 
