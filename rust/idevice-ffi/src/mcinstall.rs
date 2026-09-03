@@ -188,7 +188,10 @@ pub async fn mcinstall_power_with_handles(on: bool) -> Result<String, IdeviceErr
     let c_path = CString::new(pairing_path.as_str())
         .map_err(|_| IdeviceError::UnexpectedResponse("配对文件路径含 NUL".into()))?;
     let mut pf: *mut IdevicePairingFile = std::ptr::null_mut();
-    if let Some(_err) = unsafe { idevice_pairing_file_read(c_path.as_ptr(), &mut pf) } {
+    // 注意：返回裸指针（非 Option）——null 表示成功
+    let err = unsafe { idevice_pairing_file_read(c_path.as_ptr(), &mut pf) };
+    if !err.is_null() {
+        unsafe { crate::errors::idevice_error_free(err) };
         return Err(IdeviceError::UnexpectedResponse("读取配对文件失败".into()));
     }
     if pf.is_null() {
