@@ -576,6 +576,77 @@ static void uloader_run_initializers(struct uloader_image *img) {
     }
 }
 
+
+// ---- 通用入口符号发现：扫描 LC_SYMTAB 中"以后缀结尾"的已定义外部符号 ----
+// 用途：引擎不该知道任何模块的符号名（如某模块导出 XxxMain）。
+// 调用方拿到候选名后用 dlsym 逐个尝试即可，实现零模块耦合。
+int uloader_symbols_with_suffix(const char *path, const char *suffix,
+                                char *outBuf, int outBufSize) {
+    if (!path || !suffix || !outBuf || outBufSize <= 0) return 0;
+    outBuf[0] = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    off_t fsize = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+    void *map = mmap(NULL, (size_t)fsize, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) { close(fd); return 0; }
+
+    int found = 0;
+    size_t used = 0;
+    const uint8_t *hdr = (const uint8_t *)map;
+    uint32_t magic = *(const uint32_t *)hdr;
+    const uint8_t *base = hdr;
+    if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+        const struct fat_header *fh = (const struct fat_header *)hdr;
+        uint32_t nfat = (magic == FAT_MAGIC) ? fh->nfat_arch : OSSwapInt32(fh->nfat_arch);
+        const struct fat_arch *fa = (const struct fat_arch *)(hdr + sizeof(struct fat_header));
+        for (uint32_t i = 0; i < nfat; i++) {
+            cpu_type_t ct = (magic == FAT_MAGIC) ? fa[i].cputype : OSSwapInt32(fa[i].cputype);
+            uint32_t off = (magic == FAT_MAGIC) ? fa[i].offset : OSSwapInt32(fa[i].offset);
+            if (ct == CPU_TYPE_ARM64) { base = hdr + off; break; }
+        }
+        void *newmap = mmap(NULL, (size_t)fsize, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (newmap != MAP_FAILED) { munmap(newmap, (size_t)fsize); }
+    }
+    const struct mach_header_64 *mh = (const struct mach_header_64 *)base;
+    if (mh->magic == MH_MAGIC_64 && mh->cputype == CPU_TYPE_ARM64) {
+        const uint8_t *ptr = base + sizeof(struct mach_header_64);
+        uint32_t symoff = 0, nsyms = 0, stroff = 0;
+        for (uint32_t i = 0; i < mh->ncmds; i++) {
+            const struct load_command *lc = (const struct load_command *)ptr;
+            if (lc->cmd == LC_SYMTAB) {
+                const struct symtab_command *st = (const struct symtab_command *)ptr;
+                symoff = st->symoff; nsyms = st->nsyms; stroff = st->stroff;
+            }
+            ptr += lc->cmdsize;
+        }
+        if (nsyms > 0) {
+            const struct nlist_64 *syms = (const struct nlist_64 *)(base + symoff);
+            const char *strs = (const char *)(base + stroff);
+            size_t slen = strlen(suffix);
+            for (uint32_t i = 0; i < nsyms && found < 8; i++) {
+                if ((syms[i].n_type & N_TYPE) != N_SECT) continue;   // 只要本镜像定义的
+                if (syms[i].n_value == 0) continue;
+                const char *name = strs + syms[i].n_un.n_strx;
+                size_t nlen = strlen(name);
+                if (nlen < slen) continue;
+                if (strncmp(name + (nlen - slen), suffix, slen) != 0) continue;
+                // 追加到输出（换行分隔）
+                size_t need = nlen + 1;
+                if (used + need + 1 >= (size_t)outBufSize) break;
+                if (used > 0) { outBuf[used++] = '\n'; }
+                memcpy(outBuf + used, name, nlen);
+                used += nlen;
+                outBuf[used] = 0;
+                found++;
+            }
+        }
+    }
+    munmap(map, (size_t)fsize);
+    close(fd);
+    return found;
+}
+
 // ---- 公开接口 ----
 
 void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {

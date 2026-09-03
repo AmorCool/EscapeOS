@@ -41,7 +41,7 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
     /// 启动模块二进制（全程后台：Go runtime 初始化 + 服务启动可能数秒，绝不占主线程）
-    /// 方案 A（v0.3.73）：OpenListMain 已静态链接进宿主 app（与 Sap* 共用单一 Go
+    /// 方案 A：模块入口符号已静态链接进宿主 app（与 Sap* 共用单一 Go
     /// runtime，sap.h 直接暴露给 Swift）。进程内直接调用——无 dylib、无第二 runtime、
     /// 无 AMFI exec 限制。此前 dlopen 第二 Go runtime 的方案在初始化即崩（run.log 实锤）。
     /// automatic=true 为自启动（受崩溃循环守卫保护）；false 为用户手动点启动（总是重试）
@@ -76,6 +76,26 @@ final class BinaryModuleRunner: ObservableObject {
         }
     }
 
+
+    /// 通用入口发现：扫描模块 dylib 的符号表，找第一个 "*Main" 结尾的已定义符号。
+    /// 这样引擎不需要知道任何模块的符号名（v0.3.112：彻底消除模块名硬编码）。
+    nonisolated static func discoverEntrySymbol(moduleDir: URL, logFile: URL) -> String? {
+        guard let dylib = findDylib(moduleDir: moduleDir) else { return nil }
+        var buf = [CChar](repeating: 0, count: 4096)
+        let n = uloader_symbols_with_suffix(dylib.path, "Main", &buf, Int32(buf.count))
+        guard n > 0 else { return nil }
+        let names = String(cString: buf).split(separator: "\n").map(String.init)
+        // 去掉 Mach-O 前导下划线后交给 dlsym 验证
+        for var nm in names {
+            if nm.hasPrefix("_") { nm.removeFirst() }
+            if let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), nm) {
+                _ = sym
+                return nm
+            }
+        }
+        return names.first.map { $0.hasPrefix("_") ? String($0.dropFirst()) : $0 }
+    }
+
     private static func inFlightKey(_ id: String) -> String { "Binary.startInFlight.\(id)" }
 
     /// 后台执行体（非隔离：Go 启动全在这里，状态写回走主线程）
@@ -90,7 +110,7 @@ final class BinaryModuleRunner: ObservableObject {
             return
         }
         // 数据目录可写性门禁（v0.3.74 闪退根修）：
-        // OpenList bootstrap 在目录不可写时走 log.Fatalf → os.Exit → 连宿主一起杀。
+        // 模块 bootstrap 在目录不可写时走 log.Fatalf → os.Exit → 连宿主一起杀。
         // 这里先建目录 + 写探针，失败就放弃启动并把原因报给 UI（宿主永不死）。
         do {
             try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
@@ -104,8 +124,11 @@ final class BinaryModuleRunner: ObservableObject {
             return
         }
         do {
-            // entrySymbol 默认 "OpenListMain"（v0.3.111：未来可由 module.json 的 binary.entrySymbol 覆盖）
-            try startBinaryModule(moduleId: module.id, entrySymbol: "OpenListMain",
+            // v0.3.112：入口符号通用化——优先 module.json 的 binary.entrySymbol，
+            // 否则自动扫描 dylib 符号表里 "*Main" 结尾的导出（引擎零模块耦合）
+            let entrySymbol = bin.entrySymbol
+                ?? (Self.discoverEntrySymbol(moduleDir: ModuleService.shared.installURL(for: module.id), logFile: logFile) ?? "Main")
+            try startBinaryModule(moduleId: module.id, entrySymbol: entrySymbol,
                                   dataDir: dataDir, logFile: logFile,
                                   moduleDir: ModuleService.shared.installURL(for: module.id))
             appendLog(logFile, "[host] 进程内启动成功（随宿主退出）")
@@ -150,7 +173,7 @@ final class BinaryModuleRunner: ObservableObject {
     }
 
 // MARK: 进程内启动（方案 A：单一 Go runtime，v0.3.73）
-    /// 启动 OpenList（v0.3.90 双形态统一入口）：
+    /// 启动二进制模块（双形态统一入口）：
     /// ① 模块目录带 bin/*.dylib（可拆卸 zip 安装）→ dlopen + dlsym
     /// ② 否则 RTLD_DEFAULT 找内置静态符号（openlist_embed 构建形态）
     /// ③ 都没有 → 报错提示安装模块 zip

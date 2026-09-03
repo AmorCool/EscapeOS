@@ -20,7 +20,7 @@ struct EscapeSpaceApp: App {
         }
         // Go runtime 内存节流（v0.3.81）：必须在**任何 Go 调用之前**设置——
         // Go 在 runtime 初始化时快照 environ，之后再 setenv 对 Go 不可见。
-        // 目的：OpenList 服务启动阶段疑似内存超限被系统硬杀（stderr 无任何输出），
+        // 目的：二进制模块服务启动阶段疑似内存超限被系统硬杀（stderr 无任何输出），
         // 这里压低 Go 堆上限与 P 数量，给 LC 宿主留出内存余量。
         setenv("GOGC", "60", 1)              // 默认 100 → 更早触发 GC
         setenv("GOMEMLIMIT", "256MiB", 1)    // 堆软上限，超限即强制 GC

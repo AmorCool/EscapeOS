@@ -398,130 +398,39 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             }
             guard let s = try? String(contentsOf: target, encoding: .utf8) else { return "非 UTF-8 文本文件" }
             return s
-        case "gotest", "probe", "startopenlist", "memtest", "step1", "step2", "step3", "step4", "adminpwd":
-            // v0.3.90 统一解析：这些 OpenList 导出符号可能来自可拆卸 dylib（dlopen）
-            // 或内置静态（RTLD_DEFAULT）——由 BinaryModuleRunner.resolveBinaryModuleSymbol 决定。
-            // 引擎不内置任何二进制模块（按设计：模块化）——直接符号调用无法通过编译，必须走解析器。
+                case "invoke":
+            // v0.3.112 通用符号调用：任何二进制模块的任何导出符号都能调。
+            // 取代此前硬编码的 startopenlist/probe/memtest/step1..4/adminpwd/gotest——
+            // 那些符号名是「模块的数据」，不该出现在引擎代码里。
+            // 用法：invoke <符号名>       例：invoke Main
+            let parts = trimmed.split(separator: " ")
+            guard parts.count >= 2 else {
+                return "用法: invoke <符号名>   —— 调用当前二进制模块的导出符号（数据目录作参数传入）"
+            }
+            let symName = String(parts[1])
+
             let binID = Self.firstBinaryModuleID()
             let moduleDir = ModuleService.shared.installURL(for: binID)
             let dataDir = ModuleService.shared.dataURL(for: binID)
             try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
-            setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底（dylib 场景 dlopen 前设置则可见）
+            setenv("MODULE_DATA_DIR", dataDir.path, 1)   // 通用兜底：数据目录传给模块
+
+            guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol(symName, moduleDir: moduleDir) else {
+                return "❌ 符号未找到: \(symName)\n"
+                     + "   模块: \(binID)\n"
+                     + "   可能原因：dylib 加载失败（dyld 库校验拒绝 ad-hoc 签名）或符号未导出\n"
+                     + "   详情: runlog 25"
+            }
 
             typealias DirFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Int32
-            typealias NoArgFn = @convention(c) () -> Int32
-            typealias MemFn = @convention(c) (Int32) -> Int32
-            typealias AdminFn = @convention(c) (UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<CChar>?) -> Int32
-
-            switch cmd {
-            case "gotest":
-                guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("GoSelfTest", moduleDir: moduleDir) else {
-                    return "❌ GoSelfTest 符号未找到（请确认模块已从 module-esc 导入）"
-                }
-                let box = GoCallBox { unsafeBitCast(sym, to: NoArgFn.self)() }
-                box.run()
-                return """
-                GoSelfTest: 调用已发出
-                结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
-                说明: 返回 42 = Go runtime 初始化成功
-                """
-            case "probe":
-                guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListProbe", moduleDir: moduleDir) else {
-                    return "❌ OpenListProbe 符号未找到（请确认模块已从 module-esc 导入）"
-                }
-                let fn = unsafeBitCast(sym, to: DirFn.self)
-                let box = GoCallBox {
-                    dataDir.path.withCString { cstr in fn(UnsafeMutablePointer(mutating: cstr)) }
-                }
-                box.run()
-                return """
-                OpenListProbe: 调用已发出
-                结果: \(box.value.map { String($0) } ?? "（超时/未返回）")
-                说明: >=0 = 进程内 Go 可写文件（写入字节数）；-1 = 写文件失败
-                """
-            case "memtest":
-                let mb = parts.count > 1 ? (Int(parts[1]) ?? 64) : 64
-                guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListMemTest", moduleDir: moduleDir) else {
-                    return "❌ OpenListMemTest 符号未找到（请确认模块已从 module-esc 导入）"
-                }
-                let fn = unsafeBitCast(sym, to: MemFn.self)
-                let box = GoCallBox { fn(Int32(mb)) }
-                box.run(timeout: 30)
-                return """
-                memtest: 申请 \(mb) MB
-                结果: \(box.value.map { "成功申请 \($0) MB" } ?? "（未返回＝进程被杀，说明天花板低于 \(mb) MB）")
-                """
-            case "step1", "step2", "step3", "step4":
-                let step = cmd
-                let blocking = (step == "step4")
-                guard let s1 = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListStep1", moduleDir: moduleDir),
-                      let s2 = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListStep2", moduleDir: moduleDir),
-                      let s3 = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListStep3", moduleDir: moduleDir),
-                      let s4 = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListStep4", moduleDir: moduleDir) else {
-                    return "❌ OpenListStep* 符号未找到（请确认模块已从 module-esc 导入）"
-                }
-                let fns = [unsafeBitCast(s1, to: DirFn.self), unsafeBitCast(s2, to: DirFn.self),
-                           unsafeBitCast(s3, to: DirFn.self), unsafeBitCast(s4, to: DirFn.self)]
-                let idx = Int(step.dropFirst(4)) ?? 1   // "step1" → 1
-                let box = GoCallBox {
-                    dataDir.path.withCString { cstr in fns[idx - 1](UnsafeMutablePointer(mutating: cstr)) }
-                }
-                box.run(timeout: blocking ? 4 : 3, keepAlive: blocking)
-                return """
-                \(step): 已调用（数据目录以参数传入）
-                结果: \(box.value.map { String($0) } ?? (blocking ? "（阻塞中＝服务在跑，属正常）" : "（超时/未返回）"))
-                下一步: runlog 看 \(step).begin / \(step).done 标记
-                """
-            case "startopenlist":
-                // 远程触发模块入口函数（长时间阻塞属正常）+ fd2 重定向抓临终输出
-                let goErr = dataDir.appendingPathComponent("go_stderr.log")
-                let efd = open(goErr.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
-                if efd >= 0 {
-                    dup2(efd, STDERR_FILENO)
-                    close(efd)
-                }
-                // v0.3.110：不再用"请先安装模块 zip"这类误导文案（模块可能已安装，
-                // 只是加载被拒）→ 改为指向 run.log 的真实原因
-                guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListMain", moduleDir: moduleDir) else {
-                    return "❌ OpenListMain 未就绪（不是缺模块 zip，是 dylib 加载失败）\n"
-                         + "   详情：SSH 执行 `runlog 25`，或模块卡片「查看日志」\n"
-                         + "   常见原因：dyld 库校验拒绝 ad-hoc 签名；或用户态加载器重定位失败"
-                }
-                let fn = unsafeBitCast(sym, to: DirFn.self)
-                let box = GoCallBox {
-                    dataDir.path.withCString { cstr in fn(UnsafeMutablePointer(mutating: cstr)) }
-                }
-                box.run(timeout: 3, keepAlive: true)
-                return """
-                入口函数: 已在 8MB 大栈后台线程调用
-                结果: \(box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）")
-                下一步: runlog 看 data/trace.txt 打点 + mlog log/log.log
-                """
-            case "adminpwd":
-                let chars = "abcdefghjkmnpqrstuvwxyz23456789"
-                let pwd = String((0..<8).map { _ in chars.randomElement()! })
-                guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListAdminSet", moduleDir: moduleDir) else {
-                    return "❌ OpenListAdminSet 符号未找到（请确认模块已从 module-esc 导入）"
-                }
-                let fn = unsafeBitCast(sym, to: AdminFn.self)
-                let box = GoCallBox {
-                    pwd.withCString { p in
-                        dataDir.path.withCString { d in
-                            fn(UnsafeMutablePointer(mutating: p), UnsafeMutablePointer(mutating: d))
-                        }
-                    }
-                }
-                box.run(timeout: 20)
-                let ok = box.value == 0
-                return """
-                OpenList 管理密码重置\(ok ? "成功" : "失败（ret=\(box.value.map { String($0) } ?? "超时")）")
-                账号: admin
-                新密码: \(ok ? pwd : "（未生效，用 ret 值排查）")
-                登录地址: http://127.0.0.1:5244/@manage
-                """
-            default:
-                return "❌ 未知诊断命令: \(cmd)"
+            let fn = unsafeBitCast(sym, to: DirFn.self)
+            let box = GoCallBox {
+                dataDir.path.withCString { cstr in fn(UnsafeMutablePointer(mutating: cstr)) }
             }
+            box.run(timeout: 3, keepAlive: true)
+            let resultText = box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）"
+            return "\(symName): 已调用（数据目录以参数传入）\n结果: \(resultText)\n下一步: runlog 查看模块日志"
+
         case "mlog":
             // 读模块数据目录下的任意文件。
             // 注意：不能用通用 cat —— 它基于 FileManager.documentDirectory，而模块数据目录
@@ -607,11 +516,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
-      step1..step4    OpenListMain 崩溃点二分诊断（逐步逼近）
-      gotest          手动触发一次 Go runtime 初始化（诊断）
-      probe           进程内 Go 写文件自检（写 <data>/probe.txt）
-      adminpwd        重置 OpenList 管理密码并回显明文
-      startopenlist   远程调用 OpenListMain（配合 trace 定位）
+      invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）
       ls [路径]       浏览 Documents 目录（相对路径）
       cat <文件>      查看 Documents 内文本文件（≤256KB）
       ip              局域网 IP
@@ -622,7 +527,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
 }
 
 /// 在 8MB 大栈后台线程调用 Go 导出函数（带超时读取结果）
-/// keepAlive=true 用于长期阻塞的调用（如 OpenListMain），故意不释放避免悬垂指针
+/// keepAlive=true 用于长期阻塞的调用（如模块入口函数），故意不释放避免悬垂指针
 final class GoCallBox {
     private let lock = NSLock()
     private var _value: Int32?

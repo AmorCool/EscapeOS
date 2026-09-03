@@ -80,6 +80,9 @@ struct BinaryConfig: Codable {
     var webPath: String?
     /// 是否随宿主自启动
     var autoStart: Bool?
+    /// 入口符号名（v0.3.112：模块化——引擎默认自动扫描 dylib 符号表里 "*Main"
+    /// 结尾的导出，只有模块想显式指定时才在 module.json 里声明，避免引擎耦合模块符号名）
+    var entrySymbol: String?
 }
 
 /// Lua 模块配置（v1.2）：纯脚本模块，无签名要求
@@ -263,7 +266,7 @@ final class ModuleService {
                     // 旧版落盘副本清理：只删残留的 bin/（旧 dylib，现已编译进 App）。
                     // ⚠️ v0.3.80 修复：此前这里执行 removeItem(dest)，而 dest 与 dataRoot
                     // 对内置原地模块是同一目录 —— 等于每次启动都把模块数据目录（日志/配置/
-                    // 数据库）整个删掉，既导致 OpenList 数据无法留存，也销毁了排障日志。
+                    // 数据库）整个删掉，既导致模块数据无法留存，也销毁了排障日志。
                     let legacyBin = dest.appendingPathComponent("bin", isDirectory: true)
                     if FileManager.default.fileExists(atPath: legacyBin.path) {
                         do {
