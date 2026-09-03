@@ -400,14 +400,12 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             return s
                 case "invoke":
             // v0.3.112 通用符号调用：任何二进制模块的任何导出符号都能调。
-            // 取代此前硬编码的 startopenlist/probe/memtest/step1..4/adminpwd/gotest——
-            // 那些符号名是「模块的数据」，不该出现在引擎代码里。
-            // 用法：invoke <符号名>       例：invoke Main
-            let parts = trimmed.split(separator: " ")
+            // 此前硬编码的专用命令（模块名即符号名）已删除——那些是「模块的数据」，
+            // 不该出现在引擎代码里。用法：invoke <符号名>
             guard parts.count >= 2 else {
                 return "用法: invoke <符号名>   —— 调用当前二进制模块的导出符号（数据目录作参数传入）"
             }
-            let symName = String(parts[1])
+            let symName = parts[1]
 
             let binID = Self.firstBinaryModuleID()
             let moduleDir = ModuleService.shared.installURL(for: binID)
