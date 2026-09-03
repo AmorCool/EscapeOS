@@ -31,14 +31,18 @@
 #define DYLD_CHAINED_PTR_START_NONE   0xFFFF
 #define DYLD_CHAINED_PTR_START_MULTI  0x8000
 
-// 实测位布局（真实 dylib 解码验证，pointer_format=6、stride 8）：
-//   bit63      = bind 标志（1=bind，0=rebase）
-//   bits52-62  = next（stride 个数）
-//   bits0-51   = target（rebase 时为 vmaddr；bind 时为 imports 表索引）
+// 位布局（dyld_chained_fixups.h 规范 + 真实 dylib 353634 条全量仿真验证）：
+//   bit63        = bind 标志（1=bind，0=rebase）
+//   bits51-62    = next：到下一条的偏移，**单位是 4 字节**（不是 8！）
+//   rebase:      target = bits0-42（36+7=43 位）；对 PTR_64_OFFSET 是相对镜像基址的偏移
+//   bind:        ordinal = bits0-23（24 位），addend = bits24-31，reserved = bits32-50
 #define CHAIN_BIND_MASK    (1ULL << 63)
-#define CHAIN_TARGET_MASK  0x7FFFFFFFFFFFFULL
+#define CHAIN_TARGET_MASK  0x7FFFFFFFFFFULL      // 43 位（rebase）
+#define CHAIN_ORDINAL_MASK 0xFFFFFFULL           // 24 位（bind 序号）
+#define CHAIN_ADDEND_SHIFT 24
 #define CHAIN_NEXT_SHIFT   51
 #define CHAIN_NEXT_MASK    0xFFF
+#define CHAIN_STRIDE       4                       // next 的单位字节数
 
 
 #include <dlfcn.h>
@@ -525,24 +529,42 @@ static bool uloader_chained_fixups(struct uloader_image *img) {
                 uint32_t next   = (uint32_t)((val >> CHAIN_NEXT_SHIFT) & CHAIN_NEXT_MASK);
 
                 if (isBind) {
-                    if (target >= importsCount) { set_error(img, "（chain）imports 索引越界"); return false; }
-                    uint32_t w = *(const uint32_t *)(cf + importsOff + (uint32_t)target * 4);
+                    // bind：序号在低 24 位，addend 在 bits24-31（v0.3.117 修正：
+                    // 旧实现用 51 位 target 当序号，addend≠0 时解析错）
+                    uint64_t ordinal = val & CHAIN_ORDINAL_MASK;
+                    uint64_t addend  = (val >> CHAIN_ADDEND_SHIFT) & 0xFF;
+                    if (ordinal >= importsCount) { set_error(img, "（chain）imports 序号越界"); return false; }
+                    uint32_t w = *(const uint32_t *)(cf + importsOff + (uint32_t)ordinal * 4);
                     uint32_t nameOff = w >> 9;   // lib_ordinal:8 + weak:1
                     const char *symName = (const char *)(cf + symbolsOff + nameOff);
                     const char *lookup = (symName[0] == '_') ? (symName + 1) : symName;
-                    void *sym = dlsym(RTLD_DEFAULT, lookup);
+                    // 解析顺序：① 本镜像 symtab（x_cgo_inittls 等 Go 运行时符号
+                    //   虽在 imports 里但定义在本 dylib 内）→ ② dlsym 全局 →
+                    //   ③ 兜底 dlopen libresolv（_res_9_* 所在库，宿主默认不加载）
+                    void *sym = uloader_symbol((void *)img, symName);
+                    if (!sym) sym = dlsym(RTLD_DEFAULT, lookup);
+                    if (!sym) {
+                        static bool libresolvTried = false;
+                        if (!libresolvTried) {
+                            libresolvTried = true;
+                            dlopen("libresolv.9.dylib", RTLD_NOW | RTLD_GLOBAL);
+                            sym = dlsym(RTLD_DEFAULT, lookup);
+                        }
+                    }
                     if (!sym) {
                         snprintf(img->lastError, sizeof(img->lastError),
                                  "（chain）符号未找到: %s", lookup);
                         return false;
                     }
-                    *slot = (uint64_t)(uintptr_t)sym;
+                    *slot = (uint64_t)(uintptr_t)sym + addend;
                 } else {
+                    // rebase：target 43 位；PTR_64_OFFSET 格式下是相对镜像基址的偏移
+                    // （本 dylib __TEXT vmaddr=0 已实测，imageBase=0 → +slide 即可）
                     *slot = target + (uint64_t)img->slide;
                 }
 
                 if (next == 0) break;
-                offsetInPage += (uint64_t)next * 8;    // stride 8
+                offsetInPage += (uint64_t)next * CHAIN_STRIDE;   // ★ 规范：next 单位是 4 字节
                 if (offsetInPage >= pageSize) break;   // 链走出本页即结束
             }
         }
