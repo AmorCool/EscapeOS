@@ -206,6 +206,25 @@ final class BinaryModuleRunner: ObservableObject {
                     appendLog(logFile, "[host] dylib 缺少 \(entrySymbol) 导出")
                 }
             } else {
+                // v0.3.122：真证书路径（SideStore 信任链）——有开发证书时先签后 dlopen。
+                // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）。
+                if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
+                    appendLog(logFile, "[host] 开发证书可用 → 真证书签名")
+                    let signURL = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)) ?? dylibURL
+                    if DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId) {
+                        appendLog(logFile, "[host] 真证书签名完成: \(signURL.lastPathComponent)")
+                        if let h = dlopen(signURL.path, RTLD_NOW | RTLD_GLOBAL) {
+                            handle = h
+                            appendLog(logFile, "[host] 真证书签名后 dlopen 成功 ✓")
+                        } else {
+                            let e2 = dlerror().map { String(cString: $0) } ?? "未知错误"
+                            appendLog(logFile, "[host] 真证书签名后 dlopen 仍失败: \(e2.prefix(160))")
+                        }
+                    } else {
+                        appendLog(logFile, "[host] 真证书签名失败（证书/私钥不可用）")
+                    }
+                }
+                if handle == nil {
                 // v0.3.108：dlopen 被 dyld 库校验拦下（ad-hoc 无 CMS blob 在 dyld 层必拒）→
                 // 改用自研用户态 Mach-O 加载器（移植自 Nyxian kxld）：自己 mmap + rebase + bind，
                 // 完全绕开 dyld——这是 LC / Nyxian 加载访客代码的方式。
@@ -228,6 +247,7 @@ final class BinaryModuleRunner: ObservableObject {
                     uloaderErrorText = reason
                     appendLog(logFile, "[host] 用户态加载器失败: \(reason)")
                 }
+                }   // v0.3.122 handle==nil 守卫闭合
             }
         }
         // ② 内置静态符号（openlist_embed 构建形态）；RTLD_DEFAULT = -2
@@ -315,6 +335,27 @@ final class BinaryModuleRunner: ObservableObject {
                 // v0.3.115：dlopen 被 dyld 库校验拒绝 → 走自研用户态加载器（绕开 dyld）
                 let err0 = dlerror().map { String(cString: $0) } ?? "?"
                 note("dlopen 失败：\(err0.prefix(120))")
+                // v0.3.122：真证书路径（SideStore 信任链）
+                if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
+                    note("开发证书可用 → 真证书签名")
+                    let signURL = (try? MachoReSign.rebuildToNewFile(at: dylib, bundleId: moduleId)) ?? dylib
+                    if DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId) {
+                        note("真证书签名完成: \(signURL.lastPathComponent)")
+                        if let h = dlopen(signURL.path, RTLD_NOW | RTLD_GLOBAL) {
+                            cacheBinaryModuleHandle(h)
+                            if let resolved = dlsym(h, name) {
+                                note("真证书签名后解析到符号 \(name) ✓")
+                                return resolved
+                            }
+                            note("真证书签名后 dlopen 成功但无符号 \(name)")
+                        } else {
+                            let e2 = dlerror().map { String(cString: $0) } ?? "?"
+                            note("真证书签名后 dlopen 仍失败: \(e2.prefix(140))")
+                        }
+                    } else {
+                        note("真证书签名失败")
+                    }
+                }
                 // v0.3.119：匿名内存方案下 uloader 不需要有效签名——直接加载原始文件
                 // （v0.3.118 实测：zsign 重签 + 全新 vnode，签名登记仍 EPERM → AMFI
                 //  拒的是 blob 本身，重签无意义）

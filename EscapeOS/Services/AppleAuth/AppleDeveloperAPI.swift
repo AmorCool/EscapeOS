@@ -262,6 +262,44 @@ enum AppleDeveloperAPI {
         return certs
     }
 
+    /// 提交 CSR 创建开发证书（免费 Apple ID 通用）。
+    /// 端点对齐 SideStore/AltSign：POST .../ios/submitSigningCertificateRequest.action，
+    /// plist body 携带 csr（base64 DER）；响应 certificates[0].certContent（base64 DER）。
+    static func submitSigningCertificate(team: DeveloperTeam,
+                                         csrBase64: String,
+                                         machineName: String,
+                                         session: AppleAPISession) async throws -> Data {
+        LoginLogger.shared.log("▶ 提交 CSR 创建开发证书（team=\(team.identifier)）")
+        var headers = try await makeHeaders(session: session)
+        headers["Content-Type"] = "text/x-xml-plist"
+        let body: [String: Any] = [
+            "clientId": clientID,
+            "protocolVersion": "QH65B2",
+            "requestId": UUID().uuidString.uppercased(),
+            "teamId": team.identifier,
+            "csr": csrBase64,
+            "machineName": machineName
+        ]
+        let url = qhURL.appendingPathComponent("ios/submitSigningCertificateRequest.action")
+            .appendingQueryItem("clientId", clientID)
+        let data = try await post(url: url, headers: headers, plistBody: body, method: "POST")
+        guard let dict = plist(data),
+              let certs = dict["certificates"] as? [[String: Any]],
+              let first = certs.first else {
+            try throwIfSessionExpired(data)
+            let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
+            LoginLogger.shared.log("❌ 证书创建响应解析失败: \(preview)")
+            throw AppleAPIError.customError(code: -1, message: "证书创建响应解析失败: \(preview)")
+        }
+        guard let b64 = first["certContent"] as? String,
+              let certDER = Data(base64Encoded: b64) else {
+            LoginLogger.shared.log("❌ 响应缺少 certContent")
+            throw AppleAPIError.customError(code: -1, message: "响应缺少 certContent")
+        }
+        LoginLogger.shared.log("✓ 开发证书创建成功（\(certDER.count) 字节）")
+        return certDER
+    }
+
     /// 吊销指定序列号的开发证书。
     /// 端点对齐 isideload：POST .../ios/revokeDevelopmentCert.action，
     /// body 含 teamId + serialNumber。

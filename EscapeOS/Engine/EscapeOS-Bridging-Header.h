@@ -36,6 +36,15 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // 崩溃探针：把硬故障（SIGSEGV/BUS/ILL/FPE）的 信号/地址/PC 写入 fd 后重抛
 void uloader_install_crash_probe(int fd);
 
+// v0.3.122 开发证书（SideStore/AltSign 同款流程）
+// 生成 RSA2048 私钥(PEM) + CSR(PEM)；输出 buffer 用 free() 释放
+int zsign_gen_key_csr(char **csrPemOut, int *csrPemLen, char **keyPemOut, int *keyPemLen);
+// 真证书签名（cert/key 均为 PEM）
+int zsign_sign_file_with_cert(const char *path, const char *bundleId,
+                              const char *certPem, int certLen,
+                              const char *keyPem, int keyLen,
+                              const char *entXml, int entLen);
+
 // ZSign ad-hoc 重签名（v0.3.101：LC/Nyxian 同款引擎，编进 App；对副本就地重签）
 int zsign_adhoc_file(const char *path, const char *bundleId, const char *entXml, int entLen);
 

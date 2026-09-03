@@ -706,6 +706,31 @@ struct SettingsForm: View {
                 }
             }
 
+            // v0.3.122：开发证书（原生可拆卸模块的签名信任链）
+            Section(header: Text("开发证书（原生模块）"), footer: Text("用已登录 Apple ID 的开发证书给原生模块签名（同 TeamID，免 JIT 加载）。OpenList 模块依赖此项。")) {
+                if DeveloperCertStore.shared.hasCert {
+                    Label("证书已创建\(DeveloperCertStore.shared.teamId.map { " · Team \($0)" } ?? "")",
+                          systemImage: "checkmark.seal.fill")
+                        .foregroundColor(.green)
+                    Button("重新创建证书") {
+                        Task {
+                            try? await DeveloperCertStore.shared.createCertificateWithStoredAccount()
+                        }
+                    }
+                } else {
+                    Label("尚未创建开发证书", systemImage: "seal")
+                        .foregroundColor(.secondary)
+                    Button("创建开发证书") {
+                        Task {
+                            try? await DeveloperCertStore.shared.createCertificateWithStoredAccount()
+                        }
+                    }
+                }
+                Toggle("免 JIT 模式（真证书签名加载）", isOn: Binding(
+                    get: { DeveloperCertStore.shared.jitFreeMode },
+                    set: { DeveloperCertStore.shared.jitFreeMode = $0 }))
+            }
+
             Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）, 默认 ani.stikstore.app.")) {
                 Picker("服务器", selection: $anisetteServer) {
                     ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
