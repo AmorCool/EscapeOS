@@ -5,6 +5,7 @@
 #include <string.h>
 #include "openssl.h"
 #include "macho.h"
+#include "common/log.h"
 
 extern "C" int zsign_adhoc_file(const char* path,
                                 const char* bundleId,
