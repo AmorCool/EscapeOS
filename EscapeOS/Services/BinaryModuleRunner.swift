@@ -178,21 +178,23 @@ final class BinaryModuleRunner: ObservableObject {
                 // ad-hoc 无身份，仅重建内容完整性；能否加载取决于 LC 环境的 AMFI 放行
                 // （旧 dylib 实证 ad-hoc 可加载）。失败原因写入 run.log 便于诊断。
                 let err0 = dlerror().map { String(cString: $0) } ?? "未知错误"
-                appendLog(logFile, "[host] dlopen 失败（\(err0)）→ 尝试设备端 ad-hoc 重签名")
+                appendLog(logFile, "[host] dlopen 失败（\(err0)）→ 设备端重建签名到全新文件")
                 do {
-                    try MachoReSign.refreshCodeSignature(at: dylibURL)
-                    appendLog(logFile, "[host] 重签名完成，重试 dlopen")
-                    if let h = dlopen(dylibURL.path, RTLD_NOW | RTLD_GLOBAL) {
+                    // v0.3.100：写到全新文件（新 vnode）——内核按 vnode 缓存校验判决，
+                    // 原地重签不失效缓存（Nyxian 同款解法：vnode_recover 到新路径）。
+                    let newURL = try MachoReSign.rebuildToNewFile(at: dylibURL)
+                    appendLog(logFile, "[host] 重建完成: \(newURL.lastPathComponent)，重试 dlopen")
+                    if let h = dlopen(newURL.path, RTLD_NOW | RTLD_GLOBAL) {
                         handle = h
-                        appendLog(logFile, "[host] 重签名后 dlopen 成功 ✓")
+                        appendLog(logFile, "[host] 重建后 dlopen 成功 ✓")
                     } else {
                         let err1 = dlerror().map { String(cString: $0) } ?? "未知错误"
                         reSignErrorText = err1
-                        appendLog(logFile, "[host] 重签名后仍失败: \(err1)")
+                        appendLog(logFile, "[host] 重建后仍失败: \(err1)")
                     }
                 } catch {
                     reSignErrorText = error.localizedDescription
-                    appendLog(logFile, "[host] 重签名失败: \(error.localizedDescription)")
+                    appendLog(logFile, "[host] 签名重建失败: \(error.localizedDescription)")
                 }
             }
             if let handle {
