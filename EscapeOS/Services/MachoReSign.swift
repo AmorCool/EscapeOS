@@ -91,7 +91,12 @@ enum MachoReSign {
         }
 
         // 布局计算（全部偏移相对各结构体起始）
-        let cdHeader = 52                        // v0x20400 头部：40 + scatter(4) + team(4) + 补齐
+        // ★ v0x20400 头部实际 88 字节：…spare2(40) scatter(44) team(48) spare3(52)
+        //   codeLimit64(56) execSegBase(64) execSegLimit(72) execSegFlags(80) → 88。
+        //   此前只写 52 就放哈希 → 哈希覆盖 codeLimit64/execSeg 字段 → 内核读出垃圾
+        //   → "code signature invalid"/"LINKEDIT beyond"（v0.3.93/94 两个现象的真因）。
+        //   dylib：codeLimit64=codeLimit，execSegBase/Limit/Flags=0。
+        let cdHeader = 88
         var hashOffset = cdHeader
         if hashOffset % 4 != 0 { hashOffset += 4 - hashOffset % 4 }
         let idLen = identifier.utf8.count + 1
@@ -144,7 +149,13 @@ enum MachoReSign {
         w32(0)                    // spare2
         w32(0)                    // scatterOffset
         w32(0)                    // teamOffset
-        while b.count < 20 + hashOffset { b.append(0) }   // 对齐填充至哈希区
+        w32(0)                    // spare3（cd+52）
+        w32(Int(codeLimit >> 32)) // codeLimit64 高 32 位（cd+56）
+        w32(codeLimit & 0xffffffff) // codeLimit64 低 32 位（cd+60）
+        w32(0); w32(0)            // execSegBase（cd+64，u64）
+        w32(0); w32(0)            // execSegLimit（cd+72，u64，dylib=0）
+        w32(0); w32(0)            // execSegFlags（cd+80，u64，dylib=0）
+        while b.count < 20 + hashOffset { b.append(0) }   // 对齐填充至哈希区（cd 头 88B）
 
         // 流式哈希代码页 [0, codeLimit)——datasize 已落盘，第 0 页哈希正确
         rh.seek(toFileOffset: 0)
