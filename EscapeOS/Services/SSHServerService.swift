@@ -541,7 +541,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       logs [n]        登录日志末尾 n 行（默认 30）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）
-  devcert        创建开发证书（用已登录 Apple ID；原生模块签名用）
+      devcert        创建开发证书（用已登录 Apple ID；原生模块签名用）
       ls [路径]       浏览 Documents 目录（相对路径）
       cat <文件>      查看 Documents 内文本文件（≤256KB）
       ip              局域网 IP
