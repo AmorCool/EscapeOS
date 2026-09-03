@@ -153,7 +153,7 @@ pub async fn set_wifi_power_stream(
 pub async fn mcinstall_power_with_handles(on: bool) -> Result<String, IdeviceError> {
     let (a, h) = take_mcinstall_handles()
         .ok_or(IdeviceError::ServiceNotFound)?; // Swift 未准备好隧道
-    let (adapter, handshake) = unsafe {
+    let (mut adapter, handshake) = unsafe {
         // 接管 Swift 移交的所有权（此后由本函数负责释放）
         let adapter = Box::from_raw(a);
         let handshake = Box::from_raw(h);
