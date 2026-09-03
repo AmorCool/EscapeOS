@@ -48,4 +48,8 @@ int zsign_adhoc_file(const char *path, const char *bundleId, const char *entXml,
 int lua_host_eval(const char *code, const char *outPath);
 int lua_host_exec(const char *code, const char *outPath);
 
+// Lua 宿主原生 handler 注册（v0.3.102：WiFi 射频经 RSD 隧道 MCInstall SetWiFiPowerState）。
+// Swift 实现阻塞执行，返回 0=成功；-1=失败。
+void lua_host_set_wifi_power_fn(int (*fn)(int));
+
 #endif /* EscapeOS_Bridging_Header_h */
