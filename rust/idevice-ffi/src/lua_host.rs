@@ -183,6 +183,7 @@ fn wifi_set_power_via_tunnel(on: bool) -> Option<String> {
     let f = (*WIFI_FN.lock().unwrap())?;
     let func = unsafe { std::mem::transmute::<usize, WifiPowerFn>(f) };
     let mut err_ptr: *mut c_char = std::ptr::null_mut();
+    // 阶段 1：Swift 建隧道并把 adapter/handshake 所有权注册进来（errOut 带失败原因）
     let rc = unsafe { func(if on { 1 } else { 0 }, &mut err_ptr) };
     let detail = if !err_ptr.is_null() {
         let s = unsafe { CStr::from_ptr(err_ptr).to_string_lossy().into_owned() };
@@ -191,9 +192,15 @@ fn wifi_set_power_via_tunnel(on: bool) -> Option<String> {
     } else {
         String::new()
     };
-    Some(if rc == 0 {
-        format!("ok: 隧道 SetWiFiPowerState({}) {}", on, detail)
-    } else {
-        format!("err: 隧道 SetWiFiPowerState 失败: {}", detail)
-    })
+    if rc != 0 {
+        return Some(format!("err: 隧道准备失败: {}", detail));
+    }
+    // 阶段 2：Rust 用接管的手柄走 MCInstall 协议（adapter.connect 隧道内转发）
+    match crate::mcinstall::mcinstall_power_with_handles(on) {
+        Ok(reply) => {
+            let head: String = reply.chars().take(200).collect();
+            Some(format!("ok: 隧道 SetWiFiPowerState({}) 响应: {}", on, head))
+        }
+        Err(e) => Some(format!("err: 隧道 MCInstall 失败: {:?}", e)),
+    }
 }
