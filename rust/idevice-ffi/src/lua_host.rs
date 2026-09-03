@@ -186,7 +186,7 @@ fn wifi_set_power_via_tunnel(on: bool) -> Option<String> {
     let rc = unsafe { func(if on { 1 } else { 0 }, &mut err_ptr) };
     let detail = if !err_ptr.is_null() {
         let s = unsafe { CStr::from_ptr(err_ptr).to_string_lossy().into_owned() };
-        libc::free(err_ptr.cast());
+        unsafe { libc::free(err_ptr.cast()); }
         s
     } else {
         String::new()
