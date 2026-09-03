@@ -263,10 +263,13 @@ enum AppleDeveloperAPI {
     }
 
     /// 提交 CSR 创建开发证书（免费 Apple ID 通用）。
-    /// 端点对齐 SideStore/AltSign：POST .../ios/submitSigningCertificateRequest.action，
-    /// plist body 携带 csr（base64 DER）；响应 certificates[0].certContent（base64 DER）。
+    /// 端点/键名对齐 SideStore/AltSign addCertificate：
+    /// POST .../ios/submitDevelopmentCSR.action，plist body 携带
+    /// csrContent（**完整 PEM 字符串**）+ machineId（随机大写 UUID）+ machineName。
+    /// 响应 certRequest.certContent（base64 DER）。
+    /// 特殊错误码：3250=CSR 无效，7460=证书数量达上限。
     static func submitSigningCertificate(team: DeveloperTeam,
-                                         csrBase64: String,
+                                         csrPEM: String,
                                          machineName: String,
                                          session: AppleAPISession) async throws -> Data {
         LoginLogger.shared.log("▶ 提交 CSR 创建开发证书（team=\(team.identifier)）")
@@ -277,24 +280,35 @@ enum AppleDeveloperAPI {
             "protocolVersion": "QH65B2",
             "requestId": UUID().uuidString.uppercased(),
             "teamId": team.identifier,
-            "csr": csrBase64,
+            "csrContent": csrPEM,
+            "machineId": UUID().uuidString.uppercased(),
             "machineName": machineName
         ]
-        let url = qhURL.appendingPathComponent("ios/submitSigningCertificateRequest.action")
+        let url = qhURL.appendingPathComponent("ios/submitDevelopmentCSR.action")
             .appendingQueryItem("clientId", clientID)
         let data = try await post(url: url, headers: headers, plistBody: body, method: "POST")
         guard let dict = plist(data),
-              let certs = dict["certificates"] as? [[String: Any]],
-              let first = certs.first else {
+              let certRequest = dict["certRequest"] as? [String: Any] else {
             try throwIfSessionExpired(data)
+            // 特殊错误码提示（plist 顶层 resultCode）
+            if let resultCode = plist(data)?["resultCode"] as? Int {
+                if resultCode == 3250 {
+                    LoginLogger.shared.log("❌ Apple 拒绝 CSR（3250）")
+                    throw AppleAPIError.customError(code: 3250, message: "Apple 拒绝了证书请求（3250：CSR 无效）")
+                }
+                if resultCode == 7460 {
+                    LoginLogger.shared.log("❌ 证书数量达上限（7460）")
+                    throw AppleAPIError.customError(code: 7460, message: "开发证书数量已达上限（7460），请先吊销一张旧证书")
+                }
+            }
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
             LoginLogger.shared.log("❌ 证书创建响应解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "证书创建响应解析失败: \(preview)")
         }
-        guard let b64 = first["certContent"] as? String,
+        guard let b64 = certRequest["certContent"] as? String,
               let certDER = Data(base64Encoded: b64) else {
-            LoginLogger.shared.log("❌ 响应缺少 certContent")
-            throw AppleAPIError.customError(code: -1, message: "响应缺少 certContent")
+            LoginLogger.shared.log("❌ 响应缺少 certRequest.certContent")
+            throw AppleAPIError.customError(code: -1, message: "响应缺少 certRequest.certContent")
         }
         LoginLogger.shared.log("✓ 开发证书创建成功（\(certDER.count) 字节）")
         return certDER

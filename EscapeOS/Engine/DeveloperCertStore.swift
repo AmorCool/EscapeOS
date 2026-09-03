@@ -100,18 +100,12 @@ final class DeveloperCertStore: ObservableObject {
                 throw NSError(domain: "DeveloperCert", code: -2,
                               userInfo: [NSLocalizedDescriptionKey: "账号下没有开发者团队"])
             }
-            // 2) 本机密钥 + CSR
+            // 2) 本机密钥 + CSR（完整 PEM，含头尾——Apple 端点要求原样提交）
             let csrPem = try generateKeyAndCSR()
-            // 取 CSR DER（PEM 去头尾 + base64 解码）
-            let b64 = csrPem
-                .replacingOccurrences(of: "-----BEGIN CERTIFICATE REQUEST-----", with: "")
-                .replacingOccurrences(of: "-----END CERTIFICATE REQUEST-----", with: "")
-                .replacingOccurrences(of: "\n", with: "")
-                .replacingOccurrences(of: "\r", with: "")
-            // 3) 提交 Apple
+            // 3) 提交 Apple（csrContent = 完整 PEM 字符串）
             let machineName = (UIDevice.current.name)
             let certDER = try await AppleDeveloperAPI.submitSigningCertificate(
-                team: team, csrBase64: b64, machineName: machineName, session: session)
+                team: team, csrPEM: csrPem, machineName: machineName, session: session)
             // 4) DER → PEM 存储
             let der64 = certDER.base64EncodedString()
             var pem = "-----BEGIN CERTIFICATE-----\n"
