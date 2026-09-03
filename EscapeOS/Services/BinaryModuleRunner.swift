@@ -277,7 +277,7 @@ final class BinaryModuleRunner: ObservableObject {
             if let dylibURL = Self.findDylib(moduleDir: moduleDir) {
                 parts.append("已找到模块 dylib：\(dylibURL.lastPathComponent)")
                 if let e = reSignErrorText {
-                    parts.append("dyld 加载被拒（dlopen）：\(e.prefix(300))")
+                    parts.append("dyld 加载被拒（dlopen）：\(e.suffix(400))")
                 }
                 if let e = uloaderErrorText {
                     parts.append("用户态加载器失败：\(e)")
