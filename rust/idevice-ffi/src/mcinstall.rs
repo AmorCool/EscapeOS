@@ -6,6 +6,7 @@
 //! App 无 wifi entitlement，直调 MobileWiFi 是空操作 → 必须经设备自己的服务。
 
 use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
 use std::ptr::null_mut;
 
 use idevice::{Idevice, IdeviceError, IdeviceService, RsdService, ReadWrite};
