@@ -648,8 +648,6 @@ bool ZSignAsset::Init(
 				rawTeam = jvRaw["Entitlements"]["com.apple.developer.team-identifier"].as_cstr();
 			}
 			if (!rawTeam.empty() && rawTeam != "TEAMID") {
-").c_str());
-").c_str());
 				m_strTeamId = rawTeam;
 				if (m_strEntitleData.empty()) {
 					jvRaw["Entitlements"].style_write_plist(m_strEntitleData);

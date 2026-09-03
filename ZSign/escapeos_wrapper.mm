@@ -95,7 +95,8 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
                                          const char* certPem, int certLen,
                                          const char* keyPem, int keyLen,
                                          const char* entXml, int entLen,
-                                         const char* dbgPath) {
+                                         const char* dbgPath,
+                                         const char* teamId) {
     auto diagWrite = [dbgPath](const std::string& text) {
         if (!dbgPath) return;
         FILE* f = fopen(dbgPath, "a");
@@ -137,14 +138,18 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
 
     // ⚠ zsign bAdhoc=false 时强制要求 provisioning 文件（"Can't find provision file!" 实锤）。
     // 生成最小合法 profile（XML plist；zsign 只提取 Name/Entitlements/ExpirationDate）。
-    // App ID 前缀用占位 TEAMID——zsign 会以证书的实际 TeamID 覆盖 entitlements。
-    const char* provXml =
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    // App ID 前缀用调用方传入的真实 TeamID（teamId.txt，与签名证书同 Team）。
+    std::string team = (teamId && *teamId) ? teamId : "TEAMID";
+    diagWrite(std::string("teamId=") + team + "\n");
+    std::string provXml =
+        std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
         "<plist version=\"1.0\"><dict>"
         "<key>Name</key><string>EscapeOS Developer</string>"
-        "<key>ApplicationIdentifierPrefix</key><array><string>TEAMID</string></array>"
+        "<key>TeamIdentifier</key><array><string>") + team + "</string></array>"
+        "<key>ApplicationIdentifierPrefix</key><array><string>" + team + "</string></array>"
         "<key>Entitlements</key><dict>"
-        "<key>application-identifier</key><string>TEAMID.com.escapeos.alist</string>"
+        "<key>com.apple.developer.team-identifier</key><string>" + team + "</string>"
+        "<key>application-identifier</key><string>" + team + "." + bundleId + "</string>"
         "<key>get-task-allow</key><true/>"
         "</dict>"
         "<key>ExpirationDate</key><date>2033-01-01T00:00:00Z</date>"
@@ -162,7 +167,7 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         FILE* pf = fopen(provTpl, "w");
         if (!pf) { close(pfd); unlink(provTpl); unlink(certTpl); unlink(keyTpl);
             diagWrite("FAIL: provision 写入失败\n"); return -2; }
-        fwrite(provXml, 1, strlen(provXml), pf);
+        fwrite(provXml.data(), 1, provXml.size(), pf);
         fclose(pf);
     }
 
