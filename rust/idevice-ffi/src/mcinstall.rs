@@ -52,8 +52,12 @@ pub unsafe extern "C" fn lua_host_set_mcinstall_handles(
 }
 
 fn take_mcinstall_handles() -> Option<(*mut AdapterHandle, *mut RsdHandshakeHandle)> {
-    let guard = MC_TUNNEL.lock().unwrap();
-    guard.map(|(a, h)| (a as *mut AdapterHandle, h as *mut RsdHandshakeHandle))
+    let mut guard = MC_TUNNEL.lock().unwrap();
+    let (a, h) = (*guard)?;
+    // ⚠️ 必须取走并清空：否则槽位残留悬垂指针，下次注册时"释放旧句柄"
+    //    会二次释放已释放内存 → 崩溃（v0.3.105 闪退根因）。
+    *guard = None;
+    Some((a as *mut AdapterHandle, h as *mut RsdHandshakeHandle))
 }
 
 // ---- XML plist 协议（对齐 idevice crate send_plist/read_plist 实现）----
@@ -164,6 +168,9 @@ pub async fn mcinstall_power_with_handles(on: bool) -> Result<String, IdeviceErr
         .services
         .get(MC_SERVICE)
         .ok_or(IdeviceError::ServiceNotFound)?;
+    // 诊断：该服务声明的所需 entitlement（空串表示无要求）
+    eprintln!("[MCInstall] 服务 entitlement='{}' port={} uv={}",
+        svc.entitlement, svc.port, svc.uses_remote_xpc);
     let port = svc.port;
     let mut stream: Box<dyn ReadWrite> = Box::new(adapter.connect(port).await?);
     rsd_checkin(&mut stream).await?;

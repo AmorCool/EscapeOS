@@ -202,7 +202,7 @@ fn wifi_set_power_via_tunnel(on: bool) -> Option<String> {
     });
     match res {
         Ok(reply) => {
-            let head: String = reply.chars().take(200).collect();
+            let head: String = reply.chars().take(1200).collect();
             Some(format!("ok: 隧道 SetWiFiPowerState({}) 响应: {}", on, head))
         }
         Err(e) => Some(format!("err: 隧道 MCInstall 失败: {:?}", e)),
