@@ -25,8 +25,7 @@ final class WiFiPowerBridge {
             .appendingPathComponent("Modules/com.escapeos.wifitoggle/data/wifi_bridge.log")
         try? FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
-        let line = "[" + String(describing: Date()) + "] " + text + "
-"
+        let line = "[" + String(describing: Date()) + "] " + text + "\n"
         if let handle = FileHandle(forWritingAtPath: path.path) {
             handle.seekToEndOfFile()
             handle.write(line.data(using: .utf8)!)
