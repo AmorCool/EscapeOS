@@ -28,7 +28,7 @@ final class WiFiPowerBridge {
     func ensureRegistered() {
         lock.lock(); defer { lock.unlock() }
         guard !handlerRegistered else { return }
-        lua_host_set_wifi_power_fn(escapeos_wifi_power_impl)
+        lua_host_set_wifi_power_fn(escapeos_wifi_power_cfn)
         handlerRegistered = true
     }
 
