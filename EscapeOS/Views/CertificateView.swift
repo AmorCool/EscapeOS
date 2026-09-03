@@ -92,18 +92,6 @@ struct CertificateView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("证书管理")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("移出白名单？", isPresented: Binding(
-            get: { whitelistRemovalTarget != nil },
-            set: { if !$0 { whitelistRemovalTarget = nil } }
-        )) {
-            Button("移出", role: .destructive) {
-                certStore.revokeWhitelist = ""
-                whitelistRemovalTarget = nil
-            }
-            Button("取消", role: .cancel) { whitelistRemovalTarget = nil }
-        } message: {
-            Text("移出后，自动撤销将不再放行「\(whitelistRemovalTarget?.name ?? "")」.")
-        }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 if settings.isLoggedIn && !manager.certs.isEmpty {
