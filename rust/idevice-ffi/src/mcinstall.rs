@@ -155,7 +155,7 @@ pub async fn mcinstall_power_with_handles(on: bool) -> Result<String, IdeviceErr
         .get(MC_SERVICE)
         .ok_or(IdeviceError::ServiceNotFound)?;
     let port = svc.port;
-    let mut stream = adapter.connect(port).await?;
+    let mut stream: Box<dyn ReadWrite> = Box::new(adapter.connect(port).await?);
     rsd_checkin(&mut stream).await?;
     set_wifi_power_stream(&mut stream, on).await
 }
