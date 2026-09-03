@@ -22,10 +22,10 @@ struct CertificateView: View {
     var body: some View {
         List {
             headerSection
-            // v0.3.131：自动撤销（统一撤销接口的管控开关）+ 白名单（仅一个）
-            Section(header: Text("自动撤销"), footer: Text("开启后，「创建开发证书」遇 7460 配额满会自动吊销旧证书（白名单与 SideStore/AltStore 标识的证书放行）。默认关闭，防止误吊销。")) {
+            // v0.3.131：自动撤销（统一撤销接口的管控开关）+ 白名单（仅一个）、（白名单与 SideStore/AltStore 标识的证书放行）遇 7460 情况使用
+            Section(header: Text("自动撤销"), footer: Text("开启后，配额满会自动吊销旧证书.")) {
                 Toggle("自动撤销证书", isOn: $certStore.autoRevokeEnabled)
-                TextField("白名单（证书名包含则放行，仅一个）", text: $certStore.revokeWhitelist)
+                TextField("白名单", text: $certStore.revokeWhitelist)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
             }
@@ -81,7 +81,7 @@ struct CertificateView: View {
             }
             Button("取消", role: .cancel) { whitelistRemovalTarget = nil }
         } message: {
-            Text("移出后，自动撤销将不再放行「\(whitelistRemovalTarget?.name ?? "")」。")
+            Text("移出后，自动撤销将不再放行「\(whitelistRemovalTarget?.name ?? "")」.")
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
@@ -141,7 +141,7 @@ struct CertificateView: View {
             manager.autoLoad()
         }
         .onChange(of: settings.appleID) { _ in
-            // 新登录 / 切换账号：清空旧团队的证书，重新拉团队列表。
+            // 新登录 / 切换账号：清空旧团队的证书，重新拉团队列表.
             manager.reset()
             manager.autoLoad()
         }
@@ -154,7 +154,7 @@ struct CertificateView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将吊销已选的 \(selected.count) 张证书。用这些证书签名的应用会在所有设备上停止启动，且无法撤销。")
+            Text("将吊销已选的 \(selected.count) 张证书.用这些证书签名的应用会在所有设备上停止启动，且无法撤销.")
         }
         .alert("吊销这张证书？", isPresented: Binding(
             get: { pendingRevoke != nil },
@@ -167,7 +167,7 @@ struct CertificateView: View {
             Button("取消", role: .cancel) { pendingRevoke = nil }
         } message: {
             if let cert = pendingRevoke {
-                Text("「\(cert.displayName)」将被吊销。已用该证书签名的应用会在所有设备上停止启动，且无法撤销。")
+                Text("「\(cert.displayName)」将被吊销.已用该证书签名的应用会在所有设备上停止启动，且无法撤销.")
             }
         }
     }
@@ -210,15 +210,15 @@ struct CertificateView: View {
 
     // MARK: - 开发者团队（v0.2.112：对齐「增加内存限制」的团队栏）
 
-    /// 团队选择器。与「增加内存限制」保持同一套展示语言：
-    /// 加载中 → 进度；失败 → 红字 + 重试；成功 → Picker（单团队时补一行说明）。
+    /// 团队选择器.与「增加内存限制」保持同一套展示语言：
+    /// 加载中 → 进度；失败 → 红字 + 重试；成功 → Picker（单团队时补一行说明）.
     private var teamSection: some View {
         Section {
             switch manager.teamState {
             case .idle:
                 // v0.2.120：`.idle` 以前和 `.loading` 渲染成同一个转圈，
-                // 导致"压根没发起请求"被误认为"正在加载"，用户永远等不到结果。
-                // 现在 `.idle` 明确显示未加载 + 给一个「加载」按钮。
+                // 导致"压根没发起请求"被误认为"正在加载"，用户永远等不到结果.
+                // 现在 `.idle` 明确显示未加载 + 给一个「加载」按钮.
                 HStack {
                     Image(systemName: "exclamationmark.circle").foregroundColor(.orange)
                     Text("尚未加载团队")
@@ -270,7 +270,7 @@ struct CertificateView: View {
 
     // MARK: - 未登录
 
-    /// 是否已全选（批量模式用）。
+    /// 是否已全选（批量模式用）.
     private var allSelected: Bool {
         !manager.certs.isEmpty && selected.count == manager.certs.count
     }
@@ -281,7 +281,7 @@ struct CertificateView: View {
                 icon: "lock.fill",
                 iconTint: .blue,
                 title: "尚未登录",
-                message: "登录 Apple ID 后即可查看账号下的开发证书并吊销失效证书。登录需要两步验证，凭据仅保存在本机钥匙串。"
+                message: "登录 Apple ID 后即可查看账号下的开发证书并吊销失效证书.登录需要两步验证，凭据仅保存在本机钥匙串."
             )
         }
     }
@@ -294,7 +294,7 @@ struct CertificateView: View {
                 icon: "checkmark.seal",
                 iconTint: .blue,
                 title: "没有证书",
-                message: "这个 Apple ID 下没有可吊销的 iOS 开发证书。"
+                message: "这个 Apple ID 下没有可吊销的 iOS 开发证书."
             )
         }
     }

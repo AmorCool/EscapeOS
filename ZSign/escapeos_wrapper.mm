@@ -135,23 +135,54 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         return -2;
     }
 
+    // ⚠ zsign bAdhoc=false 时强制要求 provisioning 文件（"Can't find provision file!" 实锤）。
+    // 生成最小合法 profile（XML plist；zsign 只提取 Name/Entitlements/ExpirationDate）。
+    // App ID 前缀用占位 TEAMID——zsign 会以证书的实际 TeamID 覆盖 entitlements。
+    const char* provXml =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<plist version=\"1.0\"><dict>"
+        "<key>Name</key><string>EscapeOS Developer</string>"
+        "<key>ApplicationIdentifierPrefix</key><array><string>TEAMID</string></array>"
+        "<key>Entitlements</key><dict>"
+        "<key>application-identifier</key><string>TEAMID.com.escapeos.alist</string>"
+        "<key>get-task-allow</key><true/>"
+        "</dict>"
+        "<key>ExpirationDate</key><date>2033-01-01T00:00:00Z</date>"
+        "</dict></plist>\n";
+    char provTpl[512];
+    snprintf(provTpl, sizeof(provTpl), "%sesc-prov-XXXXXX.mobileprovision",
+             tmpDir.fileSystemRepresentation);
+    int pfd = mkstemp(provTpl);
+    if (pfd < 0) {
+        unlink(certTpl); unlink(keyTpl);
+        diagWrite("FAIL: provision mkstemp 失败\n");
+        return -2;
+    }
+    {
+        FILE* pf = fopen(provTpl, "w");
+        if (!pf) { close(pfd); unlink(provTpl); unlink(certTpl); unlink(keyTpl);
+            diagWrite("FAIL: provision 写入失败\n"); return -2; }
+        fwrite(provXml, 1, strlen(provXml), pf);
+        fclose(pf);
+    }
+
     ZLog::logs.clear();
     ZSignAsset asset;
-    bool inited = asset.Init(certTpl, keyTpl, "", "", "", /*bAdhoc*/ false,
+    bool inited = asset.Init(certTpl, keyTpl, provTpl, "", "", /*bAdhoc*/ false,
                              /*bSHA256Only*/ true, /*bSingleBinary*/ true);
     if (!inited) {
-        diagWrite("FAIL: ZSignAsset::Init 失败（读取证书/私钥）\n");
+        diagWrite("FAIL: ZSignAsset::Init 失败（读取证书/私钥/profile）\n");
         for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
-        unlink(certTpl); unlink(keyTpl);
+        unlink(provTpl); unlink(certTpl); unlink(keyTpl);
         return -1;
     }
-    diagWrite("Init ✓（证书/私钥读取成功）\n");
+    diagWrite("Init ✓（证书/私钥/profile 读取成功）\n");
     ZMachO* macho = new ZMachO();
     if (!macho->Init(path)) {
         delete macho;
         diagWrite("FAIL: ZMachO::Init 失败（解析 dylib）\n");
         for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
-        unlink(certTpl); unlink(keyTpl);
+        unlink(provTpl); unlink(certTpl); unlink(keyTpl);
         return -2;
     }
     std::string info1, info256, res;
@@ -164,7 +195,7 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
     for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
     if (!res.empty()) diagWrite("  [res] " + res + "\n");
     delete macho;
-    unlink(certTpl); unlink(keyTpl);
+    unlink(provTpl); unlink(certTpl); unlink(keyTpl);
     int rc = ok ? 0 : -3;
     diagWrite("=== 签名结束 rc=" + std::to_string(rc) + " ===\n");
     return rc;
