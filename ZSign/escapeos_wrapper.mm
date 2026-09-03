@@ -95,9 +95,15 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
                                          const char* keyPem, int keyLen,
                                          const char* entXml, int entLen) {
     if (!path || !bundleId || !certPem || !keyPem) return -2;
-    // 写临时文件（ZSignAsset::Init 接收路径）
-    char certTpl[] = "/tmp/esc-cert-XXXXXX.pem";
-    char keyTpl[]  = "/tmp/esc-key-XXXXXX.pem";
+    // 写临时文件（ZSignAsset::Init 接收路径）。⚠ 不能用 /tmp——LC 访客沙盒
+    // 对 /tmp 无写权限（mkstemp 必败，v0.3.130 实锤「证书/私钥不可用」），用 App 自身 tmp。
+    NSString *tmpDir = NSTemporaryDirectory();
+    if (!tmpDir) return -2;
+    char certTpl[512], keyTpl[512];
+    snprintf(certTpl, sizeof(certTpl), "%sesc-cert-XXXXXX.pem",
+             tmpDir.fileSystemRepresentation);
+    snprintf(keyTpl,  sizeof(keyTpl),  "%sesc-key-XXXXXX.pem",
+             tmpDir.fileSystemRepresentation);
     int cfd = mkstemp(certTpl), kfd = mkstemp(keyTpl);
     if (cfd < 0 || kfd < 0) { if (cfd>=0) close(cfd); if (kfd>=0) close(kfd); return -2; }
     bool ok = write(cfd, certPem, certLen) == certLen

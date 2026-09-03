@@ -7,6 +7,9 @@ import SwiftUI
 struct CertificateView: View {
     @StateObject private var manager = CertificateManager.shared
     @StateObject private var settings = MemoryLimitSettings.shared
+    /// v0.3.131：自动撤销开关/白名单（统一撤销接口的管控项）
+    @StateObject private var certStore = DeveloperCertStore.shared
+    @State private var whitelistRemovalTarget: DeveloperCertificate?
     @State private var showLogin = false
     /// 待确认吊销的证书。
     @State private var pendingRevoke: DeveloperCertificate?
@@ -19,6 +22,13 @@ struct CertificateView: View {
     var body: some View {
         List {
             headerSection
+            // v0.3.131：自动撤销（统一撤销接口的管控开关）+ 白名单（仅一个）
+            Section(header: Text("自动撤销"), footer: Text("开启后，「创建开发证书」遇 7460 配额满会自动吊销旧证书（白名单与 SideStore/AltStore 标识的证书放行）。默认关闭，防止误吊销。")) {
+                Toggle("自动撤销证书", isOn: $certStore.autoRevokeEnabled)
+                TextField("白名单（证书名包含则放行，仅一个）", text: $certStore.revokeWhitelist)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+            }
             if !settings.isLoggedIn {
                 notSignedInSection
             } else {
@@ -61,6 +71,18 @@ struct CertificateView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("证书管理")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("移出白名单？", isPresented: Binding(
+            get: { whitelistRemovalTarget != nil },
+            set: { if !$0 { whitelistRemovalTarget = nil } }
+        )) {
+            Button("移出", role: .destructive) {
+                certStore.revokeWhitelist = ""
+                whitelistRemovalTarget = nil
+            }
+            Button("取消", role: .cancel) { whitelistRemovalTarget = nil }
+        } message: {
+            Text("移出后，自动撤销将不再放行「\(whitelistRemovalTarget?.name ?? "")」。")
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 if settings.isLoggedIn && !manager.certs.isEmpty {
@@ -279,6 +301,12 @@ struct CertificateView: View {
 
     // MARK: - 证书行
 
+    /// 是否命中白名单（证书名包含白名单字符串）
+    private func isWhitelisted(_ cert: DeveloperCertificate) -> Bool {
+        let w = certStore.revokeWhitelist.trimmingCharacters(in: .whitespaces)
+        return !w.isEmpty && cert.name.contains(w)
+    }
+
     private func certRow(_ cert: DeveloperCertificate) -> some View {
         let revoking = manager.revokingID == cert.id
         let isSelected = selected.contains(cert.id)
@@ -301,8 +329,20 @@ struct CertificateView: View {
                     .font(.title3)
                     .foregroundStyle(cert.isExpired ? Color.orange : Color.blue)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(cert.displayName)
-                        .font(.subheadline.weight(.semibold))
+                    HStack(spacing: 6) {
+                        Text(cert.displayName)
+                            .font(.subheadline.weight(.semibold))
+                        if isWhitelisted(cert) {
+                            // v0.3.131：白名单胶囊标签（自动撤销时放行）
+                            Text("白名单")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.blue.opacity(0.15)))
+                                .foregroundColor(.blue)
+                                .onTapGesture { whitelistRemovalTarget = cert }
+                        }
+                    }
                     if let machine = cert.machineLabel {
                         Label(machine, systemImage: "desktopcomputer")
                             .font(.caption)

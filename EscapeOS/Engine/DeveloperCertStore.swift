@@ -40,6 +40,8 @@ final class DeveloperCertStore: ObservableObject {
                  && FileManager.default.fileExists(atPath: keyURL.path)
         teamId = try? String(contentsOf: teamURL, encoding: .utf8)
         jitFreeMode = UserDefaults.standard.object(forKey: "modules.certSignEnabled") as? Bool ?? true
+        autoRevokeEnabled = UserDefaults.standard.object(forKey: "certs.autoRevokeEnabled") as? Bool ?? false
+        revokeWhitelist = UserDefaults.standard.string(forKey: "certs.revokeWhitelist") ?? ""
     }
 
     // MARK: - CSR 生成（zsign/OpenSSL，SideStore CertificatesManager.generateCSR 同款）
@@ -117,11 +119,13 @@ final class DeveloperCertStore: ObservableObject {
                     team: team, csrPEM: csrPem, machineName: machineName, session: session)
             } catch let err as AppleAPIError {
                 if case .customError(let code, _) = err, code == 7460 {
-                    LoginLogger.shared.log("⚠ 7460 配额满 → 吊销全部旧证书后重试（SideStore 免费账号标准流程）")
-                    let existing = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
-                    for old in existing {
-                        _ = try? await AppleDeveloperAPI.revokeCertificate(
-                            team: team, serialNumber: old.serialNumber, session: session)
+                    // v0.3.131：走统一撤销接口（受「自动撤销证书」开关与白名单管控）
+                    let (revoked, blocked) = await revokeAllForModuleLoading(
+                        team: team, session: session)
+                    guard !blocked, revoked > 0 else {
+                        throw AppleAPIError.customError(
+                            code: 7460,
+                            message: "开发证书数量已达上限（7460）。未设置自动撤销证书，请手动撤销（更多 → 证书管理）")
                     }
                     certDER = try await AppleDeveloperAPI.submitSigningCertificate(
                         team: team, csrPEM: csrPem, machineName: machineName, session: session)
@@ -194,6 +198,56 @@ final class DeveloperCertStore: ObservableObject {
             }
         }
         return rc == 0
+    }
+
+    /// 统一撤销接口：自动撤销开关（默认关——防止误吊销 SideStore 在用证书）
+    @Published var autoRevokeEnabled: Bool {
+        didSet { UserDefaults.standard.set(autoRevokeEnabled, forKey: "certs.autoRevokeEnabled") }
+    }
+    /// 白名单（仅支持一个）：证书名包含该字符串则不吊销（如 "SideStore"）
+    @Published var revokeWhitelist: String {
+        didSet { UserDefaults.standard.set(revokeWhitelist, forKey: "certs.revokeWhitelist") }
+    }
+
+    /// 统一撤销调用点：吊销团队下全部开发证书（白名单与 SideStore/AltStore 标识放行）。
+    /// 返回 (吊销数, 是否被开关拦下)。未开自动撤销 → 输出日志并拦下（调用方自行提示）。
+    @discardableResult
+    func revokeAllForModuleLoading(team: DeveloperTeam,
+                                   session: AppleAPISession) async -> (revoked: Int, blocked: Bool) {
+        guard autoRevokeEnabled else {
+            LoginLogger.shared.log("⚠ 未设置自动撤销证书，请手动撤销（更多 → 证书管理）")
+            return (0, true)
+        }
+        let whitelist = revokeWhitelist.trimmingCharacters(in: .whitespaces)
+        do {
+            let certs = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
+            var revoked = 0
+            for cert in certs {
+                let name = cert.name
+                let lowered = name.lowercased()
+                if !whitelist.isEmpty, name.contains(whitelist) {
+                    LoginLogger.shared.log("⏭ 白名单放行：\(name)")
+                    continue
+                }
+                if lowered.contains("sidestore") || lowered.contains("altstore") {
+                    LoginLogger.shared.log("⏭ SideStore/AltStore 标识放行：\(name)")
+                    continue
+                }
+                do {
+                    try await AppleDeveloperAPI.revokeCertificate(
+                        team: team, serialNumber: cert.serialNumber, session: session)
+                    LoginLogger.shared.log("✓ 已吊销旧证书：\(name)（serial=\(cert.serialNumber)）")
+                    revoked += 1
+                } catch {
+                    LoginLogger.shared.log("❌ 吊销失败：\(name)——\((error as NSError).localizedDescription)")
+                }
+            }
+            LoginLogger.shared.log("✓ 统一撤销完成：吊销 \(revoked)/\(certs.count) 张（白名单与 SideStore/AltStore 放行不计）")
+            return (revoked, false)
+        } catch {
+            LoginLogger.shared.log("❌ 统一撤销失败（获取证书列表）：\((error as NSError).localizedDescription)")
+            return (0, false)
+        }
     }
 
     /// 删除证书（吊销由 CertificateManager 负责；此处仅清本地）。
