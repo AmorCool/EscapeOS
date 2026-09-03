@@ -648,7 +648,6 @@ bool ZSignAsset::Init(
 				rawTeam = jvRaw["Entitlements"]["com.apple.developer.team-identifier"].as_cstr();
 			}
 			if (!rawTeam.empty() && rawTeam != "TEAMID") {
-				ZLog::Error((std::string(">>> EscapeOS fallback: raw plist provision accepted (team=") + rawTeam + ")
 ").c_str());
 ").c_str());
 				m_strTeamId = rawTeam;
