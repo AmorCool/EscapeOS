@@ -16,6 +16,11 @@ import UIKit
 @MainActor
 final class BinaryModuleRunner: ObservableObject {
     static let shared = BinaryModuleRunner()
+    /// v0.3.141：用户态加载器禁用开关 —— 本环境（LC/iOS 26+）手动映射的代码页
+    /// 执行时必被 AMFI 终止（真机两次闪退实锤：真证书签名失败 → uloader 映射
+    /// "成功" → 调 OpenListMain → 几秒后闪退）。签名链路修好后走 dlopen，此路径
+    /// 只剩必崩价值；代码保留仅为回滚能力。
+    nonisolated static let uloaderEnabled = false
     /// 运行中的二进制模块：模块 id → pid（-2 = 进程内 dylib 模式）
     @Published private(set) var runningProcesses: [String: pid_t] = [:]
     /// 启动错误（模块 id → 信息）
@@ -227,7 +232,12 @@ final class BinaryModuleRunner: ObservableObject {
                         appendLog(logFile, "[host] 真证书签名失败（证书/私钥不可用）")
                     }
                 }
-                if handle == nil {
+                if handle == nil, !Self.uloaderEnabled {
+                    // v0.3.141：必崩兜底已封 —— 给明确指引代替闪退
+                    uloaderErrorText = "模块无法安全加载: dlopen 被系统拒绝且真证书签名失败. 请到「更多 → 证书管理」吊销并重新创建证书后重试"
+                    appendLog(logFile, "[host] 用户态加载器已禁用(v0.3.141): \(uloaderErrorText!)")
+                }
+                if handle == nil, Self.uloaderEnabled {
                 // v0.3.108：dlopen 被 dyld 库校验拦下（ad-hoc 无 CMS blob 在 dyld 层必拒）→
                 // 改用自研用户态 Mach-O 加载器（移植自 Nyxian kxld）：自己 mmap + rebase + bind，
                 // 完全绕开 dyld——这是 LC / Nyxian 加载访客代码的方式。
@@ -361,6 +371,11 @@ final class BinaryModuleRunner: ObservableObject {
                     } else {
                         note("真证书签名失败")
                     }
+                }
+                // v0.3.141：uloader 禁用开关（本环境映射代码页执行必被 AMFI 终止 → 必崩）
+                guard Self.uloaderEnabled else {
+                    note("用户态加载器已禁用(v0.3.141): dlopen 被拒且真证书签名失败. 请到「更多 → 证书管理」吊销并重新创建证书后重试")
+                    return dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)   // RTLD_DEFAULT：内置静态
                 }
                 // v0.3.119：匿名内存方案下 uloader 不需要有效签名——直接加载原始文件
                 // （v0.3.118 实测：zsign 重签 + 全新 vnode，签名登记仍 EPERM → AMFI
