@@ -13,7 +13,7 @@ use std::os::raw::{c_char, c_int};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 
-use idevice::{IdeviceError, ReadWrite};
+use idevice::{IdeviceError, ReadWrite, pairing_file::PairingFile, LockdownClient};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{core_device_proxy::AdapterHandle, rsd::RsdHandshakeHandle, IdeviceFfiError};
@@ -22,11 +22,14 @@ const PLIST_HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
 \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\
 <plist version=\"1.0\">";
-const MC_SERVICE: &str = "com.apple.mobile.MCInstall.shim.remote";
+const MC_SERVICE_LOCKDOWN: &str = "com.apple.mobile.MCInstall";
+#[allow(dead_code)]
+const MC_SERVICE_RSD: &str = "com.apple.mobile.MCInstall.shim.remote";
 
 // ---- 隧道句柄桥（Swift 移交所有权）----
 
 static MC_TUNNEL: Mutex<Option<(usize, usize)>> = Mutex::new(None);
+static MC_PAIRING: Mutex<Option<String>> = Mutex::new(None);
 
 /// Swift 建好隧道后调用：移交 adapter/handshake 所有权（Swift 不再释放）
 ///
@@ -36,7 +39,12 @@ static MC_TUNNEL: Mutex<Option<(usize, usize)>> = Mutex::new(None);
 pub unsafe extern "C" fn lua_host_set_mcinstall_handles(
     adapter: *mut AdapterHandle,
     handshake: *mut RsdHandshakeHandle,
+    pairing_path: *const c_char,
 ) {
+    if !pairing_path.is_null() {
+        let s = unsafe { CStr::from_ptr(pairing_path) }.to_string_lossy().into_owned();
+        *MC_PAIRING.lock().unwrap() = Some(s);
+    }
     if adapter.is_null() || handshake.is_null() {
         return;
     }
@@ -101,6 +109,7 @@ async fn read_plist_xml(stream: &mut Box<dyn ReadWrite>) -> Result<String, Idevi
         .map_err(|e| IdeviceError::UnexpectedResponse(format!("plist 非 UTF-8: {}", e)))
 }
 
+#[allow(dead_code)]
 async fn rsd_checkin(stream: &mut Box<dyn ReadWrite>) -> Result<(), IdeviceError> {
     send_xml(
         stream,
@@ -164,16 +173,24 @@ pub async fn mcinstall_power_with_handles(on: bool) -> Result<String, IdeviceErr
         (adapter.0, handshake.0)
     };
 
-    let svc = handshake
-        .services
-        .get(MC_SERVICE)
+    let pairing_path = MC_PAIRING.lock().unwrap().clone()
         .ok_or(IdeviceError::ServiceNotFound)?;
-    // 诊断：该服务声明的所需 entitlement（空串表示无要求）
-    eprintln!("[MCInstall] 服务 entitlement='{}' port={} uv={}",
-        svc.entitlement, svc.port, svc.uses_remote_xpc);
-    let port = svc.port;
+
+    // 1) 隧道内连 lockdownd（RSD）——与 pymobiledevice3 完全同构
+    let mut hs = handshake;
+    let mut lockdown = LockdownClient::connect_rsd(&mut adapter, &mut hs).await?;
+    // 2) 用配对文件起会话（获得与电脑端同等的 lockdown 权限）
+    let pairing = PairingFile::read_from_file(&pairing_path)?;
+    let _legacy = lockdown.start_session(&pairing).await?;
+    // 3) 经 lockdownd 启动 MCInstall 服务（非 .shim.remote，无 entitlement 门禁）
+    let (port, ssl) = lockdown.start_service(MC_SERVICE_LOCKDOWN).await?;
+    if ssl {
+        return Err(IdeviceError::UnexpectedResponse(
+            "MCInstall 要求 SSL 会话，暂不支持".into(),
+        ));
+    }
+    // 4) 通过隧道 adapter 连到服务端口，直发 plist（lockdown 启动的服务无需 RSDCheckin）
     let mut stream: Box<dyn ReadWrite> = Box::new(adapter.connect(port).await?);
-    rsd_checkin(&mut stream).await?;
     set_wifi_power_stream(&mut stream, on).await
 }
 
