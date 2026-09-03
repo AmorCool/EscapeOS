@@ -170,6 +170,7 @@ fn wifi_get_power() -> String {
 // Lua host.wifi_power 优先调用；未注册时回退直调 MobileWiFi（无 entitlement 空操作）。
 
 use std::sync::Mutex;
+use crate::run_sync_local;
 
 type WifiPowerFn = unsafe extern "C" fn(c_int, *mut *mut c_char) -> c_int;
 static WIFI_FN: Mutex<Option<usize>> = Mutex::new(None);
@@ -196,7 +197,10 @@ fn wifi_set_power_via_tunnel(on: bool) -> Option<String> {
         return Some(format!("err: 隧道准备失败: {}", detail));
     }
     // 阶段 2：Rust 用接管的手柄走 MCInstall 协议（adapter.connect 隧道内转发）
-    match crate::mcinstall::mcinstall_power_with_handles(on) {
+    let res: Result<String, idevice::IdeviceError> = run_sync_local(async move {
+        crate::mcinstall::mcinstall_power_with_handles(on).await
+    });
+    match res {
         Ok(reply) => {
             let head: String = reply.chars().take(200).collect();
             Some(format!("ok: 隧道 SetWiFiPowerState({}) 响应: {}", on, head))

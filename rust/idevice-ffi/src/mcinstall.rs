@@ -40,7 +40,15 @@ pub unsafe extern "C" fn lua_host_set_mcinstall_handles(
     if adapter.is_null() || handshake.is_null() {
         return;
     }
-    *MC_TUNNEL.lock().unwrap() = Some((adapter as usize, handshake as usize));
+    let mut guard = MC_TUNNEL.lock().unwrap();
+    // 释放上次未消耗的句柄（防泄漏）
+    if let Some((old_a, old_h)) = *guard {
+        unsafe {
+            drop(Box::from_raw(old_a as *mut AdapterHandle));
+            drop(Box::from_raw(old_h as *mut RsdHandshakeHandle));
+        }
+    }
+    *guard = Some((adapter as usize, handshake as usize));
 }
 
 fn take_mcinstall_handles() -> Option<(*mut AdapterHandle, *mut RsdHandshakeHandle)> {
@@ -55,15 +63,15 @@ async fn send_xml(stream: &mut Box<dyn ReadWrite>, xml: &str) -> Result<(), Idev
     stream
         .write_all(&len.to_be_bytes())
         .await
-        .map_err(|e| IdeviceError::UnexpectedResponse(format!("发送失败: {}", e)))?;
+        ?;
     stream
         .write_all(xml.as_bytes())
         .await
-        .map_err(|e| IdeviceError::UnexpectedResponse(format!("发送失败: {}", e)))?;
+        ?;
     stream
         .flush()
         .await
-        .map_err(|e| IdeviceError::UnexpectedResponse(format!("flush 失败: {}", e)))?;
+        ?;
     Ok(())
 }
 
@@ -72,7 +80,7 @@ async fn read_plist_xml(stream: &mut Box<dyn ReadWrite>) -> Result<String, Idevi
     stream
         .read_exact(&mut len_buf)
         .await
-        .map_err(|e| IdeviceError::UnexpectedResponse(format!("读长度失败: {}", e)))?;
+        ?;
     let len = u32::from_be_bytes(len_buf) as usize;
     if len == 0 || len > 4 * 1024 * 1024 {
         return Err(IdeviceError::UnexpectedResponse(format!(
@@ -84,7 +92,7 @@ async fn read_plist_xml(stream: &mut Box<dyn ReadWrite>) -> Result<String, Idevi
     stream
         .read_exact(&mut body)
         .await
-        .map_err(|e| IdeviceError::UnexpectedResponse(format!("读体失败: {}", e)))?;
+        ?;
     String::from_utf8(body)
         .map_err(|e| IdeviceError::UnexpectedResponse(format!("plist 非 UTF-8: {}", e)))
 }
@@ -145,10 +153,12 @@ pub async fn set_wifi_power_stream(
 pub async fn mcinstall_power_with_handles(on: bool) -> Result<String, IdeviceError> {
     let (a, h) = take_mcinstall_handles()
         .ok_or(IdeviceError::ServiceNotFound)?; // Swift 未准备好隧道
-    let adapter = Box::from_raw(a);
-    let handshake = Box::from_raw(h);
-    let mut adapter = adapter.0;
-    let handshake = handshake.0;
+    let (adapter, handshake) = unsafe {
+        // 接管 Swift 移交的所有权（此后由本函数负责释放）
+        let adapter = Box::from_raw(a);
+        let handshake = Box::from_raw(h);
+        (adapter.0, handshake.0)
+    };
 
     let svc = handshake
         .services
