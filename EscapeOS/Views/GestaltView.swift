@@ -138,7 +138,7 @@ struct GestaltView: View {
         }
         .onAppear {
             // 首次进入：延迟一帧再加载，避免首帧渲染被 load() 的 bad_query
-            // 同步流程卡住（v0.2.105：首次进入「没反应」的元凶之一）。
+            // 同步流程卡住（v0.2.105：首次进入「没反应」的元凶之一）.
             Task {
                 try? await Task.sleep(for: .milliseconds(350))
                 guard !Task.isCancelled, !model.loaded, !model.isLoading else { return }
@@ -151,7 +151,7 @@ struct GestaltView: View {
 
     private func shareBackup() {
         guard let url = model.exportShareableBackup() else {
-            backupError = "MobileGestalt 尚未加载，或当前路径无法读取。请先等待加载完成。"
+            backupError = "MobileGestalt 尚未加载，或当前路径无法读取.请先等待加载完成."
             return
         }
         shareTarget = ShareTarget(url: url)
@@ -168,8 +168,8 @@ struct GestaltView: View {
                     Text(MCMIntegration.isMobileHouseArrest ? "MHA 身份已生效" : "非 MHA 构建")
                         .font(.subheadline).bold()
                     Text(MCMIntegration.isMobileHouseArrest
-                         ? "已以 MobileHouseArrest 身份运行，可访问全部容器类。"
-                         : "当前以普通身份运行。安装 MHA 版 IPA 后 LiveContainer 会按 bundle id 派生 MHA 身份。")
+                         ? "已以 MobileHouseArrest 身份运行，可访问全部容器类."
+                         : "当前以普通身份运行.安装 MHA 版 IPA 后 LiveContainer 会按 bundle id 派生 MHA 身份.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

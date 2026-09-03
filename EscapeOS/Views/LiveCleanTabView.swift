@@ -86,7 +86,7 @@ struct LiveCleanTabView: View {
                 batchBar
             } else {
                 // 留出底部间距，避免列表最后一项直接顶到 Tab 栏，
-                // 消除"Tab 栏压住内容"的观感（SpaceReclaimView 嵌套 VStack 会使默认 safe area 失效）。
+                // 消除"Tab 栏压住内容"的观感（SpaceReclaimView 嵌套 VStack 会使默认 safe area 失效）.
                 Color.clear.frame(height: 12)
             }
         }
@@ -121,7 +121,7 @@ struct LiveCleanTabView: View {
 
     private var mainContent: some View {
         List {
-            // 分段控件作为列表首项随内容滚动，避免固定在顶部遮挡列表。
+            // 分段控件作为列表首项随内容滚动，避免固定在顶部遮挡列表.
             Section {
                 Picker("清理范围", selection: $segment) {
                     ForEach(ReclaimSegment.allCases) { s in
@@ -138,7 +138,7 @@ struct LiveCleanTabView: View {
                     InfoActionCard(
                         icon: "network.badge.shield.half.filled",
                         title: "需要配对文件",
-                        message: "请先在「应用」页导入配对文件，建立 LocalDevVPN 隧道后才能扫描 LiveContainer 容器。"
+                        message: "请先在「应用」页导入配对文件，建立 LocalDevVPN 隧道后才能扫描 LiveContainer 容器."
                     )
                 }
             } else {
@@ -154,7 +154,7 @@ struct LiveCleanTabView: View {
                         InfoActionCard(
                             icon: "shippingbox",
                             title: "扫描 LiveContainer",
-                            message: "清理 LiveContainer 内安装的应用的缓存与临时文件。确认清理前不会删除任何内容。",
+                            message: "清理 LiveContainer 内安装的应用的缓存与临时文件.确认清理前不会删除任何内容.",
                             actionTitle: "扫描 LiveContainer",
                             action: {
                                 selecting = false
@@ -169,7 +169,7 @@ struct LiveCleanTabView: View {
                             icon: vm.discoveryError != nil ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
                             iconTint: vm.discoveryError != nil ? .orange : .green,
                             title: vm.discoveryError != nil ? "扫描失败" : "未找到应用",
-                            message: vm.discoveryError ?? "LiveContainer 内未找到已安装的应用。"
+                            message: vm.discoveryError ?? "LiveContainer 内未找到已安装的应用."
                         )
                     }
                 } else {
@@ -190,7 +190,7 @@ struct LiveCleanTabView: View {
             }
             if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && visible.isEmpty && !vm.rows.isEmpty {
-                Text("没有匹配「\(searchText)」的应用。")
+                Text("没有匹配「\(searchText)」的应用.")
                     .foregroundColor(.secondary)
             }
             ForEach(visible) { row in
@@ -309,14 +309,14 @@ struct SharedAppLimitBanner: View {
                 if supported {
                     Text("共享容器应用已支持扫描")
                         .font(.subheadline.weight(.semibold))
-                    Text("当前运行于已打补丁的 LiveContainer，宿主已签发沙盒扩展，转为共享的应用现在可直接列出、浏览与回收。")
+                    Text("当前运行于已打补丁的 LiveContainer，宿主已签发沙盒扩展，转为共享的应用现在可直接列出、浏览与回收.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("看不到转为共享的应用？")
                         .font(.subheadline.weight(.semibold))
-                    Text("共享 app 的数据存放在 AppGroup 沙盒里，不在当前 LiveContainer 容器内。在 LiveContainer 内长按该应用 → Convert to Private，等数据回迁到 Documents 后再回这里扫描。")
+                    Text("共享 app 的数据存放在 AppGroup 沙盒里，不在当前 LiveContainer 容器内.在 LiveContainer 内长按该应用 → Convert to Private，等数据回迁到 Documents 后再回这里扫描.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -395,7 +395,7 @@ final class LiveCleanTabViewModel: ObservableObject {
     var batchMessage: String {
         let n = selected.count
         let files = rows.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.safeFiles }
-        return "请先关闭这些应用。本次仅清理 LiveContainer 内 \(n) 个应用的安全缓存与临时文件（\(files) 个文件，\(ReclaimService.formatBytes(selectedSafeBytes))）。不包含会话数据。"
+        return "请先关闭这些应用.本次仅清理 LiveContainer 内 \(n) 个应用的安全缓存与临时文件（\(files) 个文件，\(ReclaimService.formatBytes(selectedSafeBytes))）.不包含会话数据."
     }
 
     func refreshRanksFromCache() {
@@ -423,11 +423,11 @@ final class LiveCleanTabViewModel: ObservableObject {
         self.instances = instances
         let guests = instances.flatMap { $0.guests }
         if instances.isEmpty {
-            discoveryError = "未检测到 LiveContainer。请先在设备上安装 LiveContainer。"
+            discoveryError = "未检测到 LiveContainer.请先在设备上安装 LiveContainer."
         } else if let failed = instances.first(where: { $0.error != nil }) {
             discoveryError = "无法打开 LiveContainer 容器：\(failed.error ?? "未知错误")"
         } else if guests.isEmpty {
-            discoveryError = "LiveContainer 内未找到已安装的应用。"
+            discoveryError = "LiveContainer 内未找到已安装的应用."
         } else {
             discoveryError = nil
         }
@@ -542,12 +542,12 @@ final class LiveCleanTabViewModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.isBusy = false
-                var message = "已释放 \(ReclaimService.formatBytes(freed))（\(files) 个文件），来自 LiveContainer 内 \(installedTargets.count) 个应用。"
+                var message = "已释放 \(ReclaimService.formatBytes(freed))（\(files) 个文件），来自 LiveContainer 内 \(installedTargets.count) 个应用."
                 if skipped > 0 {
-                    message += " 跳过 \(skipped) 个无法删除的项目。"
+                    message += " 跳过 \(skipped) 个无法删除的项目."
                 }
                 if failures > 0 {
-                    message += " \(failures) 个失败。"
+                    message += " \(failures) 个失败."
                 }
                 self.alert = ReclaimNotice(title: "已清理", message: message)
                 self.scan(guests: guests)

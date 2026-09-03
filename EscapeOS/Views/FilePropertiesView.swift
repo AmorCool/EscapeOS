@@ -2,14 +2,14 @@ import SwiftUI
 import CryptoKit
 import UniformTypeIdentifiers
 
-/// 文件或文件夹的详细信息。
+/// 文件或文件夹的详细信息.
 ///
 /// 字段是 EscapeOS 原版属性页与 Erosion `InfoViewer` 的并集：
 /// - 保留 EscapeOS 原有的 SHA-256、复制路径 / 复制哈希；
 /// - 补上 Erosion 有而 EscapeOS 原本没有的：UTType、创建时间、POSIX 权限、
-///   所有者 / 所属组、可执行、符号链接目标。
+///   所有者 / 所属组、可执行、符号链接目标.
 ///
-/// 所有属性都在沙盒扩展持有期间读取 —— 离开扩展后这些路径不可访问。
+/// 所有属性都在沙盒扩展持有期间读取 —— 离开扩展后这些路径不可访问.
 struct FilePropertiesView: View {
     let rootPath: String
     let item: FileItem
@@ -66,7 +66,7 @@ struct FilePropertiesView: View {
                 } header: {
                     Text("权限")
                 } footer: {
-                    Text("所有者 / 所属组在部分受保护路径下可能无法读取，此时显示“—”。")
+                    Text("所有者 / 所属组在部分受保护路径下可能无法读取，此时显示“—”.")
                 }
 
                 if !item.isDirectory {
@@ -159,7 +159,7 @@ final class FilePropertiesViewModel: ObservableObject {
 
         DispatchQueue.global(qos: .utility).async {
             do {
-                // 一次扩展覆盖全部读取：属性、符号链接目标、文件内容（算哈希）。
+                // 一次扩展覆盖全部读取：属性、符号链接目标、文件内容（算哈希）.
                 let outcome = try self.escape.withHandle(for: rootPath) { _ -> FileAttributesSnapshot in
                     let attrs = (try? self.files.attributes(at: item.path)) ?? [:]
                     let destination = item.kind == .symlink

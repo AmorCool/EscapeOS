@@ -12,7 +12,7 @@ struct FileViewerView: View {
 
     @StateObject private var vm = FileViewerViewModel()
 
-    /// 浏览某个已安装 App 容器里的文件（App 详情 / 空间回收入口）。
+    /// 浏览某个已安装 App 容器里的文件（App 详情 / 空间回收入口）.
     init(app: InstalledApp, item: FileItem, mode: FileOpenMode) {
         self.init(rootPath: app.containerPath, item: item, mode: mode)
     }
@@ -43,7 +43,7 @@ struct FileViewerView: View {
         .navigationTitle(item.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // plist 可以在「结构化编辑器」和「纯文本」之间来回切。
+            // plist 可以在「结构化编辑器」和「纯文本」之间来回切.
             ToolbarItem(placement: .navigationBarTrailing) {
                 if vm.resolvedMode == .plist {
                     Button("文本") { vm.showAsText() }
@@ -128,12 +128,12 @@ final class FileViewerViewModel: ObservableObject {
     @Published var truncated = false
     @Published var saveAlert: NamedAlert?
     @Published var isDirty = false
-    /// 当前文件是否是 plist（决定要不要显示「结构化 / 文本」切换按钮）。
+    /// 当前文件是否是 plist（决定要不要显示「结构化 / 文本」切换按钮）.
     @Published private(set) var isPlistFile = false
 
     private var rootPath: String = "/"
     private var item: FileItem?
-    /// 读进来的完整文件内容。plist 结构化编辑器直接复用它，避免二次读盘。
+    /// 读进来的完整文件内容.plist 结构化编辑器直接复用它，避免二次读盘.
     private(set) var originalData = Data()
     private let escape = SandboxEscape()
     private let files = FileService()
@@ -172,13 +172,13 @@ final class FileViewerViewModel: ObservableObject {
         }
     }
 
-    /// 从结构化编辑器切回纯文本视图（保存由本页的「保存」按钮负责）。
+    /// 从结构化编辑器切回纯文本视图（保存由本页的「保存」按钮负责）.
     func showAsText() {
         resolvedMode = .text
         apply(data: originalData, mode: .text)
     }
 
-    /// 从纯文本视图切到结构化编辑器。
+    /// 从纯文本视图切到结构化编辑器.
     func showAsPlist() {
         resolvedMode = .plist
     }
@@ -220,7 +220,7 @@ final class FileViewerViewModel: ObservableObject {
     private func resolve(mode: FileOpenMode, kind: FileContentKind, data: Data) -> FileOpenMode {
         if mode != .auto { return mode }
         // plist 默认交给结构化编辑器（可增删改键值，比纯文本好用）；
-        // 解析不了的 plist 仍会落到文本 / 16 进制视图。
+        // 解析不了的 plist 仍会落到文本 / 16 进制视图.
         if kind == .plist,
            (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) != nil {
             return .plist
@@ -265,7 +265,7 @@ final class FileViewerViewModel: ObservableObject {
             truncated = data.count > Self.maxEditableBytes
             bytes = Array(data.prefix(Self.maxEditableBytes))
         case .plist:
-            // 结构化编辑器自己持有数据，这里不需要填充文本 / 字节缓冲。
+            // 结构化编辑器自己持有数据，这里不需要填充文本 / 字节缓冲.
             break
         default:
             bytes = Array(data.prefix(Self.maxEditableBytes))
@@ -320,7 +320,7 @@ struct TextFileEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             if vm.truncated {
-                Text("文件大于 2 MB，仅显示前 2 MB 且以只读方式打开。")
+                Text("文件大于 2 MB，仅显示前 2 MB 且以只读方式打开.")
                     .font(.caption)
                     .foregroundColor(.orange)
                     .padding(8)

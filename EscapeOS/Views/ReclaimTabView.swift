@@ -63,7 +63,7 @@ struct ReclaimTabView: View {
                 batchBar
             } else {
                 // 留出底部间距，避免列表最后一项直接顶到 Tab 栏，
-                // 消除"Tab 栏压住内容"的观感（SpaceReclaimView 嵌套 VStack 会使默认 safe area 失效）。
+                // 消除"Tab 栏压住内容"的观感（SpaceReclaimView 嵌套 VStack 会使默认 safe area 失效）.
                 Color.clear.frame(height: 12)
             }
         }
@@ -98,7 +98,7 @@ struct ReclaimTabView: View {
 
     private var mainContent: some View {
         List {
-            // 分段控件作为列表首项随内容滚动，避免固定在顶部遮挡列表。
+            // 分段控件作为列表首项随内容滚动，避免固定在顶部遮挡列表.
             Section {
                 Picker("清理范围", selection: $segment) {
                     ForEach(ReclaimSegment.allCases) { s in
@@ -115,7 +115,7 @@ struct ReclaimTabView: View {
                     InfoActionCard(
                         icon: "network.badge.shield.half.filled",
                         title: "需要配对文件",
-                        message: "请先在「应用」页导入配对文件，建立 LocalDevVPN 隧道后才能扫描设备应用。"
+                        message: "请先在「应用」页导入配对文件，建立 LocalDevVPN 隧道后才能扫描设备应用."
                     )
                 }
             } else if appList.apps.isEmpty && !appList.isLoading {
@@ -123,7 +123,7 @@ struct ReclaimTabView: View {
                     InfoActionCard(
                         icon: "internaldrive",
                         title: "没有可扫描的应用",
-                        message: "设备尚未返回任何应用。请确认 LocalDevVPN 已连接且配对文件有效。"
+                        message: "设备尚未返回任何应用.请确认 LocalDevVPN 已连接且配对文件有效."
                     )
                 }
             } else if vm.rows.isEmpty && !vm.isScanning {
@@ -131,7 +131,7 @@ struct ReclaimTabView: View {
                     InfoActionCard(
                         icon: "internaldrive",
                         title: "扫描应用缓存与临时文件",
-                        message: "扫描会测量每个应用的缓存与临时文件占用。在你确认回收之前，不会删除任何内容。",
+                        message: "扫描会测量每个应用的缓存与临时文件占用.在你确认回收之前，不会删除任何内容.",
                         actionTitle: "立即扫描",
                         action: {
                             selecting = false
@@ -159,7 +159,7 @@ struct ReclaimTabView: View {
                     .foregroundColor(.secondary)
             }
             if visible.isEmpty && !vm.isScanning {
-                Text(searchText.isEmpty ? "" : "没有匹配 “\(searchText)” 的应用。")
+                Text(searchText.isEmpty ? "" : "没有匹配 “\(searchText)” 的应用.")
                     .foregroundColor(.secondary)
             }
             ForEach(visible) { row in
@@ -290,7 +290,7 @@ final class ReclaimTabViewModel: ObservableObject {
     var batchMessage: String {
         let n = selected.count
         let files = rows.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.safeFiles }
-        return "请先关闭这些应用。本次仅回收 \(n) 个应用的安全缓存与临时文件（\(files) 个文件，\(ReclaimService.formatBytes(selectedSafeBytes))）。不包含会话数据。"
+        return "请先关闭这些应用.本次仅回收 \(n) 个应用的安全缓存与临时文件（\(files) 个文件，\(ReclaimService.formatBytes(selectedSafeBytes))）.不包含会话数据."
     }
 
     func refreshRanksFromCache() {
@@ -412,12 +412,12 @@ final class ReclaimTabViewModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.isBusy = false
-                var message = "已释放 \(ReclaimService.formatBytes(freed))（\(files) 个文件），来自 \(targets.count) 个应用。"
+                var message = "已释放 \(ReclaimService.formatBytes(freed))（\(files) 个文件），来自 \(targets.count) 个应用."
                 if skipped > 0 {
-                    message += " 跳过 \(skipped) 个无法删除的项目。"
+                    message += " 跳过 \(skipped) 个无法删除的项目."
                 }
                 if failures > 0 {
-                    message += " \(failures) 个失败。"
+                    message += " \(failures) 个失败."
                 }
                 self.alert = ReclaimNotice(title: "已回收", message: message)
                 self.scan(apps: apps)

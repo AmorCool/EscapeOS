@@ -2,7 +2,7 @@ import SwiftUI
 
 struct FileRow: View {
     let item: FileItem
-    /// 可选的补充说明：在容器根浏览时是解析出来的 App 名。
+    /// 可选的补充说明：在容器根浏览时是解析出来的 App 名.
     var subtitle: String? = nil
 
     var body: some View {
@@ -14,7 +14,7 @@ struct FileRow: View {
                 Text(item.name).font(.body)
                 if let subtitle {
                     // 解析名（如「全名 (bundle id)」/ group id）独立一行完整显示，
-                    // 不截断省略 —— 用户需要看全。
+                    // 不截断省略 —— 用户需要看全.
                     Text(subtitle)
                         .font(.caption)
                         .foregroundColor(.secondary)

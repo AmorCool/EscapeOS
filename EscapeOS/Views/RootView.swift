@@ -749,7 +749,7 @@ struct SettingsForm: View {
                 }
             }
 
-            Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致。保持默认的 10.7.0.1，除非你修改过 LocalDevVPN。")) {
+            Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致.保持默认的 10.7.0.1，除非你修改过 LocalDevVPN.")) {
                 TextField("设备 IP（默认 10.7.0.1）", text: $tunnelIP)
                     .keyboardType(.numbersAndPunctuation)
                     .autocapitalization(.none)
@@ -780,7 +780,7 @@ struct SettingsForm: View {
                     .foregroundColor(.secondary)
             }
 
-            Section(header: Text("保活"), footer: Text("开启后，关闭本应用也会在后台保持运行。")) {
+            Section(header: Text("保活"), footer: Text("开启后，关闭本应用也会在后台保持运行.")) {
                 Toggle("保持后台运行", isOn: $keepAliveEnabled)
                     .onChange(of: keepAliveEnabled) { _, enabled in
                         if enabled {
@@ -797,8 +797,8 @@ struct SettingsForm: View {
                     .foregroundColor(.secondary)
             }
         }
-        // 左上角：登录日志查询入口。右上角「完成」由外层 MoreView 的 sheet 提供，
-        // 这里只补 leading 位，两者 placement 不同不会互相覆盖。
+        // 左上角：登录日志查询入口.右上角「完成」由外层 MoreView 的 sheet 提供，
+        // 这里只补 leading 位，两者 placement 不同不会互相覆盖.
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
@@ -829,7 +829,7 @@ struct SettingsForm: View {
         .alert("没有配对文件", isPresented: $showNoPairingAlert) {
             Button("好", role: .cancel) {}
         } message: {
-            Text("当前没有可导出的 pairingFile.plist。请先导入或生成配对文件。")
+            Text("当前没有可导出的 pairingFile.plist.请先导入或生成配对文件.")
         }
     }
 

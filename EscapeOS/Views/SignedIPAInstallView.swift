@@ -50,7 +50,7 @@ struct SignedIPAInstallView: View {
             } header: {
                 Text("选择 IPA")
             } footer: {
-                Text("支持 App Store 下载包、AppleID 等已签名 .ipa。选择后可按需执行安装。")
+                Text("支持 App Store 下载包、AppleID 等已签名 .ipa.选择后可按需执行安装.")
             }
 
             if busy {
@@ -96,7 +96,7 @@ struct SignedIPAInstallView: View {
                 } header: {
                     Label("执行安装", systemImage: "hammer")
                 } footer: {
-                    Text("在线安装：新装或覆盖同 bundle id 应用；覆盖升级/降级：对已安装应用升级或回退版本。")
+                    Text("在线安装：新装或覆盖同 bundle id 应用；覆盖升级/降级：对已安装应用升级或回退版本.")
                 }
             }
         }

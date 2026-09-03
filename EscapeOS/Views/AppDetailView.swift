@@ -12,7 +12,7 @@ struct AppDetailView: View {
     @State private var activeRestore: RestoreSession?
     @State private var restoreAlert: IdentifiedAlert?
     @State private var confirmReset = false
-    /// 系统应用重置的二次确认（防误触风险提示）。
+    /// 系统应用重置的二次确认（防误触风险提示）.
     @State private var confirmSystemReset = false
     @State private var isResetting = false
     @State private var resetNotice: ReclaimNotice?
@@ -84,7 +84,7 @@ struct AppDetailView: View {
                             Text("正在统计文件…").foregroundColor(.secondary)
                         }
                     } else if inventory.roots.isEmpty {
-                        Text("未找到 Documents、Library 或 tmp。")
+                        Text("未找到 Documents、Library 或 tmp.")
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(inventory.roots) { root in
@@ -100,7 +100,7 @@ struct AppDetailView: View {
                 }
             }
 
-            Section(footer: Text("将 Documents、Library 与 tmp 备份到「文件 → 我的iPhone → EscapeSpace → Backups」。不包含 Keychain。请先关闭 \(app.name) 以获得一致快照。")) {
+            Section(footer: Text("将 Documents、Library 与 tmp 备份到「文件 → 我的iPhone → EscapeSpace → Backups」.不包含 Keychain.请先关闭 \(app.name) 以获得一致快照.")) {
                 NavigationLink(destination: FileBrowserView(app: app)) {
                     Label("浏览文件", systemImage: "folder.fill")
                 }
@@ -123,7 +123,7 @@ struct AppDetailView: View {
                 backupStatus
             }
 
-            Section(footer: Text("清空该应用的 Documents、Library 与 tmp。请先关闭 \(app.name)。这些目录中的登录态与存档将丢失。Keychain 与 App Group 不受影响。")) {
+            Section(footer: Text("清空该应用的 Documents、Library 与 tmp.请先关闭 \(app.name).这些目录中的登录态与存档将丢失.Keychain 与 App Group 不受影响.")) {
                 Button(role: .destructive) {
                     confirmReset = true
                 } label: {
@@ -135,7 +135,7 @@ struct AppDetailView: View {
 
             Section(
                 header: Text(appBackups.records.isEmpty ? "备份" : "备份 (\(appBackups.records.count))"),
-                footer: Text("恢复操作将写入该应用当前容器。请先关闭应用。")
+                footer: Text("恢复操作将写入该应用当前容器.请先关闭应用.")
             ) {
                 if appBackups.isLoading && appBackups.records.isEmpty {
                     HStack {
@@ -143,7 +143,7 @@ struct AppDetailView: View {
                         Text("正在加载备份…").foregroundColor(.secondary)
                     }
                 } else if appBackups.records.isEmpty {
-                    Text("暂无 \(app.name) 的备份。")
+                    Text("暂无 \(app.name) 的备份.")
                         .foregroundColor(.secondary)
                 } else {
                     ForEach(appBackups.records) { record in
@@ -176,7 +176,7 @@ struct AppDetailView: View {
             Button("取消", role: .cancel) {}
             Button("重置应用数据", role: .destructive) {
                 if app.isSystem {
-                    // 系统应用：先弹风险提示二次确认，避免误触。
+                    // 系统应用：先弹风险提示二次确认，避免误触.
                     confirmSystemReset = true
                 } else {
                     resetAppData()
@@ -191,7 +191,7 @@ struct AppDetailView: View {
                 resetAppData()
             }
         } message: {
-            Text("\(app.name) 是系统应用。重置将清空其 Documents、Library 与 tmp，可能导致系统功能异常或需要重启设备，且数据可能无法恢复。请确认已备份重要数据。")
+            Text("\(app.name) 是系统应用.重置将清空其 Documents、Library 与 tmp，可能导致系统功能异常或需要重启设备，且数据可能无法恢复.请确认已备份重要数据.")
         }
         .alert(item: $resetNotice) { notice in
             Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("好")))
@@ -215,12 +215,12 @@ struct AppDetailView: View {
     }
 
     private var resetConfirmMessage: String {
-        var text = "请先关闭 \(app.name)。本次将清空 Documents、Library 与 tmp，之后需要重新登录并设置。Keychain 不会被删除。"
+        var text = "请先关闭 \(app.name).本次将清空 Documents、Library 与 tmp，之后需要重新登录并设置.Keychain 不会被删除."
         if app.bundleIdentifier == Bundle.main.bundleIdentifier {
-            text += " 当前选中的是的是它本身——Documents 中的配对文件也将被删除。"
+            text += " 当前选中的是的是它本身——Documents 中的配对文件也将被删除."
         }
         if app.isSystem {
-            text += " 警告：\(app.name) 是系统应用，重置可能导致系统功能异常或需要重启设备。"
+            text += " 警告：\(app.name) 是系统应用，重置可能导致系统功能异常或需要重启设备."
         }
         return text
     }
@@ -233,9 +233,9 @@ struct AppDetailView: View {
                 DispatchQueue.main.async {
                     self.isResetting = false
                     self.inventory.load(app: app)
-                    var message = "Documents、Library 与 tmp 已清空。"
+                    var message = "Documents、Library 与 tmp 已清空."
                     if skipped > 0 {
-                        message = "已尽可能清理。跳过 \(skipped) 个无法删除的项目。"
+                        message = "已尽可能清理.跳过 \(skipped) 个无法删除的项目."
                     }
                     self.resetNotice = ReclaimNotice(
                         title: "应用数据已重置",
@@ -304,7 +304,7 @@ struct AppDetailView: View {
         case .ready:
             activeRestore = RestoreSession(record: record, eligibility: eligibility)
         case .appNotInstalled(_, let name):
-            restoreAlert = IdentifiedAlert(message: "\(name) 未安装。")
+            restoreAlert = IdentifiedAlert(message: "\(name) 未安装.")
         case .invalidArchive(let message):
             restoreAlert = IdentifiedAlert(message: message)
         }

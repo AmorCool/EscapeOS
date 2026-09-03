@@ -2,11 +2,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// AFC 管理：通过「配对文件 + LocalDevVPN」隧道连接本机 AFC 服务
-/// （com.apple.afc.shim.remote，**根 = /var/mobile/media**）。
+/// （com.apple.afc.shim.remote，**根 = /var/mobile/media**）.
 /// 浏览媒体目录（DCIM / Downloads / Recordings 等）：
-/// 下载 / 导出（分享）、上传、新建目录、移动、重命名、删除。
+/// 下载 / 导出（分享）、上传、新建目录、移动、重命名、删除.
 struct AFCBrowserView: View {
-    /// AFC 服务端路径栈（"/" = AFC 根 = /var/mobile/media）。
+    /// AFC 服务端路径栈（"/" = AFC 根 = /var/mobile/media）.
     @State private var pathStack: [String] = ["/"]
     @State private var entries: [AFCService.Entry] = []
     @State private var loading = false
@@ -20,7 +20,7 @@ struct AFCBrowserView: View {
     @State private var activeSheet: SheetItem?
     @State private var toast: String?
 
-    /// 单一 sheet 入口（分享 / 移动），避免多个 .sheet 修饰符互相覆盖。
+    /// 单一 sheet 入口（分享 / 移动），避免多个 .sheet 修饰符互相覆盖.
     private enum SheetItem: Identifiable {
         case share(ShareURL)
         case move(AFCService.Entry)
@@ -37,7 +37,7 @@ struct AFCBrowserView: View {
 
     private var currentPath: String { pathStack.last ?? "/" }
 
-    /// 下载目录（EscapeSpace Documents，文件 App 可见）。
+    /// 下载目录（EscapeSpace Documents，文件 App 可见）.
     private var downloadDir: String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("AFCDownloads", isDirectory: true)
@@ -45,7 +45,7 @@ struct AFCBrowserView: View {
         return dir.path
     }
 
-    /// 上一级路径（用于"移动"目标选择）。
+    /// 上一级路径（用于"移动"目标选择）.
     private var parentPath: String? {
         guard pathStack.count > 1 else { return nil }
         return pathStack[pathStack.count - 2]
@@ -76,7 +76,7 @@ struct AFCBrowserView: View {
                 Text(pathText)
             } footer: {
                 if !loading && errorMessage == nil {
-                    Text("AFC 根目录 = 设备的 /var/mobile/media（照片、下载、录音等）。支持下载 / 导出（分享）、移动、删除。")
+                    Text("AFC 根目录 = 设备的 /var/mobile/media（照片、下载、录音等）.支持下载 / 导出（分享）、移动、删除.")
                 }
             }
         }
@@ -137,7 +137,7 @@ struct AFCBrowserView: View {
             Button("删除", role: .destructive) { doDelete() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("删除后无法恢复。")
+            Text("删除后无法恢复.")
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -342,7 +342,7 @@ struct AFCBrowserView: View {
         }
     }
 
-    /// 下载 + 导出（v0.2.125：下载后弹系统分享面板；旧版只存到 App 容器）。
+    /// 下载 + 导出（v0.2.125：下载后弹系统分享面板；旧版只存到 App 容器）.
     private func download(_ entry: AFCService.Entry) {
         loading = true
         DispatchQueue.global(qos: .userInitiated).async {

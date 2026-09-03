@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// 拉起应用（Launch Apps，汉化移植自 StikDebug 的 Other / Launch 标签页）。
-/// 列出全部已安装应用（含系统应用），点击即以普通方式启动（不启用 JIT）。
+/// 拉起应用（Launch Apps，汉化移植自 StikDebug 的 Other / Launch 标签页）.
+/// 列出全部已安装应用（含系统应用），点击即以普通方式启动（不启用 JIT）.
 struct LaunchAppsView: View {
     @State private var apps: [JITAppInfo] = []
     @State private var isLoading = false
@@ -37,13 +37,13 @@ struct LaunchAppsView: View {
                     if !hasPairing {
                         Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("拉起应用需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接。")
+                        Text("拉起应用需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("未获取到应用列表。")
+                        Text("未获取到应用列表.")
                             .foregroundStyle(.secondary)
-                        Text("点击右上角刷新重试；仍为空请确认 LocalDevVPN 已连接、配对文件有效。")
+                        Text("点击右上角刷新重试；仍为空请确认 LocalDevVPN 已连接、配对文件有效.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -51,9 +51,9 @@ struct LaunchAppsView: View {
             } else {
                 if !searchText.isEmpty && filteredApps.isEmpty {
                     Section {
-                        Text("没有匹配的应用。")
+                        Text("没有匹配的应用.")
                             .foregroundStyle(.secondary)
-                        Text("换个名称或 Bundle ID 试试。")
+                        Text("换个名称或 Bundle ID 试试.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -65,7 +65,7 @@ struct LaunchAppsView: View {
                     } header: {
                         Label("全部应用", systemImage: "app.grid.3x3")
                     } footer: {
-                        Text("点击应用即将其在前台拉起（普通启动，不启用 JIT）。")
+                        Text("点击应用即将其在前台拉起（普通启动，不启用 JIT）.")
                     }
                 }
             }

@@ -1,12 +1,12 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 描述文件管理（App Expiry，汉化移植自 StikDebug 的 ProfileView）。
+/// 描述文件管理（App Expiry，汉化移植自 StikDebug 的 ProfileView）.
 ///
 /// 与 StikDebug 原版的差异（按用户要求优化）：
 /// 1. 「未匹配描述文件」不再挤成一堆——按 AppIDName（证书名）分组，
 ///    每组显示软件名 + 最新过期时间 + 状态颜色，一眼分清属于哪个软件；
-/// 2. 新增批量选择删除（含全选），可一次清理多个过期 / 冗余描述文件。
+/// 2. 新增批量选择删除（含全选），可一次清理多个过期 / 冗余描述文件.
 struct AppExpiryView: View {
     @State private var matchedEntries: [MatchedAppEntry] = []
     @State private var unmatchedGroups: [UnmatchedGroup] = []
@@ -34,7 +34,7 @@ struct AppExpiryView: View {
         (matchedEntries.flatMap(\.profiles) + unmatchedGroups.flatMap(\.profiles)).map(\.id)
     }
 
-    /// 搜索过滤（匹配证书名 / 应用名 / Bundle ID / UUID / application-identifier）。
+    /// 搜索过滤（匹配证书名 / 应用名 / Bundle ID / UUID / application-identifier）.
     private var filteredMatchedEntries: [MatchedAppEntry] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return matchedEntries }
@@ -75,9 +75,9 @@ struct AppExpiryView: View {
                 }
             } else if matchedEntries.isEmpty && unmatchedGroups.isEmpty {
                 Section {
-                    Text("没有找到描述文件。")
+                    Text("没有找到描述文件.")
                         .foregroundStyle(.secondary)
-                    Text("可通过右上角 + 导入 .mobileprovision 描述文件；设备侧载应用的描述文件会显示在这里。")
+                    Text("可通过右上角 + 导入 .mobileprovision 描述文件；设备侧载应用的描述文件会显示在这里.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -90,7 +90,7 @@ struct AppExpiryView: View {
                     } header: {
                         Label("已匹配应用", systemImage: "app.badge.checkmark")
                     } footer: {
-                        Text("按应用的 application-identifier 与描述文件匹配，显示最近与最佳匹配的描述文件。")
+                        Text("按应用的 application-identifier 与描述文件匹配，显示最近与最佳匹配的描述文件.")
                     }
                 }
 
@@ -102,7 +102,7 @@ struct AppExpiryView: View {
                     } header: {
                         Label("未匹配描述文件（按证书分组）", systemImage: "doc.badge.gearshape")
                     } footer: {
-                        Text("设备上无法对应到已安装 App 的描述文件，按 AppIDName（证书名）分组展示，方便识别与清理。")
+                        Text("设备上无法对应到已安装 App 的描述文件，按 AppIDName（证书名）分组展示，方便识别与清理.")
                     }
                 }
             }
@@ -171,7 +171,7 @@ struct AppExpiryView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text(removeTarget.map { "删除 \($0.appName)（UUID: \($0.id)）？\n关联该描述文件的应用可能无法再运行。" } ?? "")
+            Text(removeTarget.map { "删除 \($0.appName)（UUID: \($0.id)）？\n关联该描述文件的应用可能无法再运行." } ?? "")
         }
         .alert("批量删除", isPresented: $showDeleteConfirm) {
             Button("删除 \(selectedUUIDs.count) 个", role: .destructive) {
@@ -180,7 +180,7 @@ struct AppExpiryView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将删除选中的 \(selectedUUIDs.count) 个描述文件。\n关联这些描述文件的应用可能无法再运行。")
+            Text("将删除选中的 \(selectedUUIDs.count) 个描述文件.\n关联这些描述文件的应用可能无法再运行.")
         }
         .alert("操作失败", isPresented: $showLoadError) {
             Button("好", role: .cancel) {}
@@ -411,7 +411,7 @@ struct AppExpiryView: View {
 
     /// 导入描述文件（统一走 SharedDocumentPicker：asCopy 已把文件拷入沙盒，
     /// 不再需要 security-scoped 访问——`.fileImporter` 在 LC/证书直装环境
-    /// 弹出不可靠且 security-scoped URL 读取常失败，v0.2.75 起统一）。
+    /// 弹出不可靠且 security-scoped URL 读取常失败，v0.2.75 起统一）.
     private func handleImport(urls: [URL]) async {
         do {
             guard let url = urls.first else {
@@ -419,7 +419,7 @@ struct AppExpiryView: View {
             }
             let data = try Data(contentsOf: url)
             try ProvisioningProfileStore.addProfile(data)
-            infoMessage = "描述文件添加成功。"
+            infoMessage = "描述文件添加成功."
             showInfo = true
             await load()
         } catch {
@@ -440,7 +440,7 @@ struct AppExpiryView: View {
                     }
                 }.value
                 selectedUUIDs.removeAll()
-                infoMessage = "已删除 \(targets.count) 个描述文件。"
+                infoMessage = "已删除 \(targets.count) 个描述文件."
                 showInfo = true
                 await load()
             } catch {

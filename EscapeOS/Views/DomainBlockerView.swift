@@ -1,15 +1,15 @@
 import SwiftUI
 import UIKit
 
-/// 屏蔽域名控制台。
+/// 屏蔽域名控制台.
 ///
 /// 原理来自用户提供的 iOS-Blocker.mobileconfig：通过
 /// `com.apple.dnsSettings.managed` 负载，把域名写进
 /// `SupplementalMatchDomains`，并指向一个不可达的本地 DoH 服务器
-/// (`https://127.0.0.1/dns-query`)，使这些域名的解析失败从而无法访问。
+/// (`https://127.0.0.1/dns-query`)，使这些域名的解析失败从而无法访问.
 /// 默认保留模板里苹果系统更新相关域名（去掉了 www.baidu.com），并允许
-/// 按需启用 / 关闭以及添加任意自定义域名。生成的描述文件可在“设置 →
-/// 通用 → VPN 与设备管理”中安装或移除。
+/// 按需启用 / 关闭以及添加任意自定义域名.生成的描述文件可在“设置 →
+/// 通用 → VPN 与设备管理”中安装或移除.
 struct DomainBlockerView: View {
     @State private var presets: [BlockedDomain]
     @State private var customInput = ""
@@ -33,7 +33,7 @@ struct DomainBlockerView: View {
                 InfoActionCard(
                     icon: "shield.fill",
                     title: "屏蔽域名",
-                    message: "将域名加入系统 DNS 屏蔽列表（指向不可达的本地解析服务），使其无法访问。默认包含 iOS 系统更新相关域名，可按需关闭或添加自定义域名。生成的描述文件需在“设置 → 通用 → VPN 与设备管理”中安装。"
+                    message: "将域名加入系统 DNS 屏蔽列表（指向不可达的本地解析服务），使其无法访问.默认包含 iOS 系统更新相关域名，可按需关闭或添加自定义域名.生成的描述文件需在“设置 → 通用 → VPN 与设备管理”中安装."
                 )
             }
 
@@ -62,7 +62,7 @@ struct DomainBlockerView: View {
                     }
                 }
             } footer: {
-                Text("这些域名为 Apple 系统更新 / 验证服务，默认开启。关闭后对应域名将不再被屏蔽。")
+                Text("这些域名为 Apple 系统更新 / 验证服务，默认开启.关闭后对应域名将不再被屏蔽.")
             }
 
             Section {
@@ -96,7 +96,7 @@ struct DomainBlockerView: View {
             } header: {
                 Label("自定义域名", systemImage: "plus.circle")
             } footer: {
-                Text("添加的自定义域名会保存在本机，重启应用后仍然保留。左滑可删除。")
+                Text("添加的自定义域名会保存在本机，重启应用后仍然保留.左滑可删除.")
             }
 
             Section {
@@ -136,7 +136,7 @@ struct DomainBlockerView: View {
                 } header: {
                     Label("下一步", systemImage: "chevron.forward")
                 } footer: {
-                    Text("点击“在 Safari 中下载并安装”会跳转到 Safari 加载一个本地页面并自动下载描述文件，随后进入“设置”安装。也可选“分享 / 保存到文件”，在“文件” App 中打开后安装。安装后可在“设置 → 通用 → VPN 与设备管理”中移除。")
+                    Text("点击“在 Safari 中下载并安装”会跳转到 Safari 加载一个本地页面并自动下载描述文件，随后进入“设置”安装.也可选“分享 / 保存到文件”，在“文件” App 中打开后安装.安装后可在“设置 → 通用 → VPN 与设备管理”中移除.")
                 }
             }
         }
@@ -157,7 +157,7 @@ struct DomainBlockerView: View {
 
     // MARK: - Subviews
 
-    /// 参考 WallpaperView 空状态的浅色大卡片 + 底部胶囊按钮风格。
+    /// 参考 WallpaperView 空状态的浅色大卡片 + 底部胶囊按钮风格.
     private var generateCard: some View {
         VStack(spacing: 16) {
             ZStack {
@@ -175,7 +175,7 @@ struct DomainBlockerView: View {
                     .font(.title3.weight(.semibold))
                     .foregroundColor(.primary)
 
-                Text("将当前启用的域名打包为 .mobileconfig，之后可在 Safari 中下载并安装。")
+                Text("将当前启用的域名打包为 .mobileconfig，之后可在 Safari 中下载并安装.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -214,7 +214,7 @@ struct DomainBlockerView: View {
         var host = customInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else { return }
 
-        // 去掉协议头、路径、端口，只保留主机名。
+        // 去掉协议头、路径、端口，只保留主机名.
         if let range = host.range(of: "://") {
             host = String(host[range.upperBound...])
         }
@@ -226,7 +226,7 @@ struct DomainBlockerView: View {
         host = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         guard !host.isEmpty, host.contains(".") else {
-            errorAlert = DomainBlockerAlert(title: "无效域名", message: "请输入有效的域名，例如 example.com。")
+            errorAlert = DomainBlockerAlert(title: "无效域名", message: "请输入有效的域名，例如 example.com.")
             return
         }
 
@@ -234,7 +234,7 @@ struct DomainBlockerView: View {
                       + customDomains.map { $0.lowercased() })
                       .contains(host)
         if exists {
-            errorAlert = DomainBlockerAlert(title: "已存在", message: "域名 \(host) 已在屏蔽列表中。")
+            errorAlert = DomainBlockerAlert(title: "已存在", message: "域名 \(host) 已在屏蔽列表中.")
             customInput = ""
             return
         }
@@ -248,7 +248,7 @@ struct DomainBlockerView: View {
         let enabledPresetHosts = presets.filter { $0.enabled }.map { $0.host }
         let all = enabledPresetHosts + customDomains
 
-        // 去重并保持顺序。
+        // 去重并保持顺序.
         var seen = Set<String>()
         var unique: [String] = []
         for host in all {
@@ -260,7 +260,7 @@ struct DomainBlockerView: View {
         }
 
         guard !unique.isEmpty else {
-            errorAlert = DomainBlockerAlert(title: "没有域名", message: "请至少启用一个默认域名或添加自定义域名。")
+            errorAlert = DomainBlockerAlert(title: "没有域名", message: "请至少启用一个默认域名或添加自定义域名.")
             return
         }
 
@@ -282,7 +282,7 @@ struct DomainBlockerView: View {
         }
     }
 
-    /// 启动一个本地 HTTP 服务器，把 .mobileconfig 以 Safari 下载的方式交给系统安装。
+    /// 启动一个本地 HTTP 服务器，把 .mobileconfig 以 Safari 下载的方式交给系统安装.
     private func installProfile(at url: URL) {
         do {
             let data = try Data(contentsOf: url)
@@ -315,7 +315,7 @@ struct DomainBlockerView: View {
 
     // MARK: - Profile builder
 
-    /// 构造与 iOS-Blocker.mobileconfig 同构的 DNS 屏蔽描述文件。
+    /// 构造与 iOS-Blocker.mobileconfig 同构的 DNS 屏蔽描述文件.
     static func buildProfileXML(domains: [String]) throws -> Data {
         let dnsPayload: [String: Any] = [
             "PayloadType": "com.apple.dnsSettings.managed",
@@ -333,7 +333,7 @@ struct DomainBlockerView: View {
         let root: [String: Any] = [
             "PayloadContent": [dnsPayload],
             "PayloadDisplayName": "屏蔽域名",
-            "PayloadDescription": "通过屏蔽自定义域名限制访问，对其它网络流量无影响。文件未签名属正常现象，可在“设置 → 通用 → VPN 与设备管理”中安装或移除。",
+            "PayloadDescription": "通过屏蔽自定义域名限制访问，对其它网络流量无影响.文件未签名属正常现象，可在“设置 → 通用 → VPN 与设备管理”中安装或移除.",
             "PayloadIdentifier": "com.escapeos.blocker",
             "PayloadOrganization": "EscapeSpace",
             "PayloadRemovalDisallowed": false,
@@ -349,7 +349,7 @@ struct DomainBlockerView: View {
 
 // MARK: - Models
 
-/// 一条待屏蔽的域名（预设或自定义）。
+/// 一条待屏蔽的域名（预设或自定义）.
 struct BlockedDomain: Identifiable {
     let id = UUID()
     let host: String
@@ -363,14 +363,14 @@ private struct DomainBlockerAlert: Identifiable {
     let message: String
 }
 
-/// 持久化默认域名的启用状态与自定义域名列表。
+/// 持久化默认域名的启用状态与自定义域名列表.
 final class DomainBlockerStore {
     static let shared = DomainBlockerStore()
 
     private let presetsKey = "domainblocker_presets"
     private let customKey = "domainblocker_custom"
 
-    /// 默认屏蔽的苹果系统更新 / 验证相关域名（来自 iOS-Blocker.mobileconfig，已移除 www.baidu.com）。
+    /// 默认屏蔽的苹果系统更新 / 验证相关域名（来自 iOS-Blocker.mobileconfig，已移除 www.baidu.com）.
     private let presetHosts: [String] = [
         "mesu.apple.com",
         "gdmf.apple.com",

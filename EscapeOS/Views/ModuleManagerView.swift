@@ -507,7 +507,7 @@ struct ModuleRunResult {
 }
 
 /// 模块 WebView 页（KernelSU webroot 对齐）：加载模块目录内 index.html，
-/// 读权限限定在模块目录内。
+/// 读权限限定在模块目录内.
 struct ModuleWebView: UIViewRepresentable {
     let startPage: URL
     let readAccessRoot: URL
@@ -529,7 +529,7 @@ struct ModuleWebView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
-/// SharedDocumentPicker 的 SwiftUI 包装（模块导入专用，限 .zip）。
+/// SharedDocumentPicker 的 SwiftUI 包装（模块导入专用，限 .zip）.
 struct ModuleImportPicker: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     let onPicked: ([URL]) -> Void
@@ -558,7 +558,7 @@ struct ModuleImportPicker: UIViewControllerRepresentable {
 
 /// 安装界面（对齐 KernelSU 官方 FlashScreen Material 版）：
 /// 普通页面背景 + 等宽小字日志整页滚动 + 自动滚底，
-/// 标题随状态变化（安装中/安装成功/安装失败），完成后右下角悬浮「关闭」按钮。
+/// 标题随状态变化（安装中/安装成功/安装失败），完成后右下角悬浮「关闭」按钮.
 struct ModuleInstallSheet: View {
     let lines: [String]
     let finished: Bool
@@ -665,7 +665,7 @@ struct ModuleLogView: View {
                 Button("清空 run.log", role: .destructive) { tryClear(target: logFile) }
                 Button("清空 go_stderr.log", role: .destructive) { tryClear(target: goStderr) }
                 Button("取消", role: .cancel) {}
-            } message: { Text("删除后不可恢复。") }
+            } message: { Text("删除后不可恢复.") }
         }
     }
 

@@ -1,11 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// IPA 侧载（汉化移植自 SideInstaller 的「安装」板块）。
+/// IPA 侧载（汉化移植自 SideInstaller 的「安装」板块）.
 ///
 /// 选择 IPA（本地导入 / URL 下载）→ 登录 Apple ID（含 2FA）→ 签名 →
-/// 通过 LocalDevVPN 隧道安装到设备。导入走 SharedDocumentPicker 统一调用点
-/// （LC/证书直装环境可靠）。
+/// 通过 LocalDevVPN 隧道安装到设备.导入走 SharedDocumentPicker 统一调用点
+/// （LC/证书直装环境可靠）.
 struct IPAInstallView: View {
     @StateObject private var service = IPAInstallService.shared
 
@@ -15,18 +15,18 @@ struct IPAInstallView: View {
     @State private var ipaLink = ""
     @State private var isDownloading = false
     @State private var downloadProgress: Double = 0
-    /// 「已下载的 IPA」列表（Documents/Custom 目录）。
+    /// 「已下载的 IPA」列表（Documents/Custom 目录）.
     @State private var savedIPAs: [SavedIPA] = []
-    /// 待确认删除的 IPA。
+    /// 待确认删除的 IPA.
     @State private var pendingDeleteIPA: SavedIPA?
 
     // Apple ID
     @State private var appleID = ""
     @State private var password = ""
     @State private var showPassword = false
-    /// 是否已从「更多 → 设置」复用过凭据（避免重复触发自动登录）。
+    /// 是否已从「更多 → 设置」复用过凭据（避免重复触发自动登录）.
     @State private var didPrefillCredentials = false
-    /// 正在用设置里保存的 Apple ID 自动登录。
+    /// 正在用设置里保存的 Apple ID 自动登录.
     @State private var isAutoSigningIn = false
 
     // 2FA
@@ -48,7 +48,7 @@ struct IPAInstallView: View {
     @State private var step: Step = .idle
     @State private var installProgress: Double = 0
 
-    /// 一个已下载/导入的 IPA 文件。
+    /// 一个已下载/导入的 IPA 文件.
     private struct SavedIPA: Identifiable {
         let url: URL
         let name: String
@@ -57,7 +57,7 @@ struct IPAInstallView: View {
         var id: String { url.path }
     }
 
-    /// IPA 统一存放目录（对齐 SideInstaller 的 IPALibrary.customDir）。
+    /// IPA 统一存放目录（对齐 SideInstaller 的 IPALibrary.customDir）.
     private var customDir: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Custom", isDirectory: true)
@@ -98,7 +98,7 @@ struct IPAInstallView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("IPA 侧载")
                                 .font(.headline)
-                            Text("签名并安装 IPA 到设备（需 Apple ID + 配对文件 + LocalDevVPN）。")
+                            Text("签名并安装 IPA 到设备（需 Apple ID + 配对文件 + LocalDevVPN）.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -163,13 +163,13 @@ struct IPAInstallView: View {
             } header: {
                 Text("IPA")
             } footer: {
-                Text("导入的 IPA 会先拷贝到应用沙盒（统一文件选择调用点），可离线签名安装。")
+                Text("导入的 IPA 会先拷贝到应用沙盒（统一文件选择调用点），可离线签名安装.")
             }
 
             // 已下载的 IPA
             Section {
                 if savedIPAs.isEmpty {
-                    Text("暂无已下载的 IPA。导入或下载的 IPA 会保存在这里。")
+                    Text("暂无已下载的 IPA.导入或下载的 IPA 会保存在这里.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 } else {
@@ -198,7 +198,7 @@ struct IPAInstallView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            // 再次点击已选项 = 取消选择（ipaURL 置空，勾选消失）。
+                            // 再次点击已选项 = 取消选择（ipaURL 置空，勾选消失）.
                             if ipaURL?.path == item.url.path {
                                 ipaURL = nil
                             } else {
@@ -218,7 +218,7 @@ struct IPAInstallView: View {
             } header: {
                 Text("已下载的 IPA")
             } footer: {
-                Text("点击选择为要安装的 IPA，再次点击取消选择；左滑删除。")
+                Text("点击选择为要安装的 IPA，再次点击取消选择；左滑删除.")
             }
 
             // Apple ID
@@ -241,7 +241,7 @@ struct IPAInstallView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(isManuallySigningIn ? "正在登录 Apple ID…" : "正在用「设置」里的 Apple ID 自动登录…")
                                 .font(.subheadline)
-                            Text("如需两步验证，会自动弹出验证码输入框。")
+                            Text("如需两步验证，会自动弹出验证码输入框.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -291,8 +291,8 @@ struct IPAInstallView: View {
                 Text("Apple ID")
             } footer: {
                 Text(service.isSignedIn
-                     ? "签名会话已就绪。"
-                     : "登录用于获取签名证书与描述文件；2FA 验证码在安装时弹出。")
+                     ? "签名会话已就绪."
+                     : "登录用于获取签名证书与描述文件；2FA 验证码在安装时弹出.")
             }
 
             // v0.3.118：自动登录开关/从设置登录独立成区（不再和输入框挤在一起）
@@ -314,7 +314,7 @@ struct IPAInstallView: View {
                             .foregroundColor(.secondary)
                     }
                 } footer: {
-                    Text("关闭自动登录后，进入本页不再自动登录/触发 2FA。")
+                    Text("关闭自动登录后，进入本页不再自动登录/触发 2FA.")
                 }
             }
 
@@ -375,7 +375,7 @@ struct IPAInstallView: View {
                 .disabled(isRunning || ipaURL == nil
                           || (!service.isSignedIn && (appleID.isEmpty || password.isEmpty)))
             } footer: {
-                Text("需要 Apple ID 登录态（若未登录需填写上方凭据）、已导入 IPA、配对文件与 LocalDevVPN。")
+                Text("需要 Apple ID 登录态（若未登录需填写上方凭据）、已导入 IPA、配对文件与 LocalDevVPN.")
             }
         }
         .listStyle(.insetGrouped)
@@ -399,7 +399,7 @@ struct IPAInstallView: View {
         .onAppear {
             // v0.3.116 修卡死：signIn 跑在 Task.detached（后台线程），
             // 此前直接在此改 @State → 主线程外更新 SwiftUI 状态 → 弹窗不出现
-            // 且永久等待验证码 → 界面像卡住。改为切主线程更新，并加超时兜底。
+            // 且永久等待验证码 → 界面像卡住.改为切主线程更新，并加超时兜底.
             service.twoFactorPrompt = { reply in
                 Task { @MainActor in
                     twoFactorGeneration += 1
@@ -407,8 +407,8 @@ struct IPAInstallView: View {
                     twoFactorCode = ""
                     twoFactorReply = reply
                     showTwoFactor = true
-                    // 5 分钟未输入则放弃，避免无限等待导致界面无响应。
-                    // 代际校验：若期间弹了新一轮 2FA，旧定时器自动作废。
+                    // 5 分钟未输入则放弃，避免无限等待导致界面无响应.
+                    // 代际校验：若期间弹了新一轮 2FA，旧定时器自动作废.
                     Task.detached {
                         try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
                         await MainActor.run {
@@ -422,13 +422,13 @@ struct IPAInstallView: View {
                 }
             }
             refreshSavedIPAs()
-            // 每次进入都尝试自动登录/刷新状态（不依赖一次性标记）。
+            // 每次进入都尝试自动登录/刷新状态（不依赖一次性标记）.
             // 这样用户在「设置」里重新登录后切回 IPA 侧载页能立即生效，
-            // 不需要退出页面再进一次。
+            // 不需要退出页面再进一次.
             autoSignInWithSavedCredentials()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // 从后台切回（例如去设置登录完再回来）也刷新一次登录态。
+            // 从后台切回（例如去设置登录完再回来）也刷新一次登录态.
             autoSignInWithSavedCredentials()
         }
         .onDisappear {
@@ -447,7 +447,7 @@ struct IPAInstallView: View {
             Button("取消", role: .cancel) { pendingDeleteIPA = nil }
         } message: {
             if let item = pendingDeleteIPA {
-                Text("「\(item.name)」将被永久删除，此操作不可撤销。")
+                Text("「\(item.name)」将被永久删除，此操作不可撤销.")
             }
         }
         .alert("来自\(IPAInstallService.twoFactorFeature)的 Apple ID 验证请求",
@@ -476,7 +476,7 @@ struct IPAInstallView: View {
     private func downloadIPA() {
         guard let url = URL(string: ipaLink.trimmingCharacters(in: .whitespacesAndNewlines)),
               url.scheme == "http" || url.scheme == "https" else {
-            errorMessage = "链接无效：请输入 http/https 开头的 IPA 直链。"
+            errorMessage = "链接无效：请输入 http/https 开头的 IPA 直链."
             return
         }
         errorMessage = nil
@@ -504,7 +504,7 @@ struct IPAInstallView: View {
     }
 
     /// 导入的 IPA 复制到 Custom 目录（对齐 SideInstaller 的
-    /// IPALibrary.replaceCustomImport），并刷新「已下载的 IPA」列表。
+    /// IPALibrary.replaceCustomImport），并刷新「已下载的 IPA」列表.
     private func importIPA(from url: URL) {
         do {
             try FileManager.default.createDirectory(at: customDir, withIntermediateDirectories: true)
@@ -524,7 +524,7 @@ struct IPAInstallView: View {
         }
     }
 
-    /// 扫描 Custom 目录里的 IPA（最新在前）。
+    /// 扫描 Custom 目录里的 IPA（最新在前）.
     private func refreshSavedIPAs() {
         let fm = FileManager.default
         let names = (try? fm.contentsOfDirectory(atPath: customDir.path)) ?? []
@@ -564,7 +564,7 @@ struct IPAInstallView: View {
     }
 
     /// 手动刷新界面状态（右上角刷新按钮 / 日志输出完后调用）：
-    /// 重新扫描已存 IPA、刷新登录态与局域网信息。
+    /// 重新扫描已存 IPA、刷新登录态与局域网信息.
     private func refreshStatus() {
         refreshSavedIPAs()
         // 重新尝试登录/恢复会话（内部幂等：已登录则直接返回）
@@ -576,14 +576,14 @@ struct IPAInstallView: View {
 
     /// 复用「更多 → 设置」已保存的 Apple ID，**不重复登录/2FA**：
     /// 1) 优先用 dsid + authToken 恢复 isideload 签名会话（免登录免 2FA）；
-    /// 2) 恢复失败（token 过期等）才回退用邮箱+密码完整登录（可能弹 2FA）。
+    /// 2) 恢复失败（token 过期等）才回退用邮箱+密码完整登录（可能弹 2FA）.
     /// 自动登录总开关（设置里可关；默认开）
     private var autoSignInEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "IPA.autoSignInEnabled") as? Bool ?? true }
     }
 
-    /// 手动登录：用输入框里的 Apple ID + 密码（2FA 走弹窗）。
-    /// 成功后持久化凭据，下次自动登录/免 2FA 恢复可用。
+    /// 手动登录：用输入框里的 Apple ID + 密码（2FA 走弹窗）.
+    /// 成功后持久化凭据，下次自动登录/免 2FA 恢复可用.
     private func manualLogin() {
         let id = appleID.trimmingCharacters(in: .whitespacesAndNewlines)
         let pw = password
@@ -617,7 +617,7 @@ struct IPAInstallView: View {
         // v0.3.116：用户明确要求可禁用自动登录（会触发 2FA 打断操作）
         guard autoSignInEnabled else { return }
         // warmUp（App 启动后台恢复）正在执行：不重复联网，等它完成——
-        // 完成时 @Published isSignedIn 变化会自动刷新页面（v0.2.106 去重）。
+        // 完成时 @Published isSignedIn 变化会自动刷新页面（v0.2.106 去重）.
         guard !service.isWarmingUp else { return }
         let settings = MemoryLimitSettings.shared
         guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
@@ -626,10 +626,10 @@ struct IPAInstallView: View {
         isAutoSigningIn = true
         Task {
             do {
-                // 路径 1：已有 dsid/authToken → 免 2FA 恢复会话。
+                // 路径 1：已有 dsid/authToken → 免 2FA 恢复会话.
                 // （预热已失败过则跳过——token 大概率过期，白等一次注定失败的请求）
                 // v0.2.112：读 isideload 专用键；`dsid`/`authToken` 属于 Swift 认证
-                // 引擎（证书管理/增加内存限制用），两套 Anisette 机器标识不同不能混用。
+                // 引擎（证书管理/增加内存限制用），两套 Anisette 机器标识不同不能混用.
                 if !service.sessionRestoreFailed,
                    let dsid = settings.sideloadDSID, let authToken = settings.sideloadAuthToken,
                    !dsid.isEmpty, !authToken.isEmpty {
@@ -641,10 +641,10 @@ struct IPAInstallView: View {
                         isAutoSigningIn = false
                         return
                     } catch {
-                        // token 失效，回退完整登录。
+                        // token 失效，回退完整登录.
                     }
                 }
-                // 路径 2：邮箱+密码完整登录（2FA 走弹窗）。
+                // 路径 2：邮箱+密码完整登录（2FA 走弹窗）.
                 let pw = settings.password(forHistory: id) ?? ""
                 guard !pw.isEmpty else {
                     isAutoSigningIn = false
@@ -654,7 +654,7 @@ struct IPAInstallView: View {
                     try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: ani)
                 }.value
                 // 完整登录成功 → 持久化本次拿到的 dsid/authToken，
-                // 下次进入（含 App 重启后 warmUp）即可免登录恢复。
+                // 下次进入（含 App 重启后 warmUp）即可免登录恢复.
                 let dsid = service.lastSessionDSID ?? ""
                 let authToken = service.lastSessionAuthToken ?? ""
                 await MainActor.run {
@@ -691,8 +691,8 @@ struct IPAInstallView: View {
                         try IPAInstallService.shared.signIn(appleID: id, password: pw, anisetteURL: anisetteURL)
                     }.value
                     // 登录成功 → 把邮箱/密码 **以及** 本次登录拿到的 dsid +
-                    // xcode.auth token 一起持久化（v0.2.111，isideload fork 暴露）。
-                    // 之后 warmUp / 自动登录都能用这两个值免登录免 2FA 恢复。
+                    // xcode.auth token 一起持久化（v0.2.111，isideload fork 暴露）.
+                    // 之后 warmUp / 自动登录都能用这两个值免登录免 2FA 恢复.
                     let dsid = service.lastSessionDSID ?? ""
                     let authToken = service.lastSessionAuthToken ?? ""
                     await MainActor.run {
@@ -715,7 +715,7 @@ struct IPAInstallView: View {
                     }
                 }.value
                 step = .done
-                successMessage = "「\((signedPath as NSString).lastPathComponent)」已安装到设备。"
+                successMessage = "「\((signedPath as NSString).lastPathComponent)」已安装到设备."
             } catch {
                 step = .idle
                 errorMessage = error.localizedDescription

@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// 配置导入（汉化移植自 SideInstaller 的「配对 → 安装到应用」）。
+/// 配置导入（汉化移植自 SideInstaller 的「配对 → 安装到应用」）.
 ///
 /// 扫描设备上已安装的支持列表应用（SideStore / LiveContainer / Feather /
 /// StikDebug 等），把当前配对文件写入它们的容器，让这些应用复用同一份
-/// 配对身份。链路为 LocalDevVPN 隧道 + house_arrest，不依赖本地网络权限。
+/// 配对身份.链路为 LocalDevVPN 隧道 + house_arrest，不依赖本地网络权限.
 struct PairingInstallView: View {
     @State private var targets: [PairingInstallService.InstalledTarget] = []
     @State private var hasScanned = false
@@ -34,7 +34,7 @@ struct PairingInstallView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("配置导入")
                                 .font(.headline)
-                            Text("把配对文件写入已安装的侧载工具，让它们复用同一份配对身份。")
+                            Text("把配对文件写入已安装的侧载工具，让它们复用同一份配对身份.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -88,7 +88,7 @@ struct PairingInstallView: View {
                 }
                 .disabled(isBusy)
             } footer: {
-                Text("通过 LocalDevVPN 隧道扫描设备上已安装的侧载工具。")
+                Text("通过 LocalDevVPN 隧道扫描设备上已安装的侧载工具.")
             }
 
             if hasScanned && targets.isEmpty && !isScanning {
@@ -97,7 +97,7 @@ struct PairingInstallView: View {
                         icon: "questionmark.app.dashed",
                         iconTint: .blue,
                         title: "未找到支持的应用",
-                        message: "请先在设备上安装 SideStore、LiveContainer、Feather 或 StikDebug 等应用，再重新扫描。"
+                        message: "请先在设备上安装 SideStore、LiveContainer、Feather 或 StikDebug 等应用，再重新扫描."
                     )
                 }
             } else if !targets.isEmpty {
@@ -125,7 +125,7 @@ struct PairingInstallView: View {
                 } header: {
                     Text("支持的应用（\(targets.count)）")
                 } footer: {
-                    Text("配对文件会写入各应用的 Documents 目录（SideStore 等以各自约定的文件名读取）。")
+                    Text("配对文件会写入各应用的 Documents 目录（SideStore 等以各自约定的文件名读取）.")
                 }
             }
         }
@@ -197,7 +197,7 @@ struct PairingInstallView: View {
                 let bytes = try await Task.detached(priority: .userInitiated) {
                     try PairingInstallService.shared.installPairing(into: target)
                 }.value
-                successMessage = "已写入 \(target.name)（\(bytes) 字节，读回已验证）。"
+                successMessage = "已写入 \(target.name)（\(bytes) 字节，读回已验证）."
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -217,7 +217,7 @@ struct PairingInstallView: View {
                     try PairingInstallService.shared.installPairing(intoAll: all)
                 }.value
                 if failures.isEmpty {
-                    successMessage = "已写入全部 \(all.count) 个应用，读回已验证。"
+                    successMessage = "已写入全部 \(all.count) 个应用，读回已验证."
                 } else {
                     errorMessage = "以下应用写入失败：\n" + failures.joined(separator: "\n")
                 }

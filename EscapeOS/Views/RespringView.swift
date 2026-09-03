@@ -1,11 +1,11 @@
 // RespringView.swift —— 按 rooootdev/mond 的 Respring 实现移植（mond/helpers/utils.swift）
-// Web 方案由 @neonmodder123 开发，@skadz108 移植到 Swift，适配所有 iOS 版本。
-// 与 Erosion/Mond 展示方式一致：`.overlay` + `.brightness(-1.0)` + `.ignoresSafeArea()`。
+// Web 方案由 @neonmodder123 开发，@skadz108 移植到 Swift，适配所有 iOS 版本.
+// 与 Erosion/Mond 展示方式一致：`.overlay` + `.brightness(-1.0)` + `.ignoresSafeArea()`.
 // 原理：在 WKWebView 中加载高压力 CSS（500 层 backdrop-filter 透视层）+ 持续
-// navigator.share / crypto 压力，把 SpringBoard 挤到内存不足自动重启（视觉上先黑屏）。
+// navigator.share / crypto 压力，把 SpringBoard 挤到内存不足自动重启（视觉上先黑屏）.
 // v0.2.109：iframe 必须占满视口并保留极低透明度，这样 500 层 backdrop-filter
 // 才会被实际渲染、产生内存压力；如果 width/height=0 或完全透明，WebKit 会跳过
-// 渲染，导致挤崩 SpringBoard 失效。
+// 渲染，导致挤崩 SpringBoard 失效.
 
 import SwiftUI
 import WebKit

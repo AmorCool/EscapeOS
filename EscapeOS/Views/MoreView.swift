@@ -212,7 +212,7 @@ struct MoreCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            // 强调色用 .blue，不用 AppTheme.accent（暖橙在浅色玻璃上显棕）。
+            // 强调色用 .blue，不用 AppTheme.accent（暖橙在浅色玻璃上显棕）.
             AppRowIcon(systemName: icon, tint: .blue, symbolSize: 20, frameSize: 36)
 
             VStack(alignment: .leading, spacing: 3) {

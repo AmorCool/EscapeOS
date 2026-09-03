@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 /// IPCC 安装：导入运营商配置文件（.ipcc），经 AFC 隧道上传到
 /// /var/mobile/Media/PublicStaging，再调 CoreTelephony 私有 API
-/// 交给 CommCenter 安装（爱思助手 / iTunes / Finder 同一条系统管线）。
+/// 交给 CommCenter 安装（爱思助手 / iTunes / Finder 同一条系统管线）.
 struct IPCCInstallView: View {
     @State private var showImporter = false
     @State private var parsed: IPCCInstallService.ParsedIPCC?
@@ -13,11 +13,11 @@ struct IPCCInstallView: View {
     @State private var errorMessage: String?
     @State private var toast: String?
     @State private var showRespringHint = false
-    /// v0.2.130：查看安装日志详情的记录。
+    /// v0.2.130：查看安装日志详情的记录.
     @State private var detailRecord: IPCCInstallService.InstallRecord?
-    /// v0.2.132：清空安装记录确认。
+    /// v0.2.132：清空安装记录确认.
     @State private var confirmClearRecords = false
-    /// v0.2.138：蜂窝网络维护状态（v0.2.142 移除刷新信号，仅保留重启）。
+    /// v0.2.138：蜂窝网络维护状态（v0.2.142 移除刷新信号，仅保留重启）.
     @State private var commCenterBusy = false
     @State private var confirmRestartCommCenter = false
 
@@ -67,7 +67,7 @@ struct IPCCInstallView: View {
             } header: {
                 Text("安装运营商包")
             } footer: {
-                Text("选择IPCC文件上传到 PublicStaging 后交给 CommCenter 安装。")
+                Text("选择IPCC文件上传到 PublicStaging 后交给 CommCenter 安装.")
             }
 
             Section {
@@ -121,12 +121,12 @@ struct IPCCInstallView: View {
                     }
                 }
             } footer: {
-                Text("查看最近安装记录，安装后的实际 bundle 由 CommCenter 写入系统区。")
+                Text("查看最近安装记录，安装后的实际 bundle 由 CommCenter 写入系统区.")
             }
 
             // v0.2.138：蜂窝网络维护（参考 CellularInfo 工具板块；v0.2.142
             // 移除「刷新蜂窝网络信号」—— 无 entitlement 必被静默丢弃，保留
-            // 真正可用的「重启蜂窝网络服务」）。
+            // 真正可用的「重启蜂窝网络服务」）.
             Section {
                 Button {
                     confirmRestartCommCenter = true
@@ -145,7 +145,7 @@ struct IPCCInstallView: View {
             } header: {
                 Text("蜂窝网络维护")
             } footer: {
-                Text("重启服务： 经 RSD 隧道向 CommCenter 发送 SIGKILL，系统自动拉起。")
+                Text("重启服务： 经 RSD 隧道向 CommCenter 发送 SIGKILL，系统自动拉起.")
             }
         }
         .listStyle(.insetGrouped)
@@ -168,7 +168,7 @@ struct IPCCInstallView: View {
         .alert("已提交安装", isPresented: $showRespringHint) {
             Button("好的") {}
         } message: {
-            Text("已通过 installation_proxy（PackageType=CarrierBundle）交给系统安装。")
+            Text("已通过 installation_proxy（PackageType=CarrierBundle）交给系统安装.")
         }
         .alert("清空安装记录？", isPresented: $confirmClearRecords) {
             Button("清空", role: .destructive) {
@@ -178,7 +178,7 @@ struct IPCCInstallView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将删除全部最近安装记录（含日志详情），不可恢复。")
+            Text("将删除全部最近安装记录（含日志详情），不可恢复.")
         }
         .alert("重启蜂窝网络服务？", isPresented: $confirmRestartCommCenter) {
             Button("重启", role: .destructive) {
@@ -186,7 +186,7 @@ struct IPCCInstallView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将向 CommCenter 发送终止信号，系统会自动拉起该服务，蜂窝网络会短暂断开后恢复。")
+            Text("将向 CommCenter 发送终止信号，系统会自动拉起该服务，蜂窝网络会短暂断开后恢复.")
         }
         .sheet(item: $detailRecord) { record in
             NavigationView {
@@ -304,7 +304,7 @@ struct IPCCInstallView: View {
 
     // MARK: - 蜂窝网络维护（v0.2.138；v0.2.142 移除刷新信号，仅保留重启服务）
 
-    /// 重启蜂窝网络服务：走 RSD 隧道向 CommCenter 发 SIGKILL（系统自动拉起）。
+    /// 重启蜂窝网络服务：走 RSD 隧道向 CommCenter 发 SIGKILL（系统自动拉起）.
     private func restartCommCenter() {
         guard !commCenterBusy else { return }
         commCenterBusy = true

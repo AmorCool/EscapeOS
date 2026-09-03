@@ -2,12 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AVFoundation
 
-/// 铃声在线播放器（AVAudioPlayer 包装）。
+/// 铃声在线播放器（AVAudioPlayer 包装）.
 final class RingtonePlayer: NSObject, AVAudioPlayerDelegate, ObservableObject {
     @Published var playingID: String?
     private var player: AVAudioPlayer?
 
-    /// 播放内存中的音频；同一 id 再次调用则停止。
+    /// 播放内存中的音频；同一 id 再次调用则停止.
     func play(data: Data, id: String) {
         if playingID == id { stop(); return }
         stop()
@@ -34,11 +34,11 @@ final class RingtonePlayer: NSObject, AVAudioPlayerDelegate, ObservableObject {
 }
 
 /// 铃声管理：经 RSD 隧道（AFC）管理 /var/mobile/media 内的铃声文件，
-/// 支持导入 / 导出 / 删除 / 重命名 / 在线播放 / 刷新。
+/// 支持导入 / 导出 / 删除 / 重命名 / 在线播放 / 刷新.
 ///
 /// ⚠️ 硬限制说明（页面 footer 会展示）：系统铃声库
 /// /var/mobile/Library/Ringtones 在 AFC 根（= /var/mobile/media）之外，
-/// 隧道不可达，因此只能管理媒体目录内的铃声文件。
+/// 隧道不可达，因此只能管理媒体目录内的铃声文件.
 struct RingtonesView: View {
     @State private var ringtones: [RingtonesService.Entry] = []
     @State private var loading = false
@@ -76,7 +76,7 @@ struct RingtonesView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("没有找到文件")
                             .foregroundColor(.secondary)
-                        Text("已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根。点右上角导入音频（会自动转换为 .m4r 铃声格式）。")
+                        Text("已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根.点右上角导入音频（会自动转换为 .m4r 铃声格式）.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -88,7 +88,7 @@ struct RingtonesView: View {
             } header: {
                 Text("铃声（/var/mobile/media）")
             } footer: {
-                Text("导入任意音频（mp3/wav/m4a 等）会自动转换为 .m4r并上传到 iTunes_Control/Ringtones，随后发送系统同步通知刷新媒体库 —— 导入成功后到「设置 → 声音 → 铃声」查看。")
+                Text("导入任意音频（mp3/wav/m4a 等）会自动转换为 .m4r并上传到 iTunes_Control/Ringtones，随后发送系统同步通知刷新媒体库 —— 导入成功后到「设置 → 声音 → 铃声」查看.")
             }
         }
         .listStyle(.insetGrouped)
@@ -129,7 +129,7 @@ struct RingtonesView: View {
             Button("删除", role: .destructive) { doDelete() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("删除后无法恢复。")
+            Text("删除后无法恢复.")
         }
         .alert("重命名", isPresented: Binding(
             get: { renameTarget != nil },
@@ -287,7 +287,7 @@ struct RingtonesView: View {
         }
     }
 
-    /// 在线播放 / 停止（v0.2.130）：AFC 拉取数据到内存，AVAudioPlayer 播放。
+    /// 在线播放 / 停止（v0.2.130）：AFC 拉取数据到内存，AVAudioPlayer 播放.
     private func play(_ entry: RingtonesService.Entry) {
         if player.playingID == entry.id {
             player.stop()
@@ -310,7 +310,7 @@ struct RingtonesView: View {
         }
     }
 
-    /// 导出：下载到本地后弹系统分享面板。
+    /// 导出：下载到本地后弹系统分享面板.
     private func export(_ entry: RingtonesService.Entry) {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
@@ -374,7 +374,7 @@ struct RingtonesView: View {
     }
 }
 
-/// UIActivityViewController 的 SwiftUI 包装（分享面板）。
+/// UIActivityViewController 的 SwiftUI 包装（分享面板）.
 struct ActivityView: UIViewControllerRepresentable {
     let items: [Any]
 
@@ -385,7 +385,7 @@ struct ActivityView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-/// sheet(item:) 用的小包装（避免给 URL 全局加 Identifiable 扩展）。
+/// sheet(item:) 用的小包装（避免给 URL 全局加 Identifiable 扩展）.
 struct ShareURL: Identifiable {
     let url: URL
     var id: String { url.absoluteString }

@@ -569,13 +569,13 @@ final class ProcessManagerViewModel: ObservableObject {
     @Published var searchText: String = ""
     @Published var isRefreshing = false
     @Published private(set) var activeControlState: (pid: Int, action: ProcessControlAction)?
-    /// 统一的提示弹窗通道（操作结果 / 错误）。v0.2.106：此前双 .alert 并存，
-    /// 后注册覆盖先注册导致「进程已结束」等操作弹窗从不弹出。
+    /// 统一的提示弹窗通道（操作结果 / 错误）.v0.2.106：此前双 .alert 并存，
+    /// 后注册覆盖先注册导致「进程已结束」等操作弹窗从不弹出.
     @Published var alertItem: ProcessAlert?
 
     private var refreshTask: Task<Void, Never>?
     private var controlTimeoutTask: Task<Void, Never>?
-    /// SIGKILL 后的二次验证任务（检查目标 PID 是否真的消失）。
+    /// SIGKILL 后的二次验证任务（检查目标 PID 是否真的消失）.
     private var killVerifyTask: Task<Void, Never>?
 
     /// v0.3.47：排序后的进程列表（在搜索过滤基础上）
@@ -680,9 +680,9 @@ final class ProcessManagerViewModel: ObservableObject {
 
     /// SIGKILL 最终复核（v0.2.107）：1.5 秒后重新枚举进程，**无论结果如何都弹
     /// 一个结论**——目标 PID 消失 → 「进程已结束」；仍在 → 「进程可能仍在运行」
-    /// （受保护 / 前台 App 被 SpringBoard 拉起 / 权限不足）。
+    /// （受保护 / 前台 App 被 SpringBoard 拉起 / 权限不足）.
     /// 注意：@MainActor 类内 `Task { }` 继承主线程隔离，self 非 Optional，
-    /// 用 `[self]` 强捕获。
+    /// 用 `[self]` 强捕获.
     private func verifyKill(_ targetPID: Int) {
         killVerifyTask?.cancel()
         killVerifyTask = Task { [self] in
@@ -696,16 +696,16 @@ final class ProcessManagerViewModel: ObservableObject {
             self.killVerifyTask = nil
             self.refresh()
             if stillAlive {
-                self.alertItem = ProcessAlert(title: "进程可能仍在运行", message: "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中。常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足。")
+                self.alertItem = ProcessAlert(title: "进程可能仍在运行", message: "PID \(targetPID) 已发送 SIGKILL，但刷新后仍出现在进程列表中.常见原因：系统关键进程受保护、前台 App 被 SpringBoard 自动拉起、或设备 app_service 权限不足.")
             } else {
-                self.alertItem = ProcessAlert(title: "进程已结束", message: "PID \(targetPID) 已退出后台。")
+                self.alertItem = ProcessAlert(title: "进程已结束", message: "PID \(targetPID) 已退出后台.")
             }
         }
     }
 
     func control(_ action: ProcessControlAction, process: ProcessEntry) {
         guard activeControlState == nil else {
-            alertItem = ProcessAlert(title: "操作进行中", message: "上一项进程操作尚未完成，请稍候。")
+            alertItem = ProcessAlert(title: "操作进行中", message: "上一项进程操作尚未完成，请稍候.")
             return
         }
 
@@ -736,7 +736,7 @@ final class ProcessManagerViewModel: ObservableObject {
                     if action == .kill {
                         // SIGKILL：不立即弹成功，等 1.5 秒复核结果后给**一个**最终
                         // 结论弹窗（已结束 / 可能仍在运行），保证一定有反馈
-                        // （v0.2.107：避免成功弹窗被复核弹窗覆盖导致用户看不到）。
+                        // （v0.2.107：避免成功弹窗被复核弹窗覆盖导致用户看不到）.
                         self.verifyKill(targetPID)
                     } else {
                         self.alertItem = ProcessAlert(title: action.successTitle, message: action.successMessage(for: targetPID))
@@ -768,12 +768,12 @@ struct ProcessManagerView: View {
 
     var body: some View {
         // 注意：不嵌套 NavigationStack！本页由 MoreView 的 NavigationView push 进入，
-        // 嵌套导航栈会导致导航栏高度异常、标题/按钮错位（"tab 栏往下"的真凶）。
-        // 与「描述文件管理」（AppExpiryView）同构：直接 List + navigationTitle。
+        // 嵌套导航栈会导致导航栏高度异常、标题/按钮错位（"tab 栏往下"的真凶）.
+        // 与「描述文件管理」（AppExpiryView）同构：直接 List + navigationTitle.
         content
             .navigationTitle("进程管理")
             .navigationBarTitleDisplayMode(.inline)
-            // 系统搜索栏（v0.2.90 样式）。
+            // 系统搜索栏（v0.2.90 样式）.
             .searchable(
                 text: $viewModel.searchText,
                 placement: .navigationBarDrawer(displayMode: .always),
@@ -788,7 +788,7 @@ struct ProcessManagerView: View {
                 }
             }
             // 导航栏不设置 toolbarBackground，保持系统默认半透明毛玻璃效果，
-            // 与「描述文件管理」（AppExpiryView）一致，可透视下方滚动内容。
+            // 与「描述文件管理」（AppExpiryView）一致，可透视下方滚动内容.
             .task { viewModel.startAutoRefresh() }
             .onDisappear { viewModel.stopAutoRefresh() }
             .alert(item: $viewModel.alertItem) { item in
@@ -810,13 +810,13 @@ struct ProcessManagerView: View {
                     if !hasPairing {
                         Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("进程管理需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接；③ 开发者模式已开启。")
+                        Text("进程管理需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接；③ 开发者模式已开启.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("未找到运行中的进程。")
+                        Text("未找到运行中的进程.")
                             .foregroundStyle(.secondary)
-                        Text("设备可能处于空闲状态，或隧道尚未就绪；点击右上角刷新重试。")
+                        Text("设备可能处于空闲状态，或隧道尚未就绪；点击右上角刷新重试.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -824,7 +824,7 @@ struct ProcessManagerView: View {
             } else {
                 Section {
                     if viewModel.sortedProcesses.isEmpty {
-                        Text("没有匹配的进程。")
+                        Text("没有匹配的进程.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -843,7 +843,7 @@ struct ProcessManagerView: View {
                 } header: {
                     Text("运行中的进程（\(viewModel.processes.count)）")
                 } footer: {
-                    Text("恢复（SIGCONT）/ 挂起（SIGSTOP）/ 结束（SIGKILL）经由设备隧道下发，仅对当前设备生效。对系统关键进程发送结束信号可能因权限不足而失败。")
+                    Text("恢复（SIGCONT）/ 挂起（SIGSTOP）/ 结束（SIGKILL）经由设备隧道下发，仅对当前设备生效.对系统关键进程发送结束信号可能因权限不足而失败.")
                 }
             }
         }
@@ -987,9 +987,9 @@ private struct ProcessRow: View {
                         .controlSize(.small)
                         .tint(isConfirming ? .green : ProcessControlAction.kill.tint)
                         // 固定 .titleOnly：确认态 label 是 Label（只出文字「确认结束」），
-                        // 非确认态 label 是 Image（labelStyle 对 Image 无效，照常显图标）。
+                        // 非确认态 label 是 Image（labelStyle 对 Image 无效，照常显图标）.
                         // 不能写三元 `isConfirming ? .titleOnly : .iconOnly`——两种
-                        // LabelStyle 类型不同，编译器无法统一（v0.2.108 run 33253523553 报错）。
+                        // LabelStyle 类型不同，编译器无法统一（v0.2.108 run 33253523553 报错）.
                         .labelStyle(.titleOnly)
                         .disabled(isBusy)
                     }
@@ -1001,7 +1001,7 @@ private struct ProcessRow: View {
 }
 
 
-/// 进程管理诊断日志查看与导出（查看 / 复制 / 清空 / 导出分享）。
+/// 进程管理诊断日志查看与导出（查看 / 复制 / 清空 / 导出分享）.
 struct SysmonLogView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false

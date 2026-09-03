@@ -107,10 +107,28 @@ final class DeveloperCertStore: ObservableObject {
             let knownSerials = Set(before.map { $0.serialNumber })
             // 3) 本机密钥 + CSR（完整 PEM，含头尾——Apple 端点要求原样提交）
             let csrPem = try generateKeyAndCSR()
-            // 4) 提交 Apple（异步受理：响应只含 certRequest 元数据，无证书内容）
+            // 4) 提交 Apple（异步受理：响应只含 certRequest 元数据，无证书内容）。
+            //    7460（证书数上限，免费账号常见）→ SideStore 同款：吊销全部旧证书后重试一次。
+            //    （被吊销的旧证书所属工具下次使用时会自动重建自己的证书，属正常行为）
             let machineName = (UIDevice.current.name)
-            let certDER = try await AppleDeveloperAPI.submitSigningCertificate(
-                team: team, csrPEM: csrPem, machineName: machineName, session: session)
+            var certDER: Data
+            do {
+                certDER = try await AppleDeveloperAPI.submitSigningCertificate(
+                    team: team, csrPEM: csrPem, machineName: machineName, session: session)
+            } catch let err as AppleAPIError {
+                if case .customError(let code, _) = err, code == 7460 {
+                    LoginLogger.shared.log("⚠ 7460 配额满 → 吊销全部旧证书后重试（SideStore 免费账号标准流程）")
+                    let existing = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
+                    for old in existing {
+                        _ = try? await AppleDeveloperAPI.revokeCertificate(
+                            team: team, serialNumber: old.serialNumber, session: session)
+                    }
+                    certDER = try await AppleDeveloperAPI.submitSigningCertificate(
+                        team: team, csrPEM: csrPem, machineName: machineName, session: session)
+                } else {
+                    throw err
+                }
+            }
             // 5) 同步拿到内容则直接用；异步受理（空内容）则轮询证书列表（最多 30 秒）
             var newCert: DeveloperCertificate?
             if !certDER.isEmpty {

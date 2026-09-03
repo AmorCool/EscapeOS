@@ -76,7 +76,7 @@ struct KernelCacheView: View {
             } header: {
                 Text("内核缓存")
             } footer: {
-                Text("默认按当前机型与系统版本自动匹配；也可在下方手动切换机型/版本。")
+                Text("默认按当前机型与系统版本自动匹配；也可在下方手动切换机型/版本.")
             }
 
             // 手动选择区
@@ -126,7 +126,7 @@ struct KernelCacheView: View {
             } header: {
                 Text("手动选择")
             } footer: {
-                Text("默认已自动识别当前机型与系统版本；如需下载其他机型 / 其他版本的 kernelcache，可在此手动切换。")
+                Text("默认已自动识别当前机型与系统版本；如需下载其他机型 / 其他版本的 kernelcache，可在此手动切换.")
             }
 
             if isRunning {
@@ -239,7 +239,7 @@ struct KernelCacheView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("删除后无法恢复。")
+            Text("删除后无法恢复.")
         }
         .alert("选择机型", isPresented: $showIdentifierPicker) {
             TextField("机型标识，如 iPhone13,1", text: $identifierInput)
@@ -250,7 +250,7 @@ struct KernelCacheView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("输入要下载 kernelcache 的机型标识（hw.machine，如 iPhone13,1 / iPhone15,2）。")
+            Text("输入要下载 kernelcache 的机型标识（hw.machine，如 iPhone13,1 / iPhone15,2）.")
         }
         .sheet(item: $shareURL) { item in
             ShareSheet(items: [item.url])
@@ -265,7 +265,7 @@ struct KernelCacheView: View {
 
     // MARK: - 数据
 
-    /// 自动识别当前机型 + 系统版本，并加载固件列表、默认选中当前版本。
+    /// 自动识别当前机型 + 系统版本，并加载固件列表、默认选中当前版本.
     private func loadDeviceInfo() {
         let identifier = service.deviceIdentifier()
         let version = service.systemVersion()
@@ -280,7 +280,7 @@ struct KernelCacheView: View {
         }
     }
 
-    /// 手动指定机型后重新查询固件列表。
+    /// 手动指定机型后重新查询固件列表.
     private func applyIdentifier(_ identifier: String) {
         let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -290,12 +290,12 @@ struct KernelCacheView: View {
         errorMessage = nil
         Task {
             // 手动选择机型时保留自动识别的系统版本做默认匹配；
-            // 若该机型无此版本则只列列表让用户手选。
+            // 若该机型无此版本则只列列表让用户手选.
             await queryFirmwares(identifier: trimmed, autoSelectVersion: systemVersion)
         }
     }
 
-    /// 查询指定机型的全部固件；autoSelectVersion 非空时自动选中该版本。
+    /// 查询指定机型的全部固件；autoSelectVersion 非空时自动选中该版本.
     @MainActor
     private func queryFirmwares(identifier: String, autoSelectVersion: String?) async {
         isQuerying = true

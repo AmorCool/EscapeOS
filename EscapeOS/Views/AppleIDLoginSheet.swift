@@ -1,9 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 登录 Apple ID 的弹窗。
+/// 登录 Apple ID 的弹窗.
 /// 调用本地自带的 Apple 认证引擎（SRP-6a + Anisette v3）完成真实登录，
-/// 而非仅保存凭据。需要两步验证时会弹出验证码输入框。
+/// 而非仅保存凭据.需要两步验证时会弹出验证码输入框.
 struct AppleIDLoginSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -71,7 +71,7 @@ struct AppleIDLoginSheet: View {
                         Label("记住账户", systemImage: "bookmark")
                     }
                 } footer: {
-                    Text("开启后，登录成功的账户会保存在「最近登录」列表中，之后可从下拉菜单一键登录；未开启则不记录。")
+                    Text("开启后，登录成功的账户会保存在「最近登录」列表中，之后可从下拉菜单一键登录；未开启则不记录.")
                 }
 
                 Section {
@@ -88,7 +88,7 @@ struct AppleIDLoginSheet: View {
                     .disabled(email.isEmpty || password.isEmpty || ctrl.isAuthenticating)
                 }
 
-                Section(header: Text("SideStore"), footer: Text("从 SideStore 设置中导出账户 JSON，可免去手动输入账号密码，并直接带入设备认证所需的 adi.pb 与本地标识。")) {
+                Section(header: Text("SideStore"), footer: Text("从 SideStore 设置中导出账户 JSON，可免去手动输入账号密码，并直接带入设备认证所需的 adi.pb 与本地标识.")) {
                     Button("导入 SideStore 账户文件") {
                         showImporter = true
                     }
@@ -141,7 +141,7 @@ struct AppleIDLoginSheet: View {
                     reply?(nil)
                 }
             } message: {
-                Text("Apple 已向你的受信任设备或短信发送验证码，请输入以完成登录。")
+                Text("Apple 已向你的受信任设备或短信发送验证码，请输入以完成登录.")
             }
         }
     }
@@ -161,9 +161,9 @@ struct AppleIDLoginSheet: View {
             LoginLogger.shared.log("SRP 自检: \(selfTest)")
         }
         do {
-            // v0.2.115：改用带重试 + 服务器轮换的入口。清数据后首次登录要走完整
+            // v0.2.115：改用带重试 + 服务器轮换的入口.清数据后首次登录要走完整
             // provisioning，遇到服务器侧 -45025 / -45003 / WebSocket 断开时自动换
-            // 下一个 Anisette 服务器重试，而不是直接把错误抛给用户。
+            // 下一个 Anisette 服务器重试，而不是直接把错误抛给用户.
             let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback()
             LoginLogger.shared.log("✓ Anisette 获取成功，进入 GrandSlam 握手")
             let (account, session) = try await AppleAuthenticator.authenticate(
@@ -199,7 +199,7 @@ struct AppleIDLoginSheet: View {
         }
     }
 
-    /// 从「最近登录」选择一个账户：回填邮箱与密码并立即登录。
+    /// 从「最近登录」选择一个账户：回填邮箱与密码并立即登录.
     private func fillHistory(_ account: String) {
         email = account
         password = MemoryLimitSettings.shared.password(forHistory: account) ?? ""
@@ -222,7 +222,7 @@ struct AppleIDLoginSheet: View {
     }
 }
 
-/// 登录过程中的可变状态（2FA 弹窗、进度、错误）。
+/// 登录过程中的可变状态（2FA 弹窗、进度、错误）.
 final class AppleLoginController: ObservableObject {
     @Published var isAuthenticating = false
     @Published var authError: String?
@@ -231,7 +231,7 @@ final class AppleLoginController: ObservableObject {
     var twoFactorReply: ((String?) -> Void)?
 }
 
-/// 登录诊断日志查看与导出（查看 / 复制 / 导出分享 / 清空）。
+/// 登录诊断日志查看与导出（查看 / 复制 / 导出分享 / 清空）.
 struct LoginLogView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
@@ -304,7 +304,7 @@ struct LoginLogView: View {
             .alert("已复制", isPresented: $copied) {
                 Button("好", role: .cancel) {}
             } message: {
-                Text("日志已复制到剪贴板，可直接粘贴发给开发者。")
+                Text("日志已复制到剪贴板，可直接粘贴发给开发者.")
             }
         }
     }

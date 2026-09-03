@@ -35,7 +35,7 @@ struct ProfileInstallView: View {
             } header: {
                 Text("描述文件管理")
             } footer: {
-                Text("支持导入 .mobileconfig 。导入后点「发送到本机」→ 系统提示已下载 → 到「设置 → 通用 → VPN 与设备管理」安装。")
+                Text("支持导入 .mobileconfig .导入后点「发送到本机」→ 系统提示已下载 → 到「设置 → 通用 → VPN 与设备管理」安装.")
             }
 
             Section {
@@ -109,7 +109,7 @@ struct ProfileInstallView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("删除后无法恢复。")
+            Text("删除后无法恢复.")
         }
         .overlay(alignment: .bottom) {
             if let toast {
@@ -172,7 +172,7 @@ struct ProfileInstallView: View {
         try? FileManager.default.removeItem(atPath: path)
     }
 
-    /// 启动本地 HTTP 服务 + Safari 打开（与 DomainBlocker 同款）。
+    /// 启动本地 HTTP 服务 + Safari 打开（与 DomainBlocker 同款）.
     private func sendToSettings(name: String) {
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
@@ -212,7 +212,7 @@ struct ProfileInstallView: View {
         }
     }
 
-    /// 读取描述文件 PayloadDisplayName（有则显示，无则显示文件大小）。
+    /// 读取描述文件 PayloadDisplayName（有则显示，无则显示文件大小）.
     private func profileSummary(named name: String) -> String {
         let path = (profilesDirectory as NSString).appendingPathComponent(name)
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),

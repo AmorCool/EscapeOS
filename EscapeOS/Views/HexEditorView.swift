@@ -11,7 +11,7 @@ struct HexEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             if vm.truncated {
-                Text("仅显示前 512 KB 的十六进制预览。超过此大小的文件不可保存。")
+                Text("仅显示前 512 KB 的十六进制预览.超过此大小的文件不可保存.")
                     .font(.caption)
                     .foregroundColor(.orange)
                     .padding(8)

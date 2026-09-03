@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 /// 延迟创建 NavigationLink destination —— 修复"闪退回上级"：
 /// destination 在 list 渲染时就被 eager 创建，父级 state 刷新会重建
-/// destination 导致 navigation stack 重置。包装后 destination 只在
-/// 用户实际点击 push 时才创建一次，父级刷新不再影响子级。
+/// destination 导致 navigation stack 重置.包装后 destination 只在
+/// 用户实际点击 push 时才创建一次，父级刷新不再影响子级.
 struct NavigationLazyView<Content: View>: View {
     let build: () -> Content
     init(_ build: @autoclosure @escaping () -> Content) {
@@ -36,7 +36,7 @@ struct FileBrowserView: View {
     @State private var pendingDelete: [FileItem] = []
     @State private var archivePassword = ""
 
-    /// 浏览某个已安装 App 的容器（原入口：App 详情 / 空间回收）。
+    /// 浏览某个已安装 App 的容器（原入口：App 详情 / 空间回收）.
     init(app: InstalledApp) {
         self.init(rootPath: app.containerPath, title: app.name)
     }
@@ -45,12 +45,12 @@ struct FileBrowserView: View {
         self.init(rootPath: app.containerPath, title: app.name, initialPath: initialPath)
     }
 
-    /// 浏览任意路径（根级文件浏览器用）。
+    /// 浏览任意路径（根级文件浏览器用）.
     /// - Parameters:
-    ///   - rootPath: 沙盒扩展的签发锚点 —— 容器内所有读写都以它为基准申请扩展。
-    ///   - title: 根层级的显示标题（子目录会用目录名）。
-    ///   - initialPath: 起始目录，缺省即 `rootPath`。
-    ///   - appNameIndex: bundle id → App 显示名（可选，用于容器行显示「全名 (bundle id)」）。
+    ///   - rootPath: 沙盒扩展的签发锚点 —— 容器内所有读写都以它为基准申请扩展.
+    ///   - title: 根层级的显示标题（子目录会用目录名）.
+    ///   - initialPath: 起始目录，缺省即 `rootPath`.
+    ///   - appNameIndex: bundle id → App 显示名（可选，用于容器行显示「全名 (bundle id)」）.
     init(rootPath: String, title: String, initialPath: String? = nil, appNameIndex: [String: String] = [:]) {
         self.rootPath = rootPath
         self.title = title
@@ -266,7 +266,7 @@ struct FileBrowserView: View {
                     pendingDelete = []
                 }
             } message: {
-                Text("此操作不可撤销。若文件可能被占用，请先关闭目标应用。")
+                Text("此操作不可撤销.若文件可能被占用，请先关闭目标应用.")
             }
             .sheet(item: $propertiesItem) { item in
                 FilePropertiesView(rootPath: rootPath, item: item)
@@ -284,7 +284,7 @@ struct FileBrowserView: View {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return vm.items }
         // 索引：目录名（UUID）+ 解析出的容器名（「全名 (bundle id)」/ group id），
-        // 让用户可以直接搜 App 名 / bundle id 定位到对应容器。
+        // 让用户可以直接搜 App 名 / bundle id 定位到对应容器.
         return vm.items.filter { item in
             if item.name.localizedCaseInsensitiveContains(query) { return true }
             if let resolved = vm.containerNames[item.path],

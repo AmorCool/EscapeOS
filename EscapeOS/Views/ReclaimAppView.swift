@@ -123,7 +123,7 @@ struct ReclaimAppView: View {
     }
 
     private var safeSection: some View {
-        Section(header: Text("安全"), footer: Text("这些是缓存与临时文件目录，应用通常可以自行重建。")) {
+        Section(header: Text("安全"), footer: Text("这些是缓存与临时文件目录，应用通常可以自行重建.")) {
             ForEach(vm.buckets.filter { $0.category.risk == .safe }) { bucket in
                 bucketRow(bucket)
             }
@@ -131,7 +131,7 @@ struct ReclaimAppView: View {
     }
 
     private var sessionSection: some View {
-        Section(header: Text("会话"), footer: Text("可能导致应用内网页登录态丢失。默认关闭，需要时可手动开启。")) {
+        Section(header: Text("会话"), footer: Text("可能导致应用内网页登录态丢失.默认关闭，需要时可手动开启.")) {
             if vm.isFilling && vm.buckets.filter({ $0.category.risk == .session }).isEmpty {
                 Text("测量中…").foregroundColor(.secondary)
             }
@@ -142,7 +142,7 @@ struct ReclaimAppView: View {
     }
 
     private var keptSection: some View {
-        Section(header: Text("保留"), footer: Text("Documents、Preferences 与 Application Support 在此面板中不会被回收。")) {
+        Section(header: Text("保留"), footer: Text("Documents、Preferences 与 Application Support 在此面板中不会被回收.")) {
             if vm.isFilling && vm.buckets.filter({ $0.category.risk == .kept }).isEmpty {
                 Text("测量中…").foregroundColor(.secondary)
             }
@@ -153,7 +153,7 @@ struct ReclaimAppView: View {
     }
 
     private var containerSection: some View {
-        Section(header: Text("容器内容"), footer: Text("浏览或备份该应用的 Documents、Library 与 tmp。备份会保存到「文件 → 我的iPhone → EscapeSpace → Backups」，不包含 Keychain。请先关闭 \(app.name) 以获得一致快照。")) {
+        Section(header: Text("容器内容"), footer: Text("浏览或备份该应用的 Documents、Library 与 tmp.备份会保存到「文件 → 我的iPhone → EscapeSpace → Backups」，不包含 Keychain.请先关闭 \(app.name) 以获得一致快照.")) {
             NavigationLink(destination: FileBrowserView(app: app)) {
                 Label("浏览文件", systemImage: "folder.fill")
                     .foregroundColor(AppTheme.accent)
@@ -318,9 +318,9 @@ final class ReclaimAppViewModel: ObservableObject {
 
     func confirmMessage(appName: String) -> String {
         let count = buckets.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.files }
-        var text = "请先关闭 \(appName)。本次将删除 \(count) 个文件（\(ReclaimService.formatBytes(selectedBytes))）。"
+        var text = "请先关闭 \(appName).本次将删除 \(count) 个文件（\(ReclaimService.formatBytes(selectedBytes))）."
         if selectedHasSession {
-            text += " 会话类数据可能导致应用内网页登录态丢失。"
+            text += " 会话类数据可能导致应用内网页登录态丢失."
         }
         return text
     }
@@ -407,9 +407,9 @@ final class ReclaimAppViewModel: ObservableObject {
                     self.isBusy = false
                     self.apply(refreshed, resetSelection: true)
                     ReclaimScanCache.shared.merge(refreshed, for: app.bundleIdentifier)
-                    var message = "已释放 \(ReclaimService.formatBytes(result.bytesFreed))（\(result.filesRemoved) 个文件）。"
+                    var message = "已释放 \(ReclaimService.formatBytes(result.bytesFreed))（\(result.filesRemoved) 个文件）."
                     if result.skipped > 0 {
-                        message += " 跳过 \(result.skipped) 个无法删除的项目。"
+                        message += " 跳过 \(result.skipped) 个无法删除的项目."
                     }
                     self.alert = ReclaimNotice(title: "已回收", message: message)
                 }

@@ -445,6 +445,16 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let resultText = box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）"
             return "\(symName): 已调用（数据目录以参数传入）\n入口=\(sym) 前16字节: \(codeHex)\n结果: \(resultText)\n下一步: runlog 查看模块日志；若闪退见 go_stderr.log 的 [uloader-crash] 行"
 
+        case "devcert":
+            // v0.3.130：远程触发开发证书创建（诊断/自测用）。
+            // 流程：生成密钥+CSR → 提交 Apple →（7460 自动吊销重试）→ 轮询取证书。
+            do {
+                try await DeveloperCertStore.shared.createCertificateWithStoredAccount()
+                return "✓ 开发证书创建成功（已存 DeveloperCert/，原生模块将用真证书签名加载）"
+            } catch {
+                return "❌ 开发证书创建失败: \((error as NSError).localizedDescription)"
+            }
+
         case "mlog":
             // 读模块数据目录下的任意文件。
             // 注意：不能用通用 cat —— 它基于 FileManager.documentDirectory，而模块数据目录
@@ -531,6 +541,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       logs [n]        登录日志末尾 n 行（默认 30）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）
+  devcert        创建开发证书（用已登录 Apple ID；原生模块签名用）
       ls [路径]       浏览 Documents 目录（相对路径）
       cat <文件>      查看 Documents 内文本文件（≤256KB）
       ip              局域网 IP

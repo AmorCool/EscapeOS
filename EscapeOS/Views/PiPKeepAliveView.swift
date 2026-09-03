@@ -2,10 +2,10 @@
 //  PiPKeepAliveView.swift
 //  EscapeSpace
 //
-//  PiP 保活设置页（更多 → PiP 保活）。
+//  PiP 保活设置页（更多 → PiP 保活）.
 //  说明：playerLayer 必须常驻视图层级（哪怕很小），PiP 才可能启动；
-//  页面内嵌一个小预览窗，同时承载 layer。开始 PiP 后可离开应用，
-//  系统以悬浮小窗形式保活宿主进程。
+//  页面内嵌一个小预览窗，同时承载 layer.开始 PiP 后可离开应用，
+//  系统以悬浮小窗形式保活宿主进程.
 //
 
 import SwiftUI
@@ -103,7 +103,7 @@ struct PiPKeepAliveView: View {
                     .frame(height: 31)
                 }
             } footer: {
-                Text("启动后回主屏幕或锁屏，系统以悬浮小窗维持应用活跃。悬浮窗支持拖动/双指缩放；「隐藏」会把窗口缩到不可见但保活继续。用于需要长时间后台运行的任务（隧道保活 / 长传输）。")
+                Text("启动后回主屏幕或锁屏，系统以悬浮小窗维持应用活跃.悬浮窗支持拖动/双指缩放；「隐藏」会把窗口缩到不可见但保活继续.用于需要长时间后台运行的任务（隧道保活 / 长传输）.")
             }
 
             Section {
@@ -142,7 +142,7 @@ struct PiPKeepAliveView: View {
             } header: {
                 Text("全局高刷")
             } footer: {
-                Text("开启后本应用活跃期间强制维持设备最高刷新率（\(highRefresh.maxFPS)Hz，CADisplayLink preferredFrameRateRange 方案）。关闭后交还系统自适应。")
+                Text("开启后本应用活跃期间强制维持设备最高刷新率（\(highRefresh.maxFPS)Hz，CADisplayLink preferredFrameRateRange 方案）.关闭后交还系统自适应.")
             }
         }
         .navigationTitle("PiP 保活")

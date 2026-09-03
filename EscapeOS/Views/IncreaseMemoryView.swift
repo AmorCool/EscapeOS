@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// 「增加内存限制」入口：移植自 GetMoreRam。
+/// 「增加内存限制」入口：移植自 GetMoreRam.
 /// 登录后自动加载团队与 App ID 列表，选择目标 App 即可调用 Apple Developer API
-/// 为其开启 INCREASED_MEMORY_LIMIT 能力。
+/// 为其开启 INCREASED_MEMORY_LIMIT 能力.
 struct IncreaseMemoryView: View {
     @StateObject private var settings = MemoryLimitSettings.shared
     @StateObject private var ctrl = IncreaseMemoryController()
@@ -73,7 +73,7 @@ struct IncreaseMemoryView: View {
                     Text("未登录")
                         .foregroundColor(.secondary)
                 }
-                Text("请在「更多 → 设置 → Apple ID 账户」中登录。")
+                Text("请在「更多 → 设置 → Apple ID 账户」中登录.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -101,7 +101,7 @@ struct IncreaseMemoryView: View {
             switch ctrl.teamState {
             case .idle:
                 // v0.2.120：`.idle` 曾与 `.loading` 渲染成同一个转圈，
-                // "没发起请求"被误认为"正在加载"。现在明确区分。
+                // "没发起请求"被误认为"正在加载".现在明确区分.
                 HStack {
                     Image(systemName: "exclamationmark.circle").foregroundColor(.orange)
                     Text("尚未加载团队")
@@ -204,7 +204,7 @@ struct IncreaseMemoryView: View {
 
     private var appFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("开启后需要重新安装对应 App 才能使 INCREASED_MEMORY_LIMIT 能力生效。")
+            Text("开启后需要重新安装对应 App 才能使 INCREASED_MEMORY_LIMIT 能力生效.")
             if ctrl.appState == .loaded, !ctrl.apps.isEmpty {
                 Toggle("跳过已开启的", isOn: $ctrl.skipEnabled)
                     .font(.caption)
@@ -278,7 +278,7 @@ private struct AppRowView: View {
 
 // MARK: - Controller
 
-/// 「增加内存限制」页面状态：团队 / App ID 加载与开启操作。
+/// 「增加内存限制」页面状态：团队 / App ID 加载与开启操作.
 final class IncreaseMemoryController: ObservableObject {
     enum LoadState: Equatable {
         case idle
@@ -342,22 +342,22 @@ final class IncreaseMemoryController: ObservableObject {
     @MainActor
     func reload() async {
         // v0.2.120：以前 session 为 nil 时静默 return，teamState 停在 `.idle`，
-        // 而 UI 把 `.idle` 与 `.loading` 渲染成同一个转圈 → 永远"正在加载团队"。
+        // 而 UI 把 `.idle` 与 `.loading` 渲染成同一个转圈 → 永远"正在加载团队".
         guard let session else {
             let reason = MemoryLimitSettings.shared.isLoggedIn
                 ? "已登录但 Swift 会话缺失（dsid/authToken 为空）"
                 : "尚未登录 Apple ID"
             LoginLogger.shared.log("⚠ 增加内存限制：团队列表未发起 —— \(reason)")
-            teamState = .failed("\(reason)。请到「更多 → 设置」重新登录 Apple ID。")
+            teamState = .failed("\(reason).请到「更多 → 设置」重新登录 Apple ID.")
             return
         }
         teamState = .loading
         appState = .idle
-        // v0.2.116 看门狗：超时强制切失败态，不让 UI 永久停在「正在加载团队…」。
+        // v0.2.116 看门狗：超时强制切失败态，不让 UI 永久停在「正在加载团队…」.
         let watchdog = DispatchWorkItem { [weak self] in
             guard let self else { return }
             if case .loading = self.teamState {
-                self.teamState = .failed("加载超时。请下拉刷新重试，或到「更多 → 设置 → Anisette 服务器」换一个服务器。")
+                self.teamState = .failed("加载超时.请下拉刷新重试，或到「更多 → 设置 → Anisette 服务器」换一个服务器.")
                 LoginLogger.shared.log("❌ 增加内存限制：团队列表加载看门狗超时")
             }
         }
@@ -397,7 +397,7 @@ final class IncreaseMemoryController: ObservableObject {
         defer { operatingIDs.remove(app.identifier) }
         do {
             let response = try await AppleDeveloperAPI.enableIncreasedMemory(appID: app, team: team, session: session)
-            resultMessage = "已为 \(app.bundleIdentifier) 开启增加内存限制。\n\n服务器响应：\n\(response.prefix(300))"
+            resultMessage = "已为 \(app.bundleIdentifier) 开启增加内存限制.\n\n服务器响应：\n\(response.prefix(300))"
             showResult = true
             await loadAppIDs()  // 刷新状态标记
         } catch {
@@ -423,7 +423,7 @@ final class IncreaseMemoryController: ObservableObject {
         }
     }
 
-    /// 串行批量开启（每次开启都取独立 Anisette OTP，最稳）。跳过已开启的（若开启「跳过已开启」）。
+    /// 串行批量开启（每次开启都取独立 Anisette OTP，最稳）.跳过已开启的（若开启「跳过已开启」）.
     @MainActor
     func enableBatch() async {
         guard let session, let team = teams.first(where: { $0.identifier == selectedTeamID }) else { return }
@@ -447,7 +447,7 @@ final class IncreaseMemoryController: ObservableObject {
             batchDone += 1
         }
         // 一次性汇总报告
-        var summary = "批量开启完成（\(successes.count) 成功 / \(failures.count) 失败）。\n"
+        var summary = "批量开启完成（\(successes.count) 成功 / \(failures.count) 失败）.\n"
         if !successes.isEmpty { summary += "\n成功：\n" + successes.map { "• \($0)" }.joined(separator: "\n") }
         if !failures.isEmpty {
             summary += "\n\n失败：\n" + failures.map { "• \($0.0) —— \($0.1)" }.joined(separator: "\n")

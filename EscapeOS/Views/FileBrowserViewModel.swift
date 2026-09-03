@@ -18,32 +18,32 @@ final class FileBrowserViewModel: ObservableObject {
     @Published var exportError: IdentifiedError?
     @Published var operationError: IdentifiedError?
     @Published var unzipPasswordItem: FileItem?
-    @Published var unzipPasswordMessage = "该压缩包已加密，请输入密码后解压。"
+    @Published var unzipPasswordMessage = "该压缩包已加密，请输入密码后解压."
 
     var isBusy: Bool { isZipping || isExporting || isPasting }
 
-    /// 目录路径 → 解析出的容器名（App 名），仅在容器根浏览时有值。
+    /// 目录路径 → 解析出的容器名（App 名），仅在容器根浏览时有值.
     @Published var containerNames: [String: String] = [:]
 
     let rootPath: String
     let title: String
-    /// 当前根是否是「容器根」。容器根走 `bad_query_list` 枚举，不消费沙盒扩展。
+    /// 当前根是否是「容器根」.容器根走 `bad_query_list` 枚举，不消费沙盒扩展.
     let isContainerRoot: Bool
-    /// bundle id → App 显示名（来自已加载的 App 列表，隧道数据，安全）。
-    /// 为空时容器行只显示 bundle id（对齐 Erosion 原版）。
+    /// bundle id → App 显示名（来自已加载的 App 列表，隧道数据，安全）.
+    /// 为空时容器行只显示 bundle id（对齐 Erosion 原版）.
     let appNameIndex: [String: String]
     private let escape = SandboxEscape()
     private let files = FileService()
 
-    /// 兼容原调用点（App 详情 / 空间回收）。class 的委托初始化必须标记为 convenience。
+    /// 兼容原调用点（App 详情 / 空间回收）.class 的委托初始化必须标记为 convenience.
     convenience init(app: InstalledApp, initialPath: String? = nil) {
         self.init(rootPath: app.containerPath, title: app.name, initialPath: initialPath)
     }
 
     /// - Parameters:
-    ///   - rootPath: 沙盒扩展的签发锚点 —— 每个文件操作都以它为基准申请扩展。
-    ///   - title: 根层级的显示标题。
-    ///   - appNameIndex: bundle id → App 显示名（可选）。
+    ///   - rootPath: 沙盒扩展的签发锚点 —— 每个文件操作都以它为基准申请扩展.
+    ///   - title: 根层级的显示标题.
+    ///   - appNameIndex: bundle id → App 显示名（可选）.
     init(rootPath: String, title: String, initialPath: String? = nil, appNameIndex: [String: String] = [:]) {
         self.rootPath = rootPath
         self.title = title
@@ -88,14 +88,14 @@ final class FileBrowserViewModel: ObservableObject {
 
     /// 根据根路径类型选择正确的枚举方式：
     /// - 容器根：走 `bad_query_list`（多级回退），不消费沙盒扩展；空结果时
-    ///   再兜底尝试签发扩展后用 FileManager 直接列（iOS 27 上部分只读目录可列）。
-    /// - 普通根 / 容器内部：先尝试用沙盒扩展；失败时退回直接 `FileManager`。
+    ///   再兜底尝试签发扩展后用 FileManager 直接列（iOS 27 上部分只读目录可列）.
+    /// - 普通根 / 容器内部：先尝试用沙盒扩展；失败时退回直接 `FileManager`.
     private func list(at path: String) throws -> [FileItem] {
         if isContainerRoot && path == rootPath {
             let items = try files.listContainerRoot(at: path)
             if !items.isEmpty { return items }
             // 兜底：签发扩展后用 FileManager 直接列（绕过 isDirectory 前置检查，
-            // 沙盒下 fileExists 对跨容器路径可能误判）。成功则用，失败保持空列表。
+            // 沙盒下 fileExists 对跨容器路径可能误判）.成功则用，失败保持空列表.
             if let fallback = try? escape.withHandle(for: rootPath) { _ in
                 try files.listDirectly(at: path)
             } {
@@ -109,7 +109,7 @@ final class FileBrowserViewModel: ObservableObject {
             }
         } catch {
             // 部分环境（如特定 LiveContainer 扩展已覆盖的路径）不需要显式签发
-            // 就能用 FileManager 直接列出，失败时退回一次直接读取。
+            // 就能用 FileManager 直接列出，失败时退回一次直接读取.
             return try files.list(directory: path)
         }
     }
@@ -119,35 +119,35 @@ final class FileBrowserViewModel: ObservableObject {
             switch sandboxError {
             case .kernelRejected:
                 if let entry = FileSystemRoots.entry(for: rootPath), entry.requiresRave {
-                    return "当前系统版本无法访问「\(entry.title)」。该目录需要 iOS 27 特定预览版（24A5355q / 24A5370h / 24A5380h / 24A5390f）才支持。"
+                    return "当前系统版本无法访问「\(entry.title)」.该目录需要 iOS 27 特定预览版（24A5355q / 24A5370h / 24A5380h / 24A5390f）才支持."
                 }
-                return "系统拒绝为此目录签发沙盒扩展，当前环境无法访问。"
+                return "系统拒绝为此目录签发沙盒扩展，当前环境无法访问."
             case .notAbsolutePath:
-                return "路径格式不正确。"
+                return "路径格式不正确."
             case .targetMissing:
-                return "目标路径不存在。"
+                return "目标路径不存在."
             case .resolveFailed:
-                return "无法解析容器管理器符号。"
+                return "无法解析容器管理器符号."
             case .queryCreateFailed:
-                return "无法创建容器查询。"
+                return "无法创建容器查询."
             case .outsideSandbox:
-                return "路径不在容器管理器沙盒内。"
+                return "路径不在容器管理器沙盒内."
             case .asprintfFailed:
-                return "内部错误：构建查询字符串失败。"
+                return "内部错误：构建查询字符串失败."
             case .invalidHandle:
-                return "沙盒句柄已失效。"
+                return "沙盒句柄已失效."
             case .unknown(let code):
-                return "未知沙盒错误（代码 \(code)）。"
+                return "未知沙盒错误（代码 \(code)）."
             }
         }
         return error.localizedDescription
     }
 
     /// 在容器根（如 /var/mobile/Containers/Data/Application）浏览时，把 UUID 目录
-    /// 解析成可读标识。每个容器读一次 metadata plist 拿 bundle id（/ App Group 的
+    /// 解析成可读标识.每个容器读一次 metadata plist 拿 bundle id（/ App Group 的
     /// group id），再用 `appNameIndex`（来自已加载的 App 列表，隧道数据）补 App
-    /// 显示名，组合为「全名 (bundleId)」；无显示名时只显示 bundle id（对齐 Erosion）。
-    /// 解析在后台批量跑（bad_query + plist，线程安全），结果回主线程刷新。
+    /// 显示名，组合为「全名 (bundleId)」；无显示名时只显示 bundle id（对齐 Erosion）.
+    /// 解析在后台批量跑（bad_query + plist，线程安全），结果回主线程刷新.
     private func resolveContainerNames() {
         guard FileSystemRoots.containerNameRoots.contains(currentPath) else {
             if !containerNames.isEmpty { containerNames = [:] }
@@ -178,7 +178,7 @@ final class FileBrowserViewModel: ObservableObject {
 
     func create(name: String, kind: CreateKind) {
         guard let safe = FileNameRules.sanitize(name) else {
-            operationError = IdentifiedError(message: "请输入不含斜杠的文件名。")
+            operationError = IdentifiedError(message: "请输入不含斜杠的文件名.")
             return
         }
         let dest = (currentPath as NSString).appendingPathComponent(safe)
@@ -193,7 +193,7 @@ final class FileBrowserViewModel: ObservableObject {
 
     func rename(item: FileItem, to newName: String) {
         guard let safe = FileNameRules.sanitize(newName) else {
-            operationError = IdentifiedError(message: "请输入不含斜杠的文件名。")
+            operationError = IdentifiedError(message: "请输入不含斜杠的文件名.")
             return
         }
         mutate {
@@ -245,7 +245,7 @@ final class FileBrowserViewModel: ObservableObject {
     private func paste(_ clip: FileClipboard.Payload, into destDir: String, destContainer: String) throws {
         for item in clip.items {
             if Self.wouldNest(source: item.path, inside: destDir) {
-                throw FileServiceError.operationFailed("无法将文件夹粘贴到自身内部。")
+                throw FileServiceError.operationFailed("无法将文件夹粘贴到自身内部.")
             }
         }
         if clip.containerPath == destContainer {
@@ -444,7 +444,7 @@ final class FileBrowserViewModel: ObservableObject {
 
     func clearUnzipPasswordPrompt() {
         unzipPasswordItem = nil
-        unzipPasswordMessage = "该压缩包已加密，请输入密码后解压。"
+        unzipPasswordMessage = "该压缩包已加密，请输入密码后解压."
     }
 
     func unzip(item: FileItem, password: String? = nil) {
@@ -491,14 +491,14 @@ final class FileBrowserViewModel: ObservableObject {
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.isZipping = false
-                    self.unzipPasswordMessage = "该压缩包已加密，请输入密码后解压。"
+                    self.unzipPasswordMessage = "该压缩包已加密，请输入密码后解压."
                     self.unzipPasswordItem = item
                 }
             } catch ZipReaderError.wrongPassword {
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.isZipping = false
-                    self.unzipPasswordMessage = "密码错误，请重试。"
+                    self.unzipPasswordMessage = "密码错误，请重试."
                     self.unzipPasswordItem = item
                 }
             } catch {

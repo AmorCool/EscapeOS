@@ -3,8 +3,8 @@
 //  EscapeSpace
 //
 //  SSH 无线调试页（更多 → SSH 调试）：
-//  展示连接命令/凭据、启停服务、重置密码。
-//  电脑侧: ssh escape@<IP> -p 2222，登录后输入 help 查看内置诊断命令。
+//  展示连接命令/凭据、启停服务、重置密码.
+//  电脑侧: ssh escape@<IP> -p 2222，登录后输入 help 查看内置诊断命令.
 //
 
 import SwiftUI
@@ -98,7 +98,7 @@ struct SSHDebugView: View {
                 .tint(.blue)
                 .disabled(!service.canStart)
             } footer: {
-                Text("开启后每次启动 App 都会自动拉起 SSH 服务（延迟 1.5 秒避开启动高峰），无需手动点启动，随时可无线连进来排查日志。")
+                Text("开启后每次启动 App 都会自动拉起 SSH 服务（延迟 1.5 秒避开启动高峰），无需手动点启动，随时可无线连进来排查日志.")
             }
 
             Section {
@@ -129,9 +129,9 @@ struct SSHDebugView: View {
                 .disabled(service.isRunning)
             } footer: {
                 if service.isRunning {
-                    Text("密码重置需先停止服务。连接后输入 help 查看可用诊断命令。")
+                    Text("密码重置需先停止服务.连接后输入 help 查看可用诊断命令.")
                 } else {
-                    Text("启动后，同一局域网内的电脑可通过上方命令无线连接。仅局域网可达，随时可关。")
+                    Text("启动后，同一局域网内的电脑可通过上方命令无线连接.仅局域网可达，随时可关.")
                 }
             }
 

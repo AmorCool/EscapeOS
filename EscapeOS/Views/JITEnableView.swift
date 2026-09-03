@@ -198,7 +198,7 @@ struct JITEnableView: View {
                 }.value
                 await MainActor.run {
                     isWorking = false
-                    successMessage = "「\(app.name)」已以调试模式启动，JIT 已生效。\n应用在运行期间保持 JIT；返回可继续操作。"
+                    successMessage = "「\(app.name)」已以调试模式启动，JIT 已生效。\n应用在运行期间保持 JIT；返回可继续操作."
                     showSuccess = true
                 }
             } catch {
@@ -221,12 +221,12 @@ struct JITEnableView: View {
     }
 }
 
-/// App 图标行组件（「启用 JIT」/「拉起应用」共用）。
+/// App 图标行组件（「启用 JIT」/「拉起应用」共用）.
 ///
 /// 优先用 SpringBoardServices 隧道图标（真实图标，第三方应用也能拿到），
-/// 未加载完成 / 获取失败时回退灰色占位（app.dashed）。
+/// 未加载完成 / 获取失败时回退灰色占位（app.dashed）.
 /// 替换前用的进程内私有 API（supervisedAppIcon）对证书直装 / 侧载的
-/// 第三方应用经常取不到图标 → 灰图标（v0.2.71 修复）。
+/// 第三方应用经常取不到图标 → 灰图标（v0.2.71 修复）.
 struct JITAppIconView: View {
     let bundleID: String
     @State private var icon: UIImage?
