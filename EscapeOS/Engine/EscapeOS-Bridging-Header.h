@@ -50,6 +50,6 @@ int lua_host_exec(const char *code, const char *outPath);
 
 // Lua 宿主原生 handler 注册（v0.3.102：WiFi 射频经 RSD 隧道 MCInstall SetWiFiPowerState）。
 // Swift 实现阻塞执行，返回 0=成功；-1=失败。
-void lua_host_set_wifi_power_fn(int (*fn)(int));
+void lua_host_set_wifi_power_fn(int (*fn)(int, char **errOut));
 
 #endif /* EscapeOS_Bridging_Header_h */

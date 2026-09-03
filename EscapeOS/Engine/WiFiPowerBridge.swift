@@ -16,7 +16,24 @@ final class WiFiPowerBridge {
     private var handlerRegistered = false
 
     private func makeError(_ message: String) -> NSError {
-        NSError(domain: "WiFiPower", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+        stepLog("❌ " + message)
+        return NSError(domain: "WiFiPower", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private func stepLog(_ text: String) {
+        let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Modules/com.escapeos.wifitoggle/data/wifi_bridge.log")
+        try? FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        let line = "[\(Date())] \(text)
+"
+        if let handle = FileHandle(forWritingAtPath: path.path) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8)!)
+            try? handle.close()
+        } else {
+            try? line.data(using: .utf8)?.write(to: path)
+        }
     }
 
     private var pairingPath: String {
@@ -41,6 +58,7 @@ final class WiFiPowerBridge {
         }
 
         // 2) 隧道 IP
+        stepLog("步骤1 配对文件 ✓")
         let deviceIP = LocalDevVPN.targetIP
         guard !deviceIP.isEmpty else {
             throw makeError("隧道 IP 为空（请检查「设置 → 本地隧道」）")
@@ -96,6 +114,7 @@ final class WiFiPowerBridge {
         guard let (adapter, handshake) = created else {
             throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
         }
+        stepLog("步骤2 隧道创建 ✓")
         defer {
             adapter_free(adapter)
             rsd_handshake_free(handshake)
@@ -109,24 +128,28 @@ final class WiFiPowerBridge {
         }
         defer { rsd_free_services(servicesArray) }
         var mcPort: UInt16?
+        var names: [String] = []
         if let arr = servicesArray?.pointee.services {
             let count = Int(servicesArray?.pointee.count ?? 0)
             for i in 0..<count {
                 let svc = arr[i]
                 let name = svc.name.map { String(cString: $0) } ?? ""
+                names.append(name)
                 if name == "com.apple.mobile.MCInstall.shim.remote" {
                     mcPort = svc.port
-                    break
                 }
             }
+            stepLog("RSD 服务(\(count)): \(names.joined(separator: ", ").prefix(500))")
         }
         guard let port = mcPort else {
-            throw makeError("RSD 服务列表中无 MCInstall.shim.remote")
+            throw makeError("RSD 服务列表中无 MCInstall.shim.remote（服务数已列出，见上一条日志）")
         }
+        stepLog("步骤3 MCInstall 端口=\(port) ✓")
 
         // 5) TCP 直连（隧道 IP:服务端口）
         let fd = try connectSocket(ip: deviceIP, port: port)
         defer { close(fd) }
+        stepLog("步骤4 TCP 连接 \(deviceIP):\(port) ✓")
 
         // 6) RSDCheckin 三步握手
         try sendPlist(fd, dict: [
@@ -138,6 +161,7 @@ final class WiFiPowerBridge {
         guard r1.contains("RSDCheckin") else { throw makeError("RSDCheckin 响应不匹配: \(r1.prefix(200))") }
         let r2 = try readFrame(fd)
         guard r2.contains("StartService") else { throw makeError("StartService 响应不匹配: \(r2.prefix(200))") }
+        stepLog("步骤5 RSDCheckin ✓")
 
         // 7) SetWiFiPowerState
         try sendPlist(fd, dict: [
@@ -148,6 +172,7 @@ final class WiFiPowerBridge {
         if reply.contains("<key>Error</key>") {
             throw makeError("SetWiFiPowerState 设备返回错误: \(reply.prefix(300))")
         }
+        stepLog("步骤6 SetWiFiPowerState ✓ 响应: \(reply.prefix(200))")
     }
 
     // MARK: - TCP + plist 帧
@@ -244,11 +269,14 @@ final class WiFiPowerBridge {
 
 /// 注册进 Lua 宿主的原生 handler（C 函数指针；由 Rust wifi_set_power 回调）。
 /// 无捕获 @convention(c) 闭包 —— 阻塞当前线程（Lua 宿主工作线程）直至隧道操作完成。
-let escapeos_wifi_power_cfn: @convention(c) (Int32) -> Int32 = { on in
+let escapeos_wifi_power_cfn: @convention(c) (Int32, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Int32 = { on, errOut in
     do {
         try WiFiPowerBridge.shared.performPower(on == 1)
+        if let errOut { errOut.pointee = strdup("ok") }
         return 0
     } catch {
+        let msg = (error as NSError).localizedDescription
+        if let errOut { errOut.pointee = strdup(msg) }
         return -1
     }
 }

@@ -171,7 +171,7 @@ fn wifi_get_power() -> String {
 
 use std::sync::Mutex;
 
-type WifiPowerFn = unsafe extern "C" fn(c_int) -> c_int;
+type WifiPowerFn = unsafe extern "C" fn(c_int, *mut *mut c_char) -> c_int;
 static WIFI_FN: Mutex<Option<usize>> = Mutex::new(None);
 
 #[unsafe(no_mangle)]
@@ -182,10 +182,18 @@ pub extern "C" fn lua_host_set_wifi_power_fn(f: Option<WifiPowerFn>) {
 fn wifi_set_power_via_tunnel(on: bool) -> Option<String> {
     let f = (*WIFI_FN.lock().unwrap())?;
     let func = unsafe { std::mem::transmute::<usize, WifiPowerFn>(f) };
-    let rc = unsafe { func(if on { 1 } else { 0 }) };
-    Some(if rc == 0 {
-        format!("ok: 隧道 SetWiFiPowerState({})", on)
+    let mut err_ptr: *mut c_char = std::ptr::null_mut();
+    let rc = unsafe { func(if on { 1 } else { 0 }, &mut err_ptr) };
+    let detail = if !err_ptr.is_null() {
+        let s = unsafe { CStr::from_ptr(err_ptr).to_string_lossy().into_owned() };
+        libc::free(err_ptr.cast());
+        s
     } else {
-        format!("err: 隧道 SetWiFiPowerState 失败 (code {})", rc)
+        String::new()
+    };
+    Some(if rc == 0 {
+        format!("ok: 隧道 SetWiFiPowerState({}) {}", on, detail)
+    } else {
+        format!("err: 隧道 SetWiFiPowerState 失败: {}", detail)
     })
 }
