@@ -298,7 +298,7 @@ enum AppleDeveloperAPI {
                 }
                 if resultCode == 7460 {
                     LoginLogger.shared.log("❌ 证书数量达上限（7460）")
-                    throw AppleAPIError.customError(code: 7460, message: "开发证书数量已达上限（7460），请先吊销一张旧证书")
+                    throw AppleAPIError.customError(code: 7460, message: "开发证书数量已达上限（7460）。请到「更多 → 证书管理」吊销一张过期/旧证书（别吊销 SideStore 正在用的那张），再回来重新创建")
                 }
             }
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
