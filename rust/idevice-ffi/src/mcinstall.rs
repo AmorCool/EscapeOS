@@ -13,7 +13,12 @@ use std::os::raw::{c_char, c_int};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 
-use idevice::{IdeviceError, ReadWrite, pairing_file::PairingFile, services::lockdown::LockdownClient};
+// 与 FFI 的 lockdown.rs 完全同款导入：
+// - `lockdown::LockdownClient` 是 crate 根再导出的公开路径
+// - `RsdService as _` 匿名导入 trait 才能调 connect_rsd（避免与 crates.io 版同名 trait 冲突）
+use idevice::{
+    IdeviceError, ReadWrite, RsdService as _, lockdown::LockdownClient, pairing_file::PairingFile,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{core_device_proxy::AdapterHandle, rsd::RsdHandshakeHandle, IdeviceFfiError};
