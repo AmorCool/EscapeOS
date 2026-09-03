@@ -16,9 +16,8 @@ use std::sync::Mutex;
 // 与 FFI 的 lockdown.rs 完全同款导入：
 // - `lockdown::LockdownClient` 是 crate 根再导出的公开路径
 // - `RsdService as _` 匿名导入 trait 才能调 connect_rsd（避免与 crates.io 版同名 trait 冲突）
-use idevice::{
-    IdeviceError, ReadWrite, RsdService as _, lockdown::LockdownClient, pairing_file::PairingFile,
-};
+use idevice::{IdeviceError, ReadWrite, RsdService as _, lockdown::LockdownClient};
+use crate::pairing_file::{IdevicePairingFile, idevice_pairing_file_read};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{core_device_proxy::AdapterHandle, rsd::RsdHandshakeHandle, IdeviceFfiError};
@@ -185,8 +184,20 @@ pub async fn mcinstall_power_with_handles(on: bool) -> Result<String, IdeviceErr
     let mut hs = handshake;
     let mut lockdown = LockdownClient::connect_rsd(&mut adapter, &mut hs).await?;
     // 2) 用配对文件起会话（获得与电脑端同等的 lockdown 权限）
-    let pairing = PairingFile::read_from_file(&pairing_path)?;
-    let _legacy = lockdown.start_session(&pairing).await?;
+    // FFI 自己的读取器（plist 格式）；PairingFile::read_from_file 只吃 raw 格式会报错
+    let c_path = CString::new(pairing_path.as_str())
+        .map_err(|_| IdeviceError::UnexpectedResponse("配对文件路径含 NUL".into()))?;
+    let mut pf: *mut IdevicePairingFile = std::ptr::null_mut();
+    if let Some(_err) = unsafe { idevice_pairing_file_read(c_path.as_ptr(), &mut pf) } {
+        return Err(IdeviceError::UnexpectedResponse("读取配对文件失败".into()));
+    }
+    if pf.is_null() {
+        return Err(IdeviceError::UnexpectedResponse("读取配对文件失败（空句柄）".into()));
+    }
+    let pairing: &_ = unsafe { &(*pf).0 };
+    let _legacy = lockdown.start_session(pairing).await?;
+    // 会话已建立，释放配对文件句柄
+    drop(unsafe { Box::from_raw(pf) });
     // 3) 经 lockdownd 启动 MCInstall 服务（非 .shim.remote，无 entitlement 门禁）
     let (port, ssl) = lockdown.start_service(MC_SERVICE_LOCKDOWN).await?;
     if ssl {
