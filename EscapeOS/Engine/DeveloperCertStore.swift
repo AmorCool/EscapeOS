@@ -185,6 +185,7 @@ final class DeveloperCertStore: ObservableObject {
     /// 对 dylib 就地做真证书签名。返回 true = 签名成功。
     /// 诊断日志（zsign 全部输出 + 分步结果）落盘 dataDir/go_sign_debug.log。
     func signDylib(path: String, bundleId: String, debugLog: URL? = nil) -> Bool {
+        let team = (try? String(contentsOf: teamURL, encoding: .utf8)) ?? ""
         guard hasCert,
               let certData = try? Data(contentsOf: certURL),
               let keyData = try? Data(contentsOf: keyURL) else {
@@ -199,7 +200,7 @@ final class DeveloperCertStore: ObservableObject {
                                           Int32(certData.count),
                                           keyBuf.baseAddress?.assumingMemoryBound(to: CChar.self),
                                           Int32(keyData.count),
-                                          nil, 0, dbg)
+                                          nil, 0, dbg, team)
             }
         }
         LoginLogger.shared.log("zsign 真证书签名 rc=\(rc)（0=成功 -1=Init -2=文件/macho -3=Sign）")

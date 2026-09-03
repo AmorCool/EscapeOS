@@ -44,7 +44,8 @@ int zsign_sign_file_with_cert(const char *path, const char *bundleId,
                               const char *certPem, int certLen,
                               const char *keyPem, int keyLen,
                               const char *entXml, int entLen,
-                              const char *dbgPath);
+                              const char *dbgPath,
+                              const char *teamId);
 
 // ZSign ad-hoc 重签名（v0.3.101：LC/Nyxian 同款引擎，编进 App；对副本就地重签）
 int zsign_adhoc_file(const char *path, const char *bundleId, const char *entXml, int entLen);

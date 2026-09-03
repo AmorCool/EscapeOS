@@ -635,6 +635,28 @@ bool ZSignAsset::Init(
 		}
 	}
 
+	// EscapeOS fallback（v0.3.134）：开发证书场景下无 CMS 信封的裸 plist provision。
+	// TeamIdentifier/AppID 前缀由调用方（DeveloperCertStore）以真实 TeamID 写入。
+	if (m_strTeamId.empty()) {
+		jvalue jvRaw;
+		if (jvRaw.read_plist(m_strProvData)) {
+			string rawTeam = jvRaw["TeamIdentifier"][0].as_cstr();
+			if (rawTeam.empty() || rawTeam == "TEAMID") {
+				rawTeam = jvRaw["ApplicationIdentifierPrefix"][0].as_cstr();
+			}
+			if (rawTeam.empty() || rawTeam == "TEAMID") {
+				rawTeam = jvRaw["Entitlements"]["com.apple.developer.team-identifier"].as_cstr();
+			}
+			if (!rawTeam.empty() && rawTeam != "TEAMID") {
+				ZLog::Log(">>> EscapeOS fallback: raw plist provision accepted (team=%s)\n", rawTeam.c_str());
+				m_strTeamId = rawTeam;
+				if (m_strEntitleData.empty()) {
+					jvRaw["Entitlements"].style_write_plist(m_strEntitleData);
+				}
+			}
+		}
+	}
+
 	if (m_strTeamId.empty()) {
 		ZLog::Error(">>> Can't find TeamId!\n");
 		return false;

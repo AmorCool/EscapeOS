@@ -9,7 +9,6 @@ struct CertificateView: View {
     @StateObject private var settings = MemoryLimitSettings.shared
     /// v0.3.131：自动撤销开关/白名单（统一撤销接口的管控项）
     @StateObject private var certStore = DeveloperCertStore.shared
-    @State private var whitelistRemovalTarget: DeveloperCertificate?
     @State private var showLogin = false
     /// 待确认吊销的证书。
     @State private var pendingRevoke: DeveloperCertificate?
@@ -60,6 +59,28 @@ struct CertificateView: View {
                         Section {
                             ForEach(manager.certs) { cert in
                                 certRow(cert)
+                                    // 左划：加入白名单（未在白名单时）
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        if cert.serialNumber != certStore.revokeWhitelist {
+                                            Button {
+                                                certStore.revokeWhitelist = cert.serialNumber
+                                            } label: {
+                                                Label("加入白名单", systemImage: "checkmark.seal")
+                                            }
+                                            .tint(.blue)
+                                        }
+                                    }
+                                    // 右划：移出白名单（在白名单时）
+                                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                        if cert.serialNumber == certStore.revokeWhitelist {
+                                            Button {
+                                                certStore.revokeWhitelist = ""
+                                            } label: {
+                                                Label("移出白名单", systemImage: "xmark.seal")
+                                            }
+                                            .tint(.orange)
+                                        }
+                                    }
                             }
                         } header: {
                             Text("\(manager.certs.count) 个证书")
@@ -301,10 +322,9 @@ struct CertificateView: View {
 
     // MARK: - 证书行
 
-    /// 是否命中白名单（证书名包含白名单字符串）
+    /// 是否命中白名单（序列号精确匹配）
     private func isWhitelisted(_ cert: DeveloperCertificate) -> Bool {
-        let w = certStore.revokeWhitelist.trimmingCharacters(in: .whitespaces)
-        return !w.isEmpty && cert.name.contains(w)
+        !certStore.revokeWhitelist.isEmpty && cert.serialNumber == certStore.revokeWhitelist
     }
 
     private func certRow(_ cert: DeveloperCertificate) -> some View {
@@ -340,7 +360,7 @@ struct CertificateView: View {
                                 .padding(.vertical, 2)
                                 .background(Capsule().fill(Color.blue.opacity(0.15)))
                                 .foregroundColor(.blue)
-                                .onTapGesture { whitelistRemovalTarget = cert }
+
                         }
                     }
                     if let machine = cert.machineLabel {
