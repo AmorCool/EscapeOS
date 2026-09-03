@@ -177,6 +177,7 @@ final class BinaryModuleRunner: ObservableObject {
         var sym: UnsafeMutableRawPointer?
         var dylibName: String?
         var reSignErrorText: String?
+        var uloaderErrorText: String?
         // ① 可拆卸 dylib 模块（zip 安装，bin/*.dylib）
         if let dylibURL = Self.findDylib(moduleDir: moduleDir) {
             var handle: UnsafeMutableRawPointer?
@@ -230,10 +231,12 @@ final class BinaryModuleRunner: ObservableObject {
                         Self.cacheUloaderImage(img)   // 常驻，不卸载（Go runtime）
                         appendLog(logFile, "[host] 用户态加载器解析 OpenListMain 成功 ✓")
                     } else {
-                        appendLog(logFile, "[host] 用户态加载器未找到 OpenListMain（符号表可能仅 trie）")
+                        uloaderErrorText = "映射成功但未找到 OpenListMain（符号表可能仅 trie）"
+                    appendLog(logFile, "[host] 用户态加载器未找到 OpenListMain（符号表可能仅 trie）")
                     }
                 } else {
                     let reason = String(cString: errBuf)
+                    uloaderErrorText = reason
                     appendLog(logFile, "[host] 用户态加载器失败: \(reason)")
                 }
             }
@@ -246,9 +249,25 @@ final class BinaryModuleRunner: ObservableObject {
             }
         }
         guard let fnSym = sym else {
-            let hint = reSignErrorText.map { "\n重签名已尝试但仍失败: \($0)" } ?? ""
-            throw BinaryModuleError.spawnFailed(
-                "OpenList 未就绪：本 App 未内置 OpenList，且模块目录中没有可加载的 bin/*.dylib。请确认已从 module-esc edge 导入 com.escapeos.alist 模块 zip。\(hint)")
+            // v0.3.110：文案改为**动态报真实原因**（旧文案静态枚举"未内置/无 dylib"，
+            // 而实际 dylib 就在模块目录里、是加载被拒——误导排查方向）
+            var parts: [String] = []
+            if let dylibURL = Self.findDylib(moduleDir: moduleDir) {
+                parts.append("已找到模块 dylib：\(dylibURL.lastPathComponent)")
+                if let e = reSignErrorText {
+                    parts.append("dyld 加载被拒（dlopen）：\(e.prefix(300))")
+                }
+                if let e = uloaderErrorText {
+                    parts.append("用户态加载器失败：\(e)")
+                }
+                if reSignErrorText == nil, uloaderErrorText == nil {
+                    parts.append("（未记录具体失败原因，见 run.log）")
+                }
+            } else {
+                parts.append("模块目录中无 bin/*.dylib——请从 module-esc edge 导入 com.escapeos.alist 模块 zip")
+            }
+            parts.append("本 App 未内置 OpenList（按设计：模块化，不内置引擎）")
+            throw BinaryModuleError.spawnFailed(parts.joined(separator: "\n"))
         }
 
         // 数据目录以 strdup C 字符串 + 函数符号一起打包成线程上下文

@@ -480,8 +480,12 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                     dup2(efd, STDERR_FILENO)
                     close(efd)
                 }
+                // v0.3.110：不再用"请先安装模块 zip"这类误导文案（模块可能已安装，
+                // 只是加载被拒）→ 改为指向 run.log 的真实原因
                 guard let sym = BinaryModuleRunner.resolveOpenListSymbol("OpenListMain", moduleDir: moduleDir) else {
-                    return "❌ OpenListMain 符号未找到——请先安装 OpenList 模块 zip"
+                    return "❌ OpenListMain 未就绪（不是缺模块 zip，是 dylib 加载失败）\n"
+                         + "   详情：SSH 执行 `runlog 25`，或模块卡片「查看日志」\n"
+                         + "   常见原因：dyld 库校验拒绝 ad-hoc 签名；或用户态加载器重定位失败"
                 }
                 let fn = unsafeBitCast(sym, to: DirFn.self)
                 let box = GoCallBox {
