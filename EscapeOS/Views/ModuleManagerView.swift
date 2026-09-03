@@ -153,19 +153,7 @@ struct ModuleManagerView: View {
                 set: { if !$0 { uninstallTarget = nil } }
             ),
             titleVisibility: .visible
-        ) {
-            
-                        // v0.3.111：模块日志查看器（导出/复制/清空）
-                        Button {
-                            showingLogFor = module
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "doc.text.magnifyingglass")
-                                Text("日志")
-                            }
-                        }
-                        .tint(.secondary)
-                        Button("卸载", role: .destructive) {
+        ) {Button("卸载", role: .destructive) {
                 if let m = uninstallTarget {
                     ModuleService.shared.delete(id: m.id)
                     reload()
@@ -383,6 +371,10 @@ struct ModuleManagerView: View {
                     .padding(.horizontal, 18)
                     .padding(.vertical, 9)
                     .background(Capsule().fill(Color(.systemGray6)))
+                // v0.3.111：模块日志查看器（导出/复制/清空 run.log + go_stderr.log）
+                pill(label: "日志", icon: "doc.text.magnifyingglass") {
+                    showingLogFor = module
+                }
                 } else {
                     pill(label: "卸载", icon: "trash") {
                         uninstallTarget = module

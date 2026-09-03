@@ -195,7 +195,7 @@ final class BinaryModuleRunner: ObservableObject {
                 do {
                     // v0.3.100：写到全新文件（新 vnode）——内核按 vnode 缓存校验判决，
                     // 原地重签不失效缓存（Nyxian 同款解法：vnode_recover 到新路径）。
-                    let newURL = try MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: bundleId)
+                    let newURL = try MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)
                     appendLog(logFile, "[host] 重建完成: \(newURL.lastPathComponent)，重试 dlopen")
                     if let h = dlopen(newURL.path, RTLD_NOW | RTLD_GLOBAL) {
                         handle = h
@@ -223,7 +223,7 @@ final class BinaryModuleRunner: ObservableObject {
                 // v0.3.108：dlopen 被 dyld 库校验拦下（ad-hoc 无 CMS blob 在 dyld 层必拒）→
                 // 改用自研用户态 Mach-O 加载器（移植自 Nyxian kxld）：自己 mmap + rebase + bind，
                 // 完全绕开 dyld——这是 LC / Nyxian 加载访客代码的方式。
-                let target = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: bundleId)) ?? dylibURL
+                let target = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)) ?? dylibURL
                 var errBuf = [CChar](repeating: 0, count: 512)
                 if let img = uloader_load(target.path, &errBuf, errBuf.count) {
                     appendLog(logFile, "[host] 用户态加载器映射成功：\(target.lastPathComponent)")

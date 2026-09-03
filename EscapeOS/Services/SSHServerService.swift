@@ -416,7 +416,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             switch cmd {
             case "gotest":
                 guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("GoSelfTest", moduleDir: moduleDir) else {
-                    return "❌ GoSelfTest 符号未找到（请确认 \(moduleId) 模块已从 module-esc 导入）"
+                    return "❌ GoSelfTest 符号未找到（请确认模块已从 module-esc 导入）"
                 }
                 let box = GoCallBox { unsafeBitCast(sym, to: NoArgFn.self)() }
                 box.run()
@@ -427,7 +427,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 """
             case "probe":
                 guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListProbe", moduleDir: moduleDir) else {
-                    return "❌ OpenListProbe 符号未找到（请确认 \(moduleId) 模块已从 module-esc 导入）"
+                    return "❌ OpenListProbe 符号未找到（请确认模块已从 module-esc 导入）"
                 }
                 let fn = unsafeBitCast(sym, to: DirFn.self)
                 let box = GoCallBox {
@@ -442,7 +442,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             case "memtest":
                 let mb = parts.count > 1 ? (Int(parts[1]) ?? 64) : 64
                 guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListMemTest", moduleDir: moduleDir) else {
-                    return "❌ OpenListMemTest 符号未找到（请确认 \(moduleId) 模块已从 module-esc 导入）"
+                    return "❌ OpenListMemTest 符号未找到（请确认模块已从 module-esc 导入）"
                 }
                 let fn = unsafeBitCast(sym, to: MemFn.self)
                 let box = GoCallBox { fn(Int32(mb)) }
