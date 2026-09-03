@@ -32,6 +32,11 @@ struct IPAInstallView: View {
     // 2FA
     @State private var showTwoFactor = false
     @State private var twoFactorCode = ""
+    /// 自动登录开关（持久化在 UserDefaults；默认开）
+    @State private var autoSignInOn: Bool =
+        UserDefaults.standard.object(forKey: "IPA.autoSignInEnabled") as? Bool ?? true
+    /// 2FA 等待代际：每次弹窗自增；超时定时器只在代际未变时生效（防旧定时器误取消新等待）
+    @State private var twoFactorGeneration = 0
     @State private var twoFactorReply: ((String?) -> Void)?
 
     // 流程
@@ -271,6 +276,23 @@ struct IPAInstallView: View {
                         }
                         .buttonStyle(.borderless)
                     }
+
+                    // v0.3.116：自动登录总开关（避免 2FA 弹窗打断操作）+ 从「设置」手动登录入口
+                    Toggle("自动登录（用「设置」里的 Apple ID）", isOn: $autoSignInOn)
+                        .onChange(of: autoSignInOn) { newValue in
+                            UserDefaults.standard.set(newValue, forKey: "IPA.autoSignInEnabled")
+                        }
+                    if MemoryLimitSettings.shared.isLoggedIn {
+                        Button {
+                            autoSignInWithSavedCredentials()
+                        } label: {
+                            Label("从「设置」登录 Apple ID", systemImage: "person.badge.key.fill")
+                        }
+                    } else {
+                        Label("「更多 → 设置」里还没有保存 Apple ID", systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             } header: {
                 Text("Apple ID")
@@ -342,6 +364,16 @@ struct IPAInstallView: View {
         }
         .listStyle(.insetGrouped)
         .navigationTitle("IPA 侧载")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    refreshStatus()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("刷新状态")
+            }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .documentPicker(isPresented: $showImporter, allowedTypes: [UTType(filenameExtension: "ipa") ?? .data]) { urls in
             if let url = urls.first {
@@ -349,10 +381,29 @@ struct IPAInstallView: View {
             }
         }
         .onAppear {
+            // v0.3.116 修卡死：signIn 跑在 Task.detached（后台线程），
+            // 此前直接在此改 @State → 主线程外更新 SwiftUI 状态 → 弹窗不出现
+            // 且永久等待验证码 → 界面像卡住。改为切主线程更新，并加超时兜底。
             service.twoFactorPrompt = { reply in
-                twoFactorCode = ""
-                twoFactorReply = reply
-                showTwoFactor = true
+                Task { @MainActor in
+                    twoFactorGeneration += 1
+                    let generation = twoFactorGeneration
+                    twoFactorCode = ""
+                    twoFactorReply = reply
+                    showTwoFactor = true
+                    // 5 分钟未输入则放弃，避免无限等待导致界面无响应。
+                    // 代际校验：若期间弹了新一轮 2FA，旧定时器自动作废。
+                    Task.detached {
+                        try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
+                        await MainActor.run {
+                            guard generation == twoFactorGeneration, twoFactorReply != nil else { return }
+                            twoFactorReply?(nil)
+                            twoFactorReply = nil
+                            showTwoFactor = false
+                            errorMessage = "2FA 验证码等待超时，已取消自动登录（可在设置里重新登录 Apple ID）"
+                        }
+                    }
+                }
             }
             refreshSavedIPAs()
             // 每次进入都尝试自动登录/刷新状态（不依赖一次性标记）。
@@ -496,13 +547,29 @@ struct IPAInstallView: View {
         return dest
     }
 
+    /// 手动刷新界面状态（右上角刷新按钮 / 日志输出完后调用）：
+    /// 重新扫描已存 IPA、刷新登录态与局域网信息。
+    private func refreshStatus() {
+        refreshSavedIPAs()
+        // 重新尝试登录/恢复会话（内部幂等：已登录则直接返回）
+        autoSignInWithSavedCredentials()
+        SSHServerService.shared.refreshNetworkInfo()
+    }
+
     // MARK: - 自动登录（复用「更多 → 设置」的 Apple ID）
 
     /// 复用「更多 → 设置」已保存的 Apple ID，**不重复登录/2FA**：
     /// 1) 优先用 dsid + authToken 恢复 isideload 签名会话（免登录免 2FA）；
     /// 2) 恢复失败（token 过期等）才回退用邮箱+密码完整登录（可能弹 2FA）。
+    /// 自动登录总开关（设置里可关；默认开）
+    private var autoSignInEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "IPA.autoSignInEnabled") as? Bool ?? true }
+    }
+
     private func autoSignInWithSavedCredentials() {
         guard !service.isSignedIn, !isRunning else { return }
+        // v0.3.116：用户明确要求可禁用自动登录（会触发 2FA 打断操作）
+        guard autoSignInEnabled else { return }
         // warmUp（App 启动后台恢复）正在执行：不重复联网，等它完成——
         // 完成时 @Published isSignedIn 变化会自动刷新页面（v0.2.106 去重）。
         guard !service.isWarmingUp else { return }

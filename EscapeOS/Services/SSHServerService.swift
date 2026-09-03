@@ -243,6 +243,12 @@ final class SSHServerService: NSObject, ObservableObject {
         return address
     }
 
+    /// 重新探测局域网 IP（网络切换 / 回前台 / 用户手动刷新时调用）
+    func refreshNetworkInfo() {
+        let ip = Self.detectLANIP() ?? "未连接 Wi-Fi"
+        DispatchQueue.main.async { self.lanIP = ip }
+    }
+
     // MARK: 连接信息
 
     var connectHint: String {

@@ -187,6 +187,20 @@ struct SSHDebugView: View {
             }
         }
         .navigationTitle("SSH 调试")
+        .onAppear { service.refreshNetworkInfo() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // 网络变更/从后台切回：重新探测局域网 IP（此前只在 init 取一次，换网后一直是旧 IP）
+            service.refreshNetworkInfo()
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    service.refreshNetworkInfo()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+        }
         .navigationBarTitleDisplayMode(.inline)
     }
 }
