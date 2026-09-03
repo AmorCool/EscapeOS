@@ -177,7 +177,9 @@ final class BinaryModuleRunner: ObservableObject {
             close(fd)
         }
         uloader_install_crash_probe(STDERR_FILENO)   // v0.3.120：硬故障诊断落盘
-        appendLog(logFile, "[host] 调用 \(entrySymbol)（\(moduleId)模块，进程内）")
+        appendLog(logFile, "[host] 调用 \(entrySymbol)（\(moduleId)模块，进程内）\
+[App \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")]\
+当前内存足迹 \(currentFootprintMB())MB")
         var sym: UnsafeMutableRawPointer?
         var dylibName: String?
         var reSignErrorText: String?
@@ -296,7 +298,7 @@ final class BinaryModuleRunner: ObservableObject {
         let logFile = moduleDir.appendingPathComponent("run.log")
         func note(_ line: String) {
             // 便于诊断：解析失败原因直接落模块的 run.log（卡片「日志」按钮可见）
-            let text = "[\(DateFormatter.logStamp)] [resolve] \(line)\n"
+            let text = "[\(DateFormatter.now())][\(DateFormatter.logStamp)] [resolve] \(line)\n"
             if let fh = FileHandle(forWritingAtPath: logFile.path) {
                 fh.seekToEndOfFile(); fh.write(text.data(using: .utf8)!); try? fh.close()
             } else {
@@ -319,7 +321,7 @@ final class BinaryModuleRunner: ObservableObject {
                 let target = dylib
                 var errBuf = [CChar](repeating: 0, count: 512)
                 if let img = uloader_load(target.path, &errBuf, errBuf.count) {
-                    note("用户态加载器映射成功")
+                    note("用户态加载器映射成功（内存足迹 \(currentFootprintMB())MB）")
                     if let s = uloader_symbol(img, name) {
                         cacheUloaderImage(img)
                         note("用户态加载器解析到符号 \(name) ✓")
@@ -333,6 +335,19 @@ final class BinaryModuleRunner: ObservableObject {
         }
         return dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)   // RTLD_DEFAULT：内置静态
     }
+    /// 当前进程物理足迹（MB）——诊断 Jetsam 内存杀（匿名代码段无法换出，全常驻）
+    nonisolated static func currentFootprintMB() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return -1 }
+        return Int(info.phys_footprint / (1024 * 1024))
+    }
+
     /// 端口占用检测（本机回环，connect 立即返回）
     nonisolated private func isPortInUse(_ port: UInt16) -> Bool {
         var addr = sockaddr_in()
@@ -351,7 +366,7 @@ final class BinaryModuleRunner: ObservableObject {
     }
     /// 追加宿主侧日志到模块 run.log（与子进程 stdout/stderr 同文件）
     nonisolated private func appendLog(_ logFile: URL, _ line: String) {
-        let text = "[\(DateFormatter.logStamp)] \(line)\n"
+        let text = "[\(DateFormatter.now())][\(DateFormatter.logStamp)] \(line)\n"
         if let fh = FileHandle(forWritingAtPath: logFile.path) {
             fh.seekToEndOfFile()
             fh.write(text.data(using: .utf8)!)
@@ -387,9 +402,11 @@ final class BinaryModuleRunner: ObservableObject {
 private extension DateFormatter {
     static let logStamp: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
+        f.dateFormat = "HH:mm:ss.SSS"   // 时:分:秒.毫秒（用户要求精确到毫秒）
         return f
     }()
+    /// 当前时间字符串（HH:mm:ss）
+    static func now() -> String { logStamp.string(from: Date()) }
 }
 // MARK: 通用二进制模块进程入口（C 函数指针，供 pthread_create 使用）
 // ctx = strdup 出来的数据目录 C 字符串；线程长期存活（服务阻塞），故不 free。

@@ -878,6 +878,7 @@ void uloader_install_crash_probe(int fd) {
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);   // Go fatal / abort 路径（v0.3.121 补）
 }
 
 void uloader_unload(void *handle) {
