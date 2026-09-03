@@ -11,25 +11,19 @@
 //  注意：原生机型受代码签名限制，需 ldid 伪签名的 arm64 二进制；
 //  LC 环境下通常可直接运行。启动失败会以模块卡片错误形式反馈。
 //
-
 import Foundation
 import UIKit
-
 @MainActor
 final class BinaryModuleRunner: ObservableObject {
     static let shared = BinaryModuleRunner()
-
     /// 运行中的二进制模块：模块 id → pid（-2 = 进程内 dylib 模式）
     @Published private(set) var runningProcesses: [String: pid_t] = [:]
     /// 启动错误（模块 id → 信息）
     @Published private(set) var startErrors: [String: String] = [:]
     /// 进程内 dylib 模式的模块 id（无独立 pid，随宿主退出）
     @Published private(set) var inProcessModules: Set<String> = []
-
     private init() {}
-
     // MARK: 生命周期
-
     /// 应用启动 / 模块导入 / 启用后调用：拉起所有声明 autoStart 的已启用二进制模块
     func autoStartAll() {
         for module in ModuleService.shared.listModules() {
@@ -39,7 +33,6 @@ final class BinaryModuleRunner: ObservableObject {
             start(module: module)
         }
     }
-
     /// 启动模块二进制（全程后台：Go runtime 初始化 + 服务启动可能数秒，绝不占主线程）
     /// 方案 A：模块入口符号已静态链接进宿主 app（与 Sap* 共用单一 Go
     /// runtime，sap.h 直接暴露给 Swift）。进程内直接调用——无 dylib、无第二 runtime、
@@ -48,7 +41,6 @@ final class BinaryModuleRunner: ObservableObject {
     func start(module: EscapeModule, automatic: Bool = true) {
         guard let bin = module.binary else { return }
         guard runningProcesses[module.id] == nil else { return }
-
         // 崩溃循环守卫：若上一次启动后宿主没活到清除标记（8s），判定崩溃 → 跳过自启动，
         // 保证用户还能进 App 看日志/关模块（否则每次进入 2s 后必崩，永远改不回来）
         let flag = Self.inFlightKey(module.id)
@@ -61,22 +53,17 @@ final class BinaryModuleRunner: ObservableObject {
             return
         }
         UserDefaults.standard.set(true, forKey: flag)
-
         let dataDir = ModuleService.shared.dataURL(for: module.id)
         let logFile = ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log")
-
         // 撑过 8s 视为启动成功，清除崩溃标记
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
             UserDefaults.standard.set(false, forKey: flag)
         }
-
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             self.runBinaryModule(module, bin: bin, dataDir: dataDir, logFile: logFile)
         }
     }
-
-
     /// 通用入口发现：扫描模块 dylib 的符号表，找第一个 "*Main" 结尾的已定义符号。
     /// 这样引擎不需要知道任何模块的符号名（v0.3.112：彻底消除模块名硬编码）。
     nonisolated static func discoverEntrySymbol(moduleDir: URL, logFile: URL) -> String? {
@@ -95,9 +82,7 @@ final class BinaryModuleRunner: ObservableObject {
         }
         return names.first.map { $0.hasPrefix("_") ? String($0.dropFirst()) : $0 }
     }
-
     private static func inFlightKey(_ id: String) -> String { "Binary.startInFlight.\(id)" }
-
     /// 后台执行体（非隔离：Go 启动全在这里，状态写回走主线程）
     nonisolated private func runBinaryModule(
         _ module: EscapeModule, bin: BinaryConfig,
@@ -138,7 +123,6 @@ final class BinaryModuleRunner: ObservableObject {
             setError(module.id, "启动失败: \(error.localizedDescription)")
         }
     }
-
     /// 停止模块二进制（SIGKILL；进程内 dylib 模式随宿主退出，无法单独停止）
     func stop(module: EscapeModule) {
         guard let pid = runningProcesses[module.id] else { return }
@@ -150,20 +134,17 @@ final class BinaryModuleRunner: ObservableObject {
         runningProcesses[module.id] = nil
         print("[Binary][\(module.id)] 已停止 pid=\(pid)")
     }
-
     /// 运行状态查询
     func isRunning(module: EscapeModule) -> Bool {
         if inProcessModules.contains(module.id) { return true }
         guard let pid = runningProcesses[module.id], pid > 0 else { return false }
         return kill(pid, 0) == 0
     }
-
     /// WebUI 地址（binary.port + webPath）
     func webURL(for module: EscapeModule) -> URL? {
         guard let bin = module.binary, let port = bin.port else { return nil }
         return URL(string: "http://127.0.0.1:\(port)\(bin.webPath ?? "/")")
     }
-
     /// 打开 WebUI（浏览器）
     func openWebUI(module: EscapeModule) {
         guard let url = webURL(for: module) else { return }
@@ -171,7 +152,6 @@ final class BinaryModuleRunner: ObservableObject {
             UIApplication.shared.open(url)
         }
     }
-
 // MARK: 进程内启动（方案 A：单一 Go runtime，v0.3.73）
     /// 启动二进制模块（双形态统一入口）：
     /// ① 模块目录带 bin/*.dylib（可拆卸 zip 安装）→ dlopen + dlsym
@@ -182,12 +162,10 @@ final class BinaryModuleRunner: ObservableObject {
     /// 常驻保存用户态加载的镜像句柄（不卸载：Go runtime 必须存活）
     private static let uloaderLock = NSLock()
     private nonisolated(unsafe) static var cachedUloaderImage: UnsafeMutableRawPointer?
-
     nonisolated private static func cacheUloaderImage(_ img: UnsafeMutableRawPointer) {
         uloaderLock.lock(); defer { uloaderLock.unlock() }
         cachedUloaderImage = img
     }
-
     nonisolated private func startBinaryModule(moduleId: String, entrySymbol: String,
                                           dataDir: URL, logFile: URL, moduleDir: URL) throws {
         // fd 2 重定向：Go runtime 初始化阶段的 throw/fatal（先于任何 Go 代码）原本只写
@@ -199,7 +177,6 @@ final class BinaryModuleRunner: ObservableObject {
             close(fd)
         }
         appendLog(logFile, "[host] 调用 \(entrySymbol)（\(moduleId)模块，进程内）")
-
         var sym: UnsafeMutableRawPointer?
         var dylibName: String?
         var reSignErrorText: String?
@@ -295,14 +272,12 @@ final class BinaryModuleRunner: ObservableObject {
             parts.append("本 App 未内置 \(moduleId) 的 \(entrySymbol)，外部导入属正常现象")
             throw BinaryModuleError.spawnFailed(parts.joined(separator: "\n"))
         }
-
         // 数据目录以 strdup C 字符串 + 函数符号一起打包成线程上下文
         guard let dirC = strdup(dataDir.path) else {
             throw BinaryModuleError.spawnFailed("strdup 数据目录路径失败")
         }
         let ctx = BinaryModuleLaunchCtx(sym: fnSym, dir: dirC)
         appendLog(logFile, "[host] 调用 \(entrySymbol)\(dylibName.map { "（dylib: \($0)）" } ?? "（内置）")")
-
         var attr = pthread_attr_t()
         guard pthread_attr_init(&attr) == 0 else {
             throw BinaryModuleError.spawnFailed("pthread_attr_init 失败")
@@ -315,7 +290,6 @@ final class BinaryModuleRunner: ObservableObject {
             throw BinaryModuleError.spawnFailed("pthread_create 失败：\(rc)")
         }
     }
-
     /// 查找模块目录下 bin/*.dylib（可拆卸模块形态）
     nonisolated static func findDylib(moduleDir: URL) -> URL? {
         let binDir = moduleDir.appendingPathComponent("bin", isDirectory: true)
@@ -323,7 +297,6 @@ final class BinaryModuleRunner: ObservableObject {
             at: binDir, includingPropertiesForKeys: nil) else { return nil }
         return items.first { $0.pathExtension.lowercased() == "dylib" }
     }
-
     /// dylib 句柄缓存（SSH 诊断命令复用；故意不 dlclose——Go runtime 必须常驻）
     /// nonisolated(unsafe)：@MainActor 类的存储属性不能直接 nonisolated；
     /// 访问全部经由 handleLock 保护的存取器，实际无竞争。
@@ -339,17 +312,14 @@ final class BinaryModuleRunner: ObservableObject {
         let logFile = moduleDir.appendingPathComponent("run.log")
         func note(_ line: String) {
             // 便于诊断：解析失败原因直接落模块的 run.log（卡片「日志」按钮可见）
-            let text = "[\(DateFormatter.logStamp)] [resolve] \(line)
-"
+            let text = "[\(DateFormatter.logStamp)] [resolve] \(line)\n"
             if let fh = FileHandle(forWritingAtPath: logFile.path) {
                 fh.seekToEndOfFile(); fh.write(text.data(using: .utf8)!); try? fh.close()
             } else {
                 try? text.data(using: .utf8)?.write(to: logFile)
             }
         }
-
         if let h = cachedBinaryModuleHandle, let s = dlsym(h, name) { return s }
-
         if let dylib = findDylib(moduleDir: moduleDir) {
             if let h = dlopen(dylib.path, RTLD_NOW | RTLD_GLOBAL) {
                 cacheBinaryModuleHandle(h)
@@ -375,7 +345,6 @@ final class BinaryModuleRunner: ObservableObject {
         }
         return dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)   // RTLD_DEFAULT：内置静态
     }
-
     /// 端口占用检测（本机回环，connect 立即返回）
     nonisolated private func isPortInUse(_ port: UInt16) -> Bool {
         var addr = sockaddr_in()
@@ -392,7 +361,6 @@ final class BinaryModuleRunner: ObservableObject {
         }
         return r == 0
     }
-
     /// 追加宿主侧日志到模块 run.log（与子进程 stdout/stderr 同文件）
     nonisolated private func appendLog(_ logFile: URL, _ line: String) {
         let text = "[\(DateFormatter.logStamp)] \(line)\n"
@@ -404,7 +372,6 @@ final class BinaryModuleRunner: ObservableObject {
             try? text.data(using: .utf8)!.write(to: logFile)
         }
     }
-
     // MARK: 状态写回（主线程队列）
     nonisolated private func setRunningInProcess(_ id: String) {
         DispatchQueue.main.async {
@@ -429,7 +396,6 @@ final class BinaryModuleRunner: ObservableObject {
         }
     }
 }
-
 private extension DateFormatter {
     static let logStamp: DateFormatter = {
         let f = DateFormatter()
@@ -437,16 +403,13 @@ private extension DateFormatter {
         return f
     }()
 }
-
 // MARK: 通用二进制模块进程入口（C 函数指针，供 pthread_create 使用）
 // ctx = strdup 出来的数据目录 C 字符串；线程长期存活（服务阻塞），故不 free。
 // 数据目录必须走参数：Go 在 runtime 初始化时已快照 environ，事后 setenv 对
 // os.Getenv 不可见（v0.3.78 闪退根因）。
 // MARK: 通用二进制模块进程入口（C 函数指针，供 pthread_create 使用）
-
 /// 通用二进制模块入口函数 C 签名（Go: func Main(dataDirC *C.char) C.int）
 private typealias BinaryEntryFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Int32
-
 /// pthread 线程上下文：解析好的函数符号 + strdup 的数据目录。
 /// 线程长期存活（服务阻塞），ctx 与 dir 均故意不释放。
 private final class BinaryModuleLaunchCtx {
@@ -461,16 +424,13 @@ private final class BinaryModuleLaunchCtx {
         return fn(dir)
     }
 }
-
 private let openlistEntry: @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? = { ctx in
     let c = Unmanaged<BinaryModuleLaunchCtx>.fromOpaque(ctx).takeRetainedValue()
     _ = c.call()   // Go runtime 首次调用时初始化；阻塞服务，永不返回
     return nil
 }
-
 enum BinaryModuleError: LocalizedError {
     case spawnFailed(String)
-
     var errorDescription: String? {
         switch self {
         case .spawnFailed(let m): return m  // 不加前缀——setError 处统一加
