@@ -393,8 +393,14 @@ final class ModuleService {
             manifestDir = ""                          // zip 根
         }
         // 安装根 = module.json 所在目录（支持任意嵌套：modules/<id>/、module-esc-main/modules/<id>/ 均可）
-        let extractedRoot = tmp.appendingPathComponent(
-            manifestDir.isEmpty ? "." : String(manifestDir.dropLast()), isDirectory: true)
+        // ⚠️ 根级 module.json 时 manifestDir 为空 → 直接用 tmp 本身，
+        //    不能拼出 "tmp/."（"/." 后缀会让 moveItem 报"未能将 . 移到…"——v0.3.99 实测）
+        let extractedRoot: URL
+        if manifestDir.isEmpty {
+            extractedRoot = tmp
+        } else {
+            extractedRoot = tmp.appendingPathComponent(String(manifestDir.dropLast()), isDirectory: true)
+        }
 
         // 热补丁 / 二进制模块必须携带官方签名（signature.sig = 对 module.json 的 ed25519 签名 base64 文本）
         if module.isHotfixModule || module.isBinaryModule {

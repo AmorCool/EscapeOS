@@ -136,7 +136,8 @@ enum MachoReSign {
         w32(0xfade0c02)
         w32(0)                    // length 占位 → b[24..28]
         w32(0x20400)              // version
-        w32(0)                    // flags
+        w32(0x2)                  // flags = CS_ADHOC（无 CMS，纯哈希校验必须带此标志，
+                                  //   否则验证器走证书链路径 → "code signature invalid"）
         w32(hashOffset)           // hashOffset（相对 cd）
         w32(cdIdentRel)           // identOffset（相对 cd，先占位同值）
         w32(0)                    // nSpecialSlots
