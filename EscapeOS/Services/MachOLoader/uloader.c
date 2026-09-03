@@ -25,6 +25,22 @@
 
 #include "uloader.h"
 
+// iOS 15+ 新格式：chained fixups（本模块 dylib 用的就是它，没有 LC_DYLD_INFO）
+#define LC_DYLD_CHAINED_FIXUPS_       0x80000034
+#define LC_DYLD_CHAINED_FIXUPS_PLAIN  0x34
+#define DYLD_CHAINED_PTR_START_NONE   0xFFFF
+#define DYLD_CHAINED_PTR_START_MULTI  0x8000
+
+// 实测位布局（真实 dylib 解码验证，pointer_format=6、stride 8）：
+//   bit63      = bind 标志（1=bind，0=rebase）
+//   bits52-62  = next（stride 个数）
+//   bits0-51   = target（rebase 时为 vmaddr；bind 时为 imports 表索引）
+#define CHAIN_BIND_MASK    (1ULL << 63)
+#define CHAIN_TARGET_MASK  0x7FFFFFFFFFFFFULL
+#define CHAIN_NEXT_SHIFT   51
+#define CHAIN_NEXT_MASK    0xFFF
+
+
 #include <dlfcn.h>
 #include <libkern/OSByteOrder.h>
 #include <stdio.h>
@@ -86,7 +102,9 @@ struct uloader_image {
     uint64_t segFileOffs[16];
     uint32_t segCount;
 
-    // dyld info
+    // chained fixups（新格式）
+    uint32_t chainedOff, chainedSize;
+    // dyld info（旧格式，备用）
     const uint8_t *dyldInfo;
     uint32_t rebaseOff, rebaseSize, bindOff, bindSize, weakBindOff, weakBindSize,
              lazyBindOff, lazyBindSize, exportOff, exportSize;
@@ -456,6 +474,79 @@ static bool uloader_bind(struct uloader_image *img) {
     return true;
 }
 
+
+// ---- chained fixups（iOS 15+ 新格式；本模块 dylib 实际使用）----
+
+static bool uloader_chained_fixups(struct uloader_image *img) {
+    const uint8_t *cf = img->header + img->chainedOff;
+    uint32_t startsOff     = *(const uint32_t *)(cf + 4);
+    uint32_t importsOff    = *(const uint32_t *)(cf + 8);
+    uint32_t symbolsOff    = *(const uint32_t *)(cf + 12);
+    uint32_t importsCount  = *(const uint32_t *)(cf + 16);
+    uint32_t segCount      = *(const uint32_t *)cf;   // starts_in_image.seg_count
+
+    const uint8_t *starts = cf + startsOff;
+
+    for (uint32_t si = 0; si < segCount && si < 16; si++) {
+        uint32_t sio = *(const uint32_t *)(starts + 4 + si * 4);
+        if (sio == 0) continue;
+
+        const uint8_t *segInfo = starts + sio;
+        uint32_t pageSize      = *(const uint16_t *)(segInfo + 4);
+        uint64_t segmentOffset = *(const uint64_t *)(segInfo + 8);
+        uint16_t pageCount     = *(const uint16_t *)(segInfo + 18);
+        const uint16_t *pageStarts = (const uint16_t *)(segInfo + 22);
+        if (pageSize == 0) pageSize = 0x4000;
+
+        // 用段的文件偏移匹配到我们记录的段，从而拿到 vmaddr 基址
+        int segIdx = -1;
+        for (uint32_t i = 0; i < img->segCount; i++) {
+            if (img->segFileOffs[i] == segmentOffset) { segIdx = (int)i; break; }
+        }
+        if (segIdx < 0) continue;
+
+        for (uint32_t pg = 0; pg < pageCount; pg++) {
+            uint16_t ps = pageStarts[pg];
+            if (ps == DYLD_CHAINED_PTR_START_NONE) continue;
+            if (ps & DYLD_CHAINED_PTR_START_MULTI) continue;   // multi 起点暂不支持（本 dylib 未使用）
+
+            uint64_t offsetInPage = ps;
+            while (true) {
+                uint64_t loc = img->segVmAddrs[segIdx] + (uint64_t)img->slide
+                             + (uint64_t)pg * pageSize + offsetInPage;
+                uint64_t *slot = (uint64_t *)(uintptr_t)loc;
+                uint64_t val   = *slot;
+
+                bool isBind = (val & CHAIN_BIND_MASK) != 0;
+                uint64_t target = val & CHAIN_TARGET_MASK;
+                uint32_t next   = (uint32_t)((val >> CHAIN_NEXT_SHIFT) & CHAIN_NEXT_MASK);
+
+                if (isBind) {
+                    if (target >= importsCount) { set_error(img, "（chain）imports 索引越界"); return false; }
+                    uint32_t w = *(const uint32_t *)(cf + importsOff + (uint32_t)target * 4);
+                    uint32_t nameOff = w >> 9;   // lib_ordinal:8 + weak:1
+                    const char *symName = (const char *)(cf + symbolsOff + nameOff);
+                    const char *lookup = (symName[0] == '_') ? (symName + 1) : symName;
+                    void *sym = dlsym(RTLD_DEFAULT, lookup);
+                    if (!sym) {
+                        snprintf(img->lastError, sizeof(img->lastError),
+                                 "（chain）符号未找到: %s", lookup);
+                        return false;
+                    }
+                    *slot = (uint64_t)(uintptr_t)sym;
+                } else {
+                    *slot = target + (uint64_t)img->slide;
+                }
+
+                if (next == 0) break;
+                offsetInPage += (uint64_t)next * 8;    // stride 8
+                if (offsetInPage >= pageSize) break;   // 链走出本页即结束
+            }
+        }
+    }
+    return true;
+}
+
 // ---- 构造器（__mod_init_func）----
 
 static void uloader_run_initializers(struct uloader_image *img) {
@@ -552,6 +643,10 @@ void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {
             img->weakBindOff = dic->weak_bind_off; img->weakBindSize = dic->weak_bind_size;
             img->lazyBindOff = dic->lazy_bind_off; img->lazyBindSize = dic->lazy_bind_size;
             img->exportOff = dic->export_off;    img->exportSize = dic->export_size;
+        } else if (lc->cmd == LC_DYLD_CHAINED_FIXUPS_ || lc->cmd == LC_DYLD_CHAINED_FIXUPS_PLAIN) {
+            const struct linkedit_data_command *ldc = (const struct linkedit_data_command *)ptr;
+            img->chainedOff = ldc->dataoff;
+            img->chainedSize = ldc->datasize;
         } else if (lc->cmd == LC_SYMTAB) {
             const struct symtab_command *st = (const struct symtab_command *)ptr;
             img->symtab = (const struct nlist_64 *)(img->header + st->symoff);
@@ -561,15 +656,19 @@ void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {
         ptr += lc->cmdsize;
     }
 
-    if (!img->dyldInfo) {
+    if (!img->dyldInfo && img->chainedOff == 0) {
         munmap(img->fileMap, img->fileSize); close(img->fd); free(img);
-        if (errBuf) snprintf(errBuf, errBufSize, "无 LC_DYLD_INFO（无法重定位）");
+        if (errBuf) snprintf(errBuf, errBufSize, "既无 LC_DYLD_INFO 也无 LC_DYLD_CHAINED_FIXUPS（无法重定位）");
         return NULL;
     }
 
     if (!uloader_map_segments(img)) goto fail;
-    if (!uloader_rebase(img)) goto fail;
-    if (!uloader_bind(img)) goto fail;
+    if (img->chainedOff != 0) {
+        if (!uloader_chained_fixups(img)) goto fail;
+    } else {
+        if (!uloader_rebase(img)) goto fail;
+        if (!uloader_bind(img)) goto fail;
+    }
     uloader_run_initializers(img);
 
     return img;
