@@ -1,5 +1,4 @@
 pub mod lua_host;
-pub mod mcinstall;
 // Jackson Coxson
 
 #[cfg(feature = "tunnel_tcp_stack")]
