@@ -181,7 +181,8 @@ pub extern "C" fn lua_host_set_wifi_power_fn(f: Option<WifiPowerFn>) {
 
 fn wifi_set_power_via_tunnel(on: bool) -> Option<String> {
     let f = (*WIFI_FN.lock().unwrap())?;
-    let rc = unsafe { f(if on { 1 } else { 0 }) };
+    let func = unsafe { std::mem::transmute::<usize, WifiPowerFn>(f) };
+    let rc = unsafe { func(if on { 1 } else { 0 }) };
     Some(if rc == 0 {
         format!("ok: 隧道 SetWiFiPowerState({})", on)
     } else {

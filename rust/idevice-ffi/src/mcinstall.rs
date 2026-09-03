@@ -43,15 +43,15 @@ impl McInstallClient {
         self.stream
             .write_all(&len.to_be_bytes())
             .await
-            .map_err(|e| IdeviceError::Unknown(Box::new(e)))?;
+            .map_err(|e| IdeviceError::UnexpectedResponse(format!("IO: {}", e)))?;
         self.stream
             .write_all(xml.as_bytes())
             .await
-            .map_err(|e| IdeviceError::Unknown(Box::new(e)))?;
+            .map_err(|e| IdeviceError::UnexpectedResponse(format!("IO: {}", e)))?;
         self.stream
             .flush()
             .await
-            .map_err(|e| IdeviceError::Unknown(Box::new(e)))?;
+            .map_err(|e| IdeviceError::UnexpectedResponse(format!("IO: {}", e)))?;
         Ok(())
     }
 
@@ -61,7 +61,7 @@ impl McInstallClient {
         self.stream
             .read_exact(&mut len_buf)
             .await
-            .map_err(|e| IdeviceError::Unknown(Box::new(e)))?;
+            .map_err(|e| IdeviceError::UnexpectedResponse(format!("IO: {}", e)))?;
         let len = u32::from_be_bytes(len_buf) as usize;
         if len == 0 || len > 4 * 1024 * 1024 {
             return Err(IdeviceError::UnexpectedResponse(format!(
@@ -73,7 +73,7 @@ impl McInstallClient {
         self.stream
             .read_exact(&mut body)
             .await
-            .map_err(|e| IdeviceError::Unknown(Box::new(e)))?;
+            .map_err(|e| IdeviceError::UnexpectedResponse(format!("IO: {}", e)))?;
         String::from_utf8(body)
             .map_err(|e| IdeviceError::UnexpectedResponse(format!("plist 非 UTF-8: {}", e)))
     }
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn mcinstall_connect_rsd(
     let res: Result<McInstallClient, IdeviceError> = run_sync_local(async move {
         let provider_ref = unsafe { &mut (*provider).0 };
         let handshake_ref = unsafe { &mut (*handshake).0 };
-        McInstallClient::connect_rsd(provider_ref, handshake_ref).await
+        <McInstallClient as idevice::RsdService>::connect_rsd(provider_ref, handshake_ref).await
     });
 
     match res {
