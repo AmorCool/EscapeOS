@@ -56,6 +56,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 // dyld 重定位/绑定 opcode（dyld_info 标准值）
 #define REBASE_OPCODE_MASK                  0xF0
