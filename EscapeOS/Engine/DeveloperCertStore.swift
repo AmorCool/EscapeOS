@@ -67,7 +67,7 @@ final class DeveloperCertStore: ObservableObject {
     // MARK: - 完整流程：生成 → 提交 Apple → 存储证书
 
     /// 从存储的登录凭据构造 session（CertificateManager 同款）。
-    private func makeSession() -> AppleAPISession? {
+    @MainActor private func makeSession() -> AppleAPISession? {
         let settings = MemoryLimitSettings.shared
         guard let dsid = settings.dsid, let authToken = settings.authToken else { return nil }
         return AppleAPISession(dsid: dsid, authToken: authToken,
@@ -81,7 +81,7 @@ final class DeveloperCertStore: ObservableObject {
     /// 设置页入口：用已登录的 Apple ID 创建开发证书并存储。
     /// （未登录抛错提示先登录；同 Apple ID 新证书 TeamID 相同 → 库验证通过）
     func createCertificateWithStoredAccount() async throws {
-        guard let session = makeSession() else {
+        guard let session = await MainActor.run(body: { makeSession() }) else {
             throw NSError(domain: "DeveloperCert", code: -3,
                           userInfo: [NSLocalizedDescriptionKey: "请先在上方登录 Apple ID"])
         }
