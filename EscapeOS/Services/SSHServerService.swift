@@ -458,7 +458,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                       let s2 = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListStep2", moduleDir: moduleDir),
                       let s3 = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListStep3", moduleDir: moduleDir),
                       let s4 = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListStep4", moduleDir: moduleDir) else {
-                    return "❌ OpenListStep* 符号未找到（请确认 \(moduleId) 模块已从 module-esc 导入）"
+                    return "❌ OpenListStep* 符号未找到（请确认模块已从 module-esc 导入）"
                 }
                 let fns = [unsafeBitCast(s1, to: DirFn.self), unsafeBitCast(s2, to: DirFn.self),
                            unsafeBitCast(s3, to: DirFn.self), unsafeBitCast(s4, to: DirFn.self)]
@@ -501,7 +501,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 let chars = "abcdefghjkmnpqrstuvwxyz23456789"
                 let pwd = String((0..<8).map { _ in chars.randomElement()! })
                 guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol("OpenListAdminSet", moduleDir: moduleDir) else {
-                    return "❌ OpenListAdminSet 符号未找到（请确认 \(moduleId) 模块已从 module-esc 导入）"
+                    return "❌ OpenListAdminSet 符号未找到（请确认模块已从 module-esc 导入）"
                 }
                 let fn = unsafeBitCast(sym, to: AdminFn.self)
                 let box = GoCallBox {
