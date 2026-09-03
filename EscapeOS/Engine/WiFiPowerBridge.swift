@@ -241,3 +241,14 @@ final class WiFiPowerBridge {
         }
     }
 }
+
+/// 注册进 Lua 宿主的原生 handler（C 函数指针；由 Rust wifi_set_power 回调）。
+/// 无捕获 @convention(c) 闭包 —— 阻塞当前线程（Lua 宿主工作线程）直至隧道操作完成。
+let escapeos_wifi_power_cfn: @convention(c) (Int32) -> Int32 = { on in
+    do {
+        try WiFiPowerBridge.shared.performPower(on == 1)
+        return 0
+    } catch {
+        return -1
+    }
+}
