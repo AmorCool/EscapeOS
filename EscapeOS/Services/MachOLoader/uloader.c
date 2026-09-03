@@ -102,6 +102,8 @@ struct uloader_image {
     uint64_t segFileOffs[16];
     uint32_t segCount;
 
+    // 代码签名 blob（供 F_ADDFILESIGS_RETURN 登记）
+    uint32_t codeSigOff, codeSigSize;
     // chained fixups（新格式）
     uint32_t chainedOff, chainedSize;
     // dyld info（旧格式，备用）
@@ -718,6 +720,10 @@ void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {
             const struct linkedit_data_command *ldc = (const struct linkedit_data_command *)ptr;
             img->chainedOff = ldc->dataoff;
             img->chainedSize = ldc->datasize;
+        } else if (lc->cmd == LC_CODE_SIGNATURE) {
+            const struct linkedit_data_command *cs = (const struct linkedit_data_command *)ptr;
+            img->codeSigOff = cs->dataoff;
+            img->codeSigSize = cs->datasize;
         } else if (lc->cmd == LC_SYMTAB) {
             const struct symtab_command *st = (const struct symtab_command *)ptr;
             img->symtab = (const struct nlist_64 *)(img->header + st->symoff);
@@ -731,6 +737,31 @@ void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {
         munmap(img->fileMap, img->fileSize); close(img->fd); free(img);
         if (errBuf) snprintf(errBuf, errBufSize, "既无 LC_DYLD_INFO 也无 LC_DYLD_CHAINED_FIXUPS（无法重定位）");
         return NULL;
+    }
+
+    // ★ 映射前必须向内核登记签名（移植自 Nyxian kxld/validation.c）：
+    //   iOS 不允许以 PROT_EXEC 映射未登记签名的文件——这正是 dlopen 与裸 mmap
+    //   双双失败的根因。F_ADDFILESIGS_RETURN 把文件的 CMS blob 交给内核登记，
+    //   F_CHECK_LV 做库校验；之后 mmap(PROT_EXEC) 才会被允许。
+    {
+        fsignatures_t siginfo = {
+            .fs_file_start = img->sliceOffset,
+            .fs_blob_start = (void *)(uintptr_t)img->codeSigOff,
+            .fs_blob_size  = img->codeSigSize,
+        };
+        fchecklv_t checkInfo = { .lv_file_start = img->sliceOffset, 0 };  /* 其余置零 */
+
+        if (fcntl(img->fd, F_ADDFILESIGS_RETURN, &siginfo) == -1) {
+            snprintf(img->lastError, sizeof(img->lastError),
+                     "（签名登记）F_ADDFILESIGS_RETURN 失败 errno=%d blob=0x%x/%u",
+                     errno, img->codeSigOff, img->codeSigSize);
+            goto fail;
+        }
+        if (fcntl(img->fd, F_CHECK_LV, &checkInfo) == -1) {
+            snprintf(img->lastError, sizeof(img->lastError),
+                     "（签名登记）F_CHECK_LV 失败 errno=%d", errno);
+            goto fail;
+        }
     }
 
     if (!uloader_map_segments(img)) goto fail;
