@@ -21,6 +21,11 @@ final class WiFiPowerBridge {
         return NSError(domain: "WiFiPower", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
+    private var pairingPath: String {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("pairingFile.plist").path
+    }
+
     private func stepLog(_ text: String) {
         let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Modules/com.escapeos.wifitoggle/data/wifi_bridge.log")
@@ -114,7 +119,7 @@ final class WiFiPowerBridge {
         stepLog("步骤2 隧道创建 ✓（IP=\(deviceIP)）")
 
         // 4) 所有权移交 Rust（此后 Swift 不再释放；Rust 用完自行释放）
-        lua_host_set_mcinstall_handles(adapter, handshake)
+        lua_host_set_mcinstall_handles(UnsafeMutableRawPointer(adapter), UnsafeMutableRawPointer(handshake))
         stepLog("步骤3 adapter/handshake 所有权已移交 Rust ✓")
     }
 }
