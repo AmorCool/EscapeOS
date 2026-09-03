@@ -657,6 +657,10 @@ struct EmptyStateView: View {
 struct SettingsForm: View {
     var onResetPairing: () -> Void
     @StateObject private var memorySettings = MemoryLimitSettings.shared
+    /// v0.3.122：开发证书状态观察（创建成功/失败即时刷新 UI）
+    @StateObject private var certStore = DeveloperCertStore.shared
+    @State private var certTask: Task<Void, Never>?
+    @State private var certError: String?
     @AppStorage("TunnelDeviceIP") private var tunnelIP: String = "10.7.0.1"
     @AppStorage("AnisetteServer") private var anisetteServer: String = "https://ani.stikstore.app"
     @State private var shareTarget: ShareTarget?
@@ -707,28 +711,30 @@ struct SettingsForm: View {
             }
 
             // v0.3.122：开发证书（原生可拆卸模块的签名信任链）
-            Section(header: Text("开发证书（原生模块）"), footer: Text("用已登录 Apple ID 的开发证书给原生模块签名（同 TeamID，免 JIT 加载）。OpenList 模块依赖此项。")) {
-                if DeveloperCertStore.shared.hasCert {
-                    Label("证书已创建\(DeveloperCertStore.shared.teamId.map { " · Team \($0)" } ?? "")",
+            Section(header: Text("开发证书（原生模块）"), footer: Text("用已登录 Apple ID 的开发证书给原生模块签名（同 TeamID，免 JIT 加载）。提示会话过期（1100）时，请在上方 Apple ID 账户重新登录。")) {
+                if certStore.hasCert {
+                    Label("证书已创建\(certStore.teamId.map { " · Team \($0)" } ?? "")",
                           systemImage: "checkmark.seal.fill")
                         .foregroundColor(.green)
-                    Button("重新创建证书") {
-                        Task {
-                            try? await DeveloperCertStore.shared.createCertificateWithStoredAccount()
-                        }
+                    Button {
+                        certTask = Task { await runCertCreation() }
+                    } label: {
+                        if certStore.isBusy { ProgressView() } else { Text("重新创建证书") }
                     }
+                    .disabled(certStore.isBusy)
                 } else {
                     Label("尚未创建开发证书", systemImage: "seal")
                         .foregroundColor(.secondary)
-                    Button("创建开发证书") {
-                        Task {
-                            try? await DeveloperCertStore.shared.createCertificateWithStoredAccount()
-                        }
+                    Button {
+                        certTask = Task { await runCertCreation() }
+                    } label: {
+                        if certStore.isBusy { ProgressView() } else { Text("创建开发证书") }
                     }
+                    .disabled(certStore.isBusy)
                 }
-                Toggle("免 JIT 模式（真证书签名加载）", isOn: Binding(
-                    get: { DeveloperCertStore.shared.jitFreeMode },
-                    set: { DeveloperCertStore.shared.jitFreeMode = $0 }))
+                Toggle("免 JIT 模式", isOn: Binding(
+                    get: { certStore.jitFreeMode },
+                    set: { certStore.jitFreeMode = $0 }))
             }
 
             Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）, 默认 ani.stikstore.app.")) {
@@ -809,6 +815,14 @@ struct SettingsForm: View {
         .sheet(isPresented: $showLoginLog) {
             LoginLogView()
         }
+        .alert("证书创建失败", isPresented: Binding(
+            get: { certError != nil },
+            set: { if !$0 { certError = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(certError ?? "")
+        }
         .sheet(item: $shareTarget) { target in
             ShareSheet(items: [target.url])
         }
@@ -816,6 +830,20 @@ struct SettingsForm: View {
             Button("好", role: .cancel) {}
         } message: {
             Text("当前没有可导出的 pairingFile.plist。请先导入或生成配对文件。")
+        }
+    }
+
+    /// v0.3.122：创建开发证书（错误不再吞掉——弹窗展示，1100 提示重新登录）
+    private func runCertCreation() async {
+        do {
+            try await DeveloperCertStore.shared.createCertificateWithStoredAccount()
+        } catch {
+            let desc = (error as NSError).localizedDescription
+            if desc.contains("1100") || desc.lowercased().contains("session has expired") {
+                certError = "会话已过期，请在上方「Apple ID 账户」重新登录后再试"
+            } else {
+                certError = desc
+            }
         }
     }
 
