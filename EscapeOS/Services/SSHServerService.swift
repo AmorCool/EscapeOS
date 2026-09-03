@@ -426,14 +426,24 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                      + "   详情: runlog 25"
             }
 
+            // v0.3.120：与 start 路径对齐——stderr 重定向 + 崩溃探针（硬故障落盘）
+            let goErr = dataDir.appendingPathComponent("go_stderr.log")
+            let efd = open(goErr.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+            if efd >= 0 {
+                dup2(efd, STDERR_FILENO)
+                close(efd)
+            }
+            uloader_install_crash_probe(STDERR_FILENO)
             typealias DirFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Int32
             let fn = unsafeBitCast(sym, to: DirFn.self)
+            let bytes = sym.assumingMemoryBound(to: UInt8.self)
+            let codeHex = (0..<16).map { String(format: "%02x", bytes[$0]) }.joined(separator: " ")
             let box = GoCallBox {
                 dataDir.path.withCString { cstr in fn(UnsafeMutablePointer(mutating: cstr)) }
             }
             box.run(timeout: 3, keepAlive: true)
             let resultText = box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）"
-            return "\(symName): 已调用（数据目录以参数传入）\n结果: \(resultText)\n下一步: runlog 查看模块日志"
+            return "\(symName): 已调用（数据目录以参数传入）\n入口=\(sym) 前16字节: \(codeHex)\n结果: \(resultText)\n下一步: runlog 查看模块日志；若闪退见 go_stderr.log 的 [uloader-crash] 行"
 
         case "mlog":
             // 读模块数据目录下的任意文件。

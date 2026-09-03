@@ -176,6 +176,7 @@ final class BinaryModuleRunner: ObservableObject {
             dup2(fd, STDERR_FILENO)
             close(fd)
         }
+        uloader_install_crash_probe(STDERR_FILENO)   // v0.3.120：硬故障诊断落盘
         appendLog(logFile, "[host] 调用 \(entrySymbol)（\(moduleId)模块，进程内）")
         var sym: UnsafeMutableRawPointer?
         var dylibName: String?

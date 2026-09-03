@@ -33,6 +33,9 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #include "sap.h"
 #include "../Services/MachOLoader/uloader.h"
 
+// 崩溃探针：把硬故障（SIGSEGV/BUS/ILL/FPE）的 信号/地址/PC 写入 fd 后重抛
+void uloader_install_crash_probe(int fd);
+
 // ZSign ad-hoc 重签名（v0.3.101：LC/Nyxian 同款引擎，编进 App；对副本就地重签）
 int zsign_adhoc_file(const char *path, const char *bundleId, const char *entXml, int entLen);
 

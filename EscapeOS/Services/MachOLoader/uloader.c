@@ -56,6 +56,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <signal.h>
 #include <fcntl.h>
 
 // dyld 重定位/绑定 opcode（dyld_info 标准值）
@@ -829,6 +830,54 @@ void *uloader_symbol(void *handle, const char *name) {
         }
     }
     return NULL;
+}
+
+
+// ---- 崩溃探针（v0.3.120）：闪退发生在模块入口内部且 stderr 无输出（硬故障）。
+// 安装处理器把 信号/故障地址/PC/LR/SP 写入 fd（= go_stderr.log），随后恢复默认
+// 并重抛——进程仍按原样崩溃，但诊断信息已落盘。仅 write()，async-signal-safe。
+static int g_diagFD = -1;
+
+static void uloader_crash_handler(int sig, siginfo_t *si, void *ucv) {
+    if (g_diagFD >= 0) {
+        ucontext_t *uc = (ucontext_t *)ucv;
+        uint64_t pc = uc->uc_mcontext->__ss.__pc;
+        uint64_t lr = uc->uc_mcontext->__ss.__lr;
+        uint64_t sp = uc->uc_mcontext->__ss.__sp;
+        uint64_t fa = (uint64_t)si->si_addr;
+        char buf[256];
+        size_t n = 0;
+        const char *pfx = "\n[uloader-crash] sig=";
+        for (const char *q = pfx; *q && n < sizeof(buf) - 1; q++) buf[n++] = *q;
+        if (sig >= 10) buf[n++] = (char)('0' + sig / 10);
+        buf[n++] = (char)('0' + sig % 10);
+        const char *hex = "0123456789abcdef";
+        struct { const char *name; uint64_t v; } items[4] = {
+            {" addr=0x", fa}, {" pc=0x", pc}, {" lr=0x", lr}, {" sp=0x", sp},
+        };
+        for (int i = 0; i < 4; i++) {
+            for (const char *q = items[i].name; *q && n < sizeof(buf) - 20; q++) buf[n++] = *q;
+            for (int sh = 60; sh >= 0 && n < sizeof(buf) - 4; sh -= 4)
+                buf[n++] = hex[(items[i].v >> sh) & 0xF];
+        }
+        buf[n++] = '\n';
+        write(g_diagFD, buf, (size_t)n);
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+void uloader_install_crash_probe(int fd) {
+    g_diagFD = fd;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = uloader_crash_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGILL, &sa, NULL);
+    sigaction(SIGFPE, &sa, NULL);
 }
 
 void uloader_unload(void *handle) {
