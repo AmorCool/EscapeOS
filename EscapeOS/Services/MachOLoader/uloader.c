@@ -42,6 +42,7 @@
 
 
 #include <dlfcn.h>
+#include <errno.h>
 #include <libkern/OSByteOrder.h>
 #include <stdio.h>
 #include <fcntl.h>
