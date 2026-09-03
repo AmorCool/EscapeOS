@@ -104,7 +104,7 @@ final class BinaryModuleRunner: ObservableObject {
             return
         }
         do {
-            try startOpenList(dataDir: dataDir, logFile: logFile, moduleDir: ModuleService.shared.installURL(for: module.id))
+            try startOpenList(dataDir: dataDir, logFile: logFile, moduleDir: ModuleService.shared.installURL(for: module.id), bundleId: module.id)
             appendLog(logFile, "[host] 进程内启动成功（随宿主退出）")
             setRunningInProcess(module.id)
         } catch {
@@ -153,7 +153,7 @@ final class BinaryModuleRunner: ObservableObject {
     /// ③ 都没有 → 报错提示安装模块 zip
     /// 数据目录一律以**参数**传给 Go（Go env 在 runtime 初始化时已快照，setenv 事后不可见）；
     /// fd 2 重定向到 data/go_stderr.log 抓 Go runtime 临终输出；8MB 大栈 pthread 承载入口。
-    nonisolated private func startOpenList(dataDir: URL, logFile: URL, moduleDir: URL) throws {
+    nonisolated private func startOpenList(dataDir: URL, logFile: URL, moduleDir: URL, bundleId: String) throws {
         setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底（dylib 场景 runtime 初始化在 dlopen 时，setenv 先于它则可见）
         // fd 2 重定向：Go runtime 初始化阶段的 throw/fatal（先于任何 Go 代码）原本只写
         // 进程 stderr，LC 下直接丢失——重定向到文件后 SSH `mlog go_stderr.log` 可见。
@@ -182,7 +182,7 @@ final class BinaryModuleRunner: ObservableObject {
                 do {
                     // v0.3.100：写到全新文件（新 vnode）——内核按 vnode 缓存校验判决，
                     // 原地重签不失效缓存（Nyxian 同款解法：vnode_recover 到新路径）。
-                    let newURL = try MachoReSign.rebuildToNewFile(at: dylibURL)
+                    let newURL = try MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: bundleId)
                     appendLog(logFile, "[host] 重建完成: \(newURL.lastPathComponent)，重试 dlopen")
                     if let h = dlopen(newURL.path, RTLD_NOW | RTLD_GLOBAL) {
                         handle = h

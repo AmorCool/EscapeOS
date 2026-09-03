@@ -32,6 +32,9 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // libsap.a / sap.h 由 sapbridge/build-sap.sh 在编译前生成，位于 sapbridge/build/。
 #include "sap.h"
 
+// ZSign ad-hoc 重签名（v0.3.101：LC/Nyxian 同款引擎，编进 App；对副本就地重签）
+int zsign_adhoc_file(const char *path, const char *bundleId, const char *entXml, int entLen);
+
 
 // 监督模式工具：通过私有 API 取已安装 App 图标（移植自 Lithium）
 @interface UIImage (EscapeOSSupervised)

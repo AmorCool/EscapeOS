@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.100"
-    CURRENT_PROJECT_VERSION: "400"
+    MARKETING_VERSION: "0.3.101"
+    CURRENT_PROJECT_VERSION: "401"
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     ENABLE_BITCODE: "NO"
@@ -44,6 +44,10 @@ settings:
       - "$(SRCROOT)/EscapeOS/Tunnel"
       # SAP 签名桥（PR #525 纯软件 Unicorn 移植）：sap.h 由 build-sap.sh 在编译前生成于此
       - "$(SRCROOT)/sapbridge/build"
+      # ZSign 引擎（v0.3.101）+ CI 预编译的 OpenSSL 头文件
+      - "$(SRCROOT)/ZSign"
+      - "$(SRCROOT)/ZSign/common"
+      - "$(SRCROOT)/openssl-build/include"
     # 对齐 Theos 的 LDFLAGS：系统 framework。
     # Rust FFI（libidevice_ffi）自 #317 起改以 xcframework 形式分发，由下方 target
     # dependencies 的 framework 依赖链接（不再走 LIBRARY_SEARCH_PATHS + -lidevice_ffi）。
@@ -63,6 +67,9 @@ settings:
       - "-L$(SRCROOT)/sapbridge/build"
       - "-lsap"
       - "-lunicorn"
+      # ZSign（v0.3.101）：ad-hoc 重签名依赖 libcrypto（CI 预编译 iOS arm64 静态库）
+      - "-L$(SRCROOT)/openssl-build"
+      - "-lcrypto"
     SWIFT_OBJC_BRIDGING_HEADER: "EscapeOS/Engine/EscapeOS-Bridging-Header.h"
 
 packages:
@@ -102,6 +109,8 @@ targets:
         basedOnDependencyAnalysis: false
     sources:
       - path: EscapeOS
+      # ZSign 引擎（LC 同款签名器，v0.3.101：ad-hoc 重签名可拆卸 dylib 模块）
+      - path: ZSign
       - path: Resources
         # 把 Resources/ 内资源（AppIcon PNG、Supervised 的 .mobileconfig、solarium.jpg 等）
         # 打进 .app bundle。此前漏把 Resources/ 纳入 xcodegen source 树，导致切到 Xcode 后
