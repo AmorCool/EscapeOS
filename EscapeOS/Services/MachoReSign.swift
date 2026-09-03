@@ -96,7 +96,7 @@ enum MachoReSign {
 
         // 新文件路径（全新 vnode）；清理旧副本防配额累积
         let dir = original.deletingLastPathComponent()
-        if let olds = try? FileManager.default.contentsOfDirectory(at: dir) {
+        if let olds = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
             for f in olds where f.lastPathComponent.contains("-rs-") { try? FileManager.default.removeItem(at: f) }
         }
         let uid = UUID().uuidString.prefix(8)
@@ -114,7 +114,7 @@ enum MachoReSign {
         var patchedDatasize = false
         src.seek(toFileOffset: 0)
         while copied < Int64(sigOff + sigSize) {
-            let toRead = min(1024 * 1024, Int(sigOff + sigSize - copied))
+            let toRead = min(1024 * 1024, Int(Int64(sigOff + sigSize) - copied))
             guard toRead > 0 else { break }
             let chunk = try src.readData(ofLength: toRead)
             guard chunk.count == toRead else { throw ReSignError.ioFailure("读块失败 @\(copied)") }
