@@ -146,7 +146,7 @@ pub unsafe extern "C" fn mcinstall_connect_rsd(
     let res: Result<McInstallClient, IdeviceError> = run_sync_local(async move {
         let provider_ref = unsafe { &mut (*provider).0 };
         let handshake_ref = unsafe { &mut (*handshake).0 };
-        <McInstallClient as idevice::RsdService>::connect_rsd(provider_ref, handshake_ref).await
+        McInstallClient::connect_rsd(provider_ref, handshake_ref).await
     });
 
     match res {
