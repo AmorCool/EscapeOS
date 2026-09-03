@@ -13,7 +13,7 @@ use std::os::raw::{c_char, c_int};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 
-use idevice::{IdeviceError, ReadWrite, pairing_file::PairingFile, LockdownClient};
+use idevice::{IdeviceError, ReadWrite, pairing_file::PairingFile, services::lockdown::LockdownClient};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{core_device_proxy::AdapterHandle, rsd::RsdHandshakeHandle, IdeviceFfiError};
