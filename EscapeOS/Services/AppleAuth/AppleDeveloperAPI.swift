@@ -26,6 +26,8 @@ struct DeveloperCertificate: Identifiable, Hashable {
     let name: String
     let serialNumber: String
     let machineName: String
+    /// 证书内容（plist <data> → DER）；仅列表接口返回，可能为 nil
+    let certContent: Data?
     let certificateId: String
     let platform: String
     let status: String
@@ -248,10 +250,19 @@ enum AppleDeveloperAPI {
             } else {
                 expiration = nil
             }
+            let certContent: Data?
+            if let dataObj = d["certContent"] as? Data {
+                certContent = dataObj
+            } else if let b64 = d["certContent"] as? String {
+                certContent = Data(base64Encoded: b64)
+            } else {
+                certContent = nil
+            }
             return DeveloperCertificate(
                 name: s("name"),
                 serialNumber: s("serialNumber"),
                 machineName: s("machineName"),
+                certContent: certContent,
                 certificateId: s("certificateId"),
                 platform: s("certificatePlatform"),
                 status: s("status"),

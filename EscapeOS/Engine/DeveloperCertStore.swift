@@ -89,6 +89,8 @@ final class DeveloperCertStore: ObservableObject {
     }
 
     /// 用已登录的 Apple ID 创建开发证书并存储（同 Apple ID 团队 → 库验证通过）。
+    /// Apple 现为**异步签发**：submit 只返回受理（certRequest 无证书内容），
+    /// 需轮询证书列表等新证书出现后取其 certContent。
     func createCertificate(session: AppleAPISession) async throws {
         guard !isBusy else { return }
         await MainActor.run { isBusy = true; lastError = nil }
@@ -100,14 +102,32 @@ final class DeveloperCertStore: ObservableObject {
                 throw NSError(domain: "DeveloperCert", code: -2,
                               userInfo: [NSLocalizedDescriptionKey: "账号下没有开发者团队"])
             }
-            // 2) 本机密钥 + CSR（完整 PEM，含头尾——Apple 端点要求原样提交）
+            // 2) 提交前记录已有序列号（用于识别新证书）
+            let before = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
+            let knownSerials = Set(before.map { $0.serialNumber })
+            // 3) 本机密钥 + CSR（完整 PEM，含头尾——Apple 端点要求原样提交）
             let csrPem = try generateKeyAndCSR()
-            // 3) 提交 Apple（csrContent = 完整 PEM 字符串）
+            // 4) 提交 Apple（异步受理：响应只含 certRequest 元数据，无证书内容）
             let machineName = (UIDevice.current.name)
-            let certDER = try await AppleDeveloperAPI.submitSigningCertificate(
+            _ = try await AppleDeveloperAPI.submitSigningCertificate(
                 team: team, csrPEM: csrPem, machineName: machineName, session: session)
-            // 4) DER → PEM 存储
-            let der64 = certDER.base64EncodedString()
+            // 5) 轮询证书列表（最多 30 秒）等新证书出现并取其内容
+            var newCert: DeveloperCertificate?
+            for attempt in 1...10 {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
+                newCert = list.first { !knownSerials.contains($0.serialNumber) && $0.certContent != nil }
+                if let c = newCert {
+                    LoginLogger.shared.log("✓ 新证书已签发（第 \(attempt) 次轮询，serial=\(c.serialNumber)）")
+                    break
+                }
+            }
+            guard let cert = newCert, let der = cert.certContent else {
+                throw NSError(domain: "DeveloperCert", code: -4,
+                              userInfo: [NSLocalizedDescriptionKey: "证书签发处理超时（30 秒），请稍后在「证书管理」查看并重试"])
+            }
+            // 6) DER → PEM 存储
+            let der64 = der.base64EncodedString()
             var pem = "-----BEGIN CERTIFICATE-----\n"
             var idx = der64.startIndex
             while idx < der64.endIndex {
