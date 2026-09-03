@@ -153,6 +153,15 @@ final class BinaryModuleRunner: ObservableObject {
     /// ③ 都没有 → 报错提示安装模块 zip
     /// 数据目录一律以**参数**传给 Go（Go env 在 runtime 初始化时已快照，setenv 事后不可见）；
     /// fd 2 重定向到 data/go_stderr.log 抓 Go runtime 临终输出；8MB 大栈 pthread 承载入口。
+    /// 常驻保存用户态加载的镜像句柄（不卸载：Go runtime 必须存活）
+    private static let uloaderLock = NSLock()
+    private nonisolated(unsafe) static var cachedUloaderImage: UnsafeMutableRawPointer?
+
+    nonisolated private static func cacheUloaderImage(_ img: UnsafeMutableRawPointer) {
+        uloaderLock.lock(); defer { uloaderLock.unlock() }
+        cachedUloaderImage = img
+    }
+
     nonisolated private func startOpenList(dataDir: URL, logFile: URL, moduleDir: URL, bundleId: String) throws {
         setenv("OPENLIST_DATA", dataDir.path, 1)   // 兜底（dylib 场景 runtime 初始化在 dlopen 时，setenv 先于它则可见）
         // fd 2 重定向：Go runtime 初始化阶段的 throw/fatal（先于任何 Go 代码）原本只写
@@ -205,6 +214,27 @@ final class BinaryModuleRunner: ObservableObject {
                     appendLog(logFile, "[host] 已加载可拆卸模块 dylib: \(dylibURL.lastPathComponent)")
                 } else {
                     appendLog(logFile, "[host] dylib 缺少 OpenListMain 导出，回退内置符号")
+                }
+            } else {
+                // v0.3.108：dlopen 被 dyld 库校验拦下（ad-hoc 无 CMS blob 在 dyld 层必拒）→
+                // 改用自研用户态 Mach-O 加载器（移植自 Nyxian kxld）：自己 mmap + rebase + bind，
+                // 完全绕开 dyld——这是 LC / Nyxian 加载访客代码的方式。
+                let target = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: bundleId)) ?? dylibURL
+                var errBuf = [CChar](repeating: 0, count: 512)
+                if let img = uloader_load(target.path, &errBuf, errBuf.count) {
+                    appendLog(logFile, "[host] 用户态加载器映射成功：\(target.lastPathComponent)")
+                    let s = uloader_symbol(img, "OpenListMain")
+                    if let s {
+                        sym = s
+                        dylibName = target.lastPathComponent
+                        Self.cacheUloaderImage(img)   // 常驻，不卸载（Go runtime）
+                        appendLog(logFile, "[host] 用户态加载器解析 OpenListMain 成功 ✓")
+                    } else {
+                        appendLog(logFile, "[host] 用户态加载器未找到 OpenListMain（符号表可能仅 trie）")
+                    }
+                } else {
+                    let reason = String(cString: errBuf)
+                    appendLog(logFile, "[host] 用户态加载器失败: \(reason)")
                 }
             }
         }

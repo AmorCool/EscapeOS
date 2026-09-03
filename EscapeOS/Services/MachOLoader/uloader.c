@@ -1,0 +1,622 @@
+//
+//  uloader.c
+//  EscapeOS
+//
+//  用户态 Mach-O dylib 加载器（v0.3.108）
+//  —— 移植自 Nyxian 的 ProcEnvironment/Surface/kxld（AGPL-3.0-or-later，emexlab）
+//
+//  为什么需要它：
+//  dlopen() 会经过 dyld 的**库校验（library validation）**，ad-hoc 签名（无 CMS
+//  blob）的 dylib 在 dyld 层必被拒（实测 "code signature invalid"）。
+//  LC / Nyxian 加载访客代码不走 dyld：自己 mmap 段 + 自己做 rebase/bind + 自己跑
+//  构造器。本文件即该机制的最小可用实现。
+//
+//  映射流程（对齐 kxld/mapper.c）：
+//  1) PROT_NONE 预留整段地址空间
+//  2) 按 segment->initprot 逐段 MAP_FIXED 映射（可写段 MAP_PRIVATE，只读/执行段 MAP_SHARED 文件映射）
+//  3) vmsize > filesize 的部分用匿名内存补齐（BSS）
+//  4) LC_DYLD_INFO(_ONLY) rebase 修正 slide
+//  5) LC_DYLD_INFO(_ONLY) bind：外部符号用 dlsym(RTLD_DEFAULT) 解析
+//  6) 执行 __mod_init_func 构造器
+//  7) 符号查找走 LC_SYMTAB（nlist 表，比 export trie 简单可靠）
+//
+//  SPDX-License-Identifier: AGPL-3.0-or-later
+//
+
+#include "uloader.h"
+
+#include <dlfcn.h>
+#include <libkern/OSByteOrder.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <mach-o/fat.h>
+#include <mach-o/loader.h>
+#include <mach-o/nlist.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+// dyld 重定位/绑定 opcode（dyld_info 标准值）
+#define REBASE_OPCODE_MASK                  0xF0
+#define REBASE_IMMEDIATE_MASK               0x0F
+#define REBASE_OPCODE_DONE                  0x00
+#define REBASE_OPCODE_SET_TYPE_IMM          0x10
+#define REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB 0x20
+#define REBASE_OPCODE_ADD_ADDR_ULEB         0x30
+#define REBASE_OPCODE_ADD_ADDR_IMM_SCALED   0x40
+#define REBASE_OPCODE_DO_REBASE_IMM_TIMES   0x50
+#define REBASE_OPCODE_DO_REBASE_ULEB_TIMES  0x60
+#define REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB 0x70
+#define REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB 0x80
+
+#define BIND_OPCODE_MASK                    0xF0
+#define BIND_IMMEDIATE_MASK                 0x0F
+#define BIND_OPCODE_DONE                    0x00
+#define BIND_OPCODE_SET_DYLIB_ORDINAL_IMM   0x10
+#define BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB  0x20
+#define BIND_OPCODE_SET_DYLIB_SPECIAL_IMM   0x30
+#define BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM 0x40
+#define BIND_OPCODE_SET_TYPE_IMM            0x50
+#define BIND_OPCODE_SET_ADDEND_SLEB         0x60
+#define BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB 0x70
+#define BIND_OPCODE_ADD_ADDR_ULEB           0x80
+#define BIND_OPCODE_DO_BIND                 0x90
+#define BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB   0xA0
+#define BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED 0xB0
+#define BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB 0xC0
+
+#define BIND_TYPE_POINTER                   1
+#define REBASE_TYPE_POINTER                 1
+
+struct uloader_image {
+    int fd;
+    void *fileMap;         // 整个文件的只读映射（解析用）
+    size_t fileSize;
+    const uint8_t *header; // 实际 Mach-O 头（可能是 fat 中的切片）
+    size_t sliceOffset;
+
+    void *base;            // 加载后的镜像基址
+    size_t len;
+    intptr_t slide;
+
+    // 段信息（用于 bind 的 segment/offset 换算）
+    uint64_t segVmAddrs[16];
+    uint64_t segVmSizes[16];
+    uint64_t segFileOffs[16];
+    uint32_t segCount;
+
+    // dyld info
+    const uint8_t *dyldInfo;
+    uint32_t rebaseOff, rebaseSize, bindOff, bindSize, weakBindOff, weakBindSize,
+             lazyBindOff, lazyBindSize, exportOff, exportSize;
+
+    // 符号表
+    const struct nlist_64 *symtab;
+    const char *strtab;
+    uint32_t nsyms;
+
+    char lastError[256];
+};
+
+// ---- ULEB128 / SLEB128 解码 ----
+
+static uint64_t read_uleb128(const uint8_t **pp, const uint8_t *end) {
+    uint64_t result = 0;
+    int bit = 0;
+    const uint8_t *p = *pp;
+    do {
+        if (p >= end) break;
+        uint64_t slice = *p & 0x7f;
+        if (bit >= 64) { p++; break; }
+        result |= (slice << bit);
+        bit += 7;
+    } while (*p++ & 0x80);
+    *pp = p;
+    return result;
+}
+
+static int64_t read_sleb128(const uint8_t **pp, const uint8_t *end) {
+    int64_t result = 0;
+    int bit = 0;
+    const uint8_t *p = *pp;
+    uint8_t byte = 0;
+    do {
+        if (p >= end) break;
+        byte = *p++;
+        result |= ((int64_t)(byte & 0x7f) << bit);
+        bit += 7;
+    } while (byte & 0x80);
+    // 符号扩展
+    if (byte & 0x40) result |= (~0ULL << bit);
+    *pp = p;
+    return result;
+}
+
+static void set_error(struct uloader_image *img, const char *msg) {
+    strncpy(img->lastError, msg, sizeof(img->lastError) - 1);
+    img->lastError[sizeof(img->lastError) - 1] = 0;
+}
+
+// ---- 段地址换算 ----
+
+static int addr_to_offset(struct uloader_image *img, uint64_t addr, uint32_t *outFileOff) {
+    // addr 是已 slide 的运行时地址（rebase/bind 流中的 segOffset 是未 slide 的 vmaddr）
+    for (uint32_t i = 0; i < img->segCount; i++) {
+        uint64_t vmStart = img->segVmAddrs[i];
+        uint64_t vmEnd = vmStart + img->segVmSizes[i];
+        if (addr >= vmStart && addr < vmEnd) {
+            *outFileOff = (uint32_t)(img->segFileOffs[i] + (addr - vmStart));
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void *uloader_ptr(struct uloader_image *img, uint32_t segIndex, uint64_t segOffset) {
+    if (segIndex >= img->segCount) return NULL;
+    uint64_t vmaddr = img->segVmAddrs[segIndex] + segOffset;
+    return (void *)(uintptr_t)(vmaddr + img->slide);
+}
+
+// ---- 映射（移植自 kxld/mapper.c）----
+
+static bool uloader_map_segments(struct uloader_image *img) {
+    const struct mach_header_64 *mh = (const struct mach_header_64 *)img->header;
+    const uint8_t *ptr = img->header + sizeof(struct mach_header_64);
+
+    uint64_t vmStart = ~0ULL, vmEnd = 0;
+
+    // 1) 计算地址空间范围 + 收集段信息
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)ptr;
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sc = (const struct segment_command_64 *)ptr;
+            if (sc->vmsize > 0) {
+                if (sc->vmaddr < vmStart) vmStart = sc->vmaddr;
+                if (sc->vmaddr + sc->vmsize > vmEnd) vmEnd = sc->vmaddr + sc->vmsize;
+                if (img->segCount < 16) {
+                    uint32_t idx = img->segCount++;
+                    img->segVmAddrs[idx] = sc->vmaddr;
+                    img->segVmSizes[idx] = sc->vmsize;
+                    img->segFileOffs[idx] = sc->fileoff;
+                }
+            }
+        }
+        ptr += lc->cmdsize;
+    }
+
+    if (vmEnd <= vmStart) { set_error(img, "（映射）无有效段"); return false; }
+
+    // 2) PROT_NONE 预留
+    img->len = (size_t)(vmEnd - vmStart);
+    img->base = mmap(NULL, img->len, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (img->base == MAP_FAILED) { set_error(img, "（映射）预留地址空间失败"); return false; }
+    img->slide = (intptr_t)img->base - (intptr_t)vmStart;
+
+    // 3) 逐段 MAP_FIXED
+    ptr = img->header + sizeof(struct mach_header_64);
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)ptr;
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sc = (const struct segment_command_64 *)ptr;
+            if (sc->vmsize > 0) {
+                void *addr = (void *)(uintptr_t)(sc->vmaddr + img->slide);
+                off_t fileOff = (off_t)(img->sliceOffset + sc->fileoff);
+                int prot = 0;
+                if (sc->initprot & VM_PROT_READ)    prot |= PROT_READ;
+                if (sc->initprot & VM_PROT_WRITE)   prot |= PROT_WRITE;
+                if (sc->initprot & VM_PROT_EXECUTE) prot |= PROT_EXEC;
+                int flags = (sc->initprot & VM_PROT_WRITE)
+                            ? (MAP_PRIVATE | MAP_FIXED)
+                            : (MAP_SHARED  | MAP_FIXED);
+
+                if (sc->filesize > 0) {
+                    void *r = mmap(addr, sc->filesize, prot, flags, img->fd, fileOff);
+                    if (r == MAP_FAILED) {
+                        set_error(img, "（映射）段映射失败");
+                        return false;
+                    }
+                }
+                // BSS：vmsize 超出 filesize 的整页尾部
+                if (sc->vmsize > sc->filesize) {
+                    size_t pageSize = (size_t)getpagesize();
+                    uintptr_t fileEnd = (uintptr_t)addr + sc->filesize;
+                    uintptr_t bssStart = (fileEnd + pageSize - 1) & ~(uintptr_t)(pageSize - 1);
+                    uintptr_t bssEnd = ((uintptr_t)addr + sc->vmsize + pageSize - 1) & ~(uintptr_t)(pageSize - 1);
+                    if (bssEnd > bssStart) {
+                        void *r = mmap((void *)bssStart, bssEnd - bssStart, prot,
+                                       MAP_PRIVATE | MAP_FIXED | MAP_ANON, -1, 0);
+                        if (r == MAP_FAILED) {
+                            set_error(img, "（映射）BSS 映射失败");
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        ptr += lc->cmdsize;
+    }
+    return true;
+}
+
+// ---- rebase ----
+
+static bool uloader_rebase(struct uloader_image *img) {
+    if (img->rebaseSize == 0) return true;
+    const uint8_t *p = img->dyldInfo + img->rebaseOff;
+    const uint8_t *end = p + img->rebaseSize;
+
+    uint8_t type = 0;
+    uint32_t segIndex = 0;
+    uint64_t segOffset = 0;
+
+    while (p < end) {
+        uint8_t opcode = *p++;
+        uint8_t imm = opcode & REBASE_IMMEDIATE_MASK;
+        opcode &= REBASE_OPCODE_MASK;
+
+        switch (opcode) {
+            case REBASE_OPCODE_DONE:
+                return true;
+            case REBASE_OPCODE_SET_TYPE_IMM:
+                type = imm;
+                break;
+            case REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB:
+                segIndex = (uint32_t)imm;
+                segOffset = read_uleb128(&p, end);
+                break;
+            case REBASE_OPCODE_ADD_ADDR_ULEB:
+                segOffset += read_uleb128(&p, end);
+                break;
+            case REBASE_OPCODE_ADD_ADDR_IMM_SCALED:
+                segOffset += imm * sizeof(uintptr_t);
+                break;
+            case REBASE_OPCODE_DO_REBASE_IMM_TIMES: {
+                for (uint8_t i = 0; i < imm; i++) {
+                    void *loc = uloader_ptr(img, segIndex, segOffset);
+                    if (!loc) { set_error(img, "（rebase）地址越界"); return false; }
+                    if (type == REBASE_TYPE_POINTER) {
+                        uintptr_t val = *(uintptr_t *)loc;
+                        *(uintptr_t *)loc = val + (uintptr_t)img->slide;
+                    }
+                    segOffset += sizeof(uintptr_t);
+                }
+                break;
+            }
+            case REBASE_OPCODE_DO_REBASE_ULEB_TIMES: {
+                uint64_t count = read_uleb128(&p, end);
+                for (uint64_t i = 0; i < count; i++) {
+                    void *loc = uloader_ptr(img, segIndex, segOffset);
+                    if (!loc) { set_error(img, "（rebase）地址越界"); return false; }
+                    if (type == REBASE_TYPE_POINTER) {
+                        uintptr_t val = *(uintptr_t *)loc;
+                        *(uintptr_t *)loc = val + (uintptr_t)img->slide;
+                    }
+                    segOffset += sizeof(uintptr_t);
+                }
+                break;
+            }
+            case REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB: {
+                void *loc = uloader_ptr(img, segIndex, segOffset);
+                if (!loc) { set_error(img, "（rebase）地址越界"); return false; }
+                if (type == REBASE_TYPE_POINTER) {
+                    uintptr_t val = *(uintptr_t *)loc;
+                    *(uintptr_t *)loc = val + (uintptr_t)img->slide;
+                }
+                segOffset += sizeof(uintptr_t) + read_uleb128(&p, end);
+                break;
+            }
+            case REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB: {
+                uint64_t count = read_uleb128(&p, end);
+                uint64_t skip = read_uleb128(&p, end);
+                for (uint64_t i = 0; i < count; i++) {
+                    void *loc = uloader_ptr(img, segIndex, segOffset);
+                    if (!loc) { set_error(img, "（rebase）地址越界"); return false; }
+                    if (type == REBASE_TYPE_POINTER) {
+                        uintptr_t val = *(uintptr_t *)loc;
+                        *(uintptr_t *)loc = val + (uintptr_t)img->slide;
+                    }
+                    segOffset += sizeof(uintptr_t) + skip;
+                }
+                break;
+            }
+            default:
+                set_error(img, "（rebase）未知 opcode");
+                return false;
+        }
+    }
+    return true;
+}
+
+// ---- bind（外部符号用 dlsym 解析到本进程）----
+
+static bool uloader_bind(struct uloader_image *img) {
+    if (img->bindSize == 0) return true;
+    const uint8_t *p = img->dyldInfo + img->bindOff;
+    const uint8_t *end = p + img->bindSize;
+
+    int ordinal = 0;
+    uint8_t type = BIND_TYPE_POINTER;
+    int64_t addend = 0;
+    uint32_t segIndex = 0;
+    uint64_t segOffset = 0;
+    const char *symName = NULL;
+
+    while (p < end) {
+        uint8_t opcode = *p++;
+        uint8_t imm = opcode & BIND_IMMEDIATE_MASK;
+        opcode &= BIND_OPCODE_MASK;
+
+        switch (opcode) {
+            case BIND_OPCODE_DONE:
+                return true;
+            case BIND_OPCODE_SET_DYLIB_ORDINAL_IMM:
+                ordinal = (int)imm;
+                break;
+            case BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB:
+                ordinal = (int)read_uleb128(&p, end);
+                break;
+            case BIND_OPCODE_SET_DYLIB_SPECIAL_IMM:
+                ordinal = (int)(int8_t)imm; // 负数表示特殊（flat/weak 等），统一按普通解析处理
+                break;
+            case BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM: {
+                symName = (const char *)p;
+                while (p < end && *p != 0) p++;
+                p++; // 跳过结尾 0
+                break;
+            }
+            case BIND_OPCODE_SET_TYPE_IMM:
+                type = imm;
+                break;
+            case BIND_OPCODE_SET_ADDEND_SLEB:
+                addend = read_sleb128(&p, end);
+                break;
+            case BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB:
+                segIndex = (uint32_t)imm;
+                segOffset = read_uleb128(&p, end);
+                break;
+            case BIND_OPCODE_ADD_ADDR_ULEB:
+                segOffset += read_uleb128(&p, end);
+                break;
+            case BIND_OPCODE_DO_BIND: {
+                void *loc = uloader_ptr(img, segIndex, segOffset);
+                if (!loc || !symName) { set_error(img, "（bind）位置或符号为空"); return false; }
+                // 去掉 Mach-O 符号前导下划线后在本进程查找
+                const char *lookup = (*symName == '_') ? (symName + 1) : symName;
+                void *sym = dlsym(RTLD_DEFAULT, lookup);
+                if (!sym) {
+                    snprintf(img->lastError, sizeof(img->lastError),
+                             "（bind）符号未找到: %s", lookup);
+                    return false;
+                }
+                if (type == BIND_TYPE_POINTER) {
+                    *(uintptr_t *)loc = (uintptr_t)sym + (uintptr_t)addend;
+                }
+                segOffset += sizeof(uintptr_t);
+                break;
+            }
+            case BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB: {
+                void *loc = uloader_ptr(img, segIndex, segOffset);
+                if (!loc || !symName) { set_error(img, "（bind）位置或符号为空"); return false; }
+                const char *lookup = (*symName == '_') ? (symName + 1) : symName;
+                void *sym = dlsym(RTLD_DEFAULT, lookup);
+                if (!sym) {
+                    snprintf(img->lastError, sizeof(img->lastError),
+                             "（bind）符号未找到: %s", lookup);
+                    return false;
+                }
+                if (type == BIND_TYPE_POINTER) {
+                    *(uintptr_t *)loc = (uintptr_t)sym + (uintptr_t)addend;
+                }
+                segOffset += sizeof(uintptr_t) + read_uleb128(&p, end);
+                break;
+            }
+            case BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED: {
+                void *loc = uloader_ptr(img, segIndex, segOffset);
+                if (!loc || !symName) { set_error(img, "（bind）位置或符号为空"); return false; }
+                const char *lookup = (*symName == '_') ? (symName + 1) : symName;
+                void *sym = dlsym(RTLD_DEFAULT, lookup);
+                if (!sym) {
+                    snprintf(img->lastError, sizeof(img->lastError),
+                             "（bind）符号未找到: %s", lookup);
+                    return false;
+                }
+                if (type == BIND_TYPE_POINTER) {
+                    *(uintptr_t *)loc = (uintptr_t)sym + (uintptr_t)addend;
+                }
+                segOffset += sizeof(uintptr_t) + imm * sizeof(uintptr_t);
+                break;
+            }
+            case BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB: {
+                uint64_t count = read_uleb128(&p, end);
+                uint64_t skip = read_uleb128(&p, end);
+                for (uint64_t i = 0; i < count; i++) {
+                    void *loc = uloader_ptr(img, segIndex, segOffset);
+                    if (!loc || !symName) { set_error(img, "（bind）位置或符号为空"); return false; }
+                    const char *lookup = (*symName == '_') ? (symName + 1) : symName;
+                    void *sym = dlsym(RTLD_DEFAULT, lookup);
+                    if (!sym) {
+                        snprintf(img->lastError, sizeof(img->lastError),
+                                 "（bind）符号未找到: %s", lookup);
+                        return false;
+                    }
+                    if (type == BIND_TYPE_POINTER) {
+                        *(uintptr_t *)loc = (uintptr_t)sym + (uintptr_t)addend;
+                    }
+                    segOffset += sizeof(uintptr_t) + skip;
+                }
+                break;
+            }
+            default:
+                set_error(img, "（bind）未知 opcode");
+                return false;
+        }
+    }
+    return true;
+}
+
+// ---- 构造器（__mod_init_func）----
+
+static void uloader_run_initializers(struct uloader_image *img) {
+    const struct mach_header_64 *mh = (const struct mach_header_64 *)img->header;
+    const uint8_t *ptr = img->header + sizeof(struct mach_header_64);
+
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)ptr;
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sc = (const struct segment_command_64 *)ptr;
+            const uint8_t *sp = (const uint8_t *)sc + sizeof(struct segment_command_64);
+            for (uint32_t j = 0; j < sc->nsects; j++) {
+                const struct section_64 *sect = (const struct section_64 *)sp;
+                if ((sect->flags & SECTION_TYPE) == S_MOD_INIT_FUNC_POINTERS) {
+                    uintptr_t *funcs = (uintptr_t *)(uintptr_t)(sect->addr + img->slide);
+                    uint64_t count = sect->size / sizeof(uintptr_t);
+                    for (uint64_t k = 0; k < count; k++) {
+                        if (funcs[k] == 0) continue;
+                        void (*init)(void) = (void (*)(void))funcs[k];
+                        init();
+                    }
+                }
+                sp += sizeof(struct section_64);
+            }
+        }
+        ptr += lc->cmdsize;
+    }
+}
+
+// ---- 公开接口 ----
+
+void *uloader_load(const char *path, char *errBuf, size_t errBufSize) {
+    struct uloader_image *img = calloc(1, sizeof(struct uloader_image));
+    if (!img) return NULL;
+
+    img->fd = open(path, O_RDONLY);
+    if (img->fd < 0) { free(img); if (errBuf) snprintf(errBuf, errBufSize, "打开文件失败"); return NULL; }
+
+    off_t fileSize = lseek(img->fd, 0, SEEK_END);
+    lseek(img->fd, 0, SEEK_SET);
+    img->fileSize = (size_t)fileSize;
+    img->fileMap = mmap(NULL, img->fileSize, PROT_READ, MAP_PRIVATE, img->fd, 0);
+    if (img->fileMap == MAP_FAILED) {
+        close(img->fd); free(img);
+        if (errBuf) snprintf(errBuf, errBufSize, "映射文件失败");
+        return NULL;
+    }
+
+    const uint8_t *base = (const uint8_t *)img->fileMap;
+    uint32_t magic = *(const uint32_t *)base;
+
+    // fat 二进制：挑 arm64 切片
+    if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+        const struct fat_header *fh = (const struct fat_header *)base;
+        uint32_t nfat = magic == FAT_MAGIC ? fh->nfat_arch : OSSwapInt32(fh->nfat_arch);
+        const struct fat_arch *fa = (const struct fat_arch *)(base + sizeof(struct fat_header));
+        bool found = false;
+        for (uint32_t i = 0; i < nfat; i++) {
+            cpu_type_t ct = magic == FAT_MAGIC ? fa[i].cputype : OSSwapInt32(fa[i].cputype);
+            uint32_t off = magic == FAT_MAGIC ? fa[i].offset : OSSwapInt32(fa[i].offset);
+            if (ct == CPU_TYPE_ARM64) {
+                img->sliceOffset = off;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            munmap(img->fileMap, img->fileSize); close(img->fd); free(img);
+            if (errBuf) snprintf(errBuf, errBufSize, "fat 中无 arm64 切片");
+            return NULL;
+        }
+        img->header = base + img->sliceOffset;
+    } else {
+        img->header = base;
+        img->sliceOffset = 0;
+    }
+
+    const struct mach_header_64 *mh = (const struct mach_header_64 *)img->header;
+    if (mh->magic != MH_MAGIC_64 || mh->cputype != CPU_TYPE_ARM64) {
+        munmap(img->fileMap, img->fileSize); close(img->fd); free(img);
+        if (errBuf) snprintf(errBuf, errBufSize, "非 arm64 Mach-O");
+        return NULL;
+    }
+
+    // 解析加载命令
+    const uint8_t *ptr = img->header + sizeof(struct mach_header_64);
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)ptr;
+        if (lc->cmd == LC_DYLD_INFO || lc->cmd == LC_DYLD_INFO_ONLY) {
+            const struct dyld_info_command *dic = (const struct dyld_info_command *)ptr;
+            img->dyldInfo = img->header;
+            img->rebaseOff = dic->rebase_off;    img->rebaseSize = dic->rebase_size;
+            img->bindOff = dic->bind_off;        img->bindSize = dic->bind_size;
+            img->weakBindOff = dic->weak_bind_off; img->weakBindSize = dic->weak_bind_size;
+            img->lazyBindOff = dic->lazy_bind_off; img->lazyBindSize = dic->lazy_bind_size;
+            img->exportOff = dic->export_off;    img->exportSize = dic->export_size;
+        } else if (lc->cmd == LC_SYMTAB) {
+            const struct symtab_command *st = (const struct symtab_command *)ptr;
+            img->symtab = (const struct nlist_64 *)(img->header + st->symoff);
+            img->strtab = (const char *)(img->header + st->stroff);
+            img->nsyms = st->nsyms;
+        }
+        ptr += lc->cmdsize;
+    }
+
+    if (!img->dyldInfo) {
+        munmap(img->fileMap, img->fileSize); close(img->fd); free(img);
+        if (errBuf) snprintf(errBuf, errBufSize, "无 LC_DYLD_INFO（无法重定位）");
+        return NULL;
+    }
+
+    if (!uloader_map_segments(img)) goto fail;
+    if (!uloader_rebase(img)) goto fail;
+    if (!uloader_bind(img)) goto fail;
+    uloader_run_initializers(img);
+
+    return img;
+
+fail:
+    if (errBuf) snprintf(errBuf, errBufSize, "%s", img->lastError);
+    if (img->base) munmap(img->base, img->len);
+    munmap(img->fileMap, img->fileSize);
+    close(img->fd);
+    free(img);
+    return NULL;
+}
+
+void *uloader_symbol(void *handle, const char *name) {
+    struct uloader_image *img = (struct uloader_image *)handle;
+    if (!img || !img->symtab || !img->strtab) return NULL;
+
+    // 兼容带/不带前导下划线的调用
+    const char *want = name;
+    const char *wantUs = (name[0] == '_') ? name : NULL;
+
+    for (uint32_t i = 0; i < img->nsyms; i++) {
+        const struct nlist_64 *nl = &img->symtab[i];
+        if ((nl->n_type & N_TYPE) != N_SECT) continue;   // 只要本镜像定义的符号
+        if (nl->n_value == 0) continue;
+        const char *sym = img->strtab + nl->n_un.n_strx;
+        bool match = false;
+        if (wantUs && strcmp(sym, wantUs) == 0) match = true;
+        if (!match) {
+            if (want[0] == '_') {
+                match = (strcmp(sym, want) == 0);
+            } else if (sym[0] == '_') {
+                match = (strcmp(sym + 1, want) == 0);
+            }
+        }
+        if (match) {
+            return (void *)(uintptr_t)(nl->n_value + img->slide);
+        }
+    }
+    return NULL;
+}
+
+void uloader_unload(void *handle) {
+    struct uloader_image *img = (struct uloader_image *)handle;
+    if (!img) return;
+    if (img->base) munmap(img->base, img->len);
+    if (img->fileMap) munmap(img->fileMap, img->fileSize);
+    if (img->fd >= 0) close(img->fd);
+    free(img);
+}

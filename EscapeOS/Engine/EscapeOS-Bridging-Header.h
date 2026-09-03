@@ -31,6 +31,7 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // SAP 签名桥（纯软件 Unicorn 模拟 Apple CommerceKit，PR #525 移植）。
 // libsap.a / sap.h 由 sapbridge/build-sap.sh 在编译前生成，位于 sapbridge/build/。
 #include "sap.h"
+#include "../Services/MachOLoader/uloader.h"
 
 // ZSign ad-hoc 重签名（v0.3.101：LC/Nyxian 同款引擎，编进 App；对副本就地重签）
 int zsign_adhoc_file(const char *path, const char *bundleId, const char *entXml, int entLen);
