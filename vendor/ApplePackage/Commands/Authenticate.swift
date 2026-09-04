@@ -246,6 +246,14 @@ public enum Authenticator {
                     try ensureFailed("authentication failed: \(string)")
                 }
             } catch {
+                // v0.3.169：ensureFailed 的确定性错误（domain=EscapeOS.Ensure）直接透传，
+                // 不再吞入 lastError 继续重试。旧实现吞错导致：204→2FA 触发后循环仍继续
+                // 重试 anisette，3 服务器全挂时最终报的是 anisette 获取错误，把
+                // 'Authentication requires verification code' 文案覆盖（真机 01:20 日志：
+                // UI 只看到 "AppleAPIError错误0"，2FA 弹窗从未弹出）。
+                if let ns = error as NSError, ns.domain == "EscapeOS.Ensure" {
+                    throw error
+                }
                 lastError = error
             }
         }
