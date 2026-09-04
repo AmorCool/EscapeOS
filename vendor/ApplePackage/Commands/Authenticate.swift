@@ -168,6 +168,20 @@ public enum Authenticator {
                 }
                 // ===== v0.2.157 健壮性：区分暂态 / 永久失败，避免无意义重试 =====
                 let status = response.status
+                // v0.3.174：检测 AMD-Action::SP（Apple 26HOTFIX24+ 新流程——首次商业登录
+                // 要求用户先去 appleid.apple.com 网页授权此客户端，不再发验证码；ipatool
+                // PR#486 实证：m-allowed=false 200 + AMD-Action::SP = 需浏览器登录授权，非 2FA).
+                if status == .ok,
+                   var respBody = response.body, respBody.readableBytes > 0,
+                   let data = respBody.readData(length: respBody.readableBytes) ?? Data(),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let msg = plist["customerMessage"] as? String, msg.contains("AMD-Action::SP") {
+                    LoginLogger.shared.log("Apple 返回 AMD-Action::SP——需在 appleid.apple.com 网页授权后重试")
+                    try ensureFailed(
+                        "Apple ID 账号需先在 appleid.apple.com 网页登录授权此客户端（26HOTFIX24+ 新流程，Apple 不再发送验证码，而是要求账户所有者网页确认）.\n" +
+                        "处理方法：浏览器访问 https://appleid.apple.com 用 xcradn@163.com 登录并按提示授权新设备，授权完成后再回本 App 重试登录."
+                    )
+                }
                 // v0.3.172：记录可回退状态码（ipatool PR#514 fallback 条件）
                 if [204, 403, 404, 503].contains(status.code) {
                     sawFallbackStatus = true
