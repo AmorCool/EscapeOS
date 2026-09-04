@@ -199,7 +199,9 @@ final class BinaryModuleRunner: ObservableObject {
                 // 签名都报 code signature invalid）→ 直接走用户态加载器（匿名内存
                 // 方案，无需有效签名——见 uloader.c 注释）。重签步骤已删。
                 reSignErrorText = dlerror().map { String(cString: $0) } ?? "未知错误"
-                appendLog(logFile, "[host] dlopen 失败（\(reSignErrorText!.prefix(120))）→ 用户态加载器")
+                appendLog(logFile, "[host] dlopen 失败（\(reSignErrorText!.suffix(500))）→ 用户态加载器")
+                appendLog(logFile, "[host] dlopen#1 目标(原始): \(dylibURL.path)")
+                Self.appendDiag(logFile, "\n=== dlopen#1 失败(原始 \(dylibURL.lastPathComponent)) ===\n\(reSignErrorText!)\n")
             }
             if let handle {
                 sym = dlsym(handle, entrySymbol)
@@ -215,18 +217,28 @@ final class BinaryModuleRunner: ObservableObject {
                 // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）。
                 if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     appendLog(logFile, "[host] 开发证书可用 → 真证书签名")
-                    let signURL = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)) ?? dylibURL
                     let signDbg = logFile.deletingLastPathComponent()
                         .appendingPathComponent("data").appendingPathComponent("go_sign_debug.log")
-                    if DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId,
-                                                           debugLog: signDbg) {
+                    // v0.3.143: 就地签名原始文件（内核实锤 code signature invalid errno=1，
+                    // 疑点集中在 rebuildToNewFile 产物——其已签输出曾连 zsign 自身都解析失败）。
+                    // 就地失败再退回 rebuild 副本路径。
+                    var signURL = dylibURL
+                    var signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg)
+                    if !signOk {
+                        appendLog(logFile, "[host] 就地签名失败 → 退回 rebuild 副本路径")
+                        signURL = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)) ?? dylibURL
+                        signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg)
+                    }
+                    if signOk {
                         appendLog(logFile, "[host] 真证书签名完成: \(signURL.lastPathComponent)")
                         if let h = dlopen(signURL.path, RTLD_NOW | RTLD_GLOBAL) {
                             handle = h
                             appendLog(logFile, "[host] 真证书签名后 dlopen 成功 ✓")
                         } else {
                             let e2 = dlerror().map { String(cString: $0) } ?? "未知错误"
-                            appendLog(logFile, "[host] 真证书签名后 dlopen 仍失败: \(e2.prefix(160))")
+                            appendLog(logFile, "[host] 真证书签名后 dlopen 仍失败: \(e2.suffix(500))")
+                            appendLog(logFile, "[host] dlopen#2 目标(签名后): \(signURL.path)")
+                            Self.appendDiag(logFile, "\n=== dlopen#2 失败(签名后 \(signURL.lastPathComponent)) ===\n\(e2)\n")
                         }
                     } else {
                         appendLog(logFile, "[host] 真证书签名失败（证书/私钥不可用）")
@@ -347,15 +359,22 @@ final class BinaryModuleRunner: ObservableObject {
             } else {
                 // v0.3.115：dlopen 被 dyld 库校验拒绝 → 走自研用户态加载器（绕开 dyld）
                 let err0 = dlerror().map { String(cString: $0) } ?? "?"
-                note("dlopen 失败：\(err0.prefix(120))")
+                note("dlopen 失败：\(err0.suffix(400))")
+                Self.appendDiag(logFile, "\n=== [ext] dlopen#1 失败 ===\n\(err0)\n")
                 // v0.3.122：真证书路径（SideStore 信任链）
                 if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     note("开发证书可用 → 真证书签名")
-                    let signURL = (try? MachoReSign.rebuildToNewFile(at: dylib, bundleId: moduleId)) ?? dylib
                     let signDbg = logFile.deletingLastPathComponent()
                         .appendingPathComponent("data").appendingPathComponent("go_sign_debug.log")
-                    if DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId,
-                                                           debugLog: signDbg) {
+                    // v0.3.143: 就地签名原始文件，失败退回 rebuild 副本（同 startBinaryModule）
+                    var signURL = dylib
+                    var signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg)
+                    if !signOk {
+                        note("就地签名失败 → 退回 rebuild 副本路径")
+                        signURL = (try? MachoReSign.rebuildToNewFile(at: dylib, bundleId: moduleId)) ?? dylib
+                        signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg)
+                    }
+                    if signOk {
                         note("真证书签名完成: \(signURL.lastPathComponent)")
                         if let h = dlopen(signURL.path, RTLD_NOW | RTLD_GLOBAL) {
                             cacheBinaryModuleHandle(h)
@@ -366,7 +385,8 @@ final class BinaryModuleRunner: ObservableObject {
                             note("真证书签名后 dlopen 成功但无符号 \(name)")
                         } else {
                             let e2 = dlerror().map { String(cString: $0) } ?? "?"
-                            note("真证书签名后 dlopen 仍失败: \(e2.prefix(140))")
+                            note("真证书签名后 dlopen 仍失败: \(e2.suffix(400))")
+                            Self.appendDiag(logFile, "\n=== [ext] dlopen#2 失败(签名后 \(signURL.lastPathComponent)) ===\n\(e2)\n")
                         }
                     } else {
                         note("真证书签名失败")
@@ -435,6 +455,19 @@ final class BinaryModuleRunner: ObservableObject {
             try? fh.close()
         } else {
             try? text.data(using: .utf8)!.write(to: logFile)
+        }
+    }
+    /// 诊断原文追加到 data/go_sign_debug.log（SSH mlog 直读、无行长截断；
+    /// run.log/UI 层的 prefix/suffix 截断会吃掉 dyld 报错尾部的真实拒绝原因）
+    nonisolated private static func appendDiag(_ logFile: URL, _ text: String) {
+        let url = logFile.deletingLastPathComponent()
+            .appendingPathComponent("data").appendingPathComponent("go_sign_debug.log")
+        if let fh = FileHandle(forWritingAtPath: url.path) {
+            fh.seekToEndOfFile()
+            fh.write(text.data(using: .utf8)!)
+            try? fh.close()
+        } else {
+            try? text.data(using: .utf8)!.write(to: url)
         }
     }
     // MARK: 状态写回（主线程队列）
