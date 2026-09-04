@@ -4,6 +4,7 @@
 #import <Foundation/Foundation.h>
 #include <string.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 #include "openssl.h"
 #include "macho.h"
 #include "common/log.h"
@@ -103,9 +104,10 @@ static void escDumpBlob(const uint8_t* base, size_t size, uint32_t dataoff,
         return;
     }
     const uint8_t* sb = base + dataoff;
-    uint32_t magic = *(const uint32_t*)(sb);
-    uint32_t length = *(const uint32_t*)(sb + 4);
-    uint32_t count = *(const uint32_t*)(sb + 8);
+    // v0.3.150：CS blob 头字段是 big-endian（Mach-O load command 才是 LE），必须 ntohl
+    uint32_t magic = ntohl(*(const uint32_t*)(sb));
+    uint32_t length = ntohl(*(const uint32_t*)(sb + 4));
+    uint32_t count = ntohl(*(const uint32_t*)(sb + 8));
     snprintf(buf, sizeof(buf), "  [%s] blob magic=0x%08x length=%u count=%u (cmd datasize=%u)\n",
              tag, magic, length, count, datasize);
     diag(buf);
@@ -115,31 +117,31 @@ static void escDumpBlob(const uint8_t* base, size_t size, uint32_t dataoff,
     }
     for (uint32_t i = 0; i < count && i < 16; i++) {
         const uint8_t* idx = sb + 12 + i * 8;
-        uint32_t type = *(const uint32_t*)idx;
-        uint32_t off = *(const uint32_t*)(idx + 4);
+        uint32_t type = ntohl(*(const uint32_t*)idx);
+        uint32_t off = ntohl(*(const uint32_t*)(idx + 4));
         const uint8_t* slot = sb + off;
-        uint32_t slotMagic = *(const uint32_t*)slot;
-        uint32_t slotLen = *(const uint32_t*)(slot + 4);
+        uint32_t slotMagic = ntohl(*(const uint32_t*)slot);
+        uint32_t slotLen = ntohl(*(const uint32_t*)(slot + 4));
         snprintf(buf, sizeof(buf), "    slot[%u] type=0x%x off=%u magic=0x%08x len=%u\n",
                  i, type, off, slotMagic, slotLen);
         diag(buf);
         if (slotMagic == CSMAGIC_CODEDIRECTORY) {
             const CS_CodeDirectory* cd = (const CS_CodeDirectory*)slot;
-            std::string ident((const char*)slot + cd->identOffset);
+            std::string ident((const char*)slot + ntohl(cd->identOffset));
             std::string team;
-            if (cd->version >= 0x20200 && cd->teamOffset > 0)
-                team = std::string((const char*)slot + cd->teamOffset);
+            if (ntohl(cd->version) >= 0x20200 && ntohl(cd->teamOffset) > 0)
+                team = std::string((const char*)slot + ntohl(cd->teamOffset));
             snprintf(buf, sizeof(buf),
                      "      CD: ver=0x%x flags=0x%x hashSize=%u hashType=%u pageSize=1<<%u\n"
                      "          nSpecial=%u nCode=%u codeLimit=%u ident=\"%.64s\" team=\"%.32s\"\n",
-                     cd->version, cd->flags, cd->hashSize, cd->hashType, cd->pageSize,
-                     cd->nSpecialSlots, cd->nCodeSlots, cd->codeLimit, ident.c_str(), team.c_str());
+                     ntohl(cd->version), ntohl(cd->flags), cd->hashSize, cd->hashType, cd->pageSize,
+                     ntohl(cd->nSpecialSlots), ntohl(cd->nCodeSlots), ntohl(cd->codeLimit), ident.c_str(), team.c_str());
             diag(buf);
             // CDHash 抽样自检（SHA256：hashType=2 hashSize=32）
-            if (cd->hashType == 2 && cd->hashSize == 32 && (uint64_t)cd->codeLimit <= size) {
+            if (cd->hashType == 2 && cd->hashSize == 32 && (uint64_t)ntohl(cd->codeLimit) <= size) {
                 uint32_t pageSz = 1u << cd->pageSize;
-                uint32_t nCode = cd->nCodeSlots;
-                const uint8_t* hashes = slot + cd->hashOffset;
+                uint32_t nCode = ntohl(cd->nCodeSlots);
+                const uint8_t* hashes = slot + ntohl(cd->hashOffset);
                 int okN = 0, badN = 0;
                 uint32_t picks[14];
                 int np = 0;
@@ -151,7 +153,7 @@ static void escDumpBlob(const uint8_t* base, size_t size, uint32_t dataoff,
                     uint32_t s = picks[k];
                     if (s >= nCode) continue;
                     uint64_t foff = (uint64_t)s * pageSz;
-                    uint32_t chunk = (s == nCode - 1) ? (uint32_t)(cd->codeLimit - foff) : pageSz;
+                    uint32_t chunk = (s == nCode - 1) ? (uint32_t)(ntohl(cd->codeLimit) - foff) : pageSz;
                     if (foff + chunk > size || chunk == 0 || chunk > pageSz) { badN++; continue; }
                     uint8_t h[EVP_MAX_MD_SIZE]; unsigned int hl = 0;
                     EVP_Digest(base + foff, chunk, h, &hl, EVP_sha256(), NULL);
@@ -289,6 +291,63 @@ static void escDumpMachO(const std::string& path, const char* tag,
     }
 }
 
+// v0.3.150：读文件签名区声明（load command LE）+ 可选自愈损坏文件。
+// heal=true：若 dataoff+datasize > filesize（Realloc 写文件 padding 缺失的
+// 历史损坏，真机实锤内核报 "mapped file has no cdhash, completely
+// unsigned"），补零到声明长度。heal=false 仅校验输出结果。
+static bool escGetSigRange(const std::string& path, uint32_t* dataoffOut,
+                           uint32_t* datasizeOut, long* fileSizeOut, bool heal,
+                           const std::function<void(const std::string&)>& diag) {
+    char buf[512];
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    fseek(fp, 0, SEEK_END);
+    long fsize = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    uint8_t hdr[64];
+    if (fread(hdr, 1, 64, fp) < 64) { fclose(fp); return false; }
+    uint32_t magic = *(const uint32_t*)hdr;
+    if (magic != MH_MAGIC_64) { fclose(fp); return false; }
+    uint32_t ncmds = *(const uint32_t*)(hdr + 16);
+    uint32_t sizeofcmds = *(const uint32_t*)(hdr + 20);
+    std::vector<uint8_t> lcb(sizeofcmds);
+    if (fread(lcb.data(), 1, sizeofcmds, fp) != sizeofcmds) { fclose(fp); return false; }
+    fclose(fp);
+    uint8_t* p = lcb.data();
+    long consumed = 0;
+    for (uint32_t i = 0; i < ncmds && consumed + 8 <= (long)sizeofcmds; i++) {
+        uint32_t cmd = *(const uint32_t*)p;
+        uint32_t cmdsize = *(const uint32_t*)(p + 4);
+        if (cmdsize < 8) break;
+        if (cmd == LC_CODE_SIGNATURE) {
+            uint32_t doff = *(const uint32_t*)(p + 8);
+            uint32_t dsz = *(const uint32_t*)(p + 12);
+            *dataoffOut = doff; *datasizeOut = dsz; *fileSizeOut = fsize;
+            if ((uint64_t)doff + dsz > (uint64_t)fsize) {
+                long need = (long)((uint64_t)doff + dsz - (uint64_t)fsize);
+                snprintf(buf, sizeof(buf),
+                         "[自愈] ⚠ blob 声明尾部越界 %ld 字节 (dataoff=%u datasize=%u 文件=%ld)\n",
+                         need, doff, dsz, fsize);
+                diag(buf);
+                if (!heal) return true;
+                diag("[自愈] → 补零修复\n");
+                FILE* fa = fopen(path.c_str(), "ab");
+                if (!fa) { diag("[自愈] append 打开失败\n"); return true; }
+                std::vector<char> zeros((size_t)need, 0);
+                size_t w = fwrite(zeros.data(), 1, (size_t)need, fa);
+                fclose(fa);
+                snprintf(buf, sizeof(buf), "[自愈] 补零 %zu/%ld 字节 %s\n",
+                         w, need, w == (size_t)need ? "✓" : "✗");
+                diag(buf);
+            }
+            return true;
+        }
+        p += cmdsize;
+        consumed += cmdsize;
+    }
+    return false;
+}
+
 // v0.3.149：内核判决（LC checkCodeSignature 同款，LCMachOUtils.m L520-560）——
 // F_ADDFILESIGS_RETURN 把签名 blob 喂给内核；F_CHECK_LV 让内核做 Library
 // Validation 并返回 lv_error_message（内核视角的确切拒绝原因）。
@@ -424,6 +483,15 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
     diagWrite("\n=== zsign 真证书签名开始 ===\n");
     diagWrite(std::string("target=") + (path ? path : "(null)") + "\n");
     diagWrite(std::string("bundleId=") + (bundleId ? bundleId : "(null)") + "\n");
+    // v0.3.150：签名前自愈历史损坏（blob 声明尾部越界 → 补零到声明长度）
+    {
+        uint32_t d0 = 0, d1 = 0; long fsz = 0;
+        if (escGetSigRange(path, &d0, &d1, &fsz, /*heal*/ true, diagWrite)) {
+            char b2[160];
+            snprintf(b2, sizeof(b2), "[签名前] 签名区 dataoff=%u datasize=%u 文件=%ld\n", d0, d1, fsz);
+            diagWrite(b2);
+        }
+    }
     // v0.3.148：先 dump 主程序签名做"过审对照基线"（exec 校验已通过）
     @autoreleasepool {
         NSString* exePath = [NSBundle mainBundle].executablePath;
@@ -523,9 +591,21 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         // v0.3.148：签名后独立回读解析（验证落盘 + 结构 + CDHash 自检）
         uint32_t kSigOff = 0, kSigSize = 0;
         escDumpMachO(path, "模块dylib(签名后回读)", diagWrite, &kSigOff, &kSigSize);
+        ok = rfAfter;
+        // v0.3.150：签名后强制自洽校验（blob 声明必须落在文件内，不再允许假成功）
+        {
+            uint32_t d0 = 0, d1 = 0; long fsz = 0;
+            if (escGetSigRange(path, &d0, &d1, &fsz, /*heal*/ false, diagWrite)) {
+                char b2[200];
+                bool coherent = ((uint64_t)d0 + d1 <= (uint64_t)fsz);
+                snprintf(b2, sizeof(b2), "[自洽校验] dataoff=%u datasize=%u 文件=%ld → %s\n",
+                         d0, d1, fsz, coherent ? "✓ 自洽" : "✗ 损坏（blob 越界，签名无效）");
+                diagWrite(b2);
+                if (!coherent) ok = false;
+            }
+        }
         // v0.3.149：喂签名给内核 + F_CHECK_LV 拿内核判决（LC validateJITLessSetup 同款）
         escKernelCheck(path, kSigOff, kSigSize, diagWrite);
-        ok = rfAfter;
     }
     for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
     if (!res.empty()) diagWrite("  [res] " + res + "\n");
