@@ -74,7 +74,7 @@ struct TwoFactorCodePrompt: View {
                     code = ""
                 }
             } message: {
-                Text("请输入发送到该账户的双重认证验证码。")
+                Text("验证码会发送到该账户的受信任设备（其他 iPhone/iPad/Mac 的通知）或绑定的手机短信.\n没收到？确认账号绑定了受信任手机号，或在 appleid.apple.com 触发一次登录请求.")
             }
     }
 }
