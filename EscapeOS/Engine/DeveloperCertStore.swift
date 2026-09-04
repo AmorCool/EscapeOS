@@ -215,13 +215,31 @@ final class DeveloperCertStore: ObservableObject {
     /// 诊断日志（zsign 全部输出 + 分步结果）落盘 dataDir/go_sign_debug.log。
     /// v0.3.152：签名前对比"主程序叶子证书 serial"与"当前证书 serial"——
     /// 150/151 真机实锤主程序用 LC 导入的旧证书（能过校验），新证书签的 dylib 被拒。
-    func signDylib(path: String, bundleId: String, debugLog: URL? = nil) -> Bool {
+    /// v0.3.156：useMainIdent=true 时签名 identifier 改用主程序 CD 的 identifier
+    /// （对照实验：155 实锤同证书仍拒，主程序与 dylib 的 CD 逐字段全同，
+    /// 唯一剩余差异是 identifier）。
+    func signDylib(path: String, bundleId: String, debugLog: URL? = nil,
+                   useMainIdent: Bool = false) -> Bool {
         let team = (try? String(contentsOf: teamURL, encoding: .utf8)) ?? ""
         guard hasCert,
               let certData = try? Data(contentsOf: certURL),
               let keyData = try? Data(contentsOf: keyURL) else {
             LoginLogger.shared.log("❌ signDylib：cert/key 文件读取失败")
             return false
+        }
+        var effectiveBundleId = bundleId
+        if useMainIdent, let mainExe = Bundle.main.executablePath {
+            var buf = [CChar](repeating: 0, count: 256)
+            let rc = mainExe.withCString { p -> Int32 in
+                zsign_file_ident(p, &buf, 256)
+            }
+            if rc == 0 {
+                let ident = String(cString: buf)
+                if !ident.isEmpty, ident != bundleId {
+                    LoginLogger.shared.log("v0.3.156 实验：签名 identifier \(bundleId) → 主程序 ident \(ident)")
+                    effectiveBundleId = ident
+                }
+            }
         }
         // v0.3.152 serial 同源诊断：主程序（能过校验的基准）vs 当前签名证书
         let mainSerial = UnsafeMutablePointer<CChar>.allocate(capacity: 96)
@@ -260,7 +278,7 @@ final class DeveloperCertStore: ObservableObject {
         let dbg = debugLog?.path
         let rc = certData.withUnsafeBytes { certBuf -> Int32 in
             keyData.withUnsafeBytes { keyBuf -> Int32 in
-                zsign_sign_file_with_cert(path, bundleId,
+                zsign_sign_file_with_cert(path, effectiveBundleId,
                                           certBuf.baseAddress?.assumingMemoryBound(to: CChar.self),
                                           Int32(certData.count),
                                           keyBuf.baseAddress?.assumingMemoryBound(to: CChar.self),

@@ -54,6 +54,8 @@ int zsign_sign_file_with_cert(const char *path, const char *bundleId,
 int zsign_cert_serial(const char *certPem, int certLen,
                       char *outHex, int outHexLen);
 int zsign_file_leaf_serial(const char *path, char *outHex, int outHexLen);
+// v0.3.156 读 Mach-O 文件 CodeDirectory 的 identifier（主程序 vs dylib 对照）
+int zsign_file_ident(const char *path, char *out, int outLen);
 // v0.3.152 p12 导入：PKCS12_parse 提取 cert/key PEM；输出 buffer 用 free() 释放
 int zsign_p12_extract(const char *p12Data, int p12Len, const char *password,
                       char **certPemOut, int *certPemLen,

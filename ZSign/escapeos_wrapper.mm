@@ -292,6 +292,60 @@ static void escDumpMachO(const std::string& path, const char* tag,
     }
 }
 
+// v0.3.156：读 Mach-O 文件 CodeDirectory 的 identifier（主程序 vs dylib 对照用）。
+// 返回 0=成功（out 拷贝 identifier）；<0 失败。
+extern "C" int zsign_file_ident(const char* path, char* out, int outLen) {
+    if (!path || !out || outLen < 16) return -2;
+    out[0] = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -2;
+    struct stat st;
+    if (0 != fstat(fd, &st) || st.st_size < 4096) { close(fd); return -2; }
+    void* m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (!m || m == MAP_FAILED) return -2;
+    int ret = -2;
+    uint8_t* base = (uint8_t*)m;
+    struct mach_header_64 mh;
+    memcpy(&mh, base, sizeof(mh));
+    uint8_t* p = base + sizeof(mh);
+    long consumed = 0;
+    for (uint32_t i = 0; i < mh.ncmds && consumed + 8 <= (long)mh.sizeofcmds; i++) {
+        uint32_t cmd = *(const uint32_t*)p;
+        uint32_t cmdsize = *(const uint32_t*)(p + 4);
+        if (cmdsize < 8) break;
+        if (cmd == LC_CODE_SIGNATURE) {
+            uint32_t dataoff = *(const uint32_t*)(p + 8);
+            uint32_t datasize = *(const uint32_t*)(p + 12);
+            if ((uint64_t)dataoff + datasize <= (uint64_t)st.st_size) {
+                const uint8_t* sb = base + dataoff;
+                if (ntohl(*(const uint32_t*)sb) == CSMAGIC_EMBEDDED_SIGNATURE) {
+                    uint32_t count = ntohl(*(const uint32_t*)(sb + 8));
+                    for (uint32_t k = 0; k < count && k < 16; k++) {
+                        const uint8_t* idx = sb + 12 + k * 8;
+                        uint32_t off = ntohl(*(const uint32_t*)(idx + 4));
+                        const uint8_t* slot = sb + off;
+                        if (ntohl(*(const uint32_t*)slot) == CSMAGIC_CODEDIRECTORY) {
+                            const CS_CodeDirectory* cd = (const CS_CodeDirectory*)slot;
+                            uint32_t identOff = ntohl(cd->identOffset);
+                            if (identOff > 0 && identOff < datasize) {
+                                snprintf(out, outLen, "%s", (const char*)slot + identOff);
+                                ret = 0;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        p += cmdsize;
+        consumed += cmdsize;
+    }
+    munmap(m, (size_t)st.st_size);
+    return ret;
+}
+
 // v0.3.152：p12 导入（同源证书方案）——真机 dump 实锤主程序（LC 签，能过校验）
 // 用的是 LC 导入的 p12 证书（notAfter=2027-08-24），而 EscapeSpace 登录新签的
 // 证书（notAfter=2027-09-04）签的 dylib 被 AMFI 拒——iOS 27 beta 疑似要求

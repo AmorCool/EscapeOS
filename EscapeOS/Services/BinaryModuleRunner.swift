@@ -223,11 +223,11 @@ final class BinaryModuleRunner: ObservableObject {
                     // 疑点集中在 rebuildToNewFile 产物——其已签输出曾连 zsign 自身都解析失败）。
                     // 就地失败再退回 rebuild 副本路径。
                     var signURL = dylibURL
-                    var signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg)
+                    var signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg, useMainIdent: true)
                     if !signOk {
                         appendLog(logFile, "[host] 就地签名失败 → 退回 rebuild 副本路径")
                         signURL = (try? MachoReSign.rebuildToNewFile(at: dylibURL, bundleId: moduleId)) ?? dylibURL
-                        signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg)
+                        signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg, useMainIdent: true)
                     }
                     if signOk {
                         appendLog(logFile, "[host] 真证书签名完成: \(signURL.lastPathComponent)")
@@ -368,11 +368,11 @@ final class BinaryModuleRunner: ObservableObject {
                         .appendingPathComponent("data").appendingPathComponent("go_sign_debug.log")
                     // v0.3.143: 就地签名原始文件，失败退回 rebuild 副本（同 startBinaryModule）
                     var signURL = dylib
-                    var signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg)
+                    var signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg, useMainIdent: true)
                     if !signOk {
                         note("就地签名失败 → 退回 rebuild 副本路径")
                         signURL = (try? MachoReSign.rebuildToNewFile(at: dylib, bundleId: moduleId)) ?? dylib
-                        signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg)
+                        signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg, useMainIdent: true)
                     }
                     if signOk {
                         note("真证书签名完成: \(signURL.lastPathComponent)")
