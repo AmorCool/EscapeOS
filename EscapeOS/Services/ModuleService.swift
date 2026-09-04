@@ -437,9 +437,18 @@ final class ModuleService {
         guard !module.actions.isEmpty || module.isBinaryModule || module.isLuaModule else {
             throw ModuleError.badSpec("模块未声明任何 action")
         }
-        // 校验动作类型（v1 只支持 signal；未知类型拒绝导入，保证向前兼容的严格性）
-        for action in module.actions where action.type != "signal" {
-            throw ModuleError.badSpec("不支持的 action 类型：\(action.type)（本宿主仅支持 signal）")
+        // 校验动作声明（v0.3.159：type 自由——非 signal 一律走通用桥调用，语义由模块决定；
+        // 只校验字段完备性：signal 需 process，桥调用需 symbol）
+        for action in module.actions {
+            if action.type == "signal" {
+                guard action.process != nil, !action.process!.isEmpty else {
+                    throw ModuleError.badSpec("signal 动作「\(action.label)」缺少 process 字段")
+                }
+            } else {
+                guard action.symbol != nil, !action.symbol!.isEmpty else {
+                    throw ModuleError.badSpec("动作「\(action.label)」缺少 symbol 字段（桥调用必需）")
+                }
+            }
         }
 
         // 安装：Modules/<id>/（同 id 覆盖升级）
