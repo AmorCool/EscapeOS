@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/cmd"
@@ -142,6 +143,27 @@ func OpenListAdminSet(pwdC, dirC *C.char) C.int {
 	}()
 	<-done
 	return ret
+}
+
+//export OpenListStop
+// 进程内优雅停止：向自己发 SIGTERM——ServerCmd.Run 的 signal.Notify
+// （SIGINT/SIGTERM）捕获后走 bootstrap.Shutdown 优雅停机，Execute 返回，
+// openlistRun 返回，OpenListMain 落到永久阻塞（宿主存活，绝不 os.Exit）。
+// 注意：bootstrap.Start 与 signal.Notify 注册之间存在毫秒级默认处置窗口，
+// 仅应在服务完全启动后调用（宿主 UI 的停止按钮满足此条件）。
+// 停止后本进程内不可再次启动（bootstrap 重复 Init 有风险），重启 App 恢复。
+//
+//export OpenListStop
+func OpenListStop() C.int {
+	openlistMu.Lock()
+	defer openlistMu.Unlock()
+	if !openlistStarted {
+		return C.int(0)
+	}
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		return C.int(-1)
+	}
+	return C.int(0)
 }
 
 // OpenListMemTest 逐步申请 MB 级内存并触碰（提交物理页），返回成功申请的 MB 数。
