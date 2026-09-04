@@ -69,25 +69,11 @@ struct CertificateView: View {
                                 certRow(cert)
                                     // 左划：加入白名单（未在白名单时）
                                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        if cert.serialNumber != certStore.revokeWhitelist {
-                                            Button {
-                                                certStore.revokeWhitelist = cert.serialNumber
-                                            } label: {
-                                                Label("加入白名单", systemImage: "checkmark.seal")
-                                            }
-                                            .tint(.blue)
-                                        }
+                                        whitelistAddAction(cert)
                                     }
                                     // 右划：移出白名单（在白名单时）
                                     .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                        if cert.serialNumber == certStore.revokeWhitelist {
-                                            Button {
-                                                certStore.revokeWhitelist = ""
-                                            } label: {
-                                                Label("移出白名单", systemImage: "xmark.seal")
-                                            }
-                                            .tint(.orange)
-                                        }
+                                        whitelistRemoveAction(cert)
                                     }
                             }
                         } header: {
@@ -189,12 +175,8 @@ struct CertificateView: View {
             TextField("导出时设置的密码", text: $p12Password)
             Button("导入") {
                 guard let data = pendingP12Data else { return }
-                switch certStore.importP12(data: data, password: p12Password) {
-                case .success:
-                    p12Message = "✓ 导入成功（与主程序同源证书. 重启模块后生效）"
-                case .failure(let err):
-                    p12Message = "✗ \(err)"
-                }
+                let result = certStore.importP12(data: data, password: p12Password)
+                p12Message = result.ok ? "✓ \(result.message)" : "✗ \(result.message)"
                 pendingP12Data = nil
             }
             Button("取消", role: .cancel) { pendingP12Data = nil }
@@ -371,6 +353,31 @@ struct CertificateView: View {
     /// 是否命中白名单（序列号精确匹配）
     private func isWhitelisted(_ cert: DeveloperCertificate) -> Bool {
         !certStore.revokeWhitelist.isEmpty && cert.serialNumber == certStore.revokeWhitelist
+    }
+
+    // v0.3.152：白名单 swipeActions 拆出（body type-check 超时修复）
+    @ViewBuilder
+    private func whitelistAddAction(_ cert: DeveloperCertificate) -> some View {
+        if cert.serialNumber != certStore.revokeWhitelist {
+            Button {
+                certStore.revokeWhitelist = cert.serialNumber
+            } label: {
+                Label("加入白名单", systemImage: "checkmark.seal")
+            }
+            .tint(.blue)
+        }
+    }
+
+    @ViewBuilder
+    private func whitelistRemoveAction(_ cert: DeveloperCertificate) -> some View {
+        if cert.serialNumber == certStore.revokeWhitelist {
+            Button {
+                certStore.revokeWhitelist = ""
+            } label: {
+                Label("移出白名单", systemImage: "xmark.seal")
+            }
+            .tint(.orange)
+        }
     }
 
     private func certRow(_ cert: DeveloperCertificate) -> some View {

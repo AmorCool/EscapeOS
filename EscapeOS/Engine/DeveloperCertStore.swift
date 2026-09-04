@@ -274,7 +274,7 @@ final class DeveloperCertStore: ObservableObject {
 
     /// v0.3.152：导入 p12（同源证书方案）——解析 PKCS12 提取 cert/key PEM，
     /// 配对校验通过后覆盖落盘。用于导入与主程序（LC/SideStore 签发）相同的证书。
-    func importP12(data: Data, password: String) -> Result<Void, String> {
+    func importP12(data: Data, password: String) -> (ok: Bool, message: String) {
         var certPemOut: UnsafeMutablePointer<CChar>? = nil
         var keyPemOut: UnsafeMutablePointer<CChar>? = nil
         var certLen: Int32 = 0
@@ -287,7 +287,7 @@ final class DeveloperCertStore: ObservableObject {
             }
         }
         guard rc == 0, let certP = certPemOut, let keyP = keyPemOut else {
-            return .failure("p12 解析失败（密码错误或文件损坏）")
+            return (false, "p12 解析失败（密码错误或文件损坏）")
         }
         defer {
             free(certP)
@@ -304,7 +304,7 @@ final class DeveloperCertStore: ObservableObject {
             }
         }
         guard paired == 1 else {
-            return .failure("p12 证书与私钥不配对")
+            return (false, "p12 证书与私钥不配对")
         }
         // serial 记录（与主程序对比的信息源）
         let serialHex = certPem.withUnsafeBytes { cbuf -> String in
@@ -315,13 +315,13 @@ final class DeveloperCertStore: ObservableObject {
             return r > 0 ? String(cString: out) : "?"
         }
         do {
-            try keyPem.write(to: keyURL, atomically: true, encoding: .utf8)
-            try certPem.write(to: certURL, atomically: true, encoding: .utf8)
+            try keyPem.write(to: keyURL, options: .atomic)
+            try certPem.write(to: certURL, options: .atomic)
             hasCert = true
             LoginLogger.shared.log("✓ p12 导入成功 serial=\(serialHex.suffix(12))（重启模块后生效）")
-            return .success(())
+            return (true, "导入成功 serial=\(serialHex.suffix(12))（重启模块后生效）")
         } catch {
-            return .failure("落盘失败: \(error.localizedDescription)")
+            return (false, "落盘失败: \(error.localizedDescription)")
         }
     }
 
