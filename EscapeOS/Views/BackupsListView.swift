@@ -101,7 +101,7 @@ struct BackupsListView: View {
                     performBatchDelete()
                 }
             } message: {
-                Text("将永久删除 \(selected.count) 个备份归档，此操作不可撤销。")
+                Text("将永久删除 \(selected.count) 个备份归档，此操作不可撤销.")
             }
     }
 
@@ -112,7 +112,7 @@ struct BackupsListView: View {
                     InfoActionCard(
                         icon: "externaldrive.fill.badge.timemachine",
                         title: "正在加载备份…",
-                        message: "读取 EscapeSpace/Backups 目录中的备份归档。"
+                        message: "读取 EscapeSpace/Backups 目录中的备份归档."
                     )
                 }
             } else if let error = vm.errorMessage, vm.records.isEmpty {
@@ -131,7 +131,7 @@ struct BackupsListView: View {
                     InfoActionCard(
                         icon: "tray.full",
                         title: "暂无备份",
-                        message: "可在「应用」或「容器管理」页进入任意应用，再点击「备份数据」导出备份。归档文件保存在「文件 → 我的iPhone → EscapeSpace → Backups」。"
+                        message: "可在「应用」或「容器管理」页进入任意应用，再点击「备份数据」导出备份.归档文件保存在「文件 → 我的iPhone → EscapeSpace → Backups」."
                     )
                 }
             } else {
@@ -362,7 +362,7 @@ struct CustomRestoreSheet: View {
                         InfoActionCard(
                             icon: "app.dashed",
                             title: "未找到可恢复的目标应用",
-                            message: "请先在「应用」页导入配对文件并扫描到 LiveContainer。"
+                            message: "请先在「应用」页导入配对文件并扫描到 LiveContainer."
                         )
                     }
                 } else {
@@ -403,7 +403,7 @@ struct CustomRestoreSheet: View {
                                         Image(systemName: "magnifyingglass")
                                             .font(.system(size: 40))
                                             .foregroundColor(.secondary)
-                                        Text("未找到匹配「\(searchText)」的应用。")
+                                        Text("未找到匹配「\(searchText)」的应用.")
                                             .font(.subheadline)
                                             .foregroundColor(.secondary)
                                     }
@@ -493,12 +493,12 @@ struct CustomRestoreSheet: View {
         if meta.isContainerApp {
             let targetId = guestBundleId(from: app.bundleIdentifier)
             if targetId != guestBundleId(from: meta.bundleIdentifier) {
-                warnings.append("备份来自「\(meta.appName)」，与目标容器应用不一致，强制恢复可能覆盖目标数据。")
+                warnings.append("备份来自「\(meta.appName)」，与目标容器应用不一致，强制恢复可能覆盖目标数据.")
             }
         } else if app.bundleIdentifier != meta.bundleIdentifier {
-            warnings.append("备份来自「\(meta.appName)」，与目标应用不一致，强制恢复可能覆盖目标数据。")
+            warnings.append("备份来自「\(meta.appName)」，与目标应用不一致，强制恢复可能覆盖目标数据.")
         }
-        warnings.append("关闭 \(app.name) 后再恢复。应用运行时打开的数据库可能无法完整恢复。")
+        warnings.append("关闭 \(app.name) 后再恢复.应用运行时打开的数据库可能无法完整恢复.")
         return warnings
     }
 
@@ -640,7 +640,7 @@ struct RestoreView: View {
                             .font(.footnote)
                             .foregroundColor(.orange)
                     }
-                    Text("将覆盖 Documents、Library 和 tmp 中现有的同名文件。Keychain 数据不会被恢复。")
+                    Text("将覆盖 Documents、Library 和 tmp 中现有的同名文件.Keychain 数据不会被恢复.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
@@ -666,7 +666,7 @@ struct RestoreView: View {
                 )
             }
         } else {
-            Text("此备份无法恢复。")
+            Text("此备份无法恢复.")
                 .foregroundColor(.secondary)
         }
     }
@@ -786,7 +786,7 @@ final class BackupsListViewModel: ObservableObject {
         case .ready:
             activeRestore = RestoreSession(record: record, eligibility: eligibility)
         case .appNotInstalled(_, let appName):
-            alertError = IdentifiedAlert(message: "\(appName) 未安装。请先安装该应用后再恢复此备份。")
+            alertError = IdentifiedAlert(message: "\(appName) 未安装.请先安装该应用后再恢复此备份.")
         case .invalidArchive(let message):
             alertError = IdentifiedAlert(message: message)
         }

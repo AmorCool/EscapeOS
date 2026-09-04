@@ -16,7 +16,7 @@ struct RootView: View {
     @AppStorage("HasAcknowledgedLimits") private var hasAcknowledgedLimits = false
     @State private var selectedTab: MainTab = .apps
     @ObservedObject private var copyFeedback = CopyFeedback.shared
-    /// 全局 2FA 输入框：任何页面（含启动预热）触发的验证码请求都弹这里。
+    /// 全局 2FA 输入框：任何页面（含启动预热）触发的验证码请求都弹这里.
     @StateObject private var twoFactor = TwoFactorPromptCoordinator.shared
 
     var body: some View {
@@ -80,9 +80,9 @@ struct RootView: View {
         }
         .overlay(CopyBanner(message: copyFeedback.message))
         // 标签栏 / 导航栏的 Liquid Glass 外观由 EscapeSpaceApp.init() 统一配置
-        // （UIAppearance 代理只对之后创建的实例生效，必须早于 UI 构建）。
+        // （UIAppearance 代理只对之后创建的实例生效，必须早于 UI 构建）.
         // 这里不要再接 `.toolbarBackground(.visible, for: .tabBar)` —— 它会给
-        // 标签栏加一层不透明底板，把玻璃的透明材质与顶部高光整个盖掉。
+        // 标签栏加一层不透明底板，把玻璃的透明材质与顶部高光整个盖掉.
         .sheet(isPresented: Binding(
             get: { !hasAcknowledgedLimits },
             set: { if !$0 { hasAcknowledgedLimits = true } }
@@ -94,7 +94,7 @@ struct RootView: View {
         }
         .onAppear {
             // 预热不等免责声明确认：免 2FA 的静默会话恢复，越早启动
-            // 用户进入「IPA 侧载 / 证书管理」页时越可能已完成（幂等，内部有 guard）。
+            // 用户进入「IPA 侧载 / 证书管理」页时越可能已完成（幂等，内部有 guard）.
             viewModel.reload()
             warmUpAutoLogin()
         }
@@ -103,8 +103,8 @@ struct RootView: View {
                 viewModel.reload()
             }
         }
-        // 全局 2FA 输入：后台预热 / 任何页面触发的验证码请求都在这里输入。
-        // 标题标明来自哪个功能，避免用户不知道是谁在要验证码。
+        // 全局 2FA 输入：后台预热 / 任何页面触发的验证码请求都在这里输入.
+        // 标题标明来自哪个功能，避免用户不知道是谁在要验证码.
         .alert(
             "来自\(twoFactor.pending?.feature ?? "Apple ID")的 Apple ID 验证请求",
             isPresented: Binding(
@@ -124,8 +124,8 @@ struct RootView: View {
     }
 
     /// app 启动后后台预热「IPA 侧载」与「证书管理」的 Apple ID 登录态，
-    /// 用户进入对应页面时无需再等十几秒的登录/列表加载。
-    /// 只走免 2FA 的会话恢复与静默加载；失败不影响 app 正常使用。
+    /// 用户进入对应页面时无需再等十几秒的登录/列表加载.
+    /// 只走免 2FA 的会话恢复与静默加载；失败不影响 app 正常使用.
     private func warmUpAutoLogin() {
         let settings = MemoryLimitSettings.shared
         guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
@@ -142,7 +142,7 @@ struct RootView: View {
         } else if let error = viewModel.errorMessage, viewModel.apps.isEmpty {
             ErrorStateView(message: error, onRetry: { viewModel.reload() })
         } else if viewModel.apps.isEmpty {
-            EmptyStateView(diagnostics: "设备未返回任何用户应用。")
+            EmptyStateView(diagnostics: "设备未返回任何用户应用.")
         } else {
             AppListView(viewModel: viewModel)
         }
@@ -195,11 +195,11 @@ struct PairingSetupView: View {
 
                 VStack(alignment: .leading, spacing: 14) {
                     SetupStep(number: 1, title: "安装 LocalDevVPN",
-                               text: "从 App Store 安装 LocalDevVPN，保持设备 IP / 隧道 IP 为默认值（10.7.0.1），连接它并开启 Wi-Fi。")
+                               text: "从 App Store 安装 LocalDevVPN，保持设备 IP / 隧道 IP 为默认值（10.7.0.1），连接它并开启 Wi-Fi.")
                     SetupStep(number: 2, title: "获取配对文件",
-                               text: "在 Windows 上用 iPASide 侧载。它会生成与 iLoader 相同类型的配对文件（USB 信任密钥 + 远程配对密钥），并自动放置 pairingFile.plist。也可以在这里导入 iLoader 文件。之后即可拔线——EscapeSpace 通过 LocalDevVPN 与本机通信，不走 USB。iOS 26.4+ 需要远程配对密钥；iOS 18 只需要 USB 信任部分。")
+                               text: "在 Windows 上用 iPASide 侧载.它会生成与 iLoader 相同类型的配对文件（USB 信任密钥 + 远程配对密钥），并自动放置 pairingFile.plist.也可以在这里导入 iLoader 文件.之后即可拔线——EscapeSpace 通过 LocalDevVPN 与本机通信，不走 USB.iOS 26.4+ 需要远程配对密钥；iOS 18 只需要 USB 信任部分.")
                     SetupStep(number: 3, title: "加载应用",
-                               text: "EscapeSpace 随后列出你已安装的应用，可浏览或备份其数据。")
+                               text: "EscapeSpace 随后列出你已安装的应用，可浏览或备份其数据.")
                 }
                 .padding(.horizontal)
 
@@ -238,16 +238,16 @@ struct PairingSetupView: View {
                 }
 
                 // iOS 27 无线配对（无需电脑）：配对码直接在 App 内显示，
-                // 参考 SideInstaller 的 in-app PIN 卡片做法（原版 StikPair 用通知）。
+                // 参考 SideInstaller 的 in-app PIN 卡片做法（原版 StikPair 用通知）.
                 // 真实配对引擎已接入：si_run_host（Rust）经 WirelessPairing 桥接到本视图，
-                // 配对文件写入 Documents/pairingFile.plist，TunnelContext 自动加载。
+                // 配对文件写入 Documents/pairingFile.plist，TunnelContext 自动加载.
                 if isIOS27OrLater {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("iOS 27 无线配对（无需电脑）", systemImage: "wifi")
                             .font(.headline)
                             .foregroundStyle(.blue)
 
-                        Text("iOS 27 支持无线配对，且配对码会直接显示在 App 内（而不是系统通知）。点击「开始无线配对」后，在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并把此处显示的配对码输入到该设备即可完成。")
+                        Text("iOS 27 支持无线配对，且配对码会直接显示在 App 内（而不是系统通知）.点击「开始无线配对」后，在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并把此处显示的配对码输入到该设备即可完成.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
 
@@ -308,7 +308,7 @@ struct PairingSetupView: View {
                         throw NSError(
                             domain: "EscapeOS",
                             code: -2,
-                            userInfo: [NSLocalizedDescriptionKey: "无法读取该配对文件。"]
+                            userInfo: [NSLocalizedDescriptionKey: "无法读取该配对文件."]
                         )
                     }
                     try viewModel.importPairingFile(contents)
@@ -332,11 +332,11 @@ struct PairingSetupView: View {
     private func importFromClipboard() {
         guard let pasted = UIPasteboard.general.string,
               !pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            clipboardError = "剪贴板为空，或不含文本。"
+            clipboardError = "剪贴板为空，或不含文本."
             return
         }
         guard let data = pasted.data(using: .utf8) else {
-            clipboardError = "剪贴板内容无法解析为配对文件。"
+            clipboardError = "剪贴板内容无法解析为配对文件."
             return
         }
         do {
@@ -366,7 +366,7 @@ struct PairingSetupView: View {
         wirelessStatus = "正在广播配对服务（_remotepairing-pairable-host._tcp）…"
         showWirelessPairing = true
 
-        // 若用户开启则启动后台保活，避免 Bonjour 注册被系统 SRP 回收。
+        // 若用户开启则启动后台保活，避免 Bonjour 注册被系统 SRP 回收.
         keepAlive.start(audio: keepAliveAudio, location: keepAliveLocation)
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -404,7 +404,7 @@ struct PairingSetupView: View {
         wirelessStatus = "正在广播配对服务…"
     }
 
-    /// 后台保活开关卡片（移植自 StikPair）。
+    /// 后台保活开关卡片（移植自 StikPair）.
     private var keepAliveCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("后台保活")
@@ -417,7 +417,7 @@ struct PairingSetupView: View {
             Toggle("位置更新", isOn: $keepAliveLocation)
                 .font(.subheadline)
 
-            Text("若广播过一会就消失，可开启其中一个或多个选项，让系统在后台继续保留本 App 的 Bonjour 注册。")
+            Text("若广播过一会就消失，可开启其中一个或多个选项，让系统在后台继续保留本 App 的 Bonjour 注册.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -457,7 +457,7 @@ struct PairingSetupView: View {
                         .font(.system(size: 44))
                         .foregroundStyle(.green)
                     Text("配对成功").font(.title3).bold()
-                    Text("已与 \(name) 建立无线配对。")
+                    Text("已与 \(name) 建立无线配对.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -482,7 +482,7 @@ struct PairingSetupView: View {
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                                     .fill(Color(.secondarySystemGroupedBackground))
                             )
-                        Text("在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并输入上方配对码。")
+                        Text("在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并输入上方配对码.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -490,7 +490,7 @@ struct PairingSetupView: View {
                 } else {
                     // 进度态：菊花 + 状态文字垂直居中，keepAliveCard 贴底
                     //（v0.2.76 改：之前整个进度态一起被 Spacer 居中，
-                    // keepAliveCard 较高把菊花+文字重心拉下，看起来偏下）。
+                    // keepAliveCard 较高把菊花+文字重心拉下，看起来偏下）.
                     Spacer(minLength: 8)
                     VStack(spacing: 12) {
                         ProgressView()
@@ -554,7 +554,7 @@ struct PairingSetupView: View {
                 self.wirelessBroadcastErrorCode = nil
                 self.keepAlive.stop()
             } else {
-                self.wirelessError = errorMsg.isEmpty ? "配对失败，请重试。" : errorMsg
+                self.wirelessError = errorMsg.isEmpty ? "配对失败，请重试." : errorMsg
             }
         }
     }
@@ -575,7 +575,7 @@ struct PairingSetupView: View {
         }
         // 监听 Bonjour 广播失败（NSNetService didNotPublish）：
         // v0.2.76 之前只 NSLog，LiveContainer 共享应用 guest 等嵌入环境下
-        // 静默失败让用户以为广播成功却搜不到——现在把错误码回报给 UI 提示。
+        // 静默失败让用户以为广播成功却搜不到——现在把错误码回报给 UI 提示.
         wirelessBroadcastObserver = center.addObserver(
             forName: Notification.Name("WirelessPairingDidFailBroadcastNotification"),
             object: nil,
@@ -622,7 +622,7 @@ struct ErrorStateView: View {
                     iconTint: .orange,
                     title: "出现问题",
                     message: message + (message.contains("tunnel") || message.contains("LocalDevVPN") || message.contains("Heartbeat")
-                        ? "\n\n提示：将 LocalDevVPN 重置为默认的 10.7.0.1 地址，保持 Wi-Fi 连接，并让 iPASide 放置配对文件（或在此导入）。iOS 26.5 上不需要自定义局域网 IP。"
+                        ? "\n\n提示：将 LocalDevVPN 重置为默认的 10.7.0.1 地址，保持 Wi-Fi 连接，并让 iPASide 放置配对文件（或在此导入）.iOS 26.5 上不需要自定义局域网 IP."
                         : ""),
                     actionTitle: "重试",
                     action: onRetry
@@ -667,13 +667,13 @@ struct SettingsForm: View {
     @State private var showNoPairingAlert = false
     @State private var showLoginSheet = false
     @State private var showAccountDetails = false
-    /// v0.2.112：左上角登录日志入口（排查Apple 登录 / Anisette 失败用）。
+    /// v0.2.112：左上角登录日志入口（排查Apple 登录 / Anisette 失败用）.
     @State private var showLoginLog = false
     @AppStorage(KeepAliveManager.enabledKey) private var keepAliveEnabled = false
 
     var body: some View {
         Form {
-            Section(header: Text("Apple ID 账户"), footer: Text("登录后，部分功能可统一调用此账户。")) {
+            Section(header: Text("Apple ID 账户"), footer: Text("登录后，部分功能可统一调用此账户.")) {
                 if memorySettings.isLoggedIn {
                     HStack {
                         Text("账号")

@@ -34,7 +34,7 @@ struct PairingFilePickerModifier: ViewModifier {
                             onPicked(.failure(NSError(
                                 domain: "EscapeOS",
                                 code: -3,
-                                userInfo: [NSLocalizedDescriptionKey: "未选择配对文件。"]
+                                userInfo: [NSLocalizedDescriptionKey: "未选择配对文件."]
                             )))
                         }
                         isPresented = false

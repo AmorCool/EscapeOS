@@ -219,8 +219,15 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
 
     ZLog::logs.clear();
     ZSignAsset asset;
+    // v0.3.147：参数对齐 LC。LC InitSimple 不设置 m_bSHA256Only/m_bSingleBinary，
+    // 构造默认 false/false → 双 CodeDirectory（SHA1 主 + SHA256 alternate）。
+    // iOS AMFI 只接受双目录 blob；v0.3.141-146 传 bSHA256Only=true 生成
+    // 单 SHA256 目录 blob（archo.cpp "make it the primary (and only)"）→
+    // code signature invalid errno=1（真机 6 版实锤，refreshFile 换 inode 无效
+    // 证明非缓存问题）。bSingleBinary 仅影响 MH_EXECUTE 的 execSegFlags，
+    // 对 dylib 无效，一并归 false。
     bool inited = asset.Init(certTpl, keyTpl, "", "", "", /*bAdhoc*/ false,
-                             /*bSHA256Only*/ true, /*bSingleBinary*/ true);
+                             /*bSHA256Only*/ false, /*bSingleBinary*/ false);
     if (!inited) {
         diagWrite("FAIL: ZSignAsset::Init 失败（读取证书/私钥）\n");
         for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");

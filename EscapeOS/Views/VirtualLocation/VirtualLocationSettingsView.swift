@@ -43,7 +43,7 @@ struct VirtualLocationSettingsView: View {
                 } header: {
                     Text("开发者配对")
                 } footer: {
-                    Text("需要 idevice_pair 生成的 RPPairing 格式配对文件（.mobiledevicepairing）。已导入则此处直接可用，无需重复导入。")
+                    Text("需要 idevice_pair 生成的 RPPairing 格式配对文件（.mobiledevicepairing）")
                 }
 
                 Section {
@@ -73,11 +73,11 @@ struct VirtualLocationSettingsView: View {
                 } header: {
                     Text("隧道")
                 } footer: {
-                    Text("传送前先连接 LocalDevVPN。默认隧道 IP 为 10.7.0.1。建议在 Wi-Fi 下开始模拟，之后可切回蜂窝网络继续。")
+                    Text("传送前先连接 LocalDevVPN.默认隧道 IP 为 10.7.0.1.建议在 Wi-Fi 下开始模拟，之后可切回蜂窝网络继续.")
                 }
 
                 Section("隐私") {
-                    Text("完全在设备本地运行。收藏与最近记录仅存于 UserDefaults，无任何分析、账号或上传。")
+                    Text("完全在设备本地运行.收藏与最近记录仅存于 UserDefaults，无任何分析、账号或上传.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -85,7 +85,7 @@ struct VirtualLocationSettingsView: View {
                 Section("关于") {
                     LabeledContent("版本", value: appVersion)
                     LabeledContent("引擎", value: "idevice DVT 定位模拟")
-                    Text("虚拟定位功能移植自开源项目 locus（MIT）：定位注入通过 idevice FFI 调用 Apple 开发者定位模拟服务，无需越狱或漏洞。")
+                    Text("虚拟定位功能移植自开源项目 locus（MIT）：定位注入通过 idevice FFI 调用 Apple 开发者定位模拟服务.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -113,7 +113,7 @@ struct VirtualLocationSettingsView: View {
             .alert("导入配对文件", isPresented: $showImportGuide) {
                 Button("好", role: .cancel) {}
             } message: {
-                Text("请退出本页，进入底部「应用」标签页，使用右上角的配对导入功能导入 idevice_pair 生成的配对文件；或使用 iPASide 安装时附带配对文件。导入后回到这里即可开始虚拟定位。")
+                Text("请退出本页，进入底部「应用」标签页，使用右上角的配对导入功能导入 idevice_pair 生成的配对文件；或使用 iPASide 安装时附带配对文件.导入后回到这里即可开始虚拟定位.")
             }
         }
     }

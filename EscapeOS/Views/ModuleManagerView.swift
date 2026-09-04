@@ -2,9 +2,9 @@
 //  ModuleManagerView.swift
 //  EscapeSpace
 //
-//  模块管理主界面（v0.3.48，底栏第五个 tab；v0.3.49 卡片化重构）。
+//  模块管理主界面（v0.3.48，底栏第五个 tab；v0.3.49 卡片化重构）.
 //  卡片风格对齐 KernelSU / 爱思模块市场：名称 + 启用 Toggle + 版本/作者 +
-//  描述 + 动作按钮 + 底部「打开(WebView) / 卸载」胶囊按钮。
+//  描述 + 动作按钮 + 底部「打开(WebView) / 卸载」胶囊按钮.
 //
 
 import SwiftUI
@@ -75,7 +75,7 @@ struct ModuleManagerView: View {
                         }
                         .tint(.blue)
                     } footer: {
-                        Text("开启后，覆盖安装新版本 IPA 时内置模块自动恢复；关闭后卸载即永久卸载（重新导入 .zip 可恢复）。")
+                        Text("开启后，覆盖安装新版本 IPA 时内置模块自动恢复；关闭后卸载即永久卸载（重新导入 .zip 可恢复）.")
                     }
 
                     Section {
@@ -90,7 +90,7 @@ struct ModuleManagerView: View {
                         }
                         .tint(.blue)
                     } footer: {
-                        Text("内置模块被卸载后未自动回归时（如同一安装包反复覆盖），点此手动恢复。")
+                        Text("内置模块被卸载后未自动回归时（如同一安装包反复覆盖），点此手动恢复.")
                     }
                 }
                 .navigationTitle("模块设置")

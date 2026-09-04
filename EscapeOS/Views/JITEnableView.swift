@@ -1,9 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// 启用 JIT（汉化移植自 StikDebug，对齐原版 Home 的列表组织）。
+/// 启用 JIT（汉化移植自 StikDebug，对齐原版 Home 的列表组织）.
 /// 布局与 StikDebug 一致：导航栏常驻搜索框 + 「最近使用」分组 +
-/// 「Apps with get-task-allow」全部分组；行内显示 App 图标 + 名称 + Bundle ID。
+/// 「Apps with get-task-allow」全部分组；行内显示 App 图标 + 名称 + Bundle ID.
 struct JITEnableView: View {
     @State private var apps: [JITAppInfo] = []
     @State private var isLoading = false
@@ -47,13 +47,13 @@ struct JITEnableView: View {
                     if !hasPairing {
                         Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("启用 JIT 需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接；③ 应用签名带 get-task-allow。")
+                        Text("启用 JIT 需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接；③ 应用签名带 get-task-allow.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("未找到可启用 JIT 的应用。")
+                        Text("未找到可启用 JIT 的应用.")
                             .foregroundStyle(.secondary)
-                        Text("只有签名带 get-task-allow（开发签名 / 证书直装）的应用才能启用 JIT；App Store 应用不适用。")
+                        Text("只有签名带 get-task-allow（开发签名 / 证书直装）的应用才能启用 JIT；App Store 应用不适用.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -61,9 +61,9 @@ struct JITEnableView: View {
             } else {
                 if !searchText.isEmpty && filteredApps.isEmpty {
                     Section {
-                        Text("没有匹配的应用。")
+                        Text("没有匹配的应用.")
                             .foregroundStyle(.secondary)
-                        Text("换个名称或 Bundle ID 试试。")
+                        Text("换个名称或 Bundle ID 试试.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -85,7 +85,7 @@ struct JITEnableView: View {
                     } header: {
                         Label("Apps with get-task-allow", systemImage: "bolt.badge.a.fill")
                     } footer: {
-                        Text("点击应用后将以调试模式启动它,JIT 权限在应用运行期间保持；应用退出后再次使用需重新启用。")
+                        Text("点击应用后将以调试模式启动它,JIT 权限在应用运行期间保持；应用退出后再次使用需重新启用.")
                     }
                 }
 
@@ -130,7 +130,7 @@ struct JITEnableView: View {
                 confirmTarget = nil
             }
         } message: {
-            Text(confirmTarget.map { "为「\($0.name)」（\($0.bundleID)）启用 JIT？\n应用将以调试模式启动，当前界面会退到后台。" } ?? "")
+            Text(confirmTarget.map { "为「\($0.name)」（\($0.bundleID)）启用 JIT？\n应用将以调试模式启动，当前界面会退到后台." } ?? "")
         }
         .alert("启用失败", isPresented: $showError) {
             Button("好", role: .cancel) {}
@@ -198,7 +198,7 @@ struct JITEnableView: View {
                 }.value
                 await MainActor.run {
                     isWorking = false
-                    successMessage = "「\(app.name)」已以调试模式启动，JIT 已生效。\n应用在运行期间保持 JIT；返回可继续操作."
+                    successMessage = "「\(app.name)」已以调试模式启动，JIT 已生效.\n应用在运行期间保持 JIT；返回可继续操作."
                     showSuccess = true
                 }
             } catch {
