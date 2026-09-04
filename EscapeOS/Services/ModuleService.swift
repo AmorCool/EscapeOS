@@ -560,7 +560,7 @@ final class ModuleService {
         guard let symbol = action.symbol, !symbol.isEmpty else {
             throw ModuleError.badAction("动作「\(action.label)」缺少 symbol 字段")
         }
-        let (rc, actual) = try BinaryModuleRunner.shared.bridgeCall(
+        let (rc, actual) = try BinaryModuleRunner.bridgeCall(
             module: module, symbol: symbol, argSpecs: action.args ?? [])
         guard rc == 0 else {
             throw ModuleError.badAction("「\(action.label)」执行失败 rc=\(rc)（详见模块日志）")
