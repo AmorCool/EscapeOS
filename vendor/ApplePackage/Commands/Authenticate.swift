@@ -116,6 +116,7 @@ public enum Authenticator {
         var currentAttempt = 1
         var redirectAttempt = 0
         var lastError: Error?
+        var promptedForCode = false
 
         // v0.2.160：上限提到 4 次，对齐 ipatool 对 204/404/5xx 的重试策略。
         while currentAttempt <= 4, redirectAttempt <= 3 {
@@ -179,7 +180,13 @@ public enum Authenticator {
                 //    与递增 attempt 再试）。上限内继续循环，不直接报错。
                 // v0.3.27：204 首次出现 → 2FA 验证码 needed（AppStorePro 实锤："204空响应通常表示需要输入验证码"）
                 // 抛带 "Authentication requires verification code" 的错误 → 触发已有的 TwoFactorCodePrompt UI
-                if status.code == 204 && currentAttempt == 1 && code.isEmpty {
+                // v0.3.168：204→2FA 判断不再限定 attempt==1——真机实锤（01:02 日志）：
+                // anisette 换服务器 provision 成功后第 4 次尝试才返回 204，attempt==1
+                // 的前 3 次是 403/404（旧票据），旧逻辑把 204 当"可重试"吞掉 4 次后
+                // 报错，2FA 弹窗从未触发。改为：任意 attempt 首次 204（且未输入码）
+                // 一律判定需要验证码（一次），避免多轮弹窗.
+                if status.code == 204 && code.isEmpty && !promptedForCode {
+                    promptedForCode = true
                     LoginLogger.shared.log("Apple 返回 204 → 双重认证验证码 needed，触发 2FA 弹窗")
                     try ensureFailed("Authentication requires verification code")
                 }

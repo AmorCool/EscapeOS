@@ -312,7 +312,7 @@ struct AppStoreDownloadView: View {
             } label: {
                 Label("重置设备标识", systemImage: "arrow.counterclockwise")
             }
-            .tint(.orange)
+            .tint(.blue)
         } header: {
             Text("设备与认证")
         } footer: {
