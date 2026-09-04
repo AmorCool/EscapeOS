@@ -123,38 +123,7 @@ struct CertificateView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 0) {
-                // v0.3.152 p12 导入（同源证书方案）
-                Button {
-                    showP12Picker = true
-                } label: {
-                    Label("导入 p12 证书（与主程序同源）", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal)
-                .padding(.top, 6)
-                if let msg = p12Message {
-                    Text(msg)
-                        .font(.caption)
-                        .foregroundStyle(msg.hasPrefix("✓") ? Color.green : Color.orange)
-                        .padding(.horizontal)
-                }
-                if selecting {
-                    HStack {
-                        Text("已选 \(selected.count) 项")
-                            .font(.subheadline)
-                        Spacer()
-                        Button("吊销", role: .destructive) {
-                            showBatchRevokeConfirm = true
-                        }
-                        .disabled(selected.isEmpty || manager.isWorking)
-                    }
-                    .padding()
-                    .background(.bar)
-                }
-            }
-            .background(selecting ? Color.clear : .bar)
+            p12ImportFooter
         }
         .onChange(of: showP12Picker) { shown in
             guard shown else { return }
@@ -353,6 +322,53 @@ struct CertificateView: View {
     /// 是否命中白名单（序列号精确匹配）
     private func isWhitelisted(_ cert: DeveloperCertificate) -> Bool {
         !certStore.revokeWhitelist.isEmpty && cert.serialNumber == certStore.revokeWhitelist
+    }
+
+    // v0.3.152：p12 导入 footer（拆出 body 修复 type-check 超时）
+    @ViewBuilder
+    private var p12ImportFooter: some View {
+        VStack(spacing: 0) {
+            Button {
+                showP12Picker = true
+            } label: {
+                Label("导入 p12 证书（与主程序同源）", systemImage: "square.and.arrow.down")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .padding(.horizontal)
+            .padding(.top, 6)
+            if let msg = p12Message {
+                p12MessageText(msg)
+            }
+            if selecting {
+                batchRevokeBar
+            }
+        }
+        .background(selecting ? Color.clear : .bar)
+    }
+
+    @ViewBuilder
+    private func p12MessageText(_ msg: String) -> some View {
+        let isOK = msg.hasPrefix("✓")
+        Text(msg)
+            .font(.caption)
+            .foregroundStyle(isOK ? Color.green : Color.orange)
+            .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var batchRevokeBar: some View {
+        HStack {
+            Text("已选 \(selected.count) 项")
+                .font(.subheadline)
+            Spacer()
+            Button("吊销", role: .destructive) {
+                showBatchRevokeConfirm = true
+            }
+            .disabled(selected.isEmpty || manager.isWorking)
+        }
+        .padding()
+        .background(.bar)
     }
 
     // v0.3.152：白名单 swipeActions 拆出（body type-check 超时修复）
