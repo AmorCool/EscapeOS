@@ -8,6 +8,8 @@ final class AppStoreDownloadStore {
 
     static let shared = AppStoreDownloadStore()
     private init() {
+        // v0.3.171：账号区域注入（国区选 CN，见 storefront 与 2FA 短信渠道关联）
+        Configuration.countryCode = UserDefaults.standard.string(forKey: "AppStore.CountryCode") ?? "US"
         Self.bootstrapDeviceIdentifier()
         Self.bootstrapSAPSigner()
     }

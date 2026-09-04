@@ -321,7 +321,9 @@ public enum Authenticator {
             // v0.3.24：Content-Type 改回 x-apple-plist——AppStorePro 二进制
             // 字符串分析实锤（application/x-apple-plist 出现 2 次，非 urlencoded）
             ("Content-Type", "application/x-apple-plist"),
-            ("X-Apple-Store-Front", "143441"),
+            // v0.3.171：storefront 随账号区域（Configuration.countryCode）——
+            // 此前硬编码 143441（US），国区账号 2FA 短信收不到（真机实锤）
+            ("X-Apple-Store-Front", Configuration.storeId(for: Configuration.countryCode) ?? "143441"),
         ]
         // v0.3.1：SAP 签名 —— 对**最终发出的请求体字节**签名（ipatool client.go 同款），
         // 失败直接抛错给登录 UI（显式错误优于无头 403）。签名对象不含 HTTP 头。

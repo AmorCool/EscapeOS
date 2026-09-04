@@ -292,9 +292,24 @@ struct AppStoreDownloadView: View {
     /// v0.3.167：设备标识（guid）展示与重置——Apple 边缘对已标记的标识持续拒
     ///（native/fast 301/404）；重置 = 换新"虚拟机器"身份，配合换网络/换
     /// Anisette 服务器排查登录被拒.
+    @AppStorage("AppStore.CountryCode") private var countryCode: String = "US"
+    private static let countryOptions: [(String, String)] = [
+        ("中国", "CN"), ("美国", "US"), ("日本", "JP"),
+        ("韩国", "KR"), ("英国", "GB"), ("德国", "DE"), ("中国香港", "HK"),
+    ]
+
     @ViewBuilder
     private var deviceSection: some View {
         Section {
+            Picker("账号区域", selection: $countryCode) {
+                ForEach(Self.countryOptions, id: \.1) { label, code in
+                    Text("\(label)（\(code)）").tag(code)
+                }
+            }
+            .onChange(of: countryCode) { _, newValue in
+                Configuration.countryCode = newValue
+                toast = "已切换账号区域为 \(newValue)（storefront \(Configuration.storeId(for: newValue) ?? "?")），请重新登录"
+            }
             LabeledContent("设备标识（guid）") {
                 Text(Configuration.deviceIdentifier)
                     .font(.caption.monospaced())
@@ -316,7 +331,7 @@ struct AppStoreDownloadView: View {
         } header: {
             Text("设备与认证")
         } footer: {
-            Text("登录持续被拒（403/301/404）时重置设备标识，并尝试切换 Anisette 服务器或更换网络后重试.")
+            Text("账号区域需与 Apple ID 注册地区一致（美区账号选美国）——不一致可能导致验证码收不到. 登录持续被拒时重置设备标识，或尝试切换 Anisette 服务器/更换网络.")
         }
     }
 

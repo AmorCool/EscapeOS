@@ -154,6 +154,10 @@ public enum Configuration {
         storeFrontValues[countryCode]
     }
 
+    /// v0.3.171：账号区域（决定 X-Apple-Store-Front）——须与 Apple ID 注册地区一致，
+    /// 由宿主（AppStore 下载页设置）登录前注入，默认 US（ipatool 同款，兼容性最好）.
+    public nonisolated(unsafe) static var countryCode: String = "US"
+
     public static func countryCode(for storeId: String) -> String? {
         storeFrontValues.first(where: { $0.value == storeId })?.key
     }
