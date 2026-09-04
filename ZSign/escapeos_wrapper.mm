@@ -3,6 +3,7 @@
 // —— 调用方必须先复制到全新路径（内核按 vnode 缓存校验判决，见 MachoReSign.swift）。
 #import <Foundation/Foundation.h>
 #include <string.h>
+#include <fcntl.h>
 #include "openssl.h"
 #include "macho.h"
 #include "common/log.h"
@@ -202,9 +203,13 @@ static void escDumpBlob(const uint8_t* base, size_t size, uint32_t dataoff,
 }
 
 // Mach-O 头 + load commands + 签名 blob 全量诊断
+// sigOffOut/sigSizeOut：返回 LC_CODE_SIGNATURE 的 dataoff/datasize（供内核判决用）
 static void escDumpMachO(const std::string& path, const char* tag,
-                         const std::function<void(const std::string&)>& diag) {
+                         const std::function<void(const std::string&)>& diag,
+                         uint32_t* sigOffOut = NULL, uint32_t* sigSizeOut = NULL) {
     char buf[512];
+    if (sigOffOut) *sigOffOut = 0;
+    if (sigSizeOut) *sigSizeOut = 0;
     diag(std::string("[") + tag + "] path=" + path + "\n");
     FILE* fp = fopen(path.c_str(), "rb");
     if (!fp) {
@@ -267,6 +272,10 @@ static void escDumpMachO(const std::string& path, const char* tag,
     }
     if (sigCount == 0) diag("  （无 LC_CODE_SIGNATURE）\n");
     else if (sigCount > 1) diag("  ⚠ 多个 LC_CODE_SIGNATURE！\n");
+    else {
+        if (sigOffOut) *sigOffOut = sigOff;
+        if (sigSizeOut) *sigSizeOut = sigSize;
+    }
     if (sigCount >= 1) {
         int fd = open(path.c_str(), O_RDONLY);
         if (fd >= 0) {
@@ -278,6 +287,44 @@ static void escDumpMachO(const std::string& path, const char* tag,
             close(fd);
         }
     }
+}
+
+// v0.3.149：内核判决（LC checkCodeSignature 同款，LCMachOUtils.m L520-560）——
+// F_ADDFILESIGS_RETURN 把签名 blob 喂给内核；F_CHECK_LV 让内核做 Library
+// Validation 并返回 lv_error_message（内核视角的确切拒绝原因）。
+// LC 在 validateJITLessSetup 里用它验证证书签名是否真实有效。
+static void escKernelCheck(const std::string& path, uint32_t sigOff, uint32_t sigSize,
+                           const std::function<void(const std::string&)>& diag) {
+    char buf[640];
+    if (sigSize == 0) { diag("[内核判决] 无签名可喂\n"); return; }
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        snprintf(buf, sizeof(buf), "[内核判决] open 失败 errno=%d\n", errno);
+        diag(buf);
+        return;
+    }
+    // 1) 喂签名（LC 同款：fs_file_start=0 单架构；成功后 fs_file_start 被内核更新为覆盖长度）
+    fsignatures_t siginfo;
+    memset(&siginfo, 0, sizeof(siginfo));
+    siginfo.fs_file_start = 0;
+    siginfo.fs_blob_start = (void*)(long)sigOff;
+    siginfo.fs_blob_size = (size_t)sigSize;
+    int r1 = fcntl(fd, F_ADDFILESIGS_RETURN, &siginfo);
+    snprintf(buf, sizeof(buf), "[内核判决] F_ADDFILESIGS_RETURN=%d (errno=%d) 覆盖长度=%lld/%u\n",
+             r1, r1 == 0 ? 0 : errno, (long long)siginfo.fs_file_start, sigSize);
+    diag(buf);
+    // 2) Library Validation 判决（内核给出错误消息）
+    char lvmsg[512] = {0};
+    fchecklv_t lv;
+    memset(&lv, 0, sizeof(lv));
+    lv.lv_error_message_size = sizeof(lvmsg);
+    lv.lv_error_message = lvmsg;
+    lv.lv_file_start = 0;
+    int r2 = fcntl(fd, F_CHECK_LV, &lv);
+    snprintf(buf, sizeof(buf), "[内核判决] F_CHECK_LV=%d (errno=%d) LV消息=\"%s\"\n",
+             r2, r2 == 0 ? 0 : errno, lvmsg[0] ? lvmsg : "(空)");
+    diag(buf);
+    close(fd);
 }
 
 // 生成 RSA2048 私钥(PEM) + CSR(PEM)。Apple 免费证书流程与 SideStore/AltSign 一致：
@@ -474,7 +521,10 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         diagWrite(std::string("refreshFile(after)=") + (rfAfter ? "✓" : ("✗ " + rfErr2)) + "\n");
         if (rfAfter) escStatDiag(path, "refreshFile后", diagWrite);
         // v0.3.148：签名后独立回读解析（验证落盘 + 结构 + CDHash 自检）
-        escDumpMachO(path, "模块dylib(签名后回读)", diagWrite);
+        uint32_t kSigOff = 0, kSigSize = 0;
+        escDumpMachO(path, "模块dylib(签名后回读)", diagWrite, &kSigOff, &kSigSize);
+        // v0.3.149：喂签名给内核 + F_CHECK_LV 拿内核判决（LC validateJITLessSetup 同款）
+        escKernelCheck(path, kSigOff, kSigSize, diagWrite);
         ok = rfAfter;
     }
     for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
