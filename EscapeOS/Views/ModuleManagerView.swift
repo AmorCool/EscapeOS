@@ -72,21 +72,8 @@ struct ModuleManagerView: View {
         .sheet(isPresented: $showModuleSettings) {
             NavigationView {
                 List {
-                    Section {
-                        Toggle(isOn: Binding(
-                            get: { ModuleService.restoreOnUpgrade },
-                            set: { ModuleService.restoreOnUpgrade = $0 }
-                        )) {
-                            HStack {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                Text("覆盖安装后恢复内置模块")
-                            }
-                        }
-                        .tint(.blue)
-                    } footer: {
-                        Text("开启后，覆盖安装新版本 IPA 时内置模块自动恢复；关闭后卸载即永久卸载（重新导入 .zip 可恢复）.")
-                    }
-
+                    // v0.3.164：已删除「覆盖安装后恢复内置模块」开关——内置模块
+                    // 卸载后不会随任何覆盖安装自动回归；恢复走下方手动按钮.
                     Section {
                         Button {
                             ModuleService.shared.restoreBundledModules()
@@ -99,7 +86,7 @@ struct ModuleManagerView: View {
                         }
                         .tint(.blue)
                     } footer: {
-                        Text("内置模块被卸载后未自动回归时（如同一安装包反复覆盖），点此手动恢复.")
+                        Text("内置模块被卸载后想恢复时点此（清空卸载记录并重新安装内置模块）.")
                     }
                 }
                 .navigationTitle("模块设置")

@@ -180,7 +180,7 @@ final class ModuleService {
 
     /// 用户主动卸载过的模块 id（防止内置模块重启后自动回归）
     private static let uninstalledKey = "Module.uninstalled.ids"
-    /// 覆盖安装检测锚点：CFBundleVersion（build 号，每次发版必变）
+    /// 安装版本锚点：CFBundleVersion（build 号，每次发版必变）
     private static let hostInstallVersionKey = "Module.hostInstall.version"
 
     private var uninstalledIds: Set<String> {
@@ -189,12 +189,8 @@ final class ModuleService {
 
     /// 首次启动时把 bundle 内置模块安装到 Documents/Modules.
     /// 幂等：目录已存在 或 用户曾主动卸载过 → 跳过.
-    /// 覆盖安装新 IPA 后是否恢复内置模块（用户可关）
-    private static let restoreOnUpgradeKey = "Module.restoreOnUpgrade"
-    static var restoreOnUpgrade: Bool {
-        get { UserDefaults.standard.object(forKey: restoreOnUpgradeKey) as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: restoreOnUpgradeKey) }
-    }
+    /// v0.3.164：已删除「覆盖安装后自动恢复内置模块」——覆盖安装（含升级）
+    /// 一律尊重卸载记录；需要恢复时用模块设置的「立即恢复内置模块」手动按钮.
 
     /// 内置且不落盘（bundle 原地加载）的二进制模块：id → bundle 内模块目录
     private var inPlaceBundled: [String: URL] = [:]
@@ -245,19 +241,18 @@ final class ModuleService {
     }
 
     private func bootstrapBundledModules() {
-        // 覆盖安装检测锚点：CFBundleVersion（build 号）.
+        // 安装版本锚点：CFBundleVersion（build 号）.
         // 旧方案（bundle 目录/可执行文件 mtime）在 LC 环境会漂移——卸载后重启模块"复活"的 bug 根因.
         // CFBundleVersion 每次发版必变、同版本内永远稳定（v0.3.72 修复）.
+        // v0.3.164：不再随覆盖安装/升级自动恢复内置模块（尊重卸载记录）——
+        // 需要恢复时用模块设置里的「立即恢复内置模块」手动按钮.
         let installVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
         let recorded = UserDefaults.standard.string(forKey: Self.hostInstallVersionKey)
         if recorded == nil {
             UserDefaults.standard.set(installVersion, forKey: Self.hostInstallVersionKey)
         } else if recorded != installVersion {
-            if Self.restoreOnUpgrade {
-                UserDefaults.standard.removeObject(forKey: Self.uninstalledKey)
-                print("[Module] 检测到覆盖安装（CFBundleVersion \(recorded ?? "?") → \(installVersion)），恢复内置模块")
-            }
             UserDefaults.standard.set(installVersion, forKey: Self.hostInstallVersionKey)
+            print("[Module] 检测到覆盖安装（CFBundleVersion \(recorded ?? "?") → \(installVersion)）")
         }
 
         guard let bundledURL = Bundle.main.url(forResource: "BundledModules", withExtension: nil) else { return }

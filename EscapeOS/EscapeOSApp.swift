@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct EscapeSpaceApp: App {
@@ -27,6 +28,26 @@ struct EscapeSpaceApp: App {
         setenv("GOMAXPROCS", "4", 1)         // 6 核设备限制 P 数，减少线程与结构开销
         // SSH Debug 模式：开启后随 App 启动自动拉起 SSH 服务（见 SSH 调试页开关）
         SSHServerService.shared.autoStartIfNeeded()
+        // v0.3.164：后台保活恢复——开关已开但上次进程已死时，启动即恢复保活
+        // （audio 静音播放，UIBackgroundModes audio）; 否则开关开了也没人 start.
+        if KeepAliveManager.shared.isEnabled {
+            KeepAliveManager.shared.start()
+        }
+        // 切后台/回前台时保活状态同步：audio session 可能被系统中断释放，
+        // 回前台或切后台都补一次 start（幂等）; 关闭开关时收回.
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                           object: nil, queue: .main) { _ in
+            if KeepAliveManager.shared.isEnabled {
+                KeepAliveManager.shared.start()
+            }
+        }
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                           object: nil, queue: .main) { _ in
+            if KeepAliveManager.shared.isEnabled {
+                KeepAliveManager.shared.start()
+            }
+        }
     }
 
     var body: some Scene {
