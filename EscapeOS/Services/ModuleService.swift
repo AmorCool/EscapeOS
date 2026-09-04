@@ -108,6 +108,8 @@ struct EscapeModuleAction: Identifiable, Codable {
     var args: [String]?
     /// 通用桥调用: 成功消息模板（{0}/{1} 替换实际实参）
     var success: String?
+    /// 通用桥调用: 成功后宿主是否把模块标记为已停止（用于停止类 action 的状态刷新）
+    var marksStopped: Bool?
     /// 执行前确认文案；为空则直接执行
     var confirm: String?
     /// 超时秒数（预留）

@@ -59,6 +59,15 @@ struct ModuleManagerView: View {
                 }
                 .accessibilityLabel("导入模块")
             }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                // v0.3.163：右上角刷新——重扫模块列表与运行状态
+                Button {
+                    reload()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("刷新模块列表")
+            }
         }
         .sheet(isPresented: $showModuleSettings) {
             NavigationView {
@@ -494,6 +503,11 @@ struct ModuleManagerView: View {
             await MainActor.run {
                 runningActionID = nil
                 resultAlert = result
+                // v0.3.163：桥 action 声明 marksStopped → 成功/失败都收口宿主状态并刷新
+                if action.marksStopped == true {
+                    BinaryModuleRunner.shared.markStopped(module: module)
+                }
+                reload()
             }
         }
     }

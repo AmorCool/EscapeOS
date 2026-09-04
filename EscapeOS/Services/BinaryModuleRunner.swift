@@ -128,9 +128,9 @@ final class BinaryModuleRunner: ObservableObject {
             setError(module.id, "启动失败: \(error.localizedDescription)")
         }
     }
-    /// 停止模块（外部进程型 SIGKILL）.
+    /// 停止模块（外部进程型 SIGKILL）。
     /// 进程内常驻模块不在此停止：由模块通过 actions 声明桥接停止符号（type=bridge），
-    /// 宿主只提供执行接口，语义完全由模块决定.
+    /// 宿主只提供执行接口，语义完全由模块决定。
     func stop(module: EscapeModule) {
         guard let pid = runningProcesses[module.id] else { return }
         guard pid > 0 else {
@@ -140,6 +140,17 @@ final class BinaryModuleRunner: ObservableObject {
         kill(pid, SIGKILL)
         runningProcesses[module.id] = nil
         print("[Binary][\(module.id)] 已停止 pid=\(pid)")
+    }
+
+    /// v0.3.163：桥 action 成功后宿主侧状态收口——把模块标记为已停止并落日志.
+    /// 由执行桥 action 的 UI 在成功后调用（action.marksStopped == true 时）.
+    func markStopped(module: EscapeModule) {
+        let wasInProcess = inProcessModules.remove(module.id) != nil
+        runningProcesses[module.id] = nil
+        if wasInProcess {
+            let logFile = ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log")
+            appendLog(logFile, "[host] 模块已标记停止（桥 action 成功）—进程内停止后重启 App 才能再次启动")
+        }
     }
 
     /// v0.3.159：通用桥调用——按 action 声明解析实参并调用模块导出符号.
@@ -264,21 +275,10 @@ final class BinaryModuleRunner: ObservableObject {
             } else {
             // v0.3.122：真证书路径（SideStore 信任链）——有开发证书时先签后 dlopen.
             // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）.
-            // v0.3.161：无本地证书时自动恢复——已登录 Apple ID 则自动签发
-            // （Apple 异步签发，createCertificate 内部轮询），失败再走失败分支.
-            if !DeveloperCertStore.shared.hasCert {
-                appendLog(logFile, "[host] 本地无签名证书 → 尝试自动签发（需已登录 Apple ID）")
-                let sem = DispatchSemaphore(value: 0)
-                nonisolated(unsafe) var certOK = false
-                Task.detached(priority: .userInitiated) {
-                    certOK = await Self.ensureCertAvailable(logFile: logFile)
-                    sem.signal()
-                }
-                _ = sem.wait(timeout: .now() + 60)
-                if certOK {
-                    appendLog(logFile, "[host] 证书自动签发完成")
-                }
-            }
+            // v0.3.163：不做自动签发——Apple 新签发证书与主程序（LC/侧载工具所持）
+            // serial 必然不同，真机实锤 iOS 27 beta 要求 dlopen 库签名证书与主程序
+            // **同款**（serial 级，identifier 已由 useMainIdent 保证）。自动签发只会
+            // 覆盖用户导入的同款 p12，把可用状态打成不可用（162 真机教训）.
             if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     appendLog(logFile, "[host] 开发证书可用 → 真证书签名")
                     let signDbg = logFile.deletingLastPathComponent()
@@ -310,7 +310,7 @@ final class BinaryModuleRunner: ObservableObject {
                 }
                 if handle == nil, !Self.uloaderEnabled {
                     // v0.3.141：必崩兜底已封 —— 给明确指引代替闪退
-                    uloaderErrorText = "模块无法安全加载: dlopen 被系统拒绝且真证书签名失败. 请确认已登录 Apple ID（启动时会自动签发证书）或到「更多 → 证书管理」导入 p12"
+                    uloaderErrorText = "模块无法安全加载: dlopen 被系统拒绝且真证书签名失败. 模块签名需与主程序同款证书（serial 一致），请在「更多 → 证书管理」导入 LC/SideStore 正在使用的 p12"
                     appendLog(logFile, "[host] 用户态加载器已禁用(v0.3.141): \(uloaderErrorText!)")
                 }
                 if handle == nil, Self.uloaderEnabled {
@@ -383,30 +383,6 @@ final class BinaryModuleRunner: ObservableObject {
         pthread_attr_destroy(&attr)
         guard rc == 0 else {
             throw BinaryModuleError.spawnFailed("pthread_create 失败：\(rc)")
-        }
-    }
-    /// v0.3.161：确保证书可用——无本地证书且 Apple ID 已登录时自动签发
-    /// （createCertificateWithStoredAccount 内部含异步签发轮询）.返回最终是否有证书.
-    nonisolated private static func ensureCertAvailable(logFile: URL) async -> Bool {
-        let store = DeveloperCertStore.shared
-        if store.hasCert { return true }
-        do {
-            try await store.createCertificateWithStoredAccount()
-        } catch {
-            Self.note(logFile, "自动签发失败: \(error.localizedDescription)")
-        }
-        if store.hasCert {
-            Self.note(logFile, "自动签发成功，本地证书已就绪")
-        }
-        return store.hasCert
-    }
-    /// static 上下文的 run.log 追加（与实例 appendLog 同格式）
-    nonisolated private static func note(_ logFile: URL, _ line: String) {
-        let text = "[\(DateFormatter.now())][\(DateFormatter.logStamp.string(from: Date()))] [host] \(line)\n"
-        if let fh = FileHandle(forWritingAtPath: logFile.path) {
-            fh.seekToEndOfFile(); fh.write(text.data(using: .utf8)!); try? fh.close()
-        } else {
-            try? text.data(using: .utf8)?.write(to: logFile)
         }
     }
     /// 查找模块目录下 bin/*.dylib（可拆卸模块形态）
@@ -491,7 +467,7 @@ final class BinaryModuleRunner: ObservableObject {
                 }
                 // v0.3.141：uloader 禁用开关（本环境映射代码页执行必被 AMFI 终止 → 必崩）
                 guard Self.uloaderEnabled else {
-                    note("用户态加载器已禁用(v0.3.141): dlopen 被拒且真证书签名失败. 请确认已登录 Apple ID（启动时自动签发）或导入 p12")
+                    note("用户态加载器已禁用(v0.3.141): dlopen 被拒且真证书签名失败. 模块签名需与主程序同款证书（serial 一致），请在证书管理导入 LC/SideStore 正在使用的 p12")
                     return dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)   // RTLD_DEFAULT：内置静态
                 }
                 // v0.3.119：匿名内存方案下 uloader 不需要有效签名——直接加载原始文件
