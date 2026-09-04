@@ -84,6 +84,8 @@ struct CertificateView: View {
                     }
                 }
             }
+            // v0.3.157：本地签名证书（p12）独立分组——登录与否都显示，与 Apple 侧证书列表区分
+            localSigningSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("证书管理")
@@ -335,39 +337,15 @@ struct CertificateView: View {
         !certStore.revokeWhitelist.isEmpty && cert.serialNumber == certStore.revokeWhitelist
     }
 
-    // v0.3.152：p12 导入 footer（拆出 body 修复 type-check 超时）
+    // v0.3.152：底部安全区（现仅批量吊销栏；p12 已移至列表内独立分组 v0.3.157）
     @ViewBuilder
     private var p12ImportFooter: some View {
         VStack(spacing: 0) {
-            Button {
-                showP12Picker = true
-            } label: {
-                Label("导入 p12 证书（与主程序同源）", systemImage: "square.and.arrow.down")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .padding(.horizontal)
-            .padding(.top, 6)
-            // v0.3.155 删除已导入证书（LC 同款：仅清本地，不吊销 Apple 侧）
-            if certStore.hasCert {
-                Button(role: .destructive) {
-                    showRemoveCertConfirm = true
-                } label: {
-                    Label("删除已导入证书（仅本地）", systemImage: "trash")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal)
-                .padding(.top, 6)
-            }
-            if let msg = p12Message {
-                p12MessageText(msg)
-            }
             if selecting {
                 batchRevokeBar
             }
         }
-        .background(.bar)
+        .background(selecting ? Color.clear : .bar)
     }
 
     @ViewBuilder
@@ -392,6 +370,42 @@ struct CertificateView: View {
         }
         .padding()
         .background(.bar)
+    }
+
+    // v0.3.157：本地签名证书（p12）独立分组。作用：模块/文件真证书签名用的
+    // 本地证书（导入的 p12 或登录自动签发），与上方 Apple 侧证书列表（吊销对象）区分。
+    @ViewBuilder
+    private var localSigningSection: some View {
+        Section {
+            if certStore.hasCert {
+                Label(certStore.localCertSummary, systemImage: "checkmark.seal.fill")
+                    .font(.footnote)
+                    .foregroundColor(.green)
+            } else {
+                Label("未设置本地签名证书", systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundColor(.orange)
+            }
+            Button {
+                showP12Picker = true
+            } label: {
+                Label("导入 p12 证书", systemImage: "square.and.arrow.down")
+            }
+            if certStore.hasCert {
+                Button(role: .destructive) {
+                    showRemoveCertConfirm = true
+                } label: {
+                    Label("删除已导入证书（仅本地）", systemImage: "trash")
+                }
+            }
+            if let msg = p12Message {
+                p12MessageText(msg)
+            }
+        } header: {
+            Text("签名证书（p12）")
+        } footer: {
+            Text("用于模块/文件真证书签名。iOS 27 beta 起签名 identifier 需与主程序一致（已自动处理），证书本身 TeamID 匹配即可. 导入的 p12 会替换本地证书文件，不吊销 Apple 侧证书.")
+        }
     }
 
     // v0.3.152：白名单 swipeActions 拆出（body type-check 超时修复）

@@ -211,6 +211,22 @@ final class DeveloperCertStore: ObservableObject {
 
     // MARK: - 真证书签名
 
+    /// v0.3.157：本地签名证书摘要（UI 展示用）——serial 尾号；读取失败给占位。
+    var localCertSummary: String {
+        guard hasCert,
+              let certData = try? Data(contentsOf: certURL) else {
+            return "本地签名证书不可用"
+        }
+        let hex = certData.withUnsafeBytes { cbuf -> String in
+            guard let cp = cbuf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "?" }
+            let out = UnsafeMutablePointer<CChar>.allocate(capacity: 96)
+            defer { out.deallocate() }
+            let r = zsign_cert_serial(cp, Int32(certData.count), out, 96)
+            return r > 0 ? String(cString: out) : "?"
+        }
+        return hex == "?" ? "签名证书 serial 解析失败" : "签名证书 serial …\(hex.suffix(12))"
+    }
+
     /// 对 dylib 就地做真证书签名。返回 true = 签名成功。
     /// 诊断日志（zsign 全部输出 + 分步结果）落盘 dataDir/go_sign_debug.log。
     /// v0.3.152：签名前对比"主程序叶子证书 serial"与"当前证书 serial"——

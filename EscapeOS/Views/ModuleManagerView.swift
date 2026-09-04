@@ -184,12 +184,25 @@ struct ModuleManagerView: View {
             get: { webviewModule != nil },
             set: { if !$0 { webviewModule = nil } }
         )) {
-            if let m = webviewModule, let root = ModuleService.shared.webrootURL(for: m) {
-                NavigationView {
-                    ModuleWebView(startPage: root.appendingPathComponent("index.html"),
-                                  readAccessRoot: root)
-                        .ignoresSafeArea(edges: .bottom)
-                        .navigationTitle(m.name)
+            if let m = webviewModule {
+                // 统一内嵌打开：静态 webroot 优先，否则 binary.port 的本地 HTTP 服务页
+                let root = ModuleService.shared.webrootURL(for: m)
+                let remote = root == nil ? BinaryModuleRunner.shared.webURL(for: m) : nil
+                if let page = root?.appendingPathComponent("index.html") ?? remote {
+                    NavigationView {
+                        ModuleWebView(startPage: page, readAccessRoot: root)
+                            .ignoresSafeArea(edges: .bottom)
+                            .navigationTitle(m.name)
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .navigationBarLeading) {
+                                    Button("关闭") { webviewModule = nil }
+                                }
+                            }
+                    }
+                } else {
+                    // 模块未声明任何可打开页面（理论上不会到这：按钮只在有页面时出现）
+                    Text("该模块没有可打开的 Web 页面")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .navigationBarLeading) {
@@ -256,9 +269,10 @@ struct ModuleManagerView: View {
                 if running {
                     if let url = runner.webURL(for: module) {
                         Button {
-                            runner.openWebUI(module: module)
+                            // v0.3.157：当前界面内嵌打开（对齐 KernelSU WebUI 体验，不再跳 Safari）
+                            webviewModule = module
                         } label: {
-                            Label("WebUI", systemImage: "safari")
+                            Label("WebUI", systemImage: "globe")
                                 .font(.footnote.weight(.medium))
                         }
                         .buttonStyle(.bordered)
@@ -506,27 +520,55 @@ struct ModuleRunResult {
     let message: String
 }
 
-/// 模块 WebView 页（KernelSU webroot 对齐）：加载模块目录内 index.html，
-/// 读权限限定在模块目录内.
+/// 模块 WebView 页（KernelSU webroot 对齐）：
+/// - file:// 静态页（模块 webroot 目录内 index.html，读权限限模块目录）
+/// - http(s):// 模块自起本地服务（如 OpenList/AList 的 127.0.0.1:port 管理页）
+/// v0.3.157：统一在 App 内打开，不再跳 Safari。
 struct ModuleWebView: UIViewRepresentable {
     let startPage: URL
-    let readAccessRoot: URL
+    let readAccessRoot: URL?
+    private var isRemote: Bool {
+        guard let scheme = startPage.scheme?.lowercased() else { return false }
+        return scheme == "http" || scheme == "https"
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = .default()
         let wv = WKWebView(frame: .zero, configuration: cfg)
-        // 时间戳查询参数破缓存，保证升级模块后加载新内容
-        var comps = URLComponents(url: startPage, resolvingAgainstBaseURL: false)!
-        comps.queryItems = [URLQueryItem(name: "_t", value: String(Int(Date().timeIntervalSince1970)))]
-        if let busted = comps.url {
-            wv.loadFileURL(busted, allowingReadAccessTo: readAccessRoot)
+        wv.navigationDelegate = context.coordinator
+        if isRemote {
+            // 本地 HTTP 服务：直接 load（ATS 已放行本地网络）
+            wv.load(URLRequest(url: startPage))
         } else {
-            wv.loadFileURL(startPage, allowingReadAccessTo: readAccessRoot)
+            // 静态页：时间戳查询参数破缓存，保证升级模块后加载新内容
+            var comps = URLComponents(url: startPage, resolvingAgainstBaseURL: false)!
+            comps.queryItems = [URLQueryItem(name: "_t", value: String(Int(Date().timeIntervalSince1970)))]
+            if let busted = comps.url {
+                wv.loadFileURL(busted, allowingReadAccessTo: readAccessRoot ?? startPage.deletingLastPathComponent())
+            } else {
+                wv.loadFileURL(startPage, allowingReadAccessTo: readAccessRoot ?? startPage.deletingLastPathComponent())
+            }
         }
         return wv
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// 拦截 http 跳转（页面内跳转继续，外部 target 也留在 webview 内）。
+    /// 目标页仍在本 App 内，不弹 Safari。
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(_ webView: WKWebView,
+                     decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            decisionHandler(.allow)
+        }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation: WKNavigation?, withError error: Error) {
+            // 本地服务未启动等场景：页面留白，交由上层提示（此处静默）
+        }
+    }
 }
 
 /// SharedDocumentPicker 的 SwiftUI 包装（模块导入专用，限 .zip）.

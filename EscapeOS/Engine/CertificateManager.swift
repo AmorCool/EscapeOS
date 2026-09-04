@@ -195,6 +195,7 @@ final class CertificateManager: ObservableObject {
                 self.certs = list
                 self.hasLoaded = true
                 self.isSignedIn = true
+                self.pruneWhitelistIfStale()
             } catch {
                 self.setError(error)
                 // 团队列表还没拉到就失败（典型是会话过期 1100）：同步把团队栏
@@ -205,6 +206,20 @@ final class CertificateManager: ObservableObject {
             }
             self.isWorking = false
         }
+    }
+
+    /// v0.3.157：白名单自动清理——列表刷新成功后比对：白名单 serial 已不在
+    /// 当前证书列表（已吊销/已不存在/账号切换）时自动清除，避免残留记录
+    /// 在「自动吊销」流程中静默放行本应吊销的证书。
+    private func pruneWhitelistIfStale() {
+        let store = DeveloperCertStore.shared
+        let wl = store.revokeWhitelist.trimmingCharacters(in: .whitespaces)
+        guard !wl.isEmpty else { return }
+        guard !certs.isEmpty else { return }   // 列表为空时不误伤（拉取失败/账号切换中）
+        let live = Set(certs.map { $0.serialNumber })
+        guard !live.contains(wl) else { return }
+        store.revokeWhitelist = ""
+        LoginLogger.shared.log("⚠ 白名单自动清除：serial \(wl) 已不在当前证书列表（已吊销/不存在）")
     }
 
     /// 吊销一张证书并刷新列表。
@@ -224,6 +239,7 @@ final class CertificateManager: ObservableObject {
                 revoked = true
                 let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
                 self.certs = list
+                self.pruneWhitelistIfStale()
             } catch {
                 self.setError(error)
             }
@@ -251,6 +267,7 @@ final class CertificateManager: ObservableObject {
                 let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
                 self.certs = list
                 self.hasLoaded = true
+                self.pruneWhitelistIfStale()
             } catch {
                 self.setError(error)
             }
