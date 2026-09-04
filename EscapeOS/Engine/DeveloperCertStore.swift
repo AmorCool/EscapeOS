@@ -215,9 +215,9 @@ final class DeveloperCertStore: ObservableObject {
     /// 诊断日志（zsign 全部输出 + 分步结果）落盘 dataDir/go_sign_debug.log。
     /// v0.3.152：签名前对比"主程序叶子证书 serial"与"当前证书 serial"——
     /// 150/151 真机实锤主程序用 LC 导入的旧证书（能过校验），新证书签的 dylib 被拒。
-    /// v0.3.156：useMainIdent=true 时签名 identifier 改用主程序 CD 的 identifier
-    /// （对照实验：155 实锤同证书仍拒，主程序与 dylib 的 CD 逐字段全同，
-    /// 唯一剩余差异是 identifier）。
+    /// v0.3.156：useMainIdent=true 时签名 identifier 用主程序 CD 的 identifier。
+    /// 最终根因：iOS 27 beta AMFI 要求 dlopen 库的 identifier 与主程序一致
+    /// （真机实锤：com.escapeos.alist 被拒，主程序 ident 通过 dlopen）。
     func signDylib(path: String, bundleId: String, debugLog: URL? = nil,
                    useMainIdent: Bool = false) -> Bool {
         let team = (try? String(contentsOf: teamURL, encoding: .utf8)) ?? ""
@@ -236,7 +236,7 @@ final class DeveloperCertStore: ObservableObject {
             if rc == 0 {
                 let ident = String(cString: buf)
                 if !ident.isEmpty, ident != bundleId {
-                    LoginLogger.shared.log("v0.3.156 实验：签名 identifier \(bundleId) → 主程序 ident \(ident)")
+                    LoginLogger.shared.log("✓ 签名 identifier 采用主程序 ident（\(ident))")
                     effectiveBundleId = ident
                 }
             }
