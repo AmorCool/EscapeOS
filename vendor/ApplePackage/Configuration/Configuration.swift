@@ -65,10 +65,13 @@ public enum Configuration {
         }
     }
 
-    // v0.2.158：由 Configurator UA 改为 iTunes Windows UA。审计 Q4 实证：
-    // Configurator UA 在 native/fast 路径被 Apple 边缘以 403/404 拒（v0.2.151 真机）；
-    // v0.2.153 curl 实测 iTunes/12.13.2 (Windows) UA 对同端点返回 200。
-    public nonisolated(unsafe) static let userAgent = "iTunes/12.12.0 (Macintosh; OS X 10.15.7) AppleWebKit/605.1.15"
+    // v0.3.175：UA 切回 Configurator——ipatool PR#486/#525 实证（26HOTFIX24 后，
+    // 2026-08 认证已迁移）：Configurator/2.17 是 ipatool 默认 UA，登录 + 2FA 验证码
+    // 收发 + 购买全链路验证通过（commerce-grade token）；v0.2.151/158 时代 iTunes UA
+    // 的"200 实测"发生在认证迁移之前，结论已过期。iTunes Mac UA 形态易触发 Apple
+    // 对第三方客户端的风控（验证码发送走短信而非受信任设备推送，中国运营商拦截
+    // 美区短号短信 → 收不到码，用户真机实锤）。
+    public nonisolated(unsafe) static let userAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
 
     // v0.4.1：bag.xml 专用 UA（= upstream ipatool pkg/http DefaultUserAgent）。
     // 实测 2026-08-31：bag.xml 只对 Configurator UA 返回 authenticateAccount 与
