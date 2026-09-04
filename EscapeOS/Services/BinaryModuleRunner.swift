@@ -262,10 +262,10 @@ final class BinaryModuleRunner: ObservableObject {
                     appendLog(logFile, "[host] dylib 缺少 \(entrySymbol) 导出")
                 }
             } else {
-            // v0.3.122：真证书路径（SideStore 信任链）——有开发证书时先签后 dlopen。
-            // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）。
+            // v0.3.122：真证书路径（SideStore 信任链）——有开发证书时先签后 dlopen.
+            // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）.
             // v0.3.161：无本地证书时自动恢复——已登录 Apple ID 则自动签发
-            // （Apple 异步签发，createCertificate 内部轮询），失败再走失败分支。
+            // （Apple 异步签发，createCertificate 内部轮询），失败再走失败分支.
             if !DeveloperCertStore.shared.hasCert {
                 appendLog(logFile, "[host] 本地无签名证书 → 尝试自动签发（需已登录 Apple ID）")
                 let sem = DispatchSemaphore(value: 0)
@@ -386,7 +386,7 @@ final class BinaryModuleRunner: ObservableObject {
         }
     }
     /// v0.3.161：确保证书可用——无本地证书且 Apple ID 已登录时自动签发
-    /// （createCertificateWithStoredAccount 内部含异步签发轮询）。返回最终是否有证书.
+    /// （createCertificateWithStoredAccount 内部含异步签发轮询）.返回最终是否有证书.
     nonisolated private static func ensureCertAvailable(logFile: URL) async -> Bool {
         let store = DeveloperCertStore.shared
         if store.hasCert { return true }
@@ -402,8 +402,7 @@ final class BinaryModuleRunner: ObservableObject {
     }
     /// static 上下文的 run.log 追加（与实例 appendLog 同格式）
     nonisolated private static func note(_ logFile: URL, _ line: String) {
-        let text = "[\(DateFormatter.now())][\(DateFormatter.logStamp)] [host] \(line)
-"
+        let text = "[\(DateFormatter.now())][\(DateFormatter.logStamp.string(from: Date()))] [host] \(line)\n"
         if let fh = FileHandle(forWritingAtPath: logFile.path) {
             fh.seekToEndOfFile(); fh.write(text.data(using: .utf8)!); try? fh.close()
         } else {
