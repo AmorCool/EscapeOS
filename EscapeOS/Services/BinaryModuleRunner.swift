@@ -268,7 +268,16 @@ final class BinaryModuleRunner: ObservableObject {
             // （Apple 异步签发，createCertificate 内部轮询），失败再走失败分支。
             if !DeveloperCertStore.shared.hasCert {
                 appendLog(logFile, "[host] 本地无签名证书 → 尝试自动签发（需已登录 Apple ID）")
-                _ = await Self.ensureCertAvailable(logFile: logFile)
+                let sem = DispatchSemaphore(value: 0)
+                nonisolated(unsafe) var certOK = false
+                Task.detached(priority: .userInitiated) {
+                    certOK = await Self.ensureCertAvailable(logFile: logFile)
+                    sem.signal()
+                }
+                _ = sem.wait(timeout: .now() + 60)
+                if certOK {
+                    appendLog(logFile, "[host] 证书自动签发完成")
+                }
             }
             if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     appendLog(logFile, "[host] 开发证书可用 → 真证书签名")
@@ -384,12 +393,22 @@ final class BinaryModuleRunner: ObservableObject {
         do {
             try await store.createCertificateWithStoredAccount()
         } catch {
-            appendLog(logFile, "[host] 自动签发失败: \(error.localizedDescription)")
+            Self.note(logFile, "自动签发失败: \(error.localizedDescription)")
         }
         if store.hasCert {
-            appendLog(logFile, "[host] 自动签发成功，本地证书已就绪")
+            Self.note(logFile, "自动签发成功，本地证书已就绪")
         }
         return store.hasCert
+    }
+    /// static 上下文的 run.log 追加（与实例 appendLog 同格式）
+    nonisolated private static func note(_ logFile: URL, _ line: String) {
+        let text = "[\(DateFormatter.now())][\(DateFormatter.logStamp)] [host] \(line)
+"
+        if let fh = FileHandle(forWritingAtPath: logFile.path) {
+            fh.seekToEndOfFile(); fh.write(text.data(using: .utf8)!); try? fh.close()
+        } else {
+            try? text.data(using: .utf8)?.write(to: logFile)
+        }
     }
     /// 查找模块目录下 bin/*.dylib（可拆卸模块形态）
     nonisolated static func findDylib(moduleDir: URL) -> URL? {
