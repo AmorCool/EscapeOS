@@ -107,6 +107,7 @@ struct AppStoreDownloadView: View {
             downloadSection
             if errorMessage != nil { errorSection }
             statusSection
+            deviceSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("App Store 下载")
@@ -285,6 +286,37 @@ struct AppStoreDownloadView: View {
             }
         } header: {
             Text("状态")
+        }
+    }
+
+    /// v0.3.167：设备标识（guid）展示与重置——Apple 边缘对已标记的标识持续拒
+    ///（native/fast 301/404）；重置 = 换新"虚拟机器"身份，配合换网络/换
+    /// Anisette 服务器排查登录被拒.
+    @ViewBuilder
+    private var deviceSection: some View {
+        Section {
+            LabeledContent("设备标识（guid）") {
+                Text(Configuration.deviceIdentifier)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+            }
+            LabeledContent("Anisette 服务器") {
+                Text(AnisetteProvider.shared.currentServer)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+            }
+            Button {
+                store.resetDeviceIdentifier()
+                toast = "已重置设备标识：\(Configuration.deviceIdentifier)（请重新登录试）"
+            } label: {
+                Label("重置设备标识", systemImage: "arrow.counterclockwise")
+            }
+            .tint(.orange)
+        } header: {
+            Text("设备与认证")
+        } footer: {
+            Text("登录持续被拒（403/301/404）时重置设备标识，并尝试切换 Anisette 服务器或更换网络后重试.")
         }
     }
 

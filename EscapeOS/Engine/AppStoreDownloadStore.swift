@@ -66,6 +66,15 @@ final class AppStoreDownloadStore {
         return dir.path
     }
 
+    /// v0.3.167：重置 App Store 机器标识（guid）——删除持久化标识后重新随机生成。
+    /// 用途：Apple 边缘对已标记的 guid 持续拒（native/fast 301/404）时换新身份.
+    func resetDeviceIdentifier() {
+        let key = "ApplePackageDeviceIdentifier"
+        UserDefaults.standard.removeObject(forKey: key)
+        Self.bootstrapDeviceIdentifier()
+        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)")
+    }
+
     private var fileURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("appstore_accounts.json")
