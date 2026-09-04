@@ -251,7 +251,7 @@ public enum Authenticator {
                 // 重试 anisette，3 服务器全挂时最终报的是 anisette 获取错误，把
                 // 'Authentication requires verification code' 文案覆盖（真机 01:20 日志：
                 // UI 只看到 "AppleAPIError错误0"，2FA 弹窗从未弹出）。
-                if let ns = error as NSError, ns.domain == "EscapeOS.Ensure" {
+                if (error as NSError).domain == "EscapeOS.Ensure" {
                     throw error
                 }
                 lastError = error
