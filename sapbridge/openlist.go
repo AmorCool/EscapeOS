@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/cmd"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 )
 
 var (
@@ -145,14 +146,45 @@ func OpenListAdminSet(pwdC, dirC *C.char) C.int {
 	return ret
 }
 
-//export OpenListStop
-// 进程内优雅停止：向自己发 SIGTERM——ServerCmd.Run 的 signal.Notify
-// （SIGINT/SIGTERM）捕获后走 bootstrap.Shutdown 优雅停机，Execute 返回，
-// openlistRun 返回，OpenListMain 落到永久阻塞（宿主存活，绝不 os.Exit）.
-// 注意：bootstrap.Start 与 signal.Notify 注册之间存在毫秒级默认处置窗口，
-// 仅应在服务完全启动后调用（宿主 UI 的停止按钮满足此条件）.
-// 停止后本进程内不可再次启动（bootstrap 重复 Init 有风险），重启 App 恢复.
-//
+//export OpenListAdminSetPwd
+// 运行中重置管理员密码（v0.3.163 安全版）：
+// 直接走 internal/op 单例（服务运行中已初始化），绕开 CLI 链——
+// 旧实现 OpenListAdminSet 走 RootCmd.Execute → setAdminPassword →
+// bootstrap.Init() 重复执行（InitDB 无幂等守卫）→ 二次初始化 sqlite
+// → fatal，Go recover 抓不住 → 宿主闪退（真机实锤）.
+// 返回 0=成功；-1=GetAdmin 失败；-2=UpdateUser 失败；-3=参数空；-4=panic.
+func OpenListAdminSetPwd(pwdC, dirC *C.char) C.int {
+	pwd := C.GoString(pwdC)
+	if pwd == "" {
+		return C.int(-3)
+	}
+	done := make(chan struct{})
+	ret := C.int(0)
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "[openlist] admin set pwd panic: %v\n", r)
+				ret = C.int(-4)
+			}
+		}()
+		admin, err := op.GetAdmin()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[openlist] GetAdmin error: %v\n", err)
+			ret = C.int(-1)
+			return
+		}
+		admin.SetPassword(pwd)
+		if err := op.UpdateUser(admin); err != nil {
+			fmt.Fprintf(os.Stderr, "[openlist] UpdateUser error: %v\n", err)
+			ret = C.int(-2)
+			return
+		}
+		fmt.Fprintln(os.Stderr, "[openlist] admin password updated")
+	}()
+	<-done
+	return ret
+}
 //export OpenListStop
 func OpenListStop() C.int {
 	openlistMu.Lock()
