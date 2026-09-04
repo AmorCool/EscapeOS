@@ -619,10 +619,8 @@ bool ZSignAsset::Init(
 
 	ZFile::ReadFile(strProvFile.c_str(), m_strProvData);
 	ZFile::ReadFile(strEntitleFile.c_str(), m_strEntitleData);
-	if (m_strProvData.empty()) {
-		ZLog::Error(">>> Can't find provision file!\n");
-		return false;
-	}
+	// v0.3.145：provision 改为可选（LC 配方）——无 provision 时 TeamID 从证书
+	// OU 直读（见下方证书加载后的 GetCertOU），不再强制要求 profile 文件
 
 	jvalue jvProv;
 	string strProvContent;
