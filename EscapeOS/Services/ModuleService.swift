@@ -2,7 +2,7 @@
 //  ModuleService.swift
 //  EscapeSpace
 //
-//  EscapeSpace 模块系统（v0.3.48）。
+//  EscapeSpace 模块系统（v0.3.48）.
 //  参考 KernelSU 的模块管理形态（module.prop + 声明式动作），升级为 JSON 规范：
 //
 //    escape.module.v1 规范
@@ -16,7 +16,7 @@
 //    - script          （预留）设备侧脚本执行
 //
 //  模块以 .zip 分发（根目录必须含 module.json），安装到
-//  Documents/Modules/<id>/。宿主内置两个官方模块（首次启动自动安装）。
+//  Documents/Modules/<id>/.宿主内置两个官方模块（首次启动自动安装）.
 //
 
 import Foundation
@@ -95,14 +95,19 @@ struct EscapeModuleAction: Identifiable, Codable {
     let id: String
     let label: String
     var icon: String?
-    /// v1: "signal"；v0.3.158: "stop"（停止模块）/ "setpwd"（运行中重置管理员密码）
+    /// 动作类型（宿主只识别 "signal"，其余值一律走通用桥调用——语义由模块决定）
     let type: String
     /// signal: 进程名（对 displayName / executablePath 做大小写不敏感包含匹配）
     var process: String?
     /// signal: "SIGKILL" | "SIGTERM" | "SIGSTOP" | "SIGCONT"
     var signal: String?
-    /// stop/setpwd: 模块 dylib 导出的桥接符号名（如 OpenListStop / OpenListAdminSet）
+    /// 通用桥调用: 模块 dylib 导出的符号名
     var symbol: String?
+    /// 通用桥调用: 实参来源声明（按序对应符号参数）：
+    /// randomPassword=生成 8 位随机密码 / dataDir=模块数据目录 / moduleDir=模块目录 / "str:xxx"=字面量
+    var args: [String]?
+    /// 通用桥调用: 成功消息模板（{0}/{1} 替换实际实参）
+    var success: String?
     /// 执行前确认文案；为空则直接执行
     var confirm: String?
     /// 超时秒数（预留）
@@ -124,15 +129,15 @@ struct EscapeModule: Identifiable, Codable {
     var notes: String?
     var category: String?
     var minHostVersion: String?
-    /// v1.1：可选。zip 内相对目录名（须含 index.html）——
+    /// v1.1：可选.zip 内相对目录名（须含 index.html）——
     /// 模块自带 WebView 界面（对齐 KernelSU 的 webroot 机制），
-    /// 有此字段时模块卡片显示「打开」按钮，用内嵌 WKWebView 加载本地页。
+    /// 有此字段时模块卡片显示「打开」按钮，用内嵌 WKWebView 加载本地页.
     var webroot: String?
-    /// v1.1：可选。热补丁配置——存在即要求官方签名（signature.sig）
+    /// v1.1：可选.热补丁配置——存在即要求官方签名（signature.sig）
     var hotfix: HotfixConfig?
-    /// v1.1：可选。二进制模块——随宿主自启动的后台服务（如 alist）
+    /// v1.1：可选.二进制模块——随宿主自启动的后台服务（如 alist）
     var binary: BinaryConfig?
-    /// v1.2：可选。Lua 模块——纯脚本（数据，无签名要求），entry 为模块目录内脚本路径
+    /// v1.2：可选.Lua 模块——纯脚本（数据，无签名要求），entry 为模块目录内脚本路径
     var lua: LuaModuleConfig?
     /// 二进制模块是否随宿主自启动（默认读 binary.autoStart）
     var autoStart: Bool?
@@ -180,8 +185,8 @@ final class ModuleService {
         Set(UserDefaults.standard.stringArray(forKey: Self.uninstalledKey) ?? [])
     }
 
-    /// 首次启动时把 bundle 内置模块安装到 Documents/Modules。
-    /// 幂等：目录已存在 或 用户曾主动卸载过 → 跳过。
+    /// 首次启动时把 bundle 内置模块安装到 Documents/Modules.
+    /// 幂等：目录已存在 或 用户曾主动卸载过 → 跳过.
     /// 覆盖安装新 IPA 后是否恢复内置模块（用户可关）
     private static let restoreOnUpgradeKey = "Module.restoreOnUpgrade"
     static var restoreOnUpgrade: Bool {
@@ -207,7 +212,7 @@ final class ModuleService {
     }
 
     // MARK: Lua 模块执行（v1.2：纯脚本模块，走内置 Rust+mlua 解释器）
-    /// 执行 Lua 模块入口脚本。返回 (返回码, 输出文本)；码 0=成功 -1=Lua 错误 -9=参数错。
+    /// 执行 Lua 模块入口脚本.返回 (返回码, 输出文本)；码 0=成功 -1=Lua 错误 -9=参数错.
     func runLuaModule(_ module: EscapeModule,
                       onProgress: ((String) -> Void)? = nil) -> (Int32, String) {
         guard module.isLuaModule else { return (-9, "非 Lua 模块") }
@@ -238,9 +243,9 @@ final class ModuleService {
     }
 
     private func bootstrapBundledModules() {
-        // 覆盖安装检测锚点：CFBundleVersion（build 号）。
-        // 旧方案（bundle 目录/可执行文件 mtime）在 LC 环境会漂移——卸载后重启模块"复活"的 bug 根因。
-        // CFBundleVersion 每次发版必变、同版本内永远稳定（v0.3.72 修复）。
+        // 覆盖安装检测锚点：CFBundleVersion（build 号）.
+        // 旧方案（bundle 目录/可执行文件 mtime）在 LC 环境会漂移——卸载后重启模块"复活"的 bug 根因.
+        // CFBundleVersion 每次发版必变、同版本内永远稳定（v0.3.72 修复）.
         let installVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
         let recorded = UserDefaults.standard.string(forKey: Self.hostInstallVersionKey)
         if recorded == nil {
@@ -261,16 +266,16 @@ final class ModuleService {
             let src = bundledURL.appendingPathComponent(id, isDirectory: true)
             let dest = modulesRoot.appendingPathComponent(id, isDirectory: true)
             // 二进制模块（binary 键）不落盘：直接从 bundle 原地加载（137MB 级 dylib
-            // 拷贝进 Documents 白白吃磁盘写入配额）。数据目录仍在 modulesRoot/<id>/data。
+            // 拷贝进 Documents 白白吃磁盘写入配额）.数据目录仍在 modulesRoot/<id>/data.
             if let data = try? Data(contentsOf: src.appendingPathComponent("module.json")),
                let m = try? JSONDecoder().decode(EscapeModule.self, from: data),
                m.isBinaryModule {
                 let dataRoot = modulesRoot.appendingPathComponent(id, isDirectory: true)
                 if FileManager.default.fileExists(atPath: dest.path) {
-                    // 旧版落盘副本清理：只删残留的 bin/（旧 dylib，现已编译进 App）。
+                    // 旧版落盘副本清理：只删残留的 bin/（旧 dylib，现已编译进 App）.
                     // ⚠️ v0.3.80 修复：此前这里执行 removeItem(dest)，而 dest 与 dataRoot
                     // 对内置原地模块是同一目录 —— 等于每次启动都把模块数据目录（日志/配置/
-                    // 数据库）整个删掉，既导致模块数据无法留存，也销毁了排障日志。
+                    // 数据库）整个删掉，既导致模块数据无法留存，也销毁了排障日志.
                     let legacyBin = dest.appendingPathComponent("bin", isDirectory: true)
                     if FileManager.default.fileExists(atPath: legacyBin.path) {
                         do {
@@ -329,10 +334,10 @@ final class ModuleService {
 
     // MARK: 导入 .zip
 
-    /// 导入 .zip 模块。zip 内任意层级（含 modules/<id>/ 前缀、GitHub 源码 zip 的多层嵌套）均可识别
-    /// module.json，并安装其所在目录的内容。spec = escape.module.v1。
-    /// log：安装详情日志回调（KernelSU 风格安装界面逐行输出）。
-    /// 返回解析后的模块；spec 不符 / 清单缺失会抛错。
+    /// 导入 .zip 模块.zip 内任意层级（含 modules/<id>/ 前缀、GitHub 源码 zip 的多层嵌套）均可识别
+    /// module.json，并安装其所在目录的内容.spec = escape.module.v1.
+    /// log：安装详情日志回调（KernelSU 风格安装界面逐行输出）.
+    /// 返回解析后的模块；spec 不符 / 清单缺失会抛错.
     func importZip(at url: URL, log: ((String) -> Void)? = nil) throws -> EscapeModule {
         log?("- 导入模块：\(url.lastPathComponent)")
         let data = try Data(contentsOf: url)
@@ -444,7 +449,7 @@ final class ModuleService {
         let dest = modulesRoot.appendingPathComponent(module.id, isDirectory: true)
         if FileManager.default.fileExists(atPath: dest.path) {
             // v0.3.93 升级导入：data/ 原位保留（用户数据库/配置在里面），
-            // 只清掉 data/ 以外的旧内容，再把新版本逐项并入——不做暂存/还原。
+            // 只清掉 data/ 以外的旧内容，再把新版本逐项并入——不做暂存/还原.
             log?("- 检测到旧版本，覆盖升级（data/ 原位保留）")
             let fm = FileManager.default
             for item in try fm.contentsOfDirectory(atPath: dest.path) where item != "data" {
@@ -529,7 +534,7 @@ final class ModuleService {
 
     // MARK: WebView 支持（对齐 KernelSU webroot 机制）
 
-    /// 模块 webroot 目录（须含 index.html）；未声明或目录缺失返回 nil。
+    /// 模块 webroot 目录（须含 index.html）；未声明或目录缺失返回 nil.
     func webrootURL(for module: EscapeModule) -> URL? {
         guard let wr = module.webroot, !wr.isEmpty else { return nil }
         let dir = module.installURL.appendingPathComponent(wr, isDirectory: true)
@@ -538,40 +543,33 @@ final class ModuleService {
         return dir
     }
 
-    // MARK: 执行动作（Rust FFI 管道 + 进程内桥接 v0.3.158）
+    // MARK: 执行动作（Rust FFI 管道 + 通用桥调用 v0.3.159）
 
-    /// 执行模块动作。type 分发：
-    /// - "signal"：按进程名下发信号（原有，Rust FFI 进程列表）
-    /// - "stop"：停止模块——进程内模块走桥接 OpenListStop 优雅停；外部进程 kill
-    /// - "setpwd"：运行中重置模块管理员密码（dlsym action.symbol，如 OpenListAdminSet）
+    /// 执行模块动作.宿主只提供执行接口，动作语义完全由模块声明决定：
+    /// - type == "signal"：按进程名下发信号（原有，Rust FFI 进程列表）
+    /// - 其他 type（如 "bridge"）：通用桥调用——dlsym action.symbol，按
+    ///   action.args 声明解析实参（randomPassword/dataDir/moduleDir/"str:xxx"），
+    ///   按 args 数量分派符号签名（0 → fn()；1 → fn(a)；2 → fn(a, b)），
+    ///   rc==0 时用 action.success 模板组装结果消息（{0}/{1} 替换实际实参）.
+    ///   功能是什么、界面展示什么，全部由模块自行决定，宿主零适配.
     func run(action: EscapeModuleAction, module: EscapeModule) throws -> String {
-        switch action.type {
-        case "signal":
+        if action.type == "signal" {
             return try runSignal(action)
-        case "stop":
-            let wasInProcess = BinaryModuleRunner.shared.inProcessModules.contains(module.id)
-            BinaryModuleRunner.shared.stop(module: module)
-            return wasInProcess
-                ? "已请求模块优雅停止（bootstrap.Shutdown 异步生效）.\n进程内停止后需重启 EscapeSpace 才能再次启动."
-                : "已停止外部进程."
-        case "setpwd":
-            guard let symbol = action.symbol, !symbol.isEmpty else {
-                throw ModuleError.badAction("setpwd 动作缺少 symbol 字段")
-            }
-            let pwd = Self.randomPassword(8)
-            let (ok, msg) = BinaryModuleRunner.shared.setAdminPassword(
-                module: module, symbol: symbol, newPassword: pwd)
-            guard ok else { throw ModuleError.badAction(msg) }
-            return msg
-        default:
-            throw ModuleError.badAction("未知动作类型 \(action.type)")
         }
-    }
-
-    /// 随机密码（8 位，去除易混淆字符 0O1lI）
-    static func randomPassword(_ len: Int) -> String {
-        let chars = Array("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789")
-        return String((0..<len).map { _ in chars.randomElement()! })
+        // 通用桥调用（type 任意非 signal 值均走此接口，模块自定义语义）
+        guard let symbol = action.symbol, !symbol.isEmpty else {
+            throw ModuleError.badAction("动作「\(action.label)」缺少 symbol 字段")
+        }
+        let (rc, actual) = try BinaryModuleRunner.shared.bridgeCall(
+            module: module, symbol: symbol, argSpecs: action.args ?? [])
+        guard rc == 0 else {
+            throw ModuleError.badAction("「\(action.label)」执行失败 rc=\(rc)（详见模块日志）")
+        }
+        var message = action.success ?? "执行成功"
+        for (idx, value) in actual.enumerated() {
+            message = message.replacingOccurrences(of: "{\(idx)}", with: value)
+        }
+        return message
     }
 
     /// signal 子流程（原有）

@@ -1,22 +1,22 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 证书管理（汉化移植自 SideInstaller 的 CertsView）。
+/// 证书管理（汉化移植自 SideInstaller 的 CertsView）.
 ///
-/// 列出并吊销 Apple ID 的 iOS 开发证书。纯开发者门户 API 调用，
-/// 不涉及设备 / 配对 / 隧道，因此不依赖 LocalDevVPN 与本地网络权限。
+/// 列出并吊销 Apple ID 的 iOS 开发证书.纯开发者门户 API 调用，
+/// 不涉及设备 / 配对 / 隧道，因此不依赖 LocalDevVPN 与本地网络权限.
 struct CertificateView: View {
     @StateObject private var manager = CertificateManager.shared
     @StateObject private var settings = MemoryLimitSettings.shared
     /// v0.3.131：自动撤销开关/白名单（统一撤销接口的管控项）
     @StateObject private var certStore = DeveloperCertStore.shared
     @State private var showLogin = false
-    /// 待确认吊销的证书。
+    /// 待确认吊销的证书.
     @State private var pendingRevoke: DeveloperCertificate?
-    /// 批量选择模式。
+    /// 批量选择模式.
     @State private var selecting = false
     @State private var selected: Set<String> = []
-    /// 批量吊销确认。
+    /// 批量吊销确认.
     @State private var showBatchRevokeConfirm = false
 
     // v0.3.152 p12 导入（同源证书方案：导入主程序同款证书）
@@ -43,7 +43,7 @@ struct CertificateView: View {
             } else {
                 teamSection
                 // 团队栏自己已展示失败原因，这里只在团队加载成功后补全局错误，
-                // 避免同一条消息在页面上出现两次。
+                // 避免同一条消息在页面上出现两次.
                 if let error = manager.lastError, manager.teamState == .loaded {
                     Section {
                         InfoActionCard(
@@ -372,8 +372,8 @@ struct CertificateView: View {
         .background(.bar)
     }
 
-    // v0.3.157：本地签名证书（p12）独立分组。作用：模块/文件真证书签名用的
-    // 本地证书（导入的 p12 或登录自动签发），与上方 Apple 侧证书列表（吊销对象）区分。
+    // v0.3.157：本地签名证书（p12）独立分组.作用：模块/文件真证书签名用的
+    // 本地证书（导入的 p12 或登录自动签发），与上方 Apple 侧证书列表（吊销对象）区分.
     @ViewBuilder
     private var localSigningSection: some View {
         Section {

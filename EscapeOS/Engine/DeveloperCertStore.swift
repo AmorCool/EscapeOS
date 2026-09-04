@@ -4,8 +4,8 @@
 //
 //  v0.3.122：开发证书获取与存储（SideStore/AltSign 同款流程）
 //  Apple ID 登录态 → 本机生成 RSA2048 私钥 + CSR（zsign/OpenSSL）→
-//  developerservices2 提交 CSR → 存 cert/key PEM → zsign 真证书签名 dylib。
-//  真证书签名与 App 同 TeamID → 库验证通过 → dlopen 直接可用。
+//  developerservices2 提交 CSR → 存 cert/key PEM → zsign 真证书签名 dylib.
+//  真证书签名与 App 同 TeamID → 库验证通过 → dlopen 直接可用.
 //
 
 import Foundation
@@ -24,7 +24,7 @@ final class DeveloperCertStore: ObservableObject {
     @Published var isBusy: Bool = false
     @Published var lastError: String?
 
-    /// 免 JIT 模式（LC 式策略开关）：开启后原生模块用真证书签名加载（不依赖 JIT）。
+    /// 免 JIT 模式（LC 式策略开关）：开启后原生模块用真证书签名加载（不依赖 JIT）.
     @Published var jitFreeMode: Bool {
         didSet { UserDefaults.standard.set(jitFreeMode, forKey: "modules.certSignEnabled") }
     }
@@ -46,9 +46,9 @@ final class DeveloperCertStore: ObservableObject {
 
     // MARK: - CSR 生成（zsign/OpenSSL，SideStore CertificatesManager.generateCSR 同款）
 
-    /// 本机生成 RSA2048 私钥 + CSR；返回 (CSR PEM, 私钥 PEM)。
+    /// 本机生成 RSA2048 私钥 + CSR；返回 (CSR PEM, 私钥 PEM).
     /// v0.3.140：私钥不再立即落盘 —— 由 createCertificate 在配对验证通过后统一写入，
-    /// 避免提交失败（1100/7460 等）时 keyURL 被新私钥污染（certURL 还是旧证书 → 错位）。
+    /// 避免提交失败（1100/7460 等）时 keyURL 被新私钥污染（certURL 还是旧证书 → 错位）.
     func generateKeyAndCSR() throws -> (csrPem: String, keyPem: String) {
         var csrPtr: UnsafeMutablePointer<CChar>?
         var csrLen: Int32 = 0
@@ -90,7 +90,7 @@ final class DeveloperCertStore: ObservableObject {
 
     // MARK: - 完整流程：生成 → 提交 Apple → 存储证书
 
-    /// 从存储的登录凭据构造 session（CertificateManager 同款）。
+    /// 从存储的登录凭据构造 session（CertificateManager 同款）.
     @MainActor private func makeSession() -> AppleAPISession? {
         let settings = MemoryLimitSettings.shared
         guard let dsid = settings.dsid, let authToken = settings.authToken else { return nil }
@@ -102,7 +102,7 @@ final class DeveloperCertStore: ObservableObject {
                                    timeZone: .current))
     }
 
-    /// 设置页入口：用已登录的 Apple ID 创建开发证书并存储。
+    /// 设置页入口：用已登录的 Apple ID 创建开发证书并存储.
     /// （未登录抛错提示先登录；同 Apple ID 新证书 TeamID 相同 → 库验证通过）
     func createCertificateWithStoredAccount() async throws {
         guard let session = await MainActor.run(body: { makeSession() }) else {
@@ -112,9 +112,9 @@ final class DeveloperCertStore: ObservableObject {
         try await createCertificate(session: session)
     }
 
-    /// 用已登录的 Apple ID 创建开发证书并存储（同 Apple ID 团队 → 库验证通过）。
+    /// 用已登录的 Apple ID 创建开发证书并存储（同 Apple ID 团队 → 库验证通过）.
     /// Apple 现为**异步签发**：submit 只返回受理（certRequest 无证书内容），
-    /// 需轮询证书列表等新证书出现后取其 certContent。
+    /// 需轮询证书列表等新证书出现后取其 certContent.
     func createCertificate(session: AppleAPISession) async throws {
         guard !isBusy else { return }
         await MainActor.run { isBusy = true; lastError = nil }
@@ -129,11 +129,11 @@ final class DeveloperCertStore: ObservableObject {
             // 2) 提交前记录已有序列号（用于识别新证书）
             let before = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
             let knownSerials = Set(before.map { $0.serialNumber })
-            // 3) 本机密钥 + CSR（完整 PEM，含头尾——Apple 端点要求原样提交）。
-            //    私钥暂存内存，配对验证通过后才落盘（v0.3.140 防错位）。
+            // 3) 本机密钥 + CSR（完整 PEM，含头尾——Apple 端点要求原样提交）.
+            //    私钥暂存内存，配对验证通过后才落盘（v0.3.140 防错位）.
             let (csrPem, pendingKeyPem) = try generateKeyAndCSR()
-            // 4) 提交 Apple（异步受理：响应只含 certRequest 元数据，无证书内容）。
-            //    7460（证书数上限，免费账号常见）→ SideStore 同款：吊销全部旧证书后重试一次。
+            // 4) 提交 Apple（异步受理：响应只含 certRequest 元数据，无证书内容）.
+            //    7460（证书数上限，免费账号常见）→ SideStore 同款：吊销全部旧证书后重试一次.
             //    （被吊销的旧证书所属工具下次使用时会自动重建自己的证书，属正常行为）
             let machineName = (UIDevice.current.name)
             var certDER: Data
@@ -148,7 +148,7 @@ final class DeveloperCertStore: ObservableObject {
                     guard !blocked, revoked > 0 else {
                         throw AppleAPIError.customError(
                             code: 7460,
-                            message: "开发证书数量已达上限（7460）。未设置自动撤销证书，请手动撤销（更多 → 证书管理）")
+                            message: "开发证书数量已达上限（7460）.未设置自动撤销证书，请手动撤销（更多 → 证书管理）")
                     }
                     certDER = try await AppleDeveloperAPI.submitSigningCertificate(
                         team: team, csrPEM: csrPem, machineName: machineName, session: session)
@@ -165,7 +165,7 @@ final class DeveloperCertStore: ObservableObject {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                     let list = try await AppleDeveloperAPI.fetchCertificates(team: team, session: session)
                     // v0.3.140：候选逐张验证与本机私钥配对 —— Apple 异步签发有延迟，
-                    // 历史失败提交的 CSR 可能此刻才被签发，不配对的直接跳过。
+                    // 历史失败提交的 CSR 可能此刻才被签发，不配对的直接跳过.
                     let candidates = list.filter { !knownSerials.contains($0.serialNumber) && $0.certContent != nil }
                     for cand in candidates {
                         guard let content = cand.certContent else { continue }
@@ -211,7 +211,7 @@ final class DeveloperCertStore: ObservableObject {
 
     // MARK: - 真证书签名
 
-    /// v0.3.157：本地签名证书摘要（UI 展示用）——serial 尾号；读取失败给占位。
+    /// v0.3.157：本地签名证书摘要（UI 展示用）——serial 尾号；读取失败给占位.
     var localCertSummary: String {
         guard hasCert,
               let certData = try? Data(contentsOf: certURL) else {
@@ -227,13 +227,13 @@ final class DeveloperCertStore: ObservableObject {
         return hex == "?" ? "签名证书 serial 解析失败" : "签名证书 serial …\(hex.suffix(12))"
     }
 
-    /// 对 dylib 就地做真证书签名。返回 true = 签名成功。
-    /// 诊断日志（zsign 全部输出 + 分步结果）落盘 dataDir/go_sign_debug.log。
+    /// 对 dylib 就地做真证书签名.返回 true = 签名成功.
+    /// 诊断日志（zsign 全部输出 + 分步结果）落盘 dataDir/go_sign_debug.log.
     /// v0.3.152：签名前对比"主程序叶子证书 serial"与"当前证书 serial"——
-    /// 150/151 真机实锤主程序用 LC 导入的旧证书（能过校验），新证书签的 dylib 被拒。
-    /// v0.3.156：useMainIdent=true 时签名 identifier 用主程序 CD 的 identifier。
+    /// 150/151 真机实锤主程序用 LC 导入的旧证书（能过校验），新证书签的 dylib 被拒.
+    /// v0.3.156：useMainIdent=true 时签名 identifier 用主程序 CD 的 identifier.
     /// 最终根因：iOS 27 beta AMFI 要求 dlopen 库的 identifier 与主程序一致
-    /// （真机实锤：com.escapeos.alist 被拒，主程序 ident 通过 dlopen）。
+    /// （真机实锤：com.escapeos.alist 被拒，主程序 ident 通过 dlopen）.
     func signDylib(path: String, bundleId: String, debugLog: URL? = nil,
                    useMainIdent: Bool = false) -> Bool {
         let team = (try? String(contentsOf: teamURL, encoding: .utf8)) ?? ""
@@ -306,9 +306,9 @@ final class DeveloperCertStore: ObservableObject {
         return rc == 0
     }
 
-    /// v0.3.155：删除本地已导入/已签发的签名证书（LC 同款删除功能）。
+    /// v0.3.155：删除本地已导入/已签发的签名证书（LC 同款删除功能）.
     /// 仅清除本地 cert/key 文件（签名功能随之不可用），不向 Apple 吊销——
-    /// Apple 侧证书状态不受影响（仍占账号名额，需要腾名额请用吊销）。
+    /// Apple 侧证书状态不受影响（仍占账号名额，需要腾名额请用吊销）.
     func removeLocalCert() -> (ok: Bool, message: String) {
         let hadCert = hasCert
         guard hadCert else {
@@ -330,7 +330,7 @@ final class DeveloperCertStore: ObservableObject {
     }
 
     /// v0.3.152：导入 p12（同源证书方案）——解析 PKCS12 提取 cert/key PEM，
-    /// 配对校验通过后覆盖落盘。用于导入与主程序（LC/SideStore 签发）相同的证书。
+    /// 配对校验通过后覆盖落盘.用于导入与主程序（LC/SideStore 签发）相同的证书.
     func importP12(data: Data, password: String) -> (ok: Bool, message: String) {
         var certPemOut: UnsafeMutablePointer<CChar>? = nil
         var keyPemOut: UnsafeMutablePointer<CChar>? = nil
@@ -391,8 +391,8 @@ final class DeveloperCertStore: ObservableObject {
         didSet { UserDefaults.standard.set(revokeWhitelist, forKey: "certs.revokeWhitelist") }
     }
 
-    /// 统一撤销调用点：吊销团队下全部开发证书（白名单与 SideStore/AltStore 标识放行）。
-    /// 返回 (吊销数, 是否被开关拦下)。未开自动撤销 → 输出日志并拦下（调用方自行提示）。
+    /// 统一撤销调用点：吊销团队下全部开发证书（白名单与 SideStore/AltStore 标识放行）.
+    /// 返回 (吊销数, 是否被开关拦下).未开自动撤销 → 输出日志并拦下（调用方自行提示）.
     @discardableResult
     func revokeAllForModuleLoading(team: DeveloperTeam,
                                    session: AppleAPISession) async -> (revoked: Int, blocked: Bool) {
@@ -432,7 +432,7 @@ final class DeveloperCertStore: ObservableObject {
         }
     }
 
-    /// 删除证书（吊销由 CertificateManager 负责；此处仅清本地）。
+    /// 删除证书（吊销由 CertificateManager 负责；此处仅清本地）.
     func removeLocal() {
         try? FileManager.default.removeItem(at: certURL)
         try? FileManager.default.removeItem(at: keyURL)

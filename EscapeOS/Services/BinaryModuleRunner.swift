@@ -9,7 +9,7 @@
 //   - WebUI 模块（如 alist）暴露 http://127.0.0.1:<port> 入口
 //
 //  注意：原生机型受代码签名限制，需 ldid 伪签名的 arm64 二进制；
-//  LC 环境下通常可直接运行。启动失败会以模块卡片错误形式反馈。
+//  LC 环境下通常可直接运行.启动失败会以模块卡片错误形式反馈.
 //
 import Foundation
 import UIKit
@@ -18,8 +18,8 @@ final class BinaryModuleRunner: ObservableObject {
     static let shared = BinaryModuleRunner()
     /// v0.3.141：用户态加载器禁用开关 —— 本环境（LC/iOS 26+）手动映射的代码页
     /// 执行时必被 AMFI 终止（真机两次闪退实锤：真证书签名失败 → uloader 映射
-    /// "成功" → 调 OpenListMain → 几秒后闪退）。签名链路修好后走 dlopen，此路径
-    /// 只剩必崩价值；代码保留仅为回滚能力。
+    /// "成功" → 调 OpenListMain → 几秒后闪退）.签名链路修好后走 dlopen，此路径
+    /// 只剩必崩价值；代码保留仅为回滚能力.
     nonisolated static let uloaderEnabled = false
     /// 运行中的二进制模块：模块 id → pid（-2 = 进程内 dylib 模式）
     @Published private(set) var runningProcesses: [String: pid_t] = [:]
@@ -40,8 +40,8 @@ final class BinaryModuleRunner: ObservableObject {
     }
     /// 启动模块二进制（全程后台：Go runtime 初始化 + 服务启动可能数秒，绝不占主线程）
     /// 方案 A：模块入口符号已静态链接进宿主 app（与 Sap* 共用单一 Go
-    /// runtime，sap.h 直接暴露给 Swift）。进程内直接调用——无 dylib、无第二 runtime、
-    /// 无 AMFI exec 限制。此前 dlopen 第二 Go runtime 的方案在初始化即崩（run.log 实锤）。
+    /// runtime，sap.h 直接暴露给 Swift）.进程内直接调用——无 dylib、无第二 runtime、
+    /// 无 AMFI exec 限制.此前 dlopen 第二 Go runtime 的方案在初始化即崩（run.log 实锤）.
     /// automatic=true 为自启动（受崩溃循环守卫保护）；false 为用户手动点启动（总是重试）
     func start(module: EscapeModule, automatic: Bool = true) {
         guard let bin = module.binary else { return }
@@ -69,8 +69,8 @@ final class BinaryModuleRunner: ObservableObject {
             self.runBinaryModule(module, bin: bin, dataDir: dataDir, logFile: logFile)
         }
     }
-    /// 通用入口发现：扫描模块 dylib 的符号表，找第一个 "*Main" 结尾的已定义符号。
-    /// 这样引擎不需要知道任何模块的符号名（v0.3.112：彻底消除模块名硬编码）。
+    /// 通用入口发现：扫描模块 dylib 的符号表，找第一个 "*Main" 结尾的已定义符号.
+    /// 这样引擎不需要知道任何模块的符号名（v0.3.112：彻底消除模块名硬编码）.
     nonisolated static func discoverEntrySymbol(moduleDir: URL, logFile: URL) -> String? {
         guard let dylib = findDylib(moduleDir: moduleDir) else { return nil }
         var buf = [CChar](repeating: 0, count: 4096)
@@ -100,8 +100,8 @@ final class BinaryModuleRunner: ObservableObject {
             return
         }
         // 数据目录可写性门禁（v0.3.74 闪退根修）：
-        // 模块 bootstrap 在目录不可写时走 log.Fatalf → os.Exit → 连宿主一起杀。
-        // 这里先建目录 + 写探针，失败就放弃启动并把原因报给 UI（宿主永不死）。
+        // 模块 bootstrap 在目录不可写时走 log.Fatalf → os.Exit → 连宿主一起杀.
+        // 这里先建目录 + 写探针，失败就放弃启动并把原因报给 UI（宿主永不死）.
         do {
             try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
             let probe = dataDir.appendingPathComponent(".write-probe")
@@ -128,64 +128,65 @@ final class BinaryModuleRunner: ObservableObject {
             setError(module.id, "启动失败: \(error.localizedDescription)")
         }
     }
-    /// 停止模块：
-    /// - 进程内常驻模块（dlopen + Go runtime）→ 桥接导出 OpenListStop 优雅停止
-    ///   （Go 内自发 SIGTERM，signal.Notify 捕获后 bootstrap.Shutdown，宿主存活）；
-    ///   停止后进程内不可再启动（重启 EscapeSpace 恢复）。
-    /// - 外部进程型模块 → SIGKILL。
+    /// 停止模块（外部进程型 SIGKILL）.
+    /// 进程内常驻模块不在此停止：由模块通过 actions 声明桥接停止符号（type=bridge），
+    /// 宿主只提供执行接口，语义完全由模块决定.
     func stop(module: EscapeModule) {
-        let logFile = ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log")
-        if inProcessModules.contains(module.id) {
-            guard let sym = Self.resolveBridgeSymbol("OpenListStop") else {
-                appendLog(logFile, "[host] 模块未导出 OpenListStop——进程内无法单独停止（重启 EscapeSpace 代替）")
-                setError(module.id, "该模块不支持进程内停止，请重启 EscapeSpace")
-                return
-            }
-            typealias StopFn = @convention(c) () -> Int32
-            let rc = unsafeBitCast(sym, to: StopFn.self)()
-            appendLog(logFile, "[host] OpenListStop rc=\(rc)——bootstrap.Shutdown 优雅停机中")
-            inProcessModules.remove(module.id)
-            print("[Binary][\(module.id)] 进程内模块已请求优雅停止")
-            return
-        }
         guard let pid = runningProcesses[module.id] else { return }
         guard pid > 0 else {
-            print("[Binary][\(module.id)] 进程内 dylib 模式：随宿主退出，不支持单独停止")
+            print("[Binary][\(module.id)] 进程内常驻模块不在此停止（走模块 actions 的桥接符号）")
             return
         }
         kill(pid, SIGKILL)
         runningProcesses[module.id] = nil
         print("[Binary][\(module.id)] 已停止 pid=\(pid)")
     }
-    /// 运行中重置模块管理员密码（桥接导出，如 OpenListAdminSet(pwd, dir)）。
-    /// 返回 (成功, 消息)——成功时消息含新密码。
-    func setAdminPassword(module: EscapeModule, symbol: String, newPassword: String) -> (Bool, String) {
-        let logFile = ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log")
-        guard inProcessModules.contains(module.id) else {
-            return (false, "模块未运行，无法重置密码（先启动模块）")
+
+    /// v0.3.159：通用桥调用——按 action 声明解析实参并调用模块导出符号.
+    /// 符号签名按 args 数量分派：0 → fn()；1 → fn(a)；2 → fn(a, b)（C.int 返回）.
+    /// 参数来源（args 元素）：randomPassword=生成 8 位随机密码（去易混淆字符），
+    /// dataDir=模块数据目录路径，moduleDir=模块安装目录路径，"str:xxx"=字面量.
+    /// 返回 (rc, 实参数组)——消息模板由调用方组装.
+    nonisolated static func bridgeCall(module: EscapeModule, symbol: String, argSpecs: [String]) throws -> (Int32, [String]) {
+        guard let sym = resolveBridgeSymbol(symbol) else {
+            throw BinaryModuleError.spawnFailed("模块未导出 \(symbol)（需更新模块至支持版本）")
         }
-        guard let sym = Self.resolveBridgeSymbol(symbol) else {
-            return (false, "模块未导出 \(symbol)（需更新模块至支持版本）")
+        var actual: [String] = []
+        for spec in argSpecs {
+            switch spec {
+            case "randomPassword":
+                actual.append(randomPassword(8))
+            case "dataDir":
+                actual.append(ModuleService.shared.dataURL(for: module.id).path)
+            case "moduleDir":
+                actual.append(ModuleService.shared.installURL(for: module.id).path)
+            default:
+                actual.append(spec.hasPrefix("str:") ? String(spec.dropFirst(4)) : spec)
+            }
         }
-        typealias SetPwdFn = @convention(c) (UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<CChar>?) -> Int32
-        guard let pwdC = strdup(newPassword) else { return (false, "内存分配失败") }
-        defer { free(pwdC) }
-        let dirPath = ModuleService.shared.dataURL(for: module.id).path
-        guard let dirC = strdup(dirPath) else { return (false, "内存分配失败") }
-        defer { free(dirC) }
-        let fn = unsafeBitCast(sym, to: SetPwdFn.self)
-        let rc = fn(pwdC, dirC)
-        appendLog(logFile, "[host] \(symbol) rc=\(rc)")
-        switch rc {
+        var rc: Int32 = -99
+        switch actual.count {
         case 0:
-            return (true, "管理员密码已重置：\(newPassword)\n（旧密码与已登录会话失效，请用新密码重新登录）")
-        case -2:
-            return (false, "数据目录参数为空（桥调用异常）")
-        case -3:
-            return (false, "桥内异常：模块服务可能未初始化")
+            typealias Fn0 = @convention(c) () -> Int32
+            rc = unsafeBitCast(sym, to: Fn0.self)()
+        case 1:
+            let a = strdup(actual[0])
+            defer { free(a) }
+            typealias Fn1 = @convention(c) (UnsafeMutablePointer<CChar>?) -> Int32
+            rc = unsafeBitCast(sym, to: Fn1.self)(a)
         default:
-            return (false, "重置失败 rc=\(rc)（详见模块日志）")
+            let a = strdup(actual[0])
+            let b = strdup(actual[1])
+            defer { free(a); free(b) }
+            typealias Fn2 = @convention(c) (UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<CChar>?) -> Int32
+            rc = unsafeBitCast(sym, to: Fn2.self)(a, b)
         }
+        return (rc, actual)
+    }
+    /// 随机密码（8 位，去除易混淆字符 0O1lI）
+    nonisolated static func randomPassword(_ len: Int) -> String {
+        let chars = Array("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789")
+        return String((0..<len).map { _ in chars.randomElement()! })
     }
     /// 运行状态查询
     func isRunning(module: EscapeModule) -> Bool {
@@ -211,7 +212,7 @@ final class BinaryModuleRunner: ObservableObject {
     /// ② 否则 RTLD_DEFAULT 找内置静态符号（openlist_embed 构建形态）
     /// ③ 都没有 → 报错提示安装模块 zip
     /// 数据目录一律以**参数**传给 Go（Go env 在 runtime 初始化时已快照，setenv 事后不可见）；
-    /// fd 2 重定向到 data/go_stderr.log 抓 Go runtime 临终输出；8MB 大栈 pthread 承载入口。
+    /// fd 2 重定向到 data/go_stderr.log 抓 Go runtime 临终输出；8MB 大栈 pthread 承载入口.
     /// 常驻保存用户态加载的镜像句柄（不卸载：Go runtime 必须存活）
     private static let uloaderLock = NSLock()
     private nonisolated(unsafe) static var cachedUloaderImage: UnsafeMutableRawPointer?
@@ -222,7 +223,7 @@ final class BinaryModuleRunner: ObservableObject {
     nonisolated private func startBinaryModule(moduleId: String, entrySymbol: String,
                                           dataDir: URL, logFile: URL, moduleDir: URL) throws {
         // fd 2 重定向：Go runtime 初始化阶段的 throw/fatal（先于任何 Go 代码）原本只写
-        // 进程 stderr，LC 下直接丢失——重定向到文件后 SSH `mlog go_stderr.log` 可见。
+        // 进程 stderr，LC 下直接丢失——重定向到文件后 SSH `mlog go_stderr.log` 可见.
         let goErr = dataDir.appendingPathComponent("go_stderr.log")
         let fd = open(goErr.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
         if fd >= 0 {
@@ -245,7 +246,7 @@ final class BinaryModuleRunner: ObservableObject {
             } else {
                 // v0.3.119：dlopen 必被 dyld 库校验拒绝（LC 同环境实测：ldid/zsign
                 // 签名都报 code signature invalid）→ 直接走用户态加载器（匿名内存
-                // 方案，无需有效签名——见 uloader.c 注释）。重签步骤已删。
+                // 方案，无需有效签名——见 uloader.c 注释）.重签步骤已删.
                 reSignErrorText = dlerror().map { String(cString: $0) } ?? "未知错误"
                 appendLog(logFile, "[host] dlopen 失败（\(reSignErrorText!.suffix(500))）→ 用户态加载器")
                 appendLog(logFile, "[host] dlopen#1 目标(原始): \(dylibURL.path)")
@@ -261,15 +262,15 @@ final class BinaryModuleRunner: ObservableObject {
                     appendLog(logFile, "[host] dylib 缺少 \(entrySymbol) 导出")
                 }
             } else {
-                // v0.3.122：真证书路径（SideStore 信任链）——有开发证书时先签后 dlopen。
-                // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）。
+                // v0.3.122：真证书路径（SideStore 信任链）——有开发证书时先签后 dlopen.
+                // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）.
                 if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     appendLog(logFile, "[host] 开发证书可用 → 真证书签名")
                     let signDbg = logFile.deletingLastPathComponent()
                         .appendingPathComponent("data").appendingPathComponent("go_sign_debug.log")
                     // v0.3.143: 就地签名原始文件（内核实锤 code signature invalid errno=1，
-                    // 疑点集中在 rebuildToNewFile 产物——其已签输出曾连 zsign 自身都解析失败）。
-                    // 就地失败再退回 rebuild 副本路径。
+                    // 疑点集中在 rebuildToNewFile 产物——其已签输出曾连 zsign 自身都解析失败）.
+                    // 就地失败再退回 rebuild 副本路径.
                     var signURL = dylibURL
                     var signOk = DeveloperCertStore.shared.signDylib(path: signURL.path, bundleId: moduleId, debugLog: signDbg, useMainIdent: true)
                     if !signOk {
@@ -300,7 +301,7 @@ final class BinaryModuleRunner: ObservableObject {
                 if handle == nil, Self.uloaderEnabled {
                 // v0.3.108：dlopen 被 dyld 库校验拦下（ad-hoc 无 CMS blob 在 dyld 层必拒）→
                 // 改用自研用户态 Mach-O 加载器（移植自 Nyxian kxld）：自己 mmap + rebase + bind，
-                // 完全绕开 dyld——这是 LC / Nyxian 加载访客代码的方式。
+                // 完全绕开 dyld——这是 LC / Nyxian 加载访客代码的方式.
                 let target = dylibURL
                 var errBuf = [CChar](repeating: 0, count: 512)
                 if let img = uloader_load(target.path, &errBuf, errBuf.count) {
@@ -378,7 +379,7 @@ final class BinaryModuleRunner: ObservableObject {
     }
     /// dylib 句柄缓存（SSH 诊断命令复用；故意不 dlclose——Go runtime 必须常驻）
     /// nonisolated(unsafe)：@MainActor 类的存储属性不能直接 nonisolated；
-    /// 访问全部经由 handleLock 保护的存取器，实际无竞争。
+    /// 访问全部经由 handleLock 保护的存取器，实际无竞争.
     nonisolated(unsafe) private static var cachedBinaryModuleHandle: UnsafeMutableRawPointer?
     private static let handleLock = NSLock()
     nonisolated private static func cacheBinaryModuleHandle(_ h: UnsafeMutableRawPointer) {
@@ -387,7 +388,7 @@ final class BinaryModuleRunner: ObservableObject {
         handleLock.unlock()
     }
     /// v0.3.158：解析进程内模块的桥接导出符号（停止/重置密码等）
-    /// 优先已加载 dylib 句柄 → 内置静态（RTLD_DEFAULT）。
+    /// 优先已加载 dylib 句柄 → 内置静态（RTLD_DEFAULT）.
     nonisolated static func resolveBridgeSymbol(_ name: String) -> UnsafeMutableRawPointer? {
         handleLock.lock()
         let h = cachedBinaryModuleHandle
@@ -561,14 +562,14 @@ private extension DateFormatter {
     static func now() -> String { logStamp.string(from: Date()) }
 }
 // MARK: 通用二进制模块进程入口（C 函数指针，供 pthread_create 使用）
-// ctx = strdup 出来的数据目录 C 字符串；线程长期存活（服务阻塞），故不 free。
+// ctx = strdup 出来的数据目录 C 字符串；线程长期存活（服务阻塞），故不 free.
 // 数据目录必须走参数：Go 在 runtime 初始化时已快照 environ，事后 setenv 对
-// os.Getenv 不可见（v0.3.78 闪退根因）。
+// os.Getenv 不可见（v0.3.78 闪退根因）.
 // MARK: 通用二进制模块进程入口（C 函数指针，供 pthread_create 使用）
 /// 通用二进制模块入口函数 C 签名（Go: func Main(dataDirC *C.char) C.int）
 private typealias BinaryEntryFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Int32
-/// pthread 线程上下文：解析好的函数符号 + strdup 的数据目录。
-/// 线程长期存活（服务阻塞），ctx 与 dir 均故意不释放。
+/// pthread 线程上下文：解析好的函数符号 + strdup 的数据目录.
+/// 线程长期存活（服务阻塞），ctx 与 dir 均故意不释放.
 private final class BinaryModuleLaunchCtx {
     let sym: UnsafeMutableRawPointer
     let dir: UnsafeMutablePointer<CChar>

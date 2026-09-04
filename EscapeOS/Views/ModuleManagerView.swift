@@ -267,7 +267,7 @@ struct ModuleManagerView: View {
                     .foregroundColor(running ? .green : .secondary)
                 Spacer()
                 if running {
-                    if let url = runner.webURL(for: module) {
+                    if runner.webURL(for: module) != nil {
                         Button {
                             // v0.3.157：当前界面内嵌打开（对齐 KernelSU WebUI 体验，不再跳 Safari）
                             webviewModule = module
@@ -278,14 +278,8 @@ struct ModuleManagerView: View {
                         .buttonStyle(.bordered)
                         .tint(.blue)
                     }
-                    Button {
-                        runner.stop(module: module)
-                    } label: {
-                        Text("停止")
-                            .font(.footnote.weight(.medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
+                    // v0.3.159：停止等模块功能全部由「执行」菜单（actions 声明）承载，
+                    // 宿主不再内置停止按钮——动作语义完全由模块决定
                 }
                 // 启动按钮移至底栏左侧（与卸载对称，用户规范）——此处不再重复
             }
@@ -522,8 +516,8 @@ struct ModuleRunResult {
 
 /// 模块 WebView 页（KernelSU webroot 对齐）：
 /// - file:// 静态页（模块 webroot 目录内 index.html，读权限限模块目录）
-/// - http(s):// 模块自起本地服务（如 OpenList/AList 的 127.0.0.1:port 管理页）
-/// v0.3.157：统一在 App 内打开，不再跳 Safari。
+/// - http(s):// 模块自起本地服务（binary.port 声明的 127.0.0.1 管理页）
+/// v0.3.157：统一在 App 内打开，不再跳 Safari.
 struct ModuleWebView: UIViewRepresentable {
     let startPage: URL
     let readAccessRoot: URL?
@@ -557,8 +551,8 @@ struct ModuleWebView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    /// 拦截 http 跳转（页面内跳转继续，外部 target 也留在 webview 内）。
-    /// 目标页仍在本 App 内，不弹 Safari。
+    /// 拦截 http 跳转（页面内跳转继续，外部 target 也留在 webview 内）.
+    /// 目标页仍在本 App 内，不弹 Safari.
     final class Coordinator: NSObject, WKNavigationDelegate {
         func webView(_ webView: WKWebView,
                      decidePolicyFor navigationAction: WKNavigationAction,
