@@ -121,9 +121,14 @@ public enum Authenticator {
         while currentAttempt <= 4, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
-                // v0.3.24：彻底移除 anisette——AppStorePro 二进制分析实锤：
-                // 整个二进制 0 个 anisette 相关字符串。SAP 签名替代了 anisette。
-                let anisetteHeaders: [(String, String)] = []
+                // v0.3.165 修复：恢复 anisette 头注入。
+                // v0.3.24 曾按 AppStorePro 字符串分析（"0 个 anisette 字符串"）把
+                // anisette 整体移除、宣称 SAP 替代 anisette——真机 403/302/404 序列
+                // 实锤该结论错误：ipatool PR#525 的 SAP 是在 anisette 之**上**叠加，
+                // 非替代；native/fast 缺 X-Apple-I-MD 设备头被 Apple 边缘直接 403
+                // （v0.2.157 早已实测并修复，v0.3.24 回退了它）。AppStorePro 无
+                // anisette 字符串 = 它走系统 AuthKit/本地生成，本环境必须显式注入。
+                let anisetteHeaders = try await anisetteProvider?() ?? []
                 let request = try makeRequest(
                     endpoint: requestEndpoint,
                     attempt: currentAttempt,
