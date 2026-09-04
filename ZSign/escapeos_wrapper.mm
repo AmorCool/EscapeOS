@@ -30,6 +30,58 @@ extern "C" int zsign_adhoc_file(const char* path,
 #include <openssl/pem.h>
 #include <openssl/evp.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <functional>
+
+// v0.3.146：LC 同款 refreshFile（LiveContainer ZSign/zsign.mm L23-34 逐字对照）——
+// copy→remove→rename 回原路径 = 换新 inode，让内核丢弃该 vnode 的旧签名校验缓存。
+// LC 原注释：copy, remove and rename back the file to prevent crash due to
+// kernel signature cache。缺这步时 dlopen 返回缓存判决（v0.3.145 真机实锤：
+// zsign Sign ✓ 后 dlopen 报错与签名前逐字节一致，同一 blobOffset/Size/UUID）。
+static bool escRefreshFile(const std::string& path, std::string* err) {
+    @autoreleasepool {
+        NSString* p = [NSString stringWithUTF8String:path.c_str()];
+        if (![NSFileManager.defaultManager fileExistsAtPath:p]) {
+            if (err) *err = "file not exists";
+            return false;
+        }
+        NSString* tmp = [p stringByAppendingString:@".escsigtmp"];
+        [NSFileManager.defaultManager removeItemAtPath:tmp error:nil]; // 清残留
+        NSError* e = nil;
+        if (![NSFileManager.defaultManager copyItemAtPath:p toPath:tmp error:&e]) {
+            if (err) *err = e.localizedDescription.UTF8String;
+            return false;
+        }
+        e = nil;
+        if (![NSFileManager.defaultManager removeItemAtPath:p error:&e]) {
+            if (err) *err = e.localizedDescription.UTF8String;
+            [NSFileManager.defaultManager removeItemAtPath:tmp error:nil];
+            return false;
+        }
+        e = nil;
+        if (![NSFileManager.defaultManager moveItemAtPath:tmp toPath:p error:&e]) {
+            if (err) *err = e.localizedDescription.UTF8String;
+            return false;
+        }
+        return true;
+    }
+}
+
+// 签名自证：输出文件 size/mtime，用于真机日志确认落盘与换 inode 生效
+static void escStatDiag(const std::string& path, const char* tag,
+                        const std::function<void(const std::string&)>& diagWrite) {
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    if (0 != stat(path.c_str(), &st)) {
+        diagWrite(std::string("[") + tag + "] stat 失败 errno=" + std::to_string(errno) + "\n");
+        return;
+    }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "[%s] size=%lld mtime=%lld\n", tag,
+             (long long)st.st_size, (long long)st.st_mtime);
+    diagWrite(buf);
+}
 
 // 生成 RSA2048 私钥(PEM) + CSR(PEM)。Apple 免费证书流程与 SideStore/AltSign 一致：
 // X509_REQ 用 EVP_sha1 签名（AltSign CertificatesManager.generateCSR 同款）。
@@ -176,6 +228,19 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         return -1;
     }
     diagWrite("Init ✓（证书/私钥/profile 读取成功）\n");
+    // v0.3.146：签名前先换 inode（LC 同款 refreshFile-before），丢掉旧 vnode 缓存判决
+    {
+        std::string rfErr;
+        bool rfBefore = escRefreshFile(path, &rfErr);
+        diagWrite(std::string("refreshFile(before)=") + (rfBefore ? "✓" : ("✗ " + rfErr)) + "\n");
+        if (!rfBefore) {
+            for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
+            unlink(certTpl); unlink(keyTpl);
+            return -4;
+        }
+    }
+    escStatDiag(path, "签名前", diagWrite);
+
     ZMachO* macho = new ZMachO();
     if (!macho->Init(path)) {
         delete macho;
@@ -190,6 +255,14 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         diagWrite("FAIL: Sign 失败\n");
     } else {
         diagWrite("Sign ✓\n");
+        escStatDiag(path, "签名后", diagWrite);
+        // v0.3.146：签名后再换 inode（LC 同款 refreshFile-after）——
+        // dlopen 见到全新 vnode 才会重新做签名校验，不吃缓存判决
+        std::string rfErr2;
+        bool rfAfter = escRefreshFile(path, &rfErr2);
+        diagWrite(std::string("refreshFile(after)=") + (rfAfter ? "✓" : ("✗ " + rfErr2)) + "\n");
+        if (rfAfter) escStatDiag(path, "refreshFile后", diagWrite);
+        ok = rfAfter;
     }
     for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
     if (!res.empty()) diagWrite("  [res] " + res + "\n");
