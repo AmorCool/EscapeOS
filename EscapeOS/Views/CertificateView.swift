@@ -344,7 +344,7 @@ struct CertificateView: View {
                 batchRevokeBar
             }
         }
-        .background(selecting ? Color.clear : .bar)
+        .background(.bar)
     }
 
     @ViewBuilder
