@@ -194,11 +194,6 @@ static void escDumpBlob(const uint8_t* base, size_t size, uint32_t dataoff,
                     }
                     OPENSSL_free(s1); OPENSSL_free(s2);
                 }
-                if (p7->d.sign && p7->d.sign->auth_attr) {
-                    snprintf(buf, sizeof(buf), "      CMS signed attrs 数=%d\n",
-                             sk_X509_ATTRIBUTE_num(p7->d.sign->auth_attr));
-                    diag(buf);
-                }
             }
             if (p7) PKCS7_free(p7);
             if (bio) BIO_free(bio);
@@ -250,12 +245,15 @@ static void escDumpMachO(const std::string& path, const char* tag,
         memcpy(&lc, p, sizeof(lc));
         if (lc.cmdsize < 8) break;
         if (lc.cmd == LC_CODE_SIGNATURE) {
-            struct linkedit_data_command le;
-            memcpy(&le, p, sizeof(le));
+            // linkedit_data_command = {cmd(4), cmdsize(4), dataoff(4), datasize(4)}
+            // （vendored mach-o.h 无该结构体定义，按字段偏移直接取）
+            uint32_t doff = 0, dsz = 0;
+            memcpy(&doff, p + 8, 4);
+            memcpy(&dsz, p + 12, 4);
             snprintf(buf, sizeof(buf), "  LC_CODE_SIGNATURE#%d dataoff=%u datasize=%u\n",
-                     ++sigCount, le.dataoff, le.datasize);
+                     ++sigCount, doff, dsz);
             diag(buf);
-            sigOff = le.dataoff; sigSize = le.datasize;
+            sigOff = doff; sigSize = dsz;
         } else if (lc.cmd == LC_SEGMENT_64) {
             struct segment_command_64 seg;
             memcpy(&seg, p, sizeof(seg));
