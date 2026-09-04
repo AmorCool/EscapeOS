@@ -110,6 +110,15 @@ public enum Authenticator {
         // v0.3.26：认证端点切换——AppStorePro 二进制实锤（中文日志+native/fast）：
         // SAP 认证走 auth.itunes.apple.com/auth/v1/native/fast/（硬编码，非 bag）
         var requestEndpoint: URL = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast/?guid=\(deviceIdentifier)")!
+        // v0.3.172：legacy 认证端点（ipatool PR #514 移植）——native/fast 返回
+        // 204/403/404/503 且响应空/非 plist（UnexpectedResponse 形态）时，回退到
+        // 老式 MZFinance 端点整轮重试。legacy（老 iTunes 客户端形态）的 2FA 走
+        // 短信发送渠道（桌面 iTunes 惯例），native 推送收不到码时可解。
+        let legacyFallbackEndpoint = try createInitialRequestEndpoint(
+            baseURL: URL(string: "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate")!,
+            deviceIdentifier: deviceIdentifier)
+        var usedLegacyFallback = false
+        var sawFallbackStatus = false   // native 阶段见过 204/403/404/503
         var cookies: [Cookie] = cookies
         var storeFront = ""
         var pod: String?
@@ -119,6 +128,9 @@ public enum Authenticator {
         var promptedForCode = false
 
         // v0.2.160：上限提到 4 次，对齐 ipatool 对 204/404/5xx 的重试策略。
+        // v0.3.172：外层 while true——native 整轮失败后可回退 legacy 再来一轮
+        //（continue 跳回内层 attempt 循环; break 在 fallback 不满足时退出）.
+        retryLoop: while true {
         while currentAttempt <= 4, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
@@ -156,6 +168,10 @@ public enum Authenticator {
                 }
                 // ===== v0.2.157 健壮性：区分暂态 / 永久失败，避免无意义重试 =====
                 let status = response.status
+                // v0.3.172：记录可回退状态码（ipatool PR#514 fallback 条件）
+                if [204, 403, 404, 503].contains(status.code) {
+                    sawFallbackStatus = true
+                }
                 // 1) Apple 边缘 403 HTML：缺失 anisette 设备头 或 出口 IP 被风控。
                 //    首轮若还能刷新 anisette，用全新 anisette 重试一次（排除 anisette 失效）；
                 //    否则（已重试过 / 无 anisette 可刷）直接明确报错，不再盲目重试。
@@ -256,6 +272,22 @@ public enum Authenticator {
                 }
                 lastError = error
             }
+        }
+
+        // v0.3.172：native/fast 整轮失败且见过 204/403/404/503 → 回退 legacy
+        // 端点再整轮重试（ipatool PR#514：native 异常/空响应时 legacy 可过）.
+        // legacy 用 createInitialRequestEndpoint 已带 ?guid=（v0.3.20 实锤必需）.
+        if !usedLegacyFallback, sawFallbackStatus, lastError != nil {
+            usedLegacyFallback = true
+            requestEndpoint = legacyFallbackEndpoint
+            currentAttempt = 1
+            redirectAttempt = 0
+            promptedForCode = false
+            lastError = nil
+            LoginLogger.shared.log("native/fast 认证失败 → 回退 legacy MZFinance 端点重试: \(requestEndpoint.absoluteString)")
+            continue
+        }
+        break
         }
 
         if let lastError = lastError { throw lastError }
