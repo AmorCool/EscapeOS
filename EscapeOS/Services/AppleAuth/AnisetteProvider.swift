@@ -120,7 +120,13 @@ final class AnisetteProvider {
 
     func getAnisetteData(refresh: Bool = false) async throws -> AnisetteData {
         if refresh {
-            clientInfo = nil; userAgent = nil; mdLu = nil; deviceId = nil
+            // v0.3.166：refresh = 强制重签 provisioning 票据（作废 adiPb 保留 identifier）。
+            // 背景：ani.846969.xyz 对同一 (identifier, adiPb) 缓存 get_headers 结果，
+            // 旧实现 refresh 只清内存缓存 → 仍命中 keychain 的 identifier+adiPb →
+            // 拿到与上次完全相同的 OTP（真机日志实锤：两次 refresh=true 返回同一
+            // X-Apple-I-MD）→ Apple 边缘判定重放/已标记 → native/fast 301/404。
+            // identifier 必须保留（v0.2.117 铁律：换 identifier = 换虚拟机器 = 风控）。
+            resetProvisioning()
         }
         LoginLogger.shared.log("▶ getAnisetteData(refresh=\(refresh)) url=\(url?.absoluteString ?? "nil")")
         guard url != nil else { throw fail("入口", "Anisette 服务器地址为空") }
