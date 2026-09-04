@@ -49,6 +49,15 @@ int zsign_sign_file_with_cert(const char *path, const char *bundleId,
                               const char *entXml, int entLen,
                               const char *dbgPath,
                               const char *teamId);
+// v0.3.152 证书 serial 匹配（iOS 27 beta AMFI 要求库与进程签名证书同源）：
+// 证书 PEM → serial hex；Mach-O 文件 CMS 叶子证书 → serial hex
+int zsign_cert_serial(const char *certPem, int certLen,
+                      char *outHex, int outHexLen);
+int zsign_file_leaf_serial(const char *path, char *outHex, int outHexLen);
+// v0.3.152 p12 导入：PKCS12_parse 提取 cert/key PEM；输出 buffer 用 free() 释放
+int zsign_p12_extract(const char *p12Data, int p12Len, const char *password,
+                      char **certPemOut, int *certPemLen,
+                      char **keyPemOut, int *keyPemLen);
 
 // ZSign ad-hoc 重签名（v0.3.101：LC/Nyxian 同款引擎，编进 App；对副本就地重签）
 int zsign_adhoc_file(const char *path, const char *bundleId, const char *entXml, int entLen);

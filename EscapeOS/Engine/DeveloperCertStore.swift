@@ -213,6 +213,8 @@ final class DeveloperCertStore: ObservableObject {
 
     /// 对 dylib 就地做真证书签名。返回 true = 签名成功。
     /// 诊断日志（zsign 全部输出 + 分步结果）落盘 dataDir/go_sign_debug.log。
+    /// v0.3.152：签名前对比"主程序叶子证书 serial"与"当前证书 serial"——
+    /// 150/151 真机实锤主程序用 LC 导入的旧证书（能过校验），新证书签的 dylib 被拒。
     func signDylib(path: String, bundleId: String, debugLog: URL? = nil) -> Bool {
         let team = (try? String(contentsOf: teamURL, encoding: .utf8)) ?? ""
         guard hasCert,
@@ -220,6 +222,28 @@ final class DeveloperCertStore: ObservableObject {
               let keyData = try? Data(contentsOf: keyURL) else {
             LoginLogger.shared.log("❌ signDylib：cert/key 文件读取失败")
             return false
+        }
+        // v0.3.152 serial 同源诊断：主程序（能过校验的基准）vs 当前签名证书
+        let mainSerial = UnsafeMutablePointer<CChar>.allocate(capacity: 96)
+        defer { mainSerial.deallocate() }
+        let curSerial = UnsafeMutablePointer<CChar>.allocate(capacity: 96)
+        defer { curSerial.deallocate() }
+        let mainExe = Bundle.main.executablePath ?? ""
+        let mainRc = mainExe.withCString { p -> Int32 in
+            zsign_file_leaf_serial(p, mainSerial, 96)
+        }
+        let curRc = certData.withUnsafeBytes { cbuf -> Int32 in
+            guard let cp = cbuf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return -2 }
+            return zsign_cert_serial(cp, Int32(certData.count), curSerial, 96)
+        }
+        if mainRc > 0, curRc > 0 {
+            let ms = String(cString: mainSerial)
+            let cs = String(cString: curSerial)
+            if ms != cs {
+                LoginLogger.shared.log("⚠ 证书不同源：主程序 serial=\(ms.suffix(12)) 当前=\(cs.suffix(12))——iOS 27 beta 疑似要求同证书. 请在「证书管理 → 导入 p12」导入主程序同款证书")
+            } else {
+                LoginLogger.shared.log("✓ 证书同源 serial=\(cs.suffix(12))")
+            }
         }
         // v0.3.140 前置配对校验：历史错位（证书对应旧私钥）在此给出明确指引，不让 zsign 模糊失败
         let paired = certData.withUnsafeBytes { cbuf -> Int32 in
@@ -246,6 +270,59 @@ final class DeveloperCertStore: ObservableObject {
         }
         LoginLogger.shared.log("zsign 真证书签名 rc=\(rc)（0=成功 -1=Init -2=文件/macho -3=Sign）")
         return rc == 0
+    }
+
+    /// v0.3.152：导入 p12（同源证书方案）——解析 PKCS12 提取 cert/key PEM，
+    /// 配对校验通过后覆盖落盘。用于导入与主程序（LC/SideStore 签发）相同的证书。
+    func importP12(data: Data, password: String) -> Result<Void, String> {
+        var certPemOut: UnsafeMutablePointer<CChar>? = nil
+        var keyPemOut: UnsafeMutablePointer<CChar>? = nil
+        var certLen: Int32 = 0
+        var keyLen: Int32 = 0
+        let rc = data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> Int32 in
+            guard let base = buf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return -2 }
+            return password.withCString { pwd in
+                zsign_p12_extract(base, Int32(data.count), pwd,
+                                  &certPemOut, &certLen, &keyPemOut, &keyLen)
+            }
+        }
+        guard rc == 0, let certP = certPemOut, let keyP = keyPemOut else {
+            return .failure("p12 解析失败（密码错误或文件损坏）")
+        }
+        defer {
+            free(certP)
+            free(keyP)
+        }
+        let certPem = Data(bytes: certP, count: Int(certLen))
+        let keyPem = Data(bytes: keyP, count: Int(keyLen))
+        // 配对校验
+        let paired = certPem.withUnsafeBytes { cbuf -> Int32 in
+            keyPem.withUnsafeBytes { kbuf -> Int32 in
+                guard let cp = cbuf.baseAddress?.assumingMemoryBound(to: CChar.self),
+                      let kp = kbuf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return 0 }
+                return zsign_check_pair(cp, Int32(certPem.count), kp, Int32(keyPem.count))
+            }
+        }
+        guard paired == 1 else {
+            return .failure("p12 证书与私钥不配对")
+        }
+        // serial 记录（与主程序对比的信息源）
+        let serialHex = certPem.withUnsafeBytes { cbuf -> String in
+            guard let cp = cbuf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "?" }
+            let out = UnsafeMutablePointer<CChar>.allocate(capacity: 96)
+            defer { out.deallocate() }
+            let r = zsign_cert_serial(cp, Int32(certPem.count), out, 96)
+            return r > 0 ? String(cString: out) : "?"
+        }
+        do {
+            try keyPem.write(to: keyURL, atomically: true, encoding: .utf8)
+            try certPem.write(to: certURL, atomically: true, encoding: .utf8)
+            hasCert = true
+            LoginLogger.shared.log("✓ p12 导入成功 serial=\(serialHex.suffix(12))（重启模块后生效）")
+            return .success(())
+        } catch {
+            return .failure("落盘失败: \(error.localizedDescription)")
+        }
     }
 
     /// 统一撤销接口：自动撤销开关（默认关——防止误吊销 SideStore 在用证书）

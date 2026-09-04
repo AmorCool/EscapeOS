@@ -5,6 +5,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
+#include <openssl/pkcs12.h>
 #include "openssl.h"
 #include "macho.h"
 #include "common/log.h"
@@ -289,6 +290,153 @@ static void escDumpMachO(const std::string& path, const char* tag,
             close(fd);
         }
     }
+}
+
+// v0.3.152：p12 导入（同源证书方案）——真机 dump 实锤主程序（LC 签，能过校验）
+// 用的是 LC 导入的 p12 证书（notAfter=2027-08-24），而 EscapeSpace 登录新签的
+// 证书（notAfter=2027-09-04）签的 dylib 被 AMFI 拒——iOS 27 beta 疑似要求
+// dlopen 库与进程签名证书严格同源。提供 p12 提取：PKCS12_parse → cert/key PEM。
+// 返回 0 成功（*certPemOut/*keyPemOut 由调用方 free）；-1 解析失败；-2 参数。
+extern "C" int zsign_p12_extract(const char* p12Data, int p12Len,
+                                 const char* password,
+                                 char** certPemOut, int* certPemLen,
+                                 char** keyPemOut, int* keyPemLen) {
+    if (!p12Data || p12Len <= 0 || !certPemOut || !keyPemOut) return -2;
+    *certPemOut = NULL; *keyPemOut = NULL;
+    BIO* bio = BIO_new_mem_buf(p12Data, p12Len);
+    if (!bio) return -2;
+    PKCS12* p12 = d2i_PKCS12_bio(bio, NULL);
+    BIO_free(bio);
+    if (!p12) return -1;
+    EVP_PKEY* pkey = NULL;
+    X509* cert = NULL;
+    if (0 == PKCS12_parse(p12, password ? password : "", &pkey, &cert, NULL)) {
+        ZSignAsset::CMSError();
+        PKCS12_free(p12);
+        return -1;
+    }
+    PKCS12_free(p12);
+    if (!pkey || !cert) {
+        if (pkey) EVP_PKEY_free(pkey);
+        if (cert) X509_free(cert);
+        return -1;
+    }
+    BIO* certBIO = BIO_new(BIO_s_mem());
+    BIO* keyBIO = BIO_new(BIO_s_mem());
+    bool ok = certBIO && keyBIO
+        && PEM_write_bio_X509(certBIO, cert) == 1
+        && PEM_write_bio_PrivateKey(keyBIO, pkey, NULL, NULL, 0, NULL, NULL) == 1;
+    if (ok) {
+        char* certPtr = NULL; long certLen = BIO_get_mem_data(certBIO, &certPtr);
+        char* keyPtr = NULL; long keyLen = BIO_get_mem_data(keyBIO, &keyPtr);
+        if (certLen > 0 && keyLen > 0) {
+            *certPemOut = (char*)malloc(certLen + 1);
+            *keyPemOut = (char*)malloc(keyLen + 1);
+            memcpy(*certPemOut, certPtr, certLen); (*certPemOut)[certLen] = 0;
+            memcpy(*keyPemOut, keyPtr, keyLen); (*keyPemOut)[keyLen] = 0;
+            *certPemLen = (int)certLen; *keyPemLen = (int)keyLen;
+        } else ok = false;
+    }
+    if (certBIO) BIO_free(certBIO);
+    if (keyBIO) BIO_free(keyBIO);
+    X509_free(cert);
+    EVP_PKEY_free(pkey);
+    return ok ? 0 : -1;
+}
+
+// v0.3.152：证书 serial 匹配——真机 dump 实锤主程序（LC 签，能过校验）叶子
+// notAfter=2027-08-24（旧证书），dylib（新证书 notAfter=2027-09-04）被拒——
+// iOS 27 beta AMFI 疑似要求 dlopen 库与进程签名证书严格同源（同 serial）。
+// 导出叶子证书 serial（hex）用于 Swift 侧匹配 DeveloperCertStore 里的同名证书。
+extern "C" int zsign_cert_serial(const char* certPem, int certLen,
+                                 char* outHex, int outHexLen) {
+    if (!certPem || certLen <= 0 || !outHex || outHexLen < 48) return -2;
+    BIO* cbio = BIO_new_mem_buf(certPem, certLen);
+    if (!cbio) return -2;
+    X509* cert = PEM_read_bio_X509(cbio, NULL, 0, NULL);
+    BIO_free(cbio);
+    if (!cert) return -2;
+    const ASN1_INTEGER* sn = X509_get0_serialNumber(cert);
+    BIGNUM* bn = ASN1_INTEGER_to_BN(sn, NULL);
+    int ret = -2;
+    if (bn) {
+        char* hex = BN_bn2hex(bn);
+        if (hex) {
+            snprintf(outHex, outHexLen, "%s", hex);
+            ret = (int)strlen(outHex);
+            OPENSSL_free(hex);
+        }
+        BN_free(bn);
+    }
+    X509_free(cert);
+    return ret;
+}
+
+// 读 Mach-O 文件 CMS 叶子证书的 serial（hex）。主程序与 dylib 的对比通道。
+// 叶子取 CMS 证书数组最后一张（zsign/苹果惯例：链在前叶子在后）。
+extern "C" int zsign_file_leaf_serial(const char* path, char* outHex, int outHexLen) {
+    if (!path || !outHex || outHexLen < 48) return -2;
+    outHex[0] = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -2;
+    struct stat st;
+    if (0 != fstat(fd, &st) || st.st_size < 4096) { close(fd); return -2; }
+    void* m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (!m || m == MAP_FAILED) return -2;
+    int ret = -2;
+    uint8_t* base = (uint8_t*)m;
+    struct mach_header_64 mh;
+    memcpy(&mh, base, sizeof(mh));
+    uint8_t* p = base + sizeof(mh);
+    long consumed = 0;
+    for (uint32_t i = 0; i < mh.ncmds && consumed + 8 <= (long)mh.sizeofcmds; i++) {
+        uint32_t cmd = *(const uint32_t*)p;
+        uint32_t cmdsize = *(const uint32_t*)(p + 4);
+        if (cmdsize < 8) break;
+        if (cmd == LC_CODE_SIGNATURE) {
+            uint32_t dataoff = *(const uint32_t*)(p + 8);
+            uint32_t datasize = *(const uint32_t*)(p + 12);
+            if ((uint64_t)dataoff + datasize <= (uint64_t)st.st_size) {
+                const uint8_t* sb = base + dataoff;
+                if (ntohl(*(const uint32_t*)sb) == CSMAGIC_EMBEDDED_SIGNATURE) {
+                    uint32_t count = ntohl(*(const uint32_t*)(sb + 8));
+                    for (uint32_t k = 0; k < count && k < 16; k++) {
+                        const uint8_t* idx = sb + 12 + k * 8;
+                        uint32_t off = ntohl(*(const uint32_t*)(idx + 4));
+                        const uint8_t* slot = sb + off;
+                        if (ntohl(*(const uint32_t*)slot) == CSMAGIC_BLOBWRAPPER) {
+                            uint32_t slotLen = ntohl(*(const uint32_t*)(slot + 4));
+                            BIO* bio = slotLen > 8 ? BIO_new_mem_buf(slot + 8, (int)(slotLen - 8)) : NULL;
+                            PKCS7* p7 = bio ? d2i_PKCS7_bio(bio, NULL) : NULL;
+                            if (p7 && p7->d.sign && p7->d.sign->cert && sk_X509_num(p7->d.sign->cert) > 0) {
+                                X509* leaf = sk_X509_value(p7->d.sign->cert, sk_X509_num(p7->d.sign->cert) - 1);
+                                const ASN1_INTEGER* sn = X509_get0_serialNumber(leaf);
+                                BIGNUM* bn = ASN1_INTEGER_to_BN(sn, NULL);
+                                if (bn) {
+                                    char* hex = BN_bn2hex(bn);
+                                    if (hex) {
+                                        snprintf(outHex, outHexLen, "%s", hex);
+                                        ret = (int)strlen(outHex);
+                                        OPENSSL_free(hex);
+                                    }
+                                    BN_free(bn);
+                                }
+                            }
+                            if (p7) PKCS7_free(p7);
+                            if (bio) BIO_free(bio);
+                            break;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        p += cmdsize;
+        consumed += cmdsize;
+    }
+    munmap(m, (size_t)st.st_size);
+    return ret;
 }
 
 // v0.3.151：签名前改 UUID（LC LCChangeMachOUUID 同款，uuid[0]+=1）。

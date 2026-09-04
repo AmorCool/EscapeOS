@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 证书管理（汉化移植自 SideInstaller 的 CertsView）。
 ///
@@ -17,6 +18,13 @@ struct CertificateView: View {
     @State private var selected: Set<String> = []
     /// 批量吊销确认。
     @State private var showBatchRevokeConfirm = false
+
+    // v0.3.152 p12 导入（同源证书方案：导入主程序同款证书）
+    @State private var showP12Picker = false
+    @State private var showP12Password = false
+    @State private var p12Password = ""
+    @State private var pendingP12Data: Data?
+    @State private var p12Message: String?
 
     var body: some View {
         List {
@@ -129,19 +137,69 @@ struct CertificateView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if selecting {
-                HStack {
-                    Text("已选 \(selected.count) 项")
-                        .font(.subheadline)
-                    Spacer()
-                    Button("吊销", role: .destructive) {
-                        showBatchRevokeConfirm = true
-                    }
-                    .disabled(selected.isEmpty || manager.isWorking)
+            VStack(spacing: 0) {
+                // v0.3.152 p12 导入（同源证书方案）
+                Button {
+                    showP12Picker = true
+                } label: {
+                    Label("导入 p12 证书（与主程序同源）", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
                 }
-                .padding()
-                .background(.bar)
+                .buttonStyle(.bordered)
+                .padding(.horizontal)
+                .padding(.top, 6)
+                if let msg = p12Message {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(msg.hasPrefix("✓") ? Color.green : Color.orange)
+                        .padding(.horizontal)
+                }
+                if selecting {
+                    HStack {
+                        Text("已选 \(selected.count) 项")
+                            .font(.subheadline)
+                        Spacer()
+                        Button("吊销", role: .destructive) {
+                            showBatchRevokeConfirm = true
+                        }
+                        .disabled(selected.isEmpty || manager.isWorking)
+                    }
+                    .padding()
+                    .background(.bar)
+                }
             }
+            .background(selecting ? Color.clear : .bar)
+        }
+        .onChange(of: showP12Picker) { shown in
+            guard shown else { return }
+            SharedDocumentPicker.present(allowedTypes: [.data]) { urls in
+                guard let url = urls.first,
+                      let data = try? Data(contentsOf: url) else {
+                    p12Message = "✗ p12 文件读取失败"
+                    return
+                }
+                pendingP12Data = data
+                p12Password = ""
+                showP12Password = true
+            } onCancelled: {
+                showP12Picker = false
+            }
+        }
+        .alert("p12 密码", isPresented: $showP12Password) {
+            TextField("导出时设置的密码", text: $p12Password)
+            Button("导入") {
+                guard let data = pendingP12Data else { return }
+                switch certStore.importP12(data: data, password: p12Password) {
+                case .success:
+                    p12Message = "✓ 导入成功（与主程序同源证书. 重启模块后生效）"
+                case .failure(let err):
+                    p12Message = "✗ \(err)"
+                }
+                pendingP12Data = nil
+            }
+            Button("取消", role: .cancel) { pendingP12Data = nil }
+        } message: {
+            Text("输入 p12 导出时设置的密码. 使用与主程序（LC/SideStore）相同的证书签名模块.")
         }
         .sheet(isPresented: $showLogin) {
             AppleIDLoginSheet()
