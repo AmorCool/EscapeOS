@@ -523,6 +523,9 @@ static bool escGetSigRange(const std::string& path, uint32_t* dataoffOut,
     uint32_t ncmds = *(const uint32_t*)(hdr + 16);
     uint32_t sizeofcmds = *(const uint32_t*)(hdr + 20);
     std::vector<uint8_t> lcb(sizeofcmds);
+    // v0.3.154 修复：load commands 从偏移 32 开始（hdr 读到 64 后必须 seek 回 32，
+    // 否则 lcb 错位 32 字节 → LC_CODE_SIGNATURE 解析失败 → 对照/自愈静默跳过）
+    if (fseek(fp, 32, SEEK_SET) != 0) { fclose(fp); return false; }
     if (fread(lcb.data(), 1, sizeofcmds, fp) != sizeofcmds) { fclose(fp); return false; }
     fclose(fp);
     uint8_t* p = lcb.data();
