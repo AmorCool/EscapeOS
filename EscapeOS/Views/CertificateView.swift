@@ -25,6 +25,8 @@ struct CertificateView: View {
     @State private var p12Password = ""
     @State private var pendingP12Data: Data?
     @State private var p12Message: String?
+    // v0.3.155 删除已导入证书（LC 同款）
+    @State private var showRemoveCertConfirm = false
 
     var body: some View {
         List {
@@ -151,6 +153,15 @@ struct CertificateView: View {
             Button("取消", role: .cancel) { pendingP12Data = nil }
         } message: {
             Text("输入 p12 导出时设置的密码. 使用与主程序（LC/SideStore）相同的证书签名模块.")
+        }
+        .alert("删除本地签名证书？", isPresented: $showRemoveCertConfirm) {
+            Button("删除", role: .destructive) {
+                let result = certStore.removeLocalCert()
+                p12Message = result.ok ? "✓ \(result.message)" : "✗ \(result.message)"
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("仅删除本地签名用的证书文件（签名功能随之不可用），不会向 Apple 吊销证书. Apple 侧证书仍占账号名额，需要腾名额请用吊销功能.")
         }
         .sheet(isPresented: $showLogin) {
             AppleIDLoginSheet()
@@ -337,6 +348,18 @@ struct CertificateView: View {
             .buttonStyle(.bordered)
             .padding(.horizontal)
             .padding(.top, 6)
+            // v0.3.155 删除已导入证书（LC 同款：仅清本地，不吊销 Apple 侧）
+            if certStore.hasCert {
+                Button(role: .destructive) {
+                    showRemoveCertConfirm = true
+                } label: {
+                    Label("删除已导入证书（仅本地）", systemImage: "trash")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal)
+                .padding(.top, 6)
+            }
             if let msg = p12Message {
                 p12MessageText(msg)
             }

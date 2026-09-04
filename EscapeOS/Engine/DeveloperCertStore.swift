@@ -272,6 +272,29 @@ final class DeveloperCertStore: ObservableObject {
         return rc == 0
     }
 
+    /// v0.3.155：删除本地已导入/已签发的签名证书（LC 同款删除功能）。
+    /// 仅清除本地 cert/key 文件（签名功能随之不可用），不向 Apple 吊销——
+    /// Apple 侧证书状态不受影响（仍占账号名额，需要腾名额请用吊销）。
+    func removeLocalCert() -> (ok: Bool, message: String) {
+        let hadCert = hasCert
+        guard hadCert else {
+            return (false, "本地没有已导入的签名证书")
+        }
+        do {
+            if FileManager.default.fileExists(atPath: certURL.path) {
+                try FileManager.default.removeItem(at: certURL)
+            }
+            if FileManager.default.fileExists(atPath: keyURL.path) {
+                try FileManager.default.removeItem(at: keyURL)
+            }
+            hasCert = false
+            LoginLogger.shared.log("✓ 已删除本地签名证书（Apple 侧未吊销）")
+            return (true, "已删除本地签名证书（Apple 侧未吊销. 模块签名不可用，重新导入 p12 或登录创建后恢复）")
+        } catch {
+            return (false, "删除失败: \(error.localizedDescription)")
+        }
+    }
+
     /// v0.3.152：导入 p12（同源证书方案）——解析 PKCS12 提取 cert/key PEM，
     /// 配对校验通过后覆盖落盘。用于导入与主程序（LC/SideStore 签发）相同的证书。
     func importP12(data: Data, password: String) -> (ok: Bool, message: String) {
