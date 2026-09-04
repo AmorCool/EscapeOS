@@ -77,7 +77,8 @@ struct AddAccountSheet: View {
         errorMessage = nil
         let email = self.email
         let password = self.password
-        Task {
+        // v0.3.173：Task.detached——SAP 初始化重活不得占用主线程（同 AppStoreDownloadView）
+        Task.detached(priority: .userInitiated) {
             LoginLogger.shared.log("App Store 下载：手动添加账户开始认证 \(email)（含验证码：\(code.isEmpty ? "否" : "是")）")
             do {
                 let account = try await Authenticator.authenticate(

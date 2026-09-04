@@ -363,7 +363,9 @@ struct AppStoreDownloadView: View {
         busy = true
         status = "正在用设置中的 Apple ID 登录 App Store…"
         LoginLogger.shared.log("App Store 下载：开始用「更多」已登录的 Apple ID（\(email)）走 iTunes 认证")
-        Task {
+        // v0.3.173：Task.detached——SAP 签名器初始化（36MB 资产下载 + Unicorn 模拟器启动）
+        // 是同步重活，Task{} 继承 MainActor 会阻塞主线程导致全局无响应（真机实锤）.
+        Task.detached(priority: .userInitiated) {
             do {
                 let account = try await Authenticator.authenticate(
                     email: email,
@@ -409,7 +411,7 @@ struct AppStoreDownloadView: View {
         busy = true
         status = "正在验证双重认证…"
         LoginLogger.shared.log("App Store 下载：设置登录流程内 2FA 重试 \(email)（含验证码：是）")
-        Task {
+        Task.detached(priority: .userInitiated) {
             do {
                 let account = try await Authenticator.authenticate(
                     email: email,
