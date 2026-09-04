@@ -346,13 +346,17 @@ struct ModuleManagerView: View {
             Divider()
 
             // 底栏：启动/执行 + 打开 在左，卸载在右（截图同款灰胶囊黑字）
+            // v0.3.161：二进制模块未运行显示「启动」，运行后同位置变「执行」（互斥）；
+            // 非二进制模块（热补丁/Lua）无运行态，始终显示「执行」.
             HStack(spacing: 12) {
-                if enabled && module.isBinaryModule && !running {
+                let showStart = enabled && module.isBinaryModule && !running
+                let showRun = enabled && !module.actions.isEmpty && (!module.isBinaryModule || running)
+                if showStart {
                     pill(label: "启动", icon: "play.fill") {
                         BinaryModuleRunner.shared.start(module: module, automatic: false)
                     }
                 }
-                if enabled && !module.actions.isEmpty {
+                if showRun {
                     pill(label: "执行", icon: "play.fill") {
                         handleRun(module: module)
                     }

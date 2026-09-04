@@ -262,9 +262,15 @@ final class BinaryModuleRunner: ObservableObject {
                     appendLog(logFile, "[host] dylib 缺少 \(entrySymbol) 导出")
                 }
             } else {
-                // v0.3.122：真证书路径（SideStore 信任链）——有开发证书时先签后 dlopen.
-                // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）.
-                if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
+            // v0.3.122：真证书路径（SideStore 信任链）——有开发证书时先签后 dlopen。
+            // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）。
+            // v0.3.161：无本地证书时自动恢复——已登录 Apple ID 则自动签发
+            // （Apple 异步签发，createCertificate 内部轮询），失败再走失败分支。
+            if !DeveloperCertStore.shared.hasCert {
+                appendLog(logFile, "[host] 本地无签名证书 → 尝试自动签发（需已登录 Apple ID）")
+                _ = await Self.ensureCertAvailable(logFile: logFile)
+            }
+            if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     appendLog(logFile, "[host] 开发证书可用 → 真证书签名")
                     let signDbg = logFile.deletingLastPathComponent()
                         .appendingPathComponent("data").appendingPathComponent("go_sign_debug.log")
@@ -295,7 +301,7 @@ final class BinaryModuleRunner: ObservableObject {
                 }
                 if handle == nil, !Self.uloaderEnabled {
                     // v0.3.141：必崩兜底已封 —— 给明确指引代替闪退
-                    uloaderErrorText = "模块无法安全加载: dlopen 被系统拒绝且真证书签名失败. 请到「更多 → 证书管理」吊销并重新创建证书后重试"
+                    uloaderErrorText = "模块无法安全加载: dlopen 被系统拒绝且真证书签名失败. 请确认已登录 Apple ID（启动时会自动签发证书）或到「更多 → 证书管理」导入 p12"
                     appendLog(logFile, "[host] 用户态加载器已禁用(v0.3.141): \(uloaderErrorText!)")
                 }
                 if handle == nil, Self.uloaderEnabled {
@@ -369,6 +375,21 @@ final class BinaryModuleRunner: ObservableObject {
         guard rc == 0 else {
             throw BinaryModuleError.spawnFailed("pthread_create 失败：\(rc)")
         }
+    }
+    /// v0.3.161：确保证书可用——无本地证书且 Apple ID 已登录时自动签发
+    /// （createCertificateWithStoredAccount 内部含异步签发轮询）。返回最终是否有证书.
+    nonisolated private static func ensureCertAvailable(logFile: URL) async -> Bool {
+        let store = DeveloperCertStore.shared
+        if store.hasCert { return true }
+        do {
+            try await store.createCertificateWithStoredAccount()
+        } catch {
+            appendLog(logFile, "[host] 自动签发失败: \(error.localizedDescription)")
+        }
+        if store.hasCert {
+            appendLog(logFile, "[host] 自动签发成功，本地证书已就绪")
+        }
+        return store.hasCert
     }
     /// 查找模块目录下 bin/*.dylib（可拆卸模块形态）
     nonisolated static func findDylib(moduleDir: URL) -> URL? {
@@ -452,7 +473,7 @@ final class BinaryModuleRunner: ObservableObject {
                 }
                 // v0.3.141：uloader 禁用开关（本环境映射代码页执行必被 AMFI 终止 → 必崩）
                 guard Self.uloaderEnabled else {
-                    note("用户态加载器已禁用(v0.3.141): dlopen 被拒且真证书签名失败. 请到「更多 → 证书管理」吊销并重新创建证书后重试")
+                    note("用户态加载器已禁用(v0.3.141): dlopen 被拒且真证书签名失败. 请确认已登录 Apple ID（启动时自动签发）或导入 p12")
                     return dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)   // RTLD_DEFAULT：内置静态
                 }
                 // v0.3.119：匿名内存方案下 uloader 不需要有效签名——直接加载原始文件
