@@ -821,6 +821,20 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         }
         // v0.3.149：喂签名给内核 + F_CHECK_LV 拿内核判决（LC validateJITLessSetup 同款）
         escKernelCheck(path, kSigOff, kSigSize, diagWrite);
+        // v0.3.153：主程序对照判决——若主程序（exec 已过审）在 fcntl 通道也
+        // errno=1，说明 guest 沙盒禁用签名 fcntl，F_CHECK_LV 判决不可信，
+        // 问题须回到 dlopen 本身（同源证书假设）分析
+        @autoreleasepool {
+            NSString* exePath2 = [NSBundle mainBundle].executablePath;
+            if (exePath2) {
+                uint32_t mOff = 0, mSize = 0; long mFsz = 0;
+                std::string exePathStr = exePath2.fileSystemRepresentation;
+                if (escGetSigRange(exePathStr, &mOff, &mSize, &mFsz, /*heal*/ false, diagWrite)) {
+                    diagWrite("[对照] 对主程序执行同一内核判决通道：\n");
+                    escKernelCheck(exePathStr, mOff, mSize, diagWrite);
+                }
+            }
+        }
     }
     for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
     if (!res.empty()) diagWrite("  [res] " + res + "\n");
