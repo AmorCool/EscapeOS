@@ -291,6 +291,70 @@ static void escDumpMachO(const std::string& path, const char* tag,
     }
 }
 
+// v0.3.151：签名前改 UUID（LC LCChangeMachOUUID 同款，uuid[0]+=1）。
+// 150 真机实锤：文件完全自洽（dataoff=134,626,672+datasize=1,728,512=文件尾、
+// CDHash 自检 14/14）但 dlopen 仍报 codeBlobOffset=134,650,608（旧位置的缓存）
+// ——iOS/dyld 按 LC_UUID 缓存签名元数据，UUID 不变就一直用缓存旧位置。
+// LC 注释原文："We have to change executable's UUID so iOS won't consider
+// 2 executables the same"。改 UUID 必须在签名前（新内容会被页 hash 覆盖）。
+static bool escChangeUUID(const std::string& path,
+                          const std::function<void(const std::string&)>& diag) {
+    char buf[256];
+    int fd = open(path.c_str(), O_RDWR);
+    if (fd < 0) {
+        snprintf(buf, sizeof(buf), "[UUID] open 失败 errno=%d\n", errno);
+        diag(buf);
+        return false;
+    }
+    struct stat st;
+    if (0 != fstat(fd, &st)) { close(fd); return false; }
+    void* m = mmap(NULL, (size_t)st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (!m || m == MAP_FAILED) {
+        snprintf(buf, sizeof(buf), "[UUID] mmap 失败 errno=%d\n", errno);
+        diag(buf);
+        close(fd);
+        return false;
+    }
+    close(fd);
+    uint8_t* base = (uint8_t*)m;
+    uint32_t magic = *(const uint32_t*)base;
+    bool changed = false;
+    uint8_t oldFirst = 0;
+    if (magic == MH_MAGIC_64) {
+        struct mach_header_64 mh;
+        memcpy(&mh, base, sizeof(mh));
+        uint8_t* p = base + sizeof(mh);
+        long consumed = 0;
+        for (uint32_t i = 0; i < mh.ncmds && consumed + 8 <= (long)mh.sizeofcmds; i++) {
+            uint32_t cmd = *(const uint32_t*)p;
+            uint32_t cmdsize = *(const uint32_t*)(p + 4);
+            if (cmdsize < 8) break;
+            if (cmd == LC_UUID && cmdsize >= 24) { // uuid_command: cmd+cmdsize+16B uuid
+                uint8_t* u = p + 8;
+                oldFirst = u[0];
+                u[0] += 1; // LC 同款：首字节 +1
+                changed = true;
+                snprintf(buf, sizeof(buf), "[UUID] %02X%02X%02X%02X... → %02X%02X%02X%02X...（首字节+1）\n",
+                         oldFirst, u[1], u[2], u[3], u[0], u[1], u[2], u[3]);
+                diag(buf);
+                break;
+            }
+            p += cmdsize;
+            consumed += cmdsize;
+        }
+    }
+    if (changed) {
+        if (0 != msync(m, (size_t)st.st_size, MS_SYNC)) {
+            diag("[UUID] msync 失败\n");
+            changed = false;
+        }
+    } else {
+        diag("[UUID] 未找到 LC_UUID load command\n");
+    }
+    munmap(m, (size_t)st.st_size);
+    return changed;
+}
+
 // v0.3.150：读文件签名区声明（load command LE）+ 可选自愈损坏文件。
 // heal=true：若 dataoff+datasize > filesize（Realloc 写文件 padding 缺失的
 // 历史损坏，真机实锤内核报 "mapped file has no cdhash, completely
@@ -492,6 +556,9 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
             diagWrite(b2);
         }
     }
+    // v0.3.151：签名前改 UUID（破 per-UUID 签名元数据缓存，LC 同款）。
+    // 150 实锤：文件自洽 + CDHash 14/14 但 dlopen 仍用旧缓存位置（差 23,936）
+    escChangeUUID(path, diagWrite);
     // v0.3.148：先 dump 主程序签名做"过审对照基线"（exec 校验已通过）
     @autoreleasepool {
         NSString* exePath = [NSBundle mainBundle].executablePath;
