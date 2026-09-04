@@ -91,14 +91,18 @@ struct LuaModuleConfig: Codable {
     var entry: String?
 }
 
-struct EscapeModuleAction: Identifiable, Codable {    let id: String
+struct EscapeModuleAction: Identifiable, Codable {
+    let id: String
     let label: String
     var icon: String?
-    let type: String            // v1: "signal"
+    /// v1: "signal"；v0.3.158: "stop"（停止模块）/ "setpwd"（运行中重置管理员密码）
+    let type: String
     /// signal: 进程名（对 displayName / executablePath 做大小写不敏感包含匹配）
     var process: String?
     /// signal: "SIGKILL" | "SIGTERM" | "SIGSTOP" | "SIGCONT"
     var signal: String?
+    /// stop/setpwd: 模块 dylib 导出的桥接符号名（如 OpenListStop / OpenListAdminSet）
+    var symbol: String?
     /// 执行前确认文案；为空则直接执行
     var confirm: String?
     /// 超时秒数（预留）
@@ -534,12 +538,45 @@ final class ModuleService {
         return dir
     }
 
-    // MARK: 执行动作（Rust FFI 管道）
+    // MARK: 执行动作（Rust FFI 管道 + 进程内桥接 v0.3.158）
 
-    /// 执行 signal 动作：按进程名在设备进程列表中查找 PID，逐个下发信号。
-    /// 返回人类可读的执行结果摘要。
-    func run(action: EscapeModuleAction) throws -> String {
-        guard action.type == "signal", let procName = action.process, !procName.isEmpty else {
+    /// 执行模块动作。type 分发：
+    /// - "signal"：按进程名下发信号（原有，Rust FFI 进程列表）
+    /// - "stop"：停止模块——进程内模块走桥接 OpenListStop 优雅停；外部进程 kill
+    /// - "setpwd"：运行中重置模块管理员密码（dlsym action.symbol，如 OpenListAdminSet）
+    func run(action: EscapeModuleAction, module: EscapeModule) throws -> String {
+        switch action.type {
+        case "signal":
+            return try runSignal(action)
+        case "stop":
+            let wasInProcess = BinaryModuleRunner.shared.inProcessModules.contains(module.id)
+            BinaryModuleRunner.shared.stop(module: module)
+            return wasInProcess
+                ? "已请求模块优雅停止（bootstrap.Shutdown 异步生效）.\n进程内停止后需重启 EscapeSpace 才能再次启动."
+                : "已停止外部进程."
+        case "setpwd":
+            guard let symbol = action.symbol, !symbol.isEmpty else {
+                throw ModuleError.badAction("setpwd 动作缺少 symbol 字段")
+            }
+            let pwd = Self.randomPassword(8)
+            let (ok, msg) = BinaryModuleRunner.shared.setAdminPassword(
+                module: module, symbol: symbol, newPassword: pwd)
+            guard ok else { throw ModuleError.badAction(msg) }
+            return msg
+        default:
+            throw ModuleError.badAction("未知动作类型 \(action.type)")
+        }
+    }
+
+    /// 随机密码（8 位，去除易混淆字符 0O1lI）
+    static func randomPassword(_ len: Int) -> String {
+        let chars = Array("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789")
+        return String((0..<len).map { _ in chars.randomElement()! })
+    }
+
+    /// signal 子流程（原有）
+    private func runSignal(_ action: EscapeModuleAction) throws -> String {
+        guard let procName = action.process, !procName.isEmpty else {
             throw ModuleError.badAction("signal 动作缺少 process 字段")
         }
         let sig = parseSignal(action.signal)

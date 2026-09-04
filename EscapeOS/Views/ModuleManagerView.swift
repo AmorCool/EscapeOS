@@ -488,7 +488,7 @@ struct ModuleManagerView: View {
         Task.detached(priority: .userInitiated) {
             var result: ModuleRunResult
             do {
-                let summary = try ModuleService.shared.run(action: action)
+                let summary = try ModuleService.shared.run(action: action, module: module)
                 result = ModuleRunResult(message: summary)
             } catch {
                 result = ModuleRunResult(message: "执行失败：\(error.localizedDescription)")

@@ -404,7 +404,7 @@ struct CertificateView: View {
         } header: {
             Text("签名证书（p12）")
         } footer: {
-            Text("用于模块/文件真证书签名。iOS 27 beta 起签名 identifier 需与主程序一致（已自动处理），证书本身 TeamID 匹配即可. 导入的 p12 会替换本地证书文件，不吊销 Apple 侧证书.")
+            Text("用于模块/文件真证书签名.签名 identifier 需与主程序一致（自动处理），证书本身 TeamID 匹配即可. 导入的 p12 会替换本地证书文件，不吊销 Apple 侧证书.")
         }
     }
 

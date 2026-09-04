@@ -128,8 +128,26 @@ final class BinaryModuleRunner: ObservableObject {
             setError(module.id, "启动失败: \(error.localizedDescription)")
         }
     }
-    /// 停止模块二进制（SIGKILL；进程内 dylib 模式随宿主退出，无法单独停止）
+    /// 停止模块：
+    /// - 进程内常驻模块（dlopen + Go runtime）→ 桥接导出 OpenListStop 优雅停止
+    ///   （Go 内自发 SIGTERM，signal.Notify 捕获后 bootstrap.Shutdown，宿主存活）；
+    ///   停止后进程内不可再启动（重启 EscapeSpace 恢复）。
+    /// - 外部进程型模块 → SIGKILL。
     func stop(module: EscapeModule) {
+        let logFile = ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log")
+        if inProcessModules.contains(module.id) {
+            guard let sym = Self.resolveBridgeSymbol("OpenListStop") else {
+                appendLog(logFile, "[host] 模块未导出 OpenListStop——进程内无法单独停止（重启 EscapeSpace 代替）")
+                setError(module.id, "该模块不支持进程内停止，请重启 EscapeSpace")
+                return
+            }
+            typealias StopFn = @convention(c) () -> Int32
+            let rc = unsafeBitCast(sym, to: StopFn.self)()
+            appendLog(logFile, "[host] OpenListStop rc=\(rc)——bootstrap.Shutdown 优雅停机中")
+            inProcessModules.remove(module.id)
+            print("[Binary][\(module.id)] 进程内模块已请求优雅停止")
+            return
+        }
         guard let pid = runningProcesses[module.id] else { return }
         guard pid > 0 else {
             print("[Binary][\(module.id)] 进程内 dylib 模式：随宿主退出，不支持单独停止")
@@ -138,6 +156,36 @@ final class BinaryModuleRunner: ObservableObject {
         kill(pid, SIGKILL)
         runningProcesses[module.id] = nil
         print("[Binary][\(module.id)] 已停止 pid=\(pid)")
+    }
+    /// 运行中重置模块管理员密码（桥接导出，如 OpenListAdminSet(pwd, dir)）。
+    /// 返回 (成功, 消息)——成功时消息含新密码。
+    func setAdminPassword(module: EscapeModule, symbol: String, newPassword: String) -> (Bool, String) {
+        let logFile = ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log")
+        guard inProcessModules.contains(module.id) else {
+            return (false, "模块未运行，无法重置密码（先启动模块）")
+        }
+        guard let sym = Self.resolveBridgeSymbol(symbol) else {
+            return (false, "模块未导出 \(symbol)（需更新模块至支持版本）")
+        }
+        typealias SetPwdFn = @convention(c) (UnsafeMutablePointer<CChar>?, UnsafeMutablePointer<CChar>?) -> Int32
+        guard let pwdC = strdup(newPassword) else { return (false, "内存分配失败") }
+        defer { free(pwdC) }
+        let dirPath = ModuleService.shared.dataURL(for: module.id).path
+        guard let dirC = strdup(dirPath) else { return (false, "内存分配失败") }
+        defer { free(dirC) }
+        let fn = unsafeBitCast(sym, to: SetPwdFn.self)
+        let rc = fn(pwdC, dirC)
+        appendLog(logFile, "[host] \(symbol) rc=\(rc)")
+        switch rc {
+        case 0:
+            return (true, "管理员密码已重置：\(newPassword)\n（旧密码与已登录会话失效，请用新密码重新登录）")
+        case -2:
+            return (false, "数据目录参数为空（桥调用异常）")
+        case -3:
+            return (false, "桥内异常：模块服务可能未初始化")
+        default:
+            return (false, "重置失败 rc=\(rc)（详见模块日志）")
+        }
     }
     /// 运行状态查询
     func isRunning(module: EscapeModule) -> Bool {
@@ -337,6 +385,15 @@ final class BinaryModuleRunner: ObservableObject {
         handleLock.lock()
         if cachedBinaryModuleHandle == nil { cachedBinaryModuleHandle = h }
         handleLock.unlock()
+    }
+    /// v0.3.158：解析进程内模块的桥接导出符号（停止/重置密码等）
+    /// 优先已加载 dylib 句柄 → 内置静态（RTLD_DEFAULT）。
+    nonisolated static func resolveBridgeSymbol(_ name: String) -> UnsafeMutableRawPointer? {
+        handleLock.lock()
+        let h = cachedBinaryModuleHandle
+        handleLock.unlock()
+        if let h, let s = dlsym(h, name) { return s }
+        return dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)
     }
     /// 供 SSH 诊断命令解析任意二进制模块的导出符号：优先已加载 dylib → 模块目录 dylib → 内置静态
     nonisolated static func resolveBinaryModuleSymbol(_ name: String, moduleDir: URL, moduleId: String) -> UnsafeMutableRawPointer? {
