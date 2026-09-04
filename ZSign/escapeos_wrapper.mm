@@ -157,49 +157,22 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         return -2;
     }
 
-    // ⚠ zsign bAdhoc=false 时强制要求 provisioning 文件（"Can't find provision file!" 实锤）。
-    // 生成最小合法 profile（XML plist；zsign 只提取 Name/Entitlements/ExpirationDate）。
-    // App ID 前缀用调用方传入的真实 TeamID（teamId.txt，与签名证书同 Team）。
-    std::string team = (teamId && *teamId) ? teamId : "TEAMID";
-    diagWrite(std::string("teamId=") + team + "\n");
-    std::string provXml =
-        std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<plist version=\"1.0\"><dict>"
-        "<key>Name</key><string>EscapeOS Developer</string>"
-        "<key>TeamIdentifier</key><array><string>") + team + "</string></array>"
-        "<key>ApplicationIdentifierPrefix</key><array><string>" + team + "</string></array>"
-        "<key>Entitlements</key><dict>"
-        "<key>com.apple.developer.team-identifier</key><string>" + team + "</string>"
-        "<key>application-identifier</key><string>" + team + "." + bundleId + "</string>"
-        "<key>get-task-allow</key><true/>"
-        "</dict>"
-        "<key>ExpirationDate</key><date>2033-01-01T00:00:00Z</date>"
-        "</dict></plist>\n";
-    char provTpl[512];
-    snprintf(provTpl, sizeof(provTpl), "%sesc-prov-XXXXXX.mobileprovision",
-             tmpDir.fileSystemRepresentation);
-    int pfd = mkstemp(provTpl);
-    if (pfd < 0) {
-        unlink(certTpl); unlink(keyTpl);
-        diagWrite("FAIL: provision mkstemp 失败\n");
-        return -2;
-    }
-    {
-        FILE* pf = fopen(provTpl, "w");
-        if (!pf) { close(pfd); unlink(provTpl); unlink(certTpl); unlink(keyTpl);
-            diagWrite("FAIL: provision 写入失败\n"); return -2; }
-        fwrite(provXml.data(), 1, provXml.size(), pf);
-        fclose(pf);
-    }
+    // v0.3.144：LC 配方（LiveContainer ZSign/zsign.mm signMachOPathArr 同款）——
+    // 不传 provision、不嵌 entitlements。真机实锤：dylib 带 entitlements blob
+    // （get-task-allow 等）会触发 AMFI 按 App 规则要求 profile 匹配 →
+    // code signature invalid errno=1。TeamID 由 openssl.cpp Init 在证书加载后
+    // 从证书 OU 直读（GetCertOU，LiveContainer InitSimple L887 同款）。
+    diagWrite(std::string("teamId=") + std::string(teamId ? teamId : "(null)")
+              + "（LC 配方：无 provision/entitlements，TeamID 取自证书 OU）\n");
 
     ZLog::logs.clear();
     ZSignAsset asset;
-    bool inited = asset.Init(certTpl, keyTpl, provTpl, "", "", /*bAdhoc*/ false,
+    bool inited = asset.Init(certTpl, keyTpl, "", "", "", /*bAdhoc*/ false,
                              /*bSHA256Only*/ true, /*bSingleBinary*/ true);
     if (!inited) {
-        diagWrite("FAIL: ZSignAsset::Init 失败（读取证书/私钥/profile）\n");
+        diagWrite("FAIL: ZSignAsset::Init 失败（读取证书/私钥）\n");
         for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
-        unlink(provTpl); unlink(certTpl); unlink(keyTpl);
+        unlink(certTpl); unlink(keyTpl);
         return -1;
     }
     diagWrite("Init ✓（证书/私钥/profile 读取成功）\n");
@@ -208,7 +181,7 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
         delete macho;
         diagWrite("FAIL: ZMachO::Init 失败（解析 dylib）\n");
         for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
-        unlink(provTpl); unlink(certTpl); unlink(keyTpl);
+        unlink(certTpl); unlink(keyTpl);
         return -2;
     }
     std::string info1, info256, res;
@@ -221,7 +194,7 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
     for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
     if (!res.empty()) diagWrite("  [res] " + res + "\n");
     delete macho;
-    unlink(provTpl); unlink(certTpl); unlink(keyTpl);
+    unlink(certTpl); unlink(keyTpl);
     int rc = ok ? 0 : -3;
     diagWrite("=== 签名结束 rc=" + std::to_string(rc) + " ===\n");
     return rc;

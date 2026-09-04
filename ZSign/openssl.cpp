@@ -656,11 +656,8 @@ bool ZSignAsset::Init(
 		}
 	}
 
-	if (m_strTeamId.empty()) {
-		ZLog::Error(">>> Can't find TeamId!\n");
-		return false;
-	}
-
+	// v0.3.144：TeamId 允许暂空——证书加载后从 OU 直读（LC 配方），
+	// 避免为凑 TeamId 而传 provision（其 Entitlements 会嵌入 dylib 触发 AMFI 拒绝）
 	X509* x509Cert = NULL;
 	EVP_PKEY* evpPKey = NULL;
 	BIO* bioPKey = BIO_new_file(strPKeyFile.c_str(), "rb");
@@ -735,6 +732,16 @@ bool ZSignAsset::Init(
 
 	if (!GetCertSubjectCN(x509Cert, m_strSubjectCN)) {
 		ZLog::Error(">>> Can't find paired certificate subject common name!\n");
+		return false;
+	}
+
+	// EscapeOS（v0.3.144）：LC 配方——无 provision 时 TeamID 从证书 OU 直读
+	// （LiveContainer ZSign/openssl.cpp InitSimple 同款逻辑）
+	if (m_strTeamId.empty()) {
+		GetCertOU(x509Cert, m_strTeamId);
+	}
+	if (m_strTeamId.empty()) {
+		ZLog::Error(">>> Can't find TeamId!\n");
 		return false;
 	}
 
