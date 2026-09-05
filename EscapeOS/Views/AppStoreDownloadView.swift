@@ -136,14 +136,22 @@ struct AppStoreDownloadView: View {
         .sheet(isPresented: $showLoginLog) {
             LoginLogView()
         }
-        .background(
-            TwoFactorCodePrompt(
-                isPresented: $showTwoFactor,
-                code: $twoFactorCode,
-                email: twoFactorEmail,
-                onVerify: verifyTwoFactor
-            )
-        )
+        // v0.3.178：2FA 输入框改标准 .alert——旧写法 .background(EmptyView().alert)
+        // 在 iOS 26 上不可靠（不呈现/被系统弹窗抢占），真机实锤 2FA 触发但输入框不出现.
+        .alert(
+            "来自 \(twoFactorEmail) 的 2FA 验证码",
+            isPresented: $showTwoFactor
+        ) {
+            TextField("6 位验证码", text: $twoFactorCode)
+                .keyboardType(.numberPad)
+            Button("验证") { verifyTwoFactor() }
+            Button("取消", role: .cancel) {
+                showTwoFactor = false
+                twoFactorCode = ""
+            }
+        } message: {
+            Text("iOS 26+：设置 → [你的名字] → 登录与验证 → 获取验证码（生成的 6 位码与 Apple 任何登录流程通用，立即填入即可）.")
+        }
         .sheet(isPresented: $showAddAccount) {
             AddAccountSheet { account in
                 store.add(account)
