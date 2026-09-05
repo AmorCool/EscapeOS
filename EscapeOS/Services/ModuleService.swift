@@ -329,6 +329,61 @@ final class ModuleService {
         listModules().first { $0.id == id }
     }
 
+    // MARK: 容器迁移修复（v0.3.195）
+
+    /// v0.3.195：App 重装 / LiveContainer 容器 UUID 变化后，Go 二进制模块（OpenList 等）
+    /// 的 config.json 仍写着旧容器的绝对路径（temp_dir/db_file/bleve_dir/log.name）——
+    /// Go 启动时 mkdir 旧路径 → operation not permitted → log.Fatal → os.Exit 杀宿主.
+    /// 这里按 OpenList internal/conf.DefaultConfig(dataDir) 的语义重写这 4 个路径字段为
+    /// 「当前 dataDir 派生值」（与用户其它配置互不影响；仅在字段值确实指向旧容器时改）.
+    ///
+    /// 数据目录可写性由调用方（BinaryModuleRunner.runBinaryModule）已门禁.
+    static func repairContainerMigratedConfig(moduleId: String, dataDir: URL) {
+        let cfgURL = dataDir.appendingPathComponent("config.json")
+        guard FileManager.default.fileExists(atPath: cfgURL.path),
+              let data = try? Data(contentsOf: cfgURL),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+
+        var changed = false
+
+        // 判定"绝对路径是否指向旧容器"：当前 dataDir 前缀（进程容器 → Documents）下不存在该路径
+        func isStalePath(_ p: String) -> Bool {
+            guard p.hasPrefix("/var/mobile/Containers/Data/Application/") else { return false }
+            return !p.hasPrefix(dataDir.path) && !FileManager.default.fileExists(atPath: p)
+        }
+        func fixPath(_ p: String, sub: String) -> String {
+            // 期望值 = dataDir/<sub>；旧值是 dataDir 之外任何绝对路径
+            let expected = dataDir.appendingPathComponent(sub).path
+            if p != expected, isStalePath(p) { changed = true; return expected }
+            return p
+        }
+
+        // temp_dir / bleve_dir（顶层）
+        if let t = json["temp_dir"] as? String {
+            json["temp_dir"] = fixPath(t, sub: "temp")
+        }
+        if let b = json["bleve_dir"] as? String {
+            json["bleve_dir"] = fixPath(b, sub: "bleve")
+        }
+        // database.db_file（子字典）
+        if var db = json["database"] as? [String: Any], let f = db["db_file"] as? String {
+            db["db_file"] = fixPath(f, sub: "data.db")
+            json["database"] = db
+        }
+        // log.name（子字典）
+        if var log = json["log"] as? [String: Any], let n = log["name"] as? String {
+            log["name"] = fixPath(n, sub: "log/log.log")
+            json["log"] = log
+        }
+
+        guard changed else { return }
+        if let out = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
+            try? out.write(to: cfgURL, options: .atomic)
+            NSLog("[Module] %@ config.json 容器路径已迁移修复 (dataDir=%@)", moduleId, dataDir.path)
+        }
+    }
+
     // MARK: 导入 .zip
 
     /// 导入 .zip 模块.zip 内任意层级（含 modules/<id>/ 前缀、GitHub 源码 zip 的多层嵌套）均可识别

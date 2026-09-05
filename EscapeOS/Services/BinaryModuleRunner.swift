@@ -113,6 +113,10 @@ final class BinaryModuleRunner: ObservableObject {
             setError(module.id, msg)
             return
         }
+        // v0.3.195：App 重装/LiveContainer 容器 UUID 变化后，config.json 残留旧容器
+        // 绝对路径 → Go 启动 mkdir 旧路径 fail → log.Fatal → os.Exit 杀宿主（真机闪退实锤）.
+        // 在启动前按 DefaultConfig 语义重写 4 个路径字段（temp/bleve/data.db/log）.
+        ModuleService.repairContainerMigratedConfig(moduleId: module.id, dataDir: dataDir)
         do {
             // v0.3.112：入口符号通用化——优先 module.json 的 binary.entrySymbol，
             // 否则自动扫描 dylib 符号表里 "*Main" 结尾的导出（引擎零模块耦合）
