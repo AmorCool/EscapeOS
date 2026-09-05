@@ -241,6 +241,70 @@ NSDictionary *getAllAppsInfo(struct AdapterHandle *adapter, struct RsdHandshakeH
     return result;
 }
 
+NSDictionary *getAllAppsInfoWithMetadata(struct AdapterHandle *adapter, struct RsdHandshakeHandle *handshake, NSString **error) {
+    // v0.3.194：Browse + ReturnAttributes 请求完整元数据。installd 对 ReturnAttributes
+    // 是"只返回列出的字段"语义——必须点名全部需要的字段，包含 iTunesMetadata /
+    // ApplicationSINF（UFADE 声称非越狱可经此取回 iTunesMetadata + SINF blob）.
+    InstallationProxyClientHandle *client = NULL;
+    if (installation_proxy_connect_rsd(adapter, handshake, &client)) {
+        *error = @"Failed to connect to installation proxy";
+        return nil;
+    }
+
+    plist_t options = plist_new_dict();
+    // ApplicationType: "User"（只要用户应用，避免系统应用刷屏）
+    plist_dict_set_item(options, "ApplicationType", plist_new_string("User"));
+    // ReturnAttributes：点名全部想要字段
+    const char *attrs[] = {
+        "CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
+        "CFBundleShortVersionString", "CFBundleVersion",
+        "ApplicationType", "Container", "Path",
+        "SignerIdentity", "ApplicationDSID", "MinimumOSVersion",
+        "iTunesMetadata", "ApplicationSINF", "ProfileValidated",
+        "StaticDiskUsage", "DynamicDiskUsage"
+    };
+    plist_t attrsArr = plist_new_array();
+    for (size_t i = 0; i < sizeof(attrs)/sizeof(attrs[0]); i++) {
+        plist_array_append_item(attrsArr, plist_new_string(attrs[i]));
+    }
+    plist_dict_set_item(options, "ReturnAttributes", attrsArr);
+
+    void *apps = NULL;
+    size_t count = 0;
+    struct IdeviceFfiError *ffiErr = installation_proxy_browse(client, options, &apps, &count);
+    if (ffiErr) {
+        NSString *msg = [NSString stringWithFormat:@"Failed to browse: %s", ffiErr->message ?: "unknown"];
+        idevice_error_free(ffiErr);
+        installation_proxy_client_free(client);
+        *error = msg;
+        return nil;
+    }
+    if (!apps) {
+        installation_proxy_client_free(client);
+        return @{};
+    }
+
+    NSMutableDictionary *result = [NSMutableDictionary dictionaryWithCapacity:count];
+    for (size_t i = 0; i < count; i++) {
+        plist_t app = ((plist_t *)apps)[i];
+        NSDictionary *appInfo = plist_to_objc_object(app);
+        NSString *bundleID = appInfo[@"CFBundleIdentifier"];
+        if (bundleID) {
+            result[bundleID] = appInfo;
+        }
+    }
+    // browse 返回的 app 节点归 FFI 管理；apps 数组本身需释放（参照 Rust side browse 的返回契约：
+    // 每个 plist_t 节点由调用方 plist_free，apps 数组由 idevice_data_free 释放）。
+    for (size_t i = 0; i < count; i++) {
+        plist_t app = ((plist_t *)apps)[i];
+        if (app) plist_free(app);
+    }
+    idevice_data_free(apps, count * sizeof(plist_t));
+
+    installation_proxy_client_free(client);
+    return result;
+}
+
 NSDictionary *getAllAppsInfoFromProvider(struct IdeviceProviderHandle *provider, NSString **error) {
     InstallationProxyClientHandle *client = NULL;
     struct IdeviceFfiError *err = installation_proxy_connect(provider, &client);

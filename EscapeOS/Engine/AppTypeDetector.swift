@@ -32,7 +32,7 @@ enum AppType: String, Hashable {
     case appStorePersonal   = "正版"
     case appStoreShared     = "共享"
     case appStore           = "AppStore"
-    case development        = "开发"
+    case development        = "个人签名"
     case enterprise         = "企业签名"
     case hidden             = "隐藏"
     case unknown            = "未知"
@@ -42,9 +42,9 @@ enum AppType: String, Hashable {
         case .appStorePersonal: return "App Store 本人购买/下载"
         case .appStoreShared:   return "App Store 家人共享（购买者非本人 Apple ID）"
         case .appStore:         return "App Store（无法判别正版/共享）"
-        case .development:      return "Xcode 调试 / 个人 Apple ID 自签 / Ad-Hoc / 团队签"
+        case .development:      return "个人 Apple ID 自签 / 免费签名 / Ad-Hoc / 团队签"
         case .enterprise:       return "企业内部/批量签发（不限设备）"
-        case .hidden:           return "系统隐藏应用"
+        case .hidden:           return "系统隐藏应用 / iOS 18+ 用户隐藏"
         case .unknown:          return "签名来源未知"
         }
     }
@@ -61,10 +61,19 @@ enum AppTypeDetector {
         applicationType: String?,
         iTunesAppleID: String?,
         currentAppleID: String?,
-        provisionsAllDevices: Bool = false
+        provisionsAllDevices: Bool = false,
+        // v0.3.194：iTunesMetadata.com.apple.iTunesStore.downloadInfo.accountInfo
+        purchaserDSID: String? = nil,    // PurchaserID —— 真实购买者 DSID
+        downloaderDSID: String? = nil,   // DSPersonID —— 下载者 DSID
+        familyID: String? = nil          // FamilyID —— 家庭 ID（非空/非0 = 经家人共享下载）
     ) -> AppType {
         // 1. 隐藏应用（基于 installation_proxy 的 ApplicationType）
-        if applicationType == "HiddenSystemApp" { return .hidden }
+        //    "HiddenSystemApp" = 系统固件隐藏（Field Test 等）；
+        //    "Hidden" = iOS 18+ 用户手动隐藏的应用（主屏移除/需要 Face ID 才显示）——
+        //    v0.3.187 只认了 HiddenSystemApp（几乎不出现），v0.3.194 补上 "Hidden".
+        if applicationType == "HiddenSystemApp" || applicationType == "Hidden" {
+            return .hidden
+        }
         guard applicationType == "User" else { return .unknown }
 
         // 2. **企业权威判定**：.mobileprovision 顶层 ProvisionsAllDevices == true
@@ -76,13 +85,32 @@ enum AppTypeDetector {
         // 3. 有 entitlements（即有 profile 但非企业）→ 开发/自签大类.
         //    不再用 get-task-allow 区分（企业 profile 也带 get-task-allow；
         //    个人 Apple ID 自签也带）。按用户规则把"开发 / 自签 / Ad-Hoc /
-        //    团队 Distribution"合并入 .development.
+        //    团队 Distribution"合并入 .development（用户改名"个人签名"）.
         if !entitlements.isEmpty {
             return .development
         }
 
         // 4. 无 entitlements → AppStore 系（系统签发）.
-        //    用 iTunesMetadata.apple-id 区分正版 vs 共享.
+        //    4a. 【v0.3.194 首选权威判定】iTunesMetadata.accountInfo：
+        //        - purchaserDSID == downloaderDSID → 本人正版（自己买自己下）
+        //        - purchaserDSID != downloaderDSID → 家人共享/他人账号（家人买、自己下）
+        //        - familyID 非空且非 "0" 是共享的附加佐证
+        //        此判定不需要任何外部"系统 Apple ID"参照——iTunesMetadata 自身
+        //        就记录购买者与下载者是否同一人（研究来源：hexordia/razb 的
+        //        iTunesMetadata 结构、Apple 家人共享规则）。
+        if let purchaser = normalize(purchaserDSID),
+           let downloader = normalize(downloaderDSID) {
+            return purchaser == downloader ? .appStorePersonal : .appStoreShared
+        }
+        if let fam = familyID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fam.isEmpty, fam != "0" {
+            // 有家庭 ID 但没有 purchaser/downloader → 无法判断是否本人，保守归共享
+            return .appStoreShared
+        }
+
+        //    4b. 【v0.3.184 旧判定 fallback】用 iTunesMetadata.apple-id 对比 currentAppleID.
+        //        注意：currentAppleID 必须是**设备主账号**（系统设置/多数 App 购买者），
+        //        不能是 App 内登录的开发者/下载账号（v0.3.186 教训）。
         if let iTunesId = iTunesAppleID?.trimmingCharacters(in: .whitespacesAndNewlines),
            !iTunesId.isEmpty,
            let currentId = currentAppleID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
@@ -92,5 +120,13 @@ enum AppTypeDetector {
 
         // 5. 拿不到 iTunesMetadata 或当前 Apple ID → 统称 AppStore
         return .appStore
+    }
+
+    /// 规整 DSID 字符串：去空白、去多余小数点（plist 可能给 "1234.0" 形式）。
+    private static func normalize(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasSuffix(".0") { s.removeLast(2) }
+        return s.isEmpty ? nil : s
     }
 }

@@ -326,6 +326,27 @@
     return nil;
 }
 
+- (NSDictionary<NSString *, NSDictionary *> *)getAllAppsInfoWithMetadataAndError:(NSError **)error {
+    // v0.3.194：Browse + ReturnAttributes（UFADE 路线）请求完整元数据.
+    if (_adapter && _handshake) {
+        NSString *errStr = nil;
+        NSDictionary *apps = getAllAppsInfoWithMetadata(_adapter, _handshake, &errStr);
+        if (errStr) {
+            if (error) *error = [self _error:errStr code:-17];
+            return nil;
+        }
+        return (NSDictionary<NSString *, NSDictionary *> *)apps;
+    }
+    if (_provider) {
+        // iOS 18 lockdown 隧道：先退化到普通 browse（iOS 18 无 RSD 时用
+        // getAllAppsInfoFromProvider），metadata 变体暂只在 RSD 通道支持.
+        if (error) *error = [self _error:@"Metadata browse requires RSD tunnel" code:-18];
+        return nil;
+    }
+    if (error) *error = [self _error:@"Tunnel not connected. Start heartbeat first." code:-1];
+    return nil;
+}
+
 - (UIImage *)getAppIconWithBundleId:(NSString *)bundleId error:(NSError **)error {
     if (_adapter && _handshake) {
         NSString *errStr = nil;
