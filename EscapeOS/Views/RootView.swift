@@ -15,8 +15,6 @@ struct RootView: View {
     @StateObject private var viewModel = AppListViewModel()
     @AppStorage("HasAcknowledgedLimits") private var hasAcknowledgedLimits = false
     @State private var selectedTab: MainTab = .apps
-    // v0.3.179：系统应用卸载入口
-    @State private var showSysAppUninstall = false
     @ObservedObject private var copyFeedback = CopyFeedback.shared
     /// 全局 2FA 输入框：任何页面（含启动预热）触发的验证码请求都弹这里.
     @StateObject private var twoFactor = TwoFactorPromptCoordinator.shared
@@ -36,21 +34,7 @@ struct RootView: View {
                             }
                             .disabled(viewModel.isLoading)
                         }
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            // v0.3.179：系统应用卸载（可卸载系统应用动态识别）
-                            Button {
-                                showSysAppUninstall = true
-                            } label: {
-                                Image(systemName: "app.badge.minus")
-                            }
-                            .accessibilityLabel("系统应用卸载")
-                        }
                     }
-            }
-            .sheet(isPresented: $showSysAppUninstall) {
-                NavigationStack {
-                    SystemAppUninstallView()
-                }
             }
             .tabItem {
                 Label("应用", systemImage: "square.grid.2x2.fill")
