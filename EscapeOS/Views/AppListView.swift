@@ -123,20 +123,36 @@ final class AppListViewModel: ObservableObject {
         // v0.3.185：改用 nonisolated 直读 keychain（本方法在后台队列执行，
         // 直接读 MainActor 隔离的 MemoryLimitSettings.shared.appleID 会编译报错）.
         let currentAppleID = MemoryLimitSettings.currentAppleIDDirect()
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // v0.3.192：misagent 全量拉取 + 解析可能产生大内存峰值（每 profile 数十 KB，
+        // 设备上可能有 20+ 个），用 .utility 低优先级队列 + autoreleasepool 包裹，
+        // 避免在 reload 高频触发时抢占线程导致卡顿/内存压力；与主流程解耦.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             // v0.3.190：两条隧道必须**顺序串行**调用——fetchSideloadedApps（installation_proxy）
             // 与 fetchAllProfiles（misagent）各自 createTunnel，若并发握手会死锁闪退
             // （v0.3.187 曾在 fetchSideloadedApps 内部嵌套调 fetchAllProfiles = 双隧道并发，
             //  是真机连续闪退元凶）. 现在顺序执行，前一条 defer 释放后才建下一条.
-            let sideloaded = (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? []
-            let allProfiles = (try? ProvisioningProfileStore.fetchAllProfiles()) ?? []
+            // v0.3.192：整个 fetch+解析包 autoreleasepool——CMS blob Data / plist 解析
+            // 的自动释放对象在每次 reload 后立即回收，防长时间运行内存累积.
+            let sideloaded: [ProvisioningProfileStore.SideloadedAppInfo]
+            let allProfiles: [ProvisioningProfileStore.ProfileInfo]
+            autoreleasepool {
+                sideloaded = (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? []
+                allProfiles = (try? ProvisioningProfileStore.fetchAllProfiles()) ?? []
+            }
             // 以 bundleID 为 key 的 entitlements 字典
             var entMap: [String: [String: Any]] = [:]
             for s in sideloaded {
                 entMap[s.bundleID] = s.entitlements
             }
             // 以 appId（application-identifier）匹配 profile 顶层 ProvisionsAllDevices
-            let profileByAppId = Dictionary(uniqueKeysWithValues: allProfiles.map { ($0.appId, $0) })
+            // v0.3.192【闪退修复】：设备上同一 App 重签/多次安装会留下多个指向同一
+            // application-identifier 的 profile → Dictionary(uniqueKeysWithValues:)
+            // 遇重复 key 直接 fatalError 崩溃（v0.3.187~191 真机闪退真凶）。
+            // 改用 uniquingKeysWith 保留首个.
+            let profileByAppId = Dictionary(
+                allProfiles.map { ($0.appId, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
             var provisionsAllDevicesMap: [String: Bool] = [:]
             for s in sideloaded {
                 guard let appId = s.applicationIdentifier,
