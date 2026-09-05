@@ -120,7 +120,9 @@ final class AppListViewModel: ObservableObject {
         let ids = apps.map { $0.bundleIdentifier }
         // v0.3.184：当前 Apple ID 用于区分正版 vs 共享（来自 AppStore 登录态）.
         // 为空时 .appStorePersonal / .appStoreShared 退化为 .appStore.
-        let currentAppleID = MemoryLimitSettings.shared.appleID
+        // v0.3.185：改用 nonisolated 直读 keychain（本方法在后台队列执行，
+        // 直接读 MainActor 隔离的 MemoryLimitSettings.shared.appleID 会编译报错）.
+        let currentAppleID = MemoryLimitSettings.currentAppleIDDirect()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let sideloaded = (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? []
             // 以 bundleID 为 key 的 entitlements 字典

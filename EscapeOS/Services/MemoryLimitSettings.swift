@@ -154,6 +154,16 @@ final class MemoryLimitSettings: ObservableObject {
     @Published private(set) var isLoggedIn: Bool = false
     @Published private(set) var appleID: String = ""
 
+    /// v0.3.185：绕过 MainActor 隔离直读 keychain 的 appleID（SecItem 调用线程安全）。
+    /// 供后台队列使用（如 AppListViewModel.loadAppTypes 的正版/共享判定）——
+    /// 后台上下文直接读 `shared.appleID` 会触发
+    /// "main actor-isolated property 'appleID' can not be referenced from a
+    /// nonisolated context" 编译错误.
+    nonisolated static func currentAppleIDDirect() -> String {
+        let kc = EscapeKeychain(service: "com.ipaside.escapeos.memorylimit")
+        return kc.string(for: "appleID") ?? ""
+    }
+
     private let keychain = EscapeKeychain(service: "com.ipaside.escapeos.memorylimit")
 
     private init() {
