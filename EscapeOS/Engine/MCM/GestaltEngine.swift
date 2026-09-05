@@ -505,6 +505,80 @@ final class BQMobileGestaltModel {
         }
     }
 
+    // MARK: - Backup library (v0.3.179，从 GestaltEdit 1.2.1 移植的备份/恢复分栏)
+
+    /// 备份目录：Documents/GestaltBackups（含 SavedGestalt.plist 与时间戳备份）
+    var backupDirectory: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("GestaltBackups", isDirectory: true)
+    }
+
+    /// 列出全部备份 plist（按修改时间倒序；含 SavedGestalt.plist 与时间戳备份）
+    func backupFiles() -> [URL] {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+        let urls = (try? fm.contentsOfDirectory(
+            at: backupDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles])) ?? []
+        return urls
+            .filter { $0.pathExtension == "plist" }
+            .sorted { a, b in
+                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return da > db
+            }
+    }
+
+    /// 立即把当前已加载的 MobileGestalt 字典保存为一份时间戳备份
+    @discardableResult
+    func createBackupNow() -> URL? {
+        guard !mgDict.isEmpty else {
+            appendLog("backup now skipped: MobileGestalt not loaded")
+            return nil
+        }
+        do {
+            let data = try PropertyListSerialization.data(fromPropertyList: mgDict, format: lastReadFormat, options: 0)
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyyMMdd-HHmmss"
+            let out = backupDirectory
+                .appendingPathComponent("MobileGestalt-\(formatter.string(from: Date()))")
+                .appendingPathExtension("plist")
+            try fm_createDirIfNeeded()
+            try data.write(to: out, options: .atomic)
+            appendLog("backup created: \(out.lastPathComponent)")
+            return out
+        } catch {
+            appendLog("backup now error: \(error)")
+            return nil
+        }
+    }
+
+    /// 从备份文件恢复 MobileGestalt（写回系统 plist 原路径，同 inode）
+    func restore(from url: URL) {
+        do {
+            let data = try Data(contentsOf: url)
+            try write(data)
+            statusMessage = "Restored from \(url.lastPathComponent) — respring to take effect"
+            appendLog("restored gestalt from \(url.lastPathComponent)")
+            alertInfo = MGAlertInfo(
+                title: "Successfully restored Gestalt backup!",
+                body: "Respring your device for changes to take effect.",
+                actionLabel: "Respring",
+                action: { self.respring() }
+            )
+            load()
+        } catch {
+            appendLog("restore error: \(error)")
+            alertInfo = MGAlertInfo(title: "Failed to restore backup!", body: "Check logs for error information.")
+        }
+    }
+
+    private func fm_createDirIfNeeded() throws {
+        try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+    }
+
     // MARK: - Write (in-place fd overwrite, same inode)
 
     private func write(_ data: Data) throws {

@@ -15,35 +15,25 @@ struct GestaltView: View {
     @State private var shareTarget: ShareTarget?
     @State private var backupError: String?
     @State private var showRespring = false
+    // v0.3.179：编辑/备份 分栏（从 GestaltEdit 1.2.1 移植的备份库）
+    @State private var gestaltPane: GestaltPane = .edit
+    @State private var backupFiles: [URL] = []
+
+    enum GestaltPane: String, CaseIterable, Identifiable {
+        case edit = "编辑"
+        case backup = "备份"
+        var id: String { rawValue }
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                mhaStatusSection
+                gestaltPanePicker
 
-                if !model.loaded {
-                    Section {
-                        if model.isLoading {
-                            HStack {
-                                ProgressView()
-                                Text("正在加载 MobileGestalt…")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            }
-                        } else {
-                            Button("Load MobileGestalt") {
-                                model.load()
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                        Text(model.statusMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } header: {
-                        Label("状态", systemImage: "info.circle")
-                    }
+                if gestaltPane == .edit {
+                    editPane
                 } else {
-                    loadedSections
+                    backupPane
                 }
             }
             .navigationTitle("Gestalt")
@@ -144,6 +134,121 @@ struct GestaltView: View {
                 guard !Task.isCancelled, !model.loaded, !model.isLoading else { return }
                 model.load()
             }
+        }
+    }
+
+    /// v0.3.179：编辑分栏（原 Gestalt 板块内容 + Nugget 灵动岛）
+    private var editPane: some View {
+        Group {
+            mhaStatusSection
+
+                if !model.loaded {
+                    Section {
+                        if model.isLoading {
+                            HStack {
+                                ProgressView()
+                                Text("正在加载 MobileGestalt…")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            Button("Load MobileGestalt") {
+                                model.load()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                        Text(model.statusMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } header: {
+                        Label("状态", systemImage: "info.circle")
+                    }
+                } else {
+                    loadedSections
+                }
+
+            // v0.3.179：灵动岛 Nugget 备用启用（GestaltEdit 1.2.1 同款键）
+            Section {
+                Toggle(isOn: model.keyBinding(["YlEtTtHlNesRBMal1CqRaA"])) {
+                    Label("启用灵动岛能力 (Nugget)", systemImage: "circle.dashed")
+                }
+            } header: {
+                Label("灵动岛", systemImage: "sparkles")
+            } footer: {
+                Text("Nugget 备用启用方式：写入灵动岛 eligibility 键（CacheExtra），Apply 后 Respring 生效.")
+            }
+        }
+    }
+
+    // MARK: - Pane picker (v0.3.179)
+
+    private var gestaltPanePicker: some View {
+        Section {
+            Picker("视图", selection: ) {
+                ForEach(GestaltPane.allCases) { pane in
+                    Text(pane.rawValue).tag(pane)
+                }
+            }
+            .pickerStyle(.segmented)
+            .listRowBackground(Color.clear)
+        }
+        .onChange(of: gestaltPane) { _, pane in
+            if pane == .backup { backupFiles = model.backupFiles() }
+        }
+    }
+
+    /// 备份分栏：时间戳备份 + 备份列表（恢复/删除）
+    private var backupPane: some View {
+        Section {
+            Button {
+                if let url = model.createBackupNow() {
+                    backupFiles = model.backupFiles()
+                    model.alertInfo = MGAlertInfo(
+                        title: "备份完成",
+                        body: url.lastPathComponent,
+                        actionLabel: nil,
+                        action: nil
+                    )
+                }
+            } label: {
+                Label("立即备份当前 MobileGestalt", systemImage: "square.and.arrow.down")
+            }
+            .disabled(!model.loaded)
+
+            if backupFiles.isEmpty {
+                Text("暂无备份文件")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(backupFiles, id: \.self) { url in
+                    HStack(spacing: 10) {
+                        Image(systemName: "archivebox")
+                            .foregroundColor(.blue)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(url.lastPathComponent)
+                                .font(.footnote)
+                                .lineLimit(2)
+                        }
+                        Spacer()
+                        Button("恢复") {
+                            model.restore(from: url)
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
+                        Button(role: .destructive) {
+                            try? FileManager.default.removeItem(at: url)
+                            backupFiles = model.backupFiles()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+        } header: {
+            Text("备份库")
+        } footer: {
+            Text("恢复会把所选备份写回 MobileGestalt.plist（原路径覆盖），Respring 后生效. Apply 前建议先做一次备份.")
         }
     }
 
