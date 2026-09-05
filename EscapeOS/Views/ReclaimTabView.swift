@@ -27,7 +27,7 @@ struct ReclaimTabView: View {
         .onAppear {
             vm.refreshRanksFromCache()
         }
-        .searchable(text: $searchText, prompt: "搜索应用")
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索应用")
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 if selecting {

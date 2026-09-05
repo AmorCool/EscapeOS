@@ -103,14 +103,23 @@ struct GestaltView: View {
                 if let msg = applyBackupToast {
                     VStack {
                         Spacer()
+                        // v0.3.183：白卡风 toast（iOS 标准 secondarySystemBackground + 细边框 + 阴影），
+                        // 取代 v0.3.181 的黑底胶囊（与上方白卡片风格冲突突兀）.
                         Text(msg)
                             .font(.footnote)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
-                            .background(Capsule().fill(Color.black.opacity(0.75)))
+                            .background(
+                                Capsule()
+                                    .fill(Color(.secondarySystemBackground))
+                                    .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+                            )
+                            .overlay(
+                                Capsule().stroke(Color(.separator), lineWidth: 0.5)
+                            )
                             .padding(.bottom, 60)
-                            .transition(.opacity)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     .allowsHitTesting(false)
                 }
@@ -206,17 +215,17 @@ struct GestaltView: View {
     // MARK: - Pane picker (v0.3.179)
 
     private var gestaltPanePicker: some View {
-        Section {
-            Picker("视图", selection: $gestaltPane) {
-                ForEach(GestaltPane.allCases) { pane in
-                    Text(pane.rawValue).tag(pane)
-                }
+        // v0.3.183：去 Section 包裹直接作为 List 首个 row（v0.3.181 紧凑版残留在 Section
+        // header 占位 ≈30pt，导致 inline 标题下到 Picker 有 ~100pt 空白).
+        Picker("视图", selection: $gestaltPane) {
+            ForEach(GestaltPane.allCases) { pane in
+                Text(pane.rawValue).tag(pane)
             }
-            .pickerStyle(.segmented)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
         }
+        .pickerStyle(.segmented)
+        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
         .onChange(of: gestaltPane) { _, pane in
             if pane == .backup { backupFiles = model.backupFiles() }
         }
