@@ -18,9 +18,6 @@ UIImage* getAppIcon(struct AdapterHandle *adapter, struct RsdHandshakeHandle *ha
 
 NSDictionary *getAllAppsInfo(struct AdapterHandle *adapter, struct RsdHandshakeHandle *handshake, NSString **error);
 NSDictionary *getAllAppsInfoFromProvider(struct IdeviceProviderHandle *provider, NSString **error);
-/// v0.3.194：Browse + ReturnAttributes 请求完整元数据（iTunesMetadata / ApplicationDSID /
-/// SINF / SignerIdentity 等）。installd 是否返回 iTunesMetadata 需真机验证（UFADE 路线）。
-NSDictionary *getAllAppsInfoWithMetadata(struct AdapterHandle *adapter, struct RsdHandshakeHandle *handshake, NSString **error);
 UIImage *getAppIconFromProvider(struct IdeviceProviderHandle *provider, NSString *bundleID, NSString **error);
 id plist_to_objc_object(plist_t plist);
 

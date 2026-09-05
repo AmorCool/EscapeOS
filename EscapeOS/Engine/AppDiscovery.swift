@@ -18,13 +18,6 @@ struct InstalledApp: Identifiable, Hashable {
     /// 带默认值 nil：避免破坏其它 Memberwise init 调用点（LiveContainerDiscovery/
     /// SupervisedHelpers/RestoreService 等不关注此字段）.
     var iTunesAppleID: String? = nil
-    /// v0.3.194：iTunesMetadata 内 com.apple.iTunesStore.downloadInfo.accountInfo 关键字段
-    /// （从 Browse+ReturnAttributes 全量元数据解析，仅 User+AppStore 应用有值）。
-    /// 用于「正版 vs 家人共享」判定（见 AppTypeDetector）.
-    var purchaserDSID: String? = nil   // accountInfo.PurchaserID（真实购买者）
-    var downloaderDSID: String? = nil  // accountInfo.DSPersonID（下载者）
-    var familyID: String? = nil        // accountInfo.FamilyID（家庭 ID，>0 表示经家人共享下载）
-    var accountAppleID: String? = nil  // accountInfo.AppleID（购买者邮箱，方便展示）
 
     /// Whether this is a system/firmware app rather than a user-installed one.
     var isSystem: Bool {
@@ -75,14 +68,7 @@ final class AppDiscovery {
 
         let all: [String: [AnyHashable: Any]]
         do {
-            // v0.3.194：优先走 Browse + ReturnAttributes 全量元数据（含 iTunesMetadata/
-            // ApplicationDSID，UFADE 路线）。失败则回退普通 Lookup（老逻辑）——
-            // 绝不能因元数据通道失败导致应用列表整体不可用.
-            if let metaApps = try? tunnel.getAllAppsInfoWithMetadata() {
-                all = metaApps
-            } else {
-                all = try tunnel.getAllAppsInfo()
-            }
+            all = try tunnel.getAllAppsInfo()
         } catch {
             throw AppDiscoveryError.enumerationFailed(error.localizedDescription)
         }
@@ -105,51 +91,21 @@ final class AppDiscovery {
             let version = info["CFBundleShortVersionString"] as? String
             // v0.3.184：iTunesMetadata 子字典（仅 App Store 下载的应用有）.
             // 用于在 AppTypeDetector 区分「本人购买」与「家人共享」.
-            let (iTunesAppleID, purchaserDSID, downloaderDSID, familyID, accountAppleID) = Self.parseITunesMetadata(info)
+            let iTunesAppleID: String? = {
+                guard let meta = info["iTunesMetadata"] as? [String: Any] else { return nil }
+                return meta["apple-id"] as? String
+            }()
             apps.append(InstalledApp(
                 bundleIdentifier: bundleId,
                 name: name,
                 containerPath: container,
                 version: version,
                 applicationType: appType,
-                iTunesAppleID: iTunesAppleID,
-                purchaserDSID: purchaserDSID,
-                downloaderDSID: downloaderDSID,
-                familyID: familyID,
-                accountAppleID: accountAppleID
+                iTunesAppleID: iTunesAppleID
             ))
         }
 
         return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    /// v0.3.194：从 app info dict 解析 iTunesMetadata 的购买者/下载者字段。
-    /// iTunesMetadata 可能以 [String:Any] 子字典出现（plist 转换后），
-    /// 也可能以 Data（二进制 plist）出现——两种都处理。
-    /// 字段层级：iTunesMetadata.com.apple.iTunesStore.downloadInfo.accountInfo
-    ///   .PurchaserID / .DSPersonID / .FamilyID / .AppleID
-    private static func parseITunesMetadata(_ info: [String: Any])
-        -> (iTunesAppleID: String?, purchaser: String?, downloader: String?, family: String?, account: String?) {
-        guard let metaRaw = info["iTunesMetadata"] else { return (nil, nil, nil, nil, nil) }
-        let meta: [String: Any]
-        if let dict = metaRaw as? [String: Any] {
-            meta = dict
-        } else if let data = metaRaw as? Data,
-                  let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
-                  let dict = plist as? [String: Any] {
-            meta = dict
-        } else {
-            return (nil, nil, nil, nil, nil)
-        }
-        // 顶层 apple-id（下载票据账号，兜底）
-        let topAppleID = meta["apple-id"] as? String
-        // downloadInfo.accountInfo
-        let accountInfo = (meta["com.apple.iTunesStore.downloadInfo"] as? [String: Any])?["accountInfo"] as? [String: Any]
-        let purchaser = accountInfo?["PurchaserID"] as? String
-        let downloader = accountInfo?["DSPersonID"] as? String
-        let family = accountInfo?["FamilyID"] as? String
-        let account = accountInfo?["AppleID"] as? String
-        return (topAppleID, purchaser, downloader, family, account)
     }
 
     /// Fetch the SpringBoard icon for an app, if the tunnel is up.

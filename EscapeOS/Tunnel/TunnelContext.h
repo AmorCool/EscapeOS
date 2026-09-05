@@ -41,10 +41,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Enumerate all installed apps (full info dictionaries). Requires tunnel.
 - (nullable NSDictionary<NSString *, NSDictionary *> *)getAllAppsInfoWithError:(NSError **)error;
-/// v0.3.194：Browse + ReturnAttributes 全量元数据（含 iTunesMetadata/ApplicationDSID，
-/// 用于正版 vs 家人共享判定）。installd 返回与否需真机验证。
-- (nullable NSDictionary<NSString *, NSDictionary *> *)getAllAppsInfoWithMetadataAndError:(NSError **)error
-    NS_SWIFT_NAME(getAllAppsInfoWithMetadata());
 
 /// Fetch an app's SpringBoard icon PNG.
 - (nullable UIImage *)getAppIconWithBundleId:(NSString *)bundleId error:(NSError **)error;

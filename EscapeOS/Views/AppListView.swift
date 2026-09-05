@@ -118,12 +118,11 @@ final class AppListViewModel: ObservableObject {
     /// 判定规则见 `AppTypeDetector.detect`。
     private func loadAppTypes(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
-        // v0.3.195【待确认】正版/共享判定的参照 Apple ID 来源：
-        // 用户明确要求 = 系统设置里登录的 Apple ID（不是 App 内任何登录态，
-        // 也不是 v0.3.186 误用的 MemoryLimitSettings 开发者账号）.
-        // 实现方式待与用户确认后落地（见 AppTypeDetector 头注释）。
-        // 暂不判定正版/共享细分：currentAppleID 传 nil → detect 落 .appStore 兜底.
-        let currentAppleID: String? = nil
+        // v0.3.184：当前 Apple ID 用于区分正版 vs 共享（来自 AppStore 登录态）.
+        // 为空时 .appStorePersonal / .appStoreShared 退化为 .appStore.
+        // v0.3.185：改用 nonisolated 直读 keychain（本方法在后台队列执行，
+        // 直接读 MainActor 隔离的 MemoryLimitSettings.shared.appleID 会编译报错）.
+        let currentAppleID = MemoryLimitSettings.currentAppleIDDirect()
         // v0.3.192：misagent 全量拉取 + 解析可能产生大内存峰值（每 profile 数十 KB，
         // 设备上可能有 20+ 个），用 .utility 低优先级队列 + autoreleasepool 包裹，
         // 避免在 reload 高频触发时抢占线程导致卡顿/内存压力；与主流程解耦.
@@ -174,17 +173,13 @@ final class AppListViewModel: ObservableObject {
             // v0.3.190：从 misagent 拉的 mobileprovision 顶层 ProvisionsAllDevices 匹配，
             // 企业判定唯一权威字段（Apple TN3125）——已在上面按 appId 构建 provisionsAllDevicesMap.
             var resolved: [String: AppType] = [:]
-            for app in apps {
-                let id = app.bundleIdentifier
+            for id in ids {
                 resolved[id] = AppTypeDetector.detect(
                     entitlements: entMap[id] ?? [:],
                     applicationType: appTypeMap[id],
                     iTunesAppleID: iTunesIDMap[id],
                     currentAppleID: currentAppleID,
-                    provisionsAllDevices: provisionsAllDevicesMap[id] ?? false,
-                    purchaserDSID: app.purchaserDSID,
-                    downloaderDSID: app.downloaderDSID,
-                    familyID: app.familyID
+                    provisionsAllDevices: provisionsAllDevicesMap[id] ?? false
                 )
             }
             DispatchQueue.main.async {
