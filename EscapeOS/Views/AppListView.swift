@@ -129,7 +129,7 @@ final class AppListViewModel: ObservableObject {
                 resolved[id] = AppTypeDetector.detect(entitlements: entMap[id] ?? [:])
             }
             DispatchQueue.main.async {
-                self.appTypes = resolved
+                self?.appTypes = resolved
             }
         }
     }
@@ -474,10 +474,8 @@ struct AppListView: View {
                             .padding(.vertical, 1)
                             .background(Color(.tertiarySystemFill), in: Capsule())
                     } else if let type = viewModel.appTypes[app.bundleIdentifier] {
-                        // v0.3.181：第三方应用类型胶囊（AppStore/企业/AdHoc/开发）
                         AppTypeBadge(type: type, compact: true)
                     }
-                }
                 Text(app.bundleIdentifier)
                     .font(.caption)
                     .foregroundColor(.secondary)
