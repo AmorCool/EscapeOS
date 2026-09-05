@@ -124,11 +124,24 @@ final class AppListViewModel: ObservableObject {
         // 直接读 MainActor 隔离的 MemoryLimitSettings.shared.appleID 会编译报错）.
         let currentAppleID = MemoryLimitSettings.currentAppleIDDirect()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            // v0.3.190：两条隧道必须**顺序串行**调用——fetchSideloadedApps（installation_proxy）
+            // 与 fetchAllProfiles（misagent）各自 createTunnel，若并发握手会死锁闪退
+            // （v0.3.187 曾在 fetchSideloadedApps 内部嵌套调 fetchAllProfiles = 双隧道并发，
+            //  是真机连续闪退元凶）. 现在顺序执行，前一条 defer 释放后才建下一条.
             let sideloaded = (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? []
+            let allProfiles = (try? ProvisioningProfileStore.fetchAllProfiles()) ?? []
             // 以 bundleID 为 key 的 entitlements 字典
             var entMap: [String: [String: Any]] = [:]
             for s in sideloaded {
                 entMap[s.bundleID] = s.entitlements
+            }
+            // 以 appId（application-identifier）匹配 profile 顶层 ProvisionsAllDevices
+            let profileByAppId = Dictionary(uniqueKeysWithValues: allProfiles.map { ($0.appId, $0) })
+            var provisionsAllDevicesMap: [String: Bool] = [:]
+            for s in sideloaded {
+                guard let appId = s.applicationIdentifier,
+                      let profile = profileByAppId[appId] else { continue }
+                provisionsAllDevicesMap[s.bundleID] = profile.provisionsAllDevices
             }
             // 以 bundleID 为 key 的 applicationType / iTunesAppleID
             var appTypeMap: [String: String] = [:]
@@ -137,12 +150,8 @@ final class AppListViewModel: ObservableObject {
                 if let t = app.applicationType { appTypeMap[app.bundleIdentifier] = t }
                 if let id = app.iTunesAppleID { iTunesIDMap[app.bundleIdentifier] = id }
             }
-            // v0.3.187：从 misagent 拉的 mobileprovision 顶层 ProvisionsAllDevices，
-            // 是企业判定的唯一权威字段（Apple TN3125；不是 entitlements 内 enterprise.* 键）.
-            var provisionsAllDevicesMap: [String: Bool] = [:]
-            for s in sideloaded {
-                provisionsAllDevicesMap[s.bundleID] = s.provisionsAllDevices
-            }
+            // v0.3.190：从 misagent 拉的 mobileprovision 顶层 ProvisionsAllDevices 匹配，
+            // 企业判定唯一权威字段（Apple TN3125）——已在上面按 appId 构建 provisionsAllDevicesMap.
             var resolved: [String: AppType] = [:]
             for id in ids {
                 resolved[id] = AppTypeDetector.detect(

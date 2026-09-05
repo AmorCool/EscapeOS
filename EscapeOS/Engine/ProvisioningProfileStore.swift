@@ -230,29 +230,19 @@ enum ProvisioningProfileStore {
             let name = (dict["CFBundleDisplayName"] as? String)
                 ?? (dict["CFBundleName"] as? String)
                 ?? bundleID
-            // v0.3.187：从 misagent 拿全所有 mobileprovision，按 appId 等值匹配本 app.
-            // 注意 fetchSideloadedApps 仍只从 installation_proxy 读 entitlements，
-            // 但额外把匹配的 profile 顶层 ProvisionsAllDevices/ProvisionedDevices 字段透出,
-            // 让 AppTypeDetector 能用 Apple TN3125 权威字段而非误用 enterprise entitlements 启发式.
-            let appInfo = SideloadedAppInfo(
+            result.append(SideloadedAppInfo(
                 bundleID: bundleID,
                 name: name,
                 applicationIdentifier: entitlements["application-identifier"] as? String,
                 entitlements: entitlements
-            )
-            result.append(appInfo)
+            ))
         }
-        // v0.3.187：第二次调用 misagent 拿全部 .mobileprovision，按 application-identifier
-        // 匹配每个 app 对应的 profile 顶层字段。失败时静默跳过（旧逻辑不受影响）.
-        let allProfiles = (try? fetchAllProfiles()) ?? []
-        let profileByAppId = Dictionary(uniqueKeysWithValues: allProfiles.map { ($0.appId, $0) })
-        for i in result.indices {
-            guard let info = result[i].applicationIdentifier,
-                  let profile = profileByAppId[info] else { continue }
-            result[i].provisionsAllDevices = profile.provisionsAllDevices
-            result[i].provisionedDevicesCount = profile.provisionedDevicesCount
-            result[i].teamIdentifier = profile.teamIdentifier
-        }
+        // v0.3.190：删除 v0.3.187 在此处调 fetchAllProfiles() 的代码——
+        // 本函数内 installation_proxy 隧道（defer 在末尾才释放）仍活着时，
+        // fetchAllProfiles() 会再建一条 LocalDevVPN 隧道并发 RSD 握手 →
+        // 隧道状态竞争/死锁 → 真机闪退（v0.3.187~189 连续闪退元凶）。
+        // 需要 profile 顶层字段时由调用方（AppListView.loadAppTypes）顺序串行
+        // 调 fetchSideloadedApps() + fetchAllProfiles() 并自行按 appId 匹配.
         return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
