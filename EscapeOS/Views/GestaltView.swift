@@ -29,12 +29,11 @@ struct GestaltView: View {
 
     var body: some View {
         NavigationStack {
-            // v0.3.188：回滚到 iOS 16+ 全版本稳定的 inline + toolbar principal 方案
-            // （iOS 设置 App 的标准做法）。v0.3.187 的 `.large` + safeAreaInset(.top) 在
-            // iOS 26 SwiftUI 上有 layout 计算风险，被用户反馈"闪退 + 标题仍是 inline"。
-            // Picker 嵌入 toolbar principal 居中替换标题，与 nav bar 视觉体系融合——
-            // 模块板块是大标题 + 搜索栏；Gestalt 是切换控件用 toolbar principal 居中，
-            // 两者都是 iOS 标准 nav bar 整合方式.
+            // v0.3.189：彻底重构——删除 Picker 控件（v0.3.184 VStack 顶置被骂丑；
+            // v0.3.187 大标题+safeAreaInset 闪退；v0.3.188 toolbar principal 仍不满意）.
+            // "编辑/备份"切换改为 toolbar Menu 按钮（点开切换），导航栏与模块板块
+            // 一致：大标题 + Leading 齿轮 + Trailing Menu + ellipsis 菜单，
+            // List 内只有内容，**屏幕上不再有任何 segmented control**。
             List {
                 if gestaltPane == .edit {
                     editPane
@@ -43,13 +42,10 @@ struct GestaltView: View {
                 }
             }
             .navigationTitle("Gestalt")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    gestaltPanePicker
-                        .frame(maxWidth: 240)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
+                    // 综合菜单：日志/重载/扩展/备份分享
                     Menu {
                         Button {
                             logPresented = true
@@ -77,6 +73,31 @@ struct GestaltView: View {
                         Image(systemName: "ellipsis.circle")
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    // v0.3.189：编辑/备份切换——Menu 按钮（取代 v0.3.179 picker），
+                    // 显示当前 pane 名称 + chevron 下拉，**屏幕上不再有 Picker 控件**。
+                    Menu {
+                        ForEach(GestaltPane.allCases) { pane in
+                            Button {
+                                gestaltPane = pane
+                            } label: {
+                                if gestaltPane == pane {
+                                    Label(pane.rawValue, systemImage: "checkmark")
+                                } else {
+                                    Text(pane.rawValue)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(gestaltPane.rawValue)
+                                .font(.body)
+                            Image(systemName: "chevron.down")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(.blue)
+                    }
+                }
             }
             .alert(item: $model.alertInfo) { info in
                 if let actionLabel = info.actionLabel {
@@ -101,6 +122,11 @@ struct GestaltView: View {
                     showRespring = true
                     model.shouldRespring = false
                 }
+            }
+            // v0.3.189：编辑/备份切换由 toolbar Menu 触发（取代 v0.3.184 picker 路径），
+            // 此处监听 gestaltPane 改变以刷新 backupFiles.
+            .onChange(of: gestaltPane) { _, pane in
+                if pane == .backup { backupFiles = model.backupFiles() }
             }
             .overlay {
                 if showRespring {
@@ -220,23 +246,10 @@ struct GestaltView: View {
         }
     }
 
-    // MARK: - Pane picker (v0.3.179)
-
-    private var gestaltPanePicker: some View {
-        // v0.3.188：toolbar principal 嵌入——Picker 居中替换标题（inline 模式 + principal），
-        // iOS 16+ 全版本稳定。labelsHidden 隐藏 Picker 自带的"视图"标签,
-        // 让 segmented control 视觉更紧凑.
-        Picker("视图", selection: $gestaltPane) {
-            ForEach(GestaltPane.allCases) { pane in
-                Text(pane.rawValue).tag(pane)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .onChange(of: gestaltPane) { _, pane in
-            if pane == .backup { backupFiles = model.backupFiles() }
-        }
-    }
+    // MARK: - 编辑/备份切换
+    // v0.3.189：删除 v0.3.179 的 gestaltPanePicker 函数——Picker 控件（VStack 顶置 / segmented）
+    // 在 v0.3.184~188 多轮反复尝试都失败（丑/闪退/不被接受），现改用 toolbar Menu
+    // 按钮（在 body .toolbar 内）。gestaltPane 的 onChange 监听移到 body 内 List 修饰符.
 
     /// 备份分栏：时间戳备份 + 备份列表（恢复/删除）
     private var backupPane: some View {
