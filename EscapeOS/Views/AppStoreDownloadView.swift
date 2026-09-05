@@ -20,16 +20,16 @@ import SwiftUI
 func iTunesAuthErrorMessage(_ error: Error) -> String {
     let desc = error.localizedDescription
     if desc.contains("未能读取数据") || desc.localizedCaseInsensitiveContains("property list") {
-        return "Apple 返回的认证数据格式异常（非预期 plist）。常见原因：会话 / 令牌过期、网络异常或 Anisette 失效。建议：先在「更多 → 设置 → Apple ID 账户」重新登录或检查网络；若开启双重认证，请改用手动添加账户并填验证码。"
+        return "Apple 返回的认证数据格式异常（非预期 plist）。常见原因：会话 / 令牌过期、网络异常或 Anisette 失效."
     }
     return "登录失败：\(desc)"
 }
 
-/// 把 `AnisetteData` 转成 App Store iTunes 认证（`native/fast/`）所需的设备认证请求头。
-/// 复用 Swift 认证引擎已验证可用的头部集合（X-Apple-I-MD / X-Apple-I-MD-M 等）。
-/// 缺失这些头时 Apple 边缘会直接返回 403 HTML（ipatool 机制分析已确认）。
+/// 把 `AnisetteData` 转成 App Store iTunes 认证（`native/fast/`）所需的设备认证请求头.
+/// 复用 Swift 认证引擎已验证可用的头部集合（X-Apple-I-MD / X-Apple-I-MD-M 等）.
+/// 缺失这些头时 Apple 边缘会直接返回 403 HTML（ipatool 机制分析已确认）.
 ///
-/// - 注意：anisette OTP 一次性，调用方应在**每次认证尝试**时重新取全新 anisette 再调本函数。
+/// - 注意：anisette OTP 一次性，调用方应在**每次认证尝试**时重新取全新 anisette 再调本函数.
 func buildAppStoreAnisetteHeaders(for data: AnisetteData) -> [(String, String)] {
     let df = AppleAuthenticator.dateFormatter
     return [
@@ -46,17 +46,17 @@ func buildAppStoreAnisetteHeaders(for data: AnisetteData) -> [(String, String)] 
     ]
 }
 
-/// 取一次全新 anisette 并转成 iTunes 认证头，供 `Authenticator.authenticate(anisetteProvider:)` 使用。
+/// 取一次全新 anisette 并转成 iTunes 认证头，供 `Authenticator.authenticate(anisetteProvider:)` 使用.
 /// - 必须传 `refresh: true`：Apple 的 anisette OTP 一次性，每次认证尝试都需要新的设备
-///   标识/头；若复用同一 OTP，Apple 边缘会静默拒绝（表现为 204/403/301 等）。
+///   标识/头；若复用同一 OTP，Apple 边缘会静默拒绝（表现为 204/403/301 等）.
 func fetchFreshAppStoreAnisetteHeaders() async throws -> [(String, String)] {
     let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback(refresh: true)
     return buildAppStoreAnisetteHeaders(for: anisette)
 }
 
-/// 双重认证验证码输入：把 App Store 登录的 2FA 入口统一到这一个组件。
+/// 双重认证验证码输入：把 App Store 登录的 2FA 入口统一到这一个组件.
 /// `AppStoreDownloadView`（设置里已登录的 Apple ID）与 `AddAccountSheet`（手动添加）
-/// 共用，避免两处各写一套 alert（审计 Q12「2FA 弹窗双入口重构」）。
+/// 共用，避免两处各写一套 alert（审计 Q12「2FA 弹窗双入口重构」）.
 struct TwoFactorCodePrompt: View {
     @Binding var isPresented: Bool
     @Binding var code: String
@@ -74,7 +74,9 @@ struct TwoFactorCodePrompt: View {
                     code = ""
                 }
             } message: {
-                Text("在任意受信任设备上获取验证码：设置 → [你的名字] → 密码与安全性 → 获取验证码.\n（美区账号验证短信走美国短号，国内运营商可能拦截；用设备内获取最可靠）")
+                // v0.3.176：iOS 26 重命名为「登录与验证」；给出可执行路径（美区账号
+                // 短信易被运营商拦截，设备内「获取验证码」最可靠不依赖网络）
+                Text("iOS 26+：设置 → [你的名字] → 登录与验证 → 获取验证码（生成的 6 位码与 Apple 任何登录流程通用，立即填入下方即可）.\n美区账号验证短信走美国短号，国内运营商常拦截，所以推荐用设备内获取。")
             }
     }
 }
@@ -88,7 +90,7 @@ struct AppStoreDownloadView: View {
     @State private var status = ""
     @State private var errorMessage: String?
     @State private var toast: String?
-    // 2FA（双重认证）内联处理：与 AddAccountSheet 共用 TwoFactorCodePrompt（审计 Q12）。
+    // 2FA（双重认证）内联处理：与 AddAccountSheet 共用 TwoFactorCodePrompt（审计 Q12）.
     @State private var showTwoFactor = false
     @State private var twoFactorCode = ""
     @State private var twoFactorEmail = ""
@@ -161,8 +163,8 @@ struct AppStoreDownloadView: View {
 
     // MARK: - 子视图
 
-    /// v0.3.6：SAP 状态条——JIT 模式 + 资产包进度。JIT 行可点击重测
-    /// （StikDebug 开启 JIT 后回来点一下即更新，不再依赖登录流程内的探测）。
+    /// v0.3.6：SAP 状态条——JIT 模式 + 资产包进度.JIT 行可点击重测
+    /// （StikDebug 开启 JIT 后回来点一下即更新，不再依赖登录流程内的探测）.
     private var sapStatusSection: some View {
         Section {
             HStack(spacing: 8) {
@@ -180,7 +182,7 @@ struct AppStoreDownloadView: View {
                     .font(.footnote)
             }
         } footer: {
-            Text("TCI 解释器模式运行（无需 JIT/StikDebug）。资产包仅首次下载（约 36MB），之后走本地缓存。")
+            Text("TCI 解释器模式运行.资产包仅首次下载（约 36MB），之后走本地缓存.")
         }
     }
 
@@ -218,14 +220,14 @@ struct AppStoreDownloadView: View {
                 }
             }
             // 复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID：
-            // 同一份邮箱 + 密码即可走 iTunes 认证拿到 AppStoreAccount，无需再单独登录一次。
-            // appleID 是非可选 String（空串表示未登录），不能用 if let 绑定。
+            // 同一份邮箱 + 密码即可走 iTunes 认证拿到 AppStoreAccount，无需再单独登录一次.
+            // appleID 是非可选 String（空串表示未登录），不能用 if let 绑定.
             let settingsEmail = MemoryLimitSettings.shared.appleID
             if !settingsEmail.isEmpty {
                 Button {
                     useSettingsAppleID()
                 } label: {
-                    Label("使用「更多」已登录的 Apple ID", systemImage: "person.crop.circle.badge.checkmark")
+                    Label("从「设置」登录 Apple ID", systemImage: "person.crop.circle.badge.checkmark")
                 }
                 .foregroundColor(.blue)
                 .disabled(busy)
@@ -240,7 +242,7 @@ struct AppStoreDownloadView: View {
         } header: {
             Text("账户")
         } footer: {
-            Text("已登录「更多 → 设置 → Apple ID 账户」时，点上方按钮即可直接复用该 Apple ID 下载 App Store 应用，无需重复登录；遇到双重认证等情况可改用下方手动添加并填写验证码。凭据只保存在本机。")
+            Text("已登录「更多 → 设置 → Apple ID 账户」时，点上方按钮即可直接复用该 Apple ID 下载 App Store 应用，无需重复登录；遇到双重认证需填写验证码.凭据只保存在本机.")
         }
     }
 
@@ -256,7 +258,7 @@ struct AppStoreDownloadView: View {
         } header: {
             Text("下载")
         } footer: {
-            Text(selectedEmail.isEmpty ? "请先添加并选择一个账户。" : "下载完成的 IPA 会保存在本机「已下载」列表，可一键发送给「IPA 安装」在线安装。")
+            Text(selectedEmail.isEmpty ? "请先添加并选择一个账户." : "下载完成的 IPA 会保存在本机「已下载」列表.")
         }
     }
 
@@ -331,7 +333,7 @@ struct AppStoreDownloadView: View {
         } header: {
             Text("设备与认证")
         } footer: {
-            Text("账号区域需与 Apple ID 注册地区一致（美区账号选美国）——不一致可能导致验证码收不到. 登录持续被拒时重置设备标识，或尝试切换 Anisette 服务器/更换网络.")
+            Text("账号区域需与 Apple ID 注册地区一致，不一致可能导致验证码收不到. 登录持续被拒时重置设备标识，或尝试切换 Anisette 服务器/更换网络.")
         }
     }
 
@@ -343,18 +345,18 @@ struct AppStoreDownloadView: View {
     }
 
     /// 复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID（同一份邮箱 + 密码）
-    /// 走 iTunes 认证拿到 AppStoreAccount，避免用户在 App Store 下载里再登录一次。
+    /// 走 iTunes 认证拿到 AppStoreAccount，避免用户在 App Store 下载里再登录一次.
     ///
     /// 注意：侧载的 GrandSlam 会话与 App Store 的 iTunes 会话**令牌不互通**，
     /// 这里只是复用**凭据**（邮箱+密码），仍要调一次 `Authenticator.authenticate`
-    /// 走 iTunes 流程拿 `passwordToken` / `dsPersonId` / cookie。开启双重认证时
-    /// 该接口会失败，此时回退到手动添加账户并填写验证码。
+    /// 走 iTunes 流程拿 `passwordToken` / `dsPersonId` / cookie.开启双重认证时
+    /// 该接口会失败，此时回退到手动添加账户并填写验证码.
     private func useSettingsAppleID() {
         let settings = MemoryLimitSettings.shared
         let email = settings.appleID
         guard !email.isEmpty,
               let password = settings.password(forHistory: email), !password.isEmpty else {
-            errorMessage = "未找到「更多 → 设置 → Apple ID 账户」的登录凭据，请先在那里登录，或点下方手动添加。"
+            errorMessage = "未找到「更多 → 设置 → Apple ID 账户」的登录凭据，请先在那里登录，或点下方手动添加."
             return
         }
         let pw = password
@@ -386,7 +388,7 @@ struct AppStoreDownloadView: View {
                 await MainActor.run {
                     busy = false
                     // 双重认证：与原手动添加入口共用同一套 2FA 弹窗（审计 Q12 单一入口），
-                    // 不再要求用户「改用下方手动添加」，直接在设置登录流程内补全验证码。
+                    // 不再要求用户「改用下方手动添加」，直接在设置登录流程内补全验证码.
                     if desc.contains("Authentication requires verification code") {
                         twoFactorEmail = email
                         twoFactorCode = ""
@@ -400,7 +402,7 @@ struct AppStoreDownloadView: View {
         }
     }
 
-    /// 设置登录流程内的 2FA 重试：用同一份（邮箱+密码）+ 用户输入的验证码重新走 iTunes 认证。
+    /// 设置登录流程内的 2FA 重试：用同一份（邮箱+密码）+ 用户输入的验证码重新走 iTunes 认证.
     private func verifyTwoFactor() {
         let email = pendingEmail
         let password = pendingPassword

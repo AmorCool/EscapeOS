@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// 搜索 App Store 应用并下载 IPA（含历史版本选择）。
+/// 搜索 App Store 应用并下载 IPA（含历史版本选择）.
 ///
 /// 下载链路：账户登录 → 搜索/查询 → 免费入库（purchase）→ 取下载地址
-/// （downloadURL + sinf）→ 下载 IPA → 注入 sinf 签名 → 交给「IPA 安装」。
+/// （downloadURL + sinf）→ 下载 IPA → 注入 sinf 签名 → 交给「IPA 安装」.
 struct AppStoreSearchView: View {
     let email: String
 
@@ -35,7 +35,7 @@ struct AppStoreSearchView: View {
             } header: {
                 Text("搜索")
             } footer: {
-                Text("当前账户：\(email)。下载前会自动把免费应用入库（App Store 官方流程）。")
+                Text("当前账户：\(email).下载前会自动把免费应用入库（App Store 官方流程）.")
             }
 
             if searching {
@@ -104,7 +104,7 @@ struct AppStoreSearchView: View {
                 } header: {
                     Text("已下载")
                 } footer: {
-                    Text("点「安装」跳转到「IPA 安装」，选在线安装即可（无需再次签名）。")
+                    Text("点「安装」跳转到「IPA 安装」，选在线安装即可（无需再次签名）.")
                 }
             }
 
@@ -219,7 +219,7 @@ struct AppStoreSearchView: View {
     }
 
     private func sendToInstaller(name: String) {
-        // 记录待安装文件，供「IPA 安装」页读取（同一 App 内共享目录）。
+        // 记录待安装文件，供「IPA 安装」页读取（同一 App 内共享目录）.
         UserDefaults.standard.set(name, forKey: "pendingIPAPath")
         toast = "已选择 \(name)，请到「更多 → IPA 安装」点在线安装"
     }

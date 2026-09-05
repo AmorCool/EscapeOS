@@ -39,7 +39,11 @@ public enum Purchase {
             eventLoopGroupProvider: .singleton,
             configuration: .init(
                 tlsConfiguration: Configuration.tlsConfiguration,
-                redirectConfiguration: .disallow,
+                // v0.3.176：buyProduct 返回 302 重定向到正确 pod（Apple 标准 store-pod
+                // 分配机制）—— 旧实现 .disallow 直接失败 302，真机下载 100% 报错
+                // "purchase request failed with status 302"。改为 .follow(8 hops) 与
+                // ipatool 上游对齐（PR #486 实证：购买端点需跟随跨 pod 重定向到真实 pod）。
+                redirectConfiguration: .follow(max: 8, allowCycles: false),
                 timeout: .init(
                     connect: .seconds(Configuration.timeoutConnect),
                     read: .seconds(Configuration.timeoutRead)
