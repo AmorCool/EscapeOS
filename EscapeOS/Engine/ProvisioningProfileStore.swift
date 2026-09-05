@@ -18,6 +18,16 @@ enum ProvisioningProfileStore {
         let appId: String       // application-identifier
         let expirationDate: Date?
         let entitlements: [String: Any]
+        /// v0.3.187：mobileprovision 顶层 ProvisionsAllDevices。
+        /// true 即企业 / In-House profile（Apple TN3125 权威字段）.
+        /// 默认 false 让旧调用点（memberwise init）免改.
+        var provisionsAllDevices: Bool = false
+        /// v0.3.187：mobileprovision 顶层 ProvisionedDevices 数组长度.
+        /// >0 即 Ad-Hoc profile（特定设备列表）;0 即 Development/Distribution 团队签.
+        var provisionedDevicesCount: Int = 0
+        /// v0.3.187：mobileprovision 顶层 TeamIdentifier（首项）或 ApplicationIdentifierPrefix.
+        /// 用于 AppType 调色板的同 team 多 App 关联.
+        var teamIdentifier: String? = nil
 
         var formattedDate: String {
             guard let expirationDate else { return "未知" }
@@ -136,6 +146,12 @@ enum ProvisioningProfileStore {
         let name: String
         let applicationIdentifier: String?
         let entitlements: [String: Any]
+        /// v0.3.187：从匹配的 .mobileprovision 顶层读到的企业标志（权威）.
+        var provisionsAllDevices: Bool = false
+        /// v0.3.187：mobileprovision 顶层 ProvisionedDevices 数组长度;>0 = Ad-Hoc profile.
+        var provisionedDevicesCount: Int = 0
+        /// v0.3.187：mobileprovision 顶层的 team identifier（前缀）.
+        var teamIdentifier: String? = nil
     }
 
     /// 读取设备上全部描述文件（misagent_copy_all）。
@@ -214,12 +230,28 @@ enum ProvisioningProfileStore {
             let name = (dict["CFBundleDisplayName"] as? String)
                 ?? (dict["CFBundleName"] as? String)
                 ?? bundleID
-            result.append(SideloadedAppInfo(
+            // v0.3.187：从 misagent 拿全所有 mobileprovision，按 appId 等值匹配本 app.
+            // 注意 fetchSideloadedApps 仍只从 installation_proxy 读 entitlements，
+            // 但额外把匹配的 profile 顶层 ProvisionsAllDevices/ProvisionedDevices 字段透出,
+            // 让 AppTypeDetector 能用 Apple TN3125 权威字段而非误用 enterprise entitlements 启发式.
+            let appInfo = SideloadedAppInfo(
                 bundleID: bundleID,
                 name: name,
                 applicationIdentifier: entitlements["application-identifier"] as? String,
                 entitlements: entitlements
-            ))
+            )
+            result.append(appInfo)
+        }
+        // v0.3.187：第二次调用 misagent 拿全部 .mobileprovision，按 application-identifier
+        // 匹配每个 app 对应的 profile 顶层字段。失败时静默跳过（旧逻辑不受影响）.
+        let allProfiles = (try? fetchAllProfiles()) ?? []
+        let profileByAppId = Dictionary(uniqueKeysWithValues: allProfiles.map { ($0.appId, $0) })
+        for i in result.indices {
+            guard let info = result[i].applicationIdentifier,
+                  let profile = profileByAppId[info] else { continue }
+            result[i].provisionsAllDevices = profile.provisionsAllDevices
+            result[i].provisionedDevicesCount = profile.provisionedDevicesCount
+            result[i].teamIdentifier = profile.teamIdentifier
         }
         return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -267,6 +299,14 @@ enum ProvisioningProfileStore {
         let uuid = dict["UUID"] as? String ?? UUID().uuidString
         let expiration = dict["ExpirationDate"] as? Date
         let entitlements = dict["Entitlements"] as? [String: Any] ?? [:]
+        // v0.3.187：从 mobileprovision 顶层解析企业/Ad-Hoc 权威字段.
+        let provisionsAllDevices = dict["ProvisionsAllDevices"] as? Bool ?? false
+        let provisionedDevicesCount = (dict["ProvisionedDevices"] as? [Any])?.count ?? 0
+        // teamIdentifier 取 TeamIdentifier 数组首项；fallback ApplicationIdentifierPrefix.
+        let teamIdentifier: String? = {
+            if let team = (dict["TeamIdentifier"] as? [String])?.first { return team }
+            return dict["ApplicationIdentifierPrefix"] as? String
+        }()
 
         return ProfileInfo(
             id: uuid,
@@ -274,7 +314,10 @@ enum ProvisioningProfileStore {
             appName: appName,
             appId: appId,
             expirationDate: expiration,
-            entitlements: entitlements
+            entitlements: entitlements,
+            provisionsAllDevices: provisionsAllDevices,
+            provisionedDevicesCount: provisionedDevicesCount,
+            teamIdentifier: teamIdentifier
         )
     }
 

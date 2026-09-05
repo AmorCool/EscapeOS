@@ -1,22 +1,33 @@
 import Foundation
 
-/// v0.3.184：第三方应用类型识别（应用板块 · 胶囊标签），细分到「正版 vs 共享」。
+/// v0.3.187：第三方应用类型识别（应用板块 · 胶囊标签），细分到「正版 vs 共享 vs 企业」。
 ///
-/// 数据来源（仅运行时可获取，不读跨 app bundle）：
-///  1) misagent 拉的 provisioning profile entitlements
-///     （来自 ProvisioningProfileStore.fetchSideloadedApps）——企业/开发判定
-///  2) installation_proxy 返回的 ApplicationType 字段 —— User / System / HiddenSystemApp
-///  3) installation_proxy 返回的 iTunesMetadata.apple-id 字段（App Store 下载的 App）
-///  4) 当前 Apple ID（来自 MemoryLimitSettings.appleID，由用户在 AppStore 登录态提供）
+/// **权威字段来源**（Apple TN3125 + libimobiledevice 协议）：
+///   1) misagent 拉的 .mobileprovision 顶层 `ProvisionsAllDevices`
+///      —— true 即企业 / In-House profile（**唯一可靠的企业判定**）
+///   2) installation_proxy 返回的 `ApplicationType` 字段
+///      —— User / System / HiddenSystemApp
+///   3) installation_proxy 返回的 `iTunesMetadata.apple-id`（App Store 下载的 App）
+///   4) 当前 Apple ID（来自 MemoryLimitSettings.appleID / keychain）
 ///
-/// 判定优先级：
-///   - HiddenSystemApp → .hidden（隐藏应用，App Store 不可见）
-///   - User + entitlements.com.apple.developer.enterprise.* → .enterprise
-///   - User + entitlements.get-task-allow == true → .development
-///   - User + 有 entitlements（非企业非开发）→ .development（团队/Ad-Hoc 个人签）
-///   - User + 无 entitlements + iTunesAppleID == currentAppleID → .appStorePersonal
-///   - User + 无 entitlements + iTunesAppleID != currentAppleID → .appStoreShared
-///   - User + 无 entitlements + 无 iTunesMetadata → .appStore（无法判定，统称 AppStore）
+/// **v0.3.187 之前的两个错误启发式**（已废弃）：
+///   - `entitlements.com.apple.developer.enterprise.*` 前缀 → Apple 文档（TN3125）
+///     明确**没有这种标准 entitlement**；企业标志只在 mobileprovision 顶层
+///     `ProvisionsAllDevices=true`。v0.3.184~186 用此启发式 → iOS 14+ 几乎不命中，
+///     所有企业应用被合并到「开发」（被吐槽"全改成开发"的根因）。
+///   - `entitlements.get-task-allow == true` → development → **错**。get-task-allow
+///     也出现在企业 profile（企业 App 同样允许调试器 attach）和个人 Apple ID 自签
+///     （free provisioning 也带）。不能作为类型判定依据。
+///
+/// **判定优先级**（v0.3.187 起）：
+///   - HiddenSystemApp → .hidden
+///   - 非 User → .unknown
+///   - ProvisionsAllDevices == true → .enterprise（**唯一权威**）
+///   - 有 entitlements（即有 profile 但非企业）→ .development
+///     （开发调试 / 个人 Apple ID 自签 / Ad-Hoc / 团队 Distribution 合并）
+///   - 无 entitlements + iTunesAppleID == currentAppleID → .appStorePersonal
+///   - 无 entitlements + iTunesAppleID != currentAppleID → .appStoreShared
+///   - 无 entitlements + 无 iTunesMetadata → .appStore（兜底）
 enum AppType: String, Hashable {
     case appStorePersonal   = "正版"
     case appStoreShared     = "共享"
@@ -31,7 +42,7 @@ enum AppType: String, Hashable {
         case .appStorePersonal: return "App Store 本人购买/下载"
         case .appStoreShared:   return "App Store 家人共享（购买者非本人 Apple ID）"
         case .appStore:         return "App Store（无法判别正版/共享）"
-        case .development:      return "Xcode 调试或证书直装"
+        case .development:      return "Xcode 调试 / 个人 Apple ID 自签 / Ad-Hoc / 团队签"
         case .enterprise:       return "企业内部/批量签发（不限设备）"
         case .hidden:           return "系统隐藏应用"
         case .unknown:          return "签名来源未知"
@@ -39,43 +50,39 @@ enum AppType: String, Hashable {
     }
 }
 
-/// 应用类型检测器：纯运行时启发式（不依赖 pymobiledevice3）。
-///
-/// `entitlements` 来自 misagent ProfileInfo；`applicationType` 来自 installation_proxy；
-/// `iTunesAppleID` 来自 iTunesMetadata.apple-id（installation_proxy 返回）；`currentAppleID`
-/// 来自 MemoryLimitSettings.appleID。
+/// 应用类型检测器。
 enum AppTypeDetector {
     /// 综合判定应用类型。
-    /// 任意输入为 nil 时降级到下一档，最后兜底 .unknown（仅 system 类应用可能落到这）。
+    ///
+    /// `provisionsAllDevices` 来自 misagent 拉的 .mobileprovision 顶层字段
+    /// （**企业判定唯一权威字段**，Apple TN3125）.
     static func detect(
         entitlements: [String: Any],
         applicationType: String?,
         iTunesAppleID: String?,
-        currentAppleID: String?
+        currentAppleID: String?,
+        provisionsAllDevices: Bool = false
     ) -> AppType {
-        // 1. 隐藏应用优先（基于 installation_proxy 的 ApplicationType）
+        // 1. 隐藏应用（基于 installation_proxy 的 ApplicationType）
         if applicationType == "HiddenSystemApp" { return .hidden }
-
-        // 2. 非 User 类型兜底为 .unknown
         guard applicationType == "User" else { return .unknown }
 
-        // 3. 有 entitlements：企业 / 开发 / Ad-Hoc 优先
+        // 2. **企业权威判定**：.mobileprovision 顶层 ProvisionsAllDevices == true
+        //    （这是 Apple 文档（TN3125）明确的企业标志；entitlements 内无对应键）
+        if provisionsAllDevices {
+            return .enterprise
+        }
+
+        // 3. 有 entitlements（即有 profile 但非企业）→ 开发/自签大类.
+        //    不再用 get-task-allow 区分（企业 profile 也带 get-task-allow；
+        //    个人 Apple ID 自签也带）。按用户规则把"开发 / 自签 / Ad-Hoc /
+        //    团队 Distribution"合并入 .development.
         if !entitlements.isEmpty {
-            // 任意 enterprise 专属 entitlement 命中 → 企业签名
-            for key in entitlements.keys where key.hasPrefix("com.apple.developer.enterprise") {
-                return .enterprise
-            }
-            // get-task-allow=true（Xcode Debug/个人开发者）→ Development
-            if let gta = entitlements["get-task-allow"], (gta as? Bool) == true {
-                return .development
-            }
-            // 其它有 entitlements 但无 enterprise / get-task-allow 标识
-            // → 团队/Ad-hoc 个人签。归为 development（语义上同属「非 AppStore 签发」）.
             return .development
         }
 
-        // 4. 无 entitlements → AppStore 系（system-signed）
-        // 用 iTunesMetadata.apple-id 区分正版 vs 共享
+        // 4. 无 entitlements → AppStore 系（系统签发）.
+        //    用 iTunesMetadata.apple-id 区分正版 vs 共享.
         if let iTunesId = iTunesAppleID?.trimmingCharacters(in: .whitespacesAndNewlines),
            !iTunesId.isEmpty,
            let currentId = currentAppleID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),

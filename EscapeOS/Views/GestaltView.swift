@@ -29,21 +29,24 @@ struct GestaltView: View {
 
     var body: some View {
         NavigationStack {
-            // v0.3.184：Picker 用 VStack 顶置固定（不滚动），消除 v0.3.183 残留的
-            // picker 与下方 Section 之间 ≈30pt 空白（List 默认 Section 间距，
-            // .listSectionSpacing iOS 16 不支持，故不依赖此 modifier）.
-            VStack(spacing: 0) {
-                gestaltPanePicker
-                List {
-                    if gestaltPane == .edit {
-                        editPane
-                    } else {
-                        backupPane
-                    }
+            // v0.3.187：参考模块板块的大标题风格——`.large` 大标题 + 标题下用
+            // safeAreaInset(.top) 把 Picker 固定在大标题下方的搜索栏位置
+            // （与模块的 `.searchable(... .navigationBarDrawer(always))` 视觉位置一致）。
+            // v0.3.184 的 VStack 顶置被吐槽"丑"——Picker 像浮在标题旁边的卡片，
+            // 现在 Picker 是导航栏 drawer 内的常驻控件，融入 nav bar 视觉体系.
+            List {
+                if gestaltPane == .edit {
+                    editPane
+                } else {
+                    backupPane
                 }
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                gestaltPanePicker
+                    .background(Color(.systemBackground))
+            }
             .navigationTitle("Gestalt")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -219,8 +222,8 @@ struct GestaltView: View {
     // MARK: - Pane picker (v0.3.179)
 
     private var gestaltPanePicker: some View {
-        // v0.3.184：Picker 改为普通视图（v0.3.183 仍用 listRow* 修饰但仍是 List row，
-        // 保留 Section header 占位）。VStack 顶置后不再需要 row 修饰.
+        // v0.3.187：作为 safeAreaInset(.top) 的常驻内容——与模块板块大标题下
+        // 的搜索栏 drawer 视觉位置一致。Picker 不再带额外 padding.
         Picker("视图", selection: $gestaltPane) {
             ForEach(GestaltPane.allCases) { pane in
                 Text(pane.rawValue).tag(pane)
@@ -228,7 +231,7 @@ struct GestaltView: View {
         }
         .pickerStyle(.segmented)
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.bottom, 8)
         .onChange(of: gestaltPane) { _, pane in
             if pane == .backup { backupFiles = model.backupFiles() }
         }

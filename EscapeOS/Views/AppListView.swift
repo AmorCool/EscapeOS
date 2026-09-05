@@ -137,13 +137,20 @@ final class AppListViewModel: ObservableObject {
                 if let t = app.applicationType { appTypeMap[app.bundleIdentifier] = t }
                 if let id = app.iTunesAppleID { iTunesIDMap[app.bundleIdentifier] = id }
             }
+            // v0.3.187：从 misagent 拉的 mobileprovision 顶层 ProvisionsAllDevices，
+            // 是企业判定的唯一权威字段（Apple TN3125；不是 entitlements 内 enterprise.* 键）.
+            var provisionsAllDevicesMap: [String: Bool] = [:]
+            for s in sideloaded {
+                provisionsAllDevicesMap[s.bundleID] = s.provisionsAllDevices
+            }
             var resolved: [String: AppType] = [:]
             for id in ids {
                 resolved[id] = AppTypeDetector.detect(
                     entitlements: entMap[id] ?? [:],
                     applicationType: appTypeMap[id],
                     iTunesAppleID: iTunesIDMap[id],
-                    currentAppleID: currentAppleID
+                    currentAppleID: currentAppleID,
+                    provisionsAllDevices: provisionsAllDevicesMap[id] ?? false
                 )
             }
             DispatchQueue.main.async {
