@@ -29,11 +29,12 @@ struct GestaltView: View {
 
     var body: some View {
         NavigationStack {
-            // v0.3.187：参考模块板块的大标题风格——`.large` 大标题 + 标题下用
-            // safeAreaInset(.top) 把 Picker 固定在大标题下方的搜索栏位置
-            // （与模块的 `.searchable(... .navigationBarDrawer(always))` 视觉位置一致）。
-            // v0.3.184 的 VStack 顶置被吐槽"丑"——Picker 像浮在标题旁边的卡片，
-            // 现在 Picker 是导航栏 drawer 内的常驻控件，融入 nav bar 视觉体系.
+            // v0.3.188：回滚到 iOS 16+ 全版本稳定的 inline + toolbar principal 方案
+            // （iOS 设置 App 的标准做法）。v0.3.187 的 `.large` + safeAreaInset(.top) 在
+            // iOS 26 SwiftUI 上有 layout 计算风险，被用户反馈"闪退 + 标题仍是 inline"。
+            // Picker 嵌入 toolbar principal 居中替换标题，与 nav bar 视觉体系融合——
+            // 模块板块是大标题 + 搜索栏；Gestalt 是切换控件用 toolbar principal 居中，
+            // 两者都是 iOS 标准 nav bar 整合方式.
             List {
                 if gestaltPane == .edit {
                     editPane
@@ -41,13 +42,13 @@ struct GestaltView: View {
                     backupPane
                 }
             }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                gestaltPanePicker
-                    .background(Color(.systemBackground))
-            }
             .navigationTitle("Gestalt")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    gestaltPanePicker
+                        .frame(maxWidth: 240)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
@@ -222,16 +223,16 @@ struct GestaltView: View {
     // MARK: - Pane picker (v0.3.179)
 
     private var gestaltPanePicker: some View {
-        // v0.3.187：作为 safeAreaInset(.top) 的常驻内容——与模块板块大标题下
-        // 的搜索栏 drawer 视觉位置一致。Picker 不再带额外 padding.
+        // v0.3.188：toolbar principal 嵌入——Picker 居中替换标题（inline 模式 + principal），
+        // iOS 16+ 全版本稳定。labelsHidden 隐藏 Picker 自带的"视图"标签,
+        // 让 segmented control 视觉更紧凑.
         Picker("视图", selection: $gestaltPane) {
             ForEach(GestaltPane.allCases) { pane in
                 Text(pane.rawValue).tag(pane)
             }
         }
         .pickerStyle(.segmented)
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+        .labelsHidden()
         .onChange(of: gestaltPane) { _, pane in
             if pane == .backup { backupFiles = model.backupFiles() }
         }
