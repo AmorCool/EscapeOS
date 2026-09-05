@@ -71,10 +71,10 @@ final class LSAppWorkspace {
         guard let workspace else { return [] }
         let sel = NSSelectorFromString("allInstalledApplications")
         guard workspace.responds(to: sel),
-              let proxies = workspace.perform(sel)?
-                  .takeUnretainedValue() as? [NSObject] else {
+              let proxiesAny = workspace.perform(sel)?.takeUnretainedValue() as? [Any] else {
             return []
         }
+        let proxies = proxiesAny.compactMap { /usr/bin/bash as? NSObject }
 
         var result: [SystemApp] = []
         var seen = Set<String>()
@@ -120,7 +120,7 @@ final class LSAppWorkspace {
         let twoArg = NSSelectorFromString("uninstallSystemApplicationWithBundleID:error:")
         if let method = class_getInstanceMethod(type(of: workspace), twoArg) {
             typealias Fn = @convention(c) (NSObject, Selector, NSString,
-                UnsafeMutablePointer<UnsafeMutablePointer<NSError>?>?) -> ObjCBool
+                UnsafeMutablePointer<NSError>?) -> ObjCBool
             let fn = unsafeBitCast(method_getImplementation(method), to: Fn.self)
             var err: NSError?
             let ok = fn(workspace, twoArg, bundleID as NSString, &err)

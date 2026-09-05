@@ -150,7 +150,7 @@ struct SystemAppUninstallView: View {
             var ok = 0
             var failed: [String] = []
             for bundleID in targets {
-                if LSAppWorkspace.shared.uninstallSystemApp(bundleID: bundleID) {
+                if LSAppWorkspace.shared?.uninstallSystemApp(bundleID: bundleID) == true {
                     ok += 1
                 } else {
                     failed.append(bundleID)

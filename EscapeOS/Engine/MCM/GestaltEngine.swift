@@ -533,7 +533,7 @@ final class BQMobileGestaltModel {
     /// 立即把当前已加载的 MobileGestalt 字典保存为一份时间戳备份
     @discardableResult
     func createBackupNow() -> URL? {
-        guard !mgDict.isEmpty else {
+        guard mgDict.count > 0 else {
             appendLog("backup now skipped: MobileGestalt not loaded")
             return nil
         }
