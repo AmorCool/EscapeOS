@@ -177,13 +177,32 @@ public enum Authenticator {
                         amdBody = respBody.readData(length: respBody.readableBytes)
                     }
                     if let data = amdBody,
-                       let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                       let msg = plist["customerMessage"] as? String, msg.contains("AMD-Action::SP") {
-                        LoginLogger.shared.log("Apple 返回 AMD-Action::SP——需在 appleid.apple.com 网页授权后重试")
-                        try ensureFailed(
-                            "Apple ID 账号需先在 appleid.apple.com 网页登录授权此客户端（26HOTFIX24+ 新流程，Apple 不再发送验证码，而是要求账户所有者网页确认）.\n" +
-                            "处理方法：浏览器访问 https://appleid.apple.com 用 xcradn@163.com 登录并按提示授权新设备，授权完成后再回本 App 重试登录."
-                        )
+                       let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                        let failureType = plist["failureType"] as? String ?? ""
+                        let customerMessage = plist["customerMessage"] as? String ?? ""
+                        // v0.3.177：需要双重认证验证码（ipatool 同款判定，见
+                        // pkg/appstore/appstore_login.go parseLoginResponse +
+                        // constants.go）：failureType 为空 + 未填验证码 +
+                        // customerMessage == MZFinance.BadLogin.Configurator_message
+                        // → ErrAuthCodeRequired. Configurator UA（v0.3.175 起）下 Apple
+                        // 不再返回 204 空响应，而是 200 + 该 plist——旧实现只认 204，
+                        // 导致 2FA 输入框不弹（真机 09:32 实锤）.
+                        if failureType.isEmpty && code.isEmpty && !promptedForCode,
+                           customerMessage == "MZFinance.BadLogin.Configurator_message" {
+                            promptedForCode = true
+                            LoginLogger.shared.log("Apple 返回 BadLogin（Configurator_message）→ 需要双重认证验证码，触发 2FA 弹窗")
+                            try ensureFailed("Authentication requires verification code")
+                        }
+                        // v0.3.174：AMD-Action::SP（Apple 26HOTFIX24+ 新流程——首次商业登录
+                        // 要求用户先去 appleid.apple.com 网页授权此客户端，不再发验证码；ipatool
+                        // PR#486 实证：m-allowed=false 200 + AMD-Action::SP = 需浏览器登录授权）.
+                        if customerMessage.contains("AMD-Action::SP") {
+                            LoginLogger.shared.log("Apple 返回 AMD-Action::SP——需在 appleid.apple.com 网页授权后重试")
+                            try ensureFailed(
+                                "Apple ID 账号需先在 appleid.apple.com 网页登录授权此客户端（26HOTFIX24+ 新流程，Apple 不再发送验证码，而是要求账户所有者网页确认）.\n" +
+                                "处理方法：浏览器访问 https://appleid.apple.com 用账号登录并按提示授权新设备，授权完成后再回本 App 重试登录."
+                            )
+                        }
                     }
                 }
                 // v0.3.172：记录可回退状态码（ipatool PR#514 fallback 条件）

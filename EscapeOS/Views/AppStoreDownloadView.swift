@@ -76,9 +76,16 @@ struct TwoFactorCodePrompt: View {
             } message: {
                 // v0.3.176：iOS 26 重命名为「登录与验证」；给出可执行路径（美区账号
                 // 短信易被运营商拦截，设备内「获取验证码」最可靠不依赖网络）
-                Text("iOS 26+：设置 → [你的名字] → 登录与验证 → 获取验证码（生成的 6 位码与 Apple 任何登录流程通用，立即填入下方即可）.\n美区账号验证短信走美国短号，国内运营商常拦截，所以推荐用设备内获取。")
+                Text("在任意受信任设备上获取验证码：\n设置 → [AppleID] → 密码与安全性 → 获取双重验证码.")
             }
     }
+}
+
+/// 已下载的 IPA 条目（v0.3.177）
+private struct DownloadedIPAItem: Identifiable {
+    let id: String
+    let name: String
+    let size: String
 }
 
 struct AppStoreDownloadView: View {
@@ -95,6 +102,8 @@ struct AppStoreDownloadView: View {
     @State private var twoFactorCode = ""
     @State private var twoFactorEmail = ""
     @State private var pendingEmail = ""
+    /// v0.3.177：已下载的 IPA 列表
+    @State private var downloadedFiles: [DownloadedIPAItem] = []
     @State private var pendingPassword = ""
 
     private let store = AppStoreDownloadStore.shared
@@ -107,6 +116,7 @@ struct AppStoreDownloadView: View {
             sapStatusSection
             accountSection
             downloadSection
+            downloadedSection
             if errorMessage != nil { errorSection }
             statusSection
             deviceSection
@@ -158,10 +168,51 @@ struct AppStoreDownloadView: View {
                     }
             }
         }
-        .onAppear { reload() }
+        .onAppear { reload(); loadDownloadedFiles() }
     }
 
     // MARK: - 子视图
+
+    /// v0.3.177：已下载应用（Documents/AppStoreDownloads 下的 .ipa）
+    private var downloadedSection: some View {
+        Section {
+            if downloadedFiles.isEmpty {
+                Text("暂无已下载应用")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(downloadedFiles) { file in
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .foregroundColor(.blue)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(file.name)
+                                .font(.footnote)
+                                .lineLimit(2)
+                            Text(file.size)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+        } header: {
+            HStack {
+                Text("已下载")
+                Spacer()
+                Button {
+                    loadDownloadedFiles()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .imageScale(.small)
+                }
+            }
+        } footer: {
+            Text("已下载的 IPA 保存在本 App 的 AppStoreDownloads 目录（文件 App 可见），可用「IPA 安装」安装.")
+        }
+    }
+
+
 
     /// v0.3.6：SAP 状态条——JIT 模式 + 资产包进度.JIT 行可点击重测
     /// （StikDebug 开启 JIT 后回来点一下即更新，不再依赖登录流程内的探测）.
@@ -342,6 +393,25 @@ struct AppStoreDownloadView: View {
     private func reload() {
         accounts = store.accounts
         if selectedEmail.isEmpty { selectedEmail = accounts.first?.email ?? "" }
+    }
+
+    /// v0.3.177：扫描下载目录，列出已下载的 IPA（按修改时间倒序）
+    private func loadDownloadedFiles() {
+        let dir = store.downloadsDirectory
+        let fm = FileManager.default
+        let urls = (try? fm.contentsOfDirectory(atPath: dir)) ?? []
+        let items = urls.compactMap { name -> DownloadedIPAItem? in
+            guard name.hasSuffix(".ipa") else { return nil }
+            let full = (dir as NSString).appendingPathComponent(name)
+            guard let attrs = try? fm.attributesOfItem(atPath: full),
+                  let sizeNum = attrs[.size] as? NSNumber else { return nil }
+            let bytes = sizeNum.int64Value
+            let size = bytes > 1024 * 1024
+                ? String(format: "%.1f MB", Double(bytes) / 1048576.0)
+                : String(format: "%.0f KB", Double(bytes) / 1024.0)
+            return DownloadedIPAItem(id: name, name: name, size: size)
+        }
+        downloadedFiles = items
     }
 
     /// 复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID（同一份邮箱 + 密码）
