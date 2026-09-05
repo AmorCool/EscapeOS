@@ -2,10 +2,8 @@ import Foundation
 import ObjectiveC.runtime
 
 /// LSApplicationWorkspace 私有 API 封装（v0.3.179 应用板块·系统应用卸载）：
-/// 动态枚举已安装应用 + 识别 Apple 官方"可卸载系统应用"（removableSystemApp）。
-/// 不依赖固定名单——系统应用的 removable 标记由 Apple 随系统版本维护，
-/// 这里通过 KVC 探测（removableSystemApp / isRemovable），探测失败再回退
-/// 最小核心排除名单兜底（绝不建议卸载的系统组件）。
+/// 动态枚举系统应用，可卸载性**只信任 Apple 自己的 removableSystemApp 标记**
+/// （由系统按版本维护，不硬编码任何名单）。
 final class LSAppWorkspace {
     static let shared = LSAppWorkspace()
 
@@ -13,52 +11,30 @@ final class LSAppWorkspace {
         let id: String          // bundleID
         let name: String
         let bundleID: String
+        /// true = Apple 标记为可卸载（removableSystemApp）
         let removable: Bool
     }
 
-    /// 卸载后系统仍可从 App Store 重新下载恢复，但操作本身不可即时撤销.
-    private static let coreKeepList: Set<String> = [
-        "com.apple.springboard",
-        "com.apple.MobilePhone",
-        "com.apple.mobilephone",
-        "com.apple.MobileSMS",
-        "com.apple.mobilesms",
-        "com.apple.mobilesafari",
-        "com.apple.Preferences",
-        "com.apple.AppStore",
-        "com.apple.MobileStore",
-        "com.apple.camera",
-        "com.apple.mobileslideshow",
-        "com.apple.purplebuddy",     // Setup
-        "com.apple.dataaccess.dataaccessd",
-        "com.apple.facetime",
-        "com.apple.FaceTime",
-        "com.apple.Health",
-        "com.apple.mobileme.fmf1",   // Find My
-        "com.apple.findmy",
-        "com.apple.mobiletimer",
-        "com.apple.calls.callstatedbservice",
-        "com.apple.webapp",
-    ]
+    /// allInstalledApplications 的返回值处理（NSArray → [NSObject]）。
+    private static let allAppsSelector = NSSelectorFromString("allInstalledApplications")
 
     private let workspace: NSObject?
 
     private init?() {
-        let frameworkPaths = [
+        var targetClass: AnyClass?
+        for path in [
             "/System/Library/PrivateFrameworks/MobileCoreServices.framework",
             "/System/Library/Frameworks/MobileCoreServices.framework",
-        ]
-        var loadedClass: AnyClass?
-        for path in frameworkPaths {
+        ] {
             if let bundle = Bundle(path: path) {
                 _ = bundle.load()
-                if let cls = NSClassFromString("LSApplicationWorkspace") {
-                    loadedClass = cls
-                    break
-                }
+            }
+            if let cls = NSClassFromString("LSApplicationWorkspace") {
+                targetClass = cls
+                break
             }
         }
-        guard let cls = loadedClass,
+        guard let cls = targetClass,
               let ws = cls.perform(NSSelectorFromString("defaultWorkspace"))?
                   .takeUnretainedValue() as? NSObject else {
             return nil
@@ -66,18 +42,24 @@ final class LSAppWorkspace {
         workspace = ws
     }
 
-    /// 动态枚举系统应用（applicationType == "System"），并识别可卸载标记.
+    /// 动态枚举系统应用（applicationType == "System"）。
+    /// removable 判定顺序：
+    ///   1. removableSystemApp（Apple 官方标记，唯一权威来源）
+    ///   2. isRemovable（旧版备选标记）
+    ///   都不存在时按不可卸载处理（保守，避免误卸系统组件）
     func systemApps() -> [SystemApp] {
         guard let workspace else { return [] }
-        let sel = NSSelectorFromString("allInstalledApplications")
-        guard workspace.responds(to: sel),
-              let proxiesAny = workspace.perform(sel)?.takeUnretainedValue() as? [Any] else {
+        guard workspace.responds(to: Self.allAppsSelector),
+              let raw = workspace.perform(Self.allAppsSelector)?.takeUnretainedValue() as? [Any] else {
             return []
         }
-        let proxies = proxiesAny.compactMap { /usr/bin/bash as? NSObject }
+        let proxies = raw.compactMap { $0 as? NSObject }
 
         var result: [SystemApp] = []
         var seen = Set<String>()
+        let removableSel = NSSelectorFromString("removableSystemApp")
+        let isRemovableSel = NSSelectorFromString("isRemovable")
+
         for proxy in proxies {
             let bundleID = (proxy.value(forKey: "applicationIdentifier") as? String)
                 ?? (proxy.value(forKey: "bundleIdentifier") as? String) ?? ""
@@ -88,22 +70,16 @@ final class LSAppWorkspace {
 
             let name = (proxy.value(forKey: "localizedName") as? String) ?? bundleID
 
-            // 可卸载判定：优先 Apple 自己的 removable 标记（KVC 探测），
-            // 再回退核心排除名单（不在名单内的系统应用视为可卸载候选）.
             var removable = false
-            if proxy.responds(to: NSSelectorFromString("removableSystemApp")),
+            if proxy.responds(to: removableSel),
                let flag = proxy.value(forKey: "removableSystemApp") as? Bool {
                 removable = flag
-            } else if proxy.responds(to: NSSelectorFromString("isRemovable")),
+            } else if proxy.responds(to: isRemovableSel),
                       let flag = proxy.value(forKey: "isRemovable") as? Bool {
                 removable = flag
-            } else {
-                removable = !Self.coreKeepList.contains(bundleID)
             }
-            // 核心组件无论标记如何一律不可卸载（双保险）
-            if Self.coreKeepList.contains(bundleID) {
-                removable = false
-            }
+            // 不存在的标记一律视为不可卸载（保守）
+
             result.append(SystemApp(id: bundleID, name: name, bundleID: bundleID, removable: removable))
         }
         return result.sorted {
@@ -112,24 +88,28 @@ final class LSAppWorkspace {
         }
     }
 
-    /// 卸载系统应用（bundleID）。iOS 15+ 私有 selector 带NSError** 出参，
-    /// Swift perform 无法直接传——用 method IMP cast 调用.
+    /// 卸载系统应用（bundleID）。
+    /// 优先 uninstallSystemApplicationWithBundleID:error:（iOS 15+，带出参），
+    /// Swift 无法用 perform 传 NSError**，用 method IMP cast 调用；
+    /// 老系统回退 uninstallSystemApplication:.
     @discardableResult
     func uninstallSystemApp(bundleID: String) -> Bool {
         guard let workspace else { return false }
         let twoArg = NSSelectorFromString("uninstallSystemApplicationWithBundleID:error:")
         if let method = class_getInstanceMethod(type(of: workspace), twoArg) {
-            typealias Fn = @convention(c) (NSObject, Selector, NSString,
-                UnsafeMutablePointer<NSError>?) -> ObjCBool
-            let fn = unsafeBitCast(method_getImplementation(method), to: Fn.self)
-            var err: NSError?
-            let ok = fn(workspace, twoArg, bundleID as NSString, &err)
-            return ok.boolValue && err == nil
+            typealias UninstallFn = @convention(c) (NSObject, Selector, NSString,
+                                                    UnsafeMutablePointer<NSError?>) -> ObjCBool
+            let fn = unsafeBitCast(method_getImplementation(method), to: UninstallFn.self)
+            var error: NSError?
+            let ok = fn(workspace, twoArg, bundleID as NSString, &error)
+            if ok.boolValue, error == nil {
+                return true
+            }
+            return false
         }
         let oneArg = NSSelectorFromString("uninstallSystemApplication:")
         if workspace.responds(to: oneArg) {
-            let result = workspace.perform(oneArg, with: bundleID)
-            return result != nil
+            return workspace.perform(oneArg, with: bundleID) != nil
         }
         return false
     }
