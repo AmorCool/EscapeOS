@@ -15,7 +15,9 @@ struct InstalledApp: Identifiable, Hashable {
     /// v0.3.184：iTunesMetadata.apple-id（installation_proxy 返回的子字典）。
     /// 仅 App Store 下载的 App 存在此字段；用于区分「本人购买」与「家人共享」.
     /// nil 表示该 app 没有 iTunesMetadata（侧载/重签/系统应用）.
-    let iTunesAppleID: String?
+    /// 带默认值 nil：避免破坏其它 Memberwise init 调用点（LiveContainerDiscovery/
+    /// SupervisedHelpers/RestoreService 等不关注此字段）.
+    var iTunesAppleID: String? = nil
 
     /// Whether this is a system/firmware app rather than a user-installed one.
     var isSystem: Bool {
