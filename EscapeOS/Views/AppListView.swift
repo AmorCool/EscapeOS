@@ -476,6 +476,7 @@ struct AppListView: View {
                     } else if let type = viewModel.appTypes[app.bundleIdentifier] {
                         AppTypeBadge(type: type, compact: true)
                     }
+                }
                 Text(app.bundleIdentifier)
                     .font(.caption)
                     .foregroundColor(.secondary)
