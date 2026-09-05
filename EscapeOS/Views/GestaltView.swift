@@ -18,6 +18,8 @@ struct GestaltView: View {
     // v0.3.179：编辑/备份 分栏（从 GestaltEdit 1.2.1 移植的备份库）
     @State private var gestaltPane: GestaltPane = .edit
     @State private var backupFiles: [URL] = []
+    /// v0.3.181：Apply 前自动备份的短提示
+    @State private var applyBackupToast: String?
 
     enum GestaltPane: String, CaseIterable, Identifiable {
         case edit = "编辑"
@@ -97,6 +99,27 @@ struct GestaltView: View {
                     RespringView()
                         .brightness(-1.0)
                         .ignoresSafeArea()
+                }
+                if let msg = applyBackupToast {
+                    VStack {
+                        Spacer()
+                        Text(msg)
+                            .font(.footnote)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(Color.black.opacity(0.75)))
+                            .padding(.bottom, 60)
+                            .transition(.opacity)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+            .onChange(of: applyBackupToast) { _, msg in
+                guard msg != nil else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(3))
+                    withAnimation { applyBackupToast = nil }
                 }
             }
             .sheet(isPresented: $logPresented) {
@@ -190,7 +213,9 @@ struct GestaltView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
         }
         .onChange(of: gestaltPane) { _, pane in
             if pane == .backup { backupFiles = model.backupFiles() }
@@ -357,6 +382,11 @@ struct GestaltView: View {
             // Apply / Revert
             Section {
                 Button {
+                    // v0.3.181：Apply 前自动备份当前 MobileGestalt 到时间戳文件
+                    if let url = model.createBackupNow() {
+                        applyBackupToast = "已自动备份：\(url.lastPathComponent)"
+                        backupFiles = model.backupFiles()
+                    }
                     model.apply()
                 } label: {
                     Label("Apply Tweaks", systemImage: "checkmark.circle.fill")

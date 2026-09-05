@@ -17,6 +17,8 @@ final class AppListViewModel: ObservableObject {
     @Published var needsPairing = false
     @Published var icons: [String: UIImage] = [:]
     @Published var uninstallStatus: String?
+    /// v0.3.181：应用类型（AppStore/企业/AdHoc/开发/未知），key=bundleID。
+    @Published var appTypes: [String: AppType] = [:]
 
     private let discovery = AppDiscovery()
     private let uninstaller = UninstallService.shared
@@ -51,6 +53,7 @@ final class AppListViewModel: ObservableObject {
                     self.stopAutoRetry()
                 }
                 self.loadIcons(for: found)
+                self.loadAppTypes(for: found)
             } catch let e as AppDiscoveryError {
                 DispatchQueue.main.async {
                     self.isLoading = false
@@ -106,6 +109,27 @@ final class AppListViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     self.icons[bundleId] = icon
                 }
+            }
+        }
+    }
+
+    /// v0.3.181：拉取设备的 provisioning profiles（misagent），构建 entitlements → AppType 映射。
+    /// 失败的 app（App Store 等不在 misagent 列表）记为 .appStore。
+    private func loadAppTypes(for apps: [InstalledApp]) {
+        let ids = apps.map { $0.bundleIdentifier }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let sideloaded = (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? []
+            // 以 bundleID 为 key 的 entitlements 字典
+            var entMap: [String: [String: Any]] = [:]
+            for s in sideloaded {
+                entMap[s.bundleID] = s.entitlements
+            }
+            var resolved: [String: AppType] = [:]
+            for id in ids {
+                resolved[id] = AppTypeDetector.detect(entitlements: entMap[id] ?? [:])
+            }
+            DispatchQueue.main.async {
+                self.appTypes = resolved
             }
         }
     }
@@ -439,7 +463,7 @@ struct AppListView: View {
                     .foregroundColor(checked ? .accentColor : .secondary)
             }
             AppIconView(icon: viewModel.icons[app.bundleIdentifier])
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(app.name).font(.body)
                     if app.isSystem {
@@ -449,6 +473,9 @@ struct AppListView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
                             .background(Color(.tertiarySystemFill), in: Capsule())
+                    } else if let type = viewModel.appTypes[app.bundleIdentifier] {
+                        // v0.3.181：第三方应用类型胶囊（AppStore/企业/AdHoc/开发）
+                        AppTypeBadge(type: type, compact: true)
                     }
                 }
                 Text(app.bundleIdentifier)
