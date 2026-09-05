@@ -38,8 +38,9 @@ final class LSAppWorkspace {
         // defaultWorkspace 是类方法——Swift 无法对 AnyClass 发 perform，
         // 用 class_getClassMethod + IMP cast 调用.
         let sel = NSSelectorFromString("defaultWorkspace")
-        guard let method = class_getClassMethod(cls, sel),
-              let imp = method_getImplementation(method) else { return nil }
+        guard let method = class_getClassMethod(cls, sel) else { return nil }
+        // method_getImplementation 返回 IMP（非 Optional，方法存在即非空）
+        let imp = method_getImplementation(method)
         typealias DefaultFn = @convention(c) (AnyClass, Selector) -> Unmanaged<NSObject>?
         let fn = unsafeBitCast(imp, to: DefaultFn.self)
         guard let ws = fn(cls, sel)?.takeUnretainedValue() else { return nil }
