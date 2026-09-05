@@ -184,7 +184,7 @@ struct GestaltView: View {
 
     private var gestaltPanePicker: some View {
         Section {
-            Picker("视图", selection: ) {
+            Picker("视图", selection: $gestaltPane) {
                 ForEach(GestaltPane.allCases) { pane in
                     Text(pane.rawValue).tag(pane)
                 }
