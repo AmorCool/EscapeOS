@@ -133,12 +133,16 @@ final class AppListViewModel: ObservableObject {
             //  是真机连续闪退元凶）. 现在顺序执行，前一条 defer 释放后才建下一条.
             // v0.3.192：整个 fetch+解析包 autoreleasepool——CMS blob Data / plist 解析
             // 的自动释放对象在每次 reload 后立即回收，防长时间运行内存累积.
-            let sideloaded: [ProvisioningProfileStore.SideloadedAppInfo]
-            let allProfiles: [ProvisioningProfileStore.ProfileInfo]
-            autoreleasepool {
-                sideloaded = (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? []
-                allProfiles = (try? ProvisioningProfileStore.fetchAllProfiles()) ?? []
-            }
+            // autoreleasepool(invoking:) 返回闭包结果，避免"let 在闭包内赋值"编译错误.
+            let (sideloaded, allProfiles): (
+                [ProvisioningProfileStore.SideloadedAppInfo],
+                [ProvisioningProfileStore.ProfileInfo]
+            ) = autoreleasepool(invoking: {
+                (
+                    (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? [],
+                    (try? ProvisioningProfileStore.fetchAllProfiles()) ?? []
+                )
+            })
             // 以 bundleID 为 key 的 entitlements 字典
             var entMap: [String: [String: Any]] = [:]
             for s in sideloaded {
