@@ -29,13 +29,17 @@ struct GestaltView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            // v0.3.184：Picker 用 VStack 顶置固定（不滚动），消除 v0.3.183 残留的
+            // picker 与下方 Section 之间 ≈30pt 空白（List 默认 Section 间距，
+            // .listSectionSpacing iOS 16 不支持，故不依赖此 modifier）.
+            VStack(spacing: 0) {
                 gestaltPanePicker
-
-                if gestaltPane == .edit {
-                    editPane
-                } else {
-                    backupPane
+                List {
+                    if gestaltPane == .edit {
+                        editPane
+                    } else {
+                        backupPane
+                    }
                 }
             }
             .navigationTitle("Gestalt")
@@ -215,17 +219,16 @@ struct GestaltView: View {
     // MARK: - Pane picker (v0.3.179)
 
     private var gestaltPanePicker: some View {
-        // v0.3.183：去 Section 包裹直接作为 List 首个 row（v0.3.181 紧凑版残留在 Section
-        // header 占位 ≈30pt，导致 inline 标题下到 Picker 有 ~100pt 空白).
+        // v0.3.184：Picker 改为普通视图（v0.3.183 仍用 listRow* 修饰但仍是 List row，
+        // 保留 Section header 占位）。VStack 顶置后不再需要 row 修饰.
         Picker("视图", selection: $gestaltPane) {
             ForEach(GestaltPane.allCases) { pane in
                 Text(pane.rawValue).tag(pane)
             }
         }
         .pickerStyle(.segmented)
-        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .onChange(of: gestaltPane) { _, pane in
             if pane == .backup { backupFiles = model.backupFiles() }
         }

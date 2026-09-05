@@ -113,10 +113,14 @@ final class AppListViewModel: ObservableObject {
         }
     }
 
-    /// v0.3.181：拉取设备的 provisioning profiles（misagent），构建 entitlements → AppType 映射。
-    /// 失败的 app（App Store 等不在 misagent 列表）记为 .appStore。
+    /// v0.3.184：拉取设备的 provisioning profiles（misagent）并结合 installation_proxy 已拿到的
+    /// applicationType/iTunesAppleID，构建每个 app 的 AppType 映射。
+    /// 判定规则见 `AppTypeDetector.detect`。
     private func loadAppTypes(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
+        // v0.3.184：当前 Apple ID 用于区分正版 vs 共享（来自 AppStore 登录态）.
+        // 为空时 .appStorePersonal / .appStoreShared 退化为 .appStore.
+        let currentAppleID = MemoryLimitSettings.shared.appleID
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let sideloaded = (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? []
             // 以 bundleID 为 key 的 entitlements 字典
@@ -124,9 +128,21 @@ final class AppListViewModel: ObservableObject {
             for s in sideloaded {
                 entMap[s.bundleID] = s.entitlements
             }
+            // 以 bundleID 为 key 的 applicationType / iTunesAppleID
+            var appTypeMap: [String: String] = [:]
+            var iTunesIDMap: [String: String] = [:]
+            for app in apps {
+                if let t = app.applicationType { appTypeMap[app.bundleIdentifier] = t }
+                if let id = app.iTunesAppleID { iTunesIDMap[app.bundleIdentifier] = id }
+            }
             var resolved: [String: AppType] = [:]
             for id in ids {
-                resolved[id] = AppTypeDetector.detect(entitlements: entMap[id] ?? [:])
+                resolved[id] = AppTypeDetector.detect(
+                    entitlements: entMap[id] ?? [:],
+                    applicationType: appTypeMap[id],
+                    iTunesAppleID: iTunesIDMap[id],
+                    currentAppleID: currentAppleID
+                )
             }
             DispatchQueue.main.async {
                 self?.appTypes = resolved
@@ -325,7 +341,7 @@ struct AppListView: View {
                     }
                 }
             }
-        .searchable(text: $searchText, prompt: "搜索应用")
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索应用")
         .toolbar {
             if selecting {
                 ToolbarItem(placement: .navigationBarLeading) {

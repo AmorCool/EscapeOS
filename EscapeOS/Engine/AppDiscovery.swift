@@ -12,6 +12,10 @@ struct InstalledApp: Identifiable, Hashable {
     /// `ApplicationType` from installation_proxy: "User", "System",
     /// "HiddenSystemApp", or nil. Used by the app list to split 全部 / 系统 / 三方.
     let applicationType: String?
+    /// v0.3.184：iTunesMetadata.apple-id（installation_proxy 返回的子字典）。
+    /// 仅 App Store 下载的 App 存在此字段；用于区分「本人购买」与「家人共享」.
+    /// nil 表示该 app 没有 iTunesMetadata（侧载/重签/系统应用）.
+    let iTunesAppleID: String?
 
     /// Whether this is a system/firmware app rather than a user-installed one.
     var isSystem: Bool {
@@ -83,12 +87,19 @@ final class AppDiscovery {
             // we keep them in the list (read-only) instead of dropping them.
             let container = (info["Container"] as? String) ?? ""
             let version = info["CFBundleShortVersionString"] as? String
+            // v0.3.184：iTunesMetadata 子字典（仅 App Store 下载的应用有）.
+            // 用于在 AppTypeDetector 区分「本人购买」与「家人共享」.
+            let iTunesAppleID: String? = {
+                guard let meta = info["iTunesMetadata"] as? [String: Any] else { return nil }
+                return meta["apple-id"] as? String
+            }()
             apps.append(InstalledApp(
                 bundleIdentifier: bundleId,
                 name: name,
                 containerPath: container,
                 version: version,
-                applicationType: appType
+                applicationType: appType,
+                iTunesAppleID: iTunesAppleID
             ))
         }
 
