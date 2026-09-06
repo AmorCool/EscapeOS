@@ -6,10 +6,11 @@ struct TreasureBoxView: View {
     var body: some View {
         VStack(spacing: 0) {
             // 顶部标题区（sheet 拖动指示条由 presentationDragIndicator 提供）
+            // v0.3.208：拖动指示条与"百宝箱"文字挨太近 → 加 padding 撑开
             Text("百宝箱")
                 .font(.headline)
-                .padding(.top, 6)
-                .padding(.bottom, 4)
+                .padding(.top, 18)
+                .padding(.bottom, 10)
 
             ScrollView {
                 VStack(spacing: 12) {

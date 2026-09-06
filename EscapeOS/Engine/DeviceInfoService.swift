@@ -1,82 +1,300 @@
 import Foundation
 import UIKit
 
-/// v0.3.207：设备信息 —— 参考 iDescriptor 信息面板（DeviceInfo）。
-/// 本机可拿（sysctl + UIDevice，无需配对）：型号标识 hw.machine、系统版本、
-/// CPU 核数、内存、可用存储；隧道扩展（配对后）：设备序列号。
+/// v0.3.208：设备信息（照搬 iDescriptor 完整字段清单）。
+/// 数据源：lockdown 整棵字典（一次 GetValue）+ com.apple.disk_usage 域 +
+/// AFC device_info + DiagnosticsRelay mobilegestalt + sysctl 本机。
 struct DeviceInfoModel {
-    var productType: String       // hw.machine: "iPhone13,1"
-    var modelName: String         // 映射中文名: "iPhone 12 mini"
-    var systemVersion: String     // 25.x
-    var cpuCount: Int             // 核数
-    var memoryMB: Int             // 物理内存
-    var storageTotalGB: Int       // 总存储
-    var storageFreeGB: Int        // 可用存储
-    var serialNumber: String?     // 配对后从 lockdown 拿
-    var deviceName: String?       // 配对后从 lockdown 拿
+    // 顶部/基础
+    var modelName: String          // Marketing 机型名
+    var productType: String        // hw.machine: "iPhone13,1"
+    var hardwareModel: String?     // lockdown HardwareModel: "D52gAP"
+    var modelNumber: String?       // lockdown ModelNumber: "MGA82LL/A"
+    var deviceClass: String?       // lockdown DeviceClass: "iPhone"
+    var activationState: String?   // lockdown ActivationState: "Activated"
+    var region: String?            // lockdown RegionInfo 解析
+    var hardwarePlatform: String?  // lockdown HardwarePlatform: "t8120"
+    var cpuArchitecture: String?    // lockdown CPUArchitecture: "arm64e"
+    var firmwareVersion: String?   // lockdown FirmwareVersion: "iBoot-..."
+    var buildVersion: String?      // lockdown BuildVersion: "21G93"
+    var systemVersion: String      // iOS 26.x
+    var productionDevice: String?  // ProductionSOC bool → "是/否"
+    var jailbroken: Bool?           // afc /bin 是否非空
+    var deviceName: String?         // lockdown DeviceName
+    var deviceColor: String?         // lockdown DeviceColor
+    var wiFiAddress: String?         // lockdown WiFiAddress
+    var ethernetAddress: String?     // lockdown EthernetAddress
+    var bluetoothAddress: String?    // lockdown BluetoothAddress
+    // 序列号/隐私敏感（v0.3.208：统一小眼睛+长按复制）
+    var serialNumber: String?        // lockdown SerialNumber
+    var imei: String?                // lockdown InternationalMobileEquipmentIdentity
+    var udid: String?                // lockdown UniqueDeviceID
+    var meid: String?                // lockdown MobileEquipmentIdentifier
+    var ecid: String?                // DiagnosticsRelay mobilegestalt UniqueChipID
+    var mlbSerial: String?           // DiagnosticsRelay mobilegestalt MLBSerialNumber
+    var basebandSerial: String?      // DiagnosticsRelay mobilegestalt BasebandSerialNumber
+    // 存储
+    var totalDiskBytes: Int64?       // lockdown com.apple.disk_usage TotalDataCapacity
+    var totalDataBytes: Int64?
+    var totalSystemBytes: Int64?
+    var storageTotalGB: Int
+    var storageFreeGB: Int
+    // CPU/内存
+    var cpuCount: Int
+    var memoryMB: Int
+    var raw: [String: Any] = [:]
 }
 
 enum DeviceInfoService {
-    static func collectLocal() -> DeviceInfoModel {
-        let machine = Self.stringSysctl("hw.machine") ?? "unknown"
+    /// 收集完整设备信息（lockdown + AFC + MobileGestalt + sysctl）。
+    /// 同步阻塞——调用方放到后台线程。
+    static func collectFull() throws -> DeviceInfoModel {
+        let machine = stringSysctl("hw.machine") ?? "unknown"
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let systemVersion = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         var cpuCount: Int = 0
-        var size = MemoryLayout<Int>.size
-        sysctlbyname("hw.ncpu", &cpuCount, &size, nil, 0)
+        var cpuSize = MemoryLayout<Int>.size
+        sysctlbyname("hw.ncpu", &cpuCount, &cpuSize, nil, 0)
         var mem: UInt64 = 0
         var memSize = MemoryLayout<UInt64>.size
         sysctlbyname("hw.memsize", &mem, &memSize, nil, 0)
-        let memoryMB = Int(mem / 1024 / 1024)
-
-        // 存储（Home 目录所在卷）
         var storageTotalGB = 0, storageFreeGB = 0
-        if let attrs = try? FileManager.default.attributesOfFileSystem(
-            forPath: NSHomeDirectory()) {
+        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()) {
             let total = (attrs[.systemSize] as? NSNumber)?.uint64Value ?? 0
             let free = (attrs[.systemFreeSize] as? NSNumber)?.uint64Value ?? 0
             storageTotalGB = Int(total / 1024 / 1024 / 1024)
             storageFreeGB = Int(free / 1024 / 1024 / 1024)
         }
 
+        // 隧道拿 lockdown 整棵字典（核心数据）
+        let lockdown = (try? Self.lockdownFullDict()) ?? [:]
+        let region = Self.parseRegion(lockdown["RegionInfo"] as? String)
+        let isJailbroken = (try? Self.isacJailbroken()) ?? nil
+        let productionSOC = lockdown["ProductionSOC"] as? Bool
+
+        // MobileGestalt
+        let (mgUniqueChip, mgMLB, mgBaseband) = (try? Self.mobilegestaltKeys()) ?? (nil, nil, nil)
+
+        // 磁盘域
+        var totalDisk: Int64? = nil
+        var totalData: Int64? = nil
+        var totalSystem: Int64? = nil
+        if let du = try? Self.lockdownDomainDict("com.apple.disk_usage") {
+            totalDisk = (du["TotalDataCapacity"] as? Int).map(Int64.init)
+                ?? (du["TotalDiskCapacity"] as? Int).map(Int64.init)
+            totalData = (du["TotalDataCapacity"] as? Int).map(Int64.init)
+            totalSystem = (du["TotalSystemCapacity"] as? Int).map(Int64.init)
+        }
+
         return DeviceInfoModel(
-            productType: machine,
             modelName: Self.friendlyModel(machine),
+            productType: machine,
+            hardwareModel: lockdown["HardwareModel"] as? String,
+            modelNumber: lockdown["ModelNumber"] as? String,
+            deviceClass: lockdown["DeviceClass"] as? String,
+            activationState: lockdown["ActivationState"] as? String,
+            region: region,
+            hardwarePlatform: lockdown["HardwarePlatform"] as? String,
+            cpuArchitecture: lockdown["CPUArchitecture"] as? String,
+            firmwareVersion: lockdown["FirmwareVersion"] as? String,
+            buildVersion: lockdown["BuildVersion"] as? String,
             systemVersion: systemVersion,
-            cpuCount: cpuCount,
-            memoryMB: memoryMB,
+            productionDevice: productionSOC.map { $0 ? "是" : "否" },
+            jailbroken: isJailbroken,
+            deviceName: lockdown["DeviceName"] as? String,
+            deviceColor: lockdown["DeviceColor"] as? String,
+            wiFiAddress: lockdown["WiFiAddress"] as? String,
+            ethernetAddress: lockdown["EthernetAddress"] as? String,
+            bluetoothAddress: lockdown["BluetoothAddress"] as? String,
+            serialNumber: lockdown["SerialNumber"] as? String,
+            imei: lockdown["InternationalMobileEquipmentIdentity"] as? String,
+            udid: lockdown["UniqueDeviceID"] as? String,
+            meid: lockdown["MobileEquipmentIdentifier"] as? String,
+            ecid: mgUniqueChip.map { String($0) },
+            mlbSerial: mgMLB,
+            basebandSerial: mgBaseband,
+            totalDiskBytes: totalDisk,
+            totalDataBytes: totalData,
+            totalSystemBytes: totalSystem,
             storageTotalGB: storageTotalGB,
             storageFreeGB: storageFreeGB,
-            serialNumber: nil,
-            deviceName: nil
+            cpuCount: cpuCount,
+            memoryMB: Int(mem / 1024 / 1024),
+            raw: lockdown
         )
     }
 
-    /// 配对后补充设备序列号（lockdown GetValue，需 LocalDevVPN）
-    static func enrichWithLockdown(_ info: DeviceInfoModel) -> DeviceInfoModel {
-        var result = info
-        do {
-            var tunnel = try makeTunnel()
-            defer { tunnel.free() }
-            guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else { return result }
-            var client: OpaquePointer?
-            guard lockdownd_connect_rsd(adapter, handshake, &client) == nil, let client else { return result }
-            defer { lockdownd_client_free(client) }
-            var node: plist_t?
-            guard lockdownd_get_value(client, nil, nil, &node) == nil, let node else { return result }
-            defer { plist_free(node) }
-            var binPtr: UnsafeMutablePointer<CChar>?
-            var binLen: UInt32 = 0
-            guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
-                  let binPtr, binLen > 0 else { return result }
-            defer { plist_mem_free(binPtr) }
-            if let dict = try? PropertyListSerialization.propertyList(
-                from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil) as? [String: Any] {
-                result.serialNumber = dict["SerialNumber"] as? String
-                result.deviceName = dict["DeviceName"] as? String
+    static func parseRegion(_ s: String?) -> String? {
+        guard let s, !s.isEmpty else { return nil }
+        return String(s.prefix(16))
+    }
+
+    // MARK: 隧道
+    private struct TunnelHandles {
+        var adapter: OpaquePointer?
+        var handshake: OpaquePointer?
+        mutating func free() {
+            if let handshake { rsd_handshake_free(handshake); self.handshake = nil }
+            if let adapter { adapter_free(adapter); self.adapter = nil }
+        }
+    }
+    private static func pairingPath() -> String {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("pairingFile.plist").path
+    }
+    private static func makeTunnel() throws -> TunnelHandles {
+        guard FileManager.default.fileExists(atPath: pairingPath()) else {
+            throw NSError(domain: "DeviceInfo", code: -1, userInfo: [NSLocalizedDescriptionKey: "无配对文件"])
+        }
+        var pairingFile: OpaquePointer?
+        if let e = pairingPath().withCString({ rp_pairing_file_read($0, &pairingFile) }) {
+            throw NSError(domain: "DeviceInfo", code: -2, userInfo: [NSLocalizedDescriptionKey: "读取配对文件失败"])
+        }
+        guard let pairingFile else { throw NSError(domain: "DeviceInfo", code: -3, userInfo: [NSLocalizedDescriptionKey: "配对文件解析失败"]) }
+        defer { rp_pairing_file_free(pairingFile) }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(49152).bigEndian
+        let deviceIP = LocalDevVPN.targetIP
+        let _ = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+
+        var lastError: NSError?
+        for _ in 0..<3 {
+            var tunnel = TunnelHandles()
+            let e = "EscapeSpaceDeviceInfo".withCString { hn in
+                withUnsafePointer(to: &addr) { pointer in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        tunnel_create_rppairing($0, socklen_t(MemoryLayout<sockaddr_in>.stride),
+                            hn, pairingFile, nil, nil, &tunnel.adapter, &tunnel.handshake)
+                    }
+                }
             }
-        } catch {}
-        return result
+            if e != nil {
+                lastError = NSError(domain: "DeviceInfo", code: -5, userInfo: [NSLocalizedDescriptionKey: "创建隧道失败"])
+            } else if tunnel.adapter != nil, tunnel.handshake != nil {
+                return tunnel
+            }
+            if let h = tunnel.handshake { rsd_handshake_free(h) }
+            if let a = tunnel.adapter { adapter_free(a) }
+        }
+        throw lastError ?? NSError(domain: "DeviceInfo", code: -6, userInfo: [NSLocalizedDescriptionKey: "创建隧道失败"])
+    }
+
+    /// lockdown GetValue(None, None) → 整棵根字典
+    static func lockdownFullDict() throws -> [String: Any] {
+        let tunnel = try makeTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw NSError(domain: "DeviceInfo", code: -10, userInfo: [NSLocalizedDescriptionKey: "隧道未建立"])
+        }
+        var client: OpaquePointer?
+        guard lockdownd_connect_rsd(adapter, handshake, &client) == nil, let client else {
+            throw NSError(domain: "DeviceInfo", code: -11, userInfo: [NSLocalizedDescriptionKey: "连接 lockdownd 失败"])
+        }
+        defer { lockdownd_client_free(client) }
+        var node: plist_t?
+        guard lockdownd_get_value(client, nil, nil, &node) == nil, let node else {
+            throw NSError(domain: "DeviceInfo", code: -12, userInfo: [NSLocalizedDescriptionKey: "GetValue 失败"])
+        }
+        defer { plist_free(node) }
+        return Self.dictFromPlist(node)
+    }
+
+    static func lockdownDomainDict(_ domain: String) throws -> [String: Any] {
+        let tunnel = try makeTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw NSError(domain: "DeviceInfo", code: -20, userInfo: [NSLocalizedDescriptionKey: "隧道未建立"])
+        }
+        var client: OpaquePointer?
+        guard lockdownd_connect_rsd(adapter, handshake, &client) == nil, let client else {
+            throw NSError(domain: "DeviceInfo", code: -21, userInfo: [NSLocalizedDescriptionKey: "连接失败"])
+        }
+        defer { lockdownd_client_free(client) }
+        var node: plist_t?
+        let rc = domain.withCString { domainCStr in
+            lockdownd_get_value(client, nil, domainCStr, &node)
+        }
+        guard rc == nil, let node else {
+            throw NSError(domain: "DeviceInfo", code: -22, userInfo: [NSLocalizedDescriptionKey: "GetValue 失败"])
+        }
+        defer { plist_free(node) }
+        return Self.dictFromPlist(node)
+    }
+
+    private static func dictFromPlist(_ node: plist_t) -> [String: Any] {
+        var binPtr: UnsafeMutablePointer<CChar>?
+        var binLen: UInt32 = 0
+        guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
+              let binPtr, binLen > 0 else { return [:] }
+        defer { plist_mem_free(binPtr) }
+        return (try? PropertyListSerialization.propertyList(
+            from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil) as? [String: Any]) ?? [:]
+    }
+
+    /// 越狱检测（iDescriptor utils.rs:497-502：afc list_dir ../../../../bin 非空）
+    static func isacJailbroken() throws -> Bool {
+        let tunnel = try makeTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else { return false }
+        var afc: OpaquePointer?
+        guard afc_client_connect_rsd(adapter, handshake, &afc) == nil, let afc else { return false }
+        defer { afc_client_free(afc) }
+        var entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+        if afc_list_dir(afc, "/bin", & &entries) == PLIST_ERR_SUCCESS, let entries {
+            var count = 0
+            while entries[count] != nil { count += 1 }
+            return count > 0
+        }
+        return false
+    }
+
+    /// DiagnosticsRelay mobilegestalt 取 ECID / MLB / Baseband
+    static func mobilegestaltKeys() throws -> (Int64?, String?, String?) {
+        let tunnel = try makeTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            return (nil, nil, nil)
+        }
+        var client: OpaquePointer?
+        guard diagnostics_relay_client_connect_rsd(adapter, handshake, &client) == nil, let client else {
+            return (nil, nil, nil)
+        }
+        defer { diagnostics_relay_client_free(client) }
+        let keys: [String] = ["UniqueChipID", "MLBSerialNumber", "BasebandSerialNumber"]
+        var ecid: Int64? = nil
+        var mlb: String? = nil
+        var bb: String? = nil
+        for k in keys {
+            let keyCStr = (k as NSString).utf8String
+            var node: plist_t?
+            if diagnostics_relay_client_mobilegestalt(client, keyCStr, &node) == nil, let node {
+                defer { plist_free(node) }
+                var binPtr: UnsafeMutablePointer<CChar>?
+                var binLen: UInt32 = 0
+                if plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
+                   let binPtr, binLen > 0 {
+                    defer { plist_mem_free(binPtr) }
+                    if let value = try? PropertyListSerialization.propertyList(
+                        from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil),
+                       let dict = value as? [String: Any] {
+                        switch k {
+                        case "UniqueChipID":
+                            if let n = dict[k] as? Int { ecid = Int64(n) }
+                            else if let n = dict[k] as? Double { ecid = Int64(n) }
+                            else if let s = dict[k] as? String { ecid = Int64(s) }
+                        case "MLBSerialNumber":
+                            mlb = dict[k] as? String
+                        case "BasebandSerialNumber":
+                            bb = dict[k] as? String
+                        default: break
+                        }
+                    }
+                }
+            }
+        }
+        return (ecid, mlb, bb)
     }
 
     private static func stringSysctl(_ name: String) -> String? {
@@ -88,7 +306,7 @@ enum DeviceInfoService {
         return String(cString: buf)
     }
 
-    /// hw.machine → 中文机型名（覆盖常见 iPhone/iPad）
+    /// hw.machine → 中文机型名
     static func friendlyModel(_ machine: String) -> String {
         let table: [String: String] = [
             "iPhone14,7": "iPhone 14", "iPhone14,8": "iPhone 14 Plus",
@@ -116,60 +334,5 @@ enum DeviceInfoService {
         if let name = table[machine] { return name }
         if machine.hasPrefix("iPhone") { return machine.replacingOccurrences(of: "iPhone", with: "iPhone ") }
         return machine
-    }
-
-    // MARK: 隧道（同 BatteryHealthService 模式，避免循环依赖故内联）
-    private struct TunnelHandles {
-        var adapter: OpaquePointer?
-        var handshake: OpaquePointer?
-        mutating func free() {
-            if let handshake { rsd_handshake_free(handshake); self.handshake = nil }
-            if let adapter { adapter_free(adapter); self.adapter = nil }
-        }
-    }
-    private static func makeTunnel() throws -> TunnelHandles {
-        let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("pairingFile.plist").path
-        guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw NSError(domain: "DeviceInfo", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "无配对文件（序列号需配对）"])
-        }
-        var pairingFile: OpaquePointer?
-        if let e = pairingPath.withCString({ rp_pairing_file_read($0, &pairingFile) }) {
-            throw NSError(domain: "DeviceInfo", code: -2, userInfo: [NSLocalizedDescriptionKey: "配对文件读取失败"])
-        }
-        guard let pairingFile else { throw NSError(domain: "DeviceInfo", code: -3,
-            userInfo: [NSLocalizedDescriptionKey: "配对文件解析失败"]) }
-        defer { rp_pairing_file_free(pairingFile) }
-
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = in_port_t(49152).bigEndian
-        let deviceIP = LocalDevVPN.targetIP
-        let parseResult = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
-        guard parseResult == 1 else { throw NSError(domain: "DeviceInfo", code: -4,
-            userInfo: [NSLocalizedDescriptionKey: "隧道 IP 无效"]) }
-
-        var lastError: NSError?
-        for attempt in 0..<3 {
-            var tunnel = TunnelHandles()
-            let e = "EscapeSpaceDeviceInfo".withCString { hn in
-                withUnsafePointer(to: &addr) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                        tunnel_create_rppairing($0, socklen_t(MemoryLayout<sockaddr_in>.stride),
-                            hn, pairingFile, nil, nil, &tunnel.adapter, &tunnel.handshake)
-                    }
-                }
-            }
-            if let e {
-                lastError = NSError(domain: "DeviceInfo", code: -5,
-                    userInfo: [NSLocalizedDescriptionKey: "创建隧道失败"])
-            } else if tunnel.adapter != nil, tunnel.handshake != nil {
-                return tunnel
-            }
-            if attempt < 2 { usleep(useconds_t(300_000 * (attempt + 1))) }
-        }
-        throw lastError ?? NSError(domain: "DeviceInfo", code: -6,
-            userInfo: [NSLocalizedDescriptionKey: "创建隧道失败"])
     }
 }

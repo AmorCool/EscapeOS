@@ -209,6 +209,17 @@ struct HomeView: View {
                          tint: .teal)
             }
             .buttonStyle(.plain)
+
+            // v0.3.208：文档浏览（iDescriptor FileSharing 移植——开启文档共享的应用文件树）
+            NavigationLink {
+                FileSharingAppsView()
+            } label: {
+                HomeCard(title: "文档浏览",
+                         subtitle: "开启文件共享的 App 文档目录",
+                         icon: "folder.fill",
+                         tint: .indigo)
+            }
+            .buttonStyle(.plain)
         }
     }
 
