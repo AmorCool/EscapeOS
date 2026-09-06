@@ -107,13 +107,16 @@ enum FileSharingService {
     }
 
     /// 列目录（AFC）。返回顶层条目名 + 是否目录。
+    /// v0.3.213：错误不再吞成空数组——抛给 UI 显示真实原因。
     static func listDirectory(afc: OpaquePointer, path: String) throws -> [AfcEntry] {
         var entriesPtr: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
         var count: Int = 0
         let rc = path.withCString { cstr in
             afc_list_directory(afc, cstr, &entriesPtr, &count)
         }
-        guard rc == nil else { return [] }
+        guard rc == nil else {
+            throw makeError("列目录失败：\(path)")
+        }
         defer {
             if let entriesPtr {
                 for i in 0..<count {

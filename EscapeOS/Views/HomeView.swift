@@ -16,7 +16,7 @@ struct HomeView: View {
         ScrollView {
             VStack(spacing: 20) {
                 heroCard
-                quickCheckCard
+                tipCard             // v0.3.213：体检提示卡（替代 quickCheckCard）
                 cardsGrid
                 treasureHandleBar   // v0.3.207：底部把手（点击/上滑开 sheet）
                 Spacer(minLength: 8)
@@ -42,7 +42,7 @@ struct HomeView: View {
             }.value
             withAnimation(.easeInOut(duration: 0.5)) { securityScore = total }
         }
-        .navigationTitle("主页")
+        .navigationTitle("系统管家")
         .navigationBarTitleDisplayMode(.large)
     }
 
@@ -53,63 +53,62 @@ struct HomeView: View {
     }
 
     // MARK: Hero —— 灵动球 + 分数 + 立即体检
-    // v0.3.207：回退 v0.3.204 版灵动球（v0.3.206 八层液态玻璃被用户否掉）
+    // v0.3.213：参考系统管家 — 圆环进度条 + 一键优化（替代球体灵动球）
     private var heroCard: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             ZStack {
-                // 外圈柔光呼吸
+                // 外圈柔光（呼吸）
                 Circle()
                     .fill(scoreGradient)
-                    .frame(width: 220, height: 220)
-                    .blur(radius: breathe ? 18 : 8)
-                    .opacity(breathe ? 0.75 : 0.5)
-                    .animation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true), value: breathe)
-                // 球体本体
+                    .frame(width: 240, height: 240)
+                    .blur(radius: breathe ? 22 : 12)
+                    .opacity(breathe ? 0.55 : 0.32)
+                    .scaleEffect(breathe ? 1.06 : 1.0)
+                    .animation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true), value: breathe)
+                // 底环
                 Circle()
-                    .fill(sphereGradient)
-                    .frame(width: 180, height: 180)
-                    .overlay(
-                        Circle()
-                            .stroke(AngularGradient(colors: ringColors, center: .center), lineWidth: 3)
-                            .blur(radius: 0.5)
+                    .stroke(Color(.systemGray5), lineWidth: 14)
+                // 进度环
+                Circle()
+                    .trim(from: 0, to: CGFloat(securityScore) / 100)
+                    .stroke(
+                        AngularGradient(
+                            colors: [scoreColor.opacity(0.6), scoreColor, scoreColor.opacity(0.85)],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: 14, lineCap: .round)
                     )
-                    .shadow(color: scoreShadow, radius: 24, y: 4)
-                // 高光
-                Circle()
-                    .fill(.white.opacity(0.18))
-                    .frame(width: 90, height: 90)
-                    .offset(x: -28, y: -42)
-                    .blur(radius: 12)
-                // 数字
-                VStack(spacing: 2) {
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeInOut(duration: 0.7), value: securityScore)
+                // 数字 + "分"
+                VStack(spacing: -4) {
                     Text("\(securityScore)")
-                        .font(.system(size: 64, weight: .bold, design: .rounded))
+                        .font(.system(size: 72, weight: .bold, design: .rounded))
                         .contentTransition(.numericText())
-                        .foregroundStyle(.white)
-                    Text(scoreSubtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.78))
+                        .foregroundStyle(scoreColor)
+                    Text("分")
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(scoreColor.opacity(0.7))
                 }
             }
-            .frame(height: 240)
+            .frame(width: 240, height: 240)
             .onAppear { breathe = true }
-            // 立即体检按钮
+            Text(scoreSubtitle)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            // 一键优化按钮
             NavigationLink {
                 HealthCheckView(score: $securityScore)
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "stethoscope")
-                        .font(.body.weight(.semibold))
-                    Text("立即体检")
-                        .font(.body.weight(.semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.blue.opacity(0.92))
-                )
-                .foregroundStyle(.white)
+                Label("一键优化", systemImage: "wand.and.stars")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.blue.opacity(0.92))
+                    )
+                    .foregroundStyle(.white)
             }
         }
         .padding(20)
@@ -119,37 +118,41 @@ struct HomeView: View {
         )
     }
 
-    // MARK: 简短的体检小结
-    private var quickCheckCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "checkmark.shield.fill")
-                .font(.title2)
-                .foregroundStyle(.green)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(scoreSubtitle)
-                    .font(.subheadline.weight(.semibold))
-                Text("下次体检建议：每周一次")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    // MARK: 体检提示卡（v0.3.213：参考系统管家 "AI 风险提醒" 风格）
+    private var tipCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .foregroundStyle(.orange)
+                Text("设备体检")
+                    .font(.headline)
+                Spacer()
             }
-            Spacer()
-            NavigationLink {
-                HealthCheckView(score: $securityScore)
-            } label: {
-                Text("查看")
-                    .font(.footnote.weight(.semibold))
+            Text("EscapeOS 自动检测越狱/注入/可疑文件/可疑端口，确保设备运行环境可信。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("知道了") {}
+                    .font(.footnote)
                     .foregroundStyle(.blue)
+                Button {
+                    // 占位：未来跳体检详情
+                } label: {
+                    Text("了解详情")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
     }
 
-    // MARK: 功能卡片网格 — 只放项目真有的功能
+    // MARK: 功能卡片网格（v0.3.213：参考系统管家 2×3 = 6 卡布局）
     private var cardsGrid: some View {
         let columns = [
             GridItem(.flexible(), spacing: 12),
@@ -277,18 +280,9 @@ struct HomeView: View {
     }
     private var scoreGradient: RadialGradient {
         RadialGradient(
-            colors: [scoreColor.opacity(0.55), scoreColor.opacity(0)],
+            colors: [scoreColor.opacity(0.45), scoreColor.opacity(0)],
             center: .center, startRadius: 30, endRadius: 180
         )
-    }
-    private var sphereGradient: RadialGradient {
-        RadialGradient(
-            colors: [scoreColor.opacity(0.95), scoreColor.opacity(0.55)],
-            center: .center, startRadius: 8, endRadius: 100
-        )
-    }
-    private var ringColors: [Color] {
-        [scoreColor.opacity(0.9), scoreColor.opacity(0.4), scoreColor.opacity(0.9)]
     }
     private var scoreColor: Color {
         switch securityScore {
@@ -296,9 +290,6 @@ struct HomeView: View {
         case 60..<80: return .yellow
         default: return .orange
         }
-    }
-    private var scoreShadow: Color {
-        scoreColor.opacity(0.6)
     }
 }
 

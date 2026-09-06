@@ -35,7 +35,7 @@ struct FileSharingAppsView: View {
             }
         }
         .navigationTitle("文档浏览")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)  // v0.3.212：参考模块板块顶栏样式
         .task { await load() }
     }
 
