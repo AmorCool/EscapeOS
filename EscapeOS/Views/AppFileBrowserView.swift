@@ -110,12 +110,12 @@ struct AppFileBrowserView: View {
     @ViewBuilder
     private var toastOverlay: some View {
         if let toast {
-            // v0.3.224：深色半透明小胶囊（用户不要白色背景——白胶囊浮在浅灰列表上像多了一栏）
+            // v0.3.225：回退白色胶囊（v0.3.224 深色是误解用户意思的乱改）
             Text(toast)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.white)
+                .font(.caption)
                 .padding(.horizontal, 18).padding(.vertical, 9)
-                .background(Capsule().fill(Color.black.opacity(0.78)))
+                .background(Capsule().fill(Color(.systemBackground)))
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
                 .padding(.bottom, 12)
                 .transition(.opacity)
         }
@@ -274,14 +274,26 @@ struct AppFileBrowserView: View {
         }
     }
 
-    // MARK: 目录分段（v0.3.221：固定顶部 + 限宽，不再占满整行）
+    // MARK: 目录分段（v0.3.225：自定义透明分段——系统 segmented 自带白色背景板，用户雷点）
     private var scopeBar: some View {
-        Picker("目录", selection: $scope) {
+        HStack(spacing: 4) {
             ForEach(Scope.allCases) { s in
-                Text(s.rawValue).tag(s)
+                Button {
+                    if scope != s { scope = s }
+                } label: {
+                    Text(s.rawValue)
+                        .font(.subheadline.weight(scope == s ? .semibold : .regular))
+                        .foregroundStyle(scope == s ? .primary : .secondary)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            Capsule().fill(scope == s ? Color(.systemBackground) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
             }
         }
-        .pickerStyle(.segmented)
+        .padding(3)
         .frame(maxWidth: 320)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
