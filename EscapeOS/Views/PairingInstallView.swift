@@ -41,7 +41,7 @@ struct PairingInstallView: View {
                         Spacer()
                     }
                     if !pairingFileExists {
-                        Label("未检测到配对文件，请先在「应用」页导入", systemImage: "exclamationmark.triangle.fill")
+                        Label("未检测到配对文件，请到「更多 → 配对文件导入」导入", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
                             .foregroundColor(.orange)
                     }

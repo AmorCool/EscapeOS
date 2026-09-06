@@ -131,7 +131,7 @@ struct BackupsListView: View {
                     InfoActionCard(
                         icon: "tray.full",
                         title: "暂无备份",
-                        message: "可在「应用」或「容器管理」页进入任意应用，再点击「备份数据」导出备份.归档文件保存在「文件 → 我的iPhone → EscapeSpace → Backups」."
+                        message: "可在「应用管理」或「容器管理」页进入任意应用，再点击「备份数据」导出备份.归档文件保存在「文件 → 我的iPhone → EscapeSpace → Backups」."
                     )
                 }
             } else {
@@ -362,7 +362,7 @@ struct CustomRestoreSheet: View {
                         InfoActionCard(
                             icon: "app.dashed",
                             title: "未找到可恢复的目标应用",
-                            message: "请先在「应用」页导入配对文件并扫描到 LiveContainer."
+                            message: "请到「更多 → 配对文件导入」导入配对文件并扫描到 LiveContainer."
                         )
                     }
                 } else {

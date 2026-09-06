@@ -78,7 +78,7 @@ final class PairingInstallService {
         var remoteRelativePath: String { app.remoteRelativePath }
     }
 
-    /// EscapeSpace 的配对文件路径（与「应用」页 / JIT / 虚拟定位共用）。
+    /// EscapeSpace 的配对文件路径（与「应用管理」/ JIT / 虚拟定位共用）。
     private var pairingPath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
@@ -115,7 +115,7 @@ final class PairingInstallService {
 
     private func createTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请先在「应用」页导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
         }
 
         var pairingFile: OpaquePointer?

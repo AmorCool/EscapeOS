@@ -47,7 +47,7 @@ struct JITEnableView: View {
                     if !hasPairing {
                         Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("启用 JIT 需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接；③ 应用签名带 get-task-allow.")
+                        Text("启用 JIT 需要：① 配对文件（在「更多 → 配对文件导入」导入）；② LocalDevVPN 已连接；③ 应用签名带 get-task-allow.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {

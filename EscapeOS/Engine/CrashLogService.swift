@@ -54,7 +54,7 @@ final class CrashLogService {
 
     private func createTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请先在「应用」页导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
         }
         var pairingFile: OpaquePointer?
         if let ffiError = pairingPath.withCString({ rp_pairing_file_read($0, &pairingFile) }) {

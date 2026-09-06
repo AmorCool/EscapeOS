@@ -75,7 +75,7 @@ enum ProvisioningProfileStore {
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请先在「应用」页导入配对文件。")
+            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件。")
         }
 
         var pairingFile: OpaquePointer?

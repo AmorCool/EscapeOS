@@ -166,7 +166,7 @@ final class ProcessManagerService {
     /// v0.3.38：内存查询专用串行队列（sysmontap 阻塞式，不与其他操作争用）
     private let memoryQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr.memory", qos: .utility)
 
-    /// EscapeSpace 的配对文件路径（与「应用」页 / 虚拟定位共用）。
+    /// EscapeSpace 的配对文件路径（与「应用管理」/ 虚拟定位共用）。
     private var pairingPath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
@@ -203,7 +203,7 @@ final class ProcessManagerService {
 
     private func createTunnel(hostname: String) throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请先在「应用」页导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
         }
 
         var pairingFile: OpaquePointer?
@@ -810,7 +810,7 @@ struct ProcessManagerView: View {
                     if !hasPairing {
                         Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("进程管理需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接；③ 开发者模式已开启.")
+                        Text("进程管理需要：① 配对文件（在「更多 → 配对文件导入」导入）；② LocalDevVPN 已连接；③ 开发者模式已开启.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {

@@ -115,7 +115,7 @@ struct ReclaimTabView: View {
                     InfoActionCard(
                         icon: "network.badge.shield.half.filled",
                         title: "需要配对文件",
-                        message: "请先在「应用」页导入配对文件，建立 LocalDevVPN 隧道后才能扫描设备应用."
+                        message: "请到「更多 → 配对文件导入」导入配对文件，建立 LocalDevVPN 隧道后才能扫描设备应用."
                     )
                 }
             } else if appList.apps.isEmpty && !appList.isLoading {

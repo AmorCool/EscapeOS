@@ -37,7 +37,7 @@ struct LaunchAppsView: View {
                     if !hasPairing {
                         Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("拉起应用需要：① 配对文件（在「应用」页导入）；② LocalDevVPN 已连接.")
+                        Text("拉起应用需要：① 配对文件（在「更多 → 配对文件导入」导入）；② LocalDevVPN 已连接.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
