@@ -63,6 +63,7 @@ struct AppFileBrowserView: View {
         .navigationTitle(scope == .documents ? appName : "\(appName) · \(scope.rawValue)")
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索当前目录")
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .toolbar {
             // v0.3.223：对齐空间回收板块——独立 ToolbarItem + HStack，
             // 禁用 ToolbarItemGroup 多按钮玻璃胶囊组（用户永久雷点：割裂/遮挡视线）
@@ -109,11 +110,12 @@ struct AppFileBrowserView: View {
     @ViewBuilder
     private var toastOverlay: some View {
         if let toast {
+            // v0.3.224：深色半透明小胶囊（用户不要白色背景——白胶囊浮在浅灰列表上像多了一栏）
             Text(toast)
-                .font(.caption)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white)
                 .padding(.horizontal, 18).padding(.vertical, 9)
-                .background(Capsule().fill(Color(.systemBackground)))
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+                .background(Capsule().fill(Color.black.opacity(0.78)))
                 .padding(.bottom, 12)
                 .transition(.opacity)
         }
