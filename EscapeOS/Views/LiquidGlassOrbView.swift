@@ -33,7 +33,6 @@ struct LiquidGlassOrbView: View {
     // MARK: - Metal 实时液态玻璃球（iOS 17+）
 
     @available(iOS 17.0, *)
-    @available(iOS 17.0, *)
     @ViewBuilder
     private func shaderRect(size: CGSize, t: Double) -> some View {
         // ShaderLibrary.xxx 返回 ShaderFunction?（.metal 未编译/函数未找到 → nil）
@@ -41,13 +40,13 @@ struct LiquidGlassOrbView: View {
             Rectangle()
                 .fill(Color(red: 0.010, green: 0.012, blue: 0.028))
                 .colorEffect(
-                    Shader(fn,
+                    Shader(fn, [
                         .float2(Float(size.width), Float(size.height)),
                         .float(Float(t)),
                         .float2(Float(lightCur.x), Float(lightCur.y)),
                         .float3(tintVec.x, tintVec.y, tintVec.z),
                         .float(progressCur)
-                    )
+                    ])
                 )
         } else {
             // .metal 未编译 → 占位背景
