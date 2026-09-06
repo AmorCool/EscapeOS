@@ -38,8 +38,8 @@ struct MoreView: View {
         [
             ("配对文件", "重置/更换配对文件后从这里重新导入", [
                 MoreItem("pairing-import", "key.horizontal", "配对文件导入",
-                         "导入本机配对文件（RSD 隧道凭证）",
-                         PairingImportView()),
+                         "文件导入 / 剪贴板粘贴 / iOS 27 无线配对",
+                         PairingSetupView(viewModel: appList)),
             ]),
             ("设备工具", "需要配对文件 + LocalDevVPN 隧道", [
                 MoreItem("virtual-location", "location.fill", "虚拟定位",

@@ -305,7 +305,7 @@ struct AppListView: View {
                             Text("重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复应用列表。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            NavigationLink(destination: NavigationLazyView(PairingImportView())) {
+                            NavigationLink(destination: NavigationLazyView(PairingSetupView(viewModel: viewModel))) {
                                 Label("去导入配对文件", systemImage: "key.horizontal")
                             }
                         }
