@@ -57,6 +57,7 @@ struct HomeView: View {
     private var heroCard: some View {
         VStack(spacing: 16) {
             LiquidGlassOrbView(score: securityScore, tint: scoreColor)
+            Text(scoreSubtitle)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             // 立即体检按钮
