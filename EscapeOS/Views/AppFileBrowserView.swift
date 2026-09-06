@@ -41,6 +41,11 @@ struct AppFileBrowserView: View {
     @State private var fileInfoTarget: AfcEntry?
     @State private var fileInfoDetail: String?
     @State private var toast: String?
+    // v0.3.217：选择模式 + 查看/编辑 + 导入
+    @State private var selectionMode = false
+    @State private var selectedPaths = Set<String>()
+    @State private var editingEntry: AfcEntry?
+    @State private var showImportPicker = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -81,16 +86,65 @@ struct AppFileBrowserView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if currentPath != scope.path {
-                    Button("上级") { navigateUp() }
+                if selectionMode {
+                    Button(selectedPaths.count == entries.count ? "全不选" : "全选") {
+                        if selectedPaths.count == entries.count {
+                            selectedPaths.removeAll()
+                        } else {
+                            selectedPaths = Set(entries.map { $0.path })
+                        }
+                    }
+                    Button("完成") { exitSelection() }
+                } else {
+                    if currentPath != scope.path {
+                        Button("上级") { navigateUp() }
+                    }
+                    Button {
+                        SharedDocumentPicker.present(allowedTypes: [.item], onPicked: { urls in
+                            importUrls(urls)
+                        }, onCancelled: { })
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .accessibilityLabel("导入文件")
+                    Button {
+                        showNewFolder = true
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                    }
+                    .accessibilityLabel("新建文件夹")
+                    Button("选择") { enterSelection() }
                 }
-                Button {
-                    showNewFolder = true
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                }
-                .accessibilityLabel("新建文件夹")
             }
+        }
+        // v0.3.217：选择模式底部操作条
+        .safeAreaInset(edge: .bottom) {
+            if selectionMode {
+                HStack {
+                    Text("已选 \(selectedPaths.count) 项")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(role: .destructive) {
+                        deleteSelected()
+                    } label: {
+                        Label("删除", systemImage: "trash")
+                    }
+                    .disabled(selectedPaths.isEmpty)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.bar)
+            }
+        }
+        // v0.3.217：文本查看/编辑 sheet
+        .sheet(item: $editingEntry) { entry in
+            AfcTextEditorView(
+                load: { try FileSharingService.downloadFile(afc: clientFor(entry), path: entry.path) },
+                save: { try FileSharingService.uploadFile(afc: clientFor(entry), data: $0, to: entry.path) },
+                fileName: entry.name,
+                onDone: { editingEntry = nil }
+            )
         }
         .task { await connectForScope() }
         .onDisappear { closeAll() }
@@ -235,35 +289,72 @@ struct AppFileBrowserView: View {
     // MARK: 行
     @ViewBuilder
     private func rowFor(_ entry: AfcEntry) -> some View {
+        let selected = selectedPaths.contains(entry.path)
         if entry.isDirectory {
             Button {
-                Task { await loadDir(path: entry.path) }
-            } label: {
-                HStack {
-                    Image(systemName: "folder.fill").foregroundStyle(.blue).frame(width: 24)
-                    Text(entry.name).font(.subheadline)
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                if selectionMode {
+                    toggleSelect(entry)
+                } else {
+                    Task { await loadDir(path: entry.path) }
                 }
+            } label: {
+                rowContent(entry, selected: selected)
             }
             .buttonStyle(.plain)
-            .contextMenu { itemMenu(entry) }
+            .contextMenu {
+                if !selectionMode { itemMenu(entry) }
+            }
         } else {
-            HStack {
-                Image(systemName: fileIcon(entry.name)).foregroundStyle(.gray).frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name).font(.subheadline)
+            Button {
+                if selectionMode {
+                    toggleSelect(entry)
+                } else if isEditableText(entry) {
+                    editingEntry = entry   // 文本 → 查看/编辑
+                } else {
+                    fileInfoTarget = entry
+                    fileInfoDetail = fileDetailText(entry)
+                }
+            } label: {
+                rowContent(entry, selected: selected)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                if !selectionMode { itemMenu(entry) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rowContent(_ entry: AfcEntry, selected: Bool) -> some View {
+        HStack {
+            if selectionMode {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selected ? .blue : .secondary)
+            }
+            Image(systemName: entry.isDirectory ? "folder.fill" : fileIcon(entry.name))
+                .foregroundStyle(entry.isDirectory ? .blue : .gray)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name).font(.subheadline)
+                if !entry.isDirectory {
                     Text(formatSize(sizes[entry.path] ?? 0))
                         .font(.caption2.monospaced()).foregroundStyle(.secondary)
                 }
-                Spacer()
             }
-            .contentShape(Rectangle())
-            .contextMenu { itemMenu(entry) }
-            .onTapGesture {
-                fileInfoTarget = entry
-                fileInfoDetail = fileDetailText(entry)
+            Spacer()
+            if !selectionMode && !entry.isDirectory && isEditableText(entry) {
+                Image(systemName: "pencil")
+                    .font(.caption2)
+                    .foregroundStyle(.blue.opacity(0.7))
             }
+        }
+    }
+
+    private func toggleSelect(_ entry: AfcEntry) {
+        if selectedPaths.contains(entry.path) {
+            selectedPaths.remove(entry.path)
+        } else {
+            selectedPaths.insert(entry.path)
         }
     }
 
@@ -373,6 +464,69 @@ struct AppFileBrowserView: View {
     private func closeAll() {
         closeClient()
         if let c = containerAfc { afc_client_free(c); containerAfc = nil }
+    }
+
+    // MARK: v0.3.217 选择模式
+    private func enterSelection() {
+        selectionMode = true
+        selectedPaths.removeAll()
+    }
+    private func exitSelection() {
+        selectionMode = false
+        selectedPaths.removeAll()
+    }
+    private func deleteSelected() {
+        guard let client = activeClient() else { return }
+        let paths = Array(selectedPaths)
+        Task {
+            var failed = 0
+            for p in paths {
+                do {
+                    try FileSharingService.remove(afc: client, path: p, recursive: true)
+                } catch { failed += 1 }
+            }
+            selectedPaths.removeAll()
+            if failed == 0 {
+                showToast("已删除 \(paths.count) 项")
+            } else {
+                showToast("\(failed) 项删除失败")
+            }
+            await loadDir(path: currentPath)
+        }
+    }
+    private func importUrls(_ urls: [URL]) {
+        guard let client = activeClient(), let url = urls.first,
+              let data = try? Data(contentsOf: url) else { return }
+        let name = (url.lastPathComponent as NSString).lastPathComponent
+        let dest = currentPath.hasSuffix("/") ? currentPath + name : currentPath + "/" + name
+        showToast("正在导入…")
+        Task {
+            do {
+                try FileSharingService.uploadFile(afc: client, data: data, to: dest)
+                showToast("已导入 \(name)")
+                await loadDir(path: currentPath)
+            } catch {
+                showToast(error.localizedDescription)
+            }
+        }
+    }
+    /// sheet(item:) 需要 Identifiable 的 entry；捕获当时 client
+    private func clientFor(_ entry: AfcEntry) -> OpaquePointer {
+        if let c = activeClient() { return c }
+        // 极端情况（client 被关）——重新开 Documents
+        let reopened = (try? FileSharingService.openAppDocuments(bundleId: bundleId))
+            ?? (try? FileSharingService.openAppContainer(bundleId: bundleId))
+        if let reopened { afcClient = reopened }
+        return reopened!
+    }
+    /// 判断是否可作为文本编辑（小文件 + 文本扩展名）
+    private func isEditableText(_ entry: AfcEntry) -> Bool {
+        guard !entry.isDirectory else { return false }
+        let ext = (entry.name as NSString).pathExtension.lowercased()
+        let textExts = ["txt", "json", "plist", "xml", "log", "md", "csv", "srt", "conf", "yaml", "yml", "ini"]
+        guard textExts.contains(ext) else { return false }
+        let size = sizes[entry.path] ?? 0
+        return size > 0 && size < 1024 * 1024
     }
 
     private func fileIcon(_ name: String) -> String {

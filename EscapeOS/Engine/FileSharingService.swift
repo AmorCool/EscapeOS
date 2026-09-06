@@ -157,7 +157,7 @@ enum FileSharingService {
         guard rc == nil else { throw makeError("删除失败：\(path)") }
     }
 
-    /// 下载整个文件到内存（供保存到本地/预览）。afc_file_read 每次返回新分配的缓冲。
+    /// 下载整个文件到内存（afc_file_read_entire 一次读，AFCService 同款范式）
     static func downloadFile(afc: OpaquePointer, path: String) throws -> Data {
         guard let size = fileSize(afc: afc, path: path), size > 0, size < 200 * 1024 * 1024 else {
             throw makeError("文件过大或不存在")
@@ -166,21 +166,34 @@ enum FileSharingService {
         let rc = path.withCString { afc_file_open(afc, $0, AfcRdOnly, &handle) }
         guard rc == nil, let handle else { throw makeError("打开文件失败") }
         defer { afc_file_close(handle) }
-        var out = Data()
-        out.reserveCapacity(Int(size))
-        while out.count < Int(size) {
-            var dataPtr: UnsafeMutablePointer<UInt8>? = nil
-            var readLen: Int = 0
-            let chunk = UInt32(min(65536, Int(size) - out.count))
-            let r = afc_file_read(handle, &dataPtr, UInt(chunk), &readLen)
-            if let dataPtr, readLen > 0 {
-                out.append(dataPtr, count: readLen)
-                afc_file_read_data_free(dataPtr, UInt(readLen))
-            }
-            guard r == nil else { throw makeError("读取失败") }
-            if readLen <= 0 { break }
+        var dataPtr: UnsafeMutablePointer<UInt8>? = nil
+        var length: Int = 0
+        if let r = afc_file_read_entire(handle, &dataPtr, &length) {
+            throw makeError("读取失败")
         }
-        return out
+        defer { if let dataPtr { afc_file_read_data_free(dataPtr, length) } }
+        guard let dataPtr, length > 0 else { return Data() }
+        return Data(bytes: dataPtr, count: length)
+    }
+
+    /// 上传文件到 AFC（1MB 分块写，AFCService writeFile 同款）。父目录须已存在。
+    static func uploadFile(afc: OpaquePointer, data: Data, to path: String) throws {
+        var handle: OpaquePointer?
+        let rc = path.withCString { afc_file_open(afc, $0, AfcWrOnly, &handle) }
+        guard rc == nil, let handle else { throw makeError("创建文件失败：\(path)") }
+        defer { afc_file_close(handle) }
+        let chunkSize = 1_048_576
+        try data.withUnsafeBytes { buffer in
+            guard let base = buffer.bindMemory(to: UInt8.self).baseAddress else { return }
+            var offset = 0
+            while offset < data.count {
+                let chunk = min(chunkSize, data.count - offset)
+                if let r = afc_file_write(handle, base.advanced(by: offset), chunk) {
+                    throw makeError("写入失败：\(path)")
+                }
+                offset += chunk
+            }
+        }
     }
 
     /// 列目录（AFC）。返回顶层条目名 + 是否目录。
