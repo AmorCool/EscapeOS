@@ -53,8 +53,6 @@ struct AppFileBrowserView: View {
     /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）。URL 不符合 Identifiable，
     /// 用 wrapper 让 sheet(item:) 可用。
     @State private var shareItems: ShareItems?
-    /// v0.3.222：分享结束后自动清理的临时文件（AFC 远端文件必须落地本地才能被系统分享面板读取）
-    @State private var shareCleanup: [URL] = []
     @State private var showImportPicker = false
 
     struct ShareItems: Identifiable { let id = UUID(); let urls: [URL] }
@@ -66,25 +64,27 @@ struct AppFileBrowserView: View {
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索当前目录")
         .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if selectionMode {
-                    Button(selectedPaths.count == entries.count ? "全不选" : "全选") {
-                        if selectedPaths.count == entries.count { selectedPaths.removeAll() }
-                        else { selectedPaths = Set(entries.map { $0.path }) }
+            // v0.3.223：对齐空间回收板块——独立 ToolbarItem + HStack，
+            // 禁用 ToolbarItemGroup 多按钮玻璃胶囊组（用户永久雷点：割裂/遮挡视线）
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 14) {
+                    if selectionMode {
+                        Button(selectedPaths.count == entries.count ? "全不选" : "全选") {
+                            if selectedPaths.count == entries.count { selectedPaths.removeAll() }
+                            else { selectedPaths = Set(entries.map { $0.path }) }
+                        }
+                        Button("完成") { exitSelection() }
+                    } else {
+                        if currentPath != scope.path { Button("上级") { navigateUp() } }
+                        Button { importFilePicker() } label: { Image(systemName: "square.and.arrow.down") }.accessibilityLabel("导入文件")
+                        Button { showCreateSheet = true } label: { Image(systemName: "plus.circle") }.accessibilityLabel("新建")
+                        Button("选择") { enterSelection() }
                     }
-                    Button("完成") { exitSelection() }
-                } else {
-                    if currentPath != scope.path { Button("上级") { navigateUp() } }
-                    Button { importFilePicker() } label: { Image(systemName: "square.and.arrow.down") }.accessibilityLabel("导入文件")
-                    Button { showCreateSheet = true } label: { Image(systemName: "plus.circle") }.accessibilityLabel("新建")
-                    Button("选择") { enterSelection() }
                 }
             }
         }
         .safeAreaInset(edge: .bottom) { selectionBar }
-        .sheet(item: $shareItems, onDismiss: { cleanupShareTemp() }) { item in
-            ShareSheet(items: item.urls)
-        }
+        .sheet(item: $shareItems) { item in ShareSheet(items: item.urls) }
         .sheet(item: $editingEntry) { entry in editorView(entry) }
         .task { await connectForScope() }
         .onDisappear { closeAll() }
@@ -125,10 +125,7 @@ struct AppFileBrowserView: View {
             HStack(spacing: 18) {
                 Text("已选 \(selectedPaths.count)").font(.footnote).foregroundStyle(.secondary)
                 Spacer()
-                // v0.3.221：批量分享（下载到 tmp → ShareSheet）
-                Button { shareSelected() } label: { Label("分享", systemImage: "square.and.arrow.up") }
-                    .disabled(selectedPaths.isEmpty)
-                // v0.3.221：批量导出 → EscapeSpace Documents/文件导出浏览/
+                // v0.3.223：批量分享已删（用户评估不行）；仅保留导出+删除
                 Button { exportSelected() } label: { Label("导出", systemImage: "tray.and.arrow.down") }
                     .disabled(selectedPaths.isEmpty)
                 Button(role: .destructive) { deleteSelected() } label: {
@@ -429,6 +426,12 @@ struct AppFileBrowserView: View {
         Button("分享") {
             Task { await shareEntry(entry) }
         }
+        // v0.3.223：任意文件均可强制以文本编辑（保存按 UTF-8 写回）
+        if !entry.isDirectory {
+            Button("以文本进行编辑") {
+                editingEntry = entry
+            }
+        }
         Button("重命名") {
             renameTarget = entry
             renameText = entry.name
@@ -566,10 +569,7 @@ struct AppFileBrowserView: View {
                 try Self.downloadEntry(client: client, entry: entry, to: dest)
                 return dest
             }.value
-            await MainActor.run {
-                shareCleanup = [url]
-                shareItems = ShareItems(urls: [url])
-            }
+            await MainActor.run { shareItems = ShareItems(urls: [url]) }
         } catch {
             showToast(error.localizedDescription)
         }
@@ -582,34 +582,6 @@ struct AppFileBrowserView: View {
         } else {
             let data = try FileSharingService.downloadFile(afc: client, path: entry.path)
             try data.write(to: dest)
-        }
-    }
-
-    /// v0.3.221：批量分享（选中项下载到 tmp → ShareSheet 多 URL）
-    private func shareSelected() {
-        guard let client = activeClient() else { return }
-        let picked = entries.filter { selectedPaths.contains($0.path) }
-        guard !picked.isEmpty else { return }
-        showToast("准备分享…")
-        Task {
-            do {
-                let tmp = FileManager.default.temporaryDirectory
-                let urls = try await Task.detached(priority: .userInitiated) {
-                    try picked.map { entry -> URL in
-                        let safeName = (entry.name as NSString).lastPathComponent
-                        let dest = tmp.appendingPathComponent("share-\(UUID().uuidString.prefix(6))-\(safeName)")
-                        try Self.downloadEntry(client: client, entry: entry, to: dest)
-                        return dest
-                    }
-                }.value
-                await MainActor.run {
-                    selectedPaths.removeAll()
-                    shareCleanup = urls
-                    shareItems = ShareItems(urls: urls)
-                }
-            } catch {
-                showToast(error.localizedDescription)
-            }
         }
     }
 
@@ -687,14 +659,6 @@ struct AppFileBrowserView: View {
         }
         lines.append("路径：\(entry.path)")
         return lines.joined(separator: "\n")
-    }
-
-    /// v0.3.222：分享面板关闭 → 立即清理本次分享的临时文件
-    private func cleanupShareTemp() {
-        for url in shareCleanup {
-            try? FileManager.default.removeItem(at: url)
-        }
-        shareCleanup = []
     }
 
     private func showToast(_ text: String) {
