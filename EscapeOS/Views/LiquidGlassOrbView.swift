@@ -35,21 +35,28 @@ struct LiquidGlassOrbView: View {
     @available(iOS 17.0, *)
     @ViewBuilder
     private func shaderRect(size: CGSize, t: Double) -> some View {
-        // ShaderLibrary.xxx 返回 ShaderFunction?（.metal 未编译/函数未找到 → nil）
-        if let fn = ShaderLibrary.liquidGlassOrb {
+        // 兼容不同 SDK：ShaderLibrary 下标在新旧系统上返回类型不一
+        //（ShaderFunction / Optional<ShaderFunction>），显式收进 Optional 再解包，
+        // 两种皆可编译；着色器函数缺失时回退占位背景（避免运行时崩溃）。
+        // Shader 正确签名：init(function: ShaderFunction, arguments: [Shader.Argument])
+        let fnOpt: ShaderFunction? = ShaderLibrary.liquidGlassOrb
+        if let fn = fnOpt {
             Rectangle()
                 .fill(Color(red: 0.010, green: 0.012, blue: 0.028))
                 .colorEffect(
-                    Shader(fn, [
-                        .float2(Float(size.width), Float(size.height)),
-                        .float(Float(t)),
-                        .float2(Float(lightCur.x), Float(lightCur.y)),
-                        .float3(tintVec.x, tintVec.y, tintVec.z),
-                        .float(progressCur)
-                    ])
+                    Shader(
+                        function: fn,
+                        arguments: [
+                            .float2(Float(size.width), Float(size.height)),
+                            .float(Float(t)),
+                            .float2(Float(lightCur.x), Float(lightCur.y)),
+                            .float3(tintVec.x, tintVec.y, tintVec.z),
+                            .float(progressCur)
+                        ]
+                    )
                 )
         } else {
-            // .metal 未编译 → 占位背景
+            // .metal 未编入 target / 函数未找到 → 占位背景
             Rectangle().fill(Color(red: 0.010, green: 0.012, blue: 0.028))
         }
     }
