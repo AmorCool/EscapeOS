@@ -175,7 +175,7 @@ enum FileSharingService {
             let r = afc_file_read(handle, &dataPtr, UInt(chunk), &readLen)
             if let dataPtr, readLen > 0 {
                 out.append(dataPtr, count: readLen)
-                afc_file_read_data_free(dataPtr)
+                afc_file_read_data_free(dataPtr, UInt(readLen))
             }
             guard r == nil else { throw makeError("读取失败") }
             if readLen <= 0 { break }
