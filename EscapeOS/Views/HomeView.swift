@@ -41,9 +41,8 @@ struct HomeView: View {
         .onPreferenceChange(ScrollTopOffsetKey.self) { topOffset = $0 }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {
-            let (_, total) = await Task.detached(priority: .userInitiated) {
-                let (_, score) = SecurityScanner.runAll()
-                return score
+            let total = await Task.detached(priority: .userInitiated) {
+                SecurityScanner.runAll().1
             }.value
             withAnimation(.easeInOut(duration: 0.5)) { securityScore = total }
         }

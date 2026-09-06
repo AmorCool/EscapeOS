@@ -11,6 +11,10 @@
 #include "bad_query.h"
 #include "zip_crypto.h"
 
+// v0.3.200：体检引擎 DYLD 注入检测需要 mach-o/dyld API
+#include <mach-o/dyld.h>
+#include <objc/runtime.h>
+
 // v0.3.8：JIT 探测——csops 读取自身代码签名标志。CS_DEBUGGED(0x10000000) 是
 // 「调试器（StikDebug/debugserver）已附加并生效」的内核级判据，比 mmap MAP_JIT
 // 探测准确（iOS 27 beta 实锤：mmap 成功但执行仍被 CODESIGNING Invalid Page 杀）。
