@@ -52,6 +52,7 @@ struct TreasureBoxView: View {
 
     // v0.3.240：WiFi 射频开关（wifi_set_power Lua 命令 → RSD 隧道 MCInstall SetWiFiPowerState）
     @State private var wifiPowerOn = false
+    @State private var wifiPairingOn = false
     @State private var wifiPowerBusy = false
     @State private var wifiPowerMsg: String?
 
@@ -75,15 +76,19 @@ struct TreasureBoxView: View {
         }
     }
 
-    private func enableWifiPairing() {
+    private func setWifiPairing(_ on: Bool) {
         wifiPowerBusy = true
         wifiPowerMsg = nil
         Task.detached(priority: .userInitiated) {
             do {
-                try WirelessLockdownService.enableWifiConnections()
+                if on {
+                    try WirelessLockdownService.enableWifiConnections()
+                } else {
+                    try WirelessLockdownService.disableWifiConnections()
+                }
                 await MainActor.run {
                     wifiPowerBusy = false
-                    wifiPowerMsg = "已启用局域网 Wi-Fi 配对连接"
+                    wifiPowerMsg = "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接"
                 }
             } catch {
                 await MainActor.run {
@@ -111,10 +116,14 @@ struct TreasureBoxView: View {
                 }
             }
             .disabled(wifiPowerBusy)
-            Button {
-                enableWifiPairing()
-            } label: {
-                Label("启用局域网 Wi-Fi 配对连接", systemImage: "wifi")
+            Toggle(isOn: Binding(
+                get: { wifiPairingOn },
+                set: { on in
+                    guard !wifiPowerBusy else { return }
+                    setWifiPairing(on)
+                }
+            )) {
+                Label("局域网 Wi-Fi 配对连接", systemImage: "wifi")
                     .font(.subheadline)
             }
             .disabled(wifiPowerBusy)

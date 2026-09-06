@@ -89,6 +89,19 @@ enum WirelessLockdownService {
         guard let client else { throw makeError("lockdownd 客户端创建失败") }
         defer { lockdownd_client_free(client) }
 
+        // v0.3.241：set_value 前必须启动配对会话（否则写 wireless_lockdown 域不生效）
+        var pairingFile: OpaquePointer?
+        let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("pairingFile.plist").path
+        if let ffiError = pairingPath.withCString({ rp_pairing_file_read($0, &pairingFile) }) {
+            throw error(from: ffiError, fallback: "读取配对文件失败")
+        }
+        guard let pairingFile else { throw makeError("配对文件解析失败") }
+        defer { rp_pairing_file_free(pairingFile) }
+        if let ffiError = lockdownd_start_session(client, pairingFile) {
+            throw error(from: ffiError, fallback: "启动 lockdownd 会话失败")
+        }
+
         let plistValue = plist_new_bool(value ? 1 : 0)
         defer { plist_free(plistValue) }
 
@@ -111,5 +124,10 @@ enum WirelessLockdownService {
     /// 局域网 Wi-Fi 配对连接（EnableWifiConnections）
     static func enableWifiConnections() throws {
         try setValue(key: "EnableWifiConnections", value: true)
+    }
+
+    /// 停用局域网 Wi-Fi 配对连接
+    static func disableWifiConnections() throws {
+        try setValue(key: "EnableWifiConnections", value: false)
     }
 }

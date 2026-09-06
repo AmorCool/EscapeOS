@@ -1,41 +1,47 @@
 import SwiftUI
 
-/// v0.3.240：配对文件缺失引导卡（统一组件，严格对齐应用管理页 IMG_4642 样式）——
-/// 橙色三角+标题同行 / 灰色说明 / 钥匙导航行（蓝字+右箭头）。自带白卡背景。
+/// v0.3.241：配对文件缺失引导卡（统一组件）——
+/// InfoActionCard 视觉基因（图标块 + 标题 + 描述）+ 「去导入配对文件」导航行.
+/// 独立区块呈现，List 场景需 clear row 背景；非 List 场景传 showChevron: true.
 /// 所有依赖配对文件的功能页统一接入.
 struct PairingGuideCard: View {
-    /// 附加说明（可选；默认给通用提示）
     var note: String? = nil
+    /// 非 List 容器（VStack）需要手动 chevron；List 场景 row 自带
+    var showChevron: Bool = false
     @State private var viewModel = AppListViewModel()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text("配对文件未导入")
-                    .font(.headline)
-                    .foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                AppRowIcon(systemName: "exclamationmark.triangle.fill",
+                           tint: .orange, symbolSize: 18, frameSize: 36)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("配对文件未导入")
+                        .font(.subheadline.weight(.semibold))
+                    Text(note ?? "重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复本功能.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Text(note ?? "重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复本功能.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             NavigationLink(destination: NavigationLazyView(PairingSetupView(viewModel: viewModel))) {
                 HStack(spacing: 8) {
                     Image(systemName: "key.horizontal")
                         .foregroundStyle(.blue)
                     Text("去导入配对文件")
+                        .font(.subheadline)
                         .foregroundStyle(.blue)
                     Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    if showChevron {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 .contentShape(Rectangle())
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))

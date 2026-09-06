@@ -300,7 +300,8 @@ struct BatteryHealthView: View {
             Text("无法读取电池数据")
                 .font(.headline)
             if let err = errorText, PairingGate.isPairingError(err) {
-                PairingGuideCard(note: "电池健康还需要 LocalDevVPN 已连接（远程隧道读取）.")
+                PairingGuideCard(note: "电池健康还需要 LocalDevVPN 已连接（远程隧道读取）.",
+                                 showChevron: true)
             } else {
                 Text(errorText ?? "未知错误")
                     .font(.caption)

@@ -14,12 +14,16 @@ import Darwin
 enum ProfileConfigService {
 
     struct ConfigurationProfile: Identifiable {
-        let uuid: String           // PayloadUUID（remove 用）
-        let name: String           // PayloadDisplayName
+        let uuid: String           // PayloadUUID / UUID（remove 用）
+        let name: String           // PayloadDisplayName / Name / AppIDName
         let organization: String?  // PayloadOrganization
         let type: String?          // PayloadType（首个 payload）
         let desc: String?          // PayloadDescription
         let verified: Bool         // SignedPayload（设备已验证签名）
+        let teamName: String?      // TeamName（使用者，mobileprovision）
+        let version: Int?          // Version（版本号）
+        let expiry: Date?          // ExpirationDate
+        let isProvisioning: Bool   // 预置描述（.mobileprovision）
         var id: String { uuid }
     }
 
@@ -170,6 +174,22 @@ enum ProfileConfigService {
                     if desc == nil { desc = first["PayloadDescription"] as? String }
                 }
 
+                // v0.3.241：mobileprovision 字段 fallback（Name/AppIDName/TeamName/Version/ExpirationDate）
+                if displayName == nil { displayName = dict["Name"] as? String }
+                if displayName == nil { displayName = dict["AppIDName"] as? String }
+                let teamName = (dict["TeamName"] as? String)
+                    ?? ((dict["TeamIdentifier"] as? [String])?.first)
+                    ?? (dict["ApplicationIdentifierPrefix"] as? [String])?.first
+                let version = (dict["Version"] as? NSNumber)?.intValue
+                var expiry: Date?
+                if let ts = dict["ExpirationDate"] as? Double {
+                    expiry = Date(timeIntervalSinceReferenceDate: ts)
+                } else if let ts = dict["ExpirationDate"] as? TimeInterval {
+                    expiry = Date(timeIntervalSinceReferenceDate: ts)
+                } else if let date = dict["ExpirationDate"] as? Date {
+                    expiry = date
+                }
+
                 // UUID fallback：无 UUID 时用名称+序号占位（remove 对此类会失败但至少可见）
                 let uuid = (dict["PayloadUUID"] as? String)
                     ?? (dict["UUID"] as? String)
@@ -182,7 +202,11 @@ enum ProfileConfigService {
                     organization: organization,
                     type: isProvisioning ? "预置描述" : type,
                     desc: desc,
-                    verified: (dict["SignedPayload"] as? Bool) ?? false
+                    verified: (dict["SignedPayload"] as? Bool) ?? false,
+                    teamName: teamName,
+                    version: version,
+                    expiry: expiry,
+                    isProvisioning: isProvisioning
                 ))
             }
             return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }

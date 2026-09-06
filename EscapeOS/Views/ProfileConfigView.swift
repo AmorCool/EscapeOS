@@ -1,17 +1,32 @@
 import SwiftUI
 
-/// v0.3.229：配置描述管理（「更多」板块入口）——
-/// iOS 设置描述文件（Configuration Profile，.mobileconfig/.mobileprofile）管理.
-/// 参考 pymobiledevice3 profile 命令（list / install / remove），底层 misagent（MCInstall）.
+/// v0.3.241：配置描述管理（「更多」板块入口）——
+/// iOS 设置描述文件（Configuration Profile）管理，misagent（MCInstall）通道.
+/// v0.3.241：空间回收式顶栏（.large + searchable 常驻搜索 UUID/名称）+ 选择模式批量删除
+/// + 行完整显示（名称/类型/使用者/UUID 全文/过期时间，对齐爱思助手）+ 全量不过滤.
 struct ProfileConfigView: View {
     @State private var profiles: [ProfileConfigService.ConfigurationProfile] = []
     @State private var loading = false
     @State private var errorText: String?
-    @State private var importFileURL: URL?
-    @State private var pendingRemove: ProfileConfigService.ConfigurationProfile?
-    @State private var toast: String?
     @State private var rawCount = 0
     @State private var parseFailed = 0
+    @State private var searchText: String = ""
+    @State private var selectionMode = false
+    @State private var selectedUUIDs = Set<String>()
+    @State private var importFileURL: URL?
+    @State private var pendingRemove: ProfileConfigService.ConfigurationProfile?
+    @State private var confirmBatch = false
+    @State private var toast: String?
+
+    private var filtered: [ProfileConfigService.ConfigurationProfile] {
+        let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return profiles }
+        return profiles.filter {
+            $0.uuid.lowercased().contains(q)
+                || $0.name.lowercased().contains(q)
+                || ($0.organization?.lowercased().contains(q) ?? false)
+        }
+    }
 
     var body: some View {
         List {
@@ -22,8 +37,12 @@ struct ProfileConfigView: View {
                 }
             } else if let err = errorText {
                 Section {
-                    Label(err, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
+                    if PairingGate.isPairingError(err) {
+                        PairingGuideCard()
+                    } else {
+                        Label(err, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
                 }
             } else if profiles.isEmpty {
                 Section {
@@ -49,33 +68,63 @@ struct ProfileConfigView: View {
                 }
             } else {
                 Section {
-                    ForEach(profiles) { p in
+                    ForEach(filtered) { p in
                         profileRow(p)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                pendingRemove = p
-                            } label: {
-                                Label("删除", systemImage: "trash")
-                            }
-                        }
+                            .listRowBackground(selectionMode && selectedUUIDs.contains(p.uuid)
+                                               ? Color.blue.opacity(0.08)
+                                               : nil)
                     }
                 } header: {
-                    Text("设备描述文件（\(profiles.count)）")
+                    Text(selectionMode
+                         ? "已选 \(selectedUUIDs.count)/\(filtered.count)"
+                         : "设备描述文件（\(filtered.count)）")
                 } footer: {
-                    Text("删除需在系统设置中输入移除密码（若该描述文件设置了 HasRemovalPasscode）.")
+                    Text("预置描述为 App 签名描述；删除设置了移除密码的描述文件会被设备拒绝.")
                 }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("配置描述管理")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索 UUID 或名称")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 14) {
-                    Button { refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    Button { importFilePicker() } label: { Image(systemName: "plus.circle") }
-                        .accessibilityLabel("导入描述文件")
+                    if selectionMode {
+                        Button(selectedUUIDs.count == filtered.count ? "全不选" : "全选") {
+                            if selectedUUIDs.count == filtered.count {
+                                selectedUUIDs.removeAll()
+                            } else {
+                                selectedUUIDs = Set(filtered.map { $0.uuid })
+                            }
+                        }
+                        Button("完成") {
+                            selectionMode = false
+                            selectedUUIDs.removeAll()
+                        }
+                    } else {
+                        Button { refresh() } label: { Image(systemName: "arrow.clockwise") }
+                        Button { importFilePicker() } label: { Image(systemName: "plus.circle") }
+                            .accessibilityLabel("导入描述文件")
+                        Button("选择") {
+                            selectionMode = true
+                        }
+                    }
                 }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if selectionMode {
+                HStack {
+                    Text("已选 \(selectedUUIDs.count) 项").font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(role: .destructive) { confirmBatch = true } label: {
+                        Label("批量删除", systemImage: "trash")
+                    }
+                    .disabled(selectedUUIDs.isEmpty)
+                }
+                .font(.footnote)
+                .padding(.horizontal, 16).padding(.vertical, 10).background(.bar)
             }
         }
         .overlay(alignment: .bottom) {
@@ -90,46 +139,79 @@ struct ProfileConfigView: View {
             }
         }
         .task { refresh() }
+        .confirmationDialog("删除 \(selectedUUIDs.count) 个描述文件？", isPresented: $confirmBatch, titleVisibility: .visible) {
+            Button("批量删除", role: .destructive) { removeSelected() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将逐个从设备移除选中的描述文件，失败项会跳过并汇总.")
+        }
         .confirmationDialog("删除 \(pendingRemove?.name ?? "")？", isPresented: Binding(
             get: { pendingRemove != nil },
             set: { if !$0 { pendingRemove = nil } }
         ), titleVisibility: .visible) {
             Button("删除描述文件", role: .destructive) {
-                if let p = pendingRemove { remove(p) }
+                if let p = pendingRemove { removeOne(p) }
                 pendingRemove = nil
             }
             Button("取消", role: .cancel) { pendingRemove = nil }
         } message: {
-            Text("将从设备移除该配置描述文件（UUID ····\(String(pendingRemove?.uuid.suffix(8) ?? ""))）.")
+            Text("将从设备移除该配置描述文件.")
         }
     }
+
+    // MARK: - 行（完整显示，对齐爱思助手）
 
     @ViewBuilder
     private func profileRow(_ p: ProfileConfigService.ConfigurationProfile) -> some View {
-        let uuidTail = String(p.uuid.suffix(8))
-        VStack(alignment: .leading, spacing: 3) {
-            Text(p.name).font(.subheadline)
-            if let org = p.organization, !org.isEmpty {
-                Text(org).font(.caption2).foregroundStyle(.secondary)
+        let isSelected = selectionMode && selectedUUIDs.contains(p.uuid)
+        Button {
+            if selectionMode {
+                if selectedUUIDs.contains(p.uuid) { selectedUUIDs.remove(p.uuid) }
+                else { selectedUUIDs.insert(p.uuid) }
             }
-            HStack(spacing: 6) {
-                if let t = p.type {
-                    Text(t).font(.caption2.monospaced()).foregroundStyle(.secondary)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    if selectionMode {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(isSelected ? .blue : .secondary)
+                    }
+                    Text(p.name).font(.subheadline.weight(.medium))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 }
-                Text("UUID ····" + uuidTail)
-                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                if p.verified {
-                    Text("已验证").font(.caption2).foregroundStyle(.green)
+                HStack(spacing: 6) {
+                    Text(p.isProvisioning ? "预置描述" : (p.type ?? "配置描述"))
+                        .font(.caption2)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.blue.opacity(0.10)))
+                        .foregroundStyle(.blue)
+                    if let team = p.teamName, !team.isEmpty {
+                        Text(team).font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    if p.verified {
+                        Text("已验证").font(.caption2).foregroundStyle(.green)
+                    }
                 }
+                if let expiry = p.expiry {
+                    Text("过期：\(expiry.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Text(p.uuid)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
-    private func importFilePicker() {
-        SharedDocumentPicker.present(allowedTypes: [.data], onPicked: { urls in
-            importFile(url: urls.first)
-        }, onCancelled: {})
-    }
+    // MARK: - 操作
 
     private func showToast(_ text: String) {
         withAnimation { toast = text }
@@ -137,6 +219,12 @@ struct ProfileConfigView: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             withAnimation { toast = nil }
         }
+    }
+
+    private func importFilePicker() {
+        SharedDocumentPicker.present(allowedTypes: [.data], onPicked: { urls in
+            importFile(url: urls.first)
+        }, onCancelled: {})
     }
 
     private func refresh() {
@@ -149,6 +237,7 @@ struct ProfileConfigView: View {
                     profiles = result.profiles
                     rawCount = result.rawCount
                     parseFailed = result.parseFailed
+                    selectedUUIDs.removeAll()
                     loading = false
                 }
             } catch {
@@ -183,7 +272,7 @@ struct ProfileConfigView: View {
         }
     }
 
-    private func remove(_ p: ProfileConfigService.ConfigurationProfile) {
+    private func removeOne(_ p: ProfileConfigService.ConfigurationProfile) {
         showToast("正在删除…")
         Task.detached(priority: .userInitiated) {
             do {
@@ -197,6 +286,27 @@ struct ProfileConfigView: View {
                     showToast(error.localizedDescription)
                     refresh()
                 }
+            }
+        }
+    }
+
+    private func removeSelected() {
+        let targets = profiles.filter { selectedUUIDs.contains($0.uuid) }
+        guard !targets.isEmpty else { return }
+        showToast("正在批量删除…")
+        Task.detached(priority: .userInitiated) {
+            var ok = 0, failed = 0
+            for p in targets {
+                do {
+                    try ProfileConfigService.remove(uuid: p.uuid)
+                    ok += 1
+                } catch { failed += 1 }
+            }
+            let okR = ok, failR = failed
+            await MainActor.run {
+                selectedUUIDs.removeAll()
+                showToast("已删除 \(okR) 项" + (failR > 0 ? "（\(failR) 项失败）" : ""))
+                refresh()
             }
         }
     }
