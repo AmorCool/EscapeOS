@@ -107,10 +107,12 @@ enum FileSharingService {
             return []
         }
         defer {
-            for i in 0..<count {
-                if let p = entriesPtr[i] { plist_mem_free(p) }
+            if let entriesPtr {
+                for i in 0..<count {
+                    if let p = entriesPtr[i] { free(p) }
+                }
+                entriesPtr.deallocate()
             }
-            entriesPtr.deallocate()
         }
         var result: [AfcEntry] = []
         for i in 0..<count {
@@ -132,7 +134,6 @@ enum FileSharingService {
         let rc = path.withCString { cstr in
             afc_get_file_info(afc, cstr, &info)
         }
-        defer { afc_file_info_free(&info) }
         guard rc == nil else { return false }
         if let p = info.st_ifmt {
             let s = String(cString: p)
@@ -147,7 +148,6 @@ enum FileSharingService {
         let rc = path.withCString { cstr in
             afc_get_file_info(afc, cstr, &info)
         }
-        defer { afc_file_info_free(&info) }
         return rc == nil ? Int64(info.size) : nil
     }
 

@@ -242,12 +242,17 @@ enum DeviceInfoService {
         guard afc_client_connect_rsd(adapter, handshake, &afc) == nil, let afc else { return false }
         defer { afc_client_free(afc) }
         var entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
-        if afc_list_dir(afc, "/bin", & &entries) == PLIST_ERR_SUCCESS, let entries {
-            var count = 0
-            while entries[count] != nil { count += 1 }
-            return count > 0
+        var count = 0
+        guard afc_list_directory(afc, "/bin", &entries, &count) == nil else { return false }
+        defer {
+            if let entries {
+                for i in 0..<count {
+                    if let p = entries[i] { free(p) }
+                }
+                entries.deallocate()
+            }
         }
-        return false
+        return count > 0
     }
 
     /// DiagnosticsRelay mobilegestalt 取 ECID / MLB / Baseband
