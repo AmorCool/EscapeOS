@@ -36,6 +36,11 @@ struct MoreView: View {
     /// 分组定义（v0.3.29：22 个功能 → 7 个逻辑分区）
     private var sections: [(header: String, footer: String?, items: [MoreItem])] {
         [
+            ("配对文件", "重置/更换配对文件后从这里重新导入", [
+                MoreItem("pairing-import", "key.horizontal", "配对文件导入",
+                         "导入本机配对文件（RSD 隧道凭证）",
+                         PairingInstallView()),
+            ]),
             ("设备工具", "需要配对文件 + LocalDevVPN 隧道", [
                 MoreItem("virtual-location", "location.fill", "虚拟定位",
                          "地图定位模拟，支持轨迹",
@@ -66,9 +71,6 @@ struct MoreView: View {
                 MoreItem("appstore", "cart.fill", "App Store 下载",
                          "搜索下载正版 IPA",
                          AppStoreDownloadView()),
-                MoreItem("pairing-install", "tray.and.arrow.down.fill", "配置导入",
-                         "写入本机配对文件到应用",
-                         PairingInstallView()),
             ]),
             ("文件管理", nil, [
                 MoreItem("file-browser", "folder.fill", "文件浏览器",

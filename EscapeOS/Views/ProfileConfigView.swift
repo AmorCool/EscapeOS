@@ -71,11 +71,7 @@ struct ProfileConfigView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 14) {
                     Button { refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    Button {
-                        SharedDocumentPicker.present(allowedTypes: [.data], onPicked: { urls in
-                            importFile(url: urls.first)
-                        }, onCancelled: {})
-                    } label: { Image(systemName: "plus.circle") }
+                    Button { importFilePicker() } label: { Image(systemName: "plus.circle") }
                         .accessibilityLabel("导入描述文件")
                 }
             }
@@ -104,6 +100,12 @@ struct ProfileConfigView: View {
         } message: {
             Text("将从设备移除该配置描述文件（UUID ····\(String(pendingRemove?.uuid.suffix(8) ?? ""))）。")
         }
+    }
+
+    private func importFilePicker() {
+        SharedDocumentPicker.present(allowedTypes: [.data], onPicked: { urls in
+            importFile(url: urls.first)
+        }, onCancelled: {})
     }
 
     private func showToast(_ text: String) {

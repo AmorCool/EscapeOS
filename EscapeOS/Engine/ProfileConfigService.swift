@@ -44,30 +44,48 @@ enum ProfileConfigService {
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("无配对文件")
+            throw makeError("未检测到配对文件。请先导入配对文件。")
         }
+
         var pairingFile: OpaquePointer?
-        if let e = pairingPath.withCString({ rp_pairing_file_read($0, &pairingFile) }) {
-            throw error(from: e, fallback: "读取配对文件失败")
+        if let ffiError = pairingPath.withCString({ rp_pairing_file_read($0, &pairingFile) }) {
+            throw error(from: ffiError, fallback: "读取配对文件失败")
         }
-        guard let pairingFile else { throw makeError("配对文件解析失败") }
+        guard let pairingFile else { throw makeError("读取配对文件失败") }
         defer { rp_pairing_file_free(pairingFile) }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(49152).bigEndian
+        let deviceIP = LocalDevVPN.targetIP
+        let parseResult = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+        guard parseResult == 1 else {
+            throw makeError("隧道 IP 无效：\(deviceIP)")
+        }
 
         var adapter: OpaquePointer?
         var handshake: OpaquePointer?
-        if let e = pairingFile.withCString({
-            adapter_connect_rsd($0, &adapter)
-        }) {
-            throw error(from: e, fallback: "RSD 连接失败")
+        let ffiError = "EscapeSpaceProfiles".withCString { hostname in
+            withUnsafePointer(to: &addr) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    tunnel_create_rppairing(
+                        $0,
+                        socklen_t(MemoryLayout<sockaddr_in>.stride),
+                        hostname,
+                        pairingFile,
+                        nil,
+                        nil,
+                        &adapter,
+                        &handshake
+                    )
+                }
+            }
         }
-        guard let adapter else { throw makeError("RSD 适配器创建失败") }
-        if let e = adapter_handshake_rsd(adapter, &handshake) {
-            adapter_free(adapter)
-            throw error(from: e, fallback: "RSD 握手失败")
+        if let ffiError {
+            throw error(from: ffiError, fallback: "创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
         }
-        guard let handshake else {
-            adapter_free(adapter)
-            throw makeError("RSD 握手句柄缺失")
+        guard let adapter, let handshake else {
+            throw makeError("创建开发者隧道失败")
         }
         return (adapter, handshake)
     }
