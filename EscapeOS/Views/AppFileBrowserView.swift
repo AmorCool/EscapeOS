@@ -52,50 +52,8 @@ struct AppFileBrowserView: View {
     @State private var showImportPicker = false
 
     var body: some View {
-        // v0.3.219：布局参考「空间回收」——segmented 放 Section 随列表滚动 + 搜索栏 + 浮层胶囊 toast
-        Group {
-            if loading {
-                VStack(spacing: 12) {
-                    scopeSection
-                    Spacer()
-                    ProgressView("正在加载…")
-                    Spacer()
-                }
-                .padding(.top, 8)
-            } else if noPermission {
-                VStack {
-                    scopeSection
-                    Spacer()
-                    ContentUnavailableView("无权限", systemImage: "lock.fill",
-                        description: Text("\(appName) 不允许访问 \(scope.rawValue) 目录"))
-                    Spacer()
-                }
-            } else {
-                List {
-                    scopeSection
-                    if let err = errorText {
-                        Section {
-                            Label(err, systemImage: "exclamationmark.triangle")
-                                .foregroundStyle(.orange)
-                        }
-                    } else if filteredEntries.isEmpty {
-                        Section {
-                            ContentUnavailableView("空目录", systemImage: "folder",
-                                                   description: Text("\(displayCurrentPath) 下没有文件"))
-                        }
-                    } else {
-                        Section {
-                            ForEach(filteredEntries) { entry in
-                                rowFor(entry)
-                            }
-                        } header: {
-                            Text(displayCurrentPath).font(.caption.monospaced())
-                        }
-                    }
-                }
-                .listStyle(.insetGrouped)
-            }
-        }
+        // v0.3.219b：内容区拆分（规避 body 类型检查超时）+ 浮层胶囊 toast
+        content
         .overlay(alignment: .bottom) {
             if let toast {
                 Text(toast)
@@ -320,6 +278,56 @@ struct AppFileBrowserView: View {
             let parent = String(p[..<last])
             Task { await loadDir(path: parent.isEmpty ? scope.path : parent) }
         }
+    }
+
+    // v0.3.219b：三分支内容视图（拆分以通过类型检查）
+    @ViewBuilder
+    private var content: some View {
+        if loading {
+            VStack(spacing: 12) {
+                scopeSection
+                Spacer()
+                ProgressView("正在加载…")
+                Spacer()
+            }
+            .padding(.top, 8)
+        } else if noPermission {
+            VStack {
+                scopeSection
+                Spacer()
+                ContentUnavailableView("无权限", systemImage: "lock.fill",
+                    description: Text("\(appName) 不允许访问 \(scope.rawValue) 目录"))
+                Spacer()
+            }
+        } else {
+            fileList
+        }
+    }
+
+    private var fileList: some View {
+        List {
+            scopeSection
+            if let err = errorText {
+                Section {
+                    Label(err, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+            } else if filteredEntries.isEmpty {
+                Section {
+                    ContentUnavailableView("空目录", systemImage: "folder",
+                                           description: Text("\(displayCurrentPath) 下没有文件"))
+                }
+            } else {
+                Section {
+                    ForEach(filteredEntries) { entry in
+                        rowFor(entry)
+                    }
+                } header: {
+                    Text(displayCurrentPath).font(.caption.monospaced())
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
     }
 
     // MARK: 行

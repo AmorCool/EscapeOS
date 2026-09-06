@@ -33,24 +33,29 @@ struct LiquidGlassOrbView: View {
     // MARK: - Metal 实时液态玻璃球（iOS 17+）
 
     @available(iOS 17.0, *)
+    private func shaderRect(size: CGSize, t: Double) -> some View {
+        let rect = Rectangle()
+            .fill(Color(red: 0.010, green: 0.012, blue: 0.028))
+        return rect.colorEffect(
+            Shader(
+                "liquidGlassOrb",
+                .float2(Float(size.width), Float(size.height)),
+                .float(Float(t)),
+                .float2(Float(lightCur.x), Float(lightCur.y)),
+                .float3(tintVec),
+                .float(progressCur)
+            )
+        )
+    }
+
+    @available(iOS 17.0, *)
     private var shaderOrb: some View {
         GeometryReader { geo in
             let size = geo.size
             ZStack(alignment: .topLeading) {
                 TimelineView(.animation) { timeline in
                     let t = reduceMotion ? 3.0 : timeline.date.timeIntervalSince(startDate)
-                    Rectangle()
-                        .fill(Color(red: 0.010, green: 0.012, blue: 0.028))
-                        .colorEffect(
-                            Shader(
-                                "liquidGlassOrb",
-                                .float2(Float(size.width), Float(size.height)),
-                                .float(Float(t)),
-                                .float2(Float(lightCur.x), Float(lightCur.y)),
-                                .float3(tintVec),
-                                .float(progressCur)
-                            )
-                        )
+                    shaderRect(size: size, t: t)
                 }
                 // 球心分数（球心位于面板 55% 高度处）
                 scoreText
