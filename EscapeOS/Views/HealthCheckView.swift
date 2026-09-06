@@ -82,8 +82,12 @@ struct HealthCheckView: View {
     }
     private var currentCheckName: String {
         let names: [String: String] = [
-            "env": "环境变量", "dyld": "注入库", "objc": "运行时类",
-            "ports": "可疑端口", "writable": "系统目录",
+            "urlscheme": "越狱商店 Scheme", "files": "可疑文件路径",
+            "writable": "系统目录", "dyld": "注入库",
+            "objc": "运行时类", "interpreters": "解释器",
+            "symlink": "符号链接", "fork": "进程权限",
+            "executables": "可疑可执行", "ports": "可疑端口",
+            "env": "环境变量", "libraryNames": "逆向库",
         ]
         let id = currentCheckIndex < SecurityScanner.checkIDs.count
             ? SecurityScanner.checkIDs[currentCheckIndex] : ""
@@ -155,14 +159,21 @@ struct HealthCheckView: View {
         // 用串行 async 逐项执行，UI 显示推进
         Task {
             for (i, id) in ids.enumerated() {
-                try? await Task.sleep(nanoseconds: 350_000_000)  // 每项节奏
+                try? await Task.sleep(nanoseconds: 300_000_000)  // 每项节奏
                 let result: SecurityCheckResult
                 switch id {
-                case "env": result = SecurityScanner.checkEnvironmentVariables()
+                case "urlscheme": result = SecurityScanner.checkURLSchemes()
+                case "files": result = SecurityScanner.checkSuspiciousFiles()
+                case "writable": result = SecurityScanner.checkSystemDirsWritable()
                 case "dyld": result = SecurityScanner.checkDYLDInjection()
                 case "objc": result = SecurityScanner.checkSuspiciousObjCClasses()
+                case "interpreters": result = SecurityScanner.checkAccessibleInterpreters()
+                case "symlink": result = SecurityScanner.checkSuspiciousSymbolicLinks()
+                case "fork": result = SecurityScanner.checkFork()
+                case "executables": result = SecurityScanner.checkSuspiciousExecutables()
                 case "ports": result = SecurityScanner.checkSuspiciousPorts()
-                case "writable": result = SecurityScanner.checkSystemDirsWritable()
+                case "env": result = SecurityScanner.checkEnvironmentVariables()
+                case "libraryNames": result = SecurityScanner.checkSuspiciousLibraryNames()
                 default: continue
                 }
                 await MainActor.run {
