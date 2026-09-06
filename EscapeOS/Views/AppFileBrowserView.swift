@@ -47,9 +47,12 @@ struct AppFileBrowserView: View {
     // v0.3.219：文件搜索（过滤当前目录）
     @State private var searchText: String = ""
     @State private var editingEntry: AfcEntry?
-    /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）
-    @State private var shareURL: URL?
+    /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）。URL 不符合 Identifiable，
+    /// 用 wrapper 让 sheet(item:) 可用。
+    @State private var shareItem: ShareItem?
     @State private var showImportPicker = false
+
+    struct ShareItem: Identifiable { let id = UUID(); let url: URL }
 
     var body: some View {
         content
@@ -74,7 +77,7 @@ struct AppFileBrowserView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { selectionBar }
-        .sheet(item: $shareURL) { url in ShareSheet(items: [url]) }
+        .sheet(item: $shareItem) { item in ShareSheet(items: [item.url]) }
         .sheet(item: $editingEntry) { entry in editorView(entry) }
         .task { await connectForScope() }
         .onDisappear { closeAll() }
@@ -461,7 +464,7 @@ struct AppFileBrowserView: View {
             let url = try await Task.detached(priority: .userInitiated) {
                 try self.prepareShare(client: client, entry: entry)
             }.value
-            await MainActor.run { shareURL = url }
+            await MainActor.run { shareItem = ShareItem(url: url) }
         } catch {
             showToast(error.localizedDescription)
         }

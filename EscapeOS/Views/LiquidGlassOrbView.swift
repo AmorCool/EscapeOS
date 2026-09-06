@@ -38,7 +38,7 @@ struct LiquidGlassOrbView: View {
             .fill(Color(red: 0.010, green: 0.012, blue: 0.028))
             .colorEffect(
                 Shader(
-                    ShaderFunction("liquidGlassOrb"),
+                    ShaderLibrary.liquidGlassOrb,
                     .float2(Float(size.width), Float(size.height)),
                     .float(Float(t)),
                     .float2(Float(lightCur.x), Float(lightCur.y)),
