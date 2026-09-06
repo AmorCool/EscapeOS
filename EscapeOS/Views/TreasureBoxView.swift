@@ -1,27 +1,15 @@
 import SwiftUI
 
-/// v0.3.206：百宝箱面板 —— 主页底部上拉滑入（小米管家式抽屉）。
-/// 由 HomeView 通过底部把手手势驱动 offset 呈现；面板顶部把手可下滑关闭。
-/// 内含杂七杂八工具的入口集合（后续逐项实现并接真实页面）。
+/// v0.3.207：百宝箱面板 —— 主页原生 sheet 呈现（presentationDetents 0.4↔1.0），
+/// 系统上拉展开/下拉关闭，跟手流畅。内含杂七杂八工具的入口集合。
 struct TreasureBoxView: View {
-    var onClose: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部把手（下滑关闭）
-            VStack(spacing: 6) {
-                Capsule()
-                    .fill(Color(.separator))
-                    .frame(width: 40, height: 5)
-                    .padding(.top, 10)
-                Text("百宝箱")
-                    .font(.headline)
-                    .padding(.bottom, 4)
-            }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture { onClose() }
+            // 顶部标题区（sheet 拖动指示条由 presentationDragIndicator 提供）
+            Text("百宝箱")
+                .font(.headline)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
 
             ScrollView {
                 VStack(spacing: 12) {

@@ -1,48 +1,40 @@
 import SwiftUI
 
 /// v0.3.197：主页（手机管家形态）— 顶部灵动球 hero + 卡片网格。
-/// v0.3.206：百宝箱 = 底部上拉抽屉（小米管家式：面板从底部滑动进入，
-/// 带滑动过程与弹簧动画，不是简单 push/切换；把手支持点击或上滑手势）。
+/// v0.3.207：百宝箱 = 系统原生 sheet（presentationDetents 0.4↔1.0，原生上拉展开/
+/// 下拉关闭——跟手流畅，返回不必点横线；把手区点击或上滑触发）。
 struct HomeView: View {
     @ObservedObject var appList: AppListViewModel
     /// v0.3.197：安全评分（占位 — 后续接入 SecurityPresets.plist + Reveil 思路实做）.
     @State private var securityScore: Int = 92
     /// 体感上的呼吸节奏 —— 灵动球渐变光晕周期
     @State private var breathe: Bool = false
-    /// v0.3.206：灵动球扫描环旋转
-    @State private var spinRing: Bool = false
-    /// v0.3.206：百宝箱抽屉开关
+    /// v0.3.207：百宝箱 sheet
     @State private var treasureOpen = false
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            ScrollView {
-                VStack(spacing: 20) {
-                    heroCard
-                    quickCheckCard
-                    cardsGrid
-                    treasureHandleBar   // v0.3.206：底部把手（上拉/点击开抽屉）
-                    Spacer(minLength: 8)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 32)
+        ScrollView {
+            VStack(spacing: 20) {
+                heroCard
+                quickCheckCard
+                cardsGrid
+                treasureHandleBar   // v0.3.207：底部把手（点击/上滑开 sheet）
+                Spacer(minLength: 8)
             }
-            .scrollContentBackground(.hidden)
-
-            // v0.3.206：百宝箱抽屉（底部滑入）
-            if treasureOpen {
-                Color.black.opacity(0.32)
-                    .ignoresSafeArea()
-                    .transition(.opacity)
-                    .onTapGesture { closeTreasure() }
-                TreasureBoxView(onClose: { closeTreasure() })
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.move(edge: .bottom))
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 32)
         }
+        .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
-        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: treasureOpen)
+        .sheet(isPresented: $treasureOpen) {
+            // 原生 sheet：0.4↔1.0 detent 上拉展开、下拉关闭
+            TreasureBoxView()
+                .presentationDetents([.fraction(0.4), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.4)))
+                .interactiveDismissDisabled(false)
+        }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {
             let total = await Task.detached(priority: .userInitiated) {
@@ -54,138 +46,53 @@ struct HomeView: View {
         .navigationBarTitleDisplayMode(.large)
     }
 
-    /// 关闭抽屉
-    private func closeTreasure() {
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-            treasureOpen = false
-        }
-    }
-    /// 打开抽屉（上滑触发；把手内 DragGesture onEnded 调）
+    /// 打开百宝箱 sheet（把手点击/上滑触发）
     private func openTreasure() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-            treasureOpen = true
-        }
+        treasureOpen = true
     }
 
-    // MARK: Hero —— 液态玻璃灵动球 + 分数 + 立即体检
+    // MARK: Hero —— 灵动球 + 分数 + 立即体检
+    // v0.3.207：回退 v0.3.204 版灵动球（v0.3.206 八层液态玻璃被用户否掉）
     private var heroCard: some View {
         VStack(spacing: 14) {
             ZStack {
-                // ① 外圈呼吸光晕
+                // 外圈柔光呼吸
                 Circle()
                     .fill(scoreGradient)
-                    .frame(width: 232, height: 232)
-                    .blur(radius: breathe ? 20 : 9)
-                    .opacity(breathe ? 0.8 : 0.55)
+                    .frame(width: 220, height: 220)
+                    .blur(radius: breathe ? 18 : 8)
+                    .opacity(breathe ? 0.75 : 0.5)
                     .animation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true), value: breathe)
-
-                // ② 玻璃球底座（液态玻璃质感：多层渐变叠）
+                // 球体本体
                 Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [scoreColor.opacity(0.9), scoreColor.opacity(0.35)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    )
+                    .fill(sphereGradient)
                     .frame(width: 180, height: 180)
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [.white.opacity(0.22), .clear],
-                            center: .init(x: 0.3, y: 0.25), startRadius: 0, endRadius: 110
-                        )
+                    .overlay(
+                        Circle()
+                            .stroke(AngularGradient(colors: ringColors, center: .center), lineWidth: 3)
+                            .blur(radius: 0.5)
                     )
-                    .frame(width: 180, height: 180)
-
-                // ③ 玻璃描边（内亮外淡，模拟折射边缘）
+                    .shadow(color: scoreShadow, radius: 24, y: 4)
+                // 高光
                 Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [.white.opacity(0.85), scoreColor.opacity(0.55), .white.opacity(0.1)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1.4
-                    )
-                    .frame(width: 180, height: 180)
-
-                // ④ 顶部弧形反光（玻璃高光条）
-                Capsule()
-                    .fill(LinearGradient(
-                        colors: [.white.opacity(0.65), .white.opacity(0.05)],
-                        startPoint: .top, endPoint: .bottom
-                    ))
-                    .frame(width: 110, height: 22)
-                    .offset(x: -30, y: -62)
-                    .rotationEffect(.degrees(-18))
-                    .blur(radius: 0.8)
-
-                // ⑤ 内层高光点
-                Circle()
-                    .fill(.white.opacity(0.28))
-                    .frame(width: 42, height: 42)
-                    .offset(x: -52, y: -52)
-                    .blur(radius: 3)
-
-                // ⑥ 扫描环（双环旋转，动态完整性实时感）
-                Circle()
-                    .trim(from: 0.0, to: 0.72)
-                    .stroke(
-                        AngularGradient(
-                            colors: [.clear, scoreColor.opacity(0.9), .clear],
-                            center: .center
-                        ),
-                        style: StrokeStyle(lineWidth: 2.2, lineCap: .round)
-                    )
-                    .frame(width: 186, height: 186)
-                    .rotationEffect(.degrees(spinRing ? 360 : 0))
-                    .animation(.linear(duration: 3.6).repeatForever(autoreverses: false), value: spinRing)
-                Circle()
-                    .trim(from: 0.3, to: 0.85)
-                    .stroke(
-                        AngularGradient(
-                            colors: [.clear, .white.opacity(0.8), .clear],
-                            center: .center
-                        ),
-                        style: StrokeStyle(lineWidth: 1.2, lineCap: .round)
-                    )
-                    .frame(width: 164, height: 164)
-                    .rotationEffect(.degrees(spinRing ? -360 : 0))
-                    .animation(.linear(duration: 5.2).repeatForever(autoreverses: false), value: spinRing)
-
-                // ⑦ 底部内阴影
-                Circle()
-                    .stroke(Color.black.opacity(0.14), lineWidth: 3)
-                    .frame(width: 174, height: 174)
-                    .offset(y: 2)
-                    .blur(radius: 2)
-                    .mask(
-                        Circle().frame(width: 180, height: 180)
-                            .offset(y: 2)
-                    )
-
-                // ⑧ 数字 + 副标题
+                    .fill(.white.opacity(0.18))
+                    .frame(width: 90, height: 90)
+                    .offset(x: -28, y: -42)
+                    .blur(radius: 12)
+                // 数字
                 VStack(spacing: 2) {
                     Text("\(securityScore)")
-                        .font(.system(size: 60, weight: .bold, design: .rounded))
+                        .font(.system(size: 64, weight: .bold, design: .rounded))
                         .contentTransition(.numericText())
                         .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
                     Text(scoreSubtitle)
                         .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(.white.opacity(0.78))
                 }
-                .offset(y: 4)
             }
             .frame(height: 240)
-            .onAppear {
-                breathe = true
-                spinRing = true
-            }
-            .onChange(of: securityScore) { _, _ in
-                // 分数变化给球体一个"呼吸脉冲"
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            }
+            .onAppear { breathe = true }
             // 立即体检按钮
             NavigationLink {
                 HealthCheckView(score: $securityScore)
@@ -289,6 +196,17 @@ struct HomeView: View {
                          subtitle: "循环次数 / 容量 / 健康度",
                          icon: "battery.75percent",
                          tint: .green)
+            }
+            .buttonStyle(.plain)
+
+            // v0.3.207：设备信息（iDescriptor DeviceInfo 面板移植）
+            NavigationLink {
+                DeviceInfoView()
+            } label: {
+                HomeCard(title: "设备信息",
+                         subtitle: "机型 / 系统 / CPU / 存储",
+                         icon: "iphone.gen3",
+                         tint: .teal)
             }
             .buttonStyle(.plain)
         }

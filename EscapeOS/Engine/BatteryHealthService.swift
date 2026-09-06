@@ -204,35 +204,53 @@ enum BatteryHealthService {
         // 2. 设计容量：BatteryData.DesignCapacity（iDescriptor 无顶层回退，mAh）
         let design = num("DesignCapacity", in: bd) ?? num("DesignCapacity", in: dict)
 
-        // 3. 最大容量 —— 修复核心：候选值可能混入「0-100 百分比」（iDescriptor #132/#133）。
-        //    只信任 mAh 量级（>200 且 ≤ design*1.3）的候选：
-        //    顶层 FullChargeCapacity / AppleRawMaxCapacity（mAh，新 iOS）；
-        //    BatteryData.MaxCapacity 需 sanity 过滤。
+        // 3. 最大容量 —— v0.3.207 修复「充电中虚高/随时变」：
+        //    FullChargeCapacity = 当前满充估算，充电中会随电压电流浮动（iDescriptor 也踩，
+        //    iOS26.6 健康度不准 issue #132）。**AppleRawMaxCapacity 才是稳定原始满充容量**，
+        //    优先取它；FullChargeCapacity 仅兜底。仍保留 mAh sanity（>200 且 ≤ design+1000）。
+        let isChargingNow = dict["IsCharging"] as? Bool ?? false
         let candidates: [(String, Int?)] = [
-            ("FullChargeCapacity", num("FullChargeCapacity", in: dict)),
             ("AppleRawMaxCapacity", num("AppleRawMaxCapacity", in: dict)),
-            ("BatteryData.MaxCapacity", num("MaxCapacity", in: bd)),
             ("BatteryData.FullChargeCapacity", num("FullChargeCapacity", in: bd)),
+            ("FullChargeCapacity", num("FullChargeCapacity", in: dict)),
+            ("BatteryData.MaxCapacity", num("MaxCapacity", in: bd)),
             ("top.MaxCapacity", num("MaxCapacity", in: dict)),
         ]
         var maxCapacity: Int? = nil
-        var maxSource = ""
         for (src, val) in candidates {
             guard let val else { continue }
-            // mAh sanity：iPhone 电池设计 1500~6000；≥200 且接近 design 视为 mAh
             if val >= 200 && (design == nil || val <= (design ?? 5000) + 1000) {
                 maxCapacity = val
-                maxSource = src
                 break
             }
         }
         // 若全部落选（如 BatteryData.MaxCapacity 恰是百分比），兜底设计容量
-        if maxCapacity == nil { maxCapacity = design; maxSource = "design(fallback)" }
+        if maxCapacity == nil { maxCapacity = design }
 
-        // 4. 健康度
+        // 4. 健康度 —— v0.3.207：单调基线（物理真实健康度只会缓慢下降；充电估算上涨是噪声）。
+        //    基线存 UserDefaults；允许下降立即更新；上涨仅当明显跳变（>2%，如换电池/校准）才采纳。
         var health: Int? = nil
         if let design, design > 0, let maxCapacity {
-            health = min(100, max(0, Int((Double(maxCapacity) / Double(design)) * 100)))
+            let raw = min(100, max(0, Int((Double(maxCapacity) / Double(design)) * 100)))
+            let cacheKey = "BatteryHealthBaselinePct"
+            let baseline = UserDefaults.standard.integer(forKey: cacheKey)
+            if baseline <= 0 {
+                // 首次：记录基线
+                UserDefaults.standard.set(raw, forKey: cacheKey)
+                health = raw
+            } else if raw <= baseline {
+                // 下降或持平 → 更新基线
+                UserDefaults.standard.set(raw, forKey: cacheKey)
+                health = raw
+            } else if raw > baseline {
+                // 上涨：充电中视为噪声（保持基线）；非充电大涨视为换电池/校准（采纳）
+                if !isChargingNow && raw - baseline > 2 {
+                    UserDefaults.standard.set(raw, forKey: cacheKey)
+                    health = raw
+                } else {
+                    health = baseline
+                }
+            }
         }
 
         // 5. 当前电量 —— v0.3.205 改百分比：
