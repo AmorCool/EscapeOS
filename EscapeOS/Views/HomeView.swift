@@ -1,14 +1,13 @@
 import SwiftUI
 
 /// v0.3.197：主页（手机管家形态）— 顶部灵动球 hero + 卡片网格。
+/// v0.3.219：Hero 换装 Metal 实时液态玻璃球（LiquidGlassOrbView + LiquidGlassOrb.metal）。
 /// v0.3.207：百宝箱 = 系统原生 sheet（presentationDetents 0.4↔1.0，原生上拉展开/
 /// 下拉关闭——跟手流畅，返回不必点横线；把手区点击或上滑触发）。
 struct HomeView: View {
     @ObservedObject var appList: AppListViewModel
     /// v0.3.197：安全评分（占位 — 后续接入 SecurityPresets.plist + Reveil 思路实做）.
     @State private var securityScore: Int = 92
-    /// 体感上的呼吸节奏 —— 灵动球渐变光晕周期
-    @State private var breathe: Bool = false
     /// v0.3.207：百宝箱 sheet
     @State private var treasureOpen = false
 
@@ -52,91 +51,12 @@ struct HomeView: View {
     }
 
     // MARK: Hero —— 灵动球 + 分数 + 立即体检
-    // v0.3.213：参考系统管家 — 圆环进度条 + 一键优化（替代球体灵动球）
-    // v0.3.218：液态玻璃球（参考 D:\Zcode\liquid-glass\index-v2.html 折射效果——
-    // SwiftUI 用多层 RadialGradient + 高光 + 实时微扰模拟液态玻璃）
+    // v0.3.219：Metal 实时液态玻璃球（折射 + RGB 色散 + 菲涅尔 + 焦散 + 液态轮廓，
+    // 移植自 liquid-glass v2 WebGL 样板；组件见 LiquidGlassOrbView.swift，
+    // 着色器见 LiquidGlassOrb.metal；iOS 17 以下回退旧版圆环进度样式）
     private var heroCard: some View {
         VStack(spacing: 16) {
-            ZStack {
-                // ① 外圈光晕（呼吸）
-                Circle()
-                    .fill(scoreGradient)
-                    .frame(width: 260, height: 260)
-                    .blur(radius: breathe ? 26 : 14)
-                    .opacity(breathe ? 0.6 : 0.35)
-                    .scaleEffect(breathe ? 1.05 : 1.0)
-                    .animation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true), value: breathe)
-                // ② 底部投影
-                Circle()
-                    .fill(Color.black.opacity(0.12))
-                    .frame(width: 170, height: 14)
-                    .blur(radius: 8)
-                    .offset(y: 90)
-                // ③ 球体主体（径向渐变模拟内部折射色散）
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [scoreColor.opacity(0.92), scoreColor.opacity(0.45), scoreColor.opacity(0.15)],
-                            center: UnitPoint(x: 0.5, y: 0.45),
-                            startRadius: 4, endRadius: 110
-                        )
-                    )
-                    .frame(width: 200, height: 200)
-                // ③-2 球体中部高光（反向径向，模拟内部反射）
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Color.white.opacity(0.55), Color.white.opacity(0.0)],
-                            center: UnitPoint(x: 0.32, y: 0.28),
-                            startRadius: 0, endRadius: 80
-                        )
-                    )
-                    .frame(width: 200, height: 200)
-                // ④ 边缘描边（液态玻璃折射感 + TimelineView 自驱动多频正弦扰动）
-                LiquidGlassEdge(color: scoreColor)
-                    .frame(width: 200, height: 200)
-                // ⑤ 顶部弧形高光（液态玻璃最显眼的"反射天空"效果）
-                Capsule()
-                    .fill(LinearGradient(
-                        colors: [.white.opacity(0.7), .white.opacity(0.05)],
-                        startPoint: .top, endPoint: .bottom
-                    ))
-                    .frame(width: 120, height: 24)
-                    .offset(x: -34, y: -72)
-                    .rotationEffect(.degrees(-18))
-                    .blur(radius: 0.6)
-                // ⑥ 内层光点
-                Circle()
-                    .fill(.white.opacity(0.45))
-                    .frame(width: 22, height: 22)
-                    .offset(x: -60, y: -60)
-                    .blur(radius: 2.5)
-                // ⑦ 底部内阴影
-                Circle()
-                    .stroke(Color.black.opacity(0.16), lineWidth: 4)
-                    .frame(width: 196, height: 196)
-                    .offset(y: 1.5)
-                    .blur(radius: 2)
-                    .mask(
-                        Circle().frame(width: 200, height: 200)
-                            .offset(y: 1.5)
-                    )
-                // ⑧ 数字 + "分"
-                VStack(spacing: -4) {
-                    Text("\(securityScore)")
-                        .font(.system(size: 64, weight: .bold, design: .rounded))
-                        .contentTransition(.numericText())
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
-                    Text("分")
-                        .font(.title3.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                .offset(y: 2)
-            }
-            .frame(width: 240, height: 240)
-            .onAppear { breathe = true }
-            Text(scoreSubtitle)
+            LiquidGlassOrbView(score: securityScore, tint: scoreColor)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             // 立即体检按钮
@@ -286,12 +206,6 @@ struct HomeView: View {
         case 60..<80: return "安全状况良好"
         default: return "建议尽快体检"
         }
-    }
-    private var scoreGradient: RadialGradient {
-        RadialGradient(
-            colors: [scoreColor.opacity(0.45), scoreColor.opacity(0)],
-            center: .center, startRadius: 30, endRadius: 180
-        )
     }
     private var scoreColor: Color {
         switch securityScore {

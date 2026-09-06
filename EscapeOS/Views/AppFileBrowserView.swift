@@ -44,46 +44,72 @@ struct AppFileBrowserView: View {
     // v0.3.217：选择模式 + 查看/编辑 + 导入
     @State private var selectionMode = false
     @State private var selectedPaths = Set<String>()
+    // v0.3.219：文件搜索（过滤当前目录）
+    @State private var searchText: String = ""
     @State private var editingEntry: AfcEntry?
+    /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）
+    @State private var shareURL: URL?
     @State private var showImportPicker = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            scopePicker
+        // v0.3.219：布局参考「空间回收」——segmented 放 Section 随列表滚动 + 搜索栏 + 浮层胶囊 toast
+        Group {
             if loading {
-                ProgressView("正在加载…").padding(.vertical, 50)
+                VStack(spacing: 12) {
+                    scopeSection
+                    Spacer()
+                    ProgressView("正在加载…")
+                    Spacer()
+                }
+                .padding(.top, 8)
             } else if noPermission {
-                ContentUnavailableView("无权限", systemImage: "lock.fill",
-                    description: Text("\(appName) 不允许访问 \(scope.rawValue) 目录"))
-            } else if let err = errorText {
-                ContentUnavailableView("无法访问", systemImage: "folder.badge.questionmark",
-                                       description: Text(err))
-            } else if entries.isEmpty {
-                ContentUnavailableView("空目录", systemImage: "folder",
-                                       description: Text("\(displayCurrentPath) 下没有文件"))
+                VStack {
+                    scopeSection
+                    Spacer()
+                    ContentUnavailableView("无权限", systemImage: "lock.fill",
+                        description: Text("\(appName) 不允许访问 \(scope.rawValue) 目录"))
+                    Spacer()
+                }
             } else {
                 List {
-                    Section {
-                        ForEach(entries) { entry in
-                            rowFor(entry)
+                    scopeSection
+                    if let err = errorText {
+                        Section {
+                            Label(err, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
                         }
-                    } header: {
-                        Text(displayCurrentPath).font(.caption.monospaced())
+                    } else if filteredEntries.isEmpty {
+                        Section {
+                            ContentUnavailableView("空目录", systemImage: "folder",
+                                                   description: Text("\(displayCurrentPath) 下没有文件"))
+                        }
+                    } else {
+                        Section {
+                            ForEach(filteredEntries) { entry in
+                                rowFor(entry)
+                            }
+                        } header: {
+                            Text(displayCurrentPath).font(.caption.monospaced())
+                        }
                     }
                 }
                 .listStyle(.insetGrouped)
             }
+        }
+        .overlay(alignment: .bottom) {
             if let toast {
                 Text(toast)
                     .font(.caption)
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(Capsule().fill(Color(.systemGray6)))
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, 18).padding(.vertical, 9)
+                    .background(Capsule().fill(Color(.systemBackground)))
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+                    .padding(.bottom, 12)
                     .transition(.opacity)
             }
         }
         .navigationTitle(scope == .documents ? appName : "\(appName) · \(scope.rawValue)")
         .navigationBarTitleDisplayMode(.large)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索当前目录")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if selectionMode {
@@ -138,6 +164,9 @@ struct AppFileBrowserView: View {
             }
         }
         // v0.3.217：文本查看/编辑 sheet
+        .sheet(item: $shareURL) { url in
+            ShareSheet(items: [url])
+        }
         .sheet(item: $editingEntry) { entry in
             AfcTextEditorView(
                 load: { try FileSharingService.downloadFile(afc: clientFor(entry), path: entry.path) },
@@ -194,19 +223,20 @@ struct AppFileBrowserView: View {
         return currentPath
     }
 
-    // MARK: 顶部目录分段
-    private var scopePicker: some View {
-        Picker("目录", selection: $scope) {
-            ForEach(Scope.allCases) { s in
-                Text(s.rawValue).tag(s)
+    // MARK: 目录分段（v0.3.219：空间回收式，Section 内随列表滚动）
+    private var scopeSection: some View {
+        Section {
+            Picker("目录", selection: $scope) {
+                ForEach(Scope.allCases) { s in
+                    Text(s.rawValue).tag(s)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: scope) { _, _ in
+                Task { await connectForScope() }
             }
         }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .onChange(of: scope) { _, _ in
-            Task { await connectForScope() }
-        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     }
 
     // MARK: 连接与列目录
@@ -272,6 +302,12 @@ struct AppFileBrowserView: View {
         }
     }
 
+    private var filteredEntries: [AfcEntry] {
+        guard !searchText.isEmpty else { return entries }
+        let q = searchText.lowercased()
+        return entries.filter { $0.name.lowercased().contains(q) }
+    }
+
     private func activeClient() -> OpaquePointer? {
         scope.needsContainer ? (containerAfc ?? afcClient) : afcClient
     }
@@ -290,37 +326,46 @@ struct AppFileBrowserView: View {
     @ViewBuilder
     private func rowFor(_ entry: AfcEntry) -> some View {
         let selected = selectedPaths.contains(entry.path)
+        Button {
+            if selectionMode {
+                toggleSelect(entry)
+            } else {
+                Task { await openEntry(entry) }
+            }
+        } label: {
+            rowContent(entry, selected: selected)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if !selectionMode { itemMenu(entry) }
+        }
+    }
+
+    /// v0.3.219：打开条目——目录优先（isDirectory 可能误判，失败回退当文件），
+    /// 修"文件夹点击进不去"。
+    private func openEntry(_ entry: AfcEntry) async {
+        guard let client = activeClient() else { return }
         if entry.isDirectory {
-            Button {
-                if selectionMode {
-                    toggleSelect(entry)
-                } else {
-                    Task { await loadDir(path: entry.path) }
-                }
-            } label: {
-                rowContent(entry, selected: selected)
+            await loadDir(path: entry.path)
+            return
+        }
+        // 标为文件但仍可能实为目录（AFC st_ifmt 判定失败）→ 尝试列
+        do {
+            let subs = try FileSharingService.listDirectory(afc: client, path: entry.path)
+            await MainActor.run {
+                currentPath = entry.path
+                entries = subs
+                errorText = nil
             }
-            .buttonStyle(.plain)
-            .contextMenu {
-                if !selectionMode { itemMenu(entry) }
-            }
+            return
+        } catch {
+            // 确为文件 → 文本可编辑直接打开，否则显示信息
+        }
+        if isEditableText(entry) {
+            editingEntry = entry
         } else {
-            Button {
-                if selectionMode {
-                    toggleSelect(entry)
-                } else if isEditableText(entry) {
-                    editingEntry = entry   // 文本 → 查看/编辑
-                } else {
-                    fileInfoTarget = entry
-                    fileInfoDetail = fileDetailText(entry)
-                }
-            } label: {
-                rowContent(entry, selected: selected)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-                if !selectionMode { itemMenu(entry) }
-            }
+            fileInfoTarget = entry
+            fileInfoDetail = fileDetailText(entry)
         }
     }
 
@@ -360,6 +405,9 @@ struct AppFileBrowserView: View {
 
     @ViewBuilder
     private func itemMenu(_ entry: AfcEntry) -> some View {
+        Button("分享") {
+            Task { await shareEntry(entry) }
+        }
         Button("重命名") {
             renameTarget = entry
             renameText = entry.name
@@ -368,9 +416,6 @@ struct AppFileBrowserView: View {
             deleteTarget = entry
         }
         if !entry.isDirectory {
-            Button("下载到本地") {
-                Task { await download(entry) }
-            }
             Button("文件信息") {
                 fileInfoDetail = fileDetailText(entry)
             }
@@ -417,6 +462,48 @@ struct AppFileBrowserView: View {
             await loadDir(path: currentPath)
         } catch {
             showToast(error.localizedDescription)
+        }
+    }
+
+    /// v0.3.219：分享（文件下载到 tmp；文件夹递归下载成目录 → ShareSheet 分享）
+    private func shareEntry(_ entry: AfcEntry) async {
+        guard let client = activeClient() else { return }
+        showToast("准备分享…")
+        do {
+            let url = try await Task.detached(priority: .userInitiated) {
+                try self.prepareShare(client: client, entry: entry)
+            }.value
+            await MainActor.run { shareURL = url }
+        } catch {
+            showToast(error.localizedDescription)
+        }
+    }
+    private func prepareShare(client: OpaquePointer, entry: AfcEntry) throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory
+        let safeName = (entry.name as NSString).lastPathComponent
+        let dest = tmp.appendingPathComponent("share-\(UUID().uuidString.prefix(6))-\(safeName)")
+        if entry.isDirectory {
+            try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+            try Self.recursiveDownload(client: client, srcDir: entry.path, toDir: dest)
+        } else {
+            let data = try FileSharingService.downloadFile(afc: client, path: entry.path)
+            try data.write(to: dest)
+        }
+        return dest
+    }
+
+    /// 递归下载目录（保结构）
+    private static func recursiveDownload(client: OpaquePointer, srcDir: String, toDir: URL) throws {
+        let items = try FileSharingService.listDirectory(afc: client, path: srcDir)
+        for item in items {
+            let target = toDir.appendingPathComponent(item.name)
+            if item.isDirectory {
+                try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+                try recursiveDownload(client: client, srcDir: item.path, toDir: target)
+            } else {
+                let data = try FileSharingService.downloadFile(afc: client, path: item.path)
+                try data.write(to: target)
+            }
         }
     }
 

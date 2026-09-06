@@ -1,9 +1,12 @@
 import SwiftUI
+import UIKit
 
 /// v0.3.208：文档共享应用列表（iDescriptor InstalledApps 文件共享过滤移植）。
 /// 区分可浏览（UIFileSharingEnabled=true）与不可浏览；点击可浏览项进入文件树。
+/// v0.3.219：真实 App 图标（SpringBoardServices）+ 模块板块风格顶栏（.large + searchable）。
 struct FileSharingAppsView: View {
     @State private var apps: [FileSharingApp] = []
+    @State private var icons: [String: UIImage] = [:]
     @State private var loading = true
     @State private var errorText: String?
     @State private var filterEnabledOnly = true
@@ -64,9 +67,7 @@ struct FileSharingAppsView: View {
 
     private func appContent(_ app: FileSharingApp) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: app.applicationType == "System" ? "app.badge.fill" : "app.fill")
-                .foregroundStyle(app.supportsFileSharing ? .blue : .secondary)
-                .frame(width: 26)
+            appIcon(app.bundleId)
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(app.name).font(.subheadline.weight(.medium))
@@ -98,8 +99,36 @@ struct FileSharingAppsView: View {
                 try FileSharingService.listAppsWithFileSharing()
             }.value
             errorText = nil
+            loadIcons()
         } catch {
             errorText = error.localizedDescription
+        }
+    }
+
+    /// v0.3.219：后台批量拉真实 App 图标（SpringBoardServices，AppDiscovery 同源）
+    private func loadIcons() {
+        let ids = apps.map { $0.bundleId }
+        guard !ids.isEmpty else { return }
+        let discovery = AppDiscovery()
+        Task.detached(priority: .utility) {
+            for id in ids {
+                guard let icon = discovery.appIcon(for: id) else { continue }
+                await MainActor.run { self.icons[id] = icon }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func appIcon(_ bundleId: String) -> some View {
+        if let img = icons[bundleId] {
+            Image(uiImage: img)
+                .resizable()
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        } else {
+            Image(systemName: "app.fill")
+                .foregroundStyle(.secondary)
+                .frame(width: 34, height: 34)
         }
     }
 }

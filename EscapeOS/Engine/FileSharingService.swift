@@ -238,6 +238,7 @@ enum FileSharingService {
             afc_get_file_info(afc, cstr, &info)
         }
         guard rc == nil else { return false }
+        defer { afc_file_info_free(&info) }
         if let p = info.st_ifmt {
             let s = String(cString: p)
             return s == "S_IFDIR"
@@ -251,6 +252,7 @@ enum FileSharingService {
         let rc = path.withCString { cstr in
             afc_get_file_info(afc, cstr, &info)
         }
+        defer { afc_file_info_free(&info) }
         return rc == nil ? Int64(info.size) : nil
     }
 
