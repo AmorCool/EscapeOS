@@ -113,7 +113,7 @@ struct VirtualLocationSettingsView: View {
             .alert("导入配对文件", isPresented: $showImportGuide) {
                 Button("好", role: .cancel) {}
             } message: {
-                Text("请退出本页，进入底部「应用」标签页，使用右上角的配对导入功能导入 idevice_pair 生成的配对文件；或使用 iPASide 安装时附带配对文件.导入后回到这里即可开始虚拟定位.")
+                Text("请退出本页，到「更多 → 配对文件导入」导入 idevice_pair 生成的配对文件；或使用 iPASide 安装时附带配对文件.导入后回到这里即可开始虚拟定位.")
             }
         }
     }
