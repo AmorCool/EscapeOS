@@ -39,6 +39,14 @@ struct HomeView: View {
         }
         .coordinateSpace(name: "homeScroll")
         .onPreferenceChange(ScrollTopOffsetKey.self) { topOffset = $0 }
+        // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
+        .task(id: "auto-check") {
+            let (_, total) = await Task.detached(priority: .userInitiated) {
+                let (_, score) = SecurityScanner.runAll()
+                return score
+            }.value
+            withAnimation(.easeInOut(duration: 0.5)) { securityScore = total }
+        }
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
         .navigationTitle("主页")
@@ -116,7 +124,7 @@ struct HomeView: View {
             .onAppear { breathe = true }
             // 立即体检按钮
             NavigationLink {
-                HealthCheckView()
+                HealthCheckView(score: $securityScore)
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "stethoscope")
@@ -155,7 +163,7 @@ struct HomeView: View {
             }
             Spacer()
             NavigationLink {
-                HealthCheckView()
+                HealthCheckView(score: $securityScore)
             } label: {
                 Text("查看")
                     .font(.footnote.weight(.semibold))

@@ -1,19 +1,38 @@
 import SwiftUI
 
-/// v0.3.197：体检页占位 — 当前只显示分数与基础提示，后续接入
-/// SecurityPresets.plist 19 类检查项 + Reveil 方法论后实现各项明细。
+/// v0.3.200：设备体检页 —— 执行 SecurityScanner 真实检测。
+/// 得分通过 binding 回传主页灵动球（立即体检后主页分数同步刷新）。
 struct HealthCheckView: View {
-    @State private var score: Int = 92
+    /// 体检得分绑定（主页灵动球显示用）
+    var score: Binding<Int>? = nil
+    @State private var phase: Phase = .idle
+    @State private var results: [SecurityCheckResult] = []
+    @State private var currentCheckIndex = 0
+    @State private var finalScore = 0
+
+    enum Phase { case idle, scanning, done }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                scoreCard
-                checkItemsCard
-                Text("v0.3.197：基础分占位；详细检测项（基于爱思 SecurityPresets.plist 19 类 + Reveil 方法论）将在后续版本接入。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 4)
+                switch phase {
+                case .idle, .scanning:
+                    scanProgressCard
+                case .done:
+                    scoreCard
+                    resultsCard
+                    Button {
+                        startScan()
+                    } label: {
+                        Label("重新体检", systemImage: "arrow.clockwise")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.blue.opacity(0.92)))
+                            .foregroundStyle(.white)
+                    }
+                }
             }
             .padding(16)
         }
@@ -21,73 +40,141 @@ struct HealthCheckView: View {
         .background(Color(.systemBackground))
         .navigationTitle("设备体检")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if phase == .idle { startScan() }
+        }
     }
 
+    // MARK: 扫描进度卡（灵动环 + 当前项）
+    private var scanProgressCard: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .stroke(Color(.systemGray5), lineWidth: 8)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(Color.blue, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeInOut(duration: 0.25), value: progress)
+                VStack(spacing: 2) {
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .contentTransition(.numericText())
+                    Text(phase == .scanning ? currentCheckName : "准备体检…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 160, height: 160)
+            Text("正在扫描 \(currentCheckIndex)/\(SecurityScanner.checkIDs.count)")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(Color(.secondarySystemGroupedBackground)))
+    }
+
+    private var progress: CGFloat {
+        guard phase == .scanning else { return 0 }
+        return CGFloat(currentCheckIndex) / CGFloat(max(SecurityScanner.checkIDs.count, 1))
+    }
+    private var currentCheckName: String {
+        let names: [String: String] = [
+            "env": "环境变量", "dyld": "注入库", "objc": "运行时类",
+            "ports": "可疑端口", "writable": "系统目录",
+        ]
+        let id = currentCheckIndex < SecurityScanner.checkIDs.count
+            ? SecurityScanner.checkIDs[currentCheckIndex] : ""
+        return names[id] ?? "…"
+    }
+
+    // MARK: 结果
     private var scoreCard: some View {
-        VStack(spacing: 8) {
-            Text("\(score)")
-                .font(.system(size: 72, weight: .bold, design: .rounded))
+        VStack(spacing: 6) {
+            Text("\(finalScore)")
+                .font(.system(size: 64, weight: .bold, design: .rounded))
                 .contentTransition(.numericText())
-                .foregroundStyle(score >= 80 ? Color.blue : Color.orange)
-            Text(score >= 80 ? "手机很安全" : "存在风险项")
+                .foregroundStyle(scoreColor)
+            Text(scoreLabel)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(Color(.secondarySystemGroupedBackground)))
     }
 
-    private var checkItemsCard: some View {
+    private var resultsCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("检查项")
+            Text("检测明细")
                 .font(.headline)
-                .padding(.bottom, 8)
-            ForEach(HealthCheckItem.placeholder) { item in
-                HStack(spacing: 12) {
-                    Image(systemName: item.icon)
+                .padding(.bottom, 6)
+            ForEach(results) { item in
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: item.iconName)
                         .foregroundStyle(item.color)
                         .frame(width: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.title)
-                            .font(.subheadline)
+                            .font(.subheadline.weight(.medium))
                         Text(item.detail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
                 }
-                .padding(.vertical, 10)
-                Divider().opacity(item.id == HealthCheckItem.placeholder.last?.id ? 0 : 1)
+                .padding(.vertical, 8)
+                Divider().opacity(item.id == results.last?.id ? 0 : 1)
             }
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Color(.secondarySystemGroupedBackground)))
     }
-}
 
-struct HealthCheckItem: Identifiable {
-    let id: String
-    let icon: String
-    let title: String
-    let detail: String
-    let color: Color
-    static let placeholder: [HealthCheckItem] = [
-        .init(id: "1", icon: "doc.text.fill", title: "可疑文件检测",
-              detail: "扫描设备可疑可执行/库/符号链接（接入 SecurityPresets）", color: .blue),
-        .init(id: "2", icon: "lock.shield.fill", title: "描述文件验证",
-              detail: "校验 misagent 描述文件哈希", color: .purple),
-        .init(id: "3", icon: "network", title: "可疑端口/URL Scheme",
-              detail: "扫描可疑端口与 URL Scheme 注册", color: .indigo),
-        .init(id: "4", icon: "gearshape.fill", title: "环境变量检查",
-              detail: "检测已知违规的环境变量", color: .gray),
-    ]
+    private var scoreColor: Color {
+        finalScore >= 90 ? .blue : (finalScore >= 70 ? .yellow : .orange)
+    }
+    private var scoreLabel: String {
+        switch finalScore {
+        case 90...: return "设备很安全"
+        case 70..<90: return "安全状况良好"
+        default: return "发现风险项"
+        }
+    }
+
+    // MARK: 扫描执行（逐项动画推进）
+    private func startScan() {
+        phase = .scanning
+        currentCheckIndex = 0
+        results = []
+        let ids = SecurityScanner.checkIDs
+        // 用串行 async 逐项执行，UI 显示推进
+        Task {
+            for (i, id) in ids.enumerated() {
+                try? await Task.sleep(nanoseconds: 350_000_000)  // 每项节奏
+                let result: SecurityCheckResult
+                switch id {
+                case "env": result = SecurityScanner.checkEnvironmentVariables()
+                case "dyld": result = SecurityScanner.checkDYLDInjection()
+                case "objc": result = SecurityScanner.checkSuspiciousObjCClasses()
+                case "ports": result = SecurityScanner.checkSuspiciousPorts()
+                case "writable": result = SecurityScanner.checkSystemDirsWritable()
+                default: continue
+                }
+                await MainActor.run {
+                    currentCheckIndex = i + 1
+                    results.append(result)
+                }
+            }
+            await MainActor.run {
+                finalScore = max(0, 100 - results.reduce(0) { $0 + $1.penalty })
+                phase = .done
+                score?.wrappedValue = finalScore
+            }
+        }
+    }
 }
