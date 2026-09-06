@@ -63,7 +63,7 @@ struct HealthCheckView: View {
                         .foregroundStyle(.green)
                 }
                 .padding(.vertical, 10)
-                Divider().opacity(item == HealthCheckItem.placeholder.last ? 0 : 1)
+                Divider().opacity(item.id == HealthCheckItem.placeholder.last?.id ? 0 : 1)
             }
         }
         .padding(16)

@@ -40,7 +40,7 @@ struct HomeView: View {
             ZStack {
                 // 外圈柔光呼吸（中等复杂度核心）
                 Circle()
-                    .fill(radial: scoreGradient)
+                    .fill(scoreGradient)
                     .frame(width: 220, height: 220)
                     .blur(radius: breathe ? 18 : 8)
                     .opacity(breathe ? 0.75 : 0.5)

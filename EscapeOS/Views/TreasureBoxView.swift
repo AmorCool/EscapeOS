@@ -79,7 +79,7 @@ struct TreasureBoxView: View {
                         .foregroundStyle(.tertiary)
                 }
                 .padding(.vertical, 12)
-                Divider().opacity(item == TreasureItem.placeholder.last ? 0 : 1)
+                Divider().opacity(item.id == TreasureItem.placeholder.last?.id ? 0 : 1)
             }
         }
         .padding(16)
