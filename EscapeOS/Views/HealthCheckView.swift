@@ -88,6 +88,8 @@ struct HealthCheckView: View {
             "symlink": "符号链接", "fork": "进程权限",
             "executables": "可疑可执行", "ports": "可疑端口",
             "env": "环境变量", "libraryNames": "逆向库",
+            "mainExe": "主可执行文件", "taskPorts": "进程任务端口",
+            "provisioning": "权限配置文件", "entitlements": "关键权限",
         ]
         let id = currentCheckIndex < SecurityScanner.checkIDs.count
             ? SecurityScanner.checkIDs[currentCheckIndex] : ""
@@ -174,6 +176,10 @@ struct HealthCheckView: View {
                 case "ports": result = SecurityScanner.checkSuspiciousPorts()
                 case "env": result = SecurityScanner.checkEnvironmentVariables()
                 case "libraryNames": result = SecurityScanner.checkSuspiciousLibraryNames()
+                case "mainExe": result = SecurityScanner.checkMainExecutableIntegrity()
+                case "taskPorts": result = SecurityScanner.checkExceptionPorts()
+                case "provisioning": result = SecurityScanner.checkProvisioningProfiles()
+                case "entitlements": result = SecurityScanner.checkEntitlements()
                 default: continue
                 }
                 await MainActor.run {

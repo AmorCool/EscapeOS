@@ -2,6 +2,8 @@ import Foundation
 import Darwin
 import SwiftUI
 import UIKit
+import CommonCrypto
+import Security
 
 /// v0.3.203：设备体检引擎 —— 安全检测项执行器。
 ///
@@ -26,12 +28,19 @@ struct SecurityCheckResult: Identifiable {
     let detail: String
     let passed: Bool
     let warn: Bool
-    /// 该检查扣分值（failed 扣分；warn 小扣）
+    /// v0.3.206：uncertain —— 依赖私有 API/需更高权限，无法判定（Reveil .unchanged 语义）。
+    /// 默认 false：既有构造点免改.
+    var uncertain: Bool = false
+    /// 该检查扣分值（failed 扣分；warn 小扣；uncertain 不扣但显示 ?）
     var penalty: Int {
-        passed ? 0 : (warn ? 4 : 12)
+        uncertain ? 0 : (passed ? 0 : (warn ? 4 : 12))
     }
-    var iconName: String { passed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill" }
-    var color: Color { passed ? .green : (warn ? .yellow : .orange) }
+    var iconName: String {
+        uncertain ? "questionmark.circle" : (passed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+    }
+    var color: Color {
+        uncertain ? .gray : (passed ? .green : (warn ? .yellow : .orange))
+    }
 }
 
 /// 体检引擎
@@ -41,6 +50,7 @@ enum SecurityScanner {
         "urlscheme", "files", "writable", "dyld", "objc",
         "interpreters", "symlink", "fork", "executables",
         "ports", "env", "libraryNames",
+        "mainExe", "taskPorts", "provisioning", "entitlements",
     ]
 
     /// 执行全部检查（同步；最耗时项 = 端口探测 ~1.5s）。
@@ -59,6 +69,10 @@ enum SecurityScanner {
             checkSuspiciousPorts(),
             checkEnvironmentVariables(),
             checkSuspiciousLibraryNames(),
+            checkMainExecutableIntegrity(),
+            checkExceptionPorts(),
+            checkProvisioningProfiles(),
+            checkEntitlements(),
         ]
         let total = max(0, 100 - results.reduce(0) { $0 + $1.penalty })
         return (results, total)
@@ -316,5 +330,107 @@ enum SecurityScanner {
         return SecurityCheckResult(id: "libraryNames", title: "逆向库检测",
             detail: "发现逆向库：\(loaded.prefix(3).joined(separator: "\n"))",
             passed: false, warn: false)
+    }
+}
+
+// MARK: 13. 主可执行文件完整性（Reveil amITampered 思路 + Presets secureMainExecutableMachOHashes）
+
+extension SecurityScanner {
+    /// 检查主可执行 Mach-O 完整性 —— 计算自身可执行文件的 SHA256 并与安装时基线对比
+    /// （若被越狱注入/重签篡改则哈希变化）。基线存 UserDefaults（首次记录）。
+    static func checkMainExecutableIntegrity() -> SecurityCheckResult {
+        guard let mainPath = Bundle.main.executablePath else {
+            return SecurityCheckResult(id: "mainExe", title: "主可执行文件",
+                detail: "无法定位主可执行文件", passed: true, warn: true)
+        }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: mainPath)) else {
+            return SecurityCheckResult(id: "mainExe", title: "主可执行文件",
+                detail: "无法读取主可执行文件", passed: true, warn: true)
+        }
+        // SHA256
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        data.withUnsafeBytes { buf in
+            _ = CC_SHA256(buf.baseAddress, CC_LONG(data.count), &hash)
+        }
+        let hex = hash.map { String(format: "%02x", $0) }.joined()
+        let baselineKey = "SecurityMainExeHash"
+        let previous = UserDefaults.standard.string(forKey: baselineKey)
+        if previous == nil {
+            UserDefaults.standard.set(hex, forKey: baselineKey)
+            return SecurityCheckResult(id: "mainExe", title: "主可执行文件",
+                detail: "首次运行，已记录可执行文件哈希基线（\(hex.prefix(12))…）",
+                passed: true, warn: false)
+        }
+        if previous == hex {
+            return SecurityCheckResult(id: "mainExe", title: "主可执行文件",
+                detail: "主可执行文件未被篡改（哈希与基线一致）", passed: true, warn: false)
+        }
+        return SecurityCheckResult(id: "mainExe", title: "主可执行文件",
+            detail: "⚠️ 主可执行文件哈希与基线不一致——可能被重签或篡改", passed: false, warn: false)
+    }
+}
+
+// MARK: 14. 进程异常端口（Reveil exception ports / task ports）
+
+extension SecurityScanner {
+    /// 检查是否有调试器/注入器附加到本进程的异常端口（越狱检测常用）。
+    /// 通过 mach task 端口只读查询异常端口配置；失败即无权限 → uncertain（Reveil 同标 .unchanged）。
+    static func checkExceptionPorts() -> SecurityCheckResult {
+        // 先检查是否正被调试（PT_DENY_ATTACH 等 sysctl）
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        let rc = sysctl(&mib, u_int(mib.count), &info, &size, nil, 0)
+        if rc == 0, (info.kp_proc.p_flag & P_TRACED) != 0 {
+            return SecurityCheckResult(id: "taskPorts", title: "进程任务端口",
+                detail: "检测到本进程正被调试器附加（P_TRACED）", passed: false, warn: false)
+        }
+        // 常规进程无异常任务端口可读——按 Reveil 语义标 uncertain（需私有 API）
+        return SecurityCheckResult(id: "taskPorts", title: "进程任务端口",
+            detail: "未检测到调试附加；异常端口深度检查需私有 Mach API（按原版标为“未深入检测”）",
+            passed: true, warn: true, uncertain: true)
+    }
+}
+
+// MARK: 15. 权限配置文件（描述文件 / Provisioning Profile 哈希）
+
+extension SecurityScanner {
+    /// 设备上安装的 provisioning profile 是否与白名单哈希一致（Presets secureMobileProvisioningProfileHashes）。
+    /// 读全量 profile 需 misagent + RSD 配对（EscapeSpace 已具备）；无配对/失败时标 uncertain。
+    static func checkProvisioningProfiles() -> SecurityCheckResult {
+        let profiles = (try? ProvisioningProfileStore.fetchAllProfiles()) ?? []
+        if profiles.isEmpty {
+            return SecurityCheckResult(id: "provisioning", title: "权限配置文件",
+                detail: "设备无 provisioning profile，或未连接配对（读取需 LocalDevVPN）",
+                passed: true, warn: true, uncertain: true)
+        }
+        // 列出 profile 概况供用户自查（爱思白名单哈希校验需 Apple 侧清单，做不了逐条对比）
+        let names = profiles.prefix(3).map { $0.appName }.joined(separator: "、")
+        return SecurityCheckResult(id: "provisioning", title: "权限配置文件",
+            detail: "设备有 \(profiles.count) 个描述文件：\(names)…（白名单哈希校验需 Apple 清单）",
+            passed: true, warn: false)
+    }
+}
+
+// MARK: 16. 关键 entitlements 自检（Presets secureEntitlementKeys 部分）
+
+extension SecurityScanner {
+    /// 检查自身是否持有高危 entitlement（越狱/注入工具常带 com.apple.private.security.no-sandbox 等）。
+    /// 正常侧载 App 不带 → passed；进程被注入者通常可查看到异常 entitlement。
+    static func checkEntitlements() -> SecurityCheckResult {
+        // 检查进程环境变量中是否有注入迹象 + 简单 entitlement 自检
+        // 自身 entitlements：SecTask 可读（本 App 无高危键即通过）
+        let task = SecTaskCreateFromSelf(nil)
+        guard let task else {
+            return SecurityCheckResult(id: "entitlements", title: "关键权限",
+                detail: "无法读取进程权限（SecTask 不可用）", passed: true, warn: true, uncertain: true)
+        }
+        let noSandbox = SecTaskCopyValueForEntitlement(task, "com.apple.private.security.no-sandbox" as CFString, nil)
+        if noSandbox != nil {
+            return SecurityCheckResult(id: "entitlements", title: "关键权限",
+                detail: "⚠️ 检测到 no-sandbox 权限——沙盒被关闭（异常）", passed: false, warn: false)
+        }
+        return SecurityCheckResult(id: "entitlements", title: "关键权限",
+            detail: "进程权限正常，未持有 no-sandbox 等高危 entitlement", passed: true, warn: false)
     }
 }

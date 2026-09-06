@@ -4,19 +4,26 @@ import Foundation
 /// 字段规则移植自 iDescriptor（github.com/iDescriptor/iDescriptor）utils.rs query_battery_info。
 struct BatteryHealthInfo {
     var cycleCount: Int?
-    var designCapacity: Int?      // mAh
+    var designCapacity: Int?      // mAh（出厂设计容量）
     var maxCapacity: Int?         // mAh（当前实际最大容量）
-    var currentCapacity: Int?     // mAh（当前剩余）
+    var currentPercent: Int?      // 当前电量 %
     var healthPercent: Int?       // 健康度 % = max/design*100
     var serial: String?
     var isCharging: Bool?
     var fullyCharged: Bool?
-    var adapterWatts: Int?
+    // v0.3.205：适配器（电源/电压）
+    var adapterWatts: Int?        // W
+    var adapterVoltage: Double?   // V（mV/1000）
+    var adapterDescription: String?  // 连接描述（如 USB-C/无线）
+    var batteryManufacturer: String? // 厂商（iOS 不暴露稳定字段，Apple 为推断）
     var raw: [String: Any] = [:]  // 调试用（字段缺失时可看）
 }
 
 /// v0.3.199：电池健康服务 —— diagnostics_relay IORegistry/IOPMPowerSource。
 /// 非越狱、普通配对 + 解锁即可读取（iDescriptor 实证）。iOS 26/27 字段迁移已处理。
+/// v0.3.205 修复：BatteryData.MaxCapacity 在某些设备返回 0-100 百分比而非 mAh
+/// （iDescriptor issue #132/#133）→ 加 mAh 量级 sanity 过滤；电量改百分比；
+/// 适配器电压/电源；厂商（Apple 推断）。
 enum BatteryHealthService {
     private static func makeError(_ message: String) -> NSError {
         NSError(domain: "BatteryHealth", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
@@ -95,17 +102,14 @@ enum BatteryHealthService {
     }
 
     /// 读取电池健康（同步阻塞——调用方需放后台线程）。
-    /// v0.3.202：机型/系统版本改从 lockdown GetValue 拿（IORegistry dict 无 ProductType——
-    /// 旧实现拿不到机型 → 健康度解析分支走错，用户实测读数不准）。
+    /// v0.3.202：机型/系统版本从 lockdown GetValue 拿（IORegistry dict 无 ProductType）。
     static func fetchBatteryHealth() throws -> BatteryHealthInfo {
         var tunnel = try createTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
             throw makeError("隧道未建立")
         }
-        // ① lockdown GetValue 全字典 → ProductType（iPhone12,1）/ ProductVersion major
         let (productType, iosMajor) = try fetchLockdownInfo(adapter: adapter, handshake: handshake)
-        // ② diagnostics relay IORegistry 电池
         var lastError: NSError?
         for attempt in 0..<3 {
             var client: OpaquePointer?
@@ -176,71 +180,124 @@ enum BatteryHealthService {
         return parse(dict: dict, productType: productType, iosMajor: iosMajor)
     }
 
-    /// 解析 IORegistry 电池字典（字段规则来自 iDescriptor utils.rs，含 iOS 26/27 迁移）。
-    /// v0.3.202：机型/系统版本由调用方从 lockdown GetValue 传入（IORegistry 无 ProductType）。
+    /// 解析 IORegistry 电池字典（字段规则来自 iDescriptor utils.rs）。
+    /// v0.3.205 修复 mAh/百分比混淆 + 电流百分比 + 适配器电压/电源。
     static func parse(dict: [String: Any], productType: String? = nil, iosMajor: Int? = nil) -> BatteryHealthInfo {
-        func int(_ key: String, in d: [String: Any]) -> Int? {
+        func num(_ key: String, in d: [String: Any]) -> Int? {
             if let n = d[key] as? Int { return n }
             if let n = d[key] as? Double { return Int(n) }
+            if let n = d[key] as? Bool { return n ? 1 : 0 }
             if let s = d[key] as? String { return Int(s) }
             return nil
         }
+        func dbl(_ key: String, in d: [String: Any]) -> Double? {
+            if let n = d[key] as? Double { return n }
+            if let n = d[key] as? Int { return Double(n) }
+            if let s = d[key] as? String { return Double(s) }
+            return nil
+        }
+        let isIPhone = productType?.lowercased().hasPrefix("iphone") ?? false
         let bd = dict["BatteryData"] as? [String: Any] ?? [:]
-        let cycle = int("CycleCount", in: bd) ?? int("CycleCount", in: dict)
-        let design = int("DesignCapacity", in: bd) ?? int("DesignCapacity", in: dict)
-        // maxCapacity 迁移规则（iDescriptor parse_diag_info 实测）：
-        //  - iOS > 26 → FullChargeCapacity → AppleRawMaxCapacity → BatteryData.MaxCapacity
-        //  - iPhone 比 iPhone8,1 新 → 顶层 AppleRawMaxCapacity（BatteryData.MaxCapacity 不准）
-        //  - 其余（老机型/非 iPhone）→ BatteryData.MaxCapacity
-        let maxBatteryData = int("MaxCapacity", in: bd)
-        let maxFullCharge = int("FullChargeCapacity", in: dict)
-        let maxTopRaw = int("AppleRawMaxCapacity", in: dict)
-        let maxCapacity: Int? = {
-            if let iosMajor, iosMajor > 26 {
-                return maxFullCharge ?? maxTopRaw ?? maxBatteryData
+
+        // 1. 循环次数：BatteryData 优先 → 顶层（iOS 27 beta 起移顶层）
+        let cycle = num("CycleCount", in: bd) ?? num("CycleCount", in: dict)
+        // 2. 设计容量：BatteryData.DesignCapacity（iDescriptor 无顶层回退，mAh）
+        let design = num("DesignCapacity", in: bd) ?? num("DesignCapacity", in: dict)
+
+        // 3. 最大容量 —— 修复核心：候选值可能混入「0-100 百分比」（iDescriptor #132/#133）。
+        //    只信任 mAh 量级（>200 且 ≤ design*1.3）的候选：
+        //    顶层 FullChargeCapacity / AppleRawMaxCapacity（mAh，新 iOS）；
+        //    BatteryData.MaxCapacity 需 sanity 过滤。
+        let candidates: [(String, Int?)] = [
+            ("FullChargeCapacity", num("FullChargeCapacity", in: dict)),
+            ("AppleRawMaxCapacity", num("AppleRawMaxCapacity", in: dict)),
+            ("BatteryData.MaxCapacity", num("MaxCapacity", in: bd)),
+            ("BatteryData.FullChargeCapacity", num("FullChargeCapacity", in: bd)),
+            ("top.MaxCapacity", num("MaxCapacity", in: dict)),
+        ]
+        var maxCapacity: Int? = nil
+        var maxSource = ""
+        for (src, val) in candidates {
+            guard let val else { continue }
+            // mAh sanity：iPhone 电池设计 1500~6000；≥200 且接近 design 视为 mAh
+            if val >= 200 && (design == nil || val <= (design ?? 5000) + 1000) {
+                maxCapacity = val
+                maxSource = src
+                break
             }
-            if isIPhoneNewerThan8_1(model: productType) {
-                return maxTopRaw ?? maxBatteryData  // 新机型顶层优先，缺失时兜底
-            }
-            return maxBatteryData
-        }()
-        let currentCapacity = int("CurrentCapacity", in: bd) ?? int("AppleRawCurrentCapacity", in: dict)
+        }
+        // 若全部落选（如 BatteryData.MaxCapacity 恰是百分比），兜底设计容量
+        if maxCapacity == nil { maxCapacity = design; maxSource = "design(fallback)" }
+
+        // 4. 健康度
         var health: Int? = nil
         if let design, design > 0, let maxCapacity {
-            health = min(100, Int((Double(maxCapacity) / Double(design)) * 100))
+            health = min(100, max(0, Int((Double(maxCapacity) / Double(design)) * 100)))
         }
+
+        // 5. 当前电量 —— v0.3.205 改百分比：
+        //    iOS ≤26：AppleRawCurrentCapacity / AppleRawMaxCapacity × 100
+        //    iOS >26：BatteryData.CurrentCapacity 已是百分比（clamp ≤100）
+        var currentPercent: Int? = nil
+        if let iosMajor, iosMajor > 26 {
+            if let c = num("CurrentCapacity", in: bd) {
+                currentPercent = min(100, c)
+            } else if let cur = num("AppleRawCurrentCapacity", in: dict),
+                      let max = num("AppleRawMaxCapacity", in: dict), max > 0 {
+                currentPercent = min(100, Int(Double(cur) / Double(max) * 100))
+            }
+        } else {
+            if let cur = num("AppleRawCurrentCapacity", in: dict),
+               let max = num("AppleRawMaxCapacity", in: dict), max > 0 {
+                currentPercent = min(100, Int(Double(cur) / Double(max) * 100))
+            } else if let c = num("CurrentCapacity", in: bd) {
+                currentPercent = min(100, c)
+            }
+        }
+
         let serial = dict["Serial"] as? String
-        let isCharging = dict["IsCharging"] as? Bool
+        let isCharging: Bool? = dict["IsCharging"] as? Bool
+            ?? ((dict["ChargerData"] as? [String: Any])?["IsCharging"] as? Bool)
         let fullyCharged = dict["FullyCharged"] as? Bool
+
+        // 6. 适配器（v0.3.205）
         var adapterWatts: Int? = nil
-        if let adapter = dict["AdapterDetails"] as? [String: Any],
-           let watts = int("Watts", in: adapter) { adapterWatts = watts }
+        var adapterVoltage: Double? = nil
+        var adapterDescription: String? = nil
+        if let details = dict["AppleRawAdapterDetails"] as? [Any],
+           let first = details.first as? [String: Any] {
+            // 新机型：AdapterVoltage(mV) / Watts(W)
+            if let mv = dbl("AdapterVoltage", in: first), mv > 0 {
+                adapterVoltage = mv / 1000.0
+            }
+            adapterWatts = num("Watts", in: first) ?? num("AdapterWatts", in: first)
+        } else if let adapter = dict["AdapterDetails"] as? [String: Any] {
+            adapterWatts = num("Watts", in: adapter)
+            if let mv = dbl("AdapterVoltage", in: adapter), mv > 0 {
+                adapterVoltage = mv / 1000.0
+            }
+            adapterDescription = adapter["Description"] as? String
+        }
+        // 7. 厂商：iOS 不暴露稳定字段（IOPMPowerSource 规范含但 iOS10+ 裁剪）。
+        //    Apple 设备电池实际为 Apple 认证（推断显示 Apple），原始键尝试读取。
+        let manufacturer = (dict["Manufacturer"] as? String)
+            ?? (dict["BatteryManufacturer"] as? String)
+            ?? "Apple"
+
         return BatteryHealthInfo(
             cycleCount: cycle,
             designCapacity: design,
             maxCapacity: maxCapacity,
-            currentCapacity: currentCapacity,
+            currentPercent: currentPercent,
             healthPercent: health,
             serial: serial,
             isCharging: isCharging,
             fullyCharged: fullyCharged,
             adapterWatts: adapterWatts,
+            adapterVoltage: adapterVoltage,
+            adapterDescription: adapterDescription,
+            batteryManufacturer: manufacturer,
             raw: dict
         )
-    }
-
-    /// iPhone 且比 iPhone8,1（6s）新 → true（顶层 AppleRawMaxCapacity 优先）。
-    static func isIPhoneNewerThan8_1(model: String?) -> Bool {
-        guard let model else { return false }
-        let m = model.lowercased()
-        guard m.hasPrefix("iphone") else { return false }
-        let comps = m.dropFirst("iphone".count).split(separator: ",")
-        if comps.count == 2,
-           let major = Int(comps[0]), let minor = Int(comps[1]) {
-            if major > 8 { return true }
-            if major == 8 { return minor > 1 }
-            return false
-        }
-        return true
     }
 }

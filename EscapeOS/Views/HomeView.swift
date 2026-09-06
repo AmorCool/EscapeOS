@@ -1,28 +1,48 @@
 import SwiftUI
 
-/// v0.3.197：主页（手机管家形态）— 顶部灵动球 hero + 卡片网格 + 底部百宝箱区块。
-/// v0.3.202：百宝箱**嵌在主页最底部**（滚动直达，无下拉手势——用户反馈手势灵敏度
-/// 太高易误触；也删除了顶部"下拉进入"把手与独立 push 页）。
+/// v0.3.197：主页（手机管家形态）— 顶部灵动球 hero + 卡片网格。
+/// v0.3.206：百宝箱 = 底部上拉抽屉（小米管家式：面板从底部滑动进入，
+/// 带滑动过程与弹簧动画，不是简单 push/切换；把手支持点击或上滑手势）。
 struct HomeView: View {
     @ObservedObject var appList: AppListViewModel
     /// v0.3.197：安全评分（占位 — 后续接入 SecurityPresets.plist + Reveil 思路实做）.
     @State private var securityScore: Int = 92
     /// 体感上的呼吸节奏 —— 灵动球渐变光晕周期
     @State private var breathe: Bool = false
+    /// v0.3.206：灵动球扫描环旋转
+    @State private var spinRing: Bool = false
+    /// v0.3.206：百宝箱抽屉开关
+    @State private var treasureOpen = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                heroCard
-                quickCheckCard
-                cardsGrid
-                treasureSection     // v0.3.202：百宝箱区块（主页最底部）
-                Spacer(minLength: 8)
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(spacing: 20) {
+                    heroCard
+                    quickCheckCard
+                    cardsGrid
+                    treasureHandleBar   // v0.3.206：底部把手（上拉/点击开抽屉）
+                    Spacer(minLength: 8)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 32)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 32)
+            .scrollContentBackground(.hidden)
+
+            // v0.3.206：百宝箱抽屉（底部滑入）
+            if treasureOpen {
+                Color.black.opacity(0.32)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .onTapGesture { closeTreasure() }
+                TreasureBoxView(onClose: { closeTreasure() })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.move(edge: .bottom))
+            }
         }
+        .background(Color(.systemBackground))
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: treasureOpen)
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {
             let total = await Task.detached(priority: .userInitiated) {
@@ -30,52 +50,142 @@ struct HomeView: View {
             }.value
             withAnimation(.easeInOut(duration: 0.5)) { securityScore = total }
         }
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemBackground))
         .navigationTitle("主页")
         .navigationBarTitleDisplayMode(.large)
     }
 
-    // MARK: Hero —— 灵动球 + 分数 + 立即体检
+    /// 关闭抽屉
+    private func closeTreasure() {
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            treasureOpen = false
+        }
+    }
+    /// 打开抽屉（上滑触发；把手内 DragGesture onEnded 调）
+    private func openTreasure() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            treasureOpen = true
+        }
+    }
+
+    // MARK: Hero —— 液态玻璃灵动球 + 分数 + 立即体检
     private var heroCard: some View {
         VStack(spacing: 14) {
             ZStack {
-                // 外圈柔光呼吸（中等复杂度核心）
+                // ① 外圈呼吸光晕
                 Circle()
                     .fill(scoreGradient)
-                    .frame(width: 220, height: 220)
-                    .blur(radius: breathe ? 18 : 8)
-                    .opacity(breathe ? 0.75 : 0.5)
+                    .frame(width: 232, height: 232)
+                    .blur(radius: breathe ? 20 : 9)
+                    .opacity(breathe ? 0.8 : 0.55)
                     .animation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true), value: breathe)
-                // 球体本体
+
+                // ② 玻璃球底座（液态玻璃质感：多层渐变叠）
                 Circle()
-                    .fill(sphereGradient)
-                    .frame(width: 180, height: 180)
-                    .overlay(
-                        Circle()
-                            .stroke(AngularGradient(colors: ringColors, center: .center), lineWidth: 3)
-                            .blur(radius: 0.5)
+                    .fill(
+                        LinearGradient(
+                            colors: [scoreColor.opacity(0.9), scoreColor.opacity(0.35)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
                     )
-                    .shadow(color: scoreShadow, radius: 24, y: 4)
-                // 高光
+                    .frame(width: 180, height: 180)
                 Circle()
-                    .fill(.white.opacity(0.18))
-                    .frame(width: 90, height: 90)
-                    .offset(x: -28, y: -42)
-                    .blur(radius: 12)
-                // 数字
+                    .fill(
+                        RadialGradient(
+                            colors: [.white.opacity(0.22), .clear],
+                            center: .init(x: 0.3, y: 0.25), startRadius: 0, endRadius: 110
+                        )
+                    )
+                    .frame(width: 180, height: 180)
+
+                // ③ 玻璃描边（内亮外淡，模拟折射边缘）
+                Circle()
+                    .stroke(
+                        LinearGradient(
+                            colors: [.white.opacity(0.85), scoreColor.opacity(0.55), .white.opacity(0.1)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.4
+                    )
+                    .frame(width: 180, height: 180)
+
+                // ④ 顶部弧形反光（玻璃高光条）
+                Capsule()
+                    .fill(LinearGradient(
+                        colors: [.white.opacity(0.65), .white.opacity(0.05)],
+                        startPoint: .top, endPoint: .bottom
+                    ))
+                    .frame(width: 110, height: 22)
+                    .offset(x: -30, y: -62)
+                    .rotationEffect(.degrees(-18))
+                    .blur(radius: 0.8)
+
+                // ⑤ 内层高光点
+                Circle()
+                    .fill(.white.opacity(0.28))
+                    .frame(width: 42, height: 42)
+                    .offset(x: -52, y: -52)
+                    .blur(radius: 3)
+
+                // ⑥ 扫描环（双环旋转，动态完整性实时感）
+                Circle()
+                    .trim(from: 0.0, to: 0.72)
+                    .stroke(
+                        AngularGradient(
+                            colors: [.clear, scoreColor.opacity(0.9), .clear],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: 2.2, lineCap: .round)
+                    )
+                    .frame(width: 186, height: 186)
+                    .rotationEffect(.degrees(spinRing ? 360 : 0))
+                    .animation(.linear(duration: 3.6).repeatForever(autoreverses: false), value: spinRing)
+                Circle()
+                    .trim(from: 0.3, to: 0.85)
+                    .stroke(
+                        AngularGradient(
+                            colors: [.clear, .white.opacity(0.8), .clear],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: 1.2, lineCap: .round)
+                    )
+                    .frame(width: 164, height: 164)
+                    .rotationEffect(.degrees(spinRing ? -360 : 0))
+                    .animation(.linear(duration: 5.2).repeatForever(autoreverses: false), value: spinRing)
+
+                // ⑦ 底部内阴影
+                Circle()
+                    .stroke(Color.black.opacity(0.14), lineWidth: 3)
+                    .frame(width: 174, height: 174)
+                    .offset(y: 2)
+                    .blur(radius: 2)
+                    .mask(
+                        Circle().frame(width: 180, height: 180)
+                            .offset(y: 2)
+                    )
+
+                // ⑧ 数字 + 副标题
                 VStack(spacing: 2) {
                     Text("\(securityScore)")
-                        .font(.system(size: 64, weight: .bold, design: .rounded))
+                        .font(.system(size: 60, weight: .bold, design: .rounded))
                         .contentTransition(.numericText())
                         .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
                     Text(scoreSubtitle)
                         .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.78))
+                        .foregroundStyle(.white.opacity(0.85))
                 }
+                .offset(y: 4)
             }
             .frame(height: 240)
-            .onAppear { breathe = true }
+            .onAppear {
+                breathe = true
+                spinRing = true
+            }
+            .onChange(of: securityScore) { _, _ in
+                // 分数变化给球体一个"呼吸脉冲"
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
             // 立即体检按钮
             NavigationLink {
                 HealthCheckView(score: $securityScore)
@@ -184,44 +294,47 @@ struct HomeView: View {
         }
     }
 
-    // MARK: 百宝箱区块（v0.3.202：嵌在主页最底部，滚动直达，无手势）
+    // MARK: 百宝箱把手（v0.3.206：底部上拉抽屉——小米管家式，非嵌内容非简单切换）
 
-    /// 主页底部「百宝箱」区块：杂七杂八工具的入口集合（后续逐项填充）。
-    private var treasureSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
+    /// 主页底部把手条：点击或上滑手势进入百宝箱抽屉（面板从底部滑动进入）。
+    private var treasureHandleBar: some View {
+        VStack(spacing: 10) {
+            Capsule()
+                .fill(Color(.separator))
+                .frame(width: 40, height: 5)
+            HStack(spacing: 8) {
                 Image(systemName: "shippingbox.and.arrow.backward.fill")
                     .foregroundStyle(.purple)
-                Text("百宝箱")
-                    .font(.headline)
-            }
-            .padding(.bottom, 8)
-
-            ForEach(TreasureItem.placeholder) { item in
-                HStack(spacing: 12) {
-                    Image(systemName: item.icon)
-                        .foregroundStyle(item.color)
-                        .frame(width: 26)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.title)
-                            .font(.subheadline)
-                        Text(item.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text("即将上线")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("百宝箱")
+                        .font(.subheadline.weight(.semibold))
+                    Text("上拉查看小工具 · 更多工具持续补充")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 10)
-                Divider().opacity(item.id == TreasureItem.placeholder.last?.id ? 0 : 1)
+                Spacer()
+                Image(systemName: "chevron.up")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { openTreasure() }
+        .highPriorityGesture(
+            // 上滑手势进入抽屉（与点击并存；只响应向上滑动）
+            DragGesture(minimumDistance: 30)
+                .onEnded { value in
+                    guard value.translation.height < -60,
+                          abs(value.translation.width) < 80 else { return }
+                    openTreasure()
+                }
         )
     }
 
@@ -287,23 +400,4 @@ struct HomeCard: View {
                 .fill(Color(.secondarySystemGroupedBackground))
         )
     }
-}
-
-/// 百宝箱工具占位项（后续逐项实现并接真实页面）
-struct TreasureItem: Identifiable {
-    let id: String
-    let icon: String
-    let title: String
-    let detail: String
-    let color: Color
-    static let placeholder: [TreasureItem] = [
-        .init(id: "1", icon: "doc.text.magnifyingglass", title: "设备日志导出",
-              detail: "一键导出系统日志/Sysmon/诊断数据", color: .blue),
-        .init(id: "2", icon: "key.fill", title: "随机设备 ID",
-              detail: "重置 ApplePackage/Anisette 设备标识", color: .indigo),
-        .init(id: "3", icon: "wifi", title: "设备网络信息",
-              detail: "查看局域网 IP / 端口占用", color: .purple),
-        .init(id: "4", icon: "trash", title: "清理应用残留",
-              detail: "扫描并清理卸载残留的容器/缓存", color: .gray),
-    ]
 }

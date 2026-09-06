@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// v0.3.199：电池健康面板 —— diagnostics_relay IORegistry 读取（非越狱可读）。
-/// 参考 iDescriptor BatteryInfo 面板：循环/设计容量/最大容量/健康度/序列号/充电状态。
+/// 参考 iDescriptor BatteryInfo 面板：健康/循环/容量/序列号/充电/适配器。
+/// v0.3.205：当前电量改百分比、新增适配器电源+电压卡、序列号小眼睛、厂商/生产日期。
 struct BatteryHealthView: View {
     @State private var isLoading = true
     @State private var info: BatteryHealthInfo?
@@ -9,6 +10,8 @@ struct BatteryHealthView: View {
     @State private var lastUpdated: Date?
     /// v0.3.202：实时更新 —— 定时轮询（10s），离开页面取消
     @State private var pollTask: Task<Void, Never>?
+    /// v0.3.205：序列号小眼睛 —— 默认隐藏，点眼睛显示
+    @State private var showSerial = false
 
     var body: some View {
         ScrollView {
@@ -20,6 +23,8 @@ struct BatteryHealthView: View {
                 } else if let info {
                     healthRing(info: info)
                     metricsGrid(info: info)
+                    adapterCard(info: info)      // v0.3.205：适配器电源 + 电压
+                    identityCard(info: info)     // v0.3.205：序列号(眼睛)/厂商/生产日期
                     if let lastUpdated {
                         Label("更新于 \(Self.timeFormatter.string(from: lastUpdated))", systemImage: "clock")
                             .font(.caption2)
@@ -47,7 +52,7 @@ struct BatteryHealthView: View {
         }
         .task {
             await load()
-            // v0.3.202：实时轮询 —— 用 Task 检查取消；struct 不能用 [weak self]
+            // v0.3.202：实时轮询 —— struct 不能 [weak self]，用 Task.isCancelled 守卫
             pollTask = Task {
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 10_000_000_000)
@@ -68,7 +73,6 @@ struct BatteryHealthView: View {
         return f
     }()
 
-    /// silent：静默刷新不闪 ProgressView（轮询用）
     private func load(silent: Bool = false) async {
         if !silent { isLoading = true }
         defer { if !silent { isLoading = false } }
@@ -84,7 +88,7 @@ struct BatteryHealthView: View {
         }
     }
 
-    /// 健康度环形展示（蓝→黄→橙按百分比）
+    // MARK: 健康度环形
     private func healthRing(info: BatteryHealthInfo) -> some View {
         let health = info.healthPercent ?? 0
         let color: Color = health >= 85 ? .green : (health >= 70 ? .yellow : .orange)
@@ -129,14 +133,15 @@ struct BatteryHealthView: View {
         }
     }
 
+    // MARK: 指标网格
     private func metricsGrid(info: BatteryHealthInfo) -> some View {
+        // v0.3.205：当前电量显示百分比；容量均为 mAh
         let rows: [(String, String)] = [
+            ("当前电量", info.currentPercent.map { "\($0)%" } ?? "—"),
             ("循环次数", info.cycleCount.map { "\($0) 次" } ?? "—"),
             ("设计容量", info.designCapacity.map { "\($0) mAh" } ?? "—"),
             ("最大容量", info.maxCapacity.map { "\($0) mAh" } ?? "—"),
-            ("当前电量", info.currentCapacity.map { "\($0) mAh" } ?? "—"),
             ("充电状态", chargingLabel(info)),
-            ("序列号", info.serial ?? "—"),
         ]
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
             ForEach(rows, id: \.0) { row in
@@ -158,6 +163,100 @@ struct BatteryHealthView: View {
                 )
             }
         }
+    }
+
+    // MARK: v0.3.205 适配器卡（电源 + 电压）
+    private func adapterCard(info: BatteryHealthInfo) -> some View {
+        let watts = info.adapterWatts.map { "\($0) W" } ?? "—"
+        let volts = info.adapterVoltage.map { String(format: "%.1f V", $0) } ?? "—"
+        let desc = info.adapterDescription
+        return HStack(spacing: 12) {
+            Image(systemName: "powerplug.fill")
+                .font(.title2)
+                .foregroundStyle(.blue)
+                .frame(width: 36)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("适配器")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    Label(watts, systemImage: "bolt.fill")
+                        .font(.subheadline.weight(.semibold))
+                    Label(volts, systemImage: "waveform.path.ecg")
+                        .font(.subheadline.weight(.semibold))
+                }
+                if let desc, !desc.isEmpty {
+                    Text(desc)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    // MARK: v0.3.205 身份卡（序列号小眼睛 / 厂商 / 生产日期）
+    private func identityCard(info: BatteryHealthInfo) -> some View {
+        VStack(spacing: 0) {
+            // 序列号行
+            HStack(spacing: 12) {
+                Image(systemName: "number.circle")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                Text("电池序列号")
+                    .font(.subheadline)
+                Spacer()
+                Text(showSerial ? (info.serial ?? "未知") : String(repeating: "•", count: min(info.serial?.count ?? 6, 10)))
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(showSerial ? .primary : .secondary)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showSerial.toggle() }
+                } label: {
+                    Image(systemName: showSerial ? "eye.slash" : "eye")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                }
+            }
+            .padding(.vertical, 10)
+            Divider()
+            // 厂商
+            HStack(spacing: 12) {
+                Image(systemName: "hammer.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                Text("电池厂商")
+                    .font(.subheadline)
+                Spacer()
+                Text(info.batteryManufacturer ?? "未知")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 10)
+            Divider()
+            // 生产日期（iOS 不暴露 → 诚实显示不可用）
+            HStack(spacing: 12) {
+                Image(systemName: "calendar")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                Text("生产日期")
+                    .font(.subheadline)
+                Spacer()
+                Text("iOS 未公开")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 10)
+        }
+        .padding(.horizontal, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
     }
 
     private func chargingLabel(_ info: BatteryHealthInfo) -> String {
