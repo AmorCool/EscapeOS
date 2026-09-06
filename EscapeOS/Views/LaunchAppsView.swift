@@ -36,6 +36,8 @@ struct LaunchAppsView: View {
                 Section {
                     if !hasPairing {
                         PairingGuideCard(note: "拉起应用还需要 LocalDevVPN 已连接.")
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
                     } else {
                         Text("未获取到应用列表.")
                             .foregroundStyle(.secondary)

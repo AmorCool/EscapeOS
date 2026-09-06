@@ -124,15 +124,23 @@ enum ProfileConfigService {
 
     // MARK: - 列表
 
-    /// 设备上全部**配置描述文件**（排除 PayloadType == "Provisioning Profiles" 的预置描述）.
-    static func listConfigurationProfiles() throws -> [ConfigurationProfile] {
-        try withMisagent { client in
+    /// 列表结果（含诊断：copy_all 原始数量 / 解析失败数）
+    struct ListResult {
+        let profiles: [ConfigurationProfile]
+        let rawCount: Int
+        let parseFailed: Int
+    }
+
+    /// 设备上**全部描述文件**（v0.3.239：取消类型过滤对齐爱思识别；预置描述标注"预置"）.
+    static func listAll() throws -> ListResult {
+        let all = try withMisagent { client -> [ConfigurationProfile] in
             var profilePointers: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?
             var profileLengths: UnsafeMutablePointer<Int>?
             var profileCount = 0
             if let ffiError = misagent_copy_all(client, &profilePointers, &profileLengths, &profileCount) {
                 throw error(from: ffiError, fallback: "获取描述文件失败")
             }
+            profileCountSnapshot = profileCount
             defer {
                 if let profilePointers, let profileLengths {
                     misagent_free_profiles(profilePointers, profileLengths, profileCount)
@@ -146,10 +154,9 @@ enum ProfileConfigService {
                 let data = Data(bytes: bytes, count: profileLengths[index])
                 guard let plistData = extractPlist(from: data),
                       let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil),
-                      let dict = plist as? [String: Any] else { continue }
-
-                // 排除预置描述（.mobileprovision，归"预置描述管理"管）
-                if (dict["PayloadType"] as? String) == "Provisioning Profiles" { continue }
+                      let dict = plist as? [String: Any] else {
+                    continue  // 计入 parseFailed
+                }
 
                 // 单 payload 或多 payload（取首 payload 元数据）
                 var type: String? = dict["PayloadType"] as? String
@@ -163,22 +170,30 @@ enum ProfileConfigService {
                     if desc == nil { desc = first["PayloadDescription"] as? String }
                 }
 
-                // 预置描述也可能无 PayloadType 顶层键但内容像 mobileprovision（有 Entitlements+AppIDName）——排除
-                if dict["Entitlements"] is [String: Any], type == nil { continue }
-
-                guard let uuid = (dict["PayloadUUID"] as? String) ?? (dict["UUID"] as? String) else { continue }
+                // UUID fallback：无 UUID 时用名称+序号占位（remove 对此类会失败但至少可见）
+                let uuid = (dict["PayloadUUID"] as? String)
+                    ?? (dict["UUID"] as? String)
+                    ?? ("unknown-\(index)-" + (displayName ?? "unnamed"))
+                let isProvisioning = (type == "Provisioning Profiles")
+                    || (dict["Entitlements"] is [String: Any])
                 result.append(ConfigurationProfile(
                     uuid: uuid,
                     name: displayName ?? "未命名",
                     organization: organization,
-                    type: type,
+                    type: isProvisioning ? "预置描述" : type,
                     desc: desc,
                     verified: (dict["SignedPayload"] as? Bool) ?? false
                 ))
             }
             return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
+        let raw = profileCountSnapshot
+        let failed = max(raw - all.count, 0)
+        return ListResult(profiles: all, rawCount: raw, parseFailed: failed)
     }
+
+    /// copy_all 原始数量快照（ListResult 诊断用）
+    private static var profileCountSnapshot: Int = 0
 
     // MARK: - 安装 / 删除
 

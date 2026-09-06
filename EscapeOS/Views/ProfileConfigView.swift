@@ -10,6 +10,8 @@ struct ProfileConfigView: View {
     @State private var importFileURL: URL?
     @State private var pendingRemove: ProfileConfigService.ConfigurationProfile?
     @State private var toast: String?
+    @State private var rawCount = 0
+    @State private var parseFailed = 0
 
     var body: some View {
         List {
@@ -27,11 +29,22 @@ struct ProfileConfigView: View {
                 Section {
                     VStack(spacing: 10) {
                         Image(systemName: "checkmark.shield").font(.system(size: 40)).foregroundStyle(.secondary)
-                        Text("设备上没有配置描述文件").font(.headline)
-                        Text("点击右上角导入 .mobileconfig / .mobileprofile").font(.caption).foregroundStyle(.secondary)
+                        Text(rawCount > 0
+                             ? "检测到 \(rawCount) 个描述文件，但 \(parseFailed) 个无法解析"
+                             : "设备上没有配置描述文件")
+                            .font(.headline)
+                        Text(rawCount > 0
+                             ? "解析失败的描述文件多为 DER/CMS 格式，请联系开发者扩展解析."
+                             : "点击右上角导入 .mobileconfig / .mobileprofile")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 40)
+                    .background(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .fill(Color(.secondarySystemGroupedBackground))
+                    )
+                    .padding(.horizontal, 4)
                     .listRowBackground(Color.clear)
                 }
             } else {
@@ -131,9 +144,11 @@ struct ProfileConfigView: View {
         errorText = nil
         Task.detached(priority: .userInitiated) {
             do {
-                let result = try ProfileConfigService.listConfigurationProfiles()
+                let result = try ProfileConfigService.listAll()
                 await MainActor.run {
-                    profiles = result
+                    profiles = result.profiles
+                    rawCount = result.rawCount
+                    parseFailed = result.parseFailed
                     loading = false
                 }
             } catch {

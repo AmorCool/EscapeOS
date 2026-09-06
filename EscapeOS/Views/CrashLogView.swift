@@ -39,6 +39,8 @@ struct CrashLogView: View {
                 } else if let errorMessage {
                     if PairingGate.isPairingError(errorMessage) {
                         PairingGuideCard(note: "崩溃分析还需要 LocalDevVPN 已连接.")
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
                     } else {
                         Text(errorMessage)
                             .foregroundColor(.red)
