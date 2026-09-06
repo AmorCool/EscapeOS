@@ -37,20 +37,7 @@ struct ProfileConfigView: View {
             } else {
                 Section("设备描述文件（\(profiles.count)）") {
                     ForEach(profiles) { p in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(p.name).font(.subheadline)
-                            if let org = p.organization, !org.isEmpty {
-                                Text(org).font(.caption2).foregroundStyle(.secondary)
-                            }
-                            HStack(spacing: 6) {
-                                if let t = p.type { Text(t).font(.caption2.monospaced()).foregroundStyle(.secondary) }
-                                Text("UUID ····\(String(p.uuid.suffix(8)))")
-                                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                                if p.verified {
-                                    Text("已验证").font(.caption2).foregroundStyle(.green)
-                                }
-                            }
-                        }
+                        profileRow(p)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 pendingRemove = p
@@ -99,6 +86,27 @@ struct ProfileConfigView: View {
             Button("取消", role: .cancel) { pendingRemove = nil }
         } message: {
             Text("将从设备移除该配置描述文件（UUID ····\(String(pendingRemove?.uuid.suffix(8) ?? ""))）。")
+        }
+    }
+
+    @ViewBuilder
+    private func profileRow(_ p: ProfileConfigService.ConfigurationProfile) -> some View {
+        let uuidTail = String(p.uuid.suffix(8))
+        VStack(alignment: .leading, spacing: 3) {
+            Text(p.name).font(.subheadline)
+            if let org = p.organization, !org.isEmpty {
+                Text(org).font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                if let t = p.type {
+                    Text(t).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                }
+                Text("UUID ····" + uuidTail)
+                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                if p.verified {
+                    Text("已验证").font(.caption2).foregroundStyle(.green)
+                }
+            }
         }
     }
 
