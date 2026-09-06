@@ -53,13 +53,30 @@ struct AppFileBrowserView: View {
     /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）。URL 不符合 Identifiable，
     /// 用 wrapper 让 sheet(item:) 可用。
     @State private var shareItems: ShareItems?
+    /// v0.3.227：导出进度（当前文件名 + 字节 + 项序号）
+    @State private var exportProgress: ExportProgress?
+
+    struct ExportProgress: Identifiable {
+        let id = UUID()
+        let name: String
+        let done: Int64
+        let total: Int64
+        let index: Int
+        let count: Int
+    }
     @State private var showImportPicker = false
 
     struct ShareItems: Identifiable { let id = UUID(); let urls: [URL] }
 
     var body: some View {
         content
-        .overlay(alignment: .bottom) { toastOverlay }
+        .overlay(alignment: .bottom) {
+            if let ep = exportProgress {
+                exportProgressView(ep)
+            } else {
+                toastOverlay
+            }
+        }
         .navigationTitle(scope == .documents ? appName : "\(appName) · \(scope.rawValue)")
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索当前目录")
@@ -105,6 +122,26 @@ struct AppFileBrowserView: View {
     }
 
     // MARK: body 拆分属性（v0.3.219c：规避 type-check 超时）
+
+    /// v0.3.227：导出进度卡
+    private func exportProgressView(_ ep: ExportProgress) -> some View {
+        VStack(spacing: 6) {
+            ProgressView(value: ep.total > 0 ? Double(ep.done) : 0, total: Double(max(ep.total, 1)))
+            Text("导出 \(ep.index)/\(ep.count)：\(ep.name)  \(formatSize(ep.done))/\(formatSize(ep.total))")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .frame(maxWidth: 340)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+        .padding(.bottom, 12)
+        .transition(.opacity)
+    }
 
     @ViewBuilder
     private var toastOverlay: some View {
@@ -597,45 +634,82 @@ struct AppFileBrowserView: View {
             showToast(error.localizedDescription)
         }
     }
-    /// v0.3.221：下载单个条目（文件直接下；文件夹建目录递归）到指定目标路径
+    /// v0.3.227：下载单个条目（文件流式不限大小；文件夹建目录递归）到指定目标路径
     private static func downloadEntry(client: OpaquePointer, entry: AfcEntry, to dest: URL) throws {
         if entry.isDirectory {
             try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
             try recursiveDownload(client: client, srcDir: entry.path, toDir: dest)
         } else {
-            let data = try FileSharingService.downloadFile(afc: client, path: entry.path)
-            try data.write(to: dest)
+            try FileSharingService.downloadFileStreaming(afc: client, path: entry.path, to: dest) { _, _ in }
         }
     }
 
-    /// v0.3.221：批量导出 → EscapeSpace Documents/文件导出浏览/
+    /// v0.3.227：批量导出（流式下载不限大小 + 实时进度）→ EscapeSpace Documents/文件导出浏览/
     private func exportSelected() {
         guard let client = activeClient() else { return }
         let picked = entries.filter { selectedPaths.contains($0.path) }
         guard !picked.isEmpty else { return }
-        showToast("正在导出…")
+        let count = picked.count
         Task {
-            do {
-                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let destDir = docs.appendingPathComponent("文件导出浏览", isDirectory: true)
-                try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
-                let result = try await Task.detached(priority: .userInitiated) {
-                    var ok = 0, failed = 0
-                    for entry in picked {
-                        do {
-                            let dest = destDir.appendingPathComponent(entry.name)
-                            try Self.downloadEntry(client: client, entry: entry, to: dest)
-                            ok += 1
-                        } catch { failed += 1 }
-                    }
-                    return (ok, failed)
-                }.value
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let destDir = docs.appendingPathComponent("文件导出浏览", isDirectory: true)
+            try? FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+            var ok = 0, failed = 0
+            for (idx, entry) in picked.enumerated() {
                 await MainActor.run {
-                    selectedPaths.removeAll()
-                    showToast("已导出 \(result.0) 项 → 文件导出浏览" + (result.1 > 0 ? "（\(result.1) 项失败）" : ""))
+                    exportProgress = ExportProgress(name: entry.name, done: 0, total: 0,
+                                                    index: idx + 1, count: count)
                 }
-            } catch {
-                showToast(error.localizedDescription)
+                do {
+                    let dest = destDir.appendingPathComponent(entry.name)
+                    try Self.exportEntry(client: client, entry: entry, to: dest) { name, done, total in
+                        Task { await MainActor.run {
+                            exportProgress = ExportProgress(name: name, done: done, total: total,
+                                                            index: idx + 1, count: count)
+                        }}
+                    }
+                    ok += 1
+                } catch {
+                    failed += 1
+                }
+            }
+            let okR = ok, failR = failed
+            await MainActor.run {
+                exportProgress = nil
+                selectedPaths.removeAll()
+                showToast("已导出 \(okR) 项 → 文件导出浏览" + (failR > 0 ? "（\(failR) 项失败）" : ""))
+            }
+        }
+    }
+
+    /// 单条目导出（文件流式 / 文件夹递归流式），progress 回调（相对名, 已完成字节, 总字节）
+    private static func exportEntry(client: OpaquePointer, entry: AfcEntry, to dest: URL,
+                                    progress: @escaping (String, Int64, Int64) -> Void) throws {
+        if entry.isDirectory {
+            try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+            try recursiveExport(client: client, srcDir: entry.path, toDir: dest,
+                                prefix: entry.name, progress: progress)
+        } else {
+            try FileSharingService.downloadFileStreaming(afc: client, path: entry.path, to: dest) { done, total in
+                progress(entry.name, done, total)
+            }
+        }
+    }
+
+    private static func recursiveExport(client: OpaquePointer, srcDir: String, toDir: URL, prefix: String,
+                                        progress: @escaping (String, Int64, Int64) -> Void) throws {
+        let items = try FileSharingService.listDirectory(afc: client, path: srcDir)
+        for item in items {
+            let target = toDir.appendingPathComponent(item.name)
+            let rel = prefix + "/" + item.name
+            if item.isDirectory {
+                try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+                try recursiveExport(client: client, srcDir: item.path, toDir: target,
+                                    prefix: rel, progress: progress)
+            } else {
+                try FileSharingService.downloadFileStreaming(afc: client, path: item.path, to: target) { done, total in
+                    progress(rel, done, total)
+                }
             }
         }
     }

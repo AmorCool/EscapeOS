@@ -177,6 +177,35 @@ enum FileSharingService {
         return Data(bytes: dataPtr, count: length)
     }
 
+    /// v0.3.227：流式下载到本地文件（1MB 分块读+写盘，不占内存，任意大小）+ 字节进度
+    static func downloadFileStreaming(afc: OpaquePointer, path: String, to dest: URL,
+                                      progress: @escaping (Int64, Int64) -> Void) throws {
+        let total = fileSize(afc: afc, path: path) ?? 0
+        var handle: OpaquePointer?
+        let rc = path.withCString { afc_file_open(afc, $0, AfcRdOnly, &handle) }
+        guard rc == nil, let handle else { throw makeError("打开文件失败：\(path)") }
+        defer { afc_file_close(handle) }
+        FileManager.default.createFile(atPath: dest.path, contents: nil)
+        guard let fh = try? FileHandle(forWritingTo: dest) else {
+            throw makeError("创建本地文件失败：\(dest.lastPathComponent)")
+        }
+        defer { try? fh.close() }
+        var done: Int64 = 0
+        while true {
+            var dataPtr: UnsafeMutablePointer<UInt8>? = nil
+            var readLen: Int = 0
+            let r = afc_file_read(handle, &dataPtr, 1_048_576, &readLen)
+            if let dataPtr, readLen > 0 {
+                fh.write(Data(bytes: dataPtr, count: readLen))
+                afc_file_read_data_free(dataPtr, readLen)
+                done += Int64(readLen)
+                progress(done, total)
+            }
+            if r != nil { throw makeError("读取失败：\(path)") }
+            if readLen <= 0 { break }
+        }
+    }
+
     /// 上传文件到 AFC（1MB 分块写，AFCService writeFile 同款）。父目录须已存在。
     static func uploadFile(afc: OpaquePointer, data: Data, to path: String) throws {
         var handle: OpaquePointer?
