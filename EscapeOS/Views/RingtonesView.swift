@@ -94,7 +94,7 @@ struct RingtonesView: View {
             } header: {
                 Text("铃声（/var/mobile/media）")
             } footer: {
-                Text("导入任意音频（mp3/wav/m4a 等）会自动转换为 .m4r并上传到 iTunes_Control/Ringtones，随后发送系统同步通知刷新媒体库 —— 导入成功后到「设置 → 声音 → 铃声」查看.")
+                Text("导入任意音频（mp3/wav/m4a 等，超 40 秒自动截取）会转换为 .m4r 上传到 iTunes_Control/Ringtones 并注册进系统铃声库（Ringtones.plist，爱思同机制）——导入成功后到「设置 → 声音 → 铃声」查看；若未立即出现，重启设备后必然加载.")
             }
         }
         .listStyle(.insetGrouped)
@@ -266,7 +266,8 @@ struct RingtonesView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let remote = try service.importRingtone(localURL: url)
-                // 同步通知失败不阻塞导入，但提示用户（见 footer 说明）
+                // 同步通知失败不阻塞导入（注册表已写入，铃声已进系统铃声库），
+                // 但提示用户
                 let syncFailed: String? = {
                     do {
                         try service.postSyncNotification("com.apple.itunes-mobdev.syncDidFinish")
@@ -278,9 +279,9 @@ struct RingtonesView: View {
                 DispatchQueue.main.async {
                     busy = false
                     if let syncFailed {
-                        toast = "已上传 \(url.lastPathComponent)，但媒体库刷新通知失败（\(syncFailed)）"
+                        toast = "已导入并注册铃声 \(url.lastPathComponent)；媒体库刷新通知失败（\(syncFailed)）——若设置里未出现，重启设备即可"
                     } else {
-                        toast = "已导入并通知系统同步：\(url.lastPathComponent)（可到「设置 → 声音 → 铃声」查看）"
+                        toast = "已导入并注册到铃声库：\(url.lastPathComponent)（到「设置 → 声音 → 铃声」查看；未出现请重启设备）"
                     }
                     reload()
                 }

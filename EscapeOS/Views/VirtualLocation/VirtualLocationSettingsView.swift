@@ -29,6 +29,9 @@ struct VirtualLocationSettingsView: View {
                             .foregroundStyle(session.hasPairing ? LocusTheme.statusGood : LocusTheme.statusWarn)
                     }
 
+                    Button("清除虚拟定位") {
+                        SpoofSession.shared.stop()
+                    }
                     Button("如何导入配对文件") {
                         showImportGuide = true
                     }

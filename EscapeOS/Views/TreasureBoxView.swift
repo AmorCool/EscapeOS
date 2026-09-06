@@ -15,6 +15,7 @@ struct TreasureBoxView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     heroCard
+                    wifiPowerCard
                     itemsCard
                     Text("更多工具持续补充中")
                         .font(.caption2)
@@ -41,6 +42,88 @@ struct TreasureBoxView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    // v0.3.240：WiFi 射频开关（wifi_set_power Lua 命令 → RSD 隧道 MCInstall SetWiFiPowerState）
+    @State private var wifiPowerOn = false
+    @State private var wifiPowerBusy = false
+    @State private var wifiPowerMsg: String?
+
+    private func setWifiPower(_ on: Bool) {
+        wifiPowerBusy = true
+        wifiPowerMsg = nil
+        Task.detached(priority: .userInitiated) {
+            do {
+                try WirelessLockdownService.setWifiPower(on)
+                await MainActor.run {
+                    wifiPowerBusy = false
+                    wifiPowerOn = on
+                    wifiPowerMsg = "已\(on ? "开启" : "关闭") Wi-Fi 射频"
+                }
+            } catch {
+                await MainActor.run {
+                    wifiPowerBusy = false
+                    wifiPowerMsg = "失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func enableWifiPairing() {
+        wifiPowerBusy = true
+        wifiPowerMsg = nil
+        Task.detached(priority: .userInitiated) {
+            do {
+                try WirelessLockdownService.enableWifiConnections()
+                await MainActor.run {
+                    wifiPowerBusy = false
+                    wifiPowerMsg = "已启用局域网 Wi-Fi 配对连接"
+                }
+            } catch {
+                await MainActor.run {
+                    wifiPowerBusy = false
+                    wifiPowerMsg = "失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private var wifiPowerCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("设备控制").font(.headline).padding(.bottom, 2)
+            Toggle(isOn: Binding(
+                get: { wifiPowerOn },
+                set: { on in
+                    guard !wifiPowerBusy else { return }
+                    setWifiPower(on)
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Wi-Fi 射频开关").font(.subheadline)
+                    Text("lockdown wireless_lockdown（需 LocalDevVPN + 配对文件）")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(wifiPowerBusy)
+            Button {
+                enableWifiPairing()
+            } label: {
+                Label("启用局域网 Wi-Fi 配对连接", systemImage: "wifi")
+                    .font(.subheadline)
+            }
+            .disabled(wifiPowerBusy)
+            if wifiPowerBusy {
+                HStack { ProgressView().controlSize(.small); Text("正在执行…").font(.caption).foregroundStyle(.secondary) }
+            }
+            if let msg = wifiPowerMsg {
+                Text(msg).font(.caption2).foregroundStyle(wifiPowerMsg?.hasPrefix("失败") == true ? .red : .green)
+            }
         }
         .padding(16)
         .background(
