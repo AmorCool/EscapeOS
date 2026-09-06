@@ -5,7 +5,8 @@ import Foundation
 ///   - instproxy_browse 列全部已装应用（含 UIFileSharingEnabled 字段）
 ///   - house_arrest_vend_documents 为指定 bundle id 拿 AFC 会话（仅该 App /Documents 容器）
 ///   - afc_list_directory / afc_get_file_info 列举与读元数据
-struct FileSharingApp {
+struct FileSharingApp: Identifiable {
+    var id: String { bundleId }
     var bundleId: String
     var name: String        // CFBundleDisplayName
     var version: String     // CFBundleShortVersionString
@@ -19,7 +20,7 @@ enum FileSharingService {
         NSError(domain: "FileSharing", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    /// 列出全部已装应用并标 UIFileSharingEnabled（iDescriptor utils.rs:543）。
+    /// 列出全部已装应用并标 UIFileSharingEnabled（iDescriptor 同 instproxy browse）。
     /// 同步阻塞——调用方放后台线程。
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
@@ -35,31 +36,34 @@ enum FileSharingService {
         }
         defer { installation_proxy_client_free(ip) }
 
-        // 2. browse(NULL) 拿所有 app 字典
-        var nodesPtr: UnsafeMutablePointer<UnsafeMutablePointer<plist_t>?>?
-        var nodesLen: Int = 0
-        guard installation_proxy_browse(ip, nil, &nodesPtr, &nodesLen) == nil,
-              let nodesPtr, nodesLen > 0 else {
+        // 2. browse(nil) —— 返回 plist_t 指针数组（元素 = 每 app 的属性 dict）
+        var nodes: plist_t? = nil
+        var count = 0
+        let rc = installation_proxy_browse(ip, nil, &nodes, &count)
+        guard rc == nil, count > 0, let base = nodes else {
             throw makeError("browse 失败")
         }
+        // 数组按 plist_t? 元素读（JITEnableService 同款）
+        let array = base.assumingMemoryBound(to: plist_t?.self)
         defer {
-            for i in 0..<nodesLen {
-                if let p = nodesPtr[i] { plist_free(p) }
+            for i in 0..<count {
+                if let p = array[i] { plist_free(p) }
             }
-            nodesPtr.deallocate()
+            // Rust 侧 boxed slice 由 ffi 释放
+            idevice_data_free(base.assumingMemoryBound(to: UInt8.self), UInt(count * MemoryLayout<plist_t?>.stride))
         }
 
         var apps: [FileSharingApp] = []
-        apps.reserveCapacity(nodesLen)
-        for i in 0..<nodesLen {
-            guard let p = nodesPtr[i] else { continue }
-            guard let dict = plistToDict(p) else { continue }
+        apps.reserveCapacity(count)
+        for i in 0..<count {
+            guard let node = array[i] else { continue }
+            guard let dict = plistToDict(node) else { continue }
             let bundleId = dict["CFBundleIdentifier"] as? String ?? ""
             let name = dict["CFBundleDisplayName"] as? String
                 ?? dict["CFBundleName"] as? String ?? bundleId
             let version = dict["CFBundleShortVersionString"] as? String ?? ""
             let appType = dict["ApplicationType"] as? String ?? "Unknown"
-            // UIFileSharingEnabled 字段（plist bool）
+            // UIFileSharingEnabled 字段（instproxy browse 返回的属性字段）
             let sharing = (dict["UIFileSharingEnabled"] as? Bool) ?? false
             apps.append(FileSharingApp(
                 bundleId: bundleId,
@@ -103,9 +107,7 @@ enum FileSharingService {
         let rc = path.withCString { cstr in
             afc_list_directory(afc, cstr, &entriesPtr, &count)
         }
-        guard rc == nil, let entriesPtr, count > 0 else {
-            return []
-        }
+        guard rc == nil else { return [] }
         defer {
             if let entriesPtr {
                 for i in 0..<count {
@@ -115,6 +117,7 @@ enum FileSharingService {
             }
         }
         var result: [AfcEntry] = []
+        guard let entriesPtr else { return [] }
         for i in 0..<count {
             guard let cstr = entriesPtr[i] else { continue }
             let name = String(cString: cstr)
@@ -124,7 +127,8 @@ enum FileSharingService {
             result.append(AfcEntry(name: name, path: childPath, isDirectory: isDir))
         }
         return result.sorted {
-            ($0.isDirectory, $0.name.lowercased()) < ($1.isDirectory, $1.name.lowercased())
+            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
     }
 

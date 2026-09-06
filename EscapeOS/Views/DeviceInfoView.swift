@@ -87,6 +87,7 @@ struct DeviceInfoView: View {
         }
     }
 
+    @ViewBuilder
     private func identifiersSection(_ info: DeviceInfoModel) -> some View {
         sectionCard(title: "系统与固件", icon: "gearshape.2.fill") {
             row("iOS 版本", "iOS \(info.systemVersion)")

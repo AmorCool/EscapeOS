@@ -183,7 +183,7 @@ enum DeviceInfoService {
 
     /// lockdown GetValue(None, None) → 整棵根字典
     static func lockdownFullDict() throws -> [String: Any] {
-        let tunnel = try makeTunnel()
+        var tunnel = try makeTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
             throw NSError(domain: "DeviceInfo", code: -10, userInfo: [NSLocalizedDescriptionKey: "隧道未建立"])
@@ -202,7 +202,7 @@ enum DeviceInfoService {
     }
 
     static func lockdownDomainDict(_ domain: String) throws -> [String: Any] {
-        let tunnel = try makeTunnel()
+        var tunnel = try makeTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
             throw NSError(domain: "DeviceInfo", code: -20, userInfo: [NSLocalizedDescriptionKey: "隧道未建立"])
@@ -235,7 +235,7 @@ enum DeviceInfoService {
 
     /// 越狱检测（iDescriptor utils.rs:497-502：afc list_dir ../../../../bin 非空）
     static func isacJailbroken() throws -> Bool {
-        let tunnel = try makeTunnel()
+        var tunnel = try makeTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else { return false }
         var afc: OpaquePointer?
@@ -255,9 +255,9 @@ enum DeviceInfoService {
         return count > 0
     }
 
-    /// DiagnosticsRelay mobilegestalt 取 ECID / MLB / Baseband
+    /// DiagnosticsRelay mobilegestalt 取 ECID / MLB / Baseband（一次传 keys 数组）
     static func mobilegestaltKeys() throws -> (Int64?, String?, String?) {
-        let tunnel = try makeTunnel()
+        var tunnel = try makeTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
             return (nil, nil, nil)
@@ -268,37 +268,37 @@ enum DeviceInfoService {
         }
         defer { diagnostics_relay_client_free(client) }
         let keys: [String] = ["UniqueChipID", "MLBSerialNumber", "BasebandSerialNumber"]
-        var ecid: Int64? = nil
-        var mlb: String? = nil
-        var bb: String? = nil
-        for k in keys {
-            let keyCStr = (k as NSString).utf8String
-            var node: plist_t?
-            if diagnostics_relay_client_mobilegestalt(client, keyCStr, &node) == nil, let node {
-                defer { plist_free(node) }
-                var binPtr: UnsafeMutablePointer<CChar>?
-                var binLen: UInt32 = 0
-                if plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
-                   let binPtr, binLen > 0 {
-                    defer { plist_mem_free(binPtr) }
-                    if let value = try? PropertyListSerialization.propertyList(
-                        from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil),
-                       let dict = value as? [String: Any] {
-                        switch k {
-                        case "UniqueChipID":
-                            if let n = dict[k] as? Int { ecid = Int64(n) }
-                            else if let n = dict[k] as? Double { ecid = Int64(n) }
-                            else if let s = dict[k] as? String { ecid = Int64(s) }
-                        case "MLBSerialNumber":
-                            mlb = dict[k] as? String
-                        case "BasebandSerialNumber":
-                            bb = dict[k] as? String
-                        default: break
-                        }
-                    }
-                }
-            }
+        // const char ** keys 数组
+        var carray: [UnsafePointer<CChar>?] = keys.map { ($0 as NSString).utf8String }
+        var node: plist_t?
+        let rc = carray.withUnsafeMutableBufferPointer { buf in
+            diagnostics_relay_client_mobilegestalt(client, buf.baseAddress, UInt(buf.count), &node)
         }
+        guard rc == nil, let node else { return (nil, nil, nil) }
+        defer { plist_free(node) }
+        var binPtr: UnsafeMutablePointer<CChar>?
+        var binLen: UInt32 = 0
+        guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
+              let binPtr, binLen > 0 else { return (nil, nil, nil) }
+        defer { plist_mem_free(binPtr) }
+        guard let dict = (try? PropertyListSerialization.propertyList(
+            from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil)) as? [String: Any]
+        else { return (nil, nil, nil) }
+        // 响应可能为 { "UniqueChipID": {...} } 或 { key: value }；兼容两层
+        func value(_ k: String) -> Any? {
+            if let v = dict[k] { return v }
+            if let sub = dict[k] as? [String: Any], let v = sub[k] { return v }
+            return nil
+        }
+        var ecid: Int64? = nil
+        if let v = value("UniqueChipID") {
+            if let n = v as? Int { ecid = Int64(n) }
+            else if let n = v as? Double { ecid = Int64(n) }
+            else if let n = v as? Int64 { ecid = n }
+            else if let s = v as? String { ecid = Int64(s) }
+        }
+        let mlb = value("MLBSerialNumber") as? String
+        let bb = value("BasebandSerialNumber") as? String
         return (ecid, mlb, bb)
     }
 
