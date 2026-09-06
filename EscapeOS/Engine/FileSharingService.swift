@@ -20,7 +20,7 @@ enum FileSharingService {
         NSError(domain: "FileSharing", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    /// 列出全部已装应用并标 UIFileSharingEnabled（iDescriptor 同 instproxy browse）。
+    /// 列出全部已装应用并标 UIFileSharingEnabled（get_apps / Lookup 同 AppDiscovery）。
     /// 同步阻塞——调用方放后台线程。
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
@@ -36,36 +36,42 @@ enum FileSharingService {
         }
         defer { installation_proxy_client_free(ip) }
 
-        // 2. browse(nil) —— 返回 plist_t 指针数组（元素 = 每 app 的属性 dict）
-        var nodes: plist_t? = nil
+        // 2. get_apps（Lookup）—— 与 AppDiscovery / JITEnableService 同一范式
+        var rawApps: UnsafeMutableRawPointer?
         var count = 0
-        let rc = installation_proxy_browse(ip, nil, &nodes, &count)
-        guard rc == nil, count > 0, let base = nodes else {
-            throw makeError("browse 失败")
+        if let ffiError = installation_proxy_get_apps(ip, nil, nil, 0, &rawApps, &count) {
+            throw makeError("获取应用列表失败")
         }
-        // 数组按 plist_t? 元素读（JITEnableService 同款）
-        let array = base.assumingMemoryBound(to: plist_t?.self)
+        guard let rawApps, count > 0 else { return [] }
+
+        let apps = rawApps.assumingMemoryBound(to: plist_t?.self)
         defer {
-            for i in 0..<count {
-                if let p = array[i] { plist_free(p) }
+            for index in 0..<count {
+                plist_free(apps[index])
             }
-            // Rust 侧 boxed slice 由 ffi 释放
-            idevice_data_free(base.assumingMemoryBound(to: UInt8.self), UInt(count * MemoryLayout<plist_t?>.stride))
+            idevice_data_free(rawApps.assumingMemoryBound(to: UInt8.self),
+                               UInt(count * MemoryLayout<plist_t?>.stride))
         }
 
-        var apps: [FileSharingApp] = []
-        apps.reserveCapacity(count)
-        for i in 0..<count {
-            guard let node = array[i] else { continue }
-            guard let dict = plistToDict(node) else { continue }
-            let bundleId = dict["CFBundleIdentifier"] as? String ?? ""
-            let name = dict["CFBundleDisplayName"] as? String
-                ?? dict["CFBundleName"] as? String ?? bundleId
-            let version = dict["CFBundleShortVersionString"] as? String ?? ""
-            let appType = dict["ApplicationType"] as? String ?? "Unknown"
-            // UIFileSharingEnabled 字段（instproxy browse 返回的属性字段）
+        var result: [FileSharingApp] = []
+        for index in 0..<count {
+            var binaryPlist: UnsafeMutablePointer<CChar>?
+            var binaryLength: UInt32 = 0
+            guard plist_to_bin(apps[index], &binaryPlist, &binaryLength) == PLIST_ERR_SUCCESS,
+                  let binaryPlist, binaryLength > 0 else { continue }
+            let data = Data(bytes: binaryPlist, count: Int(binaryLength))
+            plist_mem_free(binaryPlist)
+            guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil))
+                    as? [String: Any],
+                  let bundleId = dict["CFBundleIdentifier"] as? String, !bundleId.isEmpty else { continue }
+
+            let name = (dict["CFBundleDisplayName"] as? String)
+                ?? (dict["CFBundleName"] as? String) ?? bundleId
+            let version = (dict["CFBundleShortVersionString"] as? String) ?? ""
+            let appType = (dict["ApplicationType"] as? String) ?? "Unknown"
+            // UIFileSharingEnabled（Lookup 返回的属性字段；可能为 absent → false）
             let sharing = (dict["UIFileSharingEnabled"] as? Bool) ?? false
-            apps.append(FileSharingApp(
+            result.append(FileSharingApp(
                 bundleId: bundleId,
                 name: name,
                 version: version,
@@ -74,7 +80,7 @@ enum FileSharingService {
                 path: dict["Path"] as? String
             ))
         }
-        return apps
+        return result
     }
 
     /// 为指定 bundle id 建立 Documents 容器 AFC 会话（house_arrest）。
@@ -153,18 +159,6 @@ enum FileSharingService {
             afc_get_file_info(afc, cstr, &info)
         }
         return rc == nil ? Int64(info.size) : nil
-    }
-
-    // MARK: 辅助
-    /// plist_t → [String: Any]
-    static func plistToDict(_ node: plist_t) -> [String: Any]? {
-        var binPtr: UnsafeMutablePointer<CChar>?
-        var binLen: UInt32 = 0
-        guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
-              let binPtr, binLen > 0 else { return nil }
-        defer { plist_mem_free(binPtr) }
-        return try? PropertyListSerialization.propertyList(
-            from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil) as? [String: Any]
     }
 
     // MARK: 隧道（拷贝自 DeviceInfoService 简化版）

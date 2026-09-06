@@ -268,13 +268,16 @@ enum DeviceInfoService {
         }
         defer { diagnostics_relay_client_free(client) }
         let keys: [String] = ["UniqueChipID", "MLBSerialNumber", "BasebandSerialNumber"]
-        // const char ** keys 数组
-        var carray: [UnsafePointer<CChar>?] = keys.map { ($0 as NSString).utf8String }
+        // const char ** keys 数组（不可变指针）
+        let keyPtrs: [UnsafePointer<CChar>?] = keys.map { ($0 as NSString).utf8String }
         var node: plist_t?
-        let rc = carray.withUnsafeMutableBufferPointer { buf in
+        if let ffiError = keyPtrs.withUnsafeBufferPointer({ buf in
             diagnostics_relay_client_mobilegestalt(client, buf.baseAddress, UInt(buf.count), &node)
+        }) {
+            idevice_error_free(ffiError)
+            return (nil, nil, nil)
         }
-        guard rc == nil, let node else { return (nil, nil, nil) }
+        guard let node else { return (nil, nil, nil) }
         defer { plist_free(node) }
         var binPtr: UnsafeMutablePointer<CChar>?
         var binLen: UInt32 = 0
