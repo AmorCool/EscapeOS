@@ -39,7 +39,7 @@ struct MoreView: View {
             ("配对文件", "重置/更换配对文件后从这里重新导入", [
                 MoreItem("pairing-import", "key.horizontal", "配对文件导入",
                          "导入本机配对文件（RSD 隧道凭证）",
-                         PairingInstallView()),
+                         PairingImportView()),
             ]),
             ("设备工具", "需要配对文件 + LocalDevVPN 隧道", [
                 MoreItem("virtual-location", "location.fill", "虚拟定位",
@@ -68,6 +68,9 @@ struct MoreView: View {
                 MoreItem("signed-ipa", "app.badge.checkmark", "IPA 安装",
                          "在线 / 覆盖安装已签名 IPA",
                          SignedIPAInstallView()),
+                MoreItem("pairing-install", "tray.and.arrow.down.fill", "管理配对文件",
+                         "把配对文件写入其它侧载工具（复用同一配对身份）",
+                         PairingInstallView()),
                 MoreItem("appstore", "cart.fill", "App Store 下载",
                          "搜索下载正版 IPA",
                          AppStoreDownloadView()),
