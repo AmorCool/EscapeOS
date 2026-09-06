@@ -47,11 +47,12 @@ struct BatteryHealthView: View {
         }
         .task {
             await load()
-            pollTask = Task { [weak self] in
+            // v0.3.202：实时轮询 —— 用 Task 检查取消；struct 不能用 [weak self]
+            pollTask = Task {
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 10_000_000_000)
                     guard !Task.isCancelled else { break }
-                    await self?.load(silent: true)
+                    await self.load(silent: true)
                 }
             }
         }
