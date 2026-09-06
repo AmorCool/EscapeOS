@@ -10,28 +10,68 @@ struct HomeView: View {
     /// 体感上的呼吸节奏 —— 灵动球渐变光晕周期
     @State private var breathe: Bool = false
     @State private var showTreasure: Bool = false
+    /// v0.3.199：百宝箱手势 — 跟踪 ScrollView 顶部偏移，判定"是否在页面顶部"
+    /// （只有顶部才能下拉进入百宝箱，避免与列表滚动冲突误触）
+    @State private var topOffset: CGFloat = 0
+    @State private var dragOffset: CGFloat = 0
 
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
+                treasureHandle    // 顶部把手（下拉进入百宝箱）
                 heroCard
                 quickCheckCard
                 cardsGrid
                 Spacer(minLength: 24)
-                treasureHint
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding(.top, 4)
             .padding(.bottom, 32)
+            .background(
+                // 读取 ScrollView 内容相对滚动的顶部偏移
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: ScrollTopOffsetKey.self,
+                        value: geo.frame(in: .named("homeScroll")).minY
+                    )
+                }
+            )
         }
+        .coordinateSpace(name: "homeScroll")
+        .onPreferenceChange(ScrollTopOffsetKey.self) { topOffset = $0 }
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
         .navigationTitle("主页")
         .navigationBarTitleDisplayMode(.large)
-        .gesture(treasureGesture)
+        .simultaneousGesture(treasureGesture)
         .navigationDestination(isPresented: $showTreasure) {
             TreasureBoxView()
         }
+    }
+
+    /// 顶部把手：提示下拉进入百宝箱；拖动时视觉放大反馈
+    private var treasureHandle: some View {
+        VStack(spacing: 5) {
+            Capsule()
+                .fill(Color(.separator))
+                .frame(width: 36, height: 5)
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down")
+                    .font(.caption2.weight(.semibold))
+                Text("下拉进入百宝箱")
+                    .font(.caption2)
+            }
+            .foregroundStyle(.tertiary)
+            .scaleEffect(handleScale)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    private var handleScale: CGFloat {
+        // 下拉时把手轻微放大 → 提示手势生效
+        let pull = max(0, min(dragOffset, 60))
+        return 1 + (pull / 60) * 0.18
     }
 
     // MARK: Hero —— 灵动球 + 分数 + 立即体检
@@ -178,29 +218,39 @@ struct HomeView: View {
                          tint: .purple)
             }
             .buttonStyle(.plain)
+
+            // v0.3.199：电池健康（iDescriptor BatteryInfo 移植）
+            NavigationLink {
+                BatteryHealthView()
+            } label: {
+                HomeCard(title: "电池健康",
+                         subtitle: "循环次数 / 容量 / 健康度",
+                         icon: "battery.75percent",
+                         tint: .green)
+            }
+            .buttonStyle(.plain)
         }
     }
 
-    // MARK: 百宝箱提示（页面底部装饰）
-    private var treasureHint: some View {
-        VStack(spacing: 4) {
-            Image(systemName: "chevron.compact.down")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            Text("下滑进入百宝箱")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    // MARK: 百宝箱下滑手势
+    // MARK: 百宝箱下滑手势（v0.3.199：只在页面顶部时触发，避免与滚动冲突）
     private var treasureGesture: some Gesture {
-        // 在 ScrollView 顶部时下滑触发
-        DragGesture(minimumDistance: 30, coordinateSpace: .named("home"))
+        // simultaneousGesture：与 ScrollView 滚动共存——但仅当内容在顶部
+        // （topOffset ≥ -2，含下拉弹性）且下滑 >90pt 时进入百宝箱。
+        DragGesture(minimumDistance: 24)
+            .onChanged { value in
+                // 只有向下拖且在页面顶部时记录
+                if value.translation.height > 0, topOffset >= -2 {
+                    dragOffset = value.translation.height
+                } else {
+                    dragOffset = 0
+                }
+            }
             .onEnded { value in
-                guard value.translation.height > 80,
-                      abs(value.translation.width) < 60 else { return }
+                dragOffset = 0
+                guard value.translation.height > 90,
+                      abs(value.translation.width) < 80,
+                      topOffset >= -2 else { return }
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 showTreasure = true
             }
     }
@@ -266,5 +316,12 @@ struct HomeCard: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
+    }
+}
+// MARK: - 滚动顶部偏移 PreferenceKey（百宝箱手势判定用）
+fileprivate struct ScrollTopOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
