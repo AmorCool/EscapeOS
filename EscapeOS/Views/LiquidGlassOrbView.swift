@@ -34,18 +34,18 @@ struct LiquidGlassOrbView: View {
 
     @available(iOS 17.0, *)
     private func shaderRect(size: CGSize, t: Double) -> some View {
-        let rect = Rectangle()
+        Rectangle()
             .fill(Color(red: 0.010, green: 0.012, blue: 0.028))
-        return rect.colorEffect(
-            Shader(
-                "liquidGlassOrb",
-                .float2(Float(size.width), Float(size.height)),
-                .float(Float(t)),
-                .float2(Float(lightCur.x), Float(lightCur.y)),
-                .float3(tintVec),
-                .float(progressCur)
+            .colorEffect(
+                Shader(
+                    ShaderFunction("liquidGlassOrb"),
+                    .float2(Float(size.width), Float(size.height)),
+                    .float(Float(t)),
+                    .float2(Float(lightCur.x), Float(lightCur.y)),
+                    .float3(tintVec.x, tintVec.y, tintVec.z),
+                    .float(progressCur)
+                )
             )
-        )
     }
 
     @available(iOS 17.0, *)
@@ -82,7 +82,7 @@ struct LiquidGlassOrbView: View {
             .accessibilityLabel("安全评分 \(score) 分")
         }
         .aspectRatio(1.25, contentMode: .fit)
-        .task(id: "orb-loop") { animateLoop() }
+        .task(id: "orb-loop") { await animateLoop() }
     }
 
     /// 60fps 轻量状态循环：光源缓动 + 进度环平滑
