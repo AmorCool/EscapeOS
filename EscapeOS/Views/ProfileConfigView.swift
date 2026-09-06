@@ -35,7 +35,7 @@ struct ProfileConfigView: View {
                     .listRowBackground(Color.clear)
                 }
             } else {
-                Section("设备描述文件（\(profiles.count)）") {
+                Section(header: Text("设备描述文件（\(profiles.count)）")) {
                     ForEach(profiles) { p in
                         profileRow(p)
                         .swipeActions(edge: .trailing) {
