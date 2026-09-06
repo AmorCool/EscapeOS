@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFAudio
 
 /// v0.3.208：设备信息面板 —— iDescriptor 完整字段（基础/硬件/序列号/网络/存储）。
 /// 序列号/UDID/IMEI/ECID/MLB 等敏感字段：统一小眼睛显示/隐藏 + 长按复制。
@@ -9,6 +10,8 @@ struct DeviceInfoView: View {
     @State private var loading = true
     /// 隐私敏感字段统一小眼睛状态（默认全部隐藏）
     @State private var showSensitive = false
+    /// v0.3.214：其它音频正在播放（loupe AudioRouteProvider 同款，AVAudioSession）
+    @State private var otherAudioPlaying = false
 
     var body: some View {
         ScrollView {
@@ -19,6 +22,7 @@ struct DeviceInfoView: View {
                     deviceHero(info)
                     basicSection(info)
                     identifiersSection(info)
+                    audioSection              // v0.3.214：其它音频正在播放
                     networkSection(info)
                     storageSection(info)
                     if info.raw.count > 0 { rawCard(info) }
@@ -55,6 +59,7 @@ struct DeviceInfoView: View {
                 try DeviceInfoService.collectFull()
             }.value
             errorText = nil
+            refreshAudio()
         } catch {
             errorText = error.localizedDescription
         }
@@ -107,6 +112,42 @@ struct DeviceInfoView: View {
             sensitiveRow("ECID", info.ecid)
             sensitiveRow("MLB 序列号", info.mlbSerial)
             sensitiveRow("基带序列号", info.basebandSerial)
+        }
+    }
+
+    // MARK: v0.3.214 音频（loupe 同款：AVAudioSession.isOtherAudioPlaying）
+    private var audioSection: some View {
+        sectionCard(title: "音频", icon: "speaker.wave.2.fill") {
+            Button {
+                refreshAudio()
+            } label: {
+                HStack {
+                    Text("其它音频正在播放")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .frame(width: 110, alignment: .leading)
+                    Text(otherAudioPlaying ? "是" : "否")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .foregroundStyle(otherAudioPlaying ? .green : .secondary)
+                    Spacer()
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func refreshAudio() {
+        // loupe：先 setCategory(.ambient, .mixWithOthers) + setActive 再读，否则恒 false
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.ambient, options: .mixWithOthers)
+            try session.setActive(true)
+            otherAudioPlaying = session.isOtherAudioPlaying
+        } catch {
+            otherAudioPlaying = false
         }
     }
 

@@ -24,6 +24,7 @@ struct BatteryHealthView: View {
                     healthRing(info: info)
                     metricsGrid(info: info)
                     adapterCard(info: info)      // v0.3.205：适配器电源 + 电压
+                    lowPowerCard                 // v0.3.214：低电量模式（loupe 同款）
                     identityCard(info: info)     // v0.3.205：序列号(眼睛)/厂商/生产日期
                     if let lastUpdated {
                         Label("更新于 \(Self.timeFormatter.string(from: lastUpdated))", systemImage: "clock")
@@ -163,6 +164,32 @@ struct BatteryHealthView: View {
                 )
             }
         }
+    }
+
+    // MARK: v0.3.214 低电量模式卡（loupe 同款：ProcessInfo.isLowPowerModeEnabled）
+    private var lowPowerCard: some View {
+        let lpm = ProcessInfo.processInfo.isLowPowerModeEnabled
+        return HStack(spacing: 12) {
+            Image(systemName: "battery.25percent")
+                .font(.title2)
+                .foregroundStyle(lpm ? .yellow : .green)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(lpm ? "低电量模式开启" : "低电量模式关闭")
+                    .font(.subheadline.weight(.semibold))
+                Text(lpm ? "系统正在省电，部分后台活动已暂停" : "正常用电模式")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(lpm ? "开" : "关")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(lpm ? .yellow : .green)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
     }
 
     // MARK: v0.3.205 适配器卡（电源 + 电压）

@@ -16,7 +16,6 @@ struct HomeView: View {
         ScrollView {
             VStack(spacing: 20) {
                 heroCard
-                tipCard             // v0.3.213：体检提示卡（替代 quickCheckCard）
                 cardsGrid
                 treasureHandleBar   // v0.3.207：底部把手（点击/上滑开 sheet）
                 Spacer(minLength: 8)
@@ -42,7 +41,7 @@ struct HomeView: View {
             }.value
             withAnimation(.easeInOut(duration: 0.5)) { securityScore = total }
         }
-        .navigationTitle("系统管家")
+        .navigationTitle("主页")
         .navigationBarTitleDisplayMode(.large)
     }
 
@@ -100,7 +99,7 @@ struct HomeView: View {
             NavigationLink {
                 HealthCheckView(score: $securityScore)
             } label: {
-                Label("一键优化", systemImage: "wand.and.stars")
+                Label("立即体检", systemImage: "stethoscope")
                     .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
@@ -114,40 +113,6 @@ struct HomeView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-    }
-
-    // MARK: 体检提示卡（v0.3.213：参考系统管家 "AI 风险提醒" 风格）
-    private var tipCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "shield.lefthalf.filled")
-                    .foregroundStyle(.orange)
-                Text("设备体检")
-                    .font(.headline)
-                Spacer()
-            }
-            Text("EscapeOS 自动检测越狱/注入/可疑文件/可疑端口，确保设备运行环境可信。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("知道了") {}
-                    .font(.footnote)
-                    .foregroundStyle(.blue)
-                Button {
-                    // 占位：未来跳体检详情
-                } label: {
-                    Text("了解详情")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.blue)
-                }
-            }
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
     }

@@ -10,9 +10,7 @@ struct FileSharingAppsView: View {
     @State private var searchText: String = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            searchBar
-            List {
+        List {
                 if loading {
                     Section {
                         HStack { ProgressView(); Text("正在读取已装应用…") }
@@ -33,9 +31,12 @@ struct FileSharingAppsView: View {
                     }
                 }
             }
+            .listStyle(.insetGrouped)   // v0.3.214：参考模块板块样式
         }
         .navigationTitle("文档浏览")
         .navigationBarTitleDisplayMode(.large)  // v0.3.212：参考模块板块顶栏样式
+        .searchable(text: $searchText, prompt: "搜索应用")   // v0.3.214：系统搜索框替代自绘
+        .autocorrectionDisabled()
         .task { await load() }
     }
 
@@ -47,19 +48,6 @@ struct FileSharingAppsView: View {
             list = list.filter { $0.bundleId.lowercased().contains(q) || $0.name.lowercased().contains(q) }
         }
         return list
-    }
-
-    private var searchBar: some View {
-        HStack {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜索应用", text: $searchText)
-                .textFieldStyle(.plain)
-                .autocorrectionDisabled()
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
     }
 
     @ViewBuilder

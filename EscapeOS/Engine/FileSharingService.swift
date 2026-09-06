@@ -83,7 +83,7 @@ enum FileSharingService {
         return result
     }
 
-    /// 为指定 bundle id 建立 Documents 容器 AFC 会话（house_arrest）。
+    /// 为指定 bundle id 建立 Documents 容器 AFC 会话（house_arrest vend_documents）。
     /// 返回 AFC handle（caller 负责 free）。失败 throw。
     static func openAppDocuments(bundleId: String) throws -> OpaquePointer {
         var tunnel = try makeTunnel()
@@ -104,6 +104,83 @@ enum FileSharingService {
             throw makeError("无法为 \(bundleId) 取得 Documents AFC（可能未开启文档共享或未配对）")
         }
         return afc
+    }
+
+    /// v0.3.214：为指定 bundle id 建立**完整数据容器** AFC 会话（house_arrest vend_container）。
+    /// 返回 AFC handle（caller 负责 free）；失败 throw —— 表示该应用不允许整个容器访问
+    /// （多数第三方 App 无权限，仅开发者/受信签名 App 可开；此时降级只读 Documents）。
+    static func openAppContainer(bundleId: String) throws -> OpaquePointer {
+        var tunnel = try makeTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw makeError("隧道未建立")
+        }
+        var ha: OpaquePointer?
+        guard house_arrest_client_connect_rsd(adapter, handshake, &ha) == nil, let ha else {
+            throw makeError("连接 house_arrest 失败")
+        }
+        var afc: OpaquePointer?
+        let rc = bundleId.withCString { bid in
+            house_arrest_vend_container(ha, bid, &afc)
+        }
+        guard rc == nil, let afc else {
+            throw makeError("该应用不允许访问完整容器（无权限）")
+        }
+        return afc
+    }
+
+    // MARK: v0.3.214 文件操作（移植 FileBrowserView 能力：新建/重命名/删除）
+
+    /// 新建目录
+    static func makeDirectory(afc: OpaquePointer, path: String) throws {
+        let rc = path.withCString { afc_make_directory(afc, $0) }
+        guard rc == nil else { throw makeError("新建目录失败：\(path)") }
+    }
+
+    /// 重命名 / 移动
+    static func rename(afc: OpaquePointer, from: String, to: String) throws {
+        let rc = from.withCString { src in
+            to.withCString { dst in afc_rename_path(afc, src, dst) }
+        }
+        guard rc == nil else { throw makeError("重命名失败：\(from)") }
+    }
+
+    /// 删除（目录需递归删 → 用 remove_path_and_contents）
+    static func remove(afc: OpaquePointer, path: String, recursive: Bool) throws {
+        let rc = path.withCString { cstr in
+            if recursive {
+                afc_remove_path_and_contents(afc, cstr)
+            } else {
+                afc_remove_path(afc, cstr)
+            }
+        }
+        guard rc == nil else { throw makeError("删除失败：\(path)") }
+    }
+
+    /// 下载整个文件到内存（供保存到本地/预览）。afc_file_read 每次返回新分配的缓冲。
+    static func downloadFile(afc: OpaquePointer, path: String) throws -> Data {
+        guard let size = fileSize(afc: afc, path: path), size > 0, size < 200 * 1024 * 1024 else {
+            throw makeError("文件过大或不存在")
+        }
+        var handle: OpaquePointer?
+        let rc = path.withCString { afc_file_open(afc, $0, AfcRdOnly, &handle) }
+        guard rc == nil, let handle else { throw makeError("打开文件失败") }
+        defer { afc_file_close(handle) }
+        var out = Data()
+        out.reserveCapacity(Int(size))
+        while out.count < Int(size) {
+            var dataPtr: UnsafeMutablePointer<UInt8>? = nil
+            var readLen: Int = 0
+            let chunk = UInt32(min(65536, Int(size) - out.count))
+            let r = afc_file_read(handle, &dataPtr, UInt(chunk), &readLen)
+            if let dataPtr, readLen > 0 {
+                out.append(dataPtr, count: readLen)
+                afc_file_read_data_free(dataPtr)
+            }
+            guard r == nil else { throw makeError("读取失败") }
+            if readLen <= 0 { break }
+        }
+        return out
     }
 
     /// 列目录（AFC）。返回顶层条目名 + 是否目录。
