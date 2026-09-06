@@ -35,7 +35,7 @@ struct ProfileConfigView: View {
                     .listRowBackground(Color.clear)
                 }
             } else {
-                Section(header: Text("设备描述文件（\(profiles.count)）")) {
+                Section {
                     ForEach(profiles) { p in
                         profileRow(p)
                         .swipeActions(edge: .trailing) {
@@ -46,6 +46,8 @@ struct ProfileConfigView: View {
                             }
                         }
                     }
+                } header: {
+                    Text("设备描述文件（\(profiles.count)）")
                 } footer: {
                     Text("删除需在系统设置中输入移除密码（若该描述文件设置了 HasRemovalPasscode）。")
                 }
