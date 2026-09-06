@@ -53,6 +53,8 @@ struct AppFileBrowserView: View {
     /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）。URL 不符合 Identifiable，
     /// 用 wrapper 让 sheet(item:) 可用。
     @State private var shareItems: ShareItems?
+    /// v0.3.222：分享结束后自动清理的临时文件（AFC 远端文件必须落地本地才能被系统分享面板读取）
+    @State private var shareCleanup: [URL] = []
     @State private var showImportPicker = false
 
     struct ShareItems: Identifiable { let id = UUID(); let urls: [URL] }
@@ -80,7 +82,9 @@ struct AppFileBrowserView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { selectionBar }
-        .sheet(item: $shareItems) { item in ShareSheet(items: item.urls) }
+        .sheet(item: $shareItems, onDismiss: { cleanupShareTemp() }) { item in
+            ShareSheet(items: item.urls)
+        }
         .sheet(item: $editingEntry) { entry in editorView(entry) }
         .task { await connectForScope() }
         .onDisappear { closeAll() }
@@ -562,7 +566,10 @@ struct AppFileBrowserView: View {
                 try Self.downloadEntry(client: client, entry: entry, to: dest)
                 return dest
             }.value
-            await MainActor.run { shareItems = ShareItems(urls: [url]) }
+            await MainActor.run {
+                shareCleanup = [url]
+                shareItems = ShareItems(urls: [url])
+            }
         } catch {
             showToast(error.localizedDescription)
         }
@@ -597,6 +604,7 @@ struct AppFileBrowserView: View {
                 }.value
                 await MainActor.run {
                     selectedPaths.removeAll()
+                    shareCleanup = urls
                     shareItems = ShareItems(urls: urls)
                 }
             } catch {
@@ -679,6 +687,14 @@ struct AppFileBrowserView: View {
         }
         lines.append("路径：\(entry.path)")
         return lines.joined(separator: "\n")
+    }
+
+    /// v0.3.222：分享面板关闭 → 立即清理本次分享的临时文件
+    private func cleanupShareTemp() {
+        for url in shareCleanup {
+            try? FileManager.default.removeItem(at: url)
+        }
+        shareCleanup = []
     }
 
     private func showToast(_ text: String) {
