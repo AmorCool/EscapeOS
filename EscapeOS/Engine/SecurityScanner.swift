@@ -416,21 +416,13 @@ extension SecurityScanner {
 
 extension SecurityScanner {
     /// 检查自身是否持有高危 entitlement（越狱/注入工具常带 com.apple.private.security.no-sandbox 等）。
-    /// 正常侧载 App 不带 → passed；进程被注入者通常可查看到异常 entitlement。
+    /// 读取自身进程 entitlement 需私有 API（SecTask 在 iOS 不可用）——按 Reveil 语义降级为
+    /// uncertain（? 灰显）：沙箱内无法枚举自身签名 entitlement。
     static func checkEntitlements() -> SecurityCheckResult {
-        // 检查进程环境变量中是否有注入迹象 + 简单 entitlement 自检
-        // 自身 entitlements：SecTask 可读（本 App 无高危键即通过）
-        let task = SecTaskCreateFromSelf(nil)
-        guard let task else {
-            return SecurityCheckResult(id: "entitlements", title: "关键权限",
-                detail: "无法读取进程权限（SecTask 不可用）", passed: true, warn: true, uncertain: true)
-        }
-        let noSandbox = SecTaskCopyValueForEntitlement(task, "com.apple.private.security.no-sandbox" as CFString, nil)
-        if noSandbox != nil {
-            return SecurityCheckResult(id: "entitlements", title: "关键权限",
-                detail: "⚠️ 检测到 no-sandbox 权限——沙盒被关闭（异常）", passed: false, warn: false)
-        }
+        // 可观测的代理信号：本 App 运行于普通侧载沙箱时 DYLD 无注入、无 no-sandbox
+        // 已由 checkDYLDInjection / checkEnvironmentVariables 覆盖。
         return SecurityCheckResult(id: "entitlements", title: "关键权限",
-            detail: "进程权限正常，未持有 no-sandbox 等高危 entitlement", passed: true, warn: false)
+            detail: "自身 entitlement 枚举需私有 API（SecTask iOS 不可用）；已通过注入/环境变量检查间接覆盖",
+            passed: true, warn: true, uncertain: true)
     }
 }
