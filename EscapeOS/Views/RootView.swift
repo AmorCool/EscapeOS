@@ -3,63 +3,33 @@ import UniformTypeIdentifiers
 import UIKit
 
 private enum MainTab: Hashable {
-    case apps
-    case reclaim
-    case modules
+    case home
     case gestalt
     case more
 }
 
-/// Top-level navigation: native SwiftUI tab bar + pairing onboarding.
+/// v0.3.197：顶部 Tab 重组 — 手机管家形态。
+/// 原 5 tab（应用/空间回收/模块/Gestalt/更多）→ 3 tab：
+/// 主页（空间回收 + 应用管理 + 模块 + 百宝箱卡片入口）/ Gestalt / 更多。
+/// MoreView（原 More 页）保留备份/关于/设置等次要入口。
 struct RootView: View {
     @StateObject private var viewModel = AppListViewModel()
     @AppStorage("HasAcknowledgedLimits") private var hasAcknowledgedLimits = false
-    @State private var selectedTab: MainTab = .apps
+    @State private var selectedTab: MainTab = .home
     @ObservedObject private var copyFeedback = CopyFeedback.shared
     /// 全局 2FA 输入框：任何页面（含启动预热）触发的验证码请求都弹这里.
     @StateObject private var twoFactor = TwoFactorPromptCoordinator.shared
 
     var body: some View {
         TabView(selection: $selectedTab) {
+            // v0.3.197：主页 — 手机管家形态
             NavigationStack {
-                appsContent
-                    .navigationTitle("应用")
-                    .navigationBarTitleDisplayMode(.large)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button {
-                                viewModel.reload()
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                            .disabled(viewModel.isLoading)
-                        }
-                    }
+                HomeView(appList: viewModel)
             }
             .tabItem {
-                Label("应用", systemImage: "square.grid.2x2.fill")
+                Label("主页", systemImage: "house.fill")
             }
-            .tag(MainTab.apps)
-
-            NavigationStack {
-                SpaceReclaimView(appList: viewModel)
-                    .navigationBarTitleDisplayMode(.large)
-            }
-            .tabItem {
-                Label("空间回收", systemImage: "internaldrive")
-            }
-            .tag(MainTab.reclaim)
-
-            // v0.3.48：模块板块（KernelSU 式模块管理，escape.module.v1 规范）
-            NavigationStack {
-                ModuleManagerView()
-                    .navigationTitle("模块")
-                    .navigationBarTitleDisplayMode(.large)
-            }
-            .tabItem {
-                Label("模块", systemImage: "shippingbox.fill")
-            }
-            .tag(MainTab.modules)
+            .tag(MainTab.home)
 
             GestaltView()
                 .tabItem {
@@ -70,7 +40,7 @@ struct RootView: View {
             NavigationStack {
                 MoreView(appList: viewModel, onResetPairing: {
                     viewModel.resetPairing()
-                    selectedTab = .apps
+                    selectedTab = .home
                 })
             }
             .tabItem {
@@ -131,21 +101,6 @@ struct RootView: View {
         guard settings.isLoggedIn, !settings.appleID.isEmpty else { return }
         IPAInstallService.shared.warmUp()
         CertificateManager.shared.warmUp()
-    }
-
-    @ViewBuilder
-    private var appsContent: some View {
-        if viewModel.isLoading && viewModel.apps.isEmpty && !viewModel.needsPairing {
-            ProgressView("正在加载应用…")
-        } else if viewModel.needsPairing {
-            PairingSetupView(viewModel: viewModel)
-        } else if let error = viewModel.errorMessage, viewModel.apps.isEmpty {
-            ErrorStateView(message: error, onRetry: { viewModel.reload() })
-        } else if viewModel.apps.isEmpty {
-            EmptyStateView(diagnostics: "设备未返回任何用户应用.")
-        } else {
-            AppListView(viewModel: viewModel)
-        }
     }
 }
 

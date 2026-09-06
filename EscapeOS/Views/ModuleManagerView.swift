@@ -27,6 +27,9 @@ struct ModuleManagerView: View {
     @State private var uninstallTarget: EscapeModule? = nil
     @State private var actionMenuModule: EscapeModule? = nil
     @State private var showModuleSettings = false
+    // v0.3.197：自动恢复容器迁移 — 全屏修复进度 + 结果
+    @State private var repairInProgress: Bool = false
+    @State private var repairResult: String? = nil
     @State private var webviewModule: EscapeModule? = nil
     @State private var searchText = ""
 
@@ -88,6 +91,26 @@ struct ModuleManagerView: View {
                     } footer: {
                         Text("内置模块被卸载后想恢复时点此（清空卸载记录并重新安装内置模块）.")
                     }
+
+                    // v0.3.197：自动恢复容器迁移 — OpenList 等 Go 模块的 config.json
+                    // 若残留旧容器绝对路径，启动时会 mkdir 失败→ log.Fatal→杀宿主。
+                    // 这里扫所有模块的 config.json，检测到残留就按当前 dataDir
+                    // 语义重写 4 个路径字段（temp/bleve/data.db/log）。
+                    Section {
+                        Button {
+                            runContainerRepairFlow()
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                Text("检测并修复容器路径变更")
+                            }
+                        }
+                        .tint(.orange)
+                    } header: {
+                        Text("数据路径修复")
+                    } footer: {
+                        Text("App 重装或 LiveContainer 容器 UUID 变化后，模块 config.json 里的旧容器绝对路径会让 Go 模块启动时崩溃。本工具会按当前容器重写 temp/bleve/data.db/log 四个路径字段，保留网盘账号等用户配置。")
+                    }
                 }
                 .navigationTitle("模块设置")
                 .navigationBarTitleDisplayMode(.inline)
@@ -104,6 +127,32 @@ struct ModuleManagerView: View {
             ModuleLogView(module: mod) { showingLogFor = nil }
         }
         .refreshable { reload() }
+        // v0.3.197：容器路径修复全屏进度（阻断其它操作）
+        .fullScreenCover(isPresented: $repairInProgress) {
+            VStack(spacing: 16) {
+                ProgressView().controlSize(.large)
+                Text("正在修复容器路径…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("扫描所有模块 config.json 残留旧容器绝对路径，按当前 dataDir 语义重写。\n此期间不会启动任何模块，完成前请勿操作。")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemBackground))
+            .interactiveDismissDisabled(true)
+        }
+        // 修复完成结果
+        .alert("容器路径修复", isPresented: Binding(
+            get: { repairResult != nil },
+            set: { if !$0 { repairResult = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(repairResult ?? "")
+        }
         .background(
             ModuleImportPicker(isPresented: $isImporting) { urls in
                 handleImport(urls)
@@ -442,6 +491,64 @@ struct ModuleManagerView: View {
         enabledMap = Dictionary(uniqueKeysWithValues: modules.map {
             ($0.id, ModuleService.shared.isEnabled(id: $0.id))
         })
+    }
+
+    /// v0.3.197：检测并修复所有模块 config.json 的容器路径残留——OpenList 等
+    /// Go 模块的 config.json 在容器 UUID 变化后会含旧路径，导致 Go mkdir 失败→Fatal→宿主崩。
+    /// 这里用 ModuleService.repairContainerMigratedConfig 修复（仅改路径字段，
+    /// 保留用户配置如 jwt_secret / 数据库账号）。
+    private func runContainerRepairFlow() {
+        showModuleSettings = false
+        repairInProgress = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            var fixed: [String] = []
+            var scanned = 0
+            for m in ModuleService.shared.listModules() {
+                guard m.isBinaryModule, let bin = m.binary else { continue }
+                scanned += 1
+                let dataDir = ModuleService.shared.dataURL(for: m.id)
+                // 修复前再检查一次是否需要修复（避免无谓 IO）
+                let cfgURL = dataDir.appendingPathComponent("config.json")
+                guard FileManager.default.fileExists(atPath: cfgURL.path) else { continue }
+                let needsFix = Self.configJSONNeedsRepair(cfgURL: cfgURL, dataDir: dataDir)
+                if needsFix {
+                    ModuleService.repairContainerMigratedConfig(moduleId: m.id, dataDir: dataDir)
+                    fixed.append(m.id)
+                }
+            }
+            repairInProgress = false
+            repairResult = fixed.isEmpty
+                ? "扫描了 \(scanned) 个模块，未发现残留旧容器路径。"
+                : "已修复 \(fixed.count) 个模块：\(fixed.joined(separator: "、"))"
+        }
+    }
+
+    /// 读取 config.json 文本，检查是否含旧容器绝对路径（路径以 dataDir.path 为前缀则无残留）
+    private static func configJSONNeedsRepair(cfgURL: URL, dataDir: URL) -> Bool {
+        guard let data = try? Data(contentsOf: cfgURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        func isStale(_ p: String) -> Bool {
+            guard p.hasPrefix("/var/mobile/Containers/Data/Application/") else { return false }
+            return !p.hasPrefix(dataDir.path) && !FileManager.default.fileExists(atPath: p)
+        }
+        let pathKeys: [(String, String)] = [
+            ("temp_dir", "temp"),
+            ("bleve_dir", "bleve"),
+            ("database.db_file", "data.db"),
+            ("log.name", "log/log.log"),
+        ]
+        func check(_ val: String?, sub: String) -> Bool {
+            guard let val, val.hasPrefix("/var/mobile/Containers/Data/Application/") else { return false }
+            let expected = dataDir.appendingPathComponent(sub).path
+            return val != expected && isStale(val)
+        }
+        if check(json["temp_dir"] as? String, sub: "temp") { return true }
+        if check(json["bleve_dir"] as? String, sub: "bleve") { return true }
+        if let db = json["database"] as? [String: Any],
+           check(db["db_file"] as? String, sub: "data.db") { return true }
+        if let log = json["log"] as? [String: Any],
+           check(log["name"] as? String, sub: "log/log.log") { return true }
+        return false
     }
 
     private func handleImport(_ urls: [URL]) {
