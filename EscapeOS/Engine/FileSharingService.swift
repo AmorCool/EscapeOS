@@ -158,9 +158,10 @@ enum FileSharingService {
     }
 
     /// 下载整个文件到内存（afc_file_read_entire 一次读，AFCService 同款范式）
+    /// v0.3.226：0 字节空文件合法（新建空文件可编辑）；>200MB 才拒
     static func downloadFile(afc: OpaquePointer, path: String) throws -> Data {
-        guard let size = fileSize(afc: afc, path: path), size > 0, size < 200 * 1024 * 1024 else {
-            throw makeError("文件过大或不存在")
+        guard let size = fileSize(afc: afc, path: path), size <= 200 * 1024 * 1024 else {
+            throw makeError("文件不存在或超过 200MB")
         }
         var handle: OpaquePointer?
         let rc = path.withCString { afc_file_open(afc, $0, AfcRdOnly, &handle) }

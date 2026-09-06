@@ -63,7 +63,6 @@ struct AppFileBrowserView: View {
         .navigationTitle(scope == .documents ? appName : "\(appName) · \(scope.rawValue)")
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索当前目录")
-        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .toolbar {
             // v0.3.223：对齐空间回收板块——独立 ToolbarItem + HStack，
             // 禁用 ToolbarItemGroup 多按钮玻璃胶囊组（用户永久雷点：割裂/遮挡视线）
@@ -257,50 +256,60 @@ struct AppFileBrowserView: View {
         }
     }
 
-    // v0.3.221：三分支内容视图——scopeBar 固定顶部（不满宽），状态用卡片 banner
+    // v0.3.226：完整复刻空间回收板块结构——一个 List，分段作首项随滚动，
+    // listRowBackground 设为页面底色（无白板），loading/无权限/空目录全部列表内呈现
     @ViewBuilder
     private var content: some View {
-        VStack(spacing: 0) {
-            scopeBar
-            if loading {
-                VStack { Spacer(); ProgressView("正在加载…"); Spacer() }
-            } else if noPermission {
-                stateCard(icon: "lock.fill", title: "无权限",
-                          desc: "\(appName) 不允许访问 \(scope.rawValue) 目录")
-                Spacer()
-            } else {
-                fileList
-            }
-        }
-    }
-
-    // MARK: 目录分段（v0.3.225：自定义透明分段——系统 segmented 自带白色背景板，用户雷点）
-    private var scopeBar: some View {
-        HStack(spacing: 4) {
-            ForEach(Scope.allCases) { s in
-                Button {
-                    if scope != s { scope = s }
-                } label: {
-                    Text(s.rawValue)
-                        .font(.subheadline.weight(scope == s ? .semibold : .regular))
-                        .foregroundStyle(scope == s ? .primary : .secondary)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            Capsule().fill(scope == s ? Color(.systemBackground) : Color.clear)
-                        )
+        List {
+            Section {
+                Picker("目录", selection: $scope) {
+                    ForEach(Scope.allCases) { s in
+                        Text(s.rawValue).tag(s)
+                    }
                 }
-                .buttonStyle(.plain)
+                .pickerStyle(.segmented)
+                .listRowBackground(Color(.systemGroupedBackground))
+                .onChange(of: scope) { _, _ in
+                    Task { await connectForScope() }
+                }
+            }
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
+            if loading {
+                Section {
+                    HStack { Spacer(); ProgressView("正在加载…"); Spacer() }
+                        .listRowBackground(Color.clear)
+                }
+            } else if noPermission {
+                Section {
+                    stateCard(icon: "lock.fill", title: "无权限",
+                              desc: "\(appName) 不允许访问 \(scope.rawValue) 目录")
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            } else if let err = errorText {
+                Section {
+                    Label(err, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+            } else if filteredEntries.isEmpty {
+                Section {
+                    stateCard(icon: "folder", title: "空目录",
+                              desc: "\(displayCurrentPath) 下没有文件")
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            } else {
+                Section {
+                    ForEach(filteredEntries) { entry in
+                        rowFor(entry)
+                    }
+                } header: {
+                    Text("\(displayCurrentPath) · \(filteredEntries.count) 项").font(.caption.monospaced())
+                }
             }
         }
-        .padding(3)
-        .frame(maxWidth: 320)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .onChange(of: scope) { _, _ in
-            Task { await connectForScope() }
-        }
+        .listStyle(.insetGrouped)
     }
 
     /// v0.3.221：状态卡片 banner（IMG_4630 滚动截屏样式——白圆角卡片，不再空旷）
