@@ -95,12 +95,17 @@ enum BatteryHealthService {
     }
 
     /// 读取电池健康（同步阻塞——调用方需放后台线程）。
+    /// v0.3.202：机型/系统版本改从 lockdown GetValue 拿（IORegistry dict 无 ProductType——
+    /// 旧实现拿不到机型 → 健康度解析分支走错，用户实测读数不准）。
     static func fetchBatteryHealth() throws -> BatteryHealthInfo {
         var tunnel = try createTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
             throw makeError("隧道未建立")
         }
+        // ① lockdown GetValue 全字典 → ProductType（iPhone12,1）/ ProductVersion major
+        let (productType, iosMajor) = try fetchLockdownInfo(adapter: adapter, handshake: handshake)
+        // ② diagnostics relay IORegistry 电池
         var lastError: NSError?
         for attempt in 0..<3 {
             var client: OpaquePointer?
@@ -108,7 +113,7 @@ enum BatteryHealthService {
                 lastError = ffiError(e, fallback: "连接诊断服务失败（需配对 + LocalDevVPN）")
             } else if let client {
                 defer { diagnostics_relay_client_free(client) }
-                return try query(client: client)
+                return try query(client: client, productType: productType, iosMajor: iosMajor)
             } else {
                 lastError = makeError("连接诊断服务失败")
             }
@@ -117,7 +122,37 @@ enum BatteryHealthService {
         throw lastError ?? makeError("连接诊断服务失败")
     }
 
-    private static func query(client: OpaquePointer) throws -> BatteryHealthInfo {
+    /// lockdown GetValue（domain/key 均 nil → 全字典）取 ProductType / ProductVersion。
+    private static func fetchLockdownInfo(adapter: OpaquePointer, handshake: OpaquePointer)
+        -> (productType: String?, iosMajor: Int?) {
+        var client: OpaquePointer?
+        guard lockdownd_connect_rsd(adapter, handshake, &client) == nil, let client else {
+            return (nil, nil)
+        }
+        defer { lockdownd_client_free(client) }
+        var node: plist_t?
+        if lockdownd_get_value(client, nil, nil, &node) != nil { return (nil, nil) }
+        defer { if let node { plist_free(node) } }
+        guard let node else { return (nil, nil) }
+        var binPtr: UnsafeMutablePointer<CChar>?
+        var binLen: UInt32 = 0
+        guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
+              let binPtr, binLen > 0 else { return (nil, nil) }
+        defer { plist_mem_free(binPtr) }
+        guard let dict = try? PropertyListSerialization.propertyList(
+                from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil) as? [String: Any]
+        else { return (nil, nil) }
+        let productType = dict["ProductType"] as? String
+        var major: Int? = nil
+        if let ver = dict["ProductVersion"] as? String,
+           let first = ver.split(separator: ".").first,
+           let m = Int(first) {
+            major = m
+        }
+        return (productType, major)
+    }
+
+    private static func query(client: OpaquePointer, productType: String?, iosMajor: Int?) throws -> BatteryHealthInfo {
         var node: plist_t?
         if let e = diagnostics_relay_client_ioregistry(client, nil, nil, "IOPMPowerSource", &node) {
             throw ffiError(e, fallback: "查询电池 IORegistry 失败")
@@ -138,11 +173,12 @@ enum BatteryHealthService {
                 as? [String: Any] else {
             throw makeError("电池 plist 解析失败")
         }
-        return parse(dict: dict)
+        return parse(dict: dict, productType: productType, iosMajor: iosMajor)
     }
 
     /// 解析 IORegistry 电池字典（字段规则来自 iDescriptor utils.rs，含 iOS 26/27 迁移）。
-    static func parse(dict: [String: Any]) -> BatteryHealthInfo {
+    /// v0.3.202：机型/系统版本由调用方从 lockdown GetValue 传入（IORegistry 无 ProductType）。
+    static func parse(dict: [String: Any], productType: String? = nil, iosMajor: Int? = nil) -> BatteryHealthInfo {
         func int(_ key: String, in d: [String: Any]) -> Int? {
             if let n = d[key] as? Int { return n }
             if let n = d[key] as? Double { return Int(n) }
@@ -152,12 +188,21 @@ enum BatteryHealthService {
         let bd = dict["BatteryData"] as? [String: Any] ?? [:]
         let cycle = int("CycleCount", in: bd) ?? int("CycleCount", in: dict)
         let design = int("DesignCapacity", in: bd) ?? int("DesignCapacity", in: dict)
+        // maxCapacity 迁移规则（iDescriptor parse_diag_info 实测）：
+        //  - iOS > 26 → FullChargeCapacity → AppleRawMaxCapacity → BatteryData.MaxCapacity
+        //  - iPhone 比 iPhone8,1 新 → 顶层 AppleRawMaxCapacity（BatteryData.MaxCapacity 不准）
+        //  - 其余（老机型/非 iPhone）→ BatteryData.MaxCapacity
         let maxBatteryData = int("MaxCapacity", in: bd)
-        let maxTopRaw = int("AppleRawMaxCapacity", in: dict) ?? int("FullChargeCapacity", in: dict)
-        let prefersTopRaw = isIPhoneNewerThan8_1(model: dict["ProductType"] as? String)
+        let maxFullCharge = int("FullChargeCapacity", in: dict)
+        let maxTopRaw = int("AppleRawMaxCapacity", in: dict)
         let maxCapacity: Int? = {
-            if prefersTopRaw { return maxTopRaw }
-            return maxTopRaw ?? maxBatteryData
+            if let iosMajor, iosMajor > 26 {
+                return maxFullCharge ?? maxTopRaw ?? maxBatteryData
+            }
+            if isIPhoneNewerThan8_1(model: productType) {
+                return maxTopRaw ?? maxBatteryData  // 新机型顶层优先，缺失时兜底
+            }
+            return maxBatteryData
         }()
         let currentCapacity = int("CurrentCapacity", in: bd) ?? int("AppleRawCurrentCapacity", in: dict)
         var health: Int? = nil

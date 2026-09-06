@@ -6,6 +6,9 @@ struct BatteryHealthView: View {
     @State private var isLoading = true
     @State private var info: BatteryHealthInfo?
     @State private var errorText: String?
+    @State private var lastUpdated: Date?
+    /// v0.3.202：实时更新 —— 定时轮询（10s），离开页面取消
+    @State private var pollTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
@@ -17,6 +20,11 @@ struct BatteryHealthView: View {
                 } else if let info {
                     healthRing(info: info)
                     metricsGrid(info: info)
+                    if let lastUpdated {
+                        Label("更新于 \(Self.timeFormatter.string(from: lastUpdated))", systemImage: "clock")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                     rawCard(info: info)
                 } else {
                     errorCard
@@ -28,19 +36,50 @@ struct BatteryHealthView: View {
         .background(Color(.systemBackground))
         .navigationTitle("电池健康")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await load() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+        }
+        .task {
+            await load()
+            pollTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    guard !Task.isCancelled else { break }
+                    await self?.load(silent: true)
+                }
+            }
+        }
+        .onDisappear {
+            pollTask?.cancel()
+            pollTask = nil
+        }
     }
 
-    private func load() async {
-        isLoading = true
-        defer { isLoading = false }
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .medium
+        return f
+    }()
+
+    /// silent：静默刷新不闪 ProgressView（轮询用）
+    private func load(silent: Bool = false) async {
+        if !silent { isLoading = true }
+        defer { if !silent { isLoading = false } }
         do {
             let result = try await Task.detached(priority: .userInitiated) {
                 try BatteryHealthService.fetchBatteryHealth()
             }.value
             info = result
+            lastUpdated = Date()
+            errorText = nil
         } catch {
-            errorText = error.localizedDescription
+            if !silent { errorText = error.localizedDescription }
         }
     }
 
