@@ -37,7 +37,7 @@ struct FileSharingAppsView: View {
             .listStyle(.insetGrouped)   // v0.3.214：参考模块板块样式
         .navigationTitle("文档浏览")
         .navigationBarTitleDisplayMode(.large)  // v0.3.212：参考模块板块顶栏样式
-        .searchable(text: $searchText, prompt: "搜索应用")   // v0.3.214：系统搜索框替代自绘
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索应用")   // v0.3.214：系统搜索框替代自绘
         .autocorrectionDisabled()
         .task { await load() }
     }

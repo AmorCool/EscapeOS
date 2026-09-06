@@ -36,8 +36,11 @@ struct AppFileBrowserView: View {
     @State private var renameTarget: AfcEntry?
     @State private var renameText = ""
     @State private var deleteTarget: AfcEntry?
-    @State private var showNewFolder = false
-    @State private var newFolderName = ""
+    // v0.3.221：新建（文件夹 / 文件.txt 可改后缀）——sheet 替代失效的 alert TextField
+    @State private var showCreateSheet = false
+    @State private var createIsFolder = true
+    @State private var createName = ""
+    @State private var createExt = "txt"
     @State private var fileInfoTarget: AfcEntry?
     @State private var fileInfoDetail: String?
     @State private var toast: String?
@@ -49,10 +52,10 @@ struct AppFileBrowserView: View {
     @State private var editingEntry: AfcEntry?
     /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）。URL 不符合 Identifiable，
     /// 用 wrapper 让 sheet(item:) 可用。
-    @State private var shareItem: ShareItem?
+    @State private var shareItems: ShareItems?
     @State private var showImportPicker = false
 
-    struct ShareItem: Identifiable { let id = UUID(); let url: URL }
+    struct ShareItems: Identifiable { let id = UUID(); let urls: [URL] }
 
     var body: some View {
         content
@@ -71,21 +74,18 @@ struct AppFileBrowserView: View {
                 } else {
                     if currentPath != scope.path { Button("上级") { navigateUp() } }
                     Button { importFilePicker() } label: { Image(systemName: "square.and.arrow.down") }.accessibilityLabel("导入文件")
-                    Button { showNewFolder = true } label: { Image(systemName: "folder.badge.plus") }.accessibilityLabel("新建文件夹")
+                    Button { showCreateSheet = true } label: { Image(systemName: "plus.circle") }.accessibilityLabel("新建")
                     Button("选择") { enterSelection() }
                 }
             }
         }
         .safeAreaInset(edge: .bottom) { selectionBar }
-        .sheet(item: $shareItem) { item in ShareSheet(items: [item.url]) }
+        .sheet(item: $shareItems) { item in ShareSheet(items: item.urls) }
         .sheet(item: $editingEntry) { entry in editorView(entry) }
         .task { await connectForScope() }
         .onDisappear { closeAll() }
-        .alert("新建文件夹", isPresented: $showNewFolder) {
-            TextField("文件夹名", text: $newFolderName)
-            Button("创建") { Task { await createFolder() } }
-            Button("取消", role: .cancel) {}
-        }
+        // v0.3.221：新建（文件夹 / 文件）sheet——alert TextField 在部分 iOS 版本取值失效
+        .sheet(isPresented: $showCreateSheet) { createSheet }
         .alert("重命名", isPresented: renameAlertBinding) {
             TextField("新名称", text: $renameText)
             Button("确定") { Task { await doRename() } }
@@ -118,14 +118,21 @@ struct AppFileBrowserView: View {
     @ViewBuilder
     private var selectionBar: some View {
         if selectionMode {
-            HStack {
-                Text("已选 \(selectedPaths.count) 项").font(.footnote).foregroundStyle(.secondary)
+            HStack(spacing: 18) {
+                Text("已选 \(selectedPaths.count)").font(.footnote).foregroundStyle(.secondary)
                 Spacer()
+                // v0.3.221：批量分享（下载到 tmp → ShareSheet）
+                Button { shareSelected() } label: { Label("分享", systemImage: "square.and.arrow.up") }
+                    .disabled(selectedPaths.isEmpty)
+                // v0.3.221：批量导出 → EscapeSpace Documents/文件导出浏览/
+                Button { exportSelected() } label: { Label("导出", systemImage: "tray.and.arrow.down") }
+                    .disabled(selectedPaths.isEmpty)
                 Button(role: .destructive) { deleteSelected() } label: {
                     Label("删除", systemImage: "trash")
                 }
                 .disabled(selectedPaths.isEmpty)
             }
+            .font(.footnote)
             .padding(.horizontal, 16).padding(.vertical, 10).background(.bar)
         }
     }
@@ -162,22 +169,6 @@ struct AppFileBrowserView: View {
         }
         if currentPath == scope.path || currentPath == "/" { return scope.path }
         return currentPath
-    }
-
-    // MARK: 目录分段（v0.3.219：空间回收式，Section 内随列表滚动）
-    private var scopeSection: some View {
-        Section {
-            Picker("目录", selection: $scope) {
-                ForEach(Scope.allCases) { s in
-                    Text(s.rawValue).tag(s)
-                }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: scope) { _, _ in
-                Task { await connectForScope() }
-            }
-        }
-        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     }
 
     // MARK: 连接与列目录
@@ -263,33 +254,64 @@ struct AppFileBrowserView: View {
         }
     }
 
-    // v0.3.219b：三分支内容视图（拆分以通过类型检查）
+    // v0.3.221：三分支内容视图——scopeBar 固定顶部（不满宽），状态用卡片 banner
     @ViewBuilder
     private var content: some View {
-        if loading {
-            VStack(spacing: 12) {
-                scopeSection
+        VStack(spacing: 0) {
+            scopeBar
+            if loading {
+                VStack { Spacer(); ProgressView("正在加载…"); Spacer() }
+            } else if noPermission {
+                stateCard(icon: "lock.fill", title: "无权限",
+                          desc: "\(appName) 不允许访问 \(scope.rawValue) 目录")
                 Spacer()
-                ProgressView("正在加载…")
-                Spacer()
+            } else {
+                fileList
             }
-            .padding(.top, 8)
-        } else if noPermission {
-            VStack {
-                scopeSection
-                Spacer()
-                ContentUnavailableView("无权限", systemImage: "lock.fill",
-                    description: Text("\(appName) 不允许访问 \(scope.rawValue) 目录"))
-                Spacer()
-            }
-        } else {
-            fileList
         }
+    }
+
+    // MARK: 目录分段（v0.3.221：固定顶部 + 限宽，不再占满整行）
+    private var scopeBar: some View {
+        Picker("目录", selection: $scope) {
+            ForEach(Scope.allCases) { s in
+                Text(s.rawValue).tag(s)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 320)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .onChange(of: scope) { _, _ in
+            Task { await connectForScope() }
+        }
+    }
+
+    /// v0.3.221：状态卡片 banner（IMG_4630 滚动截屏样式——白圆角卡片，不再空旷）
+    private func stateCard(icon: String, title: String, desc: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text(title).font(.headline)
+            Text(desc)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 44).padding(.horizontal, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     private var fileList: some View {
         List {
-            scopeSection
             if let err = errorText {
                 Section {
                     Label(err, systemImage: "exclamationmark.triangle")
@@ -297,8 +319,11 @@ struct AppFileBrowserView: View {
                 }
             } else if filteredEntries.isEmpty {
                 Section {
-                    ContentUnavailableView("空目录", systemImage: "folder",
-                                           description: Text("\(displayCurrentPath) 下没有文件"))
+                    // v0.3.221：空目录用卡片 banner（不再裸 ContentUnavailableView）
+                    stateCard(icon: "folder", title: "空目录",
+                              desc: "\(displayCurrentPath) 下没有文件")
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
                 }
             } else {
                 Section {
@@ -306,7 +331,7 @@ struct AppFileBrowserView: View {
                         rowFor(entry)
                     }
                 } header: {
-                    Text(displayCurrentPath).font(.caption.monospaced())
+                    Text("\(displayCurrentPath) · \(filteredEntries.count) 项").font(.caption.monospaced())
                 }
             }
         }
@@ -325,6 +350,7 @@ struct AppFileBrowserView: View {
             }
         } label: {
             rowContent(entry, selected: selected)
+                .contentShape(Rectangle())   // v0.3.221：整行可点（不只名字）
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -414,14 +440,82 @@ struct AppFileBrowserView: View {
     }
 
     // MARK: 操作
-    private func createFolder() async {
-        let name = newFolderName.trimmingCharacters(in: .whitespaces)
-        newFolderName = ""
+    // v0.3.221：新建 sheet（文件夹 / 文件.txt 可改后缀）
+    private var createSheet: some View {
+        NavigationStack {
+            Form {
+                Section("新建类型") {
+                    Picker("类型", selection: $createIsFolder) {
+                        Text("文件夹").tag(true)
+                        Text("文件").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                Section(createIsFolder ? "文件夹名称" : "文件名称") {
+                    TextField(createIsFolder ? "新建文件夹" : "新建文件", text: $createName)
+                        .autocorrectionDisabled()
+                    if !createIsFolder {
+                        TextField("扩展名（默认 txt）", text: $createExt)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                    }
+                }
+                if !createIsFolder {
+                    Section {
+                        Text("将创建：\(previewCreateName)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("新建")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { showCreateSheet = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("创建") {
+                        Task { await createItem() }
+                    }
+                    .disabled(trimmedCreateName.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private var trimmedCreateName: String {
+        createName.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var previewCreateName: String {
+        let base = trimmedCreateName.isEmpty ? "新建文件" : trimmedCreateName
+        let ext = createExt.trimmingCharacters(in: .whitespaces)
+        return ext.isEmpty ? base : "\(base).\(ext)"
+    }
+
+    private func createItem() async {
+        let name = trimmedCreateName
         guard !name.isEmpty, let client = activeClient() else { return }
-        let path = currentPath.hasSuffix("/") ? currentPath + name : currentPath + "/" + name
+        let finalName: String
+        if createIsFolder {
+            finalName = name
+        } else {
+            let ext = createExt.trimmingCharacters(in: .whitespaces)
+            finalName = ext.isEmpty ? name : "\(name).\(ext)"
+        }
+        showCreateSheet = false
+        let path = currentPath.hasSuffix("/") ? currentPath + finalName : currentPath + "/" + finalName
         do {
-            try FileSharingService.makeDirectory(afc: client, path: path)
-            showToast("已创建 \(name)")
+            if createIsFolder {
+                try FileSharingService.makeDirectory(afc: client, path: path)
+            } else {
+                try FileSharingService.uploadFile(afc: client, data: Data(), to: path)
+            }
+            createName = ""
+            createExt = "txt"
+            showToast("已创建 \(finalName)")
             await loadDir(path: currentPath)
         } catch {
             showToast(error.localizedDescription)
@@ -462,25 +556,85 @@ struct AppFileBrowserView: View {
         showToast("准备分享…")
         do {
             let url = try await Task.detached(priority: .userInitiated) {
-                try self.prepareShare(client: client, entry: entry)
+                let tmp = FileManager.default.temporaryDirectory
+                let safeName = (entry.name as NSString).lastPathComponent
+                let dest = tmp.appendingPathComponent("share-\(UUID().uuidString.prefix(6))-\(safeName)")
+                try Self.downloadEntry(client: client, entry: entry, to: dest)
+                return dest
             }.value
-            await MainActor.run { shareItem = ShareItem(url: url) }
+            await MainActor.run { shareItems = ShareItems(urls: [url]) }
         } catch {
             showToast(error.localizedDescription)
         }
     }
-    private func prepareShare(client: OpaquePointer, entry: AfcEntry) throws -> URL {
-        let tmp = FileManager.default.temporaryDirectory
-        let safeName = (entry.name as NSString).lastPathComponent
-        let dest = tmp.appendingPathComponent("share-\(UUID().uuidString.prefix(6))-\(safeName)")
+    /// v0.3.221：下载单个条目（文件直接下；文件夹建目录递归）到指定目标路径
+    private static func downloadEntry(client: OpaquePointer, entry: AfcEntry, to dest: URL) throws {
         if entry.isDirectory {
             try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
-            try Self.recursiveDownload(client: client, srcDir: entry.path, toDir: dest)
+            try recursiveDownload(client: client, srcDir: entry.path, toDir: dest)
         } else {
             let data = try FileSharingService.downloadFile(afc: client, path: entry.path)
             try data.write(to: dest)
         }
-        return dest
+    }
+
+    /// v0.3.221：批量分享（选中项下载到 tmp → ShareSheet 多 URL）
+    private func shareSelected() {
+        guard let client = activeClient() else { return }
+        let picked = entries.filter { selectedPaths.contains($0.path) }
+        guard !picked.isEmpty else { return }
+        showToast("准备分享…")
+        Task {
+            do {
+                let tmp = FileManager.default.temporaryDirectory
+                let urls = try await Task.detached(priority: .userInitiated) {
+                    try picked.map { entry -> URL in
+                        let safeName = (entry.name as NSString).lastPathComponent
+                        let dest = tmp.appendingPathComponent("share-\(UUID().uuidString.prefix(6))-\(safeName)")
+                        try Self.downloadEntry(client: client, entry: entry, to: dest)
+                        return dest
+                    }
+                }.value
+                await MainActor.run {
+                    selectedPaths.removeAll()
+                    shareItems = ShareItems(urls: urls)
+                }
+            } catch {
+                showToast(error.localizedDescription)
+            }
+        }
+    }
+
+    /// v0.3.221：批量导出 → EscapeSpace Documents/文件导出浏览/
+    private func exportSelected() {
+        guard let client = activeClient() else { return }
+        let picked = entries.filter { selectedPaths.contains($0.path) }
+        guard !picked.isEmpty else { return }
+        showToast("正在导出…")
+        Task {
+            do {
+                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let destDir = docs.appendingPathComponent("文件导出浏览", isDirectory: true)
+                try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+                let result = try await Task.detached(priority: .userInitiated) {
+                    var ok = 0, failed = 0
+                    for entry in picked {
+                        do {
+                            let dest = destDir.appendingPathComponent(entry.name)
+                            try Self.downloadEntry(client: client, entry: entry, to: dest)
+                            ok += 1
+                        } catch { failed += 1 }
+                    }
+                    return (ok, failed)
+                }.value
+                await MainActor.run {
+                    selectedPaths.removeAll()
+                    showToast("已导出 \(result.0) 项 → 文件导出浏览" + (result.1 > 0 ? "（\(result.1) 项失败）" : ""))
+                }
+            } catch {
+                showToast(error.localizedDescription)
+            }
+        }
     }
 
     /// 递归下载目录（保结构）

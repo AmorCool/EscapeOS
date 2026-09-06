@@ -40,7 +40,8 @@ struct DeviceInfoView: View {
             }
             ToolbarItem(placement: .topBarLeading) {
                 Button { showSensitive.toggle() } label: {
-                    Image(systemName: showSensitive ? "eye.slash" : "eye")
+                    // v0.3.221：图标=当前状态（显示中=睁眼，隐藏中=闭眼），修反逻辑
+                    Image(systemName: showSensitive ? "eye" : "eye.slash")
                 }
             }
         }
