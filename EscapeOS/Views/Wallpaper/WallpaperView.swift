@@ -1,8 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 自定义壁纸管理页：导入 .tendies 壁纸包并应用到 PosterBoard。
-/// UI 参考 Erosion 原版：大圆角卡片、浅灰背景、底部浅色胶囊按钮。
+/// 自定义壁纸管理页：导入 .tendies 壁纸包并应用到 PosterBoard.
+/// UI 参考 Erosion 原版：大圆角卡片、浅灰背景、底部浅色胶囊按钮.
 struct WallpaperView: View {
     @AppStorage("wallpaperTendies") private var tendiesArray: [TendiesObject] = []
     @AppStorage("wallpaperPBContainerPath") private var pbContainerPath = ""
@@ -131,7 +131,7 @@ struct WallpaperView: View {
             Button("取消", role: .cancel) {}
             Button("清空", role: .destructive) { clearAll() }
         } message: {
-            Text("将删除所有已导入的壁纸包，但不会恢复 PosterBoard 本身。")
+            Text("将删除所有已导入的壁纸包，但不会恢复 PosterBoard 本身.")
         }
         .alert("删除壁纸包？", isPresented: $showDeleteConfirm) {
             Button("取消", role: .cancel) { deleteTarget = nil }
@@ -140,7 +140,7 @@ struct WallpaperView: View {
                 deleteTarget = nil
             }
         } message: {
-            Text("“\(deleteTarget?.name ?? "")” 将被永久删除。")
+            Text("“\(deleteTarget?.name ?? "")” 将被永久删除.")
         }
         .alert(item: $activeAlert) { alert in
             if alert.hasAction {
@@ -193,7 +193,7 @@ struct WallpaperView: View {
                         .font(.title3.weight(.semibold))
                         .foregroundColor(.primary)
 
-                    Text("导入 .tendies 文件即可开始应用自定义壁纸。\n支持 Collections、MercuryPoster 与 Videos 三类描述符。")
+                    Text("导入 .tendies 文件即可开始应用自定义壁纸.\n支持 Collections、MercuryPoster 与 Videos 三类描述符.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -332,7 +332,7 @@ struct WallpaperView: View {
         if !tendiesArray[index].isOn {
             let total = selectedDescriptorsCount + tendiesArray[index].descrNames.count
             if total > 15 {
-                showAlert(title: "已达到上限", message: "单次最多应用 15 张壁纸。请先取消选择一个壁纸包。")
+                showAlert(title: "已达到上限", message: "单次最多应用 15 张壁纸.请先取消选择一个壁纸包.")
                 return
             }
         }
@@ -368,7 +368,7 @@ struct WallpaperView: View {
         guard !selected.isEmpty else { return }
 
         if !hasShownFirstRunMsg {
-            showAlert(title: "提示", message: "如果 PosterBoard 中没有出现壁纸，请尝试在设置中重置 Collections、MercuryPoster 或 Videos。") {
+            showAlert(title: "提示", message: "如果 PosterBoard 中没有出现壁纸，请尝试在设置中重置 Collections、MercuryPoster 或 Videos.") {
                 hasShownFirstRunMsg = true
                 proceedApply(selected)
             }
@@ -391,11 +391,11 @@ struct WallpaperView: View {
             let success = applyObjects(objects)
             DispatchQueue.main.async {
                 if success {
-                    showAlert(title: "应用成功", message: "请杀死后台并重新打开 PosterBoard 以查看效果。") {
+                    showAlert(title: "应用成功", message: "请杀死后台并重新打开 PosterBoard 以查看效果.") {
                         openPosterBoard()
                     }
                 } else {
-                    showAlert(title: "应用失败", message: "无法写入 PosterBoard 描述符。请检查沙盒扩展是否生效，或尝试重置。")
+                    showAlert(title: "应用失败", message: "无法写入 PosterBoard 描述符.请检查沙盒扩展是否生效，或尝试重置.")
                 }
             }
         }
@@ -484,7 +484,7 @@ struct WallpaperView: View {
 
 // MARK: - 提取当前系统壁纸
 
-/// 扫描 PosterBoard 容器中已安装的描述符，并导出为 .tendies 文件。
+/// 扫描 PosterBoard 容器中已安装的描述符，并导出为 .tendies 文件.
 private struct WallpaperExtractorSheet: View {
     let pbContainerPath: String
     let onShare: (URL) -> Void
@@ -537,7 +537,7 @@ private struct WallpaperExtractorSheet: View {
                 .foregroundStyle(.secondary)
             Text("未找到可提取的壁纸")
                 .font(.headline)
-            Text("PosterBoard 容器中没有已安装的自定义描述符，或当前无权限读取。")
+            Text("PosterBoard 容器中没有已安装的自定义描述符，或当前无权限读取.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

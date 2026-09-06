@@ -1,7 +1,7 @@
 import CoreLocation
 import SwiftUI
 
-/// 路线规划面板（移植自 locus-ZH，已中文本地化）。
+/// 路线规划面板（移植自 locus-ZH，已中文本地化）.
 struct RoutePlannerSheet: View {
     @Binding var start: CLLocationCoordinate2D?
     @Binding var end: CLLocationCoordinate2D?
@@ -75,7 +75,7 @@ struct RoutePlannerSheet: View {
                 }
 
                 Section {
-                    Text("优先使用 Apple 地图规划道路路线；路线服务器不可用时自动生成直线备用路线。速度设置同时作用于轨迹和摇杆。")
+                    Text("优先使用 Apple 地图规划道路路线；路线服务器不可用时自动生成直线备用路线.速度设置同时作用于轨迹和摇杆.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

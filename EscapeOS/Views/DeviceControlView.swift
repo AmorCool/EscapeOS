@@ -1,15 +1,15 @@
 import SwiftUI
 
-/// 「更多」左上角入口：设备控制（重启 SpringBoard / 网页崩溃 / 重启设备 / 关机 / 恢复模式）。
+/// 「更多」左上角入口：设备控制（重启 SpringBoard / 网页崩溃 / 重启设备 / 关机 / 恢复模式）.
 ///
-/// - 重启 SpringBoard（SIGKILL）与网页崩溃（RespringView 内存压力）：桌面立即重启。
+/// - 重启 SpringBoard（SIGKILL）与网页崩溃（RespringView 内存压力）：桌面立即重启.
 /// - 重启设备 / 关机 / 进入恢复模式：经配对文件 + LocalDevVPN 隧道的 RSD 通道
-///   （diagnostics relay / lockdownd），需要已连接隧道。
-/// - 所有危险操作均弹确认框；恢复模式额外强调风险。
+///   （diagnostics relay / lockdownd），需要已连接隧道.
+/// - 所有危险操作均弹确认框；恢复模式额外强调风险.
 ///
 /// ⚠️ 已知坑（v0.2.104 修复）：同一视图链上不要挂两个 `.alert(item:)`——
-/// 后注册的会覆盖先注册的，导致确认弹窗不弹、点击无反应。这里统一走
-/// 单个 `alertItem` 通道（确认 / 结果两种形态）。
+/// 后注册的会覆盖先注册的，导致确认弹窗不弹、点击无反应.这里统一走
+/// 单个 `alertItem` 通道（确认 / 结果两种形态）.
 struct DeviceControlView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -68,7 +68,7 @@ struct DeviceControlView: View {
         }
     }
 
-    /// 统一的 alert 通道：确认弹窗（dangerous action）或结果/错误提示。
+    /// 统一的 alert 通道：确认弹窗（dangerous action）或结果/错误提示.
     private enum AlertItem: Identifiable {
         case confirm(DeviceAction)
         case notice(title: String, message: String)
@@ -131,7 +131,7 @@ struct DeviceControlView: View {
             alertView(for: item)
         }
         .fullScreenCover(isPresented: $showWebCrash) {
-            // 黑屏 + 压力网页：SpringBoard 被挤崩后桌面自动重启。
+            // 黑屏 + 压力网页：SpringBoard 被挤崩后桌面自动重启.
             RespringView()
                 .ignoresSafeArea()
                 .overlay(alignment: .bottom) {
@@ -242,7 +242,7 @@ struct DeviceControlView: View {
                 }
                 await MainActor.run {
                     self.isRunning = false
-                    // 指令已送达：重启/关机/恢复模式会打断连接，无需等待回执。
+                    // 指令已送达：重启/关机/恢复模式会打断连接，无需等待回执.
                     self.alertItem = .notice(
                         title: "指令已发送",
                         message: "「\(action.rawValue)」操作已执行，请稍候."

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// v0.3.197：主页（手机管家形态）— 顶部灵动球 hero + 卡片网格。
-/// v0.3.219：Hero 换装 Metal 实时液态玻璃球（LiquidGlassOrbView + LiquidGlassOrb.metal）。
+/// v0.3.197：主页（手机管家形态）— 顶部灵动球 hero + 卡片网格.
+/// v0.3.219：Hero 换装 Metal 实时液态玻璃球（LiquidGlassOrbView + LiquidGlassOrb.metal）.
 /// v0.3.207：百宝箱 = 系统原生 sheet（presentationDetents 0.4↔1.0，原生上拉展开/
-/// 下拉关闭——跟手流畅，返回不必点横线；把手区点击或上滑触发）。
+/// 下拉关闭——跟手流畅，返回不必点横线；把手区点击或上滑触发）.
 struct HomeView: View {
     @ObservedObject var appList: AppListViewModel
     /// v0.3.197：安全评分（占位 — 后续接入 SecurityPresets.plist + Reveil 思路实做）.
@@ -158,7 +158,7 @@ struct HomeView: View {
 
     // MARK: 百宝箱把手（v0.3.206：底部上拉抽屉——小米管家式，非嵌内容非简单切换）
 
-    /// 主页底部把手条：点击或上滑手势进入百宝箱抽屉（面板从底部滑动进入）。
+    /// 主页底部把手条：点击或上滑手势进入百宝箱抽屉（面板从底部滑动进入）.
     private var treasureHandleBar: some View {
         VStack(spacing: 10) {
             Capsule()

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 虚拟定位页主题（移植自 locus-ZH，青/橙语义色，无棕色系）。
+/// 虚拟定位页主题（移植自 locus-ZH，青/橙语义色，无棕色系）.
 enum LocusTheme {
     static let accent = Color(red: 0.35, green: 0.78, blue: 0.72)
     static let accentSecondary = Color(red: 0.95, green: 0.55, blue: 0.28)
@@ -17,7 +17,7 @@ enum LocusGlassStyle {
     case interactive
 }
 
-/// iOS 26 液态玻璃；旧系统回退半透明材质。
+/// iOS 26 液态玻璃；旧系统回退半透明材质.
 struct LocusGlassModifier<S: Shape>: ViewModifier {
     var style: LocusGlassStyle
     var shape: S
@@ -27,7 +27,7 @@ struct LocusGlassModifier<S: Shape>: ViewModifier {
         if #available(iOS 26.0, *) {
             content
                 .glassEffect(glass, in: shape)
-                // 玻璃会画出布局边界，扩展命中区域保持一致。
+                // 玻璃会画出布局边界，扩展命中区域保持一致.
                 .contentShape(shape)
         } else {
             content

@@ -1,26 +1,26 @@
 import SwiftUI
 
-/// App Store IPA 下载（功能移植自 asspp / ApplePackage，v0.2.148+）。
+/// App Store IPA 下载（功能移植自 asspp / ApplePackage，v0.2.148+）.
 ///
 /// 与「IPA 侧载」的区别：
 /// - IPA 侧载：用 Apple ID 登录开发者服务，**自己签名**后安装
 /// - 本页：用 Apple ID 登录 **App Store**，**下载官方正版 IPA**（含 FairPlay
-///   sinf 签名），下载完直接交给「IPA 安装」在线安装 —— 与爱思助手同类。
+///   sinf 签名），下载完直接交给「IPA 安装」在线安装 —— 与爱思助手同类.
 ///
 /// 底层走移植进来的 ApplePackage（网络层已用 URLSession 重写，ZIP 用
-/// 项目已有的 SWCompression），无需再次签名。
+/// 项目已有的 SWCompression），无需再次签名.
 ///
 /// 账户登录：优先复用「更多 → 设置 → Apple ID 账户」里已登录的 Apple ID
 ///（同一份邮箱 + 密码走 iTunes 认证即可），无需在 App Store 下载里再登录一次；
-/// 遇到双重认证等情况时仍可手动添加账户。
+/// 遇到双重认证等情况时仍可手动添加账户.
 
-/// 把 iTunes 认证错误转成中文可读提示，对「plist 格式异常」做专门说明。
+/// 把 iTunes 认证错误转成中文可读提示，对「plist 格式异常」做专门说明.
 /// 该错误来自移植进来的 ApplePackage（`Authenticate.parseResponse` 的
-/// PropertyListSerialization 解析失败），根因需真机日志取证，这里只做清晰化。
+/// PropertyListSerialization 解析失败），根因需真机日志取证，这里只做清晰化.
 func iTunesAuthErrorMessage(_ error: Error) -> String {
     let desc = error.localizedDescription
     if desc.contains("未能读取数据") || desc.localizedCaseInsensitiveContains("property list") {
-        return "Apple 返回的认证数据格式异常（非预期 plist）。常见原因：会话 / 令牌过期、网络异常或 Anisette 失效."
+        return "Apple 返回的认证数据格式异常（非预期 plist）.常见原因：会话 / 令牌过期、网络异常或 Anisette 失效."
     }
     return "登录失败：\(desc)"
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// 设备控制服务：重启 SpringBoard（sigkill）/ 重启设备 / 关机 / 进入恢复模式。
+/// 设备控制服务：重启 SpringBoard（sigkill）/ 重启设备 / 关机 / 进入恢复模式.
 ///
 /// 全部走「配对文件 + LocalDevVPN 本地隧道」的 RSD 通道（与进程管理 / 虚拟定位
 /// 同一套机制），复用 idevice.h 暴露的 C 函数：
@@ -9,13 +9,13 @@ import Foundation
 /// - `lockdownd_connect_rsd` + `lockdownd_enter_recovery`：进入恢复模式
 ///
 /// 「网页崩溃 SpringBoard」不需要隧道（本进程 WKWebView 内存压力），见
-/// `RespringView`（ConfigurationsView 已使用），由 UI 层直接展示。
+/// `RespringView`（ConfigurationsView 已使用），由 UI 层直接展示.
 final class DeviceControlService {
 
     static let shared = DeviceControlService()
     private init() {}
 
-    /// EscapeSpace 的配对文件路径（与「应用管理」/ 进程管理共用）。
+    /// EscapeSpace 的配对文件路径（与「应用管理」/ 进程管理共用）.
     private var pairingPath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
@@ -52,7 +52,7 @@ final class DeviceControlService {
 
     private func createTunnel(hostname: String) throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）.")
         }
 
         var pairingFile: OpaquePointer?
@@ -109,8 +109,8 @@ final class DeviceControlService {
 
     // MARK: 进程信号
 
-    /// connect 失败自动重试（最多 3 次、短退避）。RSD 服务发现偶发
-    /// 「ServiceNotFound」——多页面并发建隧道竞争导致，重试覆盖大部分偶发失败。
+    /// connect 失败自动重试（最多 3 次、短退避）.RSD 服务发现偶发
+    /// 「ServiceNotFound」——多页面并发建隧道竞争导致，重试覆盖大部分偶发失败.
     private func withAppService<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         var tunnel = try createTunnel(hostname: "EscapeSpaceDevice")
         defer { tunnel.free() }
@@ -133,8 +133,8 @@ final class DeviceControlService {
         throw lastError ?? makeError("连接应用服务失败")
     }
 
-    /// 在设备进程列表里找 CommCenter 的 PID（可执行路径包含 CommCenter）。
-    /// 与 SpringBoard 同理（`springBoardPID`），供重启蜂窝网络服务使用。
+    /// 在设备进程列表里找 CommCenter 的 PID（可执行路径包含 CommCenter）.
+    /// 与 SpringBoard 同理（`springBoardPID`），供重启蜂窝网络服务使用.
     func commCenterPID() throws -> Int? {
         try withAppService { appService in
             var processes: UnsafeMutablePointer<ProcessTokenC>?
@@ -160,7 +160,7 @@ final class DeviceControlService {
     /// 重启蜂窝网络服务（CommCenter）：走 RSD 隧道对 CommCenter 发 SIGKILL，
     /// 系统会自动拉起 —— 与 respringSpringBoard 同一套机制，无需 root、
     /// 无需 entitlement（CellularInfo 需要 root helper 才能做的事，隧道版
-    /// 直接做到）。效果等同「飞行模式开关 / 重启蜂窝服务」。
+    /// 直接做到）.效果等同「飞行模式开关 / 重启蜂窝服务」.
     func restartCommCenter() throws {
         let pid = try commCenterPID()
         guard let pid else { throw makeError("未在进程列表中找到 CommCenter") }
@@ -174,7 +174,7 @@ final class DeviceControlService {
         }
     }
 
-    /// 在设备进程列表里找 SpringBoard 的 PID（可执行路径包含 SpringBoard）。
+    /// 在设备进程列表里找 SpringBoard 的 PID（可执行路径包含 SpringBoard）.
     func springBoardPID() throws -> Int? {
         try withAppService { appService in
             var processes: UnsafeMutablePointer<ProcessTokenC>?
@@ -197,7 +197,7 @@ final class DeviceControlService {
         }
     }
 
-    /// 方法一：SIGKILL 终止 SpringBoard（桌面立即重启，App 进程保留）。
+    /// 方法一：SIGKILL 终止 SpringBoard（桌面立即重启，App 进程保留）.
     func respringSpringBoard() throws {
         let pid = try springBoardPID()
         guard let pid else { throw makeError("未在进程列表中找到 SpringBoard") }
@@ -255,7 +255,7 @@ final class DeviceControlService {
         throw lastError ?? makeError("连接诊断服务失败")
     }
 
-    /// 重启设备。
+    /// 重启设备.
     func restartDevice() throws {
         try withDiagnosticsRelay { client in
             if let ffiError = diagnostics_relay_client_restart(client) {
@@ -264,7 +264,7 @@ final class DeviceControlService {
         }
     }
 
-    /// 关机。
+    /// 关机.
     func shutdownDevice() throws {
         try withDiagnosticsRelay { client in
             if let ffiError = diagnostics_relay_client_shutdown(client) {
@@ -275,7 +275,7 @@ final class DeviceControlService {
 
     // MARK: 恢复模式（lockdownd）
 
-    /// 进入恢复模式（设备屏幕显示连接电脑图标）。
+    /// 进入恢复模式（设备屏幕显示连接电脑图标）.
     func enterRecovery() throws {
         var tunnel = try createTunnel(hostname: "EscapeSpaceDevice")
         defer { tunnel.free() }

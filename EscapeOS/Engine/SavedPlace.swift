@@ -1,7 +1,7 @@
 import CoreLocation
 import Foundation
 
-/// 收藏 / 最近使用的地点（移植自 locus-ZH），JSON 存入 UserDefaults。
+/// 收藏 / 最近使用的地点（移植自 locus-ZH），JSON 存入 UserDefaults.
 struct SavedPlace: Identifiable, Codable, Equatable {
     var id: String { "\(latitude),\(longitude)" }
     var name: String

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 摇杆（移植自 locus-ZH）：拖动控制模拟位置连续移动。
+/// 摇杆（移植自 locus-ZH）：拖动控制模拟位置连续移动.
 struct JoystickPad: View {
     var onChange: (CGVector) -> Void
 

@@ -1,14 +1,14 @@
 import Foundation
 import SwiftUI
 
-/// plist 结构化编辑器的状态与读写。
+/// plist 结构化编辑器的状态与读写.
 ///
 /// 移植自 Erosion 的 `PlistManager`，但有两处关键改动：
-/// 1. **不是单例** —— 每个 plist 文件一个实例，避免多个页面互相踩数据。
+/// 1. **不是单例** —— 每个 plist 文件一个实例，避免多个页面互相踩数据.
 /// 2. **读写都走 SandboxEscape + FileService** —— plist 在别的 App 容器里，
-///    离开沙盒扩展既读不到也写不回（Erosion 是独立 App，能直接写）。
+///    离开沙盒扩展既读不到也写不回（Erosion 是独立 App，能直接写）.
 /// `Result` 的 `Failure` 必须遵循 `Error`，而 `String` 不遵循；包一层既满足协议
-/// 约束，又是 Sendable（后台写文件的结果要跨 actor 边界回主线程）。
+/// 约束，又是 Sendable（后台写文件的结果要跨 actor 边界回主线程）.
 private struct PlistSaveFailure: Error {
     let message: String
 }
@@ -16,8 +16,8 @@ private struct PlistSaveFailure: Error {
 @MainActor
 final class PlistEditorViewModel: ObservableObject {
 
-    /// 顶层条目数组。约定 `items[0]` 是虚拟的 Root 节点，真正的键值对在它的 `dictVal` 里
-    /// —— 这样替换 / 删除递归函数有统一的入口（与 Erosion 一致）。
+    /// 顶层条目数组.约定 `items[0]` 是虚拟的 Root 节点，真正的键值对在它的 `dictVal` 里
+    /// —— 这样替换 / 删除递归函数有统一的入口（与 Erosion 一致）.
     @Published var items: [PlistItem] = []
     @Published var isLoading = true
     @Published var isSaving = false
@@ -36,7 +36,7 @@ final class PlistEditorViewModel: ObservableObject {
         load(data: initialData)
     }
 
-    /// 顶层字典（Root 节点的子项）。
+    /// 顶层字典（Root 节点的子项）.
     var rootChildren: [PlistItem] {
         items.first?.dictVal ?? []
     }
@@ -50,7 +50,7 @@ final class PlistEditorViewModel: ObservableObject {
         do {
             let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
             guard let dict = plist as? [String: Any] else {
-                // 数组 / 其它根类型：包一层虚拟 Root，让用户仍能看到内容。
+                // 数组 / 其它根类型：包一层虚拟 Root，让用户仍能看到内容.
                 var root = PlistItem(key: "Root", value: ["value": plist], isExpanded: true)
                 root.type = .dict
                 items = [root]
@@ -70,7 +70,7 @@ final class PlistEditorViewModel: ObservableObject {
 
     // MARK: - 增删改
 
-    /// 用 `updated` 替换树中同 id 的节点（不改 key 时用）。
+    /// 用 `updated` 替换树中同 id 的节点（不改 key 时用）.
     func replace(_ updated: PlistItem) {
         _ = replaceRecursively(in: &items, with: updated)
     }
@@ -87,7 +87,7 @@ final class PlistEditorViewModel: ObservableObject {
 
     // MARK: - 保存
 
-    /// 把整棵树序列化成二进制 plist 写回原文件。
+    /// 把整棵树序列化成二进制 plist 写回原文件.
     func save() {
         guard !isSaving else { return }
         guard let root = items.first else { return }
@@ -114,7 +114,7 @@ final class PlistEditorViewModel: ObservableObject {
         let rootPath = self.rootPath
         let path = item.path
 
-        // 后台串行化 + 在闭包内创建实例，避免跨 actor 捕获非 Sendable 对象。
+        // 后台串行化 + 在闭包内创建实例，避免跨 actor 捕获非 Sendable 对象.
         Task.detached(priority: .userInitiated) { [weak self] in
             let escape = SandboxEscape()
             let files = FileService()
@@ -133,7 +133,7 @@ final class PlistEditorViewModel: ObservableObject {
                 self.isSaving = false
                 switch outcome {
                 case .success:
-                    self.successMessage = "已写回文件。返回后重新打开可看到最新内容。"
+                    self.successMessage = "已写回文件.返回后重新打开可看到最新内容."
                 case .failure(let failure):
                     self.errorMessage = "写入失败：\(failure.message)"
                 }

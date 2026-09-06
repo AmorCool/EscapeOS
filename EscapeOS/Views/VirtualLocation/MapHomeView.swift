@@ -1,7 +1,7 @@
 import MapKit
 import SwiftUI
 
-/// 虚拟定位地图主页（移植自 locus-ZH）。
+/// 虚拟定位地图主页（移植自 locus-ZH）.
 struct MapHomeView: View {
     @ObservedObject private var session = SpoofSession.shared
 
@@ -20,7 +20,7 @@ struct MapHomeView: View {
     @State private var pinSelected = false
     @State private var isDraggingPin = false
     @State private var suppressNextMapTap = false
-    /// 搜索 / 命名地点落针时记录名称，供收藏星标保留标题。
+    /// 搜索 / 命名地点落针时记录名称，供收藏星标保留标题.
     @State private var pinPlaceName: String?
 
     private var mapStyle: MapStyle {
@@ -33,7 +33,7 @@ struct MapHomeView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // 地图保持在安全布局内，MapProxy.convert 才能与手指位置对齐。
+            // 地图保持在安全布局内，MapProxy.convert 才能与手指位置对齐.
             MapReader { proxy in
                 Map(position: $position) {
                     UserAnnotation()
@@ -292,7 +292,7 @@ struct MapHomeView: View {
         .accessibilityLabel("回到当前位置")
     }
 
-    /// 模拟中回到模拟坐标，否则回真实 GPS——绝不停留在残留图钉上。
+    /// 模拟中回到模拟坐标，否则回真实 GPS——绝不停留在残留图钉上.
     private func goToCurrentLocation() {
         let meters: CLLocationDistance = 900
         withAnimation(.easeInOut(duration: 0.35)) {
@@ -357,7 +357,7 @@ struct MapHomeView: View {
                     session.pushNamedRecent(name: item.name ?? query, coordinate: coord)
                 }
             } else {
-                await MainActor.run { session.lastError = "没有找到匹配的地点。" }
+                await MainActor.run { session.lastError = "没有找到匹配的地点." }
             }
         }
     }
@@ -385,7 +385,7 @@ struct MapHomeView: View {
     private func buildRoadRoute() {
         guard let start = routeStart ?? session.simulated ?? session.pin,
               let end = routeEnd else {
-            session.lastError = "请设置路线起点和终点。"
+            session.lastError = "请设置路线起点和终点."
             return
         }
         isRouting = true
@@ -408,7 +408,7 @@ struct MapHomeView: View {
     private func playRoute() {
         let path = routeCoords.isEmpty ? drawnPath : routeCoords
         guard path.count >= 2 else {
-            session.lastError = "请先规划、手绘或导入一条轨迹。"
+            session.lastError = "请先规划、手绘或导入一条轨迹."
             return
         }
         showRouteSheet = false
@@ -431,7 +431,7 @@ struct MapHomeView: View {
     private func exportGPX() {
         let path = routeCoords.isEmpty ? drawnPath : routeCoords
         guard !path.isEmpty else {
-            session.lastError = "当前没有可导出的轨迹。"
+            session.lastError = "当前没有可导出的轨迹."
             return
         }
         let gpx = GPXCodec.export(path)

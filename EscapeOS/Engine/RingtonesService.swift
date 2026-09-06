@@ -2,17 +2,17 @@ import Foundation
 import AVFoundation
 
 /// 铃声管理服务 —— 走 RSD 隧道（AFCService，`com.apple.afc.shim.remote`，
-/// 根 = **/var/mobile/media**）。
+/// 根 = **/var/mobile/media**）.
 ///
 /// v0.2.128 变更：
 /// - **移除系统提示音（/System/Library/Audio/UISounds）读取**：该目录在 AFC
 ///   根之外，bad_query 又报 `The path lies outside containermanager's sandbox`，
-///   用户已要求删除这部分。
+///   用户已要求删除这部分.
 /// - 列表改为**扫描 media 内多个常见位置**的音频文件（iTunes_Control/Ringtones、
-///   PublicStaging、Downloads、media 根），解决"用户铃声不显示"的问题。
+///   PublicStaging、Downloads、media 根），解决"用户铃声不显示"的问题.
 ///
 /// ⚠️ 硬限制：系统铃声库 `/var/mobile/Library/Ringtones` 在 AFC 根（media）
-/// 之外，隧道不可达，无法直接读取 —— 只能管理 media 内的铃声文件。
+/// 之外，隧道不可达，无法直接读取 —— 只能管理 media 内的铃声文件.
 final class RingtonesService {
 
     static let shared = RingtonesService()
@@ -20,14 +20,14 @@ final class RingtonesService {
 
     private let afc = AFCService.shared
 
-    /// 主目录（= /var/mobile/media/iTunes_Control/Ringtones，iTunes/爱思同款）。
+    /// 主目录（= /var/mobile/media/iTunes_Control/Ringtones，iTunes/爱思同款）.
     static let userRingtonesAFCPath = "iTunes_Control/Ringtones"
-    /// 扫描位置（AFC 相对路径；"" 表示 media 根）。
+    /// 扫描位置（AFC 相对路径；"" 表示 media 根）.
     static let scanRoots = [userRingtonesAFCPath, "PublicStaging", "Downloads", ""]
-    /// 视为铃声的扩展名（v0.2.132 恢复过滤 —— 用户确认旧版按扩展名过滤更好）。
+    /// 视为铃声的扩展名（v0.2.132 恢复过滤 —— 用户确认旧版按扩展名过滤更好）.
     static let audioExtensions: Set<String> = ["m4r", "caf", "m4a", "aiff", "wav", "aac", "mp3"]
 
-    /// 本地导出目录（文件 App 可见）。
+    /// 本地导出目录（文件 App 可见）.
     static var exportDirectory: String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("Ringtones", isDirectory: true)
@@ -35,7 +35,7 @@ final class RingtonesService {
         return dir.path
     }
 
-    /// 条目。
+    /// 条目.
     struct Entry: Identifiable, Equatable {
         let name: String
         let path: String
@@ -75,7 +75,7 @@ final class RingtonesService {
 
     private func createTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）.")
         }
 
         var pairingFile: OpaquePointer?
@@ -133,8 +133,8 @@ final class RingtonesService {
     // MARK: - 列表（AFC 隧道，扫描 media 内常见位置）
 
     /// 扫描 media 内各常见位置的铃声文件（v0.2.132：恢复**按扩展名过滤**，
-    /// 只显示音频文件 —— 用户确认旧版过滤逻辑更好）。
-    /// 目录自动排除；扫描根全部失败时抛错，部分成功则返回成功的部分。
+    /// 只显示音频文件 —— 用户确认旧版过滤逻辑更好）.
+    /// 目录自动排除；扫描根全部失败时抛错，部分成功则返回成功的部分.
     func listUserRingtones() throws -> [Entry] {
         var found: [Entry] = []
         var seen = Set<String>()
@@ -164,7 +164,7 @@ final class RingtonesService {
     /// 导入铃声：**先转成 .m4r**（AAC/m4a 容器，爱思助手同款 —— 用户观察：
     /// "爱思助手还要转换成铃声格式 .m4r 的"），再经 AFC 上传到
     /// iTunes_Control/Ringtones，最后发 iTunes 同步通知让系统刷新媒体库
-    /// （爱思的「同步进铃声库」本质 = 写文件 + 通知刷新）。
+    /// （爱思的「同步进铃声库」本质 = 写文件 + 通知刷新）.
     @discardableResult
     func importRingtone(localURL: URL) throws -> String {
         // 1. 格式转换（mp3/wav/m4a 等任意音频 → .m4r）
@@ -198,8 +198,8 @@ final class RingtonesService {
         return remote
     }
 
-    /// 导出铃声到本地文件 App（用户可长按 → 用作铃声，iOS 16+）。
-    /// 通过 AFC 读取设备上的铃声文件 → 保存到 Documents/Ringtones/。
+    /// 导出铃声到本地文件 App（用户可长按 → 用作铃声，iOS 16+）.
+    /// 通过 AFC 读取设备上的铃声文件 → 保存到 Documents/Ringtones/.
     func exportToLocal(entry: Entry) throws -> URL {
         let data = try afc.readFile(entry.path)
         guard !data.isEmpty else { throw makeError("铃声内容为空") }
@@ -210,8 +210,8 @@ final class RingtonesService {
     }
 
     /// 通过 RSD 隧道向 notification_proxy 服务发送 iTunes 同步通知，
-    /// 让系统感知媒体库变更（铃声同步协议，未越狱设备的公开通道）。
-    /// 失败静默（不影响主流程），调用方按需提示。
+    /// 让系统感知媒体库变更（铃声同步协议，未越狱设备的公开通道）.
+    /// 失败静默（不影响主流程），调用方按需提示.
     func postSyncNotification(_ name: String) throws {
         var tunnel = try createTunnel()
         defer { tunnel.free() }
@@ -229,8 +229,8 @@ final class RingtonesService {
         }
     }
 
-    /// 用 AVAssetExportSession 把任意音频转成 .m4r（AAC，m4a 容器改扩展名）。
-    /// 输出到临时目录，调用方负责清理。
+    /// 用 AVAssetExportSession 把任意音频转成 .m4r（AAC，m4a 容器改扩展名）.
+    /// 输出到临时目录，调用方负责清理.
     private func convertToM4R(localURL: URL) throws -> URL {
         let asset = AVURLAsset(url: localURL)
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
@@ -251,12 +251,12 @@ final class RingtonesService {
         return outURL
     }
 
-    /// 读取铃声文件原始数据（在线播放用）。
+    /// 读取铃声文件原始数据（在线播放用）.
     func readData(path: String) throws -> Data {
         try afc.readFile(path)
     }
 
-    /// 下载铃声到本地导出目录，返回本地路径。
+    /// 下载铃声到本地导出目录，返回本地路径.
     func download(path: String) throws -> String {
         let data = try afc.readFile(path)
         let name = (path as NSString).lastPathComponent
@@ -265,14 +265,14 @@ final class RingtonesService {
         return target.path
     }
 
-    /// 重命名铃声（AFC rename_path）。
+    /// 重命名铃声（AFC rename_path）.
     func renameRingtone(path: String, to newName: String) throws {
         let parent = (path as NSString).deletingLastPathComponent
         let target = (parent == "/" ? "" : parent) + "/" + newName
         try afc.renamePath(path, to: target)
     }
 
-    /// 删除铃声。
+    /// 删除铃声.
     func deleteRingtone(path: String) throws {
         try afc.removePath(path)
     }

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// v0.3.200：设备体检页 —— 执行 SecurityScanner 真实检测。
-/// 得分通过 binding 回传主页灵动球（立即体检后主页分数同步刷新）。
+/// v0.3.200：设备体检页 —— 执行 SecurityScanner 真实检测.
+/// 得分通过 binding 回传主页灵动球（立即体检后主页分数同步刷新）.
 struct HealthCheckView: View {
     /// 体检得分绑定（主页灵动球显示用）
     var score: Binding<Int>? = nil

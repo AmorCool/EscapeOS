@@ -1,6 +1,6 @@
 import Foundation
 
-/// v0.3.208：文档共享应用文件浏览（iDescriptor FileSharing 移植，不依赖漏洞）。
+/// v0.3.208：文档共享应用文件浏览（iDescriptor FileSharing 移植，不依赖漏洞）.
 /// 数据源：
 ///   - instproxy_browse 列全部已装应用（含 UIFileSharingEnabled 字段）
 ///   - house_arrest_vend_documents 为指定 bundle id 拿 AFC 会话（仅该 App /Documents 容器）
@@ -20,8 +20,8 @@ enum FileSharingService {
         NSError(domain: "FileSharing", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    /// 列出全部已装应用并标 UIFileSharingEnabled（get_apps / Lookup 同 AppDiscovery）。
-    /// 同步阻塞——调用方放后台线程。
+    /// 列出全部已装应用并标 UIFileSharingEnabled（get_apps / Lookup 同 AppDiscovery）.
+    /// 同步阻塞——调用方放后台线程.
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
@@ -83,8 +83,8 @@ enum FileSharingService {
         return result
     }
 
-    /// 为指定 bundle id 建立 Documents 容器 AFC 会话（house_arrest vend_documents）。
-    /// 返回 AFC handle（caller 负责 free）。失败 throw。
+    /// 为指定 bundle id 建立 Documents 容器 AFC 会话（house_arrest vend_documents）.
+    /// 返回 AFC handle（caller 负责 free）.失败 throw.
     static func openAppDocuments(bundleId: String) throws -> OpaquePointer {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
@@ -106,9 +106,9 @@ enum FileSharingService {
         return afc
     }
 
-    /// v0.3.214：为指定 bundle id 建立**完整数据容器** AFC 会话（house_arrest vend_container）。
+    /// v0.3.214：为指定 bundle id 建立**完整数据容器** AFC 会话（house_arrest vend_container）.
     /// 返回 AFC handle（caller 负责 free）；失败 throw —— 表示该应用不允许整个容器访问
-    /// （多数第三方 App 无权限，仅开发者/受信签名 App 可开；此时降级只读 Documents）。
+    /// （多数第三方 App 无权限，仅开发者/受信签名 App 可开；此时降级只读 Documents）.
     static func openAppContainer(bundleId: String) throws -> OpaquePointer {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
@@ -206,7 +206,7 @@ enum FileSharingService {
         }
     }
 
-    /// 上传文件到 AFC（1MB 分块写，AFCService writeFile 同款）。父目录须已存在。
+    /// 上传文件到 AFC（1MB 分块写，AFCService writeFile 同款）.父目录须已存在.
     static func uploadFile(afc: OpaquePointer, data: Data, to path: String) throws {
         var handle: OpaquePointer?
         let rc = path.withCString { afc_file_open(afc, $0, AfcWrOnly, &handle) }
@@ -226,8 +226,8 @@ enum FileSharingService {
         }
     }
 
-    /// 列目录（AFC）。返回顶层条目名 + 是否目录。
-    /// v0.3.213：错误不再吞成空数组——抛给 UI 显示真实原因。
+    /// 列目录（AFC）.返回顶层条目名 + 是否目录.
+    /// v0.3.213：错误不再吞成空数组——抛给 UI 显示真实原因.
     static func listDirectory(afc: OpaquePointer, path: String) throws -> [AfcEntry] {
         var entriesPtr: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
         var count: Int = 0

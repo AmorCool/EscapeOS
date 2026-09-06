@@ -17,19 +17,19 @@ final class AppListViewModel: ObservableObject {
     @Published var needsPairing = false
     @Published var icons: [String: UIImage] = [:]
     @Published var uninstallStatus: String?
-    /// v0.3.181：应用类型（AppStore/企业/AdHoc/开发/未知），key=bundleID。
+    /// v0.3.181：应用类型（AppStore/企业/AdHoc/开发/未知），key=bundleID.
     @Published var appTypes: [String: AppType] = [:]
 
     private let discovery = AppDiscovery()
     private let uninstaller = UninstallService.shared
-    /// 加载失败后的自动重试任务（LocalDevVPN 开启后无需手动点重试）。
+    /// 加载失败后的自动重试任务（LocalDevVPN 开启后无需手动点重试）.
     private var retryTask: Task<Void, Never>?
 
     var hasPairingFile: Bool { discovery.hasPairingFile }
 
     var canUninstall: Bool { discovery.canUninstallApps() }
 
-    /// 停止自动重试（页面消失时调用）。
+    /// 停止自动重试（页面消失时调用）.
     func stopAutoRetry() {
         retryTask?.cancel()
         retryTask = nil
@@ -49,7 +49,7 @@ final class AppListViewModel: ObservableObject {
                     self.apps = found
                     self.errorMessage = nil
                     self.icons = [:]
-                    // 成功：取消自动重试。
+                    // 成功：取消自动重试.
                     self.stopAutoRetry()
                 }
                 self.loadIcons(for: found)
@@ -59,7 +59,7 @@ final class AppListViewModel: ObservableObject {
                     self.isLoading = false
                     if case .noPairingFile = e {
                         self.needsPairing = true
-                        // 配对文件缺失：不再自动重试（等用户导入）。
+                        // 配对文件缺失：不再自动重试（等用户导入）.
                         self.stopAutoRetry()
                     } else {
                         self.errorMessage = e.localizedDescription
@@ -78,11 +78,11 @@ final class AppListViewModel: ObservableObject {
 
     /// 加载失败后自动重试（v0.2.108 修正）：
     /// - 单次调度：本次 retry 触发 reload 并等其完成后，再由 reload 的 catch
-    ///   块决定是否继续下一次。避免旧 `while` 循环在 reload 尚未完成时就调度
-    ///   下一个 Task，导致多个 retry 并发、互相覆盖甚至把 tunnel 资源耗尽。
-    /// - 间隔 3 秒。v0.2.106 的「端口可达预检」已移除；RSD tunnel_create_rppairing
-    ///   自带 3 次重试，直接重试更可靠。
-    /// - 配对文件缺失（needsPairing）时不重试。
+    ///   块决定是否继续下一次.避免旧 `while` 循环在 reload 尚未完成时就调度
+    ///   下一个 Task，导致多个 retry 并发、互相覆盖甚至把 tunnel 资源耗尽.
+    /// - 间隔 3 秒.v0.2.106 的「端口可达预检」已移除；RSD tunnel_create_rppairing
+    ///   自带 3 次重试，直接重试更可靠.
+    /// - 配对文件缺失（needsPairing）时不重试.
     private func scheduleAutoRetry() {
         guard retryTask == nil else { return }
         retryTask = Task { [weak self] in
@@ -114,8 +114,8 @@ final class AppListViewModel: ObservableObject {
     }
 
     /// v0.3.184：拉取设备的 provisioning profiles（misagent）并结合 installation_proxy 已拿到的
-    /// applicationType/iTunesAppleID，构建每个 app 的 AppType 映射。
-    /// 判定规则见 `AppTypeDetector.detect`。
+    /// applicationType/iTunesAppleID，构建每个 app 的 AppType 映射.
+    /// 判定规则见 `AppTypeDetector.detect`.
     private func loadAppTypes(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
         // v0.3.184：当前 Apple ID 用于区分正版 vs 共享（来自 AppStore 登录态）.
@@ -151,7 +151,7 @@ final class AppListViewModel: ObservableObject {
             // 以 appId（application-identifier）匹配 profile 顶层 ProvisionsAllDevices
             // v0.3.192【闪退修复】：设备上同一 App 重签/多次安装会留下多个指向同一
             // application-identifier 的 profile → Dictionary(uniqueKeysWithValues:)
-            // 遇重复 key 直接 fatalError 崩溃（v0.3.187~191 真机闪退真凶）。
+            // 遇重复 key 直接 fatalError 崩溃（v0.3.187~191 真机闪退真凶）.
             // 改用 uniquingKeysWith 保留首个.
             let profileByAppId = Dictionary(
                 allProfiles.map { ($0.appId, $0) },
@@ -207,7 +207,7 @@ final class AppListViewModel: ObservableObject {
             throw NSError(
                 domain: "EscapeOS",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "无法读取该配对文件。"]
+                userInfo: [NSLocalizedDescriptionKey: "无法读取该配对文件."]
             )
         }
         try importPairingFile(contents)
@@ -302,7 +302,7 @@ struct AppListView: View {
                             Label("配对文件未导入", systemImage: "exclamationmark.triangle")
                                 .font(.headline)
                                 .foregroundStyle(.orange)
-                            Text("重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复应用列表。")
+                            Text("重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复应用列表.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             NavigationLink(destination: NavigationLazyView(PairingSetupView(viewModel: viewModel))) {
@@ -332,7 +332,7 @@ struct AppListView: View {
                                 if app.isSystem {
                                     // 系统应用同样支持进入详情页：浏览文件 / 回收空间 /
                                     // 备份数据 / 重置应用数据（重置有额外二次风险确认，
-                                    // 见 AppDetailView）。系统应用不参与批量选择与卸载。
+                                    // 见 AppDetailView）.系统应用不参与批量选择与卸载.
                                     NavigationLink(destination: AppDetailView(app: app, viewModel: viewModel)) {
                                         appRow(app, mode: .normal)
                                     }
@@ -445,8 +445,8 @@ struct AppListView: View {
         .sheet(item: $iconShare) { payload in
             IconShareSheet(image: payload.image, fileName: payload.suggestedName)
         }
-        // 用户切到后台去开 LocalDevVPN，回到前台时主动刷新一次。
-        // 与缩短后的 15s 超时配合，能更快从"开 App 后才连 VPN"的场景恢复。
+        // 用户切到后台去开 LocalDevVPN，回到前台时主动刷新一次.
+        // 与缩短后的 15s 超时配合，能更快从"开 App 后才连 VPN"的场景恢复.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             viewModel.reload()
         }
@@ -500,9 +500,9 @@ struct AppListView: View {
 
     private var uninstallConfirmMessage: String {
         let n = pendingUninstall.count
-        let prefix = "将卸载 \(n) 个应用。iOS 可能会弹出系统确认对话框。"
+        let prefix = "将卸载 \(n) 个应用.iOS 可能会弹出系统确认对话框."
         if !viewModel.canUninstall {
-            return prefix + "（⚠️ 配对文件未导入 — 请到「更多 → 配对文件导入」重新导入。）"
+            return prefix + "（⚠️ 配对文件未导入 — 请到「更多 → 配对文件导入」重新导入.）"
         }
         return prefix
     }
@@ -513,7 +513,7 @@ struct AppListView: View {
         viewModel.uninstallBatch(toRemove) { _, failures in
             // Successful apps are removed by installd; we just refresh.
             let succeeded = toRemove.count - failures.count
-            var msg = "已卸载 \(succeeded) 个应用。"
+            var msg = "已卸载 \(succeeded) 个应用."
             if !failures.isEmpty {
                 let names = failures.map { "\($0.0.name)（\($0.1.localizedDescription)）" }.joined(separator: "\n")
                 msg += "\n失败 \(failures.count) 个：\n\(names)"
@@ -561,9 +561,9 @@ struct AppListView: View {
     private var emptyListMessage: String {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
-            return "未找到应用。"
+            return "未找到应用."
         }
-        return "没有匹配 “\(query)” 的应用。"
+        return "没有匹配 “\(query)” 的应用."
     }
 
     private var filteredApps: [InstalledApp] {

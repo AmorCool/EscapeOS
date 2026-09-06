@@ -12,7 +12,7 @@ struct InstalledApp: Identifiable, Hashable {
     /// `ApplicationType` from installation_proxy: "User", "System",
     /// "HiddenSystemApp", or nil. Used by the app list to split 全部 / 系统 / 三方.
     let applicationType: String?
-    /// v0.3.184：iTunesMetadata.apple-id（installation_proxy 返回的子字典）。
+    /// v0.3.184：iTunesMetadata.apple-id（installation_proxy 返回的子字典）.
     /// 仅 App Store 下载的 App 存在此字段；用于区分「本人购买」与「家人共享」.
     /// nil 表示该 app 没有 iTunesMetadata（侧载/重签/系统应用）.
     /// 带默认值 nil：避免破坏其它 Memberwise init 调用点（LiveContainerDiscovery/
@@ -35,9 +35,9 @@ enum AppDiscoveryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noPairingFile:
-            return "尚未导入配对文件。需要配对文件才能列出设备上的应用。"
+            return "尚未导入配对文件.需要配对文件才能列出设备上的应用."
         case .heartbeatFailed(let m):
-            return "无法连接本地隧道：\(m)。请将 LocalDevVPN 的设备 IP / 隧道 IP 保持默认（10.7.0.1），保持 Wi-Fi 连接，并使用 iPASide 生成的配对文件。"
+            return "无法连接本地隧道：\(m).请将 LocalDevVPN 的设备 IP / 隧道 IP 保持默认（10.7.0.1），保持 Wi-Fi 连接，并使用 iPASide 生成的配对文件."
         case .enumerationFailed(let m):
             return "枚举应用失败：\(m)"
         }

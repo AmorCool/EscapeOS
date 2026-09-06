@@ -105,9 +105,7 @@ struct IPAInstallView: View {
                         Spacer()
                     }
                     if !pairingFileExists {
-                        Label("未检测到配对文件，请到「更多 → 配对文件导入」导入", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.orange)
+                        PairingGuideCard(note: "IPA 侧载需要配对文件（签名安装依赖设备身份）.")
                     }
                 }
                 .padding(.vertical, 6)

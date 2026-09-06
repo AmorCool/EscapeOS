@@ -93,9 +93,9 @@ struct ModuleManagerView: View {
                     }
 
                     // v0.3.197：自动恢复容器迁移 — OpenList 等 Go 模块的 config.json
-                    // 若残留旧容器绝对路径，启动时会 mkdir 失败→ log.Fatal→杀宿主。
+                    // 若残留旧容器绝对路径，启动时会 mkdir 失败→ log.Fatal→杀宿主.
                     // 这里扫所有模块的 config.json，检测到残留就按当前 dataDir
-                    // 语义重写 4 个路径字段（temp/bleve/data.db/log）。
+                    // 语义重写 4 个路径字段（temp/bleve/data.db/log）.
                     Section {
                         Button {
                             runContainerRepairFlow()
@@ -109,7 +109,7 @@ struct ModuleManagerView: View {
                     } header: {
                         Text("数据路径修复")
                     } footer: {
-                        Text("App 重装或 LiveContainer 容器 UUID 变化后，模块 config.json 里的旧容器绝对路径会让 Go 模块启动时崩溃。本工具会按当前容器重写 temp/bleve/data.db/log 四个路径字段，保留网盘账号等用户配置。")
+                        Text("App 重装或 LiveContainer 容器 UUID 变化后，模块 config.json 里的旧容器绝对路径会让 Go 模块启动时崩溃.本工具会按当前容器重写 temp/bleve/data.db/log 四个路径字段，保留网盘账号等用户配置.")
                     }
                 }
                 .navigationTitle("模块设置")
@@ -134,7 +134,7 @@ struct ModuleManagerView: View {
                 Text("正在修复容器路径…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text("扫描所有模块 config.json 残留旧容器绝对路径，按当前 dataDir 语义重写。\n此期间不会启动任何模块，完成前请勿操作。")
+                Text("扫描所有模块 config.json 残留旧容器绝对路径，按当前 dataDir 语义重写.\n此期间不会启动任何模块，完成前请勿操作.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -494,9 +494,9 @@ struct ModuleManagerView: View {
     }
 
     /// v0.3.197：检测并修复所有模块 config.json 的容器路径残留——OpenList 等
-    /// Go 模块的 config.json 在容器 UUID 变化后会含旧路径，导致 Go mkdir 失败→Fatal→宿主崩。
+    /// Go 模块的 config.json 在容器 UUID 变化后会含旧路径，导致 Go mkdir 失败→Fatal→宿主崩.
     /// 这里用 ModuleService.repairContainerMigratedConfig 修复（仅改路径字段，
-    /// 保留用户配置如 jwt_secret / 数据库账号）。
+    /// 保留用户配置如 jwt_secret / 数据库账号）.
     private func runContainerRepairFlow() {
         showModuleSettings = false
         repairInProgress = true
@@ -518,7 +518,7 @@ struct ModuleManagerView: View {
             }
             repairInProgress = false
             repairResult = fixed.isEmpty
-                ? "扫描了 \(scanned) 个模块，未发现残留旧容器路径。"
+                ? "扫描了 \(scanned) 个模块，未发现残留旧容器路径."
                 : "已修复 \(fixed.count) 个模块：\(fixed.joined(separator: "、"))"
         }
     }

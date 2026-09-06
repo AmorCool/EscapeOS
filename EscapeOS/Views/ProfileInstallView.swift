@@ -2,12 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 发送描述文件：导入 .mobileconfig（如屏蔽 iOS 更新、Wi-Fi、VPN 等配置），
-/// 一键发送到本机设置安装。
+/// 一键发送到本机设置安装.
 ///
 /// 原理（与爱思助手同款）：App 内起 127.0.0.1 本地 HTTP 服务（复用
 /// `ProfileHTTPServer`，DomainBlocker 同款），把描述文件以
 /// `application/x-apple-aspen-config` 暴露给 Safari，Safari 交给系统
-/// 描述文件摄取流程 → 用户到「设置 → 通用 → VPN 与设备管理」安装。
+/// 描述文件摄取流程 → 用户到「设置 → 通用 → VPN 与设备管理」安装.
 struct ProfileInstallView: View {
     @State private var profiles: [String] = []
     @State private var showImporter = false
@@ -15,7 +15,7 @@ struct ProfileInstallView: View {
     @State private var toast: String?
     @State private var confirmDelete: String?
 
-    /// 描述文件保存目录（Documents/Profiles，文件 App 可见）。
+    /// 描述文件保存目录（Documents/Profiles，文件 App 可见）.
     private var profilesDirectory: String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("Profiles", isDirectory: true)

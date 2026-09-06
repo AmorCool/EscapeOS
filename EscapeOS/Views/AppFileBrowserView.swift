@@ -50,8 +50,8 @@ struct AppFileBrowserView: View {
     // v0.3.219：文件搜索（过滤当前目录）
     @State private var searchText: String = ""
     @State private var editingEntry: AfcEntry?
-    /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）。URL 不符合 Identifiable，
-    /// 用 wrapper 让 sheet(item:) 可用。
+    /// v0.3.219：分享临时文件 URL（下载到 tmp 后弹 ShareSheet）.URL 不符合 Identifiable，
+    /// 用 wrapper 让 sheet(item:) 可用.
     @State private var shareItems: ShareItems?
     /// v0.3.227：导出进度（当前文件名 + 字节 + 项序号）
     @State private var exportProgress: ExportProgress?
@@ -219,7 +219,7 @@ struct AppFileBrowserView: View {
         defer { loading = false }
         do {
             if scope.needsContainer {
-                // Library / tmp：需要完整容器。Documents 会话不足以访问 → vend_container
+                // Library / tmp：需要完整容器.Documents 会话不足以访问 → vend_container
                 if containerAfc == nil {
                     do {
                         let c = try await Task.detached(priority: .userInitiated) {
@@ -420,7 +420,7 @@ struct AppFileBrowserView: View {
     }
 
     /// v0.3.219：打开条目——目录优先（isDirectory 可能误判，失败回退当文件），
-    /// 修"文件夹点击进不去"。
+    /// 修"文件夹点击进不去".
     private func openEntry(_ entry: AfcEntry) async {
         guard let client = activeClient() else { return }
         if entry.isDirectory {

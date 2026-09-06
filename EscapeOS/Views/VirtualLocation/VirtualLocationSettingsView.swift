@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 虚拟定位页设置：配对状态 / 隧道 / LocalDevVPN / 保活说明。
-/// 配对文件与 EscapeSpace「更多 → 应用 / 设置」共用 Documents/pairingFile.plist。
+/// 虚拟定位页设置：配对状态 / 隧道 / LocalDevVPN / 保活说明.
+/// 配对文件与 EscapeSpace「更多 → 应用 / 设置」共用 Documents/pairingFile.plist.
 struct VirtualLocationSettingsView: View {
     @ObservedObject private var session = SpoofSession.shared
     @Environment(\.dismiss) private var dismiss

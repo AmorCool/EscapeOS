@@ -48,7 +48,7 @@ enum SRP6a {
 
     /// Compute the SRP shared secret S and the session key K.
     /// `x` is the final SRP x value (already derived by the caller).
-    /// 对齐 swift-srp：u = H(A_pad256 | B_raw)（B 用服务器原始字节，不 pad 到 256）。
+    /// 对齐 swift-srp：u = H(A_pad256 | B_raw)（B 用服务器原始字节，不 pad 到 256）.
     static func calculateSharedSecret(private a: BigInt, x: BigInt, salt: [UInt8], A: [UInt8], B: [UInt8]) -> (sharedSecret: BigInt, sessionKey: [UInt8]) {
         let Bb = BigInt(bytes: B)
         let u = BigInt(bytes: sha256(pad(A, to: sizeN) + B))
@@ -64,7 +64,7 @@ enum SRP6a {
     // MARK: - Proofs
 
     /// M1 = H( H(N)⊕H(g_pad256) | H(username) | salt | A_pad256 | B_pad256 | H(S) )
-    /// 对齐 swift-srp：hashSharedSecret = H(S) 只哈希一次，K 参数已是 H(S)，不得再哈希。
+    /// 对齐 swift-srp：hashSharedSecret = H(S) 只哈希一次，K 参数已是 H(S)，不得再哈希.
     static func clientProof(username: String, salt: [UInt8], A: [UInt8], B: [UInt8], K: [UInt8]) -> [UInt8] {
         let hn = sha256(N.bytes)
         let hg = sha256(pad(g.bytes, to: sizeN))

@@ -1,21 +1,21 @@
 import Foundation
 import CryptoKit
 
-/// 获取 Anisette Data（Apple 设备认证数据）的 v3 流程实现。
-/// 参考 GetMoreRam / SideStore 的 Anisette v3 协议，纯原生实现（无第三方依赖）。
+/// 获取 Anisette Data（Apple 设备认证数据）的 v3 流程实现.
+/// 参考 GetMoreRam / SideStore 的 Anisette v3 协议，纯原生实现（无第三方依赖）.
 ///
 /// - 若钥匙串中已有 `identifier` + `adiPb`（来自 SideStore 账户导入或上一次的成功配置），
-///   直接走 `/v3/get_headers`。
-/// - 否则执行一次完整的 WebSocket 配给（provisioning）流程，把 `adiPb` 存入钥匙串后再取 headers。
+///   直接走 `/v3/get_headers`.
+/// - 否则执行一次完整的 WebSocket 配给（provisioning）流程，把 `adiPb` 存入钥匙串后再取 headers.
 final class AnisetteProvider {
     static let shared = AnisetteProvider()
 
     private let keychain = EscapeKeychain(service: "com.ipaside.escapeos.memorylimit")
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
-        // v0.2.114：Anisette 服务器偶发无响应会导致整个页面卡在「正在加载团队…」。
+        // v0.2.114：Anisette 服务器偶发无响应会导致整个页面卡在「正在加载团队…」.
         // 给该 session 下所有请求（含 WebSocket receive）统一设 30 秒无活动超时，
-        // 作为单个请求显式 timeoutInterval 的兜底。
+        // 作为单个请求显式 timeoutInterval 的兜底.
         config.timeoutIntervalForRequest = 30
         return URLSession(configuration: config)
     }()
@@ -28,14 +28,14 @@ final class AnisetteProvider {
     private var deviceId: String?
 
     /// 最近一次失败的阶段（`provision` / `get_headers` / `client_info` / `入口`），
-    /// 由 `fail()` 写入，供 `getAnisetteDataWithFallback` 决定"要不要换设备身份"。
-    /// v0.2.119：只有 provisioning 阶段被拒才需要换 identifier；取票据失败换服务器即可。
+    /// 由 `fail()` 写入，供 `getAnisetteDataWithFallback` 决定"要不要换设备身份".
+    /// v0.2.119：只有 provisioning 阶段被拒才需要换 identifier；取票据失败换服务器即可.
     private var lastFailureStage: String?
 
     private init() {}
 
-    /// 重置：signOut / 切换账号时调用。清空内存缓存并删除 keychain 里的
-    /// identifier+adiPb，确保下一次登录重新走完整 provision 并重新生成 identifier。
+    /// 重置：signOut / 切换账号时调用.清空内存缓存并删除 keychain 里的
+    /// identifier+adiPb，确保下一次登录重新走完整 provision 并重新生成 identifier.
     func reset() {
         clientInfo = nil
         userAgent = nil
@@ -46,18 +46,18 @@ final class AnisetteProvider {
         LoginLogger.shared.log("… AnisetteProvider 重置（identifier/adiPb 已清除）")
     }
 
-    /// **只作废 provisioning 票据（adiPb）与内存缓存，保留设备身份 identifier。**
+    /// **只作废 provisioning 票据（adiPb）与内存缓存，保留设备身份 identifier.**
     ///
-    /// v0.2.119 关键修复。此前 `getAnisetteDataWithFallback` 任何失败都调 `reset()`，
+    /// v0.2.119 关键修复.此前 `getAnisetteDataWithFallback` 任何失败都调 `reset()`，
     /// 连 identifier（"虚拟机器"身份）一起删掉 —— 后果是：
     /// 1. Swift 侧每失败一次就换一台"虚拟机器"，Apple 端视为多设备 → 风控；
     /// 2. identifier 被删后 `sharedMachineIdentifier` 返回 nil，
     ///    `syncSharedAnisetteStateIfAvailable()` 直接 return，**不会更新 isideload 的
-    ///    `anisette_state`**，Rust 侧继续用已被抛弃的旧身份 → 两套实现状态彻底分裂。
-    ///    这正是「IPA 侧载一登录，证书管理/增加内存限制就卡」的传导链。
+    ///    `anisette_state`**，Rust 侧继续用已被抛弃的旧身份 → 两套实现状态彻底分裂.
+    ///    这正是「IPA 侧载一登录，证书管理/增加内存限制就卡」的传导链.
     ///
     /// 取票据（get_headers）失败绝大多数是单点服务器问题，换服务器重试即可，
-    /// 不该为此丢弃一个已经正常工作的设备身份。
+    /// 不该为此丢弃一个已经正常工作的设备身份.
     func resetProvisioning() {
         clientInfo = nil
         userAgent = nil
@@ -70,31 +70,31 @@ final class AnisetteProvider {
     // MARK: - 共享机器标识（v0.2.117）
 
     /// keychain 里当前 identifier 的原始 16 字节（IPA 侧载/Rust 复用同一台
-    /// "虚拟机器"用）；无或损坏时返回 nil。
+    /// "虚拟机器"用）；无或损坏时返回 nil.
     var sharedMachineIdentifier: Data? {
         guard let s = keychain.string(for: "identifier"),
               let d = Data(base64Encoded: s), d.count == 16 else { return nil }
         return d
     }
 
-    /// keychain 里当前 adiPb 的原始字节（base64 字符串解码）；无则 nil。
+    /// keychain 里当前 adiPb 的原始字节（base64 字符串解码）；无则 nil.
     var sharedAdiPb: Data? {
         guard let s = keychain.string(for: "adiPb") else { return nil }
         return Data(base64Encoded: s)
     }
 
-    /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）。
+    /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）.
 
-    /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）。
+    /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）.
     private func fail(_ stage: String, _ detail: String) -> AppleAPIError {
         lastFailureStage = stage
         LoginLogger.shared.log("❌ Anisette[\(stage)]: \(detail)")
         return AppleAPIError.customError(code: -22421, message: "Anisette \(stage)失败: \(detail)")
     }
 
-    /// 构造带 Apple 设备头的请求（对齐 GetMoreRam `buildAppleRequest`）。
+    /// 构造带 Apple 设备头的请求（对齐 GetMoreRam `buildAppleRequest`）.
     /// gsa lookup / midStartProvisioning / midFinishProvisioning 都必须带这些头，
-    /// 否则 Apple 返回 404（此前裸 GET 的根因）。
+    /// 否则 Apple 返回 404（此前裸 GET 的根因）.
     private func makeAppleRequest(url: URL) throws -> URLRequest {
         guard let clientInfo, let userAgent, let mdLu, let deviceId else {
             throw fail("provision", "缺少 client_info 字段（未先 fetchClientInfo）")
@@ -120,12 +120,12 @@ final class AnisetteProvider {
 
     func getAnisetteData(refresh: Bool = false) async throws -> AnisetteData {
         if refresh {
-            // v0.3.166：refresh = 强制重签 provisioning 票据（作废 adiPb 保留 identifier）。
+            // v0.3.166：refresh = 强制重签 provisioning 票据（作废 adiPb 保留 identifier）.
             // 背景：ani.846969.xyz 对同一 (identifier, adiPb) 缓存 get_headers 结果，
             // 旧实现 refresh 只清内存缓存 → 仍命中 keychain 的 identifier+adiPb →
             // 拿到与上次完全相同的 OTP（真机日志实锤：两次 refresh=true 返回同一
-            // X-Apple-I-MD）→ Apple 边缘判定重放/已标记 → native/fast 301/404。
-            // identifier 必须保留（v0.2.117 铁律：换 identifier = 换虚拟机器 = 风控）。
+            // X-Apple-I-MD）→ Apple 边缘判定重放/已标记 → native/fast 301/404.
+            // identifier 必须保留（v0.2.117 铁律：换 identifier = 换虚拟机器 = 风控）.
             resetProvisioning()
         }
         LoginLogger.shared.log("▶ getAnisetteData(refresh=\(refresh)) url=\(url?.absoluteString ?? "nil")")
@@ -141,13 +141,13 @@ final class AnisetteProvider {
 
     // MARK: - 服务器轮换 + 失败重试
 
-    /// 当前 Anisette 服务器地址（供日志/展示用）。
+    /// 当前 Anisette 服务器地址（供日志/展示用）.
     var currentServer: String {
         UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.stikstore.app"
     }
 
-    /// 切换到内置服务器列表中的下一个，并持久化到 `AnisetteServer`。
-    /// 返回切换后的地址；列表为空时返回 nil。
+    /// 切换到内置服务器列表中的下一个，并持久化到 `AnisetteServer`.
+    /// 返回切换后的地址；列表为空时返回 nil.
     @discardableResult
     private func rotateServer() -> String? {
         let servers = MemoryLimitSettings.anisetteServers
@@ -164,22 +164,22 @@ final class AnisetteProvider {
         return next
     }
 
-    /// **带重试与服务器轮换的入口**，登录 / 团队列表等场景应优先调用它。
+    /// **带重试与服务器轮换的入口**，登录 / 团队列表等场景应优先调用它.
     ///
     /// 背景：Anisette v3 的 provisioning 会被 Apple 或中间服务器明确拒绝，
     /// 典型如 `unknown session (-45025)`、`invalid Trust Key (-45003)`，
-    /// 以及 WebSocket 中途 `Socket未连接`。这些**绝大多数是单个 Anisette 服务器
+    /// 以及 WebSocket 中途 `Socket未连接`.这些**绝大多数是单个 Anisette 服务器
     /// 的问题**（与 Apple 的 trust key 不同步、被风控、或会话过期），换一个
-    /// 服务器重试通常就能过。v0.2.114 加的超时只解决"卡死"，解决不了这类
-    /// "服务器明确拒绝"，所以这里补上重试 + 轮换。
+    /// 服务器重试通常就能过.v0.2.114 加的超时只解决"卡死"，解决不了这类
+    /// "服务器明确拒绝"，所以这里补上重试 + 轮换.
     ///
     /// 每次重试前会 `reset()`：清掉内存缓存与 keychain 里的 identifier/adiPb，
-    /// 强制重新生成 identifier 并对新服务器走完整 provision，避免拿旧会话重试。
+    /// 强制重新生成 identifier 并对新服务器走完整 provision，避免拿旧会话重试.
     func getAnisetteDataWithFallback(refresh: Bool = false, maxAttempts: Int = 3) async throws -> AnisetteData {
         let originalServer = currentServer
         let started = Date()
-        // v0.2.116：整体时间预算。就算某个请求没被单条 timeout 拦住（例如 WebSocket
-        // 在握手后长时间不发消息），超预算也直接放弃，绝不把 UI 永久留在 loading。
+        // v0.2.116：整体时间预算.就算某个请求没被单条 timeout 拦住（例如 WebSocket
+        // 在握手后长时间不发消息），超预算也直接放弃，绝不把 UI 永久留在 loading.
         let budget: TimeInterval = 75
         var lastError: Error?
         var attempt = 0
@@ -198,11 +198,11 @@ final class AnisetteProvider {
                 // get_headers / client_info 阶段失败只作废票据、保留 identifier ——
                 // 否则每失败一次就换一台"虚拟机器"，Apple 端视为多设备风控，
                 // 且 identifier 被清空后 isideload 的机器标识同步会断链，
-                // 两套实现状态分裂（v0.2.118 及之前三功能互斥的真凶）。
+                // 两套实现状态分裂（v0.2.118 及之前三功能互斥的真凶）.
                 let stage = lastFailureStage
                 if stage == nil || stage == "provision" {
                     // stage == nil：错误不是 fail() 抛出的（如 URLSession 超时），
-                    // 无法判断身份是否可用，退回原行为（换身份重来）最稳。
+                    // 无法判断身份是否可用，退回原行为（换身份重来）最稳.
                     reset()
                 } else {
                     resetProvisioning()
@@ -211,8 +211,8 @@ final class AnisetteProvider {
                 rotateServer()
             }
         }
-        // 全部失败：把服务器还原成用户原本配置的地址。
-        // 否则失败过程中轮换到的坏服务器会被固化，之后每次进页面都先撞它。
+        // 全部失败：把服务器还原成用户原本配置的地址.
+        // 否则失败过程中轮换到的坏服务器会被固化，之后每次进页面都先撞它.
         if currentServer != originalServer {
             UserDefaults.standard.set(originalServer, forKey: "AnisetteServer")
             LoginLogger.shared.log("… 已还原 Anisette 服务器为 \(originalServer)")
@@ -223,17 +223,17 @@ final class AnisetteProvider {
         LoginLogger.shared.log("❌ Anisette 已尝试 \(maxAttempts) 个服务器仍失败（耗时 \(Int(Date().timeIntervalSince(started)))s）")
         throw AppleAPIError.customError(
             code: -22421,
-            message: "Anisette 连续 \(maxAttempts) 个服务器均失败（最后错误：\(detail)）。\n"
-                + "可到「更多 → 设置 → Anisette 服务器」手动换一个，或稍后重试。"
+            message: "Anisette 连续 \(maxAttempts) 个服务器均失败（最后错误：\(detail)）.\n"
+                + "可到「更多 → 设置 → Anisette 服务器」手动换一个，或稍后重试."
         )
     }
 
     // MARK: - V3: client_info
 
     private func fetchClientInfo() async throws {
-        // 先检查 keychain 里的 identifier 是否仍有效。 signOut 会删 identifier，
+        // 先检查 keychain 里的 identifier 是否仍有效. signOut 会删 identifier，
         // 但 AnisetteProvider 的内存缓存可能还在，此时必须重新生成 identifier，
-        // 否则 provision 到 GiveIdentifier 时会从 keychain 读不到而报 -22421。
+        // 否则 provision 到 GiveIdentifier 时会从 keychain 读不到而报 -22421.
         let hasValidIdentifier: Bool = {
             guard let existing = keychain.string(for: "identifier") else { return false }
             guard let decoded = Data(base64Encoded: existing), decoded.count == 16 else { return false }
@@ -246,13 +246,13 @@ final class AnisetteProvider {
 
         guard let base = url else { throw fail("client_info", "服务器地址为空") }
 
-        // client_info / user_agent 是设备描述，基本不变。只在内存缓存缺失时拉取。
+        // client_info / user_agent 是设备描述，基本不变.只在内存缓存缺失时拉取.
         if clientInfo == nil || userAgent == nil {
             let clientInfoURL = base.appendingPathComponent("v3").appendingPathComponent("client_info")
             var clientInfoRequest = URLRequest(url: clientInfoURL)
-            // v0.2.116：client_info 只是取设备描述字符串，正常几百毫秒就返回。
+            // v0.2.116：client_info 只是取设备描述字符串，正常几百毫秒就返回.
             // 服务器不可达时 30 秒太长，会让「正在加载团队…」转很久；缩到 10 秒，
-            // 让失败快速暴露并进入换服务器重试。
+            // 让失败快速暴露并进入换服务器重试.
             clientInfoRequest.timeoutInterval = 10
             let (data, response) = try await session.data(for: clientInfoRequest)
             let http = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -270,8 +270,8 @@ final class AnisetteProvider {
         }
 
         // identifier 必须以 base64 字符串存储（EscapeKeychain.string(for:) 用 UTF-8 解码，
-        // 存原始字节会解码失败 → 登录报「Anisette数据无效或已过期」）。
-        // 兼容清理：旧版本可能遗留了原始字节的坏数据，解码失败时重新生成。
+        // 存原始字节会解码失败 → 登录报「Anisette数据无效或已过期」）.
+        // 兼容清理：旧版本可能遗留了原始字节的坏数据，解码失败时重新生成.
         var identifier: String? = nil
         if hasValidIdentifier, let existing = keychain.string(for: "identifier") {
             identifier = existing
@@ -304,7 +304,7 @@ final class AnisetteProvider {
         guard let base = url else { throw fail("get_headers", "服务器地址为空") }
         var request = URLRequest(url: base.appendingPathComponent("v3").appendingPathComponent("get_headers"))
         request.httpMethod = "POST"
-        // v0.2.116：get_headers 是一次简单 POST，15 秒足够；失败快才能快速换服务器。
+        // v0.2.116：get_headers 是一次简单 POST，15 秒足够；失败快才能快速换服务器.
         request.timeoutInterval = 15
         request.httpBody = try JSONSerialization.data(withJSONObject: ["identifier": identifier, "adi_pb": adiPb])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -474,7 +474,7 @@ final class AnisetteProvider {
                 let raw = json["message"] as? String ?? ""
                 // -45025 unknown session / -45003 invalid Trust Key 都是**单个
                 // Anisette 服务器**与 Apple trust 不同步或其会话过期，换服务器
-                // 通常即可通过。这里打点说明，重试逻辑见 getAnisetteDataWithFallback。
+                // 通常即可通过.这里打点说明，重试逻辑见 getAnisetteDataWithFallback.
                 if raw.contains("-45025") || raw.contains("-45003") || raw.contains("-45061") {
                     LoginLogger.shared.log("… 该 Anisette 服务器被 Apple 拒绝（\(raw)），属可重试错误，将换服务器")
                 }

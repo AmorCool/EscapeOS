@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// IPA 安装（已签名包在线安装 / 覆盖升级降级）—— 爱思助手同款通道。
+/// IPA 安装（已签名包在线安装 / 覆盖升级降级）—— 爱思助手同款通道.
 ///
 /// 与「IPA 侧载」的区别：侧载走 isideload 签名流程（Apple ID 登录签名）；
 /// 本页接收**已经签好名**的 .ipa（App Store 下载包、爱思/AltStore 签过的

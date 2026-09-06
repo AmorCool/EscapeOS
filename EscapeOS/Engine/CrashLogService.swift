@@ -2,14 +2,14 @@ import Foundation
 
 /// 崩溃分析服务：通过「配对文件 + LocalDevVPN」隧道连接
 /// com.apple.crashreportcopymobile，再用 `crash_report_client_to_afc`
-/// 把它转成 **AFC 客户端**浏览日志目录（v0.2.127）。
+/// 把它转成 **AFC 客户端**浏览日志目录（v0.2.127）.
 ///
 /// 为什么转 AFC：crashreportcopymobile 的 ls 对子目录参数会返回
 /// Afc(ObjectNotFound)（服务端行为），而转成的 AFC 视图是**标准文件系统
 /// 视图**（根下是 CrashReporter / DiagnosticLogs / Logs 等真实子目录），
-/// 目录 / 文件类型一目了然，进入子目录、读内容、删除全部走 AFC 协议。
+/// 目录 / 文件类型一目了然，进入子目录、读内容、删除全部走 AFC 协议.
 ///
-/// 同样遵循 RSD 隧道并发铁律（本服务内所有操作串行）。
+/// 同样遵循 RSD 隧道并发铁律（本服务内所有操作串行）.
 final class CrashLogService {
 
     static let shared = CrashLogService()
@@ -17,7 +17,7 @@ final class CrashLogService {
 
     private let queue = DispatchQueue(label: "com.ipaside.escapeos.crashlog")
 
-    /// 崩溃日志条目（AFC 视图路径）。
+    /// 崩溃日志条目（AFC 视图路径）.
     struct Entry: Identifiable, Equatable {
         let name: String
         let path: String
@@ -54,7 +54,7 @@ final class CrashLogService {
 
     private func createTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）.")
         }
         var pairingFile: OpaquePointer?
         if let ffiError = pairingPath.withCString({ rp_pairing_file_read($0, &pairingFile) }) {
@@ -100,8 +100,8 @@ final class CrashLogService {
         throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
     }
 
-    /// 连接 crashreportcopymobile → `crash_report_client_to_afc` 转 AFC 客户端。
-    /// 注意：to_afc 会**消费并释放** crashreport 客户端，之后直接使用 AFC 句柄。
+    /// 连接 crashreportcopymobile → `crash_report_client_to_afc` 转 AFC 客户端.
+    /// 注意：to_afc 会**消费并释放** crashreport 客户端，之后直接使用 AFC 句柄.
     private func withAfcClient<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         var tunnel = try createTunnel()
         defer { tunnel.free() }
@@ -132,7 +132,7 @@ final class CrashLogService {
     }
 
     /// 在串行队列上执行可能抛错的闭包（Theos 的 DispatchQueue.sync 无 throwing
-    /// 重载，用 Result 包装绕开 —— v0.2.122 实锤）。
+    /// 重载，用 Result 包装绕开 —— v0.2.122 实锤）.
     private func syncOnQueue<T>(_ body: () throws -> T) throws -> T {
         var result: Result<T, Error>!
         queue.sync {
@@ -144,8 +144,8 @@ final class CrashLogService {
 
     // MARK: - 列表 / 拉取 / 删除（AFC 视图）
 
-    /// 列出日志目录。`subdirectory` 为 nil 时列根目录
-    /// （含 CrashReporter / DiagnosticLogs / Logs 等子目录，v0.2.127 起可进入）。
+    /// 列出日志目录.`subdirectory` 为 nil 时列根目录
+    /// （含 CrashReporter / DiagnosticLogs / Logs 等子目录，v0.2.127 起可进入）.
     func list(subdirectory: String? = nil) throws -> [Entry] {
         try syncOnQueue {
             try withAfcClient { afc in
@@ -155,9 +155,9 @@ final class CrashLogService {
         }
     }
 
-    /// v0.2.128：改为 1MB 分块 `afc_file_read`。
+    /// v0.2.128：改为 1MB 分块 `afc_file_read`.
     /// `afc_file_read_entire` 在导出时返回 Afc(UnknownError)，分块读更稳，
-    /// 且失败时能带上"已读多少字节"便于定位。
+    /// 且失败时能带上"已读多少字节"便于定位.
     private func pullInternal(client: OpaquePointer, path: String) throws -> Data {
         var handle: OpaquePointer?
         if let ffiError = path.withCString({ afc_file_open(client, $0, AfcRdOnly, &handle) }) {
@@ -186,7 +186,7 @@ final class CrashLogService {
         return result
     }
 
-    /// 拉取日志文件内容（.ips 是 JSON 文本）。
+    /// 拉取日志文件内容（.ips 是 JSON 文本）.
     func pull(_ path: String) throws -> Data {
         try syncOnQueue {
             try withAfcClient { afc in
@@ -201,7 +201,7 @@ final class CrashLogService {
         }
     }
 
-    /// 删除日志（目录会连内容一起删）。
+    /// 删除日志（目录会连内容一起删）.
     func remove(_ path: String) throws {
         try syncOnQueue {
             try withAfcClient { afc in
@@ -212,7 +212,7 @@ final class CrashLogService {
 
     // MARK: - 导出
 
-    /// 导出目录（EscapeSpace 自己 Documents 下的 CrashLogs 文件夹，文件 App 可见）。
+    /// 导出目录（EscapeSpace 自己 Documents 下的 CrashLogs 文件夹，文件 App 可见）.
     static var exportDirectory: String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("CrashLogs", isDirectory: true)
@@ -221,7 +221,7 @@ final class CrashLogService {
     }
 
     /// 批量导出：**同一条 AFC 连接**循环拉取（v0.2.125 修复过死锁，v0.2.127 改为
-    /// AFC 视图后保留同款结构）。progress 在后台队列调用，UI 负责切主线程。
+    /// AFC 视图后保留同款结构）.progress 在后台队列调用，UI 负责切主线程.
     func export(entries: [Entry], progress: ((Int, Int) -> Void)? = nil) throws -> [String] {
         try syncOnQueue {
             try withAfcClient { afc in
@@ -240,7 +240,7 @@ final class CrashLogService {
         }
     }
 
-    /// 批量删除：同一条 AFC 连接循环删除，返回失败数。
+    /// 批量删除：同一条 AFC 连接循环删除，返回失败数.
     func removeBatch(_ entries: [Entry], progress: ((Int, Int) -> Void)? = nil) throws -> Int {
         try syncOnQueue {
             try withAfcClient { afc in

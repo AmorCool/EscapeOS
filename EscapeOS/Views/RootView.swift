@@ -8,10 +8,10 @@ private enum MainTab: Hashable {
     case more
 }
 
-/// v0.3.197：顶部 Tab 重组 — 手机管家形态。
+/// v0.3.197：顶部 Tab 重组 — 手机管家形态.
 /// 原 5 tab（应用/空间回收/模块/Gestalt/更多）→ 3 tab：
-/// 主页（空间回收 + 应用管理 + 模块 + 百宝箱卡片入口）/ Gestalt / 更多。
-/// MoreView（原 More 页）保留备份/关于/设置等次要入口。
+/// 主页（空间回收 + 应用管理 + 模块 + 百宝箱卡片入口）/ Gestalt / 更多.
+/// MoreView（原 More 页）保留备份/关于/设置等次要入口.
 struct RootView: View {
     @StateObject private var viewModel = AppListViewModel()
     @AppStorage("HasAcknowledgedLimits") private var hasAcknowledgedLimits = false

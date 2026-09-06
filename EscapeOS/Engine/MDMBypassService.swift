@@ -6,16 +6,16 @@ import XPC
 //  MDMBypassService.swift
 //  EscapeOS
 //
-//  v0.3.228：MDM 沙盒逃逸 + 配置文件管理（移植自 mond-main MDM 绕过，个人测试用途）。
+//  v0.3.228：MDM 沙盒逃逸 + 配置文件管理（移植自 mond-main MDM 绕过，个人测试用途）.
 //
 //  iOS 26.5/26.6 对 configurationprofiles SystemGroup 拒绝签发沙盒扩展
-//  （bad_query 返回 -4 / copy_sandbox_token 返回 NULL）。mond 的绕过思路：
+//  （bad_query 返回 -4 / copy_sandbox_token 返回 NULL）.mond 的绕过思路：
 //    A. sandbox_extension_issue_file 直发（libsystem_sandbox.dylib）
 //    B. container_object_sandbox_extension_activate（cmg-activate，绕过 copy_sandbox_token）
 //    C/D. bad_query + mobilegestaltcache 标识重定向 / 自动识别
 //    E. UUID 路径 bypass（container_object_get_path 返回不含 "configurationprofiles"
 //       字符串的 UUID 容器路径，绕内核黑名单）
-//  每层激活后用 Darwin.open 真实验证目录可达性，失败自动降级下一层。
+//  每层激活后用 Darwin.open 真实验证目录可达性，失败自动降级下一层.
 //
 
 enum MDMPaths {
@@ -205,7 +205,7 @@ func mdm_resolve_uuid_path() -> String? {
 // MARK: - 五层策略链
 
 enum MDMEscape {
-    /// 依序尝试 5 层逃逸策略，返回首个通过 Darwin.open 实测可达的方式。
+    /// 依序尝试 5 层逃逸策略，返回首个通过 Darwin.open 实测可达的方式.
     static func run(log: @escaping (String) -> Void = { _ in }) -> MDMEscapeResult? {
         // A. sandbox_extension_issue_file 直发
         if let token = mdm_sandbox_extension_issue_file(path: MDMPaths.profilesDir),
@@ -288,7 +288,7 @@ enum MDMBypass {
         return !contents.isEmpty
     }
 
-    /// 对单个已知 MDM 文件：读（备份）→ 空字典覆盖。返回状态。
+    /// 对单个已知 MDM 文件：读（备份）→ 空字典覆盖.返回状态.
     /// - Returns: .overwritten / .notPresent / .denied(String)
     enum FileAction { case overwritten, notPresent, denied(String) }
 

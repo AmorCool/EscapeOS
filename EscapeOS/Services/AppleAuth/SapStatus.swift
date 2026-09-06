@@ -5,12 +5,12 @@ import Darwin
 //
 // 数据源两路：
 //   ① 本进程 mmap(MAP_JIT) 探测（登录前一次，展示用）；
-//   ② Go 侧 SapGetProgress 轮询（SapInit 阻塞期间 400ms 一次，下载进度/阶段）。
+//   ② Go 侧 SapGetProgress 轮询（SapInit 阻塞期间 400ms 一次，下载进度/阶段）.
 // AppStoreDownloadView 顶部状态条观察 SapStatusModel；阶段/进度同时节流写入
-// LoginLogger（完整日志进登录日志）。
+// LoginLogger（完整日志进登录日志）.
 
 
-/// 状态条数据模型。@Published 的变更统一经 DispatchQueue.main（轮询在后台线程）。
+/// 状态条数据模型.@Published 的变更统一经 DispatchQueue.main（轮询在后台线程）.
 final class SapStatusModel: ObservableObject {
     static let shared = SapStatusModel()
 
@@ -48,7 +48,7 @@ final class SapStatusModel: ObservableObject {
         }
     }
 
-    /// 应用 Go 侧 "phase=N;done=N;total=N" 轮询结果。
+    /// 应用 Go 侧 "phase=N;done=N;total=N" 轮询结果.
     func apply(progressString raw: String) {
         var phase: Int = -1
         var done: UInt64 = 0
@@ -90,7 +90,7 @@ final class SapStatusModel: ObservableObject {
     }
 }
 
-/// 轮询 Go 侧进度（SapInit 阻塞期间每 400ms 一次），驱动状态条 + 节流登录日志。
+/// 轮询 Go 侧进度（SapInit 阻塞期间每 400ms 一次），驱动状态条 + 节流登录日志.
 final class SapProgressPoller {
     static let shared = SapProgressPoller()
 
@@ -118,14 +118,14 @@ final class SapProgressPoller {
         task = nil
     }
 
-    /// 调 C 导出 SapGetProgress()；返回的 malloc 字符串必须 SapFree。
+    /// 调 C 导出 SapGetProgress()；返回的 malloc 字符串必须 SapFree.
     private static func readProgress() -> String {
         guard let ptr = SapGetProgress() else { return "" }
         defer { SapFree(ptr) }
         return String(cString: ptr)
     }
 
-    /// 阶段变化逐行记日志；下载中每 +10% 记一行（避免刷屏）。
+    /// 阶段变化逐行记日志；下载中每 +10% 记一行（避免刷屏）.
     private func logThrottled(_ raw: String) {
         guard let phase = Self.parse(raw, key: "phase") else { return }
         let done = Self.parse(raw, key: "done") ?? 0

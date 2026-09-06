@@ -2,7 +2,7 @@ import CoreLocation
 import Foundation
 import MapKit
 
-/// 路线构建与 GPX 编解码（移植自 locus-ZH）。
+/// 路线构建与 GPX 编解码（移植自 locus-ZH）.
 enum RouteBuilder {
     static func roadRoute(
         from start: CLLocationCoordinate2D,
@@ -27,7 +27,7 @@ enum RouteBuilder {
             if let response = try? await MKDirections(request: request).calculate(),
                let route = response.routes.first {
                 let coordinates = sample(polyline: route.polyline, every: 12)
-                // 轨迹播放坐标统一用地图坐标系。
+                // 轨迹播放坐标统一用地图坐标系.
                 if ChinaCoordinateTransform.usesMainlandChinaOffset(start),
                    candidateStart.latitude != start.latitude {
                     return coordinates.map(ChinaCoordinateTransform.systemCoordinateToMapCoordinate)
@@ -36,7 +36,7 @@ enum RouteBuilder {
             }
         }
 
-        // Apple 路线服务在部分网络不可用；退化为起点到终点的直线备用路线。
+        // Apple 路线服务在部分网络不可用；退化为起点到终点的直线备用路线.
         return sample(coordinates: [start, end], every: 10)
     }
 

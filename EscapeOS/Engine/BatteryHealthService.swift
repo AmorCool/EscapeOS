@@ -1,7 +1,7 @@
 import Foundation
 
-/// v0.3.199：电池健康数据模型 —— diagnostics_relay IORegistry/IOPMPowerSource 解析结果。
-/// 字段规则移植自 iDescriptor（github.com/iDescriptor/iDescriptor）utils.rs query_battery_info。
+/// v0.3.199：电池健康数据模型 —— diagnostics_relay IORegistry/IOPMPowerSource 解析结果.
+/// 字段规则移植自 iDescriptor（github.com/iDescriptor/iDescriptor）utils.rs query_battery_info.
 struct BatteryHealthInfo {
     var cycleCount: Int?
     var designCapacity: Int?      // mAh（出厂设计容量）
@@ -19,11 +19,11 @@ struct BatteryHealthInfo {
     var raw: [String: Any] = [:]  // 调试用（字段缺失时可看）
 }
 
-/// v0.3.199：电池健康服务 —— diagnostics_relay IORegistry/IOPMPowerSource。
-/// 非越狱、普通配对 + 解锁即可读取（iDescriptor 实证）。iOS 26/27 字段迁移已处理。
+/// v0.3.199：电池健康服务 —— diagnostics_relay IORegistry/IOPMPowerSource.
+/// 非越狱、普通配对 + 解锁即可读取（iDescriptor 实证）.iOS 26/27 字段迁移已处理.
 /// v0.3.205 修复：BatteryData.MaxCapacity 在某些设备返回 0-100 百分比而非 mAh
 /// （iDescriptor issue #132/#133）→ 加 mAh 量级 sanity 过滤；电量改百分比；
-/// 适配器电压/电源；厂商（Apple 推断）。
+/// 适配器电压/电源；厂商（Apple 推断）.
 enum BatteryHealthService {
     private static func makeError(_ message: String) -> NSError {
         NSError(domain: "BatteryHealth", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
@@ -50,7 +50,7 @@ enum BatteryHealthService {
     /// 建隧道（3 次退避重试，参照 RSD 铁律）
     private static func createTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请先在「应用管理」导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件.请先在「应用管理」导入配对文件（需 LocalDevVPN + 开发者模式）.")
         }
         var pairingFile: OpaquePointer?
         if let e = pairingPath.withCString({ rp_pairing_file_read($0, &pairingFile) }) {
@@ -101,8 +101,8 @@ enum BatteryHealthService {
         throw lastError ?? makeError("创建开发者隧道失败")
     }
 
-    /// 读取电池健康（同步阻塞——调用方需放后台线程）。
-    /// v0.3.202：机型/系统版本从 lockdown GetValue 拿（IORegistry dict 无 ProductType）。
+    /// 读取电池健康（同步阻塞——调用方需放后台线程）.
+    /// v0.3.202：机型/系统版本从 lockdown GetValue 拿（IORegistry dict 无 ProductType）.
     static func fetchBatteryHealth() throws -> BatteryHealthInfo {
         var tunnel = try createTunnel()
         defer { tunnel.free() }
@@ -126,7 +126,7 @@ enum BatteryHealthService {
         throw lastError ?? makeError("连接诊断服务失败")
     }
 
-    /// lockdown GetValue（domain/key 均 nil → 全字典）取 ProductType / ProductVersion。
+    /// lockdown GetValue（domain/key 均 nil → 全字典）取 ProductType / ProductVersion.
     private static func fetchLockdownInfo(adapter: OpaquePointer, handshake: OpaquePointer)
         -> (productType: String?, iosMajor: Int?) {
         var client: OpaquePointer?
@@ -180,8 +180,8 @@ enum BatteryHealthService {
         return parse(dict: dict, productType: productType, iosMajor: iosMajor)
     }
 
-    /// 解析 IORegistry 电池字典（字段规则来自 iDescriptor utils.rs）。
-    /// v0.3.205 修复 mAh/百分比混淆 + 电流百分比 + 适配器电压/电源。
+    /// 解析 IORegistry 电池字典（字段规则来自 iDescriptor utils.rs）.
+    /// v0.3.205 修复 mAh/百分比混淆 + 电流百分比 + 适配器电压/电源.
     static func parse(dict: [String: Any], productType: String? = nil, iosMajor: Int? = nil) -> BatteryHealthInfo {
         func num(_ key: String, in d: [String: Any]) -> Int? {
             if let n = d[key] as? Int { return n }
@@ -206,8 +206,8 @@ enum BatteryHealthService {
 
         // 3. 最大容量 —— v0.3.207 修复「充电中虚高/随时变」：
         //    FullChargeCapacity = 当前满充估算，充电中会随电压电流浮动（iDescriptor 也踩，
-        //    iOS26.6 健康度不准 issue #132）。**AppleRawMaxCapacity 才是稳定原始满充容量**，
-        //    优先取它；FullChargeCapacity 仅兜底。仍保留 mAh sanity（>200 且 ≤ design+1000）。
+        //    iOS26.6 健康度不准 issue #132）.**AppleRawMaxCapacity 才是稳定原始满充容量**，
+        //    优先取它；FullChargeCapacity 仅兜底.仍保留 mAh sanity（>200 且 ≤ design+1000）.
         let isChargingNow = dict["IsCharging"] as? Bool ?? false
         let candidates: [(String, Int?)] = [
             ("AppleRawMaxCapacity", num("AppleRawMaxCapacity", in: dict)),
@@ -227,8 +227,8 @@ enum BatteryHealthService {
         // 若全部落选（如 BatteryData.MaxCapacity 恰是百分比），兜底设计容量
         if maxCapacity == nil { maxCapacity = design }
 
-        // 4. 健康度 —— v0.3.207：单调基线（物理真实健康度只会缓慢下降；充电估算上涨是噪声）。
-        //    基线存 UserDefaults；允许下降立即更新；上涨仅当明显跳变（>2%，如换电池/校准）才采纳。
+        // 4. 健康度 —— v0.3.207：单调基线（物理真实健康度只会缓慢下降；充电估算上涨是噪声）.
+        //    基线存 UserDefaults；允许下降立即更新；上涨仅当明显跳变（>2%，如换电池/校准）才采纳.
         var health: Int? = nil
         if let design, design > 0, let maxCapacity {
             let raw = min(100, max(0, Int((Double(maxCapacity) / Double(design)) * 100)))
@@ -296,8 +296,8 @@ enum BatteryHealthService {
             }
             adapterDescription = adapter["Description"] as? String
         }
-        // 7. 厂商：iOS 不暴露稳定字段（IOPMPowerSource 规范含但 iOS10+ 裁剪）。
-        //    Apple 设备电池实际为 Apple 认证（推断显示 Apple），原始键尝试读取。
+        // 7. 厂商：iOS 不暴露稳定字段（IOPMPowerSource 规范含但 iOS10+ 裁剪）.
+        //    Apple 设备电池实际为 Apple 认证（推断显示 Apple），原始键尝试读取.
         let manufacturer = (dict["Manufacturer"] as? String)
             ?? (dict["BatteryManufacturer"] as? String)
             ?? "Apple"

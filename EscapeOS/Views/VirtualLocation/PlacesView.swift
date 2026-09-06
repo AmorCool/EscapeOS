@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 收藏与最近使用的地点（移植自 locus-ZH，汉化）。
+/// 收藏与最近使用的地点（移植自 locus-ZH，汉化）.
 struct PlacesView: View {
     @ObservedObject private var session = SpoofSession.shared
     @Environment(\.dismiss) private var dismiss
@@ -13,7 +13,7 @@ struct PlacesView: View {
             List {
                 Section("收藏") {
                     if session.favorites.isEmpty {
-                        Text("在地图上给图钉点亮星标即可收藏。")
+                        Text("在地图上给图钉点亮星标即可收藏.")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(session.favorites) { place in
@@ -37,7 +37,7 @@ struct PlacesView: View {
 
                 Section("最近使用") {
                     if session.recents.isEmpty {
-                        Text("传送过的位置会出现在这里。")
+                        Text("传送过的位置会出现在这里.")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(session.recents) { place in
@@ -74,7 +74,7 @@ struct PlacesView: View {
                     placeToRename = nil
                 }
             } message: {
-                Text("起一个以后能认出来的名字。")
+                Text("起一个以后能认出来的名字.")
             }
         }
     }

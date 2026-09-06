@@ -1,6 +1,6 @@
 import Foundation
 
-/// v0.3.187：第三方应用类型识别（应用板块 · 胶囊标签），细分到「正版 vs 共享 vs 企业」。
+/// v0.3.187：第三方应用类型识别（应用板块 · 胶囊标签），细分到「正版 vs 共享 vs 企业」.
 ///
 /// **权威字段来源**（Apple TN3125 + libimobiledevice 协议）：
 ///   1) misagent 拉的 .mobileprovision 顶层 `ProvisionsAllDevices`
@@ -13,11 +13,11 @@ import Foundation
 /// **v0.3.187 之前的两个错误启发式**（已废弃）：
 ///   - `entitlements.com.apple.developer.enterprise.*` 前缀 → Apple 文档（TN3125）
 ///     明确**没有这种标准 entitlement**；企业标志只在 mobileprovision 顶层
-///     `ProvisionsAllDevices=true`。v0.3.184~186 用此启发式 → iOS 14+ 几乎不命中，
-///     所有企业应用被合并到「开发」（被吐槽"全改成开发"的根因）。
-///   - `entitlements.get-task-allow == true` → development → **错**。get-task-allow
+///     `ProvisionsAllDevices=true`.v0.3.184~186 用此启发式 → iOS 14+ 几乎不命中，
+///     所有企业应用被合并到「开发」（被吐槽"全改成开发"的根因）.
+///   - `entitlements.get-task-allow == true` → development → **错**.get-task-allow
 ///     也出现在企业 profile（企业 App 同样允许调试器 attach）和个人 Apple ID 自签
-///     （free provisioning 也带）。不能作为类型判定依据。
+///     （free provisioning 也带）.不能作为类型判定依据.
 ///
 /// **判定优先级**（v0.3.187 起）：
 ///   - HiddenSystemApp → .hidden
@@ -50,9 +50,9 @@ enum AppType: String, Hashable {
     }
 }
 
-/// 应用类型检测器。
+/// 应用类型检测器.
 enum AppTypeDetector {
-    /// 综合判定应用类型。
+    /// 综合判定应用类型.
     ///
     /// `provisionsAllDevices` 来自 misagent 拉的 .mobileprovision 顶层字段
     /// （**企业判定唯一权威字段**，Apple TN3125）.
@@ -75,7 +75,7 @@ enum AppTypeDetector {
 
         // 3. 有 entitlements（即有 profile 但非企业）→ 开发/自签大类.
         //    不再用 get-task-allow 区分（企业 profile 也带 get-task-allow；
-        //    个人 Apple ID 自签也带）。按用户规则把"开发 / 自签 / Ad-Hoc /
+        //    个人 Apple ID 自签也带）.按用户规则把"开发 / 自签 / Ad-Hoc /
         //    团队 Distribution"合并入 .development.
         if !entitlements.isEmpty {
             return .development

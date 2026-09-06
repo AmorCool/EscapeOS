@@ -21,15 +21,15 @@ enum MCMError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notMHA:
-            return "本进程未以 MobileHouseArrest 身份运行（MHA 分支未生效）。"
+            return "本进程未以 MobileHouseArrest 身份运行（MHA 分支未生效）."
         case .bridgeUnavailable:
-            return "Containermanager 符号解析失败，当前 iOS 版本不支持。"
+            return "Containermanager 符号解析失败，当前 iOS 版本不支持."
         case .invalidIdentifier:
-            return "容器标识符非法（含不允许的字符）。"
+            return "容器标识符非法（含不允许的字符）."
         case .activationFailed(let detail):
             return "容器激活失败：\(detail)"
         case .unknown:
-            return "未知的 MCM 错误。"
+            return "未知的 MCM 错误."
         }
     }
 }

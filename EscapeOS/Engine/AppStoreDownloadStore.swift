@@ -1,9 +1,9 @@
 import Foundation
 
-/// App Store 账户的本地存储（凭据只写在本机 Documents，不上传）。
+/// App Store 账户的本地存储（凭据只写在本机 Documents，不上传）.
 ///
 /// 与 EscapeOS 侧载用的 Apple ID 凭据是**两套独立命名空间**——
-/// 侧载走开发者签名服务，这里走 App Store 下载，互不影响。
+/// 侧载走开发者签名服务，这里走 App Store 下载，互不影响.
 final class AppStoreDownloadStore {
 
     static let shared = AppStoreDownloadStore()
@@ -14,14 +14,14 @@ final class AppStoreDownloadStore {
         Self.bootstrapSAPSigner()
     }
 
-    /// 设置 ApplePackage 的机器标识（guid）。
+    /// 设置 ApplePackage 的机器标识（guid）.
     ///
     /// iOS 拿不到 MAC 地址（`DeviceIdentifier.system()` 永远 throw），而
     /// `Configuration.tlsConfiguration` 有一条
-    /// `precondition(!deviceIdentifier.isEmpty)` —— 不设置就**一调用即崩溃**。
+    /// `precondition(!deviceIdentifier.isEmpty)` —— 不设置就**一调用即崩溃**.
     ///
-    /// 关键：这个值必须**持久化**。原版注释明确要求 "use random and save it"，
-    /// 若每次冷启动都随机，等于每次换一台虚拟机器，Apple 会按多设备风控处理。
+    /// 关键：这个值必须**持久化**.原版注释明确要求 "use random and save it"，
+    /// 若每次冷启动都随机，等于每次换一台虚拟机器，Apple 会按多设备风控处理.
     private static func bootstrapDeviceIdentifier() {
         let key = "ApplePackageDeviceIdentifier"
         let defaults = UserDefaults.standard
@@ -36,14 +36,14 @@ final class AppStoreDownloadStore {
 
     /// v0.3.1：注入 SAP 签名器工厂（ApplePackage 只认 `SAPActionSigning` 抽象，
     /// 实现是本 app 的 `SapSigner`——Unicorn 解释执行 Apple 私有 CommerceKit 算
-    /// `X-Apple-ActionSignature`，见 sapbridge/ 与 Services/AppleAuth/SapSigner.swift）。
-    /// Apple 2026 年起认证请求缺此头 → 账号校验前直接 403（无论账号真假）。
+    /// `X-Apple-ActionSignature`，见 sapbridge/ 与 Services/AppleAuth/SapSigner.swift）.
+    /// Apple 2026 年起认证请求缺此头 → 账号校验前直接 403（无论账号真假）.
     private static func bootstrapSAPSigner() {
         guard Configuration.sapSignerFactory == nil else { return }
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
         Configuration.sapSignerFactory = { config in
             // v0.3.17：本机 TCI 解释器模式（Naville/unicorn feature/tci 分支，
-            // 解释器不写可执行内存 → 无需 JIT/CODESIGNING 权限）。
+            // 解释器不写可执行内存 → 无需 JIT/CODESIGNING 权限）.
             // v0.3.17：JIT 探测已移除（TCI 解释器不依赖 JIT 权限）
             LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
             SapProgressPoller.shared.start()
@@ -60,7 +60,7 @@ final class AppStoreDownloadStore {
         }
     }
 
-    /// 下载目录（Documents/AppStoreDownloads，文件 App 可见）。
+    /// 下载目录（Documents/AppStoreDownloads，文件 App 可见）.
     var downloadsDirectory: String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("AppStoreDownloads", isDirectory: true)
@@ -68,7 +68,7 @@ final class AppStoreDownloadStore {
         return dir.path
     }
 
-    /// v0.3.167：重置 App Store 机器标识（guid）——删除持久化标识后重新随机生成。
+    /// v0.3.167：重置 App Store 机器标识（guid）——删除持久化标识后重新随机生成.
     /// 用途：Apple 边缘对已标记的 guid 持续拒（native/fast 301/404）时换新身份.
     func resetDeviceIdentifier() {
         let key = "ApplePackageDeviceIdentifier"
@@ -117,6 +117,6 @@ final class AppStoreDownloadStore {
     }
 }
 
-// v0.3.1：SapSigner 适配 ApplePackage 的 SAPActionSigning 抽象。
-// sign(requestBody:) / close() 签名与 SapSigner 既有方法完全一致，直接空扩展即可。
+// v0.3.1：SapSigner 适配 ApplePackage 的 SAPActionSigning 抽象.
+// sign(requestBody:) / close() 签名与 SapSigner 既有方法完全一致，直接空扩展即可.
 extension SapSigner: SAPActionSigning {}

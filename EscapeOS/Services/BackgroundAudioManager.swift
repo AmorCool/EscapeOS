@@ -2,10 +2,10 @@
 //  BackgroundAudioManager.swift
 //  EscapeSpace
 //
-//  后台静默音频保活。移植自 StikPair / StikDebug：
+//  后台静默音频保活.移植自 StikPair / StikDebug：
 //  通过持续播放 0 音量 PCM 缓冲区并占用 AVAudioSession，
 //  使应用在后台/锁屏时仍被系统视为「正在播放音频」，
-//  从而延缓 Bonjour 注册被系统 SRP sweeper 回收。
+//  从而延缓 Bonjour 注册被系统 SRP sweeper 回收.
 //
 
 import AVFoundation
@@ -35,25 +35,25 @@ final class BackgroundAudioManager {
         )
     }
 
-    /// 持久开启（无线配对期间调用）。
+    /// 持久开启（无线配对期间调用）.
     func start() {
         persistentEnabled = true
         refreshRunningState()
     }
 
-    /// 持久关闭（配对结束 / sheet 关闭时调用）。
+    /// 持久关闭（配对结束 / sheet 关闭时调用）.
     func stop() {
         persistentEnabled = false
         refreshRunningState()
     }
 
-    /// 临时请求开启（计数器模式）。
+    /// 临时请求开启（计数器模式）.
     func requestStart() {
         activityCount += 1
         refreshRunningState()
     }
 
-    /// 临时请求关闭。
+    /// 临时请求关闭.
     func requestStop() {
         activityCount = max(activityCount - 1, 0)
         refreshRunningState()
@@ -100,7 +100,7 @@ final class BackgroundAudioManager {
             try engine.start()
             player.play()
         } catch {
-            // iOS 26 SDK 把 NSLog 的 variadic 形式标 unavailable，用 print 代替。
+            // iOS 26 SDK 把 NSLog 的 variadic 形式标 unavailable，用 print 代替.
             print("[BackgroundAudioManager] 启动失败: \(error.localizedDescription)")
         }
     }
@@ -110,11 +110,11 @@ final class BackgroundAudioManager {
         let frameCount = AVAudioFrameCount(format.sampleRate)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
         buffer.frameLength = frameCount
-        // PCM 缓冲区已初始化为 0 —— 纯静音，不耗电也不出声。
+        // PCM 缓冲区已初始化为 0 —— 纯静音，不耗电也不出声.
         player.scheduleBuffer(buffer, at: nil, options: .loops)
     }
 
-    /// 每 2 秒检查一次，若被其他音频会话挤占则重新夺回。
+    /// 每 2 秒检查一次，若被其他音频会话挤占则重新夺回.
     private func startHealthCheck() {
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             self?.recoverIfNeeded()
@@ -132,7 +132,7 @@ final class BackgroundAudioManager {
             }
             player.play()
         } catch {
-            // 音频会话仍被占用，下次心跳再试。
+            // 音频会话仍被占用，下次心跳再试.
         }
     }
 

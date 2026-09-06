@@ -104,9 +104,9 @@ enum MemoryLimitError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingField:
-            return "账户文件缺少必要字段（email / password / adiPB / local_user）。"
+            return "账户文件缺少必要字段（email / password / adiPB / local_user）."
         case .invalidLocalUser:
-            return "local_user 必须是 Base64 编码的 16 字节标识符。"
+            return "local_user 必须是 Base64 编码的 16 字节标识符."
         }
     }
 }
@@ -121,7 +121,7 @@ final class MemoryLimitSettings: ObservableObject {
     static let shared = MemoryLimitSettings()
 
     /// Anisette 服务器列表：原有 4 个 + 合并 SideInstaller 社区列表
-    /// （servers.sidestore.io）中我们没有的 11 个。
+    /// （servers.sidestore.io）中我们没有的 11 个.
     static let anisetteServers = [
         // 原有
         "https://ani.sidestore.io",
@@ -154,7 +154,7 @@ final class MemoryLimitSettings: ObservableObject {
     @Published private(set) var isLoggedIn: Bool = false
     @Published private(set) var appleID: String = ""
 
-    /// v0.3.185：绕过 MainActor 隔离直读 keychain 的 appleID（SecItem 调用线程安全）。
+    /// v0.3.185：绕过 MainActor 隔离直读 keychain 的 appleID（SecItem 调用线程安全）.
     /// 供后台队列使用（如 AppListViewModel.loadAppTypes 的正版/共享判定）——
     /// 后台上下文直接读 `shared.appleID` 会触发
     /// "main actor-isolated property 'appleID' can not be referenced from a
@@ -174,15 +174,15 @@ final class MemoryLimitSettings: ObservableObject {
 
     // MARK: - 会话归属（v0.2.112：两套实现必须分开存）
 
-    /// 当前 `dsid` / `authToken` 归属哪套 Apple 认证实现。
+    /// 当前 `dsid` / `authToken` 归属哪套 Apple 认证实现.
     ///
     /// **铁律**：`AppleAuthenticator`（Swift，自带 Anisette identifier/adiPb）与
     /// isideload（Rust，另一套 Anisette identifier/adiPb）产出的 dsid/authToken
-    /// **互不通用**。v0.2.111 让两者共用 `dsid`/`authToken` 一对键，isideload 登录
+    /// **互不通用**.v0.2.111 让两者共用 `dsid`/`authToken` 一对键，isideload 登录
     /// 会覆盖 Swift 侧会话，导致「证书管理」「增加内存限制」请求
-    /// developerservices2 时返回 resultCode 1100（Your session has expired）。
+    /// developerservices2 时返回 resultCode 1100（Your session has expired）.
     /// 现在：Swift 侧写 `dsid`/`authToken`，isideload 侧写
-    /// `sideloadDSID`/`sideloadAuthToken`，永不互相覆盖。
+    /// `sideloadDSID`/`sideloadAuthToken`，永不互相覆盖.
     private enum SessionOwner: String {
         case swift = "swift"
         case sideload = "sideload"
@@ -194,27 +194,27 @@ final class MemoryLimitSettings: ObservableObject {
     }
 
     /// 自愈迁移：v0.2.111（及更早）把 isideload 的 dsid/authToken 写进了
-    /// `dsid`/`authToken` 主键。升级到 v0.2.112 后，若 isideload 专用键为空而
+    /// `dsid`/`authToken` 主键.升级到 v0.2.112 后，若 isideload 专用键为空而
     /// 主键有值，就搬到专用键并清掉主键，让 Swift 侧（证书管理 /
-    /// 增加内存限制）回到「未登录」状态而不是拿着异种 token 反复 1100。
+    /// 增加内存限制）回到「未登录」状态而不是拿着异种 token 反复 1100.
     ///
     /// **v0.2.111 没写 `sessionOwner`**，因此不能只看归属标记；结合
     /// `accountName` 判断：Swift 登录会写 accountName/firstName/lastName，
-    /// isideload 登录不会。没有 accountName 的主键凭据视为 isideload 污染。
+    /// isideload 登录不会.没有 accountName 的主键凭据视为 isideload 污染.
     ///
     /// **v0.2.120 修复（这是「证书管理/增加内存限制卡在加载团队」的真凶）**：
     /// 原实现用 `sideloadDSID != nil` 判定"已迁移过"，然后**无条件删除
-    /// `dsid`/`authToken` 主键**。于是只要用户用过 IPA 侧载登录（写入
+    /// `dsid`/`authToken` 主键**.于是只要用户用过 IPA 侧载登录（写入
     /// sideloadDSID），**每次冷启动都会把 Swift 侧的登录会话删掉**：
     /// 设置里登录（写 dsid/authToken）→ 去 IPA 侧载登录（写 sideloadDSID）
     /// → 下次启动 Swift 会话被清空 → `session` 为 nil → `loadTeams()` 首道
     /// 守卫 return → 团队栏停在 `.idle`，而 UI 把 `.idle` 和 `.loading` 渲染成
-    /// 同一个转圈 → 表现为"永远卡在加载团队"，且不打任何日志。
+    /// 同一个转圈 → 表现为"永远卡在加载团队"，且不打任何日志.
     ///
-    /// 正确语义：这是**一次性**的遗留数据清理，判断依据必须是"归属标记是否存在"。
+    /// 正确语义：这是**一次性**的遗留数据清理，判断依据必须是"归属标记是否存在".
     private func migrateLegacySideloadSession() {
         // 已确定归属（v0.2.112 及之后写入的会话）：主键的存废由登录流程负责，
-        // 迁移逻辑不再插手。
+        // 迁移逻辑不再插手.
         if currentOwner() != nil { return }
 
         let legacyDSID = keychain.string(for: "dsid") ?? ""
@@ -222,14 +222,14 @@ final class MemoryLimitSettings: ObservableObject {
         guard !legacyDSID.isEmpty, !legacyToken.isEmpty else { return }
 
         // 有 accountName 说明是 Swift 登录产生的合法会话 —— 必须保留，
-        // 只补上归属标记，防止以后再被误判。
+        // 只补上归属标记，防止以后再被误判.
         let accountName = keychain.string(for: "accountName") ?? ""
         if !accountName.isEmpty || (keychain.string(for: "firstName") ?? "").isEmpty == false {
             keychain.set(SessionOwner.swift.rawValue, for: "sessionOwner")
             return
         }
 
-        // 无归属标记、无 accountName → 认定为 v0.2.111 遗留的 isideload 污染，搬走。
+        // 无归属标记、无 accountName → 认定为 v0.2.111 遗留的 isideload 污染，搬走.
         keychain.set(legacyDSID, for: "sideloadDSID")
         keychain.set(legacyToken, for: "sideloadAuthToken")
         keychain.delete("dsid")
@@ -237,8 +237,8 @@ final class MemoryLimitSettings: ObservableObject {
         keychain.set(SessionOwner.sideload.rawValue, for: "sessionOwner")
     }
 
-    /// 启动时把凭据状态写进登录日志。v0.2.120：团队栏"假卡死"排查成本极高，
-    /// 这里一次性给出 Swift 会话 / isideload 凭据 / 归属标记的完整快照。
+    /// 启动时把凭据状态写进登录日志.v0.2.120：团队栏"假卡死"排查成本极高，
+    /// 这里一次性给出 Swift 会话 / isideload 凭据 / 归属标记的完整快照.
     func logCredentialSnapshot() {
         let owner = currentOwner()?.rawValue ?? "无"
         let swiftOK = (keychain.string(for: "dsid") ?? "").isEmpty == false
@@ -247,8 +247,8 @@ final class MemoryLimitSettings: ObservableObject {
         LoginLogger.shared.log("… 凭据快照：isLoggedIn=\(isLoggedIn) owner=\(owner) "
             + "Swift会话=\(swiftOK ? "有" : "无") 侧载凭据=\(sideloadOK ? "有" : "无")")
         if isLoggedIn && !swiftOK {
-            LoginLogger.shared.log("⚠ 已登录但 Swift 会话缺失 —— 证书管理/增加内存限制无法建 session。"
-                + "请在「设置」重新登录 Apple ID。")
+            LoginLogger.shared.log("⚠ 已登录但 Swift 会话缺失 —— 证书管理/增加内存限制无法建 session."
+                + "请在「设置」重新登录 Apple ID.")
         }
     }
 
@@ -299,7 +299,7 @@ final class MemoryLimitSettings: ObservableObject {
         keychain.delete("lastName")
         keychain.delete("isLoggedIn")
         // 清空 AnisetteProvider 的内存缓存，否则重新登录时 provision 会读到
-        // 旧的 clientInfo/mdLu/deviceId，却从 keychain 找不到 identifier 而报 -22421。
+        // 旧的 clientInfo/mdLu/deviceId，却从 keychain 找不到 identifier 而报 -22421.
         AnisetteProvider.shared.reset()
         refresh()
     }
@@ -324,14 +324,14 @@ final class MemoryLimitSettings: ObservableObject {
     }
 
     /// 保存 isideload（IPA 侧载）完整登录拿到的 dsid + `com.apple.gs.xcode.auth`
-    /// token。
+    /// token.
     ///
     /// **v0.2.112 关键修复**：这些凭据由 Rust 侧的 isideload 用自己的 Anisette
     /// identifier/adiPb 生成，**只能**用于 `si_signin_with_session`，**不能**给
-    /// Swift 的 `AppleDeveloperAPI` 用。因此单独存
+    /// Swift 的 `AppleDeveloperAPI` 用.因此单独存
     /// `sideloadDSID`/`sideloadAuthToken`，绝不覆盖 `dsid`/`authToken`
     /// —— 否则「证书管理」「增加内存限制」会拿到异种 token，Apple 一律回
-    /// resultCode 1100（Your session has expired）。
+    /// resultCode 1100（Your session has expired）.
     func saveSessionCredentials(email: String, password: String, dsid: String, authToken: String) {
         let email = email.trimmingCharacters(in: .whitespacesAndNewlines)
         keychain.set(email, for: "appleID")
@@ -347,11 +347,11 @@ final class MemoryLimitSettings: ObservableObject {
 
     // MARK: - 读取会话凭据
 
-    /// Swift 认证引擎（`AppleAuthenticator`）的会话，供证书管理 / 增加内存限制用。
+    /// Swift 认证引擎（`AppleAuthenticator`）的会话，供证书管理 / 增加内存限制用.
     var dsid: String? { keychain.string(for: "dsid") }
     var authToken: String? { keychain.string(for: "authToken") }
 
-    /// isideload（Rust）的签名会话，供 IPA 侧载免登录恢复用。
+    /// isideload（Rust）的签名会话，供 IPA 侧载免登录恢复用.
     var sideloadDSID: String? { keychain.string(for: "sideloadDSID") }
     var sideloadAuthToken: String? { keychain.string(for: "sideloadAuthToken") }
     var accountName: String { keychain.string(for: "accountName") ?? "" }
@@ -362,7 +362,7 @@ final class MemoryLimitSettings: ObservableObject {
 
     private static let historyKey = "LoginHistory"
 
-    /// 最近登录的邮箱列表（最近在前，最多 10 条）。
+    /// 最近登录的邮箱列表（最近在前，最多 10 条）.
     var loginHistory: [String] {
         UserDefaults.standard.stringArray(forKey: Self.historyKey) ?? []
     }
@@ -381,7 +381,7 @@ final class MemoryLimitSettings: ObservableObject {
         keychain.delete("pw:" + email)
     }
 
-    /// 历史账户的一键登录密码（keychain 中按邮箱单独保存；当前登录账户回退到 applePassword）。
+    /// 历史账户的一键登录密码（keychain 中按邮箱单独保存；当前登录账户回退到 applePassword）.
     func password(forHistory email: String) -> String? {
         if let pw = keychain.string(for: "pw:" + email), !pw.isEmpty { return pw }
         if email.lowercased() == appleID.lowercased() {

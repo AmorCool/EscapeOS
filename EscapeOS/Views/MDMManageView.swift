@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// v0.3.228：MDM 管理（「更多」板块入口）——
-/// 移植 mond-main MDM 绕过：5 层沙盒逃逸策略 + 描述文件备份/清空/还原。
-/// 仅个人测试用途；iOS 26.5+ 侧载环境可能被沙盒策略拦截（结果如实显示）。
+/// 移植 mond-main MDM 绕过：5 层沙盒逃逸策略 + 描述文件备份/清空/还原.
+/// 仅个人测试用途；iOS 26.5+ 侧载环境可能被沙盒策略拦截（结果如实显示）.
 struct MDMManageView: View {
     @State private var escapeMethod: String?
     @State private var escapeTarget: String?
@@ -76,7 +76,7 @@ struct MDMManageView: View {
                 }
                 .disabled(probing || !hasBackups)
             } footer: {
-                Text("清空前自动备份到 Documents/SystemFileBackups/MDM；还原后请重启设备。仅供个人测试。")
+                Text("清空前自动备份到 Documents/SystemFileBackups/MDM；还原后请重启设备.仅供个人测试.")
             }
 
             // 日志
@@ -122,9 +122,9 @@ struct MDMManageView: View {
                     escapeMethod = nil
                     escapeTarget = nil
                     alertTitle = "逃逸失败"
-                    alertBody = "5 层策略均未通过 Darwin.open 实测。\n" +
+                    alertBody = "5 层策略均未通过 Darwin.open 实测.\n" +
                         "提示：侧载（LiveContainer）环境下系统沙盒策略可能拦截 ConfigurationProfiles；" +
-                        "该绕过在 TrollStore 安装或越狱环境成功率更高。详见日志。"
+                        "该绕过在 TrollStore 安装或越狱环境成功率更高.详见日志."
                     showAlert = true
                 }
                 hasBackups = MDMBypass.hasBackups()
@@ -167,13 +167,13 @@ struct MDMManageView: View {
                 refreshFiles(target: target)
                 if written > 0 {
                     alertTitle = "MDM 绕过完成"
-                    alertBody = "\(written) 个描述文件已覆盖为空字典（已备份）。\n\(noEntry) 个未预置，\(denied) 个被拒。\n请重启设备使配置生效。"
+                    alertBody = "\(written) 个描述文件已覆盖为空字典（已备份）.\n\(noEntry) 个未预置，\(denied) 个被拒.\n请重启设备使配置生效."
                 } else if noEntry == MDMPaths.knownFiles.count {
                     alertTitle = "未加入 MDM 监管"
-                    alertBody = "未检测到任何 MDM 描述文件，设备当前未受监管。"
+                    alertBody = "未检测到任何 MDM 描述文件，设备当前未受监管."
                 } else {
                     alertTitle = "绕过失败"
-                    alertBody = "\(denied) 个文件访问被拒（详见日志）。"
+                    alertBody = "\(denied) 个文件访问被拒（详见日志）."
                 }
                 showAlert = true
             }
@@ -190,7 +190,7 @@ struct MDMManageView: View {
                 refreshFiles(target: target)
                 alertTitle = "还原完成"
                 alertBody = r.restored > 0
-                    ? "已还原 \(r.restored) 个文件。\n\(r.error ?? "请重启设备使配置生效。")"
+                    ? "已还原 \(r.restored) 个文件.\n\(r.error ?? "请重启设备使配置生效.")"
                     : "还原失败：\(r.error ?? "未知错误")"
                 showAlert = true
             }

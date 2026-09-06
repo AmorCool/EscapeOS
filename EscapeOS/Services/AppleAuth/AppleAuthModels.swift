@@ -3,8 +3,8 @@ import CryptoKit
 
 // MARK: - AnisetteData
 
-/// Apple 设备认证数据（Anisette Data）。
-/// 字段与 StosSign / AltStore 的 AnisetteData 兼容，仅用于从 JSON 字典解码。
+/// Apple 设备认证数据（Anisette Data）.
+/// 字段与 StosSign / AltStore 的 AnisetteData 兼容，仅用于从 JSON 字典解码.
 struct AnisetteData: Decodable {
     let machineID: String
     let oneTimePassword: String
@@ -17,7 +17,7 @@ struct AnisetteData: Decodable {
     let locale: Locale
     let timeZone: TimeZone
 
-    /// 显式成员构造器（定义了 init(from:) 后 memberwise init 不再自动生成）。
+    /// 显式成员构造器（定义了 init(from:) 后 memberwise init 不再自动生成）.
     init(machineID: String, oneTimePassword: String, localUserID: String,
          routingInfo: UInt64, deviceUniqueIdentifier: String, deviceSerialNumber: String,
          deviceDescription: String, date: Date, locale: Locale, timeZone: TimeZone) {
@@ -68,7 +68,7 @@ struct AnisetteData: Decodable {
 
 // MARK: - Account
 
-/// Apple ID 账户信息，从开发者服务的 `developer` 字典解码。
+/// Apple ID 账户信息，从开发者服务的 `developer` 字典解码.
 struct Account: Decodable {
     let appleID: String
     let identifier: Int
@@ -112,7 +112,7 @@ struct Account: Decodable {
 
 // MARK: - AppleAPISession
 
-/// 认证成功后拿到的会话（用于后续调用 Apple 开发者服务）。
+/// 认证成功后拿到的会话（用于后续调用 Apple 开发者服务）.
 struct AppleAPISession {
     let dsid: String
     let authToken: String
@@ -133,7 +133,7 @@ enum AppleAPIError: Error {
     case accountLocked
     case customError(code: Int, message: String)
     /// v0.2.112：Apple 返回 resultCode 1100 —— 会话已过期 / 凭据与 Anisette
-    /// 机器标识不匹配（例如被另一套认证实现覆盖）。需要重新登录。
+    /// 机器标识不匹配（例如被另一套认证实现覆盖）.需要重新登录.
     case sessionExpired
 
     var errorDescription: String? {
@@ -148,12 +148,12 @@ enum AppleAPIError: Error {
         case .invalidAnisetteData: return "Anisette 数据无效或已过期"
         case .accountLocked: return "Apple ID 已被锁定"
         case .sessionExpired:
-            return "Apple 会话已过期（错误 1100）。请到「更多 → 设置 → Apple ID 账户」退出并重新登录；如果在 IPA 侧载页登录过同一账号，重新登录一次即可恢复。"
+            return "Apple 会话已过期（错误 1100）.请到「更多 → 设置 → Apple ID 账户」退出并重新登录；如果在 IPA 侧载页登录过同一账号，重新登录一次即可恢复."
         case .customError(let code, let message): return "错误 \(code)：\(message)"
         }
     }
 
-    /// 是否「会话已过期」类错误（供调用方决定要不要清空登录态）。
+    /// 是否「会话已过期」类错误（供调用方决定要不要清空登录态）.
     var isSessionExpired: Bool {
         if case .sessionExpired = self { return true }
         return false

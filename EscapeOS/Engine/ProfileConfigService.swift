@@ -5,10 +5,10 @@ import Darwin
 //  ProfileConfigService.swift
 //  EscapeOS
 //
-//  v0.3.229：iOS 设置描述文件（Configuration Profile，.mobileconfig/.mobileprofile）管理。
+//  v0.3.229：iOS 设置描述文件（Configuration Profile，.mobileconfig/.mobileprofile）管理.
 //  参考 pymobiledevice3 的 profile 命令（list / install / remove）——底层同为 misagent
-//  服务（com.apple.misagent）。与"预置描述管理"（.mobileprovision，ProvisioningProfileStore）
-//  共用同一服务：copy_all 返回设备全部 profile，按 PayloadType 排除预置描述。
+//  服务（com.apple.misagent）.与"预置描述管理"（.mobileprovision，ProvisioningProfileStore）
+//  共用同一服务：copy_all 返回设备全部 profile，按 PayloadType 排除预置描述.
 //
 
 enum ProfileConfigService {
@@ -44,7 +44,7 @@ enum ProfileConfigService {
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请先导入配对文件。")
+            throw makeError("未检测到配对文件.请先导入配对文件.")
         }
 
         var pairingFile: OpaquePointer?
@@ -124,7 +124,7 @@ enum ProfileConfigService {
 
     // MARK: - 列表
 
-    /// 设备上全部**配置描述文件**（排除 PayloadType == "Provisioning Profiles" 的预置描述）。
+    /// 设备上全部**配置描述文件**（排除 PayloadType == "Provisioning Profiles" 的预置描述）.
     static func listConfigurationProfiles() throws -> [ConfigurationProfile] {
         try withMisagent { client in
             var profilePointers: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?

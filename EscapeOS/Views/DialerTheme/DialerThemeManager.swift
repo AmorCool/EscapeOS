@@ -2,7 +2,7 @@
 //  DialerThemeManager.swift
 //  EscapeOS
 //
-//  拨号器主题引擎（移植自 Ketamine 的 Passcode / Customization 板块）。
+//  拨号器主题引擎（移植自 Ketamine 的 Passcode / Customization 板块）.
 //
 //  原理（三层）：
 //
@@ -10,22 +10,22 @@
 //     按钮（0–9、*、#、拨号键、删除键），渲染结果以 PNG 形式缓存到自己的容器里：
 //         /var/mobile/Containers/Data/Application/<UUID>/Library/Caches/TelephonyUI-<版本>/
 //     这个缓存不是每次启动重算的 —— iOS 启动时命中缓存就直接读，所以替换 PNG
-//     就等于换了键盘外观，重启电话 App 即可生效（不需要 respring）。
+//     就等于换了键盘外观，重启电话 App 即可生效（不需要 respring）.
 //
-//  2. 该路径位于电话 App 的沙盒容器内，EscapeOS 默认无权访问。这里通过
+//  2. 该路径位于电话 App 的沙盒容器内，EscapeOS 默认无权访问.这里通过
 //     `SandboxEscape`（bad_query 路径遍历）让 containermanagerd 代为签发目标
-//     路径的 sandbox extension，之后 FileManager 即可正常读写。所有跨容器读写
-//     必须在持有 handle 期间完成。
+//     路径的 sandbox extension，之后 FileManager 即可正常读写.所有跨容器读写
+//     必须在持有 handle 期间完成.
 //
 //  3. 同一资源在各语言下各有一份（en-xxx.png / de-xxx.png / zh-xxx.png …），
-//     内容像素完全相同，仅仅是文件名不同。因此匹配时剥掉第一个 "-" 之前的前缀，
-//     用一个 key 覆盖全部语言副本，换一次主题所有语言都生效。
+//     内容像素完全相同，仅仅是文件名不同.因此匹配时剥掉第一个 "-" 之前的前缀，
+//     用一个 key 覆盖全部语言副本，换一次主题所有语言都生效.
 //
 //  移植时相对 Ketamine 的改动：
-//  - 解压/打包改用 EscapeOS 自带的 ZipReader / ZipWriter，不引入 ZIPFoundation。
-//  - 沙盒句柄统一走 SandboxEscape（含 LiveContainer 容器扩展的 sentinel 分支）。
+//  - 解压/打包改用 EscapeOS 自带的 ZipReader / ZipWriter，不引入 ZIPFoundation.
+//  - 沙盒句柄统一走 SandboxEscape（含 LiveContainer 容器扩展的 sentinel 分支）.
 //  - 缓存目录名（TelephonyUI-<版本>）不再硬编码为 -10，扫描前缀并取版本号最高者，
-//    避免 iOS 大版本升级后目录名变化导致整个功能失效。
+//    避免 iOS 大版本升级后目录名变化导致整个功能失效.
 //
 
 import Foundation
@@ -46,25 +46,25 @@ enum DialerThemeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .containerNotFound:
-            return "未能定位电话 App 的数据容器。请确认设备已激活电话功能，且 bad_query 可用（iOS 26.0–26.6.1）。"
+            return "未能定位电话 App 的数据容器.请确认设备已激活电话功能，且 bad_query 可用（iOS 26.0–26.6.1）."
         case .cacheDirectoryNotFound:
-            return "容器里没有找到 TelephonyUI 缓存目录，系统可能尚未生成拨号键盘缓存。请打开一次电话 App 的拨号键盘后重试。"
+            return "容器里没有找到 TelephonyUI 缓存目录，系统可能尚未生成拨号键盘缓存.请打开一次电话 App 的拨号键盘后重试."
         case .sandboxFailed(let detail):
             return "沙盒扩展签发失败：\(detail)"
         case .notAnArchiveOrPNG:
-            return "所选文件既不是 .passthm/.zip 主题包，也不是 PNG 图片。"
+            return "所选文件既不是 .passthm/.zip 主题包，也不是 PNG 图片."
         case .noPNGsInPackage:
-            return "主题包里没有找到任何 PNG 图片。"
+            return "主题包里没有找到任何 PNG 图片."
         case .noMatchingAssets(let liveNames, let packageKeys):
             let live = liveNames.prefix(6).joined(separator: ", ")
             let keys = packageKeys.prefix(6).joined(separator: ", ")
-            return "主题包里的图片与当前主题没有任何同名项。设备上的文件：\(live)。包内（去掉语言前缀后）：\(keys)。"
+            return "主题包里的图片与当前主题没有任何同名项.设备上的文件：\(live).包内（去掉语言前缀后）：\(keys)."
         case .noBackup:
-            return "还没有备份过原生主题。首次应用主题时会自动备份。"
+            return "还没有备份过原生主题.首次应用主题时会自动备份."
         case .noImagesToExport:
-            return "没有可导出的拨号键盘图片。"
+            return "没有可导出的拨号键盘图片."
         case .archiveWriteFailed:
-            return "创建导出压缩包失败。"
+            return "创建导出压缩包失败."
         }
     }
 }
@@ -72,13 +72,13 @@ enum DialerThemeError: LocalizedError {
 // MARK: - 状态快照
 
 struct DialerThemeStatus {
-    /// 电话 App 容器绝对路径。
+    /// 电话 App 容器绝对路径.
     let containerPath: String
-    /// 缓存目录名（TelephonyUI-<版本>）。
+    /// 缓存目录名（TelephonyUI-<版本>）.
     let cacheDirectoryName: String
-    /// 缓存目录里的 PNG 数量。
+    /// 缓存目录里的 PNG 数量.
     let pngCount: Int
-    /// 是否已备份过原生主题。
+    /// 是否已备份过原生主题.
     let hasBackup: Bool
 
     var cachePath: String {
@@ -99,16 +99,16 @@ final class DialerThemeManager {
 
     private static let containersRoot = "/var/mobile/Containers/Data/Application"
     private static let cachePrefix = "TelephonyUI-"
-    /// 电话 App 的 bundle id（Ketamine 用它在容器 metadata 里精确匹配）。
+    /// 电话 App 的 bundle id（Ketamine 用它在容器 metadata 里精确匹配）.
     private static let mobilePhoneBundleId = "com.apple.mobilephone"
-    /// containermanager 在每个容器根放的元数据文件，内含 MCMMetadataIdentifier。
+    /// containermanager 在每个容器根放的元数据文件，内含 MCMMetadataIdentifier.
     private static let metadataFileName = ".com.apple.mobile_container_manager.metadata.plist"
 
     private var documentsDirectory: URL {
         fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
 
-    /// 原生主题的一次性快照，只写一次、永不覆盖。
+    /// 原生主题的一次性快照，只写一次、永不覆盖.
     private var backupDirectory: URL {
         documentsDirectory.appendingPathComponent("DialerThemeBackup", isDirectory: true)
     }
@@ -121,19 +121,19 @@ final class DialerThemeManager {
         ((try? fm.contentsOfDirectory(atPath: backupDirectory.path)) ?? []).isEmpty == false
     }
 
-    /// 删除已有备份。容器路径变化时调用：旧备份可能来自错误的容器，
-    /// 继续使用会把错容器的原图写进新容器。
+    /// 删除已有备份.容器路径变化时调用：旧备份可能来自错误的容器，
+    /// 继续使用会把错容器的原图写进新容器.
     func resetBackup() {
         try? fm.removeItem(at: backupDirectory)
     }
 
     // MARK: - 文件名匹配
 
-    /// 去掉语言前缀后的匹配键：取第一个 "-" 之后的部分。
-    /// 没有 "-" 的文件名表示不区分语言，直接用全名。
+    /// 去掉语言前缀后的匹配键：取第一个 "-" 之后的部分.
+    /// 没有 "-" 的文件名表示不区分语言，直接用全名.
     ///
     /// 这是 Ketamine 原版逻辑，对标准 locale 前缀主题包（如 en-lock-mask.png / de-lock-mask.png）
-    /// 完全适用：两者都会 key 到 lock-mask.png。
+    /// 完全适用：两者都会 key 到 lock-mask.png.
     static func matchKey(for filename: String) -> String {
         let lowercased = filename.lowercased()
         guard let dash = lowercased.firstIndex(of: "-") else { return lowercased }
@@ -141,14 +141,14 @@ final class DialerThemeManager {
     }
 
     /// 资源名 key：去掉第一个连续 dash 组及之前的所有内容，再去掉扩展名和
-    /// 末尾的 "-bold"（设备缓存里常见，如 other-0---mask-bold.png）。
+    /// 末尾的 "-bold"（设备缓存里常见，如 other-0---mask-bold.png）.
     ///
     /// 某些主题包不是用标准 locale 前缀，而是用 `#---mask.png`、`*---white.png`
-    /// 这种「前缀 + 多个 dash + 资源名」的格式。对这类包，用 resourceKey 可以匹配到
-    /// 设备上的 `other-0---mask-bold.png` 等资源。
+    /// 这种「前缀 + 多个 dash + 资源名」的格式.对这类包，用 resourceKey 可以匹配到
+    /// 设备上的 `other-0---mask-bold.png` 等资源.
     static func resourceKey(for filename: String) -> String {
         let lowercased = filename.lowercased()
-        // 匹配第一个连续 dash 组：优先两个及以上 "--"，否则单个 "-"。
+        // 匹配第一个连续 dash 组：优先两个及以上 "--"，否则单个 "-".
         guard let range = lowercased.range(of: "--+", options: .regularExpression)
                 ?? lowercased.range(of: "-", options: .regularExpression) else {
             return (lowercased as NSString).deletingPathExtension
@@ -156,14 +156,14 @@ final class DialerThemeManager {
         let afterDash = String(lowercased[range.upperBound...])
         let withoutExt = (afterDash as NSString).deletingPathExtension
         // 设备文件名常见 `-bold` 后缀（ bold / white 两种变体），主题包通常只提供一种，
-        // 匹配时把 `-bold` 剥掉，让包内的 mask.png 能同时替换 mask-bold.png / mask.png。
+        // 匹配时把 `-bold` 剥掉，让包内的 mask.png 能同时替换 mask-bold.png / mask.png.
         if withoutExt.hasSuffix("-bold") {
             return String(withoutExt.dropLast(5))
         }
         return withoutExt
     }
 
-    /// 同时生成两种 key：标准 locale key 与资源名 key。
+    /// 同时生成两种 key：标准 locale key 与资源名 key.
     static func candidateKeys(for filename: String) -> [String] {
         let standard = matchKey(for: filename)
         let resource = resourceKey(for: filename)
@@ -173,11 +173,11 @@ final class DialerThemeManager {
 
     // MARK: - 目录枚举
 
-    /// 列出目录下的一级条目名。
+    /// 列出目录下的一级条目名.
     ///
     /// 优先用 FileManager（调用前应已持有该路径的沙盒扩展）；返回空时回退
     /// `bad_query_list`（fsgetpath inode 扫描）— LiveContainer 访客沙盒下
-    /// FileManager 列目录会被裁剪，实测不可信。
+    /// FileManager 列目录会被裁剪，实测不可信.
     private func entryNames(at directory: String, maxInode: Int64 = 200_000) -> [String] {
         let fmNames = (try? fm.contentsOfDirectory(atPath: directory)) ?? []
         if !fmNames.isEmpty { return fmNames }
@@ -187,17 +187,17 @@ final class DialerThemeManager {
 
     // MARK: - 容器发现
 
-    /// 找到电话 App 的数据容器，并定位其中的 TelephonyUI 缓存目录。
+    /// 找到电话 App 的数据容器，并定位其中的 TelephonyUI 缓存目录.
     ///
     /// 策略（对齐 Ketamine 原版）：
     /// 1. 主路径：枚举容器根，读每个容器的 `MCMMetadataIdentifier`，
-    ///    **精确匹配 com.apple.mobilephone**，再定位其 TelephonyUI 缓存。
+    ///    **精确匹配 com.apple.mobilephone**，再定位其 TelephonyUI 缓存.
     ///    只凭「存在 TelephonyUI-* 目录」判断可能找错容器（其他 App 也可能带
-    ///    该缓存），导致替换不生效 —— v0.2.94/95 实锤踩过。
+    ///    该缓存），导致替换不生效 —— v0.2.94/95 实锤踩过.
     /// 2. 兜底：万一 metadata 读不到（bad_query 对个别路径失败），退回按
-    ///    TelephonyUI-* 特征匹配，取第一个命中的容器。
+    ///    TelephonyUI-* 特征匹配，取第一个命中的容器.
     func discoverStatus() throws -> DialerThemeStatus {
-        // 与 Ketamine 一致，搜多个容器根；电话 App 的数据容器在 Application 下。
+        // 与 Ketamine 一致，搜多个容器根；电话 App 的数据容器在 Application 下.
         let roots = [Self.containersRoot]
         var fallbackStatus: DialerThemeStatus?
         var sawTelephonyCache = false
@@ -207,17 +207,17 @@ final class DialerThemeManager {
             for name in containers {
                 let containerPath = (root as NSString).appendingPathComponent(name)
 
-                // 1) 精确匹配 bundle id（读取失败/不匹配就跳过，不消耗太多时间）。
+                // 1) 精确匹配 bundle id（读取失败/不匹配就跳过，不消耗太多时间）.
                 if let bundleId = readBundleId(fromContainerPath: containerPath) {
                     guard bundleId == Self.mobilePhoneBundleId else { continue }
-                    // 容器找对了，但缓存目录可能还没生成（没打开过拨号键盘）。
+                    // 容器找对了，但缓存目录可能还没生成（没打开过拨号键盘）.
                     guard let status = try? makeStatus(containerPath: containerPath) else {
                         throw DialerThemeError.cacheDirectoryNotFound
                     }
                     return status
                 }
 
-                // 2) metadata 读不到时记录 TelephonyUI 特征容器作为兜底。
+                // 2) metadata 读不到时记录 TelephonyUI 特征容器作为兜底.
                 let cachesPath = (containerPath as NSString).appendingPathComponent("Library/Caches")
                 guard let handle = try? escape.consume(path: cachesPath, create: true) else { continue }
                 defer { escape.release(handle) }
@@ -241,14 +241,14 @@ final class DialerThemeManager {
 
         if let fallbackStatus { return fallbackStatus }
         if sawTelephonyCache {
-            // 有 TelephonyUI 缓存但没能验证 bundle id，无法确认是电话 App。
+            // 有 TelephonyUI 缓存但没能验证 bundle id，无法确认是电话 App.
             throw DialerThemeError.containerNotFound
         }
         throw DialerThemeError.containerNotFound
     }
 
-    /// 读容器根的 containermanager 元数据，返回 `MCMMetadataIdentifier`（即 bundle id）。
-    /// 与 Ketamine 原版 BadQuery.readBundleId 一致：先试带点前缀的文件名，再试不带点的。
+    /// 读容器根的 containermanager 元数据，返回 `MCMMetadataIdentifier`（即 bundle id）.
+    /// 与 Ketamine 原版 BadQuery.readBundleId 一致：先试带点前缀的文件名，再试不带点的.
     private func readBundleId(fromContainerPath containerPath: String) -> String? {
         let primary = (containerPath as NSString).appendingPathComponent(Self.metadataFileName)
         if let id = readMetadataIdentifier(at: primary) { return id }
@@ -263,7 +263,7 @@ final class DialerThemeManager {
         return dict["MCMMetadataIdentifier"] as? String
     }
 
-    /// 在已确认的电话容器里定位 TelephonyUI 缓存目录并统计 PNG 数量。
+    /// 在已确认的电话容器里定位 TelephonyUI 缓存目录并统计 PNG 数量.
     private func makeStatus(containerPath: String) throws -> DialerThemeStatus {
         let cachesPath = (containerPath as NSString).appendingPathComponent("Library/Caches")
         let handle = try consumeOrThrow(cachesPath)
@@ -288,7 +288,7 @@ final class DialerThemeManager {
     }
 
     /// 在若干 `TelephonyUI-<n>` 目录名中取版本号最高者（Ketamine 硬编码 -10，
-    /// 这里改为扫描，避免 iOS 升级后目录名变化导致功能整体失效）。
+    /// 这里改为扫描，避免 iOS 升级后目录名变化导致功能整体失效）.
     private static func preferredCacheDirectory(in names: [String]) -> String? {
         let candidates = names.filter { $0.hasPrefix(cachePrefix) }
         guard !candidates.isEmpty else { return nil }
@@ -304,7 +304,7 @@ final class DialerThemeManager {
     // MARK: - 备份
 
     /// 首次调用时把当前缓存目录的全部 PNG 复制到 App 自己的 Documents，
-    /// 之后不再覆盖 —— 与 MobileGestalt 备份同样的一次性快照策略。
+    /// 之后不再覆盖 —— 与 MobileGestalt 备份同样的一次性快照策略.
     @discardableResult
     func ensureBackup(cachePath: String) throws -> Int {
         if hasBackup { return 0 }
@@ -332,13 +332,13 @@ final class DialerThemeManager {
 
     // MARK: - 应用主题
 
-    /// 用主题包（.passthm / .zip）或散装 PNG 覆盖缓存目录里的同名图片。
-    /// - Parameter sources: 一个主题包，或若干张 PNG（用户可直接多选图片，不必打包）。
-    /// - Returns: 被替换的文件数。
+    /// 用主题包（.passthm / .zip）或散装 PNG 覆盖缓存目录里的同名图片.
+    /// - Parameter sources: 一个主题包，或若干张 PNG（用户可直接多选图片，不必打包）.
+    /// - Returns: 被替换的文件数.
     @discardableResult
     func apply(sources: [URL], cachePath: String) throws -> Int {
         // 1. 收集包内 PNG：用「标准 locale key」和「资源名 key」两种索引，
-        //    同一 key 只取第一张（先遇到的优先）。
+        //    同一 key 只取第一张（先遇到的优先）.
         var packageByKey: [String: Data] = [:]
         var packageKeys: [String] = []
         for url in sources {
@@ -369,10 +369,10 @@ final class DialerThemeManager {
 
         guard !packageByKey.isEmpty else { throw DialerThemeError.noPNGsInPackage }
 
-        // 2. 先备份原生主题（只做一次）。
+        // 2. 先备份原生主题（只做一次）.
         try ensureBackup(cachePath: cachePath)
 
-        // 3. 持有缓存目录的沙盒扩展，逐个替换同名文件。
+        // 3. 持有缓存目录的沙盒扩展，逐个替换同名文件.
         let handle = try consumeOrThrow(cachePath)
         defer { escape.release(handle) }
 
@@ -420,11 +420,11 @@ final class DialerThemeManager {
 
     // MARK: - 导出当前主题
 
-    /// 把当前主题打包成 zip（有备份就用备份，否则直接读缓存），作为制作自定义主题的素材。
-    /// 纯读操作，不会产生备份副作用。
+    /// 把当前主题打包成 zip（有备份就用备份，否则直接读缓存），作为制作自定义主题的素材.
+    /// 纯读操作，不会产生备份副作用.
     func exportCurrentTheme(cachePath: String) throws -> URL {
         // handle 必须提升到函数级作用域：defer 绑在 else 块上会在块结束时提前释放
-        // 扩展，随后读取缓存文件时就拿不到权限（v0.2.94/95 实测「无权限」的根因）。
+        // 扩展，随后读取缓存文件时就拿不到权限（v0.2.94/95 实测「无权限」的根因）.
         var handle: SandboxEscape.Handle?
         defer {
             if let handle { escape.release(handle) }
@@ -473,10 +473,10 @@ final class DialerThemeManager {
         }
     }
 
-    /// 覆盖目标文件：先把新内容写入临时文件，再「先删后拷」进缓存目录。
+    /// 覆盖目标文件：先把新内容写入临时文件，再「先删后拷」进缓存目录.
     /// 对齐 Ketamine 原版的 removeItem + copyItem 方式 —— 直接对沙盒扩展路径做
     /// 原子写（Data.write(atomic) = 写临时文件 + rename）在 LiveContainer 环境下
-    /// 不可靠，rename 可能因文件系统/权限策略失败；而 copyItem 是壁纸功能验证过的路径。
+    /// 不可靠，rename 可能因文件系统/权限策略失败；而 copyItem 是壁纸功能验证过的路径.
     private func replaceFile(at destination: String, with payload: Data) throws {
         let tempURL = fm.temporaryDirectory
             .appendingPathComponent("dialer-theme-\(UUID().uuidString).png")
@@ -489,7 +489,7 @@ final class DialerThemeManager {
         try fm.copyItem(at: tempURL, to: URL(fileURLWithPath: destination))
     }
 
-    /// ZIP 文件头魔数 "PK"。.passthm 只是换了个扩展名的 zip。
+    /// ZIP 文件头魔数 "PK"..passthm 只是换了个扩展名的 zip.
     private static func isZip(_ data: Data) -> Bool {
         data.count >= 4 && data[0] == 0x50 && data[1] == 0x4B
     }

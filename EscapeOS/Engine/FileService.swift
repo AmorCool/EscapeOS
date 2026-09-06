@@ -73,11 +73,11 @@ final class FileService {
             throw FileServiceError.notDirectory(path)
         }
 
-        // 只用 FileManager：调用方通常已持有沙盒扩展，速度快。
+        // 只用 FileManager：调用方通常已持有沙盒扩展，速度快.
         // 注意：不要在这里回退 bad_query_list —— 那会对「空目录 / 被沙盒裁剪的
         // 目录」触发 O(maxInode) 次 fsgetpath 扫描（默认 100 万次），空间回收
-        // 递归 countTree、容器管理扫描等会因此慢到不可用（v0.2.97 实测回归）。
-        // 容器根这类跨容器路径由 listContainerRoot(at:) 显式走 bad_query_list。
+        // 递归 countTree、容器管理扫描等会因此慢到不可用（v0.2.97 实测回归）.
+        // 容器根这类跨容器路径由 listContainerRoot(at:) 显式走 bad_query_list.
         let names: [String]
         do {
             names = try fm.contentsOfDirectory(atPath: path)
@@ -87,18 +87,18 @@ final class FileService {
         return try buildFileItems(names: names, basePath: path, fallbackKind: .other)
     }
 
-    /// 容器根目录专用枚举。
+    /// 容器根目录专用枚举.
     ///
     /// 与 `list(directory:)` 不同，这里不先检查 `isDirectory`，也不依赖
     /// `FileManager.contentsOfDirectory` —— 在 LiveContainer 访客沙盒下，
-    /// 后者对跨容器路径会被裁剪。这里采用三级策略（对齐 Erosion 的
+    /// 后者对跨容器路径会被裁剪.这里采用三级策略（对齐 Erosion 的
     /// `bad_query_list` 思路，但更稳健）：
     /// 1. FileManager 快路径：部分只读系统目录（如 /var/containers/Bundle/Application）
     ///    在部分环境可直接列出，命中即快；
     /// 2. `bad_query_list` 默认 maxInode=1M（绝大多数容器 UUID 在此范围内）；
     /// 3. 仍为空则提高 maxInode=2M 重试（inode 号偏大的场景，如长期使用的
-    ///    设备上后安装的 App 容器）。
-    /// 属性取不到时仍然保留条目，让用户至少能看到目录存在。
+    ///    设备上后安装的 App 容器）.
+    /// 属性取不到时仍然保留条目，让用户至少能看到目录存在.
     func listContainerRoot(at path: String) throws -> [FileItem] {
         var names: [String] = []
         if let fmNames = try? fm.contentsOfDirectory(atPath: path), !fmNames.isEmpty {
@@ -112,12 +112,12 @@ final class FileService {
         return try buildFileItems(names: names, basePath: path, fallbackKind: .directory)
     }
 
-    /// 直接列出目录一级条目，**不做 `isDirectory` 前置检查**。
+    /// 直接列出目录一级条目，**不做 `isDirectory` 前置检查**.
     ///
     /// 用于「已通过 SandboxEscape 消费扩展」后的兜底枚举：LiveContainer 访客沙盒下
     /// `fileExists(atPath:isDirectory:)` 对跨容器路径可能仍返回 false（导致
     /// `list(directory:)` 误报 notDirectory），但扩展生效后 `contentsOfDirectory`
-    /// 实际可列。应用安装目录（/var/containers/Bundle/Application）等场景需要它。
+    /// 实际可列.应用安装目录（/var/containers/Bundle/Application）等场景需要它.
     func listDirectly(at path: String) throws -> [FileItem] {
         let names = try fm.contentsOfDirectory(atPath: path)
         return try buildFileItems(names: names, basePath: path, fallbackKind: .directory)
@@ -128,7 +128,7 @@ final class FileService {
         for name in names {
             let full = (basePath as NSString).appendingPathComponent(name)
             // 属性查不到时仍保留该条目（回退枚举出来的路径上 lstat 可能失败），
-            // 至少让用户看到文件存在，而不是整个目录显示为空。
+            // 至少让用户看到文件存在，而不是整个目录显示为空.
             guard let attrs = try? fm.attributesOfItem(atPath: full) else {
                 items.append(FileItem(
                     name: name,

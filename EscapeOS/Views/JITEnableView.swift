@@ -45,11 +45,7 @@ struct JITEnableView: View {
             } else if apps.isEmpty && !isLoading {
                 Section {
                     if !hasPairing {
-                        Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Text("启用 JIT 需要：① 配对文件（在「更多 → 配对文件导入」导入）；② LocalDevVPN 已连接；③ 应用签名带 get-task-allow.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        PairingGuideCard(note: "启用 JIT 还需要：① LocalDevVPN 已连接；② 应用签名带 get-task-allow.")
                     } else {
                         Text("未找到可启用 JIT 的应用.")
                             .foregroundStyle(.secondary)

@@ -63,7 +63,7 @@ final class RestoreService {
                     appName: metadata.appName
                 )
             }
-            warnings.append("关闭 \(app.name) 后再恢复。应用运行时打开的数据库可能无法完整恢复。")
+            warnings.append("关闭 \(app.name) 后再恢复.应用运行时打开的数据库可能无法完整恢复.")
             return .ready(app: app, metadata: metadata, warnings: warnings)
         }
 
@@ -77,10 +77,10 @@ final class RestoreService {
         var warnings: [String] = []
         if app.containerPath != metadata.containerPath {
             warnings.append(
-                "备份时的容器路径与当前不一致，恢复将写入当前容器。"
+                "备份时的容器路径与当前不一致，恢复将写入当前容器."
             )
         }
-        warnings.append("关闭 \(app.name) 后再恢复。应用运行时打开的数据库可能无法完整恢复。")
+        warnings.append("关闭 \(app.name) 后再恢复.应用运行时打开的数据库可能无法完整恢复.")
 
         return .ready(app: app, metadata: metadata, warnings: warnings)
     }

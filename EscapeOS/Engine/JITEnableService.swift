@@ -1,22 +1,22 @@
 import Foundation
 import UIKit
 
-/// 启用 JIT 服务（汉化移植自 StikDebug 的 JITEnableContext，核心机制同源）。
+/// 启用 JIT 服务（汉化移植自 StikDebug 的 JITEnableContext，核心机制同源）.
 ///
 /// 原理：通过 LocalDevVPN 隧道（RPPairing 配对文件）连接设备的 debug_proxy /
 /// process_control 开发者服务，以「调试模式」启动目标 App——App 进程带
 /// get-task-allow 调试附着启动后即获得 JIT 权限（与 debugserver attach 等价，
-/// 无越狱要求；与 Xcode「在设备上调试」同一通道）。
+/// 无越狱要求；与 Xcode「在设备上调试」同一通道）.
 ///
 /// 前提：配对文件（Documents/pairingFile.plist）+ LocalDevVPN 已连接 + 目标 App
-/// 的签名带 get-task-allow（证书直装签名默认带）。
+/// 的签名带 get-task-allow（证书直装签名默认带）.
 final class JITEnableService {
 
     static let shared = JITEnableService()
 
     private init() {}
 
-    /// EscapeSpace 的配对文件路径（与「应用管理」/ 虚拟定位共用）。
+    /// EscapeSpace 的配对文件路径（与「应用管理」/ 虚拟定位共用）.
     private var pairingPath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
@@ -52,7 +52,7 @@ final class JITEnableService {
 
     private func createTunnel(hostname: String) throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）.")
         }
 
         var pairingFile: OpaquePointer?
@@ -74,7 +74,7 @@ final class JITEnableService {
 
         // 隧道建立失败自动重试（最多 3 次、短退避）：Wi-Fi↔蜂窝切换等
         // 瞬时抖动会导致 RPPairing 握手失败，重试后通常成功
-        // （对齐 StikDebug PR #432 的隧道重试思路）。
+        // （对齐 StikDebug PR #432 的隧道重试思路）.
         var lastError: NSError?
         for attempt in 0..<3 {
             var tunnel = TunnelHandles()
@@ -112,12 +112,12 @@ final class JITEnableService {
 
     // MARK: - 应用列表
 
-    /// 列出全部已安装应用（含系统应用，用于「拉起应用」）。
+    /// 列出全部已安装应用（含系统应用，用于「拉起应用」）.
     func listAllApps() throws -> [JITAppInfo] {
         try listApps(requireGetTaskAllow: false)
     }
 
-    /// 列出可启用 JIT 的应用（签名带 get-task-allow 的已安装应用）。
+    /// 列出可启用 JIT 的应用（签名带 get-task-allow 的已安装应用）.
     func listJITCapableApps() throws -> [JITAppInfo] {
         try listApps(requireGetTaskAllow: true)
     }
@@ -166,7 +166,7 @@ final class JITEnableService {
                   !bundleID.isEmpty else { continue }
 
             if requireGetTaskAllow {
-                // 只看用户安装且带 get-task-allow 的应用（JIT 调试启动的前提）。
+                // 只看用户安装且带 get-task-allow 的应用（JIT 调试启动的前提）.
                 guard let entitlements = dict["Entitlements"] as? [String: Any],
                       (entitlements["get-task-allow"] as? Bool) == true else { continue }
             }
@@ -181,13 +181,13 @@ final class JITEnableService {
 
     // MARK: - App 图标
 
-    /// 通过 SpringBoardServices 服务获取应用图标（与 StikDebug 同源）。
-    /// 设备端按 Bundle ID 返回真实图标 PNG —— 对系统应用与第三方应用均有效。
+    /// 通过 SpringBoardServices 服务获取应用图标（与 StikDebug 同源）.
+    /// 设备端按 Bundle ID 返回真实图标 PNG —— 对系统应用与第三方应用均有效.
     ///
     /// 为什么不用进程内私有 API `UIImage._applicationIconImageForBundleIdentifier:format:scale:`：
     /// 它读的是本机 IconServices 图标缓存，证书直装 / 侧载的第三方应用经常取不到
     /// （图标不在该缓存可达范围）→ 列表显示灰色占位；而 SpringBoardServices 由
-    /// 设备端按 bundle id 查询，与查询方沙盒无关，任何已安装应用都能拿到。
+    /// 设备端按 bundle id 查询，与查询方沙盒无关，任何已安装应用都能拿到.
     func getAppIcon(bundleID: String) throws -> UIImage {
         var tunnel = try createTunnel(hostname: "EscapeSpaceIcon")
         defer { tunnel.free() }
@@ -212,7 +212,7 @@ final class JITEnableService {
         guard let rawIconData, rawIconLength > 0 else {
             throw makeError("应用图标数据为空")
         }
-        // Rust 侧分配（into_boxed_slice），必须用 Rust 侧释放函数。
+        // Rust 侧分配（into_boxed_slice），必须用 Rust 侧释放函数.
         defer { idevice_data_free(rawIconData.assumingMemoryBound(to: UInt8.self), UInt(rawIconLength)) }
 
         let data = Data(bytes: rawIconData, count: rawIconLength)
@@ -224,7 +224,7 @@ final class JITEnableService {
 
     // MARK: - 拉起应用（普通启动，不调试）
 
-    /// 普通启动指定应用（不启用 JIT）。
+    /// 普通启动指定应用（不启用 JIT）.
     func launchApp(bundleID: String) throws {
         var tunnel = try createTunnel(hostname: "EscapeSpaceLaunch")
         defer { tunnel.free() }
@@ -257,13 +257,13 @@ final class JITEnableService {
 
     // MARK: - 启用 JIT
 
-    /// 以调试模式启动目标应用，使其获得 JIT 权限。
-    /// 调用后应用会被拉起（EscapeSpace 退到后台），JIT 保持到应用退出。
+    /// 以调试模式启动目标应用，使其获得 JIT 权限.
+    /// 调用后应用会被拉起（EscapeSpace 退到后台），JIT 保持到应用退出.
     func enableJIT(bundleID: String, progress: ((String) -> Void)? = nil) throws {
         // 关键保活：process_control 调试启动目标应用后，本应用立即退到后台，
         // iOS 数秒内就会挂起进程——若此时 attach/detach 流程还没跑完，
-        // 目标应用会一直停在 SIGSTOP（黑屏无反应）。持有后台租约保证
-        // 整个会话期间本应用不被挂起（对齐 StikDebug 的 DebugKeepAliveLease）。
+        // 目标应用会一直停在 SIGSTOP（黑屏无反应）.持有后台租约保证
+        // 整个会话期间本应用不被挂起（对齐 StikDebug 的 DebugKeepAliveLease）.
         let keepAliveLease = JITBackgroundLease()
         defer { keepAliveLease.invalidate() }
 
@@ -333,11 +333,11 @@ final class JITEnableService {
                 let text = String(cString: response)
                 idevice_string_free(response)
                 // debugserver 的 vAttach 成功时返回的是 stop reply（如
-                // `T11thread:...;...`，T11 = SIGSTOP，目标进程被暂停），**不是 "OK"**。
-                // 只有以 "E" 开头的响应（debugserver 错误包）才是真正的失败。
+                // `T11thread:...;...`，T11 = SIGSTOP，目标进程被暂停），**不是 "OK"**.
+                // 只有以 "E" 开头的响应（debugserver 错误包）才是真正的失败.
                 // v0.2.71 误把成功响应当失败 → throw 后 detach 未执行，目标应用
-                // 停在 SIGSTOP、连接断开后被 debugserver 终止（闪退）。
-                // 对齐 StikDebug：原版不检查 attach 响应，成功失败都继续 detach。
+                // 停在 SIGSTOP、连接断开后被 debugserver 终止（闪退）.
+                // 对齐 StikDebug：原版不检查 attach 响应，成功失败都继续 detach.
                 if text.hasPrefix("E") {
                     throw makeError("调试器附着失败：\(text)")
                 }
@@ -357,19 +357,19 @@ final class JITEnableService {
     }
 }
 
-/// 可启用 JIT 的应用。
+/// 可启用 JIT 的应用.
 struct JITAppInfo: Identifiable {
     var id: String { bundleID }
     let bundleID: String
     let name: String
 }
 
-/// App 图标内存缓存加载器（「启用 JIT」/「拉起应用」共用）。
+/// App 图标内存缓存加载器（「启用 JIT」/「拉起应用」共用）.
 ///
 /// 与 StikDebug 的 AppIconRepository 同思路：icon 通过 RSD 隧道向设备端
 /// SpringBoardServices 服务获取（每次请求需建隧道，较慢），因此必须
 /// ① 内存缓存（滚动不重复建隧道）；② in-flight 去重（同一 bundle id 只建一次）；
-/// ③ 限制并发（避免一次给几十个应用同时建隧道）。
+/// ③ 限制并发（避免一次给几十个应用同时建隧道）.
 @MainActor
 final class JITAppIconLoader {
     static let shared = JITAppIconLoader()
@@ -380,10 +380,10 @@ final class JITAppIconLoader {
 
     private init() {}
 
-    /// 已缓存图标（同步查询，用于避免重复触发加载）。
+    /// 已缓存图标（同步查询，用于避免重复触发加载）.
     func cached(for bundleID: String) -> UIImage? { cache[bundleID] }
 
-    /// 异步取图标：命中缓存直接返回；否则建隧道获取（失败返回 nil，由调用方回退占位）。
+    /// 异步取图标：命中缓存直接返回；否则建隧道获取（失败返回 nil，由调用方回退占位）.
     func load(bundleID: String) async -> UIImage? {
         if let img = cache[bundleID] { return img }
         if let task = inFlight[bundleID] { return await task.value }
@@ -403,7 +403,7 @@ final class JITAppIconLoader {
     }
 }
 
-/// 简易信号量：限制同时建隧道的数量。
+/// 简易信号量：限制同时建隧道的数量.
 private actor IconFetchSemaphore {
     private var permits: Int
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -436,18 +436,18 @@ private actor IconFetchSemaphore {
 }
 
 /// JIT 会话后台保活租约（对齐原版 StikDebug 的 DebugKeepAliveLease 与
-/// PR #432 的续期思路）。
+/// PR #432 的续期思路）.
 ///
 /// 为什么必须保活：`process_control_launch_app(debug: true)` 调试启动目标应用后，
-/// 本应用立即退到后台，iOS 数秒内就会挂起进程。若此时 QStartNoAckMode /
+/// 本应用立即退到后台，iOS 数秒内就会挂起进程.若此时 QStartNoAckMode /
 /// vAttach / D（detach）流程尚未完成，目标应用会一直停在 SIGSTOP ——
-/// 表现为启动后永久黑屏无反应。
+/// 表现为启动后永久黑屏无反应.
 ///
 /// 为什么不用静音音频保活：目标应用启动时会激活自己的 AVAudioSession，
 /// 抢占/打断本应用的音频会话（KeepAliveManager 等音频保活会失效，
-/// 这是 v0.2.73 前用户开启「保持后台运行」仍黑屏的根因）。因此这里
+/// 这是 v0.2.73 前用户开启「保持后台运行」仍黑屏的根因）.因此这里
 /// 只依赖 `beginBackgroundTask`：到期自动续期，直到 JIT 会话结束
-/// （invalidate），与用户设置、音频会话完全解耦。
+/// （invalidate），与用户设置、音频会话完全解耦.
 private final class JITBackgroundLease {
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var isActive = true
@@ -458,8 +458,8 @@ private final class JITBackgroundLease {
         }
     }
 
-    /// 申请后台执行宽限；到期回调里若会话仍活跃则自动续期。
-    /// 会话通常只有几秒，最多续期 1~2 次，不会触发系统惩罚。
+    /// 申请后台执行宽限；到期回调里若会话仍活跃则自动续期.
+    /// 会话通常只有几秒，最多续期 1~2 次，不会触发系统惩罚.
     private func renew() {
         guard isActive else { return }
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "EscapeSpaceJIT") { [weak self] in

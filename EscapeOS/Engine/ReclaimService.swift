@@ -41,7 +41,7 @@ enum ReclaimError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .nothingSelected:
-            return "未选择任何要回收的内容。"
+            return "未选择任何要回收的内容."
         }
     }
 }

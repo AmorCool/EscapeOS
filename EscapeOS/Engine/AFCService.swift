@@ -2,21 +2,21 @@ import Foundation
 
 /// AFC 管理服务：通过「配对文件 + LocalDevVPN 本地隧道」的 RSD 通道连接
 /// 本机 AFC 服务（com.apple.afc，**根目录 = /var/mobile/media**），
-/// 提供浏览 / 读取 / 下载 / 上传 / 删除 / 新建目录 / 重命名能力。
+/// 提供浏览 / 读取 / 下载 / 上传 / 删除 / 新建目录 / 重命名能力.
 ///
 /// 复用 DeviceControlService 同一套隧道机制（tunnel_create_rppairing），
 /// 并遵循 RSD 隧道并发铁律：本服务所有操作走同一条串行队列，
-/// 避免与进程管理 / 设备控制并发建隧道互相抢占。
+/// 避免与进程管理 / 设备控制并发建隧道互相抢占.
 final class AFCService {
 
     static let shared = AFCService()
     private init() {}
 
     /// RSD 隧道并发铁律：同一 hostname 并发 `tunnel_create_rppairing` 会互相抢占，
-    /// 本服务所有操作全部经 `afcQueue` 串行执行。
+    /// 本服务所有操作全部经 `afcQueue` 串行执行.
     private let afcQueue = DispatchQueue(label: "com.ipaside.escapeos.afc")
 
-    /// 浏览条目（对齐 FileRow 展示所需字段）。
+    /// 浏览条目（对齐 FileRow 展示所需字段）.
     struct Entry: Identifiable, Equatable {
         let name: String
         let path: String
@@ -57,7 +57,7 @@ final class AFCService {
 
     private func createTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）.")
         }
 
         var pairingFile: OpaquePointer?
@@ -112,8 +112,8 @@ final class AFCService {
         throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
     }
 
-    /// 打开 AFC 连接并执行操作（每次一条连接，用完即释放）。
-    /// `afc_client_connect_rsd` 与建隧道一样需要 3 次退避重试（RSD 铁律）。
+    /// 打开 AFC 连接并执行操作（每次一条连接，用完即释放）.
+    /// `afc_client_connect_rsd` 与建隧道一样需要 3 次退避重试（RSD 铁律）.
     private func withClient<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         var tunnel = try createTunnel()
         defer { tunnel.free() }
@@ -136,7 +136,7 @@ final class AFCService {
         throw lastError ?? makeError("连接 AFC 服务失败")
     }
 
-    /// 释放 C 字符串数组（Rust 侧 CString::into_raw 分配，与 libc free 兼容）。
+    /// 释放 C 字符串数组（Rust 侧 CString::into_raw 分配，与 libc free 兼容）.
     private func freeCStrings(_ entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?, _ count: Int) {
         guard let entries else { return }
         for index in 0..<count {
@@ -145,12 +145,12 @@ final class AFCService {
         entries.deallocate()
     }
 
-    /// 在串行队列上执行可能抛错的闭包。
+    /// 在串行队列上执行可能抛错的闭包.
     ///
     /// 不直接用 `try afcQueue.sync { ... }`：Theos 的 GCD 桥接里
     /// `DispatchQueue.sync` 只有非 throwing 重载，throwing 闭包会报
-    /// "invalid conversion from throwing function"（v0.2.122 实锤）。
-    /// 这里用 Result 包装绕开。
+    /// "invalid conversion from throwing function"（v0.2.122 实锤）.
+    /// 这里用 Result 包装绕开.
     private func syncOnQueue<T>(_ body: () throws -> T) throws -> T {
         var result: Result<T, Error>!
         afcQueue.sync {
@@ -163,7 +163,7 @@ final class AFCService {
     // MARK: - 浏览
 
     /// 静态辅助：在**已建立的 AFC 连接**上列出目录（供 CrashLogService 等
-    /// 使用 crashreport 转出的 AFC 客户端时复用，避免复制逻辑）。
+    /// 使用 crashreport 转出的 AFC 客户端时复用，避免复制逻辑）.
     static func listDirectory(client: OpaquePointer, path: String) throws -> [Entry] {
         var entries: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
         var count = 0
@@ -212,7 +212,7 @@ final class AFCService {
         }
     }
 
-    /// 静态辅助：获取 AFC 文件信息（供复用同一连接的调用方使用）。
+    /// 静态辅助：获取 AFC 文件信息（供复用同一连接的调用方使用）.
     static func fileInfo(client: OpaquePointer, path: String) throws -> AfcFileInfo {
         var info = AfcFileInfo()
         if let ffiError = path.withCString({ afc_get_file_info(client, $0, &info) }) {
@@ -226,7 +226,7 @@ final class AFCService {
     }
 
     /// 在一条 AFC 连接上执行批量操作（供 IPCC 安装 / 铃声管理复用，
-    /// 避免逐文件重建隧道）。已在串行队列内，body 里可直接调 C 函数。
+    /// 避免逐文件重建隧道）.已在串行队列内，body 里可直接调 C 函数.
     func batch<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         try syncOnQueue {
             try withClient { client in
@@ -235,11 +235,11 @@ final class AFCService {
         }
     }
 
-    /// 列出目录内容。`path` 为空或 "/" 表示 AFC 根。
+    /// 列出目录内容.`path` 为空或 "/" 表示 AFC 根.
     /// v0.2.126 结论：`afc_client_connect_rsd`（com.apple.afc.shim.remote）
-    /// 根目录 = /var/mobile/media（与标准 AFC1 相同，不是整个文件系统）。
+    /// 根目录 = /var/mobile/media（与标准 AFC1 相同，不是整个文件系统）.
     /// 因此本服务只能访问媒体目录（DCIM / Downloads / iTunes_Control /
-    /// PublicStaging 等）；/var/mobile/Library 之外的系统路径不可达。
+    /// PublicStaging 等）；/var/mobile/Library 之外的系统路径不可达.
     func listDirectory(_ path: String) throws -> [Entry] {
         try syncOnQueue {
             try withClient { client in
@@ -258,7 +258,7 @@ final class AFCService {
 
     // MARK: - 文件操作
 
-    /// 下载文件全部内容。
+    /// 下载文件全部内容.
     func readFile(_ path: String) throws -> Data {
         try syncOnQueue {
             try withClient { client in
@@ -283,8 +283,8 @@ final class AFCService {
         }
     }
 
-    /// 上传文件（父目录必须已存在）。v0.2.127：改为 1MB 分块写入，
-    /// 避免超大文件（如 .ipcc）一次性提交超出 AFC 协议包限制。
+    /// 上传文件（父目录必须已存在）.v0.2.127：改为 1MB 分块写入，
+    /// 避免超大文件（如 .ipcc）一次性提交超出 AFC 协议包限制.
     func writeFile(_ data: Data, to path: String) throws {
         try syncOnQueue {
             try withClient { client in
@@ -311,7 +311,7 @@ final class AFCService {
         }
     }
 
-    /// 新建目录。
+    /// 新建目录.
     func makeDirectory(_ path: String) throws {
         try syncOnQueue {
             try withClient { client in
@@ -322,7 +322,7 @@ final class AFCService {
         }
     }
 
-    /// 删除文件或目录（目录需为空，空目录用 `removePathAndContents`）。
+    /// 删除文件或目录（目录需为空，空目录用 `removePathAndContents`）.
     func removePath(_ path: String, includingContents: Bool = false) throws {
         try syncOnQueue {
             try withClient { client in
@@ -340,7 +340,7 @@ final class AFCService {
         }
     }
 
-    /// 重命名 / 移动。
+    /// 重命名 / 移动.
     func renamePath(_ source: String, to target: String) throws {
         try syncOnQueue {
             try withClient { client in

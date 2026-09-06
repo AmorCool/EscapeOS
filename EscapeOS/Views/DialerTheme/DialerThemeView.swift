@@ -2,11 +2,11 @@
 //  DialerThemeView.swift
 //  EscapeOS
 //
-//  拨号器主题：替换电话 App 容器内的 TelephonyUI 缓存，改变拨号键盘外观。
-//  移植自 Ketamine 的 Customization → Passcode 板块，交互与文案已汉化。
+//  拨号器主题：替换电话 App 容器内的 TelephonyUI 缓存，改变拨号键盘外观.
+//  移植自 Ketamine 的 Customization → Passcode 板块，交互与文案已汉化.
 //
 //  页面是「更多」页 push 进入的次级页 —— 不要嵌套 NavigationStack（会导致
-//  导航栏高度异常、标题与按钮错位），由外层 NavigationView 提供导航栏。
+//  导航栏高度异常、标题与按钮错位），由外层 NavigationView 提供导航栏.
 //
 
 import SwiftUI
@@ -15,7 +15,7 @@ import UniformTypeIdentifiers
 // MARK: - 跨 actor 的失败信息
 
 /// `Result` 的 `Failure` 必须遵循 `Error`，而 `String` 不遵循；包一层既满足
-/// 协议约束，又保持 Sendable（后台任务的结果要跨 actor 边界回主线程）。
+/// 协议约束，又保持 Sendable（后台任务的结果要跨 actor 边界回主线程）.
 private struct DialerTaskFailure: Error {
     let message: String
 }
@@ -39,11 +39,11 @@ final class DialerThemeViewModel: ObservableObject {
     private static let containerPathKey = "dialerThemeContainerPath"
     private static let cacheDirectoryKey = "dialerThemeCacheDirectory"
     /// 发现逻辑的版本号：升级后旧缓存（可能是 v0.2.94/95 的「特征目录」结果，
-    /// 存在找错容器的风险）一律作废，强制重新精确扫描。
+    /// 存在找错容器的风险）一律作废，强制重新精确扫描.
     private static let scanVersionKey = "dialerThemeScanVersion"
     private static let scanVersion = 2
 
-    /// 上次定位成功的电话容器路径（缓存在 UserDefaults，避免每次进页面都全量扫描容器）。
+    /// 上次定位成功的电话容器路径（缓存在 UserDefaults，避免每次进页面都全量扫描容器）.
     private var cachedContainerPath: String {
         get { defaults.string(forKey: Self.containerPathKey) ?? "" }
         set { defaults.set(newValue, forKey: Self.containerPathKey) }
@@ -56,9 +56,9 @@ final class DialerThemeViewModel: ObservableObject {
 
     // MARK: 定位
 
-    /// `force == true` 时忽略缓存重新扫描（系统更新后容器 UUID 会变，用得上）。
+    /// `force == true` 时忽略缓存重新扫描（系统更新后容器 UUID 会变，用得上）.
     /// 发现逻辑升级（scanVersion 变化）时同样会强制重扫 —— v0.2.94/95 的旧缓存
-    /// 是按「TelephonyUI 特征」找的容器，可能不是电话 App 本体，必须作废重扫。
+    /// 是按「TelephonyUI 特征」找的容器，可能不是电话 App 本体，必须作废重扫.
     func scan(force: Bool = false) {
         let cachedVersion = defaults.integer(forKey: Self.scanVersionKey)
         let needsRescan = cachedVersion != Self.scanVersion
@@ -74,7 +74,7 @@ final class DialerThemeViewModel: ObservableObject {
         }
 
         isScanning = true
-        // 闭包内只捕获 Sendable 局部值；错误在后台就地转成 String 再跨 actor。
+        // 闭包内只捕获 Sendable 局部值；错误在后台就地转成 String 再跨 actor.
         Task.detached(priority: .userInitiated) { [weak self] in
             let outcome: Result<DialerThemeStatus, DialerTaskFailure>
             do {
@@ -92,7 +92,7 @@ final class DialerThemeViewModel: ObservableObject {
                     self.cachedCacheDirectory = status.cacheDirectoryName
                     self.defaults.set(Self.scanVersion, forKey: Self.scanVersionKey)
                     // 容器路径变了：旧备份来自旧容器（v0.2.94/95 可能是错误的容器），
-                    // 继续保留会把错容器的原图写进新容器，删掉。
+                    // 继续保留会把错容器的原图写进新容器，删掉.
                     if !oldContainerPath.isEmpty, oldContainerPath != status.containerPath {
                         DialerThemeManager.shared.resetBackup()
                     }
@@ -107,7 +107,7 @@ final class DialerThemeViewModel: ObservableObject {
         }
     }
 
-    /// 只刷新缓存目录里的 PNG 数量，不重新扫描容器（快）。
+    /// 只刷新缓存目录里的 PNG 数量，不重新扫描容器（快）.
     private func refreshCount() {
         guard !cachedContainerPath.isEmpty, !cachedCacheDirectory.isEmpty else { return }
         let snapshot = DialerThemeStatus(
@@ -120,10 +120,10 @@ final class DialerThemeViewModel: ObservableObject {
         Task.detached(priority: .utility) { [weak self] in
             // 实例建在闭包内（避免捕获 non-Sendable 对象），且必须贯穿
             // consume / release：SandboxEscape 用实例内的 liveHandles 集合判定
-            // 句柄是否有效，两个实例会让 release 空转。
+            // 句柄是否有效，两个实例会让 release 空转.
             let escape = SandboxEscape()
             // 一次性求出结果再传给主线程：在并发闭包里声明 var 再改写会触发
-            // "captured var in concurrently-executing code" 警告。
+            // "captured var in concurrently-executing code" 警告.
             let count: Int = {
                 guard let handle = try? escape.consume(path: cachePath, create: true) else { return 0 }
                 defer { escape.release(handle) }
@@ -153,7 +153,7 @@ final class DialerThemeViewModel: ObservableObject {
             let outcome: Result<String, DialerTaskFailure>
             do {
                 let count = try DialerThemeManager.shared.apply(sources: urls, cachePath: cachePath)
-                outcome = .success("已替换 \(count) 张键盘图片。重新打开电话 App 即可看到效果。")
+                outcome = .success("已替换 \(count) 张键盘图片.重新打开电话 App 即可看到效果.")
             } catch {
                 outcome = .failure(DialerTaskFailure(message: error.localizedDescription))
             }
@@ -171,7 +171,7 @@ final class DialerThemeViewModel: ObservableObject {
             let outcome: Result<String, DialerTaskFailure>
             do {
                 let count = try DialerThemeManager.shared.restoreOriginal(cachePath: cachePath)
-                outcome = .success("已恢复 \(count) 张原生键盘图片，重新打开电话 App 生效。")
+                outcome = .success("已恢复 \(count) 张原生键盘图片，重新打开电话 App 生效.")
             } catch {
                 outcome = .failure(DialerTaskFailure(message: error.localizedDescription))
             }
@@ -205,8 +205,8 @@ final class DialerThemeViewModel: ObservableObject {
 
     // MARK: 重启电话 App
 
-    /// 结束电话进程，让它下次启动时重新读取缓存里的键盘图片。
-    /// 需要配对文件 + LocalDevVPN；失败时提示用户手动上滑关闭。
+    /// 结束电话进程，让它下次启动时重新读取缓存里的键盘图片.
+    /// 需要配对文件 + LocalDevVPN；失败时提示用户手动上滑关闭.
     func relaunchPhoneApp() {
         guard !isBusy else { return }
         begin("正在重启电话 App")
@@ -216,15 +216,15 @@ final class DialerThemeViewModel: ObservableObject {
                 let processes = try ProcessManagerService.shared.listProcesses()
                 let targets = processes.filter { $0.executablePath.contains("MobilePhone") }
                 if targets.isEmpty {
-                    outcome = .failure(DialerTaskFailure(message: "当前没有正在运行的电话进程，直接打开电话 App 即可。"))
+                    outcome = .failure(DialerTaskFailure(message: "当前没有正在运行的电话进程，直接打开电话 App 即可."))
                 } else {
                     for process in targets {
                         try? ProcessManagerService.shared.sendSignal(.kill, toPID: process.pid)
                     }
-                    outcome = .success("已结束电话进程（\(targets.count) 个），重新打开电话 App 即可看到新主题。")
+                    outcome = .success("已结束电话进程（\(targets.count) 个），重新打开电话 App 即可看到新主题.")
                 }
             } catch {
-                outcome = .failure(DialerTaskFailure(message: "自动重启失败：\(error.localizedDescription)\n请手动上滑关闭电话 App 后重新打开。"))
+                outcome = .failure(DialerTaskFailure(message: "自动重启失败：\(error.localizedDescription)\n请手动上滑关闭电话 App 后重新打开."))
             }
             await MainActor.run {
                 guard let self else { return }
@@ -235,13 +235,13 @@ final class DialerThemeViewModel: ObservableObject {
 
     // MARK: 内部
 
-    /// 开始一项需要进度遮罩的后台任务。
+    /// 开始一项需要进度遮罩的后台任务.
     private func begin(_ message: String) {
         isBusy = true
         busyMessage = message
     }
 
-    /// 在主线程收尾：`refresh` 为真时顺带刷新图片数量（应用/恢复后数量会变）。
+    /// 在主线程收尾：`refresh` 为真时顺带刷新图片数量（应用/恢复后数量会变）.
     private func finish(_ outcome: Result<String, DialerTaskFailure>, refresh: Bool) {
         isBusy = false
         switch outcome {
@@ -296,7 +296,7 @@ struct DialerThemeView: View {
                 Button("取消", role: .cancel) {}
                 Button("恢复", role: .destructive) { viewModel.restore() }
             } message: {
-                Text("将用首次应用主题时备份的原图覆盖当前的键盘图片。")
+                Text("将用首次应用主题时备份的原图覆盖当前的键盘图片.")
             }
             .alert("出错了", isPresented: errorBinding) {
                 Button("好", role: .cancel) { viewModel.errorMessage = nil }
@@ -386,7 +386,7 @@ struct DialerThemeView: View {
                     icon: "exclamationmark.triangle.fill",
                     iconTint: .orange,
                     title: "未定位到电话容器",
-                    message: "请确认设备可使用电话功能，并打开一次拨号键盘让系统生成缓存，然后点右上角刷新重试。",
+                    message: "请确认设备可使用电话功能，并打开一次拨号键盘让系统生成缓存，然后点右上角刷新重试.",
                     actionTitle: "重新扫描",
                     action: { viewModel.scan(force: true) }
                 )
@@ -415,7 +415,7 @@ struct DialerThemeView: View {
 
             Button {
                 // 先清空：连续两次导出拿到的是同一个 URL，值没变化 onChange 不触发，
-                // 分享面板就弹不出来了。
+                // 分享面板就弹不出来了.
                 viewModel.exportedURL = nil
                 viewModel.export()
             } label: {
@@ -425,7 +425,7 @@ struct DialerThemeView: View {
         } header: {
             Text("操作")
         } footer: {
-            Text("支持 .passthm / .zip 主题包，也支持直接在文件 App 里多选 PNG 图片导入。图片按「文件名去掉语言前缀」匹配，同名即替换，无需打包。")
+            Text("支持 .passthm / .zip 主题包，也支持直接在文件 App 里多选 PNG 图片导入.图片按「文件名去掉语言前缀」匹配，同名即替换，无需打包.")
         }
     }
 
@@ -438,7 +438,7 @@ struct DialerThemeView: View {
             }
             .disabled(viewModel.status == nil)
         } footer: {
-            Text("主题写入缓存后需重新打开电话 App 才会生效（不需要重启设备）。此项通过隧道结束电话进程，需要配对文件与 LocalDevVPN；若失败请手动上滑关闭电话 App 再打开。")
+            Text("主题写入缓存后需重新打开电话 App 才会生效（不需要重启设备）.此项通过隧道结束电话进程，需要配对文件与 LocalDevVPN；若失败请手动上滑关闭电话 App 再打开.")
         }
     }
 
@@ -447,10 +447,10 @@ struct DialerThemeView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("原理")
                     .font(.subheadline.weight(.semibold))
-                Text("电话 App 通过 TelephonyUI 渲染拨号键盘，渲染结果以 PNG 缓存进自己的容器。缓存命中时不会重新生成，因此替换这些 PNG 即改变键盘外观。")
+                Text("电话 App 通过 TelephonyUI 渲染拨号键盘，渲染结果以 PNG 缓存进自己的容器.缓存命中时不会重新生成，因此替换这些 PNG 即改变键盘外观.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("该路径在电话 App 沙盒内，需通过 bad_query 让 containermanagerd 代为签发沙盒扩展才能写入（iOS 26.0–26.6.1）。同一张图在各语言下各有一份且内容相同，故按去掉语言前缀后的文件名匹配，一次替换覆盖全部语言。")
+                Text("该路径在电话 App 沙盒内，需通过 bad_query 让 containermanagerd 代为签发沙盒扩展才能写入（iOS 26.0–26.6.1）.同一张图在各语言下各有一份且内容相同，故按去掉语言前缀后的文件名匹配，一次替换覆盖全部语言.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

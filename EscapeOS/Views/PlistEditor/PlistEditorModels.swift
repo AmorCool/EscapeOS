@@ -1,9 +1,9 @@
 import Foundation
 
-/// plist 里一个条目的类型。
+/// plist 里一个条目的类型.
 ///
-/// 移植自 Erosion 的 `PlistItemType`。`label` 保留 Xcode/plist 的标准英文术语
-/// 便于对照，`displayName` 是界面上显示的中文。
+/// 移植自 Erosion 的 `PlistItemType`.`label` 保留 Xcode/plist 的标准英文术语
+/// 便于对照，`displayName` 是界面上显示的中文.
 enum PlistItemType: String, CaseIterable, Identifiable {
     case string
     case int
@@ -45,23 +45,23 @@ enum PlistItemType: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 是否是有子条目的容器类型（字典 / 数组）。
+    /// 是否是有子条目的容器类型（字典 / 数组）.
     var isContainer: Bool {
         self == .dict || self == .array
     }
 }
 
-/// plist 树上的一个节点。
+/// plist 树上的一个节点.
 ///
 /// 移植自 Erosion 的 `PlistItem`：除了保留原始值 `rawVal`（写回时 Data 类型要靠它），
-/// 另存一份可编辑的 `stringVal` / `boolVal`，容器类型则递归存 `dictVal`。
-/// 字典与数组的子条目都放在 `dictVal` 里，靠 `type` 区分序列化方式。
+/// 另存一份可编辑的 `stringVal` / `boolVal`，容器类型则递归存 `dictVal`.
+/// 字典与数组的子条目都放在 `dictVal` 里，靠 `type` 区分序列化方式.
 struct PlistItem: Identifiable {
     var id = UUID()
     var key: String
     var rawVal: Any?
     var type: PlistItemType = .unknown
-    /// 数组元素的序号（字典条目为 nil）。
+    /// 数组元素的序号（字典条目为 nil）.
     var index: Int?
     var isExpanded: Bool
 
@@ -104,7 +104,7 @@ struct PlistItem: Identifiable {
         }
     }
 
-    /// 序列化回 plist 能接受的原始值。
+    /// 序列化回 plist 能接受的原始值.
     func rawValue() -> Any {
         switch type {
         case .string:
@@ -117,7 +117,7 @@ struct PlistItem: Identifiable {
             return boolVal
         case .data:
             // Data 不做文本往返（base64 会改变二进制 plist 的语义），
-            // 保留读进来时的原始值。
+            // 保留读进来时的原始值.
             return rawVal ?? Data()
         case .date:
             return rawVal ?? stringVal

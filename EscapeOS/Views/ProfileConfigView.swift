@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// v0.3.229：配置描述管理（「更多」板块入口）——
-/// iOS 设置描述文件（Configuration Profile，.mobileconfig/.mobileprofile）管理。
-/// 参考 pymobiledevice3 profile 命令（list / install / remove），底层 misagent（MCInstall）。
+/// iOS 设置描述文件（Configuration Profile，.mobileconfig/.mobileprofile）管理.
+/// 参考 pymobiledevice3 profile 命令（list / install / remove），底层 misagent（MCInstall）.
 struct ProfileConfigView: View {
     @State private var profiles: [ProfileConfigService.ConfigurationProfile] = []
     @State private var loading = false
@@ -49,7 +49,7 @@ struct ProfileConfigView: View {
                 } header: {
                     Text("设备描述文件（\(profiles.count)）")
                 } footer: {
-                    Text("删除需在系统设置中输入移除密码（若该描述文件设置了 HasRemovalPasscode）。")
+                    Text("删除需在系统设置中输入移除密码（若该描述文件设置了 HasRemovalPasscode）.")
                 }
             }
         }
@@ -87,7 +87,7 @@ struct ProfileConfigView: View {
             }
             Button("取消", role: .cancel) { pendingRemove = nil }
         } message: {
-            Text("将从设备移除该配置描述文件（UUID ····\(String(pendingRemove?.uuid.suffix(8) ?? ""))）。")
+            Text("将从设备移除该配置描述文件（UUID ····\(String(pendingRemove?.uuid.suffix(8) ?? ""))）.")
         }
     }
 

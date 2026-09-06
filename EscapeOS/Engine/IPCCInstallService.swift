@@ -1,6 +1,6 @@
 import Foundation
 
-/// IPCC 安装服务 —— **爱思助手「更新 IPCC」同款通道**（v0.2.128）。
+/// IPCC 安装服务 —— **爱思助手「更新 IPCC」同款通道**（v0.2.128）.
 ///
 /// 链路（与 ideviceinstaller / 爱思助手一致，无需越狱、无需系统级 entitlement）：
 /// 1. AFC 隧道（RSD，根 = /var/mobile/media）把 .ipcc 上传到
@@ -8,20 +8,20 @@ import Foundation
 /// 2. `installation_proxy` 服务的 `Install` 命令，
 ///    `ClientOptions = { PackageType: "CarrierBundle" }`（.ipa 是 `Developer`），
 ///    `PackagePath` 指向刚上传的路径；
-/// 3. installd → CommCenter 完成解包 / 校验 / 写入运营商配置区并广播变更。
+/// 3. installd → CommCenter 完成解包 / 校验 / 写入运营商配置区并广播变更.
 ///
 /// 爱思在电脑端做的事（usbmuxd → lockdownd 配对 → installation_proxy），
-/// 我们设备端 App 扮演"配对主机"，用同一条 RSD 隧道完成同样的上传 + 命令。
+/// 我们设备端 App 扮演"配对主机"，用同一条 RSD 隧道完成同样的上传 + 命令.
 ///
 /// 与巨魔 IPCCInstaller 的区别：那个是设备端直接调 CoreTelephony 私有 API
 /// （`_CTServerConnectionInstallCarrierBundle`），需要 CoreTrust 授予的系统级
-/// entitlement —— **不是我们的路子**。
+/// entitlement —— **不是我们的路子**.
 final class IPCCInstallService {
 
     static let shared = IPCCInstallService()
     private init() {}
 
-    /// 解析 .ipcc 得到的包信息。
+    /// 解析 .ipcc 得到的包信息.
     struct ParsedIPCC {
         let bundleName: String
         let identifier: String
@@ -29,21 +29,21 @@ final class IPCCInstallService {
         let prefix: String
     }
 
-    /// 最近安装记录（本地保存；CommCenter 安装后的实际 bundle 在系统区，我们看不到）。
+    /// 最近安装记录（本地保存；CommCenter 安装后的实际 bundle 在系统区，我们看不到）.
     struct InstallRecord: Identifiable, Equatable {
         let fileName: String
         let bundleName: String
         let date: Date
         let success: Bool
         let detail: String
-        /// v0.2.130：详细步骤日志（时间戳 + 每一步结果）。
+        /// v0.2.130：详细步骤日志（时间戳 + 每一步结果）.
         let steps: [String]
         var id: String { fileName + "-" + date.timeIntervalSince1970.description }
     }
 
     private var recordsKey: String { "IPCCInstallHistory" }
 
-    /// 清空最近安装记录。
+    /// 清空最近安装记录.
     func clearRecords() {
         UserDefaults.standard.removeObject(forKey: recordsKey)
     }
@@ -90,7 +90,7 @@ final class IPCCInstallService {
     // MARK: - 解析
 
     /// 解析 .ipcc：任意层级找 `*.bundle/Info.plist`（Apple 标准 IPCC =
-    /// Payload/xxx.bundle/...，v0.2.126 已修复）。
+    /// Payload/xxx.bundle/...，v0.2.126 已修复）.
     func parse(ipccURL: URL) throws -> ParsedIPCC {
         let reader: ZipReader
         do {
@@ -126,11 +126,11 @@ final class IPCCInstallService {
 
     // MARK: - 安装（爱思同款：installation_proxy + PackageType=CarrierBundle）
 
-    /// 安装 .ipcc。
+    /// 安装 .ipcc.
     /// 1. 经 AFC 隧道上传到 `/PublicStaging/`（AFC jail，installd/CommCenter 可读）；
     /// 2. `installation_proxy` 的 Install 命令 + `PackageType=CarrierBundle`
     ///    （ideviceinstaller / 爱思助手安装 .ipcc 的标准做法）；
-    /// 3. installd → CommCenter 完成解包 / 校验 / 写入运营商配置区并触发重载。
+    /// 3. installd → CommCenter 完成解包 / 校验 / 写入运营商配置区并触发重载.
     func install(ipccURL: URL) throws -> String {
         let parsed = try parse(ipccURL: ipccURL)
         var steps: [String] = []

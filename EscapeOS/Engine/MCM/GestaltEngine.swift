@@ -91,7 +91,7 @@ final class BQMobileGestaltModel {
     var isApplying = false
     var isDirty = false
     /// load() 正在执行（bad_query 首次 dlopen / 容器遍历耗时数秒，期间给出反馈，
-    /// 避免「点了没反应」的错觉；v0.2.105）。
+    /// 避免「点了没反应」的错觉；v0.2.105）.
     var isLoading = false
 
     // Routing state
@@ -792,8 +792,8 @@ final class BQMobileGestaltModel {
     // MARK: - Respring
 
     /// 触发「网页崩溃 respring」：由 GestaltView 监听 shouldRespring 后展示 RespringView
-    /// （WKWebView 高内存压力挤崩 SpringBoard，视觉先黑屏再重启桌面）。
-    /// 取代原先错误的 `shortcuts://run-shortcut?name=reboot`（该快捷指令不存在，点了无反应）。
+    /// （WKWebView 高内存压力挤崩 SpringBoard，视觉先黑屏再重启桌面）.
+    /// 取代原先错误的 `shortcuts://run-shortcut?name=reboot`（该快捷指令不存在，点了无反应）.
     func respring() {
         shouldRespring = true
     }

@@ -226,8 +226,8 @@ struct BigInt: Equatable, Comparable, CustomStringConvertible {
     }
 
     // 大整数除法：标准 little-endian Knuth D（经 Python 参考实现验证：
-    // 1000 组随机除法 + SRP 固定向量 S/K 全部正确）。输入输出均为 big-endian limbs，
-    // 内部反转处理。比逐位二进制长除法快两个数量级（登录耗时从 ~56s 回到 ~1s）。
+    // 1000 组随机除法 + SRP 固定向量 S/K 全部正确）.输入输出均为 big-endian limbs，
+    // 内部反转处理.比逐位二进制长除法快两个数量级（登录耗时从 ~56s 回到 ~1s）.
     private static func divModMag(_ uIn: [UInt32], _ vIn: [UInt32]) -> ([UInt32], [UInt32]) {
         var u = Array(uIn.reversed())
         var v = Array(vIn.reversed())
@@ -294,7 +294,7 @@ struct BigInt: Equatable, Comparable, CustomStringConvertible {
         return (q.reversed(), rem.reversed())
     }
 
-    /// little-endian limbs 左移 bits 位（0 < bits < 32）。
+    /// little-endian limbs 左移 bits 位（0 < bits < 32）.
     private static func shlLE(_ a: [UInt32], _ bits: Int) -> [UInt32] {
         guard bits > 0 else { return a }
         var out = a
@@ -308,7 +308,7 @@ struct BigInt: Equatable, Comparable, CustomStringConvertible {
         return out
     }
 
-    /// little-endian limbs 右移 bits 位（0 < bits < 32）。
+    /// little-endian limbs 右移 bits 位（0 < bits < 32）.
     private static func shrLE(_ a: [UInt32], _ bits: Int) -> [UInt32] {
         guard bits > 0 else { return a }
         var out = a

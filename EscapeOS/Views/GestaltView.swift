@@ -33,7 +33,7 @@ struct GestaltView: View {
             // v0.3.187 大标题+safeAreaInset 闪退；v0.3.188 toolbar principal 仍不满意）.
             // "编辑/备份"切换改为 toolbar Menu 按钮（点开切换），导航栏与模块板块
             // 一致：大标题 + Leading 齿轮 + Trailing Menu + ellipsis 菜单，
-            // List 内只有内容，**屏幕上不再有任何 segmented control**。
+            // List 内只有内容，**屏幕上不再有任何 segmented control**.
             List {
                 if gestaltPane == .edit {
                     editPane
@@ -75,7 +75,7 @@ struct GestaltView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     // v0.3.189：编辑/备份切换——Menu 按钮（取代 v0.3.179 picker），
-                    // 显示当前 pane 名称 + chevron 下拉，**屏幕上不再有 Picker 控件**。
+                    // 显示当前 pane 名称 + chevron 下拉，**屏幕上不再有 Picker 控件**.
                     Menu {
                         ForEach(GestaltPane.allCases) { pane in
                             Button {
@@ -249,7 +249,7 @@ struct GestaltView: View {
     // MARK: - 编辑/备份切换
     // v0.3.189：删除 v0.3.179 的 gestaltPanePicker 函数——Picker 控件（VStack 顶置 / segmented）
     // 在 v0.3.184~188 多轮反复尝试都失败（丑/闪退/不被接受），现改用 toolbar Menu
-    // 按钮（在 body .toolbar 内）。gestaltPane 的 onChange 监听移到 body 内 List 修饰符.
+    // 按钮（在 body .toolbar 内）.gestaltPane 的 onChange 监听移到 body 内 List 修饰符.
 
     /// 备份分栏：时间戳备份 + 备份列表（恢复/删除）
     private var backupPane: some View {

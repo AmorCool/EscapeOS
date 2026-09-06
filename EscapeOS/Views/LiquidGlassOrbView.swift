@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// v0.3.219：液态玻璃灵动球（主页 Hero）。
+/// v0.3.219：液态玻璃灵动球（主页 Hero）.
 ///
 /// iOS 17+：Metal 实时渲染 —— 极光背景折射进球体（RGB 三路色散）、菲涅尔边缘反射、
 /// 虹彩薄膜、三光源高光（主光跟随手指）、底部焦散、SDF 液态轮廓微扰、
-/// 卫星小球、安全分进度环（分数变化时平滑增长）。算法与视觉对标
-/// D:\Zcode\liquid-glass\index-v2.html 的 WebGL 样板。
+/// 卫星小球、安全分进度环（分数变化时平滑增长）.算法与视觉对标
+/// D:\Zcode\liquid-glass\index-v2.html 的 WebGL 样板.
 ///
-/// ⚠️ 着色器在 LiquidGlassOrb.metal，需一并加入 App target。
-/// iOS 17 以下：自动回退为旧的圆环进度样式。
+/// ⚠️ 着色器在 LiquidGlassOrb.metal，需一并加入 App target.
+/// iOS 17 以下：自动回退为旧的圆环进度样式.
 struct LiquidGlassOrbView: View {
     var score: Int
     var tint: Color
@@ -37,7 +37,7 @@ struct LiquidGlassOrbView: View {
     private func shaderRect(size: CGSize, t: Double) -> some View {
         // 兼容不同 SDK：ShaderLibrary 下标在新旧系统上返回类型不一
         //（ShaderFunction / Optional<ShaderFunction>），显式收进 Optional 再解包，
-        // 两种皆可编译；着色器函数缺失时回退占位背景（避免运行时崩溃）。
+        // 两种皆可编译；着色器函数缺失时回退占位背景（避免运行时崩溃）.
         // Shader 正确签名：init(function: ShaderFunction, arguments: [Shader.Argument])
         let fnOpt: ShaderFunction? = ShaderLibrary.liquidGlassOrb
         if let fn = fnOpt {

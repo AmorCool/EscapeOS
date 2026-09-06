@@ -2,9 +2,9 @@
 //  SSHServerService.swift
 //  EscapeSpace
 //
-//  SSH 无线调试服务（v0.3.63）——路线 A：app 内嵌 Citadel（swift-nio-ssh）SSH 服务端。
+//  SSH 无线调试服务（v0.3.63）——路线 A：app 内嵌 Citadel（swift-nio-ssh）SSH 服务端.
 //  用途：电脑 `ssh escape@<手机IP> -p 2222` 无线连接设备，执行内置诊断命令，
-//  免去爱思导出日志的来回折腾。
+//  免去爱思导出日志的来回折腾.
 //
 //  安全模型：
 //   - 仅监听局域网（本地网络权限保护，外网不可达）
@@ -91,7 +91,7 @@ final class SSHServerService: NSObject, ObservableObject {
     var canStart: Bool { hasSetPassword }
 
     /// Debug 模式：开启后每次启动 App 自动拉起 SSH 服务（无需手动点启动），
-    /// 便于随时无线连进来排查日志。
+    /// 便于随时无线连进来排查日志.
     static let debugModeKey = "ssh.debugMode"
     var debugMode: Bool {
         get { UserDefaults.standard.bool(forKey: Self.debugModeKey) }
@@ -405,9 +405,9 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             guard let s = try? String(contentsOf: target, encoding: .utf8) else { return "非 UTF-8 文本文件" }
             return s
                 case "invoke":
-            // v0.3.112 通用符号调用：任何二进制模块的任何导出符号都能调。
+            // v0.3.112 通用符号调用：任何二进制模块的任何导出符号都能调.
             // 此前硬编码的专用命令（模块名即符号名）已删除——那些是「模块的数据」，
-            // 不该出现在引擎代码里。用法：invoke <符号名>
+            // 不该出现在引擎代码里.用法：invoke <符号名>
             guard parts.count >= 2 else {
                 return "用法: invoke <符号名>   —— 调用当前二进制模块的导出符号（数据目录作参数传入）"
             }
@@ -446,9 +446,9 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             return "\(symName): 已调用（数据目录以参数传入）\n入口=\(sym) 前16字节: \(codeHex)\n结果: \(resultText)\n下一步: runlog 查看模块日志；若闪退见 go_stderr.log 的 [uloader-crash] 行"
 
         case "devcert":
-            // v0.3.130：远程触发开发证书创建（诊断/自测用）。
-            // 流程：生成密钥+CSR → 提交 Apple →（7460 自动吊销重试）→ 轮询取证书。
-            // execute 是同步函数 → 信号量等 Task 完成（整流程最多 ~40 秒）。
+            // v0.3.130：远程触发开发证书创建（诊断/自测用）.
+            // 流程：生成密钥+CSR → 提交 Apple →（7460 自动吊销重试）→ 轮询取证书.
+            // execute 是同步函数 → 信号量等 Task 完成（整流程最多 ~40 秒）.
             let sem = DispatchSemaphore(value: 0)
             var devcertResult = ""
             Task {
@@ -464,9 +464,9 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             return "devcert: \(devcertResult)\n详情: logs"
 
         case "mlog":
-            // 读模块数据目录下的任意文件。
+            // 读模块数据目录下的任意文件.
             // 注意：不能用通用 cat —— 它基于 FileManager.documentDirectory，而模块数据目录
-            // 在 LC 下位于 NSHomeDirectory() 之下，两者不是同一棵树（v0.3.74 实锤）。
+            // 在 LC 下位于 NSHomeDirectory() 之下，两者不是同一棵树（v0.3.74 实锤）.
             let binID = Self.firstBinaryModuleID()
             let dataDir = ModuleService.shared.dataURL(for: binID)
             let name = parts.count > 1 ? parts[1] : "log/log.log"
@@ -503,7 +503,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let all = s.components(separatedBy: "\n").filter { !$0.isEmpty }
             return all.isEmpty ? "（空）" : all.suffix(min(max(n, 1), 400)).joined(separator: "\n")
         case "luaeval", "luaexec":
-            // v0.3.95：Lua 模块宿主（Rust+mlua，编进 App）。luaeval=表达式求值，luaexec=语句块。
+            // v0.3.95：Lua 模块宿主（Rust+mlua，编进 App）.luaeval=表达式求值，luaexec=语句块.
             let code = String(raw.dropFirst(cmd.count)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !code.isEmpty else { return "用法: \(cmd) <lua 表达式/代码>" }
             let outPath = ModuleService.shared.dataURL(for: Self.firstBinaryModuleID())

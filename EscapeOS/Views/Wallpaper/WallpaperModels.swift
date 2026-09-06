@@ -1,6 +1,6 @@
 import Foundation
 
-/// 一个已导入的 .tendies 壁纸包在 EscapeSpace 中的表示。
+/// 一个已导入的 .tendies 壁纸包在 EscapeSpace 中的表示.
 struct TendiesObject: Identifiable, Codable {
     var id = UUID()
     var name: String
@@ -10,7 +10,7 @@ struct TendiesObject: Identifiable, Codable {
     var targetDescr: PBPath = .wpKit
 }
 
-/// PosterBoard 三种 descriptor 目标路径。
+/// PosterBoard 三种 descriptor 目标路径.
 enum PBPath: String, Codable, CaseIterable {
     case wpKit
     case mercury

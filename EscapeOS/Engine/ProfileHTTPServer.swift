@@ -2,14 +2,14 @@ import Foundation
 import Darwin
 
 /// 一个极简的本地 HTTP 服务器，用于把生成的 .mobileconfig 描述文件
-/// 通过 Safari 下载的方式交给系统安装。
+/// 通过 Safari 下载的方式交给系统安装.
 ///
 /// 使用方式：
 ///   let port = try ProfileHTTPServer.shared.start(payload: data, filename: "blocked.mobileconfig")
 ///   UIApplication.shared.open(URL(string: "http://127.0.0.1:\(port)/")!)
 ///
 /// 服务器会返回一个自动跳转页面，随后把文件以
-/// `application/x-apple-aspen-config` MIME 类型输出，触发 iOS 的描述文件安装流程。
+/// `application/x-apple-aspen-config` MIME 类型输出，触发 iOS 的描述文件安装流程.
 final class ProfileHTTPServer: NSObject {
     static let shared = ProfileHTTPServer()
 
@@ -25,7 +25,7 @@ final class ProfileHTTPServer: NSObject {
         return _port
     }
 
-    /// 启动本地服务器并返回实际监听的端口。失败时抛出错误。
+    /// 启动本地服务器并返回实际监听的端口.失败时抛出错误.
     @discardableResult
     func start(payload: Data, filename: String = "profile.mobileconfig") throws -> UInt16 {
         stop()
@@ -88,7 +88,7 @@ final class ProfileHTTPServer: NSObject {
         return port
     }
 
-    /// 关闭监听 socket，让后台线程退出。
+    /// 关闭监听 socket，让后台线程退出.
     func stop() {
         lock.lock()
         let fd = listenFd
@@ -99,7 +99,7 @@ final class ProfileHTTPServer: NSObject {
         if fd >= 0 {
             close(fd)
         }
-        // 关闭监听 socket 后 accept() 会返回错误，线程自然退出。
+        // 关闭监听 socket 后 accept() 会返回错误，线程自然退出.
     }
 
     @objc private func run() {
@@ -116,7 +116,7 @@ final class ProfileHTTPServer: NSObject {
     }
 
     private func handle(client: Int32) {
-        // 读取 HTTP 请求头（直到 \r\n\r\n）。
+        // 读取 HTTP 请求头（直到 \r\n\r\n）.
         var buffer = Data()
         var temp = [UInt8](repeating: 0, count: 1024)
         while buffer.range(of: Data([0x0D, 0x0A, 0x0D, 0x0A])) == nil {
@@ -125,7 +125,7 @@ final class ProfileHTTPServer: NSObject {
             buffer.append(contentsOf: temp[0..<n])
         }
 
-        // 解析请求行，例如 "GET /blocked.mobileconfig HTTP/1.1"。
+        // 解析请求行，例如 "GET /blocked.mobileconfig HTTP/1.1".
         guard let lineEnd = buffer.firstIndex(of: 0x0D),
               let line = String(data: buffer[..<lineEnd], encoding: .utf8),
               let path = line.split(separator: " ").dropFirst().first.map(String.init) else {
@@ -177,7 +177,7 @@ final class ProfileHTTPServer: NSObject {
               <div class="card">
                 <div class="spinner"></div>
                 <h1>正在下载描述文件…</h1>
-                <p>完成后将自动跳转至“设置”安装。</p>
+                <p>完成后将自动跳转至“设置”安装.</p>
               </div>
             </body>
             </html>

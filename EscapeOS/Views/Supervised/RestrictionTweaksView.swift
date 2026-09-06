@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - 限制开关（移植自 Lithium Restrictions）
 
-/// 单条限制开关（可能联动多个 payload key）。
+/// 单条限制开关（可能联动多个 payload key）.
 struct SupervisedRestrictionItem: Identifiable {
     let id = UUID()
     let name: String
@@ -10,7 +10,7 @@ struct SupervisedRestrictionItem: Identifiable {
     let warning: String?
 }
 
-/// 一组限制开关。
+/// 一组限制开关.
 struct SupervisedRestrictionSection: Identifiable {
     let id = UUID()
     let name: String
@@ -20,27 +20,27 @@ struct SupervisedRestrictionSection: Identifiable {
 }
 
 extension SupervisedRestrictionSection {
-    /// 本地化后的限制目录（中文）。
+    /// 本地化后的限制目录（中文）.
     static let all: [SupervisedRestrictionSection] = [
         SupervisedRestrictionSection(name: "App", icon: "apps.iphone", minVersion: 0, items: [
             SupervisedRestrictionItem(name: "App Store", keys: ["allowUIAppInstallation"], warning: nil),
             SupervisedRestrictionItem(name: "安装与卸载应用", keys: ["allowAppInstallation", "allowAppRemoval"], warning: nil),
             SupervisedRestrictionItem(name: "应用内购买", keys: ["allowInAppPurchases"], warning: nil),
             SupervisedRestrictionItem(name: "Apple Music 服务", keys: ["allowMusicService", "allowRadioService"], warning: nil),
-            SupervisedRestrictionItem(name: "图书商店", keys: ["allowBookstore"], warning: "若你使用依赖图书商店的漏洞工具（如 Nugget），在 iOS 26.2 开发者测试版及更早版本上请勿关闭此项，否则会破坏漏洞所需的下载能力。")
+            SupervisedRestrictionItem(name: "图书商店", keys: ["allowBookstore"], warning: "若你使用依赖图书商店的漏洞工具（如 Nugget），在 iOS 26.2 开发者测试版及更早版本上请勿关闭此项，否则会破坏漏洞所需的下载能力.")
         ]),
         SupervisedRestrictionSection(name: "系统功能", icon: "gearshape", minVersion: 0, items: [
             SupervisedRestrictionItem(name: "截屏", keys: ["allowScreenShot"], warning: nil),
             SupervisedRestrictionItem(name: "Siri", keys: ["allowAssistant"], warning: nil),
             SupervisedRestrictionItem(name: "游戏中心", keys: ["allowGameCenter"], warning: nil),
-            SupervisedRestrictionItem(name: "屏幕使用时间", keys: ["allowEnablingRestrictions"], warning: "关闭后可能影响“屏幕使用时间”设置，风险自负。"),
+            SupervisedRestrictionItem(name: "屏幕使用时间", keys: ["allowEnablingRestrictions"], warning: "关闭后可能影响“屏幕使用时间”设置，风险自负."),
             SupervisedRestrictionItem(name: "Safari", keys: ["allowSafari"], warning: nil),
             SupervisedRestrictionItem(name: "相机", keys: ["allowCamera"], warning: nil)
         ]),
         SupervisedRestrictionSection(name: "共享与外部", icon: "sharing", minVersion: 0, items: [
-            SupervisedRestrictionItem(name: "Apple Watch 配对", keys: ["allowPairedWatch"], warning: "若已配对手表，关闭会导致手表取消配对并恢复出厂。"),
+            SupervisedRestrictionItem(name: "Apple Watch 配对", keys: ["allowPairedWatch"], warning: "若已配对手表，关闭会导致手表取消配对并恢复出厂."),
             SupervisedRestrictionItem(name: "近距离设置新设备", keys: ["allowProximitySetupToNewDevice"], warning: nil),
-            SupervisedRestrictionItem(name: "NFC", keys: ["allowNFC"], warning: "若有依赖 NFC 的卡片 / 通行证，关闭后将无法使用。"),
+            SupervisedRestrictionItem(name: "NFC", keys: ["allowNFC"], warning: "若有依赖 NFC 的卡片 / 通行证，关闭后将无法使用."),
             SupervisedRestrictionItem(name: "AirDrop", keys: ["allowAirDrop"], warning: nil)
         ]),
         SupervisedRestrictionSection(name: "Apple 智能", icon: "sparkles", minVersion: 18.1, items: [
@@ -104,7 +104,7 @@ struct RestrictionTweaksView: View {
             } header: {
                 Label("OTA 更新", systemImage: "arrow.down.circle")
             } footer: {
-                Text("最多可延迟 90 天（约 3 个月）。若当前系统版本高于目标版本，延迟更新不会生效。")
+                Text("最多可延迟 90 天（约 3 个月）.若当前系统版本高于目标版本，延迟更新不会生效.")
             }
 
             // 应用隐藏入口
@@ -113,7 +113,7 @@ struct RestrictionTweaksView: View {
                     Label("应用隐藏", systemImage: "eye.slash")
                 }
             } footer: {
-                Text("进入后可隐藏指定 App（同时将其从“设置”与 App 资源库中移除，数据保留）。")
+                Text("进入后可隐藏指定 App（同时将其从“设置”与 App 资源库中移除，数据保留）.")
             }
 
             // 限制分组
@@ -198,12 +198,12 @@ struct RestrictionTweaksView: View {
 
     // MARK: - 辅助
 
-    /// PayloadContent[0]（NSMutableDictionary）。
+    /// PayloadContent[0]（NSMutableDictionary）.
     private func payloadContent() -> NSMutableDictionary? {
         (rsCurrentDict["PayloadContent"] as? NSArray)?.firstObject as? NSMutableDictionary
     }
 
-    /// 多 key 联动的开关绑定。
+    /// 多 key 联动的开关绑定.
     private func restrictionBinding(_ keys: [String]) -> Binding<Bool> {
         Binding(get: {
             guard let pl = payloadContent() else { return true }

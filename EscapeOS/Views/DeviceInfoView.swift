@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// v0.3.208：设备信息面板 —— iDescriptor 完整字段（基础/硬件/序列号/网络/存储）。
-/// 序列号/UDID/IMEI/ECID/MLB 等敏感字段：统一小眼睛显示/隐藏 + 长按复制。
+/// v0.3.208：设备信息面板 —— iDescriptor 完整字段（基础/硬件/序列号/网络/存储）.
+/// 序列号/UDID/IMEI/ECID/MLB 等敏感字段：统一小眼睛显示/隐藏 + 长按复制.
 struct DeviceInfoView: View {
     @State private var info: DeviceInfoModel?
     @State private var errorText: String?

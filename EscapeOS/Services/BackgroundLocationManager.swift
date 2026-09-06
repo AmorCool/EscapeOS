@@ -2,10 +2,10 @@
 //  BackgroundLocationManager.swift
 //  EscapeSpace
 //
-//  后台位置更新保活。移植自 StikPair / StikDebug：
+//  后台位置更新保活.移植自 StikPair / StikDebug：
 //  通过持续请求位置更新（精度极低、距离过滤最大），
 //  使应用在后台/锁屏时仍被视为「正在使用位置服务」，
-//  从而延缓 Bonjour 注册被系统 SRP sweeper 回收。
+//  从而延缓 Bonjour 注册被系统 SRP sweeper 回收.
 //
 
 import CoreLocation
@@ -26,7 +26,7 @@ final class BackgroundLocationManager: NSObject, CLLocationManagerDelegate {
         locationManager.pausesLocationUpdatesAutomatically = false
     }
 
-    /// 持久开启（无线配对期间调用）。
+    /// 持久开启（无线配对期间调用）.
     func start() {
         isRunning = true
         switch locationManager.authorizationStatus {
@@ -41,13 +41,13 @@ final class BackgroundLocationManager: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 持久关闭（配对结束 / sheet 关闭时调用）。
+    /// 持久关闭（配对结束 / sheet 关闭时调用）.
     func stop() {
         isRunning = false
         locationManager.stopUpdatingLocation()
     }
 
-    /// 临时请求开启（计数器模式）。
+    /// 临时请求开启（计数器模式）.
     func requestStart() {
         activityCount += 1
         if activityCount == 1, UserDefaults.standard.bool(forKey: "keepAliveLocation") {
@@ -55,7 +55,7 @@ final class BackgroundLocationManager: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 临时请求关闭。
+    /// 临时请求关闭.
     func requestStop() {
         activityCount = max(activityCount - 1, 0)
         if activityCount == 0 {
@@ -75,6 +75,6 @@ final class BackgroundLocationManager: NSObject, CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         // 室内无 GPS 等导致定位失败是正常的；
-        // 只要 manager 在运行即可达到保活目的，不必真正 fix 到位置。
+        // 只要 manager 在运行即可达到保活目的，不必真正 fix 到位置.
     }
 }

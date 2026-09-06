@@ -136,7 +136,7 @@ struct WebClipView: View {
     private func buildAndInstall() {
         guard !label.trimmingCharacters(in: .whitespaces).isEmpty,
               !url.trimmingCharacters(in: .whitespaces).isEmpty else {
-            errorMessage = "请先填写标题与网页地址。"
+            errorMessage = "请先填写标题与网页地址."
             showError = true
             return
         }
@@ -189,7 +189,7 @@ struct WebClipView: View {
         }
     }
 
-    /// 将图标裁剪为 256×256 居中正方形（与 Lithium 一致）。
+    /// 将图标裁剪为 256×256 居中正方形（与 Lithium 一致）.
     private func cropImage(_ data: Data) -> Data {
         guard let image = UIImage(data: data) else { return data }
         let target = CGSize(width: 256, height: 256)

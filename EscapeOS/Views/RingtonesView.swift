@@ -58,10 +58,14 @@ struct RingtonesView: View {
         List {
             if let errorMessage {
                 Section {
-                    Text(errorMessage)
-                        .font(.footnote)
-                        .foregroundColor(.red)
-                    Button("重试") { reload() }
+                    if PairingGate.isPairingError(errorMessage) {
+                        PairingGuideCard()
+                    } else {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundColor(.red)
+                        Button("重试") { reload() }
+                    }
                 }
             }
 

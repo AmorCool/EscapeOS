@@ -1,29 +1,29 @@
 import Foundation
 
-/// 配置导入服务（汉化移植自 SideInstaller 的「配对 → 安装到应用」）。
+/// 配置导入服务（汉化移植自 SideInstaller 的「配对 → 安装到应用」）.
 ///
 /// 把当前配对文件（Documents/pairingFile.plist）写入设备上已安装的
 /// 「支持列表」应用的容器 Documents 目录（如 SideStore 的
 /// ALTPairingFile.mobiledevicepairing、Feather/StikDebug 的 pairingFile.plist），
-/// 让这些应用能直接使用 EscapeSpace 的配对身份连上同一台设备。
+/// 让这些应用能直接使用 EscapeSpace 的配对身份连上同一台设备.
 ///
 /// 传输链路与 JIT / 虚拟定位完全一致：LocalDevVPN 隧道（RPPairing）→
-/// house_arrest + AFC。不涉及原版 SideInstaller 的 LocalNetworkAuthorization
+/// house_arrest + AFC.不涉及原版 SideInstaller 的 LocalNetworkAuthorization
 /// （NWBrowser/NWListener 本地网络权限探测）——那是它在生成配对文件时用来
 /// 请求权限的，LiveContainer guest 等嵌入环境拿不到该权限；我们只做「写入」，
-/// 用已有配对文件 + 系统 VPN 隧道，天然绕开这个 LC 兼容性问题。
+/// 用已有配对文件 + 系统 VPN 隧道，天然绕开这个 LC 兼容性问题.
 final class PairingInstallService {
 
     static let shared = PairingInstallService()
     private init() {}
 
     /// 支持接收配对文件的应用表（移植自 SideInstaller 的 PairingTargetApp.all，
-    /// 与 iLoader 的 PAIRING_APPS 一致）。remoteRelativePath 相对目标应用的
-    /// Documents 目录。
+    /// 与 iLoader 的 PAIRING_APPS 一致）.remoteRelativePath 相对目标应用的
+    /// Documents 目录.
     struct PairingTargetApp: Identifiable, Equatable {
         let name: String
         let remoteRelativePath: String
-        /// 限制匹配 bundle id 包含该字符串（区分 App Store 版与侧载版 StikDebug）。
+        /// 限制匹配 bundle id 包含该字符串（区分 App Store 版与侧载版 StikDebug）.
         let bundleIDContains: String?
 
         var id: String { name }
@@ -68,7 +68,7 @@ final class PairingInstallService {
         ]
     }
 
-    /// 表项与安装的 bundle id 配对后的目标。
+    /// 表项与安装的 bundle id 配对后的目标.
     struct InstalledTarget: Identifiable, Equatable {
         let app: PairingTargetApp
         let bundleID: String
@@ -78,7 +78,7 @@ final class PairingInstallService {
         var remoteRelativePath: String { app.remoteRelativePath }
     }
 
-    /// EscapeSpace 的配对文件路径（与「应用管理」/ JIT / 虚拟定位共用）。
+    /// EscapeSpace 的配对文件路径（与「应用管理」/ JIT / 虚拟定位共用）.
     private var pairingPath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
@@ -115,7 +115,7 @@ final class PairingInstallService {
 
     private func createTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）.")
         }
 
         var pairingFile: OpaquePointer?
@@ -173,7 +173,7 @@ final class PairingInstallService {
     // MARK: - 扫描支持的应用
 
     /// 通过安装代理列出已安装应用，匹配支持表（按显示名，侧载版 StikDebug
-    /// 走 bundle id 分支），保持表顺序。
+    /// 走 bundle id 分支），保持表顺序.
     func scanTargets() throws -> [InstalledTarget] {
         var tunnel = try createTunnel()
         defer { tunnel.free() }
@@ -245,7 +245,7 @@ final class PairingInstallService {
 
     // MARK: - 写入配对文件
 
-    /// 把配对文件写入一个目标应用，读回验证字节数。
+    /// 把配对文件写入一个目标应用，读回验证字节数.
     @discardableResult
     func installPairing(into target: InstalledTarget) throws -> Int {
         let data = try Data(contentsOf: URL(fileURLWithPath: pairingPath))
@@ -255,7 +255,7 @@ final class PairingInstallService {
                              data: data)
     }
 
-    /// 写入全部目标（一个失败不阻塞其余，返回失败列表）。
+    /// 写入全部目标（一个失败不阻塞其余，返回失败列表）.
     func installPairing(intoAll targets: [InstalledTarget]) throws -> [String] {
         var failures: [String] = []
         for target in targets {
@@ -269,7 +269,7 @@ final class PairingInstallService {
     }
 
     /// house_arrest + AFC 写入并读回验证（对齐 SideInstaller 的
-    /// DeviceConnection.writeFile）。
+    /// DeviceConnection.writeFile）.
     @discardableResult
     private func writeFile(intoBundleID bundleID: String,
                            remoteRelativePath: String,
@@ -287,7 +287,7 @@ final class PairingInstallService {
         }
         guard ha != nil else { throw makeError("house_arrest 客户端为空") }
 
-        // vend_documents 会消费 ha（成功失败都一样），绝不能 free。
+        // vend_documents 会消费 ha（成功失败都一样），绝不能 free.
         var afc: OpaquePointer?
         let vendErr = bundleID.withCString { house_arrest_vend_documents(ha, $0, &afc) }
         if let vendErr {
@@ -296,7 +296,7 @@ final class PairingInstallService {
         guard let afc else { throw makeError("获取容器 AFC 客户端失败") }
         defer { afc_client_free(afc) }
 
-        // vend_documents 的根在容器本身（容器根只读），路径带 /Documents/。
+        // vend_documents 的根在容器本身（容器根只读），路径带 /Documents/.
         let remotePath = "/Documents/\(remoteRelativePath)"
         makeRemoteDirectories(afc, forFileAt: remotePath)
 
@@ -320,7 +320,7 @@ final class PairingInstallService {
             throw error(from: ffiError, fallback: "关闭写入句柄失败（写入未提交）")
         }
 
-        // 读回验证。
+        // 读回验证.
         var rfile: OpaquePointer?
         if let ffiError = remotePath.withCString({ afc_file_open(afc, $0, AfcRdOnly, &rfile) }) {
             throw error(from: ffiError, fallback: "读回打开失败")
@@ -340,7 +340,7 @@ final class PairingInstallService {
         return rlen
     }
 
-    /// 逐级创建目标文件的父目录（AFC 无 mkdir -p）。
+    /// 逐级创建目标文件的父目录（AFC 无 mkdir -p）.
     private func makeRemoteDirectories(_ afc: OpaquePointer, forFileAt remoteFilePath: String) {
         let components = remoteFilePath.split(separator: "/").dropLast()
         var path = ""

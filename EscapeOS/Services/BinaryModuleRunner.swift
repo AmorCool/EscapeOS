@@ -132,9 +132,9 @@ final class BinaryModuleRunner: ObservableObject {
             setError(module.id, "启动失败: \(error.localizedDescription)")
         }
     }
-    /// 停止模块（外部进程型 SIGKILL）。
+    /// 停止模块（外部进程型 SIGKILL）.
     /// 进程内常驻模块不在此停止：由模块通过 actions 声明桥接停止符号（type=bridge），
-    /// 宿主只提供执行接口，语义完全由模块决定。
+    /// 宿主只提供执行接口，语义完全由模块决定.
     func stop(module: EscapeModule) {
         guard let pid = runningProcesses[module.id] else { return }
         guard pid > 0 else {
@@ -281,7 +281,7 @@ final class BinaryModuleRunner: ObservableObject {
             // 真证书与 App 同 TeamID → 库验证通过 → 文件映射有效（本环境唯一活路）.
             // v0.3.163：不做自动签发——Apple 新签发证书与主程序（LC/侧载工具所持）
             // serial 必然不同，真机实锤 iOS 27 beta 要求 dlopen 库签名证书与主程序
-            // **同款**（serial 级，identifier 已由 useMainIdent 保证）。自动签发只会
+            // **同款**（serial 级，identifier 已由 useMainIdent 保证）.自动签发只会
             // 覆盖用户导入的同款 p12，把可用状态打成不可用（162 真机教训）.
             if DeveloperCertStore.shared.hasCert, DeveloperCertStore.shared.jitFreeMode {
                     appendLog(logFile, "[host] 开发证书可用 → 真证书签名")

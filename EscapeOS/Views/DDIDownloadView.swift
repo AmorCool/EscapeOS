@@ -1,10 +1,10 @@
 import SwiftUI
 import UIKit
 
-/// 开发者镜像（DDI / DMG）下载页。
+/// 开发者镜像（DDI / DMG）下载页.
 /// 参考 StikDebug 的 Redownload DDI：下载 Xcode_iOS_DDI_Personalized 中的
 /// BuildManifest.plist、Image.dmg、Image.dmg.trustcache 到 Documents/DDI/，
-/// 完成后打包成 DMG.zip 并弹出系统分享。
+/// 完成后打包成 DMG.zip 并弹出系统分享.
 struct DDIDownloadView: View {
     @State private var state = DDIDownloadState()
     @State private var shareURL: URL?

@@ -1,7 +1,7 @@
 import Foundation
 
 /// WiFi 射频控制桥（v0.3.105）—— RSD 隧道 MCInstall `SetWiFiPowerState`
-/// （pymobiledevice3 `profile set-wifi-power` 同款）。
+/// （pymobiledevice3 `profile set-wifi-power` 同款）.
 ///
 /// 分工：
 /// - Swift：rp_pairing 隧道建立（配对文件 + LocalDevVPN IP），建好后把
@@ -41,7 +41,7 @@ final class WiFiPowerBridge {
         }
     }
 
-    /// 向 Lua 宿主注册原生 wifi handler；幂等。
+    /// 向 Lua 宿主注册原生 wifi handler；幂等.
     func ensureRegistered() {
         lock.lock(); defer { lock.unlock() }
         guard !handlerRegistered else { return }
@@ -51,8 +51,8 @@ final class WiFiPowerBridge {
 
     // MARK: - 隧道建立 + 所有权移交（同步阻塞，供 handler 调用）
 
-    /// 建 rp_pairing 隧道并把 adapter/handshake 移交给 Rust。
-    /// 失败抛错（错误文本经 errOut 回 Lua）。
+    /// 建 rp_pairing 隧道并把 adapter/handshake 移交给 Rust.
+    /// 失败抛错（错误文本经 errOut 回 Lua）.
     func prepareTunnelAndHandover() throws {
         // 1) 配对文件
         guard FileManager.default.fileExists(atPath: pairingPath) else {
@@ -128,8 +128,8 @@ final class WiFiPowerBridge {
     }
 }
 
-/// 注册进 Lua 宿主的原生 handler（C 函数指针；由 Rust wifi_set_power 两阶段调用）。
-/// 阶段 1：建隧道 + 移交所有权；阶段 2 由 Rust 完成 MCInstall 协议。
+/// 注册进 Lua 宿主的原生 handler（C 函数指针；由 Rust wifi_set_power 两阶段调用）.
+/// 阶段 1：建隧道 + 移交所有权；阶段 2 由 Rust 完成 MCInstall 协议.
 let escapeos_wifi_power_cfn: @convention(c) (Int32, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Int32 = { on, errOut in
     do {
         try WiFiPowerBridge.shared.prepareTunnelAndHandover()

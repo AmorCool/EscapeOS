@@ -2,10 +2,10 @@ import Foundation
 import CommonCrypto
 import CryptoKit
 
-/// Apple GrandSlam (gsa.apple.com) SRP-6a 认证上下文。
+/// Apple GrandSlam (gsa.apple.com) SRP-6a 认证上下文.
 /// 对应 StosSign 的 GSAContext，但使用本项目自带的纯 Swift `SRP6a` 引擎 +
 /// 原生 `CommonCrypto`(PBKDF2/AES-CBC) 与 `CryptoKit`(SHA256/HMAC/AES-GCM)，
-/// 不依赖任何第三方 SwiftPM 包（swift-srp / swift-crypto / CryptoSwift 在 Theos 下无法编译）。
+/// 不依赖任何第三方 SwiftPM 包（swift-srp / swift-crypto / CryptoSwift 在 Theos 下无法编译）.
 final class GSAAuth {
     let username: String
     let password: String
@@ -47,8 +47,8 @@ final class GSAAuth {
         // - sessionKey = S 的 256 字节（sharedSecret.bytes），用于 M2 验证与 spd 的 AES-CBC 解密
         //   （decryptedCBC 用 HMAC(key: sessionKey) 派生，HMAC 允许任意长度 key）；
         // - 进入 apptokens 前 sessionKey 会被 spd 里的 sk 覆盖（Apple 下发的 32 字节密钥），
-        //   checksum / GCM 解密都用那个 sk，与这里无关。
-        // - K = SHA256(S) 仅用于 M1/M2 证明（hashSharedSecret）。
+        //   checksum / GCM 解密都用那个 sk，与这里无关.
+        // - K = SHA256(S) 仅用于 M1/M2 证明（hashSharedSecret）.
         let (S, K) = SRP6a.calculateSharedSecret(
             private: clientPrivateKey,
             x: BigInt(bytes: x),
@@ -113,7 +113,7 @@ final class GSAAuth {
     // MARK: - 自检（对齐 Python 参考实现生成的固定向量，登录前运行并写入诊断日志）
 
     /// 用固定输入验证 x 推导与 SRP 数学（BigInt modPow / 乘除 / 证明），
-    /// 任一 FAIL 即说明实现与原版不一致——这是排查 -22406 的关键证据。
+    /// 任一 FAIL 即说明实现与原版不一致——这是排查 -22406 的关键证据.
     static func runSelfTest() -> String {
         var lines = ["SRP 自检开始"]
         let hexOf: ([UInt8]) -> String = { $0.map { String(format: "%02x", $0) }.joined() }

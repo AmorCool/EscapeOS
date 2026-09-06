@@ -1,9 +1,9 @@
 import Foundation
 import UIKit
 
-/// v0.3.208：设备信息（照搬 iDescriptor 完整字段清单）。
+/// v0.3.208：设备信息（照搬 iDescriptor 完整字段清单）.
 /// 数据源：lockdown 整棵字典（一次 GetValue）+ com.apple.disk_usage 域 +
-/// AFC device_info + DiagnosticsRelay mobilegestalt + sysctl 本机。
+/// AFC device_info + DiagnosticsRelay mobilegestalt + sysctl 本机.
 struct DeviceInfoModel {
     // 顶部/基础
     var modelName: String          // Marketing 机型名
@@ -46,8 +46,8 @@ struct DeviceInfoModel {
 }
 
 enum DeviceInfoService {
-    /// 收集完整设备信息（lockdown + AFC + MobileGestalt + sysctl）。
-    /// 同步阻塞——调用方放到后台线程。
+    /// 收集完整设备信息（lockdown + AFC + MobileGestalt + sysctl）.
+    /// 同步阻塞——调用方放到后台线程.
     static func collectFull() throws -> DeviceInfoModel {
         let machine = stringSysctl("hw.machine") ?? "unknown"
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion

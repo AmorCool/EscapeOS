@@ -2,7 +2,7 @@ import Foundation
 
 /// 登录诊断日志：把 Apple 认证引擎每一步的关键事件（请求/响应/错误）记录到
 /// `Documents/LoginLogs/login.log`，支持在登录界面查看、复制与导出分享，便于排查
-/// Anisette / GrandSlam 握手失败的真实原因。
+/// Anisette / GrandSlam 握手失败的真实原因.
 final class LoginLogger {
     static let shared = LoginLogger()
 
@@ -10,7 +10,7 @@ final class LoginLogger {
     private var buffer: [String] = []
     private let maxBufferLines = 500
 
-    /// 日志文件位置（App 沙盒 Documents 内，LiveContainer 中同样可写、可被文件浏览器访问）。
+    /// 日志文件位置（App 沙盒 Documents 内，LiveContainer 中同样可写、可被文件浏览器访问）.
     var logFileURL: URL {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/LoginLogs")
@@ -33,7 +33,7 @@ final class LoginLogger {
         lock.unlock()
         appendToFile(line)
         // iOS 26 SDK 把 NSLog 的 variadic 形式标 unavailable，用 print 代替；
-        // print 仍然进 Apple 系统日志（Console.app 可见），仅 path 不同（用户日常习惯差异）。
+        // print 仍然进 Apple 系统日志（Console.app 可见），仅 path 不同（用户日常习惯差异）.
         print("[Login] \(message)")
     }
 
@@ -44,7 +44,7 @@ final class LoginLogger {
         try? FileManager.default.removeItem(at: logFileURL)
     }
 
-    /// 全部日志文本（内存缓冲 + 文件内容合并，去重）。
+    /// 全部日志文本（内存缓冲 + 文件内容合并，去重）.
     func fullLog() -> String {
         lock.lock()
         let mem = buffer

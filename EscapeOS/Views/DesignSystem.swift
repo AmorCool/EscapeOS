@@ -6,7 +6,7 @@ import UIKit
 /// category styling. Uses EscapeOS's own model fields (no localization system).
 enum AppTheme {
     /// Brand accent. System blue (semantic), adapts to light/dark mode.
-    /// 之前是暖橙，在浅色玻璃背景下显脏棕，按用户审美改为系统蓝。
+    /// 之前是暖橙，在浅色玻璃背景下显脏棕，按用户审美改为系统蓝.
     static let accent = Color(uiColor: .systemBlue)
     static let pageInset: CGFloat = 16
     static let appIconSize: CGFloat = 44

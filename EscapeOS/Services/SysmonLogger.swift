@@ -1,8 +1,8 @@
 import Foundation
 
 /// 进程管理诊断日志：sysmontap 内存查询每一步的关键事件记录到
-/// `Documents/SysmonLogs/sysmon.log`——独立于 LoginLogger，互不污染。
-/// 进程管理界面 toolbar 的日志按钮直接分享本文件。
+/// `Documents/SysmonLogs/sysmon.log`——独立于 LoginLogger，互不污染.
+/// 进程管理界面 toolbar 的日志按钮直接分享本文件.
 final class SysmonLogger {
     static let shared = SysmonLogger()
 
@@ -10,7 +10,7 @@ final class SysmonLogger {
     private var buffer: [String] = []
     private let maxBufferLines = 500
 
-    /// 日志文件位置（App 沙盒 Documents 内，文件浏览器可见）。
+    /// 日志文件位置（App 沙盒 Documents 内，文件浏览器可见）.
     var logFileURL: URL {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/SysmonLogs")
@@ -34,7 +34,7 @@ final class SysmonLogger {
         print("[Sysmon] \(message)")
     }
 
-    /// 全部日志文本（内存缓冲 + 文件内容合并，去重）。
+    /// 全部日志文本（内存缓冲 + 文件内容合并，去重）.
     func fullLog() -> String {
         lock.lock()
         let mem = buffer

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 崩溃分析：通过「配对文件 + LocalDevVPN」隧道读取本机崩溃 / 诊断日志
 /// （对应 iOS「设置 → 隐私与安全性 → 分析与改进」），支持查看内容、
-/// 批量选择（含全选）导出到本机与删除。
+/// 批量选择（含全选）导出到本机与删除.
 struct CrashLogView: View {
     @State private var entries: [CrashLogService.Entry] = []
     @State private var currentDir: String?
@@ -16,9 +16,9 @@ struct CrashLogView: View {
     @State private var toast: String?
     @State private var confirmDelete = false
     @State private var exporting = false
-    /// 批量操作中（导出 / 删除）：显示进度，禁用重复操作。
+    /// 批量操作中（导出 / 删除）：显示进度，禁用重复操作.
     @State private var busy = false
-    /// 进度文本（如「3 / 12」）。
+    /// 进度文本（如「3 / 12」）.
     @State private var progressText: String?
 
     private let service = CrashLogService.shared
@@ -37,9 +37,13 @@ struct CrashLogView: View {
                             .foregroundColor(.secondary)
                     }
                 } else if let errorMessage {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                    Button("重试") { reload() }
+                    if PairingGate.isPairingError(errorMessage) {
+                        PairingGuideCard(note: "崩溃分析还需要 LocalDevVPN 已连接.")
+                    } else {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                        Button("重试") { reload() }
+                    }
                 } else if entries.isEmpty {
                     Text("没有日志")
                         .foregroundColor(.secondary)
@@ -52,7 +56,7 @@ struct CrashLogView: View {
                 Text(currentDir.map { "目录：\($0)" } ?? "目录：/")
             } footer: {
                 if !loading && errorMessage == nil {
-                    Text("对应「设置 → 隐私与安全性 → 分析与改进」。支持批量导出 / 删除。")
+                    Text("对应「设置 → 隐私与安全性 → 分析与改进」.支持批量导出 / 删除.")
                 }
             }
         }
@@ -98,7 +102,7 @@ struct CrashLogView: View {
             }
         }
         .overlay {
-            // v0.2.125：批量导出 / 删除进度遮罩（旧版无进度、且导出会闪退）。
+            // v0.2.125：批量导出 / 删除进度遮罩（旧版无进度、且导出会闪退）.
             if busy {
                 VStack(spacing: 12) {
                     ProgressView()

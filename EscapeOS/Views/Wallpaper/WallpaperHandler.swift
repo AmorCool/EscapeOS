@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-/// 壁纸包导入错误。
+/// 壁纸包导入错误.
 enum WallpaperImportError: Error, LocalizedError {
     case notTendiesArchive
     case noDescriptors
@@ -12,9 +12,9 @@ enum WallpaperImportError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notTendiesArchive:
-            return "未识别到壁纸描述符，请确认文件为 .tendies 格式。"
+            return "未识别到壁纸描述符，请确认文件为 .tendies 格式."
         case .noDescriptors:
-            return "该压缩包内没有可应用的壁纸描述符。"
+            return "该压缩包内没有可应用的壁纸描述符."
         case .extractFailed(let m):
             return "解压失败：\(m)"
         case .persistFailed(let m):
@@ -25,17 +25,17 @@ enum WallpaperImportError: Error, LocalizedError {
     }
 }
 
-/// 负责解析 .tendies 壁纸包并准备 PosterBoard 描述符。
+/// 负责解析 .tendies 壁纸包并准备 PosterBoard 描述符.
 final class WallpaperHandler {
 
     private let fm = FileManager.default
 
-    /// 壁纸包持久化根目录（Documents/Wallpapers）。
+    /// 壁纸包持久化根目录（Documents/Wallpapers）.
     static var wallpapersFolder: URL {
         BackupPaths.documentsDirectory().appendingPathComponent("Wallpapers", isDirectory: true)
     }
 
-    /// 可被提取的系统描述符（来自 PosterBoard 容器）。
+    /// 可被提取的系统描述符（来自 PosterBoard 容器）.
     struct ExtractableDescriptor: Identifiable, Hashable {
         let id = UUID()
         let provider: PBPath
@@ -44,11 +44,11 @@ final class WallpaperHandler {
         let fileCount: Int
     }
 
-    /// 从 PosterBoard 容器中扫描可被提取的描述符。
+    /// 从 PosterBoard 容器中扫描可被提取的描述符.
     /// - Parameters:
-    ///   - pbContainerPath: PosterBoard 容器根路径。
-    ///   - sandbox: 用于消费沙盒扩展以读取 PosterBoard 容器。
-    /// - Returns: 每个 provider 目录下找到的描述符列表。
+    ///   - pbContainerPath: PosterBoard 容器根路径.
+    ///   - sandbox: 用于消费沙盒扩展以读取 PosterBoard 容器.
+    /// - Returns: 每个 provider 目录下找到的描述符列表.
     func extractableDescriptors(from pbContainerPath: String, using sandbox: SandboxEscape) throws -> [ExtractableDescriptor] {
         let handle = try sandbox.consume(path: pbContainerPath)
         defer { sandbox.release(handle) }
@@ -86,13 +86,13 @@ final class WallpaperHandler {
         return count
     }
 
-    /// 把选中的 PosterBoard 描述符导出为 .tendies 压缩包。
+    /// 把选中的 PosterBoard 描述符导出为 .tendies 压缩包.
     /// - Parameters:
-    ///   - descriptors: 要导出的描述符（可来自不同 provider）。
-    ///   - pbContainerPath: PosterBoard 容器根路径。
-    ///   - destination: 导出的 .tendies 文件目标路径。
-    ///   - sandbox: 用于消费沙盒扩展。
-    /// - Throws: 沙盒扩展失败或文件复制失败时抛出。
+    ///   - descriptors: 要导出的描述符（可来自不同 provider）.
+    ///   - pbContainerPath: PosterBoard 容器根路径.
+    ///   - destination: 导出的 .tendies 文件目标路径.
+    ///   - sandbox: 用于消费沙盒扩展.
+    /// - Throws: 沙盒扩展失败或文件复制失败时抛出.
     func exportTendies(
         descriptors: [ExtractableDescriptor],
         from pbContainerPath: String,
@@ -112,7 +112,7 @@ final class WallpaperHandler {
         let containerRoot = tempRoot.appendingPathComponent("container")
         defer { try? fm.removeItem(at: tempRoot) }
 
-        // 重建与导入器兼容的 container/.../descriptors/<name> 目录结构。
+        // 重建与导入器兼容的 container/.../descriptors/<name> 目录结构.
         for descriptor in descriptors {
             let relativeToProvider = descriptor.path.dropFirst(pbContainerPath.count)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -136,7 +136,7 @@ final class WallpaperHandler {
         try writer.finish()
     }
 
-    /// 从 .tendies 文件创建壁纸包对象，并将描述符持久化到沙盒。
+    /// 从 .tendies 文件创建壁纸包对象，并将描述符持久化到沙盒.
     func makeObject(from url: URL) throws -> TendiesObject {
         let data = try Data(contentsOf: url)
         let tempDir = fm.temporaryDirectory
@@ -152,7 +152,7 @@ final class WallpaperHandler {
         func descriptorURLs() -> [URL]? {
             var urls: [URL] = []
 
-            // 有时文件会多嵌套一层，先找到真正的根目录。
+            // 有时文件会多嵌套一层，先找到真正的根目录.
             if let realRoot = rootURLs.first(where: {
                 let name = $0.lastPathComponent
                 return !name.localizedCaseInsensitiveContains("descriptor")
@@ -165,7 +165,7 @@ final class WallpaperHandler {
                 }
             }
 
-            // 检查 1：目录名直接包含 descriptor / ordered-descriptor / video-descriptor。
+            // 检查 1：目录名直接包含 descriptor / ordered-descriptor / video-descriptor.
             for dirURL in rootURLs {
                 let dirName = dirURL.lastPathComponent
                 if dirName.localizedCaseInsensitiveContains("descriptor")
@@ -185,7 +185,7 @@ final class WallpaperHandler {
                 }
             }
 
-            // 检查 2：嵌套在 container 目录下，需要匹配三种目标路径之一。
+            // 检查 2：嵌套在 container 目录下，需要匹配三种目标路径之一.
             if let containerDir = rootURLs.first(where: { $0.lastPathComponent.localizedCaseInsensitiveContains("container") }) {
                 for option in PBPath.allCases {
                     let candidate = containerDir.appendingPathComponent(option.path)
@@ -229,7 +229,7 @@ final class WallpaperHandler {
         )
     }
 
-    /// 随机化描述符中的 identifier，避免与系统已有壁纸冲突。
+    /// 随机化描述符中的 identifier，避免与系统已有壁纸冲突.
     private func randomizeWallpaperIDs(_ descrURL: URL) {
         let id = Int.random(in: 9999...99999)
         guard let enumerator = fm.enumerator(at: descrURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
@@ -269,7 +269,7 @@ final class WallpaperHandler {
 
 extension WallpaperHandler {
 
-    /// 枚举 /var/mobile/Containers/Data/Application，查找 PosterBoard 容器路径。
+    /// 枚举 /var/mobile/Containers/Data/Application，查找 PosterBoard 容器路径.
     static func discoverPosterBoardContainer() -> String {
         let base = "/var/mobile/Containers/Data/Application"
         let paths = listDirectory(base)
@@ -284,7 +284,7 @@ extension WallpaperHandler {
     }
 
     private static func listDirectory(_ path: String) -> [String] {
-        // 跨容器目录在 LiveContainer 沙盒下列不出来，走 bad_query_list。
+        // 跨容器目录在 LiveContainer 沙盒下列不出来，走 bad_query_list.
         BadQueryLister.paths(at: path, maxInode: 100_000)
     }
 }

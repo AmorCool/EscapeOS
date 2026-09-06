@@ -1,7 +1,7 @@
 import MapKit
 import SwiftUI
 
-/// 地图图钉：液态玻璃「移除图钉」菜单 + 长按拖动（移植自 locus-ZH）。
+/// 地图图钉：液态玻璃「移除图钉」菜单 + 长按拖动（移植自 locus-ZH）.
 struct MapDropPin: View {
     var selected: Bool
     var isDragging: Bool
@@ -34,7 +34,7 @@ struct MapDropPin: View {
                 .shadow(color: .black.opacity(0.35), radius: isDragging ? 8 : 4, y: 2)
                 .scaleEffect(isDragging ? 1.12 : 1)
         }
-        // 图钉尖端对准坐标，菜单悬在上方。
+        // 图钉尖端对准坐标，菜单悬在上方.
         .padding(.bottom, 2)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -45,7 +45,7 @@ struct MapDropPin: View {
         .animation(.easeOut(duration: 0.15), value: isDragging)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(selected ? "已选中的图钉" : "地图图钉")
-        .accessibilityHint("轻点显示移除，长按拖动。")
+        .accessibilityHint("轻点显示移除，长按拖动.")
     }
 
     private var dragGesture: some Gesture {

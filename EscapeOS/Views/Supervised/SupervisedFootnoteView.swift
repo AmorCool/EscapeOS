@@ -2,9 +2,9 @@ import SwiftUI
 
 // MARK: - 锁屏页脚（监管，移植自 Lithium FootnoteView）
 
-/// 通过 `com.apple.shareddeviceconfiguration` 描述文件在锁屏底部添加页脚文字。
+/// 通过 `com.apple.shareddeviceconfiguration` 描述文件在锁屏底部添加页脚文字.
 /// 与「配置管理」里直接写入 `LockScreenFootnote` 的双轨并存：这里是描述文件路线，
-/// 不需要写系统配置目录，只要设备处于监督模式即可。
+/// 不需要写系统配置目录，只要设备处于监督模式即可.
 struct SupervisedFootnoteView: View {
     @State private var leadingText = ""   // IfLostReturnToMessage
     @State private var trailingText = ""  // AssetTagInformation
@@ -59,7 +59,7 @@ struct SupervisedFootnoteView: View {
             } header: {
                 Label("内容", systemImage: "text.line.first.and.arrowtriangle.forward")
             } footer: {
-                Text("对应描述文件字段 IfLostReturnToMessage 与 AssetTagInformation，安装后显示在锁屏底部。")
+                Text("对应描述文件字段 IfLostReturnToMessage 与 AssetTagInformation，安装后显示在锁屏底部.")
             }
         }
         .listStyle(.insetGrouped)

@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - 通知管理（移植自 Lithium NotificationsView）
 
-/// 已登记的通知管理项（名称 + Bundle ID + 是否允许通知）。
+/// 已登记的通知管理项（名称 + Bundle ID + 是否允许通知）.
 struct NotificationEntry: Identifiable, Codable {
     var id = UUID()
     var name: String
@@ -42,7 +42,7 @@ struct NotificationManageView: View {
                     Label("从已安装应用选择", systemImage: "list.bullet")
                 }
             } footer: {
-                Text("关闭某 App 的开关后将完全收不到它的通知（可能包含关键提醒）。Bundle ID 区分大小写。")
+                Text("关闭某 App 的开关后将完全收不到它的通知（可能包含关键提醒）.Bundle ID 区分大小写.")
             }
 
             Section {
@@ -142,7 +142,7 @@ struct NotificationManageView: View {
             if isPickerLoading {
                 ProgressView("正在枚举已安装应用…")
             } else if installedApps.isEmpty {
-                ContentUnavailableView("暂无应用", systemImage: "app", description: Text(pickerMessage.isEmpty ? "未找到已安装应用。" : pickerMessage))
+                ContentUnavailableView("暂无应用", systemImage: "app", description: Text(pickerMessage.isEmpty ? "未找到已安装应用." : pickerMessage))
             } else {
                 List(installedApps) { app in
                     Button {
@@ -210,7 +210,7 @@ struct NotificationManageView: View {
         let nm = name.trimmingCharacters(in: .whitespaces)
         guard !bid.isEmpty else { return }
         if catalog.contains(where: { $0.bundleID == bid }) {
-            errorMessage = "该 Bundle ID 已存在。"
+            errorMessage = "该 Bundle ID 已存在."
             showError = true
             return
         }

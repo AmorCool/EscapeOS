@@ -1,14 +1,14 @@
 import Foundation
 
 /// 描述文件（provisioning profile）仓库（汉化移植自 StikDebug 的
-/// IdeviceFFIBridge + ProfileView 数据层）。
+/// IdeviceFFIBridge + ProfileView 数据层）.
 ///
 /// 数据来源：设备上的 **misagent** 服务（`misagent_copy_all`）返回设备全部的
 /// provisioning profiles——物理存储在设备的 `/var/mobile/Library/MobileDevice/
-/// Provisioning Profiles/`（每个文件为 <UUID>.mobileprovision）。
+/// Provisioning Profiles/`（每个文件为 <UUID>.mobileprovision）.
 /// 这是 Apple 官方的描述文件管理通道（Xcode 的 Devices 窗口也走它），
 /// 通过开发者隧道（RPPairing 配对文件 + LocalDevVPN）以配对身份访问，
-/// 因此无需越狱即可读取 / 添加 / 删除。
+/// 因此无需越狱即可读取 / 添加 / 删除.
 enum ProvisioningProfileStore {
 
     struct ProfileInfo: Identifiable {
@@ -18,7 +18,7 @@ enum ProvisioningProfileStore {
         let appId: String       // application-identifier
         let expirationDate: Date?
         let entitlements: [String: Any]
-        /// v0.3.187：mobileprovision 顶层 ProvisionsAllDevices。
+        /// v0.3.187：mobileprovision 顶层 ProvisionsAllDevices.
         /// true 即企业 / In-House profile（Apple TN3125 权威字段）.
         /// 默认 false 让旧调用点（memberwise init）免改.
         var provisionsAllDevices: Bool = false
@@ -34,7 +34,7 @@ enum ProvisioningProfileStore {
             return Self.dateFormatter.string(from: expirationDate)
         }
 
-        /// 过期剩余天数（正 = 还有 N 天，负 = 已过期 N 天）。
+        /// 过期剩余天数（正 = 还有 N 天，负 = 已过期 N 天）.
         var daysRemaining: Int {
             guard let expirationDate else { return Int.max }
             let today = Calendar.current.startOfDay(for: Date())
@@ -75,7 +75,7 @@ enum ProvisioningProfileStore {
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件。")
+            throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件.")
         }
 
         var pairingFile: OpaquePointer?
@@ -121,7 +121,7 @@ enum ProvisioningProfileStore {
         return (adapter, handshake)
     }
 
-    /// 用隧道执行 misagent 操作。
+    /// 用隧道执行 misagent 操作.
     private static func withMisagent<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         let tunnel = try createTunnel()
         defer {
@@ -139,7 +139,7 @@ enum ProvisioningProfileStore {
 
     // MARK: - 读取 / 写入
 
-    /// 侧载应用（installation_proxy 返回、带 ProfileValidated 字段）。
+    /// 侧载应用（installation_proxy 返回、带 ProfileValidated 字段）.
     struct SideloadedAppInfo: Identifiable {
         var id: String { bundleID }
         let bundleID: String
@@ -154,7 +154,7 @@ enum ProvisioningProfileStore {
         var teamIdentifier: String? = nil
     }
 
-    /// 读取设备上全部描述文件（misagent_copy_all）。
+    /// 读取设备上全部描述文件（misagent_copy_all）.
     static func fetchAllProfiles() throws -> [ProfileInfo] {
         try withMisagent { client in
             var profilePointers: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?
@@ -183,7 +183,7 @@ enum ProvisioningProfileStore {
     }
 
     /// 侧载应用列表（installation_proxy 返回、带 ProfileValidated 字段，
-    /// 用于把描述文件归到对应 App 名下）。
+    /// 用于把描述文件归到对应 App 名下）.
     static func fetchSideloadedApps() throws -> [SideloadedAppInfo] {
         let tunnel = try createTunnel()
         defer {
@@ -240,13 +240,13 @@ enum ProvisioningProfileStore {
         // v0.3.190：删除 v0.3.187 在此处调 fetchAllProfiles() 的代码——
         // 本函数内 installation_proxy 隧道（defer 在末尾才释放）仍活着时，
         // fetchAllProfiles() 会再建一条 LocalDevVPN 隧道并发 RSD 握手 →
-        // 隧道状态竞争/死锁 → 真机闪退（v0.3.187~189 连续闪退元凶）。
+        // 隧道状态竞争/死锁 → 真机闪退（v0.3.187~189 连续闪退元凶）.
         // 需要 profile 顶层字段时由调用方（AppListView.loadAppTypes）顺序串行
         // 调 fetchSideloadedApps() + fetchAllProfiles() 并自行按 appId 匹配.
         return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    /// 删除指定 UUID 的描述文件（misagent_remove）。
+    /// 删除指定 UUID 的描述文件（misagent_remove）.
     static func removeProfile(uuid: String) throws {        try withMisagent { client in
             if let ffiError = misagent_remove(client, uuid) {
                 throw error(from: ffiError, fallback: "删除描述文件失败（UUID: \(uuid)）")
@@ -254,7 +254,7 @@ enum ProvisioningProfileStore {
         }
     }
 
-    /// 安装描述文件（misagent_install）。
+    /// 安装描述文件（misagent_install）.
     static func addProfile(_ data: Data) throws {
         try withMisagent { client in
             let ffiError = data.withUnsafeBytes { rawBuffer in
@@ -272,7 +272,7 @@ enum ProvisioningProfileStore {
 
     // MARK: - 解析
 
-    /// 解析 CMS 签名的 .mobileprovision → plist（简化实现：直接提取内嵌 plist）。
+    /// 解析 CMS 签名的 .mobileprovision → plist（简化实现：直接提取内嵌 plist）.
     static func parseProfile(_ data: Data) -> ProfileInfo? {
         guard let plistData = extractPlist(from: data),
               let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil),
@@ -311,7 +311,7 @@ enum ProvisioningProfileStore {
         )
     }
 
-    /// 从 CMS 载荷中提取内嵌 plist（XML 或二进制）。
+    /// 从 CMS 载荷中提取内嵌 plist（XML 或二进制）.
     private static func extractPlist(from data: Data) -> Data? {
         let xmlStart = Data("<?xml".utf8)
         let plistEnd = Data("</plist>".utf8)

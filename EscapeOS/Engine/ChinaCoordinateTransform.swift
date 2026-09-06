@@ -2,17 +2,17 @@ import CoreLocation
 import Foundation
 
 /// 把 Apple 中国地图瓦片（GCJ-02）上选择的坐标，转换回开发者定位服务
-/// 期望的 WGS-84 坐标（移植自 locus-ZH，MIT）。
+/// 期望的 WGS-84 坐标（移植自 locus-ZH，MIT）.
 enum ChinaCoordinateTransform {
     private static let semiMajorAxis = 6_378_245.0
     private static let eccentricitySquared = 0.00669342162296594323
 
-    /// Core Location 的 WGS-84 坐标 → Apple 中国地图瓦片坐标。
+    /// Core Location 的 WGS-84 坐标 → Apple 中国地图瓦片坐标.
     static func systemCoordinateToMapCoordinate(_ coordinate: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
         wgs84ToGCJ02(coordinate)
     }
 
-    /// 地图瓦片坐标 → 系统坐标（中国大陆区域做 GCJ-02 反算，迭代收敛）。
+    /// 地图瓦片坐标 → 系统坐标（中国大陆区域做 GCJ-02 反算，迭代收敛）.
     static func mapCoordinateToSystemCoordinate(_ coordinate: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
         guard usesMainlandChinaOffset(coordinate) else { return coordinate }
 

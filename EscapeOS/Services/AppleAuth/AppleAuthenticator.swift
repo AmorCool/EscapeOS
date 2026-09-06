@@ -1,9 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// Apple GrandSlam 认证引擎（对应 StosSign 的 `Authentication`）。
+/// Apple GrandSlam 认证引擎（对应 StosSign 的 `Authentication`）.
 /// 使用本项目自带的 `GSAAuth`（SRP-6a）完成 init → complete 握手，支持两步验证（受信任设备 / 短信），
-/// 成功后返回 `Account` 与 `AppleAPISession`。全程只依赖原生框架。
+/// 成功后返回 `Account` 与 `AppleAPISession`.全程只依赖原生框架.
 enum AppleAuthenticator {
     static let dateFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -13,11 +13,11 @@ enum AppleAuthenticator {
     static let gsaURL = URL(string: "https://gsa.apple.com/grandslam/GsService2")!
     static let qhURL = URL(string: "https://developerservices2.apple.com/services/QH65B2/")!
 
-    /// 与 Apple 完成 SRP-6a 握手并登录。
+    /// 与 Apple 完成 SRP-6a 握手并登录.
     /// `verificationHandler` 在需要两步验证时被调用，参数为一个「提交验证码」的回调：
-    /// 调用方应弹出输入界面，待用户填好验证码后调用 `reply(code)`（传 nil 表示取消）。
+    /// 调用方应弹出输入界面，待用户填好验证码后调用 `reply(code)`（传 nil 表示取消）.
     /// `refreshAnisette`：两步验证提交后、重新握手前调用，获取全新的 Anisette 数据——
-    /// Apple 的 anisette OTP 在一次握手成功后即失效（防止重放），复用旧数据会导致 -22421。
+    /// Apple 的 anisette OTP 在一次握手成功后即失效（防止重放），复用旧数据会导致 -22421.
     static func authenticate(
         appleID unsanitizedAppleID: String,
         password: String,

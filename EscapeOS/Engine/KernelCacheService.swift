@@ -2,11 +2,11 @@ import Foundation
 import UIKit
 import Darwin
 
-/// KernelCache 下载服务 —— **IPSW Range 直拉方案**（v0.2.133）。
+/// KernelCache 下载服务 —— **IPSW Range 直拉方案**（v0.2.133）.
 ///
 /// 背景：lara 的 `fetchkcache` 依赖内核漏洞（dirty sheep + vn_fileredirect
 /// vnode 重定向），EscapeOS 是 LiveContainer 访客沙盒，无 exploit 能力，
-/// 无法照搬。替代方案（用户确认）：
+/// 无法照搬.替代方案（用户确认）：
 ///
 /// 1. 用 `hw.machine` 拿当前设备型号（如 iPhone13,1），`UIDevice` 拿系统版本；
 /// 2. 查 ipsw.me API 找到该版本对应 IPSW 的下载 URL；
@@ -15,26 +15,26 @@ import Darwin
 ///    iPhone13,1/16.3.1 为 ~19.2MB deflate 压缩）；
 /// 4. 按偏移 Range 分块下载压缩数据 → raw deflate 解压 → 校验 magic
 ///    `0x30 0x84`（LZSS kernelcache 标志，与 lara 的校验一致）→ 保存到
-///    Documents/KernelCache/。
+///    Documents/KernelCache/.
 ///
-/// 纯网络、零权限、零漏洞，与 lara 从设备读到的 kernelcache 是同一份文件。
+/// 纯网络、零权限、零漏洞，与 lara 从设备读到的 kernelcache 是同一份文件.
 final class KernelCacheService {
 
     static let shared = KernelCacheService()
     private init() {}
 
-    /// 已解析的固件信息。
+    /// 已解析的固件信息.
     struct Firmware: Identifiable {
         let version: String
         let buildid: String
         let url: String
         let releasedate: String
         var id: String { buildid }
-        /// 展示名，如 "16.3.1 (20D67)"。
+        /// 展示名，如 "16.3.1 (20D67)".
         var displayName: String { "iOS \(version)（\(buildid)）" }
     }
 
-    /// 本地保存目录（文件 App 可见）。
+    /// 本地保存目录（文件 App 可见）.
     static var saveDirectory: String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("KernelCache", isDirectory: true)
@@ -44,7 +44,7 @@ final class KernelCacheService {
 
     // MARK: - 设备信息
 
-    /// 当前设备型号标识（hw.machine，如 "iPhone13,1"）。
+    /// 当前设备型号标识（hw.machine，如 "iPhone13,1"）.
     func deviceIdentifier() -> String {
         var size = 0
         sysctlbyname("hw.machine", nil, &size, nil, 0)
@@ -54,14 +54,14 @@ final class KernelCacheService {
         return String(cString: buffer)
     }
 
-    /// 当前系统版本（如 "16.3.1"）。
+    /// 当前系统版本（如 "16.3.1"）.
     func systemVersion() -> String {
         UIDevice.current.systemVersion
     }
 
     // MARK: - 固件查询（ipsw.me）
 
-    /// 查询指定设备的全部可用固件（按 release date 降序），供手动选择。
+    /// 查询指定设备的全部可用固件（按 release date 降序），供手动选择.
     func listFirmwares(identifier: String) async throws -> [Firmware] {
         guard let url = URL(string: "https://api.ipsw.me/v4/device/\(identifier)") else {
             throw makeError("无法构造 ipsw.me 查询 URL")
@@ -91,7 +91,7 @@ final class KernelCacheService {
         return list.sorted { $0.releasedate > $1.releasedate }
     }
 
-    /// 在列表中按系统版本匹配固件（同版本多个 build 取 release date 最新）。
+    /// 在列表中按系统版本匹配固件（同版本多个 build 取 release date 最新）.
     func matchFirmware(in list: [Firmware], version: String) -> Firmware? {
         list.first { $0.version == version }
     }
@@ -99,7 +99,7 @@ final class KernelCacheService {
     // MARK: - 下载
 
     /// 从 IPSW 下载并解压 kernelcache，保存到 Documents/KernelCache/，
-    /// 返回保存路径。`progress` 在主线程回调（0...1）。
+    /// 返回保存路径.`progress` 在主线程回调（0...1）.
     func downloadKernelCache(firmware: Firmware,
                              progress: @escaping (Double) -> Void) async throws -> String {
         guard let url = URL(string: firmware.url) else {
@@ -117,9 +117,9 @@ final class KernelCacheService {
             throw makeError("IPSW 中未找到 kernelcache.release 条目")
         }
 
-        // 3. 按偏移 Range 分块下载压缩数据。
+        // 3. 按偏移 Range 分块下载压缩数据.
         //    data 偏移 = local header 起点 + 30 字节头 + 真实 nlen/xlen
-        //    （以 local header 为准，中央目录的 nlen/xlen 理论可能不同）。
+        //    （以 local header 为准，中央目录的 nlen/xlen 理论可能不同）.
         let localHeader = try await fetchRange(url: url,
                                                range: "bytes=\(entry.localHeaderOffset)-\(entry.localHeaderOffset + 59)")
         let localBytes = [UInt8](localHeader)
@@ -169,7 +169,7 @@ final class KernelCacheService {
 
     // MARK: - ZIP64 解析
 
-    /// 从 IPSW 尾部数据定位 ZIP64 中央目录（返回 offset 与 size）。
+    /// 从 IPSW 尾部数据定位 ZIP64 中央目录（返回 offset 与 size）.
     private func locateCentralDirectory(tail: Data, url: URL) async throws -> (UInt64, UInt64) {
         // EOCD: PK\x05\x06（从尾部往前找，签名 0x06054b50）
         let bytes = [UInt8](tail)
@@ -207,7 +207,7 @@ final class KernelCacheService {
         return (cdOffset, cdSize)
     }
 
-    /// 在中央目录中查找 kernelcache.release 条目。
+    /// 在中央目录中查找 kernelcache.release 条目.
     private func findKernelEntry(centralDir: Data) -> ZipEntry? {
         var pos = 0
         let bytes = [UInt8](centralDir)
@@ -275,7 +275,7 @@ final class KernelCacheService {
 
     // MARK: - 网络工具
 
-    /// Range 请求：拉取指定字节区间。
+    /// Range 请求：拉取指定字节区间.
     private func fetchRange(url: URL, range: String) async throws -> Data {
         var request = URLRequest(url: url)
         request.setValue("bytes", forHTTPHeaderField: "Accept-Ranges")
@@ -289,18 +289,18 @@ final class KernelCacheService {
         return data
     }
 
-    /// raw deflate 解压已改用 SWCompression 的 Deflate（同 target 编译，直接可用）。
+    /// raw deflate 解压已改用 SWCompression 的 Deflate（同 target 编译，直接可用）.
 
     // MARK: - 已下载列表
 
-    /// 列出已下载的 kernelcache 文件。
+    /// 列出已下载的 kernelcache 文件.
     func savedFiles() -> [String] {
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(atPath: Self.saveDirectory) else { return [] }
         return items.filter { $0.hasPrefix("kernelcache") }.sorted()
     }
 
-    /// 删除已下载文件。
+    /// 删除已下载文件.
     func deleteSavedFile(named name: String) {
         let path = URL(fileURLWithPath: Self.saveDirectory).appendingPathComponent(name).path
         try? FileManager.default.removeItem(atPath: path)

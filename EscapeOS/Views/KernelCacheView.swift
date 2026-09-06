@@ -2,13 +2,13 @@ import SwiftUI
 import UIKit
 
 /// 下载 KernelCache：从 Apple CDN 的 IPSW 里用 Range 请求只拉 kernelcache
-/// 文件（无需下载数 GB 整包），零权限、零漏洞。
+/// 文件（无需下载数 GB 整包），零权限、零漏洞.
 ///
 /// 原理（详见 KernelCacheService）：
 /// 自动识别当前机型（hw.machine）+ 系统版本（UIDevice）→ ipsw.me 查该机型
 /// 全部固件 → 默认选中当前系统版本（一键提取），也可手动选择其他机型/版本
 /// → 解析 ZIP64 目录定位 kernelcache.release 条目 → 分块 Range 下载
-/// （~20MB）→ raw deflate 解压 → 校验 0x30 0x84 magic → 保存。
+/// （~20MB）→ raw deflate 解压 → 校验 0x30 0x84 magic → 保存.
 struct KernelCacheView: View {
     @State private var deviceIdentifier = ""
     @State private var systemVersion = ""
@@ -22,7 +22,7 @@ struct KernelCacheView: View {
     @State private var savedFiles: [String] = []
     @State private var shareURL: ShareURL?
     @State private var confirmDelete: String?
-    /// 手动选择机型弹窗。
+    /// 手动选择机型弹窗.
     @State private var showIdentifierPicker = false
     @State private var identifierInput = ""
 

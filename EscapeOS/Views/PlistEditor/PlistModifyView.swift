@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// 单个 plist 条目的查看 / 编辑页（移植自 Erosion 的 `ModifyItemPage`）。
+/// 单个 plist 条目的查看 / 编辑页（移植自 Erosion 的 `ModifyItemPage`）.
 ///
 /// 交互与 Erosion 一致：默认只读，点「编辑」进入编辑态，可改键名、改类型、改值、
-/// 增删子条目；「保存」把改动写回整棵树再落盘，「取消」还原成本页打开时的快照。
+/// 增删子条目；「保存」把改动写回整棵树再落盘，「取消」还原成本页打开时的快照.
 struct PlistModifyView: View {
     @EnvironmentObject private var vm: PlistEditorViewModel
     @Environment(\.dismiss) private var dismiss
@@ -39,7 +39,7 @@ struct PlistModifyView: View {
                 Text(item.type.isContainer ? "值（\(item.dictVal.count) 项）" : "值")
             } footer: {
                 if isEditing {
-                    Text("切换类型后请确认值仍然合法，写入时才不会丢失数据。")
+                    Text("切换类型后请确认值仍然合法，写入时才不会丢失数据.")
                 }
             }
 
@@ -112,9 +112,9 @@ struct PlistModifyView: View {
 
     // MARK: - 动作
 
-    /// 显式替换一次树中同 id 的节点，再整体写盘。
+    /// 显式替换一次树中同 id 的节点，再整体写盘.
     /// `ForEach($item.dictVal)` 的动态 Binding 通常已写回数组，这里多一步是保险：
-    /// 树结构一旦和当前 item 不同步，保存就会丢改动。
+    /// 树结构一旦和当前 item 不同步，保存就会丢改动.
     private func commit() {
         vm.replace(item)
         vm.save()

@@ -2,11 +2,11 @@ import SwiftUI
 import NetworkExtension
 
 /// 虚拟定位主入口页（移植自 locus-ZH）：
-/// 地图 + 状态栏 + 底部控制台 + 收藏 / 设置。
+/// 地图 + 状态栏 + 底部控制台 + 收藏 / 设置.
 ///
 /// 保活说明：会话是全局单例（SpoofSession.shared），返回「更多」菜单后
 /// 模拟注入与定时器继续运行；退到后台由静音音频保活（KeepAliveManager）
-/// 与后台定位延续。
+/// 与后台定位延续.
 struct VirtualLocationView: View {
     @ObservedObject private var session = SpoofSession.shared
     @State private var showSettings = false
@@ -42,7 +42,7 @@ struct VirtualLocationView: View {
     }
 }
 
-/// 顶部状态条：模拟状态 / 配对缺失 / LocalDevVPN 未连接。
+/// 顶部状态条：模拟状态 / 配对缺失 / LocalDevVPN 未连接.
 struct StatusBarView: View {
     @ObservedObject private var session = SpoofSession.shared
     @Environment(\.scenePhase) private var scenePhase
@@ -131,7 +131,7 @@ struct StatusBarView: View {
             refreshTunnel()
         }
         .onReceive(NotificationCenter.default.publisher(for: .NEVPNStatusDidChange)) { _ in
-            // LocalDevVPN 的连接变化会广播到这里（即使不是我们拥有的 VPN）。
+            // LocalDevVPN 的连接变化会广播到这里（即使不是我们拥有的 VPN）.
             refreshTunnel()
         }
         .task(id: scenePhase) {
@@ -183,7 +183,7 @@ struct StatusBarView: View {
     }
 }
 
-/// 底部控制台：出行方式 / 设置 / 收藏 / 摇杆 / 轨迹 / 开始与停止定位。
+/// 底部控制台：出行方式 / 设置 / 收藏 / 摇杆 / 轨迹 / 开始与停止定位.
 struct BottomControlsView: View {
     @ObservedObject private var session = SpoofSession.shared
     @Binding var showSettings: Bool
@@ -310,7 +310,7 @@ struct BottomControlsView: View {
                 } else {
                     Button {
                         guard let pin = session.pin else {
-                            session.lastError = "请先点击地图放置图钉。"
+                            session.lastError = "请先点击地图放置图钉."
                             return
                         }
                         session.teleport(to: pin)
@@ -331,7 +331,7 @@ struct BottomControlsView: View {
         }
         .padding(14)
         .locusGlass(.regular, in: trayShape)
-        // 整个托盘吸收点击，避免误触穿透到地图。
+        // 整个托盘吸收点击，避免误触穿透到地图.
         .contentShape(trayShape)
     }
 

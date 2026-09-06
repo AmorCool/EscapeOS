@@ -1,9 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// v0.3.208：文档共享应用列表（iDescriptor InstalledApps 文件共享过滤移植）。
-/// 区分可浏览（UIFileSharingEnabled=true）与不可浏览；点击可浏览项进入文件树。
-/// v0.3.219：真实 App 图标（SpringBoardServices）+ 模块板块风格顶栏（.large + searchable）。
+/// v0.3.208：文档共享应用列表（iDescriptor InstalledApps 文件共享过滤移植）.
+/// 区分可浏览（UIFileSharingEnabled=true）与不可浏览；点击可浏览项进入文件树.
+/// v0.3.219：真实 App 图标（SpringBoardServices）+ 模块板块风格顶栏（.large + searchable）.
 struct FileSharingAppsView: View {
     @State private var apps: [FileSharingApp] = []
     @State private var icons: [String: UIImage] = [:]

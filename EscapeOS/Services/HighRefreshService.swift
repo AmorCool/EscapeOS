@@ -4,8 +4,8 @@
 //
 //  全局高刷（v0.3.51）——移植自 GlobalRefresh 的帧率方案：
 //  持续调度的 CADisplayLink 携带 preferredFrameRateRange(30, max, max)，
-//  迫使系统在 app 活跃期间维持最高刷新率（ProMotion 120Hz）。
-//  关闭时 preferred 回 0 交还系统自适应，不干涉其它场景。
+//  迫使系统在 app 活跃期间维持最高刷新率（ProMotion 120Hz）.
+//  关闭时 preferred 回 0 交还系统自适应，不干涉其它场景.
 //
 
 import Foundation

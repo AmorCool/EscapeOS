@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// v0.3.207：百宝箱面板 —— 主页原生 sheet 呈现（presentationDetents 0.4↔1.0），
-/// 系统上拉展开/下拉关闭，跟手流畅。内含杂七杂八工具的入口集合。
+/// 系统上拉展开/下拉关闭，跟手流畅.内含杂七杂八工具的入口集合.
 struct TreasureBoxView: View {
     var body: some View {
         VStack(spacing: 0) {

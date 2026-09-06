@@ -5,12 +5,12 @@ import UIKit
 import CommonCrypto
 import Security
 
-/// v0.3.203：设备体检引擎 —— 安全检测项执行器。
+/// v0.3.203：设备体检引擎 —— 安全检测项执行器.
 ///
 /// 方法论 1:1 移植 Lessica/Reveil（内嵌 IOSSecuritySuite）：越狱环境组 / 沙箱违规组 /
 /// 静态完整性组 / 动态完整性组 / 调试模拟器组 / 网络代理组；名单升级为爱思助手
 /// SecurityPresets.plist（v0.3.203 起由该 plist 自动生成 SecurityPresets.swift，
-/// 比 Reveil 内置名单更新——用户非 LC 容器安装时文件系统检测可用，勿再删项）。
+/// 比 Reveil 内置名单更新——用户非 LC 容器安装时文件系统检测可用，勿再删项）.
 ///
 /// 检测项（34 项分组内可落地部分，每项三态 passed/warn/failed）：
 ///   越狱环境：URL Scheme、可疑文件路径、受限目录可写、DYLD 注入库、可疑 ObjC 类
@@ -19,7 +19,7 @@ import Security
 ///   其它：危险环境变量、越狱/注入入口宏
 ///
 /// 全部基于公开检测方法论；文件系统项在非越狱沙箱内多数为「不存在/不可写」
-/// （通过），这是正确行为而非检测失败。
+/// （通过），这是正确行为而非检测失败.
 
 /// 单项检查结果
 struct SecurityCheckResult: Identifiable {
@@ -28,7 +28,7 @@ struct SecurityCheckResult: Identifiable {
     let detail: String
     let passed: Bool
     let warn: Bool
-    /// v0.3.206：uncertain —— 依赖私有 API/需更高权限，无法判定（Reveil .unchanged 语义）。
+    /// v0.3.206：uncertain —— 依赖私有 API/需更高权限，无法判定（Reveil .unchanged 语义）.
     /// 默认 false：既有构造点免改.
     var uncertain: Bool = false
     /// 该检查扣分值（failed 扣分；warn 小扣；uncertain 不扣但显示 ?）
@@ -53,7 +53,7 @@ enum SecurityScanner {
         "mainExe", "taskPorts", "provisioning", "entitlements",
     ]
 
-    /// 执行全部检查（同步；最耗时项 = 端口探测 ~1.5s）。
+    /// 执行全部检查（同步；最耗时项 = 端口探测 ~1.5s）.
     /// 返回 (结果数组, 总分 0-100)
     static func runAll() -> ([SecurityCheckResult], Int) {
         let results: [SecurityCheckResult] = [
@@ -337,7 +337,7 @@ enum SecurityScanner {
 
 extension SecurityScanner {
     /// 检查主可执行 Mach-O 完整性 —— 计算自身可执行文件的 SHA256 并与安装时基线对比
-    /// （若被越狱注入/重签篡改则哈希变化）。基线存 UserDefaults（首次记录）。
+    /// （若被越狱注入/重签篡改则哈希变化）.基线存 UserDefaults（首次记录）.
     static func checkMainExecutableIntegrity() -> SecurityCheckResult {
         guard let mainPath = Bundle.main.executablePath else {
             return SecurityCheckResult(id: "mainExe", title: "主可执行文件",
@@ -373,8 +373,8 @@ extension SecurityScanner {
 // MARK: 14. 进程异常端口（Reveil exception ports / task ports）
 
 extension SecurityScanner {
-    /// 检查是否有调试器/注入器附加到本进程的异常端口（越狱检测常用）。
-    /// 通过 mach task 端口只读查询异常端口配置；失败即无权限 → uncertain（Reveil 同标 .unchanged）。
+    /// 检查是否有调试器/注入器附加到本进程的异常端口（越狱检测常用）.
+    /// 通过 mach task 端口只读查询异常端口配置；失败即无权限 → uncertain（Reveil 同标 .unchanged）.
     static func checkExceptionPorts() -> SecurityCheckResult {
         // 先检查是否正被调试（PT_DENY_ATTACH 等 sysctl）
         var info = kinfo_proc()
@@ -395,8 +395,8 @@ extension SecurityScanner {
 // MARK: 15. 权限配置文件（描述文件 / Provisioning Profile 哈希）
 
 extension SecurityScanner {
-    /// 设备上安装的 provisioning profile 是否与白名单哈希一致（Presets secureMobileProvisioningProfileHashes）。
-    /// 读全量 profile 需 misagent + RSD 配对（EscapeSpace 已具备）；无配对/失败时标 uncertain。
+    /// 设备上安装的 provisioning profile 是否与白名单哈希一致（Presets secureMobileProvisioningProfileHashes）.
+    /// 读全量 profile 需 misagent + RSD 配对（EscapeSpace 已具备）；无配对/失败时标 uncertain.
     static func checkProvisioningProfiles() -> SecurityCheckResult {
         let profiles = (try? ProvisioningProfileStore.fetchAllProfiles()) ?? []
         if profiles.isEmpty {
@@ -415,12 +415,12 @@ extension SecurityScanner {
 // MARK: 16. 关键 entitlements 自检（Presets secureEntitlementKeys 部分）
 
 extension SecurityScanner {
-    /// 检查自身是否持有高危 entitlement（越狱/注入工具常带 com.apple.private.security.no-sandbox 等）。
+    /// 检查自身是否持有高危 entitlement（越狱/注入工具常带 com.apple.private.security.no-sandbox 等）.
     /// 读取自身进程 entitlement 需私有 API（SecTask 在 iOS 不可用）——按 Reveil 语义降级为
-    /// uncertain（? 灰显）：沙箱内无法枚举自身签名 entitlement。
+    /// uncertain（? 灰显）：沙箱内无法枚举自身签名 entitlement.
     static func checkEntitlements() -> SecurityCheckResult {
         // 可观测的代理信号：本 App 运行于普通侧载沙箱时 DYLD 无注入、无 no-sandbox
-        // 已由 checkDYLDInjection / checkEnvironmentVariables 覆盖。
+        // 已由 checkDYLDInjection / checkEnvironmentVariables 覆盖.
         return SecurityCheckResult(id: "entitlements", title: "关键权限",
             detail: "自身 entitlement 枚举需私有 API（SecTask iOS 不可用）；已通过注入/环境变量检查间接覆盖",
             passed: true, warn: true, uncertain: true)

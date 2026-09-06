@@ -4,7 +4,7 @@ import MapKit
 import UIKit
 import UserNotifications
 
-/// 移动方式（轨迹/摇杆速度基准）。
+/// 移动方式（轨迹/摇杆速度基准）.
 enum TravelMode: String, CaseIterable, Identifiable {
     case walk, run, cycle, drive
 
@@ -28,7 +28,7 @@ enum TravelMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 基础速度（米/秒），叠加自然波动。
+    /// 基础速度（米/秒），叠加自然波动.
     var baseSpeed: CLLocationSpeed {
         switch self {
         case .walk: return 1.4
@@ -69,11 +69,11 @@ enum SpoofStatus: Equatable {
     }
 }
 
-/// 虚拟定位会话（移植自 locus-ZH）。
+/// 虚拟定位会话（移植自 locus-ZH）.
 ///
 /// **全局单例**：从虚拟定位页面返回后会话仍存活，模拟注入、
-/// 8 秒重发 / 12 秒心跳定时器继续运行——「离开界面也保持运行」。
-/// 进程退后台则由 KeepAliveManager（静音音频保活）+ 后台定位延续。
+/// 8 秒重发 / 12 秒心跳定时器继续运行——「离开界面也保持运行」.
+/// 进程退后台则由 KeepAliveManager（静音音频保活）+ 后台定位延续.
 @MainActor
 final class SpoofSession: ObservableObject {
     static let shared = SpoofSession()
@@ -121,7 +121,7 @@ final class SpoofSession: ObservableObject {
         routeLoopEnabled = UserDefaults.standard.bool(forKey: "escape.routeLoopEnabled")
     }
 
-    /// EscapeSpace 的配对文件（与「更多 → 应用」等共用 Documents/pairingFile.plist）。
+    /// EscapeSpace 的配对文件（与「更多 → 应用」等共用 Documents/pairingFile.plist）.
     var hasPairing: Bool { TunnelContext.shared.hasPairingFile }
     var pairingPath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -136,7 +136,7 @@ final class SpoofSession: ObservableObject {
 
     func teleport(to coordinate: CLLocationCoordinate2D) {
         guard hasPairing else {
-            lastError = "未检测到配对文件。请先在「设置 → 配对文件」导入（或使用 iPASide 安装时附带）。"
+            lastError = "未检测到配对文件.请先在「设置 → 配对文件」导入（或使用 iPASide 安装时附带）."
             return
         }
         pin = coordinate
@@ -150,7 +150,7 @@ final class SpoofSession: ObservableObject {
         speedMultiplier = min(4.0, max(0.25, speedMultiplier + delta))
     }
 
-    /// 移动中按一次先暂停在当前模拟坐标；再按一次清除模拟定位返回真实 GPS。
+    /// 移动中按一次先暂停在当前模拟坐标；再按一次清除模拟定位返回真实 GPS.
     func stop() {
         if isMoving {
             stopMovement()
@@ -166,9 +166,9 @@ final class SpoofSession: ObservableObject {
             simulated = nil
             status = .idle
             endBackground()
-            // 设置页保活开关未开时，任务结束即停止保活。
+            // 设置页保活开关未开时，任务结束即停止保活.
             KeepAliveManager.shared.stop()
-            // 继续轻量定位，让地图定位点回到真实 GPS。
+            // 继续轻量定位，让地图定位点回到真实 GPS.
             locationKeeper.start()
         case .failure(let error):
             lastError = error.localizedDescription
@@ -177,24 +177,24 @@ final class SpoofSession: ObservableObject {
         }
     }
 
-    /// 最近一次真实设备坐标（非图钉）。
+    /// 最近一次真实设备坐标（非图钉）.
     var realCoordinate: CLLocationCoordinate2D? {
         locationKeeper.lastKnownCoordinate
     }
 
-    /// 真实 GPS 转换到 Apple 地图瓦片坐标显示。
+    /// 真实 GPS 转换到 Apple 地图瓦片坐标显示.
     var realMapCoordinate: CLLocationCoordinate2D? {
         realCoordinate.map(ChinaCoordinateTransform.systemCoordinateToMapCoordinate)
     }
 
-    /// 启动轻量 GPS 更新（地图定位点 / 回到真实位置）。
+    /// 启动轻量 GPS 更新（地图定位点 / 回到真实位置）.
     func startLocationUpdates() {
         locationKeeper.start()
     }
 
     func startJoystick() {
         guard hasPairing else {
-            lastError = "未检测到配对文件。请先在「设置 → 配对文件」导入。"
+            lastError = "未检测到配对文件.请先在「设置 → 配对文件」导入."
             return
         }
         routeTask?.cancel()
@@ -204,7 +204,7 @@ final class SpoofSession: ObservableObject {
         activeRoute.removeAll()
         let start = simulated ?? pin ?? realMapCoordinate
         guard let start else {
-            lastError = "使用摇杆前请先放置图钉或开始模拟定位。"
+            lastError = "使用摇杆前请先放置图钉或开始模拟定位."
             return
         }
         if simulated == nil {
@@ -327,7 +327,7 @@ final class SpoofSession: ObservableObject {
             latitude: coordinate.latitude,
             longitude: coordinate.longitude
         )
-        // 同名坐标处已有命名收藏时不覆盖。
+        // 同名坐标处已有命名收藏时不覆盖.
         if let existing = favorites.first(where: { $0.id == place.id }),
            Self.isGenericFavoriteName(place.name),
            !Self.isGenericFavoriteName(existing.name) {
@@ -356,7 +356,7 @@ final class SpoofSession: ObservableObject {
         SavedPlace.save(recents, key: recentsKey)
     }
 
-    /// 收藏建议名（搜索结果 / 匹配最近使用）。
+    /// 收藏建议名（搜索结果 / 匹配最近使用）.
     func suggestedFavoriteName(for coordinate: CLLocationCoordinate2D, fallback: String? = nil) -> String {
         if let fallback, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -392,7 +392,7 @@ final class SpoofSession: ObservableObject {
     private func apply(_ coordinate: CLLocationCoordinate2D, markRecent: Bool) {
         guard CLLocationCoordinate2DIsValid(coordinate),
               coordinate.latitude.isFinite, coordinate.longitude.isFinite else {
-            lastError = "所选地图坐标无效，请重新放置图钉。"
+            lastError = "所选地图坐标无效，请重新放置图钉."
             return
         }
         if status == .idle || status.isDropped {
@@ -415,7 +415,7 @@ final class SpoofSession: ObservableObject {
             lastError = nil
             beginBackground()
             locationKeeper.start()
-            // 核心保活：即使离开本页 / 退到后台，模拟也持续生效。
+            // 核心保活：即使离开本页 / 退到后台，模拟也持续生效.
             KeepAliveManager.shared.ensureRunning()
             startResend()
             startHealth()
@@ -446,7 +446,7 @@ final class SpoofSession: ObservableObject {
         apply(next, markRecent: false)
     }
 
-    /// 每 8 秒重发当前坐标，防止会话被系统回收。
+    /// 每 8 秒重发当前坐标，防止会话被系统回收.
     private func startResend() {
         resendTimer?.invalidate()
         resendTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
@@ -468,7 +468,7 @@ final class SpoofSession: ObservableObject {
         resendTimer = nil
     }
 
-    /// 每 12 秒健康检查，掉线自动重连。
+    /// 每 12 秒健康检查，掉线自动重连.
     private func startHealth() {
         healthTimer?.invalidate()
         healthTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
@@ -544,6 +544,6 @@ final class SpoofSession: ObservableObject {
 }
 
 extension Notification.Name {
-    /// 从其他 App 分享 .gpx 到 EscapeSpace 时投递（内容为 URL）。
+    /// 从其他 App 分享 .gpx 到 EscapeSpace 时投递（内容为 URL）.
     static let escapeImportGPX = Notification.Name("escapeImportGPX")
 }

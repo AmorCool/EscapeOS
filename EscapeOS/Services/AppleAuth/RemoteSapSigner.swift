@@ -3,9 +3,9 @@ import Foundation
 // ─── v0.3.11：远程签名客户端（局域网 PC 上的 EscapeSapServer.exe）──────────
 //
 // 架构：SAP 签名需要模拟执行 CommerceKit x86-64（Unicorn TCG = JIT），iOS 侧
-// 受 JIT 权限限制（无 JIT 物理不可行，StikDebug 附加在 iOS 27 beta 上不可靠）。
+// 受 JIT 权限限制（无 JIT 物理不可行，StikDebug 附加在 iOS 27 beta 上不可靠）.
 // 改为签名在 PC 上执行：PC 跑 EscapeSapServer.exe（Windows 原生，无 JIT 限制，
-// 资产包在 PC 侧下载——iOS 磁盘配额/下载问题一并消除），EscapeOS 走局域网 HTTP。
+// 资产包在 PC 侧下载——iOS 磁盘配额/下载问题一并消除），EscapeOS 走局域网 HTTP.
 //
 // 协议（与 sapbridge/cmd/server/main.go 对齐）：
 //   POST /v1/init  JSON {setupURL, certURL, version, hwIDBase64} → {"status":"ready"}
@@ -14,7 +14,7 @@ import Foundation
 //   GET  /health                                                    → {"status":"ok","ready":bool}
 
 /// 远程签名错误（Authenticate 捕获后**直接中止登录**——服务器不可达/初始化失败时，
-/// 回退未签名请求只会得到误导性的 Apple 403）。
+/// 回退未签名请求只会得到误导性的 Apple 403）.
 struct SAPRemoteSignerError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
@@ -25,7 +25,7 @@ final class RemoteSapSigner: SAPActionSigning {
     private let token: String?
     private let session: URLSession
 
-    /// 初始化 = 让 PC 下载资产包并启动模拟器（首次 ~36MB，走 PC 网络）。
+    /// 初始化 = 让 PC 下载资产包并启动模拟器（首次 ~36MB，走 PC 网络）.
     init(baseURL: URL, config: SAPConfig, token: String? = nil) async throws {
         self.baseURL = baseURL
         self.token = token
@@ -53,9 +53,9 @@ final class RemoteSapSigner: SAPActionSigning {
                                    body: body, token: token, session: session)
     }
 
-    /// 对请求体字节签名，返回 base64（作为 X-Apple-ActionSignature 头）。
+    /// 对请求体字节签名，返回 base64（作为 X-Apple-ActionSignature 头）.
     /// 协议要求同步——authenticate 在后台线程调用，经典 dataTask + 信号量桥接
-    ///（v0.3.11 首版用 Task.detached + async 桥接触发编译错，改纯同步更稳）。
+    ///（v0.3.11 首版用 Task.detached + async 桥接触发编译错，改纯同步更稳）.
     func sign(requestBody: Data) throws -> String {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/sign"))
         req.httpMethod = "POST"

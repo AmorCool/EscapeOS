@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - 应用隐藏（移植自 Lithium AppBlockingView）
 
 /// 已登记的可隐藏 App（名称 + Bundle ID），持久化在 @AppStorage，
-/// 真正的隐藏集合来自限制描述文件的 `blockedAppBundleIDs`。
+/// 真正的隐藏集合来自限制描述文件的 `blockedAppBundleIDs`.
 struct HiddenAppItem: Identifiable, Codable {
     var id = UUID()
     var name: String
@@ -42,7 +42,7 @@ struct AppHideView: View {
                     Label("从已安装应用选择", systemImage: "list.bullet")
                 }
             } footer: {
-                Text("关闭某 App 的开关即将其隐藏：它会从主屏幕、App 资源库与“设置”中消失，但数据会保留。Bundle ID 区分大小写。")
+                Text("关闭某 App 的开关即将其隐藏：它会从主屏幕、App 资源库与“设置”中消失，但数据会保留.Bundle ID 区分大小写.")
             }
 
             Section {
@@ -145,7 +145,7 @@ struct AppHideView: View {
             if isPickerLoading {
                 ProgressView("正在枚举已安装应用…")
             } else if installedApps.isEmpty {
-                ContentUnavailableView("暂无应用", systemImage: "app", description: Text(pickerMessage.isEmpty ? "未找到已安装应用。" : pickerMessage))
+                ContentUnavailableView("暂无应用", systemImage: "app", description: Text(pickerMessage.isEmpty ? "未找到已安装应用." : pickerMessage))
             } else {
                 List(installedApps) { app in
                     Button {
@@ -203,7 +203,7 @@ struct AppHideView: View {
         let nm = name.trimmingCharacters(in: .whitespaces)
         guard !bid.isEmpty else { return }
         if catalog.contains(where: { $0.bundleID == bid }) {
-            errorMessage = "该 Bundle ID 已存在。"
+            errorMessage = "该 Bundle ID 已存在."
             showError = true
             return
         }
@@ -224,7 +224,7 @@ struct AppHideView: View {
         persist()
     }
 
-    /// 开关 ON = 可见（不在 blocked 列表）；OFF = 隐藏（在 blocked 列表）。
+    /// 开关 ON = 可见（不在 blocked 列表）；OFF = 隐藏（在 blocked 列表）.
     private func hiddenBinding(_ bundleID: String) -> Binding<Bool> {
         Binding(get: {
             let arr = blockedArray()

@@ -3,7 +3,7 @@ import Foundation
 
 /// 轻量后台定位（移植自 locus-ZH）：虚拟定位激活期间保持轻量 GPS 会话，
 /// 让地图定位点 / 「回到真实位置」可用，同时借助 location 后台模式延长
-/// 进程存活时间。
+/// 进程存活时间.
 final class BackgroundKeepAlive: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private var lastKnownLocation: CLLocation?
@@ -67,6 +67,6 @@ final class BackgroundKeepAlive: NSObject, CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        // 定位授权未就绪或 GPS 未稳定时的瞬时失败可忽略。
+        // 定位授权未就绪或 GPS 未稳定时的瞬时失败可忽略.
     }
 }

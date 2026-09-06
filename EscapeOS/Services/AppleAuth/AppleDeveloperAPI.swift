@@ -2,14 +2,14 @@ import Foundation
 
 // MARK: - 模型
 
-/// Apple Developer 团队信息（listTeams.action）。
+/// Apple Developer 团队信息（listTeams.action）.
 struct DeveloperTeam: Identifiable, Hashable {
     let name: String
     let identifier: String
     var id: String { identifier }
 }
 
-/// Apple Developer App ID（ios/listAppIds.action）。
+/// Apple Developer App ID（ios/listAppIds.action）.
 struct DeveloperAppID: Identifiable, Hashable {
     let identifier: String       // appIdId（PATCH /v1/bundleIds/<id> 用）
     let name: String
@@ -21,7 +21,7 @@ struct DeveloperAppID: Identifiable, Hashable {
 }
 
 /// Apple Developer 开发证书（ios/listAllDevelopmentCerts.action），
-/// 移植自 SideInstaller 的 DevCert / isideload 的 DevelopmentCertificate。
+/// 移植自 SideInstaller 的 DevCert / isideload 的 DevelopmentCertificate.
 struct DeveloperCertificate: Identifiable, Hashable {
     let name: String
     let serialNumber: String
@@ -31,18 +31,18 @@ struct DeveloperCertificate: Identifiable, Hashable {
     let certificateId: String
     let platform: String
     let status: String
-    /// 过期时间（RFC3339 / plist date），Apple 可能不返回。
+    /// 过期时间（RFC3339 / plist date），Apple 可能不返回.
     let expiration: Date?
 
-    /// 稳定标识：吊销以序列号为准，缺失时退回证书 id。
+    /// 稳定标识：吊销以序列号为准，缺失时退回证书 id.
     var id: String { serialNumber.isEmpty ? certificateId : serialNumber }
 
     var displayName: String { name.isEmpty ? "未命名证书" : name }
 
-    /// 证书关联的机器（Apple 标记的），无则 nil。
+    /// 证书关联的机器（Apple 标记的），无则 nil.
     var machineLabel: String? { machineName.isEmpty ? nil : machineName }
 
-    /// 是否已过期。
+    /// 是否已过期.
     var isExpired: Bool {
         guard let expiration else { return false }
         return expiration < Date()
@@ -52,8 +52,8 @@ struct DeveloperCertificate: Identifiable, Hashable {
 // MARK: - Apple Developer API
 
 /// Apple Developer 后端 API（developerservices2.apple.com），移植自 GetMoreRam / StosSign，
-/// 纯原生 URLSession 实现。所有请求携带 dsid/authToken，Anisette OTP 每次取全新值
-/// （Apple 的 OTP 为一次性，复用会 -22421）。
+/// 纯原生 URLSession 实现.所有请求携带 dsid/authToken，Anisette OTP 每次取全新值
+/// （Apple 的 OTP 为一次性，复用会 -22421）.
 enum AppleDeveloperAPI {
     static let clientID = "XABBG36SBA"
     static let qhURL = URL(string: "https://developerservices2.apple.com/services/QH65B2/")!
@@ -62,10 +62,10 @@ enum AppleDeveloperAPI {
     // MARK: - 请求头
 
     private static func makeHeaders(session: AppleAPISession) async throws -> [String: String] {
-        // 每次调用都取全新 Anisette（新 OTP），避免一次性 OTP 失效。
+        // 每次调用都取全新 Anisette（新 OTP），避免一次性 OTP 失效.
         // v0.2.115：改用带重试 + 服务器轮换的入口——Anisette 服务器侧故障
         // （-45025 / -45003 / WebSocket 断开）在此自动换服务器，不再让页面
-        // 直接报错或卡住。
+        // 直接报错或卡住.
         let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback()
         let fmt = ISO8601DateFormatter()
         return [
@@ -90,7 +90,7 @@ enum AppleDeveloperAPI {
 
     // MARK: - Teams
 
-    /// 获取账号下的开发者团队列表。
+    /// 获取账号下的开发者团队列表.
     static func fetchTeams(session: AppleAPISession) async throws -> [DeveloperTeam] {
         LoginLogger.shared.log("▶ 获取团队列表")
         var headers = try await makeHeaders(session: session)
@@ -125,7 +125,7 @@ enum AppleDeveloperAPI {
 
     // MARK: - App IDs
 
-    /// 获取团队下的 App ID 列表。
+    /// 获取团队下的 App ID 列表.
     static func fetchAppIDs(team: DeveloperTeam, session: AppleAPISession) async throws -> [DeveloperAppID] {
         LoginLogger.shared.log("▶ 获取 App ID 列表（team=\(team.identifier)）")
         var headers = try await makeHeaders(session: session)
@@ -159,8 +159,8 @@ enum AppleDeveloperAPI {
 
     // MARK: - 开启增加内存限制
 
-    /// PATCH /v1/bundleIds/<appIdId>，为 App ID 开启 INCREASED_MEMORY_LIMIT 能力。
-    /// 返回服务器响应原文（成功时包含更新后的 data）。
+    /// PATCH /v1/bundleIds/<appIdId>，为 App ID 开启 INCREASED_MEMORY_LIMIT 能力.
+    /// 返回服务器响应原文（成功时包含更新后的 data）.
     static func enableIncreasedMemory(appID: DeveloperAppID, team: DeveloperTeam, session: AppleAPISession) async throws -> String {
         LoginLogger.shared.log("▶ 开启 INCREASED_MEMORY_LIMIT: \(appID.bundleIdentifier)")
         var headers = try await makeHeaders(session: session)
@@ -217,9 +217,9 @@ enum AppleDeveloperAPI {
 
     // MARK: - 开发证书（移植自 SideInstaller 证书板块）
 
-    /// 获取团队下的 iOS 开发证书列表。
+    /// 获取团队下的 iOS 开发证书列表.
     /// 端点与请求格式对齐 isideload 的 CertificatesApi：
-    /// POST .../ios/listAllDevelopmentCerts.action，body 含 teamId。
+    /// POST .../ios/listAllDevelopmentCerts.action，body 含 teamId.
     static func fetchCertificates(team: DeveloperTeam, session: AppleAPISession) async throws -> [DeveloperCertificate] {
         LoginLogger.shared.log("▶ 获取证书列表（team=\(team.identifier)）")
         var headers = try await makeHeaders(session: session)
@@ -273,12 +273,12 @@ enum AppleDeveloperAPI {
         return certs
     }
 
-    /// 提交 CSR 创建开发证书（免费 Apple ID 通用）。
+    /// 提交 CSR 创建开发证书（免费 Apple ID 通用）.
     /// 端点/键名对齐 SideStore/AltSign addCertificate：
     /// POST .../ios/submitDevelopmentCSR.action，plist body 携带
-    /// csrContent（**完整 PEM 字符串**）+ machineId（随机大写 UUID）+ machineName。
-    /// 响应 certRequest.certContent（base64 DER）。
-    /// 特殊错误码：3250=CSR 无效，7460=证书数量达上限。
+    /// csrContent（**完整 PEM 字符串**）+ machineId（随机大写 UUID）+ machineName.
+    /// 响应 certRequest.certContent（base64 DER）.
+    /// 特殊错误码：3250=CSR 无效，7460=证书数量达上限.
     static func submitSigningCertificate(team: DeveloperTeam,
                                          csrPEM: String,
                                          machineName: String,
@@ -309,7 +309,7 @@ enum AppleDeveloperAPI {
                 }
                 if resultCode == 7460 {
                     LoginLogger.shared.log("❌ 证书数量达上限（7460）")
-                    throw AppleAPIError.customError(code: 7460, message: "开发证书数量已达上限（7460）。请到「更多 → 证书管理」吊销一旧证书.")
+                    throw AppleAPIError.customError(code: 7460, message: "开发证书数量已达上限（7460）.请到「更多 → 证书管理」吊销一旧证书.")
                 }
             }
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
@@ -319,7 +319,7 @@ enum AppleDeveloperAPI {
         // certContent 在 plist 响应里是 <data> 类型（解析后即 Data 对象，非字符串）；
         // 备用键 certificateContent（base64 字符串）——对齐 AltSign ALTX509Certificate 解析
         // v0.3.129：异步签发是**正常路径**——响应无 certContent = 已受理，
-        // 证书稍后出现在列表里（由调用方轮询）。此处绝不能抛错（v0.3.128 的 bug）。
+        // 证书稍后出现在列表里（由调用方轮询）.此处绝不能抛错（v0.3.128 的 bug）.
         let certDER: Data
         if let dataObj = certRequest["certContent"] as? Data {
             certDER = dataObj                                   // 同步签发（罕见）：直接拿内容
@@ -339,9 +339,9 @@ enum AppleDeveloperAPI {
         return certDER
     }
 
-    /// 吊销指定序列号的开发证书。
+    /// 吊销指定序列号的开发证书.
     /// 端点对齐 isideload：POST .../ios/revokeDevelopmentCert.action，
-    /// body 含 teamId + serialNumber。
+    /// body 含 teamId + serialNumber.
     static func revokeCertificate(team: DeveloperTeam, serialNumber: String, session: AppleAPISession) async throws {
         LoginLogger.shared.log("▶ 吊销证书（team=\(team.identifier), serial=\(serialNumber)）")
         var headers = try await makeHeaders(session: session)
@@ -360,11 +360,11 @@ enum AppleDeveloperAPI {
 
     // MARK: - Helpers
 
-    /// v0.2.112：Apple 在 HTTP 200 的 plist 体里用 `resultCode` 表达业务错误。
+    /// v0.2.112：Apple 在 HTTP 200 的 plist 体里用 `resultCode` 表达业务错误.
     /// 1100 = "Your session has expired. Please log in." —— 常见于 dsid/authToken
-    /// 与当前 Anisette 机器标识不匹配（例如被另一套认证实现的登录覆盖）。
+    /// 与当前 Anisette 机器标识不匹配（例如被另一套认证实现的登录覆盖）.
     /// 统一识别成 `.sessionExpired`，好让 UI 给出「重新登录」的可操作提示，
-    /// 而不是让用户对着一段 XML 原文发懵。
+    /// 而不是让用户对着一段 XML 原文发懵.
     private static func throwIfSessionExpired(_ data: Data) throws {
         guard let dict = plist(data) else { return }
         let code: Int? = (dict["resultCode"] as? NSNumber)?.intValue

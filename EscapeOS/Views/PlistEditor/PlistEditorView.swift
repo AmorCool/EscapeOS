@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// plist 的结构化查看 / 编辑器。
+/// plist 的结构化查看 / 编辑器.
 ///
 /// 移植自 Erosion 的 `PlistViewer` + `ItemRow` + `ModifyItemPage`，去掉了对
 /// PartyUI 的依赖，文案改为中文，读写改走 EscapeOS 的沙盒通道（见
-/// `PlistEditorViewModel`）。
+/// `PlistEditorViewModel`）.
 ///
 /// 本页面由 `FileViewerView` 在打开 .plist 文件时呈现，是 push 页——
-/// 不要嵌套 NavigationStack，导航栏由外层提供。
+/// 不要嵌套 NavigationStack，导航栏由外层提供.
 struct PlistEditorView: View {
     @StateObject private var vm: PlistEditorViewModel
 
@@ -157,7 +157,7 @@ struct PlistItemRow: View {
         }
     }
 
-    /// 字典 / 数组 / 数据的行：点击折叠展开，右侧 info 按钮进详情页。
+    /// 字典 / 数组 / 数据的行：点击折叠展开，右侧 info 按钮进详情页.
     private var containerRow: some View {
         HStack(spacing: 8) {
             Button {
@@ -205,8 +205,8 @@ struct PlistItemRow: View {
 
 // MARK: - 层级背景色
 
-/// 层级越深背景越沉，方便看清 plist 的嵌套结构。
-/// 移植自 Erosion 的 `UIColor.hierarchyLevelColor`（纯 UIKit 实现，不依赖 PartyUI）。
+/// 层级越深背景越沉，方便看清 plist 的嵌套结构.
+/// 移植自 Erosion 的 `UIColor.hierarchyLevelColor`（纯 UIKit 实现，不依赖 PartyUI）.
 enum PlistHierarchyColor {
     static func background(level: Int) -> Color {
         Color(UIColor { trait in

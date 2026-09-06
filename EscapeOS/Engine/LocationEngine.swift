@@ -1,12 +1,12 @@
 import Foundation
 
-// 虚拟定位：DVT 定位模拟引擎（移植自 Bellaboy/locus-ZH，MIT）。
+// 虚拟定位：DVT 定位模拟引擎（移植自 Bellaboy/locus-ZH，MIT）.
 //
 // 原理：通过 LocalDevVPN 本机隧道（10.7.0.1:49152）+ RPPairing 配对文件，
 // 走 Apple 开发者工具用的 DVT location simulation 服务（Xcode「模拟位置」
-// 同一机制），把模拟坐标注入 locationd——不需要越狱 / 漏洞。
+// 同一机制），把模拟坐标注入 locationd——不需要越狱 / 漏洞.
 // FFI 符号（location_simulation_* 等）由 rust/idevice-ffi 提供，
-// 经 TunnelContext.h → idevice.h 暴露给 Swift（见 EscapeOS-Bridging-Header.h）。
+// 经 TunnelContext.h → idevice.h 暴露给 Swift（见 EscapeOS-Bridging-Header.h）.
 
 enum LocationEngineError: LocalizedError {
     case invalidIP
@@ -20,14 +20,14 @@ enum LocationEngineError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidIP: return "隧道 IP 无效。请检查设置 → 本地隧道（默认 10.7.0.1）。"
-        case .pairingRead: return "无法读取配对文件。请用 idevice_pair 生成 RPPairing 格式的配对文件并导入。"
-        case .tunnelCreate: return "无法建立开发隧道。请确认 LocalDevVPN 已连接（Wi-Fi 下）。"
-        case .remoteServer: return "已连接隧道，但 RemoteXPC 握手失败。"
-        case .simulationCreate: return "无法打开 Apple 的定位模拟服务。"
-        case .locationSet: return "设置模拟坐标失败。"
-        case .locationClear: return "清除模拟定位失败。"
-        case .notActive: return "当前没有活动的模拟会话。"
+        case .invalidIP: return "隧道 IP 无效.请检查设置 → 本地隧道（默认 10.7.0.1）."
+        case .pairingRead: return "无法读取配对文件.请用 idevice_pair 生成 RPPairing 格式的配对文件并导入."
+        case .tunnelCreate: return "无法建立开发隧道.请确认 LocalDevVPN 已连接（Wi-Fi 下）."
+        case .remoteServer: return "已连接隧道，但 RemoteXPC 握手失败."
+        case .simulationCreate: return "无法打开 Apple 的定位模拟服务."
+        case .locationSet: return "设置模拟坐标失败."
+        case .locationClear: return "清除模拟定位失败."
+        case .notActive: return "当前没有活动的模拟会话."
         }
     }
 
@@ -45,7 +45,7 @@ enum LocationEngineError: LocalizedError {
     }
 }
 
-/// idevice DVT 定位模拟的薄封装（注入 locationd）。
+/// idevice DVT 定位模拟的薄封装（注入 locationd）.
 enum LocationEngine {
     private static let queue = DispatchQueue(label: "com.escapeos.location", qos: .userInitiated)
 

@@ -2,16 +2,16 @@
 //  ProcessManagerView.swift
 //  EscapeOS
 //
-//  进程管理（汉化移植自 StikDebug 的 Process Inspector）。
+//  进程管理（汉化移植自 StikDebug 的 Process Inspector）.
 //
 //  原理：经 LocalDevVPN 隧道（RPPairing 配对文件）连接设备的 app_service，
 //  调用 `app_service_list_processes` 枚举全设备进程、`app_service_send_signal`
-//  向指定 PID 发送信号（恢复 SIGCONT / 挂起 SIGSTOP / 结束 SIGKILL）。
+//  向指定 PID 发送信号（恢复 SIGCONT / 挂起 SIGSTOP / 结束 SIGKILL）.
 //  与「启用 JIT / 拉起应用 / 卸载」走的是同一个 RSD 隧道通道，因此在
-//  LiveContainer 访客沙盒内同样可用；前提是：配对文件 + LocalDevVPN + 开发者模式。
+//  LiveContainer 访客沙盒内同样可用；前提是：配对文件 + LocalDevVPN + 开发者模式.
 //
 //  设备端 app_service 只回传 pid + 可执行路径，没有 Bundle ID / 友好名，
-//  故列表显示名取路径末段（与 StikDebug 原版一致）。
+//  故列表显示名取路径末段（与 StikDebug 原版一致）.
 //
 
 import SwiftUI
@@ -20,7 +20,7 @@ import Darwin
 
 // MARK: - 进程模型
 
-/// 统一的提示弹窗数据（v0.2.106：替代原先双 alert 通道）。
+/// 统一的提示弹窗数据（v0.2.106：替代原先双 alert 通道）.
 struct ProcessAlert: Identifiable {
     let id = UUID()
     let title: String
@@ -30,12 +30,12 @@ struct ProcessAlert: Identifiable {
 struct ProcessEntry: Identifiable {
     let pid: Int
     let executablePath: String
-    /// 物理内存占用（bytes）。nil = FFI 尚未返回此字段（需 idevice crate 升级）。
+    /// 物理内存占用（bytes）.nil = FFI 尚未返回此字段（需 idevice crate 升级）.
     var memoryBytes: Int64? = nil
 
     var id: Int { pid }
 
-    /// 格式化内存显示（MB/KB）。
+    /// 格式化内存显示（MB/KB）.
     var memoryDisplay: String? {
         guard let bytes = memoryBytes, bytes > 0 else { return nil }
         let mb = Double(bytes) / 1_048_576
@@ -43,7 +43,7 @@ struct ProcessEntry: Identifiable {
         return String(format: "%.0f KB", Double(bytes) / 1024)
     }
 
-    /// 显示名取可执行路径末段（设备不回传友好名）。
+    /// 显示名取可执行路径末段（设备不回传友好名）.
     var displayName: String {
         let components = executablePath.split(separator: "/")
         if let last = components.last, !last.isEmpty {
@@ -60,7 +60,7 @@ enum ProcessControlAction: String {
     case pause
     case kill
 
-    /// 对应 Unix 信号。
+    /// 对应 Unix 信号.
     var signal: Int32 {
         switch self {
         case .resume: return Int32(SIGCONT)
@@ -127,17 +127,17 @@ enum ProcessControlAction: String {
 
     func successMessage(for pid: Int) -> String {
         switch self {
-        case .resume: return "已向 PID \(pid) 发送 SIGCONT (19)。"
-        case .pause:  return "已向 PID \(pid) 发送 SIGSTOP (17)。"
-        case .kill:   return "PID \(pid) 已被终止。"
+        case .resume: return "已向 PID \(pid) 发送 SIGCONT (19)."
+        case .pause:  return "已向 PID \(pid) 发送 SIGSTOP (17)."
+        case .kill:   return "PID \(pid) 已被终止."
         }
     }
 
     func timeoutMessage(for pid: Int) -> String {
         switch self {
-        case .resume: return "无法确认 PID \(pid) 已恢复，请重试。"
-        case .pause:  return "无法确认 PID \(pid) 已挂起，请重试。"
-        case .kill:   return "无法确认 PID \(pid) 已结束，请重试。"
+        case .resume: return "无法确认 PID \(pid) 已恢复，请重试."
+        case .pause:  return "无法确认 PID \(pid) 已挂起，请重试."
+        case .kill:   return "无法确认 PID \(pid) 已结束，请重试."
         }
     }
 }
@@ -145,7 +145,7 @@ enum ProcessControlAction: String {
 // MARK: - 服务层（隧道 + app_service FFI）
 
 /// 进程管理服务：复用 JITEnableService 的隧道写法，直接调用 idevice.h 暴露的
-/// `app_service_*` C 函数（经 bridging header 可见）。
+/// `app_service_*` C 函数（经 bridging header 可见）.
 ///
 /// v0.2.108 关键修复：
 /// - 所有进程操作（枚举 / 发信号）走**同一条串行队列**，禁止并发的
@@ -153,20 +153,20 @@ enum ProcessControlAction: String {
 /// - `app_service_connect_rsd` 与 `tunnel_create_rppairing` 一样加 3 次退避重试，
 ///   覆盖 RSD 服务发现的偶发 `ServiceNotFound`；
 /// - 发信号使用 `UInt32(SIGKILL)` 直接量，与「设备控制」侧完全一致，避免
-///   `Int32 → UInt32` 转换在任何编译/平台组合下出现歧义。
+///   `Int32 → UInt32` 转换在任何编译/平台组合下出现歧义.
 final class ProcessManagerService {
 
     static let shared = ProcessManagerService()
     private init() {}
 
-    /// 串行队列：保证 listProcesses / sendSignal 不并发建隧道。
+    /// 串行队列：保证 listProcesses / sendSignal 不并发建隧道.
     /// 同一 hostname 并发 tunnel_create_rppairing 是进程管理 SIGKILL 偶发/持续
-    /// 无效的根因之一（RSD 通道竞争）。
+    /// 无效的根因之一（RSD 通道竞争）.
     private let operationQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr", qos: .userInitiated)
     /// v0.3.38：内存查询专用串行队列（sysmontap 阻塞式，不与其他操作争用）
     private let memoryQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr.memory", qos: .utility)
 
-    /// EscapeSpace 的配对文件路径（与「应用管理」/ 虚拟定位共用）。
+    /// EscapeSpace 的配对文件路径（与「应用管理」/ 虚拟定位共用）.
     private var pairingPath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
@@ -203,7 +203,7 @@ final class ProcessManagerService {
 
     private func createTunnel(hostname: String) throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）。")
+            throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）.")
         }
 
         var pairingFile: OpaquePointer?
@@ -223,7 +223,7 @@ final class ProcessManagerService {
             throw makeError("隧道 IP 无效：\(deviceIP)（请检查「设置 → 本地隧道」）")
         }
 
-        // 隧道建立失败自动重试（最多 3 次、短退避）：对齐 DeviceControlService。
+        // 隧道建立失败自动重试（最多 3 次、短退避）：对齐 DeviceControlService.
         var lastError: NSError?
         for attempt in 0..<3 {
             var tunnel = TunnelHandles()
@@ -259,7 +259,7 @@ final class ProcessManagerService {
         throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
     }
 
-    /// 连接 app_service，失败自动重试 3 次（覆盖 ServiceNotFound）。
+    /// 连接 app_service，失败自动重试 3 次（覆盖 ServiceNotFound）.
     private func connectAppService(adapter: OpaquePointer, handshake: OpaquePointer) throws -> OpaquePointer {
         var lastError: NSError?
         for attempt in 0..<3 {
@@ -314,8 +314,8 @@ final class ProcessManagerService {
 
     // MARK: - 内存查询（v0.3.33：DVT sysmontap physFootprint）
 
-    /// 通过 DVT sysmontap 获取每个进程的 physFootprint（物理内存占用）。
-    /// 返回 [pid: bytes]，进程已退出时不出现在字典中。
+    /// 通过 DVT sysmontap 获取每个进程的 physFootprint（物理内存占用）.
+    /// 返回 [pid: bytes]，进程已退出时不出现在字典中.
     func fetchMemoryUsage() throws -> [Int32: UInt64] {
         // v0.3.38：不用 operationQueue.sync（sysmontap 阻塞式会卡死串行队列）
         try memoryQueue.sync {
@@ -808,11 +808,7 @@ struct ProcessManagerView: View {
             if viewModel.processes.isEmpty && !viewModel.isRefreshing {
                 Section {
                     if !hasPairing {
-                        Label("未检测到配对文件", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Text("进程管理需要：① 配对文件（在「更多 → 配对文件导入」导入）；② LocalDevVPN 已连接；③ 开发者模式已开启.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        PairingGuideCard(note: "进程管理还需要：① LocalDevVPN 已连接；② 开发者模式已开启.")
                     } else {
                         Text("未找到运行中的进程.")
                             .foregroundStyle(.secondary)

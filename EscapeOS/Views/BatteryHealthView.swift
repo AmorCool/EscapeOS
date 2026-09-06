@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// v0.3.199：电池健康面板 —— diagnostics_relay IORegistry 读取（非越狱可读）。
-/// 参考 iDescriptor BatteryInfo 面板：健康/循环/容量/序列号/充电/适配器。
-/// v0.3.205：当前电量改百分比、新增适配器电源+电压卡、序列号小眼睛、厂商/生产日期。
+/// v0.3.199：电池健康面板 —— diagnostics_relay IORegistry 读取（非越狱可读）.
+/// 参考 iDescriptor BatteryInfo 面板：健康/循环/容量/序列号/充电/适配器.
+/// v0.3.205：当前电量改百分比、新增适配器电源+电压卡、序列号小眼睛、厂商/生产日期.
 struct BatteryHealthView: View {
     @State private var isLoading = true
     @State private var info: BatteryHealthInfo?
@@ -299,10 +299,14 @@ struct BatteryHealthView: View {
                 .foregroundStyle(.secondary)
             Text("无法读取电池数据")
                 .font(.headline)
-            Text(errorText ?? "未知错误")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            if let err = errorText, PairingGate.isPairingError(err) {
+                PairingGuideCard(note: "电池健康还需要 LocalDevVPN 已连接（远程隧道读取）.")
+            } else {
+                Text(errorText ?? "未知错误")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
             Button("重试") {
                 Task { await load() }
             }

@@ -6,21 +6,21 @@ import Glibc
 import Darwin
 #endif
 
-/// 文件浏览器可进入的根路径清单。
+/// 文件浏览器可进入的根路径清单.
 ///
 /// 移植自 Erosion 的 `FSPaths` / `FSURL`，并按 EscapeOS 的实际情况做了调整：
 /// - iOS 26 上只显示「应用数据 / 守护进程 / App 插件」三个容器根；
 ///   它们通过 `bad_query_list`（inode 扫描）枚举，不需要为根路径本身
-///   签发沙盒扩展 —— 这正是 Erosion 原版的做法。
+///   签发沙盒扩展 —— 这正是 Erosion 原版的做法.
 /// - 「App Group / SystemGroup / System App Data」需要 iOS 27.0 特定预览版
-///   的 bad_query 路径才能访问，因此按 `raveSupported()` 门控显示，与原版一致。
-/// - 额外保留「应用安装目录」（.app 包），同样走 `bad_query_list`。
+///   的 bad_query 路径才能访问，因此按 `raveSupported()` 门控显示，与原版一致.
+/// - 额外保留「应用安装目录」（.app 包），同样走 `bad_query_list`.
 enum FileSystemRoots {
 
-    /// 容器根的列表策略。
-    /// - `badQueryList`: 用 `bad_query_list` 直接枚举，不消费沙盒扩展。
+    /// 容器根的列表策略.
+    /// - `badQueryList`: 用 `bad_query_list` 直接枚举，不消费沙盒扩展.
     /// - `sandboxExtension`: 进入前先尝试 `SandboxEscape.consume`，与 Erosion
-    ///   的 `shouldGrant: true` 行为一致。
+    ///   的 `shouldGrant: true` 行为一致.
     enum ListingMode {
         case badQueryList
         case sandboxExtension
@@ -31,11 +31,11 @@ enum FileSystemRoots {
         let title: String
         let subtitle: String
         let systemImage: String
-        /// true 表示其下的第一级目录是「容器」，可解析出 App 名。
+        /// true 表示其下的第一级目录是「容器」，可解析出 App 名.
         let resolvesContainerNames: Bool
-        /// 该根应如何枚举一级条目。
+        /// 该根应如何枚举一级条目.
         let listingMode: ListingMode
-        /// true 表示仅在 iOS 27.0 特定预览版上显示（raveSupported）。
+        /// true 表示仅在 iOS 27.0 特定预览版上显示（raveSupported）.
         let requiresRave: Bool
     }
 
@@ -118,24 +118,24 @@ enum FileSystemRoots {
         entries.first { $0.id == path }
     }
 
-    /// 需要把 UUID 目录解析成 App 名的路径集合。
+    /// 需要把 UUID 目录解析成 App 名的路径集合.
     static let containerNameRoots: Set<String> = Set(
         entries.filter(\.resolvesContainerNames).map(\.id)
     )
 
-    /// 使用 `bad_query_list` 枚举的根路径集合。
+    /// 使用 `bad_query_list` 枚举的根路径集合.
     static let badQueryListRoots: Set<String> = Set(
         entries.filter { $0.listingMode == .badQueryList }.map(\.id)
     )
 
-    /// 本应用自己的 Documents（备份、配对文件、导出物都在里面）。
+    /// 本应用自己的 Documents（备份、配对文件、导出物都在里面）.
     static var appDocuments: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
     }
 
     // MARK: - 版本门控（对齐 Erosion 的 raveSupported）
 
-    /// iOS 27.0 预览版中 bad_query 路径遍历恢复可用的 4 个特定 build。
+    /// iOS 27.0 预览版中 bad_query 路径遍历恢复可用的 4 个特定 build.
     static var isRaveSupported: Bool {
         let version = doubleSystemVersion()
         let build = buildNumber()
