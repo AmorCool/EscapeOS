@@ -89,15 +89,18 @@ enum WirelessLockdownService {
         guard let client else { throw makeError("lockdownd 客户端创建失败") }
         defer { lockdownd_client_free(client) }
 
-        // v0.3.241：set_value 前必须启动配对会话（否则写 wireless_lockdown 域不生效）
+        // v0.3.242：set_value 前启动配对会话（否则写 wireless_lockdown 域不生效）。
+        // lockdownd_start_session 只接受 IdevicePairingFile（idevice_pairing_file_read 产出）；
+        // 不能复用 createTunnel 里的 RpPairingFileHandle —— 两者都是不透明指针但底层布局不同，
+        // 强传会按错误结构解引用 host_id/system_buid，直接闪退。
         var pairingFile: OpaquePointer?
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
-        if let ffiError = pairingPath.withCString({ rp_pairing_file_read($0, &pairingFile) }) {
+        if let ffiError = pairingPath.withCString({ idevice_pairing_file_read($0, &pairingFile) }) {
             throw error(from: ffiError, fallback: "读取配对文件失败")
         }
         guard let pairingFile else { throw makeError("配对文件解析失败") }
-        defer { rp_pairing_file_free(pairingFile) }
+        defer { idevice_pairing_file_free(pairingFile) }
         if let ffiError = lockdownd_start_session(client, pairingFile) {
             throw error(from: ffiError, fallback: "启动 lockdownd 会话失败")
         }
