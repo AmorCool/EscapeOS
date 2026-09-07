@@ -50,7 +50,9 @@ struct TreasureBoxView: View {
         )
     }
 
-    // v0.3.240：WiFi 射频开关（wifi_set_power Lua 命令 → RSD 隧道 MCInstall SetWiFiPowerState）
+    // v0.3.240：WiFi 射频开关 + 局域网 Wi-Fi 配对连接
+    //（v0.3.243 起走 WirelessLockdownService：RSD 隧道 lockdownd SetValue 写
+    // com.apple.mobile.wireless_lockdown 域，替代原 wifi_set_power Lua 桥）
     @State private var wifiPowerOn = false
     @State private var wifiPairingOn = false
     @State private var wifiPowerBusy = false

@@ -10,6 +10,18 @@ import Foundation
 //  - EnableWifiConnections 允许局域网 Wi-Fi 配对连接（iDescriptor 同款）
 //  替代原 WiFiPowerBridge 两阶段 Lua 桥（MCInstall SetWiFiPowerState，实测不可用）.
 //
+//  v0.3.243：修复两个开关必报「读取配对文件失败：failed to parse raw pairing file
+//  from bytes」。v0.3.242 在 SetValue 前插入了 idevice_pairing_file_read +
+//  lockdownd_start_session，但本 App 的 pairingFile.plist 是远程配对文件
+//  （RpPairingFile：identifier/public_key/private_key/alt_irk，iPASide 或 iOS 27
+//  无线配对产出），经典 IdevicePairingFile 需要 DeviceCertificate/HostPrivateKey/
+//  SystemBUID 等 USB 配对字段，解析必然失败——两个开关因此 100% 报错。
+//  且 RSD 隧道（lockdownd_connect_rsd）本来就无 StartSession 步骤：隧道自身即
+//  信任边界，pymobiledevice3 的 RemoteLockdownClient 与 idevice crate 的
+//  set_value 文档示例（恰为 wireless_lockdown 域）都是直连后直接 SetValue。
+//  现在 connect_rsd → set_value，与 DeviceInfoService/BatteryHealthService/
+//  DeviceControlService 等已验证可用的 lockdownd 调用点一致.
+//
 
 enum WirelessLockdownService {
 
@@ -76,6 +88,7 @@ enum WirelessLockdownService {
     }
 
     /// lockdown SetValue（domain: com.apple.mobile.wireless_lockdown）
+    /// v0.3.243：不再尝试 lockdownd_start_session——见文件头说明.
     private static func setValue(key: String, value: Bool) throws {
         let tunnel = try createTunnel()
         defer {
@@ -88,22 +101,6 @@ enum WirelessLockdownService {
         }
         guard let client else { throw makeError("lockdownd 客户端创建失败") }
         defer { lockdownd_client_free(client) }
-
-        // v0.3.242：set_value 前启动配对会话（否则写 wireless_lockdown 域不生效）。
-        // lockdownd_start_session 只接受 IdevicePairingFile（idevice_pairing_file_read 产出）；
-        // 不能复用 createTunnel 里的 RpPairingFileHandle —— 两者都是不透明指针但底层布局不同，
-        // 强传会按错误结构解引用 host_id/system_buid，直接闪退。
-        var pairingFile: OpaquePointer?
-        let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("pairingFile.plist").path
-        if let ffiError = pairingPath.withCString({ idevice_pairing_file_read($0, &pairingFile) }) {
-            throw error(from: ffiError, fallback: "读取配对文件失败")
-        }
-        guard let pairingFile else { throw makeError("配对文件解析失败") }
-        defer { idevice_pairing_file_free(pairingFile) }
-        if let ffiError = lockdownd_start_session(client, pairingFile) {
-            throw error(from: ffiError, fallback: "启动 lockdownd 会话失败")
-        }
 
         let plistValue = plist_new_bool(value ? 1 : 0)
         defer { plist_free(plistValue) }
