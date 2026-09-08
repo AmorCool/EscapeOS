@@ -228,25 +228,34 @@ public enum Authenticator {
                         "建议：更换网络/代理、到「更多 → 设置 → Anisette 服务器」切换并重连，或确认 Apple ID 未开启强风控验证。"
                     )
                 }
-                // 2) 服务端 5xx / Apple 边缘 204/404：ipatool 最新主线把这些状态码列为
-                //    可重试（Apple auth 握手期间会不定期返回空响应或 404，需配合新 OTP
-                //    与递增 attempt 再试）。上限内继续循环，不直接报错。
-                // v0.3.27：204 首次出现 → 2FA 验证码 needed（AppStorePro 实锤："204空响应通常表示需要输入验证码"）
-                // 抛带 "Authentication requires verification code" 的错误 → 触发已有的 TwoFactorCodePrompt UI
-                // v0.3.168：204→2FA 判断不再限定 attempt==1——真机实锤（01:02 日志）：
-                // anisette 换服务器 provision 成功后第 4 次尝试才返回 204，attempt==1
-                // 的前 3 次是 403/404（旧票据），旧逻辑把 204 当"可重试"吞掉 4 次后
-                // 报错，2FA 弹窗从未触发。改为：任意 attempt 首次 204（且未输入码）
-                // 一律判定需要验证码（一次），避免多轮弹窗.
-                if status.code == 204 && code.isEmpty && !promptedForCode {
-                    promptedForCode = true
-                    LoginLogger.shared.log("Apple 返回 204 → 双重认证验证码 needed，触发 2FA 弹窗")
-                    try ensureFailed("Authentication requires verification code")
-                }
+                // 2) 服务端 5xx / Apple 边缘 204/404：ipatool 上游语义为「可重试的边缘软拒」
+                //    （parseLoginResponse：retry = 204 || 404 || 5xx，重试间 250ms 退避）。
+                //    真 2FA 只由 200 + MZFinance.BadLogin.Configurator_message 判定
+                //    （v0.3.177 真机实锤：当前 Configurator UA 下 Apple 的 2FA 挑战走
+                //    200+plist——Apple 此时才真正向信任设备下发验证码）。
+                //    v0.3.244 修复「收不到 2FA 验证码」：旧实现把 204 空响应当 2FA 信号
+                //    直接弹验证码输入框，但 Apple 返回 204 时并未下发任何验证码（实为
+                //    边缘软拒，常与 301/403 同源：IP 信誉/风控）——用户对着一条永远不会
+                //    到来的短信/推送干等（v0.3.243 真机 07:44 日志实锤：301→204 序列直接
+                //    弹 2FA，信任设备零通知）。与上游对齐：204 一律可重试.
                 if (500...599).contains(status.code) || status.code == 204 || status.code == 404 {
                     LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code)（ipatool 可重试状态），attempt=\(currentAttempt)/4")
-                    if currentAttempt < 4 { continue }
-                    try ensureFailed("iTunes 认证服务端错误（HTTP \(status.code)），已重试 4 次仍未成功，请稍后重试。")
+                    if currentAttempt < 4 {
+                        // 上游 authenticationRetryDelay=250ms：退避重试，连续轰炸会加重风控
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        continue
+                    }
+                    // 4 次耗尽：不再 ensureFailed（那会绕过 legacy 回退），落 lastError
+                    // 走 legacy MZFinance 端点整轮；legacy 也败才把该错误抛给 UI.
+                    lastError = NSError(
+                        domain: "ApplePackage.Authenticate", code: status.code,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "iTunes 认证被 Apple 边缘持续软拒（HTTP \(status.code) 空响应 ×4）。\n" +
+                            "这不是密码错误——Apple 风控拦截了本次请求（通常伴随 301/403/404 信号），且不会因此下发任何验证码。\n" +
+                            "建议：① 「更多 → 设置 → Anisette 服务器」换一个服务器后重试；② 更换网络（Wi-Fi↔蜂窝）；" +
+                            "③ 先用 Safari 打开 account.apple.com 登录一次该 Apple ID（触发新客户端网页授权），再回本 App 重试。"]
+                    )
+                    break
                 }
                 // 3) Apple 边缘 30x 但无 Location：裸重定向（IP 信誉 / 风控 / 地域墙）。
                 //    `native/fast/` 在客户端被限流/标记时，Apple 边缘会返回「301 Moved

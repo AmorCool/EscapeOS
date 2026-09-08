@@ -51,12 +51,32 @@ struct TreasureBoxView: View {
     }
 
     // v0.3.240：WiFi 射频开关 + 局域网 Wi-Fi 配对连接
-    //（v0.3.243 起走 WirelessLockdownService：RSD 隧道 lockdownd SetValue 写
-    // com.apple.mobile.wireless_lockdown 域，替代原 wifi_set_power Lua 桥）
-    @State private var wifiPowerOn = false
+    //（v0.3.244 起走 WirelessLockdownService：射频 = MCInstall SetWiFiPowerState
+    //（pmd3 profile set-wifi-power 同款）；配对连接 = lockdown SetValue + GetValue
+    // 状态读回（iDescriptor 同款数据源））
+    // v0.3.244 修复：此前 wifiPairingOn 从未赋值——Toggle 弹回、永远显示关、
+    // 永远无法触达「停用」路径（用户实测"能开启但开关很快关闭、无法关闭"）。
+    @State private var wifiPowerOn = UserDefaults.standard.bool(forKey: WirelessLockdownService.wifiPowerStateKey)
     @State private var wifiPairingOn = false
+    @State private var wifiPairingUnknown = true   // true=状态读不到（隧道未连），显示未知
     @State private var wifiPowerBusy = false
     @State private var wifiPowerMsg: String?
+
+    // 出现时读回设备真实状态（射频持久化值在 @State 初始化时已恢复；
+    // EnableWifiConnections 无持久化，必须 GetValue 实时读）
+    private func refreshWifiStates() {
+        Task.detached(priority: .utility) {
+            let enabled = WirelessLockdownService.readWifiConnectionsEnabled()
+            await MainActor.run {
+                if let enabled {
+                    wifiPairingOn = enabled
+                    wifiPairingUnknown = false
+                } else {
+                    wifiPairingUnknown = true
+                }
+            }
+        }
+    }
 
     private func setWifiPower(_ on: Bool) {
         wifiPowerBusy = true
@@ -67,7 +87,7 @@ struct TreasureBoxView: View {
                 await MainActor.run {
                     wifiPowerBusy = false
                     wifiPowerOn = on
-                    wifiPowerMsg = "已\(on ? "开启" : "关闭") Wi-Fi 射频"
+                    wifiPowerMsg = "已\(on ? "开启" : "关闭") Wi-Fi 射频（设备已确认）"
                 }
             } catch {
                 await MainActor.run {
@@ -88,9 +108,21 @@ struct TreasureBoxView: View {
                 } else {
                     try WirelessLockdownService.disableWifiConnections()
                 }
+                // v0.3.244：写成功后读回设备真实值确认（写成功≠生效，以设备为准）
+                let confirmed = WirelessLockdownService.readWifiConnectionsEnabled()
                 await MainActor.run {
                     wifiPowerBusy = false
-                    wifiPowerMsg = "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接"
+                    if let confirmed {
+                        wifiPairingOn = confirmed
+                        wifiPairingUnknown = false
+                        wifiPowerMsg = confirmed == on
+                            ? "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接（设备已确认）"
+                            : "写入已接受，但设备读回 \(confirmed ? "开启" : "关闭")，可能被系统还原"
+                    } else {
+                        // 读回失败（隧道可能已被重置）——至少把 UI 状态跟手
+                        wifiPairingOn = on
+                        wifiPowerMsg = "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接"
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -113,7 +145,7 @@ struct TreasureBoxView: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Wi-Fi 射频开关").font(.subheadline)
-                    Text("lockdown wireless_lockdown（需 LocalDevVPN + 配对文件）")
+                    Text("MCInstall SetWiFiPowerState（需 LocalDevVPN + 配对文件）；关闭后若 LocalDevVPN 走 Wi-Fi，隧道会断开，需恢复网络后重新开启")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -125,8 +157,13 @@ struct TreasureBoxView: View {
                     setWifiPairing(on)
                 }
             )) {
-                Label("局域网 Wi-Fi 配对连接", systemImage: "wifi")
-                    .font(.subheadline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("局域网 Wi-Fi 配对连接", systemImage: "wifi").font(.subheadline)
+                    Text(wifiPairingUnknown
+                         ? "当前状态未知（连接 LocalDevVPN + 配对文件后自动读取）"
+                         : "当前状态：\(wifiPairingOn ? "开启" : "关闭")")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
             .disabled(wifiPowerBusy)
             if wifiPowerBusy {
@@ -141,6 +178,7 @@ struct TreasureBoxView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
+        .onAppear(perform: refreshWifiStates)
     }
 
     private var itemsCard: some View {
