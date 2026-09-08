@@ -323,6 +323,25 @@ enum WirelessLockdownService {
         return cert
     }
 
+    /// 本机 CloudConfigurationDetails.plist 摘要（系统组**可读**，iOS 26 只读但读没问题）.
+    /// 用于 14002 时告诉用户设备到底被谁监督着.
+    private static func localCloudConfigSummary() -> String {
+        let path = ConfigPlistURL.cloudConfig.path
+        guard let dict = (try? NSDictionary(contentsOfFile: path)) as? [String: Any] else {
+            return "（本机 CloudConfigurationDetails.plist 读不到）"
+        }
+        var parts: [String] = []
+        if let org = dict["OrganizationName"] as? String, !org.isEmpty { parts.append("监管组织=\(org)") }
+        if let sup = dict["IsSupervised"] as? Bool { parts.append("IsSupervised=\(sup ? "是" : "否")") }
+        if let certs = dict["SupervisorHostCertificates"] as? [Data], !certs.isEmpty {
+            parts.append("监督证书=\(certs.count) 张")
+        }
+        if let magic = dict["OrganizationMagic"] as? String, !magic.isEmpty {
+            parts.append("Magic=\(magic.prefix(8))…")
+        }
+        return parts.isEmpty ? "（文件存在但无监督字段）" : "本机监督状态：" + parts.joined(separator: "，")
+    }
+
     /// 把设备置于受监督状态（MCInstall SetCloudConfiguration，pmd3 `profile supervise` 同款）.
     /// ⚠️ 设备设置里会出现「此 iPhone 由 <组织> 监管」，MCInstall 无公开撤销接口.
     static func supervise(organization: String) throws {
@@ -354,7 +373,20 @@ enum WirelessLockdownService {
                 + "<key>SupervisorHostCertificates</key><array><data>\(b64)</data></array>"
                 + "</dict></dict>"
             let reply = try mcinstallRequest(body, superviseCert: nil, tunnel: tunnel)
-            try checkAck(reply, action: "SetCloudConfiguration")
+            do {
+                try checkAck(reply, action: "SetCloudConfiguration")
+            } catch let err as NSError {
+                // v0.3.250：14002 = A cloud configuration is already present on this device.
+                // 设备已被别的身份监督 → 不能覆盖；Escalate 必须用「当初那份」监督身份。
+                let text = err.localizedDescription
+                if text.contains("14002") || text.lowercased().contains("already present") {
+                    throw makeError("设备已被其他身份监督（14002），无法覆盖。"
+                        + localCloudConfigSummary()
+                        + "；SetWiFiPowerState 必须用当初监督这台设备的那份身份（证书+私钥）做 Escalate，App 新生成的身份设备不认。"
+                        + " iOS 26 上配置目录只读，也无法直接改写监督身份。")
+                }
+                throw err
+            }
         }
     }
 
@@ -374,7 +406,16 @@ enum WirelessLockdownService {
             let reply = try mcinstallRequest(
                 "<dict><key>RequestType</key><string>GetCloudConfiguration</string></dict>",
                 superviseCert: cert, tunnel: tunnel)
-            try checkAck(reply, action: "Escalate")
+            do {
+                try checkAck(reply, action: "Escalate")
+            } catch let err as NSError {
+                let text = err.localizedDescription
+                if text.contains("14005") || text.lowercased().contains("unable to set") {
+                    throw makeError("监督身份不被设备接受（Escalate 后命令仍被拒）。"
+                        + localCloudConfigSummary())
+                }
+                throw err
+            }
         }
     }
 

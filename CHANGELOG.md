@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.250] - 2026-09-08
+
+### 结论（真机实锤，监督模式走不通的根因）
+- 监督模式开启报 **14002「A cloud configuration is already present on this device.」**
+  —— **这台设备早就被别的身份监督过了**，Cloud Configuration 不能覆盖。
+- `Escalate` 必须用**当初把这台设备置为监督的那份监督身份**（证书+私钥）。App 新生成的自签身份设备不认，所以 `SetWiFiPowerState` 依旧 14005「Unable to set Wi-Fi power」。
+- 想换监督身份得直接改写 `CloudConfigurationDetails.plist`，但 **iOS 26 上 configurationprofiles 系统组只读**（项目 `ConfigAccess.readable` 探测结论，与 MobileGestalt 系统路径写入不可行的既有结论一致）。
+- **因此「Wi-Fi 射频开关」在这台设备上是被苹果监督机制硬性拦住的**：除非拿到当初监督它的那份身份文件（pymobiledevice3 的 keybag / 对应证书+私钥），否则这条命令无法成功。这不是 App 崩溃（v0.3.247 已修），也不是协议错误（已逐字对齐 pymobiledevice3）。
+
+### 改动
+- 监督模式 14002 / 14005 时，自动读取本机 `CloudConfigurationDetails.plist`（系统组可读）并在错误里给出**监管组织名 / IsSupervised / 监督证书张数 / OrganizationMagic**，让「谁在监督这台设备」一眼可见。
+- 开关说明同步更新，写明 14002 的含义与硬门槛。
+
+### 技术说明
+- 错误链路已完全可读化：`设备拒绝 SetCloudConfiguration（DMCTunnelErrorDomain 14002）：…`，不再倒 XML。
+- 监督通道（SetCloudConfiguration / Escalate / PKCS7 附签）实现保留，拿到合法监督身份后即可直接用。
+
 ## [0.3.249] - 2026-09-08
 
 ### 新增

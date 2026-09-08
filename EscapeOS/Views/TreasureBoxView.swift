@@ -207,7 +207,7 @@ struct TreasureBoxView: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Label("监督模式（Supervision）", systemImage: "checkmark.shield").font(.subheadline)
-                    Text("开启会把设备置为受监督并建立 Escalate 监督通道（设置里会出现「此 iPhone 由 EscapeOS 监管」）；MCInstall 无撤销接口，关闭只停用本 App 的监督通道")
+                    Text("开启会尝试把设备置为受监督并建立 Escalate 监督通道。若设备提示「已被其他身份监督（14002）」，说明它早就被监督过 —— SetWiFiPowerState 只认当初那份监督身份（证书+私钥），App 新生成的身份无效，iOS 26 上也无法改写监督身份")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
