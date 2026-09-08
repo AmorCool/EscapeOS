@@ -146,6 +146,32 @@ async fn rsd_checkin(stream: &mut Box<dyn ReadWrite>) -> Result<(), IdeviceError
     Ok(())
 }
 
+/// v0.3.248：从 MCInstall 错误应答里抠出单个字段的值，给用户一条能看懂的信息，
+/// 而不是把整段 XML 糊到界面上（真机实锤：设备拒绝时回 Status=Error +
+/// ErrorChain[ErrorCode/ErrorDomain/LocalizedDescription]，不含字面 <key>Error</key>）.
+fn mdm_field<'a>(xml: &'a str, key: &str, open: &str, close: &str) -> Option<&'a str> {
+    let key_tag = format!("<key>{}</key>", key);
+    let rest = &xml[xml.find(&key_tag)?..];
+    let start = rest.find(open)? + open.len();
+    let tail = &rest[start..];
+    let end = tail.find(close)?;
+    Some(&tail[..end])
+}
+
+fn describe_mdm_error(reply: &str) -> String {
+    let code = mdm_field(reply, "ErrorCode", "<integer>", "</integer>");
+    let domain = mdm_field(reply, "ErrorDomain", "<string>", "</string>");
+    let desc = mdm_field(reply, "LocalizedDescription", "<string>", "</string>")
+        .or_else(|| mdm_field(reply, "USEnglishDescription", "<string>", "</string>"));
+    match (code, domain, desc) {
+        (Some(c), Some(d), Some(s)) => format!("设备拒绝：{} {}（{}）", d, c, s),
+        _ => format!(
+            "设备应答无 Acknowledged：{}",
+            reply.chars().take(200).collect::<String>()
+        ),
+    }
+}
+
 /// SetWiFiPowerState over 已建立的 MCInstall 流
 pub async fn set_wifi_power_stream(
     stream: &mut Box<dyn ReadWrite>,
@@ -162,18 +188,13 @@ pub async fn set_wifi_power_stream(
     )
     .await?;
     let reply = read_plist_xml(stream).await?;
-    if reply.contains("<key>Error</key>") {
-        return Err(IdeviceError::UnexpectedResponse(format!(
-            "设备返回 Error: {}",
-            reply
-        )));
-    }
     // v0.3.247：校验 Acknowledged（pmd3 MobileConfig.set_wifi_power_state 同款判定，
-    // 写入被设备接受才返回 Ok，否则 Swift 侧如实报错）
+    // 写入被设备接受才返回 Ok，否则 Swift 侧如实报错）。
+    // v0.3.248：拒绝时解析 ErrorCode/ErrorDomain/LocalizedDescription，不再倒 XML。
     if !reply.contains("Acknowledged") {
         return Err(IdeviceError::UnexpectedResponse(format!(
-            "SetWiFiPowerState 未被确认（期望 Acknowledged）: {}",
-            reply
+            "SetWiFiPowerState 未被确认：{}",
+            describe_mdm_error(&reply)
         )));
     }
     Ok(reply)

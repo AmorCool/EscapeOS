@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.248] - 2026-09-08
+
+### 修复
+- 「Wi-Fi 射频开关」报错时把**一整段 XML 应答**直接糊到界面上（真机截图实锤），现在只显示人能读懂的一行。
+
+### 结论（重要）
+- **闪退已修好**：v0.3.247 之后点按不再崩溃，而是给出明确的设备应答。
+- 本次真机应答：`Status=Error`、`ErrorCode=14005`、`ErrorDomain=DMCTunnelErrorDomain`、`LocalizedDescription=Unable to set Wi-Fi power.` —— **是设备端拒绝了这条命令**，不是 App 崩溃、也不是协议写错。
+- 已用 pymobiledevice3 源码逐字核对：`set_wifi_power_state` 发的就是 `{"RequestType": "SetWiFiPowerState", "PowerState": state}`，与其 CLI `profile set-wifi-power`（**不调用 escalate、不需要监督 keybag**）完全一致。我们的请求与上游语义一字不差。
+- 结论：射频开关走 MCInstall 这条路在我们的隧道环境下被系统拒绝（`shim.remote` 家族本就是给 Apple Configurator / MDM 远程配对用的）。不回退到 lockdown `SetValue("WifiPowerState")`——那会被 lockdownd 静默吞掉，等于**假装成功**，更坑。
+
+### 改动
+- Rust `set_wifi_power_stream`：拒绝时解析 `ErrorCode` / `ErrorDomain` / `LocalizedDescription`，只返回一行可读信息（此前把整段 XML 塞进错误消息）。
+- Swift `error(from:fallback:)`：剥掉 Rust `{:?}` 调试格式外壳（`UnexpectedResponse("...")`），界面不再出现调试语法。
+- 射频开关说明补充：设备报「Unable to set Wi-Fi power」是系统拒绝该命令，不是 App 出错。
+
+### 若要真正生效
+需要走「监督（Supervision）」路线：MCInstall `SetCloudConfiguration`（把设备设为受监督）→ `Escalate`（监督证书挑战应答）→ 再 `SetWiFiPowerState`。**这会把设备置于受监督状态、界面会显示「此 iPhone 由 xx 组织监管」**，属于改变设备状态的大动作，待明确批准后再做。
+
 ## [0.3.247] - 2026-09-08
 
 ### 修复

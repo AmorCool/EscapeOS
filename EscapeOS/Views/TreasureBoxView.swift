@@ -164,7 +164,7 @@ struct TreasureBoxView: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Wi-Fi 射频开关").font(.subheadline)
-                    Text("MCInstall SetWiFiPowerState（需 LocalDevVPN + 配对文件）；写入型开关，显示的是上次设定值；关闭后若 LocalDevVPN 走 Wi-Fi，隧道会断开，需恢复网络后重新开启")
+                    Text("MCInstall SetWiFiPowerState（需 LocalDevVPN + 配对文件）；写入型开关，显示上次设定值；关闭后若 LocalDevVPN 走 Wi-Fi，隧道会断开。设备若报「Unable to set Wi-Fi power」，是该系统拒绝这条命令（通常要求监督状态），不是 App 出错")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
