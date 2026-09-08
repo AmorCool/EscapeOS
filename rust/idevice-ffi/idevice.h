@@ -9059,10 +9059,37 @@ extern "C" {
  * Both handles must be valid pointers allocated by this library and must be
  * released by the caller afterwards.
  */
-struct IdeviceFfiError *mcinstall_set_wifi_power_rsd(struct AdapterHandle *adapter,
-                                                     struct RsdHandshakeHandle *handshake,
-                                                     int on,
-                                                     char **out_reply);
+typedef int (*mcinstall_pkcs7_sign_fn)(const unsigned char *data,
+                                       int data_len,
+                                       unsigned char **der_out,
+                                       int *der_len);
+
+/**
+ * Registers the PKCS#7 signing callback used by the supervision (Escalate)
+ * handshake. Implemented on the Swift side with the already-linked libcrypto.
+ *
+ * # Safety
+ * `f` must remain valid for the lifetime of the process.
+ */
+void mcinstall_set_pkcs7_sign_fn(mcinstall_pkcs7_sign_fn f);
+
+/**
+ * Sends one MCInstall request over an RSD tunnel.
+ *
+ * `request_xml` is the bare plist body (`<dict>...</dict>`); the plist header
+ * and closing tag are added here. When `cert_der` is non-NULL the supervision
+ * Escalate handshake runs first on the same connection.
+ *
+ * # Safety
+ * `adapter`/`handshake` must be handles allocated by this library; `out_reply`
+ * may be NULL and the returned string must be freed with `idevice_string_free`.
+ */
+struct IdeviceFfiError *mcinstall_request_rsd(struct AdapterHandle *adapter,
+                                              struct RsdHandshakeHandle *handshake,
+                                              const char *request_xml,
+                                              const unsigned char *cert_der,
+                                              int cert_der_len,
+                                              char **out_reply);
 
 #ifdef __cplusplus
 }

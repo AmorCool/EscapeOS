@@ -145,7 +145,7 @@ enum WirelessLockdownService {
         throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
     }
 
-    // MARK: - MCInstall SetWiFiPowerState（协议在 Rust 侧）
+    // MARK: - MCInstall 通用请求（协议帧在 Rust 侧，Swift 只组装 plist 正文）
 
     /// RSD 服务表查 `MCInstall.shim.remote` 端口；设备未暴露该服务返回 nil.
     /// 这是**确定性**判据（直接查握手自带的服务表），不依赖 FFI 错误码与枚举的映射.
@@ -161,14 +161,61 @@ enum WirelessLockdownService {
         return port == 0 ? nil : port
     }
 
-    /// 连接 / RSDCheckin / SetWiFiPowerState / 校验 Acknowledged 全在 Rust 完成；
-    /// adapter 与 handshake 均为借用，仍由本文件负责释放.
-    private static func mcinstallSetWifiPower(_ on: Bool, tunnel: Tunnel) throws {
+    /// plist XML 文本转义（请求里只会出现我们自己拼的字段，此处兜底）
+    private static func xmlEscaped(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+         .replacingOccurrences(of: "<", with: "&lt;")
+         .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    /// 从应答里取 `<key>K</key><open>值</open>` 的值
+    private static func xmlValue(_ xml: String, key: String, open: String, close: String) -> String? {
+        guard let kRange = xml.range(of: "<key>\(key)</key>") else { return nil }
+        let tail = String(xml[kRange.upperBound...])
+        guard let oRange = tail.range(of: open) else { return nil }
+        let rest = String(tail[oRange.upperBound...])
+        guard let cRange = rest.range(of: close) else { return nil }
+        return String(rest[..<cRange.lowerBound])
+    }
+
+    /// 应答必须 Status=Acknowledged，否则把 ErrorCode/ErrorDomain/Description 拼成一句人话抛出
+    private static func checkAck(_ reply: String, action: String) throws {
+        if xmlValue(reply, key: "Status", open: "<string>", close: "</string>") == "Acknowledged" { return }
+        var msg = "设备拒绝 \(action)"
+        if let domain = xmlValue(reply, key: "ErrorDomain", open: "<string>", close: "</string>") {
+            let code = xmlValue(reply, key: "ErrorCode", open: "<integer>", close: "</integer>")
+            msg += "（\(domain)" + (code.map { " \($0)" } ?? "") + "）"
+        }
+        if let desc = xmlValue(reply, key: "LocalizedDescription", open: "<string>", close: "</string>")
+            ?? xmlValue(reply, key: "USEnglishDescription", open: "<string>", close: "</string>") {
+            msg += "：\(desc)"
+        }
+        throw makeError(msg)
+    }
+
+    /// 发一条 MCInstall 请求（同一隧道内；`certDER` 非空则先 Escalate 走监督通道）.
+    /// `body` 是 plist 正文（`<dict>...</dict>`），plist 头与收尾由 Rust 统一拼装.
+    private static func mcinstallRequest(_ body: String,
+                                         superviseCert certDER: [UInt8]?,
+                                         tunnel: Tunnel) throws -> String {
         var replyPtr: UnsafeMutablePointer<CChar>?
-        let ffiError = mcinstall_set_wifi_power_rsd(
-            tunnel.adapter, tunnel.handshake, on ? 1 : 0, &replyPtr)
-        if let replyPtr { idevice_string_free(replyPtr) }
-        if let ffiError { throw error(from: ffiError, fallback: "MCInstall 射频开关失败") }
+        let ffiError: UnsafeMutablePointer<IdeviceFfiError>?
+        if let certDER {
+            ffiError = certDER.withUnsafeBufferPointer { buf in
+                mcinstall_request_rsd(tunnel.adapter, tunnel.handshake, body,
+                                      buf.baseAddress, Int32(buf.count), &replyPtr)
+            }
+        } else {
+            ffiError = mcinstall_request_rsd(tunnel.adapter, tunnel.handshake, body, nil, 0, &replyPtr)
+        }
+        guard let replyPtr else {
+            if let ffiError { throw error(from: ffiError, fallback: "MCInstall 请求失败") }
+            throw makeError("MCInstall 空应答")
+        }
+        let reply = String(cString: replyPtr)
+        idevice_string_free(replyPtr)
+        if let ffiError { throw error(from: ffiError, fallback: "MCInstall 请求失败") }
+        return reply
     }
 
     // MARK: - lockdownd Set/Get（wireless_lockdown domain）
@@ -245,17 +292,89 @@ enum WirelessLockdownService {
     /// 优先走 MCInstall SetWiFiPowerState（真路径，pmd3 `profile set-wifi-power`
     /// / Apple Configurator 同款），全程不经过 lockdownd；设备 RSD 服务表里没有
     /// `MCInstall.shim.remote`（老系统）时回退 lockdown SetValue("WifiPowerState").
+    /// 监督模式开启时，同一连接内先 Escalate 再下发（否则现代 iOS 会拒绝该命令）.
     static func setWifiPower(_ on: Bool) throws {
         try queue.sync { () -> Void in
             let tunnel = try createTunnel()
             defer { tunnel.release() }
 
             if mcinstallShimPort(tunnel.handshake) != nil {
-                try mcinstallSetWifiPower(on, tunnel: tunnel)
+                let cert = try supervisionCertIfEnabled()
+                let body = "<dict><key>RequestType</key><string>SetWiFiPowerState</string>"
+                    + "<key>PowerState</key><\(on ? "true" : "false")/></dict>"
+                let reply = try mcinstallRequest(body, superviseCert: cert, tunnel: tunnel)
+                try checkAck(reply, action: "SetWiFiPowerState")
             } else {
                 try setValue("WifiPowerState", value: on, tunnel: tunnel)
             }
             UserDefaults.standard.set(on, forKey: wifiPowerStateKey)
+        }
+    }
+
+    // MARK: - 监督（Supervision）
+
+    /// 监督开启则取证书 DER；缺身份时给出明确指引而不是走到一半才报错
+    private static func supervisionCertIfEnabled() throws -> [UInt8]? {
+        guard SupervisionService.isEnabled else { return nil }
+        guard let cert = SupervisionService.certificateDER() else {
+            throw makeError("监督模式已开启但监督身份缺失，请先关闭再重新开启「监督模式」")
+        }
+        SupervisionService.registerSigner()
+        return cert
+    }
+
+    /// 把设备置于受监督状态（MCInstall SetCloudConfiguration，pmd3 `profile supervise` 同款）.
+    /// ⚠️ 设备设置里会出现「此 iPhone 由 <组织> 监管」，MCInstall 无公开撤销接口.
+    static func supervise(organization: String) throws {
+        try queue.sync { () -> Void in
+            guard let cert = SupervisionService.certificateDER() else {
+                throw makeError("缺少监督身份")
+            }
+            SupervisionService.registerSigner()
+            let tunnel = try createTunnel()
+            defer { tunnel.release() }
+            guard mcinstallShimPort(tunnel.handshake) != nil else {
+                throw makeError("设备未暴露 \(mcInstallRSDService)")
+            }
+            let b64 = Data(cert).base64EncodedString()
+            let magic = UUID().uuidString
+            let body = "<dict><key>RequestType</key><string>SetCloudConfiguration</string>"
+                + "<key>CloudConfiguration</key><dict>"
+                + "<key>AllowPairing</key><true/>"
+                + "<key>CloudConfigurationUIComplete</key><true/>"
+                + "<key>ConfigurationSource</key><integer>2</integer>"
+                + "<key>ConfigurationWasApplied</key><true/>"
+                + "<key>IsMDMUnremovable</key><false/>"
+                + "<key>IsMandatory</key><true/>"
+                + "<key>IsMultiUser</key><false/>"
+                + "<key>IsSupervised</key><true/>"
+                + "<key>OrganizationMagic</key><string>\(magic)</string>"
+                + "<key>OrganizationName</key><string>\(xmlEscaped(organization))</string>"
+                + "<key>PostSetupProfileWasInstalled</key><true/>"
+                + "<key>SupervisorHostCertificates</key><array><data>\(b64)</data></array>"
+                + "</dict></dict>"
+            let reply = try mcinstallRequest(body, superviseCert: nil, tunnel: tunnel)
+            try checkAck(reply, action: "SetCloudConfiguration")
+        }
+    }
+
+    /// 验证监督通道可用（Escalate → GetCloudConfiguration，同一连接内完成）.
+    /// 能 Acknowledged 即代表监督证书与 PKCS7 签名都被设备接受.
+    static func verifySupervisionChannel() throws {
+        try queue.sync { () -> Void in
+            guard let cert = SupervisionService.certificateDER() else {
+                throw makeError("缺少监督身份")
+            }
+            SupervisionService.registerSigner()
+            let tunnel = try createTunnel()
+            defer { tunnel.release() }
+            guard mcinstallShimPort(tunnel.handshake) != nil else {
+                throw makeError("设备未暴露 \(mcInstallRSDService)")
+            }
+            let reply = try mcinstallRequest(
+                "<dict><key>RequestType</key><string>GetCloudConfiguration</string></dict>",
+                superviseCert: cert, tunnel: tunnel)
+            try checkAck(reply, action: "Escalate")
         }
     }
 

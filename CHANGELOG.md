@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.249] - 2026-09-08
+
+### 新增
+- 百宝箱「设备控制」新增 **「监督模式（Supervision）」** 开关。开启后 Wi-Fi 射频开关走 MCInstall **Escalate 监督通道**——这是设备回 `DMCTunnelErrorDomain 14005`「Unable to set Wi-Fi power」时的正路。
+
+### 实现链路（对齐 pymobiledevice3 `MobileConfigService.escalate` / `supervise`）
+1. **监督身份**：App 内生成 RSA-2048 + 自签证书（CN=EscapeOS），PEM/DER 持久化在 UserDefaults，跨会话同一身份（换身份 = 设备侧监督失效）。走已链接的 libcrypto（ZSign 同源），零新增依赖。
+2. **`SetCloudConfiguration`**：`IsSupervised=true` + `SupervisorHostCertificates=[证书DER]`，把设备置为受监督。
+3. **`Escalate`（同一连接内）**：`SupervisorCertificate(证书DER)` → 设备回 `Challenge` → PKCS7 附签（attached / Binary / SHA-256，`PKCS7_sign` + `PKCS7_BINARY|PKCS7_NOSMIMECAP`）→ `EscalateResponse` → `ProceedWithKeybagMigration`。
+4. **`SetWiFiPowerState`**：监督模式开启时，每次射频开关都在同一连接先 Escalate 再下发。
+
+### 架构改动
+- Rust 侧把「单条射频命令」泛化成 **`mcinstall_request_rsd`**（通用 MCInstall 请求 + 可选 Escalate），Swift 只组装 plist 正文，帧协议/IO 仍全在 Rust（v0.3.244 闪退教训：Swift 不碰帧协议）。
+- PKCS7 签名走 **函数指针回调**（Swift 注册 → Rust 在 Escalate 中回调），Rust 不引加密依赖、Cargo.lock 不变。
+- 手写 base64 编解码（不新增 crate）；plist 应答解析在 Swift 侧做（纯字符串处理，无指针风险）。
+- 新增文件 `EscapeOS/Engine/SupervisionService.swift`（已登记 Makefile `EscapeSpace_FILES`）。
+
+### ⚠️ 须知
+- 开启会把设备置为受监督，设置里出现「此 iPhone 由 EscapeOS 监管」；**MCInstall 没有公开的撤销接口**，关闭开关只停用本 App 的监督通道，不会撤销设备侧状态。
+- 若设备已被其他身份监督，`Escalate` 会失败并给出设备原文错误。
+
 ## [0.3.248] - 2026-09-08
 
 ### 修复

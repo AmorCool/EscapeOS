@@ -116,6 +116,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Engine/KeepAliveManager.swift \
 	EscapeOS/Engine/SpoofSession.swift \
 	EscapeOS/Engine/JITEnableService.swift \
+	EscapeOS/Engine/SupervisionService.swift \
 	EscapeOS/Engine/ProvisioningProfileStore.swift \
 	EscapeOS/Engine/CertificateManager.swift \
 	EscapeOS/Engine/PairingInstallService.swift \

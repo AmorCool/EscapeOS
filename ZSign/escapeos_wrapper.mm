@@ -901,3 +901,136 @@ extern "C" int zsign_sign_file_with_cert(const char* path,
     diagWrite("=== 签名结束 rc=" + std::to_string(rc) + " ===\n");
     return rc;
 }
+
+
+// ===== 监督（Supervision）身份与 PKCS7 签名（v0.3.249） =====
+// MCInstall 的 Escalate 需要监督身份：自签证书注册进设备 CloudConfiguration 的
+// SupervisorHostCertificates，设备下发 Challenge，再用 PKCS7 附签回传。
+// 对齐 pymobiledevice3 MobileConfigService.escalate/supervise
+// （PKCS7SignatureBuilder 默认 attached + Binary，故用 PKCS7_BINARY|PKCS7_NOSMIMECAP）。
+
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/evp.h>
+#include <openssl/pkcs7.h>
+
+// 生成自签监督身份。三个输出均为 malloc 分配，调用方负责 free。
+// certDer 供 SupervisorHostCertificates / Escalate 直接内嵌（pmd3 用整张证书 DER）。
+extern "C" int zsign_gen_supervision_identity(const char* orgCN,
+                                              char** certPemOut, int* certPemLen,
+                                              char** keyPemOut, int* keyPemLen,
+                                              unsigned char** certDerOut, int* certDerLen) {
+    if (!orgCN || !certPemOut || !certPemLen || !keyPemOut || !keyPemLen
+        || !certDerOut || !certDerLen) return -2;
+    *certPemOut = NULL; *keyPemOut = NULL; *certDerOut = NULL;
+    *certPemLen = 0; *keyPemLen = 0; *certDerLen = 0;
+
+    BIGNUM* bn = BN_new();
+    RSA* rsa = RSA_new();
+    EVP_PKEY* pkey = EVP_PKEY_new();
+    X509* x = X509_new();
+    if (!bn || !rsa || !pkey || !x) {
+        if (bn) BN_free(bn);
+        if (rsa) RSA_free(rsa);
+        if (pkey) EVP_PKEY_free(pkey);
+        if (x) X509_free(x);
+        return -1;
+    }
+    bool ok = BN_set_word(bn, 65537) == 1
+           && RSA_generate_key_ex(rsa, 2048, bn, NULL) == 1
+           && EVP_PKEY_assign_RSA(pkey, rsa) == 1;   // assign 转移所有权：rsa 由 pkey 释放
+    if (ok) {
+        X509_set_version(x, 2);                       // v3
+        ASN1_INTEGER_set(X509_get_serialNumber(x), (long)time(NULL));
+        X509_gmtime_adj(X509_getm_notBefore(x), 0);
+        X509_gmtime_adj(X509_getm_notAfter(x), 60L * 60 * 24 * 3650);
+        X509_NAME* nm = X509_get_subject_name(x);
+        ok = X509_NAME_add_entry_by_txt(nm, "CN", 0x1001 /*MBSTRING_ASC*/,
+                                        (const unsigned char*)orgCN, -1, -1, 0) == 1
+          && X509_set_issuer_name(x, nm) == 1
+          && X509_set_pubkey(x, pkey) == 1
+          && X509_sign(x, pkey, EVP_sha256()) > 0;
+    }
+    if (ok) {
+        BIO* cB = BIO_new(BIO_s_mem());
+        BIO* kB = BIO_new(BIO_s_mem());
+        BIO* dB = BIO_new(BIO_s_mem());
+        ok = cB && kB && dB
+          && PEM_write_bio_X509(cB, x) == 1
+          && PEM_write_bio_PrivateKey(kB, pkey, NULL, NULL, 0, NULL, NULL) == 1
+          && i2d_X509_bio(dB, x) == 1;
+        if (ok) {
+            char* cp = NULL; long cl = BIO_get_mem_data(cB, &cp);
+            char* kp = NULL; long kl = BIO_get_mem_data(kB, &kp);
+            char* dp = NULL; long dl = BIO_get_mem_data(dB, &dp);
+            if (cl > 0 && kl > 0 && dl > 0) {
+                *certPemOut = (char*)malloc(cl + 1);
+                *keyPemOut = (char*)malloc(kl + 1);
+                *certDerOut = (unsigned char*)malloc(dl);
+                if (*certPemOut && *keyPemOut && *certDerOut) {
+                    memcpy(*certPemOut, cp, cl); (*certPemOut)[cl] = 0;
+                    memcpy(*keyPemOut, kp, kl); (*keyPemOut)[kl] = 0;
+                    memcpy(*certDerOut, dp, dl);
+                    *certPemLen = (int)cl; *keyPemLen = (int)kl; *certDerLen = (int)dl;
+                } else {
+                    free(*certPemOut); free(*keyPemOut); free(*certDerOut);
+                    *certPemOut = NULL; *keyPemOut = NULL; *certDerOut = NULL;
+                    ok = false;
+                }
+            } else ok = false;
+        }
+        if (cB) BIO_free(cB);
+        if (kB) BIO_free(kB);
+        if (dB) BIO_free(dB);
+    }
+    BN_free(bn); EVP_PKEY_free(pkey); X509_free(x);
+    return ok ? 0 : -1;
+}
+
+// PKCS7 附签（attached）/二进制/SHA-256。输出 DER（malloc），调用方负责 free。
+// 与 pymobiledevice3 PKCS7SignatureBuilder(...).sign(Encoding.DER, [Binary]) 对齐。
+extern "C" int zsign_pkcs7_sign_data(const char* certPem, int certLen,
+                                     const char* keyPem, int keyLen,
+                                     const unsigned char* data, int dataLen,
+                                     unsigned char** derOut, int* derLen) {
+    if (!certPem || certLen <= 0 || !keyPem || keyLen <= 0
+        || !data || dataLen <= 0 || !derOut || !derLen) return -2;
+    *derOut = NULL; *derLen = 0;
+
+    BIO* cbio = BIO_new_mem_buf(certPem, certLen);
+    if (!cbio) return -1;
+    X509* cert = PEM_read_bio_X509(cbio, NULL, 0, NULL);
+    BIO_free(cbio);
+    if (!cert) return -1;
+
+    BIO* kbio = BIO_new_mem_buf(keyPem, keyLen);
+    if (!kbio) { X509_free(cert); return -1; }
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(kbio, NULL, NULL, NULL);
+    BIO_free(kbio);
+    if (!pkey) { X509_free(cert); return -1; }
+
+    int rc = -1;
+    BIO* dbio = BIO_new_mem_buf(data, dataLen);
+    // PKCS7_BINARY=附签内容原样；不加 PKCS7_DETACHED=attached；NOSMIMECAP 去掉 S/MIME 能力表
+    PKCS7* p7 = dbio ? PKCS7_sign(cert, pkey, NULL, dbio, PKCS7_BINARY | PKCS7_NOSMIMECAP) : NULL;
+    if (p7) {
+        BIO* obio = BIO_new(BIO_s_mem());
+        if (obio && i2d_PKCS7_bio(obio, p7) == 1) {
+            char* ptr = NULL; long len = BIO_get_mem_data(obio, &ptr);
+            if (len > 0) {
+                *derOut = (unsigned char*)malloc(len);
+                if (*derOut) {
+                    memcpy(*derOut, ptr, len);
+                    *derLen = (int)len;
+                    rc = 0;
+                }
+            }
+        }
+        if (obio) BIO_free(obio);
+        PKCS7_free(p7);
+    }
+    if (dbio) BIO_free(dbio);
+    EVP_PKEY_free(pkey);
+    X509_free(cert);
+    return rc;
+}

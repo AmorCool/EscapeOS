@@ -86,4 +86,25 @@ int lua_host_exec(const char *code, const char *outPath);
 void lua_host_set_wifi_power_fn(int (*fn)(int, char **errOut));
 void lua_host_set_mcinstall_handles(void *adapter, void *handshake, const char *pairingPath);
 
+// 监督（Supervision）身份 + PKCS7 签名（v0.3.249，libcrypto 与 ZSign 同源）
+int zsign_gen_supervision_identity(const char *orgCN,
+                                   char **certPemOut, int *certPemLen,
+                                   char **keyPemOut, int *keyPemLen,
+                                   unsigned char **certDerOut, int *certDerLen);
+int zsign_pkcs7_sign_data(const char *certPem, int certLen,
+                          const char *keyPem, int keyLen,
+                          const unsigned char *data, int dataLen,
+                          unsigned char **derOut, int *derLen);
+
+// MCInstall 通用请求 + Escalate 签名回调（v0.3.249，Rust 侧 mcinstall.rs）。
+// mcinstall_pkcs7_sign_fn 类型已在 idevice.h 里 typedef（经 TunnelContext.h 引入），
+// 此处不要重复 typedef（C 里重复定义会直接编译错）。
+void mcinstall_set_pkcs7_sign_fn(mcinstall_pkcs7_sign_fn f);
+struct IdeviceFfiError *mcinstall_request_rsd(struct AdapterHandle *adapter,
+                                              struct RsdHandshakeHandle *handshake,
+                                              const char *request_xml,
+                                              const unsigned char *cert_der,
+                                              int cert_der_len,
+                                              char **out_reply);
+
 #endif /* EscapeOS_Bridging_Header_h */

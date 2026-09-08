@@ -66,6 +66,48 @@ struct TreasureBoxView: View {
     @State private var wifiPairingBusy = false
     @State private var wifiPowerMsg: String?
     @State private var wifiPowerMsgIsError = false
+    // v0.3.249：监督（Supervision）通道开关——设备拒绝 14005 时射频开关必须走 Escalate
+    @State private var supervisionOn = UserDefaults.standard.bool(forKey: SupervisionService.enabledKey)
+    @State private var supervisionBusy = false
+    @State private var supervisionMsg: String?
+    @State private var supervisionMsgIsError = false
+
+    private func setSupervision(_ on: Bool) {
+        guard !supervisionBusy else { return }
+        supervisionBusy = true
+        supervisionMsg = nil
+        supervisionMsgIsError = false
+        Task.detached(priority: .userInitiated) {
+            var failure: String?
+            if on {
+                do {
+                    // ① 生成（或复用）监督身份 → ② SetCloudConfiguration 置为受监督
+                    // → ③ Escalate + GetCloudConfiguration 校验监督通道真的能用
+                    try SupervisionService.ensureIdentity(organization: "EscapeOS")
+                    try WirelessLockdownService.supervise(organization: "EscapeOS")
+                    try WirelessLockdownService.verifySupervisionChannel()
+                    SupervisionService.setEnabledFlag(true)
+                } catch { failure = error.localizedDescription }
+            } else {
+                SupervisionService.setEnabledFlag(false)
+            }
+            let errText = failure
+            await MainActor.run {
+                supervisionBusy = false
+                if let errText {
+                    supervisionOn = false     // 失败：开关弹回
+                    supervisionMsgIsError = true
+                    supervisionMsg = "失败：\(errText)"
+                } else if on {
+                    supervisionMsgIsError = false
+                    supervisionMsg = "监督通道已建立（Escalate 校验通过，射频开关现在走监督通道）"
+                } else {
+                    supervisionMsgIsError = false
+                    supervisionMsg = "已停用监督通道（设备侧的监督状态不会自动撤销）"
+                }
+            }
+        }
+    }
 
     // 出现时读回设备真实状态（射频持久化值在 @State 初始化时已恢复；
     // EnableWifiConnections 无持久化，必须 GetValue 实时读）
@@ -155,6 +197,21 @@ struct TreasureBoxView: View {
     private var wifiPowerCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("设备控制").font(.headline).padding(.bottom, 2)
+            // v0.3.249：监督通道开关（射频开关被设备拒 14005 时必须走它）
+            Toggle(isOn: Binding(
+                get: { supervisionOn },
+                set: { on in
+                    guard !supervisionBusy else { return }
+                    setSupervision(on)
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("监督模式（Supervision）", systemImage: "checkmark.shield").font(.subheadline)
+                    Text("开启会把设备置为受监督并建立 Escalate 监督通道（设置里会出现「此 iPhone 由 EscapeOS 监管」）；MCInstall 无撤销接口，关闭只停用本 App 的监督通道")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(supervisionBusy)
             Toggle(isOn: Binding(
                 get: { wifiPowerOn },
                 set: { on in
@@ -164,7 +221,9 @@ struct TreasureBoxView: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Wi-Fi 射频开关").font(.subheadline)
-                    Text("MCInstall SetWiFiPowerState（需 LocalDevVPN + 配对文件）；写入型开关，显示上次设定值；关闭后若 LocalDevVPN 走 Wi-Fi，隧道会断开。设备若报「Unable to set Wi-Fi power」，是该系统拒绝这条命令（通常要求监督状态），不是 App 出错")
+                    Text(supervisionOn
+                         ? "MCInstall SetWiFiPowerState（监督通道）；写入型开关，显示上次设定值；关闭后若 LocalDevVPN 走 Wi-Fi，隧道会断开"
+                         : "MCInstall SetWiFiPowerState（需 LocalDevVPN + 配对文件）；写入型开关，显示上次设定值；设备若报「Unable to set Wi-Fi power」= 系统拒绝该命令，请先开启上方监督模式")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -185,8 +244,13 @@ struct TreasureBoxView: View {
                 }
             }
             .disabled(wifiPairingBusy)
-            if wifiPowerBusy || wifiPairingBusy {
+            if supervisionBusy || wifiPowerBusy || wifiPairingBusy {
                 HStack { ProgressView().controlSize(.small); Text("正在执行…").font(.caption).foregroundStyle(.secondary) }
+            }
+            if let msg = supervisionMsg {
+                Text(msg)
+                    .font(.caption2)
+                    .foregroundStyle(supervisionMsgIsError ? Color.red : Color.green)
             }
             if let msg = wifiPowerMsg {
                 Text(msg)

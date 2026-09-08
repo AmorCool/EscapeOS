@@ -146,9 +146,58 @@ async fn rsd_checkin(stream: &mut Box<dyn ReadWrite>) -> Result<(), IdeviceError
     Ok(())
 }
 
-/// v0.3.248：从 MCInstall 错误应答里抠出单个字段的值，给用户一条能看懂的信息，
-/// 而不是把整段 XML 糊到界面上（真机实锤：设备拒绝时回 Status=Error +
-/// ErrorChain[ErrorCode/ErrorDomain/LocalizedDescription]，不含字面 <key>Error</key>）.
+// ---- base64（手写，避免新增依赖把 Cargo.lock 打翻）----
+
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(B64_ALPHABET[((n >> 18) & 63) as usize] as char);
+        out.push(B64_ALPHABET[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { B64_ALPHABET[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { B64_ALPHABET[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut out = Vec::new();
+    for ch in s.bytes() {
+        match ch {
+            b'=' | b'\n' | b'\r' | b' ' | b'\t' => continue,
+            b'A'..=b'Z' => acc = (acc << 6) | (ch - b'A') as u32,
+            b'a'..=b'z' => acc = (acc << 6) | (ch - b'a' + 26) as u32,
+            b'0'..=b'9' => acc = (acc << 6) | (ch - b'0' + 52) as u32,
+            b'+' => acc = (acc << 6) | 62,
+            b'/' => acc = (acc << 6) | 63,
+            _ => return None,
+        }
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// 提取 plist XML 里 `<key>K</key><data>B64</data>` 的二进制值
+fn plist_data_field(xml: &str, key: &str) -> Option<Vec<u8>> {
+    let key_tag = format!("<key>{}</key>", key);
+    let rest = &xml[xml.find(&key_tag)?..];
+    let start = rest.find("<data>")? + "<data>".len();
+    let tail = &rest[start..];
+    let end = tail.find("</data>")?;
+    b64_decode(&tail[..end])
+}
+
 fn mdm_field<'a>(xml: &'a str, key: &str, open: &str, close: &str) -> Option<&'a str> {
     let key_tag = format!("<key>{}</key>", key);
     let rest = &xml[xml.find(&key_tag)?..];
@@ -156,6 +205,11 @@ fn mdm_field<'a>(xml: &'a str, key: &str, open: &str, close: &str) -> Option<&'a
     let tail = &rest[start..];
     let end = tail.find(close)?;
     Some(&tail[..end])
+}
+
+fn is_ack(reply: &str) -> bool {
+    mdm_field(reply, "Status", "<string>", "</string>") == Some("Acknowledged")
+        || reply.contains("Acknowledged")
 }
 
 fn describe_mdm_error(reply: &str) -> String {
@@ -172,82 +226,177 @@ fn describe_mdm_error(reply: &str) -> String {
     }
 }
 
-/// SetWiFiPowerState over 已建立的 MCInstall 流
-pub async fn set_wifi_power_stream(
+// ---- PKCS7 签名回调（Swift 提供，Escalate 时用） ----
+//
+// Rust 侧不引加密依赖（避免把 Cargo.lock 打翻）；证书/私钥与 PKCS7 签名都走已
+// 链接的 libcrypto（ZSign 同款）。Swift 启动时注册一次，Rust 在 Escalate 中回调。
+
+type Pkcs7SignFn = unsafe extern "C" fn(
+    data: *const u8,
+    data_len: c_int,
+    der_out: *mut *mut u8,
+    der_len: *mut c_int,
+) -> c_int;
+
+static PKCS7_SIGN_FN: Mutex<Option<Pkcs7SignFn>> = Mutex::new(None);
+
+/// 注册 PKCS7 签名回调（幂等，后注册覆盖前者）。
+///
+/// # Safety
+/// `f` 必须是有效的 C 函数指针；Swift 侧负责其生命周期（静态闭包）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mcinstall_set_pkcs7_sign_fn(f: Pkcs7SignFn) {
+    *PKCS7_SIGN_FN.lock().unwrap() = Some(f);
+}
+
+/// 隧道内连 shim.remote 并完成 RSDCheckin，返回可用流
+async fn mcinstall_connect(
+    adapter: &mut idevice::tcp::handle::AdapterHandle,
+    handshake: &idevice::rsd::RsdHandshake,
+) -> Result<Box<dyn ReadWrite>, IdeviceError> {
+    let port = handshake
+        .services
+        .get(MC_SERVICE_RSD)
+        .map(|s| s.port)
+        .ok_or(IdeviceError::ServiceNotFound)?;
+    let mut stream: Box<dyn ReadWrite> = Box::new(adapter.connect(port).await?);
+    rsd_checkin(&mut stream).await?;
+    Ok(stream)
+}
+
+/// Escalate（监督身份挑战应答）。对齐 pymobiledevice3 MobileConfigService.escalate：
+/// ① SupervisorCertificate(证书 DER) → ② 用 PKCS7 附签 Challenge 回传 → ③ keybag 迁移。
+/// **必须在同一条连接上完成**——escalate 状态是按连接记的。
+async fn mcinstall_escalate(
     stream: &mut Box<dyn ReadWrite>,
-    state: bool,
-) -> Result<String, IdeviceError> {
-    let on = if state { "true" } else { "false" };
+    cert_der: &[u8],
+) -> Result<(), IdeviceError> {
     send_xml(
         stream,
         &format!(
-            "{}<dict><key>PowerState</key><{} /><key>RequestType</key>\
-             <string>SetWiFiPowerState</string></dict></plist>",
-            PLIST_HEADER, on
+            "{}<dict><key>RequestType</key><string>Escalate</string>\
+             <key>SupervisorCertificate</key><data>{}</data></dict></plist>",
+            PLIST_HEADER,
+            b64_encode(cert_der)
         ),
     )
     .await?;
-    let reply = read_plist_xml(stream).await?;
-    // v0.3.247：校验 Acknowledged（pmd3 MobileConfig.set_wifi_power_state 同款判定，
-    // 写入被设备接受才返回 Ok，否则 Swift 侧如实报错）。
-    // v0.3.248：拒绝时解析 ErrorCode/ErrorDomain/LocalizedDescription，不再倒 XML。
-    if !reply.contains("Acknowledged") {
+    let r1 = read_plist_xml(stream).await?;
+    if !is_ack(&r1) {
         return Err(IdeviceError::UnexpectedResponse(format!(
-            "SetWiFiPowerState 未被确认：{}",
-            describe_mdm_error(&reply)
+            "Escalate 被拒绝：{}",
+            describe_mdm_error(&r1)
         )));
     }
-    Ok(reply)
+    let challenge = plist_data_field(&r1, "Challenge")
+        .ok_or_else(|| IdeviceError::UnexpectedResponse("Escalate 应答缺少 Challenge".into()))?;
+
+    let signer = *PKCS7_SIGN_FN.lock().unwrap();
+    let signer = signer
+        .ok_or_else(|| IdeviceError::UnexpectedResponse("未注册 PKCS7 签名回调".into()))?;
+    let mut der: *mut u8 = null_mut();
+    let mut der_len: c_int = 0;
+    let rc = unsafe { signer(challenge.as_ptr(), challenge.len() as c_int, &mut der, &mut der_len) };
+    if rc != 0 || der.is_null() || der_len <= 0 {
+        return Err(IdeviceError::UnexpectedResponse(format!(
+            "PKCS7 签名失败（rc={}）",
+            rc
+        )));
+    }
+    let sig = unsafe { std::slice::from_raw_parts(der, der_len as usize) }.to_vec();
+    // Swift 侧用 malloc 分配，Darwin 上与 libc::free 同一分配器
+    unsafe { libc::free(der as *mut libc::c_void) };
+
+    send_xml(
+        stream,
+        &format!(
+            "{}<dict><key>RequestType</key><string>EscalateResponse</string>\
+             <key>SignedRequest</key><data>{}</data></dict></plist>",
+            PLIST_HEADER,
+            b64_encode(&sig)
+        ),
+    )
+    .await?;
+    let r2 = read_plist_xml(stream).await?;
+    if !is_ack(&r2) {
+        return Err(IdeviceError::UnexpectedResponse(format!(
+            "EscalateResponse 被拒绝：{}",
+            describe_mdm_error(&r2)
+        )));
+    }
+
+    send_xml(
+        stream,
+        &format!(
+            "{}<dict><key>RequestType</key><string>ProceedWithKeybagMigration</string>\
+             </dict></plist>",
+            PLIST_HEADER
+        ),
+    )
+    .await?;
+    let r3 = read_plist_xml(stream).await?;
+    if !is_ack(&r3) {
+        return Err(IdeviceError::UnexpectedResponse(format!(
+            "ProceedWithKeybagMigration 被拒绝：{}",
+            describe_mdm_error(&r3)
+        )));
+    }
+    Ok(())
 }
 
-/// v0.3.247：RSD 直连 MCInstall SetWiFiPowerState（pmd3 `profile set-wifi-power` 同款）.
+/// v0.3.249：通用 MCInstall 请求（隧道内直连 shim.remote → RSDCheckin →
+/// 可选 Escalate → 发送 Swift 组装好的 plist 正文 → 原样返回设备应答）。
 ///
-/// 与旧 `mcinstall_power_with_handles` 的本质区别：**完全不经过 lockdownd**——
-/// 旧实现连 lockdownd + `idevice_pairing_file_read`（对远程配对文件必败）+
-/// start_session，这正是 v0.3.105「实测不可用」的根因，也连带导致 Swift 侧
-/// 手写帧协议版本闪退。现在：服务端口直接取自 RSD 握手自带的服务表
-/// （与 rsd_get_service_info 同源），隧道内直连 shim.remote，RSDCheckin 后
-/// 发 SetWiFiPowerState，设备 Acknowledged 才算成功.
-///
-/// 句柄为**借用**（调用方持有并在之后释放），不做所有权移交.
+/// `request_xml` 是 **plist 正文**（`<dict>...</dict>`），不含 `<?xml?>` 头与
+/// `</plist>` 收尾——Rust 侧统一拼装，Swift 不碰任何帧协议（v0.3.244 闪退教训）。
+/// `cert_der`/`cert_der_len` 非空时先走 Escalate（监督通道）。
 ///
 /// # Safety
-/// `adapter`/`handshake` 必须是本库分配的有效句柄；`out_reply` 可为 NULL
-/// （成功时写入设备应答文本，调用方用 idevice_string_free 释放）。
+/// `adapter`/`handshake` 必须是本库分配的有效句柄；`out_reply` 可为 NULL。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mcinstall_set_wifi_power_rsd(
+pub unsafe extern "C" fn mcinstall_request_rsd(
     adapter: *mut AdapterHandle,
     handshake: *mut RsdHandshakeHandle,
-    on: c_int,
+    request_xml: *const c_char,
+    cert_der: *const u8,
+    cert_der_len: c_int,
     out_reply: *mut *mut c_char,
 ) -> *mut IdeviceFfiError {
-    if adapter.is_null() || handshake.is_null() {
+    if adapter.is_null() || handshake.is_null() || request_xml.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+    if !cert_der.is_null() && cert_der_len <= 0 {
         return ffi_err!(IdeviceError::FfiInvalidArg);
     }
 
+    let req = unsafe { CStr::from_ptr(request_xml) }.to_string_lossy().into_owned();
+    let cert: Option<Vec<u8>> = if cert_der.is_null() {
+        None
+    } else {
+        Some(unsafe { std::slice::from_raw_parts(cert_der, cert_der_len as usize) }.to_vec())
+    };
+
     let res: Result<String, IdeviceError> = (|| {
         let handshake_ref = unsafe { &(*(handshake)).0 };
-        // 1) RSD 服务表直接取 shim.remote 端口（无需任何 StartService RPC）
-        let port = handshake_ref
-            .services
-            .get(MC_SERVICE_RSD)
-            .map(|s| s.port)
-            .ok_or(IdeviceError::ServiceNotFound)?;
-
         let adapter_ref = unsafe { &mut (*(adapter)).0 };
-        // 2) 隧道内直连服务端口 + RSDCheckin + SetWiFiPowerState
         run_sync_local(async move {
-            let mut stream: Box<dyn ReadWrite> = Box::new(adapter_ref.connect(port).await?);
-            rsd_checkin(&mut stream).await?;
-            set_wifi_power_stream(&mut stream, on != 0).await
+            let mut stream = mcinstall_connect(adapter_ref, handshake_ref).await?;
+            if let Some(cert) = &cert {
+                mcinstall_escalate(&mut stream, cert).await?;
+            }
+            send_xml(
+                &mut stream,
+                &format!("{}{}</plist>", PLIST_HEADER, req),
+            )
+            .await?;
+            read_plist_xml(&mut stream).await
         })
     })();
 
     match res {
         Ok(reply) => {
             if !out_reply.is_null() {
-                let head: String = reply.chars().take(400).collect();
-                let c = CString::new(head).unwrap_or_default();
+                let c = CString::new(reply).unwrap_or_default();
                 unsafe { *out_reply = c.into_raw() };
             }
             null_mut()
@@ -301,7 +450,23 @@ pub async fn mcinstall_power_with_handles(on: bool) -> Result<String, IdeviceErr
     }
     // 4) 通过隧道 adapter 连到服务端口，直发 plist（lockdown 启动的服务无需 RSDCheckin）
     let mut stream: Box<dyn ReadWrite> = Box::new(adapter.connect(port).await?);
-    set_wifi_power_stream(&mut stream, on).await
+    let on_str = if on { "true" } else { "false" };
+    send_xml(
+        &mut stream,
+        &format!(
+            "{}<dict><key>PowerState</key><{} /><key>RequestType</key>\n             <string>SetWiFiPowerState</string></dict></plist>",
+            PLIST_HEADER, on_str
+        ),
+    )
+    .await?;
+    let reply = read_plist_xml(&mut stream).await?;
+    if !is_ack(&reply) {
+        return Err(IdeviceError::UnexpectedResponse(format!(
+            "SetWiFiPowerState 未被确认：{}",
+            describe_mdm_error(&reply)
+        )));
+    }
+    Ok(reply)
 }
 
 // ---- C 导出（供 Rust lua_host 使用 mcinstall_power_with_handles 前后的诊断）----
