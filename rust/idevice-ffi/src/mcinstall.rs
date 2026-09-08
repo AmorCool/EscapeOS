@@ -21,7 +21,12 @@ use crate::pairing_file::{IdevicePairingFile, idevice_pairing_file_read};
 use crate::run_sync_local;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::{core_device_proxy::AdapterHandle, rsd::RsdHandshakeHandle, IdeviceFfiError};
+// ffi_err! 必须显式导入：#[macro_export] 宏虽在 crate 根，但 macro_rules 是文本序作用域，
+// 本模块在 lib.rs 中声明于 errors.rs 之前，不导入就报 cannot find macro（v0.3.247 实锤，
+// adapter.rs 同款显式导入见 adapter.rs 头部）
+use crate::{
+    core_device_proxy::AdapterHandle, ffi_err, rsd::RsdHandshakeHandle, IdeviceFfiError,
+};
 
 const PLIST_HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
