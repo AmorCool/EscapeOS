@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.247] - 2026-09-08
+
+### 修复
+- 百宝箱 → 「Wi-Fi 射频开关」点按闪退（v0.3.244 / 0.3.245 真机实测必崩）。
+
+### 根因
+| 项 | 说明 |
+| --- | --- |
+| 崩溃代码 | v0.3.244 起的「纯 Swift 手写帧」实现：`adapter_send` / `adapter_recv` + 自制 4 字节大端长度帧 + 欠读补齐循环。 |
+| 直接原因 | FFI 头 `idevice.h` 明写「stream 必须与 adapter 同线程、句柄非线程安全」，而 Swift 侧把 `adapter_connect` 拿到的 `ReadWriteOpaque*` 跨 `run_sync` 边界反复收发；设备提前关流时 `adapter_recv` 返回 `got == 0`，补齐循环仍继续按旧缓冲取字节，直接越界/野指针。 |
+| 为什么没人发现 | v0.3.246 的修复方向（协议下沉到 Rust `mcinstall_set_wifi_power_rsd`）只写了 Rust 实现，**没有在 `idevice.h` 里补 C 声明**，Swift 侧根本引用不到，只能继续沿用会崩的手写帧版本。 |
+
+### 改动
+- **协议整体下沉 Rust**：`mcinstall_set_wifi_power_rsd`（RSD 服务表取 `MCInstall.shim.remote` 端口 → 隧道内直连 → RSDCheckin → SetWiFiPowerState → 校验 `Acknowledged`）全在同一个 tokio 上下文内完成，Swift 只负责建隧道和借出句柄。
+- **补 C 声明**：`rust/idevice-ffi/idevice.h`（及 CI 会拷贝的 `EscapeOS/Tunnel/idevice.h`）新增 `mcinstall_set_wifi_power_rsd` 导出声明——这是 v0.3.246 编不过的直接原因。
+- **服务可用性判定改为确定性查询**：用 `rsd_get_service_info` 直接查 RSD 握手自带的服务表，不再靠「FFI 错误码 21 == ServiceNotFound」这种未验证的映射决定要不要回退 lockdown `SetValue("WifiPowerState")`。
+- **隧道并发铁律**（与 `AFCService` 同款）：本服务所有操作走同一条串行队列；一次操作只建**一条**隧道（此前「局域网 Wi-Fi 配对」一次要建 2 条，页面 `onAppear` 还要再建 1 条）。
+- **建隧道失败退避重试**（3 次，300ms 递增），与 `AFCService` / `DeviceControlService` 对齐。
+- **内存**：`plist_to_bin` 的产出改用 `plist_mem_free` 释放（此前每次读状态都泄漏）。
+- **UI**：两个开关各用各的 busy 标志（此前共用一个，一个在忙另一个也被禁用）；写入失败时开关弹回原值并如实报错，不再停在错误位置；新增成功/失败的颜色区分。
+
+### 体验小结
+- 点按「Wi-Fi 射频开关」不再闪退；成功/失败都在卡片底部给出中文回执。
+- 单次操作只建一条隧道，射频开关的等待时间约为此前的一半。
+- 射频开关是**写入型**（设备不提供读取请求），UI 显示的是「上次设定值」；关闭射频后若 LocalDevVPN 本身走 Wi-Fi，隧道会断，恢复网络后需重新开启——卡片说明已注明。
+
 ## [0.2.82] - 2026-08-27
 
 ### 修复

@@ -56,18 +56,26 @@ struct TreasureBoxView: View {
     // 状态读回（iDescriptor 同款数据源））
     // v0.3.245 修复：此前 wifiPairingOn 从未赋值——Toggle 弹回、永远显示关、
     // 永远无法触达「停用」路径（用户实测"能开启但开关很快关闭、无法关闭"）。
+    // v0.3.247：射频开关的协议改走 Rust（MCInstall SetWiFiPowerState），点按不再闪退；
+    // 两个开关各用各的 busy 标志（此前共用一个，一个在忙另一个也被禁用）；
+    // 失败时开关弹回原值并如实报错（不再出现「开关停在错位置」）。
     @State private var wifiPowerOn = UserDefaults.standard.bool(forKey: WirelessLockdownService.wifiPowerStateKey)
+    @State private var wifiPowerBusy = false
     @State private var wifiPairingOn = false
     @State private var wifiPairingUnknown = true   // true=状态读不到（隧道未连），显示未知
-    @State private var wifiPowerBusy = false
+    @State private var wifiPairingBusy = false
     @State private var wifiPowerMsg: String?
+    @State private var wifiPowerMsgIsError = false
 
     // 出现时读回设备真实状态（射频持久化值在 @State 初始化时已恢复；
     // EnableWifiConnections 无持久化，必须 GetValue 实时读）
     private func refreshWifiStates() {
+        guard !wifiPairingBusy else { return }
+        wifiPairingBusy = true
         Task.detached(priority: .utility) {
             let enabled = WirelessLockdownService.readWifiConnectionsEnabled()
             await MainActor.run {
+                wifiPairingBusy = false
                 if let enabled {
                     wifiPairingOn = enabled
                     wifiPairingUnknown = false
@@ -79,55 +87,66 @@ struct TreasureBoxView: View {
     }
 
     private func setWifiPower(_ on: Bool) {
+        guard !wifiPowerBusy else { return }
         wifiPowerBusy = true
         wifiPowerMsg = nil
+        wifiPowerMsgIsError = false
         Task.detached(priority: .userInitiated) {
-            do {
-                try WirelessLockdownService.setWifiPower(on)
-                await MainActor.run {
-                    wifiPowerBusy = false
+            var failure: String?
+            do { try WirelessLockdownService.setWifiPower(on) }
+            catch { failure = error.localizedDescription }
+            let errText = failure
+            await MainActor.run {
+                wifiPowerBusy = false
+                if let errText {
+                    // 写入失败：不更新 wifiPowerOn，开关自动弹回原状态
+                    wifiPowerMsgIsError = true
+                    wifiPowerMsg = "失败：\(errText)"
+                } else {
                     wifiPowerOn = on
+                    wifiPowerMsgIsError = false
                     wifiPowerMsg = "已\(on ? "开启" : "关闭") Wi-Fi 射频（设备已确认）"
-                }
-            } catch {
-                await MainActor.run {
-                    wifiPowerBusy = false
-                    wifiPowerMsg = "失败：\(error.localizedDescription)"
                 }
             }
         }
     }
 
     private func setWifiPairing(_ on: Bool) {
-        wifiPowerBusy = true
+        guard !wifiPairingBusy else { return }
+        wifiPairingBusy = true
         wifiPowerMsg = nil
+        wifiPowerMsgIsError = false
         Task.detached(priority: .userInitiated) {
+            var confirmed: Bool?
+            var failure: String?
             do {
-                if on {
-                    try WirelessLockdownService.enableWifiConnections()
-                } else {
-                    try WirelessLockdownService.disableWifiConnections()
-                }
-                // v0.3.245：写成功后读回设备真实值确认（写成功≠生效，以设备为准）
-                let confirmed = WirelessLockdownService.readWifiConnectionsEnabled()
-                await MainActor.run {
-                    wifiPowerBusy = false
-                    if let confirmed {
-                        wifiPairingOn = confirmed
-                        wifiPairingUnknown = false
-                        wifiPowerMsg = confirmed == on
-                            ? "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接（设备已确认）"
-                            : "写入已接受，但设备读回 \(confirmed ? "开启" : "关闭")，可能被系统还原"
-                    } else {
-                        // 读回失败（隧道可能已被重置）——至少把 UI 状态跟手
-                        wifiPairingOn = on
-                        wifiPowerMsg = "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接"
-                    }
-                }
+                // 一次操作只建一条隧道：写入 + 读回在同一条隧道内完成
+                confirmed = try WirelessLockdownService.setWifiConnections(enabled: on)
             } catch {
-                await MainActor.run {
-                    wifiPowerBusy = false
-                    wifiPowerMsg = "失败：\(error.localizedDescription)"
+                failure = error.localizedDescription
+            }
+            let errText = failure
+            let readBack = confirmed
+            await MainActor.run {
+                wifiPairingBusy = false
+                if let errText {
+                    wifiPowerMsgIsError = true
+                    wifiPowerMsg = "失败：\(errText)"
+                    return
+                }
+                if let readBack {
+                    wifiPairingOn = readBack
+                    wifiPairingUnknown = false
+                    wifiPowerMsgIsError = readBack != on
+                    wifiPowerMsg = readBack == on
+                        ? "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接（设备已确认）"
+                        : "写入已接受，但设备读回 \(readBack ? "开启" : "关闭")，可能被系统还原"
+                } else {
+                    // 读回失败（隧道可能已被重置）——至少把 UI 状态跟手，并如实说明未确认
+                    wifiPairingOn = on
+                    wifiPairingUnknown = false
+                    wifiPowerMsgIsError = false
+                    wifiPowerMsg = "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接（设备未回读确认）"
                 }
             }
         }
@@ -145,7 +164,7 @@ struct TreasureBoxView: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Wi-Fi 射频开关").font(.subheadline)
-                    Text("MCInstall SetWiFiPowerState（需 LocalDevVPN + 配对文件）；关闭后若 LocalDevVPN 走 Wi-Fi，隧道会断开，需恢复网络后重新开启")
+                    Text("MCInstall SetWiFiPowerState（需 LocalDevVPN + 配对文件）；写入型开关，显示的是上次设定值；关闭后若 LocalDevVPN 走 Wi-Fi，隧道会断开，需恢复网络后重新开启")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -153,7 +172,7 @@ struct TreasureBoxView: View {
             Toggle(isOn: Binding(
                 get: { wifiPairingOn },
                 set: { on in
-                    guard !wifiPowerBusy else { return }
+                    guard !wifiPairingBusy else { return }
                     setWifiPairing(on)
                 }
             )) {
@@ -165,12 +184,14 @@ struct TreasureBoxView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            .disabled(wifiPowerBusy)
-            if wifiPowerBusy {
+            .disabled(wifiPairingBusy)
+            if wifiPowerBusy || wifiPairingBusy {
                 HStack { ProgressView().controlSize(.small); Text("正在执行…").font(.caption).foregroundStyle(.secondary) }
             }
             if let msg = wifiPowerMsg {
-                Text(msg).font(.caption2).foregroundStyle(wifiPowerMsg?.hasPrefix("失败") == true ? .red : .green)
+                Text(msg)
+                    .font(.caption2)
+                    .foregroundStyle(wifiPowerMsgIsError ? Color.red : Color.green)
             }
         }
         .padding(16)

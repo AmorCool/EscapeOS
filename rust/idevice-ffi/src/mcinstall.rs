@@ -18,6 +18,7 @@ use std::sync::Mutex;
 // - `RsdService as _` 匿名导入 trait 才能调 connect_rsd（避免与 crates.io 版同名 trait 冲突）
 use idevice::{IdeviceError, ReadWrite, RsdService as _, lockdown::LockdownClient};
 use crate::pairing_file::{IdevicePairingFile, idevice_pairing_file_read};
+use crate::run_sync_local;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{core_device_proxy::AdapterHandle, rsd::RsdHandshakeHandle, IdeviceFfiError};
@@ -162,7 +163,71 @@ pub async fn set_wifi_power_stream(
             reply
         )));
     }
+    // v0.3.247：校验 Acknowledged（pmd3 MobileConfig.set_wifi_power_state 同款判定，
+    // 写入被设备接受才返回 Ok，否则 Swift 侧如实报错）
+    if !reply.contains("Acknowledged") {
+        return Err(IdeviceError::UnexpectedResponse(format!(
+            "SetWiFiPowerState 未被确认（期望 Acknowledged）: {}",
+            reply
+        )));
+    }
     Ok(reply)
+}
+
+/// v0.3.247：RSD 直连 MCInstall SetWiFiPowerState（pmd3 `profile set-wifi-power` 同款）.
+///
+/// 与旧 `mcinstall_power_with_handles` 的本质区别：**完全不经过 lockdownd**——
+/// 旧实现连 lockdownd + `idevice_pairing_file_read`（对远程配对文件必败）+
+/// start_session，这正是 v0.3.105「实测不可用」的根因，也连带导致 Swift 侧
+/// 手写帧协议版本闪退。现在：服务端口直接取自 RSD 握手自带的服务表
+/// （与 rsd_get_service_info 同源），隧道内直连 shim.remote，RSDCheckin 后
+/// 发 SetWiFiPowerState，设备 Acknowledged 才算成功.
+///
+/// 句柄为**借用**（调用方持有并在之后释放），不做所有权移交.
+///
+/// # Safety
+/// `adapter`/`handshake` 必须是本库分配的有效句柄；`out_reply` 可为 NULL
+/// （成功时写入设备应答文本，调用方用 idevice_string_free 释放）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mcinstall_set_wifi_power_rsd(
+    adapter: *mut AdapterHandle,
+    handshake: *mut RsdHandshakeHandle,
+    on: c_int,
+    out_reply: *mut *mut c_char,
+) -> *mut IdeviceFfiError {
+    if adapter.is_null() || handshake.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+
+    let res: Result<String, IdeviceError> = (|| {
+        let handshake_ref = unsafe { &(*(handshake)).0 };
+        // 1) RSD 服务表直接取 shim.remote 端口（无需任何 StartService RPC）
+        let port = handshake_ref
+            .services
+            .get(MC_SERVICE_RSD)
+            .map(|s| s.port)
+            .ok_or(IdeviceError::ServiceNotFound)?;
+
+        let adapter_ref = unsafe { &mut (*(adapter)).0 };
+        // 2) 隧道内直连服务端口 + RSDCheckin + SetWiFiPowerState
+        run_sync_local(async move {
+            let mut stream: Box<dyn ReadWrite> = Box::new(adapter_ref.connect(port).await?);
+            rsd_checkin(&mut stream).await?;
+            set_wifi_power_stream(&mut stream, on != 0).await
+        })
+    })();
+
+    match res {
+        Ok(reply) => {
+            if !out_reply.is_null() {
+                let head: String = reply.chars().take(400).collect();
+                let c = CString::new(head).unwrap_or_default();
+                unsafe { *out_reply = c.into_raw() };
+            }
+            null_mut()
+        }
+        Err(e) => ffi_err!(e),
+    }
 }
 
 /// 用移交的隧道句柄执行完整 MCInstall SetWiFiPowerState 流程

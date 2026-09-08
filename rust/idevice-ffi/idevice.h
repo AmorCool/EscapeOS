@@ -9030,3 +9030,40 @@ extern "C"
 }
 #endif
 #endif
+
+/* ---- EscapeOS 扩展：MCInstall SetWiFiPowerState over RSD 隧道（v0.3.247） ----
+ *
+ * 由 rust/idevice-ffi/src/mcinstall.rs 导出。此前该符号只有 Rust 实现、没有 C 声明，
+ * Swift 侧（WirelessLockdownService）调用不到——这也是 v0.3.246 本地代码编不过、
+ * 射频开关只能沿用会闪退的 Swift 手写帧版本的原因。
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * Sets the device Wi-Fi radio power state over an already-established RSD tunnel.
+ *
+ * # Arguments
+ * * [`adapter`] - The adapter handle of the tunnel (borrowed, caller keeps ownership)
+ * * [`handshake`] - The RSD handshake handle (borrowed, caller keeps ownership)
+ * * [`on`] - 1 to enable the Wi-Fi radio, 0 to disable
+ * * [`out_reply`] - Optional out-pointer for the device reply (free with
+ *   `idevice_string_free`); may be NULL
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise (ServiceNotFound when the device
+ * does not expose `com.apple.mobile.MCInstall.shim.remote`).
+ *
+ * # Safety
+ * Both handles must be valid pointers allocated by this library and must be
+ * released by the caller afterwards.
+ */
+struct IdeviceFfiError *mcinstall_set_wifi_power_rsd(struct AdapterHandle *adapter,
+                                                     struct RsdHandshakeHandle *handshake,
+                                                     int on,
+                                                     char **out_reply);
+
+#ifdef __cplusplus
+}
+#endif
