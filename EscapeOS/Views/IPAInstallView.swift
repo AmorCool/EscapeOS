@@ -104,11 +104,17 @@ struct IPAInstallView: View {
                         }
                         Spacer()
                     }
-                    if !pairingFileExists {
-                        PairingGuideCard(note: "IPA 侧载需要配对文件（签名安装依赖设备身份）.")
-                    }
                 }
                 .padding(.vertical, 6)
+            }
+
+            // v0.3.245：配对引导卡独立板块（与其他功能页同一 PairingGuideCard 视觉）
+            if !pairingFileExists {
+                Section {
+                    PairingGuideCard(note: "IPA 侧载需要配对文件（签名安装依赖设备身份）.")
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                }
             }
 
             // IPA 源

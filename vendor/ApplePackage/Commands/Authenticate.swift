@@ -233,7 +233,7 @@ public enum Authenticator {
                 //    真 2FA 只由 200 + MZFinance.BadLogin.Configurator_message 判定
                 //    （v0.3.177 真机实锤：当前 Configurator UA 下 Apple 的 2FA 挑战走
                 //    200+plist——Apple 此时才真正向信任设备下发验证码）。
-                //    v0.3.244 修复「收不到 2FA 验证码」：旧实现把 204 空响应当 2FA 信号
+                //    v0.3.245 修复「收不到 2FA 验证码」：旧实现把 204 空响应当 2FA 信号
                 //    直接弹验证码输入框，但 Apple 返回 204 时并未下发任何验证码（实为
                 //    边缘软拒，常与 301/403 同源：IP 信誉/风控）——用户对着一条永远不会
                 //    到来的短信/推送干等（v0.3.243 真机 07:44 日志实锤：301→204 序列直接
@@ -248,7 +248,7 @@ public enum Authenticator {
                     // 4 次耗尽：不再 ensureFailed（那会绕过 legacy 回退），落 lastError
                     // 走 legacy MZFinance 端点整轮；legacy 也败才把该错误抛给 UI.
                     lastError = NSError(
-                        domain: "ApplePackage.Authenticate", code: status.code,
+                        domain: "ApplePackage.Authenticate", code: Int(status.code),
                         userInfo: [NSLocalizedDescriptionKey:
                             "iTunes 认证被 Apple 边缘持续软拒（HTTP \(status.code) 空响应 ×4）。\n" +
                             "这不是密码错误——Apple 风控拦截了本次请求（通常伴随 301/403/404 信号），且不会因此下发任何验证码。\n" +

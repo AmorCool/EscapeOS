@@ -22,7 +22,7 @@ import Foundation
 //  现在 connect_rsd → set_value，与 DeviceInfoService/BatteryHealthService/
 //  DeviceControlService 等已验证可用的 lockdownd 调用点一致.
 //
-//  v0.3.244：真机反馈两个开关「开关弹回 / 射频无实际效果 / 无法关闭 / 无状态识别」.
+//  v0.3.245：真机反馈两个开关「开关弹回 / 射频无实际效果 / 无法关闭 / 无状态识别」.
 //  ① 射频开关改走 MCInstall SetWiFiPowerState 真路径（见下方公开操作注释）；
 //  ② EnableWifiConnections 增加 GetValue 状态读回（iDescriptor 同款数据源）；
 //  ③ 修复 TreasureBoxView 从未给 wifiPairingOn 赋值导致的弹回/无法关闭.
@@ -129,7 +129,7 @@ enum WirelessLockdownService {
 
     /// Wi-Fi 射频开关（真路径：MCInstall SetWiFiPowerState）
     ///
-    /// v0.3.244：lockdown SetValue("WifiPowerState") 在现代 iOS 被 lockdownd 静默
+    /// v0.3.245：lockdown SetValue("WifiPowerState") 在现代 iOS 被 lockdownd 静默
     /// 接受但不生效（真机实测），射频开关的正路是 MCInstall 服务的 SetWiFiPowerState
     /// 请求（pymobiledevice3 `profile set-wifi-power` / Apple Configurator 同款）：
     /// RSD 服务表直连 `com.apple.mobile.MCInstall.shim.remote` → RSDCheckin →
@@ -187,7 +187,8 @@ enum WirelessLockdownService {
         guard let client else { throw makeError("lockdownd 客户端创建失败") }
         defer { lockdownd_client_free(client) }
 
-        var node: OpaquePointer?
+        // plist_t = UnsafeMutableRawPointer?（非 OpaquePointer，DeviceInfoService 同款）
+        var node: plist_t?
         let rc = key.withCString { k in
             domain.withCString { d in
                 lockdownd_get_value(client, k, d, &node)

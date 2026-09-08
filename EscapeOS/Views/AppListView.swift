@@ -295,21 +295,13 @@ struct AppListView: View {
                 }
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
 
-                // v0.3.230：配对文件缺失引导（原"应用"板块入口随改版丢失，恢复引导）
+                // v0.3.245：配对文件缺失引导统一走 PairingGuideCard（独立卡片板块，
+                // 图标块+标题+描述+钥匙导航行，与其余功能页同一视觉）
                 if viewModel.needsPairing {
                     Section {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("配对文件未导入", systemImage: "exclamationmark.triangle")
-                                .font(.headline)
-                                .foregroundStyle(.orange)
-                            Text("重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复应用列表.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            NavigationLink(destination: NavigationLazyView(PairingSetupView(viewModel: viewModel))) {
-                                Label("去导入配对文件", systemImage: "key.horizontal")
-                            }
-                        }
-                        .padding(.vertical, 4)
+                        PairingGuideCard(note: "重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复应用列表.")
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
                     }
                 }
 

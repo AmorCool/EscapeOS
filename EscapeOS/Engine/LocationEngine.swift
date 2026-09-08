@@ -111,7 +111,22 @@ enum LocationEngine {
                 return ok
             }
         }
+        // 无活动会话（或旧会话已失效被清）→ 建立新会话再设值
+        let connectCode = connectLocked(pairingPath: pairingPath, deviceIP: deviceIP)
+        guard connectCode == ok else { return connectCode }
+        guard let locationSimulation else { return simulationCreate }
+        if let setError = location_simulation_set(locationSimulation, latitude, longitude) {
+            idevice_error_free(setError)
+            cleanup()
+            return locationSet
+        }
+        return ok
+    }
 
+    /// 建立 隧道→RemoteXPC→DVT 定位模拟会话（不动设备状态）.
+    /// v0.3.245：从 setLocked 抽出——clear 在无活动会话时也要能建会话下发清除
+    /// （App 重启后内存句柄为空，但设备 locationd 里可能残留上次注入的模拟坐标）.
+    private static func connectLocked(pairingPath: String, deviceIP: String) -> Int32 {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = in_port_t(49152).bigEndian
@@ -159,22 +174,32 @@ enum LocationEngine {
         }
         // location_simulation_new 接管 remote server 生命周期
         remoteServer = nil
-
-        if let setError = location_simulation_set(locationSimulation, latitude, longitude) {
-            idevice_error_free(setError)
-            cleanup()
-            return locationSet
-        }
         return ok
     }
 
     private static func clearLocked() -> Int32 {
+        // v0.3.245 修复「清除模拟定位失败」：旧实现在无活动会话时直接报错——
+        // App 重启后内存句柄必为空，一点清除就失败，而设备侧残留的模拟定位
+        // 恰恰需要经 DVT 会话才能清掉（pmd3 `location clear` 同款：新建会话再
+        // clear）.现在无会话时先建会话再清除；新建会话后清除报错按成功处理
+        // （目标态即「无模拟」，幂等——设备重启后本就无残留，clear 被拒亦无妨）.
+        let hadSession = locationSimulation != nil
+        if !hadSession {
+            // 与 SpoofSession.pairingPath 同一路径（共用 Documents/pairingFile.plist），
+            // 不经 SpoofSession 取值——其属性挂在 @MainActor，queue.sync 内不可跨.
+            let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("pairingFile.plist").path
+            let connectCode = connectLocked(pairingPath: pairingPath, deviceIP: LocalDevVPN.targetIP)
+            guard connectCode == ok else { return connectCode }
+        }
         guard let locationSimulation else { return locationClear }
         let err = location_simulation_clear(locationSimulation)
         cleanup()
         if let err {
             idevice_error_free(err)
-            return locationClear
+            // 会话是本次新建的：清除失败多为设备本无活动模拟（重启后），按幂等成功处理；
+            // 旧会话路径的清除失败仍是真失败（隧道断开等）.
+            return hadSession ? locationClear : ok
         }
         return ok
     }

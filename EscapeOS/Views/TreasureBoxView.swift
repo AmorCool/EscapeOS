@@ -51,10 +51,10 @@ struct TreasureBoxView: View {
     }
 
     // v0.3.240：WiFi 射频开关 + 局域网 Wi-Fi 配对连接
-    //（v0.3.244 起走 WirelessLockdownService：射频 = MCInstall SetWiFiPowerState
+    //（v0.3.245 起走 WirelessLockdownService：射频 = MCInstall SetWiFiPowerState
     //（pmd3 profile set-wifi-power 同款）；配对连接 = lockdown SetValue + GetValue
     // 状态读回（iDescriptor 同款数据源））
-    // v0.3.244 修复：此前 wifiPairingOn 从未赋值——Toggle 弹回、永远显示关、
+    // v0.3.245 修复：此前 wifiPairingOn 从未赋值——Toggle 弹回、永远显示关、
     // 永远无法触达「停用」路径（用户实测"能开启但开关很快关闭、无法关闭"）。
     @State private var wifiPowerOn = UserDefaults.standard.bool(forKey: WirelessLockdownService.wifiPowerStateKey)
     @State private var wifiPairingOn = false
@@ -108,7 +108,7 @@ struct TreasureBoxView: View {
                 } else {
                     try WirelessLockdownService.disableWifiConnections()
                 }
-                // v0.3.244：写成功后读回设备真实值确认（写成功≠生效，以设备为准）
+                // v0.3.245：写成功后读回设备真实值确认（写成功≠生效，以设备为准）
                 let confirmed = WirelessLockdownService.readWifiConnectionsEnabled()
                 await MainActor.run {
                     wifiPowerBusy = false

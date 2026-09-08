@@ -24,6 +24,11 @@ enum ProfileConfigService {
         let version: Int?          // Version（版本号）
         let expiry: Date?          // ExpirationDate
         let isProvisioning: Bool   // 预置描述（.mobileprovision）
+        // v0.3.245：详情页新增字段（对齐爱思助手详情：文件ID/使用者/是否可移除…）
+        let identifier: String?    // PayloadIdentifier（文件 ID）
+        let removable: Bool        // 顶层 RemovalDisallowed 取反（默认可移除；设备端移除密码仅删除时报错）
+        let created: Date?         // CreationDate（mobileprovision 常见）
+        let contentCount: Int      // PayloadContent payload 数（0=单层/未知）
         var id: String { uuid }
     }
 
@@ -196,6 +201,16 @@ enum ProfileConfigService {
                     ?? ("unknown-\(index)-" + (displayName ?? "unnamed"))
                 let isProvisioning = (type == "Provisioning Profiles")
                     || (dict["Entitlements"] is [String: Any])
+                // v0.3.245：详情页字段（PayloadIdentifier / RemovalDisallowed / CreationDate / payload 数）
+                let identifier = (dict["PayloadIdentifier"] as? String) ?? (dict["Identifier"] as? String)
+                let removable = !(dict["RemovalDisallowed"] as? Bool ?? false)
+                var created: Date?
+                if let ts = dict["CreationDate"] as? Double {
+                    created = Date(timeIntervalSinceReferenceDate: ts)
+                } else if let date = dict["CreationDate"] as? Date {
+                    created = date
+                }
+                let contentCount = (dict["PayloadContent"] as? [Any])?.count ?? 0
                 result.append(ConfigurationProfile(
                     uuid: uuid,
                     name: displayName ?? "未命名",
@@ -206,7 +221,11 @@ enum ProfileConfigService {
                     teamName: teamName,
                     version: version,
                     expiry: expiry,
-                    isProvisioning: isProvisioning
+                    isProvisioning: isProvisioning,
+                    identifier: identifier,
+                    removable: removable,
+                    created: created,
+                    contentCount: contentCount
                 ))
             }
             return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }

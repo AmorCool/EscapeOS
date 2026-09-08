@@ -136,6 +136,8 @@ struct LiveCleanTabView: View {
             if appList.needsPairing {
                 Section {
                     PairingGuideCard(note: "建立 LocalDevVPN 隧道后才能扫描 LiveContainer 容器.")
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                 }
             } else {
                 Section {

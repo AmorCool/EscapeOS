@@ -18,13 +18,25 @@ struct ProfileConfigView: View {
     @State private var confirmBatch = false
     @State private var toast: String?
 
+    @State private var detailTarget: ProfileConfigService.ConfigurationProfile?
+
+    // v0.3.245：搜索覆盖详情页全部字段——名称/UUID/使用者/组织/类型/文件ID/描述/版本/可移除性
     private var filtered: [ProfileConfigService.ConfigurationProfile] {
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return profiles }
-        return profiles.filter {
-            $0.uuid.lowercased().contains(q)
-                || $0.name.lowercased().contains(q)
-                || ($0.organization?.lowercased().contains(q) ?? false)
+        return profiles.filter { p in
+            p.uuid.lowercased().contains(q)
+                || p.name.lowercased().contains(q)
+                || (p.organization?.lowercased().contains(q) ?? false)
+                || (p.teamName?.lowercased().contains(q) ?? false)
+                || (p.identifier?.lowercased().contains(q) ?? false)
+                || (p.type?.lowercased().contains(q) ?? false)
+                || (p.desc?.lowercased().contains(q) ?? false)
+                || (p.version.map { String($0).contains(q) } ?? false)
+                || (q == "可移除" && p.removable)
+                || (q == "不可移除" && !p.removable)
+                || (q == "预置" && p.isProvisioning)
+                || (q == "已验证" && p.verified)
         }
     }
 
@@ -39,6 +51,8 @@ struct ProfileConfigView: View {
                 Section {
                     if PairingGate.isPairingError(err) {
                         PairingGuideCard()
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
                     } else {
                         Label(err, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
@@ -86,7 +100,7 @@ struct ProfileConfigView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("配置描述管理")
         .navigationBarTitleDisplayMode(.large)
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索 UUID 或名称")
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索名称/UUID/描述/文件ID/版本")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 14) {
@@ -139,6 +153,9 @@ struct ProfileConfigView: View {
             }
         }
         .task { refresh() }
+        .sheet(item: $detailTarget) { p in
+            profileDetail(p)
+        }
         .confirmationDialog("删除 \(selectedUUIDs.count) 个描述文件？", isPresented: $confirmBatch, titleVisibility: .visible) {
             Button("批量删除", role: .destructive) { removeSelected() }
             Button("取消", role: .cancel) {}
@@ -168,6 +185,10 @@ struct ProfileConfigView: View {
             if selectionMode {
                 if selectedUUIDs.contains(p.uuid) { selectedUUIDs.remove(p.uuid) }
                 else { selectedUUIDs.insert(p.uuid) }
+            } else {
+                // v0.3.245：普通模式点击进详情页（对齐爱思助手：文件ID/版本/使用者/
+                // 唯一码/状态/可移除/描述全量展示）
+                detailTarget = p
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
@@ -179,6 +200,12 @@ struct ProfileConfigView: View {
                     Text(p.name).font(.subheadline.weight(.medium))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    if !selectionMode {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 HStack(spacing: 6) {
                     Text(p.isProvisioning ? "预置描述" : (p.type ?? "配置描述"))
@@ -193,6 +220,9 @@ struct ProfileConfigView: View {
                     if p.verified {
                         Text("已验证").font(.caption2).foregroundStyle(.green)
                     }
+                    Text(p.removable ? "可移除" : "不可移除")
+                        .font(.caption2)
+                        .foregroundStyle(p.removable ? .secondary : .orange)
                 }
                 if let expiry = p.expiry {
                     Text("过期：\(expiry.formatted(date: .abbreviated, time: .omitted))")
@@ -209,6 +239,72 @@ struct ProfileConfigView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - 详情页（v0.3.245，行样式对齐爱思助手：左标签右值，长文本换行）
+
+    private func detailRow(_ label: String, _ value: String?, monospaced: Bool = false, copyable: Bool = false) -> some View {
+        Group {
+            if let value, !value.isEmpty {
+                HStack(alignment: .top, spacing: 12) {
+                    Text(label)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 84, alignment: .leading)
+                    if copyable {
+                        Text(value)
+                            .font(monospaced ? .subheadline.monospaced() : .subheadline)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(value)
+                            .font(monospaced ? .subheadline.monospaced() : .subheadline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.vertical, 11)
+                .padding(.horizontal, 14)
+                .background(Color(.secondarySystemGroupedBackground))
+            }
+        }
+    }
+
+    private func profileDetail(_ p: ProfileConfigService.ConfigurationProfile) -> some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 0) {
+                    detailRow("文件 ID", p.identifier ?? p.uuid, monospaced: true, copyable: true)
+                    detailRow("文件名称", p.name, copyable: true)
+                    detailRow("版本号", p.version.map(String.init))
+                    detailRow("类型", p.type ?? (p.isProvisioning ? "预置描述" : nil))
+                    detailRow("使用者", p.organization ?? p.teamName)
+                    detailRow("唯一码", p.uuid, monospaced: true, copyable: true)
+                    detailRow("状态", p.verified ? "有效（签名已验证）" : "有效")
+                    detailRow("是否可移除", p.removable ? "可移除" : "不可移除（设备端拒绝删除或设置了移除保护）")
+                    if let created = p.created {
+                        detailRow("创建时间", created.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    if let expiry = p.expiry {
+                        detailRow("过期时间", expiry.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    if p.contentCount > 0 {
+                        detailRow("载荷数量", "\(p.contentCount) 个 payload")
+                    }
+                    detailRow("文件描述", p.desc ?? "（无描述）")
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("描述文件详情")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("完成") { detailTarget = nil }
+                }
+            }
+        }
     }
 
     // MARK: - 操作
