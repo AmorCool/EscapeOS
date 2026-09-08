@@ -20,7 +20,7 @@ struct ProfileConfigView: View {
 
     @State private var detailTarget: ProfileConfigService.ConfigurationProfile?
 
-    // v0.3.245：搜索覆盖详情页全部字段——名称/UUID/使用者/组织/类型/文件ID/描述/版本/可移除性
+    // v0.3.246：搜索覆盖详情页全部字段——名称/UUID/使用者/组织/类型/文件ID/描述/版本/可移除性
     private var filtered: [ProfileConfigService.ConfigurationProfile] {
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return profiles }
@@ -186,7 +186,7 @@ struct ProfileConfigView: View {
                 if selectedUUIDs.contains(p.uuid) { selectedUUIDs.remove(p.uuid) }
                 else { selectedUUIDs.insert(p.uuid) }
             } else {
-                // v0.3.245：普通模式点击进详情页（对齐爱思助手：文件ID/版本/使用者/
+                // v0.3.246：普通模式点击进详情页（对齐爱思助手：文件ID/版本/使用者/
                 // 唯一码/状态/可移除/描述全量展示）
                 detailTarget = p
             }
@@ -222,7 +222,7 @@ struct ProfileConfigView: View {
                     }
                     Text(p.removable ? "可移除" : "不可移除")
                         .font(.caption2)
-                        .foregroundStyle(p.removable ? .secondary : .orange)
+                        .foregroundStyle(p.removable ? Color.secondary : Color.orange)
                 }
                 if let expiry = p.expiry {
                     Text("过期：\(expiry.formatted(date: .abbreviated, time: .omitted))")
@@ -241,7 +241,7 @@ struct ProfileConfigView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 详情页（v0.3.245，行样式对齐爱思助手：左标签右值，长文本换行）
+    // MARK: - 详情页（v0.3.246，行样式对齐爱思助手：左标签右值，长文本换行）
 
     private func detailRow(_ label: String, _ value: String?, monospaced: Bool = false, copyable: Bool = false) -> some View {
         Group {
