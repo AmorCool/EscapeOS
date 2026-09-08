@@ -225,7 +225,8 @@ jobs:
           # 否则 .a 默认按 SDK 版本(26.5)编，链接到 18.0 时会刷 ~191 条
           # "built for newer 'iOS' version (26.5) than being linked (18.0)" 的 linker 警告。
           export IPHONEOS_DEPLOYMENT_TARGET=18.0
-          cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml
+          # tee 落盘：GitHub run log 偶发 421 取不到时，靠 artifact 拿真实报错（同 package.log 兜底思路）
+          cargo build --release --target aarch64-apple-ios --manifest-path rust/idevice-ffi/Cargo.toml 2>&1 | tee /tmp/rust-build.log
           mkdir -p rust-libs
           cp "rust/idevice-ffi/target/aarch64-apple-ios/release/libidevice_ffi.a" rust-libs/libidevice_ffi.a
           # 记录产物对应的源码 hash（artifact 产物缓存的命中判据，供 Save 步骤打包）。
@@ -539,6 +540,7 @@ jobs:
           path: |
             /tmp/xcodegen.log
             /tmp/xcodebuild.log
+            /tmp/rust-build.log
 
       - name: Upload package log
         if: always()
