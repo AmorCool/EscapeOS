@@ -33,11 +33,20 @@ enum GoAppStoreAuth {
             var path: String?
         }
 
+        struct Diag: Decodable {
+            var step: String
+            var url: String
+            var status: Int
+            var elapsedMs: Int
+            var detail: String?
+        }
+
         var success: Bool
         var authCodeRequired: Bool
         var error: String?
         var account: Account?
         var cookies: [Cookie]?
+        var diagnostics: [Diag]?
     }
 
     /// 阻塞执行一次完整登录（bag → SAP 签名器 → 双层重试 → 解析）。
@@ -90,6 +99,12 @@ enum GoAppStoreAuth {
         guard let jsonData = jsonString.data(using: .utf8),
               let result = try? JSONDecoder().decode(LoginResult.self, from: jsonData) else {
             throw AppleAPIError.customError(code: -2602, message: "Go 登录返回无法解析: \(jsonString.prefix(200))")
+        }
+
+        // v0.3.263：逐请求诊断全量入日志（bag/sap-init/auth-attemptN 的 URL+guid、
+        // 状态码、耗时）——<1s=边缘秒拒（服务器侧风控），数秒=后端拒（参数问题）.
+        for diag in result.diagnostics ?? [] {
+            LoginLogger.shared.log("[GoAuth][\(diag.step)] status=\(diag.status) \(diag.elapsedMs)ms \(diag.url.prefix(100))\(diag.detail.map { " | \($0.prefix(120))" } ?? "")")
         }
 
         if result.success, let account = result.account {

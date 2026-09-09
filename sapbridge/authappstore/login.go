@@ -270,30 +270,61 @@ type loginResult struct {
 	PasswordToken       string             `plist:"passwordToken,omitempty"`
 }
 
+// DiagEntry 是一次请求的诊断快照（随登录结果回传宿主日志，全透明取证）.
+type DiagEntry struct {
+	Step      string `json:"step"`
+	URL       string `json:"url"`
+	Status    int    `json:"status"`
+	ElapsedMs int    `json:"elapsedMs"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+var lastDiags []DiagEntry
+
+func diagReset() { lastDiags = nil }
+
+func diagAdd(step, url string, status, elapsedMs int, detail string) {
+	lastDiags = append(lastDiags, DiagEntry{Step: step, URL: url, Status: status, ElapsedMs: elapsedMs, Detail: detail})
+}
+
+func takeDiagnostics() []DiagEntry {
+	out := lastDiags
+	lastDiags = nil
+	return out
+}
+
 // login 执行一次完整登录（bag → SAP 签名器 → 双层重试 → 解析 → Account）。
 // cacheDir 传宿主 Caches 目录（SAP 资产包缓存，与 Swift 侧 SapSigner 共用）。
 // 第三返回值是登录会话 cookie（download/purchase 等下游请求的会话延续需要，
 // Swift 侧并入 AppStoreAccount.cookie 持久化）。
-func Login(email, password, authCode, macAddress, cacheDir string) (Account, []SessionCookie, error) {
+func Login(email, password, authCode, macAddress, cacheDir string) (Account, []SessionCookie, []DiagEntry, error) {
+	diagReset()
 	guid, machineID, err := machineIdentity(macAddress)
 	if err != nil {
-		return Account{}, nil, err
+		return Account{}, nil, takeDiagnostics(), err
 	}
 
 	jar := newJarWithSave()
 	bagClient := NewClient[bagResult](Args{CookieJar: jar})
 
-	bag, err := bag(guid, bagClient)
+	bagURL := fmt.Sprintf("https://%s%s?guid=%s", PrivateInitDomain, PrivateInitPath, guid)
+	bagStart := time.Now()
+	bagOut, err := bag(guid, bagClient)
 	if err != nil {
-		return Account{}, nil, fmt.Errorf("failed to get bag: %w", err)
+		diagAdd("bag", bagURL, 0, int(time.Since(bagStart).Milliseconds()), err.Error())
+		return Account{}, nil, takeDiagnostics(), fmt.Errorf("failed to get bag: %w", err)
 	}
+	diagAdd("bag", bagURL, 200, int(time.Since(bagStart).Milliseconds()),
+		"auth="+bagOut.AuthEndpoint)
 
-	signer, err := defaultActionSignerFactory(bag.SAPConfig, machineID, cacheDir)
+	signer, err := defaultActionSignerFactory(bagOut.SAPConfig, machineID, cacheDir)
 	if err != nil {
-		return Account{}, nil, fmt.Errorf("failed to initialize SAP action signer: %w", err)
+		diagAdd("sap-init", bagOut.SAPConfig.SetupURL, 0, 0, err.Error())
+		return Account{}, nil, takeDiagnostics(), fmt.Errorf("failed to initialize SAP action signer: %w", err)
 	}
+	diagAdd("sap-init", bagOut.SAPConfig.SetupURL, 200, 0, "SAP signer ready")
 
-	acc, loginErr := performLogin(email, password, authCode, guid, bag.SAPConfig.AuthEndpoint, signer, jar)
+	acc, loginErr := performLogin(email, password, authCode, guid, bagOut.SAPConfig.AuthEndpoint, signer, jar)
 	closeErr := signer.Close()
 
 	if closeErr != nil {
@@ -302,17 +333,17 @@ func Login(email, password, authCode, macAddress, cacheDir string) (Account, []S
 
 	if loginErr != nil {
 		if closeErr != nil {
-			return Account{}, nil, errors.Join(loginErr, closeErr)
+			return Account{}, nil, takeDiagnostics(), errors.Join(loginErr, closeErr)
 		}
 
-		return Account{}, nil, loginErr
+		return Account{}, nil, takeDiagnostics(), loginErr
 	}
 
 	if closeErr != nil {
-		return acc, sessionCookies(jar), closeErr
+		return acc, sessionCookies(jar), takeDiagnostics(), closeErr
 	}
 
-	return acc, sessionCookies(jar), nil
+	return acc, sessionCookies(jar), takeDiagnostics(), nil
 }
 
 // SessionCookie 是导出给宿主（Swift）的会话 cookie 快照.
@@ -366,7 +397,23 @@ func performLogin(email, password, authCode, guid, endpoint string, signer Actio
 
 		request := loginRequest(email, password, authCode, guid, endpoint, requestAttempt, signer)
 		request.URL, _ = IfEmpty(redirect, request.URL), ""
+
+		started := time.Now()
 		res, err = sendAuthenticationRequest(loginClient, request)
+		elapsed := int(time.Since(started).Milliseconds())
+
+		// v0.3.263：逐次尝试埋点——URL（含 guid）/状态码/耗时全透明，<1s 秒拒
+		// （WAF 级）与数秒（后端拒）在宿主日志里直接可辨.
+		status := res.StatusCode
+		detail := ""
+		if err != nil {
+			detail = err.Error()
+			var ure *UnexpectedResponseError
+			if errors.As(err, &ure) {
+				status = ure.StatusCode
+			}
+		}
+		diagAdd(fmt.Sprintf("auth-attempt%d", requestAttempt), request.URL, status, elapsed, detail)
 
 		if err != nil {
 			return Account{}, fmt.Errorf("request failed: %w", err)

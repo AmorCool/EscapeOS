@@ -206,7 +206,7 @@ func EscapeAppStoreLogin(email, password, authCode, macAddress, cacheDir *C.char
 	// recover 防 panic 跨 cgo 边界 abort 进程。
 	defer func() {
 		if r := recover(); r != nil {
-			result = C.CString(escapeLoginJSON(false, false, fmt.Sprintf("go panic: %v", r), nil, nil))
+			result = C.CString(escapeLoginJSON(false, false, fmt.Sprintf("go panic: %v", r), nil, nil, nil))
 		}
 	}()
 
@@ -216,7 +216,7 @@ func EscapeAppStoreLogin(email, password, authCode, macAddress, cacheDir *C.char
 	macStr := C.GoString(macAddress)
 	cacheDirStr := C.GoString(cacheDir)
 
-	acc, cookies, err := authappstore.Login(emailStr, passwordStr, authCodeStr, macStr, cacheDirStr)
+	acc, cookies, diags, err := authappstore.Login(emailStr, passwordStr, authCodeStr, macStr, cacheDirStr)
 	if err != nil {
 		authCodeRequired := errors.Is(err, authappstore.ErrAuthCodeRequired)
 		msg := err.Error()
@@ -225,14 +225,14 @@ func EscapeAppStoreLogin(email, password, authCode, macAddress, cacheDir *C.char
 			//（desc.contains("Authentication requires verification code")）.
 			msg = "Authentication requires verification code"
 		}
-		return C.CString(escapeLoginJSON(false, authCodeRequired, msg, nil, nil))
+		return C.CString(escapeLoginJSON(false, authCodeRequired, msg, nil, nil, diags))
 	}
 
 	exported := make([]escapeCookie, 0, len(cookies))
 	for _, ck := range cookies {
 		exported = append(exported, escapeCookie{Name: ck.Name, Value: ck.Value, Domain: ck.Domain, Path: ck.Path})
 	}
-	return C.CString(escapeLoginJSON(true, false, "", &acc, exported))
+	return C.CString(escapeLoginJSON(true, false, "", &acc, exported, diags))
 }
 
 // escapeCookie 带显式 json tag（type alias 转换不继承源类型 tag，必须重写）.
@@ -244,20 +244,22 @@ type escapeCookie struct {
 }
 
 type escapeLoginResult struct {
-	Success          bool                  `json:"success"`
-	AuthCodeRequired bool                  `json:"authCodeRequired"`
-	Error            string                `json:"error,omitempty"`
-	Account          *authappstore.Account `json:"account,omitempty"`
-	Cookies          []escapeCookie        `json:"cookies,omitempty"`
+	Success          bool                      `json:"success"`
+	AuthCodeRequired bool                      `json:"authCodeRequired"`
+	Error            string                    `json:"error,omitempty"`
+	Account          *authappstore.Account     `json:"account,omitempty"`
+	Cookies          []escapeCookie            `json:"cookies,omitempty"`
+	Diagnostics      []authappstore.DiagEntry  `json:"diagnostics,omitempty"`
 }
 
-func escapeLoginJSON(success, authCodeRequired bool, errMsg string, acc *authappstore.Account, cookies []escapeCookie) string {
+func escapeLoginJSON(success, authCodeRequired bool, errMsg string, acc *authappstore.Account, cookies []escapeCookie, diags []authappstore.DiagEntry) string {
 	payload := escapeLoginResult{
 		Success:          success,
 		AuthCodeRequired: authCodeRequired,
 		Error:            errMsg,
 		Account:          acc,
 		Cookies:          cookies,
+		Diagnostics:      diags,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
