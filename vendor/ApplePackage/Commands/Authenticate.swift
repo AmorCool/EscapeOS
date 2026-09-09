@@ -143,6 +143,10 @@ public enum Authenticator {
         while currentAttempt <= 4, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
+                // v0.3.261：响应耗时观测——边缘 WAF 秒拒（<1s HTML）与后端拒（数秒）
+                // 是两种不同信号：前者=出口 IP 被临时拉黑（换网络/等冷却才有效），
+                // 后者=请求被处理但拒绝（anisette/签名/参数问题，代码可修）。
+                let attemptStartedAt = Date()
                 // v0.3.260：SAP-only 认证——不再注入任何 anisette 头.
                 // 上游 ipatool abd86cb（2026-08-28 "replace App Store login with
                 // SAP signing"）实锤：26HOTFIX24 后设备认证由 SAP 签名接管，登录
@@ -163,13 +167,14 @@ public enum Authenticator {
                     sapSigner: sapSigner
                 )
                 let response = try await client.execute(request: request).get()
+                let elapsedMs = Int(Date().timeIntervalSince(attemptStartedAt) * 1000)
                 // 用 print 不用 NSLog：iOS 26 SDK 已把 NSLog 的 variadic 形式标为 unavailable
                 // （'NSLog' is unavailable: Variadic function is unavailable），但 Swift 的
                 // 单参 print 依然受支持。
                 print("[EscapeOS][AppStore][Auth] \(requestEndpoint.host ?? "?") status=\(response.status.code)")
                 // v0.3.22：记录完整响应（headers + body 前 2000B）——诊断 Apple 实际返回内容
                 let respHeaders = response.headers.all.map { "\($0.name): \($0.value.prefix(80))" }.joined(separator: " | ")
-                LoginLogger.shared.log("响应 status=\(response.status.code) headers=[\(respHeaders)]")
+                LoginLogger.shared.log("响应 status=\(response.status.code)（耗时 \(elapsedMs)ms）headers=[\(respHeaders)]")
                 if var respBody = response.body, respBody.readableBytes > 0 {
                     let respData = respBody.readData(length: respBody.readableBytes) ?? Data()
                     let respText = String(data: respData.prefix(2000), encoding: .utf8) ?? "(binary)"
@@ -248,10 +253,17 @@ public enum Authenticator {
                 //    到来的短信/推送干等（v0.3.243 真机 07:44 日志实锤：301→204 序列直接
                 //    弹 2FA，信任设备零通知）。与上游对齐：204 一律可重试.
                 if (500...599).contains(status.code) || status.code == 204 || status.code == 404 {
-                    LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code)（ipatool 可重试状态），attempt=\(currentAttempt)/4")
+                    // v0.3.261：<1s 的 HTML/空响应 = 边缘 WAF 秒拒（出口 IP 疑似被
+                    // 临时风控；数秒级 = 后端处理过才拒）。真机 2026-09-09 18:23：
+                    // 同 IP 旧版 3~10s 拒 → 新版 0.4s 拒 = 惩罚升级曲线实锤.
+                    let edgeFastReject = elapsedMs < 1000
+                    LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code)（ipatool 可重试状态，耗时 \(elapsedMs)ms\(edgeFastReject ? "，⚠️ 边缘秒拒——出口 IP 疑似被临时风控，代码层无法绕过，建议换网络（Wi-Fi↔蜂窝）或等待冷却" : "")），attempt=\(currentAttempt)/4")
                     if currentAttempt < 4 {
-                        // 上游 authenticationRetryDelay=250ms：退避重试，连续轰炸会加重风控
-                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        // v0.3.261：退避 250ms→按尝试次递增（500ms/1s/1.5s）——
+                        // 在已发热的 IP 上每秒连发会加重风控标记（上游 250ms 是
+                        // 「正常 IP」场景的值；我们的用户常在 IP 已热时重试）.
+                        let backoffMs = 500 * currentAttempt
+                        try? await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
                         continue
                     }
                     // 4 次耗尽：不再 ensureFailed（那会绕过 legacy 回退），落 lastError
