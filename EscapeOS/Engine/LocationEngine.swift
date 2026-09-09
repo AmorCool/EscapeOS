@@ -83,43 +83,26 @@ enum LocationEngine {
         return result
     }
 
-    /// v0.3.252：SIGKILL locationd.
-    /// 清掉模拟坐标后，系统定位守护仍向客户端回报最后一次模拟值（守护内部状态 +
-    /// 客户端缓存），表现为「清除成功但定位不刷新」——手动 kill 就能立刻恢复.
-    /// App 无 root 直接 kill 必被 EPERM 拒（v0.3.251 真机实锤 kill 静默失败），
-    /// 所以先 `setuid(0)` 提权（Dopamine 允许 App 提权）再 kill，杀完切回 501.
-    /// 返回 kill 是否真的成功，调用方如实反馈.
+    /// v0.3.254：结束设备侧 locationd —— **走 RSD 隧道**（app_service 枚举进程 + 发信号）.
+    ///
+    /// 方向修正：设备**没有越狱**，App 在沙盒里本地 kill 守护进程必被拒
+    /// （v0.3.253 的 setuid 提权方案作废——把「有越狱」当前提是搞错了）。
+    /// 「进程管理」页结束设备进程用的就是这套 FFI（app_service_list_processes +
+    /// app_service_send_signal），这里直接复用：枚举进程 → 找 locationd → SIGKILL.
     @discardableResult
     static func killLocationd() -> Bool {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL]
-        var size = 0
-        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return false }
-        let stride = MemoryLayout<kinfo_proc>.stride
-        var procs = [kinfo_proc]()
-        for _ in 0..<4 {                                    // 进程表可能在两次调用间增长，重试几次
-            procs = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 16)
-            var sz = procs.count * stride
-            if sysctl(&mib, 3, &procs, &sz, nil, 0) == 0 {
-                let count = sz / stride
-                for i in 0..<count {
-                    let p = procs[i].kp_proc
-                    let name = withUnsafeBytes(of: p.p_comm) { raw -> String in
-                        String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
-                    }
-                    if name == "locationd" {
-                        // 提权：App 普通身份 kill 守护进程必 EPERM；Dopamine 下 setuid(0) 可行
-                        setgid(0)
-                        setuid(0)
-                        let ok = kill(p.p_pid, SIGKILL) == 0
-                        setuid(501)                                  // 切回 mobile，避免影响沙盒内写文件
-                        if ok { return true }
-                    }
-                }
-                return false
+        guard let entries = try? ProcessManagerService.shared.listProcesses() else { return false }
+        let pids = entries
+            .filter { $0.executablePath.hasSuffix("/locationd") }
+            .map { $0.pid }
+        guard !pids.isEmpty else { return false }
+        var killed = false
+        for pid in pids {
+            if (try? ProcessManagerService.shared.sendSignal(.kill, toPID: pid)) != nil {
+                killed = true
             }
-            if errno != ENOMEM { return false }
         }
-        return false
+        return killed
     }
 
     private static func cleanup() {

@@ -171,7 +171,7 @@ final class SpoofSession: ObservableObject {
             endBackground()
             // 设置页保活开关未开时，任务结束即停止保活.
             KeepAliveManager.shared.stop()
-            // v0.3.251：SIGKILL locationd——甩掉残留的模拟值，定位点立即回真实 GPS.
+            // v0.3.254：走 RSD 隧道 SIGKILL 设备侧 locationd（App 无越狱，本地 kill 无效）.
             locationdKilled = LocationEngine.killLocationd()
             // 继续轻量定位，让地图定位点回到真实 GPS.
             locationKeeper.start()
@@ -179,6 +179,26 @@ final class SpoofSession: ObservableObject {
             lastError = error.localizedDescription
             status = .dropped(error.localizedDescription)
             postDropNotification(error.localizedDescription)
+        }
+    }
+
+    /// v0.3.254：清除流程结束后的状态收敛（**主线程调用**）.
+    /// success = clear 成功且设备侧 locationd 已被 SIGKILL.
+    func applyCleared(success: Bool) {
+        isBusy = false
+        if success {
+            stopMovement()
+            stopResend()
+            stopHealth()
+            simulated = nil
+            status = .idle
+            lastError = nil
+            endBackground()
+            KeepAliveManager.shared.stop()
+            locationKeeper.start()
+            locationdKilled = true
+        } else {
+            status = .dropped("清除虚拟定位失败")
         }
     }
 

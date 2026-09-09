@@ -11,6 +11,7 @@ struct VirtualLocationSettingsView: View {
     @State private var tunnelConnected = LocalDevVPN.isConnected
     @State private var showImportGuide = false
     @State private var clearAlertMessage: String?
+    @State private var isClearing = false
     @Environment(\.scenePhase) private var scenePhase
 
     private var appVersion: String {
@@ -31,13 +32,24 @@ struct VirtualLocationSettingsView: View {
                     }
 
                     Button("清除虚拟定位") {
-                        // v0.3.252：无条件执行（clear 自带「无会话先建会话」幂等逻辑），
-                        // 成功 + SIGKILL locationd，两个结果，不啰嗦.
-                        SpoofSession.shared.stop()
-                        clearAlertMessage = SpoofSession.shared.lastError == nil
-                            ? "已清除模拟位置"
-                            : "操作失败"
+                        // v0.3.254：无条件执行 clear（自带「无会话先建会话」幂等逻辑）
+                        // + 走 RSD 隧道 SIGKILL 设备侧 locationd；后台跑不冻 UI，两态反馈.
+                        guard !isClearing else { return }
+                        isClearing = true
+                        Task.detached(priority: .userInitiated) {
+                            var ok = false
+                            if case .success = LocationEngine.clear() {
+                                ok = LocationEngine.killLocationd()
+                            }
+                            let success = ok
+                            await MainActor.run {
+                                isClearing = false
+                                SpoofSession.shared.applyCleared(success: success)
+                                clearAlertMessage = success ? "已清除模拟位置" : "操作失败"
+                            }
+                        }
                     }
+                    .disabled(isClearing)
                     .alert("清除虚拟定位",
                            isPresented: Binding(get: { clearAlertMessage != nil },
                                                 set: { if !$0 { clearAlertMessage = nil } })) {
