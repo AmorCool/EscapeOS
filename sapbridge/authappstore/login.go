@@ -274,7 +274,7 @@ type loginResult struct {
 // cacheDir 传宿主 Caches 目录（SAP 资产包缓存，与 Swift 侧 SapSigner 共用）。
 // 第三返回值是登录会话 cookie（download/purchase 等下游请求的会话延续需要，
 // Swift 侧并入 AppStoreAccount.cookie 持久化）。
-func login(email, password, authCode, macAddress, cacheDir string) (Account, []SessionCookie, error) {
+func Login(email, password, authCode, macAddress, cacheDir string) (Account, []SessionCookie, error) {
 	guid, machineID, err := machineIdentity(macAddress)
 	if err != nil {
 		return Account{}, nil, err
