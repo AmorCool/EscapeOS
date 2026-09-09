@@ -113,7 +113,7 @@ struct IPAInstallView: View {
                 Section {
                     PairingGuideCard(note: "IPA 侧载需要配对文件（签名安装依赖设备身份）.")
                         .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                 }
             }
 

@@ -40,7 +40,7 @@ struct CrashLogView: View {
                     if PairingGate.isPairingError(errorMessage) {
                         PairingGuideCard(note: "崩溃分析还需要 LocalDevVPN 已连接.")
                             .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                     } else {
                         Text(errorMessage)
                             .foregroundColor(.red)

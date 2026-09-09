@@ -817,7 +817,7 @@ struct ProcessManagerView: View {
                     if !hasPairing {
                         PairingGuideCard(note: "进程管理还需要：① LocalDevVPN 已连接；② 开发者模式已开启.")
                             .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                     } else {
                         Text("未找到运行中的进程.")
                             .foregroundStyle(.secondary)

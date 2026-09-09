@@ -47,7 +47,7 @@ struct PairingInstallView: View {
                 Section {
                     PairingGuideCard(note: "把配对写入其它侧载工具的前提：本机已导入配对文件.")
                         .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                 }
             }
 

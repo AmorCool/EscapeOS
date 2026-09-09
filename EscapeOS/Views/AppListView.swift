@@ -301,7 +301,7 @@ struct AppListView: View {
                     Section {
                         PairingGuideCard(note: "重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复应用列表.")
                             .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                     }
                 }
 
