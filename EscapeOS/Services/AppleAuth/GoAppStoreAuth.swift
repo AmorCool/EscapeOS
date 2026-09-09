@@ -71,7 +71,15 @@ enum GoAppStoreAuth {
             throw AppleAPIError.customError(code: -2600, message: "凭据转 C 字符串失败（含非法编码？）")
         }
 
-        guard let resultPtr = EscapeAppStoreLogin(emailC, passwordC, codeC, guidC, cacheDirC) else {
+        // cgo 生成头参数是 char*（UnsafeMutablePointer），utf8String 是 const char*
+        //（UnsafePointer）——需 mutating 显式转换（同 SapSigner.swift 的 SapSign 调用）.
+        guard let resultPtr = EscapeAppStoreLogin(
+            UnsafeMutablePointer(mutating: emailC),
+            UnsafeMutablePointer(mutating: passwordC),
+            UnsafeMutablePointer(mutating: codeC),
+            UnsafeMutablePointer(mutating: guidC),
+            UnsafeMutablePointer(mutating: cacheDirC)
+        ) else {
             throw AppleAPIError.customError(code: -2601, message: "Go 登录返回空结果（cgo 异常）")
         }
         defer { SapFree(resultPtr) }
@@ -85,9 +93,12 @@ enum GoAppStoreAuth {
         }
 
         if result.success, let account = result.account {
-            // 成功：组装 AppStoreAccount（storefront 用 Go 返回的 X-Set-Apple-Store-Front
-            // 头值；缺头时回退配置值，与旧链路语义一致）.
-            let store = account.storeFront ?? (Configuration.storeId(for: Configuration.countryCode) ?? "143441")
+            // 成功：组装 AppStoreAccount。storefront 头（X-Set-Apple-Store-Front）
+            // 值形如 "143441-1,29"——取首段纯 storeId（旧 Swift parseResponse 同款
+            // 处理；AppStoreAccount convenience init 会校验 storeId 合法性）.
+            let rawStore = account.storeFront ?? ""
+            let store = rawStore.split(separator: "-").first.map(String.init)
+                ?? (Configuration.storeId(for: Configuration.countryCode) ?? "143441")
             let cookies = (result.cookies ?? []).map { item in
                 Cookie(
                     name: item.name,
@@ -110,8 +121,8 @@ enum GoAppStoreAuth {
                 cookie: cookies,
                 pod: account.pod
             )
-            // Go 返回的 accountInfo 里 firstName/lastName 在 name 合并串里；
-            // AppStoreAccount 需要拆分（老持久化数据兼容显示）.
+            // Go 返回的 accountInfo 里姓名是合并串（"First Last"）；
+            // AppStoreAccount 需要拆分（持久化与展示兼容）.
             var final = converted
             let parts = (account.name ?? "").split(separator: " ", maxSplits: 1).map(String.init)
             final.firstName = parts.first ?? ""
