@@ -63,6 +63,39 @@ enum GoAppStoreAuth {
         deviceIdentifier: String,
         cacheDir: String
     ) throws -> AppStoreAccount {
+        do {
+            return try loginOnce(email: email, password: password, code: code, deviceIdentifier: deviceIdentifier, cacheDir: cacheDir)
+        } catch {
+            let desc = error.localizedDescription
+            let isEdgeSoftReject = ["HTTP 404", "HTTP 503", "HTTP 204", "HTTP 403"]
+                .contains { desc.contains($0) }
+            guard isEdgeSoftReject else { throw error }
+
+            if code.isEmpty {
+                // 无码登录被软拒：换新 guid 重试一轮（新 guid 新计数窗口）.
+                LoginLogger.shared.log("[GoAuth] edge soft-reject, rotating device identifier and retrying once")
+                AppStoreDownloadStore.shared.resetDeviceIdentifier()
+                return try loginOnce(email: email, password: password, code: code, deviceIdentifier: Configuration.deviceIdentifier, cacheDir: cacheDir)
+            }
+
+            // 2FA 带码重试被软拒：验证码已下发且 30 分钟内有效，等 75s 让边缘
+            // 限流窗口回落后原 guid 重试一次（Apple 对 authenticate 的限流极紧，
+            // 21:04→21:05 间隔 30s 的带码重试实测撞 pod 403）.
+            LoginLogger.shared.log("[GoAuth] edge soft-reject on 2FA attempt, waiting 75s before one retry")
+            Thread.sleep(forTimeInterval: 75)
+            return try loginOnce(email: email, password: password, code: code, deviceIdentifier: deviceIdentifier, cacheDir: cacheDir)
+        }
+    }
+
+    /// 单次登录（bag → SAP 签名器 → 双层重试 → 解析）。
+    /// 调用方应在后台线程 Task.detached 中使用（SAP 初始化可能较慢）。
+    static func loginOnce(
+        email: String,
+        password: String,
+        code: String,
+        deviceIdentifier: String,
+        cacheDir: String
+    ) throws -> AppStoreAccount {
         LoginLogger.shared.log("[GoAuth] 开始登录（Go 栈，上游 ipatool 形态）: \(email)（含验证码：\(code.isEmpty ? "否" : "是")）")
 
         // SAP 状态条：Go 侧 assets.Load 会写进度（SapGetProgress），登录期间
