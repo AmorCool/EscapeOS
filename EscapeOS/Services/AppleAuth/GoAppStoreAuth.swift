@@ -67,7 +67,8 @@ enum GoAppStoreAuth {
             return try loginOnce(email: email, password: password, code: code, deviceIdentifier: deviceIdentifier, cacheDir: cacheDir)
         } catch {
             let desc = error.localizedDescription
-            let isEdgeSoftReject = ["HTTP 404", "HTTP 503", "HTTP 204", "HTTP 403"]
+            let isEdgeSoftReject = ["HTTP 404", "HTTP 503", "HTTP 204", "HTTP 403",
+                                    "failed to retrieve redirect location", "redirect status"]
                 .contains { desc.contains($0) }
             guard isEdgeSoftReject else { throw error }
 
