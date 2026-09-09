@@ -390,6 +390,112 @@ enum WirelessLockdownService {
         }
     }
 
+    // MARK: - 描述文件列表（MCInstall GetProfileList，v0.3.252）
+
+    /// GetProfileList 里单个描述文件的元数据
+    struct ManagedProfile {
+        let identifier: String     // PayloadIdentifier（唯一码）
+        let uuid: String           // PayloadUUID（文件 ID）
+        let name: String
+        let desc: String?
+        let organization: String?
+        let type: String?
+        let version: Int?
+        let removable: Bool
+        let created: Date?
+        let expiry: Date?
+    }
+
+    /// 取设备上**全部**已安装配置描述（含用户装的 .mobileconfig / 托管描述）.
+    /// misagent 只返回预置描述（.mobileprovision），这是「描述文件管理」比爱思少的根因.
+    static func getManagedProfileList() throws -> [ManagedProfile] {
+        try queue.sync { () -> [ManagedProfile] in
+            let tunnel = try createTunnel()
+            defer { tunnel.release() }
+            guard mcinstallShimPort(tunnel.handshake) != nil else {
+                throw makeError("设备未暴露 \(mcInstallRSDService)")
+            }
+            let reply = try mcinstallRequest(
+                "<dict><key>RequestType</key><string>GetProfileList</string></dict>",
+                superviseCert: nil, tunnel: tunnel)
+            try checkAck(reply, action: "GetProfileList")
+            return parseProfileMetadata(reply)
+        }
+    }
+
+    /// 解析 GetProfileList 应答的 ProfileMetadata（identifier → 各字段）.
+    private static func parseProfileMetadata(_ reply: String) -> [ManagedProfile] {
+        let iso = ISO8601DateFormatter()
+        var out: [ManagedProfile] = []
+        for entry in profileMetadataEntries(reply) {
+            let body = entry.body
+            func str(_ key: String) -> String? {
+                xmlValue(body, key: key, open: "<string>", close: "</string>")
+            }
+            let uuid = str("PayloadUUID") ?? entry.id
+            let name = str("DisplayName") ?? str("PayloadDisplayName") ?? entry.id
+            let removable = (xmlValue(body, key: "RemovalDisallowed", open: "<", close: "/>") != "true")
+            let created = str("CreationDate").flatMap { iso.date(from: $0) }
+            let expiry = str("ExpirationDate").flatMap { iso.date(from: $0) }
+            let version = xmlValue(body, key: "Version", open: "<integer>", close: "</integer>")
+                .flatMap(Int.init)
+            out.append(ManagedProfile(
+                identifier: entry.id,
+                uuid: uuid,
+                name: name,
+                desc: str("PayloadDescription") ?? str("Description"),
+                organization: str("PayloadOrganization"),
+                type: str("PayloadType"),
+                version: version,
+                removable: removable,
+                created: created,
+                expiry: expiry))
+        }
+        return out
+    }
+
+    /// 把 `ProfileMetadata` 下每个 `<key>ID</key><dict>…</dict>` 切成独立片段.
+    /// （GetProfileList 的元数据是嵌套 dict，逐段配对 `<dict>`/`</dict>` 深度）.
+    private static func profileMetadataEntries(_ reply: String) -> [(id: String, body: String)] {
+        guard let metaKey = reply.range(of: "<key>ProfileMetadata</key>") else { return [] }
+        guard let outer = reply[metaKey.upperBound...].range(of: "<dict>") else { return [] }
+        var i = outer.upperBound
+        var out: [(String, String)] = []
+        while true {
+            // 子 dict 之后：下一个 token 要么是 <key>（还有更多描述），要么是 </dict>（外层结束）
+            let nextKey = reply[i...].range(of: "<key>")
+            let outerClose = reply[i...].range(of: "</dict>")
+            if let c = outerClose, nextKey == nil || c.lowerBound < nextKey!.lowerBound { break }
+
+            guard let kRange = reply[i...].range(of: "<key>") else { break }
+            guard let kEnd = reply[kRange.upperBound...].range(of: "</key>") else { break }
+            let id = String(reply[kRange.upperBound..<kEnd.lowerBound])
+
+            guard let dOpen = reply[kEnd.upperBound...].range(of: "<dict>") else { break }
+            var depth = 1
+            var j = dOpen.upperBound
+            var bodyEnd = j
+            while depth > 0 {
+                let o = reply[j...].range(of: "<dict>")
+                let c = reply[j...].range(of: "</dict>")
+                switch (o, c) {
+                case (let o?, let c?) where o.lowerBound < c.lowerBound:
+                    depth += 1; j = o.upperBound
+                case (_, let c?):
+                    depth -= 1; j = c.upperBound
+                    if depth == 0 { bodyEnd = c.lowerBound }
+                case (let o?, nil):
+                    depth += 1; j = o.upperBound
+                default:
+                    return out                       // XML 不完整，返回已解析部分
+                }
+            }
+            out.append((id, String(reply[dOpen.upperBound..<bodyEnd])))
+            i = j
+        }
+        return out
+    }
+
     /// 验证监督通道可用（Escalate → GetCloudConfiguration，同一连接内完成）.
     /// 能 Acknowledged 即代表监督证书与 PKCS7 签名都被设备接受.
     static func verifySupervisionChannel() throws {

@@ -11,7 +11,7 @@ struct PairingGuideCard: View {
     @State private var viewModel = AppListViewModel()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
                 AppRowIcon(systemName: "exclamationmark.triangle.fill",
                            tint: .orange, symbolSize: 18, frameSize: 36)
@@ -44,7 +44,7 @@ struct PairingGuideCard: View {
         // v0.3.251: 本组件即独立卡片 —— 自带背景与 16pt continuous 圆角,
         // 不再加 .padding(.vertical, 4) (那会让卡片在 List/ScrollView 里出现
         // 不对称空隙, 圆角看着不协调).
-        .padding(14)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))

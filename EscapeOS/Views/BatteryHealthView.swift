@@ -295,7 +295,7 @@ struct BatteryHealthView: View {
     // v0.3.251: 错误态拆成两张独立卡片 —— (1)状态卡(图标/标题/重试)
     // (2)配对引导卡(PairingGuideCard 自带独立卡片背景), 不再把引导挤进状态卡里.
     private var errorCard: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             VStack(spacing: 10) {
                 Image(systemName: "battery.0percent")
                     .font(.title)
@@ -316,7 +316,7 @@ struct BatteryHealthView: View {
                 .padding(.top, 4)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 32)
+            .padding(.vertical, 22)
             .background(errorCardBackground)
 
             if let err = errorText, PairingGate.isPairingError(err) {

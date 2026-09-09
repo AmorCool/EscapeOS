@@ -167,6 +167,7 @@ final class SpoofSession: ObservableObject {
         case .success:
             simulated = nil
             status = .idle
+            lastError = nil
             endBackground()
             // 设置页保活开关未开时，任务结束即停止保活.
             KeepAliveManager.shared.stop()

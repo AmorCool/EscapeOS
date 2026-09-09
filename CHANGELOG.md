@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.252] - 2026-09-09
+
+### 修复
+- **描述文件管理只显示预置描述、比爱思少一截（真根因）**：列表只走 misagent
+  （`com.apple.misagent`），它**只返回预置描述（.mobileprovision）**——用户安装的
+  配置描述（.mobileconfig / 托管描述）它根本拿不到，爱思走的是 MCInstall。
+  现在合并 **MCInstall GetProfileList**：解析应答里的 ProfileMetadata
+  （identifier → PayloadUUID / DisplayName / Description / Organization / Version /
+  RemovalDisallowed / CreationDate / ExpirationDate），与 misagent 结果按
+  PayloadIdentifier 去重合并。MCInstall 不可用（老系统）时维持原样不报错。
+- **描述文件详情页「文件描述」为空**：同样因为 misagent 元数据缺 PayloadDescription，
+  GetProfileList 自带，合并后正常显示。
+
+### 调整
+- 虚拟定位「清除虚拟定位」极简化：**无条件执行**（clear 自带「无会话先建会话」幂等逻辑）
+  → SIGKILL locationd → 成功提示「已清除模拟位置」、失败提示「操作失败」，去掉所有附加条件与长文案。
+- 配对引导卡收紧：内边距 14→12、行距 10→8；电池健康错误态两卡间距 16→12、状态卡高度 32→22。
+
 ## [0.3.251] - 2026-09-09
 
 ### 修复

@@ -142,7 +142,7 @@ enum ProfileConfigService {
 
     /// 设备上**全部描述文件**（v0.3.239：取消类型过滤对齐爱思识别；预置描述标注"预置"）.
     static func listAll() throws -> ListResult {
-        let all = try withMisagent { client -> [ConfigurationProfile] in
+        var all = try withMisagent { client -> [ConfigurationProfile] in
             var profilePointers: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?
             var profileLengths: UnsafeMutablePointer<Int>?
             var profileCount = 0
@@ -230,6 +230,34 @@ enum ProfileConfigService {
             }
             return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
+        // v0.3.252：合并 MCInstall GetProfileList —— misagent 只给预置描述（.mobileprovision），
+        // 用户安装的配置描述（.mobileconfig / 托管描述）它根本拿不到，这就是「描述文件管理
+        // 比爱思少一截」的根因.合并去重后统一展示；MCInstall 不可用（老系统）则维持原样.
+        if let managed = try? WirelessLockdownService.getManagedProfileList(), !managed.isEmpty {
+            var merged = all
+            var seen = Set(merged.map { $0.identifier ?? $0.uuid })
+            for m in managed where !seen.contains(m.identifier) {
+                seen.insert(m.identifier)
+                merged.append(ConfigurationProfile(
+                    uuid: m.uuid,
+                    name: m.name,
+                    organization: m.organization,
+                    type: m.type,
+                    desc: m.desc,
+                    verified: true,
+                    teamName: nil,
+                    version: m.version,
+                    expiry: m.expiry,
+                    isProvisioning: false,
+                    identifier: m.identifier,
+                    removable: m.removable,
+                    created: m.created,
+                    contentCount: 0))
+            }
+            merged.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            all = merged
+        }
+
         let raw = profileCountSnapshot
         let failed = max(raw - all.count, 0)
         return ListResult(profiles: all, rawCount: raw, parseFailed: failed)
