@@ -219,6 +219,9 @@ public enum Authenticator {
                     let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
                     LoginLogger.shared.log("App Store 认证被 Apple 边缘拒绝(403 HTML): \(bodySnippet)")
                     if currentAttempt < 4, anisetteProvider != nil {
+                        // v0.3.259：通知宿主轮换 Anisette 服务器（同服务器重 provision
+                        // 出的还是被标记的机器，换服务器才是换机器池）
+                        Configuration.onAuthEdgeSoftReject?()
                         LoginLogger.shared.log("… 用全新 Anisette 重试（attempt=\(currentAttempt)/4）")
                         continue
                     }
@@ -241,6 +244,10 @@ public enum Authenticator {
                 if (500...599).contains(status.code) || status.code == 204 || status.code == 404 {
                     LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code)（ipatool 可重试状态），attempt=\(currentAttempt)/4")
                     if currentAttempt < 4 {
+                        // v0.3.259：边缘软拒 = 当前「anisette 虚拟机器 + 本机 IP」组合
+                        // 被拉黑（真机 2026-09-09 实锤：同一服务器 4 连拒 500/404/204）。
+                        // 通知宿主换服务器（换机器池），同服务器重 provision 无意义。
+                        Configuration.onAuthEdgeSoftReject?()
                         // 上游 authenticationRetryDelay=250ms：退避重试，连续轰炸会加重风控
                         try? await Task.sleep(nanoseconds: 250_000_000)
                         continue
@@ -269,6 +276,8 @@ public enum Authenticator {
                     let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
                     LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code) 裸重定向（无 Location 头，疑似 IP 信誉/风控）：\(bodySnippet)")
                     if currentAttempt < 4, anisetteProvider != nil {
+                        // v0.3.259：同 204/404/5xx 分支——换 Anisette 服务器换机器池
+                        Configuration.onAuthEdgeSoftReject?()
                         LoginLogger.shared.log("… 用全新 Anisette 重试（attempt=\(currentAttempt)/4，设备标识变化可能改变边缘决策）")
                         continue
                     }
@@ -316,6 +325,10 @@ public enum Authenticator {
                 if (error as NSError).domain == "EscapeOS.Ensure" {
                     throw error
                 }
+                // v0.3.259：连接层异常必须留痕——此前静默吞进 lastError，登录日志里
+                // 只见「出站请求」不见任何响应（真机 17:23:37/17:23:49 native/fast
+                // 两次出站后无响应日志，即为该分支吞掉的连接超时/TLS 异常），无法取证.
+                LoginLogger.shared.log("❌ 认证请求异常（attempt=\(currentAttempt)，网络/连接层）: \(error.localizedDescription)")
                 lastError = error
             }
         }

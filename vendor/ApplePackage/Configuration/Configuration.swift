@@ -107,6 +107,18 @@ public enum Configuration {
     /// 退回未签名行为（会被 Apple 403，保留可诊断的错误路径）。
     public nonisolated(unsafe) static var sapSignerFactory: ((SAPConfig) async throws -> SAPActionSigning)?
 
+    // ─── v0.3.259：认证边缘软拒通知注入点 ────────────────────────────────
+    //
+    // 真机证据（2026-09-09 17:23 登录日志）：native/fast ×2 连接异常 + legacy
+    // MZFinance 500/404/204 ×4 —— 4 次重试全部钉在**同一台 Anisette 服务器**
+    // （同一 provision 机器池）上，Apple 边缘已把「这台虚拟机器 + 本机出口 IP」
+    // 组合拉黑，refresh 只会重 provision 出同一台被标记的机器，注定 4 连拒.
+    //
+    // 宿主（AnisetteProvider）在此回调里轮换服务器 + 重置虚拟机器身份，
+    // 让下一次认证尝试拿到**另一批机器**的 anisette（等价于用户手动
+    // 「换 Anisette 服务器重试」，只是自动化了）。vendor 层不 import 宿主类型.
+    public nonisolated(unsafe) static var onAuthEdgeSoftReject: (() -> Void)?
+
     public nonisolated(unsafe) static var tlsConfiguration: TLSConfiguration = {
         precondition(!deviceIdentifier.isEmpty, "deviceIdentifier must be set")
         #if DEBUG
