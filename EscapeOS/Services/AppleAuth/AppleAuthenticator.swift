@@ -148,21 +148,21 @@ enum AppleAuthenticator {
         case "trustedDeviceSecondaryAuth":
             guard let verificationHandler else { throw AppleAPIError.requiresTwoFactorAuthentication }
             try await requestTrustedDeviceTwoFactorCode(dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData, verificationHandler: verificationHandler)
-            // 验证码通过后重新获取 Anisette（OTP 已被首次握手消费），再走完整握手
-            let freshAnisette = try await (refreshAnisette?() ?? anisetteData)
-            if freshAnisette.oneTimePassword != anisetteData.oneTimePassword {
-                LoginLogger.shared.log("… 2FA 通过，刷新 Anisette OTP 后重新握手")
-            }
-            return try await authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: freshAnisette, verificationHandler: verificationHandler, refreshAnisette: refreshAnisette)
+            // v0.3.265：2FA 通过后用【同一份 anisetteData】重新握手，禁止刷新！
+            // 对齐 AltSign 原版（ALTAppleAPI+Authentication.m：验证成功后 restart
+            // authentication 传入的就是原 anisetteData，注释 "which will now succeed"）。
+            // 此前 refreshAnisette 换新 OTP → 服务器重新 provision → MD-M 机器标识
+            // 变化（真机 20:23 日志：三次 provision 三个不同 MD-M）→ 2FA 验证绑的是
+            // 机器 A、重新握手变成机器 B → Apple 视机器 B 为未验证 2FA → 又要求
+            // 2FA → 死循环（用户被迫反复输码，最终「登录失败: 需要两步验证」）。
+            // AltSign 千万用户验证过：同一份 anisetteData（含已消费 OTP）走两轮握手可行.
+            return try await authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: anisetteData, verificationHandler: verificationHandler, refreshAnisette: refreshAnisette)
 
         case "secondaryAuth":
             guard let verificationHandler else { throw AppleAPIError.requiresTwoFactorAuthentication }
             try await requestSMSTwoFactorCode(dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData, verificationHandler: verificationHandler)
-            let freshAnisette = try await (refreshAnisette?() ?? anisetteData)
-            if freshAnisette.oneTimePassword != anisetteData.oneTimePassword {
-                LoginLogger.shared.log("… 短信验证通过，刷新 Anisette OTP 后重新握手")
-            }
-            return try await authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: freshAnisette, verificationHandler: verificationHandler, refreshAnisette: refreshAnisette)
+            // v0.3.265：短信路径同款修复（同死循环根因）.
+            return try await authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: anisetteData, verificationHandler: verificationHandler, refreshAnisette: refreshAnisette)
 
         default:
             guard let sessionKey = decryptedDictionary["sk"] as? Data,
