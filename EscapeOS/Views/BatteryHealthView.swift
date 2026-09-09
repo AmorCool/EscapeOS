@@ -294,29 +294,33 @@ struct BatteryHealthView: View {
 
     // v0.3.251: 错误态拆成两张独立卡片 —— (1)状态卡(图标/标题/重试)
     // (2)配对引导卡(PairingGuideCard 自带独立卡片背景), 不再把引导挤进状态卡里.
+    // v0.3.252：错误态两张卡片**同款紧凑样式**（图标块 + 文案 + 右侧重试，同一 16pt 圆角、
+    // 同一 12pt 内边距、同一高度量级）——v0.3.251 状态卡用大图标+大按钮、引导卡用小行样式，
+    // 两卡一大一小非常不协调（用户实测截图）.
     private var errorCard: some View {
         VStack(spacing: 12) {
-            VStack(spacing: 10) {
-                Image(systemName: "battery.0percent")
-                    .font(.title)
-                    .foregroundStyle(.secondary)
-                Text("无法读取电池数据")
-                    .font(.headline)
-                if let err = errorText, !PairingGate.isPairingError(err) {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+            HStack(spacing: 12) {
+                AppRowIcon(systemName: "battery.0percent",
+                           tint: Color.secondary, symbolSize: 18, frameSize: 36)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("无法读取电池数据")
+                        .font(.subheadline.weight(.semibold))
+                    if let err = errorText, !PairingGate.isPairingError(err) {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(Color.secondary)
+                            .lineLimit(2)
+                    }
                 }
+                Spacer(minLength: 8)
                 Button("重试") {
                     Task { await load() }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.blue)
-                .padding(.top, 4)
+                .controlSize(.small)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 22)
+            .padding(12)
             .background(errorCardBackground)
 
             if let err = errorText, PairingGate.isPairingError(err) {
@@ -328,7 +332,7 @@ struct BatteryHealthView: View {
     }
 
     private var errorCardBackground: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
             .fill(Color(.secondarySystemGroupedBackground))
     }
 
