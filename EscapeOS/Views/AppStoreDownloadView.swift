@@ -397,7 +397,7 @@ struct AppStoreDownloadView: View {
     /// 走 iTunes 认证拿到 AppStoreAccount，避免用户在 App Store 下载里再登录一次.
     ///
     /// 注意：侧载的 GrandSlam 会话与 App Store 的 iTunes 会话**令牌不互通**，
-    /// 这里只是复用**凭据**（邮箱+密码），仍要调一次 `Authenticator.authenticate`
+    /// 这里只是复用**凭据**（邮箱+密码），仍要调一次 Go 栈登录（GoAppStoreAuth.login）
     /// 走 iTunes 流程拿 `passwordToken` / `dsPersonId` / cookie.开启双重认证时
     /// 该接口会失败，此时回退到手动添加账户并填写验证码.
     private func useSettingsAppleID() {
@@ -418,9 +418,14 @@ struct AppStoreDownloadView: View {
         // 是同步重活，Task{} 继承 MainActor 会阻塞主线程导致全局无响应（真机实锤）.
         Task.detached(priority: .userInitiated) {
             do {
-                let account = try await Authenticator.authenticate(
+                // v0.3.262：登录整体下沉 Go 栈（照抄 IPARanger/上游 ipatool 形态），
+                // 旧 Swift 链路被边缘 WAF 秒拒（详见 GoAppStoreAuth 注释）。
+                let account = try GoAppStoreAuth.login(
                     email: email,
-                    password: pw
+                    password: pw,
+                    code: "",
+                    deviceIdentifier: Configuration.deviceIdentifier,
+                    cacheDir: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
                 )
                 await MainActor.run {
                     store.add(account)
@@ -463,10 +468,13 @@ struct AppStoreDownloadView: View {
         LoginLogger.shared.log("App Store 下载：设置登录流程内 2FA 重试 \(email)（含验证码：是）")
         Task.detached(priority: .userInitiated) {
             do {
-                let account = try await Authenticator.authenticate(
+                // v0.3.262：2FA 重试同走 Go 栈.
+                let account = try GoAppStoreAuth.login(
                     email: email,
                     password: password,
-                    code: code
+                    code: code,
+                    deviceIdentifier: Configuration.deviceIdentifier,
+                    cacheDir: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
                 )
                 await MainActor.run {
                     store.add(account)

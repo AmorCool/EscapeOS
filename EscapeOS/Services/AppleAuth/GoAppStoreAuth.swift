@@ -1,0 +1,138 @@
+import Foundation
+
+/// v0.3.262：App Store 登录的 Go 实现（照抄 IPARanger / 上游 ipatool 的链路）.
+///
+/// 背景：Swift 旧登录链路（vendor ApplePackage.Authenticator，URLSession 栈 +
+/// x-apple-plist Content-Type）被 Apple 边缘 WAF 秒拒（真机 2026-09-09 18:23：
+/// 0.4s HTML 404/403，Wi-Fi 与蜂窝同拒）；而同网络下 IPARanger 捆绑的 Go 版
+/// ipatool 形态可用。本类型把登录整体下沉到 Go：经 cgo 调用 libsap.a 的
+/// `EscapeAppStoreLogin`（sapbridge/authappstore = 上游 pkg/appstore+pkg/http
+/// 文件级照抄），请求由 Go 标准库 net/http/crypto-tls 发出 —— 报文形态
+///（Content-Type: application/x-www-form-urlencoded、Go TLS 指纹、头集合与
+/// 顺序、bag/init 端点、双层重试语义）与 IPARanger 完全一致。
+///
+/// SAP 签名复用本进程 Unicorn guest（authappstore 内部装配 internal/sap，
+/// 资产包缓存目录与 Swift 侧 SapSigner 共用，只下载一次）。
+enum GoAppStoreAuth {
+
+    /// cgo 返回的 JSON 结构.
+    private struct LoginResult: Decodable {
+        struct Account: Decodable {
+            var email: String?
+            var passwordToken: String?
+            var directoryServicesID: String?
+            var name: String?
+            var storeFront: String?
+            var pod: String?
+        }
+
+        struct Cookie: Decodable {
+            var name: String
+            var value: String
+            var domain: String?
+            var path: String?
+        }
+
+        var success: Bool
+        var authCodeRequired: Bool
+        var error: String?
+        var account: Account?
+        var cookies: [Cookie]?
+    }
+
+    /// 阻塞执行一次完整登录（bag → SAP 签名器 → 双层重试 → 解析）。
+    /// 调用方应在后台线程 Task.detached 中使用（SAP 初始化可能较慢）。
+    /// - Parameters:
+    ///   - email/password: Apple ID 凭据
+    ///   - authCode: 2FA 验证码（可空）
+    ///   - deviceIdentifier: 与 SAP 硬件标识同源的设备标识（hex 串）
+    ///   - cacheDir: SAP 资产包缓存目录（与 SapSigner 共用）
+    static func login(
+        email: String,
+        password: String,
+        code: String,
+        deviceIdentifier: String,
+        cacheDir: String
+    ) throws -> AppStoreAccount {
+        LoginLogger.shared.log("[GoAuth] 开始登录（Go 栈，上游 ipatool 形态）: \(email)（含验证码：\(code.isEmpty ? "否" : "是")）")
+
+        // SAP 状态条：Go 侧 assets.Load 会写进度（SapGetProgress），登录期间
+        // 开轮询驱动 UI（与旧 Swift 工厂闭包同款节奏）.
+        SapProgressPoller.shared.start()
+        defer { SapProgressPoller.shared.stop() }
+
+        // NSString.utf8String：同步 cgo 调用期间由 autoreleasepool 保证有效，
+        // 免手动 malloc/free（strdup + deallocate 与 free 的 ABI 不保证一致）.
+        guard let emailC = (email as NSString).utf8String,
+              let passwordC = (password as NSString).utf8String,
+              let codeC = (code as NSString).utf8String,
+              let guidC = (deviceIdentifier as NSString).utf8String,
+              let cacheDirC = (cacheDir as NSString).utf8String else {
+            throw AppleAPIError.customError(code: -2600, message: "凭据转 C 字符串失败（含非法编码？）")
+        }
+
+        guard let resultPtr = EscapeAppStoreLogin(emailC, passwordC, codeC, guidC, cacheDirC) else {
+            throw AppleAPIError.customError(code: -2601, message: "Go 登录返回空结果（cgo 异常）")
+        }
+        defer { SapFree(resultPtr) }
+
+        let jsonString = String(cString: resultPtr)
+        LoginLogger.shared.log("[GoAuth] Go 返回: \(jsonString.prefix(400))")
+
+        guard let jsonData = jsonString.data(using: .utf8),
+              let result = try? JSONDecoder().decode(LoginResult.self, from: jsonData) else {
+            throw AppleAPIError.customError(code: -2602, message: "Go 登录返回无法解析: \(jsonString.prefix(200))")
+        }
+
+        if result.success, let account = result.account {
+            // 成功：组装 AppStoreAccount（storefront 用 Go 返回的 X-Set-Apple-Store-Front
+            // 头值；缺头时回退配置值，与旧链路语义一致）.
+            let store = account.storeFront ?? (Configuration.storeId(for: Configuration.countryCode) ?? "143441")
+            let cookies = (result.cookies ?? []).map { item in
+                Cookie(
+                    name: item.name,
+                    value: item.value,
+                    path: item.path ?? "/",
+                    domain: item.domain,
+                    httpOnly: false,
+                    secure: true
+                )
+            }
+            let converted = try AppStoreAccount(
+                email: email,
+                password: password,
+                appleId: account.email,
+                store: store,
+                firstName: nil,
+                lastName: nil,
+                passwordToken: account.passwordToken,
+                directoryServicesIdentifier: account.directoryServicesID,
+                cookie: cookies,
+                pod: account.pod
+            )
+            // Go 返回的 accountInfo 里 firstName/lastName 在 name 合并串里；
+            // AppStoreAccount 需要拆分（老持久化数据兼容显示）.
+            var final = converted
+            let parts = (account.name ?? "").split(separator: " ", maxSplits: 1).map(String.init)
+            final.firstName = parts.first ?? ""
+            final.lastName = parts.count > 1 ? parts[1] : ""
+            LoginLogger.shared.log("[GoAuth] 登录成功: store=\(store), dsId=\(account.directoryServicesID ?? "?"), cookies=\(cookies.count)")
+            return final
+        }
+
+        if result.authCodeRequired {
+            // 与现有 2FA 弹窗的字符串判定兼容（调用方 contains 匹配）.
+            throw AppleAPIError.customError(
+                code: -2603,
+                message: "Authentication requires verification code\n" +
+                    "If no verification code prompted, try logging in at https://account.apple.com " +
+                    "to trigger the alert and fill the code in the 2FA Code here."
+            )
+        }
+
+        throw AppleAPIError.customError(
+            code: -2604,
+            message: result.error ?? "Go 登录失败（未知原因）"
+        )
+    }
+}

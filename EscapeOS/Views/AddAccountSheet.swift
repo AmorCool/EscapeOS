@@ -88,10 +88,14 @@ struct AddAccountSheet: View {
         Task.detached(priority: .userInitiated) {
             LoginLogger.shared.log("App Store 下载：手动添加账户开始认证 \(email)（含验证码：\(code.isEmpty ? "否" : "是")）")
             do {
-                let account = try await Authenticator.authenticate(
+                // v0.3.262：登录整体下沉 Go 栈（照抄 IPARanger/上游 ipatool 形态），
+                // 旧 Swift 链路被边缘 WAF 秒拒（详见 GoAppStoreAuth 注释）。
+                let account = try GoAppStoreAuth.login(
                     email: email,
                     password: password,
-                    code: code
+                    code: code,
+                    deviceIdentifier: Configuration.deviceIdentifier,
+                    cacheDir: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
                 )
                 await MainActor.run {
                     busy = false

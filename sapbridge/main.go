@@ -8,11 +8,14 @@ import "C"
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"unsafe"
 
+	"github.com/majd/ipatool/v2/authappstore"
 	"github.com/majd/ipatool/v2/internal/sap"
 )
 
@@ -173,6 +176,95 @@ func SapFree(ptr *C.char) {
 	if ptr != nil {
 		C.free(unsafe.Pointer(ptr))
 	}
+}
+
+// ─── EscapeAppStoreLogin（v0.3.262）──────────────────────────────────────
+//
+// App Store 登录整体下沉到 Go 侧：直接复用上游 ipatool 的登录链路
+//（authappstore 包 = pkg/appstore+pkg/http 文件级照抄），请求由 Go 标准库
+// net/http/crypto-tls 发出 —— 报文形态（Content-Type: application/x-www-form-
+//-urlencoded、Go TLS 指纹、头集合与顺序）与 IPARanger 捆绑的 ipatool 二进制
+// 完全一致。SAP 签名器复用本进程 internal/sap 的 Unicorn guest（cacheDir 与
+// Swift 侧共享，资产包只下载一次）。
+//
+// 参数：
+//	email/password/authCode —— Apple ID 凭据（authCode 为 2FA 验证码，可空串）
+//	macAddress              —— 设备标识（Swift 侧持久化的
+//	                          ApplePackageDeviceIdentifier，hex 串；与 SAP
+//	                          硬件标识同源，对齐上游 machineIdentity）
+//	cacheDir                —— SAP 资产包缓存目录（可与 SapInit 共用）
+// 返回（JSON 字符串，SapFree 释放）：
+//	{"success":true,"authCodeRequired":false,"error":"",
+//	 "account":{"email":...,"passwordToken":...,"directoryServicesID":...,
+//	            "name":...,"storeFront":...,"pod":...},
+//	 "cookies":[{"name":...,"value":...,"domain":...,"path":...}]}
+//	失败时 success=false + error 文本；2FA 时 authCodeRequired=true。
+//
+//export EscapeAppStoreLogin
+func EscapeAppStoreLogin(email, password, authCode, macAddress, cacheDir *C.char) (result *C.char) {
+	// 登录是长事务（bag + SAP 初始化 + 至多 4×3 次请求）；与 SapInit 一样
+	// recover 防 panic 跨 cgo 边界 abort 进程。
+	defer func() {
+		if r := recover(); r != nil {
+			result = C.CString(escapeLoginJSON(false, false, fmt.Sprintf("go panic: %v", r), nil, nil))
+		}
+	}()
+
+	emailStr := C.GoString(email)
+	passwordStr := C.GoString(password)
+	authCodeStr := C.GoString(authCode)
+	macStr := C.GoString(macAddress)
+	cacheDirStr := C.GoString(cacheDir)
+
+	acc, cookies, err := authappstore.Login(emailStr, passwordStr, authCodeStr, macStr, cacheDirStr)
+	if err != nil {
+		authCodeRequired := errors.Is(err, authappstore.ErrAuthCodeRequired)
+		msg := err.Error()
+		if authCodeRequired {
+			// 与 Swift 侧现役 2FA 弹窗的字符串判定保持兼容
+			//（desc.contains("Authentication requires verification code")）.
+			msg = "Authentication requires verification code"
+		}
+		return C.CString(escapeLoginJSON(false, authCodeRequired, msg, nil, nil))
+	}
+
+	exported := make([]escapeCookie, 0, len(cookies))
+	for _, ck := range cookies {
+		exported = append(exported, escapeCookie{Name: ck.Name, Value: ck.Value, Domain: ck.Domain, Path: ck.Path})
+	}
+	return C.CString(escapeLoginJSON(true, false, "", &acc, exported))
+}
+
+// escapeCookie 带显式 json tag（type alias 转换不继承源类型 tag，必须重写）.
+type escapeCookie struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Domain string `json:"domain"`
+	Path   string `json:"path"`
+}
+
+type escapeLoginResult struct {
+	Success          bool                  `json:"success"`
+	AuthCodeRequired bool                  `json:"authCodeRequired"`
+	Error            string                `json:"error,omitempty"`
+	Account          *authappstore.Account `json:"account,omitempty"`
+	Cookies          []escapeCookie        `json:"cookies,omitempty"`
+}
+
+func escapeLoginJSON(success, authCodeRequired bool, errMsg string, acc *authappstore.Account, cookies []escapeCookie) string {
+	payload := escapeLoginResult{
+		Success:          success,
+		AuthCodeRequired: authCodeRequired,
+		Error:            errMsg,
+		Account:          acc,
+		Cookies:          cookies,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return `{"success":false,"authCodeRequired":false,"error":"marshal result: ` + err.Error() + `"}`
+	}
+
+	return string(data)
 }
 
 func main() {}
