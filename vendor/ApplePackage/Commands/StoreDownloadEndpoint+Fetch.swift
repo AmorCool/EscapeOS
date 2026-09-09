@@ -118,6 +118,9 @@ extension StoreDownloadEndpoint {
             "creditDisplay": "",
             "guid": deviceIdentifier,
             "salableAdamId": app.id,
+            // v0.3.258：对齐上游 ipatool 5f776fe —— 缺 serialNumber 时 Apple 按
+            // 无效设备校验，直接回「Your device or computer could not be verified」.
+            "serialNumber": "0",
         ]
 
         if !externalVersionID.isEmpty {

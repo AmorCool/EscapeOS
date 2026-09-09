@@ -129,6 +129,8 @@ public enum VersionFinder {
             "creditDisplay": "",
             "guid": guid,
             "salableAdamId": app.id,
+            // v0.3.258：对齐上游 ipatool 5f776fe（get_version_metadata 同款）
+            "serialNumber": "0",
         ]
 
         let data = try PropertyListSerialization.data(fromPropertyList: payload, format: .xml, options: 0)

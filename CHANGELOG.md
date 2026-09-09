@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.258] - 2026-09-09
+
+### 修复（对齐上游 ipatool 5f776fe）
+- **AppStore 下载报「Your device or computer could not be verified.
+  Contact support for assistance.」**：搜索正常、登录偶尔成功，卡在下载请求——
+  上游 ipatool 8/28 的修复（fix: FailureType 5002, commit 5f776fe）给
+  **download / get_version_metadata / list_versions 三个请求体补了
+  `serialNumber: "0"`**：Apple 会校验请求里的设备序列号，缺省时按无效设备处理
+  直接拒绝。我们的移植版三个请求都缺这个字段（逐字比对了上游改动清单）。
+  `purchase` 上游未改，保持不动。
+- 登录部分无需再改：上游 8/29 的「临时性认证响应重试」（204/404/5xx 重试 3 次 +
+  250ms 递增退避）与 legacy 端点回退，我们在 v0.3.176/0.3.172 已移植且更完整
+  （上上限 4 次 + 全新 anisette 强制刷新）。
+
+### 审计结论
+- 对照上游 2026 年 8 月批次提交逐条核对：SAP 登录（已实现）、5002/serialNumber
+  （本轮补）、临时性认证重试（已有）、legacy 回退（已有）、bag.xml 自定义端点
+  （已有）。剩余上游新增的 visionOS/macOS 搜索下载与 list-purchases 与本 App
+  场景无关，不引入。
+
 ## [0.3.257] - 2026-09-09
 
 ### 修复

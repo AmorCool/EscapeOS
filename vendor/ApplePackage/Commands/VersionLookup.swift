@@ -118,6 +118,8 @@ public enum VersionLookup {
             "creditDisplay": "",
             "guid": guid,
             "salableAdamId": app.id,
+            // v0.3.258：对齐上游 ipatool 5f776fe（list_versions 同款）
+            "serialNumber": "0",
             "externalVersionId": versionID,
         ]
 
