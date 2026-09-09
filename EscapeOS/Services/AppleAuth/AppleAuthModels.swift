@@ -121,7 +121,12 @@ struct AppleAPISession {
 
 // MARK: - AppleAPIError
 
-enum AppleAPIError: Error {
+// v0.3.264：遵循 LocalizedError——此前只写了 errorDescription 计算属性却未声明
+// 协议，Swift→NSError 桥接不调用它，localizedDescription 落到默认格式
+//「未能完成操作。（EscapeSpace.AppleAPIError错误0。）」（真机 20:16 实锤：
+// Go 登录的 2FA 信号 message 被吃掉，调用方 contains("Authentication requires
+// verification code") 匹配失败，2FA 弹窗不弹、Apple 已下发的验证码无处可填）.
+enum AppleAPIError: Error, LocalizedError {
     case unknown
     case invalidParameters
     case badServerResponse
