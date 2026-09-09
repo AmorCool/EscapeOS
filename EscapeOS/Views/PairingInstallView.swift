@@ -28,23 +28,27 @@ struct PairingInstallView: View {
     var body: some View {
         List {
             Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 12) {
-                        AppRowIcon(systemName: "tray.and.arrow.down.fill", tint: .blue, symbolSize: 20, frameSize: 40)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("配置导入")
-                                .font(.headline)
-                            Text("把配对文件写入已安装的侧载工具，让它们复用同一份配对身份.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
+                HStack(spacing: 12) {
+                    AppRowIcon(systemName: "tray.and.arrow.down.fill", tint: .blue, symbolSize: 20, frameSize: 40)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("配置导入")
+                            .font(.headline)
+                        Text("把配对文件写入已安装的侧载工具，让它们复用同一份配对身份.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
-                    if !pairingFileExists {
-                        PairingGuideCard(note: "把配对写入其它侧载工具的前提：本机已导入配对文件.")
-                    }
+                    Spacer()
                 }
                 .padding(.vertical, 6)
+            }
+
+            // v0.3.251: 配对引导独立卡片板块, 不再挤在标题卡里
+            if !pairingFileExists {
+                Section {
+                    PairingGuideCard(note: "把配对写入其它侧载工具的前提：本机已导入配对文件.")
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                }
             }
 
             if let error = errorMessage {

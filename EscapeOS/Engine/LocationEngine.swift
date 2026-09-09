@@ -83,6 +83,38 @@ enum LocationEngine {
         return result
     }
 
+    /// v0.3.251：SIGKILL locationd.
+    /// 清掉模拟坐标后，系统定位守护仍可能向客户端继续回报最后一次模拟值
+    /// （客户端缓存 + 守护进程内部状态），表现为「清除成功但地图定位点不动」.
+    /// 杀掉 locationd 让它重启后立即回到真实 GPS.
+    /// 注意：App 无 root/特权时 kill 会失败（EPERM），调用方需如实反馈，
+    /// 不影响 clear 本身的成功与否.
+    @discardableResult
+    static func killLocationd() -> Bool {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return false }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        var procs = [kinfo_proc]()
+        for _ in 0..<4 {                                    // 进程表可能在两次调用间增长，重试几次
+            procs = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 16)
+            var sz = procs.count * stride
+            if sysctl(&mib, 3, &procs, &sz, nil, 0) == 0 {
+                let count = sz / stride
+                for i in 0..<count {
+                    let p = procs[i].kp_proc
+                    let name = withUnsafeBytes(of: p.p_comm) { raw -> String in
+                        String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
+                    }
+                    if name == "locationd", kill(p.p_pid, SIGKILL) == 0 { return true }
+                }
+                return false
+            }
+            if errno != ENOMEM { return false }
+        }
+        return false
+    }
+
     private static func cleanup() {
         if let locationSimulation {
             location_simulation_free(locationSimulation)

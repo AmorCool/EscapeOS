@@ -10,6 +10,7 @@ struct VirtualLocationSettingsView: View {
     @State private var localDevVPNInstalled = LocalDevVPN.isInstalled
     @State private var tunnelConnected = LocalDevVPN.isConnected
     @State private var showImportGuide = false
+    @State private var clearAlertMessage: String?
     @Environment(\.scenePhase) private var scenePhase
 
     private var appVersion: String {
@@ -30,7 +31,27 @@ struct VirtualLocationSettingsView: View {
                     }
 
                     Button("清除虚拟定位") {
+                        // v0.3.251：清除后给明确反馈（成功/失败 + 是否重启了 locationd），
+                        // 不再「点了没反应」.
+                        let alreadyIdle = (SpoofSession.shared.simulated == nil
+                                           && SpoofSession.shared.status == .idle)
                         SpoofSession.shared.stop()
+                        if let err = SpoofSession.shared.lastError {
+                            clearAlertMessage = "清除失败：\(err)"
+                        } else if alreadyIdle {
+                            clearAlertMessage = "当前本就没有虚拟定位，无需清除."
+                        } else if SpoofSession.shared.locationdKilled == true {
+                            clearAlertMessage = "清除成功，并已重启系统定位服务（locationd），定位立即回到真实 GPS."
+                        } else {
+                            clearAlertMessage = "清除成功.定位守护（locationd）需要系统特权未能重启，若地图/系统定位未刷新，请锁屏再解锁或稍等片刻."
+                        }
+                    }
+                    .alert("清除虚拟定位",
+                           isPresented: Binding(get: { clearAlertMessage != nil },
+                                                set: { if !$0 { clearAlertMessage = nil } })) {
+                        Button("好", role: .cancel) {}
+                    } message: {
+                        Text(clearAlertMessage ?? "")
                     }
                     Button("如何导入配对文件") {
                         showImportGuide = true

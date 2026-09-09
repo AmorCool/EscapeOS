@@ -292,35 +292,44 @@ struct BatteryHealthView: View {
         return "未充电"
     }
 
+    // v0.3.251: 错误态拆成两张独立卡片 —— (1)状态卡(图标/标题/重试)
+    // (2)配对引导卡(PairingGuideCard 自带独立卡片背景), 不再把引导挤进状态卡里.
     private var errorCard: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "battery.0percent")
-                .font(.title)
-                .foregroundStyle(.secondary)
-            Text("无法读取电池数据")
-                .font(.headline)
+        VStack(spacing: 16) {
+            VStack(spacing: 10) {
+                Image(systemName: "battery.0percent")
+                    .font(.title)
+                    .foregroundStyle(.secondary)
+                Text("无法读取电池数据")
+                    .font(.headline)
+                if let err = errorText, !PairingGate.isPairingError(err) {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                Button("重试") {
+                    Task { await load() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 32)
+            .background(errorCardBackground)
+
             if let err = errorText, PairingGate.isPairingError(err) {
+                // 独立卡片: 与全 App 其他功能页同一 PairingGuideCard 视觉
                 PairingGuideCard(note: "电池健康还需要 LocalDevVPN 已连接（远程隧道读取）.",
                                  showChevron: true)
-            } else {
-                Text(errorText ?? "未知错误")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
             }
-            Button("重试") {
-                Task { await load() }
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.blue)
-            .padding(.top, 4)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+    }
+
+    private var errorCardBackground: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(Color(.secondarySystemGroupedBackground))
     }
 
     /// 调试：原始字段（字段缺失时可排查 iOS 版本差异）

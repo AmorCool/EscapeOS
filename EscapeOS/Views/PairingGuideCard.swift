@@ -41,12 +41,14 @@ struct PairingGuideCard: View {
                 .contentShape(Rectangle())
             }
         }
-        .padding(12)
+        // v0.3.251: 本组件即独立卡片 —— 自带背景与 16pt continuous 圆角,
+        // 不再加 .padding(.vertical, 4) (那会让卡片在 List/ScrollView 里出现
+        // 不对称空隙, 圆角看着不协调).
+        .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
-        .padding(.vertical, 4)
     }
 }
 

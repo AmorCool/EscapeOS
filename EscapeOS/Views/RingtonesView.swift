@@ -61,7 +61,7 @@ struct RingtonesView: View {
                     if PairingGate.isPairingError(errorMessage) {
                         PairingGuideCard()
                             .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets())
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     } else {
                         Text(errorMessage)
                             .font(.footnote)

@@ -84,6 +84,8 @@ final class SpoofSession: ObservableObject {
     @Published var travelMode: TravelMode = .walk
     @Published var mapStyleIndex: Int = 0
     @Published var lastError: String?
+    /// v0.3.251：最近一次清除后是否成功 SIGKILL 了 locationd（nil = 未执行过清除）
+    @Published var locationdKilled: Bool?
     @Published var isBusy = false
     @Published var joystickActive = false
     @Published private(set) var routeActive = false
@@ -168,6 +170,8 @@ final class SpoofSession: ObservableObject {
             endBackground()
             // 设置页保活开关未开时，任务结束即停止保活.
             KeepAliveManager.shared.stop()
+            // v0.3.251：SIGKILL locationd——甩掉残留的模拟值，定位点立即回真实 GPS.
+            locationdKilled = LocationEngine.killLocationd()
             // 继续轻量定位，让地图定位点回到真实 GPS.
             locationKeeper.start()
         case .failure(let error):

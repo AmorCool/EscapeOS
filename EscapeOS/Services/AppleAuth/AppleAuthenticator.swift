@@ -1,6 +1,37 @@
 import Foundation
 import CryptoKit
 
+/// v0.3.251：GrandSlam / Apple API 专用请求通道.
+///
+/// 根因（AltSign PR #52 实锤，2026-08-31 起）：Apple 在 gsa.apple.com 前面的边缘节点
+/// 现在**每条连接最多放行 1~2 个请求**，之后的请求一律回 503 HTML。登录要连发三个请求
+/// （o=init → o=complete → o=apptokens），`URLSession.shared` 会复用连接 →
+/// `apptokens` 必中 503，HTML 被 plist 解析器吃掉就成了
+/// `NSCocoaErrorDomain 3840「数据格式不正确」`——密码其实已经验证通过.
+/// 对策：**每个请求都走全新 ephemeral session，用完即 invalidate**，杜绝连接复用；
+/// 并对 5xx 直接抛错（带状态码），不再把 HTML 喂给 plist 解析器.
+enum GrandSlamHTTP {
+    static func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpMaximumConnectionsPerHost = 1
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        if http.statusCode >= 500 {
+            let head = String(data: data.prefix(160), encoding: .utf8) ?? ""
+            throw NSError(domain: "GrandSlamHTTP", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "Apple 服务器返回 \(http.statusCode)（疑似边缘节点限流）"
+                            + (head.isEmpty ? "" : "：\(head)")])
+        }
+        return (data, http)
+    }
+}
+
 /// Apple GrandSlam 认证引擎（对应 StosSign 的 `Authentication`）.
 /// 使用本项目自带的 `GSAAuth`（SRP-6a）完成 init → complete 握手，支持两步验证（受信任设备 / 短信），
 /// 成功后返回 `Account` 与 `AppleAPISession`.全程只依赖原生框架.
@@ -196,7 +227,7 @@ enum AppleAuthenticator {
         request.httpBody = bodyData
         httpHeaders.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await GrandSlamHTTP.data(for: request)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
 
         guard let responseDictionary = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
@@ -282,7 +313,7 @@ enum AppleAuthenticator {
         let verifyURL = URL(string: "https://gsa.apple.com/grandslam/GsService2/validate")!
 
         let request = makeTwoFactorCodeRequest(url: requestURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
-        _ = try await URLSession.shared.data(for: request)
+        _ = try await GrandSlamHTTP.data(for: request)
 
         let verificationCode = try await withCheckedThrowingContinuation { continuation in
             Task {
@@ -297,7 +328,7 @@ enum AppleAuthenticator {
         var verifyRequest = makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
         verifyRequest.allHTTPHeaderFields?["security-code"] = code
 
-        let (data, _) = try await URLSession.shared.data(for: verifyRequest)
+        let (data, _) = try await GrandSlamHTTP.data(for: verifyRequest)
         guard let responseDictionary = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             throw URLError(.badServerResponse)
         }
@@ -321,7 +352,7 @@ enum AppleAuthenticator {
         request.httpMethod = "POST"
         let bodyXML = ["serverInfo": ["phoneNumber.id": "1"]] as [String: Any]
         request.httpBody = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
-        _ = try await URLSession.shared.data(for: request)
+        _ = try await GrandSlamHTTP.data(for: request)
 
         let verificationCode = try await withCheckedThrowingContinuation { continuation in
             Task {
@@ -341,7 +372,7 @@ enum AppleAuthenticator {
         ] as [String: Any]
         verifyRequest.httpBody = try PropertyListSerialization.data(fromPropertyList: verifyBodyXML, format: .xml, options: 0)
 
-        let (_, response) = try await URLSession.shared.data(for: verifyRequest)
+        let (_, response) = try await GrandSlamHTTP.data(for: verifyRequest)
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200,
               httpResponse.allHeaderFields.keys.contains("X-Apple-PE-Token") else {
@@ -378,7 +409,7 @@ enum AppleAuthenticator {
         request.setValue(session.anisetteData.locale.identifier, forHTTPHeaderField: "X-Apple-Locale")
         request.setValue(session.anisetteData.timeZone.abbreviation() ?? "GMT", forHTTPHeaderField: "X-Apple-I-TimeZone")
 
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, _) = try await GrandSlamHTTP.data(for: request)
         guard let resp = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let developer = resp["developer"] as? [String: Any] else {
             throw AppleAPIError.badServerResponse

@@ -204,7 +204,7 @@ enum AppleDeveloperAPI {
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         headers.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await GrandSlamHTTP.data(for: request)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
         let responseString = String(data: data, encoding: .utf8) ?? ""
         LoginLogger.shared.log("← PATCH HTTP \(http): \(responseString.prefix(300))")
@@ -381,7 +381,7 @@ enum AppleDeveloperAPI {
         request.timeoutInterval = 30
         request.httpBody = try PropertyListSerialization.data(fromPropertyList: plistBody, format: .xml, options: 0)
         headers.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await GrandSlamHTTP.data(for: request)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard (200..<300).contains(http) else {
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""

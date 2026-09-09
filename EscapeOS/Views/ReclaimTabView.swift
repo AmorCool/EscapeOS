@@ -114,7 +114,7 @@ struct ReclaimTabView: View {
                 Section {
                     PairingGuideCard(note: "建立 LocalDevVPN 隧道后才能扫描设备应用.")
                         .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets())
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }
             } else if appList.apps.isEmpty && !appList.isLoading {
                 Section {

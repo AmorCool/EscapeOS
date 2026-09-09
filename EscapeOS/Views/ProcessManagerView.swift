@@ -671,6 +671,13 @@ final class ProcessManagerViewModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     guard let self else { return }
+                    // v0.3.251: 无配对文件属预期状态(页面已有独立引导卡片),
+                    // 不再弹窗 —— 否则弹窗[好] -> refresh() -> 再弹窗, 无限循环.
+                    if PairingGate.isPairingError(error.localizedDescription)
+                        || !TunnelContext.shared.hasPairingFile {
+                        self.isRefreshing = false
+                        return
+                    }
                     self.alertItem = ProcessAlert(title: "加载进程失败", message: error.localizedDescription)
                     self.isRefreshing = false
                 }
@@ -810,7 +817,7 @@ struct ProcessManagerView: View {
                     if !hasPairing {
                         PairingGuideCard(note: "进程管理还需要：① LocalDevVPN 已连接；② 开发者模式已开启.")
                             .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets())
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     } else {
                         Text("未找到运行中的进程.")
                             .foregroundStyle(.secondary)

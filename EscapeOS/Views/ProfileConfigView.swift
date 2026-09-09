@@ -52,7 +52,7 @@ struct ProfileConfigView: View {
                     if PairingGate.isPairingError(err) {
                         PairingGuideCard()
                             .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets())
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     } else {
                         Label(err, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
@@ -273,12 +273,13 @@ struct ProfileConfigView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
-                    detailRow("文件 ID", p.identifier ?? p.uuid, monospaced: true, copyable: true)
+                    // v0.3.251: 字段对齐爱思助手 —— 文件 ID = PayloadUUID, 唯一码 = PayloadIdentifier
+                    detailRow("文件 ID", p.uuid, monospaced: true, copyable: true)
                     detailRow("文件名称", p.name, copyable: true)
                     detailRow("版本号", p.version.map(String.init))
                     detailRow("类型", p.type ?? (p.isProvisioning ? "预置描述" : nil))
                     detailRow("使用者", p.organization ?? p.teamName)
-                    detailRow("唯一码", p.uuid, monospaced: true, copyable: true)
+                    detailRow("唯一码", p.identifier ?? p.uuid, monospaced: true, copyable: true)
                     detailRow("状态", p.verified ? "有效（签名已验证）" : "有效")
                     detailRow("是否可移除", p.removable ? "可移除" : "不可移除（设备端拒绝删除或设置了移除保护）")
                     if let created = p.created {
