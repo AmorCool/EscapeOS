@@ -45,14 +45,12 @@ struct ProfileConfigView: View {
             if loading {
                 Section {
                     HStack { Spacer(); ProgressView("正在读取设备描述文件…"); Spacer() }
-                        .listRowBackground(Color.clear)
                 }
             } else if let err = errorText {
                 Section {
                     if PairingGate.isPairingError(err) {
-                        PairingGuideCard()
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        PairingGuideCard(showsBackground: false)
+                            .listRowInsets(EdgeInsets())
                     } else {
                         Label(err, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
@@ -78,7 +76,6 @@ struct ProfileConfigView: View {
                             .fill(Color(.secondarySystemGroupedBackground))
                     )
                     .padding(.horizontal, 4)
-                    .listRowBackground(Color.clear)
                 }
             } else {
                 Section {

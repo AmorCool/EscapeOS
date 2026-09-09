@@ -299,9 +299,8 @@ struct AppListView: View {
                 // 图标块+标题+描述+钥匙导航行，与其余功能页同一视觉）
                 if viewModel.needsPairing {
                     Section {
-                        PairingGuideCard(note: "重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复应用列表.")
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        PairingGuideCard(showsBackground: false, note: "重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复应用列表.")
+                            .listRowInsets(EdgeInsets())
                     }
                 }
 

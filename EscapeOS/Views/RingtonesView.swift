@@ -59,9 +59,8 @@ struct RingtonesView: View {
             if let errorMessage {
                 Section {
                     if PairingGate.isPairingError(errorMessage) {
-                        PairingGuideCard()
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        PairingGuideCard(showsBackground: false)
+                            .listRowInsets(EdgeInsets())
                     } else {
                         Text(errorMessage)
                             .font(.footnote)

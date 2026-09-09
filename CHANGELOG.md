@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.257] - 2026-09-09
+
+### 修复
+- **引导卡圆角与同页卡片不统一（彻底解法）**：List 场景引导卡不再自绘背景与圆角，
+  直接交给**系统 Section 卡片**渲染——底色 / 圆角 / 边距 / 分隔与同页其它卡片
+  **像素级一致**（此前自绘 16pt 圆角永远和系统圆角差一点，怎么调都不对）。
+  `PairingGuideCard` 新增 `showsBackground` 参数：List 场景传 false，
+  VStack/ScrollView 场景（电池健康错误态）保持默认 true 自带背景。
+- 11 个 List 调用点同步：去掉 `listRowBackground(Color.clear)`、行 insets 归零
+  （内容内边距由组件自带 16pt 提供），参数顺序调整为 showsBackground 在前。
+- 误改回退：应用列表 / LiveClean / 空间回收三个页面的分段选择器行 insets
+  恢复 (8,16,8,16)，未受本次改动影响。
+
 ## [0.3.256] - 2026-09-09
 
 ### 修复（回退 + 重做）

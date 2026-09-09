@@ -45,9 +45,8 @@ struct JITEnableView: View {
             } else if apps.isEmpty && !isLoading {
                 Section {
                     if !hasPairing {
-                        PairingGuideCard(note: "启用 JIT 还需要：① LocalDevVPN 已连接；② 应用签名带 get-task-allow.")
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        PairingGuideCard(showsBackground: false, note: "启用 JIT 还需要：① LocalDevVPN 已连接；② 应用签名带 get-task-allow.")
+                            .listRowInsets(EdgeInsets())
                     } else {
                         Text("未找到可启用 JIT 的应用.")
                             .foregroundStyle(.secondary)

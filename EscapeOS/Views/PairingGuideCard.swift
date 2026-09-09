@@ -5,6 +5,10 @@ import SwiftUI
 /// 独立区块呈现，List 场景需 clear row 背景；非 List 场景传 showChevron: true.
 /// 所有依赖配对文件的功能页统一接入.
 struct PairingGuideCard: View {
+    /// List 场景传 **false**：背景与圆角交给系统 Section 卡片（与同页其它卡片像素级一致）；
+    /// VStack/ScrollView 场景保持默认 true（组件自带背景）.
+    /// 注意参数顺序在 note 之前（memberwise init 按声明顺序）.
+    var showsBackground: Bool = true
     var note: String? = nil
     /// 非 List 容器（VStack）需要手动 chevron；List 场景 row 自带
     var showChevron: Bool = false
@@ -45,10 +49,14 @@ struct PairingGuideCard: View {
         // 不再加 .padding(.vertical, 4) (那会让卡片在 List/ScrollView 里出现
         // 不对称空隙, 圆角看着不协调).
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .background {
+            // v0.3.257：List 场景不自带背景 —— 系统 Section 卡片的圆角/底色/边距
+            // 与同页其它卡片天然一致，自绘 16pt 圆角永远差一点（用户实测截图）.
+            if showsBackground {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            }
+        }
     }
 }
 
