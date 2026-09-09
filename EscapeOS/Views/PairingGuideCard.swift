@@ -11,13 +11,13 @@ struct PairingGuideCard: View {
     @State private var viewModel = AppListViewModel()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 AppRowIcon(systemName: "exclamationmark.triangle.fill",
-                           tint: .orange, symbolSize: 18, frameSize: 36)
+                           tint: .orange, symbolSize: 20, frameSize: 40)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("配对文件未导入")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.headline)
                     Text(note ?? "重置配对文件后，到「更多 → 配对文件导入」重新导入即可恢复本功能.")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -29,7 +29,7 @@ struct PairingGuideCard: View {
                     Image(systemName: "key.horizontal")
                         .foregroundStyle(.blue)
                     Text("去导入配对文件")
-                        .font(.subheadline)
+                        .font(.callout)
                         .foregroundStyle(.blue)
                     Spacer()
                     if showChevron {
@@ -44,7 +44,7 @@ struct PairingGuideCard: View {
         // v0.3.251: 本组件即独立卡片 —— 自带背景与 16pt continuous 圆角,
         // 不再加 .padding(.vertical, 4) (那会让卡片在 List/ScrollView 里出现
         // 不对称空隙, 圆角看着不协调).
-        .padding(12)
+        .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))

@@ -301,7 +301,7 @@ struct BatteryHealthView: View {
         VStack(spacing: 12) {
             HStack(spacing: 12) {
                 AppRowIcon(systemName: "battery.0percent",
-                           tint: Color.secondary, symbolSize: 18, frameSize: 36)
+                           tint: Color.secondary, symbolSize: 20, frameSize: 40)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("无法读取电池数据")
                         .font(.subheadline.weight(.semibold))
@@ -320,7 +320,7 @@ struct BatteryHealthView: View {
                 .tint(.blue)
                 .controlSize(.small)
             }
-            .padding(12)
+            .padding(16)
             .background(errorCardBackground)
 
             if let err = errorText, PairingGate.isPairingError(err) {
