@@ -91,8 +91,7 @@ struct AddAccountSheet: View {
                 let account = try await Authenticator.authenticate(
                     email: email,
                     password: password,
-                    code: code,
-                    anisetteProvider: { try await fetchFreshAppStoreAnisetteHeaders() }
+                    code: code
                 )
                 await MainActor.run {
                     busy = false

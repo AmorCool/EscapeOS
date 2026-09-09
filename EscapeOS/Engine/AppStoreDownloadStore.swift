@@ -12,9 +12,6 @@ final class AppStoreDownloadStore {
         Configuration.countryCode = UserDefaults.standard.string(forKey: "AppStore.CountryCode") ?? "US"
         Self.bootstrapDeviceIdentifier()
         Self.bootstrapSAPSigner()
-        // v0.3.259：认证边缘软拒回调接线已移至 AnisetteProvider.init —— 单例首次
-        // 访问必触发，覆盖 AddAccountSheet / AppStoreDownloadView 全部登录入口
-        //（此前若用户从不碰 AppStoreDownloadStore 就手动加账号，回调会缺失）.
     }
 
     /// 设置 ApplePackage 的机器标识（guid）.

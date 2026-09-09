@@ -20,39 +20,15 @@ import SwiftUI
 func iTunesAuthErrorMessage(_ error: Error) -> String {
     let desc = error.localizedDescription
     if desc.contains("未能读取数据") || desc.localizedCaseInsensitiveContains("property list") {
-        return "Apple 返回的认证数据格式异常（非预期 plist）.常见原因：会话 / 令牌过期、网络异常或 Anisette 失效."
+        return "Apple 返回的认证数据格式异常（非预期 plist）.常见原因：会话 / 令牌过期或网络异常."
     }
     return "登录失败：\(desc)"
 }
 
-/// 把 `AnisetteData` 转成 App Store iTunes 认证（`native/fast/`）所需的设备认证请求头.
-/// 复用 Swift 认证引擎已验证可用的头部集合（X-Apple-I-MD / X-Apple-I-MD-M 等）.
-/// 缺失这些头时 Apple 边缘会直接返回 403 HTML（ipatool 机制分析已确认）.
-///
-/// - 注意：anisette OTP 一次性，调用方应在**每次认证尝试**时重新取全新 anisette 再调本函数.
-func buildAppStoreAnisetteHeaders(for data: AnisetteData) -> [(String, String)] {
-    let df = AppleAuthenticator.dateFormatter
-    return [
-        ("X-Apple-I-MD", data.oneTimePassword),
-        ("X-Apple-I-MD-M", data.machineID),
-        ("X-Mme-Device-Id", data.deviceUniqueIdentifier),
-        ("X-Apple-I-MD-LU", data.localUserID),
-        ("X-Apple-I-MD-RINFO", "\(data.routingInfo)"),
-        ("X-Apple-I-SRL-NO", data.deviceSerialNumber),
-        ("X-Apple-I-Client-Time", df.string(from: data.date)),
-        ("X-Apple-I-TimeZone", data.timeZone.abbreviation() ?? "PST"),
-        ("X-MMe-Client-Info", data.deviceDescription),
-        ("X-Apple-Locale", data.locale.identifier),
-    ]
-}
-
-/// 取一次全新 anisette 并转成 iTunes 认证头，供 `Authenticator.authenticate(anisetteProvider:)` 使用.
-/// - 必须传 `refresh: true`：Apple 的 anisette OTP 一次性，每次认证尝试都需要新的设备
-///   标识/头；若复用同一 OTP，Apple 边缘会静默拒绝（表现为 204/403/301 等）.
-func fetchFreshAppStoreAnisetteHeaders() async throws -> [(String, String)] {
-    let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback(refresh: true)
-    return buildAppStoreAnisetteHeaders(for: anisette)
-}
+// v0.3.260：App Store 下载的 iTunes 认证已切换为 SAP-only（对齐上游 ipatool
+// abd86cb）——不再构造/注入任何 anisette 设备头，第三方 anisette 服务器依赖
+// 彻底移除。此前的 buildAppStoreAnisetteHeaders / fetchFreshAppStoreAnisetteHeaders
+// 已删除；AnisetteProvider 仍服务于「IPA 侧载」的机器标识共享，不受影响.
 
 /// 双重认证验证码输入：把 App Store 登录的 2FA 入口统一到这一个组件.
 /// `AppStoreDownloadView`（设置里已登录的 Apple ID）与 `AddAccountSheet`（手动添加）
@@ -352,7 +328,7 @@ struct AppStoreDownloadView: View {
 
     /// v0.3.167：设备标识（guid）展示与重置——Apple 边缘对已标记的标识持续拒
     ///（native/fast 301/404）；重置 = 换新"虚拟机器"身份，配合换网络/换
-    /// Anisette 服务器排查登录被拒.
+    /// v0.3.260：SAP-only 认证，登录被拒时排查设备标识与网络.
     @AppStorage("AppStore.CountryCode") private var countryCode: String = "US"
     private static let countryOptions: [(String, String)] = [
         ("中国", "CN"), ("美国", "US"), ("日本", "JP"),
@@ -376,12 +352,7 @@ struct AppStoreDownloadView: View {
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
             }
-            LabeledContent("Anisette 服务器") {
-                Text(AnisetteProvider.shared.currentServer)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .textSelection(.enabled)
-            }
+            // v0.3.260：SAP-only 认证后 App Store 下载不再使用 anisette，服务器展示移除.
             Button {
                 store.resetDeviceIdentifier()
                 toast = "已重置设备标识：\(Configuration.deviceIdentifier)（请重新登录试）"
@@ -392,7 +363,7 @@ struct AppStoreDownloadView: View {
         } header: {
             Text("设备与认证")
         } footer: {
-            Text("账号区域需与 Apple ID 注册地区一致，不一致可能导致验证码收不到. 登录持续被拒时重置设备标识，或尝试切换 Anisette 服务器/更换网络.")
+            Text("账号区域需与 Apple ID 注册地区一致，不一致可能导致验证码收不到. 登录持续被拒时重置设备标识或更换网络.")
         }
     }
 
@@ -449,8 +420,7 @@ struct AppStoreDownloadView: View {
             do {
                 let account = try await Authenticator.authenticate(
                     email: email,
-                    password: pw,
-                    anisetteProvider: { try await fetchFreshAppStoreAnisetteHeaders() }
+                    password: pw
                 )
                 await MainActor.run {
                     store.add(account)
@@ -496,8 +466,7 @@ struct AppStoreDownloadView: View {
                 let account = try await Authenticator.authenticate(
                     email: email,
                     password: password,
-                    code: code,
-                    anisetteProvider: { try await fetchFreshAppStoreAnisetteHeaders() }
+                    code: code
                 )
                 await MainActor.run {
                     store.add(account)

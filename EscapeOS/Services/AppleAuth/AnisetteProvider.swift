@@ -32,15 +32,12 @@ final class AnisetteProvider {
     /// v0.2.119：只有 provisioning 阶段被拒才需要换 identifier；取票据失败换服务器即可.
     private var lastFailureStage: String?
 
-    private init() {
-        // v0.3.259：认证边缘软拒回调接线。vendor 层（Authenticator）在 204/404/5xx/
-        // 403 HTML/裸 301 重试前触发本回调 → noteAuthEdgeReject() 轮换服务器并重建
-        // 机器身份。接线放单例 init：任何登录入口（AddAccountSheet/AppStoreDownloadView）
-        // 只要取 anisette 就必然已接线，不依赖 AppStoreDownloadStore 先被初始化.
-        Configuration.onAuthEdgeSoftReject = { [weak self] in
-            self?.noteAuthEdgeReject()
-        }
-    }
+    // v0.3.260：本类不再服务于「App Store 下载」——该功能的 iTunes 认证已切
+    // SAP-only（对齐上游 ipatool abd86cb），认证请求不含 anisette 头.本类保留
+    // 仅为「IPA 侧载」的机器标识共享（sharedMachineIdentifier/sharedAdiPb →
+    // isideload/Rust 侧），v3 服务器流程仅在侧载场景被消费.
+
+    private init() {}
 
     /// 重置：signOut / 切换账号时调用.清空内存缓存并删除 keychain 里的
     /// identifier+adiPb，确保下一次登录重新走完整 provision 并重新生成 identifier.
@@ -73,28 +70,6 @@ final class AnisetteProvider {
         deviceId = nil
         keychain.delete("adiPb")
         LoginLogger.shared.log("… Anisette 票据作废（保留 identifier，仅重新 provision）")
-    }
-
-    // MARK: - 认证边缘软拒驱动的服务器轮换（v0.3.259）
-
-    /// **App Store 认证被 Apple 边缘软拒（204/404/5xx/403 HTML/裸 301）时由
-    /// vendor 层经 `Configuration.onAuthEdgeSoftReject` 调用.**
-    ///
-    /// 真机证据（2026-09-09 17:23 登录日志）：认证循环 4 次重试全部钉在同一台
-    /// anisette 服务器（ani.npeg.us）的机器池上——`refresh=true` 只在同一服务器
-    /// 重 provision，出的是同一台被标记的虚拟机器，Apple 边缘 500/404/204 连拒.
-    /// 此场景必须**换服务器**（= 换一批 provision 机器）才有意义.
-    ///
-    /// 与 v0.2.119「保留 identifier」铁律不冲突：那个铁律管的是 anisette 获取
-    /// 失败（票据/会话问题）；这里是 Apple 边缘把当前机器**拉黑**——不换机器
-    /// 身份重试必然再被拒（4 连拒日志实锤），此时换服务器 + 重建机器才是对症.
-    func noteAuthEdgeReject() {
-        let before = currentServer
-        guard rotateServer() != nil else { return }
-        // 换服务器后必须重建虚拟机器身份：旧 identifier 是在旧服务器 provision 的，
-        // 新服务器无法复用（且被拉黑的机器身份也不该带过去）.
-        reset()
-        LoginLogger.shared.log("… Apple 边缘软拒 → 已轮换 Anisette 服务器并重建机器身份（\(before) → \(currentServer)）")
     }
 
     // MARK: - 共享机器标识（v0.2.117）

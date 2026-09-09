@@ -34,6 +34,16 @@
 //   5xx 一样可重试，上限提到 4 次；③ 依赖调用方 `fetchFreshAppStoreAnisetteHeaders` 传
 //   refresh=true 确保每次尝试都是全新 OTP。
 //
+// v0.3.260：SAP-only 认证——anisette 头注入链路整体移除（第三方 anisette 服务器依赖解除）。
+//   证据链：① 上游 ipatool abd86cb（2026-08-28 "replace App Store login with SAP signing"）
+//   后登录请求不再携带任何 X-Apple-I-MD/M 头（全仓库无 anisette 实现，仅 purchase history
+//   用本地可拼的 Client-Time/Locale/TimeZone 三个非密码学头）；② IPARanger fork 二进制无
+//   X-Apple-I-MD 字符串（SAP-only 同款）；③ 真机 2026-09-09 17:23 登录日志：携带公共
+//   anisette 服务器（ani.npeg.us）代发机器头 + SAP 签名 → Apple 边缘 500/404/204 连拒，
+//   被标记的第三方机器身份是负资产.设备认证现由 SAP 签名（X-Apple-ActionSignature，
+//   Unicorn guest 跑 CommerceKit/CoreFP）接管.注：v0.3.24「SAP 替代 anisette」失败于
+//   native/fast 403，与本次不矛盾——26HOTFIX24 认证迁移完成后上游才落地 SAP-only.
+//
 
 import Foundation
 
@@ -50,8 +60,7 @@ public enum Authenticator {
         email: String,
         password: String,
         code: String = "",
-        cookies: [Cookie] = [],
-        anisetteProvider: (() async throws -> [(String, String)])? = nil
+        cookies: [Cookie] = []
     ) async throws -> AppStoreAccount {
         let deviceIdentifier = Configuration.deviceIdentifier
 
@@ -134,14 +143,15 @@ public enum Authenticator {
         while currentAttempt <= 4, redirectAttempt <= 3 {
             defer { currentAttempt += 1 }
             do {
-                // v0.3.165 修复：恢复 anisette 头注入。
-                // v0.3.24 曾按 AppStorePro 字符串分析（"0 个 anisette 字符串"）把
-                // anisette 整体移除、宣称 SAP 替代 anisette——真机 403/302/404 序列
-                // 实锤该结论错误：ipatool PR#525 的 SAP 是在 anisette 之**上**叠加，
-                // 非替代；native/fast 缺 X-Apple-I-MD 设备头被 Apple 边缘直接 403
-                // （v0.2.157 早已实测并修复，v0.3.24 回退了它）。AppStorePro 无
-                // anisette 字符串 = 它走系统 AuthKit/本地生成，本环境必须显式注入。
-                let anisetteHeaders = try await anisetteProvider?() ?? []
+                // v0.3.260：SAP-only 认证——不再注入任何 anisette 头.
+                // 上游 ipatool abd86cb（2026-08-28 "replace App Store login with
+                // SAP signing"）实锤：26HOTFIX24 后设备认证由 SAP 签名接管，登录
+                // 请求不含 X-Apple-I-MD/M 等 anisette 头（上游全仓库已无此头）；
+                // IPARanger fork 二进制同样没有 X-Apple-I-MD 字符串.公共 anisette
+                // 服务器代发的机器数据反而成为负资产——真机 2026-09-09 17:23 日志
+                // 实锤：携带 ani.npeg.us 机器池的 anisette 头 + SAP 签名 → Apple
+                // 边缘 500/404/204 连拒（该机器身份已被风控标记）.移除后第三方
+                // anisette 服务器依赖随之彻底解除.
                 let request = try makeRequest(
                     endpoint: requestEndpoint,
                     attempt: currentAttempt,
@@ -150,7 +160,6 @@ public enum Authenticator {
                     code: code,
                     cookies: cookies,
                     deviceIdentifier: deviceIdentifier,
-                    anisetteHeaders: anisetteHeaders,
                     sapSigner: sapSigner
                 )
                 let response = try await client.execute(request: request).get()
@@ -218,17 +227,14 @@ public enum Authenticator {
                     let bodyData = response.body?.data ?? Data()
                     let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
                     LoginLogger.shared.log("App Store 认证被 Apple 边缘拒绝(403 HTML): \(bodySnippet)")
-                    if currentAttempt < 4, anisetteProvider != nil {
-                        // v0.3.259：通知宿主轮换 Anisette 服务器（同服务器重 provision
-                        // 出的还是被标记的机器，换服务器才是换机器池）
-                        Configuration.onAuthEdgeSoftReject?()
-                        LoginLogger.shared.log("… 用全新 Anisette 重试（attempt=\(currentAttempt)/4）")
+                    if currentAttempt < 4 {
+                        LoginLogger.shared.log("… 重试（attempt=\(currentAttempt)/4）")
                         continue
                     }
                     try ensureFailed(
                         "iTunes 认证被 Apple 拒绝（HTTP 403，返回 HTML 而非 plist）。\n" +
-                        "常见原因：① 请求缺少 Anisette 设备认证头；② 本机出口 IP 被 Apple 风控；③ 该 Apple ID 触发了额外网页验证。\n" +
-                        "建议：更换网络/代理、到「更多 → 设置 → Anisette 服务器」切换并重连，或确认 Apple ID 未开启强风控验证。"
+                        "常见原因：① 本机出口 IP 被 Apple 风控；② 该 Apple ID 触发了额外网页验证。\n" +
+                        "建议：更换网络/代理后重试，或先用 Safari 打开 account.apple.com 登录一次该 Apple ID 再回来重试."
                     )
                 }
                 // 2) 服务端 5xx / Apple 边缘 204/404：ipatool 上游语义为「可重试的边缘软拒」
@@ -244,10 +250,6 @@ public enum Authenticator {
                 if (500...599).contains(status.code) || status.code == 204 || status.code == 404 {
                     LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code)（ipatool 可重试状态），attempt=\(currentAttempt)/4")
                     if currentAttempt < 4 {
-                        // v0.3.259：边缘软拒 = 当前「anisette 虚拟机器 + 本机 IP」组合
-                        // 被拉黑（真机 2026-09-09 实锤：同一服务器 4 连拒 500/404/204）。
-                        // 通知宿主换服务器（换机器池），同服务器重 provision 无意义。
-                        Configuration.onAuthEdgeSoftReject?()
                         // 上游 authenticationRetryDelay=250ms：退避重试，连续轰炸会加重风控
                         try? await Task.sleep(nanoseconds: 250_000_000)
                         continue
@@ -259,8 +261,8 @@ public enum Authenticator {
                         userInfo: [NSLocalizedDescriptionKey:
                             "iTunes 认证被 Apple 边缘持续软拒（HTTP \(status.code) 空响应 ×4）。\n" +
                             "这不是密码错误——Apple 风控拦截了本次请求（通常伴随 301/403/404 信号），且不会因此下发任何验证码。\n" +
-                            "建议：① 「更多 → 设置 → Anisette 服务器」换一个服务器后重试；② 更换网络（Wi-Fi↔蜂窝）；" +
-                            "③ 先用 Safari 打开 account.apple.com 登录一次该 Apple ID（触发新客户端网页授权），再回本 App 重试。"]
+                            "建议：① 更换网络（Wi-Fi↔蜂窝）后重试；" +
+                            "② 先用 Safari 打开 account.apple.com 登录一次该 Apple ID（触发新客户端网页授权），再回本 App 重试。"]
                     )
                     break
                 }
@@ -275,16 +277,14 @@ public enum Authenticator {
                     let bodyData = response.body?.data ?? Data()
                     let bodySnippet = String(data: bodyData.prefix(200), encoding: .utf8) ?? "(空体)"
                     LoginLogger.shared.log("App Store 认证 Apple 边缘返回 \(status.code) 裸重定向（无 Location 头，疑似 IP 信誉/风控）：\(bodySnippet)")
-                    if currentAttempt < 4, anisetteProvider != nil {
-                        // v0.3.259：同 204/404/5xx 分支——换 Anisette 服务器换机器池
-                        Configuration.onAuthEdgeSoftReject?()
-                        LoginLogger.shared.log("… 用全新 Anisette 重试（attempt=\(currentAttempt)/4，设备标识变化可能改变边缘决策）")
+                    if currentAttempt < 4 {
+                        LoginLogger.shared.log("… 重试（attempt=\(currentAttempt)/4）")
                         continue
                     }
                     try ensureFailed(
                         "iTunes 认证被 Apple 边缘裸重定向拒绝（HTTP \(status.code)，无 Location 头，无法跟随）。\n" +
-                        "常见原因：① 本机出口 IP 被 Apple 风控/限流；② 地域/网络环境触发重定向墙；③ Anisette 设备标识被标记。\n" +
-                        "建议：更换网络/代理、到「更多 → 设置 → Anisette 服务器」切换并重连后重试，或稍后更换时段再试。"
+                        "常见原因：① 本机出口 IP 被 Apple 风控/限流；② 地域/网络环境触发重定向墙。\n" +
+                        "建议：更换网络/代理后重试，或稍后更换时段再试。"
                     )
                 }
                 let result = try parseResponse(
@@ -387,7 +387,6 @@ public enum Authenticator {
         code: String,
         cookies: [Cookie],
         deviceIdentifier: String,
-        anisetteHeaders: [(String, String)] = [],
         sapSigner: SAPActionSigning? = nil
     ) throws -> HTTPClient.Request {
         // v0.2.160：attempt 按当前尝试次数递增，不再固定为 "4"/"2"。
@@ -431,11 +430,8 @@ public enum Authenticator {
         for item in cookies.buildCookieHeader(endpoint) {
             headers.append(item)
         }
-        // v0.2.157：追加 anisette 设备认证头（X-Apple-I-* / X-Mme-*）。
-        // `native/fast/` 端点强制要求这些头，缺失会被 Apple 边缘直接 403。
-        for (name, value) in anisetteHeaders {
-            headers.append((name, value))
-        }
+        // v0.3.260：anisette 设备头注入已整体移除（见 authenticate 内注释）——
+        // SAP 签名接管设备认证，X-Apple-I-MD/M 等头不再出现在登录请求里.
         return HTTPClient.Request(
             url: endpoint.absoluteString,
             method: .POST,
