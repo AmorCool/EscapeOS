@@ -74,8 +74,11 @@ enum GoAppStoreAuth {
 
             if code.isEmpty {
                 // 无码登录被软拒：换新 guid 重试一轮（新 guid 新计数窗口）.
-                LoginLogger.shared.log("[GoAuth] edge soft-reject, rotating device identifier and retrying once")
+                LoginLogger.shared.log("[GoAuth] edge soft-reject, rotating device identifier and retrying once after 15s")
                 AppStoreDownloadStore.shared.resetDeviceIdentifier()
+                // 等待窗口回落后再打（16:35/16:36 日志：换 guid 后立即重打仍撞
+                // 限流——IP/账号维度计数同样在热区）.
+                Thread.sleep(forTimeInterval: 15)
                 return try loginOnce(email: email, password: password, code: code, deviceIdentifier: Configuration.deviceIdentifier, cacheDir: cacheDir)
             }
 

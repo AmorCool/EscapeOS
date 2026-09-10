@@ -88,6 +88,9 @@ struct AppStoreDownloadView: View {
     // v0.3.17：PC 签名服务已移除，保留变量防编译错（不展示）
     /// v0.3.268：状态/账户/已下载列表的自动刷新定时器
     @State private var autoRefreshTimer: Timer?
+    /// v0.3.268：登录过程实时尾部（LoginLogger 最近 N 行）
+    @State private var liveLogLines: [String] = []
+    @State private var liveLogTimer: Timer?
 
     var body: some View {
         List {
@@ -114,6 +117,9 @@ struct AppStoreDownloadView: View {
                 Button {
                     reload()
                     loadDownloadedFiles()
+                    // v0.3.269：手动刷新必须同时拉取登录日志尾部——否则状态板块
+                    // 的实时日志不动，按钮形同摆设（用户实测指正）.
+                    liveLogLines = LoginLogger.shared.recentLines(6)
                     toast = "已刷新"
                 } label: {
                     Label("刷新", systemImage: "arrow.clockwise")
@@ -174,10 +180,19 @@ struct AppStoreDownloadView: View {
                     loadDownloadedFiles()
                 }
             }
+            // v0.3.268：登录过程实时尾部（2s 一拍，纯内存读取）.
+            liveLogTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+                Task { @MainActor in
+                    liveLogLines = LoginLogger.shared.recentLines(6)
+                }
+            }
+            liveLogLines = LoginLogger.shared.recentLines(6)
         }
         .onDisappear {
             autoRefreshTimer?.invalidate()
             autoRefreshTimer = nil
+            liveLogTimer?.invalidate()
+            liveLogTimer = nil
         }
     }
 
@@ -346,6 +361,20 @@ struct AppStoreDownloadView: View {
                 Text(status.isEmpty ? "就绪" : status)
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+            // v0.3.268：登录过程实时尾部（LoginLogger 最近 6 行，2s 刷新）——
+            // SAP 握手/bag/auth 每步状态直接在状态板块可见，不用进登录日志页.
+            if !liveLogLines.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(liveLogLines.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 10, weight: .regular, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .textSelection(.enabled)
+                    }
+                }
             }
         } header: {
             Text("状态")

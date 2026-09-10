@@ -59,6 +59,14 @@ final class LoginLogger {
         return merged.joined(separator: "\n")
     }
 
+    /// 最近 n 行（纯内存读取，v0.3.268 供状态板块 2s 轮询实时展示登录过程）.
+    func recentLines(_ n: Int) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard n > 0 else { return [] }
+        return Array(buffer.suffix(n))
+    }
+
     private func appendToFile(_ line: String) {
         guard let data = (line + "\n").data(using: .utf8) else { return }
         if FileManager.default.fileExists(atPath: logFileURL.path) {
