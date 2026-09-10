@@ -122,7 +122,9 @@ struct FileSharingAppsView: View {
     }
 
     private func docCapsuleText(_ app: FileSharingApp) -> String {
-        if let size = docSizes[app.bundleId] {
+        // v0.3.271：优先 Browse 返回的 DynamicDiskUsage（一次请求即得）；缺失才走
+        // house_arrest AFC 递归懒算.
+        if let size = app.docSize ?? docSizes[app.bundleId] {
             return "文档 \(FileSharingService.formatMB(size))"
         }
         if computingDocs.contains(app.bundleId) {
@@ -131,9 +133,10 @@ struct FileSharingAppsView: View {
         return "文档 —"
     }
 
-    /// v0.3.270：后台逐 App 计算 Documents 容器大小（串行避免隧道抢占），算完逐个回填.
+    /// v0.3.271：后台逐 App 计算 Documents 容器大小——仅对 Browse 未返回
+    /// DynamicDiskUsage 的项兜底（Browse 已返回的项不再重复开隧道）.
     private func computeDocumentSizes() {
-        let targets = filtered.filter { $0.supportsFileSharing && docSizes[$0.bundleId] == nil && !computingDocs.contains($0.bundleId) }
+        let targets = filtered.filter { $0.supportsFileSharing && $0.docSize == nil && docSizes[$0.bundleId] == nil && !computingDocs.contains($0.bundleId) }
         guard !targets.isEmpty else { return }
         for app in targets {
             let bundleId = app.bundleId

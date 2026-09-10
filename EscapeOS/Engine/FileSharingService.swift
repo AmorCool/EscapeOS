@@ -13,7 +13,8 @@ struct FileSharingApp: Identifiable {
     var applicationType: String // "User" / "System"
     var supportsFileSharing: Bool
     var path: String?       // ApplicationPath（可选展示）
-    var appSize: Int64?     // CFBundleSize（字节；Lookup 未返回则为 nil）
+    var appSize: Int64?     // 应用大小（StaticDiskUsage / CFBundleSize，字节；未返回则为 nil）
+    var docSize: Int64?     // 文档大小（DynamicDiskUsage，字节；未返回则 UI 层走 AFC 懒算）
     var appleId: String?    // 安装来源 Apple ID（iTunesMetadata.appleId，App Store 安装才有）
 }
 
@@ -22,9 +23,116 @@ enum FileSharingService {
         NSError(domain: "FileSharing", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    /// 列出全部已装应用并标 UIFileSharingEnabled（get_apps / Lookup 同 AppDiscovery）.
+    /// 列出全部已装应用并标 UIFileSharingEnabled.
+    /// v0.3.271：主路径改 **Browse + ReturnAttributes**（pymobiledevice3 同款——
+    /// StaticDiskUsage/DynamicDiskUsage/iTunesMetadata 只在带 ReturnAttributes 的
+    /// 请求里返回，普通 Lookup 不带，这正是 v0.3.270 两个胶囊显示「—」的根因）；
+    /// browse 失败回退原 get_apps 全字段 Lookup.
     /// 同步阻塞——调用方放后台线程.
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
+        if let apps = try? browseAppsWithSizeAttributes(), !apps.isEmpty {
+            return apps
+        }
+        return try legacyGetApps()
+    }
+
+    /// Browse + ReturnAttributes 主路径.
+    private static func browseAppsWithSizeAttributes() throws -> [FileSharingApp] {
+        var tunnel = try makeTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw makeError("隧道未建立")
+        }
+        var ip: OpaquePointer?
+        guard installation_proxy_connect_rsd(adapter, handshake, &ip) == nil, let ip else {
+            throw makeError("连接 instproxy 失败")
+        }
+        defer { installation_proxy_client_free(ip) }
+
+        let returnAttributes = [
+            "CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
+            "CFBundleShortVersionString", "ApplicationType", "UIFileSharingEnabled",
+            "Path", "StaticDiskUsage", "DynamicDiskUsage", "iTunesMetadata", "CFBundleSize",
+        ]
+        let optionsDict: [String: Any] = [
+            "ClientOptions": ["ReturnAttributes": returnAttributes],
+            "ApplicationType": "Any",
+        ]
+        let optionsData = try PropertyListSerialization.data(fromPropertyList: optionsDict, format: .binary, options: 0)
+
+        var optionsPlist: plist_t?
+        let buildRc = optionsData.withUnsafeBytes { (raw: UnsafeRawBuffer) -> plist_err_t in
+            guard let base = raw.bindMemory(to: CChar.self).baseAddress else { return -1 }
+            return plist_from_bin(base, UInt32(optionsData.count), &optionsPlist)
+        }
+        guard buildRc == PLIST_ERR_SUCCESS, let optionsPlist else {
+            throw makeError("构造 Browse options 失败")
+        }
+        defer { plist_free(optionsPlist) }
+
+        var rawApps: UnsafeMutableRawPointer?
+        var count = 0
+        if let ffiError = installation_proxy_browse(ip, optionsPlist, &rawApps, &count) {
+            throw makeError("Browse 应用列表失败")
+        }
+        guard let rawApps, count > 0 else { return [] }
+
+        let apps = rawApps.assumingMemoryBound(to: plist_t?.self)
+        defer {
+            for index in 0..<count {
+                plist_free(apps[index])
+            }
+            idevice_data_free(rawApps.assumingMemoryBound(to: UInt8.self),
+                               UInt(count * MemoryLayout<plist_t?>.stride))
+        }
+
+        var result: [FileSharingApp] = []
+        for index in 0..<count {
+            var binaryPlist: UnsafeMutablePointer<CChar>?
+            var binaryLength: UInt32 = 0
+            guard plist_to_bin(apps[index], &binaryPlist, &binaryLength) == PLIST_ERR_SUCCESS,
+                  let binaryPlist, binaryLength > 0 else { continue }
+            let data = Data(bytes: binaryPlist, count: Int(binaryLength))
+            plist_mem_free(binaryPlist)
+            guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil))
+                    as? [String: Any],
+                  let bundleId = dict["CFBundleIdentifier"] as? String, !bundleId.isEmpty else { continue }
+            if let app = parseAppDict(dict) { result.append(app) }
+        }
+        return result
+    }
+
+    /// dict → FileSharingApp（大小字段多来源防御：StaticDiskUsage/CFBundleSize →
+    /// NSNumber/Int64 双形态）.
+    private static func parseAppDict(_ dict: [String: Any]) -> FileSharingApp? {
+        guard let bundleId = dict["CFBundleIdentifier"] as? String, !bundleId.isEmpty else { return nil }
+        let name = (dict["CFBundleDisplayName"] as? String)
+            ?? (dict["CFBundleName"] as? String) ?? bundleId
+        let version = (dict["CFBundleShortVersionString"] as? String) ?? ""
+        let appType = (dict["ApplicationType"] as? String) ?? "Unknown"
+        let sharing = (dict["UIFileSharingEnabled"] as? Bool) ?? false
+        let appSize = (dict["StaticDiskUsage"] as? NSNumber)?.int64Value
+            ?? (dict["CFBundleSize"] as? NSNumber)?.int64Value
+        let docSize = (dict["DynamicDiskUsage"] as? NSNumber)?.int64Value
+        let itunesMeta = dict["iTunesMetadata"] as? [String: Any]
+        let appleId = (itunesMeta?["appleId"] as? String)
+            ?? (itunesMeta?["bpsAccountID"] as? String)
+            ?? (itunesMeta?["purchaseAccountID"] as? String)
+        return FileSharingApp(
+            bundleId: bundleId,
+            name: name,
+            version: version,
+            applicationType: appType,
+            supportsFileSharing: sharing,
+            path: dict["Path"] as? String,
+            appSize: appSize,
+            docSize: docSize,
+            appleId: appleId
+        )
+    }
+
+    /// 原 get_apps（Lookup 全字段）实现——browse 失败时的回退.
+    private static func legacyGetApps() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
@@ -64,32 +172,8 @@ enum FileSharingService {
             let data = Data(bytes: binaryPlist, count: Int(binaryLength))
             plist_mem_free(binaryPlist)
             guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil))
-                    as? [String: Any],
-                  let bundleId = dict["CFBundleIdentifier"] as? String, !bundleId.isEmpty else { continue }
-
-            let name = (dict["CFBundleDisplayName"] as? String)
-                ?? (dict["CFBundleName"] as? String) ?? bundleId
-            let version = (dict["CFBundleShortVersionString"] as? String) ?? ""
-            let appType = (dict["ApplicationType"] as? String) ?? "Unknown"
-            // UIFileSharingEnabled（Lookup 返回的属性字段；可能为 absent → false）
-            let sharing = (dict["UIFileSharingEnabled"] as? Bool) ?? false
-            // v0.3.270：应用大小 + 安装来源 Apple ID（防御性读取，字段缺失 → nil）
-            let appSize = (dict["CFBundleSize"] as? NSNumber)?.int64Value
-                ?? (dict["CFBundleSize"] as? Int64)
-            let itunesMeta = dict["iTunesMetadata"] as? [String: Any]
-            let appleId = (itunesMeta?["appleId"] as? String)
-                ?? (itunesMeta?["bpsAccountID"] as? String)
-                ?? (itunesMeta?["purchaseAccountID"] as? String)
-            result.append(FileSharingApp(
-                bundleId: bundleId,
-                name: name,
-                version: version,
-                applicationType: appType,
-                supportsFileSharing: sharing,
-                path: dict["Path"] as? String,
-                appSize: appSize,
-                appleId: appleId
-            ))
+                    as? [String: Any] else { continue }
+            if let app = parseAppDict(dict) { result.append(app) }
         }
         return result
     }
