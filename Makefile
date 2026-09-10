@@ -134,6 +134,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Tunnel/heartbeat.m \
 	EscapeOS/Tunnel/WirelessPairing.m \
 	EscapeOS/Tunnel/EscBrowseApps.c \
+	EscapeOS/Engine/AppStoreIdReader.swift \
 	EscapeOS/Services/BackgroundAudioManager.swift \
 	EscapeOS/Services/BackgroundLocationManager.swift \
 	EscapeOS/Services/WirelessKeepAlive.swift \

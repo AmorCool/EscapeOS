@@ -14,6 +14,9 @@ struct FileSharingAppsView: View {
     /// v0.3.270：Documents 容器大小（bundleId → 字节，后台懒算回填）
     @State private var docSizes: [String: Int64] = [:]
     @State private var computingDocs: Set<String> = []
+    /// v0.3.281：深度读取的真实 Apple ID（Archive 通道，点击胶囊触发）
+    @State private var deepAppleIds: [String: String] = [:]
+    @State private var deepLoading: Set<String> = []
 
     var body: some View {
         List {
@@ -30,10 +33,15 @@ struct FileSharingAppsView: View {
                     Section {
                         Toggle("仅显示文件共享应用", isOn: $filterEnabledOnly)
                     }
-                    Section("应用列表（\(filtered.count) 个）") {
+                    Section {
                         ForEach(filtered) { app in
                             appRow(app)
                         }
+                    } header: {
+                        Text("应用列表（\(filtered.count) 个）")
+                    } footer: {
+                        Text("点击 Apple ID 胶囊可深度读取安装来源账号：App 会被临时归档到设备（耗时与体积成正比），读取后自动清理。")
+                            .font(.caption2)
                     }
                 }
             }
@@ -95,9 +103,7 @@ struct FileSharingAppsView: View {
                     }
                     capsule("应用 \(FileSharingService.formatMB(app.appSize))", tint: .green)
                     capsule(docCapsuleText(app), tint: .orange)
-                    if let appleId = app.appleId, !appleId.isEmpty {
-                        capsule(appleId, tint: .purple)
-                    }
+                    appleIdCapsule(app)
                 }
             }
             Spacer()
@@ -107,6 +113,61 @@ struct FileSharingAppsView: View {
                 Text("未开启")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// v0.3.281：Apple ID 胶囊——点击触发深度读取（instproxy Archive → 归档包内
+    /// iTunesMetadata.plist，爱思同款通道；耗时与 App 大小成正比）。
+    @ViewBuilder
+    private func appleIdCapsule(_ app: FileSharingApp) -> some View {
+        let bundleId = app.bundleId
+        let loading = deepLoading.contains(bundleId)
+        let deep = deepAppleIds[bundleId]
+        let shown: String = {
+            if loading { return "读取中…" }
+            if let deep { return deep.isEmpty ? "无 Apple ID" : deep }
+            return app.appleId ?? "—"
+        }()
+        let tint: Color = {
+            if loading { return .secondary }
+            if let deep { return deep.isEmpty ? .gray : .purple }
+            return app.appleId != nil ? .purple : .gray
+        }()
+        Button {
+            deepRead(app)
+        } label: {
+            HStack(spacing: 3) {
+                if loading { ProgressView().controlSize(.mini) }
+                Text(shown).font(.caption2.weight(.medium))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(tint.opacity(0.12), in: Capsule())
+            .lineLimit(1)
+        }
+        .buttonStyle(.plain)
+        .disabled(loading)
+    }
+
+    /// 深度读取：Archive 该 App 并从归档包解析 iTunesMetadata.appleId（后台执行）。
+    private func deepRead(_ app: FileSharingApp) {
+        let bundleId = app.bundleId
+        guard !deepLoading.contains(bundleId) else { return }
+        deepLoading.insert(bundleId)
+        LoginLogger.shared.log("[AppleID] 开始深度读取 \(bundleId)（Archive 通道）")
+        Task.detached(priority: .userInitiated) {
+            let result = try? AppStoreIdReader.installingAppleId(bundleId: bundleId) { line in
+                LoginLogger.shared.log("[AppleID] \(line)")
+            }
+            await MainActor.run {
+                deepLoading.remove(bundleId)
+                if let result {
+                    deepAppleIds[bundleId] = result.appleId
+                } else {
+                    deepAppleIds[bundleId] = ""
+                }
             }
         }
     }

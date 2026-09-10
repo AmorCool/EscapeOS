@@ -4119,6 +4119,23 @@ struct IdeviceFfiError *installation_proxy_browse(struct InstallationProxyClient
                                                   size_t *out_result_len);
 
 /**
+ * Archive an app to the device (v0.3.281).
+ *
+ * Produces `<bundle_id>.ipa` under the device's `/PublicStaging/` directory,
+ * whose payload contains the app's `iTunesMetadata.plist` — the only
+ * non-jailbroken channel to read the installing Apple ID (i4Tools-style).
+ * Blocks until the archive completes; the caller should then read the file
+ * via AFC (`/PublicStaging/<bundle_id>.ipa`) and delete it afterwards.
+ *
+ * # Safety
+ * `client` must be a valid pointer to a handle allocated by this library
+ * `bundle_id` must be a valid NUL-terminated C string
+ */
+struct IdeviceFfiError *installation_proxy_archive(struct InstallationProxyClientHandle *client,
+                                                   const char *bundle_id,
+                                                   bool skip_uninstall);
+
+/**
  * Creates a new InstallcoordinationProxy client from a ReadWrite stream
  *
  * # Arguments

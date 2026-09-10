@@ -19,7 +19,7 @@ struct FileSharingApp: Identifiable {
 }
 
 enum FileSharingService {
-    private static func makeError(_ message: String) -> NSError {
+    static func makeError(_ message: String) -> NSError {
         NSError(domain: "FileSharing", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
@@ -403,7 +403,7 @@ enum FileSharingService {
     }
 
     // MARK: 隧道（拷贝自 DeviceInfoService 简化版）
-    private struct TunnelHandles {
+    struct TunnelHandles {
         var adapter: OpaquePointer?
         var handshake: OpaquePointer?
         mutating func free() {
@@ -411,11 +411,11 @@ enum FileSharingService {
             if let adapter { adapter_free(adapter); self.adapter = nil }
         }
     }
-    private static func pairingPath() -> String {
+    static func pairingPath() -> String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
     }
-    private static func makeTunnel() throws -> TunnelHandles {
+    static func makeTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath()) else {
             throw makeError("无配对文件")
         }

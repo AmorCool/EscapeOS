@@ -644,3 +644,69 @@ pub unsafe extern "C" fn installation_proxy_browse(
         Err(e) => ffi_err!(e),
     }
 }
+
+/// v0.3.281：instproxy Archive —— 把 App 归档到设备 `/PublicStaging/<bid>.ipa`
+/// （归档包内即含 `iTunesMetadata.plist`），用于读取「安装来源 Apple ID」。
+///
+/// 通道来源：爱思助手同款——其 `idm_app.dll` 字符串实锤
+/// （`/PublicStaging/` + `SkipUninstall` + `am_archive_app` + `iTunesMetadata`）。
+/// `iTunesMetadata.plist` 只在 App 的 bundle 目录（非 Data 容器），AFC/house_arrest
+/// 均不可达；Archive 是唯一非越狱可用的导出路径。
+///
+/// # Safety
+/// `client` must be a valid pointer to a handle allocated by this library
+/// `bundle_id` must be a valid NUL-terminated C string
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn installation_proxy_archive(
+    client: *mut InstallationProxyClientHandle,
+    bundle_id: *const libc::c_char,
+    skip_uninstall: bool,
+) -> *mut IdeviceFfiError {
+    if client.is_null() || bundle_id.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+
+    let bundle_id = match unsafe { std::ffi::CStr::from_ptr(bundle_id) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return ffi_err!(IdeviceError::FfiInvalidString),
+    };
+
+    let res: Result<(), IdeviceError> = run_sync_local(async {
+        let client_ref = unsafe { &mut *client };
+
+        let mut options = plist::Dictionary::new();
+        options.insert("SkipUninstall".into(), plist::Value::Boolean(skip_uninstall));
+
+        let mut cmd = plist::Dictionary::new();
+        cmd.insert("Command".into(), plist::Value::String("Archive".into()));
+        cmd.insert(
+            "ApplicationIdentifier".into(),
+            plist::Value::String(bundle_id.clone()),
+        );
+        cmd.insert("ClientOptions".into(), plist::Value::Dictionary(options));
+
+        client_ref
+            .0
+            .idevice
+            .send_plist(plist::Value::Dictionary(cmd))
+            .await?;
+
+        loop {
+            let mut res = client_ref.0.idevice.read_plist().await?;
+            if let Some(e) = res.remove("ErrorDescription").and_then(|x| x.into_string()) {
+                return Err(IdeviceError::UnexpectedResponse(e));
+            }
+            if let Some(s) = res.remove("Status").and_then(|x| x.into_string())
+                && s == "Complete"
+            {
+                break;
+            }
+        }
+        Ok(())
+    });
+
+    match res {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => ffi_err!(e),
+    }
+}
