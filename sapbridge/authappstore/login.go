@@ -501,7 +501,11 @@ func parseLoginResponse(res *Result[loginResult], attempt int, authCode string) 
 		err      error
 	)
 
-	if res.StatusCode == gohttp.StatusFound {
+	// v0.3.268：redirect 分支从「仅 302」扩展到所有 3xx——真机 16:05 实证 Apple
+	// 对 2FA 带码登录返回 302(buy)→pod 返回 301(Moved Permanently)，上游照抄的
+	// parseLoginResponse 只认 StatusFound(302)，301 落兜底报 "something went
+	// wrong"。handleXMLResponse 对所有 3xx 都保留 Headers，此处统一取 Location 跟随.
+	if res.StatusCode >= 300 && res.StatusCode < 400 {
 		if redirect, err = res.GetHeader("location"); err != nil {
 			err = fmt.Errorf("failed to retrieve redirect location: %w", err)
 		} else if err = validateAuthenticationEndpoint(redirect); err != nil {

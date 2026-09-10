@@ -86,6 +86,8 @@ struct AppStoreDownloadView: View {
     // v0.3.3：SAP 状态条（JIT 模式 + 资产包下载进度）
     @ObservedObject private var sapStatus = SapStatusModel.shared
     // v0.3.17：PC 签名服务已移除，保留变量防编译错（不展示）
+    /// v0.3.268：状态/账户/已下载列表的自动刷新定时器
+    @State private var autoRefreshTimer: Timer?
 
     var body: some View {
         List {
@@ -106,6 +108,15 @@ struct AppStoreDownloadView: View {
                     showLoginLog = true
                 } label: {
                     Label("登录日志", systemImage: "doc.text.magnifyingglass")
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    reload()
+                    loadDownloadedFiles()
+                    toast = "已刷新"
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
                 }
             }
         }
@@ -152,7 +163,22 @@ struct AppStoreDownloadView: View {
                     }
             }
         }
-        .onAppear { reload(); loadDownloadedFiles() }
+        .onAppear {
+            reload()
+            loadDownloadedFiles()
+            // v0.3.268：自动刷新——状态/账户/已下载列表每 20s 重读一次（纯本地
+            // 读取，无网络请求），不再需要手动划动界面.
+            autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in
+                Task { @MainActor in
+                    reload()
+                    loadDownloadedFiles()
+                }
+            }
+        }
+        .onDisappear {
+            autoRefreshTimer?.invalidate()
+            autoRefreshTimer = nil
+        }
     }
 
     // MARK: - 子视图
@@ -440,6 +466,7 @@ struct AppStoreDownloadView: View {
                 let desc = error.localizedDescription
                 await MainActor.run {
                     busy = false
+                    status = "登录失败，见下方错误信息"
                     // 双重认证：与原手动添加入口共用同一套 2FA 弹窗（审计 Q12 单一入口），
                     // 不再要求用户「改用下方手动添加」，直接在设置登录流程内补全验证码.
                     if desc.contains("Authentication requires verification code") {
@@ -489,6 +516,7 @@ struct AppStoreDownloadView: View {
                 let desc = error.localizedDescription
                 await MainActor.run {
                     busy = false
+                    status = "登录失败，见下方错误信息"
                     errorMessage = iTunesAuthErrorMessage(error)
                 }
                 LoginLogger.shared.log("App Store 下载：2FA 重试失败 - \(desc)")
