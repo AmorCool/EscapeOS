@@ -17,10 +17,14 @@ struct DeviceInfoView: View {
                     ProgressView("正在读取设备信息…").frame(maxWidth: .infinity).padding(.vertical, 60)
                 } else if let info {
                     deviceHero(info)
+                    batterySection(info)
                     basicSection(info)
                     identifiersSection(info)
+                    productionSection(info)
+                    partsSection(info)
                     networkSection(info)
                     storageSection(info)
+                    featuresSection(info)
                     if info.raw.count > 0 { rawCard(info) }
                 } else {
                     errorCard
@@ -137,6 +141,103 @@ struct DeviceInfoView: View {
     }
 
     @ViewBuilder
+    /// v0.3.285：电池卡（移植爱思电池面板——健康度/循环次数/容量/当前电量）
+    @ViewBuilder
+    private func batterySection(_ info: DeviceInfoModel) -> some View {
+        if info.batteryHealthPercent != nil || info.cycleCount != nil || info.designCapacity != nil {
+            sectionCard(title: "电池", icon: "battery.100") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let health = info.batteryHealthPercent {
+                        let tint: Color = health >= 80 ? .green : (health >= 60 ? .orange : .red)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text("\(health)%")
+                                .font(.system(size: 34, weight: .semibold, design: .rounded))
+                                .foregroundStyle(tint)
+                            Text("电池健康度")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        ProgressView(value: Double(min(max(health, 0), 100)), total: 100)
+                            .tint(tint)
+                    }
+                    row("循环次数", info.cycleCount.map { "\($0) 次" })
+                    row("设计容量", info.designCapacity.map { "\($0) mAh" })
+                    row("实际容量", info.maxCapacity.map { "\($0) mAh" })
+                    row("当前电量", info.batteryLevel.map { "\($0)%" })
+                    row("充电状态", chargingText(info))
+                    sensitiveRow("电池序列号", info.batterySerial)
+                }
+            }
+        }
+    }
+
+    private func chargingText(_ info: DeviceInfoModel) -> String? {
+        guard let charging = info.batteryIsCharging else { return nil }
+        if charging {
+            return (info.batteryIsFullyCharged ?? false) ? "已充满" : "充电中"
+        }
+        return "未充电"
+    }
+
+    /// v0.3.285：生产与验机（移植爱思「验机报告」——生产状态/FDR 密封/内部版本）
+    @ViewBuilder
+    private func productionSection(_ info: DeviceInfoModel) -> some View {
+        if info.effectiveProductionStatusAp != nil || info.certificateProductionStatus != nil
+            || info.fdrSealingStatus != nil || info.configNumber != nil {
+            sectionCard(title: "生产与验机", icon: "checkmark.seal") {
+                VStack(alignment: .leading, spacing: 0) {
+                    row("生产状态(AP)", info.effectiveProductionStatusAp)
+                    row("生产状态(SEP)", info.effectiveProductionStatusSep)
+                    row("证书生产状态", statusText(info.certificateProductionStatus))
+                    row("FDR 密封", statusText(info.fdrSealingStatus))
+                    row("内部版本", info.internalBuild.map { $0 ? "是" : "否" })
+                    row("配置号", info.configNumber)
+                    row("基带版本", info.basebandVersion)
+                    row("基带状态", statusText(info.basebandStatus))
+                    row("基带芯片", info.basebandChipId)
+                }
+            }
+        }
+    }
+
+    private func statusText(_ v: String?) -> String? {
+        guard let v, !v.isEmpty else { return nil }
+        switch v {
+        case "0": return "0（正常）"
+        case "1": return "1（异常）"
+        default: return v
+        }
+    }
+
+    /// v0.3.285：零部件序列号（移植爱思「硬件」页，默认打码）
+    @ViewBuilder
+    private func partsSection(_ info: DeviceInfoModel) -> some View {
+        if info.coverglassSerial != nil || info.lunaFlexSerial != nil
+            || info.mesaSerial != nil || info.arcModuleSerial != nil {
+            sectionCard(title: "零部件序列号", icon: "cpu") {
+                VStack(alignment: .leading, spacing: 0) {
+                    sensitiveRow("屏幕盖板", info.coverglassSerial)
+                    sensitiveRow("Luna 排线", info.lunaFlexSerial)
+                    sensitiveRow("Mesa(指纹)", info.mesaSerial)
+                    sensitiveRow("Arc 模块", info.arcModuleSerial)
+                }
+            }
+        }
+    }
+
+    /// v0.3.285：功能支持（DeviceSupports* 全集，移植爱思「功能支持」）
+    @ViewBuilder
+    private func featuresSection(_ info: DeviceInfoModel) -> some View {
+        if !info.supportedFeatures.isEmpty {
+            sectionCard(title: "功能支持（\(info.supportedFeatures.count) 项）", icon: "sparkles") {
+                Text(info.supportedFeatures.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
     private func sectionCard<Content: View>(title: String, icon: String,
                                             @ViewBuilder _ body: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {

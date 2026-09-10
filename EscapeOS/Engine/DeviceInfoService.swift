@@ -42,6 +42,39 @@ struct DeviceInfoModel {
     // CPU/内存
     var cpuCount: Int
     var memoryMB: Int
+    // v0.3.285：移植爱思设备信息面板字段（逆向 i4Tools idm_info.dll 的 255 项键名清单）
+    // 电池（com.apple.mobile.iTunes + com.apple.mobile.battery 域）
+    var designCapacity: Int?            // DesignCapacity（mAh）
+    var maxCapacity: Int?               // AppleRawMaxCapacity -> MaxCapacity（实际容量）
+    var batteryHealthPercent: Int?      // maxCapacity / designCapacity
+    var cycleCount: Int?                // CycleCount
+    var batteryLevel: Int?              // BatteryCurrentCapacity（当前电量 %）
+    var batteryIsCharging: Bool?        // BatteryIsCharging
+    var batteryIsFullyCharged: Bool?    // BatteryIsFullyCharged
+    var batterySerial: String?          // BatterySerialNumber
+    // 基带
+    var basebandVersion: String?        // BasebandVersion
+    var basebandChipId: String?         // BasebandChipId
+    var basebandStatus: String?         // BasebandStatus
+    // 生产与验机（爱思「验机报告」核心）
+    var effectiveProductionStatusAp: String?   // EffectiveProductionStatusAp
+    var effectiveProductionStatusSep: String?  // EffectiveProductionStatusSEP
+    var certificateProductionStatus: String?   // CertificateProductionStatus
+    var fdrSealingStatus: String?              // FDRSealingStatus
+    var internalBuild: Bool?                   // InternalBuild
+    var configNumber: String?                  // ConfigNumber
+    // 零部件序列号（爱思「硬件」页）
+    var coverglassSerial: String?       // CoverglassSerialNumber
+    var lunaFlexSerial: String?         // LunaFlexSerialNumber
+    var mesaSerial: String?             // MesaSerialNumber
+    var arcModuleSerial: String?        // ArcModuleSerialNumber
+    // 状态
+    var isChaperoned: Bool?             // com.apple.mobile.chaperone
+    var developerModeStatus: Bool?      // DeveloperModeStatus
+    var hasBaseband: Bool?              // HasBaseband
+    var hasBattery: Bool?               // HasBattery
+    // 功能支持（DeviceSupports* 全部键）
+    var supportedFeatures: [String] = []
     var raw: [String: Any] = [:]
 }
 
@@ -74,6 +107,39 @@ enum DeviceInfoService {
 
         // MobileGestalt
         let (mgUniqueChip, mgMLB, mgBaseband) = (try? Self.mobilegestaltKeys()) ?? (nil, nil, nil)
+
+        // v0.3.285：爱思同款域采集（逆向 idm_info.dll 得出的域清单）
+        let itunes = (try? Self.lockdownDomainDict("com.apple.mobile.iTunes")) ?? [:]
+        let batteryDomain = (try? Self.lockdownDomainDict("com.apple.mobile.battery")) ?? [:]
+        let chaperone = (try? Self.lockdownDomainDict("com.apple.mobile.chaperone")) ?? [:]
+        func intOf(_ v: Any?) -> Int? {
+            if let n = v as? Int { return n }
+            if let n = v as? NSNumber { return n.intValue }
+            if let sv = v as? String { return Int(sv) }
+            return nil
+        }
+        func boolOf(_ v: Any?) -> Bool? {
+            if let b = v as? Bool { return b }
+            if let n = v as? NSNumber { return n.boolValue }
+            return nil
+        }
+        func stringOf(_ v: Any?) -> String? {
+            if let sv = v as? String { return sv }
+            if let n = v as? NSNumber { return n.stringValue }
+            return nil
+        }
+        let designCap = intOf(itunes["DesignCapacity"])
+        let maxCap = intOf(itunes["AppleRawMaxCapacity"]) ?? intOf(itunes["MaxCapacity"])
+        var healthPercent: Int? = nil
+        if let d = designCap, let m = maxCap, d > 0 {
+            healthPercent = Int((Double(m) / Double(d) * 100).rounded())
+        }
+        // DeviceSupports* 功能支持清单（键名集合）
+        let featurePrefix = "DeviceSupports"
+        let features: [String] = itunes.keys
+            .filter { $0.hasPrefix(featurePrefix) && boolOf(itunes[$0]) == true }
+            .map { String($0.dropFirst(featurePrefix.count)) }
+            .sorted()
 
         // 磁盘域
         var totalDisk: Int64? = nil
@@ -120,7 +186,33 @@ enum DeviceInfoService {
             storageFreeGB: storageFreeGB,
             cpuCount: cpuCount,
             memoryMB: Int(mem / 1024 / 1024),
-            raw: lockdown
+            designCapacity: designCap,
+            maxCapacity: maxCap,
+            batteryHealthPercent: healthPercent,
+            cycleCount: intOf(itunes["CycleCount"]),
+            batteryLevel: intOf(batteryDomain["BatteryCurrentCapacity"]) ?? intOf(itunes["BatteryCurrentCapacity"]),
+            batteryIsCharging: boolOf(batteryDomain["BatteryIsCharging"]),
+            batteryIsFullyCharged: boolOf(batteryDomain["BatteryIsFullyCharged"]),
+            batterySerial: itunes["BatterySerialNumber"] as? String,
+            basebandVersion: itunes["BasebandVersion"] as? String,
+            basebandChipId: stringOf(itunes["BasebandChipId"]),
+            basebandStatus: stringOf(itunes["BasebandStatus"]),
+            effectiveProductionStatusAp: itunes["EffectiveProductionStatusAp"] as? String,
+            effectiveProductionStatusSep: itunes["EffectiveProductionStatusSEP"] as? String,
+            certificateProductionStatus: stringOf(itunes["CertificateProductionStatus"]),
+            fdrSealingStatus: stringOf(itunes["FDRSealingStatus"]),
+            internalBuild: boolOf(itunes["InternalBuild"]),
+            configNumber: stringOf(itunes["ConfigNumber"]),
+            coverglassSerial: itunes["CoverglassSerialNumber"] as? String,
+            lunaFlexSerial: itunes["LunaFlexSerialNumber"] as? String,
+            mesaSerial: itunes["MesaSerialNumber"] as? String,
+            arcModuleSerial: itunes["ArcModuleSerialNumber"] as? String,
+            isChaperoned: boolOf(chaperone["DeviceIsChaperoned"]) ?? boolOf(lockdown["DeviceIsChaperoned"]),
+            developerModeStatus: boolOf(itunes["DeveloperModeStatus"]),
+            hasBaseband: boolOf(itunes["HasBaseband"]),
+            hasBattery: boolOf(itunes["HasBattery"]),
+            supportedFeatures: features,
+            raw: lockdown.merging(itunes) { a, _ in a }
         )
     }
 
