@@ -55,7 +55,8 @@ enum FileSharingService {
         // PropertyListSerialization 解析.
         let attrs = ["CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
                      "CFBundleShortVersionString", "ApplicationType", "UIFileSharingEnabled",
-                     "Path", "StaticDiskUsage", "DynamicDiskUsage", "iTunesMetadata", "CFBundleSize"]
+                     "Path", "StaticDiskUsage", "DynamicDiskUsage", "iTunesMetadata", "CFBundleSize",
+                     "Entitlements", "IsAppStoreVendable"]
         var cAttrs: [UnsafeMutablePointer<CChar>?] = attrs.map { strdup($0) }
         defer { for item in cAttrs { if let p = item { free(p) } } }
 
@@ -93,9 +94,22 @@ enum FileSharingService {
             ?? (dict["CFBundleSize"] as? NSNumber)?.int64Value
         let docSize = (dict["DynamicDiskUsage"] as? NSNumber)?.int64Value
         let itunesMeta = dict["iTunesMetadata"] as? [String: Any]
-        let appleId = (itunesMeta?["appleId"] as? String)
+        var appleId = (itunesMeta?["appleId"] as? String)
             ?? (itunesMeta?["bpsAccountID"] as? String)
             ?? (itunesMeta?["purchaseAccountID"] as? String)
+        // v0.3.280：iOS 26 的 instproxy 不返回 iTunesMetadata（真机实测恒为 —），
+        // 用签名来源兜底——Entitlements.application-identifier（TeamID.BundleID）
+        // + IsAppStoreVendable 判断「App Store 正版」还是「侧载（TeamID 前缀）」。
+        if appleId == nil {
+            let entitlements = dict["Entitlements"] as? [String: Any]
+            let appIdentifier = entitlements?["application-identifier"] as? String
+            let vendable = (dict["IsAppStoreVendable"] as? Bool) ?? false
+            if let appIdentifier, let teamID = appIdentifier.split(separator: ".").first.map(String.init) {
+                appleId = vendable ? "App Store" : "侧载 \(teamID)"
+            } else if vendable {
+                appleId = "App Store"
+            }
+        }
         return FileSharingApp(
             bundleId: bundleId,
             name: name,
