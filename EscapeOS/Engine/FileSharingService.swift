@@ -77,10 +77,13 @@ enum FileSharingService {
         // 一个错，273 改 plist_t? 反而引入新类型错，组合定稿.
         var rawApps: UnsafeMutableRawPointer?
         var count = 0
-        // v0.3.276：browse 的 options 参数在 Swift 侧是 plist_t*（二级指针）——
-        // 274 注解实锤（实参 UnsafeMutableRawPointer? 期望 UnsafeMutablePointer<plist_t?>?），
-        // 传 &optionsPlist；rawApps 的 &rawApps 未报错即正确.
-        if let ffiError = installation_proxy_browse(ip, &optionsPlist, &rawApps, &count) {
+        // v0.3.277：out_result 参数在 Swift 侧是 UnsafeMutablePointer<plist_t?>?（Optional
+        // 指针）——Swift 的 &x 自动转换只对非 Optional 指针参数生效，Optional 指针必须用
+        // withUnsafeMutablePointer(to:) 显式构造（276 注解实锤 &rawApps 报类型不匹配）.
+        let browseError = withUnsafeMutablePointer(to: &rawApps) { rawAppsPtr in
+            installation_proxy_browse(ip, &optionsPlist, rawAppsPtr, &count)
+        }
+        if let browseError {
             throw makeError("Browse 应用列表失败")
         }
         guard let rawApps, count > 0 else { return [] }
