@@ -99,10 +99,11 @@ enum FileSharingService {
             let entitlements = dict["Entitlements"] as? [String: Any]
             let appIdentifier = entitlements?["application-identifier"] as? String
             let vendable = (dict["IsAppStoreVendable"] as? Bool) ?? false
+            // v0.3.289：文案对齐爱思——`苹果正版`(App Store) / `共享正版`(第三方商店共享账号签名)
             if let appIdentifier, let teamID = appIdentifier.split(separator: ".").first.map(String.init) {
-                appleId = vendable ? "App Store" : "侧载 \(teamID)"
+                appleId = vendable ? "苹果正版" : "共享正版 · \(teamID.prefix(6))"
             } else if vendable {
-                appleId = "App Store"
+                appleId = "苹果正版"
             }
         }
         return FileSharingApp(
