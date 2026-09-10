@@ -13,7 +13,7 @@ import Foundation
 // （ipatool PR #525 实证：无此头 → 账号校验前直接 403，无论账号真假）。
 // 签名算法在 Apple 私有 CommerceKit 的 x86-64 代码里，Swift 层无法直接实现——
 // 由宿主 app（EscapeSpace）注入签名器工厂：Unicorn 解释执行 CommerceKit
-// 产出签名（见 sapbridge/ 与 EscapeOS/Services/AppleAuth/SapSigner.swift）。
+// 产出签名（Go 侧 authappstore/internal-sap 装配）。
 // vendor 层只依赖这里的抽象，不 import 任何宿主类型。
 
 /// SAP 端点三元组（来自 bag.xml 的 `sign-sap-setup` / `sign-sap-setup-cert` /
@@ -85,7 +85,7 @@ public enum Configuration {
     // （ipatool PR #525 实证：无此头 → 账号校验前直接 403，无论账号真假）。
     // 签名算法在 Apple 私有 CommerceKit 的 x86-64 代码里，Swift 层无法直接实现——
     // 由宿主 app（EscapeSpace）注入签名器工厂：Unicorn 解释执行 CommerceKit
-    // 产出签名（见 sapbridge/ 与 EscapeOS/Services/AppleAuth/SapSigner.swift）。
+    // 产出签名（Go 侧 authappstore/internal-sap 装配）。
     // vendor 层只依赖这里的抽象，不 import 任何宿主类型。
     //
     // 注意：SAPConfig / SAPActionSigning 是**文件顶层类型**（在枚举外声明）——

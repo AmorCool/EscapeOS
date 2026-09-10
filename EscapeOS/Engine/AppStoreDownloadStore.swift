@@ -11,7 +11,6 @@ final class AppStoreDownloadStore {
         // v0.3.171：账号区域注入（国区选 CN，见 storefront 与 2FA 短信渠道关联）
         Configuration.countryCode = UserDefaults.standard.string(forKey: "AppStore.CountryCode") ?? "US"
         Self.bootstrapDeviceIdentifier()
-        Self.bootstrapSAPSigner()
     }
 
     /// 设置 ApplePackage 的机器标识（guid）.
@@ -32,32 +31,6 @@ final class AppStoreDownloadStore {
         let generated = DeviceIdentifier.random()
         defaults.set(generated, forKey: key)
         Configuration.deviceIdentifier = generated
-    }
-
-    /// v0.3.1：注入 SAP 签名器工厂（ApplePackage 只认 `SAPActionSigning` 抽象，
-    /// 实现是本 app 的 `SapSigner`——Unicorn 解释执行 Apple 私有 CommerceKit 算
-    /// `X-Apple-ActionSignature`，见 sapbridge/ 与 Services/AppleAuth/SapSigner.swift）.
-    /// Apple 2026 年起认证请求缺此头 → 账号校验前直接 403（无论账号真假）.
-    private static func bootstrapSAPSigner() {
-        guard Configuration.sapSignerFactory == nil else { return }
-        let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
-        Configuration.sapSignerFactory = { config in
-            // v0.3.17：本机 TCI 解释器模式（Naville/unicorn feature/tci 分支，
-            // 解释器不写可执行内存 → 无需 JIT/CODESIGNING 权限）.
-            // v0.3.17：JIT 探测已移除（TCI 解释器不依赖 JIT 权限）
-            LoginLogger.shared.log("SAP 签名器初始化开始（缓存目录 \(cachesDir)）")
-            SapProgressPoller.shared.start()
-            defer { SapProgressPoller.shared.stop() }
-            let signer = try SapSigner(
-                setupURL: config.setupURL.absoluteString,
-                certURL: config.certificateURL.absoluteString,
-                version: Int32(truncatingIfNeeded: config.version),
-                hardwareID: config.hardwareID,
-                cacheDirectory: cachesDir
-            )
-            LoginLogger.shared.log("SAP 签名器初始化成功")
-            return signer
-        }
     }
 
     /// 下载目录（Documents/AppStoreDownloads，文件 App 可见）.
@@ -116,7 +89,3 @@ final class AppStoreDownloadStore {
         try? data.write(to: fileURL, options: .atomic)
     }
 }
-
-// v0.3.1：SapSigner 适配 ApplePackage 的 SAPActionSigning 抽象.
-// sign(requestBody:) / close() 签名与 SapSigner 既有方法完全一致，直接空扩展即可.
-extension SapSigner: SAPActionSigning {}

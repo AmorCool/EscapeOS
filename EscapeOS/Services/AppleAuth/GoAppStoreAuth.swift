@@ -12,7 +12,7 @@ import Foundation
 /// 顺序、bag/init 端点、双层重试语义）与 IPARanger 完全一致。
 ///
 /// SAP 签名复用本进程 Unicorn guest（authappstore 内部装配 internal/sap，
-/// 资产包缓存目录与 Swift 侧 SapSigner 共用，只下载一次）。
+/// 资产包缓存目录与宿主 Caches 共用）。
 enum GoAppStoreAuth {
 
     /// cgo 返回的 JSON 结构.
@@ -55,7 +55,7 @@ enum GoAppStoreAuth {
     ///   - email/password: Apple ID 凭据
     ///   - authCode: 2FA 验证码（可空）
     ///   - deviceIdentifier: 与 SAP 硬件标识同源的设备标识（hex 串）
-    ///   - cacheDir: SAP 资产包缓存目录（与 SapSigner 共用）
+    ///   - cacheDir: SAP 资产包缓存目录（宿主 Caches）
     static func login(
         email: String,
         password: String,
@@ -118,7 +118,7 @@ enum GoAppStoreAuth {
         }
 
         // cgo 生成头参数是 char*（UnsafeMutablePointer），utf8String 是 const char*
-        //（UnsafePointer）——需 mutating 显式转换（同 SapSigner.swift 的 SapSign 调用）.
+        //（UnsafePointer）——需 mutating 显式转换（cgo 指针参数惯例）.
         guard let resultPtr = EscapeAppStoreLogin(
             UnsafeMutablePointer(mutating: emailC),
             UnsafeMutablePointer(mutating: passwordC),

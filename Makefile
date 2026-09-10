@@ -143,6 +143,7 @@ EscapeSpace_FILES = \
 	EscapeOS/Services/AppleAuth/GSAAuth.swift \
 	EscapeOS/Services/AppleAuth/AnisetteProvider.swift \
 	EscapeOS/Services/AppleAuth/AppleAuthenticator.swift \
+	EscapeOS/Services/AppleAuth/GoAppStoreAuth.swift \
 	EscapeOS/Services/AppleAuth/LoginLogger.swift \
 	EscapeOS/Services/AppleAuth/AppleDeveloperAPI.swift \
 	EscapeOS/Services/ModuleService.swift \
