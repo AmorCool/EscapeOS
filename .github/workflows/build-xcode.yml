@@ -423,6 +423,9 @@ jobs:
         # 产物，省掉 dSYM 生成/拷贝这一大块链接后处理时间（v0.3.81）。
         run: |
           set -euo pipefail
+          # v0.3.272：失败时把具体编译错误行转成 ::error:: annotation——匿名 API
+          # 只能读 annotations 读不到 job log，此前 CI 失败只能盲猜.
+          XCB_EXIT=0
           xcodebuild build \
             -project EscapeSpace.xcodeproj \
             -scheme EscapeSpace-iOS \
@@ -436,7 +439,14 @@ jobs:
             DEBUG_INFORMATION_FORMAT=dwarf \
             GCC_GENERATE_DEBUGGING_SYMBOLS=NO \
             DEAD_CODE_STRIPPING=NO \
-            2>&1 | tee /tmp/xcodebuild.log
+            2>&1 | tee /tmp/xcodebuild.log || XCB_EXIT=$?
+          if [ "$XCB_EXIT" -ne 0 ]; then
+            grep -E "error:" /tmp/xcodebuild.log | head -30 | while IFS= read -r line; do
+              echo "::error::${line:0:400}"
+            done
+            exit "$XCB_EXIT"
+          fi
+          echo "Xcode build (compile/link) succeeded"
           echo "Xcode build (compile/link) succeeded"
           echo "=== app 体积 ==="
           du -sh build/Build/Products/Release-iphoneos/EscapeSpace.app 2>/dev/null || true
