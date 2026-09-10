@@ -7,6 +7,13 @@ import UIKit
 ///   （vend_container），多数第三方 App 无权限 → 显示「无权限」
 /// - 文件操作移植 FileBrowserView 能力：新建文件夹 / 重命名 / 删除 / 属性 / 下载到本地
 struct AppFileBrowserView: View {
+    /// v0.3.288：文件行时间格式（与 FileRow 同款紧凑格式）
+    static let rowStamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }()
+
     let bundleId: String
     let appName: String
 
@@ -459,9 +466,20 @@ struct AppFileBrowserView: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name).font(.subheadline)
-                if !entry.isDirectory {
-                    Text(formatSize(sizes[entry.path] ?? 0))
-                        .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                // v0.3.288：详细展示——真实大小 + 修改时间（原先恒 0 字节，sizes 字典从未填充）
+                HStack(spacing: 6) {
+                    if !entry.isDirectory {
+                        Text(formatSize(entry.size))
+                            .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    } else {
+                        Text("文件夹")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if let modified = entry.modified {
+                        Text("·").font(.caption2).foregroundStyle(.tertiary)
+                        Text(Self.rowStamp.string(from: modified))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
             Spacer()
@@ -752,7 +770,7 @@ struct AppFileBrowserView: View {
     private func fileDetailText(_ entry: AfcEntry) -> String {
         var lines = [entry.name, entry.isDirectory ? "类型：文件夹" : "类型：文件"]
         if !entry.isDirectory {
-            lines.append("大小：\(formatSize(sizes[entry.path] ?? 0))")
+            lines.append("大小：\(formatSize(entry.size))")
         }
         lines.append("路径：\(entry.path)")
         return lines.joined(separator: "\n")
@@ -834,7 +852,7 @@ struct AppFileBrowserView: View {
         let ext = (entry.name as NSString).pathExtension.lowercased()
         let textExts = ["txt", "json", "plist", "xml", "log", "md", "csv", "srt", "conf", "yaml", "yml", "ini"]
         guard textExts.contains(ext) else { return false }
-        let size = sizes[entry.path] ?? 0
+        let size = entry.size
         return size > 0 && size < 1024 * 1024
     }
 

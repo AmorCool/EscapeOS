@@ -88,10 +88,12 @@ struct FileSharingAppsView: View {
         }
         .task {
             await load()
-            computeDocumentSizes()
+            // v0.3.288：不再自动跑 AFC 递归算文档大小——v0.3.284 起由 Lookup 的
+            // DynamicDiskUsage 一次返回（原实现每 App 开 house_arrest 隧道 + 全树
+            // 遍历，20 个 App 时列表长时间「计算中」，用户实测卡顿）.
         }
         // v0.3.270：切换「仅显示文件共享应用」/搜索结果变化时补算新出现项的文档大小
-        .onChange(of: filterEnabledOnly) { _, _ in computeDocumentSizes() }
+
     }
 
     private var filtered: [FileSharingApp] {

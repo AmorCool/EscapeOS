@@ -363,8 +363,28 @@ enum FileSharingService {
             let name = String(cString: cstr)
             guard name != ".", name != ".." else { continue }
             let childPath = path.hasSuffix("/") ? path + name : path + "/" + name
-            let isDir = isDirectory(afc: afc, path: childPath)
-            result.append(AfcEntry(name: name, path: childPath, isDirectory: isDir))
+            // v0.3.288：一次 afc_get_file_info 同时取 类型/大小/修改时间
+            //（原先只判目录 + 大小从未取 → 列表恒 0 字节）
+            var info = AfcFileInfo()
+            let rc = childPath.withCString { afc_get_file_info(afc, $0, &info) }
+            var isDir = false
+            var size: Int64 = 0
+            var modified: Date? = nil
+            if rc == nil {
+                if let ifmt = info.st_ifmt { isDir = String(cString: ifmt) == "S_IFDIR" }
+                size = Int64(info.size)
+                if info.modified > 0 {
+                    // libimobiledevice AFC 的 modified 为纳秒；自适应秒/纳秒
+                    let raw = Double(info.modified)
+                    let seconds = raw > 1e12 ? raw / 1_000_000_000.0 : raw
+                    if seconds > 0 { modified = Date(timeIntervalSince1970: seconds) }
+                }
+                afc_file_info_free(&info)
+            } else {
+                isDir = isDirectory(afc: afc, path: childPath)
+            }
+            result.append(AfcEntry(name: name, path: childPath, isDirectory: isDir,
+                                   size: size, modified: modified))
         }
         return result.sorted {
             if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
@@ -454,5 +474,8 @@ struct AfcEntry: Identifiable {
     let name: String
     let path: String
     let isDirectory: Bool
+    /// v0.3.288：文件大小（字节）与修改时间——原先列表恒显示 0（sizes 字典从未填充）
+    var size: Int64 = 0
+    var modified: Date? = nil
     var id: String { path }
 }
