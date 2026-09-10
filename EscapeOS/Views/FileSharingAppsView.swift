@@ -11,6 +11,9 @@ struct FileSharingAppsView: View {
     @State private var errorText: String?
     @State private var filterEnabledOnly = true
     @State private var searchText: String = ""
+    /// v0.3.270：Documents 容器大小（bundleId → 字节，后台懒算回填）
+    @State private var docSizes: [String: Int64] = [:]
+    @State private var computingDocs: Set<String> = []
 
     var body: some View {
         List {
@@ -40,7 +43,12 @@ struct FileSharingAppsView: View {
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索应用")
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)   // v0.3.214：系统搜索框替代自绘
         .autocorrectionDisabled()
-        .task { await load() }
+        .task {
+            await load()
+            computeDocumentSizes()
+        }
+        // v0.3.270：切换「仅显示文件共享应用」/搜索结果变化时补算新出现项的文档大小
+        .onChange(of: filterEnabledOnly) { _, _ in computeDocumentSizes() }
     }
 
     private var filtered: [FileSharingApp] {
@@ -69,7 +77,7 @@ struct FileSharingAppsView: View {
     private func appContent(_ app: FileSharingApp) -> some View {
         HStack(spacing: 12) {
             appIcon(app.bundleId)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(app.name).font(.subheadline.weight(.medium))
                     if app.applicationType == "System" {
@@ -80,6 +88,17 @@ struct FileSharingAppsView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                // v0.3.270：信息胶囊（版本 / 应用大小 / 文档大小 / 安装来源 Apple ID）
+                HStack(spacing: 5) {
+                    if !app.version.isEmpty {
+                        capsule("v\(app.version)", tint: .blue)
+                    }
+                    capsule("应用 \(FileSharingService.formatMB(app.appSize))", tint: .green)
+                    capsule(docCapsuleText(app), tint: .orange)
+                    if let appleId = app.appleId, !appleId.isEmpty {
+                        capsule(appleId, tint: .purple)
+                    }
+                }
             }
             Spacer()
             if app.supportsFileSharing {
@@ -88,6 +107,45 @@ struct FileSharingAppsView: View {
                 Text("未开启")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func capsule(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(tint.opacity(0.12), in: Capsule())
+            .lineLimit(1)
+    }
+
+    private func docCapsuleText(_ app: FileSharingApp) -> String {
+        if let size = docSizes[app.bundleId] {
+            return "文档 \(FileSharingService.formatMB(size))"
+        }
+        if computingDocs.contains(app.bundleId) {
+            return "文档 计算中…"
+        }
+        return "文档 —"
+    }
+
+    /// v0.3.270：后台逐 App 计算 Documents 容器大小（串行避免隧道抢占），算完逐个回填.
+    private func computeDocumentSizes() {
+        let targets = filtered.filter { $0.supportsFileSharing && docSizes[$0.bundleId] == nil && !computingDocs.contains($0.bundleId) }
+        guard !targets.isEmpty else { return }
+        for app in targets {
+            let bundleId = app.bundleId
+            computingDocs.insert(bundleId)
+            Task.detached(priority: .utility) {
+                let size = try? FileSharingService.computeDocumentsSize(bundleId: bundleId)
+                await MainActor.run {
+                    computingDocs.remove(bundleId)
+                    if let size {
+                        docSizes[bundleId] = size
+                    }
+                }
             }
         }
     }

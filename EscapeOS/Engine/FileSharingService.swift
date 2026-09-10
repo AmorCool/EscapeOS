@@ -13,6 +13,8 @@ struct FileSharingApp: Identifiable {
     var applicationType: String // "User" / "System"
     var supportsFileSharing: Bool
     var path: String?       // ApplicationPath（可选展示）
+    var appSize: Int64?     // CFBundleSize（字节；Lookup 未返回则为 nil）
+    var appleId: String?    // 安装来源 Apple ID（iTunesMetadata.appleId，App Store 安装才有）
 }
 
 enum FileSharingService {
@@ -71,13 +73,22 @@ enum FileSharingService {
             let appType = (dict["ApplicationType"] as? String) ?? "Unknown"
             // UIFileSharingEnabled（Lookup 返回的属性字段；可能为 absent → false）
             let sharing = (dict["UIFileSharingEnabled"] as? Bool) ?? false
+            // v0.3.270：应用大小 + 安装来源 Apple ID（防御性读取，字段缺失 → nil）
+            let appSize = (dict["CFBundleSize"] as? NSNumber)?.int64Value
+                ?? (dict["CFBundleSize"] as? Int64)
+            let itunesMeta = dict["iTunesMetadata"] as? [String: Any]
+            let appleId = (itunesMeta?["appleId"] as? String)
+                ?? (itunesMeta?["bpsAccountID"] as? String)
+                ?? (itunesMeta?["purchaseAccountID"] as? String)
             result.append(FileSharingApp(
                 bundleId: bundleId,
                 name: name,
                 version: version,
                 applicationType: appType,
                 supportsFileSharing: sharing,
-                path: dict["Path"] as? String
+                path: dict["Path"] as? String,
+                appSize: appSize,
+                appleId: appleId
             ))
         }
         return result
@@ -127,6 +138,35 @@ enum FileSharingService {
             throw makeError("该应用不允许访问完整容器（无权限）")
         }
         return afc
+    }
+
+    /// v0.3.270：计算指定 App Documents 容器的总大小（字节）.
+    /// 每次新建 house_arrest 隧道 + AFC 递归遍历求和（Documents 树通常较小）.
+    /// 调用方放后台线程、逐 App 串行（避免同时开多条隧道抢占）.
+    static func computeDocumentsSize(bundleId: String) throws -> Int64 {
+        let afc = try openAppDocuments(bundleId: bundleId)
+        defer { afc_client_free(afc) }
+        return try documentsSizeRecursively(afc: afc, path: "/")
+    }
+
+    private static func documentsSizeRecursively(afc: OpaquePointer, path: String) throws -> Int64 {
+        var total: Int64 = 0
+        for entry in try listDirectory(afc: afc, path: path) {
+            if entry.isDirectory {
+                total += try documentsSizeRecursively(afc: afc, path: entry.path)
+            } else {
+                total += fileSize(afc: afc, path: entry.path) ?? 0
+            }
+        }
+        return total
+    }
+
+    /// v0.3.270：字节 → MB 可读文本（保留 2 位小数，与爱思格式一致）.
+    static func formatMB(_ bytes: Int64?) -> String {
+        guard let bytes else { return "—" }
+        let mb = Double(bytes) / (1024 * 1024)
+        if mb >= 100 { return String(format: "%.0f MB", mb) }
+        return String(format: "%.2f MB", mb)
     }
 
     // MARK: v0.3.214 文件操作（移植 FileBrowserView 能力：新建/重命名/删除）
