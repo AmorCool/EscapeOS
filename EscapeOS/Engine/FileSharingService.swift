@@ -77,15 +77,26 @@ enum FileSharingService {
         // 一个错，273 改 plist_t? 反而引入新类型错，组合定稿.
         var rawApps: UnsafeMutableRawPointer?
         var count = 0
-        // v0.3.277：out_result 参数在 Swift 侧是 UnsafeMutablePointer<plist_t?>?（Optional
-        // 指针）——Swift 的 &x 自动转换只对非 Optional 指针参数生效，Optional 指针必须用
-        // withUnsafeMutablePointer(to:) 显式构造（276 注解实锤 &rawApps 报类型不匹配）.
-        let browseError = withUnsafeMutablePointer(to: &rawApps) { rawAppsPtr in
-            installation_proxy_browse(ip, &optionsPlist, rawAppsPtr, &count)
+        // v0.3.278：两个 plist_t* 参数（options / out_result）均用显式堆分配的
+        // UnsafeMutablePointer<plist_t?> 传入——271~277 的 &x / withUnsafeMutablePointer
+        // 闭包写法在该 FFI 头导入下类型推断反复出错（错误注解实测），显式分配
+        // 彻底消除推断歧义（plist_t? = UnsafeMutableRawPointer?）.
+        let optionsStorage = UnsafeMutablePointer<plist_t?>.allocate(capacity: 1)
+        optionsStorage.initialize(to: optionsPlist)
+        let rawAppsStorage = UnsafeMutablePointer<plist_t?>.allocate(capacity: 1)
+        rawAppsStorage.initialize(to: nil)
+        defer {
+            optionsStorage.deinitialize(count: 1)
+            optionsStorage.deallocate()
+            rawAppsStorage.deinitialize(count: 1)
+            rawAppsStorage.deallocate()
         }
+
+        let browseError = installation_proxy_browse(ip, optionsStorage, rawAppsStorage, &count)
         if let browseError {
             throw makeError("Browse 应用列表失败")
         }
+        rawApps = rawAppsStorage.pointee
         guard let rawApps, count > 0 else { return [] }
 
         let apps = rawApps.assumingMemoryBound(to: plist_t?.self)
