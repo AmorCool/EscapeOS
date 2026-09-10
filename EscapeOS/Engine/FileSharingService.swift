@@ -72,7 +72,10 @@ enum FileSharingService {
         }
         defer { plist_free(optionsPlist) }
 
-        var rawApps: plist_t?
+        // v0.3.274：rawApps 沿用 get_apps 已验证范本（UnsafeMutableRawPointer? +
+        // assumingMemoryBound(to: plist_t?.self)）——271a 用此写法仅报 UnsafeRawBuffer
+        // 一个错，273 改 plist_t? 反而引入新类型错，组合定稿.
+        var rawApps: UnsafeMutableRawPointer?
         var count = 0
         if let ffiError = installation_proxy_browse(ip, optionsPlist, &rawApps, &count) {
             throw makeError("Browse 应用列表失败")
@@ -84,7 +87,8 @@ enum FileSharingService {
             for index in 0..<count {
                 if let p = apps[index] { plist_free(p) }
             }
-            idevice_data_free(rawApps, UInt(count * MemoryLayout<plist_t?>.stride))
+            idevice_data_free(rawApps.assumingMemoryBound(to: UInt8.self),
+                               UInt(count * MemoryLayout<plist_t?>.stride))
         }
 
         var result: [FileSharingApp] = []
