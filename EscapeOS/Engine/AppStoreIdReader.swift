@@ -57,6 +57,66 @@ enum AppStoreIdReader {
         return Result(appleId: appleId, purchaseDate: date)
     }
 
+    // MARK: - 导出 IPA（爱思「导出应用」同款：Archive → 拉回本机）
+
+    /// 把指定 App 归档并完整拉回本机 Documents/AppStoreDownloads/<bundleId>.ipa。
+    /// 归档包即 App Store 风格 IPA（含 Payload/ + iTunesMetadata.plist），可再次安装。
+    /// 同步阻塞；progress 回调 0...1。
+    static func exportIPA(bundleId: String,
+                          log: ((String) -> Void)? = nil,
+                          progress: ((Double) -> Void)? = nil) throws -> URL {
+        log?("开始归档 \(bundleId) 到设备…")
+        try archiveApp(bundleId: bundleId, log: log)
+        defer { removeArchivedApp(bundleId: bundleId, log: log) }
+
+        let afc = try openMediaAFC()
+        defer { afc_client_free(afc) }
+        let devicePath = "/PublicStaging/\(bundleId).ipa"
+        let size = try fileSize(afc: afc, path: devicePath)
+        guard size > 0 else { throw makeError("归档文件为空") }
+
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let outDir = docs.appendingPathComponent("AppStoreDownloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let outURL = outDir.appendingPathComponent("\(bundleId).ipa")
+        if FileManager.default.fileExists(atPath: outURL.path) {
+            try? FileManager.default.removeItem(at: outURL)
+        }
+        FileManager.default.createFile(atPath: outURL.path, contents: nil)
+        guard let handle = FileHandle(forWritingAtPath: outURL.path) else {
+            throw makeError("无法创建本地文件")
+        }
+        defer { try? handle.close() }
+
+        // 分块从设备读 → 写本地（1MB/块，对齐 CrashLogService 结论）
+        var handleDevice: OpaquePointer?
+        if let e = devicePath.withCString({ afc_file_open(afc, $0, AfcRdOnly, &handleDevice) }) {
+            idevice_error_free(e)
+            throw makeError("打开设备归档失败")
+        }
+        guard let handleDevice else { throw makeError("打开设备归档失败（空句柄）") }
+        defer { afc_file_close(handleDevice) }
+
+        var offset: Int64 = 0
+        let chunk = 1 << 20
+        while offset < size {
+            let want = Int(min(Int64(chunk), size - offset))
+            var buf: UnsafeMutablePointer<UInt8>?
+            var got: Int = 0
+            if let e = afc_file_read(handleDevice, &buf, UInt(want), &got) {
+                idevice_error_free(e)
+                throw makeError("读取归档失败（offset=\(offset)）")
+            }
+            guard let buf, got > 0 else { break }
+            handle.write(Data(bytes: buf, count: got))
+            afc_file_read_data_free(buf, got)
+            offset += Int64(got)
+            progress?(Double(offset) / Double(size))
+        }
+        log?("导出完成：\(outURL.lastPathComponent)（\(size / 1024 / 1024) MB）")
+        return outURL
+    }
+
     // MARK: - 1) instproxy Archive
 
     private static func archiveApp(bundleId: String, log: ((String) -> Void)?) throws {
