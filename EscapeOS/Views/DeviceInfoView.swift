@@ -140,7 +140,6 @@ struct DeviceInfoView: View {
         }
     }
 
-    @ViewBuilder
     /// v0.3.285：电池卡（移植爱思电池面板——健康度/循环次数/容量/当前电量）
     @ViewBuilder
     private func batterySection(_ info: DeviceInfoModel) -> some View {
@@ -238,6 +237,7 @@ struct DeviceInfoView: View {
         }
     }
 
+    @ViewBuilder
     private func sectionCard<Content: View>(title: String, icon: String,
                                             @ViewBuilder _ body: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
