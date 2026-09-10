@@ -674,32 +674,49 @@ pub unsafe extern "C" fn installation_proxy_archive(
     let res: Result<(), IdeviceError> = run_sync_local(async {
         let client_ref = unsafe { &mut *client };
 
-        let mut options = plist::Dictionary::new();
-        options.insert(String::from("SkipUninstall"), plist::Value::Boolean(skip_uninstall));
-
-        let mut cmd = plist::Dictionary::new();
-        cmd.insert(String::from("Command"), plist::Value::String(String::from("Archive")));
-        cmd.insert(
-            String::from("ApplicationIdentifier"),
-            plist::Value::String(bundle_id.clone()),
+        // v0.3.283：Idevice::send_plist/read_plist 是 crate 私有（E0624 实锤），
+        // 改用 pub 的 send_raw/read_raw + 长度前缀 XML plist 帧（对齐 mcinstall.rs，
+        // 亦为 idevice crate property_list_service 的线格式）。
+        let xml = format!(
+            "{header}<dict><key>Command</key><string>Archive</string><key>ApplicationIdentifier</key><string>{bid}</string><key>ClientOptions</key><dict><key>SkipUninstall</key><{flag}/></dict></dict></plist>",
+            header = crate::mcinstall::PLIST_HEADER,
+            bid = bundle_id,
+            flag = if skip_uninstall { "true" } else { "false" }
         );
-        cmd.insert(String::from("ClientOptions"), plist::Value::Dictionary(options));
 
-        client_ref
-            .0
-            .idevice
-            .send_plist(plist::Value::Dictionary(cmd))
-            .await?;
+        let mut frame = Vec::with_capacity(4 + xml.len());
+        frame.extend_from_slice(&(xml.len() as u32).to_be_bytes());
+        frame.extend_from_slice(xml.as_bytes());
+        client_ref.0.idevice.send_raw(&frame).await?;
 
         loop {
-            let mut res = client_ref.0.idevice.read_plist().await?;
-            if let Some(e) = res
+            let len_buf = client_ref.0.idevice.read_raw(4).await?;
+            let len = u32::from_be_bytes([len_buf[0], len_buf[1], len_buf[2], len_buf[3]]) as usize;
+            if len == 0 || len > 8 * 1024 * 1024 {
+                return Err(IdeviceError::UnexpectedResponse(format!(
+                    "plist 长度异常: {}",
+                    len
+                )));
+            }
+            let body = client_ref.0.idevice.read_raw(len).await?;
+            let value: plist::Value = plist::from_bytes(&body)
+                .map_err(|e| IdeviceError::UnexpectedResponse(format!("plist 解析失败: {}", e)))?;
+            let mut dict = match value {
+                plist::Value::Dictionary(d) => d,
+                _ => {
+                    return Err(IdeviceError::UnexpectedResponse(
+                        "非字典响应".to_string(),
+                    ))
+                }
+            };
+
+            if let Some(e) = dict
                 .remove("ErrorDescription")
                 .and_then(|x| x.as_string().map(|s| s.to_string()))
             {
                 return Err(IdeviceError::UnexpectedResponse(e));
             }
-            if let Some(s) = res
+            if let Some(s) = dict
                 .remove("Status")
                 .and_then(|x| x.as_string().map(|s| s.to_string()))
                 && s == "Complete"
