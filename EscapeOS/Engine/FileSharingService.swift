@@ -60,40 +60,36 @@ enum FileSharingService {
         ]
         let optionsData = try PropertyListSerialization.data(fromPropertyList: optionsDict, format: .binary, options: 0)
 
-        // v0.3.271b：plist_from_bin 出参是 plist_t*（Swift: UnsafeMutablePointer<plist_t>，
-        // plist_t 本身是 OpaquePointer 别名），inout 变量必须是非 optional 的 plist_t；
-        // NULL 判定用 bitPattern == 0.
-        var optionsPlist = plist_t(bitPattern: 0)
-        let buildRc = optionsData.withUnsafeBytes { (raw: UnsafeRawBuffer) -> plist_err_t in
-            guard let base = raw.bindMemory(to: CChar.self).baseAddress else { return PLIST_ERR_UNKNOWN }
-            return plist_from_bin(base, UInt32(optionsData.count), &optionsPlist)
-        }
+        // v0.3.273：plist_t = UnsafeMutableRawPointer（错误注解 aka 实锤）——
+        // options 构造不用 withUnsafeBytes 闭包（272 实证其签名编译失败），用
+        // NSData.bytes 直接取指针；browse 出参 plist_t** 即 plist_t? 的指针.
+        let nsOptions = optionsData as NSData
+        var optionsPlist: plist_t?
+        let buildRc = plist_from_bin(nsOptions.bytes.assumingMemoryBound(to: CChar.self),
+                                     UInt32(nsOptions.length), &optionsPlist)
         guard buildRc == PLIST_ERR_SUCCESS, optionsPlist != nil else {
             throw makeError("构造 Browse options 失败")
         }
         defer { plist_free(optionsPlist) }
 
-        // v0.3.271 修正：browse 出参是 plist_t**（Swift: UnsafeMutablePointer<plist_t>），
-        // 不能用 UnsafeMutableRawPointer?（那是 get_apps 的 void** 写法）——271 首版
-        // CI exit 65 即此类型不匹配.
-        var rawApps: UnsafeMutablePointer<plist_t>?
+        var rawApps: plist_t?
         var count = 0
         if let ffiError = installation_proxy_browse(ip, optionsPlist, &rawApps, &count) {
             throw makeError("Browse 应用列表失败")
         }
         guard let rawApps, count > 0 else { return [] }
 
+        let apps = rawApps.assumingMemoryBound(to: plist_t?.self)
         defer {
             for index in 0..<count {
-                plist_free(rawApps[index])
+                if let p = apps[index] { plist_free(p) }
             }
-            idevice_data_free(UnsafeMutableRawPointer(rawApps).assumingMemoryBound(to: UInt8.self),
-                               UInt(count * MemoryLayout<plist_t>.stride))
+            idevice_data_free(rawApps, UInt(count * MemoryLayout<plist_t?>.stride))
         }
 
         var result: [FileSharingApp] = []
         for index in 0..<count {
-            let p = rawApps[index]
+            guard let p = apps[index] else { continue }
             var binaryPlist: UnsafeMutablePointer<CChar>?
             var binaryLength: UInt32 = 0
             guard plist_to_bin(p, &binaryPlist, &binaryLength) == PLIST_ERR_SUCCESS,
