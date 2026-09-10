@@ -96,13 +96,15 @@ struct FileSharingAppsView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                // v0.3.270：信息胶囊（版本 / 应用大小 / 文档大小 / 安装来源 Apple ID）
+                // v0.3.270/284：信息胶囊（版本 / 应用大小 / 文档大小）+ 第二行安装来源
                 HStack(spacing: 5) {
                     if !app.version.isEmpty {
                         capsule("v\(app.version)", tint: .blue)
                     }
                     capsule("应用 \(FileSharingService.formatMB(app.appSize))", tint: .green)
                     capsule(docCapsuleText(app), tint: .orange)
+                }
+                HStack(spacing: 5) {
                     appleIdCapsule(app)
                 }
             }

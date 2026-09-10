@@ -732,3 +732,102 @@ pub unsafe extern "C" fn installation_proxy_archive(
         Err(e) => ffi_err!(e),
     }
 }
+
+/// v0.3.284：instproxy **Lookup**（带 ReturnAttributes）——一次请求拿全部字段：
+/// 基础信息 + StaticDiskUsage/DynamicDiskUsage（大小）+ Entitlements + iTunesMetadata。
+///
+/// 关键：大小字段只在 **Lookup** 的 ReturnAttributes 里返回（pymobiledevice3
+/// installation.py 的 GET_APPS_ADDITIONAL_INFO 走 lookup，不走到 browse；
+/// v0.3.279~283 的 browse 通道因此拿不到大小，胶囊恒为「—」）。
+/// 结果以 binary plist 数组字节回传（调用方 idevice_data_free 释放）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn installation_proxy_lookup_apps(
+    client: *mut InstallationProxyClientHandle,
+    out_result: *mut *mut libc::c_void,
+    out_result_len: *mut libc::size_t,
+) -> *mut IdeviceFfiError {
+    if client.is_null() || out_result.is_null() || out_result_len.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+
+    let res: Result<Vec<u8>, IdeviceError> = run_sync_local(async {
+        let client_ref = unsafe { &mut *client };
+
+        let attrs = "<string>CFBundleIdentifier</string>                     <string>CFBundleDisplayName</string>                     <string>CFBundleName</string>                     <string>CFBundleShortVersionString</string>                     <string>ApplicationType</string>                     <string>UIFileSharingEnabled</string>                     <string>Path</string>                     <string>StaticDiskUsage</string>                     <string>DynamicDiskUsage</string>                     <string>iTunesMetadata</string>                     <string>CFBundleSize</string>                     <string>Entitlements</string>                     <string>IsAppStoreVendable</string>";
+
+        let mut xml = String::new();
+        xml.push_str(crate::mcinstall::PLIST_HEADER);
+        xml.push_str("<dict><key>Command</key><string>Lookup</string><key>ClientOptions</key>");
+        xml.push_str("<dict><key>ApplicationType</key><string>Any</string>");
+        xml.push_str("<key>ReturnAttributes</key><array>");
+        xml.push_str(attrs);
+        xml.push_str("</array></dict></dict></plist>");
+
+        let mut frame = Vec::with_capacity(4 + xml.len());
+        frame.extend_from_slice(&(xml.len() as u32).to_be_bytes());
+        frame.extend_from_slice(xml.as_bytes());
+        client_ref.0.idevice.send_raw(&frame).await?;
+
+        // 读响应（循环直到 Status=Complete；LookupResult 为 {bundleId: appDict}）
+        let mut apps: Vec<plist::Value> = Vec::new();
+        loop {
+            let len_buf = client_ref.0.idevice.read_raw(4).await?;
+            let len = u32::from_be_bytes([len_buf[0], len_buf[1], len_buf[2], len_buf[3]]) as usize;
+            if len == 0 || len > 32 * 1024 * 1024 {
+                return Err(IdeviceError::UnexpectedResponse(format!("plist 长度异常: {}", len)));
+            }
+            let body = client_ref.0.idevice.read_raw(len).await?;
+            let value: plist::Value = plist::from_bytes(&body)
+                .map_err(|e| IdeviceError::UnexpectedResponse(format!("plist 解析失败: {}", e)))?;
+            let mut dict = match value {
+                plist::Value::Dictionary(d) => d,
+                _ => return Err(IdeviceError::UnexpectedResponse("非字典响应".to_string())),
+            };
+
+            if let Some(e) = dict
+                .remove("ErrorDescription")
+                .and_then(|x| x.as_string().map(|s| s.to_string()))
+            {
+                return Err(IdeviceError::UnexpectedResponse(e));
+            }
+            if let Some(res) = dict.remove("LookupResult")
+                && let plist::Value::Dictionary(map) = res
+            {
+                for (_k, v) in map.into_iter() {
+                    apps.push(v);
+                }
+            }
+            if let Some(s) = dict
+                .remove("Status")
+                .and_then(|x| x.as_string().map(|s| s.to_string()))
+                && s == "Complete"
+            {
+                break;
+            }
+            if !apps.is_empty() {
+                break;
+            }
+        }
+
+        let root = plist::Value::Array(apps);
+        let mut buf: Vec<u8> = Vec::new();
+        plist::to_writer_binary(&mut buf, &root)
+            .map_err(|e| IdeviceError::UnexpectedResponse(format!("编码失败: {}", e)))?;
+        Ok(buf)
+    });
+
+    match res {
+        Ok(bytes) => {
+            let mut boxed = bytes.into_boxed_slice();
+            let ptr = boxed.as_mut_ptr();
+            let len = boxed.len();
+            std::mem::forget(boxed);
+            unsafe {
+                *out_result = ptr as *mut libc::c_void;
+                *out_result_len = len;
+            }
+            std::ptr::null_mut()
+        }
+        Err(e) => ffi_err!(e),
+    }
+}

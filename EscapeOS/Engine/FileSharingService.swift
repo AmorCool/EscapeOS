@@ -30,14 +30,17 @@ enum FileSharingService {
     /// browse 失败回退原 get_apps 全字段 Lookup.
     /// 同步阻塞——调用方放后台线程.
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
-        if let apps = try? browseAppsWithSizeAttributes(), !apps.isEmpty {
+        if let apps = try? lookupAppsWithAttributes(), !apps.isEmpty {
             return apps
         }
         return try legacyGetApps()
     }
 
-    /// Browse + ReturnAttributes 主路径.
-    private static func browseAppsWithSizeAttributes() throws -> [FileSharingApp] {
+    /// v0.3.284：**Lookup** + ReturnAttributes 主路径（此前用 Browse —— 大小字段
+    /// 只在 Lookup 的 ReturnAttributes 里返回，pymobiledevice3 同款：lookup +
+    /// GET_APPS_ADDITIONAL_INFO）。Rust 侧一次请求取全部字段并以 bplist 字节回传，
+    /// Swift 侧完全不碰 plist_t 指针（照抄 get_apps 的 void** 出参模式）。
+    private static func lookupAppsWithAttributes() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
@@ -49,30 +52,22 @@ enum FileSharingService {
         }
         defer { installation_proxy_client_free(ip) }
 
-        // v0.3.279：改用 C 垫片 esc_browse_apps_bin——Swift 侧完全不碰 plist_t 指针
-        // （271~278 八轮 CI 实测 Clang Importer 对该 typedef void* 的指针参数推断
-        //  不可靠），只传 C 字符串数组 + 整数，拿回 bplist 字节后用
-        // PropertyListSerialization 解析.
-        let attrs = ["CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
-                     "CFBundleShortVersionString", "ApplicationType", "UIFileSharingEnabled",
-                     "Path", "StaticDiskUsage", "DynamicDiskUsage", "iTunesMetadata", "CFBundleSize",
-                     "Entitlements", "IsAppStoreVendable"]
-        var cAttrs: [UnsafeMutablePointer<CChar>?] = attrs.map { strdup($0) }
-        defer { for item in cAttrs { if let p = item { free(p) } } }
-
-        var outLen: UInt32 = 0
-        let binPtr = cAttrs.withUnsafeMutableBufferPointer { buf -> UnsafeMutablePointer<UInt8>? in
-            esc_browse_apps_bin(ip, buf.baseAddress, Int32(attrs.count), &outLen)
+        var rawPtr: UnsafeMutableRawPointer?
+        var len: Int = 0
+        if let err = installation_proxy_lookup_apps(ip, &rawPtr, &len) {
+            let msg = err.pointee.message.map { String(cString: $0) } ?? "unknown"
+            idevice_error_free(err)
+            throw makeError("Lookup 失败：\(msg)")
         }
-        guard let binPtr, outLen > 0 else {
-            throw makeError("Browse 应用列表失败")
+        guard let rawPtr, len > 0 else {
+            throw makeError("Lookup 返回空结果")
         }
-        defer { plist_mem_free(UnsafeMutableRawPointer(binPtr)) }
+        defer { idevice_data_free(rawPtr.assumingMemoryBound(to: UInt8.self), UInt(len)) }
 
-        let data = Data(bytes: binPtr, count: Int(outLen))
+        let data = Data(bytes: rawPtr, count: len)
         guard let array = (try? PropertyListSerialization.propertyList(from: data, format: nil))
                 as? [[String: Any]] else {
-            throw makeError("Browse 结果解析失败")
+            throw makeError("Lookup 结果解析失败")
         }
         var result: [FileSharingApp] = []
         for dict in array {

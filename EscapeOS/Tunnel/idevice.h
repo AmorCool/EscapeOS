@@ -4136,6 +4136,21 @@ struct IdeviceFfiError *installation_proxy_archive(struct InstallationProxyClien
                                                    bool skip_uninstall);
 
 /**
+ * Lookup installed apps with a fixed ReturnAttributes set (v0.3.284).
+ *
+ * Returns base fields + StaticDiskUsage/DynamicDiskUsage (sizes) + Entitlements
+ * + iTunesMetadata. NOTE: the size fields are only returned by **Lookup**
+ * (pymobiledevice3 GET_APPS_ADDITIONAL_INFO uses lookup, not browse).
+ * Result is a binary plist array of app dictionaries; free with idevice_data_free.
+ *
+ * # Safety
+ * `client` must be a valid pointer to a handle allocated by this library
+ */
+struct IdeviceFfiError *installation_proxy_lookup_apps(struct InstallationProxyClientHandle *client,
+                                                      void **out_result,
+                                                      size_t *out_result_len);
+
+/**
  * Creates a new InstallcoordinationProxy client from a ReadWrite stream
  *
  * # Arguments
