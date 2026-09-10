@@ -15,7 +15,16 @@ struct BatteryHealthInfo {
     var adapterWatts: Int?        // W
     var adapterVoltage: Double?   // V（mV/1000）
     var adapterDescription: String?  // 连接描述（如 USB-C/无线）
-    var batteryManufacturer: String? // 厂商（iOS 不暴露稳定字段，Apple 为推断）
+    var batteryManufacturer: String? // 厂商（v0.3.286：电池序列号前 3 位映射）
+    // v0.3.286：移植爱思电池详情面板字段（逆向 idm_info.dll：IOPMPowerSource + gasguage）
+    var currentCapacityMAh: Int?     // AppleRawCurrentCapacity（当前容量 mAh）
+    var voltage: Double?             // Voltage（mV → V：当前电压）
+    var bootVoltage: Double?         // BootVoltage（mV → V：开机电压）
+    var instantAmperage: Int?        // InstantAmperage（mA：电池电流，负=放电）
+    var temperatureC: Double?        // Temperature（℃，-1/无效 → nil）
+    var atWarnLevel: Bool?           // AtWarnLevel（电池处于警告水平）
+    var atCriticalLevel: Bool?       // AtCriticalLevel（电池处于临界水平）
+    var vendorCode: String?          // 电池序列号前 3 位（F8Y 等）
     var raw: [String: Any] = [:]  // 调试用（字段缺失时可看）
 }
 
@@ -296,11 +305,41 @@ enum BatteryHealthService {
             }
             adapterDescription = adapter["Description"] as? String
         }
-        // 7. 厂商：iOS 不暴露稳定字段（IOPMPowerSource 规范含但 iOS10+ 裁剪）.
-        //    Apple 设备电池实际为 Apple 认证（推断显示 Apple），原始键尝试读取.
-        let manufacturer = (dict["Manufacturer"] as? String)
-            ?? (dict["BatteryManufacturer"] as? String)
-            ?? "Apple"
+        // 7. 厂商（v0.3.286 移植爱思：电池序列号前 3 位编码厂商，社区公认映射表）
+        let vendorCode = serial.map { String($0.prefix(3)).uppercased() }
+        let manufacturer: String? = {
+            if let raw = dict["Manufacturer"] as? String, !raw.isEmpty { return raw }
+            if let raw = dict["BatteryManufacturer"] as? String, !raw.isEmpty { return raw }
+            guard let code = vendorCode else { return nil }
+            switch code {
+            case "F5D": return "惠州德赛"
+            case "F8Y": return "深圳欣旺达"
+            case "FG9": return "常熟新普"
+            case "SWD": return "欣旺达"
+            case "ATL": return "新能源科技(ATL)"
+            case "SUN": return "索尼"
+            case "LGX", "LGC": return "LG"
+            case "SDI": return "三星SDI"
+            default: return code
+            }
+        }()
+
+        // 8. v0.3.286：爱思同款附加字段（电压/电流/温度/警告水平/当前容量 mAh）
+        func volts(_ key: String) -> Double? {
+            guard let mv = dbl(key, in: dict), mv > 0 else { return nil }
+            return mv / 1000.0
+        }
+        let voltageV = volts("Voltage")
+        let bootVoltageV = volts("BootVoltage")
+        let amperage = num("InstantAmperage", in: dict).map { $0 > 32768 ? $0 - 65536 : $0 }
+        var tempC: Double? = nil
+        if let t = dbl("Temperature", in: dict), t > 0 {
+            // IOPMPowerSource 的温度单位为 1/100 ℃
+            tempC = t > 200 ? t / 100.0 : t
+        }
+        let warnLevel = dict["AtWarnLevel"] as? Bool
+        let criticalLevel = dict["AtCriticalLevel"] as? Bool
+        let currentMAh = num("AppleRawCurrentCapacity", in: dict)
 
         return BatteryHealthInfo(
             cycleCount: cycle,
@@ -315,6 +354,14 @@ enum BatteryHealthService {
             adapterVoltage: adapterVoltage,
             adapterDescription: adapterDescription,
             batteryManufacturer: manufacturer,
+            currentCapacityMAh: currentMAh,
+            voltage: voltageV,
+            bootVoltage: bootVoltageV,
+            instantAmperage: amperage,
+            temperatureC: tempC,
+            atWarnLevel: warnLevel,
+            atCriticalLevel: criticalLevel,
+            vendorCode: vendorCode,
             raw: dict
         )
     }

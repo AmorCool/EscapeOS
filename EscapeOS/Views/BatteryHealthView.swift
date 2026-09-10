@@ -125,12 +125,12 @@ struct BatteryHealthView: View {
         )
     }
 
+    /// v0.3.286：对齐爱思评级（良好 / 一般 / 差）
     private func healthLabel(_ health: Int) -> String {
         switch health {
-        case 90...: return "电池状况良好"
-        case 80..<90: return "电池状况正常"
-        case 70..<80: return "电池已略微损耗"
-        default: return "建议更换电池"
+        case 80...: return "良好"
+        case 60..<80: return "一般"
+        default: return "差"
         }
     }
 
@@ -228,9 +228,11 @@ struct BatteryHealthView: View {
     }
 
     // MARK: v0.3.205 身份卡（序列号小眼睛 / 厂商 / 生产日期）
+    /// v0.3.286：身份与电芯参数卡（移植爱思「电池详情」右栏：厂商/生产日期/序列号/
+    /// 出厂容量/当前容量/满充容量/当前电压/开机电压/电池电流/警告水平/临界水平）
     private func identityCard(info: BatteryHealthInfo) -> some View {
         VStack(spacing: 0) {
-            // 序列号行
+            // 序列号（眼睛切换）
             HStack(spacing: 12) {
                 Image(systemName: "number.circle")
                     .foregroundStyle(.secondary)
@@ -250,40 +252,63 @@ struct BatteryHealthView: View {
                 }
             }
             .padding(.vertical, 10)
-            Divider()
-            // 厂商
-            HStack(spacing: 12) {
-                Image(systemName: "hammer.fill")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24)
-                Text("电池厂商")
-                    .font(.subheadline)
-                Spacer()
-                Text(info.batteryManufacturer ?? "未知")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 10)
-            Divider()
-            // 生产日期（iOS 不暴露 → 诚实显示不可用）
-            HStack(spacing: 12) {
-                Image(systemName: "calendar")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24)
-                Text("生产日期")
-                    .font(.subheadline)
-                Spacer()
-                Text("iOS 未公开")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.vertical, 10)
+            batteryCardRow("电池厂商", info.batteryManufacturer ?? "未知", icon: "hammer.fill")
+            batteryCardRow("生产日期", manufactureDateText(info), icon: "calendar")
+            batteryCardRow("出厂容量", info.designCapacity.map { "\($0) mAh" }, icon: "battery.0")
+            batteryCardRow("当前容量", info.currentCapacityMAh.map { "\($0) mAh" }, icon: "battery.50")
+            batteryCardRow("满充容量", info.maxCapacity.map { "\($0) mAh" }, icon: "battery.100")
+            batteryCardRow("当前电压", info.voltage.map { String(format: "%.2f V", $0) }, icon: "bolt.fill")
+            batteryCardRow("开机电压", info.bootVoltage.map { String(format: "%.2f V", $0) }, icon: "power")
+            batteryCardRow("电池电流", info.instantAmperage.map { "\($0) mA" }, icon: "waveform.path.ecg")
+            batteryCardRow("电池温度", info.temperatureC.map { String(format: "%.1f ℃", $0) }, icon: "thermometer.medium")
+            batteryCardRow("电池处于警告水平", boolText(info.atWarnLevel), icon: "exclamationmark.triangle")
+            batteryCardRow("电池处于临界水平", boolText(info.atCriticalLevel), icon: "exclamationmark.octagon")
         }
         .padding(.horizontal, 16)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
+    }
+
+    /// 卡片行（带分隔线，与序列号行同款尺寸）
+    private func batteryCardRow(_ label: String, _ value: String?, icon: String) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                Text(label)
+                    .font(.subheadline)
+                Spacer()
+                Text(value ?? "—")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 10)
+        }
+    }
+
+    private func boolText(_ v: Bool?) -> String? {
+        guard let v else { return nil }
+        return v ? "是" : "否"
+    }
+
+    /// 生产日期：优先查 IORegistry 原始字典的日期键，否则诚实标注未公开
+    private func manufactureDateText(_ info: BatteryHealthInfo) -> String? {
+        let keys = ["ManufactureDate", "ProductionDate", "ManufacturingDate"]
+        for k in keys {
+            if let d = info.raw[k] as? String, !d.isEmpty { return d }
+            if let n = info.raw[k] as? Int, n > 0 { return String(n) }
+        }
+        if let bd = info.raw["BatteryData"] as? [String: Any] {
+            for k in keys {
+                if let d = bd[k] as? String, !d.isEmpty { return d }
+            }
+        }
+        return "未公开"
     }
 
     private func chargingLabel(_ info: BatteryHealthInfo) -> String {
