@@ -32,6 +32,9 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // IPA 侧载：Apple ID 登录 + 签名（isideload sign-only 路径）
 #include "../Tunnel/sideload_auth.h"
 
+// v0.3.279：instproxy Browse 的 C 垫片（Swift 侧零 plist_t 指针传递）
+#include "../Tunnel/EscBrowseApps.h"
+
 // SAP 签名桥（纯软件 Unicorn 模拟 Apple CommerceKit，PR #525 移植）。
 // libsap.a / sap.h 由 sapbridge/build-sap.sh 在编译前生成，位于 sapbridge/build/。
 #include "sap.h"

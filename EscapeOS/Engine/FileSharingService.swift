@@ -49,77 +49,32 @@ enum FileSharingService {
         }
         defer { installation_proxy_client_free(ip) }
 
-        let returnAttributes = [
-            "CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
-            "CFBundleShortVersionString", "ApplicationType", "UIFileSharingEnabled",
-            "Path", "StaticDiskUsage", "DynamicDiskUsage", "iTunesMetadata", "CFBundleSize",
-        ]
-        let optionsDict: [String: Any] = [
-            "ClientOptions": ["ReturnAttributes": returnAttributes],
-            "ApplicationType": "Any",
-        ]
-        let optionsData = try PropertyListSerialization.data(fromPropertyList: optionsDict, format: .binary, options: 0)
+        // v0.3.279：改用 C 垫片 esc_browse_apps_bin——Swift 侧完全不碰 plist_t 指针
+        // （271~278 八轮 CI 实测 Clang Importer 对该 typedef void* 的指针参数推断
+        //  不可靠），只传 C 字符串数组 + 整数，拿回 bplist 字节后用
+        // PropertyListSerialization 解析.
+        let attrs = ["CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
+                     "CFBundleShortVersionString", "ApplicationType", "UIFileSharingEnabled",
+                     "Path", "StaticDiskUsage", "DynamicDiskUsage", "iTunesMetadata", "CFBundleSize"]
+        var cAttrs: [UnsafeMutablePointer<CChar>?] = attrs.map { strdup($0) }
+        defer { for item in cAttrs { if let p = item { free(p) } } }
 
-        // v0.3.273：plist_t = UnsafeMutableRawPointer（错误注解 aka 实锤）——
-        // options 构造不用 withUnsafeBytes 闭包（272 实证其签名编译失败），用
-        // NSData.bytes 直接取指针；browse 出参 plist_t** 即 plist_t? 的指针.
-        let nsOptions = optionsData as NSData
-        var optionsPlist: plist_t?
-        let buildRc = plist_from_bin(nsOptions.bytes.assumingMemoryBound(to: CChar.self),
-                                     UInt32(nsOptions.length), &optionsPlist)
-        guard buildRc == PLIST_ERR_SUCCESS, optionsPlist != nil else {
-            throw makeError("构造 Browse options 失败")
+        var outLen: UInt32 = 0
+        let binPtr = cAttrs.withUnsafeMutableBufferPointer { buf -> UnsafeMutablePointer<UInt8>? in
+            esc_browse_apps_bin(ip, buf.baseAddress, Int32(attrs.count), &outLen)
         }
-        defer { plist_free(optionsPlist) }
-
-        // v0.3.274：rawApps 沿用 get_apps 已验证范本（UnsafeMutableRawPointer? +
-        // assumingMemoryBound(to: plist_t?.self)）——271a 用此写法仅报 UnsafeRawBuffer
-        // 一个错，273 改 plist_t? 反而引入新类型错，组合定稿.
-        var rawApps: UnsafeMutableRawPointer?
-        var count = 0
-        // v0.3.278：两个 plist_t* 参数（options / out_result）均用显式堆分配的
-        // UnsafeMutablePointer<plist_t?> 传入——271~277 的 &x / withUnsafeMutablePointer
-        // 闭包写法在该 FFI 头导入下类型推断反复出错（错误注解实测），显式分配
-        // 彻底消除推断歧义（plist_t? = UnsafeMutableRawPointer?）.
-        let optionsStorage = UnsafeMutablePointer<plist_t?>.allocate(capacity: 1)
-        optionsStorage.initialize(to: optionsPlist)
-        let rawAppsStorage = UnsafeMutablePointer<plist_t?>.allocate(capacity: 1)
-        rawAppsStorage.initialize(to: nil)
-        defer {
-            optionsStorage.deinitialize(count: 1)
-            optionsStorage.deallocate()
-            rawAppsStorage.deinitialize(count: 1)
-            rawAppsStorage.deallocate()
-        }
-
-        let browseError = installation_proxy_browse(ip, optionsStorage, rawAppsStorage, &count)
-        if let browseError {
+        guard let binPtr, outLen > 0 else {
             throw makeError("Browse 应用列表失败")
         }
-        rawApps = rawAppsStorage.pointee
-        guard let rawApps, count > 0 else { return [] }
+        defer { plist_mem_free(UnsafeMutableRawPointer(binPtr)) }
 
-        let apps = rawApps.assumingMemoryBound(to: plist_t?.self)
-        defer {
-            for index in 0..<count {
-                if let p = apps[index] { plist_free(p) }
-            }
-            idevice_data_free(rawApps.assumingMemoryBound(to: UInt8.self),
-                               UInt(count * MemoryLayout<plist_t?>.stride))
+        let data = Data(bytes: binPtr, count: Int(outLen))
+        guard let array = (try? PropertyListSerialization.propertyList(from: data, format: nil))
+                as? [[String: Any]] else {
+            throw makeError("Browse 结果解析失败")
         }
-
         var result: [FileSharingApp] = []
-        for index in 0..<count {
-            guard let p = apps[index] else { continue }
-            var binaryPlist: UnsafeMutablePointer<CChar>?
-            var binaryLength: UInt32 = 0
-            guard plist_to_bin(p, &binaryPlist, &binaryLength) == PLIST_ERR_SUCCESS,
-                  let binaryPlist, binaryLength > 0 else { continue }
-            let data = Data(bytes: binaryPlist, count: Int(binaryLength))
-            plist_mem_free(binaryPlist)
-            guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil))
-                    as? [String: Any],
-                  let bundleId = dict["CFBundleIdentifier"] as? String, !bundleId.isEmpty else { continue }
+        for dict in array {
             if let app = parseAppDict(dict) { result.append(app) }
         }
         return result
