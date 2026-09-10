@@ -62,7 +62,7 @@ enum FileSharingService {
 
         var optionsPlist: plist_t?
         let buildRc = optionsData.withUnsafeBytes { (raw: UnsafeRawBuffer) -> plist_err_t in
-            guard let base = raw.bindMemory(to: CChar.self).baseAddress else { return -1 }
+            guard let base = raw.bindMemory(to: CChar.self).baseAddress else { return PLIST_ERR_UNKNOWN }
             return plist_from_bin(base, UInt32(optionsData.count), &optionsPlist)
         }
         guard buildRc == PLIST_ERR_SUCCESS, let optionsPlist else {
@@ -70,27 +70,30 @@ enum FileSharingService {
         }
         defer { plist_free(optionsPlist) }
 
-        var rawApps: UnsafeMutableRawPointer?
+        // v0.3.271 修正：browse 出参是 plist_t**（类型化双指针），不能用
+        // UnsafeMutableRawPointer?（那是 get_apps 的 void** 写法）——271 首版
+        // CI exit 65 即此类型不匹配.
+        var rawApps: UnsafeMutablePointer<plist_t?>?
         var count = 0
         if let ffiError = installation_proxy_browse(ip, optionsPlist, &rawApps, &count) {
             throw makeError("Browse 应用列表失败")
         }
         guard let rawApps, count > 0 else { return [] }
 
-        let apps = rawApps.assumingMemoryBound(to: plist_t?.self)
         defer {
             for index in 0..<count {
-                plist_free(apps[index])
+                if let p = rawApps[index] { plist_free(p) }
             }
-            idevice_data_free(rawApps.assumingMemoryBound(to: UInt8.self),
+            idevice_data_free(UnsafeMutableRawPointer(rawApps).assumingMemoryBound(to: UInt8.self),
                                UInt(count * MemoryLayout<plist_t?>.stride))
         }
 
         var result: [FileSharingApp] = []
         for index in 0..<count {
+            guard let p = rawApps[index] else { continue }
             var binaryPlist: UnsafeMutablePointer<CChar>?
             var binaryLength: UInt32 = 0
-            guard plist_to_bin(apps[index], &binaryPlist, &binaryLength) == PLIST_ERR_SUCCESS,
+            guard plist_to_bin(p, &binaryPlist, &binaryLength) == PLIST_ERR_SUCCESS,
                   let binaryPlist, binaryLength > 0 else { continue }
             let data = Data(bytes: binaryPlist, count: Int(binaryLength))
             plist_mem_free(binaryPlist)
