@@ -675,15 +675,15 @@ pub unsafe extern "C" fn installation_proxy_archive(
         let client_ref = unsafe { &mut *client };
 
         let mut options = plist::Dictionary::new();
-        options.insert("SkipUninstall".into(), plist::Value::Boolean(skip_uninstall));
+        options.insert(String::from("SkipUninstall"), plist::Value::Boolean(skip_uninstall));
 
         let mut cmd = plist::Dictionary::new();
-        cmd.insert("Command".into(), plist::Value::String("Archive".into()));
+        cmd.insert(String::from("Command"), plist::Value::String(String::from("Archive")));
         cmd.insert(
-            "ApplicationIdentifier".into(),
+            String::from("ApplicationIdentifier"),
             plist::Value::String(bundle_id.clone()),
         );
-        cmd.insert("ClientOptions".into(), plist::Value::Dictionary(options));
+        cmd.insert(String::from("ClientOptions"), plist::Value::Dictionary(options));
 
         client_ref
             .0
@@ -693,10 +693,15 @@ pub unsafe extern "C" fn installation_proxy_archive(
 
         loop {
             let mut res = client_ref.0.idevice.read_plist().await?;
-            if let Some(e) = res.remove("ErrorDescription").and_then(|x| x.into_string()) {
+            if let Some(e) = res
+                .remove("ErrorDescription")
+                .and_then(|x| x.as_string().map(|s| s.to_string()))
+            {
                 return Err(IdeviceError::UnexpectedResponse(e));
             }
-            if let Some(s) = res.remove("Status").and_then(|x| x.into_string())
+            if let Some(s) = res
+                .remove("Status")
+                .and_then(|x| x.as_string().map(|s| s.to_string()))
                 && s == "Complete"
             {
                 break;
