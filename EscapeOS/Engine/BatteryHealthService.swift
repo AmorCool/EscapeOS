@@ -29,6 +29,9 @@ struct BatteryHealthInfo {
     var nominalChargeCapacity: Int?  // mAh 额定容量 BatteryData.NominalChargeCapacity
     var remainingCapacity: Int?      // mAh 剩余容量 BatteryData.RemainingCapacity
     var batteryPowerMW: Int?         // mW 电池功率 BatteryData.BatteryPower（负=放电）
+    // v0.3.305：iOS 27 实测仅存的温度/临界项（用于「电池温度/警告水平」的如实展示）
+    var skinTemperatureC: Int?       // ℃ 电池表皮温度
+                                     // （DeadBatteryBootData.GeneralPayload.AverageBattSkinTemp，上次欠压启动记录）
     var raw: [String: Any] = [:]  // 调试用（字段缺失时可看）
 }
 
@@ -328,7 +331,15 @@ enum BatteryHealthService {
             tempC = t > 200 ? t / 100.0 : t
         }
         let warnLevel = dict["AtWarnLevel"] as? Bool
+            ?? num("AtWarnLevel", in: dict).map { $0 != 0 }
+            ?? (dict["BatteryData"] as? [String: Any]).flatMap { num("AtWarnLevel", in: $0).map { v in v != 0 } }
         let criticalLevel = dict["AtCriticalLevel"] as? Bool
+            ?? num("AtCriticalLevel", in: dict).map { $0 != 0 }
+        // v0.3.305：iOS 27 实测 —— 整个 IOPMPowerSource 树里唯一的温度是
+        // DeadBatteryBootData.GeneralPayload.AverageBattSkinTemp（℃ 整数，上次欠压启动记录）
+        let skinTemp = (dict["DeadBatteryBootData"] as? [String: Any])
+            .flatMap { $0["GeneralPayload"] as? [String: Any] }
+            .flatMap { num("AverageBattSkinTemp", in: $0) }
         // v0.3.291：当前容量 = BatteryData.AbsoluteCapacity（mA·h 实测值）；
         // 老版本回退 AppleRawCurrentCapacity；BatteryData.BatteryPower 为 mW 功率.
         let currentMAh = absolute
@@ -362,6 +373,7 @@ enum BatteryHealthService {
             nominalChargeCapacity: nominal,
             remainingCapacity: remaining,
             batteryPowerMW: powerMW,
+            skinTemperatureC: skinTemp,
             raw: dict
         )
     }

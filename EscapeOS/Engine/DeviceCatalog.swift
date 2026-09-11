@@ -103,6 +103,20 @@ enum DeviceCatalog {
         return regions[code]
     }
 
+    /// v0.3.305：机身颜色代码（lockdown `DeviceColor`，设备侧只给数字）→ 中文名.
+    ///
+    /// ⚠️ **只收录有真机/爱思对照实证的映射**：iPhone15,4（`DeviceColor = 1`）爱思显示「黑色」。
+    /// 其余代码（2/3/4…）没有实证，一律返回 nil 由 UI 显示原始代码，**不编造颜色表**
+    /// （爱思的颜色名来自它自己的服务端，本地资源里没有该表）。
+    static let deviceColors: [String: String] = [
+        "1": "黑色",
+    ]
+
+    static func deviceColorName(_ code: String?) -> String? {
+        guard let code, !code.isEmpty else { return nil }
+        return deviceColors[code]
+    }
+
     /// 销售类型：苹果零售机型首字母 M=零售 / N=官换 / F=官翻 / P=定制
     static func salesType(_ modelNumber: String?) -> String? {
         guard let first = modelNumber?.uppercased().first else { return nil }

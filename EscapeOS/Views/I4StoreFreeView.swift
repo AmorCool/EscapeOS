@@ -21,11 +21,14 @@ struct I4StoreFreeView: View {
     /// 每个 App 的操作状态文案（下载/安装进度）
     @State private var progress: [String: String] = [:]
     @State private var toast: String?
+    /// v0.3.305：已下载数量（进入页面时读一次磁盘台账）
+    @State private var downloadedCount = 0
 
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         List {
+            downloadManagerSection
             if isSearchMode {
                 searchSection
             } else {
@@ -60,9 +63,40 @@ struct I4StoreFreeView: View {
                     .padding(.bottom, 20)
             }
         }
-        .task { if apps.isEmpty { await load() } }
+        .task {
+            downloadedCount = IPADownloadLibrary.shared.items().count
+            if apps.isEmpty { await load() }
+        }
     }
 
+    // MARK: - v0.3.305 下载管理入口
+
+    /// 已下载安装包的管理入口（列表 + 安装 + 删除），顶在最上面方便随时进
+    private var downloadManagerSection: some View {
+        Section {
+            NavigationLink {
+                IPADownloadManagerView()
+            } label: {
+                HStack(spacing: 12) {
+                    AppRowIcon(systemName: "shippingbox.fill", tint: .blue,
+                               symbolSize: 18, frameSize: 34)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("下载管理").font(.subheadline.weight(.medium))
+                        Text("管理已下载的 IPA 并安装").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 6)
+                    if downloadedCount > 0 {
+                        Text("\(downloadedCount)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    /// 已下载数量（进入页面时读一次磁盘台账）
     // MARK: - 榜单选择
 
     private var rankSection: some View {
@@ -243,6 +277,16 @@ struct I4StoreFreeView: View {
                     onLog: { LoginLogger.shared.log("[I4源] \($0)") })
 
                 self.progress[app.id] = "安装中…"
+                // v0.3.305：登记到下载台账（商店元信息只有列表里才有，包本身读不出来）
+                await MainActor.run {
+                    IPADownloadLibrary.shared.record(fileURL: ipa,
+                                                     displayName: app.name,
+                                                     bundleId: app.bundleId,
+                                                     version: app.version,
+                                                     iconURL: app.icon,
+                                                     source: "爱思免登录")
+                    self.downloadedCount = IPADownloadLibrary.shared.items().count
+                }
                 try await AppStoreInstallService.installLocalIPA(
                     ipa.path,
                     progress: { p in

@@ -17,18 +17,23 @@ struct DeviceInfoView: View {
                     ProgressView("正在读取设备信息…").frame(maxWidth: .infinity).padding(.vertical, 60)
                 } else if let info {
                     // v0.3.294：分组与顺序对齐爱思「设备详情」
-                    // （设备 → 系统与时区 → 卡槽与网络 → CPU 与硬件 → 电池 → 生产验机 → 传感器备件 → 存储）
+                    // v0.3.305：按实测通道补齐缺项（设备树 / 电池节点 / 全量 lockdown）
+                    // （设备 → 系统与时区 → 卡槽与网络 → CPU 与硬件 → 电池 →
+                    //   零部件 → 生产验机 → 存储 → 功能支持 → 原始数据）
                     deviceHero(info)
-                    basicSection(info)
+                    deviceSection(info)
                     systemSection(info)
                     networkSection(info)
                     hardwareSection(info)
                     batterySection(info)
-                    productionSection(info)
-                    partsSection(info)
-                    storageSection(info)
-                    featuresSection(info)
-                    allValuesSection(info)
+                    Group {
+                        partsSection(info)
+                        productionSection(info)
+                        storageSection(info)
+                        featuresSection(info)
+                        unavailableNote
+                        allValuesSection(info)
+                    }
                 } else {
                     errorCard
                 }
@@ -80,23 +85,47 @@ struct DeviceInfoView: View {
             .fill(Color(.secondarySystemGroupedBackground)))
     }
 
-    /// v0.3.294：设备（对齐爱思「设备详情」第一组）
-    private func basicSection(_ info: DeviceInfoModel) -> some View {
+    /// v0.3.305：设备（行序与分组对齐爱思「设备详情」第一组）
+    ///
+    /// 爱思行序：设备名称/容量颜色/上市日期 → 设备型号/激活状态/生产日期 →
+    /// 序列号/越狱状态/销售类型 → 主板序列号/产品类型/销售型号 → ECID/固件版本/销售地区 → UDID
+    private func deviceSection(_ info: DeviceInfoModel) -> some View {
         sectionCard(title: "设备", icon: "iphone.gen3") {
             row("设备名称", info.deviceName)
-            row("设备型号", info.modelName)
-            row("产品类型", productTypeText(info))
+            row("容量颜色", capacityColorText(info))
             row("上市日期", info.releaseDate)
-            row("销售型号", [info.modelNumber, info.region].compactMap { $0 }.joined(separator: " "))
-            row("销售地区", [info.region, info.regionName].compactMap { $0 }.joined(separator: " "))
-            row("销售类型", info.salesType)
-            sensitiveRow("序列号", info.serialNumber)
-            sensitiveRow("主板序列号", info.mlbSerial)
-            sensitiveRow("ECID", info.ecid)
-            sensitiveRow("UDID", info.udid)
+            row("设备型号", info.modelName)
             row("激活状态", activationText(info.activationState))
+            row("生产日期", Self.notProvided)
+            sensitiveRow("序列号", info.serialNumber)
             row("越狱状态", info.jailbroken.map { $0 ? "已越狱" : "未越狱" })
+            row("销售类型", info.salesType)
+            sensitiveRow("主板序列号", info.mlbSerial)
+            row("产品类型", productTypeText(info))
+            row("销售型号", [info.modelNumber, info.region].compactMap { $0 }.joined(separator: " "))
+            sensitiveRow("ECID", info.ecid)
+            row("固件版本", versionText(info))
+            row("销售地区", [info.region, info.regionName].compactMap { $0 }.joined(separator: " "))
+            sensitiveRow("UDID", info.udid)
+            row("硬件型号", info.uniqueModel)
+            row("设备类别", info.deviceClass)
         }
+    }
+
+    /// 容量 + 机身颜色（爱思显示「512GB 黑色」）.
+    /// 容量用本机磁盘总容量；颜色名只在有实证映射时才翻译，否则显示设备给的颜色代码.
+    private func capacityColorText(_ info: DeviceInfoModel) -> String? {
+        guard info.storageTotalGB > 0 else { return nil }
+        let cap = "\(info.storageTotalGB)GB"
+        if let name = DeviceCatalog.deviceColorName(info.deviceColor) { return "\(cap) \(name)" }
+        if let code = info.deviceColor, !code.isEmpty { return "\(cap)（颜色代码 \(code)）" }
+        return cap
+    }
+
+    /// 「固件版本」= iOS 版本 (构建号) —— 与爱思同口径（爱思把 iOS 版本这一行叫「固件版本」）
+    private func versionText(_ info: DeviceInfoModel) -> String? {
+        guard let build = info.buildVersion, !build.isEmpty else { return info.systemVersion }
+        return "\(info.systemVersion) (\(build))"
     }
 
     /// 产品类型：ProductType + 监管型号（如 iPhone15,4 (A2846)）
@@ -116,34 +145,50 @@ struct DeviceInfoView: View {
         }
     }
 
-    /// v0.3.294：系统与时区（对齐爱思第二组，含 24 小时制/协议版本/分区/硬件版本）
+    /// v0.3.305：系统与时区（对齐爱思第二组：时区/地区/24 小时制 + 充电次数/剩余电量/电池寿命）
     @ViewBuilder
     private func systemSection(_ info: DeviceInfoModel) -> some View {
         sectionCard(title: "系统与时区", icon: "gearshape.2.fill") {
-            row("系统版本", info.buildVersion.map { "\(info.systemVersion) (\($0))" } ?? info.systemVersion)
-            row("固件版本", info.firmwareVersion)
             row("时区", info.timeZone)
             row("地区", info.localeRegion ?? info.region)
             row("24 小时制", info.uses24HourClock.map { $0 ? "是" : "否" })
-            row("协议版本", info.protocolVersion)
-            row("分区类型", info.partitionType)
-            row("硬件版本", info.hardwareVersion)
+            row("充电次数", info.cycleCount.map { "\($0) 次" })
+            row("剩余电量", info.batteryLevel.map { "\($0)%" })
+            row("电池寿命", batteryLifeText(info))
+            row("iBoot 固件", info.firmwareVersion)
         }
     }
 
-    /// v0.3.294：CPU 与硬件（对齐爱思第四组）
+    /// 电池寿命：优先用读到的健康度，读不到就按爱思本机同款显示「系统未提供」
+    private func batteryLifeText(_ info: DeviceInfoModel) -> String? {
+        guard let h = info.batteryHealthPercent else { return Self.notProvided }
+        return "\(h)%"
+    }
+
+    /// v0.3.305：CPU 与硬件（行序对齐爱思第四组）
+    ///
+    /// 爱思行序：CPU 类型/Wi-Fi 模块/屏幕大小 → CPU 核心/Wi-Fi 序列号/屏幕分辨率 →
+    /// CPU 频率/无线技术类型/硬盘类型 → 协处理器/硬件版本/分区类型
     @ViewBuilder
     private func hardwareSection(_ info: DeviceInfoModel) -> some View {
         sectionCard(title: "CPU 与硬件", icon: "cpu") {
             row("CPU 类型", info.cpuName)
-            row("CPU 核心", "\(info.cpuCount) 核")
-            row("CPU 频率", info.cpuFrequency)
-            row("物理内存", "\(info.memoryMB) MB")
+            row("Wi-Fi 模块", Self.notProvided)
             row("屏幕大小", info.screenInches.map { "\($0) 英寸" })
+            row("CPU 核心", "\(info.cpuCount) 核")
+            row("Wi-Fi 序列号", info.wirelessBoardSerial)
             row("屏幕分辨率", screenResolution)
-            row("CPU 架构", info.cpuArchitecture)
-            row("硬件型号", info.hardwareModel)
+            row("CPU 频率", info.cpuFrequency)
+            row("无线技术类型", Self.notProvided)
+            row("硬盘类型", info.diskCellType)
+            row("协处理器", Self.notProvided)
+            row("硬件版本", info.hardwareVersion)
+            row("分区类型", info.partitionType)
+            row("硬件型号", info.uniqueModel)
             row("硬件平台", info.hardwarePlatform)
+            row("Wi-Fi 芯片", info.wifiChipset)
+            row("物理内存", "\(info.memoryMB) MB")
+            row("CPU 架构", info.cpuArchitecture)
         }
     }
 
@@ -154,27 +199,44 @@ struct DeviceInfoView: View {
         return "\(Int(max(b.width, b.height))) x \(Int(min(b.width, b.height)))"
     }
 
-    /// v0.3.294：卡槽与网络（对齐爱思第三组）
+    /// v0.3.305：卡槽与网络（行序对齐爱思第三组）
+    ///
+    /// 爱思行序：卡槽类型/IMEI1/eSIM卡1 → 有无卡托/IMEI2/eSIM卡2 → 基带版本/Wi-Fi地址/SIM卡状态
+    /// → 基带激活版本/蓝牙地址/SIM卡托状态 → 基带状态/蜂窝地址/通话功能 → 基带序列号/IMSI/协议版本
     @ViewBuilder
     private func networkSection(_ info: DeviceInfoModel) -> some View {
         sectionCard(title: "卡槽与网络", icon: "antenna.radiowaves.left.and.right") {
+            row("卡槽类型", simSlotKind(info))
             sensitiveRow("IMEI 1", info.imei)
-            sensitiveRow("IMEI 2", info.imei2)
             row("eSIM 卡1 信息", info.carrier1)
+            row("有无卡托", info.simTrayInserted.map { $0 ? "有" : "无" })
+            sensitiveRow("IMEI 2", info.imei2)
             row("eSIM 卡2 信息", info.carrier2)
-            sensitiveRow("IMSI", info.imsi)
-            sensitiveRow("IMSI 2", info.imsi2)
-            row("SIM 卡状态", info.simStatus)
-            row("SIM 卡托状态", info.simTrayStatus)
             row("基带版本", info.basebandVersion)
-            row("基带状态", info.basebandStatus)
-            sensitiveRow("基带序列号", info.basebandSerial)
-            sensitiveRow("MEID", info.meid)
             row("Wi-Fi 地址", info.wiFiAddress)
+            row("SIM 卡状态", info.simStatus)
+            row("基带激活版本", info.basebandActivationTicket)
             row("蓝牙地址", info.bluetoothAddress)
+            row("SIM 卡托状态", info.simTrayStatus)
+            row("基带状态", info.basebandStatus)
             row("蜂窝地址", info.ethernetAddress)
+            row("通话功能", info.callCapable.map { $0 ? "是" : "否" })
+            sensitiveRow("基带序列号", info.basebandSerial)
+            sensitiveRow("IMSI", info.imsi)
+            row("协议版本", info.protocolVersion)
+            row("基带芯片", info.basebandChipset)
             row("Wi-Fi 序列号", info.wirelessBoardSerial)
+            sensitiveRow("ICCID", info.iccid)
+            sensitiveRow("IMSI 2", info.imsi2)
+            sensitiveRow("MEID", info.meid)
         }
+    }
+
+    /// 卡槽类型：由「SIM1/SIM2 是否 eSIM」推导（两张都内嵌 = 无实体卡槽）.
+    /// 本机实测（iPhone15,4，SIM1IsEmbedded/SIM2IsEmbedded 均为 true）与爱思显示的「单卡」一致.
+    private func simSlotKind(_ info: DeviceInfoModel) -> String? {
+        guard let embedded = info.simsAreEmbedded else { return nil }
+        return embedded ? "单卡" : "双卡"
     }
 
     private func storageSection(_ info: DeviceInfoModel) -> some View {
@@ -205,9 +267,11 @@ struct DeviceInfoView: View {
     }
 
     /// v0.3.285：电池卡（移植爱思电池面板——健康度/循环次数/容量/当前电量）
+    /// v0.3.305：电池序列号/电压/电流/温度改由 AppleSmartBattery 节点补（iTunes 域在 iOS 27 已无这些键）
     @ViewBuilder
     private func batterySection(_ info: DeviceInfoModel) -> some View {
-        if info.batteryHealthPercent != nil || info.cycleCount != nil || info.designCapacity != nil {
+        if info.batteryHealthPercent != nil || info.cycleCount != nil || info.designCapacity != nil
+            || info.batterySerial != nil {
             sectionCard(title: "电池", icon: "battery.100") {
                 VStack(alignment: .leading, spacing: 8) {
                     if let health = info.batteryHealthPercent {
@@ -227,7 +291,11 @@ struct DeviceInfoView: View {
                     row("实际容量", info.maxCapacity.map { "\($0) mAh" })
                     row("当前电量", info.batteryLevel.map { "\($0)%" })
                     row("充电状态", chargingText(info))
-                    sensitiveRow("电池序列号", info.batterySerial)
+                    row("电池型号", info.batteryModelID)
+                    row("电池电压", info.batteryVoltageMV.map { String(format: "%.2f V", Double($0) / 1000.0) })
+                    row("电池电流", info.batteryAmperageMA.map { "\($0) mA" })
+                    row("电池温度", info.batterySkinTempC.map { "\($0) ℃（表皮，上次记录）" })
+                    row("临界水平", info.atCriticalLevel.map { $0 ? "是" : "否" })
                 }
             }
         }
@@ -271,21 +339,55 @@ struct DeviceInfoView: View {
         }
     }
 
-    /// v0.3.285：零部件序列号（移植爱思「硬件」页，默认打码）
+    /// v0.3.305：零部件序列号（行序对齐爱思第五组）
+    ///
+    /// 爱思行序：距离传感器/环境光/点阵 → 红外摄像头/电池序列号/震动器编码 → 盖板码 → 屏幕序列号
+    ///
+    /// 其中**环境光 / 盖板码 / 屏幕序列号 / 电池序列号**已从实测通道读到
+    /// （IODeviceTree `product` 节点 + `AppleSmartBattery` 节点）；
+    /// **点阵 / 红外摄像头 / 震动器编码 / 距离传感器**在设备侧读不到——
+    /// 设备树的 `sacm-jasper` / `pearl-sep` / `haptics` / `prox` 节点都只有寄存器属性、
+    /// 没有序列号（爱思能显示是因为它按序列号去自己的服务端取出厂数据，不是从设备读）。
     @ViewBuilder
     private func partsSection(_ info: DeviceInfoModel) -> some View {
-        if info.coverglassSerial != nil || info.lunaFlexSerial != nil
-            || info.mesaSerial != nil || info.arcModuleSerial != nil {
-            sectionCard(title: "零部件序列号", icon: "cpu") {
-                VStack(alignment: .leading, spacing: 0) {
-                    sensitiveRow("屏幕盖板", info.coverglassSerial)
-                    sensitiveRow("Luna 排线", info.lunaFlexSerial)
-                    sensitiveRow("Mesa(指纹)", info.mesaSerial)
-                    sensitiveRow("Arc 模块", info.arcModuleSerial)
-                }
-            }
+        sectionCard(title: "零部件序列号", icon: "cpu") {
+            row("距离传感器", Self.notProvided)
+            sensitiveRow("环境光", info.ambientLightSerial)
+            row("点阵", Self.notProvided)
+            row("红外摄像头", Self.notProvided)
+            sensitiveRow("电池序列号", info.batterySerial)
+            row("震动器编码", Self.notProvided)
+            sensitiveRow("盖板码", info.coverglassSerial)
+            sensitiveRow("屏幕序列号", info.panelSerial)
         }
     }
+
+    /// 未提供项的说明卡（把「系统未提供」的原因讲清楚，避免看起来像没做）
+    private var unavailableNote: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle").foregroundStyle(.secondary)
+                Text("关于「\(Self.notProvided)」").font(.footnote.weight(.semibold))
+            }
+            Text("以下各项在 iOS 27 侧载环境下没有读取通道（不是没做）：\n"
+                 + "· 生产日期：需 DateOfFirstUse（iOS 27 已移除该键）或按序列号推算"
+                 + "（本机为随机序列号、含字母，爱思自己的算法也推算不出，其设备详情同样显示「未知」）。\n"
+                 + "· 点阵 / 红外摄像头 / 震动器编码 / 距离传感器：设备树对应节点没有序列号属性，"
+                 + "爱思是拿序列号去它自己的服务端换出厂数据。\n"
+                 + "· Wi-Fi 模块 / 无线技术类型 / 协处理器：系统不向侧载 App 暴露（爱思走 PC 端私有通道）。\n"
+                 + "· 电池温度 / 警告水平见「电池健康」页——同样只取本机真实存在的键，不填假数据。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color(.secondarySystemGroupedBackground)))
+    }
+
+    /// 「系统未提供」统一文案
+    static let notProvided = "系统未提供"
 
     /// v0.3.285：功能支持（DeviceSupports* 全集，移植爱思「功能支持」）
     @ViewBuilder

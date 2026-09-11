@@ -101,6 +101,27 @@ struct DeviceInfoModel {
     var carrier1: String?             // eSIM 卡1 运营商
     var carrier2: String?             // eSIM 卡2 运营商
     var wirelessBoardSerial: String?  // Wi-Fi 序列号
+    // v0.3.305：设备树（IODeviceTree /product 节点）+ AppleSmartBattery 实测通道补齐
+    // （iOS 27 的 com.apple.mobile.iTunes 域已无零部件序列号，只能从设备树按节点名查）
+    var coverglassSerial: String?     // 盖板码（product.coverglass-serial-number）
+    var panelSerial: String?          // 屏幕序列号（product.raw-panel-serial-number）
+    var ambientLightSerial: String?   // 环境光序列号（product.ambient-light-sensor-serial-num）
+    var uniqueModel: String?          // 硬件型号（product.unique-model，如 D37AP）
+    var wifiChipset: String?          // Wi-Fi 芯片（product.wifi-chipset）
+    var basebandChipset: String?      // 基带芯片（product.baseband-chipset）
+    var batteryModelID: String?       // 电池型号（smc-charger.battery-id，如 741-01369）
+    var batteryVoltageMV: Int?        // 电池电压（AppleSmartBattery.Voltage）
+    var batteryAmperageMA: Int?       // 电池电流（AppleSmartBattery.InstantAmperage，负=放电）
+    var batterySkinTempC: Int?        // 电池表皮温度（上次欠压启动记录，℃）
+    var atCriticalLevel: Bool?        // 电池处于临界水平
+    var diskCellType: String?         // 硬盘类型（NVMe default-bits-per-cell → SLC/MLC/TLC/QLC）
+    var iccid: String?                // ICCID（lockdown IntegratedCircuitCardIdentity）
+    var callCapable: Bool?            // 通话功能（lockdown TelephonyCapability）
+    var basebandActivationTicket: String?  // 基带激活版本（lockdown BasebandActivationTicketVersion）
+    var simTrayInserted: Bool?        // 有无卡托（SIMTrayStatus 是否 Inserted）
+    var simsAreEmbedded: Bool?        // 是否全 eSIM（SIM1/SIM2IsEmbedded）
+    /// 设备树/电池节点是否读成功（用于 UI 区分「系统未提供」与「读取失败」）
+    var enrichAvailable: Bool = false
     var raw: [String: Any] = [:]
 }
 
@@ -158,6 +179,9 @@ enum DeviceInfoService {
 
         // MobileGestalt
         let (mgUniqueChip, mgMLB, mgBaseband) = (try? Self.mobilegestaltKeys()) ?? (nil, nil, nil)
+
+        // v0.3.305：设备树 + 电池节点补全（单条隧道内查多个节点；失败不影响其它字段）
+        let enrich: DeviceEnrichInfo? = try? DeviceEnrichService.fetch()
 
         // v0.3.285：爱思同款域采集（逆向 idm_info.dll 得出的域清单）
         let itunes = (try? Self.lockdownDomainDict("com.apple.mobile.iTunes")) ?? [:]
@@ -259,7 +283,7 @@ enum DeviceInfoService {
             batteryLevel: intOf(batteryDomain["BatteryCurrentCapacity"]) ?? intOf(itunes["BatteryCurrentCapacity"]),
             batteryIsCharging: boolOf(batteryDomain["BatteryIsCharging"]),
             batteryIsFullyCharged: boolOf(batteryDomain["BatteryIsFullyCharged"]),
-            batterySerial: itunes["BatterySerialNumber"] as? String,
+            batterySerial: (itunes["BatterySerialNumber"] as? String) ?? enrich?.batterySerial,
             basebandVersion: itunes["BasebandVersion"] as? String,
             basebandChipId: stringOf(itunes["BasebandChipId"]),
             basebandStatus: stringOf(itunes["BasebandStatus"]),
@@ -298,6 +322,28 @@ enum DeviceInfoService {
             carrier1: carrierOf(lockdown["InternationalMobileSubscriberIdentity"] as? String),
             carrier2: carrierOf(lockdown["InternationalMobileSubscriberIdentity2"] as? String),
             wirelessBoardSerial: lockdown["WirelessBoardSerialNumber"] as? String,
+            coverglassSerial: enrich?.coverglassSerial,
+            panelSerial: enrich?.panelSerial,
+            ambientLightSerial: enrich?.ambientLightSerial,
+            uniqueModel: enrich?.uniqueModel,
+            wifiChipset: enrich?.wifiChipset,
+            basebandChipset: enrich?.basebandChipset,
+            batteryModelID: enrich?.batteryModelID,
+            batteryVoltageMV: enrich?.batteryVoltageMV,
+            batteryAmperageMA: enrich?.batteryAmperageMA,
+            batterySkinTempC: enrich?.batterySkinTempC,
+            atCriticalLevel: enrich?.atCriticalLevel,
+            diskCellType: enrich?.diskCellType,
+            iccid: lockdown["IntegratedCircuitCardIdentity"] as? String,
+            callCapable: boolOf(lockdown["TelephonyCapability"]),
+            basebandActivationTicket: lockdown["BasebandActivationTicketVersion"] as? String,
+            simTrayInserted: (lockdown["SIMTrayStatus"] as? String).map {
+                $0.localizedCaseInsensitiveContains("Inserted")
+            },
+            simsAreEmbedded: boolOf(lockdown["SIM1IsEmbedded"]).map { embedded1 in
+                embedded1 && (boolOf(lockdown["SIM2IsEmbedded"]) ?? false)
+            },
+            enrichAvailable: enrich.map { $0.coverglassSerial != nil || $0.batterySerial != nil } ?? false,
             raw: lockdown.merging(itunes) { a, _ in a }
         )
     }

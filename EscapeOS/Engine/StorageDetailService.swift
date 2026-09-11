@@ -149,27 +149,30 @@ enum StorageDetailService {
     }
 
     private static func query(client: OpaquePointer) throws -> StorageDetailInfo {
-        var node: plist_t?
-        if let e = diagnostics_relay_client_ioregistry(client, nil, nil,
-                                                      "AppleEmbeddedNVMeController", &node) {
-            throw ffiError(e, fallback: "查询闪存 IORegistry 失败")
-        }
-        defer { if let node { plist_free(node) } }
-        guard let node else {
+        guard let dict = queryNode(client: client, entryName: "AppleEmbeddedNVMeController") else {
             throw makeError("未返回闪存数据（设备可能未解锁，或该机型不支持）")
         }
+        return parse(dict)
+    }
+
+    /// v0.3.305：按 `EntryName` 取 IORegistry 节点原始字典 —— 供设备信息补全复用
+    /// （设备信息的零部件序列号只能从设备树节点按名字查，见 `DeviceEnrichService`）.
+    static func queryNode(client: OpaquePointer, entryName: String) -> [String: Any]? {
+        var node: plist_t?
+        let rc = entryName.withCString { nameCStr in
+            diagnostics_relay_client_ioregistry(client, nil, nameCStr, nil, &node)
+        }
+        if let rc { idevice_error_free(rc) }
+        guard rc == nil, let node else { return nil }
+        defer { plist_free(node) }
         var binPtr: UnsafeMutablePointer<CChar>?
         var binLen: UInt32 = 0
         guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS, let binPtr, binLen > 0 else {
-            throw makeError("闪存 plist 序列化失败")
+            return nil
         }
         defer { plist_mem_free(binPtr) }
-        let data = Data(bytes: binPtr, count: Int(binLen))
-        guard let dict = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-                as? [String: Any] else {
-            throw makeError("闪存 plist 解析失败")
-        }
-        return parse(dict)
+        return (try? PropertyListSerialization.propertyList(
+            from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil)) as? [String: Any]
     }
 
     /// IORegistry 字典 → 模型
