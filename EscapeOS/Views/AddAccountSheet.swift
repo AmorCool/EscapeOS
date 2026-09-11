@@ -55,6 +55,7 @@ struct AddAccountSheet: View {
                 }
             }
             .navigationTitle("添加账户")
+        .onAppear { prefillFromSettings() }
         // v0.3.178：2FA 输入框改标准 .alert（iOS 26 上 background 挂载不可靠）
         .alert(
             "来自 \(email) 的 2FA 验证码",
@@ -75,6 +76,21 @@ struct AddAccountSheet: View {
                     Button("取消") { dismiss() }
                 }
             }
+        }
+    }
+
+    /// v0.3.302：若「设置」里已登录过 Apple ID（侧载用的那套），自动带入邮箱与密码。
+    ///
+    /// App Store 认证（SAP）与开发者认证共用同一组 Apple ID 凭据，因此没必要让用户
+    /// 在商店里再输一遍 —— 打开即已填好，点「登录」即可。
+    private func prefillFromSettings() {
+        guard email.isEmpty, password.isEmpty else { return }
+        let saved = MemoryLimitSettings.shared.appleID
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !saved.isEmpty else { return }
+        email = saved
+        if let pw = MemoryLimitSettings.shared.password(forHistory: saved), !pw.isEmpty {
+            password = pw
         }
     }
 

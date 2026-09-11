@@ -4,10 +4,17 @@ import SwiftUI
 struct AppStoreDetailView: View {
     @State var item: AppStoreItem
     @ObservedObject private var installManager = AppStoreInstallManager.shared
+    @State private var showAccountSheet = false
+    @State private var signedEmail: String?
     @State private var expanded = false
     @State private var loadingDetail = false
     @State private var installingSource = false
     @State private var toastText: String?
+
+    /// 是否已有 App Store 账号（有则「获取」直接下载安装，无需任何配置）
+    private var hasAccount: Bool {
+        signedEmail != nil || !AppStoreDownloadStore.shared.accounts.isEmpty
+    }
 
     var body: some View {
         List {
@@ -31,6 +38,17 @@ struct AppStoreDetailView: View {
             }
         }
         .task { await loadDetail() }
+        .onAppear { signedEmail = AppStoreDownloadStore.shared.accounts.first?.email }
+        .sheet(isPresented: $showAccountSheet) {
+            AddAccountSheet { account in
+                AppStoreDownloadStore.shared.add(account)
+                signedEmail = account.email
+                toastText = "已登录：\(account.email)"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    installManager.start(item: item)
+                }
+            }
+        }
     }
 
     // MARK: 头部
@@ -209,10 +227,19 @@ struct AppStoreDetailView: View {
                 .padding(.vertical, 2)
             } else {
                 Button {
-                    installManager.start(item: item)
+                    if hasAccount {
+                        installManager.start(item: item)
+                    } else {
+                        showAccountSheet = true
+                    }
                 } label: {
-                    Label(item.priceText == "免费" ? "下载并安装" : "下载并安装（\(item.priceText)）",
-                          systemImage: "arrow.down.circle.fill")
+                    if hasAccount {
+                        Label(item.priceText == "免费" ? "下载并安装" : "下载并安装（\(item.priceText)）",
+                              systemImage: "arrow.down.circle.fill")
+                    } else {
+                        Label("登录 Apple ID 后下载安装",
+                              systemImage: "person.crop.circle.badge.plus")
+                    }
                 }
             }
 
