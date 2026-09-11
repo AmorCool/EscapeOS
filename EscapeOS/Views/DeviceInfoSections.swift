@@ -100,7 +100,8 @@ struct DeviceInfoSectionCard: View {
                 Text(section.title).font(.headline)
             }
             .padding(.bottom, 8)
-            ForEach(section.rows) { row in
+            // v0.3.308：没有值的行直接不显示（此前一律渲染成「—」，整页出现大量空行）
+            ForEach(section.rows.filter { ($0.value ?? "").isEmpty == false }) { row in
                 DeviceInfoRowView(row: row, showSensitive: showSensitive, onCopy: onCopy)
             }
         }

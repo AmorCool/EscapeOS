@@ -149,18 +149,25 @@ enum StorageDetailService {
     }
 
     private static func query(client: OpaquePointer) throws -> StorageDetailInfo {
-        guard let dict = queryNode(client: client, entryName: "AppleEmbeddedNVMeController") else {
+        guard let dict = queryNode(client: client, entryClass: "AppleEmbeddedNVMeController") else {
             throw makeError("未返回闪存数据（设备可能未解锁，或该机型不支持）")
         }
         return parse(dict)
     }
 
-    /// v0.3.305：按 `EntryName` 取 IORegistry 节点原始字典 —— 供设备信息补全复用
-    /// （设备信息的零部件序列号只能从设备树节点按名字查，见 `DeviceEnrichService`）.
-    static func queryNode(client: OpaquePointer, entryName: String) -> [String: Any]? {
+    /// v0.3.305/308：按 IORegistry **节点名（EntryName）或类名（EntryClass）** 取原始字典 —— 供设备信息补全复用.
+    ///
+    /// ⚠️ 两者不可混用（真机实测）：`AppleEmbeddedNVMeController` 只能用 **EntryClass** 查到
+    /// （用 EntryName 查返回空 → 硬盘详情/硬盘类型全部读不到，v0.3.305 引入的回归）；
+    /// 而设备树的 `product` 节点只能用 **EntryName** 查（它是 IODeviceTree 里的节点名，不是类名）。
+    static func queryNode(client: OpaquePointer,
+                          entryName: String? = nil,
+                          entryClass: String? = nil) -> [String: Any]? {
         var node: plist_t?
-        let rc = entryName.withCString { nameCStr in
-            diagnostics_relay_client_ioregistry(client, nil, nameCStr, nil, &node)
+        let rc = withUnsafeOptionalCString(entryName) { nameCStr in
+            withUnsafeOptionalCString(entryClass) { classCStr in
+                diagnostics_relay_client_ioregistry(client, nil, nameCStr, classCStr, &node)
+            }
         }
         if let rc { idevice_error_free(rc) }
         guard rc == nil, let node else { return nil }
@@ -173,6 +180,13 @@ enum StorageDetailService {
         defer { plist_mem_free(binPtr) }
         return (try? PropertyListSerialization.propertyList(
             from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil)) as? [String: Any]
+    }
+
+    /// 可选字符串 → 可选 C 指针（nil 时传 NULL）
+    private static func withUnsafeOptionalCString<R>(_ s: String?,
+                                                     _ body: (UnsafePointer<CChar>?) -> R) -> R {
+        guard let s else { return body(nil) }
+        return s.withCString { body($0) }
     }
 
     /// IORegistry 字典 → 模型

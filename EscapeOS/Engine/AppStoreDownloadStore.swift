@@ -88,6 +88,45 @@ final class AppStoreDownloadStore {
         return accounts.first { $0.email == email }
     }
 
+    // MARK: - v0.3.308：当前账号 / 账号管理
+
+    /// 当前用于下载的账号邮箱（持久化）。
+    /// 此前所有下载入口都硬取 `accounts.first`，多账号时无法切换、也没法退出登录。
+    var selectedEmail: String? {
+        get { UserDefaults.standard.string(forKey: "AppStore.SelectedEmail") }
+        set { UserDefaults.standard.set(newValue, forKey: "AppStore.SelectedEmail") }
+    }
+
+    /// 下载/安装实际使用的账号（选中账号失效时回退到第一个）
+    var selectedAccount: AppStoreAccount? {
+        if accounts.isEmpty { load() }
+        if let e = selectedEmail, let hit = accounts.first(where: { $0.email == e }) { return hit }
+        return accounts.first
+    }
+
+    func select(email: String) { selectedEmail = email }
+
+    /// 退出登录单个账号
+    func signOut(email: String) {
+        remove(email)
+        if selectedEmail == email { selectedEmail = accounts.first?.email }
+    }
+
+    /// 退出全部账号
+    func signOutAll() {
+        accounts = []
+        save()
+        selectedEmail = nil
+    }
+
+    /// 批量登录结果（供账号管理页展示）
+    struct BatchResult: Identifiable {
+        let id = UUID()
+        let email: String
+        let ok: Bool
+        let message: String
+    }
+
     private func save() {
         guard let data = try? JSONEncoder().encode(accounts) else { return }
         try? data.write(to: fileURL, options: .atomic)

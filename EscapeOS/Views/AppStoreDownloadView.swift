@@ -127,7 +127,7 @@ struct AppStoreDownloadView: View {
             }
         }
         .sheet(isPresented: $showLoginLog) {
-            LoginLogView(categories: [.appStore])
+            AppStoreLogView()
         }
         // v0.3.178：2FA 输入框改标准 .alert——旧写法 .background(EmptyView().alert)
         // 在 iOS 26 上不可靠（不呈现/被系统弹窗抢占），真机实锤 2FA 触发但输入框不出现.

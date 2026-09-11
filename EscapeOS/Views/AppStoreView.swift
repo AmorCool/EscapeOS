@@ -60,7 +60,7 @@ struct AppStoreView: View {
     @ViewBuilder
     private var accountSection: some View {
         Section {
-            if let email = signedEmail ?? AppStoreDownloadStore.shared.accounts.first?.email {
+            if let email = signedEmail ?? AppStoreDownloadStore.shared.selectedAccount?.email {
                 HStack(spacing: 10) {
                     Image(systemName: "person.crop.circle.fill")
                         .font(.title3)
@@ -95,9 +95,46 @@ struct AppStoreView: View {
                 .buttonStyle(.plain)
             }
         } footer: {
-            if signedEmail == nil, AppStoreDownloadStore.shared.accounts.isEmpty {
+            if signedEmail == nil, (AppStoreDownloadStore.shared.selectedAccount == nil) {
                 Text("没有账号时才会退回「分发源」或系统 App Store；登录后无需任何配置。")
                     .font(.caption2)
+            }
+        }
+    }
+
+    /// v0.3.308：账号管理 + **AppStore 独立日志**入口（此前商店里没有这两个入口）
+    @ViewBuilder
+    private var manageSection: some View {
+        Section {
+            NavigationLink {
+                AppStoreAccountsView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.2.badge.gearshape.fill")
+                        .font(.title3)
+                        .foregroundStyle(.blue)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("账号管理").font(.subheadline.weight(.medium))
+                        Text("多账号 / 批量登录 / 退出登录")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            NavigationLink {
+                AppStoreLogView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.title3)
+                        .foregroundStyle(.purple)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("AppStore 日志").font(.subheadline.weight(.medium))
+                        Text("只看 AppStore 板块（登录/下载/安装）")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
             }
         }
     }
@@ -106,6 +143,7 @@ struct AppStoreView: View {
         List {
             freeSection
             accountSection
+            manageSection
             if isSearchMode {
                 searchSection
             } else {
@@ -194,7 +232,7 @@ struct AppStoreView: View {
         }
         .task {
             if !AppStoreDisclaimer.accepted { showDisclaimer = true }
-            signedEmail = AppStoreDownloadStore.shared.accounts.first?.email
+            signedEmail = AppStoreDownloadStore.shared.selectedAccount?.email
             if items.isEmpty { await loadCharts() }
         }
     }
@@ -452,14 +490,14 @@ struct AppStoreView: View {
     /// 未登录则**就地弹出登录**（登录后自动继续安装），不再要求去配置分发源。
     private func install(_ app: AppStoreItem) {
         guard !installManager.isRunning(app.id) else { return }
-        let hasAccount = !AppStoreDownloadStore.shared.accounts.isEmpty
+        let hasAccount = !(AppStoreDownloadStore.shared.selectedAccount == nil)
             || signedEmail != nil
         if !hasAccount {
             pendingItem = app
             showAccountSheet = true
             return
         }
-        if AppStoreDownloadStore.shared.accounts.isEmpty,
+        if (AppStoreDownloadStore.shared.selectedAccount == nil),
            let email = signedEmail {
             // 极端情况：本地账号被清掉但界面仍显示已登录 —— 重新拉一次
             LoginLogger.shared.log("[AppStore] 账号状态不一致（\(email)），已重置界面状态", category: .appStore)

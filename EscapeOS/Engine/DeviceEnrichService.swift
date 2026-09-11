@@ -40,6 +40,7 @@ struct DeviceEnrichInfo {
     var batteryVoltageMV: Int?         // 当前电压 mV
     var batteryAmperageMA: Int?        // 电池电流 mA（负=放电）
     var batterySkinTempC: Int?         // 电池表皮温度 ℃（上次欠压启动记录）
+    var batteryCycleCount: Int?        // 循环次数（AppleSmartBattery.CycleCount；iOS 27 的 iTunes 域已无此键）
     var atCriticalLevel: Bool?         // 电池处于临界水平
     // 存储
     var diskCellType: String?          // 硬盘类型 SLC/MLC/TLC/QLC
@@ -156,6 +157,7 @@ enum DeviceEnrichService {
             info.rawBattery = battery
             info.batterySerial = text(battery["Serial"])
             info.batteryVoltageMV = int(battery["Voltage"])
+            info.batteryCycleCount = int(battery["CycleCount"])
             info.batteryAmperageMA = int(battery["InstantAmperage"]).map { $0 > 32768 ? $0 - 65536 : $0 }
             info.atCriticalLevel = bool(battery["AtCriticalLevel"])
             let dead = battery["DeadBatteryBootData"] as? [String: Any]
@@ -163,7 +165,7 @@ enum DeviceEnrichService {
             info.batterySkinTempC = int(payload?["AverageBattSkinTemp"])
         }
         if let storage = StorageDetailService.queryNode(client: client,
-                                                       entryName: "AppleEmbeddedNVMeController") {
+                                                       entryClass: "AppleEmbeddedNVMeController") {
             info.diskCellType = StorageDetailService.parse(storage).cellType
         }
         return info

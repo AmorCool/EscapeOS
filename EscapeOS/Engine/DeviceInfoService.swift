@@ -176,8 +176,15 @@ enum DeviceInfoService {
         let isJailbroken = (try? Self.isacJailbroken()) ?? nil
         let productionSOC = lockdown["ProductionSOC"] as? Bool
 
-        // MobileGestalt
+        // MobileGestalt（iOS ≥17.4 已被 Apple 废弃 → 基本恒为 nil，仅留作老系统回退）
         let (mgUniqueChip, mgMLB, mgBaseband) = (try? Self.mobilegestaltKeys()) ?? (nil, nil, nil)
+
+        // v0.3.308：这些值在 iOS 27 上**lockdown 根字典里就有**，此前误走已废弃的
+        // MobileGestalt / 已残缺的 iTunes 域，导致设备信息里出现一片「—」.
+        let mlbFromLockdown = lockdown["MLBSerialNumber"] as? String
+        let basebandSerialFromLockdown = stringOf(lockdown["BasebandSerialNumber"])
+        let basebandVersionFromLockdown = lockdown["BasebandVersion"] as? String
+        let basebandStatusFromLockdown = stringOf(lockdown["BasebandStatus"])
 
         // v0.3.305：设备树 + 电池节点补全（单条隧道内查多个节点；失败不影响其它字段）
         let enrich: DeviceEnrichInfo? = try? DeviceEnrichService.fetch()
@@ -266,8 +273,8 @@ enum DeviceInfoService {
             udid: lockdown["UniqueDeviceID"] as? String,
             meid: lockdown["MobileEquipmentIdentifier"] as? String,
             ecid: mgUniqueChip.map { String($0) },
-            mlbSerial: mgMLB,
-            basebandSerial: mgBaseband,
+            mlbSerial: mlbFromLockdown ?? mgMLB,
+            basebandSerial: basebandSerialFromLockdown ?? mgBaseband,
             totalDiskBytes: totalDisk,
             totalDataBytes: totalData,
             totalSystemBytes: totalSystem,
@@ -278,14 +285,14 @@ enum DeviceInfoService {
             designCapacity: designCap,
             maxCapacity: maxCap,
             batteryHealthPercent: healthPercent,
-            cycleCount: intOf(itunes["CycleCount"]),
+            cycleCount: intOf(itunes["CycleCount"]) ?? enrich?.batteryCycleCount,
             batteryLevel: intOf(batteryDomain["BatteryCurrentCapacity"]) ?? intOf(itunes["BatteryCurrentCapacity"]),
             batteryIsCharging: boolOf(batteryDomain["BatteryIsCharging"]),
             batteryIsFullyCharged: boolOf(batteryDomain["BatteryIsFullyCharged"]),
             batterySerial: (itunes["BatterySerialNumber"] as? String) ?? enrich?.batterySerial,
-            basebandVersion: itunes["BasebandVersion"] as? String,
+            basebandVersion: (itunes["BasebandVersion"] as? String) ?? basebandVersionFromLockdown,
             basebandChipId: stringOf(itunes["BasebandChipId"]),
-            basebandStatus: stringOf(itunes["BasebandStatus"]),
+            basebandStatus: stringOf(itunes["BasebandStatus"]) ?? basebandStatusFromLockdown,
             effectiveProductionStatusAp: itunes["EffectiveProductionStatusAp"] as? String,
             effectiveProductionStatusSep: itunes["EffectiveProductionStatusSEP"] as? String,
             certificateProductionStatus: stringOf(itunes["CertificateProductionStatus"]),
@@ -311,8 +318,7 @@ enum DeviceInfoService {
             salesType: DeviceCatalog.salesType(lockdown["ModelNumber"] as? String),
             regionName: DeviceCatalog.regionName(lockdown["RegionInfo"] as? String),
             timeZone: lockdown["TimeZone"] as? String,
-            localeRegion: lockdown["UserLocale"] as? String
-                ?? lockdown["Locale"] as? String,
+            localeRegion: Self.userLocaleIdentifier(),
             uses24HourClock: boolOf(lockdown["Uses24HourClock"]),
             protocolVersion: stringOf(lockdown["ProtocolVersion"]),
             partitionType: lockdown["PartitionType"] as? String,
@@ -345,6 +351,24 @@ enum DeviceInfoService {
             enrichAvailable: enrich.map { $0.coverglassSerial != nil || $0.batterySerial != nil } ?? false,
             raw: lockdown.merging(itunes) { a, _ in a }
         )
+    }
+
+    /// v0.3.308：**「地区」= 本机语言+区域设置**（如 `zh-Hans_JP`），与「销售地区」是两回事.
+    ///
+    /// 爱思的「地区」显示的也是这种 `语言_区域` 串（如 zh-Hans_JP），而「销售地区」是
+    /// `RegionInfo`（LL/A → 美国/销售渠道）。此前两者都取 RegionInfo，等于同一项显示两遍；
+    /// 且 lockdown 在 iOS 27 已不返回 `Locale`/`UserLocale`（实测为 nil），
+    /// 用设备侧的区域 API 拼出来才是设备当前真实设置.
+    static func userLocaleIdentifier() -> String? {
+        let locale = Locale.current
+        let lang = locale.language.languageCode?.identifier ?? ""
+        let script = locale.language.script?.identifier
+        let region = locale.region?.identifier
+        guard !lang.isEmpty else { return nil }
+        var out = lang
+        if let script, !script.isEmpty { out += "-\(script)" }
+        if let region, !region.isEmpty { out += "_\(region)" }
+        return out
     }
 
     static func parseRegion(_ s: String?) -> String? {

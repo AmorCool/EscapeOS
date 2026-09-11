@@ -123,6 +123,7 @@ struct DeviceInfoView: View {
             .init(id: 12, label: "销售型号", value: [info.modelNumber, info.region].compactMap { $0 }.joined(separator: " "), sensitive: false),
             .init(id: 13, label: "ECID", value: info.ecid, sensitive: true),
             .init(id: 14, label: "固件版本", value: versionText(info), sensitive: false),
+            // 销售地区 = RegionInfo（渠道/国家，如 LL/A → 美国）
             .init(id: 15, label: "销售地区", value: [info.region, info.regionName].compactMap { $0 }.joined(separator: " "), sensitive: false),
             .init(id: 16, label: "UDID", value: info.udid, sensitive: true),
             .init(id: 17, label: "硬件型号", value: info.uniqueModel, sensitive: false),
@@ -133,7 +134,8 @@ struct DeviceInfoView: View {
     private func systemSection(_ info: DeviceInfoModel) -> DeviceInfoSectionSpec {
         DeviceInfoSectionSpec(title: "系统与时区", icon: "gearshape.2.fill", rows: [
             .init(id: 1, label: "时区", value: info.timeZone, sensitive: false),
-            .init(id: 2, label: "地区", value: info.localeRegion ?? info.region, sensitive: false),
+            // 地区 = 本机语言+区域设置（如 zh-Hans_JP），与「销售地区」是两项独立检测
+            .init(id: 2, label: "地区", value: info.localeRegion, sensitive: false),
             .init(id: 3, label: "24 小时制", value: info.uses24HourClock.map { $0 ? "是" : "否" }, sensitive: false),
             .init(id: 4, label: "充电次数", value: info.cycleCount.map { "\($0) 次" }, sensitive: false),
             .init(id: 5, label: "剩余电量", value: info.batteryLevel.map { "\($0)%" }, sensitive: false),
@@ -166,7 +168,6 @@ struct DeviceInfoView: View {
             .init(id: 20, label: "Wi-Fi 序列号", value: info.wirelessBoardSerial, sensitive: false),
             .init(id: 21, label: "ICCID", value: info.iccid, sensitive: true),
             .init(id: 22, label: "IMSI 2", value: info.imsi2, sensitive: true),
-            .init(id: 23, label: "MEID", value: info.meid, sensitive: true),
         ])
     }
 
@@ -205,15 +206,10 @@ struct DeviceInfoView: View {
 
     private func partsSection(_ info: DeviceInfoModel) -> DeviceInfoSectionSpec {
         DeviceInfoSectionSpec(title: "零部件序列号", icon: "wrench.and.screwdriver", rows: [
-            // 前 3 项爱思有、设备侧无读取通道（见交付说明），按爱思「未知」口径留位
-            .init(id: 1, label: "距离传感器", value: nil, sensitive: false),
-            .init(id: 2, label: "环境光", value: info.ambientLightSerial, sensitive: true),
-            .init(id: 3, label: "点阵", value: nil, sensitive: false),
-            .init(id: 4, label: "红外摄像头", value: nil, sensitive: false),
-            .init(id: 5, label: "电池序列号", value: info.batterySerial, sensitive: true),
-            .init(id: 6, label: "震动器编码", value: nil, sensitive: false),
-            .init(id: 7, label: "盖板码", value: info.coverglassSerial, sensitive: true),
-            .init(id: 8, label: "屏幕序列号", value: info.panelSerial, sensitive: true),
+            .init(id: 1, label: "环境光", value: info.ambientLightSerial, sensitive: true),
+            .init(id: 2, label: "电池序列号", value: info.batterySerial, sensitive: true),
+            .init(id: 3, label: "盖板码", value: info.coverglassSerial, sensitive: true),
+            .init(id: 4, label: "屏幕序列号", value: info.panelSerial, sensitive: true),
         ])
     }
 

@@ -13,7 +13,7 @@ struct AppStoreDetailView: View {
 
     /// 是否已有 App Store 账号（有则「获取」直接下载安装，无需任何配置）
     private var hasAccount: Bool {
-        signedEmail != nil || !AppStoreDownloadStore.shared.accounts.isEmpty
+        signedEmail != nil || !(AppStoreDownloadStore.shared.selectedAccount == nil)
     }
 
     var body: some View {
@@ -38,7 +38,7 @@ struct AppStoreDetailView: View {
             }
         }
         .task { await loadDetail() }
-        .onAppear { signedEmail = AppStoreDownloadStore.shared.accounts.first?.email }
+        .onAppear { signedEmail = AppStoreDownloadStore.shared.selectedAccount?.email }
         .sheet(isPresented: $showAccountSheet) {
             AddAccountSheet { account in
                 AppStoreDownloadStore.shared.add(account)

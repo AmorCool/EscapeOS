@@ -110,7 +110,7 @@ final class AppStoreInstallManager: ObservableObject {
                 // v0.3.301：优先走**本机 Apple ID + App Store 官方源** —— sinf 按本机身份
                 // 生成，installd 能解 FairPlay 密文段（不需要解密、不需要重签）。
                 // 只有没有账号时才回退到自备分发源。
-                if let email = AppStoreDownloadStore.shared.accounts.first?.email {
+                if let email = AppStoreDownloadStore.shared.selectedAccount?.email {
                     await MainActor.run {
                         self.setPhase(appId, .downloading)
                         self.append("使用本机 Apple ID「\(email)」从 App Store 下载", to: appId)
