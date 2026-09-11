@@ -5,6 +5,8 @@ struct AppStoreDetailView: View {
     @State var item: AppStoreItem
     @State private var expanded = false
     @State private var loadingDetail = false
+    @State private var installingSource = false
+    @State private var toastText: String?
 
     var body: some View {
         List {
@@ -18,6 +20,15 @@ struct AppStoreDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(item.name)
         .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) {
+            if let toastText {
+                Text(toastText)
+                    .font(.footnote)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.bottom, 20)
+            }
+        }
         .task { await loadDetail() }
     }
 
@@ -175,6 +186,15 @@ struct AppStoreDetailView: View {
     private var actionSection: some View {
         Section {
             Button {
+                installFromSource()
+            } label: {
+                HStack {
+                    if installingSource { ProgressView().controlSize(.small) }
+                    Label(installingSource ? "正在通过分发源安装…" : "通过分发源安装", systemImage: "arrow.down.app.fill")
+                }
+            }
+            .disabled(installingSource)
+            Button {
                 _ = AppStoreInstaller.openInAppStore(item)
             } label: {
                 Label("在 App Store 中打开", systemImage: "arrow.up.forward.app")
@@ -196,6 +216,28 @@ struct AppStoreDetailView: View {
     }
 
     // MARK: 加载
+
+    /// 通过已配置的分发源安装（走 itms-services OTA，与爱思手机端同一条系统调用）
+    private func installFromSource() {
+        guard !installingSource else { return }
+        installingSource = true
+        Task {
+            do {
+                let r = try await AppStoreInstallService.installUsingAnySource(item: item) { line in
+                    LoginLogger.shared.log("[AppStore] \(line)")
+                }
+                await MainActor.run {
+                    installingSource = false
+                    toastText = "已交给系统安装（\(r.source.name)）"
+                }
+            } catch {
+                await MainActor.run {
+                    installingSource = false
+                    toastText = "安装失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
 
     private func loadDetail() async {
         loadingDetail = true

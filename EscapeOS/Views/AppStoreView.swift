@@ -5,6 +5,7 @@ import SwiftUI
 /// 数据源：Apple 公开接口（iTunes Search / Lookup / 官方榜单 RSS）。
 /// 安装：①系统 App Store（默认）②itms-services OTA（爱思同款机制，需自备 manifest 源）。
 struct AppStoreView: View {
+    @Environment(\.dismiss) private var dismiss
     @State private var kind: AppStoreRankKind = .free
     @State private var genre: AppStoreGenre = .all
     @State private var items: [AppStoreItem] = []
@@ -14,6 +15,9 @@ struct AppStoreView: View {
     @State private var searchResults: [AppStoreItem] = []
     @State private var searching = false
     @State private var showOTASheet = false
+    @State private var showSources = false
+    @State private var showDisclaimer = false
+    @State private var installing: Set<String> = []
     @State private var otaURL = ""
     @State private var toast: String?
 
@@ -50,12 +54,32 @@ struct AppStoreView: View {
                     } label: {
                         Label("OTA 安装（自定义分发源）", systemImage: "arrow.down.app")
                     }
+                    Button {
+                        showSources = true
+                    } label: {
+                        Label("分发源管理", systemImage: "server.rack")
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
         }
         .sheet(isPresented: $showOTASheet) { otaSheet }
+        .sheet(isPresented: $showSources) { NavigationStack { AppStoreSourceView() } }
+        .overlay {
+            if showDisclaimer {
+                AppStoreDisclaimerView(
+                    onAccept: {
+                        AppStoreDisclaimer.accept()
+                        showDisclaimer = false
+                    },
+                    onDecline: {
+                        showDisclaimer = false
+                        dismiss()
+                    }
+                )
+            }
+        }
         .overlay(alignment: .bottom) {
             if let toast {
                 Text(toast)
@@ -66,7 +90,10 @@ struct AppStoreView: View {
                     .transition(.opacity)
             }
         }
-        .task { if items.isEmpty { await loadCharts() } }
+        .task {
+            if !AppStoreDisclaimer.accepted { showDisclaimer = true }
+            if items.isEmpty { await loadCharts() }
+        }
     }
 
     // MARK: 榜单
@@ -208,18 +235,20 @@ struct AppStoreView: View {
             }
             Spacer(minLength: 6)
             Button {
-                if !AppStoreInstaller.openInAppStore(app) {
-                    toast = "无法打开 App Store"
-                    clearToastLater()
-                }
+                install(app)
             } label: {
-                Text(app.priceText == "免费" ? "获取" : app.priceText)
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Color.blue.opacity(0.14), in: Capsule())
-                    .foregroundStyle(.blue)
+                if installing.contains(app.id) {
+                    ProgressView().controlSize(.mini).frame(width: 36)
+                } else {
+                    Text(app.priceText == "免费" ? "获取" : app.priceText)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.blue.opacity(0.14), in: Capsule())
+                        .foregroundStyle(.blue)
+                }
             }
             .buttonStyle(.plain)
+            .disabled(installing.contains(app.id))
         }
         .padding(.vertical, 2)
     }
@@ -313,6 +342,38 @@ struct AppStoreView: View {
                 errorText = error.localizedDescription
             }
             searching = false
+        }
+    }
+
+    /// 安装：优先走已配置的分发源（itms-services OTA，与爱思手机端同一条系统调用）；
+    /// 没有可用源时退回系统 App Store。
+    private func install(_ app: AppStoreItem) {
+        if AppStoreSourceStore.shared.enabledSources.isEmpty {
+            _ = AppStoreInstaller.openInAppStore(app)
+            toast = "未配置分发源，已打开系统 App Store"
+            clearToastLater()
+            return
+        }
+        guard !installing.contains(app.id) else { return }
+        installing.insert(app.id)
+        toast = "正在解析分发源…"
+        Task {
+            do {
+                let r = try await AppStoreInstallService.installUsingAnySource(item: app) { line in
+                    LoginLogger.shared.log("[AppStore] \(line)")
+                }
+                await MainActor.run {
+                    installing.remove(app.id)
+                    toast = "已交给系统安装（\(r.source.name)）"
+                    clearToastLater()
+                }
+            } catch {
+                await MainActor.run {
+                    installing.remove(app.id)
+                    toast = "安装失败：\(error.localizedDescription)"
+                    clearToastLater()
+                }
+            }
         }
     }
 
