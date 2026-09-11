@@ -17,6 +17,7 @@ struct AppStoreView: View {
     @State private var showOTASheet = false
     @State private var showSources = false
     @State private var showDisclaimer = false
+    @State private var showI4 = false
     @State private var installing: Set<String> = []
     @State private var otaURL = ""
     @State private var toast: String?
@@ -59,6 +60,11 @@ struct AppStoreView: View {
                     } label: {
                         Label("分发源管理", systemImage: "server.rack")
                     }
+                    Button {
+                        showI4 = true
+                    } label: {
+                        Label("爱思商店（专题 / 榜单）", systemImage: "cart.fill")
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -66,6 +72,7 @@ struct AppStoreView: View {
         }
         .sheet(isPresented: $showOTASheet) { otaSheet }
         .sheet(isPresented: $showSources) { NavigationStack { AppStoreSourceView() } }
+        .sheet(isPresented: $showI4) { NavigationStack { AppStoreI4View() } }
         .overlay {
             if showDisclaimer {
                 AppStoreDisclaimerView(
