@@ -27,6 +27,31 @@ struct AppStoreView: View {
 
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    /// v0.3.303：免登录下载入口 —— 放在商店最显眼位置。
+    ///
+    /// 数据与安装包来自爱思 PC 端在用的公开接口（`app4.i4.cn` / `d-app6.i4.cn`），
+    /// 服务端即为已签名 IPA，因此**不需要 Apple ID、也不需要配置任何分发源**。
+    @ViewBuilder
+    private var freeSection: some View {
+        Section {
+            NavigationLink {
+                I4StoreFreeView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("免登录下载").font(.subheadline.weight(.medium))
+                        Text("不用 Apple ID、不用配置，点一下就装")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
     /// v0.3.302：账号区 —— 商店内直接登录 Apple ID。
     ///
     /// 此前登录入口只存在于旧的「App Store 下载」页，本页没有 → 用户点「获取」被
@@ -79,6 +104,7 @@ struct AppStoreView: View {
 
     var body: some View {
         List {
+            freeSection
             accountSection
             if isSearchMode {
                 searchSection
