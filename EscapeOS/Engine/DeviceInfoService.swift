@@ -28,6 +28,9 @@ struct DeviceInfoModel {
     // 序列号/隐私敏感（v0.3.208：统一小眼睛+长按复制）
     var serialNumber: String?        // lockdown SerialNumber
     var imei: String?                // lockdown InternationalMobileEquipmentIdentity
+    var imei2: String?               // lockdown InternationalMobileEquipmentIdentity2
+    var imsi: String?                // lockdown InternationalMobileSubscriberIdentity
+    var imsi2: String?               // lockdown InternationalMobileSubscriberIdentity2
     var udid: String?                // lockdown UniqueDeviceID
     var meid: String?                // lockdown MobileEquipmentIdentifier
     var ecid: String?                // DiagnosticsRelay mobilegestalt UniqueChipID
@@ -79,6 +82,25 @@ struct DeviceInfoModel {
     // <序列号>_info.txt 即lockdown GetValue 全量字典；此前只挑了部分键，
     // 故检测项远少于爱思）
     var allValues: [(String, String)] = []
+    // v0.3.294：对齐爱思「设备详情」的派生子项（机型规格来自 DeviceCatalog）
+    var releaseDate: String?          // 上市日期
+    var cpuName: String?              // CPU 类型（Apple A16）
+    var cpuFrequency: String?         // CPU 频率
+    var screenInches: String?         // 屏幕尺寸（英寸）
+    var regulatoryModel: String?      // 监管型号（A2846）
+    var salesType: String?            // 销售类型（零售机/官换机…）
+    var regionName: String?           // 销售地区名（美国）
+    var timeZone: String?             // 时区
+    var localeRegion: String?         // 地区（zh-Hans_JP）
+    var uses24HourClock: Bool?        // 24 小时制
+    var protocolVersion: String?      // 协议版本
+    var partitionType: String?        // 分区类型
+    var hardwareVersion: String?      // 硬件版本（t8120 → 8120）
+    var simStatus: String?            // SIM 卡状态
+    var simTrayStatus: String?        // SIM 卡托状态
+    var carrier1: String?             // eSIM 卡1 运营商
+    var carrier2: String?             // eSIM 卡2 运营商
+    var wirelessBoardSerial: String?  // Wi-Fi 序列号
     var raw: [String: Any] = [:]
 }
 
@@ -181,6 +203,18 @@ enum DeviceInfoService {
             totalSystem = (du["TotalSystemCapacity"] as? Int).map(Int64.init)
         }
 
+        // v0.3.294：爱思「设备详情」派生子项（机型规格查 DeviceCatalog 公开规格表）
+        let spec = DeviceCatalog.spec(machine)
+        func carrierOf(_ imsi: String?) -> String? {
+            guard let imsi, imsi.count >= 5 else { return nil }
+            return DeviceCatalog.carrierName(mcc: String(imsi.prefix(3)),
+                                             mnc: String(imsi.dropFirst(3).prefix(2)))
+        }
+        let hardwareVersion: String? = {
+            guard let platform = lockdown["HardwarePlatform"] as? String else { return nil }
+            return platform.hasPrefix("t") ? String(platform.dropFirst()) : platform
+        }()
+
         return DeviceInfoModel(
             modelName: Self.friendlyModel(machine),
             productType: machine,
@@ -203,6 +237,9 @@ enum DeviceInfoService {
             bluetoothAddress: lockdown["BluetoothAddress"] as? String,
             serialNumber: lockdown["SerialNumber"] as? String,
             imei: lockdown["InternationalMobileEquipmentIdentity"] as? String,
+            imei2: lockdown["InternationalMobileEquipmentIdentity2"] as? String,
+            imsi: lockdown["InternationalMobileSubscriberIdentity"] as? String,
+            imsi2: lockdown["InternationalMobileSubscriberIdentity2"] as? String,
             udid: lockdown["UniqueDeviceID"] as? String,
             meid: lockdown["MobileEquipmentIdentifier"] as? String,
             ecid: mgUniqueChip.map { String($0) },
@@ -242,6 +279,25 @@ enum DeviceInfoService {
             hasBattery: boolOf(itunes["HasBattery"]),
             supportedFeatures: features,
             allValues: Self.flatten(lockdown),
+            releaseDate: spec?.releaseDate,
+            cpuName: spec?.cpu,
+            cpuFrequency: spec?.cpuFrequency,
+            screenInches: spec?.screenInches,
+            regulatoryModel: DeviceCatalog.regulatoryModel[machine],
+            salesType: DeviceCatalog.salesType(lockdown["ModelNumber"] as? String),
+            regionName: DeviceCatalog.regionName(lockdown["RegionInfo"] as? String),
+            timeZone: lockdown["TimeZone"] as? String,
+            localeRegion: lockdown["UserLocale"] as? String
+                ?? lockdown["Locale"] as? String,
+            uses24HourClock: boolOf(lockdown["Uses24HourClock"]),
+            protocolVersion: stringOf(lockdown["ProtocolVersion"]),
+            partitionType: lockdown["PartitionType"] as? String,
+            hardwareVersion: hardwareVersion,
+            simStatus: lockdown["SIMStatus"] as? String,
+            simTrayStatus: lockdown["SIMTrayStatus"] as? String,
+            carrier1: carrierOf(lockdown["InternationalMobileSubscriberIdentity"] as? String),
+            carrier2: carrierOf(lockdown["InternationalMobileSubscriberIdentity2"] as? String),
+            wirelessBoardSerial: lockdown["WirelessBoardSerialNumber"] as? String,
             raw: lockdown.merging(itunes) { a, _ in a }
         )
     }
@@ -436,33 +492,10 @@ enum DeviceInfoService {
         return String(cString: buf)
     }
 
-    /// hw.machine → 中文机型名
+    /// hw.machine → 中文机型名（v0.3.294：改走 DeviceCatalog 规格表，
+    /// 修正此前表里缺 `iPhone15,4`（真机机型，会被退化成「iPhone 15,4」）
+    /// 以及误填 `iPhone16,3/16,4`（Apple 无此标识）的问题）
     static func friendlyModel(_ machine: String) -> String {
-        let table: [String: String] = [
-            "iPhone14,7": "iPhone 14", "iPhone14,8": "iPhone 14 Plus",
-            "iPhone15,2": "iPhone 14 Pro", "iPhone15,3": "iPhone 14 Pro Max",
-            "iPhone14,5": "iPhone 13", "iPhone14,4": "iPhone 13 mini",
-            "iPhone14,2": "iPhone 13 Pro", "iPhone14,3": "iPhone 13 Pro Max",
-            "iPhone13,1": "iPhone 12 mini", "iPhone13,2": "iPhone 12",
-            "iPhone13,3": "iPhone 12 Pro", "iPhone13,4": "iPhone 12 Pro Max",
-            "iPhone12,1": "iPhone 11", "iPhone12,3": "iPhone 11 Pro",
-            "iPhone12,5": "iPhone 11 Pro Max", "iPhone12,8": "iPhone SE (2nd)",
-            "iPhone11,8": "iPhone XR", "iPhone11,2": "iPhone XS",
-            "iPhone11,6": "iPhone XS Max", "iPhone10,3": "iPhone X",
-            "iPhone10,6": "iPhone X", "iPhone10,1": "iPhone 8",
-            "iPhone10,4": "iPhone 8", "iPhone10,2": "iPhone 8 Plus",
-            "iPhone10,5": "iPhone 8 Plus", "iPhone9,1": "iPhone 7",
-            "iPhone9,3": "iPhone 7", "iPhone9,2": "iPhone 7 Plus",
-            "iPhone9,4": "iPhone 7 Plus", "iPhone8,1": "iPhone 6s",
-            "iPhone8,2": "iPhone 6s Plus", "iPhone8,4": "iPhone SE (1st)",
-            "iPhone16,1": "iPhone 15 Pro", "iPhone16,2": "iPhone 15 Pro Max",
-            "iPhone16,3": "iPhone 15", "iPhone16,4": "iPhone 15 Plus",
-            "iPhone17,1": "iPhone 16 Pro", "iPhone17,2": "iPhone 16 Pro Max",
-            "iPhone17,3": "iPhone 16", "iPhone17,4": "iPhone 16 Plus",
-            "iPhone17,5": "iPhone 16e",
-        ]
-        if let name = table[machine] { return name }
-        if machine.hasPrefix("iPhone") { return machine.replacingOccurrences(of: "iPhone", with: "iPhone ") }
-        return machine
+        DeviceCatalog.name(machine)
     }
 }

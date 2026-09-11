@@ -111,7 +111,7 @@ struct StorageDetailView: View {
         }
     }
 
-    private func errorCard: some View {
+    private func errorCard() -> some View {
         VStack(spacing: 12) {
             HStack(spacing: 12) {
                 AppRowIcon(systemName: "internaldrive", tint: .secondary, symbolSize: 20, frameSize: 40)

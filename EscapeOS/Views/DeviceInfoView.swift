@@ -16,17 +16,19 @@ struct DeviceInfoView: View {
                 if loading {
                     ProgressView("正在读取设备信息…").frame(maxWidth: .infinity).padding(.vertical, 60)
                 } else if let info {
+                    // v0.3.294：分组与顺序对齐爱思「设备详情」
+                    // （设备 → 系统与时区 → 卡槽与网络 → CPU 与硬件 → 电池 → 生产验机 → 传感器备件 → 存储）
                     deviceHero(info)
-                    batterySection(info)
                     basicSection(info)
-                    identifiersSection(info)
+                    systemSection(info)
+                    networkSection(info)
+                    hardwareSection(info)
+                    batterySection(info)
                     productionSection(info)
                     partsSection(info)
-                    networkSection(info)
                     storageSection(info)
                     featuresSection(info)
                     allValuesSection(info)
-                    if info.raw.count > 0 { rawCard(info) }
                 } else {
                     errorCard
                 }
@@ -78,49 +80,100 @@ struct DeviceInfoView: View {
             .fill(Color(.secondarySystemGroupedBackground)))
     }
 
+    /// v0.3.294：设备（对齐爱思「设备详情」第一组）
     private func basicSection(_ info: DeviceInfoModel) -> some View {
         sectionCard(title: "设备", icon: "iphone.gen3") {
             row("设备名称", info.deviceName)
-            row("型号标识", info.productType)
-            row("机型", info.modelName)
-            row("型号编号", info.modelNumber)
-            row("设备类别", info.deviceClass)
+            row("设备型号", info.modelName)
+            row("产品类型", productTypeText(info))
+            row("上市日期", info.releaseDate)
+            row("销售型号", [info.modelNumber, info.region].compactMap { $0 }.joined(separator: " "))
+            row("销售地区", [info.region, info.regionName].compactMap { $0 }.joined(separator: " "))
+            row("销售类型", info.salesType)
+            sensitiveRow("序列号", info.serialNumber)
+            sensitiveRow("主板序列号", info.mlbSerial)
+            sensitiveRow("ECID", info.ecid)
+            sensitiveRow("UDID", info.udid)
+            row("激活状态", activationText(info.activationState))
+            row("越狱状态", info.jailbroken.map { $0 ? "已越狱" : "未越狱" })
+        }
+    }
+
+    /// 产品类型：ProductType + 监管型号（如 iPhone15,4 (A2846)）
+    private func productTypeText(_ info: DeviceInfoModel) -> String? {
+        let pt = info.productType
+        guard !pt.isEmpty else { return nil }
+        if let reg = info.regulatoryModel, !reg.isEmpty { return "\(pt) (\(reg))" }
+        return pt
+    }
+
+    private func activationText(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        switch raw {
+        case "Activated": return "已激活"
+        case "Unactivated", "FactoryActivated": return "未激活"
+        default: return raw
+        }
+    }
+
+    /// v0.3.294：系统与时区（对齐爱思第二组，含 24 小时制/协议版本/分区/硬件版本）
+    @ViewBuilder
+    private func systemSection(_ info: DeviceInfoModel) -> some View {
+        sectionCard(title: "系统与时区", icon: "gearshape.2.fill") {
+            row("系统版本", info.buildVersion.map { "\(info.systemVersion) (\($0))" } ?? info.systemVersion)
+            row("固件版本", info.firmwareVersion)
+            row("时区", info.timeZone)
+            row("地区", info.localeRegion ?? info.region)
+            row("24 小时制", info.uses24HourClock.map { $0 ? "是" : "否" })
+            row("协议版本", info.protocolVersion)
+            row("分区类型", info.partitionType)
+            row("硬件版本", info.hardwareVersion)
+        }
+    }
+
+    /// v0.3.294：CPU 与硬件（对齐爱思第四组）
+    @ViewBuilder
+    private func hardwareSection(_ info: DeviceInfoModel) -> some View {
+        sectionCard(title: "CPU 与硬件", icon: "cpu") {
+            row("CPU 类型", info.cpuName)
+            row("CPU 核心", "\(info.cpuCount) 核")
+            row("CPU 频率", info.cpuFrequency)
+            row("物理内存", "\(info.memoryMB) MB")
+            row("屏幕大小", info.screenInches.map { "\($0) 英寸" })
+            row("屏幕分辨率", screenResolution)
+            row("CPU 架构", info.cpuArchitecture)
             row("硬件型号", info.hardwareModel)
             row("硬件平台", info.hardwarePlatform)
-            row("CPU 架构", info.cpuArchitecture)
-            row("生产设备", info.productionDevice)
-            row("越狱", info.jailbroken.map { $0 ? "是" : "否" })
         }
     }
 
+    /// 屏幕分辨率（取设备实时值；UIScreen 需主线程）
+    private var screenResolution: String? {
+        let b = UIScreen.main.nativeBounds
+        guard b.width > 0, b.height > 0 else { return nil }
+        return "\(Int(max(b.width, b.height))) x \(Int(min(b.width, b.height)))"
+    }
+
+    /// v0.3.294：卡槽与网络（对齐爱思第三组）
     @ViewBuilder
-    private func identifiersSection(_ info: DeviceInfoModel) -> some View {
-        sectionCard(title: "系统与固件", icon: "gearshape.2.fill") {
-            row("iOS 版本", "iOS \(info.systemVersion)")
-            row("Build 版本", info.buildVersion)
-            row("固件版本", info.firmwareVersion)
-        }
-        sectionCard(title: "激活与地区", icon: "checkmark.shield.fill") {
-            row("激活状态", info.activationState)
-            row("地区", info.region)
-            row("设备颜色", info.deviceColor)
-        }
-        sectionCard(title: "身份标识（敏感）", icon: "key.fill") {
-            sensitiveRow("序列号", info.serialNumber)
-            sensitiveRow("UDID", info.udid)
-            sensitiveRow("IMEI", info.imei)
-            sensitiveRow("MEID", info.meid)
-            sensitiveRow("ECID", info.ecid)
-            sensitiveRow("MLB 序列号", info.mlbSerial)
-            sensitiveRow("基带序列号", info.basebandSerial)
-        }
-    }
-
     private func networkSection(_ info: DeviceInfoModel) -> some View {
-        sectionCard(title: "网络接口", icon: "wifi") {
-            row("Wi-Fi MAC", info.wiFiAddress)
-            row("以太网 MAC", info.ethernetAddress)
-            row("蓝牙 MAC", info.bluetoothAddress)
+        sectionCard(title: "卡槽与网络", icon: "antenna.radiowaves.left.and.right") {
+            sensitiveRow("IMEI 1", info.imei)
+            sensitiveRow("IMEI 2", info.imei2)
+            row("eSIM 卡1 信息", info.carrier1)
+            row("eSIM 卡2 信息", info.carrier2)
+            sensitiveRow("IMSI", info.imsi)
+            sensitiveRow("IMSI 2", info.imsi2)
+            row("SIM 卡状态", info.simStatus)
+            row("SIM 卡托状态", info.simTrayStatus)
+            row("基带版本", info.basebandVersion)
+            row("基带状态", info.basebandStatus)
+            sensitiveRow("基带序列号", info.basebandSerial)
+            sensitiveRow("MEID", info.meid)
+            row("Wi-Fi 地址", info.wiFiAddress)
+            row("蓝牙地址", info.bluetoothAddress)
+            row("蜂窝地址", info.ethernetAddress)
+            row("Wi-Fi 序列号", info.wirelessBoardSerial)
         }
     }
 
@@ -136,8 +189,6 @@ struct DeviceInfoView: View {
                 row("系统占用", formatBytes(sys))
             }
             row("本机可用 / 总", "\(info.storageFreeGB) GB / \(info.storageTotalGB) GB")
-            row("CPU 核心", "\(info.cpuCount) 核")
-            row("物理内存", "\(info.memoryMB) MB")
             // v0.3.293：硬盘详情（移植爱思同款面板——IORegistry AppleEmbeddedNVMeController）
             Divider().padding(.vertical, 6)
             NavigationLink {
@@ -250,27 +301,40 @@ struct DeviceInfoView: View {
         }
     }
 
-    /// v0.3.291：lockdown 全量键值（与爱思设备信息页同源——爱思缓存的
-    /// <序列号>_info.txt 即这份 GetValue 全量字典；此前只挑选了部分键展示，
-    /// 因此检测项明显少于爱思）
+    /// v0.3.294：设备原始数据——**默认折叠**（此前是平铺在页面最底部的原始键值列表，
+    /// 观感像「一堆原始数据」；爱思也是收在「设备原始数据」按钮后面）。
     @ViewBuilder
     private func allValuesSection(_ info: DeviceInfoModel) -> some View {
         if !info.allValues.isEmpty {
-            sectionCard(title: "完整信息（\(info.allValues.count) 项）", icon: "list.bullet.rectangle") {
-                ForEach(Array(info.allValues.enumerated()), id: \.offset) { _, pair in
-                    HStack(alignment: .top, spacing: 12) {
-                        Text(pair.0)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        Text(pair.1)
-                            .font(.caption.monospaced())
-                            .multilineTextAlignment(.trailing)
-                            .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 0) {
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(info.allValues.enumerated()), id: \.offset) { _, pair in
+                            HStack(alignment: .top, spacing: 12) {
+                                Text(pair.0)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 8)
+                                Text(pair.1)
+                                    .font(.caption.monospaced())
+                                    .multilineTextAlignment(.trailing)
+                                    .textSelection(.enabled)
+                            }
+                            .padding(.vertical, 3)
+                        }
                     }
-                    .padding(.vertical, 3)
+                    .padding(.top, 8)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "list.bullet.rectangle").foregroundStyle(.blue)
+                        Text("设备原始数据（\(info.allValues.count) 项）").font(.headline)
+                    }
                 }
+                .tint(.primary)
             }
+            .padding(16)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground)))
         }
     }
 
