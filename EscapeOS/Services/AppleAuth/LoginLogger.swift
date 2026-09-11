@@ -15,9 +15,8 @@ final class LoginLogger {
     enum Category: String, CaseIterable {
         case general = "通用"
         /// **AppStore 商店**（主页商店：登录 / 获取 / 下载 / 安装 / 账号管理）
-        case appStoreStore = "商店"
-        /// **更多 → AppStore 下载** 板块（它自己的登录与文件操作）
-        case appStoreDownload = "下载板"
+        /// —— v0.3.311：原「更多 → AppStore 下载」板块已整体移除，AppStore 只剩这一个板块
+        case appStore = "AppStore"
         case i4Store = "爱思源"
         case sideload = "侧载签名"
         case certificate = "证书管理"

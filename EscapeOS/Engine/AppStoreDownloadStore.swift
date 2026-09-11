@@ -51,7 +51,7 @@ final class AppStoreDownloadStore {
         let key = "ApplePackageDeviceIdentifier"
         UserDefaults.standard.removeObject(forKey: key)
         Self.bootstrapDeviceIdentifier()
-        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)", category: .appStoreStore)
+        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)", category: .appStore)
     }
 
     private var fileURL: URL {

@@ -25,6 +25,7 @@ struct AppStoreAccountsView: View {
         List {
             currentSection
             accountsSection
+            deviceSection
             batchSection
             if !results.isEmpty { resultsSection }
         }
@@ -149,6 +150,37 @@ struct AppStoreAccountsView: View {
         }
     }
 
+    // MARK: - 设备与认证（Apple 认证边缘软拒绝时的自救入口）
+
+    @ViewBuilder
+    private var deviceSection: some View {
+        Section {
+            HStack {
+                Text("设备标识（guid）").font(.subheadline)
+                Spacer()
+                Text(String(Configuration.deviceIdentifier.prefix(14)) + "…")
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Button {
+                store.resetDeviceIdentifier()
+                reload()
+                toast = "已重置设备标识，请重新登录"
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text("重置设备标识")
+                }
+                .font(.subheadline.weight(.medium))
+            }
+        } header: {
+            Text("设备与认证")
+        } footer: {
+            Text("登录被 Apple 边缘拒绝（HTTP 404/503/204 之类的软拒绝）时，可重置设备标识后再试。")
+                .font(.caption2)
+        }
+    }
+
     // MARK: - 批量登录
 
     @ViewBuilder
@@ -227,7 +259,7 @@ struct AppStoreAccountsView: View {
         }
         busy = true
         results = []
-        LoginLogger.shared.log("[AppStore] 开始批量登录 \(list.count) 个账号", category: .appStoreStore)
+        LoginLogger.shared.log("[AppStore] 开始批量登录 \(list.count) 个账号", category: .appStore)
 
         Task.detached(priority: .userInitiated) {
             let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
@@ -245,13 +277,13 @@ struct AppStoreAccountsView: View {
                         cacheDir: cacheDir
                     )
                     await MainActor.run { AppStoreDownloadStore.shared.add(account) }
-                    LoginLogger.shared.log("[AppStore] 批量登录成功 \(item.0)", category: .appStoreStore)
+                    LoginLogger.shared.log("[AppStore] 批量登录成功 \(item.0)", category: .appStore)
                     done.append(.init(email: item.0, ok: true,
                                       message: "登录成功（store \(account.store)）"))
                 } catch {
                     let desc = error.localizedDescription
                     let need2FA = desc.contains("verification code")
-                    LoginLogger.shared.log("[AppStore] 批量登录失败 \(item.0)：\(desc)", category: .appStoreStore)
+                    LoginLogger.shared.log("[AppStore] 批量登录失败 \(item.0)：\(desc)", category: .appStore)
                     done.append(.init(email: item.0, ok: false,
                                       message: need2FA ? "需要双重认证验证码 → 请到「AppStore 下载」单独登录"
                                                        : desc))

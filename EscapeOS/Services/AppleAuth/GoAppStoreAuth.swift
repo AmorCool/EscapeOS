@@ -72,7 +72,7 @@ enum GoAppStoreAuth {
         code: String,
         deviceIdentifier: String,
         cacheDir: String,
-        logCategory: LoginLogger.Category = .appStoreStore
+        logCategory: LoginLogger.Category = .appStore
     ) throws -> AppStoreAccount {
         do {
             return try loginOnce(email: email, password: password, code: code,
@@ -116,7 +116,7 @@ enum GoAppStoreAuth {
         code: String,
         deviceIdentifier: String,
         cacheDir: String,
-        logCategory: LoginLogger.Category = .appStoreStore
+        logCategory: LoginLogger.Category = .appStore
     ) throws -> AppStoreAccount {
         LoginLogger.shared.log("[GoAuth] 开始登录（Go 栈，上游 ipatool 形态）: \(email)（含验证码：\(code.isEmpty ? "否" : "是")）", category: logCategory)
 

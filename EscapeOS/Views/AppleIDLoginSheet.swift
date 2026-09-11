@@ -109,7 +109,7 @@ struct AppleIDLoginSheet: View {
                 }
             }
             .sheet(isPresented: $showLog) {
-                LoginLogView(categories: [.appStoreStore])
+                LoginLogView(categories: [.appStore])
             }
             .documentPicker(isPresented: $showImporter, allowedTypes: [.json]) { urls in
                 handleImport(urls)

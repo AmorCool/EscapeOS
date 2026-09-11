@@ -66,9 +66,21 @@ type AddHeaderTransport struct {
 	T gohttp.RoundTripper
 }
 
+// ClientInfoHeader 是送给 Apple 认证边缘的客户端标识。
+//
+// 依据：AltStore classic 2026-09-10 提交 c558994「fix(anisette): restore Apple ID
+// sign-in rejected by Apple's servers」与 09-08 的 961ea1a「Fixes HTTP 503 error when
+// signing-in with Apple ID」——Apple 认证边缘现在会拒绝带有旧标识（Xcode 形态）的登录，
+// 真正的请求方应报成执行该请求的守护进程 akd，故这里统一带上
+// `com.apple.AuthKit/1 (com.apple.akd/1.0)` 形态的 X-MMe-Client-Info。
+const ClientInfoHeader = "<MacBookPro15,1> <Mac OS X;10.15.2;19C57> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+
 func (t *AddHeaderTransport) RoundTrip(req *gohttp.Request) (*gohttp.Response, error) {
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", DefaultUserAgent)
+	}
+	if req.Header.Get("X-MMe-Client-Info") == "" {
+		req.Header.Set("X-MMe-Client-Info", ClientInfoHeader)
 	}
 
 	res, err := t.T.RoundTrip(req)

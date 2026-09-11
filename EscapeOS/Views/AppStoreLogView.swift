@@ -8,8 +8,8 @@ import UIKit
 /// 各板块输出全混在一起（用户实测指正）。
 struct AppStoreLogView: View {
 
-    /// 该页要显示的日志分类（默认 = AppStore 商店板块；下载板块传 [.appStoreDownload]）
-    var categories: [LoginLogger.Category] = [.appStoreStore]
+    /// 该页要显示的日志分类（默认 = AppStore 商店板块）
+    var categories: [LoginLogger.Category] = [.appStore]
 
     @State private var text = ""
     @State private var copied = false

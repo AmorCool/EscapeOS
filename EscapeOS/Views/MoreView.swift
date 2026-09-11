@@ -71,9 +71,6 @@ struct MoreView: View {
                 MoreItem("pairing-install", "tray.and.arrow.down.fill", "管理配对文件",
                          "把配对文件写入其它侧载工具（复用同一配对身份）",
                          PairingInstallView()),
-                MoreItem("appstore", "cart.fill", "App Store 下载",
-                         "搜索下载正版 IPA",
-                         AppStoreDownloadView()),
             ]),
             ("文件管理", nil, [
                 MoreItem("file-browser", "folder.fill", "文件浏览器",
