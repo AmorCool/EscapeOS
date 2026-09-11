@@ -462,7 +462,7 @@ struct AppStoreView: View {
         if AppStoreDownloadStore.shared.accounts.isEmpty,
            let email = signedEmail {
             // 极端情况：本地账号被清掉但界面仍显示已登录 —— 重新拉一次
-            LoginLogger.shared.log("[AppStore] 账号状态不一致（\(email)），已重置界面状态")
+            LoginLogger.shared.log("[AppStore] 账号状态不一致（\(email)），已重置界面状态", category: .appStore)
             self.signedEmail = nil
             pendingItem = app
             showAccountSheet = true

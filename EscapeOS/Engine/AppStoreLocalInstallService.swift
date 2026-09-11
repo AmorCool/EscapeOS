@@ -19,11 +19,15 @@ enum AppStoreLocalInstallService {
     enum LocalError: Error, LocalizedError {
         case noAccount
         case badItemId
+        case accountIncomplete(String)
 
         var errorDescription: String? {
             switch self {
             case .noAccount: return "没有可用的 Apple ID 账号，请先在 AppStore 商店里登录"
             case .badItemId: return "应用 ID 无效（需要数字形式的 trackId）"
+            case .accountIncomplete(let what):
+                return "账号信息不完整（缺少 \(what)），Apple 会把下载当成未登录（MZFinance.NoAccount_message）。"
+                     + "请重新登录一次这个 Apple ID。"
             }
         }
     }
@@ -41,9 +45,24 @@ enum AppStoreLocalInstallService {
         var account = stored
         let software = try makeSoftware(item)
 
-        // 0) 身份就位：Apple 用 guid + serialNumber 关联本机 FairPlay 证书
+        // v0.3.307：先体检账号。dsid / passwordToken 为空时 Apple 必回
+        // `MZFinance.NoAccount_message`（能登录≠账号可用），提前给明确原因，别让用户猜.
+        if account.directoryServicesIdentifier.isEmpty {
+            onLog?("[账号] dsid 为空 —— Apple 无法识别会话，重新登录该 Apple ID")
+            throw LocalError.accountIncomplete("dsPersonId/dsid")
+        }
+        if account.passwordToken.isEmpty {
+            onLog?("[账号] passwordToken 为空 —— 需要重新登录该 Apple ID")
+            throw LocalError.accountIncomplete("passwordToken")
+        }
+
+        // 0) 身份就位：Apple 用 guid + serialNumber 关联本机 FairPlay 证书.
+        //    guid 必须与登录时一致（apply 只写序列号，见 LocalDeviceIdentity 注释）.
         let identity = LocalDeviceIdentity.apply()
         onLog?("[本机] \(identity.summary)")
+        onLog?("[账号] \(account.email) · dsid=\(account.directoryServicesIdentifier) · "
+               + "cookie \(account.cookie.count) 条 · pod=\(account.pod ?? "-") · "
+               + "guid=\(LocalDeviceIdentity.downloadGUID.prefix(12))…")
         if !identity.isUsable {
             onLog?("[本机] 警告：未取到序列号，Apple 可能按匿名设备发 sinf（装不上）")
         }

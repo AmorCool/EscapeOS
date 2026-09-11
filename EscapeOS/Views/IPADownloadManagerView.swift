@@ -242,7 +242,7 @@ struct IPADownloadManagerView: View {
                             self.progress[item.fileName] = String(format: "安装 %.0f%%", p * 100)
                         }
                     },
-                    onLog: { LoginLogger.shared.log("[下载管理] \($0)") })
+                    onLog: { LoginLogger.shared.log("[下载管理] \($0)", category: .i4Store) })
                 IPADownloadLibrary.shared.markInstalled(fileName: item.fileName)
                 progress[item.fileName] = nil
                 toast = "已安装：\(item.title)"
@@ -250,7 +250,7 @@ struct IPADownloadManagerView: View {
             } catch {
                 progress[item.fileName] = nil
                 toast = "失败：\(error.localizedDescription)"
-                LoginLogger.shared.log("[下载管理] 安装失败 \(item.fileName)：\(error.localizedDescription)")
+                LoginLogger.shared.log("[下载管理] 安装失败 \(item.fileName)：\(error.localizedDescription)", category: .i4Store)
             }
         }
     }

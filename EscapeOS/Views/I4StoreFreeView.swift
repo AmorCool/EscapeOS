@@ -274,7 +274,7 @@ struct I4StoreFreeView: View {
                             self.progress[app.id] = String(format: "下载 %.0f%%", p * 100)
                         }
                     },
-                    onLog: { LoginLogger.shared.log("[I4源] \($0)") })
+                    onLog: { LoginLogger.shared.log("[I4源] \($0)", category: .i4Store) })
 
                 self.progress[app.id] = "安装中…"
                 // v0.3.305：登记到下载台账（商店元信息只有列表里才有，包本身读不出来）
@@ -294,14 +294,14 @@ struct I4StoreFreeView: View {
                             self.progress[app.id] = String(format: "安装 %.0f%%", p * 100)
                         }
                     },
-                    onLog: { LoginLogger.shared.log("[I4源] \($0)") })
+                    onLog: { LoginLogger.shared.log("[I4源] \($0)", category: .i4Store) })
 
                 progress[app.id] = nil
                 toast = "已安装：\(app.name)"
             } catch {
                 progress[app.id] = nil
                 toast = "失败：\(error.localizedDescription)"
-                LoginLogger.shared.log("[I4源] 失败 \(app.name)：\(error.localizedDescription)")
+                LoginLogger.shared.log("[I4源] 失败 \(app.name)：\(error.localizedDescription)", category: .i4Store)
             }
         }
     }

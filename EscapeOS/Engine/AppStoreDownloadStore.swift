@@ -11,6 +11,10 @@ final class AppStoreDownloadStore {
         // v0.3.171：账号区域注入（国区选 CN，见 storefront 与 2FA 短信渠道关联）
         Configuration.countryCode = UserDefaults.standard.string(forKey: "AppStore.CountryCode") ?? "US"
         Self.bootstrapDeviceIdentifier()
+        // v0.3.307：**冷启动必须读盘**。此前只在 add/remove/account(for:) 里 load()，
+        // 于是重启 App 后 `accounts` 一直是空数组 —— 商店显示「未登录」、「AppStore 下载」
+        // 面板列不出账号，下载链路也会被误判成"没有账号"而回退到自备分发源（用户实测踩到）。
+        load()
     }
 
     /// 设置 ApplePackage 的机器标识（guid）.
@@ -47,7 +51,7 @@ final class AppStoreDownloadStore {
         let key = "ApplePackageDeviceIdentifier"
         UserDefaults.standard.removeObject(forKey: key)
         Self.bootstrapDeviceIdentifier()
-        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)")
+        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)", category: .appStore)
     }
 
     private var fileURL: URL {

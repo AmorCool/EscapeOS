@@ -264,9 +264,8 @@ struct BatteryHealthView: View {
             batteryCardRow("电池电流", info.instantAmperage.map { "\($0) mA" }, icon: "waveform.path.ecg")
             batteryCardRow("电池功率", info.batteryPowerMW.map { "\($0) mW" }, icon: "bolt.circle")
             batteryCardRow("电池温度", temperatureText(info), icon: "thermometer.medium")
-            batteryCardRow("电池是否处于警告水平", warnLevelText(info), icon: "exclamationmark.triangle")
+            batteryCardRow("电池处于警告水平", warnLevelText(info), icon: "exclamationmark.triangle")
             batteryCardRow("电池处于临界水平", boolText(info.atCriticalLevel), icon: "exclamationmark.octagon")
-            probeNote
         }
         .padding(.horizontal, 16)
         .background(
@@ -275,43 +274,16 @@ struct BatteryHealthView: View {
         )
     }
 
-    /// v0.3.305：这三项的取值键与真机实测结论（把「为什么是系统未提供」写在界面上）
-    private var probeNote: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Divider()
-            VStack(alignment: .leading, spacing: 4) {
-                Text("检测口径（与爱思同键）")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text("警告水平 = AtWarnLevel；电池温度 = Temperature；生产日期 = DateOfFirstUse。\n"
-                     + "真机 iPhone15,4 / iOS 27.0 实测：IOPMPowerSource（含 BatteryData / "
-                     + "AppleSmartBattery / IOService / IODeviceTree 全 plane）里「这三个键都已不存在」，"
-                     + "只剩 AtCriticalLevel 与 DeadBatteryBootData.GeneralPayload.AverageBattSkinTemp；"
-                     + "MobileGestalt 也被 Apple 在 iOS ≥17.4 废弃。\n"
-                     + "生产日期另外还试过两条路：①爱思 PC 端的 ios_parse_production_date（按旧式序列号"
-                     + "推算，要求序列号第 4/5/6 位是数字，本机随机序列号含字母 → 它自己也算不出、"
-                     + "其设备详情同样显示「未知」）；②爱思电池面板里的日期来自它自家服务端按序列号"
-                     + "查保修/启用时间，设备侧无对应键。\n"
-                     + "所以这一栏按实际键值展示，取不到就标「系统未提供」，不用别的数值顶替。")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, 10)
-        }
-    }
-
-    /// 电池温度：优先实时 `Temperature`；iOS 27 无该键 → 退回实测存在的表皮温度并标注来源
+    /// 电池温度：只取 `Temperature`（IOPMPowerSource）；iOS 27 已无该键 → 与爱思同样显示 `--`
     private func temperatureText(_ info: BatteryHealthInfo) -> String? {
-        if let t = info.temperatureC { return String(format: "%.1f ℃", t) }
-        if let s = info.skinTemperatureC { return "\(s) ℃（表皮，上次记录）" }
-        return "系统未提供"
+        info.temperatureC.map { String(format: "%.1f ℃", $0) }
     }
 
-    /// 电池是否处于警告水平：`AtWarnLevel`（iOS 27 已移除该键）
+    /// 电池是否处于警告水平：`AtWarnLevel`（idm_info.dll 读的同名键）.
+    /// iOS 27 的 IOPMPowerSource 已无此键 —— 爱思本机也显示「否」，即键缺失按 false 处理，
+    /// 这里与爱思保持同一口径（不用「系统未提供」占位）.
     private func warnLevelText(_ info: BatteryHealthInfo) -> String? {
-        if let w = info.atWarnLevel { return w ? "是" : "否" }
-        return "系统未提供"
+        (info.atWarnLevel ?? false) ? "是" : "否"
     }
 
     /// 卡片行（带分隔线，与序列号行同款尺寸）
@@ -339,13 +311,11 @@ struct BatteryHealthView: View {
         return v ? "是" : "否"
     }
 
-    /// v0.3.291：生产日期——真机 iPhone15,4 / iOS 27.0 实测：IOPMPowerSource（含
-    /// BatteryData、IOService/IODeviceTree 全 plane）均无 ManufactureDate/DateOfFirstUse，
-    /// diagnostics_relay 的 MobileGestalt 在 iOS ≥17.4 已被 Apple 废弃；
-    /// 该值只在系统「设置 → 电池 → 电池健康」内可见（batteryhealthd 私有数据），
-    /// 侧载 App 无公开读取通道。若有旧机型/旧系统仍返回该键，则直接显示。
+    /// 生产日期：键序按 idm_info.dll 读的同名字段（`DateOfFirstUse` 等）.
+    /// 旧系统能返回就直接显示；iOS 27 全 plane 已无该键 → 与爱思「设备详情」同一口径显示「未知」
+    /// （爱思电池面板里那个日期不是设备值，是它自己服务端按序列号查的保修/启用时间）.
     private func manufactureDateText(_ info: BatteryHealthInfo) -> String? {
-        let keys = ["ManufactureDate", "ProductionDate", "ManufacturingDate", "DateOfFirstUse"]
+        let keys = ["DateOfFirstUse", "ManufactureDate", "ProductionDate", "ManufacturingDate"]
         for k in keys {
             if let d = info.raw[k] as? String, !d.isEmpty { return d }
             if let n = info.raw[k] as? Int, n > 0 { return String(n) }
@@ -355,7 +325,7 @@ struct BatteryHealthView: View {
                 if let d = bd[k] as? String, !d.isEmpty { return d }
             }
         }
-        return "系统未提供"
+        return "未知"
     }
 
     private func chargingLabel(_ info: BatteryHealthInfo) -> String {

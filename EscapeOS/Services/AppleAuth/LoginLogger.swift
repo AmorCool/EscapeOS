@@ -6,8 +6,31 @@ import Foundation
 final class LoginLogger {
     static let shared = LoginLogger()
 
+    /// v0.3.307：日志**按板块分类**，各板块只读自己那一类，不再互相串台.
+    ///
+    /// 之前所有模块共用一个缓冲区、共用一个日志页，导致 AppStore 商店的日志板块里
+    /// 混着证书管理 / IPA 侧载 / 爱思源 等其它板块的输出（用户实测指正）。
+    /// 现在每条日志带一个分类；`recentLines(_:category:)` 只取该分类的行。
+    /// 未显式传分类的调用一律归入 `.general`（老代码不受影响）。
+    enum Category: String, CaseIterable {
+        case general = "通用"
+        case appStore = "AppStore"
+        case i4Store = "爱思源"
+        case sideload = "侧载签名"
+        case certificate = "证书管理"
+
+        /// 该分类的日志页要一起显示的关联分类（AppStore 与爱思源同属「下载安装」链路，
+        /// 但两者仍是不同板块，这里只放同一个板块内部用到的分类）.
+        var related: [Category] { [self] }
+    }
+
+    private struct Entry {
+        let line: String
+        let category: Category
+    }
+
     private let lock = NSLock()
-    private var buffer: [String] = []
+    private var buffer: [Entry] = []
     private let maxBufferLines = 500
 
     /// 日志文件位置（App 沙盒 Documents 内，LiveContainer 中同样可写、可被文件浏览器访问）.
@@ -25,10 +48,10 @@ final class LoginLogger {
         )
     }
 
-    func log(_ message: String) {
+    func log(_ message: String, category: Category = .general) {
         let line = "[\(Self.timestamp())] \(message)"
         lock.lock()
-        buffer.append(line)
+        buffer.append(Entry(line: line, category: category))
         if buffer.count > maxBufferLines { buffer.removeFirst(buffer.count - maxBufferLines) }
         lock.unlock()
         appendToFile(line)
@@ -47,7 +70,7 @@ final class LoginLogger {
     /// 全部日志文本（内存缓冲 + 文件内容合并，去重）.
     func fullLog() -> String {
         lock.lock()
-        let mem = buffer
+        let mem = buffer.map(\.line)
         lock.unlock()
 
         var fileLines: [String] = []
@@ -64,7 +87,23 @@ final class LoginLogger {
         lock.lock()
         defer { lock.unlock() }
         guard n > 0 else { return [] }
-        return Array(buffer.suffix(n))
+        return buffer.suffix(n).map(\.line)
+    }
+
+    /// v0.3.307：只取指定分类的最近 n 行（板块日志隔离）.
+    func recentLines(_ n: Int, categories: [Category]) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard n > 0 else { return [] }
+        let set = Set(categories)
+        return buffer.filter { set.contains($0.category) }.suffix(n).map(\.line)
+    }
+
+    /// v0.3.307：日志页文本。传 categories 则只显示这些分类（板块隔离）；
+    /// 不传则返回合并文件的全量日志（导出/全局排查用）.
+    func logText(categories: [Category]? = nil) -> String {
+        guard let categories else { return fullLog() }
+        return recentLines(10_000, categories: categories).joined(separator: "\n")
     }
 
     private func appendToFile(_ line: String) {

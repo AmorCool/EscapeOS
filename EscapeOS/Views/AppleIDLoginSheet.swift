@@ -109,7 +109,7 @@ struct AppleIDLoginSheet: View {
                 }
             }
             .sheet(isPresented: $showLog) {
-                LoginLogView()
+                LoginLogView(categories: [.appStore])
             }
             .documentPicker(isPresented: $showImporter, allowedTypes: [.json]) { urls in
                 handleImport(urls)
@@ -233,6 +233,8 @@ final class AppleLoginController: ObservableObject {
 
 /// 登录诊断日志查看与导出（查看 / 复制 / 导出分享 / 清空）.
 struct LoginLogView: View {
+    /// v0.3.307：只显示这些分类的日志（板块隔离）；nil = 全部（全局排查/导出用）
+    var categories: [LoginLogger.Category]? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
     @State private var showShare = false
@@ -241,7 +243,8 @@ struct LoginLogView: View {
 
     private var logText: String {
         _ = refreshTick
-        return LoginLogger.shared.fullLog().isEmpty ? "（暂无日志，请先尝试一次登录）" : LoginLogger.shared.fullLog()
+        let text = LoginLogger.shared.logText(categories: categories)
+        return text.isEmpty ? "（暂无日志，请先尝试一次登录）" : text
     }
 
     var body: some View {
