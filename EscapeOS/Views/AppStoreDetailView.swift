@@ -8,6 +8,7 @@ struct AppStoreDetailView: View {
     @ObservedObject private var center = IPADownloadCenter.shared
     @State private var expanded = false
     @State private var isFavorite = false
+    @State private var favoriteCount = 0
 
     // 安装方式
     @State private var showInstallOptions = false
@@ -36,13 +37,33 @@ struct AppStoreDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                // 每点一次 = 收进收藏栏一次（收藏栏按时间独立成条）；
+                // 要撤销请长按 → 「清空该应用的收藏」。
                 Button {
-                    let added = AppFavoritesStore.shared.toggle(item)
-                    isFavorite = added
-                    ToastCenter.shared.show(added ? "已加入收藏栏" : "已移出收藏栏")
+                    let count = AppFavoritesStore.shared.add(item)
+                    isFavorite = true
+                    ToastCenter.shared.show(count > 1 ? "已收藏（第 \(count) 次）" : "已加入收藏栏")
                 } label: {
-                    Image(systemName: isFavorite ? "star.fill" : "star")
-                        .foregroundStyle(isFavorite ? .yellow : .secondary)
+                    HStack(spacing: 3) {
+                        Image(systemName: isFavorite ? "star.fill" : "star")
+                            .foregroundStyle(isFavorite ? .yellow : .secondary)
+                        if favoriteCount > 1 {
+                            Text("\(favoriteCount)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .contextMenu {
+                    if favoriteCount > 0 {
+                        Button(role: .destructive) {
+                            AppFavoritesStore.shared.removeAll(appId: item.id)
+                            isFavorite = false
+                            ToastCenter.shared.show("已移出收藏栏")
+                        } label: {
+                            Label("清空该应用的收藏", systemImage: "star.slash")
+                        }
+                    }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -99,7 +120,13 @@ struct AppStoreDetailView: View {
         }
         .toastHost()
         .task { await loadDetail() }
-        .onAppear { isFavorite = AppFavoritesStore.shared.contains(appId: item.id) }
+        .onAppear { refreshFavorite() }
+    }
+
+    /// 同步星号状态（收藏栏按次计数，同一应用可能有多条）
+    private func refreshFavorite() {
+        favoriteCount = AppFavoritesStore.shared.count(appId: item.id)
+        isFavorite = favoriteCount > 0
     }
 
     /// Apple ID 通道的副标题（未登录时说明清楚）
@@ -337,7 +364,7 @@ struct AppStoreDetailView: View {
     private var moreSection: some View {
         Section {
             NavigationLink {
-                AppStoreVersionHistoryView(item: item, country: "cn")
+                AppStoreVersionHistoryView(item: item, country: AppStoreService.countryCode)
             } label: {
                 Label("历史版本", systemImage: "clock.arrow.circlepath")
             }

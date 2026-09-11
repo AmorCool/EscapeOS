@@ -8,6 +8,49 @@ import Foundation
 ///       itms-services OTA 通道（与爱思助手同一条系统机制，见 installViaOTA）。
 enum AppStoreService {
 
+    // MARK: - 区域（App Store 商店的国家/地区）
+
+    /// 用户选择的商场区域（`UserDefaults` 持久化）；默认 `cn`（国区）。
+    ///
+    /// 榜单 RSS、搜索、详情 lookup、版本历史全部走这个区域 —— 不同区域的
+    /// 商品池完全不同（美区没有国区应用，反之亦然）。
+    static var countryCode: String {
+        get { UserDefaults.standard.string(forKey: "AppStore.ShopRegion") ?? "cn" }
+        set { UserDefaults.standard.set(newValue, forKey: "AppStore.ShopRegion") }
+    }
+
+    /// 可切换的区域（爱思 PC 端同款常用区）
+    enum Region: String, CaseIterable, Identifiable {
+        case cn, us, hk, tw, jp, gb, ca, au, sg
+        var id: String { rawValue }
+        /// 选项文案：`中国大陆 · CN`
+        var display: String { "\(title) · \(rawValue.uppercased())" }
+
+        var title: String {
+            switch self {
+            case .cn: return "中国大陆"
+            case .us: return "美国"
+            case .hk: return "中国香港"
+            case .tw: return "中国台湾"
+            case .jp: return "日本"
+            case .gb: return "英国"
+            case .ca: return "加拿大"
+            case .au: return "澳大利亚"
+            case .sg: return "新加坡"
+            }
+        }
+    }
+
+    static var currentRegion: Region {
+        get { Region(rawValue: countryCode) ?? .cn }
+        set { countryCode = newValue.rawValue }
+    }
+
+    /// 传给 Apple 接口的区域（未指定时用当前选择）
+    private static func resolved(_ country: String?) -> String {
+        (country?.isEmpty == false ? country! : countryCode)
+    }
+
     // MARK: - 基础请求
 
     private static let session: URLSession = {
@@ -32,22 +75,38 @@ enum AppStoreService {
 
     // MARK: - 搜索
 
-    static func search(term: String, country: String = "cn", limit: Int = 30) async throws -> [AppStoreItem] {
+    static func search(term: String, country: String? = nil, limit: Int = 30) async throws -> [AppStoreItem] {
         let t = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return [] }
+        let cc = resolved(country)
         guard let enc = t.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://itunes.apple.com/search?term=\(enc)&country=\(country)&entity=software&limit=\(limit)") else {
+              let url = URL(string: "https://itunes.apple.com/search?term=\(enc)&country=\(cc)&entity=software&limit=\(limit)") else {
             throw AppStoreError.badURL
         }
         let obj = try await getJSON(url)
         let results = obj["results"] as? [[String: Any]] ?? []
-        return results.compactMap { parseSearchItem($0) }
+        var out = results.compactMap { parseSearchItem($0) }
+
+        // v0.3.321：关键词本身就是 BundleID 时（如 com.tencent.xin），搜索接口
+        // 命不中，改用 `/lookup?bundleId=` 直查并把结果并到最前面。
+        if looksLikeBundleId(t), let hit = try? await lookup(bundleId: t, country: cc) {
+            out.removeAll { $0.id == hit.id }
+            out.insert(hit, at: 0)
+        }
+        return out
+    }
+
+    /// 关键词是否形如 BundleID（如 `com.tencent.xin`）
+    static func looksLikeBundleId(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count >= 6, t.contains("."), !t.contains(" ") else { return false }
+        return t.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil
     }
 
     // MARK: - 详情
 
-    static func lookup(id: String, country: String = "cn") async throws -> AppStoreItem? {
-        guard let url = URL(string: "https://itunes.apple.com/lookup?id=\(id)&country=\(country)") else {
+    static func lookup(id: String, country: String? = nil) async throws -> AppStoreItem? {
+        guard let url = URL(string: "https://itunes.apple.com/lookup?id=\(id)&country=\(resolved(country))") else {
             throw AppStoreError.badURL
         }
         let obj = try await getJSON(url)
@@ -56,9 +115,58 @@ enum AppStoreService {
         return parseSearchItem(first)
     }
 
+    /// 按 BundleID 查（`/lookup?bundleId=`）—— 搜 BundleID / 补全字段用
+    static func lookup(bundleId: String, country: String? = nil) async throws -> AppStoreItem? {
+        let bid = bundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bid.isEmpty,
+              let enc = bid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://itunes.apple.com/lookup?bundleId=\(enc)&country=\(resolved(country))") else {
+            throw AppStoreError.badURL
+        }
+        let obj = try await getJSON(url)
+        let results = obj["results"] as? [[String: Any]] ?? []
+        guard let first = results.first else { return nil }
+        return parseSearchItem(first)
+    }
+
+    /// 批量查（`/lookup?id=1,2,3`，Apple 单次上限约 50 个 id）
+    static func lookupBatch(ids: [String], country: String? = nil) async throws -> [AppStoreItem] {
+        var seen = Set<String>()
+        let unique = ids.filter { !$0.isEmpty && seen.insert($0).inserted }
+        guard !unique.isEmpty else { return [] }
+        var out: [AppStoreItem] = []
+        for chunk in stride(from: 0, to: unique.count, by: 40).map({ Array(unique[$0..<min($0 + 40, unique.count)]) }) {
+            let joined = chunk.joined(separator: ",")
+            guard let url = URL(string: "https://itunes.apple.com/lookup?id=\(joined)&country=\(resolved(country))") else { continue }
+            guard let obj = try? await getJSON(url) else { continue }
+            let results = obj["results"] as? [[String: Any]] ?? []
+            out.append(contentsOf: results.compactMap { parseSearchItem($0) })
+        }
+        return out
+    }
+
+    /// 补齐 `bundleId`：**榜单 RSS 不返回 bundleId**，不补的话
+    /// 商店列表点「获取」会走不到免登录源（v0.3.320 真机实锤）。
+    static func enrichBundleIds(_ items: [AppStoreItem], country: String? = nil) async -> [AppStoreItem] {
+        let missing = items.filter { ($0.bundleId ?? "").isEmpty }.map(\.id)
+        guard !missing.isEmpty else { return items }
+        guard let found = try? await lookupBatch(ids: missing, country: country) else { return items }
+        var byId: [String: String] = [:]
+        for f in found {
+            if let b = f.bundleId, !b.isEmpty { byId[f.id] = b }
+        }
+        guard !byId.isEmpty else { return items }
+        return items.map { item in
+            var copy = item
+            if (copy.bundleId ?? "").isEmpty, let b = byId[item.id] { copy.bundleId = b }
+            return copy
+        }
+    }
+
     // MARK: - 榜单
 
-    static func charts(kind: AppStoreRankKind, genre: AppStoreGenre, country: String = "cn", limit: Int = 50) async throws -> [AppStoreItem] {
+    static func charts(kind: AppStoreRankKind, genre: AppStoreGenre, country: String? = nil, limit: Int = 50) async throws -> [AppStoreItem] {
+        let country = resolved(country)
         var urlStr = "https://itunes.apple.com/\(country)/rss/\(kind.rawValue)/limit=\(limit)"
         if genre != .all { urlStr += "/genre=\(genre.rawValue)" }
         urlStr += "/json"
@@ -71,7 +179,9 @@ enum AppStoreService {
         } else if let single = feed["entry"] as? [String: Any] {
             entries = [single]
         }
-        return entries.compactMap { parseRSSEntry($0, fallbackGenre: genre == .all ? nil : genre.title) }
+        let list = entries.compactMap { parseRSSEntry($0, fallbackGenre: genre == .all ? nil : genre.title) }
+        // RSS 不含 bundleId → 一次批量 lookup 补齐（免登录源匹配、收藏栏都需要它）
+        return await enrichBundleIds(list, country: country)
     }
 
     // MARK: - 历史版本
@@ -88,8 +198,8 @@ enum AppStoreService {
     ///
     /// 该页面**无需登录、无需认证**，但必须用桌面 UA（手机 UA 会被 301 到
     /// `itms-appss://` 协议链接）。
-    static func versionHistory(appId: String, country: String = "cn") async throws -> [AppStoreVersion] {
-        guard let url = URL(string: "https://apps.apple.com/\(country)/app/id\(appId)") else {
+    static func versionHistory(appId: String, country: String? = nil) async throws -> [AppStoreVersion] {
+        guard let url = URL(string: "https://apps.apple.com/\(resolved(country))/app/id\(appId)") else {
             throw AppStoreError.badURL
         }
         var req = URLRequest(url: url)

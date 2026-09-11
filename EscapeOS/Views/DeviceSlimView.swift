@@ -33,6 +33,8 @@ struct DeviceSlimView: View {
     @State private var errorText: String?
     @State private var fromCache = false
     @State private var reinstallProgress: DeviceSlimService.ReinstallProgress?
+    /// 「较大应用」的源可用性是否正在检测（检测期间不允许勾选，避免误判）
+    @State private var probingAvailability = false
 
     // MARK: - 派生数据
 
@@ -47,13 +49,24 @@ struct DeviceSlimView: View {
     private var bigAppItems: [DeviceSlimService.Item] {
         groups.first { $0.kind == .bigApps }?.items ?? []
     }
-    /// 可重装 = 本地已有包，或免登录源里确认有（`sourceAvailable == true`）
+    /// 是否可勾选重装：
+    /// · `true`  源里确认能下到（或本地已有包）→ 可勾
+    /// · `false` 源里**确认没有** → 「资源缺失无法重装」，禁用
+    /// · `nil`   这次没查成（网络/接口失败）→ 不算缺失，可勾；真装的时候会再查一次
+    private func canReinstall(_ item: DeviceSlimService.Item) -> Bool {
+        item.sourceAvailable != false && !(probingAvailability && item.sourceAvailable == nil)
+    }
+
     private var reinstallableApps: [DeviceSlimService.Item] {
-        bigAppItems.filter { $0.sourceAvailable == true }
+        bigAppItems.filter { canReinstall($0) }
     }
     private var reinstallTargets: [DeviceSlimService.Item] {
-        bigAppItems.filter { reinstallSelection.contains($0.id) && $0.sourceAvailable == true }
+        bigAppItems.filter { reinstallSelection.contains($0.id) && canReinstall($0) }
     }
+
+    /// 源里确认缺失的款数（用来决定要不要显示「重新检测」）
+    private var missingSourceCount: Int { bigAppItems.filter { $0.sourceAvailable == false }.count }
+    private var unknownSourceCount: Int { bigAppItems.filter { $0.sourceAvailable == nil }.count }
     private var reinstallDocBytes: Int64 {
         reinstallTargets.reduce(0) { $0 + $1.docSize }
     }
@@ -99,7 +112,7 @@ struct DeviceSlimView: View {
             Button("删除选中的 \(selectedItems.count) 项", role: .destructive) { startClean() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将永久删除这些缓存与临时文件（预计释放 \(DeviceSlimService.formatBytes(selectedBytes))）。照片、聊天记录等用户数据不在清理范围内。")
+            Text("将永久删除选中的缓存与临时文件（预计释放 \(DeviceSlimService.formatBytes(selectedBytes))）。")
         }
         .confirmationDialog("确定重装选中的 \(reinstallTargets.count) 款应用？",
                             isPresented: $confirmReinstall, titleVisibility: .visible) {
@@ -108,6 +121,7 @@ struct DeviceSlimView: View {
         } message: {
             Text("卸载重装会清除这些应用的文稿与数据（约 \(DeviceSlimService.formatBytes(reinstallDocBytes))），无法恢复。")
         }
+        .toastHost()
         .task { await bootstrap() }
     }
 
@@ -286,6 +300,18 @@ struct DeviceSlimView: View {
                             .foregroundStyle(.red)
                     }
                 }
+                // 有「确认缺失」或「没查成」的行时给出重检入口（不是爱思有、是免越狱下网络会抖）
+                if missingSourceCount + unknownSourceCount > 0 {
+                    Button {
+                        Task { await recheckAvailability() }
+                    } label: {
+                        Label(probingAvailability ? "正在检测…" : "重新检测可重装性",
+                              systemImage: "arrow.clockwise")
+                            .font(.subheadline)
+                            .foregroundStyle(probingAvailability ? Color.secondary : Color.blue)
+                    }
+                    .disabled(probingAvailability)
+                }
             } else {
                 ForEach(group.items) { item in
                     cacheRow(item)
@@ -295,9 +321,16 @@ struct DeviceSlimView: View {
             groupHeader(group)
         } footer: {
             if !group.items.isEmpty, group.kind == .bigApps {
-                Text("勾选 = 卸载重装（清除该应用的文稿与数据）").font(.caption2)
+                Text(bigAppsFooter).font(.caption2)
             }
         }
+    }
+
+    private var bigAppsFooter: String {
+        var text = "勾选 = 卸载重装（清除该应用的文稿与数据）"
+        if missingSourceCount > 0 { text += "；\(missingSourceCount) 款源里没有包" }
+        if unknownSourceCount > 0 { text += "；\(unknownSourceCount) 款未检测成功" }
+        return text
     }
 
     private func groupHeader(_ group: DeviceSlimService.Group) -> some View {
@@ -345,7 +378,7 @@ struct DeviceSlimView: View {
     /// 较大应用行（爱思表格：应用名称 / 应用大小 / 文档大小 / 操作）
     private func bigAppRow(_ item: DeviceSlimService.Item) -> some View {
         let on = reinstallSelection.contains(item.id)
-        let actionable = item.sourceAvailable == true
+        let actionable = canReinstall(item)
         return Button {
             guard actionable else { return }
             if on { reinstallSelection.remove(item.id) } else { reinstallSelection.insert(item.id) }
@@ -362,10 +395,12 @@ struct DeviceSlimView: View {
                         Text("文档 \(DeviceSlimService.formatBytes(item.docSize))")
                         if item.sourceAvailable == false {
                             Text("资源缺失无法重装").foregroundStyle(.orange)
-                        } else if item.sourceAvailable == nil {
+                        } else if probingAvailability && item.sourceAvailable == nil {
                             Text("检测中…").foregroundStyle(.secondary)
                         } else if item.isRisky {
                             Text("谨慎选择").foregroundStyle(.red)
+                        } else if item.sourceAvailable == nil {
+                            Text("源里未查到，可重试").foregroundStyle(.secondary)
                         }
                     }
                     .font(.caption2)
@@ -411,19 +446,39 @@ struct DeviceSlimView: View {
     }
 
     /// 回填「免登录源里有没有」——决定「较大应用」能不能勾选重装（爱思同款判定）
-    private func probeAvailability() async {
-        let unknown = bigAppItems
+    private func probeAvailability(recheck: Bool = false) async {
+        let pending = bigAppItems
             .filter { $0.sourceAvailable == nil }
             .map { (bundleId: $0.id, name: $0.name) }
-        guard !unknown.isEmpty else { return }
-        let result = await DeviceSlimService.probeSourceAvailability(unknown)
+        guard !pending.isEmpty else { return }
+        probingAvailability = true
+        defer { probingAvailability = false }
+        let result = recheck
+            ? await DeviceSlimService.refreshSourceAvailability(pending)
+            : await DeviceSlimService.probeSourceAvailability(pending)
+        mergeAvailability(result)
+    }
+
+    /// 「重新检测」：连**已判定缺失**的也重查（源里可能新上架，或上次是网络失败）
+    private func recheckAvailability() async {
+        guard !bigAppItems.isEmpty else { return }
+        probingAvailability = true
+        defer { probingAvailability = false }
+        let all = bigAppItems.map { (bundleId: $0.id, name: $0.name) }
+        let result = await DeviceSlimService.refreshSourceAvailability(all)
+        mergeAvailability(result)
+        ToastCenter.shared.show("已重新检测 \(all.count) 款应用")
+    }
+
+    /// 合并探测结果；`nil`（这次没查成）不写入，保持原状以免越查越少
+    private func mergeAvailability(_ result: [String: Bool?]) {
         guard !result.isEmpty else { return }
         groups = groups.map { group in
             guard group.kind == .bigApps else { return group }
             var updated = group
             updated.items = group.items.map { item in
                 var copy = item
-                if copy.sourceAvailable == nil, let ok = result[item.id] {
+                if let value = result[item.id], let ok = value {
                     copy.sourceAvailable = ok
                 }
                 return copy

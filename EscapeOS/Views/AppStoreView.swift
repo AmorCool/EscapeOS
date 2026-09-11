@@ -17,7 +17,14 @@ struct AppStoreView: View {
     @State private var showDisclaimer = false
     @State private var showI4 = false
     @State private var showFavorites = false
+    /// 区域筛选（App Store 商场，默认 cn = 国区）
+    @AppStorage("AppStore.ShopRegion") private var shopRegion = "cn"
+    // 列表行「获取」→ 安装方式选择
+    @State private var installTarget: AppStoreItem?
+    @State private var accountTarget: AppStoreItem?
     @ObservedObject private var center = IPADownloadCenter.shared
+
+    private var region: AppStoreService.Region { AppStoreService.Region(rawValue: shopRegion) ?? .cn }
 
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -90,6 +97,7 @@ struct AppStoreView: View {
             if isSearchMode {
                 searchSection
             } else {
+                regionSection
                 chartsSection
                 genreSection
                 listSection
@@ -98,9 +106,14 @@ struct AppStoreView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("AppStore 商店")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $keyword, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索 App Store 应用")
+        .searchable(text: $keyword, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索应用名 / BundleID")
         .onSubmit(of: .search) { runSearch() }
         .onChange(of: kind) { _, _ in Task { await loadCharts() } }
+        .onChange(of: shopRegion) { _, code in
+            AppStoreService.countryCode = code
+            searchResults = []
+            Task { await loadCharts() }
+        }
         .onChange(of: genre) { _, _ in Task { await loadCharts() } }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -127,6 +140,28 @@ struct AppStoreView: View {
         }
         .sheet(isPresented: $showI4) { NavigationStack { AppStoreI4View() } }
         .sheet(isPresented: $showFavorites) { NavigationStack { AppFavoritesView() } }
+        .sheet(item: $installTarget) { target in
+            InstallOptionsSheet(
+                appleIDSubtitle: appleIDSubtitle,
+                onAppleID: {
+                    installTarget = nil
+                    chooseAppleIDAndInstall(target)
+                },
+                onI4: {
+                    installTarget = nil
+                    installFromFreeSource(target)
+                })
+            .presentationDetents([.height(300)])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $accountTarget) { target in
+            AppleIDPickerSheet { email in
+                accountTarget = nil
+                IPADownloadCenter.shared.startWithAppleID(item: target, email: email)
+                ToastCenter.shared.show("已开始用「\(email)」下载")
+            }
+            .presentationDetents([.medium])
+        }
         .overlay {
             if showDisclaimer {
                 AppStoreDisclaimerView(
@@ -149,6 +184,18 @@ struct AppStoreView: View {
     }
 
     // MARK: 榜单
+
+    /// 区域筛选：切换后榜单 / 搜索 / 详情都按该区域取数据
+    private var regionSection: some View {
+        Section {
+            Picker("区域", selection: $shopRegion) {
+                ForEach(AppStoreService.Region.allCases) { r in
+                    Text(r.display).tag(r.rawValue)
+                }
+            }
+            .pickerStyle(.menu)
+        }
+    }
 
     private var chartsSection: some View {
         Section {
@@ -224,7 +271,7 @@ struct AppStoreView: View {
                     }
                 }
             } header: {
-                Text("\(genre.title) · \(kind.title) · 共 \(items.count) 款")
+                Text("\(region.title) · \(genre.title) · \(kind.title) · 共 \(items.count) 款")
             }
         }
     }
@@ -242,7 +289,7 @@ struct AppStoreView: View {
                 ContentUnavailableView.search(text: keyword)
             }
         } else {
-            Section("搜索结果 · \(searchResults.count) 款") {
+            Section("\(region.title) 搜索结果 · \(searchResults.count) 款") {
                 ForEach(searchResults) { app in
                     NavigationLink {
                         AppStoreDetailView(item: app)
@@ -287,7 +334,7 @@ struct AppStoreView: View {
             }
             Spacer(minLength: 6)
             Button {
-                install(app)
+                installTarget = app
             } label: {
                 if center.activeJob(bundleId: app.bundleId, name: app.name) != nil {
                     ProgressView().controlSize(.mini).frame(width: 36)
@@ -350,21 +397,41 @@ struct AppStoreView: View {
         }
     }
 
-    /// 列表行的「获取」：**统一走下载中心**（有 Apple ID 走官方源，否则走免登录源）。
-    private func install(_ app: AppStoreItem) {
-        guard center.activeJob(bundleId: app.bundleId, name: app.name) == nil else { return }
-        let accounts = AppStoreDownloadStore.shared.usableAccounts
-        if let first = accounts.first {
-            IPADownloadCenter.shared.startWithAppleID(item: app, email: first.email)
-            ToastCenter.shared.show("已开始用「\(first.email)」下载安装")
+    /// Apple ID 通道的副标题
+    private var appleIDSubtitle: String {
+        let list = AppStoreDownloadStore.shared.usableAccounts
+        if list.isEmpty { return "尚未登录 Apple ID" }
+        if list.count == 1 { return list[0].email }
+        return "共 \(list.count) 个账号，可自选"
+    }
+
+    private func chooseAppleIDAndInstall(_ app: AppStoreItem) {
+        let list = AppStoreDownloadStore.shared.usableAccounts
+        guard !list.isEmpty else {
+            ToastCenter.shared.show("尚未登录 Apple ID —— 请改用「从爱思源快速安装」")
             return
         }
-        guard let bid = app.bundleId, !bid.isEmpty else {
-            ToastCenter.shared.show("该应用缺少 Bundle ID，无法从源匹配")
+        if list.count > 1 {
+            accountTarget = app
             return
         }
+        IPADownloadCenter.shared.startWithAppleID(item: app, email: list[0].email)
+        ToastCenter.shared.show("已开始用「\(list[0].email)」下载")
+    }
+
+    /// 免登录源：按 bundleId 找包 → 下载 → 安装。
+    /// 榜单 RSS 不带 bundleId（已在加载时批量补全），这里再兜一次按 AppID 反查。
+    private func installFromFreeSource(_ app: AppStoreItem) {
         ToastCenter.shared.show("正在查找安装包…")
         Task {
+            var bid = app.bundleId ?? ""
+            if bid.isEmpty, let full = try? await AppStoreService.lookup(id: app.id) {
+                bid = full.bundleId ?? ""
+            }
+            guard !bid.isEmpty else {
+                ToastCenter.shared.show("无法确定该应用的 Bundle ID，不能从源匹配")
+                return
+            }
             _ = await IPADownloadCenter.shared.startFromI4Source(
                 name: app.name, bundleId: bid, iconURL: app.iconURL)
         }

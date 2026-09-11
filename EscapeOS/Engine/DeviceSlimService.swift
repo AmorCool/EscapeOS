@@ -138,17 +138,17 @@ enum DeviceSlimService {
     /// `/Downloads` 是 Safari 的下载记录数据库（`downloads.28.sqlitedb` + `-wal`/`-shm`），
     /// 体积随 WAL 波动（实测 369.25 KiB，爱思面板曾显示 361.20 KB）——爱思的清理项里也有它。
     static var systemCachePaths: [(String, String)] {
-        [(pathPhotoThumbnails, "照片缩略图（系统按需重建）"),
+        [(pathPhotoThumbnails, "照片缩略图"),
          (pathPhotoCaches, "照片库缓存"),
-         (pathSharedAlbumCaches, "共享相簿媒体缓存"),
+         (pathSharedAlbumCaches, "共享相簿缓存"),
          ("/Downloads", "下载记录缓存")]
     }
 
     static let tempPaths: [(String, String)] = [
-        ("/Deferred", "系统延迟处理暂存"),
+        ("/Deferred", "延迟处理暂存"),
         ("/Sync", "同步中转暂存"),
         ("/PublicStaging", "公共暂存区"),
-        ("/Airlock", "空投/隔空投送暂存"),
+        ("/Airlock", "隔空投送暂存"),
     ]
 
     static let bigAppThreshold: Int64 = 500 * 1024 * 1024
@@ -332,14 +332,14 @@ enum DeviceSlimService {
         for (path, why) in systemCachePaths {
             let bytes = snap.totals[path] ?? 0
             guard bytes > 0 else { continue }
-            systemItems.append(Item(id: path, name: itemName(path),
-                                    detail: "\(snap.fileCounts[path] ?? 0) 个文件",
+            systemItems.append(Item(id: path, name: why,
+                                    detail: cacheDetail(path, snap),
                                     bytes: bytes, kind: .systemCache, deletable: true))
         }
         groups.append(Group(kind: .systemCache, items: systemItems))
 
         let logItems = snap.logs.map {
-            Item(id: $0.path, name: itemName($0.path), detail: nil,
+            Item(id: $0.path, name: itemName($0.path), detail: "日志文件",
                  bytes: $0.bytes, kind: .userLog, deletable: true)
         }
         groups.append(Group(kind: .userLog, items: logItems))
@@ -348,8 +348,8 @@ enum DeviceSlimService {
         for (path, why) in tempPaths {
             let bytes = snap.totals[path] ?? 0
             guard bytes > 0 else { continue }
-            tempItems.append(Item(id: path, name: itemName(path),
-                                  detail: "\(snap.fileCounts[path] ?? 0) 个文件",
+            tempItems.append(Item(id: path, name: why,
+                                  detail: cacheDetail(path, snap),
                                   bytes: bytes, kind: .tempFiles, deletable: true))
         }
         groups.append(Group(kind: .tempFiles, items: tempItems))
@@ -392,15 +392,30 @@ enum DeviceSlimService {
         return out.sorted { $0.bytes > $1.bytes }
     }
 
+    /// 缓存行副标题：设备上的目录名 + 文件数（用来对照爱思面板）
+    private static func cacheDetail(_ path: String, _ snap: Snapshot) -> String {
+        let leaf = itemName(path)
+        let count = snap.fileCounts[path] ?? 0
+        return leaf == path ? "\(count) 个文件" : "\(leaf) · \(count) 个文件"
+    }
+
     private static func itemName(_ path: String) -> String {
         let name = (path as NSString).lastPathComponent
         return name.isEmpty ? path : name
     }
 
-    /// 探测「免登录源里有没有这些应用」，回填 `sourceAvailable`（爱思的「资源缺失无法重装」）
+    /// 探测「免登录源里有没有这些应用」，回填 `sourceAvailable`（爱思的「资源缺失无法重装」）。
+    /// 值为 nil = 该项这次没查成（**不是**资源缺失，UI 不应拦）。
     static func probeSourceAvailability(_ targets: [(bundleId: String, name: String)],
-                                        progress: ((Int, Int) -> Void)? = nil) async -> [String: Bool] {
+                                        progress: ((Int, Int) -> Void)? = nil) async -> [String: Bool?] {
         await SourcePackageLocator.probe(bundleIds: targets, progress: progress)
+    }
+
+    /// 「重新检测」：清空探测缓存后重探（源里新上架 / 之前网络失败时用）
+    static func refreshSourceAvailability(_ targets: [(bundleId: String, name: String)],
+                                          progress: ((Int, Int) -> Void)? = nil) async -> [String: Bool?] {
+        SourcePackageLocator.clearCache()
+        return await SourcePackageLocator.probe(bundleIds: targets, progress: progress)
     }
 
     // MARK: - 清理（缓存项）
