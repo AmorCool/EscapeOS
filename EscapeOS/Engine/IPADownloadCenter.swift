@@ -332,7 +332,7 @@ final class IPADownloadCenter: ObservableObject {
     }
 
     private func handle(id: UUID, safeName: String, result: Result<URL, Error>) {
-        guard let job = job(id) else { return }
+        guard let current = job(id) else { return }
         switch result {
         case .success(let tmp):
             do {
@@ -341,20 +341,20 @@ final class IPADownloadCenter: ObservableObject {
                 try? FileManager.default.removeItem(at: dest)
                 try FileManager.default.moveItem(at: tmp, to: dest)
                 IPADownloadLibrary.shared.record(fileURL: dest,
-                                                 displayName: job.name,
-                                                 bundleId: job.bundleId,
-                                                 version: job.version,
-                                                 iconURL: job.iconURL,
-                                                 source: job.source.rawValue)
+                                                 displayName: current.name,
+                                                 bundleId: current.bundleId,
+                                                 version: current.version,
+                                                 iconURL: current.iconURL,
+                                                 source: current.source.rawValue)
                 update(id) {
                     $0.localFileName = dest.lastPathComponent
                     $0.progress = 1
-                    $0.phase = job.autoInstall ? .installing : .done
-                    $0.stageText = job.autoInstall ? "安装中" : "已下载"
+                    $0.phase = current.autoInstall ? .installing : .done
+                    $0.stageText = current.autoInstall ? "安装中" : "已下载"
                 }
                 runner = nil
                 runningID = nil
-                if job.autoInstall {
+                if current.autoInstall {
                     installAfterDownload(id: id, path: dest.path, fileName: dest.lastPathComponent)
                 } else {
                     pump()

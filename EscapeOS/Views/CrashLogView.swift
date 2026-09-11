@@ -318,9 +318,9 @@ struct CrashLogView: View {
                 DispatchQueue.main.async {
                     busy = false
                     selection.removeAll()
-                    ToastCenter.shared.show(failed == 0)
+                    ToastCenter.shared.show(failed == 0
                         ? "已删除 \(targets.count) 个日志"
-                        : "已删除 \(targets.count - failed) 个，失败 \(failed) 个"
+                        : "已删除 \(targets.count - failed) 个，失败 \(failed) 个")
                     reload()
                 }
             } catch {
