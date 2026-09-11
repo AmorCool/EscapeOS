@@ -16,13 +16,14 @@ struct FileSharingAppsView: View {
     @State private var computingDocs: Set<String> = []
     /// v0.3.291：安装来源详情弹窗（取代已失效的 Archive 深读）
     @State private var detailApp: FileSharingApp?
-    /// v0.3.287：导出 IPA（Archive→AFC 拉回本地）与图标批量导出
-    @State private var exportingIPA: Set<String> = []
+    /// v0.3.292：图标批量选择导出（原实现只能「全部导出」——改为可多选/全选后导出）
+    @State private var selectingIcons = false
+    @State private var selectedIcons: Set<String> = []
     @State private var exportingIcons = false
     @State private var toastText: String?
 
     var body: some View {
-        List {
+        List(selection: $selectedIcons) {
                 if loading {
                     Section {
                         HStack { ProgressView(); Text("正在读取已装应用…") }
@@ -49,6 +50,8 @@ struct FileSharingAppsView: View {
                 }
             }
             .listStyle(.insetGrouped)   // v0.3.214：参考模块板块样式
+            // v0.3.292：图标批量选择模式
+            .environment(\.editMode, .constant(selectingIcons ? .active : .inactive))
         .navigationTitle("文档浏览")
         .navigationBarTitleDisplayMode(.large)  // v0.3.212：参考模块板块顶栏样式
         // v0.3.289：displayMode .always → .automatic——always 时搜索框常驻悬浮，
@@ -56,18 +59,39 @@ struct FileSharingAppsView: View {
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索应用")
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)   // v0.3.214：系统搜索框替代自绘
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    exportAllIcons()
-                } label: {
-                    if exportingIcons {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "square.and.arrow.up.on.square")
-                    }
+            ToolbarItem(placement: .topBarLeading) {
+                if selectingIcons {
+                    Button(allIconsSelected ? "取消全选" : "全选") { toggleSelectAllIcons() }
+                        .disabled(exportingIcons)
                 }
-                .disabled(exportingIcons)
-                .accessibilityLabel("导出全部应用图标")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if selectingIcons {
+                    Button {
+                        exportSelectedIcons()
+                    } label: {
+                        if exportingIcons {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("导出(\(selectedIcons.count))")
+                        }
+                    }
+                    .disabled(exportingIcons || selectedIcons.isEmpty)
+                } else {
+                    Button {
+                        selectedIcons.removeAll()
+                        selectingIcons = true
+                    } label: {
+                        Image(systemName: "checkmark.circle")
+                    }
+                    .accessibilityLabel("批量选择应用图标")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if selectingIcons {
+                    Button("完成") { selectingIcons = false }
+                        .disabled(exportingIcons)
+                }
             }
         }
         .autocorrectionDisabled()
@@ -121,7 +145,8 @@ struct FileSharingAppsView: View {
     @ViewBuilder
     private func appRow(_ app: FileSharingApp) -> some View {
         Group {
-            if app.supportsFileSharing {
+            // v0.3.292：选择模式下禁用导航，避免与多选冲突
+            if app.supportsFileSharing && !selectingIcons {
                 NavigationLink {
                     AppFileBrowserView(bundleId: app.bundleId, appName: app.name)
                 } label: {
@@ -131,58 +156,23 @@ struct FileSharingAppsView: View {
                 appContent(app)
             }
         }
-        // v0.3.287：导出 IPA（爱思「导出应用」同款——Archive 归档后拉回本机）
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button {
-                exportIPA(app)
-            } label: {
-                Label(exportingIPA.contains(app.bundleId) ? "导出中…" : "导出 IPA", systemImage: "square.and.arrow.down")
-            }
-            .tint(.blue)
-            .disabled(exportingIPA.contains(app.bundleId))
-        }
+        .tag(app.bundleId)
     }
 
-    /// v0.3.287：导出 IPA 到本机 Documents/AppStoreDownloads/（后台执行，归档耗时随体积）
-    private func exportIPA(_ app: FileSharingApp) {
-        let bundleId = app.bundleId
-        guard !exportingIPA.contains(bundleId) else { return }
-        exportingIPA.insert(bundleId)
-        toastText = "正在归档 \(app.name)…（耗时与体积成正比）"
-        LoginLogger.shared.log("[ExportIPA] 开始导出 \(bundleId)")
-        Task.detached(priority: .userInitiated) {
-            do {
-                let url = try AppStoreIdReader.exportIPA(bundleId: bundleId) { line in
-                    LoginLogger.shared.log("[ExportIPA] \(line)")
-                }
-                await MainActor.run {
-                    exportingIPA.remove(bundleId)
-                    toastText = "已导出：Documents/AppStoreDownloads/\(url.lastPathComponent)"
-                }
-            } catch {
-                let msg = error.localizedDescription
-                await MainActor.run {
-                    exportingIPA.remove(bundleId)
-                    toastText = "导出失败：\(msg)"
-                }
-                LoginLogger.shared.log("[ExportIPA] 失败：\(msg)")
-            }
-        }
-    }
-
-    /// v0.3.287：批量导出全部应用图标到 Documents/AppIcons/（SpringBoardServices）
-    private func exportAllIcons() {
+    /// v0.3.292：图标批量导出——选中的项（原为固定「全部导出」）
+    private func exportSelectedIcons() {
         guard !exportingIcons else { return }
+        let targets = apps.filter { selectedIcons.contains($0.bundleId) }
+        guard !targets.isEmpty else { return }
         exportingIcons = true
-        let appsSnapshot = apps
-        toastText = "正在导出 \(appsSnapshot.count) 个图标…"
+        toastText = "正在导出 \(targets.count) 个图标…"
         Task.detached(priority: .utility) {
             let discovery = AppDiscovery()
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             let dir = docs.appendingPathComponent("AppIcons", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             var count = 0
-            for app in appsSnapshot {
+            for app in targets {
                 if let icon = discovery.appIcon(for: app.bundleId),
                    let data = icon.pngData() {
                     let safeName = app.bundleId.replacingOccurrences(of: "/", with: "_")
@@ -194,9 +184,22 @@ struct FileSharingAppsView: View {
             let total = count
             await MainActor.run {
                 exportingIcons = false
-                toastText = "已导出 \(total) 个图标到 Documents/AppIcons/"
+                toastText = "已导出 \(total)/\(targets.count) 个图标到 Documents/AppIcons/"
             }
-            LoginLogger.shared.log("[ExportIcons] 导出 \(total)/\(appsSnapshot.count) 个图标")
+            LoginLogger.shared.log("[ExportIcons] 导出 \(total)/\(targets.count) 个图标")
+        }
+    }
+
+    /// 当前列表（受筛选影响）是否已全选
+    private var allIconsSelected: Bool {
+        !filtered.isEmpty && filtered.allSatisfy { selectedIcons.contains($0.bundleId) }
+    }
+
+    private func toggleSelectAllIcons() {
+        if allIconsSelected {
+            selectedIcons.removeAll()
+        } else {
+            selectedIcons.formUnion(filtered.map(\.bundleId))
         }
     }
 
