@@ -14,9 +14,8 @@ struct FileSharingAppsView: View {
     /// v0.3.270：Documents 容器大小（bundleId → 字节，后台懒算回填）
     @State private var docSizes: [String: Int64] = [:]
     @State private var computingDocs: Set<String> = []
-    /// v0.3.281：深度读取的真实 Apple ID（Archive 通道，点击胶囊触发）
-    @State private var deepAppleIds: [String: String] = [:]
-    @State private var deepLoading: Set<String> = []
+    /// v0.3.291：安装来源详情弹窗（取代已失效的 Archive 深读）
+    @State private var detailApp: FileSharingApp?
     /// v0.3.287：导出 IPA（Archive→AFC 拉回本地）与图标批量导出
     @State private var exportingIPA: Set<String> = []
     @State private var exportingIcons = false
@@ -44,7 +43,7 @@ struct FileSharingAppsView: View {
                     } header: {
                         Text("应用列表（\(filtered.count) 个）")
                     } footer: {
-                        Text("点击 Apple ID 胶囊可深度读取安装来源账号：App 会被临时归档到设备（耗时与体积成正比），读取后自动清理。")
+                        Text("「苹果正版」= 由 App Store 下发（含下载账号信息）；「共享正版」= 第三方商店或自签安装。点击 Apple ID 查看来源详情。")
                             .font(.caption2)
                     }
                 }
@@ -72,6 +71,17 @@ struct FileSharingAppsView: View {
             }
         }
         .autocorrectionDisabled()
+        // v0.3.291：安装来源详情
+        .sheet(item: $detailApp) { app in
+            NavigationStack {
+                appleIdDetailSheet(app)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") { detailApp = nil }
+                        }
+                    }
+            }
+        }
         .overlay(alignment: .bottom) {
             if let toastText {
                 Text(toastText)
@@ -204,16 +214,20 @@ struct FileSharingAppsView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                // v0.3.270/284：信息胶囊（版本 / 应用大小 / 文档大小）+ 第二行安装来源
+                // v0.3.291：对齐爱思两列——「类型」+「Apple ID」。
+                // 类型判定 = 归档信息里是否存在 iTunesMetadata（App Store 下发）：
+                // 有 → 苹果正版 + 账号邮箱；无（第三方商店/自签）→ 共享正版 + "-"。
+                HStack(spacing: 5) {
+                    capsule(app.isGenuine ? "苹果正版" : "共享正版",
+                            tint: app.isGenuine ? .teal : .gray)
+                    appleIdCapsule(app)
+                }
                 HStack(spacing: 5) {
                     if !app.version.isEmpty {
                         capsule("v\(app.version)", tint: .blue)
                     }
                     capsule("应用 \(FileSharingService.formatMB(app.appSize))", tint: .green)
                     capsule(docCapsuleText(app), tint: .orange)
-                }
-                HStack(spacing: 5) {
-                    appleIdCapsule(app)
                 }
             }
             Spacer()
@@ -227,58 +241,61 @@ struct FileSharingAppsView: View {
         }
     }
 
-    /// v0.3.281：Apple ID 胶囊——点击触发深度读取（instproxy Archive → 归档包内
-    /// iTunesMetadata.plist，爱思同款通道；耗时与 App 大小成正比）。
-    @ViewBuilder
+    /// v0.3.291：Apple ID 胶囊——直接显示 instproxy 返回的真实账号邮箱
+    /// （iTunesMetadata → downloadInfo.accountInfo.AppleID）；无则按爱思显示 "-"。
+    /// 点击弹出详情（账号 / DSID / 购买时间 / 签名来源）。
     private func appleIdCapsule(_ app: FileSharingApp) -> some View {
-        let bundleId = app.bundleId
-        let loading = deepLoading.contains(bundleId)
-        let deep = deepAppleIds[bundleId]
-        let shown: String = {
-            if loading { return "读取中…" }
-            if let deep { return deep.isEmpty ? "无 Apple ID" : deep }
-            return app.appleId ?? "—"
-        }()
-        let tint: Color = {
-            if loading { return .secondary }
-            if let deep { return deep.isEmpty ? .gray : .purple }
-            return app.appleId != nil ? .purple : .gray
-        }()
-        Button {
-            deepRead(app)
+        let text = app.appleId ?? "-"
+        let tint: Color = app.appleId != nil ? .purple : .gray
+        return Button {
+            detailApp = app
         } label: {
-            HStack(spacing: 3) {
-                if loading { ProgressView().controlSize(.mini) }
-                Text(shown).font(.caption2.weight(.medium))
-            }
-            .foregroundStyle(tint)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(tint.opacity(0.12), in: Capsule())
-            .lineLimit(1)
+            Text(text)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(tint.opacity(0.12), in: Capsule())
+                .lineLimit(1)
         }
         .buttonStyle(.plain)
-        .disabled(loading)
     }
 
-    /// 深度读取：Archive 该 App 并从归档包解析 iTunesMetadata.appleId（后台执行）。
-    private func deepRead(_ app: FileSharingApp) {
-        let bundleId = app.bundleId
-        guard !deepLoading.contains(bundleId) else { return }
-        deepLoading.insert(bundleId)
-        LoginLogger.shared.log("[AppleID] 开始深度读取 \(bundleId)（Archive 通道）")
-        Task.detached(priority: .userInitiated) {
-            let result = try? AppStoreIdReader.installingAppleId(bundleId: bundleId) { line in
-                LoginLogger.shared.log("[AppleID] \(line)")
+    /// v0.3.291：安装来源详情。（原 Archive 深读通道在 iOS 27 已失效——
+    /// instproxy Archive 返回 UnknownCommand，真机实证。）
+    private func appleIdDetailSheet(_ app: FileSharingApp) -> some View {
+        List {
+            Section("安装来源") {
+                detailRow("类型", app.isGenuine ? "苹果正版" : "共享正版")
+                detailRow("Apple ID", app.appleId ?? "-")
+                if let dsid = app.dsid { detailRow("账号 DSID", dsid) }
+                if let date = app.purchaseDate { detailRow("购买时间", date) }
             }
-            await MainActor.run {
-                deepLoading.remove(bundleId)
-                if let result {
-                    deepAppleIds[bundleId] = result.appleId
-                } else {
-                    deepAppleIds[bundleId] = ""
+            if let signer = app.signer, !signer.isEmpty {
+                Section("签名身份") {
+                    Text(signer).font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            Section("应用") {
+                detailRow("名称", app.name)
+                detailRow("标识", app.bundleId)
+                detailRow("版本", app.version.isEmpty ? "-" : app.version)
+                detailRow("应用大小", FileSharingService.formatMB(app.appSize))
+                detailRow("文档大小", docCapsuleText(app))
+            }
+        }
+        .navigationTitle(app.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func detailRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title).font(.footnote).foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.footnote.monospaced())
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.trailing)
         }
     }
 

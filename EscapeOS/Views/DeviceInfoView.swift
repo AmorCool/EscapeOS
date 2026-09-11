@@ -25,6 +25,7 @@ struct DeviceInfoView: View {
                     networkSection(info)
                     storageSection(info)
                     featuresSection(info)
+                    allValuesSection(info)
                     if info.raw.count > 0 { rawCard(info) }
                 } else {
                     errorCard
@@ -233,6 +234,30 @@ struct DeviceInfoView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// v0.3.291：lockdown 全量键值（与爱思设备信息页同源——爱思缓存的
+    /// <序列号>_info.txt 即这份 GetValue 全量字典；此前只挑选了部分键展示，
+    /// 因此检测项明显少于爱思）
+    @ViewBuilder
+    private func allValuesSection(_ info: DeviceInfoModel) -> some View {
+        if !info.allValues.isEmpty {
+            sectionCard(title: "完整信息（\(info.allValues.count) 项）", icon: "list.bullet.rectangle") {
+                ForEach(Array(info.allValues.enumerated()), id: \.offset) { _, pair in
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(pair.0)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Text(pair.1)
+                            .font(.caption.monospaced())
+                            .multilineTextAlignment(.trailing)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.vertical, 3)
+                }
             }
         }
     }

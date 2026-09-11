@@ -4,10 +4,10 @@ import Foundation
 /// 字段规则移植自 iDescriptor（github.com/iDescriptor/iDescriptor）utils.rs query_battery_info.
 struct BatteryHealthInfo {
     var cycleCount: Int?
-    var designCapacity: Int?      // mAh（出厂设计容量）
-    var maxCapacity: Int?         // mAh（当前实际最大容量）
-    var currentPercent: Int?      // 当前电量 %
-    var healthPercent: Int?       // 健康度 % = max/design*100
+    var designCapacity: Int?      // mAh（出厂设计容量）BatteryData.DesignCapacity
+    var maxCapacity: Int?         // mAh（满充容量 = 当前实际满充）BatteryData.FullChargeCapacity
+    var currentPercent: Int?      // 当前电量 %  BatteryData.CurrentCapacity
+    var healthPercent: Int?       // 健康度 % = 满充/设计*100
     var serial: String?
     var isCharging: Bool?
     var fullyCharged: Bool?
@@ -15,16 +15,20 @@ struct BatteryHealthInfo {
     var adapterWatts: Int?        // W
     var adapterVoltage: Double?   // V（mV/1000）
     var adapterDescription: String?  // 连接描述（如 USB-C/无线）
-    var batteryManufacturer: String? // 厂商（v0.3.286：电池序列号前 3 位映射）
-    // v0.3.286：移植爱思电池详情面板字段（逆向 idm_info.dll：IOPMPowerSource + gasguage）
-    var currentCapacityMAh: Int?     // AppleRawCurrentCapacity（当前容量 mAh）
+    var batteryManufacturer: String? // 厂商（电池序列号前 3 位映射）
+    // v0.3.286：移植爱思电池详情面板字段（IOPMPowerSource + gas gauge）
+    var currentCapacityMAh: Int?     // 当前容量 mAh（BatteryData.AbsoluteCapacity）
     var voltage: Double?             // Voltage（mV → V：当前电压）
     var bootVoltage: Double?         // BootVoltage（mV → V：开机电压）
     var instantAmperage: Int?        // InstantAmperage（mA：电池电流，负=放电）
-    var temperatureC: Double?        // Temperature（℃，-1/无效 → nil）
+    var temperatureC: Double?        // Temperature（℃，-1/无效 → nil；iOS 27 顶层已无此键）
     var atWarnLevel: Bool?           // AtWarnLevel（电池处于警告水平）
     var atCriticalLevel: Bool?       // AtCriticalLevel（电池处于临界水平）
     var vendorCode: String?          // 电池序列号前 3 位（F8Y 等）
+    // v0.3.291：真机 iPhone15,4 / iOS 27.0 dump 实证新增
+    var nominalChargeCapacity: Int?  // mAh 额定容量 BatteryData.NominalChargeCapacity
+    var remainingCapacity: Int?      // mAh 剩余容量 BatteryData.RemainingCapacity
+    var batteryPowerMW: Int?         // mW 电池功率 BatteryData.BatteryPower（负=放电）
     var raw: [String: Any] = [:]  // 调试用（字段缺失时可看）
 }
 
@@ -213,31 +217,21 @@ enum BatteryHealthService {
         // 2. 设计容量：BatteryData.DesignCapacity（iDescriptor 无顶层回退，mAh）
         let design = num("DesignCapacity", in: bd) ?? num("DesignCapacity", in: dict)
 
-        // 3. 最大容量 —— v0.3.207 修复「充电中虚高/随时变」：
-        //    FullChargeCapacity = 当前满充估算，充电中会随电压电流浮动（iDescriptor 也踩，
-        //    iOS26.6 健康度不准 issue #132）.**AppleRawMaxCapacity 才是稳定原始满充容量**，
-        //    优先取它；FullChargeCapacity 仅兜底.仍保留 mAh sanity（>200 且 ≤ design+1000）.
+        // 3. 容量 —— v0.3.291 真机实证修正（iPhone15,4 / iOS 27.0 dump）：
         let isChargingNow = dict["IsCharging"] as? Bool ?? false
-        let candidates: [(String, Int?)] = [
-            ("AppleRawMaxCapacity", num("AppleRawMaxCapacity", in: dict)),
-            ("BatteryData.FullChargeCapacity", num("FullChargeCapacity", in: bd)),
-            ("FullChargeCapacity", num("FullChargeCapacity", in: dict)),
-            ("BatteryData.MaxCapacity", num("MaxCapacity", in: bd)),
-            ("top.MaxCapacity", num("MaxCapacity", in: dict)),
-        ]
-        var maxCapacity: Int? = nil
-        for (src, val) in candidates {
-            guard let val else { continue }
-            if val >= 200 && (design == nil || val <= (design ?? 5000) + 1000) {
-                maxCapacity = val
-                break
-            }
-        }
-        // 若全部落选（如 BatteryData.MaxCapacity 恰是百分比），兜底设计容量
+        //    mAh 真值只在 **BatteryData** 里；顶层 AppleRawMaxCapacity /
+        //    AppleRawCurrentCapacity 在 iOS 27 已不存在（爱思同环境读不到 →
+        //    其「出厂容量/满充容量」显示 -1）。故一律以 BatteryData 为准。
+        let fullCharge = num("FullChargeCapacity", in: bd) ?? num("FullChargeCapacity", in: dict)
+        let nominal = num("NominalChargeCapacity", in: bd) ?? num("NominalChargeCapacity", in: dict)
+        let absolute = num("AbsoluteCapacity", in: bd)
+        let remaining = num("RemainingCapacity", in: bd) ?? num("TrueRemainingCapacity", in: bd)
+        var maxCapacity = fullCharge ?? num("AppleRawMaxCapacity", in: dict) ?? num("MaxCapacity", in: bd)
+        if let m = maxCapacity, m < 200 { maxCapacity = nil }   // 百分比形态剔除
         if maxCapacity == nil { maxCapacity = design }
 
-        // 4. 健康度 —— v0.3.207：单调基线（物理真实健康度只会缓慢下降；充电估算上涨是噪声）.
-        //    基线存 UserDefaults；允许下降立即更新；上涨仅当明显跳变（>2%，如换电池/校准）才采纳.
+        // 4. 健康度 —— 满充容量 / 出厂设计容量（爱思「电池寿命」同口径）。
+        //    单调基线（物理真实健康度只会缓慢下降；充电估算上涨是噪声）.
         var health: Int? = nil
         if let design, design > 0, let maxCapacity {
             let raw = min(100, max(0, Int((Double(maxCapacity) / Double(design)) * 100)))
@@ -262,30 +256,26 @@ enum BatteryHealthService {
             }
         }
 
-        // 5. 当前电量 —— v0.3.205 改百分比：
-        //    iOS ≤26：AppleRawCurrentCapacity / AppleRawMaxCapacity × 100
-        //    iOS >26：BatteryData.CurrentCapacity 已是百分比（clamp ≤100）
+        // 5. 当前电量 —— v0.3.291：BatteryData.CurrentCapacity 在 iOS 26/27 即百分比；
+        //    老版本回退 AppleRawCurrentCapacity / AppleRawMaxCapacity 比例.
         var currentPercent: Int? = nil
-        if let iosMajor, iosMajor > 26 {
-            if let c = num("CurrentCapacity", in: bd) {
-                currentPercent = min(100, c)
-            } else if let cur = num("AppleRawCurrentCapacity", in: dict),
-                      let max = num("AppleRawMaxCapacity", in: dict), max > 0 {
-                currentPercent = min(100, Int(Double(cur) / Double(max) * 100))
-            }
-        } else {
-            if let cur = num("AppleRawCurrentCapacity", in: dict),
-               let max = num("AppleRawMaxCapacity", in: dict), max > 0 {
-                currentPercent = min(100, Int(Double(cur) / Double(max) * 100))
-            } else if let c = num("CurrentCapacity", in: bd) {
-                currentPercent = min(100, c)
-            }
+        if let c = num("CurrentCapacity", in: bd), c > 0, c <= 100 {
+            currentPercent = c
+        } else if let cur = num("AppleRawCurrentCapacity", in: dict),
+                  let rawMax = num("AppleRawMaxCapacity", in: dict), rawMax > 0 {
+            currentPercent = min(100, Int(Double(cur) / Double(rawMax) * 100))
+        } else if let c = num("CurrentCapacity", in: dict), c > 0, c <= 100 {
+            currentPercent = c
         }
 
         let serial = dict["Serial"] as? String
-        let isCharging: Bool? = dict["IsCharging"] as? Bool
-            ?? ((dict["ChargerData"] as? [String: Any])?["IsCharging"] as? Bool)
-        let fullyCharged = dict["FullyCharged"] as? Bool
+        // v0.3.291：真机 ChargerData.IsCharging 是 1/0 整数而非 Bool，补数值形态
+        let isCharging: Bool? = (dict["IsCharging"] as? Bool)
+            ?? num("IsCharging", in: dict).map { $0 != 0 }
+            ?? (dict["ChargerData"] as? [String: Any]).flatMap { num("IsCharging", in: $0).map { v in v != 0 } }
+        let fullyCharged = (dict["FullyCharged"] as? Bool)
+            ?? num("FullyCharged", in: dict).map { $0 != 0 }
+            ?? num("FullyCharged", in: bd).map { $0 != 0 }
 
         // 6. 适配器（v0.3.205）
         var adapterWatts: Int? = nil
@@ -339,7 +329,14 @@ enum BatteryHealthService {
         }
         let warnLevel = dict["AtWarnLevel"] as? Bool
         let criticalLevel = dict["AtCriticalLevel"] as? Bool
-        let currentMAh = num("AppleRawCurrentCapacity", in: dict)
+        // v0.3.291：当前容量 = BatteryData.AbsoluteCapacity（mA·h 实测值）；
+        // 老版本回退 AppleRawCurrentCapacity；BatteryData.BatteryPower 为 mW 功率.
+        let currentMAh = absolute
+            ?? num("AppleRawCurrentCapacity", in: dict)
+            ?? num("CurrentCapacity", in: dict).flatMap { c in
+                (c <= 100 ? nil : c)
+            }
+        let powerMW = num("BatteryPower", in: bd)
 
         return BatteryHealthInfo(
             cycleCount: cycle,
@@ -362,6 +359,9 @@ enum BatteryHealthService {
             atWarnLevel: warnLevel,
             atCriticalLevel: criticalLevel,
             vendorCode: vendorCode,
+            nominalChargeCapacity: nominal,
+            remainingCapacity: remaining,
+            batteryPowerMW: powerMW,
             raw: dict
         )
     }

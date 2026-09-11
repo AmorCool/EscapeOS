@@ -15,7 +15,16 @@ struct FileSharingApp: Identifiable {
     var path: String?       // ApplicationPath（可选展示）
     var appSize: Int64?     // 应用大小（StaticDiskUsage / CFBundleSize，字节；未返回则为 nil）
     var docSize: Int64?     // 文档大小（DynamicDiskUsage，字节；未返回则 UI 层走 AFC 懒算）
-    var appleId: String?    // 安装来源 Apple ID（iTunesMetadata.appleId，App Store 安装才有）
+    // v0.3.291：安装来源（真机 iPhone15,4 / iOS 27.0 实证）
+    //   iTunesMetadata 是 **binary plist 字节**（不是字典），账号邮箱在
+    //   com.apple.iTunesStore.downloadInfo.accountInfo.AppleID；
+    //   ApplicationDSID = 安装该 App 的账号 DSID（与 accountInfo.DSPersonID 同值）；
+    //   IsAppStoreVendable / Archive 在 iOS 27 均不可用（后者返回 UnknownCommand）。
+    var appleId: String?      // 账号邮箱（appleId 顶层 或 downloadInfo.accountInfo.AppleID）
+    var dsid: String?         // 账号 DSID（accountInfo.DSPersonID 或 ApplicationDSID）
+    var purchaseDate: String? // 购买/下载时间（downloadInfo.purchaseDate）
+    var signer: String?       // SignerIdentity（侧载/签名身份，App Store 为 "Apple iPhone OS Application Signing"）
+    var isGenuine: Bool = false // 爱思「苹果正版」= 归档信息里有 iTunesMetadata（App Store 下发）
 }
 
 enum FileSharingService {
@@ -88,24 +97,38 @@ enum FileSharingService {
         let appSize = (dict["StaticDiskUsage"] as? NSNumber)?.int64Value
             ?? (dict["CFBundleSize"] as? NSNumber)?.int64Value
         let docSize = (dict["DynamicDiskUsage"] as? NSNumber)?.int64Value
-        let itunesMeta = dict["iTunesMetadata"] as? [String: Any]
-        var appleId = (itunesMeta?["appleId"] as? String)
-            ?? (itunesMeta?["bpsAccountID"] as? String)
-            ?? (itunesMeta?["purchaseAccountID"] as? String)
-        // v0.3.280：iOS 26 的 instproxy 不返回 iTunesMetadata（真机实测恒为 —），
-        // 用签名来源兜底——Entitlements.application-identifier（TeamID.BundleID）
-        // + IsAppStoreVendable 判断「App Store 正版」还是「侧载（TeamID 前缀）」。
-        if appleId == nil {
-            let entitlements = dict["Entitlements"] as? [String: Any]
-            let appIdentifier = entitlements?["application-identifier"] as? String
-            let vendable = (dict["IsAppStoreVendable"] as? Bool) ?? false
-            // v0.3.289：文案对齐爱思——`苹果正版`(App Store) / `共享正版`(第三方商店共享账号签名)
-            if let appIdentifier, let teamID = appIdentifier.split(separator: ".").first.map(String.init) {
-                appleId = vendable ? "苹果正版" : "共享正版 · \(teamID.prefix(6))"
-            } else if vendable {
-                appleId = "苹果正版"
+        let itunesMeta = dict["iTunesMetadata"]
+        var appleId: String?
+        var dsid = (dict["ApplicationDSID"] as? NSNumber).map { String($0.int64Value) }
+        var purchaseDate: String?
+
+        // v0.3.291：iTunesMetadata 在 iOS 27 上以 **binary plist 字节(Data)** 返回
+        // （真机实证：b'bplist00...'），此前按 [String:Any] 解析恒失败 → 所有 App
+        // 都落到兜底分支被打成「共享正版」。账号邮箱实际路径：
+        //   com.apple.iTunesStore.downloadInfo.accountInfo.AppleID
+        func absorbMetadata(_ meta: [String: Any]) {
+            if appleId == nil {
+                appleId = (meta["appleId"] as? String)
+                    ?? (meta["purchaseAccountID"] as? String)
+                    ?? (meta["bpsAccountID"] as? String)
+            }
+            guard let info = meta["com.apple.iTunesStore.downloadInfo"] as? [String: Any] else { return }
+            if purchaseDate == nil { purchaseDate = info["purchaseDate"] as? String }
+            guard let account = info["accountInfo"] as? [String: Any] else { return }
+            if appleId == nil { appleId = account["AppleID"] as? String }
+            if dsid == nil, let person = account["DSPersonID"] as? NSNumber {
+                dsid = String(person.int64Value)
             }
         }
+        if let metaData = itunesMeta as? Data,
+           let meta = (try? PropertyListSerialization.propertyList(from: metaData, options: [], format: nil)) as? [String: Any] {
+            absorbMetadata(meta)
+        } else if let meta = itunesMeta as? [String: Any] {
+            absorbMetadata(meta)
+        }
+
+        let signer = dict["SignerIdentity"] as? String
+        let isGenuine = itunesMeta != nil
         return FileSharingApp(
             bundleId: bundleId,
             name: name,
@@ -115,7 +138,11 @@ enum FileSharingService {
             path: dict["Path"] as? String,
             appSize: appSize,
             docSize: docSize,
-            appleId: appleId
+            appleId: appleId,
+            dsid: dsid,
+            purchaseDate: purchaseDate,
+            signer: signer,
+            isGenuine: isGenuine
         )
     }
 

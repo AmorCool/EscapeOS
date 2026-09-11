@@ -75,10 +75,39 @@ struct DeviceInfoModel {
     var hasBattery: Bool?               // HasBattery
     // 功能支持（DeviceSupports* 全部键）
     var supportedFeatures: [String] = []
+    // v0.3.291：lockdown 全量键值（与爱思设备信息页同源同量——爱思缓存的
+    // <序列号>_info.txt 即lockdown GetValue 全量字典；此前只挑了部分键，
+    // 故检测项远少于爱思）
+    var allValues: [(String, String)] = []
     var raw: [String: Any] = [:]
 }
 
 enum DeviceInfoService {
+    /// v0.3.291：lockdown 字典 → 扁平键值对（嵌套字典/数组转字符串），按 key 排序.
+    static func flatten(_ dict: [String: Any]) -> [(String, String)] {
+        dict.compactMap { key, value -> (String, String)? in
+            let text: String
+            switch value {
+            case let s as String:
+                text = s
+            case let b as Bool:
+                text = b ? "true" : "false"
+            case let n as NSNumber:
+                text = n.stringValue
+            case let a as [Any]:
+                text = a.map { String(describing: $0) }.joined(separator: ", ")
+            case let d as [String: Any]:
+                text = d.map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+            default:
+                text = String(describing: value)
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return (key, trimmed)
+        }
+        .sorted { $0.0 < $1.0 }
+    }
+
     /// 收集完整设备信息（lockdown + AFC + MobileGestalt + sysctl）.
     /// 同步阻塞——调用方放到后台线程.
     static func collectFull() throws -> DeviceInfoModel {
@@ -212,6 +241,7 @@ enum DeviceInfoService {
             hasBaseband: boolOf(itunes["HasBaseband"]),
             hasBattery: boolOf(itunes["HasBattery"]),
             supportedFeatures: features,
+            allValues: Self.flatten(lockdown),
             raw: lockdown.merging(itunes) { a, _ in a }
         )
     }

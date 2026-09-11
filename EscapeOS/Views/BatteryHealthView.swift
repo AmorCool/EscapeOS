@@ -136,13 +136,13 @@ struct BatteryHealthView: View {
 
     // MARK: 指标网格
     private func metricsGrid(info: BatteryHealthInfo) -> some View {
-        // v0.3.205：当前电量显示百分比；容量均为 mAh
+        // v0.3.291：指标项与爱思「电池详情」对齐（充电次数 / 出厂容量 / 满充容量 / 电池寿命）
         let rows: [(String, String)] = [
             ("当前电量", info.currentPercent.map { "\($0)%" } ?? "—"),
-            ("循环次数", info.cycleCount.map { "\($0) 次" } ?? "—"),
-            ("设计容量", info.designCapacity.map { "\($0) mAh" } ?? "—"),
-            ("最大容量", info.maxCapacity.map { "\($0) mAh" } ?? "—"),
-            ("充电状态", chargingLabel(info)),
+            ("充电次数", info.cycleCount.map { "\($0) 次" } ?? "—"),
+            ("出厂容量", info.designCapacity.map { "\($0) mAh" } ?? "—"),
+            ("满充容量", info.maxCapacity.map { "\($0) mAh" } ?? "—"),
+            ("电池寿命", info.healthPercent.map { "\($0)%" } ?? "—"),
         ]
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
             ForEach(rows, id: \.0) { row in
@@ -257,9 +257,12 @@ struct BatteryHealthView: View {
             batteryCardRow("出厂容量", info.designCapacity.map { "\($0) mAh" }, icon: "battery.0")
             batteryCardRow("当前容量", info.currentCapacityMAh.map { "\($0) mAh" }, icon: "battery.50")
             batteryCardRow("满充容量", info.maxCapacity.map { "\($0) mAh" }, icon: "battery.100")
+            batteryCardRow("额定容量", info.nominalChargeCapacity.map { "\($0) mAh" }, icon: "battery.75")
+            batteryCardRow("剩余容量", info.remainingCapacity.map { "\($0) mAh" }, icon: "battery.25")
             batteryCardRow("当前电压", info.voltage.map { String(format: "%.2f V", $0) }, icon: "bolt.fill")
             batteryCardRow("开机电压", info.bootVoltage.map { String(format: "%.2f V", $0) }, icon: "power")
             batteryCardRow("电池电流", info.instantAmperage.map { "\($0) mA" }, icon: "waveform.path.ecg")
+            batteryCardRow("电池功率", info.batteryPowerMW.map { "\($0) mW" }, icon: "bolt.circle")
             batteryCardRow("电池温度", info.temperatureC.map { String(format: "%.1f ℃", $0) }, icon: "thermometer.medium")
             batteryCardRow("电池处于警告水平", boolText(info.atWarnLevel), icon: "exclamationmark.triangle")
             batteryCardRow("电池处于临界水平", boolText(info.atCriticalLevel), icon: "exclamationmark.octagon")
@@ -296,9 +299,13 @@ struct BatteryHealthView: View {
         return v ? "是" : "否"
     }
 
-    /// 生产日期：优先查 IORegistry 原始字典的日期键，否则诚实标注未公开
+    /// v0.3.291：生产日期——真机 iPhone15,4 / iOS 27.0 实测：IOPMPowerSource（含
+    /// BatteryData、IOService/IODeviceTree 全 plane）均无 ManufactureDate/DateOfFirstUse，
+    /// diagnostics_relay 的 MobileGestalt 在 iOS ≥17.4 已被 Apple 废弃；
+    /// 该值只在系统「设置 → 电池 → 电池健康」内可见（batteryhealthd 私有数据），
+    /// 侧载 App 无公开读取通道。若有旧机型/旧系统仍返回该键，则直接显示。
     private func manufactureDateText(_ info: BatteryHealthInfo) -> String? {
-        let keys = ["ManufactureDate", "ProductionDate", "ManufacturingDate"]
+        let keys = ["ManufactureDate", "ProductionDate", "ManufacturingDate", "DateOfFirstUse"]
         for k in keys {
             if let d = info.raw[k] as? String, !d.isEmpty { return d }
             if let n = info.raw[k] as? Int, n > 0 { return String(n) }
@@ -308,7 +315,7 @@ struct BatteryHealthView: View {
                 if let d = bd[k] as? String, !d.isEmpty { return d }
             }
         }
-        return "未公开"
+        return "系统未提供"
     }
 
     private func chargingLabel(_ info: BatteryHealthInfo) -> String {
