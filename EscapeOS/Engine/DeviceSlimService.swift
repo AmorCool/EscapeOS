@@ -88,13 +88,15 @@ enum DeviceSlimService {
         var appSize: Int64 = 0
         var docSize: Int64 = 0
         var version: String = ""
-        var ipaFileName: String?   // 免登录下载库里匹配到的重装包（nil = 资源缺失）
+        var ipaFileName: String?   // 免登录下载库里已有的包（nil = 本地没有）
+        /// 免登录源里能不能下到（nil = 还没探测）—— 恢复爱思的「资源缺失无法重装」判定
+        var sourceAvailable: Bool? = nil
         var isRisky: Bool = false  // 聊天类：重装会丢聊天记录
     }
 
     struct Group: Identifiable {
         let kind: GroupKind
-        let items: [Item]
+        var items: [Item]
         var id: String { kind.rawValue }
         var totalBytes: Int64 { items.reduce(0) { $0 + $1.bytes } }
     }
@@ -132,10 +134,14 @@ enum DeviceSlimService {
     static let pathPhotoCaches = "/PhotoData/Caches"
     static let pathSharedAlbumCaches = "/PhotoData/PhotoCloudSharingData/Caches"
 
+    /// 系统缓存文件 = 可再生缓存目录。
+    /// `/Downloads` 是 Safari 的下载记录数据库（`downloads.28.sqlitedb` + `-wal`/`-shm`），
+    /// 体积随 WAL 波动（实测 369.25 KiB，爱思面板曾显示 361.20 KB）——爱思的清理项里也有它。
     static var systemCachePaths: [(String, String)] {
         [(pathPhotoThumbnails, "照片缩略图（系统按需重建）"),
          (pathPhotoCaches, "照片库缓存"),
-         (pathSharedAlbumCaches, "共享相簿媒体缓存")]
+         (pathSharedAlbumCaches, "共享相簿媒体缓存"),
+         ("/Downloads", "下载记录缓存")]
     }
 
     static let tempPaths: [(String, String)] = [
@@ -370,10 +376,17 @@ enum DeviceSlimService {
             let docSize = app.docSize ?? 0
             let total = appSize + docSize
             guard total > bigAppThreshold else { continue }
+            var available: Bool? = nil
+            if byBundle[app.bundleId] != nil {
+                available = true
+            } else {
+                available = SourcePackageLocator.cachedAvailability(bundleId: app.bundleId)
+            }
             out.append(Item(id: app.bundleId, name: app.name,
                             detail: nil, bytes: total, kind: .bigApps, deletable: false,
                             appSize: appSize, docSize: docSize, version: app.version,
                             ipaFileName: byBundle[app.bundleId]?.fileName,
+                            sourceAvailable: available,
                             isRisky: riskyBundleIds.contains(app.bundleId)))
         }
         return out.sorted { $0.bytes > $1.bytes }
@@ -382,6 +395,12 @@ enum DeviceSlimService {
     private static func itemName(_ path: String) -> String {
         let name = (path as NSString).lastPathComponent
         return name.isEmpty ? path : name
+    }
+
+    /// 探测「免登录源里有没有这些应用」，回填 `sourceAvailable`（爱思的「资源缺失无法重装」）
+    static func probeSourceAvailability(_ targets: [(bundleId: String, name: String)],
+                                        progress: ((Int, Int) -> Void)? = nil) async -> [String: Bool] {
+        await SourcePackageLocator.probe(bundleIds: targets, progress: progress)
     }
 
     // MARK: - 清理（缓存项）

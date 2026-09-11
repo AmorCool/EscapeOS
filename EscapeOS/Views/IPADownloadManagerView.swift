@@ -12,6 +12,8 @@ struct IPADownloadManagerView: View {
     @State private var items: [IPADownloadItem] = []
     @State private var selection = Set<String>()
     @ObservedObject private var center = IPADownloadCenter.shared
+    @Environment(\.editMode) private var editMode
+    private var isEditing: Bool { editMode?.wrappedValue == .active }
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -20,7 +22,9 @@ struct IPADownloadManagerView: View {
     }()
 
     var body: some View {
-        List(selection: $selection) {
+        // 只有进入「编辑」才允许勾选（否则点一下就会被选中）
+        List(selection: Binding(get: { isEditing ? selection : [] },
+                                set: { if isEditing { selection = $0 } })) {
             activeSection
             summarySection
             contentSection
@@ -77,21 +81,20 @@ struct IPADownloadManagerView: View {
             }
             ProgressView(value: min(1, max(0, job.overall)))
             HStack(spacing: 14) {
-                if job.canPause {
-                    Button {
-                        if job.phase == .paused {
-                            center.resume(job.id)
-                        } else {
-                            center.pause(job.id)
-                        }
-                    } label: {
-                        Label(job.phase == .paused ? "继续" : "暂停",
-                              systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
-                            .font(.caption)
+                Button {
+                    if job.phase == .paused {
+                        center.resume(job.id)
+                    } else {
+                        center.pause(job.id)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.blue)
+                } label: {
+                    Label(job.phase == .paused ? "继续" : "暂停",
+                          systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
+                        .font(.caption)
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
+                .disabled(!job.canPause)
                 Button {
                     center.cancel(job.id)
                     ToastCenter.shared.show("已取消并删除该安装包")

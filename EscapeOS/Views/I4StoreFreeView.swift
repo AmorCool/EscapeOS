@@ -191,19 +191,19 @@ struct I4StoreFreeView: View {
                         .frame(width: 44)
                     Text(job.phase == .paused ? "已暂停" : job.stageText)
                         .font(.caption2).foregroundStyle(.secondary)
-                    if job.canPause {
-                        Button {
-                            if job.phase == .paused {
-                                center.resume(job.id)
-                            } else {
-                                center.pause(job.id)
-                            }
-                        } label: {
-                            Image(systemName: job.phase == .paused ? "play.circle.fill" : "pause.circle.fill")
-                                .font(.body)
+                    Button {
+                        if job.phase == .paused {
+                            center.resume(job.id)
+                        } else {
+                            center.pause(job.id)
                         }
-                        .buttonStyle(.plain)
+                    } label: {
+                        Image(systemName: job.phase == .paused ? "play.circle.fill" : "pause.circle.fill")
+                            .font(.body)
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
+                    .disabled(!job.canPause)
                     Button {
                         center.cancel(job.id)
                     } label: {

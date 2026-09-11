@@ -19,6 +19,9 @@ struct AppStoreDetailView: View {
     // 内置网页
     @State private var browserTarget: LinkShareTarget?
 
+    // 下载管理
+    @State private var showDownloadManager = false
+
     var body: some View {
         List {
             headerSection
@@ -41,6 +44,26 @@ struct AppStoreDetailView: View {
                     Image(systemName: isFavorite ? "star.fill" : "star")
                         .foregroundStyle(isFavorite ? .yellow : .secondary)
                 }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showDownloadManager = true
+                } label: {
+                    // 有进行中的任务时带小圆点
+                    Image(systemName: center.activeJobs.isEmpty
+                          ? "arrow.down.circle" : "arrow.down.circle.fill")
+                        .foregroundStyle(center.activeJobs.isEmpty ? Color.secondary : Color.blue)
+                }
+            }
+        }
+        .sheet(isPresented: $showDownloadManager) {
+            NavigationStack {
+                IPADownloadManagerView()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") { showDownloadManager = false }
+                        }
+                    }
             }
         }
         .sheet(isPresented: $showInstallOptions) {
@@ -75,6 +98,7 @@ struct AppStoreDetailView: View {
             AppStoreScreenshotViewer(urls: item.screenshots, startIndex: target.index)
         }
         .toastHost()
+        .task { await loadDetail() }
         .onAppear { isFavorite = AppFavoritesStore.shared.contains(appId: item.id) }
     }
 
@@ -149,42 +173,81 @@ struct AppStoreDetailView: View {
     @ViewBuilder
     private var installArea: some View {
         if let job = activeJob {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Text(job.stageText).font(.subheadline.weight(.medium))
                     Spacer(minLength: 0)
                     Text("\(Int(job.overall * 100))%")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                    if job.canPause {
-                        Button {
-                            if job.phase == .paused {
-                                center.resume(job.id)
-                            } else {
-                                center.pause(job.id)
-                            }
-                        } label: {
-                            Image(systemName: job.phase == .paused ? "play.circle.fill" : "pause.circle.fill")
-                                .font(.title3)
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
                 ProgressView(value: min(1, max(0, job.overall)))
+
+                HStack(spacing: 16) {
+                    // 暂停/继续：只有直链下载期间可用（安装阶段不可暂停）
+                    Button {
+                        if job.phase == .paused {
+                            center.resume(job.id)
+                        } else {
+                            center.pause(job.id)
+                        }
+                    } label: {
+                        Label(job.phase == .paused ? "继续" : "暂停",
+                              systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
+                    .disabled(!job.canPause)
+
+                    Button {
+                        center.cancel(job.id)
+                        ToastCenter.shared.show("已取消并删除该安装包")
+                    } label: {
+                        Label("删除安装包", systemImage: "trash")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+
+                    Spacer(minLength: 0)
+
+                    Button {
+                        showDownloadManager = true
+                    } label: {
+                        Label("下载管理", systemImage: "list.bullet")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                }
+            }
+        } else if let failed = center.lastFinishedJob(bundleId: item.bundleId, name: item.name),
+                  failed.phase == .failed, let err = failed.error {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                getButton
             }
         } else {
-            Button {
-                showInstallOptions = true
-            } label: {
-                Text(item.priceText == "免费" ? "获取" : "购买 \(item.priceText)")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.blue, in: Capsule())
-                    .foregroundStyle(.white)
-            }
-            .buttonStyle(.plain)
+            getButton
         }
+    }
+
+    /// 「获取」按钮：弹出安装方式选择
+    private var getButton: some View {
+        Button {
+            showInstallOptions = true
+        } label: {
+            Text(item.priceText == "免费" ? "获取" : "购买 \(item.priceText)")
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.blue, in: Capsule())
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: 截图

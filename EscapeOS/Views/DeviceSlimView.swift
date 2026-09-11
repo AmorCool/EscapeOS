@@ -47,10 +47,12 @@ struct DeviceSlimView: View {
     private var bigAppItems: [DeviceSlimService.Item] {
         groups.first { $0.kind == .bigApps }?.items ?? []
     }
-    /// 可重装的 = 全部较大应用（本地无包时重装会自动去免登录源下载）
-    private var reinstallableApps: [DeviceSlimService.Item] { bigAppItems }
+    /// 可重装 = 本地已有包，或免登录源里确认有（`sourceAvailable == true`）
+    private var reinstallableApps: [DeviceSlimService.Item] {
+        bigAppItems.filter { $0.sourceAvailable == true }
+    }
     private var reinstallTargets: [DeviceSlimService.Item] {
-        bigAppItems.filter { reinstallSelection.contains($0.id) }
+        bigAppItems.filter { reinstallSelection.contains($0.id) && $0.sourceAvailable == true }
     }
     private var reinstallDocBytes: Int64 {
         reinstallTargets.reduce(0) { $0 + $1.docSize }
@@ -343,20 +345,26 @@ struct DeviceSlimView: View {
     /// 较大应用行（爱思表格：应用名称 / 应用大小 / 文档大小 / 操作）
     private func bigAppRow(_ item: DeviceSlimService.Item) -> some View {
         let on = reinstallSelection.contains(item.id)
+        let actionable = item.sourceAvailable == true
         return Button {
+            guard actionable else { return }
             if on { reinstallSelection.remove(item.id) } else { reinstallSelection.insert(item.id) }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: on ? "checkmark.square.fill" : "square")
+                Image(systemName: actionable ? (on ? "checkmark.square.fill" : "square") : "square")
                     .font(.body)
-                    .foregroundStyle(on ? .blue : .secondary)
+                    .foregroundStyle(actionable ? (on ? .blue : .secondary) : Color.gray.opacity(0.35))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name).font(.subheadline).lineLimit(1).foregroundStyle(.primary)
                     HStack(spacing: 6) {
                         Text("应用 \(DeviceSlimService.formatBytes(item.appSize))")
                         Text("·")
                         Text("文档 \(DeviceSlimService.formatBytes(item.docSize))")
-                        if item.isRisky {
+                        if item.sourceAvailable == false {
+                            Text("资源缺失无法重装").foregroundStyle(.orange)
+                        } else if item.sourceAvailable == nil {
+                            Text("检测中…").foregroundStyle(.secondary)
+                        } else if item.isRisky {
                             Text("谨慎选择").foregroundStyle(.red)
                         }
                     }
@@ -370,6 +378,7 @@ struct DeviceSlimView: View {
             .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
+        .disabled(!actionable)
     }
 
     // MARK: - 流程
@@ -395,8 +404,31 @@ struct DeviceSlimView: View {
             selection = Set(scanned.filter { $0.kind.selectable }.flatMap(\.items).map(\.id))
             self.fromCache = fromCache
             phase = .ready
+            await probeAvailability()
         } catch {
             errorText = "读取失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 回填「免登录源里有没有」——决定「较大应用」能不能勾选重装（爱思同款判定）
+    private func probeAvailability() async {
+        let unknown = bigAppItems
+            .filter { $0.sourceAvailable == nil }
+            .map { (bundleId: $0.id, name: $0.name) }
+        guard !unknown.isEmpty else { return }
+        let result = await DeviceSlimService.probeSourceAvailability(unknown)
+        guard !result.isEmpty else { return }
+        groups = groups.map { group in
+            guard group.kind == .bigApps else { return group }
+            var updated = group
+            updated.items = group.items.map { item in
+                var copy = item
+                if copy.sourceAvailable == nil, let ok = result[item.id] {
+                    copy.sourceAvailable = ok
+                }
+                return copy
+            }
+            return updated
         }
     }
 
