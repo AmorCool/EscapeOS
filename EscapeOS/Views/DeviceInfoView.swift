@@ -138,6 +138,18 @@ struct DeviceInfoView: View {
             row("本机可用 / 总", "\(info.storageFreeGB) GB / \(info.storageTotalGB) GB")
             row("CPU 核心", "\(info.cpuCount) 核")
             row("物理内存", "\(info.memoryMB) MB")
+            // v0.3.293：硬盘详情（移植爱思同款面板——IORegistry AppleEmbeddedNVMeController）
+            Divider().padding(.vertical, 6)
+            NavigationLink {
+                StorageDetailView()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "internaldrive.fill").foregroundStyle(.blue)
+                    Text("硬盘详情").font(.footnote)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
         }
     }
 
