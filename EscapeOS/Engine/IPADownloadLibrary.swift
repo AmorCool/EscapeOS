@@ -70,6 +70,12 @@ final class IPADownloadLibrary {
         directory.appendingPathComponent(item.fileName).path
     }
 
+    /// 本地绝对路径（按文件名）—— v0.3.314：设备瘦身的「重装」只需要文件名，
+    /// 不必为了拿路径去拼一个假的 item.
+    func path(forFileName name: String) -> String {
+        directory.appendingPathComponent(name).path
+    }
+
     // MARK: - 读取（索引 ∪ 磁盘）
 
     /// 列出全部已下载 IPA（按下载时间倒序）.

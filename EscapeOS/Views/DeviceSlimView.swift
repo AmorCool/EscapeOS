@@ -1,59 +1,19 @@
 import SwiftUI
 
-/// 设备瘦身（爱思助手 8.0「设备瘦身」移植）—— 主页新板块.
+/// 设备瘦身（爱思助手 8.0「设备瘦身」移植）—— 主页板块.
 ///
-/// 结构对齐爱思：设备头 + 空间占用环形图与图例 + 备份警告 + 扫描结果分组
-/// （系统缓存文件 / 用户日志 / 其他临时文件 / 较大应用）+ 已选统计 + 开始瘦身.
+/// 版式对齐爱思：设备头 + **环形图与图例同一张卡**（v0.3.314 修掉之前的"割裂感"）
+/// + 备份警告 + 已选统计 + 分组（系统缓存文件 / 用户日志 / 其他临时文件 / 较大应用）
+/// + 「较大应用」按爱思做成**应用名称 / 应用大小 / 文档大小 / 操作**表，勾选 = 重装.
 ///
-/// 实现要点：行/分组全部走纯数据（`DeviceSlimService.Group` / `Item`），
-/// 视图只负责渲染——避免把大量 `@ViewBuilder` 分组堆进一个 body
-/// （v0.3.307 设备信息页闪退的根因就是 body 类型过深）.
+/// 视图只做渲染，行与分组全部走纯数据（`DeviceSlimService.Group` / `Item`），
+/// 避免把大量 `@ViewBuilder` 分组堆进一个 body（v0.3.307 设备信息页闪退的根因）.
 struct DeviceSlimView: View {
 
     private enum Phase: Equatable {
-        case loading      // 读空间占用
-        case scanning     // 扫描可清理项
-        case ready        // 结果就绪（可勾选）
-        case cleaning     // 清理中
-        case finished     // 已瘦身
+        case loading, scanning, ready, cleaning, reinstalling, finished
     }
 
-    private struct SectionSpec: Identifiable {
-        let id: String
-        let title: String
-        let subtitle: String
-        let icon: String
-    }
-
-    @State private var phase: Phase = .loading
-    @State private var usage: DeviceSlimService.SpaceUsage?
-    @State private var groups: [DeviceSlimService.Group] = []
-    @State private var selection: Set<String> = []
-    @State private var statusText = "正在分析您的设备空间占用情况…"
-    @State private var confirmClean = false
-    @State private var resultText: String?
-    @State private var errorText: String?
-
-    // MARK: - 派生数据
-
-    /// 可勾选的项（较大应用不参与）
-    private var selectableItems: [DeviceSlimService.Item] {
-        groups.filter { $0.kind.selectable }.flatMap(\.items)
-    }
-
-    private var selectedItems: [DeviceSlimService.Item] {
-        selectableItems.filter { selection.contains($0.id) }
-    }
-
-    private var selectedBytes: Int64 {
-        selectedItems.reduce(0) { $0 + $1.bytes }
-    }
-
-    private var isBusy: Bool { phase == .loading || phase == .scanning || phase == .cleaning }
-
-    /// 环形图分段（累加比例）—— 用结构体而非元组：
-    /// Swift 的 KeyPath 不支持元组成员，`ForEach(_, id: \.id)` 会编译失败.
-    /// 必须是 fileprivate（同文件的 `DeviceSlimDonut` 要引用它）.
     fileprivate struct ChartSegment: Identifiable {
         let id: String
         let start: Double
@@ -61,17 +21,55 @@ struct DeviceSlimView: View {
         let colorHex: UInt32
     }
 
+    @State private var phase: Phase = .loading
+    @State private var usage: DeviceSlimService.SpaceUsage?
+    @State private var groups: [DeviceSlimService.Group] = []
+    @State private var selection: Set<String> = []            // 缓存项
+    @State private var reinstallSelection: Set<String> = []   // 较大应用（重装）
+    @State private var statusText = "正在分析您的设备空间占用情况…"
+    @State private var confirmClean = false
+    @State private var confirmReinstall = false
+    @State private var resultText: String?
+    @State private var errorText: String?
+    @State private var fromCache = false
+
+    // MARK: - 派生数据
+
+    private var selectableItems: [DeviceSlimService.Item] {
+        groups.filter { $0.kind.selectable }.flatMap(\.items)
+    }
+    private var selectedItems: [DeviceSlimService.Item] {
+        selectableItems.filter { selection.contains($0.id) }
+    }
+    private var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + $1.bytes } }
+
+    private var bigAppItems: [DeviceSlimService.Item] {
+        groups.first { $0.kind == .bigApps }?.items ?? []
+    }
+    private var reinstallableApps: [DeviceSlimService.Item] {
+        bigAppItems.filter { $0.ipaFileName != nil }
+    }
+    private var reinstallTargets: [DeviceSlimService.Item] {
+        bigAppItems.filter { reinstallSelection.contains($0.id) && $0.ipaFileName != nil }
+    }
+    private var reinstallDocBytes: Int64 {
+        reinstallTargets.reduce(0) { $0 + $1.docSize }
+    }
+
+    private var isBusy: Bool {
+        phase == .loading || phase == .scanning || phase == .cleaning || phase == .reinstalling
+    }
+
     private var chartSegments: [ChartSegment] {
         guard let usage, usage.total > 0 else { return [] }
         let sum = usage.slices.reduce(Int64(0)) { $0 + max(0, $1.bytes) }
         guard sum > 0 else { return [] }
-        var accumulated = 0.0
+        var acc = 0.0
         var out: [ChartSegment] = []
         for slice in usage.slices {
-            let fraction = Double(max(0, slice.bytes)) / Double(sum)
-            out.append(ChartSegment(id: slice.id, start: accumulated,
-                                    end: accumulated + fraction, colorHex: slice.colorHex))
-            accumulated += fraction
+            let frac = Double(max(0, slice.bytes)) / Double(sum)
+            out.append(ChartSegment(id: slice.id, start: acc, end: acc + frac, colorHex: slice.colorHex))
+            acc += frac
         }
         return out
     }
@@ -88,35 +86,36 @@ struct DeviceSlimView: View {
             }
             if let errorText {
                 Section {
-                    Text(errorText)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
+                    Text(errorText).font(.footnote).foregroundStyle(.red)
                 }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("设备瘦身")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("确定开始瘦身？",
-                            isPresented: $confirmClean,
-                            titleVisibility: .visible) {
+        .confirmationDialog("确定开始瘦身？", isPresented: $confirmClean, titleVisibility: .visible) {
             Button("删除选中的 \(selectedItems.count) 项", role: .destructive) { startClean() }
             Button("取消", role: .cancel) {}
         } message: {
             Text("将永久删除这些缓存与临时文件（预计释放 \(DeviceSlimService.formatBytes(selectedBytes))）。照片、聊天记录等用户数据不在清理范围内。")
         }
+        .confirmationDialog("确定重装选中的 \(reinstallTargets.count) 款应用？",
+                            isPresented: $confirmReinstall, titleVisibility: .visible) {
+            Button("卸载并重装", role: .destructive) { startReinstall() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("重装 = 先卸载再从「免登录下载」库里重新安装。**这些应用内的文稿与数据会被一起清除且无法恢复**（预计清理 \(DeviceSlimService.formatBytes(reinstallDocBytes)) 应用文档）。建议先备份。")
+        }
         .task { await bootstrap() }
     }
 
-    // MARK: - 1. 设备 + 空间占用
+    // MARK: - 1. 环形图 + 图例（同一张卡）
 
     private var overviewSection: some View {
         Section {
             if let usage {
                 HStack(spacing: 14) {
-                    Image(systemName: "iphone.gen3")
-                        .font(.title2)
-                        .foregroundStyle(.blue)
+                    Image(systemName: "iphone.gen3").font(.title2).foregroundStyle(.blue)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(usage.deviceName).font(.headline)
                         Text(usage.capacityText).font(.caption).foregroundStyle(.secondary)
@@ -133,9 +132,7 @@ struct DeviceSlimView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-                .listRowBackground(Color.clear)
+                .padding(.vertical, 8)
 
                 ForEach(usage.slices) { slice in
                     legendRow(slice)
@@ -147,21 +144,32 @@ struct DeviceSlimView: View {
                 }
             }
         } header: {
-            Text("空间占用情况")
+            HStack {
+                Text("空间占用情况")
+                Spacer(minLength: 0)
+                if let at = usage?.scannedAt {
+                    Text(scanStamp(at))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
         }
+    }
+
+    private func scanStamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "上次扫描 hh:mm"
+        return formatter.string(from: date)
     }
 
     private func legendRow(_ slice: DeviceSlimService.UsageSlice) -> some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(Color(slimHex: slice.colorHex))
-                .frame(width: 9, height: 9)
+            Circle().fill(Color(slimHex: slice.colorHex)).frame(width: 9, height: 9)
             Text(slice.label).font(.subheadline)
             Spacer(minLength: 0)
             Text(DeviceSlimService.formatBytes(slice.bytes))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
+                .font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
         }
     }
 
@@ -171,11 +179,9 @@ struct DeviceSlimView: View {
         Section {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .font(.footnote)
+                    .foregroundStyle(.orange).font(.footnote)
                 Text("瘦身前请备份好重要数据，谨防数据丢失")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .font(.footnote).foregroundStyle(.orange)
                 Spacer(minLength: 0)
             }
             .padding(.vertical, 2)
@@ -194,8 +200,7 @@ struct DeviceSlimView: View {
             } else {
                 HStack {
                     Text("已选 \(selectedItems.count) 项")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.footnote).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                     Text("可释放 \(DeviceSlimService.formatBytes(selectedBytes)) 空间")
                         .font(.footnote.weight(.medium))
@@ -220,10 +225,9 @@ struct DeviceSlimView: View {
                 .disabled(selectedItems.isEmpty)
 
                 Button {
-                    Task { await runScan() }
+                    Task { await runScan(force: true) }
                 } label: {
-                    Label("重新扫描", systemImage: "arrow.clockwise")
-                        .font(.subheadline)
+                    Label("重新扫描", systemImage: "arrow.clockwise").font(.subheadline)
                 }
             }
 
@@ -235,23 +239,21 @@ struct DeviceSlimView: View {
                 }
             }
         } footer: {
-            Text(scanFooter)
-                .font(.caption2)
+            Text(scanFooter).font(.caption2)
         }
     }
 
     private var scanFooter: String {
-        switch phase {
-        case .loading, .scanning:
-            return "正在扫描设备…"
-        case .ready, .finished:
-            let count = selectableItems.count
-            return count == 0
-                ? "本机可达范围内没有需要清理的缓存（免越狱只清理媒体分区内可再生的缓存）。"
-                : "共 \(count) 项可清理；「较大应用」只作提示，清理需卸载重装，会丢失文稿与数据。"
-        case .cleaning:
-            return "正在删除，请勿断开设备…"
+        if isBusy { return phase == .reinstalling ? "正在卸载并重装，请勿断开设备…" : "正在扫描设备…" }
+        let count = selectableItems.count
+        var text = count == 0
+            ? "本机可达范围内没有需要清理的缓存（免越狱只清理媒体分区内可再生的缓存）。"
+            : "共 \(count) 项可清理。"
+        if fromCache { text += " 当前为缓存结果，点「重新扫描」可刷新。" }
+        if !reinstallableApps.isEmpty {
+            text += " 「较大应用」勾选 = 卸载重装（会清空该应用文稿与数据）。"
         }
+        return text
     }
 
     // MARK: - 4. 分组
@@ -259,107 +261,174 @@ struct DeviceSlimView: View {
     private func groupSection(_ group: DeviceSlimService.Group) -> some View {
         Section {
             if group.items.isEmpty {
-                Text("未发现可清理项")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(group.items) { item in
-                itemRow(item)
-            }
-        } header: {
-            HStack(spacing: 8) {
-                Image(systemName: group.kind.icon)
-                    .font(.caption)
-                    .foregroundStyle(.blue)
-                Text(group.kind.rawValue)
-                Spacer(minLength: 0)
-                if !group.items.isEmpty {
-                    Text("\(group.items.count) 项 \(DeviceSlimService.formatBytes(group.totalBytes))")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                Text(group.kind == .userLog ? "本机未发现可清理的日志" : "未发现可清理项")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            } else if group.kind == .bigApps {
+                if reinstallableApps.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "info.circle").foregroundStyle(.secondary).font(.footnote)
+                        Text("这些应用本地都没有可重装的安装包（去「免登录下载」里下载一份即可重装）")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(group.items) { item in
+                    bigAppRow(item)
+                }
+                if !reinstallTargets.isEmpty {
+                    Button {
+                        confirmReinstall = true
+                    } label: {
+                        Label("重装选中的 \(reinstallTargets.count) 款（可清理 \(DeviceSlimService.formatBytes(reinstallDocBytes))）",
+                              systemImage: "arrow.triangle.2.circlepath")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.red)
+                    }
+                }
+            } else {
+                ForEach(group.items) { item in
+                    cacheRow(item)
                 }
             }
+        } header: {
+            groupHeader(group)
         } footer: {
-            if !group.items.isEmpty, group.kind.selectable {
-                Text(group.kind == .bigApps
-                     ? "通过批量重装应用，清理应用的冗余文稿和数据。"
-                     : group.kind.subtitle)
-                    .font(.caption2)
+            if !group.items.isEmpty {
+                Text(groupFooter(group)).font(.caption2)
             }
         }
     }
 
-    private func itemRow(_ item: DeviceSlimService.Item) -> some View {
-        Button {
-            guard item.deletable else { return }
-            if selection.contains(item.id) {
-                selection.remove(item.id)
-            } else {
-                selection.insert(item.id)
+    private func groupHeader(_ group: DeviceSlimService.Group) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: group.kind.icon).font(.caption).foregroundStyle(.blue)
+            Text(group.kind.rawValue)
+            Spacer(minLength: 0)
+            if group.kind == .bigApps {
+                Text("共 \(group.items.count) 款 已选择重装 \(reinstallTargets.count) 款 可清理 \(DeviceSlimService.formatBytes(reinstallDocBytes)) 应用文档")
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            } else if !group.items.isEmpty {
+                Text("共 \(group.items.count) 项，已选择 \(DeviceSlimService.formatBytes(selectedBytesFor(group)))")
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
             }
+        }
+    }
+
+    private func selectedBytesFor(_ group: DeviceSlimService.Group) -> Int64 {
+        group.items.filter { selection.contains($0.id) }.reduce(0) { $0 + $1.bytes }
+    }
+
+    private func groupFooter(_ group: DeviceSlimService.Group) -> String {
+        switch group.kind {
+        case .systemCache, .tempFiles: return group.kind.subtitle
+        case .userLog: return "日志文件及过期的临时文件（免越狱只能清理媒体分区内可达的部分）"
+        case .bigApps: return "通过批量重装应用，清理应用的冗余文稿和数据。重装会清空该应用的文稿与数据，且无法恢复。"
+        }
+    }
+
+    private func cacheRow(_ item: DeviceSlimService.Item) -> some View {
+        let on = selection.contains(item.id)
+        return Button {
+            if on { selection.remove(item.id) } else { selection.insert(item.id) }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: selection.contains(item.id) && item.deletable
-                      ? "checkmark.square.fill" : "square")
-                    .font(.body)
-                    .foregroundStyle(item.deletable ? (selection.contains(item.id) ? .blue : .secondary) : Color.gray.opacity(0.4))
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .font(.body).foregroundStyle(on ? .blue : .secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    Text(item.name).font(.subheadline).lineLimit(1)
                     if let detail = item.detail {
-                        Text(detail)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer(minLength: 0)
                 Text(DeviceSlimService.formatBytes(item.bytes))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
-        .disabled(!item.deletable)
+    }
+
+    /// 较大应用行（爱思表格：应用名称 / 应用大小 / 文档大小 / 操作）
+    private func bigAppRow(_ item: DeviceSlimService.Item) -> some View {
+        let available = item.ipaFileName != nil
+        let on = reinstallSelection.contains(item.id)
+        return Button {
+            guard available else { return }
+            if on { reinstallSelection.remove(item.id) } else { reinstallSelection.insert(item.id) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: available ? (on ? "checkmark.square.fill" : "square") : "square")
+                    .font(.body)
+                    .foregroundStyle(available ? (on ? .blue : .secondary) : Color.gray.opacity(0.35))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name).font(.subheadline).lineLimit(1).foregroundStyle(.primary)
+                    HStack(spacing: 6) {
+                        Text("应用 \(DeviceSlimService.formatBytes(item.appSize))")
+                        Text("·")
+                        Text("文档 \(DeviceSlimService.formatBytes(item.docSize))")
+                        if !available {
+                            Text("资源缺失无法重装").foregroundStyle(.orange)
+                        } else if item.isRisky {
+                            Text("谨慎选择").foregroundStyle(.red)
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Text(DeviceSlimService.formatBytes(item.docSize))
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(!available)
     }
 
     // MARK: - 流程
 
     private func bootstrap() async {
-        await loadUsage()
-        await runScan()
+        // 先用缓存秒开，再按需刷新
+        if let cached = DeviceSlimService.cachedSnapshot() {
+            await apply(snapshot: cached, fromCache: true)
+        }
+        await runScan(force: false)
     }
 
-    private func loadUsage() async {
+    private func apply(snapshot: DeviceSlimService.Snapshot, fromCache: Bool) async {
         do {
             let value = try await Task.detached(priority: .userInitiated) {
-                try DeviceSlimService.loadUsage()
+                try DeviceSlimService.loadUsage(snapshot: snapshot)
             }.value
             usage = value
-        } catch {
-            errorText = "读取空间占用失败：\(error.localizedDescription)"
-        }
-    }
-
-    private func runScan() async {
-        phase = .scanning
-        statusText = "正在扫描…"
-        errorText = nil
-        resultText = nil
-        do {
             let scanned = try await Task.detached(priority: .userInitiated) {
-                try DeviceSlimService.scan { message in
-                    Task { @MainActor in statusText = message }
-                }
+                try DeviceSlimService.scan(snapshot: snapshot)
             }.value
             groups = scanned
             selection = Set(scanned.filter { $0.kind.selectable }.flatMap(\.items).map(\.id))
+            self.fromCache = fromCache
             phase = .ready
+        } catch {
+            errorText = "读取失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func runScan(force: Bool) async {
+        if !force, let cached = DeviceSlimService.cachedSnapshot() {
+            await apply(snapshot: cached, fromCache: true)
+            return
+        }
+        phase = .scanning
+        statusText = "正在扫描设备…"
+        errorText = nil
+        resultText = nil
+        do {
+            let snap = try await Task.detached(priority: .userInitiated) {
+                try DeviceSlimService.buildSnapshot { message in
+                    Task { @MainActor in statusText = message }
+                }
+            }.value
+            await apply(snapshot: snap, fromCache: false)
         } catch {
             phase = .ready
             errorText = "扫描失败：\(error.localizedDescription)"
@@ -382,26 +451,45 @@ struct DeviceSlimView: View {
                     + (result.failures.isEmpty ? "" : "（\(result.failures.count) 项失败）")
                 errorText = result.failures.isEmpty ? nil : result.failures.prefix(3).joined(separator: "\n")
                 phase = .finished
-                await loadUsage()
-                await runScan()
+                await runScan(force: true)
             } catch {
                 phase = .ready
                 errorText = "瘦身失败：\(error.localizedDescription)"
             }
         }
     }
+
+    private func startReinstall() {
+        let targets = reinstallTargets
+        guard !targets.isEmpty else { return }
+        phase = .reinstalling
+        statusText = "正在卸载并重装…"
+        Task {
+            let result = await DeviceSlimService.reinstall(items: targets) { index, total, name in
+                Task { @MainActor in statusText = "正在重装 \(index)/\(total)：\(name)" }
+            }
+            if result.ok.isEmpty && !result.failures.isEmpty {
+                errorText = result.failures.prefix(3).joined(separator: "\n")
+            } else {
+                resultText = "已重装 \(result.ok.count) 款"
+                    + (result.failures.isEmpty ? "" : "（\(result.failures.count) 款失败）")
+                errorText = result.failures.isEmpty ? nil : result.failures.prefix(3).joined(separator: "\n")
+            }
+            reinstallSelection.removeAll()
+            phase = .finished
+            await runScan(force: true)
+        }
+    }
 }
 
 // MARK: - 环形图
 
-/// 空间占用环形图（按比例分段；与爱思圆环一致）
 private struct DeviceSlimDonut: View {
     let segments: [DeviceSlimView.ChartSegment]
 
     var body: some View {
         ZStack {
-            Circle()
-                .stroke(Color(.systemGray5), lineWidth: 24)
+            Circle().stroke(Color(.systemGray5), lineWidth: 24)
             ForEach(segments) { segment in
                 DonutArc(start: segment.start, end: segment.end)
                     .stroke(Color(slimHex: segment.colorHex),
@@ -420,8 +508,7 @@ private struct DonutArc: Shape {
         guard end > start else { return path }
         let center = CGPoint(x: rect.midX, y: rect.midY)
         let radius = min(rect.width, rect.height) / 2
-        path.addArc(center: center,
-                    radius: radius,
+        path.addArc(center: center, radius: radius,
                     startAngle: .degrees(start * 360 - 90),
                     endAngle: .degrees(end * 360 - 90),
                     clockwise: false)
@@ -430,7 +517,6 @@ private struct DonutArc: Shape {
 }
 
 private extension Color {
-    /// 0xRRGGBB → Color
     init(slimHex hex: UInt32) {
         self.init(.sRGB,
                   red: Double((hex >> 16) & 0xFF) / 255,
