@@ -161,24 +161,30 @@ enum GoAppStoreAuth {
                     secure: true
                 )
             }
-            let converted = try AppStoreAccount(
+            // Go 返回的 accountInfo 里姓名是合并串（"First Last"）；
+            // AppStoreAccount 需要拆分（持久化与展示兼容）.
+            let parts = (account.name ?? "").split(separator: " ", maxSplits: 1).map(String.init)
+            // v0.3.304 修复：改用**不校验**的 memberwise init。
+            //
+            // 原实现走 `throws` 版 convenience init 并传 `firstName: nil, lastName: nil`，
+            // 而该 init 内部是 `try firstName.get("unable to read firstName")` ——
+            // nil 即抛错。真机实测报的就是这句：
+            //     「登录失败: unable to read firstName」
+            // 而且名字的拆分代码写在 init **之后**，永远执行不到（死代码）。
+            // appleId / passwordToken / directoryServicesIdentifier 为 nil 时会抛同样的错，
+            // 因此这里一并兜底（Go 侧字段缺失时不该让整个登录失败）。
+            let final = AppStoreAccount(
                 email: email,
                 password: password,
-                appleId: account.email,
+                appleId: account.email ?? email,
                 store: store,
-                firstName: nil,
-                lastName: nil,
-                passwordToken: account.passwordToken,
-                directoryServicesIdentifier: account.directoryServicesID,
+                firstName: parts.first ?? "",
+                lastName: parts.count > 1 ? parts[1] : "",
+                passwordToken: account.passwordToken ?? "",
+                directoryServicesIdentifier: account.directoryServicesID ?? "",
                 cookie: cookies,
                 pod: account.pod
             )
-            // Go 返回的 accountInfo 里姓名是合并串（"First Last"）；
-            // AppStoreAccount 需要拆分（持久化与展示兼容）.
-            var final = converted
-            let parts = (account.name ?? "").split(separator: " ", maxSplits: 1).map(String.init)
-            final.firstName = parts.first ?? ""
-            final.lastName = parts.count > 1 ? parts[1] : ""
             LoginLogger.shared.log("[GoAuth] 登录成功: store=\(store), dsId=\(account.directoryServicesID ?? "?"), cookies=\(cookies.count)")
             return final
         }

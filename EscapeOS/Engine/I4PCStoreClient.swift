@@ -64,15 +64,37 @@ enum I4PCStoreClient {
         var isSigned: Bool = false
 
         var ipaURL: URL? {
-            guard let p = ipaPath, !p.isEmpty else { return nil }
-            if p.hasPrefix("http") { return URL(string: p) }
-            return URL(string: I4PCStoreClient.packagePrefix + p)
+            guard let s = I4PCStoreClient.normalizeAssetURL(ipaPath) else { return nil }
+            return URL(string: s)
         }
         var plistURL: URL? {
-            guard let p = plistPath, !p.isEmpty else { return nil }
-            if p.hasPrefix("http") { return URL(string: p) }
-            return URL(string: I4PCStoreClient.packagePrefix + p)
+            guard let s = I4PCStoreClient.normalizeAssetURL(plistPath) else { return nil }
+            return URL(string: s)
         }
+    }
+
+    /// v0.3.304：把服务端给的资源地址规范化成 **https**。
+    ///
+    /// **这是真机实测踩到的坑**：列表接口返回的 `path` 是**明文 http**：
+    /// `http://d.app6.i4.cn/soft/2026/09/10/23/6466733523/z…_796155.ipa`
+    /// iOS 的 ATS 会直接拒绝该连接，用户看到的是
+    /// 「The resource could not be loaded because the App Transport Security policy
+    /// requires the use of a secure connection.」——即"点安装没反应/失败"。
+    ///
+    /// 爱思自己的前端就是这么干的（`index-4f71eb97.js` 原文）：
+    /// `path.replace("http://d.app6.i4.cn/soft", "https://d-app6.i4.cn/soft")`
+    /// 实测 https 侧可正常下载（206，长度与接口 `sizebyte` 一致）。
+    static func normalizeAssetURL(_ raw: String?) -> String? {
+        guard var v = raw?.trimmingCharacters(in: .whitespaces), !v.isEmpty else { return nil }
+        v = v.replacingOccurrences(of: "http://d.app6.i4.cn/soft",
+                                   with: "https://d-app6.i4.cn/soft")
+        v = v.replacingOccurrences(of: "http://d.image.i4.cn",
+                                   with: "https://d-image.i4.cn")
+        // 任何残留的明文 i4 CDN 一并升级，避免再被 ATS 拦
+        v = v.replacingOccurrences(of: "http://d-app6.i4.cn", with: "https://d-app6.i4.cn")
+        v = v.replacingOccurrences(of: "http://d-image.i4.cn", with: "https://d-image.i4.cn")
+        if v.hasPrefix("http") { return v }
+        return packagePrefix + v
     }
 
     /// 榜单（remd/sort 取自 PC 端首页模块的真实配置）
@@ -217,7 +239,7 @@ enum I4PCStoreClient {
         guard let id, let name, !name.isEmpty else { return nil }
         var app = I4App(id: id, name: name)
         app.bundleId = str(d["sourceId"]) ?? str(d["sourceid"])
-        app.itemId = str(d["itemId"])
+        app.itemId = str(d["itemId"]) ?? str(d["itemid"])
         app.version = str(d["version"]) ?? str(d["shortversion"])
         app.versionId = str(d["versionid"]) ?? str(d["versionId"])
         app.slogan = str(d["slogan"])
@@ -238,13 +260,15 @@ enum I4PCStoreClient {
     }
 
     private static func normalizeIcon(_ s: String?) -> String? {
-        guard let s, !s.isEmpty else { return nil }
-        if s.hasPrefix("http") {
-            // 列表接口给的是 http 明文，统一升 https
-            return s.replacingOccurrences(of: "http://d.image.i4.cn",
-                                          with: "https://d-image.i4.cn")
+        guard let raw = s?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        if raw.hasPrefix("http") {
+            // 列表接口给的是 http 明文，统一升 https（否则 ATS 拦图）
+            var v = raw
+            v = v.replacingOccurrences(of: "http://d.image.i4.cn", with: "https://d-image.i4.cn")
+            v = v.replacingOccurrences(of: "http://d.app6.i4.cn", with: "https://d-app6.i4.cn")
+            return v
         }
-        return iconPrefix + s
+        return iconPrefix + raw
     }
 
     private static func str(_ v: Any?) -> String? {
