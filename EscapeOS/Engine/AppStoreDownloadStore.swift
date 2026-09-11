@@ -51,7 +51,7 @@ final class AppStoreDownloadStore {
         let key = "ApplePackageDeviceIdentifier"
         UserDefaults.standard.removeObject(forKey: key)
         Self.bootstrapDeviceIdentifier()
-        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)", category: .appStore)
+        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)", category: .appStoreStore)
     }
 
     private var fileURL: URL {
@@ -100,11 +100,24 @@ final class AppStoreDownloadStore {
         set { UserDefaults.standard.set(newValue, forKey: "AppStore.SelectedEmail") }
     }
 
-    /// 下载/安装实际使用的账号（选中账号失效时回退到第一个）
+    /// 账号是否可用：**必须同时有 dsid 与 passwordToken**.
+    /// 缺任一项 Apple 就会把请求当未登录（`MZFinance.NoAccount_message`）；
+    /// 这类账号（多为 v0.3.304~309 期间写下的坏记录）不能再参与下载。
+    static func isUsable(_ a: AppStoreAccount) -> Bool {
+        !a.directoryServicesIdentifier.isEmpty && !a.passwordToken.isEmpty
+    }
+
+    var usableAccounts: [AppStoreAccount] {
+        if accounts.isEmpty { load() }
+        return accounts.filter { Self.isUsable($0) }
+    }
+
+    /// 下载/安装实际使用的账号（选中账号失效时回退到第一个**可用**账号）
     var selectedAccount: AppStoreAccount? {
         if accounts.isEmpty { load() }
-        if let e = selectedEmail, let hit = accounts.first(where: { $0.email == e }) { return hit }
-        return accounts.first
+        if let e = selectedEmail, let hit = accounts.first(where: { $0.email == e }),
+           Self.isUsable(hit) { return hit }
+        return usableAccounts.first
     }
 
     func select(email: String) { selectedEmail = email }

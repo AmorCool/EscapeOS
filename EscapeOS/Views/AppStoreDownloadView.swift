@@ -119,7 +119,7 @@ struct AppStoreDownloadView: View {
                     loadDownloadedFiles()
                     // v0.3.269：手动刷新必须同时拉取登录日志尾部——否则状态板块
                     // 的实时日志不动，按钮形同摆设（用户实测指正）.
-                    liveLogLines = LoginLogger.shared.recentLines(6, categories: [.appStore])
+                    liveLogLines = LoginLogger.shared.recentLines(6, categories: [.appStoreDownload])
                     toast = "已刷新"
                 } label: {
                     Label("刷新", systemImage: "arrow.clockwise")
@@ -127,7 +127,7 @@ struct AppStoreDownloadView: View {
             }
         }
         .sheet(isPresented: $showLoginLog) {
-            AppStoreLogView()
+            LoginLogView()
         }
         // v0.3.178：2FA 输入框改标准 .alert——旧写法 .background(EmptyView().alert)
         // 在 iOS 26 上不可靠（不呈现/被系统弹窗抢占），真机实锤 2FA 触发但输入框不出现.
@@ -183,10 +183,10 @@ struct AppStoreDownloadView: View {
             // v0.3.268：登录过程实时尾部（2s 一拍，纯内存读取）.
             liveLogTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
                 Task { @MainActor in
-                    liveLogLines = LoginLogger.shared.recentLines(6, categories: [.appStore])
+                    liveLogLines = LoginLogger.shared.recentLines(6, categories: [.appStoreDownload])
                 }
             }
-            liveLogLines = LoginLogger.shared.recentLines(6, categories: [.appStore])
+            liveLogLines = LoginLogger.shared.recentLines(6, categories: [.appStoreDownload])
         }
         .onDisappear {
             autoRefreshTimer?.invalidate()
@@ -468,7 +468,7 @@ struct AppStoreDownloadView: View {
         pendingPassword = pw
         busy = true
         status = "正在用设置中的 Apple ID 登录 App Store…"
-        LoginLogger.shared.log("App Store 下载：开始用「更多」已登录的 Apple ID（\(email)）走 iTunes 认证", category: .appStore)
+        LoginLogger.shared.log("App Store 下载：开始用「更多」已登录的 Apple ID（\(email)）走 iTunes 认证", category: .appStoreDownload)
         // v0.3.173：Task.detached——SAP 签名器初始化（36MB 资产下载 + Unicorn 模拟器启动）
         // 是同步重活，Task{} 继承 MainActor 会阻塞主线程导致全局无响应（真机实锤）.
         Task.detached(priority: .userInitiated) {
@@ -480,7 +480,8 @@ struct AppStoreDownloadView: View {
                     password: pw,
                     code: "",
                     deviceIdentifier: Configuration.deviceIdentifier,
-                    cacheDir: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
+                    cacheDir: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path,
+                    logCategory: .appStoreDownload
                 )
                 await MainActor.run {
                     store.add(account)
@@ -490,7 +491,7 @@ struct AppStoreDownloadView: View {
                     status = "已用设置中的 Apple ID 登录"
                     toast = "已用「更多」中的 Apple ID 登录：\(account.email)"
                 }
-                LoginLogger.shared.log("App Store 下载：iTunes 认证成功，store=\(account.store)，appleId=\(account.appleId ?? "未知")", category: .appStore)
+                LoginLogger.shared.log("App Store 下载：iTunes 认证成功，store=\(account.store)，appleId=\(account.appleId ?? "未知")", category: .appStoreDownload)
             } catch {
                 let desc = error.localizedDescription
                 await MainActor.run {
@@ -506,7 +507,7 @@ struct AppStoreDownloadView: View {
                         errorMessage = iTunesAuthErrorMessage(error)
                     }
                 }
-                LoginLogger.shared.log("App Store 下载：iTunes 认证失败 - \(desc)", category: .appStore)
+                LoginLogger.shared.log("App Store 下载：iTunes 认证失败 - \(desc)", category: .appStoreDownload)
             }
         }
     }
@@ -521,7 +522,7 @@ struct AppStoreDownloadView: View {
         guard !email.isEmpty, !password.isEmpty else { return }
         busy = true
         status = "正在验证双重认证…"
-        LoginLogger.shared.log("App Store 下载：设置登录流程内 2FA 重试 \(email)（含验证码：是）", category: .appStore)
+        LoginLogger.shared.log("App Store 下载：设置登录流程内 2FA 重试 \(email)（含验证码：是）", category: .appStoreDownload)
         Task.detached(priority: .userInitiated) {
             do {
                 // v0.3.262：2FA 重试同走 Go 栈.
@@ -530,7 +531,8 @@ struct AppStoreDownloadView: View {
                     password: password,
                     code: code,
                     deviceIdentifier: Configuration.deviceIdentifier,
-                    cacheDir: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
+                    cacheDir: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path,
+                    logCategory: .appStoreDownload
                 )
                 await MainActor.run {
                     store.add(account)
@@ -540,7 +542,7 @@ struct AppStoreDownloadView: View {
                     status = "已用设置中的 Apple ID 登录"
                     toast = "已用「更多」中的 Apple ID 登录：\(account.email)"
                 }
-                LoginLogger.shared.log("App Store 下载：2FA 重试成功，store=\(account.store)", category: .appStore)
+                LoginLogger.shared.log("App Store 下载：2FA 重试成功，store=\(account.store)", category: .appStoreDownload)
             } catch {
                 let desc = error.localizedDescription
                 await MainActor.run {
@@ -548,7 +550,7 @@ struct AppStoreDownloadView: View {
                     status = "登录失败，见下方错误信息"
                     errorMessage = iTunesAuthErrorMessage(error)
                 }
-                LoginLogger.shared.log("App Store 下载：2FA 重试失败 - \(desc)", category: .appStore)
+                LoginLogger.shared.log("App Store 下载：2FA 重试失败 - \(desc)", category: .appStoreDownload)
             }
         }
     }

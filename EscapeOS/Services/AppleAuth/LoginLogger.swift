@@ -14,14 +14,13 @@ final class LoginLogger {
     /// 未显式传分类的调用一律归入 `.general`（老代码不受影响）。
     enum Category: String, CaseIterable {
         case general = "通用"
-        case appStore = "AppStore"
+        /// **AppStore 商店**（主页商店：登录 / 获取 / 下载 / 安装 / 账号管理）
+        case appStoreStore = "商店"
+        /// **更多 → AppStore 下载** 板块（它自己的登录与文件操作）
+        case appStoreDownload = "下载板"
         case i4Store = "爱思源"
         case sideload = "侧载签名"
         case certificate = "证书管理"
-
-        /// 该分类的日志页要一起显示的关联分类（AppStore 与爱思源同属「下载安装」链路，
-        /// 但两者仍是不同板块，这里只放同一个板块内部用到的分类）.
-        var related: [Category] { [self] }
     }
 
     private struct Entry {
@@ -49,7 +48,9 @@ final class LoginLogger {
     }
 
     func log(_ message: String, category: Category = .general) {
-        let line = "[\(Self.timestamp())] \(message)"
+        // v0.3.310：分类写进行首 —— 这样**文件里的历史日志**也能按板块过滤
+        // （此前分类只在内存条目里，重启后按分类读文件读不到 → 板块日志页空白）
+        let line = "[\(Self.timestamp())][\(category.rawValue)] \(message)"
         lock.lock()
         buffer.append(Entry(line: line, category: category))
         if buffer.count > maxBufferLines { buffer.removeFirst(buffer.count - maxBufferLines) }

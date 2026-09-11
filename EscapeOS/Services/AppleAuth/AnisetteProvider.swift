@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import CryptoKit
 
 /// 获取 Anisette Data（Apple 设备认证数据）的 v3 流程实现.
@@ -21,6 +22,26 @@ final class AnisetteProvider {
     }()
 
     private var url: URL? { URL(string: UserDefaults.standard.string(forKey: "AnisetteServer") ?? "https://ani.stikstore.app") }
+
+
+    /// v0.3.310：把 `X-MMe-Client-Info` 里的客户端标识改写成 `com.apple.akd/1.0`.
+    ///
+    /// **依据**（AltStore classic 2026-09-10 提交 c558994「fix(anisette): restore Apple ID
+    /// sign-in rejected by Apple's servers」）：Apple 认证边缘现在对**任何**
+    /// `X-MMe-Client-Info` 里标识为 `com.apple.dt.Xcode` 的登录请求直接返回 503
+    /// （发生在校验凭据之前，与账号无关）。修法就是把客户端标识改报成真正执行该请求的
+    /// 守护进程 `akd`。公共 anisette 服务多还在用 Xcode 形态，故这里统一改写。
+    static func normalizedClientInfo(_ raw: String?) -> String {
+        let device = UIDevice.current
+        let fallback = "<\(device.model)> <iOS;\(device.systemVersion)> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        guard var text = raw, !text.isEmpty else { return fallback }
+        if let r = text.range(of: "(com.apple.", options: .backwards) {
+            text = String(text[text.startIndex..<r.lowerBound]) + "(com.apple.akd/1.0)>"
+        } else if !text.contains("com.apple.") {
+            text += " <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+        }
+        return text
+    }
 
     private var clientInfo: String?
     private var userAgent: String?
@@ -342,7 +363,7 @@ final class AnisetteProvider {
         else if let v = json["X-Apple-I-MD-RINFO"] as? Int { formatted["routingInfo"] = String(v) }
 
         if v3 {
-            formatted["deviceDescription"] = clientInfo ?? ""
+            formatted["deviceDescription"] = Self.normalizedClientInfo(clientInfo)
             formatted["localUserID"] = mdLu ?? ""
             formatted["deviceUniqueIdentifier"] = deviceId ?? ""
             let fmt = DateFormatter()
@@ -354,7 +375,7 @@ final class AnisetteProvider {
             formatted["locale"] = Locale.current.identifier
             formatted["timeZone"] = TimeZone.current.abbreviation() ?? "GMT"
         } else {
-            if let v = json["X-MMe-Client-Info"] as? String { formatted["deviceDescription"] = v }
+            if let v = json["X-MMe-Client-Info"] as? String { formatted["deviceDescription"] = Self.normalizedClientInfo(v) }
             if let v = json["X-Apple-I-MD-LU"] as? String { formatted["localUserID"] = v }
             if let v = json["X-Mme-Device-Id"] as? String { formatted["deviceUniqueIdentifier"] = v }
             if let v = json["X-Apple-I-Client-Time"] as? String { formatted["date"] = v }

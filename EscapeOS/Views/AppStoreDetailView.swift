@@ -298,7 +298,7 @@ struct AppStoreDetailView: View {
         Task {
             do {
                 let r = try await AppStoreInstallService.installUsingAnySource(item: item) { line in
-                    LoginLogger.shared.log("[AppStore] \(line)", category: .appStore)
+                    LoginLogger.shared.log("[AppStore] \(line)", category: .appStoreStore)
                 }
                 await MainActor.run {
                     installingSource = false

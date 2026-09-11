@@ -89,7 +89,7 @@ final class AppStoreInstallManager: ObservableObject {
         s.log.append(line)
         if s.log.count > 200 { s.log.removeFirst(s.log.count - 200) }
         tasks[appId] = s
-        LoginLogger.shared.log("[AppStore] \(line)", category: .appStore)
+        LoginLogger.shared.log("[AppStore] \(line)", category: .appStoreStore)
     }
 
     // MARK: - 启动链路

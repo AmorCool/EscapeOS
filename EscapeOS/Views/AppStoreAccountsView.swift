@@ -91,6 +91,11 @@ struct AppStoreAccountsView: View {
         return parts.joined(separator: " · ")
     }
 
+    /// 失效账号（缺 dsid/token）不能用于下载，需要在 UI 上明确标出来
+    private func needsRelogin(_ a: AppStoreAccount) -> Bool {
+        !AppStoreDownloadStore.isUsable(a)
+    }
+
     // MARK: - 账号列表
 
     @ViewBuilder
@@ -113,7 +118,13 @@ struct AppStoreAccountsView: View {
                             Text(healthText(a)).font(.caption2).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 0)
-                        if a.email == current {
+                        if needsRelogin(a) {
+                            Text("需重新登录")
+                                .font(.caption2)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.orange)
+                        } else if a.email == current {
                             Image(systemName: "checkmark").foregroundStyle(.green).font(.caption)
                         }
                     }
@@ -216,7 +227,7 @@ struct AppStoreAccountsView: View {
         }
         busy = true
         results = []
-        LoginLogger.shared.log("[AppStore] 开始批量登录 \(list.count) 个账号", category: .appStore)
+        LoginLogger.shared.log("[AppStore] 开始批量登录 \(list.count) 个账号", category: .appStoreStore)
 
         Task.detached(priority: .userInitiated) {
             let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
@@ -234,13 +245,13 @@ struct AppStoreAccountsView: View {
                         cacheDir: cacheDir
                     )
                     await MainActor.run { AppStoreDownloadStore.shared.add(account) }
-                    LoginLogger.shared.log("[AppStore] 批量登录成功 \(item.0)", category: .appStore)
+                    LoginLogger.shared.log("[AppStore] 批量登录成功 \(item.0)", category: .appStoreStore)
                     done.append(.init(email: item.0, ok: true,
                                       message: "登录成功（store \(account.store)）"))
                 } catch {
                     let desc = error.localizedDescription
                     let need2FA = desc.contains("verification code")
-                    LoginLogger.shared.log("[AppStore] 批量登录失败 \(item.0)：\(desc)", category: .appStore)
+                    LoginLogger.shared.log("[AppStore] 批量登录失败 \(item.0)：\(desc)", category: .appStoreStore)
                     done.append(.init(email: item.0, ok: false,
                                       message: need2FA ? "需要双重认证验证码 → 请到「AppStore 下载」单独登录"
                                                        : desc))

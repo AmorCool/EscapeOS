@@ -24,6 +24,16 @@ enum GoAppStoreAuth {
             var name: String?
             var storeFront: String?
             var pod: String?
+
+            /// ⚠️ **必须显式映射**：Go 侧 `authappstore.Account` 的 json tag 是
+            /// `directoryServicesIdentifier`（见 sapbridge/authappstore/login.go），
+            /// 而 Swift 属性叫 `directoryServicesID` —— 不写 CodingKeys 就永远解不出来，
+            /// dsID 恒为空 → 下载请求的 `X-Dsid` 为空 → Apple 回
+            /// `MZFinance.NoAccount_message`（"能登录但下不了"的真根因，2026-09-11 定位）.
+            enum CodingKeys: String, CodingKey {
+                case email, passwordToken, name, storeFront, pod
+                case directoryServicesID = "directoryServicesIdentifier"
+            }
         }
 
         struct Cookie: Decodable {
@@ -61,10 +71,13 @@ enum GoAppStoreAuth {
         password: String,
         code: String,
         deviceIdentifier: String,
-        cacheDir: String
+        cacheDir: String,
+        logCategory: LoginLogger.Category = .appStoreStore
     ) throws -> AppStoreAccount {
         do {
-            return try loginOnce(email: email, password: password, code: code, deviceIdentifier: deviceIdentifier, cacheDir: cacheDir)
+            return try loginOnce(email: email, password: password, code: code,
+                                 deviceIdentifier: deviceIdentifier, cacheDir: cacheDir,
+                                 logCategory: logCategory)
         } catch {
             let desc = error.localizedDescription
             let isEdgeSoftReject = ["HTTP 404", "HTTP 503", "HTTP 204", "HTTP 403",
@@ -74,20 +87,24 @@ enum GoAppStoreAuth {
 
             if code.isEmpty {
                 // 无码登录被软拒：换新 guid 重试一轮（新 guid 新计数窗口）.
-                LoginLogger.shared.log("[GoAuth] edge soft-reject, rotating device identifier and retrying once after 15s", category: .appStore)
+                LoginLogger.shared.log("[GoAuth] edge soft-reject, rotating device identifier and retrying once after 15s", category: logCategory)
                 AppStoreDownloadStore.shared.resetDeviceIdentifier()
                 // 等待窗口回落后再打（16:35/16:36 日志：换 guid 后立即重打仍撞
                 // 限流——IP/账号维度计数同样在热区）.
                 Thread.sleep(forTimeInterval: 15)
-                return try loginOnce(email: email, password: password, code: code, deviceIdentifier: Configuration.deviceIdentifier, cacheDir: cacheDir)
+                return try loginOnce(email: email, password: password, code: code,
+                                     deviceIdentifier: Configuration.deviceIdentifier, cacheDir: cacheDir,
+                                     logCategory: logCategory)
             }
 
             // 2FA 带码重试被软拒：验证码已下发且 30 分钟内有效，等 75s 让边缘
             // 限流窗口回落后原 guid 重试一次（Apple 对 authenticate 的限流极紧，
             // 21:04→21:05 间隔 30s 的带码重试实测撞 pod 403）.
-            LoginLogger.shared.log("[GoAuth] edge soft-reject on 2FA attempt, waiting 75s before one retry", category: .appStore)
+            LoginLogger.shared.log("[GoAuth] edge soft-reject on 2FA attempt, waiting 75s before one retry", category: logCategory)
             Thread.sleep(forTimeInterval: 75)
-            return try loginOnce(email: email, password: password, code: code, deviceIdentifier: deviceIdentifier, cacheDir: cacheDir)
+            return try loginOnce(email: email, password: password, code: code,
+                                 deviceIdentifier: deviceIdentifier, cacheDir: cacheDir,
+                                 logCategory: logCategory)
         }
     }
 
@@ -98,9 +115,10 @@ enum GoAppStoreAuth {
         password: String,
         code: String,
         deviceIdentifier: String,
-        cacheDir: String
+        cacheDir: String,
+        logCategory: LoginLogger.Category = .appStoreStore
     ) throws -> AppStoreAccount {
-        LoginLogger.shared.log("[GoAuth] 开始登录（Go 栈，上游 ipatool 形态）: \(email)（含验证码：\(code.isEmpty ? "否" : "是")）", category: .appStore)
+        LoginLogger.shared.log("[GoAuth] 开始登录（Go 栈，上游 ipatool 形态）: \(email)（含验证码：\(code.isEmpty ? "否" : "是")）", category: logCategory)
 
         // SAP 状态条：Go 侧 assets.Load 会写进度（SapGetProgress），登录期间
         // 开轮询驱动 UI（与旧 Swift 工厂闭包同款节奏）.
@@ -131,7 +149,7 @@ enum GoAppStoreAuth {
         defer { SapFree(resultPtr) }
 
         let jsonString = String(cString: resultPtr)
-        LoginLogger.shared.log("[GoAuth] Go 返回: \(jsonString.prefix(400))", category: .appStore)
+        LoginLogger.shared.log("[GoAuth] Go 返回: \(jsonString.prefix(400))", category: logCategory)
 
         guard let jsonData = jsonString.data(using: .utf8),
               let result = try? JSONDecoder().decode(LoginResult.self, from: jsonData) else {
@@ -141,7 +159,7 @@ enum GoAppStoreAuth {
         // v0.3.263：逐请求诊断全量入日志（bag/sap-init/auth-attemptN 的 URL+guid、
         // 状态码、耗时）——<1s=边缘秒拒（服务器侧风控），数秒=后端拒（参数问题）.
         for diag in result.diagnostics ?? [] {
-            LoginLogger.shared.log("[GoAuth][\(diag.step)] status=\(diag.status) \(diag.elapsedMs)ms \(diag.url.prefix(100))\(diag.detail.map { " | \($0.prefix(120))" } ?? "")", category: .appStore)
+            LoginLogger.shared.log("[GoAuth][\(diag.step)] status=\(diag.status) \(diag.elapsedMs)ms \(diag.url.prefix(100))\(diag.detail.map { " | \($0.prefix(120))" } ?? "")", category: logCategory)
         }
 
         if result.success, let account = result.account {
@@ -173,6 +191,18 @@ enum GoAppStoreAuth {
             // 而且名字的拆分代码写在 init **之后**，永远执行不到（死代码）。
             // appleId / passwordToken / directoryServicesIdentifier 为 nil 时会抛同样的错，
             // 因此这里一并兜底（Go 侧字段缺失时不该让整个登录失败）。
+            // 关键字段必须齐（Go 侧成功时是有值的；为空即解析/协议异常，不能兜底成空串，
+            // 否则会存下一个"看着已登录、实际下不了"的坏账号）
+            let dsid = account.directoryServicesID ?? ""
+            let token = account.passwordToken ?? ""
+            guard !dsid.isEmpty, !token.isEmpty else {
+                LoginLogger.shared.log(
+                    "[GoAuth] 登录返回缺少关键字段（dsIdEmpty=\(dsid.isEmpty) tokenEmpty=\(token.isEmpty)）原始返回：\(jsonString.prefix(400))",
+                    category: logCategory)
+                throw AppleAPIError.customError(
+                    code: -2605,
+                    message: "登录返回缺少 dsPersonId/passwordToken（Apple 未下发会话，稍后重试或换网络）")
+            }
             let final = AppStoreAccount(
                 email: email,
                 password: password,
@@ -180,12 +210,12 @@ enum GoAppStoreAuth {
                 store: store,
                 firstName: parts.first ?? "",
                 lastName: parts.count > 1 ? parts[1] : "",
-                passwordToken: account.passwordToken ?? "",
-                directoryServicesIdentifier: account.directoryServicesID ?? "",
+                passwordToken: token,
+                directoryServicesIdentifier: dsid,
                 cookie: cookies,
                 pod: account.pod
             )
-            LoginLogger.shared.log("[GoAuth] 登录成功: store=\(store), dsId=\(account.directoryServicesID ?? "?"), cookies=\(cookies.count)", category: .appStore)
+            LoginLogger.shared.log("[GoAuth] 登录成功: store=\(store), dsId=\(account.directoryServicesID ?? "?"), cookies=\(cookies.count)", category: logCategory)
             return final
         }
 
