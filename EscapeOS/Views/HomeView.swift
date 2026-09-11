@@ -100,6 +100,19 @@ struct HomeView: View {
             }
             .buttonStyle(.plain)
 
+            // v0.3.313：设备瘦身（爱思助手 8.0「设备瘦身」移植——
+            // 空间占用 7 项分析 + 系统缓存/临时文件清理，口径与爱思一致）
+            NavigationLink {
+                DeviceSlimView()
+                    .navigationBarTitleDisplayMode(.inline)
+            } label: {
+                HomeCard(title: "设备瘦身",
+                         subtitle: "空间占用分析 / 缓存清理",
+                         icon: "arrow.down.to.line",
+                         tint: .mint)
+            }
+            .buttonStyle(.plain)
+
             NavigationLink {
                 AppListView(viewModel: appList)
             } label: {
