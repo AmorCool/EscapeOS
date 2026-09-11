@@ -8,7 +8,6 @@ struct AppStoreI4View: View {
     @State private var errorText: String?
     @State private var rank: I4StoreClient.Rank = .mustHave
     @State private var tab = 0
-    @State private var toast: String?
 
     var body: some View {
         List {
@@ -75,14 +74,7 @@ struct AppStoreI4View: View {
                     .disabled(loading)
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast).font(.footnote)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 20)
-            }
-        }
+        .toastHost()
         .task { await reload() }
     }
 
@@ -188,12 +180,12 @@ struct AppStoreI4View: View {
         let bid = i4Value(a, keys: ["bundleid", "bundleId", "sourceid", "sourceId"])
         let name = i4Value(a, keys: ["name", "appname", "appName", "title"])
         guard !bid.isEmpty else {
-            await MainActor.run { toast = "该条目缺少 Bundle ID，无法匹配安装包" }
+            ToastCenter.shared.show("该条目缺少 Bundle ID，无法匹配安装包")
             return
         }
         do {
             guard let hit = await SourcePackageLocator.find(bundleId: bid, name: name) else {
-                await MainActor.run { toast = "免登录源里没有该应用" }
+                ToastCenter.shared.show("免登录源里没有该应用")
                 return
             }
             let ipa = try await AppStoreInstallService.downloadIPA(
@@ -212,9 +204,9 @@ struct AppStoreI4View: View {
                 ipa.path,
                 onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
             IPADownloadLibrary.shared.markInstalled(fileName: ipa.lastPathComponent)
-            await MainActor.run { toast = "已安装：\(name.isEmpty ? hit.name : name)" }
+            ToastCenter.shared.show("已安装：\(name.isEmpty ? hit.name : name)")
         } catch {
-            await MainActor.run { toast = "安装失败：\(error.localizedDescription)" }
+            ToastCenter.shared.show("安装失败：\(error.localizedDescription)")
         }
     }
 
@@ -264,7 +256,6 @@ struct I4SpecialAppsView: View {
     @State private var raw = ""
     @State private var loading = true
     @State private var sort = 1
-    @State private var toast: String?
 
     var body: some View {
         List {
@@ -329,14 +320,7 @@ struct I4SpecialAppsView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast).font(.footnote)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 20)
-            }
-        }
+        .toastHost()
         .task { await load() }
         .onChange(of: sort) { _, _ in Task { await load() } }
     }
@@ -357,12 +341,12 @@ struct I4SpecialAppsView: View {
         let bid = i4Value(a, keys: ["bundleid", "bundleId", "sourceid", "sourceId"])
         let name = i4Value(a, keys: ["name", "appname", "appName", "title"])
         guard !bid.isEmpty else {
-            await MainActor.run { toast = "该条目缺少 Bundle ID，无法匹配安装包" }
+            ToastCenter.shared.show("该条目缺少 Bundle ID，无法匹配安装包")
             return
         }
         do {
             guard let hit = await SourcePackageLocator.find(bundleId: bid, name: name) else {
-                await MainActor.run { toast = "免登录源里没有该应用" }
+                ToastCenter.shared.show("免登录源里没有该应用")
                 return
             }
             let ipa = try await AppStoreInstallService.downloadIPA(
@@ -381,9 +365,9 @@ struct I4SpecialAppsView: View {
                 ipa.path,
                 onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
             IPADownloadLibrary.shared.markInstalled(fileName: ipa.lastPathComponent)
-            await MainActor.run { toast = "已安装：\(name.isEmpty ? hit.name : name)" }
+            ToastCenter.shared.show("已安装：\(name.isEmpty ? hit.name : name)")
         } catch {
-            await MainActor.run { toast = "安装失败：\(error.localizedDescription)" }
+            ToastCenter.shared.show("安装失败：\(error.localizedDescription)")
         }
     }
 }

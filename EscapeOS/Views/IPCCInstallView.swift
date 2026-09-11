@@ -11,7 +11,6 @@ struct IPCCInstallView: View {
     @State private var installing = false
     @State private var records: [IPCCInstallService.InstallRecord] = []
     @State private var errorMessage: String?
-    @State private var toast: String?
     @State private var showRespringHint = false
     /// v0.2.130：查看安装日志详情的记录.
     @State private var detailRecord: IPCCInstallService.InstallRecord?
@@ -174,7 +173,7 @@ struct IPCCInstallView: View {
             Button("清空", role: .destructive) {
                 service.clearRecords()
                 records = []
-                toast = "安装记录已清空"
+                ToastCenter.shared.show("安装记录已清空")
             }
             Button("取消", role: .cancel) {}
         } message: {
@@ -226,22 +225,7 @@ struct IPCCInstallView: View {
                 }
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 12)
-                    .transition(.opacity)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                            withAnimation { self.toast = nil }
-                        }
-                    }
-            }
-        }
+        .toastHost()
         .onAppear {
             reloadRecords()
         }
@@ -279,7 +263,7 @@ struct IPCCInstallView: View {
                     installing = false
                     parsed = nil
                     self.parsedURL = nil
-                    toast = "已交给 CommCenter：\(path)"
+                    ToastCenter.shared.show("已交给 CommCenter：\(path)")
                     showRespringHint = true
                     reloadRecords()
                 }
@@ -313,12 +297,12 @@ struct IPCCInstallView: View {
                 try DeviceControlService.shared.restartCommCenter()
                 DispatchQueue.main.async {
                     commCenterBusy = false
-                    toast = "已重启 CommCenter，蜂窝网络将在数秒内恢复"
+                    ToastCenter.shared.show("已重启 CommCenter，蜂窝网络将在数秒内恢复")
                 }
             } catch {
                 DispatchQueue.main.async {
                     commCenterBusy = false
-                    toast = "重启失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("重启失败：\(error.localizedDescription)")
                 }
             }
         }

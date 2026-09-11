@@ -16,7 +16,6 @@ struct ProfileConfigView: View {
     @State private var importFileURL: URL?
     @State private var pendingRemove: ProfileConfigService.ConfigurationProfile?
     @State private var confirmBatch = false
-    @State private var toast: String?
 
     @State private var detailTarget: ProfileConfigService.ConfigurationProfile?
 
@@ -138,17 +137,7 @@ struct ProfileConfigView: View {
                 .padding(.horizontal, 16).padding(.vertical, 10).background(.bar)
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.caption)
-                    .padding(.horizontal, 18).padding(.vertical, 9)
-                    .background(Capsule().fill(Color(.systemBackground)))
-                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-                    .padding(.bottom, 12)
-                    .transition(.opacity)
-            }
-        }
+        .toastHost()
         .task { refresh() }
         .sheet(item: $detailTarget) { p in
             profileDetail(p)
@@ -308,11 +297,7 @@ struct ProfileConfigView: View {
     // MARK: - 操作
 
     private func showToast(_ text: String) {
-        withAnimation { toast = text }
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            withAnimation { toast = nil }
-        }
+        ToastCenter.shared.show(text)
     }
 
     private func importFilePicker() {

@@ -13,7 +13,6 @@ struct AppStoreAccountsView: View {
     @State private var accounts: [AppStoreAccount] = []
     @State private var current: String = ""
     @State private var confirmSignOutAll = false
-    @State private var toast: String?
 
     private var store: AppStoreDownloadStore { .shared }
 
@@ -36,19 +35,11 @@ struct AppStoreAccountsView: View {
             Button("退出全部账号", role: .destructive) {
                 store.signOutAll()
                 reload()
-                toast = "已退出全部账号"
+                ToastCenter.shared.show("已退出全部账号")
             }
             Button("取消", role: .cancel) {}
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 20)
-            }
-        }
+        .toastHost()
         .onAppear { reload() }
     }
 
@@ -103,7 +94,7 @@ struct AppStoreAccountsView: View {
                 Button {
                     store.select(email: a.email)
                     reload()
-                    toast = "已切换到 \(a.email)"
+                    ToastCenter.shared.show("已切换到 \(a.email)")
                 } label: {
                     HStack(spacing: 12) {
                         AppRowIcon(systemName: "person.fill", tint: .blue, symbolSize: 16, frameSize: 32)
@@ -130,7 +121,7 @@ struct AppStoreAccountsView: View {
                     Button(role: .destructive) {
                         store.signOut(email: a.email)
                         reload()
-                        toast = "已退出 \(a.email)"
+                        ToastCenter.shared.show("已退出 \(a.email)")
                     } label: {
                         Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                     }
@@ -159,7 +150,7 @@ struct AppStoreAccountsView: View {
             Button {
                 store.resetDeviceIdentifier()
                 reload()
-                toast = "已重置设备标识"
+                ToastCenter.shared.show("已重置设备标识")
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath")

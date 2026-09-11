@@ -18,11 +18,10 @@ struct I4StoreFreeView: View {
     @State private var searchResults: [I4PCStoreClient.I4App] = []
     @State private var searching = false
 
-    /// 每个 App 的操作状态文案（下载/安装进度）
-    @State private var progress: [String: String] = [:]
-    @State private var toast: String?
     /// v0.3.305：已下载数量（进入页面时读一次磁盘台账）
     @State private var downloadedCount = 0
+    /// 统一下载中心（免登录源与 Apple ID 共用）
+    @ObservedObject private var center = IPADownloadCenter.shared
 
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -54,15 +53,7 @@ struct I4StoreFreeView: View {
                 .disabled(loading)
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 20)
-            }
-        }
+        .toastHost()
         .task {
             downloadedCount = IPADownloadLibrary.shared.items().count
             if apps.isEmpty { await load() }
@@ -194,10 +185,33 @@ struct I4StoreFreeView: View {
             }
             Spacer(minLength: 6)
 
-            if let st = progress[app.id] {
-                HStack(spacing: 5) {
-                    ProgressView().controlSize(.mini)
-                    Text(st).font(.caption2).foregroundStyle(.secondary)
+            if let job = center.activeJob(bundleId: app.bundleId, name: app.name) {
+                HStack(spacing: 6) {
+                    ProgressView(value: min(1, max(0, job.overall)))
+                        .frame(width: 44)
+                    Text(job.phase == .paused ? "已暂停" : job.stageText)
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if job.canPause {
+                        Button {
+                            if job.phase == .paused {
+                                center.resume(job.id)
+                            } else {
+                                center.pause(job.id)
+                            }
+                        } label: {
+                            Image(systemName: job.phase == .paused ? "play.circle.fill" : "pause.circle.fill")
+                                .font(.body)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Button {
+                        center.cancel(job.id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
             } else {
                 Button {
@@ -245,7 +259,7 @@ struct I4StoreFreeView: View {
                 searchResults = try await I4PCStoreClient.search(keyword: kw)
             } catch {
                 searchResults = []
-                toast = "搜索失败：\(error.localizedDescription)"
+                ToastCenter.shared.show("搜索失败：\(error.localizedDescription)")
             }
             searching = false
         }
@@ -254,55 +268,16 @@ struct I4StoreFreeView: View {
     // MARK: - 下载并安装（免登录）
 
     private func install(_ app: I4PCStoreClient.I4App) {
-        guard progress[app.id] == nil else { return }
         guard let ipaURL = app.ipaURL else {
-            toast = "该应用没有可用的安装包地址"
+            ToastCenter.shared.show("该应用没有可用的安装包地址")
             return
         }
-        progress[app.id] = "下载中…"
-        let bundle = app.bundleId ?? app.id
-        let version = app.version ?? "x"
-
-        Task {
-            do {
-                let ipa = try await AppStoreInstallService.downloadIPA(
-                    urlString: ipaURL.absoluteString,
-                    suggestedName: "\(bundle)-\(version).ipa",
-                    progress: { p in
-                        // 下载进度来自 URLSession delegate queue（非主线程）
-                        DispatchQueue.main.async {
-                            self.progress[app.id] = String(format: "下载 %.0f%%", p * 100)
-                        }
-                    },
-                    onLog: { LoginLogger.shared.log("[I4源] \($0)", category: .i4Store) })
-
-                self.progress[app.id] = "安装中…"
-                // v0.3.305：登记到下载台账（商店元信息只有列表里才有，包本身读不出来）
-                await MainActor.run {
-                    IPADownloadLibrary.shared.record(fileURL: ipa,
-                                                     displayName: app.name,
-                                                     bundleId: app.bundleId,
-                                                     version: app.version,
-                                                     iconURL: app.icon,
-                                                     source: "爱思免登录")
-                    self.downloadedCount = IPADownloadLibrary.shared.items().count
-                }
-                try await AppStoreInstallService.installLocalIPA(
-                    ipa.path,
-                    progress: { p in
-                        DispatchQueue.main.async {
-                            self.progress[app.id] = String(format: "安装 %.0f%%", p * 100)
-                        }
-                    },
-                    onLog: { LoginLogger.shared.log("[I4源] \($0)", category: .i4Store) })
-
-                progress[app.id] = nil
-                toast = "已安装：\(app.name)"
-            } catch {
-                progress[app.id] = nil
-                toast = "失败：\(error.localizedDescription)"
-                LoginLogger.shared.log("[I4源] 失败 \(app.name)：\(error.localizedDescription)", category: .i4Store)
-            }
-        }
+        _ = IPADownloadCenter.shared.start(name: app.name,
+                                           bundleId: app.bundleId,
+                                           version: app.version,
+                                           iconURL: app.icon,
+                                           remoteURL: ipaURL.absoluteString,
+                                           autoInstall: true)
+        downloadedCount = IPADownloadLibrary.shared.items().count
     }
 }

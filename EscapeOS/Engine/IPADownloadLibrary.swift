@@ -148,6 +148,14 @@ final class IPADownloadLibrary {
         saveIndex(index)
     }
 
+    /// 删除单个包（按文件名）—— 下载中心取消任务时用
+    func remove(fileName: String) {
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent(fileName))
+        var index = loadIndex()
+        index.removeAll { $0.fileName == fileName }
+        saveIndex(index)
+    }
+
     /// 批量删除（配合列表编辑模式）
     func remove(fileNames: Set<String>) {
         for name in fileNames {

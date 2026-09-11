@@ -12,7 +12,6 @@ struct ProfileInstallView: View {
     @State private var profiles: [String] = []
     @State private var showImporter = false
     @State private var busy = false
-    @State private var toast: String?
     @State private var confirmDelete: String?
 
     /// 描述文件保存目录（Documents/Profiles，文件 App 可见）.
@@ -111,22 +110,7 @@ struct ProfileInstallView: View {
         } message: {
             Text("删除后无法恢复.")
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 12)
-                    .transition(.opacity)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                            withAnimation { self.toast = nil }
-                        }
-                    }
-            }
-        }
+        .toastHost()
         .onAppear {
             reload()
         }
@@ -155,13 +139,13 @@ struct ProfileInstallView: View {
                 try data.write(to: target)
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "已导入：\(name)"
+                    ToastCenter.shared.show("已导入：\(name)")
                     reload()
                 }
             } catch {
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "导入失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("导入失败：\(error.localizedDescription)")
                 }
             }
         }
@@ -201,12 +185,12 @@ struct ProfileInstallView: View {
                         }
                     }
                     busy = false
-                    toast = "已打开 Safari：到「设置 → 通用 → VPN 与设备管理」安装"
+                    ToastCenter.shared.show("已打开 Safari：到「设置 → 通用 → VPN 与设备管理」安装")
                 }
             } catch {
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "发送失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("发送失败：\(error.localizedDescription)")
                 }
             }
         }

@@ -18,7 +18,6 @@ struct AFCBrowserView: View {
     @State private var renameText = ""
     @State private var confirmDelete: AFCService.Entry?
     @State private var activeSheet: SheetItem?
-    @State private var toast: String?
 
     /// 单一 sheet 入口（分享 / 移动），避免多个 .sheet 修饰符互相覆盖.
     private enum SheetItem: Identifiable {
@@ -147,22 +146,7 @@ struct AFCBrowserView: View {
                 moveSheet(source: source)
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 12)
-                    .transition(.opacity)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                            withAnimation { self.toast = nil }
-                        }
-                    }
-            }
-        }
+        .toastHost()
         .onAppear {
             if entries.isEmpty && errorMessage == nil { reload() }
         }
@@ -220,7 +204,7 @@ struct AFCBrowserView: View {
             do {
                 try service.renamePath(source.path, to: target)
                 DispatchQueue.main.async {
-                    toast = "已移动到 \(target)"
+                    ToastCenter.shared.show("已移动到 \(target)")
                     loading = false
                     reload()
                 }
@@ -329,7 +313,7 @@ struct AFCBrowserView: View {
             do {
                 try service.writeFile(data, to: target)
                 DispatchQueue.main.async {
-                    toast = "已上传 \(name)"
+                    ToastCenter.shared.show("已上传 \(name)")
                     loading = false
                     reload()
                 }
@@ -371,7 +355,7 @@ struct AFCBrowserView: View {
             do {
                 try service.makeDirectory(target)
                 DispatchQueue.main.async {
-                    toast = "已创建 \(name)"
+                    ToastCenter.shared.show("已创建 \(name)")
                     newFolderName = ""
                     reload()
                 }
@@ -393,7 +377,7 @@ struct AFCBrowserView: View {
             do {
                 try service.renamePath(target.path, to: newPath)
                 DispatchQueue.main.async {
-                    toast = "已重命名"
+                    ToastCenter.shared.show("已重命名")
                     renameTarget = nil
                     reload()
                 }
@@ -411,7 +395,7 @@ struct AFCBrowserView: View {
             do {
                 try service.removePath(target.path, includingContents: target.isDirectory)
                 DispatchQueue.main.async {
-                    toast = "已删除 \(target.name)"
+                    ToastCenter.shared.show("已删除 \(target.name)")
                     confirmDelete = nil
                     reload()
                 }

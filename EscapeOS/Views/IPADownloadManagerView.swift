@@ -10,9 +10,8 @@ import SwiftUI
 struct IPADownloadManagerView: View {
 
     @State private var items: [IPADownloadItem] = []
-    @State private var progress: [String: String] = [:]
-    @State private var toast: String?
     @State private var selection = Set<String>()
+    @ObservedObject private var center = IPADownloadCenter.shared
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -22,6 +21,7 @@ struct IPADownloadManagerView: View {
 
     var body: some View {
         List(selection: $selection) {
+            activeSection
             summarySection
             contentSection
         }
@@ -38,16 +38,73 @@ struct IPADownloadManagerView: View {
                 }
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 20)
+        .toastHost()
+        .task { reload() }
+    }
+
+    // MARK: - 下载中（暂停 / 继续 / 删除）
+
+    @ViewBuilder
+    private var activeSection: some View {
+        if !center.activeJobs.isEmpty {
+            Section {
+                ForEach(center.activeJobs) { job in
+                    activeRow(job)
+                }
+            } header: {
+                HStack {
+                    Text("下载中")
+                    Spacer(minLength: 0)
+                    Text("\(center.activeJobs.count) 个任务")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .task { reload() }
+    }
+
+    private func activeRow(_ job: IPADownloadCenter.Job) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(job.name).font(.subheadline).lineLimit(1)
+                Spacer(minLength: 0)
+                Text(job.phase == .paused ? "已暂停" : job.stageText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("\(Int(job.overall * 100))%")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: min(1, max(0, job.overall)))
+            HStack(spacing: 14) {
+                if job.canPause {
+                    Button {
+                        if job.phase == .paused {
+                            center.resume(job.id)
+                        } else {
+                            center.pause(job.id)
+                        }
+                    } label: {
+                        Label(job.phase == .paused ? "继续" : "暂停",
+                              systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                }
+                Button {
+                    center.cancel(job.id)
+                    ToastCenter.shared.show("已取消并删除该安装包")
+                } label: {
+                    Label("删除安装包", systemImage: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.vertical, 3)
     }
 
     // MARK: - 概览
@@ -77,8 +134,7 @@ struct IPADownloadManagerView: View {
             }
             .padding(.vertical, 4)
         } footer: {
-            Text("安装包保存在 Documents/AppStoreDownloads，可用文件 App 直接拷走或拷入；"
-                 + "放进该目录的 IPA 会自动出现在这里。安装走 RSD 隧道（需配对文件 + LocalDevVPN）。")
+            Text("包存在 Documents/AppStoreDownloads，放进该目录的 IPA 会自动出现在这里")
                 .font(.caption2)
         }
     }
@@ -137,10 +193,12 @@ struct IPADownloadManagerView: View {
             }
             Spacer(minLength: 6)
 
-            if let st = progress[item.fileName] {
+            if let job = center.activeJob(bundleId: item.bundleId, name: item.title) {
                 HStack(spacing: 5) {
-                    ProgressView().controlSize(.mini)
-                    Text(st).font(.caption2).foregroundStyle(.secondary)
+                    ProgressView(value: min(1, max(0, job.overall)))
+                        .frame(width: 40)
+                    Text(job.phase == .paused ? "已暂停" : job.stageText)
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
             } else {
                 Button {
@@ -222,36 +280,19 @@ struct IPADownloadManagerView: View {
         items = IPADownloadLibrary.shared.items()
     }
 
+    /// 安装/重装/降级安装 —— 统一交给下载中心（进度统一展示、可取消）
     private func install(_ item: IPADownloadItem, downgrade: Bool = false) {
-        guard progress[item.fileName] == nil else { return }
         let filePath = IPADownloadLibrary.shared.path(for: item)
         guard FileManager.default.fileExists(atPath: filePath) else {
-            toast = "文件不存在：\(item.fileName)"
+            ToastCenter.shared.show("文件不存在：\(item.fileName)")
             reload()
             return
         }
-        progress[item.fileName] = "准备…"
-
-        Task {
-            do {
-                try await AppStoreInstallService.installLocalIPA(
-                    filePath,
-                    allowDowngrade: downgrade,
-                    progress: { p in
-                        DispatchQueue.main.async {
-                            self.progress[item.fileName] = String(format: "安装 %.0f%%", p * 100)
-                        }
-                    },
-                    onLog: { LoginLogger.shared.log("[下载管理] \($0)", category: .i4Store) })
-                IPADownloadLibrary.shared.markInstalled(fileName: item.fileName)
-                progress[item.fileName] = nil
-                toast = "已安装：\(item.title)"
-                reload()
-            } catch {
-                progress[item.fileName] = nil
-                toast = "失败：\(error.localizedDescription)"
-                LoginLogger.shared.log("[下载管理] 安装失败 \(item.fileName)：\(error.localizedDescription)", category: .i4Store)
-            }
-        }
+        _ = IPADownloadCenter.shared.installLocal(fileName: item.fileName,
+                                                 displayName: item.title,
+                                                 bundleId: item.bundleId,
+                                                 version: item.version,
+                                                 iconURL: item.iconURL)
+        ToastCenter.shared.show(downgrade ? "正在降级安装…" : "正在安装…")
     }
 }

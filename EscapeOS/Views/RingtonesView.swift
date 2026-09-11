@@ -45,7 +45,6 @@ struct RingtonesView: View {
     @State private var errorMessage: String?
     @State private var busy = false
     @State private var showImporter = false
-    @State private var toast: String?
     @State private var confirmDelete: RingtonesService.Entry?
     @State private var renameTarget: RingtonesService.Entry?
     @State private var renameText = ""
@@ -160,22 +159,7 @@ struct RingtonesView: View {
                 .shadow(radius: 8)
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 12)
-                    .transition(.opacity)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                            withAnimation { self.toast = nil }
-                        }
-                    }
-            }
-        }
+        .toastHost()
         .onAppear {
             if ringtones.isEmpty && errorMessage == nil {
                 reload()
@@ -278,9 +262,9 @@ struct RingtonesView: View {
                 DispatchQueue.main.async {
                     busy = false
                     if let syncFailed {
-                        toast = "已导入并注册铃声 \(url.lastPathComponent)；媒体库刷新通知失败（\(syncFailed)）——若设置里未出现，重启设备即可"
+                        ToastCenter.shared.show("已导入并注册铃声 \(url.lastPathComponent)；媒体库刷新通知失败（\(syncFailed)）——若设置里未出现，重启设备即可")
                     } else {
-                        toast = "已导入并注册到铃声库：\(url.lastPathComponent)（到「设置 → 声音 → 铃声」查看；未出现请重启设备）"
+                        ToastCenter.shared.show("已导入并注册到铃声库：\(url.lastPathComponent)（到「设置 → 声音 → 铃声」查看；未出现请重启设备）")
                     }
                     reload()
                 }
@@ -310,7 +294,7 @@ struct RingtonesView: View {
             } catch {
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "播放失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("播放失败：\(error.localizedDescription)")
                 }
             }
         }
@@ -329,7 +313,7 @@ struct RingtonesView: View {
             } catch {
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "导出失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("导出失败：\(error.localizedDescription)")
                 }
             }
         }
@@ -346,13 +330,13 @@ struct RingtonesView: View {
                 DispatchQueue.main.async {
                     busy = false
                     renameTarget = nil
-                    toast = "已重命名为 \(name)"
+                    ToastCenter.shared.show("已重命名为 \(name)")
                     reload()
                 }
             } catch {
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "重命名失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("重命名失败：\(error.localizedDescription)")
                 }
             }
         }
@@ -367,13 +351,13 @@ struct RingtonesView: View {
                 DispatchQueue.main.async {
                     busy = false
                     confirmDelete = nil
-                    toast = "已删除 \(target.name)"
+                    ToastCenter.shared.show("已删除 \(target.name)")
                     reload()
                 }
             } catch {
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "删除失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("删除失败：\(error.localizedDescription)")
                 }
             }
         }

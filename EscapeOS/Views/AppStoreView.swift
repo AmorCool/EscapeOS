@@ -16,8 +16,8 @@ struct AppStoreView: View {
     @State private var searching = false
     @State private var showDisclaimer = false
     @State private var showI4 = false
-    @ObservedObject private var installManager = AppStoreInstallManager.shared
-    @State private var toast: String?
+    @State private var showFavorites = false
+    @ObservedObject private var center = IPADownloadCenter.shared
 
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -115,12 +115,18 @@ struct AppStoreView: View {
                     } label: {
                         Label("爱思商店（专题 / 榜单）", systemImage: "cart.fill")
                     }
+                    Button {
+                        showFavorites = true
+                    } label: {
+                        Label("收藏栏", systemImage: "star")
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
         }
         .sheet(isPresented: $showI4) { NavigationStack { AppStoreI4View() } }
+        .sheet(isPresented: $showFavorites) { NavigationStack { AppFavoritesView() } }
         .overlay {
             if showDisclaimer {
                 AppStoreDisclaimerView(
@@ -135,16 +141,7 @@ struct AppStoreView: View {
                 )
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 20)
-                    .transition(.opacity)
-            }
-        }
+        .toastHost()
         .task {
             if !AppStoreDisclaimer.accepted { showDisclaimer = true }
             if items.isEmpty { await loadCharts() }
@@ -292,7 +289,7 @@ struct AppStoreView: View {
             Button {
                 install(app)
             } label: {
-                if installManager.isRunning(app.id) {
+                if center.activeJob(bundleId: app.bundleId, name: app.name) != nil {
                     ProgressView().controlSize(.mini).frame(width: 36)
                 } else {
                     Text(app.priceText == "免费" ? "获取" : app.priceText)
@@ -303,7 +300,7 @@ struct AppStoreView: View {
                 }
             }
             .buttonStyle(.plain)
-            .disabled(installManager.isRunning(app.id))
+            .disabled(center.activeJob(bundleId: app.bundleId, name: app.name) != nil)
         }
         .padding(.vertical, 2)
     }
@@ -353,28 +350,23 @@ struct AppStoreView: View {
         }
     }
 
-    /// 安装：走本机 Apple ID 的 App Store 官方源。
-    ///
-    /// v0.3.312：Apple ID 登录实现已整体移除（待按 CloudOfEquality/Asspp 分叉的本地
-    /// SAP 方案重新接入），因此这里**不再就地弹出登录**；未登录时提示用户改走
-    /// 「免登录下载」（爱思源，不需要 Apple ID）。
+    /// 列表行的「获取」：**统一走下载中心**（有 Apple ID 走官方源，否则走免登录源）。
     private func install(_ app: AppStoreItem) {
-        guard !installManager.isRunning(app.id) else { return }
-        let hasAccount = !(AppStoreDownloadStore.shared.selectedAccount == nil)
-        guard hasAccount else {
-            toast = "尚未登录 Apple ID（登录功能正在重构）—— 可直接用上方的「免登录下载」"
-            clearToastLater()
+        guard center.activeJob(bundleId: app.bundleId, name: app.name) == nil else { return }
+        let accounts = AppStoreDownloadStore.shared.usableAccounts
+        if let first = accounts.first {
+            IPADownloadCenter.shared.startWithAppleID(item: app, email: first.email)
+            ToastCenter.shared.show("已开始用「\(first.email)」下载安装")
             return
         }
-        AppStoreInstallManager.shared.start(item: app)
-        toast = "已开始从 App Store 下载安装「\(app.name)」"
-        clearToastLater()
-    }
-
-    private func clearToastLater() {
+        guard let bid = app.bundleId, !bid.isEmpty else {
+            ToastCenter.shared.show("该应用缺少 Bundle ID，无法从源匹配")
+            return
+        }
+        ToastCenter.shared.show("正在查找安装包…")
         Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            toast = nil
+            _ = await IPADownloadCenter.shared.startFromI4Source(
+                name: app.name, bundleId: bid, iconURL: app.iconURL)
         }
     }
 }

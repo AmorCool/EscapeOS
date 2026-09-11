@@ -20,7 +20,6 @@ struct FileSharingAppsView: View {
     @State private var selectingIcons = false
     @State private var selectedIcons: Set<String> = []
     @State private var exportingIcons = false
-    @State private var toastText: String?
 
     var body: some View {
         List(selection: $selectedIcons) {
@@ -106,22 +105,7 @@ struct FileSharingAppsView: View {
                     }
             }
         }
-        .overlay(alignment: .bottom) {
-            if let toastText {
-                Text(toastText)
-                    .font(.footnote)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 16)
-                    .transition(.opacity)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                            withAnimation { self.toastText = nil }
-                        }
-                    }
-            }
-        }
+        .toastHost()
         .task {
             await load()
             // v0.3.288：不再自动跑 AFC 递归算文档大小——v0.3.284 起由 Lookup 的
@@ -165,7 +149,7 @@ struct FileSharingAppsView: View {
         let targets = apps.filter { selectedIcons.contains($0.bundleId) }
         guard !targets.isEmpty else { return }
         exportingIcons = true
-        toastText = "正在导出 \(targets.count) 个图标…"
+        ToastCenter.shared.show("正在导出 \(targets.count) 个图标…")
         Task.detached(priority: .utility) {
             let discovery = AppDiscovery()
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -184,7 +168,7 @@ struct FileSharingAppsView: View {
             let total = count
             await MainActor.run {
                 exportingIcons = false
-                toastText = "已导出 \(total)/\(targets.count) 个图标到 Documents/AppIcons/"
+                ToastCenter.shared.show("已导出 \(total)/\(targets.count) 个图标到 Documents/AppIcons/")
             }
             LoginLogger.shared.log("[ExportIcons] 导出 \(total)/\(targets.count) 个图标")
         }

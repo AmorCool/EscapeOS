@@ -13,7 +13,6 @@ struct CrashLogView: View {
     @State private var previewEntry: CrashLogService.Entry?
     @State private var previewText = ""
     @State private var previewLoading = false
-    @State private var toast: String?
     @State private var confirmDelete = false
     @State private var exporting = false
     /// 批量操作中（导出 / 删除）：显示进度，禁用重复操作.
@@ -157,22 +156,7 @@ struct CrashLogView: View {
         } message: {
             Text("删除后无法恢复.")
         }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 12)
-                    .transition(.opacity)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                            withAnimation { self.toast = nil }
-                        }
-                    }
-            }
-        }
+        .toastHost()
         .onAppear {
             if entries.isEmpty && errorMessage == nil { reload() }
         }
@@ -275,7 +259,7 @@ struct CrashLogView: View {
                 DispatchQueue.main.async {
                     previewEntry = nil
                     previewLoading = false
-                    toast = "无法打开：\(error.localizedDescription)"
+                    ToastCenter.shared.show("无法打开：\(error.localizedDescription)")
                 }
             }
         }
@@ -307,13 +291,13 @@ struct CrashLogView: View {
                     busy = false
                     exporting = false
                     selection.removeAll()
-                    toast = "已导出 \(paths.count) 个日志到 App 的 CrashLogs 目录（文件 App 可见）"
+                    ToastCenter.shared.show("已导出 \(paths.count) 个日志到 App 的 CrashLogs 目录（文件 App 可见）")
                 }
             } catch {
                 DispatchQueue.main.async {
                     busy = false
                     exporting = false
-                    toast = "导出失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("导出失败：\(error.localizedDescription)")
                 }
             }
         }
@@ -334,7 +318,7 @@ struct CrashLogView: View {
                 DispatchQueue.main.async {
                     busy = false
                     selection.removeAll()
-                    toast = failed == 0
+                    ToastCenter.shared.show(failed == 0)
                         ? "已删除 \(targets.count) 个日志"
                         : "已删除 \(targets.count - failed) 个，失败 \(failed) 个"
                     reload()
@@ -342,7 +326,7 @@ struct CrashLogView: View {
             } catch {
                 DispatchQueue.main.async {
                     busy = false
-                    toast = "删除失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("删除失败：\(error.localizedDescription)")
                 }
             }
         }
