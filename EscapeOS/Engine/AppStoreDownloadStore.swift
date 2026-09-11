@@ -75,6 +75,9 @@ final class AppStoreDownloadStore {
         accounts.removeAll { $0.email == account.email }
         accounts.append(account)
         save()
+        // v0.3.309：新登录的账号自动成为「当前下载账号」——多账号时用户刚登录的那个
+        // 才是他想用来下载的；否则会沿用上一次的选择，出现"登录了却拿旧账号去下"。
+        selectedEmail = account.email
     }
 
     func remove(_ email: String) {
