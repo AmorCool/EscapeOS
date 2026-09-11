@@ -352,18 +352,21 @@ struct AppStoreView: View {
         }
     }
 
-    /// 安装：走已配置的分发源 → 下载 IPA → RSD 隧道安装（v0.3.300 起为真实下载安装）；
-    /// 没有可用源时退回系统 App Store。
+    /// 安装：优先用**本机 Apple ID 走 App Store 官方源**（sinf 按本机身份生成，可直接安装）；
+    /// 没有账号时回退到自备分发源；两者都没有才跳系统 App Store。
     private func install(_ app: AppStoreItem) {
-        if AppStoreSourceStore.shared.enabledSources.isEmpty {
+        guard !installManager.isRunning(app.id) else { return }
+        let hasAccount = !AppStoreDownloadStore.shared.accounts.isEmpty
+        if !hasAccount && AppStoreSourceStore.shared.enabledSources.isEmpty {
             _ = AppStoreInstaller.openInAppStore(app)
-            toast = "未配置分发源，已打开系统 App Store"
+            toast = "未登录 Apple ID 且无分发源，已打开系统 App Store"
             clearToastLater()
             return
         }
-        guard !installManager.isRunning(app.id) else { return }
         AppStoreInstallManager.shared.start(item: app)
-        toast = "已开始处理「\(app.name)」，进度见详情页"
+        toast = hasAccount
+            ? "已开始从 App Store 下载安装「\(app.name)」"
+            : "已开始处理「\(app.name)」，进度见详情页"
         clearToastLater()
     }
 

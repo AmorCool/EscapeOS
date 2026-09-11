@@ -65,6 +65,15 @@ public enum Configuration {
         }
     }
 
+    /// v0.3.301：下载请求 payload 里的 `serialNumber`。
+    ///
+    /// 原实现写死 `"0"`（ipatool 老行为）→ Apple 按"无效设备"处理，
+    /// 返回的 FairPlay sinf 绑不到本机，`installation_proxy` 装上必失败
+    /// （`ApplicationSINFCaptureFailed`）。改由 `LocalDeviceIdentity` 写入本机真实
+    /// 序列号，Apple 才能关联到本机的 FairPlay 证书生成可用 sinf。
+    /// 拿不到本机身份时保持 `"0"`（退回原行为，不阻塞链路）。
+    public nonisolated(unsafe) static var deviceSerialNumber: String = "0"
+
     // v0.3.175：UA 切回 Configurator——ipatool PR#486/#525 实证（26HOTFIX24 后，
     // 2026-08 认证已迁移）：Configurator/2.17 是 ipatool 默认 UA，登录 + 2FA 验证码
     // 收发 + 购买全链路验证通过（commerce-grade token）；v0.2.151/158 时代 iTunes UA

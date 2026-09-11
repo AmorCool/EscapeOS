@@ -107,38 +107,63 @@ final class AppStoreInstallManager: ObservableObject {
 
         Task.detached(priority: .userInitiated) { [item] in
             do {
-                await MainActor.run { self.setPhase(appId, .downloading) }
-
-                let (payload, source) = try await AppStoreInstallService
-                    .resolvePayloadUsingAnySource(item: item) { line in
-                        Task { @MainActor in self.append(line, to: appId) }
+                // v0.3.301：优先走**本机 Apple ID + App Store 官方源** —— sinf 按本机身份
+                // 生成，installd 能解 FairPlay 密文段（不需要解密、不需要重签）。
+                // 只有没有账号时才回退到自备分发源。
+                if let email = AppStoreDownloadStore.shared.accounts.first?.email {
+                    await MainActor.run {
+                        self.setPhase(appId, .downloading)
+                        self.append("使用本机 Apple ID「\(email)」从 App Store 下载", to: appId)
                     }
-                await MainActor.run {
-                    self.append("源「\(source.name)」载荷：\(payload.title ?? item.name) "
-                                + "\(payload.bundleVersion ?? "-")", to: appId)
+                    _ = try await AppStoreLocalInstallService.downloadAndInstall(
+                        item: item,
+                        email: email,
+                        downloadProgress: { p in
+                            Task { @MainActor in self.setDownload(appId, p) }
+                        },
+                        installProgress: { p in
+                            Task { @MainActor in
+                                self.setPhase(appId, .installing)
+                                self.setInstall(appId, p)
+                            }
+                        },
+                        onLog: { line in
+                            Task { @MainActor in self.append(line, to: appId) }
+                        })
+                } else {
+                    await MainActor.run {
+                        self.setPhase(appId, .downloading)
+                        self.append("未登录 Apple ID，改用自备分发源", to: appId)
+                    }
+                    let (payload, source) = try await AppStoreInstallService
+                        .resolvePayloadUsingAnySource(item: item) { line in
+                            Task { @MainActor in self.append(line, to: appId) }
+                        }
+                    await MainActor.run {
+                        self.append("源「\(source.name)」载荷：\(payload.title ?? item.name) "
+                                    + "\(payload.bundleVersion ?? "-")", to: appId)
+                    }
+                    let fileName = (payload.bundleIdentifier ?? item.bundleId ?? appId) + ".ipa"
+                    let ipa = try await AppStoreInstallService.downloadIPA(
+                        urlString: payload.ipaURL,
+                        suggestedName: fileName,
+                        progress: { p in
+                            Task { @MainActor in self.setDownload(appId, p) }
+                        },
+                        onLog: { line in
+                            Task { @MainActor in self.append(line, to: appId) }
+                        })
+                    await MainActor.run { self.setPhase(appId, .installing) }
+                    try await AppStoreInstallService.installLocalIPA(
+                        ipa.path,
+                        allowDowngrade: allowDowngrade,
+                        progress: { p in
+                            Task { @MainActor in self.setInstall(appId, p) }
+                        },
+                        onLog: { line in
+                            Task { @MainActor in self.append(line, to: appId) }
+                        })
                 }
-
-                let fileName = (payload.bundleIdentifier ?? item.bundleId ?? appId) + ".ipa"
-                let ipa = try await AppStoreInstallService.downloadIPA(
-                    urlString: payload.ipaURL,
-                    suggestedName: fileName,
-                    progress: { p in
-                        Task { @MainActor in self.setDownload(appId, p) }
-                    },
-                    onLog: { line in
-                        Task { @MainActor in self.append(line, to: appId) }
-                    })
-
-                await MainActor.run { self.setPhase(appId, .installing) }
-                try await AppStoreInstallService.installLocalIPA(
-                    ipa.path,
-                    allowDowngrade: allowDowngrade,
-                    progress: { p in
-                        Task { @MainActor in self.setInstall(appId, p) }
-                    },
-                    onLog: { line in
-                        Task { @MainActor in self.append(line, to: appId) }
-                    })
 
                 await MainActor.run {
                     if var s = self.tasks[appId] {

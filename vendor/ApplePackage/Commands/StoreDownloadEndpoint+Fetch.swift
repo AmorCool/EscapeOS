@@ -120,7 +120,9 @@ extension StoreDownloadEndpoint {
             "salableAdamId": app.id,
             // v0.3.258：对齐上游 ipatool 5f776fe —— 缺 serialNumber 时 Apple 按
             // 无效设备校验，直接回「Your device or computer could not be verified」.
-            "serialNumber": "0",
+            // v0.3.301：改为可配置 —— 传入本机真实序列号后，Apple 才能关联本机
+            // FairPlay 证书，生成可被本机 installd 解密的 sinf。默认仍是 "0"。
+            "serialNumber": Configuration.deviceSerialNumber,
         ]
 
         if !externalVersionID.isEmpty {

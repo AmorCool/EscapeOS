@@ -231,7 +231,7 @@ enum IPAPackageInspector {
             return try? fh.read(upToCount: want)
         case 8:
             // 只读压缩数据的前若干字节即可解出开头（deflate 是流式）
-            let wantComp = min(Int(entry.compSize), max(1 << 20))
+            let wantComp = min(Int(entry.compSize), 1 << 20)
             try? fh.seek(toOffset: UInt64(dataOffset))
             guard let comp = try? fh.read(upToCount: wantComp), !comp.isEmpty else { return nil }
             return inflatePrefix(comp, maxOut: maxBytes)
