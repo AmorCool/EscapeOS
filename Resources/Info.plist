@@ -49,6 +49,8 @@
 		</dict>
 	</dict>
 	<!-- v0.3.203：体检 URL Scheme 探测（Reveil 同款白名单，canOpenURL 只认已声明 scheme） -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于把提取的应用图标与预览图保存到相册</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>cydia</string>
@@ -75,9 +77,9 @@
 		<string>iPhoneOS</string>
 	</array>
 <key>CFBundleShortVersionString</key>
-<string>0.3.314</string>
+<string>0.3.315</string>
 <key>CFBundleVersion</key>
-<string>614</string>
+<string>615</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>

@@ -110,6 +110,22 @@ enum DeviceSlimService {
         var failures: [String] = []
     }
 
+    /// 重装阶段（进度条文案）
+    enum ReinstallStage: String {
+        case locating = "查找安装包"
+        case downloading = "下载中"
+        case installing = "安装中"
+    }
+
+    /// 重装进度（index 从 1 开始）
+    struct ReinstallProgress {
+        let index: Int
+        let total: Int
+        let name: String
+        let stage: ReinstallStage
+        let fraction: Double    // 当前这一个的整体进度 0~1
+    }
+
     // MARK: - 白名单与常量
 
     static let pathPhotoThumbnails = "/PhotoData/Thumbnails"
@@ -311,13 +327,13 @@ enum DeviceSlimService {
             let bytes = snap.totals[path] ?? 0
             guard bytes > 0 else { continue }
             systemItems.append(Item(id: path, name: itemName(path),
-                                    detail: "\(why) · \(snap.fileCounts[path] ?? 0) 个文件",
+                                    detail: "\(snap.fileCounts[path] ?? 0) 个文件",
                                     bytes: bytes, kind: .systemCache, deletable: true))
         }
         groups.append(Group(kind: .systemCache, items: systemItems))
 
         let logItems = snap.logs.map {
-            Item(id: $0.path, name: itemName($0.path), detail: "日志文件",
+            Item(id: $0.path, name: itemName($0.path), detail: nil,
                  bytes: $0.bytes, kind: .userLog, deletable: true)
         }
         groups.append(Group(kind: .userLog, items: logItems))
@@ -327,7 +343,7 @@ enum DeviceSlimService {
             let bytes = snap.totals[path] ?? 0
             guard bytes > 0 else { continue }
             tempItems.append(Item(id: path, name: itemName(path),
-                                  detail: "\(why) · \(snap.fileCounts[path] ?? 0) 个文件",
+                                  detail: "\(snap.fileCounts[path] ?? 0) 个文件",
                                   bytes: bytes, kind: .tempFiles, deletable: true))
         }
         groups.append(Group(kind: .tempFiles, items: tempItems))
@@ -398,22 +414,61 @@ enum DeviceSlimService {
 
     // MARK: - 重装（较大应用）
 
-    /// 卸载 + 用免登录下载库里的 IPA 重装（**会清掉该 App 的文稿与数据**）.
+    /// 卸载 + 重装（**会清掉该 App 的文稿与数据**）。
+    ///
+    /// 本地「免登录下载」库里没有该包时，**现场去免登录源按 bundleId 找并下载**
+    /// ——这正是爱思的做法（它的包不落本地，重装时从自己服务端取）。
+    /// 源里也找不到才判定为「资源缺失」。
     static func reinstall(items: [Item],
-                          progress: ((Int, Int, String) -> Void)? = nil) async -> ReinstallResult {
+                          progress: ((ReinstallProgress) -> Void)? = nil) async -> ReinstallResult {
         var result = ReinstallResult()
-        let targets = items.filter { $0.kind == .bigApps && $0.ipaFileName != nil }
+        let targets = items.filter { $0.kind == .bigApps }
         for (index, item) in targets.enumerated() {
-            progress?(index + 1, targets.count, item.name)
-            guard let fileName = item.ipaFileName else { continue }
-            let ipaPath = IPADownloadLibrary.shared.path(forFileName: fileName)
-            guard FileManager.default.fileExists(atPath: ipaPath) else {
-                result.failures.append("\(item.name)：重装包不在本地（\(fileName)）")
-                continue
+            func report(_ stage: ReinstallStage, _ fraction: Double) {
+                progress?(ReinstallProgress(index: index + 1, total: targets.count,
+                                            name: item.name, stage: stage, fraction: fraction))
             }
             do {
+                // ① 本地已有包就直接用；否则去源里找
+                var fileName = item.ipaFileName
+                var localPath = fileName.map { IPADownloadLibrary.shared.path(forFileName: $0) } ?? ""
+                if fileName == nil || !FileManager.default.fileExists(atPath: localPath) {
+                    report(.locating, 0)
+                    guard let hit = await SourcePackageLocator.find(bundleId: item.id, name: item.name) else {
+                        result.failures.append("\(item.name)：源里没有找到该应用")
+                        continue
+                    }
+                    let saved = try await AppStoreInstallService.downloadIPA(
+                        urlString: hit.ipaURL,
+                        suggestedName: "\(item.id)-\(hit.version ?? "x").ipa",
+                        progress: { p in
+                            DispatchQueue.main.async { report(.downloading, p * 0.6) }
+                        },
+                        onLog: { LoginLogger.shared.log("[瘦身] \($0)", category: .i4Store) })
+                    fileName = saved.lastPathComponent
+                    localPath = saved.path
+                    await MainActor.run {
+                        IPADownloadLibrary.shared.record(fileURL: saved,
+                                                         displayName: item.name,
+                                                         bundleId: item.id,
+                                                         version: hit.version,
+                                                         iconURL: nil,
+                                                         source: "爱思免登录")
+                    }
+                }
+                guard let fileName, FileManager.default.fileExists(atPath: localPath) else {
+                    result.failures.append("\(item.name)：安装包不可用")
+                    continue
+                }
+                // ② 卸载 → 装回
+                report(.installing, 0.6)
                 try UninstallService.shared.uninstall(bundleId: item.id)
-                try await AppStoreInstallService.installLocalIPA(ipaPath, progress: { _ in })
+                try await AppStoreInstallService.installLocalIPA(
+                    localPath,
+                    progress: { p in
+                        DispatchQueue.main.async { report(.installing, 0.6 + p * 0.4) }
+                    },
+                    onLog: { LoginLogger.shared.log("[瘦身] \($0)", category: .i4Store) })
                 IPADownloadLibrary.shared.markInstalled(fileName: fileName)
                 result.ok.append(item.name)
             } catch {

@@ -185,24 +185,34 @@ struct AppStoreI4View: View {
 
     /// 取详情 → 解析 manifest plist → 交给系统 itms-services
     private func install(_ a: [String: Any]) async {
-        let appid: String = {
-            if let s = a["id"] as? String { return s }
-            if let n = a["id"] as? NSNumber { return n.stringValue }
-            if let n = a["appid"] as? NSNumber { return n.stringValue }
-            return ""
-        }()
-        guard !appid.isEmpty else {
-            await MainActor.run { toast = "该条目没有 appid" }
+        let bid = i4Value(a, keys: ["bundleid", "bundleId", "sourceid", "sourceId"])
+        let name = i4Value(a, keys: ["name", "appname", "appName", "title"])
+        guard !bid.isEmpty else {
+            await MainActor.run { toast = "该条目缺少 Bundle ID，无法匹配安装包" }
             return
         }
         do {
-            let info = try await I4StoreClient.appInfo(appid: appid)
-            guard let plist = I4StoreClient.manifestURL(from: info) else {
-                await MainActor.run { toast = "详情未返回 plist 地址" }
+            guard let hit = await SourcePackageLocator.find(bundleId: bid, name: name) else {
+                await MainActor.run { toast = "免登录源里没有该应用" }
                 return
             }
-            let ok = AppStoreInstaller.installViaOTA(manifestURL: plist)
-            await MainActor.run { toast = ok ? "已交给系统安装" : "无法打开安装链接" }
+            let ipa = try await AppStoreInstallService.downloadIPA(
+                urlString: hit.ipaURL,
+                suggestedName: "\(bid)-\(hit.version ?? "x").ipa",
+                onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
+            await MainActor.run {
+                IPADownloadLibrary.shared.record(fileURL: ipa,
+                                                 displayName: name.isEmpty ? hit.name : name,
+                                                 bundleId: bid,
+                                                 version: hit.version,
+                                                 iconURL: i4Value(a, keys: ["icon", "iconurl"]),
+                                                 source: "爱思免登录")
+            }
+            try await AppStoreInstallService.installLocalIPA(
+                ipa.path,
+                onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
+            IPADownloadLibrary.shared.markInstalled(fileName: ipa.lastPathComponent)
+            await MainActor.run { toast = "已安装：\(name.isEmpty ? hit.name : name)" }
         } catch {
             await MainActor.run { toast = "安装失败：\(error.localizedDescription)" }
         }
@@ -344,25 +354,45 @@ struct I4SpecialAppsView: View {
     }
 
     private func install(_ a: [String: Any]) async {
-        let appid: String = {
-            if let s = a["id"] as? String { return s }
-            if let n = a["id"] as? NSNumber { return n.stringValue }
-            return ""
-        }()
-        guard !appid.isEmpty else {
-            await MainActor.run { toast = "该条目没有 appid" }
+        let bid = i4Value(a, keys: ["bundleid", "bundleId", "sourceid", "sourceId"])
+        let name = i4Value(a, keys: ["name", "appname", "appName", "title"])
+        guard !bid.isEmpty else {
+            await MainActor.run { toast = "该条目缺少 Bundle ID，无法匹配安装包" }
             return
         }
         do {
-            let info = try await I4StoreClient.appInfo(appid: appid)
-            guard let plist = I4StoreClient.manifestURL(from: info) else {
-                await MainActor.run { toast = "详情未返回 plist 地址" }
+            guard let hit = await SourcePackageLocator.find(bundleId: bid, name: name) else {
+                await MainActor.run { toast = "免登录源里没有该应用" }
                 return
             }
-            let ok = AppStoreInstaller.installViaOTA(manifestURL: plist)
-            await MainActor.run { toast = ok ? "已交给系统安装" : "无法打开安装链接" }
+            let ipa = try await AppStoreInstallService.downloadIPA(
+                urlString: hit.ipaURL,
+                suggestedName: "\(bid)-\(hit.version ?? "x").ipa",
+                onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
+            await MainActor.run {
+                IPADownloadLibrary.shared.record(fileURL: ipa,
+                                                 displayName: name.isEmpty ? hit.name : name,
+                                                 bundleId: bid,
+                                                 version: hit.version,
+                                                 iconURL: i4Value(a, keys: ["icon", "iconurl"]),
+                                                 source: "爱思免登录")
+            }
+            try await AppStoreInstallService.installLocalIPA(
+                ipa.path,
+                onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
+            IPADownloadLibrary.shared.markInstalled(fileName: ipa.lastPathComponent)
+            await MainActor.run { toast = "已安装：\(name.isEmpty ? hit.name : name)" }
         } catch {
             await MainActor.run { toast = "安装失败：\(error.localizedDescription)" }
         }
     }
+}
+
+/// 爱思接口返回的是 `[String: Any]`，字段名各接口大小写不一致 —— 按候选键依次取值。
+private func i4Value(_ d: [String: Any], keys: [String]) -> String {
+    for k in keys {
+        if let v = d[k] as? String, !v.isEmpty { return v }
+        if let n = d[k] as? NSNumber { return n.stringValue }
+    }
+    return ""
 }

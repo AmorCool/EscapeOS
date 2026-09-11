@@ -3,7 +3,7 @@ import SwiftUI
 /// v0.3.295：AppStore 商店（主页新板块）
 ///
 /// 数据源：Apple 公开接口（iTunes Search / Lookup / 官方榜单 RSS）。
-/// 安装：①系统 App Store（默认）②itms-services OTA（爱思同款机制，需自备 manifest 源）。
+/// 安装：免登录源直装（RSD 隧道）或跳转系统 App Store。
 struct AppStoreView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var kind: AppStoreRankKind = .free
@@ -14,12 +14,9 @@ struct AppStoreView: View {
     @State private var keyword = ""
     @State private var searchResults: [AppStoreItem] = []
     @State private var searching = false
-    @State private var showOTASheet = false
-    @State private var showSources = false
     @State private var showDisclaimer = false
     @State private var showI4 = false
     @ObservedObject private var installManager = AppStoreInstallManager.shared
-    @State private var otaURL = ""
     @State private var toast: String?
 
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -114,17 +111,6 @@ struct AppStoreView: View {
                         Label("刷新榜单", systemImage: "arrow.clockwise")
                     }
                     Button {
-                        otaURL = UserDefaults.standard.string(forKey: "AppStoreOTAManifest") ?? ""
-                        showOTASheet = true
-                    } label: {
-                        Label("OTA 安装（自定义分发源）", systemImage: "arrow.down.app")
-                    }
-                    Button {
-                        showSources = true
-                    } label: {
-                        Label("分发源管理", systemImage: "server.rack")
-                    }
-                    Button {
                         showI4 = true
                     } label: {
                         Label("爱思商店（专题 / 榜单）", systemImage: "cart.fill")
@@ -134,8 +120,6 @@ struct AppStoreView: View {
                 }
             }
         }
-        .sheet(isPresented: $showOTASheet) { otaSheet }
-        .sheet(isPresented: $showSources) { NavigationStack { AppStoreSourceView() } }
         .sheet(isPresented: $showI4) { NavigationStack { AppStoreI4View() } }
         .overlay {
             if showDisclaimer {
@@ -337,53 +321,6 @@ struct AppStoreView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
-    }
-
-    // MARK: OTA 安装面板
-
-    private var otaSheet: some View {
-        NavigationStack {
-            List {
-                Section {
-                    TextField("https://…/manifest.plist", text: $otaURL, axis: .vertical)
-                        .font(.footnote.monospaced())
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } header: {
-                    Text("manifest 描述文件地址")
-                } footer: {
-                    Text("走 iOS 系统的 itms-services OTA 通道（与爱思助手同一条机制）：系统读取该 plist 后自行下载并安装其中指向的 IPA。plist 与 IPA 需由你自己的分发源提供——本 App 不内置任何第三方分发地址。安装后如提示「未受信任的开发者」，需到 设置 → 通用 → VPN与设备管理 信任对应证书。")
-                        .font(.caption2)
-                }
-                Section {
-                    Button {
-                        UserDefaults.standard.set(otaURL, forKey: "AppStoreOTAManifest")
-                        if AppStoreInstaller.installViaOTA(manifestURL: otaURL) {
-                            toast = "已交给系统安装"
-                        } else {
-                            toast = "地址无效或无法打开"
-                        }
-                        clearToastLater()
-                        showOTASheet = false
-                    } label: {
-                        Label("开始 OTA 安装", systemImage: "arrow.down.app.fill")
-                    }
-                    .disabled(otaURL.trimmingCharacters(in: .whitespaces).isEmpty)
-                    Button {
-                        AppStoreInstaller.openCertificateTrustSettings()
-                    } label: {
-                        Label("打开证书信任设置", systemImage: "checkmark.shield")
-                    }
-                }
-            }
-            .navigationTitle("OTA 安装")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { showOTASheet = false }
-                }
-            }
-        }
     }
 
     // MARK: 加载

@@ -1,15 +1,23 @@
 import SwiftUI
+import UIKit
 
-/// v0.3.295：AppStore 应用详情（进入时用 Lookup 补全字段）
+/// AppStore 应用详情。
 struct AppStoreDetailView: View {
     @State var item: AppStoreItem
     @ObservedObject private var installManager = AppStoreInstallManager.shared
     @State private var expanded = false
     @State private var loadingDetail = false
-    @State private var installingSource = false
     @State private var toastText: String?
 
-    /// 是否已有 App Store 账号（有则「获取」直接下载安装，无需任何配置）
+    // 免登录源直装
+    @State private var installingFree = false
+    @State private var freeStage: String?
+    @State private var freeProgress: Double = 0
+
+    // 预览浏览器
+    @State private var viewerIndex: Int?
+
+    /// 是否已有 App Store 账号（有则走本机 Apple ID 通道）
     private var hasAccount: Bool {
         !(AppStoreDownloadStore.shared.selectedAccount == nil)
     }
@@ -21,7 +29,7 @@ struct AppStoreDetailView: View {
             infoSection
             if let notes = item.releaseNotes, !notes.isEmpty { releaseNotesSection(notes) }
             if let desc = item.summary, !desc.isEmpty { descriptionSection(desc) }
-            actionSection
+            moreSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle(item.name)
@@ -35,56 +43,109 @@ struct AppStoreDetailView: View {
                     .padding(.bottom, 20)
             }
         }
+        .fullScreenCover(item: Binding(
+            get: { viewerIndex.map { ScreenshotTarget(index: $0) } },
+            set: { viewerIndex = $0?.index }
+        )) { target in
+            AppStoreScreenshotViewer(urls: item.screenshots, startIndex: target.index)
+        }
         .task { await loadDetail() }
     }
 
-    // MARK: 头部
+    // MARK: 头部（图标 + 信息 + 获取按钮：同一张卡）
 
     private var headerSection: some View {
         Section {
-            HStack(alignment: .top, spacing: 14) {
-                AsyncImage(url: URL(string: item.iconURL ?? item.iconSmallURL ?? "")) { phase in
-                    switch phase {
-                    case .success(let img): img.resizable().scaledToFit()
-                    case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
-                    default: ProgressView().controlSize(.small)
-                    }
-                }
-                .frame(width: 96, height: 96)
-                .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(item.name)
-                        .font(.headline)
-                        .lineLimit(2)
-                    if let seller = item.seller {
-                        Text(seller)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    HStack(spacing: 8) {
-                        Text(item.priceText)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(item.priceText == "免费" ? Color.green : Color.blue)
-                        if let r = item.ratingText {
-                            Label(r, systemImage: "star.fill")
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 14) {
+                    iconView
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(item.name)
+                            .font(.headline)
+                            .lineLimit(2)
+                        if let seller = item.seller {
+                            Text(seller)
                                 .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                        if let c = item.ratingCount {
-                            Text("(\(c.formattedCount))")
-                                .font(.caption2)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        HStack(spacing: 8) {
+                            Text(item.priceText)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(item.priceText == "免费" ? Color.green : Color.blue)
+                            if let r = item.ratingText {
+                                Label(r, systemImage: "star.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                            if let c = item.ratingCount {
+                                Text("(\(c.formattedCount))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+
+                installArea
             }
             .padding(.vertical, 6)
+        }
+    }
 
+    /// 图标：长按弹出「提取图标」
+    private var iconView: some View {
+        AsyncImage(url: URL(string: item.iconURL ?? item.iconSmallURL ?? "")) { phase in
+            switch phase {
+            case .success(let img): img.resizable().scaledToFit()
+            case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
+            default: ProgressView().controlSize(.small)
+            }
+        }
+        .frame(width: 96, height: 96)
+        .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+        .onLongPressGesture(minimumDuration: 0.35) { extractIcon() }
+        .contextMenu {
             Button {
-                _ = AppStoreInstaller.openInAppStore(item)
+                extractIcon()
+            } label: {
+                Label("提取图标", systemImage: "square.and.arrow.down")
+            }
+        }
+    }
+
+    /// 获取 / 下载安装 / 进度
+    @ViewBuilder
+    private var installArea: some View {
+        if let st = installManager.state(for: item.id), st.phase.isRunning {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(st.phase.title).font(.subheadline.weight(.medium))
+                    Spacer(minLength: 0)
+                    Text("\(Int(st.overall * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(value: st.overall)
+            }
+        } else if installingFree {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(freeStage ?? "下载中").font(.subheadline.weight(.medium))
+                    Spacer(minLength: 0)
+                    Text("\(Int(freeProgress * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(value: min(1, max(0, freeProgress)))
+            }
+        } else {
+            Button {
+                startInstall()
             } label: {
                 Text(item.priceText == "免费" ? "获取" : "购买 \(item.priceText)")
                     .font(.body.weight(.semibold))
@@ -94,36 +155,35 @@ struct AppStoreDetailView: View {
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 10, trailing: 16))
-            .listRowBackground(Color.clear)
         }
     }
 
-    // MARK: 截图
+    // MARK: 截图（点击进浏览器）
 
     private var screenshotsSection: some View {
         Section {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    ForEach(item.screenshots, id: \.self) { url in
-                        AsyncImage(url: URL(string: url)) { phase in
-                            switch phase {
-                            case .success(let img):
-                                img.resizable().scaledToFill()
-                            case .failure:
-                                Color(.tertiarySystemFill)
-                            default:
-                                ProgressView().controlSize(.small)
+                    ForEach(Array(item.screenshots.enumerated()), id: \.offset) { index, url in
+                        Button {
+                            viewerIndex = index
+                        } label: {
+                            AsyncImage(url: URL(string: url)) { phase in
+                                switch phase {
+                                case .success(let img): img.resizable().scaledToFill()
+                                case .failure: Color(.tertiarySystemFill)
+                                default: ProgressView().controlSize(.small)
+                                }
                             }
+                            .frame(width: 180, height: 320)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
-                        .frame(width: 180, height: 320)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.vertical, 4)
             }
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 0))
-            .listRowBackground(Color.clear)
         } header: {
             Text("预览")
         }
@@ -187,73 +247,15 @@ struct AppStoreDetailView: View {
         }
     }
 
-    // MARK: 操作
+    // MARK: 更多
 
-    private var actionSection: some View {
+    private var moreSection: some View {
         Section {
-            // v0.3.300：主通道 = 走分发源下载 IPA → RSD 隧道安装（不再只跳转 App Store）
-            if let st = installManager.state(for: item.id), st.phase.isRunning {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text(st.phase.title).font(.subheadline.weight(.medium))
-                        Spacer(minLength: 0)
-                        Text("\(Int(st.overall * 100))%")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    ProgressView(value: st.overall)
-                    if st.phase == .downloading, st.downloadProgress > 0 {
-                        Text(String(format: "下载 %.0f%%", st.downloadProgress * 100))
-                            .font(.caption2).foregroundStyle(.secondary)
-                    } else if st.phase == .installing, st.installProgress > 0 {
-                        Text(String(format: "安装 %.0f%%", st.installProgress * 100))
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 2)
-            } else {
-                Button {
-                    if hasAccount {
-                        installManager.start(item: item)
-                    } else {
-                        toastText = "尚未登录 Apple ID（登录功能正在重构）—— 请改用「免登录下载」"
-                    }
-                } label: {
-                    if hasAccount {
-                        Label(item.priceText == "免费" ? "下载并安装" : "下载并安装（\(item.priceText)）",
-                              systemImage: "arrow.down.circle.fill")
-                    } else {
-                        Label("需要 Apple ID（登录重构中）",
-                              systemImage: "exclamationmark.circle")
-                    }
-                }
-            }
-
             NavigationLink {
                 AppStoreVersionHistoryView(item: item, country: "cn")
             } label: {
                 Label("历史版本", systemImage: "clock.arrow.circlepath")
             }
-
-            if let st = installManager.state(for: item.id), st.phase == .failed,
-               let err = st.errorText {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            Button {
-                installFromSource()
-            } label: {
-                HStack {
-                    if installingSource { ProgressView().controlSize(.small) }
-                    Label(installingSource ? "正在交给系统…" : "交给系统 OTA 安装",
-                          systemImage: "arrow.down.app.fill")
-                }
-            }
-            .disabled(installingSource)
-
             Button {
                 _ = AppStoreInstaller.openInAppStore(item)
             } label: {
@@ -264,38 +266,110 @@ struct AppStoreDetailView: View {
                     Label("网页版商店页", systemImage: "safari")
                 }
             }
-            Button {
-                AppStoreInstaller.openCertificateTrustSettings()
-            } label: {
-                Label("证书信任设置", systemImage: "checkmark.shield")
+            if let st = installManager.state(for: item.id), st.phase == .failed,
+               let err = st.errorText {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
-        } footer: {
-            Text("「下载并安装」从已配置的分发源取 manifest → 下载 IPA → 经 RSD 隧道安装到本机。"
-                 + "App Store 原始包为 FairPlay 加密，无法安装；需源提供已重签名或已解密的 IPA。")
-                .font(.caption2)
         }
     }
 
-    // MARK: 加载
+    // MARK: 动作
 
-    /// 通过已配置的分发源安装（走 itms-services OTA，与爱思手机端同一条系统调用）
-    private func installFromSource() {
-        guard !installingSource else { return }
-        installingSource = true
+    /// 有 Apple ID → 官方源；否则走免登录源直装（RSD 隧道）
+    private func startInstall() {
+        if hasAccount {
+            installManager.start(item: item)
+            return
+        }
+        installFromFreeSource()
+    }
+
+    /// 免登录源：按 bundleId 找包 → 下载 → RSD 隧道安装
+    private func installFromFreeSource() {
+        guard !installingFree else { return }
+        installingFree = true
+        freeProgress = 0
+        freeStage = "查找安装包"
         Task {
             do {
-                let r = try await AppStoreInstallService.installUsingAnySource(item: item) { line in
-                    LoginLogger.shared.log("[AppStore] \(line)", category: .appStore)
+                guard let bid = item.bundleId, !bid.isEmpty else {
+                    await MainActor.run {
+                        installingFree = false
+                        toastText = "该应用缺少 Bundle ID，无法从源匹配"
+                    }
+                    return
                 }
+                guard let hit = await SourcePackageLocator.find(bundleId: bid, name: item.name) else {
+                    await MainActor.run {
+                        installingFree = false
+                        toastText = "源里没有该应用，已为你打开 App Store"
+                        _ = AppStoreInstaller.openInAppStore(item)
+                    }
+                    return
+                }
+                await MainActor.run { freeStage = "下载安装包" }
+                let ipa = try await AppStoreInstallService.downloadIPA(
+                    urlString: hit.ipaURL,
+                    suggestedName: "\(bid)-\(hit.version ?? "x").ipa",
+                    progress: { p in
+                        DispatchQueue.main.async { freeProgress = p * 0.6 }
+                    },
+                    onLog: { LoginLogger.shared.log("[商店] \($0)", category: .appStore) })
                 await MainActor.run {
-                    installingSource = false
-                    toastText = "已交给系统安装（\(r.source.name)）"
+                    IPADownloadLibrary.shared.record(fileURL: ipa,
+                                                     displayName: item.name,
+                                                     bundleId: bid,
+                                                     version: hit.version,
+                                                     iconURL: item.iconURL,
+                                                     source: "爱思免登录")
+                    freeStage = "安装中"
+                    freeProgress = 0.6
+                }
+                try await AppStoreInstallService.installLocalIPA(
+                    ipa.path,
+                    progress: { p in
+                        DispatchQueue.main.async { freeProgress = 0.6 + p * 0.4 }
+                    },
+                    onLog: { LoginLogger.shared.log("[商店] \($0)", category: .appStore) })
+                IPADownloadLibrary.shared.markInstalled(fileName: ipa.lastPathComponent)
+                await MainActor.run {
+                    installingFree = false
+                    freeStage = nil
+                    toastText = "已安装：\(item.name)"
                 }
             } catch {
                 await MainActor.run {
-                    installingSource = false
+                    installingFree = false
+                    freeStage = nil
                     toastText = "安装失败：\(error.localizedDescription)"
                 }
+            }
+        }
+    }
+
+    /// 长按图标 → 提取（优先存相册，失败存沙盒）
+    private func extractIcon() {
+        let raw = item.iconURL ?? item.iconSmallURL ?? ""
+        guard !raw.isEmpty else {
+            toastText = "没有可提取的图标"
+            return
+        }
+        toastText = "正在提取图标…"
+        Task {
+            do {
+                let image = try await MediaSaver.downloadImage(raw.appStoreHighResImage)
+                let outcome = try await MediaSaver.save(image,
+                                                        fileName: "\(item.bundleId ?? item.id)-icon")
+                await MainActor.run {
+                    switch outcome {
+                    case .photos: toastText = "图标已存到相册"
+                    case .files(let name): toastText = "已存到文件 App：AppIcons/\(name)"
+                    }
+                }
+            } catch {
+                await MainActor.run { toastText = "提取失败：\(error.localizedDescription)" }
             }
         }
     }
@@ -303,7 +377,6 @@ struct AppStoreDetailView: View {
     private func loadDetail() async {
         loadingDetail = true
         if let full = try? await AppStoreService.lookup(id: item.id) {
-            // 保留榜单里已有但详情接口未返回的图标
             var merged = full
             if merged.iconURL == nil { merged.iconURL = item.iconURL }
             if merged.summary == nil { merged.summary = item.summary }
@@ -320,6 +393,83 @@ struct AppStoreDetailView: View {
         let out = DateFormatter()
         out.dateFormat = "yyyy-MM-dd"
         return out.string(from: d)
+    }
+}
+
+private struct ScreenshotTarget: Identifiable {
+    let index: Int
+    var id: Int { index }
+}
+
+// MARK: - 预览浏览器（左右滑动 / 长按保存到相册）
+
+struct AppStoreScreenshotViewer: View {
+    let urls: [String]
+    @State var startIndex: Int
+    @Environment(\.dismiss) private var dismiss
+    @State private var current: Int = 0
+    @State private var toast: String?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            TabView(selection: $current) {
+                ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                    AsyncImage(url: URL(string: url.appStoreHighResImage)) { phase in
+                        switch phase {
+                        case .success(let img):
+                            img.resizable().scaledToFit()
+                        case .failure:
+                            Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.4))
+                        default:
+                            ProgressView().tint(.white)
+                        }
+                    }
+                    .tag(index)
+                    .onLongPressGesture(minimumDuration: 0.35) { save(url) }
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .indexViewStyle(.page(backgroundDisplayMode: .interactive))
+        }
+        .overlay(alignment: .topTrailing) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(16)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let toast {
+                Text(toast)
+                    .font(.footnote)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.bottom, 40)
+            }
+        }
+        .onAppear { current = min(max(0, startIndex), max(0, urls.count - 1)) }
+    }
+
+    private func save(_ url: String) {
+        toast = "正在保存…"
+        Task {
+            do {
+                let image = try await MediaSaver.downloadImage(url.appStoreHighResImage)
+                let outcome = try await MediaSaver.save(image, fileName: "screenshot-\(current + 1)")
+                await MainActor.run {
+                    switch outcome {
+                    case .photos: toast = "已保存到相册"
+                    case .files(let name): toast = "已存到文件 App：AppIcons/\(name)"
+                    }
+                }
+            } catch {
+                await MainActor.run { toast = "保存失败：\(error.localizedDescription)" }
+            }
+        }
     }
 }
 

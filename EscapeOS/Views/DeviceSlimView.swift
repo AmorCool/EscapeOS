@@ -32,6 +32,7 @@ struct DeviceSlimView: View {
     @State private var resultText: String?
     @State private var errorText: String?
     @State private var fromCache = false
+    @State private var reinstallProgress: DeviceSlimService.ReinstallProgress?
 
     // MARK: - 派生数据
 
@@ -46,11 +47,10 @@ struct DeviceSlimView: View {
     private var bigAppItems: [DeviceSlimService.Item] {
         groups.first { $0.kind == .bigApps }?.items ?? []
     }
-    private var reinstallableApps: [DeviceSlimService.Item] {
-        bigAppItems.filter { $0.ipaFileName != nil }
-    }
+    /// 可重装的 = 全部较大应用（本地无包时重装会自动去免登录源下载）
+    private var reinstallableApps: [DeviceSlimService.Item] { bigAppItems }
     private var reinstallTargets: [DeviceSlimService.Item] {
-        bigAppItems.filter { reinstallSelection.contains($0.id) && $0.ipaFileName != nil }
+        bigAppItems.filter { reinstallSelection.contains($0.id) }
     }
     private var reinstallDocBytes: Int64 {
         reinstallTargets.reduce(0) { $0 + $1.docSize }
@@ -104,7 +104,7 @@ struct DeviceSlimView: View {
             Button("卸载并重装", role: .destructive) { startReinstall() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("重装 = 先卸载再从「免登录下载」库里重新安装。**这些应用内的文稿与数据会被一起清除且无法恢复**（预计清理 \(DeviceSlimService.formatBytes(reinstallDocBytes)) 应用文档）。建议先备份。")
+            Text("卸载重装会清除这些应用的文稿与数据（约 \(DeviceSlimService.formatBytes(reinstallDocBytes))），无法恢复。")
         }
         .task { await bootstrap() }
     }
@@ -192,7 +192,21 @@ struct DeviceSlimView: View {
 
     private var actionSection: some View {
         Section {
-            if isBusy {
+            if phase == .reinstalling, let p = reinstallProgress {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text("\(p.index)/\(p.total) \(p.name)")
+                            .font(.subheadline).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(p.stage.rawValue)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    ProgressView(value: min(1, max(0, p.fraction)))
+                    Text("重装中请勿断开设备")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            } else if isBusy {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text(statusText).font(.footnote).foregroundStyle(.secondary)
@@ -244,16 +258,9 @@ struct DeviceSlimView: View {
     }
 
     private var scanFooter: String {
-        if isBusy { return phase == .reinstalling ? "正在卸载并重装，请勿断开设备…" : "正在扫描设备…" }
-        let count = selectableItems.count
-        var text = count == 0
-            ? "本机可达范围内没有需要清理的缓存（免越狱只清理媒体分区内可再生的缓存）。"
-            : "共 \(count) 项可清理。"
-        if fromCache { text += " 当前为缓存结果，点「重新扫描」可刷新。" }
-        if !reinstallableApps.isEmpty {
-            text += " 「较大应用」勾选 = 卸载重装（会清空该应用文稿与数据）。"
-        }
-        return text
+        if isBusy { return "正在处理…" }
+        if fromCache { return "缓存结果，点「重新扫描」刷新" }
+        return selectableItems.isEmpty ? "没有可清理项" : "共 \(selectableItems.count) 项可清理"
     }
 
     // MARK: - 4. 分组
@@ -264,13 +271,6 @@ struct DeviceSlimView: View {
                 Text(group.kind == .userLog ? "本机未发现可清理的日志" : "未发现可清理项")
                     .font(.subheadline).foregroundStyle(.secondary)
             } else if group.kind == .bigApps {
-                if reinstallableApps.isEmpty {
-                    HStack(spacing: 8) {
-                        Image(systemName: "info.circle").foregroundStyle(.secondary).font(.footnote)
-                        Text("这些应用本地都没有可重装的安装包（去「免登录下载」里下载一份即可重装）")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
                 ForEach(group.items) { item in
                     bigAppRow(item)
                 }
@@ -292,8 +292,8 @@ struct DeviceSlimView: View {
         } header: {
             groupHeader(group)
         } footer: {
-            if !group.items.isEmpty {
-                Text(groupFooter(group)).font(.caption2)
+            if !group.items.isEmpty, group.kind == .bigApps {
+                Text("勾选 = 卸载重装（清除该应用的文稿与数据）").font(.caption2)
             }
         }
     }
@@ -315,14 +315,6 @@ struct DeviceSlimView: View {
 
     private func selectedBytesFor(_ group: DeviceSlimService.Group) -> Int64 {
         group.items.filter { selection.contains($0.id) }.reduce(0) { $0 + $1.bytes }
-    }
-
-    private func groupFooter(_ group: DeviceSlimService.Group) -> String {
-        switch group.kind {
-        case .systemCache, .tempFiles: return group.kind.subtitle
-        case .userLog: return "日志文件及过期的临时文件（免越狱只能清理媒体分区内可达的部分）"
-        case .bigApps: return "通过批量重装应用，清理应用的冗余文稿和数据。重装会清空该应用的文稿与数据，且无法恢复。"
-        }
     }
 
     private func cacheRow(_ item: DeviceSlimService.Item) -> some View {
@@ -350,25 +342,21 @@ struct DeviceSlimView: View {
 
     /// 较大应用行（爱思表格：应用名称 / 应用大小 / 文档大小 / 操作）
     private func bigAppRow(_ item: DeviceSlimService.Item) -> some View {
-        let available = item.ipaFileName != nil
         let on = reinstallSelection.contains(item.id)
         return Button {
-            guard available else { return }
             if on { reinstallSelection.remove(item.id) } else { reinstallSelection.insert(item.id) }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: available ? (on ? "checkmark.square.fill" : "square") : "square")
+                Image(systemName: on ? "checkmark.square.fill" : "square")
                     .font(.body)
-                    .foregroundStyle(available ? (on ? .blue : .secondary) : Color.gray.opacity(0.35))
+                    .foregroundStyle(on ? .blue : .secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name).font(.subheadline).lineLimit(1).foregroundStyle(.primary)
                     HStack(spacing: 6) {
                         Text("应用 \(DeviceSlimService.formatBytes(item.appSize))")
                         Text("·")
                         Text("文档 \(DeviceSlimService.formatBytes(item.docSize))")
-                        if !available {
-                            Text("资源缺失无法重装").foregroundStyle(.orange)
-                        } else if item.isRisky {
+                        if item.isRisky {
                             Text("谨慎选择").foregroundStyle(.red)
                         }
                     }
@@ -382,7 +370,6 @@ struct DeviceSlimView: View {
             .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
-        .disabled(!available)
     }
 
     // MARK: - 流程
@@ -465,8 +452,8 @@ struct DeviceSlimView: View {
         phase = .reinstalling
         statusText = "正在卸载并重装…"
         Task {
-            let result = await DeviceSlimService.reinstall(items: targets) { index, total, name in
-                Task { @MainActor in statusText = "正在重装 \(index)/\(total)：\(name)" }
+            let result = await DeviceSlimService.reinstall(items: targets) { p in
+                Task { @MainActor in reinstallProgress = p }
             }
             if result.ok.isEmpty && !result.failures.isEmpty {
                 errorText = result.failures.prefix(3).joined(separator: "\n")
@@ -476,6 +463,7 @@ struct DeviceSlimView: View {
                 errorText = result.failures.isEmpty ? nil : result.failures.prefix(3).joined(separator: "\n")
             }
             reinstallSelection.removeAll()
+            reinstallProgress = nil
             phase = .finished
             await runScan(force: true)
         }

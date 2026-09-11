@@ -44,7 +44,7 @@ struct AppStoreVersionHistoryView: View {
                 } header: {
                     Text("共 \(versions.count) 个版本")
                 } footer: {
-                    Text("版本信息来自 App Store 商品页。安装历史版本需要分发源提供对应版本的 IPA，"
+                    Text("版本信息来自 App Store 商品页。安装历史版本需要本地已有对应版本的 IPA，"
                          + "且该 IPA 必须已重签名或已解密（App Store 原始包为 FairPlay 加密，无法安装）。")
                         .font(.caption2)
                 }
