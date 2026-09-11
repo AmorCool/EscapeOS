@@ -163,9 +163,9 @@ EscapeSpace_FILES += $(shell find vendor/BitByteData/Sources vendor/SWCompressio
 	! -name 'ZlibArchive.swift' ! -name 'ZlibError.swift' ! -name 'ZlibHeader.swift' \
 	! -name 'BigEndianByteReader.swift')
 
-# ApplePackage（移植自 asspp）：App Store 登录 / 搜索 / 下载 IPA / 历史版本。
-# v0.4.0 起恢复并接入 SAP 签名（X-Apple-ActionSignature，Unicorn 解释执行
-# CommerceKit，见 sapbridge/ 与 SapSigner.swift）。网络层为 URLSession 重写
+# ApplePackage（移植自 asspp）：账号模型 / 搜索 / 清单 / 下载 / 历史版本。
+# v0.3.312：Apple ID 登录实现（含 Go 侧 SAP 桥 sapbridge/）已移除，待按
+# CloudOfEquality/Asspp 分叉的本地 SAP 方案重新接入。网络层为 URLSession 重写
 # （原 AsyncHTTPClient 兼容 shim），ZIP 用项目已有的 SWCompression。
 EscapeSpace_FILES += $(shell find vendor/ApplePackage -name '*.swift')
 

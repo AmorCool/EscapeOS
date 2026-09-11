@@ -32,14 +32,5 @@ _tmp_ci/
 _build/
 */_build/
 
-# SAP 签名桥（PR #525 纯软件 Unicorn 移植）构建产物——由 sapbridge/build-sap.sh 生成
-sapbridge/build/
-sapbridge/.unicorn-src/
-sapbridge/.unicorn-build
-sapbridge/.unicorn-build-tci/
-sapbridge/.unicorn-build
-sapbridge/.unicorn-build-tci/-macos//
-sapbridge/sapbridge
-
 # 本地临时诊断日志（一律放 _build/ci_logs，禁止进 git）
 _*.log

@@ -19,9 +19,6 @@ struct AppStoreView: View {
     @State private var showDisclaimer = false
     @State private var showI4 = false
     @ObservedObject private var installManager = AppStoreInstallManager.shared
-    @State private var showAccountSheet = false
-    @State private var signedEmail: String?
-    @State private var pendingItem: AppStoreItem?
     @State private var otaURL = ""
     @State private var toast: String?
 
@@ -52,56 +49,6 @@ struct AppStoreView: View {
         }
     }
 
-    /// v0.3.302：账号区 —— 商店内直接登录 Apple ID。
-    ///
-    /// 此前登录入口只存在于旧的「App Store 下载」页，本页没有 → 用户点「获取」被
-    /// 提示「无分发源」，误以为要手工配置。这里把登录做成商店内的第一入口：
-    /// 登录后即可一键下载安装（免费应用），无需任何配置。
-    @ViewBuilder
-    private var accountSection: some View {
-        Section {
-            if let email = signedEmail ?? AppStoreDownloadStore.shared.selectedAccount?.email {
-                HStack(spacing: 10) {
-                    Image(systemName: "person.crop.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.green)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(email).font(.subheadline.weight(.medium)).lineLimit(1)
-                        Text("已登录 · 点「获取」即可下载安装").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                    Button("切换") { showAccountSheet = true }
-                        .font(.caption)
-                }
-                .padding(.vertical, 2)
-            } else {
-                Button {
-                    showAccountSheet = true
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "person.crop.circle.badge.plus")
-                            .font(.title3)
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("登录 Apple ID").font(.subheadline.weight(.medium)).foregroundStyle(.blue)
-                            Text("登录后点「获取」即可下载并安装（免费应用）")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    .padding(.vertical, 2)
-                }
-                .buttonStyle(.plain)
-            }
-        } footer: {
-            if signedEmail == nil, (AppStoreDownloadStore.shared.selectedAccount == nil) {
-                Text("没有账号时才会退回「分发源」或系统 App Store；登录后无需任何配置。")
-                    .font(.caption2)
-            }
-        }
-    }
-
     /// v0.3.308：账号管理 + **AppStore 独立日志**入口（此前商店里没有这两个入口）
     @ViewBuilder
     private var manageSection: some View {
@@ -115,7 +62,7 @@ struct AppStoreView: View {
                         .foregroundStyle(.blue)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("账号管理").font(.subheadline.weight(.medium))
-                        Text("多账号 / 批量登录 / 退出登录")
+                        Text("多账号 / 退出登录")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -130,7 +77,7 @@ struct AppStoreView: View {
                         .foregroundStyle(.purple)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("AppStore 日志").font(.subheadline.weight(.medium))
-                        Text("只看 AppStore 板块（登录/下载/安装）")
+                        Text("只看 AppStore 板块（下载/安装）")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -142,7 +89,6 @@ struct AppStoreView: View {
     var body: some View {
         List {
             freeSection
-            accountSection
             manageSection
             if isSearchMode {
                 searchSection
@@ -191,21 +137,6 @@ struct AppStoreView: View {
         .sheet(isPresented: $showOTASheet) { otaSheet }
         .sheet(isPresented: $showSources) { NavigationStack { AppStoreSourceView() } }
         .sheet(isPresented: $showI4) { NavigationStack { AppStoreI4View() } }
-        .sheet(isPresented: $showAccountSheet) {
-            AddAccountSheet { account in
-                AppStoreDownloadStore.shared.add(account)
-                signedEmail = account.email
-                toast = "已登录：\(account.email)"
-                clearToastLater()
-                // 若是被登录拦下的安装请求，登录完自动继续
-                if let pending = pendingItem {
-                    pendingItem = nil
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        AppStoreInstallManager.shared.start(item: pending)
-                    }
-                }
-            }
-        }
         .overlay {
             if showDisclaimer {
                 AppStoreDisclaimerView(
@@ -232,7 +163,6 @@ struct AppStoreView: View {
         }
         .task {
             if !AppStoreDisclaimer.accepted { showDisclaimer = true }
-            signedEmail = AppStoreDownloadStore.shared.selectedAccount?.email
             if items.isEmpty { await loadCharts() }
         }
     }
@@ -486,24 +416,17 @@ struct AppStoreView: View {
         }
     }
 
-    /// 安装：本机 Apple ID 走 App Store 官方源（sinf 按本机身份生成，可直接安装）；
-    /// 未登录则**就地弹出登录**（登录后自动继续安装），不再要求去配置分发源。
+    /// 安装：走本机 Apple ID 的 App Store 官方源。
+    ///
+    /// v0.3.312：Apple ID 登录实现已整体移除（待按 CloudOfEquality/Asspp 分叉的本地
+    /// SAP 方案重新接入），因此这里**不再就地弹出登录**；未登录时提示用户改走
+    /// 「免登录下载」（爱思源，不需要 Apple ID）。
     private func install(_ app: AppStoreItem) {
         guard !installManager.isRunning(app.id) else { return }
         let hasAccount = !(AppStoreDownloadStore.shared.selectedAccount == nil)
-            || signedEmail != nil
-        if !hasAccount {
-            pendingItem = app
-            showAccountSheet = true
-            return
-        }
-        if (AppStoreDownloadStore.shared.selectedAccount == nil),
-           let email = signedEmail {
-            // 极端情况：本地账号被清掉但界面仍显示已登录 —— 重新拉一次
-            LoginLogger.shared.log("[AppStore] 账号状态不一致（\(email)），已重置界面状态", category: .appStore)
-            self.signedEmail = nil
-            pendingItem = app
-            showAccountSheet = true
+        guard hasAccount else {
+            toast = "尚未登录 Apple ID（登录功能正在重构）—— 可直接用上方的「免登录下载」"
+            clearToastLater()
             return
         }
         AppStoreInstallManager.shared.start(item: app)

@@ -69,8 +69,8 @@ enum LocalDeviceIdentity {
     /// ⚠️ **只写 `deviceSerialNumber`，绝不改写 `deviceIdentifier`**（v0.3.307 修正）。
     ///
     /// 原因（真机报错 `MZFinance.NoAccount_message` 的根因）：登录与下载**必须用同一个 guid**。
-    /// 登录走 `GoAppStoreAuth` 时传的是持久化的随机标识（`AppStoreDownloadStore.init`
-    /// 里的 `bootstrapDeviceIdentifier`），Apple 的会话（passwordToken / dsid / cookie）
+    /// 登录与下载共用 `AppStoreDownloadStore.init` 里 `bootstrapDeviceIdentifier`
+    /// 生成的持久化随机标识，Apple 的会话（passwordToken / dsid / cookie）
     /// 就绑在这个 guid 上；而 v0.3.301 曾在这里把 `Configuration.deviceIdentifier`
     /// 覆盖成 UDID，于是下载请求带着**另一个 guid** 出去 —— Apple 认不出这是哪个会话，
     /// 直接回 `MZFinance.NoAccount_message`（表现为「能登录但下不了」）。

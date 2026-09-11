@@ -74,37 +74,6 @@ jobs:
         # ldid 用于出包时施加 entitlements（与 Theos 的 -SEscapeSpace.entitlements 等价）。
         run: brew install xcodegen ldid
 
-      - name: Setup Go (for SAP bridge c-archive)
-        # 纯软件 Unicorn SAP 移植（PR #525）的 libsap.a 由 Go cgo 交叉编译产出，
-        # 需要 go >= 1.25（与 ipatool 上游 go.mod 对齐）。
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.27.x'
-
-      - name: Install build tools (cmake, ninja)
-        # build-sap.sh 用 cmake + ninja 交叉编译 Unicorn 2.1.x（ios-arm64）；
-        # build-sap-server.sh 解压 unicorn 官方 mingw64 静态包（p7zip）并构建
-        # Windows 版签名服务 EscapeSapServer.exe（链接官方 libunicorn.a）。
-        # 提速（v0.3.81）：macos runner 已预装 cmake/ninja，先探测再装，
-        # 避免每轮无谓的 brew 解析/下载（省 20~40 秒）。
-        run: |
-          if command -v cmake >/dev/null && command -v ninja >/dev/null; then
-            echo "cmake/ninja 已存在，跳过 brew 安装"
-          else
-            brew install cmake ninja
-          fi
-
-      # （已移除 Cache Go modules：v0.3.83 —— sapbridge 走 artifact 缓存后
-      #   该步不再被使用，而收尾上传 ~/go/pkg/mod 每轮要几分钟，纯属浪费）
-      - name: Cache Unicorn build
-        # libunicorn.a 的 cmake 构建较慢，缓存编译产物（源码克隆不缓存以省体积）。
-        uses: actions/cache@v4
-        with:
-          path: sapbridge/.unicorn-build
-          key: macos-unicorn-${{ env.UNICORN_TAG }}
-          restore-keys: |
-            macos-unicorn-
-
       - name: Cache Rust toolchain
         uses: actions/cache@v4
         with:
@@ -269,79 +238,6 @@ jobs:
             rust-libs/libidevice_ffi.a
             rust-hash.txt
 
-      - name: Restore Unicorn product (artifact, cross-run)
-        # 同 Rust：actions/cache 的 tag scope 隔离使 macos-unicorn-* 缓存永远 miss
-        # （每轮 cmake 全量重编 602 文件 ~3 分钟）。libunicorn.a 用固定名 artifact 跨 run 复用，
-        # build-sap.sh 检测到 .unicorn-build/libunicorn.a 存在即自动跳过 cmake。
-        id: unicorn_cache
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          HIT=false
-          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-unicorn-210&per_page=100" \
-            --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
-          if [ -n "${ART_ID:-}" ]; then
-            rm -rf /tmp/unicorn-cache && mkdir -p /tmp/unicorn-cache
-            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/unicorn-cache/cache.zip
-            unzip -oq /tmp/unicorn-cache/cache.zip -d sapbridge
-            # artifact 结构（LCA=sapbridge）：.unicorn-build/libunicorn.a + .unicorn-src/include/
-            if [ -s sapbridge/.unicorn-build-tci/libunicorn.a ] && [ -f sapbridge/.unicorn-src/include/unicorn/unicorn.h ]; then
-              HIT=true
-              echo "=== Unicorn cache HIT (libunicorn.a + headers restored, skip cmake full build) ==="
-            else
-              echo "=== Unicorn cache artifact content missing ==="
-              rm -rf sapbridge/.unicorn-build sapbridge/.unicorn-src
-            fi
-          else
-            echo "=== Unicorn cache artifact not found (first run or expired) ==="
-          fi
-          echo "hit=$HIT" >> "$GITHUB_OUTPUT"
-
-      - name: Restore SAP bridge product (artifact, cross-run)
-        # 同 Rust/Unicorn：actions/cache 的 tag scope 隔离使 macos-go-* 缓存永远 miss，
-        # 导致每轮重新拉 OpenList 依赖 + 编译 167MB 归档（约 3.5 分钟）。
-        # libsap.a/sap.h/.openlist-src 打包成固定名 artifact 跨 run 复用，
-        # build-sap.sh 检测到产物存在即整体跳过。
-        id: sap_cache
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          HIT=false
-          # 注意：sapbridge 没有 go.sum（每次 tidy 现场生成），用 find 避免 cat 缺失文件
-          # 在 set -euo pipefail 下直接把步骤打挂（v0.3.77 首次运行实锤）
-          # v0.3.262：hash 覆盖整个 sapbridge 源码树（含 authappstore/ 子目录）——
-          # 旧版 -maxdepth 1 只算根目录文件，新增 Go 包不会使缓存失效，
-          # 导致新导出符号缺失 + 链接失败（本轮实锤风险，先修后用）。
-          CUR_HASH="$(find sapbridge -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -name 'build-sap.sh' \) \
-            -not -path 'sapbridge/build/*' -not -path 'sapbridge/.unicorn-src/*' -not -path 'sapbridge/.unicorn-build*' \
-            -exec shasum -a 256 {} + 2>/dev/null | sort | shasum -a 256 | cut -d' ' -f1)"
-          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-sap-bridge-v1&per_page=100" \
-            --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
-          if [ -n "${ART_ID:-}" ]; then
-            rm -rf /tmp/sap-cache && mkdir -p /tmp/sap-cache
-            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/sap-cache/cache.zip
-            # 关键：upload-artifact@v4 存储的相对路径以「公共前缀 sapbridge」为根，
-            # 因此内容实际是 build/libsap.a、sap-hash.txt…——像 Unicorn 那样直接解到 sapbridge 下
-            unzip -oq /tmp/sap-cache/cache.zip -d sapbridge
-            CACHED_HASH="$(cat sapbridge/sap-hash.txt 2>/dev/null || true)"
-            if [ "$CACHED_HASH" = "$CUR_HASH" ] && [ -s sapbridge/build/libsap.a ] && [ -s sapbridge/build/sap.h ]; then
-              # OpenList 源码（含内嵌前端 dist）一并复原，避免重新 clone + 下载前端
-              if [ -f sapbridge/openlist-src.tar.gz ]; then
-                tar -xzf sapbridge/openlist-src.tar.gz -C sapbridge || true
-              fi
-              HIT=true
-              echo "=== SAP bridge cache HIT (libsap.a + sap.h + openlist-src 还原完成) ==="
-            else
-              echo "=== SAP bridge cache stale (cached=${CACHED_HASH:-empty} current=$CUR_HASH) ==="
-              rm -rf sapbridge/build sapbridge/openlist-src.tar.gz
-            fi
-          else
-            echo "=== SAP bridge cache artifact not found (first run or expired) ==="
-          fi
-          echo "hit=$HIT" >> "$GITHUB_OUTPUT"
-
       - name: Sync bundled modules from module-esc
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -460,47 +356,6 @@ jobs:
           echo "=== located app bundles ==="
           find build -name 'EscapeSpace.app' -type d || true
 
-
-      - name: Save Unicorn product (artifact, cross-run)
-        # libunicorn.a（ios-arm64）+ include 头文件（cgo 需要）一起保存，
-        # 供后续 run 跳过 cmake 全量编译与源码克隆。
-        if: steps.unicorn_cache.outputs.hit != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: escapeos-unicorn-210
-          path: |
-            sapbridge/.unicorn-build-tci/libunicorn.a
-            sapbridge/.unicorn-src/include
-          if-no-files-found: ignore
-
-      - name: Save SAP bridge product (artifact, cross-run)
-        # libsap.a + sap.h + OpenList 源码（含内嵌 dist）+ 源码哈希一起保存，
-        # 供后续 run 直接还原：省掉 clone/前端下载/依赖拉取/167MB 归档编译 ≈ 3.5 分钟。
-        if: steps.sap_cache.outputs.hit != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # 同 Restore：find 方式，避免 go.sum 缺失导致 pipefail 打挂步骤
-          find sapbridge -maxdepth 1 -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
-            -exec shasum -a 256 {} + 2>/dev/null | sort | shasum -a 256 | cut -d' ' -f1 > sapbridge/sap-hash.txt
-          if [ -d sapbridge/.openlist-src ]; then
-            tar -czf sapbridge/openlist-src.tar.gz -C sapbridge .openlist-src
-          fi
-          ls -la sapbridge/build/libsap.a sapbridge/build/sap.h sapbridge/sap-hash.txt || true
-
-      - name: Upload SAP bridge artifact
-        if: steps.sap_cache.outputs.hit != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: escapeos-sap-bridge-v1
-          path: |
-            sapbridge/build/libsap.a
-            sapbridge/build/sap.h
-            sapbridge/sap-hash.txt
-            sapbridge/openlist-src.tar.gz
-          retention-days: 7
-          if-no-files-found: ignore
 
       - name: Package unsigned IPA
         # 对齐 Theos 出包形态：ldid 施加 entitlements（与 Makefile:157 的 -S 一致）

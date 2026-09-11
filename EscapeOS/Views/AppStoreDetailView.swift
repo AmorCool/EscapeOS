@@ -4,8 +4,6 @@ import SwiftUI
 struct AppStoreDetailView: View {
     @State var item: AppStoreItem
     @ObservedObject private var installManager = AppStoreInstallManager.shared
-    @State private var showAccountSheet = false
-    @State private var signedEmail: String?
     @State private var expanded = false
     @State private var loadingDetail = false
     @State private var installingSource = false
@@ -13,7 +11,7 @@ struct AppStoreDetailView: View {
 
     /// 是否已有 App Store 账号（有则「获取」直接下载安装，无需任何配置）
     private var hasAccount: Bool {
-        signedEmail != nil || !(AppStoreDownloadStore.shared.selectedAccount == nil)
+        !(AppStoreDownloadStore.shared.selectedAccount == nil)
     }
 
     var body: some View {
@@ -38,17 +36,6 @@ struct AppStoreDetailView: View {
             }
         }
         .task { await loadDetail() }
-        .onAppear { signedEmail = AppStoreDownloadStore.shared.selectedAccount?.email }
-        .sheet(isPresented: $showAccountSheet) {
-            AddAccountSheet { account in
-                AppStoreDownloadStore.shared.add(account)
-                signedEmail = account.email
-                toastText = "已登录：\(account.email)"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    installManager.start(item: item)
-                }
-            }
-        }
     }
 
     // MARK: 头部
@@ -230,15 +217,15 @@ struct AppStoreDetailView: View {
                     if hasAccount {
                         installManager.start(item: item)
                     } else {
-                        showAccountSheet = true
+                        toastText = "尚未登录 Apple ID（登录功能正在重构）—— 请改用「免登录下载」"
                     }
                 } label: {
                     if hasAccount {
                         Label(item.priceText == "免费" ? "下载并安装" : "下载并安装（\(item.priceText)）",
                               systemImage: "arrow.down.circle.fill")
                     } else {
-                        Label("登录 Apple ID 后下载安装",
-                              systemImage: "person.crop.circle.badge.plus")
+                        Label("需要 Apple ID（登录重构中）",
+                              systemImage: "exclamationmark.circle")
                     }
                 }
             }

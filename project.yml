@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.311"
-    CURRENT_PROJECT_VERSION: "611"
+    MARKETING_VERSION: "0.3.312"
+    CURRENT_PROJECT_VERSION: "612"
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     ENABLE_BITCODE: "NO"
@@ -42,8 +42,6 @@ settings:
       - "$(SRCROOT)/EscapeOS"
       - "$(SRCROOT)/EscapeOS/Engine"
       - "$(SRCROOT)/EscapeOS/Tunnel"
-      # SAP 签名桥（PR #525 纯软件 Unicorn 移植）：sap.h 由 build-sap.sh 在编译前生成于此
-      - "$(SRCROOT)/sapbridge/build"
       # ZSign 引擎（v0.3.101）+ CI 预编译的 OpenSSL 头文件
       - "$(SRCROOT)/ZSign"
       - "$(SRCROOT)/ZSign/common"
@@ -62,11 +60,6 @@ settings:
       - "-framework AVFoundation"
       - "-framework CoreLocation"
       - "-framework CryptoKit"
-      # SAP 签名桥（PR #525 纯软件 Unicorn 移植）：链接 Go 产出的 c-archive 与静态 Unicorn 引擎。
-      # 二者由 sapbridge/build-sap.sh 在编译前生成于 sapbridge/build/。
-      - "-L$(SRCROOT)/sapbridge/build"
-      - "-lsap"
-      - "-lunicorn"
       # ZSign（v0.3.101）：ad-hoc 重签名依赖 libcrypto（CI 预编译 iOS arm64 静态库）
       - "-L$(SRCROOT)/openssl-build"
       - "-lcrypto"
@@ -89,24 +82,6 @@ targets:
       - framework: rust-libs/libidevice_ffi.xcframework
         embed: false
         link: true
-    # SAP 签名桥（PR #525 纯软件 Unicorn 移植）：在任何编译/链接之前先构建
-    # libunicorn.a + libsap.a + sap.h。脚本克隆并交叉编译 Unicorn 2.1.x（ios-arm64），
-    # 再用 cgo 产出 c-archive。需要网络（拉取 Unicorn 源码与 Go 模块）与 Xcode 工具链
-    # （clang / cmake / ninja / go），由 build-xcode.yml 的侧车步骤保证。
-    preBuildScripts:
-      - name: Build SAP bridge (libunicorn + libsap)
-        # 用 `bash <script>` 而非 `./<script>` 调用：本项目在 Windows 上开发，
-        # Windows 文件系统没有可执行位，git 只记录 100644，CI 检出后 `./` 会
-        # Permission denied（v0.3.0 首次构建即因此失败）。显式走 bash 可永不
-        # 受文件模式影响。（文件本身也已补 exec 位，便于本地直接执行。）
-        script: |
-          set -e
-          cd "$SRCROOT"
-          bash sapbridge/build-sap.sh
-        shell: /bin/bash
-        # 该脚本自带缓存（libunicorn.a / .unicorn-src 已存在则跳过重编），
-        # 声明不参与依赖分析可消除「will be run during every build」警告。
-        basedOnDependencyAnalysis: false
     sources:
       - path: EscapeOS
       # ZSign 引擎（LC 同款签名器，v0.3.101：ad-hoc 重签名可拆卸 dylib 模块）
@@ -137,10 +112,11 @@ targets:
       - path: vendor/SWCompression/Sources
         excludes:
           - "**/PrivacyInfo.xcprivacy"
-      # ApplePackage（移植自 asspp）：App Store 登录 / 搜索 / 下载 IPA / 历史版本。
-      # v0.4.0 起恢复并接入 SAP 签名（X-Apple-ActionSignature，Unicorn 解释执行
-      # CommerceKit，见 sapbridge/ 与 SapSigner.swift）。与 Theos Makefile 的
-      # find 规则对齐：全部 .swift 编进同一 target（单 module，无 import）。
+      # ApplePackage（移植自 asspp）：账号模型 / 搜索 / 清单 / 下载 / 历史版本。
+      # v0.3.312 起 Apple ID 登录实现（连同 Go 侧 SAP 桥 sapbridge/）已整体移除，
+      # 待按 CloudOfEquality/Asspp 分叉的本地 SAP 方案重新接入；本库继续提供
+      # 账号模型与下载侧能力，故保留。与 Theos Makefile 的 find 规则对齐：
+      # 全部 .swift 编进同一 target（单 module，无 import）。
       - path: vendor/ApplePackage
         excludes:
           - "**/PrivacyInfo.xcprivacy"

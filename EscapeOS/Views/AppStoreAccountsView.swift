@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// v0.3.308：AppStore 账号管理 —— 多账号、批量登录、退出登录.
+/// AppStore 账号管理 —— 多账号、切换当前下载账号、退出登录.
 ///
 /// 之前的问题：商店里只能看到一个账号（`accounts.first`），无法切换、无法退出、
 /// 也无法一次登录多个账号。这个页面补齐三件事：
@@ -12,10 +12,6 @@ struct AppStoreAccountsView: View {
 
     @State private var accounts: [AppStoreAccount] = []
     @State private var current: String = ""
-    @State private var batchText = "邮箱 密码（每行一个账号）"
-    @State private var busy = false
-    @State private var progressText = ""
-    @State private var results: [AppStoreDownloadStore.BatchResult] = []
     @State private var confirmSignOutAll = false
     @State private var toast: String?
 
@@ -26,8 +22,6 @@ struct AppStoreAccountsView: View {
             currentSection
             accountsSection
             deviceSection
-            batchSection
-            if !results.isEmpty { resultsSection }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("AppStore 账号管理")
@@ -165,7 +159,7 @@ struct AppStoreAccountsView: View {
             Button {
                 store.resetDeviceIdentifier()
                 reload()
-                toast = "已重置设备标识，请重新登录"
+                toast = "已重置设备标识"
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath")
@@ -176,54 +170,8 @@ struct AppStoreAccountsView: View {
         } header: {
             Text("设备与认证")
         } footer: {
-            Text("登录被 Apple 边缘拒绝（HTTP 404/503/204 之类的软拒绝）时，可重置设备标识后再试。")
+            Text("设备标识（guid）是下载请求携带的身份；异常时可重置后重新登录下载。")
                 .font(.caption2)
-        }
-    }
-
-    // MARK: - 批量登录
-
-    @ViewBuilder
-    private var batchSection: some View {
-        Section {
-            TextEditor(text: $batchText)
-                .font(.system(.footnote, design: .monospaced))
-                .frame(minHeight: 90)
-                .disabled(busy)
-            Button {
-                startBatchLogin()
-            } label: {
-                HStack(spacing: 8) {
-                    if busy { ProgressView().controlSize(.small) }
-                    Text(busy ? progressText : "开始批量登录")
-                        .font(.subheadline.weight(.medium))
-                }
-            }
-            .disabled(busy)
-        } header: {
-            Text("批量登录")
-        } footer: {
-            Text("每行一个账号：`邮箱 密码` 或 `邮箱----密码`。开启双重认证的账号需要验证码，"
-                 + "批量登录会失败并列出原因 —— 这类账号请到「AppStore 下载」页单独登录（可填验证码）。")
-                .font(.caption2)
-        }
-    }
-
-    @ViewBuilder
-    private var resultsSection: some View {
-        Section("批量登录结果") {
-            ForEach(results) { r in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: r.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(r.ok ? .green : .red)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(r.email).font(.footnote.weight(.medium))
-                        Text(r.message).font(.caption2).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(.vertical, 2)
-            }
         }
     }
 
@@ -232,71 +180,5 @@ struct AppStoreAccountsView: View {
     private func reload() {
         accounts = store.accounts
         current = store.selectedAccount?.email ?? ""
-    }
-
-    /// 解析批量输入：每行「邮箱 密码」或「邮箱----密码」
-    private func parseBatch(_ text: String) -> [(String, String)] {
-        text.components(separatedBy: .newlines).compactMap { line in
-            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !t.isEmpty, t.contains(" ") || t.contains("----") else { return nil }
-            if let r = t.range(of: "----") {
-                let email = String(t[t.startIndex..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
-                let pw = String(t[r.upperBound...]).trimmingCharacters(in: .whitespaces)
-                return email.isEmpty || pw.isEmpty ? nil : (email, pw)
-            }
-            let parts = t.split(separator: " ", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { return nil }
-            let pw = parts[1].trimmingCharacters(in: .whitespaces)
-            return pw.isEmpty ? nil : (parts[0], pw)
-        }
-    }
-
-    private func startBatchLogin() {
-        let list = parseBatch(batchText)
-        guard !list.isEmpty else {
-            toast = "没有解析到账号，格式：邮箱 密码（每行一个）"
-            return
-        }
-        busy = true
-        results = []
-        LoginLogger.shared.log("[AppStore] 开始批量登录 \(list.count) 个账号", category: .appStore)
-
-        Task.detached(priority: .userInitiated) {
-            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
-            var done: [AppStoreDownloadStore.BatchResult] = []
-            for (idx, item) in list.enumerated() {
-                await MainActor.run {
-                    self.progressText = "登录中 \(idx + 1)/\(list.count)…"
-                }
-                do {
-                    let account = try GoAppStoreAuth.login(
-                        email: item.0,
-                        password: item.1,
-                        code: "",
-                        deviceIdentifier: Configuration.deviceIdentifier,
-                        cacheDir: cacheDir
-                    )
-                    await MainActor.run { AppStoreDownloadStore.shared.add(account) }
-                    LoginLogger.shared.log("[AppStore] 批量登录成功 \(item.0)", category: .appStore)
-                    done.append(.init(email: item.0, ok: true,
-                                      message: "登录成功（store \(account.store)）"))
-                } catch {
-                    let desc = error.localizedDescription
-                    let need2FA = desc.contains("verification code")
-                    LoginLogger.shared.log("[AppStore] 批量登录失败 \(item.0)：\(desc)", category: .appStore)
-                    done.append(.init(email: item.0, ok: false,
-                                      message: need2FA ? "需要双重认证验证码 → 请到「AppStore 下载」单独登录"
-                                                       : desc))
-                }
-            }
-            let finished = done
-            await MainActor.run {
-                self.results = finished
-                self.busy = false
-                self.progressText = ""
-                self.reload()
-                self.toast = "批量登录完成：成功 \(finished.filter(\.ok).count)/\(finished.count)"
-            }
-        }
     }
 }

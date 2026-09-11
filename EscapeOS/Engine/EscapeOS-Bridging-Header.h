@@ -35,9 +35,6 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // v0.3.279：instproxy Browse 的 C 垫片（Swift 侧零 plist_t 指针传递）
 #include "../Tunnel/EscBrowseApps.h"
 
-// SAP 签名桥（纯软件 Unicorn 模拟 Apple CommerceKit，PR #525 移植）。
-// libsap.a / sap.h 由 sapbridge/build-sap.sh 在编译前生成，位于 sapbridge/build/。
-#include "sap.h"
 #include "../Services/MachOLoader/uloader.h"
 
 // 崩溃探针：把硬故障（SIGSEGV/BUS/ILL/FPE）的 信号/地址/PC 写入 fd 后重抛

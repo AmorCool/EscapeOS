@@ -136,13 +136,6 @@ final class AppStoreDownloadStore {
     }
 
     /// 批量登录结果（供账号管理页展示）
-    struct BatchResult: Identifiable {
-        let id = UUID()
-        let email: String
-        let ok: Bool
-        let message: String
-    }
-
     private func save() {
         guard let data = try? JSONEncoder().encode(accounts) else { return }
         try? data.write(to: fileURL, options: .atomic)
