@@ -88,7 +88,7 @@ enum AppStoreService {
         item.price = doubleVal(d["price"])
         item.formattedPrice = d["formattedPrice"] as? String
         item.version = d["version"] as? String
-        item.fileSizeBytes = intVal(d["fileSizeBytes"])
+        item.fileSizeBytes = int64Val(d["fileSizeBytes"])
         item.rating = doubleVal(d["averageUserRating"])
         item.ratingCount = intVal(d["userRatingCount"])
         item.primaryGenre = d["primaryGenreName"] as? String
@@ -156,6 +156,14 @@ enum AppStoreService {
         if let i = v as? Int { return i }
         if let n = v as? NSNumber { return n.intValue }
         if let s = v as? String { return Int(s) }
+        return nil
+    }
+
+    private static func int64Val(_ v: Any?) -> Int64? {
+        if let i = v as? Int64 { return i }
+        if let i = v as? Int { return Int64(i) }
+        if let n = v as? NSNumber { return n.int64Value }
+        if let s = v as? String { return Int64(s) }
         return nil
     }
 

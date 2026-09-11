@@ -44,7 +44,7 @@ enum AppStoreInstaller {
     @discardableResult
     static func installViaOTA(manifest: OTAInstallRequest) -> Bool {
         guard let url = manifest.manifestURL else { return false }
-        return installViaOTA(manifestURL: url)
+        return installViaOTA(manifestURL: url.absoluteString)
     }
 
     /// 引导用户到「设置 → 通用 → VPN与设备管理」信任分发证书（爱思 cerTrust 同款引导）
