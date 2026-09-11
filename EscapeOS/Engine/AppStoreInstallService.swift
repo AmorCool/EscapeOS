@@ -1,23 +1,17 @@
 import Foundation
 import UIKit
 
-/// v0.3.297：AppStore 商店 —— 安装服务（全新独立实现，不复用 IPAInstallService / ApplePackage）
+/// AppStore 商店 / 免登录源 —— IPA 下载与本地安装服务。
 ///
-/// 职责：把「某个 App」解析成一个 manifest plist 地址，然后交给 iOS 系统的
-/// itms-services 通道安装（与爱思助手手机端完全同一条系统调用）。
-///
-/// 解析顺序：
-///   1) 源的 `plistURLTemplate`（模板直接拼出 plist 地址）
-///   2) 源的 `infoURLTemplate`（请求接口，按 `plistFieldPath` 从 JSON 取 plist 地址）
-/// 安装动作：`itms-services://?action=download-manifest&url=<plist>`
+/// v0.3.315：第三方「分发源」与 itms-services OTA 链路已整体移除，这里只保留两件事：
+///   · `downloadIPA`  —— 把远端的 IPA 下载到 `Documents/AppStoreDownloads/`
+///   · `installLocalIPA` —— 经 RSD 隧道把本地 IPA 装到设备（按 cryptid 分流：
+///     加密包用包内 `SC_Info/*.sinf` 作 `ApplicationSINF`，明文包走普通 Install）
 enum AppStoreInstallService {
 
     enum InstallError: Error, LocalizedError {
-        case noSource
         case badTemplate
         case requestFailed(String)
-        case plistNotFound
-        case cannotOpen
         /// v0.3.300：加密包缺少 `SC_Info/*.sinf`，installd 无法解密安装
         case missingSINF(bundleId: String?)
 
@@ -25,8 +19,6 @@ enum AppStoreInstallService {
             switch self {
             case .badTemplate: return "源模板拼出的地址无效"
             case .requestFailed(let m): return "源接口请求失败：\(m)"
-            case .plistNotFound: return "源返回里没有找到 plist 地址"
-            case .cannotOpen: return "无法打开安装链接"
             case .missingSINF(let bid):
                 let who = bid.map { "（\($0)）" } ?? ""
                 return "该 IPA\(who) 是加密包，但缺少 SC_Info/*.sinf，installd 无法解密安装。"
