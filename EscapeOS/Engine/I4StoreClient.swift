@@ -195,14 +195,41 @@ enum I4StoreClient {
 
     /// 应用列表（按榜单 remd + 排序）
     /// 返回结构：`{"app":[...], "adli":[...], "spappli":[...]}`
-    static func appList(rank: Rank, sort: Int = 1, pageno: Int = 1, pageSize: Int = 20) async throws -> [[String: Any]] {
-        let obj = try await call(host: Host.list, path: Path.appList, params: [
+    /// - Parameter specialId: 专题 id（专题内应用列表用 remd=2 + specialid，逆向自 JS）
+    static func appList(rank: Rank, sort: Int = 1, pageno: Int = 1, pageSize: Int = 20,
+                        specialId: String? = nil) async throws -> [[String: Any]] {
+        var params: [String: Any] = [
             "pageSize": "\(pageSize)",
             "pageno": pageno,
             "remd": rank.rawValue,
             "sort": sort,
-        ])
+        ]
+        if let specialId { params["specialid"] = specialId }
+        let obj = try await call(host: Host.list, path: Path.appList, params: params)
         return (obj["app"] as? [[String: Any]]) ?? []
+    }
+
+    /// 专题内的应用列表（`remd = 2`，js 里专题页即用该组合）
+    static func specialApps(specialId: String, sort: Int = 1, pageno: Int = 1,
+                            pageSize: Int = 20) async throws -> [[String: Any]] {
+        let params: [String: Any] = [
+            "pageSize": "\(pageSize)",
+            "pageno": pageno,
+            "remd": 2,
+            "sort": sort,
+            "specialid": specialId,
+        ]
+        let obj = try await call(host: Host.list, path: Path.appList, params: params)
+        return (obj["app"] as? [[String: Any]]) ?? []
+    }
+
+    /// 原始返回（诊断用，便于区分「签名失败」与「服务端无数据」）
+    static func specialAppsRaw(specialId: String, sort: Int = 1) async throws -> String {
+        let params: [String: Any] = [
+            "pageSize": "20", "pageno": 1, "remd": 2, "sort": sort, "specialid": specialId,
+        ]
+        let data = try await callRaw(host: Host.list, path: Path.appList, params: params)
+        return String(data: data, encoding: .utf8) ?? "(\(data.count) 字节二进制)"
     }
 
     /// 应用详情（含 `plist` / `plist_s` / `path` / `size` / `md5` / `version` 等）
