@@ -417,6 +417,16 @@ struct AppStoreDetailView: View {
         }
     }
 
+    /// 进入详情时用 Lookup 补全字段（预览图 / 大小 / 版本 / 兼容性…都来自这里）
+    private func loadDetail() async {
+        guard let full = try? await AppStoreService.lookup(id: item.id) else { return }
+        var merged = full
+        if merged.iconURL == nil { merged.iconURL = item.iconURL }
+        if merged.summary == nil { merged.summary = item.summary }
+        if merged.screenshots.isEmpty { merged.screenshots = item.screenshots }
+        item = merged
+    }
+
     private static func fmtDate(_ iso: String?) -> String? {
         guard let iso else { return nil }
         let f = ISO8601DateFormatter()

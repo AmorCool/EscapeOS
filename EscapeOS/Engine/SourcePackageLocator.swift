@@ -76,7 +76,7 @@ enum SourcePackageLocator {
     static func probe(bundleIds: [(bundleId: String, name: String)],
                       progress: ((Int, Int) -> Void)? = nil) async -> [String: Bool] {
         var out: [String: Bool] = [:]
-        var pending: [(String, String)] = []
+        var pending: [(bundleId: String, name: String)] = []
         for item in bundleIds {
             if let cached = cachedAvailability(bundleId: item.bundleId) {
                 out[item.bundleId] = cached
