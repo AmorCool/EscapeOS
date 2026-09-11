@@ -103,7 +103,6 @@ struct DeviceInfoModel {
     var wirelessBoardSerial: String?  // Wi-Fi 序列号
     // v0.3.305：设备树（IODeviceTree /product 节点）+ AppleSmartBattery 实测通道补齐
     // （iOS 27 的 com.apple.mobile.iTunes 域已无零部件序列号，只能从设备树按节点名查）
-    var coverglassSerial: String?     // 盖板码（product.coverglass-serial-number）
     var panelSerial: String?          // 屏幕序列号（product.raw-panel-serial-number）
     var ambientLightSerial: String?   // 环境光序列号（product.ambient-light-sensor-serial-num）
     var uniqueModel: String?          // 硬件型号（product.unique-model，如 D37AP）
@@ -293,7 +292,8 @@ enum DeviceInfoService {
             fdrSealingStatus: stringOf(itunes["FDRSealingStatus"]),
             internalBuild: boolOf(itunes["InternalBuild"]),
             configNumber: stringOf(itunes["ConfigNumber"]),
-            coverglassSerial: itunes["CoverglassSerialNumber"] as? String,
+            // v0.3.305：iOS 27 的 iTunes 域已无这些键 → 改从设备树 product 节点取
+            coverglassSerial: enrich?.coverglassSerial,
             lunaFlexSerial: itunes["LunaFlexSerialNumber"] as? String,
             mesaSerial: itunes["MesaSerialNumber"] as? String,
             arcModuleSerial: itunes["ArcModuleSerialNumber"] as? String,
@@ -322,7 +322,6 @@ enum DeviceInfoService {
             carrier1: carrierOf(lockdown["InternationalMobileSubscriberIdentity"] as? String),
             carrier2: carrierOf(lockdown["InternationalMobileSubscriberIdentity2"] as? String),
             wirelessBoardSerial: lockdown["WirelessBoardSerialNumber"] as? String,
-            coverglassSerial: enrich?.coverglassSerial,
             panelSerial: enrich?.panelSerial,
             ambientLightSerial: enrich?.ambientLightSerial,
             uniqueModel: enrich?.uniqueModel,
