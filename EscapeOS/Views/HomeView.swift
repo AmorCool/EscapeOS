@@ -153,6 +153,17 @@ struct HomeView: View {
                          tint: .indigo)
             }
             .buttonStyle(.plain)
+
+            // v0.3.295：AppStore 商店（榜单 / 搜索 / 详情；安装走系统 App Store）
+            NavigationLink {
+                AppStoreView()
+            } label: {
+                HomeCard(title: "AppStore 商店",
+                         subtitle: "榜单 / 搜索 / 应用详情",
+                         icon: "app.badge.fill",
+                         tint: .blue)
+            }
+            .buttonStyle(.plain)
         }
     }
 

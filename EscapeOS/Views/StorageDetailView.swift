@@ -19,7 +19,7 @@ struct StorageDetailView: View {
                     ioCard(info)
                     geometryCard(info)
                 } else {
-                    errorCard
+                    errorCard()
                 }
             }
             .padding(16)
