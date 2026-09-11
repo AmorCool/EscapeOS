@@ -56,6 +56,54 @@ struct AppStoreItem: Identifiable, Hashable {
     }
 }
 
+/// v0.3.300：应用历史版本条目
+///
+/// 数据来源：`https://apps.apple.com/{cc}/app/id{appId}` 页面内嵌的
+/// `versionHistory` shelf（桌面 UA 可见，无需登录、无认证）。
+/// 每条对应一次上架：版本号（primarySubtitle）/ 发布时间（secondarySubtitle）/
+/// 更新说明（text）。
+struct AppStoreVersion: Identifiable, Hashable {
+    /// 版本号（如 8.0.78）
+    var version: String
+    /// 发布时间原始串（Apple 给的是 `Tue Sep 08 2026 04:16:59 GMT+0000`）
+    var dateRaw: String?
+    /// 更新说明
+    var notes: String?
+
+    var id: String { version }
+
+    /// 解析后的发布日期
+    var date: Date? {
+        guard let dateRaw else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "EEE MMM dd yyyy HH:mm:ss 'GMT'Z"
+        if let d = f.date(from: dateRaw) { return d }
+        // 容错：部分条目省略时区
+        f.dateFormat = "EEE MMM dd yyyy HH:mm:ss"
+        return f.date(from: dateRaw)
+    }
+
+    /// 展示用日期 `2026-09-08`
+    var dateText: String {
+        guard let d = date else { return dateRaw ?? "—" }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: d)
+    }
+
+    /// 相对时间（如 `2 个月前`）
+    var relativeText: String? {
+        guard let d = date else { return nil }
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.unitsStyle = .full
+        return f.localizedString(for: d, relativeTo: Date())
+    }
+}
+
 /// 榜单类型
 enum AppStoreRankKind: String, CaseIterable, Identifiable {
     case free = "topfreeapplications"

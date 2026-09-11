@@ -18,7 +18,7 @@ struct AppStoreView: View {
     @State private var showSources = false
     @State private var showDisclaimer = false
     @State private var showI4 = false
-    @State private var installing: Set<String> = []
+    @ObservedObject private var installManager = AppStoreInstallManager.shared
     @State private var otaURL = ""
     @State private var toast: String?
 
@@ -244,7 +244,7 @@ struct AppStoreView: View {
             Button {
                 install(app)
             } label: {
-                if installing.contains(app.id) {
+                if installManager.isRunning(app.id) {
                     ProgressView().controlSize(.mini).frame(width: 36)
                 } else {
                     Text(app.priceText == "免费" ? "获取" : app.priceText)
@@ -255,7 +255,7 @@ struct AppStoreView: View {
                 }
             }
             .buttonStyle(.plain)
-            .disabled(installing.contains(app.id))
+            .disabled(installManager.isRunning(app.id))
         }
         .padding(.vertical, 2)
     }
@@ -352,7 +352,7 @@ struct AppStoreView: View {
         }
     }
 
-    /// 安装：优先走已配置的分发源（itms-services OTA，与爱思手机端同一条系统调用）；
+    /// 安装：走已配置的分发源 → 下载 IPA → RSD 隧道安装（v0.3.300 起为真实下载安装）；
     /// 没有可用源时退回系统 App Store。
     private func install(_ app: AppStoreItem) {
         if AppStoreSourceStore.shared.enabledSources.isEmpty {
@@ -361,27 +361,10 @@ struct AppStoreView: View {
             clearToastLater()
             return
         }
-        guard !installing.contains(app.id) else { return }
-        installing.insert(app.id)
-        toast = "正在解析分发源…"
-        Task {
-            do {
-                let r = try await AppStoreInstallService.installUsingAnySource(item: app) { line in
-                    LoginLogger.shared.log("[AppStore] \(line)")
-                }
-                await MainActor.run {
-                    installing.remove(app.id)
-                    toast = "已交给系统安装（\(r.source.name)）"
-                    clearToastLater()
-                }
-            } catch {
-                await MainActor.run {
-                    installing.remove(app.id)
-                    toast = "安装失败：\(error.localizedDescription)"
-                    clearToastLater()
-                }
-            }
-        }
+        guard !installManager.isRunning(app.id) else { return }
+        AppStoreInstallManager.shared.start(item: app)
+        toast = "已开始处理「\(app.name)」，进度见详情页"
+        clearToastLater()
     }
 
     private func clearToastLater() {

@@ -74,6 +74,96 @@ enum AppStoreService {
         return entries.compactMap { parseRSSEntry($0, fallbackGenre: genre == .all ? nil : genre.title) }
     }
 
+    // MARK: - 历史版本
+
+    /// v0.3.300：应用历史版本列表
+    ///
+    /// Apple 没有公开的「历史版本」JSON 接口（`/lookup` 只返回当前版本），
+    /// 但 `apps.apple.com` 的商品页在 SSR 时会把 **完整版本历史**内嵌进 HTML：
+    ///
+    ///   "page":"versionHistory","pageData":{"shelves":[{"items":[
+    ///       {"$kind":"TitledParagraph","text":"<更新说明>",
+    ///        "primarySubtitle":"8.0.78","secondarySubtitle":"Tue Sep 08 2026 …"}
+    ///   , …]}]}
+    ///
+    /// 该页面**无需登录、无需认证**，但必须用桌面 UA（手机 UA 会被 301 到
+    /// `itms-appss://` 协议链接）。
+    static func versionHistory(appId: String, country: String = "cn") async throws -> [AppStoreVersion] {
+        guard let url = URL(string: "https://apps.apple.com/\(country)/app/id\(appId)") else {
+            throw AppStoreError.badURL
+        }
+        var req = URLRequest(url: url)
+        // 关键：桌面 UA，否则返回 301 → itms-appss://
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                     + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+                     forHTTPHeaderField: "User-Agent")
+        req.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+        let (data, resp) = try await session.data(for: req)
+        if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw AppStoreError.http(http.statusCode)
+        }
+        guard let html = String(data: data, encoding: .utf8) else { throw AppStoreError.decode }
+        return parseVersionHistory(html: html)
+    }
+
+    // MARK: - 历史版本解析
+
+    /// 从商品页 HTML 中抽出版本历史数组并结构化
+    static func parseVersionHistory(html: String) -> [AppStoreVersion] {
+        guard let marker = html.range(of: "\"page\":\"versionHistory\"") else { return [] }
+        let tail = html[marker.upperBound...]
+        guard let shelvesStart = tail.range(of: "\"shelves\":[") else { return [] }
+        let fromBracket = tail[shelvesStart.upperBound...]        // 指向 `[` 之后
+        guard let jsonArray = balancedSlice(prefix: "[", from: fromBracket) else { return [] }
+
+        guard let arr = try? JSONSerialization.jsonObject(with: Data(jsonArray.utf8)) as? [Any] else {
+            return []
+        }
+        var out: [AppStoreVersion] = []
+        var seen = Set<String>()
+        for case let shelf as [String: Any] in arr {
+            guard let items = shelf["items"] as? [Any] else { continue }
+            for case let it as [String: Any] in items {
+                guard let ver = (it["primarySubtitle"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !ver.isEmpty else { continue }
+                // 去掉可能的前缀（`mostRecentVersion` shelf 会写「版本 8.0.78」）
+                let cleaned = ver.replacingOccurrences(of: "^版本\\s*", with: "",
+                                                       options: .regularExpression)
+                guard !seen.contains(cleaned) else { continue }
+                seen.insert(cleaned)
+                out.append(AppStoreVersion(version: cleaned,
+                                           dateRaw: it["secondarySubtitle"] as? String,
+                                           notes: it["text"] as? String))
+            }
+        }
+        return out
+    }
+
+    /// 从 `from` 起做括号配对，返回完整的 `[…]/ {…}` JSON 文本。
+    ///
+    /// 必须跳过字符串字面量与反斜杠转义 —— 商品页的更新说明里含
+    /// `\n`、`( )`、`[ ]` 等字符，朴素计数会截断出错。
+    private static func balancedSlice(prefix: String, from: Substring) -> String? {
+        let chars = Array(from)
+        var depth = 1            // 起点已消费掉开头的 `[`，视为已进入该数组
+        var inString = false
+        var escaped = false
+        var endIndex: Int?
+        for (i, c) in chars.enumerated() {
+            if escaped { escaped = false; continue }
+            if c == "\\" { if inString { escaped = true }; continue }
+            if c == "\"" { inString.toggle(); continue }
+            if inString { continue }
+            if c == "[" || c == "{" { depth += 1 }
+            else if c == "]" || c == "}" {
+                depth -= 1
+                if depth == 0 { endIndex = i; break }
+            }
+        }
+        guard let end = endIndex else { return nil }
+        return prefix + String(chars[0...end])
+    }
+
     // MARK: - 解析（Search / Lookup）
 
     private static func parseSearchItem(_ d: [String: Any]) -> AppStoreItem? {

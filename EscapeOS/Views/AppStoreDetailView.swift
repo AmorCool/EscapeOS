@@ -3,6 +3,7 @@ import SwiftUI
 /// v0.3.295：AppStore 应用详情（进入时用 Lookup 补全字段）
 struct AppStoreDetailView: View {
     @State var item: AppStoreItem
+    @ObservedObject private var installManager = AppStoreInstallManager.shared
     @State private var expanded = false
     @State private var loadingDetail = false
     @State private var installingSource = false
@@ -185,15 +186,60 @@ struct AppStoreDetailView: View {
 
     private var actionSection: some View {
         Section {
+            // v0.3.300：主通道 = 走分发源下载 IPA → RSD 隧道安装（不再只跳转 App Store）
+            if let st = installManager.state(for: item.id), st.phase.isRunning {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(st.phase.title).font(.subheadline.weight(.medium))
+                        Spacer(minLength: 0)
+                        Text("\(Int(st.overall * 100))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    ProgressView(value: st.overall)
+                    if st.phase == .downloading, st.downloadProgress > 0 {
+                        Text(String(format: "下载 %.0f%%", st.downloadProgress * 100))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else if st.phase == .installing, st.installProgress > 0 {
+                        Text(String(format: "安装 %.0f%%", st.installProgress * 100))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            } else {
+                Button {
+                    installManager.start(item: item)
+                } label: {
+                    Label(item.priceText == "免费" ? "下载并安装" : "下载并安装（\(item.priceText)）",
+                          systemImage: "arrow.down.circle.fill")
+                }
+            }
+
+            NavigationLink {
+                AppStoreVersionHistoryView(item: item, country: "cn")
+            } label: {
+                Label("历史版本", systemImage: "clock.arrow.circlepath")
+            }
+
+            if let st = installManager.state(for: item.id), st.phase == .failed,
+               let err = st.errorText {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             Button {
                 installFromSource()
             } label: {
                 HStack {
                     if installingSource { ProgressView().controlSize(.small) }
-                    Label(installingSource ? "正在通过分发源安装…" : "通过分发源安装", systemImage: "arrow.down.app.fill")
+                    Label(installingSource ? "正在交给系统…" : "交给系统 OTA 安装",
+                          systemImage: "arrow.down.app.fill")
                 }
             }
             .disabled(installingSource)
+
             Button {
                 _ = AppStoreInstaller.openInAppStore(item)
             } label: {
@@ -210,7 +256,8 @@ struct AppStoreDetailView: View {
                 Label("证书信任设置", systemImage: "checkmark.shield")
             }
         } footer: {
-            Text("安装由系统 App Store 完成；本页数据来自 Apple 公开的商店接口。")
+            Text("「下载并安装」从已配置的分发源取 manifest → 下载 IPA → 经 RSD 隧道安装到本机。"
+                 + "App Store 原始包为 FairPlay 加密，无法安装；需源提供已重签名或已解密的 IPA。")
                 .font(.caption2)
         }
     }
