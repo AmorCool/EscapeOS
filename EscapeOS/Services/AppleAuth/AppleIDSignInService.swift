@@ -60,7 +60,7 @@ enum AppleIDSignInService {
 
     /// 登录后把商店区域对齐到账号所在区（浏览到的商品才会是账号真能下的）
     private static func logRegion(_ account: AppStoreAccount, log: ((String) -> Void)?) {
-        if let region = AppStoreService.adoptAccountRegion(storefront: account.store) {
+        if let region = AppStoreService.adoptAccountRegion(storefront: account.store, email: account.email) {
             log?("账号区域 \(region.uppercased())（storefront \(account.store)），商店已跟随")
             LoginLogger.shared.log("[SAP] 账号区域 \(region.uppercased())（storefront \(account.store)）",
                                    category: .appStore)

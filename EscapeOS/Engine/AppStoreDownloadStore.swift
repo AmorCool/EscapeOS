@@ -120,7 +120,14 @@ final class AppStoreDownloadStore {
         return usableAccounts.first
     }
 
-    func select(email: String) { selectedEmail = email }
+    func select(email: String) {
+        selectedEmail = email
+        // v0.3.328：切换当前下载账号后立刻把商店区域跟到这个账号，
+        // 省得「换了账号、商店还停在旧区」。
+        if let a = account(for: email) {
+            AppStoreService.adoptAccountRegion(storefront: a.store, email: a.email)
+        }
+    }
 
     /// 退出登录单个账号
     func signOut(email: String) {

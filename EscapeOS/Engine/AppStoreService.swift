@@ -53,12 +53,25 @@ enum AppStoreService {
     /// **商店区域与账号区域不一致会出怪事**：浏览到的是 A 区商品、下单却用 B 区
     /// storefront，Apple 会按「该区没有此商品」拒绝（表现为未知错误）。
     /// 登录后直接跟随账号，就不存在这个错配。
+    ///
+    /// - Parameter email: 传入则同时记住「已跟随过这个账号」，供进入商店时判断是否需要再跟随
     @discardableResult
-    static func adoptAccountRegion(storefront: String) -> String? {
+    static func adoptAccountRegion(storefront: String, email: String? = nil) -> String? {
         guard let code = Configuration.countryCode(for: storefront)?.lowercased() else { return nil }
-        guard code != countryCode else { return code }
         countryCode = code
+        if let email { UserDefaults.standard.set(email, forKey: followedEmailKey) }
         return code
+    }
+
+    /// 已经「跟随过」的账号（email）
+    private static let followedEmailKey = "AppStore.RegionFollowedEmail"
+
+    /// v0.3.328：进入商店页时用 —— **只在当前账号与上次跟随的账号不同时**才改区域，
+    /// 这样用户手动挑的区域不会被每次进页面时覆盖。
+    @discardableResult
+    static func followAccountRegionIfNeeded(email: String, storefront: String) -> String? {
+        guard email != UserDefaults.standard.string(forKey: followedEmailKey) else { return nil }
+        return adoptAccountRegion(storefront: storefront, email: email)
     }
 
     /// 传给 Apple 接口的区域（未指定时用当前选择）

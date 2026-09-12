@@ -2,6 +2,16 @@ import SwiftUI
 
 /// v0.3.207：百宝箱面板 —— 主页原生 sheet 呈现（presentationDetents 0.4↔1.0），
 /// 系统上拉展开/下拉关闭，跟手流畅.内含杂七杂八工具的入口集合.
+///
+/// v0.3.328：**移除监督模式（Supervision）与 Wi-Fi 射频开关**。
+/// - 监督模式：需要把设备置为受监督并自造 Escalate 身份，设备侧只认「当初监督它的那份身份」，
+///   非越狱环境无解；已整块移除（含 SupervisionService）。
+/// - Wi-Fi 射频：唯一可行通道是 MCInstall `SetWiFiPowerState`，而它**必须走监督通道**
+///   （无监督 → 14005 `Unable to set Wi-Fi power`）。既然坚持不走监督那套，该开关已移除。
+/// - 保留「局域网 Wi-Fi 配对连接」：走 lockdown `com.apple.mobile.wireless_lockdown`
+///   `EnableWifiConnections`，无需监督、真实可用。
+/// - 新增「开发者模式」：状态读 lockdown `DeveloperModeStatus`（com.apple.security.mac.amfi），
+///   开启走 RSD amfi 服务；**系统未提供远程关闭接口**，关闭需去设备设置里手动关。
 struct TreasureBoxView: View {
     var body: some View {
         VStack(spacing: 0) {
@@ -15,7 +25,7 @@ struct TreasureBoxView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     heroCard
-                    wifiPowerCard
+                    deviceControlCard
                     itemsCard
                     Text("更多工具持续补充中")
                         .font(.caption2)
@@ -50,76 +60,35 @@ struct TreasureBoxView: View {
         )
     }
 
-    // v0.3.240：WiFi 射频开关 + 局域网 Wi-Fi 配对连接
-    //（v0.3.245 起走 WirelessLockdownService：射频 = MCInstall SetWiFiPowerState
-    //（pmd3 profile set-wifi-power 同款）；配对连接 = lockdown SetValue + GetValue
-    // 状态读回（iDescriptor 同款数据源））
-    // v0.3.245 修复：此前 wifiPairingOn 从未赋值——Toggle 弹回、永远显示关、
-    // 永远无法触达「停用」路径（用户实测"能开启但开关很快关闭、无法关闭"）。
-    // v0.3.247：射频开关的协议改走 Rust（MCInstall SetWiFiPowerState），点按不再闪退；
-    // 两个开关各用各的 busy 标志（此前共用一个，一个在忙另一个也被禁用）；
-    // 失败时开关弹回原值并如实报错（不再出现「开关停在错位置」）。
-    @State private var wifiPowerOn = UserDefaults.standard.bool(forKey: WirelessLockdownService.wifiPowerStateKey)
-    @State private var wifiPowerBusy = false
+    // MARK: - 设备控制
+
+    /// 开发者模式（iDescriptor 同款数据源 + amfi 开启）
+    @State private var devModeOn = false
+    @State private var devModeUnknown = true     // true=读不到（隧道未连），显示未知而不是「已关闭」
+    @State private var devModeBusy = false
+    @State private var devModeMsg: String?
+    @State private var devModeMsgIsError = false
+
+    /// 局域网 Wi-Fi 配对连接（lockdown EnableWifiConnections，免监督）
     @State private var wifiPairingOn = false
-    @State private var wifiPairingUnknown = true   // true=状态读不到（隧道未连），显示未知
+    @State private var wifiPairingUnknown = true
     @State private var wifiPairingBusy = false
-    @State private var wifiPowerMsg: String?
-    @State private var wifiPowerMsgIsError = false
-    // v0.3.249：监督（Supervision）通道开关——设备拒绝 14005 时射频开关必须走 Escalate
-    @State private var supervisionOn = UserDefaults.standard.bool(forKey: SupervisionService.enabledKey)
-    @State private var supervisionBusy = false
-    @State private var supervisionMsg: String?
-    @State private var supervisionMsgIsError = false
+    @State private var wifiPairingMsg: String?
+    @State private var wifiPairingMsgIsError = false
 
-    private func setSupervision(_ on: Bool) {
-        guard !supervisionBusy else { return }
-        supervisionBusy = true
-        supervisionMsg = nil
-        supervisionMsgIsError = false
-        Task.detached(priority: .userInitiated) {
-            var failure: String?
-            if on {
-                do {
-                    // ① 生成（或复用）监督身份 → ② SetCloudConfiguration 置为受监督
-                    // → ③ Escalate + GetCloudConfiguration 校验监督通道真的能用
-                    try SupervisionService.ensureIdentity(organization: "EscapeOS")
-                    try WirelessLockdownService.supervise(organization: "EscapeOS")
-                    try WirelessLockdownService.verifySupervisionChannel()
-                    SupervisionService.setEnabledFlag(true)
-                } catch { failure = error.localizedDescription }
-            } else {
-                SupervisionService.setEnabledFlag(false)
-            }
-            let errText = failure
-            await MainActor.run {
-                supervisionBusy = false
-                if let errText {
-                    supervisionOn = false     // 失败：开关弹回
-                    supervisionMsgIsError = true
-                    supervisionMsg = "失败：\(errText)"
-                } else if on {
-                    supervisionMsgIsError = false
-                    supervisionMsg = "监督通道已建立（Escalate 校验通过，射频开关现在走监督通道）"
-                } else {
-                    supervisionMsgIsError = false
-                    supervisionMsg = "已停用监督通道（设备侧的监督状态不会自动撤销）"
-                }
-            }
-        }
-    }
-
-    // 出现时读回设备真实状态（射频持久化值在 @State 初始化时已恢复；
-    // EnableWifiConnections 无持久化，必须 GetValue 实时读）
-    private func refreshWifiStates() {
-        guard !wifiPairingBusy else { return }
-        wifiPairingBusy = true
+    private func refreshDeviceStates() {
         Task.detached(priority: .utility) {
-            let enabled = WirelessLockdownService.readWifiConnectionsEnabled()
+            let dev = DeveloperModeService.status()
+            let pairing = WirelessLockdownService.readWifiConnectionsEnabled()
             await MainActor.run {
-                wifiPairingBusy = false
-                if let enabled {
-                    wifiPairingOn = enabled
+                if let dev {
+                    devModeOn = dev
+                    devModeUnknown = false
+                } else {
+                    devModeUnknown = true
+                }
+                if let pairing {
+                    wifiPairingOn = pairing
                     wifiPairingUnknown = false
                 } else {
                     wifiPairingUnknown = true
@@ -128,26 +97,39 @@ struct TreasureBoxView: View {
         }
     }
 
-    private func setWifiPower(_ on: Bool) {
-        guard !wifiPowerBusy else { return }
-        wifiPowerBusy = true
-        wifiPowerMsg = nil
-        wifiPowerMsgIsError = false
+    private func setDeveloperMode(_ on: Bool) {
+        guard !devModeBusy else { return }
+        // 关闭：系统没有远程接口（amfi 只有 reveal/enable/accept/status），如实说明并弹回
+        guard on else {
+            devModeMsgIsError = true
+            devModeMsg = "开发者模式无法远程关闭，请在设备「设置 → 隐私与安全性 → 开发者模式」里关闭"
+            return
+        }
+        devModeBusy = true
+        devModeMsg = nil
+        devModeMsgIsError = false
         Task.detached(priority: .userInitiated) {
             var failure: String?
-            do { try WirelessLockdownService.setWifiPower(on) }
+            do { try DeveloperModeService.enable() }
             catch { failure = error.localizedDescription }
             let errText = failure
+            // 以设备读回为准
+            let readBack = DeveloperModeService.status()
             await MainActor.run {
-                wifiPowerBusy = false
+                devModeBusy = false
                 if let errText {
-                    // 写入失败：不更新 wifiPowerOn，开关自动弹回原状态
-                    wifiPowerMsgIsError = true
-                    wifiPowerMsg = "失败：\(errText)"
-                } else {
-                    wifiPowerOn = on
-                    wifiPowerMsgIsError = false
-                    wifiPowerMsg = "已\(on ? "开启" : "关闭") Wi-Fi 射频（设备已确认）"
+                    devModeMsgIsError = true
+                    devModeMsg = "失败：\(errText)"
+                }
+                if let readBack {
+                    devModeOn = readBack
+                    devModeUnknown = false
+                }
+                if errText == nil {
+                    devModeMsgIsError = !(readBack ?? false)
+                    devModeMsg = readBack == true
+                        ? "开发者模式已开启"
+                        : "已下发开启，设备可能要求在「设置 → 隐私与安全性 → 开发者模式」确认并重启后生效"
                 }
             }
         }
@@ -156,8 +138,8 @@ struct TreasureBoxView: View {
     private func setWifiPairing(_ on: Bool) {
         guard !wifiPairingBusy else { return }
         wifiPairingBusy = true
-        wifiPowerMsg = nil
-        wifiPowerMsgIsError = false
+        wifiPairingMsg = nil
+        wifiPairingMsgIsError = false
         Task.detached(priority: .userInitiated) {
             var confirmed: Bool?
             var failure: String?
@@ -172,62 +154,48 @@ struct TreasureBoxView: View {
             await MainActor.run {
                 wifiPairingBusy = false
                 if let errText {
-                    wifiPowerMsgIsError = true
-                    wifiPowerMsg = "失败：\(errText)"
+                    wifiPairingMsgIsError = true
+                    wifiPairingMsg = "失败：\(errText)"
                     return
                 }
                 if let readBack {
                     wifiPairingOn = readBack
                     wifiPairingUnknown = false
-                    wifiPowerMsgIsError = readBack != on
-                    wifiPowerMsg = readBack == on
+                    wifiPairingMsgIsError = readBack != on
+                    wifiPairingMsg = readBack == on
                         ? "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接（设备已确认）"
                         : "写入已接受，但设备读回 \(readBack ? "开启" : "关闭")，可能被系统还原"
                 } else {
-                    // 读回失败（隧道可能已被重置）——至少把 UI 状态跟手，并如实说明未确认
                     wifiPairingOn = on
                     wifiPairingUnknown = false
-                    wifiPowerMsgIsError = false
-                    wifiPowerMsg = "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接（设备未回读确认）"
+                    wifiPairingMsgIsError = false
+                    wifiPairingMsg = "已\(on ? "启用" : "停用")局域网 Wi-Fi 配对连接（设备未回读确认）"
                 }
             }
         }
     }
 
-    private var wifiPowerCard: some View {
+    private var deviceControlCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("设备控制").font(.headline).padding(.bottom, 2)
-            // v0.3.249：监督通道开关（射频开关被设备拒 14005 时必须走它）
+
             Toggle(isOn: Binding(
-                get: { supervisionOn },
+                get: { devModeOn },
                 set: { on in
-                    guard !supervisionBusy else { return }
-                    setSupervision(on)
+                    guard !devModeBusy else { return }
+                    setDeveloperMode(on)
                 }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Label("监督模式（Supervision）", systemImage: "checkmark.shield").font(.subheadline)
-                    Text("开启会尝试把设备置为受监督并建立 Escalate 监督通道。若设备提示「已被其他身份监督（14002）」，说明它早就被监督过 —— SetWiFiPowerState 只认当初那份监督身份（证书+私钥），App 新生成的身份无效，iOS 26 上也无法改写监督身份")
+                    Label("开发者模式", systemImage: "hammer").font(.subheadline)
+                    Text(devModeUnknown
+                         ? "状态未知（连接 LocalDevVPN + 配对文件后自动读取）"
+                         : (devModeOn ? "已开启" : "已关闭 · 打开后设备可能要求重启"))
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            .disabled(supervisionBusy)
-            Toggle(isOn: Binding(
-                get: { wifiPowerOn },
-                set: { on in
-                    guard !wifiPowerBusy else { return }
-                    setWifiPower(on)
-                }
-            )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Wi-Fi 射频开关").font(.subheadline)
-                    Text(supervisionOn
-                         ? "MCInstall SetWiFiPowerState（监督通道）；写入型开关，显示上次设定值；关闭后若 LocalDevVPN 走 Wi-Fi，隧道会断开"
-                         : "MCInstall SetWiFiPowerState（需 LocalDevVPN + 配对文件）；写入型开关，显示上次设定值；设备若报「Unable to set Wi-Fi power」= 系统拒绝该命令，请先开启上方监督模式")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-            .disabled(wifiPowerBusy)
+            .disabled(devModeBusy)
+
             Toggle(isOn: Binding(
                 get: { wifiPairingOn },
                 set: { on in
@@ -244,18 +212,19 @@ struct TreasureBoxView: View {
                 }
             }
             .disabled(wifiPairingBusy)
-            if supervisionBusy || wifiPowerBusy || wifiPairingBusy {
+
+            if devModeBusy || wifiPairingBusy {
                 HStack { ProgressView().controlSize(.small); Text("正在执行…").font(.caption).foregroundStyle(.secondary) }
             }
-            if let msg = supervisionMsg {
+            if let msg = devModeMsg {
                 Text(msg)
                     .font(.caption2)
-                    .foregroundStyle(supervisionMsgIsError ? Color.red : Color.green)
+                    .foregroundStyle(devModeMsgIsError ? Color.red : Color.green)
             }
-            if let msg = wifiPowerMsg {
+            if let msg = wifiPairingMsg {
                 Text(msg)
                     .font(.caption2)
-                    .foregroundStyle(wifiPowerMsgIsError ? Color.red : Color.green)
+                    .foregroundStyle(wifiPairingMsgIsError ? Color.red : Color.green)
             }
         }
         .padding(16)
@@ -263,7 +232,7 @@ struct TreasureBoxView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
-        .onAppear(perform: refreshWifiStates)
+        .onAppear(perform: refreshDeviceStates)
     }
 
     private var itemsCard: some View {

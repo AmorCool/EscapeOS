@@ -26,6 +26,17 @@ struct AppStoreView: View {
 
     private var region: AppStoreService.Region { AppStoreService.Region(rawValue: shopRegion) ?? .cn }
 
+    /// v0.3.328：进入商店时按当前 Apple ID 同步区域。
+    /// 只在**账号换了**才改（登录时已经跟随过一次）—— 用户手动挑的区域不会被每次进页面覆盖。
+    /// 改的是同一个 `AppStorage` 键，`onChange(of: shopRegion)` 会自动清空搜索并重载榜单。
+    private func syncRegionWithAccount() {
+        guard let account = AppStoreDownloadStore.shared.selectedAccount else { return }
+        guard let followed = AppStoreService.followAccountRegionIfNeeded(
+            email: account.email, storefront: account.store) else { return }
+        shopRegion = followed
+        ToastCenter.shared.show("已切换到账号区域 \(followed.uppercased())")
+    }
+
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
     /// v0.3.303：免登录下载入口 —— 放在商店最显眼位置。
@@ -108,6 +119,7 @@ struct AppStoreView: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $keyword, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索应用名 / BundleID")
         .onSubmit(of: .search) { runSearch() }
+        .onAppear(perform: syncRegionWithAccount)
         .onChange(of: kind) { _, _ in Task { await loadCharts() } }
         .onChange(of: shopRegion) { _, code in
             AppStoreService.countryCode = code
