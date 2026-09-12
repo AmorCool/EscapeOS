@@ -107,4 +107,8 @@ struct IdeviceFfiError *mcinstall_request_rsd(struct AdapterHandle *adapter,
                                               int cert_der_len,
                                               char **out_reply);
 
+// v0.3.323：Asspp 分叉的本地 SAP 登录（Unicorn TCI 解释执行 Apple CommerceKit，
+// 不需要 anisette / 不需要第三方服务器）。Swift 侧只看到 SAPContext 这一个类。
+#include "../Services/AppleAuth/SAP/SAPContext.h"
+
 #endif /* EscapeOS_Bridging_Header_h */

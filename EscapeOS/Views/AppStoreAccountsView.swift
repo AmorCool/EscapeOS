@@ -2,10 +2,9 @@ import SwiftUI
 
 /// AppStore 账号管理 —— 多账号、切换当前下载账号、退出登录.
 ///
-/// 之前的问题：商店里只能看到一个账号（`accounts.first`），无法切换、无法退出、
-/// 也无法一次登录多个账号。这个页面补齐三件事：
+/// 职责：
 ///  · 已登录账号一览 + 点选「当前下载账号」+ 单个/全部「退出登录」；
-///  · **批量登录**：一行一个账号（`邮箱 密码` 或 `邮箱----密码`），逐条走 Go 栈登录；
+///  · **添加账号**：走 Asspp 分叉的本地 SAP 登录（v0.3.323 起，不再用 anisette）；
 ///  · 账号体检：dsid / passwordToken / cookie 条数（这三样缺了 Apple 会当未登录，
 ///    下载就报 `MZFinance.NoAccount_message`）.
 struct AppStoreAccountsView: View {
@@ -13,6 +12,7 @@ struct AppStoreAccountsView: View {
     @State private var accounts: [AppStoreAccount] = []
     @State private var current: String = ""
     @State private var confirmSignOutAll = false
+    @State private var showAddAccount = false
 
     private var store: AppStoreDownloadStore { .shared }
 
@@ -27,8 +27,20 @@ struct AppStoreAccountsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showAddAccount = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button("退出全部") { confirmSignOutAll = true }
                     .disabled(accounts.isEmpty)
+            }
+        }
+        .sheet(isPresented: $showAddAccount) {
+            AddAccountSheet { _ in
+                reload()
             }
         }
         .confirmationDialog("退出所有 AppStore 账号？", isPresented: $confirmSignOutAll, titleVisibility: .visible) {
@@ -87,6 +99,12 @@ struct AppStoreAccountsView: View {
     @ViewBuilder
     private var accountsSection: some View {
         Section {
+            Button {
+                showAddAccount = true
+            } label: {
+                Label("添加 Apple ID", systemImage: "person.crop.circle.badge.plus")
+                    .font(.subheadline.weight(.medium))
+            }
             if accounts.isEmpty {
                 Text("还没有登录任何 Apple ID").font(.subheadline).foregroundStyle(.secondary)
             }

@@ -72,7 +72,19 @@ jobs:
 
       - name: Install xcodegen and ldid
         # ldid 用于出包时施加 entitlements（与 Theos 的 -SEscapeSpace.entitlements 等价）。
-        run: brew install xcodegen ldid
+        run: brew install xcodegen ldid cmake
+
+      - name: Cache SAP assets and Unicorn build
+        # Asspp 本地 SAP 登录：Unicorn 源码/构建 + Apple SAP 资产（约 38MB）。
+        # 不缓存的话每轮都要重新拉源码、编 Unicorn 并下载资产（多花好几分钟）。
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/ipatool/sap/apple-assets-v2
+            ~/Library/Developer/Xcode/DerivedData
+          key: sap-${{ runner.os }}-${{ hashFiles('Resources/Scripts/prepare.sap.py') }}
+          restore-keys: |
+            sap-${{ runner.os }}-
 
       - name: Cache Rust toolchain
         uses: actions/cache@v4
@@ -424,6 +436,13 @@ jobs:
         with:
           name: xcode-package-log
           path: /tmp/package.log
+
+      - name: Verify SAP assets inside IPA
+        # 本地 SAP 登录依赖 bundle 内 SAPAssets —— 缺了登录必然失败（invalidConfiguration）
+        run: |
+          ls -la EscapeSpace-*.ipa
+          unzip -l EscapeSpace-*.ipa | grep -E "SAPAssets/(CommerceKit|CoreFP)" || {
+            echo "::error::SAPAssets 缺失 —— Apple ID 登录会失败"; exit 1; }
 
       - name: Upload IPA
         if: always()

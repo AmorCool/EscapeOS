@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.322"
-    CURRENT_PROJECT_VERSION: "622"
+    MARKETING_VERSION: "0.3.323"
+    CURRENT_PROJECT_VERSION: "623"
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     ENABLE_BITCODE: "NO"
@@ -46,6 +46,8 @@ settings:
       - "$(SRCROOT)/ZSign"
       - "$(SRCROOT)/ZSign/common"
       - "$(SRCROOT)/openssl-build/include"
+      # Asspp 本地 SAP 登录：unicorn 头由 prepare.sap.py 生成在 DERIVED_FILE_DIR/SAP 下
+      - "$(DERIVED_FILE_DIR)/SAP/source/include"
     # 对齐 Theos 的 LDFLAGS：系统 framework。
     # Rust FFI（libidevice_ffi）自 #317 起改以 xcframework 形式分发，由下方 target
     # dependencies 的 framework 依赖链接（不再走 LIBRARY_SEARCH_PATHS + -lidevice_ffi）。
@@ -63,7 +65,12 @@ settings:
       # ZSign（v0.3.101）：ad-hoc 重签名依赖 libcrypto（CI 预编译 iOS arm64 静态库）
       - "-L$(SRCROOT)/openssl-build"
       - "-lcrypto"
+      # Asspp 本地 SAP 登录：静态链接 Unicorn TCI 解释器（无 dylib、无需嵌入）
+      - "$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a"
+      - "-lc++"
     SWIFT_OBJC_BRIDGING_HEADER: "EscapeOS/Engine/EscapeOS-Bridging-Header.h"
+    # SapMachine.cpp 用了 std::format → 必须 C++20（原分叉同理）
+    CLANG_CXX_LANGUAGE_STANDARD: "gnu++20"
 
 packages:
   Citadel:
@@ -97,6 +104,10 @@ targets:
         excludes:
           - "Info.plist"
           - "BundledModules"
+          # 脚本与许可证由 prepare.sap.py 处理（许可证它自己拷进 bundle/SAPAssets），
+          # 不再作为普通资源重复打包
+          - "Scripts"
+          - "Licenses"
       - path: Resources/BundledModules
         # v0.3.48：内置模块清单，folder reference 保留 <id>/module.json 层级，
         # 运行时经 Bundle.main.url(forResource: "BundledModules", withExtension: nil) 读取。
@@ -128,3 +139,13 @@ targets:
         # 这里改为用 build setting 直接引用现有文件，绕过该限制。
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: EscapeSpace.entitlements
+    preBuildScripts:
+      # Asspp 本地 SAP 登录（v0.3.323）：拉 Unicorn 源码 + 4 个 Apple SAP 资产，
+      # 编出 libunicorn.a 并把 SAPAssets 拷进 bundle。必须在 Link 之前完成。
+      - name: Prepare SAP
+        basedOnDependencyAnalysis: false
+        script: |
+          /usr/bin/python3 "${SRCROOT}/Resources/Scripts/prepare.sap.py"
+        outputFiles:
+          - "$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a"
+          - "$(DERIVED_FILE_DIR)/SAP/source/include/unicorn/unicorn.h"
