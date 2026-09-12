@@ -70,7 +70,14 @@ enum PurchaseHistoryService {
             throw PurchaseHistoryError.noAccount
         }
         do {
-            return try await list(account: account)
+            let list = try await list(account: account)
+            if !list.isEmpty { return list }
+            // 所有口径都回空时，还有一个强嫌疑：**X-Token 用的是过期票据**。
+            // DMAP 对过期票据可能回 200 + 空表（而不是 401），这时换一次令牌再打一遍即可。
+            // AssppPro 就是先 rotatePasswordToken 再去列已购的。
+            LoginLogger.shared.log("[已购] 全口径空结果 → 换一次令牌后重试", category: .appStore)
+            let refreshed = try await AppleIDSignInService.rotate(email: email)
+            return try await list(account: refreshed)
         } catch PurchaseHistoryError.tokenExpired {
             // 票据过期 → 用已存凭据 rotate 一次（带 cookie，通常免验证码）再重试一次
             LoginLogger.shared.log("[已购] 票据过期 → 重新登录后重试", category: .appStore)
