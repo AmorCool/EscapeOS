@@ -86,6 +86,10 @@ def main() -> None:
     require("primaryContentType" in protocol and "alternateContentType" in protocol,
             "edge rejections are probed with the alternate Content-Type")
     require("triedAlternateContentType" in auth, "content-type probe is bounded to one retry")
+    require("storeClientAccept" in protocol and "Accept" in auth,
+            "the store client Accept header is sent on the authentication request")
+    require("trailingSlashVariant" in protocol and "triedTrailingSlash" in auth,
+            "the trailing-slash endpoint variant is probed exactly once")
     # v0.3.354：换过机器身份后不能再把旧会话的 Cookie 当自己的发出去。
     require("deviceGuid" in source("vendor/ApplePackage/Models/Account.swift"),
             "session records the machine identity it was issued under")

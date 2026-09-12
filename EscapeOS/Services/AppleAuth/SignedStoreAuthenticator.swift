@@ -111,6 +111,7 @@ actor SignedStoreAuthenticator {
         // 好把「请求形状被拒」和「真的被 Apple 拒」区分开 —— 这一点只有真机能定案。
         var contentType = StoreAuthenticationProtocol.primaryContentType
         var triedAlternateContentType = false
+        var triedTrailingSlash = false
         while protocolAttempt <= 2, redirects <= 3 {
             try Task.checkCancellation()
             var request = URLRequest(url: url)
@@ -136,17 +137,28 @@ actor SignedStoreAuthenticator {
                     throw StoreAuthenticationError.rateLimited(retryAfter: StoreAuthenticationProtocol.retryAfter(
                         response.value(forHTTPHeaderField: "Retry-After")))
                 }
-                if !triedAlternateContentType {
-                    triedAlternateContentType = true
-                    contentType = StoreAuthenticationProtocol.alternateContentType
+                if !triedAlternateContentType || !triedTrailingSlash {
+                    let switchingContentType = !triedAlternateContentType
+                    if switchingContentType {
+                        triedAlternateContentType = true
+                        contentType = StoreAuthenticationProtocol.alternateContentType
+                    } else {
+                        // 两条 Content-Type 都被前置拒 → 试参考客户端的尾斜杠端点形态。
+                        triedTrailingSlash = true
+                        contentType = StoreAuthenticationProtocol.primaryContentType
+                        if let variant = StoreAuthenticationProtocol.trailingSlashVariant(endpoint) {
+                            url = variant
+                        }
+                    }
                     protocolAttempt = 1
                     redirects = 0
-                    url = endpoint
+                    if switchingContentType { url = endpoint }
                     body = try StoreAuthenticationProtocol.body(email: email, password: password,
                                                                code: normalizedCode, guid: guid,
                                                                attempt: protocolAttempt)
                     LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（\(data.count) 字节，无 plist）"
-                        + " → 换 Content-Type=\(contentType) 重打一次", category: .appStore)
+                        + " → 换 \(switchingContentType ? "Content-Type=\(contentType)" : "端点=\(url.path)") 重打一次",
+                        category: .appStore)
                     continue
                 }
                 throw StoreAuthenticationError.unstructuredResponse(response.statusCode, empty: data.isEmpty)
@@ -197,6 +209,12 @@ actor SignedStoreAuthenticator {
         // 与上游 Asspp 一致：客户端保真度（缺它更容易被边缘软拒绝）
         request.setValue(Locale.preferredLanguages.prefix(3).joined(separator: ", "),
                          forHTTPHeaderField: "Accept-Language")
+        // v0.3.356：参考客户端（AssppPro 4.2.5）的登录请求带这条 Accept，我们此前没有。
+        // 它影响 Apple 前置的路由（PC 实测带不带它返回的状态码不同）。
+        if request.url?.path.hasSuffix("/authenticate") == true
+            || request.url?.path.hasSuffix("/authenticate/") == true {
+            request.setValue(StoreAuthenticationProtocol.storeClientAccept, forHTTPHeaderField: "Accept")
+        }
         request.httpShouldHandleCookies = false
         if let url = request.url {
             for (name, value) in cookies.buildCookieHeader(url) {

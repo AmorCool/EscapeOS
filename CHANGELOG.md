@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.356] - 2026-09-12
+
+### 修复
+- **登录请求对齐「二改版 AssppPro 4.2.5」的形态**（差异直接从它的二进制字面量挖出来，
+  strings @0x46414–0x46419，就在 `MZFinance.woa/wa/authenticate/` 旁边）：
+  · 登录请求带 `Accept: application/xml, application/x-apple-plist, text/xml`（**我们此前没有**）；
+  · 端点默认值是 **带尾斜杠** 的 `…/authenticate/`（**我们此前无斜杠**）。
+  PC 复现（未签名请求）显示：同一个 URL 加不加 `Accept`、带不带尾斜杠，Apple 前置回的状态码
+  都不一样（301 / 204 / 403 / 404 混着来）—— 说明这两项影响的是**前置路由**，
+  而真机日志里那几个「204 空响应 / 403、404 + 146 字节 HTML / 302 无跳转地址」正是这一档。
+  现在的登录梯子（全部有界，最多各试一次）：带 `Accept` 发一次 → 被前置拒 → 换
+  `Content-Type: application/x-apple-plist` → 仍被拒 → 换尾斜杠端点。每次切换都写进商店日志。
+- `tools/verify_store_protocol.py` 新增断言：`Accept` 必须发送、尾斜杠变体只探一次。
+
 ## [0.3.355] - 2026-09-12
 
 ### 修复

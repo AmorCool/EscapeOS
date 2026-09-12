@@ -77,6 +77,23 @@ enum StoreAuthenticationProtocol {
     static let primaryContentType = "application/x-www-form-urlencoded"
     static let alternateContentType = "application/x-apple-plist"
 
+    /// v0.3.356：**二改版 AssppPro 4.2.5 的登录请求是这么发的**（从它的二进制字面量直接挖出来，
+    /// strings @0x46414-0x46419，紧挨着 `MZFinance.woa/wa/authenticate/`）：
+    ///   · `Accept: application/xml, application/x-apple-plist, text/xml`
+    ///   · 端点默认值 **带尾斜杠** `…/authenticate/`
+    /// 我们此前两样都没有。PC 复现显示，同一个 URL 加不加 `Accept`、带不带尾斜杠，
+    /// Apple 前置回的状态码都不一样（301/204/403/404 混着来）—— 说明这两项影响**前置路由**。
+    /// 所以按参考客户端对齐：一律带 `Accept`，被前置拒了再试一次尾斜杠变体。
+    static let storeClientAccept = "application/xml, application/x-apple-plist, text/xml"
+
+    /// 尾斜杠变体：`…/authenticate` → `…/authenticate/`（Apple 的 nginx 会用 301 提示规范的路径形态）
+    static func trailingSlashVariant(_ url: URL) -> URL? {
+        guard !url.path.hasSuffix("/") else { return nil }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.path = url.path + "/"
+        return components?.url
+    }
+
     static func authenticationURL(_ value: String) throws -> URL {
         let url = try storeURL(value, paths: [authenticationPath])
         guard isBuyHost(url.host ?? "") else { throw StoreAuthenticationError.invalidRedirect }
