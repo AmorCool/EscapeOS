@@ -138,20 +138,36 @@ enum PurchaseHistoryService {
             return UInt32(revision)
         }
 
-        // ③ 取条目（x-dmap-tagged + 签名）
+        // ③ 取条目（x-dmap-tagged + 签名）——按口径逐个试，取第一个非空
         func items(sessionID: UInt32, revision: UInt32) async throws -> [OwnedApp] {
-            let body = Self.itemsBody(sessionID: sessionID, revision: revision, query: query)
-            let (data, response) = try await send(
-                path: "/databases/\(revision)/items",
-                body: body,
-                contentType: "application/x-dmap-tagged",
-                signed: true
-            )
-            guard response.statusCode == 200 else {
-                throw PurchaseHistoryError.badResponse("items HTTP \(response.statusCode)")
+            var lastStatus = 0
+            for variant in Self.variants(store: account.store) {
+                let body = Self.itemsBody(sessionID: sessionID, revision: revision,
+                                          query: variant.query)
+                let (data, response) = try await send(
+                    path: "/databases/\(revision)/items",
+                    body: body,
+                    contentType: "application/x-dmap-tagged",
+                    signed: true,
+                    storeFront: variant.storeFront
+                )
+                lastStatus = response.statusCode
+                guard response.statusCode == 200 else {
+                    LoginLogger.shared.log("[已购] \(variant.name) → HTTP \(response.statusCode)",
+                                           category: .appStore)
+                    continue
+                }
+                let apps = Self.parseOwnedApps(data)
+                LoginLogger.shared.log("[已购] \(variant.name) → \(apps.count) 条（\(data.count) 字节）",
+                                       category: .appStore)
+                if !apps.isEmpty { return apps }
+                LoginLogger.shared.log("[已购] \(variant.name) 空结果原始字节 \(Self.rawDump(data))",
+                                       category: .appStore)
             }
-            try Self.checkDMAPStatus(data, label: "items")
-            return Self.parseOwnedApps(data)
+            if lastStatus != 0, lastStatus != 200 {
+                throw PurchaseHistoryError.badResponse("items HTTP \(lastStatus)")
+            }
+            return []
         }
 
         // MARK: 请求
@@ -159,7 +175,8 @@ enum PurchaseHistoryService {
         private func send(path: String,
                           body: Data? = nil,
                           contentType: String? = nil,
-                          signed: Bool = false) async throws -> (Data, HTTPURLResponse) {
+                          signed: Bool = false,
+                          storeFront: String? = nil) async throws -> (Data, HTTPURLResponse) {
             guard let url = URL(string: base + path) else {
                 throw PurchaseHistoryError.badResponse("bad url")
             }
@@ -167,7 +184,11 @@ enum PurchaseHistoryService {
             request.httpMethod = "POST"
             request.httpBody = body
             for (name, value) in Self.headers(account: account) {
+                if name == "X-Apple-Store-Front", storeFront != nil { continue }
                 request.setValue(value, forHTTPHeaderField: name)
+            }
+            if let storeFront {
+                request.setValue(storeFront, forHTTPHeaderField: "X-Apple-Store-Front")
             }
             // **必须有 Cookie**：DMAP 的鉴权靠会话 cookie，缺它 /items 直接 401。
             // ipatool 的 HTTP 客户端自带 cookie jar，我们是 ephemeral session，
@@ -313,17 +334,48 @@ enum PurchaseHistoryService {
 
         // MARK: DMAP 编码
 
-        /// ipatool `ownedAppsItemsBody` 同款
-        private static func itemsBody(sessionID: UInt32, revision: UInt32, query: String) -> Data {
+        /// ipatool `ownedAppsItemsBody` 同款（query 为 nil 时不带 mque 过滤）
+        private static func itemsBody(sessionID: UInt32, revision: UInt32, query: String?) -> Data {
             var payload = Data()
             payload.append(tag("mstc", uint32(UInt32(Date().timeIntervalSince1970))))
             payload.append(tag("mlid", uint32(sessionID)))
             payload.append(tag("mikd", Data([2])))
             payload.append(tag("musr", uint32(revision)))
             payload.append(tag("mder", uint32(0)))
-            payload.append(tag("mque", Data(query.utf8)))
+            if let query { payload.append(tag("mque", Data(query.utf8))) }
             payload.append(tag("aetl", Data()))
             return tag("adsr", payload)
+        }
+
+        /// 「已购」在同一个账号上可能因 storefront 写法 / 是否带 media-kind 过滤而给出不同结果。
+        /// 先按 ipatool 原样打，空了再试其它组合 —— 谁先返回条目就用谁。
+        struct ItemsVariant {
+            let name: String
+            let storeFront: String
+            let query: String?
+        }
+
+        static func variants(store: String) -> [ItemsVariant] {
+            let base = store.isEmpty ? "143441" : store
+            let kind = "('com.apple.itunes.extended\\-media\\-kind:131072')"
+            return [
+                ItemsVariant(name: "A 默认（\(base)-1 + 应用过滤）", storeFront: "\(base)-1", query: kind),
+                ItemsVariant(name: "B 裸 storefront（\(base)）", storeFront: base, query: kind),
+                ItemsVariant(name: "C 默认 storefront、不带过滤", storeFront: "\(base)-1", query: nil),
+                ItemsVariant(name: "D 裸 storefront、不带过滤", storeFront: base, query: nil),
+            ]
+        }
+
+        /// 原始字节（前 160 字节的 hex + 可读文本），空结果时用来定性
+        static func rawDump(_ data: Data) -> String {
+            let head = data.prefix(160)
+            let hex = head.map { String(format: "%02x", $0) }.joined()
+            var text = ""
+            for byte in head {
+                let scalar = UnicodeScalar(byte)
+                text.append(byte >= 0x20 && byte < 0x7f ? Character(scalar) : ".")
+            }
+            return "hex=\(hex) text=\(text)"
         }
 
         private static func tag(_ name: String, _ payload: Data) -> Data {
