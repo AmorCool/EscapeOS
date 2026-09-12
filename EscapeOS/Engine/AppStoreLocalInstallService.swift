@@ -20,6 +20,7 @@ enum AppStoreLocalInstallService {
         case noAccount
         case badItemId
         case accountIncomplete(String)
+        case reloginNeedsCode
 
         var errorDescription: String? {
             switch self {
@@ -28,6 +29,8 @@ enum AppStoreLocalInstallService {
             case .accountIncomplete(let what):
                 return "账号信息不完整（缺少 \(what)），Apple 会把下载当成未登录（MZFinance.NoAccount_message）。"
                      + "请重新登录一次这个 Apple ID。"
+            case .reloginNeedsCode:
+                return "登录状态已过期，自动重登时 Apple 要求验证码 —— 请到 AppStore 商店的账号管理里重新登录一次。"
             }
         }
     }
@@ -67,13 +70,31 @@ enum AppStoreLocalInstallService {
             onLog?("[本机] 警告：未取到序列号，Apple 可能按匿名设备发 sinf（装不上）")
         }
 
-        // 1) 入库（免费应用）
-        onLog?("[AppleID] 获取授权…")
-        try await Purchase.purchase(account: &account, app: software)
+        // 1) 入库（免费应用）+ 2) 取下载直链 + sinf
+        //
+        // v0.3.330：Apple 的 `passwordToken` 有有效期，过期时购买/下载回
+        // `failureType 2034`（Sign In to the iTunes Store）。按 ipatool 的做法
+        // （cmd/purchase.go：Attempts(2) + RetryIf(ErrPasswordTokenExpired)）
+        // **自动用已保存的凭据重登一次再重试** —— 带 cookie 轮换，通常不用再收验证码。
+        var output: DownloadOutput?
+        for attempt in 1 ... 2 {
+            if attempt == 2 {
+                onLog?("[AppleID] 登录已过期 → 用已保存的凭据自动重新登录…")
+                try await refreshAccount(email: email, account: &account, onLog: onLog)
+            }
+            do {
+                onLog?("[AppleID] 获取授权…")
+                try await Purchase.purchase(account: &account, app: software)
 
-        // 2) 取下载直链 + sinf
-        onLog?("[AppleID] 请求下载信息…")
-        let output = try await Download.download(account: &account, app: software)
+                onLog?("[AppleID] 请求下载信息…")
+                output = try await Download.download(account: &account, app: software)
+                break
+            } catch ApplePackageError.passwordTokenExpired {
+                onLog?("[AppleID] Apple 判定登录已失效（2034 / Sign In to the iTunes Store）")
+                if attempt == 2 { throw ApplePackageError.passwordTokenExpired }
+            }
+        }
+        guard let output else { throw ApplePackageError.passwordTokenExpired }
         onLog?("[AppleID] 版本 \(output.bundleShortVersionString)(\(output.bundleVersion))，"
                + "sinf \(output.sinfs.count) 个")
 
@@ -95,6 +116,22 @@ enum AppStoreLocalInstallService {
                                                          progress: installProgress,
                                                          onLog: onLog)
         return dest
+    }
+
+    /// 用已保存的密码 + cookie 走一次 SAP 重登（`AppleIDSignInService.rotate`），
+    /// 拿到新的 passwordToken / dsid / cookie，并写回账号库。
+    /// Apple 要验证码时转成明确提示（`LocalError.reloginNeedsCode`）。
+    private static func refreshAccount(email: String,
+                                       account: inout AppStoreAccount,
+                                       onLog: ((String) -> Void)?) async throws {
+        do {
+            let refreshed = try await AppleIDSignInService.rotate(email: email)
+            account = refreshed
+            onLog?("[AppleID] 自动重登成功（dsid=\(refreshed.directoryServicesIdentifier)）")
+        } catch let error as StoreAuthenticationError where error.needsCode {
+            onLog?("[AppleID] 自动重登需要验证码")
+            throw LocalError.reloginNeedsCode
+        }
     }
 
     /// AppStoreItem → ApplePackage Software

@@ -85,12 +85,17 @@ public enum Purchase {
             switch failureType {
             case "2059":
                 try ensureFailed("item is temporarily unavailable")
-            case "2034":
-                try ensureFailed("password token is expired")
+            case "2034", "2042":
+                // v0.3.330：交给调用方自动重登后重试（不再是一句死错误）
+                throw ApplePackageError.passwordTokenExpired
             default:
                 if let customerMessage = dict["customerMessage"] as? String {
                     if customerMessage == "Subscription Required" {
                         try ensureFailed("subscription required")
+                    }
+                    // Apple 在令牌失效时也会用这条文案
+                    if customerMessage.contains("Sign In to the iTunes Store") {
+                        throw ApplePackageError.passwordTokenExpired
                     }
                     try ensureFailed(customerMessage)
                 }

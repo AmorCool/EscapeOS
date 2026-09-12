@@ -25,16 +25,39 @@ final class AppStoreDownloadStore {
     ///
     /// 关键：这个值必须**持久化**.原版注释明确要求 "use random and save it"，
     /// 若每次冷启动都随机，等于每次换一台虚拟机器，Apple 会按多设备风控处理.
+    ///
+    /// ⚠️ v0.3.330：**改存 Documents 的 `device_guid.txt`（不再只存 UserDefaults）**。
+    /// 真机实锤：覆盖安装新版本后购买直接回 `failureType 2034` /
+    /// `Sign In to the iTunes Store` —— 因为 UserDefaults 落在 Library/Preferences，
+    /// **重装/覆盖安装会被重建**，而 Documents 下的 `appstore_accounts.json` 还在。
+    /// 结果就是「账号还在、guid 却换了」，而 Apple 的会话
+    /// （passwordToken / dsid / cookie）绑在旧 guid 上 → 被判失效。
+    /// 存进 Documents 就能跟账号文件同生共死。
     private static func bootstrapDeviceIdentifier() {
-        let key = "ApplePackageDeviceIdentifier"
-        let defaults = UserDefaults.standard
-        if let saved = defaults.string(forKey: key), !saved.isEmpty {
+        let legacyKey = "ApplePackageDeviceIdentifier"
+        let file = documentsGUIDFile
+
+        if let saved = (try? String(contentsOf: file, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
             Configuration.deviceIdentifier = saved
             return
         }
+        // 迁移老版本存在 UserDefaults 里的值，避免升级后换身份
+        if let legacy = UserDefaults.standard.string(forKey: legacyKey), !legacy.isEmpty {
+            Configuration.deviceIdentifier = legacy
+            try? legacy.write(to: file, atomically: true, encoding: .utf8)
+            return
+        }
         let generated = DeviceIdentifier.random()
-        defaults.set(generated, forKey: key)
         Configuration.deviceIdentifier = generated
+        try? generated.write(to: file, atomically: true, encoding: .utf8)
+        UserDefaults.standard.set(generated, forKey: legacyKey)
+    }
+
+    /// guid 落盘位置（与 `appstore_accounts.json` 同目录）
+    private static var documentsGUIDFile: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("device_guid.txt")
     }
 
     /// 下载目录（Documents/AppStoreDownloads，文件 App 可见）.
@@ -48,8 +71,8 @@ final class AppStoreDownloadStore {
     /// v0.3.167：重置 App Store 机器标识（guid）——删除持久化标识后重新随机生成.
     /// 用途：Apple 边缘对已标记的 guid 持续拒（native/fast 301/404）时换新身份.
     func resetDeviceIdentifier() {
-        let key = "ApplePackageDeviceIdentifier"
-        UserDefaults.standard.removeObject(forKey: key)
+        UserDefaults.standard.removeObject(forKey: "ApplePackageDeviceIdentifier")
+        try? FileManager.default.removeItem(at: Self.documentsGUIDFile)
         Self.bootstrapDeviceIdentifier()
         LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)", category: .appStore)
     }
