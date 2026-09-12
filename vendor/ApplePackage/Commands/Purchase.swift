@@ -8,10 +8,36 @@
 import Foundation
 
 public enum Purchase {
+    /// 购买请求打到哪条路径。
+    ///
+    /// Apple 的 bag.xml 里名字就叫 `buyProduct` 的官方端点其实是 `MZBuy.woa`；
+    /// 而 ipatool / ApplePackage 一直用的是 `MZFinance.woa` 那条。两者对同一个
+    /// 请求的应答不同（MZFinance 会给明确的 `failureType`，MZBuy token 失效时只回
+    /// 一句 `Unable to process your request.`），所以两条都留着，用于对照与兜底。
+    public enum BuyEndpoint: Sendable {
+        case finance
+        case official
+
+        var path: String {
+            switch self {
+            case .finance: return "/WebObjects/MZFinance.woa/wa/buyProduct"
+            case .official: return "/WebObjects/MZBuy.woa/wa/buyProduct"
+            }
+        }
+    }
+
+    /// 购买的结果。`alreadyOwned` 对应 Apple 的 5002（该账号已有此应用的授权）。
+    public enum Outcome: Sendable, Equatable {
+        case purchased
+        case alreadyOwned
+    }
+
+    @discardableResult
     public nonisolated static func purchase(
         account: inout AppStoreAccount,
-        app: Software
-    ) async throws {
+        app: Software,
+        endpoint: BuyEndpoint = .finance
+    ) async throws -> Outcome {
         let deviceIdentifier = Configuration.deviceIdentifier
 
         if (app.price ?? 0) > 0 {
@@ -19,10 +45,12 @@ public enum Purchase {
         }
 
         do {
-            try await purchaseWithParams(account: &account, app: app, guid: deviceIdentifier, pricingParameters: "STDQ")
+            return try await purchaseWithParams(account: &account, app: app, guid: deviceIdentifier,
+                                                pricingParameters: "STDQ", endpoint: endpoint)
         } catch let error as NSError {
             if error.localizedDescription.contains("item is temporarily unavailable") {
-                try await purchaseWithParams(account: &account, app: app, guid: deviceIdentifier, pricingParameters: "GAME")
+                return try await purchaseWithParams(account: &account, app: app, guid: deviceIdentifier,
+                                                    pricingParameters: "GAME", endpoint: endpoint)
             } else {
                 throw error
             }
@@ -33,8 +61,9 @@ public enum Purchase {
         account: inout AppStoreAccount,
         app: Software,
         guid: String,
-        pricingParameters: String
-    ) async throws {
+        pricingParameters: String,
+        endpoint: BuyEndpoint
+    ) async throws -> Outcome {
         let client = HTTPClient(
             eventLoopGroupProvider: .singleton,
             configuration: .init(
@@ -56,7 +85,8 @@ public enum Purchase {
             account: account,
             app: app,
             guid: guid,
-            pricingParameters: pricingParameters
+            pricingParameters: pricingParameters,
+            endpoint: endpoint
         )
         let response = try await client.execute(request: request).get()
 
@@ -93,8 +123,8 @@ public enum Purchase {
                 // FailureTypeLicenseAlreadyExists，cmd/purchase.go 里把它当成功、
                 // 继续走下载）。此前我们把它当失败，于是"已经买过的应用"永远报
                 // Apple 的 customerMessage「An unknown error has occurred」。
-                storeLog("该账号已拥有此应用（5002 LicenseAlreadyExists）→ 视为已入库，继续下载")
-                return
+                storeLog("该账号已拥有此应用（5002 LicenseAlreadyExists）")
+                return .alreadyOwned
             default:
                 if let customerMessage = dict["customerMessage"] as? String {
                     if customerMessage == "Subscription Required" {
@@ -117,13 +147,15 @@ public enum Purchase {
         } else {
             try ensureFailed("invalid purchase response")
         }
+        return .purchased
     }
 
     private nonisolated static func makeRequest(
         account: AppStoreAccount,
         app: Software,
         guid: String,
-        pricingParameters: String
+        pricingParameters: String,
+        endpoint: BuyEndpoint
     ) throws -> HTTPClient.Request {
         let payload: [String: Any] = [
             "appExtVrsId": "0",
@@ -157,7 +189,7 @@ public enum Purchase {
         let host = (account.pod?.isEmpty == false)
             ? "p\(account.pod!)-buy.itunes.apple.com"
             : "buy.itunes.apple.com"
-        let urlString = "https://\(host)/WebObjects/MZFinance.woa/wa/buyProduct"
+        let urlString = "https://\(host)\(endpoint.path)"
 
         for item in account.cookie.buildCookieHeader(URL(string: urlString)!) {
             headers.append(item)

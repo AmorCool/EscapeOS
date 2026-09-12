@@ -102,7 +102,21 @@ enum AppStoreLocalInstallService {
                     } else {
                         onLog?("[AppleID] 获取授权…")
                     }
-                    try await Purchase.purchase(account: &account, app: software)
+                    let outcome = try await Purchase.purchase(account: &account, app: software,
+                                                              endpoint: .finance)
+                    onLog?("[AppleID] 授权结果：\(outcome == .purchased ? "下单成功" : "该账号已拥有")")
+                    if outcome == .alreadyOwned {
+                        // v0.3.340：账号已有授权却仍然拿不到下载内容时，再用 Apple bag 里
+                        // 那个真正的官方购买端点（MZBuy）试一次，结果写进日志 —— 两条端点
+                        // 对同一请求的应答不同，这一步能把「到底哪条能建立下载权」测明。
+                        do {
+                            _ = try await Purchase.purchase(account: &account, app: software,
+                                                            endpoint: .official)
+                            onLog?("[AppleID] MZBuy 端点授权成功")
+                        } catch {
+                            onLog?("[AppleID] MZBuy 端点授权失败：\(error.localizedDescription)")
+                        }
+                    }
                     needLicense = false
                 }
                 onLog?("[AppleID] 请求下载信息…")
