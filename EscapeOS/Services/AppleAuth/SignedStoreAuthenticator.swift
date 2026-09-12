@@ -56,9 +56,21 @@ actor SignedStoreAuthenticator {
         func value(_ key: String) -> Any? { bag[key] ?? nested[key] }
         let endpoint = try StoreAuthenticationProtocol.authenticationURL(
             StoreAuthenticationProtocol.string(value("authenticateAccount")))
-        guard StoreAuthenticationProtocol.string(value("sign-sap-version")) == "200",
-              let certificateURL = publicSAPURL(value("sign-sap-setup-cert"), host: "s.mzstatic.com"),
-              let setupURL = publicSAPURL(value("sign-sap-setup"), host: "fpinit.itunes.apple.com"),
+        // v0.3.357：SAP 端点走硬编码兜底（参考 Jsbox-Ipa `sap.js`）。bag 缺字段或版本号不是 200
+        // 时不再直接放弃登录 —— 先回退到 Apple 固定的两个端点，只有连资产/guid 也不可用才失败。
+        let bagVersion = StoreAuthenticationProtocol.string(value("sign-sap-version"))
+        if !bagVersion.isEmpty, bagVersion != "200" {
+            LoginLogger.shared.log("[SAP] bag 的 sign-sap-version=\(bagVersion)（非 200），按 200 处理",
+                                   category: .appStore)
+        }
+        let certificateURL = publicSAPURL(value("sign-sap-setup-cert"), host: "s.mzstatic.com")
+            ?? URL(string: StoreAuthenticationProtocol.fallbackSAPCertURL)
+        let setupURL = publicSAPURL(value("sign-sap-setup"), host: "fpinit.itunes.apple.com")
+            ?? URL(string: StoreAuthenticationProtocol.fallbackSAPSetupURL)
+        if value("sign-sap-setup-cert") == nil || value("sign-sap-setup") == nil {
+            LoginLogger.shared.log("[SAP] bag 缺少 SAP 端点 → 使用内置兜底端点", category: .appStore)
+        }
+        guard let certificateURL, let setupURL,
               let assets = SAPAssetsLocator.url,
               guid.count == 12
         else {
@@ -112,6 +124,7 @@ actor SignedStoreAuthenticator {
         var contentType = StoreAuthenticationProtocol.primaryContentType
         var triedAlternateContentType = false
         var triedTrailingSlash = false
+        var triedNativeFast = false
         while protocolAttempt <= 2, redirects <= 3 {
             try Task.checkCancellation()
             var request = URLRequest(url: url)
@@ -137,17 +150,26 @@ actor SignedStoreAuthenticator {
                     throw StoreAuthenticationError.rateLimited(retryAfter: StoreAuthenticationProtocol.retryAfter(
                         response.value(forHTTPHeaderField: "Retry-After")))
                 }
-                if !triedAlternateContentType || !triedTrailingSlash {
+                if !triedAlternateContentType || !triedTrailingSlash || !triedNativeFast {
                     let switchingContentType = !triedAlternateContentType
+                    let switchingEndpoint = !switchingContentType && !triedTrailingSlash
                     if switchingContentType {
                         triedAlternateContentType = true
                         contentType = StoreAuthenticationProtocol.alternateContentType
-                    } else {
+                    } else if switchingEndpoint {
                         // 两条 Content-Type 都被前置拒 → 试参考客户端的尾斜杠端点形态。
                         triedTrailingSlash = true
                         contentType = StoreAuthenticationProtocol.primaryContentType
                         if let variant = StoreAuthenticationProtocol.trailingSlashVariant(endpoint) {
                             url = variant
+                        }
+                    } else {
+                        // 最后一档：现代认证端点 auth.itunes.apple.com/auth/v1/native/fast/
+                        // （Jsbox-Ipa / JAsspp 的第一候选）。legacy 端点在前置那里一直是 204/301/403/404。
+                        triedNativeFast = true
+                        contentType = StoreAuthenticationProtocol.primaryContentType
+                        if let native = StoreAuthenticationProtocol.nativeFastAuthenticationURL(guid: guid) {
+                            url = native
                         }
                     }
                     protocolAttempt = 1
@@ -157,7 +179,7 @@ actor SignedStoreAuthenticator {
                                                                code: normalizedCode, guid: guid,
                                                                attempt: protocolAttempt)
                     LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（\(data.count) 字节，无 plist）"
-                        + " → 换 \(switchingContentType ? "Content-Type=\(contentType)" : "端点=\(url.path)") 重打一次",
+                        + " → 换 \(switchingContentType ? "Content-Type=\(contentType)" : "端点=\(url.host ?? "?")\(url.path)") 重打一次",
                         category: .appStore)
                     continue
                 }

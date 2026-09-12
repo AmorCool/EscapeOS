@@ -86,6 +86,30 @@ enum StoreAuthenticationProtocol {
     /// 所以按参考客户端对齐：一律带 `Accept`，被前置拒了再试一次尾斜杠变体。
     static let storeClientAccept = "application/xml, application/x-apple-plist, text/xml"
 
+    /// v0.3.357：**现代认证端点** `auth.itunes.apple.com/auth/v1/native/fast/`。
+    ///
+    /// 依据：dompling/Jsbox-Ipa（JAsspp 0.2.1，`config.js:52-53` + `auth.js:187-202`）把
+    /// native 端点列为**第一候选**，bag 给的 auth.itunes.apple.com 端点还会补 `/fast`；
+    /// 候选顺序是 native → bag → legacy。对照我们的现实：bag 给的是 legacy
+    /// `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate`，而 Apple 前置对它
+    /// 只回 204 空响应 / 301 / 403 / 404（真机日志 + PC 复现），**从来没进到认证应用**。
+    /// 所以把 native 端点作为兜底候选加进登录梯子。
+    static let nativeFastHost = "auth.itunes.apple.com"
+    static let nativeFastPath = "/auth/v1/native/fast"
+
+    static func nativeFastAuthenticationURL(guid: String) -> URL? {
+        URL(string: "https://\(nativeFastHost)\(nativeFastPath)/?guid=\(guid)")
+    }
+
+    static func isNativeFastHost(_ host: String) -> Bool {
+        host.lowercased() == nativeFastHost
+    }
+
+    /// v0.3.357：SAP 端点的**硬编码兜底**（Jsbox-Ipa `sap.js:24-25` 同款）。
+    /// bag 拿不到/不合规时不该让整次登录直接 `invalidConfiguration`。
+    static let fallbackSAPCertURL = "https://s.mzstatic.com/sap/setupCert.plist"
+    static let fallbackSAPSetupURL = "https://fpinit.itunes.apple.com/v1/signSapSetup/legacy"
+
     /// 尾斜杠变体：`…/authenticate` → `…/authenticate/`（Apple 的 nginx 会用 301 提示规范的路径形态）
     static func trailingSlashVariant(_ url: URL) -> URL? {
         guard !url.path.hasSuffix("/") else { return nil }
@@ -95,6 +119,12 @@ enum StoreAuthenticationProtocol {
     }
 
     static func authenticationURL(_ value: String) throws -> URL {
+        // native/fast 是独立 host + path，先单独放行（其它一切仍走 storeURL 白名单）。
+        if let url = URL(string: value), let host = url.host,
+           isNativeFastHost(host), url.scheme?.lowercased() == "https",
+           url.path == nativeFastPath || url.path == nativeFastPath + "/" {
+            return url
+        }
         let url = try storeURL(value, paths: [authenticationPath])
         guard isBuyHost(url.host ?? "") else { throw StoreAuthenticationError.invalidRedirect }
         return url

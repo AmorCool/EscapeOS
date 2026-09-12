@@ -90,6 +90,10 @@ def main() -> None:
             "the store client Accept header is sent on the authentication request")
     require("trailingSlashVariant" in protocol and "triedTrailingSlash" in auth,
             "the trailing-slash endpoint variant is probed exactly once")
+    require("nativeFastAuthenticationURL" in protocol and "triedNativeFast" in auth,
+            "the modern native/fast endpoint is a fallback candidate")
+    require("fallbackSAPCertURL" in protocol and "fallbackSAPSetupURL" in protocol,
+            "SAP endpoints have hardcoded fallbacks")
     # v0.3.354：换过机器身份后不能再把旧会话的 Cookie 当自己的发出去。
     require("deviceGuid" in source("vendor/ApplePackage/Models/Account.swift"),
             "session records the machine identity it was issued under")
