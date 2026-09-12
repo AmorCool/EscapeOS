@@ -192,6 +192,11 @@ struct AppStoreView: View {
                 ForEach(AppStoreService.Region.allCases) { r in
                     Text(r.display).tag(r.rawValue)
                 }
+                // 账号自动切换过来的区域可能不在这 9 个常用区里 —— 补一行，
+                // 否则 Picker 没有匹配项会显示成"没选中"。
+                if !AppStoreService.Region.allCases.contains(where: { $0.rawValue == shopRegion }) {
+                    Text(shopRegion.uppercased()).tag(shopRegion)
+                }
             }
             .pickerStyle(.menu)
         }

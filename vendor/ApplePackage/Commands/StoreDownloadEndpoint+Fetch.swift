@@ -8,9 +8,12 @@
 import Foundation
 
 extension StoreDownloadEndpoint {
-    /// 完整取下载信息：volumeStore 默认端点 → 若返回 failureType 5002 → fallback 到
-    /// redownload 端点。这是 PR #84 (2026-06-12) 的核心修复 —— vendor 老版缺这一段，
-    /// 真机偶发卡死即由此产生。
+    /// 完整取下载信息：volumeStore 默认端点 → 需要回退时改走 redownload 端点。
+    ///
+    /// 回退判定对齐 Asspp dev `65be5b04`（fix: recover empty store downloads）：
+    /// 不只看 failureType 5002 —— Apple 还会**静默返回空包**（什么错误字段都没有、
+    /// songList 缺失或为空），这时换个端点就能取到。老实现只认 5002，于是
+    /// 「An unknown error has occurred / 空包」两种都直接失败。
     static func fetchProductWithFallback(
         client: HTTPClient,
         account: inout AppStoreAccount,
@@ -26,8 +29,8 @@ extension StoreDownloadEndpoint {
             externalVersionID: externalVersionID
         )
 
-        if dict["failureType"] as? String == retryableFailureType {
-            print("[EscapeOS][AppStore] volumeStore 返回 5002，fallback 到 redownload 端点")
+        if let reason = fallbackReason(dict) {
+            print("[EscapeOS][AppStore] volumeStore 需要回退（\(reason)）→ redownload 端点；\(summary(dict))")
             dict = try await StoreDownloadEndpoint.redownload.fetchProduct(
                 client: client,
                 account: &account,
@@ -35,9 +38,48 @@ extension StoreDownloadEndpoint {
                 deviceIdentifier: deviceIdentifier,
                 externalVersionID: externalVersionID
             )
+            print("[EscapeOS][AppStore] redownload 返回；\(summary(dict))")
         }
 
         return dict
+    }
+
+    /// 是否需要换端点重取（对齐 Asspp dev 的 fallbackReason）
+    static func fallbackReason(_ response: [String: Any]) -> String? {
+        if response["failureType"] as? String == retryableFailureType {
+            return "failure-5002"
+        }
+        // 有明确的业务错误 → 是真实拒绝，不要换端点重试
+        guard (response["failureType"] as? String ?? "").isEmpty,
+              (response["customerMessage"] as? String ?? "").isEmpty,
+              response["dialog"] == nil, response["action"] == nil
+        else { return nil }
+        if let status = response["status"] as? Int, status != 0 { return nil }
+        if let status = response["status"] as? String, !status.isEmpty, status != "0" { return nil }
+        if let items = response["songList"] as? [Any] {
+            return items.isEmpty ? "empty-songList" : nil
+        }
+        return response["songList"] == nil ? "missing-songList" : nil
+    }
+
+    /// 结构化摘要 —— 只报字段形态与数字码，便于定位又不泄露内容
+    static func summary(_ response: [String: Any]) -> String {
+        let failure = response["failureType"] as? String ?? ""
+        let message = response["customerMessage"] as? String ?? ""
+        let items: String
+        if let list = response["songList"] as? [Any] {
+            items = "\(list.count)"
+        } else {
+            items = response["songList"] == nil ? "missing" : "invalid"
+        }
+        let status: String
+        if let value = response["status"] as? Int { status = "\(value)" }
+        else if let value = response["status"] as? String, !value.isEmpty { status = value }
+        else { status = "none" }
+        let shown = message.count <= 160 ? message : String(message.prefix(160)) + "…"
+        return "songList=\(items) failure=\(failure.isEmpty ? "none" : failure) "
+            + "status=\(status) customerMessage=\(message.isEmpty ? "none" : shown) "
+            + "dialog=\(response["dialog"] != nil) action=\(response["action"] != nil)"
     }
 
     /// 对单个端点发起 product 请求，处理 pod 重定向，解析返回 plist。

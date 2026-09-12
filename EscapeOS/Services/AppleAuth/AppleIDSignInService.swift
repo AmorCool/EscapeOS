@@ -37,6 +37,7 @@ enum AppleIDSignInService {
         await MainActor.run {
             AppStoreDownloadStore.shared.add(account)
         }
+        logRegion(account, log: log)
         log?("登录成功并已设为当前下载账号")
         return account
     }
@@ -53,7 +54,19 @@ enum AppleIDSignInService {
         await MainActor.run {
             AppStoreDownloadStore.shared.add(account)
         }
+        logRegion(account, log: nil)
         return account
+    }
+
+    /// 登录后把商店区域对齐到账号所在区（浏览到的商品才会是账号真能下的）
+    private static func logRegion(_ account: AppStoreAccount, log: ((String) -> Void)?) {
+        if let region = AppStoreService.adoptAccountRegion(storefront: account.store) {
+            log?("账号区域 \(region.uppercased())（storefront \(account.store)），商店已跟随")
+            LoginLogger.shared.log("[SAP] 账号区域 \(region.uppercased())（storefront \(account.store)）",
+                                   category: .appStore)
+        } else {
+            log?("账号 storefront \(account.store) 未能反查区域，商店保持 \(AppStoreService.countryCode.uppercased())")
+        }
     }
 
     /// SAP 资产是否就位（缺失时登录必然失败，UI 应给出明确提示）

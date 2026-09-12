@@ -46,6 +46,21 @@ enum AppStoreService {
         set { countryCode = newValue.rawValue }
     }
 
+    /// v0.3.327：按 Apple ID 的 storefront 自动切换商店区域。
+    ///
+    /// 登录响应的 `X-Set-Apple-Store-Front`（形如 `143441-1,29`）第一段就是账号所在区的
+    /// storefront id，`Configuration.countryCode(for:)` 可反查国家码。
+    /// **商店区域与账号区域不一致会出怪事**：浏览到的是 A 区商品、下单却用 B 区
+    /// storefront，Apple 会按「该区没有此商品」拒绝（表现为未知错误）。
+    /// 登录后直接跟随账号，就不存在这个错配。
+    @discardableResult
+    static func adoptAccountRegion(storefront: String) -> String? {
+        guard let code = Configuration.countryCode(for: storefront)?.lowercased() else { return nil }
+        guard code != countryCode else { return code }
+        countryCode = code
+        return code
+    }
+
     /// 传给 Apple 接口的区域（未指定时用当前选择）
     private static func resolved(_ country: String?) -> String {
         (country?.isEmpty == false ? country! : countryCode)

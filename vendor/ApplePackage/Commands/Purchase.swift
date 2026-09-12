@@ -78,6 +78,10 @@ public enum Purchase {
         guard let dict = plist else { try ensureFailed("invalid response") }
 
         if let failureType = dict["failureType"] as? String {
+            let customerMessage = dict["customerMessage"] as? String ?? ""
+            print("[EscapeOS][AppStore] 购买被拒：failureType=\(failureType) "
+                + "customerMessage=\(customerMessage.isEmpty ? "none" : customerMessage) "
+                + "status=\(dict["status"] ?? "none")")
             switch failureType {
             case "2059":
                 try ensureFailed("item is temporarily unavailable")

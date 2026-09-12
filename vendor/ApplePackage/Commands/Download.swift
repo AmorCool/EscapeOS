@@ -32,6 +32,7 @@ public enum Download {
 
         if let failureType = dict["failureType"] as? String {
             let customerMessage = dict["customerMessage"] as? String
+            print("[EscapeOS][AppStore] 下载被拒：\(StoreDownloadEndpoint.summary(dict))")
             switch failureType {
             case "2034", "2042":
                 try ensureFailed("password token is expired")
@@ -54,6 +55,7 @@ public enum Download {
         }
 
         guard let items = dict["songList"] as? [[String: Any]], !items.isEmpty else {
+            print("[EscapeOS][AppStore] 下载响应没有 songList：\(StoreDownloadEndpoint.summary(dict))")
             try ensureFailed("no items in response")
         }
 
@@ -91,6 +93,9 @@ public enum Download {
             }
         }
         try ensure(!sinfs.isEmpty, "no sinf found in response")
+
+        print("[EscapeOS][AppStore] 下载信息就绪：\(app.bundleID) v\(version)(\(bundleVersion)) "
+            + "sinf=\(sinfs.count) serialNumber=\(Configuration.deviceSerialNumber)")
 
         return DownloadOutput(
             downloadURL: url,
