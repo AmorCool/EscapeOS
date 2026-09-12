@@ -159,6 +159,29 @@ actor SignedStoreAuthenticator {
             ladder.append((slashed, StoreAuthenticationProtocol.primaryContentType))
         }
         var rung = 0
+
+        // v0.3.360：**「3xx 但拿不到可用 Location」不再是终点，而是边缘拒绝 → 进下一档。**
+        //
+        // 真机报错实证：用户看到的是 `missingRedirect` 的文案（「Apple 登录返回 HTTP 302，
+        // 但缺少有效的 Location 跳转地址」），而商店日志里**完全没有**「认证入口 HTTP …（无 plist）」
+        // 那行 —— 后者是「换档」路径才打的。说明循环是被 3xx 分支当场 `throw` 打死，
+        // ②③④ 档（bag·form / bag·plist / bag 尾斜杠）一次都没被尝试。而 legacy 端点回
+        // Location-less 3xx 恰恰是 v0.3.357 起要逃离的形态（PC 复现：301 + 162 字节 HTML，
+        // Location 头为 None）—— 于是本该靠换档绕开的拒绝，反而把换档本身掐断了。
+        //
+        // 安全性质不退化：换档只发往我们自己白名单内的候选（native host / bag 端点 / 尾斜杠变体），
+        // **从不把凭据重放到未经验证的 Location**；有合法 Location 且过白名单时仍照旧手动跟随。
+        func advanceRung() throws -> Bool {
+            rung += 1
+            guard rung < ladder.count else { return false }
+            protocolAttempt = 1
+            redirects = 0
+            body = try StoreAuthenticationProtocol.body(email: email, password: password,
+                                                       code: normalizedCode, guid: guid,
+                                                       attempt: protocolAttempt)
+            return true
+        }
+
         while protocolAttempt <= 2, redirects <= 3 {
             try Task.checkCancellation()
             let candidate = ladder[rung]
@@ -171,15 +194,26 @@ actor SignedStoreAuthenticator {
             if let v = response.value(forHTTPHeaderField: "X-Set-Apple-Store-Front") { storefront = v }
             if let v = response.value(forHTTPHeaderField: "pod") { pod = v }
             if (300 ... 399).contains(response.statusCode) {
-                // A 3xx without Location is not a usable redirect; do not guess its cause or replay credentials.
-                guard let location = response.value(forHTTPHeaderField: "Location"),
-                      !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      let next = URL(string: location, relativeTo: url)?.absoluteURL
-                else { throw StoreAuthenticationError.missingRedirect(response.statusCode) }
-                guard redirects < 3, next != url else { throw StoreAuthenticationError.tooManyAttempts }
-                let target = try StoreAuthenticationProtocol.authenticationURL(next.absoluteString)
-                ladder[rung] = (target, candidate.contentType)
-                redirects += 1
+                // 只有「有 Location、非空、是合法 URL、且过白名单」才手动跟随。
+                // 拿不到 / 非法（`authenticationURL` 抛 `invalidRedirect`）都算边缘拒绝 → 进下一档，
+                // 复用下面「无 plist 换档」的同一段逻辑。
+                let location = response.value(forHTTPHeaderField: "Location")?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let location, !location.isEmpty,
+                   let next = URL(string: location, relativeTo: url)?.absoluteURL,
+                   let target = try? StoreAuthenticationProtocol.authenticationURL(next.absoluteString) {
+                    guard redirects < 3, next != url else { throw StoreAuthenticationError.tooManyAttempts }
+                    ladder[rung] = (target, candidate.contentType)
+                    redirects += 1
+                    continue
+                }
+                guard (try advanceRung()) else {
+                    throw StoreAuthenticationError.missingRedirect(response.statusCode)
+                }
+                let next = ladder[rung]
+                LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（无可用 Location）"
+                    + " → 换 \(next.url.host ?? "?")\(next.url.path)（\(next.contentType)）重打一次",
+                    category: .appStore)
                 continue
             }
             guard let plist = StoreAuthenticationProtocol.plist(data) else {
@@ -188,15 +222,9 @@ actor SignedStoreAuthenticator {
                         response.value(forHTTPHeaderField: "Retry-After")))
                 }
                 // 没有 plist 说明请求没进认证应用；沿梯子换下一档重打一次。
-                rung += 1
-                guard rung < ladder.count else {
+                guard (try advanceRung()) else {
                     throw StoreAuthenticationError.unstructuredResponse(response.statusCode, empty: data.isEmpty)
                 }
-                protocolAttempt = 1
-                redirects = 0
-                body = try StoreAuthenticationProtocol.body(email: email, password: password,
-                                                           code: normalizedCode, guid: guid,
-                                                           attempt: protocolAttempt)
                 let next = ladder[rung]
                 LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（\(data.count) 字节，无 plist）"
                     + " → 换 \(next.url.host ?? "?")\(next.url.path)（\(next.contentType)）重打一次",
