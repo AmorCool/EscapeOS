@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.359] - 2026-09-12
+
+### 修复
+- **native 档现在也带 store-client 的 `Accept`**。原来 `Accept` 只在 path 以 `/authenticate`
+  结尾时加，而 native 的 path 是 `/auth/v1/native/fast/` → **梯子第一档同时差「host 是 native」
+  和「没带 Accept」两个变量**，①档失败无法归因于 host（归因污染，jsbox-re 发现）。
+  凡是发往认证端点的请求现在统一带上 `Accept`，这样真机上一次登录就能干净地得出
+  「native 可行 / native 不可行」的结论。
+- **已购链路的 SAP 校验与登录侧对齐**：`PurchaseHistoryService` 此前仍硬校验
+  `sign-sap-version == "200"` 并 pin 死 `s.mzstatic.com` / `fpinit.itunes.apple.com`，
+  登录侧已放宽到「Apple 自有域 + 内置兜底」→ 会出现「登录能过、已购签不出」的不对称。
+  现在两处同一个口径（`StoreAuthenticationProtocol.isAppleHost`）。
+- `tools/verify_store_protocol.py` 新增断言：native 档必须带 `Accept`、已购侧必须用放宽后的 host 校验。
+
 ## [0.3.358] - 2026-09-12
 
 ### 修复

@@ -207,9 +207,19 @@ enum PurchaseHistoryService {
             }
             let nested = bag["urlBag"] as? [String: Any] ?? [:]
             func value(_ key: String) -> Any? { bag[key] ?? nested[key] }
-            guard StoreAuthenticationProtocol.string(value("sign-sap-version")) == "200",
-                  let certificateURL = publicURL(value("sign-sap-setup-cert"), host: "s.mzstatic.com"),
-                  let setupURL = publicURL(value("sign-sap-setup"), host: "fpinit.itunes.apple.com") else {
+            // v0.3.359：与登录侧口径统一 —— 只要求端点**落在 Apple 自有域内**，不再 pin 具体主机名；
+            // bag 缺字段时用内置兜底。此前登录已放宽而已购没放宽，会出现
+            // 「登录能过、已购签不出」的不对称（jsbox-re 发现）。
+            let bagVersion = StoreAuthenticationProtocol.string(value("sign-sap-version"))
+            if !bagVersion.isEmpty, bagVersion != "200" {
+                LoginLogger.shared.log("[已购] bag 的 sign-sap-version=\(bagVersion)（非 200），按 200 处理",
+                                       category: .appStore)
+            }
+            let certificateURL = publicURL(value("sign-sap-setup-cert"))
+                ?? URL(string: StoreAuthenticationProtocol.fallbackSAPCertURL)
+            let setupURL = publicURL(value("sign-sap-setup"))
+                ?? URL(string: StoreAuthenticationProtocol.fallbackSAPSetupURL)
+            guard let certificateURL, let setupURL else {
                 throw PurchaseHistoryError.signerUnavailable
             }
             let (certData, certResponse) = try await perform(URLRequest(url: certificateURL))
@@ -251,9 +261,11 @@ enum PurchaseHistoryService {
             return (data, http)
         }
 
-        private func publicURL(_ value: Any?, host: String) -> URL? {
+        /// v0.3.359：与登录侧同款 —— https + Apple 自有域（不再 pin 具体主机名）
+        private func publicURL(_ value: Any?) -> URL? {
             guard let text = value as? String, let url = URL(string: text),
-                  url.scheme == "https", url.host?.lowercased() == host,
+                  url.scheme?.lowercased() == "https", let host = url.host?.lowercased(),
+                  StoreAuthenticationProtocol.isAppleHost(host),
                   url.user == nil, url.password == nil, url.fragment == nil,
                   url.port == nil || url.port == 443 else { return nil }
             return url

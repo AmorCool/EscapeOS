@@ -251,8 +251,14 @@ actor SignedStoreAuthenticator {
                          forHTTPHeaderField: "Accept-Language")
         // v0.3.356：参考客户端（AssppPro 4.2.5）的登录请求带这条 Accept，我们此前没有。
         // 它影响 Apple 前置的路由（PC 实测带不带它返回的状态码不同）。
-        if request.url?.path.hasSuffix("/authenticate") == true
-            || request.url?.path.hasSuffix("/authenticate/") == true {
+        //
+        // v0.3.359：**native/fast 的 path 不是 /authenticate**，原来这条判断会让梯子第一档
+        // 同时缺「host 是 native」和「没带 Accept」两个变量 → ①档失败无法归因于 host
+        // （jsbox-re 发现的归因污染）。凡是发往认证端点的请求都统一带上。
+        let authPath = request.url?.path ?? ""
+        let authHost = request.url?.host ?? ""
+        if authPath.hasSuffix("/authenticate") || authPath.hasSuffix("/authenticate/")
+            || StoreAuthenticationProtocol.isNativeFastHost(authHost) {
             request.setValue(StoreAuthenticationProtocol.storeClientAccept, forHTTPHeaderField: "Accept")
         }
         request.httpShouldHandleCookies = false

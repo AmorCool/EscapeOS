@@ -94,6 +94,12 @@ def main() -> None:
             "the native/fast endpoint is the FIRST login candidate (JAsspp order)")
     require("nativeFastURL" in protocol and 'hasSuffix("/fast")' in protocol,
             "bag-provided native endpoints are normalized to /auth/v1/native/fast/")
+    # v0.3.359：native 档必须也带 store-client 的 Accept，否则①档同时差 host+Accept 两个变量，
+    # 失败无法归因；已购侧的 SAP 校验必须与登录侧同样放宽。
+    require("isNativeFastHost(authHost)" in auth,
+            "the native rung also carries the store-client Accept header")
+    require("isAppleHost" in history and "fallbackSAPCertURL" in history,
+            "the purchase-history SAP signer uses the same relaxed host check as login")
     require("isDeviceGUID" in protocol and "guid.count == 12" not in auth,
             "device guid accepts the 12-32 hex form used by the reference client")
     # v0.3.358：SAP 端点只做「https + Apple 域」校验，不 pin 具体 host（上游 appstore_bag.go:89-94
