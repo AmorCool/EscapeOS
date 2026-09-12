@@ -16,6 +16,8 @@ struct AppStoreAccountsView: View {
     /// v0.3.332：单个账号「重登」（用已存凭据续期；Apple 要码时弹统一 2FA 面板并显示来源）
     @State private var reloginTarget: ReloginTarget?
     @State private var reloginBusyEmail: String?
+    /// v0.3.344：长按账号 → 查已购列表（DMAP，只读）
+    @State private var historyTarget: ReloginTarget?
 
     /// 2FA 面板的来源（sheet(item:) 需要 Identifiable）
     struct ReloginTarget: Identifiable { let id: String }
@@ -53,6 +55,9 @@ struct AppStoreAccountsView: View {
             AddAccountSheet(reloginEmail: target.id) { _ in
                 reload()
             }
+        }
+        .sheet(item: $historyTarget) { target in
+            PurchaseHistoryView(email: target.id)
         }
         .confirmationDialog("退出所有 AppStore 账号？", isPresented: $confirmSignOutAll, titleVisibility: .visible) {
             Button("退出全部账号", role: .destructive) {
@@ -146,6 +151,13 @@ struct AppStoreAccountsView: View {
                     reload()
                     ToastCenter.shared.show("已切换到 \(a.email)")
                 }
+                .contextMenu {
+                    Button {
+                        historyTarget = ReloginTarget(id: a.email)
+                    } label: {
+                        Label("查已购列表", systemImage: "list.bullet.rectangle.portrait")
+                    }
+                }
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
                         store.signOut(email: a.email)
@@ -159,7 +171,7 @@ struct AppStoreAccountsView: View {
         } header: {
             Text("已登录账号（\(accounts.count)）")
         } footer: {
-            Text("点账号 = 设为当前下载账号").font(.caption2)
+            Text("点账号 = 设为当前下载账号；长按 = 查已购列表").font(.caption2)
         }
     }
 

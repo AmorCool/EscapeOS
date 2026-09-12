@@ -97,8 +97,12 @@ struct AppStoreDetailView: View {
                 onI4: {
                     showInstallOptions = false
                     installFromFreeSource()
+                },
+                onAcquireLicense: {
+                    showInstallOptions = false
+                    acquireLicense()
                 })
-            .presentationDetents([.height(300)])
+            .presentationDetents([.height(344)])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showAccountPicker) {
@@ -406,6 +410,29 @@ struct AppStoreDetailView: View {
         ToastCenter.shared.show("已开始用「\(list[0].email)」下载")
     }
 
+    /// 获取许可证：用「当前下载账号」把该应用加入授权列表（免费应用）。
+    /// 与下载链路里 9610 分支做的是同一件事 —— 刷新登录 → buyProduct。
+    private func acquireLicense() {
+        guard let email = AppStoreDownloadStore.shared.selectedEmail, !email.isEmpty else {
+            ToastCenter.shared.show("先登录一个 Apple ID")
+            return
+        }
+        ToastCenter.shared.show("正在获取许可证…")
+        Task {
+            do {
+                let message = try await AppStoreLocalInstallService.acquireLicense(
+                    item: item, email: email) { line in
+                        LoginLogger.shared.log("[下载中心] \(line)", category: .appStore)
+                    }
+                ToastCenter.shared.show(message)
+            } catch {
+                ToastCenter.shared.show("获取许可证失败：\(error.localizedDescription)")
+                LoginLogger.shared.log("[下载中心] 获取许可证失败：\(error.localizedDescription)",
+                                       category: .appStore)
+            }
+        }
+    }
+
     /// 免登录源：按 bundleId 找包 → 下载（可暂停）→ 安装
     private func installFromFreeSource() {
         guard let bid = item.bundleId, !bid.isEmpty else {
@@ -476,6 +503,8 @@ struct InstallOptionsSheet: View {
     let appleIDSubtitle: String
     let onAppleID: () -> Void
     let onI4: () -> Void
+    /// 获取许可证：把该应用加入当前账号的授权列表（免费应用）
+    let onAcquireLicense: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -497,6 +526,11 @@ struct InstallOptionsSheet: View {
                        title: "从爱思源快速安装",
                        subtitle: "免登录，服务端已签名",
                        action: onI4)
+                option(icon: "key.fill",
+                       tint: .orange,
+                       title: "获取许可证",
+                       subtitle: "把该应用加入账号的授权列表",
+                       action: onAcquireLicense)
             }
             .padding(.horizontal, 16)
 

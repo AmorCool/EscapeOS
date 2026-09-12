@@ -170,6 +170,32 @@ enum AppStoreLocalInstallService {
     /// 用已保存的密码 + cookie 走一次 SAP 重登（`AppleIDSignInService.rotate`），
     /// 拿到新的 passwordToken / dsid / cookie，并写回账号库。
     /// Apple 要验证码时转成明确提示（`LocalError.reloginNeedsCode`）。
+    /// 「获取许可证」—— 单独把该账号对该应用的授权买下来（免费应用）。
+    ///
+    /// 与下载链路里 9610 分支是同一件事：**先 rotate 刷新 passwordToken，再 buyProduct**。
+    /// 返回一句可直接展示的结果。
+    @discardableResult
+    static func acquireLicense(item: AppStoreItem,
+                               email: String,
+                               onLog: ((String) -> Void)? = nil) async throws -> String {
+        guard var account = AppStoreDownloadStore.shared.account(for: email) else {
+            throw LocalError.noAccount
+        }
+        let software = try makeSoftware(item)
+        onLog?("[AppleID] 获取许可证：\(item.bundleId ?? item.name)")
+        try await refreshAccount(email: email, account: &account, onLog: onLog)
+        let outcome = try await Purchase.purchase(account: &account, app: software, endpoint: .finance)
+        AppStoreDownloadStore.shared.updateFromAnyThread(account)
+        switch outcome {
+        case .purchased:
+            onLog?("[AppleID] 授权结果：下单成功")
+            return "已获取许可证"
+        case .alreadyOwned:
+            onLog?("[AppleID] 授权结果：该账号已拥有")
+            return "该账号已拥有此应用"
+        }
+    }
+
     private static func refreshAccount(email: String,
                                        account: inout AppStoreAccount,
                                        onLog: ((String) -> Void)?) async throws {

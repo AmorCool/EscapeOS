@@ -162,8 +162,12 @@ struct AppStoreView: View {
                 onI4: {
                     installTarget = nil
                     installFromFreeSource(target)
+                },
+                onAcquireLicense: {
+                    installTarget = nil
+                    acquireLicense(target)
                 })
-            .presentationDetents([.height(300)])
+            .presentationDetents([.height(344)])
             .presentationDragIndicator(.visible)
         }
         .sheet(item: $accountTarget) { target in
@@ -438,6 +442,28 @@ struct AppStoreView: View {
 
     /// 免登录源：按 bundleId 找包 → 下载 → 安装。
     /// 榜单 RSS 不带 bundleId（已在加载时批量补全），这里再兜一次按 AppID 反查。
+    /// 获取许可证：用「当前下载账号」把该应用加入授权列表（免费应用）
+    private func acquireLicense(_ app: AppStoreItem) {
+        guard let email = AppStoreDownloadStore.shared.selectedEmail, !email.isEmpty else {
+            ToastCenter.shared.show("先登录一个 Apple ID")
+            return
+        }
+        ToastCenter.shared.show("正在获取许可证…")
+        Task {
+            do {
+                let message = try await AppStoreLocalInstallService.acquireLicense(
+                    item: app, email: email) { line in
+                        LoginLogger.shared.log("[下载中心] \(line)", category: .appStore)
+                    }
+                ToastCenter.shared.show(message)
+            } catch {
+                ToastCenter.shared.show("获取许可证失败：\(error.localizedDescription)")
+                LoginLogger.shared.log("[下载中心] 获取许可证失败：\(error.localizedDescription)",
+                                       category: .appStore)
+            }
+        }
+    }
+
     private func installFromFreeSource(_ app: AppStoreItem) {
         ToastCenter.shared.show("正在查找安装包…")
         Task {
