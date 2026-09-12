@@ -34,3 +34,7 @@ _build/
 
 # 本地临时诊断日志（一律放 _build/ci_logs，禁止进 git）
 _*.log
+
+# Python
+__pycache__/
+*.pyc

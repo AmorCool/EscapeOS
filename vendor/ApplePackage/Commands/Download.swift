@@ -13,7 +13,8 @@ public enum Download {
     public static func download(
         account: inout AppStoreAccount,
         app: Software,
-        externalVersionID: String? = nil
+        externalVersionID: String? = nil,
+        versionCandidates: [String] = []
     ) async throws -> DownloadOutput {
         let deviceIdentifier = Configuration.deviceIdentifier
 
@@ -32,7 +33,8 @@ public enum Download {
             app: app,
             deviceIdentifier: deviceIdentifier,
             externalVersionID: externalVersionID ?? "",
-            resolveVersion: { try await StoreCatalog.externalVersionID(appID: appID, countryCode: region) }
+            resolveVersion: { try await StoreCatalog.externalVersionID(appID: appID, countryCode: region) },
+            versionCandidates: versionCandidates
         )
 
         if let failureType = dict["failureType"] as? String {

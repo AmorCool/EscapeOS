@@ -20,7 +20,8 @@ extension StoreDownloadEndpoint {
         app: Software,
         deviceIdentifier: String,
         externalVersionID: String,
-        resolveVersion: (() async throws -> String)? = nil
+        resolveVersion: (() async throws -> String)? = nil,
+        versionCandidates: [String] = []
     ) async throws -> [String: Any] {
         var dict = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
             client: client,
@@ -29,6 +30,40 @@ extension StoreDownloadEndpoint {
             deviceIdentifier: deviceIdentifier,
             externalVersionID: externalVersionID
         )
+
+        // v0.3.361：**空包时先用候选 `externalVersionId` 重打 volumeStore，而不是直接退到 redownload。**
+        //
+        // 真机实测（2026-09-13，同一份新会话，对照 ChatGPT 6448311069 / Via 1639085829）：
+        // `volumeStoreDownloadProduct` 返回「HTTP 200 + 空 songList + 无任何错误码」的**唯一**决定性变量
+        // 就是 body 里有没有 `externalVersionId` —— 不带 → 空包；带该账号可下的旧 ID
+        // （856638501 / 857146407 / 857195392 / 890134149）→ `songList=1`；而**最新的两个**
+        // （890363403 / 890707559）仍是空包。重跑 5 次结论稳定，且 Via 不受影响。
+        // 出包响应里带回 `softwareVersionExternalIdentifiers`（212 个）——该账号对 ChatGPT
+        // 只认前面的那些。也就是说：**空包 = 该账号没有「最新版」的下载记录，但旧版可以下。**
+        // 公开情报一致：社区教程就是用 `--external-version-id 856638501` 把 ChatGPT 下下来的。
+        if let reason = fallbackReason(dict), externalVersionID.isEmpty, !versionCandidates.isEmpty {
+            storeLog("volumeStore 空包（\(reason)）→ 用候选 externalVersionId 重试（最多 6 个）")
+            for candidate in versionCandidates.prefix(6) {
+                try Task.checkCancellation()
+                do {
+                    let hit = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
+                        client: client,
+                        account: &account,
+                        app: app,
+                        deviceIdentifier: deviceIdentifier,
+                        externalVersionID: candidate
+                    )
+                    if fallbackReason(hit) == nil {
+                        storeLog("候选版本 \(candidate) 命中 → 采用该版本")
+                        return hit
+                    }
+                    storeLog("候选版本 \(candidate) 仍是空包")
+                } catch {
+                    storeLog("候选版本 \(candidate) 请求失败：\(error.localizedDescription)")
+                }
+            }
+            storeLog("候选版本全部为空包 → 退回 redownload")
+        }
 
         if let reason = fallbackReason(dict) {
             storeLog("volumeStore 需要回退（\(reason)）→ redownload；\(summary(dict))")

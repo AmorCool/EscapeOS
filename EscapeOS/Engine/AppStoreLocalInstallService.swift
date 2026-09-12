@@ -61,15 +61,25 @@ enum AppStoreLocalInstallService {
         var refreshed = false
         var licensed = false
         var emptyRetried = false
+        /// v0.3.361：空包时改用的历史版本候选（`externalVersionId`）
+        var versionCandidates: [String] = []
+        var triedVersionCandidates = false
         var attempt = 0
         while true {
             attempt += 1
-            guard attempt <= 6 else { throw ApplePackageError.emptyPackage }
+            guard attempt <= 8 else { throw ApplePackageError.emptyPackage }
             try Task.checkCancellation()
             do {
                 onLog?("[AppleID] 请求下载信息…")
                 return try await Download.download(account: &account, app: software,
-                                                   externalVersionID: externalVersionID)
+                                                   externalVersionID: externalVersionID,
+                                                   versionCandidates: versionCandidates)
+            } catch ApplePackageError.emptyPackage where !triedVersionCandidates {
+                // 第一优先：用历史版本候选重打 volumeStore（真机实测这才是能出包的那一档，
+                // 不需要刷新会话也不需要购买）。候选为空会自动落到下面「刷新会话」那条分支。
+                triedVersionCandidates = true
+                onLog?("[AppleID] Apple 未返回可下载内容 → 换该账号可下的历史版本重试")
+                versionCandidates = await candidateVersionIDs(software: software, onLog: onLog)
             } catch ApplePackageError.passwordTokenExpired where !refreshed {
                 refreshed = true
                 try await refreshAccount(email: email, account: &account, onLog: onLog)
@@ -93,6 +103,24 @@ enum AppStoreLocalInstallService {
                                              email: email, onLog: onLog)
                 }
             }
+        }
+    }
+
+    /// v0.3.361：从免登录版本目录取该应用的 `externalVersionId` 候选（最新的排在前面）。
+    ///
+    /// 依据（真机实测）：ChatGPT 的 `volumeStoreDownloadProduct` 只在 body 带 `externalVersionId`
+    /// 时才出包，且**最新的两个 ID 会被 Apple 拒**、更旧的可以下 —— 所以把最新若干个一起拿去试。
+    /// 目录通道失败不算错：返回空数组即可，调用方会继续走原有的刷新会话 / 获取许可流程。
+    private static func candidateVersionIDs(software: Software,
+                                            onLog: ((String) -> Void)?) async -> [String] {
+        do {
+            let history = try await AppStoreService.versionHistoryFromCatalog(appId: String(software.id))
+            let ids = history.compactMap { $0.externalVersionID }.filter { !$0.isEmpty }
+            onLog?("[AppleID] 历史版本候选 \(ids.count) 个")
+            return ids
+        } catch {
+            onLog?("[AppleID] 版本目录不可用：\(error.localizedDescription)")
+            return []
         }
     }
 
