@@ -118,6 +118,10 @@ enum AppStoreLocalInstallService {
                         }
                     }
                     needLicense = false
+                    // IPARanger 2.6.0 的做法：购买后**等一下**（它注释里写 "wait briefly for the
+                    // license to propagate"）再重试下载 —— 刚拿到的许可在 Apple 侧还没生效时，
+                    // 立刻重试会白打一次，于是「第一次下载总是失败」。
+                    try? await Task.sleep(for: .seconds(2.5))
                 }
                 onLog?("[AppleID] 请求下载信息…")
                 output = try await Download.download(account: &account, app: software,

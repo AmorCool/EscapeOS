@@ -149,10 +149,11 @@ enum PurchaseHistoryService {
         func items(sessionID: UInt32, revision: UInt32) async throws -> [OwnedApp] {
             var lastStatus = 0
             for variant in Self.variants(store: account.store) {
-                let body = Self.itemsBody(sessionID: sessionID, revision: revision,
+                let usedRevision = variant.revision ?? revision
+                let body = Self.itemsBody(sessionID: sessionID, revision: usedRevision,
                                           query: variant.query)
                 let (data, response) = try await send(
-                    path: "/databases/\(revision)/items",
+                    path: "/databases/\(usedRevision)/items",
                     body: body,
                     contentType: "application/x-dmap-tagged",
                     signed: true,
@@ -360,16 +361,24 @@ enum PurchaseHistoryService {
             let name: String
             let storeFront: String
             let query: String?
+            /// nil = 用 /update 返回的 revision；1 = DAAP 的「初始版本，取全部」
+            let revision: UInt32?
         }
 
         static func variants(store: String) -> [ItemsVariant] {
             let base = store.isEmpty ? "143441" : store
             let kind = "('com.apple.itunes.extended\\-media\\-kind:131072')"
             return [
-                ItemsVariant(name: "A 默认（\(base)-1 + 应用过滤）", storeFront: "\(base)-1", query: kind),
-                ItemsVariant(name: "B 裸 storefront（\(base)）", storeFront: base, query: kind),
-                ItemsVariant(name: "C 默认 storefront、不带过滤", storeFront: "\(base)-1", query: nil),
-                ItemsVariant(name: "D 裸 storefront、不带过滤", storeFront: base, query: nil),
+                ItemsVariant(name: "A 默认（\(base)-1 + 应用过滤）", storeFront: "\(base)-1", query: kind, revision: nil),
+                ItemsVariant(name: "B 裸 storefront（\(base)）", storeFront: base, query: kind, revision: nil),
+                // Apple 回的是 adbs{mstt=200, muty, mtco=0, mrco=0, musr}（total/returned count 都是 0）。
+                // 除了口径，还有一种可能：`/items` 要的 revision 应该是 DAAP 的「初始版本 1」，
+                // 而我们一直用 /update 回的那个 revision（那是「增量」口径，自然是空的）。
+                ItemsVariant(name: "E revision=1 + 默认 storefront + 应用过滤", storeFront: "\(base)-1", query: kind, revision: 1),
+                ItemsVariant(name: "F revision=1 + 裸 storefront + 应用过滤", storeFront: base, query: kind, revision: 1),
+                ItemsVariant(name: "G revision=1 + 默认 storefront、不带过滤", storeFront: "\(base)-1", query: nil, revision: 1),
+                ItemsVariant(name: "C 默认 storefront、不带过滤", storeFront: "\(base)-1", query: nil, revision: nil),
+                ItemsVariant(name: "D 裸 storefront、不带过滤", storeFront: base, query: nil, revision: nil),
             ]
         }
 

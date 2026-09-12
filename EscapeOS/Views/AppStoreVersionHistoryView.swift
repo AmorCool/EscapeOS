@@ -13,7 +13,26 @@ struct AppStoreVersionHistoryView: View {
     let item: AppStoreItem
     let country: String
 
-    private enum Channel { case account, web }
+    private enum Channel { case account, web, catalog }
+
+    /// 查询方式：两条来源各有所长，让用户自己选（失败会自动回退另一条）。
+    enum Source: String, CaseIterable, Identifiable {
+        case catalog
+        case account
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .catalog: return "版本目录"
+            case .account: return "Apple 账号"
+            }
+        }
+    }
+
+    @AppStorage("VersionHistory.Source") private var sourceRaw = Source.catalog.rawValue
+
+    private var source: Source { Source(rawValue: sourceRaw) ?? .catalog }
 
     @State private var versions: [AppStoreVersion] = []
     /// 账号通道：全量版本身份（新 → 旧）
@@ -99,6 +118,20 @@ struct AppStoreVersionHistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Picker("查询方式", selection: $sourceRaw) {
+                        ForEach(Source.allCases) { option in
+                            Text(option.title).tag(option.rawValue)
+                        }
+                    }
+                } label: {
+                    Label(source.title, systemImage: "arrow.triangle.2.circlepath")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption)
+                }
+                .disabled(loading)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     Task { await load() }
                 } label: {
@@ -107,6 +140,7 @@ struct AppStoreVersionHistoryView: View {
                 .disabled(loading)
             }
         }
+        .onChange(of: sourceRaw) { _, _ in Task { await load() } }
         .task { await load() }
     }
 
@@ -206,46 +240,80 @@ struct AppStoreVersionHistoryView: View {
         channel = .web
         accountEmail = nil
 
-        // 1) 账号通道（任何区域都有数据，且能下载历史版本）
+        // 按用户选的查询方式先来一条，失败/为空则自动回退另一条，
+        // 最后兜底商品页通道（免登录，覆盖不全）。
+        if source == .catalog {
+            if await loadCatalog() { loading = false; return }
+            if await loadAccount() { loading = false; return }
+        } else {
+            if await loadAccount() { loading = false; return }
+            if await loadCatalog() { loading = false; return }
+        }
+        await loadWeb()
+        loading = false
+    }
+
+    /// 版本目录通道（免登录，一次拿全 + 带发布日期 + 带 externalVersionID）。
+    /// Apple 的账号通道对「没有下载记录」的应用回空包，这条通道不受影响；
+    /// 与 IPARanger 2.6.0 用的是同一个接口。
+    @discardableResult
+    private func loadCatalog() async -> Bool {
+        do {
+            let list = try await AppStoreService.versionHistoryFromCatalog(appId: item.id)
+            versions = list
+            channel = .catalog
+            LoginLogger.shared.log("版本历史：版本目录通道 \(list.count) 条", category: .appStore)
+            return true
+        } catch {
+            LoginLogger.shared.log("版本历史：版本目录通道失败（\(error.localizedDescription)）",
+                                   category: .appStore)
+            return false
+        }
+    }
+
+    /// 账号通道（走 App Store 下载协议，需该账号下载过这个应用）
+    @discardableResult
+    private func loadAccount() async -> Bool {
         // bundleId 缺失时先补一次（协议按 bundleId 查）
         var bundleId = item.bundleId
         if bundleId == nil, let full = try? await AppStoreService.lookup(id: item.id) {
             bundleId = full.bundleId
         }
-        var accountError: String?
-        if let bundleId, !bundleId.isEmpty,
-           let email = AppStoreDownloadStore.shared.selectedEmail
-        {
-            do {
-                let ids = try await AppStoreService.storeVersionIdentifiers(bundleId: bundleId,
-                                                                            email: email)
-                // 协议返回旧 → 新；展示要新 → 旧
-                identifiers = Array(ids.reversed())
-                accountEmail = email
-                channel = .account
-                loading = false
-                // 商品页通道能给出**真实**的版本日期（内嵌 versionHistory shelf），
-                // 但覆盖不全；能拿到就补上，拿不到就不显示日期。
-                Task { await harvestWebDates() }
-                await loadMore()
-                return
-            } catch {
-                // 账号通道失败 → 回退商品页通道（下方）
-                accountError = error.localizedDescription
-                LoginLogger.shared.log("版本历史账号通道失败：\(error.localizedDescription)",
-                                       category: .appStore)
-            }
-        }
-
-        // 2) 商品页通道（免登录，覆盖不全）
+        guard let bundleId, !bundleId.isEmpty,
+              let email = AppStoreDownloadStore.shared.selectedEmail
+        else { return false }
         do {
-            versions = try await AppStoreService.versionHistory(appId: item.id, country: country)
+            let ids = try await AppStoreService.storeVersionIdentifiers(bundleId: bundleId,
+                                                                        email: email)
+            // 协议返回旧 → 新；展示要新 → 旧
+            identifiers = Array(ids.reversed())
+            accountEmail = email
+            channel = .account
+            // 商品页通道能给出**真实**的版本日期（内嵌 versionHistory shelf），
+            // 但覆盖不全；能拿到就补上，拿不到就不显示日期。
+            Task { await harvestWebDates() }
+            await loadMore()
+            return true
         } catch {
+            LoginLogger.shared.log("版本历史账号通道失败：\(error.localizedDescription)",
+                                   category: .appStore)
             errorText = error.localizedDescription
+            return false
         }
-        // 商品页也没有数据时，把账号通道的失败原因说出来（否则只剩一句"没有记录"）
-        if versions.isEmpty, let accountError { errorText = accountError }
-        loading = false
+    }
+
+    /// 商品页通道（免登录，覆盖不全）
+    private func loadWeb() async {
+        do {
+            let list = try await AppStoreService.versionHistory(appId: item.id, country: country)
+            if !list.isEmpty {
+                versions = list
+                channel = .web
+                errorText = nil
+            }
+        } catch {
+            if versions.isEmpty { errorText = error.localizedDescription }
+        }
     }
 
     /// 商品页通道的真实版本日期 → 按版本号补给账号通道（best-effort）

@@ -304,6 +304,83 @@ enum AppStoreService {
 
     // MARK: - 历史版本解析
 
+    // MARK: - 版本历史（版本目录 API，免登录）
+
+    /// 版本目录通道：`apis.bilin.eu.org/history/<trackId>`。
+    ///
+    /// 一次返回**全量版本**：版本号 / `external_identifier`（= 下载指定版本要的
+    /// `externalVersionId`）/ 包大小 / 发布时间。与 IPARanger 2.6.0 用的是同一个接口
+    /// （它先 iTunes lookup 拿 trackId，再打这个接口选版本，最后 `--external-version-id` 下载）。
+    ///
+    /// 关键价值：**不需要登录、不需要该账号下载过这个应用、任何区域都有数据** ——
+    /// 正好补上「账号通道为空」（Apple 对没有下载记录的应用回空包）和
+    /// 「商品页通道只在部分区域有」这两个缺口，而且**直接带发布日期**。
+    ///
+    /// 实测：ChatGPT 的 `890707559` 与我们从 MDM 目录解析出的 externalVersionId 一致。
+    /// 该服务有速率限制（连续请求会 429），所以结果按 appId 落盘缓存。
+    static func versionHistoryFromCatalog(appId: String) async throws -> [AppStoreVersion] {
+        if let data = catalogCache(appId: appId), let versions = parseCatalogHistory(data), !versions.isEmpty {
+            return versions
+        }
+        guard let url = URL(string: "https://apis.bilin.eu.org/history/\(appId)") else {
+            throw AppStoreError.badURL
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            LoginLogger.shared.log("版本目录通道 HTTP \(code)", category: .appStore)
+            throw AppStoreError.http(code)
+        }
+        guard let versions = parseCatalogHistory(data), !versions.isEmpty else {
+            throw AppStoreError.decode
+        }
+        storeCatalogCache(appId: appId, data: data)
+        return versions
+    }
+
+    private static func parseCatalogHistory(_ data: Data) -> [AppStoreVersion]? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = root["data"] as? [[String: Any]] else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        var out: [AppStoreVersion] = []
+        var seen = Set<String>()
+        for item in list {
+            guard let version = item["bundle_version"] as? String, !version.isEmpty else { continue }
+            let raw = item["created_at"] as? String
+            let identifier = (item["external_identifier"] as? NSNumber).map { "\($0.int64Value)" }
+                ?? (item["external_identifier"] as? String)
+            let key = identifier ?? version
+            guard seen.insert(key).inserted else { continue }
+            out.append(AppStoreVersion(version: version,
+                                       dateRaw: raw,
+                                       notes: nil,
+                                       externalVersionID: identifier,
+                                       dateValue: raw.flatMap { formatter.date(from: $0) }))
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// 版本目录缓存（JSON Data + 时间戳；Data 才能可靠桥接）
+    private static let catalogCacheTTL: TimeInterval = 6 * 3600
+
+    private static func catalogCache(appId: String) -> Data? {
+        let defaults = UserDefaults.standard
+        let at = defaults.double(forKey: "bilinHistory.\(appId).at")
+        guard at > 0, Date().timeIntervalSince1970 - at < catalogCacheTTL else { return nil }
+        return defaults.data(forKey: "bilinHistory.\(appId)")
+    }
+
+    private static func storeCatalogCache(appId: String, data: Data) {
+        let defaults = UserDefaults.standard
+        defaults.set(data, forKey: "bilinHistory.\(appId)")
+        defaults.set(Date().timeIntervalSince1970, forKey: "bilinHistory.\(appId).at")
+    }
+
     /// 从商品页 HTML 中抽出版本历史数组并结构化
     static func parseVersionHistory(html: String) -> [AppStoreVersion] {
         guard let marker = html.range(of: "\"page\":\"versionHistory\"") else { return [] }
