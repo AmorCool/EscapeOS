@@ -25,35 +25,74 @@ static NSMutableArray<NSString *> *AssetNotes(void) {
 }
 
 /// 描述尾部多出来的字节：若确为追加的代码签名则说明清楚，否则只报字节数。
+///
+/// ⚠️ v0.3.332：**必须支持 fat（universal）二进制**。官方资产里
+/// `CoreFP` 与 `CommerceCore` 都是 fat（magic `0xCAFEBABE`，2 个切片），
+/// 只有 `CommerceKit` 是 thin Mach-O 64。老实现只认 thin 头，
+/// 于是 fat 的那两个被误报成「不是可识别的代码签名」（用户看到日志后当场指出）。
+/// 现在：先定位 x86_64 切片，再在切片内数载入命令找 LC_CODE_SIGNATURE。
 static NSString *DescribeExtraBytes(NSData *data, NSUInteger expectedSize) {
     uint64_t extra = (uint64_t)data.length - (uint64_t)expectedSize;
     const uint8_t *p = static_cast<const uint8_t *>(data.bytes);
-    uint32_t magic = 0, ncmds = 0;
-    if (data.length >= 32) {
-        std::memcpy(&magic, p, 4);
-        std::memcpy(&ncmds, p + 16, 4);
-    }
-    if ((magic == 0xFEEDFACF || magic == 0xFEEDFACE) && ncmds > 0 && ncmds < 4096) {
-        NSUInteger off = (magic == 0xFEEDFACF) ? 32 : 28;   // mach_header_64 / _32
-        for (uint32_t i = 0; i < ncmds && off + 8 <= data.length; i++) {
-            uint32_t cmd = 0, cmdsize = 0;
-            std::memcpy(&cmd, p + off, 4);
-            std::memcpy(&cmdsize, p + off + 4, 4);
-            if (cmdsize < 8 || off + cmdsize > data.length) break;
-            if (cmd == 0x1d /* LC_CODE_SIGNATURE */ && cmdsize >= 16) {
-                uint32_t dataoff = 0, datasize = 0;
-                std::memcpy(&dataoff, p + off + 8, 4);
-                std::memcpy(&datasize, p + off + 12, 4);
-                if ((uint64_t)dataoff == (uint64_t)expectedSize &&
-                    (uint64_t)dataoff + (uint64_t)datasize == (uint64_t)data.length) {
-                    return [NSString stringWithFormat:@"尾部 +%llu B 为代码签名（侧载宿主重签）", extra];
-                }
-                return [NSString stringWithFormat:@"尾部 +%llu B（签名 %u B @ %u）", extra, datasize, dataoff];
+    NSUInteger length = data.length;
+    if (length < 8) return [NSString stringWithFormat:@"尾部 +%llu B（文件过短）", extra];
+
+    auto readBE = [](const uint8_t *q) -> uint32_t {
+        return (uint32_t(q[0]) << 24) | (uint32_t(q[1]) << 16) | (uint32_t(q[2]) << 8) | uint32_t(q[3]);
+    };
+    auto readLE = [](const uint8_t *q) -> uint32_t {
+        return (uint32_t(q[3]) << 24) | (uint32_t(q[2]) << 16) | (uint32_t(q[1]) << 8) | uint32_t(q[0]);
+    };
+
+    // ① 定位 Mach-O 头：fat 取 x86_64 切片（找不到就取第一个切片）
+    NSUInteger sliceBase = 0;
+    NSString *prefix = @"";
+    if (readBE(p) == 0xCAFEBABE) {
+        uint32_t nfat = readBE(p + 4);
+        if (nfat > 0 && nfat < 64 && length >= 8u + (NSUInteger)nfat * 20u) {
+            NSUInteger first = NSUIntegerMax;
+            NSUInteger chosen = NSUIntegerMax;
+            for (uint32_t i = 0; i < nfat; i++) {
+                const uint8_t *arch = p + 8 + (NSUInteger)i * 20;
+                uint32_t cputype = readBE(arch);
+                uint32_t offset = readBE(arch + 8);
+                if (first == NSUIntegerMax) first = offset;
+                if (cputype == 0x01000007) { chosen = offset; break; }
             }
-            off += cmdsize;
+            if (chosen == NSUIntegerMax) chosen = first;
+            if (chosen != NSUIntegerMax && chosen < length) {
+                sliceBase = chosen;
+                prefix = [NSString stringWithFormat:@"fat 二进制 %u 切片 · ", nfat];
+            }
         }
     }
-    return [NSString stringWithFormat:@"尾部 +%llu B（不是可识别的代码签名）", extra];
+    const uint8_t *m = p + sliceBase;
+    NSUInteger avail = length - sliceBase;
+    uint32_t magic = avail >= 4 ? readLE(m) : 0;
+    if (magic != 0xFEEDFACF && magic != 0xFEEDFACE) {
+        return [NSString stringWithFormat:@"尾部 +%llu B（%@不是 Mach-O，无法识别）", extra, prefix];
+    }
+
+    // ② 在 thin（或切片）内数载入命令
+    if (avail < 32) return [NSString stringWithFormat:@"尾部 +%llu B（%@Mach-O 头不全）", extra, prefix];
+    uint32_t ncmds = readLE(m + 16);
+    NSUInteger off = (magic == 0xFEEDFACF) ? 32 : 28;
+    for (uint32_t i = 0; i < ncmds && off + 8 <= avail; i++) {
+        uint32_t cmd = readLE(m + off);
+        uint32_t cmdsize = readLE(m + off + 4);
+        if (cmdsize < 8 || off + cmdsize > avail) break;
+        if (cmd == 0x1d /* LC_CODE_SIGNATURE */ && cmdsize >= 16) {
+            uint32_t dataoff = readLE(m + off + 8);
+            uint32_t datasize = readLE(m + off + 12);
+            uint64_t sigStart = (uint64_t)sliceBase + (uint64_t)dataoff;
+            if (sigStart + (uint64_t)datasize == (uint64_t)length) {
+                return [NSString stringWithFormat:@"尾部 +%llu B 为代码签名（%@侧载宿主重签）", extra, prefix];
+            }
+            return [NSString stringWithFormat:@"尾部 +%llu B（%@签名 %u B @ %llu）", extra, prefix, datasize, sigStart];
+        }
+        off += cmdsize;
+    }
+    return [NSString stringWithFormat:@"尾部 +%llu B（%@未找到代码签名命令）", extra, prefix];
 }
 
 static std::vector<uint8_t> ReadVerifiedAsset(NSURL *root, NSString *name, NSUInteger size, NSString *hash) {

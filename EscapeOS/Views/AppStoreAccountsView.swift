@@ -13,6 +13,12 @@ struct AppStoreAccountsView: View {
     @State private var current: String = ""
     @State private var confirmSignOutAll = false
     @State private var showAddAccount = false
+    /// v0.3.332：单个账号「重登」（用已存凭据续期；Apple 要码时弹统一 2FA 面板并显示来源）
+    @State private var reloginTarget: ReloginTarget?
+    @State private var reloginBusyEmail: String?
+
+    /// 2FA 面板的来源（sheet(item:) 需要 Identifiable）
+    struct ReloginTarget: Identifiable { let id: String }
 
     private var store: AppStoreDownloadStore { .shared }
 
@@ -40,6 +46,11 @@ struct AppStoreAccountsView: View {
         }
         .sheet(isPresented: $showAddAccount) {
             AddAccountSheet { _ in
+                reload()
+            }
+        }
+        .sheet(item: $reloginTarget) { target in
+            AddAccountSheet(reloginEmail: target.id) { _ in
                 reload()
             }
         }
@@ -109,32 +120,32 @@ struct AppStoreAccountsView: View {
                 Text("还没有登录任何 Apple ID").font(.subheadline).foregroundStyle(.secondary)
             }
             ForEach(accounts, id: \.email) { a in
-                Button {
+                HStack(spacing: 12) {
+                    AppRowIcon(systemName: "person.fill", tint: .blue, symbolSize: 16, frameSize: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(a.email).font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary).lineLimit(1)
+                        Text(healthText(a)).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    reloginCapsule(a)
+                    if needsRelogin(a) {
+                        Text("需重新登录")
+                            .font(.caption2)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.orange)
+                    } else if a.email == current {
+                        Image(systemName: "checkmark").foregroundStyle(.green).font(.caption)
+                    }
+                }
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+                .onTapGesture {
                     store.select(email: a.email)
                     reload()
                     ToastCenter.shared.show("已切换到 \(a.email)")
-                } label: {
-                    HStack(spacing: 12) {
-                        AppRowIcon(systemName: "person.fill", tint: .blue, symbolSize: 16, frameSize: 32)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(a.email).font(.subheadline.weight(.medium))
-                                .foregroundStyle(.primary).lineLimit(1)
-                            Text(healthText(a)).font(.caption2).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                        if needsRelogin(a) {
-                            Text("需重新登录")
-                                .font(.caption2)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Color.orange.opacity(0.15), in: Capsule())
-                                .foregroundStyle(.orange)
-                        } else if a.email == current {
-                            Image(systemName: "checkmark").foregroundStyle(.green).font(.caption)
-                        }
-                    }
-                    .padding(.vertical, 2)
                 }
-                .buttonStyle(.plain)
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
                         store.signOut(email: a.email)
@@ -148,8 +159,43 @@ struct AppStoreAccountsView: View {
         } header: {
             Text("已登录账号（\(accounts.count)）")
         } footer: {
-            Text("点账号即设为「当前下载账号」；左滑可退出该账号。下载时使用的是当前账号。")
-                .font(.caption2)
+            Text("点账号 = 设为当前下载账号").font(.caption2)
+        }
+    }
+
+    /// 「重登」胶囊：用已存凭据续期；Apple 要验证码时弹统一 2FA 面板
+    @ViewBuilder
+    private func reloginCapsule(_ a: AppStoreAccount) -> some View {
+        Button {
+            Task { await relogin(a) }
+        } label: {
+            Group {
+                if reloginBusyEmail == a.email {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Text("重登").font(.caption.weight(.medium))
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(Color.blue.opacity(0.12), in: Capsule())
+            .foregroundStyle(.blue)
+        }
+        .buttonStyle(.plain)
+        .disabled(reloginBusyEmail != nil)
+    }
+
+    /// 先静默重登（多数情况免验证码）；Apple 要码则改弹 2FA 面板并带上来源邮箱
+    private func relogin(_ a: AppStoreAccount) async {
+        reloginBusyEmail = a.email
+        defer { reloginBusyEmail = nil }
+        do {
+            let account = try await AppleIDSignInService.rotate(email: a.email)
+            reload()
+            ToastCenter.shared.show("已重登 \(account.email)")
+        } catch let error as StoreAuthenticationError where error.needsCode {
+            reloginTarget = ReloginTarget(id: a.email)
+        } catch {
+            ToastCenter.shared.show("重登失败：\(error.localizedDescription)")
         }
     }
 

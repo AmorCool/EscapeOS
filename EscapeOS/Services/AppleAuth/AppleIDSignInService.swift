@@ -42,14 +42,15 @@ enum AppleIDSignInService {
         return account
     }
 
-    /// 账号轮换：用已存账号的 cookie 重新认证，延长会话（免验证码）
+    /// 账号轮换：用已存账号的 cookie 重新认证，延长令牌寿命（免验证码）
+    /// - Parameter code: 双重认证验证码（Apple 要求时传入；首次可留空）
     @discardableResult
-    static func rotate(email: String) async throws -> AppStoreAccount {
+    static func rotate(email: String, code: String = "") async throws -> AppStoreAccount {
         guard let stored = AppStoreDownloadStore.shared.account(for: email) else {
             throw StoreAuthenticationError.invalidConfiguration
         }
         let account = try await SignedStoreAuthenticator().authenticate(
-            email: stored.email, password: stored.password, code: "",
+            email: stored.email, password: stored.password, code: code,
             guid: sapGUID(), cookies: stored.cookie)
         await MainActor.run {
             AppStoreDownloadStore.shared.add(account)
