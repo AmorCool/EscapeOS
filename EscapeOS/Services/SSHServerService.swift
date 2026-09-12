@@ -445,6 +445,35 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let resultText = box.value.map { String($0) } ?? "（阻塞中＝服务在跑，属正常）"
             return "\(symName): 已调用（数据目录以参数传入）\n入口=\(sym) 前16字节: \(codeHex)\n结果: \(resultText)\n下一步: runlog 查看模块日志；若闪退见 go_stderr.log 的 [uloader-crash] 行"
 
+        case "store":
+            // v0.3.341：远程触发 App Store 下载（诊断/自测用）。
+            // 用法：store get <trackId> [email]   —— 不传 email 用当前下载账号。
+            // 走与界面「获取」完全相同的路径（IPADownloadCenter.startWithAppleID），
+            // 结果全部落在商店日志里，可用 `logs` 直接读回。
+            guard parts.count >= 3, parts[1] == "get", let trackId = Int64(parts[2]) else {
+                return "用法: store get <trackId> [email]"
+            }
+            let explicitEmail = parts.count >= 4 ? parts[3] : nil
+            Task { @MainActor in
+                do {
+                    guard let item = try await AppStoreService.lookup(id: "\(trackId)") else {
+                        LoginLogger.shared.log("[SSH] 未找到应用 trackId=\(trackId)", category: .appStore)
+                        return
+                    }
+                    let email = explicitEmail ?? AppStoreDownloadStore.shared.selectedEmail ?? ""
+                    guard !email.isEmpty else {
+                        LoginLogger.shared.log("[SSH] 没有已登录的下载账号，无法触发", category: .appStore)
+                        return
+                    }
+                    LoginLogger.shared.log("[SSH] 触发下载：\(item.name)（\(item.bundleId ?? "-")）trackId=\(trackId) 账号=\(email)",
+                                           category: .appStore)
+                    _ = IPADownloadCenter.shared.startWithAppleID(item: item, email: email)
+                } catch {
+                    LoginLogger.shared.log("[SSH] 触发下载失败：\(error.localizedDescription)", category: .appStore)
+                }
+            }
+            return "已触发下载 trackId=\(trackId)；用 logs 200 查看过程"
+
         case "devcert":
             // v0.3.130：远程触发开发证书创建（诊断/自测用）.
             // 流程：生成密钥+CSR → 提交 Apple →（7460 自动吊销重试）→ 轮询取证书.
@@ -549,6 +578,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       logs [n]        登录日志末尾 n 行（默认 30）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）
+      store get <trackId> [email]   触发一次 App Store 下载（与界面「获取」同一条路径）
       devcert        创建开发证书（用已登录 Apple ID；原生模块签名用）
       ls [路径]       浏览 Documents 目录（相对路径）
       cat <文件>      查看 Documents 内文本文件（≤256KB）
