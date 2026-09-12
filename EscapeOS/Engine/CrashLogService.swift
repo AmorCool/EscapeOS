@@ -155,6 +155,24 @@ final class CrashLogService {
         }
     }
 
+    /// v0.3.322：崩溃报告条数（设备信息首屏「崩溃日志」用）。
+    ///
+    /// 口径：CrashReporter 根目录下的 `.ips`，**排除**资源/指标类诊断 ——
+    /// `*.diskwrites_resource-*`（磁盘写入诊断）、`WiFiLQMMetrics-*`（网络指标）、
+    /// `*.metric*`。它们不是崩溃，iOS 自己定期写。
+    /// 真机 iPhone15,4 / iOS 27 实测根目录下有上述三类 + `JetsamEvent` / `ExcUserFault_*` /
+    /// `<App>-<date>.ips` 等真实崩溃报告。
+    func crashReportCount() -> Int? {
+        guard let entries = try? list() else { return nil }
+        let excluded = ["diskwrites_resource", "wifilqmmetrics", "metric", "shutterbug"]
+        return entries.filter { entry in
+            guard !entry.isDirectory else { return false }
+            let name = entry.name.lowercased()
+            guard name.hasSuffix(".ips") else { return false }
+            return !excluded.contains { name.contains($0) }
+        }.count
+    }
+
     /// v0.2.128：改为 1MB 分块 `afc_file_read`.
     /// `afc_file_read_entire` 在导出时返回 Afc(UnknownError)，分块读更稳，
     /// 且失败时能带上"已读多少字节"便于定位.

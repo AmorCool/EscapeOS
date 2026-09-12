@@ -21,6 +21,17 @@ struct DeviceInfoRowSpec: Identifiable {
     let value: String?
     /// 敏感字段（序列号/UDID/IMEI…）：全局小眼睛控制显隐 + 可复制
     let sensitive: Bool
+    /// v0.3.322：该行要打开的链接（如「保修期限」→ Apple 官方保修查询页）；
+    /// 有值时行尾显示「查询 ›」，点按交给页面用内置浏览器打开。
+    var link: String? = nil
+
+    init(id: Int, label: String, value: String?, sensitive: Bool, link: String? = nil) {
+        self.id = id
+        self.label = label
+        self.value = value
+        self.sensitive = sensitive
+        self.link = link
+    }
 }
 
 struct DeviceInfoSectionSpec: Identifiable {
@@ -35,6 +46,7 @@ private struct DeviceInfoRowView: View {
     let row: DeviceInfoRowSpec
     let showSensitive: Bool
     let onCopy: (String) -> Void
+    let onOpenLink: ((String) -> Void)?
 
     var body: some View {
         HStack(alignment: .top) {
@@ -52,6 +64,18 @@ private struct DeviceInfoRowView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             Spacer(minLength: 0)
+            if let link = row.link, !link.isEmpty {
+                Button {
+                    onOpenLink?(link)
+                } label: {
+                    HStack(spacing: 2) {
+                        Text("查询").font(.caption)
+                        Image(systemName: "chevron.right").font(.caption2)
+                    }
+                    .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.vertical, 5)
     }
@@ -92,6 +116,7 @@ struct DeviceInfoSectionCard: View {
     let section: DeviceInfoSectionSpec
     let showSensitive: Bool
     let onCopy: (String) -> Void
+    var onOpenLink: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -101,8 +126,13 @@ struct DeviceInfoSectionCard: View {
             }
             .padding(.bottom, 8)
             // v0.3.308：没有值的行直接不显示（此前一律渲染成「—」，整页出现大量空行）
-            ForEach(section.rows.filter { ($0.value ?? "").isEmpty == false }) { row in
-                DeviceInfoRowView(row: row, showSensitive: showSensitive, onCopy: onCopy)
+            ForEach(section.rows) { row in
+                // 没有值但有链接的行照样显示（如「保修期限 → 查询」）；
+                // 既没值也没链接的行才隐藏（此前一律渲染成「—」）
+                if (row.value ?? "").isEmpty == false || (row.link ?? "").isEmpty == false {
+                    DeviceInfoRowView(row: row, showSensitive: showSensitive,
+                                      onCopy: onCopy, onOpenLink: onOpenLink)
+                }
             }
         }
         .padding(16)

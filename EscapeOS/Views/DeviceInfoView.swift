@@ -14,6 +14,8 @@ struct DeviceInfoView: View {
     @State private var loading = true
     /// 隐私敏感字段统一小眼睛状态（默认全部隐藏）
     @State private var showSensitive = false
+    /// 内置浏览器（保修期限等外链查询，不静默跳外部 App）
+    @State private var browserTarget: LinkShareTarget?
 
     var body: some View {
         ScrollView {
@@ -27,7 +29,8 @@ struct DeviceInfoView: View {
                     ForEach(sections(info)) { section in
                         DeviceInfoSectionCard(section: section,
                                               showSensitive: showSensitive,
-                                              onCopy: copy)
+                                              onCopy: copy,
+                                              onOpenLink: openLink)
                     }
                     StorageDetailLinkCard()
                     if !info.supportedFeatures.isEmpty {
@@ -48,6 +51,9 @@ struct DeviceInfoView: View {
         .background(Color(.systemBackground))
         .navigationTitle("设备信息")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $browserTarget) { target in
+            InAppBrowserView(title: target.title, url: target.url)
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if info != nil {
@@ -79,6 +85,20 @@ struct DeviceInfoView: View {
 
     private func copy(_ s: String) {
         UIPasteboard.general.string = s
+    }
+
+    /// 保修期限只能联网查（Apple 要过验证码，爱思自己也有 Capcha 任务）——
+    /// 这里给官方查询页并在内置浏览器打开，序列号带上省得手输。
+    private func warrantyURL(_ info: DeviceInfoModel) -> String {
+        guard let sn = info.serialNumber, !sn.isEmpty else {
+            return "https://checkcoverage.apple.com/cn/zh/"
+        }
+        return "https://checkcoverage.apple.com/cn/zh/?sn=\(sn)"
+    }
+
+    private func openLink(_ raw: String) {
+        guard let url = URL(string: raw) else { return }
+        browserTarget = LinkShareTarget(title: "Apple 保修查询", url: url)
     }
 
     // MARK: - 顶部
@@ -117,6 +137,20 @@ struct DeviceInfoView: View {
             .init(id: 6, label: "生产日期", value: productionDateText, sensitive: false),
             .init(id: 7, label: "序列号", value: info.serialNumber, sensitive: true),
             .init(id: 8, label: "越狱状态", value: info.jailbroken.map { $0 ? "已越狱" : "未越狱" }, sensitive: false),
+            // v0.3.322：对齐爱思首屏的四项检测
+            .init(id: 20, label: "激活锁（ID锁）",
+                  value: info.activationLockEnabled.map { $0 ? "已开启" : "未开启" },
+                  sensitive: false),
+            .init(id: 21, label: "iCloud",
+                  value: info.iCloudSignedIn.map { $0 ? "已开启" : "未开启" },
+                  sensitive: false),
+            .init(id: 22, label: "崩溃日志",
+                  value: info.crashLogCount.map { "\($0) 次" },
+                  sensitive: false),
+            .init(id: 23, label: "保修期限",
+                  value: nil,
+                  sensitive: false,
+                  link: warrantyURL(info)),
             .init(id: 9, label: "销售类型", value: info.salesType, sensitive: false),
             .init(id: 10, label: "主板序列号", value: info.mlbSerial, sensitive: true),
             .init(id: 11, label: "产品类型", value: productTypeText(info), sensitive: false),

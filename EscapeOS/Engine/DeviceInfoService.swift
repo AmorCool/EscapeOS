@@ -121,6 +121,13 @@ struct DeviceInfoModel {
     var simsAreEmbedded: Bool?        // 是否全 eSIM（SIM1/SIM2IsEmbedded）
     /// 设备树/电池节点是否读成功（用于 UI 区分「系统未提供」与「读取失败」）
     var enrichAvailable: Bool = false
+    // v0.3.322：对齐爱思设备信息首屏的三项检测
+    /// 激活锁（ID 锁）：`com.apple.fmip` → `IsAssociated`
+    var activationLockEnabled: Bool?
+    /// iCloud 是否已登录：`com.apple.mobile.data_sync` 的 AccountNames 里含 `iCloud`
+    var iCloudSignedIn: Bool?
+    /// 崩溃日志条数（CrashReporter 根目录 `.ips`，排除磁盘写入/网络指标类诊断）
+    var crashLogCount: Int?
     var raw: [String: Any] = [:]
 }
 
@@ -193,6 +200,25 @@ enum DeviceInfoService {
         let itunes = (try? Self.lockdownDomainDict("com.apple.mobile.iTunes")) ?? [:]
         let batteryDomain = (try? Self.lockdownDomainDict("com.apple.mobile.battery")) ?? [:]
         let chaperone = (try? Self.lockdownDomainDict("com.apple.mobile.chaperone")) ?? [:]
+
+        // v0.3.322：激活锁 / iCloud（键与爱思 idm_info.dll 的 ios_check_fmip / ios_check_iCloud 同源）
+        // · 激活锁 = `com.apple.fmip` → `IsAssociated`（真机实测 false = 未开启，与爱思一致）
+        // · iCloud = `com.apple.mobile.data_sync` 的 Bookmarks/Calendars/Contacts/Notes 里
+        //   `AccountNames` 含 "iCloud"（真机实测本机四项都有 iCloud，与爱思「已开启」一致）
+        let activationLock = (try? Self.lockdownValue(domain: "com.apple.fmip",
+                                                     key: "IsAssociated")) as? Bool
+        let dataSync = (try? Self.lockdownDomainDict("com.apple.mobile.data_sync")) ?? [:]
+        var iCloudSignedIn: Bool? = nil
+        if !dataSync.isEmpty {
+            iCloudSignedIn = dataSync.values.contains { value in
+                guard let dict = value as? [String: Any],
+                      let names = dict["AccountNames"] as? [Any] else { return false }
+                return names.contains {
+                    ($0 as? String)?.caseInsensitiveCompare("iCloud") == .orderedSame
+                }
+            }
+        }
+        let crashCount = CrashLogService.shared.crashReportCount()
         func intOf(_ v: Any?) -> Int? {
             if let n = v as? Int { return n }
             if let n = v as? NSNumber { return n.intValue }
@@ -349,6 +375,9 @@ enum DeviceInfoService {
                 embedded1 && (boolOf(lockdown["SIM2IsEmbedded"]) ?? false)
             },
             enrichAvailable: enrich.map { $0.coverglassSerial != nil || $0.batterySerial != nil } ?? false,
+            activationLockEnabled: activationLock,
+            iCloudSignedIn: iCloudSignedIn,
+            crashLogCount: crashCount,
             raw: lockdown.merging(itunes) { a, _ in a }
         )
     }
@@ -468,6 +497,41 @@ enum DeviceInfoService {
         }
         defer { plist_free(node) }
         return Self.dictFromPlist(node)
+    }
+
+    /// v0.3.322：读 lockdown 的**单个键**（`lockdownd_get_value` 的 key 参数此前恒传 nil）。
+    /// 有些域整域读是空的，但单键有值 —— 例如 `com.apple.fmip` → `IsAssociated`。
+    static func lockdownValue(domain: String, key: String) throws -> Any? {
+        var tunnel = try makeTunnel()
+        defer { tunnel.free() }
+        guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
+            throw NSError(domain: "DeviceInfo", code: -30,
+                          userInfo: [NSLocalizedDescriptionKey: "隧道未建立"])
+        }
+        var client: OpaquePointer?
+        guard lockdownd_connect_rsd(adapter, handshake, &client) == nil, let client else {
+            throw NSError(domain: "DeviceInfo", code: -31,
+                          userInfo: [NSLocalizedDescriptionKey: "连接失败"])
+        }
+        defer { lockdownd_client_free(client) }
+        var node: plist_t?
+        let rc = key.withCString { keyCStr in
+            domain.withCString { domainCStr in
+                lockdownd_get_value(client, keyCStr, domainCStr, &node)
+            }
+        }
+        guard rc == nil, let node else {
+            throw NSError(domain: "DeviceInfo", code: -32,
+                          userInfo: [NSLocalizedDescriptionKey: "GetValue 失败"])
+        }
+        defer { plist_free(node) }
+        var binPtr: UnsafeMutablePointer<CChar>?
+        var binLen: UInt32 = 0
+        guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
+              let binPtr, binLen > 0 else { return nil }
+        defer { plist_mem_free(binPtr) }
+        return try? PropertyListSerialization.propertyList(
+            from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil)
     }
 
     private static func dictFromPlist(_ node: plist_t) -> [String: Any] {
