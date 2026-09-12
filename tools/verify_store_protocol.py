@@ -5,7 +5,38 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def strip_comments(text: str) -> str:
+    """去掉 Swift 注释后再做子串断言。
+
+    v0.3.359 发现（jsbox-re 变异测试 C 组实测）：本脚本原来是对**源码全文**做存在性匹配，
+    于是把要断言的代码片段「留在注释里」就能骗过校验 —— 它不是行为测试，只是文本契约。
+    先剥掉注释，至少让「注释能满足断言」这条捷径失效。
+    逐行处理：`//` 之前若引号计数为偶数才当作注释起点（避免砍掉字符串里的 "https://…"）。
+    """
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    out = []
+    for line in text.splitlines():
+        quotes = 0
+        cut = None
+        i = 0
+        while i < len(line) - 1:
+            ch = line[i]
+            if ch == '"' and (i == 0 or line[i - 1] != "\\"):
+                quotes += 1
+            elif ch == "/" and line[i + 1] == "/" and quotes % 2 == 0:
+                cut = i
+                break
+            i += 1
+        out.append(line if cut is None else line[:cut])
+    return "\n".join(out)
+
+
 def source(path: str) -> str:
+    return strip_comments((ROOT / path).read_text(encoding="utf-8"))
+
+
+def raw_source(path: str) -> str:
+    """未剥注释的原文 —— 只给「必须在注释里写明」这类**文档性**断言用。"""
     return (ROOT / path).read_text(encoding="utf-8")
 
 
@@ -100,6 +131,10 @@ def main() -> None:
             "the native rung also carries the store-client Accept header")
     require("isAppleHost" in history and "fallbackSAPCertURL" in history,
             "the purchase-history SAP signer uses the same relaxed host check as login")
+    # 反向断言：已购侧的 host pin 必须**不存在**（与登录侧那条 keep-in-sync）。
+    require('publicURL(value("sign-sap-setup-cert"), host:' not in history
+            and 'publicURL(value("sign-sap-setup"), host:' not in history,
+            "the purchase-history SAP host pin is gone")
     require("isDeviceGUID" in protocol and "guid.count == 12" not in auth,
             "device guid accepts the 12-32 hex form used by the reference client")
     # v0.3.358：SAP 端点只做「https + Apple 域」校验，不 pin 具体 host（上游 appstore_bag.go:89-94
@@ -114,7 +149,8 @@ def main() -> None:
     require("status == 403" not in protocol and "status == 429" not in protocol,
             "403 / 429 are not replayed (no evidence they are transient)")
     # v0.3.358：native-first 是 JAsspp 的放宽，不是 ipatool 上游行为，代码里要写明这一点。
-    require("不是 ipatool 上游行为" in protocol and "不是 ipatool 上游行为" in auth,
+    require("不是 ipatool 上游行为" in raw_source("EscapeOS/Services/AppleAuth/StoreAuthenticationProtocol.swift")
+            and "不是 ipatool 上游行为" in raw_source("EscapeOS/Services/AppleAuth/SignedStoreAuthenticator.swift"),
             "the native-first ladder is documented as a JAsspp-only divergence")
     # v0.3.354：换过机器身份后不能再把旧会话的 Cookie 当自己的发出去。
     require("deviceGuid" in source("vendor/ApplePackage/Models/Account.swift"),
@@ -123,7 +159,9 @@ def main() -> None:
             "a session from another identity is not replayed")
     require("authenticationURL(next.absoluteString)" in auth, "login redirect is allowlisted")
     require("request.httpShouldHandleCookies = false" in auth, "auth uses one cookie owner")
-    require("storageKey" in cookies and "name, domain, path" in cookies, "cookie identity preserves scope")
+    # 只断言**代码符号**（原先还断言了一句只存在于注释里的 "(name, domain, path)" —— 剥注释后暴露为假断言）
+    require("storageKey" in cookies and "normalizedDomain" in cookies,
+            "cookie identity preserves scope (name + domain + path)")
     require("parseResponse" in shim and "HTTPCookie.cookies" in shim, "multi-cookie parser uses Foundation")
     require("redirectConfiguration: .disallow" in purchase, "purchase POST redirects are explicit")
     require("StoreAuthenticationProtocol.storeURL" in purchase and "StoreAuthenticationProtocol.storeURL" in fetch, "credential redirects are allowlisted")
