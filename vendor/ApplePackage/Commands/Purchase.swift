@@ -151,12 +151,20 @@ public enum Purchase {
             ("X-Token", account.passwordToken),
         ]
 
-        for item in account.cookie.buildCookieHeader(URL(string: "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/buyProduct")!) {
+        // v0.3.337：直接打账号自己的 store pod（对齐上游 `Configuration.purchaseAPIHost`）。
+        // 原来硬编码 `buy.itunes.apple.com` 再靠 302 跳到 `p<N>-buy` —— 多一跳，且
+        // 重定向由 URLSession 处理时请求头可能被改写（X-Token / X-Apple-Store-Front 都在）。
+        let host = (account.pod?.isEmpty == false)
+            ? "p\(account.pod!)-buy.itunes.apple.com"
+            : "buy.itunes.apple.com"
+        let urlString = "https://\(host)/WebObjects/MZFinance.woa/wa/buyProduct"
+
+        for item in account.cookie.buildCookieHeader(URL(string: urlString)!) {
             headers.append(item)
         }
 
         return try .init(
-            url: "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/buyProduct",
+            url: urlString,
             method: .POST,
             headers: .init(headers),
             body: .data(data)

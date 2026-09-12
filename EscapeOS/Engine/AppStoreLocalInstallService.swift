@@ -88,6 +88,8 @@ enum AppStoreLocalInstallService {
         var output: DownloadOutput?
         var needLicense = false
         var refreshedForLicense = false
+        /// v0.3.337：空包只给**一次**「刷新登录 + 获取许可」的机会。
+        var triedLicenseForEmpty = false
         var retries = 0
         while true {
             do {
@@ -111,6 +113,15 @@ enum AppStoreLocalInstallService {
                 needLicense = true
                 retries += 1
                 onLog?("[AppleID] 该账号还没有此应用的许可（9610）→ 获取授权")
+            } catch ApplePackageError.emptyPackage where !triedLicenseForEmpty {
+                // v0.3.337：**空包也要走一次「获取许可」**。
+                // 此前空包只回退端点、从不购买 → 这一档永远卡死（真机日志里
+                // 「请求下载信息 → volumeStore 空包 → redownload 500」就是这条路）。
+                // Apple 对「没建立过下载权」的应用回静默空包，而 `buyProduct` 才是
+                // 建立它的正规途径（9610 能触发购买，空包却从不触发 = 逻辑漏洞）。
+                triedLicenseForEmpty = true
+                needLicense = true
+                onLog?("[AppleID] Apple 未返回可下载内容（空包）→ 先刷新登录并获取许可，再重试")
             } catch ApplePackageError.passwordTokenExpired where retries < 2 {
                 retries += 1
                 onLog?("[AppleID] 登录已失效（2034 / Sign In to the iTunes Store）→ 自动重新登录…")
