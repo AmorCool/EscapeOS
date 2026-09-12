@@ -22,6 +22,36 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
     /// 用于下游 download 调用路由到正确 store。ApplePackage 1.2.7 主线字段，
     /// 老持久化的 JSON 没有此字段时 Swift Codable 会自动解码为 nil（向后兼容）。
     public var pod: String?
+    /// Preserve Apple's complete storefront header; old account JSON remains compatible.
+    public var fullStoreFront: String?
+    /// Changes only after an explicit login/refresh. Stale requests cannot replace a newer session.
+    public var sessionRevision: UUID?
+
+    public var requestStoreFront: String {
+        if let fullStoreFront, !fullStoreFront.isEmpty { return fullStoreFront }
+        return store.isEmpty ? "" : "\(store)-1"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case email, password, appleId, store, firstName, lastName, passwordToken
+        case directoryServicesIdentifier, cookie, pod, fullStoreFront, sessionRevision
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        email = try values.decode(String.self, forKey: .email)
+        password = try values.decode(String.self, forKey: .password)
+        appleId = try values.decode(String.self, forKey: .appleId)
+        store = try values.decode(String.self, forKey: .store)
+        firstName = try values.decode(String.self, forKey: .firstName)
+        lastName = try values.decode(String.self, forKey: .lastName)
+        passwordToken = try values.decode(String.self, forKey: .passwordToken)
+        directoryServicesIdentifier = try values.decode(String.self, forKey: .directoryServicesIdentifier)
+        cookie = try values.decode([Cookie].self, forKey: .cookie)
+        pod = try values.decodeIfPresent(String.self, forKey: .pod)
+        fullStoreFront = try values.decodeIfPresent(String.self, forKey: .fullStoreFront)
+        sessionRevision = try values.decodeIfPresent(UUID.self, forKey: .sessionRevision)
+    }
 
     public init(
         email: String,
@@ -33,7 +63,9 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
         passwordToken: String,
         directoryServicesIdentifier: String,
         cookie: [Cookie],
-        pod: String? = nil
+        pod: String? = nil,
+        fullStoreFront: String? = nil,
+        sessionRevision: UUID? = nil
     ) {
         self.email = email
         self.password = password
@@ -45,6 +77,8 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
         self.directoryServicesIdentifier = directoryServicesIdentifier
         self.cookie = cookie
         self.pod = pod
+        self.fullStoreFront = fullStoreFront
+        self.sessionRevision = sessionRevision
     }
 }
 
@@ -59,7 +93,9 @@ public extension AppStoreAccount {
         passwordToken: String?,
         directoryServicesIdentifier: String?,
         cookie: [Cookie],
-        pod: String? = nil
+        pod: String? = nil,
+        fullStoreFront: String? = nil,
+        sessionRevision: UUID? = nil
     ) throws {
         try ensure(!email.isEmpty, "empty email")
         try ensure(!password.isEmpty, "empty password")
@@ -75,5 +111,7 @@ public extension AppStoreAccount {
         self.directoryServicesIdentifier = try directoryServicesIdentifier.get("unable to read dsPersonId")
         self.cookie = cookie
         self.pod = pod
+        self.fullStoreFront = fullStoreFront
+        self.sessionRevision = sessionRevision
     }
 }

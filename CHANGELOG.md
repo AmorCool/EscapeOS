@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.351] - 2026-09-12
+
+### 修复
+- **阻止 Apple ID 重登风暴**：已购返回合法空表、下载缺许可或空包都不再被误判为
+  passwordToken 过期；只有明确的 HTTP/DAAP 401/403 或 Apple 2034/2042 才刷新会话。
+- **同账号操作事务化**：登录刷新采用 single-flight，下载、历史版本和已购共享账号锁；
+  新增 session revision，防止较早请求结束后把新 token/cookie 覆盖回旧值。
+- **Cookie 正确性**：按 name + domain + path 合并，解析重复 Set-Cookie、Expires、Max-Age
+  与 host-only 语义；移除 URLSession 隐式 cookie jar 和手工 cookie 的双重管理。
+- **重定向安全与 POST 保真**：认证、购买、下载和版本接口不再让 URLSession 自动把
+  301/302 POST 改成 GET；只手动跟随 HTTPS Apple 商店白名单路径，限制跳数且阻断循环。
+- **已购协议收敛到上游口径**：只使用 `/update` 返回的 `musr` 请求
+  `/databases/{musr}/items`，删除 revision=1 和多 storefront 猜测；校验 mstt/mtco/mrco。
+- 保留完整 `X-Set-Apple-Store-Front`，日志不再输出 Apple 响应正文；HTTP 301 空响应
+  不再武断提示为 IP 限流，而是明确说明 Apple 没有提供可跟随的 Location。
+
+### 验证
+- 新增 `tools/verify_store_protocol.py`，离线验证重登触发条件、DAAP 空表/截断处理、
+  Cookie 单一所有权、会话 CAS/single-flight 以及凭据重定向白名单。
+
 ## [0.3.258] - 2026-09-09
 
 ### 修复（对齐上游 ipatool 5f776fe）

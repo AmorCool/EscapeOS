@@ -166,11 +166,14 @@ public struct HTTPClientCookie {
     public let path: String
     public let domain: String
     public let maxAge: Int?
+    public let expiresAt: TimeInterval?
+    public let hostOnly: Bool?
     public let httpOnly: Bool
     public let secure: Bool
 
     public init(name: String, value: String, path: String = "/", domain: String = "",
-                maxAge: Int? = nil, httpOnly: Bool = false, secure: Bool = false) {
+                maxAge: Int? = nil, httpOnly: Bool = false, secure: Bool = false,
+                expiresAt: TimeInterval? = nil, hostOnly: Bool? = nil) {
         self.name = name
         self.value = value
         self.path = path
@@ -178,6 +181,40 @@ public struct HTTPClientCookie {
         self.maxAge = maxAge
         self.httpOnly = httpOnly
         self.secure = secure
+        self.expiresAt = expiresAt
+        self.hostOnly = hostOnly
+    }
+
+    /// Foundation combines repeated Set-Cookie headers. Split only at a new cookie-pair,
+    /// not the comma inside Expires, and parse using the actual response origin.
+    public static func parseResponse(_ fields: [AnyHashable: Any], for url: URL) -> [HTTPClientCookie] {
+        guard let host = url.host?.lowercased() else { return [] }
+        let separator = try? NSRegularExpression(pattern: #",\s*(?=[!#$%&'*+\-.^_`|~0-9A-Za-z]+=)"#)
+        var result: [HTTPClientCookie] = []
+        for (key, rawValue) in fields where String(describing: key).lowercased() == "set-cookie" {
+            let values = (rawValue as? [String]) ?? [String(describing: rawValue)]
+            for value in values {
+                let marked = separator?.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: "\n") ?? value
+                for line in marked.split(separator: "\n") {
+                    let header = String(line)
+                    let attributes = header.split(separator: ";").dropFirst().map {
+                        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                    let explicitDomain = attributes.contains { $0.lowercased().hasPrefix("domain=") }
+                    let maxAge = attributes.first { $0.lowercased().hasPrefix("max-age=") }
+                        .flatMap { Int($0.dropFirst(8).trimmingCharacters(in: .whitespaces)) }
+                    for parsed in HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": header], for: url) {
+                        let domain = String(parsed.domain.drop(while: { $0 == "." })).lowercased()
+                        guard host == domain || (explicitDomain && host.hasSuffix("." + domain)) else { continue }
+                        result.append(HTTPClientCookie(name: parsed.name, value: parsed.value,
+                            path: parsed.path, domain: domain, maxAge: maxAge,
+                            httpOnly: parsed.isHTTPOnly, secure: parsed.isSecure,
+                            expiresAt: parsed.expiresDate?.timeIntervalSince1970, hostOnly: !explicitDomain))
+                    }
+                }
+            }
+        }
+        return result
     }
 
     /// 解析一条 `Set-Cookie` 响应头。
@@ -267,8 +304,11 @@ public final class HTTPClient {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = configuration.timeoutRead
         cfg.timeoutIntervalForResource = max(configuration.timeoutRead, 60)
-        // v0.3.21：URLSession cookie 处理已开启（httpShouldHandleCookies = true），
-        // ephemeral 配置自带独立 HTTPCookieStorage，同一 session 内自动捕获+回传。
+        // One cookie owner: callers send account cookies and persist parsed response cookies.
+        // A second implicit jar could replace the caller's fresh Cookie header on the next request.
+        cfg.httpCookieStorage = nil
+        cfg.httpShouldSetCookies = false
+        cfg.urlCredentialStorage = nil
         cfg.urlCache = nil
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: cfg,
@@ -346,11 +386,14 @@ public final class HTTPClient {
         public var status: HTTPResponseStatus
         public var headers: HTTPHeaders
         public var body: ByteBuffer?
+        public var parsedCookies: [HTTPClientCookie]?
 
-        public init(status: HTTPResponseStatus, headers: HTTPHeaders = HTTPHeaders(), body: ByteBuffer?) {
+        public init(status: HTTPResponseStatus, headers: HTTPHeaders = HTTPHeaders(), body: ByteBuffer?,
+                    parsedCookies: [HTTPClientCookie]? = nil) {
             self.status = status
             self.headers = headers
             self.body = body
+            self.parsedCookies = parsedCookies
         }
     }
 
@@ -364,11 +407,7 @@ public final class HTTPClient {
             var urlRequest = URLRequest(url: url)
             urlRequest.httpMethod = request.method.rawValue
             urlRequest.timeoutInterval = self.configuration.timeoutRead
-            // v0.3.21：开启 URLSession cookie 处理——SAP 认证流程中 Apple 服务器
-            // 使用 Set-Cookie 跟踪认证会话状态。之前关闭导致 204 循环（服务器
-            // 无法将 SAP 会话与 HTTP 会话关联）。TCI 路线已证此为关键缺失。
-            // 手动 cookie 传递（buildCookieHeader）仍在，两层不冲突。
-            urlRequest.httpShouldHandleCookies = true
+            urlRequest.httpShouldHandleCookies = false
             for item in request.headers.all {
                 urlRequest.setValue(item.value, forHTTPHeaderField: item.name)
             }
@@ -384,7 +423,9 @@ public final class HTTPClient {
             for (name, value) in http?.allHeaderFields ?? [:] {
                 headers.add(name: String(describing: name), value: String(describing: value))
             }
-            return Response(status: HTTPResponseStatus(code: code), headers: headers, body: ByteBuffer(data))
+            let cookies = http.map { HTTPClientCookie.parseResponse($0.allHeaderFields, for: $0.url ?? url) } ?? []
+            return Response(status: HTTPResponseStatus(code: code), headers: headers,
+                            body: ByteBuffer(data), parsedCookies: cookies)
         }
     }
 }
@@ -395,7 +436,7 @@ public extension HTTPClient.Response {
     /// 原版 AsyncHTTPClient 会自动填充这个属性；shim 需要手动解析。
     /// 登录 / 购买 / 下载流程全靠它把会话延续下去。
     var cookies: [HTTPClientCookie] {
-        headers["Set-Cookie"].compactMap { HTTPClientCookie.parse($0) }
+        parsedCookies ?? headers["Set-Cookie"].compactMap { HTTPClientCookie.parse($0) }
     }
 }
 
@@ -458,8 +499,15 @@ private final class ApplePackageRedirectDelegate: NSObject, URLSessionTaskDelega
             // .disallow：不跟随，把 302 交还给调用方自行处理。
             completionHandler(nil)
         } else {
-            // .follow：按 URLSession 默认行为跟随。
-            completionHandler(request)
+            // Authenticated store requests use .disallow and explicit allowlisted redirects.
+            // Defense in depth: never auto-forward a credential-bearing request across origins.
+            let headers = task.originalRequest?.allHTTPHeaderFields ?? [:]
+            let sensitive = headers.keys.contains { ["cookie", "authorization", "x-token", "x-dsid", "icloud-dsid", "x-apple-actionsignature"].contains($0.lowercased()) }
+            if sensitive && (request.url?.host != task.originalRequest?.url?.host || request.url?.scheme != "https") {
+                completionHandler(nil)
+            } else {
+                completionHandler(request)
+            }
         }
     }
 }

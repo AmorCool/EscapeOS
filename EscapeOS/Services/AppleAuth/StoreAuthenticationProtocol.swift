@@ -1,19 +1,34 @@
 import Foundation
 
-enum StoreAuthenticationError: LocalizedError {
+enum StoreAuthenticationError: LocalizedError, Sendable {
     case codeRequired
     case invalidCode
     case invalidConfiguration
     case invalidRedirect
     case serviceResponse(Int)
-    case addressRefused(Int)
+    case missingRedirect(Int)
+    case unstructuredResponse(Int, empty: Bool)
+    case rateLimited(retryAfter: TimeInterval?)
+    case cooldown(Int)
+    case accountChanged
+    case credentialsRequired
     case rejected(String)
     case tooManyAttempts
 
     var needsCode: Bool {
         switch self {
-        case .codeRequired, .invalidCode: true
-        default: false
+        case .codeRequired, .invalidCode: return true
+        default: return false
+        }
+    }
+
+    /// Local backoff, not a claim about Apple's IP/account restriction duration.
+    var backoffInterval: TimeInterval? {
+        switch self {
+        case let .rateLimited(delay): return max(60, delay ?? 60)
+        case .missingRedirect, .unstructuredResponse: return 60
+        case let .serviceResponse(status) where status >= 500: return 60
+        default: return nil
         }
     }
 
@@ -24,17 +39,28 @@ enum StoreAuthenticationError: LocalizedError {
         case .invalidCode:
             return "验证码被拒绝，请重新获取后重试"
         case .invalidConfiguration:
-            return "Apple 返回的登录配置不受支持（SAP 资产缺失或版本变化）"
+            return "Apple 返回的登录配置不受支持（请检查 SAP 资产与设备标识）"
         case .invalidRedirect:
-            return "Apple 返回了非法的登录跳转，凭据未被转发"
+            return "Apple 返回了不受信任的商店跳转，凭据未被转发"
         case let .serviceResponse(status):
-            return "登录服务返回异常（HTTP \(status)）——不是密码错或验证码问题，请稍后重试"
-        case let .addressRefused(status):
-            return "Apple 拒绝了本次登录（HTTP \(status)，空响应）：这是按出口 IP 的限流，不是账号或密码问题。请换一个网络（蜂窝 ⇄ Wi-Fi、手机热点、换 VPN 节点）并等 10 分钟以上再试 —— 连续重试会延长限制。"
+            return "登录服务响应异常（HTTP \(status)）。仅凭此响应无法判断账号、网络或服务端原因，请查看商店日志。"
+        case let .missingRedirect(status):
+            return "Apple 登录返回 HTTP \(status)，但缺少有效的 Location 跳转地址。已停止自动重试并保留现有账号；这不能单独证明是 IP 限流或密码错误。"
+        case let .unstructuredResponse(status, empty):
+            return "Apple 登录返回 HTTP \(status)（\(empty ? "空响应" : "非预期响应")），没有提供可识别的认证结果。已保留现有账号，请稍后重试并查看商店日志。"
+        case let .rateLimited(delay):
+            if let delay { return "Apple 登录请求受限（HTTP 429），请至少等待 \(Int(ceil(delay))) 秒后再试。" }
+            return "Apple 登录请求受限（HTTP 429），请稍后再试。"
+        case let .cooldown(seconds):
+            return "上次登录响应异常，为避免重复发送密码，本应用暂缓自动登录；请约 \(seconds) 秒后重试。现有账号未被删除。"
+        case .accountChanged:
+            return "操作期间账号已退出或更换，请重新选择账号。"
+        case .credentialsRequired:
+            return "保存的凭据不完整，请到账号管理重新登录 Apple ID。"
         case let .rejected(message):
             return message
         case .tooManyAttempts:
-            return "重试次数过多，请稍后再试"
+            return "登录跳转或协议重试次数过多，已停止请求，请稍后再试。"
         }
     }
 }
@@ -44,12 +70,24 @@ enum StoreAuthenticationProtocol {
     static let authenticationPath = "/WebObjects/MZFinance.woa/wa/authenticate"
 
     static func authenticationURL(_ value: String) throws -> URL {
-        guard let url = URL(string: value), url.scheme == "https",
+        let url = try storeURL(value, paths: [authenticationPath])
+        guard isBuyHost(url.host ?? "") else { throw StoreAuthenticationError.invalidRedirect }
+        return url
+    }
+
+    static func isBuyHost(_ host: String) -> Bool {
+        let host = host.lowercased()
+        return host == "buy.itunes.apple.com"
+            || host.range(of: #"^p[0-9]+-buy\.itunes\.apple\.com$"#, options: .regularExpression) != nil
+    }
+
+    static func storeURL(_ value: String, paths: Set<String>) throws -> URL {
+        guard let url = URL(string: value), url.scheme?.lowercased() == "https",
               url.user == nil, url.password == nil, url.fragment == nil,
               url.port == nil || url.port == 443,
               let host = url.host?.lowercased(),
-              host == "buy.itunes.apple.com" || host.range(of: #"^p[0-9]+-buy\.itunes\.apple\.com$"#, options: .regularExpression) != nil,
-              url.path == authenticationPath
+              paths.contains(url.path),
+              isBuyHost(host) || (host == "downloaddispatch.itunes.apple.com" && url.path == "/r/redownload")
         else { throw StoreAuthenticationError.invalidRedirect }
         return url
     }
@@ -77,19 +115,19 @@ enum StoreAuthenticationProtocol {
     }
 
     static func retryable(status: Int, data: Data) -> Bool {
-        // Only retry unstructured transient responses, never a credential/2FA rejection.
-        guard plist(data) == nil else { return false }
-        return status == 204 || status == 404 || (500 ... 599).contains(status)
+        // Never replay empty/ambiguous login refusals, 429, or structured credential/2FA errors.
+        !data.isEmpty && plist(data) == nil && [502, 503, 504].contains(status)
     }
 
-    /// Apple 对“来源地址”的软拒绝：无 plist 的空响应（204/403/404/5xx），
-    /// 或 3xx 但没有 Location 可跟随。社群实测（ipatool #530/#550）这类失败
-    /// **跟着出口 IP 走、不跟账号走**：同一份签名换个网络就能成功，同一网络
-    /// 连续重试只会让限制更久。故单独成类，好让 UI 给出可执行的提示。
-    static func addressRefused(status: Int, data: Data) -> Bool {
-        guard plist(data) == nil else { return false }
-        return status == 204 || status == 403 || status == 404
-            || status == 301 || status == 302 || (500 ... 599).contains(status)
+    static func retryAfter(_ value: String?, now: Date = Date()) -> TimeInterval? {
+        guard let value else { return nil }
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = TimeInterval(text), seconds.isFinite, seconds >= 0 { return min(seconds, 604800) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        return formatter.date(from: text).map { max(0, $0.timeIntervalSince(now)) }
     }
 
     static func rejection(_ plist: [String: Any], code: String) -> StoreAuthenticationError? {
@@ -104,13 +142,10 @@ enum StoreAuthenticationProtocol {
         return nil
     }
 
-    /// Foundation preserves a leading dot on domain cookies; ApplePackage 1.2.7
-    /// expects a bare domain when deciding which cookies to send to store pods.
     static func storeCookieDomain(_ domain: String?) -> String? {
         domain.map { String($0.drop(while: { $0 == "." })).lowercased() }
     }
 
-    /// Restore ApplePackage's domain/subdomain semantics in Foundation's jar.
     static func foundationCookieDomain(_ domain: String?) -> String? {
         guard let domain = storeCookieDomain(domain),
               domain == "itunes.apple.com" || domain.hasSuffix(".itunes.apple.com")

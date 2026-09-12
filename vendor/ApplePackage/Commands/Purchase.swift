@@ -68,11 +68,8 @@ public enum Purchase {
             eventLoopGroupProvider: .singleton,
             configuration: .init(
                 tlsConfiguration: Configuration.tlsConfiguration,
-                // v0.3.176：buyProduct 返回 302 重定向到正确 pod（Apple 标准 store-pod
-                // 分配机制）—— 旧实现 .disallow 直接失败 302，真机下载 100% 报错
-                // "purchase request failed with status 302"。改为 .follow(8 hops) 与
-                // ipatool 上游对齐（PR #486 实证：购买端点需跟随跨 pod 重定向到真实 pod）。
-                redirectConfiguration: .follow(max: 8, allowCycles: false),
+                // Follow explicitly below: URLSession's default 301/302 may turn POST into GET.
+                redirectConfiguration: .disallow,
                 timeout: .init(
                     connect: .seconds(Configuration.timeoutConnect),
                     read: .seconds(Configuration.timeoutRead)
@@ -81,17 +78,42 @@ public enum Purchase {
         )
         defer { _ = client.shutdown() }
 
-        let request = try makeRequest(
+        var request = try makeRequest(
             account: account,
             app: app,
             guid: guid,
             pricingParameters: pricingParameters,
             endpoint: endpoint
         )
-        let response = try await client.execute(request: request).get()
-
-        account.cookie.mergeCookies(response.cookies)
-
+        var response: HTTPClient.Response
+        var redirects = 0
+        while true {
+            try Task.checkCancellation()
+            response = try await client.execute(request: request).get()
+            account.cookie.mergeCookies(response.cookies)
+            if let pod = response.headers.first(name: "pod"), Int(pod) != nil { account.pod = pod }
+            if let store = response.headers.first(name: "X-Set-Apple-Store-Front"), !store.isEmpty {
+                account.fullStoreFront = store
+            }
+            guard (300 ... 399).contains(response.status.code) else { break }
+            guard redirects < 3,
+                  let currentURL = URL(string: request.url),
+                  let location = response.headers.first(name: "location"), !location.isEmpty,
+                  let next = URL(string: location, relativeTo: currentURL)?.absoluteURL, next != currentURL else {
+                throw StoreAuthenticationError.invalidRedirect
+            }
+            let nextURL = try StoreAuthenticationProtocol.storeURL(next.absoluteString,
+                paths: [BuyEndpoint.finance.path, BuyEndpoint.official.path])
+            request.url = nextURL.absoluteString
+            var headers = request.headers.all.filter { $0.name.lowercased() != "cookie" }
+                .map { ($0.name, $0.value) }
+            headers += account.cookie.buildCookieHeader(nextURL)
+            request.headers = HTTPHeaders(headers)
+            redirects += 1
+        }
+        if response.status.code == 401 || response.status.code == 403 {
+            throw ApplePackageError.passwordTokenExpired
+        }
         try ensure(response.status == .ok, "purchase request failed with status \(response.status.code)")
 
         guard var body = response.body,
@@ -179,7 +201,7 @@ public enum Purchase {
             ("User-Agent", Configuration.userAgent),
             ("iCloud-DSID", account.directoryServicesIdentifier),
             ("X-Dsid", account.directoryServicesIdentifier),
-            ("X-Apple-Store-Front", "\(account.store)-1"),
+            ("X-Apple-Store-Front", account.requestStoreFront),
             ("X-Token", account.passwordToken),
         ]
 

@@ -17,8 +17,8 @@ public enum Download {
     ) async throws -> DownloadOutput {
         let deviceIdentifier = Configuration.deviceIdentifier
 
-        // v0.3.176：下载流程与 Purchase 同——Apple CDN 重定向到正确 pod 需跟随
-        let client = Configuration.makeHTTPClient(redirectConfiguration: .follow(max: 8, allowCycles: false))
+        // fetchProduct validates and follows redirects itself, preserving POST/body and updated cookies.
+        let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
 
         // fetchProductWithFallback 内部处理 302 pod 重定向 + 空包/5002 → redownload 回退。

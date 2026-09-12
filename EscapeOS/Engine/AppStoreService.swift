@@ -255,22 +255,13 @@ enum AppStoreService {
     /// 这是唯一在**任何区域**都能拿到完整版本列表的通道 —— 商品页 HTML 那条
     /// 只有部分区域/部分应用内嵌了 `versionHistory` shelf，所以非国区经常是空的。
     static func storeVersionIdentifiers(bundleId: String, email: String) async throws -> [String] {
-        guard let stored = AppStoreDownloadStore.shared.account(for: email) else {
-            throw AppStoreError.noAccount
-        }
-        var account = stored
-        defer { AppStoreDownloadStore.shared.updateFromAnyThread(account) }
-        do {
-            return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
-        } catch ApplePackageError.passwordTokenExpired {
-            // 令牌过期 → 用已存凭据自动重登一次再重试（与下载链路同款）
-            LoginLogger.shared.log("版本历史：登录已失效，自动重新登录…", category: .appStore)
-            _ = try await AppleIDSignInService.rotate(email: email)
-            guard let refreshed = AppStoreDownloadStore.shared.account(for: email) else {
-                throw AppStoreError.noAccount
+        try await StoreAccountSession.withAccount(email: email) { account in
+            do {
+                return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
+            } catch ApplePackageError.passwordTokenExpired {
+                account = try await AppleIDSignInService.rotate(email: email, failedAccount: account)
+                return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
             }
-            account = refreshed
-            return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
         }
     }
 
@@ -278,27 +269,18 @@ enum AppStoreService {
     static func storeVersionMetadata(item: AppStoreItem,
                                      versionID: String,
                                      email: String) async throws -> (version: String, date: Date) {
-        guard let stored = AppStoreDownloadStore.shared.account(for: email) else {
-            throw AppStoreError.noAccount
-        }
-        var account = stored
-        defer { AppStoreDownloadStore.shared.updateFromAnyThread(account) }
         let software = try AppStoreLocalInstallService.makeSoftware(item)
-        do {
-            let meta = try await VersionLookup.getVersionMetadata(account: &account,
-                                                                  app: software,
-                                                                  versionID: versionID)
-            return (meta.displayVersion, meta.releaseDate)
-        } catch ApplePackageError.passwordTokenExpired {
-            _ = try await AppleIDSignInService.rotate(email: email)
-            guard let refreshed = AppStoreDownloadStore.shared.account(for: email) else {
-                throw AppStoreError.noAccount
+        return try await StoreAccountSession.withAccount(email: email) { account in
+            let metadata: VersionMetadata
+            do {
+                metadata = try await VersionLookup.getVersionMetadata(account: &account,
+                                                                       app: software, versionID: versionID)
+            } catch ApplePackageError.passwordTokenExpired {
+                account = try await AppleIDSignInService.rotate(email: email, failedAccount: account)
+                metadata = try await VersionLookup.getVersionMetadata(account: &account,
+                                                                       app: software, versionID: versionID)
             }
-            account = refreshed
-            let meta = try await VersionLookup.getVersionMetadata(account: &account,
-                                                                  app: software,
-                                                                  versionID: versionID)
-            return (meta.displayVersion, meta.releaseDate)
+            return (metadata.displayVersion, metadata.releaseDate)
         }
     }
 

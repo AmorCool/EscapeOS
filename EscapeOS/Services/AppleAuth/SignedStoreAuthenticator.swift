@@ -23,7 +23,7 @@ actor SignedStoreAuthenticator {
     }
 
     private let session: URLSession
-    private let cookieStorage: HTTPCookieStorage
+    private var cookies: [Cookie] = []
     private let userAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
 
     init() {
@@ -32,7 +32,8 @@ actor SignedStoreAuthenticator {
         configuration.timeoutIntervalForResource = 60
         configuration.urlCredentialStorage = nil
         configuration.urlCache = nil
-        cookieStorage = configuration.httpCookieStorage!
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
         session = URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
     }
 
@@ -44,7 +45,7 @@ actor SignedStoreAuthenticator {
         defer { session.invalidateAndCancel() }
         try Task.checkCancellation()
         let normalizedCode = code.filter { !$0.isWhitespace }
-        restore(cookies)
+        self.cookies = cookies
 
         let bagURL = URL(string: "https://init.itunes.apple.com/bag.xml?guid=\(guid)")!
         let (bagData, bagResponse) = try await send(URLRequest(url: bagURL))
@@ -115,16 +116,22 @@ actor SignedStoreAuthenticator {
             if let v = response.value(forHTTPHeaderField: "X-Set-Apple-Store-Front") { storefront = v }
             if let v = response.value(forHTTPHeaderField: "pod") { pod = v }
             if (300 ... 399).contains(response.statusCode) {
-                // 缺 Location 的 3xx 是 Apple 的地址级软拒绝（ipatool #520），跟随不了
+                // A 3xx without Location is not a usable redirect; do not guess its cause or replay credentials.
                 guard let location = response.value(forHTTPHeaderField: "Location"),
+                      !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       let next = URL(string: location, relativeTo: url)?.absoluteURL
-                else { throw refusalError(response.statusCode, data) }
+                else { throw StoreAuthenticationError.missingRedirect(response.statusCode) }
+                guard redirects < 3, next != url else { throw StoreAuthenticationError.tooManyAttempts }
                 url = try StoreAuthenticationProtocol.authenticationURL(next.absoluteString)
                 redirects += 1
                 continue
             }
             guard let plist = StoreAuthenticationProtocol.plist(data) else {
-                throw refusalError(response.statusCode, data)
+                if response.statusCode == 429 {
+                    throw StoreAuthenticationError.rateLimited(retryAfter: StoreAuthenticationProtocol.retryAfter(
+                        response.value(forHTTPHeaderField: "Retry-After")))
+                }
+                throw StoreAuthenticationError.unstructuredResponse(response.statusCode, empty: data.isEmpty)
             }
             if protocolAttempt == 1, StoreAuthenticationProtocol.string(plist["failureType"]) == "-5000" {
                 protocolAttempt += 1
@@ -155,8 +162,9 @@ actor SignedStoreAuthenticator {
                 lastName: (address["lastName"] as? String) ?? "",
                 passwordToken: token,
                 directoryServicesIdentifier: StoreAuthenticationProtocol.string(plist["dsPersonId"]),
-                cookie: savedCookies(),
-                pod: pod)
+                cookie: self.cookies,
+                pod: pod,
+                fullStoreFront: storefront)
         }
         throw StoreAuthenticationError.tooManyAttempts
     }
@@ -169,36 +177,39 @@ actor SignedStoreAuthenticator {
         // 与上游 Asspp 一致：客户端保真度（缺它更容易被边缘软拒绝）
         request.setValue(Locale.preferredLanguages.prefix(3).joined(separator: ", "),
                          forHTTPHeaderField: "Accept-Language")
+        request.httpShouldHandleCookies = false
+        if let url = request.url {
+            for (name, value) in cookies.buildCookieHeader(url) {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
+        }
         let (data, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else {
+        guard let response = response as? HTTPURLResponse, let url = response.url else {
             throw StoreAuthenticationError.serviceResponse(0)
         }
-        // 不打印 body / 签名 / query / Set-Cookie
-        LoginLogger.shared.log("[SAP] \(request.url?.host ?? "?") → HTTP \(response.statusCode)，\(data.count) 字节",
-                               category: .appStore)
+        let received = HTTPClientCookie.parseResponse(response.allHeaderFields, for: url)
+        cookies.mergeCookies(received)
+        // Log only shape/status, never body, credentials, signatures, cookie values or redirect queries.
+        let location = response.value(forHTTPHeaderField: "Location")
+        let targetHost = location.flatMap { URL(string: $0, relativeTo: url)?.host } ?? "none"
+        LoginLogger.shared.log("[SAP] \(request.url?.host ?? "?") → HTTP \(response.statusCode)，\(data.count) 字节；LocationHost=\(targetHost)；Set-Cookie=\(received.count)", category: .appStore)
         return (data, response)
-    }
-
-    /// 把「空响应」的错误归类到位：地址级软拒绝单独报，否则算服务异常
-    private func refusalError(_ status: Int, _ data: Data) -> StoreAuthenticationError {
-        StoreAuthenticationProtocol.addressRefused(status: status, data: data)
-            ? .addressRefused(status)
-            : .serviceResponse(status)
     }
 
     /// 每次重试都**用同一份 body + 新签名**（与 ipatool 一致）
     private func sendAuthentication(_ request: URLRequest,
                                     signer: SAPContext) async throws -> (Data, HTTPURLResponse) {
-        for attempt in 1 ... 3 {
+        for attempt in 1 ... 2 {
             var signedRequest = request
             signedRequest.setValue(try signer.sign(request.httpBody ?? Data()).base64EncodedString(),
                                    forHTTPHeaderField: "X-Apple-ActionSignature")
             let result = try await send(signedRequest)
-            if attempt == 3 || !StoreAuthenticationProtocol.retryable(status: result.1.statusCode,
-                                                                      data: result.0) {
+            if attempt == 2 || !StoreAuthenticationProtocol.retryable(status: result.1.statusCode,
+                                                                      data: result.0)
+                || result.1.value(forHTTPHeaderField: "Retry-After") != nil {
                 return result
             }
-            try await Task.sleep(for: .milliseconds(attempt * 250))
+            try await Task.sleep(for: .seconds(2))
         }
         throw StoreAuthenticationError.tooManyAttempts
     }
@@ -212,27 +223,4 @@ actor SignedStoreAuthenticator {
         return url
     }
 
-    // MARK: - Cookie
-
-    private func restore(_ cookies: [Cookie]) {
-        for cookie in cookies {
-            guard let domain = StoreAuthenticationProtocol.foundationCookieDomain(cookie.domain) else { continue }
-            var properties: [HTTPCookiePropertyKey: Any] = [
-                .name: cookie.name, .value: cookie.value, .path: cookie.path, .domain: domain,
-                .secure: cookie.secure ? "TRUE" : "FALSE",
-            ]
-            if let expires = cookie.expiresAt { properties[.expires] = Date(timeIntervalSince1970: expires) }
-            if cookie.httpOnly { properties[HTTPCookiePropertyKey("HttpOnly")] = "TRUE" }
-            if let restored = HTTPCookie(properties: properties) { cookieStorage.setCookie(restored) }
-        }
-    }
-
-    private func savedCookies() -> [Cookie] {
-        (cookieStorage.cookies ?? []).map {
-            Cookie(name: $0.name, value: $0.value, path: $0.path,
-                   domain: StoreAuthenticationProtocol.storeCookieDomain($0.domain),
-                   expiresAt: $0.expiresDate?.timeIntervalSince1970,
-                   httpOnly: $0.isHTTPOnly, secure: $0.isSecure)
-        }
-    }
 }

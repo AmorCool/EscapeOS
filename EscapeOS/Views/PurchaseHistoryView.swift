@@ -18,7 +18,7 @@ struct PurchaseHistoryView: View {
     @State private var apps: [OwnedApp] = []
     @State private var icons: [Int64: String] = [:]
     @State private var keyword = ""
-    @State private var loading = true
+    @State private var loading = false
     @State private var errorText: String?
 
     private var filtered: [OwnedApp] {
@@ -48,7 +48,7 @@ struct PurchaseHistoryView: View {
                     }
                 } else if apps.isEmpty {
                     Section {
-                        Text("该账号没有已购记录。")
+                        Text("Apple 本次返回的已购列表为空。这不代表账号从未购买；请核对当前账号和商店区域。应用不会因空结果自动重新登录。")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -181,7 +181,9 @@ struct PurchaseHistoryView: View {
 
     // MARK: - 加载
 
+    @MainActor
     private func load() async {
+        guard !loading else { return }
         loading = true
         errorText = nil
         do {

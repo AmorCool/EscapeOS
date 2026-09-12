@@ -53,12 +53,9 @@ extension StoreDownloadEndpoint {
                 )
                 storeLog("redownload 返回；\(summary(dict))")
             } catch {
-                // v0.3.338：回退也失败（redownload 常见 HTTP 500 空 body）时，
-                // **本质仍然是「Apple 没有给包」**，必须把原始的空包结论抛给上层。
-                // 否则上层的「空包 → 获取许可 → 重试」分支永远不会被触发
-                // （337 就是这个缺陷：这里抛的是 500，不是 emptyPackage）。
+                // Keep authentication, cancellation, transport and trust failures intact.
+                // A failed fallback is not evidence that the user needs another license/login.
                 storeLog("redownload 失败：\(error.localizedDescription)")
-                if fallbackReason(dict) != nil { throw ApplePackageError.emptyPackage }
                 throw error
             }
         }
@@ -125,21 +122,24 @@ extension StoreDownloadEndpoint {
                 deviceIdentifier: deviceIdentifier,
                 externalVersionID: externalVersionID
             )
+            try Task.checkCancellation()
             let response = try await client.execute(request: request).get()
-            defer { finalResponse = response }
-
+            finalResponse = response
             account.cookie.mergeCookies(response.cookies)
+            if let pod = response.headers.first(name: "pod"), Int(pod) != nil { account.pod = pod }
+            if let store = response.headers.first(name: "X-Set-Apple-Store-Front"), !store.isEmpty {
+                account.fullStoreFront = store
+            }
 
-            // v0.3.334：按 Asspp 的做法接受全部 3xx（301/302/303/307/308），
-            // 并把 4 跳上限对齐 —— 原来只认 302，301 会直接当失败。
             if (300 ... 399).contains(response.status.code) {
-                guard let location = response.headers.first(name: "location"),
-                      let next = URL(string: location, relativeTo: currentURL)?.absoluteURL
-                else {
-                    storeLog("重定向缺少 Location（HTTP \(response.status.code)）")
-                    try ensureFailed("failed to retrieve redirect location")
+                guard redirectAttempt < maxRedirects,
+                      let location = response.headers.first(name: "location"), !location.isEmpty,
+                      let next = URL(string: location, relativeTo: currentURL)?.absoluteURL,
+                      next != currentURL else {
+                    throw StoreAuthenticationError.invalidRedirect
                 }
-                currentURL = next
+                currentURL = try StoreAuthenticationProtocol.storeURL(next.absoluteString,
+                    paths: [StoreDownloadEndpoint.volumeStore.path, StoreDownloadEndpoint.redownload.path])
                 redirectAttempt += 1
                 continue
             }
@@ -226,7 +226,7 @@ extension StoreDownloadEndpoint {
         // 但能让响应头 `X-Apple-Request-Store-Front` 回显真实值 —— 排查空包时这行是关键证据
         // （不回显 `<null>` 只能说明「请求没声明区域」，看不出账号到底认的哪个区）。
         if !account.store.isEmpty {
-            headers.append(("X-Apple-Store-Front", "\(account.store)-1"))
+            headers.append(("X-Apple-Store-Front", account.requestStoreFront))
         }
 
         for item in account.cookie.buildCookieHeader(url) {

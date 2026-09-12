@@ -71,6 +71,7 @@ final class AppStoreDownloadStore {
     /// v0.3.167：重置 App Store 机器标识（guid）——删除持久化标识后重新随机生成.
     /// 用途：Apple 边缘对已标记的 guid 持续拒（native/fast 301/404）时换新身份.
     func resetDeviceIdentifier() {
+        lock.lock(); defer { lock.unlock() }
         UserDefaults.standard.removeObject(forKey: "ApplePackageDeviceIdentifier")
         try? FileManager.default.removeItem(at: Self.documentsGUIDFile)
         Self.bootstrapDeviceIdentifier()
@@ -82,21 +83,34 @@ final class AppStoreDownloadStore {
             .appendingPathComponent("appstore_accounts.json")
     }
 
-    private(set) var accounts: [AppStoreAccount] = []
+    // Calls also originate in detached downloads; serialize reads, writes and persistence.
+    private let lock = NSRecursiveLock()
+    private var storedAccounts: [AppStoreAccount] = []
+    private(set) var accounts: [AppStoreAccount] {
+        get { lock.lock(); defer { lock.unlock() }; return storedAccounts }
+        set { lock.lock(); defer { lock.unlock() }; storedAccounts = newValue }
+    }
 
     func load() {
+        lock.lock(); defer { lock.unlock() }
         guard let data = try? Data(contentsOf: fileURL),
               let list = try? JSONDecoder().decode([AppStoreAccount].self, from: data) else {
             accounts = []
             return
         }
-        accounts = list
+        accounts = list.map { account in
+            var migrated = Self.normalized(account)
+            if migrated.sessionRevision == nil { migrated.sessionRevision = UUID() }
+            return migrated
+        }
     }
 
     func add(_ account: AppStoreAccount) {
+        lock.lock(); defer { lock.unlock() }
         load()
-        let account = Self.normalized(account)
-        accounts.removeAll { $0.email == account.email }
+        var account = Self.normalized(account)
+        account.sessionRevision = UUID()
+        accounts.removeAll { $0.email.caseInsensitiveCompare(account.email) == .orderedSame }
         accounts.append(account)
         save()
         // v0.3.309：新登录的账号自动成为「当前下载账号」——多账号时用户刚登录的那个
@@ -132,38 +146,51 @@ final class AppStoreDownloadStore {
     /// 我们此前只改本地 `var account` 副本、用完就丢，于是**每次都在拿旧票据去换新票据**，
     /// 表现为「动不动就要重登」。这里补上回写，且不改动当前选中账号。
     func update(_ account: AppStoreAccount) {
+        lock.lock(); defer { lock.unlock() }
         let account = Self.normalized(account)
-        // 内存里没有这个账号 → 重新读盘确认（可能只是冷启动未加载；也可能已被退出登录）
-        if !accounts.contains(where: { $0.email == account.email }) { load() }
-        guard accounts.contains(where: { $0.email == account.email }) else { return }
-        accounts.removeAll { $0.email == account.email }
-        accounts.append(account)
+        guard let index = storedAccounts.firstIndex(where: { $0.email.caseInsensitiveCompare(account.email) == .orderedSame }),
+              Self.sameSession(storedAccounts[index], account) else { return }
+        storedAccounts[index] = account
         save()
     }
 
-    /// 从任意线程安全回写。
-    ///
-    /// 下载/版本查询跑在后台线程（nonisolated async 不继承调用者的 actor），
-    /// 而 `accounts` 的所有既有写路径都在主线程（UI / `MainActor.run`）。
-    /// 这里统一调度回主线程，避免与 UI 读账号竞争。
+    /// Synchronous persistence: the next request must see the cookies just received.
     func updateFromAnyThread(_ account: AppStoreAccount) {
-        let account = Self.normalized(account)
-        if Thread.isMainThread {
-            update(account)
-        } else {
-            DispatchQueue.main.async { [weak self] in self?.update(account) }
+        update(account)
+    }
+
+    static func sameSession(_ lhs: AppStoreAccount, _ rhs: AppStoreAccount) -> Bool {
+        lhs.email.caseInsensitiveCompare(rhs.email) == .orderedSame && lhs.sessionRevision == rhs.sessionRevision
+            && lhs.passwordToken == rhs.passwordToken
+            && lhs.directoryServicesIdentifier == rhs.directoryServicesIdentifier
+    }
+
+    /// Commit a refreshed session only if the account was not removed/replaced while awaiting Apple.
+    /// Unlike add(), background refresh never changes the selected account or shop region.
+    func commitRefresh(_ account: AppStoreAccount, replacing original: AppStoreAccount) throws -> AppStoreAccount {
+        lock.lock(); defer { lock.unlock() }
+        guard let index = storedAccounts.firstIndex(where: { $0.email.caseInsensitiveCompare(original.email) == .orderedSame }) else {
+            throw StoreAuthenticationError.accountChanged
         }
+        guard Self.sameSession(storedAccounts[index], original) else { return storedAccounts[index] }
+        var refreshed = Self.normalized(account)
+        refreshed.sessionRevision = UUID()
+        storedAccounts[index] = refreshed
+        save()
+        return refreshed
     }
 
     func remove(_ email: String) {
+        lock.lock(); defer { lock.unlock() }
         load()
-        accounts.removeAll { $0.email == email }
+        accounts.removeAll { $0.email.caseInsensitiveCompare(email) == .orderedSame }
         save()
     }
 
     func account(for email: String) -> AppStoreAccount? {
+        lock.lock(); defer { lock.unlock() }
         if accounts.isEmpty { load() }
-        return accounts.first { $0.email == email }
+        return accounts.first { $0.email.caseInsensitiveCompare(email) == .orderedSame }
     }
 
     // MARK: - v0.3.308：当前账号 / 账号管理
@@ -183,14 +210,16 @@ final class AppStoreDownloadStore {
     }
 
     var usableAccounts: [AppStoreAccount] {
+        lock.lock(); defer { lock.unlock() }
         if accounts.isEmpty { load() }
         return accounts.filter { Self.isUsable($0) }
     }
 
     /// 下载/安装实际使用的账号（选中账号失效时回退到第一个**可用**账号）
     var selectedAccount: AppStoreAccount? {
+        lock.lock(); defer { lock.unlock() }
         if accounts.isEmpty { load() }
-        if let e = selectedEmail, let hit = accounts.first(where: { $0.email == e }),
+        if let e = selectedEmail, let hit = accounts.first(where: { $0.email.caseInsensitiveCompare(e) == .orderedSame }),
            Self.isUsable(hit) { return hit }
         return usableAccounts.first
     }
@@ -206,12 +235,14 @@ final class AppStoreDownloadStore {
 
     /// 退出登录单个账号
     func signOut(email: String) {
+        lock.lock(); defer { lock.unlock() }
         remove(email)
-        if selectedEmail == email { selectedEmail = accounts.first?.email }
+        if selectedEmail?.caseInsensitiveCompare(email) == .orderedSame { selectedEmail = accounts.first?.email }
     }
 
     /// 退出全部账号
     func signOutAll() {
+        lock.lock(); defer { lock.unlock() }
         accounts = []
         save()
         selectedEmail = nil
@@ -219,6 +250,7 @@ final class AppStoreDownloadStore {
 
     /// 批量登录结果（供账号管理页展示）
     private func save() {
+        lock.lock(); defer { lock.unlock() }
         guard let data = try? JSONEncoder().encode(accounts) else { return }
         try? data.write(to: fileURL, options: .atomic)
     }

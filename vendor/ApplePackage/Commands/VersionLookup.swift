@@ -28,7 +28,7 @@ public enum VersionLookup {
 
         let deviceIdentifier = Configuration.deviceIdentifier
 
-        var currentURL = try createInitialRequestEndpoint(deviceIdentifier: deviceIdentifier)
+        var currentURL = try StoreDownloadEndpoint.volumeStore.url(pod: account.pod, deviceIdentifier: deviceIdentifier)
         var redirectAttempt = 0
         var finalResponse: HTTPClient.Response?
         let maxRedirects = 3
@@ -41,18 +41,19 @@ public enum VersionLookup {
                 guid: deviceIdentifier,
                 versionID: versionID
             )
+            try Task.checkCancellation()
             let response = try await client.execute(request: request).get()
-            defer { finalResponse = response }
-
+            finalResponse = response
             account.cookie.mergeCookies(response.cookies)
 
-            if response.status == .found {
-                guard let location = response.headers.first(name: "location"),
-                      let newURL = URL(string: location)
-                else {
-                    try ensureFailed("failed to retrieve redirect location")
+            if (300 ... 399).contains(response.status.code) {
+                guard redirectAttempt < maxRedirects,
+                      let location = response.headers.first(name: "location"), !location.isEmpty,
+                      let next = URL(string: location, relativeTo: currentURL)?.absoluteURL, next != currentURL else {
+                    throw StoreAuthenticationError.invalidRedirect
                 }
-                currentURL = newURL
+                currentURL = try StoreAuthenticationProtocol.storeURL(next.absoluteString,
+                    paths: [StoreDownloadEndpoint.volumeStore.path])
                 redirectAttempt += 1
                 continue
             }
@@ -61,6 +62,13 @@ public enum VersionLookup {
 
         guard let finalResponse else { try ensureFailed("no response received") }
 
+        if let pod = finalResponse.headers.first(name: "pod"), Int(pod) != nil { account.pod = pod }
+        if let store = finalResponse.headers.first(name: "X-Set-Apple-Store-Front"), !store.isEmpty {
+            account.fullStoreFront = store
+        }
+        if finalResponse.status.code == 401 || finalResponse.status.code == 403 {
+            throw ApplePackageError.passwordTokenExpired
+        }
         try ensure(finalResponse.status == .ok, "invalid response status \(finalResponse.status.code)")
 
         guard var body = finalResponse.body,
