@@ -180,6 +180,9 @@ def main() -> None:
     # 失败无法归因；已购侧的 SAP 校验必须与登录侧同样放宽。
     require("isNativeFastHost(authHost)" in auth,
             "the native rung also carries the store-client Accept header")
+    # v0.3.360：3xx 拿不到可用 Location 必须走「进下一档」，不能当场 throw 打断阶梯。
+    require("advanceRung" in auth and "无可用 Location" in auth,
+            "a 3xx without a usable Location advances the ladder instead of aborting")
     require("isAppleHost" in history and "fallbackSAPCertURL" in history,
             "the purchase-history SAP signer uses the same relaxed host check as login")
     # 反向断言：已购侧的 host pin 必须**不存在**（与登录侧那条 keep-in-sync）。

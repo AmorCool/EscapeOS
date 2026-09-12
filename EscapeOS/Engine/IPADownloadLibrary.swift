@@ -138,6 +138,21 @@ final class IPADownloadLibrary {
         saveIndex(index)
     }
 
+    /// v0.3.360：把查到的图标地址**落盘**。
+    ///
+    /// 为什么需要：真机 `ipa_downloads.json` 里 5 条记录**都没有 `iconURL`** ——
+    /// 「本地」来源的条目大多由 `makeItem`（磁盘扫描）现场构造，那条路径固定传 `iconURL: nil`，
+    /// 于是列表永远只能显示占位图。界面侧会按 bundleId 反查图标补齐，
+    /// **这里把结果持久化**，避免每次进页面都重新发一轮 lookup 请求（条目多了会变成请求风暴）。
+    func updateIconURL(fileName: String, url: String) {
+        guard !url.isEmpty else { return }
+        var index = loadIndex()
+        guard let i = index.firstIndex(where: { $0.fileName == fileName }) else { return }
+        guard index[i].iconURL != url else { return }
+        index[i].iconURL = url
+        saveIndex(index)
+    }
+
     // MARK: - 删除
 
     /// 删除一个下载包（文件 + 索引）

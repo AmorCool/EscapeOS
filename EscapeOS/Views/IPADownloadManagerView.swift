@@ -314,15 +314,21 @@ struct IPADownloadManagerView: View {
     /// 图标只是锦上添花，不能让缺失影响列表渲染。
     @MainActor
     private func loadIcons() async {
+        // v0.3.360：查到就**落盘**（`IPADownloadLibrary.updateIconURL`），否则每次进页面都要重发
+        // 一轮 lookup。单次最多补 30 条，超出的留到下次，避免条目多时变成请求风暴。
         var queried = Set<String>()
+        var budget = 30
         for item in items {
+            guard budget > 0 else { break }
             guard item.iconURL == nil else { continue }
             guard let bid = item.bundleId?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !bid.isEmpty else { continue }
             guard icons[bid] == nil, queried.insert(bid).inserted else { continue }
+            budget -= 1
             if let hit = try? await AppStoreService.lookup(bundleId: bid),
                let icon = hit.iconSmallURL ?? hit.iconURL {
                 icons[bid] = icon
+                IPADownloadLibrary.shared.updateIconURL(fileName: item.fileName, url: icon)
             }
         }
     }

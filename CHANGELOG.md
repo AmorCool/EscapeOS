@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.360] - 2026-09-12
+
+### 修复
+- **登录：3xx 但拿不到可用 Location 时改为「进下一档」，不再当场判死打断阶梯**。
+  真机实证：用户看到的是 `missingRedirect` 的文案（「Apple 登录返回 HTTP 302，但缺少有效的
+  Location 跳转地址」），而商店日志里**完全没有**「认证入口 HTTP …（无 plist）」那行 —— 后者
+  只有「换档」路径才打。说明循环是被 3xx 分支当场 `throw` 打死的，②③④ 档（bag·form /
+  bag·plist / bag 尾斜杠）一次都没被尝试；而 legacy 端点回 Location-less 3xx 恰恰是
+  v0.3.357 起要逃离的形态（PC 复现：301 + 162 字节 HTML，Location 头为 None）——
+  本该靠换档绕开的拒绝，反而把换档本身掐断了。现在只有阶梯耗尽才抛 `missingRedirect`。
+  安全性质不退化：换档只发往自己白名单内的候选，**从不把凭据重放到未经验证的 Location**。
+- **下载管理补齐 App 图标**。根因：真机 `Documents/ipa_downloads.json` 里 5 条记录**都没有
+  `iconURL`** —— 「本地」来源的条目多由磁盘扫描（`IPADownloadLibrary.makeItem`）现场构造，
+  该路径固定传 `iconURL: nil`，于是永远只显示占位图。现在界面按 bundleId 反查图标补齐
+  （单次最多 30 条），并用新增的 `IPADownloadLibrary.updateIconURL(fileName:url:)` **落盘**，
+  避免每次进页面重发一轮请求；查不到时回退为**首字母方块**（虚框看起来像「加载失败」）。
+- **下载管理文字改为换行、不再截断**（用户要求）：标题允许 2 行；包类型与副标题去掉
+  `lineLimit(1)`/中间省略号，改为完整换行显示；两个尺寸/版本胶囊仍保持单行。
+- `tools/verify_store_protocol.py` 新增断言：3xx 无可用 Location 必须换档。
+
 ## [0.3.359] - 2026-09-12
 
 ### 修复
