@@ -265,6 +265,10 @@ enum PurchaseHistoryService {
             signerReady = true
         }
 
+        private func plain(_ url: URL) async throws -> (Data, HTTPURLResponse) {
+            try await plain(URLRequest(url: url))
+        }
+
         private func plain(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
             var request = request
             request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -326,8 +330,8 @@ enum PurchaseHistoryService {
             walk(data) { name, payload in
                 guard found == nil, name == target else { return }
                 switch payload.count {
-                case 4: found = UInt64(payload.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian })
-                case 8: found = payload.withUnsafeBytes { $0.load(as: UInt64.self).bigEndian }
+                case 4: found = UInt64(payload.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian })
+                case 8: found = payload.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).bigEndian }
                 default: break
                 }
             }
@@ -346,7 +350,7 @@ enum PurchaseHistoryService {
                 let nameData = data.subdata(in: offset ..< offset + 4)
                 guard let name = String(data: nameData, encoding: .isoLatin1) else { return }
                 let length = Int(data.subdata(in: offset + 4 ..< offset + 8)
-                    .withUnsafeBytes { $0.load(as: UInt32.self).bigEndian })
+                    .withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian })
                 guard length >= 0, offset + 8 + length <= data.count else { return }
                 let payload = data.subdata(in: offset + 8 ..< offset + 8 + length)
                 visit(name, payload)
@@ -367,9 +371,9 @@ enum PurchaseHistoryService {
                     switch field {
                     case "aeSI":
                         if value.count == 4 {
-                            app.id = Int64(value.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian })
+                            app.id = Int64(value.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian })
                         } else if value.count == 8 {
-                            app.id = Int64(bitPattern: value.withUnsafeBytes { $0.load(as: UInt64.self).bigEndian })
+                            app.id = Int64(bitPattern: value.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).bigEndian })
                         }
                     case "aeBI": app.bundleId = String(decoding: value, as: UTF8.self)
                     case "aeLN": app.name = String(decoding: value, as: UTF8.self)
@@ -378,7 +382,7 @@ enum PurchaseHistoryService {
                     case "aePd": app.version = String(decoding: value, as: UTF8.self)
                     case "asdp":
                         if value.count == 4 {
-                            let seconds = value.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+                            let seconds = value.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian }
                             app.purchaseDate = Date(timeIntervalSince1970: TimeInterval(seconds))
                         }
                     default: break
