@@ -97,8 +97,12 @@ struct AppStoreDetailView: View {
                 onI4: {
                     showInstallOptions = false
                     installFromFreeSource()
+                },
+                onSystemStore: {
+                    showInstallOptions = false
+                    openInSystemAppStore()
                 })
-            .presentationDetents([.height(300)])
+            .presentationDetents([.height(360)])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showAccountPicker) {
@@ -255,7 +259,22 @@ struct AppStoreDetailView: View {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                getButton
+                HStack(spacing: 10) {
+                    getButton
+                    // Apple 的下载接口只对「该账号真的下载过」的应用给包（详见商店日志），
+                    // 而建立这个记录的唯一入口是 Apple 自己的客户端 —— 所以给一个直达按钮，
+                    // 省得用户自己去搜。
+                    Button {
+                        openInSystemAppStore()
+                    } label: {
+                        Text("在 App Store 打开")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         } else {
             getButton
@@ -277,8 +296,20 @@ struct AppStoreDetailView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: 截图
+    /// 用系统 App Store 打开该应用页（itms-apps 直达 App Store App）
+    private func openInSystemAppStore() {
+        let id = item.id
+        if let url = URL(string: "itms-apps://apps.apple.com/app/id\(id)"),
+           UIApplication.shared.canOpenURL(url) {
+            UIApplication.shared.open(url)
+            return
+        }
+        if let web = URL(string: "https://apps.apple.com/app/id\(id)") {
+            UIApplication.shared.open(web)
+        }
+    }
 
+    // MARK: 截图
     private var screenshotsSection: some View {
         Section {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -476,6 +507,7 @@ struct InstallOptionsSheet: View {
     let appleIDSubtitle: String
     let onAppleID: () -> Void
     let onI4: () -> Void
+    let onSystemStore: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -497,6 +529,11 @@ struct InstallOptionsSheet: View {
                        title: "从爱思源快速安装",
                        subtitle: "免登录，服务端已签名",
                        action: onI4)
+                option(icon: "arrow.up.forward.app.fill",
+                       tint: .orange,
+                       title: "在系统 App Store 获取",
+                       subtitle: "AppleID 通道拿不到包时走这条",
+                       action: onSystemStore)
             }
             .padding(.horizontal, 16)
 
