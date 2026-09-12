@@ -88,6 +88,13 @@ public enum Purchase {
             case "2034", "2042":
                 // v0.3.330：交给调用方自动重登后重试（不再是一句死错误）
                 throw ApplePackageError.passwordTokenExpired
+            case "5002":
+                // v0.3.331：5002 = 该账号**已经有这个应用的授权**（ipatool 的
+                // FailureTypeLicenseAlreadyExists，cmd/purchase.go 里把它当成功、
+                // 继续走下载）。此前我们把它当失败，于是"已经买过的应用"永远报
+                // Apple 的 customerMessage「An unknown error has occurred」。
+                storeLog("该账号已拥有此应用（5002 LicenseAlreadyExists）→ 视为已入库，继续下载")
+                return
             default:
                 if let customerMessage = dict["customerMessage"] as? String {
                     if customerMessage == "Subscription Required" {

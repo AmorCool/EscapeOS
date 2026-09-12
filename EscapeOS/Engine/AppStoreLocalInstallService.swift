@@ -131,6 +131,10 @@ enum AppStoreLocalInstallService {
         } catch let error as StoreAuthenticationError where error.needsCode {
             onLog?("[AppleID] 自动重登需要验证码")
             throw LocalError.reloginNeedsCode
+        } catch {
+            // v0.3.331：重登失败必须落日志 —— 否则日志会停在第 3 行，看不出为什么没续上
+            onLog?("[AppleID] 自动重登失败：\(error.localizedDescription)")
+            throw error
         }
     }
 
