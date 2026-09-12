@@ -196,20 +196,28 @@ actor SignedStoreAuthenticator {
         return (data, response)
     }
 
-    /// 每次重试都**用同一份 body + 新签名**（与 ipatool 一致）
+    /// 每次重试都**用同一份 body + 新签名**（与 ipatool 一致）。
+    ///
+    /// v0.3.353：重试条件与次数都对齐 ipatool —— **204 / 404 / 5xx / 3xx 无 Location**，
+    /// 最多 3 次，延迟 250ms × 第几次。`Retry-After` 存在时按 429 语义交给上层，不重发。
     private func sendAuthentication(_ request: URLRequest,
                                     signer: SAPContext) async throws -> (Data, HTTPURLResponse) {
-        for attempt in 1 ... 2 {
+        let maxAttempts = 3
+        for attempt in 1 ... maxAttempts {
             var signedRequest = request
             signedRequest.setValue(try signer.sign(request.httpBody ?? Data()).base64EncodedString(),
                                    forHTTPHeaderField: "X-Apple-ActionSignature")
             let result = try await send(signedRequest)
-            if attempt == 2 || !StoreAuthenticationProtocol.retryable(status: result.1.statusCode,
-                                                                      data: result.0)
-                || result.1.value(forHTTPHeaderField: "Retry-After") != nil {
-                return result
-            }
-            try await Task.sleep(for: .seconds(2))
+            let status = result.1.statusCode
+            let location = result.1.value(forHTTPHeaderField: "Location")
+            let hasRedirect = !(location ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let shouldRetry = attempt < maxAttempts
+                && result.1.value(forHTTPHeaderField: "Retry-After") == nil
+                && StoreAuthenticationProtocol.retryable(status: status, hasRedirect: hasRedirect)
+            if !shouldRetry { return result }
+            LoginLogger.shared.log("[SAP] 认证请求 HTTP \(status)（第 \(attempt) 次，重发同一 body + 新签名）",
+                                   category: .appStore)
+            try await Task.sleep(for: StoreAuthenticationProtocol.retryDelay(attempt: attempt))
         }
         throw StoreAuthenticationError.tooManyAttempts
     }

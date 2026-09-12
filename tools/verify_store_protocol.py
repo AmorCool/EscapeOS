@@ -74,6 +74,15 @@ def main() -> None:
     require("emptyPackage" in fetch and "passwordTokenExpired" in fetch, "download endpoints classify 5xx / 401 correctly")
     require("missingRedirect" in protocol and "这是按出口 IP 的限流" not in protocol, "301 is not misdiagnosed as rate limiting")
     require("retryable" in protocol and "status == 301" not in protocol, "credentials are not replayed on empty 301")
+    # v0.3.353：认证重试必须对齐 ipatool —— 204 / 404 / 5xx（+ 3xx 无 Location），最多 3 次，
+    # 每次用同一份 body 重新签名，延迟 250ms × 第几次。
+    require("status == 204" in protocol and "status == 404" in protocol and "(500 ... 599)" in protocol,
+            "authentication retries mirror ipatool (204/404/5xx)")
+    require("hasRedirect" in protocol and "hasRedirect: hasRedirect" in auth,
+            "3xx without Location is retried instead of failing outright")
+    require("maxAttempts = 3" in auth, "authentication retry count is bounded at 3")
+    require("retryDelay" in protocol and "250 * attempt" in protocol, "retry backoff matches ipatool")
+    require("Retry-After" in auth, "429 is not replayed")
     require("authenticationURL(next.absoluteString)" in auth, "login redirect is allowlisted")
     require("request.httpShouldHandleCookies = false" in auth, "auth uses one cookie owner")
     require("storageKey" in cookies and "name, domain, path" in cookies, "cookie identity preserves scope")

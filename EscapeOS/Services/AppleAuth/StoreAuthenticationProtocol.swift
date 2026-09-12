@@ -114,10 +114,23 @@ enum StoreAuthenticationProtocol {
         ], format: .xml, options: 0)
     }
 
-    static func retryable(status: Int, data: Data) -> Bool {
-        // Never replay empty/ambiguous login refusals, 429, or structured credential/2FA errors.
-        !data.isEmpty && plist(data) == nil && [502, 503, 504].contains(status)
+    /// 认证请求是否值得**原样重发**（同一份 body + 新签名）。
+    ///
+    /// v0.3.353：对齐上游 ipatool `retryableAuthenticationError` —— 它重试的是
+    /// **204 No Content / 404 / 5xx**（最多 3 次，延迟 250ms × 第几次）。
+    /// Apple 边缘在瞬时拒绝时回的就是这几个码（真机日志里 204 / 404 / 500 / 503 都出现过），
+    /// 老实现只认 502/503/504 且额外要求「body 非空且不是 plist」→ **204（空 body）与
+    /// 404（HTML）直接被判死**，还会顺带触发 60 秒本地冷却，表现就是「每次登录都不成」。
+    ///
+    /// 另外把「3xx **但没有 Location**」也纳入重试：那是 Apple 边缘的畸形应答，
+    /// 没有可跟随的跳转地址，直接判死等于把一次瞬时抖动升级成一次登录失败。
+    static func retryable(status: Int, hasRedirect: Bool) -> Bool {
+        if status == 204 || status == 404 || (500 ... 599).contains(status) { return true }
+        return (300 ... 399).contains(status) && !hasRedirect
     }
+
+    /// 与 ipatool `authenticationRetryDelay` 同款：250ms × 第几次。
+    static func retryDelay(attempt: Int) -> Duration { .milliseconds(250 * attempt) }
 
     static func retryAfter(_ value: String?, now: Date = Date()) -> TimeInterval? {
         guard let value else { return nil }
