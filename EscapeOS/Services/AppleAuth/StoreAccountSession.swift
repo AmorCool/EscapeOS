@@ -104,9 +104,19 @@ actor StoreRefreshCoordinator {
            !AppStoreDownloadStore.sameSession(latest, stored) { return latest }
         let id = UUID()
         let task = Task<AppStoreAccount, Error> {
+            let currentGUID = AppleIDSignInService.sapGUID()
+            // v0.3.354：Apple 的 store 会话与「机器身份」绑定。用户点过「重置设备标识」之后，
+            // 旧 passwordToken/Cookie 在 Apple 眼里属于另一台设备 —— 继续把它们当 Cookie 发出去，
+            // Auth 边缘回的是畸形应答（真机实测 204 空响应 / 302 无 Location），
+            // 而不是一句清楚的「Sign In to the iTunes Store」。换过身份就**不带旧会话**重登。
+            let reusableCookies = stored.deviceGuid == currentGUID ? stored.cookie : []
+            if let old = stored.deviceGuid, old != currentGUID {
+                LoginLogger.shared.log("[SAP] 设备标识已变更（\(old) → \(currentGUID)），本次登录不带旧会话",
+                                       category: .appStore)
+            }
             let refreshed = try await SignedStoreAuthenticator().authenticate(
                 email: stored.email, password: stored.password, code: code,
-                guid: AppleIDSignInService.sapGUID(), cookies: stored.cookie)
+                guid: currentGUID, cookies: reusableCookies)
             try Task.checkCancellation()
             return try AppStoreDownloadStore.shared.commitRefresh(refreshed, replacing: stored)
         }

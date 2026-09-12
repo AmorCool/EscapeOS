@@ -75,7 +75,8 @@ final class AppStoreDownloadStore {
         UserDefaults.standard.removeObject(forKey: "ApplePackageDeviceIdentifier")
         try? FileManager.default.removeItem(at: Self.documentsGUIDFile)
         Self.bootstrapDeviceIdentifier()
-        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)", category: .appStore)
+        LoginLogger.shared.log("App Store 设备标识已重置：\(Configuration.deviceIdentifier)"
+            + "（已保存的会话属于旧身份，下次登录会不带旧会话）", category: .appStore)
     }
 
     private var fileURL: URL {

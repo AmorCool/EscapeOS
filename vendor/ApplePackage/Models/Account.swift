@@ -26,6 +26,13 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
     public var fullStoreFront: String?
     /// Changes only after an explicit login/refresh. Stale requests cannot replace a newer session.
     public var sessionRevision: UUID?
+    /// v0.3.354：这份会话是**在哪台机器身份（guid）下签发**的。
+    ///
+    /// Apple 的 store 会话（passwordToken / Cookie）与「机器身份」绑定：guid 变了以后，
+    /// 旧票据在 Apple 眼里属于另一台设备。继续把它当 Cookie 发出去，Auth 边缘会回
+    /// 畸形应答（真机实测 204 空响应 / 302 无 Location），而不是一句清楚的
+    /// "Sign In to the iTunes Store"。所以换身份后**不能再带旧 Cookie 去登录**。
+    public var deviceGuid: String?
 
     public var requestStoreFront: String {
         if let fullStoreFront, !fullStoreFront.isEmpty { return fullStoreFront }
@@ -34,7 +41,7 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case email, password, appleId, store, firstName, lastName, passwordToken
-        case directoryServicesIdentifier, cookie, pod, fullStoreFront, sessionRevision
+        case directoryServicesIdentifier, cookie, pod, fullStoreFront, sessionRevision, deviceGuid
     }
 
     public init(from decoder: Decoder) throws {
@@ -51,6 +58,7 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
         pod = try values.decodeIfPresent(String.self, forKey: .pod)
         fullStoreFront = try values.decodeIfPresent(String.self, forKey: .fullStoreFront)
         sessionRevision = try values.decodeIfPresent(UUID.self, forKey: .sessionRevision)
+        deviceGuid = try values.decodeIfPresent(String.self, forKey: .deviceGuid)
     }
 
     public init(
@@ -65,7 +73,8 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
         cookie: [Cookie],
         pod: String? = nil,
         fullStoreFront: String? = nil,
-        sessionRevision: UUID? = nil
+        sessionRevision: UUID? = nil,
+        deviceGuid: String? = nil
     ) {
         self.email = email
         self.password = password
@@ -79,6 +88,7 @@ public struct AppStoreAccount: Codable, Hashable, Equatable, Sendable {
         self.pod = pod
         self.fullStoreFront = fullStoreFront
         self.sessionRevision = sessionRevision
+        self.deviceGuid = deviceGuid
     }
 }
 
@@ -95,7 +105,8 @@ public extension AppStoreAccount {
         cookie: [Cookie],
         pod: String? = nil,
         fullStoreFront: String? = nil,
-        sessionRevision: UUID? = nil
+        sessionRevision: UUID? = nil,
+        deviceGuid: String? = nil
     ) throws {
         try ensure(!email.isEmpty, "empty email")
         try ensure(!password.isEmpty, "empty password")
@@ -113,5 +124,6 @@ public extension AppStoreAccount {
         self.pod = pod
         self.fullStoreFront = fullStoreFront
         self.sessionRevision = sessionRevision
+        self.deviceGuid = deviceGuid
     }
 }

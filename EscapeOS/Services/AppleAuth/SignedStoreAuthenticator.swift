@@ -164,7 +164,9 @@ actor SignedStoreAuthenticator {
                 directoryServicesIdentifier: StoreAuthenticationProtocol.string(plist["dsPersonId"]),
                 cookie: self.cookies,
                 pod: pod,
-                fullStoreFront: storefront)
+                fullStoreFront: storefront,
+                // v0.3.354：记下这份会话是在哪个机器身份下签发的；换身份后不能再带它的 Cookie 登录。
+                deviceGuid: guid)
         }
         throw StoreAuthenticationError.tooManyAttempts
     }

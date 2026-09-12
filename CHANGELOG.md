@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.354] - 2026-09-12
+
+### 修复
+- **换过机器身份（重置设备标识）后不再带旧会话登录**。Apple 的 store 会话
+  （`passwordToken` / Cookie）与 guid 绑定：用户点过「重置设备标识」之后，旧票据在 Apple
+  眼里属于**另一台设备**，继续当 Cookie 发出去，Auth 边缘回的是畸形应答
+  （真机实测 204 空响应 / 302 无 Location），而不是一句清楚的「Sign In to the iTunes Store」。
+  现在账号模型记录 `deviceGuid`（这份会话在哪个身份下签发），刷新会话时若**当前 guid 与它不一致
+  就不带旧 Cookie**，直接走一次干净登录；重置设备标识的日志也补上这句话。
+- `tools/verify_store_protocol.py` 新增断言：会话必须记录签发身份、跨身份的会话不得复用。
+
 ## [0.3.353] - 2026-09-12
 
 ### 修复
