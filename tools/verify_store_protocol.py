@@ -83,6 +83,9 @@ def main() -> None:
     require("maxAttempts = 3" in auth, "authentication retry count is bounded at 3")
     require("retryDelay" in protocol and "250 * attempt" in protocol, "retry backoff matches ipatool")
     require("Retry-After" in auth, "429 is not replayed")
+    require("primaryContentType" in protocol and "alternateContentType" in protocol,
+            "edge rejections are probed with the alternate Content-Type")
+    require("triedAlternateContentType" in auth, "content-type probe is bounded to one retry")
     # v0.3.354：换过机器身份后不能再把旧会话的 Cookie 当自己的发出去。
     require("deviceGuid" in source("vendor/ApplePackage/Models/Account.swift"),
             "session records the machine identity it was issued under")

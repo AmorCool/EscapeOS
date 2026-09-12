@@ -69,6 +69,14 @@ enum StoreAuthenticationError: LocalizedError, Sendable {
 enum StoreAuthenticationProtocol {
     static let authenticationPath = "/WebObjects/MZFinance.woa/wa/authenticate"
 
+    /// v0.3.355：Apple 的**前置边缘按 `Content-Type` 路由请求体**（PC 复现，2026-09-12：
+    /// 同一份 XML plist body，`x-www-form-urlencoded` → 404 + 146 字节 HTML 错误页，
+    /// `x-apple-plist` → 204 空响应）。两者都不是认证结论，说明请求没进到认证应用。
+    /// 真机日志里反复出现的「HTTP 204 空响应」「HTTP 403/404 + 146 字节」就是这个形状。
+    /// 所以先按上游 ipatool 的写法发一次，被边缘拒了再换 Apple 自家商店客户端的写法发一次。
+    static let primaryContentType = "application/x-www-form-urlencoded"
+    static let alternateContentType = "application/x-apple-plist"
+
     static func authenticationURL(_ value: String) throws -> URL {
         let url = try storeURL(value, paths: [authenticationPath])
         guard isBuyHost(url.host ?? "") else { throw StoreAuthenticationError.invalidRedirect }

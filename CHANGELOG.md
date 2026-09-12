@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.355] - 2026-09-12
+
+### 修复
+- **登录被 Apple 前置边缘挡住时，换 `Content-Type` 再打一次**。PC 复现（同一份 XML plist body，
+  只改 Content-Type）：`application/x-www-form-urlencoded` → **404 + 146 字节 HTML 错误页**；
+  `application/x-apple-plist` → **204 空响应**。两者都不是认证结论 —— 说明请求**根本没进到
+  认证应用**，被前置路由挡掉了。真机日志里反复出现的「HTTP 204 空响应」「HTTP 403/404 + 146 字节」
+  就是这个形状。
+  现在按上游 ipatool 的形态发一次，若被边缘拒（拿不到 plist）就换 Apple 自家商店客户端的
+  `application/x-apple-plist` 把同一份 body 再打一次，并在商店日志里明确写出换了哪种 ——
+  这样「请求形状被拒」和「真的被 Apple 拒」在日志里就能一眼分开。
+- `tools/verify_store_protocol.py` 新增断言：Content-Type 探测存在且只重试一次。
+
 ## [0.3.354] - 2026-09-12
 
 ### 修复

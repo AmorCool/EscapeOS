@@ -106,12 +106,17 @@ actor SignedStoreAuthenticator {
         var body = try StoreAuthenticationProtocol.body(email: email, password: password,
                                                        code: normalizedCode, guid: guid,
                                                        attempt: protocolAttempt)
+        // v0.3.355：边缘按 Content-Type 路由（见 StoreAuthenticationProtocol 注释）。
+        // 被边缘拒（拿不到 plist）时换一种 Content-Type 把同一份 body 再打一次，
+        // 好把「请求形状被拒」和「真的被 Apple 拒」区分开 —— 这一点只有真机能定案。
+        var contentType = StoreAuthenticationProtocol.primaryContentType
+        var triedAlternateContentType = false
         while protocolAttempt <= 2, redirects <= 3 {
             try Task.checkCancellation()
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.httpBody = body
-            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
             let (data, response) = try await sendAuthentication(request, signer: signer)
             if let v = response.value(forHTTPHeaderField: "X-Set-Apple-Store-Front") { storefront = v }
             if let v = response.value(forHTTPHeaderField: "pod") { pod = v }
@@ -130,6 +135,19 @@ actor SignedStoreAuthenticator {
                 if response.statusCode == 429 {
                     throw StoreAuthenticationError.rateLimited(retryAfter: StoreAuthenticationProtocol.retryAfter(
                         response.value(forHTTPHeaderField: "Retry-After")))
+                }
+                if !triedAlternateContentType {
+                    triedAlternateContentType = true
+                    contentType = StoreAuthenticationProtocol.alternateContentType
+                    protocolAttempt = 1
+                    redirects = 0
+                    url = endpoint
+                    body = try StoreAuthenticationProtocol.body(email: email, password: password,
+                                                               code: normalizedCode, guid: guid,
+                                                               attempt: protocolAttempt)
+                    LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（\(data.count) 字节，无 plist）"
+                        + " → 换 Content-Type=\(contentType) 重打一次", category: .appStore)
+                    continue
                 }
                 throw StoreAuthenticationError.unstructuredResponse(response.statusCode, empty: data.isEmpty)
             }
