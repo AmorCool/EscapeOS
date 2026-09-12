@@ -43,14 +43,24 @@ extension StoreDownloadEndpoint {
                     storeLog("目录版本解析失败：\(error.localizedDescription)")
                 }
             }
-            dict = try await StoreDownloadEndpoint.redownload.fetchProduct(
-                client: client,
-                account: &account,
-                app: app,
-                deviceIdentifier: deviceIdentifier,
-                externalVersionID: version
-            )
-            storeLog("redownload 返回；\(summary(dict))")
+            do {
+                dict = try await StoreDownloadEndpoint.redownload.fetchProduct(
+                    client: client,
+                    account: &account,
+                    app: app,
+                    deviceIdentifier: deviceIdentifier,
+                    externalVersionID: version
+                )
+                storeLog("redownload 返回；\(summary(dict))")
+            } catch {
+                // v0.3.338：回退也失败（redownload 常见 HTTP 500 空 body）时，
+                // **本质仍然是「Apple 没有给包」**，必须把原始的空包结论抛给上层。
+                // 否则上层的「空包 → 获取许可 → 重试」分支永远不会被触发
+                // （337 就是这个缺陷：这里抛的是 500，不是 emptyPackage）。
+                storeLog("redownload 失败：\(error.localizedDescription)")
+                if fallbackReason(dict) != nil { throw ApplePackageError.emptyPackage }
+                throw error
+            }
         }
 
         return dict
