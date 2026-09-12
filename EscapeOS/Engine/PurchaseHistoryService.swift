@@ -70,8 +70,8 @@ enum PurchaseHistoryService {
             throw PurchaseHistoryError.noAccount
         }
         do {
-            let list = try await list(account: account)
-            if !list.isEmpty { return list }
+            let owned = try await list(account: account)
+            if !owned.isEmpty { return owned }
             // 所有口径都回空时，还有一个强嫌疑：**X-Token 用的是过期票据**。
             // DMAP 对过期票据可能回 200 + 空表（而不是 401），这时换一次令牌再打一遍即可。
             // AssppPro 就是先 rotatePasswordToken 再去列已购的。
