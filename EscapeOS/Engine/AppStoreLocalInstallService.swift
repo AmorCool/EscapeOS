@@ -50,9 +50,11 @@ enum AppStoreLocalInstallService {
     private static func downloadInformation(software: Software, account: inout AppStoreAccount,
                                             email: String, externalVersionID: String?,
                                             onLog: ((String) -> Void)?) async throws -> DownloadOutput {
-        // 有界状态机（v0.3.352 重写）：
+        // 有界状态机（v0.3.352 重写，v0.3.361 加入历史版本候选）：
         //   下载 → 票据失效（2002/2034/2042）→ 刷新会话一次 → 继续
-        //        → 空包 → 先刷新会话确认一次（Apple 用「合法空包」表达票据不被认可）
+        //        → 空包 → **先用候选 externalVersionId 重打一次 volumeStore**（v0.3.361：
+        //                 ChatGPT 这类应用只有带旧版本 ID 才出包）
+        //                → 仍为空 → 先刷新会话确认一次（Apple 用「合法空包」表达票据不被认可）
         //                → 仍为空 → 获取许可一次 → 再下载
         //        → 9610 → 获取许可一次 → 再下载
         // Apple 的两种「没有下载权」表达方式（`failureType 9610` 与 HTTP 200 + 空 songList，
@@ -64,6 +66,9 @@ enum AppStoreLocalInstallService {
         /// v0.3.361：空包时改用的历史版本候选（`externalVersionId`）
         var versionCandidates: [String] = []
         var triedVersionCandidates = false
+        /// v0.3.361：候选里「最新版」的版本号 —— 仅用于最终日志说明
+        /// （拿到包后版本号 != 它，才说明真的改用了旧版）。
+        var newestCatalogVersion: String?
         var attempt = 0
         while true {
             attempt += 1
@@ -71,15 +76,21 @@ enum AppStoreLocalInstallService {
             try Task.checkCancellation()
             do {
                 onLog?("[AppleID] 请求下载信息…")
-                return try await Download.download(account: &account, app: software,
-                                                   externalVersionID: externalVersionID,
-                                                   versionCandidates: versionCandidates)
+                let output = try await Download.download(account: &account, app: software,
+                                                         externalVersionID: externalVersionID,
+                                                         versionCandidates: versionCandidates)
+                if let newest = newestCatalogVersion, output.bundleShortVersionString != newest {
+                    onLog?("[AppleID] Apple 拒绝了最新版，已改用该账号可下的版本 \(output.bundleShortVersionString)")
+                }
+                return output
             } catch ApplePackageError.emptyPackage where !triedVersionCandidates {
                 // 第一优先：用历史版本候选重打 volumeStore（真机实测这才是能出包的那一档，
                 // 不需要刷新会话也不需要购买）。候选为空会自动落到下面「刷新会话」那条分支。
                 triedVersionCandidates = true
                 onLog?("[AppleID] Apple 未返回可下载内容 → 换该账号可下的历史版本重试")
-                versionCandidates = await candidateVersionIDs(software: software, onLog: onLog)
+                let candidates = await candidateVersionIDs(software: software, onLog: onLog)
+                versionCandidates = candidates.ids
+                newestCatalogVersion = candidates.newestVersion
             } catch ApplePackageError.passwordTokenExpired where !refreshed {
                 refreshed = true
                 try await refreshAccount(email: email, account: &account, onLog: onLog)
@@ -106,21 +117,24 @@ enum AppStoreLocalInstallService {
         }
     }
 
-    /// v0.3.361：从免登录版本目录取该应用的 `externalVersionId` 候选（最新的排在前面）。
+    /// v0.3.361：从免登录版本目录取该应用的 `externalVersionId` 候选（目录是「最新在前」）。
     ///
     /// 依据（真机实测）：ChatGPT 的 `volumeStoreDownloadProduct` 只在 body 带 `externalVersionId`
-    /// 时才出包，且**最新的两个 ID 会被 Apple 拒**、更旧的可以下 —— 所以把最新若干个一起拿去试。
+    /// 时才出包，且**最新的两个 ID 会被 Apple 拒**、更旧的可以下 —— 所以取最新的 6 个拿去试
+    /// （`versionCandidates`：890707559 / 890363403 被拒，890134149 可下，共 6 个必覆盖可用项）。
     /// 目录通道失败不算错：返回空数组即可，调用方会继续走原有的刷新会话 / 获取许可流程。
     private static func candidateVersionIDs(software: Software,
-                                            onLog: ((String) -> Void)?) async -> [String] {
+                                            onLog: ((String) -> Void)?) async -> (ids: [String], newestVersion: String?) {
         do {
             let history = try await AppStoreService.versionHistoryFromCatalog(appId: String(software.id))
             let ids = history.compactMap { $0.externalVersionID }.filter { !$0.isEmpty }
-            onLog?("[AppleID] 历史版本候选 \(ids.count) 个")
-            return ids
+            let newestSix = Array(ids.prefix(6))
+            onLog?("[AppleID] 历史版本候选 \(newestSix.count) 个（最新 \(history.first?.version ?? "?")）")
+            // history 是「最新在前」，所以 first 就是商店最新版（= 被 Apple 拒的那个）。
+            return (newestSix, history.first?.version)
         } catch {
             onLog?("[AppleID] 版本目录不可用：\(error.localizedDescription)")
-            return []
+            return ([], nil)
         }
     }
 

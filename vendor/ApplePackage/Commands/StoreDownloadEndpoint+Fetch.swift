@@ -8,7 +8,10 @@
 import Foundation
 
 extension StoreDownloadEndpoint {
-    /// 完整取下载信息：volumeStore 默认端点 → 需要回退时改走 redownload 端点。
+    /// 完整取下载信息（v0.3.361 起为**有界三段**）：
+    ///   ① volumeStore（带调用方给的 `externalVersionID`）；
+    ///   ② ① 为空包、调用方没指定版本且给了 `versionCandidates` → 逐个用候选打 volumeStore（最多 6 个，命中即停）；
+    ///   ③ 候选也没包 → redownload 兜底。
     ///
     /// 回退判定对齐 Asspp dev `65be5b04`（fix: recover empty store downloads）：
     /// 不只看 failureType 5002 —— Apple 还会**静默返回空包**（什么错误字段都没有、
@@ -54,12 +57,15 @@ extension StoreDownloadEndpoint {
                         externalVersionID: candidate
                     )
                     if fallbackReason(hit) == nil {
-                        storeLog("候选版本 \(candidate) 命中 → 采用该版本")
+                        // 命中行必须能看出**用的是哪个** externalVersionId
+                        storeLog("候选版本命中 externalVersionId=\(candidate)；\(summary(hit))")
                         return hit
                     }
-                    storeLog("候选版本 \(candidate) 仍是空包")
+                    storeLog("候选版本仍是空包 externalVersionId=\(candidate)；\(summary(hit))")
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
-                    storeLog("候选版本 \(candidate) 请求失败：\(error.localizedDescription)")
+                    storeLog("候选版本请求失败 externalVersionId=\(candidate)：\(error.localizedDescription)")
                 }
             }
             storeLog("候选版本全部为空包 → 退回 redownload")
