@@ -95,12 +95,64 @@ final class AppStoreDownloadStore {
 
     func add(_ account: AppStoreAccount) {
         load()
+        let account = Self.normalized(account)
         accounts.removeAll { $0.email == account.email }
         accounts.append(account)
         save()
         // v0.3.309：新登录的账号自动成为「当前下载账号」——多账号时用户刚登录的那个
         // 才是他想用来下载的；否则会沿用上一次的选择，出现"登录了却拿旧账号去下"。
         selectedEmail = account.email
+    }
+
+    // MARK: - v0.3.335：会话回写（这是「令牌很容易失效」的真因之一）
+
+    /// 规范化 cookie 域（去掉前导点）后存储。
+    ///
+    /// `[Cookie].buildCookieHeader` 判域用的是
+    /// `requestHost == domain || requestHost.hasSuffix("." + domain)` ——
+    /// 存成 `.itunes.apple.com` 时，对 `p25-buy.itunes.apple.com`
+    /// 既不等也不后缀命中，**cookie 会被整批丢弃**，请求就成了"未登录"（2034）。
+    /// 而协议层每次 `mergeCookies(response.cookies)` 合并进来的
+    /// `Cookie(copyFrom:)` 是**原样**取 `HTTPClient.Cookie.domain`（可能带点），
+    /// 所以必须在**落盘前**统一规范化。
+    static func normalized(_ account: AppStoreAccount) -> AppStoreAccount {
+        var account = account
+        account.cookie = account.cookie.map {
+            var cookie = $0
+            cookie.domain = StoreAuthenticationProtocol.storeCookieDomain(cookie.domain)
+            return cookie
+        }
+        return account
+    }
+
+    /// 把请求过程中被 Apple 刷新过的账号（cookie / passwordToken / pod）写回存储。
+    ///
+    /// 购买与下载每次都会 `mergeCookies(response.cookies)` —— Apple 借 Set-Cookie
+    /// 轮换会话票据。Asspp 的 `withAccount` 会把更新后的账号写回（`accounts[idx] = ...`），
+    /// 我们此前只改本地 `var account` 副本、用完就丢，于是**每次都在拿旧票据去换新票据**，
+    /// 表现为「动不动就要重登」。这里补上回写，且不改动当前选中账号。
+    func update(_ account: AppStoreAccount) {
+        let account = Self.normalized(account)
+        // 内存里没有这个账号 → 重新读盘确认（可能只是冷启动未加载；也可能已被退出登录）
+        if !accounts.contains(where: { $0.email == account.email }) { load() }
+        guard accounts.contains(where: { $0.email == account.email }) else { return }
+        accounts.removeAll { $0.email == account.email }
+        accounts.append(account)
+        save()
+    }
+
+    /// 从任意线程安全回写。
+    ///
+    /// 下载/版本查询跑在后台线程（nonisolated async 不继承调用者的 actor），
+    /// 而 `accounts` 的所有既有写路径都在主线程（UI / `MainActor.run`）。
+    /// 这里统一调度回主线程，避免与 UI 读账号竞争。
+    func updateFromAnyThread(_ account: AppStoreAccount) {
+        let account = Self.normalized(account)
+        if Thread.isMainThread {
+            update(account)
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.update(account) }
+        }
     }
 
     func remove(_ email: String) {

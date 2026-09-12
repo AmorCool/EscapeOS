@@ -77,6 +77,19 @@ public enum VersionLookup {
         guard let dict = plist else { try ensureFailed("invalid response") }
 
         guard let items = dict["songList"] as? [[String: Any]], !items.isEmpty else {
+            // v0.3.335：区分「令牌失效」与「真没有」，前者交给调用方自动重登
+            if let failureType = dict["failureType"] as? String {
+                switch failureType {
+                case "2034", "2042":
+                    throw ApplePackageError.passwordTokenExpired
+                case "9610":
+                    throw ApplePackageError.licenseRequired
+                default:
+                    if let customerMessage = dict["customerMessage"] as? String {
+                        try ensureFailed(customerMessage)
+                    }
+                }
+            }
             try ensureFailed("no items in response")
         }
 

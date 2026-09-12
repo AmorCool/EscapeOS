@@ -82,8 +82,9 @@ public enum VersionFinder {
         guard let items = dict["songList"] as? [[String: Any]], !items.isEmpty else {
             if let failureType = dict["failureType"] as? String {
                 switch failureType {
-                case "2034":
-                    try ensureFailed("password token is expired")
+                case "2034", "2042":
+                    // v0.3.335：交给调用方自动重登后重试（与 Download/Purchase 一致）
+                    throw ApplePackageError.passwordTokenExpired
                 case "9610":
                     throw ApplePackageError.licenseRequired
                 default:

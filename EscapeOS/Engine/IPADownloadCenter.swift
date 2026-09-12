@@ -157,9 +157,15 @@ final class IPADownloadCenter: ObservableObject {
     }
 
     /// Apple ID 通道（预留）：用指定账号从 App Store 官方源取包
+    ///
+    /// v0.3.335：`externalVersionID` 非空时取**指定历史版本**（版本历史页用）。
     @discardableResult
-    func startWithAppleID(item: AppStoreItem, email: String) -> UUID {
-        var job = Job(name: item.name, bundleId: item.bundleId, version: item.version,
+    func startWithAppleID(item: AppStoreItem,
+                          email: String,
+                          externalVersionID: String? = nil,
+                          displayVersion: String? = nil) -> UUID {
+        let shownVersion = displayVersion ?? item.version
+        var job = Job(name: item.name, bundleId: item.bundleId, version: shownVersion,
                       iconURL: item.iconSmallURL ?? item.iconURL, remoteURL: nil,
                       source: .appleID, accountEmail: email, autoInstall: true)
         job.stageText = "准备中"
@@ -172,6 +178,7 @@ final class IPADownloadCenter: ObservableObject {
                 _ = try await AppStoreLocalInstallService.downloadAndInstall(
                     item: item,
                     email: email,
+                    externalVersionID: externalVersionID,
                     downloadProgress: { p in
                         Task { @MainActor in
                             self.update(id) { $0.progress = p; $0.stageText = "下载中" }
@@ -194,7 +201,7 @@ final class IPADownloadCenter: ObservableObject {
                         $0.phase = .done
                         $0.progress = 1
                         $0.stageText = "已完成"
-                        $0.localFileName = "\(item.bundleId ?? item.id)-\(item.version ?? "x").ipa"
+                        $0.localFileName = "\(item.bundleId ?? item.id)-\(shownVersion ?? "x").ipa"
                     }
                 }
             } catch {

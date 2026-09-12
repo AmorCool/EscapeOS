@@ -56,12 +56,14 @@ struct AppStoreItem: Identifiable, Hashable {
     }
 }
 
-/// v0.3.300：应用历史版本条目
+/// 应用历史版本条目
 ///
-/// 数据来源：`https://apps.apple.com/{cc}/app/id{appId}` 页面内嵌的
-/// `versionHistory` shelf（桌面 UA 可见，无需登录、无认证）。
-/// 每条对应一次上架：版本号（primarySubtitle）/ 发布时间（secondarySubtitle）/
-/// 更新说明（text）。
+/// 两个来源（v0.3.335 起双通道）：
+/// 1. **账号通道**（优先，需已登录 Apple ID）：`VersionFinder` 拿全量版本身份
+///    （`softwareVersionExternalIdentifiers`），逐条 `VersionLookup` 取版本号与日期。
+///    这条路走的是 App Store 下载协议，**任何区域都有数据**。
+/// 2. **商品页通道**（回退，免登录）：抓 `apps.apple.com/{cc}/app/id{id}` 内嵌的
+///    `versionHistory` shelf —— 只有部分区域/部分应用有，所以此前非国区经常是空的。
 struct AppStoreVersion: Identifiable, Hashable {
     /// 版本号（如 8.0.78）
     var version: String
@@ -69,11 +71,16 @@ struct AppStoreVersion: Identifiable, Hashable {
     var dateRaw: String?
     /// 更新说明
     var notes: String?
+    /// 账号通道拿到的版本身份（数字 externalVersionId）——有它才能下载该版本
+    var externalVersionID: String?
+    /// 账号通道直接给出的发布日期
+    var dateValue: Date?
 
-    var id: String { version }
+    var id: String { externalVersionID ?? version }
 
     /// 解析后的发布日期
     var date: Date? {
+        if let dateValue { return dateValue }
         guard let dateRaw else { return nil }
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

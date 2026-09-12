@@ -1,18 +1,33 @@
 import SwiftUI
 
-/// v0.3.300：AppStore 商店 —— 历史版本列表
+/// AppStore 商店 —— 历史版本
 ///
-/// 数据来自 Apple 商品页内嵌的 `versionHistory`（桌面 UA 抓取，无需登录）。
-/// 每条显示版本号、发布日期、更新说明；首条即当前版本。
+/// 两个通道（v0.3.335）：
+/// 1. **账号通道**（优先）：已登录 Apple ID 时走 App Store 下载协议
+///    （`VersionFinder` + `VersionLookup`，与 Asspp 同款），拿全量版本身份与发布日期。
+///    任何区域都有数据，且能**直接下载指定历史版本**。
+/// 2. **商品页通道**（回退）：免登录抓商品页内嵌的 `versionHistory`，
+///    数据只有部分区域/应用有，且不能下载。
 struct AppStoreVersionHistoryView: View {
 
     let item: AppStoreItem
     let country: String
 
+    private enum Channel { case account, web }
+
     @State private var versions: [AppStoreVersion] = []
+    /// 账号通道：全量版本身份（新 → 旧）
+    @State private var identifiers: [String] = []
+    @State private var loadedIDs: Set<String> = []
+    @State private var channel: Channel = .web
+    @State private var accountEmail: String?
+
     @State private var loading = true
+    @State private var loadingMore = false
     @State private var errorText: String?
     @State private var expanded: Set<String> = []
+
+    private var canLoadMore: Bool { channel == .account && loadedIDs.count < identifiers.count }
 
     var body: some View {
         List {
@@ -20,7 +35,7 @@ struct AppStoreVersionHistoryView: View {
                 Section {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
-                        Text("正在读取版本历史…").font(.subheadline).foregroundStyle(.secondary)
+                        Text("读取中…").font(.subheadline).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 6)
                 }
@@ -32,7 +47,7 @@ struct AppStoreVersionHistoryView: View {
                 }
             } else if versions.isEmpty {
                 Section {
-                    Text("该应用没有可读取的版本历史。")
+                    Text("没有可读取的版本记录。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -41,12 +56,24 @@ struct AppStoreVersionHistoryView: View {
                     ForEach(Array(versions.enumerated()), id: \.element.id) { idx, v in
                         versionRow(v, isCurrent: idx == 0)
                     }
+                    if canLoadMore {
+                        Button {
+                            Task { await loadMore() }
+                        } label: {
+                            HStack {
+                                Spacer()
+                                if loadingMore {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Text("加载更多")
+                                }
+                                Spacer()
+                            }
+                        }
+                        .disabled(loadingMore)
+                    }
                 } header: {
-                    Text("共 \(versions.count) 个版本")
-                } footer: {
-                    Text("版本信息来自 App Store 商品页。安装历史版本需要本地已有对应版本的 IPA，"
-                         + "且该 IPA 必须已重签名或已解密（App Store 原始包为 FairPlay 加密，无法安装）。")
-                        .font(.caption2)
+                    Text(summaryText)
                 }
             }
         }
@@ -66,6 +93,13 @@ struct AppStoreVersionHistoryView: View {
         .task { await load() }
     }
 
+    private var summaryText: String {
+        if channel == .account, loadedIDs.count < identifiers.count {
+            return "已读 \(loadedIDs.count) / 共 \(identifiers.count) 个版本"
+        }
+        return "共 \(versions.count) 个版本"
+    }
+
     // MARK: - 行
 
     @ViewBuilder
@@ -76,7 +110,7 @@ struct AppStoreVersionHistoryView: View {
                 Text(v.version)
                     .font(.subheadline.weight(.semibold).monospacedDigit())
                 if isCurrent {
-                    Text("当前版本")
+                    Text("当前")
                         .font(.caption2.weight(.medium))
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Color.green.opacity(0.15), in: Capsule())
@@ -106,6 +140,15 @@ struct AppStoreVersionHistoryView: View {
                     .foregroundStyle(.blue)
                 }
             }
+            if v.externalVersionID != nil, !isCurrent {
+                Button {
+                    download(v)
+                } label: {
+                    Text("下载此版本").font(.caption.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
@@ -114,17 +157,82 @@ struct AppStoreVersionHistoryView: View {
         }
     }
 
+    private func download(_ v: AppStoreVersion) {
+        guard let email = accountEmail, let vid = v.externalVersionID else { return }
+        IPADownloadCenter.shared.startWithAppleID(item: item, email: email,
+                                                  externalVersionID: vid,
+                                                  displayVersion: v.version)
+        ToastCenter.shared.show("已开始下载 \(v.version)")
+    }
+
     // MARK: - 加载
 
     private func load() async {
         loading = true
         errorText = nil
+        versions = []
+        identifiers = []
+        loadedIDs = []
+        channel = .web
+        accountEmail = nil
+
+        // 1) 账号通道（任何区域都有数据，且能下载历史版本）
+        // bundleId 缺失时先补一次（协议按 bundleId 查）
+        var bundleId = item.bundleId
+        if bundleId == nil, let full = try? await AppStoreService.lookup(id: item.id) {
+            bundleId = full.bundleId
+        }
+        var accountError: String?
+        if let bundleId, !bundleId.isEmpty,
+           let email = AppStoreDownloadStore.shared.selectedEmail
+        {
+            do {
+                let ids = try await AppStoreService.storeVersionIdentifiers(bundleId: bundleId,
+                                                                            email: email)
+                // 协议返回旧 → 新；展示要新 → 旧
+                identifiers = Array(ids.reversed())
+                accountEmail = email
+                channel = .account
+                loading = false
+                await loadMore()
+                return
+            } catch {
+                // 账号通道失败 → 回退商品页通道（下方）
+                accountError = error.localizedDescription
+                LoginLogger.shared.log("版本历史账号通道失败：\(error.localizedDescription)",
+                                       category: .appStore)
+            }
+        }
+
+        // 2) 商品页通道（免登录，覆盖不全）
         do {
             versions = try await AppStoreService.versionHistory(appId: item.id, country: country)
-            if versions.isEmpty { errorText = nil }
         } catch {
             errorText = error.localizedDescription
         }
+        // 商品页也没有数据时，把账号通道的失败原因说出来（否则只剩一句"没有记录"）
+        if versions.isEmpty, let accountError { errorText = accountError }
         loading = false
+    }
+
+    /// 账号通道：分批取版本元数据（每次 5 条）
+    private func loadMore() async {
+        guard canLoadMore, !loadingMore, let email = accountEmail else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        for id in identifiers.filter({ !loadedIDs.contains($0) }).prefix(5) {
+            do {
+                let meta = try await AppStoreService.storeVersionMetadata(item: item,
+                                                                         versionID: id,
+                                                                         email: email)
+                versions.append(AppStoreVersion(version: meta.version,
+                                                externalVersionID: id,
+                                                dateValue: meta.date))
+                loadedIDs.insert(id)
+            } catch {
+                errorText = error.localizedDescription
+                return
+            }
+        }
     }
 }

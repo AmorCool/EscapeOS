@@ -36,9 +36,12 @@ enum AppStoreLocalInstallService {
     }
 
     /// 下载并安装。`downloadProgress` / `installProgress` 在任意线程回调（0~1）。
+    ///
+    /// `externalVersionID` 非空时下载**指定历史版本**（版本历史页用）。
     @discardableResult
     static func downloadAndInstall(item: AppStoreItem,
                                    email: String,
+                                   externalVersionID: String? = nil,
                                    downloadProgress: ((Double) -> Void)? = nil,
                                    installProgress: ((Double) -> Void)? = nil,
                                    onLog: ((String) -> Void)? = nil) async throws -> URL {
@@ -46,6 +49,10 @@ enum AppStoreLocalInstallService {
             throw LocalError.noAccount
         }
         var account = stored
+        // v0.3.335：**无论如何都把账号写回**。购买/下载过程中 Apple 会通过
+        // Set-Cookie 轮换会话票据（`mergeCookies`），不回写就等于每次都在拿旧票据
+        // 换新票据 —— 表现为「动不动就要重登」。Asspp 的 `withAccount` 同样会回写。
+        defer { AppStoreDownloadStore.shared.updateFromAnyThread(account) }
         let software = try makeSoftware(item)
 
         // v0.3.307：先体检账号。dsid / passwordToken 为空时 Apple 必回
@@ -97,7 +104,8 @@ enum AppStoreLocalInstallService {
                     needLicense = false
                 }
                 onLog?("[AppleID] 请求下载信息…")
-                output = try await Download.download(account: &account, app: software)
+                output = try await Download.download(account: &account, app: software,
+                                                     externalVersionID: externalVersionID)
                 break
             } catch ApplePackageError.licenseRequired where !needLicense && retries < 2 {
                 needLicense = true
@@ -155,7 +163,7 @@ enum AppStoreLocalInstallService {
     }
 
     /// AppStoreItem → ApplePackage Software
-    private static func makeSoftware(_ item: AppStoreItem) throws -> Software {
+    static func makeSoftware(_ item: AppStoreItem) throws -> Software {
         guard let id = Int64(item.id) else { throw LocalError.badItemId }
         return Software(
             id: id,

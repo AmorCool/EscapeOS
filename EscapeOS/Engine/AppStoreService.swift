@@ -244,6 +244,64 @@ enum AppStoreService {
         return parseVersionHistory(html: html)
     }
 
+    // MARK: - v0.3.335：历史版本（账号通道，移植 Asspp）
+
+    /// 取某应用的**全量版本身份**（数字 externalVersionId，旧 → 新）。
+    ///
+    /// 走 App Store 下载协议（`VersionFinder`，Asspp `AppPackageArchive` 同款）：
+    /// `volumeStoreDownloadProduct` 响应里 `metadata.softwareVersionExternalIdentifiers`
+    /// 就是该应用全部历史版本的 ID 列表。**需要已登录的 Apple ID**（会带 DSID + cookie）。
+    ///
+    /// 这是唯一在**任何区域**都能拿到完整版本列表的通道 —— 商品页 HTML 那条
+    /// 只有部分区域/部分应用内嵌了 `versionHistory` shelf，所以非国区经常是空的。
+    static func storeVersionIdentifiers(bundleId: String, email: String) async throws -> [String] {
+        guard let stored = AppStoreDownloadStore.shared.account(for: email) else {
+            throw AppStoreError.noAccount
+        }
+        var account = stored
+        defer { AppStoreDownloadStore.shared.updateFromAnyThread(account) }
+        do {
+            return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
+        } catch ApplePackageError.passwordTokenExpired {
+            // 令牌过期 → 用已存凭据自动重登一次再重试（与下载链路同款）
+            LoginLogger.shared.log("版本历史：登录已失效，自动重新登录…", category: .appStore)
+            _ = try await AppleIDSignInService.rotate(email: email)
+            guard let refreshed = AppStoreDownloadStore.shared.account(for: email) else {
+                throw AppStoreError.noAccount
+            }
+            account = refreshed
+            return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
+        }
+    }
+
+    /// 取某版本身份对应的版本号与发布日期（`VersionLookup`，同 Asspp）。
+    static func storeVersionMetadata(item: AppStoreItem,
+                                     versionID: String,
+                                     email: String) async throws -> (version: String, date: Date) {
+        guard let stored = AppStoreDownloadStore.shared.account(for: email) else {
+            throw AppStoreError.noAccount
+        }
+        var account = stored
+        defer { AppStoreDownloadStore.shared.updateFromAnyThread(account) }
+        let software = try AppStoreLocalInstallService.makeSoftware(item)
+        do {
+            let meta = try await VersionLookup.getVersionMetadata(account: &account,
+                                                                  app: software,
+                                                                  versionID: versionID)
+            return (meta.displayVersion, meta.releaseDate)
+        } catch ApplePackageError.passwordTokenExpired {
+            _ = try await AppleIDSignInService.rotate(email: email)
+            guard let refreshed = AppStoreDownloadStore.shared.account(for: email) else {
+                throw AppStoreError.noAccount
+            }
+            account = refreshed
+            let meta = try await VersionLookup.getVersionMetadata(account: &account,
+                                                                  app: software,
+                                                                  versionID: versionID)
+            return (meta.displayVersion, meta.releaseDate)
+        }
+    }
+
     // MARK: - 历史版本解析
 
     /// 从商品页 HTML 中抽出版本历史数组并结构化
@@ -407,12 +465,14 @@ enum AppStoreError: Error, LocalizedError {
     case badURL
     case http(Int)
     case decode
+    case noAccount
 
     var errorDescription: String? {
         switch self {
         case .badURL: return "请求地址无效"
         case .http(let code): return "网络请求失败（HTTP \(code)）"
         case .decode: return "数据解析失败"
+        case .noAccount: return "需要先登录 Apple ID"
         }
     }
 }
