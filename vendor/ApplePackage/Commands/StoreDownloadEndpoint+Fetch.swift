@@ -52,15 +52,42 @@ extension StoreDownloadEndpoint {
                     externalVersionID: version
                 )
                 storeLog("redownload 返回；\(summary(dict))")
-            } catch {
-                // Keep authentication, cancellation, transport and trust failures intact.
-                // A failed fallback is not evidence that the user needs another license/login.
+                // v0.3.352：redownload 也是空包 → 两个端点都没给包，这就是「该账号
+                // 还没建立这个应用的下载权」。必须把它识别成 emptyPackage 抛给上层，
+                // 否则上层的「空包 → 获取许可 → 重试」分支永远不触发
+                // （v0.3.351 就是漏了这里：空包走到 redownload 5xx 后抛的是裸 HTTP 错误，
+                //  上层 catch 不匹配 → 直接失败，真机日志里 ChatGPT 就是这样挂的）。
+                if let reason = fallbackReason(dict) {
+                    storeLog("redownload 同样没有包（\(reason)）→ 判定为缺少下载授权")
+                    throw ApplePackageError.emptyPackage
+                }
+            } catch let error as ApplePackageError {
+                // 认证失效 / 缺许可必须原样上抛，只有「没拿到包」才归一成 emptyPackage。
                 storeLog("redownload 失败：\(error.localizedDescription)")
+                throw error
+            } catch {
+                storeLog("redownload 失败：\(error.localizedDescription)")
+                if isPackageUnavailable(error) {
+                    throw ApplePackageError.emptyPackage
+                }
                 throw error
             }
         }
 
         return dict
+    }
+
+    /// Apple 在大体上「没有包可给」时长这样：5xx + 空 body（redownload 经典形态）、
+    /// 或 200 但结构里没有 songList。这类失败是**业务结论**，不是网络抖动，
+    /// 归一成 `emptyPackage` 才能走「获取许可」补救。
+    private static func isPackageUnavailable(_ error: Error) -> Bool {
+        if case ApplePackageError.emptyPackage = error { return true }
+        let ns = error as NSError
+        if ns.domain == "EscapeOS.Ensure" {
+            let text = ns.localizedDescription
+            return text.contains("HTTP 5") || text.contains("可下载内容") || text.contains("获取记录")
+        }
+        return false
     }
 
     /// 是否需要换端点重取（对齐 Asspp dev 的 fallbackReason）
@@ -163,10 +190,14 @@ extension StoreDownloadEndpoint {
             let bodyData = finalResponse.body?.data ?? Data()
             let snippet = String(data: bodyData.prefix(512), encoding: .utf8) ?? "(非 UTF-8)"
             storeLog("store fetch failed: HTTP \(code) ct=\(ct) body=\(snippet.prefix(200))")
+            if code == 401 || code == 403 {
+                // 会话票据被拒 → 交给上层重登一次再试（对齐 ipatool/Asspp 的 401/403 语义）。
+                throw ApplePackageError.passwordTokenExpired
+            }
             if (500 ... 599).contains(code) {
-                // redownload 端点在「该账号没有此应用的获取记录」时会直接回 5xx 空 body，
-                // 不是我们可以重试修复的错。给一句能看懂的话，别把裸 HTTP 码丢给用户。
-                try ensureFailed("Apple 下载服务拒绝了本次请求（HTTP \(code)）——该 Apple ID 可能缺少此应用的获取记录")
+                // v0.3.352：5xx（redownload 常见 500/502 空 body）就是「Apple 没有包给你」，
+                // 归一成 emptyPackage，让上层去「获取许可」补救；不再抛裸 HTTP 字符串错误。
+                throw ApplePackageError.emptyPackage
             }
             try ensureFailed("store request failed with status \(code)")
         }

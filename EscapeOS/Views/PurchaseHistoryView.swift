@@ -48,7 +48,7 @@ struct PurchaseHistoryView: View {
                     }
                 } else if apps.isEmpty {
                     Section {
-                        Text("Apple 本次返回的已购列表为空。这不代表账号从未购买；请核对当前账号和商店区域。应用不会因空结果自动重新登录。")
+                        Text("Apple 未返回已购记录")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }

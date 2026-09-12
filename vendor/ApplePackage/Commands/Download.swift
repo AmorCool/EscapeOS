@@ -39,8 +39,9 @@ public enum Download {
             let customerMessage = dict["customerMessage"] as? String
             storeLog("下载被拒：\(StoreDownloadEndpoint.summary(dict))")
             switch failureType {
-            case "2034", "2042":
-                // v0.3.330：交给调用方自动重登后重试
+            case "2034", "2042", "2002":
+                // v0.3.330/352：交给调用方自动重登后重试。
+                // 2002 = FailureTypePasswordChanged，与 2034/2042 同类（票据不被 Apple 认可）。
                 throw ApplePackageError.passwordTokenExpired
             case "9610":
                 throw ApplePackageError.licenseRequired
@@ -49,9 +50,9 @@ public enum Download {
                 try ensureFailed("download failed: persistent \(failureType)")
             default:
                 if let customerMessage = customerMessage,
-                   customerMessage == "Your password has been changed"
+                   customerMessage.contains("password has") // "Your password has been changed"
                 {
-                    try ensureFailed("password token is expired")
+                    throw ApplePackageError.passwordTokenExpired
                 }
                 if let customerMessage = customerMessage,
                    customerMessage.contains("Sign In to the iTunes Store")

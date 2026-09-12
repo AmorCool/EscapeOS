@@ -42,14 +42,33 @@ enum PurchaseHistoryService {
 
     static func ownedApps(email: String) async throws -> [OwnedApp] {
         try await StoreAccountSession.withAccount(email: email) { account in
+            var first: [OwnedApp] = []
             do {
                 // A valid empty DAAP table is a result, not proof of an expired token.
-                return try await list(account: &account)
+                first = try await list(account: &account)
             } catch PurchaseHistoryError.tokenExpired {
                 LoginLogger.shared.log("[已购] 认证被拒 → 刷新一次会话后重试", category: .appStore)
                 account = try await AppleIDSignInService.rotate(email: email, failedAccount: account)
                 return try await list(account: &account)
             }
+            guard first.isEmpty else { return first }
+            // v0.3.352：**空表也刷新一次会话再问一遍**。
+            // 会话票据不被 Apple 认可时，DMAP 回的是 `mstt=200 + mtco=0`（合法的空数据库），
+            // 而不是 401 —— 只按 401/403 重登就会把「票据失效」误判成「没有购买记录」。
+            // 只重试一次，且刷新失败时沿用空结果，不让刷新本身把列表页打挂。
+            LoginLogger.shared.log("[已购] 返回空表 → 刷新一次会话后重试", category: .appStore)
+            do {
+                account = try await AppleIDSignInService.rotate(email: email, failedAccount: account)
+            } catch {
+                LoginLogger.shared.log("[已购] 会话刷新未完成（\(error.localizedDescription)），沿用空结果",
+                                       category: .appStore)
+                return first
+            }
+            let again = try await list(account: &account)
+            if again.isEmpty {
+                LoginLogger.shared.log("[已购] 刷新会话后仍为空", category: .appStore)
+            }
+            return again
         }
     }
 

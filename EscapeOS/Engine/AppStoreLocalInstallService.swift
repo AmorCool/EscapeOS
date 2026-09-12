@@ -50,35 +50,69 @@ enum AppStoreLocalInstallService {
     private static func downloadInformation(software: Software, account: inout AppStoreAccount,
                                             email: String, externalVersionID: String?,
                                             onLog: ((String) -> Void)?) async throws -> DownloadOutput {
-        var needsLicense = false
-        var purchased = false
+        // 有界状态机（v0.3.352 重写）：
+        //   下载 → 票据失效（2002/2034/2042）→ 刷新会话一次 → 继续
+        //        → 空包 → 先刷新会话确认一次（Apple 用「合法空包」表达票据不被认可）
+        //                → 仍为空 → 获取许可一次 → 再下载
+        //        → 9610 → 获取许可一次 → 再下载
+        // Apple 的两种「没有下载权」表达方式（`failureType 9610` 与 HTTP 200 + 空 songList，
+        // 后者会被 redownload 的 5xx 包住）都必须触发同一段补救逻辑 —— 老实现只认 9610，
+        // 且 351 把 redownload 失败还原成裸错误，导致空包这一档永远走不到购买。
         var refreshed = false
+        var licensed = false
+        var emptyRetried = false
+        var attempt = 0
         while true {
+            attempt += 1
+            guard attempt <= 6 else { throw ApplePackageError.emptyPackage }
             try Task.checkCancellation()
             do {
-                if needsLicense {
-                    // A license/empty package is not an expired ticket. Use the existing session first.
-                    onLog?("[AppleID] 使用现有会话获取授权…")
-                    let outcome = try await Purchase.purchase(account: &account, app: software)
-                    _ = describe(outcome, onLog: onLog)
-                    purchased = true
-                    needsLicense = false
-                    try await Task.sleep(for: .milliseconds(2500))
-                }
                 onLog?("[AppleID] 请求下载信息…")
                 return try await Download.download(account: &account, app: software,
-                                                    externalVersionID: externalVersionID)
-            } catch ApplePackageError.licenseRequired where !purchased && !needsLicense {
-                needsLicense = true
-                onLog?("[AppleID] 缺少此应用的许可（9610）→ 获取一次授权")
-            } catch ApplePackageError.emptyPackage where !purchased && !needsLicense {
-                needsLicense = true
-                onLog?("[AppleID] Apple 返回空包 → 使用现有会话尝试获取一次许可")
+                                                   externalVersionID: externalVersionID)
             } catch ApplePackageError.passwordTokenExpired where !refreshed {
                 refreshed = true
                 try await refreshAccount(email: email, account: &account, onLog: onLog)
+            } catch ApplePackageError.licenseRequired where !licensed {
+                licensed = true
+                onLog?("[AppleID] 该账号还没有此应用的许可（9610）→ 获取一次授权")
+                try await acquireLicense(software: software, account: &account,
+                                         email: email, onLog: onLog)
+            } catch ApplePackageError.emptyPackage where !licensed {
+                if !emptyRetried, !refreshed {
+                    // 先确认这空包不是「会话票据不被认可」造成的（Apple 那种情况下同样回
+                    // HTTP 200 + 空 songList，而不是 401）。直接去购买会白撞 2002。
+                    emptyRetried = true
+                    refreshed = true
+                    onLog?("[AppleID] Apple 未返回可下载内容 → 刷新会话后重试")
+                    try await refreshAccount(email: email, account: &account, onLog: onLog)
+                } else {
+                    licensed = true
+                    onLog?("[AppleID] Apple 未返回可下载内容 → 获取一次授权后重试")
+                    try await acquireLicense(software: software, account: &account,
+                                             email: email, onLog: onLog)
+                }
             }
         }
+    }
+
+    /// 获取一次许可；票据失效时**先用已保存凭据刷新会话再买一次**。
+    ///
+    /// Apple 在会话票据不被认时对 buyProduct 回 `failureType 2002 / "Your password has
+    /// changed."`（离线回放实测），而日志/下载链路当时都还好用 —— 这条必须按「票据失效」处理，
+    /// 否则「已经买过的免费应用」永远拿不到授权，下载永远停在空包。
+    private static func acquireLicense(software: Software, account: inout AppStoreAccount,
+                                       email: String, onLog: ((String) -> Void)?) async throws {
+        onLog?("[AppleID] 获取授权…")
+        do {
+            _ = describe(try await Purchase.purchase(account: &account, app: software), onLog: onLog)
+        } catch ApplePackageError.passwordTokenExpired {
+            try await refreshAccount(email: email, account: &account, onLog: onLog)
+            onLog?("[AppleID] 获取授权（已刷新会话）…")
+            _ = describe(try await Purchase.purchase(account: &account, app: software), onLog: onLog)
+        }
+        // 刚建立的许可在 Apple 侧生效有延迟，立刻重试会白打一次（IPARanger 同款等待）。
+        try await Task.sleep(for: .milliseconds(2500))
     }
 
     @discardableResult

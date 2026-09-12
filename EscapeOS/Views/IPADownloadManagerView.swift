@@ -136,9 +136,6 @@ struct IPADownloadManagerView: View {
                 }
             }
             .padding(.vertical, 4)
-        } footer: {
-            Text("包存在 Documents/AppStoreDownloads，放进该目录的 IPA 会自动出现在这里")
-                .font(.caption2)
         }
     }
 
@@ -154,10 +151,6 @@ struct IPADownloadManagerView: View {
                         .foregroundStyle(.secondary)
                     Text("还没有下载过安装包")
                         .font(.subheadline.weight(.medium))
-                    Text("在「免登录下载」里点安装，包会先下载到这里，再自动安装。")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 20)
@@ -180,40 +173,54 @@ struct IPADownloadManagerView: View {
         HStack(alignment: .center, spacing: 12) {
             iconView(item)
 
-            VStack(alignment: .leading, spacing: 3) {
+            // 三行信息：标题 / 版本 + 体积 + 包类型 / 来源与时间。
+            // `layoutPriority` + 标签 `.fixedSize` 保证标签永远单行（原来三个胶囊被右侧按钮
+            // 挤窄后会把版本号断成「v6.0.260 / 824」两行）。
+            VStack(alignment: .leading, spacing: 4) {
                 Text(item.title)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     if let v = item.version { chip("v\(v)", .blue) }
                     chip(item.sizeText, .green)
-                    chip(item.kindText, item.isEncrypted == true ? .orange : .purple)
+                    Text(item.kindText)
+                        .font(.caption2)
+                        .foregroundStyle(kindTint(item))
+                        .lineLimit(1)
                 }
                 Text(subtitle(item))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            Spacer(minLength: 6)
+            .layoutPriority(1)
+
+            Spacer(minLength: 8)
 
             if let job = center.activeJob(bundleId: item.bundleId, name: item.title) {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     ProgressView(value: min(1, max(0, job.overall)))
-                        .frame(width: 40)
+                        .frame(width: 44)
                     Text(job.phase == .paused ? "已暂停" : job.stageText)
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
+                .fixedSize()
             } else {
                 Button {
                     install(item)
                 } label: {
                     Text(item.lastInstalledAt == nil ? "安装" : "重装")
                         .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .lineLimit(1)
+                        .frame(minWidth: 40)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
                         .background(Color.blue.opacity(0.14), in: Capsule())
                         .foregroundStyle(.blue)
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
             }
         }
         .padding(.vertical, 3)
@@ -272,9 +279,16 @@ struct IPADownloadManagerView: View {
     private func chip(_ text: String, _ tint: Color) -> some View {
         Text(text)
             .font(.caption2)
-            .padding(.horizontal, 5).padding(.vertical, 1)
+            .lineLimit(1)
+            .padding(.horizontal, 6).padding(.vertical, 1)
             .background(tint.opacity(0.12), in: Capsule())
             .foregroundStyle(tint)
+            .fixedSize()
+    }
+
+    /// 包类型只在「有风险」时着色：缺 sinf 的加密包装不上，必须显眼。
+    private func kindTint(_ item: IPADownloadItem) -> Color {
+        item.isEncrypted == true && item.hasSINF != true ? .orange : .secondary
     }
 
     // MARK: - 数据与安装

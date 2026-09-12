@@ -140,6 +140,16 @@ public enum Purchase {
             case "2034", "2042":
                 // v0.3.330：交给调用方自动重登后重试（不再是一句死错误）
                 throw ApplePackageError.passwordTokenExpired
+            case "2002":
+                // v0.3.352：2002 = `FailureTypePasswordChanged`（Apple 文案 "Your password
+                // has changed."）。**实测**（离线回放 buyProduct，2026-09-12）：只要会话票据
+                // 是 Apple 当前不认的那一份，buyProduct 就稳定回 2002，而下载链路仍好用
+                // （已授权应用的 volumeStore 照样返包）。ipatool 把这条也算
+                // `ErrPasswordTokenExpired`（`CustomerMessagePasswordChanged`），据此
+                // **重登一次再重试** —— 而 ①2002 此前落在 default 里被当成普通失败
+                // ②于是「空包 → 获取许可」这一档永远拿不到授权。必须按令牌失效处理。
+                storeLog("购买令牌失效（2002 password changed）→ 需要刷新会话")
+                throw ApplePackageError.passwordTokenExpired
             case "5002":
                 // v0.3.331：5002 = 该账号**已经有这个应用的授权**（ipatool 的
                 // FailureTypeLicenseAlreadyExists，cmd/purchase.go 里把它当成功、
@@ -152,8 +162,12 @@ public enum Purchase {
                     if customerMessage == "Subscription Required" {
                         try ensureFailed("subscription required")
                     }
-                    // Apple 在令牌失效时也会用这条文案
+                    // Apple 在令牌失效时也会用这两条文案（ipatool 同款判定）
                     if customerMessage.contains("Sign In to the iTunes Store") {
+                        throw ApplePackageError.passwordTokenExpired
+                    }
+                    if customerMessage.contains("password has") { // "Your password has changed."
+                        storeLog("购买令牌失效（password changed）→ 需要刷新会话")
                         throw ApplePackageError.passwordTokenExpired
                     }
                     try ensureFailed(customerMessage)
