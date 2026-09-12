@@ -155,21 +155,29 @@ final class CrashLogService {
         }
     }
 
-    /// v0.3.322：崩溃报告条数（设备信息首屏「崩溃日志」用）。
+    /// 设备信息首屏「崩溃日志」的次数。
     ///
-    /// 口径：CrashReporter 根目录下的 `.ips`，**排除**资源/指标类诊断 ——
-    /// `*.diskwrites_resource-*`（磁盘写入诊断）、`WiFiLQMMetrics-*`（网络指标）、
-    /// `*.metric*`。它们不是崩溃，iOS 自己定期写。
-    /// 真机 iPhone15,4 / iOS 27 实测根目录下有上述三类 + `JetsamEvent` / `ExcUserFault_*` /
-    /// `<App>-<date>.ips` 等真实崩溃报告。
+    /// **口径 = 系统崩溃（panic）次数**，即 CrashReporter 根目录下的 `panic-full-*`。
+    /// 依据：爱思 9.0 的崩溃处理字符串全部围绕 `/panic-full-`（`panicString` /
+    /// `crashJson` / `diagnosis`），且真机 iPhone15,4 / iOS 27 上它的首屏显示 **0 次**；
+    /// 而该机根目录里除 panic 外还有 30 多个 `.ips`（大多是
+    /// `*.diskwrites_resource-*` 磁盘写入诊断、`WiFiLQMMetrics-*` 网络指标、
+    /// `JetsamEvent-*` 内存事件与若干 App 崩溃报告）——按"所有 .ips"数会得到 30+，
+    /// 与爱思对不上。若以后要单独展示 App 崩溃，用 `appCrashReportCount()`。
     func crashReportCount() -> Int? {
         guard let entries = try? list() else { return nil }
-        let excluded = ["diskwrites_resource", "wifilqmmetrics", "metric", "shutterbug"]
+        return entries.filter { !$0.isDirectory && $0.name.lowercased().hasPrefix("panic-full") }.count
+    }
+
+    /// App / 系统守护进程的崩溃报告条数（不含 panic、不含资源与网络诊断）
+    func appCrashReportCount() -> Int? {
+        guard let entries = try? list() else { return nil }
+        let excluded = ["diskwrites_resource", "wifilqmmetrics", "metric", "shutterbug", "jetsamevent"]
         return entries.filter { entry in
             guard !entry.isDirectory else { return false }
             let name = entry.name.lowercased()
             guard name.hasSuffix(".ips") else { return false }
-            return !excluded.contains { name.contains($0) }
+            return !name.hasPrefix("panic-full") && !excluded.contains { name.contains($0) }
         }.count
     }
 

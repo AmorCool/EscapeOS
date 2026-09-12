@@ -58,7 +58,7 @@ enum AppleIDSignInService {
 
     /// SAP 资产是否就位（缺失时登录必然失败，UI 应给出明确提示）
     static var assetsReady: Bool {
-        guard let url = Bundle.main.resourceURL?.appendingPathComponent("SAPAssets") else { return false }
+        guard let url = SAPAssetsLocator.url else { return false }
         let names = ["CommerceKit", "CommerceCore", "CoreFP", "CoreFP.icxs"]
         return names.allSatisfy {
             FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path)

@@ -58,9 +58,14 @@ actor SignedStoreAuthenticator {
         guard StoreAuthenticationProtocol.string(value("sign-sap-version")) == "200",
               let certificateURL = publicSAPURL(value("sign-sap-setup-cert"), host: "s.mzstatic.com"),
               let setupURL = publicSAPURL(value("sign-sap-setup"), host: "fpinit.itunes.apple.com"),
-              let assets = Bundle.main.resourceURL?.appendingPathComponent("SAPAssets"),
+              let assets = SAPAssetsLocator.url,
               guid.count == 12
-        else { throw StoreAuthenticationError.invalidConfiguration }
+        else {
+            LoginLogger.shared.log("[SAP] SAP 资产未找到：\(SAPAssetsLocator.describe())",
+                                   category: .appStore)
+            throw StoreAuthenticationError.invalidConfiguration
+        }
+        LoginLogger.shared.log("[SAP] 资产目录 \(assets.path)", category: .appStore)
 
         let hardware = stride(from: 0, to: 12, by: 2).compactMap { offset -> UInt8? in
             let start = guid.index(guid.startIndex, offsetBy: offset)

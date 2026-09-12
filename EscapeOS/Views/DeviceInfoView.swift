@@ -118,7 +118,8 @@ struct DeviceInfoView: View {
     // MARK: - 数据组装（行序对齐爱思「设备详情」）
 
     private func sections(_ info: DeviceInfoModel) -> [DeviceInfoSectionSpec] {
-        [deviceSection(info),
+        [overviewSection(info),
+         deviceSection(info),
          systemSection(info),
          networkSection(info),
          hardwareSection(info),
@@ -127,38 +128,50 @@ struct DeviceInfoView: View {
          storageSection(info)]
     }
 
+    /// v0.3.324：**设备概要** —— 与爱思 9.0 设备信息首屏逐行对齐
+    /// （系统版本 / 序列号 / IMEI1 / IMEI2 / 产品类型 / 型号名称 / 销售地区 /
+    ///   激活状态 / 越狱状态 / 激活锁(ID锁) / iCloud / 生产日期 / 保修期限 / 崩溃日志）
+    private func overviewSection(_ info: DeviceInfoModel) -> DeviceInfoSectionSpec {
+        DeviceInfoSectionSpec(title: "设备概要", icon: "iphone.gen3", rows: [
+            .init(id: 2, label: "序列号", value: info.serialNumber, sensitive: true),
+            .init(id: 3, label: "IMEI1", value: info.imei, sensitive: true),
+            .init(id: 4, label: "IMEI2", value: info.imei2, sensitive: true),
+            .init(id: 5, label: "产品类型", value: productTypeText(info), sensitive: false),
+            .init(id: 6, label: "型号名称",
+                  value: [info.modelNumber, info.region].compactMap { $0 }.joined(separator: " "),
+                  sensitive: false),
+            .init(id: 7, label: "销售地区",
+                  value: [info.region, info.regionName].compactMap { $0 }.joined(separator: " "),
+                  sensitive: false),
+            .init(id: 8, label: "激活状态", value: activationText(info.activationState), sensitive: false),
+            .init(id: 9, label: "越狱状态", value: info.jailbroken.map { $0 ? "已越狱" : "未越狱" }, sensitive: false),
+            // 本机状态来自 com.apple.fmip.IsAssociated；「精准查询」走 Apple 官网（爱思同款入口）
+            .init(id: 10, label: "激活锁 (ID锁)",
+                  value: info.activationLockEnabled.map { $0 ? "已开启" : "未开启" },
+                  sensitive: false,
+                  link: "https://www.icloud.com/activationlock/"),
+            .init(id: 11, label: "iCloud",
+                  value: info.iCloudSignedIn.map { $0 ? "已开启" : "未开启" },
+                  sensitive: false),
+            .init(id: 12, label: "生产日期", value: productionDateText, sensitive: false),
+            .init(id: 13, label: "保修期限", value: nil, sensitive: false, link: warrantyURL(info)),
+            .init(id: 14, label: "崩溃日志",
+                  value: info.crashLogCount.map { "\($0) 次" },
+                  sensitive: false),
+        ])
+    }
+
+    /// v0.3.324：**设备详情** —— 概要之外的机型/识别类字段
     private func deviceSection(_ info: DeviceInfoModel) -> DeviceInfoSectionSpec {
-        DeviceInfoSectionSpec(title: "设备", icon: "iphone.gen3", rows: [
+        DeviceInfoSectionSpec(title: "设备详情", icon: "doc.text.magnifyingglass", rows: [
             .init(id: 1, label: "设备名称", value: info.deviceName, sensitive: false),
             .init(id: 2, label: "容量颜色", value: capacityColorText(info), sensitive: false),
             .init(id: 3, label: "上市日期", value: info.releaseDate, sensitive: false),
             .init(id: 4, label: "设备型号", value: info.modelName, sensitive: false),
-            .init(id: 5, label: "激活状态", value: activationText(info.activationState), sensitive: false),
-            .init(id: 6, label: "生产日期", value: productionDateText, sensitive: false),
-            .init(id: 7, label: "序列号", value: info.serialNumber, sensitive: true),
-            .init(id: 8, label: "越狱状态", value: info.jailbroken.map { $0 ? "已越狱" : "未越狱" }, sensitive: false),
-            // v0.3.322：对齐爱思首屏的四项检测
-            .init(id: 20, label: "激活锁（ID锁）",
-                  value: info.activationLockEnabled.map { $0 ? "已开启" : "未开启" },
-                  sensitive: false),
-            .init(id: 21, label: "iCloud",
-                  value: info.iCloudSignedIn.map { $0 ? "已开启" : "未开启" },
-                  sensitive: false),
-            .init(id: 22, label: "崩溃日志",
-                  value: info.crashLogCount.map { "\($0) 次" },
-                  sensitive: false),
-            .init(id: 23, label: "保修期限",
-                  value: nil,
-                  sensitive: false,
-                  link: warrantyURL(info)),
             .init(id: 9, label: "销售类型", value: info.salesType, sensitive: false),
             .init(id: 10, label: "主板序列号", value: info.mlbSerial, sensitive: true),
-            .init(id: 11, label: "产品类型", value: productTypeText(info), sensitive: false),
-            .init(id: 12, label: "销售型号", value: [info.modelNumber, info.region].compactMap { $0 }.joined(separator: " "), sensitive: false),
             .init(id: 13, label: "ECID", value: info.ecid, sensitive: true),
             .init(id: 14, label: "固件版本", value: versionText(info), sensitive: false),
-            // 销售地区 = RegionInfo（渠道/国家，如 LL/A → 美国）
-            .init(id: 15, label: "销售地区", value: [info.region, info.regionName].compactMap { $0 }.joined(separator: " "), sensitive: false),
             .init(id: 16, label: "UDID", value: info.udid, sensitive: true),
             .init(id: 17, label: "硬件型号", value: info.uniqueModel, sensitive: false),
             .init(id: 18, label: "设备类别", value: info.deviceClass, sensitive: false),
