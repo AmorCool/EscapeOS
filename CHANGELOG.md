@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.358] - 2026-09-12
+
+### 修复
+- **更正 native/fast 第一候选的归属：这是 JAsspp 独有的做法，不是 ipatool 上游行为。**
+  上游 `appstore_bag.go:103-118` 的 `validateAuthenticationEndpoint` 只放行
+  `buy.itunes.apple.com` / `*-buy.itunes.apple.com`，路径必须**恰好**是
+  `/WebObjects/MZFinance.woa/wa/authenticate` —— native 端点反而进不去；
+  `appstore_login.go:29-31` 还把 `LoginInput.Endpoint` 标记 deprecated（「unsigned or
+  caller-selected fallbacks are impossible」）。行为不变，只把注释里的因果改对：这一档当作
+  **便宜的额外形状探测**，真正对齐上游的解释仍是「边缘按请求形状路由」（v0.3.355/356）。
+- **SAP 端点不再 pin 具体主机名**：原先只认 `s.mzstatic.com` / `fpinit.itunes.apple.com`，
+  比上游严 —— 上游 `appstore_bag.go:89-94` 对 SAP 端点只要求 `https` + host 非空，**不 pin**。
+  现改为「https + 无 userinfo/fragment + 443 + 落在 `apple.com` / `mzstatic.com` 域内」：
+  bag 换到同域其它主机名时直接用 bag 的值，硬编码兜底（`sap.js:24-25`）降级为**最后手段**，
+  并在日志里区分「bag 缺字段」与「bag 端点在 Apple 域外」两种回退原因。
+- **403 / 429 确认不纳入认证重轮换**（源码注释固化证据）：上游
+  `retryableAuthenticationError`（`appstore_login.go:210-222`）只重试 204 / 404 / 5xx；
+  真机日志 `login_full.log` 里 429、403 作为状态码**出现 0 次**（实际只有
+  204×3 / 404 / 301 / 500 / 503），没有「429 其实是抖动」的样本支撑。429 仍走
+  `Retry-After` 的 `rateLimited` 退避，不重放凭据。
+- 补充两处注释证据（不改行为）：URL 上的 `?guid=` 只是 JAsspp 保留历史实现的幂等参数，
+  **不是路由要求**（上游 `appstore_login_test.go:155` 断言 `req.URL == testAuthEndpoint`，无查询串）；
+  下载侧 `serialNumber` 保持 `"0"`、不补 `X-Token`、Pod 为空时不加 `p25-` 前缀，均与上游一致。
+- `tools/verify_store_protocol.py` 新增断言：SAP 校验走 Apple 域而非 pin host、pin host 写法已移除、
+  403 / 429 不出现在重试条件里、native-first 必须被标注为 JAsspp-only 差异。
+
 ## [0.3.357] - 2026-09-12
 
 ### 修复

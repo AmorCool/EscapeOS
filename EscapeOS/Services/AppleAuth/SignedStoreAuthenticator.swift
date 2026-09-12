@@ -59,17 +59,23 @@ actor SignedStoreAuthenticator {
             StoreAuthenticationProtocol.string(value("authenticateAccount")))
         // v0.3.357：SAP 端点走硬编码兜底（参考 Jsbox-Ipa `sap.js`）。bag 缺字段或版本号不是 200
         // 时不再直接放弃登录 —— 先回退到 Apple 固定的两个端点，只有连资产/guid 也不可用才失败。
+        // v0.3.358：兜底前先放宽 bag 端点的 host 校验（只要求 Apple 域，不再 pin 具体主机名），
+        // 对齐上游 `appstore_bag.go:89-94`（它只查 https + host 非空）。硬编码兜底降级为最后手段。
         let bagVersion = StoreAuthenticationProtocol.string(value("sign-sap-version"))
         if !bagVersion.isEmpty, bagVersion != "200" {
             LoginLogger.shared.log("[SAP] bag 的 sign-sap-version=\(bagVersion)（非 200），按 200 处理",
                                    category: .appStore)
         }
-        let certificateURL = publicSAPURL(value("sign-sap-setup-cert"), host: "s.mzstatic.com")
-            ?? URL(string: StoreAuthenticationProtocol.fallbackSAPCertURL)
-        let setupURL = publicSAPURL(value("sign-sap-setup"), host: "fpinit.itunes.apple.com")
-            ?? URL(string: StoreAuthenticationProtocol.fallbackSAPSetupURL)
-        if value("sign-sap-setup-cert") == nil || value("sign-sap-setup") == nil {
-            LoginLogger.shared.log("[SAP] bag 缺少 SAP 端点 → 使用内置兜底端点", category: .appStore)
+        let certificateValue = value("sign-sap-setup-cert")
+        let setupValue = value("sign-sap-setup")
+        let bagCertificateURL = publicSAPURL(certificateValue)
+        let bagSetupURL = publicSAPURL(setupValue)
+        let certificateURL = bagCertificateURL ?? URL(string: StoreAuthenticationProtocol.fallbackSAPCertURL)
+        let setupURL = bagSetupURL ?? URL(string: StoreAuthenticationProtocol.fallbackSAPSetupURL)
+        if bagCertificateURL == nil || bagSetupURL == nil {
+            let reason = (certificateValue == nil || setupValue == nil)
+                ? "bag 缺少 SAP 端点" : "bag 的 SAP 端点不在 Apple 域内"
+            LoginLogger.shared.log("[SAP] \(reason) → 使用内置兜底端点", category: .appStore)
         }
         guard let certificateURL, let setupURL,
               let assets = SAPAssetsLocator.url,
@@ -131,8 +137,15 @@ actor SignedStoreAuthenticator {
         // 直接拒绝（空 403）」，所以它把官方 native 端点放**第一候选**。
         // 我们此前把 native 放在**最后一档**，真机上永远走不到 → 每次登录必失败。
         //
+        // v0.3.358 更正归属：**native-first 是 JAsspp 独有的放宽，不是 ipatool 上游行为。**
+        // 上游 `appstore_bag.go:103-118` 的 `validateAuthenticationEndpoint` 只放行
+        // `buy.itunes.apple.com` / `*-buy.itunes.apple.com` + 路径恰好
+        // `/WebObjects/MZFinance.woa/wa/authenticate` —— native 端点反而进不去；`appstore_login.go:29-31`
+        // 还把 `LoginInput.Endpoint` 标记为 deprecated。所以「候选顺序」这一层不要写成上游依据，
+        // 它只是与参考客户端（JAsspp / 老 ipatool-sapfix）对齐的额外形状探测。
+        //
         // 梯子固定有限档、每档只打一次，仍是「同一份 body + 新签名」：
-        //   ① native/fast · form-urlencoded（官方现代端点）
+        //   ① native/fast · form-urlencoded（JAsspp 的第一候选）
         //   ② bag 端点 · form-urlencoded
         //   ③ bag 端点 · x-apple-plist（边缘按 Content-Type 路由）
         //   ④ bag 端点尾斜杠 · form-urlencoded
@@ -287,12 +300,17 @@ actor SignedStoreAuthenticator {
         throw StoreAuthenticationError.tooManyAttempts
     }
 
-    /// 只接受 https + 指定 host + 443 + 无 userinfo/fragment 的 SAP 端点
-    private func publicSAPURL(_ value: Any?, host: String) -> URL? {
+    /// 只接受 https + Apple 自有域 + 443 + 无 userinfo/fragment 的 SAP 端点。
+    ///
+    /// v0.3.358：不再 pin 具体主机名（原来是 `s.mzstatic.com` / `fpinit.itunes.apple.com`）。
+    /// 上游 ipatool 对 SAP 端点只要求 `https` + host 非空（`appstore_bag.go:89-94`），**不 pin**；
+    /// 我们比上游严，会让 bag 换到同域其它主机名时被无谓丢弃。这里保持「Apple 域」这一层收紧。
+    private func publicSAPURL(_ value: Any?) -> URL? {
         guard let text = value as? String, let url = URL(string: text),
-              url.scheme == "https", url.host?.lowercased() == host,
+              url.scheme?.lowercased() == "https", let host = url.host?.lowercased(),
               url.user == nil, url.password == nil, url.fragment == nil,
-              url.port == nil || url.port == 443 else { return nil }
+              url.port == nil || url.port == 443,
+              StoreAuthenticationProtocol.isAppleHost(host) else { return nil }
         return url
     }
 

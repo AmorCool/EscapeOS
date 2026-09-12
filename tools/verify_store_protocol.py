@@ -96,8 +96,20 @@ def main() -> None:
             "bag-provided native endpoints are normalized to /auth/v1/native/fast/")
     require("isDeviceGUID" in protocol and "guid.count == 12" not in auth,
             "device guid accepts the 12-32 hex form used by the reference client")
+    # v0.3.358：SAP 端点只做「https + Apple 域」校验，不 pin 具体 host（上游 appstore_bag.go:89-94
+    # 只查 https + host 非空）。硬编码兜底只作最后手段，不再是 host pin 失败后的唯一出路。
     require("fallbackSAPCertURL" in protocol and "fallbackSAPSetupURL" in protocol,
-            "SAP endpoints have hardcoded fallbacks")
+            "SAP endpoints keep a last-resort fallback")
+    require("isAppleHost" in protocol and "publicSAPURL(certificateValue)" in auth,
+            "SAP endpoints are validated by Apple domain, not a pinned host")
+    require('publicSAPURL(value("sign-sap-setup-cert"), host:' not in auth,
+            "the pinned-host SAP check is gone")
+    # v0.3.358：403 / 429 不纳入重试（上游只重试 204/404/5xx；真机日志 429、403 状态码 0 次）。
+    require("status == 403" not in protocol and "status == 429" not in protocol,
+            "403 / 429 are not replayed (no evidence they are transient)")
+    # v0.3.358：native-first 是 JAsspp 的放宽，不是 ipatool 上游行为，代码里要写明这一点。
+    require("不是 ipatool 上游行为" in protocol and "不是 ipatool 上游行为" in auth,
+            "the native-first ladder is documented as a JAsspp-only divergence")
     # v0.3.354：换过机器身份后不能再把旧会话的 Cookie 当自己的发出去。
     require("deviceGuid" in source("vendor/ApplePackage/Models/Account.swift"),
             "session records the machine identity it was issued under")
