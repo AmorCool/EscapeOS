@@ -26,6 +26,14 @@
 - `tools/verify_store_protocol.py` 新增断言：native/fast 必须是第一候选、native 端点需规范化、
   guid 口径放宽；`Content-Type` / 尾斜杠探测各只出现一次。
 
+### 界面
+- **25 处界面文案精简**（用户批准）——去掉解释性长句、footnote 式说明与「为什么」的自白，
+  只留必要信息与操作必需的路径/设置页指引：`PairingSetupView`、`RingtonesView`、`DialerThemeView`、
+  `DomainBlockerView`、`PiPKeepAliveView`、`LiveCleanTabView`、`ProcessManagerView`、`ConfigurationsView`、
+  `WallpaperView`、`SSHDebugView`、`ProfileInstallView`、`BackupsListView`、`CertificateView`、
+  `AppDetailView`、`ReclaimAppView`、`ModuleManagerView`、`RestrictionTweaksView`。
+  另删掉两处语义重复的 footer（`FileBrowserRootView`、`KernelCacheView`），只保留一条。
+
 ## [0.3.356] - 2026-09-12
 
 ### 修复
