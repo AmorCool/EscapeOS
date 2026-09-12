@@ -172,7 +172,8 @@ enum AppStoreLocalInstallService {
     /// Apple 要验证码时转成明确提示（`LocalError.reloginNeedsCode`）。
     /// 「获取许可证」—— 单独把该账号对该应用的授权买下来（免费应用）。
     ///
-    /// 与下载链路里 9610 分支是同一件事：**先 rotate 刷新 passwordToken，再 buyProduct**。
+    /// 与下载链路里 9610 分支是同一件事：走 `buyProduct` 把授权买下来。
+    /// **先用已存票据直接买，Apple 说票据过期（2034/2042）才 rotate 重登一次** —— 见下面注释。
     /// 返回一句可直接展示的结果。
     @discardableResult
     static func acquireLicense(item: AppStoreItem,
@@ -183,9 +184,26 @@ enum AppStoreLocalInstallService {
         }
         let software = try makeSoftware(item)
         onLog?("[AppleID] 获取许可证：\(item.bundleId ?? item.name)")
-        try await refreshAccount(email: email, account: &account, onLog: onLog)
-        let outcome = try await Purchase.purchase(account: &account, app: software, endpoint: .finance)
-        AppStoreDownloadStore.shared.updateFromAnyThread(account)
+        // 先直接用已存票据购买；**只有** Apple 说票据过期（2034/2042）才重新登录。
+        // 原来无条件 rotate：票据还有效时也白打一次登录，而登录端点被反复打会回
+        // HTTP 204/301 空响应（按出口 IP 的限流），反而把整条链路打死。
+        do {
+            let outcome = try await Purchase.purchase(account: &account, app: software,
+                                                      endpoint: .finance)
+            AppStoreDownloadStore.shared.updateFromAnyThread(account)
+            return describe(outcome, onLog: onLog)
+        } catch ApplePackageError.passwordTokenExpired {
+            onLog?("[AppleID] 票据过期 → 重新登录后重试")
+            try await refreshAccount(email: email, account: &account, onLog: onLog)
+            let outcome = try await Purchase.purchase(account: &account, app: software,
+                                                      endpoint: .finance)
+            AppStoreDownloadStore.shared.updateFromAnyThread(account)
+            return describe(outcome, onLog: onLog)
+        }
+    }
+
+    private static func describe(_ outcome: Purchase.Outcome,
+                                 onLog: ((String) -> Void)?) -> String {
         switch outcome {
         case .purchased:
             onLog?("[AppleID] 授权结果：下单成功")

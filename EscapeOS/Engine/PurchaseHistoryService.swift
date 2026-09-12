@@ -39,6 +39,9 @@ enum PurchaseHistoryError: Error, LocalizedError {
     case signerUnavailable
     case badResponse(String)
     case rejected(String)
+    /// HTTP 401/403：会话票据（passwordToken / cookie）过期 —— ipatool 同样把这两档
+    /// 直接当 passwordTokenExpired。调用方应用已存凭据 rotate 一次再重试。
+    case tokenExpired
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +49,7 @@ enum PurchaseHistoryError: Error, LocalizedError {
         case .signerUnavailable: return "SAP 资产不可用，无法签名"
         case .badResponse(let what): return "已购列表响应异常（\(what)）"
         case .rejected(let message): return message
+        case .tokenExpired: return "登录票据已过期，请重试"
         }
     }
 }
@@ -65,6 +69,17 @@ enum PurchaseHistoryService {
         guard let account = AppStoreDownloadStore.shared.account(for: email) else {
             throw PurchaseHistoryError.noAccount
         }
+        do {
+            return try await list(account: account)
+        } catch PurchaseHistoryError.tokenExpired {
+            // 票据过期 → 用已存凭据 rotate 一次（带 cookie，通常免验证码）再重试一次
+            LoginLogger.shared.log("[已购] 票据过期 → 重新登录后重试", category: .appStore)
+            let refreshed = try await AppleIDSignInService.rotate(email: email)
+            return try await list(account: refreshed)
+        }
+    }
+
+    private static func list(account: AppStoreAccount) async throws -> [OwnedApp] {
         let session = PurchaseHistorySession(account: account)
         try await session.prepare()
         let sessionID = try await session.login()
@@ -154,6 +169,12 @@ enum PurchaseHistoryService {
             for (name, value) in Self.headers(account: account) {
                 request.setValue(value, forHTTPHeaderField: name)
             }
+            // **必须有 Cookie**：DMAP 的鉴权靠会话 cookie，缺它 /items 直接 401。
+            // ipatool 的 HTTP 客户端自带 cookie jar，我们是 ephemeral session，
+            // 所以得手动把账号里存的 cookie 拼上（与 volumeStore / buyProduct 同款做法）。
+            for (name, value) in account.cookie.buildCookieHeader(url) {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
             if let contentType {
                 request.setValue(contentType, forHTTPHeaderField: "Content-Type")
             }
@@ -169,6 +190,9 @@ enum PurchaseHistoryService {
             }
             LoginLogger.shared.log("[已购] \(path) → HTTP \(http.statusCode)，\(data.count) 字节",
                                    category: .appStore)
+            if http.statusCode == 401 || http.statusCode == 403 {
+                throw PurchaseHistoryError.tokenExpired
+            }
             return (data, http)
         }
 
