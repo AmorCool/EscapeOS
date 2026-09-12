@@ -21,16 +21,9 @@ enum LocalDeviceIdentity {
         var fairPlayCertificate: String?
         var fairPlayDeviceType: String?
 
-        /// 下载请求的 `guid`：本机 UDID 去掉分隔符后的紧凑形式。
-        /// UDID 是 Apple 侧认同的权威设备标识；12 位假 MAC 反而会被当成陌设备。
-        var guid: String? {
-            guard let raw = udid?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
-            let compact = raw
-                .replacingOccurrences(of: "-", with: "")
-                .replacingOccurrences(of: ":", with: "")
-            return compact.isEmpty ? nil : compact.uppercased()
-        }
-
+        /// v0.3.336：删掉了原先的 `guid` 计算属性（它从 UDID 派生，而下载**从来不用**它，
+        /// 只用于日志展示 → 反而误导）。下载请求的 guid 见 `LocalDeviceIdentity.downloadGUID`
+        /// ＝ `Configuration.deviceIdentifier`（登录时同一份，绝不能改）。
         /// 是否拿到了可用的本机身份（序列号是 Apple 关联 FairPlay 证书的关键）
         var isUsable: Bool {
             !(serialNumber ?? "").isEmpty
@@ -38,8 +31,12 @@ enum LocalDeviceIdentity {
 
         var summary: String {
             let sn = serialNumber ?? "-"
-            let guid = guid.map { String($0.prefix(12)) + "…" } ?? "-"
-            return "序列号 \(sn) · guid \(guid) · \(productType ?? "-")"
+            // v0.3.336：这里必须显示**下载实际会用的** guid。
+            // 原来显示的是从 UDID 派生的值（iOS 27 不给 UniqueDeviceIdentifier → 恒 `-`），
+            // 与真正发出去的 `Configuration.deviceIdentifier` 不是同一个数，排查时误导。
+            let actual = Configuration.deviceIdentifier
+            let shown = actual.isEmpty ? "-" : String(actual.prefix(12)) + "…"
+            return "序列号 \(sn) · guid \(shown) · \(productType ?? "-")"
         }
     }
 

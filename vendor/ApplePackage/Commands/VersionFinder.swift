@@ -91,10 +91,10 @@ public enum VersionFinder {
                     if let customerMessage = dict["customerMessage"] as? String {
                         try ensureFailed(customerMessage)
                     }
-                    try ensureFailed("no items in response")
+                    try ensureFailed("Apple 没有返回版本信息 —— 该 Apple ID 可能缺少此应用的获取记录")
                 }
             } else {
-                try ensureFailed("no items in response")
+                try ensureFailed("Apple 没有返回版本信息 —— 该 Apple ID 可能缺少此应用的获取记录")
             }
         }
 

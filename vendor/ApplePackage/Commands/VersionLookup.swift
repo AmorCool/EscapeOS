@@ -90,7 +90,7 @@ public enum VersionLookup {
                     }
                 }
             }
-            try ensureFailed("no items in response")
+            try ensureFailed("Apple 没有返回该版本的信息 —— 该 Apple ID 可能缺少此应用的获取记录")
         }
 
         let item = items[0]

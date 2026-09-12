@@ -67,7 +67,12 @@ public enum Download {
 
         guard let items = dict["songList"] as? [[String: Any]], !items.isEmpty else {
             storeLog("下载响应没有 songList：\(StoreDownloadEndpoint.summary(dict))")
-            try ensureFailed("Apple 返回了空包（没有可下载内容），详情见商店日志")
+            // v0.3.336：Apple 对「该 Apple ID 在 App Store 侧没有这个应用的获取记录」的应用
+            // 会返回**静默空包**（HTTP 200 / failureType 空 / songList 空）—— 同一会话下换个
+            // 已获取过的应用就能拿到完整包（真机实测 Gmail 可、ChatGPT 不可）。
+            // 这不是重试能修的，文案要给出可执行的做法。
+            try ensureFailed("Apple 没有返回可下载内容 —— 该 Apple ID 缺少此应用的获取记录，"
+                             + "可先用系统 App Store 获取一次，或改用免登录源")
         }
 
         let item = items[0]

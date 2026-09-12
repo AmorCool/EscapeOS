@@ -138,13 +138,26 @@ extension StoreDownloadEndpoint {
 
         guard let finalResponse else { try ensureFailed("no response received") }
 
+        // v0.3.336：把 Apple 侧能表明原因的响应头记下来（App 内日志）。
+        // 排查「静默空包」时最有用的是 `X-Apple-Request-Store-Front`（Apple 回显它认到的
+        // storefront，`<null>` 表示没认到）与 Set-Cookie 数（会话是否被接受）。
+        let rsf = finalResponse.headers.first(name: "x-apple-request-store-front") ?? "(无)"
+        let podHeader = finalResponse.headers.first(name: "pod") ?? "-"
+        let cookieCount = finalResponse.cookies.count
+        storeLog("\(self.host)\(path) → HTTP \(finalResponse.status.code) · "
+                 + "X-Apple-Request-Store-Front=\(rsf) · pod=\(podHeader) · Set-Cookie=\(cookieCount)")
+
         guard finalResponse.status == .ok else {
             let code = finalResponse.status.code
             let ct = finalResponse.headers.first(name: "content-type") ?? "(unknown)"
             let bodyData = finalResponse.body?.data ?? Data()
             let snippet = String(data: bodyData.prefix(512), encoding: .utf8) ?? "(非 UTF-8)"
-            let detail = "store fetch failed: HTTP \(code) ct=\(ct) body=\(snippet.prefix(200))"
-            storeLog("\(detail)")
+            storeLog("store fetch failed: HTTP \(code) ct=\(ct) body=\(snippet.prefix(200))")
+            if (500 ... 599).contains(code) {
+                // redownload 端点在「该账号没有此应用的获取记录」时会直接回 5xx 空 body，
+                // 不是我们可以重试修复的错。给一句能看懂的话，别把裸 HTTP 码丢给用户。
+                try ensureFailed("Apple 下载服务拒绝了本次请求（HTTP \(code)）——该 Apple ID 可能缺少此应用的获取记录")
+            }
             try ensureFailed("store request failed with status \(code)")
         }
 
@@ -199,6 +212,12 @@ extension StoreDownloadEndpoint {
             ("iCloud-DSID", account.directoryServicesIdentifier),
             ("X-Dsid", account.directoryServicesIdentifier),
         ]
+        // v0.3.336：带上 storefront（与购买同款写法）。实测它不改变 Apple 的给包结果，
+        // 但能让响应头 `X-Apple-Request-Store-Front` 回显真实值 —— 排查空包时这行是关键证据
+        // （不回显 `<null>` 只能说明「请求没声明区域」，看不出账号到底认的哪个区）。
+        if !account.store.isEmpty {
+            headers.append(("X-Apple-Store-Front", "\(account.store)-1"))
+        }
 
         for item in account.cookie.buildCookieHeader(url) {
             headers.append(item)
