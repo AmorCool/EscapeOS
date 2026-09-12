@@ -19,7 +19,8 @@ extension StoreDownloadEndpoint {
         account: inout AppStoreAccount,
         app: Software,
         deviceIdentifier: String,
-        externalVersionID: String
+        externalVersionID: String,
+        resolveVersion: (() async throws -> String)? = nil
     ) async throws -> [String: Any] {
         var dict = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
             client: client,
@@ -30,15 +31,26 @@ extension StoreDownloadEndpoint {
         )
 
         if let reason = fallbackReason(dict) {
-            print("[EscapeOS][AppStore] volumeStore 需要回退（\(reason)）→ redownload 端点；\(summary(dict))")
+            storeLog("volumeStore 需要回退（\(reason)）→ redownload；\(summary(dict))")
+            // v0.3.329：未固定版本号时先解析出当前版本 —— 未固定版本的 redownload
+            // 可能返回 tvOS 包（Asspp 65be5b04 同款）
+            var version = externalVersionID
+            if version.isEmpty, let resolveVersion {
+                do {
+                    version = try await resolveVersion()
+                    storeLog("目录解析到当前版本 \(version)")
+                } catch {
+                    storeLog("目录版本解析失败：\(error.localizedDescription)")
+                }
+            }
             dict = try await StoreDownloadEndpoint.redownload.fetchProduct(
                 client: client,
                 account: &account,
                 app: app,
                 deviceIdentifier: deviceIdentifier,
-                externalVersionID: externalVersionID
+                externalVersionID: version
             )
-            print("[EscapeOS][AppStore] redownload 返回；\(summary(dict))")
+            storeLog("redownload 返回；\(summary(dict))")
         }
 
         return dict
@@ -129,7 +141,7 @@ extension StoreDownloadEndpoint {
             let bodyData = finalResponse.body?.data ?? Data()
             let snippet = String(data: bodyData.prefix(512), encoding: .utf8) ?? "(非 UTF-8)"
             let detail = "store fetch failed: HTTP \(code) ct=\(ct) body=\(snippet.prefix(200))"
-            print("[EscapeOS][AppStore] \(detail)")
+            storeLog("\(detail)")
             try ensureFailed("store request failed with status \(code)")
         }
 

@@ -79,7 +79,7 @@ public enum Purchase {
 
         if let failureType = dict["failureType"] as? String {
             let customerMessage = dict["customerMessage"] as? String ?? ""
-            print("[EscapeOS][AppStore] 购买被拒：failureType=\(failureType) "
+            storeLog("购买被拒：failureType=\(failureType) "
                 + "customerMessage=\(customerMessage.isEmpty ? "none" : customerMessage) "
                 + "status=\(dict["status"] ?? "none")")
             switch failureType {

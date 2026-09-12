@@ -21,18 +21,23 @@ public enum Download {
         let client = Configuration.makeHTTPClient(redirectConfiguration: .follow(max: 8, allowCycles: false))
         defer { _ = client.shutdown() }
 
-        // fetchProductWithFallback 内部已经处理 302 pod 重定向 + 5002 → redownload fallback。
+        // fetchProductWithFallback 内部处理 302 pod 重定向 + 空包/5002 → redownload 回退。
+        // v0.3.329：回退前先解析「当前版本号」再打 redownload（未固定版本的 redownload
+        // 可能返回 tvOS 包）。region 在这里先取出来，避免闭包捕获 inout 的 account。
+        let region = Configuration.countryCode(for: account.store) ?? Configuration.countryCode
+        let appID = app.id
         let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
             client: client,
             account: &account,
             app: app,
             deviceIdentifier: deviceIdentifier,
-            externalVersionID: externalVersionID ?? ""
+            externalVersionID: externalVersionID ?? "",
+            resolveVersion: { try await StoreCatalog.externalVersionID(appID: appID, countryCode: region) }
         )
 
         if let failureType = dict["failureType"] as? String {
             let customerMessage = dict["customerMessage"] as? String
-            print("[EscapeOS][AppStore] 下载被拒：\(StoreDownloadEndpoint.summary(dict))")
+            storeLog("下载被拒：\(StoreDownloadEndpoint.summary(dict))")
             switch failureType {
             case "2034", "2042":
                 try ensureFailed("password token is expired")
@@ -55,8 +60,8 @@ public enum Download {
         }
 
         guard let items = dict["songList"] as? [[String: Any]], !items.isEmpty else {
-            print("[EscapeOS][AppStore] 下载响应没有 songList：\(StoreDownloadEndpoint.summary(dict))")
-            try ensureFailed("no items in response")
+            storeLog("下载响应没有 songList：\(StoreDownloadEndpoint.summary(dict))")
+            try ensureFailed("Apple 返回了空包（没有可下载内容），详情见商店日志")
         }
 
         let item = items[0]
@@ -66,6 +71,14 @@ public enum Download {
 
         guard var metadata = item["metadata"] as? [String: Any] else {
             try ensureFailed("missing metadata")
+        }
+
+        // v0.3.329：核对返回的包是不是我们要的那个应用（Apple 有时会按客户端平台
+        // 返回 macOS/tvOS 的包；Asspp 65be5b04 同款校验）
+        if let returnedBundle = metadata["softwareVersionBundleId"] as? String,
+           !returnedBundle.isEmpty, returnedBundle != app.bundleID {
+            storeLog("返回的包不属于本应用：期望 \(app.bundleID)，实际 \(returnedBundle)")
+            try ensureFailed("Apple 返回了其他应用（或错误平台）的包：\(returnedBundle)")
         }
 
         let version = (metadata["bundleShortVersionString"] as? String)
@@ -94,7 +107,7 @@ public enum Download {
         }
         try ensure(!sinfs.isEmpty, "no sinf found in response")
 
-        print("[EscapeOS][AppStore] 下载信息就绪：\(app.bundleID) v\(version)(\(bundleVersion)) "
+        storeLog("下载信息就绪：\(app.bundleID) v\(version)(\(bundleVersion)) "
             + "sinf=\(sinfs.count) serialNumber=\(Configuration.deviceSerialNumber)")
 
         return DownloadOutput(
