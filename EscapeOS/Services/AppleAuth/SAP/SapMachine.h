@@ -42,7 +42,7 @@ public:
     ~SapShims();
 
     // Resolve an import name to a shim stub address (or CoreFP real address).
-    // Creates a new "unsupported" stub if the name is unknown.
+    // Unknown imports fault when invoked, rather than silently succeeding.
     uint64_t Resolve(std::string_view name);
 
     // True if the last invocation set a fault.
@@ -220,7 +220,11 @@ private:
     // Returns guest address.
     uint64_t Scratch(const void* data, uint64_t len);
     uint64_t Scratch(uint64_t len) { return Scratch(nullptr, len); }
-    void     ClearScratch();
+    void     ClearScratch() noexcept;
+    struct ScratchCleanup {
+        SapMachine& machine;
+        ~ScratchCleanup() { machine.ClearScratch(); }
+    };
 
     // Read len bytes from guest memory into a host vector.
     std::vector<uint8_t> ConsumeOutput(uint64_t ptrField, uint64_t lenField);

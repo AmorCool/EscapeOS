@@ -18,7 +18,7 @@ typedef struct uc_struct uc_engine;
 //  Parses a Mach-O (or fat/universal) dylib, applies dyld-style rebases and
 //  binds in-place, then loads the result into a Unicorn Engine instance.
 //
-//  Port of ipatool internal/sap/machimage, adapted for plain C++20 / Windows.
+//  Port of ipatool internal/sap/machimage, adapted for C++20 on Darwin.
 //
 //  Usage:
 //      auto img = MachImage::Open("CoreFP", raw_bytes);
@@ -91,7 +91,7 @@ private:
     // Export trie walk — fills exports_.
     void ParseExportTrie(const uint8_t* trie, size_t len);
     void WalkTrie(const uint8_t* trie, size_t len,
-                  size_t node, std::string& prefix);
+                  size_t node, std::string& prefix, size_t depth = 0);
 
     // Symbol table fallback — fills exports_ for any symbols not in trie.
     void ParseSymtab(const uint8_t* syms, uint32_t nsyms,

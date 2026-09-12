@@ -73,6 +73,10 @@ actor SignedStoreAuthenticator {
         }
         guard hardware.count == 6 else { throw StoreAuthenticationError.invalidConfiguration }
         let signer = try SAPContext(assetsURL: assets, hardwareID: Data(hardware))
+        let assetNotes = SAPContext.assetNotes()
+        if !assetNotes.isEmpty {
+            LoginLogger.shared.log("[SAP] 资产 \(assetNotes)", category: .appStore)
+        }
 
         // ① 取 SAP setup 证书 → 交给本地解释器交换
         let (certificateData, certificateResponse) = try await send(URLRequest(url: certificateURL))

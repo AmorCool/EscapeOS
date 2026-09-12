@@ -2,6 +2,11 @@
 #include "MachImage.h"
 
 #include <unicorn/unicorn.h>
+#include <mach-o/fat.h>
+#include <mach-o/loader.h>
+#include <mach-o/nlist.h>
+#include <mach/machine.h>
+#include <bit>
 
 #include <algorithm>
 #include <cassert>
@@ -10,110 +15,11 @@
 #include <span>
 #include <stdexcept>
 
-// ─── Mach-O type definitions (Windows-portable, all little-endian) ────────────
-
-// Fat (universal) binary — header is big-endian
-static constexpr uint32_t FAT_MAGIC    = 0xCAFEBABE;
-static constexpr uint32_t FAT_CIGAM    = 0xBEBAFECA;  // swapped on LE host
-static constexpr uint32_t MH_MAGIC_64  = 0xFEEDFACF;
-static constexpr uint32_t CPU_TYPE_X86_64 = 0x01000007;
-
-#pragma pack(push, 1)
-
-struct fat_header { uint32_t magic; uint32_t nfat_arch; };
-struct fat_arch   {
-    uint32_t cputype; uint32_t cpusubtype;
-    uint32_t offset;  uint32_t size; uint32_t align;
-};
-
-struct mach_header_64 {
-    uint32_t magic, cputype, cpusubtype, filetype;
-    uint32_t ncmds, sizeofcmds, flags;
-    uint32_t reserved;
-};
-
-struct load_command { uint32_t cmd, cmdsize; };
-
-struct segment_command_64 {
-    uint32_t cmd, cmdsize;
-    char     segname[16];
-    uint64_t vmaddr, vmsize, fileoff, filesize;
-    uint32_t maxprot, initprot, nsects, flags;
-};
-
-struct dyld_info_command {
-    uint32_t cmd, cmdsize;
-    uint32_t rebase_off,  rebase_size;
-    uint32_t bind_off,    bind_size;
-    uint32_t weak_bind_off, weak_bind_size;
-    uint32_t lazy_bind_off, lazy_bind_size;
-    uint32_t export_off,  export_size;
-};
-
-struct symtab_command {
-    uint32_t cmd, cmdsize;
-    uint32_t symoff, nsyms, stroff, strsize;
-};
-
-struct nlist_64 {
-    uint32_t n_strx;
-    uint8_t  n_type, n_sect;
-    uint16_t n_desc;
-    uint64_t n_value;
-};
-
-// LC_DYLD_EXPORTS_TRIE (0x80000033)
-struct linkedit_data_command {
-    uint32_t cmd, cmdsize;
-    uint32_t dataoff, datasize;
-};
-
-#pragma pack(pop)
-
-static constexpr uint32_t LC_SEGMENT_64          = 0x19;
-static constexpr uint32_t LC_SYMTAB              = 0x02;
-static constexpr uint32_t LC_DYLD_INFO           = 0x22;
-static constexpr uint32_t LC_DYLD_INFO_ONLY      = 0x22 | 0x80000000u;
-static constexpr uint32_t LC_DYLD_EXPORTS_TRIE   = 0x80000033u;
-
-// N_TYPE mask / values
-static constexpr uint8_t  N_TYPE  = 0x0E;
-static constexpr uint8_t  N_SECT  = 0x0E;
-static constexpr uint8_t  N_EXT   = 0x01;
-
-// Rebase opcodes
-static constexpr uint8_t REBASE_OPCODE_MASK                           = 0xF0;
-static constexpr uint8_t REBASE_IMM_MASK                              = 0x0F;
-static constexpr uint8_t REBASE_OPCODE_DONE                           = 0x00;
-static constexpr uint8_t REBASE_OPCODE_SET_TYPE_IMM                   = 0x10;
-static constexpr uint8_t REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB    = 0x20;
-static constexpr uint8_t REBASE_OPCODE_ADD_ADDR_ULEB                  = 0x30;
-static constexpr uint8_t REBASE_OPCODE_ADD_ADDR_IMM_SCALED            = 0x40;
-static constexpr uint8_t REBASE_OPCODE_DO_REBASE_IMM_TIMES            = 0x50;
-static constexpr uint8_t REBASE_OPCODE_DO_REBASE_ULEB_TIMES           = 0x60;
-static constexpr uint8_t REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB        = 0x70;
-static constexpr uint8_t REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIP_ULEB = 0x80;
-
-// Bind opcodes
-static constexpr uint8_t BIND_OPCODE_MASK                             = 0xF0;
-static constexpr uint8_t BIND_IMM_MASK                                = 0x0F;
-static constexpr uint8_t BIND_OPCODE_DONE                             = 0x00;
-static constexpr uint8_t BIND_OPCODE_SET_DYLIB_ORDINAL_IMM            = 0x10;
-static constexpr uint8_t BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB           = 0x20;
-static constexpr uint8_t BIND_OPCODE_SET_DYLIB_SPECIAL_IMM            = 0x30;
-static constexpr uint8_t BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM    = 0x40;
-static constexpr uint8_t BIND_OPCODE_SET_TYPE_IMM                     = 0x50;
-static constexpr uint8_t BIND_OPCODE_SET_ADDEND_SLEB                  = 0x60;
-static constexpr uint8_t BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB      = 0x70;
-static constexpr uint8_t BIND_OPCODE_ADD_ADDR_ULEB                    = 0x80;
-static constexpr uint8_t BIND_OPCODE_DO_BIND                          = 0x90;
-static constexpr uint8_t BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB            = 0xA0;
-static constexpr uint8_t BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED      = 0xB0;
-static constexpr uint8_t BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIP_ULEB     = 0xC0;
+// Use the SDK Mach-O definitions on every supported Darwin target.
 
 static constexpr uint64_t POINTER_SIZE  = 8;
 static constexpr uint64_t PAGE_SIZE     = 0x1000;
-// MAX_IMG_SPAN removed (unused)
+static constexpr uint64_t MAX_IMG_SPAN = uint64_t(256) << 20;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -123,30 +29,35 @@ static inline uint32_t bswap32(uint32_t v) {
 }
 
 static uint64_t ReadULEB128(const uint8_t*& p, const uint8_t* end) {
-    uint64_t value = 0; int shift = 0;
-    while (p < end) {
-        uint8_t b = *p++;
-        value |= uint64_t(b & 0x7F) << shift;
-        shift += 7;
-        if (!(b & 0x80)) break;
-        if (shift >= 64) throw std::runtime_error("ULEB128 overflow");
+    uint64_t value = 0;
+    for (int shift = 0; shift < 64 && p < end; shift += 7) {
+        const uint8_t byte = *p++;
+        if (shift == 63 && (byte & 0x7E)) throw std::runtime_error("ULEB128 overflow");
+        value |= uint64_t(byte & 0x7F) << shift;
+        if (!(byte & 0x80)) return value;
     }
-    return value;
+    throw std::runtime_error("Truncated or overflowing ULEB128");
 }
 
 static int64_t ReadSLEB128(const uint8_t*& p, const uint8_t* end) {
-    int64_t value = 0; int shift = 0;
-    uint8_t b = 0;
-    while (p < end) {
-        b = *p++;
-        value |= int64_t(b & 0x7F) << shift;
-        shift += 7;
-        if (!(b & 0x80)) break;
-        if (shift >= 64) throw std::runtime_error("SLEB128 overflow");
+    uint64_t value = 0;
+    for (int shift = 0; shift < 64 && p < end; shift += 7) {
+        const uint8_t byte = *p++;
+        const uint8_t bits = byte & 0x7F;
+        if (shift == 63 && bits != 0 && bits != 0x7F) throw std::runtime_error("SLEB128 overflow");
+        value |= uint64_t(bits) << shift;
+        if (!(byte & 0x80)) {
+            if (shift < 57 && (byte & 0x40)) value |= UINT64_MAX << (shift + 7);
+            return std::bit_cast<int64_t>(value);
+        }
     }
-    if (shift < 64 && (b & 0x40))
-        value |= -(int64_t(1) << shift);
-    return value;
+    throw std::runtime_error("Truncated or overflowing SLEB128");
+}
+
+static std::string ReadCString(const char* text, size_t remaining) {
+    const size_t length = strnlen(text, remaining);
+    if (length == remaining) throw std::runtime_error("Unterminated Mach-O string");
+    return std::string(text, length);
 }
 
 static inline uint64_t AlignUp(uint64_t v, uint64_t a) {
@@ -187,7 +98,7 @@ std::vector<uint8_t> MachImage::ExtractAmd64Slice(const std::vector<uint8_t>& fa
 
     const uint8_t* p = fat.data() + sizeof(fat_header);
     for (uint32_t i = 0; i < narch; ++i) {
-        if (p + sizeof(fat_arch) > fat.data() + fat.size())
+        if (size_t(fat.data() + fat.size() - p) < sizeof(fat_arch))
             throw std::runtime_error("Fat binary: arch table truncated");
         fat_arch arch;
         std::memcpy(&arch, p, sizeof(arch));
@@ -222,13 +133,14 @@ void MachImage::ParseLoadCommands() {
 
     if (mh.magic != MH_MAGIC_64)
         throw std::runtime_error(std::format("{}: not a 64-bit Mach-O (magic={:#x})", name_, mh.magic));
-    if ((mh.cputype & 0x00FFFFFFu) != (CPU_TYPE_X86_64 & 0x00FFFFFFu))
+    if (mh.cputype != CPU_TYPE_X86_64)
         throw std::runtime_error(std::format("{}: not x86-64", name_));
 
     const uint8_t* lc_ptr = base + sizeof(mach_header_64);
-    const uint8_t* lc_end = lc_ptr + mh.sizeofcmds;
-    if (lc_end > base + total)
+    if (mh.sizeofcmds > total - sizeof(mach_header_64))
         throw std::runtime_error(std::format("{}: load commands extend past file", name_));
+    const uint8_t* lc_end = lc_ptr + mh.sizeofcmds;
+    uint32_t commandCount = 0;
 
     // Pointers to deferred sections (export trie, dyld info, symtab)
     const uint8_t* rebaseOpcodes    = nullptr; uint32_t rebaseSize    = 0;
@@ -241,13 +153,16 @@ void MachImage::ParseLoadCommands() {
     bool firstText = true;
 
     while (lc_ptr < lc_end) {
+        if (size_t(lc_end - lc_ptr) < sizeof(load_command)) throw std::runtime_error("Truncated load command");
+        ++commandCount;
         load_command lc;
         std::memcpy(&lc, lc_ptr, sizeof(lc));
 
-        if (lc.cmdsize < sizeof(load_command) || lc_ptr + lc.cmdsize > lc_end)
+        if (lc.cmdsize < sizeof(load_command) || lc.cmdsize > size_t(lc_end - lc_ptr))
             throw std::runtime_error(std::format("{}: malformed load command", name_));
 
         if (lc.cmd == LC_SEGMENT_64) {
+            if (lc.cmdsize < sizeof(segment_command_64)) throw std::runtime_error("Truncated Mach-O command payload");
             segment_command_64 sc;
             std::memcpy(&sc, lc_ptr, sizeof(sc));
 
@@ -261,7 +176,7 @@ void MachImage::ParseLoadCommands() {
             // Validate
             if (seg.fileSize > seg.vmSize)
                 throw std::runtime_error(std::format("{}: segment {} file > mem", name_, seg.name));
-            if (seg.fileOff + seg.fileSize > total)
+            if (seg.fileOff > total || seg.fileSize > total - seg.fileOff)
                 throw std::runtime_error(std::format("{}: segment {} beyond EOF", name_, seg.name));
 
             // Image base = vmaddr of first non-__PAGEZERO segment
@@ -273,6 +188,7 @@ void MachImage::ParseLoadCommands() {
             segments_.push_back(std::move(seg));
         }
         else if (lc.cmd == LC_DYLD_INFO || lc.cmd == LC_DYLD_INFO_ONLY) {
+            if (lc.cmdsize < sizeof(dyld_info_command)) throw std::runtime_error("Truncated Mach-O command payload");
             dyld_info_command di;
             std::memcpy(&di, lc_ptr, sizeof(di));
 
@@ -293,6 +209,7 @@ void MachImage::ParseLoadCommands() {
             exportTrieSize  = di.export_size;
         }
         else if (lc.cmd == LC_DYLD_EXPORTS_TRIE) {
+            if (lc.cmdsize < sizeof(linkedit_data_command)) throw std::runtime_error("Truncated Mach-O command payload");
             linkedit_data_command led;
             std::memcpy(&led, lc_ptr, sizeof(led));
             if (led.datasize > 0 && uint64_t(led.dataoff) + led.datasize <= total) {
@@ -301,6 +218,7 @@ void MachImage::ParseLoadCommands() {
             }
         }
         else if (lc.cmd == LC_SYMTAB) {
+            if (lc.cmdsize < sizeof(symtab_command)) throw std::runtime_error("Truncated Mach-O command payload");
             symtab_command sc;
             std::memcpy(&sc, lc_ptr, sizeof(sc));
             if (sc.nsyms > 0 && uint64_t(sc.symoff) + sc.nsyms * sizeof(nlist_64) <= total) {
@@ -315,6 +233,8 @@ void MachImage::ParseLoadCommands() {
 
         lc_ptr += lc.cmdsize;
     }
+
+    if (commandCount != mh.ncmds) throw std::runtime_error("Mach-O load command count mismatch");
 
     // Parse deferred sections
     if (rebaseOpcodes) ParseRebaseOpcodes(rebaseOpcodes, rebaseSize);
@@ -353,7 +273,7 @@ void MachImage::ParseRebaseOpcodes(const uint8_t* start, size_t len) {
     while (p < end) {
         uint8_t b      = *p++;
         uint8_t opcode = b & REBASE_OPCODE_MASK;
-        uint8_t imm    = b & REBASE_IMM_MASK;
+        uint8_t imm    = b & REBASE_IMMEDIATE_MASK;
 
         switch (opcode) {
         case REBASE_OPCODE_DONE:
@@ -383,7 +303,7 @@ void MachImage::ParseRebaseOpcodes(const uint8_t* start, size_t len) {
             EmitRebase();
             offset += POINTER_SIZE + ReadULEB128(p, end);
             break;
-        case REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIP_ULEB: {
+        case REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB: {
             uint64_t count = ReadULEB128(p, end);
             uint64_t skip  = ReadULEB128(p, end);
             for (uint64_t i = 0; i < count; ++i) { EmitRebase(); offset += POINTER_SIZE + skip; }
@@ -422,7 +342,7 @@ void MachImage::ParseBindOpcodes(const uint8_t* start, size_t len, bool isLazy) 
     while (p < end) {
         uint8_t b      = *p++;
         uint8_t opcode = b & BIND_OPCODE_MASK;
-        uint8_t imm    = b & BIND_IMM_MASK;
+        uint8_t imm    = b & BIND_IMMEDIATE_MASK;
 
         switch (opcode) {
         case BIND_OPCODE_DONE:
@@ -444,7 +364,7 @@ void MachImage::ParseBindOpcodes(const uint8_t* start, size_t len, bool isLazy) 
         case BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM: {
             // NUL-terminated symbol name follows
             const char* s = reinterpret_cast<const char*>(p);
-            symName.assign(s);
+            symName = ReadCString(s, end - p);
             p += symName.size() + 1;
             break;
         }
@@ -470,7 +390,7 @@ void MachImage::ParseBindOpcodes(const uint8_t* start, size_t len, bool isLazy) 
         case BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED:
             EmitBind(); offset += POINTER_SIZE + imm * POINTER_SIZE;
             break;
-        case BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIP_ULEB: {
+        case BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB: {
             uint64_t count = ReadULEB128(p, end);
             uint64_t skip  = ReadULEB128(p, end);
             for (uint64_t i = 0; i < count; ++i) { EmitBind(); offset += POINTER_SIZE + skip; }
@@ -490,14 +410,16 @@ void MachImage::ParseExportTrie(const uint8_t* trie, size_t len) {
 }
 
 void MachImage::WalkTrie(const uint8_t* trie, size_t len,
-                          size_t nodeOff, std::string& prefix) {
-    if (nodeOff >= len) return;
+                          size_t nodeOff, std::string& prefix, size_t depth) {
+    if (nodeOff >= len || depth > 128 || prefix.size() > 4096)
+        throw std::runtime_error("Invalid or cyclic Mach-O export trie");
 
     const uint8_t* p   = trie + nodeOff;
     const uint8_t* end = trie + len;
 
     // Terminal size ULEB128
     uint64_t termSize = ReadULEB128(p, end);
+    if (termSize > uint64_t(end - p)) throw std::runtime_error("Truncated export trie terminal");
     if (termSize != 0) {
         // Exported: read flags and address
         const uint8_t* tp  = p;
@@ -516,7 +438,7 @@ void MachImage::WalkTrie(const uint8_t* trie, size_t len,
     for (uint8_t i = 0; i < childCount; ++i) {
         // Edge label: NUL-terminated string
         const char* label = reinterpret_cast<const char*>(p);
-        size_t labLen = strnlen(label, end - p);
+        size_t labLen = ReadCString(label, end - p).size();
         p += labLen + 1;
 
         // Child node offset ULEB128
@@ -525,7 +447,7 @@ void MachImage::WalkTrie(const uint8_t* trie, size_t len,
         // Recurse
         size_t prevLen = prefix.size();
         prefix.append(label, labLen);
-        WalkTrie(trie, len, static_cast<size_t>(childOff), prefix);
+        WalkTrie(trie, len, static_cast<size_t>(childOff), prefix, depth + 1);
         prefix.resize(prevLen);
     }
 }
@@ -542,9 +464,9 @@ void MachImage::ParseSymtab(const uint8_t* syms, uint32_t nsyms,
         if ((nl.n_type & N_TYPE) != N_SECT) continue;
         if (!(nl.n_type & N_EXT)) continue;
         if (nl.n_value == 0) continue;
-        if (nl.n_strx == 0 || nl.n_strx >= strsize) continue;
+        if (nl.n_un.n_strx == 0 || nl.n_un.n_strx >= strsize) continue;
 
-        std::string sym(strtab + nl.n_strx);
+        std::string sym = ReadCString(strtab + nl.n_un.n_strx, strsize - nl.n_un.n_strx);
         if (exports_.count(sym) == 0)          // trie wins if both present
             exports_[std::move(sym)] = nl.n_value;
     }
@@ -616,7 +538,10 @@ void MachImage::Load(uc_engine* uc) const {
         if (s.name == "__PAGEZERO" || s.vmSize == 0) continue;
         if (s.vmAddr < imageBase_)
             throw std::runtime_error(std::format("{}: segment {} below image base", name_, s.name));
-        span = std::max(span, s.vmAddr - imageBase_ + s.vmSize);
+        const uint64_t offset = s.vmAddr - imageBase_;
+        if (offset > MAX_IMG_SPAN || s.vmSize > MAX_IMG_SPAN - offset)
+            throw std::runtime_error("Mach-O image exceeds mapping limit");
+        span = std::max(span, offset + s.vmSize);
     }
     span = AlignUp(span, PAGE_SIZE);
     if (span == 0)
@@ -645,15 +570,15 @@ uint64_t MachImage::SegmentFileOffset(std::string_view segName,
     for (const auto& s : segments_) {
         if (s.name != segName) continue;
 
-        if (offset + size > s.vmSize)
+        if (offset > s.vmSize || size > s.vmSize - offset)
             throw std::runtime_error(std::format("{}: fixup at {:#x} exceeds segment {}",
                                                   name_, offset, segName));
-        if (offset + size > s.fileSize)
+        if (offset > s.fileSize || size > s.fileSize - offset)
             throw std::runtime_error(std::format("{}: fixup at {:#x} past file data in {}",
                                                   name_, offset, segName));
 
         uint64_t result = s.fileOff + offset;
-        if (result + size > data_.size())
+        if (result > data_.size() || size > data_.size() - result)
             throw std::runtime_error(std::format("{}: fixup at {:#x} beyond EOF", name_, result));
 
         return result;
@@ -662,13 +587,13 @@ uint64_t MachImage::SegmentFileOffset(std::string_view segName,
 }
 
 void MachImage::PutPointer(uint64_t fileOffset, uint64_t value) {
-    if (fileOffset + 8 > data_.size())
+    if (fileOffset > data_.size() || 8 > data_.size() - fileOffset)
         throw std::runtime_error(std::format("{}: PutPointer at {:#x} beyond EOF", name_, fileOffset));
     std::memcpy(data_.data() + fileOffset, &value, 8);
 }
 
 uint64_t MachImage::ReadPointer(uint64_t fileOffset) const {
-    if (fileOffset + 8 > data_.size())
+    if (fileOffset > data_.size() || 8 > data_.size() - fileOffset)
         throw std::runtime_error(std::format("{}: ReadPointer at {:#x} beyond EOF", name_, fileOffset));
     uint64_t v;
     std::memcpy(&v, data_.data() + fileOffset, 8);

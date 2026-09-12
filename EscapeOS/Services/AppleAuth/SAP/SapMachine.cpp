@@ -9,7 +9,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
-#include <random>
 #include <stdexcept>
 
 // UC_X86_REG_* come from <unicorn/x86.h> via <unicorn/unicorn.h> — no local defs needed.
@@ -42,6 +41,11 @@ static const char* kKeyBoard   = "board-id";
 static const char* kKeyedMsg   = "objectForKey:";
 
 static constexpr uint64_t kMaxGuestTransfer = uint64_t(64) << 20;
+
+static size_t CheckedTransfer(uint64_t size) {
+    if (size > kMaxGuestTransfer) throw std::runtime_error("guest transfer exceeds limit");
+    return static_cast<size_t>(size);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SapShims — construction
@@ -265,8 +269,9 @@ uint64_t SapShims::HeapRealloc(uint64_t oldPtr, uint64_t newSize) {
     }
 
     // Allocate new, copy, free old
+    const size_t oldSize = it->second.size; // HeapAlloc may rehash allocations_.
     uint64_t newPtr = HeapAlloc(newSize);
-    std::vector<uint8_t> buf(it->second.size);
+    std::vector<uint8_t> buf(oldSize);
     GuestRead(oldPtr, buf.data(), buf.size());
     GuestWrite(newPtr, buf.data(), buf.size());
     HeapFree(oldPtr);
@@ -308,8 +313,8 @@ uint64_t SapShims::Resolve(std::string_view name) {
     auto ce = coreExports_.find(key);
     if (ce != coreExports_.end()) { symbols_[key] = ce->second; return ce->second; }
 
-    // Unknown → zero-return stub
-    return AddFunction(key, [this, key]() { SetResult(0); });
+    // Resolve unused imports lazily, but never pretend an unsupported call succeeded.
+    return AddFunction(key, [key]() { throw std::runtime_error("unsupported SAP import: " + key); });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -331,6 +336,8 @@ void SapShims::RegisterMemoryServices() {
     });
     AddFunction("_calloc", [this]() {
         uint64_t count = Arg(0), size = Arg(1);
+        if (size && count > kMaxGuestTransfer / size)
+            throw std::runtime_error("calloc exceeds guest allocation limit");
         uint64_t total = count * size;
         uint64_t addr  = HeapAlloc(total);
         if (total) {
@@ -352,7 +359,7 @@ void SapShims::RegisterMemoryServices() {
     AddAliases({"_memcpy", "_memmove"}, [this]() {
         uint64_t dst = Arg(0), src = Arg(1), n = Arg(2);
         if (n) {
-            std::vector<uint8_t> buf(n);
+            std::vector<uint8_t> buf(CheckedTransfer(n));
             GuestRead(src, buf.data(), n);
             GuestWrite(dst, buf.data(), n);
         }
@@ -360,19 +367,19 @@ void SapShims::RegisterMemoryServices() {
     });
     AddFunction("_memset", [this]() {
         uint64_t dst = Arg(0); uint8_t c = static_cast<uint8_t>(Arg(1)); uint64_t n = Arg(2);
-        if (n) { std::vector<uint8_t> buf(n, c); GuestWrite(dst, buf.data(), n); }
+        if (n) { std::vector<uint8_t> buf(CheckedTransfer(n), c); GuestWrite(dst, buf.data(), n); }
         SetResult(dst);
     });
     AddFunction("___bzero", [this]() {  // triple underscore (Darwin mangling)
         uint64_t dst = Arg(0), n = Arg(1);
-        if (n) { std::vector<uint8_t> z(n, 0); GuestWrite(dst, z.data(), n); }
+        if (n) { std::vector<uint8_t> z(CheckedTransfer(n), 0); GuestWrite(dst, z.data(), n); }
         SetResult(dst);
     });
     // __memcpy_chk(dst, src, len, dstlen) — check len <= dstlen, then copy
     AddFunction("___memcpy_chk", [this]() {
         uint64_t dst = Arg(0), src = Arg(1), len = Arg(2), cap = Arg(3);
         if (len > cap) throw std::runtime_error("___memcpy_chk: len > cap");
-        if (len) { std::vector<uint8_t> buf(len); GuestRead(src, buf.data(), len); GuestWrite(dst, buf.data(), len); }
+        if (len) { std::vector<uint8_t> buf(CheckedTransfer(len)); GuestRead(src, buf.data(), len); GuestWrite(dst, buf.data(), len); }
         SetResult(dst);
     });
     // __memset_chk(dst, c, len, dstlen)
@@ -380,13 +387,13 @@ void SapShims::RegisterMemoryServices() {
         uint64_t dst = Arg(0); uint8_t c = static_cast<uint8_t>(Arg(1));
         uint64_t len = Arg(2), cap = Arg(3);
         if (len > cap) throw std::runtime_error("___memset_chk: len > cap");
-        if (len) { std::vector<uint8_t> buf(len, c); GuestWrite(dst, buf.data(), len); }
+        if (len) { std::vector<uint8_t> buf(CheckedTransfer(len), c); GuestWrite(dst, buf.data(), len); }
         SetResult(dst);
     });
     AddFunction("_memcmp", [this]() {
         uint64_t a = Arg(0), b = Arg(1), n = Arg(2);
         if (!n) { SetResult(0); return; }
-        std::vector<uint8_t> ba(n), bb(n);
+        std::vector<uint8_t> ba(CheckedTransfer(n)), bb(CheckedTransfer(n));
         GuestRead(a, ba.data(), n); GuestRead(b, bb.data(), n);
         SetResult(static_cast<uint64_t>(static_cast<int64_t>(
             std::memcmp(ba.data(), bb.data(), n))));
@@ -398,7 +405,7 @@ void SapShims::RegisterMemoryServices() {
             std::memcmp(a.data(), b.data(), std::min(a.size(), b.size()) + 1))));
     });
     AddFunction("_strncmp", [this]() {
-        uint64_t la = Arg(0), lb = Arg(1), n = Arg(2);
+        uint64_t la = Arg(0), lb = Arg(1), n = CheckedTransfer(Arg(2));
         // Page-safe comparison matching Go implementation
         for (uint64_t off = 0; off < n; ) {
             uint64_t chunk = std::min({n - off,
@@ -528,11 +535,8 @@ void SapShims::RegisterPlatformServices() {
 
     // ── arc4random ────────────────────────────────────────────────────────────
     AddFunction("_arc4random", [this]() {
-        uint32_t v = 0;
-        // Use cryptographic random matching Go's crypto/rand.Read
-        std::random_device rd;
-        v = rd();
-        SetResult(v);
+        // Darwin's system CSPRNG, matching the guest API's contract.
+        SetResult(arc4random());
     });
 
     // ── dlopen / dlsym ────────────────────────────────────────────────────────
@@ -624,12 +628,6 @@ void SapShims::RegisterPlatformServices() {
             SetResult(0);
             return;
         }
-        // Format MAC for debug output
-        char macStr[32] = {};
-        for (size_t i = 0; i < macAddress_.size() && i < 6; ++i)
-            snprintf(macStr + i*3, 4, "%02X%s",
-                     macAddress_[i], i < macAddress_.size()-1 ? ":" : "");
-
         uint64_t bufAddr = HeapAlloc(macAddress_.size() + 1);
         GuestWrite(bufAddr, macAddress_.data(), macAddress_.size());
         uint8_t nul = 0;
@@ -692,8 +690,6 @@ std::unique_ptr<SapMachine> SapMachine::Create(
     catch (...) {}
 
     // 5. Create shims — pass hardwareID so _get_mac_address shim returns correct MAC
-    // (extracted from coreFPExports indirectly via the config passed to Create)
-    // We extract it from the resolver closure capture below after shims init.
     m->shims_ = std::make_unique<SapShims>(m->uc_, std::move(coreFPExports), std::move(coreFPIcxs), std::move(hardwareID));
     m->shims_->SetHeap(kHeapBase, kHeapSize);
 
@@ -761,9 +757,8 @@ uint64_t SapMachine::Invoke(uint64_t fn, std::initializer_list<uint64_t> args) {
     UC_CHECK(uc_reg_write(uc_, UC_X86_REG_RSP, &rsp), "write RSP");
 
     // StartBounded: emulation stops when IP == kReturnAddr.
-    // Timeout in microseconds (sapGuestTimeout = 1 minute = 60,000,000 µs)
-    static constexpr uint64_t kTimeoutUs = 60'000'000ULL;
-    uc_err err = uc_emu_start(uc_, fn, kReturnAddr, kTimeoutUs, 0);
+    // Unicorn accepts microseconds; the configured timeout is in milliseconds.
+    uc_err err = uc_emu_start(uc_, fn, kReturnAddr, kTimeout * 1000, 0);
 
     if (err != UC_ERR_OK) {
         if (shims_->HasFault())
@@ -789,8 +784,9 @@ uint64_t SapMachine::Invoke(uint64_t fn, std::initializer_list<uint64_t> args) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 uint64_t SapMachine::Scratch(const void* data, uint64_t len) {
+    if (len > kScratchSize) throw std::runtime_error("scratch request exceeds limit");
     uint64_t reserved = AlignUp(std::max(len, uint64_t(1)), 16);
-    if (scratchCursor_ + reserved > kScratchSize)
+    if (scratchCursor_ > kScratchSize || reserved > kScratchSize - scratchCursor_)
         throw std::runtime_error("scratch exhausted");
 
     uint64_t addr = kScratchBase + scratchCursor_;
@@ -801,10 +797,11 @@ uint64_t SapMachine::Scratch(const void* data, uint64_t len) {
     return addr;
 }
 
-void SapMachine::ClearScratch() {
-    if (scratchCursor_) {
-        std::vector<uint8_t> z(scratchCursor_, 0);
-        uc_mem_write(uc_, kScratchBase, z.data(), scratchCursor_);
+void SapMachine::ClearScratch() noexcept {
+    const uint8_t zeros[4096] = {};
+    for (uint64_t offset = 0; offset < scratchCursor_; offset += sizeof(zeros)) {
+        const auto count = std::min(uint64_t(sizeof(zeros)), scratchCursor_ - offset);
+        uc_mem_write(uc_, kScratchBase + offset, zeros, count);
     }
     scratchCursor_ = 0;
 }
@@ -832,7 +829,8 @@ uint32_t SapMachine::GuestRead32(uint64_t addr) {
 
 std::vector<uint8_t> SapMachine::ConsumeOutput(uint64_t ptrFld, uint64_t lenFld) {
     uint64_t ptr = GuestRead64(ptrFld);
-    uint64_t len = GuestRead64(lenFld);
+    uint64_t len = CheckedTransfer(GuestRead64(lenFld));
+    if (len && !ptr) throw std::runtime_error("SAP output has a null pointer");
     std::vector<uint8_t> out;
     if (ptr && len) {
         out.resize(len);
@@ -848,11 +846,11 @@ std::vector<uint8_t> SapMachine::ConsumeOutput(uint64_t ptrFld, uint64_t lenFld)
 uint64_t SapMachine::Initialize(std::span<const uint8_t> hwID) {
     auto hw = HardwareBlock(hwID);
     BeginCall();
+    const ScratchCleanup cleanup{*this};
     uint64_t ctxFld = Scratch(8);
     uint64_t hwAddr = Scratch(hw.data(), hw.size());
     int32_t  status = static_cast<int32_t>(Invoke(entry_.initialize, { ctxFld, hwAddr }));
     uint64_t ctx    = GuestRead64(ctxFld);
-    ClearScratch();
     if (status != 0) throw std::runtime_error(std::format("Initialize returned {}", status));
     if (!ctx) throw std::runtime_error("Initialize returned null context");
     return ctx;
@@ -863,6 +861,7 @@ SapMachine::Exchange(uint32_t version, std::span<const uint8_t> hwID,
                      uint64_t ctx, std::span<const uint8_t> input) {
     auto hw = HardwareBlock(hwID);
     BeginCall();
+    const ScratchCleanup cleanup{*this};
     uint64_t hwAddr    = Scratch(hw.data(), hw.size());
     uint64_t inAddr    = Scratch(input.data(), input.size());
     uint64_t outPtrFld = Scratch(8);
@@ -874,16 +873,16 @@ SapMachine::Exchange(uint32_t version, std::span<const uint8_t> hwID,
         inAddr, uint64_t(input.size()),
         outPtrFld, outLenFld, resFld
     }));
-    if (status != 0) { ClearScratch(); throw std::runtime_error(std::format("Exchange returned {}", status)); }
+    if (status != 0) throw std::runtime_error(std::format("Exchange returned {}", status));
 
     auto out = ConsumeOutput(outPtrFld, outLenFld);
     int32_t result = static_cast<int32_t>(GuestRead32(resFld));
-    ClearScratch();
     return { std::move(out), result };
 }
 
 std::vector<uint8_t> SapMachine::Sign(uint64_t ctx, std::span<const uint8_t> input) {
     BeginCall();
+    const ScratchCleanup cleanup{*this};
     uint64_t inAddr    = Scratch(input.data(), input.size());
     uint64_t outPtrFld = Scratch(8);
     uint64_t outLenFld = Scratch(8);
@@ -891,17 +890,16 @@ std::vector<uint8_t> SapMachine::Sign(uint64_t ctx, std::span<const uint8_t> inp
     int32_t status = static_cast<int32_t>(Invoke(entry_.sign, {
         ctx, inAddr, uint64_t(input.size()), outPtrFld, outLenFld
     }));
-    if (status != 0) { ClearScratch(); throw std::runtime_error(std::format("Sign returned {}", status)); }
+    if (status != 0) throw std::runtime_error(std::format("Sign returned {}", status));
 
     auto sig = ConsumeOutput(outPtrFld, outLenFld);
-    ClearScratch();
     if (sig.empty()) throw std::runtime_error("Sign returned empty signature");
     return sig;
 }
 
 void SapMachine::Teardown(uint64_t ctx) {
     BeginCall();
+    const ScratchCleanup cleanup{*this};
     int32_t st = static_cast<int32_t>(Invoke(entry_.teardown, { ctx }));
-    ClearScratch();
     if (st != 0) throw std::runtime_error(std::format("Teardown returned {}", st));
 }
