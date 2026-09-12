@@ -105,7 +105,7 @@ actor SignedStoreAuthenticator {
         var body = try StoreAuthenticationProtocol.body(email: email, password: password,
                                                        code: normalizedCode, guid: guid,
                                                        attempt: protocolAttempt)
-        while protocolAttempt <= 4, redirects <= 3 {
+        while protocolAttempt <= 2, redirects <= 3 {
             try Task.checkCancellation()
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -115,15 +115,16 @@ actor SignedStoreAuthenticator {
             if let v = response.value(forHTTPHeaderField: "X-Set-Apple-Store-Front") { storefront = v }
             if let v = response.value(forHTTPHeaderField: "pod") { pod = v }
             if (300 ... 399).contains(response.statusCode) {
-                guard let location = response.value(forHTTPHeaderField: "Location") else {
-                    throw StoreAuthenticationError.serviceResponse(response.statusCode)
-                }
-                url = try StoreAuthenticationProtocol.authenticationURL(location)
+                // 缺 Location 的 3xx 是 Apple 的地址级软拒绝（ipatool #520），跟随不了
+                guard let location = response.value(forHTTPHeaderField: "Location"),
+                      let next = URL(string: location, relativeTo: url)?.absoluteURL
+                else { throw refusalError(response.statusCode, data) }
+                url = try StoreAuthenticationProtocol.authenticationURL(next.absoluteString)
                 redirects += 1
                 continue
             }
             guard let plist = StoreAuthenticationProtocol.plist(data) else {
-                throw StoreAuthenticationError.serviceResponse(response.statusCode)
+                throw refusalError(response.statusCode, data)
             }
             if protocolAttempt == 1, StoreAuthenticationProtocol.string(plist["failureType"]) == "-5000" {
                 protocolAttempt += 1
@@ -140,11 +141,16 @@ actor SignedStoreAuthenticator {
                   !StoreAuthenticationProtocol.string(plist["dsPersonId"]).isEmpty
             else { throw StoreAuthenticationError.serviceResponse(response.statusCode) }
 
+            let store = StoreAuthenticationProtocol.storeIdentifier(storefront)
+            guard !store.isEmpty else {
+                LoginLogger.shared.log("[SAP] 未取到 X-Set-Apple-Store-Front", category: .appStore)
+                throw StoreAuthenticationError.invalidConfiguration
+            }
             return AppStoreAccount(
                 email: email,
                 password: password,
                 appleId: (info["appleId"] as? String) ?? email,
-                store: StoreAuthenticationProtocol.storeIdentifier(storefront),
+                store: store,
                 firstName: (address["firstName"] as? String) ?? "",
                 lastName: (address["lastName"] as? String) ?? "",
                 passwordToken: token,
@@ -160,13 +166,24 @@ actor SignedStoreAuthenticator {
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         var request = request
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        // 与上游 Asspp 一致：客户端保真度（缺它更容易被边缘软拒绝）
+        request.setValue(Locale.preferredLanguages.prefix(3).joined(separator: ", "),
+                         forHTTPHeaderField: "Accept-Language")
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else {
             throw StoreAuthenticationError.serviceResponse(0)
         }
         // 不打印 body / 签名 / query / Set-Cookie
-        LoginLogger.shared.log("[SAP] HTTP \(response.statusCode)，\(data.count) 字节", category: .appStore)
+        LoginLogger.shared.log("[SAP] \(request.url?.host ?? "?") → HTTP \(response.statusCode)，\(data.count) 字节",
+                               category: .appStore)
         return (data, response)
+    }
+
+    /// 把「空响应」的错误归类到位：地址级软拒绝单独报，否则算服务异常
+    private func refusalError(_ status: Int, _ data: Data) -> StoreAuthenticationError {
+        StoreAuthenticationProtocol.addressRefused(status: status, data: data)
+            ? .addressRefused(status)
+            : .serviceResponse(status)
     }
 
     /// 每次重试都**用同一份 body + 新签名**（与 ipatool 一致）

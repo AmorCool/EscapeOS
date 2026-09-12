@@ -6,6 +6,7 @@ enum StoreAuthenticationError: LocalizedError {
     case invalidConfiguration
     case invalidRedirect
     case serviceResponse(Int)
+    case addressRefused(Int)
     case rejected(String)
     case tooManyAttempts
 
@@ -28,6 +29,8 @@ enum StoreAuthenticationError: LocalizedError {
             return "Apple 返回了非法的登录跳转，凭据未被转发"
         case let .serviceResponse(status):
             return "登录服务返回异常（HTTP \(status)）——不是密码错或验证码问题，请稍后重试"
+        case let .addressRefused(status):
+            return "Apple 拒绝了本次登录（HTTP \(status)，空响应）：这是按出口 IP 的限流，不是账号或密码问题。请换一个网络（蜂窝 ⇄ Wi-Fi、手机热点、换 VPN 节点）并等 10 分钟以上再试 —— 连续重试会延长限制。"
         case let .rejected(message):
             return message
         case .tooManyAttempts:
@@ -77,6 +80,16 @@ enum StoreAuthenticationProtocol {
         // Only retry unstructured transient responses, never a credential/2FA rejection.
         guard plist(data) == nil else { return false }
         return status == 204 || status == 404 || (500 ... 599).contains(status)
+    }
+
+    /// Apple 对“来源地址”的软拒绝：无 plist 的空响应（204/403/404/5xx），
+    /// 或 3xx 但没有 Location 可跟随。社群实测（ipatool #530/#550）这类失败
+    /// **跟着出口 IP 走、不跟账号走**：同一份签名换个网络就能成功，同一网络
+    /// 连续重试只会让限制更久。故单独成类，好让 UI 给出可执行的提示。
+    static func addressRefused(status: Int, data: Data) -> Bool {
+        guard plist(data) == nil else { return false }
+        return status == 204 || status == 403 || status == 404
+            || status == 301 || status == 302 || (500 ... 599).contains(status)
     }
 
     static func rejection(_ plist: [String: Any], code: String) -> StoreAuthenticationError? {
