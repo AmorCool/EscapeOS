@@ -134,7 +134,7 @@ struct ModuleManagerView: View {
                 Text("正在修复容器路径…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text("扫描所有模块 config.json 残留旧容器绝对路径，按当前 dataDir 语义重写.\n此期间不会启动任何模块，完成前请勿操作.")
+                Text("扫描所有模块 config.json 中残留的旧容器绝对路径，按当前 dataDir 语义重写.\n期间不启动任何模块，完成前请勿操作.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)

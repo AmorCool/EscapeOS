@@ -85,13 +85,17 @@ def main() -> None:
     require("Retry-After" in auth, "429 is not replayed")
     require("primaryContentType" in protocol and "alternateContentType" in protocol,
             "edge rejections are probed with the alternate Content-Type")
-    require("triedAlternateContentType" in auth, "content-type probe is bounded to one retry")
+    require(auth.count("alternateContentType") == 1, "content-type probe is bounded to one retry")
     require("storeClientAccept" in protocol and "Accept" in auth,
             "the store client Accept header is sent on the authentication request")
-    require("trailingSlashVariant" in protocol and "triedTrailingSlash" in auth,
+    require("trailingSlashVariant" in protocol and auth.count("trailingSlashVariant") == 1,
             "the trailing-slash endpoint variant is probed exactly once")
-    require("nativeFastAuthenticationURL" in protocol and "triedNativeFast" in auth,
-            "the modern native/fast endpoint is a fallback candidate")
+    require("nativeFastAuthenticationURL" in protocol and "ladder.append((native" in auth,
+            "the native/fast endpoint is the FIRST login candidate (JAsspp order)")
+    require("nativeFastURL" in protocol and 'hasSuffix("/fast")' in protocol,
+            "bag-provided native endpoints are normalized to /auth/v1/native/fast/")
+    require("isDeviceGUID" in protocol and "guid.count == 12" not in auth,
+            "device guid accepts the 12-32 hex form used by the reference client")
     require("fallbackSAPCertURL" in protocol and "fallbackSAPSetupURL" in protocol,
             "SAP endpoints have hardcoded fallbacks")
     # v0.3.354：换过机器身份后不能再把旧会话的 Cookie 当自己的发出去。

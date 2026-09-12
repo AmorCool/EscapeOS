@@ -33,7 +33,7 @@ struct DomainBlockerView: View {
                 InfoActionCard(
                     icon: "shield.fill",
                     title: "屏蔽域名",
-                    message: "将域名加入系统 DNS 屏蔽列表（指向不可达的本地解析服务），使其无法访问.默认包含 iOS 系统更新相关域名，可按需关闭或添加自定义域名.生成的描述文件需在“设置 → 通用 → VPN 与设备管理”中安装."
+                    message: "将域名加入系统 DNS 屏蔽列表（指向不可达的本地解析），使其无法访问.默认含 iOS 更新域名，可关闭或添加自定义.描述文件在「设置 → 通用 → VPN 与设备管理」安装."
                 )
             }
 
@@ -136,7 +136,7 @@ struct DomainBlockerView: View {
                 } header: {
                     Label("下一步", systemImage: "chevron.forward")
                 } footer: {
-                    Text("点击“在 Safari 中下载并安装”会跳转到 Safari 加载一个本地页面并自动下载描述文件，随后进入“设置”安装.也可选“分享 / 保存到文件”，在“文件” App 中打开后安装.安装后可在“设置 → 通用 → VPN 与设备管理”中移除.")
+                    Text("「在 Safari 中下载并安装」→ Safari 自动下载描述文件 → 到「设置」安装.也可「分享 / 保存到文件」后在「文件」打开安装.移除：设置 → 通用 → VPN 与设备管理.")
                 }
             }
         }

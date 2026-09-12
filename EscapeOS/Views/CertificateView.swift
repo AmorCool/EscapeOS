@@ -163,7 +163,7 @@ struct CertificateView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("仅删除本地签名用的证书文件（签名功能随之不可用），不会向 Apple 吊销证书. Apple 侧证书仍占账号名额，需要腾名额请用吊销功能.")
+            Text("仅删除本地签名证书文件（签名功能随之不可用），不向 Apple 吊销.证书仍占账号名额，需腾名额请用吊销功能.")
         }
         .sheet(isPresented: $showLogin) {
             AppleIDLoginSheet()
@@ -312,7 +312,7 @@ struct CertificateView: View {
                 icon: "lock.fill",
                 iconTint: .blue,
                 title: "尚未登录",
-                message: "登录 Apple ID 后即可查看账号下的开发证书并吊销失效证书.登录需要两步验证，凭据仅保存在本机钥匙串."
+                message: "登录 Apple ID 后可查看账号开发证书并吊销失效证书.登录需两步验证，凭据仅存本机钥匙串."
             )
         }
     }
@@ -404,7 +404,7 @@ struct CertificateView: View {
         } header: {
             Text("签名证书（p12）")
         } footer: {
-            Text("用于模块/文件真证书签名.签名 identifier 需与主程序一致（自动处理），证书本身 TeamID 匹配即可. 导入的 p12 会替换本地证书文件，不吊销 Apple 侧证书.")
+            Text("用于模块/文件真证书签名.identifier 需与主程序一致（自动处理），TeamID 匹配即可.导入的 p12 会替换本地证书文件，不吊销 Apple 侧证书.")
         }
     }
 

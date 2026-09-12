@@ -34,7 +34,7 @@ struct ProfileInstallView: View {
             } header: {
                 Text("描述文件管理")
             } footer: {
-                Text("支持导入 .mobileconfig .导入后点「发送到本机」→ 系统提示已下载 → 到「设置 → 通用 → VPN 与设备管理」安装.")
+                Text("支持导入 .mobileconfig .点「发送到本机」→ 系统提示已下载 → 到「设置 → 通用 → VPN 与设备管理」安装.")
             }
 
             Section {

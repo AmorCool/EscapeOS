@@ -38,7 +38,8 @@ actor SignedStoreAuthenticator {
     }
 
     /// - Parameters:
-    ///   - guid: 12 位十六进制设备标识（与下载链路用的 deviceIdentifier 必须一致）
+    ///   - guid: 12–32 位偶数长度十六进制设备标识（与下载链路用的 deviceIdentifier 必须一致；
+    ///     硬件 ID 取前 12 位 = 6 字节。放宽口径见 `StoreAuthenticationProtocol.isDeviceGUID`）
     ///   - cookies: 轮换（rotate）时带上旧 cookie，避免每次都要验证码
     func authenticate(email: String, password: String, code: String,
                       guid: String, cookies: [Cookie]) async throws -> AppStoreAccount {
@@ -72,7 +73,7 @@ actor SignedStoreAuthenticator {
         }
         guard let certificateURL, let setupURL,
               let assets = SAPAssetsLocator.url,
-              guid.count == 12
+              StoreAuthenticationProtocol.isDeviceGUID(guid)
         else {
             LoginLogger.shared.log("[SAP] SAP 资产未找到：\(SAPAssetsLocator.describe())",
                                    category: .appStore)
@@ -110,7 +111,6 @@ actor SignedStoreAuthenticator {
         guard signer.complete else { throw StoreAuthenticationError.invalidConfiguration }
 
         // ② 正式登录（-5000 是协议挑战，换一次 body 重来）
-        var url = endpoint
         var protocolAttempt = 1
         var redirects = 0
         var storefront = ""
@@ -118,19 +118,42 @@ actor SignedStoreAuthenticator {
         var body = try StoreAuthenticationProtocol.body(email: email, password: password,
                                                        code: normalizedCode, guid: guid,
                                                        attempt: protocolAttempt)
-        // v0.3.355：边缘按 Content-Type 路由（见 StoreAuthenticationProtocol 注释）。
-        // 被边缘拒（拿不到 plist）时换一种 Content-Type 把同一份 body 再打一次，
-        // 好把「请求形状被拒」和「真的被 Apple 拒」区分开 —— 这一点只有真机能定案。
-        var contentType = StoreAuthenticationProtocol.primaryContentType
-        var triedAlternateContentType = false
-        var triedTrailingSlash = false
-        var triedNativeFast = false
+
+        // v0.3.357：**候选顺序对齐 JAsspp —— native/fast 第一，bag 给的 legacy 端点其后。**
+        //
+        // 真机日志实证（`_tmp_ssh/login_full.log`，2026-09-12 真机）：bag 返回的
+        // `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate` 被 Apple 前置
+        // 一路拒——204 空响应 ×3、404 + 146 B、301 + 162 B、500 + 170 B、503 + 190 B，
+        // **一次都没进到认证应用**；而同一账号、同一时刻的下载端点
+        // `p25-buy.itunes.apple.com/…/volumeStoreDownloadProduct` 是 HTTP 200。
+        // 说明不是账号/网络/IP 的问题，是这个端点形态本身被拒。
+        // JAsspp `auth.js:193-202` 的注释原话：「bag 给出的 legacy 端点最近常被 Apple
+        // 直接拒绝（空 403）」，所以它把官方 native 端点放**第一候选**。
+        // 我们此前把 native 放在**最后一档**，真机上永远走不到 → 每次登录必失败。
+        //
+        // 梯子固定有限档、每档只打一次，仍是「同一份 body + 新签名」：
+        //   ① native/fast · form-urlencoded（官方现代端点）
+        //   ② bag 端点 · form-urlencoded
+        //   ③ bag 端点 · x-apple-plist（边缘按 Content-Type 路由）
+        //   ④ bag 端点尾斜杠 · form-urlencoded
+        var ladder: [(url: URL, contentType: String)] = []
+        if let native = StoreAuthenticationProtocol.nativeFastAuthenticationURL(guid: guid) {
+            ladder.append((native, StoreAuthenticationProtocol.primaryContentType))
+        }
+        ladder.append((endpoint, StoreAuthenticationProtocol.primaryContentType))
+        ladder.append((endpoint, StoreAuthenticationProtocol.alternateContentType))
+        if let slashed = StoreAuthenticationProtocol.trailingSlashVariant(endpoint) {
+            ladder.append((slashed, StoreAuthenticationProtocol.primaryContentType))
+        }
+        var rung = 0
         while protocolAttempt <= 2, redirects <= 3 {
             try Task.checkCancellation()
+            let candidate = ladder[rung]
+            let url = candidate.url
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.httpBody = body
-            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+            request.setValue(candidate.contentType, forHTTPHeaderField: "Content-Type")
             let (data, response) = try await sendAuthentication(request, signer: signer)
             if let v = response.value(forHTTPHeaderField: "X-Set-Apple-Store-Front") { storefront = v }
             if let v = response.value(forHTTPHeaderField: "pod") { pod = v }
@@ -141,7 +164,8 @@ actor SignedStoreAuthenticator {
                       let next = URL(string: location, relativeTo: url)?.absoluteURL
                 else { throw StoreAuthenticationError.missingRedirect(response.statusCode) }
                 guard redirects < 3, next != url else { throw StoreAuthenticationError.tooManyAttempts }
-                url = try StoreAuthenticationProtocol.authenticationURL(next.absoluteString)
+                let target = try StoreAuthenticationProtocol.authenticationURL(next.absoluteString)
+                ladder[rung] = (target, candidate.contentType)
                 redirects += 1
                 continue
             }
@@ -150,40 +174,21 @@ actor SignedStoreAuthenticator {
                     throw StoreAuthenticationError.rateLimited(retryAfter: StoreAuthenticationProtocol.retryAfter(
                         response.value(forHTTPHeaderField: "Retry-After")))
                 }
-                if !triedAlternateContentType || !triedTrailingSlash || !triedNativeFast {
-                    let switchingContentType = !triedAlternateContentType
-                    let switchingEndpoint = !switchingContentType && !triedTrailingSlash
-                    if switchingContentType {
-                        triedAlternateContentType = true
-                        contentType = StoreAuthenticationProtocol.alternateContentType
-                    } else if switchingEndpoint {
-                        // 两条 Content-Type 都被前置拒 → 试参考客户端的尾斜杠端点形态。
-                        triedTrailingSlash = true
-                        contentType = StoreAuthenticationProtocol.primaryContentType
-                        if let variant = StoreAuthenticationProtocol.trailingSlashVariant(endpoint) {
-                            url = variant
-                        }
-                    } else {
-                        // 最后一档：现代认证端点 auth.itunes.apple.com/auth/v1/native/fast/
-                        // （Jsbox-Ipa / JAsspp 的第一候选）。legacy 端点在前置那里一直是 204/301/403/404。
-                        triedNativeFast = true
-                        contentType = StoreAuthenticationProtocol.primaryContentType
-                        if let native = StoreAuthenticationProtocol.nativeFastAuthenticationURL(guid: guid) {
-                            url = native
-                        }
-                    }
-                    protocolAttempt = 1
-                    redirects = 0
-                    if switchingContentType { url = endpoint }
-                    body = try StoreAuthenticationProtocol.body(email: email, password: password,
-                                                               code: normalizedCode, guid: guid,
-                                                               attempt: protocolAttempt)
-                    LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（\(data.count) 字节，无 plist）"
-                        + " → 换 \(switchingContentType ? "Content-Type=\(contentType)" : "端点=\(url.host ?? "?")\(url.path)") 重打一次",
-                        category: .appStore)
-                    continue
+                // 没有 plist 说明请求没进认证应用；沿梯子换下一档重打一次。
+                rung += 1
+                guard rung < ladder.count else {
+                    throw StoreAuthenticationError.unstructuredResponse(response.statusCode, empty: data.isEmpty)
                 }
-                throw StoreAuthenticationError.unstructuredResponse(response.statusCode, empty: data.isEmpty)
+                protocolAttempt = 1
+                redirects = 0
+                body = try StoreAuthenticationProtocol.body(email: email, password: password,
+                                                           code: normalizedCode, guid: guid,
+                                                           attempt: protocolAttempt)
+                let next = ladder[rung]
+                LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（\(data.count) 字节，无 plist）"
+                    + " → 换 \(next.url.host ?? "?")\(next.url.path)（\(next.contentType)）重打一次",
+                    category: .appStore)
+                continue
             }
             if protocolAttempt == 1, StoreAuthenticationProtocol.string(plist["failureType"]) == "-5000" {
                 protocolAttempt += 1

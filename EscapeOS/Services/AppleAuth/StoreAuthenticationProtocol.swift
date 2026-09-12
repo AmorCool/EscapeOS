@@ -97,12 +97,50 @@ enum StoreAuthenticationProtocol {
     static let nativeFastHost = "auth.itunes.apple.com"
     static let nativeFastPath = "/auth/v1/native/fast"
 
+    /// 规范化 native 端点：**bag 给出的 native 地址通常缺少 `/fast` 子路径**。
+    ///
+    /// 依据：Jsbox-Ipa `bag.js:33-53` 的 `normalizeAuthURL` —— host 是
+    /// `auth.itunes.apple.com` 时一律把路径补成 `…/native/fast/`（去掉多余尾斜杠、
+    /// 缺 `/fast` 就补上、再补回一个尾斜杠），并保留原有查询串；legacy 端点原样返回。
+    /// 它的注释原话：「bag 中的 native 认证端点缺少 /fast/ 子路径，直接访问会 301 到 HTML」。
+    ///
+    /// 我们此前只按**精确路径**放行 native，bag 一旦返回 native 就 `invalidRedirect` ——
+    /// 这正是「bag 拿到了却登不上」的那一半。所以按同一规则规范化。
+    static func nativeFastURL(_ value: String) -> URL? {
+        guard let url = URL(string: value), url.scheme?.lowercased() == "https",
+              let host = url.host, isNativeFastHost(host),
+              url.user == nil, url.password == nil, url.fragment == nil,
+              url.port == nil || url.port == 443
+        else { return nil }
+        var path = url.path
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        // 只接受 native 家族的路径；避免把 host 上的意外路径拼成 /fast/ 这种畸形端点。
+        guard path.lowercased().contains("/native") else { return nil }
+        if !path.hasSuffix("/fast") { path += "/fast" }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.path = path + "/"
+        return components?.url
+    }
+
     static func nativeFastAuthenticationURL(guid: String) -> URL? {
-        URL(string: "https://\(nativeFastHost)\(nativeFastPath)/?guid=\(guid)")
+        nativeFastURL("https://\(nativeFastHost)\(nativeFastPath)/?guid=\(guid)")
     }
 
     static func isNativeFastHost(_ host: String) -> Bool {
         host.lowercased() == nativeFastHost
+    }
+
+    /// 设备标识：Jsbox-Ipa 两处放宽口径一致 —— `device.js:11` 用
+    /// `/^[0-9a-f]{12,32}$/i`，`sap.js:884` 用 `/^(?:[0-9A-F]{2}){1,20}$/`
+    /// （偶数长度十六进制、大小写不敏感）。
+    ///
+    /// 我们只认**恰好 12 位**，真机 `invalidConfiguration` 的来源之一：本地
+    /// `device_guid.txt` 是从旧版本 `UserDefaults` 迁移过来的**任意非空串**
+    /// （`AppStoreDownloadStore.bootstrapDeviceIdentifier` 不校验格式），长度一旦不是 12
+    /// 就直接放弃登录。这里放宽到与参考实现一致，硬件 ID 仍取**前 12 位**（6 字节）。
+    static func isDeviceGUID(_ value: String) -> Bool {
+        guard (12 ... 32).contains(value.count), value.count.isMultiple(of: 2) else { return false }
+        return value.allSatisfy(\.isHexDigit)
     }
 
     /// v0.3.357：SAP 端点的**硬编码兜底**（Jsbox-Ipa `sap.js:24-25` 同款）。
@@ -119,11 +157,13 @@ enum StoreAuthenticationProtocol {
     }
 
     static func authenticationURL(_ value: String) throws -> URL {
-        // native/fast 是独立 host + path，先单独放行（其它一切仍走 storeURL 白名单）。
-        if let url = URL(string: value), let host = url.host,
-           isNativeFastHost(host), url.scheme?.lowercased() == "https",
-           url.path == nativeFastPath || url.path == nativeFastPath + "/" {
-            return url
+        // native/fast 是独立 host，先按参考客户端规则**规范化路径**再放行
+        // （bag 返回的 native 地址常缺 `/fast`；其它一切仍走 storeURL 白名单）。
+        if let url = URL(string: value), let host = url.host, isNativeFastHost(host) {
+            guard let normalized = nativeFastURL(value) else {
+                throw StoreAuthenticationError.invalidRedirect
+            }
+            return normalized
         }
         let url = try storeURL(value, paths: [authenticationPath])
         guard isBuyHost(url.host ?? "") else { throw StoreAuthenticationError.invalidRedirect }

@@ -193,7 +193,7 @@ struct WallpaperView: View {
                         .font(.title3.weight(.semibold))
                         .foregroundColor(.primary)
 
-                    Text("导入 .tendies 文件即可开始应用自定义壁纸.\n支持 Collections、MercuryPoster 与 Videos 三类描述符.")
+                    Text("导入 .tendies 文件即可应用自定义壁纸.\n支持 Collections、MercuryPoster、Videos 三类描述符.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

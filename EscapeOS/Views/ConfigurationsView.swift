@@ -238,7 +238,7 @@ struct ConfigurationsView: View {
                     if isWritable {
                         showApplyConfirm = true
                     } else {
-                        errorMessage = "当前系统（iOS \(UIDevice.current.systemVersion)）无法写入系统配置目录.\n\n此操作需要越狱环境，或 iOS 27+ 的证书直装形态.已支持读取、备份与导出."
+                        errorMessage = "当前系统（iOS \(UIDevice.current.systemVersion)）无法写入系统配置目录.\n\n需越狱环境，或 iOS 27+ 的证书直装形态.已支持读取、备份与导出."
                         showError = true
                     }
                 }

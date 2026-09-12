@@ -27,7 +27,7 @@ extension SupervisedRestrictionSection {
             SupervisedRestrictionItem(name: "安装与卸载应用", keys: ["allowAppInstallation", "allowAppRemoval"], warning: nil),
             SupervisedRestrictionItem(name: "应用内购买", keys: ["allowInAppPurchases"], warning: nil),
             SupervisedRestrictionItem(name: "Apple Music 服务", keys: ["allowMusicService", "allowRadioService"], warning: nil),
-            SupervisedRestrictionItem(name: "图书商店", keys: ["allowBookstore"], warning: "若你使用依赖图书商店的漏洞工具（如 Nugget），在 iOS 26.2 开发者测试版及更早版本上请勿关闭此项，否则会破坏漏洞所需的下载能力.")
+            SupervisedRestrictionItem(name: "图书商店", keys: ["allowBookstore"], warning: "依赖图书商店的漏洞工具（如 Nugget）在 iOS 26.2 开发者测试版及更早版本上勿关闭此项，否则会破坏漏洞所需的下载能力.")
         ]),
         SupervisedRestrictionSection(name: "系统功能", icon: "gearshape", minVersion: 0, items: [
             SupervisedRestrictionItem(name: "截屏", keys: ["allowScreenShot"], warning: nil),

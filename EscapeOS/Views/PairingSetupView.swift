@@ -48,7 +48,7 @@ struct PairingSetupView: View {
                     SetupStep(number: 1, title: "安装 LocalDevVPN",
                                text: "从 App Store 安装 LocalDevVPN，保持设备 IP / 隧道 IP 为默认值（10.7.0.1），连接它并开启 Wi-Fi.")
                     SetupStep(number: 2, title: "获取配对文件",
-                               text: "在 Windows 上用 iPASide 侧载.它会生成与 iLoader 相同类型的配对文件（USB 信任密钥 + 远程配对密钥），并自动放置 pairingFile.plist.也可以在这里导入 iLoader 文件.之后即可拔线——EscapeSpace 通过 LocalDevVPN 与本机通信，不走 USB.iOS 26.4+ 需要远程配对密钥；iOS 18 只需要 USB 信任部分.")
+                               text: "在 Windows 上用 iPASide 侧载，生成 pairingFile.plist 并自动放置.也可在此导入 iLoader 文件.之后可拔线（走 LocalDevVPN，不走 USB）.iOS 26.4+ 需远程配对密钥，iOS 18 只需 USB 信任部分.")
                     SetupStep(number: 3, title: "加载应用",
                                text: "EscapeSpace 随后列出你已安装的应用，可浏览或备份其数据.")
                 }

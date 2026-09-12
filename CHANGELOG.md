@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.357] - 2026-09-12
+
+### 修复
+- **登录候选顺序改成「native/fast 第一，bag 的 legacy 端点其后」**（对齐 dompling/Jsbox-Ipa
+  的 JAsspp：`config.js:52-53` 把 `https://auth.itunes.apple.com/auth/v1/native/fast/?guid=`
+  列为第一候选，`auth.js:193-202` 明确注释「bag 给出的 legacy 端点最近常被 Apple 直接拒绝」）。
+  真机实证（`login_full.log`）：每次登录都只打在 bag 返回的
+  `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate`，拿到的全是
+  204 空响应 ×3 / 404 + 146 B / 301 + 162 B / 500 + 170 B / 503 + 190 B，**一次都没进到认证应用**；
+  而同一账号、同一时刻的下载端点 `p25-buy.itunes.apple.com/…/volumeStoreDownloadProduct` 是
+  HTTP 200 —— 不是账号/网络/IP 问题，是这个端点形态本身被拒。此前 native 被放在**最后一档**，
+  真机上永远走不到，所以「每次登录都不成」。现在梯子有界：native · form-urlencoded →
+  bag 端点 · form-urlencoded → bag 端点 · x-apple-plist → bag 端点尾斜杠，每档只打一次。
+- **bag 返回的 native 端点做路径规范化**（同 JAsspp `bag.js:33-53`）：bag 里的 native 地址
+  通常**缺 `/fast` 子路径**，直接访问会被 301 到 HTML；我们此前只按精确路径放行，
+  bag 一旦给 native 就 `invalidRedirect` —— 这正是「bag 拿到了却登不上」的另一半。
+- **设备标识放宽到 12–32 位偶数长度十六进制**（同 JAsspp `device.js:11` /
+  `sap.js:884`）。本地 `device_guid.txt` 是从旧版本 `UserDefaults` 迁移过来的**任意非空串**
+  （`bootstrapDeviceIdentifier` 不校验格式），此前只认恰好 12 位 → 长度不符直接
+  `invalidConfiguration`。硬件 ID 仍取前 12 位（6 字节）。登录与已购两条路径同时放宽。
+- SAP 端点保留硬编码兜底（`s.mzstatic.com/sap/setupCert.plist` +
+  `fpinit.itunes.apple.com/v1/signSapSetup/legacy`，同 `sap.js:24-25`），
+  `sign-sap-version != 200` 只记日志不再直接判死。
+- `tools/verify_store_protocol.py` 新增断言：native/fast 必须是第一候选、native 端点需规范化、
+  guid 口径放宽；`Content-Type` / 尾斜杠探测各只出现一次。
+
 ## [0.3.356] - 2026-09-12
 
 ### 修复

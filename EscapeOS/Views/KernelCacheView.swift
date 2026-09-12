@@ -125,8 +125,6 @@ struct KernelCacheView: View {
                 }
             } header: {
                 Text("手动选择")
-            } footer: {
-                Text("默认已自动识别当前机型与系统版本；如需下载其他机型 / 其他版本的 kernelcache，可在此手动切换.")
             }
 
             if isRunning {

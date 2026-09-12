@@ -190,7 +190,8 @@ enum PurchaseHistoryService {
         }
 
         func prepare() async throws {
-            guard let assets = SAPAssetsLocator.url, guid.count == 12 else {
+            guard let assets = SAPAssetsLocator.url,
+                  StoreAuthenticationProtocol.isDeviceGUID(guid) else {
                 throw PurchaseHistoryError.signerUnavailable
             }
             let bytes = stride(from: 0, to: 12, by: 2).compactMap { offset -> UInt8? in

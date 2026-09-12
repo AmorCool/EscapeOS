@@ -80,7 +80,7 @@ struct RingtonesView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("没有找到文件")
                             .foregroundColor(.secondary)
-                        Text("已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根.点右上角导入音频（会自动转换为 .m4r 铃声格式）.")
+                        Text("已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根.点右上角导入音频（自动转 .m4r）.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -92,7 +92,7 @@ struct RingtonesView: View {
             } header: {
                 Text("铃声（/var/mobile/media）")
             } footer: {
-                Text("导入任意音频（mp3/wav/m4a 等，超 40 秒自动截取）会转换为 .m4r 上传到 iTunes_Control/Ringtones 并注册进系统铃声库（Ringtones.plist，爱思同机制）——导入成功后到「设置 → 声音 → 铃声」查看；若未立即出现，重启设备后必然加载.")
+                Text("导入音频（mp3/wav/m4a，超 40 秒自动截取）→ 转 .m4r 上传至 iTunes_Control/Ringtones 并注册铃声库.导入后到「设置 → 声音 → 铃声」查看；未立即出现可重启设备.")
             }
         }
         .listStyle(.insetGrouped)

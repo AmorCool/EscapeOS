@@ -847,7 +847,7 @@ struct ProcessManagerView: View {
                 } header: {
                     Text("运行中的进程（\(viewModel.processes.count)）")
                 } footer: {
-                    Text("恢复（SIGCONT）/ 挂起（SIGSTOP）/ 结束（SIGKILL）经由设备隧道下发，仅对当前设备生效.对系统关键进程发送结束信号可能因权限不足而失败.")
+                    Text("恢复（SIGCONT）/ 挂起（SIGSTOP）/ 结束（SIGKILL）经设备隧道下发，仅对当前设备生效.对系统关键进程发结束信号可能因权限不足失败.")
                 }
             }
         }

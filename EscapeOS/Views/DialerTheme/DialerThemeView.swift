@@ -438,7 +438,7 @@ struct DialerThemeView: View {
             }
             .disabled(viewModel.status == nil)
         } footer: {
-            Text("主题写入缓存后需重新打开电话 App 才会生效（不需要重启设备）.此项通过隧道结束电话进程，需要配对文件与 LocalDevVPN；若失败请手动上滑关闭电话 App 再打开.")
+            Text("写入缓存后需重开电话 App 生效（无需重启设备）.此项经隧道结束电话进程，需配对文件与 LocalDevVPN；失败请手动上滑关闭电话 App 再打开.")
         }
     }
 
@@ -450,7 +450,7 @@ struct DialerThemeView: View {
                 Text("电话 App 通过 TelephonyUI 渲染拨号键盘，渲染结果以 PNG 缓存进自己的容器.缓存命中时不会重新生成，因此替换这些 PNG 即改变键盘外观.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("该路径在电话 App 沙盒内，需通过 bad_query 让 containermanagerd 代为签发沙盒扩展才能写入（iOS 26.0–26.6.1）.同一张图在各语言下各有一份且内容相同，故按去掉语言前缀后的文件名匹配，一次替换覆盖全部语言.")
+                Text("路径在电话 App 沙盒内，需经 bad_query 让 containermanagerd 代为签发沙盒扩展才能写入（iOS 26.0–26.6.1）.各语言图片内容相同，按去语言前缀的文件名匹配，一次替换覆盖全部语言.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

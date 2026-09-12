@@ -131,7 +131,7 @@ struct BackupsListView: View {
                     InfoActionCard(
                         icon: "tray.full",
                         title: "暂无备份",
-                        message: "可在「应用管理」或「容器管理」页进入任意应用，再点击「备份数据」导出备份.归档文件保存在「文件 → 我的iPhone → EscapeSpace → Backups」."
+                        message: "在「应用管理」或「容器管理」进入任意应用，点「备份数据」导出.归档保存在「文件 → 我的iPhone → EscapeSpace → Backups」."
                     )
                 }
             } else {
