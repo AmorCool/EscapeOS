@@ -10,6 +10,9 @@ import SwiftUI
 struct IPADownloadManagerView: View {
 
     @State private var items: [IPADownloadItem] = []
+    /// bundleId → 图标 URL。历史记录里没持久化 `iconURL`（真机 `ipa_downloads.json` 实测没有该字段），
+    /// 进入页面时按 bundleId 查回来补上；查不到就退回字母块。
+    @State private var icons: [String: String] = [:]
     @State private var selection = Set<String>()
     @ObservedObject private var center = IPADownloadCenter.shared
     @Environment(\.editMode) private var editMode
@@ -43,7 +46,10 @@ struct IPADownloadManagerView: View {
             }
         }
         .toastHost()
-        .task { reload() }
+        .task {
+            reload()
+            await loadIcons()
+        }
     }
 
     // MARK: - 下载中（暂停 / 继续 / 删除）
@@ -174,25 +180,24 @@ struct IPADownloadManagerView: View {
             iconView(item)
 
             // 三行信息：标题 / 版本 + 体积 + 包类型 / 来源与时间。
-            // `layoutPriority` + 标签 `.fixedSize` 保证标签永远单行（原来三个胶囊被右侧按钮
-            // 挤窄后会把版本号断成「v6.0.260 / 824」两行）。
+            // 版本、体积两个胶囊固定单行（`.fixedSize()`），其余文字一律「换行、不截断」：
+            // 用户明确要求「可以换行显示但不能显示不全」。
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.title)
                     .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
+                    .lineLimit(2)
                 HStack(spacing: 6) {
                     if let v = item.version { chip("v\(v)", .blue) }
                     chip(item.sizeText, .green)
                     Text(item.kindText)
                         .font(.caption2)
                         .foregroundStyle(kindTint(item))
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(subtitle(item))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .layoutPriority(1)
 
@@ -242,27 +247,34 @@ struct IPADownloadManagerView: View {
 
     @ViewBuilder
     private func iconView(_ item: IPADownloadItem) -> some View {
-        if let s = item.iconURL, let url = URL(string: s) {
+        // 优先用记录里持久化的 iconURL，其次用按 bundleId 查回来的 icons 表。
+        if let s = item.iconURL ?? icons[item.bundleId ?? ""], let url = URL(string: s) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let img): img.resizable().scaledToFit()
-                default: placeholderIcon
+                default: monogram(item)
                 }
             }
             .frame(width: 48, height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         } else {
-            placeholderIcon
+            monogram(item)
         }
     }
 
-    private var placeholderIcon: some View {
-        Image(systemName: "app.dashed")
-            .font(.title3)
-            .foregroundStyle(.secondary)
-            .frame(width: 48, height: 48)
-            .background(Color(.tertiarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+    /// 没有图标时的首字母方块（参考 `PurchaseHistoryView.monogram`）：
+    /// 虚框看着像「加载失败」，字母块看着是有意设计。
+    private func monogram(_ item: IPADownloadItem) -> some View {
+        let source = item.title.isEmpty ? (item.bundleId ?? "") : item.title
+        let letter = String(source.prefix(1)).uppercased()
+        return ZStack {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Color.blue.opacity(0.14))
+            Text(letter.isEmpty ? "?" : letter)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.blue)
+        }
+        .frame(width: 48, height: 48)
     }
 
     private func subtitle(_ item: IPADownloadItem) -> String {
@@ -295,6 +307,24 @@ struct IPADownloadManagerView: View {
 
     private func reload() {
         items = IPADownloadLibrary.shared.items()
+    }
+
+    /// 补齐列表图标：历史记录没存 `iconURL`，按 bundleId 逐个查 App Store。
+    /// 整体串行、同一 bundleId 只查一次（Gmail 有两条记录）、失败静默跳过 ——
+    /// 图标只是锦上添花，不能让缺失影响列表渲染。
+    @MainActor
+    private func loadIcons() async {
+        var queried = Set<String>()
+        for item in items {
+            guard item.iconURL == nil else { continue }
+            guard let bid = item.bundleId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !bid.isEmpty else { continue }
+            guard icons[bid] == nil, queried.insert(bid).inserted else { continue }
+            if let hit = try? await AppStoreService.lookup(bundleId: bid),
+               let icon = hit.iconSmallURL ?? hit.iconURL {
+                icons[bid] = icon
+            }
+        }
     }
 
     /// 安装/重装/降级安装 —— 统一交给下载中心（进度统一展示、可取消）
