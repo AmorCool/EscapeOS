@@ -70,28 +70,44 @@ enum AppStoreLocalInstallService {
             onLog?("[本机] 警告：未取到序列号，Apple 可能按匿名设备发 sinf（装不上）")
         }
 
-        // 1) 入库（免费应用）+ 2) 取下载直链 + sinf
+        // 1) 取下载直链 + sinf；2) 只有 Apple 说「缺许可」时才去购买
         //
-        // v0.3.330：Apple 的 `passwordToken` 有有效期，过期时购买/下载回
-        // `failureType 2034`（Sign In to the iTunes Store）。按 ipatool 的做法
-        // （cmd/purchase.go：Attempts(2) + RetryIf(ErrPasswordTokenExpired)）
-        // **自动用已保存的凭据重登一次再重试** —— 带 cookie 轮换，通常不用再收验证码。
+        // v0.3.333：对齐 Asspp（Interface/Search/ProductView.swift）——
+        //   · 主流程**只请求下载**，不无条件购买；
+        //   · 下载回 `failureType 9610`（licenseRequired）时才走「获取许可」，
+        //     而那一步**必定先 rotate 刷新 passwordToken 再 purchase**。
+        // 我们此前无条件先 purchase，于是令牌一过期整条链路直接死在购买上。
+        // 令牌失效（2034）时按 ipatool 的做法自动重登再重试。
         var output: DownloadOutput?
-        for attempt in 1 ... 2 {
-            if attempt == 2 {
-                onLog?("[AppleID] 登录已过期 → 用已保存的凭据自动重新登录…")
-                try await refreshAccount(email: email, account: &account, onLog: onLog)
-            }
+        var needLicense = false
+        var refreshedForLicense = false
+        var retries = 0
+        while true {
             do {
-                onLog?("[AppleID] 获取授权…")
-                try await Purchase.purchase(account: &account, app: software)
-
+                if needLicense {
+                    // Asspp 同款：购买前必先刷新令牌（just refreshed 时不重复打登录接口）
+                    if !refreshedForLicense {
+                        onLog?("[AppleID] 获取授权（先刷新登录）…")
+                        try await refreshAccount(email: email, account: &account, onLog: onLog)
+                        refreshedForLicense = true
+                    } else {
+                        onLog?("[AppleID] 获取授权…")
+                    }
+                    try await Purchase.purchase(account: &account, app: software)
+                    needLicense = false
+                }
                 onLog?("[AppleID] 请求下载信息…")
                 output = try await Download.download(account: &account, app: software)
                 break
-            } catch ApplePackageError.passwordTokenExpired {
-                onLog?("[AppleID] Apple 判定登录已失效（2034 / Sign In to the iTunes Store）")
-                if attempt == 2 { throw ApplePackageError.passwordTokenExpired }
+            } catch ApplePackageError.licenseRequired where !needLicense && retries < 2 {
+                needLicense = true
+                retries += 1
+                onLog?("[AppleID] 该账号还没有此应用的许可（9610）→ 获取授权")
+            } catch ApplePackageError.passwordTokenExpired where retries < 2 {
+                retries += 1
+                onLog?("[AppleID] 登录已失效（2034 / Sign In to the iTunes Store）→ 自动重新登录…")
+                try await refreshAccount(email: email, account: &account, onLog: onLog)
+                refreshedForLicense = true
             }
         }
         guard let output else { throw ApplePackageError.passwordTokenExpired }
