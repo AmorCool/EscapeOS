@@ -120,13 +120,16 @@ extension StoreDownloadEndpoint {
 
             account.cookie.mergeCookies(response.cookies)
 
-            if response.status == .found {
+            // v0.3.334：按 Asspp 的做法接受全部 3xx（301/302/303/307/308），
+            // 并把 4 跳上限对齐 —— 原来只认 302，301 会直接当失败。
+            if (300 ... 399).contains(response.status.code) {
                 guard let location = response.headers.first(name: "location"),
-                      let newURL = URL(string: location)
+                      let next = URL(string: location, relativeTo: currentURL)?.absoluteURL
                 else {
+                    storeLog("重定向缺少 Location（HTTP \(response.status.code)）")
                     try ensureFailed("failed to retrieve redirect location")
                 }
-                currentURL = newURL
+                currentURL = next
                 redirectAttempt += 1
                 continue
             }
@@ -172,11 +175,14 @@ extension StoreDownloadEndpoint {
             "creditDisplay": "",
             "guid": deviceIdentifier,
             "salableAdamId": app.id,
-            // v0.3.258：对齐上游 ipatool 5f776fe —— 缺 serialNumber 时 Apple 按
-            // 无效设备校验，直接回「Your device or computer could not be verified」.
-            // v0.3.301：改为可配置 —— 传入本机真实序列号后，Apple 才能关联本机
-            // FairPlay 证书，生成可被本机 installd 解密的 sinf。默认仍是 "0"。
-            "serialNumber": Configuration.deviceSerialNumber,
+            // v0.3.334：回到 `"0"`。上游两个可用的实现都发 "0"
+            // （ipatool PR #500：Apple 对热门应用给 volumeStore 加了校验，补
+            //   serialNumber 且**用 "0" 就能过**；Asspp StoreDownloadProtocol.payload 同款 "0"）。
+            // 我们 v0.3.301 曾改成 `Configuration.deviceSerialNumber`（本机真序列号），
+            // 理由是"sinf 要绑本机证书"——但那时没有任何可用的 Apple ID 登录，整条链路
+            // 都是盲写的。真机实测（v0.3.331 日志）：带真序列号时 volumeStore 回空包、
+            // redownload 回 HTTP 500，链路走不下去。
+            "serialNumber": "0",
         ]
 
         if !externalVersionID.isEmpty {
@@ -188,6 +194,8 @@ extension StoreDownloadEndpoint {
         var headers: [(String, String)] = [
             ("Content-Type", "application/x-apple-plist"),
             ("User-Agent", Configuration.userAgent),
+            // v0.3.334：Asspp 的下载请求带 Accept-Language，补上（客户端保真度）
+            ("Accept-Language", Locale.preferredLanguages.prefix(3).joined(separator: ", ")),
             ("iCloud-DSID", account.directoryServicesIdentifier),
             ("X-Dsid", account.directoryServicesIdentifier),
         ]
