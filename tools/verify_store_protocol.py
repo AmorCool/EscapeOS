@@ -11,24 +11,75 @@ def strip_comments(text: str) -> str:
     v0.3.359 发现（jsbox-re 变异测试 C 组实测）：本脚本原来是对**源码全文**做存在性匹配，
     于是把要断言的代码片段「留在注释里」就能骗过校验 —— 它不是行为测试，只是文本契约。
     先剥掉注释，至少让「注释能满足断言」这条捷径失效。
-    逐行处理：`//` 之前若引号计数为偶数才当作注释起点（避免砍掉字符串里的 "https://…"）。
+
+    v0.3.359 二次修复：早先的实现用 `re.sub(r"/\\*.*?\\*/", "", text, flags=re.S)` 剥块注释 ——
+    那是**跨行非贪婪**正则，仓库里 `PurchaseHistoryService.swift` 的 `("Accept", "*/*")` 字面量
+    就提供了一个 `/*`，只要它之后**任何地方**再出现一个 `*/`（哪怕只是正常块注释），
+    正则会从那里一路吞到 `*/`（jsbox-re 实测静默删除 11,027 字符，`prepare()` 全体消失，
+    既能造成假 FAIL 也能造成**假 PASS**）。
+
+    现在改成**单遍扫描器**，显式跟踪「普通字符串 / 三引号多行串 / 行注释 / 块注释」四种状态：
+    字符串内的 `//`、`/*`、`*/*` 一律原样保留，块注释按 `*/` 正确闭合，不再跨行误吞。
     """
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    out = []
-    for line in text.splitlines():
-        quotes = 0
-        cut = None
-        i = 0
-        while i < len(line) - 1:
-            ch = line[i]
-            if ch == '"' and (i == 0 or line[i - 1] != "\\"):
-                quotes += 1
-            elif ch == "/" and line[i + 1] == "/" and quotes % 2 == 0:
-                cut = i
-                break
+    out: list[str] = []
+    i, n = 0, len(text)
+    in_line = in_block = in_str = in_multiline = False
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if in_line:
+            if ch == "\n":
+                in_line = False
+                out.append(ch)
             i += 1
-        out.append(line if cut is None else line[:cut])
-    return "\n".join(out)
+            continue
+        if in_block:
+            if ch == "*" and nxt == "/":
+                in_block = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if in_multiline:
+            if text.startswith('"""', i):
+                in_multiline = False
+                out.append('"""')
+                i += 3
+                continue
+            out.append(ch)
+            i += 1
+            continue
+        if in_str:
+            out.append(ch)
+            if ch == "\\" and nxt:
+                out.append(nxt)
+                i += 2
+                continue
+            if ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if text.startswith('"""', i):
+            in_multiline = True
+            out.append('"""')
+            i += 3
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            in_line = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            in_block = True
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def source(path: str) -> str:
