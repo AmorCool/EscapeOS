@@ -26,8 +26,25 @@ struct AppStoreVersionHistoryView: View {
     @State private var loadingMore = false
     @State private var errorText: String?
     @State private var expanded: Set<String> = []
+    /// 已知的「版本号 → 真实发布日期」。只来自商品页通道；
+    /// Apple 下载协议给不出每版的日期（每版都返回应用首次上架日期）。
+    @State private var dateByVersion: [String: Date] = [:]
 
     private var canLoadMore: Bool { channel == .account && loadedIDs.count < identifiers.count }
+
+    private static let dayText: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    private static func relativeText(_ d: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.unitsStyle = .full
+        return f.localizedString(for: d, relativeTo: Date())
+    }
 
     var body: some View {
         List {
@@ -117,12 +134,25 @@ struct AppStoreVersionHistoryView: View {
                         .foregroundStyle(.green)
                 }
                 Spacer(minLength: 0)
-                Text(v.dateText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            if let rel = v.relativeText {
-                Text(rel).font(.caption2).foregroundStyle(.tertiary)
+                // 只在**确实知道**该版本发布日期时才显示。
+                // Apple 的下载协议对每个版本都回同一个 `releaseDate`（= 应用首次上架日期，
+                // 实测 Gmail 无论请求哪个 externalVersionId 都是 2011-11-02），
+                // 拿它当版本日期会整列显示同一个错误日期 —— 所以宁可留空。
+                if let date = v.date {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(Self.dayText.string(from: date))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text(Self.relativeText(date))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                } else if let raw = v.dateRaw, !raw.isEmpty {
+                    // 商品页通道给的原文（本来就是日期，只是格式因区域而异）
+                    Text(raw)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             if let notes = v.notes, !notes.isEmpty {
                 Text(notes)
@@ -194,6 +224,9 @@ struct AppStoreVersionHistoryView: View {
                 accountEmail = email
                 channel = .account
                 loading = false
+                // 商品页通道能给出**真实**的版本日期（内嵌 versionHistory shelf），
+                // 但覆盖不全；能拿到就补上，拿不到就不显示日期。
+                Task { await harvestWebDates() }
                 await loadMore()
                 return
             } catch {
@@ -215,6 +248,24 @@ struct AppStoreVersionHistoryView: View {
         loading = false
     }
 
+    /// 商品页通道的真实版本日期 → 按版本号补给账号通道（best-effort）
+    private func harvestWebDates() async {
+        guard let list = try? await AppStoreService.versionHistory(appId: item.id, country: country),
+              !list.isEmpty
+        else { return }
+        var map: [String: Date] = [:]
+        for w in list {
+            if let d = w.date { map[w.version] = d }
+        }
+        guard !map.isEmpty else { return }
+        await MainActor.run {
+            dateByVersion = map
+            for i in versions.indices {
+                if let d = map[versions[i].version] { versions[i].dateValue = d }
+            }
+        }
+    }
+
     /// 账号通道：分批取版本元数据（每次 5 条）
     private func loadMore() async {
         guard canLoadMore, !loadingMore, let email = accountEmail else { return }
@@ -227,7 +278,7 @@ struct AppStoreVersionHistoryView: View {
                                                                          email: email)
                 versions.append(AppStoreVersion(version: meta.version,
                                                 externalVersionID: id,
-                                                dateValue: meta.date))
+                                                dateValue: dateByVersion[meta.version]))
                 loadedIDs.insert(id)
             } catch {
                 errorText = error.localizedDescription
