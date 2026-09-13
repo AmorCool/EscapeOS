@@ -124,15 +124,16 @@ final class AppListViewModel: ObservableObject {
     /// ReturnAttributes）来的数据，而该调用**不返回 `iTunesMetadata`** ——
     /// 于是 `appleId` / `hasITunesMetadata` 恒为空，共享正版只能落成苹果正版。
     ///
-    /// v0.3.376：**这条 Lookup 加 20 秒硬超时**——v0.3.369 引入的这条依赖正是本次
-    /// 用户故障的开关。`FileSharingService.listAppsWithFileSharing()` 从 Swift 到
-    /// Rust 全程无超时；它一旦卡住，本方法（跑在 DispatchQueue.global 上）就**永不
-    /// 返回** → 末尾的 `self?.appTypes = resolved` 永不执行 → `viewModel.appTypes`
-    /// 恒为空 → `appRow`(:607) 的 `else if let type = viewModel.appTypes[...]` 恒为假
-    /// → **三方应用的类型胶囊整条不显示**（系统应用不受影响：它们走 `app.isSystem`
-    /// 分支显示「系统」）——与用户反馈「不显示三方应用的胶囊」完全吻合。
-    /// 超时后按「没有 Lookup 数据」继续，用 get_apps + profile 照常判定，胶囊至少
-    /// 能显示出来；同时把每一步写进诊断日志，下次不必再瞎.
+    /// v0.3.376：这条依赖加 20 秒硬超时（原因见下），避免「appTypes 恒空 → 三方胶囊消失」.
+    ///
+    /// **v0.3.378：改成两版判定，主数据源回到 `get_apps` 快路径**.
+    /// 真机 16:29 日志实证：带属性 Lookup 3 次并发、20 秒一个字节不回；而同一次会话里
+    /// `get_apps` + profile **2.5 秒**就判完 333 个应用（16:29:41.895 → :44.395）——
+    /// 通道是好的，是 Lookup 命令卡死. 所以：
+    ///   - 第一版：`get_apps` + profile 立即上屏（胶囊先出现，不再有「整条不显示」）；
+    ///   - 第二版：带属性 Lookup 作**可选增强**（独立 8 秒、失败就不补），
+    ///     补上 appleId / 正版存在性后再精修一次，共享正版才不会退化成苹果正版.
+    /// 两版都写日志（`类型判定完成（第一版/第二版…）`），下次一眼能看出走到哪.
     private func loadAppTypes(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
         LoginLogger.shared.log("[应用管理] 类型判定开始：\(ids.count) 个应用")
@@ -145,26 +146,21 @@ final class AppListViewModel: ObservableObject {
         // 设备上可能有 20+ 个），用 .utility 低优先级队列 + autoreleasepool 包裹，
         // 避免在 reload 高频触发时抢占线程导致卡顿/内存压力；与主流程解耦.
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            // v0.3.369：**先做与文档浏览同源的带属性 Lookup**，拿回
-            // iTunesMetadata / appleId / isGenuine。只有一次全量 Lookup
-            // （不是每个应用一次）；它返回**全部**已装应用，不做「是否开启
-            // 文件共享」过滤（过滤开关在 FileSharingAppsView 里）。
-            // 它自带隧道并在返回前释放（FileSharingService 内部 defer），
-            // 与下面的 installation_proxy / misagent 串行，不会双隧道并发。
-            //
-            // v0.3.376：改用带超时入口。**绝不能**让这条 Lookup 无限阻塞：
-            // 它卡住 = 本方法永不返回 = 三方胶囊全消失（见方法注释）.
-            let lookedUp: [FileSharingApp]
+            // v0.3.378：主数据源改回 **`get_apps` 快路径**。真机日志实证：
+            // 带属性 Lookup 会 20 秒一个字节不回（3 次并发全挂），而同一会话里
+            // `get_apps` + profile 2.5 秒就判完 333 个应用（16:29:41.895 → :44.395）。
+            // 带属性 Lookup 降级为下面的「可选增强」（独立 8 秒、失败就不补）.
+            let fast: [FileSharingApp]
             switch FileSharingService.listAppsWithFileSharing(timeout: 20) {
             case .ok(let found):
-                lookedUp = found
-                LoginLogger.shared.log("[应用管理] Lookup 成功：\(found.count) 条")
+                fast = found
+                LoginLogger.shared.log("[应用管理] get_apps 快路径：\(found.count) 条")
             case .failed(let message):
-                lookedUp = []
-                LoginLogger.shared.log("[应用管理] Lookup 失败：\(message)；改用 get_apps + profile 继续判定")
+                fast = []
+                LoginLogger.shared.log("[应用管理] get_apps 快路径失败：\(message)；改用 apps + profile 继续判定")
             case .timedOut:
-                lookedUp = []
-                LoginLogger.shared.log("[应用管理] Lookup 超时（20s）；改用 get_apps + profile 继续判定")
+                fast = []
+                LoginLogger.shared.log("[应用管理] get_apps 快路径超时；改用 apps + profile 继续判定")
             }
             // v0.3.190：两条隧道必须**顺序串行**调用——fetchSideloadedApps（installation_proxy）
             // 与 fetchAllProfiles（misagent）各自 createTunnel，若并发握手会死锁闪退
@@ -202,55 +198,86 @@ final class AppListViewModel: ObservableObject {
                       let profile = profileByAppId[appId] else { continue }
                 provisionsAllDevicesMap[s.bundleID] = profile.provisionsAllDevices
             }
-            // 以 bundleID 为 key 的 applicationType / iTunesAppleID
-            var appTypeMap: [String: String] = [:]
-            var iTunesIDMap: [String: String] = [:]
-            // v0.3.367：**必须把「存在 iTunesMetadata」这一事实也传下去**。
-            // 原来只传了购买邮箱，而没有元数据的包会被判成非 App Store 下发；
-            // 叠加「已装应用读不到包内 sinf（加密状态未知）」，App Store 应用会全被判成越狱版。
-            var hasMetadataMap: [String: Bool] = [:]
-            // v0.3.369：**以 `lookedUp`（带属性的 Lookup，与文档浏览同源）为准**
-            // 取 applicationType / iTunesAppleID / hasITunesMetadata —— 只有它带
-            // iTunesMetadata（appleId / isGenuine 的来源）。`apps`（get_apps，不带
-            // 属性）仅作兜底，覆盖 Lookup 未返回的条目。
-            for app in lookedUp {
-                // parseAppDict 缺 ApplicationType 时填 "Unknown"，视同未拿到，留给兜底
-                if app.applicationType != "Unknown" {
-                    appTypeMap[app.bundleId] = app.applicationType
+            // ===== v0.3.378：两版判定（第一版立即上屏，第二版用可选增强精修）=====
+            // 增强结果（可能为空 = 没取到/超时，此时按「没有账号/存在性信息」判）
+            var enhanced: [FileSharingApp] = []
+
+            // 以 bundleID 为 key 的 applicationType / iTunesAppleID / hasITunesMetadata
+            func judge() -> [String: AppType] {
+                var appTypeMap: [String: String] = [:]
+                var iTunesIDMap: [String: String] = [:]
+                // v0.3.367：**必须把「存在 iTunesMetadata」这一事实也传下去**。
+                // 原来只传了购买邮箱，而没有元数据的包会被判成非 App Store 下发；
+                // 叠加「已装应用读不到包内 sinf（加密状态未知）」，App Store 应用会全被判成越狱版。
+                var hasMetadataMap: [String: Bool] = [:]
+                for app in fast {
+                    // parseAppDict 缺 ApplicationType 时填 "Unknown"，视同未拿到，留给兜底
+                    if app.applicationType != "Unknown" {
+                        appTypeMap[app.bundleId] = app.applicationType
+                    }
+                    if let id = app.appleId { iTunesIDMap[app.bundleId] = id }
+                    hasMetadataMap[app.bundleId] = app.isGenuine
                 }
-                if let id = app.appleId { iTunesIDMap[app.bundleId] = id }
-                hasMetadataMap[app.bundleId] = app.isGenuine
+                // 第二版：带属性 Lookup 的增强值优先覆盖（它是大小/账号字段的唯一来源）
+                for app in enhanced {
+                    if app.applicationType != "Unknown" {
+                        appTypeMap[app.bundleId] = app.applicationType
+                    }
+                    if let id = app.appleId { iTunesIDMap[app.bundleId] = id }
+                    if app.isGenuine { hasMetadataMap[app.bundleId] = true }
+                }
+                for app in apps {
+                    if appTypeMap[app.bundleIdentifier] == nil, let t = app.applicationType {
+                        appTypeMap[app.bundleIdentifier] = t
+                    }
+                    if iTunesIDMap[app.bundleIdentifier] == nil, let id = app.iTunesAppleID {
+                        iTunesIDMap[app.bundleIdentifier] = id
+                    }
+                    if hasMetadataMap[app.bundleIdentifier] == nil {
+                        hasMetadataMap[app.bundleIdentifier] = app.hasITunesMetadata
+                    }
+                }
+                // v0.3.190：从 misagent 拉的 mobileprovision 顶层 ProvisionsAllDevices 匹配，
+                // 企业判定唯一权威字段（Apple TN3125）——已在上面按 appId 构建 provisionsAllDevicesMap.
+                var resolved: [String: AppType] = [:]
+                for id in ids {
+                    resolved[id] = AppTypeDetector.detect(
+                        entitlements: entMap[id] ?? [:],
+                        applicationType: appTypeMap[id],
+                        iTunesAppleID: iTunesIDMap[id],
+                        currentAppleID: currentAppleID,
+                        provisionsAllDevices: provisionsAllDevicesMap[id] ?? false,
+                        hasITunesMetadata: hasMetadataMap[id] ?? false
+                    )
+                }
+                return resolved
             }
-            for app in apps {
-                if appTypeMap[app.bundleIdentifier] == nil, let t = app.applicationType {
-                    appTypeMap[app.bundleIdentifier] = t
-                }
-                if iTunesIDMap[app.bundleIdentifier] == nil, let id = app.iTunesAppleID {
-                    iTunesIDMap[app.bundleIdentifier] = id
-                }
-                if hasMetadataMap[app.bundleIdentifier] == nil {
-                    hasMetadataMap[app.bundleIdentifier] = app.hasITunesMetadata
+
+            // 上屏 + 留痕（胶囊是否显示只看这一行有没有跑到）
+            func publish(_ resolved: [String: AppType], _ note: String) {
+                DispatchQueue.main.async {
+                    self?.appTypes = resolved
+                    LoginLogger.shared.log(note)
                 }
             }
-            // v0.3.190：从 misagent 拉的 mobileprovision 顶层 ProvisionsAllDevices 匹配，
-            // 企业判定唯一权威字段（Apple TN3125）——已在上面按 appId 构建 provisionsAllDevicesMap.
-            var resolved: [String: AppType] = [:]
-            for id in ids {
-                resolved[id] = AppTypeDetector.detect(
-                    entitlements: entMap[id] ?? [:],
-                    applicationType: appTypeMap[id],
-                    iTunesAppleID: iTunesIDMap[id],
-                    currentAppleID: currentAppleID,
-                    provisionsAllDevices: provisionsAllDevicesMap[id] ?? false,
-                    hasITunesMetadata: hasMetadataMap[id] ?? false
-                )
-            }
-            DispatchQueue.main.async {
-                self?.appTypes = resolved
-                // v0.3.376：结束时留痕——胶囊是否显示只看这一行有没有跑到.
-                LoginLogger.shared.log(
-                    "[应用管理] 类型判定完成：\(resolved.count) 条（entitlements \(entMap.count) / "
-                    + "provisionsAllDevices \(provisionsAllDevicesMap.count)）"
+
+            // 第一版：get_apps + profile —— 立即上屏，**不等**可选增强
+            //（用户实测：333 应用场景这条路径 2.5 秒级；胶囊先出现，再被第二版精修）
+            publish(
+                judge(),
+                "[应用管理] 类型判定完成（第一版·get_apps+profile）：\(ids.count) 条"
+                + "（entitlements \(entMap.count) / provisionsAllDevices \(provisionsAllDevicesMap.count)）"
+            )
+
+            // 第二版：可选增强（带属性 Lookup，独立 8 秒，失败就不补）
+            enhanced = FileSharingService.lookupAppAttributes(timeout: 8)
+            if enhanced.isEmpty {
+                LoginLogger.shared.log("[应用管理] 带属性增强未取到：账号/正版存在性按 apps 兜底（第一版结果保留）")
+            } else {
+                publish(
+                    judge(),
+                    "[应用管理] 类型判定完成（第二版·含带属性增强）：\(ids.count) 条"
+                    + "（增强 \(enhanced.count) 条）"
                 )
             }
         }

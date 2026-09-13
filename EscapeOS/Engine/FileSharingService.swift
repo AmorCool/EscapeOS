@@ -96,38 +96,95 @@ enum FileSharingService {
     /// RSD 隧道并发铁律（AFCService.swift:15 同款）：**同一 hostname 并发
     /// `tunnel_create_rppairing` 会互相抢占**. 本服务建隧道用的 hostname 固定为
     /// "EscapeSpaceFileShare"（见下方 makeTunnel），而 v0.3.369 起：
-    ///   - 「应用管理」AppListView.loadAppTypes(:158) 与
-    ///   - 「文档浏览」FileSharingAppsView.load(:395)
-    /// 会**各自独立**调用同一个 listAppsWithFileSharing() → 同 hostname 隧道并发握手.
-    /// 这正是「文档浏览一直读取中 / 应用管理三方胶囊消失」在 v0.3.369 之后出现的
-    /// 直接嫌疑. 这里把建隧道这一步串行化（不改任何调用方的隧道生命周期）.
-    private static let tunnelQueue = DispatchQueue(label: "com.escapeos.filesharing.tunnel")
+    ///   - 「应用管理」AppListView.loadAppTypes 与
+    ///   - 「文档浏览」FileSharingAppsView.load
+    /// 会**各自独立**调用本服务 → 同 hostname 隧道并发握手.
+    ///
+    /// v0.3.378：由 v0.3.376 的 `DispatchQueue.sync` 换成 **`NSRecursiveLock`**，
+    /// 两个理由：
+    ///   1. 需要把「排队等待」与「实际执行」**分开记账**（sync 拿不到这个分界点）；
+    ///   2. 闸门只在 `makeTunnel` 里取/放，锁粒度仍是「建隧道这一步」——
+    ///      **绝不在 FFI 阻塞期间持锁**，否则一次卡死会把其它入口全拖死.
+    static let tunnelGate = NSRecursiveLock()
 
-    /// 列出全部已装应用并标 UIFileSharingEnabled.
-    /// v0.3.271：主路径改 **Browse + ReturnAttributes**（pymobiledevice3 同款——
-    /// StaticDiskUsage/DynamicDiskUsage/iTunesMetadata 只在带 ReturnAttributes 的
-    /// 请求里返回，普通 Lookup 不带，这正是 v0.3.270 两个胶囊显示「—」的根因）；
-    /// browse 失败回退原 get_apps 全字段 Lookup.
-    /// v0.3.364：**只走 instproxy 一条隧道**，不再在这里等 profile —
-    /// appType 恒为 nil，由调用方用 fetchAppTypeContext() + detectTypes() 渐进补齐
-    /// （原实现首屏要等 fetchSideloadedApps + fetchAllProfiles 两条隧道跑完，
-    ///  首屏被 profile 阻塞). 同步阻塞——调用方放后台线程.
-    static func listAppsWithFileSharing() throws -> [FileSharingApp] {
-        LoginLogger.shared.log("[文件共享] 开始读取已装应用（instproxy Lookup）")
-        do {
-            let found = try lookupAppsWithAttributes()
-            LoginLogger.shared.log("[文件共享] 隧道已连上，Lookup 返回 \(found.count) 条")
-            if !found.isEmpty { return found }
-            LoginLogger.shared.log("[文件共享] Lookup 返回空，回落 get_apps")
-        } catch {
-            LoginLogger.shared.log("[文件共享] Lookup 失败：\(error.localizedDescription)；回落 get_apps")
-        }
-        let legacy = try legacyGetApps()
-        LoginLogger.shared.log("[文件共享] get_apps 回落返回 \(legacy.count) 条")
-        return legacy
+    /// v0.3.378：当前线程在闸门上的累计排队等待秒数（threadDictionary，按线程隔离）.
+    /// 为什么需要它：等待发生在 `makeTunnel` 深处，而超时记账在 `runGated`；
+    /// 线程局部是两者之间最小、且不需要改动任何调用方签名的传递通道.
+    private static let queueWaitKey = "com.escapeos.filesharing.queueWait"
+
+    private static func recordQueueWait(_ seconds: TimeInterval) {
+        let dict = Thread.current.threadDictionary
+        dict[queueWaitKey] = ((dict[queueWaitKey] as? Double) ?? 0) + seconds
     }
 
-    /// v0.3.376：**带硬超时**的列表读取——这是本故障的止血点.
+    private static func takeQueueWait() -> TimeInterval {
+        let dict = Thread.current.threadDictionary
+        let value = (dict[queueWaitKey] as? Double) ?? 0
+        dict[queueWaitKey] = 0
+        return value
+    }
+
+    private static func resetQueueWait() {
+        Thread.current.threadDictionary[queueWaitKey] = 0
+    }
+
+    private static func formatSeconds(_ value: TimeInterval) -> String {
+        String(format: "%.1f", value)
+    }
+
+    /// 列出全部已装应用并标 UIFileSharingEnabled.
+    ///
+    /// **v0.3.378：主路径改回 `get_apps`（快路径）**.
+    /// 证据（真机 16:29 日志）：3 次**并发**的带属性 Lookup 全部 20 秒一个字节不回
+    ///（`[16:29:21.813 / :24.105 / :34.744] 开始读取` → `[16:29:41.889] 读取超时`），
+    /// 而**同一次会话**里改用 `get_apps` + profile 的路径 **2.5 秒**就判完 333 个应用
+    ///（16:29:41.895 → :44.395）——说明通道是好的，是 `Lookup` 这条命令卡死.
+    /// 因此首屏只依赖 `get_apps`；带属性 Lookup 降级为可选增强
+    /// `lookupAppAttributes(timeout:)`（独立 8 秒、失败就不补、绝不阻塞首屏）.
+    ///
+    /// 代价（已知、可接受）：`get_apps` 不带 `StaticDiskUsage` / `DynamicDiskUsage` /
+    /// `iTunesMetadata` 这类「附加属性」字段 → 大小胶囊先显示「—」、账号胶囊先显示
+    /// 「-」，等可选增强回来再回填.
+    /// 同步阻塞——调用方放后台线程.
+    static func listAppsWithFileSharing() throws -> [FileSharingApp] {
+        LoginLogger.shared.log("[文件共享] get_apps 快路径开始")
+        let apps = try legacyGetApps()
+        let withMeta = apps.filter(\.isGenuine).count
+        let withAccount = apps.filter { $0.appleId != nil }.count
+        let withSize = apps.filter { $0.appSize != nil }.count
+        LoginLogger.shared.log(
+            "[文件共享] get_apps 快路径返回 \(apps.count) 条"
+            + "（带 iTunesMetadata \(withMeta) / 带账号邮箱 \(withAccount) / 带大小 \(withSize)）"
+        )
+        return apps
+    }
+
+    /// v0.3.378：**可选后台增强** —— 带属性 `Lookup`，补 appSize / docSize /
+    /// appleId / isGenuine（这些字段只有带 ReturnAttributes 的 Lookup 才返回）.
+    ///
+    /// 独立短超时（默认 8 秒）、失败或超时**返回空数组**（字段保持「—」）；
+    /// 调用方必须在首屏渲染之后调用，且不得因它失败而回退/清空主列表.
+    /// 实测该命令在真机上会 20 秒无响应（见上），所以这里刻意给得比主路径更短，
+    /// 且排队额度与执行额度分开计（见 runGated）.
+    static func lookupAppAttributes(timeout: TimeInterval = 8) -> [FileSharingApp] {
+        switch runGated(queueTimeout: 20, workTimeout: timeout, label: "带属性增强") {
+        case .ok(let apps):
+            if apps.isEmpty {
+                LoginLogger.shared.log("[文件共享] 带属性增强未取到数据：字段保持「—」")
+            } else {
+                LoginLogger.shared.log("[文件共享] 带属性增强成功：\(apps.count) 条（补大小/账号）")
+            }
+            return apps
+        case .failed(let message):
+            LoginLogger.shared.log("[文件共享] 带属性增强失败：\(message)；字段保持「—」")
+            return []
+        case .timedOut:
+            LoginLogger.shared.log("[文件共享] 带属性增强超时（\(Int(timeout))s）；字段保持「—」")
+            return []
+        }
+    }
+
+    /// v0.3.376：**带硬超时**的列表读取——止血点.
     ///
     /// 为什么必须有超时：整条链路从 Swift 到 Rust 没有任何一层设超时——
     ///   - Swift `FileSharingAppsView.load()` 的 `defer { loading = false }` 只在
@@ -136,32 +193,61 @@ enum FileSharingService {
     ///   - `TcpStream::connect`（tunnel_provider.rs:873）、`create_tcp_listener`
     ///     （:314）、`RemotePairingClient::connect`（:887）无超时；
     ///   - instproxy 响应读取 `read_raw`（installation_proxy.rs:774/779）无超时.
-    /// 只要设备/隧道不再应答，`listAppsWithFileSharing()` 就**永不返回**：
-    ///   - 「文档浏览」→ 永远停在「正在读取已装应用…」；
-    ///   - 「应用管理」→ loadAppTypes 永不完成 → `appTypes` 恒空 → 三方胶囊整条消失.
-    /// 注意 makeTunnel 内还有 3 次重试，一次黑洞连接要付 3 倍连接超时；
-    /// 之后还会回落到 legacyGetApps() 再建一条隧道（又 3 次）.
+    /// 只要设备/隧道不再应答，`listAppsWithFileSharing()` 就**永不返回**。
+    ///
+    /// v0.3.378：超时**只计「实际执行」**时长，在闸门上的排队等待单独记账
+    /// （见 runGated 与 tunnelGate 注释）——否则一个调用可能把十几秒耗在排队上，
+    /// 刚轮到就"已超时"，报出的「20s」名不副实.
     ///
     /// 超时返回 `.timedOut`（**不是**空数组），调用方据此给提示/降级，绝不无限等待.
     /// 被放弃的那次 FFI 调用仍在后台线程上跑（FFI 无法取消），只是不再阻塞调用方.
     static func listAppsWithFileSharing(timeout: TimeInterval) -> FileSharingListOutcome {
+        runGated(queueTimeout: 20, workTimeout: timeout, label: "get_apps 快路径") {
+            try listAppsWithFileSharing()
+        }
+    }
+
+    /// 排队与执行**分别记账**的硬超时执行器.
+    /// - `queueTimeout`：在闸门（同 hostname 隧道）上排队等待的额度
+    /// - `workTimeout`：真正开始干活之后的执行额度
+    /// 总等待上限 = 两者之和；结束时把「排队 Y.Ys / 实际执行 X.Xs」分别写日志，
+    /// 保证报出的执行时长不含排队时间.
+    private static func runGated(queueTimeout: TimeInterval,
+                                 workTimeout: TimeInterval,
+                                 label: String,
+                                 _ work: @escaping () throws -> [FileSharingApp]) -> FileSharingListOutcome {
         let box = TimedOutcomeBox()
         let sem = DispatchSemaphore(value: 0)
+        let startedAt = Date()
         DispatchQueue.global(qos: .userInitiated).async {
+            resetQueueWait()
             let outcome: FileSharingListOutcome
             do {
-                outcome = .ok(try listAppsWithFileSharing())
+                outcome = .ok(try work())
             } catch {
                 outcome = .failed(error.localizedDescription)
             }
-            box.store(outcome)
+            box.store(outcome, queueWait: takeQueueWait())
             sem.signal()
         }
-        switch sem.wait(timeout: .now() + timeout) {
+        switch sem.wait(timeout: .now() + queueTimeout + workTimeout) {
         case .success:
+            let elapsed = Date().timeIntervalSince(startedAt)
+            let queued = box.queueWait
+            let executed = max(0, elapsed - queued)
+            if queued > 0.2 {
+                LoginLogger.shared.log(
+                    "[文件共享] \(label)：实际执行 \(formatSeconds(executed))s"
+                    + "（其中排队等待 \(formatSeconds(queued))s，排队不吃执行额度）"
+                )
+            }
             return box.load() ?? .failed("读取失败")
         case .timedOut:
-            LoginLogger.shared.log("[文件共享] 读取超时（\(Int(timeout))s）：放弃等待，按超时收口")
+            let elapsed = Date().timeIntervalSince(startedAt)
+            LoginLogger.shared.log(
+                "[文件共享] \(label) 超时：已等待 \(formatSeconds(elapsed))s"
+                + "（排队额度 \(Int(queueTimeout))s + 执行额度 \(Int(workTimeout))s，排队与执行分开计）"
+            )
             return .timedOut
         }
     }
@@ -170,11 +256,15 @@ enum FileSharingService {
     private final class TimedOutcomeBox: @unchecked Sendable {
         private let lock = NSLock()
         private var stored: FileSharingListOutcome?
-        func store(_ outcome: FileSharingListOutcome) {
-            lock.lock(); stored = outcome; lock.unlock()
+        private var storedQueueWait: TimeInterval = 0
+        func store(_ outcome: FileSharingListOutcome, queueWait: TimeInterval) {
+            lock.lock(); stored = outcome; storedQueueWait = queueWait; lock.unlock()
         }
         func load() -> FileSharingListOutcome? {
             lock.lock(); defer { lock.unlock() }; return stored
+        }
+        var queueWait: TimeInterval {
+            lock.lock(); defer { lock.unlock() }; return storedQueueWait
         }
     }
 
@@ -255,10 +345,15 @@ enum FileSharingService {
         return resolved
     }
 
-    /// v0.3.284：**Lookup** + ReturnAttributes 主路径（此前用 Browse —— 大小字段
-    /// 只在 Lookup 的 ReturnAttributes 里返回，pymobiledevice3 同款：lookup +
+    /// v0.3.284：**Lookup** + ReturnAttributes（此前用 Browse —— 大小字段只在
+    /// Lookup 的 ReturnAttributes 里返回，pymobiledevice3 同款：lookup +
     /// GET_APPS_ADDITIONAL_INFO）。Rust 侧一次请求取全部字段并以 bplist 字节回传，
     /// Swift 侧完全不碰 plist_t 指针（照抄 get_apps 的 void** 出参模式）。
+    ///
+    /// **v0.3.378：不再是主路径**，只作可选增强（`lookupAppAttributes(timeout:)`）.
+    /// 真机 16:29 日志实证该命令会 20 秒无响应（3 次并发全挂），主路径已改回
+    /// `get_apps`（`legacyGetApps()`）。此函数保留是因为它是大小/账号字段的**唯一**
+    /// 来源；一旦设备侧恢复正常，增强会自动回填，无需再改代码.
     private static func lookupAppsWithAttributes() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
@@ -356,7 +451,10 @@ enum FileSharingService {
         )
     }
 
-    /// 原 get_apps（Lookup 全字段）实现——browse 失败时的回退.
+    /// `installation_proxy_get_apps`（不带 ReturnAttributes）——**v0.3.378 起是主路径**
+    /// （与 AppDiscovery/TunnelContext.getAllAppsInfo 同一条命令，真机 333 应用实测
+    /// 2.5 秒级可用；大小/账号等附加属性由 `lookupAppAttributes` 可选回填）.
+    /// 命名沿用历史（它曾是 Lookup 失败时的回退）.
     private static func legacyGetApps() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
@@ -668,13 +766,25 @@ enum FileSharingService {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
     }
-    /// v0.3.376：建隧道入口——**串行化**（RSD 隧道并发铁律，见 tunnelQueue 注释）.
-    /// 只锁「建隧道」这一步，不锁调用方后续的隧道生命周期：这样即使某次读取
-    /// 卡在 FFI 里（无超时），也不会把另一条入口一起拖死.
+    /// v0.3.378：建隧道入口——过**闸门**（`tunnelGate`），并把「排队等待」记下来
+    /// （threadDictionary，供 runGated 把排队时长从执行时长里剥离）.
+    ///
+    /// 闸门保护的是**同 hostname 的 `tunnel_create_rppairing`**（项目铁律：
+    /// 同一 hostname 并发建隧道会互相冲突，见 AFCService.swift:15），
+    /// 因此 `tunnel_create_rppairing` 这一次 FFI 调用**必须**在锁内；
+    /// 但**只锁到「隧道建好」为止**——调用方随后的 instproxy 命令（`get_apps` /
+    /// `Lookup`，真正会长时间无响应的那部分）都在闸门之外执行，所以一次卡死的
+    /// Lookup 不会按住闸门把别的入口一起拖死，它只占住自己那条隧道.
     static func makeTunnel() throws -> TunnelHandles {
-        try tunnelQueue.sync {
-            try makeTunnelLocked()
+        let waitStarted = Date()
+        tunnelGate.lock()
+        defer { tunnelGate.unlock() }
+        let waited = Date().timeIntervalSince(waitStarted)
+        if waited > 0.2 {
+            recordQueueWait(waited)
+            LoginLogger.shared.log("[文件共享] 隧道排队等待 \(formatSeconds(waited))s 后开始")
         }
+        return try makeTunnelLocked()
     }
 
     private static func makeTunnelLocked() throws -> TunnelHandles {

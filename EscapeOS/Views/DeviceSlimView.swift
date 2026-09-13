@@ -31,6 +31,8 @@ struct DeviceSlimView: View {
     @State private var confirmReinstall = false
     @State private var resultText: String?
     @State private var errorText: String?
+    /// v0.3.378：非致命提示（例如「应用大小不可用」——数据仍可用，只是不精确）
+    @State private var sizeNote: String?
     @State private var fromCache = false
     @State private var reinstallProgress: DeviceSlimService.ReinstallProgress?
     /// 「较大应用」的源可用性是否正在检测（检测期间不允许勾选，避免误判）
@@ -101,7 +103,22 @@ struct DeviceSlimView: View {
             }
             if let errorText {
                 Section {
-                    Text(errorText).font(.footnote).foregroundStyle(.red)
+                    HStack(spacing: 8) {
+                        Text(errorText).font(.footnote).foregroundStyle(.red)
+                        Spacer(minLength: 0)
+                        // v0.3.378：给出可见的重试入口（与「重新扫描」等价，但就近）
+                        Button("重试") {
+                            DeviceSlimService.invalidateAppReadCache()
+                            Task { await runScan(force: true) }
+                        }
+                        .font(.subheadline)
+                    }
+                }
+            }
+            if let sizeNote {
+                Section {
+                    Label(sizeNote, systemImage: "exclamationmark.triangle")
+                        .font(.footnote).foregroundStyle(.orange)
                 }
             }
         }
@@ -439,10 +456,20 @@ struct DeviceSlimView: View {
             selection = Set(scanned.filter { $0.kind.selectable }.flatMap(\.items).map(\.id))
             self.fromCache = fromCache
             phase = .ready
-            // v0.3.377：应用列表读超时（已由硬超时收口，不会再有无限「正在读取…」）
-            // → 给一条极简提示，不让用户以为应用数据真的为 0.
-            if DeviceSlimService.consumeAppListTimeout() {
+            // v0.3.378：应用数据读取结果说明（读完后取走，避免跨轮残留）.
+            //   ① 「应用读取超时」= 快路径也没拿到 → 错误态 + 「重试」；
+            //   ② 「应用大小不可用」= 列表有数据、只是没有精确大小 →
+            //      橙色提示（不是错误），「应用」分片偏小 / 「较大应用」判不出.
+            switch DeviceSlimService.consumeAppReadIssue() {
+            case "应用读取超时":
                 errorText = "应用读取超时"
+                sizeNote = nil
+            case let note?:
+                errorText = nil
+                sizeNote = note
+            default:
+                errorText = nil
+                sizeNote = nil
             }
             await probeAvailability()
         } catch {

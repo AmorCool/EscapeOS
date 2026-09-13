@@ -267,44 +267,106 @@ enum DeviceSlimService {
         return snap
     }
 
-    // MARK: - 应用列表读取（带硬超时）
+    // MARK: - 应用列表读取（快路径 + 可选大小增强）
 
-    /// v0.3.377：设备瘦身页读取已装应用（空间占用的「应用」分片 / 「较大应用」分组）.
+    /// 一次应用读取的结果.
+    struct AppReadResult {
+        var apps: [FileSharingApp] = []
+        /// 快路径（`get_apps`）是否拿到数据 —— false = 真拿不到，页面应显示错误态 + 重试
+        var usable = false
+        /// 大小/账号（带属性 Lookup 增强）是否取到 ——
+        /// false = 没有精确大小，只能按可得信息出数据（「应用」分片会偏小、
+        /// 「较大应用」判不出「> 500MB」）
+        var sizeComplete = false
+    }
+
+    /// v0.3.378：设备瘦身页读取已装应用（空间占用的「应用」分片 / 「较大应用」分组）.
     ///
-    /// 必须用带硬超时的入口：原实现直接调无超时的 `listAppsWithFileSharing()`，
-    /// 而这条 FFI 链路（Rust `run_sync_local` / `read_raw` / `TcpStream::connect`
-    /// 全程无超时）一旦卡住就永不返回 → `loadUsage` / `bigApps` 永不返回 →
-    /// 页面永远停在「正在读取空间占用…」/「正在扫描设备…」.
-    /// 超时按「本轮没有应用数据」收口（分片按 0 计、分组为空），并记日志 +
-    /// 置一次性标志供页面给一条极简提示.
-    private static func readAppsForSlim(_ label: String) -> [FileSharingApp] {
+    /// 改成「快路径 + 可选增强」（真机 16:30 日志的教训：原先直接等带属性 Lookup →
+    /// 每轮都「应用列表读取超时，本轮按空处理」→「应用」分片恒 0、「较大应用」恒空，
+    /// 用户看到的是「功能坏了」）：
+    ///   1. **快路径 `get_apps`**（真机 333 应用 2.5 秒级）→ 保证一定有应用列表；
+    ///   2. **可选增强**（带属性 Lookup，独立 8 秒）→ 补 appSize/docSize，
+    ///      「应用」分片与「较大应用」才有意义；失败就退化为「没有精确大小」；
+    ///   3. **结果缓存 30 秒**：`loadUsage` 与 `bigApps` 在同一轮页面加载里共用一份，
+    ///      不再重复开隧道；
+    ///   4. 只有**快路径也失败**时才回空数组，并置问题文案 → 页面显示
+    ///      「应用读取超时」+ 重试，**不显示成静默空列表**.
+    /// 注意：`get_apps` **不带** `StaticDiskUsage` / `DynamicDiskUsage`（大小字段
+    /// 只有带 ReturnAttributes 的 Lookup 才返回），所以「应用」分片与「较大应用」
+    /// 的精确度**完全依赖第 2 步能否成功**；取不到时页面会明确提示「应用大小不可用」.
+    private static func readAppsForSlim() -> AppReadResult {
+        appReadLock.lock()
+        if let cache = appReadCache, Date().timeIntervalSince(cache.at) < 30 {
+            let cached = cache.result
+            appReadLock.unlock()
+            return cached
+        }
+        appReadLock.unlock()
+
+        var result = AppReadResult()
+        // ① 快路径：get_apps
         switch FileSharingService.listAppsWithFileSharing(timeout: 20) {
         case .ok(let found):
-            return found
+            result.apps = found
+            result.usable = !found.isEmpty
+            LoginLogger.shared.log("[设备瘦身] get_apps 快路径：\(found.count) 条")
         case .failed(let message):
-            LoginLogger.shared.log("[设备瘦身] 应用列表读取失败（\(label)）：\(message)；本轮按空处理")
-            return []
+            LoginLogger.shared.log("[设备瘦身] get_apps 快路径失败：\(message)")
         case .timedOut:
-            LoginLogger.shared.log("[设备瘦身] 应用列表读取超时（\(label)，20s）；本轮按空处理")
-            markAppListTimeout()
-            return []
+            LoginLogger.shared.log("[设备瘦身] get_apps 快路径超时（排队与执行分开计）")
         }
+        // ② 可选增强：带属性 Lookup（独立 8 秒，失败就不补）
+        let enhanced = FileSharingService.lookupAppAttributes(timeout: 8)
+        if enhanced.isEmpty {
+            LoginLogger.shared.log("[设备瘦身] 大小增强未取到：本轮没有精确大小（「应用」分片偏小、「较大应用」判不出）")
+        } else {
+            let byId = Dictionary(enhanced.map { ($0.bundleId, $0) }, uniquingKeysWith: { first, _ in first })
+            var patched = 0
+            for index in result.apps.indices {
+                guard let e = byId[result.apps[index].bundleId] else { continue }
+                if result.apps[index].appSize == nil { result.apps[index].appSize = e.appSize }
+                if result.apps[index].docSize == nil { result.apps[index].docSize = e.docSize }
+                if result.apps[index].appleId == nil { result.apps[index].appleId = e.appleId }
+                patched += 1
+            }
+            result.sizeComplete = patched > 0
+            LoginLogger.shared.log("[设备瘦身] 大小增强成功：回填 \(patched) 条")
+        }
+
+        appReadLock.lock()
+        if !result.usable {
+            appReadIssueFlag = "应用读取超时"
+        } else if !result.sizeComplete {
+            appReadIssueFlag = "应用大小不可用"
+        } else {
+            appReadIssueFlag = nil
+        }
+        appReadCache = (result, Date())
+        let issue = appReadIssueFlag
+        appReadLock.unlock()
+        if let issue { LoginLogger.shared.log("[设备瘦身] 本轮问题：\(issue)（已在页面提示 + 提供重试）") }
+        return result
     }
 
-    /// 本轮是否出现过「应用列表读取超时」——页面取走后清零，避免跨轮残留.
-    private static let appListTimeoutLock = NSLock()
-    private static var appListTimeoutFlag = false
+    private static let appReadLock = NSLock()
+    private static var appReadCache: (result: AppReadResult, at: Date)?
+    /// 本轮需要向用户说明的问题（nil = 一切正常）——页面取走后清零，避免跨轮残留.
+    private static var appReadIssueFlag: String?
 
-    private static func markAppListTimeout() {
-        appListTimeoutLock.lock(); appListTimeoutFlag = true; appListTimeoutLock.unlock()
-    }
-
-    /// 取走并清零本轮的超时标志（页面在数据落地后调用一次）.
-    static func consumeAppListTimeout() -> Bool {
-        appListTimeoutLock.lock(); defer { appListTimeoutLock.unlock() }
-        let value = appListTimeoutFlag
-        appListTimeoutFlag = false
+    /// 取走并清零本轮的问题文案（页面在数据落地后调用一次）.
+    static func consumeAppReadIssue() -> String? {
+        appReadLock.lock(); defer { appReadLock.unlock() }
+        let value = appReadIssueFlag
+        appReadIssueFlag = nil
         return value
+    }
+
+    /// 用户点「重试」时先丢掉缓存，否则 30 秒内会直接拿到上一次的失败结果.
+    static func invalidateAppReadCache() {
+        appReadLock.lock(); defer { appReadLock.unlock() }
+        appReadCache = nil
+        appReadIssueFlag = nil
     }
 
     // MARK: - 空间占用
@@ -325,8 +387,10 @@ enum DeviceSlimService {
         usage.free = num("AmountRestoreAvailable") ?? num("AmountDataAvailable") ?? num("TotalDataAvailable") ?? 0
 
         var apps: Int64 = 0
-        // v0.3.377：带硬超时（超时/失败 → 本轮按空处理，页面仍能出数据，不会卡死）.
-        for app in readAppsForSlim("空间占用") where app.applicationType != "System" {
+        // v0.3.378：快路径（get_apps）保底出数据，不再「超时按空处理」；
+        // 精确大小依赖可选增强，取不到时该分片会偏小，页面以「应用大小不可用」明确说明.
+        let appRead = readAppsForSlim()
+        for app in appRead.apps where app.applicationType != "System" {
             apps += app.appSize ?? 0
         }
 
@@ -410,8 +474,10 @@ enum DeviceSlimService {
         }
 
         var out: [Item] = []
-        // v0.3.377：带硬超时（超时/失败 → 本分组为空，不留占位、不卡死在「正在扫描设备…」）.
-        for app in readAppsForSlim("较大应用") {
+        // v0.3.378：快路径（get_apps）保底出数据；没有精确大小时（增强未成功）
+        // 该分组判不出「> 500MB」，页面以「应用大小不可用」明确说明，而不是静默变空.
+        let appRead = readAppsForSlim()
+        for app in appRead.apps {
             guard app.applicationType != "System" else { continue }
             let appSize = app.appSize ?? 0
             let docSize = app.docSize ?? 0

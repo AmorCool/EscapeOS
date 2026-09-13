@@ -34,8 +34,15 @@ struct FileSharingAppsView: View {
                     }
                 } else if let err = errorText {
                     Section {
-                        Label(err, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
+                        HStack(spacing: 8) {
+                            Label(err, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                            Spacer(minLength: 0)
+                            // v0.3.378：超时/失败态下必须能一键重来
+                            //（用户实测反馈：只有「读取超时」没有重试入口 = 完全用不了）
+                            Button("重试") { Task { await load() } }
+                                .font(.subheadline)
+                        }
                     }
                 } else {
                     Section {
@@ -57,6 +64,8 @@ struct FileSharingAppsView: View {
                 }
             }
             .listStyle(.insetGrouped)   // v0.3.214：参考模块板块样式
+            // v0.3.378：超时/失败后下拉即可重试（与错误行上的「重试」按钮成对）
+            .refreshable { await load() }
             // v0.3.292：图标批量选择模式
             .environment(\.editMode, .constant(selectingIcons ? .active : .inactive))
         .navigationTitle("文档浏览")
@@ -416,9 +425,13 @@ struct FileSharingAppsView: View {
     /// `appTypes`（每批算完即刷 @State，不必等全部算完）。
     /// 全部跑完 → typesSettled = true，未判定者收敛到「未识别」，不会停在占位.
     ///
-    /// v0.3.376：加 30 秒看门狗——fetchAppTypeContext 同样跑在没有超时的 FFI 上
-    /// （两条 profile 隧道），卡住时 `typesSettled` 永不置位 → 所有三方应用永远
-    /// 停在「识别中」。看门狗到期即把占位收敛.
+    /// v0.3.378：顺序改成「先可选增强、再判定」，理由：
+    ///   - 主列表已改走 `get_apps` 快路径（不带大小/账号字段），而这五个胶囊的
+    ///     大小与账号只能来自带属性的 `Lookup`；
+    ///   - 增强独立 8 秒、失败就不补（大小胶囊保持「—」），**不影响首屏**
+    ///     （列表在 load() 返回时就已渲染）；
+    ///   - 先补元数据再判定，共享正版/苹果正版才判得准（isGenuine/appleId 是判据）.
+    /// 看门狗 40 秒（= 增强 8s + 上下文 + 分批的余量），到期把占位收敛，不停在「识别中」.
     private func loadTypes(for list: [FileSharingApp]) {
         guard !list.isEmpty else {
             typesSettled = true
@@ -426,20 +439,44 @@ struct FileSharingAppsView: View {
         }
         LoginLogger.shared.log("[文件共享] 类型补齐开始：\(list.count) 个应用")
         let watchdog = Task {
-            try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: 40 * 1_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard !self.typesSettled else { return }
-                LoginLogger.shared.log("[文件共享] 类型上下文超时（30s），占位收敛为「未识别」")
+                LoginLogger.shared.log("[文件共享] 类型上下文超时（40s），占位收敛为「未识别」")
                 self.typesSettled = true
             }
         }
         Task.detached(priority: .utility) {
+            // ① 可选增强：带属性 Lookup（独立 8s，失败就不补）
+            var workList = list
+            let enhanced = FileSharingService.lookupAppAttributes(timeout: 8)
+            if !enhanced.isEmpty {
+                let byId = Dictionary(
+                    enhanced.map { ($0.bundleId, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                var patched = 0
+                for index in workList.indices {
+                    guard let e = byId[workList[index].bundleId] else { continue }
+                    if workList[index].appSize == nil { workList[index].appSize = e.appSize }
+                    if workList[index].docSize == nil { workList[index].docSize = e.docSize }
+                    if workList[index].appleId == nil { workList[index].appleId = e.appleId }
+                    if workList[index].dsid == nil { workList[index].dsid = e.dsid }
+                    if workList[index].purchaseDate == nil { workList[index].purchaseDate = e.purchaseDate }
+                    if workList[index].signer == nil { workList[index].signer = e.signer }
+                    if e.isGenuine { workList[index].isGenuine = true }
+                    patched += 1
+                }
+                LoginLogger.shared.log("[文件共享] 文档浏览：增强回填 \(patched) 条（大小/账号/正版存在性）")
+                await MainActor.run { self.apps = workList }
+            }
+            // ② profile 上下文 + 分批判定（get_apps 字段 + profile）
             let context = FileSharingService.fetchAppTypeContext()
             let batchSize = 8
             var index = 0
-            while index < list.count {
-                let batch = Array(list[index..<min(index + batchSize, list.count)])
+            while index < workList.count {
+                let batch = Array(workList[index..<min(index + batchSize, workList.count)])
                 let resolved = FileSharingService.detectTypes(for: batch, context: context)
                 await MainActor.run {
                     var merged = self.appTypes
@@ -450,7 +487,7 @@ struct FileSharingAppsView: View {
             }
             watchdog.cancel()
             await MainActor.run { self.typesSettled = true }
-            LoginLogger.shared.log("[文件共享] 类型补齐完成：\(list.count) 个应用")
+            LoginLogger.shared.log("[文件共享] 类型补齐完成：\(workList.count) 个应用")
         }
     }
 
