@@ -439,6 +439,11 @@ struct DeviceSlimView: View {
             selection = Set(scanned.filter { $0.kind.selectable }.flatMap(\.items).map(\.id))
             self.fromCache = fromCache
             phase = .ready
+            // v0.3.377：应用列表读超时（已由硬超时收口，不会再有无限「正在读取…」）
+            // → 给一条极简提示，不让用户以为应用数据真的为 0.
+            if DeviceSlimService.consumeAppListTimeout() {
+                errorText = "应用读取超时"
+            }
             await probeAvailability()
         } catch {
             errorText = "读取失败：\(error.localizedDescription)"

@@ -267,6 +267,46 @@ enum DeviceSlimService {
         return snap
     }
 
+    // MARK: - 应用列表读取（带硬超时）
+
+    /// v0.3.377：设备瘦身页读取已装应用（空间占用的「应用」分片 / 「较大应用」分组）.
+    ///
+    /// 必须用带硬超时的入口：原实现直接调无超时的 `listAppsWithFileSharing()`，
+    /// 而这条 FFI 链路（Rust `run_sync_local` / `read_raw` / `TcpStream::connect`
+    /// 全程无超时）一旦卡住就永不返回 → `loadUsage` / `bigApps` 永不返回 →
+    /// 页面永远停在「正在读取空间占用…」/「正在扫描设备…」.
+    /// 超时按「本轮没有应用数据」收口（分片按 0 计、分组为空），并记日志 +
+    /// 置一次性标志供页面给一条极简提示.
+    private static func readAppsForSlim(_ label: String) -> [FileSharingApp] {
+        switch FileSharingService.listAppsWithFileSharing(timeout: 20) {
+        case .ok(let found):
+            return found
+        case .failed(let message):
+            LoginLogger.shared.log("[设备瘦身] 应用列表读取失败（\(label)）：\(message)；本轮按空处理")
+            return []
+        case .timedOut:
+            LoginLogger.shared.log("[设备瘦身] 应用列表读取超时（\(label)，20s）；本轮按空处理")
+            markAppListTimeout()
+            return []
+        }
+    }
+
+    /// 本轮是否出现过「应用列表读取超时」——页面取走后清零，避免跨轮残留.
+    private static let appListTimeoutLock = NSLock()
+    private static var appListTimeoutFlag = false
+
+    private static func markAppListTimeout() {
+        appListTimeoutLock.lock(); appListTimeoutFlag = true; appListTimeoutLock.unlock()
+    }
+
+    /// 取走并清零本轮的超时标志（页面在数据落地后调用一次）.
+    static func consumeAppListTimeout() -> Bool {
+        appListTimeoutLock.lock(); defer { appListTimeoutLock.unlock() }
+        let value = appListTimeoutFlag
+        appListTimeoutFlag = false
+        return value
+    }
+
     // MARK: - 空间占用
 
     static func loadUsage(snapshot: Snapshot? = nil,
@@ -285,8 +325,8 @@ enum DeviceSlimService {
         usage.free = num("AmountRestoreAvailable") ?? num("AmountDataAvailable") ?? num("TotalDataAvailable") ?? 0
 
         var apps: Int64 = 0
-        let appList = (try? FileSharingService.listAppsWithFileSharing()) ?? []
-        for app in appList where app.applicationType != "System" {
+        // v0.3.377：带硬超时（超时/失败 → 本轮按空处理，页面仍能出数据，不会卡死）.
+        for app in readAppsForSlim("空间占用") where app.applicationType != "System" {
             apps += app.appSize ?? 0
         }
 
@@ -370,7 +410,8 @@ enum DeviceSlimService {
         }
 
         var out: [Item] = []
-        for app in (try? FileSharingService.listAppsWithFileSharing()) ?? [] {
+        // v0.3.377：带硬超时（超时/失败 → 本分组为空，不留占位、不卡死在「正在扫描设备…」）.
+        for app in readAppsForSlim("较大应用") {
             guard app.applicationType != "System" else { continue }
             let appSize = app.appSize ?? 0
             let docSize = app.docSize ?? 0

@@ -49,7 +49,17 @@ enum ProfileConfigService {
 
     // MARK: - 隧道
 
+    /// v0.3.377：建隧道**串行化**——本 hostname 与 `ProvisioningProfileStore`
+    /// 是同一个字面量 `"EscapeSpaceProfiles"`，因此必须共用**同一条**队列
+    ///（`ProvisioningProfileStore.tunnelQueue`），各建一条等于没保护.
+    /// 只锁「建隧道」这一步（理由同 v0.3.376 FileSharingService.tunnelQueue）.
     private static func createTunnel() throws -> (adapter: OpaquePointer, handshake: OpaquePointer) {
+        try ProvisioningProfileStore.tunnelQueue.sync {
+            try createTunnelLocked()
+        }
+    }
+
+    private static func createTunnelLocked() throws -> (adapter: OpaquePointer, handshake: OpaquePointer) {
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
         guard FileManager.default.fileExists(atPath: pairingPath) else {

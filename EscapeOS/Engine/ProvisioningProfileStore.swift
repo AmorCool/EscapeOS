@@ -71,7 +71,27 @@ enum ProvisioningProfileStore {
 
     // MARK: - 隧道（与 JITEnableService 同机制）
 
+    /// v0.3.377：本 hostname（"EscapeSpaceProfiles"）的**共享串行队列**.
+    ///
+    /// RSD 隧道并发铁律（AFCService.swift:15）：**同一 hostname 并发
+    /// `tunnel_create_rppairing` 会互相抢占**. 这个 hostname 有**两个入口**——
+    /// 本文件 `createTunnel()`（hostname 见下）与 `ProfileConfigService.swift:87`
+    /// （同一字面量 `"EscapeSpaceProfiles"`），此前各自直接建隧道、无任何串行保护，
+    /// 与 v0.3.376 修的 FileSharingService 是同一类 bug.
+    ///
+    /// 队列挂在本类型上（`ProfileConfigService` 本来就用本类型做 add/remove），
+    /// 保证两个模块拿到的是**同一条队列**——各建一条等于没保护.
+    /// 只锁「建隧道」这一步，不锁调用方后续的隧道生命周期：一次卡死不会把
+    /// 另一个入口一起拖死（理由同 v0.3.376 FileSharingService.tunnelQueue）.
+    static let tunnelQueue = DispatchQueue(label: "com.escapeos.profiles.tunnel")
+
     private static func createTunnel() throws -> (adapter: OpaquePointer, handshake: OpaquePointer) {
+        try tunnelQueue.sync {
+            try createTunnelLocked()
+        }
+    }
+
+    private static func createTunnelLocked() throws -> (adapter: OpaquePointer, handshake: OpaquePointer) {
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
         guard FileManager.default.fileExists(atPath: pairingPath) else {
@@ -113,7 +133,11 @@ enum ProvisioningProfileStore {
             }
         }
         if let ffiError {
-            throw error(from: ffiError, fallback: "创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
+            // v0.3.377：这条路径此前失败也不留痕. 注意 error(from:) 会消费并释放
+            // ffiError，所以必须先建成 NSError 复用，不能调两次（会 double free）.
+            let failure = error(from: ffiError, fallback: "创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
+            LoginLogger.shared.log("[描述文件] 建隧道失败（hostname=EscapeSpaceProfiles）：\(failure.localizedDescription)")
+            throw failure
         }
         guard let adapter, let handshake else {
             throw makeError("创建开发者隧道失败")
