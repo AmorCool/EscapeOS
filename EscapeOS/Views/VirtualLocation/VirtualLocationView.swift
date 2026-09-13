@@ -35,6 +35,8 @@ struct VirtualLocationView: View {
         }
         .sheet(isPresented: $showBluetooth) {
             BluetoothPanelView()
+                // 与「轨迹」面板一致的呈现方式（中等高度可上拉）.
+                .presentationDetents([.medium, .large])
         }
         .alert("虚拟定位", isPresented: Binding(
             get: { session.lastError != nil },
@@ -259,7 +261,7 @@ struct BottomControlsView: View {
                 Spacer(minLength: 0)
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 trayIcon("gearshape.fill") { showSettings = true }
                 trayIcon("star.fill") { showPlaces = true }
                 trayIcon("antenna.radiowaves.left.and.right") { showBluetooth = true }
@@ -273,19 +275,23 @@ struct BottomControlsView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "dot.circle.and.hand.point.up.left.fill")
+                        // 空间不足时缩字而不是出省略号（开启态文案更长，曾被挤成「摇杆 …」）.
                         Text(session.joystickActive ? "摇杆开启" : "摇杆")
                             .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(session.joystickActive ? .black : .primary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(
-                        Capsule().fill(session.joystickActive ? LocusTheme.accentSecondary : Color.primary.opacity(0.08))
+                        Capsule().fill(session.joystickActive ? LocusTheme.accent : Color.primary.opacity(0.08))
                     )
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                // 摇杆先拿到它需要的宽度，后面的动作按钮宽度固定，整行不再左右位移.
+                .layoutPriority(1)
 
                 if session.isSpoofing {
                     if session.canResumeRoute {
@@ -307,7 +313,9 @@ struct BottomControlsView: View {
                         Text(session.isMoving ? "暂停" : "停止定位")
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(.white)
-                            .frame(minWidth: 72)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(width: 72)
                             .padding(.vertical, 12)
                             .padding(.horizontal, 8)
                             .background(Capsule().fill(LocusTheme.danger))
@@ -325,9 +333,12 @@ struct BottomControlsView: View {
                         Text("开始定位")
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(.black)
-                            .frame(minWidth: 96)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            // 与「停止定位」同宽，切换状态时整行不位移.
+                            .frame(width: 72)
                             .padding(.vertical, 12)
-                            .padding(.horizontal, 10)
+                            .padding(.horizontal, 8)
                             .background(Capsule().fill(LocusTheme.accent))
                             .contentShape(Capsule())
                     }

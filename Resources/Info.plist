@@ -119,9 +119,7 @@
 		<string>_remotepairing-pairable-host._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>EscapeSpace 需要通过本地网络广播 iOS 27 无线配对服务（_remotepairing-pairable-host._tcp），以便另一台设备发现并完成配对。</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>SSH 无线调试功能需要本地网络权限，用于同一 Wi-Fi 下电脑连接手机执行诊断命令。仅局域网可达，可随时关闭。</string>
+	<string>本地网络权限用于无线配对广播（_remotepairing-pairable-host._tcp）与同一 Wi-Fi 下的 SSH 无线调试。仅局域网可达，可随时关闭。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
