@@ -188,6 +188,11 @@ def main() -> None:
     # v0.3.361：空包必须先用候选 externalVersionId 重打 volumeStore（真机实测唯一决定性变量）。
     require("versionCandidates" in fetch and "versionCandidates.prefix(6)" in fetch,
             "an empty package retries volumeStore with candidate external version IDs")
+    # v0.3.365：候选只吃一轮（否则同一批候选被重打、连发撞 429）；429 必须被明确识别为限流。
+    require("pendingCandidates" in install and "versionCandidates = []" in install,
+            "version candidates are consumed in a single attempt")
+    require("code == 429" in fetch and "rateLimited" in fetch,
+            "HTTP 429 from the download service is reported as rate limiting, not as an empty package")
     require("candidateVersionIDs" in install and "versionHistoryFromCatalog" in install,
             "the candidate version IDs come from the free version catalog")
     require("cachedVersionID" in install and "rememberVersionID" in install,

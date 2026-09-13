@@ -78,9 +78,14 @@ enum AppStoreLocalInstallService {
             try Task.checkCancellation()
             do {
                 onLog?("[AppleID] 请求下载信息…")
+                // v0.3.365（请求放大审计）：候选**只吃一轮** —— 原来 versionCandidates 常驻，
+                // attempt 每轮都会重新进候选循环，同一批 6 个候选被重打 2 次（一次动作纯重复 12 次请求），
+                // 而连发会撞 429、正好把本轮的修复打坏。这里在调用前就清空（成败都不再重复）。
+                let pendingCandidates = versionCandidates
+                versionCandidates = []
                 let output = try await Download.download(account: &account, app: software,
                                                          externalVersionID: externalVersionID,
-                                                         versionCandidates: versionCandidates)
+                                                         versionCandidates: pendingCandidates)
                 if let newest = newestCatalogVersion, output.bundleShortVersionString != newest {
                     onLog?("[AppleID] Apple 拒绝了最新版，已改用该账号可下的版本 \(output.bundleShortVersionString)")
                     // 记住这一版，下次直接先试它（否则窗口滑走后又变回空包）

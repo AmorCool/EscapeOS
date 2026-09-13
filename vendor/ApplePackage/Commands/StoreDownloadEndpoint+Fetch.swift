@@ -231,6 +231,16 @@ extension StoreDownloadEndpoint {
             let bodyData = finalResponse.body?.data ?? Data()
             let snippet = String(data: bodyData.prefix(512), encoding: .utf8) ?? "(非 UTF-8)"
             storeLog("store fetch failed: HTTP \(code) ct=\(ct) body=\(snippet.prefix(200))")
+            if code == 429 {
+                // v0.3.365：**明确识别限流**。不能归一成 `emptyPackage` —— 那会让上层以为「没有包」
+                // 而转进购买/刷新流程，继续放大请求（verhist 审计：一次动作最坏 38 次，叠加后会自持）；
+                // 也不能让它以裸状态码抛出去（原来会变成「invalid response status 429」这种看不懂的硬失败）。
+                // 直接抛可识别的限流错误：上层不重试、不降级，把准确原因交给用户。
+                let retryAfter = StoreAuthenticationProtocol.retryAfter(
+                    finalResponse.headers.first(name: "Retry-After"))
+                storeLog("Apple 下载服务限流（HTTP 429），不再重试")
+                throw StoreAuthenticationError.rateLimited(retryAfter: retryAfter)
+            }
             if code == 401 || code == 403 {
                 // 会话票据被拒 → 交给上层重登一次再试（对齐 ipatool/Asspp 的 401/403 语义）。
                 throw ApplePackageError.passwordTokenExpired
