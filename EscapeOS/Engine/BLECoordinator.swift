@@ -27,17 +27,30 @@ final class BLECoordinator: NSObject, ObservableObject {
     private let queue = DispatchQueue(label: "com.escapeos.ble")
     private var role: BluetoothLinkRole = .broadcaster
 
+    /// A 机看门狗：超过这个时长既没成功推送、也没收到 B 的回报就判定对端消失.
+    private static let silentTimeout: TimeInterval = 25
+    private static let watchdogTick: TimeInterval = 5
+    /// A 机在连接期间周期性补发当前坐标，兼作链路活性探测.
+    private static let resendInterval: TimeInterval = 8
+    /// B 机重扫的最小间隔（失败退避）.
+    private static let minScanRestartInterval: TimeInterval = 2
+
     private var peripheralManager: CBPeripheralManager?
     private var coordinateCharacteristic: CBMutableCharacteristic?
     private var statusCharacteristic: CBMutableCharacteristic?
     private var subscribedCentrals: [CBCentral] = []
     private var pendingPayload: Data?
+    private var lastPeerActivity: Date?
+    private var lastPushAt: Date?
+    private var watchdog: DispatchSourceTimer?
 
     private var centralManager: CBCentralManager?
     private var target: CBPeripheral?
     private var coordinateNotifyCharacteristic: CBCharacteristic?
     private var statusWriteCharacteristic: CBCharacteristic?
-    private var isReconnecting = false
+    /// B 机去重：与上次应用的坐标完全相同则丢弃.
+    private var lastApplied: CLLocationCoordinate2D?
+    private var lastScanStart = Date.distantPast
 
     private override init() {
         super.init()
@@ -50,10 +63,11 @@ final class BLECoordinator: NSObject, ObservableObject {
             guard let self else { return }
             self.teardownLocked()
             self.role = role
-            self.isReconnecting = false
+            self.lastApplied = nil
             switch role {
             case .broadcaster:
                 self.peripheralManager = CBPeripheralManager(delegate: self, queue: self.queue, options: nil)
+                self.startWatchdogLocked()
             case .receiver:
                 self.centralManager = CBCentralManager(delegate: self, queue: self.queue, options: nil)
             }
@@ -102,6 +116,14 @@ final class BLECoordinator: NSObject, ObservableObject {
     // MARK: - 队列内实现
 
     private func teardownLocked() {
+        watchdog?.setEventHandler {}
+        watchdog?.cancel()
+        watchdog = nil
+        lastPeerActivity = nil
+        lastPushAt = nil
+        lastApplied = nil
+        lastScanStart = .distantPast
+
         peripheralManager?.stopAdvertising()
         peripheralManager?.removeAllServices()
         peripheralManager?.delegate = nil
@@ -120,6 +142,53 @@ final class BLECoordinator: NSObject, ObservableObject {
         statusWriteCharacteristic = nil
     }
 
+    /// A 机看门狗：集中处理「对端消失 → 重新广播」「无连接却未广播 → 补广播」「连接期补发坐标」.
+    private func startWatchdogLocked() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(
+            deadline: .now() + Self.watchdogTick,
+            repeating: Self.watchdogTick,
+            leeway: .milliseconds(500)
+        )
+        timer.setEventHandler { [weak self] in self?.watchdogTickLocked() }
+        watchdog = timer
+        timer.resume()
+    }
+
+    private func watchdogTickLocked() {
+        guard role == .broadcaster else { return }
+        let now = Date()
+
+        if !subscribedCentrals.isEmpty {
+            // 没有待发坐标时不判定失联：无流量可等，避免误把「空闲但对端正常」当成对端消失.
+            guard pendingPayload != nil else { return }
+            if let last = lastPeerActivity, now.timeIntervalSince(last) > Self.silentTimeout {
+                subscribedCentrals.removeAll()
+                lastPeerActivity = nil
+                lastPushAt = nil
+                publish {
+                    self.peerName = nil
+                    self.state = .advertising
+                }
+                append("对端失联，已重新开始广播")
+                if let peripheral = peripheralManager { startAdvertisingLocked(peripheral) }
+                return
+            }
+            if let payload = pendingPayload,
+               let lastPush = lastPushAt,
+               now.timeIntervalSince(lastPush) >= Self.resendInterval {
+                push(payload)
+            }
+            return
+        }
+
+        // 兜底：没有活跃连接就不该停着广播（不依赖 didUnsubscribeFrom 单个回调）.
+        guard let peripheral = peripheralManager,
+              coordinateCharacteristic != nil,
+              !peripheral.isAdvertising else { return }
+        startAdvertisingLocked(peripheral)
+    }
+
     private func sendLocked(latitude: Double, longitude: Double) {
         guard role == .broadcaster,
               CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: latitude, longitude: longitude)) else { return }
@@ -133,12 +202,18 @@ final class BLECoordinator: NSObject, ObservableObject {
         }
     }
 
-    private func push(_ payload: Data) {
+    @discardableResult
+    private func push(_ payload: Data) -> Bool {
         guard let peripheral = peripheralManager,
               let characteristic = coordinateCharacteristic,
-              !subscribedCentrals.isEmpty else { return }
+              !subscribedCentrals.isEmpty else { return false }
         // 队列已满时 updateValue 返回 false，等 peripheralManagerIsReady 回调再补发.
-        _ = peripheral.updateValue(payload, for: characteristic, onSubscribedCentrals: subscribedCentrals)
+        let accepted = peripheral.updateValue(payload, for: characteristic, onSubscribedCentrals: subscribedCentrals)
+        if accepted {
+            lastPushAt = Date()
+            lastPeerActivity = Date()
+        }
+        return accepted
     }
 
     private func reportLocked(_ report: BluetoothStatusReport) {
@@ -158,20 +233,22 @@ final class BLECoordinator: NSObject, ObservableObject {
     }
 
     private func startScanLocked(_ central: CBCentralManager) {
-        guard central.state == .poweredOn, !central.isScanning else { return }
+        guard central.state == .poweredOn else { return }
+        let now = Date()
+        let elapsed = now.timeIntervalSince(lastScanStart)
+        // 重扫最小间隔：连接反复失败时退避，避免高速重试空转.
+        guard elapsed >= Self.minScanRestartInterval else {
+            queue.asyncAfter(deadline: .now() + (Self.minScanRestartInterval - elapsed)) { [weak self] in
+                guard let self, let central = self.centralManager, self.role == .receiver else { return }
+                self.startScanLocked(central)
+            }
+            return
+        }
+        lastScanStart = now
+        // 无条件重扫：isScanning 在 stopScan 后异步翻转，按它判断会让重连路径卡死.
+        central.stopScan()
         central.scanForPeripherals(withServices: [BluetoothLink.serviceUUID], options: nil)
         publish { self.state = .scanning }
-    }
-
-    private func scheduleRescanLocked() {
-        guard !isReconnecting else { return }
-        isReconnecting = true
-        queue.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self else { return }
-            self.isReconnecting = false
-            guard let central = self.centralManager, self.role == .receiver else { return }
-            self.startScanLocked(central)
-        }
     }
 
     // MARK: - 主线程发布
@@ -264,6 +341,8 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
         if !subscribedCentrals.contains(where: { $0.identifier == central.identifier }) {
             subscribedCentrals.append(central)
         }
+        lastPeerActivity = Date()
+        lastPushAt = Date()
         // 已建立连接：停止广播，之后只靠 notify 推送（降低掉线面）.
         peripheral.stopAdvertising()
         publish {
@@ -282,6 +361,8 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
         guard characteristic.uuid == BluetoothLink.coordinateCharacteristicUUID else { return }
         subscribedCentrals.removeAll { $0.identifier == central.identifier }
         guard subscribedCentrals.isEmpty else { return }
+        lastPeerActivity = nil
+        lastPushAt = nil
         publish { self.peerName = nil }
         updateState(.advertising)
         startAdvertisingLocked(peripheral)
@@ -293,6 +374,7 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
             if request.characteristic.uuid == BluetoothLink.statusCharacteristicUUID,
                let value = request.value,
                let report = BluetoothStatusReport(data: value) {
+                lastPeerActivity = Date()
                 publish { self.lastReport = report }
                 onReport?(report)
                 append("收到回报：\(report.label)")
@@ -342,15 +424,26 @@ extension BLECoordinator: CBCentralManagerDelegate {
 
     func centralManager(
         _ central: CBCentralManager,
+        didFailToConnect peripheral: CBPeripheral,
+        error: Error?
+    ) {
+        target = nil
+        append("连接失败，重新扫描")
+        startScanLocked(central)
+    }
+
+    func centralManager(
+        _ central: CBCentralManager,
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
         coordinateNotifyCharacteristic = nil
         statusWriteCharacteristic = nil
         target = nil
-        updateState(.connecting)
+        // 断线后重新接到同一坐标也要重新应用（旧会话已失效），故清空去重记录.
+        lastApplied = nil
         append("连接断开，重新扫描")
-        scheduleRescanLocked()
+        startScanLocked(central)
     }
 }
 
@@ -402,7 +495,14 @@ extension BLECoordinator: CBPeripheralDelegate {
         guard characteristic.uuid == BluetoothLink.coordinateCharacteristicUUID,
               let data = characteristic.value,
               let coordinate = BluetoothLocationPayload.coordinate(from: data) else { return }
+        if let last = lastApplied,
+           last.latitude == coordinate.latitude,
+           last.longitude == coordinate.longitude {
+            return
+        }
+        lastApplied = coordinate
         updateState(.synced)
+        append("收到新坐标，已应用")
         onCoordinate?(coordinate)
     }
 }
