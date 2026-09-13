@@ -11,6 +11,7 @@ struct VirtualLocationView: View {
     @ObservedObject private var session = SpoofSession.shared
     @State private var showSettings = false
     @State private var showPlaces = false
+    @State private var showBluetooth = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -18,7 +19,8 @@ struct VirtualLocationView: View {
 
             BottomControlsView(
                 showSettings: $showSettings,
-                showPlaces: $showPlaces
+                showPlaces: $showPlaces,
+                showBluetooth: $showBluetooth
             )
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -30,6 +32,9 @@ struct VirtualLocationView: View {
         }
         .sheet(isPresented: $showPlaces) {
             PlacesView()
+        }
+        .sheet(isPresented: $showBluetooth) {
+            BluetoothPanelView()
         }
         .alert("虚拟定位", isPresented: Binding(
             get: { session.lastError != nil },
@@ -188,6 +193,7 @@ struct BottomControlsView: View {
     @ObservedObject private var session = SpoofSession.shared
     @Binding var showSettings: Bool
     @Binding var showPlaces: Bool
+    @Binding var showBluetooth: Bool
 
     private let trayShape = RoundedRectangle(cornerRadius: 28, style: .continuous)
 
@@ -256,6 +262,7 @@ struct BottomControlsView: View {
             HStack(spacing: 10) {
                 trayIcon("gearshape.fill") { showSettings = true }
                 trayIcon("star.fill") { showPlaces = true }
+                trayIcon("antenna.radiowaves.left.and.right") { showBluetooth = true }
 
                 Button {
                     if session.joystickActive {
