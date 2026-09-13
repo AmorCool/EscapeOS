@@ -444,7 +444,12 @@ struct I4StoreFreeView: View {
                     niuwaSearchResults = try await NiuwaStoreClient.search(keyword: kw, region: reg)
                 } catch {
                     niuwaSearchResults = []
-                    ToastCenter.shared.show("搜索失败：\(error.localizedDescription)")
+                    // ★ v0.3.387：失败原因必须**留在界面上**。
+                    // 只弹一个一闪而过的 toast 的话，用户看到的就是「列表全空、什么也不知道」，
+                    // 这一轮就是这么丢掉真机证据的（用户只反馈「界面都是空的」）。
+                    // `StoreError.server` 的 description 已带 `nwcore_code` 与 `nwcore_messages`。
+                    errorText = "牛蛙源搜索失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show("搜索失败")
                 }
             }
             searching = false
