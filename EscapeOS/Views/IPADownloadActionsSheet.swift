@@ -53,8 +53,7 @@ struct IPADownloadActionsSheet: View {
     }
 
     /// 台账里真实存在的来源直链 = 「**提取下载链接**」的取值（IPA 包原链接，下载时回填）。
-    /// ⚠️ 它同时被「操作」区的「复制下载链接」行当**显示门控**用（历史遗留）—— 那行的内容
-    /// 已改成包内 `iTunesMetadata` 的商店链接，门控与内容不再同源（见 `actionRows`）。
+    /// **只给「提取下载链接」用**：「复制下载链接」的取值完全另算（包内 `iTunesMetadata.itemId`）。
     private var sourceLink: String? {
         guard let raw = item.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty, let url = URL(string: raw), url.scheme != nil else { return nil }
@@ -169,8 +168,10 @@ struct IPADownloadActionsSheet: View {
         ]
     }
 
-    /// 「在线安装」行。置灰规则：本机服务器当前被「提取下载链接」占用（`Purpose.share`）
-    /// 时不可点 —— 单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那个分享会话。
+    /// 「在线安装」行。置灰规则：本机服务器当前被 `.share` 会话占用时不可点
+    /// （单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那份会话）。
+    /// ⚠️ v0.3.386 起「提取下载链接」已改为纯读台账、不再起本机服务 →
+    /// `blockedByShare` **恒为 `false`**（判断有意保留，见 `IPALocalHTTPServer` 类型注释）。
     private var onlineInstallRow: RowSpec {
         if !OnlineInstallService.isImplemented {
             return RowSpec(icon: "icloud.and.arrow.down", tint: .green, title: "在线安装",

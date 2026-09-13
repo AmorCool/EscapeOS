@@ -391,7 +391,8 @@ struct IPADownloadManagerView: View {
     }
 
     /// v0.3.378：把下载中心任务里记着的**来源直链**回填进台账并落盘。
-    /// 「复制下载链接」只认台账里真实存在的直链，不拿本地路径冒充。
+    /// **v0.3.386 起**该直链是操作面板「**提取下载链接**」的取值（IPA 包原链接）；
+    /// 「复制下载链接」另取包内 `iTunesMetadata.itemId`，与本台账无关。
     private func syncSourceURLs() {
         for job in center.jobs {
             guard let name = job.localFileName,

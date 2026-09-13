@@ -18,8 +18,12 @@ struct IPADownloadItem: Codable, Identifiable, Hashable {
     var downloadedAt: Date
     var iconURL: String?
     var source: String            // 「爱思免登录」/「App Store」…
-    /// v0.3.378：下载时的**来源直链**。只有走直链下载的条目才有（Apple ID 通道没有公开直链）；
-    /// 操作面板的「复制下载链接」只认它，没有就隐藏该行 —— 不拿本地路径冒充下载链接。
+    /// v0.3.378：下载时的**来源直链**（这个包当初是从哪个 URL 下下来的，例如爱思的
+    /// `https://d-app6.i4.cn/soft/....ipa`）。只有走直链下载的条目才有 —— Apple ID 通道没有公开直链。
+    ///
+    /// **v0.3.386 起语义归位**：它是操作面板「**提取下载链接**」的取值（纯读台账）。
+    /// 面板上的「**复制下载链接**」另取一处 —— 读包内 `iTunesMetadata.plist` 的 `itemId`
+    /// 拼 App Store 商店链接。**两者严格互斥、不互相回落**，别再把它们混成一个来源。
     var sourceURL: String? = nil
     var packageName: String?      // 包内 Info.plist 的显示名
     var isEncrypted: Bool?
@@ -159,7 +163,7 @@ final class IPADownloadLibrary {
         saveIndex(index)
     }
 
-    /// v0.3.378：把**来源直链**回填进台账（供操作面板「复制下载链接」用）。
+    /// v0.3.378：把**来源直链**回填进台账（供操作面板「提取下载链接」用）。
     ///
     /// 补齐方式与 `updateIconURL` 同源：下载中心的任务里记着 `remoteURL`，
     /// 界面侧把「已完成且有直链」的任务回填到这里并落盘，于是历史记录里也有链接可复制。
