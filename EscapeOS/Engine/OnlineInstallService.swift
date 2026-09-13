@@ -37,7 +37,7 @@ enum OnlineInstallService {
         case packageBlocked(String)
         /// 包内 Info.plist 缺 bundle id
         case metadataMissing
-        /        // 本机服务器起不来
+        /// 本机服务器起不来
         case serverFailed
         /// 无法调起系统安装
         case openFailed
