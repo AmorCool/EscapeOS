@@ -45,9 +45,11 @@ struct AppStoreVersionHistoryView: View {
     @State private var loadingMore = false
     /// 账号通道回报后，还会在后台补一次「商品页真实日期」——这段也算读取中
     @State private var harvesting = false
-    /// v0.3.365：整次加载最多放行一次重登（对齐 `downloadInformation` 的 `refreshed`）。
-    /// 原来每个版本身份取元数据失败都会各自 rotate，一次「加载更多」最坏 20 次重登。
-    @State private var didRotateForVersions = false
+    /// v0.3.365：**整次加载唯一的一次重登额度**（对齐 `downloadInformation` 的 `refreshed`）。
+    /// 原来每个版本身份取元数据失败都会各自 rotate，一次「加载更多」最坏 20 次重登；
+    /// 现在额度在 `loadAccount` 里**优先发给身份通道**（它一次拿全量版本身份），
+    /// 后面的 metadata 批次一律不重登 —— 整次加载 rotate 上界 = 1。
+    @State private var didUseRotateQuota = false
     @State private var errorText: String?
     @State private var expanded: Set<String> = []
     /// 已知的「版本号 → 真实发布日期」。只来自商品页通道；
@@ -249,7 +251,7 @@ struct AppStoreVersionHistoryView: View {
         loadedIDs = []
         channel = .web
         accountEmail = nil
-        didRotateForVersions = false
+        didUseRotateQuota = false
 
         // 按用户选的查询方式先来一条，失败/为空则自动回退另一条，
         // 最后兜底商品页通道（免登录，覆盖不全）。
@@ -296,10 +298,16 @@ struct AppStoreVersionHistoryView: View {
         guard let bundleId, !bundleId.isEmpty,
               let email = AppStoreDownloadStore.shared.selectedEmail
         else { return false }
+        // v0.3.365：整次加载唯一的重登额度**先给身份通道** —— 无论它是否真的用到，
+        // 后面的 metadata 批次都不再重登，保证整次加载 rotate 上界 = 1
+        // （每帧 metadata 各 rotate 一次的老写法最坏 20 次完整 SAP 登录）。
+        let allowRotate = !didUseRotateQuota
+        didUseRotateQuota = true
         do {
             let ids = try await AppStoreService.storeVersionIdentifiers(bundleId: bundleId,
                                                                         appId: item.id,
-                                                                        email: email)
+                                                                        email: email,
+                                                                        allowRotate: allowRotate)
             // 协议返回旧 → 新；展示要新 → 旧
             identifiers = Array(ids.reversed())
             accountEmail = email
@@ -381,16 +389,16 @@ struct AppStoreVersionHistoryView: View {
                 let meta = try await AppStoreService.storeVersionMetadata(item: item,
                                                                          versionID: id,
                                                                          email: email,
-                                                                         allowRotate: !didRotateForVersions)
+                                                                         allowRotate: !didUseRotateQuota)
                 versions.append(AppStoreVersion(version: meta.version,
                                                 externalVersionID: id,
                                                 dateValue: dateByVersion[meta.version]))
                 loadedIDs.insert(id)
                 fetched += 1
             } catch ApplePackageError.passwordTokenExpired {
-                // 这一次已经把整次加载的重登额度用掉（rotate 后仍失效）→ 关闸并停下，
+                // 整次加载的重登额度已被身份通道花掉（或刚花掉仍失效）→ 关闸并停下，
                 // 剩下几十条不再各自重登。文案只描述接口行为，不牵扯账号/用户。
-                didRotateForVersions = true
+                didUseRotateQuota = true
                 loadedIDs.insert(id)
                 authBroken = true
                 LoginLogger.shared.log("版本历史：重登后仍失效，停止翻页", category: .appStore)

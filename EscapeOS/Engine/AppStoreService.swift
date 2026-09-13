@@ -303,12 +303,18 @@ enum AppStoreService {
     /// v0.3.364：**不带 `externalVersionId` 时 Apple 对不少应用回静默空包**（HTTP 200 +
     /// 空 songList + 无错误码）—— 这不是「该账号没买过」（真机实测同一账号 `buyProduct`
     /// 回的是 5002 LicenseAlreadyExists），所以这里用版本目录的旧版 ID 当候选重打一次。
+    ///
+    /// v0.3.365：`allowRotate` 与 `storeVersionMetadata` 共用**整次加载唯一的一次重登额度**
+    /// （每次 rotate 都是一次完整 SAP 登录，一次页面加载重登两次等于把登录链路再推回风暴）。
+    /// 身份通道价值最高（一次拿全量版本身份），所以视图把这个额度**优先分配给它**，
+    /// 后面的 metadata 批次一律 `allowRotate: false`。
     static func storeVersionIdentifiers(bundleId: String, appId: String,
-                                       email: String) async throws -> [String] {
+                                       email: String,
+                                       allowRotate: Bool = true) async throws -> [String] {
         try await StoreAccountSession.withAccount(email: email) { account in
             do {
                 return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
-            } catch ApplePackageError.passwordTokenExpired {
+            } catch ApplePackageError.passwordTokenExpired where allowRotate {
                 account = try await AppleIDSignInService.rotate(email: email, failedAccount: account)
                 return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
             } catch ApplePackageError.emptyPackage {
