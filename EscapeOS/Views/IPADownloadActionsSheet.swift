@@ -10,6 +10,7 @@ import UIKit
 /// · 覆盖安装 → 下载中心 `installLocal`（→ `AppStoreInstallService.installLocalIPA`）
 /// · 打开     → `JITEnableService.launchApp(bundleID:)`
 /// · 分享     → `ShareSheet`（`UIActivityViewController` 包装）
+/// · 提取下载链接 → `IPALocalHTTPServer.shared.start(fileURL:)`（本机 HTTP 服务，取 `Serving.packageURL`）
 /// · 复制     → `UIPasteboard.general.string`
 /// · 提示     → `ToastCenter.shared.show`
 struct IPADownloadActionsSheet: View {
@@ -66,7 +67,7 @@ struct IPADownloadActionsSheet: View {
 
                 cardSection("操作", rows: actionRows)
 
-                cardSection("危险", rows: dangerRows)
+                cardSection("其它操作", rows: otherRows)
 
                 cancelButton
             }
@@ -181,9 +182,14 @@ struct IPADownloadActionsSheet: View {
         return rows
     }
 
-    /// 危险：删除（红色，二次确认）
-    private var dangerRows: [RowSpec] {
+    /// 其它操作：提取下载链接 + 删除（删除保持红色，二次确认）
+    private var otherRows: [RowSpec] {
         [
+            // 生成一个**本机下载链接**发出去（不依赖有没有来源直链）：
+            // 复用 IPALocalHTTPServer 只服务这一个文件的只读路由 `/package.ipa`
+            RowSpec(icon: "antenna.radiowaves.left.and.right", tint: .teal, title: "提取下载链接") {
+                extractDownloadLink()
+            },
             RowSpec(icon: "trash", tint: .red, title: "删除", titleTint: .red) {
                 showDeleteConfirm = true
             }
@@ -275,7 +281,7 @@ struct IPADownloadActionsSheet: View {
     /// 贴合内容高度：固定行高 × 行数 + 头图 + 三个分组标题 + 取消行 + 内边距
     private var sheetHeight: CGFloat {
         let actionCount = 1 + (sourceLink == nil ? 0 : 1) + 1   // 打开 / [复制下载链接] / 分享
-        let rows = 2 + actionCount + 1                          // 安装 2 行 + 危险 1 行
+        let rows = 2 + actionCount + 2                          // 安装 2 行 + 其它操作 2 行
         let sections: CGFloat = 3
         let rowsHeight = CGFloat(rows) * 58 + CGFloat(rows - 3) * 1  // 行高 + 各分组内的分隔线
         return 16 + 52 + 14
@@ -319,6 +325,30 @@ struct IPADownloadActionsSheet: View {
             return
         }
         shareTarget = ShareTarget(url: url)
+    }
+
+    /// 提取下载链接：把本地包用**本机 HTTP 服务**发出去，给这个包生成一个下载地址。
+    /// 地址由服务端给（`Serving.packageURL`）：优先 `http://<设备局域网IP>:<port>/package.ipa`，
+    /// 取不到局域网 IP 才回落 `127.0.0.1`（见 `IPALocalHTTPServer.start`）。**不依赖来源直链。**
+    private func extractDownloadLink() {
+        let url = URL(fileURLWithPath: IPADownloadLibrary.shared.path(for: item))
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            ToastCenter.shared.show("安装包已不存在")
+            return
+        }
+        do {
+            // 与「在线安装」共用同一个 shared 实例；start() 内部会先 stop() 掉上一份会话
+            let serving = try IPALocalHTTPServer.shared.start(fileURL: url)
+            UIPasteboard.general.string = serving.packageURL
+            LoginLogger.shared.log("[下载面板] 本机分享服务已启动 \(serving.packageURL)", category: .appStore)
+            ToastCenter.shared.show("链接已复制")
+            // 不常驻：10 分钟后自动关（别让服务器一直开着）
+            IPALocalHTTPServer.shared.stop(after: 10 * 60)
+        } catch {
+            LoginLogger.shared.log("[下载面板] 本机分享服务启动失败：\(error.localizedDescription)",
+                                   category: .appStore)
+            ToastCenter.shared.show("无法生成链接")
+        }
     }
 
     /// 打开：设备上装了才给点 —— 复用 `JITEnableService.launchApp`
