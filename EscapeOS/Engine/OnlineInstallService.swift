@@ -15,9 +15,12 @@ import SwiftUI
 /// 覆盖安装走 AFC + `installation_proxy`（`IPADownloadCenter.installLocal` →
 /// `AppStoreInstallService.installLocalIPA`），是**另一条通道**，本文件一行都不碰。
 ///
-/// ## 前提（不满足就明确失败，不静默）
-/// · IPA 必须是设备信任的签名（企业 in-house / 含本机 UDID 的开发者、Ad-Hoc）。
-///   App Store 的 FairPlay 加密包（`cryptid=1`）**装不了**，这里提前拦掉并说明。
+/// ## 前提
+/// · OTA 只要求：清单在 HTTPS、安装包签名有效、且本设备/账号对该应用有许可。
+/// · **是否 FairPlay 加密（`cryptid=1`）不影响 OTA 通道本身**：App Store 自己的安装
+///   走的就是 itms-services，同类工具也在装 App Store 下载的加密包。
+///   ⚠️ 曾据「加密包装不了」的说法在 `prepare` 里提前拦截 —— 该假设**无证据，已撤回**，
+///   现在加密包照常走完整链路（只记一条非阻断日志）。别再把这条当规则写回来。
 enum OnlineInstallService {
 
     /// 是否已接入真实实现（UI 的「未接入」标记由它驱动）。
@@ -33,7 +36,7 @@ enum OnlineInstallService {
         case noPackage
         /// 本地包文件不存在
         case packageMissing
-        /// 包本身装不了（例如 FairPlay 加密 = 未签名）
+        /// 包本身有问题（缺解析结果/结构异常），原因由解析层给出
         case packageBlocked(String)
         /// 包内 Info.plist 缺 bundle id
         case metadataMissing
@@ -157,9 +160,9 @@ enum OnlineInstallService {
                                    category: logCategory)
 
             if inspection.isEncrypted {
-                LoginLogger.shared.log("[在线安装] 包为 FairPlay 加密（cryptid=\(inspection.cryptid)），OTA 只能装设备信任的签名包",
+                // 只记录、不拦截：OTA 通道本身不检查 FairPlay；能否安装取决于签名有效性与许可。
+                LoginLogger.shared.log("[在线安装] 包信息：FairPlay 加密（cryptid=\(inspection.cryptid)），不拦截",
                                        category: logCategory)
-                throw OnlineInstallError.packageBlocked("包未签名")
             }
         } else if ipaPath != nil {
             LoginLogger.shared.log("[在线安装] ⚠ 未能解析包内 Info.plist，将用台账里的 bundleId 兜底",
