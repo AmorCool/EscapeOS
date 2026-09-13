@@ -28,8 +28,17 @@ struct VirtualLocationView: View {
         .navigationTitle("虚拟定位")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                guardToggle
+            // iOS 26 的工具栏条目自带一层共享玻璃底，会和自绘胶囊叠成「胶囊里套一层」
+            // （用户实测反馈）→ 隐藏系统那层，只留下面这一个胶囊.
+            if #available(iOS 26.0, *) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    guardToggle
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    guardToggle
+                }
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -51,16 +60,20 @@ struct VirtualLocationView: View {
         } message: {
             Text(session.lastError ?? "")
         }
+        // 挂全局 toast 展示层（增强守护开关切换提示；项目既有 ToastCenter）.
+        .toastHost()
     }
 
-    /// 右上角「增强守护」开关：ON 档缩短重发与健康检查间隔、回前台立即重发.
+    /// 右上角「增强守护」开关：单层胶囊（不再套第二层底色），图标随状态切换，切换弹 toast.
     private var guardToggle: some View {
         let on = session.locationGuard
         return Button {
             session.locationGuard.toggle()
+            ToastCenter.shared.show(session.locationGuard ? "增强守护已开启" : "增强守护已关闭")
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: on ? "shield.lefthalf.filled" : "shield")
+                // 开 = 实心勾盾；关 = 斜杠盾（SF Symbols 无「碎裂」字形，取失效语义最接近的）.
+                Image(systemName: on ? "checkmark.shield.fill" : "shield.slash")
                 Text("增强守护")
                     .fixedSize()
             }
