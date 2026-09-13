@@ -11,7 +11,8 @@ import UIKit
 /// · 打开     → `JITEnableService.launchApp(bundleID:)`
 /// · 分享     → `ShareSheet`（`UIActivityViewController` 包装）
 /// · 复制下载链接 → 读包内 `iTunesMetadata.plist` 的 `itemId` 拼 **App Store 商店链接**（纯读本地文件，零网络零服务）
-/// · 提取下载链接 → 台账 `IPADownloadItem.sourceURL`（下载时回填的 **IPA 包原链接**，纯读台账，零网络）
+/// · 提取下载链接 → 台账 `IPADownloadItem.sourceURL`（**下载时就落盘**的 **IPA 包原链接**，纯读本地数据，零网络零服务）
+///   「下载中」的任务还没有台账行 → 列表把该任务的 `Job.remoteURL` 放进 `item.sourceURL` 带进来
 /// · 复制     → `UIPasteboard.general.string`
 /// · 提示     → `ToastCenter.shared.show`
 struct IPADownloadActionsSheet: View {
@@ -24,6 +25,14 @@ struct IPADownloadActionsSheet: View {
     let onOverwriteInstall: () -> Void
     /// 删除（删文件 + 删台账，列表侧负责刷新与提示）
     let onDelete: () -> Void
+
+    /// v0.3.387：「下载中」任务弹这个面板时为 true。
+    ///
+    /// 这时本地**还没有包文件**（文件名/体积都要等下载落地），所以依赖文件的几行
+    /// （覆盖安装 / 在线安装 / 打开 / 复制下载链接 / 分享 IPA / 删除）全都不成立，
+    /// 面板只渲染「其它操作 → 提取下载链接」—— 用户要的就是「下载过程也能提取直链」。
+    /// 已下载条目走原样（默认 false）。
+    var isPendingDownload: Bool = false
 
     @Environment(\.dismiss) private var dismiss
 
@@ -65,11 +74,16 @@ struct IPADownloadActionsSheet: View {
             VStack(spacing: 14) {
                 header
 
-                cardSection("安装", rows: installRows)
+                if isPendingDownload {
+                    // 下载中的任务：本地还没有包文件，只留能用的那一行
+                    cardSection("其它操作", rows: pendingRows)
+                } else {
+                    cardSection("安装", rows: installRows)
 
-                cardSection("操作", rows: actionRows)
+                    cardSection("操作", rows: actionRows)
 
-                cardSection("其它操作", rows: otherRows)
+                    cardSection("其它操作", rows: otherRows)
+                }
 
                 cancelButton
             }
@@ -212,14 +226,16 @@ struct IPADownloadActionsSheet: View {
         ]
     }
 
-    /// 「提取下载链接」行。置灰规则：本机服务器当前被「在线安装」占用（`Purpose.ota`）
-    /// 时不可点 —— OTA 正在进行（系统正在装），此时不给复制链接。
-    /// 本行取值是**台账里的 IPA 包原链接**（`sourceLink`）：纯读台账，不读包、不碰任何服务。
+    /// 「下载中」任务可用的唯一一行 —— 本地没文件，删除/安装/打开/分享都不成立
+    private var pendingRows: [RowSpec] { [extractLinkRow] }
+
+    /// 「提取下载链接」行。取值是**台账里的 IPA 包原链接**（`sourceLink`，下载中则由任务直链兜底）：
+    /// 纯读本地数据，不读包、不碰任何服务 —— 与「在线安装」没有任何竞争关系，
+    /// 所以**恒可点、永不置灰、也不显示任何状态字**。
+    /// （v0.3.387 删掉了旧的「OTA 进行中 → 灰掉并标『安装中』」：那是本机服务时代的残留语义，
+    /// 用户明确否定 —— 下载/安装状态与「提取下载链接」无关。）
     private var extractLinkRow: RowSpec {
-        let blockedByOTA = IPALocalHTTPServer.shared.currentPurpose == .ota
-        return RowSpec(icon: "antenna.radiowaves.left.and.right", tint: .teal, title: "提取下载链接",
-                       trailing: blockedByOTA ? .text("安装中") : RowTrailing.none,
-                       disabled: blockedByOTA) {
+        return RowSpec(icon: "antenna.radiowaves.left.and.right", tint: .teal, title: "提取下载链接") {
             extractDownloadLink()
         }
     }
@@ -308,6 +324,13 @@ struct IPADownloadActionsSheet: View {
 
     /// 贴合内容高度：固定行高 × 行数 + 头图 + 三个分组标题 + 取消行 + 内边距
     private var sheetHeight: CGFloat {
+        if isPendingDownload {
+            // 一个分组、一行（提取下载链接）+ 取消行
+            let rowsHeight = CGFloat(1) * 58
+            return 16 + 52 + 14
+                + 23 + rowsHeight
+                + 14 + 44 + 26
+        }
         let actionCount = 3                                     // 打开 / 复制下载链接 / 分享（后两条恒显示）
         let rows = 2 + actionCount + 2                          // 安装 2 行 + 其它操作 2 行
         let sections: CGFloat = 3
@@ -386,12 +409,13 @@ struct IPADownloadActionsSheet: View {
 
     /// 提取下载链接：复制这个 IPA **包本身的下载原链接**（当初是从哪个 URL 下下来的）。
     ///
-    /// 取值：台账 `IPADownloadItem.sourceURL` —— 下载时由 `IPADownloadManagerView.syncSourceURLs()`
-    /// 从 `IPADownloadCenter.Job.remoteURL` 回填（例如爱思的 `https://d-app6.i4.cn/soft/....ipa`）。
+    /// 取值：台账 `IPADownloadItem.sourceURL` —— **v0.3.387 起在下载时（文件名/直链确定的那一刻）
+    /// 就写进台账并落盘**（`IPADownloadCenter` 调 `IPADownloadLibrary.updateSourceURL`），
+    /// 不再靠界面 reload 事后回填。下载中的任务由列表把 `Job.remoteURL` 带进 `item.sourceURL`。
     ///
     /// **纯读台账：零网络、零服务、不读包** —— 与包内 `iTunesMetadata` 无关
     /// （那是「复制下载链接」的取值，两行严格互斥、不互相回落）。
-    /// 台账没有来源直链 → 提示「无下载链接」。
+    /// 与下载/安装状态**完全无关**：任何阶段都恒可点。没有直链 → 提示「无下载链接」。
     private func extractDownloadLink() {
         guard let link = sourceLink else {
             LoginLogger.shared.log("[下载面板] 台账无 sourceURL，给不出 IPA 原链接", category: .appStore)

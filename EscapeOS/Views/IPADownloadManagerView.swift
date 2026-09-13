@@ -14,6 +14,9 @@ struct IPADownloadManagerView: View {
     @State private var items: [IPADownloadItem] = []
     /// 正在弹操作面板的条目
     @State private var actionItem: IPADownloadItem?
+    /// v0.3.387：正在弹操作面板的**下载中任务**（还没落台账，包不成条目）。
+    /// 用途：下载过程也能「提取下载链接」—— 那行的直链只在 `Job.remoteURL` 上。
+    @State private var actionJob: IPADownloadCenter.Job?
     /// bundleId → 图标 URL。历史记录里没持久化 `iconURL`（真机 `ipa_downloads.json` 实测没有该字段），
     /// 进入页面时按 bundleId 查回来补上；查不到就退回字母块。
     @State private var icons: [String: String] = [:]
@@ -74,6 +77,17 @@ struct IPADownloadManagerView: View {
                 onOverwriteInstall: { install(item) },
                 onDelete: { delete(item) })
         }
+        .sheet(item: $actionJob) { job in
+            // v0.3.387：「下载中」那行 → 同一个面板，但本地还没有包，
+            // 所以只渲染「提取下载链接」（值取 `job.remoteURL`，见 `pendingItem`）。
+            // 那两个闭包在 pending 模式下不会被渲染/调用，给空实现即可。
+            IPADownloadActionsSheet(
+                item: pendingItem(job),
+                iconURL: icons[job.bundleId ?? ""] ?? job.iconURL,
+                onOverwriteInstall: {},
+                onDelete: {},
+                isPendingDownload: true)
+        }
         .task {
             reload()
             await loadIcons()
@@ -113,6 +127,10 @@ struct IPADownloadManagerView: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+            // v0.3.387：点这一条标题行也能弹操作面板 —— 下载过程就能「提取下载链接」。
+            // 手势只加在这条标题行上：横向进度条与下面的暂停/删除按钮行为一律不动，行布局也不变。
+            .contentShape(Rectangle())
+            .onTapGesture { actionJob = job }
             ProgressView(value: min(1, max(0, job.overall)))
             HStack(spacing: 14) {
                 Button {
@@ -393,12 +411,36 @@ struct IPADownloadManagerView: View {
     /// v0.3.378：把下载中心任务里记着的**来源直链**回填进台账并落盘。
     /// **v0.3.386 起**该直链是操作面板「**提取下载链接**」的取值（IPA 包原链接）；
     /// 「复制下载链接」另取包内 `iTunesMetadata.itemId`，与本台账无关。
+    /// **v0.3.387 起**直链已在下载时（`IPADownloadCenter`）就写台账，这里**只剩幂等兜底**。
     private func syncSourceURLs() {
         for job in center.jobs {
             guard let name = job.localFileName,
                   let url = job.remoteURL, !url.isEmpty else { continue }
             IPADownloadLibrary.shared.updateSourceURL(fileName: name, url: url)
         }
+    }
+
+    /// v0.3.387：把「下载中」的任务包成一个**只读条目**喂给操作面板。
+    ///
+    /// 下载中的任务还没落台账（本地无文件），所以体积记为 0、没有安装时间，这些字段面板在
+    /// pending 模式下也不渲染。关键是 **`sourceURL` 直接取 `job.remoteURL`** ——
+    /// 面板「提取下载链接」读的就是这个字段，于是**下载过程也能提取直链**。
+    /// 文件名用 `job.localFileName ?? job.expectedFileName`（与下载中心落地的名字同源）：
+    /// 下载中它指向一个尚不存在的文件，面板里任何依赖文件的行都已按 pending 模式收起。
+    private func pendingItem(_ job: IPADownloadCenter.Job) -> IPADownloadItem {
+        IPADownloadItem(fileName: job.localFileName ?? job.expectedFileName,
+                        displayName: job.name,
+                        bundleId: job.bundleId,
+                        version: job.version,
+                        sizeBytes: 0,
+                        downloadedAt: Date(),
+                        iconURL: job.iconURL,
+                        source: job.source.rawValue,
+                        sourceURL: job.remoteURL,
+                        packageName: nil,
+                        isEncrypted: nil,
+                        hasSINF: nil,
+                        lastInstalledAt: nil)
     }
 
     /// v0.3.378：删除一个安装包（文件 + 台账），操作面板调用

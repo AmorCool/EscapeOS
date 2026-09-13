@@ -77,6 +77,15 @@ final class IPADownloadCenter: ObservableObject {
         /// 仅当 `phase == .failed` 时有意义；按**失败发生在哪个阶段**打标，不去猜错误码
         var failureStage: FailureStage? = nil
 
+        /// v0.3.387：这个任务**落地后会用**的文件名（与 `startDownload` 里的 `safeName` 同源）。
+        ///
+        /// 「下载中」的任务还没落台账（`localFileName == nil`），但直链要**在下载时就写进台账**，
+        /// 「下载中」那行弹操作面板也要能算出一个文件名 → 统一由这里出，避免两处各拼一遍。
+        var expectedFileName: String {
+            "\(bundleId ?? name)-\(version ?? "x").ipa"
+                .replacingOccurrences(of: "/", with: "_")
+        }
+
         /// 只有「有直链且正在下载/已暂停」才允许暂停/继续
         var canPause: Bool {
             remoteURL != nil && (phase == .downloading || phase == .paused)
@@ -235,6 +244,11 @@ final class IPADownloadCenter: ObservableObject {
             $0.remoteURL = hit.ipaURL
             $0.version = hit.version
             $0.stageText = "排队中"
+        }
+        // v0.3.387：直链与版本刚开始确定 → 也立刻落盘一次（此刻台账多半还没有这一行，属 no-op；
+        // 重下同版本时才真正生效）。真正写入在 `startDownload` 与 `handle` 两处。
+        if let name = job(id)?.expectedFileName {
+            IPADownloadLibrary.shared.updateSourceURL(fileName: name, url: hit.ipaURL)
         }
         pump()
         return id
@@ -441,8 +455,11 @@ final class IPADownloadCenter: ObservableObject {
         req.setValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", forHTTPHeaderField: "User-Agent")
         req.setValue("https://app4.i4.cn/pc_v9/index.html", forHTTPHeaderField: "Referer")
 
-        let safeName = "\(job.bundleId ?? job.name)-\(job.version ?? "x").ipa"
-            .replacingOccurrences(of: "/", with: "_")
+        let safeName = job.expectedFileName
+        // v0.3.387：**文件名与直链这一刻都确定了 → 立刻写进台账并落盘**（用户要求「下载时就记住
+        // 这一次的下载链接」）。幂等：台账里还没有这一行时是 no-op，真正落盘在 `handle` 那一次。
+        // 失败/取消都**保留**已写入的值 —— 链接可能过期，但「当初从哪下的」要留住。
+        IPADownloadLibrary.shared.updateSourceURL(fileName: safeName, url: urlString)
 
         let downloader = RemoteDownloader(
             request: req,
@@ -470,7 +487,8 @@ final class IPADownloadCenter: ObservableObject {
                                                  bundleId: current.bundleId,
                                                  version: current.version,
                                                  iconURL: current.iconURL,
-                                                 source: current.source.rawValue)
+                                                 source: current.source.rawValue,
+                                                 sourceURL: current.remoteURL)
                 update(id) {
                     $0.localFileName = dest.lastPathComponent
                     $0.progress = 1
