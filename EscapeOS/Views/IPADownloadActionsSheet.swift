@@ -3,14 +3,14 @@ import UIKit
 
 /// v0.3.378：已下载 IPA 的操作面板 —— 「下载管理」点任意一行弹出。
 ///
-/// 动作对齐 NB 全能助手：覆盖安装 / 在线安装 / 打开 / 复制下载链接 / 分享 / 删除 / 取消。
+/// 动作对齐 NB 全能助手：覆盖安装 / 在线安装 / 打开 / 复制商店链接 / 分享 / 删除 / 取消。
 /// 视觉沿用虚拟定位页的液态玻璃卡片（`locusGlass`）+ `AppRowIcon` 图标基调。
 ///
 /// **全部复用既有实现，不另起炉灶**：
 /// · 覆盖安装 → 下载中心 `installLocal`（→ `AppStoreInstallService.installLocalIPA`）
 /// · 打开     → `JITEnableService.launchApp(bundleID:)`
 /// · 分享     → `ShareSheet`（`UIActivityViewController` 包装）
-/// · 复制下载链接 → 读包内 `iTunesMetadata.plist` 的 `itemId` 拼 **App Store 商店链接**（纯读本地文件，零网络零服务）
+/// · 复制商店链接 → 读包内 `iTunesMetadata.plist` 的 `itemId` 拼 **App Store 商店链接**（纯读本地文件，零网络零服务）
 /// · 提取下载链接 → 台账 `IPADownloadItem.sourceURL`（**下载时就落盘**的 **IPA 包原链接**，纯读本地数据，零网络零服务）
 ///   「下载中」的任务还没有台账行 → 列表把该任务的 `Job.remoteURL` 放进 `item.sourceURL` 带进来
 /// · 复制     → `UIPasteboard.general.string`
@@ -29,7 +29,7 @@ struct IPADownloadActionsSheet: View {
     /// v0.3.387：「下载中」任务弹这个面板时为 true。
     ///
     /// 这时本地**还没有包文件**（文件名/体积都要等下载落地），所以依赖文件的几行
-    /// （覆盖安装 / 在线安装 / 打开 / 复制下载链接 / 分享 IPA / 删除）全都不成立，
+    /// （覆盖安装 / 在线安装 / 打开 / 复制商店链接 / 分享 IPA / 删除）全都不成立，
     /// 面板只渲染「其它操作 → 提取下载链接」—— 用户要的就是「下载过程也能提取直链」。
     /// 已下载条目走原样（默认 false）。
     var isPendingDownload: Bool = false
@@ -62,7 +62,7 @@ struct IPADownloadActionsSheet: View {
     }
 
     /// 台账里真实存在的来源直链 = 「**提取下载链接**」的取值（IPA 包原链接，下载时回填）。
-    /// **只给「提取下载链接」用**：「复制下载链接」的取值完全另算（包内 `iTunesMetadata.itemId`）。
+    /// **只给「提取下载链接」用**：「复制商店链接」的取值完全另算（包内 `iTunesMetadata.itemId`）。
     private var sourceLink: String? {
         guard let raw = item.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty, let url = URL(string: raw), url.scheme != nil else { return nil }
@@ -203,11 +203,11 @@ struct IPADownloadActionsSheet: View {
 
     private var actionRows: [RowSpec] {
         var rows: [RowSpec] = [openRow]
-        // 「复制下载链接」**常显**：取值是包内 `iTunesMetadata.itemId`（本地文件），
+        // 「复制商店链接」**常显**：取值是包内 `iTunesMetadata.itemId`（本地文件），
         // 与台账 `sourceURL` 无任何关系 —— 台账没直链也照样能读出商店链接。
         // 早期它是按「台账有 sourceURL」条件隐藏的，那个门控随取值来源一起作废了；
         // 包里读不到商品号时由 `copyLink()` 自己提示「无商店链接」。
-        rows.append(RowSpec(icon: "link", tint: .teal, title: "复制下载链接") {
+        rows.append(RowSpec(icon: "link", tint: .teal, title: "复制商店链接") {
             copyLink()
         })
         rows.append(RowSpec(icon: "square.and.arrow.up", tint: .indigo, title: "分享 IPA") {
@@ -331,7 +331,7 @@ struct IPADownloadActionsSheet: View {
                 + 23 + rowsHeight
                 + 14 + 44 + 26
         }
-        let actionCount = 3                                     // 打开 / 复制下载链接 / 分享（后两条恒显示）
+        let actionCount = 3                                     // 打开 / 复制商店链接 / 分享（后两条恒显示）
         let rows = 2 + actionCount + 2                          // 安装 2 行 + 其它操作 2 行
         let sections: CGFloat = 3
         let rowsHeight = CGFloat(rows) * 58 + CGFloat(rows - 3) * 1  // 行高 + 各分组内的分隔线
@@ -363,7 +363,7 @@ struct IPADownloadActionsSheet: View {
         }
     }
 
-    /// 复制下载链接：复制这个 App 在 **App Store 上的商店来源链接**。
+    /// 复制商店链接：复制这个 App 在 **App Store 上的商店来源链接**。
     ///
     /// 取值：包内 `Payload/<App>.app/iTunesMetadata.plist` 的 **`itemId`**（商店商品号），
     /// 拼成 `https://apps.apple.com/<当前商店区>/app/id<itemId>`。
@@ -377,12 +377,22 @@ struct IPADownloadActionsSheet: View {
             ToastCenter.shared.show("安装包已不存在")
             return
         }
-        guard let data = IPAPackageInspector.extractiTunesMetadata(ipaPath: path),
+        // v0.3.391：分步读 + 分步记日志 —— 一次点击就能区分「包里压根没这个条目」
+        // 与「有条目但 zip 解析失败」与「有文件但没 itemId」这三种情况。
+        // （旧写法把它们并成一个 guard，日志只有一句「无 iTunesMetadata.itemId」，无法定位。）
+        let metaData = IPAPackageInspector.extractiTunesMetadata(ipaPath: path)
+        LoginLogger.shared.log("[下载面板] iTunesMetadata 读取："
+                               + (metaData.map { "\($0.count) 字节" } ?? "取不到（包内无此条目，或 zip 解析失败）"),
+                               category: .appStore)
+        guard let data = metaData,
               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
-              let meta = plist as? [String: Any],
-              let itemId = Self.itemIdString(meta["itemId"]) else {
-            // 包里没有商品号 → 老老实实说没有，**不回落台账**
-            LoginLogger.shared.log("[下载面板] 包内无 iTunesMetadata.itemId，给不出商店链接", category: .appStore)
+              let meta = plist as? [String: Any] else {
+            ToastCenter.shared.show("无商店链接")
+            return
+        }
+        guard let itemId = Self.itemIdString(meta["itemId"]) else {
+            LoginLogger.shared.log("[下载面板] iTunesMetadata 里没有 itemId；实际键=["
+                                   + meta.keys.sorted().joined(separator: ", ") + "]", category: .appStore)
             ToastCenter.shared.show("无商店链接")
             return
         }
@@ -393,9 +403,9 @@ struct IPADownloadActionsSheet: View {
         }
         let link = Self.storeLink(itemId: itemId)
         UIPasteboard.general.string = link
-        LoginLogger.shared.log("[下载面板] 复制下载链接，来自包内 iTunesMetadata（itemId \(itemId)）"
+        LoginLogger.shared.log("[下载面板] 复制商店链接，来自包内 iTunesMetadata（itemId \(itemId)）"
                                + " → \(Self.masked(link))", category: .appStore)
-        ToastCenter.shared.show("已复制下载链接")
+        ToastCenter.shared.show("已复制商店链接")
     }
 
     private func shareIPA() {
@@ -414,7 +424,7 @@ struct IPADownloadActionsSheet: View {
     /// 不再靠界面 reload 事后回填。下载中的任务由列表把 `Job.remoteURL` 带进 `item.sourceURL`。
     ///
     /// **纯读台账：零网络、零服务、不读包** —— 与包内 `iTunesMetadata` 无关
-    /// （那是「复制下载链接」的取值，两行严格互斥、不互相回落）。
+    /// （那是「复制商店链接」的取值，两行严格互斥、不互相回落）。
     /// 与下载/安装状态**完全无关**：任何阶段都恒可点。没有直链 → 提示「无下载链接」。
     private func extractDownloadLink() {
         guard let link = sourceLink else {

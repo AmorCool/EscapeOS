@@ -310,6 +310,14 @@ final class IPADownloadCenter: ObservableObject {
                             }
                         }
                     },
+                    onResolvedURL: { url in
+                        // v0.3.391：Apple 一签发下载地址就挂到 job 上 ——
+                        // ① `handle` 落盘时会把它写进台账（用户要的「记住这次下载的链接」）；
+                        // ② 「下载中」那一行的「提取下载链接」也能立刻取到（不必等下载完）。
+                        Task { @MainActor in
+                            self.update(id) { $0.remoteURL = url }
+                        }
+                    },
                     onLog: { line in
                         LoginLogger.shared.log("[下载中心] \(line)", category: .appStore)
                     })
@@ -507,7 +515,11 @@ final class IPADownloadCenter: ObservableObject {
                                                  version: current.version,
                                                  iconURL: current.iconURL,
                                                  source: current.source.rawValue,
-                                                 sourceURL: current.remoteURL)
+                                                 // ⚠️ 必须**重新取一次** job，不能用上面的 `current`：
+                                                 // `current` 是本函数开头取的值类型快照，而直链是下载过程中
+                                                 // 才由 `onResolvedURL` 回填到 job 上的（AppleID 通道尤其如此）
+                                                 // → 用快照会**永远写进 nil**。
+                                                 sourceURL: self.job(id)?.remoteURL ?? current.remoteURL)
                 update(id) {
                     $0.localFileName = dest.lastPathComponent
                     $0.progress = 1

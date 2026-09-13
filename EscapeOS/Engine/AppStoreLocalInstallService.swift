@@ -23,6 +23,7 @@ enum AppStoreLocalInstallService {
                                    externalVersionID: String? = nil,
                                    downloadProgress: ((Double) -> Void)? = nil,
                                    installProgress: ((Double) -> Void)? = nil,
+                                   onResolvedURL: ((String) -> Void)? = nil,
                                    onLog: ((String) -> Void)? = nil) async throws -> URL {
         let software = try makeSoftware(item)
         let output = try await StoreAccountSession.withAccount(email: email) { account in
@@ -37,6 +38,12 @@ enum AppStoreLocalInstallService {
         try Task.checkCancellation()
         onLog?("[AppleID] 版本 \(output.bundleShortVersionString)(\(output.bundleVersion))，sinf \(output.sinfs.count) 个")
         onLog?("[下载] \(URL(string: output.downloadURL)?.host ?? "?")")
+        // v0.3.391：把 Apple 这次签发的下载地址**回传给调用方**，由它写进下载台账。
+        //
+        // 用户要的是「**记住我这一次下载用的链接**」—— 他自己也说了「尽管是有有效期会失效的」。
+        // 之前我们以「AppleID 通道的地址必须带授权头才有效」为理由**什么都不给**，
+        // 那是把「这个链接单独能用吗」和「这个链接有没有留档」混为一谈了 —— 用户要的是后者。
+        onResolvedURL?(output.downloadURL)
         let name = "\(software.bundleID)-\(output.bundleShortVersionString).ipa"
         let dest = try await AppStoreInstallService.downloadIPA(urlString: output.downloadURL,
             suggestedName: name, progress: downloadProgress, onLog: onLog)

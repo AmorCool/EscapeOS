@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// v0.3.305：IPA 下载管理 —— 管理已下载的安装包并直接安装.
 ///
@@ -162,9 +163,39 @@ struct IPADownloadManagerView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.red)
                 Spacer(minLength: 0)
+                // v0.3.391（用户明确要求）：**下载过程中就要能直接提取这个包的直链**，
+                // 不必点进操作面板。取值 = 该任务的 `remoteURL`
+                // （AppleID 通道在 Apple 签发下载地址的那一刻就已回填，见 `startWithAppleID`）。
+                // 还没拿到直链时按钮置灰（例如刚入队、或该来源确实不给直链）。
+                let hasLink = !(job.remoteURL ?? "").isEmpty
+                Button {
+                    extractLinkOfActiveJob(job)
+                } label: {
+                    Label("提取链接", systemImage: "link")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(hasLink ? Color.teal : Color.secondary)
+                .disabled(!hasLink)
             }
         }
         .padding(.vertical, 3)
+    }
+
+    /// 下载中任务：把该任务的直链**直接**复制走（不经过操作面板）。
+    ///
+    /// 用户原话：「下载的进度条也没提取下载链接的按钮 我让你加在进度条也不加」——
+    /// 所以这里做成**行内按钮**，而不是「让这一行可点、再进面板找」。
+    private func extractLinkOfActiveJob(_ job: IPADownloadCenter.Job) {
+        guard let raw = job.remoteURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            ToastCenter.shared.show("还没拿到直链")
+            return
+        }
+        UIPasteboard.general.string = raw
+        LoginLogger.shared.log("[下载面板] 提取下载链接（下载中任务）：\(String(raw.prefix(64)))…",
+                               category: .appStore)
+        ToastCenter.shared.show("链接已复制")
     }
 
     // MARK: - 概览
