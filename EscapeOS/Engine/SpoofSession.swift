@@ -98,6 +98,20 @@ final class SpoofSession: ObservableObject {
     @Published var routeLoopEnabled = false {
         didSet { UserDefaults.standard.set(routeLoopEnabled, forKey: "escape.routeLoopEnabled") }
     }
+    /// 增强守护：ON 档缩短重发/健康检查间隔，并在回前台、检出会话被回收时立刻重发.
+    /// OFF 档与历史行为完全一致（8s 重发 / 12s 健康检查，不写守护日志）.
+    @Published var locationGuard = false {
+        didSet {
+            guard locationGuard != oldValue else { return }
+            UserDefaults.standard.set(locationGuard, forKey: "escape.locationGuard")
+            LoginLogger.shared.log("增强守护：\(locationGuard ? "开启" : "关闭")")
+            // 已在模拟中则立刻切档，不必等本次模拟结束.
+            if isSpoofing {
+                startResend()
+                startHealth()
+            }
+        }
+    }
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
@@ -112,8 +126,25 @@ final class SpoofSession: ObservableObject {
     private var joystickVector: CGVector = .zero
     private let locationKeeper = BackgroundKeepAlive()
 
+    /// 增强守护的累计重发次数与「疑似复位」命中次数（重发前链路已被回收）.
+    private var guardResendTotal = 0
+    private var guardResetHits = 0
+
     private let favoritesKey = "escape.favorites"
     private let recentsKey = "escape.recents"
+
+    /// 增强守护重发的来源（写日志用）.
+    private enum GuardTrigger: String {
+        case timer = "定时"
+        case health = "健康检查"
+        case foreground = "回前台"
+        case manual = "手动"
+    }
+
+    /// 重发间隔：ON 档 3s，OFF 档保持 8s.
+    private var resendInterval: TimeInterval { locationGuard ? 3 : 8 }
+    /// 健康检查间隔：ON 档 5s，OFF 档保持 12s.
+    private var healthInterval: TimeInterval { locationGuard ? 5 : 12 }
 
     private init() {
         favorites = SavedPlace.load(key: favoritesKey)
@@ -121,6 +152,16 @@ final class SpoofSession: ObservableObject {
         let storedSpeed = UserDefaults.standard.double(forKey: "escape.speedMultiplier")
         speedMultiplier = storedSpeed > 0 ? min(4.0, max(0.25, storedSpeed)) : 1.0
         routeLoopEnabled = UserDefaults.standard.bool(forKey: "escape.routeLoopEnabled")
+        locationGuard = UserDefaults.standard.bool(forKey: "escape.locationGuard")
+        // 回前台立刻重发一次（守护 ON 且正在模拟时生效）。挂在单例上而不是某个页面，
+        // 这样离开虚拟定位页、退后台再回来同样会被守护覆盖.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.guardResendOnForeground() }
+        }
     }
 
     /// EscapeSpace 的配对文件（与「更多 → 应用」等共用 Documents/pairingFile.plist）.
@@ -471,19 +512,14 @@ final class SpoofSession: ObservableObject {
         apply(next, markRecent: false)
     }
 
-    /// 每 8 秒重发当前坐标，防止会话被系统回收.
+    /// 周期性重发当前坐标（OFF 档 8s / 增强守护档 3s），防止会话被系统回收.
+    /// 重发一律走 `LocationEngine.set`：内部有活动会话就复用同一条隧道，不会新建.
     private func startResend() {
         resendTimer?.invalidate()
-        resendTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
+        resendTimer = Timer.scheduledTimer(withTimeInterval: resendInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let sim = self.simulated else { return }
-                let systemCoordinate = ChinaCoordinateTransform.mapCoordinateToSystemCoordinate(sim)
-                _ = LocationEngine.set(
-                    latitude: systemCoordinate.latitude,
-                    longitude: systemCoordinate.longitude,
-                    pairingPath: self.pairingPath,
-                    deviceIP: LocalDevVPN.targetIP
-                )
+                self.resend(sim, source: .timer)
             }
         }
     }
@@ -493,18 +529,21 @@ final class SpoofSession: ObservableObject {
         resendTimer = nil
     }
 
-    /// 每 12 秒健康检查，掉线自动重连.
+    /// 健康检查（OFF 档 12s / 增强守护档 5s）：掉线自动重连.
+    /// 守护 ON 时，检出会话被回收即**立刻**重建，不等下一个重发周期.
     private func startHealth() {
         healthTimer?.invalidate()
-        healthTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
+        healthTimer = Timer.scheduledTimer(withTimeInterval: healthInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let sim = self.simulated else { return }
                 if case .dropped = self.status {
                     self.status = .reconnecting
                     self.apply(sim, markRecent: false)
+                    self.noteGuardResend(.health, ok: self.status == .active, resetSuspected: true)
                 } else if !LocationEngine.isSessionActive, self.isSpoofing {
                     self.status = .reconnecting
                     self.apply(sim, markRecent: false)
+                    self.noteGuardResend(.health, ok: self.status == .active, resetSuspected: true)
                 }
             }
         }
@@ -513,6 +552,40 @@ final class SpoofSession: ObservableObject {
     private func stopHealth() {
         healthTimer?.invalidate()
         healthTimer = nil
+    }
+
+    /// 回前台：守护 ON 且正在模拟时立刻重发一次.
+    private func guardResendOnForeground() {
+        guard locationGuard, isSpoofing, let sim = simulated else { return }
+        resend(sim, source: .foreground)
+    }
+
+    /// 重发当前坐标并记录来源（复用同一条隧道）.
+    /// OFF 档不计数、不写日志，与历史行为完全一致.
+    private func resend(_ coordinate: CLLocationCoordinate2D, source: GuardTrigger) {
+        let hadSession = LocationEngine.isSessionActive
+        let systemCoordinate = ChinaCoordinateTransform.mapCoordinateToSystemCoordinate(coordinate)
+        let result = LocationEngine.set(
+            latitude: systemCoordinate.latitude,
+            longitude: systemCoordinate.longitude,
+            pairingPath: pairingPath,
+            deviceIP: LocalDevVPN.targetIP
+        )
+        guard locationGuard else { return }
+        var ok = false
+        if case .success = result { ok = true }
+        // 重发前链路已不在 → 记为一次「疑似复位」命中.
+        noteGuardResend(source, ok: ok, resetSuspected: !hadSession)
+    }
+
+    /// 守护日志：来源 + 累计重发次数 + 疑似复位命中次数（前缀「[增强守护]」便于过滤）.
+    private func noteGuardResend(_ source: GuardTrigger, ok: Bool, resetSuspected: Bool = false) {
+        guard locationGuard else { return }
+        guardResendTotal += 1
+        if resetSuspected { guardResetHits += 1 }
+        LoginLogger.shared.log(
+            "[增强守护] 重发(\(source.rawValue)) \(ok ? "成功" : "失败") · 累计 \(guardResendTotal) 次 · 疑似复位 \(guardResetHits) 次"
+        )
     }
 
     private func pushRecent(_ coordinate: CLLocationCoordinate2D) {

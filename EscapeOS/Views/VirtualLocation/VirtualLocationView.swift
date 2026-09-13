@@ -27,6 +27,11 @@ struct VirtualLocationView: View {
         }
         .navigationTitle("虚拟定位")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                guardToggle
+            }
+        }
         .sheet(isPresented: $showSettings) {
             VirtualLocationSettingsView()
         }
@@ -46,6 +51,27 @@ struct VirtualLocationView: View {
         } message: {
             Text(session.lastError ?? "")
         }
+    }
+
+    /// 右上角「增强守护」开关：ON 档缩短重发与健康检查间隔、回前台立即重发.
+    private var guardToggle: some View {
+        let on = session.locationGuard
+        return Button {
+            session.locationGuard.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: on ? "shield.lefthalf.filled" : "shield")
+                Text("增强守护")
+                    .fixedSize()
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(on ? .black : .primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(on ? LocusTheme.accent : Color.primary.opacity(0.08)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
