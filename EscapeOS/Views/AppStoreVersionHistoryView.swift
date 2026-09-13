@@ -43,8 +43,6 @@ struct AppStoreVersionHistoryView: View {
 
     @State private var loading = true
     @State private var loadingMore = false
-    /// 账号通道回报后，还会在后台补一次「商品页真实日期」——这段也算读取中
-    @State private var harvesting = false
     /// v0.3.365：**整次加载唯一的一次重登额度**（对齐 `downloadInformation` 的 `refreshed`）。
     /// 原来每个版本身份取元数据失败都会各自 rotate，一次「加载更多」最坏 20 次重登；
     /// 现在额度在 `loadAccount` 里**优先发给身份通道**（它一次拿全量版本身份），
@@ -56,9 +54,12 @@ struct AppStoreVersionHistoryView: View {
     /// Apple 下载协议给不出每版的日期（每版都返回应用首次上架日期）。
     @State private var dateByVersion: [String: Date] = [:]
 
-    /// 读取中（含分页、后台补日期）：这段时间**不允许切换来源**，
-    /// 否则会把正在跑的请求打断成半截结果。
-    private var isBusy: Bool { loading || loadingMore || harvesting }
+    /// v0.3.367：在制的加载任务（整次加载与「加载更多」共用这一格）。
+    /// 读取过程中**允许随时切换来源** —— 切换/刷新先取消这里，再按新来源重来；
+    /// 被取消的那次在写状态前静默作废，保证同一时刻只有一次加载在写状态（不会串台）。
+    @State private var loadTask: Task<Void, Never>?
+    /// 同上：后台补日期的任务也要能取消，否则旧来源的日期会写进新来源的列表
+    @State private var harvestTask: Task<Void, Never>?
 
     private var canLoadMore: Bool { channel == .account && loadedIDs.count < identifiers.count }
 
@@ -105,7 +106,7 @@ struct AppStoreVersionHistoryView: View {
                     }
                     if canLoadMore {
                         Button {
-                            Task { await loadMore() }
+                            startLoadMore()
                         } label: {
                             HStack {
                                 Spacer()
@@ -140,20 +141,19 @@ struct AppStoreVersionHistoryView: View {
                         .labelStyle(.titleAndIcon)
                         .font(.caption)
                 }
-                // v0.3.364：读取中禁止切换来源（loading / 分页 / 后台补日期都算）
-                .disabled(isBusy)
+                // v0.3.367：**读取中也允许切换** —— 切换即取消在制的那次并重来，
+                // 不再像 v0.3.364 那样把选择器禁掉（用户明确要求能随时切）。
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    Task { await load() }
+                    startLoad()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .disabled(isBusy)
             }
         }
-        .onChange(of: sourceRaw) { _, _ in Task { await load() } }
-        .task { await load() }
+        .onChange(of: sourceRaw) { _, _ in startLoad() }
+        .task { startLoad() }
     }
 
     private var summaryText: String {
@@ -243,6 +243,21 @@ struct AppStoreVersionHistoryView: View {
 
     // MARK: - 加载
 
+    /// v0.3.367：起一次读取并**登记为在制的那次** —— 切换来源、点刷新都走这里：
+    /// 先取消上一次（含正在分页的那次与后台补日期），再按当前来源重来。
+    /// 被取消的旧加载不会写任何状态，所以两次加载不会并发串台。
+    private func startLoad() {
+        loadTask?.cancel()
+        harvestTask?.cancel()
+        loadTask = Task { await load() }
+    }
+
+    /// 「加载更多」也登记到同一格，好让切来源时能把它一起取消
+    private func startLoadMore() {
+        loadTask?.cancel()
+        loadTask = Task { await loadMore() }
+    }
+
     private func load() async {
         loading = true
         errorText = nil
@@ -255,15 +270,16 @@ struct AppStoreVersionHistoryView: View {
 
         // 按用户选的查询方式先来一条，失败/为空则自动回退另一条，
         // 最后兜底商品页通道（免登录，覆盖不全）。
+        // 每步之后都确认没被取消：取消时各通道会立刻返回 false，收尾交给接棒的那次。
         if source == .catalog {
-            if await loadCatalog() { loading = false; return }
-            if await loadAccount() { loading = false; return }
+            if await loadCatalog(), !Task.isCancelled { loading = false; return }
+            if await loadAccount(), !Task.isCancelled { loading = false; return }
         } else {
-            if await loadAccount() { loading = false; return }
-            if await loadCatalog() { loading = false; return }
+            if await loadAccount(), !Task.isCancelled { loading = false; return }
+            if await loadCatalog(), !Task.isCancelled { loading = false; return }
         }
         await loadWeb()
-        loading = false
+        if !Task.isCancelled { loading = false }
     }
 
     /// 三方 API 通道（免登录，一次拿全 + 带发布日期 + 带 externalVersionID）。
@@ -271,8 +287,10 @@ struct AppStoreVersionHistoryView: View {
     /// 与 IPARanger 2.6.0 用的是同一个接口。
     @discardableResult
     private func loadCatalog() async -> Bool {
+        if Task.isCancelled { return false }
         do {
             let list = try await AppStoreService.versionHistoryFromCatalog(appId: item.id)
+            if Task.isCancelled { return false }
             versions = list
             channel = .catalog
             // 通道成功就必须清掉上一条通道留下的警告 —— 否则回退拿到了数据，
@@ -281,6 +299,8 @@ struct AppStoreVersionHistoryView: View {
             LoginLogger.shared.log("版本历史：三方 API 通道 \(list.count) 条", category: .appStore)
             return true
         } catch {
+            // 被取消不是失败：不记日志、不弹提示
+            if Task.isCancelled { return false }
             LoginLogger.shared.log("版本历史：三方 API 通道失败（\(error.localizedDescription)）",
                                    category: .appStore)
             return false
@@ -290,11 +310,13 @@ struct AppStoreVersionHistoryView: View {
     /// 账号通道（走 App Store 下载协议）
     @discardableResult
     private func loadAccount() async -> Bool {
+        if Task.isCancelled { return false }
         // bundleId 缺失时先补一次（协议按 bundleId 查）
         var bundleId = item.bundleId
         if bundleId == nil, let full = try? await AppStoreService.lookup(id: item.id) {
             bundleId = full.bundleId
         }
+        if Task.isCancelled { return false }
         guard let bundleId, !bundleId.isEmpty,
               let email = AppStoreDownloadStore.shared.selectedEmail
         else { return false }
@@ -308,6 +330,7 @@ struct AppStoreVersionHistoryView: View {
                                                                         appId: item.id,
                                                                         email: email,
                                                                         allowRotate: allowRotate)
+            if Task.isCancelled { return false }
             // 协议返回旧 → 新；展示要新 → 旧
             identifiers = Array(ids.reversed())
             accountEmail = email
@@ -315,10 +338,13 @@ struct AppStoreVersionHistoryView: View {
             errorText = nil
             // 商品页通道能给出**真实**的版本日期（内嵌 versionHistory shelf），
             // 但覆盖不全；能拿到就补上，拿不到就不显示日期。
-            Task { await harvestWebDates() }
+            harvestTask?.cancel()
+            harvestTask = Task { await harvestWebDates() }
             await loadMore()
             return true
         } catch {
+            // 被取消不是失败：不记日志、不弹提示
+            if Task.isCancelled { return false }
             LoginLogger.shared.log("版本历史账号通道失败：\(error.localizedDescription)",
                                    category: .appStore)
             errorText = error.localizedDescription
@@ -328,22 +354,24 @@ struct AppStoreVersionHistoryView: View {
 
     /// 商品页通道（免登录，覆盖不全）
     private func loadWeb() async {
+        if Task.isCancelled { return }
         do {
             let list = try await AppStoreService.versionHistory(appId: item.id, country: country)
+            if Task.isCancelled { return }
             if !list.isEmpty {
                 versions = list
                 channel = .web
                 errorText = nil
             }
         } catch {
+            if Task.isCancelled { return }
             if versions.isEmpty { errorText = error.localizedDescription }
         }
     }
 
     /// 商品页通道的真实版本日期 → 按版本号补给账号通道（best-effort）
     private func harvestWebDates() async {
-        harvesting = true
-        defer { harvesting = false }
+        if Task.isCancelled { return }
         guard let list = try? await AppStoreService.versionHistory(appId: item.id, country: country),
               !list.isEmpty
         else { return }
@@ -352,6 +380,8 @@ struct AppStoreVersionHistoryView: View {
             if let d = w.date { map[w.version] = d }
         }
         guard !map.isEmpty else { return }
+        // 已被取消（切来源/刷新）就作废：别把这一轮的日期写进接棒那次的列表
+        if Task.isCancelled { return }
         await MainActor.run {
             dateByVersion = map
             for i in versions.indices {
@@ -385,17 +415,21 @@ struct AppStoreVersionHistoryView: View {
         for id in pending.prefix(Self.versionsPerBatch) {
             if fetched >= Self.versionsPerFetch { break }
             if authBroken { break }
+            // 切了来源 / 点了刷新 → 这一批立刻作废，状态交给接棒的那次加载
+            if Task.isCancelled { return }
             do {
                 let meta = try await AppStoreService.storeVersionMetadata(item: item,
                                                                          versionID: id,
                                                                          email: email,
                                                                          allowRotate: !didUseRotateQuota)
+                if Task.isCancelled { return }
                 versions.append(AppStoreVersion(version: meta.version,
                                                 externalVersionID: id,
                                                 dateValue: dateByVersion[meta.version]))
                 loadedIDs.insert(id)
                 fetched += 1
             } catch ApplePackageError.passwordTokenExpired {
+                if Task.isCancelled { return }
                 // 整次加载的重登额度已被身份通道花掉（或刚花掉仍失效）→ 关闸并停下，
                 // 剩下几十条不再各自重登。文案只描述接口行为，不牵扯账号/用户。
                 didUseRotateQuota = true
@@ -403,12 +437,14 @@ struct AppStoreVersionHistoryView: View {
                 authBroken = true
                 LoginLogger.shared.log("版本历史：重登后仍失效，停止翻页", category: .appStore)
             } catch {
+                if Task.isCancelled { return }
                 loadedIDs.insert(id)
                 LoginLogger.shared.log("版本历史：版本 \(id) 取不到元数据，跳过（\(error.localizedDescription)）",
                                        category: .appStore)
             }
         }
         guard authBroken || fetched == 0 else { return }
+        if Task.isCancelled { return }
         for id in identifiers where !loadedIDs.contains(id) { loadedIDs.insert(id) }
         LoginLogger.shared.log("版本历史：停止翻页（本批 \(fetched) 条\(authBroken ? "，重登后仍失效" : "")）",
                                category: .appStore)
