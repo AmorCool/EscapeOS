@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.369] - 2026-09-13
+
+### 修复
+- **应用管理板块的「共享正版」不再被判成「苹果正版」**。根因是**两个板块走的是两条不同的设备查询**：
+  · 「文档浏览」用 `FileSharingService.lookupAppsWithAttributes()` = **Lookup + ReturnAttributes**
+    （Rust FFI `installation_proxy_lookup_apps`）—— 这是**唯一**会返回 `iTunesMetadata` 的调用，
+    而「购买邮箱」就在 `iTunesMetadata.appleId` 里，是判正版/共享的唯一依据；
+    它返回**全部**已装应用（不做文件共享过滤，过滤开关只在视图层）。
+  · 「应用管理」此前用 `AppDiscovery.getAllAppsInfo()`（`installation_proxy_get_apps`）**不带
+    ReturnAttributes → 不返回 `iTunesMetadata`** → 邮箱与存在性恒空 → 只能落成苹果正版。
+    **v0.3.367 那个「App Store 应用全被判成越狱版」的回归也是同一条链路缺输入造成的。**
+  修法：`loadAppTypes` 先做**一次同款全量 Lookup**（不是每应用一次），据此构建
+  `applicationType` / `iTunesAppleID` / `hasITunesMetadata` 三张表；旧查询只兜底 Lookup 缺项；
+  `ApplicationType == "Unknown"` 视同未拿到。**判定逻辑一行未改，改的是输入** →
+  同一应用在两个板块必然显示同一类型。三条隧道串行创建、各自 defer 释放（避开历史并发闪退）。
+- **商品页抓取改为区域健壮（修「App Store 详情看不到 App 隐私」）**。实测：从中国大陆出口 IP，
+  `apps.apple.com` 会**按 IP 地理重定向** —— `/us/app/id…`（含 ChatGPT）**302 到 `/cn/iphone/today`**，
+  不带区域同理，**加 `Cookie: geo=US`/`site=US` 也无效**；只有 `/cn/app/id…` 能正常返回应用页。
+  用户的账号区是 US，所以此前去抓 `/us/…` → 拿到 Today 页 → 0 条 → 而实现是「空就不显示」→ **静默消失**。
+  现在：先按请求区抓 → **最终 URL 不是应用页就回落 `/cn/` 再抓一次** → 两条都不是才收尾；
+  缓存里记录「实际服务的区域」（`served`），下次不再先撞一次重定向；
+  **拿不到时把原因写进商店日志**（`us：200 但落到 …/today；cn：HTTP 404`），界面仍不显示空节。
+  实测（真实网络）：**微信 0→1 组、淘宝 0→3 组、抖音 0→2 组**；ChatGPT 仍 0
+  （US 独占应用从 CN IP 取不到，非解析问题）。**隐私分组数量随应用不同，不是固定 3 组**。
+
 ## [0.3.368] - 2026-09-13
 
 ### 新增
