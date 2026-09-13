@@ -261,7 +261,10 @@ final class IPADownloadCenter: ObservableObject {
         }
         // v0.3.387：直链与版本刚开始确定 → 也立刻落盘一次（此刻台账多半还没有这一行，属 no-op；
         // 重下同版本时才真正生效）。真正写入在 `startDownload` 与 `handle` 两处。
-        if let name = job(id)?.expectedFileName {
+        // ⚠️ 必须写 `self.job(id)`：本函数开头有 `var job = Job(...)`（`:242` 附近），
+        // 裸写 `job(id)` 会被那个局部变量遮蔽 →
+        // `error: cannot call value of non-function type 'IPADownloadCenter.Job'`（v0.3.387 CI 实测）。
+        if let name = self.job(id)?.expectedFileName {
             IPADownloadLibrary.shared.updateSourceURL(fileName: name, url: hit.ipaURL)
         }
         pump()
