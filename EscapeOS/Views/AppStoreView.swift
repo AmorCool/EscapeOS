@@ -17,19 +17,27 @@ struct AppStoreView: View {
     @State private var showDisclaimer = false
     @State private var showI4 = false
     @State private var showFavorites = false
-    /// 区域筛选（App Store 商场，默认 cn = 国区）
+    /// 区域筛选（App Store 商场，默认 cn = 国区；`"auto"` = 跟随账号区）
     @AppStorage("AppStore.ShopRegion") private var shopRegion = "cn"
     // 列表行「获取」→ 安装方式选择
     @State private var installTarget: AppStoreItem?
     @State private var accountTarget: AppStoreItem?
     @ObservedObject private var center = IPADownloadCenter.shared
 
-    private var region: AppStoreService.Region { AppStoreService.Region(rawValue: shopRegion) ?? .cn }
+    /// 实际生效的区域码（`"auto"` 在此解析成账号区）—— 用于标题文案
+    private var resolvedCode: String { AppStoreService.resolveRegion(shopRegion) }
+
+    /// 区域标题：常用区用中文名，其余（含「自动」解析出的陌生区）用大写码
+    private var regionTitle: String {
+        AppStoreService.Region(rawValue: resolvedCode)?.title ?? resolvedCode.uppercased()
+    }
 
     /// v0.3.328：进入商店时按当前 Apple ID 同步区域。
     /// 只在**账号换了**才改（登录时已经跟随过一次）—— 用户手动挑的区域不会被每次进页面覆盖。
     /// 改的是同一个 `AppStorage` 键，`onChange(of: shopRegion)` 会自动清空搜索并重载榜单。
     private func syncRegionWithAccount() {
+        // 用户显式选了「自动」就保持「自动」，不要被改写成具体区
+        guard shopRegion != AppStoreService.autoRegion else { return }
         guard let account = AppStoreDownloadStore.shared.selectedAccount else { return }
         guard let followed = AppStoreService.followAccountRegionIfNeeded(
             email: account.email, storefront: account.store) else { return }
@@ -201,17 +209,21 @@ struct AppStoreView: View {
 
     // MARK: 榜单
 
-    /// 区域筛选：切换后榜单 / 搜索 / 详情都按该区域取数据
+    /// 区域筛选：切换后榜单 / 搜索 / 详情都按该区域取数据。
+    /// 三段式与二改版同款：自动 → 常用区域 → 全部地区（`XX - storefront id`）
     private var regionSection: some View {
         Section {
             Picker("区域", selection: $shopRegion) {
-                ForEach(AppStoreService.Region.allCases) { r in
-                    Text(r.display).tag(r.rawValue)
+                Text(AppStoreService.autoDisplay).tag(AppStoreService.autoRegion)
+                Section("常用区域") {
+                    ForEach(AppStoreService.Region.allCases) { r in
+                        Text(r.display).tag(r.rawValue)
+                    }
                 }
-                // 账号自动切换过来的区域可能不在这 9 个常用区里 —— 补一行，
-                // 否则 Picker 没有匹配项会显示成"没选中"。
-                if !AppStoreService.Region.allCases.contains(where: { $0.rawValue == shopRegion }) {
-                    Text(shopRegion.uppercased()).tag(shopRegion)
+                Section("全部地区") {
+                    ForEach(StoreRegions.all, id: \.code) { region in
+                        Text("\(region.code) - \(region.storefrontID)").tag(region.code.lowercased())
+                    }
                 }
             }
             .pickerStyle(.menu)
@@ -292,7 +304,7 @@ struct AppStoreView: View {
                     }
                 }
             } header: {
-                Text("\(region.title) · \(genre.title) · \(kind.title) · 共 \(items.count) 款")
+                Text("\(regionTitle) · \(genre.title) · \(kind.title) · 共 \(items.count) 款")
             }
         }
     }
@@ -310,7 +322,7 @@ struct AppStoreView: View {
                 ContentUnavailableView.search(text: keyword)
             }
         } else {
-            Section("\(region.title) 搜索结果 · \(searchResults.count) 款") {
+            Section("\(regionTitle) 搜索结果 · \(searchResults.count) 款") {
                 ForEach(searchResults) { app in
                     NavigationLink {
                         AppStoreDetailView(item: app)

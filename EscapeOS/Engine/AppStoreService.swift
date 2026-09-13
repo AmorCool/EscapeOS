@@ -10,13 +10,55 @@ enum AppStoreService {
 
     // MARK: - 区域（App Store 商店的国家/地区）
 
-    /// 用户选择的商场区域（`UserDefaults` 持久化）；默认 `cn`（国区）。
+    /// 「自动」：跟随当前 Apple ID 的账号区域（v0.3.363）
+    static let autoRegion = "auto"
+
+    private static let shopRegionKey = "AppStore.ShopRegion"
+
+    /// 用户选择区的**原始**存储值：具体国家码（小写），或特殊值 `"auto"`（跟随账号）。
+    static var rawShopRegion: String {
+        get { UserDefaults.standard.string(forKey: shopRegionKey) ?? "cn" }
+        set { UserDefaults.standard.set(newValue, forKey: shopRegionKey) }
+    }
+
+    /// 传给 Apple 接口的**具体**区域码；默认 `cn`（国区）。
     ///
     /// 榜单 RSS、搜索、详情 lookup、版本历史全部走这个区域 —— 不同区域的
     /// 商品池完全不同（美区没有国区应用，反之亦然）。
+    ///
+    /// ⚠️ `"auto"` 只存在于 `rawShopRegion`，**绝不**从这里漏出：读到 `"auto"` 时
+    /// 立刻解析成账号区（未登录/无账号 → 兜底 `cn`），保证所有消费点拿到的都是具体国家码。
     static var countryCode: String {
-        get { UserDefaults.standard.string(forKey: "AppStore.ShopRegion") ?? "cn" }
-        set { UserDefaults.standard.set(newValue, forKey: "AppStore.ShopRegion") }
+        get { resolveRegion(rawShopRegion) }
+        set { rawShopRegion = newValue }
+    }
+
+    /// 把原始选择解析成**具体**国家码（`"auto"` → 账号区；空/未知 → `cn`）。
+    static func resolveRegion(_ raw: String) -> String {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if value == autoRegion { return accountStorefrontCode() ?? "cn" }
+        return value.isEmpty ? "cn" : value
+    }
+
+    /// 当前账号所在区的国家码（小写）；未登录 / storefront 认不出时 nil。
+    ///
+    /// 账号的 `fullStoreFront`（如 `143441-19,34`）第一段就是 storefront id，
+    /// 经 `StoreRegions` 反查得到国家码。
+    static func accountStorefrontCode() -> String? {
+        guard let account = AppStoreDownloadStore.shared.selectedAccount else { return nil }
+        let storefront = (account.fullStoreFront?.isEmpty == false)
+            ? (account.fullStoreFront ?? account.store) : account.store
+        let head = storefront.split(separator: "-").first.map(String.init) ?? ""
+        guard !head.isEmpty else { return nil }
+        return StoreRegions.code(for: head)?.lowercased()
+    }
+
+    /// 「自动」选项的文案：解析出的账号区**不在常用列表**里才拼 `"自动 · BR"`，
+    /// 在列表里（或未登录兜底 `cn`）就只显示 `"自动"`。
+    static var autoDisplay: String {
+        let code = resolveRegion(autoRegion)
+        if Region.allCases.contains(where: { $0.rawValue == code }) { return "自动" }
+        return "自动 · \(code.uppercased())"
     }
 
     /// 可切换的区域（爱思 PC 端同款常用区）
@@ -58,7 +100,8 @@ enum AppStoreService {
     @discardableResult
     static func adoptAccountRegion(storefront: String, email: String? = nil) -> String? {
         guard let code = Configuration.countryCode(for: storefront)?.lowercased() else { return nil }
-        countryCode = code
+        // 用户显式选了「自动」时保持不动 —— 它本来就跟随账号，不该被覆盖成具体区
+        if rawShopRegion != autoRegion { countryCode = code }
         if let email { UserDefaults.standard.set(email, forKey: followedEmailKey) }
         return code
     }
@@ -74,9 +117,11 @@ enum AppStoreService {
         return adoptAccountRegion(storefront: storefront, email: email)
     }
 
-    /// 传给 Apple 接口的区域（未指定时用当前选择）
+    /// 传给 Apple 接口的区域（未指定时用当前选择）。
+    /// 兜底再解析一次，保证调用方万一传进 `"auto"` 也不会漏进 URL。
     private static func resolved(_ country: String?) -> String {
-        (country?.isEmpty == false ? country! : countryCode)
+        guard let c = country, !c.isEmpty else { return countryCode }
+        return resolveRegion(c)
     }
 
     // MARK: - 基础请求
