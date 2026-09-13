@@ -27,9 +27,11 @@ extension ApplePackageError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .licenseRequired:
-            "License required"
+            // v0.3.366：原为英文 "License required"。这条会经由上层冒到界面上，改中文短句。
+            "缺少下载许可"
         case .passwordTokenExpired:
-            "登录状态已过期（password token is expired），请重新登录该 Apple ID"
+            // v0.3.366：去掉括号里的英文术语（对用户没有意义），与视图里的短文案统一。
+            "登录已过期，请重新登录"
         case .emptyPackage:
             "Apple 没有返回可下载内容"
         }
