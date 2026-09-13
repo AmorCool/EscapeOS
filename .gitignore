@@ -38,3 +38,9 @@ _*.log
 # Python
 __pycache__/
 *.pyc
+
+# 队友/我的 scratch 输出（曾多次被 git add -A 误入库）
+/_git*.txt
+/_tmp_*.txt
+/gs2.txt
+/chk.txt
