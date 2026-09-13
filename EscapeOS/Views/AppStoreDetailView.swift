@@ -204,15 +204,24 @@ struct AppStoreDetailView: View {
     @ViewBuilder
     private var installArea: some View {
         if let job = activeJob {
-            VStack(alignment: .leading, spacing: 8) {
+            // v0.3.367：与「下载管理」页同款的三段式展示 —— 阶段胶囊 + 文字 + 百分比 + 进度条 + 操作。
+            // 原先只有「一行文字 + 一条百分比 + 细进度条」，看不出当前处于哪个阶段
+            //（下载与安装共用同一条 0→100% 的总体进度，光看数字分不清是在下包还是在装包）。
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
-                    Text(job.stageText).font(.subheadline.weight(.medium))
-                    Spacer(minLength: 0)
+                    phaseChip(job.phase)
+                    if job.stageText != job.phase.title {
+                        Text(job.stageText)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
                     Text("\(Int(job.overall * 100))%")
-                        .font(.caption.monospacedDigit())
+                        .font(.subheadline.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
                 ProgressView(value: min(1, max(0, job.overall)))
+                    .animation(.easeOut(duration: 0.15), value: job.overall)
 
                 HStack(spacing: 16) {
                     // 暂停/继续：只有直链下载期间可用（安装阶段不可暂停）
@@ -226,6 +235,7 @@ struct AppStoreDetailView: View {
                         Label(job.phase == .paused ? "继续" : "暂停",
                               systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
                             .font(.caption.weight(.medium))
+                            .lineLimit(1)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
@@ -237,6 +247,7 @@ struct AppStoreDetailView: View {
                     } label: {
                         Label("删除安装包", systemImage: "trash")
                             .font(.caption.weight(.medium))
+                            .lineLimit(1)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.red)
@@ -248,10 +259,12 @@ struct AppStoreDetailView: View {
                     } label: {
                         Label("下载管理", systemImage: "list.bullet")
                             .font(.caption.weight(.medium))
+                            .lineLimit(1)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.blue)
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
         } else if let failed = center.lastFinishedJob(bundleId: item.bundleId, name: item.name),
                   failed.phase == .failed, let err = failed.error {
@@ -259,10 +272,33 @@ struct AppStoreDetailView: View {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
                 getButton
             }
         } else {
             getButton
+        }
+    }
+
+    /// 阶段胶囊：颜色区分「下载中 / 安装中 / 已暂停 / 等待中」
+    private func phaseChip(_ phase: IPADownloadCenter.Phase) -> some View {
+        Text(phase.title)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(phaseTint(phase).opacity(0.14), in: Capsule())
+            .foregroundStyle(phaseTint(phase))
+            .fixedSize()
+    }
+
+    private func phaseTint(_ phase: IPADownloadCenter.Phase) -> Color {
+        switch phase {
+        case .downloading: return .blue
+        case .installing:  return .orange
+        case .paused:      return .gray
+        case .waiting:     return .secondary
+        case .done:        return .green
+        case .failed:      return .red
         }
     }
 
@@ -384,12 +420,7 @@ struct AppStoreDetailView: View {
                     Label("网页版商店页", systemImage: "safari")
                 }
             }
-            if let job = center.lastFinishedJob(bundleId: item.bundleId, name: item.name),
-               job.phase == .failed, let err = job.error {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
+            // v0.3.367：失败原因已由头部 installArea 展示，这里不再重复一遍。
         }
     }
 

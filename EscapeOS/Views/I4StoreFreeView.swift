@@ -180,15 +180,20 @@ struct I4StoreFreeView: View {
                     .frame(width: 54, height: 54)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
+                    // v0.3.367：信息列不再被右侧进度控件挤扁 ——
+                    // 胶囊固定单行（`.fixedSize()`），一行放不下就**整体换到下一行**（`ChipFlow`），
+                    // 简介与名称允许换行但不截断。用户要求「可以换行显示但不能显示不全」。
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(app.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                        HStack(spacing: 6) {
-                            if let v = app.version { chip("v\(v)", .blue) }
-                            if let s = app.sizeText { chip(s, .green) }
-                            if app.isSigned { chip("已签名", .purple) }
+                        Text(app.name).font(.subheadline.weight(.medium)).lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ChipFlow(spacing: 6) {
+                            ForEach(chips(app), id: \.text) { item in
+                                chip(item.text, item.tint)
+                            }
                         }
                         if let s = app.slogan, !s.isEmpty {
-                            Text(s).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            Text(s).font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     Spacer(minLength: 6)
@@ -203,11 +208,13 @@ struct I4StoreFreeView: View {
     @ViewBuilder
     private func trailingControl(_ app: I4PCStoreClient.I4App) -> some View {
         if let job = center.activeJob(bundleId: app.bundleId, name: app.name) {
+            // 进度控件也固定宽度：它不再跟左侧抢空间，左侧空间不够时由 ChipFlow 换行解决
             HStack(spacing: 6) {
                 ProgressView(value: min(1, max(0, job.overall)))
-                    .frame(width: 44)
+                    .frame(width: 40)
                 Text(job.phase == .paused ? "已暂停" : job.stageText)
                     .font(.caption2).foregroundStyle(.secondary)
+                    .lineLimit(1)
                 Button {
                     if job.phase == .paused {
                         center.resume(job.id)
@@ -230,6 +237,7 @@ struct I4StoreFreeView: View {
                 }
                 .buttonStyle(.plain)
             }
+            .fixedSize()
         } else {
             Button {
                 install(app)
@@ -244,12 +252,24 @@ struct I4StoreFreeView: View {
         }
     }
 
+    /// 版本 / 大小 / 已签名 —— 用 `ForEach` 交给 `ChipFlow`，一行放不下就整块换行
+    private func chips(_ app: I4PCStoreClient.I4App) -> [ChipItem] {
+        var out: [ChipItem] = []
+        if let v = app.version { out.append(ChipItem(text: "v\(v)", tint: .blue)) }
+        if let s = app.sizeText { out.append(ChipItem(text: s, tint: .green)) }
+        if app.isSigned { out.append(ChipItem(text: "已签名", tint: .purple)) }
+        return out
+    }
+
+    /// 胶囊：**单行 + 定宽**，绝不被压缩折行（真机截图里 `v8.0.` / `78` 折成两行就是这个毛病）
     private func chip(_ text: String, _ tint: Color) -> some View {
         Text(text)
             .font(.caption2)
+            .lineLimit(1)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(tint.opacity(0.12), in: Capsule())
             .foregroundStyle(tint)
+            .fixedSize()
     }
 
     // MARK: - 加载
@@ -294,5 +314,62 @@ struct I4StoreFreeView: View {
                                            remoteURL: ipaURL.absoluteString,
                                            autoInstall: true)
         downloadedCount = IPADownloadLibrary.shared.items().count
+    }
+}
+
+// MARK: - 胶囊自动换行布局
+
+/// 一颗胶囊（文本 + 着色），供 `ChipFlow` 使用
+private struct ChipItem {
+    let text: String
+    let tint: Color
+}
+
+/// v0.3.367：一行放得下就横排，放不下就把**整个胶囊**挪到下一行 ——
+/// 不缩字号、不折行内文字、不截断。
+///
+/// 用 `HStack` 做不到这件事：空间不足时它会把 `Text` 压成竖排（真机截图里
+/// `v8.0.78` 变成 `v8.0.` / `78` 两行就是这个原因）。
+private struct ChipFlow: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let limit = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var widest: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if rowWidth > 0, rowWidth + spacing + size.width > limit {
+                totalHeight += rowHeight + spacing
+                widest = max(widest, rowWidth)
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+                rowHeight = max(rowHeight, size.height)
+            }
+        }
+        widest = max(widest, rowWidth)
+        totalHeight += rowHeight
+        return CGSize(width: min(widest, limit), height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            sub.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }

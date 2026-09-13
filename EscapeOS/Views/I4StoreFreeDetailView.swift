@@ -22,6 +22,12 @@ struct I4StoreFreeDetailView: View {
     private var displayName: String { detail?.name ?? app.name }
     private var displayIcon: String? { detail?.icon ?? app.icon }
 
+    /// v0.3.367：该应用正在进行的任务。**与列表页 / 下载管理页同源** ——
+    /// 全工程只有 `IPADownloadCenter` 这一套下载状态，这里只是读它。
+    private var busyJob: IPADownloadCenter.Job? {
+        center.activeJob(bundleId: bundleId, name: displayName)
+    }
+
     private var visibleVersions: [I4PCStoreClient.I4Version] {
         let all = detail?.versions ?? []
         return showAllVersions ? all : Array(all.prefix(versionPageSize))
@@ -29,6 +35,9 @@ struct I4StoreFreeDetailView: View {
 
     var body: some View {
         List {
+            // 进度只依赖 `IPADownloadCenter`（bundleId / 名称来自列表传进来的 `app`），
+            // 所以放在最外层：详情还在加载、甚至详情加载失败时，进度也照样看得见。
+            if let job = busyJob { downloadSection(job) }
             if loading {
                 loadingSection
             } else if let errorText {
@@ -51,6 +60,57 @@ struct I4StoreFreeDetailView: View {
     }
 
     // MARK: - 头图 + 当前版本
+
+    /// v0.3.367：列表里点了「安装」再进详情，这里要能立刻看见**同一个任务的进度**
+    /// （阶段文字 + 百分比 + 进度条 + 暂停 / 删除），样式对齐「下载管理」页。
+    private func downloadSection(_ job: IPADownloadCenter.Job) -> some View {
+        Section("下载中") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(job.phase == .paused ? "已暂停" : job.stageText)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    if let v = job.version, !v.isEmpty {
+                        Text("v\(v)").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Text("\(Int(job.overall * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(value: min(1, max(0, job.overall)))
+                HStack(spacing: 16) {
+                    Button {
+                        if job.phase == .paused {
+                            center.resume(job.id)
+                        } else {
+                            center.pause(job.id)
+                        }
+                    } label: {
+                        Label(job.phase == .paused ? "继续" : "暂停",
+                              systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
+                    .disabled(!job.canPause)
+
+                    Button {
+                        center.cancel(job.id)
+                    } label: {
+                        Label("删除安装包", systemImage: "trash")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+
+                    Spacer(minLength: 0)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+        }
+    }
 
     private func headerSection(_ d: I4PCStoreClient.I4AppDetail) -> some View {
         Section {
@@ -76,7 +136,13 @@ struct I4StoreFreeDetailView: View {
                     }
                 }
                 Spacer(minLength: 6)
-                installControl(version: d.version) { installCurrent(d) }
+                // v0.3.367：按「应用」而不是「版本号」匹配 —— 详情页拿到的版本号可能和
+                // 列表发起下载时的不一致，旧写法会匹配不上，于是「点了安装进来却看不到进度」。
+                if let job = busyJob {
+                    progressChip(job)
+                } else {
+                    installButton { installCurrent(d) }
+                }
             }
             .padding(.vertical, 2)
         }
@@ -187,29 +253,45 @@ struct I4StoreFreeDetailView: View {
             .foregroundStyle(tint)
     }
 
-    /// 安装按钮：该版本正在下载/安装时显示进度，否则显示「安装」
+    /// 历史版本行上的进度：只认**版本号完全一致**的任务
+    /// （当前版本的进度不能错挂到旧版那一行）
     @ViewBuilder
     private func installControl(version: String?, action: @escaping () -> Void) -> some View {
         if let job = activeJob(version: version) {
-            HStack(spacing: 6) {
-                ProgressView(value: min(1, max(0, job.overall)))
-                    .frame(width: 44)
-                Text(job.stageText).font(.caption2).foregroundStyle(.secondary)
-            }
+            progressChip(job)
         } else {
-            Button(action: action) {
-                Text("安装")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.14), in: Capsule())
-                    .foregroundStyle(.blue)
-            }
-            .buttonStyle(.plain)
+            installButton(action: action)
         }
     }
 
+    /// 进度胶囊：细进度条 + 百分比，定宽避免把左侧信息挤扁
+    private func progressChip(_ job: IPADownloadCenter.Job) -> some View {
+        HStack(spacing: 6) {
+            ProgressView(value: min(1, max(0, job.overall)))
+                .frame(width: 40)
+            Text("\(Int(job.overall * 100))%")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .fixedSize()
+    }
+
+    private func installButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text("安装")
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.blue.opacity(0.14), in: Capsule())
+                .foregroundStyle(.blue)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+
     private func activeJob(version: String?) -> IPADownloadCenter.Job? {
-        center.jobs.first { job in
+        guard let version, !version.isEmpty else { return nil }
+        return center.jobs.first { job in
             guard job.phase.isBusy, job.version == version else { return false }
             if let bid = bundleId, let jb = job.bundleId { return bid == jb }
             return job.name == displayName
