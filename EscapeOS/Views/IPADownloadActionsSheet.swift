@@ -419,7 +419,9 @@ struct IPADownloadActionsSheet: View {
     private func extractDownloadLink() {
         guard let link = sourceLink else {
             LoginLogger.shared.log("[下载面板] 台账无 sourceURL，给不出 IPA 原链接", category: .appStore)
-            ToastCenter.shared.show("无下载链接")
+            // v0.3.390：文案改准。AppleID 通道的地址是 Apple 按会话动态签发、必须带授权头才有效，
+            // **单独一个 URL 没有意义** → 这类包本来就给不出「可用的下载直链」，不是我们没查到。
+            ToastCenter.shared.show("该来源无公开直链")
             return
         }
         UIPasteboard.general.string = link

@@ -171,7 +171,10 @@ enum NiuwaStoreClient {
 
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 25
+        // v0.3.390：请求超时 25s → **10s**。
+        // 现状（真机实测）：服务端回的是**加密体**，我们解不开 → 每次搜索都必然以解析失败收场，
+        // 25 秒的等待纯属浪费用户时间。等密钥到手、能真正解出数据后，再按需调回。
+        cfg.timeoutIntervalForRequest = 10
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: cfg)
     }()
