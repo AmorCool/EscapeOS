@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.386] - 2026-09-13
+
+> ⚠️ **v0.3.378–v0.3.385 都没有产出过可安装的包**（v0.3.379 与 v0.3.384 都在 CI 编译阶段失败）。
+> **请直接安装本版**，本版包含它们全部改动。
+
+### 修复（编译失败：v0.3.384 无产物的真因）
+- `EscapeOS/Views/I4StoreFreeView.swift:25`
+  `error: cannot find 'NiuwaRegion' in scope`。
+  根因：`NiuwaRegion` 是 `NiuwaStoreClient`（`EscapeOS/Engine/NiuwaStoreClient.swift:44`）**内部的嵌套 enum**，
+  裸名引用找不到 → 改为全限定名 `NiuwaStoreClient.NiuwaRegion(rawValue:)`。
+
+### 变更（下载管理操作面板：「两行」语义按口径对齐）
+- **「复制下载链接」= App Store 商店来源链接**：读包内 `Payload/<App>.app/iTunesMetadata.plist` 的
+  **`itemId`** → `https://apps.apple.com/<当前商店区>/app/id<itemId>`。
+  **纯读本地文件，不联网、不起任何服务**；该行**恒显示**（不再要求台账有直链），
+  包里读不到商品号（自签 / 三方重签包）→ 提示「无商店链接」。
+- **「提取下载链接」= IPA 包本身的下载原链接**：读台账 `IPADownloadItem.sourceURL`
+  （下载时回填，例如爱思 `https://d-app6.i4.cn/soft/....ipa`）。
+  **纯读台账，不读包、不起服务**；台账没有 → 提示「无下载链接」。
+- 两行**严格互斥、不互相回落**。旧版「提取下载链接 = 用本机 HTTP 服务现场生成一个分享地址」
+  的做法**已删除**（本机 HTTP 服务现在只服务「在线安装」）。
+
+### 变更（在线安装：入口互挤变得可见）
+- 本机 HTTP 服务加**用途标记**（`Purpose.ota` / `.share`）：**在线安装占用时**，
+  「提取下载链接」行置灰并标「安装中」；**分享占用时**，「在线安装」行置灰并标「分享中」。
+
+### 修复（在线安装 / gist 托管）
+- **manifest 回读加严**：必须 **Content-Type ∈ {application/xml, text/xml, application/x-plist, *+xml}**，
+  并把**实际取到的 Content-Type 写进日志**（此前只比对内容，`paste.rs` 那种 `text/plain` 也能过）。
+- 匿名候选池：**删掉被劫持的 `envs.sh`**（回读被解析到广告域名）→ 新增 `tmpfiles.org` / `uguu.se`；
+  **单候选超时 25s → 8s**。
+- **本机服务器改绑 `0.0.0.0`、默认用局域网 IP 供包**（取不到才回落 `127.0.0.1`），日志写出实际地址。
+- gist 发布失败日志补上 **HTTP 状态码**（定位 401/403/404）；**仍用 secret gist，不切 public**。
+
 ## [0.3.384] - 2026-09-13
 
 > ⚠️ **v0.3.378–v0.3.383 都没有发布过包**（内部提交号）。请直接安装本版，本版包含它们全部改动。

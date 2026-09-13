@@ -22,7 +22,7 @@ struct I4StoreFreeView: View {
     }
 
     /// v0.3.382：牛蛙源的分区（客户端硬编码中国/美国/香港三档）
-    private var region: NiuwaStoreClient.NiuwaRegion { NiuwaRegion(rawValue: regionRaw) ?? .cn }
+    private var region: NiuwaStoreClient.NiuwaRegion { NiuwaStoreClient.NiuwaRegion(rawValue: regionRaw) ?? .cn }
 
     @State private var source: StoreSource = .i4
     @State private var regionRaw = "cn"

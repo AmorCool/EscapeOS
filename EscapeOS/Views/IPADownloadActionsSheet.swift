@@ -188,15 +188,13 @@ struct IPADownloadActionsSheet: View {
 
     private var actionRows: [RowSpec] {
         var rows: [RowSpec] = [openRow]
-        // ⚠️ 这里仍按「台账有 sourceURL」决定是否显示 —— 那是历史门控（当时这行的内容是台账直链）。
-        // 现在这行内容是**包内 iTunesMetadata 的商店链接**，与台账 sourceURL 不同源：
-        // 台账没直链时这行会被藏起来（哪怕包里能读出商店链接）。
-        // 按 team-lead 指示本轮**不动其它行**，故门控保持原样、只把行为换掉。
-        if sourceLink != nil {
-            rows.append(RowSpec(icon: "link", tint: .teal, title: "复制下载链接") {
-                copyLink()
-            })
-        }
+        // 「复制下载链接」**常显**：取值是包内 `iTunesMetadata.itemId`（本地文件），
+        // 与台账 `sourceURL` 无任何关系 —— 台账没直链也照样能读出商店链接。
+        // 早期它是按「台账有 sourceURL」条件隐藏的，那个门控随取值来源一起作废了；
+        // 包里读不到商品号时由 `copyLink()` 自己提示「无商店链接」。
+        rows.append(RowSpec(icon: "link", tint: .teal, title: "复制下载链接") {
+            copyLink()
+        })
         rows.append(RowSpec(icon: "square.and.arrow.up", tint: .indigo, title: "分享 IPA") {
             shareIPA()
         })
@@ -309,7 +307,7 @@ struct IPADownloadActionsSheet: View {
 
     /// 贴合内容高度：固定行高 × 行数 + 头图 + 三个分组标题 + 取消行 + 内边距
     private var sheetHeight: CGFloat {
-        let actionCount = 1 + (sourceLink == nil ? 0 : 1) + 1   // 打开 / [复制下载链接] / 分享
+        let actionCount = 3                                     // 打开 / 复制下载链接 / 分享（后两条恒显示）
         let rows = 2 + actionCount + 2                          // 安装 2 行 + 其它操作 2 行
         let sections: CGFloat = 3
         let rowsHeight = CGFloat(rows) * 58 + CGFloat(rows - 3) * 1  // 行高 + 各分组内的分隔线
