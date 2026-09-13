@@ -1,23 +1,27 @@
 import Foundation
+import Security
 
 /// v0.3.383：在线安装（OTA）的**清单生成 + HTTPS 托管**。
 ///
 /// iOS 自 iOS 7.1 起**不收 http 清单**，manifest.plist 必须落在 HTTPS 且证书受设备信任。
 /// 本机 HTTP 服务器（局域网 IP / 回环）只用来发 IPA 本体（`software-package`），
-/// 清单必须放到公网 HTTPS：
+/// 清单必须放到公网 HTTPS。托管方式按优先级：
 ///
-/// 1. **用户自带的 HTTPS 地址**（设置 → HTTPS 托管）**优先**，且一旦填了就**不再对外发任何请求**：
+/// 1. **用户自定义的 HTTPS 地址**（更多 → 设置 → HTTPS 托管）→ 只用它，不向任何第三方发请求：
 ///    · 填**完整 URL**（已含路径）→ `PUT` 覆盖它；
 ///    · 填**基址** → `POST <基址>/sign/install.plist`，响应体若是纯文本 URL 就用它，否则用请求地址本身。
-/// 2. 没填才走**匿名、免账号**候选，逐个上传 + **GET 回读校验**，失败静默换下一个：
+/// 2. **GitHub Token**（下载管理右上角齿轮 → GitHub Token）→ 只用 gist（私有 gist，
+///    `raw_url` 是可信 HTTPS）；上传/解析失败才回落匿名候选，并记「gist 失败，回落匿名」。
+/// 3. **匿名、免账号**候选（仅在没填上面两项时），逐个上传 + **GET 回读校验**，失败静默换下一个：
 ///    `litterbox.catbox.moe`（1h）→ `0x0.st` → `tmpfiles.org`（1h）→ `uguu.se`（3h）→ `paste.rs`。
 ///    临时件排前（清单只活几分钟，且含 bundleId/版本，少留痕）；**单候选超时 8s**。
 ///    ⚠️ `envs.sh` 已删除：真机回读被劫持到广告域名（`ob.sd559908.js.2gnc.com`），有安全风险。
 ///
-/// **回读校验（加严）**：内容必须一致，且 `Content-Type` 必须是 XML 家族
+/// **回读校验**：内容必须一致；匿名候选另需 `Content-Type` 属 XML 家族
 /// （`application/xml` / `text/xml` / `application/x-plist` / 任意 `*+xml`）。
-/// 若所有候选都不是 XML 类型，则用第一个「内容一致」的候选兜底，并**明确记日志**
-/// （iOS 是否接受非 XML 清单**未验证**，不把这条当结论）。
+/// 若所有匿名候选都不是 XML 类型，则用第一个「内容一致」的兜底并**明确记日志**
+/// （iOS 是否接受非 XML 清单**未验证**，不把这条当结论）。gist / 自有地址不套这条闸，
+/// 但会把回读到的 `Content-Type` 写进日志。
 ///
 /// **IPA 本体一字节都不上传**，这里只上传那份几百字节的 plist。
 enum ManifestPublisher {
@@ -73,10 +77,15 @@ enum ManifestPublisher {
     // MARK: - 发布（阻塞式；调用方已在后台队列）
 
     /// 发布清单，回调返回可直接 GET 的 HTTPS 地址。全部失败才报错。
+    ///
+    /// 托管方式优先级：
+    /// 1. **用户自定义的 HTTPS 地址**（设置项）→ 只用它，不向任何第三方发请求；
+    /// 2. **GitHub Token（下载管理右上角设置）**→ 只用 gist，失败才回落匿名候选；
+    /// 3. 匿名候选链。
     static func publish(manifest: Data, completion: @escaping (Result<String, Error>) -> Void) {
         if let endpoint = OnlineInstallConfig.endpoint {
             // 用户自有托管：只用它，不向任何第三方发请求。
-            LoginLogger.shared.log("[在线安装] 使用自有 HTTPS 托管（未对外发起任何第三方请求）", category: .appStore)
+            LoginLogger.shared.log("[在线安装] 托管方式：自有 HTTPS 地址（未对外发起任何第三方请求）", category: .appStore)
             do {
                 let url = try publishToUserEndpoint(manifest: manifest, endpoint: endpoint)
                 completion(.success(url))
@@ -87,11 +96,78 @@ enum ManifestPublisher {
             return
         }
 
+        if let token = OnlineInstallConfig.githubToken {
+            LoginLogger.shared.log("[在线安装] 托管方式：gist（token \(OnlineInstallConfig.tokenPrefix ?? "?")…）",
+                                   category: .appStore)
+            if let url = publishToGist(manifest: manifest, token: token) {
+                completion(.success(url))
+                return
+            }
+            LoginLogger.shared.log("[在线安装] gist 失败，回落匿名", category: .appStore)
+        } else {
+            LoginLogger.shared.log("[在线安装] 托管方式：匿名候选（未配置 GitHub Token）", category: .appStore)
+        }
+
         guard let url = publishToAnonymous(manifest: manifest) else {
             completion(.failure(PublishError.noHosting))
             return
         }
         completion(.success(url))
+    }
+
+    // MARK: - GitHub gist 托管
+
+    /// 私有 gist 托管：`POST /gists` → 取 `files["install.plist"].raw_url`。
+    ///
+    /// 注意：`raw_url` 落在 `gist.githubusercontent.com`，回读的 `Content-Type` 多为
+    /// `text/plain`，所以这里**以「内容一致」为准**，Content-Type **只记录、不拒绝**
+    /// （用户显式选择了 gist 这条通道）。任何上传/解析失败都返回 nil，由调用方回落匿名候选。
+    private static func publishToGist(manifest: Data, token: String) -> String? {
+        guard let content = String(data: manifest, encoding: .utf8),
+              let endpoint = URL(string: "https://api.github.com/gists"),
+              let body = try? JSONSerialization.data(withJSONObject: [
+                  "description": "EscapeSpace OTA manifest",
+                  "public": false,
+                  "files": ["install.plist": ["content": content]]
+              ]) else {
+            LoginLogger.shared.log("[在线安装] gist 请求构造失败", category: .appStore)
+            return nil
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = candidateTimeout
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        request.setValue("EscapeSpace/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+
+        guard let result = try? perform(request) else {
+            LoginLogger.shared.log("[在线安装] gist 网络失败", category: .appStore)
+            return nil
+        }
+        LoginLogger.shared.log("[在线安装] gist POST 状态码=\(result.status)", category: .appStore)
+
+        guard (200...299).contains(result.status),
+              let json = try? JSONSerialization.jsonObject(with: result.body) as? [String: Any],
+              let files = json["files"] as? [String: Any],
+              let entry = files["install.plist"] as? [String: Any],
+              let raw = entry["raw_url"] as? String,
+              raw.lowercased().hasPrefix("https://") else {
+            LoginLogger.shared.log("[在线安装] gist 未返回可用 raw_url", category: .appStore)
+            return nil
+        }
+        LoginLogger.shared.log("[在线安装] gist raw_url=\(shortURL(raw))", category: .appStore)
+
+        let outcome = verify(url: raw, expected: manifest, requireXML: false)
+        let shownType = outcome.contentType.isEmpty ? "缺失" : outcome.contentType
+        LoginLogger.shared.log("[在线安装] gist 回读 Content-Type=\(shownType)"
+                               + "（\(outcome.ok ? "内容一致" : (outcome.reason ?? "校验未过"))）",
+                               category: .appStore)
+        guard outcome.ok else { return nil }
+        return raw
     }
 
     // MARK: - 用户自有托管
@@ -135,8 +211,8 @@ enum ManifestPublisher {
             finalURL = url.absoluteString
         }
 
-        // 校验：能 GET 回来且类型是 XML 即视为通过（CDN 可能短暂回旧内容，自有地址仍照用）
-        let verified = verify(url: finalURL, expected: manifest)
+        // 校验：内容一致即按用户地址使用（Content-Type 只记录，自有地址仍照用）
+        let verified = verify(url: finalURL, expected: manifest, requireXML: false)
         let shownType = verified.contentType.isEmpty ? "缺失" : verified.contentType
         LoginLogger.shared.log("[在线安装] 自有托管校验\(verified.ok ? "通过" : "未通过（仍按自有地址使用）")"
                                + "：Content-Type=\(shownType) \(shortURL(finalURL))",
@@ -313,11 +389,12 @@ enum ManifestPublisher {
 
     /// 立刻 GET 回读，两道关：
     /// ① 内容必须一致（或至少含清单关键字段）；
-    /// ② **`Content-Type` 必须是 XML 家族** —— 这是真机失败那次留下的直接教训：
-    ///    只比对内容会让 `text/plain` 的候选通过，而 iOS 是把清单当 plist 解析的，
+    /// ② `requireXML == true` 时，**`Content-Type` 必须是 XML 家族** —— 这是真机失败那次
+    ///    留下的教训：只比对内容会让 `text/plain` 的候选通过，而 iOS 是把清单当 plist 解析的，
     ///    类型不对就白装（该相关性**未在真机确证**，所以只做「优先换 XML 候选」，
     ///    全部候选都不是 XML 时见 `publishToAnonymous` 的兜底分支）。
-    private static func verify(url: String, expected: Data) -> VerifyOutcome {
+    ///    gist / 用户自有地址传 `false`：那是用户显式选的通道，Content-Type 只记录不拒绝。
+    private static func verify(url: String, expected: Data, requireXML: Bool = true) -> VerifyOutcome {
         guard let endpoint = URL(string: url) else {
             return VerifyOutcome(ok: false, contentType: "", reason: "地址无效")
         }
@@ -335,7 +412,7 @@ enum ManifestPublisher {
                 return VerifyOutcome(ok: false, contentType: contentType, reason: "内容不一致")
             }
         }
-        guard isXMLContentType(contentType) else {
+        if requireXML, !isXMLContentType(contentType) {
             return VerifyOutcome(ok: false, contentType: contentType, reason: reasonContentType)
         }
         return VerifyOutcome(ok: true, contentType: contentType, reason: nil)
@@ -393,13 +470,19 @@ enum ManifestPublisher {
     }
 }
 
-/// v0.3.379：在线安装的配置。
+/// v0.3.383：在线安装配置。
 ///
-/// 只有一项：**HTTPS 托管地址**（用户可填自己的服务器；留空则用匿名免账号 paste 候选）。
-/// 不是账号凭证，存 `UserDefaults`（键与设置页的 `@AppStorage` 一致）。
+/// · **GitHub Token**：只存 **Keychain**（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`，
+///   不做 iCloud 同步、不落 UserDefaults）；日志最多只记前 8 位。
+/// · **HTTPS 托管地址**（可选）：非机密，存 `UserDefaults`（与设置页 `@AppStorage` 同键）。
 enum OnlineInstallConfig {
 
     static let endpointKey = "escape.onlineInstallEndpoint"
+
+    private static let keychainService = "com.ipaside.escapeos.onlineinstall"
+    private static let tokenAccount = "githubToken"
+
+    // MARK: - 自有 HTTPS 托管地址
 
     /// 用户自带的 HTTPS 托管地址；空/未配置时返回 `nil`。
     static var endpoint: String? {
@@ -407,5 +490,50 @@ enum OnlineInstallConfig {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty else { return nil }
         return value
+    }
+
+    // MARK: - GitHub Token（Keychain）
+
+    /// 已配置的 token；未配置返回 `nil`。
+    static var githubToken: String? {
+        var query = tokenQuery()
+        query[kSecReturnData as String] = kCFBooleanTrue
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data,
+              let value = String(data: data, encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    /// 保存 token（传 `nil`/空串 = 清除）。
+    static func setGitHubToken(_ raw: String?) {
+        clearGitHubToken()
+        let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !value.isEmpty, let data = value.data(using: .utf8) else { return }
+        var attributes = tokenQuery()
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        attributes[kSecValueData as String] = data
+        SecItemAdd(attributes as CFDictionary, nil)
+    }
+
+    static func clearGitHubToken() {
+        SecItemDelete(tokenQuery() as CFDictionary)
+    }
+
+    /// 日志用：**只记前 8 位**，其余一律不落日志。
+    static var tokenPrefix: String? {
+        guard let token = githubToken else { return nil }
+        return String(token.prefix(8))
+    }
+
+    private static func tokenQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: tokenAccount
+        ]
     }
 }

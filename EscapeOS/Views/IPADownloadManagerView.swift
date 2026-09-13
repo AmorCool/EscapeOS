@@ -18,6 +18,8 @@ struct IPADownloadManagerView: View {
     /// 进入页面时按 bundleId 查回来补上；查不到就退回字母块。
     @State private var icons: [String: String] = [:]
     @State private var selection = Set<String>()
+    /// v0.3.383：右上角「在线安装设置」sheet（GitHub Token）
+    @State private var showOnlineInstallSettings = false
     /// v0.3.382：在列表里出现**多于一次**的 bundleId。
     /// 用途：行状态判定时，若某个任务的版本还未知（只能按 bundleId 认行），
     /// 而这些行共享同一个 bundleId，就**宁可都不显示**进行中/失败 —— 不能显示错（见 activeJob 注释）。
@@ -44,6 +46,14 @@ struct IPADownloadManagerView: View {
         .navigationTitle("下载管理")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showOnlineInstallSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("在线安装设置")
+            }
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
             ToolbarItem(placement: .topBarLeading) {
                 Button {
@@ -54,6 +64,9 @@ struct IPADownloadManagerView: View {
             }
         }
         .toastHost()
+        .sheet(isPresented: $showOnlineInstallSettings) {
+            OnlineInstallSettingsSheet()
+        }
         .sheet(item: $actionItem) { item in
             IPADownloadActionsSheet(
                 item: item,
@@ -436,5 +449,56 @@ struct IPADownloadManagerView: View {
                                                  version: item.version,
                                                  iconURL: item.iconURL)
         ToastCenter.shared.show(downgrade ? "正在降级安装…" : "正在安装…")
+    }
+}
+
+/// v0.3.383：下载管理右上角齿轮弹出的**极简**设置 —— 只放一行 GitHub Token。
+///
+/// 用途：把在线安装的**清单**托管到私有 gist（`raw_url` 是可信 HTTPS），
+/// 比公共临时托管可靠。token 存 **Keychain**（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`，
+/// 不做 iCloud 同步、不落 UserDefaults），日志最多只记前 8 位。
+/// 注意：**这只换了一个更可靠的托管通道，不代表「在线安装装不上」被修好了**。
+struct OnlineInstallSettingsSheet: View {
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var token = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    SecureField("GitHub Token", text: $token)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                        .font(.footnote)
+                } footer: {
+                    Text("仅用于托管安装清单.")
+                        .font(.caption2)
+                }
+
+                Section {
+                    Button("保存") {
+                        OnlineInstallConfig.setGitHubToken(token)
+                        token = OnlineInstallConfig.githubToken ?? ""
+                        ToastCenter.shared.show("已保存")
+                    }
+                    Button("清除", role: .destructive) {
+                        OnlineInstallConfig.clearGitHubToken()
+                        token = ""
+                        ToastCenter.shared.show("已清除")
+                    }
+                }
+            }
+            .navigationTitle("在线安装")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .toastHost()
+        }
+        .presentationDetents([.medium])
+        .onAppear { token = OnlineInstallConfig.githubToken ?? "" }
     }
 }
