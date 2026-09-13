@@ -211,20 +211,32 @@ struct AppStoreView: View {
 
     /// 区域筛选：切换后榜单 / 搜索 / 详情都按该区域取数据。
     /// 三段式：自动（跟随账号）→ 常用区域 → 其他地区（全表余下的，`XX - storefront id`）
+    ///
+    /// v0.3.363：「自动」时把**跟随到的那个区**标注出来（用户要求：不然不知道自动跟了哪个区）。
+    /// 「自动」当前解析到的区域码（小写）；非自动模式返回空串，不标注。
+    private var followedRegionCode: String {
+        guard shopRegion == AppStoreService.autoRegion else { return "" }
+        return AppStoreService.resolveRegion(AppStoreService.autoRegion)
+    }
+
     private var regionSection: some View {
         Section {
             Picker("区域", selection: $shopRegion) {
                 Text(AppStoreService.autoDisplay).tag(AppStoreService.autoRegion)
                 Section("常用区域") {
                     ForEach(AppStoreService.Region.allCases) { r in
-                        Text(r.display).tag(r.rawValue)
+                        Text(r.rawValue == followedRegionCode ? "\(r.display) [自动跟随]" : r.display)
+                            .tag(r.rawValue)
                     }
                 }
                 // v0.3.363：这节剔掉上面的常用区 —— 两节同 tag 会让 Picker 可能双勾选/标题错。
                 Section("其他地区") {
                     ForEach(StoreRegions.excluding(Set(AppStoreService.Region.allCases.map(\.rawValue))),
                             id: \.code) { region in
-                        Text("\(region.code) - \(region.storefrontID)").tag(region.code.lowercased())
+                        Text(region.code.lowercased() == followedRegionCode
+                             ? "\(region.code) - \(region.storefrontID) [自动跟随]"
+                             : "\(region.code) - \(region.storefrontID)")
+                            .tag(region.code.lowercased())
                     }
                 }
             }

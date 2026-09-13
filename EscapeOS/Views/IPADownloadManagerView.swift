@@ -189,11 +189,14 @@ struct IPADownloadManagerView: View {
                 HStack(spacing: 6) {
                     if let v = item.version { chip("v\(v)", .blue) }
                     chip(item.sizeText, .green)
-                    Text(item.kindText)
-                        .font(.caption2)
-                        .foregroundStyle(kindTint(item))
-                        .fixedSize(horizontal: false, vertical: true)
                 }
+                // v0.3.363：包类型从胶囊同行里挪到**独立一行**。
+                // 原来和两个胶囊挤同一个 HStack，空间不够时被压成竖排窄列
+                // （真机截图里「加密 / 包 · / 带 / sinf」一列一个字的那个别扭样式）。
+                Text(item.kindText)
+                    .font(.caption2)
+                    .foregroundStyle(kindTint(item))
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(subtitle(item))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
