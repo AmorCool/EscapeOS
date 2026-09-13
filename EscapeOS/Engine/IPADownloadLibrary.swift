@@ -18,6 +18,9 @@ struct IPADownloadItem: Codable, Identifiable, Hashable {
     var downloadedAt: Date
     var iconURL: String?
     var source: String            // 「爱思免登录」/「App Store」…
+    /// v0.3.378：下载时的**来源直链**。只有走直链下载的条目才有（Apple ID 通道没有公开直链）；
+    /// 操作面板的「复制下载链接」只认它，没有就隐藏该行 —— 不拿本地路径冒充下载链接。
+    var sourceURL: String? = nil
     var packageName: String?      // 包内 Info.plist 的显示名
     var isEncrypted: Bool?
     var hasSINF: Bool?
@@ -116,7 +119,8 @@ final class IPADownloadLibrary {
                 bundleId: String?,
                 version: String?,
                 iconURL: String?,
-                source: String) {
+                source: String,
+                sourceURL: String? = nil) {
         let name = fileURL.lastPathComponent
         var index = loadIndex()
         index.removeAll { $0.fileName == name }
@@ -126,6 +130,8 @@ final class IPADownloadLibrary {
         item.version = version ?? item.version
         item.iconURL = iconURL
         item.source = source
+        // 只在拿到真直链时才覆盖，避免 Apple ID 通道把已有直链抹掉
+        if let sourceURL, !sourceURL.isEmpty { item.sourceURL = sourceURL }
         index.append(item)
         saveIndex(index)
     }
@@ -150,6 +156,20 @@ final class IPADownloadLibrary {
         guard let i = index.firstIndex(where: { $0.fileName == fileName }) else { return }
         guard index[i].iconURL != url else { return }
         index[i].iconURL = url
+        saveIndex(index)
+    }
+
+    /// v0.3.378：把**来源直链**回填进台账（供操作面板「复制下载链接」用）。
+    ///
+    /// 补齐方式与 `updateIconURL` 同源：下载中心的任务里记着 `remoteURL`，
+    /// 界面侧把「已完成且有直链」的任务回填到这里并落盘，于是历史记录里也有链接可复制。
+    func updateSourceURL(fileName: String, url: String) {
+        let link = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !link.isEmpty else { return }
+        var index = loadIndex()
+        guard let i = index.firstIndex(where: { $0.fileName == fileName }) else { return }
+        guard index[i].sourceURL != link else { return }
+        index[i].sourceURL = link
         saveIndex(index)
     }
 

@@ -7,9 +7,13 @@ import SwiftUI
 ///
 /// 安装复用既有 RSD 隧道能力（`AppStoreInstallService.installLocalIPA`）：
 /// 加密包走 `PackageType: Customer` + 包内 `SC_Info/*.sinf`，明文包走常规安装。
+///
+/// v0.3.378：点任意一行弹出操作面板（`IPADownloadActionsSheet`）。
 struct IPADownloadManagerView: View {
 
     @State private var items: [IPADownloadItem] = []
+    /// 正在弹操作面板的条目
+    @State private var actionItem: IPADownloadItem?
     /// bundleId → 图标 URL。历史记录里没持久化 `iconURL`（真机 `ipa_downloads.json` 实测没有该字段），
     /// 进入页面时按 bundleId 查回来补上；查不到就退回字母块。
     @State private var icons: [String: String] = [:]
@@ -46,6 +50,13 @@ struct IPADownloadManagerView: View {
             }
         }
         .toastHost()
+        .sheet(item: $actionItem) { item in
+            IPADownloadActionsSheet(
+                item: item,
+                iconURL: item.iconURL ?? icons[item.bundleId ?? ""],
+                onOverwriteInstall: { install(item) },
+                onDelete: { delete(item) })
+        }
         .task {
             reload()
             await loadIcons()
@@ -177,34 +188,43 @@ struct IPADownloadManagerView: View {
 
     private func row(_ item: IPADownloadItem) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            iconView(item)
+            // 点击区只覆盖「图标 + 文字」，右侧安装按钮各管各的，避免手势互相抢。
+            // v0.3.378：点这里弹出操作面板（编辑模式下点行是勾选，不弹）。
+            HStack(alignment: .center, spacing: 12) {
+                iconView(item)
 
-            // 三行信息：标题 / 版本 + 体积 + 包类型 / 来源与时间。
-            // 版本、体积两个胶囊固定单行（`.fixedSize()`），其余文字一律「换行、不截断」：
-            // 用户明确要求「可以换行显示但不能显示不全」。
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.title)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(2)
-                HStack(spacing: 6) {
-                    if let v = item.version { chip("v\(v)", .blue) }
-                    chip(item.sizeText, .green)
+                // 三行信息：标题 / 版本 + 体积 + 包类型 / 来源与时间。
+                // 版本、体积两个胶囊固定单行（`.fixedSize()`），其余文字一律「换行、不截断」：
+                // 用户明确要求「可以换行显示但不能显示不全」。
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(2)
+                    HStack(spacing: 6) {
+                        if let v = item.version { chip("v\(v)", .blue) }
+                        chip(item.sizeText, .green)
+                    }
+                    // v0.3.363：包类型从胶囊同行里挪到**独立一行**。
+                    // 原来和两个胶囊挤同一个 HStack，空间不够时被压成竖排窄列
+                    // （真机截图里「加密 / 包 · / 带 / sinf」一列一个字的那个别扭样式）。
+                    Text(item.kindText)
+                        .font(.caption2)
+                        .foregroundStyle(kindTint(item))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(subtitle(item))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                // v0.3.363：包类型从胶囊同行里挪到**独立一行**。
-                // 原来和两个胶囊挤同一个 HStack，空间不够时被压成竖排窄列
-                // （真机截图里「加密 / 包 · / 带 / sinf」一列一个字的那个别扭样式）。
-                Text(item.kindText)
-                    .font(.caption2)
-                    .foregroundStyle(kindTint(item))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(subtitle(item))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .layoutPriority(1)
+                .layoutPriority(1)
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isEditing else { return }
+                actionItem = item
+            }
 
             if let job = center.activeJob(bundleId: item.bundleId, name: item.title) {
                 HStack(spacing: 6) {
@@ -309,7 +329,25 @@ struct IPADownloadManagerView: View {
     // MARK: - 数据与安装
 
     private func reload() {
+        syncSourceURLs()
         items = IPADownloadLibrary.shared.items()
+    }
+
+    /// v0.3.378：把下载中心任务里记着的**来源直链**回填进台账并落盘。
+    /// 「复制下载链接」只认台账里真实存在的直链，不拿本地路径冒充。
+    private func syncSourceURLs() {
+        for job in center.jobs {
+            guard let name = job.localFileName,
+                  let url = job.remoteURL, !url.isEmpty else { continue }
+            IPADownloadLibrary.shared.updateSourceURL(fileName: name, url: url)
+        }
+    }
+
+    /// v0.3.378：删除一个安装包（文件 + 台账），操作面板调用
+    private func delete(_ item: IPADownloadItem) {
+        IPADownloadLibrary.shared.remove(item)
+        reload()
+        ToastCenter.shared.show("已删除安装包")
     }
 
     /// 补齐列表图标：历史记录没存 `iconURL`，按 bundleId 逐个查 App Store。
