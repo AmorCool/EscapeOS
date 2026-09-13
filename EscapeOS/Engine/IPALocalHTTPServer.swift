@@ -12,14 +12,34 @@ import Darwin
 /// · 只服务一份固定的 `.mobileconfig` 载荷（`application/x-apple-aspen-config`），
 /// · **完全不认 `Range` 头**，也没有 `Accept-Ranges`；
 /// 大 IPA 走它会一次性把整包塞进一次响应，且无法续传。因此这里单独实现一个
-/// 只服务一个 IPA 文件、带 Range 的服务器（仍沿用「127.0.0.1 + 随机端口」的做法）。
+/// 只服务一个 IPA 文件、带 Range 的服务器。
 ///
-/// ## 生命周期
-/// 只在「在线安装」期间启动，**不在打开清单后立刻关**：iOS 用户点了「安装」之后
-/// 才会来拉包，关早了 IPA 就下载失败。调用方用 `stop(after:)` 定时收尾。
+/// ## 监听地址（v0.3.383：默认局域网 IP）
+/// 绑 **`0.0.0.0` + 随机端口**，manifest 里的 `software-package.url` 默认用**设备
+/// en0 的 IPv4**（`http://<LAN-IP>:<port>/package.ipa`），取不到才回落 `127.0.0.1`。
+/// 理由：系统 OTA 安装器（itunesstored/installd）**可能**不接受 loopback 形式的
+/// 分发包地址（Feather / JSBox 都用局域网 IP）—— 但**这条未确证**，所以做成
+/// 「默认 LAN、可回落回环」，两边都能取到（听着 0.0.0.0 即同时覆盖）。
+///
+/// ## 安全边界（有意收窄）
+/// · 只有一个**只读**路由 `GET/HEAD /package.ipa`（无目录列举、无写、无上传）；
+/// · 只发当前这一份安装包，端口随机，不做端口复用之外的任何暴露；
+/// · 会话结束由 `stop(after:)` 到点即关（调用方给 15 分钟），不常驻。
 final class IPALocalHTTPServer {
 
     static let shared = IPALocalHTTPServer()
+
+    /// 启动结果：端口 / 监听接口 / manifest 里用的包地址
+    struct Serving {
+        /// 实际监听端口
+        var port: UInt16
+        /// 实际监听接口（`0.0.0.0` = 所有接口）
+        var listenHost: String
+        /// manifest 里 `software-package` 用的地址
+        var packageURL: String
+        /// `packageURL` 用的是局域网 IP（false = 回落到回环）
+        var usesLAN: Bool
+    }
 
     private let queue = DispatchQueue(label: "com.ipaside.escapeos.ota.http")
     private var listener: NWListener?
@@ -34,28 +54,22 @@ final class IPALocalHTTPServer {
 
     // MARK: - 启停
 
-    /// 启动服务器并返回实际监听的端口；`fileURL` 必须是存在的本地 IPA。
+    /// 启动服务器；`fileURL` 必须是存在的本地 IPA。
     @discardableResult
-    func start(fileURL: URL) throws -> UInt16 {
+    func start(fileURL: URL) throws -> Serving {
         stop()
 
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         guard let size = (attrs[.size] as? NSNumber)?.uint64Value, size > 0 else {
             throw IPALocalHTTPServerError.emptyFile
         }
-        guard let chosen = Self.freeLoopbackPort(), let nwPort = NWEndpoint.Port(rawValue: chosen) else {
-            throw IPALocalHTTPServerError.notReady
-        }
 
         self.fileURL = fileURL
         self.fileSize = size
 
-        // 只绑 127.0.0.1（不暴露到局域网）。端口先自己探一个空闲的再显式绑定，
-        // 比依赖 `listener.port` 在 requiredLocalEndpoint 下的取值更稳。
+        // 绑所有接口 + 系统随机端口（LAN 与回环都能取到）
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
-        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: nwPort)
-
         let listener = try NWListener(using: params)
 
         let ready = DispatchSemaphore(value: 0)
@@ -77,14 +91,20 @@ final class IPALocalHTTPServer {
         listener.start(queue: queue)
         _ = ready.wait(timeout: .now() + 5)
 
-        guard becameReady else {
+        guard becameReady, let resolvedPort = listener.port?.rawValue else {
             listener.cancel()
             throw IPALocalHTTPServerError.notReady
         }
 
         self.listener = listener
-        self.port = chosen
-        return chosen
+        self.port = resolvedPort
+
+        let lan = Self.lanIPv4()
+        let host = lan ?? "127.0.0.1"
+        return Serving(port: resolvedPort,
+                       listenHost: "0.0.0.0",
+                       packageURL: "http://\(host):\(resolvedPort)/package.ipa",
+                       usesLAN: lan != nil)
     }
 
     /// 立即关闭。
@@ -248,38 +268,36 @@ final class IPALocalHTTPServer {
         return (start, min(end, total - 1))
     }
 
-    /// 探一个当前空闲的回环端口
-    private static func freeLoopbackPort() -> UInt16? {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return nil }
-        defer { _ = Darwin.close(fd) }
+    /// 取设备当前的局域网 IPv4（优先 `en0` Wi-Fi；跳过回环与 169.254 自分配）。
+    /// 取不到返回 `nil`，调用方回落 `127.0.0.1`。
+    static func lanIPv4() -> String? {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return nil }
+        defer { freeifaddrs(head) }
 
-        var opt: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, socklen_t(MemoryLayout.size(ofValue: opt)))
+        var wifi: String?
+        var fallback: String?
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let current = cursor {
+            let ifa = current.pointee
+            cursor = ifa.ifa_next
 
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = 0
-        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
-        addr.sin_zero = (0, 0, 0, 0, 0, 0, 0, 0)
+            guard let addr = ifa.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) else { continue }
 
-        let bindRes = withUnsafePointer(to: &addr) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(addr, socklen_t(addr.pointee.sa_len),
+                              &host, socklen_t(host.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let ip = String(cString: host)
+            guard !ip.isEmpty, ip != "127.0.0.1", !ip.hasPrefix("169.254.") else { continue }
+
+            if String(cString: ifa.ifa_name) == "en0" {
+                wifi = ip
+                break
             }
+            if fallback == nil { fallback = ip }
         }
-        guard bindRes == 0 else { return nil }
-
-        var actual = sockaddr_in()
-        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let nameRes = withUnsafeMutablePointer(to: &actual) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                getsockname(fd, $0, &len)
-            }
-        }
-        guard nameRes == 0 else { return nil }
-        return UInt16(bigEndian: actual.sin_port)
+        return wifi ?? fallback
     }
 
     /// 分块把文件发给客户端（背压式：上一块发完才读下一块，避免把整包读进内存）。

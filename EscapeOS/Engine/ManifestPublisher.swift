@@ -1,16 +1,23 @@
 import Foundation
 
-/// v0.3.379：在线安装（OTA）的**清单生成 + HTTPS 托管**。
+/// v0.3.383：在线安装（OTA）的**清单生成 + HTTPS 托管**。
 ///
 /// iOS 自 iOS 7.1 起**不收 http 清单**，manifest.plist 必须落在 HTTPS 且证书受设备信任。
-/// 本机 `127.0.0.1` 只用来发 IPA 本体（`software-package`），清单必须放到公网 HTTPS：
+/// 本机 HTTP 服务器（局域网 IP / 回环）只用来发 IPA 本体（`software-package`），
+/// 清单必须放到公网 HTTPS：
 ///
 /// 1. **用户自带的 HTTPS 地址**（设置 → HTTPS 托管）**优先**，且一旦填了就**不再对外发任何请求**：
 ///    · 填**完整 URL**（已含路径）→ `PUT` 覆盖它；
 ///    · 填**基址** → `POST <基址>/sign/install.plist`，响应体若是纯文本 URL 就用它，否则用请求地址本身。
-/// 2. 没填才走**匿名、免账号**的 paste 候选，逐个上传 + **GET 回读校验**，失败静默换下一个：
-///    `litterbox.catbox.moe`（临时 1 小时）→ `0x0.st` → `envs.sh` → `paste.rs`。
-///    临时件排第一：清单只活几分钟，且里面含 bundleId/版本，少留痕。
+/// 2. 没填才走**匿名、免账号**候选，逐个上传 + **GET 回读校验**，失败静默换下一个：
+///    `litterbox.catbox.moe`（1h）→ `0x0.st` → `tmpfiles.org`（1h）→ `uguu.se`（3h）→ `paste.rs`。
+///    临时件排前（清单只活几分钟，且含 bundleId/版本，少留痕）；**单候选超时 8s**。
+///    ⚠️ `envs.sh` 已删除：真机回读被劫持到广告域名（`ob.sd559908.js.2gnc.com`），有安全风险。
+///
+/// **回读校验（加严）**：内容必须一致，且 `Content-Type` 必须是 XML 家族
+/// （`application/xml` / `text/xml` / `application/x-plist` / 任意 `*+xml`）。
+/// 若所有候选都不是 XML 类型，则用第一个「内容一致」的候选兜底，并**明确记日志**
+/// （iOS 是否接受非 XML 清单**未验证**，不把这条当结论）。
 ///
 /// **IPA 本体一字节都不上传**，这里只上传那份几百字节的 plist。
 enum ManifestPublisher {
@@ -105,44 +112,56 @@ enum ManifestPublisher {
             let target = url.appendingPathComponent("sign/install.plist")
             request = URLRequest(url: target)
             request.httpMethod = "POST"
+            request.timeoutInterval = candidateTimeout
             request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
             request.httpBody = manifest
             LoginLogger.shared.log("[在线安装] 自有托管：POST 基址 \(shortURL(target.absoluteString))",
                                    category: .appStore)
-            let (status, _) = try perform(request)
-            LoginLogger.shared.log("[在线安装] 自有托管 POST 状态码=\(status)", category: .appStore)
-            guard (200...299).contains(status) else { throw PublishError.endpointUnavailable }
+            let result = try perform(request)
+            LoginLogger.shared.log("[在线安装] 自有托管 POST 状态码=\(result.status)", category: .appStore)
+            guard (200...299).contains(result.status) else { throw PublishError.endpointUnavailable }
             finalURL = target.absoluteString
         } else {
             request = URLRequest(url: url)
             request.httpMethod = "PUT"
+            request.timeoutInterval = candidateTimeout
             request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
             request.httpBody = manifest
             LoginLogger.shared.log("[在线安装] 自有托管：PUT 完整地址 \(shortURL(url.absoluteString))",
                                    category: .appStore)
-            let (status, _) = try perform(request)
-            LoginLogger.shared.log("[在线安装] 自有托管 PUT 状态码=\(status)", category: .appStore)
-            guard (200...299).contains(status) else { throw PublishError.endpointUnavailable }
+            let result = try perform(request)
+            LoginLogger.shared.log("[在线安装] 自有托管 PUT 状态码=\(result.status)", category: .appStore)
+            guard (200...299).contains(result.status) else { throw PublishError.endpointUnavailable }
             finalURL = url.absoluteString
         }
 
-        // 校验：能 GET 回来即视为通过（CDN 可能短暂回旧内容，自有地址仍照用）
+        // 校验：能 GET 回来且类型是 XML 即视为通过（CDN 可能短暂回旧内容，自有地址仍照用）
         let verified = verify(url: finalURL, expected: manifest)
-        LoginLogger.shared.log("[在线安装] 自有托管校验\(verified ? "通过" : "未通过（仍按自有地址使用）")：\(shortURL(finalURL))",
+        let shownType = verified.contentType.isEmpty ? "缺失" : verified.contentType
+        LoginLogger.shared.log("[在线安装] 自有托管校验\(verified.ok ? "通过" : "未通过（仍按自有地址使用）")"
+                               + "：Content-Type=\(shownType) \(shortURL(finalURL))",
                                category: .appStore)
         return finalURL
     }
 
     // MARK: - 匿名候选（逐个探测 + 回退）
 
+    /// 单候选超时：一个候选最长只等这么久（实测 litterbox 会拖满 25s，把用户晾住）
+    private static let candidateTimeout: TimeInterval = 8
+
     private static func publishToAnonymous(manifest: Data) -> String? {
         let candidates: [(name: String, upload: (Data) throws -> String)] = [
             // 临时件优先（清单只活几分钟，少留痕）
             ("litterbox.catbox.moe", { try uploadLitterbox(data: $0) }),
             ("0x0.st", { try uploadMultipart(url: "https://0x0.st", data: $0) }),
-            ("envs.sh", { try uploadMultipart(url: "https://envs.sh", data: $0) }),
+            ("tmpfiles.org", { try uploadTmpfiles(data: $0) }),
+            ("uguu.se", { try uploadUguu(data: $0) }),
             ("paste.rs", { try uploadRaw(url: "https://paste.rs", data: $0) })
+            // 已删 envs.sh：真机回读被劫持到广告域名（ob.sd559908.js.2gnc.com），有安全风险
         ]
+
+        // 「内容一致、但 Content-Type 不是 XML」的候选，留作最后兜底
+        var contentOnlyFallback: (name: String, url: String, contentType: String)?
 
         for candidate in candidates {
             LoginLogger.shared.log("[在线安装] 尝试匿名托管：\(candidate.name)", category: .appStore)
@@ -150,20 +169,65 @@ enum ManifestPublisher {
             do {
                 url = try candidate.upload(manifest)
             } catch {
-                LoginLogger.shared.log("[在线安装] \(candidate.name) 上传失败，换下一个", category: .appStore)
-                continue
-            }
-            guard verify(url: url, expected: manifest) else {
-                LoginLogger.shared.log("[在线安装] \(candidate.name) 回读校验不通过（\(shortURL(url))），换下一个",
+                LoginLogger.shared.log("[在线安装] \(candidate.name) 上传失败，换下一个（单候选超时 \(Int(candidateTimeout))s）",
                                        category: .appStore)
                 continue
             }
-            LoginLogger.shared.log("[在线安装] ✓ 匿名托管成功：\(candidate.name) → \(shortURL(url))",
+            let outcome = verify(url: url, expected: manifest)
+            let shownType = outcome.contentType.isEmpty ? "缺失" : outcome.contentType
+            LoginLogger.shared.log("[在线安装] \(candidate.name) 回读 Content-Type=\(shownType)"
+                                   + "（\(outcome.ok ? "可用" : (outcome.reason ?? "不可用"))）",
                                    category: .appStore)
-            return url
+            if outcome.ok {
+                LoginLogger.shared.log("[在线安装] ✓ 匿名托管成功：\(candidate.name) → \(shortURL(url))",
+                                       category: .appStore)
+                return url
+            }
+            if outcome.reason == reasonContentType, contentOnlyFallback == nil {
+                contentOnlyFallback = (candidate.name, url, shownType)
+            }
+        }
+
+        // 兜底：所有候选的 Content-Type 都不是 XML 时，用第一个「内容一致」的。
+        // ⚠️ **iOS 的 OTA 安装器是否接受非 XML 清单未验证** —— 这里只陈述事实：
+        //    内容校验通过、只是 Content-Type 不是 XML，比直接失败更值得一赌。
+        if let fallback = contentOnlyFallback {
+            LoginLogger.shared.log("[在线安装] ⚠ 无 XML 类型候选可用，兜底使用 \(fallback.name)"
+                                   + "（Content-Type=\(fallback.contentType)，内容一致；iOS 是否接受未验证）→ \(shortURL(fallback.url))",
+                                   category: .appStore)
+            return fallback.url
         }
         LoginLogger.shared.log("[在线安装] ❌ 所有匿名托管候选均不可用", category: .appStore)
         return nil
+    }
+
+    /// 通用 `multipart/form-data` POST（0x0.st / tmpfiles.org / uguu.se / litterbox）
+    private static func multipartPost(url: String,
+                                      fields: [(name: String, value: String)],
+                                      fileField: String,
+                                      filename: String,
+                                      data: Data) throws -> HTTPResult {
+        guard let endpoint = URL(string: url) else { throw PublishError.noHosting }
+        let boundary = "----EscapeSpace\(UUID().uuidString)"
+        var body = Data()
+        for field in fields {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(field.name)\"\r\n\r\n".utf8))
+            body.append(Data("\(field.value)\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"\(fileField)\"; filename=\"\(filename)\"\r\n".utf8))
+        body.append(Data("Content-Type: application/xml\r\n\r\n".utf8))
+        body.append(data)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = candidateTimeout
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue("EscapeSpace/1.0", forHTTPHeaderField: "User-Agent")
+        request.httpBody = body
+        return try perform(request)
     }
 
     /// `POST` 原始 body，响应体是纯文本 URL（paste.rs）
@@ -171,99 +235,143 @@ enum ManifestPublisher {
         guard let endpoint = URL(string: url) else { throw PublishError.noHosting }
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 25
-        request.setValue("text/plain; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = candidateTimeout
+        // 用 XML 类型上传，尽量让服务端回读时也标成 XML
+        request.setValue("application/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue("EscapeSpace/1.0", forHTTPHeaderField: "User-Agent")
         request.httpBody = data
-        let (status, body) = try perform(request)
-        guard (200...299).contains(status) else { throw PublishError.noHosting }
-        return try extractURL(from: body)
+        let result = try perform(request)
+        guard (200...299).contains(result.status) else { throw PublishError.noHosting }
+        return try extractURL(from: result.body)
     }
 
-    /// `multipart/form-data` 字段 `file`（0x0.st / envs.sh）
+    /// `multipart/form-data` 字段 `file`，响应体是纯文本 URL（0x0.st）
     private static func uploadMultipart(url: String, data: Data) throws -> String {
-        guard let endpoint = URL(string: url) else { throw PublishError.noHosting }
-        let boundary = "----EscapeSpace\(UUID().uuidString)"
-        var body = Data()
-        body.append(Data("--\(boundary)\r\n".utf8))
-        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"install.plist\"\r\n".utf8))
-        body.append(Data("Content-Type: application/xml\r\n\r\n".utf8))
-        body.append(data)
-        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        let result = try multipartPost(url: url, fields: [], fileField: "file",
+                                       filename: "install.plist", data: data)
+        guard (200...299).contains(result.status) else { throw PublishError.noHosting }
+        return try extractURL(from: result.body)
+    }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 25
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.setValue("EscapeSpace/1.0", forHTTPHeaderField: "User-Agent")
-        request.httpBody = body
-        let (status, response) = try perform(request)
-        guard (200...299).contains(status) else { throw PublishError.noHosting }
-        return try extractURL(from: response)
+    /// tmpfiles.org（1 小时临时）：字段 `file`，响应 JSON；直链要把 `/dl/` 插进路径
+    private static func uploadTmpfiles(data: Data) throws -> String {
+        let result = try multipartPost(url: "https://tmpfiles.org/api/v1/upload",
+                                       fields: [], fileField: "file",
+                                       filename: "install.plist", data: data)
+        guard (200...299).contains(result.status) else { throw PublishError.noHosting }
+        guard let json = try? JSONSerialization.jsonObject(with: result.body) as? [String: Any],
+              let payload = json["data"] as? [String: Any],
+              let raw = payload["url"] as? String, raw.hasPrefix("https://") else {
+            throw PublishError.noHosting
+        }
+        // https://tmpfiles.org/<id>/install.plist → https://tmpfiles.org/dl/<id>/install.plist
+        return raw.replacingOccurrences(of: "://tmpfiles.org/", with: "://tmpfiles.org/dl/")
+    }
+
+    /// uguu.se（3 小时临时）：字段 `files[]`，响应 JSON
+    private static func uploadUguu(data: Data) throws -> String {
+        let result = try multipartPost(url: "https://uguu.se/upload.php",
+                                       fields: [], fileField: "files[]",
+                                       filename: "install.plist", data: data)
+        guard (200...299).contains(result.status) else { throw PublishError.noHosting }
+        guard let json = try? JSONSerialization.jsonObject(with: result.body) as? [String: Any],
+              let files = json["files"] as? [[String: Any]],
+              let first = files.first,
+              let raw = first["url"] as? String, raw.lowercased().hasPrefix("https://") else {
+            throw PublishError.noHosting
+        }
+        return raw
     }
 
     /// litterbox：`reqtype=fileupload` + `time=1h`（临时 1 小时）
     private static func uploadLitterbox(data: Data) throws -> String {
-        guard let endpoint = URL(string: "https://litterbox.catbox.moe/resources/internals/api.php") else {
-            throw PublishError.noHosting
-        }
-        let boundary = "----EscapeSpace\(UUID().uuidString)"
-        var body = Data()
-        func field(_ name: String, _ value: String) {
-            body.append(Data("--\(boundary)\r\n".utf8))
-            body.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
-            body.append(Data("\(value)\r\n".utf8))
-        }
-        field("reqtype", "fileupload")
-        field("time", "1h")
-        body.append(Data("--\(boundary)\r\n".utf8))
-        body.append(Data("Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"install.plist\"\r\n".utf8))
-        body.append(Data("Content-Type: application/xml\r\n\r\n".utf8))
-        body.append(data)
-        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 25
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.setValue("EscapeSpace/1.0", forHTTPHeaderField: "User-Agent")
-        request.httpBody = body
-        let (status, response) = try perform(request)
-        guard (200...299).contains(status) else { throw PublishError.noHosting }
-        return try extractURL(from: response)
+        let result = try multipartPost(url: "https://litterbox.catbox.moe/resources/internals/api.php",
+                                       fields: [("reqtype", "fileupload"), ("time", "1h")],
+                                       fileField: "fileToUpload",
+                                       filename: "install.plist", data: data)
+        guard (200...299).contains(result.status) else { throw PublishError.noHosting }
+        return try extractURL(from: result.body)
     }
 
     // MARK: - 校验 / 网络 / 小工具
 
-    /// 立刻 GET 回读，确认内容一致（或至少含清单关键字段）。
-    private static func verify(url: String, expected: Data) -> Bool {
-        guard let endpoint = URL(string: url) else { return false }
-        var request = URLRequest(url: endpoint)
-        request.timeoutInterval = 25
-        request.setValue("EscapeSpace/1.0", forHTTPHeaderField: "User-Agent")
-        guard let (status, body) = try? perform(request), (200...299).contains(status) else { return false }
-        if body == expected { return true }
-        guard let text = String(data: body, encoding: .utf8) else { return false }
-        return text.contains("software-package") && text.contains("bundle-identifier")
+    /// 一个 HTTP 响应（header 键统一转小写，便于查 `content-type`）
+    private struct HTTPResult {
+        var status: Int
+        var headers: [String: String]
+        var body: Data
     }
 
-    @discardableResult
-    private static func perform(_ request: URLRequest) throws -> (Int, Data) {
-        var status = -1
-        var body = Data()
+    private struct VerifyOutcome {
+        var ok: Bool
+        var contentType: String
+        var reason: String?
+    }
+
+    /// Content-Type 不合格的判定文案（仅用作内部标记，不直接展示给用户）
+    private static let reasonContentType = "Content-Type 非 XML"
+
+    /// 立刻 GET 回读，两道关：
+    /// ① 内容必须一致（或至少含清单关键字段）；
+    /// ② **`Content-Type` 必须是 XML 家族** —— 这是真机失败那次留下的直接教训：
+    ///    只比对内容会让 `text/plain` 的候选通过，而 iOS 是把清单当 plist 解析的，
+    ///    类型不对就白装（该相关性**未在真机确证**，所以只做「优先换 XML 候选」，
+    ///    全部候选都不是 XML 时见 `publishToAnonymous` 的兜底分支）。
+    private static func verify(url: String, expected: Data) -> VerifyOutcome {
+        guard let endpoint = URL(string: url) else {
+            return VerifyOutcome(ok: false, contentType: "", reason: "地址无效")
+        }
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = candidateTimeout
+        request.setValue("EscapeSpace/1.0", forHTTPHeaderField: "User-Agent")
+        guard let result = try? perform(request), (200...299).contains(result.status) else {
+            return VerifyOutcome(ok: false, contentType: "", reason: "回读失败")
+        }
+        let contentType = result.headers["content-type"] ?? ""
+
+        if result.body != expected {
+            guard let text = String(data: result.body, encoding: .utf8),
+                  text.contains("software-package"), text.contains("bundle-identifier") else {
+                return VerifyOutcome(ok: false, contentType: contentType, reason: "内容不一致")
+            }
+        }
+        guard isXMLContentType(contentType) else {
+            return VerifyOutcome(ok: false, contentType: contentType, reason: reasonContentType)
+        }
+        return VerifyOutcome(ok: true, contentType: contentType, reason: nil)
+    }
+
+    /// 可接受的清单类型：`application/xml` / `text/xml` / `application/x-plist` / 任意 `+xml`
+    private static func isXMLContentType(_ raw: String) -> Bool {
+        let value = raw.split(separator: ";").first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard !value.isEmpty else { return false }
+        if value.hasSuffix("+xml") { return true }
+        return ["application/xml", "text/xml", "application/x-plist"].contains(value)
+    }
+
+    private static func perform(_ request: URLRequest) throws -> HTTPResult {
+        var result = HTTPResult(status: -1, headers: [:], body: Data())
         var failure: Error?
         let semaphore = DispatchSemaphore(value: 0)
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             if let error { failure = error }
-            status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            body = data ?? Data()
+            if let http = response as? HTTPURLResponse {
+                result.status = http.statusCode
+                var headers: [String: String] = [:]
+                for (key, value) in http.allHeaderFields {
+                    headers[String(describing: key).lowercased()] = String(describing: value)
+                }
+                result.headers = headers
+            }
+            result.body = data ?? Data()
             semaphore.signal()
         }.resume()
         semaphore.wait()
 
         if let failure { throw failure }
-        return (status, body)
+        return result
     }
 
     /// 响应体里取第一个 `http(s)://…` 形式的 URL

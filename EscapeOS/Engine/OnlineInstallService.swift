@@ -6,7 +6,9 @@ import SwiftUI
 ///
 /// ## 机制（ipa-re 逆向牛蛙 `NiuWaCore`，照做）
 /// 1. **IPA 由设备本机 HTTP 服务器发**：`GET /package.ipa`（带 `Accept-Ranges`，
-///    支持断点续传）→ `IPALocalHTTPServer`。IPA 可以是 `http://127.0.0.1:<port>/…`。
+///    支持断点续传）→ `IPALocalHTTPServer`，监听 `0.0.0.0:<随机端口>`，
+///    包地址默认用**局域网 IP**（`http://<LAN-IP>:<port>/package.ipa`），
+///    取不到 LAN IP 才回落 `127.0.0.1`。
 /// 2. **manifest.plist 必须托管在 HTTPS**（iOS 7.1 起不收 http 清单，自签证书也不认）
 ///    → `ManifestPublisher`（用户自带 HTTPS 地址优先；没填才走匿名免账号 paste 候选）。
 /// 3. 打开 `itms-services://?action=download-manifest&url=<清单地址>`，由系统拉清单 + 装包。
@@ -182,9 +184,11 @@ enum OnlineInstallService {
         var packageURL = ipaURL.absoluteString
         if let localFile {
             do {
-                let port = try IPALocalHTTPServer.shared.start(fileURL: localFile)
-                packageURL = "http://127.0.0.1:\(port)/package.ipa"
-                LoginLogger.shared.log("[在线安装] 本机服务器已启动：127.0.0.1:\(port)（仅回环，支持 Range）",
+                let serving = try IPALocalHTTPServer.shared.start(fileURL: localFile)
+                packageURL = serving.packageURL
+                LoginLogger.shared.log("[在线安装] 本机服务器已启动：监听 \(serving.listenHost):\(serving.port)（只读单文件 /package.ipa，支持 Range）",
+                                       category: logCategory)
+                LoginLogger.shared.log("[在线安装] software-package.url=\(serving.packageURL)（\(serving.usesLAN ? "局域网 IP" : "局域网 IP 取不到，回落回环")）",
                                        category: logCategory)
             } catch {
                 LoginLogger.shared.log("[在线安装] 本机服务器启动失败：\(error.localizedDescription)", category: logCategory)
