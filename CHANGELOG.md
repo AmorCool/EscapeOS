@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.374] - 2026-09-13
+
+> **v0.3.373 的包不存在**（tag 构建在编译阶段失败，release 未发布）。请直接安装本版，本版包含 0.3.373 的全部改动。
+
+### 修复（编译错误）
+- `EscapeOS/Engine/BLECoordinator.swift:603`：`CBATTError.Code` **没有** `.notPermitted` 这个 case，
+  编译报 `type 'CBATTError.Code' has no case 'notPermitted'`（CI 退出码 65）。
+  该处是**写请求**的应答，改为 `.writeNotPermitted`。
+  （原写法意图正确但枚举名不存在；这是 v0.3.373 唯一的编译错误。）
+
 ## [0.3.373] - 2026-09-13
 
 ### 新增 / 变更（蓝牙位置模拟面板）

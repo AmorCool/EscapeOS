@@ -600,7 +600,8 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
                 append("收到回报：\(report.label)")
             }
             if request.characteristic.properties.contains(.write) {
-                peripheral.respond(to: request, withResult: authorized ? .success : .notPermitted)
+                // 这是 write 请求 → 拒绝必须用 .writeNotPermitted（CBATTError.Code 里没有 .notPermitted）。
+                peripheral.respond(to: request, withResult: authorized ? .success : .writeNotPermitted)
             }
         }
     }
