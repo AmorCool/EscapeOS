@@ -53,7 +53,8 @@ enum AppStoreLocalInstallService {
         // 有界状态机（v0.3.352 重写，v0.3.361 加入历史版本候选）：
         //   下载 → 票据失效（2002/2034/2042）→ 刷新会话一次 → 继续
         //        → 空包 → **先用候选 externalVersionId 重打一次 volumeStore**（v0.3.361：
-        //                 ChatGPT 这类应用只有带旧版本 ID 才出包）
+        //                 ChatGPT 这类应用只有带旧版本 ID 才出包；v0.3.366 候选来源为
+        //                 「三方目录 → 爱思 appinfo historyversion」两条，见 candidateVersionIDs）
         //                → 仍为空 → 先刷新会话确认一次（Apple 用「合法空包」表达票据不被认可）
         //                → 仍为空 → 获取许可一次 → 再下载
         //        → 9610 → 获取许可一次 → 再下载
@@ -130,10 +131,23 @@ enum AppStoreLocalInstallService {
         }
     }
 
-    /// v0.3.361 / v0.3.362：从免登录版本目录取该应用的 `externalVersionId` 候选（目录是「最新在前」）。
+    /// v0.3.361 / v0.3.362 / v0.3.366：取该应用的 `externalVersionId` 候选（**有序、有界**）。
     ///
     /// 依据（真机实测）：ChatGPT 的 `volumeStoreDownloadProduct` 只在 body 带 `externalVersionId`
     /// 时才出包，且**最新的两个 ID 会被 Apple 拒**、更旧的可以下 —— 所以拿最新的若干个去试。
+    ///
+    /// **来源链（v0.3.366 加入第二来源）**：
+    /// 1. **三方版本目录** `AppStoreService.versionHistoryFromCatalog(appId:)` —— 它有最新版，优先；
+    /// 2. 目录**抛错或返回空** → **爱思** `POST app4.i4.cn/appinfo.xhtml` 的 `historyversion[]`
+    ///    取 `versionid`（`versionid` 与 Apple `externalVersionId` 同口径，已鉴定：4/4 数值精确相等，
+    ///    且跨应用按日期交错，只能是 Apple 的全局版本计数器）。
+    /// 两条都拿不到 → 返回空数组，调用方继续走原来的刷新/购买流程（**不新增硬失败**）。
+    ///
+    /// **排序**：两条来源统一按 `versionid`（= `externalVersionId`）数值**降序** —— 它是 Apple 的
+    /// 全局计数器，数值越大越新；爱思的 `releasetime` 只是缓存快照日期，不能用作排序依据。
+    ///
+    /// **请求上界（候选阶段）**：目录 ≤ 1 次调用；只有目录抛错/为空时才进爱思档
+    /// = 1 次搜索（trackId → 爱思 appid 映射）+ 1 次详情，**最坏共 3 次**（新增最多 2 次）。
     ///
     /// v0.3.362：只取「最新 6 个」有**静默失效**风险 —— 前两槽固定被拒，而 ChatGPT 约每周一版，
     /// 4~6 周后可用项就会被挤出窗口，表现为「突然又下不了」。所以：
@@ -142,25 +156,54 @@ enum AppStoreLocalInstallService {
     private static func candidateVersionIDs(software: Software, dsid: String,
                                             onLog: ((String) -> Void)?)
         async -> (ids: [String], newestVersion: String?, byVersion: [String: String]) {
+        // 两条来源归一成同一种形状：(externalVersionId, 版本号)，随后的排序/裁剪只写一处。
+        var pairs: [(id: String, version: String)] = []
+        var source = "目录"
+
         do {
             let history = try await AppStoreService.versionHistoryFromCatalog(appId: String(software.id))
-            let byVersion = Dictionary(history.compactMap { v in
-                v.externalVersionID.map { (v.version, $0) }
-            }, uniquingKeysWith: { first, _ in first })
-            var ids = history.compactMap { $0.externalVersionID }.filter { !$0.isEmpty }
-            if let cached = cachedVersionID(dsid: dsid, bundleId: software.bundleID),
-               let index = ids.firstIndex(of: cached) {
-                ids.remove(at: index)
-                ids.insert(cached, at: 0)
+            for v in history {
+                if let ext = v.externalVersionID, !ext.isEmpty {
+                    pairs.append((id: ext, version: v.version))
+                }
             }
-            let window = Array(ids.prefix(6))
-            onLog?("[AppleID] 历史版本候选 \(window.count) 个（最新 \(history.first?.version ?? "?")）")
-            // history 是「最新在前」，所以 first 就是商店最新版（= 可能被 Apple 拒的那个）。
-            return (window, history.first?.version, byVersion)
+            if pairs.isEmpty { onLog?("[AppleID] 版本目录没有候选") }
         } catch {
             onLog?("[AppleID] 版本目录不可用：\(error.localizedDescription)")
+        }
+
+        if pairs.isEmpty {
+            source = "爱思"
+            do {
+                let versions = try await I4PCStoreClient.historyVersions(
+                    trackId: String(software.id), name: software.name)
+                for v in versions where !v.id.isEmpty { pairs.append((id: v.id, version: v.version)) }
+                if pairs.isEmpty { onLog?("[AppleID] 爱思没有历史版本") }
+            } catch {
+                onLog?("[AppleID] 爱思源不可用：\(error.localizedDescription)")
+            }
+        }
+
+        guard !pairs.isEmpty else {
+            onLog?("[AppleID] 历史版本候选 0 个")
             return ([], nil, [:])
         }
+
+        // 统一按 versionid 数值降序（等价于「最新在前」）；非数值 id 排到最后。
+        pairs.sort { (Int64($0.id) ?? 0) > (Int64($1.id) ?? 0) }
+
+        let byVersion = Dictionary(pairs.map { ($0.version, $0.id) },
+                                   uniquingKeysWith: { first, _ in first })
+        var ids = pairs.map { $0.id }
+        if let cached = cachedVersionID(dsid: dsid, bundleId: software.bundleID),
+           let index = ids.firstIndex(of: cached) {
+            ids.remove(at: index)
+            ids.insert(cached, at: 0)
+        }
+        let window = Array(ids.prefix(6))
+        // 日志要一眼看出候选来自哪条来源（目录 / 爱思）、几个、最新是哪版。
+        onLog?("[AppleID] 历史版本候选 \(window.count) 个（\(source) · 最新 \(pairs.first?.version ?? "?")）")
+        return (window, pairs.first?.version, byVersion)
     }
 
     /// 上次成功下到包用的 `externalVersionId`（按 dsid + bundleId）。

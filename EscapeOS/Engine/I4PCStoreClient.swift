@@ -180,6 +180,8 @@ enum I4PCStoreClient {
         case empty
         case notSigned
         case detailUnavailable
+        /// v0.3.366：搜索结果里没有 `itemId` 等于目标 Apple trackId 的应用（映射不到爱思 appid）
+        case appNotMatched
 
         var errorDescription: String? {
             switch self {
@@ -189,6 +191,7 @@ enum I4PCStoreClient {
             case .empty: return "该分组没有数据"
             case .notSigned: return "该应用在服务端没有可用的已签名安装包"
             case .detailUnavailable: return "该应用暂无详情"
+            case .appNotMatched: return "爱思没有匹配该应用"
             }
         }
     }
@@ -325,6 +328,34 @@ enum I4PCStoreClient {
         guard let obj = jsonObject(try await post(url, form: form)) else { throw StoreError.decode }
         guard let detail = parseDetail(obj) else { throw StoreError.detailUnavailable }
         return detail
+    }
+
+    // MARK: - Apple trackId → 爱思 appid → 历史版本
+
+    /// v0.3.366：按 **Apple trackId** 取爱思侧的历史版本（用于 `volumeStoreDownloadProduct`
+    /// 静默空包时的 `externalVersionId` 候选；见 `AppStoreLocalInstallService.candidateVersionIDs`）。
+    ///
+    /// 两步映射（第一步是实测踩到的坑）：
+    /// 1. **映射到爱思 appid**：搜索接口**不接受纯数字的 trackId 当关键词**（实测多个真实 trackId
+    ///    全部返回 0 条），所以只能**按应用名搜**，再在结果里挑 `itemId == trackId` 的那条，
+    ///    取其 `id`（例：搜「微信」得 `id=165776`，同一项的 `itemId` 就是微信的 App Store trackId）
+    ///    —— `id` 与 `itemId` 是**两个不同字段**，别拿错。
+    /// 2. `POST appinfo.xhtml` 取 `historyversion[]`，字段见 `I4Version`。
+    ///
+    /// **请求上界：1 次搜索 + 1 次详情**（映射失败即止，不再多打）。映射不到抛 `appNotMatched`，
+    /// 调用方按「爱思源不可用」降级。返回顺序与接口一致，**排序/裁剪由调用方统一负责**。
+    ///
+    /// 另注意：爱思的 `historyversion` 是**缓存快照**，实测**不含当前最新版**
+    ///（历史里的 `versionid` 最高值明显小于详情里当前版本的 `versionid`）—— 只适合当兜底来源。
+    static func historyVersions(trackId: String, name: String,
+                                iPad: Bool = false) async throws -> [I4Version] {
+        let tid = trackId.trimmingCharacters(in: .whitespaces)
+        let kw = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tid.isEmpty, !kw.isEmpty else { throw StoreError.appNotMatched }
+        let apps = try await search(keyword: kw, rows: 30, iPad: iPad)
+        guard let app = apps.first(where: { $0.itemId == tid }) else { throw StoreError.appNotMatched }
+        let detail = try await detail(appId: app.id, pkagetype: app.pkgType, iPad: iPad)
+        return detail.versions
     }
 
     // MARK: - 解析
