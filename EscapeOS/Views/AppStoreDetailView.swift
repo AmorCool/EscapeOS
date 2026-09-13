@@ -554,8 +554,11 @@ struct AppStoreDetailView: View {
     /// 两条通道互不依赖，并行发；隐私拿不到就保持空 → 该节不显示。
     private func loadDetail() async {
         let appId = item.id
-        async let lookup = AppStoreService.lookup(id: appId)
-        async let privacy = AppStoreService.privacyDetail(appId: appId)
+        // 抓取区域在发起时就定死：URL 与缓存键都用它，免得和「进商店时跟随账号区」的
+        // 时机错开，抓到一个空结果的区（第一次进详情看不到、刷新才有）。
+        let region = AppStoreService.countryCode
+        async let lookup = AppStoreService.lookup(id: appId, country: region)
+        async let privacy = AppStoreService.privacyDetail(appId: appId, country: region)
 
         if let full = try? await lookup {
             var merged = full
@@ -564,7 +567,10 @@ struct AppStoreDetailView: View {
             if merged.screenshots.isEmpty { merged.screenshots = item.screenshots }
             item = merged
         }
-        if let groups = try? await privacy { privacyGroups = groups }
+        privacyGroups = (try? await privacy) ?? []
+        if privacyGroups.isEmpty, AppStoreService.countryCode != region {
+            privacyGroups = (try? await AppStoreService.privacyDetail(appId: appId)) ?? []
+        }
     }
 
     private static func fmtDate(_ iso: String?) -> String? {

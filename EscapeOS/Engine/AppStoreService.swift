@@ -272,7 +272,8 @@ enum AppStoreService {
     /// v0.3.369 —— **区域健壮**：`apps.apple.com` 会按**出口 IP** 做地理重定向，
     /// 从中国大陆出口访问 `/us/app/idX`、`/app/idX` 一律 302 到 `/cn/iphone/today`
     /// （根本不是应用页；`Cookie: geo=US` / `site=US` 都压不住）。所以先按请求区域抓，
-    /// 拿到的不是该应用的详情页就**回落 `cn` 再抓一次**；两条都拿不到才算真没有。
+    /// 拿到的不是该应用的详情页就**依次回落「账号区」「`cn`」再抓**；都拿不到才算真没有。
+    /// 账号区优先于 cn：Apple 按出口 IP 重定向，账号区通常就是出口区。
     ///
     ///   实测（大陆出口 IP）：
     ///   · `/us/app/id6448311069`（ChatGPT，US 独占）→ 302 `/cn/iphone/today`；
@@ -282,9 +283,9 @@ enum AppStoreService {
     ///   隐私分组数量**随应用不同**（微信只有 1 组 `LINKED_TO_YOU`，淘宝 3 组），
     ///   不要假设一定是 3 组。
     ///
-    /// 缓存的是**能拿到页面的结果**：正常应用页，以及「被重定向、回落 cn 也不是应用页」的
-    /// 200 降级页面（后者也缓存，避免同一请求区域每次打开都重打两发）。HTTP/网络失败不写
-    /// 缓存，下次自然重试（沿用版本目录那套「失败不落成功缓存」思路）。
+    /// 只缓存**确实拿到该应用详情页**的结果；拿不到详情页（重定向到 `/xx/iphone/today`
+    /// 的 200 降级页、HTTP/网络失败）一律不写缓存，下次进入会重新抓 —— 否则「取不到 =
+    /// 空隐私」会被当成该区域的成功结果钉住，表现为第一次进详情看不到、刷新后才有。
     ///
     /// 单份 HTML 是 0.6–1.6MB，所以除了 TTL 还给个条数上限：写入前清掉过期项，
     /// 仍超上限就丢最旧的一条 —— 避免连续浏览多个应用把内存堆起来。
@@ -294,25 +295,37 @@ enum AppStoreService {
     /// 被出口 IP 地理重定向时的回落区域（v0.3.369）。
     ///
     /// 从**中国大陆出口 IP** 访问 `apps.apple.com` 只会拿到国区页面 ——
-    /// 请求区域抓不到就统一回落 `cn`；CN 上架的应用因此能拿到 `privacyDetail`。
+    /// 请求区与账号区都抓不到时最后回落 `cn`；CN 上架的应用因此能拿到 `privacyDetail`。
     private static let productFallbackRegion = "cn"
 
     /// 缓存值：整段 HTML + **实际服务这张页面的区域**。
     ///
-    /// 正常时它可能不等于请求区域：被地理重定向后回落了 `cn`，或 Apple 直接把
+    /// 正常时它可能不等于请求区域：被地理重定向后回落了账号区 / `cn`，或 Apple 直接把
     /// `/us/app/idX` 302 成 `/cn/app/idX`。记下来，命中缓存时能说清「数据为何来自别的区」。
-    /// 降级页面（两条都不是应用页）没有可用区域，就记请求区域。
+    /// 降级页面（都没拿到应用页）没有可用区域，就记请求区域。
     private struct CachedProductPage {
         let html: String
         let served: String
         let at: Date
     }
 
+    /// 抓取结果：HTML + 实际服务区域 + 是否为「该应用的详情页」。
+    private struct ProductPage {
+        let html: String
+        let served: String
+        let isAppPage: Bool
+    }
+
     private static let htmlLock = NSLock()
     private static var htmlCache: [String: CachedProductPage] = [:]
-    private static var htmlInflight: [String: Task<(html: String, served: String), Error>] = [:]
+    private static var htmlInflight: [String: Task<ProductPage, Error>] = [:]
 
     private static func productHTML(appId: String, country: String?) async throws -> String {
+        let page = try await productPage(appId: appId, country: country)
+        return page.html
+    }
+
+    private static func productPage(appId: String, country: String?) async throws -> ProductPage {
         let cc = resolved(country)
         let key = "\(cc)|\(appId)"
 
@@ -325,12 +338,11 @@ enum AppStoreService {
                 LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 命中缓存（实际服务区域 \(hit.served)，地理重定向后回落）",
                                        category: .appStore)
             }
-            return hit.html
+            return ProductPage(html: hit.html, served: hit.served, isAppPage: true)
         }
         if let running = htmlInflight[key] {
             htmlLock.unlock()
-            let page = try await running.value
-            return page.html
+            return try await running.value
         }
         let task = Task { try await loadProductPage(appId: appId, requested: cc) }
         htmlInflight[key] = task
@@ -339,16 +351,23 @@ enum AppStoreService {
         do {
             let page = try await task.value
             htmlLock.lock()
-            let now = Date()
-            htmlCache = htmlCache.filter { now.timeIntervalSince($0.value.at) < htmlCacheTTL }
-            if htmlCache.count >= htmlCacheLimit,
-               let oldest = htmlCache.min(by: { $0.value.at < $1.value.at })?.key {
-                htmlCache[oldest] = nil
+            if page.isAppPage {
+                let now = Date()
+                htmlCache = htmlCache.filter { now.timeIntervalSince($0.value.at) < htmlCacheTTL }
+                if htmlCache.count >= htmlCacheLimit,
+                   let oldest = htmlCache.min(by: { $0.value.at < $1.value.at })?.key {
+                    htmlCache[oldest] = nil
+                }
+                htmlCache[key] = CachedProductPage(html: page.html, served: page.served, at: now)
             }
-            htmlCache[key] = CachedProductPage(html: page.html, served: page.served, at: now)
             htmlInflight[key] = nil
             htmlLock.unlock()
-            return page.html
+            // 不是详情页就不落缓存，下次进入重新抓（本次仍把页面交回去解析，行为不变）。
+            if !page.isAppPage {
+                LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 未取到详情页，本次结果不缓存，下次重试",
+                                       category: .appStore)
+            }
+            return page
         } catch {
             htmlLock.lock()
             htmlInflight[key] = nil
@@ -357,19 +376,22 @@ enum AppStoreService {
         }
     }
 
-    /// 区域健壮抓取：按 `requested` → `cn` 的次序各试一次，返回第一个**确实是
-    /// `id<appId>` 详情页**的结果（含实际服务区域）。
+    /// 区域健壮抓取：按 `requested` → 账号区 → `cn` 的次序各试一次，返回第一个确实是
+    /// `id<appId>` 详情页的结果（含实际服务区域）。
     ///
     /// 判定「是不是该应用的详情页」看 `URLSession` 跟随重定向后的最终 URL（缺失时退到
     /// 页面自指的 canonical 链接）：`/cn/app/…/id414478124` 这种才算，落到
     /// `/cn/iphone/today` 就是被地理重定向了。
     ///
-    /// 两条都不是应用页时，原因（重定向到哪 / HTTP 几 / 回落失败）全部写进商店日志；
-    /// 手头若还有一份 200 页面就交回去（解析层得到空结果，与从前一致，只是不再静默），
-    /// 否则抛最后一次的错误。
-    private static func loadProductPage(appId: String, requested: String) async throws -> (html: String, served: String) {
-        // 请求区域本来就是 cn 就只跑一轮（没有更低的区域可回落）
-        let regions = requested == productFallbackRegion ? [requested] : [requested, productFallbackRegion]
+    /// 账号区排第二是因为 Apple 按**出口 IP** 重定向：请求区与出口区不一致时只会拿到
+    /// `/xx/iphone/today` 降级页，而账号区通常就是出口区，先试它才能第一次就拿到详情页。
+    ///
+    /// 三处都不是应用页时，原因（重定向到哪 / HTTP 几 / 回落失败）全部写进商店日志；
+    /// 手头若还有一份 200 页面就交回去（`isAppPage=false`，不落缓存），否则抛最后一次的错误。
+    private static func loadProductPage(appId: String, requested: String) async throws -> ProductPage {
+        var regions = [requested]
+        if let account = accountStorefrontCode(), !regions.contains(account) { regions.append(account) }
+        if !regions.contains(productFallbackRegion) { regions.append(productFallbackRegion) }
         var carriedHTML: String?
         var carriedError: Error?
         var reasons: [String] = []
@@ -385,7 +407,7 @@ enum AppStoreService {
                     }
                     LoginLogger.shared.log("商品页 HTML：\(served)/\(appId) 取到 \(attempt.html.count) 字（详情页与版本历史共用）",
                                            category: .appStore)
-                    return (attempt.html, served)
+                    return ProductPage(html: attempt.html, served: served, isAppPage: true)
                 }
                 let landing = attempt.finalURL?.absoluteString ?? "无最终 URL"
                 reasons.append("\(region)：HTTP 200 但落到 \(landing)（不是该应用的详情页）")
@@ -397,7 +419,9 @@ enum AppStoreService {
 
         LoginLogger.shared.log("商品页 HTML：\(requested)/\(appId) 取不到应用页 —— \(reasons.joined(separator: "；"))",
                                category: .appStore)
-        if let html = carriedHTML { return (html, requested) }
+        if let html = carriedHTML {
+            return ProductPage(html: html, served: requested, isAppPage: false)
+        }
         throw carriedError ?? AppStoreError.badURL
     }
 
@@ -767,11 +791,12 @@ enum AppStoreService {
     /// 但**不静默**（v0.3.369）：商品页取不到 / 页面里没有 `privacyDetail` 都会往商店日志
     /// 写一行原因（地理重定向到哪、HTTP 几、还是页面本就没有），用户能在「商店日志」看到。
     static func privacyDetail(appId: String, country: String? = nil) async throws -> [AppPrivacyGroup] {
-        let html = try await productHTML(appId: appId, country: country)
-        let groups = parsePrivacy(html: html)
+        let page = try await productPage(appId: appId, country: country)
+        let groups = parsePrivacy(html: page.html)
         if groups.isEmpty {
-            LoginLogger.shared.log("App 隐私：\(resolved(country))/\(appId) 商品页里没有 privacyDetail"
-                                   + "（该应用可能未上架当前区域，或未提供隐私标签）",
+            LoginLogger.shared.log(page.isAppPage
+                                   ? "App 隐私：\(page.served)/\(appId) 详情页里没有 privacyDetail（该应用未提供隐私标签）"
+                                   : "App 隐私：\(page.served)/\(appId) 没取到详情页，本次无数据且不缓存",
                                    category: .appStore)
         }
         return groups
