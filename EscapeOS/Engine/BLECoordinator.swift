@@ -34,6 +34,8 @@ final class BLECoordinator: NSObject, ObservableObject {
     private static let resendInterval: TimeInterval = 8
     /// B 机重扫的最小间隔（失败退避）.
     private static let minScanRestartInterval: TimeInterval = 2
+    /// B 机静默自愈：连上并订阅后超过这个时长收不到任何负载就重连（比 A 侧略大，让 A 先动）.
+    private static let receiverSilentTimeout: TimeInterval = 30
 
     private var peripheralManager: CBPeripheralManager?
     private var coordinateCharacteristic: CBMutableCharacteristic?
@@ -50,6 +52,8 @@ final class BLECoordinator: NSObject, ObservableObject {
     private var statusWriteCharacteristic: CBCharacteristic?
     /// B 机去重：与上次应用的坐标完全相同则丢弃.
     private var lastApplied: CLLocationCoordinate2D?
+    /// B 机存活时间戳：任何收到的负载都刷新（含被去重丢弃的包）.
+    private var lastReceivedAt: Date?
     private var lastScanStart = Date.distantPast
 
     private override init() {
@@ -67,10 +71,11 @@ final class BLECoordinator: NSObject, ObservableObject {
             switch role {
             case .broadcaster:
                 self.peripheralManager = CBPeripheralManager(delegate: self, queue: self.queue, options: nil)
-                self.startWatchdogLocked()
             case .receiver:
                 self.centralManager = CBCentralManager(delegate: self, queue: self.queue, options: nil)
             }
+            // 两种角色都要看门狗：A 侧防「对端消失后无法再被发现」，B 侧防「已连但收不到」.
+            self.startWatchdogLocked()
             self.publish {
                 self.isActive = true
                 self.state = role == .broadcaster ? .advertising : .scanning
@@ -122,6 +127,7 @@ final class BLECoordinator: NSObject, ObservableObject {
         lastPeerActivity = nil
         lastPushAt = nil
         lastApplied = nil
+        lastReceivedAt = nil
         lastScanStart = .distantPast
 
         peripheralManager?.stopAdvertising()
@@ -134,7 +140,7 @@ final class BLECoordinator: NSObject, ObservableObject {
         pendingPayload = nil
 
         centralManager?.stopScan()
-        if let target { centralManager?.cancelPeripheralConnection(target) }
+        if let connecting = target { centralManager?.cancelPeripheralConnection(connecting) }
         centralManager?.delegate = nil
         centralManager = nil
         target = nil
@@ -142,7 +148,8 @@ final class BLECoordinator: NSObject, ObservableObject {
         statusWriteCharacteristic = nil
     }
 
-    /// A 机看门狗：集中处理「对端消失 → 重新广播」「无连接却未广播 → 补广播」「连接期补发坐标」.
+    /// A 机看门狗：负责「对端消失 → 重新广播」「无连接却未广播 → 补广播」「连接期补发坐标」；
+    /// B 机看门狗：负责「已连但长时间收不到负载 → 重连」.
     private func startWatchdogLocked() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(
@@ -156,7 +163,13 @@ final class BLECoordinator: NSObject, ObservableObject {
     }
 
     private func watchdogTickLocked() {
-        guard role == .broadcaster else { return }
+        switch role {
+        case .broadcaster: broadcasterTickLocked()
+        case .receiver: receiverTickLocked()
+        }
+    }
+
+    private func broadcasterTickLocked() {
         let now = Date()
 
         if !subscribedCentrals.isEmpty {
@@ -187,6 +200,19 @@ final class BLECoordinator: NSObject, ObservableObject {
               coordinateCharacteristic != nil,
               !peripheral.isAdvertising else { return }
         startAdvertisingLocked(peripheral)
+    }
+
+    private func receiverTickLocked() {
+        // 只在「已连上且订阅成功」之后计时；lastReceivedAt 由每次收到的负载刷新（含被去重丢弃的包）.
+        guard target != nil, coordinateNotifyCharacteristic != nil else { return }
+        guard let last = lastReceivedAt else { return }
+        guard Date().timeIntervalSince(last) > Self.receiverSilentTimeout else { return }
+
+        // 重新计时：重连不成时按同一周期再试，不刷屏.
+        self.lastReceivedAt = Date()
+        append("长时间未收到坐标，已重新连接")
+        if let peripheral = target { centralManager?.cancelPeripheralConnection(peripheral) }
+        if let central = centralManager { startScanLocked(central) }
     }
 
     private func sendLocked(latitude: Double, longitude: Double) {
@@ -440,8 +466,9 @@ extension BLECoordinator: CBCentralManagerDelegate {
         coordinateNotifyCharacteristic = nil
         statusWriteCharacteristic = nil
         target = nil
-        // 断线后重新接到同一坐标也要重新应用（旧会话已失效），故清空去重记录.
+        // 断线后重新接到同一坐标也要重新应用（旧会话已失效），故清空去重记录与静默计时.
         lastApplied = nil
+        lastReceivedAt = nil
         append("连接断开，重新扫描")
         startScanLocked(central)
     }
@@ -466,6 +493,8 @@ extension BLECoordinator: CBPeripheralDelegate {
         for characteristic in service.characteristics ?? [] {
             if characteristic.uuid == BluetoothLink.coordinateCharacteristicUUID {
                 coordinateNotifyCharacteristic = characteristic
+                // 从「请求订阅」起就计时，避免订阅回调不到时静默卡死.
+                lastReceivedAt = Date()
                 peripheral.setNotifyValue(true, for: characteristic)
             } else if characteristic.uuid == BluetoothLink.statusCharacteristicUUID {
                 statusWriteCharacteristic = characteristic
@@ -480,6 +509,8 @@ extension BLECoordinator: CBPeripheralDelegate {
     ) {
         guard characteristic.uuid == BluetoothLink.coordinateCharacteristicUUID else { return }
         if characteristic.isNotifying {
+            // 订阅成功即开始计静默窗口.
+            lastReceivedAt = Date()
             updateState(.connected)
             append("已订阅坐标推送")
         } else {
@@ -495,6 +526,8 @@ extension BLECoordinator: CBPeripheralDelegate {
         guard characteristic.uuid == BluetoothLink.coordinateCharacteristicUUID,
               let data = characteristic.value,
               let coordinate = BluetoothLocationPayload.coordinate(from: data) else { return }
+        // 先刷存活时间戳：去重只决定「要不要重新应用坐标」，不参与「链路是否存活」的判定.
+        lastReceivedAt = Date()
         if let last = lastApplied,
            last.latitude == coordinate.latitude,
            last.longitude == coordinate.longitude {
