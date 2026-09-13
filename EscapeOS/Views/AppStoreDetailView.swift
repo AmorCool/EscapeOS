@@ -23,6 +23,9 @@ struct AppStoreDetailView: View {
     // 下载管理
     @State private var showDownloadManager = false
 
+    // App 隐私（App Store 商品页 HTML，免登录；拿不到就整节不显示）
+    @State private var privacyGroups: [AppPrivacyGroup] = []
+
     var body: some View {
         List {
             headerSection
@@ -30,6 +33,7 @@ struct AppStoreDetailView: View {
             infoSection
             if let notes = item.releaseNotes, !notes.isEmpty { releaseNotesSection(notes) }
             if let desc = item.summary, !desc.isEmpty { descriptionSection(desc) }
+            if !privacyGroups.isEmpty { privacySection }
             moreSection
         }
         .listStyle(.insetGrouped)
@@ -399,6 +403,49 @@ struct AppStoreDetailView: View {
         }
     }
 
+    // MARK: App 隐私
+
+    /// 「App 隐私」：三组（用于追踪 / 与你关联 / 不与你关联），组内每条 = 类别名 + 用途。
+    /// 数据来自商品页 HTML（与历史版本同一条免登录通道），拿不到时该节不显示。
+    private var privacySection: some View {
+        Section("App 隐私") {
+            ForEach(privacyGroups) { group in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(group.title)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(group.categories) { category in
+                        privacyCategoryRow(category)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private func privacyCategoryRow(_ category: AppPrivacyCategory) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            if let symbol = category.systemImage {
+                Image(systemName: symbol)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, alignment: .center)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(category.title).font(.subheadline)
+                if !category.purposes.isEmpty {
+                    Text(category.purposes.joined(separator: "、"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !category.dataTypes.isEmpty {
+                    Text(category.dataTypes.joined(separator: "、"))
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: 更多
 
     private var moreSection: some View {
@@ -502,14 +549,22 @@ struct AppStoreDetailView: View {
         }
     }
 
-    /// 进入详情时用 Lookup 补全字段（预览图 / 大小 / 版本 / 兼容性…都来自这里）
+    /// 进入详情时：Lookup 补全字段（预览图 / 大小 / 版本 / 兼容性…都来自这里），
+    /// 同时取「App 隐私」—— 走商品页 HTML（与历史版本页**共用同一份 HTML 缓存**）。
+    /// 两条通道互不依赖，并行发；隐私拿不到就保持空 → 该节不显示。
     private func loadDetail() async {
-        guard let full = try? await AppStoreService.lookup(id: item.id) else { return }
-        var merged = full
-        if merged.iconURL == nil { merged.iconURL = item.iconURL }
-        if merged.summary == nil { merged.summary = item.summary }
-        if merged.screenshots.isEmpty { merged.screenshots = item.screenshots }
-        item = merged
+        let appId = item.id
+        async let lookup = AppStoreService.lookup(id: appId)
+        async let privacy = AppStoreService.privacyDetail(appId: appId)
+
+        if let full = try? await lookup {
+            var merged = full
+            if merged.iconURL == nil { merged.iconURL = item.iconURL }
+            if merged.summary == nil { merged.summary = item.summary }
+            if merged.screenshots.isEmpty { merged.screenshots = item.screenshots }
+            item = merged
+        }
+        if let groups = try? await privacy { privacyGroups = groups }
     }
 
     private static func fmtDate(_ iso: String?) -> String? {

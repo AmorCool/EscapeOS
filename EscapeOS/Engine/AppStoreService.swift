@@ -257,6 +257,90 @@ enum AppStoreService {
         return await enrichBundleIds(list, country: country)
     }
 
+    // MARK: - v0.3.368：商品页 HTML（详情页「App 隐私」与历史版本页共用）
+
+    /// 商品页 HTML 抓取 + 缓存。
+    ///
+    /// 详情页（App 隐私）与版本历史页解析的是**同一张** `apps.apple.com/<cc>/app/id<id>`
+    /// 商品页 —— SSR 时 `privacyDetail` 与 `versionHistory` 一起塞在
+    /// `<script id="serialized-server-data">` 的 JSON 里。各抓各的 = 一次浏览打两发
+    /// 1MB 级页面，所以这里按「区域 + appId」缓存整段 HTML，同一份只下一次。
+    ///
+    /// 并发去重：同一 key 的在途请求只发一次，后来者等同一份结果 ——
+    /// 「刚进详情页就点历史版本」这种时序不会再各打一发。
+    ///
+    /// ⚠️ `/us/` 之类会被出口 IP 地理重定向到 `/cn/`（JSON 里的 `storefront` 字段能看出来）。
+    /// 本解析只按 `identifier` 取数据、分组标题用固定中文，所以重定向不会污染结果。
+    ///
+    /// 只缓存**成功**的 HTML；失败不写缓存，下次自然重试（沿用版本目录那套「失败不落成功缓存」思路）。
+    ///
+    /// 单份 HTML 是 0.6–1.6MB，所以除了 TTL 还给个条数上限：写入前清掉过期项，
+    /// 仍超上限就丢最旧的一条 —— 避免连续浏览多个应用把内存堆起来。
+    private static let htmlCacheTTL: TimeInterval = 10 * 60
+    private static let htmlCacheLimit = 3
+
+    private static let htmlLock = NSLock()
+    private static var htmlCache: [String: (html: String, at: Date)] = [:]
+    private static var htmlInflight: [String: Task<String, Error>] = [:]
+
+    private static func productHTML(appId: String, country: String?) async throws -> String {
+        let cc = resolved(country)
+        let key = "\(cc)|\(appId)"
+
+        htmlLock.lock()
+        if let hit = htmlCache[key], Date().timeIntervalSince(hit.at) < htmlCacheTTL {
+            htmlLock.unlock()
+            return hit.html
+        }
+        if let running = htmlInflight[key] {
+            htmlLock.unlock()
+            return try await running.value
+        }
+        let task = Task { try await loadProductHTML(appId: appId, country: cc) }
+        htmlInflight[key] = task
+        htmlLock.unlock()
+
+        do {
+            let html = try await task.value
+            htmlLock.lock()
+            let now = Date()
+            htmlCache = htmlCache.filter { now.timeIntervalSince($0.value.at) < htmlCacheTTL }
+            if htmlCache.count >= htmlCacheLimit,
+               let oldest = htmlCache.min(by: { $0.value.at < $1.value.at })?.key {
+                htmlCache[oldest] = nil
+            }
+            htmlCache[key] = (html: html, at: now)
+            htmlInflight[key] = nil
+            htmlLock.unlock()
+            LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 取到 \(html.count) 字（详情页与版本历史共用）",
+                                   category: .appStore)
+            return html
+        } catch {
+            htmlLock.lock()
+            htmlInflight[key] = nil
+            htmlLock.unlock()
+            throw error
+        }
+    }
+
+    /// 真正发请求：必须用**桌面 UA**，否则手机 UA 会被 301 到 `itms-appss://` 协议链接。
+    private static func loadProductHTML(appId: String, country: String) async throws -> String {
+        guard let url = URL(string: "https://apps.apple.com/\(country)/app/id\(appId)") else {
+            throw AppStoreError.badURL
+        }
+        var req = URLRequest(url: url)
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                     + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+                     forHTTPHeaderField: "User-Agent")
+        req.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
+        let (data, resp) = try await session.data(for: req)
+        if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw AppStoreError.http(http.statusCode)
+        }
+        guard let html = String(data: data, encoding: .utf8) else { throw AppStoreError.decode }
+        return html
+    }
+
     // MARK: - 历史版本
 
     /// v0.3.300：应用历史版本列表
@@ -269,24 +353,10 @@ enum AppStoreService {
     ///        "primarySubtitle":"8.0.78","secondarySubtitle":"Tue Sep 08 2026 …"}
     ///   , …]}]}
     ///
-    /// 该页面**无需登录、无需认证**，但必须用桌面 UA（手机 UA 会被 301 到
-    /// `itms-appss://` 协议链接）。
+    /// 该页面**无需登录、无需认证**。HTML 由 `productHTML` 统一抓取/缓存，
+    /// 与详情页的「App 隐私」共用同一份（v0.3.368）。
     static func versionHistory(appId: String, country: String? = nil) async throws -> [AppStoreVersion] {
-        guard let url = URL(string: "https://apps.apple.com/\(resolved(country))/app/id\(appId)") else {
-            throw AppStoreError.badURL
-        }
-        var req = URLRequest(url: url)
-        // 关键：桌面 UA，否则返回 301 → itms-appss://
-        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                     + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-                     forHTTPHeaderField: "User-Agent")
-        req.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
-        let (data, resp) = try await session.data(for: req)
-        if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw AppStoreError.http(http.statusCode)
-        }
-        guard let html = String(data: data, encoding: .utf8) else { throw AppStoreError.decode }
-        return parseVersionHistory(html: html)
+        parseVersionHistory(html: try await productHTML(appId: appId, country: country))
     }
 
     // MARK: - v0.3.335：历史版本（账号通道，移植 Asspp）
@@ -567,6 +637,135 @@ enum AppStoreService {
         return prefix + String(chars[0...end])
     }
 
+    // MARK: - v0.3.368：App 隐私（App Store 侧）
+
+    /// 取某应用的「App 隐私」三组数据（用于追踪 / 与你关联 / 不与你关联）。
+    ///
+    /// 数据源与版本历史**同一条**：商品页 HTML 的 `serialized-server-data` 里存在
+    /// `"page":"privacyDetail"` 段落，其 `pageData.shelves[*].items[*]` 里
+    /// `$kind` 为 `PrivacyType` 的条目，`identifier` 就是
+    /// `DATA_USED_TO_TRACK_YOU` / `DATA_LINKED_TO_YOU` / `DATA_NOT_LINKED_TO_YOU`。
+    ///
+    /// **无需登录**（`amp-api` 那条实测 401，不用）。HTML 与历史版本页共用缓存。
+    ///
+    /// 不是所有应用都有这块数据 → 返回空数组，调用方**整节不显示**（不显示空壳/占位）。
+    static func privacyDetail(appId: String, country: String? = nil) async throws -> [AppPrivacyGroup] {
+        parsePrivacy(html: try await productHTML(appId: appId, country: country))
+    }
+
+    /// 从商品页 HTML 解析隐私三组。
+    ///
+    /// 三类分组在页面里各出现一次且内容一致（`privacyHeader/seeAllAction` 与各
+    /// `privacyTypes/items[n]/clickAction` 的 `pageData` 是同一份），取第一处即可拿全。
+    ///
+    /// 结构（实测国区微信 414478124 / 387682726）：
+    ///   PrivacyType{identifier,title,purposes:[{title,categories:[{identifier,title,dataTypes:[…]}]}],
+    ///               categories:[…]}                                     ← 「用于追踪」只有 categories
+    static func parsePrivacy(html: String) -> [AppPrivacyGroup] {
+        guard let marker = html.range(of: "\"page\":\"privacyDetail\"") else { return [] }
+        let tail = html[marker.upperBound...]
+        guard let shelvesStart = tail.range(of: "\"shelves\":[") else { return [] }
+        let fromBracket = tail[shelvesStart.upperBound...]
+        guard let jsonArray = balancedSlice(prefix: "[", from: fromBracket),
+              let arr = try? JSONSerialization.jsonObject(with: Data(jsonArray.utf8)) as? [Any] else {
+            return []
+        }
+
+        var byIdentifier: [String: AppPrivacyGroup] = [:]
+        var order: [String] = []
+        for case let shelf as [String: Any] in arr {
+            // 只有 privacyType 货架承载数据类别，privacyHeader 是那句说明文字，跳过
+            guard (shelf["contentType"] as? String) == "privacyType",
+                  let items = shelf["items"] as? [Any] else { continue }
+            for case let it as [String: Any] in items {
+                guard (it["$kind"] as? String) == "PrivacyType",
+                      let identifier = it["identifier"] as? String, !identifier.isEmpty,
+                      byIdentifier[identifier] == nil else { continue }
+                let categories = privacyCategories(from: it)
+                guard !categories.isEmpty else { continue }
+                byIdentifier[identifier] = AppPrivacyGroup(id: identifier,
+                                                          title: privacyGroupTitle(identifier),
+                                                          categories: categories)
+                order.append(identifier)
+            }
+        }
+
+        // 固定顺序：用于追踪 → 与你关联 → 不与你关联（Apple 的原生顺序）
+        let rank = ["DATA_USED_TO_TRACK_YOU", "DATA_LINKED_TO_YOU", "DATA_NOT_LINKED_TO_YOU"]
+        return order.sorted { (rank.firstIndex(of: $0) ?? Int.max) < (rank.firstIndex(of: $1) ?? Int.max) }
+            .compactMap { byIdentifier[$0] }
+    }
+
+    /// 分组标题：按 identifier 给固定短中文 —— 不取 HTML 里的 `title`
+    /// （那会随区域/语言变化，而且出口 IP 重定向到别的区时会串味）。
+    private static func privacyGroupTitle(_ identifier: String) -> String {
+        switch identifier {
+        case "DATA_USED_TO_TRACK_YOU": return "用于追踪你的数据"
+        case "DATA_LINKED_TO_YOU":     return "与你关联的数据"
+        case "DATA_NOT_LINKED_TO_YOU": return "不与你关联的数据"
+        default:                       return identifier
+        }
+    }
+
+    /// 把一组的类别摊平：组级 `categories` 与 `purposes[].categories` 合并，
+    /// 同一类别（同 `identifier`）跨用途去重，用途标题按出现顺序并到一条上。
+    private static func privacyCategories(from group: [String: Any]) -> [AppPrivacyCategory] {
+        var raw: [String: [String: Any]] = [:]       // identifier → 类别原始字典
+        var purposes: [String: [String]] = [:]       // identifier → 用途（去重有序）
+        var order: [String] = []
+
+        func absorb(_ category: [String: Any], purpose: String?) {
+            guard let identifier = category["identifier"] as? String, !identifier.isEmpty else { return }
+            if raw[identifier] == nil {
+                raw[identifier] = category
+                purposes[identifier] = []
+                order.append(identifier)
+            }
+            guard let purpose, !purpose.isEmpty,
+                  purposes[identifier]?.contains(purpose) == false else { return }
+            purposes[identifier, default: []].append(purpose)
+        }
+
+        // 「用于追踪你的数据」的类别直接挂在组上
+        for case let c as [String: Any] in (group["categories"] as? [Any] ?? []) {
+            absorb(c, purpose: nil)
+        }
+        // 「与你关联 / 不与你关联」是 组 → purposes → categories
+        for case let p as [String: Any] in (group["purposes"] as? [Any] ?? []) {
+            let title = (p["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            for case let c as [String: Any] in (p["categories"] as? [Any] ?? []) {
+                absorb(c, purpose: title)
+            }
+        }
+
+        return order.compactMap { identifier -> AppPrivacyCategory? in
+            guard let category = raw[identifier] else { return nil }
+            let title = (category["title"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !title.isEmpty else { return nil }
+            return AppPrivacyCategory(id: identifier,
+                                      title: title,
+                                      dataTypes: deduped((category["dataTypes"] as? [String]) ?? []),
+                                      purposes: purposes[identifier] ?? [],
+                                      systemImage: privacySymbol(category["artwork"] as? [String: Any]))
+        }
+    }
+
+    /// `artwork.template` 形如 `systemimage://bag.fill` / `resource://person.circle.slash`。
+    /// **只认 `systemimage://`**：那是明确的 SF Symbol 名；`resource://` 是 Apple 内部资源名，
+    /// 在 iOS 上未必能解析成图标（乱用会留空白占位），所以返回 nil 表示「没有图标」。
+    private static func privacySymbol(_ artwork: [String: Any]?) -> String? {
+        let scheme = "systemimage://"
+        guard let template = artwork?["template"] as? String, template.hasPrefix(scheme) else { return nil }
+        let name = String(template.dropFirst(scheme.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    private static func deduped(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
     // MARK: - 解析（Search / Lookup）
 
     private static func parseSearchItem(_ d: [String: Any]) -> AppStoreItem? {
@@ -666,6 +865,29 @@ enum AppStoreService {
         if let s = v as? String { return Double(s) }
         return nil
     }
+}
+
+/// 一条「数据类别」（App 隐私栏目里的一行）。
+struct AppPrivacyCategory: Identifiable, Hashable {
+    /// 类别 identifier（如 `IDENTIFIERS`）
+    let id: String
+    /// 类别名，Apple 原文（如「标识符」）
+    let title: String
+    /// 具体数据类型，Apple 原文（如「设备 ID」）
+    let dataTypes: [String]
+    /// 用途，Apple 原文（如「第三方广告」）；「用于追踪」组无用途，为空
+    let purposes: [String]
+    /// SF Symbol 名；Apple 没给 `systemimage://` 模板时为 nil（不显示图标）
+    let systemImage: String?
+}
+
+/// 「App 隐私」的一个分组（用于追踪 / 与你关联 / 不与你关联）。
+struct AppPrivacyGroup: Identifiable, Hashable {
+    /// `DATA_USED_TO_TRACK_YOU` / `DATA_LINKED_TO_YOU` / `DATA_NOT_LINKED_TO_YOU`
+    let id: String
+    /// 固定短中文标题
+    let title: String
+    let categories: [AppPrivacyCategory]
 }
 
 enum AppStoreError: Error, LocalizedError {
