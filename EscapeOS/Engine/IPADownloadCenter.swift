@@ -91,7 +91,7 @@ final class IPADownloadCenter: ObservableObject {
     /// 适用：商店列表 / 详情页 —— 那里一行 = 一个应用，只关心「这个应用有没有在装/在下」。
     /// ⚠️ **不要**拿它给「同一个应用的多个版本行」判状态：它只认 bundleId，
     /// 会把同一个活跃任务挂到所有版本行上（v0.3.381 修的「多版本一起显示安装中」就是这个坑）。
-    /// 下载管理页请用 `activeJob(fileName:bundleId:version:name:)`。
+    /// 下载管理页请用 `activeJob(fileName:bundleId:version:name:allowBundleIdFallback:)`。
     func activeJob(bundleId: String?, name: String) -> Job? {
         jobs.first { job in
             guard job.phase.isBusy else { return false }
@@ -107,14 +107,19 @@ final class IPADownloadCenter: ObservableObject {
     /// 库与文件本身都是按 `fileName` 记的（`IPADownloadLibrary.markInstalled(fileName:)`、
     /// `Job.localFileName`），所以按文件名匹配才对得上唯一一行。
     ///
-    /// 回落规则（**只对「还没落地」的任务生效**）：
-    /// · `job.localFileName != nil` 的任务只认文件名，不参与回落 —— 它是针对某个具体文件的安装；
-    /// · 有回落资格的任务再按 `version` → `bundleId` → `name` 逐级比对
-    ///   （Apple ID 通道的安装任务 `localFileName` 为空但带 `version`，靠 version 就能对上唯一一行）。
+    /// 回落规则（**只对「还没落地」的任务生效**，即 `job.localFileName == nil`）：
+    /// · 任务**自带 version** → 版本不一致就不是这一行；
+    /// · 任务**version 未知**（`startFromI4Source` 的「查找安装包」阶段）→ 只能按 bundleId 认行，
+    ///   而这只在**该 bundleId 在列表里只有一行**时才是安全的 —— 多行时必须传
+    ///   `allowBundleIdFallback: false`，此时**不匹配任何行**（宁可少显示，不能显示错）。
+    ///
+    /// - Parameter allowBundleIdFallback: 该 bundleId 在列表里是否唯一（唯一才允许按 bundleId 认行）。
+    ///   由调用方按台账算；列表页 `IPADownloadManagerView` 会传 `false` 表示「这个 bundleId 有多行」。
     func activeJob(fileName: String?,
                    bundleId: String?,
                    version: String?,
-                   name: String) -> Job? {
+                   name: String,
+                   allowBundleIdFallback: Bool) -> Job? {
         // 1) 精确命中本行文件（含版本）
         if let fileName, !fileName.isEmpty,
            let exact = jobs.first(where: { $0.phase.isBusy && $0.localFileName == fileName }) {
@@ -123,7 +128,13 @@ final class IPADownloadCenter: ObservableObject {
         // 2) 回落：只考虑还没有文件名的进行中任务
         return jobs.first { job in
             guard job.phase.isBusy, job.localFileName == nil else { return false }
-            if let jv = job.version, let v = version, !v.isEmpty, jv != v { return false }
+            if let jv = job.version, !jv.isEmpty {
+                // 任务自带版本：版本对不上就不是这一行
+                if let v = version, !v.isEmpty, v != jv { return false }
+            } else if !allowBundleIdFallback {
+                // v0.3.382：任务版本未知、只能按 bundleId 认行 —— 该 bundleId 有多行时宁可不匹配
+                return false
+            }
             if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
             return job.name == name
         }
@@ -140,17 +151,23 @@ final class IPADownloadCenter: ObservableObject {
 
     /// v0.3.381：某**一条已下载的条目**最近一次结束的任务 —— 与 `activeJob(fileName:…)` 同口径，
     /// 供按行提示「这条装的成/败」用（同样是文件名优先，避免多版本行互相串状态）。
+    /// 回落规则与 `allowBundleIdFallback` 的含义同上。
     func lastFinishedJob(fileName: String?,
                          bundleId: String?,
                          version: String?,
-                         name: String) -> Job? {
+                         name: String,
+                         allowBundleIdFallback: Bool) -> Job? {
         if let fileName, !fileName.isEmpty,
            let exact = jobs.first(where: { !$0.phase.isBusy && $0.localFileName == fileName }) {
             return exact
         }
         return jobs.first { job in
             guard !job.phase.isBusy, job.localFileName == nil else { return false }
-            if let jv = job.version, let v = version, !v.isEmpty, jv != v { return false }
+            if let jv = job.version, !jv.isEmpty {
+                if let v = version, !v.isEmpty, v != jv { return false }
+            } else if !allowBundleIdFallback {
+                return false
+            }
             if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
             return job.name == name
         }
@@ -294,6 +311,9 @@ final class IPADownloadCenter: ObservableObject {
                     self.update(id) { $0.phase = .done; $0.progress = 1; $0.stageText = "已完成" }
                 }
             } catch {
+                // v0.3.382：失败原因只进日志 —— 界面行上只显示「安装失败」四个字，不把长错误塞进 UI
+                LoginLogger.shared.log("[下载中心] 安装失败 \(fileName)：\(error.localizedDescription)",
+                                       category: .appStore)
                 await MainActor.run {
                     self.update(id) {
                         $0.phase = .failed

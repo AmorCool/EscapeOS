@@ -18,6 +18,10 @@ struct IPADownloadManagerView: View {
     /// 进入页面时按 bundleId 查回来补上；查不到就退回字母块。
     @State private var icons: [String: String] = [:]
     @State private var selection = Set<String>()
+    /// v0.3.382：在列表里出现**多于一次**的 bundleId。
+    /// 用途：行状态判定时，若某个任务的版本还未知（只能按 bundleId 认行），
+    /// 而这些行共享同一个 bundleId，就**宁可都不显示**进行中/失败 —— 不能显示错（见 activeJob 注释）。
+    @State private var duplicatedBundleIds: Set<String> = []
     @ObservedObject private var center = IPADownloadCenter.shared
     @Environment(\.editMode) private var editMode
     private var isEditing: Bool { editMode?.wrappedValue == .active }
@@ -228,10 +232,7 @@ struct IPADownloadManagerView: View {
 
             // v0.3.381：按**文件名（含版本）**判本行的进行中状态 —— 只按 bundleId 会让
             // 同一应用的多版本条目一起显示「安装中」（用户实测 BUG）。
-            if let job = center.activeJob(fileName: item.fileName,
-                                          bundleId: item.bundleId,
-                                          version: item.version,
-                                          name: item.title) {
+            if let job = activeJob(for: item) {
                 HStack(spacing: 6) {
                     ProgressView(value: min(1, max(0, job.overall)))
                         .frame(width: 44)
@@ -240,17 +241,20 @@ struct IPADownloadManagerView: View {
                 }
                 .fixedSize()
             } else {
+                // v0.3.382：这一行上一次装失败 → 红字「安装失败」，**仍可点**（点了就是重试）。
+                // 不再静默变回「重装」按钮：用户点了安装、什么都没发生、按钮又变回去，他根本不知道失败了。
+                let failed = finishedJob(for: item)?.phase == .failed
                 Button {
                     install(item)
                 } label: {
-                    Text(item.lastInstalledAt == nil ? "安装" : "重装")
+                    Text(failed ? "安装失败" : (item.lastInstalledAt == nil ? "安装" : "重装"))
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
                         .frame(minWidth: 40)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(Color.blue.opacity(0.14), in: Capsule())
-                        .foregroundStyle(.blue)
+                        .background((failed ? Color.red : Color.blue).opacity(0.14), in: Capsule())
+                        .foregroundStyle(failed ? Color.red : Color.blue)
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
@@ -336,6 +340,35 @@ struct IPADownloadManagerView: View {
     private func reload() {
         syncSourceURLs()
         items = IPADownloadLibrary.shared.items()
+        // 同一个 bundleId 在列表里出现两次以上 → 记下来：任务版本未知时不允许按 bundleId 认行
+        duplicatedBundleIds = Set(
+            Dictionary(grouping: items.compactMap { $0.bundleId }, by: { $0 })
+                .filter { $0.value.count > 1 }
+                .keys)
+    }
+
+    /// 本行当前正在进行的任务（文件名优先；bundleId 只有在列表里唯一时才允许用来认行）
+    private func activeJob(for item: IPADownloadItem) -> IPADownloadCenter.Job? {
+        center.activeJob(fileName: item.fileName,
+                         bundleId: item.bundleId,
+                         version: item.version,
+                         name: item.title,
+                         allowBundleIdFallback: !bundleIdIsDuplicated(item))
+    }
+
+    /// 本行最近一次结束的任务（判「这一行装失败了」用，口径与 `activeJob(for:)` 一致）
+    private func finishedJob(for item: IPADownloadItem) -> IPADownloadCenter.Job? {
+        center.lastFinishedJob(fileName: item.fileName,
+                               bundleId: item.bundleId,
+                               version: item.version,
+                               name: item.title,
+                               allowBundleIdFallback: !bundleIdIsDuplicated(item))
+    }
+
+    /// 该行的 bundleId 是否在列表里有多行
+    private func bundleIdIsDuplicated(_ item: IPADownloadItem) -> Bool {
+        guard let bid = item.bundleId, !bid.isEmpty else { return false }
+        return duplicatedBundleIds.contains(bid)
     }
 
     /// v0.3.378：把下载中心任务里记着的**来源直链**回填进台账并落盘。
