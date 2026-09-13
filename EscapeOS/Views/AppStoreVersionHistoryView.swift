@@ -45,6 +45,9 @@ struct AppStoreVersionHistoryView: View {
     @State private var loadingMore = false
     /// 账号通道回报后，还会在后台补一次「商品页真实日期」——这段也算读取中
     @State private var harvesting = false
+    /// v0.3.365：整次加载最多放行一次重登（对齐 `downloadInformation` 的 `refreshed`）。
+    /// 原来每个版本身份取元数据失败都会各自 rotate，一次「加载更多」最坏 20 次重登。
+    @State private var didRotateForVersions = false
     @State private var errorText: String?
     @State private var expanded: Set<String> = []
     /// 已知的「版本号 → 真实发布日期」。只来自商品页通道；
@@ -246,6 +249,7 @@ struct AppStoreVersionHistoryView: View {
         loadedIDs = []
         channel = .web
         accountEmail = nil
+        didRotateForVersions = false
 
         // 按用户选的查询方式先来一条，失败/为空则自动回退另一条，
         // 最后兜底商品页通道（免登录，覆盖不全）。
@@ -348,33 +352,60 @@ struct AppStoreVersionHistoryView: View {
         }
     }
 
+    /// v0.3.365：单次「加载更多」的两个上界。
+    ///
+    /// · `versionsPerFetch = 5`：一批补 5 条，与改前一致（用户可预期的节奏）。
+    /// · `versionsPerBatch = 10`：最多往后扫 10 个版本身份。选 10 的理由 ——
+    ///   真机实测 Apple 只拒**最新 1~2 个**版本（v0.3.361 结论），留 5 倍余量足够
+    ///   跨过被拒的前缀；同时把单次点击的最坏请求数从 20 次 volumeStore 砍半到 10 次。
+    private static let versionsPerFetch = 5
+    private static let versionsPerBatch = 10
+
     /// 账号通道：分批取版本元数据。
     ///
     /// v0.3.364：Apple 只对**该账号真正可下的那些版本**回元数据，最新的一两个会被拒。
     /// 所以不能「第一条失败就把整列报错」—— 那会让账号通道永远显示不出任何东西。
-    /// 这里跳过取不到的版本继续往后走，直到攒够 5 条或试完 20 个候选（有界）。
+    /// v0.3.365：整批一条都没取到、或重登后仍失效 → **失败即停**（剩下身份标成已读），
+    /// 否则用户每点一次就再打 10 发，纯放大（审计结论）。
     private func loadMore() async {
         guard canLoadMore, !loadingMore, let email = accountEmail else { return }
         loadingMore = true
         defer { loadingMore = false }
         let pending = identifiers.filter { !loadedIDs.contains($0) }
         var fetched = 0
-        for id in pending.prefix(20) {
-            if fetched >= 5 { break }
+        var authBroken = false
+        for id in pending.prefix(Self.versionsPerBatch) {
+            if fetched >= Self.versionsPerFetch { break }
+            if authBroken { break }
             do {
                 let meta = try await AppStoreService.storeVersionMetadata(item: item,
                                                                          versionID: id,
-                                                                         email: email)
+                                                                         email: email,
+                                                                         allowRotate: !didRotateForVersions)
                 versions.append(AppStoreVersion(version: meta.version,
                                                 externalVersionID: id,
                                                 dateValue: dateByVersion[meta.version]))
                 loadedIDs.insert(id)
                 fetched += 1
+            } catch ApplePackageError.passwordTokenExpired {
+                // 这一次已经把整次加载的重登额度用掉（rotate 后仍失效）→ 关闸并停下，
+                // 剩下几十条不再各自重登。文案只描述接口行为，不牵扯账号/用户。
+                didRotateForVersions = true
+                loadedIDs.insert(id)
+                authBroken = true
+                LoginLogger.shared.log("版本历史：重登后仍失效，停止翻页", category: .appStore)
             } catch {
                 loadedIDs.insert(id)
                 LoginLogger.shared.log("版本历史：版本 \(id) 取不到元数据，跳过（\(error.localizedDescription)）",
                                        category: .appStore)
             }
+        }
+        guard authBroken || fetched == 0 else { return }
+        for id in identifiers where !loadedIDs.contains(id) { loadedIDs.insert(id) }
+        LoginLogger.shared.log("版本历史：停止翻页（本批 \(fetched) 条\(authBroken ? "，重登后仍失效" : "")）",
+                               category: .appStore)
+        if versions.isEmpty {
+            errorText = authBroken ? "登录已过期，请重新登录" : "Apple 没有返回这批版本"
         }
     }
 }

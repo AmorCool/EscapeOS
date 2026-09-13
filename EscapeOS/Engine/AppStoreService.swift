@@ -354,21 +354,28 @@ enum AppStoreService {
     }
 
     /// 取某版本身份对应的版本号与发布日期（`VersionLookup`，同 Asspp）。
+    ///
+    /// v0.3.365：`allowRotate` 是**整次加载只放行一次的重登闸门**（对齐
+    /// `AppStoreLocalInstallService.downloadInformation` 的 `refreshed` 写法）。
+    /// 历史版本页一次加载会连着取几十个 metadata，若每条的 2034 都各自 rotate，
+    /// 一次「加载更多」最坏就是 20 次重登（审计实测结论）—— 闸门用掉后
+    /// `where allowRotate` 不再匹配，错误原样上抛，由调用方停手。
     static func storeVersionMetadata(item: AppStoreItem,
                                      versionID: String,
-                                     email: String) async throws -> (version: String, date: Date) {
+                                     email: String,
+                                     allowRotate: Bool = true) async throws -> (version: String, date: Date) {
         let software = try AppStoreLocalInstallService.makeSoftware(item)
         return try await StoreAccountSession.withAccount(email: email) { account in
-            let metadata: VersionMetadata
             do {
-                metadata = try await VersionLookup.getVersionMetadata(account: &account,
-                                                                       app: software, versionID: versionID)
-            } catch ApplePackageError.passwordTokenExpired {
+                let metadata = try await VersionLookup.getVersionMetadata(account: &account,
+                                                                          app: software, versionID: versionID)
+                return (metadata.displayVersion, metadata.releaseDate)
+            } catch ApplePackageError.passwordTokenExpired where allowRotate {
                 account = try await AppleIDSignInService.rotate(email: email, failedAccount: account)
-                metadata = try await VersionLookup.getVersionMetadata(account: &account,
-                                                                       app: software, versionID: versionID)
+                let metadata = try await VersionLookup.getVersionMetadata(account: &account,
+                                                                          app: software, versionID: versionID)
+                return (metadata.displayVersion, metadata.releaseDate)
             }
-            return (metadata.displayVersion, metadata.releaseDate)
         }
     }
 
@@ -388,25 +395,48 @@ enum AppStoreService {
     ///
     /// 实测：ChatGPT 的 `890707559` 与我们从 MDM 目录解析出的 externalVersionId 一致。
     /// 该服务有速率限制（连续请求会 429），所以结果按 appId 落盘缓存。
+    ///
+    /// v0.3.365：**失败也要落缓存**（短 TTL 负缓存）。原来只有 200＋解析成功才写缓存，
+    /// 于是目录一旦 429，每次进页面都会再打一发（账号通道恢复 + 回退三方 API 各一次），
+    /// 429 永远冷却不下来 —— 这是审计出来的自持放大点。负缓存与 6h 成功缓存**分开记**，
+    /// 失败绝不写进成功缓存，窗口一过自然恢复。
     static func versionHistoryFromCatalog(appId: String) async throws -> [AppStoreVersion] {
         if let data = catalogCache(appId: appId), let versions = parseCatalogHistory(data), !versions.isEmpty {
             return versions
+        }
+        if catalogRecentlyFailed(appId: appId) {
+            LoginLogger.shared.log("三方 API：负缓存窗口内，跳过请求", category: .appStore)
+            throw AppStoreError.catalogCoolingDown
         }
         guard let url = URL(string: "https://apis.bilin.eu.org/history/\(appId)") else {
             throw AppStoreError.badURL
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let data: Data
+        let code: Int
+        do {
+            let (body, response) = try await URLSession.shared.data(for: request)
+            data = body
+            code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        } catch {
+            // 网络层失败（超时/断网）同样记负缓存，否则连续进出页面会反复重打
+            storeCatalogFailure(appId: appId)
+            LoginLogger.shared.log("三方 API 通道：网络失败（\(error.localizedDescription)）",
+                                   category: .appStore)
+            throw error
+        }
         guard code == 200 else {
-            LoginLogger.shared.log("版本目录通道 HTTP \(code)", category: .appStore)
+            storeCatalogFailure(appId: appId)
+            LoginLogger.shared.log("三方 API 通道 HTTP \(code)", category: .appStore)
             throw AppStoreError.http(code)
         }
         guard let versions = parseCatalogHistory(data), !versions.isEmpty else {
+            storeCatalogFailure(appId: appId)
             throw AppStoreError.decode
         }
         storeCatalogCache(appId: appId, data: data)
+        clearCatalogFailure(appId: appId)
         return versions
     }
 
@@ -449,6 +479,30 @@ enum AppStoreService {
         let defaults = UserDefaults.standard
         defaults.set(data, forKey: "bilinHistory.\(appId)")
         defaults.set(Date().timeIntervalSince1970, forKey: "bilinHistory.\(appId).at")
+    }
+
+    // MARK: - v0.3.365：三方目录失败负缓存
+
+    /// 失败负缓存 TTL（秒）。取 **3 分钟**：
+    ///   · 审计实测「一次会话里连续进出历史版本页」的重复打点是 2 发/次，3 分钟足以全部吸收；
+    ///   · 又远短于 6h 成功缓存，429 一停就能自然恢复，不会把目录长期判死。
+    private static let catalogFailureTTL: TimeInterval = 3 * 60
+
+    private static func catalogFailureKey(_ appId: String) -> String { "bilinHistory.\(appId).failedAt" }
+
+    /// 距上次失败是否还在负缓存窗口内
+    private static func catalogRecentlyFailed(appId: String) -> Bool {
+        let at = UserDefaults.standard.double(forKey: catalogFailureKey(appId))
+        return at > 0 && Date().timeIntervalSince1970 - at < catalogFailureTTL
+    }
+
+    /// 只记「失败时刻」，**不写成功缓存** —— 窗口内跳过网络，窗口外自动重试
+    private static func storeCatalogFailure(appId: String) {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: catalogFailureKey(appId))
+    }
+
+    private static func clearCatalogFailure(appId: String) {
+        UserDefaults.standard.removeObject(forKey: catalogFailureKey(appId))
     }
 
     /// 从商品页 HTML 中抽出版本历史数组并结构化
@@ -613,6 +667,8 @@ enum AppStoreError: Error, LocalizedError {
     case http(Int)
     case decode
     case noAccount
+    /// v0.3.365：三方版本目录刚失败过，负缓存窗口内不再重打（窗口一过自动恢复）
+    case catalogCoolingDown
 
     var errorDescription: String? {
         switch self {
@@ -620,6 +676,7 @@ enum AppStoreError: Error, LocalizedError {
         case .http(let code): return "网络请求失败（HTTP \(code)）"
         case .decode: return "数据解析失败"
         case .noAccount: return "需要先登录 Apple ID"
+        case .catalogCoolingDown: return "三方 API 暂时不可用，稍后自动重试"
         }
     }
 }
