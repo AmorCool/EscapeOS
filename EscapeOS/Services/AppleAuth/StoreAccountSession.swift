@@ -3,23 +3,42 @@ import Foundation
 /// Account cookie mutations are transactions. Actor reentrancy alone does not serialize awaits.
 private actor StoreAccountRequestGate {
     private var owners: Set<String> = []
-    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
-    func acquire(_ email: String) async {
-        if owners.insert(email).inserted { return }
-        await withCheckedContinuation { continuation in
-            waiters[email, default: []].append(continuation)
+    /// 取锁等待的**上限**。超时后**强制接管**（宁可变慢/偶发并发，绝不永久卡死）。
+    ///
+    /// ## 为什么必须有这个上限（v0.3.389 真机事故）
+    /// 本门是**纯内存态**，`release` 只在 `withAccount` 的 do/catch 两路被调用。
+    /// 但只要**持锁的那一次 `withAccount` 没走到 release**（最典型：App 进后台被挂起、
+    /// 或进程被系统回收 —— 异步任务不会补跑 defer），`owners` 里就会留下一个
+    /// **永不释放的 email**。此后这台设备上**所有下载都永久停在「准备中 0%」**，
+    /// 而且**一条日志都没有**（卡死在第一条 `onLog` 之前，`[AppleID] 请求下载信息…` 永远不出现）。
+    /// 真机实测就是这个形状：用户点下载 → 顶部「准备中 0%」不动 → 日志里没有任何下载记录。
+    ///
+    /// 旧实现用 `withCheckedContinuation` 排队，等待者**没有任何超时/取消能力** → 一旦泄漏就是永久。
+    /// 现在改成**轮询 + 超时接管**：超时后本次照常继续，并由调用方的 `release` 把那个僵尸 owner 清掉，
+    /// 于是**一次超时之后链路自行恢复**。
+    static let acquireTimeout: TimeInterval = 25
+
+    /// 因超时被强制接管的次数（诊断用）
+    private(set) var forcedAcquires = 0
+
+    /// 取锁。返回 `true` 表示「是超时夺来的」（调用方应记日志）。
+    func acquire(_ email: String) async -> Bool {
+        let deadline = Date().addingTimeInterval(Self.acquireTimeout)
+        while true {
+            if owners.insert(email).inserted { return false }
+            if Date() >= deadline {
+                forcedAcquires += 1
+                // 不在这里改 owners：那个 entry 属于（已经被挂起/回收的）旧持有者，
+                // 由本次调用方的 release 统一清掉 —— 这样下一次取锁就是正常快路径。
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
         }
     }
 
     func release(_ email: String) {
-        if var queue = waiters[email], !queue.isEmpty {
-            let next = queue.removeFirst()
-            waiters[email] = queue.isEmpty ? nil : queue
-            next.resume()
-        } else {
-            owners.remove(email)
-        }
+        owners.remove(email)
     }
 }
 
@@ -30,7 +49,13 @@ enum StoreAccountSession {
     static func withAccount<T>(email: String,
                                operation: (inout AppStoreAccount) async throws -> T) async throws -> T {
         let gateKey = email.lowercased()
-        await gate.acquire(gateKey)
+        let forcedByTimeout = await gate.acquire(gateKey)
+        if forcedByTimeout {
+            LoginLogger.shared.log(
+                "[会话] 账号租约等待超过 \(Int(StoreAccountRequestGate.acquireTimeout))s，已强制接管继续 —— "
+                + "上一个持有者很可能因 App 进后台被挂起而未释放（本次结束时会把它清掉）。",
+                category: .appStore)
+        }
         do {
             try Task.checkCancellation()
             guard var account = AppStoreDownloadStore.shared.account(for: email) else {

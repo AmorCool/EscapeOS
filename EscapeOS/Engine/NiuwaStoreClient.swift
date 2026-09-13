@@ -157,7 +157,9 @@ enum NiuwaStoreClient {
             switch self {
             case .badURL: return "接口地址无效"
             case .http(let c): return "请求失败（HTTP \(c)）"
-            case .decode: return "返回数据解析失败"
+            /// v0.3.389：真机实测服务端回的是 **base64 密文**，不是 JSON。
+            /// 这句要留在界面上，否则用户只会反复点、而我们这边看不出原因。
+            case .decode: return "响应不是 JSON（服务端加密了，待解密）"
             case .server(let code, let message):
                 return message.isEmpty ? "服务端返回码 \(code)" : "\(message)（\(code)）"
             case .network(let m): return "网络错误：\(m)"
@@ -270,41 +272,33 @@ enum NiuwaStoreClient {
 
     // MARK: - region 双形态
 
-    /// **三种 region 形态逐个试**（按证据强度排序）：
-    /// ① JSON 数字 `0`（最贴证据：`nwcore_region` 的 objc 类型是 `Tq` = `NSInteger`）；
-    /// ② JSON **字符串**数字 `"0"`（服务端常把这类枚举参数当字符串收）；
-    /// ③ ISO 串 `"cn"`（我们最早的猜测口径，留作最后兜底）。
+    /// ⚠️ **v0.3.389 临时收窄成「只发一种形态」**。
     ///
-    /// 为什么「返回空列表」也要继续试下一种：服务端不认这个取值时很可能是**安静地给空列表**
-    /// 而不是报错（用户实测正是"不报错、就是空"）。
+    /// 原因（真机实测）：`region=cn` 与 `region=us` 两次请求**返回的都是 base64 密文**，不是 JSON ——
+    /// 说明「搜不到」的**瓶颈不在 region 取值**，而在**响应体本身要解密**。
+    /// 既然三种形态都会失败，串行三发只会让用户白白多等（25s 超时 × 3 = 最长 75 秒，
+    /// 表现为「一直卡在加载中」，用户实测正是这个现象）。
     ///
-    /// 收敛判据（看日志，一次真机搜索即可定案）：
-    /// · `M>0 且 N>0` → region 形态对了（M = 服务端给的条数，N = 我们解析成功的条数）；
-    /// · `M=0` → 三种形态都不认，需要再反汇编 `nwcore_regionItemClicked:` 找常量；
-    /// · `M>0 但 N=0` → region 对了但**字段键名**不对（看同日志里打出的"首条记录的键"）。
+    /// 所以本版**只发数字形态**（证据最强：`nwcore_region` 的 objc 类型是 `Tq` = `NSInteger`），
+    /// 快速失败、快速给用户信息。**等响应解密做完**（见 `[牛蛙源] ✗ 响应不是 JSON 对象` 的那条链路），
+    /// 再决定要不要把候选形态加回来。
     private static func withRegionShapes(
         region: NiuwaRegion,
         _ attempt: (Any, String) async throws -> [NiuwaApp]
     ) async throws -> [NiuwaApp] {
-        let log = LoginLogger.shared
         let shapes: [(Any, String)] = [
             (region.index, "数字 \(region.index)"),
-            (String(region.index), "字符串 \"\(region.index)\""),
-            (region.rawValue, "字符串 \"\(region.rawValue)\""),
         ]
         var firstError: Error?
-        for (i, shape) in shapes.enumerated() {
-            let isLast = (i == shapes.count - 1)
+        for shape in shapes {
             do {
                 let apps = try await attempt(shape.0, shape.1)
                 if !apps.isEmpty { return apps }
-                // 空列表不一定是错（可能真没这款应用），所以只记日志继续试
-                log.log("\(logTag) region=\(shape.1) 返回空列表" + (isLast ? "" : " → 换下一种形态"),
-                        category: .appStore)
+                LoginLogger.shared.log("\(logTag) region=\(shape.1) 返回空列表", category: .appStore)
             } catch {
                 if firstError == nil { firstError = error }
-                log.log("\(logTag) region=\(shape.1) 失败（\(error.localizedDescription)）"
-                        + (isLast ? "" : " → 换下一种形态"), category: .appStore)
+                LoginLogger.shared.log("\(logTag) region=\(shape.1) 失败（\(error.localizedDescription)）",
+                                       category: .appStore)
             }
         }
         if let firstError { throw firstError }
