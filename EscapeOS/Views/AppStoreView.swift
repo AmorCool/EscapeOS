@@ -210,7 +210,7 @@ struct AppStoreView: View {
     // MARK: 榜单
 
     /// 区域筛选：切换后榜单 / 搜索 / 详情都按该区域取数据。
-    /// 三段式与二改版同款：自动 → 常用区域 → 全部地区（`XX - storefront id`）
+    /// 三段式：自动（跟随账号）→ 常用区域 → 其他地区（全表余下的，`XX - storefront id`）
     private var regionSection: some View {
         Section {
             Picker("区域", selection: $shopRegion) {
@@ -220,8 +220,10 @@ struct AppStoreView: View {
                         Text(r.display).tag(r.rawValue)
                     }
                 }
-                Section("全部地区") {
-                    ForEach(StoreRegions.all, id: \.code) { region in
+                // v0.3.363：这节剔掉上面的常用区 —— 两节同 tag 会让 Picker 可能双勾选/标题错。
+                Section("其他地区") {
+                    ForEach(StoreRegions.excluding(Set(AppStoreService.Region.allCases.map(\.rawValue))),
+                            id: \.code) { region in
                         Text("\(region.code) - \(region.storefrontID)").tag(region.code.lowercased())
                     }
                 }

@@ -9,6 +9,16 @@ import Foundation
 /// 界面形态与二改版「全部地区」列表同款：`XX - <storefront id>`，按国家码升序。
 enum StoreRegions {
 
+    /// 「其他地区」= 全表里**排除常用区**。
+    ///
+    /// 为什么需要：区域 Picker 里「常用区域」与「全部地区」两节如果都列出同一个国家码，
+    /// 两行会带**相同的 `.tag`**，SwiftUI 可能同时勾选两行、或把折叠标题取成其中一个
+    /// （auth-re 在 v0.3.363 报告里提的风险）。所以常用区留在上面那节，
+    /// 全表这节把常用区剔掉，两节合起来仍然是完整 134 个区域、且 tag 互不重复。
+    static func excluding(_ codes: Set<String>) -> [(code: String, storefrontID: String)] {
+        all.filter { !codes.contains($0.code.lowercased()) }
+    }
+
     /// (国家码大写, storefront id)，按国家码升序
     static let all: [(code: String, storefrontID: String)] = [
         ("AE", "143481"),
