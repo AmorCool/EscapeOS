@@ -119,11 +119,38 @@ enum I4PCStoreClient {
         var ipaPath: String?
         var plistPath: String?
         var versions: [I4Version] = []
+        /// v0.3.368：App 隐私（`app_privacy.privacycards`），没有这块数据时为空数组
+        var privacyCards: [I4PrivacyCard] = []
 
         var ipaURL: URL? {
             guard let s = I4PCStoreClient.normalizeAssetURL(ipaPath) else { return nil }
             return URL(string: s)
         }
+    }
+
+    /// v0.3.368：`app_privacy.privacycards[]` 里的一个**分组**（爱思原文 heading）。
+    ///
+    /// 实测原文（微信）：
+    /// ```json
+    /// {"heading":"与您关联的数据","description":"开发者可能会收集以下数据，且数据与您的身份关联：",
+    ///  "items":[{"heading":"健康与健身","icon":""}, …]}
+    /// ```
+    /// **保真度边界**：这份数据比 App Store 的粗 —— 只有「分组 → 数据类别」两层，
+    /// 没有 `purposes` / `dataTypes` 那层，所以只映射存在的层，缺的不编。
+    struct I4PrivacyCard: Hashable, Identifiable {
+        var heading: String
+        var items: [I4PrivacyItem]
+
+        var id: String { heading }
+    }
+
+    /// v0.3.368：隐私分组里的一条**数据类别**（`items[]`）。
+    /// 实测 `icon` 恒为空串，所以它是「有则显示」的可选字段。
+    struct I4PrivacyItem: Hashable, Identifiable {
+        var heading: String
+        var icon: String?
+
+        var id: String { heading }
     }
 
     /// v0.3.304：把服务端给的资源地址规范化成 **https**。
@@ -317,7 +344,7 @@ enum I4PCStoreClient {
     /// ```
     /// 实测（2026-09）返回体含 `AppName` / `Version` / `Size` / `Company` / `UpdateTime` /
     /// `TypeName` / `Language` / `MinVersion` / `LongNote` / `NewVersionNote` / `Image[]`（截图）/
-    /// `app_privacy`，以及 **`historyversion[]`（历史版本）**。`pkagetype` 可省略。
+    /// `app_privacy`（App 隐私，v0.3.368），以及 **`historyversion[]`（历史版本）**。`pkagetype` 可省略。
     static func detail(appId: String,
                        pkagetype: String? = nil,
                        iPad: Bool = false) async throws -> I4AppDetail {
@@ -383,7 +410,25 @@ enum I4PCStoreClient {
         detail.plistPath = str(d["plist"])
         let raw = d["historyversion"] as? [[String: Any]] ?? []
         detail.versions = raw.compactMap(parseVersion)
+        detail.privacyCards = parsePrivacy(d)
         return detail
+    }
+
+    /// v0.3.368：解析 `app_privacy.privacycards[]`（App 隐私）。
+    /// 两种「没有」都要落成空数组：整个 `app_privacy` 缺失（实测豆包/汽水音乐），
+    /// 或某个分组没有 `items`（空分组不显示）。
+    private static func parsePrivacy(_ d: [String: Any]) -> [I4PrivacyCard] {
+        guard let privacy = d["app_privacy"] as? [String: Any] else { return [] }
+        let cards = privacy["privacycards"] as? [[String: Any]] ?? []
+        return cards.compactMap { card in
+            guard let heading = str(card["heading"]) else { return nil }
+            let items = (card["items"] as? [[String: Any]] ?? []).compactMap { item -> I4PrivacyItem? in
+                guard let h = str(item["heading"]) else { return nil }
+                return I4PrivacyItem(heading: h, icon: normalizeIcon(str(item["icon"])))
+            }
+            guard !items.isEmpty else { return nil }
+            return I4PrivacyCard(heading: heading, items: items)
+        }
     }
 
     private static func parseVersion(_ d: [String: Any]) -> I4Version? {

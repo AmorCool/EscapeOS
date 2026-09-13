@@ -5,6 +5,8 @@ import SwiftUI
 /// 数据源与列表同一套（爱思 PC 端公开接口），详情走 `app4.i4.cn/appinfo.xhtml`，
 /// 返回体里的 `historyversion` 即该应用在爱思的**历史版本**；安装旧版与安装当前版本
 /// 共用统一下载入口 `IPADownloadCenter`（不另造下载器）。
+///
+/// v0.3.368：`appinfo` 返回体里还带 `app_privacy`，直接渲染成「App 隐私」一节 —— **零额外请求**。
 struct I4StoreFreeDetailView: View {
 
     let app: I4PCStoreClient.I4App
@@ -47,6 +49,7 @@ struct I4StoreFreeDetailView: View {
                 infoSection(d)
                 screenshotsSection(d)
                 noteSections(d)
+                privacySection(d)
                 versionSection(d)
             } else {
                 errorSection("该应用暂无详情")
@@ -194,6 +197,42 @@ struct I4StoreFreeDetailView: View {
         if let n = d.longNote {
             Section("简介") {
                 Text(n).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - App 隐私
+
+    /// v0.3.368：App 隐私 —— 数据来自同一发 `appinfo.xhtml` 的 `app_privacy`，**零额外请求**。
+    ///
+    /// 爱思这份数据只有「分组（原文 heading）→ 数据类别」两层，比 App Store 粗；
+    /// 所以**有什么显示什么**：不补解释句、不加 footnote、缺数据的应用整节不显示。
+    @ViewBuilder
+    private func privacySection(_ d: I4PCStoreClient.I4AppDetail) -> some View {
+        if !d.privacyCards.isEmpty {
+            Section("App 隐私") {
+                ForEach(d.privacyCards) { card in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(card.heading)
+                            .font(.subheadline.weight(.medium))
+                        ForEach(card.items) { item in
+                            HStack(spacing: 8) {
+                                if let icon = item.icon, let url = URL(string: icon) {
+                                    AsyncImage(url: url) { image in
+                                        image.resizable().scaledToFit()
+                                    } placeholder: {
+                                        Color.clear
+                                    }
+                                    .frame(width: 18, height: 18)
+                                }
+                                Text(item.heading)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
             }
         }
     }
