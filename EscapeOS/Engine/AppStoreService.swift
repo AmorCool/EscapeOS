@@ -269,19 +269,48 @@ enum AppStoreService {
     /// 并发去重：同一 key 的在途请求只发一次，后来者等同一份结果 ——
     /// 「刚进详情页就点历史版本」这种时序不会再各打一发。
     ///
-    /// ⚠️ `/us/` 之类会被出口 IP 地理重定向到 `/cn/`（JSON 里的 `storefront` 字段能看出来）。
-    /// 本解析只按 `identifier` 取数据、分组标题用固定中文，所以重定向不会污染结果。
+    /// v0.3.369 —— **区域健壮**：`apps.apple.com` 会按**出口 IP** 做地理重定向，
+    /// 从中国大陆出口访问 `/us/app/idX`、`/app/idX` 一律 302 到 `/cn/iphone/today`
+    /// （根本不是应用页；`Cookie: geo=US` / `site=US` 都压不住）。所以先按请求区域抓，
+    /// 拿到的不是该应用的详情页就**回落 `cn` 再抓一次**；两条都拿不到才算真没有。
     ///
-    /// 只缓存**成功**的 HTML；失败不写缓存，下次自然重试（沿用版本目录那套「失败不落成功缓存」思路）。
+    ///   实测（大陆出口 IP）：
+    ///   · `/us/app/id6448311069`（ChatGPT，US 独占）→ 302 `/cn/iphone/today`；
+    ///     回落 cn 后仍是首页 → **US 独占应用取不到，这不是我们的解析问题**；
+    ///   · `/us/app/id414478124`（微信，CN 有）→ 重定向，回落 cn 拿到应用页，`privacyDetail=True`。
+    ///
+    ///   隐私分组数量**随应用不同**（微信只有 1 组 `LINKED_TO_YOU`，淘宝 3 组），
+    ///   不要假设一定是 3 组。
+    ///
+    /// 缓存的是**能拿到页面的结果**：正常应用页，以及「被重定向、回落 cn 也不是应用页」的
+    /// 200 降级页面（后者也缓存，避免同一请求区域每次打开都重打两发）。HTTP/网络失败不写
+    /// 缓存，下次自然重试（沿用版本目录那套「失败不落成功缓存」思路）。
     ///
     /// 单份 HTML 是 0.6–1.6MB，所以除了 TTL 还给个条数上限：写入前清掉过期项，
     /// 仍超上限就丢最旧的一条 —— 避免连续浏览多个应用把内存堆起来。
     private static let htmlCacheTTL: TimeInterval = 10 * 60
     private static let htmlCacheLimit = 3
 
+    /// 被出口 IP 地理重定向时的回落区域（v0.3.369）。
+    ///
+    /// 从**中国大陆出口 IP** 访问 `apps.apple.com` 只会拿到国区页面 ——
+    /// 请求区域抓不到就统一回落 `cn`；CN 上架的应用因此能拿到 `privacyDetail`。
+    private static let productFallbackRegion = "cn"
+
+    /// 缓存值：整段 HTML + **实际服务这张页面的区域**。
+    ///
+    /// 正常时它可能不等于请求区域：被地理重定向后回落了 `cn`，或 Apple 直接把
+    /// `/us/app/idX` 302 成 `/cn/app/idX`。记下来，命中缓存时能说清「数据为何来自别的区」。
+    /// 降级页面（两条都不是应用页）没有可用区域，就记请求区域。
+    private struct CachedProductPage {
+        let html: String
+        let served: String
+        let at: Date
+    }
+
     private static let htmlLock = NSLock()
-    private static var htmlCache: [String: (html: String, at: Date)] = [:]
-    private static var htmlInflight: [String: Task<String, Error>] = [:]
+    private static var htmlCache: [String: CachedProductPage] = [:]
+    private static var htmlInflight: [String: Task<(html: String, served: String), Error>] = [:]
 
     private static func productHTML(appId: String, country: String?) async throws -> String {
         let cc = resolved(country)
@@ -290,18 +319,25 @@ enum AppStoreService {
         htmlLock.lock()
         if let hit = htmlCache[key], Date().timeIntervalSince(hit.at) < htmlCacheTTL {
             htmlLock.unlock()
+            // 命中「回落过」的条目：说明请求区域在这台设备上必然被重定向，
+            // 直接复用实际区域那份 HTML，不再撞一次重定向（也解释清了数据为何来自别的区）。
+            if hit.served != cc {
+                LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 命中缓存（实际服务区域 \(hit.served)，地理重定向后回落）",
+                                       category: .appStore)
+            }
             return hit.html
         }
         if let running = htmlInflight[key] {
             htmlLock.unlock()
-            return try await running.value
+            let page = try await running.value
+            return page.html
         }
-        let task = Task { try await loadProductHTML(appId: appId, country: cc) }
+        let task = Task { try await loadProductPage(appId: appId, requested: cc) }
         htmlInflight[key] = task
         htmlLock.unlock()
 
         do {
-            let html = try await task.value
+            let page = try await task.value
             htmlLock.lock()
             let now = Date()
             htmlCache = htmlCache.filter { now.timeIntervalSince($0.value.at) < htmlCacheTTL }
@@ -309,12 +345,10 @@ enum AppStoreService {
                let oldest = htmlCache.min(by: { $0.value.at < $1.value.at })?.key {
                 htmlCache[oldest] = nil
             }
-            htmlCache[key] = (html: html, at: now)
+            htmlCache[key] = CachedProductPage(html: page.html, served: page.served, at: now)
             htmlInflight[key] = nil
             htmlLock.unlock()
-            LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 取到 \(html.count) 字（详情页与版本历史共用）",
-                                   category: .appStore)
-            return html
+            return page.html
         } catch {
             htmlLock.lock()
             htmlInflight[key] = nil
@@ -323,8 +357,54 @@ enum AppStoreService {
         }
     }
 
+    /// 区域健壮抓取：按 `requested` → `cn` 的次序各试一次，返回第一个**确实是
+    /// `id<appId>` 详情页**的结果（含实际服务区域）。
+    ///
+    /// 判定「是不是该应用的详情页」看 `URLSession` 跟随重定向后的最终 URL（缺失时退到
+    /// 页面自指的 canonical 链接）：`/cn/app/…/id414478124` 这种才算，落到
+    /// `/cn/iphone/today` 就是被地理重定向了。
+    ///
+    /// 两条都不是应用页时，原因（重定向到哪 / HTTP 几 / 回落失败）全部写进商店日志；
+    /// 手头若还有一份 200 页面就交回去（解析层得到空结果，与从前一致，只是不再静默），
+    /// 否则抛最后一次的错误。
+    private static func loadProductPage(appId: String, requested: String) async throws -> (html: String, served: String) {
+        // 请求区域本来就是 cn 就只跑一轮（没有更低的区域可回落）
+        let regions = requested == productFallbackRegion ? [requested] : [requested, productFallbackRegion]
+        var carriedHTML: String?
+        var carriedError: Error?
+        var reasons: [String] = []
+
+        for region in regions {
+            do {
+                let attempt = try await loadProductHTML(appId: appId, country: region)
+                carriedHTML = attempt.html
+                if let served = appPageRegion(finalURL: attempt.finalURL, html: attempt.html, appId: appId) {
+                    if served != requested {
+                        LoginLogger.shared.log("商品页 HTML：请求 \(requested)/\(appId) 被地理重定向到 \(served)，已按 \(served) 页面解析",
+                                               category: .appStore)
+                    }
+                    LoginLogger.shared.log("商品页 HTML：\(served)/\(appId) 取到 \(attempt.html.count) 字（详情页与版本历史共用）",
+                                           category: .appStore)
+                    return (attempt.html, served)
+                }
+                let landing = attempt.finalURL?.absoluteString ?? "无最终 URL"
+                reasons.append("\(region)：HTTP 200 但落到 \(landing)（不是该应用的详情页）")
+            } catch {
+                carriedError = error
+                reasons.append("\(region)：\(error.localizedDescription)")
+            }
+        }
+
+        LoginLogger.shared.log("商品页 HTML：\(requested)/\(appId) 取不到应用页 —— \(reasons.joined(separator: "；"))",
+                               category: .appStore)
+        if let html = carriedHTML { return (html, requested) }
+        throw carriedError ?? AppStoreError.badURL
+    }
+
     /// 真正发请求：必须用**桌面 UA**，否则手机 UA 会被 301 到 `itms-appss://` 协议链接。
-    private static func loadProductHTML(appId: String, country: String) async throws -> String {
+    ///
+    /// 跟随重定向（默认行为），并把**最终 URL** 交回去 —— 判断是否被地理重定向要用它。
+    private static func loadProductHTML(appId: String, country: String) async throws -> (html: String, finalURL: URL?) {
         guard let url = URL(string: "https://apps.apple.com/\(country)/app/id\(appId)") else {
             throw AppStoreError.badURL
         }
@@ -338,7 +418,42 @@ enum AppStoreService {
             throw AppStoreError.http(http.statusCode)
         }
         guard let html = String(data: data, encoding: .utf8) else { throw AppStoreError.decode }
-        return html
+        return (html, resp.url)
+    }
+
+    /// 这张页面**确实是 `id<appId>` 的详情页**时返回其区域码（`cn` / `us` …），否则 nil。
+    ///
+    /// 首选 `URLSession` 的最终 URL（`/cn/app/微信/id414478124`）；个别情况下拿不到
+    /// （非 HTTP 响应）就退到页面自指的 `canonical` 链接 —— 被重定向到首页时 canonical
+    /// 是 `/cn/iphone/today`，同样不会误判。
+    private static func appPageRegion(finalURL: URL?, html: String, appId: String) -> String? {
+        if let final = finalURL, let region = appPageRegion(in: final.absoluteString, appId: appId) {
+            return region
+        }
+        if let canonical = canonicalHref(in: html),
+           let region = appPageRegion(in: canonical, appId: appId) {
+            return region
+        }
+        return nil
+    }
+
+    /// 从 `/cn/app/…/id414478124` 这类链接里取出区域码；不是该应用的详情页则 nil。
+    private static func appPageRegion(in urlString: String, appId: String) -> String? {
+        guard urlString.contains("/app/"), urlString.contains("id\(appId)"),
+              let app = urlString.range(of: "/app/") else { return nil }
+        let before = urlString[urlString.startIndex..<app.lowerBound]
+        guard let slash = before.lastIndex(of: "/") else { return nil }
+        let code = before[before.index(after: slash)...].lowercased()
+        return code.isEmpty ? nil : code
+    }
+
+    /// `<link rel="canonical" href="…">` —— 商品页自指链接，用来兜底确认页面归属。
+    private static func canonicalHref(in html: String) -> String? {
+        guard let marker = html.range(of: "rel=\"canonical\"") else { return nil }
+        let tail = html[marker.upperBound...]
+        guard let open = tail.range(of: "href=\""),
+              let close = tail[open.upperBound...].firstIndex(of: "\"") else { return nil }
+        return String(tail[open.upperBound..<close])
     }
 
     // MARK: - 历史版本
@@ -649,8 +764,17 @@ enum AppStoreService {
     /// **无需登录**（`amp-api` 那条实测 401，不用）。HTML 与历史版本页共用缓存。
     ///
     /// 不是所有应用都有这块数据 → 返回空数组，调用方**整节不显示**（不显示空壳/占位）。
+    /// 但**不静默**（v0.3.369）：商品页取不到 / 页面里没有 `privacyDetail` 都会往商店日志
+    /// 写一行原因（地理重定向到哪、HTTP 几、还是页面本就没有），用户能在「商店日志」看到。
     static func privacyDetail(appId: String, country: String? = nil) async throws -> [AppPrivacyGroup] {
-        parsePrivacy(html: try await productHTML(appId: appId, country: country))
+        let html = try await productHTML(appId: appId, country: country)
+        let groups = parsePrivacy(html: html)
+        if groups.isEmpty {
+            LoginLogger.shared.log("App 隐私：\(resolved(country))/\(appId) 商品页里没有 privacyDetail"
+                                   + "（该应用可能未上架当前区域，或未提供隐私标签）",
+                                   category: .appStore)
+        }
+        return groups
     }
 
     /// 从商品页 HTML 解析隐私三组。
