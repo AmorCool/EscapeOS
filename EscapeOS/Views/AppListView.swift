@@ -123,8 +123,19 @@ final class AppListViewModel: ObservableObject {
     /// `AppDiscovery.getAllAppsInfo()`（`installation_proxy_get_apps`，**不带**
     /// ReturnAttributes）来的数据，而该调用**不返回 `iTunesMetadata`** ——
     /// 于是 `appleId` / `hasITunesMetadata` 恒为空，共享正版只能落成苹果正版。
+    ///
+    /// v0.3.376：**这条 Lookup 加 20 秒硬超时**——v0.3.369 引入的这条依赖正是本次
+    /// 用户故障的开关。`FileSharingService.listAppsWithFileSharing()` 从 Swift 到
+    /// Rust 全程无超时；它一旦卡住，本方法（跑在 DispatchQueue.global 上）就**永不
+    /// 返回** → 末尾的 `self?.appTypes = resolved` 永不执行 → `viewModel.appTypes`
+    /// 恒为空 → `appRow`(:607) 的 `else if let type = viewModel.appTypes[...]` 恒为假
+    /// → **三方应用的类型胶囊整条不显示**（系统应用不受影响：它们走 `app.isSystem`
+    /// 分支显示「系统」）——与用户反馈「不显示三方应用的胶囊」完全吻合。
+    /// 超时后按「没有 Lookup 数据」继续，用 get_apps + profile 照常判定，胶囊至少
+    /// 能显示出来；同时把每一步写进诊断日志，下次不必再瞎.
     private func loadAppTypes(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
+        LoginLogger.shared.log("[应用管理] 类型判定开始：\(ids.count) 个应用")
         // v0.3.184：当前 Apple ID 用于区分正版 vs 共享（来自 AppStore 登录态）.
         // 为空时 .appStorePersonal / .appStoreShared 退化为 .appStore.
         // v0.3.185：改用 nonisolated 直读 keychain（本方法在后台队列执行，
@@ -140,8 +151,20 @@ final class AppListViewModel: ObservableObject {
             // 文件共享」过滤（过滤开关在 FileSharingAppsView 里）。
             // 它自带隧道并在返回前释放（FileSharingService 内部 defer），
             // 与下面的 installation_proxy / misagent 串行，不会双隧道并发。
-            let lookedUp = autoreleasepool {
-                (try? FileSharingService.listAppsWithFileSharing()) ?? []
+            //
+            // v0.3.376：改用带超时入口。**绝不能**让这条 Lookup 无限阻塞：
+            // 它卡住 = 本方法永不返回 = 三方胶囊全消失（见方法注释）.
+            let lookedUp: [FileSharingApp]
+            switch FileSharingService.listAppsWithFileSharing(timeout: 20) {
+            case .ok(let found):
+                lookedUp = found
+                LoginLogger.shared.log("[应用管理] Lookup 成功：\(found.count) 条")
+            case .failed(let message):
+                lookedUp = []
+                LoginLogger.shared.log("[应用管理] Lookup 失败：\(message)；改用 get_apps + profile 继续判定")
+            case .timedOut:
+                lookedUp = []
+                LoginLogger.shared.log("[应用管理] Lookup 超时（20s）；改用 get_apps + profile 继续判定")
             }
             // v0.3.190：两条隧道必须**顺序串行**调用——fetchSideloadedApps（installation_proxy）
             // 与 fetchAllProfiles（misagent）各自 createTunnel，若并发握手会死锁闪退
@@ -224,6 +247,11 @@ final class AppListViewModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 self?.appTypes = resolved
+                // v0.3.376：结束时留痕——胶囊是否显示只看这一行有没有跑到.
+                LoginLogger.shared.log(
+                    "[应用管理] 类型判定完成：\(resolved.count) 条（entitlements \(entMap.count) / "
+                    + "provisionsAllDevices \(provisionsAllDevicesMap.count)）"
+                )
             }
         }
     }

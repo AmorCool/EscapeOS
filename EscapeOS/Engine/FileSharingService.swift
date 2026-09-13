@@ -79,10 +79,29 @@ enum FileSharingTypeClass: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// v0.3.376：读取「已装应用列表」的结局——给调用方区分「成功 / 真失败 / 超时」.
+/// 为什么要区分：超时不是失败（设备可能只是慢），必须能给出「读取超时」这种
+/// 最短提示；真失败要保留原始原因（如「无配对文件」）.
+enum FileSharingListOutcome {
+    case ok([FileSharingApp])
+    case failed(String)
+    case timedOut
+}
+
 enum FileSharingService {
     static func makeError(_ message: String) -> NSError {
         NSError(domain: "FileSharing", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
+
+    /// RSD 隧道并发铁律（AFCService.swift:15 同款）：**同一 hostname 并发
+    /// `tunnel_create_rppairing` 会互相抢占**. 本服务建隧道用的 hostname 固定为
+    /// "EscapeSpaceFileShare"（见下方 makeTunnel），而 v0.3.369 起：
+    ///   - 「应用管理」AppListView.loadAppTypes(:158) 与
+    ///   - 「文档浏览」FileSharingAppsView.load(:395)
+    /// 会**各自独立**调用同一个 listAppsWithFileSharing() → 同 hostname 隧道并发握手.
+    /// 这正是「文档浏览一直读取中 / 应用管理三方胶囊消失」在 v0.3.369 之后出现的
+    /// 直接嫌疑. 这里把建隧道这一步串行化（不改任何调用方的隧道生命周期）.
+    private static let tunnelQueue = DispatchQueue(label: "com.escapeos.filesharing.tunnel")
 
     /// 列出全部已装应用并标 UIFileSharingEnabled.
     /// v0.3.271：主路径改 **Browse + ReturnAttributes**（pymobiledevice3 同款——
@@ -94,10 +113,69 @@ enum FileSharingService {
     /// （原实现首屏要等 fetchSideloadedApps + fetchAllProfiles 两条隧道跑完，
     ///  首屏被 profile 阻塞). 同步阻塞——调用方放后台线程.
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
-        if let found = try? lookupAppsWithAttributes(), !found.isEmpty {
-            return found
+        LoginLogger.shared.log("[文件共享] 开始读取已装应用（instproxy Lookup）")
+        do {
+            let found = try lookupAppsWithAttributes()
+            LoginLogger.shared.log("[文件共享] 隧道已连上，Lookup 返回 \(found.count) 条")
+            if !found.isEmpty { return found }
+            LoginLogger.shared.log("[文件共享] Lookup 返回空，回落 get_apps")
+        } catch {
+            LoginLogger.shared.log("[文件共享] Lookup 失败：\(error.localizedDescription)；回落 get_apps")
         }
-        return try legacyGetApps()
+        let legacy = try legacyGetApps()
+        LoginLogger.shared.log("[文件共享] get_apps 回落返回 \(legacy.count) 条")
+        return legacy
+    }
+
+    /// v0.3.376：**带硬超时**的列表读取——这是本故障的止血点.
+    ///
+    /// 为什么必须有超时：整条链路从 Swift 到 Rust 没有任何一层设超时——
+    ///   - Swift `FileSharingAppsView.load()` 的 `defer { loading = false }` 只在
+    ///     函数返回时执行；
+    ///   - Rust `run_sync_local`（lib.rs:136）= `block_on` 无超时；
+    ///   - `TcpStream::connect`（tunnel_provider.rs:873）、`create_tcp_listener`
+    ///     （:314）、`RemotePairingClient::connect`（:887）无超时；
+    ///   - instproxy 响应读取 `read_raw`（installation_proxy.rs:774/779）无超时.
+    /// 只要设备/隧道不再应答，`listAppsWithFileSharing()` 就**永不返回**：
+    ///   - 「文档浏览」→ 永远停在「正在读取已装应用…」；
+    ///   - 「应用管理」→ loadAppTypes 永不完成 → `appTypes` 恒空 → 三方胶囊整条消失.
+    /// 注意 makeTunnel 内还有 3 次重试，一次黑洞连接要付 3 倍连接超时；
+    /// 之后还会回落到 legacyGetApps() 再建一条隧道（又 3 次）.
+    ///
+    /// 超时返回 `.timedOut`（**不是**空数组），调用方据此给提示/降级，绝不无限等待.
+    /// 被放弃的那次 FFI 调用仍在后台线程上跑（FFI 无法取消），只是不再阻塞调用方.
+    static func listAppsWithFileSharing(timeout: TimeInterval) -> FileSharingListOutcome {
+        let box = TimedOutcomeBox()
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome: FileSharingListOutcome
+            do {
+                outcome = .ok(try listAppsWithFileSharing())
+            } catch {
+                outcome = .failed(error.localizedDescription)
+            }
+            box.store(outcome)
+            sem.signal()
+        }
+        switch sem.wait(timeout: .now() + timeout) {
+        case .success:
+            return box.load() ?? .failed("读取失败")
+        case .timedOut:
+            LoginLogger.shared.log("[文件共享] 读取超时（\(Int(timeout))s）：放弃等待，按超时收口")
+            return .timedOut
+        }
+    }
+
+    /// 上面超时入口用的线程安全小盒（只在 semaphore 信号之后读取，仍加锁防御）.
+    private final class TimedOutcomeBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: FileSharingListOutcome?
+        func store(_ outcome: FileSharingListOutcome) {
+            lock.lock(); stored = outcome; lock.unlock()
+        }
+        func load() -> FileSharingListOutcome? {
+            lock.lock(); defer { lock.unlock() }; return stored
+        }
     }
 
     /// v0.3.364：类型判定所需的输入快照（一次性拉取，供分批判定复用）.
@@ -123,6 +201,7 @@ enum FileSharingService {
     /// 同步阻塞——调用方放后台线程，且必须在首屏返回**之后**再调.
     static func fetchAppTypeContext() -> AppTypeContext {
         var context = AppTypeContext()
+        LoginLogger.shared.log("[文件共享] 类型上下文开始（profile/misagent 两条隧道串行，无超时）")
         context.currentAppleID = MemoryLimitSettings.currentAppleIDDirect()
         let (sideloaded, allProfiles): (
             [ProvisioningProfileStore.SideloadedAppInfo],
@@ -150,6 +229,11 @@ enum FileSharingService {
         }
         context.entitlements = entMap
         context.provisionsAllDevices = provisionsAllDevicesMap
+        LoginLogger.shared.log(
+            "[文件共享] 类型上下文完成：entitlements \(entMap.count) 条 / "
+            + "provisionsAllDevices \(provisionsAllDevicesMap.count) 条 / "
+            + "已登录账号 \(context.currentAppleID == nil ? "否" : "是")"
+        )
         return context
     }
 
@@ -167,6 +251,7 @@ enum FileSharingService {
                 hasITunesMetadata: app.isGenuine
             )
         }
+        LoginLogger.shared.log("[文件共享] 类型判定一批：\(apps.count) 条")
         return resolved
     }
 
@@ -583,7 +668,16 @@ enum FileSharingService {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
     }
+    /// v0.3.376：建隧道入口——**串行化**（RSD 隧道并发铁律，见 tunnelQueue 注释）.
+    /// 只锁「建隧道」这一步，不锁调用方后续的隧道生命周期：这样即使某次读取
+    /// 卡在 FFI 里（无超时），也不会把另一条入口一起拖死.
     static func makeTunnel() throws -> TunnelHandles {
+        try tunnelQueue.sync {
+            try makeTunnelLocked()
+        }
+    }
+
+    private static func makeTunnelLocked() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath()) else {
             throw makeError("无配对文件")
         }
@@ -619,6 +713,8 @@ enum FileSharingService {
             if let h = tunnel.handshake { rsd_handshake_free(h) }
             if let a = tunnel.adapter { adapter_free(a) }
         }
+        // v0.3.376：这条路径以前失败也不留痕，用户只能看到「一直读取中」.
+        LoginLogger.shared.log("[文件共享] 建隧道失败（已重试 3 次）：\(lastError?.localizedDescription ?? "未知")")
         throw lastError ?? makeError("建隧道失败")
     }
 }

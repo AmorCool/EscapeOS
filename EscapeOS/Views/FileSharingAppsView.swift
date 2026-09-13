@@ -378,22 +378,36 @@ struct FileSharingAppsView: View {
 
     /// v0.3.364：首屏只等 instproxy 一次 Lookup（名称/标识/大小/Apple ID…），
     /// **不等 profile**；类型标签交给 loadTypes() 后台渐进补齐.
+    ///
+    /// v0.3.376：**20 秒硬超时**——此前 `defer { loading = false }` 只有在函数返回
+    /// 时才执行，而 FFI 全程无超时（见 FileSharingService.listAppsWithFileSharing
+    /// (timeout:) 注释），设备/隧道一不应答就永远停在「正在读取已装应用…」。
+    /// 现在超时即收口：解除 loading、给最短提示「读取超时」、并把类型占位收敛
+    ///（typesSettled = true，不留「识别中」）.
+    /// 注：若被放弃的那次读取随后真的返回，下面的 .ok 分支仍会照常填列表
+    ///（= 迟到的自愈），不会把用户锁死在超时态.
     private func load() async {
         loading = true
         typesSettled = false
         appTypes = [:]
         defer { loading = false }
-        do {
-            let list = try await Task.detached(priority: .userInitiated) {
-                try FileSharingService.listAppsWithFileSharing()
-            }.value
+        let outcome = await Task.detached(priority: .userInitiated) {
+            FileSharingService.listAppsWithFileSharing(timeout: 20)
+        }.value
+        switch outcome {
+        case .ok(let list):
             apps = list
             errorText = nil
             loadIcons()
             loadTypes(for: list)
-        } catch {
-            errorText = error.localizedDescription
+        case .failed(let message):
+            errorText = message
             typesSettled = true
+            LoginLogger.shared.log("[文件共享] 文档浏览读取失败：\(message)")
+        case .timedOut:
+            errorText = "读取超时"
+            typesSettled = true
+            LoginLogger.shared.log("[文件共享] 文档浏览读取超时（20s），已显示「读取超时」")
         }
     }
 
@@ -401,10 +415,24 @@ struct FileSharingAppsView: View {
     /// （fetchAppTypeContext 内部两条隧道串行、各自释放），再分批判定并回填
     /// `appTypes`（每批算完即刷 @State，不必等全部算完）。
     /// 全部跑完 → typesSettled = true，未判定者收敛到「未识别」，不会停在占位.
+    ///
+    /// v0.3.376：加 30 秒看门狗——fetchAppTypeContext 同样跑在没有超时的 FFI 上
+    /// （两条 profile 隧道），卡住时 `typesSettled` 永不置位 → 所有三方应用永远
+    /// 停在「识别中」。看门狗到期即把占位收敛.
     private func loadTypes(for list: [FileSharingApp]) {
         guard !list.isEmpty else {
             typesSettled = true
             return
+        }
+        LoginLogger.shared.log("[文件共享] 类型补齐开始：\(list.count) 个应用")
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard !self.typesSettled else { return }
+                LoginLogger.shared.log("[文件共享] 类型上下文超时（30s），占位收敛为「未识别」")
+                self.typesSettled = true
+            }
         }
         Task.detached(priority: .utility) {
             let context = FileSharingService.fetchAppTypeContext()
@@ -420,7 +448,9 @@ struct FileSharingAppsView: View {
                 }
                 index += batchSize
             }
+            watchdog.cancel()
             await MainActor.run { self.typesSettled = true }
+            LoginLogger.shared.log("[文件共享] 类型补齐完成：\(list.count) 个应用")
         }
     }
 
