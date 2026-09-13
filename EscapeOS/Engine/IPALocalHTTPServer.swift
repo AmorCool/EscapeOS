@@ -25,9 +25,24 @@ import Darwin
 /// · 只有一个**只读**路由 `GET/HEAD /package.ipa`（无目录列举、无写、无上传）；
 /// · 只发当前这一份安装包，端口随机，不做端口复用之外的任何暴露；
 /// · 会话结束由 `stop(after:)` 到点即关（调用方给 15 分钟），不常驻。
+///
+/// ## 用途（`Purpose`）—— 单例一次只服务一份文件
+/// 本服务器是 `shared` 单例，且 `start()` 会**先 `stop()` 掉上一份会话**，
+/// 所以「在线安装」和「提取下载链接」这两条通道会互相挤掉。`currentPurpose`
+/// 记录「现在是谁在用」，下载面板据此把会挤掉当前会话的入口**置灰**：
+/// · 服务器是 `.ota`（安装中）→ 面板的「提取下载链接」不可点；
+/// · 服务器是 `.share`（分享中）→ 面板的「在线安装」不可点。
 final class IPALocalHTTPServer {
 
     static let shared = IPALocalHTTPServer()
+
+    /// 服务器用途：`start()` 时由调用方声明，`stop()` 清空。
+    enum Purpose {
+        /// 「在线安装」在跑：清单已发出，等系统来拉 IPA（保活 15 分钟）。
+        case ota
+        /// 「提取下载链接」在跑：把本机地址分享出去（保活 10 分钟）。
+        case share
+    }
 
     /// 启动结果：端口 / 监听接口 / manifest 里用的包地址
     struct Serving {
@@ -50,13 +65,17 @@ final class IPALocalHTTPServer {
     /// 当前监听端口（0 = 未启动）
     private(set) var port: UInt16 = 0
 
+    /// 当前用途（`nil` = 未启动）。面板据此把会互相挤掉的入口置灰。
+    private(set) var currentPurpose: Purpose?
+
     private init() {}
 
     // MARK: - 启停
 
     /// 启动服务器；`fileURL` 必须是存在的本地 IPA。
+    /// `purpose` 声明这次是谁在用（`stop()` 会清空）。
     @discardableResult
-    func start(fileURL: URL) throws -> Serving {
+    func start(fileURL: URL, purpose: Purpose) throws -> Serving {
         stop()
 
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
@@ -98,6 +117,7 @@ final class IPALocalHTTPServer {
 
         self.listener = listener
         self.port = resolvedPort
+        self.currentPurpose = purpose
 
         let lan = Self.lanIPv4()
         let host = lan ?? "127.0.0.1"
@@ -114,6 +134,7 @@ final class IPALocalHTTPServer {
         listener?.cancel()
         listener = nil
         port = 0
+        currentPurpose = nil
         fileURL = nil
         fileSize = 0
     }

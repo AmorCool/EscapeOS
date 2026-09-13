@@ -184,7 +184,7 @@ enum OnlineInstallService {
         var packageURL = ipaURL.absoluteString
         if let localFile {
             do {
-                let serving = try IPALocalHTTPServer.shared.start(fileURL: localFile)
+                let serving = try IPALocalHTTPServer.shared.start(fileURL: localFile, purpose: .ota)
                 packageURL = serving.packageURL
                 LoginLogger.shared.log("[在线安装] 本机服务器已启动：监听 \(serving.listenHost):\(serving.port)（只读单文件 /package.ipa，支持 Range）",
                                        category: logCategory)

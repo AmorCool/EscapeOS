@@ -10,8 +10,9 @@ import Security
 /// 1. **用户自定义的 HTTPS 地址**（更多 → 设置 → HTTPS 托管）→ 只用它，不向任何第三方发请求：
 ///    · 填**完整 URL**（已含路径）→ `PUT` 覆盖它；
 ///    · 填**基址** → `POST <基址>/sign/install.plist`，响应体若是纯文本 URL 就用它，否则用请求地址本身。
-/// 2. **GitHub Token**（下载管理右上角齿轮 → GitHub Token）→ 只用 gist（私有 gist，
-///    `raw_url` 是可信 HTTPS）；上传/解析失败才回落匿名候选，并记「gist 失败，回落匿名」。
+/// 2. **GitHub Token**（下载管理右上角齿轮 → GitHub Token）→ 只用 gist（**secret gist**，
+///    `"public": false`：不被列出，但 `raw_url` 知道地址即可读、**不需要 token**，iOS 无 token 也能拉）；
+///    上传/解析失败才回落匿名候选，失败日志写明 `POST /gists` 的 **HTTP 状态码**（如 `gist 失败（HTTP 401），回落匿名`）。
 /// 3. **匿名、免账号**候选（仅在没填上面两项时），逐个上传 + **GET 回读校验**，失败静默换下一个：
 ///    `litterbox.catbox.moe`（1h）→ `0x0.st` → `tmpfiles.org`（1h）→ `uguu.se`（3h）→ `paste.rs`。
 ///    临时件排前（清单只活几分钟，且含 bundleId/版本，少留痕）；**单候选超时 8s**。
@@ -99,11 +100,14 @@ enum ManifestPublisher {
         if let token = OnlineInstallConfig.githubToken {
             LoginLogger.shared.log("[在线安装] 托管方式：gist（token \(OnlineInstallConfig.tokenPrefix ?? "?")…）",
                                    category: .appStore)
-            if let url = publishToGist(manifest: manifest, token: token) {
+            let gist = publishToGist(manifest: manifest, token: token)
+            if let url = gist.url {
                 completion(.success(url))
                 return
             }
-            LoginLogger.shared.log("[在线安装] gist 失败，回落匿名", category: .appStore)
+            // 失败日志必须带 HTTP 状态码：真机一次就能分清「鉴权 401/403」还是别的。
+            let codeText = gist.status.map { "HTTP \($0)" } ?? "无 HTTP 响应"
+            LoginLogger.shared.log("[在线安装] gist 失败（\(codeText)），回落匿名", category: .appStore)
         } else {
             LoginLogger.shared.log("[在线安装] 托管方式：匿名候选（未配置 GitHub Token）", category: .appStore)
         }
@@ -121,8 +125,21 @@ enum ManifestPublisher {
     ///
     /// 注意：`raw_url` 落在 `gist.githubusercontent.com`，回读的 `Content-Type` 多为
     /// `text/plain`，所以这里**以「内容一致」为准**，Content-Type **只记录、不拒绝**
-    /// （用户显式选择了 gist 这条通道）。任何上传/解析失败都返回 nil，由调用方回落匿名候选。
-    private static func publishToGist(manifest: Data, token: String) -> String? {
+    /// （用户显式选择了 gist 这条通道）。任何上传/解析失败都返回 `url == nil`，
+    /// 由调用方回落匿名候选；`status` 回传本次 `POST /gists` 的 HTTP 状态码
+    /// （网络层都没连通时为 nil），供失败日志写明是鉴权问题还是别的。
+    ///
+    /// 口径（已拍板）：`"public": false` 保持 **secret gist**。GitHub 的 gist 只有
+    /// public(被列出) / secret(不被列出) 两种，**secret gist 的 `raw_url` 知道地址即可读、
+    /// 不需要 token**，所以 iOS 侧无 token 也能拉回清单。这里不改成 public。
+    private struct GistOutcome {
+        /// 成功时的 `raw_url`；失败为 nil
+        var url: String?
+        /// `POST /gists` 的 HTTP 状态码；请求没发出去（构造/网络失败）为 nil
+        var status: Int?
+    }
+
+    private static func publishToGist(manifest: Data, token: String) -> GistOutcome {
         guard let content = String(data: manifest, encoding: .utf8),
               let endpoint = URL(string: "https://api.github.com/gists"),
               let body = try? JSONSerialization.data(withJSONObject: [
@@ -131,7 +148,7 @@ enum ManifestPublisher {
                   "files": ["install.plist": ["content": content]]
               ]) else {
             LoginLogger.shared.log("[在线安装] gist 请求构造失败", category: .appStore)
-            return nil
+            return GistOutcome(url: nil, status: nil)
         }
 
         var request = URLRequest(url: endpoint)
@@ -145,8 +162,8 @@ enum ManifestPublisher {
         request.httpBody = body
 
         guard let result = try? perform(request) else {
-            LoginLogger.shared.log("[在线安装] gist 网络失败", category: .appStore)
-            return nil
+            LoginLogger.shared.log("[在线安装] gist 网络失败（无 HTTP 响应）", category: .appStore)
+            return GistOutcome(url: nil, status: nil)
         }
         LoginLogger.shared.log("[在线安装] gist POST 状态码=\(result.status)", category: .appStore)
 
@@ -156,8 +173,9 @@ enum ManifestPublisher {
               let entry = files["install.plist"] as? [String: Any],
               let raw = entry["raw_url"] as? String,
               raw.lowercased().hasPrefix("https://") else {
-            LoginLogger.shared.log("[在线安装] gist 未返回可用 raw_url", category: .appStore)
-            return nil
+            LoginLogger.shared.log("[在线安装] gist 未返回可用 raw_url（HTTP \(result.status)）",
+                                   category: .appStore)
+            return GistOutcome(url: nil, status: result.status)
         }
         LoginLogger.shared.log("[在线安装] gist raw_url=\(shortURL(raw))", category: .appStore)
 
@@ -166,8 +184,8 @@ enum ManifestPublisher {
         LoginLogger.shared.log("[在线安装] gist 回读 Content-Type=\(shownType)"
                                + "（\(outcome.ok ? "内容一致" : (outcome.reason ?? "校验未过"))）",
                                category: .appStore)
-        guard outcome.ok else { return nil }
-        return raw
+        guard outcome.ok else { return GistOutcome(url: nil, status: result.status) }
+        return GistOutcome(url: raw, status: result.status)
     }
 
     // MARK: - 用户自有托管

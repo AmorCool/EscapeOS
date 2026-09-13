@@ -10,7 +10,7 @@ import UIKit
 /// · 覆盖安装 → 下载中心 `installLocal`（→ `AppStoreInstallService.installLocalIPA`）
 /// · 打开     → `JITEnableService.launchApp(bundleID:)`
 /// · 分享     → `ShareSheet`（`UIActivityViewController` 包装）
-/// · 提取下载链接 → `IPALocalHTTPServer.shared.start(fileURL:)`（本机 HTTP 服务，取 `Serving.packageURL`）
+/// · 提取下载链接 → `IPALocalHTTPServer.shared.start(fileURL:purpose:.share)`（本机 HTTP 服务，取 `Serving.packageURL`）
 /// · 复制     → `UIPasteboard.general.string`
 /// · 提示     → `ToastCenter.shared.show`
 struct IPADownloadActionsSheet: View {
@@ -162,11 +162,25 @@ struct IPADownloadActionsSheet: View {
                 onOverwriteInstall()
                 dismiss()
             },
-            RowSpec(icon: "icloud.and.arrow.down", tint: .green, title: "在线安装",
-                    trailing: OnlineInstallService.isImplemented ? RowTrailing.none : .text("未接入")) {
+            onlineInstallRow
+        ]
+    }
+
+    /// 「在线安装」行。置灰规则：本机服务器当前被「提取下载链接」占用（`Purpose.share`）
+    /// 时不可点 —— 单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那个分享会话。
+    private var onlineInstallRow: RowSpec {
+        if !OnlineInstallService.isImplemented {
+            return RowSpec(icon: "icloud.and.arrow.down", tint: .green, title: "在线安装",
+                           trailing: .text("未接入")) {
                 onlineInstall()
             }
-        ]
+        }
+        let blockedByShare = IPALocalHTTPServer.shared.currentPurpose == .share
+        return RowSpec(icon: "icloud.and.arrow.down", tint: .green, title: "在线安装",
+                       trailing: blockedByShare ? .text("分享中") : RowTrailing.none,
+                       disabled: blockedByShare) {
+            onlineInstall()
+        }
     }
 
     private var actionRows: [RowSpec] {
@@ -185,15 +199,24 @@ struct IPADownloadActionsSheet: View {
     /// 其它操作：提取下载链接 + 删除（删除保持红色，二次确认）
     private var otherRows: [RowSpec] {
         [
-            // 生成一个**本机下载链接**发出去（不依赖有没有来源直链）：
-            // 复用 IPALocalHTTPServer 只服务这一个文件的只读路由 `/package.ipa`
-            RowSpec(icon: "antenna.radiowaves.left.and.right", tint: .teal, title: "提取下载链接") {
-                extractDownloadLink()
-            },
+            extractLinkRow,
             RowSpec(icon: "trash", tint: .red, title: "删除", titleTint: .red) {
                 showDeleteConfirm = true
             }
         ]
+    }
+
+    /// 「提取下载链接」行。置灰规则：本机服务器当前被「在线安装」占用（`Purpose.ota`）
+    /// 时不可点 —— 一 `start()` 就会 `stop()` 掉 OTA 会话，把正在进行的系统安装打断。
+    /// 生成一个**本机下载链接**发出去（不依赖有没有来源直链）：
+    /// 复用 `IPALocalHTTPServer` 只服务这一个文件的只读路由 `/package.ipa`。
+    private var extractLinkRow: RowSpec {
+        let blockedByOTA = IPALocalHTTPServer.shared.currentPurpose == .ota
+        return RowSpec(icon: "antenna.radiowaves.left.and.right", tint: .teal, title: "提取下载链接",
+                       trailing: blockedByOTA ? .text("安装中") : RowTrailing.none,
+                       disabled: blockedByOTA) {
+            extractDownloadLink()
+        }
     }
 
     private var openRow: RowSpec {
@@ -338,7 +361,7 @@ struct IPADownloadActionsSheet: View {
         }
         do {
             // 与「在线安装」共用同一个 shared 实例；start() 内部会先 stop() 掉上一份会话
-            let serving = try IPALocalHTTPServer.shared.start(fileURL: url)
+            let serving = try IPALocalHTTPServer.shared.start(fileURL: url, purpose: .share)
             UIPasteboard.general.string = serving.packageURL
             LoginLogger.shared.log("[下载面板] 本机分享服务已启动 \(serving.packageURL)", category: .appStore)
             ToastCenter.shared.show("链接已复制")
