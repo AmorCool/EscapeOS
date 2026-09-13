@@ -9,7 +9,8 @@ import Foundation
 ///    · 填**完整 URL**（已含路径）→ `PUT` 覆盖它；
 ///    · 填**基址** → `POST <基址>/sign/install.plist`，响应体若是纯文本 URL 就用它，否则用请求地址本身。
 /// 2. 没填才走**匿名、免账号**的 paste 候选，逐个上传 + **GET 回读校验**，失败静默换下一个：
-///    `0x0.st` → `paste.rs` → `litterbox.catbox.moe` → `envs.sh`。
+///    `litterbox.catbox.moe`（临时 1 小时）→ `0x0.st` → `envs.sh` → `paste.rs`。
+///    临时件排第一：清单只活几分钟，且里面含 bundleId/版本，少留痕。
 ///
 /// **IPA 本体一字节都不上传**，这里只上传那份几百字节的 plist。
 enum ManifestPublisher {
@@ -68,6 +69,7 @@ enum ManifestPublisher {
     static func publish(manifest: Data, completion: @escaping (Result<String, Error>) -> Void) {
         if let endpoint = OnlineInstallConfig.endpoint {
             // 用户自有托管：只用它，不向任何第三方发请求。
+            LoginLogger.shared.log("[在线安装] 使用自有 HTTPS 托管（未对外发起任何第三方请求）", category: .appStore)
             do {
                 let url = try publishToUserEndpoint(manifest: manifest, endpoint: endpoint)
                 completion(.success(url))
@@ -135,10 +137,11 @@ enum ManifestPublisher {
 
     private static func publishToAnonymous(manifest: Data) -> String? {
         let candidates: [(name: String, upload: (Data) throws -> String)] = [
-            ("0x0.st", { try uploadMultipart(url: "https://0x0.st", data: $0) }),
-            ("paste.rs", { try uploadRaw(url: "https://paste.rs", data: $0) }),
+            // 临时件优先（清单只活几分钟，少留痕）
             ("litterbox.catbox.moe", { try uploadLitterbox(data: $0) }),
-            ("envs.sh", { try uploadMultipart(url: "https://envs.sh", data: $0) })
+            ("0x0.st", { try uploadMultipart(url: "https://0x0.st", data: $0) }),
+            ("envs.sh", { try uploadMultipart(url: "https://envs.sh", data: $0) }),
+            ("paste.rs", { try uploadRaw(url: "https://paste.rs", data: $0) })
         ]
 
         for candidate in candidates {
