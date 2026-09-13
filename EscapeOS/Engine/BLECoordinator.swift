@@ -18,6 +18,12 @@ final class BLECoordinator: NSObject, ObservableObject {
     @Published private(set) var lastReport: BluetoothStatusReport?
     @Published private(set) var lastError: String?
     @Published private(set) var log: [String] = []
+    /// B 机：扫描到的附近设备（RSSI 降序）.
+    @Published private(set) var nearby: [BluetoothNearbyPeer] = []
+    /// B 机：当前已连接的对端 identifier（列表打勾用）.
+    @Published private(set) var connectedPeerID: UUID?
+    /// A 机：等待用户授权的连接请求（同一时刻只留一个）.
+    @Published private(set) var pendingRequest: BluetoothConnectionRequest?
 
     /// B 机收到 A 机下发的坐标（回调在 BLE 队列，调用方需自行切主线程）.
     var onCoordinate: ((CLLocationCoordinate2D) -> Void)?
@@ -38,6 +44,10 @@ final class BLECoordinator: NSObject, ObservableObject {
     private static let receiverSilentTimeout: TimeInterval = 30
     /// 相同日志的抑制窗口.
     private static let logSuppressWindow: TimeInterval = 3
+    /// 附近设备超过这个时长没再出现就移除.
+    private static let peerFreshWindow: TimeInterval = 12
+    /// A 机连接请求的授权窗口：无人应答即自动拒绝（绝不默认放行）.
+    private static let authorizationTimeout: TimeInterval = 20
 
     private var peripheralManager: CBPeripheralManager?
     private var coordinateCharacteristic: CBMutableCharacteristic?
@@ -47,6 +57,9 @@ final class BLECoordinator: NSObject, ObservableObject {
     private var lastPeerActivity: Date?
     private var lastPushAt: Date?
     private var watchdog: DispatchSourceTimer?
+    /// 待授权请求（BLE 队列上的真值，避免跨线程读 @Published）.
+    private var pendingRequestValue: BluetoothConnectionRequest?
+    private var pendingCentral: CBCentral?
 
     private var centralManager: CBCentralManager?
     private var target: CBPeripheral?
@@ -59,6 +72,10 @@ final class BLECoordinator: NSObject, ObservableObject {
     private var lastScanStart = Date.distantPast
     private var lastLogLine: String?
     private var lastLogAt: Date?
+    /// B 机附近设备真值（identifier → peer）.
+    private var peersLocked: [UUID: BluetoothNearbyPeer] = [:]
+    /// B 机发现的 peripheral（供用户点选后连接）.
+    private var discoveredPeripherals: [UUID: CBPeripheral] = [:]
 
     private override init() {
         super.init()
@@ -122,6 +139,46 @@ final class BLECoordinator: NSObject, ObservableObject {
         publish { self.log.removeAll() }
     }
 
+    /// B 机：用户点选附近设备后连接（不再自动连第一个）.
+    func connect(to id: UUID) {
+        queue.async { [weak self] in
+            guard let self, self.role == .receiver, self.target == nil else { return }
+            guard let peripheral = self.discoveredPeripherals[id] else { return }
+            guard self.centralManager?.state == .poweredOn else { return }
+            self.centralManager?.stopScan()
+            self.target = peripheral
+            peripheral.delegate = self
+            let name = self.peersLocked[id]?.displayName ?? String(id.uuidString.prefix(8))
+            self.publish {
+                self.connectedPeerID = id
+                self.peerName = name
+                self.state = .connecting
+            }
+            self.centralManager?.connect(peripheral, options: nil)
+            self.append("正在连接 \(name)")
+        }
+    }
+
+    /// B 机：手动重新扫描（不受退避限制）.
+    func rescan() {
+        queue.async { [weak self] in
+            guard let self, self.role == .receiver, let central = self.centralManager else { return }
+            self.lastScanStart = .distantPast
+            self.startScanLocked(central)
+            self.append("重新扫描附近设备")
+        }
+    }
+
+    /// A 机：允许待授权请求.
+    func approvePendingConnection() {
+        queue.async { [weak self] in self?.approvePendingConnectionLocked() }
+    }
+
+    /// A 机：拒绝待授权请求（含超时自动拒绝）.
+    func denyPendingConnection() {
+        queue.async { [weak self] in self?.denyPendingConnectionLocked(reason: "已拒绝") }
+    }
+
     // MARK: - 队列内实现
 
     private func teardownLocked() {
@@ -133,6 +190,10 @@ final class BLECoordinator: NSObject, ObservableObject {
         lastApplied = nil
         lastReceivedAt = nil
         lastScanStart = .distantPast
+        pendingRequestValue = nil
+        pendingCentral = nil
+        peersLocked.removeAll()
+        discoveredPeripherals.removeAll()
 
         peripheralManager?.stopAdvertising()
         peripheralManager?.removeAllServices()
@@ -150,6 +211,12 @@ final class BLECoordinator: NSObject, ObservableObject {
         target = nil
         coordinateNotifyCharacteristic = nil
         statusWriteCharacteristic = nil
+
+        publish {
+            self.nearby = []
+            self.connectedPeerID = nil
+            self.pendingRequest = nil
+        }
     }
 
     /// A 机看门狗：负责「对端消失 → 重新广播」「无连接却未广播 → 补广播」「连接期补发坐标」；
@@ -175,6 +242,12 @@ final class BLECoordinator: NSObject, ObservableObject {
 
     private func broadcasterTickLocked() {
         let now = Date()
+
+        // 无人应答即自动拒绝：面板没打开时没人点按钮，绝不能默认放行.
+        if let request = pendingRequestValue,
+           now.timeIntervalSince(request.receivedAt) > Self.authorizationTimeout {
+            denyPendingConnectionLocked(reason: "连接请求超时，已拒绝")
+        }
 
         if !subscribedCentrals.isEmpty {
             // 没有待发坐标时不判定失联：无流量可等，避免误把「空闲但对端正常」当成对端消失.
@@ -207,6 +280,7 @@ final class BLECoordinator: NSObject, ObservableObject {
     }
 
     private func receiverTickLocked() {
+        pruneNearbyLocked()
         // 只在「已连上且订阅成功」之后计时；lastReceivedAt 由每次收到的负载刷新（含被去重丢弃的包）.
         guard target != nil, coordinateNotifyCharacteristic != nil else { return }
         guard let last = lastReceivedAt else { return }
@@ -258,18 +332,91 @@ final class BLECoordinator: NSObject, ObservableObject {
         guard !peripheral.isAdvertising else { return }
         peripheral.startAdvertising([
             CBAdvertisementDataServiceUUIDsKey: [BluetoothLink.serviceUUID],
-            CBAdvertisementDataLocalNameKey: BluetoothLink.localName
+            CBAdvertisementDataLocalNameKey: BluetoothLink.broadcastName(for: role)
         ])
     }
 
+    @discardableResult
+    private func makeServiceLocked() -> CBMutableService {
+        let coordinate = CBMutableCharacteristic(
+            type: BluetoothLink.coordinateCharacteristicUUID,
+            properties: [.notify],
+            value: nil,
+            permissions: [.readable]
+        )
+        let status = CBMutableCharacteristic(
+            type: BluetoothLink.statusCharacteristicUUID,
+            properties: [.write, .writeWithoutResponse],
+            value: nil,
+            permissions: [.writeable]
+        )
+        let service = CBMutableService(type: BluetoothLink.serviceUUID, primary: true)
+        service.characteristics = [coordinate, status]
+        coordinateCharacteristic = coordinate
+        statusCharacteristic = status
+        return service
+    }
+
+    /// 重建服务并重新广播（peripheral 侧无「拒绝连接」API，拒绝只能靠拆服务）.
+    private func refreshServicesLocked() {
+        guard let peripheral = peripheralManager else { return }
+        peripheral.stopAdvertising()
+        peripheral.removeAllServices()
+        peripheral.add(makeServiceLocked())
+    }
+
+    private func setPendingRequestLocked(_ request: BluetoothConnectionRequest?) {
+        pendingRequestValue = request
+        publish { self.pendingRequest = request }
+    }
+
+    private func approvePendingConnectionLocked() {
+        guard let request = pendingRequestValue, let central = pendingCentral else { return }
+        setPendingRequestLocked(nil)
+        pendingCentral = nil
+        if !subscribedCentrals.contains(where: { $0.identifier == central.identifier }) {
+            subscribedCentrals.append(central)
+        }
+        lastPeerActivity = Date()
+        lastPushAt = Date()
+        publish {
+            self.peerName = request.displayName
+            self.state = .connected
+        }
+        append("已允许 \(request.displayName) 连接")
+        if let pending = pendingPayload { push(pending) }
+    }
+
+    private func denyPendingConnectionLocked(reason: String) {
+        guard let request = pendingRequestValue else { return }
+        setPendingRequestLocked(nil)
+        pendingCentral = nil
+        append("\(reason) \(request.displayName) 的连接")
+        refreshServicesLocked()
+    }
+
+    private func publishNearbyLocked() {
+        let sorted = peersLocked.values.sorted { $0.rssi > $1.rssi }
+        publish { self.nearby = sorted }
+    }
+
+    private func pruneNearbyLocked() {
+        let now = Date()
+        let kept = peersLocked.filter { now.timeIntervalSince($0.value.lastSeen) < Self.peerFreshWindow }
+        guard kept.count != peersLocked.count else { return }
+        peersLocked = kept
+        publishNearbyLocked()
+    }
+
     private func startScanLocked(_ central: CBCentralManager) {
-        guard central.state == .poweredOn else { return }
+        guard central.state == .poweredOn, target == nil else { return }
         let now = Date()
         let elapsed = now.timeIntervalSince(lastScanStart)
         // 重扫最小间隔：连接反复失败时退避，避免高速重试空转.
         guard elapsed >= Self.minScanRestartInterval else {
             queue.asyncAfter(deadline: .now() + (Self.minScanRestartInterval - elapsed)) { [weak self] in
-                guard let self, let central = self.centralManager, self.role == .receiver else { return }
+                guard let self, self.role == .receiver, self.target == nil,
+                      let central = self.centralManager else { return }
                 self.startScanLocked(central)
             }
             return
@@ -334,24 +481,8 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
             fail("蓝牙不可用：\(peripheral.state.linkLabel)")
             return
         }
-        let coordinate = CBMutableCharacteristic(
-            type: BluetoothLink.coordinateCharacteristicUUID,
-            properties: [.notify],
-            value: nil,
-            permissions: [.readable]
-        )
-        let status = CBMutableCharacteristic(
-            type: BluetoothLink.statusCharacteristicUUID,
-            properties: [.write, .writeWithoutResponse],
-            value: nil,
-            permissions: [.writeable]
-        )
-        let service = CBMutableService(type: BluetoothLink.serviceUUID, primary: true)
-        service.characteristics = [coordinate, status]
-        coordinateCharacteristic = coordinate
-        statusCharacteristic = status
         peripheral.removeAllServices()
-        peripheral.add(service)
+        peripheral.add(makeServiceLocked())
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
@@ -377,19 +508,16 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
         didSubscribeTo characteristic: CBCharacteristic
     ) {
         guard characteristic.uuid == BluetoothLink.coordinateCharacteristicUUID else { return }
-        if !subscribedCentrals.contains(where: { $0.identifier == central.identifier }) {
-            subscribedCentrals.append(central)
-        }
-        lastPeerActivity = Date()
-        lastPushAt = Date()
         // 已建立连接：停止广播，之后只靠 notify 推送（降低掉线面）.
         peripheral.stopAdvertising()
-        publish {
-            self.peerName = String(central.identifier.uuidString.prefix(8))
-            self.state = .connected
-        }
-        append("对端已订阅，停止广播")
-        if let pending = pendingPayload { push(pending) }
+        // 不直接放行：先挂起，交由 UI 询问用户（同一时刻只留一个待处理请求）.
+        pendingCentral = central
+        setPendingRequestLocked(BluetoothConnectionRequest(
+            centralIdentifier: central.identifier,
+            displayName: BluetoothLink.displayName(for: .receiver),
+            receivedAt: Date()
+        ))
+        append("收到连接请求，等待允许")
     }
 
     func peripheralManager(
@@ -398,6 +526,10 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
         didUnsubscribeFrom characteristic: CBCharacteristic
     ) {
         guard characteristic.uuid == BluetoothLink.coordinateCharacteristicUUID else { return }
+        if let pending = pendingRequestValue, pending.centralIdentifier == central.identifier {
+            setPendingRequestLocked(nil)
+            pendingCentral = nil
+        }
         subscribedCentrals.removeAll { $0.identifier == central.identifier }
         guard subscribedCentrals.isEmpty else { return }
         lastPeerActivity = nil
@@ -410,7 +542,10 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         for request in requests {
-            if request.characteristic.uuid == BluetoothLink.statusCharacteristicUUID,
+            // 未授权的 central 一律丢弃（拒绝连接只能靠不给数据）.
+            let authorized = subscribedCentrals.contains { $0.identifier == request.central.identifier }
+            if authorized,
+               request.characteristic.uuid == BluetoothLink.statusCharacteristicUUID,
                let value = request.value,
                let report = BluetoothStatusReport(data: value) {
                 lastPeerActivity = Date()
@@ -419,7 +554,7 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
                 append("收到回报：\(report.label)")
             }
             if request.characteristic.properties.contains(.write) {
-                peripheral.respond(to: request, withResult: .success)
+                peripheral.respond(to: request, withResult: authorized ? .success : .notPermitted)
             }
         }
     }
@@ -446,16 +581,23 @@ extension BLECoordinator: CBCentralManagerDelegate {
         rssi RSSI: NSNumber
     ) {
         guard target == nil else { return }
-        central.stopScan()
-        target = peripheral
-        peripheral.delegate = self
-        updateState(.connecting)
-        publish { self.peerName = peripheral.name ?? String(peripheral.identifier.uuidString.prefix(8)) }
-        central.connect(peripheral, options: nil)
-        append("发现对端，正在连接")
+        // 只累积列表，不自动连接：等用户在「附近设备」里点选.
+        let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
+        discoveredPeripherals[peripheral.identifier] = peripheral
+        peersLocked[peripheral.identifier] = BluetoothNearbyPeer(
+            id: peripheral.identifier,
+            name: advertisedName ?? peripheral.name ?? "",
+            role: BluetoothLink.role(fromBroadcastName: advertisedName)
+                ?? BluetoothLink.role(fromBroadcastName: peripheral.name),
+            rssi: RSSI.intValue,
+            lastSeen: Date()
+        )
+        pruneNearbyLocked()
+        publishNearbyLocked()
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        publish { self.connectedPeerID = peripheral.identifier }
         updateState(.connected)
         append("已连接")
         peripheral.discoverServices([BluetoothLink.serviceUUID])
@@ -467,6 +609,7 @@ extension BLECoordinator: CBCentralManagerDelegate {
         error: Error?
     ) {
         target = nil
+        publish { self.connectedPeerID = nil }
         append("连接失败，重新扫描")
         startScanLocked(central)
     }
@@ -482,6 +625,7 @@ extension BLECoordinator: CBCentralManagerDelegate {
         // 断线后重新接到同一坐标也要重新应用（旧会话已失效），故清空去重记录与静默计时.
         lastApplied = nil
         lastReceivedAt = nil
+        publish { self.connectedPeerID = nil }
         append("连接断开，重新扫描")
         startScanLocked(central)
     }

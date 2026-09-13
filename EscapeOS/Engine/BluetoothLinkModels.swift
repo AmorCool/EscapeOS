@@ -12,10 +12,19 @@ enum BluetoothLinkRole: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// 选择器用的完整名.
     var title: String {
         switch self {
         case .broadcaster: return "模拟终端（下发）"
         case .receiver: return "信号端（应用）"
+        }
+    }
+
+    /// 附近设备列表等窄位置用的短名.
+    var shortTitle: String {
+        switch self {
+        case .broadcaster: return "模拟终端"
+        case .receiver: return "信号端"
         }
     }
 }
@@ -34,21 +43,74 @@ enum BluetoothLinkState: Equatable {
         case .off: return "未启用"
         case .advertising: return "广播中，等待对端"
         case .scanning: return "扫描中，等待对端"
-        case .connecting: return "正在连接…"
+        case .connecting: return "正在连接"
         case .connected: return "已连接"
         case .synced: return "已同步"
         }
     }
 }
 
-/// 链路常量（UUID 与广播名固定，双方需一致）.
+/// 链路常量（UUID 双方一致；广播名按角色区分）.
 enum BluetoothLink {
     static let serviceUUID = CBUUID(string: "E5C0A100-1B2F-4E6A-9A11-0E50F1A1B001")
     /// A 机 notify、B 机订阅：坐标下行.
     static let coordinateCharacteristicUUID = CBUUID(string: "E5C0A101-1B2F-4E6A-9A11-0E50F1A1B001")
     /// B 机 write、A 机接收：状态回报上行.
     static let statusCharacteristicUUID = CBUUID(string: "E5C0A102-1B2F-4E6A-9A11-0E50F1A1B001")
-    static let localName = "EscapeSpace-Loc"
+
+    /// 广播名：31 字节广播包里 serviceUUID 已占 16 字节，名字必须短.
+    static func broadcastName(for role: BluetoothLinkRole) -> String {
+        switch role {
+        case .broadcaster: return "EscapeSpace-T"
+        case .receiver: return "EscapeSpace-S"
+        }
+    }
+
+    /// UI 展示名.
+    static func displayName(for role: BluetoothLinkRole?) -> String {
+        switch role {
+        case .broadcaster: return "EscapeSpace（模拟终端）"
+        case .receiver: return "EscapeSpace（信号端）"
+        case nil: return "未知设备"
+        }
+    }
+
+    /// 从广播名反解角色（`CBPeripheral.name` 可能为空，不能只靠它）.
+    static func role(fromBroadcastName name: String?) -> BluetoothLinkRole? {
+        guard let name, name.hasPrefix("EscapeSpace-") else { return nil }
+        if name.hasSuffix("-T") { return .broadcaster }
+        if name.hasSuffix("-S") { return .receiver }
+        return nil
+    }
+}
+
+/// 扫描到的附近设备（按 peripheral identifier 去重累积）.
+struct BluetoothNearbyPeer: Identifiable, Equatable {
+    let id: UUID
+    /// 广播名原始值（后台广播不带 localName 时可能为空）.
+    var name: String
+    var role: BluetoothLinkRole?
+    var rssi: Int
+    var lastSeen: Date
+
+    /// 列表展示名：能反解角色时显示 `EscapeSpace（角色）`.
+    var displayName: String {
+        if let role = role { return BluetoothLink.displayName(for: role) }
+        if !name.isEmpty { return name }
+        return "EscapeSpace"
+    }
+
+    /// 角色文案（窄位置用短名）.
+    var roleText: String { role?.shortTitle ?? "未知角色" }
+}
+
+/// A 机收到的待授权连接请求.
+struct BluetoothConnectionRequest: Identifiable, Equatable {
+    let centralIdentifier: UUID
+    let displayName: String
+    let receivedAt: Date
+
+    var id: UUID { centralIdentifier }
 }
 
 /// 坐标载荷 v1：1 字节版本 + 2 × Double(纬度, 经度)，小端，共 17 字节.
@@ -126,9 +188,9 @@ struct BluetoothStatusReport: Equatable {
         let base: String
         switch code {
         case 0: base = "未模拟定位"
-        case 1: base = "正在连接…"
+        case 1: base = "正在连接"
         case 2: base = "正在模拟定位"
-        case 3: base = "正在重新连接…"
+        case 3: base = "正在重新连接"
         case 4: base = "连接中断"
         default: base = "未知状态"
         }
