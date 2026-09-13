@@ -197,6 +197,11 @@ def main() -> None:
             "the candidate version IDs come from the free version catalog")
     require("cachedVersionID" in install and "rememberVersionID" in install,
             "the last good externalVersionId is cached and tried first")
+    # v0.3.367：越狱版必须有正面证据（isFairPlayEncrypted == false）；未知不得判为越狱版。
+    require("isFairPlayEncrypted == false { return .jailbroken }" in source("EscapeOS/Engine/AppTypeDetector.swift"),
+            "jailbroken requires positive evidence, never mere absence of metadata")
+    require("hasITunesMetadata: hasMetadataMap[id] ?? false" in source("EscapeOS/Views/AppListView.swift"),
+            "the app list passes iTunesMetadata existence into the type detector")
     # v0.3.364：账号版本通道必须支持带 externalVersionId，并把静默空包归一成 emptyPackage；
     # 且不得再出现「可能缺少此应用的获取记录」这种把接口行为说成「你没买过」的假结论。
     require("externalVersionID" in version_finder and "emptyPackage" in version_finder,

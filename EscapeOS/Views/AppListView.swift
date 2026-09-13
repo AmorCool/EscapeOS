@@ -166,9 +166,14 @@ final class AppListViewModel: ObservableObject {
             // 以 bundleID 为 key 的 applicationType / iTunesAppleID
             var appTypeMap: [String: String] = [:]
             var iTunesIDMap: [String: String] = [:]
+            // v0.3.367：**必须把「存在 iTunesMetadata」这一事实也传下去**。
+            // 原来只传了购买邮箱，而没有元数据的包会被判成非 App Store 下发；
+            // 叠加「已装应用读不到包内 sinf（加密状态未知）」，App Store 应用会全被判成越狱版。
+            var hasMetadataMap: [String: Bool] = [:]
             for app in apps {
                 if let t = app.applicationType { appTypeMap[app.bundleIdentifier] = t }
                 if let id = app.iTunesAppleID { iTunesIDMap[app.bundleIdentifier] = id }
+                hasMetadataMap[app.bundleIdentifier] = app.hasITunesMetadata
             }
             // v0.3.190：从 misagent 拉的 mobileprovision 顶层 ProvisionsAllDevices 匹配，
             // 企业判定唯一权威字段（Apple TN3125）——已在上面按 appId 构建 provisionsAllDevicesMap.
@@ -179,7 +184,8 @@ final class AppListViewModel: ObservableObject {
                     applicationType: appTypeMap[id],
                     iTunesAppleID: iTunesIDMap[id],
                     currentAppleID: currentAppleID,
-                    provisionsAllDevices: provisionsAllDevicesMap[id] ?? false
+                    provisionsAllDevices: provisionsAllDevicesMap[id] ?? false,
+                    hasITunesMetadata: hasMetadataMap[id] ?? false
                 )
             }
             DispatchQueue.main.async {

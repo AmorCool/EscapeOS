@@ -150,8 +150,14 @@ enum AppTypeDetector {
         }
 
         // 5. 无 profile、无 iTunesMetadata → 不是 App Store 下发的包。
-        //    仍带 FairPlay 加密时按 App Store 加密包兜底；否则是破解 / 越狱包。
-        if isFairPlayEncrypted == true { return .appStore }
-        return .jailbroken
+        //
+        //    ⚠️ v0.3.367：**只有拿到「确实没有 FairPlay 加密」这个正面证据才判越狱版**。
+        //    已装应用读不到包内 `SC_Info/*.sinf`（AFC 只到媒体域）→ `isFairPlayEncrypted` 是
+        //    **nil = 未知**，而「未知」绝不能被当成「破解」。
+        //    v0.3.364 就是在这里把「未知」当成了越狱版，加上应用板块没传 `hasITunesMetadata`，
+        //    结果 AltStore / ChatGPT 这类 App Store 应用在**应用板块**全被显示成「越狱版」
+        //    （文档浏览那条链路传了存在性所以正常）。
+        if isFairPlayEncrypted == false { return .jailbroken }
+        return .appStore
     }
 }
