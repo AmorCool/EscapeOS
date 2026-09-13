@@ -116,6 +116,13 @@ final class AppListViewModel: ObservableObject {
     /// v0.3.184：拉取设备的 provisioning profiles（misagent）并结合 installation_proxy 已拿到的
     /// applicationType/iTunesAppleID，构建每个 app 的 AppType 映射.
     /// 判定规则见 `AppTypeDetector.detect`.
+    ///
+    /// v0.3.369：**元数据输入改用与文档浏览同源的带属性 Lookup**
+    /// （`FileSharingService.listAppsWithFileSharing()` →
+    /// Rust FFI `installation_proxy_lookup_apps`）。此前这里只有
+    /// `AppDiscovery.getAllAppsInfo()`（`installation_proxy_get_apps`，**不带**
+    /// ReturnAttributes）来的数据，而该调用**不返回 `iTunesMetadata`** ——
+    /// 于是 `appleId` / `hasITunesMetadata` 恒为空，共享正版只能落成苹果正版。
     private func loadAppTypes(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
         // v0.3.184：当前 Apple ID 用于区分正版 vs 共享（来自 AppStore 登录态）.
@@ -127,6 +134,15 @@ final class AppListViewModel: ObservableObject {
         // 设备上可能有 20+ 个），用 .utility 低优先级队列 + autoreleasepool 包裹，
         // 避免在 reload 高频触发时抢占线程导致卡顿/内存压力；与主流程解耦.
         DispatchQueue.global(qos: .utility).async { [weak self] in
+            // v0.3.369：**先做与文档浏览同源的带属性 Lookup**，拿回
+            // iTunesMetadata / appleId / isGenuine。只有一次全量 Lookup
+            // （不是每个应用一次）；它返回**全部**已装应用，不做「是否开启
+            // 文件共享」过滤（过滤开关在 FileSharingAppsView 里）。
+            // 它自带隧道并在返回前释放（FileSharingService 内部 defer），
+            // 与下面的 installation_proxy / misagent 串行，不会双隧道并发。
+            let lookedUp = autoreleasepool {
+                (try? FileSharingService.listAppsWithFileSharing()) ?? []
+            }
             // v0.3.190：两条隧道必须**顺序串行**调用——fetchSideloadedApps（installation_proxy）
             // 与 fetchAllProfiles（misagent）各自 createTunnel，若并发握手会死锁闪退
             // （v0.3.187 曾在 fetchSideloadedApps 内部嵌套调 fetchAllProfiles = 双隧道并发，
@@ -170,10 +186,28 @@ final class AppListViewModel: ObservableObject {
             // 原来只传了购买邮箱，而没有元数据的包会被判成非 App Store 下发；
             // 叠加「已装应用读不到包内 sinf（加密状态未知）」，App Store 应用会全被判成越狱版。
             var hasMetadataMap: [String: Bool] = [:]
+            // v0.3.369：**以 `lookedUp`（带属性的 Lookup，与文档浏览同源）为准**
+            // 取 applicationType / iTunesAppleID / hasITunesMetadata —— 只有它带
+            // iTunesMetadata（appleId / isGenuine 的来源）。`apps`（get_apps，不带
+            // 属性）仅作兜底，覆盖 Lookup 未返回的条目。
+            for app in lookedUp {
+                // parseAppDict 缺 ApplicationType 时填 "Unknown"，视同未拿到，留给兜底
+                if app.applicationType != "Unknown" {
+                    appTypeMap[app.bundleId] = app.applicationType
+                }
+                if let id = app.appleId { iTunesIDMap[app.bundleId] = id }
+                hasMetadataMap[app.bundleId] = app.isGenuine
+            }
             for app in apps {
-                if let t = app.applicationType { appTypeMap[app.bundleIdentifier] = t }
-                if let id = app.iTunesAppleID { iTunesIDMap[app.bundleIdentifier] = id }
-                hasMetadataMap[app.bundleIdentifier] = app.hasITunesMetadata
+                if appTypeMap[app.bundleIdentifier] == nil, let t = app.applicationType {
+                    appTypeMap[app.bundleIdentifier] = t
+                }
+                if iTunesIDMap[app.bundleIdentifier] == nil, let id = app.iTunesAppleID {
+                    iTunesIDMap[app.bundleIdentifier] = id
+                }
+                if hasMetadataMap[app.bundleIdentifier] == nil {
+                    hasMetadataMap[app.bundleIdentifier] = app.hasITunesMetadata
+                }
             }
             // v0.3.190：从 misagent 拉的 mobileprovision 顶层 ProvisionsAllDevices 匹配，
             // 企业判定唯一权威字段（Apple TN3125）——已在上面按 appId 构建 provisionsAllDevicesMap.
