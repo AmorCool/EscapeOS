@@ -83,6 +83,8 @@ enum OnlineInstallService {
                                        bundleId: bundleId,
                                        alternatePackageURL: alternatePackageURL)
             } catch {
+                // 这次 OTA 没跑起来 → 清掉可能已经开始的进度会话（别让列表里挂个假进度）
+                OnlineInstallProgress.shared.reset()
                 LoginLogger.shared.log("[在线安装] ❌ 失败：\(reasonText(error))", category: logCategory)
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return
@@ -93,6 +95,7 @@ enum OnlineInstallService {
                 manifestURL = try publish(prepared)
             } catch {
                 if prepared.localFile != nil { IPALocalHTTPServer.shared.stop() }
+                OnlineInstallProgress.shared.reset()
                 LoginLogger.shared.log("[在线安装] ❌ 失败：\(reasonText(error))", category: logCategory)
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return
@@ -104,6 +107,9 @@ enum OnlineInstallService {
                 LoginLogger.shared.log("[在线安装] 本机服务器将在 \(Int(serverLifetime / 60)) 分钟后自动关闭",
                                        category: logCategory)
             }
+            // v0.3.388：进度会话同样在保活到期时收尾。
+            // ⚠️ 这只是「我们的观测窗口结束了」，**不是「系统装完了」** —— 系统安装阶段不可观测。
+            OnlineInstallProgress.shared.scheduleIdleReset(after: serverLifetime)
 
             DispatchQueue.main.async {
                 open(manifestURL: manifestURL, completion: completion)
@@ -183,9 +189,18 @@ enum OnlineInstallService {
         // 起本机服务器（放最后：此前的检查失败都不会留下服务器）
         var packageURL = ipaURL.absoluteString
         if let localFile {
+            // v0.3.388：进度回调先挂上（在服务器队列上触发 → 载体自己 hop 回主线程）。
+            // 系统来拉包的每一个字节都会经过这里，这是我们**唯一**能测到 OTA 进度的来源。
+            IPALocalHTTPServer.shared.onProgress = { sent, total in
+                OnlineInstallProgress.shared.update(sent: sent, total: total)
+            }
             do {
                 let serving = try IPALocalHTTPServer.shared.start(fileURL: localFile, purpose: .ota)
                 packageURL = serving.packageURL
+                OnlineInstallProgress.shared.begin(fileName: localFile.lastPathComponent,
+                                                   bundleId: resolvedBundleId,
+                                                   total: serving.packageSize,
+                                                   observable: true)
                 LoginLogger.shared.log("[在线安装] 本机服务器已启动：监听 \(serving.listenHost):\(serving.port)（只读单文件 /package.ipa，支持 Range）",
                                        category: logCategory)
                 LoginLogger.shared.log("[在线安装] software-package.url=\(serving.packageURL)（\(serving.usesLAN ? "局域网 IP" : "局域网 IP 取不到，回落回环")）",
@@ -194,6 +209,12 @@ enum OnlineInstallService {
                 LoginLogger.shared.log("[在线安装] 本机服务器启动失败：\(error.localizedDescription)", category: logCategory)
                 throw OnlineInstallError.serverFailed
             }
+        } else {
+            // 远端直链：包不经本机服务器 → 我们**一个字节都测不到** → 直接进不确定态，不显示假百分比
+            OnlineInstallProgress.shared.begin(fileName: nil,
+                                               bundleId: resolvedBundleId,
+                                               total: 0,
+                                               observable: false)
         }
 
         // 备选直链：只在它是 https 且与主地址不同时追加
@@ -245,6 +266,7 @@ enum OnlineInstallService {
         guard let encoded = manifestURL.addingPercentEncoding(withAllowedCharacters: allowed),
               let itmsURL = URL(string: "itms-services://?action=download-manifest&url=\(encoded)") else {
             LoginLogger.shared.log("[在线安装] ❌ itms-services 链接拼装失败", category: logCategory)
+            OnlineInstallProgress.shared.reset()
             completion(.failure(OnlineInstallError.openFailed))
             return
         }
@@ -263,6 +285,8 @@ enum OnlineInstallService {
             UIPasteboard.general.string = manifestURL
             LoginLogger.shared.log("[在线安装] 系统未受理，已回退内置浏览器并复制链接（可改用 Safari 打开）",
                                    category: logCategory)
+            // 系统没受理 = 不会真的安装 → 收掉进度会话，别在列表里挂个永远转的圈
+            OnlineInstallProgress.shared.reset()
             completion(.failure(OnlineInstallError.fallbackClipboard))
         }
     }

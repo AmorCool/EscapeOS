@@ -90,10 +90,17 @@ final class IPADownloadCenter: ObservableObject {
         var canPause: Bool {
             remoteURL != nil && (phase == .downloading || phase == .paused)
         }
+        /// 整条链路的进度（0~1），给界面画进度环用。
+        ///
+        /// v0.3.388 起 `progress` 的**口径统一**为「链路进度」：
+        /// · 下载阶段写入的是「下载分数」（0~1），故这里乘 0.75（下载占链路 75%）；
+        /// · 安装阶段写入的**已经是链路 0~1**（`AppStoreInstallService.installLocalIPA` 内部
+        ///   把 AFC 上传 0~0.75、installd 0.75~1 拼好；下载完再装的链路由调用方折算），
+        ///   所以这里直接返回 `progress` —— 再乘一次权重会把安装段压扁。
         var overall: Double {
             switch phase {
             case .downloading, .paused: return progress * 0.75
-            case .installing: return 0.75 + progress * 0.25
+            case .installing: return progress
             case .done: return 1
             default: return 0
             }
@@ -105,6 +112,13 @@ final class IPADownloadCenter: ObservableObject {
     /// 正在运行的（含暂停）
     var activeJobs: [Job] { jobs.filter { $0.phase.isBusy } }
     var finishedJobs: [Job] { jobs.filter { !$0.phase.isBusy } }
+
+    /// v0.3.388：**只属于「下载中」那条顶部横条**的任务 —— 只要下载阶段
+    /// （等待 / 下载中 / 已暂停）。安装阶段的任务**不再占用顶部那条横条**，
+    /// 改为在「已下载」列表对应行内用圆环显示（用户明确要求）。
+    var downloadJobs: [Job] {
+        jobs.filter { $0.phase == .waiting || $0.phase == .downloading || $0.phase == .paused }
+    }
 
     func job(_ id: UUID) -> Job? { jobs.first { $0.id == id } }
 
@@ -286,7 +300,9 @@ final class IPADownloadCenter: ObservableObject {
                         Task { @MainActor in
                             self.update(id) {
                                 $0.phase = .installing
-                                $0.progress = p
+                                // v0.3.388：`p` 是**安装链自己的 0~1**（上传 0~0.75 + installd 0.75~1），
+                                // 而这条链路的前 75% 是下载 → 折算到链路的后 25%，保证 `overall` 只增不减。
+                                $0.progress = 0.75 + min(1, max(0, p)) * 0.25
                                 $0.stageText = "安装中"
                             }
                         }
@@ -531,7 +547,11 @@ final class IPADownloadCenter: ObservableObject {
                 try await AppStoreInstallService.installLocalIPA(
                     path,
                     progress: { p in
-                        Task { @MainActor in self.update(id) { $0.progress = p } }
+                        Task { @MainActor in
+                            // v0.3.388：下载已占链路前 75% → 安装段（上传+installd 拼好的 0~1）
+                            // 折到链路后 25%，与 `Job.overall` 在 `.installing` 直接取 `progress` 对齐。
+                            self.update(id) { $0.progress = 0.75 + min(1, max(0, p)) * 0.25 }
+                        }
                     },
                     onLog: { LoginLogger.shared.log("[下载中心] \($0)", category: .appStore) })
                 IPADownloadLibrary.shared.markInstalled(fileName: fileName)

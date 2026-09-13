@@ -58,6 +58,8 @@ final class IPALocalHTTPServer {
         var packageURL: String
         /// `packageURL` 用的是局域网 IP（false = 回落到回环）
         var usesLAN: Bool
+        /// v0.3.388：这份包的总字节数（在线安装的进度分母）
+        var packageSize: UInt64
     }
 
     private let queue = DispatchQueue(label: "com.ipaside.escapeos.ota.http")
@@ -71,6 +73,15 @@ final class IPALocalHTTPServer {
 
     /// 当前用途（`nil` = 未启动）。面板据此把会互相挤掉的入口置灰。
     private(set) var currentPurpose: Purpose?
+
+    /// v0.3.388：**每发完一块就回调「本次已发字节（含 Range 绝对偏移）、包总大小」**。
+    ///
+    /// 用途：在线安装的进度 —— 系统从本机服务器拉包，App 只能从「发出去多少字节」估进度。
+    /// · 回调在**服务器自己的队列**上触发（不是主线程），调用方自己 hop；
+    /// · 建议在 `start(fileURL:purpose:)` **之前**设置（`start()` 内部会先 `stop()` 上一份会话；
+    ///   当前 `stop()` 并不清它，但保持「先挂回调再启动」的顺序最稳）；
+    /// · 一旦设置就常驻（`stop()` 不清），无会话时不会有回调。
+    var onProgress: ((_ sent: UInt64, _ total: UInt64) -> Void)?
 
     private init() {}
 
@@ -128,7 +139,8 @@ final class IPALocalHTTPServer {
         return Serving(port: resolvedPort,
                        listenHost: "0.0.0.0",
                        packageURL: "http://\(host):\(resolvedPort)/package.ipa",
-                       usesLAN: lan != nil)
+                       usesLAN: lan != nil,
+                       packageSize: size)
     }
 
     /// 立即关闭。
@@ -252,7 +264,12 @@ final class IPALocalHTTPServer {
                 return
             }
             try? handle.seek(toOffset: start)
-            FilePump(connection: connection, handle: handle, remaining: length).start()
+            FilePump(connection: connection,
+                     handle: handle,
+                     remaining: length,
+                     offset: start,
+                     total: fileSize,
+                     onProgress: onProgress).start()
         })
     }
 
@@ -334,12 +351,27 @@ final class IPALocalHTTPServer {
         private let connection: NWConnection
         private let handle: FileHandle
         private var remaining: UInt64
+        /// 本次响应在整份包里的绝对起始偏移（`Range` 请求时非 0）
+        private let offset: UInt64
+        /// 整份包的总大小
+        private let total: UInt64
+        /// 「这次响应已经发出去多少字节」→ 转成绝对进度上报
+        private let onProgress: ((UInt64, UInt64) -> Void)?
+        private var sent: UInt64 = 0
         private static let chunkSize = 256 * 1024
 
-        init(connection: NWConnection, handle: FileHandle, remaining: UInt64) {
+        init(connection: NWConnection,
+             handle: FileHandle,
+             remaining: UInt64,
+             offset: UInt64,
+             total: UInt64,
+             onProgress: ((UInt64, UInt64) -> Void)?) {
             self.connection = connection
             self.handle = handle
             self.remaining = remaining
+            self.offset = offset
+            self.total = total
+            self.onProgress = onProgress
         }
 
         func start() { step() }
@@ -360,6 +392,10 @@ final class IPALocalHTTPServer {
                 if error != nil {
                     self.finish()
                 } else {
+                    // v0.3.388：这块真发出去了 → 上报**绝对**进度。
+                    // 必须带 offset：系统断点续传时会分多次带 Range 拉，只累加本次字节会算错。
+                    self.sent += UInt64(chunk.count)
+                    self.onProgress?(self.offset + self.sent, self.total)
                     self.step()
                 }
             })

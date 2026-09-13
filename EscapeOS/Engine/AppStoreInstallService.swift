@@ -90,6 +90,11 @@ enum AppStoreInstallService {
     ///   直接 `installSignedIPA`（`PackageType: Application`）。
     ///
     /// `allowDowngrade = true` 时用 `Upgrade` 命令 —— installd 不拦降级，装历史版本用。
+    ///
+    /// v0.3.388：`progress` 回调的口径是**整条安装链的 0~1**：
+    /// AFC 上传段 0~0.75（`IPAInstallService.uploadFile` 按字节统计）+ installd 段 0.75~1
+    /// （系统自己回报的 0~100）。上传段以前没有任何回调，界面只能停在 0% 干等。
+    /// 注意这是**声明式加权**（与下载中心既有的下载 75% / 安装 25% 同口径），不是系统的整体百分比。
     static func installLocalIPA(_ ipaPath: String,
                                 allowDowngrade: Bool = false,
                                 progress: ((Double) -> Void)? = nil,

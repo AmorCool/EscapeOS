@@ -613,7 +613,8 @@ final class IPAInstallService: ObservableObject {
         let name = (localPath as NSString).lastPathComponent
         let remotePath = "/PublicStaging/\(name)"
         _ = remotePath.withCString { afc_remove_path_and_contents(afc, $0) }
-        try uploadFile(afc, localPath: localPath, remotePath: remotePath)
+        try uploadFile(afc, localPath: localPath, remotePath: remotePath,
+                       progress: { p in progress?(Self.uploadWeight * min(1, max(0, p))) })
 
         var ip: OpaquePointer?
         if let ffiError = installation_proxy_connect_rsd(adapter, handshake, &ip) {
@@ -631,7 +632,9 @@ final class IPAInstallService: ObservableObject {
             plist_dict_set_item(options, "PackageType", packageType)
         }
 
-        installProgressHandler = progress
+        installProgressHandler = { p in
+            progress?(Self.uploadWeight + (1 - Self.uploadWeight) * min(1, max(0, p)))
+        }
         let progressCallback: @convention(c) (UInt64, UnsafeMutableRawPointer?) -> Void = { value, ctx in
             let current = Double(value) / 100.0
             DispatchQueue.main.async {
@@ -682,7 +685,8 @@ final class IPAInstallService: ObservableObject {
         let name = (localPath as NSString).lastPathComponent
         let remotePath = "/PublicStaging/\(name)"
         _ = remotePath.withCString { afc_remove_path_and_contents(afc, $0) }
-        try uploadFile(afc, localPath: localPath, remotePath: remotePath)
+        try uploadFile(afc, localPath: localPath, remotePath: remotePath,
+                       progress: { p in progress?(Self.uploadWeight * min(1, max(0, p))) })
 
         var ip: OpaquePointer?
         if let ffiError = installation_proxy_connect_rsd(adapter, handshake, &ip) {
@@ -706,7 +710,9 @@ final class IPAInstallService: ObservableObject {
             plist_dict_set_item(options, "iTunesMetadata", v)
         }
 
-        installProgressHandler = progress
+        installProgressHandler = { p in
+            progress?(Self.uploadWeight + (1 - Self.uploadWeight) * min(1, max(0, p)))
+        }
         let progressCallback: @convention(c) (UInt64, UnsafeMutableRawPointer?) -> Void = { value, _ in
             let current = Double(value) / 100.0
             DispatchQueue.main.async {
@@ -755,7 +761,8 @@ final class IPAInstallService: ObservableObject {
         let name = (localPath as NSString).lastPathComponent
         let remotePath = "/PublicStaging/\(name)"
         _ = remotePath.withCString { afc_remove_path_and_contents(afc, $0) }
-        try uploadFile(afc, localPath: localPath, remotePath: remotePath)
+        try uploadFile(afc, localPath: localPath, remotePath: remotePath,
+                       progress: { p in progress?(Self.uploadWeight * min(1, max(0, p))) })
 
         var ip: OpaquePointer?
         if let ffiError = installation_proxy_connect_rsd(adapter, handshake, &ip) {
@@ -772,7 +779,9 @@ final class IPAInstallService: ObservableObject {
             plist_dict_set_item(options, "PackageType", packageType)
         }
 
-        installProgressHandler = progress
+        installProgressHandler = { p in
+            progress?(Self.uploadWeight + (1 - Self.uploadWeight) * min(1, max(0, p)))
+        }
         let progressCallback: @convention(c) (UInt64, UnsafeMutableRawPointer?) -> Void = { value, ctx in
             let current = Double(value) / 100.0
             DispatchQueue.main.async {
@@ -789,6 +798,17 @@ final class IPAInstallService: ObservableObject {
     }
 
     private var installProgressHandler: ((Double) -> Void)?
+
+    /// v0.3.388：**整条安装链路**的进度权重 —— AFC 上传占前 75%，installd 安装占后 25%。
+    ///
+    /// 为什么可以这样拼：两段各自都是**真实测量值**
+    /// · 上传段 = 已写进 AFC 的字节 / 文件总字节（`uploadFile` 逐块统计，v0.3.388 起才有）；
+    /// · 安装段 = installd 自己回报的 0~100。
+    ///
+    /// ⚠️ 但这个 75/25 的**权重本身是声明式的估计**（与下载中心既有的「下载 75% / 安装 25%」
+    /// 同一口径），不是系统给的「整体百分比」—— 别把它当测量结果。
+    /// 在它之前，上传段**完全没有回调**，界面只能干等，所以叠了个分母让它动起来。
+    private static let uploadWeight = 0.75
 
     /// 递归上传目录（映射读，避免大二进制撑爆内存）.
     private func uploadDirectory(_ afc: OpaquePointer, localDir: String, remoteDir: String) throws {
@@ -808,7 +828,10 @@ final class IPAInstallService: ObservableObject {
         }
     }
 
-    private func uploadFile(_ afc: OpaquePointer, localPath: String, remotePath: String) throws {
+    /// v0.3.388：`progress` 逐块回报**上传进度**（已写字节 / 文件总字节，0~1）。
+    /// 在此之前上传段没有任何进度回调，界面只能停在 0% 干等。
+    private func uploadFile(_ afc: OpaquePointer, localPath: String, remotePath: String,
+                            progress: ((Double) -> Void)? = nil) throws {
         let data = try Data(contentsOf: URL(fileURLWithPath: localPath), options: .mappedIfSafe)
         var file: OpaquePointer?
         if let ffiError = remotePath.withCString({ afc_file_open(afc, $0, AfcWrOnly, &file) }) {
@@ -819,6 +842,7 @@ final class IPAInstallService: ObservableObject {
 
         // 分块写，避免单次 FFI 调用撑爆内存.
         let chunk = 1 << 20
+        let total = data.count
         try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
             var offset = 0
@@ -828,6 +852,8 @@ final class IPAInstallService: ObservableObject {
                     throw error(from: ffiError, fallback: "写入 \(remotePath) 失败")
                 }
                 offset += n
+                // 每块写完即报（分母为 0 时跳过，避免除零）
+                if total > 0 { progress?(Double(offset) / Double(total)) }
             }
         }
     }

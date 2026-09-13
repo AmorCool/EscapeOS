@@ -28,6 +28,9 @@ struct IPADownloadManagerView: View {
     /// 而这些行共享同一个 bundleId，就**宁可都不显示**进行中/失败 —— 不能显示错（见 activeJob 注释）。
     @State private var duplicatedBundleIds: Set<String> = []
     @ObservedObject private var center = IPADownloadCenter.shared
+    /// v0.3.388：在线安装（OTA）的进度 —— 唯一真实来源是**本机服务器已发给系统的字节数**
+    /// （系统进入安装阶段后 App 观测不到，那时显示不确定态，见 `OnlineInstallProgress`）。
+    @ObservedObject private var otaProgress = OnlineInstallProgress.shared
     @Environment(\.editMode) private var editMode
     private var isEditing: Bool { editMode?.wrappedValue == .active }
 
@@ -96,18 +99,20 @@ struct IPADownloadManagerView: View {
 
     // MARK: - 下载中（暂停 / 继续 / 删除）
 
+    /// v0.3.388：这一区**只放下载阶段的任务**（`center.downloadJobs`）——
+    /// 安装阶段不再占用顶部这条横条，改在「已下载」对应行内画圆环（用户明确要求）。
     @ViewBuilder
     private var activeSection: some View {
-        if !center.activeJobs.isEmpty {
+        if !center.downloadJobs.isEmpty {
             Section {
-                ForEach(center.activeJobs) { job in
+                ForEach(center.downloadJobs) { job in
                     activeRow(job)
                 }
             } header: {
                 HStack {
                     Text("下载中")
                     Spacer(minLength: 0)
-                    Text("\(center.activeJobs.count) 个任务")
+                    Text("\(center.downloadJobs.count) 个任务")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -263,12 +268,16 @@ struct IPADownloadManagerView: View {
 
             // v0.3.381：按**文件名（含版本）**判本行的进行中状态 —— 只按 bundleId 会让
             // 同一应用的多版本条目一起显示「安装中」（用户实测 BUG）。
-            if let job = activeJob(for: item) {
-                HStack(spacing: 6) {
-                    ProgressView(value: min(1, max(0, job.overall)))
-                        .frame(width: 44)
-                    Text(job.phase == .paused ? "已暂停" : job.stageText)
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            // v0.3.388：把原来那条 44pt 横向进度条换成**圆形进度环 + 百分比**（覆盖安装与在线安装都有），
+            // 高度仍是 44pt，不动行高、不挤掉右侧信息。
+            if let progress = rowProgress(item) {
+                HStack(spacing: 8) {
+                    InstallProgressRing(fraction: progress.fraction)
+                    Text(progress.text)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
                 .fixedSize()
             } else {
@@ -408,6 +417,31 @@ struct IPADownloadManagerView: View {
         return duplicatedBundleIds.contains(bid)
     }
 
+    /// v0.3.388：这一行要不要显示**安装/下载进度环**，以及环里的分数（nil = 不确定态）与右侧文字。
+    ///
+    /// 两个来源，按「谁在动这一行」优先：
+    /// 1. **在线安装（OTA）**：分数 = 本机服务器**已经发给系统的字节 / 包大小**（真实测量值）；
+    ///    包发完 → `fraction = nil` → 转圈：**系统安装阶段 App 看不到任何进度**，
+    ///    宁可转圈也不显示假百分比。
+    /// 2. **覆盖安装 / 下载中**：用下载中心任务的 `overall`（链路 0~1，见 `Job.overall`）。
+    ///    只有「排队等待」阶段是未开始，显示不确定态。
+    private func rowProgress(_ item: IPADownloadItem) -> (fraction: Double?, text: String)? {
+        if otaProgress.isActive,
+           otaProgress.matches(fileName: item.fileName, bundleId: item.bundleId) {
+            switch otaProgress.stage {
+            case .transferring: return (otaProgress.fraction, "在线安装")
+            case .installing: return (nil, "安装中")
+            case .idle: break
+            }
+        }
+        guard let job = activeJob(for: item) else { return nil }
+        switch job.phase {
+        case .waiting: return (nil, job.stageText)
+        case .paused: return (job.overall, "已暂停")
+        default: return (job.overall, job.stageText)
+        }
+    }
+
     /// v0.3.378：把下载中心任务里记着的**来源直链**回填进台账并落盘。
     /// **v0.3.386 起**该直链是操作面板「**提取下载链接**」的取值（IPA 包原链接）；
     /// 「复制下载链接」另取包内 `iTunesMetadata.itemId`，与本台账无关。
@@ -492,6 +526,46 @@ struct IPADownloadManagerView: View {
                                                  version: item.version,
                                                  iconURL: item.iconURL)
         ToastCenter.shared.show(downgrade ? "正在降级安装…" : "正在安装…")
+    }
+}
+
+/// v0.3.388：行内**安装进度圆环**（44pt，与行首 48pt 图标等高，不动行高）。
+///
+/// · `fraction != nil` → 圆环 + 环内等宽百分比：12 点起画、圆头 3pt、主题青（`LocusTheme.accent`）；
+/// · `fraction == nil` → **不确定态**：一段持续旋转的弧，**不写百分比**
+///   —— 这是「在线安装进了系统阶段、App 量不到进度」时唯一诚实的画法。
+private struct InstallProgressRing: View {
+
+    let fraction: Double?
+
+    @State private var spinning = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(LocusTheme.accent.opacity(0.18), lineWidth: 3)
+
+            if let fraction {
+                let clamped = min(1, max(0, fraction))
+                Circle()
+                    .trim(from: 0, to: max(0.02, clamped))
+                    .stroke(LocusTheme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Text("\(Int((clamped * 100).rounded()))%")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(LocusTheme.accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            } else {
+                Circle()
+                    .trim(from: 0, to: 0.22)
+                    .stroke(LocusTheme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(spinning ? 360 : 0))
+                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
+            }
+        }
+        .frame(width: 44, height: 44)
+        .onAppear { spinning = true }
     }
 }
 
