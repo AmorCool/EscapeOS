@@ -25,6 +25,10 @@ struct FileSharingApp: Identifiable {
     var purchaseDate: String? // 购买/下载时间（downloadInfo.purchaseDate）
     var signer: String?       // SignerIdentity（侧载/签名身份，App Store 为 "Apple iPhone OS Application Signing"）
     var isGenuine: Bool = false // 爱思「苹果正版」= 归档信息里有 iTunesMetadata（App Store 下发）
+    /// v0.3.363：安装来源类型（与「应用」板块 **同一套** AppTypeDetector 判定，
+    /// 见 AppListView.loadAppTypes）。此前文档浏览只按 isGenuine 二分成
+    /// 「苹果正版 / 共享正版」，把自签 / 企业 / 系统应用全部压成「共享正版」。
+    var appType: AppType? = nil
 }
 
 enum FileSharingService {
@@ -39,10 +43,70 @@ enum FileSharingService {
     /// browse 失败回退原 get_apps 全字段 Lookup.
     /// 同步阻塞——调用方放后台线程.
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
-        if let apps = try? lookupAppsWithAttributes(), !apps.isEmpty {
-            return apps
+        var apps: [FileSharingApp]
+        if let found = try? lookupAppsWithAttributes(), !found.isEmpty {
+            apps = found
+        } else {
+            apps = try legacyGetApps()
         }
-        return try legacyGetApps()
+        // v0.3.363：复用「应用」板块的 AppTypeDetector 判定（企业/个人签名/系统…），
+        // 不再用 isGenuine 二分成「苹果正版 / 共享正版」。
+        let types = resolveAppTypes(for: apps)
+        for index in apps.indices {
+            apps[index].appType = types[apps[index].bundleId]
+        }
+        return apps
+    }
+
+    /// v0.3.363：为文档浏览的 App 列表解析 AppType（**与 AppListView.loadAppTypes 同源**）.
+    ///
+    /// 字段来源：
+    ///   - entitlements / application-identifier ← installation_proxy 的 Entitlements
+    ///     （ProvisioningProfileStore.fetchSideloadedApps，仅有 profile 的侧载应用返回）
+    ///   - ProvisionsAllDevices ← misagent 拉的 .mobileprovision 顶层字段
+    ///     （企业判定唯一权威字段，Apple TN3125），按 application-identifier 与 profile 匹配
+    ///   - iTunesAppleID ← 本 App 的 iTunesMetadata 账号（FileSharingApp.appleId）
+    ///   - currentAppleID ← 当前登录的 App Store 账号（keychain 直读，区分正版/共享）
+    ///
+    /// 两条隧道必须**顺序串行**（各自 createTunnel；并发握手会死锁闪退，见 AppListView 注释）.
+    private static func resolveAppTypes(for apps: [FileSharingApp]) -> [String: AppType] {
+        guard !apps.isEmpty else { return [:] }
+        let currentAppleID = MemoryLimitSettings.currentAppleIDDirect()
+        let (sideloaded, allProfiles): (
+            [ProvisioningProfileStore.SideloadedAppInfo],
+            [ProvisioningProfileStore.ProfileInfo]
+        ) = autoreleasepool(invoking: {
+            (
+                (try? ProvisioningProfileStore.fetchSideloadedApps()) ?? [],
+                (try? ProvisioningProfileStore.fetchAllProfiles()) ?? []
+            )
+        })
+        var entMap: [String: [String: Any]] = [:]
+        for item in sideloaded {
+            entMap[item.bundleID] = item.entitlements
+        }
+        // 同一 application-identifier 可能有多份 profile → 用 uniquingKeysWith 保留首个
+        let profileByAppId = Dictionary(
+            allProfiles.map { ($0.appId, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var provisionsAllDevicesMap: [String: Bool] = [:]
+        for item in sideloaded {
+            guard let appId = item.applicationIdentifier,
+                  let profile = profileByAppId[appId] else { continue }
+            provisionsAllDevicesMap[item.bundleID] = profile.provisionsAllDevices
+        }
+        var resolved: [String: AppType] = [:]
+        for app in apps {
+            resolved[app.bundleId] = AppTypeDetector.detect(
+                entitlements: entMap[app.bundleId] ?? [:],
+                applicationType: app.applicationType,
+                iTunesAppleID: app.appleId,
+                currentAppleID: currentAppleID,
+                provisionsAllDevices: provisionsAllDevicesMap[app.bundleId] ?? false
+            )
+        }
+        return resolved
     }
 
     /// v0.3.284：**Lookup** + ReturnAttributes 主路径（此前用 Browse —— 大小字段

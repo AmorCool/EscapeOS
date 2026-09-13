@@ -43,7 +43,7 @@ struct FileSharingAppsView: View {
                     } header: {
                         Text("应用列表（\(filtered.count) 个）")
                     } footer: {
-                        Text("「苹果正版」= 由 App Store 下发（含下载账号信息）；「共享正版」= 第三方商店或自签安装。点击 Apple ID 查看来源详情。")
+                        Text("安装来源与应用板块同源判定：正版（本人 App Store）/ 共享（他人 App Store）/ AppStore（无法判别）/ 个人签名（自签·调试·Ad-Hoc）/ 企业签名（In-House）/ 隐藏 / 系统（非用户应用）。点击任意胶囊查看来源详情。")
                             .font(.caption2)
                     }
                 }
@@ -191,30 +191,32 @@ struct FileSharingAppsView: View {
         HStack(spacing: 12) {
             appIcon(app.bundleId)
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(app.name).font(.subheadline.weight(.medium))
-                    if app.applicationType == "System" {
-                        Text("(系统)").font(.caption2).foregroundStyle(.tertiary)
-                    }
-                }
+                // v0.3.363：标题允许换行不截断（2 行）
+                Text(app.name)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                // v0.3.363：bundleId 去掉 lineLimit(1)，改为可换行（用户要求「可换行但不能显示不全」）
                 Text(app.bundleId)
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                // v0.3.291：对齐爱思两列——「类型」+「Apple ID」。
-                // 类型判定 = 归档信息里是否存在 iTunesMetadata（App Store 下发）：
-                // 有 → 苹果正版 + 账号邮箱；无（第三方商店/自签）→ 共享正版 + "-"。
+                    .fixedSize(horizontal: false, vertical: true)
+                // v0.3.363：类型改为与「应用」板块同源的 AppType（正版/共享/个人签名/
+                // 企业签名/隐藏/未知），非 User 的系统应用显示「系统」；
+                // 所有胶囊都可点开「安装来源」详情（此前只有 AppleID 胶囊能点）。
                 HStack(spacing: 5) {
-                    capsule(app.isGenuine ? "苹果正版" : "共享正版",
-                            tint: app.isGenuine ? .teal : .gray)
+                    tappableCapsule(typeLabel(app), tint: typeTint(app), app: app)
                     appleIdCapsule(app)
                 }
+                // v0.3.363：尺寸拆成两行，给每个胶囊整行宽度 → 文本 2 行换行，不出现省略号
                 HStack(spacing: 5) {
                     if !app.version.isEmpty {
-                        capsule("v\(app.version)", tint: .blue)
+                        tappableCapsule("v\(app.version)", tint: .blue, app: app)
                     }
-                    capsule("应用 \(FileSharingService.formatMB(app.appSize))", tint: .green)
-                    capsule(docCapsuleText(app), tint: .orange)
+                    tappableCapsule("应用 \(FileSharingService.formatMB(app.appSize))", tint: .green, app: app)
+                }
+                HStack(spacing: 5) {
+                    tappableCapsule(docCapsuleText(app), tint: .orange, app: app)
                 }
             }
             Spacer()
@@ -228,22 +230,57 @@ struct FileSharingAppsView: View {
         }
     }
 
+    /// v0.3.363：类型显示文案——**与「应用」板块同一套 AppTypeDetector**.
+    /// 非 User（System / HiddenSystemApp 之外的非用户应用）统一显示「系统」，
+    /// 不再被打成「共享正版」（爱思对系统应用有单独分类）。
+    private func typeLabel(_ app: FileSharingApp) -> String {
+        if app.applicationType != "User" { return "系统" }
+        return (app.appType ?? .unknown).rawValue
+    }
+
+    /// v0.3.363：类型胶囊配色——与应用板块 AppTypeBadge 对齐；「系统」单独一档（灰）.
+    private func typeTint(_ app: FileSharingApp) -> Color {
+        if app.applicationType != "User" { return .gray }
+        switch app.appType ?? .unknown {
+        case .appStorePersonal: return .blue
+        case .appStoreShared:   return .purple
+        case .appStore:         return .indigo
+        case .enterprise:       return .orange
+        case .development:      return .green
+        case .hidden, .unknown: return .secondary
+        }
+    }
+
     /// v0.3.291：Apple ID 胶囊——直接显示 instproxy 返回的真实账号邮箱
     /// （iTunesMetadata → downloadInfo.accountInfo.AppleID）；无则按爱思显示 "-"。
     /// 点击弹出详情（账号 / DSID / 购买时间 / 签名来源）。
     private func appleIdCapsule(_ app: FileSharingApp) -> some View {
         let text = app.appleId ?? "-"
         let tint: Color = app.appleId != nil ? .purple : .gray
-        return Button {
+        return tappableCapsule(text, tint: tint, app: app)
+    }
+
+    /// v0.3.363：胶囊视觉（文本可换行到 2 行，不截断）
+    private func capsuleLabel(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(tint)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(tint.opacity(0.12), in: Capsule())
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// v0.3.363：可点击胶囊——点任意胶囊都打开同一个「安装来源」详情
+    /// （最小改法：每个胶囊各自 Button，不把整行包成 Button，避免吃掉
+    ///  NavigationLink 进入箭头 / 滑动手势）.
+    private func tappableCapsule(_ text: String, tint: Color, app: FileSharingApp) -> some View {
+        Button {
             detailApp = app
         } label: {
-            Text(text)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(tint)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(tint.opacity(0.12), in: Capsule())
-                .lineLimit(1)
+            capsuleLabel(text, tint: tint)
         }
         .buttonStyle(.plain)
     }
@@ -253,7 +290,7 @@ struct FileSharingAppsView: View {
     private func appleIdDetailSheet(_ app: FileSharingApp) -> some View {
         List {
             Section("安装来源") {
-                detailRow("类型", app.isGenuine ? "苹果正版" : "共享正版")
+                detailRow("类型", typeLabel(app))
                 detailRow("Apple ID", app.appleId ?? "-")
                 if let dsid = app.dsid { detailRow("账号 DSID", dsid) }
                 if let date = app.purchaseDate { detailRow("购买时间", date) }
@@ -284,16 +321,6 @@ struct FileSharingAppsView: View {
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.trailing)
         }
-    }
-
-    private func capsule(_ text: String, tint: Color) -> some View {
-        Text(text)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(tint.opacity(0.12), in: Capsule())
-            .lineLimit(1)
     }
 
     private func docCapsuleText(_ app: FileSharingApp) -> String {
