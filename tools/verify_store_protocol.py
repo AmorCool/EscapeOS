@@ -143,7 +143,7 @@ def main() -> None:
     require("catch ApplePackageError.emptyPackage where !licensed" in install, "empty package triggers license acquisition")
     require("emptyRetried" in install and "刷新会话后重试" in install, "empty package confirms the session before buying")
     require("catch ApplePackageError.passwordTokenExpired where !refreshed" in install, "expired ticket refreshes once")
-    require("attempt <= 8" in install, "download retry loop is bounded")
+    require("attempt <= 6" in install, "download retry loop is bounded")
     require("acquireLicense(software:" in install, "download and UI share one license helper")
     require("failedAccount: account" in install and "failedAccount: account" in history, "refresh is ticket-conditioned")
     require("private var flights" in gate and "StoreAccountRequestGate" in gate, "single-flight and account lease installed")
@@ -188,6 +188,8 @@ def main() -> None:
             "an empty package retries volumeStore with candidate external version IDs")
     require("candidateVersionIDs" in install and "versionHistoryFromCatalog" in install,
             "the candidate version IDs come from the free version catalog")
+    require("cachedVersionID" in install and "rememberVersionID" in install,
+            "the last good externalVersionId is cached and tried first")
     require("isAppleHost" in history and "fallbackSAPCertURL" in history,
             "the purchase-history SAP signer uses the same relaxed host check as login")
     # 反向断言：已购侧的 host pin 必须**不存在**（与登录侧那条 keep-in-sync）。

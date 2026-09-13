@@ -69,10 +69,12 @@ enum AppStoreLocalInstallService {
         /// v0.3.361：候选里「最新版」的版本号 —— 仅用于最终日志说明
         /// （拿到包后版本号 != 它，才说明真的改用了旧版）。
         var newestCatalogVersion: String?
+        /// v0.3.362：版本号 → `externalVersionId`，用于把「命中那一版」记进缓存
+        var versionByNumber: [String: String] = [:]
         var attempt = 0
         while true {
             attempt += 1
-            guard attempt <= 8 else { throw ApplePackageError.emptyPackage }
+            guard attempt <= 6 else { throw ApplePackageError.emptyPackage }
             try Task.checkCancellation()
             do {
                 onLog?("[AppleID] 请求下载信息…")
@@ -81,6 +83,10 @@ enum AppStoreLocalInstallService {
                                                          versionCandidates: versionCandidates)
                 if let newest = newestCatalogVersion, output.bundleShortVersionString != newest {
                     onLog?("[AppleID] Apple 拒绝了最新版，已改用该账号可下的版本 \(output.bundleShortVersionString)")
+                    // 记住这一版，下次直接先试它（否则窗口滑走后又变回空包）
+                    rememberVersionID(versionByNumber[output.bundleShortVersionString],
+                                      dsid: account.directoryServicesIdentifier,
+                                      bundleId: software.bundleID)
                 }
                 return output
             } catch ApplePackageError.emptyPackage where !triedVersionCandidates {
@@ -88,9 +94,11 @@ enum AppStoreLocalInstallService {
                 // 不需要刷新会话也不需要购买）。候选为空会自动落到下面「刷新会话」那条分支。
                 triedVersionCandidates = true
                 onLog?("[AppleID] Apple 未返回可下载内容 → 换该账号可下的历史版本重试")
-                let candidates = await candidateVersionIDs(software: software, onLog: onLog)
+                let candidates = await candidateVersionIDs(
+                    software: software, dsid: account.directoryServicesIdentifier, onLog: onLog)
                 versionCandidates = candidates.ids
                 newestCatalogVersion = candidates.newestVersion
+                versionByNumber = candidates.byVersion
             } catch ApplePackageError.passwordTokenExpired where !refreshed {
                 refreshed = true
                 try await refreshAccount(email: email, account: &account, onLog: onLog)
@@ -117,25 +125,50 @@ enum AppStoreLocalInstallService {
         }
     }
 
-    /// v0.3.361：从免登录版本目录取该应用的 `externalVersionId` 候选（目录是「最新在前」）。
+    /// v0.3.361 / v0.3.362：从免登录版本目录取该应用的 `externalVersionId` 候选（目录是「最新在前」）。
     ///
     /// 依据（真机实测）：ChatGPT 的 `volumeStoreDownloadProduct` 只在 body 带 `externalVersionId`
-    /// 时才出包，且**最新的两个 ID 会被 Apple 拒**、更旧的可以下 —— 所以取最新的 6 个拿去试
-    /// （`versionCandidates`：890707559 / 890363403 被拒，890134149 可下，共 6 个必覆盖可用项）。
-    /// 目录通道失败不算错：返回空数组即可，调用方会继续走原有的刷新会话 / 获取许可流程。
-    private static func candidateVersionIDs(software: Software,
-                                            onLog: ((String) -> Void)?) async -> (ids: [String], newestVersion: String?) {
+    /// 时才出包，且**最新的两个 ID 会被 Apple 拒**、更旧的可以下 —— 所以拿最新的若干个去试。
+    ///
+    /// v0.3.362：只取「最新 6 个」有**静默失效**风险 —— 前两槽固定被拒，而 ChatGPT 约每周一版，
+    /// 4~6 周后可用项就会被挤出窗口，表现为「突然又下不了」。所以：
+    /// **把上次成功的 `externalVersionId` 缓存在候选第 1 位**（命中即停），窗口退化为兜底。
+    /// 缓存只影响「先试哪个」，丢了最多多撞一轮，所以放 UserDefaults 足够（Documents 留给凭据）。
+    private static func candidateVersionIDs(software: Software, dsid: String,
+                                            onLog: ((String) -> Void)?)
+        async -> (ids: [String], newestVersion: String?, byVersion: [String: String]) {
         do {
             let history = try await AppStoreService.versionHistoryFromCatalog(appId: String(software.id))
-            let ids = history.compactMap { $0.externalVersionID }.filter { !$0.isEmpty }
-            let newestSix = Array(ids.prefix(6))
-            onLog?("[AppleID] 历史版本候选 \(newestSix.count) 个（最新 \(history.first?.version ?? "?")）")
-            // history 是「最新在前」，所以 first 就是商店最新版（= 被 Apple 拒的那个）。
-            return (newestSix, history.first?.version)
+            let byVersion = Dictionary(history.compactMap { v in
+                v.externalVersionID.map { (v.version, $0) }
+            }, uniquingKeysWith: { first, _ in first })
+            var ids = history.compactMap { $0.externalVersionID }.filter { !$0.isEmpty }
+            if let cached = cachedVersionID(dsid: dsid, bundleId: software.bundleID),
+               let index = ids.firstIndex(of: cached) {
+                ids.remove(at: index)
+                ids.insert(cached, at: 0)
+            }
+            let window = Array(ids.prefix(6))
+            onLog?("[AppleID] 历史版本候选 \(window.count) 个（最新 \(history.first?.version ?? "?")）")
+            // history 是「最新在前」，所以 first 就是商店最新版（= 可能被 Apple 拒的那个）。
+            return (window, history.first?.version, byVersion)
         } catch {
             onLog?("[AppleID] 版本目录不可用：\(error.localizedDescription)")
-            return ([], nil)
+            return ([], nil, [:])
         }
+    }
+
+    /// 上次成功下到包用的 `externalVersionId`（按 dsid + bundleId）。
+    private static func cachedVersionID(dsid: String, bundleId: String) -> String? {
+        guard !dsid.isEmpty, !bundleId.isEmpty else { return nil }
+        let key = "AppStore.LastGoodVersion.\(dsid).\(bundleId)"
+        let value = UserDefaults.standard.string(forKey: key)
+        return (value?.isEmpty == false) ? value : nil
+    }
+
+    private static func rememberVersionID(_ id: String?, dsid: String, bundleId: String) {
+        guard let id, !id.isEmpty, !dsid.isEmpty, !bundleId.isEmpty else { return }
+        UserDefaults.standard.set(id, forKey: "AppStore.LastGoodVersion.\(dsid).\(bundleId)")
     }
 
     /// 获取一次许可；票据失效时**先用已保存凭据刷新会话再买一次**。
