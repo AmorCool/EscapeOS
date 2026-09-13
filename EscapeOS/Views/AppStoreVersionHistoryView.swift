@@ -2,12 +2,12 @@ import SwiftUI
 
 /// AppStore 商店 —— 历史版本
 ///
-/// 两个通道（v0.3.335）：
-/// 1. **账号通道**（优先）：已登录 Apple ID 时走 App Store 下载协议
+/// 两个来源（界面分别叫「三方 API」/「苹果 API」，v0.3.364 改名前是「版本目录」/「Apple 账号」）：
+/// 1. **苹果 API**（优先）：已登录 Apple ID 时走 App Store 下载协议
 ///    （`VersionFinder` + `VersionLookup`，与 Asspp 同款），拿全量版本身份与发布日期。
 ///    任何区域都有数据，且能**直接下载指定历史版本**。
-/// 2. **商品页通道**（回退）：免登录抓商品页内嵌的 `versionHistory`，
-///    数据只有部分区域/应用有，且不能下载。
+/// 2. **三方 API**（回退）：免登录打第三方版本目录接口，一次拿全且带发布日期；
+///    另外商品页内嵌的 `versionHistory` 也会被用来补真实日期。
 struct AppStoreVersionHistoryView: View {
 
     let item: AppStoreItem
@@ -24,8 +24,8 @@ struct AppStoreVersionHistoryView: View {
 
         var title: String {
             switch self {
-            case .catalog: return "版本目录"
-            case .account: return "Apple 账号"
+            case .catalog: return "三方 API"
+            case .account: return "苹果 API"
             }
         }
     }
@@ -43,11 +43,17 @@ struct AppStoreVersionHistoryView: View {
 
     @State private var loading = true
     @State private var loadingMore = false
+    /// 账号通道回报后，还会在后台补一次「商品页真实日期」——这段也算读取中
+    @State private var harvesting = false
     @State private var errorText: String?
     @State private var expanded: Set<String> = []
     /// 已知的「版本号 → 真实发布日期」。只来自商品页通道；
     /// Apple 下载协议给不出每版的日期（每版都返回应用首次上架日期）。
     @State private var dateByVersion: [String: Date] = [:]
+
+    /// 读取中（含分页、后台补日期）：这段时间**不允许切换来源**，
+    /// 否则会把正在跑的请求打断成半截结果。
+    private var isBusy: Bool { loading || loadingMore || harvesting }
 
     private var canLoadMore: Bool { channel == .account && loadedIDs.count < identifiers.count }
 
@@ -129,7 +135,8 @@ struct AppStoreVersionHistoryView: View {
                         .labelStyle(.titleAndIcon)
                         .font(.caption)
                 }
-                .disabled(loading)
+                // v0.3.364：读取中禁止切换来源（loading / 分页 / 后台补日期都算）
+                .disabled(isBusy)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -137,7 +144,7 @@ struct AppStoreVersionHistoryView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .disabled(loading)
+                .disabled(isBusy)
             }
         }
         .onChange(of: sourceRaw) { _, _ in Task { await load() } }
@@ -253,8 +260,8 @@ struct AppStoreVersionHistoryView: View {
         loading = false
     }
 
-    /// 版本目录通道（免登录，一次拿全 + 带发布日期 + 带 externalVersionID）。
-    /// Apple 的账号通道对「没有下载记录」的应用回空包，这条通道不受影响；
+    /// 三方 API 通道（免登录，一次拿全 + 带发布日期 + 带 externalVersionID）。
+    /// Apple 的苹果 API 通道不带版本号时对不少应用回静默空包，这条通道不受影响；
     /// 与 IPARanger 2.6.0 用的是同一个接口。
     @discardableResult
     private func loadCatalog() async -> Bool {
@@ -262,16 +269,19 @@ struct AppStoreVersionHistoryView: View {
             let list = try await AppStoreService.versionHistoryFromCatalog(appId: item.id)
             versions = list
             channel = .catalog
-            LoginLogger.shared.log("版本历史：版本目录通道 \(list.count) 条", category: .appStore)
+            // 通道成功就必须清掉上一条通道留下的警告 —— 否则回退拿到了数据，
+            // 界面仍被那句橙色警告盖住（列表永远显示不出来）。
+            errorText = nil
+            LoginLogger.shared.log("版本历史：三方 API 通道 \(list.count) 条", category: .appStore)
             return true
         } catch {
-            LoginLogger.shared.log("版本历史：版本目录通道失败（\(error.localizedDescription)）",
+            LoginLogger.shared.log("版本历史：三方 API 通道失败（\(error.localizedDescription)）",
                                    category: .appStore)
             return false
         }
     }
 
-    /// 账号通道（走 App Store 下载协议，需该账号下载过这个应用）
+    /// 账号通道（走 App Store 下载协议）
     @discardableResult
     private func loadAccount() async -> Bool {
         // bundleId 缺失时先补一次（协议按 bundleId 查）
@@ -284,11 +294,13 @@ struct AppStoreVersionHistoryView: View {
         else { return false }
         do {
             let ids = try await AppStoreService.storeVersionIdentifiers(bundleId: bundleId,
+                                                                        appId: item.id,
                                                                         email: email)
             // 协议返回旧 → 新；展示要新 → 旧
             identifiers = Array(ids.reversed())
             accountEmail = email
             channel = .account
+            errorText = nil
             // 商品页通道能给出**真实**的版本日期（内嵌 versionHistory shelf），
             // 但覆盖不全；能拿到就补上，拿不到就不显示日期。
             Task { await harvestWebDates() }
@@ -318,6 +330,8 @@ struct AppStoreVersionHistoryView: View {
 
     /// 商品页通道的真实版本日期 → 按版本号补给账号通道（best-effort）
     private func harvestWebDates() async {
+        harvesting = true
+        defer { harvesting = false }
         guard let list = try? await AppStoreService.versionHistory(appId: item.id, country: country),
               !list.isEmpty
         else { return }
@@ -334,12 +348,19 @@ struct AppStoreVersionHistoryView: View {
         }
     }
 
-    /// 账号通道：分批取版本元数据（每次 5 条）
+    /// 账号通道：分批取版本元数据。
+    ///
+    /// v0.3.364：Apple 只对**该账号真正可下的那些版本**回元数据，最新的一两个会被拒。
+    /// 所以不能「第一条失败就把整列报错」—— 那会让账号通道永远显示不出任何东西。
+    /// 这里跳过取不到的版本继续往后走，直到攒够 5 条或试完 20 个候选（有界）。
     private func loadMore() async {
         guard canLoadMore, !loadingMore, let email = accountEmail else { return }
         loadingMore = true
         defer { loadingMore = false }
-        for id in identifiers.filter({ !loadedIDs.contains($0) }).prefix(5) {
+        let pending = identifiers.filter { !loadedIDs.contains($0) }
+        var fetched = 0
+        for id in pending.prefix(20) {
+            if fetched >= 5 { break }
             do {
                 let meta = try await AppStoreService.storeVersionMetadata(item: item,
                                                                          versionID: id,
@@ -348,9 +369,11 @@ struct AppStoreVersionHistoryView: View {
                                                 externalVersionID: id,
                                                 dateValue: dateByVersion[meta.version]))
                 loadedIDs.insert(id)
+                fetched += 1
             } catch {
-                errorText = error.localizedDescription
-                return
+                loadedIDs.insert(id)
+                LoginLogger.shared.log("版本历史：版本 \(id) 取不到元数据，跳过（\(error.localizedDescription)）",
+                                       category: .appStore)
             }
         }
     }

@@ -299,15 +299,58 @@ enum AppStoreService {
     ///
     /// 这是唯一在**任何区域**都能拿到完整版本列表的通道 —— 商品页 HTML 那条
     /// 只有部分区域/部分应用内嵌了 `versionHistory` shelf，所以非国区经常是空的。
-    static func storeVersionIdentifiers(bundleId: String, email: String) async throws -> [String] {
+    ///
+    /// v0.3.364：**不带 `externalVersionId` 时 Apple 对不少应用回静默空包**（HTTP 200 +
+    /// 空 songList + 无错误码）—— 这不是「该账号没买过」（真机实测同一账号 `buyProduct`
+    /// 回的是 5002 LicenseAlreadyExists），所以这里用版本目录的旧版 ID 当候选重打一次。
+    static func storeVersionIdentifiers(bundleId: String, appId: String,
+                                       email: String) async throws -> [String] {
         try await StoreAccountSession.withAccount(email: email) { account in
             do {
                 return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
             } catch ApplePackageError.passwordTokenExpired {
                 account = try await AppleIDSignInService.rotate(email: email, failedAccount: account)
                 return try await VersionFinder.list(account: &account, bundleIdentifier: bundleId)
+            } catch ApplePackageError.emptyPackage {
+                let ids = await versionIdentifiersWithCandidates(account: &account, bundleId: bundleId,
+                                                                 appId: appId)
+                guard !ids.isEmpty else { throw ApplePackageError.emptyPackage }
+                return ids
             }
         }
+    }
+
+    /// v0.3.364：静默空包时，用「版本目录」里的 `externalVersionId` 逐个重打 volumeStore。
+    ///
+    /// 与 v0.3.361 下载链路同一批真机证据：ChatGPT 这类应用**只在 body 带
+    /// `externalVersionId` 时才出包**，且最新两个 ID 会被 Apple 拒、更旧的可以下 ——
+    /// 所以拿目录里最新 6 个试（目录是「最新在前」，前两槽撞空，窗口内能命中）。
+    /// 命中后 Apple 回的是该账号的**全量** `softwareVersionExternalIdentifiers`。
+    private static func versionIdentifiersWithCandidates(account: inout AppStoreAccount,
+                                                         bundleId: String,
+                                                         appId: String) async -> [String] {
+        guard let history = try? await versionHistoryFromCatalog(appId: appId) else {
+            LoginLogger.shared.log("版本历史账号通道：静默空包，且版本目录不可用（无候选）", category: .appStore)
+            return []
+        }
+        var seen = Set<String>()
+        let candidates = history.compactMap { $0.externalVersionID }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+            .prefix(6)
+        for candidate in candidates {
+            do {
+                let ids = try await VersionFinder.list(account: &account, bundleIdentifier: bundleId,
+                                                       externalVersionID: candidate)
+                LoginLogger.shared.log("版本历史账号通道：用候选 externalVersionId=\(candidate) 取到 \(ids.count) 个版本",
+                                       category: .appStore)
+                return ids
+            } catch {
+                LoginLogger.shared.log("版本历史账号通道：候选 externalVersionId=\(candidate) 未出包（\(error.localizedDescription)）",
+                                       category: .appStore)
+            }
+        }
+        LoginLogger.shared.log("版本历史账号通道：\(candidates.count) 个候选版本全部未出包", category: .appStore)
+        return []
     }
 
     /// 取某版本身份对应的版本号与发布日期（`VersionLookup`，同 Asspp）。

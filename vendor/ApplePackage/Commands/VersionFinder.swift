@@ -8,9 +8,11 @@
 import Foundation
 
 public enum VersionFinder {
+    /// v0.3.364：`externalVersionID` 可选 —— 静默空包时由调用方用候选版本重打（见下方说明）。
     public nonisolated static func list(
         account: inout AppStoreAccount,
-        bundleIdentifier: String
+        bundleIdentifier: String,
+        externalVersionID: String? = nil
     ) async throws -> [String] {
         guard let countryCode = Configuration.countryCode(for: account.store) else {
             try ensureFailed("unsupported store identifier: \(account.store)")
@@ -42,7 +44,8 @@ public enum VersionFinder {
                 account: account,
                 app: app,
                 url: currentURL,
-                guid: deviceIdentifier
+                guid: deviceIdentifier,
+                externalVersionID: externalVersionID
             )
             try Task.checkCancellation()
             let response = try await client.execute(request: request).get()
@@ -99,11 +102,23 @@ public enum VersionFinder {
                     if let customerMessage = dict["customerMessage"] as? String {
                         try ensureFailed(customerMessage)
                     }
-                    try ensureFailed("Apple 没有返回版本信息 —— 该 Apple ID 可能缺少此应用的获取记录")
+                    throw ApplePackageError.emptyPackage
                 }
-            } else {
-                try ensureFailed("Apple 没有返回版本信息 —— 该 Apple ID 可能缺少此应用的获取记录")
             }
+            // v0.3.364：**空 songList + 无 failureType / customerMessage ≠「该账号没有此应用的获取记录」。**
+            //
+            // 真机实测（2026-09-13）：
+            //   · 相关性实验：ChatGPT / Instagram / TikTok / 微信 在**不带** `externalVersionId` 时
+            //     一律是 HTTP 200 + songList=0 + 无任何错误码（Via / Gmail 则正常出包）——
+            //     这是 Apple 的**静默空包**，不是「没买过」。
+            //   · log4.txt：同一账号对 ChatGPT `buyProduct` 回的正是 5002 LicenseAlreadyExists
+            //     （即**已拥有**），却仍然拿不到不带版本号的包。
+            //   · 带旧版 `externalVersionId` 重打 volumeStore 就能出包，且响应里带该账号的**全量**
+            //     `softwareVersionExternalIdentifiers`（v0.3.361 下载链路已实锤）。
+            //
+            // 所以这里归一成 `emptyPackage`，让调用方用候选 `externalVersionId` 再试一次 ——
+            // 而不是抛一句把责任推给用户「可能缺少获取记录」的假结论。
+            throw ApplePackageError.emptyPackage
         }
 
         let item = items[0]
@@ -132,15 +147,20 @@ public enum VersionFinder {
         account: AppStoreAccount,
         app: Software,
         url: URL,
-        guid: String
+        guid: String,
+        externalVersionID: String?
     ) throws -> HTTPClient.Request {
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "creditDisplay": "",
             "guid": guid,
             "salableAdamId": app.id,
             // v0.3.258：对齐上游 ipatool 5f776fe（get_version_metadata 同款）
             "serialNumber": "0",
         ]
+        // v0.3.364：带上版本号 Apple 才可能出包（静默空包的唯一决定性变量，见 v0.3.361）
+        if let externalVersionID, !externalVersionID.isEmpty {
+            payload[StoreDownloadEndpoint.volumeStore.externalVersionIDKey] = externalVersionID
+        }
 
         let data = try PropertyListSerialization.data(fromPropertyList: payload, format: .xml, options: 0)
 
