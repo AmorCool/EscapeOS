@@ -16,10 +16,17 @@ public enum ApplePackageError: Error {
     /// v0.3.337：`volumeStoreDownloadProduct` 回了 **HTTP 200 + 空 songList**，
     /// 且 `failureType` / `customerMessage` 都为空（Apple 不给原因）。
     ///
-    /// 调用方应据此**再走一次「获取许可」再重试**：真机实测同一会话下，
-    /// 该 Apple ID 真正下载过的应用（Gmail）能拿到完整包，没建立过下载权的
-    /// （ChatGPT/Instagram/…）就是这种静默空包，而 **9610 那条路我们只在
-    /// 「明确报 9610」时才会去购买 —— 空包这一档此前永远不会触发购买**。
+    /// **v0.3.361 真机实测把这个空包的机制定死了**（旧注释里「该账号没建立过下载权」的说法已被证伪）：
+    /// 该端点在 body **不带 `externalVersionId`** 时，对**任何**应用都可能回这种静默空包；
+    /// 带上该账号可下的**旧**版本 ID 就出包，而**最新的两个 ID 仍会被拒**
+    /// （ChatGPT 实测：890134149 / 857195392 / 857146407 / 856638501 → 出包；
+    /// 890363403 / 890707559 → 空包，重跑 5 次稳定）。出包响应里会带
+    /// `softwareVersionExternalIdentifiers`（该账号可下的全套 ID）。
+    ///
+    /// 所以调用方的补救顺序是：**先用候选 `externalVersionId` 重打 volumeStore**（候选只吃一轮）
+    /// → 仍为空才刷新会话 / 获取许可。**空包 ≠ 9610**：9610 才是「真没这个应用的许可」，
+    /// 两者必须分开处理（实测同一账号对 ChatGPT 的 `buyProduct` 回 5002 已拥有，
+    /// 却仍拿不到不带版本号的包）。
     case emptyPackage
 }
 
