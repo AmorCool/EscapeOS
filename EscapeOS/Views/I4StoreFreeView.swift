@@ -41,8 +41,9 @@ struct I4StoreFreeView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("免登录下载")
         .navigationBarTitleDisplayMode(.inline)
+        // v0.3.367：用户要求顶栏搜索**常驻**（下滑也能搜），对齐主页「应用」板块的 .always。
         .searchable(text: $keyword,
-                    placement: .navigationBarDrawer(displayMode: .automatic),
+                    placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "搜索应用（无需登录）")
         .onSubmit(of: .search) { runSearch() }
         .onChange(of: rank) { _, _ in Task { await load() } }
