@@ -24,6 +24,8 @@ final class BLECoordinator: NSObject, ObservableObject {
     @Published private(set) var connectedPeerID: UUID?
     /// A 机：等待用户授权的连接请求（同一时刻只留一个）.
     @Published private(set) var pendingRequest: BluetoothConnectionRequest?
+    /// A 机：本次会话是否已拒绝过连接（拒绝后停广播，需用户点「重新开始广播」）.
+    @Published private(set) var hasDeniedPeers = false
 
     /// B 机收到 A 机下发的坐标（回调在 BLE 队列，调用方需自行切主线程）.
     var onCoordinate: ((CLLocationCoordinate2D) -> Void)?
@@ -60,6 +62,8 @@ final class BLECoordinator: NSObject, ObservableObject {
     /// 待授权请求（BLE 队列上的真值，避免跨线程读 @Published）.
     private var pendingRequestValue: BluetoothConnectionRequest?
     private var pendingCentral: CBCentral?
+    /// 本会话内被拒绝的 central（拒绝后不再询问、静默丢弃其数据）.
+    private var deniedCentrals: Set<UUID> = []
 
     private var centralManager: CBCentralManager?
     private var target: CBPeripheral?
@@ -176,7 +180,26 @@ final class BLECoordinator: NSObject, ObservableObject {
 
     /// A 机：拒绝待授权请求（含超时自动拒绝）.
     func denyPendingConnection() {
-        queue.async { [weak self] in self?.denyPendingConnectionLocked(reason: "已拒绝") }
+        queue.async { [weak self] in self?.denyPendingConnectionLocked() }
+    }
+
+    /// A 机：用户点「重新开始广播」——忘掉拒绝记录并恢复广播（拒绝后唯一的解冻入口）.
+    func resumeAdvertising() {
+        queue.async { [weak self] in
+            guard let self, self.role == .broadcaster, let peripheral = self.peripheralManager else { return }
+            self.deniedCentrals.removeAll()
+            self.subscribedCentrals.removeAll()
+            self.lastPeerActivity = nil
+            self.lastPushAt = nil
+            self.coordinateCharacteristic = nil
+            self.statusCharacteristic = nil
+            self.publish { self.hasDeniedPeers = false }
+            peripheral.stopAdvertising()
+            peripheral.removeAllServices()
+            // add 成功回调里会重新开始广播并把状态切回 .advertising.
+            peripheral.add(self.makeServiceLocked())
+            self.append("已重新开始广播")
+        }
     }
 
     // MARK: - 队列内实现
@@ -192,6 +215,7 @@ final class BLECoordinator: NSObject, ObservableObject {
         lastScanStart = .distantPast
         pendingRequestValue = nil
         pendingCentral = nil
+        deniedCentrals.removeAll()
         peersLocked.removeAll()
         discoveredPeripherals.removeAll()
 
@@ -216,6 +240,7 @@ final class BLECoordinator: NSObject, ObservableObject {
             self.nearby = []
             self.connectedPeerID = nil
             self.pendingRequest = nil
+            self.hasDeniedPeers = false
         }
     }
 
@@ -246,7 +271,7 @@ final class BLECoordinator: NSObject, ObservableObject {
         // 无人应答即自动拒绝：面板没打开时没人点按钮，绝不能默认放行.
         if let request = pendingRequestValue,
            now.timeIntervalSince(request.receivedAt) > Self.authorizationTimeout {
-            denyPendingConnectionLocked(reason: "连接请求超时，已拒绝")
+            denyPendingConnectionLocked()
         }
 
         if !subscribedCentrals.isEmpty {
@@ -272,8 +297,10 @@ final class BLECoordinator: NSObject, ObservableObject {
             return
         }
 
-        // 兜底：没有活跃连接就不该停着广播（不依赖 didUnsubscribeFrom 单个回调）.
-        guard let peripheral = peripheralManager,
+        // 兜底：没有活跃连接就不该停着广播（不依赖 didUnsubscribeFrom 单个回调）；
+        // 但拒绝记忆生效期间绝不自作主张恢复广播，必须等用户点「重新开始广播」.
+        guard deniedCentrals.isEmpty,
+              let peripheral = peripheralManager,
               coordinateCharacteristic != nil,
               !peripheral.isAdvertising else { return }
         startAdvertisingLocked(peripheral)
@@ -357,14 +384,6 @@ final class BLECoordinator: NSObject, ObservableObject {
         return service
     }
 
-    /// 重建服务并重新广播（peripheral 侧无「拒绝连接」API，拒绝只能靠拆服务）.
-    private func refreshServicesLocked() {
-        guard let peripheral = peripheralManager else { return }
-        peripheral.stopAdvertising()
-        peripheral.removeAllServices()
-        peripheral.add(makeServiceLocked())
-    }
-
     private func setPendingRequestLocked(_ request: BluetoothConnectionRequest?) {
         pendingRequestValue = request
         publish { self.pendingRequest = request }
@@ -374,6 +393,7 @@ final class BLECoordinator: NSObject, ObservableObject {
         guard let request = pendingRequestValue, let central = pendingCentral else { return }
         setPendingRequestLocked(nil)
         pendingCentral = nil
+        deniedCentrals.remove(request.centralIdentifier)
         if !subscribedCentrals.contains(where: { $0.identifier == central.identifier }) {
             subscribedCentrals.append(central)
         }
@@ -387,12 +407,26 @@ final class BLECoordinator: NSObject, ObservableObject {
         if let pending = pendingPayload { push(pending) }
     }
 
-    private func denyPendingConnectionLocked(reason: String) {
+    /// 拒绝（手动 / 超时共用）：记住该 central、拆服务踢掉对端、不重新广播.
+    /// 拆服务是 peripheral 侧唯一的「拒绝连接」手段；不重广播才不会形成「重连→重问」循环.
+    private func denyPendingConnectionLocked() {
         guard let request = pendingRequestValue else { return }
         setPendingRequestLocked(nil)
         pendingCentral = nil
-        append("\(reason) \(request.displayName) 的连接")
-        refreshServicesLocked()
+        deniedCentrals.insert(request.centralIdentifier)
+        subscribedCentrals.removeAll()
+        lastPeerActivity = nil
+        lastPushAt = nil
+        coordinateCharacteristic = nil
+        statusCharacteristic = nil
+        peripheralManager?.stopAdvertising()
+        peripheralManager?.removeAllServices()
+        publish {
+            self.peerName = nil
+            self.hasDeniedPeers = true
+            self.state = .suspended
+        }
+        append("已拒绝 \(request.displayName)（本次会话不再询问）")
     }
 
     private func publishNearbyLocked() {
@@ -490,6 +524,11 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
             fail("广播服务注册失败：\(error.localizedDescription)")
             return
         }
+        // 拒绝记忆生效期间只注册服务、不广播.
+        guard deniedCentrals.isEmpty else {
+            publish { self.state = .suspended }
+            return
+        }
         startAdvertisingLocked(peripheral)
     }
 
@@ -508,6 +547,8 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
         didSubscribeTo characteristic: CBCharacteristic
     ) {
         guard characteristic.uuid == BluetoothLink.coordinateCharacteristicUUID else { return }
+        // 已拒绝过的 central 不再询问、也不放行（拒绝记忆生效期间静默忽略）.
+        guard !deniedCentrals.contains(central.identifier) else { return }
         // 已建立连接：停止广播，之后只靠 notify 推送（降低掉线面）.
         peripheral.stopAdvertising()
         // 不直接放行：先挂起，交由 UI 询问用户（同一时刻只留一个待处理请求）.
@@ -535,6 +576,11 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
         lastPeerActivity = nil
         lastPushAt = nil
         publish { self.peerName = nil }
+        // 拒绝记忆生效期间不回弹广播，保持「已停止广播」.
+        guard deniedCentrals.isEmpty else {
+            publish { self.state = .suspended }
+            return
+        }
         updateState(.advertising)
         startAdvertisingLocked(peripheral)
         append("对端已断开，重新广播")

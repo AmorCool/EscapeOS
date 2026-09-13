@@ -29,7 +29,7 @@ enum BluetoothLinkRole: String, CaseIterable, Identifiable {
     }
 }
 
-/// 面板状态机（6 态）.错误原因单独放 `lastError`，不占状态位.
+/// 面板状态机（7 态）.错误原因单独放 `lastError`，不占状态位.
 enum BluetoothLinkState: Equatable {
     case off
     case advertising
@@ -37,6 +37,8 @@ enum BluetoothLinkState: Equatable {
     case connecting
     case connected
     case synced
+    /// A 机拒绝过连接：已停广播，等用户点「重新开始广播」.
+    case suspended
 
     var label: String {
         switch self {
@@ -46,6 +48,7 @@ enum BluetoothLinkState: Equatable {
         case .connecting: return "正在连接"
         case .connected: return "已连接"
         case .synced: return "已同步"
+        case .suspended: return "已停止广播"
         }
     }
 }
@@ -58,11 +61,11 @@ enum BluetoothLink {
     /// B 机 write、A 机接收：状态回报上行.
     static let statusCharacteristicUUID = CBUUID(string: "E5C0A102-1B2F-4E6A-9A11-0E50F1A1B001")
 
-    /// 广播名：31 字节广播包里 serviceUUID 已占 16 字节，名字必须短.
+    /// 广播名：广播包用户可用数据只有 28 字节，128-bit serviceUUID 已占 18，名字必须极短.
     static func broadcastName(for role: BluetoothLinkRole) -> String {
         switch role {
-        case .broadcaster: return "EscapeSpace-T"
-        case .receiver: return "EscapeSpace-S"
+        case .broadcaster: return "ES-T"
+        case .receiver: return "ES-S"
         }
     }
 
@@ -75,9 +78,9 @@ enum BluetoothLink {
         }
     }
 
-    /// 从广播名反解角色（`CBPeripheral.name` 可能为空，不能只靠它）.
+    /// 从广播名反解角色：只作附加确认（广播名装不下时会被系统丢弃，不能依赖它）.
     static func role(fromBroadcastName name: String?) -> BluetoothLinkRole? {
-        guard let name, name.hasPrefix("EscapeSpace-") else { return nil }
+        guard let name else { return nil }
         if name.hasSuffix("-T") { return .broadcaster }
         if name.hasSuffix("-S") { return .receiver }
         return nil
@@ -87,21 +90,20 @@ enum BluetoothLink {
 /// 扫描到的附近设备（按 peripheral identifier 去重累积）.
 struct BluetoothNearbyPeer: Identifiable, Equatable {
     let id: UUID
-    /// 广播名原始值（后台广播不带 localName 时可能为空）.
+    /// 广播名原始值（可能为空，仅作排查参考）.
     var name: String
     var role: BluetoothLinkRole?
     var rssi: Int
     var lastSeen: Date
 
-    /// 列表展示名：能反解角色时显示 `EscapeSpace（角色）`.
+    /// 只有「模拟终端」在广播，所以扫到的对端必然是终端；解析不到广播名也按终端渲染，
+    /// 不允许退化成「未知设备」.
     var displayName: String {
-        if let role = role { return BluetoothLink.displayName(for: role) }
-        if !name.isEmpty { return name }
-        return "EscapeSpace"
+        BluetoothLink.displayName(for: role ?? .broadcaster)
     }
 
     /// 角色文案（窄位置用短名）.
-    var roleText: String { role?.shortTitle ?? "未知角色" }
+    var roleText: String { (role ?? .broadcaster).shortTitle }
 }
 
 /// A 机收到的待授权连接请求.

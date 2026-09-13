@@ -62,6 +62,7 @@ struct BluetoothPanelView: View {
             Text("B 机在「附近设备」里点 A 机，A 机弹窗点「允许」后开始应用坐标。")
             Text("双方需保持 App 在前台。")
             Text("蓝牙为可选的跨设备扩展；单机无需第二台设备，直接用上方虚拟定位。")
+            Text("被拒绝后需点「重新开始广播」才能再次配对。")
         }
         .foregroundStyle(.secondary)
     }
@@ -154,6 +155,14 @@ struct BluetoothPanelView: View {
                     Label("立即下发图钉坐标", systemImage: "location.fill")
                 }
                 .disabled(!enabled || session.pin == nil)
+
+                if coordinator.hasDeniedPeers {
+                    Button {
+                        coordinator.resumeAdvertising()
+                    } label: {
+                        Label("重新开始广播", systemImage: "arrow.clockwise")
+                    }
+                }
             }
 
             if let hint = hint {
@@ -221,7 +230,7 @@ struct BluetoothPanelView: View {
     private var stateColor: Color {
         switch coordinator.state {
         case .off: return .primary.opacity(0.55)
-        case .advertising, .scanning, .connecting: return LocusTheme.statusWarn
+        case .advertising, .scanning, .connecting, .suspended: return LocusTheme.statusWarn
         case .connected, .synced: return LocusTheme.statusGood
         }
     }
