@@ -17,8 +17,11 @@ enum LocationEngineError: LocalizedError {
     case locationSet
     case locationClear
     case notActive
-    /// 设备服务表里没有定位通道（`com.apple.instruments.dtservicehub`），
-    /// 与「隧道通了但握手失败」区分开，避免用户看到泛化的超时/远端错误.
+    /// 设备服务表里没有定位通道，与「隧道通了但握手失败」区分开，
+    /// 避免用户看到泛化的超时/远端错误.
+    ///
+    /// **预留**：当前不由预检返回（预检已降级为纯诊断）。等真机实测确认我们实际走的
+    /// 入口服务（dtservicehub 还是 remoteserver）后，再决定是否启用硬门槛.
     case channelUnavailable
 
     var errorDescription: String? {
@@ -67,6 +70,7 @@ enum LocationEngine {
     private static let simulationCreate: Int32 = 10
     private static let locationSet: Int32 = 11
     private static let locationClear: Int32 = 12
+    /// 预留错误码：预检已降级为纯诊断、暂不返回；`from(code:)` 的映射保留备用.
     private static let channelUnavailableCode: Int32 = 13
 
     /// iOS 17+ 定位通道的 RSD 服务名（DTX/Instruments 入口）.
@@ -233,12 +237,11 @@ enum LocationEngine {
             return tunnelCreate
         }
 
-        // 通道预检：服务表里没有定位通道就直接收口，不再往下走握手拿泛化错误.
-        // 必须挂在上面这条已成型的隧道上，绝不另开（同 hostname 并发建隧道会互抢）.
-        guard let handshakeHandle = handshake,
-              preflightChannelLocked(handshakeHandle) else {
-            cleanup()
-            return channelUnavailableCode
+        // 定位通道预检：**只诊断、不拦截**；依据 = crate `RsdService::rsd_service_name()`
+        // 返回 dtservicehub，但**尚未真机实测**，而反方旁证（牛蛙 / iAnyGo 家族）指向
+        // remoteserver —— 故不做硬门槛，避免赌坏现有可用路径。无论可用与否都继续握手.
+        if let handshakeHandle = handshake {
+            preflightChannelLocked(handshakeHandle)
         }
 
         if let remoteServerError = remote_server_connect_rsd(adapter, handshake, &remoteServer) {
@@ -257,34 +260,35 @@ enum LocationEngine {
         return ok
     }
 
-    /// 通道预检：查 RSD 握手自带的服务表里有没有定位通道，并记录 port / remoteXPC 供诊断.
-    /// 判定只用「服务在不在」；取详情失败不影响判定（详情仅写日志）.
-    private static func preflightChannelLocked(_ handshake: OpaquePointer) -> Bool {
+    /// 定位通道预检（**只诊断、不拦截**）：查 RSD 握手自带的服务表里有没有 dtservicehub，
+    /// 并把 port / remoteXPC 写进日志，供判断方案二到底该走哪个入口。
+    /// 不做硬门槛：结论尚未真机实测，且反方旁证指向 remoteserver，拦错会打断现有可用路径.
+    /// 必须挂在本条已成型的隧道上，绝不另开（同 hostname 并发建隧道会互抢）.
+    private static func preflightChannelLocked(_ handshake: OpaquePointer) {
         var available = false
         if let error = channelServiceName.withCString({ rsd_service_available(handshake, $0, &available) }) {
             idevice_error_free(error)
             setChannelStatus(.unavailable)
-            LoginLogger.shared.log("定位通道预检：服务表查询失败")
-            return false
+            LoginLogger.shared.log("[定位通道] 预检：服务表查询失败")
+            return
         }
         guard available else {
             setChannelStatus(.unavailable)
-            LoginLogger.shared.log("定位通道预检：设备未暴露 \(channelServiceName)")
-            return false
+            LoginLogger.shared.log("[定位通道] 预检：\(channelServiceName) 不可用（设备未暴露）")
+            return
         }
 
         var info: UnsafeMutablePointer<CRsdService>?
         if let error = channelServiceName.withCString({ rsd_get_service_info(handshake, $0, &info) }) {
             idevice_error_free(error)
-            LoginLogger.shared.log("定位通道预检：\(channelServiceName) 可用，但取详情失败")
+            LoginLogger.shared.log("[定位通道] 预检：\(channelServiceName) 可用，但取详情失败")
         } else if let info {
             defer { rsd_free_service(info) }
             LoginLogger.shared.log(
-                "定位通道预检：\(channelServiceName) 可用（port \(info.pointee.port)，remoteXPC \(info.pointee.uses_remote_xpc)）"
+                "[定位通道] 预检：\(channelServiceName) 可用（port \(info.pointee.port)，remoteXPC \(info.pointee.uses_remote_xpc)）"
             )
         }
         setChannelStatus(.ready)
-        return true
     }
 
     private static func clearLocked() -> Int32 {
