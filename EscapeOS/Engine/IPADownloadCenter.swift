@@ -49,6 +49,17 @@ final class IPADownloadCenter: ObservableObject {
     }
 
     struct Job: Identifiable {
+
+        /// v0.3.383：失败发生在**哪个阶段** —— 界面上「下载失败」与「安装失败」是两件事：
+        /// 前者文件可能根本不完整/不存在，后者文件是好的、卡在安装环节。
+        /// 一律报「安装失败」属于错标（性质同「多行齐显安装中」：显示错 > 显示少）。
+        enum FailureStage {
+            /// 下载链路（取直链/下载/落盘/文件不存在）
+            case download
+            /// `AppStoreInstallService.installLocalIPA` 这条安装链路
+            case install
+        }
+
         let id = UUID()
         var name: String
         var bundleId: String?
@@ -63,6 +74,8 @@ final class IPADownloadCenter: ObservableObject {
         var stageText = "等待中"
         var localFileName: String?
         var error: String?
+        /// 仅当 `phase == .failed` 时有意义；按**失败发生在哪个阶段**打标，不去猜错误码
+        var failureStage: FailureStage? = nil
 
         /// 只有「有直链且正在下载/已暂停」才允许暂停/继续
         var canPause: Bool {
@@ -211,6 +224,8 @@ final class IPADownloadCenter: ObservableObject {
         guard let hit = await SourcePackageLocator.find(bundleId: bundleId, name: name) else {
             update(id) {
                 $0.phase = .failed
+                // 还没拿到直链就失败了 → 属下载/取包链路，不是安装链路
+                $0.failureStage = .download
                 $0.stageText = "未找到安装包"
                 $0.error = "免登录源里没有该应用"
             }
@@ -276,6 +291,9 @@ final class IPADownloadCenter: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.update(id) {
+                        // v0.3.383：这条链路「下载 + 安装」在同一个调用里，按**抛错时的 phase**打标
+                        // （已进 .installing 才算安装失败，否则是下载阶段没走完）
+                        $0.failureStage = $0.phase == .installing ? .install : .download
                         $0.phase = .failed
                         $0.error = error.localizedDescription
                         $0.stageText = "失败"
@@ -290,6 +308,14 @@ final class IPADownloadCenter: ObservableObject {
     @discardableResult
     func installLocal(fileName: String, displayName: String, bundleId: String?,
                       version: String?, iconURL: String?) -> UUID {
+        // v0.3.383：文件不在（被外部删除/移走）→ 属「下载/文件类」，**不是**安装失败
+        let path = IPADownloadLibrary.shared.path(forFileName: fileName)
+        guard FileManager.default.fileExists(atPath: path) else {
+            LoginLogger.shared.log("[下载中心] 本地包不存在 \(fileName)", category: .appStore)
+            return recordFileFailure(fileName: fileName, displayName: displayName,
+                                     bundleId: bundleId, version: version,
+                                     iconURL: iconURL, reason: "文件不存在")
+        }
         var job = Job(name: displayName, bundleId: bundleId, version: version, iconURL: iconURL,
                       remoteURL: nil, source: .i4Free, accountEmail: nil, autoInstall: true)
         job.phase = .installing
@@ -297,7 +323,6 @@ final class IPADownloadCenter: ObservableObject {
         job.localFileName = fileName
         jobs.insert(job, at: 0)
         let id = job.id
-        let path = IPADownloadLibrary.shared.path(forFileName: fileName)
         Task.detached(priority: .userInitiated) {
             do {
                 try await AppStoreInstallService.installLocalIPA(
@@ -316,6 +341,8 @@ final class IPADownloadCenter: ObservableObject {
                                        category: .appStore)
                 await MainActor.run {
                     self.update(id) {
+                        // 走到了这里就是安装链路本身失败（文件存在且可读）
+                        $0.failureStage = .install
                         $0.phase = .failed
                         $0.error = error.localizedDescription
                         $0.stageText = "失败"
@@ -324,6 +351,24 @@ final class IPADownloadCenter: ObservableObject {
             }
         }
         return id
+    }
+
+    /// v0.3.383：登记一次**文件/下载类**失败（本地包不存在等）。
+    /// 文件本身不完整/不存在，和「装失败」不是一回事 —— 行上要显示「下载失败」而不是「安装失败」。
+    /// 同文件的旧失败记录先清掉，避免反复点重试时把 jobs 堆满。
+    @discardableResult
+    func recordFileFailure(fileName: String, displayName: String, bundleId: String?,
+                           version: String?, iconURL: String?, reason: String) -> UUID {
+        jobs.removeAll { $0.localFileName == fileName && !$0.phase.isBusy }
+        var job = Job(name: displayName, bundleId: bundleId, version: version, iconURL: iconURL,
+                      remoteURL: nil, source: .i4Free, accountEmail: nil, autoInstall: true)
+        job.phase = .failed
+        job.failureStage = .download
+        job.stageText = "文件不存在"
+        job.error = reason
+        job.localFileName = fileName
+        jobs.insert(job, at: 0)
+        return job.id
     }
 
     // MARK: - 暂停 / 继续 / 删除 / 重试
@@ -366,6 +411,7 @@ final class IPADownloadCenter: ObservableObject {
             $0.phase = .waiting
             $0.progress = 0
             $0.error = nil
+            $0.failureStage = nil
             $0.stageText = "排队中"
         }
         pump()
@@ -450,6 +496,8 @@ final class IPADownloadCenter: ObservableObject {
 
     private func finishWithError(_ id: UUID, _ error: Error) {
         update(id) {
+            // 下载链路（取流/落盘/HTTP 状态码）失败 —— 文件可能根本不完整
+            $0.failureStage = .download
             $0.phase = .failed
             $0.error = error.localizedDescription
             $0.stageText = "失败"
@@ -478,6 +526,8 @@ final class IPADownloadCenter: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.update(id) {
+                        // 包已经下完落地了，这里失败只可能是安装链路
+                        $0.failureStage = .install
                         $0.phase = .failed
                         $0.error = error.localizedDescription
                         $0.stageText = "安装失败"

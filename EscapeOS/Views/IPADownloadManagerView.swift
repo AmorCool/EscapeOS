@@ -241,20 +241,26 @@ struct IPADownloadManagerView: View {
                 }
                 .fixedSize()
             } else {
-                // v0.3.382：这一行上一次装失败 → 红字「安装失败」，**仍可点**（点了就是重试）。
+                // v0.3.383：这一行上一次失败 → 红字标出**失败阶段**，**仍可点**（点了就是重试）。
+                // 「下载失败」（文件可能不完整/不存在）与「安装失败」（文件是好的、卡在安装环节）
+                // 对用户是两件事，不能都报「安装失败」——错标比不标更糟。
                 // 不再静默变回「重装」按钮：用户点了安装、什么都没发生、按钮又变回去，他根本不知道失败了。
-                let failed = finishedJob(for: item)?.phase == .failed
+                let last = finishedJob(for: item)
+                let failText: String? = last?.phase == .failed
+                    ? (last?.failureStage == .download ? "下载失败" : "安装失败")
+                    : nil
+                let isFailed = failText != nil
                 Button {
                     install(item)
                 } label: {
-                    Text(failed ? "安装失败" : (item.lastInstalledAt == nil ? "安装" : "重装"))
+                    Text(failText ?? (item.lastInstalledAt == nil ? "安装" : "重装"))
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
                         .frame(minWidth: 40)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background((failed ? Color.red : Color.blue).opacity(0.14), in: Capsule())
-                        .foregroundStyle(failed ? Color.red : Color.blue)
+                        .background((isFailed ? Color.red : Color.blue).opacity(0.14), in: Capsule())
+                        .foregroundStyle(isFailed ? Color.red : Color.blue)
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
@@ -417,6 +423,10 @@ struct IPADownloadManagerView: View {
         let filePath = IPADownloadLibrary.shared.path(for: item)
         guard FileManager.default.fileExists(atPath: filePath) else {
             ToastCenter.shared.show("文件不存在：\(item.fileName)")
+            // v0.3.383：文件类失败也要落到行上（红字「下载失败」），别只弹个转瞬即逝的 toast
+            center.recordFileFailure(fileName: item.fileName, displayName: item.title,
+                                     bundleId: item.bundleId, version: item.version,
+                                     iconURL: item.iconURL, reason: "文件不存在")
             reload()
             return
         }
