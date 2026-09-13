@@ -10,7 +10,8 @@ import UIKit
 /// · 覆盖安装 → 下载中心 `installLocal`（→ `AppStoreInstallService.installLocalIPA`）
 /// · 打开     → `JITEnableService.launchApp(bundleID:)`
 /// · 分享     → `ShareSheet`（`UIActivityViewController` 包装）
-/// · 提取下载链接 → `IPALocalHTTPServer.shared.start(fileURL:purpose:.share)`（本机 HTTP 服务，取 `Serving.packageURL`）
+/// · 复制下载链接 → 读包内 `iTunesMetadata.plist` 的 `itemId` 拼 **App Store 商店链接**（纯读本地文件，零网络零服务）
+/// · 提取下载链接 → 台账 `IPADownloadItem.sourceURL`（下载时回填的 **IPA 包原链接**，纯读台账，零网络）
 /// · 复制     → `UIPasteboard.general.string`
 /// · 提示     → `ToastCenter.shared.show`
 struct IPADownloadActionsSheet: View {
@@ -51,7 +52,9 @@ struct IPADownloadActionsSheet: View {
         let action: () -> Void
     }
 
-    /// 台账里真实存在的来源直链（没有就不显示「复制下载链接」）
+    /// 台账里真实存在的来源直链 = 「**提取下载链接**」的取值（IPA 包原链接，下载时回填）。
+    /// ⚠️ 它同时被「操作」区的「复制下载链接」行当**显示门控**用（历史遗留）—— 那行的内容
+    /// 已改成包内 `iTunesMetadata` 的商店链接，门控与内容不再同源（见 `actionRows`）。
     private var sourceLink: String? {
         guard let raw = item.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty, let url = URL(string: raw), url.scheme != nil else { return nil }
@@ -185,6 +188,10 @@ struct IPADownloadActionsSheet: View {
 
     private var actionRows: [RowSpec] {
         var rows: [RowSpec] = [openRow]
+        // ⚠️ 这里仍按「台账有 sourceURL」决定是否显示 —— 那是历史门控（当时这行的内容是台账直链）。
+        // 现在这行内容是**包内 iTunesMetadata 的商店链接**，与台账 sourceURL 不同源：
+        // 台账没直链时这行会被藏起来（哪怕包里能读出商店链接）。
+        // 按 team-lead 指示本轮**不动其它行**，故门控保持原样、只把行为换掉。
         if sourceLink != nil {
             rows.append(RowSpec(icon: "link", tint: .teal, title: "复制下载链接") {
                 copyLink()
@@ -207,9 +214,8 @@ struct IPADownloadActionsSheet: View {
     }
 
     /// 「提取下载链接」行。置灰规则：本机服务器当前被「在线安装」占用（`Purpose.ota`）
-    /// 时不可点 —— 一 `start()` 就会 `stop()` 掉 OTA 会话，把正在进行的系统安装打断。
-    /// 生成一个**本机下载链接**发出去（不依赖有没有来源直链）：
-    /// 复用 `IPALocalHTTPServer` 只服务这一个文件的只读路由 `/package.ipa`。
+    /// 时不可点 —— OTA 正在进行（系统正在装），此时不给复制链接。
+    /// 本行取值是**台账里的 IPA 包原链接**（`sourceLink`）：纯读台账，不读包、不碰任何服务。
     private var extractLinkRow: RowSpec {
         let blockedByOTA = IPALocalHTTPServer.shared.currentPurpose == .ota
         return RowSpec(icon: "antenna.radiowaves.left.and.right", tint: .teal, title: "提取下载链接",
@@ -335,9 +341,38 @@ struct IPADownloadActionsSheet: View {
         }
     }
 
+    /// 复制下载链接：复制这个 App 在 **App Store 上的商店来源链接**。
+    ///
+    /// 取值：包内 `Payload/<App>.app/iTunesMetadata.plist` 的 **`itemId`**（商店商品号），
+    /// 拼成 `https://apps.apple.com/<当前商店区>/app/id<itemId>`。
+    ///
+    /// **纯读本地文件：零网络、零服务**（不启动 `IPALocalHTTPServer`）。
+    /// 与台账 `sourceURL` **无关** —— 那是「提取下载链接」的取值，两行严格互斥、不互相回落。
+    /// 自签 / 第三方重签包一般没有 `iTunesMetadata` → 提示「无商店链接」。
     private func copyLink() {
-        guard let link = sourceLink else { return }
+        let path = IPADownloadLibrary.shared.path(for: item)
+        guard FileManager.default.fileExists(atPath: path) else {
+            ToastCenter.shared.show("安装包已不存在")
+            return
+        }
+        guard let data = IPAPackageInspector.extractiTunesMetadata(ipaPath: path),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let meta = plist as? [String: Any],
+              let itemId = Self.itemIdString(meta["itemId"]) else {
+            // 包里没有商品号 → 老老实实说没有，**不回落台账**
+            LoginLogger.shared.log("[下载面板] 包内无 iTunesMetadata.itemId，给不出商店链接", category: .appStore)
+            ToastCenter.shared.show("无商店链接")
+            return
+        }
+        if let bid = meta["softwareVersionBundleId"] as? String,
+           let expect = item.bundleId, !expect.isEmpty, bid != expect {
+            // 只记日志、不阻断：商品号仍可用，归属对不上属于诊断信息
+            LoginLogger.shared.log("[下载面板] 包内 bundleId \(bid) 与台账 \(expect) 不一致", category: .appStore)
+        }
+        let link = Self.storeLink(itemId: itemId)
         UIPasteboard.general.string = link
+        LoginLogger.shared.log("[下载面板] 复制下载链接，来自包内 iTunesMetadata（itemId \(itemId)）"
+                               + " → \(Self.masked(link))", category: .appStore)
         ToastCenter.shared.show("已复制下载链接")
     }
 
@@ -350,28 +385,51 @@ struct IPADownloadActionsSheet: View {
         shareTarget = ShareTarget(url: url)
     }
 
-    /// 提取下载链接：把本地包用**本机 HTTP 服务**发出去，给这个包生成一个下载地址。
-    /// 地址由服务端给（`Serving.packageURL`）：优先 `http://<设备局域网IP>:<port>/package.ipa`，
-    /// 取不到局域网 IP 才回落 `127.0.0.1`（见 `IPALocalHTTPServer.start`）。**不依赖来源直链。**
+    /// 提取下载链接：复制这个 IPA **包本身的下载原链接**（当初是从哪个 URL 下下来的）。
+    ///
+    /// 取值：台账 `IPADownloadItem.sourceURL` —— 下载时由 `IPADownloadManagerView.syncSourceURLs()`
+    /// 从 `IPADownloadCenter.Job.remoteURL` 回填（例如爱思的 `https://d-app6.i4.cn/soft/....ipa`）。
+    ///
+    /// **纯读台账：零网络、零服务、不读包** —— 与包内 `iTunesMetadata` 无关
+    /// （那是「复制下载链接」的取值，两行严格互斥、不互相回落）。
+    /// 台账没有来源直链 → 提示「无下载链接」。
     private func extractDownloadLink() {
-        let url = URL(fileURLWithPath: IPADownloadLibrary.shared.path(for: item))
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            ToastCenter.shared.show("安装包已不存在")
+        guard let link = sourceLink else {
+            LoginLogger.shared.log("[下载面板] 台账无 sourceURL，给不出 IPA 原链接", category: .appStore)
+            ToastCenter.shared.show("无下载链接")
             return
         }
-        do {
-            // 与「在线安装」共用同一个 shared 实例；start() 内部会先 stop() 掉上一份会话
-            let serving = try IPALocalHTTPServer.shared.start(fileURL: url, purpose: .share)
-            UIPasteboard.general.string = serving.packageURL
-            LoginLogger.shared.log("[下载面板] 本机分享服务已启动 \(serving.packageURL)", category: .appStore)
-            ToastCenter.shared.show("链接已复制")
-            // 不常驻：10 分钟后自动关（别让服务器一直开着）
-            IPALocalHTTPServer.shared.stop(after: 10 * 60)
-        } catch {
-            LoginLogger.shared.log("[下载面板] 本机分享服务启动失败：\(error.localizedDescription)",
-                                   category: .appStore)
-            ToastCenter.shared.show("无法生成链接")
+        UIPasteboard.general.string = link
+        LoginLogger.shared.log("[下载面板] 提取下载链接，来自台账 sourceURL → \(Self.masked(link))",
+                               category: .appStore)
+        ToastCenter.shared.show("链接已复制")
+    }
+
+    // MARK: - 包内元数据取值
+
+    /// `itemId` 在 plist 里既可能是数字也可能是字符串，统一成字符串
+    private static func itemIdString(_ raw: Any?) -> String? {
+        let text: String?
+        if let n = raw as? NSNumber { text = n.stringValue }
+        else if let s = raw as? String { text = s }
+        else { text = nil }
+        guard let t = text?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+        return t
+    }
+
+    /// 商品号 → 商店链接。区用当前商店区；`countryCode` 取不到具体区时才不带区
+    private static func storeLink(itemId: String) -> String {
+        let cc = AppStoreService.countryCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return cc.isEmpty ? "https://apps.apple.com/app/id\(itemId)"
+                          : "https://apps.apple.com/\(cc)/app/id\(itemId)"
+    }
+
+    /// 日志脱敏：只留 host + 路径前 16 个字符，别把整条链接写进日志
+    private static func masked(_ link: String) -> String {
+        guard let url = URL(string: link), let host = url.host else {
+            return String(link.prefix(24)) + "…"
         }
+        return "\(host)\(url.path.prefix(16))…"
     }
 
     /// 打开：设备上装了才给点 —— 复用 `JITEnableService.launchApp`
