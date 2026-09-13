@@ -36,6 +36,8 @@ final class BLECoordinator: NSObject, ObservableObject {
     private static let minScanRestartInterval: TimeInterval = 2
     /// B 机静默自愈：连上并订阅后超过这个时长收不到任何负载就重连（比 A 侧略大，让 A 先动）.
     private static let receiverSilentTimeout: TimeInterval = 30
+    /// 相同日志的抑制窗口.
+    private static let logSuppressWindow: TimeInterval = 3
 
     private var peripheralManager: CBPeripheralManager?
     private var coordinateCharacteristic: CBMutableCharacteristic?
@@ -55,6 +57,8 @@ final class BLECoordinator: NSObject, ObservableObject {
     /// B 机存活时间戳：任何收到的负载都刷新（含被去重丢弃的包）.
     private var lastReceivedAt: Date?
     private var lastScanStart = Date.distantPast
+    private var lastLogLine: String?
+    private var lastLogAt: Date?
 
     private override init() {
         super.init()
@@ -300,6 +304,15 @@ final class BLECoordinator: NSObject, ObservableObject {
     }
 
     private func append(_ line: String) {
+        let now = Date()
+        // 很短窗口内的同一条日志只留一条（append 全在 BLE 队列调用，无需额外同步）.
+        if let previous = lastLogLine, previous == line,
+           let previousAt = lastLogAt,
+           now.timeIntervalSince(previousAt) < Self.logSuppressWindow {
+            return
+        }
+        lastLogLine = line
+        lastLogAt = now
         let stamped = "\(Self.timeString()) \(line)"
         let run = {
             self.log.insert(stamped, at: 0)
