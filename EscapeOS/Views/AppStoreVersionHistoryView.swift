@@ -153,7 +153,19 @@ struct AppStoreVersionHistoryView: View {
             }
         }
         .onChange(of: sourceRaw) { _, _ in startLoad() }
-        .task { startLoad() }
+        // v0.3.367：给页面挂一个**存活期取消锚**。用户离开页面时 SwiftUI 会取消这个结构化
+        // 任务，我们借 `onCancel` 把取消转达给在制的那次加载（含分页与后台补日期）——
+        // 否则切走后还会把剩下 10 条 metadata 白打完。取消是转达式的，不改动加载本身的状态。
+        .task {
+            startLoad()
+            await withTaskCancellationHandler {
+                // 只作锚：一直挂到页面消失；被取消时 sleep 立刻抛出，随后走 onCancel。
+                try? await Task.sleep(nanoseconds: 3_600_000_000_000)
+            } onCancel: {
+                loadTask?.cancel()
+                harvestTask?.cancel()
+            }
+        }
     }
 
     private var summaryText: String {
