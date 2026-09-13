@@ -57,6 +57,8 @@ enum I4PCStoreClient {
         var sizeBytes: Int64?
         var minOS: String?
         var category: String?          // typeName
+        /// 安装包类型（详情接口 `appinfo.xhtml` 的参数之一）
+        var pkgType: String?
         /// IPA 相对路径（`d-app6.i4.cn/soft/` 之下）
         var ipaPath: String?
         var plistPath: String?
@@ -69,6 +71,57 @@ enum I4PCStoreClient {
         }
         var plistURL: URL? {
             guard let s = I4PCStoreClient.normalizeAssetURL(plistPath) else { return nil }
+            return URL(string: s)
+        }
+    }
+
+    /// v0.3.364：应用详情里的一个**历史版本**（来自 `appinfo.xhtml` 的 `historyversion`）。
+    ///
+    /// 字段名取自爱思 PC V9 商店详情页（`index-4f71eb97.js` 里 `appDetail` 组件）实测渲染：
+    /// `T.Version` / `T.releasetime` / `T.Size` / `T.versionnote`，下载用 `T.path`。
+    struct I4Version: Identifiable, Hashable {
+        var id: String                 // versionid
+        var version: String
+        var sizeText: String?
+        var sizeBytes: Int64?
+        var releaseTime: String?       // releasetime，形如 "2025-06-06"
+        var note: String?              // versionnote，多数为空
+        var minOS: String?
+        var md5: String?
+        /// 该版本的 IPA 相对地址（http 明文，需规范化）
+        var ipaPath: String?
+
+        var ipaURL: URL? {
+            guard let s = I4PCStoreClient.normalizeAssetURL(ipaPath) else { return nil }
+            return URL(string: s)
+        }
+    }
+
+    /// v0.3.364：应用详情（`appinfo.xhtml`）。
+    struct I4AppDetail: Hashable {
+        var appId: String
+        var name: String
+        var bundleId: String?
+        var icon: String?
+        var screenshots: [String] = []
+        var version: String?
+        var sizeText: String?
+        var sizeBytes: Int64?
+        var minOS: String?
+        var category: String?
+        var company: String?
+        var language: String?
+        var updateTime: String?
+        var newVersionNote: String?
+        var longNote: String?
+        var shortNote: String?
+        var downloadCount: String?
+        var ipaPath: String?
+        var plistPath: String?
+        var versions: [I4Version] = []
+
+        var ipaURL: URL? {
+            guard let s = I4PCStoreClient.normalizeAssetURL(ipaPath) else { return nil }
             return URL(string: s)
         }
     }
@@ -126,6 +179,7 @@ enum I4PCStoreClient {
         case decode
         case empty
         case notSigned
+        case detailUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -134,6 +188,7 @@ enum I4PCStoreClient {
             case .decode: return "返回数据解析失败"
             case .empty: return "该分组没有数据"
             case .notSigned: return "该应用在服务端没有可用的已签名安装包"
+            case .detailUnavailable: return "该应用暂无详情"
             }
         }
     }
@@ -160,6 +215,23 @@ enum I4PCStoreClient {
 
     private static func jsonObject(_ data: Data) -> [String: Any]? {
         (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    /// v0.3.364：表单 POST（`appinfo.xhtml` 是 POST + `application/x-www-form-urlencoded`）
+    private static func post(_ url: URL, form: [String: String]) async throws -> Data {
+        var comps = URLComponents()
+        comps.queryItems = form.map { URLQueryItem(name: $0.key, value: $0.value) }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue(referer, forHTTPHeaderField: "Referer")
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.httpBody = comps.percentEncodedQuery?.data(using: .utf8)
+        let (data, resp) = try await session.data(for: req)
+        if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw StoreError.http(http.statusCode)
+        }
+        return data
     }
 
     // MARK: - 列表
@@ -231,7 +303,82 @@ enum I4PCStoreClient {
         return []
     }
 
+    // MARK: - 详情 + 历史版本
+
+    /// v0.3.364：应用详情（免登录）。
+    ///
+    /// 来源为爱思 PC V9 商店详情页（`app4.i4.cn/pc_v9` 的 `appDetail` 组件）实测调用：
+    /// ```js
+    /// gs = a => Ce({ url: ze + "/appinfo.xhtml", method: "POST", data: a })   // ze = "https://app4.i4.cn"
+    /// const w = { appid: S.id, pkagetype: S.pkagetype, model: e.model /* iPhone | iPad */, from: 1 }
+    /// ```
+    /// 实测（2026-09）返回体含 `AppName` / `Version` / `Size` / `Company` / `UpdateTime` /
+    /// `TypeName` / `Language` / `MinVersion` / `LongNote` / `NewVersionNote` / `Image[]`（截图）/
+    /// `app_privacy`，以及 **`historyversion[]`（历史版本）**。`pkagetype` 可省略。
+    static func detail(appId: String,
+                       pkagetype: String? = nil,
+                       iPad: Bool = false) async throws -> I4AppDetail {
+        let id = appId.trimmingCharacters(in: .whitespaces)
+        guard !id.isEmpty, let url = URL(string: listHost + "/appinfo.xhtml") else { throw StoreError.badURL }
+        var form = ["appid": id, "model": iPad ? "iPad" : "iPhone", "from": "1"]
+        if let p = pkagetype, !p.isEmpty { form["pkagetype"] = p }
+        guard let obj = jsonObject(try await post(url, form: form)) else { throw StoreError.decode }
+        guard let detail = parseDetail(obj) else { throw StoreError.detailUnavailable }
+        return detail
+    }
+
     // MARK: - 解析
+
+    private static func parseDetail(_ d: [String: Any]) -> I4AppDetail? {
+        guard let appId = str(d["AppId"]) ?? str(d["appid"]),
+              let name = str(d["AppName"]) else { return nil }
+        var detail = I4AppDetail(appId: appId, name: name)
+        detail.bundleId = str(d["sourceid"]) ?? str(d["sourceId"])
+        detail.icon = normalizeIcon(str(d["Icon"]))
+        detail.screenshots = (d["Image"] as? [Any] ?? []).compactMap { normalizeIcon(str($0)) }
+        detail.version = str(d["Version"]) ?? str(d["ShortVersion"])
+        detail.sizeText = str(d["Size"])
+        detail.sizeBytes = int64(d["sizebyte"]) ?? int64(d["sizeByte"])
+        detail.minOS = str(d["MinVersion"])
+        detail.category = str(d["TypeName"])
+        detail.company = str(d["Company"])
+        detail.language = str(d["Language"])
+        detail.updateTime = str(d["UpdateTime"])
+        detail.shortNote = str(d["shortshortnote"])
+        detail.newVersionNote = stripHTML(str(d["NewVersionNote"]))
+        detail.longNote = stripHTML(str(d["LongNote"]))
+        detail.downloadCount = str(d["DownloadCount"])
+        detail.ipaPath = str(d["path"])
+        detail.plistPath = str(d["plist"])
+        let raw = d["historyversion"] as? [[String: Any]] ?? []
+        detail.versions = raw.compactMap(parseVersion)
+        return detail
+    }
+
+    private static func parseVersion(_ d: [String: Any]) -> I4Version? {
+        let vid = str(d["versionid"]) ?? str(d["versionId"])
+        let ver = str(d["Version"]) ?? str(d["version"])
+        guard let vid, let ver, !ver.isEmpty else { return nil }
+        var v = I4Version(id: vid, version: ver)
+        v.sizeText = str(d["Size"])
+        v.sizeBytes = int64(d["sizebyte"]) ?? int64(d["sizeByte"])
+        v.releaseTime = str(d["releasetime"])
+        v.note = str(d["versionnote"])
+        v.minOS = str(d["MinVersion"])
+        v.md5 = str(d["md5"])
+        v.ipaPath = str(d["path"])
+        return v
+    }
+
+    /// 详情里的 `LongNote` / `NewVersionNote` 带 HTML 标签，两端客户端都先去标签再展示
+    ///（RN bundle：`n.LongNote.replace(/<\/?[^>]*>/g,'')`）。
+    private static func stripHTML(_ s: String?) -> String? {
+        guard let s, !s.isEmpty else { return nil }
+        let clean = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return clean.isEmpty ? nil : clean
+    }
 
     private static func parse(_ d: [String: Any]) -> I4App? {
         let id = str(d["id"])
@@ -247,6 +394,7 @@ enum I4PCStoreClient {
         app.sizeBytes = int64(d["sizebyte"]) ?? int64(d["sizeByte"])
         app.minOS = str(d["minversion"]) ?? str(d["minVersion"])
         app.category = str(d["typeName"])
+        app.pkgType = str(d["pkagetype"]) ?? str(d["pkgType"])
         app.icon = normalizeIcon(str(d["icon"]))
         app.ipaPath = str(d["path"])
         app.plistPath = str(d["plist"])

@@ -8,6 +8,9 @@ import SwiftUI
 ///
 /// 流程：榜单/搜索 → 拿 `path` → `d-app6.i4.cn/soft/<path>` 下载 IPA
 /// → `AppStoreInstallService.installLocalIPA`（RSD 隧道 + AFC + installation_proxy）。
+///
+/// v0.3.364：列表项可点进 `I4StoreFreeDetailView`（详情走 `appinfo.xhtml`），
+/// 详情里列出爱思历史版本，安装旧版仍走同一条下载链路。
 struct I4StoreFreeView: View {
 
     @State private var rank: I4PCStoreClient.Rank = .recommend
@@ -160,73 +163,85 @@ struct I4StoreFreeView: View {
 
     // MARK: - 行
 
+    /// v0.3.364：左侧（图标 + 文案）整块可点进**应用详情**，右侧仍是原有的下载/进度控件。
     private func row(_ app: I4PCStoreClient.I4App) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            AsyncImage(url: URL(string: app.icon ?? "")) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFit()
-                case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
-                default: ProgressView().controlSize(.mini)
-                }
-            }
-            .frame(width: 54, height: 54)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(app.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                HStack(spacing: 6) {
-                    if let v = app.version { chip("v\(v)", .blue) }
-                    if let s = app.sizeText { chip(s, .green) }
-                    if app.isSigned { chip("已签名", .purple) }
-                }
-                if let s = app.slogan, !s.isEmpty {
-                    Text(s).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-            Spacer(minLength: 6)
-
-            if let job = center.activeJob(bundleId: app.bundleId, name: app.name) {
-                HStack(spacing: 6) {
-                    ProgressView(value: min(1, max(0, job.overall)))
-                        .frame(width: 44)
-                    Text(job.phase == .paused ? "已暂停" : job.stageText)
-                        .font(.caption2).foregroundStyle(.secondary)
-                    Button {
-                        if job.phase == .paused {
-                            center.resume(job.id)
-                        } else {
-                            center.pause(job.id)
+            NavigationLink {
+                I4StoreFreeDetailView(app: app)
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    AsyncImage(url: URL(string: app.icon ?? "")) { phase in
+                        switch phase {
+                        case .success(let img): img.resizable().scaledToFit()
+                        case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
+                        default: ProgressView().controlSize(.mini)
                         }
-                    } label: {
-                        Image(systemName: job.phase == .paused ? "play.circle.fill" : "pause.circle.fill")
-                            .font(.body)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
-                    .disabled(!job.canPause)
-                    Button {
-                        center.cancel(job.id)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.body)
-                            .foregroundStyle(.secondary)
+                    .frame(width: 54, height: 54)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(app.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                        HStack(spacing: 6) {
+                            if let v = app.version { chip("v\(v)", .blue) }
+                            if let s = app.sizeText { chip(s, .green) }
+                            if app.isSigned { chip("已签名", .purple) }
+                        }
+                        if let s = app.slogan, !s.isEmpty {
+                            Text(s).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
-                    .buttonStyle(.plain)
+                    Spacer(minLength: 6)
                 }
-            } else {
+            }
+
+            trailingControl(app)
+        }
+        .padding(.vertical, 3)
+    }
+
+    @ViewBuilder
+    private func trailingControl(_ app: I4PCStoreClient.I4App) -> some View {
+        if let job = center.activeJob(bundleId: app.bundleId, name: app.name) {
+            HStack(spacing: 6) {
+                ProgressView(value: min(1, max(0, job.overall)))
+                    .frame(width: 44)
+                Text(job.phase == .paused ? "已暂停" : job.stageText)
+                    .font(.caption2).foregroundStyle(.secondary)
                 Button {
-                    install(app)
+                    if job.phase == .paused {
+                        center.resume(job.id)
+                    } else {
+                        center.pause(job.id)
+                    }
                 } label: {
-                    Text("安装")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color.blue.opacity(0.14), in: Capsule())
-                        .foregroundStyle(.blue)
+                    Image(systemName: job.phase == .paused ? "play.circle.fill" : "pause.circle.fill")
+                        .font(.body)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
+                .disabled(!job.canPause)
+                Button {
+                    center.cancel(job.id)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
             }
+        } else {
+            Button {
+                install(app)
+            } label: {
+                Text("安装")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Color.blue.opacity(0.14), in: Capsule())
+                    .foregroundStyle(.blue)
+            }
+            .buttonStyle(.plain)
         }
-        .padding(.vertical, 3)
     }
 
     private func chip(_ text: String, _ tint: Color) -> some View {
