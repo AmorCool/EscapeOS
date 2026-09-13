@@ -28,7 +28,49 @@ struct FileSharingApp: Identifiable {
     /// v0.3.363：安装来源类型（与「应用」板块 **同一套** AppTypeDetector 判定，
     /// 见 AppListView.loadAppTypes）。此前文档浏览只按 isGenuine 二分成
     /// 「苹果正版 / 共享正版」，把自签 / 企业 / 系统应用全部压成「共享正版」。
+    /// v0.3.364：listAppsWithFileSharing() 不再填这个字段（首屏不等 profile），
+    /// 由 UI 渐进式回填（fetchAppTypeContext → detectTypes）.
     var appType: AppType? = nil
+}
+
+/// v0.3.364：文档浏览的**显示口径**——对齐爱思那五类分类（**唯一映射点**）.
+///
+/// 判定仍全部来自 AppTypeDetector；本枚举只负责「AppType → 用户看得懂的标签」。
+/// 后续 i4-class 逆向出的分类微调**只改这里的 classify**（UI 只按本类型取文案/配色）.
+enum FileSharingTypeClass: String, CaseIterable, Identifiable, Hashable {
+    case appStorePersonal = "苹果正版"
+    case appStoreShared   = "共享正版"
+    case development      = "个人签名"
+    case enterprise       = "企业签名"
+    case system           = "系统"
+    case unrecognized     = "未识别"
+
+    var id: String { rawValue }
+
+    /// 权威归入：ApplicationType + AppType → 爱思五类.
+    /// - 非 User（System / HiddenSystemApp / 其它）→ 系统
+    /// - .appStore（无 entitlements 也无 iTunesMetadata 的兜底）→ 苹果正版（不显示「AppStore」）
+    static func classify(applicationType: String?, appType: AppType?) -> FileSharingTypeClass {
+        if applicationType != "User" { return .system }
+        switch appType ?? .unknown {
+        case .appStorePersonal, .appStore: return .appStorePersonal
+        case .appStoreShared:              return .appStoreShared
+        case .development:                 return .development
+        case .enterprise:                  return .enterprise
+        case .hidden:                      return .system
+        case .unknown:                     return .unrecognized
+        }
+    }
+
+    /// 渐进加载专用：返回 nil = 「还没算出来」（UI 显示占位，不下判断）.
+    /// - 非 User 应用首屏即可定类（ApplicationType 来自 instproxy，无需 profile）
+    /// - `settled == true`（本轮判定已跑完）仍未拿到 appType → 收敛到「未识别」，
+    ///   不允许任何应用永远停在占位.
+    static func resolve(applicationType: String?, appType: AppType?, settled: Bool) -> FileSharingTypeClass? {
+        if applicationType != "User" { return .system }
+        guard let appType else { return settled ? .unrecognized : nil }
+        return classify(applicationType: applicationType, appType: appType)
+    }
 }
 
 enum FileSharingService {
@@ -41,37 +83,39 @@ enum FileSharingService {
     /// StaticDiskUsage/DynamicDiskUsage/iTunesMetadata 只在带 ReturnAttributes 的
     /// 请求里返回，普通 Lookup 不带，这正是 v0.3.270 两个胶囊显示「—」的根因）；
     /// browse 失败回退原 get_apps 全字段 Lookup.
-    /// 同步阻塞——调用方放后台线程.
+    /// v0.3.364：**只走 instproxy 一条隧道**，不再在这里等 profile —
+    /// appType 恒为 nil，由调用方用 fetchAppTypeContext() + detectTypes() 渐进补齐
+    /// （原实现首屏要等 fetchSideloadedApps + fetchAllProfiles 两条隧道跑完，
+    ///  首屏被 profile 阻塞). 同步阻塞——调用方放后台线程.
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
-        var apps: [FileSharingApp]
         if let found = try? lookupAppsWithAttributes(), !found.isEmpty {
-            apps = found
-        } else {
-            apps = try legacyGetApps()
+            return found
         }
-        // v0.3.363：复用「应用」板块的 AppTypeDetector 判定（企业/个人签名/系统…），
-        // 不再用 isGenuine 二分成「苹果正版 / 共享正版」。
-        let types = resolveAppTypes(for: apps)
-        for index in apps.indices {
-            apps[index].appType = types[apps[index].bundleId]
-        }
-        return apps
+        return try legacyGetApps()
     }
 
-    /// v0.3.363：为文档浏览的 App 列表解析 AppType（**与 AppListView.loadAppTypes 同源**）.
+    /// v0.3.364：类型判定所需的输入快照（一次性拉取，供分批判定复用）.
+    struct AppTypeContext {
+        var entitlements: [String: [String: Any]] = [:]
+        var provisionsAllDevices: [String: Bool] = [:]
+        var currentAppleID: String?
+    }
+
+    /// v0.3.364：拉取类型判定数据（**唯一**会开 profile 隧道的入口，与 AppListView.loadAppTypes 同源）.
     ///
     /// 字段来源：
     ///   - entitlements / application-identifier ← installation_proxy 的 Entitlements
     ///     （ProvisioningProfileStore.fetchSideloadedApps，仅有 profile 的侧载应用返回）
     ///   - ProvisionsAllDevices ← misagent 拉的 .mobileprovision 顶层字段
     ///     （企业判定唯一权威字段，Apple TN3125），按 application-identifier 与 profile 匹配
-    ///   - iTunesAppleID ← 本 App 的 iTunesMetadata 账号（FileSharingApp.appleId）
     ///   - currentAppleID ← 当前登录的 App Store 账号（keychain 直读，区分正版/共享）
     ///
-    /// 两条隧道必须**顺序串行**（各自 createTunnel；并发握手会死锁闪退，见 AppListView 注释）.
-    private static func resolveAppTypes(for apps: [FileSharingApp]) -> [String: AppType] {
-        guard !apps.isEmpty else { return [:] }
-        let currentAppleID = MemoryLimitSettings.currentAppleIDDirect()
+    /// **两条隧道必须顺序串行**：tuple 从左到右求值，各自 createTunnel + defer 释放后
+    /// 才建下一条（并发握手会死锁闪退，v0.3.187 真机实证，见 AppListView 注释）.
+    /// 同步阻塞——调用方放后台线程，且必须在首屏返回**之后**再调.
+    static func fetchAppTypeContext() -> AppTypeContext {
+        var context = AppTypeContext()
+        context.currentAppleID = MemoryLimitSettings.currentAppleIDDirect()
         let (sideloaded, allProfiles): (
             [ProvisioningProfileStore.SideloadedAppInfo],
             [ProvisioningProfileStore.ProfileInfo]
@@ -96,14 +140,22 @@ enum FileSharingService {
                   let profile = profileByAppId[appId] else { continue }
             provisionsAllDevicesMap[item.bundleID] = profile.provisionsAllDevices
         }
+        context.entitlements = entMap
+        context.provisionsAllDevices = provisionsAllDevicesMap
+        return context
+    }
+
+    /// v0.3.364：对给定 App 子集判定 AppType（渐进式分批回填用；与 AppListView 同源判定）.
+    /// 纯内存计算，不开隧道.
+    static func detectTypes(for apps: [FileSharingApp], context: AppTypeContext) -> [String: AppType] {
         var resolved: [String: AppType] = [:]
         for app in apps {
             resolved[app.bundleId] = AppTypeDetector.detect(
-                entitlements: entMap[app.bundleId] ?? [:],
+                entitlements: context.entitlements[app.bundleId] ?? [:],
                 applicationType: app.applicationType,
                 iTunesAppleID: app.appleId,
-                currentAppleID: currentAppleID,
-                provisionsAllDevices: provisionsAllDevicesMap[app.bundleId] ?? false
+                currentAppleID: context.currentAppleID,
+                provisionsAllDevices: context.provisionsAllDevices[app.bundleId] ?? false
             )
         }
         return resolved

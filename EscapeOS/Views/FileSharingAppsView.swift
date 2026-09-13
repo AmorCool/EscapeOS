@@ -10,7 +10,12 @@ struct FileSharingAppsView: View {
     @State private var loading = true
     @State private var errorText: String?
     @State private var filterEnabledOnly = true
+    /// v0.3.364：类型筛选（nil = 全部，默认不分类）
+    @State private var typeFilter: FileSharingTypeClass?
     @State private var searchText: String = ""
+    /// v0.3.364：渐进式类型标签——首屏不等 profile，后台算完一批回填一批
+    @State private var appTypes: [String: AppType] = [:]
+    @State private var typesSettled = false
     /// v0.3.270：Documents 容器大小（bundleId → 字节，后台懒算回填）
     @State private var docSizes: [String: Int64] = [:]
     @State private var computingDocs: Set<String> = []
@@ -35,6 +40,12 @@ struct FileSharingAppsView: View {
                 } else {
                     Section {
                         Toggle("仅显示文件共享应用", isOn: $filterEnabledOnly)
+                        Picker("类型", selection: $typeFilter) {
+                            Text("全部").tag(FileSharingTypeClass?.none)
+                            ForEach(FileSharingTypeClass.allCases) { type in
+                                Text(type.rawValue).tag(FileSharingTypeClass?.some(type))
+                            }
+                        }
                     }
                     Section {
                         ForEach(filtered) { app in
@@ -42,9 +53,6 @@ struct FileSharingAppsView: View {
                         }
                     } header: {
                         Text("应用列表（\(filtered.count) 个）")
-                    } footer: {
-                        Text("安装来源与应用板块同源判定：正版（本人 App Store）/ 共享（他人 App Store）/ AppStore（无法判别）/ 个人签名（自签·调试·Ad-Hoc）/ 企业签名（In-House）/ 隐藏 / 系统（非用户应用）。点击任意胶囊查看来源详情。")
-                            .font(.caption2)
                     }
                 }
             }
@@ -116,9 +124,13 @@ struct FileSharingAppsView: View {
 
     }
 
+    /// v0.3.364：三个条件取交集——文件共享开关 ∩ 类型筛选 ∩ 搜索
     private var filtered: [FileSharingApp] {
         var list = apps
         if filterEnabledOnly { list = list.filter { $0.supportsFileSharing } }
+        if let typeFilter {
+            list = list.filter { (typeClass($0) ?? .unrecognized) == typeFilter }
+        }
         if !searchText.isEmpty {
             let q = searchText.lowercased()
             list = list.filter { $0.bundleId.lowercased().contains(q) || $0.name.lowercased().contains(q) }
@@ -201,8 +213,8 @@ struct FileSharingAppsView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                // v0.3.363：类型改为与「应用」板块同源的 AppType（正版/共享/个人签名/
-                // 企业签名/隐藏/未知），非 User 的系统应用显示「系统」；
+                // v0.3.364：类型文案统一为爱思五类（苹果正版/共享正版/个人签名/
+                // 企业签名/系统，算不出=未识别），由 FileSharingTypeClass 单点映射；
                 // 所有胶囊都可点开「安装来源」详情（此前只有 AppleID 胶囊能点）。
                 HStack(spacing: 5) {
                     tappableCapsule(typeLabel(app), tint: typeTint(app), app: app)
@@ -230,24 +242,32 @@ struct FileSharingAppsView: View {
         }
     }
 
-    /// v0.3.363：类型显示文案——**与「应用」板块同一套 AppTypeDetector**.
-    /// 非 User（System / HiddenSystemApp 之外的非用户应用）统一显示「系统」，
-    /// 不再被打成「共享正版」（爱思对系统应用有单独分类）。
-    private func typeLabel(_ app: FileSharingApp) -> String {
-        if app.applicationType != "User" { return "系统" }
-        return (app.appType ?? .unknown).rawValue
+    /// v0.3.364：类型归类——**判定与文案全部交给 FileSharingTypeClass**（唯一映射点）.
+    /// nil = 类型还没算出来（后台渐进加载中），UI 显示占位、不做判断.
+    private func typeClass(_ app: FileSharingApp) -> FileSharingTypeClass? {
+        FileSharingTypeClass.resolve(
+            applicationType: app.applicationType,
+            appType: app.appType ?? appTypes[app.bundleId],
+            settled: app.appType != nil || typesSettled
+        )
     }
 
-    /// v0.3.363：类型胶囊配色——与应用板块 AppTypeBadge 对齐；「系统」单独一档（灰）.
+    /// v0.3.364：类型显示文案（爱思五类：苹果正版 / 共享正版 / 个人签名 / 企业签名 / 系统）.
+    /// 未算出来 → 「识别中」占位，算完（含算不出）→ 收敛到「未识别」.
+    private func typeLabel(_ app: FileSharingApp) -> String {
+        typeClass(app)?.rawValue ?? "识别中"
+    }
+
+    /// v0.3.364：类型胶囊配色——正版蓝 / 共享紫 / 个人签名绿 / 企业签名橙 / 系统灰.
     private func typeTint(_ app: FileSharingApp) -> Color {
-        if app.applicationType != "User" { return .gray }
-        switch app.appType ?? .unknown {
+        guard let type = typeClass(app) else { return .secondary }   // 识别中 → 灰
+        switch type {
         case .appStorePersonal: return .blue
         case .appStoreShared:   return .purple
-        case .appStore:         return .indigo
-        case .enterprise:       return .orange
         case .development:      return .green
-        case .hidden, .unknown: return .secondary
+        case .enterprise:       return .orange
+        case .system:           return .gray
+        case .unrecognized:     return .secondary
         }
     }
 
@@ -355,17 +375,51 @@ struct FileSharingAppsView: View {
         }
     }
 
+    /// v0.3.364：首屏只等 instproxy 一次 Lookup（名称/标识/大小/Apple ID…），
+    /// **不等 profile**；类型标签交给 loadTypes() 后台渐进补齐.
     private func load() async {
         loading = true
+        typesSettled = false
+        appTypes = [:]
         defer { loading = false }
         do {
-            apps = try await Task.detached(priority: .userInitiated) {
+            let list = try await Task.detached(priority: .userInitiated) {
                 try FileSharingService.listAppsWithFileSharing()
             }.value
+            apps = list
             errorText = nil
             loadIcons()
+            loadTypes(for: list)
         } catch {
             errorText = error.localizedDescription
+            typesSettled = true
+        }
+    }
+
+    /// v0.3.364：**渐进式**类型补齐——首屏返回后，后台拉一次 profile 快照
+    /// （fetchAppTypeContext 内部两条隧道串行、各自释放），再分批判定并回填
+    /// `appTypes`（每批算完即刷 @State，不必等全部算完）。
+    /// 全部跑完 → typesSettled = true，未判定者收敛到「未识别」，不会停在占位.
+    private func loadTypes(for list: [FileSharingApp]) {
+        guard !list.isEmpty else {
+            typesSettled = true
+            return
+        }
+        Task.detached(priority: .utility) {
+            let context = FileSharingService.fetchAppTypeContext()
+            let batchSize = 8
+            var index = 0
+            while index < list.count {
+                let batch = Array(list[index..<min(index + batchSize, list.count)])
+                let resolved = FileSharingService.detectTypes(for: batch, context: context)
+                await MainActor.run {
+                    var merged = self.appTypes
+                    for (bundleId, type) in resolved { merged[bundleId] = type }
+                    self.appTypes = merged
+                }
+                index += batchSize
+            }
+            await MainActor.run { self.typesSettled = true }
         }
     }
 
