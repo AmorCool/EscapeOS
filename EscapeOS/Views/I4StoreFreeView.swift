@@ -13,6 +13,19 @@ import SwiftUI
 /// 详情里列出爱思历史版本，安装旧版仍走同一条下载链路。
 struct I4StoreFreeView: View {
 
+    /// v0.3.382：免登录商店的**来源**（接口一 = 爱思，接口二 = 牛蛙）
+    enum StoreSource: String, CaseIterable, Identifiable {
+        case i4 = "爱思"
+        case niuwa = "牛蛙"
+
+        var id: String { rawValue }
+    }
+
+    /// v0.3.382：牛蛙源的分区（客户端硬编码中国/美国/香港三档）
+    private var region: NiuwaStoreClient.NiuwaRegion { NiuwaRegion(rawValue: regionRaw) ?? .cn }
+
+    @State private var source: StoreSource = .i4
+    @State private var regionRaw = "cn"
     @State private var rank: I4PCStoreClient.Rank = .recommend
     @State private var apps: [I4PCStoreClient.I4App] = []
     @State private var loading = true
@@ -20,6 +33,8 @@ struct I4StoreFreeView: View {
     @State private var keyword = ""
     @State private var searchResults: [I4PCStoreClient.I4App] = []
     @State private var searching = false
+    /// v0.3.382：牛蛙源的搜索结果（与爱思结果并存，切来源不必重打）
+    @State private var niuwaSearchResults: [NiuwaStoreClient.NiuwaApp] = []
 
     /// v0.3.305：已下载数量（进入页面时读一次磁盘台账）
     @State private var downloadedCount = 0
@@ -28,13 +43,19 @@ struct I4StoreFreeView: View {
 
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    /// v0.3.382：搜索框提示随来源变（牛蛙要多说一句区域）
+    private var searchPrompt: String {
+        source == .i4 ? "搜索应用（无需登录）" : "搜索应用（无需登录 · \(region.title)）"
+    }
+
     var body: some View {
         List {
             downloadManagerSection
+            sourceSection
             if isSearchMode {
                 searchSection
             } else {
-                rankSection
+                if source == .i4 { rankSection }
                 listSection
             }
         }
@@ -44,9 +65,17 @@ struct I4StoreFreeView: View {
         // v0.3.367：用户要求顶栏搜索**常驻**（下滑也能搜），对齐主页「应用」板块的 .always。
         .searchable(text: $keyword,
                     placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "搜索应用（无需登录）")
+                    prompt: searchPrompt)
         .onSubmit(of: .search) { runSearch() }
         .onChange(of: rank) { _, _ in Task { await load() } }
+        // v0.3.382：切来源 / 切区域都要重新取数（搜索态重搜，列表态重载）
+        .onChange(of: source) { _, _ in
+            if isSearchMode { runSearch() } else { Task { await load() } }
+        }
+        .onChange(of: regionRaw) { _, _ in
+            guard source == .niuwa else { return }
+            if isSearchMode { runSearch() } else { Task { await load() } }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -62,6 +91,31 @@ struct I4StoreFreeView: View {
             downloadedCount = IPADownloadLibrary.shared.items().count
             if apps.isEmpty { await load() }
         }
+    }
+
+    // MARK: - v0.3.382 来源 / 区域
+
+    /// **来源**：爱思（接口一）/ 牛蛙（接口二）；选牛蛙时下面多一行**区域**三档
+    private var sourceSection: some View {
+        Section {
+            Picker("来源", selection: $source) {
+                ForEach(StoreSource.allCases) { s in
+                    Text(s.rawValue).tag(s)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if source == .niuwa {
+                Picker("区域", selection: $regionRaw) {
+                    ForEach(NiuwaStoreClient.NiuwaRegion.allCases) { r in
+                        Text(r.title).tag(r.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+        .listRowBackground(Color.clear)
     }
 
     // MARK: - v0.3.305 下载管理入口
@@ -127,6 +181,12 @@ struct I4StoreFreeView: View {
                 Label(errorText, systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline).foregroundStyle(.orange)
             }
+        } else if source == .niuwa {
+            // v0.3.382：牛蛙源只有搜索，不做榜单（接口文档里只有 /appstore/search + /download）
+            Section {
+                Text("牛蛙源请用上方搜索框按关键词找应用。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
         } else if apps.isEmpty {
             Section {
                 Text("该分组暂时没有数据。").font(.subheadline).foregroundStyle(.secondary)
@@ -149,14 +209,28 @@ struct I4StoreFreeView: View {
                     Text("搜索中…").font(.subheadline).foregroundStyle(.secondary)
                 }
             }
-        } else if searchResults.isEmpty {
-            Section {
-                Text("没有找到匹配的应用。").font(.subheadline).foregroundStyle(.secondary)
+        } else if source == .i4 {
+            if searchResults.isEmpty {
+                Section {
+                    Text("没有找到匹配的应用。").font(.subheadline).foregroundStyle(.secondary)
+                }
+            } else {
+                Section("搜索结果 · \(searchResults.count) 款") {
+                    ForEach(searchResults) { app in
+                        row(app)
+                    }
+                }
             }
         } else {
-            Section("搜索结果 · \(searchResults.count) 款") {
-                ForEach(searchResults) { app in
-                    row(app)
+            if niuwaSearchResults.isEmpty {
+                Section {
+                    Text("没有找到匹配的应用。").font(.subheadline).foregroundStyle(.secondary)
+                }
+            } else {
+                Section("搜索结果 · \(niuwaSearchResults.count) 款") {
+                    ForEach(niuwaSearchResults) { app in
+                        row(app)
+                    }
                 }
             }
         }
@@ -273,11 +347,72 @@ struct I4StoreFreeView: View {
             .fixedSize()
     }
 
+    // MARK: - 行（牛蛙源，v0.3.382）
+
+    /// 牛蛙源的行：与爱思行同款排版（图标 + 名称 + 胶囊 + 简介），
+    /// 右侧暂用「获取直链」（**本版不接下载/安装**，走 `NiuwaStoreClient.download`）
+    private func row(_ app: NiuwaStoreClient.NiuwaApp) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                AsyncImage(url: app.icon) { phase in
+                    switch phase {
+                    case .success(let img): img.resizable().scaledToFit()
+                    case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
+                    default: ProgressView().controlSize(.mini)
+                    }
+                }
+                .frame(width: 54, height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(app.name).font(.subheadline.weight(.medium)).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ChipFlow(spacing: 6) {
+                        ForEach(chips(app), id: \.text) { item in
+                            chip(item.text, item.tint)
+                        }
+                    }
+                    if let d = app.desc, !d.isEmpty {
+                        Text(d).font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 6)
+            }
+
+            Button {
+                Task { await fetchNiuwaLink(app) }
+            } label: {
+                Text("获取直链")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Color.blue.opacity(0.14), in: Capsule())
+                    .foregroundStyle(.blue)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 3)
+    }
+
+    /// 版本 / 大小 / 区域 —— 与爱思行的胶囊同款
+    private func chips(_ app: NiuwaStoreClient.NiuwaApp) -> [ChipItem] {
+        var out: [ChipItem] = []
+        if let v = app.version, !v.isEmpty { out.append(ChipItem(text: "v\(v)", tint: .blue)) }
+        if let s = app.sizeText, !s.isEmpty { out.append(ChipItem(text: s, tint: .green)) }
+        out.append(ChipItem(text: region.title, tint: .orange))
+        return out
+    }
+
     // MARK: - 加载
 
     private func load() async {
         loading = true
         errorText = nil
+        // v0.3.382：牛蛙源没有榜单接口 —— 不请求，仅在列表处提示走搜索
+        guard source == .i4 else {
+            loading = false
+            return
+        }
         do {
             apps = try await I4PCStoreClient.list(rank: rank)
         } catch {
@@ -288,16 +423,51 @@ struct I4StoreFreeView: View {
 
     private func runSearch() {
         let kw = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !kw.isEmpty else { searchResults = []; return }
+        guard !kw.isEmpty else {
+            searchResults = []
+            niuwaSearchResults = []
+            return
+        }
         searching = true
+        let src = source
+        let reg = region
         Task {
-            do {
-                searchResults = try await I4PCStoreClient.search(keyword: kw)
-            } catch {
-                searchResults = []
-                ToastCenter.shared.show("搜索失败：\(error.localizedDescription)")
+            if src == .i4 {
+                do {
+                    searchResults = try await I4PCStoreClient.search(keyword: kw)
+                } catch {
+                    searchResults = []
+                    ToastCenter.shared.show("搜索失败：\(error.localizedDescription)")
+                }
+            } else {
+                do {
+                    niuwaSearchResults = try await NiuwaStoreClient.search(keyword: kw, region: reg)
+                } catch {
+                    niuwaSearchResults = []
+                    ToastCenter.shared.show("搜索失败：\(error.localizedDescription)")
+                }
             }
             searching = false
+        }
+    }
+
+    // MARK: - 牛蛙源：取直链（v0.3.382，**只取直链，不下载、不安装**）
+
+    /// 这一步的真正目的是**拿到一次真实响应**：请求体（UDID 打码）/ 状态码 / 响应体原文
+    /// 已由 `NiuwaStoreClient` 全量写进 `LoginLogger`（`category: .appStore`，前缀 `[牛蛙源]`）。
+    private func fetchNiuwaLink(_ app: NiuwaStoreClient.NiuwaApp) async {
+        do {
+            if let full = try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region) {
+                if let link = full.downloadURL, !link.isEmpty {
+                    ToastCenter.shared.show("已有直链，见日志")
+                } else {
+                    ToastCenter.shared.show("接口没给直链")
+                }
+            } else {
+                ToastCenter.shared.show("接口没给直链")
+            }
+        } catch {
+            ToastCenter.shared.show("失败：\(error.localizedDescription)")
         }
     }
 
