@@ -164,23 +164,256 @@ enum FileSharingService {
     ///
     /// 独立短超时（默认 8 秒）、失败或超时**返回空数组**（字段保持「—」）；
     /// 调用方必须在首屏渲染之后调用，且不得因它失败而回退/清空主列表.
-    /// 实测该命令在真机上会 20 秒无响应（见上），所以这里刻意给得比主路径更短，
-    /// 且排队额度与执行额度分开计（见 runGated）.
+    ///
+    /// **v0.3.379：全部调用统一走 `AttributeLookupCenter`（进程内单飞 + 设备级串行）**.
+    /// 真机 16:29 日志（3 次并发发起全挂 20s）+ 代码实证（见 AttributeLookupCenter
+    /// 注释）：这条命令本身与 `get_apps` 是**同一套线格式**，差别只在 ReturnAttributes
+    /// 让 installd 要对全部已装应用逐个算磁盘占用/读元数据——贵。三方（应用管理 /
+    /// 文档浏览 / 设备瘦身）各自发一条时，设备侧被同时压 3 份重活，每条都超时。
+    /// 单飞后设备侧任何时刻最多 1 条，并发调用共享同一结果；`timeout` 只计
+    /// **本条的实际执行**（跟随/缓存等待单独写日志，不占执行额度）.
     static func lookupAppAttributes(timeout: TimeInterval = 8) -> [FileSharingApp] {
-        switch runGated(queueTimeout: 20, workTimeout: timeout, label: "带属性增强") {
+        let (outcome, note) = AttributeLookupCenter.shared.run(timeout: timeout, label: "带属性增强") {
+            do {
+                return .ok(try lookupAppsWithAttributes())
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        }
+        switch outcome {
         case .ok(let apps):
             if apps.isEmpty {
-                LoginLogger.shared.log("[文件共享] 带属性增强未取到数据：字段保持「—」")
+                LoginLogger.shared.log("[文件共享] 带属性增强未取到数据：字段保持「—」（\(note)）")
             } else {
-                LoginLogger.shared.log("[文件共享] 带属性增强成功：\(apps.count) 条（补大小/账号）")
+                LoginLogger.shared.log("[文件共享] 带属性增强成功：\(apps.count) 条（补大小/账号）（\(note)）")
             }
             return apps
         case .failed(let message):
-            LoginLogger.shared.log("[文件共享] 带属性增强失败：\(message)；字段保持「—」")
+            LoginLogger.shared.log("[文件共享] 带属性增强失败：\(message)；字段保持「—」（\(note)）")
             return []
         case .timedOut:
-            LoginLogger.shared.log("[文件共享] 带属性增强超时（\(Int(timeout))s）；字段保持「—」")
+            LoginLogger.shared.log("[文件共享] 带属性增强超时：字段保持「—」（\(note)）")
             return []
+        }
+    }
+
+    /// v0.3.379：诊断只读计数——「此刻设备侧有几条带属性 Lookup 在飞」.
+    /// 单飞协调器保证只会是 0 或 1（三处消费方共用同一条）. 供日志/状态面板查询.
+    static var attributeLookupInFlightCount: Int { AttributeLookupCenter.shared.inFlightCount }
+
+    /// v0.3.379：带属性 `Lookup` 的**进程内单飞 + 设备级串行**协调器.
+    ///
+    /// 为什么必须有它（实证，非推断）：
+    ///   - `installation_proxy_lookup_apps`（rust/idevice-ffi/src/installation_proxy.rs:744）
+    ///     与 `get_apps` 是**同一条 `Lookup` 命令、同一套 4B 长度前缀线格式**
+    ///     （Swift 侧 get_apps→crate `installation_proxy.rs:87`→`Idevice::send_plist`
+    ///     /`read_plist_value`；我们的手写帧在 installation_proxy.rs:766-779）——
+    ///     所以卡死**不是**帧/读法问题；唯一差异是 ReturnAttributes 让 installd
+    ///     对全部已装应用逐个算 `StaticDiskUsage`/`DynamicDiskUsage` 并读
+    ///     `iTunesMetadata`/`Entitlements`（贵），而无属性的 `get_apps` 同会话 2.5s
+    ///     就跑完 333 个应用；
+    ///   - 消费方是**三处**：`AppListView.swift:273`（v0.3.369 起）、
+    ///     `FileSharingAppsView.swift:453`、`DeviceSlimService.swift:320`（v0.3.376 起），
+    ///     时间线上「卡死」正是并发数 2→3 那一版开始出现的——三方各自发一条贵命令，
+    ///     设备侧同时被压 3 份重活，每条都超过 20s 额度.
+    ///
+    /// 语义（三者缺一不可）：
+    ///   - **单飞**：第一条调用实际发起，其余并发调用**不另发命令**，等同一个结果；
+    ///   - **短期缓存**：成功结果在 `cacheTTL` 秒内直接复用（同一轮页面加载里三方基本命中同一次）；
+    ///   - **设备级串行**：只要上一条还没从设备返回（含已超时放弃、但 FFI 仍在后台跑的
+    ///     "僵尸"），就**不再发起**新命令——保证设备侧任何时刻最多 1 条在飞.
+    ///
+    /// 可观测：`inFlightCount` 可回答「现在有几条在飞」（本协调器保证只会是 0 或 1），
+    /// 日志区分「实际发起 / 单飞复用·缓存命中 / 单飞复用·跟随 / 僵尸返回 / 超时静默期」.
+    private final class AttributeLookupCenter: @unchecked Sendable {
+        static let shared = AttributeLookupCenter()
+
+        enum Outcome {
+            case ok([FileSharingApp])
+            case failed(String)
+            case timedOut
+        }
+
+        /// 成功结果的短期复用窗口（秒）. 12s 覆盖「同一轮页面加载」，又短到
+        /// 用户切页/重试时能拿到新数据.
+        private static let cacheTTL: TimeInterval = 12
+        /// 失败/超时后的静默期（秒）：此窗口内不重新发起，避免僵尸命令之上再叠一条.
+        private static let cooldown: TimeInterval = 4
+        /// 跟随者额外的等待余量（秒）：发起者的执行额度 + 它收尾的时间.
+        private static let followerSlack: TimeInterval = 20
+
+        /// 一次批次。**引用类型**：发起者与跟随者必须共享同一实例才能看到 `outcome`
+        /// 的写入（值类型会被各自拷贝，跟随者永远读到 nil）.
+        private final class Flight {
+            let generation: Int
+            let group = DispatchGroup()
+            var outcome: Outcome?
+            /// true = 已写结果并放行等待者（可能因为超时"放弃"，此时 FFI 仍在后台跑）.
+            var settled = false
+            /// true = 已超时放弃、但工作线程尚未返回（僵尸仍在设备上）.
+            var abandoned = false
+            var followers = 0
+            let startedAt = Date()
+            init(generation: Int) { self.generation = generation }
+        }
+
+        /// 跨线程回传工作线程结果的小盒（与 TimedOutcomeBox 同款模式）.
+        private final class OutcomeBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var stored: Outcome?
+            func store(_ value: Outcome) { lock.lock(); stored = value; lock.unlock() }
+            func load() -> Outcome? { lock.lock(); defer { lock.unlock() }; return stored }
+        }
+
+        private let lock = NSLock()
+        private var generation = 0
+        /// 非 nil = 上一条命令的工作线程**还没返回**（不论是否已超时放弃）→ 设备侧在飞 1 条.
+        private var flight: Flight?
+        private var cachedOK: (apps: [FileSharingApp], at: Date)?
+        private var cooldownUntil: Date?
+
+        private init() {}
+
+        /// 设备侧真正在飞的 Lookup 条数（只能 0 或 1）.
+        var inFlightCount: Int {
+            lock.lock(); defer { lock.unlock() }
+            return flight == nil ? 0 : 1
+        }
+
+        private static func secs(_ value: TimeInterval) -> String {
+            String(format: "%.1f", value)
+        }
+
+        /// 单飞入口. `timeout` 只作用于**本条的实际执行**；跟随/缓存等待单独写日志.
+        /// 返回（结果, 可读说明）——说明会拼进 `[文件共享]` 日志，便于区分各种复用/失败.
+        func run(timeout: TimeInterval,
+                 label: String,
+                 work: @escaping () -> Outcome) -> (Outcome, String) {
+            lock.lock()
+
+            // ① 成功结果短期复用（不另发命令）
+            if let cachedOK, Date().timeIntervalSince(cachedOK.at) < Self.cacheTTL {
+                let age = Date().timeIntervalSince(cachedOK.at)
+                lock.unlock()
+                return (.ok(cachedOK.apps),
+                        "单飞复用·缓存命中（\(Self.secs(age))s 前那一条，未再发命令；在飞 \(inFlightCount) 条）")
+            }
+            // ② 静默期（上一批失败/超时后不立刻重发）
+            if let until = cooldownUntil, Date() < until {
+                let remain = until.timeIntervalSinceNow
+                lock.unlock()
+                return (.timedOut,
+                        "单飞静默期（上一批失败/超时后 \(Self.secs(remain))s 内不重发；在飞 \(inFlightCount) 条）")
+            }
+            // ③ 上一条还在设备上（含已超时放弃的僵尸）→ 绝不叠发；能等待就跟随，僵尸则直接如实回报
+            if let current = flight {
+                if current.abandoned {
+                    lock.unlock()
+                    return (.timedOut,
+                            "设备侧上一条 Lookup 仍未返回（已超时放弃、FFI 无法取消），为保持串行不重发；在飞 \(inFlightCount) 条")
+                }
+                current.followers += 1
+                let index = current.followers
+                lock.unlock()
+                let waitedFrom = Date()
+                _ = current.group.wait(timeout: .now() + timeout + Self.followerSlack)
+                let waited = Date().timeIntervalSince(waitedFrom)
+                lock.lock()
+                let outcome = current.outcome ?? .timedOut
+                lock.unlock()
+                return (outcome,
+                        "单飞复用·跟随第 \(index) 个并发调用（与发起者共享同一条，等待 \(Self.secs(waited))s；全程设备侧只有 1 条在飞）")
+            }
+
+            // ④ 成为发起者（设备侧此刻 0 条在飞）
+            generation += 1
+            let current = Flight(generation: generation)
+            current.group.enter()
+            flight = current
+            lock.unlock()
+
+            let box = OutcomeBox()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let outcome = work()          // FFI 阻塞在这里；不可取消
+                box.store(outcome)
+                self.workerReturned(current, outcome: outcome)
+            }
+            LoginLogger.shared.log(
+                "[文件共享] \(label) 实际发起（第 \(current.generation) 批；设备侧 Lookup 在飞 \(inFlightCount) 条，已强制串行为 1）"
+                + "；等待实际执行额度 \(Int(timeout))s"
+            )
+
+            if current.group.wait(timeout: .now() + timeout) == .success {
+                let elapsed = Date().timeIntervalSince(current.startedAt)
+                let outcome = current.outcome ?? box.load() ?? .timedOut
+                let followers = current.followers
+                return (outcome,
+                        "实际执行 \(Self.secs(elapsed))s"
+                        + (followers > 0 ? "（另有 \(followers) 个并发调用复用了这一条）" : ""))
+            }
+
+            // 擦边：刚好在额度用尽时工作线程已返回 → 按完成处理（不重发、不进静默期）
+            if let done = box.load() {
+                LoginLogger.shared.log("[文件共享] \(label)：执行额度刚到但已返回，按完成处理（不重发）")
+                return (done, "实际执行略超 \(Int(timeout))s 额度但已完成")
+            }
+
+            // ⑤ 超时：向跟随者广播 .timedOut，**保留 flight**（僵尸仍在设备上）→ 真返回前绝不重发
+            abandon(current, reason: "超时放弃 \(Int(timeout))s（FFI 仍在后台跑，结果将丢弃）")
+            return (.timedOut,
+                    "实际执行超时 \(Int(timeout))s（跟随/缓存等待不计入）；已进入 \(Int(Self.cooldown))s 静默期"
+                    + "，在飞 \(inFlightCount) 条（等它真返回才允许下一批）")
+        }
+
+        /// 工作线程真正返回时的收尾：写结果 + 缓存 + 放行等待者 + **从注册表摘除**.
+        /// 「缓存」与「摘除 flight」必须在同一临界区内完成——否则跟随者可能在
+        /// 「flight 已摘除、缓存尚未写入」的缝隙里又发起一条重复命令.
+        private func workerReturned(_ current: Flight, outcome: Outcome) {
+            lock.lock()
+            if current.settled {   // 已超时放弃（僵尸）：结果丢弃，但此刻才真正摘除 flight
+                if flight === current { flight = nil }
+                lock.unlock()
+                LoginLogger.shared.log(
+                    "[文件共享] 带属性增强：僵尸 Lookup 返回（已超时放弃，结果丢弃，避免与下一批错位）；"
+                    + "跟随者 \(current.followers) 个"
+                )
+                return
+            }
+            current.outcome = outcome
+            current.settled = true
+            if case .ok(let apps) = outcome {
+                cachedOK = (apps, Date())
+                cooldownUntil = nil
+            }
+            if flight === current { flight = nil }
+            lock.unlock()
+            current.group.leave()
+            LoginLogger.shared.log(
+                "[文件共享] 带属性增强实际执行返回（\(describe(outcome))）；跟随者 \(current.followers) 个"
+            )
+        }
+
+        /// 超时放弃：写结果 + 放行等待者 + 进静默期，但**不**摘除 flight（僵尸挡重发）.
+        private func abandon(_ current: Flight, reason: String) {
+            lock.lock()
+            let firstSettle = !current.settled
+            if firstSettle {
+                current.outcome = .timedOut
+                current.settled = true
+            }
+            current.abandoned = true
+            cooldownUntil = Date().addingTimeInterval(Self.cooldown)
+            lock.unlock()
+            if firstSettle { current.group.leave() }   // group 只 leave 一次（enter 也只一次）
+            LoginLogger.shared.log("[文件共享] 带属性增强 \(reason)；跟随者 \(current.followers) 个")
+        }
+
+        private func describe(_ outcome: Outcome) -> String {
+            switch outcome {
+            case .ok(let apps): return "成功 \(apps.count) 条"
+            case .failed(let message): return "失败：\(message)"
+            case .timedOut: return "超时"
+            }
         }
     }
 
