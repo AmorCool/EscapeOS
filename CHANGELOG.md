@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.376] - 2026-09-13
+
+> **v0.3.374 的包不含以下修复**。内部提交号 0.3.375 / 0.3.377 未单独发版，其改动已全部并入本版。
+
+### 修复（用户实测两个故障，**同源**）
+- **文档浏览无限「正在读取已装应用…」**：`FileSharingAppsView.load()` 用的是 `defer { loading = false }`，而 `defer` **只在函数返回时执行**；
+  这条链路从 Swift 到 Rust **一层超时都没有**（`run_sync_local` 阻塞式 block_on、隧道 `TcpStream::connect` 无超时、
+  instproxy 读响应无超时，中间还有 3 次重试会把等待翻倍）→ 只要设备/隧道一次不应答就**永不返回**。
+  现在：**20 秒硬超时** → 列表区显示 `⚠️ 读取超时`（四字），类型占位收敛（不再停在「识别中」）；迟到的成功结果仍会正常回填，不会把用户锁在超时态。
+- **应用管理「三方应用」类型胶囊消失**：胶囊只在 `appTypes[bundleId]` 有值时才渲染，而该字典在 `loadAppTypes()` **最后一行**才写入
+  → 上面那个卡住会让字典恒空、**三方胶囊整条不渲染**（系统应用走 `isSystem` 分支，所以不受影响，与用户描述的"三方"逐字吻合）。
+  **反证**：若只是失败，`try?` 会退化成空数组、代码会继续跑完、胶囊仍在 → **胶囊消失只可能是「卡住」而非「失败」**。
+  现在 Lookup 超时/失败时按「无 Lookup 数据」**继续**用 `get_apps + profile` 判定 → 胶囊最多 20 秒后照常出现。
+- **同 hostname 并发建隧道的两处违规**（项目实测铁律：同 hostname 并发 `tunnel_create_rppairing` 会互抢）：
+  · `EscapeSpaceFileShare`：应用管理与文档浏览会**各自**建隧道且无串行保护 → 加串行队列（只锁「建隧道」这一步，不锁调用方生命周期）；
+  · `EscapeSpaceProfiles`：`ProvisioningProfileStore` 与 `ProfileConfigService` 共用同一 hostname 却无保护 → 共享**同一条**串行队列。
+- **设备瘦身两条无超时读取入口**：改用带超时的入口；超时按空数据降级（「应用」分片按 0、「较大应用」为空），
+  页面底部显示 `应用读取超时`，不再无限「正在读取空间占用…」。
+
+### 新增（让故障可见，不再靠猜）
+- 上述路径**每一步写日志**（走 `LoginLogger`，不用 `print`——用户看不到 stdout）：隧道连上 / Lookup 条数 / 回落 / 失败原因 /
+  每批判定条数 / 超时。以后卡住直接看「登录日志」定位。
+- **虚拟定位：通道预检**。建隧道后、连服务前先查 `com.apple.instruments.dtservicehub` 是否存在
+  （`rsd_service_available`），并把 `port` / `uses_remote_xpc` 写进日志；不可用即收口为新错误 **「定位通道不可用」**
+  并缓存 `channelStatus` 供 UI 读取（原来会落到泛化的 remote-server/超时错）。
+
+### 说明（本次**未做**，有依据）
+- **iAnyGo 的「方案二」（lockdown `com.apple.instruments.remoteserver`）未实现**：该入口只在 **iOS ≤16** 存在
+  （crate 注释、go-ios 报错文案、本仓 FFI 注释三处独立一致），而本 App 最低支持 **iOS 18**（`Depends: firmware (>= 18.0)`）
+  → 永不触发；且设备侧还缺 provider（无 usbmuxd；`idevice_tcp_provider_new` 需经典 lockdown 配对文件）。
+- **DDI 挂载也不需要**：要挂 DDI 的只有那条 lockdown 老路；现走的 **RSD → `dtservicehub` → DTX 在 iOS 17+ 不需要 DDI**
+  （这也是虚拟定位一直能直接用的原因）。App 至今从不挂 DDI（`DDIDownloadView` 只下载+打包，`image_mounter` 从未被调用）。
+- Rust 侧 `connect` / instproxy `read_raw` 仍无超时（FFI 不可取消）：本次只做到「不再阻塞 UI」，进程内线程与隧道残留仍在。
+
 ## [0.3.374] - 2026-09-13
 
 > **v0.3.373 的包不存在**（tag 构建在编译阶段失败，release 未发布）。请直接安装本版，本版包含 0.3.373 的全部改动。
