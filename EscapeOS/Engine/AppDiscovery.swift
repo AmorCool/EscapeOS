@@ -12,12 +12,17 @@ struct InstalledApp: Identifiable, Hashable {
     /// `ApplicationType` from installation_proxy: "User", "System",
     /// "HiddenSystemApp", or nil. Used by the app list to split 全部 / 系统 / 三方.
     let applicationType: String?
-    /// v0.3.184：iTunesMetadata.apple-id（installation_proxy 返回的子字典）.
-    /// 仅 App Store 下载的 App 存在此字段；用于区分「本人购买」与「家人共享」.
-    /// nil 表示该 app 没有 iTunesMetadata（侧载/重签/系统应用）.
-    /// 带默认值 nil：避免破坏其它 Memberwise init 调用点（LiveContainerDiscovery/
-    /// SupervisedHelpers/RestoreService 等不关注此字段）.
+    /// App Store 包的购买邮箱（iTunesMetadata 的 `appleId`，兜底
+    /// `downloadInfo.accountInfo.AppleID`）。**v0.3.364 修键名**：旧代码读的是
+    /// `apple-id`，真实键是 `appleId` —— 恒为 nil，所以应用板块永远判不出「共享」.
+    /// nil 表示取不到邮箱（侧载/重签/系统应用，或元数据解析失败）.
     var iTunesAppleID: String? = nil
+
+    /// instproxy 是否**存在** `iTunesMetadata`（存在即 App Store 下发包）.
+    /// iOS 27 上该字段是 binary plist 字节，解析可能失败，所以存在性单独记一份.
+    /// 带默认值：避免破坏其它 Memberwise init 调用点（LiveContainerDiscovery/
+    /// SupervisedHelpers/RestoreService 等不关注此字段）.
+    var hasITunesMetadata: Bool = false
 
     /// Whether this is a system/firmware app rather than a user-installed one.
     var isSystem: Bool {
@@ -89,23 +94,56 @@ final class AppDiscovery {
             // we keep them in the list (read-only) instead of dropping them.
             let container = (info["Container"] as? String) ?? ""
             let version = info["CFBundleShortVersionString"] as? String
-            // v0.3.184：iTunesMetadata 子字典（仅 App Store 下载的应用有）.
-            // 用于在 AppTypeDetector 区分「本人购买」与「家人共享」.
-            let iTunesAppleID: String? = {
-                guard let meta = info["iTunesMetadata"] as? [String: Any] else { return nil }
-                return meta["apple-id"] as? String
-            }()
+            // v0.3.364：App Store 包的两项元数据信号，供 AppTypeDetector 判正版/共享/越狱：
+            //   - hasITunesMetadata：存在性（存在即 App Store 下发包）
+            //   - iTunesAppleID：购买邮箱，真实键是 `appleId`（旧代码写的 `apple-id`
+            //     恒为 nil，这正是「应用板块永远判不出共享」的根因）
+            let iTunesMeta = info["iTunesMetadata"]
+            let iTunesAppleID = Self.appleId(fromITunesMetadata: iTunesMeta)
             apps.append(InstalledApp(
                 bundleIdentifier: bundleId,
                 name: name,
                 containerPath: container,
                 version: version,
                 applicationType: appType,
-                iTunesAppleID: iTunesAppleID
+                iTunesAppleID: iTunesAppleID,
+                hasITunesMetadata: iTunesMeta != nil
             ))
         }
 
         return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// 从 instproxy 的 `iTunesMetadata` 取 App Store 购买邮箱（v0.3.364）.
+    ///
+    /// - iOS 27 真机实证：该字段以 **binary plist 字节** 返回（`b'bplist00'`），
+    ///   旧系统上直接是字典 —— 两种形态都要吃。
+    /// - 邮箱键：`appleId`（`photo.ipa` 的 iTunesMetadata.plist 实证），
+    ///   兜底 `com.apple.iTunesStore.downloadInfo.accountInfo.AppleID`。
+    static func appleId(fromITunesMetadata metadata: Any?) -> String? {
+        guard let metadata else { return nil }
+        let meta: [String: Any]?
+        if let dict = metadata as? [String: Any] {
+            meta = dict
+        } else if let data = metadata as? Data {
+            meta = (try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil)) as? [String: Any]
+        } else {
+            meta = nil
+        }
+        guard let meta else { return nil }
+
+        func nonEmpty(_ value: Any?) -> String? {
+            guard let text = value as? String else { return nil }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let id = nonEmpty(meta["appleId"]) { return id }
+        if let id = nonEmpty(meta["purchaseAccountID"]) { return id }
+        if let info = meta["com.apple.iTunesStore.downloadInfo"] as? [String: Any],
+           let account = info["accountInfo"] as? [String: Any],
+           let id = nonEmpty(account["AppleID"]) { return id }
+        return nil
     }
 
     /// Fetch the SpringBoard icon for an app, if the tunnel is up.

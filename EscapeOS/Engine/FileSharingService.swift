@@ -33,23 +33,28 @@ struct FileSharingApp: Identifiable {
     var appType: AppType? = nil
 }
 
-/// v0.3.364：文档浏览的**显示口径**——对齐爱思那五类分类（**唯一映射点**）.
+/// v0.3.364：文档浏览的**显示口径**——对齐爱思分类（**唯一映射点**）.
 ///
 /// 判定仍全部来自 AppTypeDetector；本枚举只负责「AppType → 用户看得懂的标签」。
 /// 后续 i4-class 逆向出的分类微调**只改这里的 classify**（UI 只按本类型取文案/配色）.
+///
+/// 类别集合（v0.3.364）：苹果正版 / 共享正版 / 个人签名 / 企业签名 / 越狱版 / 系统 / 未识别。
+/// 爱思 9.0 的 6 类里没有「系统」（它只有 全部/可更新/旧版/适配iPad/苹果正版/
+/// 共享正版/个人签名/企业签名/越狱版/其他版本），「系统」是用户明确要求保留的自加类。
 enum FileSharingTypeClass: String, CaseIterable, Identifiable, Hashable {
     case appStorePersonal = "苹果正版"
     case appStoreShared   = "共享正版"
     case development      = "个人签名"
     case enterprise       = "企业签名"
+    case jailbroken       = "越狱版"
     case system           = "系统"
     case unrecognized     = "未识别"
 
     var id: String { rawValue }
 
-    /// 权威归入：ApplicationType + AppType → 爱思五类.
+    /// 权威归入：ApplicationType + AppType → 显示类别.
     /// - 非 User（System / HiddenSystemApp / 其它）→ 系统
-    /// - .appStore（无 entitlements 也无 iTunesMetadata 的兜底）→ 苹果正版（不显示「AppStore」）
+    /// - .appStore（加密包但拿不到元数据的兜底）→ 苹果正版（不显示「AppStore」）
     static func classify(applicationType: String?, appType: AppType?) -> FileSharingTypeClass {
         if applicationType != "User" { return .system }
         switch appType ?? .unknown {
@@ -57,6 +62,7 @@ enum FileSharingTypeClass: String, CaseIterable, Identifiable, Hashable {
         case .appStoreShared:              return .appStoreShared
         case .development:                 return .development
         case .enterprise:                  return .enterprise
+        case .jailbroken:                  return .jailbroken
         case .hidden:                      return .system
         case .unknown:                     return .unrecognized
         }
@@ -108,7 +114,9 @@ enum FileSharingService {
     ///     （ProvisioningProfileStore.fetchSideloadedApps，仅有 profile 的侧载应用返回）
     ///   - ProvisionsAllDevices ← misagent 拉的 .mobileprovision 顶层字段
     ///     （企业判定唯一权威字段，Apple TN3125），按 application-identifier 与 profile 匹配
-    ///   - currentAppleID ← 当前登录的 App Store 账号（keychain 直读，区分正版/共享）
+    ///   - currentAppleID ← 当前登录的 App Store 账号（keychain 直读）。
+    ///     **v0.3.364 起仅作辅助信息**：正版/共享已改为比「App 自身购买邮箱 ∈
+    ///     爱思共享账号白名单」（见 AppTypeDetector），不再比本机登录账号.
     ///
     /// **两条隧道必须顺序串行**：tuple 从左到右求值，各自 createTunnel + defer 释放后
     /// 才建下一条（并发握手会死锁闪退，v0.3.187 真机实证，见 AppListView 注释）.
@@ -155,7 +163,8 @@ enum FileSharingService {
                 applicationType: app.applicationType,
                 iTunesAppleID: app.appleId,
                 currentAppleID: context.currentAppleID,
-                provisionsAllDevices: context.provisionsAllDevices[app.bundleId] ?? false
+                provisionsAllDevices: context.provisionsAllDevices[app.bundleId] ?? false,
+                hasITunesMetadata: app.isGenuine
             )
         }
         return resolved
