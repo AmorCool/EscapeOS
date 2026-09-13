@@ -285,17 +285,21 @@ struct IPADownloadActionsSheet: View {
 
     // MARK: - 动作实现
 
-    /// 在线安装：本轮只接接口，按接口真实返回值提示（当前恒为「尚未接入」）
+    /// 在线安装：IPA 由本机服务器发（`http://127.0.0.1:<port>/package.ipa`），
+    /// 清单托管到 HTTPS 后交给系统装。优先用本地已下载的包，缺文件才退回远端直链。
     private func onlineInstall() {
-        let url = sourceLink.flatMap { URL(string: $0) }
-        OnlineInstallService.install(ipaURL: url, bundleId: item.bundleId) { result in
+        let local = URL(fileURLWithPath: IPADownloadLibrary.shared.path(for: item))
+        let hasLocal = FileManager.default.fileExists(atPath: local.path)
+        let url = hasLocal ? local : sourceLink.flatMap { URL(string: $0) }
+        OnlineInstallService.install(ipaURL: url,
+                                     bundleId: item.bundleId,
+                                     alternatePackageURL: hasLocal ? sourceLink : nil) { result in
             Task { @MainActor in
                 switch result {
                 case .success:
-                    ToastCenter.shared.show("在线安装已开始")
+                    ToastCenter.shared.show("正在安装")
                     dismiss()
                 case .failure(let error):
-                    // 按接口的真实返回值提示（当前为「在线安装尚未接入」）
                     ToastCenter.shared.show(error.localizedDescription)
                 }
             }

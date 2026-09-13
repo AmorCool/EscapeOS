@@ -179,6 +179,8 @@ struct SettingsForm: View {
     @State private var certError: String?
     @AppStorage("TunnelDeviceIP") private var tunnelIP: String = "10.7.0.1"
     @AppStorage("AnisetteServer") private var anisetteServer: String = "https://ani.stikstore.app"
+    /// v0.3.379：在线安装的清单 HTTPS 托管地址（留空则用公共临时托管）
+    @AppStorage(OnlineInstallConfig.endpointKey) private var onlineInstallEndpoint: String = ""
     @State private var shareTarget: ShareTarget?
     @State private var showNoPairingAlert = false
     @State private var showLoginSheet = false
@@ -286,6 +288,14 @@ struct SettingsForm: View {
                 Button("重置配对文件", role: .destructive) {
                     onResetPairing()
                 }
+            }
+
+            Section(header: Text("HTTPS 托管"), footer: Text("填自有地址则只走它；留空用公共临时托管.")) {
+                TextField("https://your.server", text: $onlineInstallEndpoint)
+                    .keyboardType(.URL)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .font(.footnote)
             }
 
             Section(header: Text("限制")) {
