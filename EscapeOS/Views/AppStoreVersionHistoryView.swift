@@ -413,7 +413,10 @@ struct AppStoreVersionHistoryView: View {
         LoginLogger.shared.log("版本历史：停止翻页（本批 \(fetched) 条\(authBroken ? "，重登后仍失效" : "")）",
                                category: .appStore)
         if versions.isEmpty {
-            errorText = authBroken ? "登录已过期，请重新登录" : "Apple 没有返回这批版本"
+            // 同一原因同一说法：直接取源头文案（ApplePackageError），视图不再抄一份，
+            // 否则源头改了文案这里会静默变成另一种说法。
+            errorText = authBroken ? ApplePackageError.passwordTokenExpired.localizedDescription
+                                   : "Apple 没有返回这批版本"
         }
     }
 }
