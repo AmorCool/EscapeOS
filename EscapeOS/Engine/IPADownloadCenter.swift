@@ -86,7 +86,12 @@ final class IPADownloadCenter: ObservableObject {
 
     func job(_ id: UUID) -> Job? { jobs.first { $0.id == id } }
 
-    /// 某应用当前正在进行的任务（详情页显示进度用）
+    /// 某应用当前正在进行的任务（**按 bundleId 口径**）。
+    ///
+    /// 适用：商店列表 / 详情页 —— 那里一行 = 一个应用，只关心「这个应用有没有在装/在下」。
+    /// ⚠️ **不要**拿它给「同一个应用的多个版本行」判状态：它只认 bundleId，
+    /// 会把同一个活跃任务挂到所有版本行上（v0.3.381 修的「多版本一起显示安装中」就是这个坑）。
+    /// 下载管理页请用 `activeJob(fileName:bundleId:version:name:)`。
     func activeJob(bundleId: String?, name: String) -> Job? {
         jobs.first { job in
             guard job.phase.isBusy else { return false }
@@ -95,10 +100,57 @@ final class IPADownloadCenter: ObservableObject {
         }
     }
 
-    /// 某应用最近一次结束的任务（失败提示用）
+    /// v0.3.381：某**一条已下载的条目**（含版本）当前正在进行的任务 —— **文件名优先**。
+    ///
+    /// 为什么不能只按 `bundleId`：同一应用常有多版本条目（ChatGPT v1.2026.224 / v230），
+    /// 按 bundleId 匹配会把同一个活跃任务挂到**所有版本行**上 → 多行一起显示「安装中」（用户实测 BUG）。
+    /// 库与文件本身都是按 `fileName` 记的（`IPADownloadLibrary.markInstalled(fileName:)`、
+    /// `Job.localFileName`），所以按文件名匹配才对得上唯一一行。
+    ///
+    /// 回落规则（**只对「还没落地」的任务生效**）：
+    /// · `job.localFileName != nil` 的任务只认文件名，不参与回落 —— 它是针对某个具体文件的安装；
+    /// · 有回落资格的任务再按 `version` → `bundleId` → `name` 逐级比对
+    ///   （Apple ID 通道的安装任务 `localFileName` 为空但带 `version`，靠 version 就能对上唯一一行）。
+    func activeJob(fileName: String?,
+                   bundleId: String?,
+                   version: String?,
+                   name: String) -> Job? {
+        // 1) 精确命中本行文件（含版本）
+        if let fileName, !fileName.isEmpty,
+           let exact = jobs.first(where: { $0.phase.isBusy && $0.localFileName == fileName }) {
+            return exact
+        }
+        // 2) 回落：只考虑还没有文件名的进行中任务
+        return jobs.first { job in
+            guard job.phase.isBusy, job.localFileName == nil else { return false }
+            if let jv = job.version, let v = version, !v.isEmpty, jv != v { return false }
+            if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
+            return job.name == name
+        }
+    }
+
+    /// 某应用最近一次结束的任务（失败提示用，**按 bundleId 口径**）
     func lastFinishedJob(bundleId: String?, name: String) -> Job? {
         jobs.first { job in
             guard !job.phase.isBusy else { return false }
+            if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
+            return job.name == name
+        }
+    }
+
+    /// v0.3.381：某**一条已下载的条目**最近一次结束的任务 —— 与 `activeJob(fileName:…)` 同口径，
+    /// 供按行提示「这条装的成/败」用（同样是文件名优先，避免多版本行互相串状态）。
+    func lastFinishedJob(fileName: String?,
+                         bundleId: String?,
+                         version: String?,
+                         name: String) -> Job? {
+        if let fileName, !fileName.isEmpty,
+           let exact = jobs.first(where: { !$0.phase.isBusy && $0.localFileName == fileName }) {
+            return exact
+        }
+        return jobs.first { job in
+            guard !job.phase.isBusy, job.localFileName == nil else { return false }
+            if let jv = job.version, let v = version, !v.isEmpty, jv != v { return false }
             if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
             return job.name == name
         }

@@ -226,7 +226,12 @@ struct IPADownloadManagerView: View {
                 actionItem = item
             }
 
-            if let job = center.activeJob(bundleId: item.bundleId, name: item.title) {
+            // v0.3.381：按**文件名（含版本）**判本行的进行中状态 —— 只按 bundleId 会让
+            // 同一应用的多版本条目一起显示「安装中」（用户实测 BUG）。
+            if let job = center.activeJob(fileName: item.fileName,
+                                          bundleId: item.bundleId,
+                                          version: item.version,
+                                          name: item.title) {
                 HStack(spacing: 6) {
                     ProgressView(value: min(1, max(0, job.overall)))
                         .frame(width: 44)
