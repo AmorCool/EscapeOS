@@ -140,7 +140,7 @@ enum FileSharingService {
     /// 而**同一次会话**里改用 `get_apps` + profile 的路径 **2.5 秒**就判完 333 个应用
     ///（16:29:41.895 → :44.395）——说明通道是好的，是 `Lookup` 这条命令卡死.
     /// 因此首屏只依赖 `get_apps`；带属性 Lookup 降级为可选增强
-    /// `lookupAppAttributes(timeout:)`（独立 8 秒、失败就不补、绝不阻塞首屏）.
+    /// `lookupAppAttributes(timeout:)`（独立 15 秒、失败就不补、绝不阻塞首屏）.
     ///
     /// 代价（已知、可接受）：`get_apps` 不带 `StaticDiskUsage` / `DynamicDiskUsage` /
     /// `iTunesMetadata` 这类「附加属性」字段 → 大小胶囊先显示「—」、账号胶囊先显示
@@ -162,8 +162,11 @@ enum FileSharingService {
     /// v0.3.378：**可选后台增强** —— 带属性 `Lookup`，补 appSize / docSize /
     /// appleId / isGenuine（这些字段只有带 ReturnAttributes 的 Lookup 才返回）.
     ///
-    /// 独立短超时（默认 8 秒）、失败或超时**返回空数组**（字段保持「—」）；
-    /// 调用方必须在首屏渲染之后调用，且不得因它失败而回退/清空主列表.
+    /// 独立超时、失败或超时**返回空数组**（字段保持「—」）；调用方必须在首屏渲染
+    /// 之后调用，且不得因它失败而回退/清空主列表.
+    /// **v0.3.379：额度由 8 秒提到 15 秒** —— 它是后台可选增强、不阻塞首屏，且
+    /// 单飞保证同一时刻只有一条在飞（不会因为放宽额度而多压设备）；而 v0.3.376
+    /// 之前**根本没有超时**，说明这条命令"最终会返回"才是常态。
     ///
     /// **v0.3.379：全部调用统一走 `AttributeLookupCenter`（进程内单飞 + 设备级串行）**.
     /// 真机 16:29 日志（3 次并发发起全挂 20s）+ 代码实证（见 AttributeLookupCenter
@@ -172,7 +175,7 @@ enum FileSharingService {
     /// 文档浏览 / 设备瘦身）各自发一条时，设备侧被同时压 3 份重活，每条都超时。
     /// 单飞后设备侧任何时刻最多 1 条，并发调用共享同一结果；`timeout` 只计
     /// **本条的实际执行**（跟随/缓存等待单独写日志，不占执行额度）.
-    static func lookupAppAttributes(timeout: TimeInterval = 8) -> [FileSharingApp] {
+    static func lookupAppAttributes(timeout: TimeInterval = 15) -> [FileSharingApp] {
         let (outcome, note) = AttributeLookupCenter.shared.run(timeout: timeout, label: "带属性增强") {
             do {
                 return .ok(try lookupAppsWithAttributes())
@@ -225,6 +228,18 @@ enum FileSharingService {
     ///
     /// 可观测：`inFlightCount` 可回答「现在有几条在飞」（本协调器保证只会是 0 或 1），
     /// 日志区分「实际发起 / 单飞复用·缓存命中 / 单飞复用·跟随 / 僵尸返回 / 超时静默期」.
+    ///
+    /// **真机对照判据（下次谁怀疑单飞没生效 / 怀疑卡死不只是并发，照这 4 条看日志）**：
+    ///   1. 同一轮只应出现**一条**「… 实际发起（第 N 批；设备侧 Lookup 在飞 1 条…）」；
+    ///      若 15s（≈额度）内出现**第二条「实际发起」** → 单飞漏了，回来改这里。
+    ///   2. 该条收尾为「实际执行返回（成功 N 条，额度 15s）」且 `实际执行 < 15.0s`
+    ///      → 并发就是全部原因，大小/账号字段应恢复有值。
+    ///   3. 上一条的 **N ≈ 已装应用数**（如 333）：若 N 明显偏少（如 <300）→ 说明读取
+    ///      提前截断，才需要回头查 Rust 读法（当前判定：读法是正确的，见
+    ///      installation_proxy.rs:771 的"别改成只认 Status"注释）。
+    ///   4. 该条收尾为「超时放弃 15s（FFI 仍在后台跑…）」→ 是**单条工作量 > 额度**，
+    ///      不是并发问题；此时应看到随后的调用报「设备侧上一条 Lookup 仍未返回…
+    ///      为保持串行不重发」——若没看到而出现了新的「实际发起」，说明闸门漏了。
     private final class AttributeLookupCenter: @unchecked Sendable {
         static let shared = AttributeLookupCenter()
 
@@ -246,6 +261,8 @@ enum FileSharingService {
         /// 的写入（值类型会被各自拷贝，跟随者永远读到 nil）.
         private final class Flight {
             let generation: Int
+            /// 本批的执行额度（秒）——只为日志写清"额度多少"，便于真机核对.
+            let budget: TimeInterval
             let group = DispatchGroup()
             var outcome: Outcome?
             /// true = 已写结果并放行等待者（可能因为超时"放弃"，此时 FFI 仍在后台跑）.
@@ -254,7 +271,10 @@ enum FileSharingService {
             var abandoned = false
             var followers = 0
             let startedAt = Date()
-            init(generation: Int) { self.generation = generation }
+            init(generation: Int, budget: TimeInterval) {
+                self.generation = generation
+                self.budget = budget
+            }
         }
 
         /// 跨线程回传工作线程结果的小盒（与 TimedOutcomeBox 同款模式）.
@@ -300,10 +320,10 @@ enum FileSharingService {
             }
             // ② 静默期（上一批失败/超时后不立刻重发）
             if let until = cooldownUntil, Date() < until {
-                let remain = until.timeIntervalSinceNow
+                let remain = max(0, until.timeIntervalSinceNow)
                 lock.unlock()
                 return (.timedOut,
-                        "单飞静默期（上一批失败/超时后 \(Self.secs(remain))s 内不重发；在飞 \(inFlightCount) 条）")
+                        "单飞静默期（下次可发起：还有 \(Self.secs(remain))s；在飞 \(inFlightCount) 条）")
             }
             // ③ 上一条还在设备上（含已超时放弃的僵尸）→ 绝不叠发；能等待就跟随，僵尸则直接如实回报
             if let current = flight {
@@ -327,7 +347,7 @@ enum FileSharingService {
 
             // ④ 成为发起者（设备侧此刻 0 条在飞）
             generation += 1
-            let current = Flight(generation: generation)
+            let current = Flight(generation: generation, budget: timeout)
             current.group.enter()
             flight = current
             lock.unlock()
@@ -359,10 +379,11 @@ enum FileSharingService {
             }
 
             // ⑤ 超时：向跟随者广播 .timedOut，**保留 flight**（僵尸仍在设备上）→ 真返回前绝不重发
-            abandon(current, reason: "超时放弃 \(Int(timeout))s（FFI 仍在后台跑，结果将丢弃）")
+            abandon(current, reason: "超时放弃（额度 \(Int(timeout))s；FFI 仍在后台跑，结果将丢弃）")
             return (.timedOut,
-                    "实际执行超时 \(Int(timeout))s（跟随/缓存等待不计入）；已进入 \(Int(Self.cooldown))s 静默期"
-                    + "，在飞 \(inFlightCount) 条（等它真返回才允许下一批）")
+                    "实际执行超时（额度 \(Int(timeout))s，跟随/缓存等待不计入）；已进入 \(Int(Self.cooldown))s 静默期"
+                    + "（下次可发起：还有 \(Self.secs(Self.cooldown))s），在飞 \(inFlightCount) 条"
+                    + "（等它真返回才允许下一批）")
         }
 
         /// 工作线程真正返回时的收尾：写结果 + 缓存 + 放行等待者 + **从注册表摘除**.
@@ -389,7 +410,8 @@ enum FileSharingService {
             lock.unlock()
             current.group.leave()
             LoginLogger.shared.log(
-                "[文件共享] 带属性增强实际执行返回（\(describe(outcome))）；跟随者 \(current.followers) 个"
+                "[文件共享] 带属性增强实际执行返回（\(describe(outcome))，额度 \(Int(current.budget))s）；"
+                + "跟随者 \(current.followers) 个"
             )
         }
 

@@ -286,7 +286,8 @@ enum DeviceSlimService {
     /// 每轮都「应用列表读取超时，本轮按空处理」→「应用」分片恒 0、「较大应用」恒空，
     /// 用户看到的是「功能坏了」）：
     ///   1. **快路径 `get_apps`**（真机 333 应用 2.5 秒级）→ 保证一定有应用列表；
-    ///   2. **可选增强**（带属性 Lookup，独立 8 秒）→ 补 appSize/docSize，
+    ///   2. **可选增强**（带属性 Lookup，独立 15 秒；v0.3.379 由 8 秒提到 15——后台可选、
+    ///      不阻塞首屏，且单飞保证同一时刻只有一条在飞）→ 补 appSize/docSize，
     ///      「应用」分片与「较大应用」才有意义；失败就退化为「没有精确大小」；
     ///   3. **结果缓存 30 秒**：`loadUsage` 与 `bigApps` 在同一轮页面加载里共用一份，
     ///      不再重复开隧道；
@@ -316,8 +317,8 @@ enum DeviceSlimService {
         case .timedOut:
             LoginLogger.shared.log("[设备瘦身] get_apps 快路径超时（排队与执行分开计）")
         }
-        // ② 可选增强：带属性 Lookup（独立 8 秒，失败就不补）
-        let enhanced = FileSharingService.lookupAppAttributes(timeout: 8)
+        // ② 可选增强：带属性 Lookup（独立 15 秒、失败就不补；额度见 lookupAppAttributes 默认参数）
+        let enhanced = FileSharingService.lookupAppAttributes()
         if enhanced.isEmpty {
             LoginLogger.shared.log("[设备瘦身] 大小增强未取到：本轮没有精确大小（「应用」分片偏小、「较大应用」判不出）")
         } else {

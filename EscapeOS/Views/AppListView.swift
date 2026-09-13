@@ -131,7 +131,7 @@ final class AppListViewModel: ObservableObject {
     /// `get_apps` + profile **2.5 秒**就判完 333 个应用（16:29:41.895 → :44.395）——
     /// 通道是好的，是 Lookup 命令卡死. 所以：
     ///   - 第一版：`get_apps` + profile 立即上屏（胶囊先出现，不再有「整条不显示」）；
-    ///   - 第二版：带属性 Lookup 作**可选增强**（独立 8 秒、失败就不补），
+    ///   - 第二版：带属性 Lookup 作**可选增强**（独立 15 秒、失败就不补），
     ///     补上 appleId / 正版存在性后再精修一次，共享正版才不会退化成苹果正版.
     /// 两版都写日志（`类型判定完成（第一版/第二版…）`），下次一眼能看出走到哪.
     private func loadAppTypes(for apps: [InstalledApp]) {
@@ -149,7 +149,7 @@ final class AppListViewModel: ObservableObject {
             // v0.3.378：主数据源改回 **`get_apps` 快路径**。真机日志实证：
             // 带属性 Lookup 会 20 秒一个字节不回（3 次并发全挂），而同一会话里
             // `get_apps` + profile 2.5 秒就判完 333 个应用（16:29:41.895 → :44.395）。
-            // 带属性 Lookup 降级为下面的「可选增强」（独立 8 秒、失败就不补）.
+            // 带属性 Lookup 降级为下面的「可选增强」（独立 15 秒、失败就不补）.
             let fast: [FileSharingApp]
             switch FileSharingService.listAppsWithFileSharing(timeout: 20) {
             case .ok(let found):
@@ -269,8 +269,10 @@ final class AppListViewModel: ObservableObject {
                 + "（entitlements \(entMap.count) / provisionsAllDevices \(provisionsAllDevicesMap.count)）"
             )
 
-            // 第二版：可选增强（带属性 Lookup，独立 8 秒，失败就不补）
-            enhanced = FileSharingService.lookupAppAttributes(timeout: 8)
+            // 第二版：可选增强（带属性 Lookup，独立 15 秒，失败就不补）
+            // v0.3.379：额度 8s→15s（后台可选、不阻塞首屏；单飞保证同一时刻只有一条在飞）；
+            // 额度统一在 FileSharingService.lookupAppAttributes 的默认参数里定义，调用方不再传值.
+            enhanced = FileSharingService.lookupAppAttributes()
             if enhanced.isEmpty {
                 LoginLogger.shared.log("[应用管理] 带属性增强未取到：账号/正版存在性按 apps 兜底（第一版结果保留）")
             } else {

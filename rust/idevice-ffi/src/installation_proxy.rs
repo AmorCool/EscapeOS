@@ -753,7 +753,16 @@ pub unsafe extern "C" fn installation_proxy_lookup_apps(
     let res: Result<Vec<u8>, IdeviceError> = run_sync_local(async {
         let client_ref = unsafe { &mut *client };
 
-        let attrs = "<string>CFBundleIdentifier</string>                     <string>CFBundleDisplayName</string>                     <string>CFBundleName</string>                     <string>CFBundleShortVersionString</string>                     <string>ApplicationType</string>                     <string>UIFileSharingEnabled</string>                     <string>Path</string>                     <string>StaticDiskUsage</string>                     <string>DynamicDiskUsage</string>                     <string>iTunesMetadata</string>                     <string>CFBundleSize</string>                     <string>Entitlements</string>                     <string>ApplicationDSID</string>                     <string>ApplicationMissingDSID</string>                     <string>SignerIdentity</string>";
+        // v0.3.379（减设备侧开销）：ReturnAttributes 只保留 **Swift `parseAppDict`
+        // 真正消费**的字段。删掉的 `Entitlements` / `ApplicationMissingDSID` 是
+        // v0.3.291 顺手加的、但 `FileSharingService.parseAppDict` 从不解码这两个属性，
+        // 却让 installd 对**每个**已装应用多读一次 entitlements/DSID —— 纯设备开销、零收益
+        // （而该命令在本机对 333 个应用已经贵到接近超时额度）。
+        // **不许删**：StaticDiskUsage / DynamicDiskUsage（应用/文档大小胶囊的唯一来源）、
+        // iTunesMetadata（账号/正版存在性的唯一来源）、ApplicationDSID / SignerIdentity /
+        // CFBundleSize / Path / CFBundleIdentifier / CFBundleDisplayName / CFBundleName /
+        // CFBundleShortVersionString / ApplicationType / UIFileSharingEnabled.
+        let attrs = "<string>CFBundleIdentifier</string>                     <string>CFBundleDisplayName</string>                     <string>CFBundleName</string>                     <string>CFBundleShortVersionString</string>                     <string>ApplicationType</string>                     <string>UIFileSharingEnabled</string>                     <string>Path</string>                     <string>StaticDiskUsage</string>                     <string>DynamicDiskUsage</string>                     <string>iTunesMetadata</string>                     <string>CFBundleSize</string>                     <string>ApplicationDSID</string>                     <string>SignerIdentity</string>";
 
         let mut xml = String::new();
         xml.push_str(crate::mcinstall::PLIST_HEADER);
@@ -769,6 +778,15 @@ pub unsafe extern "C" fn installation_proxy_lookup_apps(
         client_ref.0.idevice.send_raw(&frame).await?;
 
         // 读响应（循环直到 Status=Complete；LookupResult 为 {bundleId: appDict}）
+        //
+        // v0.3.379 警告：**别把下面的终止条件改成「只认 Status == Complete」**。
+        // 依据：crate 的 `get_apps`（idevice/src/services/installation_proxy.rs:103）
+        // 对本命令只 `read_plist()` 一次、且**从不校验 Status** —— 说明 Lookup 的回复
+        // **可能根本不带 `Status` 字段**；若只靠 `Status == "Complete"` 收尾，会在
+        // 读不到 Complete 时**永久阻塞在 read_raw**（本函数没有任何超时）。
+        // 因此 `!apps.is_empty()` 这个提前 break 是**必要**的终止条件，不是 bug；
+        // 它可能留下未读字节，但本函数用完即丢弃整条隧道（调用方 FileSharingService
+        // 每次 makeTunnel() 新建、defer 释放），不会造成下一条命令错位。
         let mut apps: Vec<plist::Value> = Vec::new();
         loop {
             let len_buf = client_ref.0.idevice.read_raw(4).await?;

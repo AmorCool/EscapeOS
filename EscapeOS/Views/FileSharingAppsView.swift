@@ -428,10 +428,11 @@ struct FileSharingAppsView: View {
     /// v0.3.378：顺序改成「先可选增强、再判定」，理由：
     ///   - 主列表已改走 `get_apps` 快路径（不带大小/账号字段），而这五个胶囊的
     ///     大小与账号只能来自带属性的 `Lookup`；
-    ///   - 增强独立 8 秒、失败就不补（大小胶囊保持「—」），**不影响首屏**
-    ///     （列表在 load() 返回时就已渲染）；
+    ///   - 增强独立 15 秒、失败就不补（大小胶囊保持「—」），**不影响首屏**
+    ///     （列表在 load() 返回时就已渲染）；v0.3.379 由 8 秒提到 15 秒（后台可选、
+    ///     不阻塞首屏，且单飞保证同一时刻只有一条在飞）；
     ///   - 先补元数据再判定，共享正版/苹果正版才判得准（isGenuine/appleId 是判据）.
-    /// 看门狗 40 秒（= 增强 8s + 上下文 + 分批的余量），到期把占位收敛，不停在「识别中」.
+    /// 看门狗 40 秒（= 增强 15s + 上下文 + 分批的余量），到期把占位收敛，不停在「识别中」.
     private func loadTypes(for list: [FileSharingApp]) {
         guard !list.isEmpty else {
             typesSettled = true
@@ -448,9 +449,9 @@ struct FileSharingAppsView: View {
             }
         }
         Task.detached(priority: .utility) {
-            // ① 可选增强：带属性 Lookup（独立 8s，失败就不补）
+            // ① 可选增强：带属性 Lookup（独立 15s、失败就不补；额度见 lookupAppAttributes 默认参数）
             var workList = list
-            let enhanced = FileSharingService.lookupAppAttributes(timeout: 8)
+            let enhanced = FileSharingService.lookupAppAttributes()
             if !enhanced.isEmpty {
                 let byId = Dictionary(
                     enhanced.map { ($0.bundleId, $0) },
