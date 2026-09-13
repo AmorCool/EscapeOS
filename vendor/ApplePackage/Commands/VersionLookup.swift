@@ -98,7 +98,10 @@ public enum VersionLookup {
                     }
                 }
             }
-            try ensureFailed("Apple 没有返回该版本的信息 —— 该 Apple ID 可能缺少此应用的获取记录")
+            // v0.3.364：不再把「空结果」说成「该 Apple ID 可能缺少此应用的获取记录」——
+            // 实测（_corr.json）不带 `externalVersionId` 时该端点对任何应用都可能回
+            // 「HTTP 200 + 空 + 无错误码」，那是接口行为、不是账号没买过。
+            try ensureFailed("Apple 没有返回该版本的信息")
         }
 
         let item = items[0]

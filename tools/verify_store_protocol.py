@@ -125,6 +125,8 @@ def main() -> None:
     shim = source("vendor/ApplePackage/Supplement/AsyncHTTPClientShim.swift")
     purchase = source("vendor/ApplePackage/Commands/Purchase.swift")
     fetch = source("vendor/ApplePackage/Commands/StoreDownloadEndpoint+Fetch.swift")
+    version_finder = source("vendor/ApplePackage/Commands/VersionFinder.swift")
+    version_lookup = source("vendor/ApplePackage/Commands/VersionLookup.swift")
 
     # v0.3.352：Apple 用 `mstt=200 + mtco=0` 表达「这张表是空的」，而票据不被认可时
     # 也是同样的合法空表（不是 401）。因此**允许空表刷新一次会话后重试** ——
@@ -190,6 +192,13 @@ def main() -> None:
             "the candidate version IDs come from the free version catalog")
     require("cachedVersionID" in install and "rememberVersionID" in install,
             "the last good externalVersionId is cached and tried first")
+    # v0.3.364：账号版本通道必须支持带 externalVersionId，并把静默空包归一成 emptyPackage；
+    # 且不得再出现「可能缺少此应用的获取记录」这种把接口行为说成「你没买过」的假结论。
+    require("externalVersionID" in version_finder and "emptyPackage" in version_finder,
+            "the account version channel carries externalVersionId and maps silent empty to emptyPackage")
+    require("可能缺少此应用的获取记录" not in version_finder
+            and "可能缺少此应用的获取记录" not in version_lookup,
+            "no misleading missing-purchase claim in the version channels")
     require("isAppleHost" in history and "fallbackSAPCertURL" in history,
             "the purchase-history SAP signer uses the same relaxed host check as login")
     # 反向断言：已购侧的 host pin 必须**不存在**（与登录侧那条 keep-in-sync）。
