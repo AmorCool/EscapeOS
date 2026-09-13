@@ -514,6 +514,16 @@ final class IPADownloadCenter: ObservableObject {
                     $0.phase = current.autoInstall ? .installing : .done
                     $0.stageText = current.autoInstall ? "安装中" : "已下载"
                 }
+                // v0.3.390：同名文件**刚刚成功落地** → 清掉之前那条「文件不存在」之类的失败记录。
+                //
+                // 为什么必须清（真 bug，`dl-ui` 定位）：`recordFileFailure` 插入的失败任务**不会自己消失**，
+                // 而「已下载」列表是按 `finishedJob(for:)` 判失败态的。下载成功后本条 job 会进 `.installing`
+                // （`isBusy == true`）→ **不算 finished、被过滤掉** → 那一行能匹配到的**只剩那条旧失败记录**
+                // → 用户会看到**刚下好的包被标成红色「下载失败」**，点它还会重试一次安装。
+                // 清掉之后这一行就恢复正常（「安装」/「重装」）。
+                jobs.removeAll {
+                    $0.id != id && $0.localFileName == dest.lastPathComponent && $0.phase == .failed
+                }
                 runner = nil
                 runningID = nil
                 if current.autoInstall {
