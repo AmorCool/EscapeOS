@@ -66,6 +66,9 @@ final class IPADownloadCenter: ObservableObject {
         var version: String?
         var iconURL: String?
         var remoteURL: String?
+        /// v0.3.391：**App Store 商品号（`trackId`）** —— 落盘时写进台账，供「复制商店链接」用。
+        /// AppleID 通道由 `startWithAppleID` 填（直接取 `AppStoreItem.id`）；其它来源为 nil。
+        var storeItemId: String?
         var source: Source
         var accountEmail: String?
         var autoInstall: Bool
@@ -283,6 +286,11 @@ final class IPADownloadCenter: ObservableObject {
         var job = Job(name: item.name, bundleId: item.bundleId, version: shownVersion,
                       iconURL: item.iconSmallURL ?? item.iconURL, remoteURL: nil,
                       source: .appleID, accountEmail: email, autoInstall: true)
+        // v0.3.391：**下载时就知道商品号**，直接记进任务 → 落盘时写进台账。
+        // 用户要的「商店链接」= App Store 的跳转链接（`https://apps.apple.com/app/id<itemId>`），
+        // 而 `AppStoreItem.id` 本身就是 `trackId` —— 根本不需要去读包内 `iTunesMetadata`
+        // （重签包那个文件会被删掉，读包必然失败）。
+        job.storeItemId = item.id
         job.stageText = "准备中"
         job.phase = .downloading
         jobs.insert(job, at: 0)
@@ -519,7 +527,8 @@ final class IPADownloadCenter: ObservableObject {
                                                  // `current` 是本函数开头取的值类型快照，而直链是下载过程中
                                                  // 才由 `onResolvedURL` 回填到 job 上的（AppleID 通道尤其如此）
                                                  // → 用快照会**永远写进 nil**。
-                                                 sourceURL: self.job(id)?.remoteURL ?? current.remoteURL)
+                                                 sourceURL: self.job(id)?.remoteURL ?? current.remoteURL,
+                                                 storeItemId: self.job(id)?.storeItemId ?? current.storeItemId)
                 update(id) {
                     $0.localFileName = dest.lastPathComponent
                     $0.progress = 1

@@ -25,6 +25,14 @@ struct IPADownloadItem: Codable, Identifiable, Hashable {
     /// 面板上的「**复制下载链接**」另取一处 —— 读包内 `iTunesMetadata.plist` 的 `itemId`
     /// 拼 App Store 商店链接。**两者严格互斥、不互相回落**，别再把它们混成一个来源。
     var sourceURL: String? = nil
+    /// v0.3.391：**App Store 商品号（`trackId`）** —— 拼「商店链接」用。
+    ///
+    /// 为什么记这个而不是读包内的 `iTunesMetadata.itemId`：
+    /// **重签工具会把 `iTunesMetadata.plist` 删掉**（本机 `AssppPro-4.2.5.ipa` 与 `NBPro_v3.6.2.ipa`
+    /// 实测都不含该文件），所以读包这条路对重签包必然失败；
+    /// 而**下载的那一刻我们本来就拿着商品号**（`AppStoreItem.id` 就是 `trackId`）。
+    /// 只有 AppleID 通道有（爱思 / 直链来源没有 App Store 商品号）。
+    var storeItemId: String? = nil
     var packageName: String?      // 包内 Info.plist 的显示名
     var isEncrypted: Bool?
     var hasSINF: Bool?
@@ -124,7 +132,8 @@ final class IPADownloadLibrary {
                 version: String?,
                 iconURL: String?,
                 source: String,
-                sourceURL: String? = nil) {
+                sourceURL: String? = nil,
+                storeItemId: String? = nil) {
         let name = fileURL.lastPathComponent
         var index = loadIndex()
         index.removeAll { $0.fileName == name }
@@ -136,6 +145,8 @@ final class IPADownloadLibrary {
         item.source = source
         // 只在拿到真直链时才覆盖，避免 Apple ID 通道把已有直链抹掉
         if let sourceURL, !sourceURL.isEmpty { item.sourceURL = sourceURL }
+        // 同理：没给商品号就保留台账里已有的（别把它抹成 nil）
+        if let storeItemId, !storeItemId.isEmpty { item.storeItemId = storeItemId }
         index.append(item)
         saveIndex(index)
     }

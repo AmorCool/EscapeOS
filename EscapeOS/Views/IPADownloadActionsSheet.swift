@@ -372,6 +372,21 @@ struct IPADownloadActionsSheet: View {
     /// 与台账 `sourceURL` **无关** —— 那是「提取下载链接」的取值，两行严格互斥、不互相回落。
     /// 自签 / 第三方重签包一般没有 `iTunesMetadata` → 提示「无商店链接」。
     private func copyLink() {
+        // ★ v0.3.391（用户要求）：「商店链接」= App Store 的跳转链接
+        // `https://apps.apple.com/app/id<itemId>`，而 **itemId 在下载时就在手上**
+        // （`AppStoreItem.id` 就是 `trackId`，见 `IPADownloadCenter.startWithAppleID`）
+        // → 所以这里**台账优先**，不需要去读包。
+        //
+        // 读包内 `iTunesMetadata.itemId` 只作**兜底**：重签工具会把那个文件删掉
+        // （本机 `AssppPro-4.2.5.ipa` / `NBPro_v3.6.2.ipa` 两个包实测都不含该条目），对重签包必然失败。
+        if let storeId = item.storeItemId, !storeId.isEmpty {
+            let link = Self.storeLink(itemId: storeId)
+            UIPasteboard.general.string = link
+            LoginLogger.shared.log("[下载面板] 复制商店链接（来自台账商品号 \(storeId)）"
+                                   + " → \(Self.masked(link))", category: .appStore)
+            ToastCenter.shared.show("已复制商店链接")
+            return
+        }
         let path = IPADownloadLibrary.shared.path(for: item)
         guard FileManager.default.fileExists(atPath: path) else {
             ToastCenter.shared.show("安装包已不存在")
