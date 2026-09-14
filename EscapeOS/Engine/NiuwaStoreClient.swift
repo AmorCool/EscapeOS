@@ -77,20 +77,6 @@ private enum NiuwaCrypto {
         return b64(sealed.ciphertext + sealed.tag) + b64(Data(n.utf8))
     }
 
-    /// 把最近一次响应**完整**写到 `Documents/LoginLogs/niuwa_last_response.txt`（覆盖式）。
-    ///
-    /// 用途：日志里的响应会被截断到 2000 字，而排查加解密必须看**完整**报文
-    ///（尤其尾部那 14 个字符 = `base64(时间数字)`，它决定 key/iv 的派生）。
-    /// 电脑侧取回：`python ssh_run.py niuwa`（会打印长度 + 尾部 20 字符，并把全文存到本地文件）。
-    private static func dumpResponse(_ raw: String) {
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let dir = docs.appendingPathComponent("LoginLogs", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("niuwa_last_response.txt")
-        let header = "len=\(raw.count)\ntail20=\(String(raw.suffix(20)))\nT=\(lastRequestT ?? "nil")\n---\n"
-        try? (header + raw).write(to: file, atomically: true, encoding: .utf8)
-    }
-
     /// 报文串 → 明文
     static func decrypt(_ s: String) -> Data? {
         // ★ 关键（v0.3.395）：**先去掉整段的 base64 padding 再切分**。
@@ -493,6 +479,26 @@ enum NiuwaStoreClient {
     /// - `server(code:message:)`：200 但**没有任何候选数组键命中** ——
     ///   把 `code` / `messages` / **响应里实际存在的键名**原文带上（这条最关键：
     ///   用户截图一次就能定案，不必再赌键名）
+    /// 把最近一次响应**完整**写到 `Documents/LoginLogs/niuwa_last_response.txt`（覆盖式）。
+    ///
+    /// 用途：日志里的响应会被截断到 2000 字，而排查加解密必须看**完整**报文
+    ///（尤其尾部那 14 个字符 = `base64(时间数字)`，它决定 key/iv 的派生）。
+    /// 电脑侧取回：`python ssh_run.py niuwa`（会打印长度 + 尾部 + T，并把全文存到本地，
+    /// 再当场按 `尾部+T` → `尾部` → `T` 顺序试解）。
+    ///
+    /// ⚠️ 它属于 `NiuwaStoreClient` 而不是 `NiuwaCrypto` —— v0.3.399 曾把它放进
+    /// `NiuwaCrypto`（private），结果客户端侧调用不到，CI 报
+    /// `error: cannot find 'dumpResponse' in scope`。诊断落盘是客户端的职责，放这里。
+    private static func dumpResponse(_ raw: String) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let dir = docs.appendingPathComponent("LoginLogs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("niuwa_last_response.txt")
+        let header = "len=\(raw.count)\ntail20=\(String(raw.suffix(20)))\n"
+            + "T=\(NiuwaCrypto.lastRequestT ?? "nil")\n---\n"
+        try? (header + raw).write(to: file, atomically: true, encoding: .utf8)
+    }
+
     private static func perform(path: String, body: [String: Any],
                                 region: NiuwaRegion, shape: String) async throws -> [NiuwaApp] {
         let log = LoginLogger.shared

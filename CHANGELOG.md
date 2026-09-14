@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.400] - 2026-09-14
+
+### 修复（v0.3.399 的编译错误）
+CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse' in scope`。
+原因：我把这个诊断落盘函数放在了嵌套的 `NiuwaCrypto` 里（`private`），
+而调用它的 `perform` 在**外层** `NiuwaStoreClient` 里 —— 跨类型访问不到。
+修法：把它**移到 `NiuwaStoreClient` 内**（诊断落盘本来就是客户端的职责），
+并把这次踩的坑写进该函数的注释，避免以后重犯。
+
+> 0.3.399 的全部内容（长按菜单/图标提取/截图预览 + 牛蛙响应落盘与 `N=尾部+T` 根因修复）本版照常生效。
+
 ## [0.3.399] - 2026-09-14
 
 ### 新增（长按菜单 / 图标提取 / 截图预览与保存）
