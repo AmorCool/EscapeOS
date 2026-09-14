@@ -21,7 +21,7 @@
 **改动**
 - `LocalDeviceIdentity`：
   - 加**进程内缓存**（`NSLock`），一个 App 生命周期只真正建一次隧道；新增
-    `cachedSnapshot()` / `cachedSerialNumber()` / `invalidate()` / `warmUpInBackground()`；
+    `cachedSnapshot()` / `invalidate()` / `warmUpInBackground()`；
   - **删掉第二次隧道**：不再读 `com.apple.mobile.iTunes` 域，连同那两个没人读的
     FairPlay 字段一起删除；
   - **改准顶部注释**：旧注释称"必须传本机真序列号，Apple 才能关联本机 FairPlay 证书、
@@ -34,6 +34,13 @@
 - 新增 `[计时]` 日志（`onLog`，落 `[下载中心]` 分类）：把三段耗时**分开**——
   「点击→下载链路启动」「账号租约门等待」「设备身份步骤」，另外
   `LocalDeviceIdentity` 内部会打一行「读设备身份耗时 Xms」，用于验证隧道真实开销。
+
+**已知代价**
+- **首次下载**那次的日志里 `serialNumber=` 会是默认的 `0`（该字段不进请求，只影响可读性）；
+  缓存热了之后由 `applyIfCached()` 补上真值。
+- 读设备身份**失败时不写缓存**（免得把一次偶发失败固化一整个生命周期），
+  所以隧道一直不通时每次下载都会在后台重试一次（与改动前的自愈行为一致）。
+- `invalidate()` 已提供，但当前没有调用点（换设备 / 重连隧道时才有意义）。
 
 **未做（有意）**
 - 不动账号租约语义（已购 / 版本历史页靠它防 cookie 并发改写），

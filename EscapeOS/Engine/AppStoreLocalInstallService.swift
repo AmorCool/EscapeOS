@@ -25,17 +25,48 @@ enum AppStoreLocalInstallService {
                                    installProgress: ((Double) -> Void)? = nil,
                                    onResolvedURL: ((String) -> Void)? = nil,
                                    onLog: ((String) -> Void)? = nil) async throws -> URL {
+        let t0 = Date()
         let software = try makeSoftware(item)
+
+        // v0.3.402：**把设备身份读取从下载启动的关键路径上摘下来**。
+        //
+        // 这里原来是一句同步的 `LocalDeviceIdentity.apply()` —— 它会连建 2 次 RSD 隧道
+        // （`lockdownFullDict` 一次 + `com.apple.mobile.iTunes` 域一次，后者只为两个 FairPlay
+        // 字段），真机实测秒级。用户看到的现象就是「点了下载要等好几秒才动」。
+        //
+        // 而现在这几个字段在**本链路上没有任何消费者**：
+        //   · `serialNumber` 不进请求 —— 请求体写死了 `"0"`
+        //     （`StoreDownloadEndpoint+Fetch.swift:290`，v0.3.334 真机验证过的决定），
+        //     它只喂 `Download.swift:123` 的一行日志；
+        //   · `fairPlayCertificate` / `fairPlayDeviceType` 全工程只写不读（v0.3.402 已删）。
+        //
+        // 所以改成「后台预热 + 只吃缓存」：**启动路径上一个设备 IO 都不等**。
+        // 首次下载因此不再付隧道时间；缓存热了之后，下面 `applyIfCached()` 顺手把
+        // `Configuration.deviceSerialNumber` 补上（写与它后面的读在**同一任务**里，无跨线程竞争）。
+        // 预热跑在「等账号租约」这段时间里 —— 那本来就是要等的，正好重叠掉。
+        LocalDeviceIdentity.warmUpInBackground()
+        onLog?("[计时] 下载链路启动（点击→此处 \(ms(since: t0))ms：任务调度 + makeSoftware）")
+
+        // 计时锚点：这一时刻之前的时间 = 账号租约门的排队等待（不是隧道）。
+        let leaseWaitStarted = Date()
         let output = try await StoreAccountSession.withAccount(email: email) { account in
+            // 本闭包的第一句 —— 它跑起来就说明租约已经拿到。
+            // 于是「上面的锚点 → 这里」正好等于**门等待**，与后面的设备身份步骤彻底分开。
+            onLog?("[计时] 账号租约已获得（门等待 \(ms(since: leaseWaitStarted))ms）")
+
             if account.directoryServicesIdentifier.isEmpty { throw LocalError.accountIncomplete("dsPersonId") }
             if account.passwordToken.isEmpty { throw LocalError.accountIncomplete("passwordToken") }
-            let identity = LocalDeviceIdentity.apply()
-            if !identity.isUsable { onLog?("[本机] 未取到序列号，安装授权可能不可用") }
+
+            let identityStarted = Date()
+            LocalDeviceIdentity.applyIfCached()
+            onLog?("[计时] 设备身份步骤 \(ms(since: identityStarted))ms"
+                + "（只吃缓存；冷缓存时由后台预热补，不阻塞）")
             return try await downloadInformation(software: software, account: &account,
                 email: email, externalVersionID: externalVersionID, onLog: onLog)
         }
         // Release account lease and persist cookies before the lengthy IPA transfer/installation.
         try Task.checkCancellation()
+        onLog?("[计时] 已拿到下载信息（含账号租约内全部网络往返 合计 \(ms(since: leaseWaitStarted))ms）")
         onLog?("[AppleID] 版本 \(output.bundleShortVersionString)(\(output.bundleVersion))，sinf \(output.sinfs.count) 个")
         onLog?("[下载] \(URL(string: output.downloadURL)?.host ?? "?")")
         // v0.3.391：把 Apple 这次签发的下载地址**回传给调用方**，由它写进下载台账。
@@ -263,6 +294,14 @@ enum AppStoreLocalInstallService {
         let text = outcome == .purchased ? "已获取许可证" : "该账号已拥有此应用"
         onLog?("[AppleID] \(text)")
         return text
+    }
+
+    /// v0.3.402：`[计时]` 日志用 —— 与锚点的毫秒差。
+    ///
+    /// 只是让差值一眼可见（`LoginLogger` 自己已经带 `HH:mm:ss.SSS` 绝对时间戳）。
+    /// 不叫 `ms` 属性、也不与任何局部常量同名，避免「局部变量遮蔽方法名」那类编译坑。
+    private static func ms(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 
     private static func refreshAccount(email: String, account: inout AppStoreAccount,
