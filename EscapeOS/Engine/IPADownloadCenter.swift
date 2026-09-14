@@ -330,6 +330,12 @@ final class IPADownloadCenter: ObservableObject {
                         // v0.3.391：Apple 一签发下载地址就挂到 job 上 ——
                         // ① `handle` 落盘时会把它写进台账（用户要的「记住这次下载的链接」）；
                         // ② 「下载中」那一行的「提取下载链接」也能立刻取到（不必等下载完）。
+                        //
+                        // v0.3.392：**加一行日志定案** —— 真机实测出现过「下载中能取到、
+                        // 落盘后台账里却是空」的现象，而光读代码看不出原因（链路看着都对）。
+                        // 这条日志 + `handle` 里那条，一次就能定位到底哪一步断掉。
+                        LoginLogger.shared.log("[下载中心] 拿到直链 → 写入任务：\(String(url.prefix(56)))…",
+                                               category: .appStore)
                         Task { @MainActor in
                             self.update(id) { $0.remoteURL = url }
                         }
@@ -525,6 +531,13 @@ final class IPADownloadCenter: ObservableObject {
                 let dest = dir.appendingPathComponent(safeName)
                 try? FileManager.default.removeItem(at: dest)
                 try FileManager.default.moveItem(at: tmp, to: dest)
+                // v0.3.392：落盘前先记一行「到底拿到什么」—— 真机出现过「下载中能提取、
+                // 落盘后台账为空」的现象，这行 + `onResolvedURL` 那行能一次定位断点。
+                let writeURL = self.job(id)?.remoteURL ?? current.remoteURL
+                let writeSID = self.job(id)?.storeItemId ?? current.storeItemId
+                LoginLogger.shared.log("[下载中心] 落盘写台账 \(dest.lastPathComponent)："
+                                       + "sourceURL=\(writeURL.map { String($0.prefix(40)) + "…" } ?? "nil") "
+                                       + "storeItemId=\(writeSID ?? "nil")", category: .appStore)
                 IPADownloadLibrary.shared.record(fileURL: dest,
                                                  displayName: current.name,
                                                  bundleId: current.bundleId,
@@ -535,8 +548,8 @@ final class IPADownloadCenter: ObservableObject {
                                                  // `current` 是本函数开头取的值类型快照，而直链是下载过程中
                                                  // 才由 `onResolvedURL` 回填到 job 上的（AppleID 通道尤其如此）
                                                  // → 用快照会**永远写进 nil**。
-                                                 sourceURL: self.job(id)?.remoteURL ?? current.remoteURL,
-                                                 storeItemId: self.job(id)?.storeItemId ?? current.storeItemId)
+                                                 sourceURL: writeURL,
+                                                 storeItemId: writeSID)
                 update(id) {
                     $0.localFileName = dest.lastPathComponent
                     $0.progress = 1

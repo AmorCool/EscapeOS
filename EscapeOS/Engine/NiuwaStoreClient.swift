@@ -1,5 +1,101 @@
 import Foundation
 import UIKit
+import CryptoKit
+
+// MARK: - 牛蛙报文加解密（v0.3.392）
+
+/// 牛蛙接口的**请求/响应都要加解密**，算法由逆向确证、并已用 Python 独立复现。
+///
+/// ## 报文结构
+/// `报文 = base64NoPad(密文‖tag) + base64NoPad(str(N))`
+/// - 解密：切尾部 **14 字符** → 解出 `N`（10 位十进制）；前段解出 `密文‖tag`
+///   （样本实测 **58 字节 = 42 密文 + 16 tag**）。
+/// - `N` 是服务端/客户端约定的时间种子（原始客户端：`time(NULL) + arc4random_uniform(1e8) + 1e8`）。
+///
+/// ## 算法与参数
+/// - **AES-256-GCM**（nonce 12 字节、tag 16 字节）
+/// - `key = MD5(前缀A + str(N)).uppercased()` → **32 字符 hex 串直接当 key 的 UTF-8 字节**
+/// - `iv  = MD5(前缀B + str(N)).uppercased()` 的 **第 5..<17 字符**（12 字符）
+///
+/// ## 已验证
+/// 用真机抓到的响应样本解出：`{"pub_code":650,"pub_desc":"unknow error"}`
+/// ⇒ 这说明**服务端在报「你没按加密格式发请求」** —— 即「HTTP 200 但不是 JSON」的根因是
+/// **我们过去一直发明文 JSON**，而不是解密不出来。
+private enum NiuwaCrypto {
+
+    /// 前缀 A（**32 字节**）：`~!@#$%^&*()_+` + **3 个空格** + `+_)(*&^%$#@!~` + **3 个空格**
+    ///
+    /// ⚠️ 空格**必须显式拼接**：直接写在一行里极易被格式化/编辑器吃掉，而**差一个空格整个算法就废**。
+    static let prefixA = ["~!@#$%^&*()_+", "   ", "+_)(*&^%$#@!~", "   "].joined()
+
+    /// 前缀 B（**12 字节**）：`%$#@!` + **2 个空格** + `^&*()`
+    static let prefixB = ["%$#@!", "  ", "^&*()"].joined()
+
+    /// 新生成一个 N（模仿原客户端；解密侧只认尾部那串数字，所以自造值亦可）
+    static func newN() -> String {
+        let t = Int(Date().timeIntervalSince1970)
+        return "\(t + Int.random(in: 0..<100_000_000) + 100_000_000)"
+    }
+
+    /// 由 N 派生 (key, iv)
+    static func deriveKeyIV(n: String) -> (key: Data, iv: Data) {
+        let keyHex = md5Upper(prefixA + n)
+        let ivFull = md5Upper(prefixB + n)
+        let ivHex = String(Array(ivFull)[5..<17])
+        return (Data(keyHex.utf8), Data(ivHex.utf8))
+    }
+
+    /// MD5 的大写十六进制串（`Insecure.MD5` 是 CryptoKit 对常用 MD5 的封装，够用且无第三方依赖）
+    static func md5Upper(_ s: String) -> String {
+        Insecure.MD5.hash(data: Data(s.utf8))
+            .map { String(format: "%02X", $0) }
+            .joined()
+    }
+
+    /// 明文 → 可发送的报文串
+    static func encrypt(_ plain: Data) -> String? {
+        let n = newN()
+        let (key, iv) = deriveKeyIV(n: n)
+        guard let nonce = try? AES.GCM.Nonce(data: iv),
+              let sealed = try? AES.GCM.seal(plain, using: SymmetricKey(data: key), nonce: nonce) else {
+            return nil
+        }
+        return b64(sealed.ciphertext + sealed.tag) + b64(Data(n.utf8))
+    }
+
+    /// 报文串 → 明文
+    static func decrypt(_ s: String) -> Data? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 14 else { return nil }
+        let tail = String(trimmed.suffix(14))
+        let head = String(trimmed.dropLast(14))
+        guard let nData = base64Decode(tail),
+              let n = String(data: nData, encoding: .utf8),
+              let blob = base64Decode(head), blob.count > 16 else { return nil }
+        let ciphertext = Data(blob.prefix(blob.count - 16))
+        let tag = Data(blob.suffix(16))
+        let (key, iv) = deriveKeyIV(n: n)
+        guard let nonce = try? AES.GCM.Nonce(data: iv),
+              let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag),
+              let plain = try? AES.GCM.open(box, using: SymmetricKey(data: key)) else {
+            return nil
+        }
+        return plain
+    }
+
+    /// base64 **去掉 `=` padding**（报文两段都不带 padding）
+    static func b64(_ d: Data) -> String {
+        d.base64EncodedString().replacingOccurrences(of: "=", with: "")
+    }
+
+    /// 解 base64（自动补齐 padding；同时容忍 URL-safe 字母表）
+    static func base64Decode(_ s: String) -> Data? {
+        var t = s.replacingOccurrences(of: "-", with: "+")
+                 .replacingOccurrences(of: "_", with: "/")
+        t += String(repeating: "=", count: (4 - t.count % 4) % 4)
+        return Data(base64Encoded: t)
+    }
+}
 
 /// v0.3.382：免登录下载商店的**第二来源**——牛蛙（NiuWaCore）接口客户端。
 ///
@@ -152,6 +248,8 @@ enum NiuwaStoreClient {
         /// 200 但信封里没有已知的数组键 —— 把 `code` / `messages` / **实际键名**都带上
         case server(code: String, message: String)
         case network(String)
+        /// v0.3.392：报文加解密失败（请求体加密 / 响应解密）
+        case crypto(String)
 
         var errorDescription: String? {
             switch self {
@@ -163,7 +261,7 @@ enum NiuwaStoreClient {
             case .server(let code, let message):
                 return message.isEmpty ? "服务端返回码 \(code)" : "\(message)（\(code)）"
             case .network(let m): return "网络错误：\(m)"
-            }
+            case .crypto(let m): return "报文加密异常：\(m)"            }
         }
     }
 
@@ -236,7 +334,15 @@ enum NiuwaStoreClient {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // ★ v0.3.392：**请求体必须加密**。
+        // 过去我们发的是明文 JSON，服务端直接回 `{"pub_code":650,"pub_desc":"unknow error"}`
+        // （HTTP 状态还是 200）—— 这就是「HTTP 200 但不是 JSON」的真正原因。
+        // 报文格式与响应一致：`base64NoPad(密文‖tag) + base64NoPad(str(N))`。
+        let plain = try JSONSerialization.data(withJSONObject: body)
+        guard let sealedBody = NiuwaCrypto.encrypt(plain) else {
+            throw StoreError.crypto("请求体加密失败")
+        }
+        req.httpBody = Data(sealedBody.utf8)
         let (data, resp) = try await session.data(for: req)
         if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw StoreError.http(http.statusCode)
@@ -336,10 +442,20 @@ enum NiuwaStoreClient {
         }
 
         let raw = String(data: data, encoding: .utf8) ?? "<非 UTF-8 \(data.count) 字节>"
-        log.log("\(logTag) ← 响应体 \(truncate(raw))", category: .appStore)
+        log.log("\(logTag) ← 原始响应 \(truncate(raw))", category: .appStore)
 
-        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            log.log("\(logTag) ✗ 响应不是 JSON 对象", category: .appStore)
+        // ★ v0.3.392：响应是**加密体**，先解密再解析。
+        // 解密失败时把原始体前 200 字符留档（否则以后又是「什么都看不到」）。
+        guard let plain = NiuwaCrypto.decrypt(raw) else {
+            log.log("\(logTag) ✗ 响应解密失败；原始体（前 200）：\(String(raw.prefix(200)))",
+                    category: .appStore)
+            throw StoreError.crypto("响应解密失败")
+        }
+        let plainText = String(data: plain, encoding: .utf8) ?? "<非 UTF-8 \(plain.count) 字节>"
+        log.log("\(logTag) ← 解密后 \(truncate(plainText))", category: .appStore)
+
+        guard let obj = (try? JSONSerialization.jsonObject(with: plain)) as? [String: Any] else {
+            log.log("\(logTag) ✗ 解密后仍不是 JSON 对象", category: .appStore)
             throw StoreError.decode
         }
 
