@@ -283,6 +283,9 @@ enum NiuwaStoreClient {
         var fileId: String?
         /// 更新时间（`currentVersionReleaseDate`，形如 `2025-06-06T10:00:00+08:00`）
         var releaseDate: String?
+        /// v0.3.404：**下载接口**返回的 `ba_sinfs`（base64 文本，安装加密包时要用）。
+        /// 只有 `/appstore/download` 的响应带它；搜索接口恒为 nil。
+        var sinfBase64: String?
 
         /// 列表按 bundleId 去重 → 用 bundleId 当 id
         var id: String { bundleId }
@@ -552,6 +555,31 @@ enum NiuwaStoreClient {
             ?? (obj["nwcore_messages"] as? [Any])?.map { string($0) ?? "" }.joined(separator: "；")
             ?? string(obj["message"])
             ?? ""
+
+        // ★★ v0.3.404：**下载接口的响应没有数组** —— `body` 直接给两个字段：
+        //   `ba_ipaURL`（安装包直链）、`ba_sinfs`（base64 的 sinf）。
+        // 真机实测（v0.3.403 日志）：
+        //   {"body":{"ba_ipaURL":"https://iosapps.itunes.apple.com/…signed.dpkg.ipa?accessKey=…",
+        //            "ba_sinfs":"AAAECHNpbmY…"},"pub_code":0,"pub_desc":"接口调用成功"}
+        // 之前这里和搜索**共用「找数组」的解析** → 永远命中不了 → 用户看到「获取不了」。
+        if let body = obj["body"] as? [String: Any],
+           let ipa = string(body["ba_ipaURL"]), !ipa.isEmpty {
+            let sinfB64 = string(body["ba_sinfs"])
+            log.log("\(logTag) ✓ 下载接口返回直链（sinf \(sinfB64?.count ?? 0) 字符）（region=\(shape)）",
+                    category: .appStore)
+            return [NiuwaApp(appId: string(body["app_id"]),
+                             bundleId: string(body["bundleid"]) ?? "",
+                             name: string(body["name"]) ?? "",
+                             desc: nil,
+                             version: string(body["version"]),
+                             sizeText: nil,
+                             iconURL: nil,
+                             downloadURL: ipa,
+                             md5: string(body["md5"]),
+                             fileId: string(body["fileId"]),
+                             releaseDate: nil,
+                             sinfBase64: sinfB64)]
+        }
 
         // ★★ v0.3.403：**数组可能嵌在 `body` 里**（真机实测就是 `body.ba_apps`）。
         // 先在 `body` 里找，再回落到顶层 —— 之前的实现只看顶层，
