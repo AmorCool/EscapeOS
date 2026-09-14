@@ -295,11 +295,15 @@ enum DeviceSlimService {
     ///      不再重复开隧道；
     ///   4. 只有**快路径也失败**时才回空数组，并置问题文案 → 页面显示
     ///      「应用读取超时」+ 重试，**不显示成静默空列表**.
-    /// 注意：大小字段（`StaticDiskUsage` / `DynamicDiskUsage`）**两条路都拿不到** ——
-    /// `get_apps` 从来不带它们，而 v0.3.401 起带属性 Lookup 也**不再请求**它们
-    ///（为解决「带属性 Lookup 卡 ~25 秒」的回归）。iOS 侧没有 AFC 等价通道能补应用大小
-    ///（house_arrest 只到数据容器），所以「应用」分片与「较大应用」的精确度**完全依赖
-    /// 第 2 步能否成功**；取不到时页面必须明确提示「应用大小不可用」（判据见 sizeComplete）.
+    /// 注意：大小的可得性分两种（v0.3.406 起）——
+    ///   - **应用大小** `appSize`：只能来自第 2 步的带属性 Lookup（`StaticDiskUsage`，
+    ///     v0.3.406 加回请求；`get_apps` 从来不带）。取不到时「应用」分片与「较大应用」
+    ///     会退化，页面必须明确提示「应用大小不可用」（判据见 sizeComplete）.
+    ///   - **文档大小** `docSize`（`DynamicDiskUsage`）：**暂不请求**（疑为「带属性 Lookup
+    ///     卡 ~25 秒」的元凶，见 FileSharingService / installation_proxy.rs 注释），
+    ///     所以它恒为 nil —— 无法给「应用」分片补上文档占用，也影响了「较大应用」的排序
+    ///     精度（只看 bundle 大小）. AFC 有等价实现（`computeDocumentsSize`），
+    ///     但它是「每个 App 一条隧道」的慢路径，全量 334 个不现实.
     private static func readAppsForSlim() -> AppReadResult {
         appReadLock.lock()
         if let cache = appReadCache, Date().timeIntervalSince(cache.at) < 30 {
@@ -345,10 +349,11 @@ enum DeviceSlimService {
             // 注：iOS 侧**没有 AFC 等价通道**能补应用大小（house_arrest 只到数据容器），
             // 所以去掉这两个字段就等于「应用大小整体不可用」，必须让页面说清楚.
             let sizedApps = result.apps.filter { $0.appSize != nil }.count
+            let sizedDocs = result.apps.filter { $0.docSize != nil }.count
             result.sizeComplete = sizedApps > 0
             LoginLogger.shared.log(
                 "[设备瘦身] 大小增强回填 \(patched) 条，其中真的带 appSize \(sizedApps) 条"
-                + "（sizeComplete=\(result.sizeComplete)）"
+                + " / 带 docSize \(sizedDocs) 条（sizeComplete=\(result.sizeComplete)）"
             )
         }
 

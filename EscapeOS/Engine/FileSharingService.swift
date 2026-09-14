@@ -175,6 +175,14 @@ enum FileSharingService {
     /// 类型判定只需要 `iTunesMetadata` + 基础标识字段。真机跑一次看日志里的
     /// **实际执行 X.Xs** 是否从 20s+ 掉到可接受，即完成验证（日志见本函数内）.
     ///
+    /// v0.3.406：**只把 `StaticDiskUsage` 加回请求**（用户报「设备瘦身扫不到应用」——
+    /// 334 个应用一个都没拿到 `appSize`）。`DynamicDiskUsage` / `CFBundleSize` 仍不请求：
+    /// 前者是动态计算（遍历数据容器、随用量增长），最可能就是 25 秒的元凶。
+    /// 本函数打印的「请求字段」清单即真机判据 —— 加回后 `实际执行 Y.Ys` 若回到 2~3 秒量级
+    /// ⇒ 卡的是 `DynamicDiskUsage`（应用大小 + 购买邮箱同时恢复）；若仍是 ~25 秒
+    /// ⇒ 卡的是 Lookup/installd 本身、与字段无关，此时应把 `StaticDiskUsage` 再删掉
+    /// （只留「大小不可用」提示），不要把卡死引回来.
+    ///
     /// 额度自适应：`timeout` 是外层给这条链路的总额度，这里给带属性 Lookup 留
     /// `timeout - 5`（真机 `get_apps` 2.5s 级，留 5s 足够降级跑完并把列表交回），
     /// 上限 `attributeLookupBudget`；**额度 < 10s 的调用直接用 `get_apps`**——
@@ -229,10 +237,12 @@ enum FileSharingService {
     /// v0.3.401：带属性 Lookup **实际请求**的字段（日志用）。必须与 Rust
     /// `rust/idevice-ffi/src/installation_proxy.rs` 的 `attrs` 常量逐条一致——
     /// 改一处务必改另一处，否则日志会骗人.
+    /// v0.3.406：已加回 `StaticDiskUsage`（恢复应用大小）；`DynamicDiskUsage` /
+    /// `CFBundleSize` 仍不在列表里（前者疑为 25 秒卡死的元凶）.
     private static let attributeRequestFields = [
         "CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
         "CFBundleShortVersionString", "ApplicationType", "UIFileSharingEnabled",
-        "Path", "iTunesMetadata", "ApplicationDSID", "SignerIdentity",
+        "Path", "StaticDiskUsage", "iTunesMetadata", "ApplicationDSID", "SignerIdentity",
     ]
 
     /// v0.3.401：带属性 Lookup 的执行额度上限（秒）——主路径与可选增强
@@ -250,10 +260,12 @@ enum FileSharingService {
     /// 返回与主路径完全相同的列表；三处消费方（文档浏览 / 应用管理 / 设备瘦身）
     /// 的「第二版精修」因此变成幂等回填，保留它是为了兼容调用方签名与
     /// 「主路径未取到、稍后又自愈」的窗口.
-    /// ⚠️ 大小字段自 v0.3.401 起**不再由这条命令返回**（Rust attrs 已收紧），
-    /// 所以这里补不回 appSize/docSize。文档大小本有 AFC 兜底实现
-    /// （`computeDocumentsSize`），但其调用点 `FileSharingAppsView.computeDocumentSizes()`
-    /// **当前是死代码**；应用大小在 iOS 侧没有 AFC 等价通道（house_arrest 只到数据容器）.
+    /// v0.3.406：`StaticDiskUsage`（应用大小）已**加回请求** —— 这里能补回 `appSize`；
+    /// 仍补不回的是**文档大小**（`DynamicDiskUsage`，疑为 25 秒卡死的元凶，暂不请求）。
+    /// 文档大小有 AFC 等价实现（`computeDocumentsSize`：house_arrest + AFC 递归求和），
+    /// 但其调用点 `FileSharingAppsView.computeDocumentSizes()` **当前是死代码**，
+    /// 要用得先接上；且它是「每个 App 一条隧道」的慢路径，全量 334 个跑不现实.
+    /// 应用大小在 iOS 侧没有 AFC 等价通道（house_arrest 只到数据容器）.
     ///
     /// 独立超时、失败或超时**返回空数组**（字段保持「—」）；调用方必须在首屏渲染
     /// 之后调用，且不得因它失败而回退/清空主列表.
@@ -707,9 +719,10 @@ enum FileSharingService {
     ///
     /// **v0.3.378：曾降级为可选增强；v0.3.401 起重新是「类型判定主路径」**
     /// （由 `listAppsWithAttributesWithFallback` 调用，额度自适应、失败由外层降级
-    /// 到 `get_apps`）。此函数是购买邮箱 / 大小字段的**唯一**来源；v0.3.401 起
-    /// ReturnAttributes 已收紧到类型判定必需字段（Rust 侧 `attrs` 常量），
-    /// 因此它**不再返回** `StaticDiskUsage` / `DynamicDiskUsage` / `CFBundleSize`.
+    /// 到 `get_apps`）。此函数是购买邮箱 / 应用大小的**唯一**来源；v0.3.401 起
+    /// ReturnAttributes 收紧、**v0.3.406 加回 `StaticDiskUsage`**（Rust 侧 `attrs` 常量），
+    /// 所以它返回 `StaticDiskUsage` 而**不返回** `DynamicDiskUsage` / `CFBundleSize`
+    /// （即：有 `appSize`、没有 `docSize`）.
     private static func lookupAppsWithAttributes() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }

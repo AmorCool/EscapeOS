@@ -741,15 +741,17 @@ pub unsafe extern "C" fn installation_proxy_archive(
 /// v0.3.378 把主路径退回 `get_apps` 后「共享正版被判成苹果正版」的原因。
 ///
 /// **v0.3.401：收紧到「类型判定必需」的字段**（去掉 StaticDiskUsage /
-/// DynamicDiskUsage / CFBundleSize）。假设（待真机验证）：这三个字段会让 installd
-/// 对**每个**已装应用走一遍 bundle / 数据容器目录树（`DynamicDiskUsage` 要遍历
-/// GB 级数据容器），是这条命令最贵的部分，也是 v0.3.378 之前「20 秒一个字节不回」的
-/// 重要成因之一。去掉后真机耗时若掉到可接受区间，即验证该假设。
-/// 代价：大小字段自此**不再由本命令返回**。文档大小的 AFC 兜底实现存在
-/// （Swift `FileSharingService.computeDocumentsSize`），但它的调用点
-/// `FileSharingAppsView.computeDocumentSizes()` 目前**没有任何调用**（死代码），
-/// 要用得先接上；应用大小在 iOS 侧没有 AFC 等价通道（house_arrest 只到数据容器），
-/// 需另开按需通道才能恢复。
+/// DynamicDiskUsage / CFBundleSize）—— 为解决这条命令卡 ~25 秒（真机实测）。
+///
+/// **v0.3.406：加回 `StaticDiskUsage` 单字段**（恢复「应用大小」，用户报
+/// 「设备瘦身扫不到应用」）。`DynamicDiskUsage` / `CFBundleSize` 仍不请求：
+/// 前者是动态计算（遍历数据容器、随用量增长），最可能就是 25 秒的元凶；
+/// 后者与 StaticDiskUsage 语义重叠。真机耗时即判据（见 attrs 常量上方注释）。
+/// 仍未恢复的是**文档大小**（`DynamicDiskUsage`）：AFC 侧有等价实现
+/// （Swift `FileSharingService.computeDocumentsSize`：house_arrest 打开容器 + AFC
+/// 递归求和），但它的调用点 `FileSharingAppsView.computeDocumentSizes()` 目前
+/// **没有任何调用**（死代码），要用得先接上；且它是「每个 App 一条隧道」的慢路径，
+/// DeviceSlim 的 334 个应用全量跑不现实，只能按需/候选集去算。
 /// 结果以 binary plist 数组字节回传（调用方 idevice_data_free 释放）。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn installation_proxy_lookup_apps(
@@ -765,10 +767,18 @@ pub unsafe extern "C" fn installation_proxy_lookup_apps(
         let client_ref = unsafe { &mut *client };
 
         // v0.3.401（回归修复）：ReturnAttributes 收紧到**类型判定必需**的字段。
-        // 删掉 StaticDiskUsage / DynamicDiskUsage / CFBundleSize —— 假设（待真机验证）：
-        // 这三个会让 installd 对**每个**已装应用走一遍 bundle/数据容器目录树
-        //（DynamicDiskUsage 要遍历 GB 级数据容器），是本命令最贵的部分，也是 v0.3.378
-        // 之前「20 秒一个字节不回」的重要成因之一。
+        // v0.3.406：**只加回 `StaticDiskUsage` 一个字段**（恢复「应用大小」），
+        // `DynamicDiskUsage` / `CFBundleSize` 仍然不请求。理由（可验证的假设）：
+        //   - `DynamicDiskUsage` 是**动态**计算 —— installd 要遍历每个 App 的数据容器，
+        //     容器越大/文件越多越慢（334 个应用里只要有几个 GB 级容器就会拖到几十秒）；
+        //   - `StaticDiskUsage` 是 installd 已有的 bundle 静态统计，读一下就有，几乎免费；
+        //   - v0.3.401 只验证了「三个字段全去掉就不卡」，**没有区分是哪一个**造成的，
+        //     真机日志（`[文件共享] 主路径：带属性 Lookup（请求字段：…；额度 X.Xs）` →
+        //     `主路径返回 N 条（带 iTunesMetadata M / 带购买邮箱 K），端到端 X.Xs（实际执行 Y.Ys）`）
+        //     就是用来定论的：Y.Ys 若回到 2~3 秒量级 ⇒ 卡的是 `DynamicDiskUsage`；
+        //     若仍是 ~25 秒 ⇒ 卡的是 Lookup/installd 本身，与字段无关。
+        //     ⚠️ 后者一旦被真机证实：**删掉下面 attrs 里的 StaticDiskUsage 再回报**
+        //     （只留「大小不可用」提示那条），不要把卡死重新引回来。
         // **必须保留**：iTunesMetadata（购买邮箱/正版存在性的唯一来源 —— 共享正版
         // 判定靠它）、ApplicationType（HiddenSystemApp/User 分流）、UIFileSharingEnabled
         //（是否开启文件共享）、以及基础标识字段（CFBundleIdentifier / CFBundleDisplayName
@@ -776,7 +786,7 @@ pub unsafe extern "C" fn installation_proxy_lookup_apps(
         // SignerIdentity（Swift 侧解析这两个字段，读它们是零成本的、已随 dict 返回）。
         // ⚠️ 与 Swift 侧日志字段表 `FileSharingService.attributeRequestFields` 必须一致：
         //    改这里就同步改那里，否则日志会骗人。
-        let attrs = "<string>CFBundleIdentifier</string><string>CFBundleDisplayName</string><string>CFBundleName</string><string>CFBundleShortVersionString</string><string>ApplicationType</string><string>UIFileSharingEnabled</string><string>Path</string><string>iTunesMetadata</string><string>ApplicationDSID</string><string>SignerIdentity</string>";
+        let attrs = "<string>CFBundleIdentifier</string><string>CFBundleDisplayName</string><string>CFBundleName</string><string>CFBundleShortVersionString</string><string>ApplicationType</string><string>UIFileSharingEnabled</string><string>Path</string><string>StaticDiskUsage</string><string>iTunesMetadata</string><string>ApplicationDSID</string><string>SignerIdentity</string>";
 
         let mut xml = String::new();
         xml.push_str(crate::mcinstall::PLIST_HEADER);
