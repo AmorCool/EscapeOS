@@ -28,9 +28,10 @@ struct IPADownloadActionsSheet: View {
 
     /// v0.3.387：「下载中」任务弹这个面板时为 true。
     ///
-    /// 这时本地**还没有包文件**（文件名/体积都要等下载落地），所以依赖文件的几行
-    /// （覆盖安装 / 在线安装 / 打开 / 复制商店链接 / 分享 IPA / 删除）全都不成立，
-    /// 面板只渲染「其它操作 → 提取下载链接」—— 用户要的就是「下载过程也能提取直链」。
+    /// v0.3.394 改法（用户参考图是「点一行 → 展开这个包的详情」）：**不再裁剪行**，
+    /// 全部动作照原样渲染，只把**需要本地包文件**的两行使灰 —— 「覆盖安装」「在线安装」。
+    /// 其余照常：「提取下载链接」用任务直链、「复制商店链接」用台账商品号、
+    /// 打开/分享/删除在真缺文件时会给出各自的提示（不再是「点下去没反应」）。
     /// 已下载条目走原样（默认 false）。
     var isPendingDownload: Bool = false
 
@@ -74,16 +75,11 @@ struct IPADownloadActionsSheet: View {
             VStack(spacing: 14) {
                 header
 
-                if isPendingDownload {
-                    // 下载中的任务：本地还没有包文件，只留能用的那一行
-                    cardSection("其它操作", rows: pendingRows)
-                } else {
-                    cardSection("安装", rows: installRows)
+                cardSection("安装", rows: installRows)
 
-                    cardSection("操作", rows: actionRows)
+                cardSection("操作", rows: actionRows)
 
-                    cardSection("其它操作", rows: otherRows)
-                }
+                cardSection("其它操作", rows: otherRows)
 
                 cancelButton
             }
@@ -172,9 +168,17 @@ struct IPADownloadActionsSheet: View {
     // MARK: - 动作行
 
     /// 安装：覆盖安装（原来的本地安装方式）+ 在线安装
+    ///
+    /// v0.3.394：「下载中」的任务**把这两行置灰**（右侧标「下载中」）——
+    /// 本地还没有包文件，覆盖安装必然落到 `installLocal` 的「文件不存在」分支，
+    /// 而那条分支会给**这个文件名**记一条失败（`recordFileFailure`），
+    /// 之后真正下好的同名条目就会被标成红色「下载失败」（v0.3.390 专门修过这个坑）。
+    /// 在线安装同样不该在包还没落地时另起一次。所以这两行只在有本地文件时可点。
     private var installRows: [RowSpec] {
         [
-            RowSpec(icon: "arrow.down.app.fill", tint: .blue, title: "覆盖安装") {
+            RowSpec(icon: "arrow.down.app.fill", tint: .blue, title: "覆盖安装",
+                    trailing: isPendingDownload ? .text("下载中") : RowTrailing.none,
+                    disabled: isPendingDownload) {
                 onOverwriteInstall()
                 dismiss()
             },
@@ -182,8 +186,10 @@ struct IPADownloadActionsSheet: View {
         ]
     }
 
-    /// 「在线安装」行。置灰规则：本机服务器当前被 `.share` 会话占用时不可点
-    /// （单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那份会话）。
+    /// 「在线安装」行。两条置灰规则：
+    /// 1. **v0.3.394**：下载中的任务（本地还没有包）→ 灰 + 「下载中」（理由见 `installRows`）；
+    /// 2. 本机服务器当前被 `.share` 会话占用时不可点
+    ///    （单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那份会话）。
     /// ⚠️ v0.3.386 起「提取下载链接」已改为纯读台账、不再起本机服务 →
     /// `blockedByShare` **恒为 `false`**（判断有意保留，见 `IPALocalHTTPServer` 类型注释）。
     private var onlineInstallRow: RowSpec {
@@ -194,19 +200,21 @@ struct IPADownloadActionsSheet: View {
             }
         }
         let blockedByShare = IPALocalHTTPServer.shared.currentPurpose == .share
+        let note: String? = isPendingDownload ? "下载中" : (blockedByShare ? "分享中" : nil)
         return RowSpec(icon: "icloud.and.arrow.down", tint: .green, title: "在线安装",
-                       trailing: blockedByShare ? .text("分享中") : RowTrailing.none,
-                       disabled: blockedByShare) {
+                       trailing: note.map { RowTrailing.text($0) } ?? RowTrailing.none,
+                       disabled: isPendingDownload || blockedByShare) {
             onlineInstall()
         }
     }
 
     private var actionRows: [RowSpec] {
         var rows: [RowSpec] = [openRow]
-        // 「复制商店链接」**常显**：取值是包内 `iTunesMetadata.itemId`（本地文件），
-        // 与台账 `sourceURL` 无任何关系 —— 台账没直链也照样能读出商店链接。
+        // 「复制商店链接」**常显**：取值**台账商品号优先**（`item.storeItemId`），
+        // 读包内 `iTunesMetadata.itemId` 只是兜底 —— 重签包那个文件会被删掉。
+        // 与台账 `sourceURL`（「提取下载链接」的取值）无任何关系 —— 两条严格互斥。
         // 早期它是按「台账有 sourceURL」条件隐藏的，那个门控随取值来源一起作废了；
-        // 包里读不到商品号时由 `copyLink()` 自己提示「无商店链接」。
+        // 两处都取不到时由 `copyLink()` 自己提示「无商店链接」。
         rows.append(RowSpec(icon: "link", tint: .teal, title: "复制商店链接") {
             copyLink()
         })
@@ -225,9 +233,6 @@ struct IPADownloadActionsSheet: View {
             }
         ]
     }
-
-    /// 「下载中」任务可用的唯一一行 —— 本地没文件，删除/安装/打开/分享都不成立
-    private var pendingRows: [RowSpec] { [extractLinkRow] }
 
     /// 「提取下载链接」行。取值是**台账里的 IPA 包原链接**（`sourceLink`，下载中则由任务直链兜底）：
     /// 纯读本地数据，不读包、不碰任何服务 —— 与「在线安装」没有任何竞争关系，
@@ -323,14 +328,9 @@ struct IPADownloadActionsSheet: View {
     }
 
     /// 贴合内容高度：固定行高 × 行数 + 头图 + 三个分组标题 + 取消行 + 内边距
+    ///
+    /// v0.3.394：「下载中」不再裁行，所以**只有一种高度**（原来那个 pending 分支已删）。
     private var sheetHeight: CGFloat {
-        if isPendingDownload {
-            // 一个分组、一行（提取下载链接）+ 取消行
-            let rowsHeight = CGFloat(1) * 58
-            return 16 + 52 + 14
-                + 23 + rowsHeight
-                + 14 + 44 + 26
-        }
         let actionCount = 3                                     // 打开 / 复制商店链接 / 分享（后两条恒显示）
         let rows = 2 + actionCount + 2                          // 安装 2 行 + 其它操作 2 行
         let sections: CGFloat = 3
@@ -389,7 +389,8 @@ struct IPADownloadActionsSheet: View {
         }
         let path = IPADownloadLibrary.shared.path(for: item)
         guard FileManager.default.fileExists(atPath: path) else {
-            ToastCenter.shared.show("安装包已不存在")
+            // v0.3.394：下载中还没有文件，「已不存在」是错的提示
+            ToastCenter.shared.show(isPendingDownload ? "安装包尚未下载完成" : "安装包已不存在")
             return
         }
         // v0.3.391：分步读 + 分步记日志 —— 一次点击就能区分「包里压根没这个条目」
@@ -426,7 +427,8 @@ struct IPADownloadActionsSheet: View {
     private func shareIPA() {
         let url = URL(fileURLWithPath: IPADownloadLibrary.shared.path(for: item))
         guard FileManager.default.fileExists(atPath: url.path) else {
-            ToastCenter.shared.show("安装包已不存在")
+            // v0.3.394：下载中还没有文件，「已不存在」是错的提示
+            ToastCenter.shared.show(isPendingDownload ? "安装包尚未下载完成" : "安装包已不存在")
             return
         }
         shareTarget = ShareTarget(url: url)

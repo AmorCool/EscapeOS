@@ -41,16 +41,22 @@ struct IPADownloadManagerView: View {
         return f
     }()
 
+    /// v0.3.394：「下载中」那一行用的时间戳 —— 参考图是 `2026-09-14 12:06:43`（带秒）
+    private static let stampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
     var body: some View {
         // 只有进入「编辑」才允许勾选（否则点一下就会被选中）
         List(selection: Binding(get: { isEditing ? selection : [] },
                                 set: { if isEditing { selection = $0 } })) {
-            activeSection
             summarySection
-            contentSection
+            mergedSection
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("下载管理")
+        .navigationTitle(listTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -82,15 +88,28 @@ struct IPADownloadManagerView: View {
                 onDelete: { delete(item) })
         }
         .sheet(item: $actionJob) { job in
-            // v0.3.387：「下载中」那行 → 同一个面板，但本地还没有包，
-            // 所以只渲染「提取下载链接」（值取 `job.remoteURL`，见 `pendingItem`）。
-            // 那两个闭包在 pending 模式下不会被渲染/调用，给空实现即可。
+            // v0.3.394：下载中的任务**不再是「只留一行」的裁剪面板** —— 参考图是「展开 ipa 详情」，
+            // 所以全部动作都显示，只把「覆盖安装 / 在线安装」置灰（本地还没有包文件，见面板内注释）。
+            // 「删除」在这个模式下 = 取消这次下载并丢弃半成品，所以必须真的接上闭包，
+            // 否则用户点了确认却什么都没发生（比置灰更糟）。
             IPADownloadActionsSheet(
                 item: pendingItem(job),
                 iconURL: icons[job.bundleId ?? ""] ?? job.iconURL,
                 onOverwriteInstall: {},
-                onDelete: {},
+                onDelete: {
+                    center.cancel(job.id)
+                    reload()
+                },
                 isPendingDownload: true)
+        }
+        // v0.3.394（用户硬要求）：**装完不用退出这一页就能自己刷新**。
+        //
+        // 行内容来自磁盘台账（不是 `@Published`），所以「安装中 → 安装/重装」这一步
+        // 必须重新读一次台账才会出现。`finishedTick` 由下载中心在**任务换阶段**时 +1
+        // （见 `IPADownloadCenter.update`），一个任务只有 2~3 次，不会把磁盘读爆；
+        // 而 `jobs` 每个进度回调都变，跟着它重读会读爆 —— 这是选它的原因。
+        .onChange(of: center.finishedTick) { _, _ in
+            reload()
         }
         .task {
             reload()
@@ -98,88 +117,243 @@ struct IPADownloadManagerView: View {
         }
     }
 
-    // MARK: - 下载中（暂停 / 继续 / 删除）
+    /// 标题带总数（形如「下载管理 (5)」）；一条都没有时不带数字。
+    private var listTitle: String {
+        let count = mergedRows.count
+        return count == 0 ? "下载管理" : "下载管理 (\(count))"
+    }
 
-    /// v0.3.388：这一区**只放下载阶段的任务**（`center.downloadJobs`）——
-    /// 安装阶段不再占用顶部这条横条，改在「已下载」对应行内画圆环（用户明确要求）。
-    @ViewBuilder
-    private var activeSection: some View {
-        if !center.downloadJobs.isEmpty {
-            Section {
-                ForEach(center.downloadJobs) { job in
-                    activeRow(job)
-                }
-            } header: {
-                HStack {
-                    Text("下载中")
-                    Spacer(minLength: 0)
-                    Text("\(center.downloadJobs.count) 个任务")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+    // MARK: - 合并列表
+
+    /// v0.3.394：合并列表的一行 —— 要么是下载中心**进行中的任务**，要么是台账里的**已下载条目**。
+    private enum ListRow: Identifiable {
+        case job(IPADownloadCenter.Job)
+        case file(IPADownloadItem)
+
+        var id: String {
+            switch self {
+            case .job(let job): return "job-\(job.id.uuidString)"
+            case .file(let item): return "file-\(item.fileName)"
             }
         }
     }
 
-    private func activeRow(_ job: IPADownloadCenter.Job) -> some View {
+    /// v0.3.394（用户要求）：**只有一个列表**，不再分「下载中 / 已下载」两个分组。
+    ///
+    /// 组成 = 进行中的任务 + 台账条目。**去重**：某任务的落地文件名
+    /// （`localFileName`，还没落地时用预测名 `expectedFileName`）已经在台账里 → 不单独列它，
+    /// 由台账那一行承担显示（那一行会用 `rowProgress` 画出同一个任务的进度环）。
+    /// 不去重的话，包刚落盘的那一刻会被列成两行 —— 同一份文件出现两次。
+    ///
+    /// 排序：进行中的在最上面（未完成的先看到），然后是刚结束（失败的那条还能重试），
+    /// 最后按下载时间倒序 —— 与参考图「新动静在上面」一致。
+    private var mergedRows: [ListRow] {
+        let known = Set(items.map(\.fileName))
+        let orphanJobs = center.jobs.filter { job in
+            !known.contains(job.localFileName ?? job.expectedFileName)
+        }
+        let busy = orphanJobs.filter { $0.phase.isBusy }.map(ListRow.job)
+        let settled = orphanJobs.filter { !$0.phase.isBusy }.map(ListRow.job)
+        let files = items.sorted { $0.downloadedAt > $1.downloadedAt }.map(ListRow.file)
+        return busy + settled + files
+    }
+
+    @ViewBuilder
+    private var mergedSection: some View {
+        Section {
+            if mergedRows.isEmpty {
+                emptyRow
+            } else {
+                ForEach(mergedRows) { row in
+                    switch row {
+                    case .job(let job): jobRow(job)
+                    case .file(let item): fileRow(item)
+                    }
+                }
+                .onDelete(perform: deleteRows)
+            }
+        }
+    }
+
+    private var emptyRow: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "shippingbox")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("还没有下载过安装包")
+                .font(.subheadline.weight(.medium))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+
+    /// 左滑删除：任务行 = 取消这次下载（半成品一并丢弃），条目行 = 删文件 + 删台账。
+    private func deleteRows(_ offsets: IndexSet) {
+        let rows = mergedRows
+        var names = Set<String>()
+        for index in offsets where rows.indices.contains(index) {
+            switch rows[index] {
+            case .job(let job):
+                center.cancel(job.id)
+            case .file(let item):
+                names.insert(item.fileName)
+            }
+        }
+        if !names.isEmpty {
+            IPADownloadLibrary.shared.remove(fileNames: names)
+            selection.subtract(names)
+        }
+        reload()
+    }
+
+    // MARK: - 下载中那一行
+
+    /// v0.3.394：**下载中**的行 —— 还没有本地文件（或正在下）。
+    ///
+    /// 参考图的信息密度：文件名 + 元信息（版本 · 来源 · 时间）+ 进度条 + 「已下/总量 · 速度」。
+    /// 点这一行弹操作面板（面板里「覆盖安装 / 在线安装」会置灰 —— 本地还没包，见那张表里的注释）。
+    private func jobRow(_ job: IPADownloadCenter.Job) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(job.name).font(.subheadline).lineLimit(1)
+            HStack(spacing: 12) {
+                jobIcon(job)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(job.name)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(2)
+                    Text(jobMeta(job))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .layoutPriority(1)
                 Spacer(minLength: 0)
                 Text(job.phase == .paused ? "已暂停" : job.stageText)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                Text("\(Int(job.overall * 100))%")
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isEditing else { return }
+                actionJob = job
+            }
+
+            // 进度：横向条 + 百分比（等宽数字，跳动时不会左右抖）
+            HStack(spacing: 8) {
+                ProgressView(value: min(1, max(0, job.overall)))
+                    .tint(LocusTheme.accent)
+                Text("\(Int((min(1, max(0, job.overall)) * 100).rounded()))%")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .fixedSize()
             }
-            // v0.3.387：点这一条标题行也能弹操作面板 —— 下载过程就能「提取下载链接」。
-            // 手势只加在这条标题行上：横向进度条与下面的暂停/删除按钮行为一律不动，行布局也不变。
-            .contentShape(Rectangle())
-            .onTapGesture { actionJob = job }
-            ProgressView(value: min(1, max(0, job.overall)))
-            HStack(spacing: 14) {
-                Button {
-                    if job.phase == .paused {
-                        center.resume(job.id)
-                    } else {
-                        center.pause(job.id)
-                    }
-                } label: {
-                    Label(job.phase == .paused ? "继续" : "暂停",
-                          systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
-                .disabled(!job.canPause)
-                Button {
-                    center.cancel(job.id)
-                    ToastCenter.shared.show("已取消并删除该安装包")
-                } label: {
-                    Label("删除安装包", systemImage: "trash")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-                Spacer(minLength: 0)
-                // v0.3.391（用户明确要求）：**下载过程中就要能直接提取这个包的直链**，
-                // 不必点进操作面板。取值 = 该任务的 `remoteURL`
-                // （AppleID 通道在 Apple 签发下载地址的那一刻就已回填，见 `startWithAppleID`）。
-                // 还没拿到直链时按钮置灰（例如刚入队、或该来源确实不给直链）。
-                let hasLink = !(job.remoteURL ?? "").isEmpty
-                Button {
-                    extractLinkOfActiveJob(job)
-                } label: {
-                    Label("提取链接", systemImage: "link")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(hasLink ? Color.teal : Color.secondary)
-                .disabled(!hasLink)
+
+            // 「70.3 MB/271.7 MB · 3.9 MB/s」—— 分母与速度都没有时整行不出现
+            let traffic = jobTraffic(job)
+            if !traffic.isEmpty {
+                Text(traffic)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
+
+            jobActions(job)
         }
         .padding(.vertical, 3)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                center.cancel(job.id)
+                reload()
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    /// 「下载中」的元信息：版本 · 来源 · 时间（参考图的 `v153.8010.24  2026-09-14 12:06:43`）
+    private func jobMeta(_ job: IPADownloadCenter.Job) -> String {
+        var parts: [String] = []
+        if let v = job.version, !v.isEmpty { parts.append("v\(v)") }
+        parts.append(job.source.rawValue)
+        parts.append(Self.stampFormatter.string(from: job.createdAt))
+        return parts.joined(separator: " · ")
+    }
+
+    /// 「已下/总量 · 速度」。总量还没拿到（刚起步 / 服务器不给 `Content-Length`）时只显示已下。
+    private func jobTraffic(_ job: IPADownloadCenter.Job) -> String {
+        var parts: [String] = []
+        if job.totalBytes > 0 {
+            parts.append("\(IPADownloadLibrary.sizeText(job.receivedBytes))"
+                         + "/\(IPADownloadLibrary.sizeText(job.totalBytes))")
+        } else if job.receivedBytes > 0 {
+            parts.append(IPADownloadLibrary.sizeText(job.receivedBytes))
+        }
+        // 只有真在下载才显示速度：暂停时已清零，这里再判一次阶段，
+        // 避免出现「已暂停」旁边还挂着 3.9 MB/s 这种自相矛盾的行。
+        if job.phase == .downloading, job.speedBytesPerSecond > 0 {
+            parts.append("\(IPADownloadLibrary.sizeText(Int64(job.speedBytesPerSecond)))/s")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 「下载中」的行内动作：暂停/继续、删除安装包、提取链接
+    /// （v0.3.391 起下载过程中就能直接提取直链，不必先进面板）
+    private func jobActions(_ job: IPADownloadCenter.Job) -> some View {
+        HStack(spacing: 14) {
+            Button {
+                if job.phase == .paused {
+                    center.resume(job.id)
+                } else {
+                    center.pause(job.id)
+                }
+            } label: {
+                Label(job.phase == .paused ? "继续" : "暂停",
+                      systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
+            .disabled(!job.canPause)
+            Button {
+                center.cancel(job.id)
+                ToastCenter.shared.show("已取消并删除该安装包")
+            } label: {
+                Label("删除安装包", systemImage: "trash")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.red)
+            Spacer(minLength: 0)
+            // 还没拿到直链时按钮置灰（例如刚入队、或该来源确实不给直链）
+            let hasLink = !(job.remoteURL ?? "").isEmpty
+            Button {
+                extractLinkOfActiveJob(job)
+            } label: {
+                Label("提取链接", systemImage: "link")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(hasLink ? Color.teal : Color.secondary)
+            .disabled(!hasLink)
+        }
+    }
+
+    @ViewBuilder
+    private func jobIcon(_ job: IPADownloadCenter.Job) -> some View {
+        if let s = job.iconURL ?? icons[job.bundleId ?? ""], let url = URL(string: s) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let img): img.resizable().scaledToFit()
+                default: monogram(job.name)
+                }
+            }
+            .frame(width: 48, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        } else {
+            monogram(job.name)
+        }
     }
 
     /// 下载中任务：把该任务的直链**直接**复制走（不经过操作面板）。
@@ -200,12 +374,15 @@ struct IPADownloadManagerView: View {
 
     // MARK: - 概览
 
+    /// v0.3.394：这张卡只说**磁盘占用**。原来第一行是「N 个安装包」，
+    /// 而「N」现在由标题（「下载管理 (N)」）承担，两个 N 含义还不一样（台账数 vs 列表行数）
+    /// 放在一屏里会像 bug，所以这里去掉了。
     private var summarySection: some View {
         Section {
             HStack(spacing: 12) {
                 AppRowIcon(systemName: "shippingbox.fill", tint: .blue, symbolSize: 20, frameSize: 40)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(items.count) 个安装包")
+                    Text("本地安装包")
                         .font(.subheadline.weight(.semibold))
                     Text("共占用 \(IPADownloadLibrary.sizeText(items.reduce(0) { $0 + max(0, $1.sizeBytes) }))")
                         .font(.caption)
@@ -227,37 +404,10 @@ struct IPADownloadManagerView: View {
         }
     }
 
-    // MARK: - 列表
+    // MARK: - 已下载条目那一行
 
-    @ViewBuilder
-    private var contentSection: some View {
-        if items.isEmpty {
-            Section {
-                VStack(spacing: 8) {
-                    Image(systemName: "shippingbox")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text("还没有下载过安装包")
-                        .font(.subheadline.weight(.medium))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
-            }
-        } else {
-            Section("已下载") {
-                ForEach(items) { item in
-                    row(item)
-                }
-                .onDelete { offsets in
-                    let names = Set(offsets.map { items[$0].fileName })
-                    IPADownloadLibrary.shared.remove(fileNames: names)
-                    reload()
-                }
-            }
-        }
-    }
-
-    private func row(_ item: IPADownloadItem) -> some View {
+    /// v0.3.394：台账里的**已下载条目**行。原来挂在「已下载」分组下，现在与下载中的任务同列一个列表。
+    private func fileRow(_ item: IPADownloadItem) -> some View {
         HStack(alignment: .center, spacing: 12) {
             // 点击区只覆盖「图标 + 文字」，右侧安装按钮各管各的，避免手势互相抢。
             // v0.3.378：点这里弹出操作面板（编辑模式下点行是勾选，不弹）。
@@ -361,21 +511,21 @@ struct IPADownloadManagerView: View {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let img): img.resizable().scaledToFit()
-                default: monogram(item)
+                default: monogram(item.title.isEmpty ? (item.bundleId ?? "") : item.title)
                 }
             }
             .frame(width: 48, height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         } else {
-            monogram(item)
+            monogram(item.title.isEmpty ? (item.bundleId ?? "") : item.title)
         }
     }
 
     /// 没有图标时的首字母方块（参考 `PurchaseHistoryView.monogram`）：
     /// 虚框看着像「加载失败」，字母块看着是有意设计。
-    private func monogram(_ item: IPADownloadItem) -> some View {
-        let source = item.title.isEmpty ? (item.bundleId ?? "") : item.title
-        let letter = String(source.prefix(1)).uppercased()
+    /// v0.3.394：入参从 `IPADownloadItem` 改成**名称**，好让「下载中」那一行也能复用。
+    private func monogram(_ name: String) -> some View {
+        let letter = String(name.prefix(1)).uppercased()
         return ZStack {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .fill(Color.blue.opacity(0.14))
@@ -487,21 +637,24 @@ struct IPADownloadManagerView: View {
 
     /// v0.3.387：把「下载中」的任务包成一个**只读条目**喂给操作面板。
     ///
-    /// 下载中的任务还没落台账（本地无文件），所以体积记为 0、没有安装时间，这些字段面板在
-    /// pending 模式下也不渲染。关键是 **`sourceURL` 直接取 `job.remoteURL`** ——
-    /// 面板「提取下载链接」读的就是这个字段，于是**下载过程也能提取直链**。
-    /// 文件名用 `job.localFileName ?? job.expectedFileName`（与下载中心落地的名字同源）：
-    /// 下载中它指向一个尚不存在的文件，面板里任何依赖文件的行都已按 pending 模式收起。
+    /// 下载中的任务还没落台账（本地无文件），所以**没有安装时间**，面板里依赖文件的行会置灰
+    /// （见 `IPADownloadActionsSheet.isPendingDownload`）。关键是这几个取值把任务上现有的东西
+    /// 原样带进去：
+    /// · `sourceURL` ← `job.remoteURL`：面板「提取下载链接」读的就是它 → **下载过程也能提取直链**；
+    /// · `storeItemId` ← `job.storeItemId`：面板「复制商店链接」**台账优先**，所以下载中就能复制；
+    /// · `sizeBytes` ← `job.totalBytes`：下载中已经拿到 `Content-Length` 时，面板头部的体积才是真的。
+    /// 文件名用 `job.localFileName ?? job.expectedFileName`（与下载中心落地的名字同源）。
     private func pendingItem(_ job: IPADownloadCenter.Job) -> IPADownloadItem {
         IPADownloadItem(fileName: job.localFileName ?? job.expectedFileName,
                         displayName: job.name,
                         bundleId: job.bundleId,
                         version: job.version,
-                        sizeBytes: 0,
-                        downloadedAt: Date(),
+                        sizeBytes: job.totalBytes,
+                        downloadedAt: job.createdAt,
                         iconURL: job.iconURL,
                         source: job.source.rawValue,
                         sourceURL: job.remoteURL,
+                        storeItemId: job.storeItemId,
                         packageName: nil,
                         isEncrypted: nil,
                         hasSINF: nil,

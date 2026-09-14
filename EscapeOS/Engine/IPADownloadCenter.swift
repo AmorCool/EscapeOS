@@ -80,6 +80,19 @@ final class IPADownloadCenter: ObservableObject {
         /// 仅当 `phase == .failed` 时有意义；按**失败发生在哪个阶段**打标，不去猜错误码
         var failureStage: FailureStage? = nil
 
+        // MARK: v0.3.394：下载中的实时数据（界面显示「已下/总量 · 速度」用）
+
+        /// 已收到字节（下载阶段有意义）
+        var receivedBytes: Int64 = 0
+        /// 包总字节 —— 来自 URLSession 的 `totalBytesExpectedToWrite`；
+        /// 服务器不给 `Content-Length` 时保持 0（界面就不显示分母，只显示已下）
+        var totalBytes: Int64 = 0
+        /// **瞬时速度**（字节/秒）。用两次回调的**字节差 ÷ 时间差**算，再指数平滑。
+        /// 刻意**不用全程平均**：掉速时全程平均会长时间停留在虚高的数字上，等于骗人。
+        var speedBytesPerSecond: Double = 0
+        /// 任务创建时间（合并列表里「下载中」那一行显示时间用）
+        var createdAt = Date()
+
         /// v0.3.387：这个任务**落地后会用**的文件名（与 `startDownload` 里的 `safeName` 同源）。
         ///
         /// 「下载中」的任务还没落台账（`localFileName == nil`），但直链要**在下载时就写进台账**，
@@ -112,16 +125,21 @@ final class IPADownloadCenter: ObservableObject {
 
     @Published private(set) var jobs: [Job] = []
 
+    /// v0.3.394：**「该重新读台账了」的信号** —— 任务**换阶段**时 +1。
+    ///
+    /// 为什么需要它：下载管理页的**行内容**来自磁盘上的台账（`IPADownloadLibrary`，
+    /// 它不是 `@Published`），而「装完 → 这一行从『安装中』变回『重装』」靠的是台账里的
+    /// `lastInstalledAt`。不重新读，用户就得退出这一页再进来才看到变化
+    /// —— 正是用户骂的「不要等到返回上一级目录才能刷新状态」。
+    ///
+    /// 为什么用「换阶段」而不是「`jobs` 变了」：`jobs` 在**每个下载进度回调**里都会变
+    /// （每秒几十次），跟着它重读台账等于把磁盘读爆；而阶段变化一个任务只有 2~3 次，
+    /// 重读的代价可以忽略。
+    @Published private(set) var finishedTick = 0
+
     /// 正在运行的（含暂停）
     var activeJobs: [Job] { jobs.filter { $0.phase.isBusy } }
     var finishedJobs: [Job] { jobs.filter { !$0.phase.isBusy } }
-
-    /// v0.3.388：**只属于「下载中」那条顶部横条**的任务 —— 只要下载阶段
-    /// （等待 / 下载中 / 已暂停）。安装阶段的任务**不再占用顶部那条横条**，
-    /// 改为在「已下载」列表对应行内用圆环显示（用户明确要求）。
-    var downloadJobs: [Job] {
-        jobs.filter { $0.phase == .waiting || $0.phase == .downloading || $0.phase == .paused }
-    }
 
     func job(_ id: UUID) -> Job? { jobs.first { $0.id == id } }
 
@@ -214,13 +232,66 @@ final class IPADownloadCenter: ObservableObject {
 
     private func update(_ id: UUID, _ change: (inout Job) -> Void) {
         guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
+        let before = jobs[i].phase
         change(&jobs[i])
+        // v0.3.394：阶段变了 → 台账可能已经跟着变（刚落盘 / 刚装完 / 刚失败），
+        // 通知列表重读。只在这一处发信号，所有调用点自动都覆盖到。
+        if jobs[i].phase != before { finishedTick &+= 1 }
     }
 
     // MARK: - 启动
 
     private var runner: RemoteDownloader?
     private var runningID: UUID?
+
+    // MARK: v0.3.394：瞬时速度的采样窗口
+    //
+    // 下载是**串行**的（`pump()` 保证一次只下一个），所以一套窗口变量就够，不必按任务存。
+    // 窗口长度 0.8s：太短数字乱跳，太长反应迟钝。
+
+    private var speedWindowStart: Date?
+    private var speedWindowBytes: Int64 = 0
+    private var smoothedSpeed: Double = 0
+    private static let speedWindow: TimeInterval = 0.8
+
+    /// 把「已下字节 / 总字节」写进任务，顺便估一个**瞬时速度**。
+    ///
+    /// 速度 = 两次采样的字节差 ÷ 时间差，再做指数平滑（新样本 45% / 旧值 55%）：
+    /// 既不跟着每个回调乱跳，掉速时也不会像全程平均那样长时间停在虚高的数字上。
+    /// 采样窗口没满时沿用上一次的值（不刷新），所以界面上的数字是稳定的。
+    private func applyDownloadProgress(_ id: UUID, written: Int64, expected: Int64) {
+        let now = Date()
+        if let start = speedWindowStart {
+            let dt = now.timeIntervalSince(start)
+            if dt >= Self.speedWindow {
+                let delta = Double(written - speedWindowBytes)
+                speedWindowStart = now
+                speedWindowBytes = written
+                if delta >= 0 {
+                    let instant = delta / dt
+                    smoothedSpeed = smoothedSpeed <= 0 ? instant : smoothedSpeed * 0.55 + instant * 0.45
+                }
+            }
+        } else {
+            speedWindowStart = now
+            speedWindowBytes = written
+        }
+        let speed = smoothedSpeed
+        update(id) { job in
+            if expected > 0 { job.totalBytes = expected }
+            if written > job.receivedBytes { job.receivedBytes = written }
+            if expected > 0 { job.progress = min(1, max(0, Double(written) / Double(expected))) }
+            if speed > 0 { job.speedBytesPerSecond = speed }
+        }
+    }
+
+    /// 换任务 / 暂停 / 续传 / 结束时清掉速度窗口。
+    /// 不清的话，续传后第一次采样的字节差会跨过暂停那段空档，把速度算成天文数字。
+    private func resetSpeedWindow() {
+        speedWindowStart = nil
+        speedWindowBytes = 0
+        smoothedSpeed = 0
+    }
 
     /// 免登录源：直接给直链
     @discardableResult
@@ -460,13 +531,17 @@ final class IPADownloadCenter: ObservableObject {
     func pause(_ id: UUID) {
         guard let job = job(id), job.canPause, job.phase == .downloading else { return }
         runner?.pause()
-        update(id) { $0.phase = .paused; $0.stageText = "已暂停" }
+        resetSpeedWindow()
+        // v0.3.394：暂停后速度归零 —— 否则界面上会挂着一个「暂停前」的速度数字
+        update(id) { $0.phase = .paused; $0.stageText = "已暂停"; $0.speedBytesPerSecond = 0 }
     }
 
     func resume(_ id: UUID) {
         guard let job = job(id), job.phase == .paused else { return }
         if runningID == id, let runner {
             runner.resume()
+            // v0.3.394：续传要重新起窗口（见 `resetSpeedWindow` 注释）
+            resetSpeedWindow()
             update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
             return
         }
@@ -480,6 +555,7 @@ final class IPADownloadCenter: ObservableObject {
             runner?.abort()
             runner = nil
             runningID = nil
+            resetSpeedWindow()
         }
         if let fileName = job.localFileName {
             IPADownloadLibrary.shared.remove(fileName: fileName)
@@ -531,10 +607,14 @@ final class IPADownloadCenter: ObservableObject {
         // 失败/取消都**保留**已写入的值 —— 链接可能过期，但「当初从哪下的」要留住。
         IPADownloadLibrary.shared.updateSourceURL(fileName: safeName, url: urlString)
 
+        // v0.3.394：新任务起一个新窗口
+        resetSpeedWindow()
         let downloader = RemoteDownloader(
             request: req,
-            onProgress: { p in
-                Task { @MainActor in self.update(id) { $0.progress = p } }
+            onProgress: { written, expected in
+                Task { @MainActor in
+                    self.applyDownloadProgress(id, written: written, expected: expected)
+                }
             },
             onFinish: { result in
                 Task { @MainActor in self.handle(id: id, safeName: safeName, result: result) }
@@ -576,7 +656,11 @@ final class IPADownloadCenter: ObservableObject {
                     $0.progress = 1
                     $0.phase = current.autoInstall ? .installing : .done
                     $0.stageText = current.autoInstall ? "安装中" : "已下载"
+                    // v0.3.394：收工了 → 速度归零、已下字节对齐总量（别留个 99.8% 的尾巴）
+                    if $0.totalBytes > 0 { $0.receivedBytes = $0.totalBytes }
+                    $0.speedBytesPerSecond = 0
                 }
+                resetSpeedWindow()
                 // v0.3.390：同名文件**刚刚成功落地** → 清掉之前那条「文件不存在」之类的失败记录。
                 //
                 // 为什么必须清（真 bug，`dl-ui` 定位）：`recordFileFailure` 插入的失败任务**不会自己消失**，
@@ -611,7 +695,10 @@ final class IPADownloadCenter: ObservableObject {
             $0.phase = .failed
             $0.error = error.localizedDescription
             $0.stageText = "失败"
+            // v0.3.394：失败 → 速度归零（界面上不该挂着一个速度数字）
+            $0.speedBytesPerSecond = 0
         }
+        resetSpeedWindow()
         runner = nil
         runningID = nil
         pump()
@@ -661,7 +748,9 @@ final class IPADownloadCenter: ObservableObject {
 private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
 
     private let request: URLRequest
-    private let onProgress: (Double) -> Void
+    /// v0.3.394：回调改成给**原始字节数**（已下 / 总量），不再自己折算成 0~1 ——
+    /// 界面要显示「70.3 MB/271.7 MB」，速度也要靠字节差算，所以在中心那一侧统一处理。
+    private let onProgress: (Int64, Int64) -> Void
     private let onFinish: (Result<URL, Error>) -> Void
 
     private var session: URLSession?
@@ -671,7 +760,7 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
     private var paused = false
 
     init(request: URLRequest,
-         onProgress: @escaping (Double) -> Void,
+         onProgress: @escaping (Int64, Int64) -> Void,
          onFinish: @escaping (Result<URL, Error>) -> Void) {
         self.request = request
         self.onProgress = onProgress
@@ -737,7 +826,7 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
                     totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
         guard totalBytesExpectedToWrite > 0 else { return }
-        onProgress(min(1, max(0, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))))
+        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
     }
 
     func urlSession(_ session: URLSession,
