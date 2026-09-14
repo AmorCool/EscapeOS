@@ -31,6 +31,9 @@ enum OnlineInstallService {
     /// 本机服务器保活时长：iOS 点了「安装」才会来拉包，打开清单后不能立刻关。
     private static let serverLifetime: TimeInterval = 15 * 60
 
+    /// v0.3.396（B 项）：「系统没来拉包」的判定窗口（一次性看门狗）。
+    private static let noBytesWindow: TimeInterval = 60
+
     private static let logCategory = LoginLogger.Category.appStore
 
     enum OnlineInstallError: Error, LocalizedError {
@@ -113,7 +116,42 @@ enum OnlineInstallService {
 
             DispatchQueue.main.async {
                 open(manifestURL: manifestURL, completion: completion)
+                // v0.3.396（B 项）：清单已发起 → 挂一次性「系统没来拉包」看门狗。
+                // 只在**经本机服务器发包**（localFile != nil）时挂：远端直链路径我们一个字节都量不到，
+                // 那里挂这个看门狗会在 60 秒时误报「系统未开始下载」，反而是假信号 —— 那条路径的
+                // 兜底交给 `OnlineInstallProgress` 的 3 分钟 `.installing` 窗口。
+                if prepared.localFile != nil { armNoBytesWatchdog() }
             }
+        }
+    }
+
+    // MARK: - 看门狗（B 项）
+
+    /// v0.3.396（B 项）：**一次性**「系统没来拉包」看门狗 —— 必须在主线程调。
+    ///
+    /// 现象：设备上已装同一版本、或系统直接拒装时，`itms-services` 会走完（`open` 受理成功），
+    /// 但系统**一个字节都不会来拉** → 进度环停在 0% 转圈，而唯一的收尾是 15 分钟保活到期。
+    /// 用户看到的就是「一直卡在在线安装圆圈」。
+    ///
+    /// 判定：发起后 `noBytesWindow`（60 秒）内已发字节始终为 0 → 判「系统未开始下载」→
+    /// `reset()` + 短提示。**只 `asyncAfter` 一次**（不是轮询）；60 秒内只要来过任何字节，
+    /// 到期时这道判定就静默作废（不会 reset、不会提示）。
+    ///
+    /// 两道守卫（读的都是主线程状态）：
+    /// · `sessionToken == token` —— 期间又发起了新 OTA（`begin` 会涨会话号）→ 这次判定作废，
+    ///   否则同一个包连点两次时，第一次留下的看门狗会把**第二次**的进度环误收掉；
+    /// · `stage != .idle && sentBytes == 0` —— 期间已被别的路径（手动点环 / 传输完成进入系统安装）
+    ///   清空或推进 → 不作声、不重复提示。`reset()` 本身不涨会话号，所以这道状态守卫是第二层。
+    private static func armNoBytesWatchdog() {
+        let token = OnlineInstallProgress.shared.sessionToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + noBytesWindow) {
+            let progress = OnlineInstallProgress.shared
+            guard progress.sessionToken == token else { return }
+            guard progress.stage != .idle, progress.sentBytes == 0 else { return }
+            LoginLogger.shared.log("[在线安装] 60 秒内系统未拉包（设备已装同一版本 / 被拒装）→ 收掉进度环",
+                                   category: logCategory)
+            progress.reset()
+            ToastCenter.shared.show("系统未开始下载")
         }
     }
 

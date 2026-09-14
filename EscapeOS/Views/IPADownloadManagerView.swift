@@ -452,6 +452,7 @@ struct IPADownloadManagerView: View {
             // v0.3.388：把原来那条 44pt 横向进度条换成**圆形进度环 + 百分比**（覆盖安装与在线安装都有），
             // 高度仍是 44pt，不动行高、不挤掉右侧信息。
             if let progress = rowProgress(item) {
+                let isOTA = otaRingIsActive(for: item)
                 HStack(spacing: 8) {
                     InstallProgressRing(fraction: progress.fraction)
                     Text(progress.text)
@@ -461,6 +462,14 @@ struct IPADownloadManagerView: View {
                         .minimumScaleFactor(0.75)
                 }
                 .fixedSize()
+                .contentShape(Rectangle())
+                // v0.3.396（D 项）：在线安装的环**点一下即收掉** —— 系统安装阶段 App 观测不到，
+                // 一直转下去只是「卡住」的错觉。没有说明文字、没有额外按钮，点环本身就是那个动作。
+                // 只有环**确实是 OTA 画出来的**才接这个手势（见 `otaRingIsActive`）：
+                // 覆盖安装 / 下载中的环背后是下载中心的真任务，点一下绝不能把它们悄悄取消。
+                .onTapGesture {
+                    if isOTA { otaProgress.reset() }
+                }
             } else {
                 // v0.3.383：这一行上一次失败 → 红字标出**失败阶段**，**仍可点**（点了就是重试）。
                 // 「下载失败」（文件可能不完整/不存在）与「安装失败」（文件是好的、卡在安装环节）
@@ -598,6 +607,14 @@ struct IPADownloadManagerView: View {
         return duplicatedBundleIds.contains(bid)
     }
 
+    /// v0.3.396（D 项）：这一行的进度环是不是**在线安装**画出来的。
+    ///
+    /// 只有它才允许「点一下收掉」：覆盖安装 / 下载中的环背后是下载中心的任务（`activeJob`），
+    /// 点一下绝不能把它们悄悄取消 —— 取消有取消自己的入口（左滑删除 / 行内「删除安装包」）。
+    private func otaRingIsActive(for item: IPADownloadItem) -> Bool {
+        otaProgress.isActive && otaProgress.matches(fileName: item.fileName, bundleId: item.bundleId)
+    }
+
     /// v0.3.388：这一行要不要显示**安装/下载进度环**，以及环里的分数（nil = 不确定态）与右侧文字。
     ///
     /// 两个来源，按「谁在动这一行」优先：
@@ -607,8 +624,7 @@ struct IPADownloadManagerView: View {
     /// 2. **覆盖安装 / 下载中**：用下载中心任务的 `overall`（链路 0~1，见 `Job.overall`）。
     ///    只有「排队等待」阶段是未开始，显示不确定态。
     private func rowProgress(_ item: IPADownloadItem) -> (fraction: Double?, text: String)? {
-        if otaProgress.isActive,
-           otaProgress.matches(fileName: item.fileName, bundleId: item.bundleId) {
+        if otaRingIsActive(for: item) {
             switch otaProgress.stage {
             case .transferring: return (otaProgress.fraction, "在线安装")
             case .installing: return (nil, "安装中")

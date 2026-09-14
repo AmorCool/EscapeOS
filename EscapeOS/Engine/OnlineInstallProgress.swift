@@ -16,10 +16,18 @@ import Combine
 /// **该响应的绝对起始偏移 + 本次已发字节**（见 `IPALocalHTTPServer.FilePump`），
 /// 这里用 `max` 累计：百分比只增不减、也不会超 100。
 ///
-/// ## 生命周期（诚实说明）
-/// 系统何时装完**不可观测**。`.installing` 不会自己结束：
-/// 由 `OnlineInstallService` 在本机服务器保活到期时调 `scheduleIdleReset(after:)` 被动收尾，
-/// 或下一次 OTA 开始时被 `begin(...)` 覆盖。**这不是「装完了」的信号**，只是「观测窗口结束了」。
+/// ## 生命周期（诚实说明；v0.3.396 重写）
+/// 系统何时装完**不可观测**，所以下面每一条收尾**都不是「装完了」的信号**，
+/// 只是「我们的观测窗口结束了」。三条路径，都不依赖那个拿不到的事实：
+/// 1. **60 秒内一个字节都没发出去** → `OnlineInstallService` 的一次性看门狗判定
+///    「系统没来拉包」（设备上已装同一版本 / 系统拒装就是这个表现）→ `reset()`；
+/// 2. **进入 `.installing` 后 3 分钟**（`installingWindow`）→ 本类自己到期 `reset()`。
+///    从**进态那一刻**起算，所以正在传的大包不会被掐；
+/// 3. **兜底**：本机服务器保活（15 分钟）到期时 `scheduleIdleReset(after:)` —— 只覆盖
+///    「拉到一半卡住、但已经有字节」这种前两条都够不到的残留。
+///
+/// v0.3.396 之前只有第 3 条，于是「设备已安装 / 系统拒装」时进度环要**挂满 15 分钟**
+/// 才自己消失 —— 用户看到的就是「一直卡在在线安装圆圈」。
 ///
 /// ## 线程
 /// 与 `IPADownloadLibrary` 同规矩：**只在主线程读写**。类的每个写方法内部会自己 hop 回主线程，
@@ -28,6 +36,14 @@ final class OnlineInstallProgress: ObservableObject {
 
     static let shared = OnlineInstallProgress()
     private init() {}
+
+    /// v0.3.396（C 项）：进入 `.installing` 之后，进度环最多再留这么久。
+    ///
+    /// 为什么要有上限：这一态 App **完全观测不到**（见上文），让一个转圈无限期挂着，
+    /// 用户只会认为卡死 —— 收掉比挂着诚实。
+    /// 为什么从**进态**起算而不是从开会话起算：271 MB 的包在局域网里传可以超过 3 分钟，
+    /// 按会话起算会把**正在传**的会话掐掉。
+    static let installingWindow: TimeInterval = 3 * 60
 
     enum Stage: Equatable {
         /// 没有进行中的 OTA
@@ -50,6 +66,13 @@ final class OnlineInstallProgress: ObservableObject {
 
     /// 会话号：用于「延迟收尾」回调不误伤新会话
     private var session = 0
+
+    /// v0.3.396：会话号的**只读**出口 —— 给外部看门狗做守卫用。
+    ///
+    /// 为什么需要：`OnlineInstallService` 那个 60 秒「系统没来拉包」看门狗是在**会话外**
+    /// 定时触发的，光凭 `stage`/`sentBytes` 认不出「这次的定时器还属于当前会话吗」——
+    /// 同一个包连点两次时，第一次留下的定时器会把**第二次**的进度环误收掉。
+    var sessionToken: Int { session }
 
     /// 是否有进行中的 OTA
     var isActive: Bool { stage != .idle }
@@ -89,6 +112,8 @@ final class OnlineInstallProgress: ObservableObject {
             self.sentBytes = 0
             self.totalBytes = observable ? total : 0
             self.stage = observable ? .transferring : .installing
+            // 远端直链（observable == false）一开就是不确定态 → 同样受 3 分钟兜底约束。
+            if !observable { self.scheduleInstallingReset() }
         }
     }
 
@@ -98,9 +123,10 @@ final class OnlineInstallProgress: ObservableObject {
             guard self.stage != .idle else { return }
             if total > 0 { self.totalBytes = total }
             if sent > self.sentBytes { self.sentBytes = sent }
-            if self.totalBytes > 0, self.sentBytes >= self.totalBytes {
+            if self.totalBytes > 0, self.sentBytes >= self.totalBytes, self.stage != .installing {
                 // 整个包都发给系统了 → 往后是系统自己的安装，我们看不到进度
                 self.stage = .installing
+                self.scheduleInstallingReset()
             }
         }
     }
@@ -129,6 +155,27 @@ final class OnlineInstallProgress: ObservableObject {
     }
 
     // MARK: - 私有
+
+    /// v0.3.396（C 项）：进入 `.installing` 后起一次 3 分钟倒计时；到期若仍停在**同一会话**的
+    /// `.installing`，就 `reset()` 收掉进度环。
+    ///
+    /// 两道守卫缺一不可：
+    /// · **会话号** —— 期间若又 `begin` 了新 OTA（`session += 1`），这次定时器直接作废，
+    ///   否则同包连点两次时，第一次留下的倒计时会把**第二次**的进度环掐掉；
+    /// · **`stage == .installing`** —— 期间若已由别的路径（手动点环 / 60 秒看门狗）清空或推进，
+    ///   这里什么都不做。`reset()` 本身不涨 `session`，所以这道状态守卫是必要的第二层。
+    ///
+    /// 只在**首次**进 `.installing` 时排一次（`update` 的转换分支带 `stage != .installing` 判断），
+    /// 后续同一态的重复回调不会再顺延窗口。
+    private func scheduleInstallingReset() {
+        onMain {
+            let token = self.session
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.installingWindow) { [weak self] in
+                guard let self, self.session == token, self.stage == .installing else { return }
+                self.reset()
+            }
+        }
+    }
 
     private func onMain(_ work: @escaping () -> Void) {
         if Thread.isMainThread {

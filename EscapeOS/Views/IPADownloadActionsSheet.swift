@@ -41,6 +41,18 @@ struct IPADownloadActionsSheet: View {
     private enum OpenState { case checking, installed, missing }
     @State private var openState: OpenState = .checking
 
+    /// v0.3.396（A 项）：「在线安装」的前置检查状态。
+    ///
+    /// · `idle`     —— 还没查过 → 点「在线安装」先查一次设备；
+    /// · `checking` —— 正在查（行内转圈、置灰）；
+    /// · `reminded` —— 检查已过 → 再点**直接**安装。
+    ///
+    /// 为什么要有 `reminded` 这一态：设备上已装时先给一次短提示、**不装**，
+    /// 用户再点一次才真的重装 —— 用一位状态区分「第一次点」与「第二次点」，
+    /// 不需要额外按钮、也不需要解释性文案。
+    private enum OnlineCheck { case idle, checking, reminded }
+    @State private var onlineCheck: OnlineCheck = .idle
+
     @State private var shareTarget: ShareTarget?
     @State private var showDeleteConfirm = false
 
@@ -186,10 +198,11 @@ struct IPADownloadActionsSheet: View {
         ]
     }
 
-    /// 「在线安装」行。两条置灰规则：
+    /// 「在线安装」行。三条置灰规则：
     /// 1. **v0.3.394**：下载中的任务（本地还没有包）→ 灰 + 「下载中」（理由见 `installRows`）；
     /// 2. 本机服务器当前被 `.share` 会话占用时不可点
-    ///    （单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那份会话）。
+    ///    （单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那份会话）；
+    /// 3. **v0.3.396（A 项）**：前置检查进行中 → 灰 + 行内转圈（免得用户连点两次）。
     /// ⚠️ v0.3.386 起「提取下载链接」已改为纯读台账、不再起本机服务 →
     /// `blockedByShare` **恒为 `false`**（判断有意保留，见 `IPALocalHTTPServer` 类型注释）。
     private var onlineInstallRow: RowSpec {
@@ -201,9 +214,14 @@ struct IPADownloadActionsSheet: View {
         }
         let blockedByShare = IPALocalHTTPServer.shared.currentPurpose == .share
         let note: String? = isPendingDownload ? "下载中" : (blockedByShare ? "分享中" : nil)
+        var trailing: RowTrailing = note.map { RowTrailing.text($0) } ?? RowTrailing.none
+        var disabled = isPendingDownload || blockedByShare
+        if onlineCheck == .checking {
+            trailing = .progress
+            disabled = true
+        }
         return RowSpec(icon: "icloud.and.arrow.down", tint: .green, title: "在线安装",
-                       trailing: note.map { RowTrailing.text($0) } ?? RowTrailing.none,
-                       disabled: isPendingDownload || blockedByShare) {
+                       trailing: trailing, disabled: disabled) {
             onlineInstall()
         }
     }
@@ -342,9 +360,59 @@ struct IPADownloadActionsSheet: View {
 
     // MARK: - 动作实现
 
-    /// 在线安装：IPA 由本机服务器发（`http://127.0.0.1:<port>/package.ipa`），
-    /// 清单托管到 HTTPS 后交给系统装。优先用本地已下载的包，缺文件才退回远端直链。
+    /// 在线安装入口：**第一次点先查设备是否已装，免得白转一圈**（v0.3.396 A 项）。
+    ///
+    /// 用户实测：设备上已装同一应用时点在线安装，`itms-services` 走完但系统**不会再来拉包**，
+    /// 进度环就一直转（B/C 项的收尾是兜底，这里才是源头 —— 先别让它白转）。
+    /// 已装 → 只提示一次「设备上已安装」，**不装**；用户**再点一次**才走 `performOnlineInstall()`。
     private func onlineInstall() {
+        guard onlineCheck == .idle else {
+            performOnlineInstall()
+            return
+        }
+        onlineCheck = .checking
+        Task { await checkInstalledThenDecide() }
+    }
+
+    /// 前置检查：设备上是否已装这个 `bundleId`。查完主线程决定「提示一次」还是「直接装」。
+    ///
+    /// 数据源刻意只用**快路径** `FileSharingService.listAppsWithFileSharing(timeout:)`
+    /// （`get_apps`，真机实测约 2.5 秒、带硬超时）——
+    /// **不用**带属性的 `Lookup`（那条命令实测 20 秒一个字节不回，会把点击卡死）。
+    /// 失败 / 超时**一律判「查不到」，不阻断安装**（设备未配对、隧道不可用都可能发生，
+    /// 此时宁可按用户意愿装，也不能因为查不到就不让装）。
+    private func checkInstalledThenDecide() async {
+        let bid = item.bundleId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let installed: Bool? = await Task.detached(priority: .userInitiated) { () -> Bool? in
+            guard let bid, !bid.isEmpty else { return nil }
+            switch FileSharingService.listAppsWithFileSharing(timeout: 5) {
+            case .ok(let apps):
+                return apps.contains { $0.bundleId.caseInsensitiveCompare(bid) == .orderedSame }
+            case .failed(let message):
+                LoginLogger.shared.log("[下载面板] 在线安装前置检查失败：\(message)（不阻断安装）",
+                                       category: .appStore)
+                return nil
+            case .timedOut:
+                LoginLogger.shared.log("[下载面板] 在线安装前置检查超时（不阻断安装）", category: .appStore)
+                return nil
+            }
+        }.value
+
+        await MainActor.run {
+            onlineCheck = .reminded
+            if installed == true {
+                LoginLogger.shared.log("[下载面板] 在线安装：设备已装 \(bid ?? "?")，先提示一次（再点一次才重装）",
+                                       category: .appStore)
+                ToastCenter.shared.show("设备上已安装")
+            } else {
+                performOnlineInstall()
+            }
+        }
+    }
+
+    /// 真正发起 OTA：IPA 由本机服务器发（`http://127.0.0.1:<port>/package.ipa`），
+    /// 清单托管到 HTTPS 后交给系统装。优先用本地已下载的包，缺文件才退回远端直链。
+    private func performOnlineInstall() {
         let local = URL(fileURLWithPath: IPADownloadLibrary.shared.path(for: item))
         let hasLocal = FileManager.default.fileExists(atPath: local.path)
         let url = hasLocal ? local : sourceLink.flatMap { URL(string: $0) }
