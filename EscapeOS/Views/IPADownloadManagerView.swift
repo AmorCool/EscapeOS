@@ -298,10 +298,28 @@ struct IPADownloadManagerView: View {
         return parts.joined(separator: " · ")
     }
 
-    /// 「下载中」的行内动作：暂停/继续、删除安装包、提取链接
+    /// 「下载中」的行内动作：暂停/继续/重试、删除安装包、提取链接
     /// （v0.3.391 起下载过程中就能直接提取直链，不必先进面板）
-    private func jobActions(_ job: IPADownloadCenter.Job) -> some View {
-        HStack(spacing: 14) {
+    ///
+    /// v0.3.398（③）：暂停/继续这个按钮改成**三态**。
+    ///
+    /// 原来只有两态（`paused → 继续`，**其它一律 → 暂停**），于是失败的任务显示成
+    /// 「暂停」而且 `.disabled(!job.canPause)`（`canPause` 只认 `downloading`/`paused`）
+    /// → 既看不出失败、也点不动，是个**死状态**（用户实测截图 2 就是这样）。
+    /// 现在：`.paused → 继续`（可点）、`.downloading → 暂停`（看 `canPause`）、
+    /// `.failed → 重试`（可点，走 `center.retry`）、其余（`waiting`/`installing`/`done`）→ 暂停（灰）。
+    @ViewBuilder
+    private func jobToggleButton(_ job: IPADownloadCenter.Job) -> some View {
+        if job.phase == .failed {
+            Button {
+                center.retry(job.id)
+            } label: {
+                Label("重试", systemImage: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.orange)
+        } else {
             Button {
                 if job.phase == .paused {
                     center.resume(job.id)
@@ -316,6 +334,12 @@ struct IPADownloadManagerView: View {
             .buttonStyle(.plain)
             .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
             .disabled(!job.canPause)
+        }
+    }
+
+    private func jobActions(_ job: IPADownloadCenter.Job) -> some View {
+        HStack(spacing: 14) {
+            jobToggleButton(job)
             Button {
                 center.cancel(job.id)
                 ToastCenter.shared.show("已取消并删除该安装包")

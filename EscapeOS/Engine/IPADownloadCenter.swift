@@ -244,6 +244,19 @@ final class IPADownloadCenter: ObservableObject {
     private var runner: RemoteDownloader?
     private var runningID: UUID?
 
+    /// v0.3.398（②，第二层防护）：**「这次暂停是我发起的」的显式记录**。
+    ///
+    /// 为什么光有「先写 `.paused`」不够：那一层只覆盖「回调到达时状态已经写成 `.paused`」
+    /// 这一种时序。回调是**跨队列**来的（`URLSession` delegate 队列 → `Task { @MainActor }`），
+    /// 写入与回调谁先到并没有硬保证；而且状态位本身也分不清
+    /// 「因为暂停而被取消」与「下载真的断了」。
+    /// 所以再记一份**只属于主 actor 的意图**：`pause()` 一开始就插入，回调到达时读它，
+    /// 与「状态何时写入」「回调何时到达」全都无关。
+    ///
+    /// 生命周期：`pause()` 插入；`resume()` / `cancel()` 移除（离开 `.paused` 就不再需要它，
+    /// 否则之后**真**的网络错误会被误判成暂停而永远显示「已暂停」）。
+    private var pausingIDs: Set<UUID> = []
+
     // MARK: v0.3.394：瞬时速度的采样窗口
     //
     // 下载是**串行**的（`pump()` 保证一次只下一个），所以一套窗口变量就够，不必按任务存。
@@ -530,14 +543,22 @@ final class IPADownloadCenter: ObservableObject {
 
     func pause(_ id: UUID) {
         guard let job = job(id), job.canPause, job.phase == .downloading else { return }
+        // v0.3.398（②，两层防护的第一层）：**先记意图、再写状态、最后才动下载流**。
+        //
+        // 原来的顺序是 `runner?.pause()` → 最后才写 `.paused`。而「暂停」是靠
+        // `URLSessionDownloadTask.cancel(byProducingResumeData:)` 实现的，取消会产生一个
+        // `URLError.cancelled` 回调；那个回调只要**先于**这次写入到达（异步，时机不定），
+        // `handle` 的失败分支看到的就是 `phase == .downloading` → 把「暂停」判成「下载失败」
+        // → 用户实测的「暂停后几率变失败、进度归 0」（`.failed` 的 `overall` 恒为 0）。
+        pausingIDs.insert(id)
+        update(id) { $0.phase = .paused; $0.stageText = "已暂停"; $0.speedBytesPerSecond = 0 }
         runner?.pause()
         resetSpeedWindow()
-        // v0.3.394：暂停后速度归零 —— 否则界面上会挂着一个「暂停前」的速度数字
-        update(id) { $0.phase = .paused; $0.stageText = "已暂停"; $0.speedBytesPerSecond = 0 }
     }
 
     func resume(_ id: UUID) {
         guard let job = job(id), job.phase == .paused else { return }
+        pausingIDs.remove(id)
         if runningID == id, let runner {
             runner.resume()
             // v0.3.394：续传要重新起窗口（见 `resetSpeedWindow` 注释）
@@ -545,12 +566,28 @@ final class IPADownloadCenter: ObservableObject {
             update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
             return
         }
+        // v0.3.398：下载流已经不在了 → 当**重新排队**处理。
+        //
+        // 为什么不能直接 `pump()`：`pump()` 只挑 `phase == .waiting` 的任务
+        // （见其注释与筛选条件），而这个任务还是 `.paused` → **永远选不中**
+        // → 用户点了「继续」**永久无反应**（实测 bug）。也**不能**改 `pump()` 去收 `.paused`：
+        // 那会让「暂停」的任务被自动拉起，违背暂停意图。
+        // 走这条兜底说明流已断（`resumeData` 也随流一起没了）→ 只能从头下，
+        // 所以把进度归零：界面显示 44% 却从头传是在骗人。
+        update(id) {
+            $0.phase = .waiting
+            $0.stageText = "排队中"
+            $0.progress = 0
+            $0.receivedBytes = 0
+            $0.speedBytesPerSecond = 0
+        }
         pump()
     }
 
     /// 取消并**删除安装包**（下载中的部分文件一并丢弃）
     func cancel(_ id: UUID) {
         guard let job = job(id) else { return }
+        pausingIDs.remove(id)
         if runningID == id {
             runner?.abort()
             runner = nil
@@ -570,6 +607,11 @@ final class IPADownloadCenter: ObservableObject {
         update(id) {
             $0.phase = .waiting
             $0.progress = 0
+            // v0.3.398：已下字节也要归零。`applyDownloadProgress` 只在 `written > receivedBytes`
+            // 时才写，留着上次的 120 MB 会让「进度条 0%」和「已下 120 MB/271 MB」自相矛盾，
+            // 而且要等新下载超过 120 MB 才会开始动 —— 等于一直在骗人。
+            $0.receivedBytes = 0
+            $0.speedBytesPerSecond = 0
             $0.error = nil
             $0.failureStage = nil
             $0.stageText = "排队中"
@@ -682,13 +724,25 @@ final class IPADownloadCenter: ObservableObject {
                 finishWithError(id, error)
             }
         case .failure(let error):
-            // 暂停导致的取消不算失败
-            if job(id)?.phase == .paused { runner = nil; runningID = nil; pump(); return }
+            // 暂停导致的取消不算失败。
+            //
+            // v0.3.398（②）两道判据，缺一不可：
+            // · `pausingIDs.contains(id)` —— 主 actor 上的**显式暂停意图**，与回调到达时机无关；
+            // · `job(id)?.phase == .paused` —— 状态兜底（`pause()` 已保证先写状态）。
+            // 把「取消」当失败会直接毁掉这一行的可恢复性：`.failed` 不 `isBusy` →
+            // 列表把它归入「已结束」，`overall` 对 `.failed` 恒返回 0 → 用户看到「暂停的 44%」
+            // 变成「失败 0%」，而且再点继续也回不去（实测截图就是这两帧）。
+            if pausingIDs.contains(id) || job(id)?.phase == .paused {
+                runner = nil; runningID = nil; pump(); return
+            }
             finishWithError(id, error)
         }
     }
 
     private func finishWithError(_ id: UUID, _ error: Error) {
+        // v0.3.398：这条任务已经离开「暂停」语义 → 清掉可能残留的暂停意图，
+        // 否则将来它真失败时会被那句 `pausingIDs.contains(id)` 误判成暂停。
+        pausingIDs.remove(id)
         update(id) {
             // 下载链路（取流/落盘/HTTP 状态码）失败 —— 文件可能根本不完整
             $0.failureStage = .download
@@ -855,6 +909,16 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
                     task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         if finished { return }
+        // v0.3.398：**本地取消永远不是「下载失败」** —— 这是「暂停后几率变失败」的根因层。
+        //
+        // 暂停是靠 `cancel(byProducingResumeData:)` 实现的，它必然产生一个 `URLError.cancelled`。
+        // 只靠下面的 `paused` 挡不住：`resume()` 会把 `paused` 改回 `false`，
+        // 而被取消任务的取消错误**可能晚于** `resume()` 才到达（旧任务先报错，新的还在传）
+        // → 那一刻 `paused == false` → 被判成真失败。
+        // `URLError.cancelled` 只可能来自**本地** `cancel`（`pause()` / `abort()`），
+        // 网络层的断开/超时是 `networkConnectionLost` / `timedOut` 等**别的**码，
+        // 所以这里无条件丢弃它最稳，而且不依赖任何跨线程状态的读数时序。
+        if let urlError = error as? URLError, urlError.code == .cancelled { return }
         if paused {
             // 暂停/取消产生的取消错误：不当作失败
             return

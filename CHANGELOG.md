@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.3.398] - 2026-09-14
+
+### 修复（下载中心的暂停 / 继续 / 失败三件事）
+用户原话：**「为什么暂停之后就不能继续了 而且在app详情界面点击继续虽然继续了没有刷新暂停按钮
+还有就是几率出现暂停了之后就显示失败了 而且不能继续」**
+
+截图现象：同一行从「已暂停 + 44% + 继续（可点）」变成「失败 + 0% + 暂停（灰、点不动）」。
+
+- **① 「继续」点了没反应**（`IPADownloadCenter.resume`）：兜底分支原本直接 `pump()`，
+  而 `pump()` 只挑 `phase == .waiting` 的任务 —— 一个刚暂停的任务是 `.paused`，
+  **永远选不中** → 点了等于没点。改为「先重新排队（`.waiting`）再 `pump()`」；
+  走这条兜底说明下载流已经断了（连 `resumeData` 一起没了），只能从头下，
+  所以把 `progress / receivedBytes / speed` 一并归零 —— 界面显示 44% 却从头传是骗人。
+  **没有**改 `pump()` 的筛选条件（去收 `.paused` 会让暂停的任务被自动拉起，违背暂停意图）。
+- **② 「暂停」几率变成「失败 0%」**（`IPADownloadCenter.pause` / `RemoteDownloader`）：
+  暂停是靠 `URLSessionDownloadTask.cancel(byProducingResumeData:)` 实现的，取消必然产生
+  一个错误回调；原来靠「失败回调到达时 `phase == .paused`」来区分「这是暂停不是失败」，
+  但**回调是跨队列来的**，`pause()` 又是最后才写 `.paused` → 回调先到就被判成真失败。
+  三层改法：
+  1. `pause()` 改成**先记意图 → 再写状态 → 最后才动下载流**；
+  2. 新增主 actor 上的 `pausingIDs: Set<UUID>`（`pause()` 插入，`resume()` / `cancel()` 移除），
+     `handle` 的失败分支判据改成 `pausingIDs.contains(id) || phase == .paused`；
+  3. **根因层**（`RemoteDownloader.urlSession(_:task:didCompleteWithError:)`）：
+     `URLError.cancelled` **无条件丢弃**。只靠②不够 —— `resume()` 会把 `paused` 改回 `false`，
+     而被取消任务的错误**可能晚于** `resume()` 才到达（旧任务先报错、新的还在传），
+     那一刻 `paused == false` → 照样被判成失败。`cancelled` 只可能来自本地 `cancel`
+     （暂停 / 取消），网络断开是 `networkConnectionLost` / `timedOut` 等**别的**码。
+  `.failed` 的 `overall` 恒为 0，所以这一判错就直接表现为「44% 的暂停」变成「0% 的失败」。
+- **③ 失败的任务显示「暂停」且点不动**（`IPADownloadManagerView.jobActions`）：
+  原来只有两态（`paused → 继续`，其它一律 `→ 暂停`）→ 失败的任务显示出「暂停」，
+  又因为 `canPause` 只认 `downloading`/`paused` 而被置灰，成了死状态。
+  改成三态：`.paused →「继续」`（可点）、`.downloading →「暂停」`（看 `canPause`）、
+  **`.failed →「重试」`（可点，走既有的 `center.retry`）**、其余 → 暂停（灰）。
+- **④ App 详情页「点继续后按钮没刷新」**（`AppStoreDetailView`）：
+  **核实结论：该页并没有缓存 phase** —— 它持有 `@ObservedObject center`，
+  `activeJob` 是计算属性，`jobs` 一变就重画；原诊断的「本地 `@State` 缓存一份 phase」在全仓
+  （含免登录商店的 `I4StoreFreeView` / `I4StoreFreeDetailView`）都不存在。
+  用户看到「没刷新」的真正原因是 **①**：`resume()` 什么都没改 → 没有发布事件 → 界面自然不动。
+  本次只做了一处**不加布局**的加固：暂停/继续按钮的**动作**改成点击时现取一次任务最新状态
+  （`center.job(job.id)`），不再用渲染那一刻的快照 —— 避免快照过期时误发暂停/继续。
+
+> **未在真机编译验证**：本机没有 Xcode / 真机通道，只做了静态自检（括号深度扫描、
+> 行首孤立 `/`、改动调用点 grep）与逐行核对。
+
 ## [0.3.397] - 2026-09-14
 
 ### 修复（v0.3.396 的编译错误）

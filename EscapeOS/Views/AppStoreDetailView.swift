@@ -229,11 +229,18 @@ struct AppStoreDetailView: View {
 
                 HStack(spacing: 16) {
                     // 暂停/继续：只有直链下载期间可用（安装阶段不可暂停）
+                    //
+                    // v0.3.398（④）：这个按钮的两半都是从 `center` **实时**读的
+                    //（`activeJob` 是计算属性，视图持有 `@ObservedObject center`，
+                    // 所以 `jobs` 一变就会重画 —— 原诊断「本地缓存了一份 phase」并不存在）。
+                    // 但**动作**这里再加固一层：点击那一刻**现取一次**任务最新状态，
+                    // 不用渲染时的快照 —— 否则快照过期时（如下载刚好自己完成）会误发暂停/继续。
                     Button {
-                        if job.phase == .paused {
-                            center.resume(job.id)
+                        guard let live = center.job(job.id) else { return }
+                        if live.phase == .paused {
+                            center.resume(live.id)
                         } else {
-                            center.pause(job.id)
+                            center.pause(live.id)
                         }
                     } label: {
                         Label(job.phase == .paused ? "继续" : "暂停",
