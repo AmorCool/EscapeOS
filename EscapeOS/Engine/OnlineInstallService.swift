@@ -151,7 +151,9 @@ enum OnlineInstallService {
             LoginLogger.shared.log("[在线安装] 60 秒内系统未拉包（设备已装同一版本 / 被拒装）→ 收掉进度环",
                                    category: logCategory)
             progress.reset()
-            ToastCenter.shared.show("系统未开始下载")
+            // `ToastCenter` 是 `@MainActor` 类；本方法是非隔离静态方法，这里按全仓既有写法
+            // 显式切回主 actor（`Task { @MainActor in }`），不依赖 `DispatchQueue.main` 闭包的隔离推断。
+            Task { @MainActor in ToastCenter.shared.show("系统未开始下载") }
         }
     }
 
