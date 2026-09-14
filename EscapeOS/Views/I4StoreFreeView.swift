@@ -563,6 +563,9 @@ struct I4StoreFreeView: View {
 /// 这里的这一发重试是给"网络抖动"兜底。**只对网络层失败重试**
 ///（服务端说没有包 / 解密失败 / HTTP 非 2xx 重试没有意义，照旧直接失败）。
 ///
+/// v0.3.410：**空直链也重试**（最多 2 次、间隔 600ms）—— 这是"大部分应用获取失败"的直接成因，
+/// 详见 `fetchNiuwaPackage` 的注释（含真机日志）。两层重试语义分开，不叠加。
+///
 /// `@MainActor`：**顶层自由函数不像 `View` 那样被推断成主 actor**，而这里要调
 /// `IPADownloadCenter`（`@MainActor`）与 `ToastCenter`。两个调用点都在 `View` 内。
 @MainActor
@@ -592,14 +595,54 @@ func startNiuwaDownload(_ app: NiuwaStoreClient.NiuwaApp,
     }
 }
 
-/// 取直链（`v0.3.408` 起**带一次**网络层重试）.
+/// 取直链。**两层重试，语义分开、互不叠加**：
 ///
-/// 为什么只重试网络层：`StoreError` 里 `.network` = 请求根本没拿到响应 —— 这是
-/// 「建隧道期间 LocalDevVPN 被重配、这一发被顶掉」唯一会产生的形态；
-/// `.server`（服务端说没包）、`.decode` / `.crypto`（报文问题）、`.http(N)`
-/// 重试都是白搭，只会让用户多等一轮。
+/// ① **网络层**（`v0.3.408`）：`StoreError.network` = 请求根本没拿到响应 —— 这是
+///    「建隧道期间 LocalDevVPN 被重配、这一发被顶掉」唯一会产生的形态，**只重试一次**（400ms）。
+/// ② **空直链**（`v0.3.410`）：服务端回 200、但 `ba_ipaURL` 为空
+///    （`body` 长这样：`{"ba_sinfs":"","ba_ipaURL":""}`）→ 解析层把它当「没有包」，
+///    **返回 nil、不是 error** → 旧代码**根本不重试**，用户只能自己再点一次。
+///
+/// 真机日志（同一个 `com.tuyafeng.Via`）证明空直链是**限流/抖动**、不是"真没包"：
+/// ```
+/// 21:46:36 region=1 download → 空（ba_ipaURL=""）
+/// 21:46:40 region=1 download → ✓ 直链（sinf 1376 字符）      ← 隔 4 秒重试就成功
+/// 18:47:20 / 18:47:41 region=0 → 空
+/// 18:47:43 region=0 → ✓ 直链                                  ← 第 3 次成功
+/// ```
+/// ⇒ 对空直链做**有界重试**：最多再试 **2 次**、每次间隔 **~600ms**。
+///
+/// **为什么有界（2 次）**：实测 1~2 次即成功；再多试只会把「服务端对这个应用真没包」
+/// 也拖成十几秒的假死 —— 那种情况就该如实报「没有可用的安装包」，不该让用户干等。
+///
+/// 两层**不叠加**：`.network` 的那一次补发若也拿到空直链，才会进入第 ② 层重试；
+/// 其余错误（`.server` / `.decode` / `.crypto` / `.http(N)`）一律直接抛出，不重试。
 private func fetchNiuwaPackage(_ app: NiuwaStoreClient.NiuwaApp,
                                region: NiuwaStoreClient.NiuwaRegion) async throws -> NiuwaStoreClient.NiuwaApp? {
+    // 第 0 次 = 首发；之后最多再补 2 次（只针对空直链）
+    var hit = try await fetchNiuwaPackageOnce(app, region: region)
+    var retries = 0
+    while retries < 2, (hit?.downloadURL ?? "").isEmpty {
+        retries += 1
+        LoginLogger.shared.log("[牛蛙源] 空直链（\(app.bundleId)），第 \(retries) 次重试",
+                               category: .appStore)
+        // 服务端限流/抖动是秒级的，600ms 够跨过一次；再短会和上一次请求挤在一起
+        try? await Task.sleep(for: .milliseconds(600))
+        hit = try await fetchNiuwaPackageOnce(app, region: region)
+    }
+    if retries > 0, let hit, !(hit.downloadURL ?? "").isEmpty {
+        LoginLogger.shared.log("[牛蛙源] ✓ 空直链重试成功（\(app.bundleId)，第 \(retries) 次）",
+                               category: .appStore)
+    }
+    return hit
+}
+
+/// `fetchNiuwaPackage` 的**单次**请求（含 v0.3.408 的网络层一次重试）。
+///
+/// 只负责「发一发、网络失败再补一发」，**不管空直链** —— 空直链的重试在上层，
+/// 拆开是为了不让两条重试揉在一起（否则会重复请求）。
+private func fetchNiuwaPackageOnce(_ app: NiuwaStoreClient.NiuwaApp,
+                                   region: NiuwaStoreClient.NiuwaRegion) async throws -> NiuwaStoreClient.NiuwaApp? {
     do {
         return try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region)
     } catch let error as NiuwaStoreClient.StoreError {
