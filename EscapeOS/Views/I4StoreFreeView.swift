@@ -284,44 +284,19 @@ struct I4StoreFreeView: View {
                     Spacer(minLength: 6)
                 }
             }
-            // v0.3.399：长按左侧（图标 + 文案）弹「查看图标 / 提取图标」，
-            // 与 AppleID 商店列表行的长按位置一致；右侧下载控件不受影响。
-            .contextMenu {
-                iconMenu(app.icon, fileNameBase: app.bundleId ?? app.name)
-            }
 
             trailingControl(app)
         }
         .padding(.vertical, 3)
-    }
-
-    /// v0.3.399：行**长按菜单** —— 爱思 / 牛蛙两行的内容**一字不差**，
-    /// 所以抽成一处（`I4App.icon` 与 `NiuwaApp.iconURL` 都是 `String?`，签名能直接对齐）。
-    /// 「查看图标」= 大图预览（走详情页那套 `ImageGalleryViewer`）；
-    /// 「提取图标」= `IconExporter`（与 AppleID 商店图标长按**同一份实现**）。
-    @ViewBuilder
-    private func iconMenu(_ iconURL: String?, fileNameBase: String) -> some View {
-        Button {
-            viewIcon(iconURL)
-        } label: {
-            Label("查看图标", systemImage: "photo")
+        // v0.3.399：长按弹「查看图标 / 提取图标」。
+        // v0.3.403：菜单内容改走 `ImagePreviewSupport.swift` 的共用实现（四处一份）；
+        // 挂载点从左侧那条 `NavigationLink` **挪到整行** —— AppleID 列表是整行可长按，
+        // 爱思源原来只有左半块（右半块的下载控件压上去不出菜单），位置口径也对齐。
+        .contextMenu {
+            iconMenuItems(iconURL: app.icon, fileNameBase: app.bundleId ?? app.name) {
+                showIconPreview(app.icon, images: $previewImages, target: $previewTarget)
+            }
         }
-        Button {
-            IconExporter.save(iconURL: iconURL, fileNameBase: fileNameBase)
-        } label: {
-            Label("提取图标", systemImage: "square.and.arrow.down")
-        }
-    }
-
-    /// 图标只有一张 —— 仍然塞进同一个 `ImageGalleryViewer`（长按即可保存，行为和截图一致）
-    private func viewIcon(_ iconURL: String?) {
-        let raw = (iconURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else {
-            ToastCenter.shared.show("没有可查看的图标")
-            return
-        }
-        previewImages = [raw]
-        previewTarget = ImagePreviewTarget(index: 0)
     }
 
     @ViewBuilder
@@ -423,11 +398,6 @@ struct I4StoreFreeView: View {
                 }
                 Spacer(minLength: 6)
             }
-            // v0.3.399：牛蛙源没有详情页，长按菜单只挂在左侧（图标 + 文案）这块，
-            // 菜单项与爱思行**共用** `iconMenu(_:fileNameBase:)`。
-            .contextMenu {
-                iconMenu(app.iconURL, fileNameBase: app.bundleId)
-            }
 
             Button {
                 Task { await fetchNiuwaLink(app) }
@@ -441,6 +411,14 @@ struct I4StoreFreeView: View {
             .buttonStyle(.plain)
         }
         .padding(.vertical, 3)
+        // v0.3.399：牛蛙源没有详情页，长按菜单挂在这一行上。
+        // v0.3.403：菜单项与爱思行、AppleID 两处**共用** `iconMenuItems(...)`（单份定义），
+        // 挂载点同样提到整行（原来只有左半块）。
+        .contextMenu {
+            iconMenuItems(iconURL: app.iconURL, fileNameBase: app.bundleId) {
+                showIconPreview(app.iconURL, images: $previewImages, target: $previewTarget)
+            }
+        }
     }
 
     /// 版本 / 大小 / 区域 —— 与爱思行的胶囊同款

@@ -85,16 +85,67 @@ struct ImageGalleryViewer: View {
 }
 
 /// 全屏预览「要看第几张」—— `.fullScreenCover(item:)` 需要一个 `Identifiable`。
-/// 三个调用点（App Store 详情页 / App Store 榜单行 / 爱思源详情页）共用它，不再各写一个私有包装。
+/// 各页面共用它（截图预览与 v0.3.403 起的单张图标预览都走这里），不再各写一个私有包装。
+/// `index` 对图标预览恒为 0（数组里就一张）。
 struct ImagePreviewTarget: Identifiable {
     let index: Int
     var id: Int { index }
 }
 
+/// v0.3.403：长按菜单里**「查看图标 + 提取图标」这两项的唯一一份内容**。
+///
+/// 四个调用点（AppleID 商店列表 / AppleID 应用详情 / 爱思源列表 / 爱思源详情）都调它 ——
+/// 「查看图标」开 `ImageGalleryViewer`（图标只有一张，塞进去即可），「提取图标」走 `IconExporter`。
+/// 别在页面里再抄一份这两行 `Button`，四处菜单长得不一样这个坑刚踩过。
+///
+/// `viewIcon` 由调用方传入：预览状态是各页自己的 `@State`，这里只负责触发，不持有状态。
+///
+/// 外面这层 `Group` 不是装饰：菜单项由「返回 `some View` 的函数」给出时，包一层 `Group`
+/// 才能被确定地摊平成多条菜单项 —— 本仓库 `FileBrowserView.itemMenu(for:)` 是同样的写法。
+///
+/// `@MainActor`：**顶层自由函数不会像 `View` 那样被推断成主 actor**，而这里要调
+/// `IconExporter`（`@MainActor`）——不标注就是「非隔离上下文调主 actor 方法」。四个调用点
+/// 都在 `View` 内，天然在主 actor 上。
+@MainActor
+@ViewBuilder
+func iconMenuItems(iconURL: String?, fileNameBase: String,
+                   viewIcon: @escaping @MainActor () -> Void) -> some View {
+    Group {
+        Button {
+            viewIcon()
+        } label: {
+            Label("查看图标", systemImage: "photo")
+        }
+        Button {
+            IconExporter.save(iconURL: iconURL, fileNameBase: fileNameBase)
+        } label: {
+            Label("提取图标", systemImage: "square.and.arrow.down")
+        }
+    }
+}
+
+/// v0.3.403：点「查看图标」→ 开**单张**全屏预览（`ImageGalleryViewer`）。
+///
+/// 地址为空只提示一句、不开空预览；判定与文案四处一致。
+/// 图标只有一张，仍然走同一个查看器 —— 于是「长按存图」白得，和截图那条路径行为一致。
+/// `@MainActor` 的理由同 `iconMenuItems`（顶层自由函数 + 直接驱动 `ToastCenter`）。
+@MainActor
+func showIconPreview(_ iconURL: String?,
+                     images: Binding<[String]>,
+                     target: Binding<ImagePreviewTarget?>) {
+    let raw = (iconURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !raw.isEmpty else {
+        ToastCenter.shared.show("没有可查看的图标")
+        return
+    }
+    images.wrappedValue = [raw]
+    target.wrappedValue = ImagePreviewTarget(index: 0)
+}
+
 /// v0.3.399：**「提取图标」的共用实现** —— 下载图标 → 优先存相册（失败回落 `Documents/AppIcons`）。
 ///
-/// 从 `AppStoreDetailView.extractIcon()` 抽出来（原来只有 App Store 详情页的图标长按能用），
-/// 爱思源的行长按菜单现在也走这里 —— **同一份实现，不做第二套**。
+/// v0.3.399 从 App Store 详情页图标长按的私有实现里抽出来；v0.3.403 起四个页面的
+/// 「提取图标」都走这里 —— **同一份实现，不做第二套**。
 ///
 /// `@MainActor`：本类直接驱动 `ToastCenter`（它本身是 `@MainActor` 类）与 UI 状态，
 /// 显式标注比依赖「调用点恰好也在主 actor」可靠。异步部分再显式 `Task { @MainActor in }`。

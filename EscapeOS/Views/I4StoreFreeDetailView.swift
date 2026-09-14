@@ -19,7 +19,11 @@ struct I4StoreFreeDetailView: View {
 
     /// v0.3.399：点截图 → 全屏预览（**复用** AppleID 详情页那套 `ImageGalleryViewer`，
     /// 长按存图是它自带的行为，不在爱思侧另写一套）。
+    ///
+    /// v0.3.403：`viewerTarget` 现在同时给「截图预览」和「图标预览」用 ——
+    /// 所以图数组独立成 `viewerImages`（点截图 = 整组截图，点图标 = 就那一张）。
     @State private var viewerTarget: ImagePreviewTarget?
+    @State private var viewerImages: [String] = []
 
     /// 历史版本默认只露前 8 个，其余点「查看全部」
     private let versionPageSize = 8
@@ -63,7 +67,7 @@ struct I4StoreFreeDetailView: View {
         .navigationTitle(displayName)
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $viewerTarget) { target in
-            ImageGalleryViewer(urls: detail?.screenshots ?? [], startIndex: target.index)
+            ImageGalleryViewer(urls: viewerImages, startIndex: target.index)
         }
         .toastHost()
         .task { await load() }
@@ -134,6 +138,15 @@ struct I4StoreFreeDetailView: View {
                 }
                 .frame(width: 62, height: 62)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // v0.3.403：图标长按 = 「查看图标 / 提取图标」，走 `ImagePreviewSupport.swift`
+                // 的共用实现 —— 与列表行、AppleID 两处一字不差。尺寸/圆角保持原样。
+                .contextMenu {
+                    iconMenuItems(iconURL: displayIcon,
+                                  fileNameBase: bundleId ?? displayName) {
+                        showIconPreview(displayIcon, images: $viewerImages, target: $viewerTarget)
+                    }
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(d.name).font(.headline).lineLimit(2)
@@ -179,7 +192,9 @@ struct I4StoreFreeDetailView: View {
                         ForEach(Array(d.screenshots.enumerated()), id: \.offset) { index, url in
                             // v0.3.399：对齐 AppleID 详情页 —— 点开全屏预览（进去后长按即可保存）。
                             // 图片尺寸 / 圆角保持原样，只加交互。
+                            // v0.3.403：图数组先落进 `viewerImages`（图标预览共用同一个查看器）。
                             Button {
+                                viewerImages = d.screenshots
                                 viewerTarget = ImagePreviewTarget(index: index)
                             } label: {
                                 AsyncImage(url: URL(string: url)) { phase in

@@ -24,11 +24,12 @@ struct AppStoreView: View {
     @State private var accountTarget: AppStoreItem?
     @ObservedObject private var center = IPADownloadCenter.shared
 
-    /// v0.3.399：列表行**长按 →「查看图片」**用的全屏预览。
+    /// v0.3.399：列表行**长按 →「查看图标 / 查看图片」**用的全屏预览。
     ///
     /// 为什么还要 `previewImages` 这份数组：榜单走的是 RSS（`parseRSSEntry`），
     /// 服务端**根本不返回截图**，所以列表项自己的 `screenshots` 恒为空
-    /// → 长按时先按 id 取一次 Lookup 拿图，再开预览（详见 `openImagePreview(for:)`）。
+    /// → 长按看图片时先按 id 取一次 Lookup 拿图，再开预览（详见 `openImagePreview(for:)`）。
+    /// 「查看图标」只用列表项自带的图标地址，不发网络请求（见 `showIconPreview`）。
     @State private var previewImages: [String] = []
     @State private var previewTarget: ImagePreviewTarget?
 
@@ -356,8 +357,11 @@ struct AppStoreView: View {
 
     // MARK: 行
 
-    /// v0.3.399：榜单行 / 搜索结果行**共用**的行壳 —— 点进详情 + 长按菜单「查看图片」。
+    /// v0.3.399：榜单行 / 搜索结果行**共用**的行壳 —— 点进详情 + 长按菜单。
     /// 抽出来只是为了让两处不要各挂一份一模一样的 `contextMenu`（菜单只有一项，别再复制）。
+    ///
+    /// v0.3.403：菜单补齐「查看图标 / 提取图标」——两项都走 `ImagePreviewSupport.swift`
+    /// 里的**共用实现**，与 AppleID 详情页、爱思源两处一字不差。
     private func storeRow(_ app: AppStoreItem, rank: Int?) -> some View {
         NavigationLink {
             AppStoreDetailView(item: app)
@@ -365,6 +369,14 @@ struct AppStoreView: View {
             appRow(app, rank: rank)
         }
         .contextMenu {
+            iconMenuItems(iconURL: app.iconURL ?? app.iconSmallURL,
+                          fileNameBase: app.bundleId ?? app.name) {
+                showIconPreview(app.iconURL ?? app.iconSmallURL,
+                                images: $previewImages, target: $previewTarget)
+            }
+            // 列表**独有**的一项：这里的图 = 详情页那组截图（其它三处的长按菜单都没有它）。
+            // 保留原因：用户 v0.3.399 就是在这块提的「查看图片」，本轮只要求补「查看图标 /
+            // 提取图标」，没让撤掉它 —— 少一个能用的入口不如多一个。
             Button {
                 openImagePreview(for: app)
             } label: {

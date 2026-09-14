@@ -15,7 +15,11 @@ struct AppStoreDetailView: View {
     @State private var showAccountPicker = false
 
     // 预览浏览器
-    @State private var viewerIndex: Int?
+    //
+    // v0.3.403：从 `viewerIndex: Int?` 改成「图数组 + 看第几张」——图标预览要看的是图标、
+    // 截图预览要看的是截图，共用一个查看器就得让数组跟着点的那一项变（列表页本来就是这套写法）。
+    @State private var previewImages: [String] = []
+    @State private var previewTarget: ImagePreviewTarget?
 
     // 内置网页
     @State private var browserTarget: LinkShareTarget?
@@ -120,13 +124,11 @@ struct AppStoreDetailView: View {
         .sheet(item: $browserTarget) { target in
             InAppBrowserView(title: target.title, url: target.url)
         }
-        .fullScreenCover(item: Binding(
-            get: { viewerIndex.map { ImagePreviewTarget(index: $0) } },
-            set: { viewerIndex = $0?.index }
-        )) { target in
+        .fullScreenCover(item: $previewTarget) { target in
             // v0.3.399：预览组件已搬去 `ImagePreviewSupport.swift`（`ImageGalleryViewer`），
             // 与爱思源详情页共用同一套 —— 这里只是换个名字，行为一字未改。
-            ImageGalleryViewer(urls: item.screenshots, startIndex: target.index)
+            // v0.3.403：`urls` 改读 `previewImages`（点图标就是 [图标]，点截图就是整组截图）。
+            ImageGalleryViewer(urls: previewImages, startIndex: target.index)
         }
         .toastHost()
         .task { await loadDetail() }
@@ -186,7 +188,10 @@ struct AppStoreDetailView: View {
         }
     }
 
-    /// 图标：长按只弹菜单，点菜单里的「提取图标」才下载（避免误触）
+    /// 图标：长按只弹菜单，点菜单里的「查看图标 / 提取图标」才动作（避免误触）。
+    ///
+    /// v0.3.403：两项都换成 `ImagePreviewSupport.swift` 里的共用实现 —— 与 AppleID 列表、
+    /// 爱思源两处一字不差（原来这里只有「提取图标」）。
     private var iconView: some View {
         AsyncImage(url: URL(string: item.iconURL ?? item.iconSmallURL ?? "")) { phase in
             switch phase {
@@ -199,10 +204,10 @@ struct AppStoreDetailView: View {
         .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
         .contextMenu {
-            Button {
-                extractIcon()
-            } label: {
-                Label("提取图标", systemImage: "square.and.arrow.down")
+            iconMenuItems(iconURL: item.iconURL ?? item.iconSmallURL,
+                          fileNameBase: "\(item.bundleId ?? item.id)-icon") {
+                showIconPreview(item.iconURL ?? item.iconSmallURL,
+                                images: $previewImages, target: $previewTarget)
             }
         }
     }
@@ -351,7 +356,8 @@ struct AppStoreDetailView: View {
                 HStack(spacing: 12) {
                     ForEach(Array(item.screenshots.enumerated()), id: \.offset) { index, url in
                         Button {
-                            viewerIndex = index
+                            previewImages = item.screenshots
+                            previewTarget = ImagePreviewTarget(index: index)
                         } label: {
                             AsyncImage(url: URL(string: url)) { phase in
                                 switch phase {
@@ -545,15 +551,6 @@ struct AppStoreDetailView: View {
                 name: item.name, bundleId: bid, iconURL: item.iconURL,
                 storeItemId: item.id)
         }
-    }
-
-    /// 长按菜单里的「提取图标」
-    ///
-    /// v0.3.399：实现抽到 `IconExporter`（`ImagePreviewSupport.swift`），
-    /// 爱思源的行长按菜单走**同一个**函数 —— 不再各写一份下载/保存逻辑。
-    private func extractIcon() {
-        IconExporter.save(iconURL: item.iconURL ?? item.iconSmallURL,
-                          fileNameBase: "\(item.bundleId ?? item.id)-icon")
     }
 
     /// 进入详情时：Lookup 补全字段（预览图 / 大小 / 版本 / 兼容性…都来自这里），
