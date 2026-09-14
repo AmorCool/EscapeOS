@@ -23,6 +23,18 @@ import CryptoKit
 /// **我们过去一直发明文 JSON**，而不是解密不出来。
 private enum NiuwaCrypto {
 
+    /// ★ 本次请求加密时**实际发出去的那个 T**（= 拼在请求体尾部的那串数字）。
+    ///
+    /// 为什么必须记住它（反汇编证据，`NiuwaCore`）：
+    /// `nwcore_decryptByAESWithCipher:timeSlide:` 的 IMP `0x60a50` 里，
+    /// `0x060a70 mov x24, x3`（x3 = `timeSlide:` 参数）→ `0x060b30 add x21, x0, x24`
+    /// ⇒ 服务端派生密钥用的是 **`N = 响应尾部的数字 + T`**，不是单纯的「尾部数字」。
+    ///
+    /// 这解释了「小样本能解、大样本解不开」：早期抓到的那个样本对应的请求**没带 T**（参数=0），
+    /// 于是 `N = 尾部 + 0` 与我们当时的算法恰好一致；而请求侧加密打通后 `T ≠ 0`，
+    /// 服务端按 `尾部 + T` 派生，我们仍用「尾部」→ **GCM tag 必然校验失败**。
+    private(set) static var lastRequestT: String?
+
     /// 前缀 A（**32 字节**）：`~!@#$%^&*()_+` + **3 个空格** + `+_)(*&^%$#@!~` + **3 个空格**
     ///
     /// ⚠️ 空格**必须显式拼接**：直接写在一行里极易被格式化/编辑器吃掉，而**差一个空格整个算法就废**。
@@ -55,6 +67,8 @@ private enum NiuwaCrypto {
     /// 明文 → 可发送的报文串
     static func encrypt(_ plain: Data) -> String? {
         let n = newN()
+        // ★ 记住本次发出去的 T —— 解密时要用 `尾部 + T` 派生密钥（见 `lastRequestT` 注释）
+        lastRequestT = n
         let (key, iv) = deriveKeyIV(n: n)
         guard let nonce = try? AES.GCM.Nonce(data: iv),
               let sealed = try? AES.GCM.seal(plain, using: SymmetricKey(data: key), nonce: nonce) else {
@@ -73,7 +87,7 @@ private enum NiuwaCrypto {
         let dir = docs.appendingPathComponent("LoginLogs", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("niuwa_last_response.txt")
-        let header = "len=\(raw.count)\ntail20=\(String(raw.suffix(20)))\n---\n"
+        let header = "len=\(raw.count)\ntail20=\(String(raw.suffix(20)))\nT=\(lastRequestT ?? "nil")\n---\n"
         try? (header + raw).write(to: file, atomically: true, encoding: .utf8)
     }
 
@@ -102,21 +116,40 @@ private enum NiuwaCrypto {
         }
         let ciphertext = Data(blob.prefix(blob.count - 16))
         let tag = Data(blob.suffix(16))
-        let (key, iv) = deriveKeyIV(n: n)
-        // ⚠️ 不能用 `String(key.prefix(8))` —— `prefix` 返回 `Data.SubSequence`，
-        // 那个 `String(_:)` 初始化器不存在（v0.3.396 CI 的
-        // `error: no exact matches in call to initializer` 就是这里）。
-        let keyHead = String(decoding: key.prefix(8), as: UTF8.self)
-        let ivText = String(data: iv, encoding: .utf8) ?? "?"
-        LoginLogger.shared.log("[牛蛙源·诊断] N=\(n) 密文=\(ciphertext.count) 字节 头段b64=\(head.count) "
-                               + "key前8=\(keyHead) iv=[\(ivText)]",
-                               category: .appStore)
-        guard let nonce = try? AES.GCM.Nonce(data: iv),
-              let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag),
-              let plain = try? AES.GCM.open(box, using: SymmetricKey(data: key)) else {
-            return nil
+        let tailN = n                       // 响应尾部那串数字
+        let t = lastRequestT                 // 本次请求发出去的 T
+        // ★★ 候选 N，按证据强度排序：
+        // ① `尾部 + T` —— 反汇编证据 `add x21, x0, x24`（x0=尾部、x24=timeSlide 参数=我们发的 T）；
+        // ② `尾部`     —— T=0 的老路径（早期那个 92 字样本就是这种，所以它能解开）；
+        // ③ `T`        —— 兜底。
+        // 逐个试，成功即返回 —— GCM 的 tag 校验"非过即挂"，不存在误判。
+        var candidates: [(String, String)] = []
+        if let t, let sum = decimalSum(tailN, t) { candidates.append((sum, "尾部+T")) }
+        candidates.append((tailN, "尾部"))
+        if let t { candidates.append((t, "T")) }
+
+        for (nCandidate, label) in candidates {
+            let (key, iv) = deriveKeyIV(n: nCandidate)
+            guard let nonce = try? AES.GCM.Nonce(data: iv),
+                  let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag),
+                  let plain = try? AES.GCM.open(box, using: SymmetricKey(data: key)) else {
+                LoginLogger.shared.log("[牛蛙源·诊断] N候选[\(label)]=\(nCandidate) → 失败",
+                                       category: .appStore)
+                continue
+            }
+            LoginLogger.shared.log("[牛蛙源·诊断] ✓ 命中 N候选[\(label)]=\(nCandidate)"
+                                   + "（尾部=\(tailN) T=\(t ?? "nil")）", category: .appStore)
+            return plain
         }
-        return plain
+        LoginLogger.shared.log("[牛蛙源·诊断] 全部 N 候选失败：尾部=\(tailN) T=\(t ?? "nil") "
+                               + "密文=\(ciphertext.count) 字节", category: .appStore)
+        return nil
+    }
+
+    /// 两个十进制数字字符串相加 —— `N = 尾部 + T` 可能到 10 位以上，所以用 Int64 而不是 Int32
+    static func decimalSum(_ a: String, _ b: String) -> String? {
+        guard let x = Int64(a), let y = Int64(b) else { return nil }
+        return "\(x + y)"
     }
 
     /// base64 **去掉 `=` padding**（报文两段都不带 padding）
