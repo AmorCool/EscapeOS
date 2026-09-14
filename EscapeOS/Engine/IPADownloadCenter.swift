@@ -240,10 +240,16 @@ final class IPADownloadCenter: ObservableObject {
     }
 
     /// 免登录源：只给 bundleId/名称，自己按 bundleId 去源里找包
+    ///
+    /// v0.3.392：新增 `storeItemId`（App Store trackId）—— 用来给**爱思来源**的包也记上「商店链接」。
+    /// 调用点手上就有（`AppStoreItem.id` 就是 trackId）；若没给，稍后用爱思返回的
+    /// `I4App.itemId`（**接口里本来就带的 App Store trackId**）兜底。
     @discardableResult
-    func startFromI4Source(name: String, bundleId: String, iconURL: String?) async -> UUID {
+    func startFromI4Source(name: String, bundleId: String, iconURL: String?,
+                           storeItemId: String? = nil) async -> UUID {
         var job = Job(name: name, bundleId: bundleId, version: nil, iconURL: iconURL,
                       remoteURL: nil, source: .i4Free, accountEmail: nil, autoInstall: true)
+        job.storeItemId = storeItemId
         job.stageText = "查找安装包"
         jobs.insert(job, at: 0)
         let id = job.id
@@ -260,6 +266,8 @@ final class IPADownloadCenter: ObservableObject {
         update(id) {
             $0.remoteURL = hit.ipaURL
             $0.version = hit.version
+            // 调用点没给商品号时，用爱思接口返回的那个兜底（它就是 App Store trackId）
+            if ($0.storeItemId ?? "").isEmpty { $0.storeItemId = hit.itemId }
             $0.stageText = "排队中"
         }
         // v0.3.387：直链与版本刚开始确定 → 也立刻落盘一次（此刻台账多半还没有这一行，属 no-op；

@@ -520,7 +520,8 @@ struct AppStoreDetailView: View {
         ToastCenter.shared.show("正在查找安装包…")
         Task {
             _ = await IPADownloadCenter.shared.startFromI4Source(
-                name: item.name, bundleId: bid, iconURL: item.iconURL)
+                name: item.name, bundleId: bid, iconURL: item.iconURL,
+                storeItemId: item.id)
         }
     }
 

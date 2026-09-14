@@ -21,6 +21,11 @@ enum SourcePackageLocator {
         let bundleId: String
         let name: String
         let version: String?
+        /// v0.3.392：爱思搜索结果里的 **App Store trackId**（`I4PCStoreClient.I4App.itemId`
+        /// 的注释就写着「App Store trackId」）。用来给**爱思来源**的包补上「商店链接」——
+        /// 用户指出「爱思有个从 App Store 安装，它也能查到 App Store 来源的应用」，
+        /// 而事实证明这个号**本来就在接口里**，只是我们之前没接。
+        let itemId: String?
     }
 
     /// 一次查找的结果：区分「查成了但没有」与「没查成」
@@ -60,7 +65,8 @@ enum SourcePackageLocator {
                                     hit: Hit(ipaURL: url.absoluteString,
                                              bundleId: app.bundleId ?? bundleId,
                                              name: app.name,
-                                             version: app.version))
+                                             version: app.version,
+                                             itemId: app.itemId))
             }
         }
         return LookupResult(succeeded: anySucceeded, hit: nil)

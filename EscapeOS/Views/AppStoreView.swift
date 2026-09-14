@@ -504,7 +504,8 @@ struct AppStoreView: View {
                 return
             }
             _ = await IPADownloadCenter.shared.startFromI4Source(
-                name: app.name, bundleId: bid, iconURL: app.iconURL)
+                name: app.name, bundleId: bid, iconURL: app.iconURL,
+                storeItemId: app.id)
         }
     }
 }
