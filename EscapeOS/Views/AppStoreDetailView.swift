@@ -235,22 +235,35 @@ struct AppStoreDetailView: View {
                     // 所以 `jobs` 一变就会重画 —— 原诊断「本地缓存了一份 phase」并不存在）。
                     // 但**动作**这里再加固一层：点击那一刻**现取一次**任务最新状态，
                     // 不用渲染时的快照 —— 否则快照过期时（如下载刚好自己完成）会误发暂停/继续。
+                    // v0.3.398（⑤）：**失败的任务在这一页也要能重试**。
+                    // 用户原话「…而且不能继续」——他就是在详情页遇到失败后无处可点
+                    //（原先这一格只会画一个灰的「暂停」，点不动）。
+                    // 只改这一个状态位的文案/动作/颜色，**布局（间距、字号、行高）一律不动**。
                     Button {
                         guard let live = center.job(job.id) else { return }
-                        if live.phase == .paused {
-                            center.resume(live.id)
-                        } else {
-                            center.pause(live.id)
+                        switch live.phase {
+                        case .failed: center.retry(live.id)
+                        case .paused: center.resume(live.id)
+                        default:      center.pause(live.id)
                         }
                     } label: {
-                        Label(job.phase == .paused ? "继续" : "暂停",
-                              systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
-                            .font(.caption.weight(.medium))
-                            .lineLimit(1)
+                        if job.phase == .failed {
+                            Label("重试", systemImage: "arrow.clockwise")
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                        } else {
+                            Label(job.phase == .paused ? "继续" : "暂停",
+                                  systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                        }
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
-                    .disabled(!job.canPause)
+                    .foregroundStyle(job.phase == .failed
+                                     ? Color.orange
+                                     : (job.canPause ? Color.blue : Color.secondary))
+                    // 失败态**必须可点**（否则又回到「显示暂停但点不动」那种死状态）
+                    .disabled(job.phase != .failed && !job.canPause)
 
                     Button {
                         center.cancel(job.id)

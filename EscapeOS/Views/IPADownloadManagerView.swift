@@ -307,7 +307,8 @@ struct IPADownloadManagerView: View {
     /// 「暂停」而且 `.disabled(!job.canPause)`（`canPause` 只认 `downloading`/`paused`）
     /// → 既看不出失败、也点不动，是个**死状态**（用户实测截图 2 就是这样）。
     /// 现在：`.paused → 继续`（可点）、`.downloading → 暂停`（看 `canPause`）、
-    /// `.failed → 重试`（可点，走 `center.retry`）、其余（`waiting`/`installing`/`done`）→ 暂停（灰）。
+    /// `.failed → 重试`（可点，走 `center.retry`）、`waiting`/`installing` → 暂停（灰）、
+    /// **`.done` → 不显示**（用同宽 `.hidden()` 占位，避免后面两个按钮左右跳）。
     @ViewBuilder
     private func jobToggleButton(_ job: IPADownloadCenter.Job) -> some View {
         if job.phase == .failed {
@@ -319,6 +320,13 @@ struct IPADownloadManagerView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.orange)
+        } else if job.phase == .done {
+            // v0.3.398：已完成的条目不该挂一个灰「暂停」（点不动、也没意义）。
+            // 用**同宽占位**（`.hidden()`）而不是直接不渲染 —— 否则后面的「删除安装包」「提取链接」
+            // 会往左跳一格，正是用户之前抱怨的「整行图标左右位移」。
+            Label("暂停", systemImage: "pause.fill")
+                .font(.caption)
+                .hidden()
         } else {
             Button {
                 if job.phase == .paused {
