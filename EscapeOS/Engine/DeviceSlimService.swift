@@ -274,9 +274,11 @@ enum DeviceSlimService {
         var apps: [FileSharingApp] = []
         /// 快路径（`get_apps`）是否拿到数据 —— false = 真拿不到，页面应显示错误态 + 重试
         var usable = false
-        /// 大小/账号（带属性 Lookup 增强）是否取到 ——
+        /// **是否真的拿到了可用的大小**（v0.3.401 起不再看「增强回填了几条」）——
         /// false = 没有精确大小，只能按可得信息出数据（「应用」分片会偏小、
-        /// 「较大应用」判不出「> 500MB」）
+        /// 「较大应用」判不出「> 500MB」），页面据此提示「应用大小不可用」.
+        /// 背景：带属性 Lookup 已把大小字段移出请求（为解决它卡 ~25 秒的回归），
+        /// 而 iOS 侧**没有 AFC 等价通道**能补应用大小（house_arrest 只到数据容器）.
         var sizeComplete = false
     }
 
@@ -293,9 +295,11 @@ enum DeviceSlimService {
     ///      不再重复开隧道；
     ///   4. 只有**快路径也失败**时才回空数组，并置问题文案 → 页面显示
     ///      「应用读取超时」+ 重试，**不显示成静默空列表**.
-    /// 注意：`get_apps` **不带** `StaticDiskUsage` / `DynamicDiskUsage`（大小字段
-    /// 只有带 ReturnAttributes 的 Lookup 才返回），所以「应用」分片与「较大应用」
-    /// 的精确度**完全依赖第 2 步能否成功**；取不到时页面会明确提示「应用大小不可用」.
+    /// 注意：大小字段（`StaticDiskUsage` / `DynamicDiskUsage`）**两条路都拿不到** ——
+    /// `get_apps` 从来不带它们，而 v0.3.401 起带属性 Lookup 也**不再请求**它们
+    ///（为解决「带属性 Lookup 卡 ~25 秒」的回归）。iOS 侧没有 AFC 等价通道能补应用大小
+    ///（house_arrest 只到数据容器），所以「应用」分片与「较大应用」的精确度**完全依赖
+    /// 第 2 步能否成功**；取不到时页面必须明确提示「应用大小不可用」（判据见 sizeComplete）.
     private static func readAppsForSlim() -> AppReadResult {
         appReadLock.lock()
         if let cache = appReadCache, Date().timeIntervalSince(cache.at) < 30 {
@@ -331,8 +335,21 @@ enum DeviceSlimService {
                 if result.apps[index].appleId == nil { result.apps[index].appleId = e.appleId }
                 patched += 1
             }
-            result.sizeComplete = patched > 0
-            LoginLogger.shared.log("[设备瘦身] 大小增强成功：回填 \(patched) 条")
+            // v0.3.401（补修）：`sizeComplete` 改成按「**是否真的拿到大小**」判定.
+            // 原来按「回填了几条」（`patched > 0`）判定 —— 只要带属性增强返回了列表就算
+            // 成功；而本版已把 StaticDiskUsage / DynamicDiskUsage 移出请求（为解决
+            // 「带属性 Lookup 卡 ~25 秒」），于是 `patched` 仍 > 0 但 appSize 全为 nil：
+            // 页面不给「应用大小不可用」，而 bigApps 的 `total > threshold` 会把全部
+            // 应用跳过（`appSize/docSize` 都是 0）→ 「应用」分片 /「较大应用」**静默为空**.
+            // 现在要求「至少有一个应用真的带上了 appSize」，否则如实报「大小不可用」.
+            // 注：iOS 侧**没有 AFC 等价通道**能补应用大小（house_arrest 只到数据容器），
+            // 所以去掉这两个字段就等于「应用大小整体不可用」，必须让页面说清楚.
+            let sizedApps = result.apps.filter { $0.appSize != nil }.count
+            result.sizeComplete = sizedApps > 0
+            LoginLogger.shared.log(
+                "[设备瘦身] 大小增强回填 \(patched) 条，其中真的带 appSize \(sizedApps) 条"
+                + "（sizeComplete=\(result.sizeComplete)）"
+            )
         }
 
         appReadLock.lock()

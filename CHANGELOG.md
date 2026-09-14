@@ -77,17 +77,20 @@
   失败/超时仍退回 `get_apps`（此时缺购买邮箱 → 由 A 兜成「未识别」，不再误判）。
   额度 < 10s 的调用（如 `IPADownloadActionsSheet` 的 5s 快路径数据源）直接用 `get_apps`。
   新增日志：请求字段清单 + 端到端耗时 + 「带 iTunesMetadata / 带购买邮箱」条数。
-- **代价（已知，需产品确认）**：大小字段自本版起**不再由这条命令返回** ——
-  文档大小的 AFC 兜底实现虽在（`FileSharingService.computeDocumentsSize`），
-  但其调用点 `FileSharingAppsView.computeDocumentSizes()` **当前没有任何调用**
-  （死代码，要用得先接上）；**应用大小在 iOS 侧没有 AFC 等价通道**
-  （house_arrest 只到数据容器），应用大小胶囊会显示「—」，
-  需另开「按需大小查询」通道才能恢复。
-- **同时要盯的下游影响**：`DeviceSlimService` 的「应用」分片与「较大应用」分组
-  依赖 `appSize + docSize`（两者都没有时会跳过全部应用 → 分组为空），而它的
-  `sizeComplete` 是按「增强回填了几条」判定的（`DeviceSlimService.swift:334`），
-  在大小字段缺失时仍会是 `true` → 页面**不会**给出「应用大小不可用」的说明。
-  该文件不在本次授权范围内，故未改动：建议随后把判定改为「是否真的拿到大小」。
+### 已知代价（大小字段被移出请求）
+- 为解决「带属性 Lookup 卡 ~25 秒」的卡死，本版把 `StaticDiskUsage` / `DynamicDiskUsage`
+  （连同 `CFBundleSize`）**从该请求里去掉**（`rust/idevice-ffi/src/installation_proxy.rs`
+  的 `attrs` 常量）。真机证据（实测日志）：
+  `[17:00:08.237] 类型判定一批：8 条`（快路径 334 个应用 **0.12 秒**跑完）→
+  `[17:00:33.449] 带属性增强：僵尸 Lookup 返回（已超时放弃，结果丢弃）` = **约 25 秒**。
+  顺带旁证：pymobiledevice3 里这三个字段同样是 opt-in（`get_apps(calculate_sizes=True)`）。
+- ⇒ **应用大小在 iOS 侧没有等价通道**（AFC / house_arrest 只到数据容器，拿不到 bundle 大小），
+  相关位置会显示「—」。文档大小的 AFC 兜底实现虽在
+  （`FileSharingService.computeDocumentsSize`），但它的调用点
+  `FileSharingAppsView.computeDocumentSizes()` **当前没有任何调用**（死代码，要用得先接上）。
+- ⇒ 「设备瘦身」的「应用」分片与「较大应用」分组在拿不到大小时**给出「应用大小不可用」提示，
+  不再是静默为空**：本版把 `sizeComplete` 的判定从「增强回填了几条」改成
+  「是否真的拿到了 `appSize`」（`DeviceSlimService.swift:334`）。
 
 ## [0.3.400] - 2026-09-14
 
