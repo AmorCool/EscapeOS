@@ -19,18 +19,6 @@ struct SSHDebugView: View {
     /// 那种占位文案不能拼进 ssh 命令里（v0.3.404 加「局域网」那条命令时用）。
     private var hasLAN: Bool { service.lanIP.split(separator: ".").count == 4 }
 
-    /// v0.3.405：固定主机名那条命令（`<设备名>.local`，局域网 IP 变了也能连）。
-    /// 设备名取不到 → 返回 nil，界面**整行不显示**，不显示半截命令。
-    /// 主机名里有空格时 shell 会把它拆成两个参数 → 换 `-l` 形式并给主机名加引号。
-    private var mdnsCommand: String? {
-        let label = service.mdnsHostLabel
-        guard !label.isEmpty else { return nil }
-        if label.range(of: " ") != nil {
-            return "ssh -l \(service.username) \"\(label).local\" -p \(service.port)"
-        }
-        return "ssh \(service.username)@\(label).local -p \(service.port)"
-    }
-
     var body: some View {
         List {
             if !service.hasSetPassword {
@@ -182,29 +170,14 @@ struct SSHDebugView: View {
                         .font(.body.monospaced())
                         .textSelection(.enabled)
                 }
-                // v0.3.406：**删掉「本机（仅设备自身）127.0.0.1」那条** ——
-                // 用户原话：「算了不要加 127.0.0.1 那条线路了 也不要局域网找设备了太复杂也不想要」。
-                // 回环地址只在设备自己身上有意义，对"电脑连手机"这个用途一点用没有。
-                // ⚠️ 服务端监听地址没动（仍是 `0.0.0.0`），下面「局域网」那条不受影响。
+                // v0.3.406：连接命令**只留「局域网」这一条** —— v0.3.404 与 v0.3.405 加的那两条
+                // 都按用户要求撤掉了（原话：「不改 ssh」）。
+                // ⚠️ 服务端监听地址没动（仍是 `0.0.0.0`）。
                 if hasLAN {
                     HStack {
                         Text("局域网")
                         Spacer()
                         Text(service.connectHint)
-                            .foregroundColor(.secondary)
-                            .font(.system(.footnote, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
-                }
-                // v0.3.405：固定主机名 —— 设备自带的 Bonjour 名字，局域网 IP 变了也照连。
-                // v0.3.406：用户这一轮撤的是 127.0.0.1 与「局域网找设备」，**这条按 team-lead 口径保留**
-                //（零成本、用户上一轮亲口批过「作为备用共存」）。
-                // 「需 Bonjour」写在标签里（电脑侧要有 Bonjour 客户端才解析得了 `.local`）。
-                if let mdns = mdnsCommand {
-                    HStack {
-                        Text("固定主机名（需 Bonjour）")
-                        Spacer()
-                        Text(mdns)
                             .foregroundColor(.secondary)
                             .font(.system(.footnote, design: .monospaced))
                             .textSelection(.enabled)
