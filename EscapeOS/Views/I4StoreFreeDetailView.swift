@@ -47,7 +47,7 @@ struct I4StoreFreeDetailView: View {
         List {
             // 进度只依赖 `IPADownloadCenter`（bundleId / 名称来自列表传进来的 `app`），
             // 所以放在最外层：详情还在加载、甚至详情加载失败时，进度也照样看得见。
-            if let job = busyJob { downloadSection(job) }
+            if let job = busyJob { DownloadJobSection(job: job) }
             if loading {
                 loadingSection
             } else if let errorText {
@@ -77,54 +77,9 @@ struct I4StoreFreeDetailView: View {
 
     /// v0.3.367：列表里点了「安装」再进详情，这里要能立刻看见**同一个任务的进度**
     /// （阶段文字 + 百分比 + 进度条 + 暂停 / 删除），样式对齐「下载管理」页。
-    private func downloadSection(_ job: IPADownloadCenter.Job) -> some View {
-        Section("下载中") {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Text(job.phase == .paused ? "已暂停" : job.stageText)
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                    if let v = job.version, !v.isEmpty {
-                        Text("v\(v)").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 8)
-                    Text("\(Int(job.overall * 100))%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                ProgressView(value: min(1, max(0, job.overall)))
-                HStack(spacing: 16) {
-                    Button {
-                        if job.phase == .paused {
-                            center.resume(job.id)
-                        } else {
-                            center.pause(job.id)
-                        }
-                    } label: {
-                        Label(job.phase == .paused ? "继续" : "暂停",
-                              systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
-                            .font(.caption.weight(.medium))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
-                    .disabled(!job.canPause)
-
-                    Button {
-                        center.cancel(job.id)
-                    } label: {
-                        Label("删除安装包", systemImage: "trash")
-                            .font(.caption.weight(.medium))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.red)
-
-                    Spacer(minLength: 0)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, 2)
-        }
-    }
+    ///
+    /// v0.3.406：那块控件搬去文件底部的 `DownloadJobSection` —— 牛蛙详情页要用**同一份**
+    /// （原来只有爱思详情有，再抄一遍就是第二套）。
 
     private func headerSection(_ d: I4PCStoreClient.I4AppDetail) -> some View {
         Section {
@@ -162,9 +117,9 @@ struct I4StoreFreeDetailView: View {
                 // v0.3.367：按「应用」而不是「版本号」匹配 —— 详情页拿到的版本号可能和
                 // 列表发起下载时的不一致，旧写法会匹配不上，于是「点了安装进来却看不到进度」。
                 if let job = busyJob {
-                    progressChip(job)
+                    JobProgressChip(job: job)
                 } else {
-                    installButton { installCurrent(d) }
+                    InstallButton { installCurrent(d) }
                 }
             }
             .padding(.vertical, 2)
@@ -326,35 +281,10 @@ struct I4StoreFreeDetailView: View {
     @ViewBuilder
     private func installControl(version: String?, action: @escaping () -> Void) -> some View {
         if let job = activeJob(version: version) {
-            progressChip(job)
+            JobProgressChip(job: job)
         } else {
-            installButton(action: action)
+            InstallButton(action: action)
         }
-    }
-
-    /// 进度胶囊：细进度条 + 百分比，定宽避免把左侧信息挤扁
-    private func progressChip(_ job: IPADownloadCenter.Job) -> some View {
-        HStack(spacing: 6) {
-            ProgressView(value: min(1, max(0, job.overall)))
-                .frame(width: 40)
-            Text("\(Int(job.overall * 100))%")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-        .fixedSize()
-    }
-
-    private func installButton(action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text("安装")
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(Color.blue.opacity(0.14), in: Capsule())
-                .foregroundStyle(.blue)
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
     }
 
     private func activeJob(version: String?) -> IPADownloadCenter.Job? {
@@ -417,5 +347,239 @@ struct I4StoreFreeDetailView: View {
                                            iconURL: icon,
                                            remoteURL: url.absoluteString,
                                            autoInstall: true)
+    }
+}
+
+// MARK: - v0.3.406：牛蛙源的应用详情页
+
+/// v0.3.406：牛蛙源（免登录商店的第二个来源）的**应用详情页**。
+///
+/// 与 `I4StoreFreeDetailView` 同款排版，差别只在**数据来源**：
+/// 牛蛙接口只有 `/appstore/search` 与 `/appstore/download` 两条（`NiuwaCore` 逆向结论），
+/// **没有** 爱思 `appinfo.xhtml` 那样一次给全的详情接口 —— 所以这里不额外发请求，
+/// 就把搜索结果已经带回来的那几项显示出来。
+///
+/// 「安装」= 先打一发 `/appstore/download` 拿 `ba_ipaURL`，再交给**统一下载中心**
+/// `IPADownloadCenter`（与爱思源、AppleID 通道同一条链路，全项目只有一套下载/安装实现）。
+/// 那段逻辑收在 `startNiuwaDownload(_:region:)`（`I4StoreFreeView.swift`），
+/// 列表行与这里共用同一份。
+struct NiuwaStoreDetailView: View {
+
+    let app: NiuwaStoreClient.NiuwaApp
+    let region: NiuwaStoreClient.NiuwaRegion
+
+    @ObservedObject private var center = IPADownloadCenter.shared
+    /// 取直链的等待态（取到就交给下载中心，之后由 `busyJob` 接手显示进度）
+    @State private var fetching = false
+
+    /// v0.3.403 起详情页图标长按 = 「查看图标 / 提取图标」；牛蛙详情同样走共用实现。
+    @State private var viewerTarget: ImagePreviewTarget?
+    @State private var viewerImages: [String] = []
+
+    /// 该应用正在进行的任务（与列表页、下载管理页**同源**，这里只读）
+    private var busyJob: IPADownloadCenter.Job? {
+        center.activeJob(bundleId: app.bundleId, name: app.name)
+    }
+
+    var body: some View {
+        List {
+            // 进度放最外层：详情本身没有异步加载，但进度不该被任何条件挡住
+            if let job = busyJob { DownloadJobSection(job: job) }
+            headerSection
+            infoSection
+            noteSection
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(app.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(item: $viewerTarget) { target in
+            ImageGalleryViewer(urls: viewerImages, startIndex: target.index)
+        }
+        .toastHost()
+    }
+
+    // MARK: - 头图
+
+    private var headerSection: some View {
+        Section {
+            HStack(alignment: .top, spacing: 12) {
+                AsyncImage(url: app.icon) { phase in
+                    switch phase {
+                    case .success(let img): img.resizable().scaledToFit()
+                    case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
+                    default: ProgressView().controlSize(.mini)
+                    }
+                }
+                .frame(width: 62, height: 62)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contextMenu {
+                    iconMenuItems(iconURL: app.iconURL, fileNameBase: app.bundleId) {
+                        showIconPreview(app.iconURL, images: $viewerImages, target: $viewerTarget)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(app.name).font(.headline).lineLimit(2)
+                    HStack(spacing: 6) {
+                        if let v = app.version, !v.isEmpty { chip("v\(v)", .blue) }
+                        chip(region.title, .orange)
+                    }
+                }
+                Spacer(minLength: 6)
+
+                if let job = busyJob {
+                    JobProgressChip(job: job)
+                } else if fetching {
+                    ProgressView().controlSize(.small)
+                } else {
+                    InstallButton { startDownload() }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private var infoSection: some View {
+        Section {
+            if let v = app.version, !v.isEmpty { infoRow("版本", v) }
+            if let s = app.sizeText, !s.isEmpty { infoRow("大小", s) }
+            infoRow("区域", region.title)
+            infoRow("标识", app.bundleId)
+        }
+    }
+
+    @ViewBuilder
+    private var noteSection: some View {
+        if let d = app.desc, !d.isEmpty {
+            Section("简介") {
+                Text(d).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - 小组件
+
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            Text(value).font(.subheadline).multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func chip(_ text: String, _ tint: Color) -> some View {
+        Text(text)
+            .font(.caption2)
+            .lineLimit(1)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(tint.opacity(0.12), in: Capsule())
+            .foregroundStyle(tint)
+            .fixedSize()
+    }
+
+    // MARK: - 下载
+
+    private func startDownload() {
+        guard !fetching else { return }
+        fetching = true
+        Task {
+            await startNiuwaDownload(app, region: region)
+            fetching = false
+        }
+    }
+}
+
+// MARK: - v0.3.406：两个免登录详情页共用的小组件
+
+/// 「下载中」区块：阶段文字 + 百分比 + 进度条 + 暂停 / 删除。
+///
+/// v0.3.406 从 `I4StoreFreeDetailView.downloadSection(_:)` **原样**搬出来（渲染一字未改），
+/// 供牛蛙详情共用 —— 不留第二份。样式对齐「下载管理」页。
+private struct DownloadJobSection: View {
+    let job: IPADownloadCenter.Job
+    @ObservedObject private var center = IPADownloadCenter.shared
+
+    var body: some View {
+        Section("下载中") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(job.phase == .paused ? "已暂停" : job.stageText)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    if let v = job.version, !v.isEmpty {
+                        Text("v\(v)").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Text("\(Int(job.overall * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(value: min(1, max(0, job.overall)))
+                HStack(spacing: 16) {
+                    Button {
+                        if job.phase == .paused {
+                            center.resume(job.id)
+                        } else {
+                            center.pause(job.id)
+                        }
+                    } label: {
+                        Label(job.phase == .paused ? "继续" : "暂停",
+                              systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
+                    .disabled(!job.canPause)
+
+                    Button {
+                        center.cancel(job.id)
+                    } label: {
+                        Label("删除安装包", systemImage: "trash")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+
+                    Spacer(minLength: 0)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+}
+
+/// 进度胶囊：细进度条 + 百分比，定宽避免把左侧信息挤扁（v0.3.406 搬出来共用）
+private struct JobProgressChip: View {
+    let job: IPADownloadCenter.Job
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ProgressView(value: min(1, max(0, job.overall)))
+                .frame(width: 40)
+            Text("\(Int(job.overall * 100))%")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .fixedSize()
+    }
+}
+
+/// 「安装」按钮（蓝色胶囊，v0.3.406 搬出来共用）
+private struct InstallButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("安装")
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.blue.opacity(0.14), in: Capsule())
+                .foregroundStyle(.blue)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
     }
 }

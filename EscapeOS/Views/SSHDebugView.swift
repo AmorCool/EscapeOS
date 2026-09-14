@@ -182,17 +182,10 @@ struct SSHDebugView: View {
                         .font(.body.monospaced())
                         .textSelection(.enabled)
                 }
-                // v0.3.404：并列显示连接命令。
-                // 「本机」这条是用户点名要的固定地址（`127.0.0.1` 是设备自己的回环地址，
-                // 只能设备自身连；服务端仍监听 0.0.0.0，局域网那条不受影响）。
-                HStack {
-                    Text("本机（仅设备自身）")
-                    Spacer()
-                    Text("ssh \(service.username)@127.0.0.1 -p \(service.port)")
-                        .foregroundColor(.secondary)
-                        .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
-                }
+                // v0.3.406：**删掉「本机（仅设备自身）127.0.0.1」那条** ——
+                // 用户原话：「算了不要加 127.0.0.1 那条线路了 也不要局域网找设备了太复杂也不想要」。
+                // 回环地址只在设备自己身上有意义，对"电脑连手机"这个用途一点用没有。
+                // ⚠️ 服务端监听地址没动（仍是 `0.0.0.0`），下面「局域网」那条不受影响。
                 if hasLAN {
                     HStack {
                         Text("局域网")
@@ -204,6 +197,8 @@ struct SSHDebugView: View {
                     }
                 }
                 // v0.3.405：固定主机名 —— 设备自带的 Bonjour 名字，局域网 IP 变了也照连。
+                // v0.3.406：用户这一轮撤的是 127.0.0.1 与「局域网找设备」，**这条按 team-lead 口径保留**
+                //（零成本、用户上一轮亲口批过「作为备用共存」）。
                 // 「需 Bonjour」写在标签里（电脑侧要有 Bonjour 客户端才解析得了 `.local`）。
                 if let mdns = mdnsCommand {
                     HStack {

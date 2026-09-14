@@ -11,6 +11,9 @@ import SwiftUI
 ///
 /// v0.3.364：列表项可点进 `I4StoreFreeDetailView`（详情走 `appinfo.xhtml`），
 /// 详情里列出爱思历史版本，安装旧版仍走同一条下载链路。
+///
+/// v0.3.406：**牛蛙源补上详情页与下载** —— 列表项可点进 `NiuwaStoreDetailView`，
+/// 行右侧的「安装」走 `startNiuwaDownload(_:region:)`（先取直链，再交给 `IPADownloadCenter`）。
 struct I4StoreFreeView: View {
 
     /// v0.3.382：免登录商店的**来源**（接口一 = 爱思，接口二 = 牛蛙）
@@ -35,6 +38,9 @@ struct I4StoreFreeView: View {
     @State private var searching = false
     /// v0.3.382：牛蛙源的搜索结果（与爱思结果并存，切来源不必重打）
     @State private var niuwaSearchResults: [NiuwaStoreClient.NiuwaApp] = []
+    /// v0.3.406：正在「取直链」的那一行（牛蛙要先打一发 `/appstore/download` 才有直链）。
+    /// 存 bundleId 而不是 Bool：同一时刻只允许一行在取，且要能对上具体是哪一行。
+    @State private var niuwaFetching: String?
 
     /// v0.3.305：已下载数量（进入页面时读一次磁盘台账）
     @State private var downloadedCount = 0
@@ -285,7 +291,7 @@ struct I4StoreFreeView: View {
                 }
             }
 
-            trailingControl(app)
+            trailingControl(name: app.name, bundleId: app.bundleId) { install(app) }
         }
         .padding(.vertical, 3)
         // v0.3.399：长按弹「查看图标 / 提取图标」。
@@ -299,9 +305,15 @@ struct I4StoreFreeView: View {
         }
     }
 
+    /// 右侧控件：有任务 → 进度 + 暂停 / 删除；没有 → 一枚「安装」。
+    ///
+    /// v0.3.406：参数从「爱思应用」改成裸字段（`name` / `bundleId`），好让**牛蛙行**共用
+    /// 同一份 —— 两个来源的行右侧长得一模一样，不留第二套。
     @ViewBuilder
-    private func trailingControl(_ app: I4PCStoreClient.I4App) -> some View {
-        if let job = center.activeJob(bundleId: app.bundleId, name: app.name) {
+    private func trailingControl(name: String,
+                                 bundleId: String?,
+                                 action: @escaping () -> Void) -> some View {
+        if let job = center.activeJob(bundleId: bundleId, name: name) {
             // 进度控件也固定宽度：它不再跟左侧抢空间，左侧空间不够时由 ChipFlow 换行解决
             HStack(spacing: 6) {
                 ProgressView(value: min(1, max(0, job.overall)))
@@ -334,7 +346,7 @@ struct I4StoreFreeView: View {
             .fixedSize()
         } else {
             Button {
-                install(app)
+                action()
             } label: {
                 Text("安装")
                     .font(.caption.weight(.semibold))
@@ -369,49 +381,64 @@ struct I4StoreFreeView: View {
     // MARK: - 行（牛蛙源，v0.3.382）
 
     /// 牛蛙源的行：与爱思行同款排版（图标 + 名称 + 胶囊 + 简介），
-    /// 右侧暂用「获取直链」（**本版不接下载/安装**，走 `NiuwaStoreClient.download`）
+    /// 右侧与爱思行共用 `trailingControl(...)`（安装 / 进度 / 暂停 / 删除）。
+    ///
+    /// v0.3.406：**左侧整块可点进 `NiuwaStoreDetailView`**（此前牛蛙源没有详情页）；
+    /// 右侧原来的「获取直链」改成真正的「安装」—— 先取直链再交给 `IPADownloadCenter`。
     private func row(_ app: NiuwaStoreClient.NiuwaApp) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
-                AsyncImage(url: app.icon) { phase in
-                    switch phase {
-                    case .success(let img): img.resizable().scaledToFit()
-                    case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
-                    default: ProgressView().controlSize(.mini)
-                    }
-                }
-                .frame(width: 54, height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(app.name).font(.subheadline.weight(.medium)).lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    ChipFlow(spacing: 6) {
-                        ForEach(chips(app), id: \.text) { item in
-                            chip(item.text, item.tint)
+            NavigationLink {
+                NiuwaStoreDetailView(app: app, region: region)
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    AsyncImage(url: app.icon) { phase in
+                        switch phase {
+                        case .success(let img): img.resizable().scaledToFit()
+                        case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
+                        default: ProgressView().controlSize(.mini)
                         }
                     }
-                    if let d = app.desc, !d.isEmpty {
-                        Text(d).font(.caption2).foregroundStyle(.secondary)
+                    .frame(width: 54, height: 54)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(app.name).font(.subheadline.weight(.medium)).lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
+                        ChipFlow(spacing: 6) {
+                            ForEach(chips(app), id: \.text) { item in
+                                chip(item.text, item.tint)
+                            }
+                        }
+                        if let d = app.desc, !d.isEmpty {
+                            Text(d).font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
+                    Spacer(minLength: 6)
                 }
-                Spacer(minLength: 6)
             }
 
-            Button {
-                Task { await fetchNiuwaLink(app) }
-            } label: {
-                Text("获取直链")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.14), in: Capsule())
-                    .foregroundStyle(.blue)
+            // 取直链是一次网络往返（爱思那边搜索响应里就带 ipaURL，牛蛙要单打一发）——
+            // 这一步的等待要看得见，不能按下去什么都没发生。
+            if niuwaFetching == app.bundleId {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("获取中").font(.caption2).foregroundStyle(.secondary)
+                }
+                .fixedSize()
+            } else {
+                trailingControl(name: app.name, bundleId: app.bundleId) {
+                    Task {
+                        niuwaFetching = app.bundleId
+                        await startNiuwaDownload(app, region: region)
+                        niuwaFetching = nil
+                    }
+                }
             }
-            .buttonStyle(.plain)
         }
         .padding(.vertical, 3)
-        // v0.3.399：牛蛙源没有详情页，长按菜单挂在这一行上。
+        // v0.3.399：牛蛙行也要有图标菜单（v0.3.406 起牛蛙有自己的详情页，这里仍然保留 ——
+        // 列表里长按就能取图标，不必先进详情）。
         // v0.3.403：菜单项与爱思行、AppleID 两处**共用** `iconMenuItems(...)`（单份定义），
         // 挂载点同样提到整行（原来只有左半块）。
         .contextMenu {
@@ -483,26 +510,6 @@ struct I4StoreFreeView: View {
         }
     }
 
-    // MARK: - 牛蛙源：取直链（v0.3.382，**只取直链，不下载、不安装**）
-
-    /// 这一步的真正目的是**拿到一次真实响应**：请求体（UDID 打码）/ 状态码 / 响应体原文
-    /// 已由 `NiuwaStoreClient` 全量写进 `LoginLogger`（`category: .appStore`，前缀 `[牛蛙源]`）。
-    private func fetchNiuwaLink(_ app: NiuwaStoreClient.NiuwaApp) async {
-        do {
-            if let full = try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region) {
-                if let link = full.downloadURL, !link.isEmpty {
-                    ToastCenter.shared.show("已有直链，见日志")
-                } else {
-                    ToastCenter.shared.show("接口没给直链")
-                }
-            } else {
-                ToastCenter.shared.show("接口没给直链")
-            }
-        } catch {
-            ToastCenter.shared.show("失败：\(error.localizedDescription)")
-        }
-    }
-
     // MARK: - 下载并安装（免登录）
 
     private func install(_ app: I4PCStoreClient.I4App) {
@@ -517,6 +524,46 @@ struct I4StoreFreeView: View {
                                            remoteURL: ipaURL.absoluteString,
                                            autoInstall: true)
         downloadedCount = IPADownloadLibrary.shared.items().count
+    }
+}
+
+// MARK: - v0.3.406 牛蛙源：取直链 → 交给统一下载中心
+
+/// 牛蛙源「下载」的**唯一一份实现**（列表行与详情页共用，不留第二套）。
+///
+/// 与爱思源唯一的差别：爱思的**搜索结果里就带 `ipaURL`**，点一下直接进下载中心；
+/// 牛蛙要**先打一发** `POST /appstore/download` 才拿得到直链（`ba_ipaURL`），
+/// 所以这一步必须是异步的。
+///
+/// 拿到直链之后走的是**与爱思源一字不差的同一条链路**：
+/// `IPADownloadCenter.shared.start(name:bundleId:version:iconURL:remoteURL:autoInstall:)`
+/// —— 全项目只有这一套下载/安装实现（`ref-客户端常见坑`：禁止新建第二个下载管理器），
+/// 牛蛙不另开一条，也不在本函数里做任何文件/安装动作。
+///
+/// ⚠️ 响应里的 `ba_sinfs`（base64 的 `.sinf`）**本版没有接** —— 原因见回报：
+/// 现有安装链路的 sinf 来自**包内** `SC_Info/<exe>.sinf`（`IPAPackageInspector.extractSINF`），
+/// 把外部 sinf 写回包内要改 `IPADownloadCenter` / `AppStoreInstallService`，不在本次改动范围内。
+///
+/// `@MainActor`：**顶层自由函数不像 `View` 那样被推断成主 actor**，而这里要调
+/// `IPADownloadCenter`（`@MainActor`）与 `ToastCenter`。两个调用点都在 `View` 内。
+@MainActor
+func startNiuwaDownload(_ app: NiuwaStoreClient.NiuwaApp,
+                        region: NiuwaStoreClient.NiuwaRegion) async {
+    do {
+        let full = try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region)
+        guard let link = full?.downloadURL, !link.isEmpty else {
+            ToastCenter.shared.show("该应用没有可用的安装包")
+            return
+        }
+        _ = IPADownloadCenter.shared.start(name: app.name,
+                                           bundleId: app.bundleId,
+                                           version: full?.version ?? app.version,
+                                           iconURL: app.iconURL,
+                                           remoteURL: link,
+                                           autoInstall: true)
+    } catch {
+        // 失败不许静默：界面上给一句短提示，具体原因在日志里（`[牛蛙源]` 前缀）
+        ToastCenter.shared.show("获取安装包失败")
     }
 }
 

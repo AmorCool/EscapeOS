@@ -22,29 +22,45 @@ enum PreviewImageCache {
 /// 展示（`PreviewImageView`）与「长按保存」都走它，不再各写一条下载路径。
 enum PreviewImageLoader {
 
-    /// 「正方形」尺寸变体（`100x100bb` / `1024x1024bb`）—— **只有应用图标**是这种。
-    private static let squareSizePattern = #"(\d+)x\1bb"#
+    /// 地址里的**尺寸变体**（`100x100bb` / `320x480bb` / 爱思图床的 `…_540x960bb.jpg` 都命中）。
+    private static let sizePattern = #"(\d+)x(\d+)bb"#
 
-    /// **候选地址链**（本项目"点开全屏一片黑"的根因就在这一行上）。
+    /// **候选地址链**（本项目"点开全屏一片黑"与"以前是清晰的"两次回归都出在这一行上）。
     ///
-    /// `String.appStoreHighResImage`（`MediaSaver.swift:69`）是**无差别**地把地址里的
-    /// `\d+x\d+bb` 换成 `1024x1024bb` —— 这招只对**正方形**的图标变体成立。
-    /// 而截图根本不是正方形：Apple 的 `screenshotUrls` 给的是 `392x696bb`，爱思图床也把
-    /// 尺寸写进文件名（`…_540x960bb.jpg` 之类）。换掉之后就是一个**不存在的资源**，
-    /// 请求失败 → 全屏什么都没画出来。
+    /// 三代写法，前两代的坑都记在下面，别再走回去：
+    /// · **v0.3.404 之前** —— `String.appStoreHighResImage`（`MediaSaver.swift:69`）**无差别**
+    ///   把地址里的 `\d+x\d+bb` 换成 `1024x1024bb`。这招只对**正方形**的图标变体成立：
+    ///   截图不是正方形（Apple 的 `screenshotUrls` 是 `392x696bb`，爱思图床把尺寸写进文件名
+    ///   `…_540x960bb.jpg`），换出来是一个**不存在的资源** → 请求失败 →
+    ///   而缩略图用的是原址（`AsyncImage(url: URL(string: url))`）→
+    ///   **缩略图看得见、点开全屏一片黑**。
+    /// · **v0.3.404** —— 改成「只有正方形变体升高清」。黑屏没了，但截图退回**服务端给的缩略尺寸**
+    ///   （真机日志：`取图成功（候选 1/1 · is1-ssl.mzstatic.com/320x480bb.jpg）`），
+    ///   用户看到的就是"以前是清晰的，现在糊了"。
+    /// · **v0.3.406（本版）** —— **保持长宽比**放大：宽固定 1024，高按同一比例算
+    ///   （`320x480` → `1024x1536`）。正方形算出来仍是 `1024x1024bb`，与上一版一字不差。
     ///
-    /// 而缩略图用的是**原址**（`AppStoreDetailView:362`、`I4StoreFreeDetailView:200` 都是
-    /// `AsyncImage(url: URL(string: url))`）—— 所以**缩略图看得见、点开全屏一片黑**。
+    /// 候选链固定两档：**[按比例放大的高清, 原址]** —— 这一档服务端不认（不是所有图床都接受
+    /// 任意尺寸）就自动回落原址，**绝不会再出现黑屏**；真机日志里的 `候选 1/2` 表示高清成了、
+    /// `候选 2/2` 表示回落到缩略。
     ///
-    /// 因此：只有正方形变体才升高清（图标），而且**高清失败回落原址**；其它地址原样一个候选。
+    /// 尺寸已经够大（长边 ≥ 1024）或地址里没有尺寸标记 → 只给原址一个候选，**不做放大**
+    /// （放大到 1024 反而是缩图，白折腾）。
     static func candidateURLs(for raw: String) -> [String] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        guard trimmed.range(of: squareSizePattern, options: .regularExpression) != nil else {
+        guard let match = trimmed.range(of: sizePattern, options: .regularExpression) else {
             return [trimmed]
         }
-        let highRes = trimmed.appStoreHighResImage
-        return highRes == trimmed ? [trimmed] : [highRes, trimmed]
+        let token = String(trimmed[match])          // 形如 `320x480bb`
+        let parts = token.dropLast(2).split(separator: "x")
+        guard parts.count == 2,
+              let width = Int(parts[0]), let height = Int(parts[1]),
+              width > 0, height > 0, max(width, height) < 1024 else { return [trimmed] }
+        let scaled = max(1, Int((Double(height) * 1024.0 / Double(width)).rounded()))
+        let highRes = "1024x\(scaled)bb"
+        guard highRes != token else { return [trimmed] }
+        return [trimmed.replacingCharacters(in: match, with: highRes), trimmed]
     }
 
     /// 取图：命中缓存直接返回；否则按候选链逐个试，成功即写缓存。
@@ -162,9 +178,10 @@ struct PreviewImageView: View {
 /// · 右上角 ✕ 关闭。
 ///
 /// v0.3.404：**不再用 `AsyncImage`**（失败静默 → 纯黑一片），改走 `PreviewImageView`
-/// （环形加载 / 加载失败 + 重试）与 `PreviewImageLoader`（候选地址链 + 内存缓存）；
-/// 地址也**不再无差别升高清**（截图的 `392x696bb` 被换成 `1024x1024bb` 就是不存在的资源，
-/// 那正是"缩略图能看、点开全黑"的原因，见 `PreviewImageLoader.candidateURLs`）。
+/// （环形加载 / 加载失败 + 重试）与 `PreviewImageLoader`（候选地址链 + 内存缓存）。
+///
+/// v0.3.406：地址改成**按原比例**升高清（截图不再退回缩略尺寸），
+/// 长按保存与「提取图标」走的都是同一份取图逻辑，所以清晰度一起回来。
 struct ImageGalleryViewer: View {
     let urls: [String]
     @State var startIndex: Int
