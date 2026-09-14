@@ -382,11 +382,30 @@ enum NiuwaStoreClient {
     /// 伪值形如 40 位十六进制（与真 UDID 同形）：`UniqueDeviceIdentifier` 在 iOS 26/27
     /// 与 LiveContainer 下经常取不到，而**请求体必须带这个键**，宁可给个形状合法的稳定值，
     /// 也不要在探测阶段因为一个字段把整次请求变成畸形。
+    ///
+    /// ## v0.3.408：**改成只吃缓存**（这条是「第一次点获取必失败」的直接嫌疑）
+    ///
+    /// 原来这里调的是 `LocalDeviceIdentity.load()` —— 那是**会现场建 RSD 隧道**的入口，
+    /// 而 `LocalDeviceIdentity` 的文件头明确写着「**绝不能在下载启动这类关键路径上同步调用**」
+    ///（真机实测建一次隧道是**秒级**）。于是每一次「获取」在真正发 HTTPS 之前，
+    /// 都可能先卡着建一条隧道；而同一时刻 App 自己的 LocalDevVPN 正在被重配，
+    /// **这一发请求会被顶掉** → 用户看到「获取安装包失败」，再点一次（缓存已热 / 隧道已起）就成功。
+    ///
+    /// 现在沿用 v0.3.402 在 AppleID 下载链路上立下的规矩（`warmUpInBackground()` +
+    /// 只吃缓存）：**请求路径上零设备 IO**。冷缓存就先给伪 UDID 顶着，并顺手把预热挂到后台；
+    /// 缓存一热，后面的请求自然都是真值。
+    /// 日志里会写明这一次用的是**真值还是伪值**（只在变化时打一行），
+    /// 所以「首次失败」到底是不是它，下一轮真机日志一看便知。
     private static var pubUDID: String {
-        if let real = LocalDeviceIdentity.load().udid?.trimmingCharacters(in: .whitespaces),
+        if let snap = LocalDeviceIdentity.cachedSnapshot(),
+           let real = snap.udid?.trimmingCharacters(in: .whitespaces),
            !real.isEmpty {
+            noteUDIDSource("本机真 UDID")
             return real
         }
+        // 冷缓存：**不建隧道**，后台预热（下一次请求就可能拿到真值）
+        LocalDeviceIdentity.warmUpInBackground()
+        noteUDIDSource("伪 UDID（身份缓存未热 / 真 UDID 不可用）")
         let key = "niuwa.pseudoUDID"
         if let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty { return saved }
         var hex = ""
@@ -396,13 +415,80 @@ enum NiuwaStoreClient {
         return hex
     }
 
+    /// `pub_udid` 用的是真值还是伪值 —— **只在变化时打一行**。
+    ///
+    /// 为什么要专门记它：「第一次点获取必失败、重试才成功」这件事，最需要排除的就是
+    /// 「第一次带伪 UDID、第二次带真 UDID」——那会让**同一个应用**的两次请求在服务端看来
+    /// 是两个设备。有这一行，下一轮真机日志就能定案（而不是靠猜）。
+    private static func noteUDIDSource(_ source: String) {
+        paramLock.lock()
+        let changed = lastUDIDSource != source
+        lastUDIDSource = source
+        paramLock.unlock()
+        guard changed else { return }
+        LoginLogger.shared.log("\(logTag) pub_udid 使用：\(source)", category: .appStore)
+    }
+
+    /// 当前 `pub_udid` 的来源（只给日志用）—— 下载响应异常时随诊断一起打出来.
+    private static var udidSourceForLog: String {
+        paramLock.lock(); defer { paramLock.unlock() }
+        return lastUDIDSource ?? "未记录"
+    }
+
     /// 连接设备的 iOS 版本（取不到回落到本机 `UIDevice.current.systemVersion`）
+    ///
+    /// ## v0.3.408：**改成只吃缓存 + 后台预热**
+    /// 原来这里**每次请求**都调 `DeviceInfoService.lockdownFullDict()` —— 那是一条
+    /// **要建隧道的设备 IO**（秒级，且不像身份那样有进程内缓存）。
+    /// 一次「获取」因此可能连建两条隧道（身份一条 + 本字段一条），
+    /// 这正是「第一次点必失败」的另一半原因（同一时刻 App 自己的 LocalDevVPN 在被重配）。
+    ///
+    /// 现在：缓存里没有就**不建隧道**，直接用本机 `UIDevice.current.systemVersion` 顶上
+    ///（同一台设备、同一个值），同时把真正的读取挂到后台；读到了下一轮就用真值。
     private static var pubSystemVersion: String {
-        if let root = try? DeviceInfoService.lockdownFullDict(),
-           let v = root["ProductVersion"] as? String, !v.isEmpty {
-            return v
-        }
+        paramLock.lock()
+        let cached = prefetchedSystemVersion
+        paramLock.unlock()
+        if let cached { return cached }
+        warmUpDeviceParamsInBackground()
         return UIDevice.current.systemVersion
+    }
+
+    private static let paramLock = NSLock()
+    /// 后台预热取到的 `ProductVersion`（`nil` = 还没取到 —— 此时用本机 `UIDevice` 版本顶上）
+    private static var prefetchedSystemVersion: String?
+    /// 是否已有一轮预热在跑（防止每次请求都起一条隧道）
+    private static var prefetchingParams = false
+    private static var lastUDIDSource: String?
+
+    /// 后台预热 `pub_*` 里那两处**需要设备 IO** 的字段。可重复调用，进程内只真读一次。
+    ///
+    /// 身份那一半交给 `LocalDeviceIdentity` 自己的预热（同一条 lockdown 隧道，不会重复建）；
+    /// 这里只补它不管的 `ProductVersion`。两者都**不在**请求路径上等待。
+    static func warmUpDeviceParamsInBackground() {
+        paramLock.lock()
+        let alreadyHave = prefetchedSystemVersion != nil
+        let busy = prefetchingParams
+        if !alreadyHave && !busy { prefetchingParams = true }
+        paramLock.unlock()
+        LocalDeviceIdentity.warmUpInBackground()
+        guard !alreadyHave, !busy else { return }
+        Task.detached(priority: .utility) {
+            var value = ""
+            if let root = try? DeviceInfoService.lockdownFullDict(),
+               let v = root["ProductVersion"] as? String, !v.isEmpty {
+                value = v
+            }
+            paramLock.lock()
+            if !value.isEmpty { prefetchedSystemVersion = value }
+            prefetchingParams = false
+            paramLock.unlock()
+            LoginLogger.shared.log(
+                "\(logTag) 设备参数预热完成：pub_system_version="
+                + (value.isEmpty ? "未取到（继续用本机 UIDevice 版本）" : value),
+                category: .appStore
+            )
+        }
     }
 
     /// 本 App 的 build 号（`CFBundleVersion`）—— 牛蛙的 `pub_version` 量级与之相符。
@@ -609,21 +695,27 @@ enum NiuwaStoreClient {
         if path == downloadPath {
             let requestTarget = (body["bundleid"] as? String) ?? "-"
             let desc = message.isEmpty ? "-" : message
+            // v0.3.408：把 `pub_udid` 的来源一起打出来 —— 「第一次点必失败」的定案依据之一
+            // 就是「失败的这次带的是伪 UDID、成功的那次带真 UDID」。
+            let udidNote = "udid=\(udidSourceForLog)；"
             if let envelope = obj["body"] as? [String: Any] {
                 if let rawIPA = envelope["ba_ipaURL"] {
                     if (string(rawIPA) ?? "").isEmpty {
                         let sinfLength = string(envelope["ba_sinfs"])?.count ?? 0
                         log.log("\(logTag) ⚠ 下载响应 ba_ipaURL 取不到可用值（\(requestTarget)；"
                                 + "值类型 \(type(of: rawIPA))；ba_sinfs \(sinfLength) 字符；"
+                                + "\(udidNote)"
                                 + "code=\(code) desc=\(desc)）", category: .appStore)
                     }
                 } else {
                     log.log("\(logTag) ⚠ 下载响应 body 没有 ba_ipaURL 键（\(requestTarget)；"
+                            + "\(udidNote)"
                             + "body 键：\(envelope.keys.sorted().joined(separator: ", "))；"
                             + "code=\(code) desc=\(desc)）", category: .appStore)
                 }
             } else if let rawBody = obj["body"] {
-                log.log("\(logTag) ⚠ 下载响应 body 不是对象（\(requestTarget)；类型 \(type(of: rawBody))）",
+                log.log("\(logTag) ⚠ 下载响应 body 不是对象（\(requestTarget)；"
+                        + "\(udidNote)类型 \(type(of: rawBody))）",
                         category: .appStore)
             }
         }

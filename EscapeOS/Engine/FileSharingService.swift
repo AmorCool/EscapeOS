@@ -13,8 +13,23 @@ struct FileSharingApp: Identifiable {
     var applicationType: String // "User" / "System"
     var supportsFileSharing: Bool
     var path: String?       // ApplicationPath（可选展示）
+    /// v0.3.408：**数据容器路径**（instproxy 默认响应里的 `Container`，形如
+    /// `/var/mobile/Containers/Data/Application/<UUID>`）。
+    ///
+    /// 它是设备瘦身量 `docSize` 的**入口**（见 `DeviceSlimService` 的文档大小通道）：
+    /// 有了它就能在**本机**用 `SandboxEscape` + `FileService.countTree` 递归求和，
+    /// 不必走 house_arrest AFC（那条路要求应用开启文档共享，微信/游戏这类恰恰没开）。
+    ///
+    /// 白拿的：`get_apps`（**不带** ReturnAttributes）的默认响应本来就带这个键 ——
+    /// `AppDiscovery` 正是从同一份响应里取的它（空间回收已经在用）。带属性 Lookup
+    /// 的响应**不含**此键（不在请求字段里），所以那里的值为 nil；而它恰好是设备瘦身
+    /// 的**快路径**，拿得到。
+    /// 系统应用可能给空串（与 `AppDiscovery` 同口径），所以判空后一律当 nil 用。
+    var containerPath: String? = nil
     var appSize: Int64?     // 应用大小（StaticDiskUsage / CFBundleSize，字节；未返回则为 nil）
-    var docSize: Int64?     // 文档大小（DynamicDiskUsage，字节；未返回则 UI 层走 AFC 懒算）
+    var docSize: Int64?     // 文档大小（DynamicDiskUsage；**该字段已不在请求里，恒为 nil**）
+                            // v0.3.408：设备瘦身改走**本机通道**量它（`containerPath` +
+                            // `SandboxEscape` + `FileService.countTree`，见 DeviceSlimService）
     // v0.3.291：安装来源（真机 iPhone15,4 / iOS 27.0 实证）
     //   iTunesMetadata 是 **binary plist 字节**（不是字典），账号邮箱在
     //   com.apple.iTunesStore.downloadInfo.accountInfo.AppleID；
@@ -771,6 +786,9 @@ enum FileSharingService {
         let appSize = (dict["StaticDiskUsage"] as? NSNumber)?.int64Value
             ?? (dict["CFBundleSize"] as? NSNumber)?.int64Value
         let docSize = (dict["DynamicDiskUsage"] as? NSNumber)?.int64Value
+        // v0.3.408：数据容器路径（`get_apps` 默认响应自带；带属性 Lookup 不含此键 → nil）
+        let rawContainer = dict["Container"] as? String
+        let containerPath = (rawContainer?.isEmpty == false) ? rawContainer : nil
         let itunesMeta = dict["iTunesMetadata"]
         var appleId: String?
         var dsid = (dict["ApplicationDSID"] as? NSNumber).map { String($0.int64Value) }
@@ -810,6 +828,7 @@ enum FileSharingService {
             applicationType: appType,
             supportsFileSharing: sharing,
             path: dict["Path"] as? String,
+            containerPath: containerPath,
             appSize: appSize,
             docSize: docSize,
             appleId: appleId,

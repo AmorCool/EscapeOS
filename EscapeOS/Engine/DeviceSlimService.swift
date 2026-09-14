@@ -299,11 +299,11 @@ enum DeviceSlimService {
     ///   - **应用大小** `appSize`：只能来自第 2 步的带属性 Lookup（`StaticDiskUsage`，
     ///     v0.3.406 加回请求；`get_apps` 从来不带）。取不到时「应用」分片与「较大应用」
     ///     会退化，页面必须明确提示「应用大小不可用」（判据见 sizeComplete）.
-    ///   - **文档大小** `docSize`（`DynamicDiskUsage`）：**暂不请求**（疑为「带属性 Lookup
-    ///     卡 ~25 秒」的元凶，见 FileSharingService / installation_proxy.rs 注释），
-    ///     所以它恒为 nil —— 无法给「应用」分片补上文档占用，也影响了「较大应用」的排序
-    ///     精度（只看 bundle 大小）. AFC 有等价实现（`computeDocumentsSize`），
-    ///     但它是「每个 App 一条隧道」的慢路径，全量 334 个不现实.
+    ///   - **文档大小** `docSize`（`DynamicDiskUsage`）：**不再从请求里拿**（疑为「带属性 Lookup
+    ///     卡 ~25 秒」的元凶，见 FileSharingService / installation_proxy.rs 注释）——
+    ///     v0.3.408 起改走**本机通道**按需量：`containerPath`（`get_apps` 默认响应自带）
+    ///     + `SandboxEscape` + `FileService.countTree`，与「空间回收」页同一套，
+    ///     每轮后台补一批、跨轮累积。落地与代价见 `startDocSizePass`.
     private static func readAppsForSlim() -> AppReadResult {
         appReadLock.lock()
         if let cache = appReadCache, Date().timeIntervalSince(cache.at) < 30 {
@@ -325,6 +325,10 @@ enum DeviceSlimService {
         case .timedOut:
             LoginLogger.shared.log("[设备瘦身] get_apps 快路径超时（排队与执行分开计）")
         }
+        // ①' v0.3.408：拿到列表就**立刻**发起「文档大小」（本机通道）——它要真的把每个应用
+        //     的容器文件树走一遍，所以放在这里与后面（最长 15 秒的带属性 Lookup + 空间快照）
+        //     **重叠**，不额外占首屏时间；`bigApps()` 取到什么算什么，见 `startDocSizePass`.
+        startDocSizePass(result.apps)
         // ② 可选增强：带属性 Lookup（独立 15 秒、失败就不补；额度见 lookupAppAttributes 默认参数）
         let enhanced = FileSharingService.lookupAppAttributes()
         if enhanced.isEmpty {
@@ -354,6 +358,17 @@ enum DeviceSlimService {
             LoginLogger.shared.log(
                 "[设备瘦身] 大小增强回填 \(patched) 条，其中真的带 appSize \(sizedApps) 条"
                 + " / 带 docSize \(sizedDocs) 条（sizeComplete=\(result.sizeComplete)）"
+            )
+            // v0.3.408：**没有 appSize 的那批到底是什么**（真机：334 条里只有 125 条有大小）——
+            // 一次真机日志即可判定要不要管：`ApplicationType=System/HiddenSystemApp` 的应用
+            // 本来就被 `bigApps()` 排除，若这批几乎全是系统应用，「125/334」就不再是缺陷。
+            // 只有「三方 + 有安装路径」那部分才是「较大应用」漏判的真实来源。
+            let missing = result.apps.filter { $0.appSize == nil }
+            let missingSystem = missing.filter { isSystemApp($0) }.count
+            let missingNoPath = missing.filter { ($0.path ?? "").isEmpty }.count
+            LoginLogger.shared.log(
+                "[设备瘦身] 无 appSize 的 \(missing.count) 条中：系统应用 \(missingSystem) 条"
+                + " / 三方 \(missing.count - missingSystem) 条 / 无安装路径 \(missingNoPath) 条"
             )
         }
 
@@ -390,6 +405,146 @@ enum DeviceSlimService {
         appReadLock.lock(); defer { appReadLock.unlock() }
         appReadCache = nil
         appReadIssueFlag = nil
+    }
+
+    // MARK: - v0.3.408：文档大小的本机通道
+
+    private static let docSizeLock = NSLock()
+    /// 量过的 `docSize`（bundleId → 字节 + 量到的时刻）。**跨轮保留** ——
+    /// 「较大应用」的文档大小因此一轮比一轮全，而不是每轮都从头发一遍.
+    private static var docSizeCache: [String: (bytes: Int64, at: Date)] = [:]
+    /// 正在量的 bundleId（`readAppsForSlim` 缓存刚失效时，两个调用方可能同时发起）.
+    private static var docSizeInFlight: Set<String> = []
+
+    /// 单轮最多量几个应用；单个应用最多看几个节点（20k 是「空间回收」的口径，这里更保守）.
+    private static let docSizePassMaxApps = 60
+    private static let docSizeMaxNodesPerApp = 12_000
+    /// 量到的值保留 10 分钟：文档会变，但没必要每轮重走一遍文件树.
+    private static let docSizeCacheTTL: TimeInterval = 600
+
+    /// 量到过的文档大小（读不到 / 过期 → nil，调用方按 0 处理，与从前一致）.
+    static func cachedDocSize(_ bundleId: String) -> Int64? {
+        docSizeLock.lock(); defer { docSizeLock.unlock() }
+        guard let hit = docSizeCache[bundleId] else { return nil }
+        guard Date().timeIntervalSince(hit.at) < docSizeCacheTTL else { return nil }
+        return hit.bytes
+    }
+
+    /// 系统应用（instproxy `ApplicationType` 口径，与 `InstalledApp.isSystem` 同款）.
+    private static func isSystemApp(_ app: FileSharingApp) -> Bool {
+        app.applicationType == "System" || app.applicationType == "HiddenSystemApp"
+    }
+
+    /// 单轮待量的一个应用。用 struct 而不是元组：`Task.detached` 的闭包要 `@Sendable`，
+    /// 具名类型的 Sendable 语义最明确.
+    private struct DocSizeTarget: Sendable {
+        let bundleId: String
+        let path: String
+    }
+
+    /// **文档大小（`docSize`）的落地点**（v0.3.408）.
+    ///
+    /// ## 为什么必须有它
+    /// `docSize` 以前恒为 0，因为它的来源字段 `DynamicDiskUsage` **根本不在请求里**
+    ///（`FileSharingService.attributeRequestFields` 与 Rust 的 `attrs` 都只有
+    /// `StaticDiskUsage`）—— 不是"请求了没人填"，是**从来没请求过**。
+    /// 于是「较大应用」的判据 `appSize + docSize` 里那一半恒等于 0：
+    /// **App 本体不大、文档却几十 GB 的应用（微信、游戏）永远进不了这个分组**，
+    /// 用户看到的就是「没有扫到文档的」。
+    ///
+    /// ## 为什么不把 `DynamicDiskUsage` 加回请求
+    /// 它是「带属性 Lookup 卡 ~25 秒」的头号嫌疑（见 `FileSharingService` 注释），
+    /// 为了补一个大小把它引回来不值 —— 那会让整个「应用管理 / 文档浏览 / 设备瘦身」
+    /// 一起变慢，代价远大于收益.
+    ///
+    /// ## 为什么不用 house_arrest + AFC
+    /// `house_arrest_vend_documents` **要求应用开启文档共享**（`UIFileSharingEnabled`）——
+    /// 用户报的那批应用（微信、游戏）恰恰没开，那条路覆盖不到它们.
+    ///（`FileSharingService.computeDocumentsSize` 走的就是那条路，且它的调用点
+    /// `FileSharingAppsView.computeDocumentSizes()` 至今是死代码 —— 也正因如此从没生效过.）
+    ///
+    /// ## 实际通道：本机沙盒扩展 + 递归求和（与「空间回收」页同一套）
+    /// `escape.withHandle(for: 容器路径)` 消费沙盒扩展 → `files.countTree` 递归求和.
+    /// 只要 instproxy 给了 `Container`（`get_apps` 默认响应自带，见
+    /// `FileSharingApp.containerPath`）就能量 —— 不需要应用配合，也不需要额外隧道.
+    /// 量的是**整个数据容器**（Documents + Library + tmp），与 `DynamicDiskUsage` 的口径一致
+    ///（不是只量 Documents）.
+    ///
+    /// ## 代价（如实说明）
+    /// · 走的是**本机 syscall**（不是 USB 隧道），但确实要 stat 一遍文件树，所以有上限：
+    ///   单应用 ≤ `docSizeMaxNodesPerApp` 个节点、单轮 ≤ `docSizePassMaxApps` 个应用；
+    /// · 全程在 `Task.detached(.utility)` 上跑、**不阻塞首屏**：从快路径拿到列表就发起，
+    ///   与后面的带属性 Lookup（最长 15 秒）和空间快照**重叠**，通常等在它后面的是现成结果；
+    /// · 量的结果**跨轮累积**（10 分钟有效），所以第一轮多半只覆盖一部分，
+    ///   多进几次「设备瘦身」/ 点一次刷新就补齐 —— 日志里每轮都打覆盖数，别猜.
+    private static func startDocSizePass(_ apps: [FileSharingApp]) {
+        let measurable = apps.filter { !isSystemApp($0) && ($0.containerPath?.isEmpty == false) }
+        let pending = measurable.filter { cachedDocSize($0.bundleId) == nil }
+
+        docSizeLock.lock()
+        let picked = pending
+            .filter { !docSizeInFlight.contains($0.bundleId) }
+            .prefix(docSizePassMaxApps)
+            .map { DocSizeTarget(bundleId: $0.bundleId, path: $0.containerPath ?? "") }
+        for entry in picked { docSizeInFlight.insert(entry.bundleId) }
+        let done = docSizeCache.count
+        docSizeLock.unlock()
+
+        guard !picked.isEmpty else {
+            LoginLogger.shared.log(
+                "[设备瘦身] 文档大小：本轮无需补（已量 \(done)/\(measurable.count) 个可量的应用）"
+            )
+            return
+        }
+        LoginLogger.shared.log(
+            "[设备瘦身] 文档大小：本轮量 \(picked.count) 个应用（本机通道；此前累计 \(done) 个，"
+            + "可量 \(measurable.count) 个）"
+        )
+        Task.detached(priority: .utility) {
+            var measured = 0
+            var failed = 0
+            for entry in picked {
+                let startedAt = Date()
+                let bytes = measureContainerBytes(entry.path)
+                docSizeLock.lock()
+                if let bytes {
+                    docSizeCache[entry.bundleId] = (bytes, Date())
+                    measured += 1
+                } else {
+                    failed += 1
+                }
+                docSizeInFlight.remove(entry.bundleId)
+                let nowDone = docSizeCache.count
+                docSizeLock.unlock()
+                let seconds = String(format: "%.2f", Date().timeIntervalSince(startedAt))
+                LoginLogger.shared.log(
+                    "[设备瘦身] 文档大小 \(entry.bundleId)："
+                    + (bytes.map { formatBytes($0) } ?? "量不到")
+                    + "（用时 \(seconds)s；累计 \(nowDone)/\(measurable.count)）"
+                )
+            }
+            LoginLogger.shared.log(
+                "[设备瘦身] 文档大小本轮结束：量到 \(measured) 个 / 量不到 \(failed) 个"
+                + "（剩下的下一轮继续）"
+            )
+        }
+    }
+
+    /// 单个应用数据容器的递归占用（字节）；`nil` = 这次没量到（沙盒扩展被拒 / 容器不在）.
+    private static func measureContainerBytes(_ containerPath: String) -> Int64? {
+        guard !containerPath.isEmpty else { return nil }
+        let escape = SandboxEscape()
+        let files = FileService()
+        do {
+            return try escape.withHandle(for: containerPath) { _ in
+                guard files.isDirectory(at: containerPath) else { return nil }
+                let counted = try files.countTree(at: containerPath,
+                                                  maxNodes: docSizeMaxNodesPerApp)
+                return counted.bytes
+            }
+        } catch {
+            return nil
+        }
     }
 
     // MARK: - 空间占用
@@ -503,7 +658,9 @@ enum DeviceSlimService {
         for app in appRead.apps {
             guard app.applicationType != "System" else { continue }
             let appSize = app.appSize ?? 0
-            let docSize = app.docSize ?? 0
+            // v0.3.408：文档大小取**本机通道**量到的结果（`DynamicDiskUsage` 不在请求里，
+            // 见 `startDocSizePass`）。还没量到的按 0 算 —— 与从前一字不差，不是回退.
+            let docSize = app.docSize ?? cachedDocSize(app.bundleId) ?? 0
             let total = appSize + docSize
             guard total > bigAppThreshold else { continue }
             var available: Bool? = nil

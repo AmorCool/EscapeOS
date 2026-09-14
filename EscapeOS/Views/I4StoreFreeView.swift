@@ -13,7 +13,8 @@ import SwiftUI
 /// 详情里列出爱思历史版本，安装旧版仍走同一条下载链路。
 ///
 /// v0.3.406：**牛蛙源补上详情页与下载** —— 列表项可点进 `NiuwaStoreDetailView`，
-/// 行右侧的「安装」走 `startNiuwaDownload(_:region:)`（先取直链，再交给 `IPADownloadCenter`）。
+/// 行右侧的「获取」（v0.3.408 前叫「安装」）走 `startNiuwaDownload(_:region:)`
+/// （先取直链，再交给 `IPADownloadCenter`）。
 struct I4StoreFreeView: View {
 
     /// v0.3.382：免登录商店的**来源**（接口一 = 爱思，接口二 = 牛蛙）
@@ -51,7 +52,7 @@ struct I4StoreFreeView: View {
     ///
     /// **复用** AppleID 商店详情页那套 `ImageGalleryViewer`（同一个类型，见 `ImagePreviewSupport.swift`），
     /// 不在这里另写一个只显示一张图的查看器 —— 长按存图也因此白得。
-    @State private var previewImages: [String] = []
+    /// v0.3.408：图数组收进 `ImagePreviewTarget`（页面上不再留 `previewImages`）。
     @State private var previewTarget: ImagePreviewTarget?
 
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -101,7 +102,8 @@ struct I4StoreFreeView: View {
         }
         .toastHost()
         .fullScreenCover(item: $previewTarget) { target in
-            ImageGalleryViewer(urls: previewImages, startIndex: target.index)
+            // v0.3.408：`urls` 从 target 里读
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
         }
         .task {
             downloadedCount = IPADownloadLibrary.shared.items().count
@@ -300,12 +302,13 @@ struct I4StoreFreeView: View {
         // 爱思源原来只有左半块（右半块的下载控件压上去不出菜单），位置口径也对齐。
         .contextMenu {
             iconMenuItems(iconURL: app.icon, fileNameBase: app.bundleId ?? app.name) {
-                showIconPreview(app.icon, images: $previewImages, target: $previewTarget)
+                // v0.3.408：图数组由 `showIconPreview` 写进 target
+                showIconPreview(app.icon, target: $previewTarget)
             }
         }
     }
 
-    /// 右侧控件：有任务 → 进度 + 暂停 / 删除；没有 → 一枚「安装」。
+    /// 右侧控件：有任务 → 进度 + 暂停 / 删除；没有 → 一枚「获取」（v0.3.408 前叫「安装」）。
     ///
     /// v0.3.406：参数从「爱思应用」改成裸字段（`name` / `bundleId`），好让**牛蛙行**共用
     /// 同一份 —— 两个来源的行右侧长得一模一样，不留第二套。
@@ -348,7 +351,11 @@ struct I4StoreFreeView: View {
             Button {
                 action()
             } label: {
-                Text("安装")
+                // v0.3.408：文案「安装」→「获取」（用户要求）。
+                // 只改**发起获取**这一个动作的文案 —— 这一列里的「暂停 / 删除」是**不同语义**
+                // （对已存在的任务操作），一字不动；正在跑的任务显示的是 `job.stageText`。
+                // 同理没动 AppleID 商店那边的按钮（用户说的是免登录/牛蛙这处）。
+                Text("获取")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(Color.blue.opacity(0.14), in: Capsule())
@@ -381,10 +388,11 @@ struct I4StoreFreeView: View {
     // MARK: - 行（牛蛙源，v0.3.382）
 
     /// 牛蛙源的行：与爱思行同款排版（图标 + 名称 + 胶囊 + 简介），
-    /// 右侧与爱思行共用 `trailingControl(...)`（安装 / 进度 / 暂停 / 删除）。
+    /// 右侧与爱思行共用 `trailingControl(...)`（获取 / 进度 / 暂停 / 删除）。
     ///
     /// v0.3.406：**左侧整块可点进 `NiuwaStoreDetailView`**（此前牛蛙源没有详情页）；
-    /// 右侧原来的「获取直链」改成真正的「安装」—— 先取直链再交给 `IPADownloadCenter`。
+    /// 右侧原来的「获取直链」改成真正的下载动作（v0.3.408 起按钮文案为「获取」）——
+    /// 先取直链再交给 `IPADownloadCenter`。
     private func row(_ app: NiuwaStoreClient.NiuwaApp) -> some View {
         HStack(alignment: .center, spacing: 12) {
             NavigationLink {
@@ -443,7 +451,8 @@ struct I4StoreFreeView: View {
         // 挂载点同样提到整行（原来只有左半块）。
         .contextMenu {
             iconMenuItems(iconURL: app.iconURL, fileNameBase: app.bundleId) {
-                showIconPreview(app.iconURL, images: $previewImages, target: $previewTarget)
+                // v0.3.408：图数组由 `showIconPreview` 写进 target
+                showIconPreview(app.iconURL, target: $previewTarget)
             }
         }
     }
@@ -547,13 +556,20 @@ struct I4StoreFreeView: View {
 /// （`sinfBase64:`）—— 这类包是 Apple 的**原始加密包**，装之前必须先把它写回包内
 /// `SC_Info/<CFBundleExecutable>.sinf`（由 `IPADownloadCenter` 的 `PackageSINFWriter` 做）。
 ///
+/// v0.3.408：**首次网络失败自动重试一次**（只一次）。原因见 `NiuwaStoreClient.pubUDID`：
+/// 那两个 `pub_*` 字段原来会在**请求路径上现场建设备隧道**（秒级），
+/// 而同一时刻 App 自己的 LocalDevVPN 正在被重配 —— 这一发 HTTPS 会被顶掉，
+/// 表现就是「第一次点获取必失败、再点一次就成功」。已经把那两处改成**只吃缓存 + 后台预热**，
+/// 这里的这一发重试是给"网络抖动"兜底。**只对网络层失败重试**
+///（服务端说没有包 / 解密失败 / HTTP 非 2xx 重试没有意义，照旧直接失败）。
+///
 /// `@MainActor`：**顶层自由函数不像 `View` 那样被推断成主 actor**，而这里要调
 /// `IPADownloadCenter`（`@MainActor`）与 `ToastCenter`。两个调用点都在 `View` 内。
 @MainActor
 func startNiuwaDownload(_ app: NiuwaStoreClient.NiuwaApp,
                         region: NiuwaStoreClient.NiuwaRegion) async {
     do {
-        let full = try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region)
+        let full = try await fetchNiuwaPackage(app, region: region)
         guard let link = full?.downloadURL, !link.isEmpty else {
             ToastCenter.shared.show("该应用没有可用的安装包")
             return
@@ -573,6 +589,28 @@ func startNiuwaDownload(_ app: NiuwaStoreClient.NiuwaApp,
     } catch {
         // 失败不许静默：界面上给一句短提示，具体原因在日志里（`[牛蛙源]` 前缀）
         ToastCenter.shared.show("获取安装包失败")
+    }
+}
+
+/// 取直链（`v0.3.408` 起**带一次**网络层重试）.
+///
+/// 为什么只重试网络层：`StoreError` 里 `.network` = 请求根本没拿到响应 —— 这是
+/// 「建隧道期间 LocalDevVPN 被重配、这一发被顶掉」唯一会产生的形态；
+/// `.server`（服务端说没包）、`.decode` / `.crypto`（报文问题）、`.http(N)`
+/// 重试都是白搭，只会让用户多等一轮。
+private func fetchNiuwaPackage(_ app: NiuwaStoreClient.NiuwaApp,
+                               region: NiuwaStoreClient.NiuwaRegion) async throws -> NiuwaStoreClient.NiuwaApp? {
+    do {
+        return try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region)
+    } catch let error as NiuwaStoreClient.StoreError {
+        guard case .network(let message) = error else { throw error }
+        LoginLogger.shared.log("[牛蛙源] 首发网络失败（\(message)），等 400ms 重试一次（\(app.bundleId)）",
+                               category: .appStore)
+        // 短等一下：失败的成因是"同一时刻设备隧道在重配"，立刻重发多半还在同一次抖动里
+        try? await Task.sleep(for: .milliseconds(400))
+        let retried = try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region)
+        LoginLogger.shared.log("[牛蛙源] ✓ 重试成功（\(app.bundleId)）", category: .appStore)
+        return retried
     }
 }
 

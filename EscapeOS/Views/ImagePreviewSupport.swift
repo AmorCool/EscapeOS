@@ -182,6 +182,10 @@ struct PreviewImageView: View {
 ///
 /// v0.3.406：地址改成**按原比例**升高清（截图不再退回缩略尺寸），
 /// 长按保存与「提取图标」走的都是同一份取图逻辑，所以清晰度一起回来。
+///
+/// v0.3.408：`urls` **只能来自 `ImagePreviewTarget`**（调用点统一写
+/// `ImageGalleryViewer(urls: target.urls, startIndex: target.index)`）。
+/// 别再把它接到页面上的某个 `@State` 数组 —— 那正是"弹窗读到旧的空数组"的成因。
 struct ImageGalleryViewer: View {
     let urls: [String]
     @State var startIndex: Int
@@ -194,7 +198,10 @@ struct ImageGalleryViewer: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if urls.isEmpty {
-                // v0.3.404：空数组以前是**纯黑**（`TabView` 一页都没有 → 什么都不画、也不提示）
+                // 兜底分支：正常路径进不来 —— 四个调用点都会先确认有图才构造 target
+                //（图标：`showIconPreview` 里空地址只 toast；截图：`screenshots.isEmpty` 直接跳过）。
+                // v0.3.404 之前空数组是**纯黑**（`TabView` 一页都没有 → 什么都不画、也不提示），
+                // 所以这里留一句文案；v0.3.408 起它只在"代码写错"时可见。
                 Text("没有可查看的图片")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.8))
@@ -250,12 +257,41 @@ struct ImageGalleryViewer: View {
     }
 }
 
-/// 全屏预览「要看第几张」—— `.fullScreenCover(item:)` 需要一个 `Identifiable`。
+/// 全屏预览「要看哪一组图、看第几张」—— `.fullScreenCover(item:)` 需要一个 `Identifiable`。
 /// 各页面共用它（截图预览与 v0.3.403 起的单张图标预览都走这里），不再各写一个私有包装。
 /// `index` 对图标预览恒为 0（数组里就一张）。
+///
+/// ## v0.3.408：**图数组必须挂在这里**（这是一次真实回归）
+///
+/// 用户报「查看图标时全黑 + 『没有可查看的图片』，也不自动刷新，返回才刷新，可明明有图标」。
+///
+/// 根因：图数组原来挂在**页面**上（各页一个 `@State viewerImages/previewImages`），弹窗这样写：
+/// ```swift
+/// @State private var previewImages: [String] = []      // ← 图数组
+/// @State private var previewTarget: ImagePreviewTarget?  // ← 触发器
+/// …
+/// previewImages = app.screenshots
+/// previewTarget = ImagePreviewTarget(index: index)       // 两次独立的状态写入
+/// .fullScreenCover(item: $previewTarget) { target in
+///     ImageGalleryViewer(urls: previewImages, startIndex: target.index)  // 读**外部** state
+/// }
+/// ```
+/// `fullScreenCover(item:)` 的 content 是在 item 变非 nil 那一刻构建的，而两次写入**不保证**
+/// 落在同一事务里 —— 弹窗先构建就会读到**旧的空数组** → `urls.isEmpty` → 「没有可查看的图片」；
+/// 返回时视图重算才拿到新值，于是"返回才刷新"。
+///
+/// ⇒ 现在 `urls` 跟着 item 一起走：**一次写入，弹窗构建时读的就是它自己那份**，不存在时序问题。
+/// 页面上不要再出现「预览图数组」这种 `@State`（`viewerImages` / `previewImages` 已全部删除）。
 struct ImagePreviewTarget: Identifiable {
     let index: Int
-    var id: Int { index }
+    let urls: [String]
+
+    /// **既不能只用 `index`，也不能用 `UUID()`**：
+    /// · 只用 `index` —— 同一个 index 配不同 urls 是常态（图标预览恒 0；不同应用/不同组的
+    ///   第 1 张也是 0），id 撞上会让 SwiftUI 把它当成同一个 item；
+    /// · `UUID()` —— 每次求值都变，item 还活着时重新求值就是新一轮弹窗（会反复重弹）。
+    /// 取「下标 + 张数 + 首图」：本项目所有调用点都够区分，且在**一次展示内恒定**。
+    var id: String { "\(index)-\(urls.count)-\(urls.first ?? "")" }
 }
 
 /// v0.3.403：长按菜单里**「查看图标 + 提取图标」这两项的唯一一份内容**。
@@ -295,17 +331,19 @@ func iconMenuItems(iconURL: String?, fileNameBase: String,
 /// 地址为空只提示一句、不开空预览；判定与文案四处一致。
 /// 图标只有一张，仍然走同一个查看器 —— 于是「长按存图」白得，和截图那条路径行为一致。
 /// `@MainActor` 的理由同 `iconMenuItems`（顶层自由函数 + 直接驱动 `ToastCenter`）。
+///
+/// v0.3.408：**`images:` 那个 `Binding` 撤掉了** —— 图数组不再挂在页面上，而是**写进 target**
+/// （理由见 `ImagePreviewTarget` 的注释：两次独立写入会让弹窗读到旧的空数组）。
+/// 现在只剩「图片地址 + 触发器」两个参数，**一次写入**。
 @MainActor
 func showIconPreview(_ iconURL: String?,
-                     images: Binding<[String]>,
                      target: Binding<ImagePreviewTarget?>) {
     let raw = (iconURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     guard !raw.isEmpty else {
         ToastCenter.shared.show("没有可查看的图标")
         return
     }
-    images.wrappedValue = [raw]
-    target.wrappedValue = ImagePreviewTarget(index: 0)
+    target.wrappedValue = ImagePreviewTarget(index: 0, urls: [raw])
 }
 
 /// v0.3.399：**「提取图标」的共用实现** —— 下载图标 → 优先存相册（失败回落 `Documents/AppIcons`）。

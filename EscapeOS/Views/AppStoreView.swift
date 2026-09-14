@@ -26,11 +26,13 @@ struct AppStoreView: View {
 
     /// v0.3.399：列表行**长按 →「查看图标 / 查看图片」**用的全屏预览。
     ///
-    /// 为什么还要 `previewImages` 这份数组：榜单走的是 RSS（`parseRSSEntry`），
-    /// 服务端**根本不返回截图**，所以列表项自己的 `screenshots` 恒为空
-    /// → 长按看图片时先按 id 取一次 Lookup 拿图，再开预览（详见 `openImagePreview(for:)`）。
     /// 「查看图标」只用列表项自带的图标地址，不发网络请求（见 `showIconPreview`）。
-    @State private var previewImages: [String] = []
+    /// 「查看图片」要按 id 查一次 Lookup 拿图（榜单走 RSS，`parseRSSEntry` 不解析截图），
+    /// 详见 `openImagePreview(for:)`。
+    ///
+    /// v0.3.408：**`previewImages` 这份数组撤掉了** —— 图数组现在挂进 `ImagePreviewTarget`
+    /// 一起写（原来"数组一次写入、触发器再写一次"会让弹窗读到旧的空数组，
+    /// 用户看到的就是「没有可查看的图片」+「返回才刷新」，见 `ImagePreviewTarget` 的注释）。
     @State private var previewTarget: ImagePreviewTarget?
 
     /// 实际生效的区域码（`"auto"` 在此解析成账号区）—— 用于标题文案
@@ -198,8 +200,9 @@ struct AppStoreView: View {
             .presentationDetents([.medium])
         }
         // v0.3.399：列表行长按「查看图片」→ 与详情页/爱思源**同一套**预览组件
+        // v0.3.408：`urls` 从 item 自己读（不再读页面上的 `previewImages`）
         .fullScreenCover(item: $previewTarget) { target in
-            ImageGalleryViewer(urls: previewImages, startIndex: target.index)
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
         }
         .overlay {
             if showDisclaimer {
@@ -371,8 +374,8 @@ struct AppStoreView: View {
         .contextMenu {
             iconMenuItems(iconURL: app.iconURL ?? app.iconSmallURL,
                           fileNameBase: app.bundleId ?? app.name) {
-                showIconPreview(app.iconURL ?? app.iconSmallURL,
-                                images: $previewImages, target: $previewTarget)
+                // v0.3.408：图数组由 `showIconPreview` 写进 target（页面上不再有预览数组）
+                showIconPreview(app.iconURL ?? app.iconSmallURL, target: $previewTarget)
             }
             // 列表**独有**的一项：这里的图 = 详情页那组截图（其它三处的长按菜单都没有它）。
             // 保留原因：用户 v0.3.399 就是在这块提的「查看图片」，本轮只要求补「查看图标 /
@@ -391,12 +394,13 @@ struct AppStoreView: View {
     /// 所以榜单项的 `screenshots` 恒定为空；搜索结果来自 `search`（`parseSearchItem`）自带截图，
     /// 这时就不再发网络请求。查不到图只提示一句，不开空预览。
     ///
-    /// 函数名没叫 `previewImages`：那会和上面同名的 `@State previewImages` 撞在一起（同一个类型里
+    /// 函数名没叫 `previewImages`：那会和 `openImagePreview` 想表达的意思打架（同一个类型里
     /// 属性与函数同名容易读错），改叫 `openImagePreview` 更明确。
+    ///（v0.3.408 起那个同名的 `@State previewImages` 已经不存在了，名字照旧 —— 它现在确实只做"打开"。）
     private func openImagePreview(for app: AppStoreItem) {
         if !app.screenshots.isEmpty {
-            previewImages = app.screenshots
-            previewTarget = ImagePreviewTarget(index: 0)
+            // v0.3.408：图数组随 target 一起写 —— **一次写入**，弹窗读到的就是这一份
+            previewTarget = ImagePreviewTarget(index: 0, urls: app.screenshots)
             return
         }
         ToastCenter.shared.show("正在获取图片")
@@ -406,8 +410,7 @@ struct AppStoreView: View {
                 ToastCenter.shared.show("该应用没有可查看的图片")
                 return
             }
-            previewImages = shots
-            previewTarget = ImagePreviewTarget(index: 0)
+            previewTarget = ImagePreviewTarget(index: 0, urls: shots)
         }
     }
 

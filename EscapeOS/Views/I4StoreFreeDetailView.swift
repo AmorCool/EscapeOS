@@ -21,9 +21,10 @@ struct I4StoreFreeDetailView: View {
     /// 长按存图是它自带的行为，不在爱思侧另写一套）。
     ///
     /// v0.3.403：`viewerTarget` 现在同时给「截图预览」和「图标预览」用 ——
-    /// 所以图数组独立成 `viewerImages`（点截图 = 整组截图，点图标 = 就那一张）。
+    /// 所以图数组跟着它一起走。
+    /// v0.3.408：**收进 `ImagePreviewTarget` 本体**（原来那半个 `viewerImages` 数组撤掉了：
+    /// 数组与触发器是两次独立写入，弹窗可能先构建 → 读到旧的空数组 → 「没有可查看的图片」）。
     @State private var viewerTarget: ImagePreviewTarget?
-    @State private var viewerImages: [String] = []
 
     /// 历史版本默认只露前 8 个，其余点「查看全部」
     private let versionPageSize = 8
@@ -67,7 +68,8 @@ struct I4StoreFreeDetailView: View {
         .navigationTitle(displayName)
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $viewerTarget) { target in
-            ImageGalleryViewer(urls: viewerImages, startIndex: target.index)
+            // v0.3.408：`urls` 从 target 里读
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
         }
         .toastHost()
         .task { await load() }
@@ -99,7 +101,8 @@ struct I4StoreFreeDetailView: View {
                 .contextMenu {
                     iconMenuItems(iconURL: displayIcon,
                                   fileNameBase: bundleId ?? displayName) {
-                        showIconPreview(displayIcon, images: $viewerImages, target: $viewerTarget)
+                        // v0.3.408：图数组由 `showIconPreview` 写进 target
+                        showIconPreview(displayIcon, target: $viewerTarget)
                     }
                 }
 
@@ -147,10 +150,12 @@ struct I4StoreFreeDetailView: View {
                         ForEach(Array(d.screenshots.enumerated()), id: \.offset) { index, url in
                             // v0.3.399：对齐 AppleID 详情页 —— 点开全屏预览（进去后长按即可保存）。
                             // 图片尺寸 / 圆角保持原样，只加交互。
-                            // v0.3.403：图数组先落进 `viewerImages`（图标预览共用同一个查看器）。
+                            // v0.3.403：图数组跟着 target 一起走（图标预览共用同一个查看器）。
+                            // v0.3.408：**一次写入**（原来先写 `viewerImages` 再写 target，
+                            // 弹窗可能读到旧的空数组）
                             Button {
-                                viewerImages = d.screenshots
-                                viewerTarget = ImagePreviewTarget(index: index)
+                                viewerTarget = ImagePreviewTarget(index: index,
+                                                                  urls: d.screenshots)
                             } label: {
                                 AsyncImage(url: URL(string: url)) { phase in
                                     switch phase {
@@ -359,7 +364,8 @@ struct I4StoreFreeDetailView: View {
 /// **没有** 爱思 `appinfo.xhtml` 那样一次给全的详情接口 —— 所以这里不额外发请求，
 /// 就把搜索结果已经带回来的那几项显示出来。
 ///
-/// 「安装」= 先打一发 `/appstore/download` 拿 `ba_ipaURL`，再交给**统一下载中心**
+/// 「获取」（v0.3.408 前的文案是「安装」）= 先打一发 `/appstore/download` 拿 `ba_ipaURL`，
+/// 再交给**统一下载中心**
 /// `IPADownloadCenter`（与爱思源、AppleID 通道同一条链路，全项目只有一套下载/安装实现）。
 /// 那段逻辑收在 `startNiuwaDownload(_:region:)`（`I4StoreFreeView.swift`），
 /// 列表行与这里共用同一份。
@@ -373,8 +379,8 @@ struct NiuwaStoreDetailView: View {
     @State private var fetching = false
 
     /// v0.3.403 起详情页图标长按 = 「查看图标 / 提取图标」；牛蛙详情同样走共用实现。
+    /// v0.3.408：图数组收进 `ImagePreviewTarget`（这个 struct 本来也没有截图，只有图标这一张）。
     @State private var viewerTarget: ImagePreviewTarget?
-    @State private var viewerImages: [String] = []
 
     /// 该应用正在进行的任务（与列表页、下载管理页**同源**，这里只读）
     private var busyJob: IPADownloadCenter.Job? {
@@ -393,7 +399,8 @@ struct NiuwaStoreDetailView: View {
         .navigationTitle(app.name)
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $viewerTarget) { target in
-            ImageGalleryViewer(urls: viewerImages, startIndex: target.index)
+            // v0.3.408：`urls` 从 target 里读
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
         }
         .toastHost()
     }
@@ -415,7 +422,8 @@ struct NiuwaStoreDetailView: View {
                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .contextMenu {
                     iconMenuItems(iconURL: app.iconURL, fileNameBase: app.bundleId) {
-                        showIconPreview(app.iconURL, images: $viewerImages, target: $viewerTarget)
+                        // v0.3.408：图数组由 `showIconPreview` 写进 target
+                        showIconPreview(app.iconURL, target: $viewerTarget)
                     }
                 }
 
@@ -566,13 +574,17 @@ private struct JobProgressChip: View {
     }
 }
 
-/// 「安装」按钮（蓝色胶囊，v0.3.406 搬出来共用）
+/// 「获取」按钮（蓝色胶囊，v0.3.406 搬出来共用；v0.3.408 文案「安装」→「获取」）
+///
+/// 两个使用点都在**免登录商店**（爱思详情 + 牛蛙详情），文案由用户点名要改。
+/// ⚠️ 只改这一个动作的文案：同页的下载进度区里「暂停 / 继续 / 删除」是**不同语义**，
+/// 一字未动；AppleID 商店那两处也不归这里管。
 private struct InstallButton: View {
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Text("安装")
+            Text("获取")
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
                 .padding(.horizontal, 12).padding(.vertical, 6)

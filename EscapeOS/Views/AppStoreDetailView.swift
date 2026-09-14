@@ -18,7 +18,8 @@ struct AppStoreDetailView: View {
     //
     // v0.3.403：从 `viewerIndex: Int?` 改成「图数组 + 看第几张」——图标预览要看的是图标、
     // 截图预览要看的是截图，共用一个查看器就得让数组跟着点的那一项变（列表页本来就是这套写法）。
-    @State private var previewImages: [String] = []
+    // v0.3.408：「图数组 + 看第几张」**两份都收进 `ImagePreviewTarget`**，页面上不再留
+    // `previewImages`（原来数组与触发器是两次独立写入，弹窗会读到旧的空数组 → 「没有可查看的图片」）。
     @State private var previewTarget: ImagePreviewTarget?
 
     // 内置网页
@@ -127,8 +128,9 @@ struct AppStoreDetailView: View {
         .fullScreenCover(item: $previewTarget) { target in
             // v0.3.399：预览组件已搬去 `ImagePreviewSupport.swift`（`ImageGalleryViewer`），
             // 与爱思源详情页共用同一套 —— 这里只是换个名字，行为一字未改。
-            // v0.3.403：`urls` 改读 `previewImages`（点图标就是 [图标]，点截图就是整组截图）。
-            ImageGalleryViewer(urls: previewImages, startIndex: target.index)
+            // v0.3.403：`urls` 改读预览数组（点图标就是 [图标]，点截图就是整组截图）。
+            // v0.3.408：这份数组现在**在 target 里**（不再读页面上的 `previewImages`）
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
         }
         .toastHost()
         .task { await loadDetail() }
@@ -206,8 +208,8 @@ struct AppStoreDetailView: View {
         .contextMenu {
             iconMenuItems(iconURL: item.iconURL ?? item.iconSmallURL,
                           fileNameBase: "\(item.bundleId ?? item.id)-icon") {
-                showIconPreview(item.iconURL ?? item.iconSmallURL,
-                                images: $previewImages, target: $previewTarget)
+                // v0.3.408：图数组由 `showIconPreview` 写进 target
+                showIconPreview(item.iconURL ?? item.iconSmallURL, target: $previewTarget)
             }
         }
     }
@@ -356,8 +358,10 @@ struct AppStoreDetailView: View {
                 HStack(spacing: 12) {
                     ForEach(Array(item.screenshots.enumerated()), id: \.offset) { index, url in
                         Button {
-                            previewImages = item.screenshots
-                            previewTarget = ImagePreviewTarget(index: index)
+                            // v0.3.408：整组截图 + 起始下标**一次写进 target**（原来分两次写，
+                            // 弹窗可能先构建 → 读到旧的空数组 → 「没有可查看的图片」）
+                            previewTarget = ImagePreviewTarget(index: index,
+                                                               urls: item.screenshots)
                         } label: {
                             AsyncImage(url: URL(string: url)) { phase in
                                 switch phase {
