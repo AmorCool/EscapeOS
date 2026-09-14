@@ -1,6 +1,155 @@
 import SwiftUI
 import UIKit
 
+// MARK: - 取图（v0.3.404）
+
+/// v0.3.404：预览图的**内存缓存** —— 同一地址只下一次；翻页回来、重开预览都是秒出
+///（用户反馈"感觉不能实时刷新"，其实是每翻一页都重下一遍）。
+///
+/// 只用 `NSCache`（内存，系统吃紧时自己回收）：不做磁盘缓存，避免沙盒里堆一堆过期图。
+enum PreviewImageCache {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 120
+        return c
+    }()
+
+    static func image(for url: String) -> UIImage? { cache.object(forKey: url as NSString) }
+    static func store(_ image: UIImage, for url: String) { cache.setObject(image, forKey: url as NSString) }
+}
+
+/// v0.3.404：**预览取图的唯一实现** —— 地址候选链 + 内存缓存。
+/// 展示（`PreviewImageView`）与「长按保存」都走它，不再各写一条下载路径。
+enum PreviewImageLoader {
+
+    /// 「正方形」尺寸变体（`100x100bb` / `1024x1024bb`）—— **只有应用图标**是这种。
+    private static let squareSizePattern = #"(\d+)x\1bb"#
+
+    /// **候选地址链**（本项目"点开全屏一片黑"的根因就在这一行上）。
+    ///
+    /// `String.appStoreHighResImage`（`MediaSaver.swift:69`）是**无差别**地把地址里的
+    /// `\d+x\d+bb` 换成 `1024x1024bb` —— 这招只对**正方形**的图标变体成立。
+    /// 而截图根本不是正方形：Apple 的 `screenshotUrls` 给的是 `392x696bb`，爱思图床也把
+    /// 尺寸写进文件名（`…_540x960bb.jpg` 之类）。换掉之后就是一个**不存在的资源**，
+    /// 请求失败 → 全屏什么都没画出来。
+    ///
+    /// 而缩略图用的是**原址**（`AppStoreDetailView:362`、`I4StoreFreeDetailView:200` 都是
+    /// `AsyncImage(url: URL(string: url))`）—— 所以**缩略图看得见、点开全屏一片黑**。
+    ///
+    /// 因此：只有正方形变体才升高清（图标），而且**高清失败回落原址**；其它地址原样一个候选。
+    static func candidateURLs(for raw: String) -> [String] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        guard trimmed.range(of: squareSizePattern, options: .regularExpression) != nil else {
+            return [trimmed]
+        }
+        let highRes = trimmed.appStoreHighResImage
+        return highRes == trimmed ? [trimmed] : [highRes, trimmed]
+    }
+
+    /// 取图：命中缓存直接返回；否则按候选链逐个试，成功即写缓存。
+    ///
+    /// **每一次尝试都落日志**：v0.3.404 之前这条路径一条日志都没有，出问题只能靠猜。
+    /// 日志归在「通用」板块，行首是 `[预览]`，取的是「主机 + 末段路径」——
+    /// 尺寸变体（`392x696bb`）就在末段，够定位又不刷屏。
+    static func image(for raw: String) async throws -> UIImage {
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw Failure(message: "图片地址为空") }
+        if let hit = PreviewImageCache.image(for: key) { return hit }
+
+        let candidates = candidateURLs(for: key)
+        var lastMessage = "图片地址为空"
+        for (index, candidate) in candidates.enumerated() {
+            do {
+                let image = try await MediaSaver.downloadImage(candidate)
+                PreviewImageCache.store(image, for: key)
+                log("取图成功（候选 \(index + 1)/\(candidates.count) · \(short(candidate))）")
+                return image
+            } catch {
+                lastMessage = error.localizedDescription
+                log("取图失败（候选 \(index + 1)/\(candidates.count) · \(short(candidate))）：\(lastMessage)")
+            }
+        }
+        throw Failure(message: lastMessage)
+    }
+
+    struct Failure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    private static func short(_ url: String) -> String {
+        guard let u = URL(string: url) else { return String(url.suffix(48)) }
+        return (u.host ?? "") + "/" + u.lastPathComponent
+    }
+
+    private static func log(_ message: String) {
+        LoginLogger.shared.log("[预览] \(message)")
+    }
+}
+
+/// v0.3.404：全屏预览里的**一张图** —— 三种状态都看得见：环形加载 / 图片 / 「加载失败 + 重试」。
+///
+/// 这里原来是 `AsyncImage`：加载失败只有一枚 40% 白的小图标，没有文案、没有重试、也不写日志，
+/// 在纯黑背景上用户看到的就是"点开是黑的、也没转圈"。
+struct PreviewImageView: View {
+    let url: String
+
+    private enum Phase { case loading, loaded(UIImage), failed }
+    @State private var phase: Phase = .loading
+
+    var body: some View {
+        Group {
+            switch phase {
+            case .loading:
+                ProgressView().controlSize(.large).tint(.white)
+            case .loaded(let image):
+                Image(uiImage: image).resizable().scaledToFit()
+            case .failed:
+                VStack(spacing: 12) {
+                    Image(systemName: "photo")
+                        .font(.largeTitle)
+                        .foregroundStyle(.white.opacity(0.55))
+                    Text("加载失败")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.85))
+                    Button {
+                        retry()
+                    } label: {
+                        Text("重试")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 7)
+                            .background(Color.white.opacity(0.18), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        // 撑满一页：不然失败态/转圈会被塞在页面左上角
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: url) { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        do {
+            let image = try await PreviewImageLoader.image(for: url)
+            phase = .loaded(image)
+        } catch {
+            // 具体原因（超时/404/解码失败）只进日志；界面上只给一句短提示，不放长句
+            phase = .failed
+        }
+    }
+
+    /// 重试：同一地址再走一遍（缓存未命中时才真的重发请求）
+    private func retry() {
+        phase = .loading
+        Task { await load() }
+    }
+}
+
 /// v0.3.399：**全屏图片预览** —— App Store 与爱思源（免登录商店）**共用同一套**。
 ///
 /// 这段原来长在 `AppStoreDetailView.swift` 里、名字叫 `AppStoreScreenshotViewer`（`struct` 本身
@@ -12,8 +161,10 @@ import UIKit
 /// · **长按** 图片 → 二次确认 → 「保存到相册」（失败回落 App 沙盒 `Documents/AppIcons`，见 `MediaSaver`）；
 /// · 右上角 ✕ 关闭。
 ///
-/// 地址统一先过 `appStoreHighResImage`（把 mzstatic 的 `…/100x100bb.jpg` 升成 `…/1024x1024bb.jpg`）；
-/// 非 mzstatic 的地址（爱思源的图床）不匹配那个正则，**原样返回**，所以同一条路径对两边都成立。
+/// v0.3.404：**不再用 `AsyncImage`**（失败静默 → 纯黑一片），改走 `PreviewImageView`
+/// （环形加载 / 加载失败 + 重试）与 `PreviewImageLoader`（候选地址链 + 内存缓存）；
+/// 地址也**不再无差别升高清**（截图的 `392x696bb` 被换成 `1024x1024bb` 就是不存在的资源，
+/// 那正是"缩略图能看、点开全黑"的原因，见 `PreviewImageLoader.candidateURLs`）。
 struct ImageGalleryViewer: View {
     let urls: [String]
     @State var startIndex: Int
@@ -25,27 +176,25 @@ struct ImageGalleryViewer: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            TabView(selection: $current) {
-                ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
-                    AsyncImage(url: URL(string: url.appStoreHighResImage)) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().scaledToFit()
-                        case .failure:
-                            Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.4))
-                        default:
-                            ProgressView().tint(.white)
-                        }
-                    }
-                    .tag(index)
-                    .onLongPressGesture(minimumDuration: 0.4) {
-                        pendingURL = url
-                        confirmSave = true
+            if urls.isEmpty {
+                // v0.3.404：空数组以前是**纯黑**（`TabView` 一页都没有 → 什么都不画、也不提示）
+                Text("没有可查看的图片")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.8))
+            } else {
+                TabView(selection: $current) {
+                    ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                        PreviewImageView(url: url)
+                            .tag(index)
+                            .onLongPressGesture(minimumDuration: 0.4) {
+                                pendingURL = url
+                                confirmSave = true
+                            }
                     }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+                .indexViewStyle(.page(backgroundDisplayMode: .interactive))
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            .indexViewStyle(.page(backgroundDisplayMode: .interactive))
         }
         .overlay(alignment: .topTrailing) {
             Button { dismiss() } label: {
@@ -67,18 +216,18 @@ struct ImageGalleryViewer: View {
         guard let url = pendingURL else { return }
         pendingURL = nil
         ToastCenter.shared.show("正在保存")
-        Task {
+        Task { @MainActor in
             do {
-                let image = try await MediaSaver.downloadImage(url.appStoreHighResImage)
+                // v0.3.404：走**同一份取图逻辑** —— 刚看过的图直接命中缓存，不再重下；
+                // 也不会再去要那个被"图标高清改写"改坏的地址（旧版存图同样会拿到 404）。
+                let image = try await PreviewImageLoader.image(for: url)
                 let outcome = try await MediaSaver.save(image, fileName: "screenshot-\(current + 1)")
-                await MainActor.run {
-                    switch outcome {
-                    case .photos: ToastCenter.shared.show("已保存到相册")
-                    case .files(let name): ToastCenter.shared.show("已存到文件 App：AppIcons/\(name)")
-                    }
+                switch outcome {
+                case .photos: ToastCenter.shared.show("已保存到相册")
+                case .files(let name): ToastCenter.shared.show("已存到文件 App：AppIcons/\(name)")
                 }
             } catch {
-                await MainActor.run { ToastCenter.shared.show("保存失败：\(error.localizedDescription)") }
+                ToastCenter.shared.show("保存失败：\(error.localizedDescription)")
             }
         }
     }
@@ -164,7 +313,8 @@ enum IconExporter {
         ToastCenter.shared.show("正在提取图标")
         Task { @MainActor in
             do {
-                let image = try await MediaSaver.downloadImage(raw.appStoreHighResImage)
+                // v0.3.404：图标也走**同一份取图逻辑**（正方形变体升高清、失败回落原址、命中缓存）
+                let image = try await PreviewImageLoader.image(for: raw)
                 let outcome = try await MediaSaver.save(image, fileName: fileNameBase)
                 switch outcome {
                 case .photos: ToastCenter.shared.show("图标已存到相册")

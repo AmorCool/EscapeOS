@@ -15,6 +15,10 @@ struct SSHDebugView: View {
     @State private var draftConfirm = ""
     @State private var formError: String? = nil
 
+    /// 局域网 IP 到底探到没有 —— `lanIP` 未就绪时是「获取中…」/「未连接 Wi-Fi」，
+    /// 那种占位文案不能拼进 ssh 命令里（v0.3.404 加「局域网」那条命令时用）。
+    private var hasLAN: Bool { service.lanIP.split(separator: ".").count == 4 }
+
     var body: some View {
         List {
             if !service.hasSetPassword {
@@ -165,6 +169,27 @@ struct SSHDebugView: View {
                         .foregroundColor(.secondary)
                         .font(.body.monospaced())
                         .textSelection(.enabled)
+                }
+                // v0.3.404：并列显示两条连接命令。
+                // 「本机」这条是用户点名要的固定地址（`127.0.0.1` 是设备自己的回环地址，
+                // 只能设备自身连；服务端仍监听 0.0.0.0，局域网那条不受影响）。
+                HStack {
+                    Text("本机（仅设备自身）")
+                    Spacer()
+                    Text("ssh \(service.username)@127.0.0.1 -p \(service.port)")
+                        .foregroundColor(.secondary)
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                if hasLAN {
+                    HStack {
+                        Text("局域网")
+                        Spacer()
+                        Text(service.connectHint)
+                            .foregroundColor(.secondary)
+                            .font(.system(.footnote, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
                 }
             } header: {
                 Text("连接信息")
