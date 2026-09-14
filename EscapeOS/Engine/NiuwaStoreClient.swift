@@ -155,7 +155,7 @@ private enum NiuwaCrypto {
 /// v0.3.382：免登录下载商店的**第二来源**——牛蛙（NiuWaCore）接口客户端。
 ///
 /// 与接口一（爱思，见 `I4PCStoreClient`）并列：爱思只覆盖国区，牛蛙客户端**硬编码了
-/// 中国 / 美国 / 香港三档区域**，所以它比爱思支持更多区。
+/// 中国 / 美国两档区域**（数值语义 0/1；香港=2 未暴露，见 `NiuwaRegion`），所以它比爱思支持更多区。
 ///
 /// 协议形态（已逆向确证，非推测）：
 /// - 基址 `https://api.ios222.com`（客户端配置目录名 base64 解出，全库唯一 base）
@@ -171,7 +171,7 @@ private enum NiuwaCrypto {
 ///
 /// 1. **`region` 很可能是数字索引**：属性编码 `Tq,N,V_nwcore_region`（`q` = `NSInteger`），
 ///    且与 `nwcore_regionSegmented`（`QMUISegmentedControl`）+ `nwcore_regionItemClicked:`
-///    配套 → 分段控件的**索引**就是区域值。而我们传的是 `"cn"/"us"/"hk"`。
+///    配套 → 分段控件的**索引**就是区域值。而我们传的是 ISO 串 `"cn"`（现已收敛为数字索引）。
 ///    另外：全库**没有** `cn`/`us`/`hk`/`中国`/`美国`/`香港` 任何一个明文短串
 ///    （说明区域取值不是这些字符串，也可能标题在 .lproj 里）。
 /// 2. **`pub_*` 五项没有漏**：全库 `pub_` 键名共 15 个，其中 5 个正是
@@ -224,26 +224,49 @@ enum NiuwaStoreClient {
 
     // MARK: - 区域
 
-    /// 客户端硬编码的三档区域（中文串「中国 / 美国 / 香港」来自
+    /// 客户端的区域档位（中文串「中国 / 美国」来自
     /// `NWCoreClassAppStoreSearchTableViewCell` 附近的 NSInteger 分段索引）。
     ///
     /// **`rawValue` 是 ISO 串（旧口径），`index` 是分段索引（新证据）** ——
     /// 见类型注释 1：`nwcore_region` 的 objc 类型是 `NSInteger`，所以线上更可能要数字。
     /// 请求侧两种都试（`withRegionShapes`），命中哪个由日志定案。
+    ///
+    /// ## ★ 只保留「中国 / 美国」两档
+    ///
+    /// **`region` 数值语义：`0 = 中国` / `1 = 美国` / `2 = 香港`**（交接文档结论 + 机器码/UI 证据；
+    /// 真机侧另有旁证：`0` 返回中文名、`1`/`2` 返回英文名）。
+    /// **原版牛蛙 UI 只有「中国 / 美国」两档**（区域切换控件 `nwcore_regionSegmented`
+    /// 是个 `QMUISegmentedControl`，由 `nwcore_regionItemClicked:` 弹出），香港档**没有入口**。
+    ///
+    /// ### ★★ 实测证据（2026-09-14 真机日志，同一个 `com.tuyafeng.Via`）
+    /// | region | `/appstore/search` | `/appstore/download` |
+    /// |---|---|---|
+    /// | `0`（中国） | ✓ 15/15、16/16 | 失败 1~2 次后重试**成功**（`sinf 1376 字符`） |
+    /// | `1`（美国） | ✓ 19/19、18/18 | 失败 1~2 次后重试**成功** |
+    /// | `2`（香港） | ✓ 17/17（英文名：Via Browser / Viu / Microsoft Edge…） | **20 秒内连试 8 次全部空直链**，一次没成功 |
+    ///
+    /// 香港档失败时的解密响应（逐字）：
+    /// `{"pub_code":0,"pub_desc":"接口调用成功","body":{"ba_sinfs":"","ba_ipaURL":""}}`
+    /// —— 服务端报「成功」却**不给包**。⇒ **香港档：搜得到、下不了**（不是"什么都拿不到"）。
+    /// 既然点了「获取」必然失败，就不该把它摆给用户 → 本枚举**去掉 `.hk`**，
+    /// `allCases` 只剩两项，界面分段控件（`ForEach(...allCases)`）自动跟着收敛。
+    ///
+    /// ⚠️ **将来若要恢复香港档，用 `index = 2`**（数值语义未变，只是没暴露）。
+    /// 旧持久化值 `"hk"` 由 `NiuwaRegion(rawValue:) ?? .cn` 兜底回落成 `.cn`
+    /// （见 `Views/I4StoreFreeView.swift` 的 `region` 计算属性）。
     enum NiuwaRegion: String, CaseIterable, Identifiable {
         case cn = "cn"
         case us = "us"
-        case hk = "hk"
 
         var id: String { rawValue }
 
         /// 分段控件索引（`nwcore_regionSegmented` 的 selectedSegmentIndex）。
-        /// 顺序取自 UI 三档的中文次序：中国 → 美国 → 香港。
+        /// 顺序取自 UI 两档的中文次序：中国 → 美国。
+        /// **香港档将来若恢复 = index 2**（见类型注释）。
         var index: Int {
             switch self {
             case .cn: return 0
             case .us: return 1
-            case .hk: return 2
             }
         }
 
@@ -251,7 +274,6 @@ enum NiuwaStoreClient {
             switch self {
             case .cn: return "中国"
             case .us: return "美国"
-            case .hk: return "香港"
             }
         }
     }
@@ -538,7 +560,7 @@ enum NiuwaStoreClient {
 
     // MARK: - 搜索
 
-    /// 关键词搜索（免登录）。`region` 决定区（中国 / 美国 / 香港）。
+    /// 关键词搜索（免登录）。`region` 决定区（中国 / 美国）。
     static func search(keyword: String, region: NiuwaRegion, iPad: Bool = true) async throws -> [NiuwaApp] {
         let kw = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !kw.isEmpty else { return [] }

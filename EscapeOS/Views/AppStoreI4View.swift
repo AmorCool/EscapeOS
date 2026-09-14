@@ -146,7 +146,8 @@ struct AppStoreI4View: View {
                         Button {
                             Task { await install(a) }
                         } label: {
-                            Text("安装").font(.caption.weight(.semibold))
+                            // 与免登录商店统一为「获取」（这里是"定位包 → 下载 → 安装"，不是装已下载的包）
+                            Text("获取").font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10).padding(.vertical, 5)
                                 .background(Color.blue.opacity(0.14), in: Capsule())
                                 .foregroundStyle(.blue)
@@ -310,7 +311,8 @@ struct I4SpecialAppsView: View {
                             Button {
                                 Task { await install(a) }
                             } label: {
-                                Text("安装").font(.caption.weight(.semibold))
+                                // 与免登录商店统一为「获取」（这里是"定位包 → 下载 → 安装"，不是装已下载的包）
+                                Text("获取").font(.caption.weight(.semibold))
                                     .padding(.horizontal, 10).padding(.vertical, 5)
                                     .background(Color.blue.opacity(0.14), in: Capsule())
                                     .foregroundStyle(.blue)

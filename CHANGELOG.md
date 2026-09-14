@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.409] - 2026-09-14
+
+> 本轮把交接文档里「结论已有、但没落成代码」的四项一次性补齐（B1~B4），无行为性回归风险。
+> 前一轮（v0.3.408）的六条真机观测点仍待真机日志确认。
+
+### 变更
+- **牛蛙免登录商店：区域档位去掉「香港」**（`Engine/NiuwaStoreClient.swift` 的 `NiuwaRegion`）。
+  - **实测依据**（2026-09-14 真机日志，同一个 `com.tuyafeng.Via`）：
+    | region | `/appstore/search` | `/appstore/download` |
+    |---|---|---|
+    | `0` 中国 | ✓ 15/15、16/16 | 重试 1~2 次即成功（`sinf 1376 字符`） |
+    | `1` 美国 | ✓ 19/19、18/18 | 重试 1~2 次即成功 |
+    | `2` 香港 | ✓ 17/17（英文名：Via Browser / Viu / Microsoft Edge…） | **20 秒内连试 8 次全部空直链** |
+  - 香港档失败时服务端回的原文：`{"pub_code":0,"pub_desc":"接口调用成功","body":{"ba_sinfs":"","ba_ipaURL":""}}` —— **报成功却不给包**。
+  - ⇒ 香港档**搜得到、下不了**，点了「获取」必然失败 → 不再暴露该档；界面分段控件随 `allCases` 自动收敛为「中国 / 美国」两项。
+  - 原版牛蛙客户端同样只有两档（区域切换控件 `nwcore_regionSegmented`，由 `nwcore_regionItemClicked:` 弹出）。
+  - 数值语义未变（`0` 中国 / `1` 美国 / `2` 香港），**将来要恢复香港档就用 `index = 2`**；旧持久化值 `"hk"` 由 `NiuwaRegion(rawValue:) ?? .cn` 兜底回落。
+
+### 文案统一
+- **爱思商店两处「安装」→「获取」**（`Views/AppStoreI4View.swift` 的应用行与特殊应用行）：这两处是「定位包 → 下载 → 安装」的取包动作，与免登录商店统一措辞。
+
+### 注释补全（无行为改动，防后人误判）
+- `Views/FileSharingAppsView.swift` 的 `computeDocumentSizes()` 标注为**死代码**：它走的 house_arrest 路要求目标应用开启「文档共享」，微信/游戏恰恰没开 → 永远量不到；现文档大小改由 `DeviceSlimService.startDocSizePass` 的本机沙盒扩展通道量。**保留代码作历史证据**。
+- `Engine/IPADownloadCenter.swift` 的 `PackageSINFWriter` 处写明：**别删工作区 `_tmp_ssh/syllabic/` 解压目录** —— 该样本包自带 `SC_Info/`，是 v0.3.407「缺少 SC_Info/*.sinf」问题的唯一复现来源。
+
 ## [0.3.408] - 2026-09-14
 
 ### 修复（★ 预览/图标弹窗「没有可查看的图片」+ 不自动刷新、返回才刷新）

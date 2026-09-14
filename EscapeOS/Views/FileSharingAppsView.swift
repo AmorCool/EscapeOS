@@ -367,6 +367,13 @@ struct FileSharingAppsView: View {
 
     /// v0.3.271：后台逐 App 计算 Documents 容器大小——仅对 Browse 未返回
     /// DynamicDiskUsage 的项兜底（Browse 已返回的项不再重复开隧道）.
+    ///
+    /// ⚠️ **当前没有任何调用点（死代码），已被「本机容器直读」取代** —— 保留是历史证据，要用得先接上.
+    /// · 它走的 house_arrest + AFC 路**要求目标应用开启「文档共享」（UIFileSharingEnabled）**，
+    ///   而微信 / 游戏这类恰恰没开 → 那条路**永远量不到它们**；
+    /// · 现在文档大小改由 `DeviceSlimService.startDocSizePass` 的**本机沙盒扩展 + 递归求和**
+    ///   通道量（消费 `containerPath`，不需要应用配合、也不需要额外隧道）.
+    /// · 与下方 `loadTypes` 的 v0.3.401 说明一致（那里也点明本函数是死代码）.
     private func computeDocumentSizes() {
         let targets = filtered.filter { $0.supportsFileSharing && $0.docSize == nil && docSizes[$0.bundleId] == nil && !computingDocs.contains($0.bundleId) }
         guard !targets.isEmpty else { return }
