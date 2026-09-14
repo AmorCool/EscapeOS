@@ -306,7 +306,7 @@ final class IPADownloadCenter: ObservableObject {
 
         Task.detached(priority: .userInitiated) { [item, email] in
             do {
-                _ = try await AppStoreLocalInstallService.downloadAndInstall(
+                let dest = try await AppStoreLocalInstallService.downloadAndInstall(
                     item: item,
                     email: email,
                     externalVersionID: externalVersionID,
@@ -344,11 +344,32 @@ final class IPADownloadCenter: ObservableObject {
                         LoginLogger.shared.log("[下载中心] \(line)", category: .appStore)
                     })
                 await MainActor.run {
+                    // ★★★ v0.3.392 根因修复：**这条链路必须自己写台账**。
+                    //
+                    // AppleID 通道**不走 `startDownload` → 从不经过 `handle`**，
+                    // 而写台账（含 `sourceURL` / `storeItemId`）的逻辑在 `handle` 里。
+                    // 以前这里只更新内存里的 job，台账条目是事后靠**磁盘扫描现场补登记**
+                    // 生成的 —— 那条路径根本不知道这两个字段，
+                    // 于是「已下载」面板里「提取下载链接」和「复制商店链接」双双显示「无」。
+                    // 真机实证：11:51「下载中」能提取到直链，11:52 落盘后台账里却是空。
+                    let live = self.job(id)
+                    IPADownloadLibrary.shared.record(
+                        fileURL: dest,
+                        displayName: item.name,
+                        bundleId: item.bundleId,
+                        version: shownVersion,
+                        iconURL: item.iconSmallURL ?? item.iconURL,
+                        source: live?.source.rawValue ?? Job.Source.appleID.rawValue,
+                        sourceURL: live?.remoteURL,
+                        storeItemId: live?.storeItemId)
+                    LoginLogger.shared.log("[下载中心] AppleID 通道落盘写台账 \(dest.lastPathComponent)："
+                                           + "sourceURL=\(live?.remoteURL.map { String($0.prefix(40)) + "…" } ?? "nil") "
+                                           + "storeItemId=\(live?.storeItemId ?? "nil")", category: .appStore)
                     self.update(id) {
                         $0.phase = .done
                         $0.progress = 1
                         $0.stageText = "已完成"
-                        $0.localFileName = "\(item.bundleId ?? item.id)-\(shownVersion ?? "x").ipa"
+                        $0.localFileName = dest.lastPathComponent
                     }
                 }
             } catch {

@@ -193,12 +193,17 @@ struct AppStoreI4View: View {
                 suggestedName: "\(bid)-\(hit.version ?? "x").ipa",
                 onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
             await MainActor.run {
+                // v0.3.393：**把两条链接一起写进台账** —— 这里是爱思源直装路径，
+                // `hit` 手上就带着 `ipaURL`（下载直链）与 `itemId`（App Store trackId）。
+                // 以前只传了前 6 个参数 → 「已下载」面板里「提取下载链接」「复制商店链接」都是「无」。
                 IPADownloadLibrary.shared.record(fileURL: ipa,
                                                  displayName: name.isEmpty ? hit.name : name,
                                                  bundleId: bid,
                                                  version: hit.version,
                                                  iconURL: i4Value(a, keys: ["icon", "iconurl"]),
-                                                 source: "爱思免登录")
+                                                 source: "爱思免登录",
+                                                 sourceURL: hit.ipaURL,
+                                                 storeItemId: hit.itemId)
             }
             try await AppStoreInstallService.installLocalIPA(
                 ipa.path,
@@ -354,12 +359,17 @@ struct I4SpecialAppsView: View {
                 suggestedName: "\(bid)-\(hit.version ?? "x").ipa",
                 onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
             await MainActor.run {
+                // v0.3.393：**把两条链接一起写进台账** —— 这里是爱思源直装路径，
+                // `hit` 手上就带着 `ipaURL`（下载直链）与 `itemId`（App Store trackId）。
+                // 以前只传了前 6 个参数 → 「已下载」面板里「提取下载链接」「复制商店链接」都是「无」。
                 IPADownloadLibrary.shared.record(fileURL: ipa,
                                                  displayName: name.isEmpty ? hit.name : name,
                                                  bundleId: bid,
                                                  version: hit.version,
                                                  iconURL: i4Value(a, keys: ["icon", "iconurl"]),
-                                                 source: "爱思免登录")
+                                                 source: "爱思免登录",
+                                                 sourceURL: hit.ipaURL,
+                                                 storeItemId: hit.itemId)
             }
             try await AppStoreInstallService.installLocalIPA(
                 ipa.path,

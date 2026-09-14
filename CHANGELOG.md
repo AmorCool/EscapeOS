@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.393] - 2026-09-14
+
+### 修复（「已下载」面板里「提取下载链接」和「复制商店链接」都是「无」—— 找到根因）
+真机实证（同一个包）：
+```
+11:51:44  提取下载链接（下载中任务）：https://iosapps.itunes.apple.com/...   ← 下载中拿得到
+11:52:25  [下载] 完成：178 MB → com.openai.chat-1.2026.230.ipa              ← 落盘
+11:52:56  [下载面板] 台账无 sourceURL，给不出 IPA 原链接                     ← 台账里却是空
+```
+**根因**：**AppleID 通道不走 `startDownload`，因此从不经过 `handle`** ——
+而写台账（含 `sourceURL` / `storeItemId`）的逻辑在 `handle` 里。
+以前 `startWithAppleID` 完成后**只更新内存里的任务**，台账条目是事后靠**磁盘扫描现场补登记**
+生成的，那条路径根本不知道这两个字段 → 两个链接双双为空。
+- **修法**：`startWithAppleID` 完成后**自己写台账**（把任务上的 `remoteURL` / `storeItemId` 一起落盘），
+  `localFileName` 改用真实的 `dest.lastPathComponent`（不再靠拼字符串），并加一行落盘日志便于复核。
+
+### 修复（爱思源直装的两条路径同样漏了这两个字段）
+- `AppStoreI4View` 里两处 `IPADownloadLibrary.shared.record(...)` 只传了 6 个参数。
+  它们手上的 `hit`（`SourcePackageLocator.Hit`）**本来就带着** `ipaURL` 与 `itemId`
+  → 补上 `sourceURL: hit.ipaURL, storeItemId: hit.itemId`。
+
+### 说明
+- 以上修复只对**修好之后新下载的包**生效。此前已下载的条目台账里从来没存过这两个字段，
+  不会追溯补写（要追溯得靠包内 `iTunesMetadata`，而重签包那个文件本来就没有）。
+
 ## [0.3.392] - 2026-09-14
 
 ### 修复（牛蛙源：真因是**请求体没加密**）
