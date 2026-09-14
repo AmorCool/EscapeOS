@@ -63,6 +63,20 @@ private enum NiuwaCrypto {
         return b64(sealed.ciphertext + sealed.tag) + b64(Data(n.utf8))
     }
 
+    /// 把最近一次响应**完整**写到 `Documents/LoginLogs/niuwa_last_response.txt`（覆盖式）。
+    ///
+    /// 用途：日志里的响应会被截断到 2000 字，而排查加解密必须看**完整**报文
+    ///（尤其尾部那 14 个字符 = `base64(时间数字)`，它决定 key/iv 的派生）。
+    /// 电脑侧取回：`python ssh_run.py niuwa`（会打印长度 + 尾部 20 字符，并把全文存到本地文件）。
+    private static func dumpResponse(_ raw: String) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let dir = docs.appendingPathComponent("LoginLogs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("niuwa_last_response.txt")
+        let header = "len=\(raw.count)\ntail20=\(String(raw.suffix(20)))\n---\n"
+        try? (header + raw).write(to: file, atomically: true, encoding: .utf8)
+    }
+
     /// 报文串 → 明文
     static func decrypt(_ s: String) -> Data? {
         // ★ 关键（v0.3.395）：**先去掉整段的 base64 padding 再切分**。
@@ -464,6 +478,13 @@ enum NiuwaStoreClient {
         }
 
         let raw = String(data: data, encoding: .utf8) ?? "<非 UTF-8 \(data.count) 字节>"
+        // ★ v0.3.399：**把完整响应单独落盘**（覆盖式，只留最后一次）。
+        //
+        // 为什么必须在日志之外再存一份：日志里的响应被 `truncate()` 截到 **2000 字**，
+        // 而真实大响应有 **9106 字** —— 尾部的 14 个字符（= `base64(时间数字)`）
+        // 正好在截断之外，于是「分段到底对不对」这件事**永远验证不了**。
+        // 存成独立文件后，电脑侧用 `ssh_run.py niuwa` 一条命令取回本地，不受任何截断与行序影响。
+        dumpResponse(raw)
         log.log("\(logTag) ← 原始响应 \(truncate(raw))", category: .appStore)
 
         // ★ v0.3.392：响应是**加密体**，先解密再解析。
