@@ -31,9 +31,12 @@ import Foundation
 ///   3. `ProvisionsAllDevices == true` → .enterprise（企业唯一权威字段，Apple TN3125）
 ///   4. 有 entitlements（即侧载 profile，且非企业）→ .development
 ///      （个人 Apple ID 自签 / Xcode 调试 / Ad-Hoc / 团队 Distribution）
-///   5. 有 `iTunesMetadata`（含只拿到购买邮箱的情况）→ 邮箱 ∈ 共享白名单则
+///   5. **v0.3.401（回归修复）**：元数据不可得（`hasITunesMetadata == false` 且
+///      购买邮箱为空）且加密状态未知（`isFairPlayEncrypted == nil`）→ .unknown
+///      （界面「未识别」）。**「不知道」不再被当成「苹果正版」**。
+///   6. 有 `iTunesMetadata`（含只拿到购买邮箱的情况）→ 邮箱 ∈ 共享白名单则
 ///      .appStoreShared，否则 .appStorePersonal
-///   6. 无 `iTunesMetadata` 且无 FairPlay 加密 → .jailbroken（爱思的「越狱版」）
+///   7. 无 `iTunesMetadata` 且**有明确**非加密证据 → .jailbroken（爱思的「越狱版」）
 ///
 /// `.appStore` 只剩「兜底」语义（加密包但拿不到元数据），界面文案与
 /// .appStorePersonal 相同（「苹果正版」）——**界面上不再出现「AppStore」**。
@@ -144,6 +147,25 @@ enum AppTypeDetector {
 
         // 4. App Store 系：只看 **App 自身购买邮箱** 是否在爱思共享账号白名单里
         let boughtBy = iTunesAppleID?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 4a. v0.3.401【止血，回归修复】：**「元数据没拿到」= 不知道，不能当成「苹果正版」**。
+        //     三个条件**同时**成立才算「未识别」：
+        //       - `hasITunesMetadata == false`：instproxy 这次没给出 iTunesMetadata 存在性
+        //         （典型场景 = 主数据源退化成不带 ReturnAttributes 的 `get_apps`，
+        //          见 FileSharingService.listAppsWithFileSharing 的降级路径）；
+        //       - 购买邮箱为空：连账号都没有，白名单比对无从谈起；
+        //       - `isFairPlayEncrypted == nil`：包的加密状态**未知**（已装应用读不到包内
+        //         `SC_Info/*.sinf`，此处恒为 nil）。
+        //     为什么不会误伤真·正版：真·正版要么 `hasITunesMetadata == true`（instproxy
+        //     给了元数据），要么有明确 `isFairPlayEncrypted == false`（本地 IPA 场景由
+        //     `IPAPackageInspector` 给出）—— 两者都走不到这里。
+        //     为什么不干脆落到下面的 `.appStore`：**错标比不标更糟**（本项目一致原则）——
+        //     把共享正版显示成「苹果正版」会让用户按错结论去处置应用；
+        //     显示「未识别」只是本机这次没取到信息，等带属性 Lookup 回来即自动变准。
+        if !hasITunesMetadata, (boughtBy ?? "").isEmpty, isFairPlayEncrypted == nil {
+            return .unknown
+        }
+
         if hasITunesMetadata || !(boughtBy ?? "").isEmpty {
             if let boughtBy, isSharedAccount(boughtBy) { return .appStoreShared }
             return .appStorePersonal
