@@ -28,8 +28,8 @@ enum PreviewImageLoader {
     /// **候选地址链**（本项目"点开全屏一片黑"与"以前是清晰的"两次回归都出在这一行上）。
     ///
     /// 三代写法，前两代的坑都记在下面，别再走回去：
-    /// · **v0.3.404 之前** —— `String.appStoreHighResImage`（`MediaSaver.swift:69`）**无差别**
-    ///   把地址里的 `\d+x\d+bb` 换成 `1024x1024bb`。这招只对**正方形**的图标变体成立：
+    /// · **v0.3.404 之前** —— `String.appStoreHighResImage`（v0.3.406 已删，见 `MediaSaver.swift`）
+    ///   **无差别**把地址里的 `\d+x\d+bb` 换成 `1024x1024bb`。这招只对**正方形**的图标变体成立：
     ///   截图不是正方形（Apple 的 `screenshotUrls` 是 `392x696bb`，爱思图床把尺寸写进文件名
     ///   `…_540x960bb.jpg`），换出来是一个**不存在的资源** → 请求失败 →
     ///   而缩略图用的是原址（`AsyncImage(url: URL(string: url))`）→

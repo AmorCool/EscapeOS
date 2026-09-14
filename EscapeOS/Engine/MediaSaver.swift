@@ -64,10 +64,15 @@ enum MediaSaver {
     }
 }
 
-extension String {
-    /// mzstatic 缩略图地址升成高清：`…/100x100bb.jpg` → `…/1024x1024bb.jpg`
-    var appStoreHighResImage: String {
-        guard range(of: #"\d+x\d+bb"#, options: .regularExpression) != nil else { return self }
-        return replacingOccurrences(of: #"\d+x\d+bb"#, with: "1024x1024bb", options: .regularExpression)
-    }
-}
+// MARK: - 应用图标 / 截图的高清地址
+
+// v0.3.406：这里原来有一个 `extension String { var appStoreHighResImage }`，
+// 它**无差别**把地址里的 `\d+x\d+bb` 换成 `1024x1024bb` —— 只对正方形（图标）成立；
+// 截图不是正方形（Apple 给 `392x696bb`、爱思图床 `…_540x960bb.jpg`），换出来是**不存在的资源**，
+// 请求必失败 → 「缩略图看得见、点开全屏一片黑」。（删除前已确认全仓零调用点。）
+//
+// 高清改写现在**只有一份实现**：`PreviewImageLoader.candidateURLs`
+//（`Views/ImagePreviewSupport.swift`）—— **按原比例**放大（宽 1024、高按比例），
+// 并且**保留原址作第二候选**、失败自动回落。展示 / 长按保存 / 提取图标都走它。
+//
+// ⚠️ 不要再在这里写第二个"无差别升到 1024x1024"的版本 —— 那正是黑屏的成因。

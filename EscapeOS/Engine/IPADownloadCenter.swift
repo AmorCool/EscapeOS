@@ -18,6 +18,11 @@ final class IPADownloadCenter: ObservableObject {
 
     enum Source: String {
         case i4Free = "爱思免登录"
+        /// v0.3.406：免登录商店的**第二个来源**（牛蛙）。它的包得先打一发
+        /// `/appstore/download` 才拿得到直链，但拿到之后走的是同一条下载/安装链路，
+        /// 所以只是"来源"这一栏的口径不同 —— 以前借用 `.i4Free`，
+        /// 下载管理页那一行会把牛蛙的包标成「爱思免登录」。
+        case niuwa = "牛蛙免登录"
         case appleID = "Apple ID"
     }
 
@@ -307,15 +312,19 @@ final class IPADownloadCenter: ObservableObject {
     }
 
     /// 免登录源：直接给直链
+    ///
+    /// v0.3.406：加 `source` 参数（**默认 `.i4Free`**，既有调用点一个都不用改）——
+    /// 牛蛙源要能在下载管理页显示成「牛蛙免登录」，不能借用爱思那一档。
     @discardableResult
     func start(name: String,
                bundleId: String?,
                version: String?,
                iconURL: String?,
                remoteURL: String,
-               autoInstall: Bool = true) -> UUID {
+               autoInstall: Bool = true,
+               source: Source = .i4Free) -> UUID {
         var job = Job(name: name, bundleId: bundleId, version: version, iconURL: iconURL,
-                      remoteURL: remoteURL, source: .i4Free, accountEmail: nil,
+                      remoteURL: remoteURL, source: source, accountEmail: nil,
                       autoInstall: autoInstall)
         job.stageText = "排队中"
         jobs.insert(job, at: 0)

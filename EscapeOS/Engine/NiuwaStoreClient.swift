@@ -285,6 +285,37 @@ enum NiuwaStoreClient {
         var releaseDate: String?
         /// v0.3.404：**下载接口**返回的 `ba_sinfs`（base64 文本，安装加密包时要用）。
         /// 只有 `/appstore/download` 的响应带它；搜索接口恒为 nil。
+        ///
+        /// ## v0.3.406：只解析、**暂不使用**（接手的人看这一段就能接着做）
+        ///
+        /// **它是什么**：base64 解出来是**标准 `.sinf` 容器**，不是别的包装格式 ——
+        /// 真机样本解出 **1032 字节**，头 4 字节 `00 00 04 08`（= 长度 1032）紧跟 ASCII `sinf`，
+        /// 正是 `.sinf` 的长度前缀 + tag 结构。所以它是「可以直接丢进 `SC_Info/` 的那份文件」。
+        ///
+        /// **为什么现在用不上**：本项目两条安装链路的 sinf 都不是"传参数"进去的，而是**从包里读**：
+        /// · `AppStoreInstallService.installLocalIPA`（`Engine/AppStoreInstallService.swift:111`）
+        ///   判到加密包后走 `IPAPackageInspector.extractSINF(ipaPath:)`，读的是
+        ///   `Payload/<App>.app/SC_Info/<exe>.sinf`；
+        /// · AppleID 通道更靠前一步：`SignatureInjector.inject(sinfs:into:)`
+        ///   （`Engine/AppStoreLocalInstallService.swift:83`）先把 Apple 签发的 sinf **写回包内**。
+        /// ⇒ 介质是**包本身**，光把这个字符串往下传没有任何消费者。
+        ///
+        /// **要用它必须改在哪**（两处，缺一不可）：
+        /// 1. 落盘后、安装前：`IPADownloadCenter.handle(id:safeName:result:)`
+        ///    与 `installAfterDownload(id:path:fileName:)`
+        ///    （`Engine/IPADownloadCenter.swift`）—— 调 `installLocalIPA` 之前，
+        ///    把这里的 base64 解成 `Data`，**覆盖式**写进 `Payload/<App>.app/SC_Info/<exe>.sinf`
+        ///    （执行文件名取包内 `Info.plist` 的 `CFBundleExecutable`）。
+        ///    为此还需要给 `IPADownloadCenter.Job` 加一个 sinf 字段、给 `start(...)` 加参数，
+        ///    在 `startNiuwaDownload`（`Views/I4StoreFreeView.swift`）把 `full?.sinfBase64` 传进来。
+        /// 2. `SignatureInjector`（`vendor/ApplePackage/Supplement/SignatureInjector.swift`）
+        ///    现在的语义是「**sinf 文件已存在就抛错**」（`sinf file already exists`）——
+        ///    覆盖写要么绕开它、要么给它加一个"允许覆盖"的分支。
+        ///
+        /// **触发条件**：真机上装牛蛙的包时，报出
+        /// `加密包…缺少 SC_Info/*.sinf`（`AppStoreInstallService.InstallError.missingSINF`）
+        /// 才说明非走这条路不可。若牛蛙给的 `.dpkg.ipa` 里本来就带可用 sinf，
+        /// 现有链路能直接装上，那就**永远不需要**动上面两处。
         var sinfBase64: String?
 
         /// 列表按 bundleId 去重 → 用 bundleId 当 id
