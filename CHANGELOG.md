@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.3.406] - 2026-09-14
+
+### 撤销（SSH 调试页：把 v0.3.404 / v0.3.405 关于 SSH 的改动**连根删掉**）
+用户原话：**「我们不用 hostNameReport 这些了吧 我们不改 ssh 啊」**
+- **「连接信息」区回到只显示「局域网 `ssh escape@<IP> -p 2222`」一条**；
+  删掉「本机（仅设备自身）127.0.0.1」与「固定主机名（需 Bonjour）<设备名>.local」两行，
+  以及配套的 `mdnsCommand` / `hasLAN` 之外的残留。
+- `SSHServerService`：删 `hostNameReport()`、`hostLabel(_:)`、`mdnsHostLabel`、
+  受限 shell 的 `hostname` 分支、`help` 里对应行、`refreshNetworkInfo` 里那行 `.local` 日志。
+- ⚠️ **注意**：v0.3.405 CI 曾报 `SSHServerService.swift:598: type 'Self' has no member 'hostNameReport'`。
+  **本版不是"修"它，而是把这整块删掉** —— 那块功能用户已经不要了，删掉错误自然不存在。
+  （教训已记入 `.workbuddy/memory/MY-FAULTS.md` 缺陷 1：**不要修用户已经撤销的东西**。）
+- 监听地址语义未动（仍 `0.0.0.0`）。
+
+### 修复（截图/预览**不清晰了** —— 高清改写从「无差别」改成「按比例」）
+用户原话：**「我发现现在获取的预览/截图图片不清晰了以前是清晰的 为什么」**
+- v0.3.404 为修黑屏把「无差别改写成 `1024x1024`」改成「截图走原址」，清晰度因此退回缩略图（真机实测取的是 `320x480bb`）。
+- 现在：命中 `(\d+)x(\d+)bb` 时**宽固定 1024、高按同一比例算**（`320x480bb` → `1024x1536bb`，
+  `392x696bb` → `1024x1818bb`；正方形图标仍得 `1024x1024bb`）；长边已 ≥1024 或无尺寸标记则**不放大**。
+- **候选链两档**：`[按比例高清, 原址]`，**高清失败自动回落原址**（不会退回黑屏）。
+  日志 `候选 1/2` = 服务端接受任意比例；`候选 2/2` = 不接受、回落缩略。
+- 全屏展示 / 长按保存 / 提取图标三处**走同一个 `PreviewImageLoader`**，清晰度一起回来。
+- 顺手**删掉 `String.appStoreHighResImage`**（全仓已无调用点，且它就是黑屏的源头），
+  原位留注释指向新实现，避免以后有人再写一个无差别版本。
+
+### 新增（牛蛙源：能进**详情**、能**下载**）
+用户原话：**「牛蛙源只是显示获取到直链 而且没有 app 详情界面也不能下载」**
+- 新增 `NiuwaStoreDetailView`（与爱思详情同款排版，**不额外发请求**，字段只来自搜索响应）；
+  牛蛙搜索行左侧接 `NavigationLink` 进详情。
+- **下载走全项目唯一入口** `IPADownloadCenter.shared.start(...)`（与爱思源**同一个** `start(...)`），
+  **没有第二个下载管理器**；牛蛙只是多一步「先打 `/appstore/download` 拿 `ba_ipaURL`」。
+- 列表行右侧换成与爱思共用的 `trailingControl`；两个详情页共用提出来的
+  `DownloadJobSection` / `JobProgressChip` / `InstallButton`（**一份实现**）。
+- **失败不静默**：拿不到直链 → 「该应用没有可用的安装包」；抛错 → 「获取安装包失败」（原因进 `[牛蛙源]` 日志）；
+  取直链期间行内显示「获取中」（牛蛙比爱思多一次网络往返，必须看得见）。
+- 牛蛙详情页也接上了「查看图标 / 提取图标」（同一份 `iconMenuItems`）。
+- **`ba_sinfs` 本版未使用**（经查证：现有两条安装链路的 sinf 都是**从包内 `SC_Info/` 读**的，
+  不是传参；要用 `ba_sinfs` 必须在下载完成后覆盖写回包内 → 涉及 `IPADownloadCenter` 落盘环节，
+  本版不做）。已在字段注释里留「待触发说明」，**真机若报「加密包缺少 SC_Info/*.sinf」再走那条路**。
+- `IPADownloadCenter.Source` 新增 `case niuwa = "牛蛙免登录"`，牛蛙下载的来源不再错显示成「爱思免登录」。
+
+### 修复（设备瘦身「较大应用」扫不到应用）
+用户原话：**「设备瘦身的较大应用扫描修复一下现在扫不到应用」**
+真机日志证明根因：`[设备瘦身] 大小增强回填 334 条，其中真的带 appSize 0 条（sizeComplete=false）`
+—— 334 个应用**一个都没拿到应用大小**，因为 v0.3.401 为治「带属性 Lookup 卡 ~25 秒」把磁盘占用字段全去掉了。
+- 本版**只加回 `StaticDiskUsage`**（installd 已有的静态统计，几乎免费）；
+  **`DynamicDiskUsage` / `CFBundleSize` 仍不请求**（前者要遍历每个 App 的数据容器，最可能就是卡死元凶）。
+- **降级链完全保留**：带属性 Lookup 有超时（额度不变）→ 超时/失败仍回落 `get_apps`
+  → 那时缺 `appSize` → `sizeComplete=false` → 页面给「应用大小不可用」提示（**不静默变空**）。
+- **判据**：真机 `[文件共享] 主路径返回 … 端到端 X.Xs（实际执行 Y.Ys）`。
+  **Y ≈ 2~3s** ⇒ 卡的是 `DynamicDiskUsage`，邮箱与大小同时恢复；
+  **Y 仍 ≈ 25s** ⇒ 卡的是 Lookup 本身、与字段无关，届时把该字段撤掉（回退配方写在代码注释里）。
+
 ## [0.3.405] - 2026-09-14
 
 ### 新增（SSH 调试页加「固定主机名」连法，不再只依赖会变的局域网 IP）
@@ -172,6 +225,10 @@ region=2 → {"ba_apps":[{"trackName":"Via Browser",…}]}  ← 美区（英文�
   额度 < 10s 的调用（如 `IPADownloadActionsSheet` 的 5s 快路径数据源）直接用 `get_apps`。
   新增日志：请求字段清单 + 端到端耗时 + 「带 iTunesMetadata / 带购买邮箱」条数。
 ### 已知代价（大小字段被移出请求）
+> **⚠️ 本节已被 v0.3.406 修正**：`StaticDiskUsage` **已经加回**请求
+>（只保留 `DynamicDiskUsage` / `CFBundleSize` 不请求）——
+> 因为去掉全部大小字段导致 334 个应用**一个都拿不到 `appSize`**，「设备瘦身」扫不到应用。
+> 见 `## [0.3.406]` 的「设备瘦身」条。**下文保留当时的事实与推理，别再当作现状。**
 - 为解决「带属性 Lookup 卡 ~25 秒」的卡死，本版把 `StaticDiskUsage` / `DynamicDiskUsage`
   （连同 `CFBundleSize`）**从该请求里去掉**（`rust/idevice-ffi/src/installation_proxy.rs`
   的 `attrs` 常量）。真机证据（实测日志）：
