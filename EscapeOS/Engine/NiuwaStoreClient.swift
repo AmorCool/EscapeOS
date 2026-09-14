@@ -65,16 +65,33 @@ private enum NiuwaCrypto {
 
     /// 报文串 → 明文
     static func decrypt(_ s: String) -> Data? {
+        // ★ 关键（v0.3.395）：**先去掉整段的 base64 padding 再切分**。
+        // 服务端可能带 `=` 返回：小响应恰好是 4 的倍数（92 字）看不出问题，
+        // 而大响应真机实测 9106 字、`9106 % 4 == 2` → 一定以 `==` 结尾。
+        // 那时「末尾 14 个字符」里会混进 `=` → 尾部取到的不是时间数字 → **分段错误 → 解密必败**。
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "=", with: "")
+        // ★ 诊断（v0.3.395）：真机出现「小响应能解开、大响应解不开」——
+        // 小响应 92 字符（密文 78 + 尾 14），大响应 9106 字符。**结构可能不同**，
+        // 而整体响应被日志截断到 2000 字，看不到尾部，所以这里把**关键分段信息**单独记一份。
+        LoginLogger.shared.log("[牛蛙源·诊断] 报文长度=\(trimmed.count) 尾部20=[\(String(trimmed.suffix(20)))]",
+                               category: .appStore)
         guard trimmed.count > 14 else { return nil }
         let tail = String(trimmed.suffix(14))
         let head = String(trimmed.dropLast(14))
         guard let nData = base64Decode(tail),
               let n = String(data: nData, encoding: .utf8),
-              let blob = base64Decode(head), blob.count > 16 else { return nil }
+              let blob = base64Decode(head), blob.count > 16 else {
+            LoginLogger.shared.log("[牛蛙源·诊断] 分段失败：尾14=[\(tail)] 头长度=\(head.count)",
+                                   category: .appStore)
+            return nil
+        }
         let ciphertext = Data(blob.prefix(blob.count - 16))
         let tag = Data(blob.suffix(16))
         let (key, iv) = deriveKeyIV(n: n)
+        LoginLogger.shared.log("[牛蛙源·诊断] N=\(n) 密文=\(ciphertext.count) 字节 头段b64=\(head.count) "
+                               + "key前8=\(String(key.prefix(8))) iv=[\(String(data: iv, encoding: .utf8) ?? "?")]",
+                               category: .appStore)
         guard let nonce = try? AES.GCM.Nonce(data: iv),
               let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag),
               let plain = try? AES.GCM.open(box, using: SymmetricKey(data: key)) else {
