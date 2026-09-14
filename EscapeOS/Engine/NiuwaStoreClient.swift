@@ -190,7 +190,9 @@ private enum NiuwaCrypto {
 ///
 /// 因此本版不再赌单一个键/单一形态，而是：
 /// - **数组键按序逐个试**（`listKeyCandidates`），命中即用；
-/// - **`region` 双形态各试一次**：整数索引优先（有 `Tq` 证据），空/失败再回退 ISO 串；
+/// - **`region` 只发整数索引**（有 `Tq` 证据，且真机已确证 `0/1/2` 生效）；
+///   ⚠️ **v0.3.389 起已收窄成"只发一种形态"**（`withRegionShapes` 里只剩数字形态）——
+///   此处旧文写的「双形态各试一次」**已作废**，别照它改回去（原因见 `withRegionShapes` 的注释）；
 /// - **失败时把服务端实际返回的键名写进错误与日志** —— 这样用户截图一次就能定案，
 ///   不用再赌（上一版就是只弹 toast、界面留空，白丢一轮证据）。
 ///
@@ -227,9 +229,9 @@ enum NiuwaStoreClient {
     /// 客户端的区域档位（中文串「中国 / 美国」来自
     /// `NWCoreClassAppStoreSearchTableViewCell` 附近的 NSInteger 分段索引）。
     ///
-    /// **`rawValue` 是 ISO 串（旧口径），`index` 是分段索引（新证据）** ——
-    /// 见类型注释 1：`nwcore_region` 的 objc 类型是 `NSInteger`，所以线上更可能要数字。
-    /// 请求侧两种都试（`withRegionShapes`），命中哪个由日志定案。
+    /// **`rawValue` 是 ISO 串（历史口径，**线上从未用过**），`index` 是分段索引（真机已确证）** ——
+    /// 见类型注释 1：`nwcore_region` 的 objc 类型是 `NSInteger`，线上就是**数字**。
+    /// 请求侧**只发数字**（`withRegionShapes` 里只剩数字形态；`rawValue` 现在只用于持久化与回落）。
     ///
     /// ## ★ 档位映射的所在地（v0.3.411 补证）
     /// 映射就在 **NiuWaCore 自己的 UI 类**里：`nwcore_region` 是它的**合成属性**
