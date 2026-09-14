@@ -211,13 +211,15 @@ enum NiuwaStoreClient {
 
     /// 响应里「应用数组」的候选键（按可能性排序，命中即用）。
     ///
-    /// **顺序已按二进制证据校正**（v0.3.387 二次复核）：
-    /// - `nwcore_apps` 与 `NWCoreClassAppStoreAppModel` **物理紧邻**
-    ///   （同一段 `__cstring` 里前后脚出现）→ **它才是 App Store 搜索的数组键**，排第一；
-    /// - `nwcore_list` 紧邻的是 **`NWCoreClassTaskModel`**（且旁边就是 `task/list`、`task/signin`、
-    ///   `device/cdkey` 这些端点）→ 它是**任务列表**用的，与搜索无关，降为备选。
+    /// **★ v0.3.403：`ba_apps` 排第一 —— 这是真机实测出来的真实键名。**
+    /// 真机拿到（解密成功后的）真实响应结构：
+    /// ```json
+    /// {"pub_code":0,"pub_desc":"接口调用成功","body":{"ba_apps":[{"trackName":"Via 浏览器","bundleId":"com.tuyafeng.Via", …}]}}
+    /// ```
+    /// ⇒ **数组不在顶层，而是嵌在 `body` 里**（见 `perform` 的 `scopes`）。
+    /// 下面那几个 `nwcore_*` 是从二进制字符串里推的、**至今未在真机命中过**，保留只为兜底。
     private static let listKeyCandidates = [
-        "nwcore_apps", "nwcore_list", "apps", "list", "data", "result",
+        "ba_apps", "apps", "list", "nwcore_apps", "nwcore_list", "data", "result",
     ]
 
     // MARK: - 区域
@@ -541,33 +543,46 @@ enum NiuwaStoreClient {
             throw StoreError.decode
         }
 
-        let code = string(obj["nwcore_code"]) ?? string(obj["code"]) ?? "-"
-        let message = string(obj["nwcore_messages"])
+        // ★ v0.3.403：状态码/描述的真实键名是 `pub_code` / `pub_desc`
+        // （真机实测响应：`{"pub_code":0,"pub_desc":"接口调用成功","body":{…}}`）。
+        // 旧的 `nwcore_code` / `code` 保留兜底 —— 它们是从二进制字符串推的、至今未在真机命中。
+        let code = string(obj["pub_code"]) ?? string(obj["nwcore_code"]) ?? string(obj["code"]) ?? "-"
+        let message = string(obj["pub_desc"])
+            ?? string(obj["nwcore_messages"])
             ?? (obj["nwcore_messages"] as? [Any])?.map { string($0) ?? "" }.joined(separator: "；")
             ?? string(obj["message"])
             ?? ""
 
-        // 候选键逐个试（顺序见 `listKeyCandidates`）
-        for key in listKeyCandidates {
-            guard let arr = obj[key] as? [[String: Any]] else { continue }
-            let apps = arr.compactMap(parse)
-            if apps.isEmpty && !arr.isEmpty {
-                // ★ 最关键的诊断：命中了数组、却一条都没解析出来 → 说明**字段键名**不对。
-                // 把服务端首条记录的**实际键名**打出来，一次真机搜索就能定死键名
-                // （上一版就是静默丢弃，白丢了一轮）。
-                let firstKeys = arr[0].keys.sorted().joined(separator: ", ")
-                log.log("\(logTag) ⚠ 命中数组键「\(key)」但 0 条解析成功（服务端给了 \(arr.count) 条）；"
-                        + "首条记录的键=[\(firstKeys)]（region=\(shape)）", category: .appStore)
-            } else {
-                log.log("\(logTag) ✓ 命中数组键「\(key)」code=\(code) 解析 \(apps.count)/\(arr.count) 条（region=\(shape)）",
-                        category: .appStore)
+        // ★★ v0.3.403：**数组可能嵌在 `body` 里**（真机实测就是 `body.ba_apps`）。
+        // 先在 `body` 里找，再回落到顶层 —— 之前的实现只看顶层，
+        // 于是明明解密成功、数据也拿到了，却报「无候选数组键命中」。
+        var scopes: [[String: Any]] = []
+        if let body = obj["body"] as? [String: Any] { scopes.append(body) }
+        scopes.append(obj)
+
+        for scope in scopes {
+            for key in listKeyCandidates {
+                guard let arr = scope[key] as? [[String: Any]] else { continue }
+                let apps = arr.compactMap(parse)
+                if apps.isEmpty && !arr.isEmpty {
+                    // ★ 最关键的诊断：命中了数组、却一条都没解析出来 → 说明**字段键名**不对。
+                    // 把服务端首条记录的**实际键名**打出来，一次真机搜索就能定死键名
+                    // （上一版就是静默丢弃，白丢了一轮）。
+                    let firstKeys = arr[0].keys.sorted().joined(separator: ", ")
+                    log.log("\(logTag) ⚠ 命中数组键「\(key)」但 0 条解析成功（服务端给了 \(arr.count) 条）；"
+                            + "首条记录的键=[\(firstKeys)]（region=\(shape)）", category: .appStore)
+                } else {
+                    log.log("\(logTag) ✓ 命中数组键「\(key)」code=\(code) 解析 \(apps.count)/\(arr.count) 条（region=\(shape)）",
+                            category: .appStore)
+                }
+                return apps
             }
-            return apps
         }
 
         // 一个都没命中 → 把**实际键名**暴露出来（这是下一轮定案的唯一依据）
         let actualKeys = obj.keys.sorted().joined(separator: ", ")
-        let detail = "响应键：\(actualKeys)"
+        let bodyKeys = (obj["body"] as? [String: Any])?.keys.sorted().joined(separator: ", ")
+        let detail = "响应键：\(actualKeys)" + (bodyKeys.map { "；body 键：\($0)" } ?? "")
         log.log("\(logTag) ✗ 无候选数组键命中（code=\(code) messages=\(message.isEmpty ? "-" : message)）；\(detail)",
                 category: .appStore)
         throw StoreError.server(code: code, message: message.isEmpty ? detail : message)
