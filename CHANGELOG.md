@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.394] - 2026-09-14
+
+### 修复（v0.3.393 的编译错误）
+- `IPADownloadCenter.swift:362` 写了 `Job.Source.appleID.rawValue`，但 `Source` 是
+  **`IPADownloadCenter` 的嵌套类型、不是 `Job` 的** →
+  `error: type 'IPADownloadCenter.Job' has no member 'Source'`。改为 `Source.appleID.rawValue`。
+  （v0.3.393 里「AppleID 通道补写台账」那个根因修复本身没变，本版把它一起带上。）
+
 ## [0.3.393] - 2026-09-14
 
 ### 修复（「已下载」面板里「提取下载链接」和「复制商店链接」都是「无」—— 找到根因）

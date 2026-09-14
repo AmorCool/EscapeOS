@@ -359,7 +359,7 @@ final class IPADownloadCenter: ObservableObject {
                         bundleId: item.bundleId,
                         version: shownVersion,
                         iconURL: item.iconSmallURL ?? item.iconURL,
-                        source: live?.source.rawValue ?? Job.Source.appleID.rawValue,
+                        source: live?.source.rawValue ?? Source.appleID.rawValue,
                         sourceURL: live?.remoteURL,
                         storeItemId: live?.storeItemId)
                     LoginLogger.shared.log("[下载中心] AppleID 通道落盘写台账 \(dest.lastPathComponent)："
