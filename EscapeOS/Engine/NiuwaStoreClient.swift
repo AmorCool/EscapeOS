@@ -231,6 +231,15 @@ enum NiuwaStoreClient {
     /// 见类型注释 1：`nwcore_region` 的 objc 类型是 `NSInteger`，所以线上更可能要数字。
     /// 请求侧两种都试（`withRegionShapes`），命中哪个由日志定案。
     ///
+    /// ## ★ 档位映射的所在地（v0.3.411 补证）
+    /// 映射就在 **NiuWaCore 自己的 UI 类**里：`nwcore_region` 是它的**合成属性**
+    /// （getter IMP `0x60718` / setter IMP `0x60728`，类型编码 `q16@0:8` = `NSInteger`）。
+    /// 请求侧 `nwcore_appstoreSearchWithKeyword:region:block:`（IMP `0x11a74`）拿到 `region` 后
+    /// 立刻用 `[NSNumber numberWithInteger:]` 包起来 ⇒ **线上发的就是数字**
+    /// （把上面那句"更可能要数字"**坐实**，与 `Tq` 编码一致）。
+    /// 旁证：`JCD` 主二进制里 `nwcore_` 只出现 1 次（`nwcore_runUIApplicationMainWithArgc:argv:`）
+    /// —— **NiuWaCore 自己跑 UIApplicationMain、自己建 UI**，所以区域档位不在 JCD 里。
+    ///
     /// ## ★ 只保留「中国 / 美国」两档
     ///
     /// **`region` 数值语义：`0 = 中国` / `1 = 美国` / `2 = 香港`**（交接文档结论 + 机器码/UI 证据；
@@ -513,24 +522,37 @@ enum NiuwaStoreClient {
         }
     }
 
-    /// 本 App 的 build 号（`CFBundleVersion`）—— 牛蛙的 `pub_version` 量级与之相符。
+    /// `pub_version` 的取值 —— **v0.3.411 起直接对齐原版牛蛙，硬编码 `"9.0.1"`**。
     ///
-    /// ⚠️ **不能用 `Bundle.main`**：本 App 常以侧载 / LiveContainer 方式运行，那时
-    /// `Bundle.main` 可能指向**宿主**的 bundle，取到的是与牛蛙无关的 build 号
-    /// （项目铁律：一律 `Bundle(for: SomeClass.self)`，见 `SAPAssetsLocator`）。
-    private final class BundleToken {}
-
-    private static var pubVersion: String {
-        Bundle(for: BundleToken.self).infoDictionary?["CFBundleVersion"] as? String ?? "1"
-    }
+    /// ## 为什么是常量、不再读自身 bundle
+    /// 原版牛蛙发的是**它自己的** `CFBundleShortVersionString`（= `"9.0.1"`，见
+    /// `_tmp_ssh/syllabic/Payload/JCD.app/Info.plist`）。我们 App 的版本号（`0.3.x`）
+    /// 对牛蛙服务端**没有意义** —— `pub_version` 是它认"是不是自家客户端"的口径，
+    /// 发我们自己的版本只会让它看到一串陌生数字。
+    /// 旧实现读的是 `CFBundleVersion`（= 构建号 `704`）—— **连字段都选错了**
+    /// （原版读的是 `CFBundleShortVersionString`，不是 build 号），且带 `?? "1"` 兜底。
+    ///
+    /// ## 回退说明
+    /// 若要改回"取自身 bundle 版本"，把下面的常量换成
+    /// `Bundle(for: BundleToken.self).infoDictionary?["CFBundleShortVersionString"] as? String ?? "1"`
+    /// 并恢复 `private final class BundleToken {}` 即可。
+    /// ⚠️ **无论怎么改都不能用 `Bundle.main`**：本 App 常以侧载 / LiveContainer 方式运行，
+    /// 那时 `Bundle.main` 可能指向**宿主**的 bundle，取到的是与牛蛙无关的版本号
+    ///（项目铁律：一律 `Bundle(for: SomeClass.self)`，见 `SAPAssetsLocator`）。
+    private static let pubVersion = "9.0.1"
 
     /// 公共参数五项（`pub_*`）—— 这就是牛蛙的"免登录"身份，没有 token / Authorization / uid。
     /// v0.3.387：类型放开成 `[String: Any]`，好让 `region` 能按需发**数字**而不是字符串。
+    /// v0.3.411：`pub_version` / `pub_lang` 两项**对齐原版**（见各自注释）。
     private static func pubParams(iPad: Bool) -> [String: Any] {
         [
             "pub_version": pubVersion,
             "pub_udid": pubUDID,
-            "pub_lang": DeviceInfoService.userLocaleIdentifier() ?? "zh-Hans-CN",
+            // `pub_lang` **硬编码 `"en"`、刻意对齐原版** —— 原版发的是字面量 `"en"`，
+            // **不跟系统 locale**。所以这不是"漏了本地化"，**别当 bug 改回去**。
+            // 回退说明：旧实现是 `DeviceInfoService.userLocaleIdentifier() ?? "zh-Hans-CN"`，
+            // 若要改回跟随系统，把本行换回该表达式即可。
+            "pub_lang": "en",
             "pub_platform": iPad ? "iPadOS" : "iOS",
             "pub_system_version": pubSystemVersion,
         ]

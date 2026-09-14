@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.3.411] - 2026-09-14
+
+### 变更（★ 实验：`pub_*` 两项**对齐原版牛蛙客户端**）
+> **定位**：这是一次**可回退的实验**，用来验证「部分应用拿不到（含微信）」是否与客户端身份字段有关。
+> **尚未有服务端侧的直证** —— 反汇编只证明这些字段**纯属本地身份上报**（没有参与过滤的构造点），
+> 但**我们发的值与原版不一致**这件事是事实。**验证方法**：装上后搜「微信」，看能否出结果/能否下载。
+
+- **`pub_version`：`CFBundleVersion`（构建号，实测 `700`/`701`/`703`/`704`/`705`）→ 对齐原版的 `"9.0.1"`**。
+  - 原版牛蛙发的是**它自己的 `CFBundleShortVersionString`**（`_tmp_ssh/syllabic/Payload/JCD.app/Info.plist` = `9.0.1`），
+    而旧实现**连字段都选错了**（读的是 build 号，不是版本号）。
+  - 我们自己的 `0.3.x` 对牛蛙服务端没有意义 —— `pub_version` 是它认「是不是自家客户端」的口径。
+  - **回退**：把 `NiuwaStoreClient.pubVersion` 换回 `Bundle(for: BundleToken.self).infoDictionary?["CFBundleShortVersionString"]`
+    并恢复 `BundleToken` 即可（注释里写了完整回退方式）。
+- **`pub_lang`：设备 locale（实测 `zh-Hans_JP`）→ 对齐原版的硬编码 `"en"`**。
+  - 原版发的是字面量 `"en"`、**不跟系统 locale** —— 所以这**不是**「漏了本地化」，别当 bug 改回去。
+  - **回退**：换回 `DeviceInfoService.userLocaleIdentifier() ?? "zh-Hans-CN"`。
+- **`pub_udid` / `pub_platform` / `pub_system_version` 不动**。
+  特别是 `pub_udid`：原版在 `NSUserDefaults["nwcore_UDID"]` 为空时发的是**36 位全零 UUID**，
+  **它这样都能正常使用** ⇒ 说明**服务端根本不看 UDID** ⇒ 顺带**排除了「伪 UDID 导致空直链」这个猜测**。
+
+### 注释补证（无行为改动）
+- `NiuwaRegion` 类型注释补上 `region` **档位映射的所在地**：映射在 **NiuWaCore 自己的 UI 类**里
+  （`nwcore_region` 合成属性，getter `0x60718` / setter `0x60728`，类型编码 `q16@0:8`），
+  请求侧拿到后用 `[NSNumber numberWithInteger:]` 包起来 ⇒ **线上发的就是数字**。
+  旁证：`JCD` 主二进制里 `nwcore_` 只出现 1 次（`nwcore_runUIApplicationMainWithArgc:argv:`）——
+  **NiuWaCore 自己跑 `UIApplicationMain`、自己建 UI**。
+
+### 更正一条曾写进记忆的错误结论
+- 旧结论「`appstore/search` / `appstore/download` 在 NiuWaCore 里**全库无代码引用**」**是错的**：
+  当时扫的是 `__TEXT,__cstring` 的字面量地址，而 OC 代码引用的是 **`__DATA_CONST,__cfstring` 的 `CFString` 对象** —— 扫错了节。
+  真相：**16 个端点串每个都有且仅有 1 处引用**，且**各自独立触发** ⇒
+  **`sign/inhouse`、`certificate/*` 等都不是 `/appstore/download` 的前置步骤**。
+
 ## [0.3.410] - 2026-09-14
 
 ### 修复（★ 牛蛙「大部分应用获取失败」的直接成因：空直链不重试）
