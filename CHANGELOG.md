@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.397] - 2026-09-14
+
+### 修复（v0.3.396 的编译错误）
+- `NiuwaStoreClient.swift:93`：
+  `error: no exact matches in call to initializer`。
+  原因：诊断日志里写了 `String(key.prefix(8))` —— `key` 是 `Data`，
+  `prefix` 返回 `Data.SubSequence`，**那个 `String(_:)` 初始化器并不存在**。
+  改为 `String(decoding: key.prefix(8), as: UTF8.self)`；`iv` 那段一并改成显式变量。
+- 同时把同类隐患全仓扫了一遍：其他 `String(x.prefix(...))` 的 `x` 都是 `String` 本身，**只有这一处对 `Data` 用**。
+
+> 本版内容 = v0.3.396 的全部（**牛蛙响应解密的 padding 修复** +
+> **在线安装卡进度环的四条收尾**），只是把那一处编译错误修掉后重发。
+
 ## [0.3.396] - 2026-09-14
 
 ### 修复（在线安装卡在圆圈进度条）

@@ -89,8 +89,13 @@ private enum NiuwaCrypto {
         let ciphertext = Data(blob.prefix(blob.count - 16))
         let tag = Data(blob.suffix(16))
         let (key, iv) = deriveKeyIV(n: n)
+        // ⚠️ 不能用 `String(key.prefix(8))` —— `prefix` 返回 `Data.SubSequence`，
+        // 那个 `String(_:)` 初始化器不存在（v0.3.396 CI 的
+        // `error: no exact matches in call to initializer` 就是这里）。
+        let keyHead = String(decoding: key.prefix(8), as: UTF8.self)
+        let ivText = String(data: iv, encoding: .utf8) ?? "?"
         LoginLogger.shared.log("[牛蛙源·诊断] N=\(n) 密文=\(ciphertext.count) 字节 头段b64=\(head.count) "
-                               + "key前8=\(String(key.prefix(8))) iv=[\(String(data: iv, encoding: .utf8) ?? "?")]",
+                               + "key前8=\(keyHead) iv=[\(ivText)]",
                                category: .appStore)
         guard let nonce = try? AES.GCM.Nonce(data: iv),
               let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag),
