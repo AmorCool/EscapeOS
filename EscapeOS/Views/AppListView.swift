@@ -134,6 +134,12 @@ final class AppListViewModel: ObservableObject {
     ///   - 第二版：带属性 Lookup 作**可选增强**（独立 15 秒、失败就不补），
     ///     补上 appleId / 正版存在性后再精修一次，共享正版才不会退化成苹果正版.
     /// 两版都写日志（`类型判定完成（第一版/第二版…）`），下次一眼能看出走到哪.
+    ///
+    /// **v0.3.401（回归修复）**：`FileSharingService.listAppsWithFileSharing(timeout:)`
+    /// 的主路径重新是带属性 Lookup，所以**第一版就带着购买邮箱**（`appleId`/`isGenuine`），
+    /// 共享正版在第一版即判准；第二版通常命中单飞缓存（幂等回填）。若主路径降级到
+    /// `get_apps`（无 `iTunesMetadata`），购买邮箱缺失 → `AppTypeDetector` v0.3.401
+    /// 会给出「未识别」，**不会再误判成「苹果正版」**.
     private func loadAppTypes(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
         LoginLogger.shared.log("[应用管理] 类型判定开始：\(ids.count) 个应用")

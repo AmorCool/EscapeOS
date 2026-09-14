@@ -432,6 +432,13 @@ struct FileSharingAppsView: View {
     ///     （列表在 load() 返回时就已渲染）；v0.3.379 由 8 秒提到 15 秒（后台可选、
     ///     不阻塞首屏，且单飞保证同一时刻只有一条在飞）；
     ///   - 先补元数据再判定，共享正版/苹果正版才判得准（isGenuine/appleId 是判据）.
+    ///
+    /// v0.3.401（回归修复）：主列表 `listAppsWithFileSharing(timeout:)` 的主路径重新是
+    /// 带属性 Lookup，**列表本身就带回 `appleId`**，故类型判定不再依赖这次增强；
+    /// 增强通常命中单飞缓存（不另发命令）。大小胶囊（appSize/docSize）**已不再由该命令
+    /// 返回**（Rust attrs 已去掉磁盘占用类字段），文档大小的 AFC 兜底实现虽在
+    /// （`computeDocumentsSize` + 本文件的 `computeDocumentSizes()`），但**后者当前
+    /// 没有任何调用点**（死代码），要用得先接上.
     /// 看门狗 40 秒（= 增强 15s + 上下文 + 分批的余量），到期把占位收敛，不停在「识别中」.
     private func loadTypes(for list: [FileSharingApp]) {
         guard !list.isEmpty else {

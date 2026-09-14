@@ -134,33 +134,126 @@ enum FileSharingService {
 
     /// 列出全部已装应用并标 UIFileSharingEnabled.
     ///
-    /// **v0.3.378：主路径改回 `get_apps`（快路径）**.
+    /// **v0.3.378：主路径曾一度退回 `get_apps`（快路径）**.
     /// 证据（真机 16:29 日志）：3 次**并发**的带属性 Lookup 全部 20 秒一个字节不回
     ///（`[16:29:21.813 / :24.105 / :34.744] 开始读取` → `[16:29:41.889] 读取超时`），
     /// 而**同一次会话**里改用 `get_apps` + profile 的路径 **2.5 秒**就判完 333 个应用
     ///（16:29:41.895 → :44.395）——说明通道是好的，是 `Lookup` 这条命令卡死.
-    /// 因此首屏只依赖 `get_apps`；带属性 Lookup 降级为可选增强
-    /// `lookupAppAttributes(timeout:)`（独立 15 秒、失败就不补、绝不阻塞首屏）.
     ///
-    /// 代价（已知、可接受）：`get_apps` 不带 `StaticDiskUsage` / `DynamicDiskUsage` /
-    /// `iTunesMetadata` 这类「附加属性」字段 → 大小胶囊先显示「—」、账号胶囊先显示
-    /// 「-」，等可选增强回来再回填.
+    /// **v0.3.401：类型判定的主路径改回带属性 Lookup**
+    /// （见 `listAppsWithAttributesWithFallback(timeout:)`）—— 因为 `get_apps`
+    /// **不返回 `iTunesMetadata`**，购买邮箱恒空，**共享正版会被判成「苹果正版」**
+    /// （回归：`b2c310d` / v0.3.378；两板块共用同一输入与判定）。同时把
+    /// ReturnAttributes 收紧到类型判定必需字段（去掉磁盘占用类，Rust 侧见
+    /// installation_proxy.rs 的 `attrs` 常量），验证「卡死 = 逐 app 算磁盘占用」的假设.
+    ///
+    /// 本函数（**无属性** `get_apps`）随之降级为两处用途：
+    ///   - **小额度调用**的快路径（如 `IPADownloadActionsSheet` 的 5s 数据源）；
+    ///   - 带属性 Lookup 失败/超时后的**降级路径**（缺购买邮箱 → 类型显示「未识别」，
+    ///     不再误判成「苹果正版」，见 AppTypeDetector v0.3.401）.
     /// 同步阻塞——调用方放后台线程.
     static func listAppsWithFileSharing() throws -> [FileSharingApp] {
-        LoginLogger.shared.log("[文件共享] get_apps 快路径开始")
+        LoginLogger.shared.log("[文件共享] get_apps 快路径开始（不带 ReturnAttributes）")
         let apps = try legacyGetApps()
         let withMeta = apps.filter(\.isGenuine).count
         let withAccount = apps.filter { $0.appleId != nil }.count
-        let withSize = apps.filter { $0.appSize != nil }.count
         LoginLogger.shared.log(
             "[文件共享] get_apps 快路径返回 \(apps.count) 条"
-            + "（带 iTunesMetadata \(withMeta) / 带账号邮箱 \(withAccount) / 带大小 \(withSize)）"
+            + "（带 iTunesMetadata \(withMeta) / 带购买邮箱 \(withAccount)）"
         )
         return apps
     }
 
-    /// v0.3.378：**可选后台增强** —— 带属性 `Lookup`，补 appSize / docSize /
-    /// appleId / isGenuine（这些字段只有带 ReturnAttributes 的 Lookup 才返回）.
+    /// v0.3.401：**类型判定主路径** —— 先带属性 Lookup（购买邮箱
+    /// `iTunesMetadata.appleId` 的**唯一**来源），取不到再降级到无属性 `get_apps`。
+    /// 两层都在：带属性走单飞+短期缓存（见 AttributeLookupCenter）、失败/超时降级，
+    /// 整条链路由外层 `listAppsWithFileSharing(timeout:)` 的硬超时兜底.
+    ///
+    /// 为什么「去掉磁盘占用字段」有机会救回来（**待真机验证的假设**）：
+    /// `StaticDiskUsage` / `DynamicDiskUsage` 会让 installd 对**每个**已装应用走一遍
+    /// bundle / 数据容器目录树（后者要遍历 GB 级数据容器），是这条命令最贵的部分；
+    /// 类型判定只需要 `iTunesMetadata` + 基础标识字段。真机跑一次看日志里的
+    /// **实际执行 X.Xs** 是否从 20s+ 掉到可接受，即完成验证（日志见本函数内）.
+    ///
+    /// 额度自适应：`timeout` 是外层给这条链路的总额度，这里给带属性 Lookup 留
+    /// `timeout - 5`（真机 `get_apps` 2.5s 级，留 5s 足够降级跑完并把列表交回），
+    /// 上限 `attributeLookupBudget`；**额度 < 10s 的调用直接用 `get_apps`**——
+    /// 带属性 Lookup 跑不进那么短，只会白留一条僵尸命令、还会把随后几次调用推进静默期.
+    private static func listAppsWithAttributesWithFallback(timeout: TimeInterval) throws -> [FileSharingApp] {
+        if timeout < 10 {
+            LoginLogger.shared.log(
+                "[文件共享] 额度 \(formatSeconds(timeout))s < 10s：直接用 get_apps 快路径"
+                + "（不发起带属性 Lookup）"
+            )
+            return try listAppsWithFileSharing()
+        }
+        let budget = max(2, min(attributeLookupBudget, timeout - 5))
+        let startedAt = Date()
+        LoginLogger.shared.log(
+            "[文件共享] 主路径：带属性 Lookup（请求字段："
+            + attributeRequestFields.joined(separator: " / ")
+            + "；额度 \(formatSeconds(budget))s）"
+        )
+        let (outcome, note) = AttributeLookupCenter.shared.run(
+            timeout: budget,
+            label: "带属性 Lookup（主路径）"
+        ) {
+            do {
+                return .ok(try lookupAppsWithAttributes())
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        }
+        if case .ok(let apps) = outcome, !apps.isEmpty {
+            let withMeta = apps.filter(\.isGenuine).count
+            let withAccount = apps.filter { $0.appleId != nil }.count
+            LoginLogger.shared.log(
+                "[文件共享] 主路径返回 \(apps.count) 条"
+                + "（带 iTunesMetadata \(withMeta) / 带购买邮箱 \(withAccount)）"
+                + "，端到端 \(formatSeconds(Date().timeIntervalSince(startedAt)))s（\(note)）"
+            )
+            return apps
+        }
+        LoginLogger.shared.log(
+            "[文件共享] 主路径未取到（\(note)）→ 降级 get_apps；购买邮箱缺失，"
+            + "类型判定将显示「未识别」而不是「苹果正版」（v0.3.401 A）"
+        )
+        let apps = try listAppsWithFileSharing()
+        LoginLogger.shared.log(
+            "[文件共享] 降级 get_apps 返回 \(apps.count) 条，端到端 "
+            + "\(formatSeconds(Date().timeIntervalSince(startedAt)))s"
+        )
+        return apps
+    }
+
+    /// v0.3.401：带属性 Lookup **实际请求**的字段（日志用）。必须与 Rust
+    /// `rust/idevice-ffi/src/installation_proxy.rs` 的 `attrs` 常量逐条一致——
+    /// 改一处务必改另一处，否则日志会骗人.
+    private static let attributeRequestFields = [
+        "CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
+        "CFBundleShortVersionString", "ApplicationType", "UIFileSharingEnabled",
+        "Path", "iTunesMetadata", "ApplicationDSID", "SignerIdentity",
+    ]
+
+    /// v0.3.401：带属性 Lookup 的执行额度上限（秒）——主路径与可选增强
+    /// `lookupAppAttributes(timeout:)` 共用同一个值（它们现在共享同一条单飞命令，
+    /// 增强通常会命中 12s 缓存而不另发命令）. 与 `lookupAppAttributes` 的默认参数
+    /// （15）必须一致，否则日志里的「额度」与实际不符.
+    private static let attributeLookupBudget: TimeInterval = 15
+
+    /// v0.3.378：**带属性 `Lookup`** —— `iTunesMetadata`（appleId / isGenuine）与
+    /// 大小字段的唯一来源（这些字段只有带 ReturnAttributes 的 Lookup 才返回）.
+    ///
+    /// v0.3.401：**它已不是「可选增强」，而是主路径的同一条命令**——
+    /// `listAppsWithFileSharing(timeout:)` 现在先走带属性 Lookup（主路径），
+    /// 因此本函数在那一轮加载里通常**命中 12s 缓存**（单飞复用，不另发命令），
+    /// 返回与主路径完全相同的列表；三处消费方（文档浏览 / 应用管理 / 设备瘦身）
+    /// 的「第二版精修」因此变成幂等回填，保留它是为了兼容调用方签名与
+    /// 「主路径未取到、稍后又自愈」的窗口.
+    /// ⚠️ 大小字段自 v0.3.401 起**不再由这条命令返回**（Rust attrs 已收紧），
+    /// 所以这里补不回 appSize/docSize。文档大小本有 AFC 兜底实现
+    /// （`computeDocumentsSize`），但其调用点 `FileSharingAppsView.computeDocumentSizes()`
+    /// **当前是死代码**；应用大小在 iOS 侧没有 AFC 等价通道（house_arrest 只到数据容器）.
     ///
     /// 独立超时、失败或超时**返回空数组**（字段保持「—」）；调用方必须在首屏渲染
     /// 之后调用，且不得因它失败而回退/清空主列表.
@@ -456,9 +549,16 @@ enum FileSharingService {
     ///
     /// 超时返回 `.timedOut`（**不是**空数组），调用方据此给提示/降级，绝不无限等待.
     /// 被放弃的那次 FFI 调用仍在后台线程上跑（FFI 无法取消），只是不再阻塞调用方.
+    ///
+    /// v0.3.401：本函数是**两个板块共用的唯一入口**，内部顺序为
+    /// 「带属性 Lookup（买邮箱）→ 失败/超时降级 get_apps」（见
+    /// `listAppsWithAttributesWithFallback(timeout:)`）；`workTimeout` 是这条链路的
+    /// **总额度**，带属性 Lookup 的额度在内部按它自适应 . 这里的 20s 排队额度不变.
     static func listAppsWithFileSharing(timeout: TimeInterval) -> FileSharingListOutcome {
-        runGated(queueTimeout: 20, workTimeout: timeout, label: "get_apps 快路径") {
-            try listAppsWithFileSharing()
+        runGated(queueTimeout: 20,
+                 workTimeout: timeout,
+                 label: "列表读取（带属性 Lookup → get_apps 降级）") {
+            try listAppsWithAttributesWithFallback(timeout: timeout)
         }
     }
 
@@ -605,10 +705,11 @@ enum FileSharingService {
     /// GET_APPS_ADDITIONAL_INFO）。Rust 侧一次请求取全部字段并以 bplist 字节回传，
     /// Swift 侧完全不碰 plist_t 指针（照抄 get_apps 的 void** 出参模式）。
     ///
-    /// **v0.3.378：不再是主路径**，只作可选增强（`lookupAppAttributes(timeout:)`）.
-    /// 真机 16:29 日志实证该命令会 20 秒无响应（3 次并发全挂），主路径已改回
-    /// `get_apps`（`legacyGetApps()`）。此函数保留是因为它是大小/账号字段的**唯一**
-    /// 来源；一旦设备侧恢复正常，增强会自动回填，无需再改代码.
+    /// **v0.3.378：曾降级为可选增强；v0.3.401 起重新是「类型判定主路径」**
+    /// （由 `listAppsWithAttributesWithFallback` 调用，额度自适应、失败由外层降级
+    /// 到 `get_apps`）。此函数是购买邮箱 / 大小字段的**唯一**来源；v0.3.401 起
+    /// ReturnAttributes 已收紧到类型判定必需字段（Rust 侧 `attrs` 常量），
+    /// 因此它**不再返回** `StaticDiskUsage` / `DynamicDiskUsage` / `CFBundleSize`.
     private static func lookupAppsWithAttributes() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
@@ -706,9 +807,11 @@ enum FileSharingService {
         )
     }
 
-    /// `installation_proxy_get_apps`（不带 ReturnAttributes）——**v0.3.378 起是主路径**
-    /// （与 AppDiscovery/TunnelContext.getAllAppsInfo 同一条命令，真机 333 应用实测
-    /// 2.5 秒级可用；大小/账号等附加属性由 `lookupAppAttributes` 可选回填）.
+    /// `installation_proxy_get_apps`（**不带** ReturnAttributes）——v0.3.378~400 曾是主路径；
+    /// **v0.3.401 起是「小额度快路径 + 主路径降级」**（见
+    /// `listAppsWithAttributesWithFallback`）：与 AppDiscovery/TunnelContext.getAllAppsInfo
+    /// 同一条命令，真机 333 应用实测 2.5 秒级可用，但**不返回 `iTunesMetadata`**
+    /// （购买邮箱 / 正版存在性因此缺失 → 类型判定显示「未识别」，不再误判）.
     /// 命名沿用历史（它曾是 Lookup 失败时的回退）.
     private static func legacyGetApps() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()

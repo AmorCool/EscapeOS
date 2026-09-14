@@ -1,5 +1,87 @@
 # Changelog
 
+## [0.3.402] - 2026-09-14
+
+### 修复（AppleID 商店点下载要等好几秒才开始）
+用户原话：**「还有我发现 AppleID 商店下载应用好像得等好几秒之后才会下载 这个是不是哪个bug影响的」**
+
+**根因（代码定位，非猜测）**：`click → 第一次网络请求` 之间有一段**同步设备 IO**：
+`AppStoreLocalInstallService.downloadAndInstall` 调的 `LocalDeviceIdentity.apply()`
+会连建 **2 次 RSD 隧道**（`lockdownFullDict` 一次 + `com.apple.mobile.iTunes` 域一次），
+而建隧道是秒级操作（旁证：0.3.25x 变更日志「此前在主线程同步建隧道会冻住设置页数秒」）。
+用户看到的就是任务已入列「准备中 0%」、进度却几秒不动。
+
+**关键事实：这 2 次隧道换来的字段，在这条链路上没有任何消费者。**
+- `serialNumber` **不进任何请求** —— 三个请求构造器都写死 `"0"`
+  （`StoreDownloadEndpoint+Fetch.swift:290`、`VersionFinder.swift:158`、`VersionLookup.swift:146`；
+  v0.3.334 真机实测：带本机真序列号时 volumeStore 回空包、redownload 回 HTTP 500）。
+  它唯一的读者是 `Download.swift:123` 的一行日志。
+- `fairPlayCertificate` / `fairPlayDeviceType` **全工程只写不读**。
+
+**改动**
+- `LocalDeviceIdentity`：
+  - 加**进程内缓存**（`NSLock`），一个 App 生命周期只真正建一次隧道；新增
+    `cachedSnapshot()` / `cachedSerialNumber()` / `invalidate()` / `warmUpInBackground()`；
+  - **删掉第二次隧道**：不再读 `com.apple.mobile.iTunes` 域，连同那两个没人读的
+    FairPlay 字段一起删除；
+  - **改准顶部注释**：旧注释称"必须传本机真序列号，Apple 才能关联本机 FairPlay 证书、
+    生成可用 sinf"——该结论已被 v0.3.334 推翻并回退，现按代码事实重写（见文件头）。
+- `AppStoreLocalInstallService.downloadAndInstall`：不再同步等设备身份，
+  改为 `warmUpInBackground()`（后台预热，跑在等账号租约的那段时间里）+ 只读缓存。
+  `Configuration.deviceSerialNumber` 的赋值保留在 `applyIfCached()`：缓存热了才写，
+  且写在**下载任务自己**里（与 vendor 的读同任务有序，不引入跨线程写 `String` 全局量的竞争）。
+  **首次下载**那次的日志里 `serialNumber=` 会是默认 `0`（该字段不进请求，只影响可读性）。
+- 新增 `[计时]` 日志（`onLog`，落 `[下载中心]` 分类）：把三段耗时**分开**——
+  「点击→下载链路启动」「账号租约门等待」「设备身份步骤」，另外
+  `LocalDeviceIdentity` 内部会打一行「读设备身份耗时 Xms」，用于验证隧道真实开销。
+
+**未做（有意）**
+- 不动账号租约语义（已购 / 版本历史页靠它防 cookie 并发改写），
+  所以「下载可能排在那些页面的 metadata 请求后面」这一条**本版仍存在**；
+- 不改 `IPAFileDownloader` 的进度上报口径（首字节到达前显示 0% 属正常）。
+
+## [0.3.401] - 2026-09-14
+
+### 修复（回归：共享正版被显示成「苹果正版」）
+用户原话：**「我发现怎么文档浏览板块、应用管理板块的对共享正版的识别不到位
+的 怎么识别成苹果正版的 之前不是好好的吗」**
+
+**这是回归**，引入版本 **`b2c310d`（v0.3.378）**：当时为解决「带属性 Lookup 卡死
+20 秒」，把 instproxy 主数据源退回**不带 ReturnAttributes** 的 `get_apps` ——
+而 `get_apps` **不返回 `iTunesMetadata`**，于是购买邮箱（`appleId`）与正版存在性
+（`isGenuine`）恒空。`AppTypeDetector` 的判据 `hasITunesMetadata || 购买邮箱非空`
+两条输入都空 → 继续往下落 `.appStore` → 界面文案「苹果正版」，于是**共享正版被
+显示成苹果正版**。文档浏览与应用管理共用同一输入与判定，所以两个板块同时坏。
+（可选增强 `lookupAppAttributes(timeout: 15)` 本该补救，但它在真机 20s 卡死场景下
+必然超时返回空数组，永远补不上。）
+
+- **A（止血，提交 `d5b28a6`）** —— `AppTypeDetector.detect`：在「有元数据/有购买邮箱」
+  判据**之前**插入一条判据 —— **元数据没拿到（`hasITunesMetadata == false`）
+  且购买邮箱为空 且 `isFairPlayEncrypted == nil`（加密状态未知）⇒ `.unknown`（「未识别」）**。
+  真·正版不会被误伤（它有 iTunesMetadata，或有明确 `isFairPlayEncrypted == false`）；
+  **错标比不标更糟**：宁可「未识别」，也不能把共享正版显示成「苹果正版」。
+- **B（治本，本提交）** —— `FileSharingService` 的**类型判定主路径改回带属性 Lookup**
+  （购买邮箱的唯一来源），并把 ReturnAttributes **收紧到类型判定必需字段**：
+  去掉 `StaticDiskUsage` / `DynamicDiskUsage` / `CFBundleSize`
+  （`rust/idevice-ffi/src/installation_proxy.rs` 的 `attrs` 常量）。
+  假设：这三个字段让 installd 对**每个**已装应用走一遍 bundle / 数据容器目录树
+  （`DynamicDiskUsage` 要遍历 GB 级数据容器），是这条命令最贵的部分 —— 待真机日志
+  的「实际执行 X.Xs」验证。**保留两层降级**：带属性 Lookup 有额度（自适应、上限 15s）、
+  失败/超时仍退回 `get_apps`（此时缺购买邮箱 → 由 A 兜成「未识别」，不再误判）。
+  额度 < 10s 的调用（如 `IPADownloadActionsSheet` 的 5s 快路径数据源）直接用 `get_apps`。
+  新增日志：请求字段清单 + 端到端耗时 + 「带 iTunesMetadata / 带购买邮箱」条数。
+- **代价（已知，需产品确认）**：大小字段自本版起**不再由这条命令返回** ——
+  文档大小的 AFC 兜底实现虽在（`FileSharingService.computeDocumentsSize`），
+  但其调用点 `FileSharingAppsView.computeDocumentSizes()` **当前没有任何调用**
+  （死代码，要用得先接上）；**应用大小在 iOS 侧没有 AFC 等价通道**
+  （house_arrest 只到数据容器），应用大小胶囊会显示「—」，
+  需另开「按需大小查询」通道才能恢复。
+- **同时要盯的下游影响**：`DeviceSlimService` 的「应用」分片与「较大应用」分组
+  依赖 `appSize + docSize`（两者都没有时会跳过全部应用 → 分组为空），而它的
+  `sizeComplete` 是按「增强回填了几条」判定的（`DeviceSlimService.swift:334`），
+  在大小字段缺失时仍会是 `true` → 页面**不会**给出「应用大小不可用」的说明。
+  该文件不在本次授权范围内，故未改动：建议随后把判定改为「是否真的拿到大小」。
+
 ## [0.3.400] - 2026-09-14
 
 ### 修复（v0.3.399 的编译错误）

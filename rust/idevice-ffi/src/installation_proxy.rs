@@ -733,12 +733,23 @@ pub unsafe extern "C" fn installation_proxy_archive(
     }
 }
 
-/// v0.3.284：instproxy **Lookup**（带 ReturnAttributes）——一次请求拿全部字段：
-/// 基础信息 + StaticDiskUsage/DynamicDiskUsage（大小）+ Entitlements + iTunesMetadata。
+/// v0.3.284：instproxy **Lookup**（带 ReturnAttributes）——只请求
+/// `FileSharingService.parseAppDict` 真正消费的字段。
 ///
-/// 关键：大小字段只在 **Lookup** 的 ReturnAttributes 里返回（pymobiledevice3
-/// installation.py 的 GET_APPS_ADDITIONAL_INFO 走 lookup，不走到 browse；
-/// v0.3.279~283 的 browse 通道因此拿不到大小，胶囊恒为「—」）。
+/// 关键：`iTunesMetadata`（购买邮箱 / 正版存在性的**唯一**来源）只有在带
+/// ReturnAttributes 的 Lookup 里才返回；无属性的 `get_apps` 不带它 —— 这正是
+/// v0.3.378 把主路径退回 `get_apps` 后「共享正版被判成苹果正版」的原因。
+///
+/// **v0.3.401：收紧到「类型判定必需」的字段**（去掉 StaticDiskUsage /
+/// DynamicDiskUsage / CFBundleSize）。假设（待真机验证）：这三个字段会让 installd
+/// 对**每个**已装应用走一遍 bundle / 数据容器目录树（`DynamicDiskUsage` 要遍历
+/// GB 级数据容器），是这条命令最贵的部分，也是 v0.3.378 之前「20 秒一个字节不回」的
+/// 重要成因之一。去掉后真机耗时若掉到可接受区间，即验证该假设。
+/// 代价：大小字段自此**不再由本命令返回**。文档大小的 AFC 兜底实现存在
+/// （Swift `FileSharingService.computeDocumentsSize`），但它的调用点
+/// `FileSharingAppsView.computeDocumentSizes()` 目前**没有任何调用**（死代码），
+/// 要用得先接上；应用大小在 iOS 侧没有 AFC 等价通道（house_arrest 只到数据容器），
+/// 需另开按需通道才能恢复。
 /// 结果以 binary plist 数组字节回传（调用方 idevice_data_free 释放）。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn installation_proxy_lookup_apps(
@@ -753,16 +764,19 @@ pub unsafe extern "C" fn installation_proxy_lookup_apps(
     let res: Result<Vec<u8>, IdeviceError> = run_sync_local(async {
         let client_ref = unsafe { &mut *client };
 
-        // v0.3.379（减设备侧开销）：ReturnAttributes 只保留 **Swift `parseAppDict`
-        // 真正消费**的字段。删掉的 `Entitlements` / `ApplicationMissingDSID` 是
-        // v0.3.291 顺手加的、但 `FileSharingService.parseAppDict` 从不解码这两个属性，
-        // 却让 installd 对**每个**已装应用多读一次 entitlements/DSID —— 纯设备开销、零收益
-        // （而该命令在本机对 333 个应用已经贵到接近超时额度）。
-        // **不许删**：StaticDiskUsage / DynamicDiskUsage（应用/文档大小胶囊的唯一来源）、
-        // iTunesMetadata（账号/正版存在性的唯一来源）、ApplicationDSID / SignerIdentity /
-        // CFBundleSize / Path / CFBundleIdentifier / CFBundleDisplayName / CFBundleName /
-        // CFBundleShortVersionString / ApplicationType / UIFileSharingEnabled.
-        let attrs = "<string>CFBundleIdentifier</string>                     <string>CFBundleDisplayName</string>                     <string>CFBundleName</string>                     <string>CFBundleShortVersionString</string>                     <string>ApplicationType</string>                     <string>UIFileSharingEnabled</string>                     <string>Path</string>                     <string>StaticDiskUsage</string>                     <string>DynamicDiskUsage</string>                     <string>iTunesMetadata</string>                     <string>CFBundleSize</string>                     <string>ApplicationDSID</string>                     <string>SignerIdentity</string>";
+        // v0.3.401（回归修复）：ReturnAttributes 收紧到**类型判定必需**的字段。
+        // 删掉 StaticDiskUsage / DynamicDiskUsage / CFBundleSize —— 假设（待真机验证）：
+        // 这三个会让 installd 对**每个**已装应用走一遍 bundle/数据容器目录树
+        //（DynamicDiskUsage 要遍历 GB 级数据容器），是本命令最贵的部分，也是 v0.3.378
+        // 之前「20 秒一个字节不回」的重要成因之一。
+        // **必须保留**：iTunesMetadata（购买邮箱/正版存在性的唯一来源 —— 共享正版
+        // 判定靠它）、ApplicationType（HiddenSystemApp/User 分流）、UIFileSharingEnabled
+        //（是否开启文件共享）、以及基础标识字段（CFBundleIdentifier / CFBundleDisplayName
+        // / CFBundleName / CFBundleShortVersionString / Path）、ApplicationDSID /
+        // SignerIdentity（Swift 侧解析这两个字段，读它们是零成本的、已随 dict 返回）。
+        // ⚠️ 与 Swift 侧日志字段表 `FileSharingService.attributeRequestFields` 必须一致：
+        //    改这里就同步改那里，否则日志会骗人。
+        let attrs = "<string>CFBundleIdentifier</string><string>CFBundleDisplayName</string><string>CFBundleName</string><string>CFBundleShortVersionString</string><string>ApplicationType</string><string>UIFileSharingEnabled</string><string>Path</string><string>iTunesMetadata</string><string>ApplicationDSID</string><string>SignerIdentity</string>";
 
         let mut xml = String::new();
         xml.push_str(crate::mcinstall::PLIST_HEADER);
