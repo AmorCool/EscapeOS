@@ -19,6 +19,18 @@ struct SSHDebugView: View {
     /// 那种占位文案不能拼进 ssh 命令里（v0.3.404 加「局域网」那条命令时用）。
     private var hasLAN: Bool { service.lanIP.split(separator: ".").count == 4 }
 
+    /// v0.3.405：固定主机名那条命令（`<设备名>.local`，局域网 IP 变了也能连）。
+    /// 设备名取不到 → 返回 nil，界面**整行不显示**，不显示半截命令。
+    /// 主机名里有空格时 shell 会把它拆成两个参数 → 换 `-l` 形式并给主机名加引号。
+    private var mdnsCommand: String? {
+        let label = service.mdnsHostLabel
+        guard !label.isEmpty else { return nil }
+        if label.range(of: " ") != nil {
+            return "ssh -l \(service.username) \"\(label).local\" -p \(service.port)"
+        }
+        return "ssh \(service.username)@\(label).local -p \(service.port)"
+    }
+
     var body: some View {
         List {
             if !service.hasSetPassword {
@@ -170,7 +182,7 @@ struct SSHDebugView: View {
                         .font(.body.monospaced())
                         .textSelection(.enabled)
                 }
-                // v0.3.404：并列显示两条连接命令。
+                // v0.3.404：并列显示连接命令。
                 // 「本机」这条是用户点名要的固定地址（`127.0.0.1` 是设备自己的回环地址，
                 // 只能设备自身连；服务端仍监听 0.0.0.0，局域网那条不受影响）。
                 HStack {
@@ -191,12 +203,25 @@ struct SSHDebugView: View {
                             .textSelection(.enabled)
                     }
                 }
+                // v0.3.405：固定主机名 —— 设备自带的 Bonjour 名字，局域网 IP 变了也照连。
+                // 「需 Bonjour」写在标签里（电脑侧要有 Bonjour 客户端才解析得了 `.local`）。
+                if let mdns = mdnsCommand {
+                    HStack {
+                        Text("固定主机名（需 Bonjour）")
+                        Spacer()
+                        Text(mdns)
+                            .foregroundColor(.secondary)
+                            .font(.system(.footnote, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                }
             } header: {
                 Text("连接信息")
             }
 
             Section {
-                Label("受限 shell：不执行系统命令，只应答内置诊断命令（status/logs/modules/ip/uptime/ping）", systemImage: "lock.shield")
+                // v0.3.405：不再在文案里枚举命令（加一条就得改一次，迟早写歪）；`help` 里是全的
+                Label("受限 shell：只应答内置诊断命令（help 查看全部）", systemImage: "lock.shield")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                 Label("需电脑与手机在同一 Wi-Fi；首次连接触发本地网络权限弹窗，请允许", systemImage: "wifi")

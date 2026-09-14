@@ -247,12 +247,50 @@ final class SSHServerService: NSObject, ObservableObject {
     func refreshNetworkInfo() {
         let ip = Self.detectLANIP() ?? "未连接 Wi-Fi"
         DispatchQueue.main.async { self.lanIP = ip }
+        // v0.3.405：把固定主机名一并写进日志 —— 正在排查"连不上"的时候，
+        // 只看界面是拿不到这个值的（要拿到就得先连上），所以落一行「通用」日志更实用。
+        let label = Self.hostLabel(ProcessInfo.processInfo.hostName)
+        let shown = label.isEmpty ? "（未获取到）" : label + ".local"
+        LoginLogger.shared.log("[SSH] 局域网 IP=\(ip) 固定主机名=\(shown)")
     }
 
     // MARK: 连接信息
 
     var connectHint: String {
         "ssh \(username)@\(lanIP) -p \(port)"
+    }
+
+    /// v0.3.405：**固定主机名**（Bonjour/mDNS）—— 设备自带 `<名字>.local` 这个名字，
+    /// 系统级 Bonjour 已经在广播，**不需要我们自己起 `NWListener.Service`**，
+    /// 所以它能当"局域网 IP 变了"的备用入口。
+    ///
+    /// 取的是 `ProcessInfo.hostName`（= 系统主机名，空格/非法字符已被系统换成 `-`，
+    /// 能直接放进命令行），取不到再退 `UIDevice.current.name`。
+    /// 注意：iOS 16 起没有对应 entitlement 时 `UIDevice.name` 只返回机型名（"iPhone"），
+    /// 所以它只作兜底；空串表示两边都没拿到 → 界面整行不显示。
+    var mdnsHostLabel: String {
+        let host = Self.hostLabel(ProcessInfo.processInfo.hostName)
+        return host.isEmpty ? Self.hostLabel(UIDevice.current.name) : host
+    }
+
+    /// 去掉结尾的 `.local`；空 / 明显不能当名字用的（`localhost` 之类）→ 空串
+    static func hostLabel(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasSuffix(".local") { s = String(s.dropLast(6)) }
+        let lower = s.lowercased()
+        if lower.isEmpty || lower == "localhost" || lower == "localhost.localdomain" { return "" }
+        return s
+    }
+
+    /// `hostname` 命令的输出：把两个来源都列出来，电脑侧一条命令就能核对哪个名字真能解析
+    static func hostNameReport() -> String {
+        let device = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawHost = ProcessInfo.processInfo.hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = hostLabel(rawHost).isEmpty ? hostLabel(device) : hostLabel(rawHost)
+        var lines = ["设备名: \(device.isEmpty ? "（未获取到）" : device)"]
+        lines.append("主机名: \(rawHost.isEmpty ? "（未获取到）" : rawHost)")
+        lines.append(label.isEmpty ? "固定主机名: （未获取到）" : "固定主机名: \(label).local")
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -556,6 +594,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             return "Lua 返回码: \(ret)\n结果: \(result)"
         case "ip":
             return SSHServerService.detectLANIP() ?? "未获取到局域网 IP"
+        case "hostname":
+            return Self.hostNameReport()
         case "ping":
             return "pong"
         case "uptime":
@@ -583,6 +623,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       ls [路径]       浏览 Documents 目录（相对路径）
       cat <文件>      查看 Documents 内文本文件（≤256KB）
       ip              局域网 IP
+      hostname        设备名 / 固定主机名（.local）
       uptime          PiP 运行时长
       ping            连通性测试
       help            本帮助
