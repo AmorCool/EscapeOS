@@ -121,10 +121,12 @@ struct AppStoreDetailView: View {
             InAppBrowserView(title: target.title, url: target.url)
         }
         .fullScreenCover(item: Binding(
-            get: { viewerIndex.map { ScreenshotTarget(index: $0) } },
+            get: { viewerIndex.map { ImagePreviewTarget(index: $0) } },
             set: { viewerIndex = $0?.index }
         )) { target in
-            AppStoreScreenshotViewer(urls: item.screenshots, startIndex: target.index)
+            // v0.3.399：预览组件已搬去 `ImagePreviewSupport.swift`（`ImageGalleryViewer`），
+            // 与爱思源详情页共用同一套 —— 这里只是换个名字，行为一字未改。
+            ImageGalleryViewer(urls: item.screenshots, startIndex: target.index)
         }
         .toastHost()
         .task { await loadDetail() }
@@ -546,28 +548,12 @@ struct AppStoreDetailView: View {
     }
 
     /// 长按菜单里的「提取图标」
+    ///
+    /// v0.3.399：实现抽到 `IconExporter`（`ImagePreviewSupport.swift`），
+    /// 爱思源的行长按菜单走**同一个**函数 —— 不再各写一份下载/保存逻辑。
     private func extractIcon() {
-        let raw = item.iconURL ?? item.iconSmallURL ?? ""
-        guard !raw.isEmpty else {
-            ToastCenter.shared.show("没有可提取的图标")
-            return
-        }
-        ToastCenter.shared.show("正在提取图标…")
-        Task {
-            do {
-                let image = try await MediaSaver.downloadImage(raw.appStoreHighResImage)
-                let outcome = try await MediaSaver.save(image,
-                                                        fileName: "\(item.bundleId ?? item.id)-icon")
-                await MainActor.run {
-                    switch outcome {
-                    case .photos: ToastCenter.shared.show("图标已存到相册")
-                    case .files(let name): ToastCenter.shared.show("已存到文件 App：AppIcons/\(name)")
-                    }
-                }
-            } catch {
-                await MainActor.run { ToastCenter.shared.show("提取失败：\(error.localizedDescription)") }
-            }
-        }
+        IconExporter.save(iconURL: item.iconURL ?? item.iconSmallURL,
+                          fileNameBase: "\(item.bundleId ?? item.id)-icon")
     }
 
     /// 进入详情时：Lookup 补全字段（预览图 / 大小 / 版本 / 兼容性…都来自这里），
@@ -603,11 +589,6 @@ struct AppStoreDetailView: View {
         out.dateFormat = "yyyy-MM-dd"
         return out.string(from: d)
     }
-}
-
-private struct ScreenshotTarget: Identifiable {
-    let index: Int
-    var id: Int { index }
 }
 
 // MARK: - 安装方式选择（爱思那条弹窗的加强版）
@@ -728,78 +709,6 @@ struct AppleIDPickerSheet: View {
             }
         }
         .onAppear { accounts = AppStoreDownloadStore.shared.usableAccounts }
-    }
-}
-
-// MARK: - 预览浏览器（左右滑动 / 长按确认后保存）
-
-struct AppStoreScreenshotViewer: View {
-    let urls: [String]
-    @State var startIndex: Int
-    @Environment(\.dismiss) private var dismiss
-    @State private var current: Int = 0
-    @State private var confirmSave = false
-    @State private var pendingURL: String?
-
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            TabView(selection: $current) {
-                ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
-                    AsyncImage(url: URL(string: url.appStoreHighResImage)) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().scaledToFit()
-                        case .failure:
-                            Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.4))
-                        default:
-                            ProgressView().tint(.white)
-                        }
-                    }
-                    .tag(index)
-                    .onLongPressGesture(minimumDuration: 0.4) {
-                        pendingURL = url
-                        confirmSave = true
-                    }
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            .indexViewStyle(.page(backgroundDisplayMode: .interactive))
-        }
-        .overlay(alignment: .topTrailing) {
-            Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(16)
-            }
-        }
-        .confirmationDialog("保存这张图片？", isPresented: $confirmSave, titleVisibility: .visible) {
-            Button("保存到相册") { savePending() }
-            Button("取消", role: .cancel) { pendingURL = nil }
-        }
-        .toastHost()
-        .onAppear { current = min(max(0, startIndex), max(0, urls.count - 1)) }
-    }
-
-    private func savePending() {
-        guard let url = pendingURL else { return }
-        pendingURL = nil
-        ToastCenter.shared.show("正在保存…")
-        Task {
-            do {
-                let image = try await MediaSaver.downloadImage(url.appStoreHighResImage)
-                let outcome = try await MediaSaver.save(image, fileName: "screenshot-\(current + 1)")
-                await MainActor.run {
-                    switch outcome {
-                    case .photos: ToastCenter.shared.show("已保存到相册")
-                    case .files(let name): ToastCenter.shared.show("已存到文件 App：AppIcons/\(name)")
-                    }
-                }
-            } catch {
-                await MainActor.run { ToastCenter.shared.show("保存失败：\(error.localizedDescription)") }
-            }
-        }
     }
 }
 

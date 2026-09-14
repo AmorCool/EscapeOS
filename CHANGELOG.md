@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.399] - 2026-09-14
+
+### 新增（长按菜单 / 图标提取 / 截图预览与保存）
+用户原话：**「还有爱思源没有长按弹出选择提取图标、查看图标的功能
+默认主页的 AppleID 商店也没有长按弹出选择查看图片的功能
+还有爱思源的图片预览 也就是截图板块不能像 AppleID 商店进入 app 详情点图片预览和长按弹出选择下载图片的功能」**
+
+- **① 免登录商店（爱思 / 牛蛙）列表行长按 →「查看图标 / 提取图标」**（`I4StoreFreeView`）：
+  爱思行挂在 `NavigationLink` 上（与 AppleID 商店列表同一个长按位置），牛蛙行挂在左侧信息块上；
+  两行共用同一个 `iconMenu(_:fileNameBase:)`，菜单内容只写一份。
+- **② AppleID 商店列表行长按 →「查看图片」**（`AppStoreView`）：
+  榜单行与搜索结果行共用 `storeRow(_:rank:)`，避免两处各挂一份一模一样的 `contextMenu`。
+  榜单走官方 RSS（`parseRSSEntry` **不解析截图**），所以长按时按 `id` 补一次 `lookup` 取图；
+  搜索结果（`parseSearchItem`）自带截图，直接开预览、不发请求。
+- **③ 免登录商店详情页截图板块 → 点图预览 + 长按保存**（`I4StoreFreeDetailView`）：
+  缩略图改为可点，点开走与 AppleID 详情页**完全同一套** `ImageGalleryViewer`，
+  长按存图因此不必另写。缩略图尺寸 / 圆角保持原样，只加交互。
+- **共用组件抽取**（新增 `EscapeOS/Views/ImagePreviewSupport.swift`，全工程仅此一个新文件）：
+  - `ImageGalleryViewer`：由 `AppStoreDetailView` 里的 `AppStoreScreenshotViewer` **原样搬出改名**
+    （实现未改），供三个调用点共用；
+  - `ImagePreviewTarget`：`.fullScreenCover(item:)` 的 `Identifiable` 包装（原私有 `ScreenshotTarget`）；
+  - `IconExporter.save(iconURL:fileNameBase:)`：由 `AppStoreDetailView.extractIcon()` 抽出，
+    爱思源与 AppleID 商店的长按「提取图标」**同一份实现**，不做第二套。
+
 ## [0.3.398] - 2026-09-14
 
 ### 修复（下载中心的暂停 / 继续 / 失败三件事）

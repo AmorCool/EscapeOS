@@ -24,6 +24,14 @@ struct AppStoreView: View {
     @State private var accountTarget: AppStoreItem?
     @ObservedObject private var center = IPADownloadCenter.shared
 
+    /// v0.3.399：列表行**长按 →「查看图片」**用的全屏预览。
+    ///
+    /// 为什么还要 `previewImages` 这份数组：榜单走的是 RSS（`parseRSSEntry`），
+    /// 服务端**根本不返回截图**，所以列表项自己的 `screenshots` 恒为空
+    /// → 长按时先按 id 取一次 Lookup 拿图，再开预览（详见 `openImagePreview(for:)`）。
+    @State private var previewImages: [String] = []
+    @State private var previewTarget: ImagePreviewTarget?
+
     /// 实际生效的区域码（`"auto"` 在此解析成账号区）—— 用于标题文案
     private var resolvedCode: String { AppStoreService.resolveRegion(shopRegion) }
 
@@ -188,6 +196,10 @@ struct AppStoreView: View {
             }
             .presentationDetents([.medium])
         }
+        // v0.3.399：列表行长按「查看图片」→ 与详情页/爱思源**同一套**预览组件
+        .fullScreenCover(item: $previewTarget) { target in
+            ImageGalleryViewer(urls: previewImages, startIndex: target.index)
+        }
         .overlay {
             if showDisclaimer {
                 AppStoreDisclaimerView(
@@ -313,11 +325,7 @@ struct AppStoreView: View {
         } else {
             Section {
                 ForEach(Array(items.enumerated()), id: \.element.id) { idx, app in
-                    NavigationLink {
-                        AppStoreDetailView(item: app)
-                    } label: {
-                        appRow(app, rank: idx + 1)
-                    }
+                    storeRow(app, rank: idx + 1)
                 }
             } header: {
                 Text("\(regionTitle) · \(genre.title) · \(kind.title) · 共 \(items.count) 款")
@@ -340,17 +348,56 @@ struct AppStoreView: View {
         } else {
             Section("\(regionTitle) 搜索结果 · \(searchResults.count) 款") {
                 ForEach(searchResults) { app in
-                    NavigationLink {
-                        AppStoreDetailView(item: app)
-                    } label: {
-                        appRow(app, rank: nil)
-                    }
+                    storeRow(app, rank: nil)
                 }
             }
         }
     }
 
     // MARK: 行
+
+    /// v0.3.399：榜单行 / 搜索结果行**共用**的行壳 —— 点进详情 + 长按菜单「查看图片」。
+    /// 抽出来只是为了让两处不要各挂一份一模一样的 `contextMenu`（菜单只有一项，别再复制）。
+    private func storeRow(_ app: AppStoreItem, rank: Int?) -> some View {
+        NavigationLink {
+            AppStoreDetailView(item: app)
+        } label: {
+            appRow(app, rank: rank)
+        }
+        .contextMenu {
+            Button {
+                openImagePreview(for: app)
+            } label: {
+                Label("查看图片", systemImage: "photo.on.rectangle")
+            }
+        }
+    }
+
+    /// v0.3.399：列表长按「查看图片」→ 全屏预览（图 = 详情页那组截图）。
+    ///
+    /// 为什么要按 id 再查一次：榜单走官方 RSS，`parseRSSEntry` **不解析 `screenshotUrls`**，
+    /// 所以榜单项的 `screenshots` 恒定为空；搜索结果来自 `search`（`parseSearchItem`）自带截图，
+    /// 这时就不再发网络请求。查不到图只提示一句，不开空预览。
+    ///
+    /// 函数名没叫 `previewImages`：那会和上面同名的 `@State previewImages` 撞在一起（同一个类型里
+    /// 属性与函数同名容易读错），改叫 `openImagePreview` 更明确。
+    private func openImagePreview(for app: AppStoreItem) {
+        if !app.screenshots.isEmpty {
+            previewImages = app.screenshots
+            previewTarget = ImagePreviewTarget(index: 0)
+            return
+        }
+        ToastCenter.shared.show("正在获取图片")
+        Task {
+            let shots = (try? await AppStoreService.lookup(id: app.id))?.screenshots ?? []
+            guard !shots.isEmpty else {
+                ToastCenter.shared.show("该应用没有可查看的图片")
+                return
+            }
+            previewImages = shots
+            previewTarget = ImagePreviewTarget(index: 0)
+        }
+    }
 
     private func appRow(_ app: AppStoreItem, rank: Int?) -> some View {
         HStack(spacing: 12) {

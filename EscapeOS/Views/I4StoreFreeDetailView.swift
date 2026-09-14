@@ -17,6 +17,10 @@ struct I4StoreFreeDetailView: View {
     @State private var showAllVersions = false
     @ObservedObject private var center = IPADownloadCenter.shared
 
+    /// v0.3.399：点截图 → 全屏预览（**复用** AppleID 详情页那套 `ImageGalleryViewer`，
+    /// 长按存图是它自带的行为，不在爱思侧另写一套）。
+    @State private var viewerTarget: ImagePreviewTarget?
+
     /// 历史版本默认只露前 8 个，其余点「查看全部」
     private let versionPageSize = 8
 
@@ -58,6 +62,9 @@ struct I4StoreFreeDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(item: $viewerTarget) { target in
+            ImageGalleryViewer(urls: detail?.screenshots ?? [], startIndex: target.index)
+        }
         .toastHost()
         .task { await load() }
     }
@@ -169,15 +176,22 @@ struct I4StoreFreeDetailView: View {
             Section("截图") {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
-                        ForEach(d.screenshots, id: \.self) { url in
-                            AsyncImage(url: URL(string: url)) { phase in
-                                switch phase {
-                                case .success(let img): img.resizable().scaledToFit()
-                                default: Color(.secondarySystemBackground)
+                        ForEach(Array(d.screenshots.enumerated()), id: \.offset) { index, url in
+                            // v0.3.399：对齐 AppleID 详情页 —— 点开全屏预览（进去后长按即可保存）。
+                            // 图片尺寸 / 圆角保持原样，只加交互。
+                            Button {
+                                viewerTarget = ImagePreviewTarget(index: index)
+                            } label: {
+                                AsyncImage(url: URL(string: url)) { phase in
+                                    switch phase {
+                                    case .success(let img): img.resizable().scaledToFit()
+                                    default: Color(.secondarySystemBackground)
+                                    }
                                 }
+                                .frame(height: 220)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
-                            .frame(height: 220)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.vertical, 4)

@@ -41,6 +41,13 @@ struct I4StoreFreeView: View {
     /// 统一下载中心（免登录源与 Apple ID 共用）
     @ObservedObject private var center = IPADownloadCenter.shared
 
+    /// v0.3.399：行长按「查看图标」的全屏预览。
+    ///
+    /// **复用** AppleID 商店详情页那套 `ImageGalleryViewer`（同一个类型，见 `ImagePreviewSupport.swift`），
+    /// 不在这里另写一个只显示一张图的查看器 —— 长按存图也因此白得。
+    @State private var previewImages: [String] = []
+    @State private var previewTarget: ImagePreviewTarget?
+
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
     /// v0.3.382：搜索框提示随来源变（牛蛙要多说一句区域）
@@ -87,6 +94,9 @@ struct I4StoreFreeView: View {
             }
         }
         .toastHost()
+        .fullScreenCover(item: $previewTarget) { target in
+            ImageGalleryViewer(urls: previewImages, startIndex: target.index)
+        }
         .task {
             downloadedCount = IPADownloadLibrary.shared.items().count
             if apps.isEmpty { await load() }
@@ -274,10 +284,44 @@ struct I4StoreFreeView: View {
                     Spacer(minLength: 6)
                 }
             }
+            // v0.3.399：长按左侧（图标 + 文案）弹「查看图标 / 提取图标」，
+            // 与 AppleID 商店列表行的长按位置一致；右侧下载控件不受影响。
+            .contextMenu {
+                iconMenu(app.icon, fileNameBase: app.bundleId ?? app.name)
+            }
 
             trailingControl(app)
         }
         .padding(.vertical, 3)
+    }
+
+    /// v0.3.399：行**长按菜单** —— 爱思 / 牛蛙两行的内容**一字不差**，
+    /// 所以抽成一处（`I4App.icon` 与 `NiuwaApp.iconURL` 都是 `String?`，签名能直接对齐）。
+    /// 「查看图标」= 大图预览（走详情页那套 `ImageGalleryViewer`）；
+    /// 「提取图标」= `IconExporter`（与 AppleID 商店图标长按**同一份实现**）。
+    @ViewBuilder
+    private func iconMenu(_ iconURL: String?, fileNameBase: String) -> some View {
+        Button {
+            viewIcon(iconURL)
+        } label: {
+            Label("查看图标", systemImage: "photo")
+        }
+        Button {
+            IconExporter.save(iconURL: iconURL, fileNameBase: fileNameBase)
+        } label: {
+            Label("提取图标", systemImage: "square.and.arrow.down")
+        }
+    }
+
+    /// 图标只有一张 —— 仍然塞进同一个 `ImageGalleryViewer`（长按即可保存，行为和截图一致）
+    private func viewIcon(_ iconURL: String?) {
+        let raw = (iconURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else {
+            ToastCenter.shared.show("没有可查看的图标")
+            return
+        }
+        previewImages = [raw]
+        previewTarget = ImagePreviewTarget(index: 0)
     }
 
     @ViewBuilder
@@ -378,6 +422,11 @@ struct I4StoreFreeView: View {
                     }
                 }
                 Spacer(minLength: 6)
+            }
+            // v0.3.399：牛蛙源没有详情页，长按菜单只挂在左侧（图标 + 文案）这块，
+            // 菜单项与爱思行**共用** `iconMenu(_:fileNameBase:)`。
+            .contextMenu {
+                iconMenu(app.iconURL, fileNameBase: app.bundleId)
             }
 
             Button {
