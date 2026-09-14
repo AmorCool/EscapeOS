@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.3.408] - 2026-09-14
+
+### 修复（★ 预览/图标弹窗「没有可查看的图片」+ 不自动刷新、返回才刷新）
+用户原话：**「查看图标时会这样（全黑 + 『没有可查看的图片』）也不自动刷新加载 返回才刷新 而且也不是没有图标啊 是不是哪里有bug」**
+- **根因**：**图数组挂在了「页面」上，而弹窗从外部读它** ——
+  `previewImages = …` 与 `previewTarget = …` 是**两次独立的状态写入**，不保证落在同一事务；
+  而 `fullScreenCover(item:)` 的 content 是 **item 变非 nil 那一刻构建**的 →
+  先构建就读到**旧的空数组** → 显示「没有可查看的图片」；返回时视图重算才拿到新值。
+- **修法**：**把图数组放进 `ImagePreviewTarget` 自己身上**（弹窗构建时数据就是完整的）：
+  `struct ImagePreviewTarget { let index: Int; let urls: [String]; var id: String { "\(index)-\(urls.count)-\(urls.first ?? "")" } }`。
+  `id` 这样定有讲究：**只用 index** 会让图标预览（恒 0）与每组第 1 张撞 id；
+  **UUID** 则每次求值都变、item 还活着时会反复重弹；「下标+张数+首图」在一次展示内恒定、跨调用点够区分。
+  `showIconPreview` 撤掉 `images:` Binding（图标地址为空仍**只 toast**，行为未变）；`ImageGalleryViewer` 只读 `target.urls`。
+- 四处调用点全部改净（`viewerImages` / `previewImages` 的代码出现次数 → **0**，只剩注释说明「别再这么写」）。
+
+### 修复（★ 牛蛙源「第一次点必失败、重试几次才成功」）
+- **根因（硬结论）**：**请求路径上现场建 RSD 隧道**。
+  `NiuwaStoreClient.pubParams` 里 `pub_udid` 走 `LocalDeviceIdentity.load()`（冷缓存时真建隧道）、
+  `pub_system_version` 走 `DeviceInfoService.lockdownFullDict()`（**每次请求都建一次**，无进程内缓存）——
+  一次「获取」可能建**两趟**隧道；而建隧道时 `LocalDevVPN` 被重配，**这一发 HTTPS 会被顶掉** →
+  `URLSession` 直接抛错 → `.network` → 界面弹「获取安装包失败」。第二次点缓存/隧道已热 → 于是「重试几次就成功」。
+  这与 v0.3.402 已立过的规矩是同一个病：**关键路径上不得同步做设备 IO**（`LocalDeviceIdentity` 文件头就写着这句），牛蛙这条链漏了。
+- **修法**：① `pub_udid` **只吃缓存**，没有就后台预热 + 回落**持久化伪 UDID**（40 位 hex，只生成一次，保证同机稳定）；
+  ② `pub_system_version` 只吃缓存，冷时回落 `UIDevice.current.systemVersion`（纯本地读、零 IO）；
+  ③ 新增后台预热（幂等）与「UDID 来源」单行日志。
+- **重试只做一次，且只对 `StoreError.network`**（等 400ms）——
+  理由写进注释：`.network` 是「请求根本没拿到响应」，正是「隧道顶掉这一发」的**唯一**形态；
+  `.server`（服务端说没包）/`.decode`/`.crypto`/`.http(N)` 重试都是白搭，**所以不做无条件多次重试**。
+- 诊断新增一行：`[牛蛙源] pub_udid 使用：本机真 UDID` 或 `伪 UDID（身份缓存未热…）`。
+
+### 修复（★ 设备瘦身「较大应用」文档大小恒 0）
+- **确切原因（硬结论）**：**`DynamicDiskUsage` 根本不在请求字段里、从来没请求过** ——
+  v0.3.406 只加回了 `StaticDiskUsage`；而解析那行仍在跑 → 字典没这个键 → 恒 nil → 死分支。
+  （顺带：`computeDocumentSizes()` 确认仍是**死代码**；它走的 house_arrest 路**要求应用开启文档共享**，
+   微信/游戏恰恰没开 —— 所以即使接上也量不到它们。这就是它一直没生效的原因。）
+- **改用「本机容器直读」**（`SandboxEscape` + `FileService.countTree`）——
+  **与「空间回收」页完全同一套机制**（`ReclaimService.stat` 就是 `countTree`），已在真机跑通；
+  容器路径来自 `get_apps` 默认响应里的 `Container` 键（**白拿的**，不带 ReturnAttributes 的响应就带它）。
+  **不需要应用开文档共享，不需要额外隧道。**
+- **代价与限流（明确）**：要真走一遍文件树 → **按需 + 只对候选集**：单轮 ≤60 个应用、单应用 ≤12k 节点、
+  结果缓存 10 分钟、**跨轮累积往下补**；跑在 `utility` 优先级后台任务，**与后面最长 15 秒的带属性 Lookup 重叠**，不额外占首屏。
+  量不到时按 0 算（**与改前一字不差，不是回退**）。新增 `[设备瘦身] 文档大小：本轮量 N 个应用…` 进度日志。
+- ✅ **没有**把 `DynamicDiskUsage` 加回请求（它仍是「卡 ~25 秒」的头号嫌疑）；`sizeComplete` 判据未动。
+- 新增统计日志：`无 appSize 的 N 条中：系统应用 X / 三方 Y / 无安装路径 Z` —— 用于定性那 209 条。
+
+### 变更（按钮文案「安装」→「获取」）
+用户建议：**「其实我觉得应该改为叫『获取』」**
+- **改了 4 处**：免登录商店列表行（`trailingControl`，爱思/牛蛙共用）、`InstallButton`（两个详情页共用）、
+  爱思商店（专题/榜单）两处。**只改文案**，颜色/尺寸/胶囊样式一字未动。
+- **4 处维持不变**（语义不同，改了反而错）：`继续/暂停`（对**已在跑的任务**操作）、`安装运营商包`（IPCC，另一件事）。
+
 ## [0.3.407] - 2026-09-14
 
 ### 新增（牛蛙：把 `ba_sinfs` **真正写进包内** —— 解决「缺少 SC_Info/*.sinf」）
