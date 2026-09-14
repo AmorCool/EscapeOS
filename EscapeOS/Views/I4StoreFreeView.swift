@@ -536,13 +536,16 @@ struct I4StoreFreeView: View {
 /// 所以这一步必须是异步的。
 ///
 /// 拿到直链之后走的是**与爱思源一字不差的同一条链路**：
-/// `IPADownloadCenter.shared.start(name:bundleId:version:iconURL:remoteURL:autoInstall:source:)`
+/// `IPADownloadCenter.shared.start(name:bundleId:version:iconURL:remoteURL:autoInstall:source:sinfBase64:)`
 /// —— 全项目只有这一套下载/安装实现（`ref-客户端常见坑`：禁止新建第二个下载管理器），
 /// 牛蛙不另开一条，也不在本函数里做任何文件/安装动作。
 ///
-/// ⚠️ 响应里的 `ba_sinfs`（base64 的 `.sinf`）**本版没有接** —— 原因见回报：
-/// 现有安装链路的 sinf 来自**包内** `SC_Info/<exe>.sinf`（`IPAPackageInspector.extractSINF`），
-/// 把外部 sinf 写回包内要改 `IPADownloadCenter` / `AppStoreInstallService`，不在本次改动范围内。
+/// ⚠️ `ba_ipaURL` **指向 `iosapps.itunes.apple.com` 是正常的**：牛蛙服务器代我们向 Apple 取包，
+/// 回来的是 Apple 签发的 CDN 地址，不是"抓错了源"。
+///
+/// v0.3.407：随直链回来的 `ba_sinfs`（base64 的标准 `.sinf`）也一并交给下载中心
+/// （`sinfBase64:`）—— 这类包是 Apple 的**原始加密包**，装之前必须先把它写回包内
+/// `SC_Info/<CFBundleExecutable>.sinf`（由 `IPADownloadCenter` 的 `PackageSINFWriter` 做）。
 ///
 /// `@MainActor`：**顶层自由函数不像 `View` 那样被推断成主 actor**，而这里要调
 /// `IPADownloadCenter`（`@MainActor`）与 `ToastCenter`。两个调用点都在 `View` 内。
@@ -563,7 +566,10 @@ func startNiuwaDownload(_ app: NiuwaStoreClient.NiuwaApp,
                                            autoInstall: true,
                                            // v0.3.406：来源标成「牛蛙免登录」——
                                            // 默认值是 `.i4Free`，不传就会被下载管理页错标成爱思。
-                                           source: .niuwa)
+                                           source: .niuwa,
+                                           // v0.3.407：`ba_sinfs` 是这份包**本机专用**的 sinf，
+                                           // 落盘后由下载中心写回包内 `SC_Info/` —— 不然加密包装不上。
+                                           sinfBase64: full?.sinfBase64)
     } catch {
         // 失败不许静默：界面上给一句短提示，具体原因在日志里（`[牛蛙源]` 前缀）
         ToastCenter.shared.show("获取安装包失败")

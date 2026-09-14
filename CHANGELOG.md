@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.407] - 2026-09-14
+
+### 新增（牛蛙：把 `ba_sinfs` **真正写进包内** —— 解决「缺少 SC_Info/*.sinf」）
+用户原话：**「下载的包好像是 itunes 来源的但是缺少 sinf 这个确定是牛蛙的吗」**
+- **先回答第一条困惑**：`ba_ipaURL` 指向 `iosapps.itunes.apple.com` 是**预期** ——
+  牛蛙服务器**代你去 Apple 取包**，取完把直链转手给你。**链接由牛蛙下发，包就是它给的那一个。**
+- **「缺少 sinf」的原因**：牛蛙一起下发的 `ba_sinfs`（真机样本 1376 字符 base64，
+  解出 **1032 字节**、头 `00 00 04 08` + ASCII `sinf` = 标准 `.sinf` 容器）之前**只解析、没使用** ——
+  因为现有两条安装链路的 sinf 都是**从包内 `SC_Info/` 读**的、不是传参。
+- **本版接线**：新增 `PackageSINFWriter`（`Engine/IPADownloadCenter.swift`）——
+  落盘后、安装前，**只对 `source == .niuwa` 且带 sinf 的包**执行：
+  1. 校验有 sinf、base64 可解（失败会打出字符数）；
+  2. **只对加密包**（`IPAPackageInspector.isFairPlayEncrypted == true`）动手，未加密包直接跳过；
+  3. 用 `ApplePackageArchive(accessMode: .update)` 打开 IPA，
+     **从包内 `Info.plist` 读 `CFBundleExecutable`**（不硬编码）定位
+     `Payload/<App>.app/SC_Info/<exe>.sinf`，`addEntry` + `flush` 写入；
+  4. 每一步都会落日志（前缀 `[下载中心] sinf 注入：`），失败不静默。
+- **不影响**爱思源与 AppleID 通道（那两条的 sinf 由各自链路负责）。
+- ⚠️ **已知限制（写进日志了）**：当前写入器**只能追加、不能替换** ——
+  包内若**已有**同名 sinf 则跳过。牛蛙的 `.dpkg.ipa` 实测没有 sinf，所以正常路径可用；
+  真机若报「包内已有 …；跳过（安装可能解密失败）」，再考虑改替换语义。
+
+### 修复（牛蛙下载失败：把「空直链」与「真失败」区分开）
+用户原话：**「大部分应用都获取安装包失败」**
+真机日志（同一接口、同一 region，**有的成功有的失败**）：
+```
+{msedge, region=0}      → ✗ 无候选数组键命中；body 键：ba_ipaURL, ba_sinfs
+{TakeBrowser, region=0} → ✗ 无候选数组键命中；body 键：ba_ipaURL, ba_sinfs
+{Via, region=0}         → ✓ 下载接口返回直链（sinf 1376 字符）
+{SogouExplorer, region=0} → ✓ 下载接口返回直链（sinf 1376 字符）
+```
+- **结论**：这与「在详情页还是列表页点」**无关**（两处调的是同一个 `startNiuwaDownload`）；
+  是**部分应用拿不到有效直链**。
+- 本版**加诊断**：`body` 里 `ba_ipaURL` 存在但为空/非字符串时，**单独打一行并带 bundleId** ——
+  一次真机即可判定是 **(a) 牛蛙服务器没有这些包**（不是我们的 bug）、
+  **(b) 服务端不稳**，还是 **(c) 我们漏了某种返回形态**（那就继续改解析）。
+
 ## [0.3.406] - 2026-09-14
 
 ### 撤销（SSH 调试页：把 v0.3.404 / v0.3.405 关于 SSH 的改动**连根删掉**）

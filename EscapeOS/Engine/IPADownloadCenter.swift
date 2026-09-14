@@ -77,6 +77,13 @@ final class IPADownloadCenter: ObservableObject {
         var source: Source
         var accountEmail: String?
         var autoInstall: Bool
+        /// v0.3.407：**牛蛙源**随直链一起下发的 sinf（`ba_sinfs`，base64 的标准 `.sinf` 容器）。
+        ///
+        /// 为什么它得跟着任务走：这类包是 Apple 的**原始加密包**，安装前必须把这份 sinf 写回
+        /// `Payload/<App>.app/SC_Info/<CFBundleExecutable>.sinf`（见 `PackageSINFWriter`）。
+        /// 只有 `source == .niuwa` 且非空时才用；爱思源（服务端存的是已签名包）与 AppleID 通道
+        /// （`SignatureInjector` 自己会写回）都不需要，所以默认 `nil`、不传即无行为变化。
+        var sinfBase64: String? = nil
         var phase: Phase = .waiting
         var progress: Double = 0
         var stageText = "等待中"
@@ -315,6 +322,8 @@ final class IPADownloadCenter: ObservableObject {
     ///
     /// v0.3.406：加 `source` 参数（**默认 `.i4Free`**，既有调用点一个都不用改）——
     /// 牛蛙源要能在下载管理页显示成「牛蛙免登录」，不能借用爱思那一档。
+    /// v0.3.407：加 `sinfBase64`（**默认 nil**）—— 牛蛙源把 `ba_sinfs` 一起带进来，
+    /// 落盘后由 `PackageSINFWriter` 写回包内再安装；不传即与从前完全一致。
     @discardableResult
     func start(name: String,
                bundleId: String?,
@@ -322,10 +331,11 @@ final class IPADownloadCenter: ObservableObject {
                iconURL: String?,
                remoteURL: String,
                autoInstall: Bool = true,
-               source: Source = .i4Free) -> UUID {
+               source: Source = .i4Free,
+               sinfBase64: String? = nil) -> UUID {
         var job = Job(name: name, bundleId: bundleId, version: version, iconURL: iconURL,
                       remoteURL: remoteURL, source: source, accountEmail: nil,
-                      autoInstall: autoInstall)
+                      autoInstall: autoInstall, sinfBase64: sinfBase64)
         job.stageText = "排队中"
         jobs.insert(job, at: 0)
         pump()
@@ -768,7 +778,22 @@ final class IPADownloadCenter: ObservableObject {
     }
 
     private func installAfterDownload(id: UUID, path: String, fileName: String) {
+        // v0.3.407：牛蛙源的包在**安装前**要先把它随直链一起下发的 sinf 写回包内。
+        //
+        // 为什么选这个点（而不是 `handle(...)` 里）：
+        // · `handle` 跑在**主 actor** 上，而写包要重写 ZIP 中央目录 + 追加 deflate 数据，
+        //   几百 MB 的 IPA 上会卡住界面；
+        // · 这里本来就在 `Task.detached` 里，且**恰好是 `installLocalIPA` 之前的唯一位置** ——
+        //   既离主线程，又满足"安装前"。
+        // · 写进磁盘的包是**永久的**：所以之后「装失败 → 从下载管理重装」也能直接用上，
+        //   不需要重下（重装走 `installLocal`，那里读不到 sinf，靠的就是这一步已经写好）。
+        //
+        // 只有**牛蛙源**需要（爱思源的服务端包已签名、AppleID 通道由 `SignatureInjector`
+        // 自己写回），所以 source 判定放在这里，写入器本身只管"把这份 sinf 写进这个包"。
+        let snapshot = job(id)
+        let sinfBase64 = snapshot?.source == .niuwa ? snapshot?.sinfBase64 : nil
         Task.detached(priority: .userInitiated) {
+            PackageSINFWriter.writeIfNeeded(sinfBase64: sinfBase64, ipaPath: path)
             do {
                 try await AppStoreInstallService.installLocalIPA(
                     path,
@@ -802,6 +827,104 @@ final class IPADownloadCenter: ObservableObject {
                 }
             }
         }
+    }
+}
+
+// MARK: - v0.3.407：把外部下发的 sinf 写回包内（牛蛙源专用）
+
+/// 把**外部下发**的 sinf 追加进一个已经下载好的 IPA。
+///
+/// ## 为什么必须有这一步
+/// 本项目两条安装链路的 sinf 都是**从包内读**的，不是"传参数"进去的：
+/// `AppStoreInstallService.installLocalIPA`（`:111`）判到加密包后走
+/// `IPAPackageInspector.extractSINF(ipaPath:)`，读的是 `Payload/<App>.app/SC_Info/<exe>.sinf`。
+/// 所以「从接口拿到一份 sinf」只有**写回包内**才可能生效 —— 这正是牛蛙源
+/// （`ba_ipaURL` + `ba_sinfs`）与爱思源（服务端给的已是签名包）的根本差别。
+///
+/// ## 为什么不用现成的 `SignatureInjector`
+/// 那是 AppleID 通道用的：路径由 `SC_Info/Manifest.plist` 的 `SinfPaths` **按数组下标**配对，
+/// 且**条目已存在就抛错**（`sinf file already exists`）。而这里要写的是由
+/// `CFBundleExecutable` **唯一确定**的那一个路径，并且「已存在」时正确的动作是
+/// **不写**（见下），所以直接调底层 ZIP 写入器更可控。
+///
+/// ## 覆盖策略（重要）
+/// 现有 ZIP 写入器（`vendor/ApplePackage/Supplement/ZipFoundationShim.swift`）只会**追加**条目、
+/// **没有删除能力**，所以"覆盖"其实做不到 —— 硬写只会产出**重名条目**（更坏的包）。
+/// 因此：条目**不存在**才写；**已存在**就记一行日志跳过。
+///
+/// ## 只做该做的事
+/// · 调用方（`installAfterDownload`）已经限定**只有牛蛙源**才传 sinf 进来
+///   （爱思源与 AppleID 通道传的是 nil）；
+/// · 只处理**加密包**（`cryptid == 1`）：明文/已重签的包加一个 `SC_Info/*.sinf` 反而可能
+///   破坏它自己的代码签名，而它本来也不需要 sinf；
+/// · 解出来的 base64 就是**标准 `.sinf` 容器**，直接写入，**不做任何包装/再加密**。
+///
+/// 每一步的结果（成功 / 跳过 / 失败原因）都写 `[下载中心]` 日志 —— 不许静默。
+private enum PackageSINFWriter {
+
+    static func writeIfNeeded(sinfBase64: String?, ipaPath: String) {
+        // 1) 必须有 sinf
+        guard let raw = sinfBase64?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            log("这一份没有 sinf，跳过（包内若也缺，安装会明确报「缺少 SC_Info/*.sinf」）")
+            return
+        }
+
+        // 2) base64 → Data（标准 base64；失败要说清长度，便于比对真机日志）
+        guard let sinf = Data(base64Encoded: raw) else {
+            log("sinf base64 解码失败（\(raw.count) 字符），包内不会带 sinf")
+            return
+        }
+
+        // 3) 只有加密包需要 sinf
+        guard IPAPackageInspector.isFairPlayEncrypted(ipaPath: ipaPath) == true else {
+            log("包未加密（cryptid=0），不需要 sinf，跳过")
+            return
+        }
+
+        do {
+            let archive = try ApplePackageArchive(url: URL(fileURLWithPath: ipaPath), accessMode: .update)
+            // 目标路径由包内 Info.plist 的 CFBundleExecutable 决定（不硬编码、不猜）
+            guard let infoEntry = archive.entries.first(where: {
+                $0.path.hasPrefix("Payload/") && $0.path.hasSuffix(".app/Info.plist")
+            }) else {
+                log("包内找不到 Payload/….app/Info.plist，无法定位 SC_Info（未写入）")
+                return
+            }
+            var plistData = Data()
+            try archive.extract(infoEntry) { plistData.append($0) }
+            let plistValue = try? PropertyListSerialization.propertyList(
+                from: plistData, options: [], format: nil)
+            guard let plist = plistValue,
+                  let info = plist as? [String: Any],
+                  let exe = info["CFBundleExecutable"] as? String, !exe.isEmpty,
+                  let appPrefix = infoEntry.path.components(separatedBy: ".app/").first,
+                  !appPrefix.isEmpty else {
+                log("Info.plist 里读不到 CFBundleExecutable，无法确定 sinf 文件名（未写入）")
+                return
+            }
+
+            let target = "\(appPrefix).app/SC_Info/\(exe).sinf"
+            if archive[target] != nil {
+                log("包内已有 \(target)；本写入器只能追加、不能替换，跳过（安装可能解密失败）")
+                return
+            }
+
+            try archive.addEntry(with: target,
+                                 uncompressedSize: Int64(sinf.count),
+                                 compressionMethod: .deflate,
+                                 provider: { (position: Int64, size: Int) -> Data in
+                let start = sinf.startIndex.advanced(by: Int(position))
+                return sinf.subdata(in: start ..< (start + size))
+            })
+            try archive.flush()
+            log("已把 sinf 写进包内：\(target)（\(sinf.count) 字节）")
+        } catch {
+            log("写 sinf 失败（\(error.localizedDescription)），包内不会带 sinf")
+        }
+    }
+
+    private static func log(_ message: String) {
+        LoginLogger.shared.log("[下载中心] sinf 注入：\(message)", category: .appStore)
     }
 }
 

@@ -275,7 +275,13 @@ enum NiuwaStoreClient {
         /// 大小文案（`nwcore_strAppSize`，服务端给的就是带单位的字符串）
         var sizeText: String?
         var iconURL: String?
-        /// 安装包直链（`nwcore_ipaURL` / `nwcore_url` / `downloadURL`）
+        /// 安装包直链（`nwcore_ipaURL` / `nwcore_url` / `downloadURL` / 下载接口的 `ba_ipaURL`）。
+        ///
+        /// ⚠️ v0.3.407：这条直链**指向 `iosapps.itunes.apple.com` 是正常的、不是"抓错了源"** ——
+        /// 牛蛙服务器自己用它的账号向 Apple 取包，再把 Apple 签发的 CDN 地址（形如
+        /// `…/signed.dpkg.ipa?accessKey=…`）连同**针对本机 UDID 的 sinf**（`ba_sinfs`）一起下发。
+        /// 所以「包来自 Apple CDN + sinf 由牛蛙给」这两件事同时成立，别把它当成爱思那种
+        /// "服务端存着一份已签名 IPA" 的模型。
         var downloadURL: String?
         /// 包校验值（`md5`，客户端模型里有这个字段）
         var md5: String?
@@ -286,36 +292,39 @@ enum NiuwaStoreClient {
         /// v0.3.404：**下载接口**返回的 `ba_sinfs`（base64 文本，安装加密包时要用）。
         /// 只有 `/appstore/download` 的响应带它；搜索接口恒为 nil。
         ///
-        /// ## v0.3.406：只解析、**暂不使用**（接手的人看这一段就能接着做）
+        /// ## v0.3.407：**已经用起来了**（v0.3.406 留的触发条件已触发）
+        ///
+        /// 真机上装牛蛙包时报「加密包…缺少 SC_Info/*.sinf」→ 说明牛蛙给的 Apple 原始包
+        /// 里没有可用 sinf，必须用这一份。现在的接线：
+        /// · `IPADownloadCenter.Job.sinfBase64` 收下它（`start(...)` 的 `sinfBase64:` 参数，
+        ///   由 `startNiuwaDownload`（`Views/I4StoreFreeView.swift`）传入）；
+        /// · 下载落盘后、安装前，由 `IPADownloadCenter` 的 `PackageSINFWriter`
+        ///   把 base64 解码成 `Data`，**追加**写进包内
+        ///   `Payload/<App>.app/SC_Info/<CFBundleExecutable>.sinf`。
         ///
         /// **它是什么**：base64 解出来是**标准 `.sinf` 容器**，不是别的包装格式 ——
         /// 真机样本解出 **1032 字节**，头 4 字节 `00 00 04 08`（= 长度 1032）紧跟 ASCII `sinf`，
-        /// 正是 `.sinf` 的长度前缀 + tag 结构。所以它是「可以直接丢进 `SC_Info/` 的那份文件」。
+        /// 正是 `.sinf` 的长度前缀 + tag 结构。所以它是「可以直接丢进 `SC_Info/` 的那份文件」，
+        /// **不要再给它加任何包装/加密**。
         ///
-        /// **为什么现在用不上**：本项目两条安装链路的 sinf 都不是"传参数"进去的，而是**从包里读**：
+        /// **还剩一处没做**（留给下一个需要的人）：`PackageSINFWriter` 只能在条目**不存在**时追加 ——
+        /// 现有 ZIP 写入器（`vendor/ApplePackage/Supplement/ZipFoundationShim.swift`）**没有删除条目**的
+        /// 能力，所以「包内已有一份别的设备的 sinf、要替换掉」这种情形目前只会记日志跳过。
+        /// 真机上若是那种包，症状会是**装上了但启动崩 / installd 报解密失败**，而不是"缺少 sinf"。
+        ///
+        /// **历史**（为什么非要写回包里）：本项目两条安装链路的 sinf 都不是"传参数"进去的，
+        /// 而是**从包里读**：
         /// · `AppStoreInstallService.installLocalIPA`（`Engine/AppStoreInstallService.swift:111`）
         ///   判到加密包后走 `IPAPackageInspector.extractSINF(ipaPath:)`，读的是
         ///   `Payload/<App>.app/SC_Info/<exe>.sinf`；
         /// · AppleID 通道更靠前一步：`SignatureInjector.inject(sinfs:into:)`
         ///   （`Engine/AppStoreLocalInstallService.swift:83`）先把 Apple 签发的 sinf **写回包内**。
-        /// ⇒ 介质是**包本身**，光把这个字符串往下传没有任何消费者。
+        /// ⇒ 介质是**包本身**，光把这个字符串往下传没有任何消费者 —— 所以 v0.3.407 的做法是
+        /// 「落盘后写回包内」，而不是给它加一个安装参数。
         ///
-        /// **要用它必须改在哪**（两处，缺一不可）：
-        /// 1. 落盘后、安装前：`IPADownloadCenter.handle(id:safeName:result:)`
-        ///    与 `installAfterDownload(id:path:fileName:)`
-        ///    （`Engine/IPADownloadCenter.swift`）—— 调 `installLocalIPA` 之前，
-        ///    把这里的 base64 解成 `Data`，**覆盖式**写进 `Payload/<App>.app/SC_Info/<exe>.sinf`
-        ///    （执行文件名取包内 `Info.plist` 的 `CFBundleExecutable`）。
-        ///    为此还需要给 `IPADownloadCenter.Job` 加一个 sinf 字段、给 `start(...)` 加参数，
-        ///    在 `startNiuwaDownload`（`Views/I4StoreFreeView.swift`）把 `full?.sinfBase64` 传进来。
-        /// 2. `SignatureInjector`（`vendor/ApplePackage/Supplement/SignatureInjector.swift`）
-        ///    现在的语义是「**sinf 文件已存在就抛错**」（`sinf file already exists`）——
-        ///    覆盖写要么绕开它、要么给它加一个"允许覆盖"的分支。
-        ///
-        /// **触发条件**：真机上装牛蛙的包时，报出
-        /// `加密包…缺少 SC_Info/*.sinf`（`AppStoreInstallService.InstallError.missingSINF`）
-        /// 才说明非走这条路不可。若牛蛙给的 `.dpkg.ipa` 里本来就带可用 sinf，
-        /// 现有链路能直接装上，那就**永远不需要**动上面两处。
+        /// **当初为什么绕开 `SignatureInjector`**：它是 AppleID 通道用的，自己从
+        /// `SC_Info/Manifest.plist` 的 `SinfPaths` 里挑路径、且「条目已存在就抛错」；
+        /// 而我们要写的是由 `CFBundleExecutable` 唯一确定的那个路径，且宁可跳过也不写重名条目。
         var sinfBase64: String?
 
         /// 列表按 bundleId 去重 → 用 bundleId 当 id
@@ -586,6 +595,38 @@ enum NiuwaStoreClient {
             ?? (obj["nwcore_messages"] as? [Any])?.map { string($0) ?? "" }.joined(separator: "；")
             ?? string(obj["message"])
             ?? ""
+
+        // ★★ v0.3.407：**把「服务端没有包」与「我们解析漏了形态」分开**（只对下载请求生效）。
+        //
+        // 起因（真机日志）：同一个接口、同一个 region，`Via` / `SogouExplorer` 成功，
+        // `msedge` / `TakeBrowser` 失败，而失败的都掉进下面那条「找数组」分支 ——
+        // 说明 `body.ba_ipaURL` 没通过 `!ipa.isEmpty`。但当时**没有任何一行日志打出它的值**，
+        // 到底是「没有这个键」「键在但值是空串」还是「值不是 String」只能靠猜。
+        // 下面这几行就是给它定性的，一次真机即可判定：
+        //   (a) 键根本不在 → 牛蛙服务器对这些应用**确实没有包**（不是我们的 bug，如实告诉用户）；
+        //   (b) 键在但取值不可用（空串 / NSNull / 非字符串）→ 是我们漏了某种形态，按实际类型补解析。
+        // 日志里带 `bundleId` + `code`/`desc`，所以「某个应用恒失败」与「同一应用时好时坏」也分得开。
+        if path == downloadPath {
+            let requestTarget = (body["bundleid"] as? String) ?? "-"
+            let desc = message.isEmpty ? "-" : message
+            if let envelope = obj["body"] as? [String: Any] {
+                if let rawIPA = envelope["ba_ipaURL"] {
+                    if (string(rawIPA) ?? "").isEmpty {
+                        let sinfLength = string(envelope["ba_sinfs"])?.count ?? 0
+                        log.log("\(logTag) ⚠ 下载响应 ba_ipaURL 取不到可用值（\(requestTarget)；"
+                                + "值类型 \(type(of: rawIPA))；ba_sinfs \(sinfLength) 字符；"
+                                + "code=\(code) desc=\(desc)）", category: .appStore)
+                    }
+                } else {
+                    log.log("\(logTag) ⚠ 下载响应 body 没有 ba_ipaURL 键（\(requestTarget)；"
+                            + "body 键：\(envelope.keys.sorted().joined(separator: ", "))；"
+                            + "code=\(code) desc=\(desc)）", category: .appStore)
+                }
+            } else if let rawBody = obj["body"] {
+                log.log("\(logTag) ⚠ 下载响应 body 不是对象（\(requestTarget)；类型 \(type(of: rawBody))）",
+                        category: .appStore)
+            }
+        }
 
         // ★★ v0.3.404：**下载接口的响应没有数组** —— `body` 直接给两个字段：
         //   `ba_ipaURL`（安装包直链）、`ba_sinfs`（base64 的 sinf）。
