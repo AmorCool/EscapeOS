@@ -73,6 +73,19 @@ jobs:
           echo "=== 部署目标（应为 18.0，本试验的关键点）==="
           grep -n "IPHONEOS_DEPLOYMENT_TARGET" project.yml || true
 
+      - name: Install Metal Toolchain (Xcode 27 splits it out)
+        # ★ 本分支（xcode27-trial）实测结论：Xcode 27 起 **Metal 工具链是单独下载的组件**，
+        #   不装就会在编译阶段报：
+        #     error: cannot execute tool 'metal' due to missing Metal Toolchain;
+        #            use: xcodebuild -downloadComponent MetalToolchain
+        #   我们仓库里有 `EscapeOS/Views/LiquidGlassOrb.metal`，所以这一步是**必需**的。
+        run: |
+          set -euo pipefail
+          xcodebuild -downloadComponent MetalToolchain
+          echo "=== 校验 metal 可用 ==="
+          xcrun -f metal
+          metal --version
+
       - name: Install build tooling (xcodegen, cmake)
         # 本轨道出【未签名 IPA】：不调用 ldid，entitlements 随 .app 携带、交给侧载工具施加
         # （见「Package unsigned IPA」步骤）。
