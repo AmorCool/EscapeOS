@@ -531,20 +531,49 @@ final class SpoofSession: ObservableObject {
 
     /// 健康检查（OFF 档 12s / 增强守护档 5s）：掉线自动重连.
     /// 守护 ON 时，检出会话被回收即**立刻**重建，不等下一个重发周期.
+    /// v0.3.422：健康检查的**连续失败退避**状态。
+    ///
+    /// 为什么需要（真机事故 2026-09-18）：隧道建不起来时（设备端 `remotepairingd` 不响应），
+    /// 原来的实现会**每 5 秒死循环重连** —— 实测连续 **63 次、持续 7 分钟**、每次都超时。
+    /// 这既毫无意义（对方没恢复就永远失败），又会**持续占用设备端**，
+    /// 让排在后面的其它依赖配对文件的功能（空间回收 / AFC / 设备控制…）一起被拖住。
+    private var healthFailureStreak = 0
+    private var lastHealthRetryAt: Date?
+
     private func startHealth() {
         healthTimer?.invalidate()
         healthTimer = Timer.scheduledTimer(withTimeInterval: healthInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let sim = self.simulated else { return }
+
+                let needsReconnect: Bool
                 if case .dropped = self.status {
-                    self.status = .reconnecting
-                    self.apply(sim, markRecent: false)
-                    self.noteGuardResend(.health, ok: self.status == .active, resetSuspected: true)
+                    needsReconnect = true
                 } else if !LocationEngine.isSessionActive, self.isSpoofing {
-                    self.status = .reconnecting
-                    self.apply(sim, markRecent: false)
-                    self.noteGuardResend(.health, ok: self.status == .active, resetSuspected: true)
+                    needsReconnect = true
+                } else {
+                    needsReconnect = false
                 }
+
+                guard needsReconnect else {
+                    // 会话健康 → 清零退避（下次掉线从最短间隔重新开始）.
+                    self.healthFailureStreak = 0
+                    self.lastHealthRetryAt = nil
+                    return
+                }
+
+                // ★ 退避窗口：连续失败时把重试间隔指数放大（5s→10s→20s→40s→60s 封顶）。
+                // 目的：对方不响应时**不再每 5 秒硬撞**，给设备端与其它功能让路。
+                if let last = self.lastHealthRetryAt {
+                    let backoff = min(60, self.healthInterval * pow(2, Double(min(self.healthFailureStreak, 4))))
+                    if Date().timeIntervalSince(last) < backoff { return }
+                }
+                self.lastHealthRetryAt = Date()
+
+                self.status = .reconnecting
+                self.apply(sim, markRecent: false)
+                self.noteGuardResend(.health, ok: self.status == .active, resetSuspected: true)
+                self.healthFailureStreak = (self.status == .active) ? 0 : (self.healthFailureStreak + 1)
             }
         }
     }
