@@ -115,9 +115,10 @@ final class LoginLogger: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: logFileURL.path) {
             // v0.3.434：超过用户设定的上限时**滚动截断**（保留最新部分），
             // 避免日志文件无限增长（此前实测涨到 683KB）。
-            // 上限可在「更多 → 设置 → 日志」里改，默认 1024KB。
+            // 上限可在「更多 → 设置 → 日志」里改，默认 1024KB，**填 0 = 无限制**。
             let limit = LogLimitSettings.fileLimitBytes
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: logFileURL.path),
+            if limit < Int.max,                       // 无限制 → 不截断
+               let attrs = try? FileManager.default.attributesOfItem(atPath: logFileURL.path),
                let size = attrs[.size] as? UInt64,
                size > UInt64(limit) {
                 trimFile(to: limit)

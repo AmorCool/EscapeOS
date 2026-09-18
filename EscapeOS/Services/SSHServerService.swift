@@ -420,11 +420,13 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             guard target.path.hasPrefix(docsStd + "/") else { return "❌ 路径越界（仅限 Documents 内）" }
             guard let attr = try? FileManager.default.attributesOfItem(atPath: target.path),
                   let size = attr[.size] as? UInt64 else { return "不存在: \(rel)" }
-            // v0.3.434：上限改为**用户可配置**（「更多 → 设置 → 日志」，默认 1024KB）
+            // v0.3.434：上限改为**用户可配置**（「更多 → 设置 → 日志」，默认 1024KB，填 0 = 无限制）
             let catLimit = LogLimitSettings.catLimitBytes
-            guard size <= UInt64(catLimit) else {
-                return "文件过大（\(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))），"
-                    + "当前上限 \(catLimit / 1024)KB（可在「更多 → 设置 → 日志」调整）"
+            if catLimit < Int.max {                 // 无限制 → 跳过检查
+                guard size <= UInt64(catLimit) else {
+                    return "文件过大（\(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))），"
+                        + "当前上限 \(catLimit / 1024)KB（可在「更多 → 设置 → 日志」调整；填 0 = 无限制）"
+                }
             }
             guard let s = try? String(contentsOf: target, encoding: .utf8) else { return "非 UTF-8 文本文件" }
             return s

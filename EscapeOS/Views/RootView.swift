@@ -197,16 +197,16 @@ struct SettingsForm: View {
         Form {
             // v0.3.434：日志上限（可配置）+ 一键清空
             Section(header: Text("日志"),
-                    footer: Text("留空自动恢复默认 \(LogLimitSettings.defaultKB) KB。")) {
+                    footer: Text("单位 KB（1 MB = 1024 KB）。填 0 = 无限制；留空自动恢复默认 \(LogLimitSettings.defaultKB) KB。")) {
                 HStack {
                     Text("日志存储上限")
                     Spacer()
                     TextField("\(LogLimitSettings.defaultKB)", text: $fileLimitText)
                         .keyboardType(.numberPad)
                         .multilineTextAlignment(.trailing)
-                        .frame(width: 90)
+                        .frame(width: 80)
                         .onChange(of: fileLimitText) { _, newValue in
-                            // 合法值即时生效；留空/非法 → 回填默认值（用户要求）
+                            // 合法值即时生效（0 = 无限制）；留空/非法 → 回填默认值
                             let kb = LogLimitSettings.normalizedKB(from: newValue)
                             logLimit.maxFileKB = kb
                             if Int(newValue.trimmingCharacters(in: .whitespaces)) == nil {
@@ -215,13 +215,16 @@ struct SettingsForm: View {
                         }
                     Text("KB").foregroundColor(.secondary)
                 }
+                Text(LogLimitSettings.describe(kb: logLimit.maxFileKB))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 HStack {
                     Text("cat 读取上限")
                     Spacer()
                     TextField("\(LogLimitSettings.defaultKB)", text: $catLimitText)
                         .keyboardType(.numberPad)
                         .multilineTextAlignment(.trailing)
-                        .frame(width: 90)
+                        .frame(width: 80)
                         .onChange(of: catLimitText) { _, newValue in
                             let kb = LogLimitSettings.normalizedKB(from: newValue)
                             logLimit.maxCatKB = kb
@@ -231,6 +234,9 @@ struct SettingsForm: View {
                         }
                     Text("KB").foregroundColor(.secondary)
                 }
+                Text(LogLimitSettings.describe(kb: logLimit.maxCatKB))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 Button("清空日志", role: .destructive) {
                     LoginLogger.shared.clear()
                 }
