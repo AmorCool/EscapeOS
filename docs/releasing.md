@@ -24,8 +24,8 @@ tag that is already on the remote is not.
 
 ## Before you start
 
-- Only `.github/workflows/build-xcode.yml` is enabled. `build.yml` (Theos) and `mha-build.yml`
-  are `disabled_manually`. A `v*` tag therefore starts exactly one workflow.
+- `.github/workflows/build-xcode.yml` is the **only** workflow in the tree. A `v*` tag therefore
+  starts exactly one workflow.
 - You need push access to `AmorCool/EscapeOS` and the development branch is `migrate-xcode`.
 - Version numbers only ever increase within `0.x.y`.
 
@@ -176,7 +176,7 @@ already failed for that reason, the cleanest fix is still a new version number.
 
 - The Xcode workflow listens only on `v*`. Branch pushes do not build, so a mistake caught after
   pushing to `migrate-xcode` costs nothing until you tag.
-- If `build.yml` (Theos) is ever re-enabled, remember it also listens on `v*` and would publish a
+- If a second `v*`-tag workflow is ever added (a Theos or MHA track), remember it would publish a
   second, differently built IPA into the same Release.
 - `CHANGELOG.md` and the three version locations are edited by one person at a time. Two parallel
   tasks editing them will interleave, and one set of changes will be attributed to the wrong

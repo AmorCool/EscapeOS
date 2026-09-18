@@ -1,16 +1,15 @@
 # Building EscapeOS
 
-This repository carries three build tracks. Only the first one produces the IPA that ships.
+This repository carries two build tracks. Only the first one produces the IPA that ships.
 
-| Track | Defined by | Status in GitHub Actions | Output |
+| Track | Defined by | Status | Output |
 |---|---|---|---|
-| **Xcode 26 native** (default) | `.github/workflows/build-xcode.yml` | **Active** | `EscapeSpace-<version>-xcode-unsigned.ipa` |
-| **Theos** | `Makefile` + `.github/workflows/build.yml` | Disabled (`disabled_manually`) | `EscapeSpace-<version>.ipa` (from a `.deb`) |
-| **MHA** (MobileHouseArrest) | `.github/workflows/mha-build.yml` | Disabled (`disabled_manually`) | `EscapeSpace-MHA-<version>.ipa` |
+| **Xcode 26 native** (default) | `.github/workflows/build-xcode.yml` | **Active in CI** | `EscapeSpace-<version>-xcode-unsigned.ipa` |
+| **Theos** | `Makefile` | Local only — no CI workflow | `EscapeSpace-<version>.ipa` (from a `.deb`) |
 
-The Theos and MHA workflows still exist in the tree but are turned off in the repository's
-Actions settings; they have not run since v0.2.161 and mha-v0.2.28 respectively. Re-enable one
-from the Actions tab only if you actually need that track.
+`.github/workflows/build-xcode.yml` is the **only** workflow in the tree, so a `v*` tag starts
+exactly one run. The Theos CI workflow and the separate MHA (MobileHouseArrest) workflow were
+deleted; the Theos track survives only as the local `Makefile` path described in section 2.
 
 ---
 
@@ -134,33 +133,13 @@ Apple's 18+/26+ SDKs require Apple Clang and fail under Linux clang.
 `EscapeOS/Tunnel/libidevice_ffi.a` is not in git (see the dependencies section). Place it at
 `EscapeOS/Tunnel/libidevice_ffi.a` before `make package`, or the link step fails.
 
-### CI variant (`build.yml`, currently disabled)
-
-If re-enabled, note that it also listens on `v*` tags — it would run on the same tag as the Xcode
-track and publish a second IPA into the same Release. Its differences from a local Theos build:
-
-- It symlinks Xcode's real `iPhoneOS*.sdk` into `$THEOS/sdks` and overrides
-  `TARGET="iphone:clang:<SDK_VER>:18.0"`, because `libidevice_ffi.a` links QuickKit /
-  AFFoundation, which do not exist in `theos/sdks` (max 16.5).
-- It converts the resulting `packages/*.deb` to an IPA with `dpkg-deb -x`, then zips `Payload/`.
-- It keeps an incremental-build cache keyed on a source-hash snapshot, calibrating mtimes so
-  `make` only recompiles what changed.
+There is no CI variant of this track any more. If you ever re-add one, remember that a `v*`-tag
+workflow would run on the same tag as the Xcode track and publish a second IPA into the same
+Release.
 
 ---
 
-## 3. MHA track (`mha-build.yml`, currently disabled)
-
-Triggered by `mha-v*` tags on a separate branch, on `macos-15`. It builds the Theos package and
-then rewrites the app's signing identity so that `containermanagerd` accepts it as the
-MobileHouseArrest caller: the bundle id and the CodeDirectory identifier both become
-`com.apple.mobile.MobileHouseArrest`, via `codesign -f -s - --identifier ...`.
-
-Unlike the other two tracks, it does not compile the Rust FFI. It downloads a prebuilt
-`libidevice_ffi.a` from the historical `pwnapplehat/EscapeOS` v0.1.5 release.
-
----
-
-## 4. Dependencies and generated inputs
+## 3. Dependencies and generated inputs
 
 | Item | Where it comes from | Notes |
 |---|---|---|
@@ -173,12 +152,12 @@ Unlike the other two tracks, it does not compile the Rust FFI. It downloads a pr
 | `Resources/AppIcon*.png`, `docs/brand/icon.png` | `python3 tools/generate_icons.py` | Regenerates the PNG set from `assets/EscapeOS-icon-master.png` (1024x1024, transparent corners). Requires Pillow. |
 
 A prebuilt `libidevice_ffi.a` (97,089,368 bytes) still exists as an asset of the legacy
-`pwnapplehat/EscapeOS` v0.1.5 release, and the MHA workflow downloads it from there. The current
-repository's Releases carry **only the IPA** — there is no `.a` to download from them.
+`pwnapplehat/EscapeOS` v0.1.5 release. The current repository's Releases carry **only the IPA** —
+there is no `.a` to download from them.
 
 ---
 
-## 5. iOS 26 SDK and the tab bar
+## 4. iOS 26 SDK and the tab bar
 
 The floating Liquid Glass tab bar is applied automatically when the app is **linked against the
 iOS 26 SDK**, which means Xcode 26. This is an OS-level "linked on or after" rule; runtime hacks
@@ -190,7 +169,7 @@ release builds — that flag opts out of Liquid Glass.
 
 ---
 
-## 6. When a build fails
+## 5. When a build fails
 
 CI is the only compiler this project has (there is no local Xcode on the development machine), so
 failures are read from the run, not from a local log:

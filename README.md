@@ -141,11 +141,11 @@ Without the pairing file there is no app list and no container paths to open. Ke
 
 ## Build
 
-Three tracks build this tree. Details in `docs/BUILD.md`.
+Two tracks build this tree. Details in `docs/BUILD.md`.
 
 **GitHub Actions — the shipping path.** Push a `v*` tag and `.github/workflows/build-xcode.yml` runs on `macos-latest` with Xcode 26 (iOS 26 SDK): `xcodegen generate` → `xcodebuild` → unsigned IPA → GitHub Release, all inside one workflow. The artifact is `EscapeSpace-<version>-xcode-unsigned.ipa`. No `ldid` pass is applied; `EscapeSpace.entitlements` ships inside the `.app` for the sideloading tool to apply.
 
-**Theos on Linux / WSL.** `Makefile` targets `iphone:clang:16.5:18.0` because newer Apple SDKs need Apple Clang. This track also runs in CI via `.github/workflows/build.yml`.
+**Theos on Linux / WSL (local only).** `Makefile` targets `iphone:clang:16.5:18.0` because newer Apple SDKs need Apple Clang. This track has no CI workflow — build it locally.
 
 ```sh
 export THEOS=~/theos
