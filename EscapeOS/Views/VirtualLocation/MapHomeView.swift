@@ -454,7 +454,11 @@ private extension UIWindowScene {
 }
 
 @MainActor
-final class PlaceSearchCompleter: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
+/// Swift 6：`MKLocalSearchCompleterDelegate` 是非隔离协议，而本类是 @MainActor。
+/// 用 `@preconcurrency` 遵循它是 Swift 6 迁移的标准做法 —— MapKit 的 delegate
+/// 回调本来就在主线程，把方法留在主 actor 上既符合事实，也让非 Sendable 的
+/// `MKLocalSearchCompleter` 不必跨隔离域（消掉 `sending 'completer'`）。
+final class PlaceSearchCompleter: NSObject, ObservableObject, @preconcurrency MKLocalSearchCompleterDelegate {
     @Published var results: [MKLocalSearchCompletion] = []
     private let completer = MKLocalSearchCompleter()
 
@@ -473,15 +477,12 @@ final class PlaceSearchCompleter: NSObject, ObservableObject, MKLocalSearchCompl
         completer.resultTypes = [.address, .pointOfInterest]
     }
 
-    nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
-        // Swift 6：completer（MKLocalSearchCompleter，非 Sendable）不能再被
-        // Task（@Sendable 闭包）捕获 —— 那样会触发 `sending 'completer'`（CI 实测 :480）。
-        // MapKit 的 delegate 回调本来就在主线程，用 MainActor.assumeIsolated 断言
-        // 当前隔离即可：不切线程、不跨隔离域，仍是主线程应用结果，语义不变。
-        MainActor.assumeIsolated { self.results = completer.results }
+    /// 主 actor 隔离（配合类上的 @preconcurrency 遵循）：completer 不再跨隔离域。
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        self.results = completer.results
     }
 
-    nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
-        Task { @MainActor in self.results = [] }
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        self.results = []
     }
 }
