@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.423] - 2026-09-18
+
+### 修复：我引入的性能回归 —— `ExploitRegistry.enabled()` 被高频调用却没缓存
+
+**背景**：用户报「空间回收不能用」。排查后确认根因在我自己的改动里（v0.3.413 的 bad_query 收口）。
+
+**问题**：v0.3.413 把 `SandboxEscape.consume`（取沙盒扩展）从「直接调 `bad_query`」
+改成「经 `ExploitRegistry.enabled()` 分发」。但 `enabled()` 的实现是**每次调用**都做
+`UserDefaults.array` 读 + `Set` 构造 + `filter` + 数组分配。
+
+而 `consume` 是**高频调用点**：
+- `ReclaimService.scan`（空间回收）用 `escape.withHandle(for:)` 包住整个扫描，
+  每个容器、每个分类都走一次；
+- `ContainerNameResolver` 每个路径一次；
+- `LiveContainerDiscovery` 每个实例一次；
+- 壁纸 / 拨号器主题 / MDM / 配置描述各自循环调用。
+
+空间回收要扫**几万个路径** → **几万次 UserDefaults 读 + 几万次数组分配** →
+扫描被拖到近乎卡死。
+
+**修法**：`enabled()` 加缓存，只在**勾选内容真的变化**时才重建。
+（缓存键用 `ExploitSettings.snapshot()` 的结果做比较；该快照本身仍是轻量 UserDefaults 读。）
+
+**说明**：这是我 413 收口时引入的回归，与 airlift 无关。
+
 ## [0.3.422] - 2026-09-18
 
 ### 修复：虚拟定位健康检查的「死循环重连」（真机事故的放大器）
@@ -46,14 +71,14 @@
 
 ## [0.3.420] - 2026-09-18
 
-### ★★ 通道打通：`streaming_zip_conduit` 已在 RSD 服务表里，且建连成功
+### 通道打通：`streaming_zip_conduit` 已在 RSD 服务表里，且建连成功
 **v0.3.419 真机实测（设备 0.3.419 / build 716）关键结果**：
 ```
-★ 服务表里有 com.apple.afc.shim.remote：port 53678              → ★ 建连成功
+服务表里有 com.apple.afc.shim.remote：port 53678              → 建连成功
 服务表里没有 com.apple.afc（ServiceNotFound）
-★ 服务表里有 com.apple.streaming_zip_conduit.shim.remote：port 53635 → ★ 建连成功
+服务表里有 com.apple.streaming_zip_conduit.shim.remote：port 53635 → 建连成功
 服务表里没有 com.apple.streaming_zip_conduit（ServiceNotFound）
-★ 服务表里有 com.apple.atc.shim.remote：port 53680
+服务表里有 com.apple.atc.shim.remote：port 53680
 ```
 **两条硬结论**：
 1. **RSD 上的服务名必须带 `.shim.remote` 后缀** —— 不带后缀的标准名**一律 `ServiceNotFound`**
@@ -175,7 +200,7 @@ start_service(com.apple.atc)                               → BrokenPipe
   [airlift] 配对文件 OK
   [airlift] RSD 隧道 OK
   [airlift] lockdownd OK
-  [airlift] ★ 失败：start_service(com.apple.streaming_zip_conduit) 被拒
+  [airlift] 失败：start_service(com.apple.streaming_zip_conduit) 被拒
             code=1 Socket(BrokenPipe, "channel closed")
   ```
   **前三步全通**，只卡在「启动服务」。`BrokenPipe` 不像 `InvalidService`（名字不存在），
@@ -258,7 +283,7 @@ start_service(com.apple.atc)                               → BrokenPipe
 
 ## [0.3.410] - 2026-09-14
 
-### 修复（★ 牛蛙「大部分应用获取失败」的直接成因：空直链不重试）
+### 修复（牛蛙「大部分应用获取失败」的直接成因：空直链不重试）
 - **`/appstore/download` 回 200、但直链为空时不重试** → 用户点「获取」失败，只能自己再点一次。
   - 解密后的原文：`{"pub_code":0,"pub_desc":"接口调用成功","body":{"ba_sinfs":"","ba_ipaURL":""}}` —— 服务端报「成功」却**不给包**；
     解析层把它当「没有包」，**返回 `nil` 而不是 error**，而 v0.3.408 加的重试**只覆盖 `StoreError.network`** → 这条路径**根本没有重试**。
@@ -305,7 +330,7 @@ start_service(com.apple.atc)                               → BrokenPipe
 
 ## [0.3.408] - 2026-09-14
 
-### 修复（★ 预览/图标弹窗「没有可查看的图片」+ 不自动刷新、返回才刷新）
+### 修复（预览/图标弹窗「没有可查看的图片」+ 不自动刷新、返回才刷新）
 用户原话：**「查看图标时会这样（全黑 + 『没有可查看的图片』）也不自动刷新加载 返回才刷新 而且也不是没有图标啊 是不是哪里有bug」**
 - **根因**：**图数组挂在了「页面」上，而弹窗从外部读它** ——
   `previewImages = …` 与 `previewTarget = …` 是**两次独立的状态写入**，不保证落在同一事务；
@@ -318,7 +343,7 @@ start_service(com.apple.atc)                               → BrokenPipe
   `showIconPreview` 撤掉 `images:` Binding（图标地址为空仍**只 toast**，行为未变）；`ImageGalleryViewer` 只读 `target.urls`。
 - 四处调用点全部改净（`viewerImages` / `previewImages` 的代码出现次数 → **0**，只剩注释说明「别再这么写」）。
 
-### 修复（★ 牛蛙源「第一次点必失败、重试几次才成功」）
+### 修复（牛蛙源「第一次点必失败、重试几次才成功」）
 - **根因（硬结论）**：**请求路径上现场建 RSD 隧道**。
   `NiuwaStoreClient.pubParams` 里 `pub_udid` 走 `LocalDeviceIdentity.load()`（冷缓存时真建隧道）、
   `pub_system_version` 走 `DeviceInfoService.lockdownFullDict()`（**每次请求都建一次**，无进程内缓存）——
@@ -333,7 +358,7 @@ start_service(com.apple.atc)                               → BrokenPipe
   `.server`（服务端说没包）/`.decode`/`.crypto`/`.http(N)` 重试都是白搭，**所以不做无条件多次重试**。
 - 诊断新增一行：`[牛蛙源] pub_udid 使用：本机真 UDID` 或 `伪 UDID（身份缓存未热…）`。
 
-### 修复（★ 设备瘦身「较大应用」文档大小恒 0）
+### 修复（设备瘦身「较大应用」文档大小恒 0）
 - **确切原因（硬结论）**：**`DynamicDiskUsage` 根本不在请求字段里、从来没请求过** ——
   v0.3.406 只加回了 `StaticDiskUsage`；而解析那行仍在跑 → 字典没这个键 → 恒 nil → 死分支。
   （顺带：`computeDocumentSizes()` 确认仍是**死代码**；它走的 house_arrest 路**要求应用开启文档共享**，
