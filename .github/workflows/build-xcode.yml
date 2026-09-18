@@ -58,8 +58,9 @@ jobs:
           fi
 
       - name: Select Xcode (27 trial - prefer 27, fall back to 26)
-        # ★ 本分支（xcode27-trial）专用：runner 已换成 `xcode-27-arm64`，
-        #   该镜像上只有 Xcode 27（beta），没有 Xcode_26*.app。
+        # ★ Xcode 27 专用（原 `xcode27-trial` 分支的实验，现已合入 `migrate-xcode`）：
+        #   runs-on 写 `xcode-27` —— 该镜像上只有 Xcode 27，没有 Xcode_26*.app。
+        #   ⚠️ 别写成 `xcode-27-arm64`：那只是**镜像文件名**，写成 runs-on 会**永久排队**（踩过）。
         #   ⚠️ 注意 `set -e`：`ls` 没匹配时返回非 0 会直接中断脚本，所以每处都加 `|| true`。
         run: |
           set -euo pipefail
@@ -74,7 +75,8 @@ jobs:
           grep -n "IPHONEOS_DEPLOYMENT_TARGET" project.yml || true
 
       - name: Install Metal Toolchain (Xcode 27 splits it out)
-        # ★ 本分支（xcode27-trial）实测结论：Xcode 27 起 **Metal 工具链是单独下载的组件**，
+        # ★ Xcode 27 实测结论（原 `xcode27-trial` 分支，现已合入 `migrate-xcode`）：
+        #   Xcode 27 起 **Metal 工具链是单独下载的组件**，
         #   不装就会在编译阶段报：
         #     error: cannot execute tool 'metal' due to missing Metal Toolchain;
         #            use: xcodebuild -downloadComponent MetalToolchain

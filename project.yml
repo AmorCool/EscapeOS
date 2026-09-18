@@ -133,7 +133,7 @@ targets:
           - "**/PrivacyInfo.xcprivacy"
     settings:
       base:
-        # ★★ Swift 6 语言模式迁移（分支 `swift6-migration`）。
+        # ★★ Swift 6 语言模式迁移（原 `swift6-migration` 分支，2026-09-18 已合入 `migrate-xcode`）。
         #   ⚠️ 必须写在 **target** 这一层：实测顶层 `settings.base` 的 SWIFT_VERSION **不被 xcodegen 采纳**。
         #   只作用于本 target，**不会**波及 SwiftPM 依赖（Citadel / swift-crypto 等）。
         #   ⚠️ 刻意**不开** `SWIFT_APPROACHABLE_CONCURRENCY` / `SWIFT_DEFAULT_ACTOR_ISOLATION`：
