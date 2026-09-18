@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.419] - 2026-09-18
+
+### 突破：找到 RSD 上启动服务的**正确**方式（此前一直用错 API）
+查 **pymobiledevice3** 的 RSD 实现（`pymobiledevice3/remote/remote_service_discovery.py`，权威参考）
+得到明确结论：
+
+> **"On modern devices, services are no longer started through lockdownd's StartService RPC.
+> Instead a RemoteXPC handshake against the RSD port yields `peer_info` describing every available
+> service and the TCP port it listens on."**
+
+**RSD 上取服务的正确姿势**：
+1. `peer_info["Services"][name]["Port"]` —— **本地查表**拿端口（**不调 StartService**）；
+2. 建 TCP 连到该端口；
+3. 发 `RSDCheckin` plist（`{"Label":…,"ProtocolVersion":"2","Request":"RSDCheckin"}`）完成 check-in。
+**服务不存在时本地就报 `InvalidServiceError`，根本不发请求。**
+
+⇒ **这解释了 v0.3.414~417 的 `BrokenPipe`**：`lockdownd_start_service` 是 **usbmux 通道**的机制，
+在 RSD 上**压根不是这么用的** —— 难怪连「已知可用」的 `com.apple.afc` 也失败。
+
+**本版把自检改成正确流程**：
+- `rsd_get_service_info(handshake, name, &info)` → 拿 `port` / `uses_remote_xpc`；
+- **`adapter_connect(adapter, port, &stream)`** → **真正建连**（这一步才是 RSD 语义下的"启动服务"）；
+- `idevice_stream_free(stream)` 释放。
+**任一候选建连成功即说明通道可用**，下一步才是发 `RSDCheckin` 与逆 AT 协议。
+
+（`adapter_connect` 这个 API 项目里**此前从未用过**；`rsd_service_available` / `rsd_get_service_info`
+的先例在 `Engine/LocationEngine.swift:274`。）
+
 ## [0.3.418] - 2026-09-18
 
 ### 诊断（决定性一步：换用 RSD 自己的 API）
