@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.417] - 2026-09-18
+
+### 修复（两个真机实测发现的坑）
+- **每个候选服务名必须重新连一次 lockdownd**。v0.3.416 真机（0.3.416/713）实测：
+  ```
+  [airlift] 失败：start_service(com.apple.afc)                   code=1 BrokenPipe("channel closed")
+  [airlift] 失败：start_service(com.apple.streaming_zip_conduit)  code=1 NotConnected("not connected")
+  [airlift] 失败：start_service(com.apple.mobile.data_sync)       code=1 NotConnected("not connected")
+  [airlift] 失败：start_service(com.apple.atc)                   code=1 NotConnected("not connected")
+  [airlift] 失败：start_service(com.apple.mobile.sync_data_class) code=1 NotConnected("not connected")
+  ```
+  **规律**：**第一个**候选回 `BrokenPipe`，**之后全部**回 `NotConnected` ——
+  说明 `lockdownd_start_service` 一旦失败，**连接就废了**，
+  后面几个候选的结果**全是假的**（不是"名字不存在"，是"连接已死"）。
+  ⇒ 改成**每个候选独立 `lockdownd_connect_rsd` 一次**，用完即 `free`。
+- **候选表加 shim 服务名**。`com.apple.afc` 是我们**已知可用**的服务
+  （`AFCService` 与 AirLift Mini 都靠它），但它走 `lockdownd_start_service` 也失败了 ——
+  说明 RSD 隧道上**标准服务名不适用**。而 `AFCService` 的注释里写的是
+  **`com.apple.afc.shim.remote`**（shim 服务名）。
+  ⇒ 候选表加入 `com.apple.afc.shim.remote` 与 `com.apple.streaming_zip_conduit.shim.remote`。
+
 ## [0.3.416] - 2026-09-18
 
 ### 诊断推进
