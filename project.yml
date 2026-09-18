@@ -133,6 +133,14 @@ targets:
           - "**/PrivacyInfo.xcprivacy"
     settings:
       base:
+        # ★★ Swift 6 语言模式迁移（分支 `swift6-migration`）。
+        #   ⚠️ 必须写在 **target** 这一层：实测顶层 `settings.base` 的 SWIFT_VERSION **不被 xcodegen 采纳**。
+        #   只作用于本 target，**不会**波及 SwiftPM 依赖（Citadel / swift-crypto 等）。
+        #   ⚠️ 刻意**不开** `SWIFT_APPROACHABLE_CONCURRENCY` / `SWIFT_DEFAULT_ACTOR_ISOLATION`：
+        #     实测三档对照 —— 基线 134 处；只开易用并发仍是 134（零效果）；
+        #     开默认 MainActor 隔离反而涨到 336（把引擎层的 nonisolated 代码全变成跨 actor 错误）。
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
         # 直接复用仓库已有的 Info.plist 与 entitlements（与 Theos 行为一致），
         # 不走 xcodegen 的 Plist 生成（避免覆盖现有文件 / 缺 properties 解析失败）。
         # 注：xcodegen 的 info/entitlements 是 Plist 类型，要求 path+properties 子键，
