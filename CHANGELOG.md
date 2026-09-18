@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.413] - 2026-09-18
+
+### 修复
+- **「显示已完成 100% 却没有安装按钮」**（用户截图两张图）：那一行是下载中心的**任务行**
+  （只画进度条，**从不画安装按钮**），本该在台账写完后被去重掉；但去重用的是页面**内存快照**，
+  下载刚完成、`reload` 还没跑的那一刻去重失败 → 任务行残留；点它走的是任务行分支，
+  面板 `isPendingDownload` 以前写死 `true` → 「覆盖安装 / 在线安装」被置灰标「下载中」，
+  于是同一行上「已完成」与「下载中」自相矛盾。
+  现在：**已成功完成且文件已落盘**的 job 不再单独成行（由台账行承担显示）；
+  任务行面板的 `isPendingDownload` 改按 `job.phase.isBusy` 传。
+- **D8：加密包「重装」缺 sinf**（修法 B）：`sinf` 以前只活在内存 `Job` 里，
+  而重装走 `installLocal`（那个 Job 早已结束）→ 必然报「缺少 SC_Info/*.sinf」。
+  现在 sinf **跟着台账落盘**，重装时读回来写进包内，**不用重下**。
+  （历史包台账里没有 sinf 的仍装不了，需要的话另开回填。）
+
+### 改进
+- **漏洞利用：`bad_query` 的「全部」能力已收口**。此前只收口了「列目录」，
+  另一条能力「取沙盒扩展」（`bad_query` / `bad_query_release` / `bad_query_internal_daemon`）
+  仍写死在 `SandboxEscape` 与 `GestaltEngine` 里 —— 这正是「勾不勾选都一个样」的原因。
+  现在两条能力都归 `BadQueryExploit`（含三路由回落：system → App Group → internal daemon，
+  路由顺序不变）；**全仓直接调用 bad_query 系原语的位置只剩 `Engine/Exploits/`**。
+  取消勾选会真的让这两条链路一起失效。
+- **并发下载**：单下载槽 → **最多 3 个并发**（`maxConcurrentDownloads`）。
+  配合「下载完成不再自动安装」，不会出现多个安装同时抢 RSD 隧道。
+
+### 未做（等用户确认）
+- **airlift**（`github.com/0xjohnnydev/airlift`）是**跑在 Mac 上**的 PoC：
+  `make` + `./airlift.py`，用 macOS 的 `MobileDevice.framework` / `AirTrafficHost.framework`，
+  路径为 Mac → USB/Wi-Fi → iPhone，攻击 iOS 27 的 AirTraffic/ATAirlock（Books 同步路径校验缺陷）。
+  **iOS 侧 app 拿不到那两个 macOS 框架**，无法作为 EscapeOS 内的漏洞利用实现。
+
 ## [0.3.412] - 2026-09-18
 
 ### 新增
