@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.416] - 2026-09-18
+
+### 诊断推进
+- **airlift 加「对照组」+ 换候选服务名**。v0.3.415 真机实测（设备 0.3.415/712）：
+  ```
+  [airlift] 配对文件 OK / RSD 隧道 OK / lockdownd OK
+  [airlift] 失败：start_service(com.apple.streaming_zip_conduit) code=1 BrokenPipe("channel closed")
+  [airlift] 失败：start_service(com.apple.atc)                    code=1 NotConnected("not connected")
+  [airlift] 失败：start_service(com.apple.mobile.sync_data_class) code=1 NotConnected("not connected")
+  [airlift] 失败：start_service(com.apple.airtraffic)             code=1 NotConnected("not connected")
+  [airlift] 失败：start_service(com.apple.mobile.airtraffic)      code=1 NotConnected("not connected")
+  ```
+  **两个错误码含义不同**：`NotConnected` = lockdownd **不认识这个名字**；
+  `BrokenPipe` = **名字对、请求被接受，但启动过程被切断**。
+  ⇒ airlift 组件图里的 `com.apple.streaming_zip_conduit` **名字没错**，卡的是**启动条件**。
+- 本版加**对照组**：`com.apple.afc` 是**已知可用**的服务（`AFCService` 靠它工作，
+  AirLift Mini 的日志也证明它能自连）。
+  · 若连它也失败 → 问题在**我们的调用方式**；
+  · 若它成功、只有 zip_conduit 失败 → 问题在**那个服务本身**
+    （很可能它要求 USB 传输，而 RSD 是本地回环隧道）。
+  候选顺序改为：`com.apple.afc` → `streaming_zip_conduit` → `mobile.data_sync` → `atc` → `mobile.sync_data_class`。
+
 ## [0.3.415] - 2026-09-18
 
 ### 修复 / 推进
