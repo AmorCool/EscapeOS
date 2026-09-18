@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.3.440] - 2026-09-19
+
+### 新增：AFC 越权路径**只读**探测（验证参考项目那条「不用 AT 协议」的捷径）
+
+参考项目 `marksvia/airlift-HideAccount` 里有一条**完全不同的攻击路径**
+（`Sources/accounts_direct.m`）：连 `com.apple.crashreportcopymobile` 这个 AFC 服务，
+用 `AFCFileRefOpen(绝对路径, mode=3)` **直接写** `/var/mobile/Library/Accounts/Accounts3.sqlite`
+—— 没有 zip、没有 symlink、**完全不用 AirTraffic/AT 协议**。
+
+如果这条成立，整条攻击链会简单一个数量级。但该仓库 README 自称 `Untested`，
+而且它的 `hide.py` **实际调用的还是老 airlift 链路**，`accounts_direct` 根本没被调用
+—— 自相矛盾。所以本版做一次**只读**验证。
+
+新增 `AirliftExploit.runAfcEscapeProbe()`：用现成的 `withTunnel` 建隧道，
+分别连 **两组** AFC，各跑同一张路径表：
+
+| 组 | 服务 | 已知根 |
+|---|---|---|
+| 1 | `com.apple.crashreportcopymobile`（经 `crash_report_client_to_afc` 转换） | `/var/mobile/Library/Logs/CrashReporter` |
+| 2 | `com.apple.afc` | `/var/mobile/Media` |
+
+路径表（**只用 `afc_get_file_info`，只查属性**）：
+```
+Accounts3.sqlite                                   ← 纯相对，作对照（不算逃逸）
+/var/mobile/Library/Accounts/Accounts3.sqlite      ← ★ 绝对路径（参考项目的目标）
+/var/mobile/Library/Preferences                    ← ★ 绝对路径（目录）
+../../Library/Accounts/Accounts3.sqlite            ← 相对 + .. 回溯（★ 也算逃逸）
+/var/mobile/Media                                  ← 绝对路径
++ 对照项：列根目录拿到的第一条（必然存在，用来证明连接是好的）
+```
+判定：**除「纯相对」那条外，任意一条成功 = 绝对路径能逃出 AFC 根目录**。
+（不能只看「以 `/` 开头」——`../../` 那条走的是回溯，只按前缀判会漏掉它。）
+
+**★ 全程只读：只做 `afc_get_device_info` / `afc_list_directory` / `afc_get_file_info`，
+绝不写、绝不删、绝不改设备上任何文件。** 完整记录落盘 `LoginLogs/airlift_afc_probe.txt`。
+
+挂载点：`triggerProtocolProbeOnce()` 里**先跑本探测**（只读、快、可能直接给出答案），
+再跑 AT 协议探测；两者都在串行的 `protocolQueue` 上，不违反「RSD 隧道并发铁律」。
+
+**遗留风险（已知，未处理）**：本探测与 AT 探测同挂在「首次被功能调用」的路径上，
+会真连两个服务 —— 与 v0.3.419 事故同类（真建连）。用的是生产已验证的 FFI
+（`crash_report_client_connect_rsd` 本来就是「崩溃日志」面板在用的），且单飞只跑一次，
+但仍属「真连设备」，需要真机确认不影响其它依赖配对文件的功能。
+
 ## [0.3.439] - 2026-09-19
 
 ### AT 消息链按**正确方向**重写 + 读超时（修「永久挂死」）
