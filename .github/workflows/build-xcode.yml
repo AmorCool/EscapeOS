@@ -70,11 +70,12 @@ jobs:
           sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
 
-      - name: Install build tooling (xcodegen, cmake, ldid)
-        # ⚠️ ldid 只被安装、**从不调用**（见「Package unsigned IPA」步骤里的说明）：
-        # 本轨道按用户要求出【未签名 IPA】，entitlements 随 .app 携带、交给侧载工具施加。
-        # 保留安装是为了与历史步骤一致；**不要因为看到它就把 ldid 调用加回来**。
-        run: brew install xcodegen ldid cmake
+      - name: Install build tooling (xcodegen, cmake)
+        # 本轨道出【未签名 IPA】：不调用 ldid，entitlements 随 .app 携带、交给侧载工具施加
+        # （见「Package unsigned IPA」步骤）。
+        # ★ ldid 已从依赖里删除（2026-09-18）：全流程从不调用它，装着只是白装 ——
+        #   将来要恢复签名才需要把它加回来。
+        run: brew install xcodegen cmake
 
       - name: Cache SAP assets and Unicorn build
         # Asspp 本地 SAP 登录：Unicorn 源码/构建 + Apple SAP 资产（约 38MB）。
