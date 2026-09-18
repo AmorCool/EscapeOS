@@ -185,9 +185,8 @@ final class DialerThemeManager {
         let fmNames = (try? fm.contentsOfDirectory(atPath: directory)) ?? []
         if !fmNames.isEmpty { return fmNames }
 
-        // v0.3.412：BadQueryLister 现在可能返回 nil（漏洞利用全关时）。
-        // 这里语义上"拿不到任何条目"等同空数组。
-        return BadQueryLister.entryNames(at: directory, maxInode: maxInode) ?? []
+        // v0.3.412：走漏洞利用注册表（拿不到任何条目 = 空数组）。
+        return ExploitRegistry.run { $0.entryNames(at: directory, maxInode: maxInode) } ?? []
     }
 
     // MARK: - 容器发现

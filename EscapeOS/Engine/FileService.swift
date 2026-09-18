@@ -104,10 +104,10 @@ final class FileService {
         if let fmNames = try? fm.contentsOfDirectory(atPath: path), !fmNames.isEmpty {
             names = fmNames
         } else {
-            // v0.3.412：BadQueryLister 现在可能返回 nil（漏洞利用全关时）。
-            names = BadQueryLister.entryNames(at: path) ?? []
+            // v0.3.412：走漏洞利用注册表 —— 已启用的实现按随机顺序试，全失败 = 空。
+            names = ExploitRegistry.run { $0.entryNames(at: path, maxInode: 1_000_000) } ?? []
             if names.isEmpty {
-                names = BadQueryLister.entryNames(at: path, maxInode: 2_000_000) ?? []
+                names = ExploitRegistry.run { $0.entryNames(at: path, maxInode: 2_000_000) } ?? []
             }
         }
         return try buildFileItems(names: names, basePath: path, fallbackKind: .directory)

@@ -36,6 +36,12 @@ struct MoreView: View {
     /// 分组定义（v0.3.29：22 个功能 → 7 个逻辑分区）
     private var sections: [(header: String, footer: String?, items: [MoreItem])] {
         [
+            // v0.3.412：漏洞利用 —— 置顶的普通导航行，点进去是二级选择页。
+            ("漏洞利用", nil, [
+                MoreItem("exploit", "ladybug.fill", "漏洞利用",
+                         "选择使用的漏洞利用",
+                         ExploitSelectionView()),
+            ]),
             ("配对文件", "重置/更换配对文件后从这里重新导入", [
                 MoreItem("pairing-import", "key.horizontal", "配对文件导入",
                          "文件导入 / 剪贴板粘贴 / iOS 27 无线配对",
@@ -141,11 +147,6 @@ struct MoreView: View {
 
     var body: some View {
         List {
-            // v0.3.412：漏洞利用设置 —— **默认置顶**在「更多」首页。
-            // 多选叠加；调用时按随机顺序遍历已勾选的类型，失败自动切下一个。
-            // 用户全关 = 不使用任何漏洞利用；首次安装默认勾选 badQueryList（与之前行为一致）。
-            ExploitsSection()
-
             ForEach(sections, id: \.header) { section in
                 Section {
                     ForEach(section.items.filter(isVisible)) { item in
@@ -244,49 +245,3 @@ struct MoreCard: View {
 }
 
 
-/// v0.3.412：「更多」首页置顶的「漏洞利用」分组.
-///
-/// 列出 `ExploitKind.allCases`，每个用 Toggle 勾选/取消。
-/// 持久化通过 `ExploitSettings`（UserDefaults）—— 多选叠加。
-/// 运行时由 `ExploitPicker.run` 按随机顺序遍历已勾选的类型，失败切下一个。
-struct ExploitsSection: View {
-    @ObservedObject private var settings = ExploitSettings.shared
-
-    var body: some View {
-        Section {
-            ForEach(ExploitKind.allCases) { kind in
-                Toggle(isOn: binding(for: kind)) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(kind.title)
-                            .font(.subheadline)
-                        Text(kind.detail)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        } header: {
-            Text("漏洞利用")
-                .font(.footnote.weight(.semibold))
-                .textCase(nil)
-                .foregroundColor(.secondary)
-        } footer: {
-            Text("多选叠加。同时启用多个时按随机顺序尝试；调用失败自动切换到下一个已勾选的类型；全部失败才报错。全关 = 不使用任何漏洞利用。首次安装默认启用 bad_query_list（与之前行为一致）。")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private func binding(for kind: ExploitKind) -> Binding<Bool> {
-        Binding(
-            get: { settings.enabled.contains(kind) },
-            set: { on in
-                if on {
-                    settings.enabled.insert(kind)
-                } else {
-                    settings.enabled.remove(kind)
-                }
-            }
-        )
-    }
-}

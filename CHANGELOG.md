@@ -3,11 +3,15 @@
 ## [0.3.412] - 2026-09-18
 
 ### 新增
-- **「更多」首页置顶的「漏洞利用」分组**（多选叠加；用户全关 = 不使用任何漏洞利用）
-  - `ExploitKind` 枚举（目前仅 `.badQueryList`）—— 把此前硬编码的 `bad_query` 路径**独立成可切换的漏洞利用类型**。
-  - 持久化 `ExploitSettings`（UserDefaults）—— 默认开启 `.badQueryList`（与之前行为一致）。
-  - 调用侧 `ExploitPicker.run`：按**随机顺序**遍历已勾选的类型，第一个返回非空的即采纳，全部失败才视为「无可用漏洞利用」。未来新增免越狱玩法只需在 `case` + `switch` 分支加一行。
-  - `BadQueryLister.entryNames/paths` 接入上述 picker：用户关掉 `.badQueryList` 时对应根目录直接返回空集。
+- **「更多」新增「漏洞利用」导航入口**（置顶），点进去是**二级选择页**，多选启用（可同时开多个）。
+- **把 `bad_query` 真正抽成独立的可插拔实现**（不是调用点里加判断）：
+  - 新增 `SandboxExploit` 协议（`Engine/Exploits/SandboxExploit.swift`）—— 漏洞利用的能力接口。
+  - 新增 `ExploitRegistry` 注册表 —— 所有玩法的**唯一登记处**，按用户勾选过滤、按随机顺序分发（第一个成功即采纳，全失败才报无可用）。
+  - 新增 `BadQueryExploit`（`Engine/Exploits/BadQueryExploit.swift`）—— `bad_query_list` 的**独立实现**。
+  - **删除** `BadQueryLister`（实现已整体搬进 `BadQueryExploit`，不留第二套）。
+  - 调用方（`FileService` / `DialerThemeManager` / `WallpaperHandler`）改为面向 `SandboxExploit` 协议，
+    **不再认识 `bad_query`** —— 将来新增玩法只需「加一个实现 + 注册表加一行」，调用方零改动。
+  - `ExploitKind` 枚举 + `ExploitSettings` 持久化（UserDefaults），默认启用 `badQueryList`（与升级前行为一致）。
 
 ### 修复
 - **彻底去掉「下载完成自动安装」**（用户明确要求「以后安装都不能自动安装 否则怕出bug」）。
