@@ -77,9 +77,9 @@
 		<string>iPhoneOS</string>
 	</array>
 <key>CFBundleShortVersionString</key>
-<string>0.3.423</string>
+<string>0.3.424</string>
 <key>CFBundleVersion</key>
-<string>720</string>
+<string>721</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>

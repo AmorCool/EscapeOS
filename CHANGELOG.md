@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.3.424] - 2026-09-18
+
+### 修复：「v0.3.418 好、419 起所有依赖配对文件的功能失效」的真正根因
+
+用户报告：**v0.3.418 一切正常，从 v0.3.419 开始，所有依赖配对文件的功能都无法使用**
+（先测到的是空间回收板块），且升级到 421/422/423 都不恢复。
+
+排查方法：`git diff 2aa47a7 cf0e032`（418 → 419 的完整代码差异）。
+
+**结论：418 → 419 的代码差异只有一处** ——
+`EscapeOS/Engine/Exploits/AirliftExploit.swift` 的 `connectivitySelfTest()`
+从「只读 RSD 服务表」变成了「**真的去建连**」：
+
+```
+418:  rsd_service_available(handshake, name, &available)        ← 纯读握手包，不发请求
+419:  rsd_get_service_info(...) + adapter_connect(adapter, port, &stream)   ← 真的建连
+420:  更进一步 —— idevice_new_tcp_socket + idevice_rsd_checkin（完整会话握手）
+```
+
+而这段自检**当时被挂在「勾选 airlift」这个 UI 动作上**（`ExploitSelectionView.toggle`），
+跑在 `Task.detached` 里 —— 于是用户一点勾选，就额外建了一条 RSD 隧道并向设备发起会话握手。
+
+**两层后果：**
+
+1. **设备端被污染**：真机日志显示此后 `attemptPairVerify` 连续 63 次零响应
+   （`Sending attemptPairVerify` → `Waiting` → 超时，每 7 秒一次、持续 7 分钟），
+   即设备端 RPPairing 配对验证不再响应，所有走 RSD 隧道的功能一起失效。
+2. **App 侧勾选状态不自愈**：`.airlift` 一旦被勾选就存进 `UserDefaults`。
+   而 `AirliftExploit` 目前**没有任何实际能力**（`paths` / `consumeExtension` /
+   `consumeExtensionWithFallback` **全部返回 `nil`**）。用户若为测试 airlift 而
+   **取消勾选 `bad_query`**，`ExploitRegistry.enabled()` 就只剩 `[AirliftExploit]` ——
+   **所有依赖沙盒逃逸的功能（空间回收 / 文件浏览 / 壁纸 / 拨号器主题 / 配置描述）一起失效**，
+   而且升级版本也不会自愈。
+
+**本版三处修复：**
+
+1. **自检彻底只读**：`connectivitySelfTest()` 只查 RSD 服务表（拿 port / remoteXPC），
+   **不建任何连接**。注释里写明原因，防止以后有人再把建连加回去。
+2. **`ExploitRegistry.enabled()` 加兜底**：新增 `ExploitKind.isFunctional`
+   （`badQueryList` = true，`airlift` = false，等 airlift 真正实现越界写后改回 true）。
+   `enabled()` 里若发现「勾了东西、但一个能干的都没有」，就补回 `badQueryList` ——
+   **保证基础功能永远可用**，且不改变「一个都不勾 = 不使用任何漏洞利用」的原语义。
+3. **`ExploitSettings` 一次性迁移**：清掉 `UserDefaults` 里历史遗留的 `.airlift` 勾选状态
+   （若清空则回落到 `badQueryList`）。迁移只做一次，用户以后想再用 airlift 可重新勾选。
+
+**另外**：v0.3.421 已撤除「勾选即跑自检」，v0.3.422 给虚拟定位健康检查加了失败退避，
+v0.3.423 给 `enabled()` 加了缓存 —— 这三项与本条根因是**不同的独立问题**，一并保留。
+
 ## [0.3.423] - 2026-09-18
 
 ### 修复：我引入的性能回归 —— `ExploitRegistry.enabled()` 被高频调用却没缓存
