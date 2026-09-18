@@ -886,6 +886,56 @@ struct IdeviceFfiError *stream_recv_xml(struct ReadWriteOpaque *stream_handle,
                                         char **out);
 
 /**
+ * Sends an XML payload over a ReadWriteOpaque stream with a selectable
+ * length-prefix byte order (4-byte LE or BE prefix + XML body).
+ *
+ * Needed because the AirTraffic (atc) service frames may use little-endian
+ * length prefixes while the RSD handshake is big-endian — see
+ * `stream_recv_xml_auto` for the evidence.
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`xml`] - The XML payload (null-terminated string)
+ * * [`little_endian`] - true = little-endian length prefix, false = big-endian
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `xml` must be a valid null-terminated C string.
+ */
+struct IdeviceFfiError *
+stream_send_xml_ordered(struct ReadWriteOpaque *stream_handle, const char *xml,
+                        bool little_endian);
+
+/**
+ * Reads an XML payload from a ReadWriteOpaque stream, auto-detecting the
+ * byte order of the 4-byte length prefix.
+ *
+ * The prefix is interpreted big-endian first, then little-endian; the first
+ * interpretation that lands in 1..=8MiB wins. If neither is plausible the
+ * call fails with an error message containing the raw hex bytes and both
+ * interpretations, e.g. `raw=B8 00 00 00 be=3087007744 le=184`.
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`out`] - Pointer to store the newly allocated string
+ * * [`used_little_endian`] - Optional (may be NULL); receives the detected order
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `out` must be a valid pointer. Free the returned string with
+ * `idevice_string_free`. `used_little_endian` may be NULL.
+ */
+struct IdeviceFfiError *
+stream_recv_xml_auto(struct ReadWriteOpaque *stream_handle, char **out,
+                     bool *used_little_endian);
+
+/**
  * Frees a string allocated by this library
  *
  * # Arguments

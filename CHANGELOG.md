@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.3.439] - 2026-09-19
+
+### AT 消息链按**正确方向**重写 + 读超时（修「永久挂死」）
+
+拿到 airlift PoC 的**主机端真实源码** `Sources/airtraffic_host.m` 后发现：
+**我们的 AT 消息方向是反的**。它用的是 Apple 私有 API，调用顺序本身就是协议时序：
+
+```objc
+ATHostConnectionCreate(udid);                                   // 建连接
+// ★ 先「读」—— 设备会主动发 SyncAllowed（最多读 8 条）
+ATHostConnectionSendHostInfo(c, hostInfo);                      // 发 HostInfo
+usleep(200000);
+ATHostConnectionSendSyncRequest(c, @[@"Book"], @{}, hostInfo);   // 发 RequestingSync
+// ★ 再「读」—— 设备发 ReadyForSync（最多读 12 条）
+ATHostConnectionSendMetadataSyncFinished(c, @{@"Book": @1}, @{}); // 发 FinishedSyncingMetadata
+// ★ 读 —— 设备发 AssetManifest（最多读 20 条）
+ATHostConnectionSendAssetCompleted(c, id, @"Book", dest);        // ★ 攻击：发 FileComplete
+```
+
+**上一版的 6 个错**：① 把 `ReadyForSync` 当**发送**消息（它是**设备→主机**的）；
+② 从没读过设备主动发来的 `SyncAllowed`；③ `HostInfo`/`RequestingSync` 字段是编的；
+④ 漏了 `FinishedSyncingMetadata`；⑤ 发 `AssetManifest`（也是设备→主机的）；
+⑥ 一上来就发东西，没有先读。
+
+**新的 AT 流程**（每步都写日志，读有次数上限）：
+```
+0 只读首条 → 探明帧字节序（失败即收工，不猜）
+1 读至 SyncAllowed（≤7）        2 发 HostInfo（8 字段照抄 PoC）
+3 usleep 200ms → 发 RequestingSync
+4 读至 ReadyForSync（≤12）      5 发 FinishedSyncingMetadata{SyncTypes:{Book:1},Anchors:{}}
+6 读至 AssetManifest（≤20）     7 发 FileComplete{AssetID,Dataclass,AssetPath}
+```
+另：名字前缀按 PoC 的 `airlift_target.h` 改成 `airlift-src-`（上一版写的
+`airlift-source-` 与设备端认的**不一致**）。`FileBegin` 在 PoC 最小路径里不用，本版不发。
+
+### 新增两个 FFI
+
+```c
+struct IdeviceFfiError *stream_send_xml_ordered(struct ReadWriteOpaque *, const char *xml,
+                                                bool little_endian);
+struct IdeviceFfiError *stream_recv_xml_auto(struct ReadWriteOpaque *, char **out,
+                                             bool *used_little_endian);
+```
+- **为什么需要**：RSD 帧已实测是**大端**（RSDCheckin 两条响应都解析成功），
+  但 AT 帧可能不是 —— 真机日志 `plist 长度异常: 3087007744` = `0xB8000000`，
+  同样 4 个字节按**小端**读是 **184**（一个完全合理的 plist 大小）。
+  所以不预设，**先读后发**：第一步就「读」，读成功即得字节序，之后再按它发送。
+- 读失败时错误信息带上 4 个字节的**原始十六进制 + 两种解释**
+  （`raw=B8 00 00 00 be=3087007744 le=184`）—— 一次构建就能定案，不用反复试。
+- 原 `stream_send_xml` / `stream_recv_xml` **未动**（RSD 握手仍在用）。
+
+### 修「永久挂死」：给读加 15s 超时
+
+`read_exact` 原本**没有超时**。AT 阶段第一步恰恰就是「只读」等设备主动发消息 ——
+设备不发的话，线程会**永远**卡在 `protocolQueue` 上，而调用方已经把
+`protocolProbeStarted` 置了 `true` ⇒ airlift 在**整个 App 生命周期内永久失效**，
+还白占一个线程。现在两个读函数都用 `tokio::time::timeout(15s)` 包住，
+超时返回 `UnexpectedResponse("读超时：15s 内设备没有发来完整的一帧")`。
+**宁可报错，不可挂死。**
+
 ## [0.3.438] - 2026-09-18
 
 ### 修「一点空间回收扫描就闪退」+ 日志设置 UI 按反馈重做

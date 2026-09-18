@@ -277,6 +277,148 @@ pub unsafe extern "C" fn stream_send_xml(
     }
 }
 
+/// 通过 `ReadWriteOpaque` 流发送一条 XML，**长度前缀的字节序可指定**。
+///
+/// # 为什么需要这个（2026-09-19）
+/// RSD 握手（`RSDCheckin` / 服务表）已实测是大端 4 字节长度前缀，用
+/// [`stream_send_xml`] 即可。但设备端 **AirTraffic（atc）服务**的帧字节序不同：
+/// 真机日志里 `stream_recv_xml` 读 `ReadyForSync` 响应时报
+/// `plist 长度异常: 3087007744`（= `0xB8000000`），而同样的 4 个字节
+/// `B8 00 00 00` 按小端读是 **184** —— 一个完全合理的 plist 大小。
+/// ⇒ AT 链路的帧字节序必须**可切换**，且不能靠猜（见 [`stream_recv_xml_auto`]）。
+///
+/// 其余行为与 [`stream_send_xml`] 完全一致。
+///
+/// # Safety
+/// `stream_handle` 必须是由本库分配的有效句柄；`xml` 必须是有效的 NUL 结尾 C 字符串。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stream_send_xml_ordered(
+    stream_handle: *mut ReadWriteOpaque,
+    xml: *const c_char,
+    little_endian: bool,
+) -> *mut IdeviceFfiError {
+    if stream_handle.is_null() || xml.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+    let inner = unsafe { &mut (*stream_handle).inner };
+    let Some(stream) = inner.as_mut() else {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    };
+    let xml = match unsafe { CStr::from_ptr(xml) }.to_str() {
+        Ok(s) => s.to_owned(),
+        Err(_) => return ffi_err!(IdeviceError::FfiInvalidString),
+    };
+
+    let res = run_sync(async move {
+        let len = xml.len() as u32;
+        let prefix = if little_endian {
+            len.to_le_bytes()
+        } else {
+            len.to_be_bytes()
+        };
+        stream.write_all(&prefix).await?;
+        stream.write_all(xml.as_bytes()).await?;
+        stream.flush().await?;
+        Ok::<(), IdeviceError>(())
+    });
+
+    match res {
+        Ok(_) => null_mut(),
+        Err(e) => {
+            tracing::error!("stream_send_xml_ordered failed: {e}");
+            ffi_err!(e)
+        }
+    }
+}
+
+/// 通过 `ReadWriteOpaque` 流读取一条 XML，**自动探测长度前缀的字节序**。
+///
+/// 判定规则（先读 4 字节，两种解释都试）：
+/// · 若大端解释落在 `1..=8MiB` → 视为大端，`*used_little_endian = false`；
+/// · 否则若小端解释落在同一区间 → 视为小端，`*used_little_endian = true`；
+/// · 两者都不合法 → 返回 `UnexpectedResponse`，**错误信息里带上这 4 个字节的原始十六进制**
+///   以及两种解释的数值（形如 `raw=B8 00 00 00 be=3087007744 le=184`）——
+///   这样一次真机运行就能拿到确证，而不是靠猜字节序反复试。
+///
+/// ⚠️ 存在两种解释都合法的歧义（例如 `00 00 01 00`：be=256 / le=65536）。
+/// 这里**优先大端**：RSD 握手实测就是大端，先按已知事实解释；
+/// 若真机上探测结果不对，错误信息里的 raw 十六进制足以定位。
+///
+/// 成功后把正文写成 NUL 结尾的 C 字符串存入 `out`
+/// （调用方用 `idevice_string_free` 释放）。
+///
+/// # Safety
+/// `stream_handle` 必须是由本库分配的有效句柄；`out` 必须是有效指针；
+/// `used_little_endian` 可为 NULL（此时只跳过回写，不影响解析逻辑）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stream_recv_xml_auto(
+    stream_handle: *mut ReadWriteOpaque,
+    out: *mut *mut c_char,
+    used_little_endian: *mut bool,
+) -> *mut IdeviceFfiError {
+    if stream_handle.is_null() || out.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+    let inner = unsafe { &mut (*stream_handle).inner };
+    let Some(stream) = inner.as_mut() else {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    };
+
+    let res: Result<(String, bool), IdeviceError> = run_sync(async move {
+        // ⚠️ **必须有超时。** `read_exact` 在设备一条消息都不发时会**永久阻塞**。
+        // AT 阶段的第一步恰恰就是「只读」—— 等设备主动发来 `SyncAllowed`。
+        // 没有超时的话，只要设备不发，这条线程就永远卡在 protocolQueue 上，
+        // 而调用方已经把 `protocolProbeStarted` 置了 true ⇒ airlift 在整个 App
+        // 生命周期内**永久失效**（还占着一个线程）。宁可报错，不可挂死。
+        let frame = async {
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).await?;
+            let be = u32::from_be_bytes(len_buf);
+            let le = u32::from_le_bytes(len_buf);
+            let max_len = 8 * 1024 * 1024;
+            let (len, little) = if (1..=max_len).contains(&be) {
+                (be, false)
+            } else if (1..=max_len).contains(&le) {
+                (le, true)
+            } else {
+                return Err(IdeviceError::UnexpectedResponse(format!(
+                    "格式无法识别: raw={:02X} {:02X} {:02X} {:02X} be={be} le={le}",
+                    len_buf[0], len_buf[1], len_buf[2], len_buf[3]
+                )));
+            };
+            let mut buf = vec![0u8; len as usize];
+            stream.read_exact(&mut buf).await?;
+            let text = String::from_utf8(buf)
+                .map_err(|_| IdeviceError::UnexpectedResponse("plist 正文非 UTF-8".into()))?;
+            Ok::<(String, bool), IdeviceError>((text, little))
+        };
+
+        match tokio::time::timeout(std::time::Duration::from_secs(15), frame).await {
+            Ok(result) => result,
+            Err(_) => Err(IdeviceError::UnexpectedResponse(
+                "读超时：15s 内设备没有发来完整的一帧".into(),
+            )),
+        }
+    });
+
+    match res {
+        Ok((s, little)) => {
+            let c = std::ffi::CString::new(s).unwrap_or_default();
+            unsafe {
+                *out = c.into_raw();
+                if !used_little_endian.is_null() {
+                    *used_little_endian = little;
+                }
+            }
+            null_mut()
+        }
+        Err(e) => {
+            tracing::error!("stream_recv_xml_auto failed: {e}");
+            ffi_err!(e)
+        }
+    }
+}
+
 /// 通过 `ReadWriteOpaque` 流读取一条 XML（先读 4 字节大端长度，再读正文）。
 ///
 /// 成功后把正文写成 NUL 结尾的 C 字符串存入 `out`
@@ -298,19 +440,35 @@ pub unsafe extern "C" fn stream_recv_xml(
     };
 
     let res: Result<String, IdeviceError> = run_sync(async move {
-        let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf).await?;
-        let len = u32::from_be_bytes(len_buf) as usize;
-        // 防御：长度异常直接报错（正常 plist 不会到 8MB）
-        if len == 0 || len > 8 * 1024 * 1024 {
-            return Err(IdeviceError::UnexpectedResponse(format!(
-                "plist 长度异常: {len}"
-            )));
+        // 同 [`stream_recv_xml_auto`]：**读必须有超时**，否则设备不回就永久挂死。
+        let frame = async {
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).await?;
+            let len = u32::from_be_bytes(len_buf) as usize;
+            // 防御：长度异常直接报错（正常 plist 不会到 8MB）。
+            // 错误信息里带上 4 个原始字节 —— 否则只知道数字、不知道线上到底是什么。
+            if len == 0 || len > 8 * 1024 * 1024 {
+                return Err(IdeviceError::UnexpectedResponse(format!(
+                    "plist 长度异常: {len}（raw={:02X} {:02X} {:02X} {:02X} le={}）",
+                    len_buf[0],
+                    len_buf[1],
+                    len_buf[2],
+                    len_buf[3],
+                    u32::from_le_bytes(len_buf)
+                )));
+            }
+            let mut buf = vec![0u8; len];
+            stream.read_exact(&mut buf).await?;
+            String::from_utf8(buf)
+                .map_err(|_| IdeviceError::UnexpectedResponse("plist 正文非 UTF-8".into()))
+        };
+
+        match tokio::time::timeout(std::time::Duration::from_secs(15), frame).await {
+            Ok(result) => result,
+            Err(_) => Err(IdeviceError::UnexpectedResponse(
+                "读超时：15s 内设备没有发来完整的一帧".into(),
+            )),
         }
-        let mut buf = vec![0u8; len];
-        stream.read_exact(&mut buf).await?;
-        String::from_utf8(buf)
-            .map_err(|_| IdeviceError::UnexpectedResponse("plist 正文非 UTF-8".into()))
     });
 
     match res {
