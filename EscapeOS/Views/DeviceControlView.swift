@@ -226,17 +226,21 @@ struct DeviceControlView: View {
     private func runViaTunnel(_ action: DeviceAction) {
         isRunning = true
         runningTitle = "正在执行「\(action.rawValue)」…"
-        Task.detached(priority: .userInitiated) { [service] in
+        // Swift 6：不再以 [service] 捕获实例——self.service 是主 actor 隔离属性且
+        // DeviceControlService 非 Sendable，无法送入 detached 闭包；改在闭包内直接
+        // 引用 `DeviceControlService.shared`（nonisolated(unsafe) static let，同一
+        // 单例，语义不变，与 FileBrowserViewModel 批次的 ContainerNameResolver 同型）.
+        Task.detached(priority: .userInitiated) {
             do {
                 switch action {
                 case .respringKill:
-                    try service.respringSpringBoard()
+                    try DeviceControlService.shared.respringSpringBoard()
                 case .restart:
-                    try service.restartDevice()
+                    try DeviceControlService.shared.restartDevice()
                 case .shutdown:
-                    try service.shutdownDevice()
+                    try DeviceControlService.shared.shutdownDevice()
                 case .recovery:
-                    try service.enterRecovery()
+                    try DeviceControlService.shared.enterRecovery()
                 case .webCrash:
                     break
                 }

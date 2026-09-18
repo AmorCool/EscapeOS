@@ -571,7 +571,11 @@ struct DeviceSlimView: View {
         phase = .reinstalling
         statusText = "正在卸载并重装…"
         Task {
-            let result = await DeviceSlimService.reinstall(items: targets) { p in
+            // Swift 6：回调以 `@Sendable` 显式标注 → 非 MainActor 隔离，消除
+            // 「sending MainActor 闭包给 nonisolated 方法」的诊断（与 AppStore 批次
+            // b8123f5 的 `{ @Sendable line in … }` 同型）；捕获的 self（View 结构体）
+            // 与 ReinstallProgress 均为 Sendable，语义不变.
+            let result = await DeviceSlimService.reinstall(items: targets) { @Sendable p in
                 Task { @MainActor in reinstallProgress = p }
             }
             if result.ok.isEmpty && !result.failures.isEmpty {

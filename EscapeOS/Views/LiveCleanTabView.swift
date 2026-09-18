@@ -362,6 +362,12 @@ struct ContainerDiagnosticView: View {
     }
 }
 
+/// Swift 6：本类是 SwiftUI 的 UI 模型，只在主线程读写（唯一消费者 LiveCleanTabView）→
+/// 标 `@MainActor` 是语义正确的隔离，同时让 `self` 成为 Sendable：
+/// 内层 `DispatchQueue.main.async { self.x = … }` 捕获 self 的 `sending` 诊断自然消失
+/// （该闭包本来就在主线程执行，线程语义与顺序不变）；外层 global 闭包经 self.service
+/// 触达引擎，与 AppDetailView 试点（c7dcbb9）同型，Dispatch 闭包继承主 actor 隔离.
+@MainActor
 final class LiveCleanTabViewModel: ObservableObject {
     @Published var rows: [LiveCleanAppRank] = []
     @Published var selected: Set<String> = []
@@ -537,7 +543,10 @@ final class LiveCleanTabViewModel: ObservableObject {
                     failures += 1
                 }
             }
-            DispatchQueue.main.async {
+            // Swift 6：此闭包捕获外层可变局部变量（freed/files/skipped/failures），
+            // 编译器未把它推断为主 actor 隔离 → 显式标 `@MainActor`，保证写 @Published
+            // 与调用 self.scan(guests:) 合法（本就派发到主队列执行，语义不变）.
+            DispatchQueue.main.async { @MainActor in
                 self.isBusy = false
                 var message = "已释放 \(ReclaimService.formatBytes(freed))（\(files) 个文件），来自 LiveContainer 内 \(installedTargets.count) 个应用."
                 if skipped > 0 {

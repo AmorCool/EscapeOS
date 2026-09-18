@@ -560,6 +560,12 @@ enum ProcessSortMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Swift 6：本类是 SwiftUI 的 UI 模型，只在主线程读写（唯一消费者 ProcessManagerView）→
+/// 标 `@MainActor` 是语义正确的隔离，同时让 `self` 成为 Sendable：
+/// 各 Task / Task.detached 内层 `MainActor.run { self.x = … }` 捕获 self 的
+/// `sending 'self'` 诊断自然消失（那些闭包本来就在主线程执行，线程语义与顺序不变）。
+/// verifyKill 注释中「@MainActor 类内 Task {} 继承主线程隔离」即为此预留.
+@MainActor
 final class ProcessManagerViewModel: ObservableObject {
     @Published private(set) var processes: [ProcessEntry] = []
     /// v0.3.47：排序模式
