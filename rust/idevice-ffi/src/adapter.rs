@@ -229,3 +229,98 @@ pub unsafe extern "C" fn adapter_recv(
         }
     }
 }
+
+/// 通过 `ReadWriteOpaque` 流发送一条 XML（**4 字节大端长度前缀 + XML 正文**）。
+///
+/// # 为什么需要这个（2026-09-18）
+/// airlift 漏洞利用要自己扮演 AirTraffic 主机端，需要向设备发 `RSDCheckin`
+/// 与 AT 消息（都是 plist / XML）。而现有 FFI 里能发字节的 `adapter_send`
+/// 只接受 `AdapterStreamHandle`，但 `adapter_connect` 返回的是 `ReadWriteOpaque`
+/// —— **两者不通用，库里也没有任何转换函数**。所以补这一对。
+///
+/// 线格式与 `mcinstall.rs` 的 `send_xml` 一致（idevice property_list_service 线格式）。
+///
+/// # Safety
+/// `stream_handle` 必须是由本库分配的有效句柄；`xml` 必须是有效的 NUL 结尾 C 字符串。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stream_send_xml(
+    stream_handle: *mut ReadWriteOpaque,
+    xml: *const c_char,
+) -> *mut IdeviceFfiError {
+    if stream_handle.is_null() || xml.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+    let inner = unsafe { &mut (*stream_handle).inner };
+    let Some(stream) = inner.as_mut() else {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    };
+    let xml = match unsafe { CStr::from_ptr(xml) }.to_str() {
+        Ok(s) => s.to_owned(),
+        Err(_) => return ffi_err!(IdeviceError::FfiInvalidString),
+    };
+
+    let res = run_sync(async move {
+        let len = xml.len() as u32;
+        stream.write_all(&len.to_be_bytes()).await?;
+        stream.write_all(xml.as_bytes()).await?;
+        stream.flush().await?;
+        Ok::<(), IdeviceError>(())
+    });
+
+    match res {
+        Ok(_) => null_mut(),
+        Err(e) => {
+            tracing::error!("stream_send_xml failed: {e}");
+            ffi_err!(e)
+        }
+    }
+}
+
+/// 通过 `ReadWriteOpaque` 流读取一条 XML（先读 4 字节大端长度，再读正文）。
+///
+/// 成功后把正文写成 NUL 结尾的 C 字符串存入 `out`
+/// （调用方用 `idevice_string_free` 释放）。
+///
+/// # Safety
+/// `stream_handle` 必须是由本库分配的有效句柄；`out` 必须是有效指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stream_recv_xml(
+    stream_handle: *mut ReadWriteOpaque,
+    out: *mut *mut c_char,
+) -> *mut IdeviceFfiError {
+    if stream_handle.is_null() || out.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+    let inner = unsafe { &mut (*stream_handle).inner };
+    let Some(stream) = inner.as_mut() else {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    };
+
+    let res: Result<String, IdeviceError> = run_sync(async move {
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).await?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        // 防御：长度异常直接报错（正常 plist 不会到 8MB）
+        if len == 0 || len > 8 * 1024 * 1024 {
+            return Err(IdeviceError::UnexpectedResponse(format!(
+                "plist 长度异常: {len}"
+            )));
+        }
+        let mut buf = vec![0u8; len];
+        stream.read_exact(&mut buf).await?;
+        String::from_utf8(buf)
+            .map_err(|_| IdeviceError::UnexpectedResponse("plist 正文非 UTF-8".into()))
+    });
+
+    match res {
+        Ok(s) => {
+            let c = std::ffi::CString::new(s).unwrap_or_default();
+            unsafe { *out = c.into_raw() };
+            null_mut()
+        }
+        Err(e) => {
+            tracing::error!("stream_recv_xml failed: {e}");
+            ffi_err!(e)
+        }
+    }
+}

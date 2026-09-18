@@ -845,6 +845,47 @@ void idevice_free(struct IdeviceHandle *idevice);
 void idevice_stream_free(struct ReadWriteOpaque *stream_handle);
 
 /**
+ * Sends an XML payload over a ReadWriteOpaque stream
+ * (4-byte big-endian length prefix + XML body).
+ *
+ * Used by the airlift exploit to speak RSDCheckin / AirTraffic messages:
+ * `adapter_connect` returns a ReadWriteOpaque, while `adapter_send` only
+ * accepts an AdapterStreamHandle — this bridges that gap.
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`xml`] - The XML payload (null-terminated string)
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `xml` must be a valid null-terminated C string.
+ */
+struct IdeviceFfiError *stream_send_xml(struct ReadWriteOpaque *stream_handle,
+                                        const char *xml);
+
+/**
+ * Reads an XML payload from a ReadWriteOpaque stream
+ * (4-byte big-endian length prefix + XML body).
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`out`] - Pointer to store the newly allocated string
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `out` must be a valid pointer. Free the returned string with
+ * `idevice_string_free`.
+ */
+struct IdeviceFfiError *stream_recv_xml(struct ReadWriteOpaque *stream_handle,
+                                        char **out);
+
+/**
  * Frees a string allocated by this library
  *
  * # Arguments

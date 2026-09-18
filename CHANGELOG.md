@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.3.430] - 2026-09-18
+
+### airlift 第 4 步：连 `atc` 服务 + RSDCheckin（被功能调用时自动唤起）
+
+**触发方式按用户要求改对了**：不是「勾选」也不是「启动」，而是
+**`AirliftExploit` 的能力方法第一次被其它功能调用时**。
+
+为什么这样对：空间回收 / 文件共享 / 设备瘦身 / 备份 / 壁纸 / 拨号器主题等
+**进界面就会经 `ExploitRegistry` 调用到 airlift** —— 这是**自然发生的调用**，
+用户不需要做任何额外动作。所以 airlift 的流程就在「被调用」这个时刻被唤起（单飞，只跑一次）。
+
+**新增 FFI（Rust 侧）** —— 这是实现的前提：
+现有 FFI 里能发字节的 `adapter_send` 只接受 `AdapterStreamHandle`，
+而 `adapter_connect` 返回的是 `ReadWriteOpaque`，**两者不通用、库里也没有转换函数**。
+所以补了一对直接作用于 `ReadWriteOpaque` 的接口：
+
+```rust
+stream_send_xml(stream, xml)   // 4 字节大端长度前缀 + XML 正文
+stream_recv_xml(stream, &out)  // 先读 4 字节长度，再读正文
+```
+线格式与 `mcinstall.rs` 的 `send_xml` 一致（idevice property_list_service 线格式）。
+
+**Swift 侧流程**（`AirliftExploit.runProtocolProbe()`）：
+```
+1. 建 RSD 隧道（withTunnel，与 AFCService 同款：10.7.0.1:49152 + 3 次退避）
+2. rsd_get_service_info("com.apple.atc.shim.remote") → 拿动态 port
+3. adapter_connect(adapter, port) → 拿 stream
+4. stream_send_xml(RSDCheckin) → stream_recv_xml × 2（先 RSDCheckin 再 StartService）
+5. idevice_stream_free 立即关闭连接（419 事故的教训）
+```
+
+**安全边界**（照 AFCService 规格，不重演 419）：
+专用串行队列 + 单飞标记 + 用完立即释放连接。
+
+**改动范围**：`AirliftExploit.swift`(+210)、`EscapeOS/Tunnel/idevice.h`(+41)、
+`rust/idevice-ffi/idevice.h`(+41)、`rust/idevice-ffi/src/adapter.rs`(+95)。
+
+> 注：Rust 侧新增 FFI 需 CI 编译验证；若 `Box<dyn ReadWrite>` 不满足 `run_sync`
+> 的 `Send + 'static` 约束会编译失败，届时按 CI 报错调整。
+
 ## [0.3.429] - 2026-09-18
 
 ### 删掉 airlift 自检里「无效且拖慢 40 秒」的残留代码
