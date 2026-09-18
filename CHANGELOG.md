@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.414] - 2026-09-18
+
+### 新增
+- **漏洞利用新增 `airlift`**（思路来自 `github.com/0xjohnnydev/airlift`，走**设备自连**）。
+  - **先澄清**：那份 PoC **跑在 Mac 上** —— `device_helper` / `airtraffic_host` 链接的是
+    macOS 私有框架 `MobileDevice.framework` + `AirTrafficHost.framework`（见其 Makefile），
+    且 `Sources/` 里只剩 `airlift_target.h`、两个 `.m` 被 gitignore，**无法直接移植**。
+  - **但设备自连这条路是通的**：EscapeOS 已有 RSD 隧道（`LocalDevVPN 10.7.0.1:49152` +
+    RPPairing，见 `AFCService`）与 `lockdownd_start_service`（FFI 已导出、`mcinstall.rs` 已在用），
+    可以**自己扮演 AT 主机端**，不需要 Mac。
+  - **本版只做第一步：连通性验证**。勾选 airlift 时自动跑
+    「RSD 隧道 → lockdownd → `start_service(com.apple.streaming_zip_conduit)`」，
+    逐行写 `[airlift]` 日志（SSH 取回）。**连不上就说明这条路在无越狱下不通，后面不必投入。**
+  - **尚未实现**：AT 主机端协议（Books 同步握手 / asset 描述 / zip conduit 会话）。
+    需要逆向 `AirTrafficHost.framework`，是后续独立工程。
+
 ## [0.3.413] - 2026-09-18
 
 ### 修复
