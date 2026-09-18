@@ -195,53 +195,6 @@ struct SettingsForm: View {
 
     var body: some View {
         Form {
-            // v0.3.436：日志上限（可配置，单位 MB）+ 一键清空
-            Section(header: Text("日志"),
-                    footer: Text("单位 MB。填 0 = 无限制；留空自动恢复默认 \(LogLimitSettings.defaultMB) MB。")) {
-                HStack {
-                    Text("日志存储上限")
-                    Spacer()
-                    TextField("\(LogLimitSettings.defaultMB)", text: $fileLimitText)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                        .onChange(of: fileLimitText) { _, newValue in
-                            // 合法值即时生效（0 = 无限制）；留空/非法 → 回填默认值
-                            let mb = LogLimitSettings.normalizedMB(from: newValue)
-                            logLimit.maxFileMB = mb
-                            if Int(newValue.trimmingCharacters(in: .whitespaces)) == nil {
-                                fileLimitText = "\(mb)"
-                            }
-                        }
-                    Text("MB").foregroundColor(.secondary)
-                }
-                Text(LogLimitSettings.describe(mb: logLimit.maxFileMB))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                HStack {
-                    Text("cat 读取上限")
-                    Spacer()
-                    TextField("\(LogLimitSettings.defaultMB)", text: $catLimitText)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                        .onChange(of: catLimitText) { _, newValue in
-                            let mb = LogLimitSettings.normalizedMB(from: newValue)
-                            logLimit.maxCatMB = mb
-                            if Int(newValue.trimmingCharacters(in: .whitespaces)) == nil {
-                                catLimitText = "\(mb)"
-                            }
-                        }
-                    Text("MB").foregroundColor(.secondary)
-                }
-                Text(LogLimitSettings.describe(mb: logLimit.maxCatMB))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Button("清空日志", role: .destructive) {
-                    LoginLogger.shared.clear()
-                }
-            }
-
             Section(header: Text("Apple ID 账户"), footer: Text("登录后，部分功能可统一调用此账户.")) {
                 if memorySettings.isLoggedIn {
                     HStack {
@@ -341,6 +294,43 @@ struct SettingsForm: View {
                 }
             }
 
+            // v0.3.438：日志上限（单位 MB）+ 一键清空。
+            //  · 位置按用户要求挪到「配对文件」下方（原先在 Form 最顶，用户反馈不协调）；
+            //  · 不再显示 "= 1024 KB" 之类的换算数值；
+            //  · 输入框**允许留空**（留空 = 默认值，不会强行回填文本）。
+            Section(header: Text("日志"),
+                    footer: Text("单位 MB。填 0 = 无限制；留空 = 默认 \(LogLimitSettings.defaultMB) MB。")) {
+                HStack {
+                    Text("日志存储上限")
+                    Spacer()
+                    TextField("\(LogLimitSettings.defaultMB)", text: $fileLimitText)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                        .onChange(of: fileLimitText) { _, newValue in
+                            // 留空 / 非法 → 用默认值；填 0 → 无限制。
+                            // 刻意**不回写文本**，否则用户永远清不空输入框。
+                            logLimit.maxFileMB = LogLimitSettings.normalizedMB(from: newValue)
+                        }
+                    Text("MB").foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("cat 读取上限")
+                    Spacer()
+                    TextField("\(LogLimitSettings.defaultMB)", text: $catLimitText)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                        .onChange(of: catLimitText) { _, newValue in
+                            logLimit.maxCatMB = LogLimitSettings.normalizedMB(from: newValue)
+                        }
+                    Text("MB").foregroundColor(.secondary)
+                }
+                Button("清空日志", role: .destructive) {
+                    LoginLogger.shared.clear()
+                }
+            }
+
             Section(header: Text("HTTPS 托管"), footer: Text("填自有地址则只走它；留空用公共临时托管.")) {
                 TextField("https://your.server", text: $onlineInstallEndpoint)
                     .keyboardType(.URL)
@@ -408,11 +398,14 @@ struct SettingsForm: View {
         } message: {
             Text("当前没有可导出的 pairingFile.plist.请先导入或生成配对文件.")
         }
-        // v0.3.434：把当前日志上限填进输入框
-        // （留空时由 onChange 自动回填默认值，符合「为空则改回 1024」的要求）
+        // v0.3.438：把当前日志上限填进输入框。
+        // 值**等于默认值**时显示为空（占位符里就是默认值），这样用户能真正把输入框清空，
+        // 而不是一取消输入状态就被强行回填成 "1"。
         .onAppear {
-            fileLimitText = "\(logLimit.maxFileMB)"
-            catLimitText = "\(logLimit.maxCatMB)"
+            fileLimitText = logLimit.maxFileMB == LogLimitSettings.defaultMB
+                ? "" : "\(logLimit.maxFileMB)"
+            catLimitText = logLimit.maxCatMB == LogLimitSettings.defaultMB
+                ? "" : "\(logLimit.maxCatMB)"
         }
     }
 

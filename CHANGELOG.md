@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.3.438] - 2026-09-18
+
+### 修「一点空间回收扫描就闪退」+ 日志设置 UI 按反馈重做
+
+**1. 闪退根因：Swift 独占访问冲突（exclusivity violation）**
+
+设备日志停在 `响应 #2` 之后再无输出，对应位置正是 v0.3.436 新增的 AT 消息链第一发。
+
+```swift
+// 出错写法（v0.3.436）—— exchange 同时接受 inout 的 transcript
+// 和捕获同一个 transcript 的 note 闭包
+exchange(stream: stream, label: "ReadyForSync", message: ...,
+         note: note, transcript: &transcript)
+```
+
+`note` 是个嵌套函数，捕获了外层的 `var transcript`（装箱成堆上的 box）。
+把 `&transcript` 作为 `inout` 传进去 → 该 box 进入「独占写」状态；
+`exchange` 内部再调用 `note("已发 ReadyForSync")` → 又去写同一个 box →
+**运行时直接 trap**（`Simultaneous accesses to ..., but modification requires exclusive access`）。
+
+编译期不报错，是因为冲突**跨函数**（`exchange` 和调用方各自看都没问题），
+只有运行到那一行才炸 —— 所以表现为「一切正常、一扫描就闪退」。
+
+**修法**：`exchange` 去掉 `inout String` 参数，改为**返回响应正文 `String?`**，
+由调用方拿到返回值后自行追加 `transcript`：
+
+```swift
+private static func exchange(stream: OpaquePointer,
+                             label: String,
+                             message: String,
+                             note: (String) -> Void) -> String? { ... }
+
+// 调用方
+func send(_ label: String, _ message: String) -> Bool {
+    guard let response = exchange(stream: stream, label: label,
+                                  message: message, note: note) else { return false }
+    transcript += "\n===== \(label) 响应全文 =====\n\(response)\n"
+    return true
+}
+```
+
+**规则（已记 `MY-FAULTS.md` 缺陷 27）**：
+**绝不要对同一个变量同时用 `inout` 传参 + 用闭包捕获** —— 这是运行时崩溃，编译器拦不住。
+
+**2. 日志设置 UI 按用户反馈重做**
+
+- **不再显示换算数值** —— 删掉 `= 1024 KB` 那两行 caption（`LogLimitSettings.describe(mb:)` 随之删除）。
+- **挪位置** —— 「日志」Section 从 Form 最顶移到 **「配对文件」下面**（原先在最顶，用户反馈「跟界面不协调」）。
+- **输入框允许留空** —— 原先 `onChange` 里会把非法/空文本**强行回填**成 `1`，
+  导致用户一取消输入状态就被填上，根本清不空。现在：
+  - 输入框文本**永不回写**；
+  - 值为默认值（1 MB）时，`onAppear` 显示为**空**（占位符里就是 `1`）；
+  - 语义：**留空 = 用默认 1 MB**，填 `0` = 无限制。
+
 ## [0.3.437] - 2026-09-18
 
 ### 修 v0.3.436 的编译错误（同一根因，我上次只修了一半）

@@ -8,7 +8,7 @@ import Combine
 /// - `SSHServerService` 的 `cat` 硬编码 **256KB**；
 /// - `LoginLogger` 的日志文件**完全没有上限**（实测涨到 683KB）。
 ///
-/// 现在两项都可调，**单位 MB，默认 1 MB**；输入框留空时自动恢复默认值；
+/// 现在两项都可调，**单位 MB，默认 1 MB**；输入框留空 = 用默认值（文本保持为空，不回填）；
 /// **填 `0` 表示无限制**。
 ///
 /// ⚠️ 本类是 `@MainActor`，所以**所有被 `nonisolated` 方法引用的 static 常量
@@ -75,18 +75,13 @@ final class LogLimitSettings: ObservableObject {
 
     /// 把输入框文本规整成合法 MB 值。
     ///
-    /// - 空 / 非法 → 回落默认值（用户要求「为空自动改回默认」）；
+    /// - 空 / 非法 → 回落默认值（语义上「留空 = 用默认」，但 **UI 不再回写文本**，
+    ///   否则用户永远清不空输入框 —— v0.3.438 按用户反馈修正）；
     /// - `0` → **保留为 0**（= 无限制）；
     /// - 其它非负数 → 原样。
     nonisolated static func normalizedMB(from text: String) -> Int {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let value = Int(trimmed), value >= 0 else { return defaultMB }
         return value
-    }
-
-    /// 给 UI 显示的大小说明（如 `= 1024 KB` / `无限制`）。
-    nonisolated static func describe(mb: Int) -> String {
-        if mb == 0 { return "无限制" }
-        return "= \(mb * 1024) KB"
     }
 }
