@@ -84,7 +84,8 @@ jobs:
           xcodebuild -downloadComponent MetalToolchain
           echo "=== 校验 metal 可用 ==="
           xcrun -f metal
-          metal --version
+          # ⚠️ 必须走 `xcrun metal`：`metal` 不在 PATH 上，直接调会 exit 127。
+          xcrun metal --version
 
       - name: Install build tooling (xcodegen, cmake)
         # 本轨道出【未签名 IPA】：不调用 ldid，entitlements 随 .app 携带、交给侧载工具施加
