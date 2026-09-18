@@ -76,7 +76,6 @@ final class IPADownloadCenter: ObservableObject {
         var storeItemId: String?
         var source: Source
         var accountEmail: String?
-        var autoInstall: Bool
         /// v0.3.407：**牛蛙源**随直链一起下发的 sinf（`ba_sinfs`，base64 的标准 `.sinf` 容器）。
         ///
         /// 为什么它得跟着任务走：这类包是 Apple 的**原始加密包**，安装前必须把这份 sinf 写回
@@ -325,17 +324,18 @@ final class IPADownloadCenter: ObservableObject {
     /// v0.3.407：加 `sinfBase64`（**默认 nil**）—— 牛蛙源把 `ba_sinfs` 一起带进来，
     /// 落盘后由 `PackageSINFWriter` 写回包内再安装；不传即与从前完全一致。
     @discardableResult
+    // v0.3.412：彻底去掉自动装（用户明确要求），所以不再接受也不需要 autoInstall 参数。
+    // 旧的「autoInstall: Bool = true」默认参数也一并删除 —— 没有调用方再传它。
     func start(name: String,
                bundleId: String?,
                version: String?,
                iconURL: String?,
                remoteURL: String,
-               autoInstall: Bool = true,
                source: Source = .i4Free,
                sinfBase64: String? = nil) -> UUID {
         var job = Job(name: name, bundleId: bundleId, version: version, iconURL: iconURL,
                       remoteURL: remoteURL, source: source, accountEmail: nil,
-                      autoInstall: autoInstall, sinfBase64: sinfBase64)
+                      sinfBase64: sinfBase64)
         job.stageText = "排队中"
         jobs.insert(job, at: 0)
         pump()
@@ -351,7 +351,7 @@ final class IPADownloadCenter: ObservableObject {
     func startFromI4Source(name: String, bundleId: String, iconURL: String?,
                            storeItemId: String? = nil) async -> UUID {
         var job = Job(name: name, bundleId: bundleId, version: nil, iconURL: iconURL,
-                      remoteURL: nil, source: .i4Free, accountEmail: nil, autoInstall: true)
+                      remoteURL: nil, source: .i4Free, accountEmail: nil)
         job.storeItemId = storeItemId
         job.stageText = "查找安装包"
         jobs.insert(job, at: 0)
@@ -396,7 +396,7 @@ final class IPADownloadCenter: ObservableObject {
         let shownVersion = displayVersion ?? item.version
         var job = Job(name: item.name, bundleId: item.bundleId, version: shownVersion,
                       iconURL: item.iconSmallURL ?? item.iconURL, remoteURL: nil,
-                      source: .appleID, accountEmail: email, autoInstall: true)
+                      source: .appleID, accountEmail: email)
         // v0.3.391：**下载时就知道商品号**，直接记进任务 → 落盘时写进台账。
         // 用户要的「商店链接」= App Store 的跳转链接（`https://apps.apple.com/app/id<itemId>`），
         // 而 `AppStoreItem.id` 本身就是 `trackId` —— 根本不需要去读包内 `iTunesMetadata`
@@ -504,7 +504,7 @@ final class IPADownloadCenter: ObservableObject {
                                      iconURL: iconURL, reason: "文件不存在")
         }
         var job = Job(name: displayName, bundleId: bundleId, version: version, iconURL: iconURL,
-                      remoteURL: nil, source: .i4Free, accountEmail: nil, autoInstall: true)
+                      remoteURL: nil, source: .i4Free, accountEmail: nil)
         job.phase = .installing
         job.stageText = "安装中"
         job.localFileName = fileName
@@ -548,7 +548,7 @@ final class IPADownloadCenter: ObservableObject {
                            version: String?, iconURL: String?, reason: String) -> UUID {
         jobs.removeAll { $0.localFileName == fileName && !$0.phase.isBusy }
         var job = Job(name: displayName, bundleId: bundleId, version: version, iconURL: iconURL,
-                      remoteURL: nil, source: .i4Free, accountEmail: nil, autoInstall: true)
+                      remoteURL: nil, source: .i4Free, accountEmail: nil)
         job.phase = .failed
         job.failureStage = .download
         job.stageText = "文件不存在"
@@ -712,11 +712,25 @@ final class IPADownloadCenter: ObservableObject {
                                                  // → 用快照会**永远写进 nil**。
                                                  sourceURL: writeURL,
                                                  storeItemId: writeSID)
+                // v0.3.412：把 sinf 写回包内 —— 这是「安装前的准备」，与「是否自动装」**无关**。
+                // 牛蛙源的用户即使手动点安装也必须有 sinf 才能过 FairPlay 验证。
+                // 以前 `installAfterDownload` 顺手做这一步；现在彻底不自动装，这一步独立出来：
+                // 在主 actor 上 dispatch 到后台队列跑（写几百 MB 的 IPA 不能卡 UI）。
+                // 只对**牛蛙源**做（爱思源的服务端包已签名、AppleID 通道由 SignatureInjector 自己写回）。
+                if current.source == .niuwa, let sinf = current.sinfBase64 {
+                    let ipaPath = dest.path
+                    Task.detached(priority: .userInitiated) {
+                        PackageSINFWriter.writeIfNeeded(sinfBase64: sinf, ipaPath: ipaPath)
+                    }
+                }
                 update(id) {
                     $0.localFileName = dest.lastPathComponent
                     $0.progress = 1
-                    $0.phase = current.autoInstall ? .installing : .done
-                    $0.stageText = current.autoInstall ? "安装中" : "已下载"
+                    // v0.3.412：彻底去掉自动装 —— 用户明确要求「以后安装都不能自动安装
+                    // 否则怕出bug」。下载完成永远停在「已下载」，由用户在「下载管理」
+                    // 里点对应行的「安装」手动装。
+                    $0.phase = .done
+                    $0.stageText = "已下载"
                     // v0.3.394：收工了 → 速度归零、已下字节对齐总量（别留个 99.8% 的尾巴）
                     if $0.totalBytes > 0 { $0.receivedBytes = $0.totalBytes }
                     $0.speedBytesPerSecond = 0
@@ -734,11 +748,8 @@ final class IPADownloadCenter: ObservableObject {
                 }
                 runner = nil
                 runningID = nil
-                if current.autoInstall {
-                    installAfterDownload(id: id, path: dest.path, fileName: dest.lastPathComponent)
-                } else {
-                    pump()
-                }
+                // v0.3.412：彻底不自动装 —— 见上面 $0.phase = .done 处的说明。
+                pump()
             } catch {
                 finishWithError(id, error)
             }
@@ -777,57 +788,11 @@ final class IPADownloadCenter: ObservableObject {
         pump()
     }
 
-    private func installAfterDownload(id: UUID, path: String, fileName: String) {
-        // v0.3.407：牛蛙源的包在**安装前**要先把它随直链一起下发的 sinf 写回包内。
-        //
-        // 为什么选这个点（而不是 `handle(...)` 里）：
-        // · `handle` 跑在**主 actor** 上，而写包要重写 ZIP 中央目录 + 追加 deflate 数据，
-        //   几百 MB 的 IPA 上会卡住界面；
-        // · 这里本来就在 `Task.detached` 里，且**恰好是 `installLocalIPA` 之前的唯一位置** ——
-        //   既离主线程，又满足"安装前"。
-        // · 写进磁盘的包是**永久的**：所以之后「装失败 → 从下载管理重装」也能直接用上，
-        //   不需要重下（重装走 `installLocal`，那里读不到 sinf，靠的就是这一步已经写好）。
-        //
-        // 只有**牛蛙源**需要（爱思源的服务端包已签名、AppleID 通道由 `SignatureInjector`
-        // 自己写回），所以 source 判定放在这里，写入器本身只管"把这份 sinf 写进这个包"。
-        let snapshot = job(id)
-        let sinfBase64 = snapshot?.source == .niuwa ? snapshot?.sinfBase64 : nil
-        Task.detached(priority: .userInitiated) {
-            PackageSINFWriter.writeIfNeeded(sinfBase64: sinfBase64, ipaPath: path)
-            do {
-                try await AppStoreInstallService.installLocalIPA(
-                    path,
-                    progress: { p in
-                        Task { @MainActor in
-                            // v0.3.388：下载已占链路前 75% → 安装段（上传+installd 拼好的 0~1）
-                            // 折到链路后 25%，与 `Job.overall` 在 `.installing` 直接取 `progress` 对齐。
-                            self.update(id) { $0.progress = 0.75 + min(1, max(0, p)) * 0.25 }
-                        }
-                    },
-                    onLog: { LoginLogger.shared.log("[下载中心] \($0)", category: .appStore) })
-                IPADownloadLibrary.shared.markInstalled(fileName: fileName)
-                await MainActor.run {
-                    self.update(id) { $0.phase = .done; $0.progress = 1; $0.stageText = "已完成" }
-                    self.runner = nil
-                    self.runningID = nil
-                    self.pump()
-                }
-            } catch {
-                await MainActor.run {
-                    self.update(id) {
-                        // 包已经下完落地了，这里失败只可能是安装链路
-                        $0.failureStage = .install
-                        $0.phase = .failed
-                        $0.error = error.localizedDescription
-                        $0.stageText = "安装失败"
-                    }
-                    self.runner = nil
-                    self.runningID = nil
-                    self.pump()
-                }
-            }
-        }
-    }
+    // v0.3.412：彻底删除 `installAfterDownload` —— 用户明确要求"以后安装都不能自动安装"。
+    // 安装入口现统一走 `IPADownloadManagerView.install(item)` → `installLocal(...)`
+    // （用户点"安装"/"重装"按钮触发），不再由下载完成自动启动。
+    //
+    // 牛蛙源的 sinf 写入也由手动安装流程接管（见 `installLocal` 里的处理）。
 }
 
 // MARK: - v0.3.407：把外部下发的 sinf 写回包内（牛蛙源专用）
@@ -853,11 +818,13 @@ final class IPADownloadCenter: ObservableObject {
 /// 因此：条目**不存在**才写；**已存在**就记一行日志跳过。
 ///
 /// ## 只做该做的事
-/// · 调用方（`installAfterDownload`）已经限定**只有牛蛙源**才传 sinf 进来
+/// · 调用方（`IPADownloadCenter.handle`）已经限定**只有牛蛙源**才传 sinf 进来
 ///   （爱思源与 AppleID 通道传的是 nil）；
 /// · 只处理**加密包**（`cryptid == 1`）：明文/已重签的包加一个 `SC_Info/*.sinf` 反而可能
 ///   破坏它自己的代码签名，而它本来也不需要 sinf；
 /// · 解出来的 base64 就是**标准 `.sinf` 容器**，直接写入，**不做任何包装/再加密**。
+/// · v0.3.412：写入时机从「自动装之前」改为「下载落盘之后」，与「是否自动装」解耦。
+///   哪怕用户手动点安装也得先有 sinf 才能过 FairPlay 验证。
 ///
 /// ## ★★ 复现样本：**别删工作区里的 `_tmp_ssh/syllabic/` 解压目录**
 /// 那个目录是牛蛙客户端（`JCD.app`，`com.dinh.syllabic` 9.0.1）的**解压产物**，
