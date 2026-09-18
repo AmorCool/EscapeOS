@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.3.442] - 2026-09-19
+
+### AT 链路打通到「读 SyncAllowed + 发 HostInfo」；修「发完等响应」的错
+
+**1. ★ 二进制 plist 判定被证实，AT 链路大幅推进**
+
+真机落盘记录（`LoginLogs/airlift_probe.txt`）：
+```
+AT 帧前32字节: 62 70 6C 69 73 74 30 30 D5 01 02 ...   ← "bplist00"，二进制 plist 确认
+AT 帧字节序探测：小端
+读 #1: InstalledAssets (3571 字节)
+读 #2: AssetMetrics   (753 字节)
+读 #3: SyncAllowed    (373 字节)   ← 等到了
+已发 HostInfo（二进制 plist 337 字节，小端长度前缀）
+读 HostInfo 响应 出错 → 读超时：15s 内设备没有发来完整的一帧
+```
+⇒ **二进制 plist、小端长度前缀、消息方向（先读 SyncAllowed）三件事全部验证正确**。
+设备连上后会主动连发 `Capabilities` / `InstalledAssets` / `AssetMetrics` / `SyncAllowed`。
+
+**2. 根因：主机发出的消息，设备不回响应**
+
+上一版 `send()` 是「发一条 + 读一条响应」。于是 `HostInfo` 发出去之后干等 15s，
+报读超时，整条链断在那里。
+
+airlift PoC 的主机端源码可以佐证：`ATHostConnectionSendHostInfo` /
+`SendSyncRequest` / `SendMetadataSyncFinished` / `SendAssetCompleted`
+**后面都没有读**；所有「读」都是独立步骤（等 SyncAllowed / 等 ReadyForSync /
+等 AssetManifest）。
+
+**修法**：`exchange()` 改名为 `sendMessage()`，**只发不读**，返回 `Bool`。
+`send()` 不再追加「响应全文」到 transcript。所有读仍走 `waitFor(...)`。
+
+**3. AFC 越权探测结论：走不通（参考项目那条捷径被证伪）**
+
+`LoginLogs/airlift_afc_probe.txt`：
+```
+crashreportcopymobile：/var/mobile/Library/Accounts/Accounts3.sqlite → 失败 Afc(ObjectNotFound)
+crashreportcopymobile：/var/mobile/Library/Preferences            → 失败 Afc(ObjectNotFound)
+crashreportcopymobile：../../Library/Accounts/Accounts3.sqlite    → 失败 Afc(InvalidArg)
+crashreportcopymobile：对照 "."                                    → 成功 size=3712
+com.apple.afc：同样 4 条全失败，对照 "." 成功
+结论：绝对路径能逃出 AFC 根目录 = 不能
+```
+绝对路径被解析到 AFC 根目录**之内**（`ObjectNotFound`），`..` 被服务端直接拒绝
+（`InvalidArg`）。对照组（`.`）可读，证明连接正常、这些失败是真的。
+⇒ `marksvia/airlift-HideAccount` 的 `accounts_direct.m` 那条路**不成立**，只能继续走 AT 协议。
+
 ## [0.3.441] - 2026-09-19
 
 ### AT 帧改**二进制 plist** 收发（重大发现）+ Gestalt 入口移入主页百宝箱
