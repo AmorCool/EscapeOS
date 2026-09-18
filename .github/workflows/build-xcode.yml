@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   xcode-build:
-    runs-on: macos-latest
+    runs-on: xcode-27-arm64
     env:
       UNICORN_TAG: "2.1.0"
     steps:
@@ -57,18 +57,21 @@ jobs:
             echo "=== mtime 已按提交历史恢复（内置实现）==="
           fi
 
-      - name: Select Xcode 26 (iOS 26 SDK)
-        # 与 build.yml 一致：用 Xcode 26 SDK 链接（Liquid Glass 等 iOS 26 特性）。
-        # 部署目标仍为 18.0（Info.plist / TARGET 约束），iOS 18 设备可装。
+      - name: Select Xcode (27 trial - prefer 27, fall back to 26)
+        # ★ 本分支（xcode27-trial）专用：runner 已换成 `xcode-27-arm64`，
+        #   该镜像上只有 Xcode 27（beta），没有 Xcode_26*.app。
+        #   ⚠️ 注意 `set -e`：`ls` 没匹配时返回非 0 会直接中断脚本，所以每处都加 `|| true`。
         run: |
           set -euo pipefail
-          XCODE_APP="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n1)"
-          if [ -z "$XCODE_APP" ]; then
-            XCODE_APP="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n1)"
-          fi
+          pick() { ls -d /Applications/Xcode$1*.app 2>/dev/null | sort -V | tail -n1 || true; }
+          XCODE_APP="$(pick _27)"
+          if [ -z "$XCODE_APP" ]; then XCODE_APP="$(pick _26)"; fi
+          if [ -z "$XCODE_APP" ]; then XCODE_APP="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n1 || true)"; fi
           echo "Selecting Xcode: $XCODE_APP"
           sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
+          echo "=== 部署目标（应为 18.0，本试验的关键点）==="
+          grep -n "IPHONEOS_DEPLOYMENT_TARGET" project.yml || true
 
       - name: Install build tooling (xcodegen, cmake)
         # 本轨道出【未签名 IPA】：不调用 ldid，entitlements 随 .app 携带、交给侧载工具施加
