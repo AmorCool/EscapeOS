@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.415] - 2026-09-18
+
+### 修复 / 推进
+- **airlift 自检改成「批量探测候选服务名」**。v0.3.414 真机实测（设备 0.3.414/711）结果：
+  ```
+  [airlift] 配对文件 OK
+  [airlift] RSD 隧道 OK
+  [airlift] lockdownd OK
+  [airlift] ★ 失败：start_service(com.apple.streaming_zip_conduit) 被拒
+            code=1 Socket(BrokenPipe, "channel closed")
+  ```
+  **前三步全通**，只卡在「启动服务」。`BrokenPipe` 不像 `InvalidService`（名字不存在），
+  更像「名字对不上 / 该服务不接受 RSD 启动」。
+  所以不再赌单一名字：`candidateServices` 里列出 5 个候选
+  （`com.apple.streaming_zip_conduit` / `com.apple.atc` / `com.apple.mobile.sync_data_class` /
+  `com.apple.airtraffic` / `com.apple.mobile.airtraffic`），逐个 `start_service` 并逐行记结果。
+  **一次自检就能定案**：是名字全错，还是服务存在但不接受 RSD 启动。
+
 ## [0.3.414] - 2026-09-18
 
 ### 新增
