@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.420] - 2026-09-18
+
+### ★★ 通道打通：`streaming_zip_conduit` 已在 RSD 服务表里，且建连成功
+**v0.3.419 真机实测（设备 0.3.419 / build 716）关键结果**：
+```
+★ 服务表里有 com.apple.afc.shim.remote：port 53678              → ★ 建连成功
+服务表里没有 com.apple.afc（ServiceNotFound）
+★ 服务表里有 com.apple.streaming_zip_conduit.shim.remote：port 53635 → ★ 建连成功
+服务表里没有 com.apple.streaming_zip_conduit（ServiceNotFound）
+★ 服务表里有 com.apple.atc.shim.remote：port 53680
+```
+**两条硬结论**：
+1. **RSD 上的服务名必须带 `.shim.remote` 后缀** —— 不带后缀的标准名**一律 `ServiceNotFound`**
+   （服务表里根本没有）。这就是 v0.3.414~418 一路 `BrokenPipe` 的根因。
+2. **airlift 的入口服务 `com.apple.streaming_zip_conduit.shim.remote` 确实存在，且建连成功。**
+
+**本版补齐第 ③ 环 —— `RSDCheckin`**：
+- `idevice_new_tcp_socket(sockaddr(10.7.0.1:port), …, "EscapeSpaceAirlift", &device)`
+  —— 连到服务端口并包成 `IdeviceHandle`；
+- **`idevice_rsd_checkin(device)`** —— 发 `RSDCheckin` plist 完成握手（RSD 语义下真正的"启动服务"）；
+- `idevice_free(device)` 释放。
+- `candidateServices` 全部改成 `.shim.remote` 形式，并把实测端口写进注释。
+
+**下一步**（通道确认后）：逆 AT 主机端协议 —— Books 同步握手 / asset 描述（`Persistent ID` 含 `..`）/
+zip conduit 会话，最终触发 `ATAirlock` 的路径校验缺陷。
+
 ## [0.3.419] - 2026-09-18
 
 ### 突破：找到 RSD 上启动服务的**正确**方式（此前一直用错 API）
