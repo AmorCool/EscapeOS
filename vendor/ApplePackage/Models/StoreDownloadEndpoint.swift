@@ -11,7 +11,8 @@ import Foundation
 /// 这是 ApplePackage 1.2.7 + asspp PR #84 (2026-06-12) 的关键修复点。
 public let retryableFailureType = "5002"
 
-public struct StoreDownloadEndpoint {
+// [local patch · Swift 6] StoreDownloadEndpoint 只含 let 不可变存储属性，补 Sendable 以允许 static let 常量并发共享。
+public struct StoreDownloadEndpoint: Sendable {
     public let host: String
     public let path: String
     /// volumeStore 端点用 `externalVersionId` 字段名；redownload 端点用 `appExtVrsId`。

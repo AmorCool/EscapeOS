@@ -21,7 +21,10 @@ public class ZipContainer: Container {
      - Warning: Modifying this dictionary while either `info(container:)` or `open(container:)` function is being
      executed may cause undefined behavior.
      */
-    public static var customExtraFields = [UInt16: ZipExtraField.Type]()
+    // [local patch · Swift 6] customExtraFields 是全局可变配置字典，上游文档明确写明「Modifying this
+    // dictionary while either `info(container:)` or `open(container:)` function is being executed may cause
+    // undefined behavior」，即它本就是并发修改不安全的全局配置项，故以 nonisolated(unsafe) 如实标注该约定。
+    nonisolated(unsafe) public static var customExtraFields = [UInt16: ZipExtraField.Type]()
 
     /**
      Processes ZIP container and returns an array of `ZipEntry` with information and data for all entries.

@@ -5,8 +5,9 @@
 
 import Foundation
 
+// [local patch · Swift 6] DosAttributes 只含 let 不可变存储属性，补 Sendable 以允许 static let 常量并发共享。
 /// Represents file attributes in DOS format.
-public struct DosAttributes: OptionSet {
+public struct DosAttributes: OptionSet, Sendable {
 
     /// Raw bit flags value.
     public let rawValue: UInt32

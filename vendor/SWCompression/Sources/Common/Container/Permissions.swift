@@ -5,8 +5,9 @@
 
 import Foundation
 
+// [local patch · Swift 6] Permissions 只含 let 不可变存储属性，补 Sendable 以允许 static let 常量并发共享。
 /// Represents file access permissions in UNIX format.
-public struct Permissions: OptionSet {
+public struct Permissions: OptionSet, Sendable {
 
     /// Raw bit flags value (in decimal).
     public let rawValue: UInt32

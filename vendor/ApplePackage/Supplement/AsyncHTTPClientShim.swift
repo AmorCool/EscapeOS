@@ -61,7 +61,8 @@ public enum HTTPBodyShim {
     }
 }
 
-public struct HTTPResponseStatus: Equatable {
+// [local patch · Swift 6] HTTPResponseStatus 只含 let 不可变存储属性，补 Sendable 以允许 static let 常量并发共享。
+public struct HTTPResponseStatus: Equatable, Sendable {
     public let code: UInt
     public init(code: UInt) { self.code = code }
 
@@ -124,7 +125,8 @@ public struct TLSConfiguration {
 /// 兼容 `$0.httpVersion = .http1Only`（URLSession 自动协商，这里仅占位）。
 public enum HTTPVersionShim { case http1Only, http2 }
 
-public struct RedirectConfiguration {
+// [local patch · Swift 6] RedirectConfiguration 只含 let 不可变存储属性（max: Int），补 Sendable 以允许 static let 常量并发共享。
+public struct RedirectConfiguration: Sendable {
     public let max: Int
     public init(max: Int = 8) { self.max = max }
     /// 兼容 `.follow(max:allowCycles:)`。
