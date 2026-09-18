@@ -180,13 +180,12 @@ final class AnisetteProvider {
     /// 切换到内置服务器列表中的下一个，并持久化到 `AnisetteServer`.
     /// 返回切换后的地址；列表为空时返回 nil.
     ///
-    /// Swift 6：`MemoryLimitSettings` 是 `@MainActor` 类型，它的 `anisetteServers`
-    /// 因此也是主线程隔离的；本方法只读这一个常量数组，收敛到 `@MainActor` 最省事
-    /// （调用点 `getAnisetteDataWithFallback` 已是 async，加 `await` 即可）。
-    @MainActor
+    /// Swift 6：`MemoryLimitSettings.anisetteServers` 是主线程隔离的常量数组 ——
+    /// 只在 `MainActor.run` 里取它（闭包无 self 捕获），其余逻辑留在调用方隔离域，
+    /// 不再把 self 传进主 actor（修 sending 'self'）.
     @discardableResult
-    private func rotateServer() -> String? {
-        let servers = MemoryLimitSettings.anisetteServers
+    private func rotateServer() async -> String? {
+        let servers = await MainActor.run { MemoryLimitSettings.anisetteServers }
         guard !servers.isEmpty else { return nil }
         let current = currentServer
         let next: String
@@ -453,13 +452,16 @@ final class AnisetteProvider {
             case .success(let message):
                 switch message {
                 case .string(let str):
-                    Task {
+                    // Swift 6：Task（@Sendable）不能捕获非 Sendable 的 self ——
+                    // 本类是 private init 的单例（self === Self.shared 恒成立），
+                    // 改经静态访问进入流程，行为不变（修 sending 'self'）.
+                    Task { [socket, str, startURL, endURL, continuation] in
                         do {
-                            let done = try await self.handleProvisioningMessage(str, socket: socket,
-                                                                               startURL: startURL, endURL: endURL,
-                                                                               continuation: continuation)
+                            let done = try await Self.shared.handleProvisioningMessage(str, socket: socket,
+                                                                                       startURL: startURL, endURL: endURL,
+                                                                                       continuation: continuation)
                             if !done {
-                                self.receiveProvisioningMessages(from: socket, startURL: startURL, endURL: endURL, continuation: continuation)
+                                Self.shared.receiveProvisioningMessages(from: socket, startURL: startURL, endURL: endURL, continuation: continuation)
                             }
                         } catch {
                             continuation.resume(throwing: error)

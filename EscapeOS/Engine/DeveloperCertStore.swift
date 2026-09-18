@@ -108,8 +108,11 @@ final class DeveloperCertStore: ObservableObject {
 
     /// 设置页入口：用已登录的 Apple ID 创建开发证书并存储.
     /// （未登录抛错提示先登录；同 Apple ID 新证书 TeamID 相同 → 库验证通过）
+    /// Swift 6：下列 MainActor.run 闭包统一经 `Self.shared` 访问 @Published ——
+    /// 本类 private init 单例（self === shared 恒成立），闭包因此不再捕获
+    /// 非 Sendable 的 self（修 112/124/125/208/213 的 sending 'self'）.
     func createCertificateWithStoredAccount() async throws {
-        guard let session = await MainActor.run(body: { makeSession() }) else {
+        guard let session = await MainActor.run(body: { Self.shared.makeSession() }) else {
             throw NSError(domain: "DeveloperCert", code: -3,
                           userInfo: [NSLocalizedDescriptionKey: "请先在上方登录 Apple ID"])
         }
@@ -121,8 +124,8 @@ final class DeveloperCertStore: ObservableObject {
     /// 需轮询证书列表等新证书出现后取其 certContent.
     func createCertificate(session: AppleAPISession) async throws {
         guard !isBusy else { return }
-        await MainActor.run { isBusy = true; lastError = nil }
-        defer { Task { await MainActor.run { self.isBusy = false } } }
+        await MainActor.run { Self.shared.isBusy = true; Self.shared.lastError = nil }
+        defer { Task { await MainActor.run { Self.shared.isBusy = false } } }
         do {
             // 1) 团队解析（免费账号为个人团队；新证书 TeamID 相同 → 库验证通过）
             let teams = try await AppleDeveloperAPI.fetchTeams(session: session)
@@ -204,13 +207,14 @@ final class DeveloperCertStore: ObservableObject {
             try pendingKeyPem.write(to: keyURL, atomically: true, encoding: .utf8)
             try pem.write(to: certURL, atomically: true, encoding: .utf8)
             try team.identifier.write(to: teamURL, atomically: true, encoding: .utf8)
+            let teamIdentifier = team.identifier   // 值拷贝进主线程闭包
             await MainActor.run {
-                hasCert = true
-                teamId = team.identifier
+                Self.shared.hasCert = true
+                Self.shared.teamId = teamIdentifier
             }
         } catch {
             let msg = (error as NSError).localizedDescription
-            await MainActor.run { lastError = msg }
+            await MainActor.run { Self.shared.lastError = msg }
             throw error
         }
     }

@@ -74,11 +74,12 @@ enum OnlineInstallService {
     ///             只有在本地文件缺失时才退回传远端 `http(s)` 直链（跳过本机服务器）。
     ///   - bundleId: 目标应用标识（本地包读不到 Info.plist 时兜底）
     ///   - alternatePackageURL: 台账里的远端 `https` 直链，作为清单里的备选 `software-package`
-    ///   - completion: 主线程回调
+    ///   - completion: 主线程回调（Swift 6：标 @Sendable 以跨调度队列传递；
+    ///     方法内部所有回调都经 DispatchQueue.main.async 触发，行为不变）
     static func install(ipaURL: URL?,
                         bundleId: String?,
                         alternatePackageURL: String? = nil,
-                        completion: @escaping (Result<Void, Error>) -> Void) {
+                        completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let prepared: Prepared
             do {
@@ -300,7 +301,7 @@ enum OnlineInstallService {
 
     // MARK: - 打开 itms-services（三级兜底）
 
-    private static func open(manifestURL: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    private static func open(manifestURL: String, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         // 只保留 unreserved 字符，避免清单地址里的 &/? 之类破坏 query
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         guard let encoded = manifestURL.addingPercentEncoding(withAllowedCharacters: allowed),

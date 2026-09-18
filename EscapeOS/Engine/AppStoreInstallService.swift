@@ -97,7 +97,7 @@ enum AppStoreInstallService {
     /// 注意这是**声明式加权**（与下载中心既有的下载 75% / 安装 25% 同口径），不是系统的整体百分比。
     static func installLocalIPA(_ ipaPath: String,
                                 allowDowngrade: Bool = false,
-                                progress: ((Double) -> Void)? = nil,
+                                progress: (@Sendable (Double) -> Void)? = nil,
                                 onLog: ((String) -> Void)? = nil) async throws {
         let svc = IPAInstallService.shared
         let ins = IPAPackageInspector.inspect(ipaPath: ipaPath)

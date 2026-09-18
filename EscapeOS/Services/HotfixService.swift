@@ -89,7 +89,12 @@ final class HotfixService: NSObject, ObservableObject, @unchecked Sendable {
             if hotfix.hasScript {
                 let scriptURL = module.installURL.appendingPathComponent(hotfix.scriptName)
                 if let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
-                    runScript(source, module: module)
+                    // Swift 6：runScript（含桥创建）须主线程；reload 的调用点本就在
+                    // 主队列，这里改为主 actor 异步执行（JS 的副作用本来就经主队列
+                    // 异步转发，时序语义不变）.
+                    Task { @MainActor [weak self] in
+                        self?.runScript(source, module: module)
+                    }
                     loaded.append(module.id)
                 }
             }
@@ -126,6 +131,8 @@ final class HotfixService: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: JS 引擎（二期，JavaScriptCore）
 
+    /// @MainActor：EscapeJSBridge 已收敛主线程，JS 的执行与桥创建都须在主线程.
+    @MainActor
     private func runScript(_ source: String, module: EscapeModule) {
         let ctx = JSContext()!
         ctx.name = "hotfix:\(module.id)"
@@ -152,6 +159,9 @@ final class HotfixService: NSObject, ObservableObject, @unchecked Sendable {
     var moduleId: String { get }
 }
 
+// Swift 6：JS（evaluateScript）经 reload() 在主线程执行，桥方法实际只被主线程调用；
+// 整类收敛到 @MainActor 后，方法内的主队列转发与 self 不再跨隔离（修 sending 'self'）.
+@MainActor
 final class EscapeJSBridge: NSObject, EscapeJSBridgeExports {
     weak var owner: HotfixService?
     let moduleId: String
@@ -163,21 +173,21 @@ final class EscapeJSBridge: NSObject, EscapeJSBridgeExports {
     }
 
     func log(_ message: String) {
-        let mid = moduleId   // 逃逸闭包捕获局部变量（避免隐式 self）
+        let mid = moduleId   // 捕获局部变量（避免隐式 self）
         print("[Hotfix][JS][\(mid)] \(message)")
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             self?.owner?.appendJSLog("[\(mid)] \(message)")
         }
     }
 
     func setFlag(_ key: String, _ value: Bool) {
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             self?.owner?.applyFlag(key, value)
         }
     }
 
     func setOverride(_ key: String, _ value: String) {
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             self?.owner?.applyTextOverride(key, value)
         }
     }

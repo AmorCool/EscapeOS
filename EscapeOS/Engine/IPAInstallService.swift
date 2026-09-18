@@ -399,11 +399,17 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
            let dsid = settings.sideloadDSID, let authToken = settings.sideloadAuthToken,
            !dsid.isEmpty, !authToken.isEmpty {
             isWarmingUp = true
-            Task.detached(priority: .utility) { [weak self] in
-                defer { Task { @MainActor in self?.isWarmingUp = false } }
+            // Swift 6：外层 Task 继承本方法（@MainActor）的隔离 —— isWarmingUp 的
+            // 复位（原 defer 内 Task { @MainActor }）改由外层 defer 直接执行，
+            // 不再把 self 传进主 actor 闭包（修 sending 'self'）；阻塞登录仍在
+            // detached 跑（self 为 @unchecked Sendable，可安全捕获）.
+            Task { [weak self] in
                 guard let self else { return }
+                defer { self.isWarmingUp = false }
                 do {
-                    try self.signInWithSession(email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)
+                    try await Task.detached(priority: .utility) {
+                        try self.signInWithSession(email: id, dsid: dsid, authToken: authToken, anisetteURL: ani)
+                    }.value
                 } catch {
                     // token 失效等：signInWithSession 内部已设 sessionRestoreFailed=true，
                     // 页面内自动登录会回退到完整登录.
@@ -416,19 +422,19 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
         let pw = settings.password(forHistory: id) ?? ""
         guard !pw.isEmpty else { return }
         isWarmingUp = true
-        Task.detached(priority: .utility) { [weak self] in
-            defer { Task { @MainActor in self?.isWarmingUp = false } }
+        Task { [weak self] in
             guard let self else { return }
+            defer { self.isWarmingUp = false }
             do {
-                try self.signIn(appleID: id, password: pw, anisetteURL: ani)
+                try await Task.detached(priority: .utility) {
+                    try self.signIn(appleID: id, password: pw, anisetteURL: ani)
+                }.value
                 // 成功后把凭据 + 本次登录的 dsid/authToken 一起持久化，
                 // 下次 App 启动就能走路径 A 免登录恢复.
                 let dsid = self.lastSessionDSID ?? ""
                 let authToken = self.lastSessionAuthToken ?? ""
-                await MainActor.run {
-                    MemoryLimitSettings.shared.saveSessionCredentials(
-                        email: id, password: pw, dsid: dsid, authToken: authToken)
-                }
+                MemoryLimitSettings.shared.saveSessionCredentials(
+                    email: id, password: pw, dsid: dsid, authToken: authToken)
             } catch {
                 // 静默：用户进入 IPA 页时页面内自动登录会再试并展示错误.
             }

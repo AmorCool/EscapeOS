@@ -102,8 +102,9 @@ final class KernelCacheService: Sendable {
 
     /// 从 IPSW 下载并解压 kernelcache，保存到 Documents/KernelCache/，
     /// 返回保存路径.`progress` 在主线程回调（0...1）.
+    /// Swift 6：progress 标 @Sendable（方法体内经 MainActor.run 调用，跨隔离传递）.
     func downloadKernelCache(firmware: Firmware,
-                             progress: @escaping (Double) -> Void) async throws -> String {
+                             progress: @escaping @Sendable (Double) -> Void) async throws -> String {
         guard let url = URL(string: firmware.url) else {
             throw makeError("IPSW URL 无效")
         }

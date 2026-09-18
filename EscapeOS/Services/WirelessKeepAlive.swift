@@ -9,6 +9,9 @@
 
 import UIKit
 
+// Swift 6：beginBackgroundTask 的到期回调是主线程闭包，且调用点（PairingSetupView）
+// 全部在主线程 —— 把整个类收敛到 @MainActor，self 不再跨隔离（修 sending 'self'）.
+@MainActor
 final class WirelessKeepAlive {
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 

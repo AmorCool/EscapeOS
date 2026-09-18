@@ -266,8 +266,11 @@ final class JITEnableService: Sendable {
         // iOS 数秒内就会挂起进程——若此时 attach/detach 流程还没跑完，
         // 目标应用会一直停在 SIGSTOP（黑屏无反应）.持有后台租约保证
         // 整个会话期间本应用不被挂起（对齐 StikDebug 的 DebugKeepAliveLease）.
-        let keepAliveLease = JITBackgroundLease()
-        defer { keepAliveLease.invalidate() }
+        // Swift 6：JITBackgroundLease 已收敛主线程（@MainActor）；本方法可能在后台
+        // 线程跑，创建/释放同步跳主线程（与旧版内部 DispatchQueue.main.sync 行为一致；
+        // 主线程调用本方法时 main.sync 会死锁，与旧版约束相同，调用点均在后台 Task）.
+        let keepAliveLease = DispatchQueue.main.sync { JITBackgroundLease() }
+        defer { DispatchQueue.main.sync { keepAliveLease.invalidate() } }
 
         var tunnel = try createTunnel(hostname: "EscapeSpaceJIT")
         defer { tunnel.free() }
@@ -391,7 +394,9 @@ final class JITAppIconLoader {
         if let task = inFlight[bundleID] { return await task.value }
 
         let task = Task<UIImage?, Never> {
-            let img = await semaphore.withPermit {
+            // Swift 6：显式 @Sendable 让闭包按非隔离推断，不再作为主 actor 隔离值
+            // 传入 actor 方法 withPermit（修 sending）；闭包体只捕获 Sendable 的 bundleID.
+            let img = await semaphore.withPermit { @Sendable in
                 await Task.detached(priority: .utility) {
                     try? JITEnableService.shared.getAppIcon(bundleID: bundleID)
                 }.value
@@ -450,14 +455,16 @@ private actor IconFetchSemaphore {
 /// 这是 v0.2.73 前用户开启「保持后台运行」仍黑屏的根因）.因此这里
 /// 只依赖 `beginBackgroundTask`：到期自动续期，直到 JIT 会话结束
 /// （invalidate），与用户设置、音频会话完全解耦.
+// Swift 6：backgroundTaskID / isActive 只在主线程读写（beginBackgroundTask 及其到期
+// 回调都是主线程 API），整类收敛到 @MainActor，self 不再跨隔离（修 sending 'self'）.
+// enableJIT 可能运行在后台线程，创建/释放入口见 enableJIT 内的同步跳转.
+@MainActor
 private final class JITBackgroundLease {
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var isActive = true
 
     init() {
-        DispatchQueue.main.sync {
-            renew()
-        }
+        renew()
     }
 
     /// 申请后台执行宽限；到期回调里若会话仍活跃则自动续期.
@@ -472,11 +479,9 @@ private final class JITBackgroundLease {
 
     func invalidate() {
         isActive = false
-        DispatchQueue.main.sync {
-            if backgroundTaskID != .invalid {
-                UIApplication.shared.endBackgroundTask(backgroundTaskID)
-                backgroundTaskID = .invalid
-            }
+        if backgroundTaskID != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            backgroundTaskID = .invalid
         }
     }
 }

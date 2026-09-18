@@ -20,10 +20,22 @@ import NIO
 import NIOSSH
 import UIKit
 
+/// Swift 6：供同步函数阻塞等待 async 结果用的最小盒子（NSLock 保护，
+/// 因此可安全标注 @unchecked Sendable —— 这是锁保护容器的标准用法，
+/// 非「兜底标注」）.
+private final class LockedResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var text = ""
+    func set(_ t: String) { lock.lock(); text = t; lock.unlock() }
+    func get() -> String { lock.lock(); defer { lock.unlock() }; return text }
+}
+
 /// `@unchecked Sendable`：可变状态（`server` 句柄与 `@Published` 状态）只在主线程写——
-/// `start()` / `stop()` 的写入都在 `await MainActor.run { … }` 里，调用点
-/// （`EscapeSpaceApp.init` / 各 `View`）也都在主 actor；非隔离的 `static execute`
-/// 只读取共享状态做诊断输出，不做写。
+/// `start()` / `stop()` 的 `@Published` 写入都在 `await MainActor.run { … }` 里，调用点
+/// （`EscapeSpaceApp.init` / 各 `View`）也都在主 actor；`server` 句柄仅在 start/stop
+/// 各自的单个 detached 任务内写入（start 的 guard server == nil 检查在主线程先行，
+/// stop 与 start 不会同时持有写窗口），非隔离的 `static execute` 只读共享状态做
+/// 诊断输出，不做写。
 final class SSHServerService: NSObject, ObservableObject, @unchecked Sendable {
     static let shared = SSHServerService()
 
@@ -147,29 +159,32 @@ final class SSHServerService: NSObject, ObservableObject, @unchecked Sendable {
                 server.enableExec(withDelegate: exec)
 
                 guard let self else { return }
-                await MainActor.run {
-                    self.server = server
-                    self.isRunning = true
-                    self.beginBackgroundTaskIfNeeded()
+                // Swift 6：server（非 Sendable）不再传进主 actor 闭包 —— 句柄直接写入
+                // 本类存储（本类 @unchecked Sendable，句柄读写点仅 start/stop 两处），
+                // 主 actor 只更新 @Published 状态（修 sending 'server'）.
+                self.server = server
+                await MainActor.run { [weak self] in
+                    self?.isRunning = true
+                    self?.beginBackgroundTaskIfNeeded()
                 }
                 print("[SSH] 服务已启动 port=\(port) user=\(username)")
 
                 // 阻塞等待关闭（close 后自然返回）
                 try await server.closeFuture.get()
                 print("[SSH] 服务已关闭")
-                await MainActor.run {
-                    if self.server === server {
-                        self.server = nil
-                        self.isRunning = false
-                        self.endBackgroundTaskIfNeeded()
-                    }
+                let isCurrent = (self.server === server)
+                await MainActor.run { [weak self] in
+                    guard let self, isCurrent else { return }
+                    self.server = nil
+                    self.isRunning = false
+                    self.endBackgroundTaskIfNeeded()
                 }
             } catch {
                 guard let self else { return }
-                await MainActor.run {
-                    self.lastError = "SSH 启动失败：\(error.localizedDescription)"
-                    self.server = nil
-                    self.isRunning = false
+                await MainActor.run { [weak self] in
+                    self?.lastError = "SSH 启动失败：\(error.localizedDescription)"
+                    self?.server = nil
+                    self?.isRunning = false
                 }
             }
         }
@@ -179,9 +194,11 @@ final class SSHServerService: NSObject, ObservableObject, @unchecked Sendable {
         let server = self.server
         Task.detached(priority: .userInitiated) { [weak self] in
             try? await server?.close()
+            guard let self else { return }
+            // Swift 6：引用比较移出主 actor 闭包（修 sending 'server'）
+            let isCurrent = (self.server === server)
             await MainActor.run {
-                guard let self else { return }
-                if self.server === server {
+                if isCurrent {
                     self.server = nil
                     self.isRunning = false
                 }
@@ -482,19 +499,21 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // v0.3.130：远程触发开发证书创建（诊断/自测用）.
             // 流程：生成密钥+CSR → 提交 Apple →（7460 自动吊销重试）→ 轮询取证书.
             // execute 是同步函数 → 信号量等 Task 完成（整流程最多 ~40 秒）.
+            // Swift 6：Task（@Sendable）不能捕获可变局部变量 —— 结果装进锁保护的
+            // 盒子（sem.wait/signal 已建立 happens-before，锁只满足类型系统）.
             let sem = DispatchSemaphore(value: 0)
-            var devcertResult = ""
+            let devcertBox = LockedResultBox()
             Task {
                 do {
                     try await DeveloperCertStore.shared.createCertificateWithStoredAccount()
-                    devcertResult = "✓ 开发证书创建成功（已存 DeveloperCert/，原生模块将用真证书签名加载）"
+                    devcertBox.set("✓ 开发证书创建成功（已存 DeveloperCert/，原生模块将用真证书签名加载）")
                 } catch {
-                    devcertResult = "❌ 开发证书创建失败: \((error as NSError).localizedDescription)"
+                    devcertBox.set("❌ 开发证书创建失败: \((error as NSError).localizedDescription)")
                 }
                 sem.signal()
             }
             sem.wait()
-            return "devcert: \(devcertResult)\n详情: logs"
+            return "devcert: \(devcertBox.get())\n详情: logs"
 
         case "mlog":
             // 读模块数据目录下的任意文件.

@@ -748,7 +748,7 @@ enum DeviceSlimService {
     /// ——这正是爱思的做法（它的包不落本地，重装时从自己服务端取）。
     /// 源里也找不到才判定为「资源缺失」。
     static func reinstall(items: [Item],
-                          progress: ((ReinstallProgress) -> Void)? = nil) async -> ReinstallResult {
+                          progress: (@Sendable (ReinstallProgress) -> Void)? = nil) async -> ReinstallResult {
         var result = ReinstallResult()
         let targets = items.filter { $0.kind == .bigApps }
         for (index, item) in targets.enumerated() {
