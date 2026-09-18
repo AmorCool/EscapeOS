@@ -69,20 +69,26 @@ final class SandboxEscape {
             return Handle(raw: -1)
         }
 
-        var cPath = Array(path.utf8CString)
-        var cGroup = groupIdentifier.map { Array($0.utf8CString) }
+        // v0.3.412：**不再直接调 `bad_query`** —— 交给漏洞利用注册表。
+        //
+        // 这是"把 bad_query 真正独立出来"的关键一步：以前取消勾选只影响「列目录」
+        // （`BadQueryExploit.paths`），而**取沙盒扩展**这条能力仍写死在这里，
+        // 于是勾不勾选都不影响实际行为 —— 用户实测指出过这一点。
+        // 现在两条能力都归 `BadQueryExploit`，勾选才真正控制全部。
+        //
+        // 取第一个非 nil 的结果：`nil` = 该漏洞利用没执行（被关掉），继续试下一个；
+        // 负数 = 执行了但被内核拒绝（iOS 26 常见 -4），同样继续试下一个漏洞利用。
+        let raw = ExploitRegistry.enabled()
+            .shuffled()
+            .compactMap { $0.consumeExtension(path: path,
+                                              groupIdentifier: groupIdentifier,
+                                              isGroup: isGroup,
+                                              create: create) }
+            .first(where: { $0 >= 0 })
 
-        let raw: Int64 = cPath.withUnsafeMutableBufferPointer { pathPtr in
-            if cGroup != nil {
-                return cGroup!.withUnsafeMutableBufferPointer { groupPtr in
-                    bad_query(pathPtr.baseAddress, create, groupPtr.baseAddress, isGroup)
-                }
-            }
-            return bad_query(pathPtr.baseAddress, create, nil, isGroup)
-        }
-
-        guard raw >= 0 else {
-            throw Self.error(from: raw)
+        guard let raw else {
+            // 没有任何已启用的漏洞利用能给出句柄（用户全关 / 全被内核拒绝）。
+            throw SandboxEscapeError.kernelRejected
         }
 
         lock.lock()
@@ -100,7 +106,9 @@ final class SandboxEscape {
         let removed = liveHandles.remove(handle.raw)
         lock.unlock()
         guard removed != nil else { return }
-        bad_query_release(handle.raw)
+        // v0.3.412：同样经注册表释放。用 `all`（不是 `enabled()`）——
+        // 释放是清理动作，不该因为用户中途取消勾选而泄漏句柄。
+        ExploitRegistry.all.first?.releaseExtension(handle.raw)
     }
 
     /// True when `path` lies under a LiveContainer container root for which the

@@ -230,49 +230,29 @@ final class BQMobileGestaltModel {
             return true
         }
 
-        var cPath = path.utf8CString.map { Int8($0) }
-        var handle = bad_query(&cPath, true, nil, false)
-        var route = "system"
+        // v0.3.412：三条路由（system → App Group → internal daemon）**已整体搬进
+        // `BadQueryExploit.consumeExtensionWithFallback`**（路由顺序不变）。
+        //
+        // 这里不再直接调 `bad_query` —— 于是「更多 → 漏洞利用」里取消勾选 bad_query 时，
+        // **这条链路会真的失效**。以前取消勾选只影响「列目录」，这里照样能拿到扩展，
+        // 所以用户看到的是"勾不勾选都一个样"（原话：还只是个 UI）。
+        let grant = ExploitRegistry.enabled()
+            .shuffled()
+            .compactMap { $0.consumeExtensionWithFallback(
+                path: path, appGroupIdentifier: BQMCMAppGroupIdentifier()) }
+            .first
 
-        if handle < 0 {
-            // Fallback 1: App Group sacrifice route (iOS 26). Only meaningful if
-            // a real host App Group was detected — a placeholder can never work.
-            let ag = BQMCMAppGroupIdentifier()
-            let isPlaceholder = ag.isEmpty || ag.hasSuffix(".placeholder")
-            if !isPlaceholder {
-                var cGroup = ag.utf8CString.map { Int8($0) }
-                var fallback = bad_query(&cPath, true, &cGroup, true)
-                if fallback < 0 {
-                    fallback = bad_query(&cPath, true, &cGroup, false)
-                }
-                if fallback > 0 {
-                    handle = fallback
-                    route = "app group"
-                }
-            }
-            // Fallback 2: InternalDaemon escape base (approach D, experimental).
-            // Uses a system daemon's class-10 container (e.g. com.apple.lsd) as
-            // the traversal base on iOS 26 when neither systemgroup nor App
-            // Group routes succeed. Harmless if it also fails.
-            if handle < 0 {
-                let d = bad_query_internal_daemon(&cPath, true)
-                if d > 0 {
-                    handle = d
-                    route = "internal daemon"
-                }
-            }
-        }
-
-        if handle > 0 {
-            extensionHandle = handle
+        if let grant {
+            extensionHandle = grant.handle
             hasExtension = true
-            appendLog("extension \(handle) acquired (\(route) route) for \(path)")
+            appendLog("extension \(grant.handle) acquired (\(grant.route) route) for \(path)")
             statusMessage = "Sandbox extension active"
             return true
         } else {
             hasExtension = false
-            lastError = "bad_query returned \(handle) for \(path)"
-            appendLog("extension failed (\(handle)) for \(path)")
+            lastError = "no sandbox extension for \(path)"
+            appendLog("extension failed for \(path)（已启用的漏洞利用："
+                      + ExploitRegistry.enabled().map(\.kind.title).joined(separator: ", ") + "）")
             return false
         }
     }
