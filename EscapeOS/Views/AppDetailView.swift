@@ -343,6 +343,10 @@ private struct AppBackupRow: View {
     }
 }
 
+/// Swift 6：本类是 SwiftUI 的 UI 模型，只在主线程读写 → 标 `@MainActor` 是**语义正确的隔离**，
+/// 同时让 `self` 成为 Sendable，内层 `DispatchQueue.main.async { self.x = … }` 的
+/// `sending 'self'` 诊断自然消失（该闭包本来就在主线程执行，语义不变）。
+@MainActor
 final class AppBackupsModel: ObservableObject {
     @Published var records: [BackupRecord] = []
     @Published var isLoading = false
@@ -377,6 +381,8 @@ struct ContainerRootStat: Identifiable {
     }
 }
 
+/// Swift 6：同 AppBackupsModel —— UI 模型，主线程读写，标 @MainActor。
+@MainActor
 final class ContainerInventoryModel: ObservableObject {
     @Published var roots: [ContainerRootStat] = []
     @Published var isLoading = false
@@ -418,6 +424,8 @@ final class ContainerInventoryModel: ObservableObject {
 }
 
 /// Tracks whether we can currently consume a sandbox extension for the app's container.
+/// Swift 6：同 AppBackupsModel —— UI 模型，主线程读写，标 @MainActor。
+@MainActor
 final class ContainerAccessModel: ObservableObject {
     enum State {
         case unknown
