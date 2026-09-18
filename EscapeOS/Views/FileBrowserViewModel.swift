@@ -5,6 +5,12 @@ enum CreateKind {
     case folder
 }
 
+/// Swift 6：本类是 SwiftUI 的 UI 模型，只在主线程读写（唯一消费者 FileBrowserView）→
+/// 标 `@MainActor` 是语义正确的隔离，同时让 `self` 成为 Sendable：
+/// 内层 `MainActor.run { self.x = … }` 捕获 self 的 `sending` 诊断自然消失
+/// （该闭包本来就在主线程执行，线程语义与顺序不变）。
+/// 后台重活方法（list/paste 等）标 `nonisolated`，见各方法处注释.
+@MainActor
 final class FileBrowserViewModel: ObservableObject {
     @Published var items: [FileItem] = []
     @Published var currentPath: String = "/"
@@ -32,8 +38,12 @@ final class FileBrowserViewModel: ObservableObject {
     /// bundle id → App 显示名（来自已加载的 App 列表，隧道数据，安全）.
     /// 为空时容器行只显示 bundle id（对齐 Erosion 原版）.
     let appNameIndex: [String: String]
-    private let escape = SandboxEscape()
-    private let files = FileService()
+    // Swift 6：这两个引擎在后台线程使用（Task.detached 的 nonisolated 方法内），
+    // 标 nonisolated(unsafe) 以解除 MainActor 隔离.线程安全性来自类型内部：
+    // SandboxEscape 的可变状态 liveHandles 全部在 NSLock 内；FileService 无可变状态
+    // （仅持有线程安全的 FileManager.default）.
+    nonisolated(unsafe) private let escape = SandboxEscape()
+    nonisolated(unsafe) private let files = FileService()
 
     /// 兼容原调用点（App 详情 / 空间回收）.class 的委托初始化必须标记为 convenience.
     convenience init(app: InstalledApp, initialPath: String? = nil) {
@@ -69,7 +79,9 @@ final class FileBrowserViewModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                let listed = try self.list(at: self.currentPath)
+                // 用入参 path（与刚赋值的 currentPath 等值）：currentPath 是
+                // @Published 主线程属性，后台闭包内不可直接读.
+                let listed = try self.list(at: path)
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.items = listed
@@ -90,7 +102,9 @@ final class FileBrowserViewModel: ObservableObject {
     /// - 容器根：走 `bad_query_list`（多级回退），不消费沙盒扩展；空结果时
     ///   再兜底尝试签发扩展后用 FileManager 直接列（iOS 27 上部分只读目录可列）.
     /// - 普通根 / 容器内部：先尝试用沙盒扩展；失败时退回直接 `FileManager`.
-    private func list(at path: String) throws -> [FileItem] {
+    /// Swift 6：在 Task.detached 后台线程执行；只读不可变 let（isContainerRoot/rootPath）
+    /// 与线程安全的引擎（escape/files），不触碰任何 @Published → nonisolated.
+    private nonisolated func list(at path: String) throws -> [FileItem] {
         if isContainerRoot && path == rootPath {
             let items = try files.listContainerRoot(at: path)
             if !items.isEmpty { return items }
@@ -155,11 +169,12 @@ final class FileBrowserViewModel: ObservableObject {
         }
         let paths = items.filter(\.isDirectory).map(\.path)
         guard !paths.isEmpty else { return }
-        let resolver = ContainerNameResolver.shared
         let nameIndex = appNameIndex
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            let resolved = resolver.resolveAll(containerPaths: paths)
+            // 直接引用 shared（nonisolated(unsafe) static let，作者已用 NSLock 保证
+            // 线程安全）：避免把非 Sendable 的局部引用捕获进 @Sendable 闭包.
+            let resolved = ContainerNameResolver.shared.resolveAll(containerPaths: paths)
             // bundle id → 显示名（有则组合，无则原样）
             var display: [String: String] = [:]
             for (path, identifier) in resolved {
@@ -242,7 +257,8 @@ final class FileBrowserViewModel: ObservableObject {
         }
     }
 
-    private func paste(_ clip: FileClipboard.Payload, into destDir: String, destContainer: String) throws {
+    /// 粘贴的文件搬运主体：在 Task.detached 后台线程执行，不触碰 @Published.
+    private nonisolated func paste(_ clip: FileClipboard.Payload, into destDir: String, destContainer: String) throws {
         for item in clip.items {
             if Self.wouldNest(source: item.path, inside: destDir) {
                 throw FileServiceError.operationFailed("无法将文件夹粘贴到自身内部.")
@@ -286,7 +302,8 @@ final class FileBrowserViewModel: ObservableObject {
         }
     }
 
-    private func transferSameContainer(_ clip: FileClipboard.Payload, destDir: String) throws {
+    /// 同上（被后台的 paste 调用）：只使用线程安全的 files 引擎.
+    private nonisolated func transferSameContainer(_ clip: FileClipboard.Payload, destDir: String) throws {
         let destNorm = (destDir as NSString).standardizingPath
         for item in clip.items {
             let parent = ((item.path as NSString).deletingLastPathComponent as NSString).standardizingPath
@@ -302,7 +319,7 @@ final class FileBrowserViewModel: ObservableObject {
         }
     }
 
-    private static func wouldNest(source: String, inside destDir: String) -> Bool {
+    private nonisolated static func wouldNest(source: String, inside destDir: String) -> Bool {
         let src = (source as NSString).standardizingPath
         let dest = (destDir as NSString).standardizingPath
         return dest == src || dest.hasPrefix(src + "/")
@@ -331,6 +348,8 @@ final class FileBrowserViewModel: ObservableObject {
         guard !urls.isEmpty else { return }
         isZipping = true
         busyTitle = urls.count == 1 ? "正在导入…" : "正在导入 \(urls.count) 项…"
+        // 主线程先取值，以参数传进后台闭包（currentPath 是 @Published 主线程属性）.
+        let targetDir = currentPath
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
@@ -340,7 +359,7 @@ final class FileBrowserViewModel: ObservableObject {
                         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
                         let data = try Data(contentsOf: url)
                         let dest = self.files.uniqueDestination(
-                            in: self.currentPath,
+                            in: targetDir,
                             preferredName: url.lastPathComponent
                         )
                         try self.files.writeFile(data: data, to: dest)
@@ -405,12 +424,14 @@ final class FileBrowserViewModel: ObservableObject {
         isZipping = true
         busyTitle = items.count == 1 ? "正在压缩…" : "正在压缩 \(items.count) 项…"
         operationError = nil
+        // 主线程先取值，以参数传进后台闭包（currentPath 是 @Published 主线程属性）.
+        let targetDir = currentPath
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
                 let destPath: String = try self.escape.withHandle(for: self.rootPath) { _ in
                     let dest = self.files.uniqueDestination(
-                        in: self.currentPath,
+                        in: targetDir,
                         preferredName: Self.zipName(for: items)
                     )
                     let zip = ZipWriter()
@@ -452,6 +473,8 @@ final class FileBrowserViewModel: ObservableObject {
         isZipping = true
         busyTitle = "正在解压…"
         operationError = nil
+        // 主线程先取值，以参数传进后台闭包（currentPath 是 @Published 主线程属性）.
+        let targetDir = currentPath
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
@@ -463,7 +486,7 @@ final class FileBrowserViewModel: ObservableObject {
                     }
                     let preferred = ArchiveExtractor.folderName(from: item.name)
                     let dest = self.files.uniqueDestination(
-                        in: self.currentPath,
+                        in: targetDir,
                         preferredName: preferred.isEmpty ? "归档" : preferred
                     )
                     do {
@@ -511,7 +534,7 @@ final class FileBrowserViewModel: ObservableObject {
         }
     }
 
-    private static func zipName(for items: [FileItem]) -> String {
+    private nonisolated static func zipName(for items: [FileItem]) -> String {
         if items.count == 1 {
             let name = items[0].name
             let ns = name as NSString
@@ -523,7 +546,7 @@ final class FileBrowserViewModel: ObservableObject {
         return "归档.zip"
     }
 
-    private static func shareName(for item: FileItem) -> String {
+    private nonisolated static func shareName(for item: FileItem) -> String {
         if item.isDirectory {
             return "\(item.name).zip"
         }
@@ -531,7 +554,7 @@ final class FileBrowserViewModel: ObservableObject {
     }
 
     /// Stage a share file in EscapeOS Documents under the original name (no `shared_` prefix).
-    private static func shareStagingURL(named name: String) throws -> URL {
+    private nonisolated static func shareStagingURL(named name: String) throws -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let safe = name
             .replacingOccurrences(of: "/", with: "_")
@@ -543,7 +566,10 @@ final class FileBrowserViewModel: ObservableObject {
         return dest
     }
 
-    private func mutate(_ body: @escaping () throws -> Void) {
+    /// Swift 6：body 在 Task.detached 后台线程执行 → 标 @Sendable.
+    /// 各调用点捕获的均为 Sendable 值（String/FileItem/self@MainActor），
+    /// body 内只触碰线程安全的 files 引擎，行为语义不变.
+    private func mutate(_ body: @escaping @Sendable () throws -> Void) {
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
