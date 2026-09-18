@@ -147,7 +147,9 @@ struct AddAccountSheet: View {
             let account = try await AppleIDSignInService.signIn(
                 email: email.trimmingCharacters(in: .whitespacesAndNewlines),
                 password: password,
-                code: code) { line in
+                code: code) { @Sendable line in
+                    // Swift 6：@Sendable 无捕获闭包 → 非 MainActor 隔离，
+                    // 消除「sending MainActor 闭包给 nonisolated 方法」的诊断.
                     LoginLogger.shared.log("[SAP] \(line)", category: .appStore)
                 }
             LoginLogger.shared.log("[SAP] 登录成功：dsid \(account.directoryServicesIdentifier.isEmpty ? "空" : "OK")",

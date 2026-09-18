@@ -531,7 +531,9 @@ struct AppStoreDetailView: View {
         Task {
             do {
                 let message = try await AppStoreLocalInstallService.acquireLicense(
-                    item: item, email: email) { line in
+                    item: item, email: email) { @Sendable line in
+                        // Swift 6：@Sendable 无捕获闭包 → 非 MainActor 隔离，
+                        // 消除「sending MainActor 闭包给 nonisolated 方法」的诊断.
                         LoginLogger.shared.log("[下载中心] \(line)", category: .appStore)
                     }
                 ToastCenter.shared.show(message)

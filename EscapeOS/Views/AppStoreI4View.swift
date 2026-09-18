@@ -192,7 +192,7 @@ struct AppStoreI4View: View {
             let ipa = try await AppStoreInstallService.downloadIPA(
                 urlString: hit.ipaURL,
                 suggestedName: "\(bid)-\(hit.version ?? "x").ipa",
-                onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
+                onLog: { @Sendable line in LoginLogger.shared.log("[爱思源] \(line)", category: .i4Store) })
             await MainActor.run {
                 // v0.3.393：**把两条链接一起写进台账** —— 这里是爱思源直装路径，
                 // `hit` 手上就带着 `ipaURL`（下载直链）与 `itemId`（App Store trackId）。
@@ -208,7 +208,7 @@ struct AppStoreI4View: View {
             }
             try await AppStoreInstallService.installLocalIPA(
                 ipa.path,
-                onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
+                onLog: { @Sendable line in LoginLogger.shared.log("[爱思源] \(line)", category: .i4Store) })
             IPADownloadLibrary.shared.markInstalled(fileName: ipa.lastPathComponent)
             ToastCenter.shared.show("已安装：\(name.isEmpty ? hit.name : name)")
         } catch {
@@ -359,7 +359,7 @@ struct I4SpecialAppsView: View {
             let ipa = try await AppStoreInstallService.downloadIPA(
                 urlString: hit.ipaURL,
                 suggestedName: "\(bid)-\(hit.version ?? "x").ipa",
-                onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
+                onLog: { @Sendable line in LoginLogger.shared.log("[爱思源] \(line)", category: .i4Store) })
             await MainActor.run {
                 // v0.3.393：**把两条链接一起写进台账** —— 这里是爱思源直装路径，
                 // `hit` 手上就带着 `ipaURL`（下载直链）与 `itemId`（App Store trackId）。
@@ -375,7 +375,7 @@ struct I4SpecialAppsView: View {
             }
             try await AppStoreInstallService.installLocalIPA(
                 ipa.path,
-                onLog: { LoginLogger.shared.log("[爱思源] \($0)", category: .i4Store) })
+                onLog: { @Sendable line in LoginLogger.shared.log("[爱思源] \(line)", category: .i4Store) })
             IPADownloadLibrary.shared.markInstalled(fileName: ipa.lastPathComponent)
             ToastCenter.shared.show("已安装：\(name.isEmpty ? hit.name : name)")
         } catch {

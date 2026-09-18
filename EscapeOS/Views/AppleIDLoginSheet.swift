@@ -170,14 +170,18 @@ struct AppleIDLoginSheet: View {
                 appleID: email,
                 password: password,
                 anisetteData: anisette
-            ) { reply in
+            ) { @Sendable reply in
+                // Swift 6：@Sendable → 非 MainActor 隔离，才可作为回调传入
+                // nonisolated 的 authenticate（ctrl 已随 AppleLoginController
+                // 标 @MainActor 而成为 Sendable，可被安全捕获）.
                 DispatchQueue.main.async {
                     ctrl.twoFactorCode = ""
                     ctrl.twoFactorReply = reply
                     ctrl.showTwoFactorAlert = true
                 }
-            } refreshAnisette: {
+            } refreshAnisette: { @Sendable in
                 // 2FA 通过后必须换新 OTP（一次性，首次握手已消费），否则 Apple 拒绝 -22421
+                // Swift 6：同上，@Sendable → 非 MainActor 隔离（方法本身 nonisolated async）.
                 try await AnisetteProvider.shared.getAnisetteDataWithFallback(refresh: true)
             }
             MemoryLimitSettings.shared.completeSignIn(email: email, password: password, account: account, session: session)
@@ -223,6 +227,9 @@ struct AppleIDLoginSheet: View {
 }
 
 /// 登录过程中的可变状态（2FA 弹窗、进度、错误）.
+/// Swift 6：本类是登录页的 UI 状态对象，只在主线程读写 → 标 `@MainActor` 是语义正确的隔离，
+/// 同时让 `ctrl` 成为 Sendable，verificationHandler 的 @Sendable 闭包才能捕获它.
+@MainActor
 final class AppleLoginController: ObservableObject {
     @Published var isAuthenticating = false
     @Published var authError: String?

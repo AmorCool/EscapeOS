@@ -10,6 +10,12 @@ private enum AppListScope: String, CaseIterable, Identifiable {
 }
 
 /// View model for the app picker.
+/// Swift 6：本类是 SwiftUI 的 UI 模型，只在主线程读写 → 标 `@MainActor` 是语义正确的隔离，
+/// 同时让 `self` 成为 Sendable，内层 `DispatchQueue.main.async { self.x = … }` 的
+/// `sending 'self'` 诊断自然消失（该闭包本来就在主线程执行，语义不变）。
+/// 后台重活方法（loadIcons / loadAppTypes）相应标 `nonisolated`，
+/// discovery 在主线程取好后以参数传入（后台闭包不能直读 MainActor 存储属性）。
+@MainActor
 final class AppListViewModel: ObservableObject {
     @Published var apps: [InstalledApp] = []
     @Published var isLoading = false
@@ -40,10 +46,13 @@ final class AppListViewModel: ObservableObject {
         errorMessage = nil
         needsPairing = false
         uninstallStatus = nil
+        // Swift 6：主线程先取好 discovery 再进后台闭包（类已标 @MainActor，
+        // 后台闭包不能直读 MainActor 隔离的存储属性；AppDiscovery 本身非隔离）.
+        let discovery = self.discovery
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             do {
-                let found = try self.discovery.fetchInstalledApps()
+                let found = try discovery.fetchInstalledApps()
                 DispatchQueue.main.async {
                     self.isLoading = false
                     self.apps = found
@@ -52,7 +61,7 @@ final class AppListViewModel: ObservableObject {
                     // 成功：取消自动重试.
                     self.stopAutoRetry()
                 }
-                self.loadIcons(for: found)
+                self.loadIcons(discovery, for: found)
                 self.loadAppTypes(for: found)
             } catch let e as AppDiscoveryError {
                 DispatchQueue.main.async {
@@ -97,7 +106,9 @@ final class AppListViewModel: ObservableObject {
     }
 
     /// Fetch icons concurrently and publish each one as soon as it arrives.
-    private func loadIcons(for apps: [InstalledApp]) {
+    /// Swift 6：标 `nonisolated`（后台重活，@Published 状态只在主队列闭包里写）；
+    /// discovery 由调用方主线程取好后传入.
+    nonisolated private func loadIcons(_ discovery: AppDiscovery, for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
         guard !ids.isEmpty else { return }
 
@@ -105,7 +116,7 @@ final class AppListViewModel: ObservableObject {
             guard let self else { return }
             DispatchQueue.concurrentPerform(iterations: ids.count) { index in
                 let bundleId = ids[index]
-                guard let icon = self.discovery.appIcon(for: bundleId) else { return }
+                guard let icon = discovery.appIcon(for: bundleId) else { return }
                 DispatchQueue.main.async {
                     self.icons[bundleId] = icon
                 }
@@ -140,7 +151,9 @@ final class AppListViewModel: ObservableObject {
     /// 共享正版在第一版即判准；第二版通常命中单飞缓存（幂等回填）。若主路径降级到
     /// `get_apps`（无 `iTunesMetadata`），购买邮箱缺失 → `AppTypeDetector` v0.3.401
     /// 会给出「未识别」，**不会再误判成「苹果正版」**.
-    private func loadAppTypes(for apps: [InstalledApp]) {
+    /// Swift 6：标 `nonisolated`（后台重活；appTypes 只在主队列闭包里写，
+    /// 方法体不读其它 MainActor 状态——appleID 用 nonisolated 静态方法直读 keychain）.
+    nonisolated private func loadAppTypes(for apps: [InstalledApp]) {
         let ids = apps.map { $0.bundleIdentifier }
         LoginLogger.shared.log("[应用管理] 类型判定开始：\(ids.count) 个应用")
         // v0.3.184：当前 Apple ID 用于区分正版 vs 共享（来自 AppStore 登录态）.
@@ -329,9 +342,11 @@ final class AppListViewModel: ObservableObject {
     /// Load a single icon on demand (e.g. when opening app detail before batch fetch finishes).
     func ensureIcon(for bundleId: String) {
         guard icons[bundleId] == nil else { return }
+        // Swift 6：主线程先取好 discovery（后台闭包不能直读 @MainActor 存储属性）.
+        let discovery = self.discovery
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            guard let icon = self.discovery.appIcon(for: bundleId) else { return }
+            guard let icon = discovery.appIcon(for: bundleId) else { return }
             DispatchQueue.main.async {
                 self.icons[bundleId] = icon
             }
@@ -350,24 +365,33 @@ final class AppListViewModel: ObservableObject {
             completion([], targets.map { ($0, UninstallServiceError.callFailed("尚未导入配对文件")) })
             return
         }
-        var successes: [InstalledApp] = []
-        var failures: [(InstalledApp, Error)] = []
+        // Swift 6：主线程先取好 uninstaller（@MainActor 类的存储属性不能在后台闭包直读）；
+        // successes/failures 移进队列闭包内部作为局部变量，消除「跨闭包捕获 var」的
+        // 数据竞争来源；进度文案在后台先算成 Sendable 字符串再进主队列闭包.
+        let uninstaller = self.uninstaller
         let queue = DispatchQueue(label: "escapeos.uninstall", qos: .userInitiated)
         queue.async {
+            var successes: [InstalledApp] = []
+            var failures: [(InstalledApp, Error)] = []
             for app in targets {
+                let status = "正在卸载 \(app.name) (\(successes.count + failures.count + 1) / \(targets.count))…"
                 DispatchQueue.main.async {
-                    self.uninstallStatus = "正在卸载 \(app.name) (\(successes.count + failures.count + 1) / \(targets.count))…"
+                    self.uninstallStatus = status
                 }
                 do {
-                    try self.uninstaller.uninstall(bundleId: app.bundleIdentifier)
+                    try uninstaller.uninstall(bundleId: app.bundleIdentifier)
                     successes.append(app)
                 } catch {
                     failures.append((app, error))
                 }
             }
+            // Swift 6：先拷贝成不可变值、原变量此后不再使用，跨入主队列闭包
+            // 才满足「sending 要求发送后区域闭合」的诊断.
+            let doneSuccesses = successes
+            let doneFailures = failures
             DispatchQueue.main.async {
                 self.uninstallStatus = nil
-                completion(successes, failures)
+                completion(doneSuccesses, doneFailures)
                 // Refresh app list so system apps-removed / leftover apps reflect.
                 self.reload()
             }

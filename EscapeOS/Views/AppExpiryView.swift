@@ -443,9 +443,13 @@ struct AppExpiryView: View {
         guard !targets.isEmpty else { return }
         Task {
             do {
+                // Swift 6：ProfileInfo 含 [String: Any] 非 Sendable，直接捕获 targets
+                // 会被 detached 闭包判为 sending 数据竞争 → 主线程先提取所需的
+                // Sendable 值（uuid 字符串数组），detached 闭包只捕获它.
+                let uuids = targets.map { $0.id }
                 try await Task.detached(priority: .userInitiated) {
-                    for profile in targets {
-                        try ProvisioningProfileStore.removeProfile(uuid: profile.id)
+                    for uuid in uuids {
+                        try ProvisioningProfileStore.removeProfile(uuid: uuid)
                     }
                 }.value
                 selectedUUIDs.removeAll()
