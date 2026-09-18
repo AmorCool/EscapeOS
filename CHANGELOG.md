@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.418] - 2026-09-18
+
+### 诊断（决定性一步：换用 RSD 自己的 API）
+v0.3.417 真机（0.3.417/714）拿到**干净数据**后确认：
+```
+start_service(com.apple.afc)                              → BrokenPipe("channel closed")
+start_service(com.apple.afc.shim.remote)                  → BrokenPipe
+start_service(com.apple.streaming_zip_conduit)             → BrokenPipe
+start_service(com.apple.streaming_zip_conduit.shim.remote) → BrokenPipe
+start_service(com.apple.mobile.data_sync)                  → BrokenPipe
+start_service(com.apple.atc)                               → BrokenPipe
+```
+**连「已知可用」的 `com.apple.afc` 也失败** ⇒ **RSD 通道不支持 `lockdownd_start_service`**。
+
+**原因**：`start_service` 是 **usbmux 通道**的机制（host 请 lockdownd 拉起服务）；
+而 **RSD 的模型是「设备广播服务 → host 直连端口」**，压根不经过 `start_service`。
+**旁证**：项目里凡走 RSD 的服务（AFC / MCInstall / DVT）用的都是各自封装的**专用 FFI**，
+没有一处用 `lockdownd_start_service`。
+
+**本版改用 RSD 自己的 API 判断**：
+- `rsd_get_services(handshake, &array)` —— **列出 RSD 广播的全部服务**（name / port / entitlement）；
+- `rsd_service_available(handshake, name, &bool)` —— 逐个问候选服务名在不在。
+
+**这才是 RSD 语义下的正确判据。** 下次自检会直接打印**服务清单**，
+一眼就能看出 RSD 上有没有 `streaming_zip_conduit`（或它广播时的真实名字）。
+
 ## [0.3.417] - 2026-09-18
 
 ### 修复（两个真机实测发现的坑）
