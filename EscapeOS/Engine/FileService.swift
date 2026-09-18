@@ -104,9 +104,10 @@ final class FileService {
         if let fmNames = try? fm.contentsOfDirectory(atPath: path), !fmNames.isEmpty {
             names = fmNames
         } else {
-            names = BadQueryLister.entryNames(at: path)
+            // v0.3.412：BadQueryLister 现在可能返回 nil（漏洞利用全关时）。
+            names = BadQueryLister.entryNames(at: path) ?? []
             if names.isEmpty {
-                names = BadQueryLister.entryNames(at: path, maxInode: 2_000_000)
+                names = BadQueryLister.entryNames(at: path, maxInode: 2_000_000) ?? []
             }
         }
         return try buildFileItems(names: names, basePath: path, fallbackKind: .directory)

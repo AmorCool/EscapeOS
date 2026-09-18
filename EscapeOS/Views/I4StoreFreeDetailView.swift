@@ -350,8 +350,7 @@ struct I4StoreFreeDetailView: View {
                                            bundleId: bundleId,
                                            version: version,
                                            iconURL: icon,
-                                           remoteURL: url.absoluteString,
-                                           autoInstall: true)
+                                           remoteURL: url.absoluteString)
     }
 }
 

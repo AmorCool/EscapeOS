@@ -530,8 +530,7 @@ struct I4StoreFreeView: View {
                                            bundleId: app.bundleId,
                                            version: app.version,
                                            iconURL: app.icon,
-                                           remoteURL: ipaURL.absoluteString,
-                                           autoInstall: true)
+                                           remoteURL: ipaURL.absoluteString)
         downloadedCount = IPADownloadLibrary.shared.items().count
     }
 }
@@ -545,7 +544,8 @@ struct I4StoreFreeView: View {
 /// 所以这一步必须是异步的。
 ///
 /// 拿到直链之后走的是**与爱思源一字不差的同一条链路**：
-/// `IPADownloadCenter.shared.start(name:bundleId:version:iconURL:remoteURL:autoInstall:source:sinfBase64:)`
+/// `IPADownloadCenter.shared.start(name:bundleId:version:iconURL:remoteURL:source:sinfBase64:)`
+/// （v0.3.412：去掉 `autoInstall` 参数 —— 详见 `IPADownloadCenter.start`）
 /// —— 全项目只有这一套下载/安装实现（`ref-客户端常见坑`：禁止新建第二个下载管理器），
 /// 牛蛙不另开一条，也不在本函数里做任何文件/安装动作。
 ///
@@ -582,7 +582,6 @@ func startNiuwaDownload(_ app: NiuwaStoreClient.NiuwaApp,
                                            version: full?.version ?? app.version,
                                            iconURL: app.iconURL,
                                            remoteURL: link,
-                                           autoInstall: true,
                                            // v0.3.406：来源标成「牛蛙免登录」——
                                            // 默认值是 `.i4Free`，不传就会被下载管理页错标成爱思。
                                            source: .niuwa,

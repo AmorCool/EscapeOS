@@ -285,6 +285,7 @@ extension WallpaperHandler {
 
     private static func listDirectory(_ path: String) -> [String] {
         // 跨容器目录在 LiveContainer 沙盒下列不出来，走 bad_query_list.
-        BadQueryLister.paths(at: path, maxInode: 100_000)
+        // v0.3.412：漏洞利用全关时可能返回 nil，空数组等同"列不出来".
+        BadQueryLister.paths(at: path, maxInode: 100_000) ?? []
     }
 }
