@@ -474,10 +474,11 @@ final class PlaceSearchCompleter: NSObject, ObservableObject, MKLocalSearchCompl
     }
 
     nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
-        // Swift 6：[MKLocalSearchCompletion] 非 Sendable，不能在 nonisolated 上下文读取后
-        // 捕获进 @MainActor 闭包；改为在闭包内读取（Apple 官方示例同款写法），
-        // 仍在主线程应用结果，语义不变。
-        Task { @MainActor in self.results = completer.results }
+        // Swift 6：completer（MKLocalSearchCompleter，非 Sendable）不能再被
+        // Task（@Sendable 闭包）捕获 —— 那样会触发 `sending 'completer'`（CI 实测 :480）。
+        // MapKit 的 delegate 回调本来就在主线程，用 MainActor.assumeIsolated 断言
+        // 当前隔离即可：不切线程、不跨隔离域，仍是主线程应用结果，语义不变。
+        MainActor.assumeIsolated { self.results = completer.results }
     }
 
     nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {

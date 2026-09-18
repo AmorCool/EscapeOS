@@ -26,7 +26,10 @@ final class BackupViewModel: ObservableObject {
         return false
     }
 
-    func start(app: InstalledApp, isContainerApp: Bool = false, iconData: Data? = nil, onFinished: (() -> Void)? = nil) {
+    // Swift 6：onFinished 会被后台队列闭包捕获（:47），必须标 @Sendable（CI 实测）。
+    // 调用点（AppDetailView 两处）已改为只捕获 Sendable 的局部值，不捕获 View 的 self。
+    func start(app: InstalledApp, isContainerApp: Bool = false, iconData: Data? = nil,
+               onFinished: (@Sendable () -> Void)? = nil) {
         cancelled.withLock { $0 = false }
         state = .running(files: 0, bytes: 0, current: "开始备份…")
         DispatchQueue.global(qos: .userInitiated).async {

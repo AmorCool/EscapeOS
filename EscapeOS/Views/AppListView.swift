@@ -360,7 +360,9 @@ final class AppListViewModel: ObservableObject {
     /// are collected and surfaced in `uninstallStatus` once the batch
     /// completes — we keep going rather than aborting, so the user gets
     /// partial progress even when one bundle id rejects.
-    func uninstallBatch(_ targets: [InstalledApp], completion: @escaping ([InstalledApp], [(InstalledApp, Error)]) -> Void) {
+    // Swift 6：completion 会被后台队列闭包捕获（:394），必须标 @Sendable（CI 实测）。
+    func uninstallBatch(_ targets: [InstalledApp],
+                        completion: @escaping @Sendable ([InstalledApp], [(InstalledApp, Error)]) -> Void) {
         guard canUninstall else {
             completion([], targets.map { ($0, UninstallServiceError.callFailed("尚未导入配对文件")) })
             return

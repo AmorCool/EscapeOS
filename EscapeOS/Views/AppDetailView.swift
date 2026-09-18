@@ -112,8 +112,12 @@ struct AppDetailView: View {
                 .disabled(!access.isGranted)
 
                 Button {
+                    // Swift 6：onFinished 现为 @Sendable —— 只捕获 Sendable 局部值
+                    //（AppBackupsModel 是 @MainActor 类，本身 Sendable），不捕获 View 的 self.
+                    let backups = appBackups
+                    let bundleID = app.bundleIdentifier
                     backup.start(app: app, isContainerApp: false) {
-                        appBackups.reload(bundleIdentifier: app.bundleIdentifier)
+                        backups.reload(bundleIdentifier: bundleID)
                     }
                 } label: {
                     Label("备份数据", systemImage: "externaldrive.fill.badge.plus")
@@ -290,8 +294,11 @@ struct AppDetailView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Button("重试") {
+                    // Swift 6：同上 —— 只捕获 Sendable 局部值，不捕获 View 的 self.
+                    let backups = appBackups
+                    let bundleID = app.bundleIdentifier
                     backup.start(app: app, isContainerApp: false) {
-                        appBackups.reload(bundleIdentifier: app.bundleIdentifier)
+                        backups.reload(bundleIdentifier: bundleID)
                     }
                 }
             }

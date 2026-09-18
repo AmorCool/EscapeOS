@@ -53,7 +53,9 @@ enum AppleAuthenticator {
         appleID unsanitizedAppleID: String,
         password: String,
         anisetteData: AnisetteData,
-        verificationHandler: (@Sendable (@escaping (String?) -> Void) async -> Void)? = nil,
+        // Swift 6：内层「提交验证码」回调 reply 也会被 @Sendable 闭包捕获
+        // （AppleIDLoginSheet:179），所以内层同样要标 @Sendable（CI 实测）。
+        verificationHandler: (@Sendable (@escaping @Sendable (String?) -> Void) async -> Void)? = nil,
         refreshAnisette: (() async throws -> AnisetteData)? = nil
     ) async throws -> (Account, AppleAPISession) {
         let sanitizedAppleID = unsanitizedAppleID.lowercased()
@@ -310,7 +312,7 @@ enum AppleAuthenticator {
     // 两处 request* 的 verificationHandler 标 @Sendable：方法体内 Task（@Sendable）
     // 会捕获并跨任务转发该回调（修 passing closure as a 'sending' parameter）.
     static func requestTrustedDeviceTwoFactorCode(dsid: String, idmsToken: String, anisetteData: AnisetteData,
-                                                   verificationHandler: @escaping @Sendable (@escaping (String?) -> Void) async -> Void) async throws {
+                                                   verificationHandler: @escaping @Sendable (@escaping @Sendable (String?) -> Void) async -> Void) async throws {
         let requestURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!
         let verifyURL = URL(string: "https://gsa.apple.com/grandslam/GsService2/validate")!
 
@@ -346,7 +348,7 @@ enum AppleAuthenticator {
     }
 
     static func requestSMSTwoFactorCode(dsid: String, idmsToken: String, anisetteData: AnisetteData,
-                                        verificationHandler: @escaping @Sendable (@escaping (String?) -> Void) async -> Void) async throws {
+                                        verificationHandler: @escaping @Sendable (@escaping @Sendable (String?) -> Void) async -> Void) async throws {
         let requestURL = URL(string: "https://gsa.apple.com/auth/verify/phone/put?mode=sms")!
         let verifyURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode?referrer=/auth/verify/phone/put")!
 
