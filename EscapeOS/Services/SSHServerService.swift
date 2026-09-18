@@ -348,7 +348,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
         case "logs":
             let n = Int(parts.count > 1 ? parts[1] : "30") ?? 30
             let all = LoginLogger.shared.fullLog().components(separatedBy: "\n")
-            let tail = all.suffix(max(1, min(n, 200))).joined(separator: "\n")
+            let tail = all.suffix(max(1, min(n, 5000))).joined(separator: "\n")
             return tail.isEmpty ? "（登录日志为空）" : tail
         case "runlog":
             // 模块运行日志：run.log（宿主+子进程）+ data/stderr.log（进程内 Go）
@@ -420,8 +420,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             guard target.path.hasPrefix(docsStd + "/") else { return "❌ 路径越界（仅限 Documents 内）" }
             guard let attr = try? FileManager.default.attributesOfItem(atPath: target.path),
                   let size = attr[.size] as? UInt64 else { return "不存在: \(rel)" }
-            guard size <= 256 * 1024 else {
-                return "文件过大（\(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))），仅支持 ≤256KB"
+            guard size <= 8 * 1024 * 1024 else {
+                return "文件过大（\(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))），仅支持 ≤8MB"
             }
             guard let s = try? String(contentsOf: target, encoding: .utf8) else { return "非 UTF-8 文本文件" }
             return s
@@ -598,13 +598,13 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     EscapeSpace SSH 调试 · 可用命令:
       status          运行状态总览
       modules         已安装模块列表
-      logs [n]        登录日志末尾 n 行（默认 30）
+      logs [n]        登录日志末尾 n 行（默认 30，最多 5000）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）
       store get <trackId> [email]   触发一次 App Store 下载（与界面「获取」同一条路径）
       devcert        创建开发证书（用已登录 Apple ID；原生模块签名用）
       ls [路径]       浏览 Documents 目录（相对路径）
-      cat <文件>      查看 Documents 内文本文件（≤256KB）
+      cat <文件>      查看 Documents 内文本文件（≤8MB）
       ip              局域网 IP
       uptime          PiP 运行时长
       ping            连通性测试
