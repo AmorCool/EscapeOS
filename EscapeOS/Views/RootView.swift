@@ -195,46 +195,46 @@ struct SettingsForm: View {
 
     var body: some View {
         Form {
-            // v0.3.434：日志上限（可配置）+ 一键清空
+            // v0.3.436：日志上限（可配置，单位 MB）+ 一键清空
             Section(header: Text("日志"),
-                    footer: Text("单位 KB（1 MB = 1024 KB）。填 0 = 无限制；留空自动恢复默认 \(LogLimitSettings.defaultKB) KB。")) {
+                    footer: Text("单位 MB。填 0 = 无限制；留空自动恢复默认 \(LogLimitSettings.defaultMB) MB。")) {
                 HStack {
                     Text("日志存储上限")
                     Spacer()
-                    TextField("\(LogLimitSettings.defaultKB)", text: $fileLimitText)
+                    TextField("\(LogLimitSettings.defaultMB)", text: $fileLimitText)
                         .keyboardType(.numberPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 80)
                         .onChange(of: fileLimitText) { _, newValue in
                             // 合法值即时生效（0 = 无限制）；留空/非法 → 回填默认值
-                            let kb = LogLimitSettings.normalizedKB(from: newValue)
-                            logLimit.maxFileKB = kb
+                            let mb = LogLimitSettings.normalizedMB(from: newValue)
+                            logLimit.maxFileMB = mb
                             if Int(newValue.trimmingCharacters(in: .whitespaces)) == nil {
-                                fileLimitText = "\(kb)"
+                                fileLimitText = "\(mb)"
                             }
                         }
-                    Text("KB").foregroundColor(.secondary)
+                    Text("MB").foregroundColor(.secondary)
                 }
-                Text(LogLimitSettings.describe(kb: logLimit.maxFileKB))
+                Text(LogLimitSettings.describe(mb: logLimit.maxFileMB))
                     .font(.caption)
                     .foregroundColor(.secondary)
                 HStack {
                     Text("cat 读取上限")
                     Spacer()
-                    TextField("\(LogLimitSettings.defaultKB)", text: $catLimitText)
+                    TextField("\(LogLimitSettings.defaultMB)", text: $catLimitText)
                         .keyboardType(.numberPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 80)
                         .onChange(of: catLimitText) { _, newValue in
-                            let kb = LogLimitSettings.normalizedKB(from: newValue)
-                            logLimit.maxCatKB = kb
+                            let mb = LogLimitSettings.normalizedMB(from: newValue)
+                            logLimit.maxCatMB = mb
                             if Int(newValue.trimmingCharacters(in: .whitespaces)) == nil {
-                                catLimitText = "\(kb)"
+                                catLimitText = "\(mb)"
                             }
                         }
-                    Text("KB").foregroundColor(.secondary)
+                    Text("MB").foregroundColor(.secondary)
                 }
-                Text(LogLimitSettings.describe(kb: logLimit.maxCatKB))
+                Text(LogLimitSettings.describe(mb: logLimit.maxCatMB))
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Button("清空日志", role: .destructive) {
@@ -411,8 +411,8 @@ struct SettingsForm: View {
         // v0.3.434：把当前日志上限填进输入框
         // （留空时由 onChange 自动回填默认值，符合「为空则改回 1024」的要求）
         .onAppear {
-            fileLimitText = "\(logLimit.maxFileKB)"
-            catLimitText = "\(logLimit.maxCatKB)"
+            fileLimitText = "\(logLimit.maxFileMB)"
+            catLimitText = "\(logLimit.maxCatMB)"
         }
     }
 

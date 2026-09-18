@@ -8,71 +8,81 @@ import Combine
 /// - `SSHServerService` 的 `cat` 硬编码 **256KB**；
 /// - `LoginLogger` 的日志文件**完全没有上限**（实测涨到 683KB）。
 ///
-/// 现在两项都可调，默认 **1024 KB**；输入框留空时自动恢复默认值。
+/// 现在两项都可调，**单位 MB，默认 1 MB**；输入框留空时自动恢复默认值；
+/// **填 `0` 表示无限制**。
+///
+/// ⚠️ 本类是 `@MainActor`，所以**所有被 `nonisolated` 方法引用的 static 常量
+/// 都必须显式标 `nonisolated`**（否则会报
+/// "main actor-isolated static property ... can not be referenced from a nonisolated context"）。
 @MainActor
 final class LogLimitSettings: ObservableObject {
     static let shared = LogLimitSettings()
 
-    /// 默认上限（KB）。输入框留空时回填这个值。
-    static let defaultKB = 1024
+    /// 默认上限（**MB**）。输入框留空时回填这个值。
+    /// `nonisolated`：被下面的 `nonisolated static` 读取函数引用。
+    nonisolated static let defaultMB = 1
 
-    /// 日志**文件**存储上限（KB）—— 超过时滚动截断（保留最新部分）。
-    nonisolated static let fileLimitKey = "LogLimit.maxFileKB"
-    /// SSH `cat` 命令的读取上限（KB）。
-    nonisolated static let catLimitKey = "LogLimit.maxCatKB"
+    /// 日志**文件**存储上限（MB）—— 超过时滚动截断（保留最新部分）。
+    /// `nonisolated`：被 `nonisolated static` 读取函数引用。
+    nonisolated static let fileLimitKey = "LogLimit.maxFileMB"
+    /// SSH `cat` 命令的读取上限（MB）。
+    nonisolated static let catLimitKey = "LogLimit.maxCatMB"
 
-    /// 日志文件上限（KB）.
-    @Published var maxFileKB: Int {
-        didSet { UserDefaults.standard.set(maxFileKB, forKey: Self.fileLimitKey) }
+    private static let bytesPerMB = 1024 * 1024
+
+    /// 日志文件上限（MB，0 = 无限制）.
+    @Published var maxFileMB: Int {
+        didSet { UserDefaults.standard.set(maxFileMB, forKey: Self.fileLimitKey) }
     }
 
-    /// `cat` 读取上限（KB）.
-    @Published var maxCatKB: Int {
-        didSet { UserDefaults.standard.set(maxCatKB, forKey: Self.catLimitKey) }
+    /// `cat` 读取上限（MB，0 = 无限制）.
+    @Published var maxCatMB: Int {
+        didSet { UserDefaults.standard.set(maxCatMB, forKey: Self.catLimitKey) }
     }
 
     private init() {
-        let file = UserDefaults.standard.integer(forKey: Self.fileLimitKey)
-        let cat = UserDefaults.standard.integer(forKey: Self.catLimitKey)
-        self.maxFileKB = file > 0 ? file : Self.defaultKB
-        self.maxCatKB = cat > 0 ? cat : Self.defaultKB
+        // 注意：这里用 object(forKey:) 而不是 integer(forKey:) —— 后者对"未设置"和"设为 0"都返回 0，
+        // 无法区分「从未设置」与「用户选了无限制」。
+        let file = UserDefaults.standard.object(forKey: Self.fileLimitKey) as? Int
+        let cat = UserDefaults.standard.object(forKey: Self.catLimitKey) as? Int
+        self.maxFileMB = file ?? Self.defaultMB
+        self.maxCatMB = cat ?? Self.defaultMB
     }
 
     // MARK: - 线程安全读取（供后台线程 / SSH 命令用，不经 MainActor）
 
-    /// 日志文件上限（字节）。**填 `0` 表示无限制。**
+    /// 日志文件上限（字节）。**填 `0` 表示无限制**（返回 `Int.max`）。
     nonisolated static var fileLimitBytes: Int {
         guard let raw = UserDefaults.standard.object(forKey: fileLimitKey) as? Int else {
-            return defaultKB * 1024          // 从未设置 → 默认
+            return defaultMB * bytesPerMB          // 从未设置 → 默认
         }
-        if raw == 0 { return Int.max }       // 0 = 无限制
-        return (raw > 0 ? raw : defaultKB) * 1024
+        if raw == 0 { return Int.max }             // 0 = 无限制
+        return raw * bytesPerMB
     }
 
-    /// `cat` 读取上限（字节）。**填 `0` 表示无限制。**
+    /// `cat` 读取上限（字节）。**填 `0` 表示无限制**（返回 `Int.max`）。
     nonisolated static var catLimitBytes: Int {
         guard let raw = UserDefaults.standard.object(forKey: catLimitKey) as? Int else {
-            return defaultKB * 1024
+            return defaultMB * bytesPerMB
         }
         if raw == 0 { return Int.max }
-        return (raw > 0 ? raw : defaultKB) * 1024
+        return raw * bytesPerMB
     }
 
-    /// 把输入框文本规整成合法 KB 值。
+    /// 把输入框文本规整成合法 MB 值。
     ///
-    /// - 空 / 非法 → 回落默认值（用户要求「为空自动改为 1024」）；
+    /// - 空 / 非法 → 回落默认值（用户要求「为空自动改回默认」）；
     /// - `0` → **保留为 0**（= 无限制）；
-    /// - 其它正数 → 原样。
-    nonisolated static func normalizedKB(from text: String) -> Int {
+    /// - 其它非负数 → 原样。
+    nonisolated static func normalizedMB(from text: String) -> Int {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = Int(trimmed), value >= 0 else { return defaultKB }
+        guard let value = Int(trimmed), value >= 0 else { return defaultMB }
         return value
     }
 
-    /// 给 UI 显示的大小说明（如 `1024 KB（= 1 MB）` / `无限制`）。
-    nonisolated static func describe(kb: Int) -> String {
-        if kb == 0 { return "无限制" }
-        if kb % 1024 == 0 { return "= \(kb / 1024) MB" }
-        return "= \(String(format: "%.1f", Double(kb) / 1024.0)) MB"
+    /// 给 UI 显示的大小说明（如 `= 1024 KB` / `无限制`）。
+    nonisolated static func describe(mb: Int) -> String {
+        if mb == 0 { return "无限制" }
+        return "= \(mb * 1024) KB"
     }
 }

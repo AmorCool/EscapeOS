@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.3.436] - 2026-09-18
+
+### 修 435 的编译错误 + 日志上限改 MB 单位 + airlift 完整 AT 消息链
+
+**1. 修 v0.3.435 的 Swift 编译错误**（CI 失败）：
+
+```
+LogLimitSettings.swift:46:20: error: main actor-isolated static property 'defaultKB'
+                              can not be referenced from a nonisolated context
+（46 / 49 / 55 / 58 / 68 共 5 处）
+```
+
+**原因**：`LogLimitSettings` 是 `@MainActor` 类，里面的 `static let defaultKB`
+**默认也是 main-actor 隔离**的；而我写的 `nonisolated static var fileLimitBytes` 去引用它 → 报错。
+**修法**：给被引用的常量显式加 `nonisolated`
+（项目里 `ExploitSettings.enabledKey` 的注释早就写过这条，我没照抄）。
+
+**2. 日志上限单位改成 MB**（用户要求「默认以 MB 为单位，默认 1MB」）：
+- 两个输入框单位由 KB 改为 **MB**，默认 **1 MB**；
+- 输入框下方实时显示换算：填 `1` → `= 1024 KB`；填 `0` → `无限制`；
+- 内部存储键同步改为 `LogLimit.maxFileMB` / `LogLimit.maxCatMB`。
+
+**3. airlift 接入完整 AT 消息链**（用户要求「干脆这版直接接入步骤六的流程」）：
+
+新增 `PlistValue` 枚举（支持 string / int / bool / dict / **array**）——
+因为 AT 消息的 `Params` 里 `Dataclasses` 是数组、`HostInfo` 是字典、`FileSize` 是整数。
+新增 `exchange(stream:label:message:...)` 统一「发一条 + 读一条」。
+
+**消息链**（照 airlift PoC 的攻击路径）：
+
+| 顺序 | Command | 关键字段 |
+|---|---|---|
+| 1 | `ReadyForSync` | version / deviceType / protocolVersion |
+| 2 | `RequestingSync` | Grappa / **Dataclasses**（数组）/ DataclassAnchors / HostInfo |
+| 3 | `AssetManifest` | `_AssetFileName` / Data |
+| 4 | `FileBegin` | **AssetID**（`../../<source>/p0/p1/p2/link`，含 `..`）/ Dataclass / FileSize / TotalSize |
+| 5 | **`FileComplete`** | **AssetID** + **AssetPath**（`/var/mobile/Library/SpringBoard`）← **攻击落点** |
+
+**说明**：本版**只走通消息链、验证设备是否接受**（含 `Sig` 缺失时的反应）。
+**真正的越界写还需要**：① 构造含 symlink 的 zip；② 先把它 stage 到设备；
+③ 再让 `FileComplete` 指向它 —— 这三步留待下一版（airlift 的 PoC 靠 `device_helper` 的
+`stage` 做，那份源码被 gitignore，需要自己实现）。
+
 ## [0.3.435] - 2026-09-18
 
 ### 日志上限加「无限制」选项 + 界面实时显示单位换算
