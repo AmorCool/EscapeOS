@@ -60,6 +60,11 @@ jobs:
           echo "Using Xcode SDK $SDK_NAME ($XCODE_SDK) -> TARGET iphone:clang:${SDK_VER}:18.0"
 
       - name: Download libidevice_ffi.a
+        # ⚠️ 本轨道**不编译 Rust FFI**，而是下载一份预编译产物 —— 它挂在**旧仓库**
+        # `pwnapplehat/EscapeOS` 的 v0.1.5 release 上（97,089,368 字节，实测仍可下载）。
+        # 当前仓库（AmorCool/EscapeOS）的 Releases **只有 IPA，没有 .a**。
+        # ⇒ 若旧仓库被删/改名，本步骤会 404；那时要么把该产物迁移到当前仓库再改这里，
+        #   要么照 `build-xcode.yml` 的「Build libidevice_ffi.a」步骤自行编译。
         run: |
           set -euo pipefail
           curl -L -o libidevice_ffi.a "https://github.com/pwnapplehat/EscapeOS/releases/download/v0.1.5/libidevice_ffi.a"

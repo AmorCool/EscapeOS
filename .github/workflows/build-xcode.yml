@@ -70,8 +70,10 @@ jobs:
           sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
 
-      - name: Install xcodegen and ldid
-        # ldid 用于出包时施加 entitlements（与 Theos 的 -SEscapeSpace.entitlements 等价）。
+      - name: Install build tooling (xcodegen, cmake, ldid)
+        # ⚠️ ldid 只被安装、**从不调用**（见「Package unsigned IPA」步骤里的说明）：
+        # 本轨道按用户要求出【未签名 IPA】，entitlements 随 .app 携带、交给侧载工具施加。
+        # 保留安装是为了与历史步骤一致；**不要因为看到它就把 ldid 调用加回来**。
         run: brew install xcodegen ldid cmake
 
       - name: Cache SAP assets and Unicorn build
@@ -331,7 +333,8 @@ jobs:
 
       - name: Build (compile/link, no Apple signing)
         # 验证「当前源码能在 Xcode 原生工程下编过」并产出未签名 .app。
-        # CODE_SIGNING_ALLOWED=NO 跳过 Apple 证书签名要求；entitlements 由后续 ldid 施加。
+        # CODE_SIGNING_ALLOWED=NO 跳过 Apple 证书签名要求；entitlements 随 .app 携带、
+        # 由侧载工具施加（**本轨道不调用 ldid**，见「Package unsigned IPA」步骤）。
         # -derivedDataPath build 把 .app 固定落到 build/Build/Products/Release-iphoneos/，
         # 便于打包步骤稳定定位（默认 DerivedData 路径含随机 hash，不可预测）。
         # DEBUG_INFORMATION_FORMAT=dwarf：CI 出的是未签名测试包，不需要单独 dSYM
@@ -370,7 +373,8 @@ jobs:
 
 
       - name: Package unsigned IPA
-        # 对齐 Theos 出包形态：ldid 施加 entitlements（与 Makefile:157 的 -S 一致）
+        # 打包形态与 Theos 轨道对齐（Payload/EscapeSpace.app），但**不调用 ldid**：
+        # 出的是【未签名 IPA】，entitlements 文件随 .app 携带（理由见本步骤末尾的说明）。
         # → 打包为 Payload/EscapeSpace.app → zip 成未签名 IPA（不依赖 Apple 证书）。
         # 全程诊断输出 tee 到 /tmp/package.log，并由「Upload package log」artifact 落盘，
         # 即使本步骤失败也能拿到真实错误（GitHub run log 偶发 421 取不到时作为兜底）。

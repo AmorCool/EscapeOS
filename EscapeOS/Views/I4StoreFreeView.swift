@@ -25,7 +25,12 @@ struct I4StoreFreeView: View {
         var id: String { rawValue }
     }
 
-    /// v0.3.382：牛蛙源的分区（客户端硬编码中国/美国/香港三档）
+    /// v0.3.382：牛蛙源的分区。
+    ///
+    /// ⚠️ **v0.3.409 起只剩「中国 / 美国」两档**（`NiuwaRegion` 已删掉 `.hk`）：
+    /// 香港档（`region = 2`）实测**搜得到、下不了**（`/appstore/download` 连续 8 次回空直链），
+    /// 所以不再暴露给用户。旧持久化值 `"hk"` 由 `?? .cn` 回落。
+    /// 数值语义未变（`0` 中国 / `1` 美国 / `2` 香港），将来要恢复香港档就用 `index = 2`。
     private var region: NiuwaStoreClient.NiuwaRegion { NiuwaStoreClient.NiuwaRegion(rawValue: regionRaw) ?? .cn }
 
     @State private var source: StoreSource = .i4
