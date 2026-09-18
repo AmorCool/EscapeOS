@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.427] - 2026-09-18
+
+### 修两处我的疏漏（用户指出）
+
+用户反馈：「我觉得你勾选了这个，你在用其它功能调用这个功能应该会调用啊，怎么可能没有日志？
+还是你没加？！还得我手动取消勾选再勾选这种操作」
+
+**疏漏 1 —— `AirliftExploit` 的能力方法里没加日志。**
+`AirliftExploit` 的 `paths` / `consumeExtension` / `consumeExtensionWithFallback` 都返回 `nil`，
+**但没有任何输出** —— 所以其它功能（空间回收 / 文件浏览 / 壁纸 / 拨号器主题）通过
+`ExploitRegistry` 调用它时，用户完全看不到它被调用过。
+**修法**：三个能力方法各加一次「被调用」日志（`noteInvokedOnce`）。
+**只记第一条** —— 这些方法在扫描循环里会被调用上万次，每次都记会淹掉日志文件。
+
+**疏漏 2 —— 「已勾选状态」没有触发自检。**
+触发原本只挂在「勾上」这个动作上，所以若 airlift 早已勾选（状态存在 UserDefaults），
+用户进来什么都看不到，必须「先取消再勾选」才行。
+**修法**：`ExploitSelectionView` 加 `onAppear` —— 进入本页时若 airlift 已勾选，补跑一次自检。
+（`runConnectivitySelfTestIfIdle()` 自带单飞标记，重复进入不会重复跑。）
+
+**改动范围**：只有 `AirliftExploit.swift`（+34）与 `ExploitSelectionView.swift`（+10）两个文件。
+
 ## [0.3.426] - 2026-09-18
 
 ### airlift：把「勾选时跑一次连通性自检」加回来（这次是安全的）
