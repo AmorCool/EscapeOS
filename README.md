@@ -4,7 +4,7 @@
 
 # EscapeOS
 
-On-device file browser and App Store app-data backup/restore for sideloaded iOS, using a path-scoped container sandbox escape. No jailbreak. No Keychain.
+On-device sideloading and device-management suite for iOS 18 and later. It reaches app Data containers through a path-scoped sandbox escape and drives privileged device services through a LocalDevVPN + pairing-file tunnel. No jailbreak.
 
 **Sideload the IPA with [iPASide](https://github.com/pwnapplehat/iPASide)** (Windows). iPASide creates the same kind of pairing file as [iLoader](https://iloader.site/docs/) and places `pairingFile.plist` after install. An iLoader file can be imported instead. After that, the PC is not required — EscapeOS talks to this iPhone over LocalDevVPN.
 
@@ -12,20 +12,82 @@ On-device file browser and App Store app-data backup/restore for sideloaded iOS,
 
 ## What it does
 
-- Lists installed user apps through LocalDevVPN + `pairingFile.plist` in Documents. Search by name or bundle ID; A–Z letters on the right jump the list.
+### Files, backup & restore
+
+- Lists every installed app (system included) over the pairing-file tunnel, with search by name or bundle ID and an A–Z jump index.
 - Browses an app Data container (`Documents`, `Library`, `tmp`) after consuming a `bad_query` sandbox extension for that container UUID.
-- Creates, previews, edits, and shares files in that container (share keeps the original name). Compress makes a zip of files and folders in the current directory. Tap zip, 7z, tar, gz, bz2, xz, lz4, lzma, or deb to extract; encrypted zip and 7z ask for a password. RAR is not unpackable. Select in the top right for multi-select Copy, Cut, Paste, Compress, Duplicate, and Delete. Copy Path / Copy Bundle ID put text on the system clipboard and show a confirmation.
-- Exports a zip + `manifest.json` (SHA-256 per file) into Files → On My iPhone → EscapeOS → Backups, and restores that archive into the same app's current container.
-- **Reclaim** ranks apps by cache/tmp size and can empty Safe buckets (`tmp`, `Library/Caches`, logs, splash snapshots). Session buckets (cookies, WebKit) are opt-in per app. Documents, Preferences, and Application Support are never reclaimed.
-- **Reset App Data** on an app’s detail screen empties that app’s Documents, Library, and tmp. It does not touch Keychain or App Groups.
+- Creates, previews, edits, and shares files in that container (share keeps the original name). Compress makes a zip of the current directory. Tap zip, 7z, tar, gz, bz2, xz, lz4, lzma, or deb to extract; encrypted zip and 7z ask for a password. RAR is not unpackable. Select in the top right for multi-select Copy, Cut, Paste, Compress, Duplicate, and Delete. Copy Path / Copy Bundle ID put text on the system clipboard and show a confirmation.
+- Opens a file with the right viewer: text, image, PDF, media, hex (in-place byte editing under 512 KB), or a plist editor for `.plist` files.
+- Shows full file properties — SHA-256, UTType, POSIX permissions, owner/group, executable bit, symlink target — read while the sandbox extension is held.
+- Browses the AFC media root (`/var/mobile/media`: DCIM, Downloads, Recordings) to upload, download, rename, move, create directories, and delete, plus a text editor for small files.
+- Lists apps that enabled document sharing and opens their Documents tree.
+- Exports a zip + `manifest.json` (SHA-256 per file) into Files → On My iPhone → EscapeSpace → Backups, and restores that archive into the same app's current container.
+- **Reclaim** ranks apps by cache/tmp size and can empty Safe buckets (`tmp`, `Library/Caches`, `Library/Logs`, `Library/SplashBoard`, `Library/GPUCache`). Session buckets (Cookies, HTTPStorages, WebKit, Saved Application State) are opt-in per app. Documents, Preferences, and Application Support are never reclaimed. The same cleanup runs against apps installed inside LiveContainer.
+- **Reset App Data** on an app's detail screen empties that app's Documents, Library, and tmp. It does not touch Keychain or App Groups.
+
+### App Store sideload (Apple ID)
+
+- Browses App Store charts and search results and opens app detail pages, backed by Apple's public iTunes Search / Lookup / RSS endpoints, with the full 134-region storefront table.
+- Signs in with real Apple ID accounts through a local SAP login, keeps multiple accounts, and picks which one downloads. An account health check reports the `dsid` / `passwordToken` / cookie count that Apple requires before it will hand over a package.
+- Lists a full version history per app and can download a specific historical version.
+- Reads the purchase history (DMAP) of a signed-in account — read-only, searchable by name, bundle ID, or app ID.
+
+### Free stores (no sign-in)
+
+- **i4** source: topic and chart listings, app detail with the full history-version list and the vendor's own privacy section. Packages are the vendor's already-signed IPAs.
+- **Niuwa** source: a second catalog with China and US regions, with search, detail pages, and direct download of the free link.
+
+### Downloads & install
+
+- **Download manager** for every source, with a persistent ledger, resume, and per-item actions (copy the App Store link, extract the original IPA URL).
+- **IPA sideload**: pick an IPA (local file or URL) → Apple ID login → sign → install over the tunnel.
+- **Signed IPA install**: hand an already-signed IPA to `installation_proxy` — new install, overwrite, or downgrade (installd allows downgrades that the App Store client refuses). Encrypted packages go through the SINF path.
+- Writes the current pairing file into other sideload tools on the device (SideStore, LiveContainer, Feather, StikDebug) so they reuse the same pairing identity.
+- Sends a provisioning profile to the device for installation from Settings, and installs carrier `.ipcc` files through the same system pipeline as Finder / iTunes.
+- Downloads the developer disk image (DDI) and the kernelcache for the connected device.
+
+### Cleanup & storage
+
+- **Device slim**: the 7-item space breakdown plus system-cache / temp-file cleanup, and a "larger apps" table with app size and document size per app.
+- **Storage detail** panel reads the NVMe controller directly through `diagnostics_relay`.
+- Reclaim and device-slim scans measure first and delete nothing until you confirm.
+
+### Device tools
+
+- **Device info**: model, system, CPU, storage, and the rest of the hardware panel.
+- **Battery health**: health, cycle count, capacity, serial number, charger and adapter readings.
+- **Device control**: respring (SIGKILL or web-crash), reboot, shut down, or enter recovery mode.
+- **Process manager**: list, suspend, and kill device processes.
+- **Enable JIT**: launch an app in debug mode. **Launch apps** starts any installed app in the foreground.
+- **Increase memory limit**: raises an app's memory cap through the Apple Developer API.
+- **Certificates**: list and revoke the Apple ID's iOS development certificates. **App expiry** manages `.mobileprovision` expiry. **Profiles** lists and deletes configuration profiles via `misagent`.
+- **MDM**: sandbox-escape strategies with profile backup / restore (personal testing only; the device may refuse on newer iOS).
+- **Configurations**: lock-screen footnote and the supervised-mode panels (app hiding, notification and restriction tweaks, web clips).
+- **Domain blocker**: generates a DNS-blocking profile for any domain list.
+- **Crash analysis**: reads the on-device crash and diagnostic logs, with batch export and delete.
+- **SSH debug server**: connects over the LAN for log and diagnostic access. **PiP keep-alive** keeps the app alive in the background.
+- **Device toggles**: developer mode (enable only — iOS has no remote way to turn it off) and LAN Wi-Fi pairing.
+
+### Gestalt & modules
+
+- **Gestalt**: reads and edits MobileGestalt values with automatic backup before each apply.
+- **Modules**: imports, enables, runs, and uninstalls on-device modules distributed as signed packages, with per-module settings and logs.
+
+### Extras
+
+- **Virtual location**: map-based location simulation with routes, a joystick for continuous movement, saved places, and an optional Bluetooth panel. Runs as a single-device self-tunnel session and keeps simulating after you leave the page.
+- **Wallpapers**: imports wallpaper packages and applies them to PosterBoard.
+- **Ringtones**: import, export, rename, delete, and preview ringtone files inside the media directory.
+- **Dialer theme**: replaces the dialer keyboard artwork in the telephony container.
 
 ## What it does not do
 
-- Keychain
-- Other apps' App Groups
-- System paths (`/var/mobile`, parent container directories)
-- The app's signed `.app` bundle (Data container only)
-- iOS 15, 16, or 17 (the IPA will not install; `MinimumOSVersion` is 18.0)
+- Other apps' Keychain data. (EscapeOS keeps its own Apple ID credentials in its own Keychain entries; it never reads another app's.)
+- Other apps' App Groups. LiveContainer guest containers are reachable only through the container extensions the host app grants.
+- Arbitrary system paths (`/var/mobile`, parent container directories). The file browser is limited to app Data containers and, over AFC, the media root.
+- The app's signed `.app` bundle (Data container only).
+- Anything the tunnel services do not expose. There is no jailbreak, no root shell, and no arbitrary write to system locations — privileged operations are limited to what `lockdownd`, DVT, MCInstall, `misagent`, and `installation_proxy` accept.
+- iOS 15, 16, or 17 (the IPA will not install; `MinimumOSVersion` is 18.0).
 
 ## Compatibility
 
@@ -60,10 +122,11 @@ Also required:
 ## Sideload
 
 1. Install [iPASide](https://github.com/pwnapplehat/iPASide/releases/latest) on Windows.
-2. Sideload `EscapeOS.ipa` from this repo's [Releases](https://github.com/pwnapplehat/EscapeOS/releases).
-3. Trust the developer profile on the iPhone.
-4. iPASide places `pairingFile.plist` automatically after sideload. To do it later: Settings → Pairing file → Place.
-5. Unplug if you want. Install LocalDevVPN, connect it, leave Wi-Fi on, then open EscapeOS.
+2. Download `EscapeSpace-<version>-xcode-unsigned.ipa` from this repo's [Releases](https://github.com/AmorCool/EscapeOS/releases). The IPA is **unsigned** — your sideloading tool applies the bundled entitlements.
+3. Sideload it with iPASide.
+4. Trust the developer profile on the iPhone.
+5. iPASide places `pairingFile.plist` automatically after sideload. To do it later: Settings → Pairing file → Place.
+6. Unplug if you want. Install LocalDevVPN, connect it, leave Wi-Fi on, then open EscapeOS.
 
 ## Why a pairing file (not House Arrest)
 
@@ -76,18 +139,28 @@ A sideloaded app cannot enumerate other apps or their Data containers by itself 
 
 Without the pairing file there is no app list and no container paths to open. Keep using iPASide **Place** (or import an iLoader file). The PC is not needed after that.
 
-## Build (Theos / WSL)
+## Build
 
-This tree is built with Theos against the iPhoneOS 16.5 SDK, deployment target **iOS 18.0** (Linux clang). That IPA is what was verified on iOS 26.5.1. A Mac with Xcode 26 can relink against the iOS 26 SDK for Liquid Glass; see `docs/BUILD.md`.
+Three tracks build this tree. Details in `docs/BUILD.md`.
+
+**GitHub Actions — the shipping path.** Push a `v*` tag and `.github/workflows/build-xcode.yml` runs on `macos-latest` with Xcode 26 (iOS 26 SDK): `xcodegen generate` → `xcodebuild` → unsigned IPA → GitHub Release, all inside one workflow. The artifact is `EscapeSpace-<version>-xcode-unsigned.ipa`. No `ldid` pass is applied; `EscapeSpace.entitlements` ships inside the `.app` for the sideloading tool to apply.
+
+**Theos on Linux / WSL.** `Makefile` targets `iphone:clang:16.5:18.0` because newer Apple SDKs need Apple Clang. This track also runs in CI via `.github/workflows/build.yml`.
 
 ```sh
 export THEOS=~/theos
 cd ~/apps/EscapeOS
 make package FINALPACKAGE=1
-# staged app: .theos/_/Applications/EscapeOS.app
+# staged app: .theos/_/Applications/EscapeSpace.app
 ```
 
-After reinstall, place `pairingFile.plist` again from the PC: iPASide Settings → Pairing file → Place (House Arrest), or share the file in Files.
+`EscapeOS/Tunnel/libidevice_ffi.a` (~93 MB) is not in git — fetch it from the matching GitHub Release or rebuild `jkcoxson/idevice` for `aarch64-apple-ios` before building.
+
+**Native Xcode 26 on macOS.** Open the project on a Mac with Xcode 26 and archive against the iOS 26 SDK; linking against that SDK is what enables Liquid Glass. The deployment target stays at iOS 18.0 either way.
+
+Common settings: product name `EscapeSpace`, bundle ID `com.ipaside.escapeos`, deployment target iOS 18.0, project generated by XcodeGen from `project.yml`.
+
+After reinstalling, place `pairingFile.plist` again from the PC: iPASide Settings → Pairing file → Place (House Arrest), or share the file in Files.
 
 ## License
 

@@ -1,44 +1,205 @@
 # Building EscapeOS
 
-## iOS 26 Liquid Glass tab bar
+This repository carries three build tracks. Only the first one produces the IPA that ships.
 
-Apple’s floating Liquid Glass tab bar is applied automatically when the app is **linked against the iOS 26 SDK (Xcode 26)**. This is an OS-level “linked on or after” rule — runtime hacks or custom blur styling cannot substitute for it.
+| Track | Defined by | Status in GitHub Actions | Output |
+|---|---|---|---|
+| **Xcode 26 native** (default) | `.github/workflows/build-xcode.yml` | **Active** | `EscapeSpace-<version>-xcode-unsigned.ipa` |
+| **Theos** | `Makefile` + `.github/workflows/build.yml` | Disabled (`disabled_manually`) | `EscapeSpace-<version>.ipa` (from a `.deb`) |
+| **MHA** (MobileHouseArrest) | `.github/workflows/mha-build.yml` | Disabled (`disabled_manually`) | `EscapeSpace-MHA-<version>.ipa` |
 
-| Build environment | Tab bar appearance | Use case |
-|---|---|---|
-| **Xcode 26 on macOS** (iOS 26 SDK) | Native Liquid Glass | App Store / public release |
-| **Theos on Linux/WSL** (iPhoneOS 16.5 SDK) | Legacy system tab bar | Local sideload / dev |
+The Theos and MHA workflows still exist in the tree but are turned off in the repository's
+Actions settings; they have not run since v0.2.161 and mha-v0.2.28 respectively. Re-enable one
+from the Actions tab only if you actually need that track.
 
-Do **not** set `UIDesignRequiresCompatibility` in `Info.plist` for release builds — that flag opts out of Liquid Glass.
+---
 
-### Public release (recommended)
+## 1. Xcode 26 native — the shipping track
 
-1. Open the project on a Mac with **Xcode 26**.
-2. Build with the iOS 26 SDK (deployment target iOS 18).
-3. Archive and export the IPA for distribution.
+### Trigger
 
-The shipping UI is SwiftUI `TabView` in `RootView`. Linking against the iOS 26 SDK is what enables Liquid Glass; Theos/WSL cannot do that because it uses the iPhoneOS 16.5 SDK.
+`.github/workflows/build-xcode.yml` runs on a `v*` tag push, or on manual
+`workflow_dispatch`. Branch pushes do **not** build; day-to-day commits on `migrate-xcode`
+produce no CI run.
 
-### Local sideload (WSL Theos)
+A `v*` tag therefore starts exactly one workflow, and that workflow does everything in a single
+run: build, package the unsigned IPA, and publish the GitHub Release.
 
-```bash
+### What the job does
+
+Runner: `macos-latest`. Job name: `xcode-build`. Permissions: `contents: write` and
+`actions: read`.
+
+1. **Checkout**, then **restore file mtimes** from commit history (`git-restore-mtime`). Without
+   this, every checkout gives all sources "now" as mtime, Xcode considers the cached
+   `DerivedData` stale, and the incremental build cache is worthless.
+2. **Select Xcode 26** — newest `/Applications/Xcode_26*.app`, falling back to the newest
+   `Xcode*.app`.
+3. **Install tooling** via Homebrew: `xcodegen`, `ldid`, `cmake`.
+4. **Restore caches** — SAP assets + `DerivedData`, the Rust toolchain, the Cargo registry, and
+   sccache. The Cargo and sccache caches use the shared `escapeos-build-cache` scope so they are
+   visible to the Theos track too.
+5. **Build `libidevice_ffi.a`** for `aarch64-apple-ios` from the vendored `rust/idevice-ffi`
+   source, unless the cross-run artifact cache reports a source-hash hit. Then assemble
+   `rust-libs/libidevice_ffi.xcframework` and copy `idevice.h` to `EscapeOS/Tunnel/`.
+6. **Sync bundled modules** — shallow-clone `AmorCool/module-esc` and copy `modules/*` into
+   `Resources/BundledModules/`.
+7. **Build `libcrypto.a`** from OpenSSL 3.3.2 (`iphoneos-cross no-asm`), cached in
+   `openssl-build/`. ZSign's ad-hoc re-signing needs it.
+8. **`xcodegen generate`** — `project.yml` produces `EscapeSpace.xcodeproj`.
+9. **`xcodebuild build`** with `CODE_SIGNING_ALLOWED=NO`, `CODE_SIGN_IDENTITY=""`,
+   `CODE_SIGNING_REQUIRED=NO`, `-derivedDataPath build`. Compiled errors are re-emitted as
+   `::error::` annotations, because the anonymous API can read annotations but not the job log.
+10. **Package the IPA** — move `EscapeSpace.app` into `Payload/` and `zip -r` from the parent
+    directory, so the archive root is `Payload/EscapeSpace.app/...`.
+11. **Verify SAP assets** inside the IPA (`SAPAssets/CommerceKit`, `SAPAssets/CoreFP`); a missing
+    bundle means Apple ID sign-in will fail at runtime.
+12. **Publish the Release** — only on a `v*` tag. Creates
+    `EscapeSpace <tag> (Xcode native)` if absent, otherwise re-uploads the asset with
+    `--clobber`.
+
+### Output
+
+```
+EscapeSpace-<MARKETING_VERSION>-xcode-unsigned.ipa
+```
+
+The version in the file name is read from the `MARKETING_VERSION` line of `project.yml`. For
+reference, `v0.3.410` published a single asset of 50,595,671 bytes.
+
+### Why the IPA is unsigned
+
+The build deliberately skips code signing:
+
+- `CODE_SIGNING_ALLOWED=NO` and friends mean no Apple certificate or provisioning profile is
+  involved anywhere in the pipeline.
+- `ldid` is installed by the setup step but is **never invoked**. The step name is stale — an
+  earlier revision applied entitlements with it, and the current script explicitly does not,
+  because the Homebrew `ldid` asserts on the main binary in CI (`ldid.cpp(852)`) and the shipped
+  artifact is not meant to be signed.
+- Instead, `EscapeSpace.entitlements` is copied into the `.app` next to the binary, so the
+  sideloading tool you use (Sideloadly, ESign, TrollStore) applies it. The file grants
+  `get-task-allow`, `com.apple.wifi.manager-access`, and `com.apple.wifi.join-any`.
+
+### Building locally on a Mac
+
+CI is the supported path; a local build needs three generated artifacts that only the CI steps
+produce. With Xcode 26 and `brew install xcodegen`:
+
+```sh
+# 1. Rust FFI (see the workflow's "Build libidevice_ffi.a" and "Assemble ... xcframework" steps)
+#    rust-libs/libidevice_ffi.xcframework must exist before xcodegen runs — project.yml links it.
+# 2. OpenSSL static libcrypto for ios arm64 -> openssl-build/libcrypto.a
+# 3. SAP assets: /usr/bin/python3 Resources/Scripts/prepare.sap.py  (runs as a preBuildScript)
+
+xcodegen generate
+xcodebuild build \
+  -project EscapeSpace.xcodeproj \
+  -scheme EscapeSpace-iOS \
+  -configuration Release \
+  -sdk iphoneos \
+  -destination 'generic/platform=iOS' \
+  -derivedDataPath build \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
+```
+
+Key settings, all in `project.yml`: `PRODUCT_NAME = EscapeSpace`,
+`PRODUCT_BUNDLE_IDENTIFIER = com.ipaside.escapeos`, `IPHONEOS_DEPLOYMENT_TARGET = 18.0`,
+`SWIFT_VERSION = 5.0`, `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` for the version.
+
+Sources are declared at **directory** level (`EscapeOS`, `ZSign`, `Resources`, and the vendored
+packages), so new `.swift` files need no project registration. The Theos track is the opposite —
+see below.
+
+---
+
+## 2. Theos track
+
+`Makefile` builds the same app with Theos. Its source list is **explicit**
+(`EscapeSpace_FILES`), so any new `.swift` file must be added there for this track to see it.
+
+Relevant settings: `TARGET = iphone:clang:16.5:18.0`, `ARCHS = arm64`,
+`APPLICATION_NAME = EscapeSpace`, `EscapeSpace_CODESIGN_FLAGS = -SEscapeSpace.entitlements`.
+
+### Local build (Linux / WSL)
+
+```sh
 export THEOS=~/theos
-cd ~/apps/EscapeOS
 make clean package
 ```
 
-The Makefile pins `iphone:clang:16.5:18.0` because newer Apple SDKs require Xcode’s Apple Clang and fail under Linux clang.
+This is what `README.md` documents. The default target pins the **iPhoneOS 16.5 SDK**, because
+Apple's 18+/26+ SDKs require Apple Clang and fail under Linux clang.
 
-`EscapeOS/Tunnel/libidevice_ffi.a` is not in git (≈93 MB). Download it from the same GitHub Release as the IPA, or rebuild `jkcoxson/idevice` for `aarch64-apple-ios`, and place it at `EscapeOS/Tunnel/libidevice_ffi.a` before `make package`.
+`EscapeOS/Tunnel/libidevice_ffi.a` is not in git (see the dependencies section). Place it at
+`EscapeOS/Tunnel/libidevice_ffi.a` before `make package`, or the link step fails.
 
-After install, place `pairingFile.plist` again from the PC: iPASide Settings → Pairing file → Place (House Arrest), or share the file in Files.
+### CI variant (`build.yml`, currently disabled)
 
-### App icon
+If re-enabled, note that it also listens on `v*` tags — it would run on the same tag as the Xcode
+track and publish a second IPA into the same Release. Its differences from a local Theos build:
 
-Regenerate PNGs from the master artwork:
+- It symlinks Xcode's real `iPhoneOS*.sdk` into `$THEOS/sdks` and overrides
+  `TARGET="iphone:clang:<SDK_VER>:18.0"`, because `libidevice_ffi.a` links QuickKit /
+  AFFoundation, which do not exist in `theos/sdks` (max 16.5).
+- It converts the resulting `packages/*.deb` to an IPA with `dpkg-deb -x`, then zips `Payload/`.
+- It keeps an incremental-build cache keyed on a source-hash snapshot, calibrating mtimes so
+  `make` only recompiles what changed.
 
-```bash
-python3 tools/generate_icons.py
-```
+---
 
-Master icon: `assets/EscapeOS-icon-master.png` (teal escape/sandbox motif, transparent corners).
+## 3. MHA track (`mha-build.yml`, currently disabled)
+
+Triggered by `mha-v*` tags on a separate branch, on `macos-15`. It builds the Theos package and
+then rewrites the app's signing identity so that `containermanagerd` accepts it as the
+MobileHouseArrest caller: the bundle id and the CodeDirectory identifier both become
+`com.apple.mobile.MobileHouseArrest`, via `codesign -f -s - --identifier ...`.
+
+Unlike the other two tracks, it does not compile the Rust FFI. It downloads a prebuilt
+`libidevice_ffi.a` from the historical `pwnapplehat/EscapeOS` v0.1.5 release.
+
+---
+
+## 4. Dependencies and generated inputs
+
+| Item | Where it comes from | Notes |
+|---|---|---|
+| `EscapeOS/Tunnel/libidevice_ffi.a` | Built from `rust/idevice-ffi` in CI | **Git-ignored** (`.gitignore`). Never committed. |
+| `rust/idevice-ffi/` | Vendored `jkcoxson/idevice` FFI (BSD-3) plus the `si_run_host` engine | Built for `aarch64-apple-ios`; `IPHONEOS_DEPLOYMENT_TARGET` is pinned to 18.0 to match the app. |
+| `rust-libs/libidevice_ffi.xcframework` | Assembled by the Xcode workflow before `xcodegen generate` | Referenced by `project.yml`; absent from a fresh clone. |
+| `openssl-build/libcrypto.a` | OpenSSL 3.3.2, `iphoneos-cross no-asm` | Needed by ZSign. Cached across runs. |
+| `Resources/BundledModules/` | `AmorCool/module-esc`, cloned during the Xcode build | Folder reference in the bundle, so the `<id>/module.json` layout is preserved. |
+| `Resources/SAPAssets/` | `Resources/Scripts/prepare.sap.py` (preBuildScript) | Unicorn + Apple SAP assets. Missing assets break Apple ID sign-in. |
+| `Resources/AppIcon*.png`, `docs/brand/icon.png` | `python3 tools/generate_icons.py` | Regenerates the PNG set from `assets/EscapeOS-icon-master.png` (1024x1024, transparent corners). Requires Pillow. |
+
+A prebuilt `libidevice_ffi.a` (97,089,368 bytes) still exists as an asset of the legacy
+`pwnapplehat/EscapeOS` v0.1.5 release, and the MHA workflow downloads it from there. The current
+repository's Releases carry **only the IPA** — there is no `.a` to download from them.
+
+---
+
+## 5. iOS 26 SDK and the tab bar
+
+The floating Liquid Glass tab bar is applied automatically when the app is **linked against the
+iOS 26 SDK**, which means Xcode 26. This is an OS-level "linked on or after" rule; runtime hacks
+and custom blur styling cannot substitute for it.
+
+The build SDK is raised to 26 while the deployment target stays at 18.0, so iOS 18 devices can
+still install the result. Do **not** set `UIDesignRequiresCompatibility` in `Info.plist` for
+release builds — that flag opts out of Liquid Glass.
+
+---
+
+## 6. When a build fails
+
+CI is the only compiler this project has (there is no local Xcode on the development machine), so
+failures are read from the run, not from a local log:
+
+1. Find the run by `head_sha` — the run-list API is cached and will hand you a stale run.
+2. Check each step's conclusion first, then read the failure annotations, which carry
+   `file:line` and the compiler message.
+3. The workflow also uploads `xcodegen-and-build-logs` (`xcodegen.log`, `xcodebuild.log`,
+   `rust-build.log`) and `xcode-package-log` as artifacts, as a fallback when the job log is
+   unavailable.
+
+`docs/releasing.md` has the exact commands.
