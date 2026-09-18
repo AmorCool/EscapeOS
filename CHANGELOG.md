@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.3.429] - 2026-09-18
+
+### 删掉 airlift 自检里「无效且拖慢 40 秒」的残留代码
+
+**真机实测（426/723）发现的**：自检在服务表查询成功后，还会继续跑一段
+`lockdownd_connect_rsd` + `lockdownd_start_service` 循环 —— 每个候选都回
+`BrokenPipe("channel closed")`，**而且每次要等 10 秒超时**：
+
+```
+[22:33:20.309] 失败：start_service(streaming_zip_conduit.shim.remote) BrokenPipe
+[22:33:30.585] 失败：start_service(atc.shim.remote) BrokenPipe           ← 白等 10 秒
+[22:33:40.747] 失败：start_service(afc.shim.remote) BrokenPipe           ← 白等 10 秒
+[22:33:50.901] 失败：start_service(notification_proxy…) BrokenPipe
+[22:33:50.902] 失败：start_service(installation_proxy…) BrokenPipe
+```
+
+**这段是 v0.3.419 时代的残留**：`start_service` 是 **usbmux 通道**的机制，
+在 RSD 通道上必然失败（v0.3.418 那次就已确认）。判断服务可用性的正确方式是
+**查 RSD 握手包**（自检的 2.6 段已经在做）。
+
+**删掉后**：自检从「40 秒 + 一堆误导性失败」变成「约 1 秒出结果」。
+
+**顺带确认的好消息**（426/723 真机实测）—— 目标服务都在 RSD 服务表里：
+
+| 服务名 | port |
+|---|---|
+| **`com.apple.streaming_zip_conduit.shim.remote`** | **55580** |
+| **`com.apple.atc.shim.remote`**（AirTraffic 主服务） | **55621** |
+| `com.apple.afc.shim.remote` | 55619 |
+| `com.apple.mobile.notification_proxy.shim.remote` | 55596 |
+| `com.apple.mobile.installation_proxy.shim.remote` | 55590 |
+
 ## [0.3.428] - 2026-09-18
 
 ### 撤掉 v0.3.427 的 onAppear 触发，改成「App 启动时自动跑」
