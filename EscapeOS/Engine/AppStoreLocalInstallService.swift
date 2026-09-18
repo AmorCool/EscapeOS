@@ -22,7 +22,9 @@ enum AppStoreLocalInstallService {
     static func downloadAndInstall(item: AppStoreItem, email: String,
                                    externalVersionID: String? = nil,
                                    downloadProgress: ((Double) -> Void)? = nil,
-                                   installProgress: ((Double) -> Void)? = nil,
+                                   // Swift 6：本闭包会传进 AppStoreInstallService.installLocalIPA
+                                   // 的 @Sendable 参数，这里也要对齐标 @Sendable（CI 实测 :84）。
+                                   installProgress: (@Sendable (Double) -> Void)? = nil,
                                    onResolvedURL: ((String) -> Void)? = nil,
                                    onLog: ((String) -> Void)? = nil) async throws -> URL {
         let t0 = Date()

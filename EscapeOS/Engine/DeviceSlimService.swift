@@ -752,9 +752,17 @@ enum DeviceSlimService {
         var result = ReinstallResult()
         let targets = items.filter { $0.kind == .bigApps }
         for (index, item) in targets.enumerated() {
-            func report(_ stage: ReinstallStage, _ fraction: Double) {
-                progress?(ReinstallProgress(index: index + 1, total: targets.count,
-                                            name: item.name, stage: stage, fraction: fraction))
+            // Swift 6：report 会被下面两个 @Sendable 的 progress 闭包捕获 ——
+            // 标 @Sendable，并且只捕获 Sendable 的快照（进度回调、序号、总数、名称），
+            // 不再捕获可能非 Sendable 的 `item` / `targets`（原写法触发
+            // SendableClosureCaptures，CI 实测 :797）。语义不变。
+            let progressHandler = progress
+            let itemIndex = index + 1
+            let itemTotal = targets.count
+            let itemName = item.name
+            @Sendable func report(_ stage: ReinstallStage, _ fraction: Double) {
+                progressHandler?(ReinstallProgress(index: itemIndex, total: itemTotal,
+                                                   name: itemName, stage: stage, fraction: fraction))
             }
             do {
                 // ① 本地已有包就直接用；否则去源里找

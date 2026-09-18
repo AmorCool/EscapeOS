@@ -691,15 +691,20 @@ struct ModuleImportPicker: UIViewControllerRepresentable {
         DispatchQueue.main.async {
             guard self.isPresented else { return }
             self.isPresented = false
-            SharedDocumentPicker.present(
-                allowedTypes: [UTType.zip],
-                allowsMultipleSelection: false,
-                asCopy: true,
-                onPicked: { urls in
-                    self.onPicked(urls)
-                },
-                onCancelled: nil
-            )
+            // Swift 6：本闭包是 @Sendable 的非隔离上下文，而 present 已收敛到
+            // @MainActor。这里确实已经在主队列上，用 assumeIsolated 断言即可
+            //（不会真的切线程，语义与改动前完全一致）。
+            MainActor.assumeIsolated {
+                SharedDocumentPicker.present(
+                    allowedTypes: [UTType.zip],
+                    allowsMultipleSelection: false,
+                    asCopy: true,
+                    onPicked: { urls in
+                        self.onPicked(urls)
+                    },
+                    onCancelled: nil
+                )
+            }
         }
     }
 }

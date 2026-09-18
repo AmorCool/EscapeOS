@@ -119,7 +119,9 @@ struct FileViewerView: View {
 @MainActor
 final class FileViewerViewModel: ObservableObject {
     static let maxEditableBytes = 512 * 1024
-    static let maxTextBytes = 2 * 1024 * 1024
+    /// Swift 6：`nonisolated` —— 它是不可变常量（`Int` 本身 Sendable），
+    /// 会被非隔离的类型判定函数读取（CI 实测 :245）。**不要**改成 `nonisolated(unsafe)`。
+    nonisolated static let maxTextBytes = 2 * 1024 * 1024
 
     @Published var isLoading = true
     @Published var isSaving = false

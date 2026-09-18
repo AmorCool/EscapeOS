@@ -17,6 +17,12 @@ enum SharedDocumentPicker {
 
     /// Present a document picker and return URLs that already live inside the app
     /// sandbox (the system copied them), so no security-scoped access dance is needed.
+    /// Swift 6：整条链路收敛到主 actor（本类型、delegate 类、UIKit 展示都在主线程）。
+    /// 早期把 delegate 的 init 标 `nonisolated` 来消解 `sending` 诊断，结果换来
+    ///「主 actor 隔离属性不能在 nonisolated 上下文里赋值」（CI 实测 :63/:64）。
+    /// 收敛到 @MainActor 后闭包从头到尾不跨隔离域，两个诊断同时消失，
+    /// 5 个调用点（都是 SwiftUI 视图上下文）无需改动。
+    @MainActor
     static func present(
         allowedTypes: [UTType],
         allowsMultipleSelection: Bool = false,
@@ -55,11 +61,10 @@ final class SharedDocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
     let onPicked: ([URL]) -> Void
     let onCancelled: (() -> Void)?
 
-    /// Swift 6：本类因遵循 UIDocumentPickerDelegate 被推断为 @MainActor，而
-    /// `SharedDocumentPicker.present` 是 nonisolated 的；回调闭包从调用方（主线程）
-    /// 传入 nonisolated init 不跨隔离域，`sending 'onPicked'/'onCancelled'` 诊断即消解。
-    /// delegate 回调方法仍保持 @MainActor（UIKit 主线程调用），语义不变。
-    nonisolated init(onPicked: @escaping ([URL]) -> Void, onCancelled: (() -> Void)?) {
+    /// Swift 6：本类因遵循 UIDocumentPickerDelegate 被推断为 @MainActor，
+    /// 因此 init 也是主 actor 隔离的 —— 属性赋值不再跨隔离域。
+    ///（配套改动见 `SharedDocumentPicker.present` 的 @MainActor 说明。）
+    init(onPicked: @escaping ([URL]) -> Void, onCancelled: (() -> Void)?) {
         self.onPicked = onPicked
         self.onCancelled = onCancelled
     }
