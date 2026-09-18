@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.426] - 2026-09-18
+
+### airlift：把「勾选时跑一次连通性自检」加回来（这次是安全的）
+
+用户要求：加回来，但**不能出 bug**。
+
+**为什么以前不能加、现在能加：**
+- v0.3.421 撤掉它的**唯一原因**是：那时自检会真的 `adapter_connect` 建连 +
+  `idevice_rsd_checkin` 做完整会话握手 → 抢隧道、污染设备端 →
+  所有依赖配对文件的功能一起失效（真机事故，详见 v0.3.424 / v0.3.425 条目）。
+- **现在自检已改成只读**：只查 RSD 服务表（拿 port / remoteXPC），
+  **不建连、不发 RSDCheckin、不碰设备** —— 撤掉它的理由已不存在。
+
+**本次实现（只加触发，不加任何"自动"逻辑）：**
+- `AirliftExploit.runConnectivitySelfTestIfIdle()` —— 新增的显式入口：
+  - 走 airlift **自己的串行队列**（`com.ipaside.escapeos.airlift.selftest`），不占主线程；
+  - **单飞标记**：已有自检在跑时直接返回，快速连点勾选也不会并发；
+  - 结果照旧写 `[airlift]` 日志，SSH 可取回。
+- `ExploitSelectionView.toggle()`：**只在「勾上」airlift 时**调用该入口；
+  **取消勾选不做任何事**；不勾 airlift 则一切照旧（完全无副作用）。
+
+**改动范围**：只有 `AirliftExploit.swift`（+35 行）与 `ExploitSelectionView.swift` 两个文件。
+
+**airlift 当前进度（整条链 6 步，已完成第 3 步）**：
+
+| # | 环节 | 状态 |
+|---|---|---|
+| 1 | 配对文件读取 | 已完成 |
+| 2 | RSD 隧道建立（`10.7.0.1:49152` + RPPairing） | 已完成 |
+| 3 | RSD 服务表查询（确认 `com.apple.streaming_zip_conduit.shim.remote` 在表里，port 53635） | 已完成 |
+| 4 | RSDCheckin 建立服务连接 | **故意未做** —— 等 AT 协议落地时接入正式功能路径，不放自检里 |
+| 5 | AT 协议（Books 同步握手 / asset 描述 / zip conduit 会话） | 未开始（需逆向 `AirTrafficHost.framework`） |
+| 6 | 触发 `ATAirlock` 路径校验缺陷 → 越界写 | 未开始 |
+
 ## [0.3.425] - 2026-09-18
 
 ### 撤销：v0.3.424 里我擅自加的两个「自动」机制
