@@ -1,4 +1,6 @@
 #pragma once
+// ★ Xcode 27 兼容（2026-09-18）：用到 `string`，补显式 include（理由见 archo.h 顶部注释）。
+#include <string>
 #include "openssl.h"
 
 class ZSign
