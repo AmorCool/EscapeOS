@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.432] - 2026-09-18
+
+### airlift 第 4 步真机验证成功 + 响应全文落盘
+
+**v0.3.431 真机实测（431/728）—— 第 4 步打通：**
+
+```
+[23:15:22.996] [airlift] 被调用（consumeExtension）            ← 功能调用触发了流程
+[23:15:23.105] [airlift] 协议探测开始（连 atc 服务 + RSDCheckin）
+[23:15:23.457] [airlift] com.apple.atc.shim.remote → port 58010
+[23:15:23.462] [airlift] 已连上 com.apple.atc.shim.remote
+[23:15:23.468] [airlift] 已发 RSDCheckin
+[23:15:23.483] [airlift] 响应 #1：<?xml version="1.0" encoding="UTF-8"?>
+[23:15:23.493] [airlift] 响应 #2：<?xml version="1.0" encoding="UTF-8"?>
+[23:15:23.500] [airlift] 结论：RSDCheckin 完成 —— 服务连接已建立
+```
+
+**三件事同时验证了**：
+1. **触发方式正确** —— 进一次空间回收（`被调用（consumeExtension）`）就把流程带起来了，用户零操作；
+2. **连上了 `com.apple.atc.shim.remote`**（动态 port 58010，查服务表拿到的）；
+3. **设备真的回了两次握手响应** —— RSDCheckin 成功。
+
+**但响应内容被日志长度限制截断了**（只显示到 `<dict>`）。
+**修法**：完整记录落盘到 `Documents/LoginLogs/airlift_probe.txt`
+（日志里只留首行，全文进文件）—— 符合项目铁律「长内容必须独立落盘再取回」。
+SSH 可直接 `cat LoginLogs/airlift_probe.txt` 取回全文。
+
+**改动范围**：只有 `AirliftExploit.swift`。
+
 ## [0.3.431] - 2026-09-18
 
 ### 修 v0.3.430 的 Rust 编译错误（漏 import）
