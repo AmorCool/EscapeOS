@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.421] - 2026-09-18
+
+### 🔴 紧急修复：勾选 airlift 会让**所有依赖配对文件的功能**一起失效
+**用户报告**：「勾选这个导致所有依赖配对文件的功能好像不正常没法用了，首先我测试了空间回收板块」。
+
+**真机日志（0.3.420 / build 717）实证**：
+```
+[20:55:00.899] [airlift] 连通性自检开始 → com.apple.streaming_zip_conduit
+[20:55:00.904] [airlift] 配对文件 OK
+（之后没有下文 —— 卡在建隧道）
+[20:55:03.118] ❌ IPA 侧载登录失败 …
+```
+
+**根因**：v0.3.414 起，`ExploitSelectionView.toggle()` 在勾选 airlift 时会
+`Task.detached { AirliftExploit.connectivitySelfTest() }` —— 而**自检第一步就是
+`tunnel_create_rppairing` 建一条新 RSD 隧道**。
+项目铁律明确写着：**「同一 hostname 并发建隧道会互相抢占」**。
+它跑在 detached 里，于是跟其它功能（空间回收 / AFC / 设备控制 …）**抢隧道** →
+自检卡住，**其它依赖配对文件的功能一起不正常**。
+
+**修法**：**勾选只改状态位，绝不发起任何 I/O**（撤掉自动自检）。
+自检能力仍保留在 `AirliftExploit.connectivitySelfTest()` 里，但必须**串行**在
+`AFCService` 那条队列上跑，且**另找触发时机**（不占用户操作路径）—— 留待后续。
+
 ## [0.3.420] - 2026-09-18
 
 ### ★★ 通道打通：`streaming_zip_conduit` 已在 RSD 服务表里，且建连成功
