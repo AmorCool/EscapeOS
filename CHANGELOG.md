@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.3.443] - 2026-09-19
+
+### 电池健康按爱思 9.0 口径修正（温度 / 寿命 / 厂商 / 序列号）+ 全量 registry dump
+
+**背景**：用户发现爱思助手 9.0 现在能读到一批电池信息（厂商 / 生产日期 / 序列号 / 温度 /
+寿命 / 充电次数…），而我们面板「寿命不准、生产日期不显示、温度未知」。
+逆向 `i4Tools9` 后确认：**这些值 9 项直读设备 IORegistry**（不是爱思服务端查表）。
+
+**1. 温度（修「显示未知」）**
+
+`idm_info.dll` 反汇编证据：`0x180014076 lea r8,"AppleSmartBatteryPack"`，
+且位于 **`Temperature == 0` 的分支**里。而我们的 `query()` **只查了 `IOPMPowerSource`** ——
+iOS 27 上这个入口的 `Temperature` 是 0。
+⇒ 新增 `fetchRegistry(client:entryName:)`：**先按 `entry_name` 查，报错再退回 `entry_class` 查**
+（原调用是 class 形式）。温度缺失/为 0 时再查 `AppleSmartBatteryPack`，
+取 `BatteryData.Temperature`（单位 1/100 ℃）。
+新增 `temperatureSource` 字段记录温度取自哪个 EntryName 并写日志，便于以后排查。
+两处都拿不到 → 保持「未知」，**不编默认值**。
+
+**2. 寿命（修「不准」）—— 两个原因叠加**
+
+- **公式不同**：改用 `NominalChargeCapacity / DesignCapacity`。
+  依据（很硬）：爱思截图里**「满充容量」显示 -1**（即它读不到 `FullChargeCapacity`）却仍给出
+  **81%**；而 `2724 / 3329 = 81.8% ≈ 81%` ⇒ 它用的不是 `FullChargeCapacity`。
+- **★ 删掉 `BatteryHealthBaselinePct`「单调基线」闩锁**（连带 `isChargingNow`）。
+  它把**历史最低值锁死**，这本身就是「寿命不准」的直接原因；而且换公式后旧基线还会继续
+  夹住新值，导致修复**完全无效**。
+- 回退链保留：`nominal` 取不到时回退 `maxCapacity`。
+
+**3. 厂商 —— 改成 2 位前缀 + 用爱思的真实表**
+
+爱思用**序列号前 2 位**（`i4Tools.exe!0x14090ff60` 读 `cache/devices_table/devices_table.txt`
+的 `batfacotry[]`，`QString::startsWith` 比前 2 位）。**从该文件逐条抄录了真实的 13 条**
+（YW/YV 无锡索尼、AE/AF 东莞新能源、SB 三星、L5/TP 天津力神、D8 常熟新世、FG 常熟新普、
+F5 惠州德赛、F8 深圳欣旺达、C0 苏州顺达、LN 乐金化学），2 位前缀优先，**3 位旧表降级为兼容回退**。
+本机序列号 `F8YH7Y22SC600006TY` → 深圳欣旺达，与爱思截图逐字一致。
+
+**4. 序列号**：首选键改为 `BatterySerialNumber`（空串也回退），再回退 `Serial`。
+
+**5. ★ 新增「电池 IORegistry 全量 dump」（为了搞定「生产日期」）**
+
+新增 `dumpBatteryRegistry(primary:pack:)` → `Documents/LoginLogs/battery_dump.txt`：
+把 `IOPMPowerSource` 与 `AppleSmartBatteryPack` 两个节点的**顶层全键 + `BatteryData` 全键**
+（键名 + 值）写出来，另设「键名含 date/time/manufactur/produc/firstuse/factory」小节。
+只在成功拿到 registry 时写，失败静默，不含配对信息。
+
+**为什么加这个**：生产日期**尚未定案**。逆向发现爱思有本地解码器
+`ios_parse_production_date`（RVA `0x18000fb80`，按长度分支 + base-32 字母表
+`123456789CDFGHJKLMNPQRTVWXY` + `mktime`），但把本机 SN / MLB / 电池 SN 各种组合代进去
+**都算不出 2024-06-23**（都落在 2010 年左右），输入链路没钉死。
+⇒ **用实测数据定案，不再猜**。SSH 可直接 `cat LoginLogs/battery_dump.txt` 取回。
+
+**6. 顺带更正两处错误注释**（`BatteryHealthView.swift`）
+- 原「爱思那个日期是它自己服务端按序列号查的」→ 更正为：不是服务端，
+  `getProdate.xhtml` 本机实测回「未知」、`cache/` 也 grep 不到，证据指向本地解码器，但尚未定案。
+- 原「iOS 27 已无温度键 → 与爱思同样显示 `--`」→ 更正为已回退
+  `AppleSmartBatteryPack.BatteryData.Temperature`。
+
 ## [0.3.442] - 2026-09-19
 
 ### AT 链路打通到「读 SyncAllowed + 发 HostInfo」；修「发完等响应」的错

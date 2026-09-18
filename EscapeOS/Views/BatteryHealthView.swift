@@ -281,7 +281,10 @@ struct BatteryHealthView: View {
         )
     }
 
-    /// 电池温度：只取 `Temperature`（IOPMPowerSource）；iOS 27 已无该键 → 与爱思同样显示 `--`
+    /// 电池温度：`IOPMPowerSource.Temperature` 优先；iOS 27 该键缺失时
+    /// `BatteryHealthService` 已回退到 `AppleSmartBatteryPack.BatteryData.Temperature`
+    /// （爱思 9.0 同款回退，见 idm_info.dll!ios_get_detailed_battery_info @0x18001405c）.
+    /// 两处都取不到才显示「—」（不编默认值）.
     private func temperatureText(_ info: BatteryHealthInfo) -> String? {
         info.temperatureC.map { String(format: "%.1f ℃", $0) }
     }
@@ -319,8 +322,14 @@ struct BatteryHealthView: View {
     }
 
     /// 生产日期：键序按 idm_info.dll 读的同名字段（`DateOfFirstUse` 等）.
-    /// 旧系统能返回就直接显示；iOS 27 全 plane 已无该键 → 与爱思「设备详情」同一口径显示「未知」
-    /// （爱思电池面板里那个日期不是设备值，是它自己服务端按序列号查的保修/启用时间）.
+    /// 旧系统能返回就直接显示；iOS 27 全 plane 已无该键 → 显示「未知」.
+    ///
+    /// v0.3.443 更正：爱思面板里那个日期**不是**服务端按序列号查的保修/启用时间 ——
+    /// `getProdate.xhtml` 本机实测回 `"未知"`（协议已 100% 复刻，服务端就是不认），
+    /// 而 `cache/` 里也 grep 不到该日期；证据指向爱思**本地**算的
+    /// （idm_info.dll!ios_parse_production_date @0x18000fb80：按序列号长度 11/12/10
+    /// 分支 + base-32 字母表 + mktime64 推算年/周/日）。本地算不出本机那个日期的原因
+    /// 尚未定案，故此处仍如实显示「未知」，等 `battery_dump.txt` 实测数据再定.
     private func manufactureDateText(_ info: BatteryHealthInfo) -> String? {
         let keys = ["DateOfFirstUse", "ManufactureDate", "ProductionDate", "ManufacturingDate"]
         for k in keys {
