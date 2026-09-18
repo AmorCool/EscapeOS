@@ -18,7 +18,11 @@ import SwiftUI
 /// - Note: 所有方法都必须在**主线程**调用（内部会驱动 SwiftUI 更新）.
 ///         调用方是 `IPAInstallService.beginTwoFactorPrompt()`，已在
 ///         `DispatchQueue.main.async` 里，因此天然满足.
-final class TwoFactorPromptCoordinator: ObservableObject {
+/// `@unchecked Sendable`：按类注释的约定，可变状态（`pending` / `code`）只在主线程读写——
+/// 调用点一是 `IPAInstallService.beginTwoFactorPrompt()` 内的 `DispatchQueue.main.async`
+/// 闭包（该闭包不是 `@MainActor` 隔离的，故这里不能用 `@MainActor`），二是 `RootView`
+/// （`View`，主 actor）。跨线程不存在并发写。
+final class TwoFactorPromptCoordinator: ObservableObject, @unchecked Sendable {
 
     static let shared = TwoFactorPromptCoordinator()
 

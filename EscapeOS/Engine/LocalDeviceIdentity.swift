@@ -60,9 +60,13 @@ enum LocalDeviceIdentity {
     /// 用 `NSLock` 而不是 `actor`：这里全是**同步** API（调用点 `load()` / `applyIfCached()`
     /// 都在同步上下文里），`actor` 满足不了。与 `AppStoreDownloadStore` 同款做法。
     private static let cacheLock = NSLock()
-    private static var cached: Snapshot?
-    /// 是否已经有一次**后台预取**在跑 —— 防止「连点两次下载」时并发建两轮隧道。
-    private static var prefetching = false
+    /// Swift 6 并发检查：`cached` / `prefetching` 的**全部**读写都在上面的 `cacheLock` 内
+    /// （见 `cachedSnapshot` / `invalidate` / `warmUpInBackground` / `loadIntoCache`），
+    /// 因此这两个静态变量本身线程安全。
+    nonisolated(unsafe) private static var cached: Snapshot?
+    /// 是否已经有一次**后台预取**在跑 —— 防止「连点两次下载」时并发建两轮隧道.
+    /// （同上：读写均在 `cacheLock` 内）
+    nonisolated(unsafe) private static var prefetching = false
 
     /// 缓存里的身份（**绝不建隧道**）；冷缓存返回 nil。
     static func cachedSnapshot() -> Snapshot? {

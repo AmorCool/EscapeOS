@@ -12,7 +12,11 @@ import Foundation
 /// - 「更多 → 设置 → 保活」开关控制 `isEnabled`（UserDefaults 持久化）；
 /// - 虚拟定位激活时调用 `ensureRunning()`（强制保活，与开关无关），
 ///   停止模拟后调用 `stopIfNotRequested()`（开关关闭时自动停）.
-final class KeepAliveManager {
+/// `@unchecked Sendable`：可变状态（`player` / `timer` / `forced`）只在主线程写——
+/// 三个调用点分别是 `EscapeSpaceApp.init`（`App` 为主 actor）、`RootView`（`View`）、
+/// `SpoofSession`（`@MainActor` 类），以及 `NotificationCenter` 注册的 `queue: .main`
+/// 回调（主队列）。跨线程不存在并发写。
+final class KeepAliveManager: @unchecked Sendable {
     static let shared = KeepAliveManager()
 
     /// 设置页开关的持久化键.

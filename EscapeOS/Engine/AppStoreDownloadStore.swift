@@ -6,7 +6,10 @@ import Foundation
 /// 侧载走开发者签名服务，这里走 App Store 下载，互不影响.
 final class AppStoreDownloadStore {
 
-    static let shared = AppStoreDownloadStore()
+    /// Swift 6 并发检查：本类型非 Sendable，但唯一的可变状态 `storedAccounts` 的
+    /// **全部**读写都经 `lock`（NSRecursiveLock，见下方 `accounts` 访问器与各方法），
+    /// 实例本身线程安全（注释已说明「detached 下载也会调用，读写需串行化」）。
+    nonisolated(unsafe) static let shared = AppStoreDownloadStore()
     private init() {
         // v0.3.171：账号区域注入（国区选 CN，见 storefront 与 2FA 短信渠道关联）
         Configuration.countryCode = UserDefaults.standard.string(forKey: "AppStore.CountryCode") ?? "US"

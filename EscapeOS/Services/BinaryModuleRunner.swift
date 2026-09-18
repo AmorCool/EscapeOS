@@ -229,7 +229,11 @@ final class BinaryModuleRunner: ObservableObject {
     /// 数据目录一律以**参数**传给 Go（Go env 在 runtime 初始化时已快照，setenv 事后不可见）；
     /// fd 2 重定向到 data/go_stderr.log 抓 Go runtime 临终输出；8MB 大栈 pthread 承载入口.
     /// 常驻保存用户态加载的镜像句柄（不卸载：Go runtime 必须存活）
-    private static let uloaderLock = NSLock()
+    /// nonisolated：本类标注了 @MainActor，静态存储属性默认随类隔离，而
+    /// `cacheUloaderImage` 是 nonisolated（Go 启动在后台线程）—— 必须能在非主线程取到锁。
+    /// 这里用 `nonisolated` 而非 `nonisolated(unsafe)`：`NSLock` 自身线程安全且是
+    /// 不可变引用（Sendable），去掉隔离标注即安全，无需 unsafe 承诺.
+    nonisolated private static let uloaderLock = NSLock()
     private nonisolated(unsafe) static var cachedUloaderImage: UnsafeMutableRawPointer?
     nonisolated private static func cacheUloaderImage(_ img: UnsafeMutableRawPointer) {
         uloaderLock.lock(); defer { uloaderLock.unlock() }
@@ -400,7 +404,9 @@ final class BinaryModuleRunner: ObservableObject {
     /// nonisolated(unsafe)：@MainActor 类的存储属性不能直接 nonisolated；
     /// 访问全部经由 handleLock 保护的存取器，实际无竞争.
     nonisolated(unsafe) private static var cachedBinaryModuleHandle: UnsafeMutableRawPointer?
-    private static let handleLock = NSLock()
+    /// nonisolated：同上（@MainActor 类 + nonisolated 存取器）；锁本身线程安全，
+    /// 只去掉随类继承的 MainActor 隔离，不加 unsafe.
+    nonisolated private static let handleLock = NSLock()
     nonisolated private static func cacheBinaryModuleHandle(_ h: UnsafeMutableRawPointer) {
         handleLock.lock()
         if cachedBinaryModuleHandle == nil { cachedBinaryModuleHandle = h }

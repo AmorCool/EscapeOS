@@ -165,7 +165,10 @@ struct EscapeModule: Identifiable, Codable {
 // MARK: - 服务
 
 final class ModuleService {
-    static let shared = ModuleService()
+    /// Swift 6 并发检查：本类型非 Sendable。可变状态只有 `inPlaceBundled`（内置原地模块表），
+    /// 仅在 `bootstrapBundledModules()` / 内置模块安装流程里写入、之后只读；
+    /// 其余全是计算属性或对 UserDefaults / 文件系统的无状态操作。
+    nonisolated(unsafe) static let shared = ModuleService()
 
     /// 模块安装根目录：Documents/Modules
     let modulesRoot: URL = URL(fileURLWithPath: NSHomeDirectory())
@@ -210,6 +213,16 @@ final class ModuleService {
     }
 
     // MARK: Lua 模块执行（v1.2：纯脚本模块，走内置 Rust+mlua 解释器）
+
+    /// `lua_host_exec` 的结果盒：用于把返回值从并发闭包带回同步调用方。
+    ///
+    /// 线程安全论证：`value` 的写发生在 `sem.signal()` **之前**、读发生在 `sem.wait()`
+    /// 返回**之后**，两者之间由 `DispatchSemaphore` 建立 happens-before 关系，
+    /// 且期间不存在第二个访问者 —— 故 `@unchecked Sendable` 成立。
+    private final class LuaResultBox: @unchecked Sendable {
+        var value: Int32 = -99
+    }
+
     /// 执行 Lua 模块入口脚本.返回 (返回码, 输出文本)；码 0=成功 -1=Lua 错误 -9=参数错.
     func runLuaModule(_ module: EscapeModule,
                       onProgress: ((String) -> Void)? = nil) -> (Int32, String) {
@@ -223,12 +236,14 @@ final class ModuleService {
         let outFile = dataDir.appendingPathComponent("lua_out.txt")
         WiFiPowerBridge.shared.ensureRegistered()   // 注册隧道 wifi handler（幂等）
         onProgress?("执行 \(module.luaEntry)（\(code.count) 字符）…")
-        var ret: Int32 = -99
+        // Swift 6：结果经引用盒回传（不能在被捕获的局部 `var` 上跨并发闭包写入），
+        // 线程安全论证见 `LuaResultBox`。
+        let retBox = LuaResultBox()
         let sem = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
             code.withCString { c in
                 outFile.path.withCString { o in
-                    ret = lua_host_exec(
+                    retBox.value = lua_host_exec(
                         UnsafeMutablePointer(mutating: c),
                         UnsafeMutablePointer(mutating: o))
                 }
@@ -237,7 +252,7 @@ final class ModuleService {
         }
         _ = sem.wait(timeout: .now() + 15)
         let output = (try? String(contentsOf: outFile, encoding: .utf8)) ?? "（无输出）"
-        return (ret, output)
+        return (retBox.value, output)
     }
 
     private func bootstrapBundledModules() {

@@ -90,7 +90,10 @@ struct DialerThemeStatus {
 
 final class DialerThemeManager {
 
-    static let shared = DialerThemeManager()
+    /// Swift 6 并发检查：本类型非 Sendable，但**没有可变实例状态** ——
+    /// 只有 `fm`（FileManager）与 `escape`（SandboxEscape）两个无状态工具实例，
+    /// 其余全是计算属性；所有方法只做文件 IO，不保存跨调用状态。
+    nonisolated(unsafe) static let shared = DialerThemeManager()
 
     private init() {}
 

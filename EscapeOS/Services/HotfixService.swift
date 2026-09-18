@@ -26,7 +26,11 @@ import CryptoKit
 import Foundation
 import JavaScriptCore
 
-final class HotfixService: NSObject, ObservableObject {
+/// `@unchecked Sendable`：所有可变状态（`featureFlags` / `textOverrides` /
+/// `jsModulesLoaded` / `jsLog` 四个 @Published）只在主线程写——`reload()` 的两个
+/// 调用点（`ModuleService` 安装/导入后的钩子）都在 `DispatchQueue.main.async`
+/// 里，UI（`MoreView`）也在主线程读。跨线程不存在并发写。
+final class HotfixService: NSObject, ObservableObject, @unchecked Sendable {
     static let shared = HotfixService()
 
     /// EscapeSpace 官方热补丁签名公钥（ed25519 raw 32B，编译进 app）

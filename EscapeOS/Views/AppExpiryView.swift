@@ -1,6 +1,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Swift 6：`ProvisioningProfileStore.ProfileInfo` / `SideloadedAppInfo` 含
+/// `entitlements: [String: Any]`（`Any` 非 Sendable），两个类型都不是 Sendable，
+/// 不能作为 `Task.detached` 的返回类型跨 actor 边界传回。
+/// 这里用薄包装**转移**（不是共享）这些值：它们由 detached 任务内部一次性构造完成，
+/// 返回后只作为 `@State` 被主线程只读展示，之后没有任何线程再写入或并发访问。
+private struct ProfileFetchBox<T>: @unchecked Sendable { let value: T }
+
 /// 描述文件管理（App Expiry，汉化移植自 StikDebug 的 ProfileView）.
 ///
 /// 与 StikDebug 原版的差异（按用户要求优化）：
@@ -364,10 +371,12 @@ struct AppExpiryView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            let (profiles, apps) = try await Task.detached(priority: .userInitiated) {
-                (try ProvisioningProfileStore.fetchAllProfiles(),
-                 try ProvisioningProfileStore.fetchSideloadedApps())
+            // Swift 6：两个模型都非 Sendable → 用 ProfileFetchBox 整体转移回主线程
+            let fetched = try await Task.detached(priority: .userInitiated) {
+                ProfileFetchBox(value: (try ProvisioningProfileStore.fetchAllProfiles(),
+                                        try ProvisioningProfileStore.fetchSideloadedApps()))
             }.value
+            let (profiles, apps) = fetched.value
 
             // 已匹配：按 app 分组
             var matched: [MatchedAppEntry] = []

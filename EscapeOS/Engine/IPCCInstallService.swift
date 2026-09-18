@@ -16,7 +16,9 @@ import Foundation
 /// 与巨魔 IPCCInstaller 的区别：那个是设备端直接调 CoreTelephony 私有 API
 /// （`_CTServerConnectionInstallCarrierBundle`），需要 CoreTrust 授予的系统级
 /// entitlement —— **不是我们的路子**.
-final class IPCCInstallService {
+/// `Sendable`（非 unchecked）：本类**没有任何存储属性**（`recordsKey` 是计算属性，
+/// 状态全部落在 `UserDefaults`），因此编译器可直接证明其可安全跨隔离域共享。
+final class IPCCInstallService: Sendable {
 
     static let shared = IPCCInstallService()
     private init() {}

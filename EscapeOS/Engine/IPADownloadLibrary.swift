@@ -60,7 +60,11 @@ struct IPADownloadItem: Codable, Identifiable, Hashable {
 }
 
 /// 下载库（单例；只在主线程使用）
-final class IPADownloadLibrary {
+///
+/// `@unchecked Sendable`：本类**没有任何可变实例状态**——唯一的持久化状态是磁盘上的
+/// `Documents/ipa_downloads.json` 台账（每次调用现场读、现场写），实例本身只是一个
+/// 无状态门面，因此跨隔离域共享引用是安全的。
+final class IPADownloadLibrary: @unchecked Sendable {
 
     static let shared = IPADownloadLibrary()
     private init() {}

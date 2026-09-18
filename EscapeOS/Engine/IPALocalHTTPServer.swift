@@ -36,7 +36,20 @@ import Darwin
 /// 于是 `.share` **当前没有任何调用方**（全仓已无 `start(purpose: .share)`），
 /// 面板里的 `blockedByShare` 恒为 `false`。枚举与判断**有意保留**（将来做
 /// 「把已下载的包用本机地址分享出去」可直接用），但**别误以为它现在还在生效**。
-final class IPALocalHTTPServer {
+///
+/// ## 并发（Swift 6 `@unchecked Sendable` 的论证）
+/// 本类是可变的单例，可变状态只有 `listener` / `fileURL` / `fileSize` / `stopWorkItem` /
+/// `port` / `currentPurpose` / `onProgress`，交接面只有两个：
+/// · **写**：`start()` / `stop()` / `stop(after:)`，全部调用点都在主线程
+///   （`OnlineInstallService` 标了 `@MainActor`；`IPADownloadActionsSheet` 是 View）；
+/// · **读**：本类私有**串行**队列 `queue` 上的连接回调（`accept` / `readHeader` / `respond`），
+///   且只读「已发布的会话快照」—— `respond` 一进来就把 `fileURL`/`fileSize` 取成局部量
+///   （第 205 行），之后整条响应链路都用局部量；`onProgress` 在 `start()` 之前设置，之后只读。
+/// · **发布顺序**：`start()` 先写 `fileURL`/`fileSize`，再 `listener.start(queue:)` 开始收
+///   连接，因此连接回调看到的一定是完整的本次会话。
+/// · 结论：`@unchecked Sendable` 只是把该类**既有**的「主线程改会话 / 串行队列读快照」约定
+///   显式告知编译器；**不加锁、不改线程模型、不引入任何行为变化**。
+final class IPALocalHTTPServer: @unchecked Sendable {
 
     static let shared = IPALocalHTTPServer()
 
@@ -107,13 +120,14 @@ final class IPALocalHTTPServer {
         let listener = try NWListener(using: params)
 
         let ready = DispatchSemaphore(value: 0)
-        var becameReady = false
+        // Swift 6：`stateUpdateHandler` 在并发执行，不能在里面改捕获的 var
+        // （旧写法 `var becameReady` 会报 "mutation of captured var 'becameReady'
+        //  in concurrently-executing code"）。这里让闭包**只负责唤醒信号**，
+        // 就绪与否在闭包外用 `listener.state` 直接读 —— 语义等价：
+        // .ready 才算就绪；.failed / .cancelled 与 5 秒超时都落到 notReady。
         listener.stateUpdateHandler = { state in
             switch state {
-            case .ready:
-                becameReady = true
-                ready.signal()
-            case .failed, .cancelled:
+            case .ready, .failed, .cancelled:
                 ready.signal()
             default:
                 break
@@ -125,7 +139,7 @@ final class IPALocalHTTPServer {
         listener.start(queue: queue)
         _ = ready.wait(timeout: .now() + 5)
 
-        guard becameReady, let resolvedPort = listener.port?.rawValue else {
+        guard listener.state == .ready, let resolvedPort = listener.port?.rawValue else {
             listener.cancel()
             throw IPALocalHTTPServerError.notReady
         }

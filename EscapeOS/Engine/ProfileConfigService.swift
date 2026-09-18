@@ -152,6 +152,10 @@ enum ProfileConfigService {
 
     /// 设备上**全部描述文件**（v0.3.239：取消类型过滤对齐爱思识别；预置描述标注"预置"）.
     static func listAll() throws -> ListResult {
+        /// copy_all 原始数量快照（ListResult 诊断用）。
+        /// 原来是一个 `static var`，但它只服务于**本次调用**：在下面的闭包内写入、
+        /// 在同一同步调用栈上读回。改成局部量后语义不变，且不再有跨调用/跨线程共享。
+        var rawCountSnapshot = 0
         var all = try withMisagent { client -> [ConfigurationProfile] in
             var profilePointers: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?
             var profileLengths: UnsafeMutablePointer<Int>?
@@ -159,7 +163,7 @@ enum ProfileConfigService {
             if let ffiError = misagent_copy_all(client, &profilePointers, &profileLengths, &profileCount) {
                 throw error(from: ffiError, fallback: "获取描述文件失败")
             }
-            profileCountSnapshot = profileCount
+            rawCountSnapshot = profileCount
             defer {
                 if let profilePointers, let profileLengths {
                     misagent_free_profiles(profilePointers, profileLengths, profileCount)
@@ -268,13 +272,10 @@ enum ProfileConfigService {
             all = merged
         }
 
-        let raw = profileCountSnapshot
+        let raw = rawCountSnapshot
         let failed = max(raw - all.count, 0)
         return ListResult(profiles: all, rawCount: raw, parseFailed: failed)
     }
-
-    /// copy_all 原始数量快照（ListResult 诊断用）
-    private static var profileCountSnapshot: Int = 0
 
     // MARK: - 安装 / 删除
 

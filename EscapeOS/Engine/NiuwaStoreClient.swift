@@ -33,7 +33,17 @@ private enum NiuwaCrypto {
     /// 这解释了「小样本能解、大样本解不开」：早期抓到的那个样本对应的请求**没带 T**（参数=0），
     /// 于是 `N = 尾部 + 0` 与我们当时的算法恰好一致；而请求侧加密打通后 `T ≠ 0`，
     /// 服务端按 `尾部 + T` 派生，我们仍用「尾部」→ **GCM tag 必然校验失败**。
-    private(set) static var lastRequestT: String?
+    ///
+    /// Swift 6 并发检查：它原来是裸的静态可变存储，却在 async 请求链路上被读写
+    /// （`encrypt` 写、`decrypt` 读）。改为**加锁访问器 + 私有后备存储**：
+    /// 后备存储的全部读写都在 `tLock` 内，`nonisolated(unsafe)` 因此有明确论证。
+    /// （本改动只消除数据竞争，不改变「T 与本次请求绑定」的既有逻辑。）
+    private static let tLock = NSLock()
+    private nonisolated(unsafe) static var storedRequestT: String?
+    private(set) static var lastRequestT: String? {
+        get { tLock.withLock { storedRequestT } }
+        set { tLock.withLock { storedRequestT = newValue } }
+    }
 
     /// 前缀 A（**32 字节**）：`~!@#$%^&*()_+` + **3 个空格** + `+_)(*&^%$#@!~` + **3 个空格**
     ///
@@ -477,11 +487,14 @@ enum NiuwaStoreClient {
     }
 
     private static let paramLock = NSLock()
+    /// Swift 6 并发检查：下面三个静态变量的**全部**读写都在上面的 `paramLock` 内
+    /// （见 `pubSystemVersion` / `noteUDIDSource` / `udidSourceForLog` / `warmUpDeviceParamsInBackground`），
+    /// 因此本身线程安全。
     /// 后台预热取到的 `ProductVersion`（`nil` = 还没取到 —— 此时用本机 `UIDevice` 版本顶上）
-    private static var prefetchedSystemVersion: String?
+    nonisolated(unsafe) private static var prefetchedSystemVersion: String?
     /// 是否已有一轮预热在跑（防止每次请求都起一条隧道）
-    private static var prefetchingParams = false
-    private static var lastUDIDSource: String?
+    nonisolated(unsafe) private static var prefetchingParams = false
+    nonisolated(unsafe) private static var lastUDIDSource: String?
 
     /// 后台预热 `pub_*` 里那两处**需要设备 IO** 的字段。可重复调用，进程内只真读一次。
     ///
@@ -501,10 +514,12 @@ enum NiuwaStoreClient {
                let v = root["ProductVersion"] as? String, !v.isEmpty {
                 value = v
             }
-            paramLock.lock()
-            if !value.isEmpty { prefetchedSystemVersion = value }
-            prefetchingParams = false
-            paramLock.unlock()
+            // Swift 6：NSLock 的 lock/unlock 在 async 上下文不可用，改用作用域加锁
+            // `withLock`（临界区内没有 await，语义与原来的 lock/unlock 完全一致）。
+            paramLock.withLock {
+                if !value.isEmpty { prefetchedSystemVersion = value }
+                prefetchingParams = false
+            }
             LoginLogger.shared.log(
                 "\(logTag) 设备参数预热完成：pub_system_version="
                 + (value.isEmpty ? "未取到（继续用本机 UIDevice 版本）" : value),

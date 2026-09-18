@@ -57,10 +57,13 @@ enum LocationEngineError: LocalizedError {
 enum LocationEngine {
     private static let queue = DispatchQueue(label: "com.escapeos.location", qos: .userInitiated)
 
-    private static var adapter: OpaquePointer?
-    private static var handshake: OpaquePointer?
-    private static var remoteServer: OpaquePointer?
-    private static var locationSimulation: OpaquePointer?
+    /// Swift 6 并发检查：下面四个 FFI 句柄的**全部读写都在串行队列 `queue` 上** ——
+    /// 公开入口 `set` / `clear` 一律 `queue.sync` 进入，其余 `*Locked` 私有方法只由它们调用。
+    /// （`isSessionActive` 是对 `locationSimulation` 的跨线程只读，属既有行为，未改。）
+    nonisolated(unsafe) private static var adapter: OpaquePointer?
+    nonisolated(unsafe) private static var handshake: OpaquePointer?
+    nonisolated(unsafe) private static var remoteServer: OpaquePointer?
+    nonisolated(unsafe) private static var locationSimulation: OpaquePointer?
 
     private static let ok: Int32 = 0
     private static let invalidIP: Int32 = 1
@@ -96,7 +99,9 @@ enum LocationEngine {
     }
 
     private static let statusLock = NSLock()
-    private static var storedChannelStatus: ChannelStatus = .unknown
+    /// Swift 6 并发检查：`storedChannelStatus` 的**全部**读写都在上面的 `statusLock` 内
+    /// （见 `channelStatus` getter 与 `setChannelStatus`），本身线程安全。
+    nonisolated(unsafe) private static var storedChannelStatus: ChannelStatus = .unknown
 
     /// 最近一次通道预检结果（跨线程读取安全）.
     static var channelStatus: ChannelStatus {

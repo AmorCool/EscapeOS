@@ -11,7 +11,10 @@
 import CoreLocation
 
 final class BackgroundLocationManager: NSObject, CLLocationManagerDelegate {
-    static let shared = BackgroundLocationManager()
+    /// Swift 6 并发检查：本类型非 Sendable。可变状态（isRunning / activityCount）只在主线程访问 ——
+    /// 公开入口 `start/stop/requestStart/requestStop` 的调用方 `WirelessKeepAlive` 由配对 UI 触发，
+    /// `CLLocationManager` 在主线程创建、其 delegate 回调也回到主队列。
+    nonisolated(unsafe) static let shared = BackgroundLocationManager()
 
     private let locationManager = CLLocationManager()
     private var isRunning = false

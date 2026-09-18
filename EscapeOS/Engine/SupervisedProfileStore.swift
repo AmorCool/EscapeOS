@@ -55,7 +55,10 @@ enum SupervisedProfileStore {
 
     // MARK: - 路径
 
-    private static let fm = FileManager.default
+    /// `FileManager.default` 是系统共享实例；这里用**计算属性**而不是 `static let`
+    /// 存储属性 —— 语义完全等价（每次取到的都是同一个 default 实例），
+    /// 但不会在 Swift 6 下产生「全局可变状态 / 非 Sendable 全局量」的诊断。
+    private static var fm: FileManager { FileManager.default }
 
     /// 可编辑副本所在目录：`Documents/Profiles/`.
     static var profilesDirectory: URL {

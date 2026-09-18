@@ -32,7 +32,11 @@ import Combine
 /// ## 线程
 /// 与 `IPADownloadLibrary` 同规矩：**只在主线程读写**。类的每个写方法内部会自己 hop 回主线程，
 /// 所以调用方（服务器队列 / 后台下载队列）直接调即可。
-final class OnlineInstallProgress: ObservableObject {
+/// `@unchecked Sendable`：本类刻意「所有可变状态只在主线程读写」——每个写方法
+/// （`begin` / `update` / `reset` / `schedule*`）内部都经 `onMain` 收敛到主线程，
+/// 因此调用方（本机服务器队列 / 后台下载队列）直接调也不会产生并发写；
+/// 跨隔离域共享引用安全（这也是这里不能用 `@MainActor` 的原因：调用点是非隔离的）。
+final class OnlineInstallProgress: ObservableObject, @unchecked Sendable {
 
     static let shared = OnlineInstallProgress()
     private init() {}

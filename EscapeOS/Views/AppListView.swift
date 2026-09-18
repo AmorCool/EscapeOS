@@ -260,20 +260,21 @@ final class AppListViewModel: ObservableObject {
             }
 
             // 上屏 + 留痕（胶囊是否显示只看这一行有没有跑到）
-            func publish(_ resolved: [String: AppType], _ note: String) {
-                DispatchQueue.main.async {
-                    self?.appTypes = resolved
-                    LoginLogger.shared.log(note)
-                }
-            }
+            // Swift 6：原来这里是局部函数 `publish(_:_:)`，它捕获非 Sendable 的 `self`，
+            // 报 "capture of 'self' with non-Sendable type 'AppListViewModel?' in an
+            // isolated local function"（DispatchQueue 的 @preconcurrency @Sendable 只把普通
+            // 捕获降级成警告，不覆盖「隔离的局部函数」这条错误）。展开成与本文件其它处一致的
+            // 「主队列 hop + self? 弱引用」写法，语义不变（`judge()` 仍在后台队列先算好）.
 
             // 第一版：get_apps + profile —— 立即上屏，**不等**可选增强
             //（用户实测：333 应用场景这条路径 2.5 秒级；胶囊先出现，再被第二版精修）
-            publish(
-                judge(),
-                "[应用管理] 类型判定完成（第一版·get_apps+profile）：\(ids.count) 条"
+            let firstResolved = judge()
+            let firstNote = "[应用管理] 类型判定完成（第一版·get_apps+profile）：\(ids.count) 条"
                 + "（entitlements \(entMap.count) / provisionsAllDevices \(provisionsAllDevicesMap.count)）"
-            )
+            DispatchQueue.main.async {
+                self?.appTypes = firstResolved
+                LoginLogger.shared.log(firstNote)
+            }
 
             // 第二版：可选增强（带属性 Lookup，独立 15 秒，失败就不补）
             // v0.3.379：额度 8s→15s（后台可选、不阻塞首屏；单飞保证同一时刻只有一条在飞）；
@@ -282,11 +283,13 @@ final class AppListViewModel: ObservableObject {
             if enhanced.isEmpty {
                 LoginLogger.shared.log("[应用管理] 带属性增强未取到：账号/正版存在性按 apps 兜底（第一版结果保留）")
             } else {
-                publish(
-                    judge(),
-                    "[应用管理] 类型判定完成（第二版·含带属性增强）：\(ids.count) 条"
+                let secondResolved = judge()
+                let secondNote = "[应用管理] 类型判定完成（第二版·含带属性增强）：\(ids.count) 条"
                     + "（增强 \(enhanced.count) 条）"
-                )
+                DispatchQueue.main.async {
+                    self?.appTypes = secondResolved
+                    LoginLogger.shared.log(secondNote)
+                }
             }
         }
     }

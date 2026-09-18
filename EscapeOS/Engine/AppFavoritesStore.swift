@@ -63,7 +63,10 @@ struct FavoriteApp: Codable, Identifiable, Hashable {
 /// 收藏栏存储（`Documents/app_favorites.json`，单例，主线程使用）。
 final class AppFavoritesStore {
 
-    static let shared = AppFavoritesStore()
+    /// Swift 6 并发检查：本类型非 Sendable，但**没有可变实例状态** ——
+    /// 每次操作都直接读写 `Documents/app_favorites.json`，不缓存任何内存状态；
+    /// 按设计只在主线程（收藏栏 UI）使用。因此 `shared` 共享无风险。
+    nonisolated(unsafe) static let shared = AppFavoritesStore()
     private init() {}
 
     private var fileURL: URL {

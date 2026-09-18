@@ -12,7 +12,10 @@ import Foundation
 /// 同样遵循 RSD 隧道并发铁律（本服务内所有操作串行）.
 final class CrashLogService {
 
-    static let shared = CrashLogService()
+    /// Swift 6 并发检查：本类型非 Sendable，但没有可变实例状态 ——
+    /// 只有一条串行队列 `queue` 与计算属性 `pairingPath`，隧道/客户端句柄都是方法内局部量，
+    /// 且所有 FFI 操作都在这条串行队列上执行。实例本身线程安全，`shared` 共享无风险。
+    nonisolated(unsafe) static let shared = CrashLogService()
     private init() {}
 
     private let queue = DispatchQueue(label: "com.ipaside.escapeos.crashlog")

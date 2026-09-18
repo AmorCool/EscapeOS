@@ -154,7 +154,10 @@ enum ProcessControlAction: String {
 ///   覆盖 RSD 服务发现的偶发 `ServiceNotFound`；
 /// - 发信号使用 `UInt32(SIGKILL)` 直接量，与「设备控制」侧完全一致，避免
 ///   `Int32 → UInt32` 转换在任何编译/平台组合下出现歧义.
-final class ProcessManagerService {
+/// `Sendable`（非 unchecked）：本类**没有可变存储属性**——两个存储属性都是
+/// `let` 的串行队列（`DispatchQueue` 本身是 `Sendable`），所有进程状态都在
+/// 方法内局部变量里、并已被这两条队列串行化。
+final class ProcessManagerService: Sendable {
 
     static let shared = ProcessManagerService()
     private init() {}

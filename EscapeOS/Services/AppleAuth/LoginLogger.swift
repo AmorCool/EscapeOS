@@ -3,7 +3,11 @@ import Foundation
 /// 登录诊断日志：把 Apple 认证引擎每一步的关键事件（请求/响应/错误）记录到
 /// `Documents/LoginLogs/login.log`，支持在登录界面查看、复制与导出分享，便于排查
 /// Anisette / GrandSlam 握手失败的真实原因.
-final class LoginLogger {
+/// `@unchecked Sendable`：本类是全项目（含后台隧道 / Rust 回调线程）共用的日志器。
+/// 唯一可变状态 `buffer` 的每次读写都在 `lock`（`NSLock`）保护下
+/// （`log` / `clear` / `fullLog` / `recentLines` 四个入口全部持锁），
+/// 因此跨隔离域共享引用是安全的——复用类内已有的锁。
+final class LoginLogger: @unchecked Sendable {
     static let shared = LoginLogger()
 
     /// v0.3.307：日志**按板块分类**，各板块只读自己那一类，不再互相串台.

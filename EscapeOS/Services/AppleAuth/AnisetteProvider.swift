@@ -9,7 +9,12 @@ import CryptoKit
 ///   直接走 `/v3/get_headers`.
 /// - 否则执行一次完整的 WebSocket 配给（provisioning）流程，把 `adiPb` 存入钥匙串后再取 headers.
 final class AnisetteProvider {
-    static let shared = AnisetteProvider()
+    /// Swift 6 并发检查：本类型非 Sendable。可变字段（clientInfo / userAgent / mdLu /
+    /// deviceId / lastFailureStage）是**单次 anisette 流程内的临时状态**：由
+    /// `fetchClientInfo` / `provision` 写、同一流程内的 `makeAppleRequest` / `fail` 读。
+    /// 现有调用方（AppleDeveloperAPI / AppleIDLoginSheet / IPAInstallService）均以
+    /// `await` 串行发起，不存在并发进入 —— 这是既有设计，本次迁移不改语义。
+    nonisolated(unsafe) static let shared = AnisetteProvider()
 
     private let keychain = EscapeKeychain(service: "com.ipaside.escapeos.memorylimit")
     private let session: URLSession = {
@@ -174,6 +179,11 @@ final class AnisetteProvider {
 
     /// 切换到内置服务器列表中的下一个，并持久化到 `AnisetteServer`.
     /// 返回切换后的地址；列表为空时返回 nil.
+    ///
+    /// Swift 6：`MemoryLimitSettings` 是 `@MainActor` 类型，它的 `anisetteServers`
+    /// 因此也是主线程隔离的；本方法只读这一个常量数组，收敛到 `@MainActor` 最省事
+    /// （调用点 `getAnisetteDataWithFallback` 已是 async，加 `await` 即可）。
+    @MainActor
     @discardableResult
     private func rotateServer() -> String? {
         let servers = MemoryLimitSettings.anisetteServers
@@ -234,7 +244,7 @@ final class AnisetteProvider {
                     resetProvisioning()
                 }
                 LoginLogger.shared.log("⚠ Anisette 第 \(attempt)/\(maxAttempts) 次失败（阶段：\(stage ?? "未知")），换服务器重试")
-                rotateServer()
+                await rotateServer()
             }
         }
         // 全部失败：把服务器还原成用户原本配置的地址.

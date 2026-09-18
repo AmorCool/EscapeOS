@@ -127,39 +127,59 @@ final class SandboxEscape {
     }
 
     // MARK: - LiveContainer container-management extensions
+    //
+    // 线程安全论证（下面 8 个 `nonisolated(unsafe)` 静态属性的共同依据）：
+    // · **写者唯一**：只有 `bootstrapLiveContainerExtensions()` 一处写入，而它必须在本 App
+    //   启动时（`EscapeSpaceApp.init`，主线程）调用一次——源码注释已写明「Must run at app
+    //   launch so the extensions are live before any discovery/scan」。该函数把全部字段写完后
+    //   才返回，此后**再无任何写入点**，故不存在写-写竞争。
+    // · **读**：① 主线程/SwiftUI（`LiveCleanTabView` 诊断区）；② 后台队列
+    //   （`BackupsListView.loadTargets` 的 `DispatchQueue.global().async` →
+    //   `LiveContainerDiscovery.discover`）。两处读取都发生在启动之后，启动时的写入对它们
+    //   有 happens-before（全局变量惰性初始化 + 队列提交）；此后数据不再变化，并发只读安全。
+    // · 结论：语义上等价于「启动时一次性初始化的只读全局量」，`nonisolated(unsafe)` 只是把
+    //   这一既有事实告知编译器；**不引入任何行为变化**。
 
     /// Set when the LiveContainer host handed us container sandbox tokens via
     /// `ESC_LC_CONTAINER_TOKENS`. While active, `LiveContainerDiscovery` skips the
     /// (iOS-26-blocked) `bad_query` path and reads guest containers directly, since
     /// the consumed extensions grant access to the LC data + App Group roots.
-    static var lcContainerExtensionsActive = false
+    /// nonisolated(unsafe)：写者唯一（启动 bootstrap），论证见上方 MARK 注释块.
+    nonisolated(unsafe) static var lcContainerExtensionsActive = false
 
     /// LC data container root, forwarded by the host as `ESC_LC_HOME`
     /// (private guest containers live under `<this>/Documents/Data/Application`).
-    static var lcHomePath: String?
+    /// nonisolated(unsafe)：写者唯一（启动 bootstrap），论证见上方 MARK 注释块.
+    nonisolated(unsafe) static var lcHomePath: String?
 
     /// LC's real App Group container, forwarded by the host as `ESC_LC_APPGROUP_PATH`
     /// (shared/"converted" guest containers live under `<this>/LiveContainer/Data/Application`).
-    static var lcAppGroupPath: String?
+    /// nonisolated(unsafe)：写者唯一（启动 bootstrap），论证见上方 MARK 注释块.
+    nonisolated(unsafe) static var lcAppGroupPath: String?
 
     /// Host-reported grant outcome (forwarded via `ESC_LC_GRANT_STATUS`).
     /// Possible values: "issued:N", "failed:issue_null",
     /// "skipped:no_symbol", "skipped:not_target", optionally suffixed
     /// with ",no_appgroup". NULL when the host never forwarded it.
-    static var lcContainerGrantStatus: String?
+    /// nonisolated(unsafe)：写者唯一（启动 bootstrap），论证见上方 MARK 注释块.
+    nonisolated(unsafe) static var lcContainerGrantStatus: String?
 
     /// Number of tokens the host handed us (and we attempted to consume).
-    static var lcContainerTokenCount = 0
+    /// nonisolated(unsafe)：写者唯一（启动 bootstrap），论证见上方 MARK 注释块.
+    nonisolated(unsafe) static var lcContainerTokenCount = 0
 
     /// Number of tokens successfully consumed in this process.
-    static var lcContainerConsumedCount = 0
+    /// nonisolated(unsafe)：写者唯一（启动 bootstrap），论证见上方 MARK 注释块.
+    nonisolated(unsafe) static var lcContainerConsumedCount = 0
 
     /// Per-token consume result strings (for on-device diagnosis).
-    static var lcContainerConsumeResults: [String] = []
+    /// nonisolated(unsafe)：写者唯一（启动 bootstrap），论证见上方 MARK 注释块.
+    nonisolated(unsafe) static var lcContainerConsumeResults: [String] = []
 
     /// How the LiveContainer host launched us: "appex" (multitask) or "classic"
     /// (same-process). Forwarded as `ESC_LC_LAUNCH_MODE` for diagnostics.
-    static var lcContainerLaunchMode: String?
+    /// nonisolated(unsafe)：写者唯一（启动 bootstrap），论证见上方 MARK 注释块.
+    nonisolated(unsafe) static var lcContainerLaunchMode: String?
 
     /// Consume the container sandbox tokens issued by the LiveContainer host.
     /// Tokens are newline-separated in `ESC_LC_CONTAINER_TOKENS`; each is consumed

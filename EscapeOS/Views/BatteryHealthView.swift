@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Swift 6：`BatteryHealthInfo` 含 `raw: [String: Any]`（`Any` 非 Sendable），
+/// 整个类型因此不是 Sendable，不能作为 `Task.detached` 的返回类型跨 actor 边界传回。
+/// 这里用薄包装**转移**（不是共享）该值：它由 detached 任务内部一次性构造完成，
+/// 返回后只作为 `@State` 被主线程只读展示，之后没有任何线程再写入或并发访问。
+private struct BatteryHealthBox<T>: @unchecked Sendable { let value: T }
+
 /// v0.3.199：电池健康面板 —— diagnostics_relay IORegistry 读取（非越狱可读）.
 /// 参考 iDescriptor BatteryInfo 面板：健康/循环/容量/序列号/充电/适配器.
 /// v0.3.205：当前电量改百分比、新增适配器电源+电压卡、序列号小眼睛、厂商/生产日期.
@@ -78,10 +84,11 @@ struct BatteryHealthView: View {
         if !silent { isLoading = true }
         defer { if !silent { isLoading = false } }
         do {
+            // Swift 6：经 BatteryHealthBox 把非 Sendable 的 BatteryHealthInfo 转移回主线程
             let result = try await Task.detached(priority: .userInitiated) {
-                try BatteryHealthService.fetchBatteryHealth()
+                BatteryHealthBox(value: try BatteryHealthService.fetchBatteryHealth())
             }.value
-            info = result
+            info = result.value
             lastUpdated = Date()
             errorText = nil
         } catch {

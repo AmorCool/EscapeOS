@@ -12,7 +12,10 @@ import Foundation
 /// `RespringView`（ConfigurationsView 已使用），由 UI 层直接展示.
 final class DeviceControlService {
 
-    static let shared = DeviceControlService()
+    /// Swift 6 并发检查：本类型非 Sendable，但**没有任何可变实例状态** ——
+    /// 隧道句柄都是方法内局部量，方法本身不保存任何跨调用状态。
+    /// 因此实例本身线程安全，`shared` 跨线程共享无风险。
+    nonisolated(unsafe) static let shared = DeviceControlService()
     private init() {}
 
     /// EscapeSpace 的配对文件路径（与「应用管理」/ 进程管理共用）.

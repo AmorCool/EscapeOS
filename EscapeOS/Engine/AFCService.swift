@@ -9,7 +9,11 @@ import Foundation
 /// 避免与进程管理 / 设备控制并发建隧道互相抢占.
 final class AFCService {
 
-    static let shared = AFCService()
+    /// Swift 6 并发检查：本类型非 Sendable，但**没有任何可变实例状态** ——
+    /// 只有一条串行队列 `afcQueue` 与计算属性 `pairingPath`，隧道句柄都是方法内局部量，
+    /// 且所有 FFI 操作都在这条串行队列上执行（见 `afcQueue` 注释）。
+    /// 因此实例本身线程安全，`shared` 跨线程共享无风险。
+    nonisolated(unsafe) static let shared = AFCService()
     private init() {}
 
     /// RSD 隧道并发铁律：同一 hostname 并发 `tunnel_create_rppairing` 会互相抢占，

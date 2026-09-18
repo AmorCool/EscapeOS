@@ -39,7 +39,10 @@ enum UninstallServiceError: LocalizedError {
     }
 }
 
-final class UninstallService {
+/// `@unchecked Sendable`：本类**没有可变存储属性**，唯一存储属性是只读的
+/// `tunnel`（`TunnelContext` 自身负责其线程安全）；`uninstall` 全程用局部变量。
+/// 因为 `tunnel` 的类型未标注 `Sendable`，编译器无法自动推导，故用 unchecked 显式声明。
+final class UninstallService: @unchecked Sendable {
     static let shared = UninstallService()
 
     /// The pairing-file + LocalDevVPN tunnel that authenticates the uninstall.

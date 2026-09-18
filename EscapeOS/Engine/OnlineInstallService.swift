@@ -320,7 +320,10 @@ enum OnlineInstallService {
                 return
             }
             // 兜底 1：内置 WebView（InAppBrowserView）里再跳一次
-            presentBrowserFallback(itmsURL)
+            // `UIApplication.open` 的 completion 由系统在**主队列**回调，但闭包本身不是
+            // `@MainActor` 隔离的 → 用 `assumeIsolated` 同步进入主 actor（不做异步跳转，
+            // 行为与原来一致）。
+            MainActor.assumeIsolated { presentBrowserFallback(itmsURL) }
             // 兜底 2：复制清单链接，让用户去 Safari 打开
             UIPasteboard.general.string = manifestURL
             LoginLogger.shared.log("[在线安装] 系统未受理，已回退内置浏览器并复制链接（可改用 Safari 打开）",
@@ -332,6 +335,9 @@ enum OnlineInstallService {
     }
 
     /// 在 App 内置浏览器里再尝试一次（部分 iOS 版本会拦 App 内的 itms-services）。
+    /// `@MainActor`：本方法全程驱动 UIKit（取顶层控制器 / present），必须与
+    /// `topViewController()` 同在主 actor 上。
+    @MainActor
     private static func presentBrowserFallback(_ url: URL) {
         guard let top = topViewController() else {
             LoginLogger.shared.log("[在线安装] 无可用控制器，跳过内置浏览器兜底", category: logCategory)
@@ -343,6 +349,10 @@ enum OnlineInstallService {
         LoginLogger.shared.log("[在线安装] 已回退到内置浏览器再跳一次", category: logCategory)
     }
 
+    /// `@MainActor`：`UIWindowScene.windows` 是主 actor 隔离属性，在非隔离上下文里
+    /// 连 key path 都拼不出来（Swift 6 报 "cannot form key path to main actor-isolated
+    /// property 'windows'"）；本方法只服务于上面的主 actor 展示路径，收敛到主 actor 即可。
+    @MainActor
     private static func topViewController() -> UIViewController? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let windows = scenes.flatMap(\.windows)

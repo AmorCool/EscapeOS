@@ -11,7 +11,11 @@
 import Foundation
 
 final class DeveloperCertStore: ObservableObject {
-    static let shared = DeveloperCertStore()
+    /// Swift 6 并发检查：本类型非 Sendable。`@Published` 的**写**全部收敛在
+    /// `MainActor.run` 内（见 `createCertificateWithStoredAccount` 等异步方法）；
+    /// 其余调用点（BinaryModuleRunner 的后台线程）只读 `hasCert` / `jitFreeMode`
+    /// 两个 Bool —— 无并发写，`shared` 共享无风险。
+    nonisolated(unsafe) static let shared = DeveloperCertStore()
 
     /// 证书文件目录：Documents/DeveloperCert/
     private let dir: URL
@@ -135,7 +139,9 @@ final class DeveloperCertStore: ObservableObject {
             // 4) 提交 Apple（异步受理：响应只含 certRequest 元数据，无证书内容）.
             //    7460（证书数上限，免费账号常见）→ SideStore 同款：吊销全部旧证书后重试一次.
             //    （被吊销的旧证书所属工具下次使用时会自动重建自己的证书，属正常行为）
-            let machineName = (UIDevice.current.name)
+            // Swift 6：`UIDevice` 在 iOS 26 SDK 里是 `@MainActor` 类型，本方法是非隔离
+            // async 上下文，必须显式 `await` 才能读它（取值语义不变）。
+            let machineName = await UIDevice.current.name
             var certDER: Data
             do {
                 certDER = try await AppleDeveloperAPI.submitSigningCertificate(

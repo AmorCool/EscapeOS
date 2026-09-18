@@ -12,7 +12,12 @@ import Combine
 ///   本地网络权限与配对（原版在 LC guest 下卡在 LocalNetworkAuthorization）；
 /// - 设备连接复用 EscapeSpace 既有隧道（配对文件 + LocalDevVPN），
 ///   签名所需的设备 UDID 直接从配对文件 plist 的 identifier 读取.
-final class IPAInstallService: ObservableObject {
+/// `@unchecked Sendable`：本类的跨线程可变状态只有 2FA 交接那一对
+/// （`twoFactorResult` / `twoFactorSem`），其读写由 `DispatchSemaphore` 的
+/// signal/wait 建立 happens-before；`twoFactorPrompt` 与其余状态只在主队列
+/// （`beginTwoFactorPrompt` 的 `DispatchQueue.main.async`）访问。
+/// 即：跨线程共享的不是「并发可变状态」，而是被信号量串行化的一次交接。
+final class IPAInstallService: ObservableObject, @unchecked Sendable {
 
     static let shared = IPAInstallService()
     private init() {}

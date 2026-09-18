@@ -10,7 +10,9 @@ import UIKit
 ///
 /// 前提：配对文件（Documents/pairingFile.plist）+ LocalDevVPN 已连接 + 目标 App
 /// 的签名带 get-task-allow（证书直装签名默认带）.
-final class JITEnableService {
+/// `Sendable`（非 unchecked）：本类**没有任何存储属性**（`pairingPath` 是计算属性，
+/// 所有中间状态都是方法内局部变量 / FFI 句柄），编译器可直接证明其可安全共享。
+final class JITEnableService: Sendable {
 
     static let shared = JITEnableService()
 

@@ -20,7 +20,11 @@ import NIO
 import NIOSSH
 import UIKit
 
-final class SSHServerService: NSObject, ObservableObject {
+/// `@unchecked Sendable`：可变状态（`server` 句柄与 `@Published` 状态）只在主线程写——
+/// `start()` / `stop()` 的写入都在 `await MainActor.run { … }` 里，调用点
+/// （`EscapeSpaceApp.init` / 各 `View`）也都在主 actor；非隔离的 `static execute`
+/// 只读取共享状态做诊断输出，不做写。
+final class SSHServerService: NSObject, ObservableObject, @unchecked Sendable {
     static let shared = SSHServerService()
 
     @Published private(set) var isRunning = false

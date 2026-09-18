@@ -1,6 +1,16 @@
 import SwiftUI
 import UIKit
 
+/// Swift 6：AFC 客户端句柄是 `OpaquePointer`（FFI 句柄，非 Sendable），
+/// 不能直接作为 `Task.detached` 的返回类型跨 actor 边界传回。
+///
+/// 线程安全论证：`idevice.h` 明写这些句柄 **NOT thread safe**，必须与创建它的
+/// adapter 在同一线程使用（`idevice.h:905`「must be used in the same thread as the
+/// adapter」；`idevice.h:1222`「The file handle MAY NOT be used from another thread」）。
+/// 本包装**只是类型层面的标注**：它沿用本文件原有的「创建 → 传回 → 在串行流程里使用」
+/// 路径，不新增任何共享或并发访问，句柄的线程归属与本次迁移前完全一致（纯编译期改动）。
+private struct AFCClientBox: @unchecked Sendable { let raw: OpaquePointer }
+
 /// v0.3.214：App 文档浏览（重做版）——
 /// - 顶部目录分段：Documents（默认）/ Library / tmp
 /// - Documents 走 vend_documents（文件共享 App 必可开）；Library/tmp 需要完整容器
@@ -229,10 +239,11 @@ struct AppFileBrowserView: View {
                 // Library / tmp：需要完整容器.Documents 会话不足以访问 → vend_container
                 if containerAfc == nil {
                     do {
-                        let c = try await Task.detached(priority: .userInitiated) {
-                            try FileSharingService.openAppContainer(bundleId: bundleId)
+                        // Swift 6：OpaquePointer 非 Sendable → 经 AFCClientBox 转移回主线程
+                        let boxed = try await Task.detached(priority: .userInitiated) {
+                            AFCClientBox(raw: try FileSharingService.openAppContainer(bundleId: bundleId))
                         }.value
-                        containerAfc = c
+                        containerAfc = boxed.raw
                     } catch {
                         noPermission = true
                         entries = []
@@ -246,10 +257,11 @@ struct AppFileBrowserView: View {
             } else {
                 // Documents
                 if afcClient == nil {
-                    let c = try await Task.detached(priority: .userInitiated) {
-                        try FileSharingService.openAppDocuments(bundleId: bundleId)
+                    // Swift 6：OpaquePointer 非 Sendable → 经 AFCClientBox 转移回主线程
+                    let boxed = try await Task.detached(priority: .userInitiated) {
+                        AFCClientBox(raw: try FileSharingService.openAppDocuments(bundleId: bundleId))
                     }.value
-                    afcClient = c
+                    afcClient = boxed.raw
                 }
                 currentPath = "/Documents"
                 await loadDir(path: "/Documents")
@@ -653,7 +665,10 @@ struct AppFileBrowserView: View {
         }
     }
     /// v0.3.227：下载单个条目（文件流式不限大小；文件夹建目录递归）到指定目标路径
-    private static func downloadEntry(client: OpaquePointer, entry: AfcEntry, to dest: URL) throws {
+    ///
+    /// Swift 6：本方法只做 FFI + FileManager，不碰任何 UI 状态，且只在 `shareEntry` 的
+    /// `Task.detached` 里调用 → 显式 `nonisolated`，不被 View 的 MainActor 推断隔离。
+    private nonisolated static func downloadEntry(client: OpaquePointer, entry: AfcEntry, to dest: URL) throws {
         if entry.isDirectory {
             try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
             try recursiveDownload(client: client, srcDir: entry.path, toDir: dest)
@@ -733,7 +748,8 @@ struct AppFileBrowserView: View {
     }
 
     /// 递归下载目录（保结构）
-    private static func recursiveDownload(client: OpaquePointer, srcDir: String, toDir: URL) throws {
+    /// Swift 6：只被 `downloadEntry`（已 nonisolated）调用 → 同步 nonisolated。
+    private nonisolated static func recursiveDownload(client: OpaquePointer, srcDir: String, toDir: URL) throws {
         let items = try FileSharingService.listDirectory(afc: client, path: srcDir)
         for item in items {
             let target = toDir.appendingPathComponent(item.name)

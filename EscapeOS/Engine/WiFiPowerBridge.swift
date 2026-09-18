@@ -9,7 +9,10 @@ import Foundation
 /// - Rust：services 查 MCInstall.shim.remote 端口 → adapter.connect（隧道内转发，
 ///   裸 TCP 会被拒——v0.3.104 实测 Connection refused）→ XML plist 帧
 ///   （RSDCheckin 三步握手 + SetWiFiPowerState）
-final class WiFiPowerBridge {
+/// `@unchecked Sendable`：唯一可变状态 `handlerRegistered` 的读写
+/// （`ensureRegistered`）都在 `lock`（`NSLock`）保护下；`prepareTunnelAndHandover`
+/// 用的是方法内局部 FFI 句柄。复用类内已有的锁，跨隔离域共享引用安全。
+final class WiFiPowerBridge: @unchecked Sendable {
     static let shared = WiFiPowerBridge()
     private init() {}
 

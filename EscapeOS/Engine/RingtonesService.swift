@@ -21,7 +21,10 @@ import CoreMedia
 ///
 /// ⚠️ 硬限制：系统铃声库 `/var/mobile/Library/Ringtones` 在 AFC 根（media）
 /// 之外，隧道不可达，无法直接读取 —— 只能管理 media 内的铃声文件.
-final class RingtonesService {
+/// `@unchecked Sendable`：本类**没有可变存储属性**——唯一存储属性是只读的
+/// `afc`（`AFCService` 单例，其隧道访问自身串行化）；所有方法只用局部变量。
+/// 因 `afc` 的类型未标注 `Sendable`，编译器无法自动推导，故用 unchecked 显式声明。
+final class RingtonesService: @unchecked Sendable {
 
     static let shared = RingtonesService()
     private init() {}

@@ -12,7 +12,9 @@ import Foundation
 /// （NWBrowser/NWListener 本地网络权限探测）——那是它在生成配对文件时用来
 /// 请求权限的，LiveContainer guest 等嵌入环境拿不到该权限；我们只做「写入」，
 /// 用已有配对文件 + 系统 VPN 隧道，天然绕开这个 LC 兼容性问题.
-final class PairingInstallService {
+/// `Sendable`（非 unchecked）：本类**没有任何存储属性**（`pairingPath` 是计算属性），
+/// 编译器可直接证明其可安全跨隔离域共享。
+final class PairingInstallService: Sendable {
 
     static let shared = PairingInstallService()
     private init() {}

@@ -8,7 +8,11 @@ import UIKit
 ///
 /// 只用 `NSCache`（内存，系统吃紧时自己回收）：不做磁盘缓存，避免沙盒里堆一堆过期图。
 enum PreviewImageCache {
-    private static let cache: NSCache<NSString, UIImage> = {
+    /// `nonisolated(unsafe)`：`NSCache` 是 Apple **文档明确保证线程安全**的类型
+    /// （"You can add, remove, and query items in the cache from different threads
+    /// without having to lock the cache yourself"），因此这个全局引用没有并发风险，
+    /// 不需要额外加锁，也不该把它挪到某个 actor 上（取图是跨线程的）。
+    nonisolated(unsafe) private static let cache: NSCache<NSString, UIImage> = {
         let c = NSCache<NSString, UIImage>()
         c.countLimit = 120
         return c

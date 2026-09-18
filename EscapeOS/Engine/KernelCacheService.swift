@@ -18,7 +18,9 @@ import Darwin
 ///    Documents/KernelCache/.
 ///
 /// 纯网络、零权限、零漏洞，与 lara 从设备读到的 kernelcache 是同一份文件.
-final class KernelCacheService {
+/// `Sendable`（非 unchecked）：本类**没有任何存储属性**（`saveDirectory` 是计算属性，
+/// 下载过程全部用方法内局部变量），编译器可直接证明其可安全共享。
+final class KernelCacheService: Sendable {
 
     static let shared = KernelCacheService()
     private init() {}

@@ -15,7 +15,10 @@ import UIKit
 /// 结果按容器路径缓存，避免每次刷新目录都重读 plist.
 final class ContainerNameResolver {
 
-    static let shared = ContainerNameResolver()
+    /// Swift 6 并发检查：本类型非 Sendable，但唯一的可变状态 `cache` 的**全部**读写
+    /// 都在 `lock`（NSLock）内（见 `resolveAll` / `displayName`），实例本身线程安全
+    /// —— `resolveAll` 的文档也声明「任意线程可调」。
+    nonisolated(unsafe) static let shared = ContainerNameResolver()
 
     private let escape = SandboxEscape()
     private var cache: [String: String] = [:]

@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 
+/// Swift 6：`DeviceInfoModel` 含 `raw: [String: Any]`（`Any` 非 Sendable），
+/// 整个类型因此不是 Sendable，不能作为 `Task.detached` 的返回类型跨 actor 边界传回。
+/// 这里用薄包装**转移**（不是共享）该值：它由 detached 任务内部一次性构造完成，
+/// 返回后只作为 `@State` 被主线程只读展示，之后没有任何线程再写入或并发访问。
+private struct DeviceInfoBox<T>: @unchecked Sendable { let value: T }
+
 /// v0.3.208：设备信息面板 —— 字段清单对齐爱思「设备详情」.
 ///
 /// v0.3.307：**改成数据驱动**。所有行/分组由 `sections(_:)` 组装成
@@ -74,9 +80,11 @@ struct DeviceInfoView: View {
         loading = true
         defer { loading = false }
         do {
-            info = try await Task.detached(priority: .userInitiated) {
-                try DeviceInfoService.collectFull()
+            // Swift 6：经 DeviceInfoBox 把非 Sendable 的 DeviceInfoModel 转移回主线程
+            let boxed = try await Task.detached(priority: .userInitiated) {
+                DeviceInfoBox(value: try DeviceInfoService.collectFull())
             }.value
+            info = boxed.value
             errorText = nil
         } catch {
             errorText = error.localizedDescription

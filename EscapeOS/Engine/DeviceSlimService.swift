@@ -388,9 +388,12 @@ enum DeviceSlimService {
     }
 
     private static let appReadLock = NSLock()
-    private static var appReadCache: (result: AppReadResult, at: Date)?
+    /// Swift 6 并发检查：`appReadCache` / `appReadIssueFlag` 的**全部**读写都在上面的
+    /// `appReadLock` 内（见 `readAppsForSlim` / `consumeAppReadIssue` / `invalidateAppReadCache`），
+    /// 因此这两个静态变量本身线程安全。
+    nonisolated(unsafe) private static var appReadCache: (result: AppReadResult, at: Date)?
     /// 本轮需要向用户说明的问题（nil = 一切正常）——页面取走后清零，避免跨轮残留.
-    private static var appReadIssueFlag: String?
+    nonisolated(unsafe) private static var appReadIssueFlag: String?
 
     /// 取走并清零本轮的问题文案（页面在数据落地后调用一次）.
     static func consumeAppReadIssue() -> String? {
@@ -410,11 +413,13 @@ enum DeviceSlimService {
     // MARK: - v0.3.408：文档大小的本机通道
 
     private static let docSizeLock = NSLock()
+    /// Swift 6 并发检查：`docSizeCache` / `docSizeInFlight` 的**全部**读写都在上面的
+    /// `docSizeLock` 内（见 `cachedDocSize` / `startDocSizePass` 的量取任务），本身线程安全。
     /// 量过的 `docSize`（bundleId → 字节 + 量到的时刻）。**跨轮保留** ——
     /// 「较大应用」的文档大小因此一轮比一轮全，而不是每轮都从头发一遍.
-    private static var docSizeCache: [String: (bytes: Int64, at: Date)] = [:]
+    nonisolated(unsafe) private static var docSizeCache: [String: (bytes: Int64, at: Date)] = [:]
     /// 正在量的 bundleId（`readAppsForSlim` 缓存刚失效时，两个调用方可能同时发起）.
-    private static var docSizeInFlight: Set<String> = []
+    nonisolated(unsafe) private static var docSizeInFlight: Set<String> = []
 
     /// 单轮最多量几个应用；单个应用最多看几个节点（20k 是「空间回收」的口径，这里更保守）.
     private static let docSizePassMaxApps = 60
@@ -506,16 +511,18 @@ enum DeviceSlimService {
             for entry in picked {
                 let startedAt = Date()
                 let bytes = measureContainerBytes(entry.path)
-                docSizeLock.lock()
-                if let bytes {
-                    docSizeCache[entry.bundleId] = (bytes, Date())
-                    measured += 1
-                } else {
-                    failed += 1
+                // Swift 6：NSLock 的 lock/unlock 在 async 上下文不可用，改用作用域加锁
+                // `withLock`（临界区内没有 await，语义与原来的 lock/unlock 完全一致）。
+                let nowDone = docSizeLock.withLock { () -> Int in
+                    if let bytes {
+                        docSizeCache[entry.bundleId] = (bytes, Date())
+                        measured += 1
+                    } else {
+                        failed += 1
+                    }
+                    docSizeInFlight.remove(entry.bundleId)
+                    return docSizeCache.count
                 }
-                docSizeInFlight.remove(entry.bundleId)
-                let nowDone = docSizeCache.count
-                docSizeLock.unlock()
                 let seconds = String(format: "%.2f", Date().timeIntervalSince(startedAt))
                 LoginLogger.shared.log(
                     "[设备瘦身] 文档大小 \(entry.bundleId)："

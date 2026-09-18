@@ -24,7 +24,11 @@ import AVKit
 import Foundation
 import UIKit
 
-final class PiPKeepAliveService: NSObject, ObservableObject {
+/// `@unchecked Sendable`：全部可变状态都是主线程 UI 对象（`AVPictureInPictureController`
+/// / `UIView` / `UILabel` / `Timer` / `@Published`），只在主线程读写（PiP 回调、定时器、
+/// 视图调用点都在主 runloop）。唯一的跨线程访问是 SSH 诊断命令
+/// （`SSHServerService.execute`，非隔离上下文）对 `isPiPActive` / `startedAt` 做只读快照。
+final class PiPKeepAliveService: NSObject, ObservableObject, @unchecked Sendable {
     static let shared = PiPKeepAliveService()
 
     @Published private(set) var isPiPActive = false

@@ -316,9 +316,21 @@ enum AppStoreService {
         let isAppPage: Bool
     }
 
+    /// `productPage(appId:country:)` 在锁内算出的查找结果：命中缓存 / 命中在飞任务 / 新建在飞任务。
+    /// 拆成枚举是为了让 `htmlLock` 只覆盖**同步**的「查表 + 登记」，`await` 一律在锁外发生。
+    private enum ProductPageLookup {
+        case cached(CachedProductPage)
+        case inflight(Task<ProductPage, Error>)
+        case started(Task<ProductPage, Error>)
+    }
+
     private static let htmlLock = NSLock()
-    private static var htmlCache: [String: CachedProductPage] = [:]
-    private static var htmlInflight: [String: Task<ProductPage, Error>] = [:]
+    /// nonisolated(unsafe)：`enum` 的静态存储属性无法用锁做隔离标注；
+    /// `htmlCache` / `htmlInflight` 的**全部**读写都在 `htmlLock.withLock` 作用域内
+    /// （无一处跨 `await` 持锁），实际无竞争 —— 与 `BinaryModuleRunner` 的
+    /// `cachedBinaryModuleHandle` 同一套「锁保护的存取器」约定。
+    nonisolated(unsafe) private static var htmlCache: [String: CachedProductPage] = [:]
+    nonisolated(unsafe) private static var htmlInflight: [String: Task<ProductPage, Error>] = [:]
 
     private static func productHTML(appId: String, country: String?) async throws -> String {
         let page = try await productPage(appId: appId, country: country)
@@ -329,9 +341,23 @@ enum AppStoreService {
         let cc = resolved(country)
         let key = "\(cc)|\(appId)"
 
-        htmlLock.lock()
-        if let hit = htmlCache[key], Date().timeIntervalSince(hit.at) < htmlCacheTTL {
-            htmlLock.unlock()
+        // 锁内只做「查缓存 / 查在飞任务 / 登记新任务」这三件同步事；await 一律在锁外。
+        // （Swift 6：NSLock.lock()/unlock() 在异步上下文不可用，改用作用域式的 withLock；
+        //   这里的锁本来就没有跨 await 持有，语义完全不变。）
+        let lookup: ProductPageLookup = htmlLock.withLock {
+            if let hit = htmlCache[key], Date().timeIntervalSince(hit.at) < htmlCacheTTL {
+                return .cached(hit)
+            }
+            if let running = htmlInflight[key] {
+                return .inflight(running)
+            }
+            let task = Task { try await loadProductPage(appId: appId, requested: cc) }
+            htmlInflight[key] = task
+            return .started(task)
+        }
+
+        switch lookup {
+        case .cached(let hit):
             // 命中「回落过」的条目：说明请求区域在这台设备上必然被重定向，
             // 直接复用实际区域那份 HTML，不再撞一次重定向（也解释清了数据为何来自别的区）。
             if hit.served != cc {
@@ -339,40 +365,37 @@ enum AppStoreService {
                                        category: .appStore)
             }
             return ProductPage(html: hit.html, served: hit.served, isAppPage: true)
-        }
-        if let running = htmlInflight[key] {
-            htmlLock.unlock()
-            return try await running.value
-        }
-        let task = Task { try await loadProductPage(appId: appId, requested: cc) }
-        htmlInflight[key] = task
-        htmlLock.unlock()
 
-        do {
-            let page = try await task.value
-            htmlLock.lock()
-            if page.isAppPage {
-                let now = Date()
-                htmlCache = htmlCache.filter { now.timeIntervalSince($0.value.at) < htmlCacheTTL }
-                if htmlCache.count >= htmlCacheLimit,
-                   let oldest = htmlCache.min(by: { $0.value.at < $1.value.at })?.key {
-                    htmlCache[oldest] = nil
+        case .inflight(let running):
+            return try await running.value
+
+        case .started(let task):
+            do {
+                let page = try await task.value
+                htmlLock.withLock {
+                    if page.isAppPage {
+                        let now = Date()
+                        htmlCache = htmlCache.filter { now.timeIntervalSince($0.value.at) < htmlCacheTTL }
+                        if htmlCache.count >= htmlCacheLimit,
+                           let oldest = htmlCache.min(by: { $0.value.at < $1.value.at })?.key {
+                            htmlCache[oldest] = nil
+                        }
+                        htmlCache[key] = CachedProductPage(html: page.html, served: page.served, at: now)
+                    }
+                    htmlInflight[key] = nil
                 }
-                htmlCache[key] = CachedProductPage(html: page.html, served: page.served, at: now)
+                // 不是详情页就不落缓存，下次进入重新抓（本次仍把页面交回去解析，行为不变）。
+                if !page.isAppPage {
+                    LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 未取到详情页，本次结果不缓存，下次重试",
+                                           category: .appStore)
+                }
+                return page
+            } catch {
+                htmlLock.withLock {
+                    htmlInflight[key] = nil
+                }
+                throw error
             }
-            htmlInflight[key] = nil
-            htmlLock.unlock()
-            // 不是详情页就不落缓存，下次进入重新抓（本次仍把页面交回去解析，行为不变）。
-            if !page.isAppPage {
-                LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 未取到详情页，本次结果不缓存，下次重试",
-                                       category: .appStore)
-            }
-            return page
-        } catch {
-            htmlLock.lock()
-            htmlInflight[key] = nil
-            htmlLock.unlock()
-            throw error
         }
     }
 

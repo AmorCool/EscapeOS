@@ -3,7 +3,10 @@ import Foundation
 /// 进程管理诊断日志：sysmontap 内存查询每一步的关键事件记录到
 /// `Documents/SysmonLogs/sysmon.log`——独立于 LoginLogger，互不污染.
 /// 进程管理界面 toolbar 的日志按钮直接分享本文件.
-final class SysmonLogger {
+/// `@unchecked Sendable`：本类是可跨线程调用的日志器——唯一可变状态 `buffer`
+/// 的每次读写都在 `lock`（`NSLock`）保护下（`log` / `fullLog` / `clear`），
+/// 因此跨隔离域共享引用是安全的（复用类内已有的锁，而不是新增逃逸）。
+final class SysmonLogger: @unchecked Sendable {
     static let shared = SysmonLogger()
 
     private let lock = NSLock()

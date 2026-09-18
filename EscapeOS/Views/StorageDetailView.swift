@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Swift 6：`StorageDetailInfo` 含 `raw: [String: Any]`（`Any` 非 Sendable），
+/// 整个类型因此不是 Sendable，不能作为 `Task.detached` 的返回类型跨 actor 边界传回。
+/// 这里用薄包装**转移**（不是共享）该值：它由 detached 任务内部一次性构造完成，
+/// 返回后只作为 `@State` 被主线程只读展示，之后没有任何线程再写入或并发访问。
+private struct StorageDetailBox<T>: @unchecked Sendable { let value: T }
+
 /// v0.3.293：硬盘详情面板（移植爱思「硬盘详情」）
 /// 数据源：diagnostics_relay IORegistry → AppleEmbeddedNVMeController（真机实测 46 键）
 struct StorageDetailView: View {
@@ -41,9 +47,11 @@ struct StorageDetailView: View {
         loading = true
         defer { loading = false }
         do {
-            info = try await Task.detached(priority: .userInitiated) {
-                try StorageDetailService.fetch()
+            // Swift 6：经 StorageDetailBox 把非 Sendable 的 StorageDetailInfo 转移回主线程
+            let boxed = try await Task.detached(priority: .userInitiated) {
+                StorageDetailBox(value: try StorageDetailService.fetch())
             }.value
+            info = boxed.value
             errorText = nil
         } catch {
             errorText = error.localizedDescription

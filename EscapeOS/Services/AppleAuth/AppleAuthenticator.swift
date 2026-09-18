@@ -36,10 +36,10 @@ enum GrandSlamHTTP {
 /// 使用本项目自带的 `GSAAuth`（SRP-6a）完成 init → complete 握手，支持两步验证（受信任设备 / 短信），
 /// 成功后返回 `Account` 与 `AppleAPISession`.全程只依赖原生框架.
 enum AppleAuthenticator {
-    static let dateFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        return f
-    }()
+    /// Swift 6 并发检查：`ISO8601DateFormatter` 不是 Sendable，无法作为共享静态实例。
+    /// 改为**按需构造**的计算属性：原来是「无参构造、不再修改」的静态实例，
+    /// 输出与配置完全一致，只是不再共享同一个对象（调用点在认证流程里，开销可忽略）。
+    static var dateFormatter: ISO8601DateFormatter { ISO8601DateFormatter() }
 
     static let gsaURL = URL(string: "https://gsa.apple.com/grandslam/GsService2")!
     static let qhURL = URL(string: "https://developerservices2.apple.com/services/QH65B2/")!

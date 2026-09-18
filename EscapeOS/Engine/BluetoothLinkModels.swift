@@ -55,11 +55,13 @@ enum BluetoothLinkState: Equatable {
 
 /// 链路常量（UUID 双方一致；广播名按角色区分）.
 enum BluetoothLink {
-    static let serviceUUID = CBUUID(string: "E5C0A100-1B2F-4E6A-9A11-0E50F1A1B001")
-    /// A 机 notify、B 机订阅：坐标下行.
-    static let coordinateCharacteristicUUID = CBUUID(string: "E5C0A101-1B2F-4E6A-9A11-0E50F1A1B001")
-    /// B 机 write、A 机接收：状态回报上行.
-    static let statusCharacteristicUUID = CBUUID(string: "E5C0A102-1B2F-4E6A-9A11-0E50F1A1B001")
+    /// Swift 6 并发检查：`CBUUID` 非 Sendable，但这三个都是**构造后永不修改的常量**
+    /// （只用于广播/订阅时的匹配比较），跨线程只读访问安全。
+    nonisolated(unsafe) static let serviceUUID = CBUUID(string: "E5C0A100-1B2F-4E6A-9A11-0E50F1A1B001")
+    /// A 机 notify、B 机订阅：坐标下行（同上：不可变常量）.
+    nonisolated(unsafe) static let coordinateCharacteristicUUID = CBUUID(string: "E5C0A101-1B2F-4E6A-9A11-0E50F1A1B001")
+    /// B 机 write、A 机接收：状态回报上行（同上：不可变常量）.
+    nonisolated(unsafe) static let statusCharacteristicUUID = CBUUID(string: "E5C0A102-1B2F-4E6A-9A11-0E50F1A1B001")
 
     /// 广播名：广播包用户可用数据只有 28 字节，128-bit serviceUUID 已占 18，名字必须极短.
     static func broadcastName(for role: BluetoothLinkRole) -> String {

@@ -73,7 +73,10 @@ final class SharedDocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
 
 /// Retains picker delegates for the lifetime of the presentation so ARC does not
 /// release them before the delegate callback fires.
-final class SharedDocumentPickerDelegateStore {
+/// `@unchecked Sendable`：唯一可变状态 `delegates` 的读写（`retain` / `release`）
+/// 都在 `lock`（`NSLock`）保护下；本类本身就是要被 picker 回调（可能在其它线程）
+/// 访问的，复用类内已有的锁即可安全跨隔离域共享。
+final class SharedDocumentPickerDelegateStore: @unchecked Sendable {
     static let shared = SharedDocumentPickerDelegateStore()
     private var delegates: [SharedDocumentPickerDelegate] = []
     private let lock = NSLock()

@@ -9,7 +9,11 @@ import Foundation
 /// B 机 = `CBCentralManager`（订阅坐标特征、写状态特征）.
 /// 所有 CoreBluetooth 回调都在私有串行队列，`@Published` 一律回主线程更新.
 final class BLECoordinator: NSObject, ObservableObject {
-    static let shared = BLECoordinator()
+    /// Swift 6 并发检查：本类型非 Sendable，但**全部可变状态只在私有串行队列 `queue` 内读写** ——
+    /// 公开 API 一律 `queue.async` 进入（CoreBluetooth 回调也在同一条队列），
+    /// `@Published` 更新统一经 `DispatchQueue.main.async` 回主线程。
+    /// 因此实例本身线程安全，`shared` 跨线程共享无风险。
+    nonisolated(unsafe) static let shared = BLECoordinator()
 
     @Published private(set) var state: BluetoothLinkState = .off
     @Published private(set) var isActive = false

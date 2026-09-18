@@ -11,7 +11,11 @@
 import AVFoundation
 
 final class BackgroundAudioManager {
-    static let shared = BackgroundAudioManager()
+    /// Swift 6 并发检查：本类型非 Sendable。可变状态（isRunning / persistentEnabled /
+    /// activityCount / healthCheckTimer）只在主线程访问 —— 公开入口
+    /// `start/stop/requestStart/requestStop` 的调用方 `WirelessKeepAlive` 由配对 UI 触发，
+    /// 通知与定时器回调也在主队列。因此 `shared` 共享无风险。
+    nonisolated(unsafe) static let shared = BackgroundAudioManager()
 
     private var engine = AVAudioEngine()
     private var player = AVAudioPlayerNode()

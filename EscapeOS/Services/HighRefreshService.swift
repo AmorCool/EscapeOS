@@ -12,7 +12,12 @@ import Foundation
 import QuartzCore
 import UIKit
 
-final class HighRefreshService: NSObject, ObservableObject {
+/// `@unchecked Sendable`：可变状态（`displayLink` / `frameCount` / `lastSample` /
+/// `@Published isRunning`·`measuredFPS`）只在主线程写——`start` / `stop` 由 UI 调用，
+/// `tick` 是 CADisplayLink 回调（主 runloop）。唯一的跨线程访问是 SSH 诊断命令
+/// （`SSHServerService.execute`，非隔离上下文）对 `isRunning` / `measuredFPS` /
+/// `maxFPS` 三个标量做只读快照。跨线程不存在并发写。
+final class HighRefreshService: NSObject, ObservableObject, @unchecked Sendable {
     static let shared = HighRefreshService()
 
     @Published private(set) var isRunning = false
