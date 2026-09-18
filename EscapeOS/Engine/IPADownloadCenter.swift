@@ -510,7 +510,21 @@ final class IPADownloadCenter: ObservableObject {
         job.localFileName = fileName
         jobs.insert(job, at: 0)
         let id = job.id
+        // ★★★ v0.3.413（D8 修法 B）：**安装前把台账里的 sinf 写回包内**。
+        //
+        // 这是 D8 的核心修复。牛蛙源的加密包只有包内有 `SC_Info/<CFBundleExecutable>.sinf`
+        // 才能过 FairPlay 验证；而「下载管理 → 重装」走的是本方法（`installLocal`），
+        // 它以前**读不到**内存里的 `Job.sinfBase64`（那个 Job 早就结束了）→ 必然报
+        // 「该 IPA 是加密包，但缺少 SC_Info/*.sinf」（真机日志实证）。
+        //
+        // 现在 sinf 跟着台账落盘（见 `IPADownloadLibrary.record(sinfBase64:)`），
+        // 这里读回来写进包内即可 —— **不需要重下**。
+        // 写包是几百 MB 的 ZIP 操作，必须在 detached 里跑（不能占主线程）。
+        let sinfBase64 = IPADownloadLibrary.shared.sinf(forFileName: fileName)
         Task.detached(priority: .userInitiated) {
+            if let sinfBase64 {
+                PackageSINFWriter.writeIfNeeded(sinfBase64: sinfBase64, ipaPath: path)
+            }
             do {
                 try await AppStoreInstallService.installLocalIPA(
                     path,
@@ -711,7 +725,11 @@ final class IPADownloadCenter: ObservableObject {
                                                  // 才由 `onResolvedURL` 回填到 job 上的（AppleID 通道尤其如此）
                                                  // → 用快照会**永远写进 nil**。
                                                  sourceURL: writeURL,
-                                                 storeItemId: writeSID)
+                                                 storeItemId: writeSID,
+                                                 // v0.3.413（D8 修法 B）：sinf 一并落台账 ——
+                                                 // 于是「下载管理 → 重装」也能把它读回来写进包内，
+                                                 // 不必重下（以前 sinf 只活在内存 Job 里，重装必失败）。
+                                                 sinfBase64: current.sinfBase64)
                 // v0.3.412：把 sinf 写回包内 —— 这是「安装前的准备」，与「是否自动装」**无关**。
                 // 牛蛙源的用户即使手动点安装也必须有 sinf 才能过 FairPlay 验证。
                 // 以前 `installAfterDownload` 顺手做这一步；现在彻底不自动装，这一步独立出来：

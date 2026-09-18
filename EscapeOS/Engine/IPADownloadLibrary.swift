@@ -37,6 +37,16 @@ struct IPADownloadItem: Codable, Identifiable, Hashable {
     var isEncrypted: Bool?
     var hasSINF: Bool?
     var lastInstalledAt: Date?
+    /// v0.3.413（D8 修法 B）：**下载时拿到的 sinf**（base64 的标准 `.sinf` 容器）。
+    ///
+    /// 为什么必须落台账：牛蛙源的加密包只有把 sinf 写回包内 `SC_Info/` 才能过
+    /// FairPlay 验证。而 sinf 以前只活在内存里的 `Job.sinfBase64` ——
+    /// 于是「下载管理 → 重装」（走 `installLocal`，读不到内存 Job）必然失败：
+    /// 真机报「该 IPA 是加密包，但缺少 SC_Info/*.sinf」。
+    ///
+    /// 落盘之后，**重装时能从这里读回来写进包内**，不需要重下。
+    /// 只有牛蛙源有；爱思源（服务端已签名）与 AppleID 通道（`SignatureInjector` 自己写回）为 nil。
+    var sinfBase64: String? = nil
 
     var id: String { fileName }
 
@@ -137,7 +147,8 @@ final class IPADownloadLibrary: @unchecked Sendable {
                 iconURL: String?,
                 source: String,
                 sourceURL: String? = nil,
-                storeItemId: String? = nil) {
+                storeItemId: String? = nil,
+                sinfBase64: String? = nil) {
         let name = fileURL.lastPathComponent
         var index = loadIndex()
         index.removeAll { $0.fileName == name }
@@ -151,8 +162,19 @@ final class IPADownloadLibrary: @unchecked Sendable {
         if let sourceURL, !sourceURL.isEmpty { item.sourceURL = sourceURL }
         // 同理：没给商品号就保留台账里已有的（别把它抹成 nil）
         if let storeItemId, !storeItemId.isEmpty { item.storeItemId = storeItemId }
+        // v0.3.413（D8 B）：sinf 也落台账 —— 同样只在真拿到时覆盖，别把已有的抹成 nil。
+        // 这是「重装不用重下」的关键：`installLocal` 会从这里读回来写进包内。
+        if let sinfBase64, !sinfBase64.isEmpty { item.sinfBase64 = sinfBase64 }
         index.append(item)
         saveIndex(index)
+    }
+
+    /// v0.3.413（D8 修法 B）：读回该包**下载时拿到的 sinf**（base64）。没有则 `nil`。
+    ///
+    /// 用途：`IPADownloadCenter.installLocal` 在安装前把它写回包内 `SC_Info/`，
+    /// 让「下载管理 → 重装」也能过 FairPlay 验证（以前必然报「缺少 SC_Info/*.sinf」）。
+    func sinf(forFileName fileName: String) -> String? {
+        loadIndex().first { $0.fileName == fileName }?.sinfBase64
     }
 
     /// 安装成功后打时间戳
