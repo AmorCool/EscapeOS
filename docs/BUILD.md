@@ -1,15 +1,18 @@
 # Building EscapeOS
 
-This repository carries two build tracks. Only the first one produces the IPA that ships.
+This repository carries exactly **one** build track.
 
 | Track | Defined by | Status | Output |
 |---|---|---|---|
-| **Xcode 26 native** (default) | `.github/workflows/build-xcode.yml` | **Active in CI** | `EscapeSpace-<version>-xcode-unsigned.ipa` |
-| **Theos** | `Makefile` | Local only — no CI workflow | `EscapeSpace-<version>.ipa` (from a `.deb`) |
+| **Xcode 26 native** | `.github/workflows/build-xcode.yml` | **Active** | `EscapeSpace-<version>-xcode-unsigned.ipa` |
 
 `.github/workflows/build-xcode.yml` is the **only** workflow in the tree, so a `v*` tag starts
-exactly one run. The Theos CI workflow and the separate MHA (MobileHouseArrest) workflow were
-deleted; the Theos track survives only as the local `Makefile` path described in section 2.
+exactly one run.
+
+The two other tracks that used to exist are **gone**: the Theos track (its `Makefile` and its CI
+workflow `build.yml`) and the MHA / MobileHouseArrest track (`mha-build.yml`). Both CI workflows
+had been `disabled_manually` for a long time before the files were deleted. Only the Xcode track
+ever produced the shipping IPA.
 
 ---
 
@@ -36,8 +39,7 @@ Runner: `macos-latest`. Job name: `xcode-build`. Permissions: `contents: write` 
    `Xcode*.app`.
 3. **Install tooling** via Homebrew: `xcodegen`, `ldid`, `cmake`.
 4. **Restore caches** — SAP assets + `DerivedData`, the Rust toolchain, the Cargo registry, and
-   sccache. The Cargo and sccache caches use the shared `escapeos-build-cache` scope so they are
-   visible to the Theos track too.
+   sccache. The Cargo and sccache caches use the shared `escapeos-build-cache` scope.
 5. **Build `libidevice_ffi.a`** for `aarch64-apple-ios` from the vendored `rust/idevice-ffi`
    source, unless the cross-run artifact cache reports a source-hash hit. Then assemble
    `rust-libs/libidevice_ffi.xcframework` and copy `idevice.h` to `EscapeOS/Tunnel/`.
@@ -104,42 +106,19 @@ xcodebuild build \
 
 Key settings, all in `project.yml`: `PRODUCT_NAME = EscapeSpace`,
 `PRODUCT_BUNDLE_IDENTIFIER = com.ipaside.escapeos`, `IPHONEOS_DEPLOYMENT_TARGET = 18.0`,
-`SWIFT_VERSION = 5.0`, `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` for the version.
+`SWIFT_VERSION = 6.0`, `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` for the version.
 
 Sources are declared at **directory** level (`EscapeOS`, `ZSign`, `Resources`, and the vendored
-packages), so new `.swift` files need no project registration. The Theos track is the opposite —
-see below.
+packages), so new `.swift` files need no project registration. (`ZSign` is a **runtime**
+dependency of the app — it signs native modules — so it stays even though the Theos track is
+gone.)
+
+If a second `v*`-tag workflow is ever added, remember it would run on the same tag and publish a
+second IPA into the same Release.
 
 ---
 
-## 2. Theos track
-
-`Makefile` builds the same app with Theos. Its source list is **explicit**
-(`EscapeSpace_FILES`), so any new `.swift` file must be added there for this track to see it.
-
-Relevant settings: `TARGET = iphone:clang:16.5:18.0`, `ARCHS = arm64`,
-`APPLICATION_NAME = EscapeSpace`, `EscapeSpace_CODESIGN_FLAGS = -SEscapeSpace.entitlements`.
-
-### Local build (Linux / WSL)
-
-```sh
-export THEOS=~/theos
-make clean package
-```
-
-This is what `README.md` documents. The default target pins the **iPhoneOS 16.5 SDK**, because
-Apple's 18+/26+ SDKs require Apple Clang and fail under Linux clang.
-
-`EscapeOS/Tunnel/libidevice_ffi.a` is not in git (see the dependencies section). Place it at
-`EscapeOS/Tunnel/libidevice_ffi.a` before `make package`, or the link step fails.
-
-There is no CI variant of this track any more. If you ever re-add one, remember that a `v*`-tag
-workflow would run on the same tag as the Xcode track and publish a second IPA into the same
-Release.
-
----
-
-## 3. Dependencies and generated inputs
+## 2. Dependencies and generated inputs
 
 | Item | Where it comes from | Notes |
 |---|---|---|
@@ -157,7 +136,7 @@ there is no `.a` to download from them.
 
 ---
 
-## 4. iOS 26 SDK and the tab bar
+## 3. iOS 26 SDK and the tab bar
 
 The floating Liquid Glass tab bar is applied automatically when the app is **linked against the
 iOS 26 SDK**, which means Xcode 26. This is an OS-level "linked on or after" rule; runtime hacks
@@ -169,7 +148,7 @@ release builds — that flag opts out of Liquid Glass.
 
 ---
 
-## 5. When a build fails
+## 4. When a build fails
 
 CI is the only compiler this project has (there is no local Xcode on the development machine), so
 failures are read from the run, not from a local log:

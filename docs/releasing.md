@@ -37,15 +37,17 @@ export GH_TOKEN=$(git remote get-url origin | sed -E 's|.*//([^@]+)@.*|\1|' | se
 
 ---
 
-## 1. Bump the version in three places
+## 1. Bump the version in two places
 
-All three must agree. A mismatch ships an app that reports one version and installs as another.
+Both must agree. A mismatch ships an app that reports one version and installs as another.
 
 | File | Key(s) |
 |---|---|
-| `control` | `Version:` |
 | `project.yml` | `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` |
 | `Resources/Info.plist` | `CFBundleShortVersionString` and `CFBundleVersion` |
+
+(The Theos `control` file used to be a third location. It was deleted along with the whole Theos
+track, so `control` no longer exists.)
 
 - `MARKETING_VERSION` must equal `CFBundleShortVersionString` — this is the `<version>` in the IPA
   file name and the tag.
@@ -69,7 +71,7 @@ Stage only the files this release touches. Do **not** use `git add -A`: it sweep
 progress and other people's uncommitted changes.
 
 ```sh
-git add control project.yml Resources/Info.plist CHANGELOG.md
+git add project.yml Resources/Info.plist CHANGELOG.md
 git commit -m "v0.x.y"
 git push origin migrate-xcode
 ```
@@ -178,6 +180,6 @@ already failed for that reason, the cleanest fix is still a new version number.
   pushing to `migrate-xcode` costs nothing until you tag.
 - If a second `v*`-tag workflow is ever added (a Theos or MHA track), remember it would publish a
   second, differently built IPA into the same Release.
-- `CHANGELOG.md` and the three version locations are edited by one person at a time. Two parallel
+- `CHANGELOG.md` and the two version locations are edited by one person at a time. Two parallel
   tasks editing them will interleave, and one set of changes will be attributed to the wrong
   commit.
