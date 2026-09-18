@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.431] - 2026-09-18
+
+### 修 v0.3.430 的 Rust 编译错误（漏 import）
+
+CI 在 `Build libidevice_ffi.a (Rust, aarch64-apple-ios)` 步骤报错：
+
+```
+error[E0425]: cannot find type `IdeviceError` in this scope
+  305 | return Err(IdeviceError::UnexpectedResponse(format!(
+error[E0433]: cannot find type `IdeviceError` in this scope
+  312 | .map_err(|_| IdeviceError::UnexpectedResponse("plist 正文非 UTF-8".into()))
+error: could not compile `idevice-ffi` (lib) due to 4 previous errors
+```
+
+**原因**：我在 `adapter.rs` 里写了 `IdeviceError::UnexpectedResponse`，但**没 import `IdeviceError`**。
+
+**修法**：加一行 `use idevice::IdeviceError;`
+（与项目里 `mcinstall.rs` / `debug_proxy.rs` / `mobilebackup2.rs` 等 8 个文件的写法一致）。
+
+**顺带确认一件好事**：CI **只报了这 4 个 import 错误**，
+**没有报 `run_sync` 的 `Send + 'static` 约束错误** ——
+说明 `ReadWriteOpaque.inner` 的 `Box<dyn ReadWrite>` 满足该约束，
+`stream_send_xml` / `stream_recv_xml` 的写法是可行的（这是我提交前唯一担心的风险）。
+
 ## [0.3.430] - 2026-09-18
 
 ### airlift 第 4 步：连 `atc` 服务 + RSDCheckin（被功能调用时自动唤起）

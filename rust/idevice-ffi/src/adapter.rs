@@ -4,6 +4,7 @@ use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
 
 use idevice::tcp::handle::StreamHandle;
+use idevice::IdeviceError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::core_device_proxy::AdapterHandle;
