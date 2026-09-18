@@ -100,7 +100,10 @@ struct IPADownloadManagerView: View {
                     center.cancel(job.id)
                     reload()
                 },
-                isPendingDownload: true)
+                // v0.3.413：只有**真的还在进行中**才把「覆盖安装 / 在线安装」置灰标「下载中」。
+                // 以前这里写死 `true` —— 于是一个**已完成**的任务行（若因去重时序残留）
+                // 点开会显示"下载中"，与行上的「已完成 100%」自相矛盾（用户截图）。
+                isPendingDownload: job.phase.isBusy)
         }
         // v0.3.394（用户硬要求）：**装完不用退出这一页就能自己刷新**。
         //
@@ -150,7 +153,25 @@ struct IPADownloadManagerView: View {
     private var mergedRows: [ListRow] {
         let known = Set(items.map(\.fileName))
         let orphanJobs = center.jobs.filter { job in
-            !known.contains(job.localFileName ?? job.expectedFileName)
+            // ★★★ v0.3.413 真机 bug 修复（用户截图）：「显示已完成 100%，但没有安装按钮」。
+            //
+            // 根因：下载完成的那一刻，台账**已经写盘**，但页面 `items` 是**上一次 reload 的
+            // 快照**，`finishedTick` 的 reload 可能还没跑到。这一刻用 `items` 去重会失败，
+            // 于是同一个包被列成两行：
+            //   · 「任务行」（`jobRow`）—— **只画进度条，永远不画「安装」按钮**；
+            //   · 「台账行」（`fileRow`）—— 有「安装」按钮。
+            // 用户点那行「已完成」时走的是任务行 → `actionJob` → `isPendingDownload: true`
+            // → 「覆盖安装 / 在线安装」被置灰标「下载中」（第二张图就是这个面板）。
+            //
+            // 修法：**已成功完成、且文件已落盘**（`localFileName != nil`）的 job
+            // 一律不再单独成行 —— 由台账行承担显示（`items()` 会扫磁盘补登记，一定会出现）。
+            // 这样彻底摆脱「内存快照 vs 磁盘台账」的时序依赖。
+            //
+            // 为什么不像以前那样直接查磁盘台账：`IPADownloadLibrary.items()` 里带
+            // `IPAPackageInspector.inspect`（要解 IPA 包），每次渲染都调会卡界面。
+            // 失败的任务**必须保留**（用户要能重试），所以只过滤 `.done`。
+            if job.phase == .done, job.localFileName != nil { return false }
+            return !known.contains(job.localFileName ?? job.expectedFileName)
         }
         let busy = orphanJobs.filter { $0.phase.isBusy }.map(ListRow.job)
         let settled = orphanJobs.filter { !$0.phase.isBusy }.map(ListRow.job)
