@@ -886,6 +886,114 @@ struct IdeviceFfiError *stream_recv_xml(struct ReadWriteOpaque *stream_handle,
                                         char **out);
 
 /**
+ * Sends an XML payload over a ReadWriteOpaque stream with a selectable
+ * length-prefix byte order (4-byte LE or BE prefix + XML body).
+ *
+ * Needed because the AirTraffic (atc) service frames may use little-endian
+ * length prefixes while the RSD handshake is big-endian — see
+ * `stream_recv_xml_auto` for the evidence.
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`xml`] - The XML payload (null-terminated string)
+ * * [`little_endian`] - true = little-endian length prefix, false = big-endian
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `xml` must be a valid null-terminated C string.
+ */
+struct IdeviceFfiError *
+stream_send_xml_ordered(struct ReadWriteOpaque *stream_handle, const char *xml,
+                        bool little_endian);
+
+/**
+ * Reads an XML payload from a ReadWriteOpaque stream, auto-detecting the
+ * byte order of the 4-byte length prefix.
+ *
+ * The prefix is interpreted big-endian first, then little-endian; the first
+ * interpretation that lands in 1..=8MiB wins. If neither is plausible the
+ * call fails with an error message containing the raw hex bytes and both
+ * interpretations, e.g. `raw=B8 00 00 00 be=3087007744 le=184`.
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`out`] - Pointer to store the newly allocated string
+ * * [`used_little_endian`] - Optional (may be NULL); receives the detected order
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `out` must be a valid pointer. Free the returned string with
+ * `idevice_string_free`. `used_little_endian` may be NULL.
+ */
+struct IdeviceFfiError *
+stream_recv_xml_auto(struct ReadWriteOpaque *stream_handle, char **out,
+                     bool *used_little_endian);
+
+/**
+ * Sends raw bytes over a ReadWriteOpaque stream with a selectable length-prefix
+ * byte order (4-byte LE or BE prefix + raw body).
+ *
+ * Needed because the AirTraffic (atc) frames carry a *binary* plist body
+ * (device evidence: `plist 正文非 UTF-8`), and a binary body necessarily
+ * contains NUL bytes — so it cannot go through `stream_send_xml` /
+ * `stream_send_xml_ordered`, which take a NUL-terminated C string.
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`bytes`] - Pointer to the raw payload
+ * * [`len`] - Number of bytes in the payload
+ * * [`little_endian`] - true = little-endian length prefix, false = big-endian
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `bytes` must point to at least `len` readable bytes.
+ */
+struct IdeviceFfiError *stream_send_bytes(struct ReadWriteOpaque *stream_handle,
+                                          const uint8_t *bytes, uintptr_t len,
+                                          bool little_endian);
+
+/**
+ * Reads one raw frame from a ReadWriteOpaque stream (4-byte length prefix +
+ * raw body), auto-detecting the prefix byte order. The body is NOT required
+ * to be UTF-8.
+ *
+ * Same detection rule as `stream_recv_xml_auto`: big-endian is tried first,
+ * then little-endian; the first interpretation landing in 1..=8MiB wins. If
+ * neither is plausible the call fails with the raw hex bytes and both
+ * interpretations, e.g. `raw=B8 00 00 00 be=3087007744 le=184`.
+ *
+ * Has a 15s timeout — without it `read_exact` would block forever when the
+ * device sends nothing.
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`out_bytes`] - Receives a `malloc`-allocated buffer with the body
+ * * [`out_len`] - Receives the body length in bytes
+ * * [`used_little_endian`] - Optional (may be NULL); receives the detected order
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `out_bytes` and `out_len` must be valid pointers. Free the returned buffer
+ * with `free()` (it is allocated with `malloc`, NOT `idevice_string_free`).
+ * `used_little_endian` may be NULL.
+ */
+struct IdeviceFfiError *
+stream_recv_frame_raw(struct ReadWriteOpaque *stream_handle, uint8_t **out_bytes,
+                      uintptr_t *out_len, bool *used_little_endian);
+
+/**
  * Frees a string allocated by this library
  *
  * # Arguments

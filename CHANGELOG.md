@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.3.441] - 2026-09-19
+
+### AT 帧改**二进制 plist** 收发（重大发现）+ Gestalt 入口移入主页百宝箱
+
+**1. ★ AT 帧不是 XML，是「小端长度前缀 + 二进制 plist」**
+
+v0.3.439 真机日志给出了决定性证据：
+```
+[airlift] 读 AT 首条消息 出错 code=13 UnexpectedResponse("plist 正文非 UTF-8")
+```
+对比上一版的 `plist 长度异常: 3087007744`（= 大端 `0xB8000000`，30 亿，不可能）——
+同样 4 字节按**小端**读是 **184**（合理的小 plist 大小）。v0.3.439 的
+「先大端、不合法再小端」规则**接受了小端这一支**，正文被完整读出来（184 字节），
+只是不是文本。⇒ 两条结论：
+
+- **AT 帧的长度前缀是 4 字节小端**。⚠️ **RSD 帧仍是 4 字节大端 + XML** ——
+  同一根 socket 上，RSD 阶段和 AT 阶段的帧格式**不一样**，别混。
+- **AT 帧的正文是二进制**，极可能是二进制 plist（`bplist00`）。
+
+之前一直不通，是「方向 + 格式」双重错。
+
+**2. 修法：项目已链 libplist，XML/二进制都能处理**
+
+新增两个 FFI（原有 4 个 `stream_*` 一行未动，RSD 握手仍在用）：
+```c
+struct IdeviceFfiError *stream_send_bytes(struct ReadWriteOpaque *, const uint8_t *bytes,
+                                          uintptr_t len, bool little_endian);
+struct IdeviceFfiError *stream_recv_frame_raw(struct ReadWriteOpaque *, uint8_t **out_bytes,
+                                              uintptr_t *out_len, bool *used_little_endian);
+```
+- **发**：保留现有 `atMessage(...)` 拼 XML → `plist_from_xml` → `plist_to_bin` 转二进制 → 发。
+- **收**：拿原始字节 → **先打前 32 字节十六进制**（判断「到底是不是 `bplist00`」的唯一确证）
+  → `plist_from_memory`（自动识别 XML/二进制/JSON）→ `plist_to_xml` 转**可读文本**落盘
+  → 从解析出的 plist 取 `Command`（二进制里字符串查找 `<key>Command</key>` 必然失效，旧实现已换掉）。
+- `stream_recv_frame_raw` 同样带 **15s 超时**（现在三个读函数都有超时）。
+- libplist 的产出用 **`plist_mem_free`** 释放（不是 `free`）—— 项目里已有 7 处先例，
+  用错会每次读值都泄漏。
+
+**3. Gestalt 入口移入主页百宝箱（按用户选择）**
+
+- **底部 tab**：删掉 `Gestalt`，只剩 **主页 / 更多** 两栏（`MainTab.gestalt` 全仓无其它引用）。
+- **入口**：主页 → 百宝箱 → 「工具」卡片里的**第一个真实可点条目**（原来那 4 项全是「即将上线」占位）：
+  「Gestalt 编辑 / 查询 · 修改 MobileGestalt 键值（含备份）」→ 右侧 chevron。
+- **「工具」卡上移到设备控制卡之前**：百宝箱默认 detent 只有 0.4，排第三张的卡片在折叠区之外，
+  入口会看不见，得先上拉 —— 真实可跳转的条目优先级高于两个开关。
+- `GestaltView` 去掉最外层 `NavigationStack`（它现在是被 push 进来的；
+  自带一层会套出第二层栈、页面没有返回按钮）。`git diff --ignore-all-space` 确认**只删了那 2 行**。
+- **导航时序**：百宝箱是 sheet，不能在里面直接 push，也不能「关 sheet 的同时 push」（会被吞）。
+  用 `sheet(isPresented:onDismiss:)` 做中转 —— `onDismiss` 里再置 `showGestalt`，此时 sheet 已完全消失。
+- `EscapeOS/Tunnel/idevice.h`（CI 会从 `rust/idevice-ffi/idevice.h` 拷过去的**跟踪副本**）已同步，
+  免得以后读头文件时找不到这些新函数。
+
 ## [0.3.440] - 2026-09-19
 
 ### 新增：AFC 越权路径**只读**探测（验证参考项目那条「不用 AT 协议」的捷径）

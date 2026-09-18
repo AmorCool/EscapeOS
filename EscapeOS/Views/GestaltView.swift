@@ -28,169 +28,167 @@ struct GestaltView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            // v0.3.189：彻底重构——删除 Picker 控件（v0.3.184 VStack 顶置被骂丑；
-            // v0.3.187 大标题+safeAreaInset 闪退；v0.3.188 toolbar principal 仍不满意）.
-            // "编辑/备份"切换改为 toolbar Menu 按钮（点开切换），导航栏与模块板块
-            // 一致：大标题 + Leading 齿轮 + Trailing Menu + ellipsis 菜单，
-            // List 内只有内容，**屏幕上不再有任何 segmented control**.
-            List {
-                if gestaltPane == .edit {
-                    editPane
-                } else {
-                    backupPane
-                }
+        // v0.3.189：彻底重构——删除 Picker 控件（v0.3.184 VStack 顶置被骂丑；
+        // v0.3.187 大标题+safeAreaInset 闪退；v0.3.188 toolbar principal 仍不满意）.
+        // "编辑/备份"切换改为 toolbar Menu 按钮（点开切换），导航栏与模块板块
+        // 一致：大标题 + Leading 齿轮 + Trailing Menu + ellipsis 菜单，
+        // List 内只有内容，**屏幕上不再有任何 segmented control**.
+        List {
+            if gestaltPane == .edit {
+                editPane
+            } else {
+                backupPane
             }
-            .navigationTitle("Gestalt")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    // 综合菜单：日志/重载/扩展/备份分享
-                    Menu {
+        }
+        .navigationTitle("Gestalt")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                // 综合菜单：日志/重载/扩展/备份分享
+                Menu {
+                    Button {
+                        logPresented = true
+                    } label: {
+                        Label("查看日志", systemImage: "text.alignleft")
+                    }
+                    if model.loaded {
                         Button {
-                            logPresented = true
+                            model.load()
                         } label: {
-                            Label("查看日志", systemImage: "text.alignleft")
+                            Label("重新加载", systemImage: "arrow.clockwise")
                         }
-                        if model.loaded {
-                            Button {
-                                model.load()
-                            } label: {
-                                Label("重新加载", systemImage: "arrow.clockwise")
-                            }
-                            Button {
-                                model.grantExtension(for: model.gestaltPath)
-                            } label: {
-                                Label("刷新扩展", systemImage: "key.fill")
-                            }
-                            Button {
-                                shareBackup()
-                            } label: {
-                                Label("备份 MobileGestalt", systemImage: "square.and.arrow.up")
-                            }
+                        Button {
+                            model.grantExtension(for: model.gestaltPath)
+                        } label: {
+                            Label("刷新扩展", systemImage: "key.fill")
                         }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Button {
+                            shareBackup()
+                        } label: {
+                            Label("备份 MobileGestalt", systemImage: "square.and.arrow.up")
+                        }
                     }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    // v0.3.189：编辑/备份切换——Menu 按钮（取代 v0.3.179 picker），
-                    // 显示当前 pane 名称 + chevron 下拉，**屏幕上不再有 Picker 控件**.
-                    Menu {
-                        ForEach(GestaltPane.allCases) { pane in
-                            Button {
-                                gestaltPane = pane
-                            } label: {
-                                if gestaltPane == pane {
-                                    Label(pane.rawValue, systemImage: "checkmark")
-                                } else {
-                                    Text(pane.rawValue)
-                                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                // v0.3.189：编辑/备份切换——Menu 按钮（取代 v0.3.179 picker），
+                // 显示当前 pane 名称 + chevron 下拉，**屏幕上不再有 Picker 控件**.
+                Menu {
+                    ForEach(GestaltPane.allCases) { pane in
+                        Button {
+                            gestaltPane = pane
+                        } label: {
+                            if gestaltPane == pane {
+                                Label(pane.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(pane.rawValue)
                             }
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(gestaltPane.rawValue)
-                                .font(.body)
-                            Image(systemName: "chevron.down")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(.blue)
                     }
-                }
-            }
-            .alert(item: $model.alertInfo) { info in
-                if let actionLabel = info.actionLabel {
-                    Alert(
-                        title: Text(info.title),
-                        message: Text(info.body),
-                        primaryButton: .default(Text(actionLabel)) {
-                            info.action?()
-                        },
-                        secondaryButton: .cancel()
-                    )
-                } else {
-                    Alert(
-                        title: Text(info.title),
-                        message: Text(info.body),
-                        dismissButton: .cancel()
-                    )
-                }
-            }
-            .onChange(of: model.shouldRespring) { _, newValue in
-                if newValue {
-                    showRespring = true
-                    model.shouldRespring = false
-                }
-            }
-            // v0.3.189：编辑/备份切换由 toolbar Menu 触发（取代 v0.3.184 picker 路径），
-            // 此处监听 gestaltPane 改变以刷新 backupFiles.
-            .onChange(of: gestaltPane) { _, pane in
-                if pane == .backup { backupFiles = model.backupFiles() }
-            }
-            .overlay {
-                if showRespring {
-                    RespringView()
-                        .brightness(-1.0)
-                        .ignoresSafeArea()
-                }
-                if let msg = applyBackupToast {
-                    VStack {
-                        Spacer()
-                        // v0.3.183：白卡风 toast（iOS 标准 secondarySystemBackground + 细边框 + 阴影），
-                        // 取代 v0.3.181 的黑底胶囊（与上方白卡片风格冲突突兀）.
-                        Text(msg)
-                            .font(.footnote)
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule()
-                                    .fill(Color(.secondarySystemBackground))
-                                    .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
-                            )
-                            .overlay(
-                                Capsule().stroke(Color(.separator), lineWidth: 0.5)
-                            )
-                            .padding(.bottom, 60)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(gestaltPane.rawValue)
+                            .font(.body)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
                     }
-                    .allowsHitTesting(false)
+                    .foregroundStyle(.blue)
                 }
             }
-            .onChange(of: applyBackupToast) { _, msg in
-                guard msg != nil else { return }
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(3))
-                    withAnimation { applyBackupToast = nil }
+        }
+        .alert(item: $model.alertInfo) { info in
+            if let actionLabel = info.actionLabel {
+                Alert(
+                    title: Text(info.title),
+                    message: Text(info.body),
+                    primaryButton: .default(Text(actionLabel)) {
+                        info.action?()
+                    },
+                    secondaryButton: .cancel()
+                )
+            } else {
+                Alert(
+                    title: Text(info.title),
+                    message: Text(info.body),
+                    dismissButton: .cancel()
+                )
+            }
+        }
+        .onChange(of: model.shouldRespring) { _, newValue in
+            if newValue {
+                showRespring = true
+                model.shouldRespring = false
+            }
+        }
+        // v0.3.189：编辑/备份切换由 toolbar Menu 触发（取代 v0.3.184 picker 路径），
+        // 此处监听 gestaltPane 改变以刷新 backupFiles.
+        .onChange(of: gestaltPane) { _, pane in
+            if pane == .backup { backupFiles = model.backupFiles() }
+        }
+        .overlay {
+            if showRespring {
+                RespringView()
+                    .brightness(-1.0)
+                    .ignoresSafeArea()
+            }
+            if let msg = applyBackupToast {
+                VStack {
+                    Spacer()
+                    // v0.3.183：白卡风 toast（iOS 标准 secondarySystemBackground + 细边框 + 阴影），
+                    // 取代 v0.3.181 的黑底胶囊（与上方白卡片风格冲突突兀）.
+                    Text(msg)
+                        .font(.footnote)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(Color(.secondarySystemBackground))
+                                .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+                        )
+                        .overlay(
+                            Capsule().stroke(Color(.separator), lineWidth: 0.5)
+                        )
+                        .padding(.bottom, 60)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .onChange(of: applyBackupToast) { _, msg in
+            guard msg != nil else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                withAnimation { applyBackupToast = nil }
+            }
+        }
+        .sheet(isPresented: $logPresented) {
+            NavigationStack {
+                ScrollView {
+                    Text(model.log.joined(separator: "\n"))
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .textSelection(.enabled)
+                }
+                .navigationTitle("诊断日志")
+                .toolbar {
+                    Button("完成") { logPresented = false }
                 }
             }
-            .sheet(isPresented: $logPresented) {
-                NavigationStack {
-                    ScrollView {
-                        Text(model.log.joined(separator: "\n"))
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .textSelection(.enabled)
-                    }
-                    .navigationTitle("诊断日志")
-                    .toolbar {
-                        Button("完成") { logPresented = false }
-                    }
-                }
-            }
-            .sheet(item: $shareTarget) { target in
-                ShareSheet(items: [target.url])
-            }
-            .alert("无法备份", isPresented: Binding(
-                get: { backupError != nil },
-                set: { if !$0 { backupError = nil } }
-            )) {
-                Button("好", role: .cancel) {}
-            } message: {
-                Text(backupError ?? "")
-            }
+        }
+        .sheet(item: $shareTarget) { target in
+            ShareSheet(items: [target.url])
+        }
+        .alert("无法备份", isPresented: Binding(
+            get: { backupError != nil },
+            set: { if !$0 { backupError = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(backupError ?? "")
         }
         .onAppear {
             // 首次进入：延迟一帧再加载，避免首帧渲染被 load() 的 bad_query

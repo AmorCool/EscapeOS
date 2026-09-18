@@ -419,6 +419,145 @@ pub unsafe extern "C" fn stream_recv_xml_auto(
     }
 }
 
+/// 通过 `ReadWriteOpaque` 流发送**任意原始字节**（4 字节长度前缀 + 正文）。
+///
+/// # 为什么需要这个（2026-09-19）
+/// 真机实测（v0.3.439）已确证：**AT 帧的正文不是 XML 文本，而是二进制 plist**
+/// （`stream_recv_xml_auto` 能读出正文但报 `plist 正文非 UTF-8`）。
+/// 所以发送端也不能再发 XML 文本 —— 必须把 plist 先序列化成 `bplist00` 再发。
+/// [`stream_send_xml`] / [`stream_send_xml_ordered`] 只收 NUL 结尾的 C 字符串，
+/// 二进制正文里必然含 `\0`，走不了那条路，故新增本函数。
+///
+/// # Safety
+/// `stream_handle` 必须是由本库分配的有效句柄；
+/// `bytes` 必须指向至少 `len` 个可读字节。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stream_send_bytes(
+    stream_handle: *mut ReadWriteOpaque,
+    bytes: *const u8,
+    len: usize,
+    little_endian: bool,
+) -> *mut IdeviceFfiError {
+    if stream_handle.is_null() || bytes.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+    let inner = unsafe { &mut (*stream_handle).inner };
+    let Some(stream) = inner.as_mut() else {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    };
+    // 拷成 owned Vec：run_sync 的 future 要求 'static，不能借用调用方的缓冲区。
+    let data = unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec();
+
+    let res = run_sync(async move {
+        let len32 = data.len() as u32;
+        let prefix = if little_endian {
+            len32.to_le_bytes()
+        } else {
+            len32.to_be_bytes()
+        };
+        stream.write_all(&prefix).await?;
+        stream.write_all(&data).await?;
+        stream.flush().await?;
+        Ok::<(), IdeviceError>(())
+    });
+
+    match res {
+        Ok(_) => null_mut(),
+        Err(e) => {
+            tracing::error!("stream_send_bytes failed: {e}");
+            ffi_err!(e)
+        }
+    }
+}
+
+/// 通过 `ReadWriteOpaque` 流读取**一帧原始字节**（4 字节长度前缀 + 正文），
+/// **不要求正文是 UTF-8**。
+///
+/// 判定规则与 [`stream_recv_xml_auto`] 完全一致（大端落在 `1..=8MiB` 用大端，
+/// 否则小端落在同一区间用小端；两者都不合法则报错，错误信息带 raw 十六进制
+/// 与两种解释）。
+///
+/// 成功后正文由 `libc::malloc` 分配并写入 `*out_bytes` / `*out_len`，
+/// **调用方用 `free()` 释放**（与 C 运行时同源，不能用 `idevice_string_free`）。
+///
+/// ⚠️ 与 `stream_recv_xml_auto` 一样**必须有 15s 超时**：`read_exact` 无超时会在
+/// 设备不发消息时**永久阻塞**，而调用方已把 `protocolProbeStarted` 置 true，
+/// 会让 airlift 在整个 App 生命周期内永久失效。
+///
+/// # Safety
+/// `stream_handle` 必须是由本库分配的有效句柄；
+/// `out_bytes` / `out_len` 必须是有效指针；`used_little_endian` 可为 NULL。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stream_recv_frame_raw(
+    stream_handle: *mut ReadWriteOpaque,
+    out_bytes: *mut *mut u8,
+    out_len: *mut usize,
+    used_little_endian: *mut bool,
+) -> *mut IdeviceFfiError {
+    if stream_handle.is_null() || out_bytes.is_null() || out_len.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+    let inner = unsafe { &mut (*stream_handle).inner };
+    let Some(stream) = inner.as_mut() else {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    };
+
+    let res: Result<(Vec<u8>, bool), IdeviceError> = run_sync(async move {
+        let frame = async {
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).await?;
+            let be = u32::from_be_bytes(len_buf);
+            let le = u32::from_le_bytes(len_buf);
+            let max_len = 8 * 1024 * 1024;
+            let (len, little) = if (1..=max_len).contains(&be) {
+                (be, false)
+            } else if (1..=max_len).contains(&le) {
+                (le, true)
+            } else {
+                return Err(IdeviceError::UnexpectedResponse(format!(
+                    "raw={:02X} {:02X} {:02X} {:02X} be={be} le={le}",
+                    len_buf[0], len_buf[1], len_buf[2], len_buf[3]
+                )));
+            };
+            let mut buf = vec![0u8; len as usize];
+            stream.read_exact(&mut buf).await?;
+            Ok::<(Vec<u8>, bool), IdeviceError>((buf, little))
+        };
+
+        match tokio::time::timeout(std::time::Duration::from_secs(15), frame).await {
+            Ok(result) => result,
+            Err(_) => Err(IdeviceError::UnexpectedResponse(
+                "读超时：15s 内设备没有发来完整的一帧".into(),
+            )),
+        }
+    });
+
+    match res {
+        Ok((buf, little)) => {
+            // 用 libc::malloc 分配 —— 与 Swift 侧的 free() 同源（都是 libsystem_malloc）。
+            let ptr = unsafe { libc::malloc(buf.len()) } as *mut u8;
+            if ptr.is_null() {
+                return ffi_err!(IdeviceError::UnexpectedResponse(
+                    "malloc 分配收帧缓冲区失败".into()
+                ));
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(buf.as_ptr(), ptr, buf.len());
+                *out_bytes = ptr;
+                *out_len = buf.len();
+                if !used_little_endian.is_null() {
+                    *used_little_endian = little;
+                }
+            }
+            null_mut()
+        }
+        Err(e) => {
+            tracing::error!("stream_recv_frame_raw failed: {e}");
+            ffi_err!(e)
+        }
+    }
+}
+
 /// 通过 `ReadWriteOpaque` 流读取一条 XML（先读 4 字节大端长度，再读正文）。
 ///
 /// 成功后把正文写成 NUL 结尾的 C 字符串存入 `out`

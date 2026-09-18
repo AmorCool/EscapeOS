@@ -4,7 +4,6 @@ import UIKit
 
 private enum MainTab: Hashable {
     case home
-    case gestalt
     case more
 }
 
@@ -12,6 +11,11 @@ private enum MainTab: Hashable {
 /// 原 5 tab（应用/空间回收/模块/Gestalt/更多）→ 3 tab：
 /// 主页（空间回收 + 应用管理 + 模块 + 百宝箱卡片入口）/ Gestalt / 更多.
 /// MoreView（原 More 页）保留备份/关于/设置等次要入口.
+///
+/// v0.3.441：Gestalt 不再占底部 tab，改从「主页 → 百宝箱」进入。
+/// 原因：底部只有两栏（主页 / 更多）比三栏干净，且 Gestalt 属于低频的进阶功能，
+/// 塞进底部会稀释主页/更多这两个高频入口。删除后 `.gestalt` 已无任何引用，
+/// `GestaltView` 改为 push 到主页的导航栈上（见 HomeView 的 navigationDestination）。
 struct RootView: View {
     @StateObject private var viewModel = AppListViewModel()
     @AppStorage("HasAcknowledgedLimits") private var hasAcknowledgedLimits = false
@@ -30,12 +34,6 @@ struct RootView: View {
                 Label("主页", systemImage: "house.fill")
             }
             .tag(MainTab.home)
-
-            GestaltView()
-                .tabItem {
-                    Label("Gestalt", systemImage: "gearshape.2")
-                }
-                .tag(MainTab.gestalt)
 
             NavigationStack {
                 MoreView(appList: viewModel, onResetPairing: {

@@ -13,6 +13,11 @@ import SwiftUI
 /// - 新增「开发者模式」：状态读 lockdown `DeveloperModeStatus`（com.apple.security.mac.amfi），
 ///   开启走 RSD amfi 服务；**系统未提供远程关闭接口**，关闭需去设备设置里手动关。
 struct TreasureBoxView: View {
+    /// v0.3.441：点「Gestalt 编辑」后的回调。由 HomeView 传入——它负责先关掉本 sheet，
+    /// 再等 onDismiss 把 GestaltView push 到主页的导航栈上（本视图自己不 push，
+    /// 因为在 sheet 里 push 会落到 sheet 自己那层导航栈，页面就没有返回按钮了）。
+    let onOpenGestalt: () -> Void
+
     var body: some View {
         VStack(spacing: 0) {
             // 顶部标题区（sheet 拖动指示条由 presentationDragIndicator 提供）
@@ -25,8 +30,12 @@ struct TreasureBoxView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     heroCard
-                    deviceControlCard
+                    // v0.3.441：把「工具」卡提到设备控制卡**之前**。
+                    // 为什么：本 sheet 默认 detent 只有 0.4，排在第三张的卡片在折叠区之外 ——
+                    // 「Gestalt 编辑」这个**真实可点的入口**会看不见，得先上拉才找得到。
+                    // 工具卡里是唯一能跳转的条目，优先级高于两个开关，故上移。
                     itemsCard
+                    deviceControlCard
                     Text("更多工具持续补充中")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -240,6 +249,32 @@ struct TreasureBoxView: View {
             Text("工具")
                 .font(.headline)
                 .padding(.bottom, 6)
+            // v0.3.441：Gestalt 入口（唯一真实可点的一条，其余仍是占位）。
+            // 样式刻意与下方占位行保持一致，只有右侧换成 chevron 表示「可进入」。
+            Button {
+                onOpenGestalt()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "gearshape.2.fill")
+                        .foregroundStyle(.blue)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Gestalt 编辑")
+                            .font(.subheadline)
+                        Text("查询 / 修改 MobileGestalt 键值（含备份）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
             ForEach(TreasureItem.placeholder) { item in
                 HStack(spacing: 12) {
                     Image(systemName: item.icon)

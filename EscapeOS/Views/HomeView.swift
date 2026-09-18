@@ -11,6 +11,13 @@ struct HomeView: View {
     /// v0.3.207：百宝箱 sheet
     @State private var treasureOpen = false
 
+    /// v0.3.441：Gestalt 不再占底部 tab，改从百宝箱进入。
+    /// 为什么要 pendingGestalt 这个中转：直接在 sheet 里 push 会套第二层导航栈（页面没返回按钮），
+    /// 而「关掉 sheet 再 push」必须等 sheet **完全关闭**才 push，否则导航会被吞掉 ——
+    /// 所以用 sheet 的 onDismiss 作为时机。
+    @State private var showGestalt = false
+    @State private var pendingGestalt = false
+
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
@@ -25,13 +32,28 @@ struct HomeView: View {
         }
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
-        .sheet(isPresented: $treasureOpen) {
+        .sheet(isPresented: $treasureOpen, onDismiss: {
+            // v0.3.441：百宝箱里点了「Gestalt 编辑」→ 等 sheet 完全关闭后再 push
+            // （sheet 还在收场时 push 会被导航系统吞掉）
+            if pendingGestalt {
+                pendingGestalt = false
+                showGestalt = true
+            }
+        }) {
             // 原生 sheet：0.4↔1.0 detent 上拉展开、下拉关闭
-            TreasureBoxView()
-                .presentationDetents([.fraction(0.4), .large])
-                .presentationDragIndicator(.visible)
-                .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.4)))
-                .interactiveDismissDisabled(false)
+            TreasureBoxView(onOpenGestalt: {
+                pendingGestalt = true
+                treasureOpen = false
+            })
+            .presentationDetents([.fraction(0.4), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.4)))
+            .interactiveDismissDisabled(false)
+        }
+        // v0.3.441：Gestalt 编辑页。挂在这里是因为 HomeView 就是 RootView 里
+        // `NavigationStack { HomeView(...) }` 的内容视图，本修饰符链天然位于该栈内部。
+        .navigationDestination(isPresented: $showGestalt) {
+            GestaltView()
         }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {
