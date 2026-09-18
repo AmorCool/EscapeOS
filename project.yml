@@ -141,6 +141,10 @@ targets:
         #     开默认 MainActor 隔离反而涨到 336（把引擎层的 nonisolated 代码全变成跨 actor 错误）。
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
+        # ★ 实测项（2026-09-18 第 6 轮）：对**完整**错误集重测「易用并发」。
+        #   此前三档对照（134/336/134）是在**残缺**错误集上测的（编译提前中止），结论作废。
+        #   SE-0461 NonisolatedNonsendingByDefault 正是用来减少 sending 诊断的。
+        SWIFT_APPROACHABLE_CONCURRENCY: "YES"
         # 直接复用仓库已有的 Info.plist 与 entitlements（与 Theos 行为一致），
         # 不走 xcodegen 的 Plist 生成（避免覆盖现有文件 / 缺 properties 解析失败）。
         # 注：xcodegen 的 info/entitlements 是 Plist 类型，要求 path+properties 子键，
