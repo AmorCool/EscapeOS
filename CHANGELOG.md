@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.437] - 2026-09-18
+
+### 修 v0.3.436 的编译错误（同一根因，我上次只修了一半）
+
+**v0.3.436 又因同一类错误失败：**
+
+```
+LogLimitSettings.swift:57/60/66/69: error: main actor-isolated static property 'bytesPerMB'
+                                     can not be referenced from a nonisolated context
+```
+
+**原因**：v0.3.435 的报错只点名了 `defaultKB`，我**就只改了被点名的那个** ——
+漏了同一个类里的 `bytesPerMB`。**同一根因导致连续两次失败、白烧两次构建。**
+
+**修法**：给 `bytesPerMB` 补 `nonisolated`，并**按规则全量复查**：
+`LogLimitSettings` 的全部 4 个 static 常量
+（`defaultMB` / `fileLimitKey` / `catLimitKey` / `bytesPerMB`）**现已全部标 `nonisolated`**；
+`shared` 不被非隔离上下文引用 —— 确认无遗漏。
+
+**教训（已记 `MY-FAULTS.md` 缺陷 26）**：编译器只报「当前这轮能看到的错」，
+同一根因常有未报出的同类点。**修这类错要按规则全量扫，而不是照着报错行改。**
+
 ## [0.3.436] - 2026-09-18
 
 ### 修 435 的编译错误 + 日志上限改 MB 单位 + airlift 完整 AT 消息链

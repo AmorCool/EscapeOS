@@ -28,7 +28,11 @@ final class LogLimitSettings: ObservableObject {
     /// SSH `cat` 命令的读取上限（MB）。
     nonisolated static let catLimitKey = "LogLimit.maxCatMB"
 
-    private static let bytesPerMB = 1024 * 1024
+    /// 每 MB 的字节数。
+    /// `nonisolated`：被下面的 `nonisolated static` 读取函数引用
+    /// （漏标会报 "main actor-isolated static property ... can not be referenced
+    ///  from a nonisolated context" —— 这个错我已经犯过两次，见 `MY-FAULTS.md` 缺陷 25/26）。
+    nonisolated private static let bytesPerMB = 1024 * 1024
 
     /// 日志文件上限（MB，0 = 无限制）.
     @Published var maxFileMB: Int {
