@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.428] - 2026-09-18
+
+### 撤掉 v0.3.427 的 onAppear 触发，改成「App 启动时自动跑」
+
+用户指出：「什么叫进入漏洞利用页面时补跑一次？意思我要手动进入漏洞利用选择界面才能让它调用？」
+
+**这是对的** —— 「进入页面才触发」等于**还是把观测责任推给用户**。
+
+**改法**：
+- 撤掉 `ExploitSelectionView` 的 `onAppear`；
+- 新增 `AirliftExploit.scheduleSelfTestAfterLaunch()`，在 `EscapeSpaceApp.init` 里调用：
+  **只要 airlift 处于勾选状态**（`ExploitSettings.snapshot()` 含 `.airlift`），
+  启动后**延迟 5 秒**自动跑一次自检。
+
+**为什么延迟 5 秒**：App 启动瞬间多个功能集中建 RSD 隧道（文件共享 / 应用管理 / 设备信息 …），
+此时插一条会加剧竞争；等启动高峰过去更稳。
+
+**效果**：勾选过一次 airlift 之后，**什么都不用做** —— 每次启动 App 都会自动跑一遍并写 `[airlift]` 日志。
+（勾选那一刻也会跑一次，两条路径都覆盖。）
+
+**另外**（v0.3.427 已包含，本版保留）：`AirliftExploit` 的三个能力方法
+（`paths` / `consumeExtension` / `consumeExtensionWithFallback`）各加一次「被调用」日志 ——
+这样你用空间回收 / 文件浏览时，就能在日志里看到 `[airlift] 被调用（…）`，
+证明它确实参与了分发（只记第一条，避免淹日志）。
+
+**改动范围**：`AirliftExploit.swift`（+15）、`EscapeOSApp.swift`（+3）、`ExploitSelectionView.swift`（−10）。
+
 ## [0.3.427] - 2026-09-18
 
 ### 修两处我的疏漏（用户指出）
