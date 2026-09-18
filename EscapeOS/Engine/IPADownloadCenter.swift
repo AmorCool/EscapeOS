@@ -252,8 +252,18 @@ final class IPADownloadCenter: ObservableObject {
 
     // MARK: - 启动
 
-    private var runner: RemoteDownloader?
-    private var runningID: UUID?
+    /// v0.3.413：**并发下载** —— 每个进行中的任务一个下载器，按 job id 索引。
+    ///
+    /// 以前是单个 `runner` + `runningID`（`pump()` 保证一次只下一个）。
+    /// 改成字典后可以同时跑多个；上限见 `maxConcurrentDownloads`。
+    private var runners: [UUID: RemoteDownloader] = [:]
+
+    /// 同时进行的下载数上限。
+    ///
+    /// 用户要求「并发下载」；加上限是为了不把网络 / 内存打满 ——
+    /// 每个下载各有独立的 `URLSession` 与落盘缓冲，同时太多会互相抢带宽、
+    /// 也会让「下载管理」页的速度显示与进度更新变得难以阅读。
+    private static let maxConcurrentDownloads = 3
 
     /// v0.3.398（②，第二层防护）：**「这次暂停是我发起的」的显式记录**。
     ///
@@ -585,15 +595,15 @@ final class IPADownloadCenter: ObservableObject {
         // → 用户实测的「暂停后几率变失败、进度归 0」（`.failed` 的 `overall` 恒为 0）。
         pausingIDs.insert(id)
         update(id) { $0.phase = .paused; $0.stageText = "已暂停"; $0.speedBytesPerSecond = 0 }
-        runner?.pause()
+        runners[id]?.pause()
         resetSpeedWindow()
     }
 
     func resume(_ id: UUID) {
         guard let job = job(id), job.phase == .paused else { return }
         pausingIDs.remove(id)
-        if runningID == id, let runner {
-            runner.resume()
+        if let r = runners[id] {
+            r.resume()
             // v0.3.394：续传要重新起窗口（见 `resetSpeedWindow` 注释）
             resetSpeedWindow()
             update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
@@ -621,10 +631,9 @@ final class IPADownloadCenter: ObservableObject {
     func cancel(_ id: UUID) {
         guard let job = job(id) else { return }
         pausingIDs.remove(id)
-        if runningID == id {
-            runner?.abort()
-            runner = nil
-            runningID = nil
+        if let r = runners[id] {
+            r.abort()
+            runners[id] = nil
             resetSpeedWindow()
         }
         if let fileName = job.localFileName {
@@ -657,17 +666,21 @@ final class IPADownloadCenter: ObservableObject {
         jobs.removeAll { !$0.phase.isBusy }
     }
 
-    // MARK: - 调度（串行）
+    // MARK: - 调度（v0.3.413：并发，上限 `maxConcurrentDownloads`）
 
+    /// 把排队中的任务尽量填满并发槽。
+    ///
+    /// `startDownload` 会把命中的 job 改成 `.downloading`，所以下一轮
+    /// `jobs.last(where: { .waiting })` 取到的是**下一个**任务 —— 不会死循环。
     private func pump() {
-        guard runningID == nil,
-              let next = jobs.last(where: { $0.phase == .waiting && $0.remoteURL != nil }) else { return }
-        startDownload(next.id)
+        while runners.count < Self.maxConcurrentDownloads,
+              let next = jobs.last(where: { $0.phase == .waiting && $0.remoteURL != nil }) {
+            startDownload(next.id)
+        }
     }
 
     private func startDownload(_ id: UUID) {
         guard let job = job(id), let urlString = job.remoteURL, let url = URL(string: urlString) else { return }
-        runningID = id
         update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
 
         var req = URLRequest(url: url)
@@ -694,7 +707,7 @@ final class IPADownloadCenter: ObservableObject {
             onFinish: { result in
                 Task { @MainActor in self.handle(id: id, safeName: safeName, result: result) }
             })
-        runner = downloader
+        runners[id] = downloader
         downloader.start()
     }
 
@@ -764,9 +777,9 @@ final class IPADownloadCenter: ObservableObject {
                 jobs.removeAll {
                     $0.id != id && $0.localFileName == dest.lastPathComponent && $0.phase == .failed
                 }
-                runner = nil
-                runningID = nil
+                runners[id] = nil
                 // v0.3.412：彻底不自动装 —— 见上面 $0.phase = .done 处的说明。
+                // v0.3.413：并发下载 —— 一个任务收工后把并发槽让给下一个排队的。
                 pump()
             } catch {
                 finishWithError(id, error)
@@ -781,7 +794,7 @@ final class IPADownloadCenter: ObservableObject {
             // 列表把它归入「已结束」，`overall` 对 `.failed` 恒返回 0 → 用户看到「暂停的 44%」
             // 变成「失败 0%」，而且再点继续也回不去（实测截图就是这两帧）。
             if pausingIDs.contains(id) || job(id)?.phase == .paused {
-                runner = nil; runningID = nil; pump(); return
+                runners[id] = nil; pump(); return
             }
             finishWithError(id, error)
         }
@@ -801,8 +814,7 @@ final class IPADownloadCenter: ObservableObject {
             $0.speedBytesPerSecond = 0
         }
         resetSpeedWindow()
-        runner = nil
-        runningID = nil
+        runners[id] = nil
         pump()
     }
 
