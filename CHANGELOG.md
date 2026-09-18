@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.3.434] - 2026-09-18
+
+### 日志上限可配置 + 一键清空 + airlift 第 5 步
+
+**用户要求**：「在更多板块右上角设置里新增限制日志存储大小的功能（默认 1024KB，可自定义，
+留空自动填回 1024KB）、cat 日志大小的限制、一键清空日志的功能」。
+
+**1. 日志上限做成可配置**（新增 `LogLimitSettings`，两项都默认 **1024 KB**，留空自动回填）：
+
+| 设置项 | 作用 | 此前 |
+|---|---|---|
+| **日志存储上限** | `LoginLogger` 写文件时超过上限就**滚动截断**（保留最新部分） | **完全没有上限**，实测涨到 683KB |
+| **cat 读取上限** | `SSHServerService` 的 `cat` 改用它 | 硬编码 256KB（v0.3.433 临时提到 8MB） |
+
+UI 位置：**「更多 → 右上角齿轮 → 日志」** —— 两个输入框 + 一个「清空日志」按钮。
+
+**2. 一键清空** —— 调 `LoginLogger.shared.clear()`（清内存 buffer + 删日志文件）。
+
+**3. airlift 第 5 步** —— 在已建立的 `com.apple.atc` 连接上发第一条 AT 消息 `ReadyForSync`：
+
+```plist
+{ Session: 0, Command: "ReadyForSync", Params: { version, deviceType, protocolVersion } }
+```
+
+顶层结构 `Session`/`Command`/`Params` 来自 `AirTrafficHost.dll` 反汇编。
+**暂不发 `Sig`**（Grappa 签名）—— 先试探设备是否强制校验；若不校验就能省掉整个 Grappa 实现。
+
+**顺带（用户指出的概念纠正）**：清掉 `project.yml` `settings.base` 里那行**不生效**的
+`SWIFT_VERSION: "5.0"`（xcodegen 不采纳该层，只会误导），并在注释里写明
+**「编译器版本 ≠ 语言模式」** —— CI 用的是 **Xcode 27 自带的 Swift 6.4 编译器**，
+按 **target 层的 `"6.0"` 语言模式**编译。
+
 ## [0.3.433] - 2026-09-18
 
 ### 移除 SSH 调试服务的两个不合理上限（用户要求）

@@ -188,9 +188,54 @@ struct SettingsForm: View {
     /// v0.2.112：左上角登录日志入口（排查Apple 登录 / Anisette 失败用）.
     @State private var showLoginLog = false
     @AppStorage(KeepAliveManager.enabledKey) private var keepAliveEnabled = false
+    // v0.3.434：日志上限（可配置）+ 一键清空
+    @StateObject private var logLimit = LogLimitSettings.shared
+    @State private var fileLimitText = ""
+    @State private var catLimitText = ""
 
     var body: some View {
         Form {
+            // v0.3.434：日志上限（可配置）+ 一键清空
+            Section(header: Text("日志"),
+                    footer: Text("留空自动恢复默认 \(LogLimitSettings.defaultKB) KB。")) {
+                HStack {
+                    Text("日志存储上限")
+                    Spacer()
+                    TextField("\(LogLimitSettings.defaultKB)", text: $fileLimitText)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                        .onChange(of: fileLimitText) { _, newValue in
+                            // 合法值即时生效；留空/非法 → 回填默认值（用户要求）
+                            let kb = LogLimitSettings.normalizedKB(from: newValue)
+                            logLimit.maxFileKB = kb
+                            if Int(newValue.trimmingCharacters(in: .whitespaces)) == nil {
+                                fileLimitText = "\(kb)"
+                            }
+                        }
+                    Text("KB").foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("cat 读取上限")
+                    Spacer()
+                    TextField("\(LogLimitSettings.defaultKB)", text: $catLimitText)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                        .onChange(of: catLimitText) { _, newValue in
+                            let kb = LogLimitSettings.normalizedKB(from: newValue)
+                            logLimit.maxCatKB = kb
+                            if Int(newValue.trimmingCharacters(in: .whitespaces)) == nil {
+                                catLimitText = "\(kb)"
+                            }
+                        }
+                    Text("KB").foregroundColor(.secondary)
+                }
+                Button("清空日志", role: .destructive) {
+                    LoginLogger.shared.clear()
+                }
+            }
+
             Section(header: Text("Apple ID 账户"), footer: Text("登录后，部分功能可统一调用此账户.")) {
                 if memorySettings.isLoggedIn {
                     HStack {
@@ -356,6 +401,12 @@ struct SettingsForm: View {
             Button("好", role: .cancel) {}
         } message: {
             Text("当前没有可导出的 pairingFile.plist.请先导入或生成配对文件.")
+        }
+        // v0.3.434：把当前日志上限填进输入框
+        // （留空时由 onChange 自动回填默认值，符合「为空则改回 1024」的要求）
+        .onAppear {
+            fileLimitText = "\(logLimit.maxFileKB)"
+            catLimitText = "\(logLimit.maxCatKB)"
         }
     }
 

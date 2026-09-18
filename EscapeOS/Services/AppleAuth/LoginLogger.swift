@@ -113,6 +113,15 @@ final class LoginLogger: @unchecked Sendable {
     private func appendToFile(_ line: String) {
         guard let data = (line + "\n").data(using: .utf8) else { return }
         if FileManager.default.fileExists(atPath: logFileURL.path) {
+            // v0.3.434：超过用户设定的上限时**滚动截断**（保留最新部分），
+            // 避免日志文件无限增长（此前实测涨到 683KB）。
+            // 上限可在「更多 → 设置 → 日志」里改，默认 1024KB。
+            let limit = LogLimitSettings.fileLimitBytes
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: logFileURL.path),
+               let size = attrs[.size] as? UInt64,
+               size > UInt64(limit) {
+                trimFile(to: limit)
+            }
             if let handle = try? FileHandle(forWritingTo: logFileURL) {
                 defer { try? handle.close() }
                 try? handle.seekToEnd()
@@ -121,6 +130,22 @@ final class LoginLogger: @unchecked Sendable {
         } else {
             try? data.write(to: logFileURL)
         }
+    }
+
+    /// 把日志文件截到 `limit` 字节 —— **保留后半段**（即最新的日志）。
+    ///
+    /// 从换行处切开，避免留下半行。
+    private func trimFile(to limit: Int) {
+        guard let data = try? Data(contentsOf: logFileURL), data.count > limit else { return }
+        let tail = data.suffix(limit)
+        if let newline = tail.firstIndex(of: 0x0A) {
+            let after = tail.index(after: newline)
+            if after < tail.endIndex {
+                try? Data(tail[after...]).write(to: logFileURL)
+                return
+            }
+        }
+        try? Data(tail).write(to: logFileURL)
     }
 
     private static func timestamp() -> String {
