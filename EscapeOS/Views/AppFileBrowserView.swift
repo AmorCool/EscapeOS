@@ -652,11 +652,14 @@ struct AppFileBrowserView: View {
         guard let client = activeClient() else { return }
         showToast("准备分享…")
         do {
+            // Swift 6：OpaquePointer 非 Sendable → 经 AFCClientBox（@unchecked Sendable）传入
+            // Task.detached（同一指针，沿用本文件既有模式，句柄线程归属不变）。
+            let clientBox = AFCClientBox(raw: client)
             let url = try await Task.detached(priority: .userInitiated) {
                 let tmp = FileManager.default.temporaryDirectory
                 let safeName = (entry.name as NSString).lastPathComponent
                 let dest = tmp.appendingPathComponent("share-\(UUID().uuidString.prefix(6))-\(safeName)")
-                try Self.downloadEntry(client: client, entry: entry, to: dest)
+                try Self.downloadEntry(client: clientBox.raw, entry: entry, to: dest)
                 return dest
             }.value
             await MainActor.run { shareItems = ShareItems(urls: [url]) }
@@ -767,8 +770,10 @@ struct AppFileBrowserView: View {
         guard let client = activeClient() else { return }
         showToast("正在下载…")
         do {
+            // Swift 6：同 shareEntry —— client 经 AFCClientBox 传入 Task.detached。
+            let clientBox = AFCClientBox(raw: client)
             let data = try await Task.detached(priority: .userInitiated) {
-                try FileSharingService.downloadFile(afc: client, path: entry.path)
+                try FileSharingService.downloadFile(afc: clientBox.raw, path: entry.path)
             }.value
             // 存到本 App 文档目录
             let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

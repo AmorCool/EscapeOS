@@ -55,7 +55,11 @@ final class SharedDocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
     let onPicked: ([URL]) -> Void
     let onCancelled: (() -> Void)?
 
-    init(onPicked: @escaping ([URL]) -> Void, onCancelled: (() -> Void)?) {
+    /// Swift 6：本类因遵循 UIDocumentPickerDelegate 被推断为 @MainActor，而
+    /// `SharedDocumentPicker.present` 是 nonisolated 的；回调闭包从调用方（主线程）
+    /// 传入 nonisolated init 不跨隔离域，`sending 'onPicked'/'onCancelled'` 诊断即消解。
+    /// delegate 回调方法仍保持 @MainActor（UIKit 主线程调用），语义不变。
+    nonisolated init(onPicked: @escaping ([URL]) -> Void, onCancelled: (() -> Void)?) {
         self.onPicked = onPicked
         self.onCancelled = onCancelled
     }

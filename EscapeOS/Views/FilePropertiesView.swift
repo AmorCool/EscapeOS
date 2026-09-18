@@ -137,6 +137,10 @@ struct FilePropertiesView: View {
     }
 }
 
+/// Swift 6：本类是 SwiftUI 的 UI 模型，只在主线程读写 → 标 `@MainActor` 是语义正确的隔离，
+/// 同时让 `self` 成为 Sendable，内层 `DispatchQueue.main.async { self.x = … }` 的
+/// `sending 'self'` 诊断自然消失（该闭包本来就在主线程执行，语义不变）。
+@MainActor
 final class FilePropertiesViewModel: ObservableObject {
     @Published var sha256: String?
     @Published var isLoading = true
@@ -173,10 +177,18 @@ final class FilePropertiesViewModel: ObservableObject {
                     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
                 }
 
+                // Swift 6：快照里的 [FileAttributeKey: Any]（Any 非 Sendable）不能跨隔离捕获，
+                // 在后台先把要展示的字段解析成 Sendable 值（Int/String/Date），主线程闭包只收简单值。
+                let perms = (outcome.attrs[.posixPermissions] as? NSNumber)?.intValue
+                let owner = outcome.attrs[.ownerAccountName] as? String
+                let group = outcome.attrs[.groupOwnerAccountName] as? String
+                let created = outcome.attrs[.creationDate] as? Date
+                let destination = outcome.destination
+
                 DispatchQueue.main.async {
                     self.sha256 = digest
-                    self.apply(outcome.attrs)
-                    self.symlinkDestination = outcome.destination
+                    self.apply(perms: perms, owner: owner, group: group, created: created)
+                    self.symlinkDestination = destination
                     self.isLoading = false
                 }
             } catch {
@@ -188,16 +200,16 @@ final class FilePropertiesViewModel: ObservableObject {
         }
     }
 
-    private func apply(_ attrs: [FileAttributeKey: Any]) {
-        if let perms = attrs[.posixPermissions] as? NSNumber {
-            let value = perms.intValue
-            posixPermissions = String(format: "%04o", value)
-            isExecutable = value & 0o111 != 0
+    /// Swift 6：改为接收后台已解析好的 Sendable 字段（语义与原 attrs 字典取值完全一致）。
+    private func apply(perms: Int?, owner: String?, group: String?, created: Date?) {
+        if let perms {
+            posixPermissions = String(format: "%04o", perms)
+            isExecutable = perms & 0o111 != 0
         }
-        owner = attrs[.ownerAccountName] as? String
-        group = attrs[.groupOwnerAccountName] as? String
-        if let date = attrs[.creationDate] as? Date {
-            creationDate = BackupPaths.displayStamp.string(from: date)
+        self.owner = owner
+        self.group = group
+        if let created {
+            creationDate = BackupPaths.displayStamp.string(from: created)
         }
     }
 

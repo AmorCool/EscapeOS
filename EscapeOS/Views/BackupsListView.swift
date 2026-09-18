@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import os
 
 /// Lists backup archives and drives restore confirmation + progress.
 struct BackupsListView: View {
@@ -747,6 +748,10 @@ struct IdentifiedAlert: Identifiable {
     let message: String
 }
 
+/// Swift 6：本类是 SwiftUI 的 UI 模型，只在主线程读写 → 标 `@MainActor` 是语义正确的隔离，
+/// 同时让 `self` 成为 Sendable，内层 `DispatchQueue.main.async { self.x = … }` 的
+/// `sending 'self'` 诊断自然消失（该闭包本来就在主线程执行，语义不变）。
+@MainActor
 final class BackupsListViewModel: ObservableObject {
     @Published var records: [BackupRecord] = []
     @Published var isLoading = false
@@ -811,6 +816,8 @@ final class BackupsListViewModel: ObservableObject {
     }
 }
 
+/// Swift 6：同 BackupsListViewModel —— UI 模型，主线程读写，标 @MainActor。
+@MainActor
 final class RestoreViewModel: ObservableObject {
     enum State {
         case confirm
@@ -827,10 +834,12 @@ final class RestoreViewModel: ObservableObject {
     /// The sandbox the user chose to restore into (when more than one exists).
     @Published var selectedSandbox: LiveContainerGuest? = nil
     private let service = RestoreService()
-    private var cancelled = false
+    /// Swift 6：取消标志在主线程写（cancel()）、后台还原流程里轮询读（isCancelled 闭包），
+    /// 用系统锁保护避免数据竞争（@MainActor 隔离无法覆盖后台轮询路径）。
+    private let cancelled = OSAllocatedUnfairLock(initialState: false)
 
     func prepare(session: RestoreSession, installedApps: [InstalledApp], preselectedGuest: LiveContainerGuest? = nil) {
-        cancelled = false
+        cancelled.withLock { $0 = false }
         state = .confirm
         if let guest = preselectedGuest {
             // Custom restore: the user already chose the exact sandbox, so skip
@@ -860,7 +869,7 @@ final class RestoreViewModel: ObservableObject {
             guard case .ready(let readyApp, _, _) = session.eligibility else { return }
             app = readyApp
         }
-        cancelled = false
+        cancelled.withLock { $0 = false }
         state = .running(current: "Starting…", done: 0, total: session.record.metadata.fileCount)
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -873,7 +882,7 @@ final class RestoreViewModel: ObservableObject {
                             self.state = .running(current: current, done: done, total: total)
                         }
                     },
-                    isCancelled: { self.cancelled }
+                    isCancelled: { self.cancelled.withLock { $0 } }
                 )
                 DispatchQueue.main.async {
                     self.state = .done(result)
@@ -895,6 +904,6 @@ final class RestoreViewModel: ObservableObject {
     }
 
     func cancel() {
-        cancelled = true
+        cancelled.withLock { $0 = true }
     }
 }

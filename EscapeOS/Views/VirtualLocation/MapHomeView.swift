@@ -474,8 +474,10 @@ final class PlaceSearchCompleter: NSObject, ObservableObject, MKLocalSearchCompl
     }
 
     nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
-        let items = completer.results
-        Task { @MainActor in self.results = items }
+        // Swift 6：[MKLocalSearchCompletion] 非 Sendable，不能在 nonisolated 上下文读取后
+        // 捕获进 @MainActor 闭包；改为在闭包内读取（Apple 官方示例同款写法），
+        // 仍在主线程应用结果，语义不变。
+        Task { @MainActor in self.results = completer.results }
     }
 
     nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
