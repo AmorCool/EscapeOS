@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   xcode-build:
-    runs-on: xcode-27-arm64
+    runs-on: xcode-27
     env:
       UNICORN_TAG: "2.1.0"
     steps:
