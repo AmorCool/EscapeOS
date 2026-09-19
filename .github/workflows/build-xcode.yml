@@ -461,7 +461,7 @@ jobs:
           ATH_X86_SHA256="$(shasum -a 256 "$APP/SAPAssets/AirTrafficHost.x86_64" | awk '{print $1}')"
           echo "ATH 源文件   sha256 = $ATH_SRC_SHA256"
           echo "  已实测通过 A-64 的那份 = $ATH_SRC_KNOWN_SHA256"
-          echo "x86_64 切片  sha256 = $ATH_X86_SHA256（记录用，供下次钉住）"
+          echo "x86_64 切片  sha256 = ${ATH_X86_SHA256}（记录用，供下次钉住）"
           if [ "$ATH_SRC_SHA256" != "$ATH_SRC_KNOWN_SHA256" ]; then
             echo "::error::ATH 源文件与「A-64 已实测通过的那一份」不一致 ⇒ A-64 结论已过期。"
             echo "::error::请先重跑 A-64 验证（Actions → A-64 Grappa verify → Run workflow），"
