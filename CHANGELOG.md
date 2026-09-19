@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.3.471] - 2026-09-19
+
+### ★★ 变体 2/3 真机结果：**响应层面判不出成败** ⇒ 必须靠 AFC 回读
+
+**变体 2**（趁会话活着先发 `FileComplete`）：
+```
+1) 发 FileComplete 后，设备回：（一条都没读到）
+2) 发 FinishedSyncingMetadata 后，设备回：SyncFinished, SyncAllowed, Ping
+```
+
+**变体 3**（主机先发 `AssetManifest`，再发 `FileComplete`）：
+```
+1) 发 AssetManifest 后，设备回：（一条都没读到）
+2) 发 FileComplete 后，设备回：Ping, Ping, Ping          ← ★ 变体 2 里这里是「无响应」
+3) 发 FinishedSyncingMetadata 后，设备回：SyncFinished, SyncAllowed, AssetMetrics
+```
+
+**两个变体都没有被拒绝**（无 `FileError` / `SyncFailed` / `ErrorCode`）。
+变体 3 里 `FileComplete` 之后设备还在发 **`Ping`（保活）** ⇒ **会话当时是活的**（变体 2 那一步是完全无响应）。
+
+⇒ **响应层面既判不出「成功」也判不出「失败」** —— **唯一判据是回读落点。**
+
+### ★ 本版解决一个「测量问题」：落点必须在 Media 之外，但我们只能读 Media
+
+- 落点必须在 **AFC 根（`/var/mobile/Media`）之外**才能证明逃逸；
+- 而 **AFC 读不出 Media**（`airlift_afc_probe.txt` 已证）。
+
+⇒ **「证明逃逸」与「能读到落点」看起来互斥。**
+
+**解法：换用另一个 AFC 服务的根。**
+`com.apple.crashreportcopymobile` 的 AFC 根是 **`/var/mobile/Library/Logs/CrashReporter`** ——
+**它在 Media 之外**，而且**我们能读它**（`airlift_afc_probe.txt` 里连过、能列目录）。
+
+⇒ 落点改为：
+```
+/var/mobile/Library/Logs/CrashReporter/airlift-escape-probe-<token>.txt
+```
+同时满足：**Media 之外（证明逃逸）+ 可读回（能验证）+ 无害（崩溃日志目录本就可丢弃）**。
+
+### 新增**第 ③ 步：AFC 回读**（本步唯一的成功判据）
+
+攻击消息发完后，用 `crash_report_client_connect_rsd` + `crash_report_client_to_afc`
+（与 `runAfcEscapeProbe()` 第一组同一套，直接复用）连到它的 AFC 根，查那个 probe 文件：
+- **落点出现** ⇒ **越界写成立** ⇒ 攻击链打通；
+- **没出现** ⇒ 本次没有越界（如实报，并区分「消息已被接受、但设备没执行 move」）。
+
+⚠️ 顺带纠正一处 FFI 用法：`afc_client_connect_rsd` **没有服务名参数**，
+连 `crashreportcopymobile` 必须走 `crash_report_client_connect_rsd` + `crash_report_client_to_afc`。
+
+**防御性设计**：结论文件在 **AFC 回读前后各落盘一次** —— 回读要开**第二条服务连接**，
+真机有「第二条连接卡死」的先例；万一卡住，前面拿到的响应必须**已经在盘上**。
+
+自检：`_tools_paren_scan.py` → 最终深度 +0、无负行、无「少逗号」可疑位置。
+⚠️ 本机不能编译、不能连真机 ⇒ 待真机实测。
+
 ## [0.3.470] - 2026-09-19
 
 ### ★★★ `airlift2` 真机结果（v0.3.469）：**不是「被拒绝」，是「发晚了」**
