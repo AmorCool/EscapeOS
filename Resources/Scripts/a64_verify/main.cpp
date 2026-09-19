@@ -156,6 +156,109 @@ static void HexDump(const std::vector<uint8_t>& b) {
     }
 }
 
+// ─── 已知结构核对 ───────────────────────────────────────────────────────────
+//
+// 依据：`ref-attraffic协议.md` §13.1（看雪 2018 样本：固定 84 字节，开头 `01 01`）
+//       + memory `2026-09-19.md` §22（macOS 侧 3/3 样本一致的布局）：
+//   [0..1]   = 01 01            常量
+//   [2..17]  = 16 字节          每次不同
+//   [18..19] = u16LE，高 14 位 == 0x4000，低 2 位是 flag
+//              （实测出现过 0x4003 / 0x4001 / 0x4000）
+//   [20..83] = 64 字节          每次不同
+//
+// ★ 注意偏移是**十进制字节偏移**（18..19 就是 0x12..0x13）。
+// ★ 2 + 16 + 2 + 64 = 84 —— 分区长度之和恰好等于总长，这本身就独立佐证了分区正确。
+//
+// 为什么值得做这个核对：`err=0 / outLen=84` 是**弱判据** —— 项目历史实验
+// （CHANGELOG.md:631）证明「84 字节全 0」与「`01 01`+82 个 0」在真机上也返回成功。
+// 只有结构对得上，才能把「真 Grappa」与「空壳成功」分开。
+static bool AllZero(const std::vector<uint8_t>& b, size_t from, size_t to) {
+    for (size_t i = from; i < to; ++i) if (b[i]) return false;
+    return true;
+}
+
+static bool CheckStructure(const std::vector<uint8_t>& b, const char* tag) {
+    bool ok = true;
+    if (b.size() != 84) {
+        std::printf("  ✗ %s 长度 = %zu，期望 84\n", tag, b.size());
+        return false;
+    }
+
+    // [0..1] 常量 01 01
+    if (b[0] != 0x01 || b[1] != 0x01) {
+        std::printf("  ✗ %s [0..1] = %02x %02x，期望 01 01\n", tag, unsigned(b[0]), unsigned(b[1]));
+        ok = false;
+    } else {
+        std::printf("  ★ %s [0..1]   = 01 01 ✓（常量）\n", tag);
+    }
+
+    // [2..17] 16 字节可变段
+    if (AllZero(b, 2, 18)) {
+        std::printf("  ✗ %s [2..17]  16 字节全 0\n", tag);
+        ok = false;
+    } else {
+        std::printf("  ★ %s [2..17]  16 字节非全零 ✓\n", tag);
+    }
+
+    // [18..19] u16LE，高 14 位应为 0x4000
+    const uint16_t w  = static_cast<uint16_t>(b[18]) | (static_cast<uint16_t>(b[19]) << 8);
+    const uint16_t hi = w & 0xFFFCu;
+    if (hi != 0x4000u) {
+        std::printf("  ✗ %s [18..19] = %#06x，高 14 位 = %#06x ≠ 0x4000\n",
+                    tag, unsigned(w), unsigned(hi));
+        ok = false;
+    } else {
+        std::printf("  ★ %s [18..19] = %#06x ✓（高 14 位 0x4000，低 2 位 flag = %u）\n",
+                    tag, unsigned(w), unsigned(w & 0x0003u));
+    }
+
+    // [20..83] 64 字节可变段
+    if (AllZero(b, 20, 84)) {
+        std::printf("  ✗ %s [20..83] 64 字节全 0\n", tag);
+        ok = false;
+    } else {
+        std::printf("  ★ %s [20..83] 64 字节非全零 ✓\n", tag);
+    }
+    return ok;
+}
+
+// ─── 单次调用 ───────────────────────────────────────────────────────────────
+struct CallResult {
+    int32_t              err    = 0;
+    uint64_t             outPtr = 0;
+    uint32_t             outLen = 0;
+    uint32_t             sid    = 0;
+    std::vector<uint8_t> blob;
+};
+
+static CallResult RunGrappaOnce(uc_engine* uc, SapShims& shims, uint64_t fn,
+                                const uint8_t in12[12],
+                                uint64_t inAddr, uint64_t sidAddr,
+                                uint64_t outAddr, uint64_t lenAddr) {
+    // 每次调用前把 4 个字段重置干净 —— 否则第二次会读到第一次的残留值，
+    // 把「没写」误判成「写对了」。
+    const uint32_t zero32 = 0;
+    const uint64_t zero64 = 0;
+    check(uc_mem_write(uc, inAddr,  in12, 12), "write in12");
+    check(uc_mem_write(uc, sidAddr, &zero32, 4), "write sessionId=0");
+    check(uc_mem_write(uc, outAddr, &zero64, 8), "write outPtr=0");
+    check(uc_mem_write(uc, lenAddr, &zero32, 4), "write outLen=0");
+
+    CallResult r;
+    r.err    = static_cast<int32_t>(Invoke(uc, shims, fn, inAddr, sidAddr, outAddr, lenAddr));
+    r.outLen = ReadU32(uc, lenAddr);
+    r.outPtr = ReadU64(uc, outAddr);
+    r.sid    = ReadU32(uc, sidAddr);
+
+    // 立刻把 blob 拷出来：第二次调用会再 malloc，虽然当前堆分配器只递增游标、
+    // 不会覆盖第一次的块，但依赖这一点太脆。
+    if (r.err == 0 && r.outLen > 0 && r.outLen <= (1u << 20) && r.outPtr != 0) {
+        r.blob.resize(r.outLen);
+        check(uc_mem_read(uc, r.outPtr, r.blob.data(), r.blob.size()), "read grappa blob");
+    }
+    return r;
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr, "usage: %s <CoreFP> <AirTrafficHost> [CoreFP.icxs]\n", argv[0]);
@@ -237,56 +340,100 @@ int main(int argc, char** argv) {
         const uint64_t outAddr = kScratchBase + 0x30;   // void *outPtr
         const uint64_t lenAddr = kScratchBase + 0x38;   // uint32 outLen
 
-        check(uc_mem_write(uc, inAddr, in12, sizeof(in12)), "write in12");
-        const uint32_t zero32 = 0;
-        check(uc_mem_write(uc, sidAddr, &zero32, 4), "write sessionId=0");
-        const uint64_t zero64 = 0;
-        check(uc_mem_write(uc, outAddr, &zero64, 8), "write outPtr=0");
-        check(uc_mem_write(uc, lenAddr, &zero32, 4), "write outLen=0");
+        // ── 7. 连调两次 ────────────────────────────────────────────────────────
+        // 为什么在**同一个 run 内**调两次、而不是跑两次 CI：
+        //   要判的「两次输出是否相同」—— 相同 ⇒ 硬编码/常量填充的强信号。
+        //   同进程连调两次，一次 CI 就能给出答案，还顺带排除了「两次 run 环境不同」
+        //   这个混淆因素（堆布局、随机源种子、runner 差异）。
+        std::printf("[a64] 调用 #1：f(in12, &sessionId=0, &outPtr, &outLen) …\n");
+        const CallResult c1 = RunGrappaOnce(uc, *shims, fn, in12, inAddr, sidAddr, outAddr, lenAddr);
+        std::printf("[a64]   err=%d outPtr=%#llx outLen=%u sessionId=%u\n",
+                    c1.err, (unsigned long long)c1.outPtr, c1.outLen, c1.sid);
 
-        // ── 7. 调用 ────────────────────────────────────────────────────────────
-        std::printf("[a64] 调用 f(in12, &sessionId=0, &outPtr, &outLen) …\n");
-        const uint64_t ret = Invoke(uc, *shims, fn, inAddr, sidAddr, outAddr, lenAddr);
-
-        const int32_t  err    = static_cast<int32_t>(ret);
-        const uint32_t outLen = ReadU32(uc, lenAddr);
-        const uint64_t outPtr = ReadU64(uc, outAddr);
-        const uint32_t sidNow = ReadU32(uc, sidAddr);
-
-        std::printf("[a64] err        = %d\n", err);
-        std::printf("[a64] outPtr     = %#llx\n", (unsigned long long)outPtr);
-        std::printf("[a64] outLen     = %u\n", outLen);
-        std::printf("[a64] sessionId  = %u（in/out）\n", sidNow);
+        std::printf("[a64] 调用 #2：同样入参再跑一次 …\n");
+        const CallResult c2 = RunGrappaOnce(uc, *shims, fn, in12, inAddr, sidAddr, outAddr, lenAddr);
+        std::printf("[a64]   err=%d outPtr=%#llx outLen=%u sessionId=%u\n",
+                    c2.err, (unsigned long long)c2.outPtr, c2.outLen, c2.sid);
 
         // 注意：Invoke() 内部已按 SapMachine 的顺序检查过 HasFault()，
         // 有 fault 的话这里根本走不到 —— 它是以异常形式报出来的。
 
-        if (err != 0) {
-            std::printf("\n[a64] 结果：失败 —— err=%d（期望 0）\n", err);
+        // #1 是**主判据**：A-64 的核心问题（能不能生成 Grappa）由它回答。
+        if (c1.err != 0) {
+            std::printf("\n[a64] 结果：失败 —— err!=0（#1=%d，期望 0）\n", c1.err);
             return 1;
         }
-        if (outLen != 84) {
-            std::printf("\n[a64] 结果：失败 —— outLen=%u（期望 84）\n", outLen);
+        if (c1.outLen != 84) {
+            std::printf("\n[a64] 结果：失败 —— outLen!=84（#1=%u，期望 84）\n", c1.outLen);
             return 1;
         }
-        if (!outPtr) {
-            std::printf("\n[a64] 结果：失败 —— err/outLen 对了但 outPtr 是 NULL\n");
+        if (!c1.outPtr) {
+            std::printf("\n[a64] 结果：失败 —— outPtr==NULL（#1：err/outLen 对了但没吐出缓冲区）\n");
             return 1;
         }
 
-        std::vector<uint8_t> blob(outLen);
-        check(uc_mem_read(uc, outPtr, blob.data(), blob.size()), "read grappa blob");
-        bool allZero = true;
-        for (uint8_t b : blob) if (b) { allZero = false; break; }
+        // #2 只用于判「输出是否随机」。★ 它失败**不能**推翻 #1 的结论 ——
+        // 这个函数可能就是一次性的（会话状态被 #1 消费掉），
+        // 若把 #2 也当硬判据，就会凭空造出一个假失败，把已证明的结论推翻。
+        const bool twoOk = (c2.err == 0 && c2.outLen == 84 && c2.outPtr != 0 && !c2.blob.empty());
+        if (!twoOk) {
+            std::printf("\n[a64] ⚠️ 调用 #2 未成功（err=%d outLen=%u outPtr=%#llx）"
+                        " ⇒ 随机性未验，但**不影响 #1 的结论**\n",
+                        c2.err, c2.outLen, (unsigned long long)c2.outPtr);
+        }
 
-        std::printf("\n[a64] Grappa（%u 字节）：\n", outLen);
-        HexDump(blob);
+        std::printf("\n[a64] Grappa #1（%u 字节）：\n", c1.outLen);
+        HexDump(c1.blob);
+        if (twoOk) {
+            std::printf("\n[a64] Grappa #2（%u 字节）：\n", c2.outLen);
+            HexDump(c2.blob);
+        }
 
-        if (allZero) {
-            std::printf("\n[a64] 结果：可疑 —— err=0 / outLen=84，但内容全 0\n");
+        if (AllZero(c1.blob, 0, c1.blob.size())) {
+            std::printf("\n[a64] 结果：可疑 —— 内容全 0（#1）\n");
             return 1;
         }
-        std::printf("\n[a64] 结果：★ 通过 —— err=0, outLen=84, 内容非全零\n");
+
+        // ── 8. 已知结构核对（把「真 Grappa」与「空壳成功」分开）─────────────────
+        std::printf("\n[a64] 已知结构核对（[0..1]=01 01 / [2..17] 16B / [18..19] u16LE 高 14 位 0x4000 / [20..83] 64B）：\n");
+        const bool s1 = CheckStructure(c1.blob, "#1");
+        const bool s2 = twoOk ? CheckStructure(c2.blob, "#2") : true;
+
+        // ── 9. 两次比对（只在 #2 跑成时才有意义）────────────────────────────────
+        size_t diff = 0, diffVar16 = 0, diffVar64 = 0;
+        if (twoOk) {
+            for (size_t i = 0; i < 84; ++i) {
+                if (c1.blob[i] != c2.blob[i]) {
+                    ++diff;
+                    if (i >= 2 && i <= 17) ++diffVar16;
+                    if (i >= 20)          ++diffVar64;
+                }
+            }
+            std::printf("\n[a64] 两次比对：84 字节中 %zu 个不同"
+                        "（16 字节段 %zu/16，64 字节段 %zu/64）\n", diff, diffVar16, diffVar64);
+            std::printf("[a64]   [0..1]   #1=%02x %02x  #2=%02x %02x   %s\n",
+                        unsigned(c1.blob[0]), unsigned(c1.blob[1]),
+                        unsigned(c2.blob[0]), unsigned(c2.blob[1]),
+                        (c1.blob[0] == c2.blob[0] && c1.blob[1] == c2.blob[1])
+                            ? "一致（应为常量）✓" : "★ 不一致（常量都变了）");
+            std::printf("[a64]   sessionId #1=%u  #2=%u   %s\n", c1.sid, c2.sid,
+                        c1.sid == c2.sid ? "★ 两次相同（可疑）" : "不同 ✓");
+        }
+
+        if (!s1 || !s2) {
+            std::printf("\n[a64] 结果：失败 —— 结构核对未通过（见上面 ✗ 行；err=0 但产出的不是已知布局）\n");
+            return 1;
+        }
+        if (twoOk && diff == 0) {
+            std::printf("\n[a64] 结果：失败 —— 两次完全相同（硬编码/常量填充的强信号）\n");
+            return 1;
+        }
+        if (!twoOk) {
+            std::printf("\n[a64] 结果：★ 通过（仅 #1）—— err=0, outLen=84, 结构符合已知布局；"
+                        "#2 未跑成 ⇒ 随机性**未验**\n");
+            return 0;
+        }
+        std::printf("\n[a64] 结果：★ 通过 —— err=0, outLen=84, 结构符合已知布局, 两次输出不同（%zu/84 字节）\n", diff);
         return 0;
     } catch (const std::exception& e) {
         std::printf("\n[a64] 异常：%s\n", e.what());

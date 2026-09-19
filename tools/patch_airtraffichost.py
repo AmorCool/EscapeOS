@@ -10,6 +10,7 @@
 
 产物全部落在 _tmp_fw/。
 """
+import hashlib
 import os
 import struct
 import sys
@@ -63,6 +64,7 @@ LC_CODE_SIGNATURE = 0x1D
 
 CPU_TYPE_ARM64 = 0x0100000C
 CPU_SUBTYPE_ARM64E = 2
+CPU_TYPE_X86_64 = 0x01000007
 
 # 注意：下面这张表的值必须与 <mach-o/loader.h> 完全一致。
 # 0x24 之后每一条都容易记错一位，这里按头文件逐个核对过。
@@ -126,6 +128,37 @@ log("  选中 slice[%d] = arm64e (off=%d size=%d)" % (idx, off, size))
 thin = bytearray(data[off:off + size])
 assert struct.unpack("<I", thin[:4])[0] == MH_MAGIC_64, "切片开头不是 MH_MAGIC_64"
 open(os.path.join(OUTDIR, "AirTrafficHost.orig"), "wb").write(bytes(thin))
+
+# ---------------------------------------------------------------- 产出 x86_64 切片（可选，A-64 用）
+#
+# 为什么需要：**A-64 路线要的是 x86_64 切片**（喂给 Unicorn 解释执行），不是 arm64e。
+#   arm64e 那份是给「原生 dlopen」路线用的，而那条路已死（iOS 上没有 CoreFP，
+#   且 CoreFP 的 12 条依赖里 StoreFoundation / DiskArbitration 在 iOS 上不存在）。
+#   x86_64 那份**不补丁、不签名、不改 load command** —— 它不进 dyld，只当**数据**喂给模拟器。
+#
+# 为什么不进仓库：Apple 专有二进制（仓库是 public）。与 SAPAssets/CoreFP 同款做法 ——
+#   CI 在 runner 上现场取、现场切，落到 app bundle 里。
+EMIT_X86 = _opt("--emit-x86_64", "")
+if EMIT_X86:
+    x86 = None
+    for i, (ct2, cs2, o2, s2, al2) in enumerate(slices):
+        if ct2 == CPU_TYPE_X86_64:
+            x86 = (i, o2, s2)
+            break
+    assert x86, "FAT 里找不到 x86_64 切片 —— A-64 跑不了（本机 ATH 只剩 arm64e？）"
+    xidx, xoff, xsize = x86
+    xthin = bytes(data[xoff:xoff + xsize])
+    assert struct.unpack("<I", xthin[:4])[0] == MH_MAGIC_64, "x86_64 切片开头不是 MH_MAGIC_64"
+    parent = os.path.dirname(EMIT_X86)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(EMIT_X86, "wb") as f:
+        f.write(xthin)
+    log()
+    log("== 产出 x86_64 切片（A-64 用；不补丁、不签名，只当数据）==")
+    log("  slice[%d] off=%d size=%d" % (xidx, xoff, xsize))
+    log("  落盘: %s" % EMIT_X86)
+    log("  sha256: %s" % hashlib.sha256(xthin).hexdigest())
 log("  -> 薄切片(未补丁) %d 字节  magic=0x%08x" %
     (len(thin), struct.unpack("<I", thin[:4])[0]))
 

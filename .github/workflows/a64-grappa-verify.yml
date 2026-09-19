@@ -94,12 +94,14 @@ jobs:
           echo "a64_verify exit_code = ${{ steps.run.outputs.exit_code }}"
           if [ "${{ steps.run.outputs.exit_code }}" != "0" ]; then
             echo "::error::A-64 验证未通过（exit=${{ steps.run.outputs.exit_code }}），对照 verify.log："
-            echo "::error::  err!=0        → Grappa 生成函数返回了失败码"
+            echo "::error::  err!=0        → Grappa 生成函数返回了失败码（#1/#2 分别打印）"
             echo "::error::  outLen!=84    → 输入 12 字节或 sessionId 初值不对"
             echo "::error::  outPtr==NULL  → err/outLen 对了但没吐出缓冲区（内部路径不对）"
             echo "::error::  内容全 0      → err=0/outLen=84 但 84 字节全零（可疑：可能是空壳成功）"
+            echo "::error::  两次完全相同  → 同进程连调两次输出逐字节相同 ⇒ 硬编码/常量填充的强信号"
+            echo "::error::  结构核对未通过 → 产出的不是已知布局（见日志 ✗ 行：01 01 / 16B / u16LE 0x4000 / 64B）"
             echo "::error::  异常          → MachImage/SapShims/Invoke 阶段就失败了（日志里有原文；"
             echo "::error::                  未注册的 import 会在这里报出它的名字）"
             exit 1
           fi
-          echo "A-64 验证通过：err=0 / outLen=84 / 内容非全零"
+          echo "A-64 验证通过：err=0 / outLen=84 / 结构符合已知布局 / 两次输出不同"
