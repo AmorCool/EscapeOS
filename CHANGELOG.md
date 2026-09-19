@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.3.465] - 2026-09-19
+
+### ★★★ airlift stage 根因定案：**漏了 `RSDCheckin`**（v0.3.464 两趟拆分跑出 `A❌+B❌`）
+
+v0.3.464 的两趟拆分跑通了，真机结论：
+
+```
+★ 判据【Pass A】：link st_ifmt=S_IFLNK=false、link 存在=false、跟随对照文件=false ⇒ A = ❌
+★ 判据【Pass B】：link st_ifmt=S_IFLNK=false、link 存在=false、逃逸探针=false ⇒ B = ❌
+★ 结论【四象限】A❌+B❌：连纯对照 zip 都被拒 ⇒ 问题在 zip 格式或帧格式，不在逃逸条目
+```
+
+而 Pass A **每一步都成功了、却什么都没留下**：
+
+```
+[Pass A][大端长度 + XML plist] MediaSubdir = airlift-src-38A5ECBA
+已发 plist（大端长度 + XML plist）
+已发 zip 原始字节 1220 字节（**无长度前缀**）
+读 … 响应 出错 Socket(BrokenPipe: "channel closed")      ← 设备直接关连接
+```
+四种帧格式**全都一样**；AFC 回读 `airlift-src-38A5ECBA/` → `Afc(ObjectNotFound)`
+⇒ **那个目录压根没被创建**（设备根本没解压）。
+
+**排除项（先做的功课起了作用）**：把 `StageZipBuilder` 在 PC 侧用 Python 复刻、`zipfile` 校验
+（`testzip=None`、`create_system=3`、`S_IFLNK`/`S_IFDIR`/`S_IFREG` 全对）
+⇒ **不是 zip 结构、也不是帧格式**，是**漏了一个协议步骤**。
+
+**根因**：对照本文件里**已经跑通**的 AT 探测（能正常拿到 `Capabilities`/`InstalledAssets`/`SyncAllowed`）：
+
+| | AT 探测 | stage 探测 |
+|---|---|---|
+| 服务 | `com.apple.atc.shim.remote` | `com.apple.streaming_zip_conduit.shim.remote` |
+| **RSDCheckin** | ✅ **发了** | ❌ **没发** |
+
+⇒ **`adapter_connect` 连上 RSD 服务端口之后，必须先发一条 `RSDCheckin` 才算进入服务协议。**
+不发，设备认为这条连接是坏的、**直接关掉** —— 正是 `BrokenPipe("channel closed")` / `ConnectionReset`。
+
+**修法**（只改 `AirliftExploit.swift`，+75/-2）：
+
+- 新增 `sendConduitCheckin(stream:note:)`：形状照抄已跑通的 `runProtocolProbe`
+  （`Label` = `EscapeSpaceAirliftStage` / `ProtocolVersion` = `2` / `Request` = `RSDCheckin`）。
+- **每一条连接都发**（两趟 × 四种帧格式 = 8 条，无一例外），位置在 `openConduit()` 之后、
+  `sendConduitPlist` 之前。
+- 新增 `readConduitCheckinResponses(stream:note:record:)`：**有界 + 失败绝不中止** ——
+  只在该 Pass 的**第一条连接**上读（最多 2 条，**第一条失败就不再读第二条**），
+  避免 8 条连接 × 15s 超时最坏 240s。依据是 ref 原文「**成功判据是 AFC 回读，不是响应**」。
+- 四种帧格式、`sendConduitPlist`、`makeStageTestZip`、四象限判定、AFC 回读逻辑**全部未动**。
+
+自检：`_tools_paren_scan.py` → 最终深度 +0、无负行、无「参数列表少逗号」可疑位置。
+⚠️ 本机不能编译、不能连真机 ⇒ 能否解除 `BrokenPipe` 要等真机实测。
+
 ## [0.3.464] - 2026-09-19
 
 ### ★★★ 更正：前两版「成因」都是**我猜的**，全部作废 —— `ServiceNotFound` 是**设备侧服务状态**问题，**重启手机即恢复**
