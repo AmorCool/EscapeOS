@@ -166,7 +166,11 @@ def main() -> int:
                   "请确认这台 runner 的 macOS 版本里是否还带 AirTrafficHost", file=sys.stderr)
         return 1
 
-    shutil.copy2(chosen, dest)
+    # ⚠️ 不能用 shutil.copy2：它会连**文件标志位**一起拷（内部走 `chflags`），
+    #    而源文件在 `/Library/Apple/System/Library/...`（SIP 保护区）带受限 flag
+    #    ⇒ `PermissionError: [Errno 1] Operation not permitted`（CI 实测，run 35416847155）。
+    #    我们只要**内容**，不要元数据 ⇒ 用 copyfile（只拷字节）。
+    shutil.copyfile(chosen, dest)
     print("=== 素材指纹（与 _gp15/A64-ASSET-HASHES.txt 对照）===")
     if not describe(dest):
         print("::error::这份 AirTrafficHost 没有 x86_64 切片，A-64 跑不了", file=sys.stderr)
