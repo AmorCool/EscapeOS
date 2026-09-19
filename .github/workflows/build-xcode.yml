@@ -428,9 +428,37 @@ jobs:
           python3 tools/patch_airtraffichost.py \
             --src "$FW_SRC" \
             --out "$APP/Frameworks/AirTrafficHost" \
-            --outdir /tmp/fw_patch
+            --outdir /tmp/fw_patch \
+            --emit-x86_64 "$APP/SAPAssets/AirTrafficHost.x86_64"
           # 把补丁详情落到构建日志里（可观测性：补丁前后对照 + 17 个桩符号清单）
           cat /tmp/fw_patch/PATCH-REPORT.txt || true
+
+          # ★★ x86_64 切片的 sha256 必须与「A-64 已实测通过的那一份」一致。
+          #
+          # 为什么是**硬失败**而不是警告（GP-13 指出）：
+          #   A-64（在 Unicorn 里跑 x86_64 ATH + 10.9 CoreFP 生成 Grappa）的结论
+          #   （`err=0 / outLen=84 / 结构 8/8`）**只对某一个具体 build 的 ATH 成立**。
+          #   runner 的 macOS 一升级，`$FW_SRC` 就会换成另一份 ATH —— 届时
+          #   **A-64 的结论静默过期，而 CI 依然全绿**。那正是「验证过的结论悄悄烂掉」的典型。
+          #   所以这里宁可让构建失败，也不让它在未复核的基础上继续出包。
+          #
+          # 处理办法（当这条真的失败时）：
+          #   1) 重跑 A-64 验证：Actions →「A-64 Grappa verify (temporary)」→ Run workflow；
+          #   2) 确认 `err=0 / outLen=84 / 结构核对通过`；
+          #   3) 把下面 ATH_X86_KNOWN_SHA256 换成新值，并**在提交信息里写明重跑过 A-64**。
+          ATH_X86_KNOWN_SHA256="afe39e753f307e18633eafaa1686271a22a7fd2d4c616a10f688850b9a2b4b94"
+          ATH_X86_SHA256="$(shasum -a 256 "$APP/SAPAssets/AirTrafficHost.x86_64" | awk '{print $1}')"
+          echo "AirTrafficHost.x86_64 sha256 = $ATH_X86_SHA256"
+          echo "  已实测通过 A-64 的那份   = $ATH_X86_KNOWN_SHA256"
+          if [ "$ATH_X86_SHA256" != "$ATH_X86_KNOWN_SHA256" ]; then
+            echo "::error::x86_64 切片与「A-64 已实测通过的那一份」不一致 ⇒ A-64 结论已过期。"
+            echo "::error::请先重跑 A-64 验证（Actions → A-64 Grappa verify → Run workflow），"
+            echo "::error::确认 err=0 / outLen=84 / 结构核对通过后，再更新 workflow 里的 ATH_X86_KNOWN_SHA256。"
+            echo "::error::（runner 的 macOS 很可能刚升级过，$FW_SRC 换了另一份 ATH。）"
+            exit 1
+          fi
+          ls -la "$APP/SAPAssets/AirTrafficHost.x86_64"
+
           # dlopen 不看可执行位，但侧载工具/签名器对可执行镜像通常要求 0755，
           # 显式设一次，避免被工具链拒绝。
           chmod 755 "$APP/Frameworks/AirTrafficHost"
@@ -617,6 +645,11 @@ jobs:
           ls -la EscapeSpace-*.ipa
           unzip -l EscapeSpace-*.ipa | grep -E "SAPAssets/(CommerceKit|CoreFP)" || {
             echo "::error::SAPAssets 缺失 —— Apple ID 登录会失败"; exit 1; }
+          # A-64（在 Unicorn 里跑 x86_64 ATH 生成 Grappa）需要这份 x86_64 切片。
+          # 它**不是**给 dyld 用的（架构不匹配、也不该被签名），只是喂给模拟器的数据
+          # ⇒ 必须确认它真的进了 IPA，否则 A-64 在设备上会因为缺素材而失败。
+          unzip -l EscapeSpace-*.ipa | grep -E "SAPAssets/AirTrafficHost\.x86_64" || {
+            echo "::error::SAPAssets/AirTrafficHost.x86_64 缺失 —— A-64 在设备上会缺素材"; exit 1; }
 
       - name: Upload IPA
         if: always()
