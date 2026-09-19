@@ -386,10 +386,14 @@ struct ModuleManagerView: View {
                     .foregroundColor(.green)
             }
 
-            // v1.3：模块声明了宿主能力（requires）而宿主不具备 —— 装载期就明说缺哪一项，
+            // v1.3：模块被阻断（缺宿主能力 / 宿主版本太老）—— 装载期就明说原因，
             // 同时把下面的「执行 / 打开」入口置灰（而不是让用户点下去在运行时静默失败）.
-            if !module.isUsable {
-                Label("缺少宿主能力：\(module.missingCapabilities.joined(separator: "、"))（请升级 EscapeSpace）",
+            // 这里用 `blockingIssues`（人话清单）而不是 `missingCapabilities`：后者只覆盖
+            // 能力缺失，漏掉了 minHostVersion 版本门禁。**不加「缺少宿主能力：」前缀** ——
+            // 每条 issue 自带说明（「缺少宿主能力：…」/「需要宿主 v…，当前 v…」），
+            // 加前缀会重复成「缺少宿主能力：缺少宿主能力：fs.read」.
+            if !module.blockingIssues.isEmpty {
+                Label(module.blockingIssues.joined(separator: "；") + "（请升级 EscapeSpace）",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundColor(.orange)
