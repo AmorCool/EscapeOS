@@ -386,11 +386,17 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             //     1（默认）= FinishedSyncingMetadata → 读 AssetManifest → 发 FileComplete
             //     2        = 发 FileComplete → 发 FinishedSyncingMetadata → 读（趁会话活着）
             //     3        = 发 AssetManifest（主机侧）→ 发 FileComplete → 发 FinishedSyncingMetadata → 读
+            //     4        = ★ 参考实现的**两段式**（v0.3.474）：读 AssetManifest →
+            //                发 FileComplete(link → `airlift-link-<t>`) → sleep 0.9s →
+            //                发 FileComplete(payload → `airlift-link-<t>/<leaf>`) →
+            //                用 `com.apple.afc` 回读**三个位置**（跟随 symlink / 被当目录替换 / 都没发生）。
+            //                落点由 `airlift3` 交接（`airlift-target = …`）决定，
+            //                默认在 Media 内部 ⇒ 零风险且可自验。
             //   **一次只跑一个变体**。
             //
             // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
             //    挂在 UI 路径上会跟其它功能抢隧道（v0.3.419/421/424 那串事故的成因）。
-            // 用法：airlift2 [变体号]   变体号 ∈ {1, 2, 3}，**省略 = 1**
+            // 用法：airlift2 [变体号]   变体号 ∈ {1, 2, 3, 4}，**省略 = 1**
             let variant = parts.count > 1 ? parts[1] : "1"
             AirliftExploit.forceAttackStep2Probe(variant: variant)
             return "已触发 airlift 攻击链第②步探测（变体 \(variant)）。\n"
@@ -414,12 +420,20 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             //
             // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
             //    挂在 UI 路径上会跟其它功能抢隧道（v0.3.419/421/424 那串事故的成因）。
-            // 用法：airlift3
-            AirliftExploit.runBooksStagingProbe()
+            // 用法：airlift3 [越界目标路径]
+            //   · 省略 = `/var/mobile/Media/airlift-canary-<token>`（**Media 内部，零风险**）
+            //     —— 配套的 `airlift2 4` 会穿过 symlink 写到那里，落点**能用 AFC 读回来**
+            //     ⇒ 「机制成立与否」当场可验；
+            //   · 传值 = 用真实目标（例如参考实现的 `/var/mobile/Library/SpringBoard`）
+            //     —— **那会写 Media 之外**，必须显式指定、并自行确认授权。
+            let booksTarget = parts.count > 1 ? parts[1] : nil
+            AirliftExploit.runBooksStagingProbe(target: booksTarget)
+            let targetText = booksTarget ?? "（默认：Media 内部的 canary 目录，零风险）"
             return "已触发 airlift books staging 最小实验（stage + 写 Books.plist，不碰 AirTraffic）。\n"
+                 + "越界目标 = \(targetText)\n"
                  + "结果：cat LoginLogs/airlift_books_verdict.txt（结论）"
                  + " / cat LoginLogs/airlift_books.txt（完整过程）\n"
-                 + "下一步：airlift2 1 → cat LoginLogs/airlift_at2.txt（看有没有 AssetManifest）"
+                 + "下一步：airlift2 4 → cat LoginLogs/airlift_at2.txt（两段式 + 落点回读）"
         case "ddiprobe":
             // ★ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
             //
@@ -728,8 +742,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     EscapeSpace SSH 调试 · 可用命令:
       status          运行状态总览
       airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
-      airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
-      airlift3  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；跑完接着跑 airlift2 1 看有没有 AssetManifest（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
+      airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest 4=两段式（先搬 symlink 再穿过它写 payload，并回读落点）（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
+      airlift3 [目标路径]  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；省略目标 = Media 内部 canary 目录（零风险，配套 airlift2 4 可自验），传值 = 真实目标（会写 Media 之外）（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）
       modules         已安装模块列表

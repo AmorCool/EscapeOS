@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.3.474] - 2026-09-19
+
+### ★★★ 把参考实现的**两段式**做进来（`airlift2 4`）—— 越界写本体
+
+之前 `airlift2` 只发**一条** `FileComplete`，形状跟参考实现不一样 ⇒ 即使 stage 落地了也写不出去。
+参考实现是**两条、顺序不能反**（`airlift.py:379-392` 的 `keep=false` 那组）：
+
+| # | `AssetID` | `AssetPath` | 设备端做什么 |
+|---|---|---|---|
+| 1 | `../../airlift-src-<t>/p0/p1/p2/link` | `airlift-link-<t>` | 把那条 **symlink** 搬到 `/var/mobile/Media/airlift-link-<t>` |
+| 2 | `../../airlift-src-<t>/payload` | `airlift-link-<t>/<leaf>` | 把 `payload` 搬到那个路径 —— **跟随 symlink** ⇒ 落到目标目录里 |
+
+设备端 `-[ATAirlock processCompletedAsset:]` 对每条都做：
+`source = /var/mobile/Media/Airlock/Book + asset.identifier`（**不校验**）、
+`destination = standardize("/var/mobile/Media/" + asset.path)`（**只查字符串前缀**）、
+然后 `moveItemAtPath:toPath:`。
+
+**为什么两条的顺序不能反**：symlink 里写的是 `../../../<target_tail>`。
+在**原位置**（`<root>/p0/p1/p2/link`，相对解压根深度 3）解析成 `<root>/<target_tail>`
+—— **词法上还在解压根内** ⇒ StreamingZip 放行；
+第 1 条把它搬到 `/var/mobile/Media/airlift-link-<t>`（相对 `/` 深度也是 3）
+⇒ 同样 3 个 `..` **正好退到 `/`** ⇒ 解析成**真实目标**。
+第 2 条的 destination **字符串**仍以 `/var/mobile/Media/` 开头（过得了 `hasPrefix`），
+但解析时**跟随那条 symlink** ⇒ 真正落到目标目录里。
+
+### ★ 落点默认放在 Media **内部**（零风险 + 可自验）
+
+参考实现依赖目标目录**已经存在**（它的 `DEFAULT_TARGET` `/var/mobile/Library/SpringBoard`
+在设备上本来就有）。v0.3.474 起 `airlift3` 的默认目标改成
+**`/var/mobile/Media/airlift-canary-<token>`**，并用 AFC 把它建出来
+（`airlift3 [目标路径]` 才用真实目标 —— 那会写 Media 之外，必须显式指定）。
+
+⇒ 落点**能用 `com.apple.afc` 读回来**，而且**三个位置分得开**：
+
+| 现象 | 结论 |
+|---|---|
+| `<交接目标>/<leaf>` 出现 | ★★★ **机制成立**：设备**跟随了 symlink**、两次 move 都执行了 |
+| `airlift-link-<t>/<leaf>` 出现 | **没有跟随 symlink**：symlink 被当普通目录替换了 |
+| 两个都没有 | 两次 move 至少有一次没发生（看「已被搬走」那两行定位是哪一次） |
+
+### 其它改动
+
+1. **`sendMetadataSyncFinished` 的 `DataclassAnchors` 也改成非空** ——
+   它原本是 `.dict([])`，与上游那处（v0.3.472 已改）**不一致**，
+   等于变体 2/3 一直在发「没有新东西要同步」⇒ 设备直接 `SyncFinished`。
+2. `fileCompleteMessage()` **参数化**成 `fileCompleteMessage(assetID:assetPath:)`
+   （变体 4 要发两条、参数不同）。
+3. `airlift3` 新增**目标交接**：note 一行 `airlift-target = <绝对路径>`，
+   `airlift2 4` 读它（按 mtime 取最新那份记录）—— 两边必须用**同一个目标**，
+   否则落点判据失去意义。读不到就**如实报出并放弃**，绝不猜。
+4. `forceAttackStep2Probe` 接受变体 `"4"`；help 与各处注释同步更新。
+
+### 真机步骤
+
+```
+airlift3            →  cat LoginLogs/airlift_books_verdict.txt   # 造前置条件（默认 Media 内落点）
+airlift2 4          →  cat LoginLogs/airlift_at2.txt             # 两段式 + 三个位置的落点回读
+```
+
+要看的：
+1. `★ 判据② airlift-src-<token>/` **成功**（stage 真落地 —— v0.3.473 修的）；
+2. `★★★ 清单里有没有我们那条：` = **有**（v0.3.472/473 已验过）；
+3. `★★★ 机制成立` —— payload 落在**交接目标目录**里，而不是 `airlift-link-*` 下面。
+
+第 3 条一旦出现，把 `airlift3` 的目标换成真实路径（例如 `/var/mobile/Library/SpringBoard`）
+就是**真正的越界写** —— 那一步会写 Media 之外，需要显式授权后再做。
+
 ## [0.3.473] - 2026-09-19
 
 ### ★★★★ 真机实证：**根因成立** —— 设备第一次发出了 `AssetManifest`
