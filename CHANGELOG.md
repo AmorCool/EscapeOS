@@ -1,5 +1,102 @@
 # Changelog
 
+## [0.3.481] - 2026-09-20
+
+### ★★★ 模块系统补上**反向通道**：`escape.host.v1` 宿主能力接口 + 原生 SwiftUI 二级界面
+
+#### ① 为什么做这个（这是一直缺的一块）
+
+模块系统此前只能**单向**：宿主调用模块（`signal` / `bridge`）。
+模块**不能反向调用宿主能力** —— 后果是任何需要「沙盒外读写 / 改系统设置 / 枚举进程」
+的模块，都得自己把整套漏洞利用重写一遍。既是重复劳动，也是模块之间耦合的根源。
+
+现在模块只声明 `requires`，由宿主决定底层走 bad_query 还是 airlift。
+**将来漏洞链被替换，模块零改动；加新能力只需要改宿主一个文件。**
+
+#### ② `HostCapabilityService` —— 13 项能力，两条调用路径
+
+| 能力 | 说明 | 限制（如实标注） |
+|---|---|---|
+| `host.version` / `host.capabilities` | 宿主版本 / 本机能力清单 | — |
+| `fs.read` / `fs.write` / `fs.delete` | 文件读写删 | 沙盒外**只能单文件** |
+| `fs.exists` | 判存在 | ⚠️ **不支持沙盒外**（见下） |
+| `fs.list` | 列目录 | ⚠️ **仅 App 沙盒内** |
+| `sys.supervised.get` / `.set` | 监督模式 | 写需要 airlift |
+| `proc.list` / `proc.signal` | 进程枚举 / 发信号 | 信号限 SIGKILL/SIGSTOP/SIGCONT |
+| `notify.post` | 本地通知 | 需已授权 |
+| `exploit.status` | 漏洞利用可用性 | — |
+
+两条路径都汇到同一个 `call` 分发器：
+
+- **外部 dylib 模块**（C/Go）：宿主加载时把 `EscapeHostAPI` 函数表指针交给模块可选的
+  `escape_module_init`。★ **刻意不用 dlsym 宿主符号** —— 主可执行文件的符号不保证对
+  `dlsym(RTLD_DEFAULT)` 可见（本仓库自己就是因为这个才写了
+  `uloader_symbols_with_suffix` 去读符号表）。传指针对 dlopen 的 dylib 与静态链接的
+  模块都成立。
+- **原生 SwiftUI 模块界面**：视图是编译进宿主的 Swift 代码，直接调
+  `HostCapabilityService.call(...)`，根本不需要 C ABI。
+
+#### ③ ★ 三个安全判断（都是读源码后改的设计）
+
+1. **`fs.read` 对沙盒外路径是破坏性的** —— airlift 的「读」是**移动不是拷贝**，
+   读完原位置就没这个文件了。所以必须调用方显式传 `allowMove: true` 才执行，
+   否则拒绝并说明原因。一个查询接口不能默认造成破坏。
+2. **`fs.exists` 刻意不支持沙盒外** —— 拿 airlift 探存在会把文件搬走。
+   宿主也没有别的「只 stat 不搬动」的沙盒外原语，所以如实报错，不假装知道。
+3. **`sys.supervised.get` 不走 airlift** —— 依据 `ConfigurationsStore.readCurrent()`
+   用的是 `NSDictionary(contentsOfFile:)`，读不需要任何沙盒扩展（只有写才需要
+   `ensureAccess()`）。改用 airlift 读会把 plist 搬走。
+   `set` 的流程：普通 FileManager 读（非破坏性）→ 改字段 → **备份原字节到
+   `Documents/CapBackup`** → airlift 写回 → **再读回校验**（不轻信写入返回值）。
+
+#### ④ 原生 SwiftUI 二级界面（`ui` 清单字段）
+
+模块清单新增 `ui: { style: "native", view: "<注册名>", title }`。
+SwiftUI 视图没法从 zip 里加载，所以 `view` 是**宿主内的注册名**；
+名字没注册 ⇒ 卡片**不给「打开」入口**（不会给一个点进去空白的按钮）。
+
+进模块是**全屏二级独立界面**：`fullScreenCover` 盖住 App 的 TabView（看不到默认底栏），
+底部是**模块自己的**导航栏，左上角**常驻**「返回上一级」+「主页」两个出口。
+
+> 外壳**刻意不套 `NavigationStack`** —— 已经有常驻顶栏了，再叠一层系统导航栏会多出
+> 一条空细条（双层栏）。需要下钻的模块由它自己的 tab 内容内部去套。
+
+#### ⑤ 清单新增 `requires` + ★ `minHostVersion` 真正生效
+
+- `requires: ["fs.read", "fs.write", ...]`：声明需要的宿主能力。
+  宿主装载时校验，缺任何一项 ⇒ 模块标记为**不可用**（卡片橙字显示缺哪项，
+  执行/打开/启动全部置灰）。**能力缺失是装载期可见的，不是点下去才静默失败。**
+- `minHostVersion` **此前只是读进来存着、从未参与任何判断**（全仓 grep 只有那一行声明）
+  ⇒ 「模块声明需要 0.3.481 却装在 0.3.480 上」会一路放行到运行时。
+  现在新增 `HostVersion`（自写 semver 比较，不引第三方库）+
+  `EscapeModule.blockingIssues`（把「缺能力」与「版本太老」合成一个人话清单，UI 只认它）。
+- `autoStartAll()` 也跳过 `blockingIssues` 非空的模块 —— 它跑起来也只会失败，
+  而在启动期炸掉（Go 侧 `log.Fatal` → `os.Exit`）会连宿主一起带走。
+
+#### ⑥ 第一个用它的模块：`com.escapeos.airlift-poc`（原生界面）
+
+三个 tab：**概览**（宿主版本 / 模块可用性 / airlift 状态 / 逐条标注声明能力是否支持）、
+**监督模式**（本次唯一功能）、**日志**（宿主能力调用的原始 JSON 往来，排障用）。
+
+监督模式：读当前状态 → 改 `IsSupervised` → 写回 → **读回校验**。
+执行前确认弹窗如实说明风险；执行后逐条列出 steps；失败显示 `error` 原文，
+**不吞、不粉饰**；显示原文件备份路径。
+
+> **为什么监督模式现在才做得成**：现有实现靠 `escape.consume(path: configProfiles,
+> isGroup: true)` 拿 bad_query 沙盒扩展，而 iOS 26.5/26.6 对 `configurationprofiles`
+> SystemGroup **拒绝签发沙盒扩展** ⇒ 写不进去。airlift 能写任意单个文件 ⇒ 正好补这个洞。
+
+#### ⑦ 模块仓库（module-esc）同步
+
+- `validate.py` 重写：认 `bridge` 动作（宿主 `ModuleService.run` 只特判 `signal`，
+  其余一律走 `bridgeCall`）——**此前它只认 `signal`，把 alist 判为非法，
+  导致 `Package Modules` 从 2026-09-04 起一直失败，locache / wifirefresh 也一起发不出去**
+- 新增 `requires` / `ui` 校验；新增 `--strict` / `--skip-signature`
+- 校验 `signature.sig`（binary/hotfix 必须有，且是 64 字节合法 base64）
+- README 重写：原文「模块是声明式清单，不含可执行代码」是错的
+  （有 `binary` / `lua` / `hotfix` / `webroot` / `ui` 五种载荷形态）
+- 新增 `module.schema.json`（编辑器补全）、`templates/`、`.gitignore`、`.gitattributes`
+
 ## [0.3.480] - 2026-09-19
 
 ### ★★★ 补上「删除」+「任意字节写」+ **编程接口层**（模块化的前提）
