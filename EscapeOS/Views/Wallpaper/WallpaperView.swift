@@ -12,6 +12,7 @@ struct WallpaperView: View {
     @State private var isReady = false
     @State private var importError: String?
     @State private var showResetConfirm = false
+    @State private var showResetCuratedConfirm = false
     @State private var showDeleteConfirm = false
     @State private var deleteTarget: TendiesObject?
     @State private var activeAlert: WallpaperAlert?
@@ -59,6 +60,14 @@ struct WallpaperView: View {
                         showExtractor = true
                     } label: {
                         Label("提取当前系统壁纸", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(pbContainerPath.isEmpty)
+
+                    // 与「清空所有导入」互相独立：这一项动的是 PosterBoard 系统容器，不是 App 内的导入包.
+                    Button(role: .destructive) {
+                        showResetCuratedConfirm = true
+                    } label: {
+                        Label("重置精选集", systemImage: "arrow.counterclockwise")
                     }
                     .disabled(pbContainerPath.isEmpty)
 
@@ -132,6 +141,12 @@ struct WallpaperView: View {
             Button("清空", role: .destructive) { clearAll() }
         } message: {
             Text("将删除所有已导入的壁纸包，但不会恢复 PosterBoard 本身.")
+        }
+        .alert("重置精选集？", isPresented: $showResetCuratedConfirm) {
+            Button("取消", role: .cancel) {}
+            Button("重置", role: .destructive) { resetCurated() }
+        } message: {
+            Text("将删除 PosterBoard 中的自定义壁纸，Apple 默认精选集保留.")
         }
         .alert("删除壁纸包？", isPresented: $showDeleteConfirm) {
             Button("取消", role: .cancel) { deleteTarget = nil }
@@ -461,6 +476,51 @@ struct WallpaperView: View {
         withAnimation {
             tendiesArray.removeAll()
         }
+    }
+
+    /// 重置精选集：只动 PosterBoard 系统容器里的自定义描述符，不碰 App 内已导入的壁纸包.
+    private func resetCurated() {
+        let container = pbContainerPath
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = try handler.resetCustomDescriptors(containerPath: container, using: sandbox)
+                DispatchQueue.main.async {
+                    // 四种情况都如实报：全成 / 一张都没删 / 有失败（已删的和失败的都要说）.
+                    if result.failed > 0 || result.unreadable > 0 {
+                        // 只把非 0 的项拼进去，不显示「0 张失败」；「读不了几个目录」张数未知，单独说.
+                        var parts = ["已删除 \(result.removed) 张"]
+                        if result.failed > 0 { parts.append("\(result.failed) 张删除失败") }
+                        if result.unreadable > 0 { parts.append("\(result.unreadable) 个目录读取失败") }
+                        showAlert(title: "重置精选集", message: parts.joined(separator: "；") + ".") {
+                            openPosterBoard()
+                        }
+                    } else if result.removed == 0 {
+                        showAlert(title: "重置精选集", message: "没有可重置的自定义壁纸.")
+                    } else {
+                        showAlert(title: "重置完成", message: "已删除 \(result.removed) 张自定义壁纸，重新打开 PosterBoard 生效.") {
+                            openPosterBoard()
+                        }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    showAlert(title: "重置失败", message: resetFailureMessage(for: error))
+                }
+            }
+        }
+    }
+
+    /// 如实区分失败原因：没有写权限 / 没找到容器.
+    /// 注意：**单个目录删除失败不再走这里** —— 它由 `resetCustomDescriptors` 计数后随成功数一起报.
+    private func resetFailureMessage(for error: Error) -> String {
+        // 沙盒扩展拿不到（被内核拒绝、路径不在 containermanager 沙盒内等）⇒ 没有写权限.
+        if error is SandboxEscapeError { return "没有写权限." }
+        // 容器路径非法或三个 provider 目录都不存在 ⇒ 没找到容器.
+        if let importError = error as? WallpaperImportError,
+           case .operationFailed(let message) = importError {
+            return message
+        }
+        return "重置失败：\(error.localizedDescription)"
     }
 
     private func openPosterBoard() {
