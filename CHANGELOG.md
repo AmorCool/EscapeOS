@@ -36,6 +36,14 @@ Apple 自己的 dyld 源码把该路径包在 `#if TARGET_OS_OSX` 里）。若�
 **本版同时带上 v0.3.449 的构建修复**（桩被 xcodegen 拷到 bundle 根 ⇒ 改由 CI 显式拷进
 `Frameworks/`，并加硬自检）。v0.3.449 那次构建**已成功**，本版在其基础上加四组实验。
 
+**★ 本版修正一处发版缺陷（复核时抓到，非本次实验代码）**：
+`CURRENT_PROJECT_VERSION` 曾误沿用 v0.3.449 的 **746**（应递增）。
+`ModuleService.bootstrapBundledModules()` 以 `CFBundleVersion` 作**安装版本锚点**
+（`ModuleService.swift:259-261`：「CFBundleVersion 每次发版必变」），
+且设置页显示的就是 build 号 —— 449/450 同号会同时**丢掉覆盖安装检测**并**让用户无法从
+日志区分装的是哪一版**。已改 **746 → 747**，并重发 v0.3.450（原 tag 指向的构建已取消，
+`v0.3.450` 只构建一次）。
+
 ## [0.3.449] - 2026-09-19
 
 ### ★ 修 v0.3.448 的构建失败：桩被拷到了 **bundle 根**（而不是 `Frameworks/`）
