@@ -91,6 +91,24 @@ struct LuaModuleConfig: Codable {
     var entry: String?
 }
 
+/// 原生 SwiftUI 界面配置（module.json "ui" 键，v1.3）
+///
+/// 模块想自带**原生**界面（而不是 `webroot` 的 WKWebView）时声明这个键。
+/// 视图实现必须编译进宿主（SwiftUI 视图没法从 zip 里加载），所以 `view` 是一个
+/// **注册名**：宿主在启动时把内置视图按名字注册进 `ModuleUIRegistry`，
+/// 模块只声明"我要用哪个视图"。注册名缺失 ⇒ 模块卡片不显示「打开」按钮
+/// （不会崩，也不会给用户一个点进去是空白的入口）。
+struct ModuleUIConfig: Codable {
+    /// 界面形态，目前只有 "native"
+    var style: String
+    /// 视图注册名（见 ModuleUIRegistry）
+    var view: String
+    /// 二级界面标题；为空则用模块 name
+    var title: String?
+
+    var isNative: Bool { style == "native" }
+}
+
 struct EscapeModuleAction: Identifiable, Codable {
     let id: String
     let label: String
@@ -141,6 +159,14 @@ struct EscapeModule: Identifiable, Codable {
     var binary: BinaryConfig?
     /// v1.2：可选.Lua 模块——纯脚本（数据，无签名要求），entry 为模块目录内脚本路径
     var lua: LuaModuleConfig?
+    /// v1.3：可选.原生 SwiftUI 界面（view 为宿主内的注册名，见 ModuleUIRegistry）
+    var ui: ModuleUIConfig?
+    /// v1.3：可选.声明需要的宿主能力（见 HostCapabilityService.capabilityList）
+    ///
+    /// 宿主装载时校验：缺任何一项 ⇒ 模块视为「不可用」（卡片显示缺哪一项，
+    /// actions 与原生界面都不给入口）。这样能力缺失是**装载期可见**的，
+    /// 而不是用户点下去才在运行时静默失败。
+    var requires: [String]?
     /// 二进制模块是否随宿主自启动（默认读 binary.autoStart）
     var autoStart: Bool?
     let actions: [EscapeModuleAction]
@@ -153,6 +179,21 @@ struct EscapeModule: Identifiable, Codable {
     var isLuaModule: Bool { lua != nil }
     /// Lua 模块入口脚本路径（相对模块目录；默认 main.lua）
     var luaEntry: String { lua?.entry ?? "main.lua" }
+    /// 是否自带原生 SwiftUI 界面
+    var hasNativeUI: Bool { ui?.isNative == true }
+    /// 原生界面视图注册名
+    var nativeUIViewName: String? { hasNativeUI ? ui?.view : nil }
+
+    /// 缺失的宿主能力（空 = 全部满足）
+    var missingCapabilities: [String] {
+        let needed = requires ?? []
+        guard !needed.isEmpty else { return [] }
+        let have = Set(HostCapabilityService.capabilityList)
+        return needed.filter { !have.contains($0) }
+    }
+
+    /// 是否可用（能力齐备）
+    var isUsable: Bool { missingCapabilities.isEmpty }
 
     /// 安装目录（内置原地模块指向 bundle）
     var installURL: URL {
@@ -629,6 +670,13 @@ final class ModuleService {
     ///   rc==0 时用 action.success 模板组装结果消息（{0}/{1} 替换实际实参）.
     ///   功能是什么、界面展示什么，全部由模块自行决定，宿主零适配.
     func run(action: EscapeModuleAction, module: EscapeModule) throws -> String {
+        // v1.3：能力门禁——模块声明的宿主能力缺任何一项就拒绝执行，
+        // 而不是让它跑到一半在运行时静默失败
+        let missing = module.missingCapabilities
+        if !missing.isEmpty {
+            throw ModuleError.badAction(
+                "模块「\(module.name)」需要宿主能力 \(missing.joined(separator: "、"))，当前宿主不支持（需升级 EscapeSpace）")
+        }
         if action.type == "signal" {
             return try runSignal(action)
         }
