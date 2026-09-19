@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.3.444] - 2026-09-19
+
+### AT 主机消息结构修正（4 处，键名从 DLL 二进制直接读出）+ `Sig` 证伪
+
+**背景**：v0.3.442 真机实测，设备回了
+`SyncFailed{ErrorCode:4}` —— 它收到了我们的 `HostInfo` / `RequestingSync` 但**拒绝了**。
+
+**1. 键名不是推断的，是从 `AirTrafficHost.dll` 二进制里直接读出来的**
+
+方法：`lea rcx,[rip+X]` 指向的常量**就是内联 ASCII**，读原始字节即可（不用解析 `__CFConstantString`）。
+
+| DLL 函数 | 真实的 `Params` 键（顺序即写入顺序） | 条目数 |
+|---|---|---|
+| `ATHostConnectionSendHostInfo` | `HostInfo` / **`LocalCloudSupport`** | `mov r9d, 2` |
+| `ATHostConnectionSendSyncRequest` | `Dataclasses` / `DataclassAnchors` / `HostInfo` | `mov r9d, 3` |
+| `ATHostConnectionSendMetadataSyncFinished` | **`DataclassAnchors`** | `mov r9d, 2` |
+
+**⇒ 修正 4 处**：
+1. `HostInfo` 消息：8 个业务字段应在 **`Params.HostInfo` 内层**（我们原来放在 Params 顶层）；
+2. 补上 **`LocalCloudSupport`**（取自 `conn+0x28`；该初值未逆出，先发 `false` —— 它只由
+   `ATHostConnectionCreateWithCallbacks` 第 5 参写入，`ATHostConnectionCreate` 走 calloc ⇒ 默认 false）；
+3. `RequestingSync`：**`Grappa` 属于 `HostInfo` 内层**、类型是 **CFData**（`0x180031e98`），
+   我们原来放在 Params 顶层当 `int(0)` —— **层级和类型都错**；
+   `PlistValue` 因此新增 `.data(Data)`（plist 的 `<data>` 是 base64）；
+4. `FinishedSyncingMetadata` 第二个键是 **`DataclassAnchors`**（`0x180031a85`），原来写成 `Anchors`。
+
+另：**Session 号** `inc [conn+0x14]`（`0x180031df3`）只在 `SendSyncRequest` 里出现一次，
+初值 0 ⇒ `HostInfo` 用 0、**从 `RequestingSync` 起用 1**。原来全是 0。
+
+**2. `Sig` 与我们无关（此前的担忧被证伪）**
+
+`Sig` 字符串全 DLL **只被引用一次**：`0x18002f4bd`，是 `ATCFMessageVerify` **读**它
+（类型 CFData，`0x18002f4e3 CFDataGetLength`），唯一调用点在**校验设备发来的 `AssetManifest`**。
+**Windows 主机从不产生 `Sig`** ⇒ 不用实现签名，省掉一整块密码学工作。
+顶层字典也确认只有 `{Session, Command, Params}` 三个键（`Type`/`Id` 在代码里零引用）。
+
+**3. `ErrorCode 4` = Grappa/认证失败**
+
+`0x180030a33 mov edx, 4` 构造 `{Command:"SyncFailed", Params:{ErrorCode:4}}`；
+两条汇入路径是 `"Grappa key could not be established"` 与
+`"Grappa could not verify message, sending auth error"`。
+
+**4. ★ 当前卡点（诚实记录）**：`Grappa` 的派生函数 `sub_180011110` 是 **VM 混淆**
+（状态加密 + 加密函数指针表 `0x180049ae0` + 分发器 `sub_180003360`），
+**人工逆向不现实**；且 `sub_1800125a0` 里 `rdtsc % 9` 选 9 个 16 字节常量之一，
+**有可能每次都不一样**。`sub_180003430`（建密钥）同样是 VM。
+
+已知的确定信息（有用）：`conn+0x18` 是 DLL 自己拍平的 **12 字节结构**
+`{u8 version; u8[3] pad; i32 deviceType; u8 protocolVersion; u8 pad; u16 0}`，
+本机实测 = `01 00 00 00 | 00 00 00 00 | 01 00 00 00`（来自设备 `Capabilities.GrappaSupportInfo`）。
+`conn+0x24` = Grappa 会话 id（0 = 无活跃会话）。
+
+**本版仍会得到 `ErrorCode 4`**（Grappa 未实现），但结构已全部正确 ——
+这一步是为了把「结构错误」这个变量排除掉，确认 Grappa 是**唯一**剩下的拦路虎。
+
 ## [0.3.443] - 2026-09-19
 
 ### 电池健康按爱思 9.0 口径修正（温度 / 寿命 / 厂商 / 序列号）+ 全量 registry dump
