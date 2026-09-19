@@ -396,6 +396,30 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             return "已触发 airlift 攻击链第②步探测（变体 \(variant)）。\n"
                  + "结果：cat LoginLogs/airlift_at2.txt（结论，< 2 KB）"
                  + " / cat LoginLogs/airlift_at2_full.txt（每帧原文）"
+        case "airlift3":
+            // ★ 开发期入口：**只做** airlift 攻击链的「前置条件」那一步 ——
+            // ① stage 真实归档（zip 落地到 `/var/mobile/Media/airlift-src-<token>/`）
+            // ② AFC 建 `Books`、`Books/Sync` 并写 `Books/Sync/Books.plist`
+            // **不发任何 AirTraffic 消息**（第 ③ 步用已有的 `airlift2 1`）。
+            //
+            // 为什么需要（根因，依据 `AldazActivator/airlift-rw` 源码）：
+            //   参考实现自己用 AFC **伪造了设备上的 Books 同步元数据**，
+            //   设备端 Books 同步客户端读到它才会在 `AssetManifest` 里播报
+            //   那个「待下载 asset」。我们从来没写过这个文件 ⇒ 设备无待下载 asset
+            //   ⇒ 不发 AssetManifest ⇒ 第 ③ 步的 `FileComplete` 成了孤立应答 ⇒ 被忽略。
+            //   详见 `AirliftExploit.runBooksStagingProbe()` 的头注释。
+            //
+            // 跑完接着跑 `airlift2 1`，看 `LoginLogs/airlift_at2.txt` 里**有没有
+            // `AssetManifest`** —— 有 = 根因定案；没有 = 这条前置条件不成立，如实报出。
+            //
+            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
+            //    挂在 UI 路径上会跟其它功能抢隧道（v0.3.419/421/424 那串事故的成因）。
+            // 用法：airlift3
+            AirliftExploit.runBooksStagingProbe()
+            return "已触发 airlift books staging 最小实验（stage + 写 Books.plist，不碰 AirTraffic）。\n"
+                 + "结果：cat LoginLogs/airlift_books_verdict.txt（结论）"
+                 + " / cat LoginLogs/airlift_books.txt（完整过程）\n"
+                 + "下一步：airlift2 1 → cat LoginLogs/airlift_at2.txt（看有没有 AssetManifest）"
         case "ddiprobe":
             // ★ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
             //
@@ -705,6 +729,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       status          运行状态总览
       airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
       airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
+      airlift3  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；跑完接着跑 airlift2 1 看有没有 AssetManifest（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）
       modules         已安装模块列表

@@ -1,5 +1,78 @@
 # Changelog
 
+## [0.3.472] - 2026-09-19
+
+### ★★★ 根因定案：**我们从来没写 `Books/Sync/Books.plist`**
+
+依据：`https://github.com/AldazActivator/airlift-rw`（**有完整源码**，README 写明
+Tested on iOS 27.0 RC `24A435`，`airlift_target.h` 的 `AIRLIFT_TESTED_BUILDS` 还列了 `24A5390f`）。
+反汇编了它的 `build/airtraffic_host`（Mach-O 64），**逐条印证了源码**。
+
+**参考实现的完整链条**：
+
+1. `com.apple.streaming_zip_conduit` 把带 symlink 的 zip 落地到
+   `/var/mobile/Media/airlift-src-<token>/`；
+2. **AFC 写 `/var/mobile/Media/Books/Sync/Books.plist`**
+   （`device_helper.m:501-504`，内容由 `airlift.py:290-295` 的 `build_books()` 造）；
+3. 起 AirTraffic 会话 → 设备在 **`AssetManifest`** 里播报第 2 步写进去的那些
+   `Persistent ID`（`airtraffic_host.m:56-65` 的 `ManifestContains` 要求
+   我们声明的 identifier 在清单里且 `IsDownload` 为真）→ 逐条 `SendAssetCompleted`
+   → 设备端 `-[ATAirlock processCompletedAsset:]` 做 `move`。
+
+**我们从来没做过第 2 步** ⇒ 设备没有待下载 asset ⇒ **不发 `AssetManifest`**
+⇒ 第 3 步发的 `FileComplete` 是**没有对应请求的孤立应答** ⇒ 被忽略。
+这与 v0.3.471 真机实测（`FinishedSyncingMetadata` 之后设备**直接回 `SyncFinished`**）
+**完全自洽**。
+
+### ★ 越界机制（README「ATAirlock path validation」段 + `airlift.py:362-401`）
+
+`ATAirlock` 两个缺陷：`asset.identifier` **无路径校验**地拼进 `source`；
+`destination` 只做**字符串**前缀检查（`stringByStandardizingPath` **不解析 symlink**）。
+
+zip 里 symlink `p0/p1/p2/link` 的内容 = **`../../../` + `target[1:]`**，一条内容同时满足两件相反的事：
+
+| | 相对 `/` 深度 | `../../../var/mobile/Library/SpringBoard` 解析成 |
+|---|---|---|
+| 解压时（在 `<root>/p0/p1/p2/`） | 3 | `<root>/var/mobile/Library/SpringBoard` ⇒ **词法在根内 ⇒ 被接受** |
+| 第 1 次 move 后（搬到 `/var/mobile/Media/airlift-link-<t>`） | 3 | **`/var/mobile/Library/SpringBoard`** ⇒ Media **之外** |
+
+⇒ 第 2 次 move 的 destination 字符串仍以 `/var/mobile/Media/` 开头（**过检查**），
+实际落点已在 Media 外。**这解释了 v0.3.465 Pass A 里「`link` 含 3 个 `..` 却被接受」。**
+
+### ★ 本版改动（**只做前置条件，不碰 AirTraffic**）
+
+1. **新增 SSH 命令 `airlift3`** → `AirliftExploit.runBooksStagingProbe()`：
+   - 用**真实的**归档（`makeAirliftArchive`，条目逐字照抄 `airlift.py:262-287`：
+     `payload` + `p0/p1/p2/link` + `target_tail` 各层目录 + `META-INF/com.apple.ZipMetadata.plist`）
+     走 conduit 落地；
+   - AFC 逐层建 `Books`、`Books/Sync`（`afcEnsureDirectory`），写
+     `Books/Sync/Books.plist`（`afcWriteFile`），内容 = binary plist
+     `{"Books":[{"DSID":"1","Item ID":"1","Persistent ID":"../../airlift-src-<t>/p0/p1/p2/link"}, …]}`
+     —— **结构、键名、identifier 逐字照抄参考实现**；
+   - 全部用 **AFC 回读**做判据（不是响应）；结论写 `LoginLogs/airlift_books_verdict.txt`。
+2. **`FinishedSyncingMetadata` 的 `DataclassAnchors`：`{}` → `{"Book": 1}`**
+   （`airtraffic_host.m:149-152` 原文是 `@{ @"Book": @1 }`）。空 anchors 的含义是
+   「没有新东西要同步」⇒ 设备直接结束会话，与实测现象自洽。
+3. `stagedSourceNameFromLastStageRun()`：**先看 `airlift_books.txt`，再看 `airlift_stage.txt`**
+   —— `airlift3` 之后紧接着跑 `airlift2 1`，后者必须拿到同一个 source 目录名。
+
+**下一步（真机）**：`airlift3` → `airlift2 1` → `cat LoginLogs/airlift_at2.txt`，
+看**有没有 `AssetManifest`**。有 = 根因定案；没有 = 这条前置条件不成立，如实报出。
+
+### ★ 铁律（本版新增两条）
+
+1. **读 PoC 先确认拿的不是被改过的 fork**（尤其看校验有没有被注释掉）。
+   我们上一轮读的是 `marksvia/airlift-HideAccount`，它的 `airtraffic_host.m`
+   **把 manifest 校验整段注释掉了**（"Skip manifest validation to allow writes to arbitrary paths"）、
+   README 自称 "Untested" ⇒ 我们据此误判「这条链从来没人证实过」。**那个判断是错的。**
+2. **`DataclassAnchors` 不能是空字典** —— 空 = 「没有新东西」，设备直接 `SyncFinished`。
+
+### 顺带：新增静态自检工具
+
+`_tools_swift_balance.py` —— 能正确处理**字符串字面量 / `\(…)` 插值（含插值里的闭包 `{ }`）/
+行·块注释**的括号配平检查器。`_tools_paren_scan.py` 是「逐行剥离字符串」的朴素实现，
+遇到 `\(cond ? "a" : "b")` 这种插值里嵌字符串就会错判。
+
 ## [0.3.471] - 2026-09-19
 
 ### ★★ 变体 2/3 真机结果：**响应层面判不出成败** ⇒ 必须靠 AFC 回读
