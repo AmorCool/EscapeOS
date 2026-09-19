@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.3.448] - 2026-09-19
+
+### 修 3 个 bug + Grappa 探测链补全（`LC_SYMTAB` 替换 `dlsym`、CoreFP、iOS 原生框架）
+
+**本版的核心目的**：把 v0.3.447 那次**必然失败**的三个 bug 全部堵上，并让**一次真机运行**
+就能同时回答四个问题（框架能否加载 / iOS 有没有 CoreFP 且混淆名对不对 / iOS 有没有自带
+`AirTrafficHost` / **stage 那条不依赖 Grappa 的路通不通**）。
+
+**1. 修构建失败：`MobileDeviceStub` 链接不到 `libunicorn.a`**
+顶层 `settings.base` 里的 SAP/openssl 设置（`$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a`、
+`-L openssl-build -lcrypto`、QuickLook/PDFKit/AVKit… 一堆 framework）**对所有 target 生效**，
+而桩 target **不跑** `prepare.sap.py` ⇒ 继承后去链一个不存在的文件。
+修法：在**该 target 的 `settings.base` 里逐条覆盖**（xcodegen 的 settings 合并是**按 key 覆盖**、
+不拼数组）—— `OTHER_LDFLAGS: ["-framework","CoreFoundation"]` / `HEADER_SEARCH_PATHS: []` /
+`LIBRARY_SEARCH_PATHS: []`。**没动顶层 `settings.base`。**
+
+**2. 修产物文件名不匹配（即使编译过，dlopen 也会失败）**
+实际产物是 `MobileDeviceStub.dylib`（**无 `lib` 前缀**），而框架的 `LC_LOAD_DYLIB` 写的是
+`libMobileDeviceStub.dylib` ⇒ **dyld 找不到桩**。
+★ 我最初建议的 `EXECUTABLE_PREFIX: lib` **单独用不行** —— xcodegen 的产物引用路径是
+`Target.filename`，而它**只对 `staticLibrary` 自动加 `lib`**（`dynamicLibrary` 不加）⇒
+加了只会让**实际产物**带 `lib`，pbxproj 的 embed 阶段仍引用不带 `lib` 的名字 ⇒ **拷贝阶段找不到文件**。
+修法：**三处一起钉死** —— `productName` + `PRODUCT_NAME: libMobileDeviceStub` + `EXECUTABLE_PREFIX: ""`。
+
+**3. 修 `dlsym` 必然返回 NULL（private external）**
+`_uhO2GULXwfgKwPcp4YR2` 的 `n_type = 0x1e` = `N_PEXT|N_SECT`，**`N_EXT = 0`**
+⇒ **不进动态符号表 ⇒ `dlsym` 永远拿不到**。
+修法：改成**自己解析已加载镜像的 `LC_SYMTAB`**（`_dyld_image_count` /
+`_dyld_get_image_name` / `_dyld_get_image_header` / `_dyld_get_image_vmaddr_slide`
+→ 遍历 load command → `nlist_64` 表按名匹配 → `n_value + slide`），`dlsym` 降为兜底。
+- **地址换算**：`slide = base − __TEXT.vmaddr`；`symTab = slide + (__LINKEDIT.vmaddr − __LINKEDIT.fileoff) + symoff`
+  （把文件偏移转成运行时地址）。
+- **过滤**：跳 `N_STAB`、只取 `N_SECT`、跳 `n_value == 0`。
+- ★ **对照值**：本机那份二进制里该符号 `n_value = 0x2ecb8`；runner 上算出的运行时地址
+  `0x100c16cb8 − 0x2ecb8 = 0x100be8000`（**页对齐的 slide**）⇒ 两个独立来源自洽。
+  ★ 但**不把它做成硬失败判据** —— CI 是当次 runner 现场取框架，版本不同则 `n_value` 也会不同。
+
+**4. CoreFP 探测：改判据 + 修一个会造成假阴性的 bug**
+- ★ **`dlsym(CoreFP, "appHelloImp")` 是错的判据**：那 5 个 `xxxImp` 只是 `AirTrafficHost` 用
+  `puts` 打的**人类可读标签**；**真正传给 dlsym 的是混淆名**
+  （`appHelloImp→WIn9UJ86JKdV4dM`、`appSetupSessionImp→X46O5IeS`、`runCommandImp→YlCJ3lg`、
+  `getDLLVersionImp→lxpgvVMLd0S7uRl`、`teardownImp→dku592fbFAj`，在 loader `0x5abc` 处逐字节核对过）。
+  这 5 个**全在 CoreFP 的导出表里**（CoreFP arm64e 切片只导出 8 个，全是混淆名）。
+  ⇒ 改成**枚举 iOS CoreFP 的导出符号、逐个对照那 5 个 macOS 混淆名**。
+- ★★ **修 `!exists → continue` 的假阴性**：iOS 的系统私有框架**大量只存在于 dyld shared cache**，
+  磁盘上没有独立文件，而 `dlopen` 走 dyld、**不看文件系统**。原写法会「连试都不试 dlopen」
+  就报「两个候选路径都不存在」——**恰好把最想回答的问题答错**。
+  修法：`fileExists` 降级为纯日志，**dlopen 无条件试**（CoreFP 段与 iOS 段**两处都改**）。
+
+**5. 新增：iOS 自带 `AirTrafficHost` 探测**
+`dlopen("/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost")`（失败再试 `Versions/A/`）
+→ 成功则列导出符号并查有没有 Grappa 符号；失败则打 `dlerror()` 原文。
+★ **为什么值得加**：若 iOS 自带同款实现，它内部 dlsym 的是 **iOS 自己的 CoreFP 混淆名**（天然匹配）
+⇒ **可能根本不用移植 macOS 那份**（无平台补丁、无桩、无名字不匹配）。
+
+**6. 修一处会误导用户的日志**
+`[airlift] 被调用（…）—— 当前无实际能力，返回 nil` ⇒ 用户看到后**以为 airlift 漏洞利用被移除了**。
+新措辞把两件事都写出来：**既**返回 nil（airlift 不实现这条沙盒能力，注册表会自动继续试下一个），
+**又**已经**唤起 airlift 协议探测流程**。
+
+**已知未完成（不阻塞本版）**：从打进 bundle 的那份二进制里**动态读**那 5 个混淆名（替代硬编码）尚未落地；
+`exportedNames` 的 `LC_DYLD_EXPORTS_TRIE` 回退也未加（iOS 系统框架常用 exports trie ⇒ 可能返回 nil）。
+两者都**不会造成假阳性**，最坏是「本次无法判定」。**下一版补。**
+
 ## [0.3.447] - 2026-09-19
 
 > ⚠️ **说明**：原本规划的 `v0.3.446`（stage 探针那一版）**只改了版本号与 CHANGELOG，没有提交、没有打 tag

@@ -451,8 +451,21 @@ jobs:
             echo "ERROR: 桩没被 embed 进 Frameworks/（xcodegen 的 embed 落点可能不是这里）"
             exit 1
           fi
-          echo "=== 桩的外部符号（nm -gU）==="
-          nm -gU "$STUB" | grep " _AM" || true
+          # ★ 用哪个工具查符号？**优先 `dyld_info -exports`**，它是 dyld 真正用来解析 import 的
+          #   那张导出表；`nm -gU` 读的是符号表，**Release 下被 strip 掉就会误报「没有」**，
+          #   而误报会让构建直接失败（白烧一次 CI）。所以先试权威工具，读不到再退回 nm。
+          EXPORTS=/tmp/stub-exports.txt
+          if xcrun dyld_info -exports "$STUB" > "$EXPORTS" 2>/dev/null && [ -s "$EXPORTS" ]; then
+            echo "=== 桩的导出表（dyld_info -exports）==="
+            grep -E "_AM" "$EXPORTS" || true
+            LOOKUP() { grep -qE "_${1}\$|_${1} " "$EXPORTS"; }
+          else
+            echo "（dyld_info 不可用或读不到，退回 nm -gU）"
+            nm -gU "$STUB" > "$EXPORTS" 2>/dev/null || true
+            echo "=== 桩的外部符号（nm -gU）==="
+            grep " _AM" "$EXPORTS" || true
+            LOOKUP() { grep -q "_${1}\$" "$EXPORTS"; }
+          fi
           MISSING=0
           for s in AMDeviceConnect AMDeviceDisconnect AMDeviceStartSession AMDeviceStopSession \
                    AMDeviceValidatePairing AMDeviceSecureStartService AMDeviceGetInterfaceType \
@@ -462,7 +475,7 @@ jobs:
                    AMDSecureShutdownNotificationProxy \
                    AMDServiceConnectionInvalidate AMDServiceConnectionReceive \
                    AMDServiceConnectionSend; do
-            if ! nm -gU "$STUB" | grep -q "_${s}\$"; then
+            if ! LOOKUP "$s"; then
               echo "ERROR: 桩缺导出符号 _${s}"
               MISSING=1
             fi

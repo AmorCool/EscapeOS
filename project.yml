@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.447"
-    CURRENT_PROJECT_VERSION: "744"
+    MARKETING_VERSION: "0.3.448"
+    CURRENT_PROJECT_VERSION: "745"
     # 注：这里**刻意不写** `SWIFT_VERSION` —— 实测顶层 `settings.base` 的它**不被 xcodegen 采纳**，
     # 真正生效的是下面 target 层那一份（当前 `"6.0"` = Swift 6 语言模式）。
     # 另注：**编译器版本 ≠ 语言模式** —— CI 用 Xcode 27 自带的 Swift 6.4 编译器，
@@ -198,13 +198,41 @@ targets:
   MobileDeviceStub:
     type: library.dynamic
     platform: iOS
+    # ★★ 产物文件名必须**真的**是 `libMobileDeviceStub.dylib`（与 AirTrafficHost 里那条
+    #    `@executable_path/Frameworks/libMobileDeviceStub.dylib` 逐字对应），否则 dyld
+    #    找不到桩 ⇒ `Library not loaded` ⇒ 整个框架 dlopen 失败。
+    #
+    #    为什么不能靠 `EXECUTABLE_PREFIX: lib`（v0.3.447 首选的写法，实测不可行）：
+    #    xcodegen 的产物文件引用路径是 `Target.filename`，而它是
+    #        filename = productName + "." + fileExtension        // 只有 staticLibrary 才自动加 lib
+    #    （XcodeGen 源码 `Sources/ProjectSpec/Target.swift` 的 `var filename`：
+    #      `if type == .staticLibrary { filename = "lib\(filename)" }` —— **dynamicLibrary 不加**）
+    #    ⇒ 加了 `EXECUTABLE_PREFIX: lib` 只会让**实际产物**变成 libMobileDeviceStub.dylib，
+    #      而 pbxproj 里 embed 阶段引用的仍是 `MobileDeviceStub.dylib` ⇒ 拷贝阶段找不到文件。
+    #    正确做法是**两边一起钉死**：用 YAML 的 `productName`（驱动 xcodegen 的引用路径）
+    #    + `PRODUCT_NAME`/`EXECUTABLE_PREFIX`（驱动实际文件名），全部对齐 libMobileDeviceStub。
+    productName: libMobileDeviceStub
     sources:
       - path: vendor/MobileDeviceStub
     settings:
       base:
-        # 产物名必须是 libMobileDeviceStub.dylib —— 与 AirTrafficHost 里那条
-        # `@executable_path/Frameworks/libMobileDeviceStub.dylib` 逐字对应。
-        # 顶层 settings.base 里 PRODUCT_NAME = EscapeSpace 会被继承，所以这里必须显式覆盖。
-        PRODUCT_NAME: MobileDeviceStub
+        # 与上面的 productName 配对（顶层 settings.base 的 PRODUCT_NAME = EscapeSpace
+        # 会被继承，所以这里必须显式覆盖）。
+        PRODUCT_NAME: libMobileDeviceStub
+        # 实际文件名 = $(EXECUTABLE_PREFIX)$(PRODUCT_NAME).dylib —— 显式置空，
+        # 不依赖 Xcode 对 `com.apple.product-type.library.dynamic` 的默认前缀，
+        # 免得出现 liblibMobileDeviceStub.dylib。
+        EXECUTABLE_PREFIX: ""
         PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos.mobiledevicestub
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        # ★★ 覆盖从顶层 `settings.base` 继承来的链接/搜索设置。
+        #    顶层那份是给 app 主体用的（SAP 的 `$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a`
+        #    + openssl 的 -L/-lcrypto + QuickLook/PDFKit/AVKit/... 一堆 framework）。
+        #    本 target **不跑** `prepare.sap.py` 那个 preBuildScript，继承了就会去链一个
+        #    不存在的 libunicorn.a ⇒ v0.3.447 实测 `Ld ... no such file or directory` 失败。
+        #    xcodegen 的 settings 合并是**按 key 覆盖**（`Settings.merge` 就是字典赋值，
+        #    没有数组拼接），所以 target 层逐条覆盖即可，**不用动顶层 settings.base**。
+        #    桩是纯 C、只用 <stdint.h>，唯一需要的是 CoreFoundation 的类型（链接层面其实也可省）。
+        OTHER_LDFLAGS: ["-framework", "CoreFoundation"]
+        HEADER_SEARCH_PATHS: []
+        LIBRARY_SEARCH_PATHS: []
