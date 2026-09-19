@@ -491,7 +491,45 @@ jobs:
             grep " _AM" "$EXPORTS" || true
             LOOKUP() { grep -q "_${1}\$" "$EXPORTS"; }
           fi
+          # ★★ v0.3.455 修：原来自检是**自证**，现在改成**对证**。
+          #
+          # 原来拿**硬编码的 17 个名字**去查桩自己 —— 那是自证：查的是「桩导出了这 17 个吗」，
+          # 而不是「这份 ATH **需要**的是哪 17 个吗」。而 ATH 是**从 runner 的 macOS 现取**的
+          # （见本步骤开头），macOS 一升级，它的导入集就可能变。届时 CI 仍会打印
+          # 「桩 17 个符号全部已导出 ✓」并放行 ⇒ 设备上 dlopen 才在 **bind 阶段**炸，
+          # 而且失败码 `-0xa5a4` 与「桩文件不存在」**同码**，真机排查要白烧一轮。
+          #
+          # ⇒ 改用**同一次运行里 patch 脚本产出的 `mobiledevice-imports.txt`** 当清单
+          #   —— 那个文件读的就是**这份 ATH 的 import 表**（按 lib_ordinal 归类），
+          #   所以它才是「桩必须导出什么」的唯一权威来源。
+          NEEDS=/tmp/fw_patch/mobiledevice-imports.txt
+          if [ ! -f "$NEEDS" ]; then
+            echo "ERROR: 找不到 $NEEDS —— patch 脚本没产出导入清单，无法对证"
+            exit 1
+          fi
+          # 去注释行/空行/CR；条目形如 `_AMDeviceConnect`（带前导下划线，与导出表一致）
+          tr -d '\r' < "$NEEDS" | grep -v '^#' | grep -v '^[[:space:]]*$' | sort -u > /tmp/ath-needs.txt
+          NEED_COUNT="$(wc -l < /tmp/ath-needs.txt | tr -d ' ')"
+          echo "=== 这份 ATH 实际从 MobileDevice 导入 $NEED_COUNT 个符号（桩必须全部导出）==="
+          cat /tmp/ath-needs.txt
+
           MISSING=0
+          while read -r sym; do
+            [ -z "$sym" ] && continue
+            if ! LOOKUP "${sym#_}"; then
+              echo "ERROR: 桩缺导出符号 $sym —— 这份 ATH 需要它"
+              MISSING=1
+            fi
+          done < /tmp/ath-needs.txt
+          if [ "$MISSING" -ne 0 ]; then
+            echo "ERROR: 桩符号不全 ⇒ dyld 解析 import 表会失败 ⇒ dlopen 必失败"
+            exit 1
+          fi
+          echo "桩已导出这份 ATH 需要的全部 $NEED_COUNT 个符号 ✓"
+
+          # 交叉核对：与 2026-09 那版 macOS 的历史清单比一下。
+          # **只警告、不失败** —— 差异本身是**有用信号**（说明 macOS 换了一版 ATH，
+          # 那么之前基于旧版做的偏移/符号名结论都要重核），但对证已由上面那段保证。
           for s in AMDeviceConnect AMDeviceDisconnect AMDeviceStartSession AMDeviceStopSession \
                    AMDeviceValidatePairing AMDeviceSecureStartService AMDeviceGetInterfaceType \
                    AMDeviceNotificationSubscribe AMDeviceNotificationUnsubscribe \
@@ -500,16 +538,9 @@ jobs:
                    AMDSecureShutdownNotificationProxy \
                    AMDServiceConnectionInvalidate AMDServiceConnectionReceive \
                    AMDServiceConnectionSend; do
-            if ! LOOKUP "$s"; then
-              echo "ERROR: 桩缺导出符号 _${s}"
-              MISSING=1
-            fi
+            grep -qx "_$s" /tmp/ath-needs.txt \
+              || echo "WARN: 历史清单里的 _$s 现在不再被这份 ATH 导入（macOS 换版了？）"
           done
-          if [ "$MISSING" -ne 0 ]; then
-            echo "ERROR: 桩符号不全 ⇒ dyld 解析 import 表会失败 ⇒ dlopen 必失败"
-            exit 1
-          fi
-          echo "桩 17 个符号全部已导出 ✓"
 
       - name: Package unsigned IPA
         # 打包形态与 Theos 轨道对齐（Payload/EscapeSpace.app），但**不调用 ldid**：
