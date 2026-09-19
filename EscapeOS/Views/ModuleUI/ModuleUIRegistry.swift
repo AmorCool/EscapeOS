@@ -100,5 +100,6 @@ final class ModuleUIRegistry {
 /// 而不是散落在各处的副作用.
 @MainActor
 func registerBuiltinModuleUIs() {
-    // 由各模块 UI 文件追加注册
+    // 各模块的原生界面分别在自己的文件里注册（见 AirliftPocModuleUI.swift）
+    registerAirliftPocModuleUI()
 }
