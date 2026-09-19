@@ -60,7 +60,7 @@ final class GSAAuth {
 
         // 中间值日志：配合 Python 参考实现可精确复算定位（u 不依赖密码）
         let hexOf: ([UInt8]) -> String = { $0.map { String(format: "%02x", $0) }.joined() }
-        LoginLogger.shared.log("SRP 中间值 x=\(hexOf(x)) u=\(hexOf(SRP6a.sha256(SRP6a.pad(publicKey.map { $0 }, to: SRP6a.sizeN) + serverPublicKey.map { $0 }))) S=\(hexOf(S.bytes(paddedTo: SRP6a.sizeN))) K=\(hexOf(K))")
+        LoginLogger.shared.log("SRP 中间值 x=\(hexOf(x)) u=\(hexOf(SRP6a.sha256(SRP6a.pad(publicKey.map { $0 }, to: SRP6a.sizeN) + serverPublicKey.map { $0 }))) S=\(hexOf(S.bytes(paddedTo: SRP6a.sizeN))) K=\(hexOf(K))", category: .appleID)
 
         let M1 = SRP6a.clientProof(
             username: username,

@@ -771,66 +771,68 @@ struct ModuleInstallSheet: View {
 
 
 // v0.3.111：模块日志查看器（v0.3.111：每个已安装模块可查看/导出/复制/清空运行日志）
+/// 模块运行日志（查看 / 复制 / 分享 / 清空）.
+///
+/// 数据源 = 模块目录下的 `run.log` + `data/go_stderr.log` 两份文件，按行合并展示。
+/// 排版走共享的 `LogConsoleView`（逐行 `Text` + 行间 `Divider` + 自动滚底 + 复制带元信息头）——
+/// 此前是**一整块 `Text`**。
+///
+/// ⚠️ 统一到「四件套工具栏」带来的两处能力变化（有意为之，供上层知情）：
+/// ① 「清空」不再区分两份文件，一次清掉两个（旧版是二选一的 `confirmationDialog`）；
+/// ② 旧版可用 `ShareLink` 单独导出 `run.log` / `go_stderr.log` 两个**文件**，
+///    现在分享的是**合并后的文本**（带元信息头）。需要原文件时请走文件浏览器。
 struct ModuleLogView: View {
     let module: EscapeModule
     var onClose: () -> Void
-    @State private var logText: String = ""
-    @State private var showCopied = false
-    @State private var showClearConfirm = false
+    @State private var lines: [String] = []
 
     private var logFile: URL { ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log") }
     private var goStderr: URL { ModuleService.shared.installURL(for: module.id).appendingPathComponent("data/go_stderr.log") }
 
     var body: some View {
-        NavigationView {
-            ScrollView {
-                Text(logText.isEmpty ? "（暂无日志）" : logText)
-                    .font(.system(.footnote, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(12)
-            }
-            .navigationTitle("\(module.name) 日志")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("关闭") { onClose() }
-                }
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button {
-                        UIPasteboard.general.string = logText
-                        showCopied = true
-                    } label: { Image(systemName: "doc.on.doc") }
-                    Menu {
-                        Button { reload() } label: { Label("刷新", systemImage: "arrow.clockwise") }
-                        ShareLink(item: logFile) { Label("导出 run.log", systemImage: "square.and.arrow.up") }
-                        ShareLink(item: goStderr) { Label("导出 go_stderr.log", systemImage: "square.and.arrow.up") }
-                        Divider()
-                        Button(role: .destructive) { showClearConfirm = true } label: {
-                            Label("清空日志", systemImage: "trash")
-                        }
-                    } label: { Image(systemName: "ellipsis.circle") }
+        // 本页由父级的 `.sheet(item:)` 弹出，**必须自带导航容器** —— 否则 `LogConsoleView` 的
+        // `navigationTitle` 与工具栏（清除/复制/分享/完成）没有导航栏可挂，整条工具栏都不会出现。
+        NavigationStack {
+            LogConsoleView(
+                lines: lines,
+                title: "\(module.name) 日志",
+                onClear: {
+                    clearAll()
+                    reload()
+                },
+                // 本页由父级用闭包弹出（`onClose`）→ 直接用父级给的关闭动作当「完成」
+                onDone: onClose,
+                clearConfirmTitle: "确定清空模块日志？"
+            )
+            .task {
+                reload()
+                // 2s 轮询：模块安装/运行过程中能实时看到输出
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    guard !Task.isCancelled else { break }
+                    reload()
                 }
             }
-            .onAppear { reload() }
-            .alert("已复制", isPresented: $showCopied) { Button("好", role: .cancel) {} }
-            .confirmationDialog("确认清空？", isPresented: $showClearConfirm) {
-                Button("清空 run.log", role: .destructive) { tryClear(target: logFile) }
-                Button("清空 go_stderr.log", role: .destructive) { tryClear(target: goStderr) }
-                Button("取消", role: .cancel) {}
-            } message: { Text("删除后不可恢复.") }
         }
     }
 
+    /// 两份文件按行合并（每份前面加一行 `[文件名]` 便于区分来源），只留最后 `maxRenderedLines` 行。
     private func reload() {
-        let combined = [logFile, goStderr].map { url -> String in
-            (try? String(contentsOf: url, encoding: .utf8)).map { "[\(url.lastPathComponent)]\n\($0)\n" } ?? ""
-        }.joined()
-        logText = combined.isEmpty ? "" : combined
+        let all = [logFile, goStderr].flatMap { url -> [String] in
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+            let body = text.components(separatedBy: "\n").filter { !$0.isEmpty }
+            return body.isEmpty ? [] : ["[\(url.lastPathComponent)]"] + body
+        }
+        let fresh = all.count > LogConsoleView.maxRenderedLines
+            ? Array(all.suffix(LogConsoleView.maxRenderedLines))
+            : all
+        // 内容没变就不重新赋值（避免白触发 body 重算）
+        guard fresh != lines else { return }
+        lines = fresh
     }
 
-    private func tryClear(target: URL) {
-        try? FileManager.default.removeItem(at: target)
-        reload()
+    private func clearAll() {
+        try? FileManager.default.removeItem(at: logFile)
+        try? FileManager.default.removeItem(at: goStderr)
     }
 }

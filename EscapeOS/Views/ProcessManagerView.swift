@@ -1023,89 +1023,87 @@ private struct ProcessRow: View {
 }
 
 
-/// 进程管理诊断日志查看与导出（查看 / 复制 / 清空 / 导出分享）.
+/// 进程管理诊断日志（查看 / 复制 / 分享 / 清空）.
+///
+/// 排版走共享的 `LogConsoleView`（逐行 `Text` + 行间 `Divider` + 自动滚底 + 复制带元信息头）——
+/// 此前是**一整块 `Text`**，长日志糊成一坨。
 struct SysmonLogView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var copied = false
-    @State private var showShare = false
-    @State private var showClearConfirm = false
-    @State private var refreshTick = 0
-    @State private var shareURL: URL?
-
-    private var logText: String {
-        _ = refreshTick
-        return SysmonLogger.shared.fullLog().isEmpty ? "（暂无日志，请先在进程管理刷新一次）" : SysmonLogger.shared.fullLog()
-    }
+    @State private var lines: [String] = []
 
     var body: some View {
-        NavigationView {
-            ScrollView {
-                Text(logText)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-            }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("进程诊断日志")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("关闭") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack {
-                        Button {
-                            showClearConfirm = true
-                        } label: {
-                            Label("清空", systemImage: "trash")
-                        }
-                        .disabled(SysmonLogger.shared.fullLog().isEmpty)
-                        Button("复制") {
-                            UIPasteboard.general.string = logText
-                            copied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
-                        }
-                        .disabled(SysmonLogger.shared.fullLog().isEmpty)
-                    }
-                }
-            }
-            .confirmationDialog("确定清空进程日志？", isPresented: $showClearConfirm, titleVisibility: .visible) {
-                Button("清空日志", role: .destructive) {
+        // 本页由 `.sheet` 弹出，**必须自带导航容器** —— 否则 `LogConsoleView` 的
+        // `navigationTitle` 与工具栏（清除/复制/分享/完成）没有导航栏可挂，整条工具栏都不会出现。
+        NavigationStack {
+            LogConsoleView(
+                lines: lines,
+                title: "进程诊断日志",
+                onClear: {
                     SysmonLogger.shared.clear()
-                    refreshTick += 1
-                }
-                Button("取消", role: .cancel) {}
-            }
-            .safeAreaInset(edge: .bottom) {
-                Button {
-                    shareURL = SysmonLogger.shared.logFileURL
-                    showShare = true
-                } label: {
-                    Label("导出分享日志", systemImage: "square.and.arrow.up")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
-                .padding()
-                .disabled(SysmonLogger.shared.fullLog().isEmpty)
-            }
-            .sheet(isPresented: $showShare) {
-                ShareSheet(items: [logText])
-            }
-            .overlay {
-                if copied {
-                    Text("已复制")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(.black.opacity(0.7)))
-                        .transition(.opacity)
+                    refresh()
+                },
+                // 本页是 `.sheet` 弹出来的 → 需要「完成」按钮关闭
+                onDone: { dismiss() },
+                clearConfirmTitle: "确定清空进程诊断日志？"
+            )
+            .task {
+                refresh()
+                // 2s 轮询：进程扫描过程中能实时看到每一步
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    guard !Task.isCancelled else { break }
+                    refresh()
                 }
             }
         }
+    }
+
+    /// `SysmonLogger` **没有按行取数的接口**，所以在 View 层取数。
+    ///
+    /// ⚠️ **不能写成 `fullLog()` + `suffix(maxRenderedLines)`**（虽然那样最短）：
+    /// `fullLog()` 的合并顺序是 `内存缓冲（最新 500 行）+ 更早的文件行`，即**最新的一块在最前面**。
+    /// 对它取 `suffix()` 拿到的是**最旧**的那批行；而日志页把最后一行当「最新」去自动滚底，
+    /// 结果会停在最旧的一行上 —— 顺序反了。
+    /// 所以这里优先**直接读日志文件尾部**（`logFileURL` 是公开属性）：文件是追加写的，
+    /// 天然就是时间顺序、最新的在最后；而且每行都会落盘（`log(_:)` 里 append 到 buffer 后
+    /// 立刻 `appendToFile`），文件本身就是完整来源。
+    /// 文件读不到时（首次启动 / 刚清空）回退到 `fullLog()` —— 那种情况下它只剩内存那一段，
+    /// 顺序本来就是对的。
+    private func refresh() {
+        var all = tailLines()
+        if all.isEmpty {
+            all = SysmonLogger.shared.fullLog()
+                .components(separatedBy: "\n")
+                .filter { !$0.isEmpty }
+        }
+        let fresh = all.count > LogConsoleView.maxRenderedLines
+            ? Array(all.suffix(LogConsoleView.maxRenderedLines))
+            : all
+        // 内容没变就不重新赋值（避免白触发 body 重算）
+        guard fresh != lines else { return }
+        lines = fresh
+    }
+
+    /// 读 `sysmon.log` 尾部（最多 512KB）并拆行（时间顺序，最新的在最后）。
+    ///
+    /// 只读尾部：本页 2s 轮询一次，而 `SysmonLogger` 的文件**没有滚动截断**
+    /// （不像 `LoginLogger` 受 `LogLimitSettings` 限制），长期用下来会很大，整文件读是白烧。
+    /// 从任意字节偏移开始读时首行必然被截断 —— 且**必须**从换行字节处切开：
+    /// 日志含中文（多字节 UTF-8），从某个字符的中间字节开始解码会让整段解码直接失败。
+    private func tailLines() -> [String] {
+        let cap = 512 * 1024
+        guard let handle = try? FileHandle(forReadingFrom: SysmonLogger.shared.logFileURL) else { return [] }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return [] }
+        let offset = size > UInt64(cap) ? size - UInt64(cap) : 0
+        guard (try? handle.seek(toOffset: offset)) != nil,
+              let data = try? handle.readToEnd() else { return [] }
+        var bytes = [UInt8](data)
+        if offset > 0 {
+            guard let newline = bytes.firstIndex(of: 0x0A) else { return [] }
+            bytes = Array(bytes[(newline + 1)...])
+        }
+        guard let text = String(bytes: bytes, encoding: .utf8) else { return [] }
+        return text.components(separatedBy: "\n").filter { !$0.isEmpty }
     }
 }

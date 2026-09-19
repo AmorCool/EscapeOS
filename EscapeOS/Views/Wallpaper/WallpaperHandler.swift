@@ -289,29 +289,36 @@ extension WallpaperHandler {
     }
 }
 
-// MARK: - 重置精选集
+// MARK: - 移除已应用的自定义描述符
 
 extension WallpaperHandler {
 
-    /// 重置精选集：删除 PosterBoard 三个 provider 目录下所有「自定义」描述符目录，
-    /// Apple 默认精选集不动（它不满足「整数 identifier」判据）。
+    /// 移除我们**记录在案**的已应用描述符目录；记录之外的一律不碰.
     ///
-    /// 判据与外部参考实现 3105 的 `WallpaperDescriptorIdentity.isCustom` 一致：
-    /// 目录内三个标识文件之一能取到**整数** identifier 即为自定义 —— 我方导入时
-    /// `randomizeWallpaperIDs(_:)`（本文件 :233）写进去的正是整数，Apple 内置用 UUID。
-    /// **不采用** 3105 的 `.3105-wallpaper-` 目录名前缀判据：那是它自己的命名标记。
+    /// 为什么必须查记录、不能再靠特征猜：v0.3.460 之前这里是按「目录内 identifier 能取到整数」
+    /// 判「自定义」，依据是「Apple 内置用 UUID」—— 真机上 Apple 的默认收藏**也是整数**，
+    /// 于是被一并删掉。任何「按特征猜归属」的判据都不可靠；唯一可靠的依据是**我们自己装的时候
+    /// 记下来的目录名**（`TendiesObject.appliedDescriptors`，由 `applyObjects()` 写入）。
+    /// 记录之外的一切 —— Apple 默认收藏、以及本修复之前装的没有记录的目录 —— **一律不删**，
+    /// 只如实报个数.
     ///
     /// - Parameters:
     ///   - containerPath: PosterBoard 容器根路径.
+    ///   - recorded: 记录在案的目录名，key = `PBPath.rawValue`.
     ///   - sandbox: 用于消费沙盒扩展以获得容器写权限（与 `applyObjects()` 同一条路）.
-    /// - Returns: `(removed: 实际删除的描述符目录数, failed: 删除失败数, unreadable: 读不了的目录数)`.
+    /// - Returns: `(removed: 删掉的目录名（按 provider 分组，供调用方清记录）, failed: 删除失败数,
+    ///   unreadable: 读不了的目录数, unrecorded: 不在记录中的目录数)`.
     ///   单个删除失败**不中断**、也不吞掉 —— 否则「删了 2 个、第 3 个失败」会被报成整体失败，
     ///   而用户的数据其实已经动过了（`CORE.md`：如实报）.
-    ///   `unreadable` **单独占一格**：目录列不出来时**里面有几张是未知的**，混进 `failed` 就是编数字；
+    ///   `unreadable` **单独占一格**：目录列不出来时**里面有几个是未知的**，混进 `failed` 就是编数字；
     ///   未知 ≠ 失败（同「无法判定 ≠ 没找到」）.
     /// - Throws: 只在**一件事都没开始做**时抛：`WallpaperImportError` 容器路径非法 / 无 provider 目录；
     ///           `SandboxEscapeError` 拿不到沙盒扩展（两者都发生在下面**第一遍**收集阶段）.
-    func resetCustomDescriptors(containerPath: String, using sandbox: SandboxEscape) throws -> (removed: Int, failed: Int, unreadable: Int) {
+    func removeAppliedDescriptors(
+        containerPath: String,
+        recorded: [String: [String]],
+        using sandbox: SandboxEscape
+    ) throws -> (removed: [String: [String]], failed: Int, unreadable: Int, unrecorded: Int) {
         // 容器根合法性：空路径或 "/" 会让下面的遍历在错误的层级上删东西.
         guard !containerPath.isEmpty, containerPath != "/" else {
             throw WallpaperImportError.operationFailed("未找到 PosterBoard 容器")
@@ -323,7 +330,7 @@ extension WallpaperHandler {
         // 任何一个拿不到扩展都在这里抛 —— 此时还什么都没动，报「没有写权限」才是准的；
         // 若边拿边删，provider 3 拿不到扩展时前两个已经删掉了，报出来的话就是错的.
         // 姿势与 applyObjects() 一致：先收齐全部 handle，再动手写.
-        var targets: [(path: String, handle: SandboxEscape.Handle)] = []
+        var targets: [(provider: PBPath, path: String, handle: SandboxEscape.Handle)] = []
         defer {
             // 函数级统一释放（不是循环内 defer）：中途抛错也要把已拿到的 handle 全部还回去.
             for target in targets { sandbox.release(target.handle) }
@@ -333,7 +340,7 @@ extension WallpaperHandler {
             let providerPath = "\(containerPath)/\(provider.path)"
             guard files.exists(at: providerPath), files.isDirectory(at: providerPath) else { continue }
             let handle = try sandbox.consume(path: providerPath)
-            targets.append((path: providerPath, handle: handle))
+            targets.append((provider, providerPath, handle))
         }
 
         // 三个 provider 目录一个都不在 ⇒ 容器路径已失效（例如 generation 变了），如实报错而不是报「0 张」.
@@ -341,12 +348,14 @@ extension WallpaperHandler {
             throw WallpaperImportError.operationFailed("未找到 PosterBoard 容器")
         }
 
-        // 第二遍：动手删。单个失败只计数、继续删剩下的，最后把三个数字一起如实报给用户.
-        var removed = 0
+        // 第二遍：动手删。单个失败只计数、继续删剩下的，最后把几个数字一起如实报给用户.
+        var removed: [String: [String]] = [:]
         var failed = 0
         var unreadable = 0
+        var unrecorded = 0
+
         for target in targets {
-            // 目录列不出来 ⇒ 里面有几张无从得知，只能单独记一笔「读不了」，不能算成「N 张失败」.
+            // 目录列不出来 ⇒ 里面有几个无从得知，只能单独记一笔「读不了」，不能算成「N 个失败」.
             let children: [FileItem]
             do {
                 children = try files.list(directory: target.path)
@@ -356,8 +365,11 @@ extension WallpaperHandler {
                 continue
             }
 
+            // 只有「记录里点了名」的目录才进待删名单；其余只数、不碰.
+            let recordedNames = Set(recorded[target.provider.rawValue] ?? [])
+
             for child in children {
-                // 只删目录：普通文件及其它类型一律跳过.
+                // 只认目录：普通文件及其它类型一律跳过.
                 guard child.isDirectory else { continue }
 
                 // 拒绝符号链接：不跟随链接删除，否则可能删到 provider 目录之外.
@@ -368,13 +380,17 @@ extension WallpaperHandler {
                 // 路径包含性校验：待删目录必须真的在 provider 目录内（防路径穿越误删）.
                 guard child.path.hasPrefix(target.path + "/") else { continue }
 
-                // Apple 默认精选集取不到整数 identifier，自然被跳过.
-                guard isCustomDescriptor(at: child.path) else { continue }
+                // 判据只有一条：这个目录名在我们自己的记录里。除此之外不看任何特征.
+                guard recordedNames.contains(child.name) else {
+                    // 不在记录里 ⇒ 可能是 Apple 默认收藏，也可能是本修复之前装的 —— 无法确认归属，不猜、不删.
+                    unrecorded += 1
+                    continue
+                }
 
-                // 逐个删：失败只计数、继续删剩下的，最后把三个数字一起如实报给用户.
+                // 逐个删：失败只计数、继续删剩下的.
                 do {
                     try fm.removeItem(atPath: child.path)
-                    removed += 1
+                    removed[target.provider.rawValue, default: []].append(child.name)
                 } catch {
                     print("[wallpaper] failed to remove \(child.path): \(error)")
                     failed += 1
@@ -382,57 +398,7 @@ extension WallpaperHandler {
             }
         }
 
-        return (removed, failed, unreadable)
+        return (removed, failed, unreadable, unrecorded)
     }
 
-    /// 判据：描述符目录内三个标识文件之一能取到**整数** identifier → 「自定义」.
-    ///
-    /// 递归枚举的写法对齐本文件 `randomizeWallpaperIDs(_:)`（同样 `skipsHiddenFiles` /
-    /// `skipsPackageDescendants`）—— 标识文件可能不在描述符目录的第一层。
-    /// 沿用 3105 的 400 个文件上限，避免异常目录拖慢扫描.
-    private func isCustomDescriptor(at directoryPath: String) -> Bool {
-        guard let enumerator = fm.enumerator(
-            at: URL(fileURLWithPath: directoryPath),
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return false }
-
-        var inspected = 0
-        for case let fileURL as URL in enumerator {
-            inspected += 1
-            if inspected > 400 { break }
-
-            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values?.isSymbolicLink != true, values?.isRegularFile == true else { continue }
-
-            switch fileURL.lastPathComponent {
-            case "com.apple.posterkit.provider.descriptor.identifier":
-                // 纯文本文件：去空白后能解析成整数即为自定义.
-                if let data = fm.contents(atPath: fileURL.path),
-                   let text = String(data: data, encoding: .utf8),
-                   Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) != nil {
-                    return true
-                }
-            case "Wallpaper.plist":
-                if plistIntegerValue(at: fileURL, key: "identifier") != nil { return true }
-            case "com.apple.posterkit.provider.contents.userInfo":
-                if plistIntegerValue(at: fileURL, key: "wallpaperRepresentingIdentifier") != nil { return true }
-            default:
-                continue
-            }
-        }
-        return false
-    }
-
-    /// 读 plist 里的整数 key；读法对齐本文件 `setPlistValue(_:key:value:)`（PropertyListSerialization）.
-    private func plistIntegerValue(at url: URL, key: String) -> Int? {
-        guard let data = fm.contents(atPath: url.path),
-              let dict = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-              let value = dict[key] else {
-            return nil
-        }
-        if let number = value as? Int { return number }
-        if let string = value as? String { return Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        return nil
-    }
 }

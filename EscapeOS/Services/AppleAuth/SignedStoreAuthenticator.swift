@@ -64,7 +64,7 @@ actor SignedStoreAuthenticator {
         let bagVersion = StoreAuthenticationProtocol.string(value("sign-sap-version"))
         if !bagVersion.isEmpty, bagVersion != "200" {
             LoginLogger.shared.log("[SAP] bag 的 sign-sap-version=\(bagVersion)（非 200），按 200 处理",
-                                   category: .appStore)
+                                   category: .appleID)
         }
         let certificateValue = value("sign-sap-setup-cert")
         let setupValue = value("sign-sap-setup")
@@ -75,17 +75,17 @@ actor SignedStoreAuthenticator {
         if bagCertificateURL == nil || bagSetupURL == nil {
             let reason = (certificateValue == nil || setupValue == nil)
                 ? "bag 缺少 SAP 端点" : "bag 的 SAP 端点不在 Apple 域内"
-            LoginLogger.shared.log("[SAP] \(reason) → 使用内置兜底端点", category: .appStore)
+            LoginLogger.shared.log("[SAP] \(reason) → 使用内置兜底端点", category: .appleID)
         }
         guard let certificateURL, let setupURL,
               let assets = SAPAssetsLocator.url,
               StoreAuthenticationProtocol.isDeviceGUID(guid)
         else {
             LoginLogger.shared.log("[SAP] SAP 资产未找到：\(SAPAssetsLocator.describe())",
-                                   category: .appStore)
+                                   category: .appleID)
             throw StoreAuthenticationError.invalidConfiguration
         }
-        LoginLogger.shared.log("[SAP] 资产目录 \(assets.path)", category: .appStore)
+        LoginLogger.shared.log("[SAP] 资产目录 \(assets.path)", category: .appleID)
 
         let hardware = stride(from: 0, to: 12, by: 2).compactMap { offset -> UInt8? in
             let start = guid.index(guid.startIndex, offsetBy: offset)
@@ -95,7 +95,7 @@ actor SignedStoreAuthenticator {
         let signer = try SAPContext(assetsURL: assets, hardwareID: Data(hardware))
         let assetNotes = SAPContext.assetNotes()
         if !assetNotes.isEmpty {
-            LoginLogger.shared.log("[SAP] 资产 \(assetNotes)", category: .appStore)
+            LoginLogger.shared.log("[SAP] 资产 \(assetNotes)", category: .appleID)
         }
 
         // ① 取 SAP setup 证书 → 交给本地解释器交换
@@ -213,7 +213,7 @@ actor SignedStoreAuthenticator {
                 let next = ladder[rung]
                 LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（无可用 Location）"
                     + " → 换 \(next.url.host ?? "?")\(next.url.path)（\(next.contentType)）重打一次",
-                    category: .appStore)
+                    category: .appleID)
                 continue
             }
             guard let plist = StoreAuthenticationProtocol.plist(data) else {
@@ -228,7 +228,7 @@ actor SignedStoreAuthenticator {
                 let next = ladder[rung]
                 LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（\(data.count) 字节，无 plist）"
                     + " → 换 \(next.url.host ?? "?")\(next.url.path)（\(next.contentType)）重打一次",
-                    category: .appStore)
+                    category: .appleID)
                 continue
             }
             if protocolAttempt == 1, StoreAuthenticationProtocol.string(plist["failureType"]) == "-5000" {
@@ -248,7 +248,7 @@ actor SignedStoreAuthenticator {
 
             let store = StoreAuthenticationProtocol.storeIdentifier(storefront)
             guard !store.isEmpty else {
-                LoginLogger.shared.log("[SAP] 未取到 X-Set-Apple-Store-Front", category: .appStore)
+                LoginLogger.shared.log("[SAP] 未取到 X-Set-Apple-Store-Front", category: .appleID)
                 throw StoreAuthenticationError.invalidConfiguration
             }
             return AppStoreAccount(
@@ -304,7 +304,7 @@ actor SignedStoreAuthenticator {
         // Log only shape/status, never body, credentials, signatures, cookie values or redirect queries.
         let location = response.value(forHTTPHeaderField: "Location")
         let targetHost = location.flatMap { URL(string: $0, relativeTo: url)?.host } ?? "none"
-        LoginLogger.shared.log("[SAP] \(request.url?.host ?? "?") → HTTP \(response.statusCode)，\(data.count) 字节；LocationHost=\(targetHost)；Set-Cookie=\(received.count)", category: .appStore)
+        LoginLogger.shared.log("[SAP] \(request.url?.host ?? "?") → HTTP \(response.statusCode)，\(data.count) 字节；LocationHost=\(targetHost)；Set-Cookie=\(received.count)", category: .appleID)
         return (data, response)
     }
 
@@ -328,7 +328,7 @@ actor SignedStoreAuthenticator {
                 && StoreAuthenticationProtocol.retryable(status: status, hasRedirect: hasRedirect)
             if !shouldRetry { return result }
             LoginLogger.shared.log("[SAP] 认证请求 HTTP \(status)（第 \(attempt) 次，重发同一 body + 新签名）",
-                                   category: .appStore)
+                                   category: .appleID)
             try await Task.sleep(for: StoreAuthenticationProtocol.retryDelay(attempt: attempt))
         }
         throw StoreAuthenticationError.tooManyAttempts

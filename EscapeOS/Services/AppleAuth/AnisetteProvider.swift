@@ -74,7 +74,7 @@ final class AnisetteProvider {
         deviceId = nil
         keychain.delete("identifier")
         keychain.delete("adiPb")
-        LoginLogger.shared.log("… AnisetteProvider 重置（identifier/adiPb 已清除）")
+        LoginLogger.shared.log("… AnisetteProvider 重置（identifier/adiPb 已清除）", category: .appleID)
     }
 
     /// **只作废 provisioning 票据（adiPb）与内存缓存，保留设备身份 identifier.**
@@ -95,7 +95,7 @@ final class AnisetteProvider {
         mdLu = nil
         deviceId = nil
         keychain.delete("adiPb")
-        LoginLogger.shared.log("… Anisette 票据作废（保留 identifier，仅重新 provision）")
+        LoginLogger.shared.log("… Anisette 票据作废（保留 identifier，仅重新 provision）", category: .appleID)
     }
 
     // MARK: - 共享机器标识（v0.2.117）
@@ -119,7 +119,7 @@ final class AnisetteProvider {
     /// 统一失败出口：写诊断日志并返回带真实原因的错误（不再用笼统的 invalidAnisetteData）.
     private func fail(_ stage: String, _ detail: String) -> AppleAPIError {
         lastFailureStage = stage
-        LoginLogger.shared.log("❌ Anisette[\(stage)]: \(detail)")
+        LoginLogger.shared.log("❌ Anisette[\(stage)]: \(detail)", category: .appleID)
         return AppleAPIError.customError(code: -22421, message: "Anisette \(stage)失败: \(detail)")
     }
 
@@ -159,14 +159,14 @@ final class AnisetteProvider {
             // identifier 必须保留（v0.2.117 铁律：换 identifier = 换虚拟机器 = 风控）.
             resetProvisioning()
         }
-        LoginLogger.shared.log("▶ getAnisetteData(refresh=\(refresh)) url=\(url?.absoluteString ?? "nil")")
+        LoginLogger.shared.log("▶ getAnisetteData(refresh=\(refresh)) url=\(url?.absoluteString ?? "nil")", category: .appleID)
         guard url != nil else { throw fail("入口", "Anisette 服务器地址为空") }
         if let identifier = keychain.string(for: "identifier"),
            let adiPb = keychain.string(for: "adiPb") {
-            LoginLogger.shared.log("✓ 命中已缓存 identifier+adiPb，直接 get_headers")
+            LoginLogger.shared.log("✓ 命中已缓存 identifier+adiPb，直接 get_headers", category: .appleID)
             return try await fetchAnisetteV3(identifier: identifier, adiPb: adiPb)
         }
-        LoginLogger.shared.log("… 无缓存凭证，走完整 WebSocket provision")
+        LoginLogger.shared.log("… 无缓存凭证，走完整 WebSocket provision", category: .appleID)
         return try await provision()
     }
 
@@ -195,7 +195,7 @@ final class AnisetteProvider {
             next = servers[0]
         }
         UserDefaults.standard.set(next, forKey: "AnisetteServer")
-        LoginLogger.shared.log("… Anisette 服务器切换：\(current) → \(next)")
+        LoginLogger.shared.log("… Anisette 服务器切换：\(current) → \(next)", category: .appleID)
         return next
     }
 
@@ -242,7 +242,7 @@ final class AnisetteProvider {
                 } else {
                     resetProvisioning()
                 }
-                LoginLogger.shared.log("⚠ Anisette 第 \(attempt)/\(maxAttempts) 次失败（阶段：\(stage ?? "未知")），换服务器重试")
+                LoginLogger.shared.log("⚠ Anisette 第 \(attempt)/\(maxAttempts) 次失败（阶段：\(stage ?? "未知")），换服务器重试", category: .appleID)
                 await rotateServer()
             }
         }
@@ -250,12 +250,12 @@ final class AnisetteProvider {
         // 否则失败过程中轮换到的坏服务器会被固化，之后每次进页面都先撞它.
         if currentServer != originalServer {
             UserDefaults.standard.set(originalServer, forKey: "AnisetteServer")
-            LoginLogger.shared.log("… 已还原 Anisette 服务器为 \(originalServer)")
+            LoginLogger.shared.log("… 已还原 Anisette 服务器为 \(originalServer)", category: .appleID)
         }
         let detail = (lastError as? AppleAPIError)?.errorDescription
             ?? lastError?.localizedDescription
             ?? "未知原因"
-        LoginLogger.shared.log("❌ Anisette 已尝试 \(maxAttempts) 个服务器仍失败（耗时 \(Int(Date().timeIntervalSince(started)))s）")
+        LoginLogger.shared.log("❌ Anisette 已尝试 \(maxAttempts) 个服务器仍失败（耗时 \(Int(Date().timeIntervalSince(started)))s）", category: .appleID)
         throw AppleAPIError.customError(
             code: -22421,
             message: "Anisette 连续 \(maxAttempts) 个服务器均失败（最后错误：\(detail)）.\n"
@@ -299,9 +299,9 @@ final class AnisetteProvider {
             }
             clientInfo = ci
             userAgent = ua
-            LoginLogger.shared.log("✓ client_info OK: \(ci) / \(ua)")
+            LoginLogger.shared.log("✓ client_info OK: \(ci) / \(ua)", category: .appleID)
         } else if !hasValidIdentifier {
-            LoginLogger.shared.log("… 内存缓存命中但 keychain identifier 已清除，重新生成")
+            LoginLogger.shared.log("… 内存缓存命中但 keychain identifier 已清除，重新生成", category: .appleID)
         }
 
         // identifier 必须以 base64 字符串存储（EscapeKeychain.string(for:) 用 UTF-8 解码，
@@ -320,7 +320,7 @@ final class AnisetteProvider {
             let newIdentifier = Data(bytes).base64EncodedString()
             keychain.set(newIdentifier, for: "identifier")
             identifier = newIdentifier
-            LoginLogger.shared.log("… 重新生成 identifier（旧值缺失或损坏）")
+            LoginLogger.shared.log("… 重新生成 identifier（旧值缺失或损坏）", category: .appleID)
         }
         guard let identifier else { throw fail("identifier", "无法读取 identifier") }
         guard let decoded = Data(base64Encoded: identifier) else {
@@ -329,7 +329,7 @@ final class AnisetteProvider {
         mdLu = Data(SHA256.hash(data: decoded)).map { String(format: "%02X", $0) }.joined()
         let uuid = decoded.withUnsafeBytes { $0.loadUnaligned(as: UUID.self) }
         deviceId = uuid.uuidString.uppercased()
-        LoginLogger.shared.log("✓ identifier=\(identifier.prefix(12))… mdLu=\(mdLu?.prefix(12) ?? "") deviceId=\(deviceId ?? "")")
+        LoginLogger.shared.log("✓ identifier=\(identifier.prefix(12))… mdLu=\(mdLu?.prefix(12) ?? "") deviceId=\(deviceId ?? "")", category: .appleID)
     }
 
     // MARK: - V3: get_headers
@@ -343,10 +343,10 @@ final class AnisetteProvider {
         request.timeoutInterval = 15
         request.httpBody = try JSONSerialization.data(withJSONObject: ["identifier": identifier, "adi_pb": adiPb])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        LoginLogger.shared.log("▶ get_headers POST \(base.appendingPathComponent("v3").appendingPathComponent("get_headers").absoluteString)")
+        LoginLogger.shared.log("▶ get_headers POST \(base.appendingPathComponent("v3").appendingPathComponent("get_headers").absoluteString)", category: .appleID)
         let (data, response) = try await session.data(for: request)
         let http = (response as? HTTPURLResponse)?.statusCode ?? -1
-        LoginLogger.shared.log("← get_headers HTTP \(http): \(String(data: data, encoding: .utf8)?.prefix(200) ?? "")")
+        LoginLogger.shared.log("← get_headers HTTP \(http): \(String(data: data, encoding: .utf8)?.prefix(200) ?? "")", category: .appleID)
         return try await extractAnisetteData(data, response as? HTTPURLResponse, v3: true)
     }
 
@@ -356,10 +356,10 @@ final class AnisetteProvider {
         }
         if v3, let result = json["result"] as? String, result == "GetHeadersError",
            let message = json["message"] as? String {
-            LoginLogger.shared.log("⚠ get_headers 返回错误: \(message)")
+            LoginLogger.shared.log("⚠ get_headers 返回错误: \(message)", category: .appleID)
             if message.contains("-45061") {
                 keychain.delete("adiPb")
-                LoginLogger.shared.log("… adiPb 已过期(-45061)，删除后重新 provision")
+                LoginLogger.shared.log("… adiPb 已过期(-45061)，删除后重新 provision", category: .appleID)
                 return try await provision()
             }
             throw AppleAPIError.customError(code: -1, message: "Anisette 服务器: \(message)")
@@ -396,14 +396,14 @@ final class AnisetteProvider {
               let anisette = try? JSONDecoder().decode(AnisetteData.self, from: jsonData) else {
             throw fail("get_headers", "Anisette 字段组装/解码失败: \(formatted.keys.sorted().joined(separator: ","))")
         }
-        LoginLogger.shared.log("✓ AnisetteData 组装成功: md=\(anisette.machineID.prefix(12))… otp=\(anisette.oneTimePassword.prefix(12))… rinfo=\(anisette.routingInfo)")
+        LoginLogger.shared.log("✓ AnisetteData 组装成功: md=\(anisette.machineID.prefix(12))… otp=\(anisette.oneTimePassword.prefix(12))… rinfo=\(anisette.routingInfo)", category: .appleID)
         return anisette
     }
 
     // MARK: - V3: provisioning（首次使用、无 adi.pb 时）
 
     private func provision() async throws -> AnisetteData {
-        LoginLogger.shared.log("▶ provision 开始")
+        LoginLogger.shared.log("▶ provision 开始", category: .appleID)
         try await fetchClientInfo()
         let request = try makeAppleRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2/lookup")!)
         let (data, response) = try await session.data(for: request)
@@ -415,7 +415,7 @@ final class AnisetteProvider {
               let startURL = URL(string: startStr), let endURL = URL(string: endStr) else {
             throw fail("provision", "gsa lookup 异常(HTTP \(http)): \(String(data: data, encoding: .utf8)?.prefix(200) ?? "")")
         }
-        LoginLogger.shared.log("✓ gsa lookup 拿到 mid 端点")
+        LoginLogger.shared.log("✓ gsa lookup 拿到 mid 端点", category: .appleID)
         let adiPb = try await startProvisioningSession(startURL: startURL, endURL: endURL)
         keychain.set(adiPb, for: "adiPb")
         guard let identifier = keychain.string(for: "identifier") else {
@@ -431,7 +431,7 @@ final class AnisetteProvider {
         guard let wsURL = comps.url else { throw fail("provision", "WebSocket URL 构建失败") }
         var wsReq = URLRequest(url: wsURL)
         wsReq.timeoutInterval = 30
-        LoginLogger.shared.log("▶ WebSocket 连接 \(wsURL.absoluteString)")
+        LoginLogger.shared.log("▶ WebSocket 连接 \(wsURL.absoluteString)", category: .appleID)
         let socket = session.webSocketTask(with: wsReq)
         socket.resume()
         return try await withCheckedThrowingContinuation { continuation in
@@ -446,7 +446,7 @@ final class AnisetteProvider {
             guard let self else { return }
             switch result {
             case .failure(let err):
-                LoginLogger.shared.log("❌ WebSocket 接收失败: \(err.localizedDescription)")
+                LoginLogger.shared.log("❌ WebSocket 接收失败: \(err.localizedDescription)", category: .appleID)
                 continuation.resume(throwing: self.fail("provision", "WebSocket 接收失败: \(err.localizedDescription)"))
                 socket.cancel(with: .normalClosure, reason: nil)
             case .success(let message):
@@ -469,7 +469,7 @@ final class AnisetteProvider {
                         }
                     }
                 default:
-                    LoginLogger.shared.log("❌ WebSocket 收到非文本消息")
+                    LoginLogger.shared.log("❌ WebSocket 收到非文本消息", category: .appleID)
                     continuation.resume(throwing: self.fail("provision", "WebSocket 收到非文本消息"))
                     socket.cancel(with: .normalClosure, reason: nil)
                 }
@@ -485,7 +485,7 @@ final class AnisetteProvider {
               let result = json["result"] as? String else {
             throw fail("provision", "服务端消息无法解析: \(str.prefix(200))")
         }
-        LoginLogger.shared.log("← WebSocket: \(str.prefix(200))")
+        LoginLogger.shared.log("← WebSocket: \(str.prefix(200))", category: .appleID)
         switch result {
         case "GiveIdentifier":
             guard let identifier = keychain.string(for: "identifier") else { throw fail("provision", "GiveIdentifier 时无 identifier") }
@@ -502,7 +502,7 @@ final class AnisetteProvider {
             return false
         case "ProvisioningSuccess":
             guard let adiPb = json["adi_pb"] as? String else { throw fail("provision", "ProvisioningSuccess 无 adi_pb") }
-            LoginLogger.shared.log("✓ provision 成功，adi_pb=\(adiPb.prefix(16))…")
+            LoginLogger.shared.log("✓ provision 成功，adi_pb=\(adiPb.prefix(16))…", category: .appleID)
             socket.cancel(with: .normalClosure, reason: nil)
             continuation.resume(returning: adiPb)
             return true
@@ -514,7 +514,7 @@ final class AnisetteProvider {
                 // Anisette 服务器**与 Apple trust 不同步或其会话过期，换服务器
                 // 通常即可通过.这里打点说明，重试逻辑见 getAnisetteDataWithFallback.
                 if raw.contains("-45025") || raw.contains("-45003") || raw.contains("-45061") {
-                    LoginLogger.shared.log("… 该 Anisette 服务器被 Apple 拒绝（\(raw)），属可重试错误，将换服务器")
+                    LoginLogger.shared.log("… 该 Anisette 服务器被 Apple 拒绝（\(raw)），属可重试错误，将换服务器", category: .appleID)
                 }
                 throw fail("provision", "服务端返回 \(result): \(raw)")
             }

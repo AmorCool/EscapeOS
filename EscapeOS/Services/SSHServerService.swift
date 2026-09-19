@@ -382,6 +382,24 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 安全约束全部落在 `DDIMountProbe` 头注释里（复用 AFC 串行队列 / 单连接 / 只读）。
             // 用法：ddiprobe   （同步阻塞执行，结束后直接读结果）
             return DDIMountProbe.runOnce()
+        case "cdprobe":
+            // ★ 只读诊断：走「CoreDeviceProxy 隧道内的**第二个** RSD 握手」，
+            // dump CoreDevice 服务表并端到端跑一次 app_service_list_processes。
+            //
+            // 为什么需要：主页两个内置模块（locache / wifirefresh）与「进程管理」走
+            // `app_service_connect_rsd` 时必现 `ServiceNotFound`(21)。已核实
+            // `RsdHandshake::connect` 是纯 HashMap 查表、查不到直接报错、**无回退**
+            // ⇒ 必现。真机 19 次 dump 里 `com.apple.coredevice.*` **整块 0 条**。
+            // 待验证假设：Apple 官方通往 CoreDevice 的路是 CoreDeviceProxy 隧道里的
+            // 第二个 RSD 握手（上游 `tools/src/app_service.rs:69-85`），
+            // 而不是本仓 `withAppService` 用的那条 RPPairing 握手。
+            // 本命令把这条路一次跑通并如实报告每一步的错误原文。
+            //
+            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建隧道 + 真开一条
+            //    app_service 连接（RSD 隧道并发铁律；v0.3.419/420 事故见 `MY-FAULTS.md` 缺陷 17）。
+            // 安全约束全部落在 `CDProbe` 头注释里（复用 AFC 串行队列 / 单连接 / 只读）。
+            // 用法：cdprobe   （同步阻塞执行，结束后直接读结果）
+            return CDProbe.runOnce()
         case "modules":
             let mods = ModuleService.shared.listModules()
             guard !mods.isEmpty else { return "（无已安装模块）" }
@@ -645,6 +663,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       status          运行状态总览
       airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
+      cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30，最多 5000）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）

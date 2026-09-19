@@ -390,20 +390,34 @@ struct WallpaperView: View {
 
     private func proceedApply(_ objects: [TendiesObject]) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let success = applyObjects(objects)
+            let outcome = applyObjects(objects)
             DispatchQueue.main.async {
-                if success {
+                // 先把记录落下来 —— 写进去的目录名必须记住，否则日后「清空」就没有依据、
+                // 只能去猜哪些是自定义的（v0.3.460 删掉 Apple 默认收藏的根因）。
+                // 部分成功也照记：写进去了就得有记录，否则那些目录永远无人认领.
+                for (objectID, mapping) in outcome.records {
+                    guard let index = tendiesArray.firstIndex(where: { $0.id == objectID }) else { continue }
+                    var applied = tendiesArray[index].appliedDescriptors ?? [:]
+                    for (providerKey, names) in mapping {
+                        applied[providerKey, default: []].append(contentsOf: names)
+                    }
+                    tendiesArray[index].appliedDescriptors = applied
+                }
+
+                if outcome.failed {
+                    showAlert(title: "应用失败", message: "无法写入 PosterBoard 描述符.请检查沙盒扩展是否生效，或尝试重置.")
+                } else {
                     showAlert(title: "应用成功", message: "请杀死后台并重新打开 PosterBoard 以查看效果.") {
                         openPosterBoard()
                     }
-                } else {
-                    showAlert(title: "应用失败", message: "无法写入 PosterBoard 描述符.请检查沙盒扩展是否生效，或尝试重置.")
                 }
             }
         }
     }
 
-    private func applyObjects(_ objects: [TendiesObject]) -> Bool {
+    /// - Returns: `(records: 每个包实际写成功的目录名（key = 包 id，内层 key = PBPath.rawValue）,
+    ///   failed: 是否有任何一个目录没写成功)`.
+    private func applyObjects(_ objects: [TendiesObject]) -> (records: [UUID: [String: [String]]], failed: Bool) {
         let targets = Set(objects.map(\.targetDescr))
         var handles: [SandboxEscape.Handle] = []
         defer {
@@ -416,10 +430,12 @@ struct WallpaperView: View {
                 handles.append(handle)
             } catch {
                 print("[wallpaper] failed to consume sandbox extension for \(targetPath): \(error)")
-                return false
+                return ([:], true)
             }
         }
 
+        var records: [UUID: [String: [String]]] = [:]
+        var failed = false
         for object in objects {
             let container = "\(pbContainerPath)/\(object.targetDescr.path)"
             for descr in object.descrNames {
@@ -430,13 +446,15 @@ struct WallpaperView: View {
                     .appendingPathComponent(descr)
                 do {
                     try FileManager.default.copyItem(at: source, to: dest)
+                    // 复制成功才记录：这个随机目录名是我们生成的，也是日后唯一敢删的东西.
+                    records[object.id, default: [:]][object.targetDescr.rawValue, default: []].append(destName)
                 } catch {
                     print("[wallpaper] failed to copy \(source) -> \(dest): \(error)")
-                    return false
+                    failed = true
                 }
             }
         }
-        return true
+        return (records, failed)
     }
 
     private func openDataFolder(for tendies: TendiesObject) {
@@ -462,6 +480,17 @@ struct WallpaperView: View {
     private func clearAll() {
         let objects = tendiesArray
         let container = pbContainerPath
+
+        // 汇总所有记录：**只有这里点到名的目录才允许被删**。
+        // 记录之外的一律不碰 —— 我们没有任何依据判断它们是谁的（Apple 默认收藏也在里面）.
+        // 用 reduce 出 `let`：这个值会被 @Sendable 的后台闭包捕获，不留可变变量.
+        let recorded = objects.reduce(into: [String: [String]]()) { result, object in
+            guard let applied = object.appliedDescriptors else { return }
+            for (providerKey, names) in applied {
+                result[providerKey, default: []].append(contentsOf: names)
+            }
+        }
+
         DispatchQueue.global(qos: .userInitiated).async {
             // ① App 内的包：逐个删，失败只计数、不中断.
             var packagesRemoved = 0
@@ -481,15 +510,32 @@ struct WallpaperView: View {
 
             // ② 系统容器：容器/写权限类错误在「一张都还没删」时抛出，此时①已经做完了 ——
             //    把它当作「系统那段没做成」如实报，而不是假装整体失败.
-            var descriptors: (removed: Int, failed: Int, unreadable: Int)?
+            var descriptors: (removed: [String: [String]], failed: Int, unreadable: Int, unrecorded: Int)?
             var systemError: Error?
             do {
-                descriptors = try handler.resetCustomDescriptors(containerPath: container, using: sandbox)
+                descriptors = try handler.removeAppliedDescriptors(
+                    containerPath: container, recorded: recorded, using: sandbox)
             } catch {
                 systemError = error
             }
 
             DispatchQueue.main.async {
+                // 已经删掉的目录名要从记录里划掉：否则「包删失败、但系统描述符删成功」的那些条目
+                // 会留着指向不存在目录的记录，下次清空再去删就必然失败、报成「移除失败」（假失败）。
+                var removedNames: Set<String> = []
+                if let descriptors {
+                    for names in descriptors.removed.values { removedNames.formUnion(names) }
+                }
+                if !removedNames.isEmpty {
+                    for index in tendiesArray.indices {
+                        guard var applied = tendiesArray[index].appliedDescriptors else { continue }
+                        for (providerKey, names) in applied {
+                            applied[providerKey] = names.filter { !removedNames.contains($0) }
+                        }
+                        tendiesArray[index].appliedDescriptors = applied
+                    }
+                }
+
                 // 只摘掉真删掉的条目：删失败的文件夹还在磁盘上，列表里就必须还在 ——
                 // 无条件清空会让用户以为清干净了，而 Documents/Wallpapers 里其实还留着.
                 withAnimation { tendiesArray.removeAll { removedIDs.contains($0.id) } }
@@ -509,15 +555,16 @@ struct WallpaperView: View {
     }
 
     /// 把两类结果拼成一句：**只列非 0 的项**，不显示「0 个包失败」这种废话.
-    /// `refresh` = 动过系统容器，需要重新打开 PosterBoard 才会刷新.
+    /// `refresh` = 系统容器里真删掉过东西，需要重新打开 PosterBoard 才会刷新.
     private func clearResult(
         packagesRemoved: Int,
         packagesFailed: Int,
-        descriptors: (removed: Int, failed: Int, unreadable: Int)?,
+        descriptors: (removed: [String: [String]], failed: Int, unreadable: Int, unrecorded: Int)?,
         systemError: Error?
     ) -> (title: String, message: String, refresh: Bool) {
         var parts: [String] = []
         var clean = true
+        var removedCount = 0
 
         if packagesRemoved > 0 { parts.append("已清空 \(packagesRemoved) 个包") }
         if packagesFailed > 0 {
@@ -525,7 +572,8 @@ struct WallpaperView: View {
             clean = false
         }
         if let descriptors {
-            if descriptors.removed > 0 { parts.append("系统已移除 \(descriptors.removed) 张") }
+            removedCount = descriptors.removed.values.reduce(0) { $0 + $1.count }
+            if removedCount > 0 { parts.append("系统已移除 \(removedCount) 张") }
             if descriptors.failed > 0 {
                 parts.append("\(descriptors.failed) 张移除失败")
                 clean = false
@@ -533,6 +581,14 @@ struct WallpaperView: View {
             if descriptors.unreadable > 0 {
                 parts.append("\(descriptors.unreadable) 个目录读取失败")
                 clean = false
+            }
+            if descriptors.unrecorded > 0 {
+                // 只进日志：这个数必然含 Apple 默认精选集（干净设备上也 > 0），
+                // 放界面是恒定噪音，而且「未删除」会让用户以为清空失败。
+                // 我们不做归属判断 —— 这正是 v0.3.460 删掉 Apple 默认收藏的根因。
+                LoginLogger.shared.log(
+                    "[壁纸] 清空：已删 \(removedCount) 张（我们记录的）；"
+                    + "另有 \(descriptors.unrecorded) 个目录不在记录中，未动", category: .general)
             }
         }
         if let systemError {
@@ -542,11 +598,12 @@ struct WallpaperView: View {
 
         // 两边都没东西可清 → 不报「完成」，也别去重新打开 PosterBoard.
         guard !parts.isEmpty else { return ("清空所有导入", "没有可清空的内容.", false) }
-        return (clean ? "清空完成" : "清空所有导入", parts.joined(separator: "；") + ".", true)
+        // 只有系统容器里真删掉过东西才需要重开 PosterBoard 刷新（只是「没记录没删」时不重开）.
+        return (clean ? "清空完成" : "清空所有导入", parts.joined(separator: "；") + ".", removedCount > 0)
     }
 
     /// 如实区分失败原因：没有写权限 / 没找到容器.
-    /// 注意：**单个目录删除失败不走这里** —— 它由 `resetCustomDescriptors` 计数后随成功数一起报.
+    /// 注意：**单个目录删除失败不走这里** —— 它由 `removeAppliedDescriptors` 计数后随成功数一起报.
     private func clearFailureMessage(for error: Error) -> String {
         // 沙盒扩展拿不到（被内核拒绝、路径不在 containermanager 沙盒内等）⇒ 没有写权限.
         if error is SandboxEscapeError { return "没有写权限." }

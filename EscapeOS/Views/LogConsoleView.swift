@@ -31,6 +31,12 @@ struct LogConsoleView: View {
     /// —— 页面本身是 `NavigationLink` push 出来的（已有系统返回按钮）时用这个，避免两个等价按钮。
     var onDone: (() -> Void)? = nil
 
+    /// 「清除」的二次确认标题。`nil` = 点了直接清。
+    ///
+    /// 清空日志**不可恢复**（会把日志文件一起删掉），所以凡是有清除按钮的页面都该传这个 ——
+    /// 五个日志页统一都有确认，别让某一页静默丢历史。
+    var clearConfirmTitle: String? = nil
+
     /// **渲染上限：只渲染最近这么多行。**
     ///
     /// 为什么必须有这个上限：逐行 `Text` 意味着**每一行都是一个独立的 SwiftUI 视图**，
@@ -44,6 +50,7 @@ struct LogConsoleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var copied = false
     @State private var showShare = false
+    @State private var showClearConfirm = false
 
     /// 实际渲染的行。数据层已按上限取过数，这里是**兜底**：
     /// 保证任何调用方（含以后接进来的另外三个日志页）都不可能把超量行丢进 `LazyVStack`。
@@ -79,7 +86,14 @@ struct LogConsoleView: View {
         .toolbar {
             if let onClear {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("清除", role: .destructive) { onClear() }
+                    Button("清除", role: .destructive) {
+                        // 有确认标题就先弹确认（清空不可恢复），没传则保持旧 AppStoreLogView 的直接清
+                        if clearConfirmTitle != nil {
+                            showClearConfirm = true
+                        } else {
+                            onClear()
+                        }
+                    }
                 }
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
@@ -112,6 +126,12 @@ struct LogConsoleView: View {
         }
         .sheet(isPresented: $showShare) {
             ShareSheet(items: [shareText])
+        }
+        // 未传 `clearConfirmTitle` 时永远不会触发（按钮走直接清那条路），
+        // 所以这里给个空标题不会露出来。
+        .confirmationDialog(clearConfirmTitle ?? "", isPresented: $showClearConfirm, titleVisibility: .visible) {
+            Button("清空日志", role: .destructive) { onClear?() }
+            Button("取消", role: .cancel) {}
         }
     }
 

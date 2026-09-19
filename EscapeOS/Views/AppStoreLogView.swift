@@ -29,6 +29,7 @@ struct AppStoreLogView: View {
             }
             // 不传 onDone：本页是 `AppStoreView` 里 `NavigationLink` push 出来的，
             // 系统返回按钮已经在做同一件事，再加「完成」就是两个等价按钮。
+            clearConfirmTitle: "确定清空 AppStore 日志？"
         )
         .task {
             refresh()

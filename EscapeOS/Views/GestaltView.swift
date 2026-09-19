@@ -166,17 +166,13 @@ struct GestaltView: View {
         }
         .sheet(isPresented: $logPresented) {
             NavigationStack {
-                ScrollView {
-                    Text(model.log.joined(separator: "\n"))
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                        .textSelection(.enabled)
-                }
-                .navigationTitle("诊断日志")
-                .toolbar {
-                    Button("完成") { logPresented = false }
-                }
+                // `model.log` 本身就是逐行数组、且是 @Published（有新行会自动刷新），直接交给共享视图；
+                // 引擎没有「清空日志」的接口 → 不传 onClear（工具栏就不会出现清除按钮）。
+                LogConsoleView(
+                    lines: model.log,
+                    title: "诊断日志",
+                    onDone: { logPresented = false }
+                )
             }
         }
         .sheet(item: $shareTarget) { target in

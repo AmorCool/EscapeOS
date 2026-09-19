@@ -1,5 +1,87 @@
 # Changelog
 
+## [0.3.462] - 2026-09-19
+
+### ★★★ 更正：`ServiceNotFound` 的真根因是**我们接错了隧道**（推翻 v0.3.376 的「DDI 未挂」结论）
+
+**`com.apple.coredevice.*` 这一族服务只存在于 CoreDeviceProxy 隧道里的「第二个 RSD 握手」上，
+不在 `tunnel_create_rppairing` 拿到的那条上。** 而 `withAppService` / `ProcessManagerService`
+用的是后者 ⇒ 整块查不到 ⇒ `ServiceNotFound`(21) 必现。
+
+证据是 Apple **官方** `idevice-tools app-service` 的实现（`tools/src/app_service.rs:69-85`）：
+```rust
+let proxy = CoreDeviceProxy::connect(&*provider).await;
+let rsd_port = proxy.tunnel_info().server_rsd_port;
+let adapter = proxy.create_software_tunnel();
+let stream = adapter.connect(rsd_port).await;
+let mut handshake = RsdHandshake::new(stream).await;      // ← 第二个 RSD 握手
+let mut asc = AppServiceClient::connect_rsd(&mut adapter, &mut handshake).await;
+```
+等价的 C 版在 `tools/examples/process_control.c`。**服务名没错、查表点没错，错的是握手包拿的是哪条隧道。**
+
+**为什么以前判成 DDI**：只看到「服务表里没有」就跳到「设备没广播」，没去读上游官方实现。
+`ddiprobe` 报「已挂载开发者镜像数量 = 0」是**结果**不是原因。真机 19 次 dump 里服务表
+**稳定 64 条**（端口每次变、集合不变）⇒ **隧道建得没问题**，更说明问题出在「查错了握手包」。
+
+**本版先做只读探针把这条链钉死**（见下），**不动** `withAppService` —— 等探针结果出来再改接线。
+
+### 新增：只读 SSH 诊断命令 `cdprobe`
+
+走「lockdown TCP provider → `core_device_proxy_connect` → `get_server_rsd_port` →
+`create_tcp_adapter` → `adapter_connect` → **第二个 `rsd_handshake_new`**」，
+然后：
+- 全量 dump 这条握手的服务表（name / port / remoteXPC），**明确标注** `com.apple.coredevice.appservice` 在不在、
+  `com.apple.coredevice.*` 共几条；
+- **端到端**跑一次 `app_service_connect_rsd` + `app_service_list_processes`，报进程条数。
+
+结果 → `Documents/LoginLogs/cd_probe.txt`（日志里只留一行摘要）。
+
+实现照 `EscDDIProbe` 的先例走 **C 垫片**（`EscapeOS/Tunnel/EscCDProbe.h/.c` + `EscapeOS/Engine/CDProbe.swift`）：
+本 FFI 头里 `typedef void *` 的指针参数在 Swift 侧不可靠（v0.3.271~278 烧掉 8 轮 CI），
+所以整条链关在 C 层，Swift 侧只传四个标量、拿回文本。
+
+安全约束：复用 `AFCService.runExclusively` 串行队列（RSD 隧道并发铁律；v0.3.419/420 事故）、
+只开一条服务连接、只读、**只由 SSH 显式触发、不挂任何 UI**。
+
+### 日志板块：拆分类 + 堵住串台 + 五页排版统一
+
+**根因**：`RootView.swift` 那个「登录日志」入口传的是**无参** `LoginLogView()`，
+而 `categories == nil` 走 `fullLog()`（**全量、不过滤**）⇒ 所有板块的日志都串到「登录诊断日志」页里。
+
+**第二层**：`LoginLogger.Category.appStore` 被**两个板块共用**（① AppleID 登录/认证引擎
+② AppStore 商店业务，后者 100+ 处）⇒ 光堵 `nil` 不够，必须拆开。
+
+- 新增分类 `appleID = "AppleID 登录"`；`Services/AppleAuth/` 下描述「登录/认证握手」的日志改挂它
+  （`AnisetteProvider` / `AppleAuthenticator` / `GSAAuth` / `AppleIDSignInService` /
+  `SignedStoreAuthenticator` / `StoreAccountSession`）。
+- `RootView` 与 `AppleIDLoginSheet` 两个入口都改成 `[.appleID]`；**任何 UI 路径都不再传 `nil`**。
+- **五个日志页统一到 `LogConsoleView`**（3105 排版：逐行 `Text` + 行间 `Divider` + 自动滚底 +
+  复制带元信息头）：`AppStoreLogView` / `LoginLogView` / `SysmonLogView` / `ModuleLogView` /
+  `GestaltView` 的「诊断日志」。`IPCCInstallView` 的「安装日志」是**结构化记录**，不改。
+- **补上「按分类读文件」**：`recentLines(_:categories:)` 此前**只读内存缓冲**（上限 500 行），
+  而 `.appStore` 一次下载就能刷满它 ⇒ 低频分类被整批挤出 ⇒ 日志页几乎空白。
+  本文件从 v0.3.310 起就把分类写进行首（`[HH:mm:ss.SSS][分类] 正文`），注释也写着
+  「这样文件里的历史日志也能按板块过滤」—— **但那个意图一直没被实现**，本版补上：
+  读「文件尾部 512KB + 内存」合并后按行首分类过滤（512KB ≈ 2000+ 行，与渲染上限同量级；
+  从字节偏移切开会把中文 UTF-8 拦腰截断 ⇒ 必须从换行字节处切开）。
+- **清空统一加二次确认**（`LogConsoleView.clearConfirmTitle`）：`LoginLogView` / `SysmonLogView`
+  原本就有确认，排版统一时被弄丢了 —— 清空日志不可恢复，属功能倒退，本版补回并五页统一。
+
+### 壁纸：清空改成「只删我们记录在案的」，不再猜归属
+
+v0.3.460 的「重置精选集」按「目录内 identifier 是整数」判自定义 —— 真机上 Apple 默认收藏**也是整数**，
+于是被一并删掉。**任何「按特征猜归属」的判据都不可靠。**
+
+- `TendiesObject` 新增 `appliedDescriptors`（key = `PBPath.rawValue`，value = `applyObjects()` 当场生成的
+  随机目录名），随 `@AppStorage("wallpaperTendies")` 持久化。
+- `applyObjects` 复制成功即落记录；`clearAll` 汇总记录，只删**记录里点到名**的目录；
+  记录之外（含 Apple 默认收藏、以及本修复之前装的）**一律不碰**。
+- `resetCustomDescriptors` → `removeAppliedDescriptors`，返回值改为按 provider 分组，
+  并新增 `unrecorded`（不在记录中的目录数）。**`unrecorded` 只进日志、不进弹窗** ——
+  它必然含 Apple 默认收藏（干净设备上也 > 0），放界面是恒定噪音，且「未删除」会让用户以为清空失败。
+- 已删掉的目录名会从记录里划掉，避免「包删失败但描述符删成功」的条目下次清空时报**假失败**。
+- 旧方法 `isCustomDescriptor` / `plistIntegerValue` 一并删除（**全仓零残留**）。
+
 ## [0.3.461] - 2026-09-19
 
 ### ★ 修「探测队列被永久堵死」—— 自动路径跑全部组 ⇒ 卡死 ⇒ 之后所有探测都不再执行

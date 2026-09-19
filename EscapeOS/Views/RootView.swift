@@ -378,7 +378,10 @@ struct SettingsForm: View {
             AppleIDLoginSheet()
         }
         .sheet(isPresented: $showLoginLog) {
-            LoginLogView()
+            // 这个入口就是「登录日志」（页面标题「登录诊断日志」）→ 只显示 AppleID 登录/认证引擎那一类。
+            // 此前传的是无参 `LoginLogView()`，而 `categories == nil` 会走 `fullLog()`（**全量不过滤**），
+            // 于是商店 / 证书 / 侧载各板块的日志全都串到这一页里（用户实测指正）。
+            LoginLogView(categories: [.appleID])
         }
         .alert("证书创建失败", isPresented: Binding(
             get: { certError != nil },

@@ -54,7 +54,7 @@ enum StoreAccountSession {
             LoginLogger.shared.log(
                 "[会话] 账号租约等待超过 \(Int(StoreAccountRequestGate.acquireTimeout))s，已强制接管继续 —— "
                 + "上一个持有者很可能因 App 进后台被挂起而未释放（本次结束时会把它清掉）。",
-                category: .appStore)
+                category: .appleID)
         }
         do {
             try Task.checkCancellation()
@@ -137,7 +137,7 @@ actor StoreRefreshCoordinator {
             let reusableCookies = stored.deviceGuid == currentGUID ? stored.cookie : []
             if let old = stored.deviceGuid, old != currentGUID {
                 LoginLogger.shared.log("[SAP] 设备标识已变更（\(old) → \(currentGUID)），本次登录不带旧会话",
-                                       category: .appStore)
+                                       category: .appleID)
             }
             let refreshed = try await SignedStoreAuthenticator().authenticate(
                 email: stored.email, password: stored.password, code: code,

@@ -21,6 +21,14 @@ final class LoginLogger: @unchecked Sendable {
         /// **AppStore 商店**（主页商店：登录 / 获取 / 下载 / 安装 / 账号管理）
         /// —— v0.3.311：原「更多 → AppStore 下载」板块已整体移除，AppStore 只剩这一个板块
         case appStore = "AppStore"
+        /// **AppleID 登录 / 认证引擎**（SAP / GrandSlam / Anisette / 会话）。
+        ///
+        /// 为什么必须和 `.appStore` 拆开：这个分类此前被**两个板块共用** ——
+        /// ① AppleID 登录/认证引擎（`Services/AppleAuth/` 的 SAP / GrandSlam / Anisette / 会话），
+        /// ② AppStore 商店业务（商品页 / 版本历史 / 三方 API / 下载安装，全仓 100+ 处）。
+        /// 结果就是「登录诊断日志」页里混着商店业务日志、商店页里混着登录握手日志，
+        /// 两边都过滤不干净（用户实测指正）。拆开后各页只读自己那一类。
+        case appleID = "AppleID 登录"
         case i4Store = "爱思源"
         case sideload = "侧载签名"
         case certificate = "证书管理"
@@ -94,13 +102,75 @@ final class LoginLogger: @unchecked Sendable {
         return buffer.suffix(n).map(\.line)
     }
 
-    /// v0.3.307：只取指定分类的最近 n 行（板块日志隔离）.
+    /// 只取指定分类的最近 n 行（板块日志隔离）。
+    ///
+    /// **必须读文件，不能只读内存缓冲**（本轮修正 —— 之前只读 `buffer`，是个真实缺陷）：
+    /// `buffer` 是**全 App 共享**的、上限只有 `maxBufferLines`（500）行，而商店业务
+    /// （`.appStore`，100+ 个写入点）一次下载就能把它刷满 ⇒ 低频分类（如 `.appleID`）
+    /// 会被**整批挤出缓冲** ⇒ 「登录诊断日志」页会几乎空白。
+    /// 本文件从 v0.3.310 起就把分类写进了**行首**（`[HH:mm:ss.SSS][分类] 正文`），
+    /// 当时注释写的就是「这样**文件里的历史日志**也能按板块过滤」——
+    /// 但 `logText` / `recentLines` 都只读内存，**那个意图一直没被实现**；这里把它补上。
+    ///
+    /// 性能：本方法被四个日志页 **2s 轮询**调用，所以文件**只读尾部**（见 `tailLines`），
+    /// 不整文件读。
     func recentLines(_ n: Int, categories: [Category]) -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
         guard n > 0 else { return [] }
-        let set = Set(categories)
-        return buffer.filter { set.contains($0.category) }.suffix(n).map(\.line)
+        let wanted = Set(categories.map(\.rawValue))
+
+        lock.lock()
+        let mem = buffer.map(\.line)
+        lock.unlock()
+
+        // 顺序 = 时间顺序（**最新的在最后**）：文件尾部（旧的在前）→ 再补上内存里
+        // 还没落盘的行（正常为空；只有写文件失败时才可能非空，那时它本来就是最新的）。
+        // ⚠️ 不要照 `fullLog()` 的 `mem + 文件` 顺序 —— 那是「最新的一块在最前」，
+        // 日志页会把最后一行当作最新去自动滚底，顺序反了就会停在**最旧**的一行上。
+        var all = tailLines()
+        let inFile = Set(all)
+        all.append(contentsOf: mem.filter { !inFile.contains($0) })
+
+        return Array(all.filter { Self.category(of: $0).map(wanted.contains) ?? false }.suffix(n))
+    }
+
+    /// 读日志文件**尾部**并拆行（时间顺序，最新的在最后）。
+    ///
+    /// 为什么只读尾部：调用方（日志页）是 2s 轮询，而文件上限默认 1024KB
+    /// （`LogLimitSettings.fileLimitBytes`，可配、可关）—— 每次整文件读 + 解码是白烧。
+    /// 512KB 约等于 2000+ 行，与 `LogConsoleView.maxRenderedLines` 同量级，够用。
+    private func tailLines() -> [String] {
+        let cap = 512 * 1024
+        guard let handle = try? FileHandle(forReadingFrom: logFileURL) else { return [] }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return [] }
+        let offset = size > UInt64(cap) ? size - UInt64(cap) : 0
+        guard (try? handle.seek(toOffset: offset)) != nil,
+              let data = try? handle.readToEnd() else { return [] }
+
+        var bytes = [UInt8](data)
+        if offset > 0 {
+            // 从任意字节偏移开始读，首行必然被截断 —— 而且**必须**从换行字节处切开：
+            // 日志正文是中文（多字节 UTF-8），若从某个字符的中间字节开始解码，
+            // 整个 `String(bytes:encoding:)` 会直接返回 nil（一行都拿不到）。
+            guard let newline = bytes.firstIndex(of: 0x0A) else { return [] }
+            bytes = Array(bytes[(newline + 1)...])
+        }
+        guard let text = String(bytes: bytes, encoding: .utf8) else { return [] }
+        return text.components(separatedBy: "\n").filter { !$0.isEmpty }
+    }
+
+    /// 从一行日志里取出**分类的 rawValue**。
+    ///
+    /// 行格式（见 `log(_:category:)`）：`[HH:mm:ss.SSS][分类] 正文`
+    /// ⇒ 取**第二个**方括号里的内容。时间戳里不含 `]`，所以「找第一个 `]` 再找下一个 `[`」是安全的。
+    /// 注意匹配的是 `rawValue`（中文，如 `"AppleID 登录"`），**不是** case 名。
+    private static func category(of line: String) -> String? {
+        guard line.hasPrefix("["), let firstClose = line.firstIndex(of: "]") else { return nil }
+        let afterFirst = line.index(after: firstClose)
+        guard afterFirst < line.endIndex, line[afterFirst] == "[" else { return nil }
+        let rest = line[line.index(after: afterFirst)...]
+        guard let secondClose = rest.firstIndex(of: "]") else { return nil }
+        return String(rest[rest.startIndex..<secondClose])
     }
 
     /// v0.3.307：日志页文本。传 categories 则只显示这些分类（板块隔离）；

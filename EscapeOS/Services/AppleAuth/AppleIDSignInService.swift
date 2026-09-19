@@ -46,7 +46,7 @@ enum AppleIDSignInService {
     private static func logRegion(_ account: AppStoreAccount, log: ((String) -> Void)?) {
         if let region = AppStoreService.adoptAccountRegion(storefront: account.store, email: account.email) {
             log?("账号区域 \(region.uppercased())（storefront \(account.store)），商店已跟随")
-            LoginLogger.shared.log("[SAP] 账号区域 \(region.uppercased())（storefront \(account.store)）", category: .appStore)
+            LoginLogger.shared.log("[SAP] 账号区域 \(region.uppercased())（storefront \(account.store)）", category: .appleID)
         }
     }
 

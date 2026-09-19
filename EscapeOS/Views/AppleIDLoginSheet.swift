@@ -109,7 +109,10 @@ struct AppleIDLoginSheet: View {
                 }
             }
             .sheet(isPresented: $showLog) {
-                LoginLogView(categories: [.appStore])
+                // 这里是**登录**面板里的「诊断日志」→ 只显示 AppleID 登录/认证引擎那一类。
+                // 此前传 `[.appStore]`，而 `.appStore` 被商店业务与登录引擎共用，
+                // 于是商店的商品页/下载日志也会混进来（用户实测指正）。
+                LoginLogView(categories: [.appleID])
             }
             .documentPicker(isPresented: $showImporter, allowedTypes: [.json]) { urls in
                 handleImport(urls)
@@ -238,84 +241,62 @@ final class AppleLoginController: ObservableObject {
     var twoFactorReply: ((String?) -> Void)?
 }
 
-/// 登录诊断日志查看与导出（查看 / 复制 / 导出分享 / 清空）.
+/// 登录诊断日志（查看 / 复制 / 分享 / 清空）.
+///
+/// 排版走共享的 `LogConsoleView`（逐行 `Text` + 行间 `Divider` + 自动滚底 + 复制带元信息头）——
+/// 此前是**一整块 `Text`**，长日志糊成一坨。
 struct LoginLogView: View {
-    /// v0.3.307：只显示这些分类的日志（板块隔离）；nil = 全部（全局排查/导出用）
+    /// 只显示这些分类的日志（板块隔离）。
+    ///
+    /// `nil` = 全量（不按分类过滤）——**只保留给将来的「导出全部日志」**。
+    /// ⚠️ **任何 UI 入口都不许再传 nil**：`RootView` 曾经用无参 `LoginLogView()` 进来，
+    /// `nil` 会走不过滤的全量读取，于是商店 / 证书 / 侧载各板块的日志全串到这一页（用户实测指正）。
     var categories: [LoginLogger.Category]? = nil
-    @Environment(\.dismiss) private var dismiss
-    @State private var copied = false
-    @State private var showShare = false
-    @State private var showClearConfirm = false
-    @State private var refreshTick = 0
 
-    private var logText: String {
-        _ = refreshTick
-        let text = LoginLogger.shared.logText(categories: categories)
-        return text.isEmpty ? "（暂无日志，请先尝试一次登录）" : text
-    }
+    @Environment(\.dismiss) private var dismiss
+    @State private var lines: [String] = []
 
     var body: some View {
-        NavigationView {
-            ScrollView {
-                Text(logText)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-            }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("登录诊断日志")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("关闭") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack {
-                        Button {
-                            showClearConfirm = true
-                        } label: {
-                            Label("清空", systemImage: "trash")
-                        }
-                        .disabled(LoginLogger.shared.fullLog().isEmpty)
-                        Button("复制") {
-                            UIPasteboard.general.string = logText
-                            copied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
-                        }
-                        .disabled(LoginLogger.shared.fullLog().isEmpty)
-                    }
-                }
-            }
-            .confirmationDialog("确定清空登录日志？", isPresented: $showClearConfirm, titleVisibility: .visible) {
-                Button("清空日志", role: .destructive) {
+        // 本页由 `.sheet` 弹出，**必须自带导航容器** —— 否则 `LogConsoleView` 的
+        // `navigationTitle` 与工具栏（清除/复制/分享/完成）没有导航栏可挂，整条工具栏都不会出现。
+        NavigationStack {
+            LogConsoleView(
+                lines: lines,
+                title: "登录诊断日志",
+                onClear: {
                     LoginLogger.shared.clear()
-                    refreshTick += 1
+                    refresh()
+                },
+                // 本页是 `.sheet` 弹出来的 → 需要「完成」按钮关闭（3105 同款）
+                onDone: { dismiss() },
+                clearConfirmTitle: "确定清空登录日志？"
+            )
+            .task {
+                refresh()
+                // 2s 轮询：登录/认证握手过程中能实时看到每一步
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    guard !Task.isCancelled else { break }
+                    refresh()
                 }
-                Button("取消", role: .cancel) {}
-            }
-            .safeAreaInset(edge: .bottom) {
-                Button {
-                    showShare = true
-                } label: {
-                    Label("导出分享日志", systemImage: "square.and.arrow.up")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
-                .padding()
-                .disabled(LoginLogger.shared.fullLog().isEmpty)
-            }
-            .sheet(isPresented: $showShare) {
-                ShareSheet(items: [logText])
-            }
-            .alert("已复制", isPresented: $copied) {
-                Button("好", role: .cancel) {}
-            } message: {
-                Text("日志已复制到剪贴板，可直接粘贴发给开发者.")
             }
         }
+    }
+
+    /// 取日志行。
+    /// - `categories != nil` → 只取该板块（`recentLines(_:categories:)`，逐行数组）；
+    /// - `categories == nil` → 全量内存行（`recentLines(_:)`）—— 注意**不读日志文件**，
+    ///   所以这里和旧的 `logText(categories: nil)`（走 `fullLog()` 会读文件）语义不同，
+    ///   但 `nil` 现在没有 UI 入口，只影响将来的导出功能。
+    private func refresh() {
+        let fresh: [String]
+        if let categories {
+            fresh = LoginLogger.shared.recentLines(LogConsoleView.maxRenderedLines, categories: categories)
+        } else {
+            fresh = LoginLogger.shared.recentLines(LogConsoleView.maxRenderedLines)
+        }
+        // 轮询每 2s 重跑一次；内容没变就不重新赋值（避免白触发 body 重算）
+        guard fresh != lines else { return }
+        lines = fresh
     }
 }
