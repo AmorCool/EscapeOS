@@ -378,13 +378,22 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 做什么：组(d) 的真实 macOS 样本过 Grappa 认证之后，继续走第 ② 步 ——
             // **读** `AssetManifest`（设备→主机，§9.2 方向表）→ 发 `FileComplete`（攻击落点），
             // 并把设备对**每一条**的响应原文拿回来 —— 拿到清单是进展、被拒也是结论。
-            // （`FileBegin` 按 §9.2 不发；`AssetManifest` **不许发** —— 那是 §9.3 第 5 条点名的错。）
+            // （`FileBegin` 按 §9.2 不发。）
+            //
+            // ★ 变体（真机 19:24 / v0.3.469 实证：设备在 `FinishedSyncingMetadata` 之后
+            //   **直接回 `SyncFinished`** ⇒ 会话那时就结束了 ⇒ 变体 1 的 `FileComplete`
+            //   落进**死会话**，设备把它当**新会话开场**回 `SyncAllowed`+`AssetMetrics`）：
+            //     1（默认）= FinishedSyncingMetadata → 读 AssetManifest → 发 FileComplete
+            //     2        = 发 FileComplete → 发 FinishedSyncingMetadata → 读（趁会话活着）
+            //     3        = 发 AssetManifest（主机侧）→ 发 FileComplete → 发 FinishedSyncingMetadata → 读
+            //   **一次只跑一个变体**。
             //
             // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
             //    挂在 UI 路径上会跟其它功能抢隧道（v0.3.419/421/424 那串事故的成因）。
-            // 用法：airlift2   （异步触发，结束后读结果文件）
-            AirliftExploit.forceAttackStep2Probe()
-            return "已触发 airlift 攻击链第②步探测。\n"
+            // 用法：airlift2 [变体号]   变体号 ∈ {1, 2, 3}，**省略 = 1**
+            let variant = parts.count > 1 ? parts[1] : "1"
+            AirliftExploit.forceAttackStep2Probe(variant: variant)
+            return "已触发 airlift 攻击链第②步探测（变体 \(variant)）。\n"
                  + "结果：cat LoginLogs/airlift_at2.txt（结论，< 2 KB）"
                  + " / cat LoginLogs/airlift_at2_full.txt（每帧原文）"
         case "ddiprobe":
@@ -695,7 +704,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     EscapeSpace SSH 调试 · 可用命令:
       status          运行状态总览
       airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
-      airlift2        只跑攻击链第②步最小闭环：读 AssetManifest + 发 FileComplete（§9.2 方向表）+ 逐条响应原文（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
+      airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）
       modules         已安装模块列表

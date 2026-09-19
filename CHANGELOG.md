@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.3.470] - 2026-09-19
+
+### ★★★ `airlift2` 真机结果（v0.3.469）：**不是「被拒绝」，是「发晚了」**
+
+```
+0) AssetID = ../../airlift-src-AB5045F8/p0/p1/p2/link      ← ★ 指向 stage 真实目录 ✓
+1) 读（等 AssetManifest，上限 6 条）：SyncFinished
+   ⚠️ 没读到 AssetManifest（设备先回了 SyncFinished）⇒ 设备本次没有待下载资产 ⇒ FileComplete 是盲发
+2) 发 FileComplete 后，设备回：SyncAllowed, AssetMetrics
+```
+
+**三条事实**：
+1. **`AssetID` 指向 stage 阶段真实建出来的目录** ✓ —— 这一环是对的。
+2. **设备不发 `AssetManifest`**：它在 `FinishedSyncingMetadata` 之后**直接回 `SyncFinished`**
+   ⇒ **会话在那时就结束了** ⇒ 之后发的 `FileComplete` 落进**死会话**。
+3. **`FileComplete` 没被拒绝**（回的是 `SyncAllowed` + `AssetMetrics`，**不是**
+   `FileError`/`SyncFailed`/`ErrorCode`）—— 但 `SyncAllowed`/`AssetMetrics` 是**会话开场**消息
+   ⇒ 设备把那条当成了**新会话开场**，**这本身就是「发晚了」的证据**。
+
+### 本版：`airlift2` 加**变体**入口 + 攻击落点换**无害路径**
+
+`airlift2 [变体号]`，变体号 ∈ {1,2,3}，**省略 = 1**；变体号只认 1/2/3，其它当 1，
+**实际用的变体会写进结论文件**（不静默）：
+
+| 变体 | `ReadyForSync` 之后的顺序 | 目的 |
+|---|---|---|
+| **1**（默认） | `FinishedSyncingMetadata` → 读 `AssetManifest` → 发 `FileComplete` | 现状（已知：会话已结束） |
+| **2** | **发 `FileComplete`** → 发 `FinishedSyncingMetadata` → 读 | 趁会话活着发攻击消息 |
+| **3** | **发 `AssetManifest`（主机侧）→ 发 `FileComplete`** → 发 `FinishedSyncingMetadata` → 读 | 探测「主机先声明 asset」能否让设备进入可 `FileComplete` 的状态 |
+
+变体 2/3 **跳过上游那条 `FinishedSyncingMetadata`**（由分支自己发）—— 否则会话立刻被 `SyncFinished` 关掉。
+
+**为什么加变体 3**：设备不发清单 ⇒ 它**没有待下载资产**。ref §9.2 把 `AssetManifest` 归为设备→主机，
+但那张表来自 PoC 源码的**一条路径**，**没有排除协议里两个方向都有**。
+「主机先声明 asset」是唯一能让设备进入「有 asset 可 complete」状态的可试路径。
+
+### ⚠️ 攻击落点换成无害路径（首次成功不拿系统目录冒险）
+
+原来是 `/var/mobile/Library/SpringBoard` —— **真实敏感目录**，一旦攻击生效就会往那里写。改为：
+
+```
+/var/mobile/Library/Caches/airlift-escape-probe-<token>.txt
+```
+
+理由（已写进代码注释）：① 在 **AFC 根（`/var/mobile/Media`）之外** ⇒ 足以证明逃逸；
+② `Caches/` 按设计就是可丢弃的 ⇒ 真写进去也无害；③ 文件名带标识 ⇒ 可识别、可清理。
+
+### 判据行也更新了
+
+`airlift_at2.txt` 现在把三种响应分开写清：
+- 回 `FileError`/`SyncFailed`/`ErrorCode` = **设备拒绝**；
+- 回 `SyncFinished` = **会话已结束**（消息没被处理）；
+- 回 `SyncAllowed`/`AssetMetrics` = **设备把它当成新会话开场**（= **发晚了**）。
+
+自检：两文件过 `_tools_paren_scan.py`（最终深度 +0、无负行、无「少逗号」可疑位置）。
+⚠️ 本机不能编译、不能连真机 ⇒ 变体 2/3 效果待真机实测。
+
 ## [0.3.469] - 2026-09-19
 
 ### 修 v0.3.468 的 CI 编译错：字符串拼接的 `+` 被写进了字面量**内部**
