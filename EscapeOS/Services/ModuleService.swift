@@ -21,6 +21,58 @@
 
 import Foundation
 
+// MARK: - 宿主版本
+
+/// 宿主版本读取与比较（用于 `minHostVersion` 门禁）.
+///
+/// 版本号格式是 semver（`0.3.481` / `1.2.3` / 可带 `-rc1` 后缀）。这里**不引入
+/// 第三方 semver 库**，只做够用的事：按 `.` 切段比数值，段数不等时缺的当 0，
+/// 后缀（`-` 之后）按「有后缀 < 无后缀」处理（`1.0.0-rc1` 早于 `1.0.0`）。
+///
+/// 为什么不用 `String.compare(options: .numeric)`：它对 `0.3.10` vs `0.3.9` 是对的，
+/// 但对 `1.0` vs `1.0.0` 会判不等（段数不同），而我们要的是相等。
+enum HostVersion {
+    /// 当前宿主版本（CFBundleShortVersionString）
+    static var current: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    }
+
+    /// 比较两个版本号：a < b 返回 -1，相等返回 0，a > b 返回 1
+    static func compare(_ a: String, _ b: String) -> Int {
+        let (aCore, aSuffix) = split(a)
+        let (bCore, bSuffix) = split(b)
+        let count = max(aCore.count, bCore.count)
+        for i in 0..<count {
+            let x = i < aCore.count ? aCore[i] : 0
+            let y = i < bCore.count ? bCore[i] : 0
+            if x != y { return x < y ? -1 : 1 }
+        }
+        // 主版本相同：有后缀的算更早（1.0.0-rc1 < 1.0.0）
+        switch (aSuffix, bSuffix) {
+        case (nil, nil): return 0
+        case (.some, nil): return -1
+        case (nil, .some): return 1
+        case (.some(let s1), .some(let s2)): return s1 == s2 ? 0 : (s1 < s2 ? -1 : 1)
+        }
+    }
+
+    /// 拆成「数值段数组」+「后缀」
+    private static func split(_ v: String) -> ([Int], String?) {
+        let trimmed = v.trimmingCharacters(in: .whitespaces)
+        let head: String
+        let suffix: String?
+        if let idx = trimmed.firstIndex(where: { $0 == "-" || $0 == "+" }) {
+            head = String(trimmed[trimmed.startIndex..<idx])
+            suffix = String(trimmed[trimmed.index(after: idx)...])
+        } else {
+            head = trimmed
+            suffix = nil
+        }
+        let parts = head.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) ?? 0 }
+        return (parts.isEmpty ? [0] : parts, suffix)
+    }
+}
+
 // MARK: - 模块模型
 
 /// 热补丁声明（hotfix.patches[]）
@@ -192,8 +244,34 @@ struct EscapeModule: Identifiable, Codable {
         return needed.filter { !have.contains($0) }
     }
 
-    /// 是否可用（能力齐备）
-    var isUsable: Bool { missingCapabilities.isEmpty }
+    /// 宿主版本是否低于模块要求（module.json 的 minHostVersion）
+    ///
+    /// v0.3.481 起才真正强制。此前 `minHostVersion` 只是被读进来存着，
+    /// 从未参与任何判断 —— 于是「模块声明了需要 0.3.481，却装在 0.3.480 上」
+    /// 会一路放行到运行时才出问题。
+    var isHostTooOld: Bool {
+        guard let need = minHostVersion, !need.isEmpty else { return false }
+        return HostVersion.compare(HostVersion.current, need) < 0
+    }
+
+    /// 阻断使用的问题清单（人话，直接给 UI 显示）；空 = 模块可用
+    ///
+    /// 两类问题合成一处：缺宿主能力、宿主版本太老。UI 只认这一个属性，
+    /// 免得以后再加一类阻断原因时漏改界面。
+    var blockingIssues: [String] {
+        var issues: [String] = []
+        let missing = missingCapabilities
+        if !missing.isEmpty {
+            issues.append("缺少宿主能力：\(missing.joined(separator: "、"))")
+        }
+        if isHostTooOld {
+            issues.append("需要宿主 v\(minHostVersion ?? "?")+，当前 v\(HostVersion.current)")
+        }
+        return issues
+    }
+
+    /// 是否可用（能力齐备 且 宿主版本够新）
+    var isUsable: Bool { blockingIssues.isEmpty }
 
     /// 安装目录（内置原地模块指向 bundle）
     var installURL: URL {
@@ -670,12 +748,12 @@ final class ModuleService {
     ///   rc==0 时用 action.success 模板组装结果消息（{0}/{1} 替换实际实参）.
     ///   功能是什么、界面展示什么，全部由模块自行决定，宿主零适配.
     func run(action: EscapeModuleAction, module: EscapeModule) throws -> String {
-        // v1.3：能力门禁——模块声明的宿主能力缺任何一项就拒绝执行，
+        // v1.3：门禁——模块声明的宿主能力 / 最低宿主版本不满足就拒绝执行，
         // 而不是让它跑到一半在运行时静默失败
-        let missing = module.missingCapabilities
-        if !missing.isEmpty {
+        let issues = module.blockingIssues
+        if !issues.isEmpty {
             throw ModuleError.badAction(
-                "模块「\(module.name)」需要宿主能力 \(missing.joined(separator: "、"))，当前宿主不支持（需升级 EscapeSpace）")
+                "模块「\(module.name)」不可用：\(issues.joined(separator: "；"))（请升级 EscapeSpace）")
         }
         if action.type == "signal" {
             return try runSignal(action)
