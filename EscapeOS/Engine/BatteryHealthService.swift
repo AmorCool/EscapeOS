@@ -17,7 +17,7 @@ struct BatteryHealthInfo {
     var adapterDescription: String?  // 连接描述（如 USB-C/无线）
     var batteryManufacturer: String? // 厂商（电池序列号前 2 位前缀查表；见 §7）
     // v0.3.286：移植爱思电池详情面板字段（IOPMPowerSource + gas gauge）
-    var currentCapacityMAh: Int?     // 当前容量 mAh（BatteryData.AbsoluteCapacity）
+    var currentCapacityMAh: Int?     // 当前容量 mAh（v0.3.456 起取 NominalChargeCapacity，对齐爱思）
     var voltage: Double?             // Voltage（mV → V：当前电压）
     var bootVoltage: Double?         // BootVoltage（mV → V：开机电压）
     var instantAmperage: Int?        // InstantAmperage（mA：电池电流，负=放电）
@@ -539,7 +539,16 @@ enum BatteryHealthService {
             .flatMap { num("AverageBattSkinTemp", in: $0) }
         // v0.3.291：当前容量 = BatteryData.AbsoluteCapacity（mA·h 实测值）；
         // 老版本回退 AppleRawCurrentCapacity；BatteryData.BatteryPower 为 mW 功率.
-        let currentMAh = absolute
+        // 「当前容量」—— ★ v0.3.456 改成 `NominalChargeCapacity`（对齐爱思）。
+        //
+        // 真机实证（同一台设备、同一时刻，2026-09-19）：
+        //   爱思「当前容量」= **2709**；设备 registry 里
+        //   `NominalChargeCapacity = 2709`，而 `AbsoluteCapacity = 2263`。
+        // ⇒ 爱思的「当前容量」取的是**额定容量**，不是「剩余绝对容量」。
+        //   我们原来取 `AbsoluteCapacity` ⇒ 显示 2263，与爱思对不上（用户报告）。
+        // 回退链保留 —— nominal 取不到时不丢能力。
+        let currentMAh = nominal
+            ?? absolute
             ?? num("AppleRawCurrentCapacity", in: dict)
             ?? num("CurrentCapacity", in: dict).flatMap { c in
                 (c <= 100 ? nil : c)

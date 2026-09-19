@@ -341,6 +341,21 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             lines.append("  模块数量: \(ModuleService.shared.listModules().count)")
             lines.append("  实测帧率: \(HighRefreshService.shared.measuredFPS) FPS")
             return lines.joined(separator: "\n")
+        case "airlift":
+            // ★ 开发期入口：**强制**再跑一遍 airlift 协议探测（忽略单飞标志）。
+            //
+            // 为什么需要：探测的设计是「功能首次调用 airlift 时自动跑一次」
+            // （空间回收→扫描 / 文件共享进界面就会调到）。但开发期要**反复取结果**，
+            // 没有这个入口就只能靠「请用户去点一次扫描」来触发 ——
+            // **那是把系统的活推给用户**（本项目已犯过的错）。
+            // 有了它，取结果在 SSH 里一条命令完成。
+            //
+            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** ——
+            //    它会真建 RSD 隧道，挂在 UI 路径上会跟其它功能抢隧道
+            //    （v0.3.419/421/424 那串「所有依赖配对文件的功能一起失效」的成因）。
+            AirliftExploit.forceProtocolProbe()
+            return "已触发 airlift 协议探测（Grappa 内容实验 + stage zip）。\n"
+                 + "结果：logs 200 / cat LoginLogs/airlift_stage.txt / cat LoginLogs/airlift_grappa.txt"
         case "modules":
             let mods = ModuleService.shared.listModules()
             guard !mods.isEmpty else { return "（无已安装模块）" }
@@ -602,6 +617,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     static let helpText = """
     EscapeSpace SSH 调试 · 可用命令:
       status          运行状态总览
+      airlift         强制再跑一遍 airlift 协议探测（Grappa 内容实验 + stage zip）
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30，最多 5000）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
