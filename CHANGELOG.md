@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.3.452] - 2026-09-19
+
+### ★ 闪退真正的位置找到了：不是 AFC，是 `runGrappaProbe()` 里的**越界读**。全部探测归零。
+
+**v0.3.451 我判断错了**，真机日志纠正了我：
+
+```
+09:41:19.648  [airlift] iOS AirTrafficHost 候选路径：AirTrafficDevice.framework/... — 不存在
+09:41:26.928  ← 断在这里
+```
+
+**关键：连「AFC 越权路径探测开始」那行都没有** ⇒ 崩溃发生在**最后那行日志之后**，
+也就是 **`runGrappaProbe()` 内部** —— 具体是在 **`AirTraffic` 那个镜像上做导出符号枚举**时。
+
+**根因**：`/System/Library/PrivateFrameworks/AirTraffic.framework/AirTraffic` **`dlopen` 成功了**，
+但它是**来自 dyld 共享缓存**的系统镜像，其 `LC_SYMTAB` 可能被裁掉 / `__LINKEDIT` 语义不同；
+而我们那套地址折算
+```
+slide   = base − __TEXT.vmaddr
+symTab  = slide + (__LINKEDIT.vmaddr − __LINKEDIT.fileoff) + symoff
+```
+在这种镜像上会算出**非法地址 ⇒ 越界读 ⇒ 崩**。
+（实现者当初就标注过「若 dyld 给的 offset 语义不符会读到非法地址（崩溃风险）」—— 现在命中了。）
+
+**本版处置：一条探测都不跑。**
+`runGrappaProbe()` / `runAfcEscapeProbe()` / `runStageProbe()` / `runProtocolProbe()`
+**四个调用点全部注释掉**（函数体保留）。App 稳定性优先。
+
+**停掉不损失信息 —— 该拿的答案都已经拿到了**：
+- ★ **iOS 上没有 `CoreFP`**（实测：`no such file`，且 `not in dyld cache`）
+- **`AirTrafficHost` 也没有**；只有**设备侧**的 `AirTraffic`（不含 Grappa 生成逻辑）
+⇒ **AT/Grappa 这条线在纯手机端走不通**（结论已定）。
+
+**后续（按这个顺序，不再跳步）**：
+1. 给 `exportedNames` / `findSymbolInImage` 加**地址合法性校验**（至少：`symoff`/`stroff` 必须落在
+   `__LINKEDIT` 区间内、`nsyms` 上限、逐条读之前先验边界），修掉越界读；
+2. 把探测改成**手动触发**（**绝不挂在功能调用路径上**）；
+3. 再逐条放开，每次只放一条并真机验证不崩。
+
+**教训（已写进 `MY-FAULTS.md`）**：**任何会真连设备、或会裸读内存的自检，都不能挂在 UI 触发路径上。**
+v0.3.419 栽过一次（真连设备），这次又栽一次（裸读内存）—— 同一个错犯两遍。
+
 ## [0.3.451] - 2026-09-19
 
 ### ★ 紧急修回归：停用三条「真连设备」的探测（空间回收扫描闪退 + 配对功能全废）
