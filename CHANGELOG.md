@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.3.467] - 2026-09-19
+
+### ★★★ v0.3.466 真机结果：Pass C 定案 **(甲)** —— zip-slip 捷径收口
+
+```
+★ 判据【Pass A】：link st_ifmt=S_IFLNK=true、link 存在=true、跟随对照文件=true ⇒ A = ✅
+★ 判据【Pass B】：link 存在=false、逃逸探针=false ⇒ B = ❌
+★ 判据【Pass C】：link 存在=false、跟随对照文件=false、out 存在=false、out 是 symlink=false
+★ 结论【Pass C】(甲) 逃逸 symlink 内容本身触发整包拒绝
+```
+
+⇒ **设备在解压前做静态检查：zip 里只要有一条「解析后逃出解压根」的 symlink，就整包拒绝**，
+与有没有写穿它**无关** ⇒ 「靠 zip-slip 直接越界写」这条捷径**收口**。
+
+**判据口径（本版统一）**：被拒的**不是「有 `..`」** ——
+Pass A 的 `link` 内容 `../../../airlift-stage-target` 里**就有 3 个 `..`**，却被接受了。
+准确判据是「**条目的 symlink 解析后落点逃出解压根**」（Pass A 落在根内 ⇒ 接受；
+Pass C 的 `../../../../` 落在根外 ⇒ 拒）。这条口径已写进结论与注释。
+
+### 新增 **Pass D**：绝对路径 symlink（探测设备的检查逻辑）
+
+现在只剩一格没测过 —— **绝对路径**。它能区分设备到底在查什么：
+
+- 查「**解析后必须落在解压根内**」⇒ 绝对路径也会被拒 ⇒ 这条路彻底死；
+- 查「**不许 `..` 逃逸**」⇒ **绝对路径能绕过去** ⇒ 整条链可能成立。
+
+`StageZipMode` 新增 `.escapeLinkAbsolute`：与 `.escapeLinkOnly` 条目完全相同，
+只把 `p0/p1/p2/out` 的**内容**从 `../../../../` 换成 **`/var/mobile/Media/Books`**
+（绝对路径、**指向 Media 内部**的一个真目录）—— 内容里**一个 `..` 都没有**，这正是与 C 的唯一区别。
+
+⚠️ **本趟零风险、不越界**：目标在 Media 内部，即使设备放行、AFC 写穿成功，落点仍在 AFC 根之内。
+它只回答「检查逻辑是什么」；**真要指向 Media 外面，等明确授权再做**。
+
+配套三处必要改动：
+- `afcWriteThrough` 加 `landingPath:` —— 落点**不能写死成 AFC 根**，否则 Pass D 的落点在 `Books/`
+  会**假阴性**；返回值 `escaped` → `landed`。
+- `AfcEntry` 加 `linkTarget`（判据要报 `st_link_target`）。
+- 写穿前**预查落点父目录**并落日志 —— 否则「目录不存在导致写不进」会被误读成「被防护拦住」。
+
+**Pass D 结论分五支**：整包被拒 / `out` 单独被跳过 / `out` 非 symlink /
+写穿落到 `Books` ⇒ **绕过成立** / 写不进（并区分「落点问题」与「防护」）。
+
+自检：`_tools_paren_scan.py` → 最终深度 +0、无负行、无「参数列表少逗号」可疑位置；
+离线脚本 `_tmp_verify_stage_zip.py` 四 mode 全 PASS（含用 `normpath` 断言 D 的 `out`
+**确实解析到根外**、且**指向 Media 内部**）。
+⚠️ 本机不能编译、不能连真机 ⇒ 待真机 `airlift a`。
+
 ## [0.3.466] - 2026-09-19
 
 ### ★★★ v0.3.465 真机结果：**stage 通了** —— `RSDCheckin` 就是缺的那一步
