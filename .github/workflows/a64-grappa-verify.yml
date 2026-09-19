@@ -76,18 +76,30 @@ jobs:
         with:
           name: a64-verify-log
           path: ${{ env.WORK }}/verify.log
-          if-no-files-found: warn
+          # ⚠️ 必须 error，不能 warn：
+          #    第一次 run（35416847155）死在 fetch_ath.py，verify.log 根本没生成，
+          #    `warn` 只留下一句 warning ⇒「harness 没跑到」和「harness 跑失败」
+          #    在产物层面无法区分，得人工翻完整 CI 日志才发现它压根没执行。
+          if-no-files-found: error
           retention-days: 7
 
       - name: 判定
         run: |
+          # 先确认 harness 真的跑过 —— 否则 exit_code 是空的，下面的分类会误导人。
+          if [ ! -s "$WORK/verify.log" ]; then
+            echo "::error::verify.log 不存在或为空 —— harness 根本没执行，本次 run 对 A-64 没有回答任何问题"
+            echo "::error::请先看**它前面哪一步失败了**（构建 / 取 CoreFP / 取 ATH），不要从下面的分类里找原因"
+            exit 1
+          fi
           echo "a64_verify exit_code = ${{ steps.run.outputs.exit_code }}"
           if [ "${{ steps.run.outputs.exit_code }}" != "0" ]; then
             echo "::error::A-64 验证未通过（exit=${{ steps.run.outputs.exit_code }}），对照 verify.log："
-            echo "::error::  err!=0      → Grappa 生成函数返回了失败码"
-            echo "::error::  outLen!=84  → 输入 12 字节或 sessionId 初值不对"
-            echo "::error::  shim fault  → 某条路径调到了未注册的导入（日志里有名字）"
-            echo "::error::  异常        → MachImage/SapShims 阶段就失败了（日志里有原文）"
+            echo "::error::  err!=0        → Grappa 生成函数返回了失败码"
+            echo "::error::  outLen!=84    → 输入 12 字节或 sessionId 初值不对"
+            echo "::error::  outPtr==NULL  → err/outLen 对了但没吐出缓冲区（内部路径不对）"
+            echo "::error::  内容全 0      → err=0/outLen=84 但 84 字节全零（可疑：可能是空壳成功）"
+            echo "::error::  异常          → MachImage/SapShims/Invoke 阶段就失败了（日志里有原文；"
+            echo "::error::                  未注册的 import 会在这里报出它的名字）"
             exit 1
           fi
           echo "A-64 验证通过：err=0 / outLen=84 / 内容非全零"
