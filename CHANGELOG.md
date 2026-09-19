@@ -132,6 +132,39 @@ UI 只把错误塞进 `errorText`，`login.log` 里一行都没有，
 **修法**：回退节点改为「**失败即放弃回退**」，绝不让它拖死主数据 ——
 主数据已经在手，一个可选的温度来源不该有否决权。
 
+### ★ 同版附带：入口收敛为「只跑 stage 探测」
+
+上一版新增的手动入口一次会连跑三条探测（AFC / stage / protocol）。现在**只跑 stage**。
+
+理由（三条路各自的状态已经确定，不需要再一起跑）：
+
+| 探测 | 状态 |
+|---|---|
+| `runProtocolProbe`（AT/Grappa） | **这条线已死** —— 设备侧无法生成 Grappa，而它强依赖 FairPlay/CoreFP |
+| `runAfcEscapeProbe`（AFC 越权） | **已实测证伪** —— 绝对路径被解析到根内、`..` 被服务端直接拒 `InvalidArg` |
+| `runStageProbe` | **唯一还在推进的路** —— 见下 |
+
+**为什么 stage 是唯一绕得开的**：整条攻击链里，**只有第 ② 步（发 `FileComplete`）需要 AT/Grappa**。
+第 ① 步 stage 走 `com.apple.streaming_zip_conduit`，**不碰 AirTraffic、不需要 FairPlay**。
+
+**要回答的那个问题**：解压器**跟不跟随 symlink**？
+若跟随，只要在 zip 里放一个「路径穿过 symlink」的普通文件，越界写在**解压阶段**就完成了。
+PoC 的 zip 里**故意没有**这种条目 ⇒ 这一点从没被验证过。
+
+`runStageProbe()` 里为此放了两条**独立**判据（不是一条）：
+
+1. **不逃逸对照**：`p0/p1/p2/link` → `../../../airlift-stage-target`，
+   再放 `p0/p1/p2/link/<follow-probe>`。**它只回答「跟不跟随」，不触发 zip-slip 防护。**
+2. **逃逸探针**：`p0/p1/p2/out` → `../../../../`，再放 `p0/p1/p2/out/<escape-probe>`。
+   命中 ⇒ 越界写**不需要** ATAirlock。
+
+★ 为什么必须有第 1 条：如果只有第 2 条，一旦整包被 zip-slip 防护拒掉，
+就分不清「不跟随」与「整包被拒」—— 而这两个结论的后续动作完全不同。
+代码里对此写了显式分支：`!linkPresent` 时结论是「**无法判定**」，**不是**「不跟随」。
+
+入口改名 `runStageProbeManually()`（原 `runDeviceProbesManually()`），
+按钮文案「运行 stage 探测」。仍然只在用户主动点时跑，不挂任何自动路径。
+
 ## [0.3.453] - 2026-09-19
 
 ### ★ 闪退真修 + 四个探测全部恢复 + 撤回一条被写进代码的**错误结论**
