@@ -417,7 +417,15 @@ enum BatteryHealthService {
             //   实机值 2709/3329 = 81.37% ⇒ 两者同为 81，分不出；但 81.6% 这种值
             //   截断会给 81、四舍五入给 82 —— 差 1 就可能跨过评级档位边界。
             //   （「爱思是否真的四舍五入」仍标**未验证**：实机样本落在两法同结果的区间。）
-            health = min(100, max(0, Int((Double(healthBase) / Double(design)) * 100).rounded()))
+            //
+            // ⚠️ 必须拆成中间变量：写成一句
+            //   `min(100, max(0, Int((Double(healthBase) / Double(design)) * 100).rounded()))`
+            //   会让 Swift 类型检查器超时（CI 实锤 v0.3.457 构建失败：
+            //   `the compiler is unable to type-check this expression in reasonable time`）。
+            //   拆开之后每一步都有明确类型，编译器不再需要穷举重载组合。
+            let ratio: Double = (Double(healthBase) / Double(design)) * 100.0
+            let rounded: Int = Int(ratio.rounded())
+            health = min(100, max(0, rounded))
         }
 
         // 5. 当前电量 —— v0.3.291：BatteryData.CurrentCapacity 在 iOS 26/27 即百分比；
