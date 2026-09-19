@@ -1,5 +1,110 @@
 # Changelog
 
+## [0.3.447] - 2026-09-19
+
+> ⚠️ **说明**：原本规划的 `v0.3.446`（stage 探针那一版）**只改了版本号与 CHANGELOG，没有提交、没有打 tag
+> ⇒ 那一版从未存在过**。本版把它的全部内容与「Grappa 框架移植」合并发布，**一次构建覆盖两件事**。
+
+### ★ 把 macOS 的 `AirTrafficHost`（arm64e）移植到 iOS 上跑 —— 直接**调用**它生成 Grappa
+
+**背景**：AT 协议只剩 `Grappa` 认证块没解决。已查明：
+- **Windows 版造不出 Grappa**（无条件硬失败 `-42404`，与输入/连接状态/外部环境全无关；
+  IAT hook 17 个导入全程监控，执行期间**只调了一次 `CreateMutexA`**）；
+- **macOS 版能造**（在 GitHub Actions 的 `macos-latest` runner 上**直调成功**：
+  输入 12 字节 `01 00 00 00 | 00 00 00 00 | 01 00 00 00` → `err=0`、`outLen=84`）；
+- ★ 但 **Grappa 每次输出都不同**（前缀 `0101` 固定，其余含随机密钥）⇒ **不能硬编码**。
+
+⇒ 所以**不再逆算法，改成把那个框架搬到手机上、直接调用它**（我们不需要理解它，只需要能跑）。
+
+**做法**（补丁脚本 + CI + Swift 三部分）：
+1. **`tools/patch_airtraffichost.py`**（仓库里唯一的「移植」产物，**我们自己的代码**）——
+   从 macOS 框架的 FAT 里抽出 **arm64e 切片**（332,176 字节）并打两个补丁：
+   · `LC_BUILD_VERSION.platform` `1(macOS) → 2(iOS)`，`minos` `11.0 → 18.0`（sdk 保持 26.6.1 不动）；
+   · `LC_LOAD_DYLIB` 里 macOS 专有的 `MobileDevice.framework` → `@executable_path/Frameworks/libMobileDeviceStub.dylib`
+     （新路径 53 字节 < 原 80 字节，**同 `cmdsize` 内改写、尾部补 27 个 `\0`**，`offset`/`cmdsize` 未变）。
+   ⚠️ 改过 load command ⇒ **原签名必然失效** ⇒ 必须靠侧载工具重签。
+   ★★ **那个二进制不进仓库** —— 仓库是 **public**，再分发 Apple 的专有框架不合适。
+   改为 **CI 在 runner 上现场取 + 现场打补丁**（`macos-latest` runner 上本来就有这个框架，
+   而且拿到的是**与 runner 同版本**的那份）。仓库里只有补丁脚本、**没有任何 Apple 二进制**。
+   （本地验证：用同一份输入跑，产出与手工产物 **sha256 逐字节一致**。）
+2. **`vendor/MobileDeviceStub/MobileDeviceStub.c`** + `project.yml` 新增 `library.dynamic` target `MobileDeviceStub`
+   —— 导出框架需要的 **17 个 `AMDevice*`/`AMD*` 符号**（清单来自 `LC_DYLD_CHAINED_FIXUPS` import 表
+   `ordinal 1`，与 `LC_SYMTAB` undefined **17/17 对上**；总数 138 = 17 + 45(CoreFoundation) + 76(libSystem)）。
+   · ★ **故意返回失败码**（`-1`）而不是 `0`：`AMDevice*` 的 `0` 语义是「成功」，若真被调用，
+     框架会拿着我们返回的 **NULL 句柄**继续走 → 崩；返回非 0 让它**干净失败退出**。
+     （`AMDeviceGetInterfaceType` 例外，返回 `0`：它返回**传输类型枚举**，没有「失败」档，
+     `-1` 不是合法枚举值反而可能让调用方落到未定义分支。）
+   · Grappa 路径**本来就不调它们** —— 它在 runner 上**无设备**也能成功生成 Grappa。
+3. **`.github/workflows/build-xcode.yml` 新增 `Embed AirTrafficHost into Frameworks`**（在 Build 之后、打包之前）：
+   在 runner 上取 macOS 系统里的 `AirTrafficHost` → 跑 `tools/patch_airtraffichost.py` →
+   产出落到 **`.app/Frameworks/AirTrafficHost`**；并把 `PATCH-REPORT.txt` 打进构建日志（补丁前后对照 + 17 个桩符号清单）。
+   ★ **为什么必须放 `Frameworks/`**：我们出的是**未签名 IPA**，签名完全靠侧载工具，
+   而它们递归签名的范围是**约定位置**（`Frameworks/` / `PlugIns/` / `Watch/`）——
+   **bundle 根下的散装 dylib 会被漏签**，而签名无效的镜像在 iOS 上**根本 dlopen 不了**。
+   另加**桩符号自检**：`nm -gU` 逐个核对 17 个符号都导出了 ——
+   把「默认可见性到底生效没有」从**猜测**变成**构建日志里的证据**（本机无法编译验证）。
+4. **`AirliftExploit.runGrappaProbe()`**：`dlopen` → `dlsym`（先试带下划线 `_uhO2GULXwfgKwPcp4YR2`，再试不带）
+   → `unsafeBitCast` 成 `@convention(c)` 调用 → `err`/`outLen`/前 16 字节 hex 全写日志，
+   成功则 84 字节全 hex 落盘 `LoginLogs/airlift_grappa.txt`。
+   ★ **`dlerror()` 原文必须记** —— 它区分「平台补丁不够 / 签名无效 / 桩没生效 / CoreFP 权限被拒」。
+
+**已提前排掉/标出的坑**：平台补丁 ✓、桩 ✓、签名位置 ✓、桩返回值语义 ✓、`LC_CODE_SIGNATURE` 必然失效 ✓。
+**唯一剩下的真未知**：iOS 上框架内部 `dlopen` 的 `CoreFP.framework`（FairPlay）**会不会因权限被拒** —— 只能实测。
+
+### stage 探针加「解压器是否跟随 symlink」的两个测试（其中一个**可能绕过 Grappa**）
+
+**动机**：AT 那条线卡在 VM 混淆的 `Grappa` 认证上，且**连 Apple 自己的 Windows 主机代码也造不出
+Grappa**（实测：Apple 发出的 `RequestingSync` 同样没有 `Grappa` 键，设备同样回
+`SyncFailed{ErrorCode:4}`）。**如果越界写能在「解压 zip」这一步就完成，整条链就完全不需要 AT。**
+
+**关键未知数**：`com.apple.streaming_zip_conduit` 的解压器**建文件时会不会跟随 symlink**。
+PoC 的 zip 里**故意没有**任何「穿过 symlink 的条目」（它的 symlink 是留给后面 `ATAirlock` 用的），
+所以这一点**从没被验证过**。
+
+**新增两个 zip 条目**（顺序严格，见下）：
+
+| # | 条目 | 类型 | 落点 |
+|---|---|---|---|
+| 1 | `p0/p1/p2/link/airlift-follow-probe-<t>.txt` | 文件 0600 | `<source>/airlift-stage-target/…`（**不逃逸**，零风险对照） |
+| 2 | `p0/p1/p2/out` | symlink 0777，内容 **`../../../../`** | `/var/mobile/Media/`（**逃逸**，真正的越界写探针） |
+| 3 | `p0/p1/p2/out/airlift-escape-probe-<t>.txt` | 文件 0600 | `/var/mobile/Media/airlift-escape-probe-<t>.txt` |
+
+**`..` 层数复核过**：`out` 在 `p0/p1/p2/` 下，相对目标从**它所在目录**解析 ⇒
+`p0/p1/p2 → p0/p1 → p0 → <source> → /var/mobile/Media` = **4 个 `..`**。
+
+**★ 为什么还要那个「不逃逸」的对照项**：`out` 是**逃出解压根**的，若解压器有 zip-slip 防护，
+可能**整包拒绝** ⇒ 连 `link` 都没有 ⇒ **分不清「不跟随」和「整包被拒」**。
+（注意 PoC 自己的 `link` → `../../../airlift-stage-target` **没逃逸** —— `../../../` 从 `p0/p1/p2/`
+数上去正好是 `<root>/`，落点仍在根内。它是**故意**这么设计的，好过任何 zip-slip 校验。）
+⇒ 对照项穿过那个**不逃逸**的 `link`，零风险地单独回答「解压器到底跟不跟 symlink」。
+
+**四种观察组合各有明确解读**（结论行分开写，不混）：
+| 观察 | 结论 |
+|---|---|
+| `link` 在 **且** follow-probe 也在 | **解压器跟随 symlink** → 再判逃逸那条成没成 |
+| `link` 在 **但** follow-probe 不在 | 解压器**不**跟随（结论可靠，与整包是否被拒无关） |
+| `link` 不在 **且** `<source>/` 也不在 | **整包被拒** → 不能下「不跟随」的结论，需去掉逃逸条目重跑 |
+| `link` 不在 **但** `<source>/` 在 | 解压中途中断 → 同样别下结论 |
+
+**条目顺序（严格）**：
+```
+META-INF/ → META-INF/com.apple.ZipMetadata.plist
+→ airlift-stage-target/        ← 必须在所有穿透条目之前（否则目标目录还不存在，对照项必然 ENOENT）
+→ p0/ p0/p1/ p0/p1/p2/
+→ p0/p1/p2/link（symlink，不逃逸）
+→ p0/p1/p2/link/<follow-probe>（★ 零风险对照）
+→ payload
+→ p0/p1/p2/out（symlink，逃逸）
+→ p0/p1/p2/out/<escape-probe>（★ 越界写探针，必须最后）
+```
+（`out` 与穿透文件必须排最后：反过来的话解压器会先自建一个**真目录** `out/`，逃逸测试就废了。）
+
+**AFC 回读新增**：`<source>/airlift-stage-target/airlift-follow-probe-<t>.txt` 与
+`airlift-escape-probe-<t>.txt` 各查一次（note `size` / `st_ifmt`）；`AfcEntry` 加了 `exists` 字段
+（原来只有 `ifmt`，分不开「取不到」和「取到但无 ifmt」）。
+
+**残留**：`/var/mobile/Media/` 下那几个探针文件**刻意留着当证据**，事后再用 AFC 删。
+
 ## [0.3.445] - 2026-09-19
 
 ### 新增 airlift 第 ① 步「stage」：经 `streaming_zip_conduit` 上传含 symlink 的 zip

@@ -390,6 +390,88 @@ jobs:
           echo "=== located app bundles ==="
           find build -name 'EscapeSpace.app' -type d || true
 
+      - name: Embed AirTrafficHost into Frameworks
+        # ★ v0.3.446（airlift Grappa 移植）：把移植到 iOS 的 macOS `AirTrafficHost`
+        # (arm64e) 放进 `.app/Frameworks/`。
+        #
+        # 为什么不走 xcodegen 资源：`Resources/` 下的文件会被拷到 bundle **根**，
+        # 而 bundle 根下的散装 dylib **不在侧载工具（Sideloadly/ESign/TrollStore）
+        # 递归签名的范围内**（它们只扫 Frameworks/ / PlugIns/ / Watch/ 这些约定位置）。
+        # 这个二进制被我们改过 load command ⇒ 原签名必然失效 ⇒ 一个签名无效的镜像
+        # 在 iOS 上根本 dlopen 不了（dlerror 会说 code signature invalid）。
+        # 所以必须落在 Frameworks/ —— 那里才会被侧载工具签名。
+        #
+        # ★★ 这个二进制**不进仓库**（仓库是 public，再分发 Apple 的专有框架不合适）。
+        #    改为**在本步骤里从 runner 自己的 macOS 系统取**，再用 `tools/patch_airtraffichost.py`
+        #    现场抽出 arm64e 切片并打两个补丁。仓库里只有**补丁脚本**（我们自己的代码），
+        #    没有任何 Apple 二进制。这也顺便保证拿到的是**与 runner 同版本**的框架。
+        run: |
+          set -euo pipefail
+          APP="$(find build -name 'EscapeSpace.app' -type d | head -n1)"
+          if [ -z "$APP" ]; then
+            echo "ERROR: EscapeSpace.app not found under build/"
+            exit 1
+          fi
+
+          # macOS 上该框架的真实路径（`/Library/Apple/...` 只是同一文件的符号链接）
+          FW_SRC="/System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost"
+          if [ ! -f "$FW_SRC" ]; then
+            FW_SRC="/Library/Apple/System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost"
+          fi
+          if [ ! -f "$FW_SRC" ]; then
+            echo "ERROR: 在 runner 上找不到 AirTrafficHost（两个候选路径都不存在）"
+            exit 1
+          fi
+          echo "框架源: $FW_SRC"
+
+          mkdir -p "$APP/Frameworks"
+          python3 tools/patch_airtraffichost.py \
+            --src "$FW_SRC" \
+            --out "$APP/Frameworks/AirTrafficHost" \
+            --outdir /tmp/fw_patch
+          # 把补丁详情落到构建日志里（可观测性：补丁前后对照 + 17 个桩符号清单）
+          cat /tmp/fw_patch/PATCH-REPORT.txt || true
+          # dlopen 不看可执行位，但侧载工具/签名器对可执行镜像通常要求 0755，
+          # 显式设一次，避免被工具链拒绝。
+          chmod 755 "$APP/Frameworks/AirTrafficHost"
+          echo "=== .app/Frameworks/ 内容 ==="
+          ls -la "$APP/Frameworks/"
+          # 自检：必须落在 Frameworks/ 而不是 bundle 根
+          test -f "$APP/Frameworks/AirTrafficHost"
+          test ! -f "$APP/AirTrafficHost"
+          echo "AirTrafficHost embedded at $APP/Frameworks/AirTrafficHost"
+
+          # ★ 自检：桩必须真的把 17 个符号**导出**出去。
+          # 为什么要在 CI 里查而不是靠「默认可见性」：dyld 在 dlopen 时是**按名字**解析
+          # chained fixups 的 import 表，缺任何一个都会让 dlopen 整体失败。而「非 static 的 C
+          # 函数默认导出」这件事受 Xcode 的符号可见性设置影响（GCC_SYMBOLS_PRIVATE_EXTERN /
+          # 导出符号列表），**本地无法编译验证** ⇒ 把结论落到构建日志里，别赌。
+          STUB="$APP/Frameworks/libMobileDeviceStub.dylib"
+          if [ ! -f "$STUB" ]; then
+            echo "ERROR: 桩没被 embed 进 Frameworks/（xcodegen 的 embed 落点可能不是这里）"
+            exit 1
+          fi
+          echo "=== 桩的外部符号（nm -gU）==="
+          nm -gU "$STUB" | grep " _AM" || true
+          MISSING=0
+          for s in AMDeviceConnect AMDeviceDisconnect AMDeviceStartSession AMDeviceStopSession \
+                   AMDeviceValidatePairing AMDeviceSecureStartService AMDeviceGetInterfaceType \
+                   AMDeviceNotificationSubscribe AMDeviceNotificationUnsubscribe \
+                   AMDeviceCopyDeviceIdentifier AMDCopyErrorText \
+                   AMDSecureListenForNotifications AMDSecureObserveNotification \
+                   AMDSecureShutdownNotificationProxy \
+                   AMDServiceConnectionInvalidate AMDServiceConnectionReceive \
+                   AMDServiceConnectionSend; do
+            if ! nm -gU "$STUB" | grep -q "_${s}\$"; then
+              echo "ERROR: 桩缺导出符号 _${s}"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            echo "ERROR: 桩符号不全 ⇒ dyld 解析 import 表会失败 ⇒ dlopen 必失败"
+            exit 1
+          fi
+          echo "桩 17 个符号全部已导出 ✓"
 
       - name: Package unsigned IPA
         # 打包形态与 Theos 轨道对齐（Payload/EscapeSpace.app），但**不调用 ldid**：
