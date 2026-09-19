@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.448"
-    CURRENT_PROJECT_VERSION: "745"
+    MARKETING_VERSION: "0.3.449"
+    CURRENT_PROJECT_VERSION: "746"
     # 注：这里**刻意不写** `SWIFT_VERSION` —— 实测顶层 `settings.base` 的它**不被 xcodegen 采纳**，
     # 真正生效的是下面 target 层那一份（当前 `"6.0"` = Swift 6 语言模式）。
     # 另注：**编译器版本 ≠ 语言模式** —— CI 用 Xcode 27 自带的 Swift 6.4 编译器，
@@ -97,11 +97,21 @@ targets:
       #   `@executable_path/Frameworks/libMobileDeviceStub.dylib`（原为 macOS 专有的
       #   MobileDevice.framework，iOS 上没有）。这里提供那 17 个符号的空实现。
       #   `link: false` 是**必须的** —— 主 target 不引用它任何符号，链接进来只会让
-      #   .app 多一条没必要的加载项；`embed: true` 才会把它拷进 `.app/Frameworks/`，
-      #   这正是上面那条 LC_LOAD_DYLIB 的落点（也是侧载工具会递归签名的标准位置）。
+      #   .app 多一条没必要的加载项。
+      #
+      #   ⚠️ **`embed: true` 实测是错的，已改成 `false`**（v0.3.448 构建日志实锤）：
+      #   xcodegen 对 `library.dynamic` 的 `embed` **没有**生成「Embed Frameworks」阶段，
+      #   而是当**普通资源**拷到了 **bundle 根** ——
+      #     日志：`CpResource .../EscapeSpace.app/libMobileDeviceStub.dylib`
+      #   而框架里那条 `LC_LOAD_DYLIB` 要的是 `@executable_path/Frameworks/libMobileDeviceStub.dylib`
+      #   ⇒ **位置对不上 ⇒ dyld 找不到桩 ⇒ 整个框架 dlopen 失败**。
+      #   而且 bundle 根**不在侧载工具的递归签名范围内**，那一份即使留着也是没用的。
+      #
+      #   ⇒ 改为：这里**只保留构建依赖**（确保桩被编出来），
+      #      由 CI 的「Embed AirTrafficHost into Frameworks」步骤
+      #      把它和框架一起拷进 `.app/Frameworks/`（侧载工具会签的标准位置）。
       - target: MobileDeviceStub
-        embed: true
-        codeSign: true
+        embed: false
         link: false
     sources:
       - path: EscapeOS

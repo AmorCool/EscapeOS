@@ -434,11 +434,36 @@ jobs:
           # dlopen 不看可执行位，但侧载工具/签名器对可执行镜像通常要求 0755，
           # 显式设一次，避免被工具链拒绝。
           chmod 755 "$APP/Frameworks/AirTrafficHost"
+
+          # ★ 桩也要拷进 Frameworks/。
+          # 为什么不能靠 xcodegen 的 `embed: true`（v0.3.448 构建日志实锤）：
+          #   xcodegen 对 `library.dynamic` 的 embed **没有**生成「Embed Frameworks」阶段，
+          #   而是当**普通资源**拷到了 **bundle 根** ——
+          #     日志：`CpResource .../EscapeSpace.app/libMobileDeviceStub.dylib`
+          #   而框架里那条 LC_LOAD_DYLIB 要的是 `@executable_path/Frameworks/libMobileDeviceStub.dylib`
+          #   ⇒ **位置对不上 ⇒ dyld 找不到桩 ⇒ 整个框架 dlopen 必失败**。
+          #   而且 bundle 根**不在侧载工具的递归签名范围内**，那份即使留着也没用。
+          #   ⇒ 在 project.yml 里把 embed 关掉，改由这里显式拷进 Frameworks/。
+          STUB_SRC="build/Build/Products/Release-iphoneos/libMobileDeviceStub.dylib"
+          if [ ! -f "$STUB_SRC" ]; then
+            echo "ERROR: 桩没被编出来（$STUB_SRC 不存在）"
+            echo "      检查 project.yml 里 app 对 MobileDeviceStub 的依赖是否还在（embed:false 不能把依赖也去掉）"
+            exit 1
+          fi
+          cp "$STUB_SRC" "$APP/Frameworks/libMobileDeviceStub.dylib"
+          chmod 755 "$APP/Frameworks/libMobileDeviceStub.dylib"
+
           echo "=== .app/Frameworks/ 内容 ==="
           ls -la "$APP/Frameworks/"
           # 自检：必须落在 Frameworks/ 而不是 bundle 根
           test -f "$APP/Frameworks/AirTrafficHost"
+          test -f "$APP/Frameworks/libMobileDeviceStub.dylib"
           test ! -f "$APP/AirTrafficHost"
+          # 桩若**同时**出现在 bundle 根，说明 `embed: true` 又被打开了（会多一份
+          # 没被侧载工具签名的副本）。只警告不失败 —— 那份不会被 dlopen，无害。
+          if [ -f "$APP/libMobileDeviceStub.dylib" ]; then
+            echo "WARN: 桩同时出现在 bundle 根（project.yml 的 embed 是不是又开成 true 了？）"
+          fi
           echo "AirTrafficHost embedded at $APP/Frameworks/AirTrafficHost"
 
           # ★ 自检：桩必须真的把 17 个符号**导出**出去。

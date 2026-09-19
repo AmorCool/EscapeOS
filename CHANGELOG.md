@@ -1,5 +1,110 @@
 # Changelog
 
+## [0.3.449] - 2026-09-19
+
+### ★ 修 v0.3.448 的构建失败：桩被拷到了 **bundle 根**（而不是 `Frameworks/`）
+
+**v0.3.448 的构建挂在 `Embed AirTrafficHost into Frameworks` 这一步 —— 是那道自检自己抓出来的。**
+
+日志实锤（`CpResource`）：
+```
+CpResource .../EscapeSpace.app/libMobileDeviceStub.dylib   ← 拷到了 **bundle 根**
+```
+**根因**：xcodegen 对 `library.dynamic` 的 **`embed: true` 没有生成「Embed Frameworks」阶段**，
+而是当**普通资源**拷到了 bundle 根。而框架里那条 `LC_LOAD_DYLIB` 要的是
+`@executable_path/Frameworks/libMobileDeviceStub.dylib` ⇒ **位置对不上 ⇒ dyld 找不到桩
+⇒ 整个框架 dlopen 必失败**。而且 **bundle 根不在侧载工具的递归签名范围内**，那份留着也没用。
+（project.yml 里原来的注释还写着「`embed: true` 才会把它拷进 `.app/Frameworks/`」——**那条注释是错的**。）
+
+**修法**：`project.yml` 里把该依赖改成 **`embed: false`**（只保留构建依赖，确保桩被编出来），
+由 CI 的 Embed 步骤**显式 `cp` 进 `.app/Frameworks/`**（与框架同位置）。
+并加自检：`test -f "$APP/Frameworks/libMobileDeviceStub.dylib"`（**硬失败**）+
+「桩若同时出现在 bundle 根则警告」（软提示 `embed` 又被打开了）。
+
+★ **顺带确认：v0.3.448 的另外 3 个修复全部生效**（日志可证）：
+- step 22 `Build (compile/link)` **成功**；
+- 桩链接参数里**只剩 `-framework CoreFoundation`**（SAP/openssl 那堆继承设置被覆盖掉了 ✓）；
+- 产物名**确实是 `libMobileDeviceStub.dylib`**（`productName` 修法生效 ✓）；
+- **补丁脚本在 runner 上跑通**：`框架源: /System/Library/.../AirTrafficHost`、
+  `补丁后: offset=24(未变) cmdsize=112(未变) 新路径(53 字节)`、`ordinal 1 -> 17 个符号`、
+  `AirTrafficHost embedded at .../EscapeSpace.app/Frameworks/AirTrafficHost` ✓。
+
+### 加「iOS 原生 AirTrafficHost」探测 + export trie 枚举
+
+**动机**：既然 Grappa 依赖 FairPlay（见下方更正），而 **iOS 自己也要做 FairPlay**，
+那就存在一种可能：**iOS 系统里本来就带 `AirTrafficHost`（含 Grappa 能力）**。
+如果真是这样，**我们前面折腾的一整套移植全部不需要** —— 不用改平台标记、不用空桩、不用重签，
+**连 arm64/arm64e 架构的顾虑都没有**，直接 `dlopen` 系统那份、调同一个函数即可。
+
+⚠️ **但独立复核（GP-20）给这个期望泼了冷水**，四条独立证据都指向「**iOS 没有 `AirTrafficHost`**」：
+① TheAppleWiki 的 iOS `PrivateFrameworks` 全表里只有 `AirTraffic`(5.0+) 与 `AirTrafficDevice`(8.0+)，
+**没有 `AirTrafficHost`**；② 另一份按版本的存在性矩阵（iOS 1.x–18.x）同样只有那两行；
+③ `Dev:AirTrafficHost.framework` 页面**不存在**（API 返回 `missingtitle`），而
+`Dev:AirTraffic.framework` / `Dev:AirTrafficDevice.framework` 都存在；
+④ 全站搜 "AirTrafficHost" 共 5 处命中，**没有一处与 framework 相关**。
+**置信度约 85%（公开资料，未实测）。**
+而且反汇编里有 `"Grappa host verify fail: %d"` —— `AirFairSyncGrappaCreate` 是**主机侧**能力，
+iOS 设备侧很可能**只消费 Grappa、不生成它**。
+⇒ **本探测按「顺手一试」保留**（两个候选路径都试，成本≈0），**但不要把它当主路线**。
+（已把候选路径扩到 `AirTraffic.framework/AirTraffic` 与 `AirTrafficDevice.framework/AirTrafficDevice`。）
+
+**1. 新增「iOS 原生 AirTrafficHost」探测**
+候选路径（**两个都试**，且**不因 `fileExists` 为假就跳过** —— 见下方坑 ②）：
+```
+/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost
+/System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost
+```
+★ **判据升级（比原计划更可靠）**：不看混淆符号 `_uhO2GULXwfgKwPcp4YR2`
+（它是 **private external**，只存在于 `LC_SYMTAB`；iOS 系统镜像常把 symtab 整个剥掉 ⇒ 会**假阴性**），
+改为查 **`grappaPublic`** —— **公开导出里含 `grappa` 的**（如 `_ATHostConnectionGetGrappaSessionId`）。
+**理由**：公开导出**在 export trie 里**，**不依赖 `LC_SYMTAB`**，**shared cache 场景照样拿得到**。
+
+**2. `exportedNames` 补上 export trie（与 `LC_SYMTAB` 取并集，缺一不可）**
+- **为什么要补**：iOS 系统框架多在 dyld shared cache 里、`LC_SYMTAB` 常被裁掉（`nsyms=0`）
+  ⇒ 只认 symtab 的话导出名清单直接拿不到；而 export trie 在 shared cache 里也在，
+  而且它正是 **`dlsym` 真正走的那张表**。
+- **为什么还要保留 `LC_SYMTAB`**：**private external 不在 trie 里**（实测：
+  `_uhO2GULXwfgKwPcp4YR2` **不在** AirTrafficHost 的 58 个 trie 名字里）⇒ 两者**互补**。
+- 支持两种承载：`LC_DYLD_EXPORTS_TRIE`(0x80000033) 优先，`LC_DYLD_INFO(_ONLY)`(0x22/0x80000022)
+  的 `export_off`(cmd+40) / `export_size`(cmd+44) 作回退。
+- ★ **`trieOff` 是文件偏移、不是 vmaddr** ⇒ 必须按段折算（`__LINKEDIT` 的 `vmaddr − fileoff`）。
+  普通 dylib 里恰好相等，**shared cache 里不保证** —— 不能偷懒写 `header + trieOff`。
+
+**3. 验证方式：把 Swift 逐行照搬成 Python，跑真实二进制对比**
+| 二进制 | trie 大小 | 节点数 | 解析出 | 期望 | 结果 |
+|---|---|---|---|---|---|
+| `_tmp_fw/AirTrafficHost` | 1320 B | 87 | **58** | 58 | **PASS** |
+| `_tmp_corefp/fwx/A/CoreFP` | 176 B | 10 | **8** | 8 | **PASS** |
+
+★ CoreFP 那例的 `__LINKEDIT` **delta = 32768 ≠ 0**，正好走到「shared cache 折算」那条分支
+⇒ **公式被真实数据验证过，不是纸上推导**。
+
+**4. 日志补 `nsyms` / `nValue` / `slide`**
+用于核对「符号表到底有没有被剥」—— 若 `nsyms = 0` 就说明是 shared-cache 镜像，
+此时**按名字定位会失败，但这**不等于**「没有这个能力」**。
+
+**5. ★ 修一处会造成假阴性的结论措辞**
+iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」时写的是
+**「本次无法判定（注意：不是「没有」）」**，并单独加一行说明
+「混淆符号未出现 —— 它是 private external，只在 `LC_SYMTAB` 里；若该镜像 symtab 被剥，
+此项**阴性无效**，不作为判据」。
+**为什么必须这么写**：搞混了就会让我们**错误地放弃「iOS 原生路径」这条最优解**。
+
+**6. 更正 v0.3.448 里两处结论**（都来自同一轮深入复核）
+- **Windows 的 `0x6560` 不是「无脑硬桩」** —— 行为上像（827 组输入恒同一错误码、不读入参、
+  不写出参），**结构上是真实现**（42 状态控制流平坦化 + MBA 混淆；**有成功哨兵 `0x0FE8DD8F`**，
+  在 `0x6560`–`0x8650` 内的 `0x6753` 处）。准确说法：**真实现，卡在某个早期 gate**。
+- ★ **「Windows 也卡在 CoreFP 缺失」这个推断被推翻**（我自己推错的）：
+  我拿「`0xFFFF5A5C` 有符号读 = `-0xa5a4`，与 macOS 上 CoreFP 缺失的失败码同值」直接推出「同因」——
+  **「同码 ⇒ 同因」不成立**。硬证据：**Windows 版全文件扫 `CoreFP` = 0 命中**，
+  导入表里没有能 dlopen 它的东西；**`0xFFFF5A5C` 全文件 0 处** ⇒ 返回值是**算出来的**
+  （对照 `0xFFFF5BD9` 有 12 处）。
+- ★ 但**「Grappa 依赖 FairPlay」这条站得住**：Windows 版**内嵌完整 FairPlay 证书链**
+  （CN = `GrappaForATH.3333AF110510AF0000011` 一族），字符串里还有
+  `Grappa host init failed` / `Grappa host verify fail` / `Grappa key could not be established`
+  ⇒ **「Grappa 算法自包含、可纯 Swift 重实现」这个前提不成立**。
+  （对我们影响为零 —— 第 4 轮就已改走「移植 macOS 框架」，这条只是**加强**那个决定。）
+
 ## [0.3.448] - 2026-09-19
 
 ### 修 3 个 bug + Grappa 探测链补全（`LC_SYMTAB` 替换 `dlsym`、CoreFP、iOS 原生框架）
