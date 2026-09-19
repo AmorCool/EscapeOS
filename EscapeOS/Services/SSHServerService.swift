@@ -434,6 +434,22 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                  + "结果：cat LoginLogs/airlift_books_verdict.txt（结论）"
                  + " / cat LoginLogs/airlift_books.txt（完整过程）\n"
                  + "下一步：airlift2 4 → cat LoginLogs/airlift_at2.txt（两段式 + 落点回读）"
+        case "airlift4":
+            // ★ 开发期入口（v0.3.476）：**只读**盘点 `/var/mobile/Media` 里的落点。
+            //
+            // 为什么需要：`airlift2 4` 的落点回读写在 `airlift_at2.txt` 的**末尾**，
+            // 而那个文件有字节上限 —— 真机实测（v0.3.475）判据正好被截掉，**一趟白跑**。
+            // 而**落点状态还留在设备上**，所以补这条只读命令：不必重跑整条链就能看清
+            // 「payload 落在 canary 目标目录（= 跟随了 symlink）还是落在 airlift-link-* 下面
+            // （= symlink 被当普通目录替换）」。上限已同时提到 3600 字节。
+            //
+            // ⚠️ **只读**：只列目录 / 查文件信息，不建、不写、不删；只挑 `airlift-` 前缀的条目。
+            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上**（会真建 RSD 隧道）。
+            // 用法：airlift4
+            AirliftExploit.runAfcLandingProbe()
+            return "已触发 Media 落点只读盘点。\n"
+                 + "结果：cat LoginLogs/airlift_landing.txt\n"
+                 + "（判据 A = payload 落在 canary 目标目录里 ⇒ 机制成立；判据 B = 落在 airlift-link-* 里 ⇒ 没跟随）"
         case "ddiprobe":
             // ★ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
             //
@@ -744,6 +760,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
       airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest 4=两段式（先搬 symlink 再穿过它写 payload，并回读落点）（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
       airlift3 [目标路径]  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；省略目标 = Media 内部 canary 目录（零风险，配套 airlift2 4 可自验），传值 = 真实目标（会写 Media 之外）（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
+      airlift4  只读盘点 Media 里的落点：列根目录 + 逐个 inspect 所有 airlift-* 条目（判据 A=payload 在 canary 目标目录里⇒机制成立；判据 B=在 airlift-link-* 里⇒没跟随）（结果 → LoginLogs/airlift_landing.txt）
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）
       modules         已安装模块列表

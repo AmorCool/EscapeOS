@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.3.476] - 2026-09-19
+
+### ★★★★ 真机实证：**stage 修复成功** + **清单命中（`IsDownload=1`）**
+
+`airlift3` 的结论（对比 0.3.472 那趟三条全是 `ObjectNotFound`）：
+
+```
+★ 判据② airlift-src-020697C4/             → 成功 size=192 st_ifmt=S_IFDIR   ← 目录建出来了
+★ 判据② airlift-src-020697C4/p0/p1/p2/link → 成功 size=49  st_ifmt=S_IFLNK  ← symlink 建出来了
+★ 判据② airlift-src-020697C4/payload       → 成功 size=30  st_ifmt=S_IFREG
+★ 结论 Books.plist 备份：LoginLogs/books_plist_backup_020697C4.bin（原文件存在，已备份后覆盖）
+```
+
+`link` 的 **size=49** 正好等于 `../../../var/mobile/Media/airlift-canary-020697C4` 的长度
+⇒ symlink 内容就是我们算的那条。
+⇒ **「`RSDCheckin` 发完必须把应答读掉」这个修复成立**（v0.3.473），
+**「写 `Books.plist` 前先备份」也生效**（v0.3.473）。
+
+`airlift2 4`（两段式）的结论：
+
+```
+0) 变体 4
+   airlift3 交接的越界目标 = /var/mobile/Media/airlift-canary-020697C4      ← 目标交接生效
+1) 读（上限 6 条）：AssetManifest
+   ★★★ 清单里有没有我们那条：**有** ⇒ 前置条件成立，可以往下做越界写
+       判据：清单第 0 条**命中**：AssetID = ../../airlift-src-020697C4/p0/p1/p2/link、IsDownload = 1
+2) 已发 FileComplete(link → airlift-link-020697C4)（**刻意不读** …）
+3) 已发 FileComplete(payload → airlift-link-020697C4/airlift-canary-020697C4.bin）
+```
+
+**这是第一次拿到「清单里有我们那条、且 `IsDownload=1`」** —— 正是参考实现
+`ManifestContains()` 的那道门（`airtraffic_host.m:56-65`）。
+
+### ★ 但落点回读**被自己的字节上限截掉了** —— 本版修这个「测量问题」
+
+`airlift_at2.txt` 的上限是 **1800 字节**，而落点回读写在**文件末尾**
+⇒ 前面的行把它挤了出去 ⇒ **判据看不到，一趟白跑**。
+
+两处修：
+
+1. **上限 1800 → 3600**。1800 当初是「保证 < 2 KB」定的，但真正的约束只是
+   **能被 SSH 的 `cat` 完整读回**（`cat` 在 ~31 KB 处才截断）⇒ 3600 离上限还很远。
+   同时把变体 4 那条冗余的 `0)` 说明压成一行。
+2. **新增只读命令 `airlift4`** —— 盘点 `/var/mobile/Media` 里的落点，
+   **判据不再只依赖那个文件**（落点状态本来就在设备上，不必重跑整条链）：
+
+| 判据 | 含义 |
+|---|---|
+| **A**：payload 落在 `airlift-canary-*` **目标目录**里 | ★★★ **机制成立**（跟随了 symlink、两次 move 都执行了） |
+| **B**：payload 落在 `airlift-link-*` 下面 | **没有跟随 symlink**（symlink 被当普通目录替换了） |
+| 两个都没有 | 两次 move 至少有一次没发生 |
+
+`airlift4` **只读**：只 `afc_list_directory` / `afc_get_file_info`，不建/不写/不删，
+且只挑 `airlift-` 前缀的条目 —— 设备自己的条目一个都不碰。
+
+### ★ 顺带记一个工具缺陷：`version` 命令会报**过期**的版本号
+
+真机实测：设备上跑的明明是新版（`help` 里有 `airlift2 … 4` 与 `airlift3 [目标路径]`），
+但 `version` 报 `0.3.473` —— 因为它读的是 `login.log` 里的**启动行**，
+而这次启动**没有清空 `login.log`**，于是那条旧启动行一直留在文件头。
+
+⇒ **判据优先级：`help`（从正在跑的二进制里出）> `version`（读日志文件）。**
+下次拿不准时看 `help` 有没有新命令，比看启动行可靠。
+
+### 真机步骤
+
+```
+airlift3            →  cat LoginLogs/airlift_books_verdict.txt    # 造前置条件
+airlift2 4          →  cat LoginLogs/airlift_at2.txt              # 两段式（上限已提到 3600）
+airlift4            →  cat LoginLogs/airlift_landing.txt          # 只读盘点落点（独立判据）
+```
+
 ## [0.3.475] - 2026-09-19
 
 ### ★★ 修一个会让两段式直接失败的写法：两条 `FileComplete` 之间**不能插读**
