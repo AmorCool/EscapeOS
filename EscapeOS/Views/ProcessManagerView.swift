@@ -158,12 +158,23 @@ enum ProcessControlAction: String {
 /// `let` 的串行队列（`DispatchQueue` 本身是 `Sendable`），所有进程状态都在
 /// 方法内局部变量里、并已被这两条队列串行化。
 ///
-/// ⚠️ **2026-09-19 更正**：上面「3 次退避重试覆盖**偶发** `ServiceNotFound`」**是错的**。
-/// 真机核实：19 次 RSD 服务表 dump（`_tmp_big.txt`）里 `com.apple.coredevice.*` **一条都没有**；
-/// `rsd.rs:171-189` 查服务是纯 `HashMap`、查不到直接 `Err(ServiceNotFound)`（错误码 21），**无回退**
-/// ⇒ **必现**，重试 3 次只是白等 0.9s。真因：`app_service` 属 CoreDevice 服务族，
-/// **设备未挂 DDI（Developer Disk Image）时整块不广播**。
-/// 详见 `CHANGELOG.md` `[0.3.376]` 段的「更正」与 `_tmp_svc_结论.md`。
+/// ⚠️ **本条注释已经被改过三次 —— 前两版「成因」都是猜的，全部作废**：
+/// ① 上面「3 次退避重试覆盖**偶发** `ServiceNotFound`」：作废；
+/// ② 第二版「设备未挂 DDI（Developer Disk Image）⇒ CoreDevice 整块不广播」：作废；
+/// ③ 第三版「接错隧道（CoreDevice 族只在 CoreDeviceProxy 隧道的第二个 RSD 握手上）」：
+///    **同样作废**（与 PC 侧 `pymobiledevice3` 的交叉验证矛盾）。
+/// **⇒ 本文件从此不再写任何成因推测。**
+///
+/// **事实（用户实测 + PC 侧交叉验证）**：`ServiceNotFound`(21) 是**设备侧的服务状态问题**，
+/// **不是本 App 的缺陷** —— 该服务在设备侧**偶尔**不可用，**重启手机即恢复**（用户实测；
+/// 同类工具也这么处理）。**与 DDI 无关，也与「用哪条隧道」无关**：PC 侧标准工具
+/// `pymobiledevice3` 拿到的 RSD 服务表与我们**逐条一致**（64 条），调同一个服务**同样失败**。
+/// **原理未知。**
+///
+/// **仍然成立（保留）**：`rsd.rs:171-189` 查服务是纯 `HashMap`、查不到直接
+/// `Err(ServiceNotFound)`（错误码 21），**无回退** ⇒ 失败时**重试 3 次毫无意义**（只是白等 0.9s）；
+/// 两个内置模块 / 进程管理 / 虚拟定位停止 / 拨号器主题重启电话 / IPCC 重启 CommCenter /
+/// 设备控制重启 SpringBoard **共用同一套 `app_service` 底座** ⇒ 它不可用时这些会一起失败。
 final class ProcessManagerService: Sendable {
 
     static let shared = ProcessManagerService()
@@ -172,8 +183,9 @@ final class ProcessManagerService: Sendable {
     /// 串行队列：保证 listProcesses / sendSignal 不并发建隧道.
     /// 同一 hostname 并发 `tunnel_create_rppairing` 会互相抢占（RSD 通道竞争），
     /// 因此这里必须串行 —— 这条约束本身成立。
-    /// ⚠️ 2026-09-19 更正：但它是**通道被抢占**的根因，**不是** `ServiceNotFound` 的根因；
-    /// 后者是 DDI 未挂导致 CoreDevice 服务整块不广播（必现），与并发无关。见上方注释。
+    /// ⚠️ 2026-09-19 更正：但它是**通道被抢占**的根因，**不是** `ServiceNotFound` 的根因 ——
+    /// 后者是**设备侧的服务状态问题**（该服务偶尔不可用，**重启手机即恢复**），与并发无关。
+    /// 见上方注释。
     private let operationQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr", qos: .userInitiated)
     /// v0.3.38：内存查询专用串行队列（sysmontap 阻塞式，不与其他操作争用）
     private let memoryQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr.memory", qos: .utility)
@@ -271,7 +283,10 @@ final class ProcessManagerService: Sendable {
         throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
     }
 
-    /// 连接 app_service，失败自动重试 3 次（覆盖 ServiceNotFound）.
+    /// 连接 app_service，失败自动重试 3 次.
+    ///
+    /// ⚠️ 这 3 次重试**覆盖不了任何东西**：失败是设备侧 `app_service` 服务偶尔不可用
+    /// （`ServiceNotFound`，**重启手机即恢复**），重试只是白等 0.9s。见类头注释。
     private func connectAppService(adapter: OpaquePointer, handshake: OpaquePointer) throws -> OpaquePointer {
         var lastError: NSError?
         for attempt in 0..<3 {

@@ -81,7 +81,7 @@ static char *esc_cd_error_string(const char *fallback) {
     return out;
 }
 
-// 把 `IdeviceFfiError` 的 code + message 原样写进报告（不是写进 out_err）。
+// 把 `IdeviceFfiError` 的 code + sub_code + message 原样写进报告（不是写进 out_err）。
 static void esc_cd_note_error(EscTextBuf *b, const char *label, struct IdeviceFfiError *err) {
     if (err != NULL) {
         esc_text_printf(b, "  %s：code=%d sub_code=%d message=%s\n",
@@ -108,9 +108,15 @@ static unsigned char *esc_text_finish(EscTextBuf *b, unsigned int *out_len, char
 
 // MARK: - 探针主体
 
+// ★ 这条链要连的 RSD 服务名（真机 64 条服务里有它，**没有** `.shim.remote` 后缀）。
+#define ESC_CD_PROXY_SERVICE "com.apple.internal.devicecompute.CoreDeviceProxy"
+
+// 第二个握手要连的服务（判据用）
+static const char *kTargetService = "com.apple.coredevice.appservice";
+
 unsigned char *esc_cd_probe_run(const char *pairing_path,
                                 const char *device_ip,
-                                uint16_t lockdown_port,
+                                uint16_t rppairing_port,
                                 const char *label,
                                 unsigned int *out_len,
                                 char **out_err) {
@@ -129,32 +135,33 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
 
     esc_text_puts(&buf, "--- 调用链（每一步失败即停止后续步骤，错误原文照抄）---\n");
 
-    // [0] 前置：解析目标 IP。
-    // 顺序说明：任务给的顺序是「先读配对文件、再构造 sockaddr」，但 `idevice_tcp_provider_new`
-    // 会**消费**配对文件句柄，若在读完配对文件之后才发现 IP 非法，那个句柄就没人能再释放
-    // （头文件明写 "consumed must never be used again"）。IP 解析是纯计算，提前到最前
-    // 可以在失败路径上不留悬空句柄。报告里仍按调用顺序编号。
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(lockdown_port);
+    // [0] 前置：解析隧道地址。
+    // 顺序说明：IP 解析是纯计算，提前到最前可以在失败路径上不留悬空句柄。
+    struct sockaddr_in tunnelAddr;
+    memset(&tunnelAddr, 0, sizeof(tunnelAddr));
+    tunnelAddr.sin_family = AF_INET;
+    tunnelAddr.sin_port = htons(rppairing_port);
     esc_text_puts(&buf, "\n[0] 前置\n");
-    esc_text_printf(&buf, "  · 目标 = %s:%u\n", device_ip, (unsigned)lockdown_port);
+    esc_text_printf(&buf, "  · RPPairing 隧道目标 = %s:%u\n", device_ip, (unsigned)rppairing_port);
     esc_text_printf(&buf, "  · label = %s\n", label);
     esc_text_printf(&buf, "  · 配对文件 = %s\n", pairing_path);
-    if (inet_pton(AF_INET, device_ip, &addr.sin_addr) != 1) {
+    esc_text_printf(&buf, "  · 目标 RSD 服务 = %s\n", ESC_CD_PROXY_SERVICE);
+    if (inet_pton(AF_INET, device_ip, &tunnelAddr.sin_addr) != 1) {
         esc_text_printf(&buf, "  ❌ 目标 IP 非法（inet_pton 失败）：%s\n", device_ip);
         esc_text_puts(&buf, "\n结论：目标 IP 非法，探针终止（此时尚未读配对文件，无句柄泄漏）。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     esc_text_puts(&buf, "  · IP 解析 OK\n");
 
-    // [1] lockdown 配对文件（**不是** rp_pairing_file_read）
-    esc_text_puts(&buf, "\n[1] idevice_pairing_file_read（lockdown 配对文件）\n");
-    struct IdevicePairingFile *pairing = NULL;
-    struct IdeviceFfiError *err = idevice_pairing_file_read(pairing_path, &pairing);
+    // [1] RSD / 无线配对文件（**不是** `idevice_pairing_file_read`）。
+    // 真机实证（v0.3.463）：`Documents/pairingFile.plist` 是 **RpPairingFile** 格式，
+    // `idevice_pairing_file_read` 对它必报
+    // `UnexpectedResponse("failed to parse raw pairing file from bytes")`（code 13）。
+    esc_text_puts(&buf, "\n[1] rp_pairing_file_read（RSD / 无线配对文件）\n");
+    struct RpPairingFileHandle *pairing = NULL;
+    struct IdeviceFfiError *err = rp_pairing_file_read(pairing_path, &pairing);
     if (err != NULL) {
-        esc_cd_note_error(&buf, "❌ idevice_pairing_file_read 失败", err);
+        esc_cd_note_error(&buf, "❌ rp_pairing_file_read 失败", err);
         idevice_error_free(err);
         esc_text_puts(&buf, "\n结论：配对文件读不出来，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
@@ -166,96 +173,209 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
     }
     esc_text_puts(&buf, "  · OK\n");
 
-    // [2] TCP provider —— ⚠️ 本调用**消费** pairing，此后永不触碰（不 free）
-    esc_text_puts(&buf, "\n[2] idevice_tcp_provider_new（⚠️ 消费 pairing，此后不再 free 它）\n");
-    struct IdeviceProviderHandle *provider = NULL;
-    err = idevice_tcp_provider_new((const idevice_sockaddr *)&addr, pairing, label, &provider);
-    pairing = NULL;   // 已被消费：置空以防后续误用（不是释放）
+    // [2] RPPairing 隧道（我们自己的那条 RSD）—— `pairing_file` 是**借用**，用完即还
+    esc_text_puts(&buf, "\n[2] tunnel_create_rppairing（pairing_file 是借用的，用完即还）\n");
+    struct AdapterHandle *tunnelAdapter = NULL;
+    struct RsdHandshakeHandle *tunnelHandshake = NULL;
+    err = tunnel_create_rppairing((const idevice_sockaddr *)&tunnelAddr,
+                                  (idevice_socklen_t)sizeof(struct sockaddr_in),
+                                  label,
+                                  pairing,
+                                  NULL,
+                                  NULL,
+                                  &tunnelAdapter,
+                                  &tunnelHandshake);
+    rp_pairing_file_free(pairing);
+    pairing = NULL;
     if (err != NULL) {
-        esc_cd_note_error(&buf, "❌ idevice_tcp_provider_new 失败", err);
+        esc_cd_note_error(&buf, "❌ tunnel_create_rppairing 失败", err);
         idevice_error_free(err);
-        esc_text_puts(&buf, "\n结论：建 provider 失败（LocalDevVPN 未连接 / 配对文件与设备不匹配？），探针终止。\n");
+        esc_text_puts(&buf, "\n结论：RPPairing 隧道没建起来（先解决 LocalDevVPN / 配对文件），探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
-    if (provider == NULL) {
+    if (tunnelAdapter == NULL || tunnelHandshake == NULL) {
+        esc_text_printf(&buf, "  ❌ 返回空句柄（adapter=%s handshake=%s）\n",
+                        tunnelAdapter != NULL ? "非空" : "空",
+                        tunnelHandshake != NULL ? "非空" : "空");
+        if (tunnelHandshake != NULL) { rsd_handshake_free(tunnelHandshake); }
+        if (tunnelAdapter != NULL) { adapter_free(tunnelAdapter); }
+        esc_text_puts(&buf, "\n结论：隧道句柄不完整，探针终止。\n");
+        return esc_text_finish(&buf, out_len, out_err);
+    }
+    esc_text_puts(&buf, "  · OK（adapter + handshake 均已就绪）\n");
+
+    // [3] 从**我们自己的 RSD 服务表**里取 CoreDeviceProxy 的端口
+    esc_text_puts(&buf, "\n[3] rsd_get_service_info（取 CoreDeviceProxy 端口）\n");
+    struct CRsdService *proxyInfo = NULL;
+    err = rsd_get_service_info(tunnelHandshake, ESC_CD_PROXY_SERVICE, &proxyInfo);
+    if (err != NULL || proxyInfo == NULL) {
+        if (err != NULL) {
+            esc_cd_note_error(&buf, "❌ rsd_get_service_info 失败", err);
+            idevice_error_free(err);
+        } else {
+            esc_text_puts(&buf, "  ❌ 返回空（无错误对象）\n");
+        }
+        esc_text_puts(&buf, "  · 附：隧道服务表里名字含 \"CoreDevice\" 的服务（供核对服务名是否写对）：\n");
+        struct CRsdServiceArray *probeAll = NULL;
+        struct IdeviceFfiError *listErr = rsd_get_services(tunnelHandshake, &probeAll);
+        if (listErr == NULL && probeAll != NULL) {
+            int hits = 0;
+            if (probeAll->services != NULL) {
+                for (size_t i = 0; i < probeAll->count; i++) {
+                    const char *nm = probeAll->services[i].name;
+                    if (nm != NULL && strstr(nm, "CoreDevice") != NULL) {
+                        esc_text_printf(&buf, "      - %s  port=%u\n",
+                                        nm, (unsigned)probeAll->services[i].port);
+                        hits++;
+                    }
+                }
+            }
+            esc_text_printf(&buf, "      共 %d 条；服务表总数 = %lu\n",
+                            hits, (unsigned long)probeAll->count);
+            rsd_free_services(probeAll);
+        } else {
+            if (listErr != NULL) {
+                esc_cd_note_error(&buf, "      （连服务表都取不到）", listErr);
+                idevice_error_free(listErr);
+            } else {
+                esc_text_puts(&buf, "      （连服务表都取不到）\n");
+            }
+        }
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
+        esc_text_puts(&buf, "\n结论：服务表里没有这个 CoreDeviceProxy 服务 ⇒ 这条工程路在本机不成立。\n");
+        return esc_text_finish(&buf, out_len, out_err);
+    }
+    uint16_t proxyPort = proxyInfo->port;
+    esc_text_printf(&buf, "  · 命中：name=%s port=%u remoteXPC=%s\n",
+                    proxyInfo->name != NULL ? proxyInfo->name : "(null)",
+                    (unsigned)proxyPort,
+                    proxyInfo->uses_remote_xpc ? "true" : "false");
+    rsd_free_service(proxyInfo);
+    proxyInfo = NULL;
+
+    // [4] 直连该端口，包成 Idevice（socket 已 set 好，[5] 直接能用）
+    esc_text_puts(&buf, "\n[4] idevice_new_tcp_socket（直连 CoreDeviceProxy 端口）\n");
+    struct sockaddr_in proxyAddr;
+    memset(&proxyAddr, 0, sizeof(proxyAddr));
+    proxyAddr.sin_family = AF_INET;
+    proxyAddr.sin_port = htons(proxyPort);
+    if (inet_pton(AF_INET, device_ip, &proxyAddr.sin_addr) != 1) {
+        esc_text_printf(&buf, "  ❌ 目标 IP 非法：%s\n", device_ip);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
+        return esc_text_finish(&buf, out_len, out_err);
+    }
+    esc_text_printf(&buf, "  · 目标 = %s:%u\n", device_ip, (unsigned)proxyPort);
+    struct IdeviceHandle *idevice = NULL;
+    err = idevice_new_tcp_socket((const idevice_sockaddr *)&proxyAddr,
+                                 (idevice_socklen_t)sizeof(struct sockaddr_in),
+                                 label,
+                                 &idevice);
+    if (err != NULL) {
+        esc_cd_note_error(&buf, "❌ idevice_new_tcp_socket 失败", err);
+        idevice_error_free(err);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
+        esc_text_puts(&buf, "\n结论：连不上 CoreDeviceProxy 端口，探针终止。\n");
+        return esc_text_finish(&buf, out_len, out_err);
+    }
+    if (idevice == NULL) {
         esc_text_puts(&buf, "  ❌ 返回空句柄（无错误对象）\n");
-        esc_text_puts(&buf, "\n结论：provider 句柄为空，探针终止。\n");
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
+        esc_text_puts(&buf, "\n结论：Idevice 句柄为空，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     esc_text_puts(&buf, "  · OK\n");
 
-    // [3] CoreDeviceProxy
-    esc_text_puts(&buf, "\n[3] core_device_proxy_connect\n");
+    // [5] CoreDeviceProxy —— ⚠️ 本调用**消费** idevice，此后永不 free 它
+    //     （Rust 侧是 `Box::from_raw(socket)`，成功失败都已接管所有权）
+    esc_text_puts(&buf, "\n[5] core_device_proxy_new（⚠️ 消费 idevice，此后不再 free）\n");
+    esc_text_puts(&buf, "    刻意不做 idevice_rsd_checkin：上游 CoreDeviceProxy::new 只做\n");
+    esc_text_puts(&buf, "    `socket.take()` + `CdTunnel::handshake(socket)`，没有 RSDCheckin 这一步。\n");
     struct CoreDeviceProxyHandle *proxy = NULL;
-    err = core_device_proxy_connect(provider, &proxy);
-    // provider 不参与 proxy 的生命周期（头文件未写消费），**成功失败都立刻释放**，避免泄漏。
-    idevice_provider_free(provider);
-    provider = NULL;
+    err = core_device_proxy_new(idevice, &proxy);
+    idevice = NULL;   // 已被消费：置空以防后续误用（不是释放）
     if (err != NULL) {
-        esc_cd_note_error(&buf, "❌ core_device_proxy_connect 失败", err);
+        esc_cd_note_error(&buf, "❌ core_device_proxy_new 失败", err);
         idevice_error_free(err);
-        esc_text_puts(&buf, "\n结论：连不上 CoreDeviceProxy，探针终止。\n");
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
+        esc_text_puts(&buf, "\n结论：CdTunnel 握手失败，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     if (proxy == NULL) {
         esc_text_puts(&buf, "  ❌ 返回空句柄（无错误对象）\n");
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：CoreDeviceProxy 句柄为空，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
-    esc_text_puts(&buf, "  · OK（provider 已释放）\n");
+    esc_text_puts(&buf, "  · OK\n");
 
-    // [4] ★ 必须在下一次调用之前取端口（下一次会消费 proxy）
-    esc_text_puts(&buf, "\n[4] core_device_proxy_get_server_rsd_port（★ 必须在 [5] 之前）\n");
+    // [6] ★ 必须在下一次调用之前取端口（下一次会消费 proxy）
+    esc_text_puts(&buf, "\n[6] core_device_proxy_get_server_rsd_port（★ 必须在 [7] 之前）\n");
     uint16_t rsdPort = 0;
     err = core_device_proxy_get_server_rsd_port(proxy, &rsdPort);
     if (err != NULL) {
         esc_cd_note_error(&buf, "❌ core_device_proxy_get_server_rsd_port 失败", err);
         idevice_error_free(err);
         core_device_proxy_free(proxy);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：拿不到隧道内 RSD 端口，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     esc_text_printf(&buf, "  · server_rsd_port = %u\n", (unsigned)rsdPort);
 
-    // [5] software TCP adapter —— ⚠️ 本调用**消费** proxy
-    esc_text_puts(&buf, "\n[5] core_device_proxy_create_tcp_adapter（⚠️ 消费 proxy，此后不再 core_device_proxy_free）\n");
+    // [7] software TCP adapter —— ⚠️ 本调用**消费** proxy
+    esc_text_puts(&buf, "\n[7] core_device_proxy_create_tcp_adapter（⚠️ 消费 proxy，此后不再 core_device_proxy_free）\n");
     struct AdapterHandle *cdAdapter = NULL;
     err = core_device_proxy_create_tcp_adapter(proxy, &cdAdapter);
     proxy = NULL;     // 已被消费：置空以防后续误用（不是释放）
     if (err != NULL) {
         esc_cd_note_error(&buf, "❌ core_device_proxy_create_tcp_adapter 失败", err);
         idevice_error_free(err);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：建 software tunnel adapter 失败，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     if (cdAdapter == NULL) {
         esc_text_puts(&buf, "  ❌ 返回空句柄（无错误对象）\n");
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：adapter 句柄为空，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     esc_text_puts(&buf, "  · OK\n");
 
-    // [6] 隧道内连 RSD 端口
-    esc_text_puts(&buf, "\n[6] adapter_connect(cdAdapter, rsdPort) —— 隧道内新开一条流\n");
+    // [8] 隧道内连 RSD 端口
+    esc_text_puts(&buf, "\n[8] adapter_connect(cdAdapter, rsdPort) —— 隧道内新开一条流\n");
     struct ReadWriteOpaque *stream = NULL;
     err = adapter_connect(cdAdapter, rsdPort, &stream);
     if (err != NULL) {
         esc_cd_note_error(&buf, "❌ adapter_connect 失败", err);
         idevice_error_free(err);
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：隧道内连不上 RSD 端口，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     if (stream == NULL) {
         esc_text_puts(&buf, "  ❌ 返回空流（无错误对象）\n");
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：RSD 流为空，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     esc_text_puts(&buf, "  · OK\n");
 
-    // [7] ★ 第二个 RSD 握手 —— ⚠️ 本调用**消费** stream
-    esc_text_puts(&buf, "\n[7] ★ rsd_handshake_new(stream) —— 第二个 RSD 握手（⚠️ 消费 stream）\n");
+    // [9] ★ 第二个 RSD 握手 —— ⚠️ 本调用**消费** stream
+    esc_text_puts(&buf, "\n[9] ★ rsd_handshake_new(stream) —— 第二个 RSD 握手（⚠️ 消费 stream）\n");
     struct RsdHandshakeHandle *cdHandshake = NULL;
     err = rsd_handshake_new(stream, &cdHandshake);
     stream = NULL;    // 已被消费：置空以防后续误用（不是释放）
@@ -263,19 +383,23 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
         esc_cd_note_error(&buf, "❌ rsd_handshake_new 失败", err);
         idevice_error_free(err);
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：第二个 RSD 握手失败，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     if (cdHandshake == NULL) {
         esc_text_puts(&buf, "  ❌ 返回空句柄（无错误对象）\n");
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：第二个握手句柄为空，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     esc_text_puts(&buf, "  · OK\n");
 
-    // [8] 服务表（只读内存结构，不建连）
-    esc_text_puts(&buf, "\n[8] rsd_get_services（只读内存结构，不建连）\n");
+    // [10] 服务表（只读内存结构，不建连）
+    esc_text_puts(&buf, "\n[10] rsd_get_services（只读内存结构，不建连）\n");
     struct CRsdServiceArray *services = NULL;
     err = rsd_get_services(cdHandshake, &services);
     if (err != NULL) {
@@ -283,6 +407,8 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
         idevice_error_free(err);
         rsd_handshake_free(cdHandshake);
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：取不到服务表，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
@@ -290,12 +416,12 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
         esc_text_puts(&buf, "  ❌ 返回空（无错误对象）\n");
         rsd_handshake_free(cdHandshake);
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：服务表为空，探针终止。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
 
-    const char *kTargetService = "com.apple.coredevice.appservice";
-    const char *kCoreDevicePrefix = "com.apple.coredevice";
     int targetFound = 0;
     size_t coreDeviceCount = 0;
     size_t total = services->count;
@@ -314,20 +440,20 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
                             (unsigned)services->services[i].port,
                             services->services[i].uses_remote_xpc ? "true" : "false");
             if (strcmp(name, kTargetService) == 0) { targetFound = 1; }
-            if (strncmp(name, kCoreDevicePrefix, strlen(kCoreDevicePrefix)) == 0) {
+            if (strncmp(name, "com.apple.coredevice", strlen("com.apple.coredevice")) == 0) {
                 coreDeviceCount++;
             }
         }
     }
 
-    esc_text_puts(&buf, "\n[8.1] ★ 判据\n");
+    esc_text_puts(&buf, "\n[10.1] ★ 判据\n");
     esc_text_printf(&buf, "  · %s → %s\n", kTargetService,
                     targetFound ? "在表里 ✅" : "❌ 不在表里");
     esc_text_printf(&buf, "  · com.apple.coredevice.* 共 %lu 条\n", (unsigned long)coreDeviceCount);
     esc_text_puts(&buf, "  · 对照：RPPairing 隧道那条握手 19 次真机 dump 里 coredevice 整块 0 条\n");
 
-    // [9] ★ 端到端：**即使服务不在表里也照跑** —— 失败原文本身就是证据
-    esc_text_puts(&buf, "\n[9] ★ 端到端：app_service_connect_rsd(cdAdapter, cdHandshake)\n");
+    // [11] ★ 端到端：**即使服务不在表里也照跑** —— 失败原文本身就是证据
+    esc_text_puts(&buf, "\n[11] ★ 端到端：app_service_connect_rsd(cdAdapter, cdHandshake)\n");
     if (!targetFound) {
         esc_text_puts(&buf, "  （服务不在表里，仍按任务要求继续尝试：预期失败，失败原文即证据）\n");
     }
@@ -339,6 +465,8 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
         rsd_free_services(services);
         rsd_handshake_free(cdHandshake);
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：连不上 app_service —— 进程管理那条路在这条链上仍然不通。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
@@ -347,12 +475,14 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
         rsd_free_services(services);
         rsd_handshake_free(cdHandshake);
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：app_service 句柄为空。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
     esc_text_puts(&buf, "  · 连接成功 ✅\n");
 
-    esc_text_puts(&buf, "\n[10] ★ 端到端：app_service_list_processes\n");
+    esc_text_puts(&buf, "\n[12] ★ 端到端：app_service_list_processes\n");
     struct ProcessTokenC *processes = NULL;
     uintptr_t pcount = 0;
     err = app_service_list_processes(appService, &processes, &pcount);
@@ -363,6 +493,8 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
         rsd_free_services(services);
         rsd_handshake_free(cdHandshake);
         adapter_free(cdAdapter);
+        rsd_handshake_free(tunnelHandshake);
+        adapter_free(tunnelAdapter);
         esc_text_puts(&buf, "\n结论：app_service 连上了，但进程列表拿不到（失败原文见上）。\n");
         return esc_text_finish(&buf, out_len, out_err);
     }
@@ -387,24 +519,26 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
     }
     app_service_free(appService);
 
-    esc_text_puts(&buf, "\n[11] 结论\n");
+    esc_text_puts(&buf, "\n[13] 结论\n");
     if (targetFound && pcount > 0) {
         esc_text_puts(&buf, "  ⇒ **CoreDeviceProxy 隧道内的第二个 RSD 握手这条路是通的**：\n");
         esc_text_puts(&buf, "     服务表里有 com.apple.coredevice.appservice，且进程列表拿到非零条数。\n");
-        esc_text_puts(&buf, "     ⇒ DeviceControlService.withAppService 应改走这条路（等 lead 决定）。\n");
+        esc_text_puts(&buf, "     ⇒ 这条路在本仓可行（是一个可用的工程选项）；是否改接线由 lead 决定。\n");
     } else if (!targetFound) {
         esc_text_puts(&buf, "  ⇒ 这条握手**也没有**广播 com.apple.coredevice.appservice。\n");
-        esc_text_puts(&buf, "     ⇒ 「换隧道」解释不了 ServiceNotFound，要转向「DDI 未挂」那条假设\n");
-        esc_text_puts(&buf, "       （对照 SSH 命令 ddiprobe 的结果）。\n");
+        esc_text_puts(&buf, "     ⇒ 这条工程路也走不通；但**不要**回头写「DDI」或「接错隧道」的成因结论（两版都已作废）。\n");
     } else {
         esc_text_puts(&buf, "  ⇒ 服务在表里，但进程列表条数为 0 —— 连接层通了、应用层没数据，需单独查。\n");
     }
     esc_text_puts(&buf, "  注：以上均为**设备侧一次性只读观测**，本机（Windows）无法验证真机行为。\n");
 
-    // 收尾释放：顺序与 TunnelContext 一致（先握手、后 adapter）
+    // 收尾释放：顺序与 TunnelContext 一致（先握手、后 adapter）；
+    // 两条链各释放一次，且都只释放「没被消费」的句柄。
     rsd_free_services(services);
     rsd_handshake_free(cdHandshake);
     adapter_free(cdAdapter);
+    rsd_handshake_free(tunnelHandshake);
+    adapter_free(tunnelAdapter);
 
     return esc_text_finish(&buf, out_len, out_err);
 }

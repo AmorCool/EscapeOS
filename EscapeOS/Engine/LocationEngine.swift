@@ -140,6 +140,13 @@ enum LocationEngine {
     /// （v0.3.253 的 setuid 提权方案作废——把「有越狱」当前提是搞错了）。
     /// 「进程管理」页结束设备进程用的就是这套 FFI（app_service_list_processes +
     /// app_service_send_signal），这里直接复用：枚举进程 → 找 locationd → SIGKILL.
+    ///
+    /// ⚠️ **服务不可用时的行为**（2026-09-19 更正）：`ServiceNotFound`(21) 是**设备侧的服务
+    /// 状态问题**，不是本 App 的缺陷 —— 该服务偶尔不可用，**重启手机即恢复**（用户实测）。
+    /// 与 DDI、与「用哪条隧道」都无关（PC 侧 `pymobiledevice3` 交叉验证：服务表逐条一致、
+    /// 调同一个服务同样失败）。**原理未知。**
+    /// 此时 `listProcesses()` 会抛错 ⇒ 本方法返回 `false`；**重试没有意义**
+    /// （`RsdHandshake::connect` 无回退），**重启手机即可恢复**。
     @discardableResult
     static func killLocationd() -> Bool {
         guard let entries = try? ProcessManagerService.shared.listProcesses() else { return false }

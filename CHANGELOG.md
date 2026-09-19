@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.3.464] - 2026-09-19
+
+### ★★★ 更正：前两版「成因」都是**我猜的**，全部作废 —— `ServiceNotFound` 是**设备侧服务状态**问题，**重启手机即恢复**
+
+**事实（用户实测 + PC 侧标准工具交叉验证）**：
+
+- 主页两个内置模块（`com.escapeos.locache` / `com.escapeos.wifirefresh`）、进程管理、
+  虚拟定位停止、拨号器主题「重启电话 App」、IPCC「重启 CommCenter」、设备控制「重启 SpringBoard」
+  —— **这些功能本身一直是对的**，代码没有问题。
+- `ServiceNotFound`(21) 出现时，**重启手机即恢复**（用户实测；同类工具也是这么处理的）。
+- **原理未知。** 本文件从此不再为它写任何成因推测。
+
+**两版错误归因（都已作废，保留作反面教材）**：
+
+| 版本 | 当时的结论 | 为什么作废 |
+|---|---|---|
+| `[0.3.376]` | 设备未挂 **DDI** ⇒ CoreDevice 服务整块不广播 | 与「重启手机即恢复」不符；且 `pymobiledevice3` 同样连不上 |
+| `[0.3.462]` | 本仓**接错了隧道**（CoreDevice 族只在 CoreDeviceProxy 隧道内的第二个 RSD 上） | `pymobiledevice3` 的默认隧道**就是** CdTunnel，服务表与我们**逐条一致（64 条）**，同样失败 |
+
+**交叉验证（可复跑）**：
+```
+pymobiledevice3 usbmux list                  # 设备 USB 连着 PC
+pymobiledevice3 remote rsd-info              # → 64 条服务，与我们那条逐条一致
+pymobiledevice3 developer core-device list-processes   # → 同样失败
+pymobiledevice3 amfi developer-mode-status   # → true
+```
+⇒ **同一台设备、同一条 RSD、同一个服务名，成熟标准工具结果完全一样。**
+
+**本版把散在 5 个文件里的错误注释与用户可见文案全部改掉**
+（`DeviceControlService` / `ProcessManagerView` / `DDIMountProbe` / `SSHServerService` / `LocationEngine`），
+统一改成上面的事实口径；**同时把仍然成立的两条保留**：① `rsd.rs:171-189` 是纯 `HashMap` 查表、
+无回退 ⇒ 失败时重试 3 次毫无意义；② 上述 6 个功能共用同一套 `app_service` 底座。
+
+### airlift：`stage` 探测把两个变量拆成两趟独立探测
+
+真机结论原文写着「**两者别混**」—— 旧版把两个变量塞在同一个 zip 里：
+
+- `p0/p1/p2/link`（symlink + 穿过它的对照文件）← 纯对照
+- `p0/p1/p2/out` → `../../../../` ← 逃逸条目
+
+结果是「**连对照用的 `link` 都不在**」⇒ **整包可能被拒** ⇒「解压器不跟随 symlink」这个结论
+**根本读不出来**。四种帧格式全试也没用 —— 变量没拆开，试多少种都读不出信息。
+
+- `makeStageTestZip(..., includeEscapeEntry: Bool = true)`：`false` 时**只跳过最后两条**逃逸条目，
+  其余原样保留（zip 里一个 `..` 都没有）。
+- `runStageProbe` 抽出 `runPass(label:includeEscapeEntry:)`，**两趟各自独立**的
+  `MediaSubdir` 与探针 token，**两趟都跑**（不是 A 成功才跑 B）。
+- **四象限判定**：`A✅B✅` ⇒ 攻击链成立（不需要 Grappa）；`A✅B❌` ⇒ 逃逸条目被单独拒 ⇒ 如实收口；
+  `A❌B❌` ⇒ 问题在 zip/帧格式、**不在**逃逸条目；`A❌B✅` ⇒ 自相矛盾 ⇒ **如实报矛盾，不挑一个说**。
+
+### 本轮**没有改动任何功能逻辑**
+
+`v0.3.461` → 本版，用 `git show <rev>:<file>` 去注释/去空白后逐段比对：
+`ProcessManagerService`、`DeviceControlService`、`ModuleService` **完全相同**。
+实际改动只有：① 日志页排版统一 + 日志分类隔离 ② 壁纸清空判据
+③ 新增 SSH 只读探针 `cdprobe`（不挂任何 UI）④ airlift stage 两趟拆分 ⑤ 注释与文案更正。
+
 ## [0.3.463] - 2026-09-19
 
 ### 修 v0.3.462 的 CI 编译错：`AppStoreLogView` 参数列表少一个逗号
@@ -24,26 +81,21 @@ EscapeOS/Views/AppStoreLogView.swift:29:14: error: Expected ',' separator
 
 ## [0.3.462] - 2026-09-19
 
-### ★★★ 更正：`ServiceNotFound` 的真根因是**我们接错了隧道**（推翻 v0.3.376 的「DDI 未挂」结论）
+### ~~★★★ 更正：`ServiceNotFound` 的真根因是「我们接错了隧道」~~ ⚠️ **本段结论也是错的，见 `[0.3.464]`**
 
-**`com.apple.coredevice.*` 这一族服务只存在于 CoreDeviceProxy 隧道里的「第二个 RSD 握手」上，
-不在 `tunnel_create_rppairing` 拿到的那条上。** 而 `withAppService` / `ProcessManagerService`
-用的是后者 ⇒ 整块查不到 ⇒ `ServiceNotFound`(21) 必现。
-
-证据是 Apple **官方** `idevice-tools app-service` 的实现（`tools/src/app_service.rs:69-85`）：
-```rust
-let proxy = CoreDeviceProxy::connect(&*provider).await;
-let rsd_port = proxy.tunnel_info().server_rsd_port;
-let adapter = proxy.create_software_tunnel();
-let stream = adapter.connect(rsd_port).await;
-let mut handshake = RsdHandshake::new(stream).await;      // ← 第二个 RSD 握手
-let mut asc = AppServiceClient::connect_rsd(&mut adapter, &mut handshake).await;
-```
-等价的 C 版在 `tools/examples/process_control.c`。**服务名没错、查表点没错，错的是握手包拿的是哪条隧道。**
-
-**为什么以前判成 DDI**：只看到「服务表里没有」就跳到「设备没广播」，没去读上游官方实现。
-`ddiprobe` 报「已挂载开发者镜像数量 = 0」是**结果**不是原因。真机 19 次 dump 里服务表
-**稳定 64 条**（端口每次变、集合不变）⇒ **隧道建得没问题**，更说明问题出在「查错了握手包」。
+> **保留作反面教材。** 本节当时给出的「接错隧道」结论，在 `[0.3.464]` 被真机 + PC 侧标准工具
+> 交叉验证推翻。下面这段的技术描述（官方 `app-service` 走 CoreDeviceProxy → 第二个 RSD 握手）
+> **本身是对的**，但它**不是**本仓 `ServiceNotFound` 的原因。
+>
+> ~~**`com.apple.coredevice.*` 这一族服务只存在于 CoreDeviceProxy 隧道里的「第二个 RSD 握手」上，
+> 不在 `tunnel_create_rppairing` 拿到的那条上。** 而 `withAppService` / `ProcessManagerService`
+> 用的是后者 ⇒ 整块查不到 ⇒ `ServiceNotFound`(21) 必现。~~
+>
+> 官方 `idevice-tools app-service`（`tools/src/app_service.rs:69-85`）确实走
+> `CoreDeviceProxy::connect` → `create_software_tunnel` → `RsdHandshake::new` → `connect_rsd`。
+> 但 `pymobiledevice3` 的默认隧道**就是** `CoreDeviceTunnelProxy`（= CdTunnel，
+> `remote/userspace_tunnel.py:709`、`:727`），它拿到的服务表**与我们逐条一致（64 条）**，
+> 调同一个服务**同样失败** ⇒ **「换隧道」换不出另一张表**。
 
 **本版先做只读探针把这条链钉死**（见下），**不动** `withAppService` —— 等探针结果出来再改接线。
 

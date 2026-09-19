@@ -1,23 +1,36 @@
 import Foundation
 
-/// ★ 只读诊断探针（svc-notfound / 2026-09-19）：把「设备上到底挂没挂 DDI」从假设变成事实。
+/// ★ 只读诊断探针（svc-notfound / 2026-09-19）：回答「设备上到底挂没挂 DDI」这个**独立**问题。
 ///
-/// ## 为什么要这个探针
+/// ## ⚠️ 先读这段：这份探针当初是为一个**已被推翻的假设**写的
+/// 它当初要验证的**主导假设**是「CoreDevice 那块是 **DDI 门控**的 —— 设备没挂 DDI ⇒
+/// RSD 不广播整块 ⇒ app_service 必现 `ServiceNotFound`(21)」。**该假设已作废。**
+/// 后来写过的第三版归因「接错隧道」**也作废**（与 PC 侧 `pymobiledevice3` 的交叉验证矛盾）。
+///
+/// **事实（用户实测 + PC 侧交叉验证）**：`ServiceNotFound`(21) 是**设备侧的服务状态问题**，
+/// **不是本 App 的缺陷** —— 该服务在设备侧**偶尔**不可用，**重启手机即恢复**（用户实测；
+/// 同类工具也这么处理）。**与 DDI 无关，也与「用哪条隧道」无关**：PC 侧标准工具
+/// `pymobiledevice3` 拿到的 RSD 服务表与我们**逐条一致**（64 条），调同一个服务**同样失败**。
+/// **原理未知** —— 不要再往这个方向补推测。
+///
+/// ## ★ `ddiprobe` 现在还有没有用？有。
+/// 它回答的是「**DDI 挂没挂**」这个**独立**问题（设备侧已挂载的开发者镜像列表），
+/// 与 `ServiceNotFound` 无关 —— 所以**本文件与 `ddiprobe` 命令都保留**。
+/// 只是**不要再拿它的结果去解释 `ServiceNotFound`**。
+///
+/// ## 探针当初的依据（保留作历史记录，**归因部分已作废**）
 /// 主页两个内置模块（`com.escapeos.locache` / `com.escapeos.wifirefresh`，都是 `type: "signal"`）
-/// 执行时必现 `ServiceNotFound`（错误码 21）。已核实的**事实**（见 `_tmp_svc_结论.md`）：
+/// 执行时会出现 `ServiceNotFound`（错误码 21）。仍然成立的一条：
 /// - `RsdHandshake::connect` 是纯 `HashMap` 查表，查不到直接 `Err(ServiceNotFound)`，无回退
-///   （`idevice/src/services/rsd.rs:171-189`）⇒ **必现**，重试 3 次毫无意义；
-/// - 真机 19 次 RSD dump 里 **整块** `com.apple.coredevice.*` 都不在（`_tmp_big.txt`）；
-/// - 但 41 条 `.shim.remote` 与 pymobiledevice3 记录的「隧道内受信 RSD」清单 **41/41 全中**
-///   ⇒ 我们没走错 RSD、没走错信任级别，**缺的只有 CoreDevice 那一块**。
+///   （`idevice/src/services/rsd.rs:171-189`）⇒ 失败时**重试 3 次毫无意义**；
 ///
-/// **主导假设**：CoreDevice 那块（`UsesRemoteXPC: true`）是 **DDI 门控**的 ——
-/// 设备没挂 Developer Disk Image ⇒ RSD 不广播整块 ⇒ app_service 必现 code 21。
-/// 旁证：pymobiledevice3 #1744（DDI 换版本后 coredevice 服务 7 → 17）、
-/// `remote_service_discovery.py:462-465` 的报错文案、StikDebug 把挂 DDI 当前置条件。
+/// 已作废、**不要再引用**的两条（保留作历史）：
+/// - ~~真机 19 次 RSD dump 里整块 `com.apple.coredevice.*` 都不在 ⇒ 缺 CoreDevice 那一块~~；
+/// - ~~主导假设：CoreDevice 那块是 DDI 门控的；旁证 pymobiledevice3 #1744 /
+///   `remote_service_discovery.py:462-465` 的报错文案 / StikDebug 把挂 DDI 当前置条件~~；
+/// - ~~第三版：本仓接错了握手（CoreDevice 族只在 CoreDeviceProxy 隧道内的第二个 RSD 握手上）~~。
 ///
 /// **本探针只回答一个问题：设备上已挂载的开发者镜像列表是空还是非空。**
-/// 空 ⇒ 假设存活（设备没挂 DDI）；非空 ⇒ 假设被推翻，要转向「嵌套 CoreDeviceProxy 隧道」那条。
 ///
 /// ## ★ 为什么走 C 垫片（`EscDDIProbe.c`），而不是 Swift 直调 FFI
 /// 本探针要用的两个函数的出参都是 **opaque 指针数组**形状：
@@ -68,7 +81,8 @@ enum DDIMountProbe {
         let stamp = ISO8601DateFormatter().string(from: Date())
         lines.append("=== DDI 挂载只读探针 @ \(stamp) ===")
         lines.append("目的：判定设备上是否已挂载 Developer Disk Image（DDI）")
-        lines.append("依据：CoreDevice 服务块（com.apple.coredevice.*）疑为 DDI 门控；未挂 ⇒ app_service 必现 ServiceNotFound(21)")
+        // 依据行（用户可见输出）：只写事实与恢复办法，**不写任何成因推测**。
+        lines.append("依据：ServiceNotFound(21) 是设备侧的服务状态问题，不是本 App 的缺陷；该服务偶尔不可用，重启手机即恢复（用户实测）。与 DDI、与「用哪条隧道」均无关")
         lines.append("")
 
         do {
@@ -121,6 +135,10 @@ enum DDIMountProbe {
         }
 
         // 2) 读 RSD 服务表（**只读内存结构，不建连**）
+        //    ⚠️ 下面 dump 出来的「coredevice 整块不在表里」**不解释 `ServiceNotFound`** ——
+        //       既不是 DDI 造成的，也不是「接错隧道」造成的（两版归因都已作废）。
+        //       `dumpServiceTable` 的判据 A/B/C 仍有参考价值（判据 C 是「DDI 挂没挂」的旁证），
+        //       但**不要把它读成 `ServiceNotFound` 的解释**。
         out.append("")
         out.append("[2] RSD 服务表（rsd_get_services，只读内存，不建连）")
         dumpServiceTable(handshake, into: &out)
@@ -169,14 +187,17 @@ enum DDIMountProbe {
 
         out.append("")
         out.append("[5] 结论")
+        // ⚠️ 下面两个分支只报告「设备挂没挂 DDI」这个**独立事实**。
+        //    不要再把它当成 `ServiceNotFound` 的解释（DDI 与「接错隧道」两版归因都已作废），
+        //    **也不要照着它去挂 DDI**。
         if !images.isEmpty {
-            out.append("  ⇒ **已挂 DDI**：『DDI 未挂』这个主导假设被**推翻**。")
-            out.append("     下一步：走 `_tmp_svc_结论.md` §4.1 的 E3（嵌套 CoreDeviceProxy 隧道探针），")
-            out.append("     看 CoreDeviceProxy 隧道内的 RSD 是否广播 com.apple.coredevice.appservice。")
+            out.append("  ⇒ **已挂 DDI**：设备侧已挂载开发者镜像（与 ServiceNotFound 无关）。")
+            out.append("     ServiceNotFound(21) 是设备侧服务状态问题，该服务偶尔不可用，")
+            out.append("     重启手机即恢复（用户实测）——与本探针报告的 DDI 状态没有关系。")
         } else {
-            out.append("  ⇒ **未挂 DDI**（列表为空）：主导假设**存活**。")
-            out.append("     下一步：走 §4.1 的 E4 —— 用 Documents/DDI/ 三件套挂 personalized DDI，")
-            out.append("     挂完**重建隧道重取握手包**，再 dump 服务表确认 com.apple.coredevice.appservice 是否出现。")
+            out.append("  ⇒ **未挂 DDI**（列表为空）：设备侧未挂载开发者镜像（与 ServiceNotFound 无关）。")
+            out.append("     ServiceNotFound(21) 是设备侧服务状态问题，该服务偶尔不可用，")
+            out.append("     重启手机即恢复（用户实测）——与本探针报告的 DDI 状态没有关系。")
         }
         return out
     }
@@ -282,13 +303,14 @@ enum DDIMountProbe {
         let mounterName = "com.apple.mobile.mobile_image_mounter.shim.remote"
         out.append("  · [判据 A] \(mounterName) → \(names.contains(mounterName) ? "在表里" : "❌ 不在表里")")
 
-        // 判据 B：CoreDevice 整块（本次问题的主角）
+        // 判据 B：CoreDevice 整块（当初以为它是本次问题的主角，**该归因已作废**）
         let coreDevice = names.filter { $0.hasPrefix("com.apple.coredevice") }.sorted()
         out.append("  · [判据 B] com.apple.coredevice.* 共 \(coreDevice.count) 条"
-                   + (coreDevice.isEmpty ? "（整块不在 ⇒ 与 19 次真机 dump 一致）" : "："))
+                   + (coreDevice.isEmpty ? "（整块不在；这与 ServiceNotFound 无关）" : "："))
         for name in coreDevice { out.append("      - \(name)") }
 
         // 判据 C：DDI 已挂的两个外部标志（pymobiledevice3 #1744 用的判据）
+        //   仅用于回答「DDI 挂没挂」这个独立问题，**与 ServiceNotFound 无关**。
         for marker in ["com.apple.dt.testmanagerd.remote", "com.apple.dt.ViewHierarchyAgent.remote"] {
             out.append("  · [判据 C] \(marker) → \(names.contains(marker) ? "在表里（旁证：DDI 已挂）" : "不在表里")")
         }

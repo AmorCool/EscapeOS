@@ -371,10 +371,16 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // ★ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
             //
             // 为什么需要：主页两个内置模块（locache / wifirefresh）走
-            // `app_service_connect_rsd` 时必现 `ServiceNotFound`(21)。已证实设备 RSD 服务表里
-            // **整块** `com.apple.coredevice.*` 都不在（19 次真机 dump 一致），而 41 条
-            // `.shim.remote` 与 pymobiledevice3 记录的「隧道内受信 RSD」41/41 全中。
-            // 主导假设：CoreDevice 那块是 **DDI 门控**的，没挂 DDI ⇒ 整块不广播。
+            // `app_service_connect_rsd` 时会出现 `ServiceNotFound`(21)。
+            //
+            // ⚠️ 关于 `ServiceNotFound` 的成因，本项目先后写过两版**都已作废**：
+            //    ①「DDI 门控」（见 `CHANGELOG.md` `[0.3.462]`）；②「接错隧道」。
+            //    **事实（用户实测 + PC 侧交叉验证）**：`ServiceNotFound`(21) 是**设备侧的服务状态
+            //    问题**，不是本 App 的缺陷 —— 该服务偶尔不可用，**重启手机即恢复**；
+            //    与 DDI、与「用哪条隧道」都无关（PC 侧标准工具 `pymobiledevice3` 拿到的 RSD
+            //    服务表与我们**逐条一致**（64 条），调同一个服务**同样失败**）。**原理未知。**
+            //    **本命令仍保留**：它回答的是「DDI 挂没挂」这个**独立**问题，
+            //    只是**不再用来解释 `ServiceNotFound`**。
             // 本命令只回答一个问题：`image_mounter_copy_devices` 返回空还是非空。
             //
             // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道

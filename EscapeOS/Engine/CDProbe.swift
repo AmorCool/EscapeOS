@@ -1,20 +1,26 @@
 import Foundation
 
-/// ★ 只读诊断探针（svc-notfound / 2026-09-19）：验证 `com.apple.coredevice.appservice`
-/// 是否**只在 CoreDeviceProxy 隧道内的「第二个 RSD 握手」**里广播。
+/// ★ 只读诊断探针（svc-notfound / 2026-09-19）：走一遍 CoreDeviceProxy 隧道内的
+/// 「第二个 RSD 握手」，看 `com.apple.coredevice.appservice` 能不能连上。
 ///
 /// ## 为什么要这个探针
 /// 主页两个内置模块（`com.escapeos.locache` / `com.escapeos.wifirefresh`，`type: "signal"`）
-/// 与「更多 → 进程管理」执行时必现 `ServiceNotFound`（错误码 21）。已核实的**事实**：
-/// - `RsdHandshake::connect` 拿 `T::rsd_service_name()` 去 `self.services`（`HashMap`）查，
-///   查不到直接 `Err(IdeviceError::ServiceNotFound)`，**无回退**
-///   （`idevice/src/services/rsd.rs:171-189`）⇒ **必现**，重试 3 次毫无意义；
-/// - 真机实证：`tunnel_create_rppairing` 建出来的 RSD 握手包广播 64 个服务，
-///   **`com.apple.coredevice.*` 一条都没有**（稳定复现 19 次）。
+/// 与「更多 → 进程管理」执行时会出现 `ServiceNotFound`（错误码 21）。
 ///
-/// **本探针要证伪/证实的假设**：Apple 官方通往 CoreDevice 服务的路**不是** RPPairing
-/// 隧道那条 RSD，而是 **CoreDeviceProxy 隧道里的第二个 RSD 握手**。证据是上游官方
-/// `idevice-tools app-service`（`tools/src/app_service.rs:69-85`）：
+/// ⚠️ **成因尚未定论，本项目写过的两版归因都已作废**：①「设备未挂 DDI」；
+/// ②「本仓接错了握手（CoreDevice 族只在 CoreDeviceProxy 隧道的第二个 RSD 握手上）」。
+/// **事实（用户实测 + PC 侧交叉验证）**：`ServiceNotFound`(21) 是**设备侧的服务状态问题**，
+/// 不是本 App 的缺陷 —— 该服务偶尔不可用，**重启手机即恢复**；与 DDI、与「用哪条隧道」
+/// 都无关（PC 侧标准工具 `pymobiledevice3` 拿到的 RSD 服务表与我们**逐条一致**（64 条），
+/// 调同一个服务**同样失败**）。**原理未知。**
+///
+/// 仍然成立的一条：`RsdHandshake::connect` 拿 `T::rsd_service_name()` 去 `self.services`
+/// （`HashMap`）查，查不到直接 `Err(IdeviceError::ServiceNotFound)`，**无回退**
+/// （`idevice/src/services/rsd.rs:171-189`）⇒ 失败时**重试 3 次毫无意义**。
+///
+/// **本探针因此只回答一个工程问题**：CoreDeviceProxy 隧道内那条 RSD 握手**能不能**连上
+/// app_service（即上游官方 `idevice-tools app-service` 走的那条路在本仓是否可行）。
+/// 上游官方 `idevice-tools app-service`（`tools/src/app_service.rs:69-85`）就是：
 /// ```rust
 /// let proxy = CoreDeviceProxy::connect(&*provider).await.expect("no core proxy");
 /// let rsd_port = proxy.tunnel_info().server_rsd_port;
@@ -24,8 +30,33 @@ import Foundation
 /// let mut handshake = RsdHandshake::new(stream).await.unwrap();   // ← 第二个握手
 /// let mut asc = AppServiceClient::connect_rsd(&mut adapter, &mut handshake).await;
 /// ```
-/// 本仓 `DeviceControlService.withAppService` 用的是**第一条**（RPPairing）握手
-/// ⇒ 必然 `ServiceNotFound`。**本轮只做探针，不动 `withAppService`。**
+/// 本仓 `DeviceControlService.withAppService` 用的是**第一条**（RPPairing）握手。
+/// **本轮只做探针，不动 `withAppService`。**
+///
+/// ## ★ 入口已按 v0.3.463 真机结果换掉（**重要**）
+/// 第一版探针走 `idevice_pairing_file_read` + `idevice_tcp_provider_new` +
+/// `core_device_proxy_connect(provider)`。**真机在第一步就失败**：
+/// ```
+/// [1] idevice_pairing_file_read
+///   ❌ 失败：code=13 sub_code=0 message=UnexpectedResponse("failed to parse raw pairing file from bytes")
+/// ```
+/// ⇒ `Documents/pairingFile.plist` 是 **RpPairingFile**（RSD/无线配对格式），
+/// **不是** lockdown 配对文件（旁证：`rp_pairing_file_read` 对它一直正常 —— RP 隧道能建、
+/// airlift 报「配对文件 OK」）。⇒ **lockdown provider 这条路在设备侧不可用，已整体删掉。**
+///
+/// 改用：**我们自己的 RSD 服务表里就有** `com.apple.internal.devicecompute.CoreDeviceProxy`
+/// （真机 64 条服务之一，**无** `.shim.remote` 后缀，直连 TCP 端口即可），
+/// 把它的端口包成 socket 就走同一条 CDTunnel。
+///
+/// ## 实际调用链（全部在 `EscCDProbe.c` 里）
+/// `rp_pairing_file_read` → `tunnel_create_rppairing`(10.7.0.1:49152) →
+/// `rsd_get_service_info("com.apple.internal.devicecompute.CoreDeviceProxy")` →
+/// `idevice_new_tcp_socket(10.7.0.1:info->port)` → `core_device_proxy_new` →
+/// `core_device_proxy_get_server_rsd_port` → `core_device_proxy_create_tcp_adapter` →
+/// `adapter_connect` → **`rsd_handshake_new`（第二个握手）** → `rsd_get_services` →
+/// `app_service_connect_rsd` → `app_service_list_processes`。
+/// **刻意不做 `idevice_rsd_checkin`**（上游 `CoreDeviceProxy::new` 没有这一步；
+/// 本仓 v0.3.420 正是在那里加 checkin 之后出的配对事故）。
 ///
 /// ## ★ 为什么走 C 垫片（`EscCDProbe.c`），而不是 Swift 直调 FFI
 /// 本 FFI 头里 `plist_t` 是 `typedef void *`（`idevice.h:317`），且这条链每一步的出参
@@ -59,6 +90,11 @@ enum CDProbe {
 
     /// 连接 label（与 `TunnelContext.m` 的 label 用法同源，仅用于设备侧识别）
     private static let connectLabel = "EscapeSpaceCDProbe"
+
+    /// RPPairing 隧道端口（`10.7.0.1:49152`）。
+    /// 与 `AFCService` / `DeviceControlService` / `DDIMountProbe` / `TunnelContext.m` 同款 ——
+    /// **不是** lockdown 的 62078（那条路要 lockdown 配对文件，我们手上没有）。
+    private static let rppairingPort: UInt16 = 49152
 
     /// 强制跑一次。返回完整记录，同时落盘 + 记一行摘要到登录日志。
     /// 调用方必须是 SSH 命令处理路径（见 `SSHServerService` 的 `cdprobe`）。
@@ -110,7 +146,7 @@ enum CDProbe {
         let bytes = pairingPath.withCString { path in
             LocalDevVPN.targetIP.withCString { ip in
                 connectLabel.withCString { label in
-                    esc_cd_probe_run(path, ip, UInt16(LOCKDOWN_PORT), label, &byteLen, &errorCStr)
+                    esc_cd_probe_run(path, ip, rppairingPort, label, &byteLen, &errorCStr)
                 }
             }
         }
@@ -144,8 +180,10 @@ enum CDProbe {
             "❌ rsd_handshake_new",
             "❌ adapter_connect",
             "❌ core_device_proxy",
-            "❌ idevice_tcp_provider_new",
-            "❌ idevice_pairing_file_read",
+            "❌ idevice_new_tcp_socket",
+            "❌ rsd_get_service_info",
+            "❌ tunnel_create_rppairing",
+            "❌ rp_pairing_file_read",
         ]
         var picked: [String] = []
         for line in text.components(separatedBy: "\n") {
