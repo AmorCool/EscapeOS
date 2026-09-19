@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.3.453] - 2026-09-19
+
+### ★ 闪退真修 + 四个探测全部恢复 + 撤回一条被写进代码的**错误结论**
+
+#### 1. 闪退的**真正**修法（v0.3.452 只找到了位置，没修根因）
+
+v0.3.452 定位正确 —— 崩在 `runGrappaProbe()` 里对**共享缓存镜像**做符号枚举时。
+但它采取的是「**把探测全停掉**」来回避，不是修。本版修根因。
+
+**根因**：把「文件偏移」折算成「运行时地址」用的式子
+```
+symTab = slide + (__LINKEDIT.vmaddr − __LINKEDIT.fileoff) + symoff
+```
+对**磁盘上的普通 dylib** 成立（`vmaddr − fileoff` = 首选加载地址，dylib 通常为 0）。
+但对 **dyld shared cache 里的镜像**不成立 —— 缓存构建器改写了 `__LINKEDIT.fileoff`，
+该式会**双重计数** ⇒ 算出**未映射地址** ⇒ 直接解引用 = 越界读 = 闪退。
+`AirTraffic.framework/AirTraffic` 正是共享缓存镜像。
+
+**关键认知**：**头部自洽性检查挡不住这个 bug** —— 缓存里的头部**本身是自洽的**
+（`symoff` 确实落在 `__LINKEDIT` 描述的范围内），错的是 `slide` 的语义。
+⇒ 只有「**真的去问内核这段内存可不可读**」才算修好。
+
+**修法**（`AirliftExploit.swift`）：
+| 措施 | 说明 |
+|---|---|
+| 新增 `isReadable(addr, len)` | 用 `mach_vm_region` 逐段确认**已映射且 `VM_PROT_READ`**；这是唯一真正的保证 |
+| `exportTrieNames` | 读 `trieStart` 前先证明 `[trieStart, trieStart+trieSize)` 可读 |
+| `findSymbolInImage` | `nsyms` 上限 1e6 + `symTab`/`strTab` 整段可读性校验 |
+| `exportedNames` | 同上（不可读则**整段跳过**，trie 那半边仍有效，不丢结论） |
+| `ncmds` 封顶 4096 | 畸形 `ncmds` 会让 load command 循环一直往后读 |
+| `boundedCString` 取代 `String(cString:)` | 后者**无上界**，字符串表畸形时会扫出界（另一条越界读） |
+
+★ **不可读时必须报「本次无法判定」，绝不退化成「没找到」** —— 后者是假阴性，会把结论带偏。
+
+#### 2. 四个探测全部恢复
+
+`runGrappaProbe()` / `runAfcEscapeProbe()` / `runStageProbe()` / `runProtocolProbe()`
+调用点**全部接回**（v0.3.452 是四个全注释掉）。仍挂在「首次被功能调用」的路径上
+（用户明确要求的设计：功能真的需要时自动拉起，而不是让用户手动勾选/取消勾选）。
+所有探测都在串行后台队列，不阻塞 UI，连接一律 `defer` 释放。
+
+#### 3. ★ 撤回 v0.3.451 写进代码/CHANGELOG 的错误结论
+
+v0.3.451 写的是：
+> 「iOS 上没有 CoreFP（实测，dlopen `no such file` + not in dyld cache）
+>  ⇒ Grappa 的生成在设备侧无解 ⇒ **「移植 macOS AirTrafficHost」这条路线到此为止**」
+
+**这条结论撤回。** 三处问题：
+
+1. **证据基础不完整**：探测的候选路径**全是 `/System/Library/...` 系统路径**，
+   **从未探测 App bundle 里的 `SAPAssets/CoreFP`**（29,014,912 B，**已经随包发到设备上了**）。
+   「系统路径上没有」与「bundle 里那份加载不了」强度差一个数量级。
+2. **结论与本项目已在生产运行的基础设施直接冲突**：
+   `SignedStoreAuthenticator` 明确写着「用**本地 Unicorn 解释执行 Apple 的 CommerceKit/CoreFP**」
+   给登录请求做 SAP 签名 —— **「在 iOS 上执行 macOS CoreFP」本项目早就做到了**。
+3. **`dlopen` 失败本身不构成证据**：即便系统路径上有 CoreFP，它是 macOS 平台的二进制，
+   平台号不匹配时 `dlopen` 也会失败；反过来，我们自己的那份是**文件**、可以走解释执行。
+
+**⇒ 修正后的口径**：「**dlopen 路线**到此为止（系统路径无 CoreFP；且 CoreFP 有 12 条依赖，
+其中 `StoreFoundation`/`DiskArbitration` 在 iOS 上不存在）。但**移植路线本身有既有基础设施**，
+障碍已从『文件不存在』变成『**架构是否匹配解释器**』。」
+
+#### 4. 顺带更正一处过时注释
+
+`AirliftExploit.swift` 里「Windows 版 Grappa 生成**无条件硬失败**（与输入无关）」——
+已被推翻：准确说法是「**真实实现，卡在某个早期 gate**」（42 状态平坦化 + MBA，是真代码），
+且 Windows **也有**那套 `LoadLibraryA` + `GetProcAddress` 机制。
+
+#### 5. 教训
+
+同一个错本项目**犯了两次**：
+- v0.3.419：**真连设备**的自检挂在 UI 触发路径上 ⇒ 配对相关功能全废
+- v0.3.450：**裸读内存**的探测挂在同一条路径上 ⇒ 闪退
+
+共同点：**把有副作用的自检挂在了 UI 触发路径上**。
+但两次的教训**不一样**：419 的教训是「别把重活挂 UI 路径」，
+450 的教训是「**任何由不可信头部算出的地址，解引用前必须先证明它可读**」——
+后者不能靠「挪位置」解决，只能靠校验。
+
 ## [0.3.452] - 2026-09-19
 
 ### ★ 闪退真正的位置找到了：不是 AFC，是 `runGrappaProbe()` 里的**越界读**。全部探测归零。

@@ -76,10 +76,10 @@
 	<array>
 		<string>iPhoneOS</string>
 	</array>
-<key>CFBundleShortVersionString</key>
-<string>0.3.452</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.3.453</string>
 	<key>CFBundleVersion</key>
-	<string>748</string>
+	<string>749</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
