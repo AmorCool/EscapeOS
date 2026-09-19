@@ -393,13 +393,20 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // dump CoreDevice 服务表并端到端跑一次 app_service_list_processes。
             //
             // 为什么需要：主页两个内置模块（locache / wifirefresh）与「进程管理」走
-            // `app_service_connect_rsd` 时必现 `ServiceNotFound`(21)。已核实
-            // `RsdHandshake::connect` 是纯 HashMap 查表、查不到直接报错、**无回退**
-            // ⇒ 必现。真机 19 次 dump 里 `com.apple.coredevice.*` **整块 0 条**。
-            // 待验证假设：Apple 官方通往 CoreDevice 的路是 CoreDeviceProxy 隧道里的
-            // 第二个 RSD 握手（上游 `tools/src/app_service.rs:69-85`），
-            // 而不是本仓 `withAppService` 用的那条 RPPairing 握手。
-            // 本命令把这条路一次跑通并如实报告每一步的错误原文。
+            // `app_service_connect_rsd` 时会出现 `ServiceNotFound`(21)。
+            //
+            // ⚠️ 关于 `ServiceNotFound` 的成因，本项目先后写过两版**都已作废**
+            //    （①「DDI 门控」；②「接错隧道」）。**事实（用户实测 + PC 侧交叉验证）**：
+            //    `ServiceNotFound`(21) 是**设备侧的服务状态问题**，不是本 App 的缺陷 ——
+            //    该服务偶尔不可用，**重启手机即恢复**；与 DDI、与「用哪条隧道」都无关
+            //    （PC 侧标准工具 `pymobiledevice3` 拿到的 RSD 服务表与我们**逐条一致**，
+            //    调同一个服务**同样失败**）。**原理未知。**
+            // 仍然成立的一条：`RsdHandshake::connect` 是纯 HashMap 查表、查不到直接
+            // 报错、**无回退** ⇒ 失败时重试 3 次毫无意义。
+            //
+            // 本命令因此只回答一个工程问题：CoreDeviceProxy 隧道内的「第二个 RSD 握手」
+            // 这条路在本仓**能不能**走通（上游 `tools/src/app_service.rs:69-85`），
+            // 并如实报告每一步的错误原文。
             //
             // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建隧道 + 真开一条
             //    app_service 连接（RSD 隧道并发铁律；v0.3.419/420 事故见 `MY-FAULTS.md` 缺陷 17）。
