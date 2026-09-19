@@ -98,6 +98,71 @@ v0.3.453 把四个探测**全部接回**自动路径，其中三条会 `withTunn
 自检：括号平衡 +0；无 `mach_vm_region` / `mach_task_self_` / `VM_PROT_READ` 等残留引用
 （仅保留在「为什么不用它」的说明注释里）；`isReadable` 字样已全部清掉。
 
+#### 6. ★ 恢复 `runProtocolProbe`：它**不是「已死」，是「还没测」**
+
+「补 3」把 Grappa 内容实验整个删掉了，理由写的是「AT/Grappa 这条线已死」。**这个理由不成立**，
+而且它把**两个不同的问题**混成了一个：
+
+| 问题 | 需要什么 |
+|---|---|
+| **设备侧能不能「生成」Grappa** | 需要 FairPlay/CoreFP —— 确实难 |
+| **设备是否「校验」Grappa 内容** | **只需要发一组假值试一次** —— 不需要任何 FairPlay |
+
+四组对照里只要 **(a) 84 字节全 0** 或 **(b) `01 01`+82 个 0** 有一组通过，
+就说明**设备根本不校验内容** ⇒ **整条 CoreFP 路线全部作废**，攻击链直接往前走。
+这是目前**最便宜、且唯一能改变路线**的实验，必须留着。
+
+⇒ 手动入口恢复为跑**两条**（`runStageProbe` + `runProtocolProbe`），
+改名 `runManualProbes()`，按钮文案「运行设备端探测（stage + 协议）」。
+`runAfcEscapeProbe` 仍不进这个入口（**已实测证伪**：绝对路径被解析到根内、`..` 被服务端拒 `InvalidArg`）。
+
+代码注释里同时写清 v0.3.451 那条「iOS 上没有 CoreFP ⇒ 路线到此为止」**已撤回**的三条理由
+（探测路径全是系统路径、从未探 bundle 里的 `SAPAssets/CoreFP`；与生产中的 Unicorn 链路直接冲突；
+`dlopen` 失败不构成证据），防止后人再照着那条错误结论删东西。
+
+#### 7. ★ 补丁 C：修掉**第二个**加载期拦路虎（`Versions/A` 路径形态）
+
+**这是 GP-20 发现的，与「闪退」「隧道抢占」都独立的第三个问题。**
+
+补丁后的 `AirTrafficHost` 里，依赖路径记录的是 **macOS 形态**：
+
+```
+/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+```
+
+而 iOS 上**没有 `Versions/` 目录**，系统框架的 install name 是**扁平形态**：
+
+```
+/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation
+```
+
+dyld 解析依赖时 install name 是**按字符串精确匹配**共享缓存里的镜像名
+⇒ 在 iOS 上会直接 `Library not loaded: .../Versions/A/CoreFoundation` 失败。
+
+**只改 `LC_BUILD_VERSION`（补丁 A）不够 —— 这是两个独立的拦路虎。**
+
+修法（补丁 C，`tools/patch_airtraffichost.py`）：把所有 `.../Versions/<X>/...` 路径
+**逐个剥掉** `/Versions/<X>` 段。扁平形态**一定更短** ⇒ 原地覆写 + `\0` 填充，`cmdsize` 不变。
+覆盖全部带路径名的 load command：`LC_LOAD_DYLIB` / `LC_LOAD_WEAK_DYLIB` / `LC_REEXPORT_DYLIB` /
+`LC_LAZY_LOAD_DYLIB` / `LC_LOAD_UPWARD_DYLIB` / **`LC_ID_DYLIB`**。
+
+**本地实测（在真 FAT 二进制上跑，不是纸上推理）**：
+```
+LC_ID_DYLIB   @0x0550 cmdsize=112（未变）
+    旧: .../AirTrafficHost.framework/Versions/A/AirTrafficHost
+    新: .../AirTrafficHost.framework/AirTrafficHost
+LC_LOAD_DYLIB @0x0710 cmdsize=104（未变）
+    旧: /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+    新: /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation
+共改 2 条
+```
+独立复核补丁后产物：`LC_BUILD_VERSION platform=2(iOS) minos=18.0.0`、
+`@executable_path/Frameworks/libMobileDeviceStub.dylib`、
+`CoreFoundation.framework/CoreFoundation`（扁平）、**全文件无 `/Versions/` 残留**、
+文件大小不变（332176 → 332176）、`LC_DYLD_CHAINED_FIXUPS` 的 import 表也同步显示扁平名。
+
+同一函数 `flatten_versions()` 之后 CoreFP 也要用（那边有 5+ 条同类路径）。
+
 ### ★ 同版附带：修「电池健康读不出数据」回归（用户报告）
 
 **现象**：用户报告「电池健康板块出问题，没法读取电池数据了」。

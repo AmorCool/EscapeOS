@@ -236,6 +236,73 @@ for p, cmd, sz in dylibs:
         break
 assert patched_b, "没找到 MobileDevice 的 LC_LOAD_DYLIB"
 
+# ---------------------------------------------------------------- 补丁 C
+log()
+log("== 补丁 C: macOS 的 `.../Versions/<X>/...` 依赖路径 -> iOS 扁平形态 ==")
+#
+# 为什么必须改（v0.3.455 加，GP-20 发现）：
+#   dyld 解析依赖时，install name 是**按字符串精确匹配**共享缓存里的镜像名。
+#   iOS 上**没有 `Versions/` 目录**，系统框架的 install name 是扁平形态：
+#       /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation
+#   而 macOS 侧记录的是：
+#       /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+#   ⇒ 在 iOS 上会直接 `Library not loaded: .../Versions/A/CoreFoundation` 失败。
+#   ★ 这一条与「platform/minos 不匹配」是**两个独立**的加载期拦路虎，
+#     只改 LC_BUILD_VERSION 不够。
+#   扁平形态**一定更短**（少掉 `/Versions/<X>`）⇒ 原地覆写 + \0 填充，`cmdsize` 不变。
+
+def flatten_versions(path: bytes) -> bytes:
+    """`/a/Versions/A/b` -> `/a/b`（逐个剥掉每一段 `/Versions/<X>`）。"""
+    marker = b"/Versions/"
+    index = path.find(marker)
+    while index != -1:
+        slash = path.find(b"/", index + len(marker))
+        if slash == -1:
+            break
+        path = path[:index] + path[slash:]
+        index = path.find(marker)
+    return path
+
+# 所有「带 lc_str 名字、且名字是路径」的 load command：name.offset 都在 +8。
+PATH_CMDS = (
+    LC_LOAD_DYLIB,   # 0x0C
+    0x18,            # LC_LOAD_WEAK_DYLIB
+    0x1F,            # LC_REEXPORT_DYLIB
+    0x20,            # LC_LAZY_LOAD_DYLIB
+    0x23,            # LC_LOAD_UPWARD_DYLIB
+    LC_ID_DYLIB,     # 0x0D
+)
+patched_c = []
+for p, cmd, sz in lcs:
+    if cmd not in PATH_CMDS:
+        continue
+    noff, = struct.unpack_from("<I", thin, p + 8)
+    end = thin.index(b"\0", p + noff)
+    raw = bytes(thin[p + noff:end])
+    if b"/Versions/" not in raw:
+        continue
+    flat = flatten_versions(raw)
+    oldlen = end - (p + noff)
+    assert len(flat) + 1 <= oldlen, "扁平形态竟然更长？不成立的前提，停下"
+    region = p + noff
+    thin[region:region + oldlen] = flat + b"\0" * (oldlen - len(flat))
+    # 校验：cmdsize 边界没被破坏、新串可读、下一个 LC 的 cmd 仍合法
+    noff2, = struct.unpack_from("<I", thin, p + 8)
+    end2 = thin.index(b"\0", p + noff2)
+    assert thin[p + noff2:end2] == flat, "补丁 C 覆写校验失败"
+    assert p + noff2 + len(flat) < p + sz, "补丁 C 写穿了 cmdsize 边界"
+    nxt = p + sz
+    if nxt < 32 + sum(s for _, _, s in lcs):
+        ncmd, = struct.unpack_from("<I", thin, nxt)
+        assert ncmd in LC_NAMES or (ncmd & ~LC_REQ_DYLD) in LC_NAMES, \
+            "补丁 C 之后下一个 LC 的 cmd 被破坏: 0x%x" % ncmd
+    log("  %-22s @0x%04x cmdsize=%d（未变）" % (lcname(cmd), p, sz))
+    log("      旧: %s" % raw.decode())
+    log("      新: %s" % flat.decode())
+    patched_c.append((cmd, raw.decode(), flat.decode()))
+log("  共改 %d 条" % len(patched_c))
+assert patched_c, "一条 `Versions/` 路径都没改到 —— 前提不成立，请复核（不该静默通过）"
+
 # ---------------------------------------------------------------- 枚举 undefined symbols
 log()
 log("== SYMTAB undefined symbols ==")
