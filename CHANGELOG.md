@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.3.451] - 2026-09-19
+
+### ★ 紧急修回归：停用三条「真连设备」的探测（空间回收扫描闪退 + 配对功能全废）
+
+**用户反馈**：「空间回收板块点击扫描又闪退了」+「涉及配对功能的都没法用」。
+
+**根因（真机日志实锤）**：探测顺序是 `Grappa → AFC → stage → AT`，日志显示
+```
+09:41:19.648  [airlift] iOS AirTrafficHost 候选路径：AirTrafficDevice.framework/... — 不存在
+09:41:26.928  ← 直接跳到别的日志，中间没有任何 AFC 输出
+```
+⇒ **`runGrappaProbe()`（纯离线）跑完了，之后没有任何 AFC 日志就断了 ⇒ 闪退在 `runAfcEscapeProbe()` 里。**
+
+**为什么影响面这么大**：`triggerProtocolProbeOnce()` 挂在**首次被功能调用**的路径上——
+「空间回收 → 扫描」「文件共享」**进界面**就会经 `ExploitRegistry` 调到 airlift ⇒ 触发这一串探测。
+而三条设备探测**都会真建 RSD 隧道、真连设备服务** ⇒ 崩在那里会把配对相关状态带坏，
+于是表现为「**所有依赖配对的功能都没法用**」。
+**——这正是 v0.3.419 那次事故的同一类问题**（自检挂在 UI 触发路径上 + 真连设备），
+我本该在加探测时就防住，是我的疏漏。
+
+**本版处置：App 稳定性优先。**
+- **只保留 `runGrappaProbe()`** —— 它**完全离线**（只 dlopen 一个本地文件，不建隧道、不碰设备），
+  毫秒级、已实测不崩，而且它的答案**已经拿到了**（见下）。
+- **`runAfcEscapeProbe()` / `runStageProbe()` / `runProtocolProbe()` 全部停用**（源码保留，调用点注释掉）。
+  等各自单独排掉闪退、并且**改成手动触发**（不再挂在功能调用路径上）之后再逐条放开。
+
+### ★★ 顺带定案：iOS 上**没有 CoreFP**（实测，不再是推断）
+
+同一次日志里，`runGrappaProbe()` 给出了决定性结果：
+```
+CoreFP dlopen 失败（/System/Library/PrivateFrameworks/CoreFP.framework/CoreFP）:
+  dlopen(...): tried: '.../CoreFP.framework/CoreFP' (no such file),
+  '/private/preboot/Cryptexes/OS/.../CoreFP.framework/CoreFP' (no such file),
+  '.../CoreFP.framework/CoreFP' (no such file, not in dyld cache)
+```
+⇒ **磁盘上没有，dyld 共享缓存里也没有** ⇒ **iOS 上确实没有 CoreFP** ✓
+⇒ **Grappa 的生成在设备侧无解**（Grappa 依赖 FairPlay/CoreFP，而 Apple 只在 macOS/Windows 提供它）
+⇒ **「移植 macOS AirTrafficHost」这条路线到此为止。**
+
+**另一条实测**：`AirTrafficHost` 也不存在，但 **`/System/Library/PrivateFrameworks/AirTraffic.framework/AirTraffic`
+`dlopen` 成功了**（`handle=0x36a75f300`）—— 那是**设备侧**的 AirTraffic，不是主机侧的 Host 实现，
+不含 Grappa 生成逻辑。（已记录，后续如需可查它的导出符号。）
+
+**⇒ 结论：AT/Grappa 这条线在纯手机端走不通。** 剩下的希望是 **stage**（不依赖 Grappa），
+但它也需要先排掉闪退 + 改成手动触发再放开。
+
 ## [0.3.450] - 2026-09-19
 
 ### ★ 四组「Grappa 内容」实验 —— 直接判定设备**校不校 Grappa 内容**
