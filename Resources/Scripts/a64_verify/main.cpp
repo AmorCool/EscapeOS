@@ -351,12 +351,25 @@ int main(int argc, char** argv) {
                     c1.err, (unsigned long long)c1.outPtr, c1.outLen, c1.sid);
 
         std::printf("[a64] 调用 #2：同样入参再跑一次 …\n");
-        const CallResult c2 = RunGrappaOnce(uc, *shims, fn, in12, inAddr, sidAddr, outAddr, lenAddr);
-        std::printf("[a64]   err=%d outPtr=%#llx outLen=%u sessionId=%u\n",
-                    c2.err, (unsigned long long)c2.outPtr, c2.outLen, c2.sid);
-
-        // 注意：Invoke() 内部已按 SapMachine 的顺序检查过 HasFault()，
-        // 有 fault 的话这里根本走不到 —— 它是以异常形式报出来的。
+        // ★ #2 只是**诊断**，不是判据 —— 所以它连异常都不许往外抛。
+        //
+        // 为什么必须就地收口（这是一处真缺陷，不是防御性编程）：
+        //   Invoke() 在 **fault / 跑飞 / 超时** 三种情况下都是**抛异常**（见 Invoke 末尾）。
+        //   若让它穿到 main 的 catch，退出码会变成 1 ⇒ 一次「#1 明明成功了」的运行
+        //   会被报成「A-64 验证未通过」；更糟的是 c1 的 hexdump 在下面 ——
+        //   日志里连那 84 字节都不会出现，等于把主判据的证据一起吞掉。
+        //
+        // 异常时 c2 保持默认构造（err=0 / outLen=0 / outPtr=0）⇒ 下面的 twoOk 自然为 false，
+        // 走的正是「#2 未跑成 ⇒ 随机性未验」那条路。
+        CallResult c2;
+        try {
+            c2 = RunGrappaOnce(uc, *shims, fn, in12, inAddr, sidAddr, outAddr, lenAddr);
+            std::printf("[a64]   err=%d outPtr=%#llx outLen=%u sessionId=%u\n",
+                        c2.err, (unsigned long long)c2.outPtr, c2.outLen, c2.sid);
+        } catch (const std::exception& e) {
+            std::printf("[a64]   ⚠️ 调用 #2 抛异常：%s ⇒ 随机性未验，**不影响 #1 的结论**\n",
+                        e.what());
+        }
 
         // #1 是**主判据**：A-64 的核心问题（能不能生成 Grappa）由它回答。
         if (c1.err != 0) {
@@ -431,6 +444,18 @@ int main(int argc, char** argv) {
         if (!twoOk) {
             std::printf("\n[a64] 结果：★ 通过（仅 #1）—— err=0, outLen=84, 结构符合已知布局；"
                         "#2 未跑成 ⇒ 随机性**未验**\n");
+            return 0;
+        }
+        // ★ 分段差异全为 0 时，**不能**靠「diff != 0」就说随机性过了：
+        //   两次的结构核对都通过 ⇒ [0..1] 都是 01 01，所以差异只可能落在 [18..19]。
+        //   即 16 字节段与 64 字节段**逐字节相同**，唯一变化的是 flag 低 2 位 ——
+        //   这正是「常量填充 + 自增计数器」的指纹，而不是随机源。
+        //   这里**仍然返回 0**（不凭空新造一个失败类别，避免假失败），
+        //   但措辞必须把它与真随机分开，否则日志会被读成「随机性已验证」。
+        if (diffVar16 == 0 && diffVar64 == 0) {
+            std::printf("\n[a64] 结果：⚠️ 可疑通过 —— 两次只在 [18..19] 的 flag 位上不同，"
+                        "16 字节段与 64 字节段**逐字节相同** ⇒ 更像「常量填充 + 计数器」，"
+                        "不是随机源。随机性**未验**，不要当作已验证。\n");
             return 0;
         }
         std::printf("\n[a64] 结果：★ 通过 —— err=0, outLen=84, 结构符合已知布局, 两次输出不同（%zu/84 字节）\n", diff);
