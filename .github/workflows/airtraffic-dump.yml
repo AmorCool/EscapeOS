@@ -1,0 +1,253 @@
+name: airtraffic-dump
+
+# TEMPORARY workflow: fetch + analyze macOS AirTrafficHost.framework, then probe
+# AirFairSyncGrappaCreate on the runner. Manual trigger only. Deleted after use.
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 1) Env info + locate framework
+        run: |
+          mkdir -p out
+          exec > >(tee out/01-locate.txt) 2>&1
+          set -x
+          uname -a
+          sw_vers
+          echo "=== ls /Library/Apple/System/Library/PrivateFrameworks (filtered) ==="
+          ls -la /Library/Apple/System/Library/PrivateFrameworks/ 2>&1 | grep -i -E 'air|traffic' || true
+          echo "=== candidate A: /Library/Apple/.../AirTrafficHost.framework ==="
+          ls -laR /Library/Apple/System/Library/PrivateFrameworks/AirTrafficHost.framework/ 2>&1 | head -60 || true
+          echo "=== candidate B: /System/Library/.../AirTrafficHost.framework ==="
+          ls -laR /System/Library/PrivateFrameworks/AirTrafficHost.framework/ 2>&1 | head -60 || true
+          echo "=== candidate C: any AirTrafficHost anywhere in the usual roots ==="
+          find /Library/Apple /System/Library/PrivateFrameworks /System/Library/Frameworks -maxdepth 3 -iname '*AirTraffic*' 2>/dev/null || true
+          echo "=== dyld shared cache check ==="
+          ls -la /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/ 2>/dev/null | head -20 || true
+          echo "=== file(1) on the binary ==="
+          file /Library/Apple/System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost 2>&1 || true
+          file /System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost 2>&1 || true
+
+      - name: 2) Pack framework + collect binary metadata
+        run: |
+          exec > >(tee out/02-pack.txt) 2>&1
+          set -x
+          BIN=""
+          for p in \
+            /Library/Apple/System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost \
+            /System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost \
+            /Library/Apple/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost \
+            /System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost ; do
+            if [ -f "$p" ]; then echo "FOUND: $p"; BIN="$p"; fi
+          done
+          echo "BIN=$BIN" | tee out/binpath.txt
+          if [ -z "$BIN" ]; then echo "!!! framework not found, aborting pack"; exit 0; fi
+          FW=$(dirname "$(dirname "$(dirname "$BIN")")")
+          echo "FW=$FW"
+          ls -la "$FW"
+          tar czf out/airtraffichost-framework.tgz -C "$(dirname "$FW")" "$(basename "$FW")" 2>&1 || true
+          ls -la out/
+          echo "=== otool -L ==="
+          otool -L "$BIN" || true
+          echo "=== otool -hv (macho header) ==="
+          otool -hv "$BIN" || true
+          echo "=== codesign ==="
+          codesign -dvvv "$BIN" 2>&1 || true
+          echo "=== shasum ==="
+          shasum -a 256 "$BIN" || true
+
+      - name: 3) nm exported symbols (AirFairSync / Grappa / Sync)
+        run: |
+          exec > >(tee out/03-nm.txt) 2>&1
+          set -x
+          BIN=$(cat out/binpath.txt | sed 's/^BIN=//')
+          if [ -z "$BIN" ]; then echo "no bin"; exit 0; fi
+          echo "===== nm -gU (all exported, count) ====="
+          nm -gU "$BIN" > out/nm-all.txt 2>&1 || nm -g "$BIN" > out/nm-all.txt 2>&1 || true
+          wc -l out/nm-all.txt
+          echo "===== grep AirFairSync ====="
+          grep -i 'AirFairSync' out/nm-all.txt || echo "(none)"
+          echo "===== grep -i grappa ====="
+          grep -i 'grappa' out/nm-all.txt || echo "(none)"
+          echo "===== grep -i sync ====="
+          grep -i 'sync' out/nm-all.txt || true
+          echo "===== grep -i -E 'AirTraffic|ATHost|HostConnection' ====="
+          grep -i -E 'AirTraffic|ATHost|HostConnection' out/nm-all.txt || true
+          echo "===== nm -gU full (first 400 lines) ====="
+          head -400 out/nm-all.txt
+
+      - name: 4) strings with Grappa
+        run: |
+          exec > >(tee out/04-strings.txt) 2>&1
+          set -x
+          BIN=$(cat out/binpath.txt | sed 's/^BIN=//')
+          if [ -z "$BIN" ]; then echo "no bin"; exit 0; fi
+          strings -a "$BIN" > out/strings-all.txt 2>&1 || true
+          wc -l out/strings-all.txt
+          echo "===== grep -i grappa ====="
+          grep -i 'grappa' out/strings-all.txt || echo "(none)"
+          echo "===== grep -i -E 'AirFair|fairplay|Sig' ====="
+          grep -i -E 'AirFair|fairplay|grappa|sig' out/strings-all.txt | head -80 || true
+          echo "===== grep -i -E 'could not be established|ErrorCode' ====="
+          grep -i -E 'could not be established|ErrorCode|key could' out/strings-all.txt | head -40 || true
+
+      - name: 5) Disassemble AirFairSyncGrappaCreate (if exported)
+        run: |
+          exec > >(tee out/05-otool.txt) 2>&1
+          set -x
+          BIN=$(cat out/binpath.txt | sed 's/^BIN=//')
+          if [ -z "$BIN" ]; then echo "no bin"; exit 0; fi
+          for s in AirFairSyncGrappaCreate AirFairSyncGrappaUpdate AirFairSyncCalcSig; do
+            echo "================ otool -tvV -p $s ================"
+            otool -tvV -p "$s" "$BIN" 2>&1 | head -200 || true
+          done
+          echo "================ nm addresses for AirFairSync* ================"
+          nm -gU "$BIN" 2>/dev/null | grep -i airfairsync || true
+          echo "================ objdump-ish fallback: otool -tV head ================"
+          otool -tV "$BIN" 2>&1 | head -60 || true
+
+      - name: 6) Build + run Grappa probe
+        run: |
+          exec > >(tee out/06-probe.txt) 2>&1
+          set -x
+          cat > probe.c <<'PROBE_EOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <dlfcn.h>
+          #include <signal.h>
+          #include <unistd.h>
+          #include <CoreFoundation/CoreFoundation.h>
+
+          static const char *PATHS[] = {
+            "/Library/Apple/System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost",
+            "/System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost",
+            "/Library/Apple/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost",
+            "/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost",
+            NULL
+          };
+
+          static void dump(const char *tag, const void *p, size_t n) {
+            if (!p) { printf("  %s = NULL\n", tag); return; }
+            if (n == 0 || n > 4096) { printf("  %s = %p (len=%zu, skipped)\n", tag, p, n); return; }
+            printf("  %s len=%zu hex=", tag, n);
+            const unsigned char *b = (const unsigned char *)p;
+            for (size_t i = 0; i < n; i++) printf("%02x", b[i]);
+            printf("\n");
+          }
+
+          static void sig(int s) {
+            printf("!!! CRASH signal %d (%s)\n", s, strsignal(s));
+            fflush(stdout);
+            _exit(139);
+          }
+
+          int main(int argc, char **argv) {
+            int mode = (argc > 1) ? atoi(argv[1]) : 0;
+            setvbuf(stdout, NULL, _IONBF, 0);
+            signal(SIGSEGV, sig); signal(SIGBUS, sig); signal(SIGABRT, sig);
+            signal(SIGILL, sig);  signal(SIGFPE, sig);  signal(SIGTRAP, sig);
+
+            printf("=== probe mode=%d ===\n", mode);
+            void *h = NULL;
+            for (int i = 0; PATHS[i]; i++) {
+              h = dlopen(PATHS[i], RTLD_NOW | RTLD_GLOBAL);
+              printf("dlopen(%s) -> %p %s\n", PATHS[i], h, h ? "OK" : (dlerror() ? dlerror() : "?"));
+              if (h) break;
+            }
+            if (!h) { printf("RESULT: dlopen failed\n"); return 2; }
+
+            const char *names[] = {"AirFairSyncGrappaCreate", "_AirFairSyncGrappaCreate", NULL};
+            void *fn = NULL;
+            for (int i = 0; names[i]; i++) {
+              fn = dlsym(h, names[i]);
+              printf("dlsym(%s) -> %p\n", names[i], fn);
+              if (fn) break;
+            }
+            if (!fn) { printf("RESULT: symbol not found\n"); return 3; }
+
+            /* 12-byte input struct from Windows-side reverse engineering:
+               {u8 version; u8[3] pad; i32 deviceType; u8 proto; u8 pad; u16 0}
+               observed device value = 01 00 00 00 | 00 00 00 00 | 01 00 00 00 */
+            unsigned char in12[12] = {0x01,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, 0x01,0x00,0x00,0x00};
+            int sessionId = 0;
+            void *outPtr = NULL;
+            size_t outLen = 0;
+
+            if (mode == 0) {
+              typedef long (*fn_t)(void *, int *, void **, size_t *);
+              fn_t f = (fn_t)fn;
+              long r = f(in12, &sessionId, &outPtr, &outLen);
+              printf("mode0 ret=0x%lx (%ld)  sessionId=%d outPtr=%p outLen=%zu\n",
+                     (unsigned long)r, r, sessionId, outPtr, outLen);
+              dump("outPtr", outPtr, outLen);
+              if (r > 0x1000 && r < 0x800000000000ULL) {
+                CFTypeRef o = (CFTypeRef)r;
+                printf("  ret-as-CF: typeid=%lu (CFData=%lu)\n",
+                       (unsigned long)CFGetTypeID(o), (unsigned long)CFDataGetTypeID());
+                if (CFGetTypeID(o) == CFDataGetTypeID()) {
+                  CFIndex n = CFDataGetLength((CFDataRef)o);
+                  printf("  ret-as-CFData len=%ld\n", (long)n);
+                  dump("cfdata", CFDataGetBytePtr((CFDataRef)o), (size_t)(n > 0 ? n : 0));
+                }
+              }
+            } else if (mode == 1) {
+              typedef long (*fn_t)(void *, int *, void *);
+              fn_t f = (fn_t)fn;
+              long r = f(in12, &sessionId, &outPtr);
+              printf("mode1 ret=0x%lx sessionId=%d outPtr=%p\n", (unsigned long)r, sessionId, outPtr);
+              dump("outPtr", outPtr, outLen);
+            } else if (mode == 2) {
+              typedef long (*fn_t)(void *);
+              fn_t f = (fn_t)fn;
+              long r = f(in12);
+              printf("mode2 ret=0x%lx\n", (unsigned long)r);
+            } else if (mode == 3) {
+              /* CFDictionary params, no 12-byte struct */
+              CFMutableDictionaryRef d = CFDictionaryCreateMutable(NULL, 0,
+                  &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+              typedef long (*fn_t)(void *, int *, void **, size_t *);
+              fn_t f = (fn_t)fn;
+              long r = f((void *)d, &sessionId, &outPtr, &outLen);
+              printf("mode3 ret=0x%lx sessionId=%d outPtr=%p outLen=%zu\n",
+                     (unsigned long)r, sessionId, outPtr, outLen);
+              dump("outPtr", outPtr, outLen);
+            }
+            printf("RESULT: mode %d completed without crash\n", mode);
+            return 0;
+          }
+          PROBE_EOF
+          echo "=== probe.c head ==="
+          head -20 probe.c
+          clang -o probe probe.c -framework CoreFoundation -ldl -Wno-everything 2>&1 | tail -20 || true
+          ls -la probe 2>/dev/null || true
+
+      - name: 7) Run probe 3x (mode 0) + alternate modes
+        run: |
+          exec > >(tee out/07-probe-run.txt) 2>&1
+          set -x
+          if [ ! -x ./probe ]; then echo "probe not built"; exit 0; fi
+          for i in 1 2 3 4 5; do
+            echo "########## mode 0 run #$i ##########"
+            ./probe 0 || echo "exit=$?"
+            echo
+          done
+          for m in 1 2 3; do
+            echo "########## mode $m ##########"
+            ./probe $m || echo "exit=$?"
+            echo
+          done
+
+      - name: 8) Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: airtraffichost-framework
+          path: out/
+          if-no-files-found: warn
+          retention-days: 7
