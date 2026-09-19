@@ -962,6 +962,31 @@ struct IdeviceFfiError *stream_send_bytes(struct ReadWriteOpaque *stream_handle,
                                           bool little_endian);
 
 /**
+ * Sends raw bytes over a ReadWriteOpaque stream with **no length prefix at
+ * all** (pure socket send).
+ *
+ * Needed for the airlift "stage" step: `com.apple.streaming_zip_conduit`
+ * expects a framed plist message first, then the *raw* zip bytes. The upstream
+ * PoC sends the archive with `AMDServiceConnectionSend` (no framing), so using
+ * `stream_send_bytes` here would prepend 4 length bytes and corrupt the zip
+ * (its first bytes must be the `PK\x03\x04` local file header signature).
+ *
+ * # Arguments
+ * * [`stream_handle`] - The stream handle
+ * * [`bytes`] - Pointer to the raw payload
+ * * [`len`] - Number of bytes in the payload
+ *
+ * # Returns
+ * Null on success, an IdeviceFfiError otherwise
+ *
+ * # Safety
+ * `stream_handle` must be a valid handle allocated by this library.
+ * `bytes` must point to at least `len` readable bytes.
+ */
+struct IdeviceFfiError *stream_send_raw(struct ReadWriteOpaque *stream_handle,
+                                        const uint8_t *bytes, uintptr_t len);
+
+/**
  * Reads one raw frame from a ReadWriteOpaque stream (4-byte length prefix +
  * raw body), auto-detecting the prefix byte order. The body is NOT required
  * to be UTF-8.

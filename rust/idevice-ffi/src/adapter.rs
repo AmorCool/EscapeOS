@@ -470,6 +470,52 @@ pub unsafe extern "C" fn stream_send_bytes(
     }
 }
 
+/// 通过 `ReadWriteOpaque` 流发送**裸字节**（**无任何长度前缀**）。
+///
+/// # 为什么需要这个（2026-09-19）
+/// airlift 的 stage 步骤（`com.apple.streaming_zip_conduit`）线格式是
+/// 「先发一条 plist 消息（4 字节长度前缀 + plist），**再把 zip 的原始字节整段发过去**」。
+/// 上游 PoC 发 zip 用的是 `AMDServiceConnectionSend` —— **纯 socket send，没有帧头**
+/// （`Sources/device_helper.m` 的 `SendAll()`）。所以这里必须有一个「不加长度前缀」的
+/// 发送函数：若用 [`stream_send_bytes`]，设备会把那 4 字节长度前缀当成 zip 的开头，
+/// 解压必然失败（zip 的第一个 local file header 签名必须正好是 `PK\x03\x04`）。
+///
+/// 其余行为（错误处理 / `flush` / `run_sync`）与 [`stream_send_bytes`] 完全一致。
+///
+/// # Safety
+/// `stream_handle` 必须是由本库分配的有效句柄；
+/// `bytes` 必须指向至少 `len` 个可读字节。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stream_send_raw(
+    stream_handle: *mut ReadWriteOpaque,
+    bytes: *const u8,
+    len: usize,
+) -> *mut IdeviceFfiError {
+    if stream_handle.is_null() || bytes.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+    let inner = unsafe { &mut (*stream_handle).inner };
+    let Some(stream) = inner.as_mut() else {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    };
+    // 拷成 owned Vec：run_sync 的 future 要求 'static，不能借用调用方的缓冲区。
+    let data = unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec();
+
+    let res = run_sync(async move {
+        stream.write_all(&data).await?;
+        stream.flush().await?;
+        Ok::<(), IdeviceError>(())
+    });
+
+    match res {
+        Ok(_) => null_mut(),
+        Err(e) => {
+            tracing::error!("stream_send_raw failed: {e}");
+            ffi_err!(e)
+        }
+    }
+}
+
 /// 通过 `ReadWriteOpaque` 流读取**一帧原始字节**（4 字节长度前缀 + 正文），
 /// **不要求正文是 UTF-8**。
 ///

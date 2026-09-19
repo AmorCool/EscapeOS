@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.3.445] - 2026-09-19
+
+### 新增 airlift 第 ① 步「stage」：经 `streaming_zip_conduit` 上传含 symlink 的 zip
+
+**为什么这一步现在就能做**：整条攻击链里**只有第 ② 步（发 `FileComplete`）需要 AirTraffic/AT 协议**，
+而 AT 目前卡在 VM 混淆的 `Grappa` 认证上。第 ① 步走的是**另一个服务**
+`com.apple.streaming_zip_conduit` —— 它**在我们的 RSD 服务表里**（真机实测 port 65096），
+**完全不依赖 Grappa**。而且它是整条链的必经环节，**做了不亏**。
+
+**新增 `AirliftExploit.runStageProbe()`**，三段式：
+
+1. **先只发一条 plist** `{MediaSubdir: <source>}`，**4 种候选帧格式链式回退**：
+   大端长度+XML → 大端长度+二进制 → 小端长度+二进制 → **无长度前缀+二进制**。
+   每种都记：发送 ok/err（code+message）、`stream_recv_frame_raw` 的**前 32 字节 raw hex**、
+   plist 全文、或 15s 超时原文。
+2. **再发 plist + zip**（每条候选一个**新连接**）。
+3. **用 AFC 回读验证**（`afc_client_connect_rsd`，根 = `/var/mobile/Media`）：
+   `<source>/` 在不在、`<source>/p0/p1/p2/link` 的 **`st_ifmt` 是不是 `S_IFLNK`**（并打 `st_link_target`）、
+   `<source>/payload` 在不在。
+
+**★ 成功判据是 AFC，不是响应** —— PoC 自己也不看响应。
+
+**新增 zip 构造器 `makeStageTestZip()`**（照抄 PoC 的 `build_archive()`）：
+`META-INF/`、`META-INF/com.apple.ZipMetadata.plist`（二进制 plist `{Version: 2}`）、
+`p0/ p0/p1/ p0/p1/p2/`、**`p0/p1/p2/link`（symlink，内容 `../../../airlift-stage-target`）**、
+`airlift-stage-target/`（让 symlink 有落点）、`payload`。
+★ 每个条目都带 **`0x5A53` 这个 zip extra field** + `external_attr` 里的 Unix mode ——
+**只设 `external_attr` 解压器认不出 symlink**（PoC 源码里挖出来的）。
+
+**★ 为什么必须新增一个 Rust FFI（超出「只改 Swift」的范围，但没得选）**
+PoC 的 `SendAll` 用的是 `AMDServiceConnectionSend`（**纯 socket send、无帧头**）来发 zip。
+我们现有的 `stream_send_bytes` 会多写 4 字节长度前缀 —— 设备会把那 4 字节当成 zip 开头，**必然失败**。
+故新增：
+```c
+struct IdeviceFfiError *stream_send_raw(struct ReadWriteOpaque *, const uint8_t *bytes, uintptr_t len);
+```
+（逐行照抄 `stream_send_bytes` 只去掉前缀；内部拷成 owned `Vec` 以满足 `run_sync` 的 `'static` 要求。）
+两份 `idevice.h` 同步更新，`diff` 确认仍逐字相同。
+
+**为什么没动 `ZipWriter.swift`**：它的 local/central header **写死 `extra field length = 0`、
+`external_attrs = 0`、`version made by = 20`**，而 stage 的 zip 必须带 `0x5A53` extra + Unix mode。
+它是备份/压缩共用类，改动风险大 ⇒ 改为在 `AirliftExploit` 内自写最小 **STORED** 写入器
+（自实现 CRC-32，不引 zlib）。
+
+挂载顺序：`triggerProtocolProbeOnce` 里改为 **AFC 探测 → stage 探测 → AT 探测**
+（stage 比 AT 重要，因为它不依赖 Grappa）。同一串行队列，不并发。
+
+**已知取舍与风险**（如实记录）：
+- **最坏耗时 ≈ 5~7 条连接 × 15s 超时 ≈ 75~105s**，会较久占用 RSD 隧道（串行，不并发）。
+- 第 1 步「只发 plist」时设备大概率只是在等 zip（15s 超时）——**超时不能证明帧格式对**，
+  真正定案靠第 2 步的 AFC 回读。这是刻意取舍（不想为探格式白等 4×15s）。
+- 若真机上 `st_ifmt` 回 `S_IFREG`，说明解压器没按 `0x5A53` 建 symlink，
+  下一步该查 extra field 编码而不是帧格式。
+- Rust 侧无法本地编译（本机无 cargo/iOS target）—— `stream_send_raw` 是逐行拷贝去掉前缀，
+  风险极低，但仍是本版唯一的编译风险点。
+
 ## [0.3.444] - 2026-09-19
 
 ### AT 主机消息结构修正（4 处，键名从 DLL 二进制直接读出）+ `Sig` 证伪
