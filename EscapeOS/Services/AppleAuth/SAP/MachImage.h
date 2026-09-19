@@ -38,6 +38,23 @@ public:
     // Throws std::runtime_error if the symbol is not found.
     uint64_t Export(std::string_view symbol, uint64_t loadBase) const;
 
+    // 同上，但**额外**允许 `N_PEXT`（private external）符号。
+    //
+    // 为什么需要单独一个方法、而不是放宽 Export()：
+    //   · Apple 会把内部实现标成 N_PEXT（`n_type = 0x1e = N_PEXT|N_SECT`，`N_EXT = 0`）。
+    //     这类符号**不在 export trie 里**（trie 只收对外导出的名字），
+    //     所以 Export() 的 symtab 回退路径是它们唯一的来源；
+    //     而那条回退路径在 `ParseSymtab` 里按 `N_EXT` 过滤，把它们全丢了。
+    //   · 例：macOS 的 AirTrafficHost 里 `_uhO2GULXwfgKwPcp4YR2`（Grappa 生成函数）
+    //     就是 0x1e —— 实测该文件 export trie 58 项恰好等于公开符号 58 项，
+    //     即它确实不在 trie 里。
+    //   · 但 SAP 生产路径（CoreFP 的 6 个名字）用的是**公开导出**，
+    //     放宽 Export() 会平白改变它的行为。所以这里**只加新方法，不动 Export()**。
+    //
+    // 实现是**直接遍历 LC_SYMTAB**（不依赖 exports_ 映射），
+    // 因此与 `Export()` 的解析结果互不影响，也不会给 exports_ 引入新条目。
+    uint64_t ExportPrivate(std::string_view symbol, uint64_t loadBase) const;
+
     // Apply dyld rebases and external bindings to the data buffer in-place.
     // resolve(symbolName) must return the emulator load address of that symbol,
     // or throw std::runtime_error("…") if unknown.
@@ -116,6 +133,15 @@ private:
     std::vector<Rebase>      rebases_;
     std::vector<Bind>        binds_;
     std::unordered_map<std::string, uint64_t> exports_; // symbol → vmAddr (in-image)
+
+    // LC_SYMTAB 的原始位置（**存偏移而不是裸指针**）。
+    // ExportPrivate() 要重新遍历一遍符号表，所以解析结果必须留到 ParseLoadCommands 之后；
+    // 存偏移而非 data_.data()+off 的裸指针，是为了不依赖 data_ 的缓冲区地址稳定
+    // （Relocate() 会原地改 data_，虽然不会重分配，但依赖这一点太脆）。
+    uint32_t symtabSymsOff_  = 0;
+    uint32_t symtabNsyms_    = 0;
+    uint32_t symtabStrOff_   = 0;
+    uint32_t symtabStrSize_  = 0;
 
     bool     relocated_   = false;
     uint64_t loadedBase_  = 0;

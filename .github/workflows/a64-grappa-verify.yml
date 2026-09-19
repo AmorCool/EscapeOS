@@ -1,0 +1,90 @@
+name: A-64 Grappa verify (temporary)
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  A-64 第一步验证（**临时工作流**：验证通过后连同 Resources/Scripts/a64_verify/ 一起删除）
+#
+#  回答一个问题：把 macOS 的 AirTrafficHost **x86_64 切片** + bundle 里那份
+#  **10.9 CoreFP** 一起喂给 Unicorn 解释执行，能不能调通 Grappa 生成函数
+#  `_uhO2GULXwfgKwPcp4YR2`，拿到 err=0 / outLen=84。
+#
+#  判据：main.cpp 的退出码（0 = 通过），明细看 verify.log。
+#
+#  ⚠️ 只手动触发（workflow_dispatch）。不监听 push / tag。
+#  ⚠️ 不产出 App 产物，不提交任何二进制 —— 素材都在 runner 上现取。
+#  ⚠️ 所有脚本都在 Resources/Scripts/a64_verify/ 里（独立文件，不用内联 heredoc：
+#     heredoc 的结束标记必须顶格，而 YAML 块标量的缩进会把整个脚本带偏）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  a64-verify:
+    # 与 build-xcode.yml 同一个自建 runner（Xcode 27 的那台 Mac）
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    env:
+      A64: ${{ github.workspace }}/Resources/Scripts/a64_verify
+      WORK: ${{ runner.temp }}/a64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 环境信息（供留档）
+        run: |
+          echo "=== runner ==="
+          uname -a
+          sw_vers
+          echo "=== 是否有 x86_64 共享缓存（Rosetta 才提供）==="
+          ls -la /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/ 2>/dev/null \
+            || echo "(no cryptex dyld dir)"
+
+      - name: 构建 harness（Unicorn x86 解释器 + a64_verify）
+        run: |
+          chmod +x "$A64/build.sh"
+          "$A64/build.sh" "$WORK"
+
+      - name: 取 bundle 内 CoreFP（10.9，复用 prepare.sap.py 的 CDN 逻辑 + sha256 校验）
+        run: python3 "$A64/fetch_corefp.py" "$WORK/assets"
+
+      - name: 取 runner 自己的 AirTrafficHost（现取，不提交）
+        run: python3 "$A64/fetch_ath.py" "$WORK/ath/AirTrafficHost"
+
+      - name: ★ 跑 A-64 验证
+        id: run
+        run: |
+          set +e
+          "$WORK/a64_verify" \
+            "$WORK/assets/CoreFP" \
+            "$WORK/ath/AirTrafficHost" \
+            "$WORK/assets/CoreFP.icxs" 2>&1 | tee "$WORK/verify.log"
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: 留档日志（只传文本，不传二进制）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a64-verify-log
+          path: ${{ runner.temp }}/a64/verify.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 判定
+        run: |
+          echo "a64_verify exit_code = ${{ steps.run.outputs.exit_code }}"
+          if [ "${{ steps.run.outputs.exit_code }}" != "0" ]; then
+            echo "::error::A-64 验证未通过（exit=${{ steps.run.outputs.exit_code }}），对照 verify.log："
+            echo "::error::  err!=0      → Grappa 生成函数返回了失败码"
+            echo "::error::  outLen!=84  → 输入 12 字节或 sessionId 初值不对"
+            echo "::error::  shim fault  → 某条路径调到了未注册的导入（日志里有名字）"
+            echo "::error::  异常        → MachImage/SapShims 阶段就失败了（日志里有原文）"
+            exit 1
+          fi
+          echo "A-64 验证通过：err=0 / outLen=84 / 内容非全零"

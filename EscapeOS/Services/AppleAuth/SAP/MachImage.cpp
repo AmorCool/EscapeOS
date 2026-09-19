@@ -224,10 +224,15 @@ void MachImage::ParseLoadCommands() {
             if (sc.nsyms > 0 && uint64_t(sc.symoff) + sc.nsyms * sizeof(nlist_64) <= total) {
                 symtabSyms   = base + sc.symoff;
                 symtabNsyms  = sc.nsyms;
+                // 同时留下偏移，供 ExportPrivate() 事后重扫（见 MachImage.h 的说明）
+                symtabSymsOff_ = sc.symoff;
+                symtabNsyms_   = sc.nsyms;
             }
             if (sc.strsize > 0 && uint64_t(sc.stroff) + sc.strsize <= total) {
                 symtabStrtab  = reinterpret_cast<const char*>(base + sc.stroff);
                 symtabStrsize = sc.strsize;
+                symtabStrOff_  = sc.stroff;
+                symtabStrSize_ = sc.strsize;
             }
         }
 
@@ -484,6 +489,45 @@ uint64_t MachImage::Export(std::string_view symbol, uint64_t loadBase) const {
         throw std::runtime_error(std::format("{}: symbol {} precedes image base", name_, symbol));
 
     return loadBase + (vmAddr - imageBase_);
+}
+
+// ─── ExportPrivate ───────────────────────────────────────────────────────────
+//
+// 与 Export() 的唯一区别：**接受 N_PEXT（private external）符号**。
+// 直接遍历 LC_SYMTAB，完全不碰 exports_ 映射 ⇒ 对 Export() 的行为零影响。
+// 适用场景见 MachImage.h 的注释（AirTrafficHost 的 5 个 Grappa 函数都是 N_PEXT）。
+
+uint64_t MachImage::ExportPrivate(std::string_view symbol, uint64_t loadBase) const {
+    if (symtabNsyms_ == 0 || symtabStrSize_ == 0)
+        throw std::runtime_error(std::format("{}: no usable LC_SYMTAB for {}", name_, symbol));
+
+    const uint8_t* syms = data_.data() + symtabSymsOff_;
+    const char*    strs = reinterpret_cast<const char*>(data_.data()) + symtabStrOff_;
+
+    for (uint32_t i = 0; i < symtabNsyms_; ++i) {
+        nlist_64 nl;
+        std::memcpy(&nl, syms + i * sizeof(nlist_64), sizeof(nl));
+
+        // 只要「定义在本镜像的某个 section 里」的符号。
+        // N_PEXT 与 N_EXT 都收；纯 local（两者皆无）不收 —— 那些是 .cold.1 之类的编译产物，
+        // 不是我们要找的入口。
+        if ((nl.n_type & N_TYPE) != N_SECT) continue;
+        if (!(nl.n_type & (N_EXT | N_PEXT))) continue;
+        if (nl.n_value == 0) continue;
+        if (nl.n_un.n_strx == 0 || nl.n_un.n_strx >= symtabStrSize_) continue;
+
+        // 有界比较：字符串表理论上可能不以 NUL 结尾，不能直接用 strcmp
+        const size_t remaining = symtabStrSize_ - nl.n_un.n_strx;
+        const char*  candidate = strs + nl.n_un.n_strx;
+        if (std::string_view(candidate, strnlen(candidate, remaining)) != symbol) continue;
+
+        if (nl.n_value < imageBase_)
+            throw std::runtime_error(std::format("{}: symbol {} precedes image base", name_, symbol));
+
+        return loadBase + (nl.n_value - imageBase_);
+    }
+
+    throw std::runtime_error(std::format("{}: symbol not found (N_EXT or N_PEXT): {}", name_, symbol));
 }
 
 // ─── Relocate ────────────────────────────────────────────────────────────────
