@@ -35,6 +35,16 @@ final class BinaryModuleRunner: ObservableObject {
             guard ModuleService.shared.isEnabled(id: module.id),
                   let bin = module.binary,
                   bin.autoStart == true else { continue }
+            // v0.3.481：能力/版本不满足的模块**不启动** —— 它跑起来也只会失败，
+            // 而在启动期炸掉（Go 侧 log.Fatal → os.Exit）会连宿主一起带走.
+            let issues = module.blockingIssues
+            if !issues.isEmpty {
+                let logFile = ModuleService.shared.installURL(for: module.id)
+                    .appendingPathComponent("run.log")
+                appendLog(logFile, "[host] 跳过自启动（模块不可用）：\(issues.joined(separator: "；"))")
+                setError(module.id, issues.joined(separator: "；"))
+                continue
+            }
             start(module: module)
         }
     }
@@ -375,6 +385,8 @@ final class BinaryModuleRunner: ObservableObject {
             parts.append("本 App 未内置 \(moduleId) 的 \(entrySymbol)，外部导入属正常现象")
             throw BinaryModuleError.spawnFailed(parts.joined(separator: "\n"))
         }
+        // v0.3.481：把宿主能力函数表交给模块（可选导出；老模块没有这个符号是正常的）
+        handoffHostCapabilities(dataDir: dataDir, moduleDir: moduleDir, logFile: logFile)
         // 数据目录以 strdup C 字符串 + 函数符号一起打包成线程上下文
         guard let dirC = strdup(dataDir.path) else {
             throw BinaryModuleError.spawnFailed("strdup 数据目录路径失败")
@@ -393,6 +405,32 @@ final class BinaryModuleRunner: ObservableObject {
             throw BinaryModuleError.spawnFailed("pthread_create 失败：\(rc)")
         }
     }
+
+    /// v0.3.481：把宿主能力函数表交给模块可选的 `escape_module_init`.
+    ///
+    /// ## 为什么是「加载时传函数表」而不是让模块 `dlsym` 宿主符号
+    /// 主可执行文件的符号**不保证**对 `dlsym(RTLD_DEFAULT)` 可见（本仓库自己就是
+    /// 因为这个才写了 `uloader_symbols_with_suffix` 去读符号表）. 传指针对
+    /// dlopen 的 dylib 与静态链接的模块**都成立**，不依赖任何符号导出行为.
+    ///
+    /// ## 失败不影响启动
+    /// 老模块都没有这个符号 —— **找不到是正常情况**，只记一行日志.
+    /// 模块拿到表之后怎么用是它自己的事（`HostCapabilityService.call`）.
+    nonisolated private func handoffHostCapabilities(dataDir: URL, moduleDir: URL, logFile: URL) {
+        guard let sym = Self.resolveBridgeSymbol("escape_module_init") else {
+            appendLog(logFile, "[host] 模块未导出 escape_module_init（老模块正常现象）→ 跳过能力表交接")
+            return
+        }
+        var api = HostCapabilityService.makeAPI(moduleDataDir: dataDir.path,
+                                               moduleDir: moduleDir.path)
+        typealias ModuleInitFn = @convention(c) (UnsafeMutablePointer<EscapeHostAPI>?) -> Int32
+        let fn = unsafeBitCast(sym, to: ModuleInitFn.self)
+        let rc = withUnsafeMutablePointer(to: &api) { fn($0) }
+        appendLog(logFile, "[host] escape_module_init 返回 \(rc)"
+            + "（能力表 abi=\(api.abiVersion) 大小=\(api.structSize) 字节，"
+            + "支持 \(HostCapabilityService.capabilityList.count) 项能力）")
+    }
+
     /// 查找模块目录下 bin/*.dylib（可拆卸模块形态）
     nonisolated static func findDylib(moduleDir: URL) -> URL? {
         let binDir = moduleDir.appendingPathComponent("bin", isDirectory: true)
