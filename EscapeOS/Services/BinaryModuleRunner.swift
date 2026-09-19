@@ -423,9 +423,15 @@ final class BinaryModuleRunner: ObservableObject {
         }
         var api = HostCapabilityService.makeAPI(moduleDataDir: dataDir.path,
                                                moduleDir: moduleDir.path)
-        typealias ModuleInitFn = @convention(c) (UnsafeMutablePointer<EscapeHostAPI>?) -> Int32
+        // ⚠️ 形参必须是 `UnsafeMutableRawPointer?`（= C 的 `void *`），**不能**写
+        // `UnsafeMutablePointer<EscapeHostAPI>?` —— 后者会被编译器判
+        // 「not representable in Objective-C, so it cannot be used with '@convention(c)'」：
+        // EscapeHostAPI 里有 `@convention(c)` 函数指针字段，Swift 不认为它 C 可表示.
+        // 从 C 侧看两者都是「一个指针」，ABI 完全一致，所以模块照样声明
+        // `int escape_module_init(const EscapeHostAPI *api)`.
+        typealias ModuleInitFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
         let fn = unsafeBitCast(sym, to: ModuleInitFn.self)
-        let rc = withUnsafeMutablePointer(to: &api) { fn($0) }
+        let rc = withUnsafeMutablePointer(to: &api) { fn(UnsafeMutableRawPointer($0)) }
         appendLog(logFile, "[host] escape_module_init 返回 \(rc)"
             + "（能力表 abi=\(api.abiVersion) 大小=\(api.structSize) 字节，"
             + "支持 \(HostCapabilityService.capabilityList.count) 项能力）")
