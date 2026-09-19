@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.478] - 2026-09-19
+
+### ★ 为最后一步（写 Media 之外）补上验证手段：`airlift4` 也盘 **Media 之外**
+
+真实目标的落点在 `/var/mobile/Library/Logs/CrashReporter`
+（= `com.apple.crashreportcopymobile` 的 AFC 根），**在 Media 之外**
+⇒ 只盘 `com.apple.afc`（根 = Media）**根本看不到它** ⇒ 越界写就没法验证。
+
+⇒ `airlift4` 新增一段：连 `com.apple.crashreportcopymobile` → 列它的根 → 挑 `airlift-*` 条目
+（**新增判据 D**）。同样是**只读**（只 `afc_list_directory` / `afc_get_file_info`）。
+
+判据 D 有 `airlift-*` 条目 ⇒ **Media 之外的落点存在 ⇒ 越界写成立（真的逃出了 Media）**。
+
+⚠️ `crash_report_client_to_afc` 会**消费并释放** `crashClient` ——
+之后只能碰 `crashAfc`，**绝不能再 free `crashClient`**（否则双重释放）。代码里已按这个顺序写。
+
+### 最后一步的目标选择（为什么不用参考实现的默认值）
+
+参考实现的 `DEFAULT_TARGET` 是 `/var/mobile/Library/SpringBoard`。
+我们改用 **`/var/mobile/Library/Logs/CrashReporter`**，因为三个条件同时满足：
+
+| 条件 | |
+|---|---|
+| **在 Media 之外** | ✅ 能证明真的逃逸（不是自欺欺人） |
+| **我们能读回来** | ✅ 走 `com.apple.crashreportcopymobile` 的 AFC 根 |
+| **无害** | ✅ 崩溃日志目录、按设计可丢弃；文件名 `airlift-canary-<token>.bin` 可识别 |
+
+⇒ 往 SpringBoard 目录里塞文件没有意义，还会留下垃圾。
+
+### 用法
+
+```
+airlift3 /var/mobile/Library/Logs/CrashReporter   # 真实目标（会写 Media 之外）
+airlift2 4                                        # 两段式
+airlift4                                          # 只读盘点（判据 A/B/C 在 Media，判据 D 在 Media 之外）
+```
+
 ## [0.3.477] - 2026-09-19
 
 ### ★★★★★ 真机实证：**机制成立** —— 攻击链七环全部打通
