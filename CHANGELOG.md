@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.3.479] - 2026-09-19
+
+### ★★★★ 补上「**读**」—— 逃逸现在读写双向打通
+
+「写」在 v0.3.478 已经真机验证（文件落到了 Media 之外的 `/var/mobile/Library/Logs/CrashReporter/`）。
+参考实现还有「读」（`AldazActivator/airlift-rw` 的 `airlift.py:504-563`，逐字）：
+
+```python
+AIRLOCK_ROOT      = "/var/mobile/Media/Airlock/Book"
+link_identifier   = f"../../{source}/p0/p1/p2/link"
+target_identifier = posixpath.relpath(target_path, AIRLOCK_ROOT)   # 例：../../../Library/Preferences/com.x.plist
+identifiers  = [link_identifier, target_identifier]
+destinations = [link_destination, recovered]     # airlift-link-<t> / airlift-recovered-<t>
+```
+
+**机制**：AFC 的根就是 `/var/mobile/Media`，**出不去**；但设备端
+`-[ATAirlock processCompletedAsset:]` 对每条做
+`moveItemAtPath: (AIRLOCK_ROOT + identifier) → (Media 内的 AssetPath)`，而 `identifier` **不校验路径**
+⇒ 第 2 条写成 `../../../Library/Preferences/com.x.plist` 时，源路径就是**真实的越界文件**
+⇒ `move` 把它**搬进 Media** ⇒ 再用 AFC（根 = Media）读出来。
+
+**⇒ 「读」和「写」是同一个机制的两半**，只差 Books.plist 里第 2 条 identifier 写什么。
+
+### 新增用法
+
+```
+airlift3 read /var/mobile/Library/Preferences/com.x.plist    # ① 读模式：声明 [link, relpath(该文件)]
+airlift2 5                                                    # ② 读：两条 FileComplete + AFC 读回
+cat LoginLogs/airlift_at2.txt                                 #    判据 = recovered 存在且大小 > 0
+cat LoginLogs/airlift_read_<token>.bin                        #    读到的**字节原文**
+```
+
+`airlift2 5` 会把读到的字节存成 `LoginLogs/airlift_read_<token>.bin`，并在结论里报出
+**大小 + 前 64 字节十六进制 + 前 200 字节可打印文本**。
+
+### 实现要点
+
+1. **`posixRelativePath(from:to:)` 自己写，绝不用 `URL`/`NSString` 的路径 API** ——
+   那些 API 会做**标准化**（把 `..` 吃掉），而我们要的**就是** `../../../Library/...` 这种原始形式：
+   设备端 `source = 根 + identifier` 不校验，只有这些 `..` 退到 `/var/mobile` 才够得到 Media 之外。
+   一旦被标准化，路径就变成另一个（Media 内的）位置，整条「读」的机制就没了。
+2. `runBooksStagingProbe(target:readTarget:)` —— 读写**只差第 2 条 identifier**，
+   其余（stage zip、AFC 建目录、**先备份**再写 Books.plist、AFC 回读）一律不变。
+3. `airlift-target = <绝对路径>` 这一行**兼作读写两种交接**：变体 4 拿它算落点、变体 5 拿它算 `targetIdentifier`。
+4. 变体 5 的两条 `FileComplete` **只发不读**（`sendOnly`）、中间 `usleep(900_000)` —— 与变体 4 同款
+   （`airtraffic_host.m:183-191`：两次发送之间**没有任何 `ReadMessage`**）。
+5. 读目标**读不到就如实报出并放弃**，绝不猜 —— 猜出来的路径读不到东西，
+   会把「机制不成立」和「读错了地方」混成一件事。
+
+### ⚠️ 两个必须知道的限制
+
+1. **读是「移动」不是「拷贝」** —— 目标文件读完就**不在原位**了。
+   参考实现的还原（`airlift.py:592-599`）是**再跑一遍写流程**把字节写回原路径；
+   但本项目的 `airlift3` payload 目前**写死**成 canary 字符串
+   ⇒ **任意字节的 payload（= 还原）不在本版范围**，需要另行实现。
+2. `airlift3 read` 与 `airlift2 5` 是**两条命令**（各自一条隧道）—— 真机实证：把 conduit 与 AT
+   塞进同一条隧道有「第 2 个连接卡死」的风险，所以**不要合并**。
+
 ## [0.3.478] - 2026-09-19
 
 ### ★ 为最后一步（写 Media 之外）补上验证手段：`airlift4` 也盘 **Media 之外**
