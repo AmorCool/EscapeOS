@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.3.480] - 2026-09-19
+
+### ★★★ 补上「删除」+「任意字节写」+ **编程接口层**（模块化的前提）
+
+#### ① `airlift3 write <目标> <payload 相对路径>` —— 任意字节写
+
+`airlift3` 的 payload 以前**写死**成 canary 字符串 ⇒ 只能写「标记文件」，**不能把读到的内容写回去**
+（= 不能还原）。现在可以传一个 **Documents 里的文件**当 payload（相对路径，与 SSH 的 `cat`/`ls` 同口径）。
+
+⚠️ **读不到就放弃，绝不退回 canary** —— 那会把**错的内容**写进目标（目标可能是配置文件），
+比直接失败糟得多。
+
+#### ② `airlift2 6` —— **删除文件**
+
+机制：与变体 5 **完全相同**（把目标搬进 Media），**再删掉 Media 里的副本**。
+`move` 是**移动不是拷贝** ⇒ 副本一删，**原位置的文件就彻底消失** = 删除。
+
+⚠️ **安全顺序（已内建）**：搬进 Media 之后，那份副本是数据的**唯一一份**（原位置已空）
+⇒ 实现里**先确认备份落盘，再删**；备份没落盘就**不删**，并如实报出副本还在 Media 的哪个路径。
+
+#### ③ `AirliftExploit` 新增**编程接口**（给 App 内功能 / 模块用）
+
+```swift
+struct PocOutcome { let ok: Bool; let summary: String; let details: [String]; let data: Data? }
+
+static func pocReadFile(path: String) -> PocOutcome            // 越界读（Media 之外）
+static func pocWriteFile(path: String, data: Data) -> PocOutcome  // 越界写（任意字节）
+static func pocDeleteFile(path: String) -> PocOutcome          // 越界删
+```
+
+**设计要点（都是踩过坑换来的）**：
+
+1. **不重写，只编排** —— 两个半段（stage / AT）都已是**真机验证过**的实现，各自一条隧道；
+   真机实证「把 conduit 与 AT 塞进同一条隧道」有第 2 个连接卡死的风险 ⇒ **保持两条隧道**。
+2. **借 `protocolQueue.sync` 串行化** —— AT 会话是**设备侧单例资源**，不能与 SSH 探测并发；
+   `triggerProtocolProbeOnce` 用的也是同一条队列（`async`）⇒ 串行化正确。
+   ⚠️ **调用方必须在后台线程调**（在主线程调会把主线程阻塞十几秒）。
+3. **`PocOutcome` 带 `details` 而不是只回 `Bool`** —— 两趟流程里失败可能发生在**六个环节**
+   （stage 没落地 / 清单没命中 / 第 1 次 move 没发生 / 第 2 次没发生 / AFC 读不到 / 备份写盘失败），
+   只回 `false` 会让调用方与用户都无从下手。`details` 就是两趟里所有 `★` 判据行。
+4. **`pocWriteFile` 诚实标注「不校验落点」** —— 真实目标在 Media 之外，`com.apple.afc` 读不回来
+   ⇒ 无法在这里做 AFC 回读。要确认写成功，请再调一次 `pocReadFile` 读回比对（唯一通用判据）。
+
+### ★ App 图标换成透明背景玻璃方块
+
+`Resources/AppIcon*.png` **18 个尺寸全部换新**（RGBA）。抠图脚本 `_tmp_icon.py`：
+
+- **从画面四边泛洪**判「与边缘连通的白色」= 背景 —— **不是**简单白键：玻璃体内部有大量近白高光，
+  白键会把它们**打穿成洞**；
+- 背景区 **`alpha = 255 - 亮度`** —— 方块底部在白底上有柔和投影，抹成全透明会留一圈生硬灰边；
+- alpha 轻微羽化（1.0），颜色不动；内容占 92%×94%（原取景就是最合适的）。
+
+⚠️ **iOS 不允许图标带透明度** —— 透明区域会被渲染成**黑色**。所以主屏观感 = **黑底 + 玻璃方块**
+（`_tmp_icon_preview_black.png` 就是主屏实际效果）。若要包本身「干净」（无 alpha），
+可以把同一个效果**把黑底烤进去**，视觉一模一样。
+
 ## [0.3.479] - 2026-09-19
 
 ### ★★★★ 补上「**读**」—— 逃逸现在读写双向打通

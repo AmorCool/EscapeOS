@@ -398,11 +398,14 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             //                用 `com.apple.afc`（根 = Media）读回 `airlift-recovered-<t>`。
             //                读目标由 `airlift3 read <路径>` 交接（`airlift-target = …`）；
             //                判据 = `recovered` 存在且大小 > 0 ⇒ 越界读成立。
+            //     6        = ★ 与变体 5 **完全相同**，读完再删掉 Media 里的副本（v0.3.480）。
+            //                `move` 是移动不是拷贝 ⇒ 副本一删，**原位置的文件就彻底消失** = **删除**。
+            //                ⚠️ **先确认备份落盘再删**（备份是唯一一份；没备份就不删，如实报出副本路径）。
             //   **一次只跑一个变体**。
             //
             // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
             //    挂在 UI 路径上会跟其它功能抢隧道（v0.3.419/421/424 那串事故的成因）。
-            // 用法：airlift2 [变体号]   变体号 ∈ {1, 2, 3, 4, 5}，**省略 = 1**
+            // 用法：airlift2 [变体号]   变体号 ∈ {1, 2, 3, 4, 5, 6}，**省略 = 1**
             let variant = parts.count > 1 ? parts[1] : "1"
             AirliftExploit.forceAttackStep2Probe(variant: variant)
             return "已触发 airlift 攻击链第②步探测（变体 \(variant)）。\n"
@@ -439,6 +442,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             //     ⚠️ 读是**移动**不是拷贝 —— 目标文件读完就不在原位了（还原见 `airlift2 5` 的注释）。
             let booksRead: String?
             let booksTarget: String?
+            let booksPayload: String?
             if parts.count > 1 && parts[1] == "read" {
                 // `read` 必须带目标；没带就如实报用法，**不猜**（猜一个目标等于读错地方）。
                 guard parts.count > 2 else {
@@ -447,15 +451,32 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 }
                 booksRead = parts[2]
                 booksTarget = nil
+                booksPayload = nil
+            } else if parts.count > 1 && parts[1] == "write" {
+                // ★ v0.3.480：`write <目标> <payload 相对路径>` —— 用**任意字节**写。
+                // payload 文件放在 **App 的 Documents** 里（相对路径，与 SSH 的 cat/ls 同口径）。
+                // 这是「把读到的字节写回去」（= 还原）与「任意内容写入」的前提
+                // —— 也是 `airlift2 6`（删除）敢于删副本的底气：备份能放回去。
+                guard parts.count > 3 else {
+                    return "用法：airlift3 write <目标绝对路径> <payload 相对路径（相对 App Documents）>\n"
+                         + "（例：airlift3 write /var/mobile/Library/Preferences/com.x.plist my.plist）"
+                }
+                booksRead = nil
+                booksTarget = parts[2]
+                booksPayload = parts[3]
             } else {
                 booksRead = nil
                 booksTarget = parts.count > 1 ? parts[1] : nil
+                booksPayload = nil
             }
-            AirliftExploit.runBooksStagingProbe(target: booksTarget, readTarget: booksRead)
+            AirliftExploit.runBooksStagingProbe(target: booksTarget,
+                                                readTarget: booksRead,
+                                                payloadRelativePath: booksPayload)
             let targetText = booksRead.map { "读模式，目标 = " + $0 }
                 ?? (booksTarget ?? "（默认：Media 内部的 canary 目录，零风险）")
             return "已触发 airlift books staging 最小实验（stage + 写 Books.plist，不碰 AirTraffic）。\n"
                  + "越界目标 = \(targetText)\n"
+                 + (booksPayload.map { "payload 来源 = Documents/" + $0 + "\n" } ?? "")
                  + "结果：cat LoginLogs/airlift_books_verdict.txt（结论）"
                  + " / cat LoginLogs/airlift_books.txt（完整过程）\n"
                  + (booksRead == nil
@@ -785,8 +806,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     EscapeSpace SSH 调试 · 可用命令:
       status          运行状态总览
       airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
-      airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest 4=两段式（先搬 symlink 再穿过它写 payload，并回读落点）5=读（把 Media 之外的真实文件搬进 Media 再 AFC 读回，读目标由 airlift3 read 交接）（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
-      airlift3 [目标路径]  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；省略目标 = Media 内部 canary 目录（零风险，配套 airlift2 4 可自验），传值 = 真实目标（会写 Media 之外）；airlift3 read <路径> = 读模式（配套 airlift2 5，让设备把该文件搬进 Media）（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
+      airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest 4=两段式（先搬 symlink 再穿过它写 payload，并回读落点）5=读（把 Media 之外的真实文件搬进 Media 再 AFC 读回，读目标由 airlift3 read 交接）6=删除（与 5 相同，读完删副本 ⇒ 原文件彻底消失；先确认备份落盘再删）（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
+      airlift3 [目标路径]  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；省略目标 = Media 内部 canary 目录（零风险，配套 airlift2 4 可自验），传值 = 真实目标（会写 Media 之外）；airlift3 read <路径> = 读模式（配套 airlift2 5）；airlift3 write <目标> <payload相对路径> = 用 Documents 里的**任意字节**写（配套 airlift2 4，是「还原」的前提）（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
       airlift4  只读盘点 Media 里的落点：列根目录 + 逐个 inspect 所有 airlift-* 条目（判据 A=payload 在 canary 目标目录里⇒机制成立；判据 B=在 airlift-link-* 里⇒没跟随）（结果 → LoginLogs/airlift_landing.txt）
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）
