@@ -433,27 +433,39 @@ jobs:
           # 把补丁详情落到构建日志里（可观测性：补丁前后对照 + 17 个桩符号清单）
           cat /tmp/fw_patch/PATCH-REPORT.txt || true
 
-          # ★★ x86_64 切片的 sha256 必须与「A-64 已实测通过的那一份」一致。
+          # ★★ ATH **源文件**的 sha256 必须与「A-64 已实测通过的那一份」一致。
           #
           # 为什么是**硬失败**而不是警告（GP-13 指出）：
           #   A-64（在 Unicorn 里跑 x86_64 ATH + 10.9 CoreFP 生成 Grappa）的结论
           #   （`err=0 / outLen=84 / 结构 8/8`）**只对某一个具体 build 的 ATH 成立**。
           #   runner 的 macOS 一升级，`$FW_SRC` 就会换成另一份 ATH —— 届时
-          #   **A-64 的结论静默过期，而 CI 依然全绿**。那正是「验证过的结论悄悄烂掉」的典型。
+          #   **A-64 的结论静默过期，而 CI 依然全绿**。那正是「验证过的结论悄悄烂掉」。
           #   所以这里宁可让构建失败，也不让它在未复核的基础上继续出包。
+          #
+          # ⚠️ 为什么钉**整个源文件**而不是 x86_64 切片：
+          #   我**没有**从 CI 观测到切片的 sha256（日志只打了布局，没打切片 hash），
+          #   而我本地那份归档与 runner 上那份**不是同一个 build**
+          #   （本地切片 1,506,816 B vs runner 1,506,736 B，差 80 字节；
+          #     本地 FAT sha256 422ddeb5… vs runner e21ab638…）。
+          #   ⇒ 拿本地切片 hash 当门禁会**把每次构建都判失败**。
+          #   整个源文件的 sha256 是我**确实从 run#4 日志读到**的值（`fetch_ath.py` 打的），
+          #   用它做门禁同样能挡住「runner 换了 ATH」这件事，而且值是对的。
           #
           # 处理办法（当这条真的失败时）：
           #   1) 重跑 A-64 验证：Actions →「A-64 Grappa verify (temporary)」→ Run workflow；
           #   2) 确认 `err=0 / outLen=84 / 结构核对通过`；
-          #   3) 把下面 ATH_X86_KNOWN_SHA256 换成新值，并**在提交信息里写明重跑过 A-64**。
-          ATH_X86_KNOWN_SHA256="afe39e753f307e18633eafaa1686271a22a7fd2d4c616a10f688850b9a2b4b94"
+          #   3) 用日志里新打出的 `sha256 = …` 替换下面的常量，
+          #      并**在提交信息里写明重跑过 A-64**。
+          ATH_SRC_KNOWN_SHA256="e21ab638836879eed0221d32555eae3bc4417b9b8b2f4f359d8536f00375aeb0"
+          ATH_SRC_SHA256="$(shasum -a 256 "$FW_SRC" | awk '{print $1}')"
           ATH_X86_SHA256="$(shasum -a 256 "$APP/SAPAssets/AirTrafficHost.x86_64" | awk '{print $1}')"
-          echo "AirTrafficHost.x86_64 sha256 = $ATH_X86_SHA256"
-          echo "  已实测通过 A-64 的那份   = $ATH_X86_KNOWN_SHA256"
-          if [ "$ATH_X86_SHA256" != "$ATH_X86_KNOWN_SHA256" ]; then
-            echo "::error::x86_64 切片与「A-64 已实测通过的那一份」不一致 ⇒ A-64 结论已过期。"
+          echo "ATH 源文件   sha256 = $ATH_SRC_SHA256"
+          echo "  已实测通过 A-64 的那份 = $ATH_SRC_KNOWN_SHA256"
+          echo "x86_64 切片  sha256 = $ATH_X86_SHA256（记录用，供下次钉住）"
+          if [ "$ATH_SRC_SHA256" != "$ATH_SRC_KNOWN_SHA256" ]; then
+            echo "::error::ATH 源文件与「A-64 已实测通过的那一份」不一致 ⇒ A-64 结论已过期。"
             echo "::error::请先重跑 A-64 验证（Actions → A-64 Grappa verify → Run workflow），"
-            echo "::error::确认 err=0 / outLen=84 / 结构核对通过后，再更新 workflow 里的 ATH_X86_KNOWN_SHA256。"
+            echo "::error::确认 err=0 / outLen=84 / 结构核对通过后，再用日志里的新 sha256 更新本文件常量。"
             echo "::error::（runner 的 macOS 很可能刚升级过，$FW_SRC 换了另一份 ATH。）"
             exit 1
           fi
