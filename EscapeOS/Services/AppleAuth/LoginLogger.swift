@@ -145,17 +145,16 @@ final class LoginLogger: @unchecked Sendable {
         guard let size = try? handle.seekToEnd() else { return [] }
         let offset = size > UInt64(cap) ? size - UInt64(cap) : 0
         guard (try? handle.seek(toOffset: offset)) != nil,
-              let data = try? handle.readToEnd() else { return [] }
+              var data = try? handle.readToEnd() else { return [] }
 
-        var bytes = [UInt8](data)
         if offset > 0 {
             // 从任意字节偏移开始读，首行必然被截断 —— 而且**必须**从换行字节处切开：
             // 日志正文是中文（多字节 UTF-8），若从某个字符的中间字节开始解码，
-            // 整个 `String(bytes:encoding:)` 会直接返回 nil（一行都拿不到）。
-            guard let newline = bytes.firstIndex(of: 0x0A) else { return [] }
-            bytes = Array(bytes[(newline + 1)...])
+            // 整个解码会直接失败（一行都拿不到）。
+            guard let newline = data.firstIndex(of: 0x0A) else { return [] }
+            data = data[data.index(after: newline)...]
         }
-        guard let text = String(bytes: bytes, encoding: .utf8) else { return [] }
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
         return text.components(separatedBy: "\n").filter { !$0.isEmpty }
     }
 

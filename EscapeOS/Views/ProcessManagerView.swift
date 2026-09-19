@@ -1097,13 +1097,13 @@ struct SysmonLogView: View {
         guard let size = try? handle.seekToEnd() else { return [] }
         let offset = size > UInt64(cap) ? size - UInt64(cap) : 0
         guard (try? handle.seek(toOffset: offset)) != nil,
-              let data = try? handle.readToEnd() else { return [] }
-        var bytes = [UInt8](data)
+              var data = try? handle.readToEnd() else { return [] }
+
         if offset > 0 {
-            guard let newline = bytes.firstIndex(of: 0x0A) else { return [] }
-            bytes = Array(bytes[(newline + 1)...])
+            guard let newline = data.firstIndex(of: 0x0A) else { return [] }
+            data = data[data.index(after: newline)...]
         }
-        guard let text = String(bytes: bytes, encoding: .utf8) else { return [] }
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
         return text.components(separatedBy: "\n").filter { !$0.isEmpty }
     }
 }
