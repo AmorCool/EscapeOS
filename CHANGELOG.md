@@ -1,5 +1,74 @@
 # Changelog
 
+## [0.3.460] - 2026-09-19
+
+### 壁纸两个入口**合并成一个** + DDI 只读探针 + 更正两处错误记载
+
+#### 1. 壁纸：「重置精选集」并进「清空所有导入」（用户拍板）
+
+用户问「「重置精选集」就是「清空所有导入」对吧 **你为什么要设计两个**」。
+我核了代码：两者**不是**重复 —— 一个删 App 内 `Documents/Wallpapers/` 的包，
+一个删 PosterBoard 系统容器里的描述符 —— **但用户第一反应就是「这俩不是一回事吗」，
+这本身就说明两个入口并存是设计问题**。而且更根本：「清空所有导入」这个名字是**误导的**，
+它说「清空所有导入」，但导入的东西**还在系统里**（壁纸选择器照样看得到）。
+
+⇒ **只留「清空所有导入」一项，让它同时做两件事**，并去掉单独那个入口。
+
+**顺带修掉一个「列表在说谎」**：`clearAll()` 原来**无条件清空 App 内列表**，
+但包删除失败时文件夹**还在磁盘上** ⇒ 列表显示已清空、实际没清。
+现在**只移除删成功的条目**，失败的留在列表里（它本来就还在）。
+
+确认框文案也改成如实说明两件事：
+「将清空 App 内的壁纸包，并从系统移除已应用的自定义壁纸.」
+
+#### 2. ★ 新增只读 DDI 探针（`ddiprobe` SSH 命令）
+
+**为什么需要**：`ServiceNotFound` 的根因是「**设备没挂 DDI**」——
+CoreDevice 那批服务（`com.apple.coredevice.*`）是 DDI 门控的，没挂 DDI ⇒ 整块不广播
+⇒ `appservice` 查不到 ⇒ **必现失败**（两个内置模块 / 进程管理 / respring / 定位缓存清理**全受影响**）。
+
+**这同时解释了用户说的「以前能行」**：那时 DDI 挂着。**不需要质疑用户，也不需要猜。**
+
+本命令只回答一个问题：`image_mounter_copy_devices` 返回**空还是非空**。
+
+**安全约束（全部写进头注释，因为这是有副作用路径）**：
+- 复用 `AFCService` 的**同一条串行队列**（`AFCService.runExclusively`，新增公开入口）；
+- **一次只建一条服务连接**，用完立刻 `image_mounter_free`；
+- **只由 SSH 命令显式触发**，不挂 UI、不自启、不放 `Task.detached`；
+- 只读：不挂载、不上传、不发信号。
+
+⚠️ 为什么这么小心：v0.3.419/420 就是因为在自检/detached 路径对 RSD 服务建连，
+把设备端 RPPairing pair-verify 搞到**连续 63 次零响应**，**所有走隧道的功能一起挂**。
+
+#### 3. ★★ 走 C 垫片（本仓验证过的唯一路径）
+
+`image_mounter_connect_rsd` 的出参是 `ImageMounterHandle **`、
+`image_mounter_copy_devices` 的是 `plist_t **`（`plist_t` 是 `typedef void *`）——
+**正是 v0.3.271~278 烧掉 8 轮 CI 的那个雷区**。
+
+本仓 v0.3.279 的提交信息原文：
+> 「browse 改走 C 垫片(**终结 8 轮 Swift 指针类型战**)……
+>  依据：271~278 八轮 CI 实测 Clang Importer 对 `typedef void*` 的指针参数推断不可靠」
+
+⇒ **两个指针形状全部关在 C 层**（新增 `EscapeOS/Tunnel/EscDDIProbe.h/.c`，
+形状照抄 `EscBrowseApps`）：**Swift 侧只传两个 `OpaquePointer`、拿回 bplist 字节，
+零 `plist_t` / 零 opaque 指针出参。**
+
+**所有权写清**：结果字节由 `plist_mem_free` 释放；错误字符串由 `free` 释放；
+外层指针数组**故意泄漏**（`Box::leak` 交出、本库无对应释放函数，
+而 `idevice_plist_array_free` 只 free 元素 —— 元素所有权已移入 root，再调它 = double free）。
+**一次性只读探针，可接受。**
+
+#### 4. 更正两处错误记载（保留原话 + 追加更正段）
+
+- 「RSD 在 iOS 17+ **不需要 DDI**」—— 至少对 CoreDevice 服务**是错的**
+  （同段自己写着「尚未真机实测」）；
+- 「进程管理页**一直在用**那套 FFI」—— **未验证假设**，而且它被拿去当基线支撑了
+  v0.3.254 的定位清理方案 ⇒ **这条假设链是断的**。
+
+代码注释里那两句「偶发 / 并发建隧道竞争导致」（`DeviceControlService` / `ProcessManagerView`）
+一并改成「**必现 —— DDI 未挂时 CoreDevice 服务整块不广播**」，并指向真机证据。
+
 ## [0.3.459] - 2026-09-19
 
 ### 新功能：壁纸「重置精选集」+ 日志页控制台排版（参考 3105 项目）
@@ -3189,6 +3258,32 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
   → 永不触发；且设备侧还缺 provider（无 usbmuxd；`idevice_tcp_provider_new` 需经典 lockdown 配对文件）。
 - **DDI 挂载也不需要**：要挂 DDI 的只有那条 lockdown 老路；现走的 **RSD → `dtservicehub` → DTX 在 iOS 17+ 不需要 DDI**
   （这也是虚拟定位一直能直接用的原因）。App 至今从不挂 DDI（`DDIDownloadView` 只下载+打包，`image_mounter` 从未被调用）。
+> **⚠️ 更正（2026-09-19）** —— 用户报告「主页模块板块的两个内置模块执行时 ServiceNotFound」
+> （`com.escapeos.locache` 定位缓存清理 / `com.escapeos.wifirefresh` WLAN 连接刷新，两者都是 `"type": "signal"`，
+> 走 `app_service_list_processes` → `app_service_send_signal`）。核实后确认上面这条「**DDI 挂载也不需要**」**结论有误**：
+>
+> 1. **原文是什么**（上面那条，一字未删）：要挂 DDI 的只有那条 lockdown 老路；现走的 RSD → `dtservicehub` → DTX
+>    在 iOS 17+ 不需要 DDI（这也是虚拟定位一直能直接用的原因）；App 至今从不挂 DDI。
+> 2. **为什么错 / 未验证**：把**两个不同的服务族当成了一族**。`com.apple.instruments.dtservicehub`（**DVT 族**）确实
+>    **不**依赖 DDI ——「虚拟定位一直能直接跑」是真的；但 **`com.apple.coredevice.*`（CoreDevice 族）是另一套门控**，
+>    DDI 未挂时**整块不广播**。「dtservicehub 不需要 DDI」被错误外推成「本 App 所有服务都不需要 DDI」。
+>    「App 至今从不挂 DDI」是事实，但当时被写成了「**不需要**」，而实际是「**没做**」。
+> 3. **现在的证据（均可复核）**：
+>    - 真机 **19 次 RSD 服务表 dump**（工作目录 `_tmp_big.txt`）里 **`com.apple.coredevice.*` 一条都没有**，
+>      `com.apple.coredevice.appservice` **从未出现过**；`testmanagerd.remote` 同样从未出现。
+>    - 上游 **pymobiledevice3 issue #1744**：换上与设备 iOS 版本匹配的 DDI 后，coredevice 服务条数 **7 → 17** ——
+>      直接证明该族按 DDI 门控。
+>    - 服务表形态比对：我方 64 条服务中的 **41 条 `.shim.remote`** 与 pymobiledevice3 `misc/RemoteXPC.md`
+>      记录的隧道内受信 RSD 清单 **41/41 全中** —— 说明**不是**「走错 RSD / 服务名形态不对」，是服务**没被广播**。
+>    - 代码侧：`rust/idevice/src/services/rsd.rs:171-189` 查服务是**纯 HashMap、无回退** → 表里没有就是
+>      `ServiceNotFound`（错误码 **21**）⇒ **必现**，不是偶发。
+> 4. **结论改成什么**：
+>    - **虚拟定位（`dtservicehub` / DTX）不需要 DDI —— 原文这条成立，保留。**
+>    - **`com.apple.coredevice.*`（`app_service` / `process_control` 等）必须设备已挂 DDI 才会广播。**
+>      App 从不挂 DDI，因此**依赖 CoreDevice 的功能（进程管理页、定位缓存清理、WLAN 连接刷新）会稳定拿到
+>      `ServiceNotFound`**。
+>    - 修复只有两条路：**(A) App 内自动挂 DDI**（需 ECID + 与设备 iOS 版本匹配的 personalized image，走 Apple TSS
+>      个人化）；**(B) 明确报错 / 隐藏入口**，不再让用户看到必然失败的操作。**（待用户拍板，本轮未实施。）**
 - Rust 侧 `connect` / instproxy `read_raw` 仍无超时（FFI 不可取消）：本次只做到「不再阻塞 UI」，进程内线程与隧道残留仍在。
 
 ## [0.3.374] - 2026-09-13
@@ -3763,6 +3858,19 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
   **已作废删除**。正确做法是本项目「进程管理」页一直在用的那套 FFI：
   `app_service_list_processes`（枚举设备进程）→ 找 `/locationd` →
   `app_service_send_signal`（SIGKILL），全部经 RSD 隧道由设备侧执行。
+> **⚠️ 更正（2026-09-19）** —— 上面「本项目『进程管理』页**一直在用**的那套 FFI」这句话**未经验证**：
+>
+> 1. **原文是什么**（上面那条，一字未删）：正确做法是本项目「进程管理」页一直在用的那套 FFI：
+>    `app_service_list_processes`（枚举设备进程）→ 找 `/locationd` → `app_service_send_signal`（SIGKILL），
+>    全部经 RSD 隧道由设备侧执行。
+> 2. **为什么错 / 未验证**：「一直在用」是**假设**，不是观测。核查本仓日志与真机记录，**`app_service_*` 系列
+>    没有任何一条真机成功记录**；而 `app_service` 属 `com.apple.coredevice.*`，该族在 DDI 未挂时**不广播**
+>    （证据见本文件 `[0.3.376]` 段的「更正」）。
+> 3. **现在的证据**：真机 19 次 RSD 服务表 dump 中 `com.apple.coredevice.*` 一条都没有（工作目录 `_tmp_big.txt`）；
+>    上游 pymobiledevice3 #1744 显示挂上匹配 DDI 后 coredevice 服务条数 7 → 17。
+> 4. **结论改成什么**：这套 FFI **在「设备已挂 DDI」时可用，在本 App 当前「从不挂 DDI」的状态下必然
+>    `ServiceNotFound`**。也就是说 v0.3.254 那条「走 RSD 隧道 SIGKILL locationd」的**方向没错、但缺了 DDI
+>    这个前置条件** —— 在挂上 DDI 之前，它对用户是**不可用**的。
 - 清除流程：无条件 `clear`（自带「无会话先建会话」幂等）→ 隧道 SIGKILL locationd
   → 成功「已清除模拟位置」/ 失败「操作失败」。
 - 隧道操作移到后台线程执行（此前在主线程同步建隧道会冻住设置页数秒），执行期间按钮禁用。

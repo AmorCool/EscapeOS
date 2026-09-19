@@ -157,14 +157,23 @@ enum ProcessControlAction: String {
 /// `Sendable`（非 unchecked）：本类**没有可变存储属性**——两个存储属性都是
 /// `let` 的串行队列（`DispatchQueue` 本身是 `Sendable`），所有进程状态都在
 /// 方法内局部变量里、并已被这两条队列串行化。
+///
+/// ⚠️ **2026-09-19 更正**：上面「3 次退避重试覆盖**偶发** `ServiceNotFound`」**是错的**。
+/// 真机核实：19 次 RSD 服务表 dump（`_tmp_big.txt`）里 `com.apple.coredevice.*` **一条都没有**；
+/// `rsd.rs:171-189` 查服务是纯 `HashMap`、查不到直接 `Err(ServiceNotFound)`（错误码 21），**无回退**
+/// ⇒ **必现**，重试 3 次只是白等 0.9s。真因：`app_service` 属 CoreDevice 服务族，
+/// **设备未挂 DDI（Developer Disk Image）时整块不广播**。
+/// 详见 `CHANGELOG.md` `[0.3.376]` 段的「更正」与 `_tmp_svc_结论.md`。
 final class ProcessManagerService: Sendable {
 
     static let shared = ProcessManagerService()
     private init() {}
 
     /// 串行队列：保证 listProcesses / sendSignal 不并发建隧道.
-    /// 同一 hostname 并发 tunnel_create_rppairing 是进程管理 SIGKILL 偶发/持续
-    /// 无效的根因之一（RSD 通道竞争）.
+    /// 同一 hostname 并发 `tunnel_create_rppairing` 会互相抢占（RSD 通道竞争），
+    /// 因此这里必须串行 —— 这条约束本身成立。
+    /// ⚠️ 2026-09-19 更正：但它是**通道被抢占**的根因，**不是** `ServiceNotFound` 的根因；
+    /// 后者是 DDI 未挂导致 CoreDevice 服务整块不广播（必现），与并发无关。见上方注释。
     private let operationQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr", qos: .userInitiated)
     /// v0.3.38：内存查询专用串行队列（sysmontap 阻塞式，不与其他操作争用）
     private let memoryQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr.memory", qos: .utility)

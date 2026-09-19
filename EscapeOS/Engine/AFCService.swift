@@ -164,6 +164,15 @@ final class AFCService {
         return try result.get()
     }
 
+    /// 把**任意可能建 RSD 隧道**的操作放到 AFC 的这条串行队列上执行.
+    ///
+    /// 存在的唯一理由：让别的模块（目前只有只读诊断 `DDIMountProbe`）复用同一条队列，
+    /// 而不是自建第二条 —— 同一 hostname 并发 `tunnel_create_rppairing` 会互相抢占
+    /// （RSD 隧道并发铁律，见本文件 8-9 行）. 队列是私有的，所以只暴露这个受控入口.
+    func runExclusively<T>(_ body: () throws -> T) throws -> T {
+        try syncOnQueue(body)
+    }
+
     // MARK: - 浏览
 
     /// 静态辅助：在**已建立的 AFC 连接**上列出目录（供 CrashLogService 等

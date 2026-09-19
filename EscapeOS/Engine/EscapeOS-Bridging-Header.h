@@ -35,6 +35,9 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // v0.3.279：instproxy Browse 的 C 垫片（Swift 侧零 plist_t 指针传递）
 #include "../Tunnel/EscBrowseApps.h"
 
+// 只读 DDI 探针的 C 垫片（同一先例：Swift 侧零 plist_t / 零 opaque 指针出参）
+#include "../Tunnel/EscDDIProbe.h"
+
 #include "../Services/MachOLoader/uloader.h"
 
 // 崩溃探针：把硬故障（SIGSEGV/BUS/ILL/FPE）的 信号/地址/PC 写入 fd 后重抛

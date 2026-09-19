@@ -112,8 +112,14 @@ final class DeviceControlService {
 
     // MARK: 进程信号
 
-    /// connect 失败自动重试（最多 3 次、短退避）.RSD 服务发现偶发
-    /// 「ServiceNotFound」——多页面并发建隧道竞争导致，重试覆盖大部分偶发失败.
+    /// connect 失败自动重试（最多 3 次、短退避）。
+    ///
+    /// ⚠️ **2026-09-19 更正**：原先注释写「RSD 服务发现**偶发** `ServiceNotFound` —— 多页面并发建隧道竞争导致」，
+    /// **这个解释是错的**。真机核实（19 次 RSD 服务表 dump，`_tmp_big.txt`）里 `com.apple.coredevice.*`
+    /// **一条都没有**；`rsd.rs:171-189` 查服务是纯 `HashMap`、查不到直接 `Err(ServiceNotFound)`（错误码 21），
+    /// **无回退、无竞争成分** ⇒ **必现**，重试 3 次只是白等 0.9s。
+    /// 真因：`com.apple.coredevice.appservice` 属 CoreDevice 服务族，**设备未挂 DDI 时整块不广播**。
+    /// 详见 `CHANGELOG.md` `[0.3.376]` 段的「更正」与 `_tmp_svc_结论.md`。
     private func withAppService<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         var tunnel = try createTunnel(hostname: "EscapeSpaceDevice")
         defer { tunnel.free() }
@@ -211,6 +217,8 @@ final class DeviceControlService {
         }
         var appService: OpaquePointer?
         var connectError: NSError?
+        // ⚠️ 同 `withAppService`：这里的 3 次重试**不覆盖任何偶发失败** —— DDI 未挂时
+        // `com.apple.coredevice.*` 整块不广播，`ServiceNotFound` 是必现的（详见 `withAppService` 注释）。
         for attempt in 0..<3 {
             var candidate: OpaquePointer?
             if let ffiError = app_service_connect_rsd(adapter, handshake, &candidate) {

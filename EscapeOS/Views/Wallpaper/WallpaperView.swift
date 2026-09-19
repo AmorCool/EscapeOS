@@ -12,7 +12,6 @@ struct WallpaperView: View {
     @State private var isReady = false
     @State private var importError: String?
     @State private var showResetConfirm = false
-    @State private var showResetCuratedConfirm = false
     @State private var showDeleteConfirm = false
     @State private var deleteTarget: TendiesObject?
     @State private var activeAlert: WallpaperAlert?
@@ -63,16 +62,10 @@ struct WallpaperView: View {
                     }
                     .disabled(pbContainerPath.isEmpty)
 
-                    // 与「清空所有导入」互相独立：这一项动的是 PosterBoard 系统容器，不是 App 内的导入包.
-                    Button(role: .destructive) {
-                        showResetCuratedConfirm = true
-                    } label: {
-                        Label("重置精选集", systemImage: "arrow.counterclockwise")
-                    }
-                    .disabled(pbContainerPath.isEmpty)
-
                     Divider()
 
+                    // 一项做两件事：删 App 内的包 + 从 PosterBoard 系统容器移除已应用的自定义壁纸.
+                    // 只做前者的话系统壁纸选择器里那堆还在，用户会以为没生效 —— 所以不拆成两个入口.
                     Button(role: .destructive) {
                         showResetConfirm = true
                     } label: {
@@ -136,17 +129,11 @@ struct WallpaperView: View {
         } message: {
             Text(importError ?? "")
         }
-        .alert("重置所有壁纸导入？", isPresented: $showResetConfirm) {
+        .alert("清空所有导入？", isPresented: $showResetConfirm) {
             Button("取消", role: .cancel) {}
             Button("清空", role: .destructive) { clearAll() }
         } message: {
-            Text("将删除所有已导入的壁纸包，但不会恢复 PosterBoard 本身.")
-        }
-        .alert("重置精选集？", isPresented: $showResetCuratedConfirm) {
-            Button("取消", role: .cancel) {}
-            Button("重置", role: .destructive) { resetCurated() }
-        } message: {
-            Text("将删除 PosterBoard 中的自定义壁纸，Apple 默认精选集保留.")
+            Text("将清空 App 内的壁纸包，并从系统移除已应用的自定义壁纸.")
         }
         .alert("删除壁纸包？", isPresented: $showDeleteConfirm) {
             Button("取消", role: .cancel) { deleteTarget = nil }
@@ -468,51 +455,99 @@ struct WallpaperView: View {
         }
     }
 
+    /// 清空所有导入：① 删 App 内 Documents 里的壁纸包；② 从 PosterBoard 系统容器移除已应用的自定义壁纸.
+    ///
+    /// 两件事必须一起做：只做①的话，壁纸包没了但系统壁纸选择器里那堆还在（用户会以为没生效），
+    /// 只做②的话 App 列表里还留着已经不在系统里的条目 —— 所以对外只留一个入口.
     private func clearAll() {
-        for object in tendiesArray {
-            let url = WallpaperHandler.wallpapersFolder.appendingPathComponent(object.folderName)
-            try? FileManager.default.removeItem(at: url)
-        }
-        withAnimation {
-            tendiesArray.removeAll()
-        }
-    }
-
-    /// 重置精选集：只动 PosterBoard 系统容器里的自定义描述符，不碰 App 内已导入的壁纸包.
-    private func resetCurated() {
+        let objects = tendiesArray
         let container = pbContainerPath
         DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let result = try handler.resetCustomDescriptors(containerPath: container, using: sandbox)
-                DispatchQueue.main.async {
-                    // 四种情况都如实报：全成 / 一张都没删 / 有失败（已删的和失败的都要说）.
-                    if result.failed > 0 || result.unreadable > 0 {
-                        // 只把非 0 的项拼进去，不显示「0 张失败」；「读不了几个目录」张数未知，单独说.
-                        var parts = ["已删除 \(result.removed) 张"]
-                        if result.failed > 0 { parts.append("\(result.failed) 张删除失败") }
-                        if result.unreadable > 0 { parts.append("\(result.unreadable) 个目录读取失败") }
-                        showAlert(title: "重置精选集", message: parts.joined(separator: "；") + ".") {
-                            openPosterBoard()
-                        }
-                    } else if result.removed == 0 {
-                        showAlert(title: "重置精选集", message: "没有可重置的自定义壁纸.")
-                    } else {
-                        showAlert(title: "重置完成", message: "已删除 \(result.removed) 张自定义壁纸，重新打开 PosterBoard 生效.") {
-                            openPosterBoard()
-                        }
-                    }
+            // ① App 内的包：逐个删，失败只计数、不中断.
+            var packagesRemoved = 0
+            var packagesFailed = 0
+            var removedIDs: [UUID] = []
+            for object in objects {
+                let url = WallpaperHandler.wallpapersFolder.appendingPathComponent(object.folderName)
+                do {
+                    try FileManager.default.removeItem(at: url)
+                    packagesRemoved += 1
+                    removedIDs.append(object.id)
+                } catch {
+                    print("[wallpaper] failed to remove \(url): \(error)")
+                    packagesFailed += 1
                 }
+            }
+
+            // ② 系统容器：容器/写权限类错误在「一张都还没删」时抛出，此时①已经做完了 ——
+            //    把它当作「系统那段没做成」如实报，而不是假装整体失败.
+            var descriptors: (removed: Int, failed: Int, unreadable: Int)?
+            var systemError: Error?
+            do {
+                descriptors = try handler.resetCustomDescriptors(containerPath: container, using: sandbox)
             } catch {
-                DispatchQueue.main.async {
-                    showAlert(title: "重置失败", message: resetFailureMessage(for: error))
+                systemError = error
+            }
+
+            DispatchQueue.main.async {
+                // 只摘掉真删掉的条目：删失败的文件夹还在磁盘上，列表里就必须还在 ——
+                // 无条件清空会让用户以为清干净了，而 Documents/Wallpapers 里其实还留着.
+                withAnimation { tendiesArray.removeAll { removedIDs.contains($0.id) } }
+                let result = clearResult(
+                    packagesRemoved: packagesRemoved,
+                    packagesFailed: packagesFailed,
+                    descriptors: descriptors,
+                    systemError: systemError
+                )
+                if result.refresh {
+                    showAlert(title: result.title, message: result.message) { openPosterBoard() }
+                } else {
+                    showAlert(title: result.title, message: result.message)
                 }
             }
         }
     }
 
+    /// 把两类结果拼成一句：**只列非 0 的项**，不显示「0 个包失败」这种废话.
+    /// `refresh` = 动过系统容器，需要重新打开 PosterBoard 才会刷新.
+    private func clearResult(
+        packagesRemoved: Int,
+        packagesFailed: Int,
+        descriptors: (removed: Int, failed: Int, unreadable: Int)?,
+        systemError: Error?
+    ) -> (title: String, message: String, refresh: Bool) {
+        var parts: [String] = []
+        var clean = true
+
+        if packagesRemoved > 0 { parts.append("已清空 \(packagesRemoved) 个包") }
+        if packagesFailed > 0 {
+            parts.append("\(packagesFailed) 个包删除失败")
+            clean = false
+        }
+        if let descriptors {
+            if descriptors.removed > 0 { parts.append("系统已移除 \(descriptors.removed) 张") }
+            if descriptors.failed > 0 {
+                parts.append("\(descriptors.failed) 张移除失败")
+                clean = false
+            }
+            if descriptors.unreadable > 0 {
+                parts.append("\(descriptors.unreadable) 个目录读取失败")
+                clean = false
+            }
+        }
+        if let systemError {
+            parts.append("系统壁纸未处理：\(clearFailureMessage(for: systemError))")
+            clean = false
+        }
+
+        // 两边都没东西可清 → 不报「完成」，也别去重新打开 PosterBoard.
+        guard !parts.isEmpty else { return ("清空所有导入", "没有可清空的内容.", false) }
+        return (clean ? "清空完成" : "清空所有导入", parts.joined(separator: "；") + ".", true)
+    }
+
     /// 如实区分失败原因：没有写权限 / 没找到容器.
-    /// 注意：**单个目录删除失败不再走这里** —— 它由 `resetCustomDescriptors` 计数后随成功数一起报.
-    private func resetFailureMessage(for error: Error) -> String {
+    /// 注意：**单个目录删除失败不走这里** —— 它由 `resetCustomDescriptors` 计数后随成功数一起报.
+    private func clearFailureMessage(for error: Error) -> String {
         // 沙盒扩展拿不到（被内核拒绝、路径不在 containermanager 沙盒内等）⇒ 没有写权限.
         if error is SandboxEscapeError { return "没有写权限." }
         // 容器路径非法或三个 provider 目录都不存在 ⇒ 没找到容器.
@@ -520,7 +555,8 @@ struct WallpaperView: View {
            case .operationFailed(let message) = importError {
             return message
         }
-        return "重置失败：\(error.localizedDescription)"
+        // 其余错误原样上报；外层已有「系统壁纸未处理：」这个前缀，不再自己加「失败」.
+        return error.localizedDescription
     }
 
     private func openPosterBoard() {

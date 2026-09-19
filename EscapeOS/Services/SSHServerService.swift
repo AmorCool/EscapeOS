@@ -364,6 +364,21 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             AirliftExploit.forceProtocolProbe(group: group)
             return "已触发 airlift 协议探测（组 = \(group ?? "全部")）。\n"
                  + "结果：logs 200 / cat LoginLogs/airlift_stage.txt / cat LoginLogs/airlift_grappa.txt"
+        case "ddiprobe":
+            // ★ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
+            //
+            // 为什么需要：主页两个内置模块（locache / wifirefresh）走
+            // `app_service_connect_rsd` 时必现 `ServiceNotFound`(21)。已证实设备 RSD 服务表里
+            // **整块** `com.apple.coredevice.*` 都不在（19 次真机 dump 一致），而 41 条
+            // `.shim.remote` 与 pymobiledevice3 记录的「隧道内受信 RSD」41/41 全中。
+            // 主导假设：CoreDevice 那块是 **DDI 门控**的，没挂 DDI ⇒ 整块不广播。
+            // 本命令只回答一个问题：`image_mounter_copy_devices` 返回空还是非空。
+            //
+            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道
+            //    （理由与上面的 airlift 相同；且它开的服务连接**每次只允许一条**）。
+            // 安全约束全部落在 `DDIMountProbe` 头注释里（复用 AFC 串行队列 / 单连接 / 只读）。
+            // 用法：ddiprobe   （同步阻塞执行，结束后直接读结果）
+            return DDIMountProbe.runOnce()
         case "modules":
             let mods = ModuleService.shared.listModules()
             guard !mods.isEmpty else { return "（无已安装模块）" }
@@ -626,6 +641,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     EscapeSpace SSH 调试 · 可用命令:
       status          运行状态总览
       airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
+      ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30，最多 5000）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
