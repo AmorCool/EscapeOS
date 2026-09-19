@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.3.477] - 2026-09-19
+
+### ★★★★★ 真机实证：**机制成立** —— 攻击链七环全部打通
+
+`airlift4` 的只读盘点（`LoginLogs/airlift_landing.txt`）：
+
+```
+   airlift-canary-020697C4 → 成功 size=96 st_ifmt=S_IFDIR
+      └─ 3 项：. / .. / airlift-canary-020697C4.bin        ← payload 落在 canary 目标目录里
+   airlift-link-020697C4   → 成功 size=49 st_ifmt=S_IFLNK  ← 它仍然是 symlink
+   airlift-src-020697C4    → 成功 size=160 st_ifmt=S_IFDIR
+      └─ 5 项：. / .. / var / META-INF / p0               ← payload 与 p0/p1/p2/link 都不在了
+```
+
+| 证据 | 含义 |
+|---|---|
+| `airlift-src-020697C4` 里只剩 `var / META-INF / p0` | **两次 move 都执行了**（`payload` 与 `p0/p1/p2/link` 都被搬走） |
+| `airlift-link-020697C4` = **`S_IFLNK` size=49** | symlink 被**原样**搬过来，没被替换成目录；49 正好是 `../../../var/mobile/Media/airlift-canary-020697C4` 的长度 |
+| `airlift-canary-020697C4/airlift-canary-020697C4.bin` 存在 | move 2 的落点**穿过 symlink 落到了目标目录** |
+
+⇒ **设备跟随了 symlink、两次 move 都发生了、payload 写进了目标目录。**
+
+### 整条链的七环状态
+
+| 环节 | 状态 |
+|---|---|
+| ① zip 构造（与参考实现逐字节一致） | ✅ |
+| ① stage 落地（`RSDCheckin` 应答必须先读掉） | ✅ |
+| ② AFC 写 `Books/Sync/Books.plist`（+ 先备份） | ✅ |
+| ③ Grappa 认证 | ✅ |
+| ④ `DataclassAnchors = {"Book": 1}` | ✅ |
+| ⑤ 设备清单**命中**我们的 identifier 且 `IsDownload=1` | ✅ |
+| ⑥ 两条 `FileComplete`（之间不插读） | ✅ |
+| ⑦ **越界落点（穿过 symlink 落到目标目录）** | ✅ **本版拿到** |
+
+**⇒ 只剩最后一步：把目标从 Media 内部的 canary 目录换成真实路径
+（例如参考实现的 `/var/mobile/Library/SpringBoard`）—— 那一步会写 Media 之外，需显式授权。**
+
+### ★ 修 `airlift4` 的判据 bug（差点把成功读成失败）
+
+原判据是「A（payload 在 canary 目录）与 B（payload 在 `airlift-link-*` 里）**同时为真 ⇒ 没跟随**」
+—— **错了**。
+
+当 `airlift-link-*` **仍然是 symlink 且指向 canary 目录**时，`<link>/<leaf>` 与 `<canary>/<leaf>`
+就是**同一个文件的两条路径** ⇒ A 与 B **必然同时为真**，那恰恰是**成功**的特征。
+
+⇒ 真正的判据是 **`airlift-link-*` 的 `st_ifmt`**（新增判据 C）：
+- `S_IFLNK` + canary 目录里有 payload ⇒ **机制成立**；
+- `airlift-link-*` 是**普通目录**且里面有 payload ⇒ symlink 被当目录替换了（没跟随）。
+
+**铁律**：判断「符号链接有没有被跟随」要看**链接自身的类型**，不能靠「文件出现在哪个目录」——
+当链接还活着时，同一个文件会**同时**出现在链接路径和目标路径下。
+
 ## [0.3.476] - 2026-09-19
 
 ### ★★★★ 真机实证：**stage 修复成功** + **清单命中（`IsDownload=1`）**
