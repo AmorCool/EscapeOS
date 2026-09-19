@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.3.468] - 2026-09-19
+
+### ★★★★★ `airlift d` 真机结果：**Grappa 认证通过了**（推翻「必须现造 Grappa」的结论）
+
+```
+【Grappa 实验】组(d) 真实 macOS 样本（硬编码，84 字节） → 设备回 Command=ReadyForSync ★★★ 通过！
+已发 FinishedSyncingMetadata（二进制 plist 153 字节，小端长度前缀）
+读 #1（等 AssetManifest）：XML plist 101 字节，消息名 = SyncFinished
+```
+完整序列：`SyncAllowed` → `InstalledAssets` → `ReadyForSync` → 发 `FinishedSyncingMetadata` → 设备回 `SyncFinished`。
+
+**⇒ 设备回的是 `ReadyForSync`，不是 `SyncFailed{ErrorCode:4}` ⇒ Grappa 认证通过。**
+
+**★ 这推翻了此前那句「所有组都不通过 ⇒ 内容被校验、且绑主机身份 ⇒ 必须现造 A-64」**
+—— 那句话**只跑了组(a) 就下了结论**，而**组(d)（硬编码真实 macOS 样本）直接通过**。
+
+`AirliftExploit.swift:444-447` 的注释早就写明这个分支的含义：
+> · 组(d) 通过 ⇒ 设备只校验「是不是一块合法 Grappa」、**不绑主机身份**
+>   ⇒ **固定样本就能用，A-64 那套 Unicorn 生成器可以不进 App**。
+
+**连带省掉的工作**（都是原本以为必须做、且有风险的）：
+- ❌ **不需要** A-64（Unicorn 生成器）进 App；
+- ❌ **不需要**在设备上调用 macOS 私有框架（原计划里唯一有崩溃风险的一步）；
+- ❌ **不需要** `airlift_grappa.bin`（组(c) 的前提）。
+
+### 新增 SSH 命令 `airlift2`：攻击链**第 ② 步**最小闭环
+
+第 ① 步（stage，建 symlink）与 AT 认证都已通，只剩**真正触发那次越界 move**。
+`airlift2` 只跑一条链：
+
+```
+读 SyncAllowed → 发 HostInfo → 发 RequestingSync（带 Grappa）→ 读 ReadyForSync
+→ 发 FinishedSyncingMetadata → ★读 AssetManifest → ★★发 FileComplete → 读终止消息
+```
+
+**★ 方向依据 `ref-attraffic协议.md` §9.2 的消息方向表**（该表 §9.3 把「发 `AssetManifest`」
+明确列为**旧实现犯过的错**，本次就是修这条）：
+```
+| `AssetManifest` | 设备 → 主机 | 读 ← ★ 我们原先发它，方向反了 |
+| `FileBegin` / `FileProgress` | 主机 → 设备 | PoC 的最小路径里没有，可省 |
+| `FileComplete` | 主机 → 设备 | 发 ← 攻击落点（ATHostConnectionSendAssetCompleted） |
+```
+⇒ `AssetManifest` **只读不发**；`FileBegin` **不发**（§9.2「可省」）；`FileComplete` **发**（攻击落点）。
+
+**结果落两个文件**（这个区分很重要 —— 见下）：
+- `LoginLogs/airlift_at2.txt`：**结论，代码夹在 1800 字节以内**（SSH `cat` 在 ~31 KB 处截断，
+  超了就读不回来）；
+- `LoginLogs/airlift_at2_full.txt`：每帧原文（大块 plist 全文只进这里）。
+
+**判据**：设备对 `FileComplete` 的响应原文（接受 / 拒绝 / 无响应都是结论）；
+若设备先回了别的消息 ⇒ 如实写「**盲发**」，**不得读成「越界失败」**。
+`AssetID` 优先取 `airlift_stage.txt` 里末次 `MediaSubdir`（stage 真实目录），
+取不到就如实标注「非 stage 真实目录 ⇒ 本条只能验消息是否被接受，验不了越界写」。
+
+⚠️ **本步不做越界判据（AFC 回读）**，结论里已显式写明，免得被误读成「越界失败」。
+
+### 修工作流缺陷：结论读不回来
+
+`airlift_stage.txt` 已 37 KB，而 SSH `cat` 在 ~31 KB 处**截断并保留开头** ⇒ 末尾的
+`★ 判据` / `★ 结论` **全部读不回来**；`logs n` 也够不到（`fullLog()` 顺序是
+「最新 500 行 + 更早的行」，窗口落在更早那段）。本次是靠 `logs 2600` 这个**猜测值**才捞出来的。
+
+⇒ 新增 `LoginLogs/airlift_verdict.txt`（**1.67–1.86 KB，恒 < 2 KB**），只收
+`★ 判据` / `★ 结论` + AFC 写穿诊断行 + 中止时的第一条 `失败：` 行；
+`record()` 加 **4096 字节**单次上限（按 UTF-8 字节截断、注明原长，**只截断不删除**）。
+
 ## [0.3.467] - 2026-09-19
 
 ### ★★★ v0.3.466 真机结果：Pass C 定案 **(甲)** —— zip-slip 捷径收口
