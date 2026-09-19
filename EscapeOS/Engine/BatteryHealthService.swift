@@ -230,35 +230,53 @@ enum BatteryHealthService {
     ///
     /// ⚠️ `diagnostics_relay_client_ioregistry(client, current_plane, entry_name, entry_class, res)`
     /// —— `DeviceEnrichService` 把节点名放第 3 参（entry_name），本文件历史上放第 4 参（entry_class）。
-    /// 两条路在真机上都能取到节点，故这里**先按 name 查、拿不到再按 class 查**，避免任一侧语义
-    /// 不同导致新加的温度回退静默失效。
+    ///
+    /// ★★ v0.3.455 修：**两种查法都要试，判据是「有没有拿到节点」，不是「有没有报错」。**
+    ///
+    /// v0.3.443 把顺序改成「先 name 查」，但退回 class 的条件写成了 `if let e`（**报错才退回**）。
+    /// 真机实证（v0.3.454，2026-09-19 10:32:48）：
+    /// ```
+    /// 电池：IOPMPowerSource 节点不存在（返回空）
+    /// 电池：主节点 IOPMPowerSource 查询失败：未返回电池数据
+    /// ```
+    /// ⇒ 本机上 **name 形式不报错、但返回空节点** ⇒ 退回分支根本不执行
+    ///   ⇒ 主节点直接拿到 nil ⇒ **整个电池读取失败**（连温度回退都没机会跑）。
+    ///   而 class 形式（本文件历史上的原始写法）本来是能取到节点的。
+    ///
+    /// 教训：**「没报错」不等于「拿到了」**。拿不到节点时必须继续试下一种查法。
     private static func fetchRegistry(client: OpaquePointer, entryName: String) throws -> [String: Any]? {
-        var node: plist_t?
-        let e = entryName.withCString { nameCStr in
-            diagnostics_relay_client_ioregistry(client, nil, nameCStr, nil, &node)
-        }
-        if let e {
-            // name 形式报错时，退回 class 形式（本文件原调用方式）。
-            idevice_error_free(e)
-            var node2: plist_t?
-            if let e2 = entryName.withCString({ classCStr in
-                diagnostics_relay_client_ioregistry(client, nil, nil, classCStr, &node2)
-            }) {
-                throw ffiError(e2, fallback: "查询电池 IORegistry 失败（\(entryName)）")
+        // 先把两种查法都跑一遍，**只在「真的拿到节点」时才停下**。
+        var firstError: UnsafeMutablePointer<IdeviceFfiError>?
+        for byName in [true, false] {
+            var node: plist_t?
+            let e = entryName.withCString { cStr in
+                byName
+                    ? diagnostics_relay_client_ioregistry(client, nil, cStr, nil, &node)
+                    : diagnostics_relay_client_ioregistry(client, nil, nil, cStr, &node)
             }
-            node = node2
+            if let e {
+                // 这一种查法报错 ⇒ 记下第一个错误（两种都失败时用它报错），继续试下一种。
+                if firstError == nil { firstError = e } else { idevice_error_free(e) }
+                continue
+            }
+            guard let node else { continue }   // ★ 没报错但也没节点 ⇒ 继续试下一种
+            if let firstError { idevice_error_free(firstError) }
+            defer { plist_free(node) }
+            var binPtr: UnsafeMutablePointer<CChar>?
+            var binLen: UInt32 = 0
+            guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
+                  let binPtr, binLen > 0 else {
+                return nil
+            }
+            defer { plist_mem_free(binPtr) }
+            return (try? PropertyListSerialization.propertyList(
+                from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil)) as? [String: Any]
         }
-        guard let node else { return nil }
-        defer { plist_free(node) }
-        var binPtr: UnsafeMutablePointer<CChar>?
-        var binLen: UInt32 = 0
-        guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
-              let binPtr, binLen > 0 else {
-            return nil
+        // 两种查法都没拿到节点：报错就抛错，没报错就是「这个节点确实不存在」。
+        if let firstError {
+            throw ffiError(firstError, fallback: "查询电池 IORegistry 失败（\(entryName)）")
         }
-        defer { plist_mem_free(binPtr) }
-        return (try? PropertyListSerialization.propertyList(
-            from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil)) as? [String: Any]
+        return nil
     }
 
     /// 取整数（Int / Double / Bool / String 形态都吃），供 query 里的判定用。
