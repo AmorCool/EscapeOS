@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.3.475] - 2026-09-19
+
+### ★★ 修一个会让两段式直接失败的写法：两条 `FileComplete` 之间**不能插读**
+
+v0.3.474 的变体 4 用 `sendAndRecord` 发那两条 `FileComplete` —— 而 `sendAndRecord` **发完会读最多 3 条**。
+参考实现在两次发送之间**没有任何读**（`airtraffic_host.m:183-191` 原文）：
+
+```objc
+ATHostConnectionSendAssetCompleted(connection, …);   // 第 1 条
+if (index + 1 < assets.count) usleep(900000);        // 0.9s
+ATHostConnectionSendAssetCompleted(connection, …);   // 第 2 条
+…
+sleep(2);
+```
+
+真机实测（20:39）「发 `FileComplete` 后，设备回：（一条都没读到）」——
+那条连接**很可能已经被设备关了**（会话在 `FinishedSyncingMetadata` 之后随时可能结束）。
+在第 1 条之后插一次读，等于**多给设备一个把连接关掉的机会** ⇒ 第 2 条 `BrokenPipe`
+⇒ 那次 move 不会发生 ⇒ 整趟白跑。
+
+⇒ 新增 `sendOnly(_:_:_:)`（**只发不读**），变体 4 的两条都改用它。
+判据仍然只看**落点回读**（AFC），不依赖这两条的响应 —— 与项目铁律一致。
+
+**铁律**：协议里「连续动作之间不读」的地方，**不要用「发完顺手读一下」的封装** ——
+那个"顺手"会改变会话状态。
+
+### 背景：v0.3.474 还没装上
+
+设备日志显示两次安装都失败在 Apple 的登录服务上：
+
+```
+[20:37:37] / [20:55:32]  ❌ IPA 侧载登录失败:
+   ● HTTP status server error (503 Service Temporarily Unavailable)
+     for url (https://gsa.apple.com/grandslam/GsService2)
+```
+
+⇒ **Apple 服务端 503（临时故障）**，与证书/设备/操作都无关。等它恢复后装最新版即可。
+
 ## [0.3.474] - 2026-09-19
 
 ### ★★★ 把参考实现的**两段式**做进来（`airlift2 4`）—— 越界写本体
