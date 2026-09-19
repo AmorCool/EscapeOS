@@ -87,15 +87,17 @@ struct ModuleHostShell: View {
                 description: Text("模块声明的原生界面未在宿主内注册。")
             )
         } else {
+            // 注意：这里**刻意不套 NavigationStack**。
+            // 外壳已经有自己的常驻顶栏，再叠一层系统导航栏会在顶栏下面多出一条
+            // 空的细条（tab 内容通常不设 navigationTitle），视觉上变成双层栏。
+            // 需要下钻/自带导航栏的模块，由它**自己的 tab 内容内部**去套 NavigationStack.
             TabView(selection: $selection) {
                 ForEach(tabs) { tab in
-                    NavigationStack {
-                        tab.content(module)
-                    }
-                    .tabItem {
-                        Label(tab.title, systemImage: tab.systemImage)
-                    }
-                    .tag(tab.id)
+                    tab.content(module)
+                        .tabItem {
+                            Label(tab.title, systemImage: tab.systemImage)
+                        }
+                        .tag(tab.id)
                 }
             }
         }

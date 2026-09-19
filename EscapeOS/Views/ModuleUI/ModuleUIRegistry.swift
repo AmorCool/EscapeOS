@@ -31,19 +31,18 @@ struct ModuleUITab: Identifiable {
     /// 该 Tab 的内容；入参是模块本身，调用方按需渲染.
     let content: (EscapeModule) -> AnyView
 
-    init(id: String, title: String, systemImage: String, content: @escaping (EscapeModule) -> AnyView) {
-        self.id = id
-        self.title = title
-        self.systemImage = systemImage
-        self.content = content
-    }
-
-    /// 便利初始化器：调用方直接给 `@ViewBuilder` 闭包，由本初始化器包成 `AnyView`.
+    /// **唯一的**初始化器：调用方给 `@ViewBuilder` 闭包，内部包成 `AnyView`.
     ///
     /// 注册表必须把异质视图存进同一个 `[ModuleUITab]`，所以存储形态是 `AnyView`；
-    /// 但让每个注册点都手写 `AnyView(...)` 很啰嗦，这里补一个泛型重载。
-    /// 注：这里**直接写存储属性**而不是 `self.init(...)` 委托 —— 两个初始化器同名同标签，
-    /// 委托调用要再做一次重载消解，写存储属性则完全没有「选错重载」的可能.
+    /// 但调用方只写视图本身即可，不用手写 `AnyView(...)`.
+    ///
+    /// 刻意**只保留这一个**：若再加一个 `content: @escaping (EscapeModule) -> AnyView`
+    /// 的重载，调用点写 `content: { AnyView(X) }` 时两个重载都能匹配，胜负要靠
+    /// 「非泛型优先」的消解规则去赌 —— 那是可以避免的脆弱点。只留一个 ⇒
+    /// 歧义在**类型层面**就不可能发生.
+    ///
+    /// 另外这里是**直接写存储属性**而不是 `self.init(...)` 委托（本类型也只有这一个
+    /// 初始化器，没有可委托的对象）.
     init<V: View>(id: String, title: String, systemImage: String,
                   @ViewBuilder content: @escaping (EscapeModule) -> V) {
         self.id = id
