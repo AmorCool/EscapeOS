@@ -412,7 +412,12 @@ enum BatteryHealthService {
         //    回退链保留：nominal 取不到时用 maxCapacity（现有能力不丢）.
         var health: Int? = nil
         if let design, design > 0, let healthBase = nominal ?? maxCapacity {
-            health = min(100, max(0, Int((Double(healthBase) / Double(design)) * 100)))
+            // ★ v0.3.457：改成**四舍五入**（原来是 `Int(...)` 截断）。
+            //   爱思的反汇编显示它对 `Nominal/Design*100` 做四舍五入。
+            //   实机值 2709/3329 = 81.37% ⇒ 两者同为 81，分不出；但 81.6% 这种值
+            //   截断会给 81、四舍五入给 82 —— 差 1 就可能跨过评级档位边界。
+            //   （「爱思是否真的四舍五入」仍标**未验证**：实机样本落在两法同结果的区间。）
+            health = min(100, max(0, Int((Double(healthBase) / Double(design)) * 100).rounded()))
         }
 
         // 5. 当前电量 —— v0.3.291：BatteryData.CurrentCapacity 在 iOS 26/27 即百分比；

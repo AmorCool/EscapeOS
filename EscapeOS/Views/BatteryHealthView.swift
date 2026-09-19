@@ -132,11 +132,29 @@ struct BatteryHealthView: View {
         )
     }
 
-    /// v0.3.286：对齐爱思评级（良好 / 一般 / 差）
+    /// 对齐爱思 9.0 的电池评级（**三档文字与边界都是从二进制读出来的，不是猜的**）。
+    ///
+    /// 证据（`_tmp_rating_结论.txt`，反汇编 idm_info 的评级函数）：
+    /// ```
+    /// 0x...1D4  cmp  eax, 0x5B      ; 91
+    /// 0x...1D7  jl   0x...1E2       ; < 91 ⇒ 看下一档
+    ///            → 「优」
+    /// 0x...1E2  cmp  eax, 0x50      ; 80
+    /// 0x...1E5  jl   0x...1F0       ; < 80 ⇒ 差
+    ///            → 「一般」
+    /// 0x...1F0  → 「差」
+    /// ```
+    /// ⇒ **`优` = 91…100；`一般` = 80…90（闭区间）；`差` = 0…79。**
+    ///
+    /// ⚠️ 两处与旧实现不同，都是**原来写错了**：
+    ///   1. 旧代码是 `80... → 良好`、`60..<80 → 一般`。**80 那条线错了**（应归「一般」），
+    ///      而且 **「良好」这个词在爱思二进制里根本不存在**（实测只有「优 / 一般 / 差」）。
+    ///      ⇒ 实机 81% 爱思判「一般」、我们判「良好」（用户截图实证）。
+    ///   2. 90 是**闭区间上界**（`< 91` 才往下走）—— 90 归「一般」，不是「优」。
     private func healthLabel(_ health: Int) -> String {
         switch health {
-        case 80...: return "良好"
-        case 60..<80: return "一般"
+        case 91...: return "优"
+        case 80...90: return "一般"
         default: return "差"
         }
     }
@@ -262,9 +280,16 @@ struct BatteryHealthView: View {
             batteryCardRow("电池厂商", info.batteryManufacturer ?? "未知", icon: "hammer.fill")
             batteryCardRow("生产日期", manufactureDateText(info), icon: "calendar")
             batteryCardRow("出厂容量", info.designCapacity.map { "\($0) mAh" }, icon: "battery.0")
-            batteryCardRow("当前容量", info.currentCapacityMAh.map { "\($0) mAh" }, icon: "battery.50")
+            // ★ v0.3.457：原「当前容量」与「额定容量」**两行是同一个字段**
+            //   （都取 `NominalChargeCapacity`）⇒ 显示成两个一模一样的 2709，看着就像 bug
+            //   （用户报告「数值怎么是一样的」）。合并成一行。
+            //
+            //   名字用「额定/当前容量」而不是单说「当前容量」：后者会被读成
+            //   「现在装了多少」，于是与下面的「剩余容量」打架
+            //   （80% × 2709 = 2167 ≠ 2226）—— 用户正是这么被绕进去的。
+            //   这个量是**电池现在能装多少**（额定），不是**还剩多少**。
+            batteryCardRow("额定/当前容量", info.nominalChargeCapacity.map { "\($0) mAh" }, icon: "battery.75")
             batteryCardRow("满充容量", info.maxCapacity.map { "\($0) mAh" }, icon: "battery.100")
-            batteryCardRow("额定容量", info.nominalChargeCapacity.map { "\($0) mAh" }, icon: "battery.75")
             batteryCardRow("剩余容量", info.remainingCapacity.map { "\($0) mAh" }, icon: "battery.25")
             batteryCardRow("当前电压", info.voltage.map { String(format: "%.2f V", $0) }, icon: "bolt.fill")
             batteryCardRow("开机电压", info.bootVoltage.map { String(format: "%.2f V", $0) }, icon: "power")
