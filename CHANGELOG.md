@@ -1,5 +1,113 @@
 # Changelog
 
+## [0.3.473] - 2026-09-19
+
+### ★★★★ 真机实证：**根因成立** —— 设备第一次发出了 `AssetManifest`
+
+v0.3.472 的 `airlift3`（stage + AFC 写 `Books/Sync/Books.plist`）→ `airlift2 1` 真机结果：
+
+```
+0) 变体 1：先发 FinishedSyncingMetadata → 读 AssetManifest → 发 FileComplete
+   AssetID = ../../airlift-src-72BDBB83/p0/p1/p2/link
+1) 读（上限 6 条）：AssetManifest
+   ★ 读到 AssetManifest（设备→主机）：子树键序（前 12）= Book, Variant, TransferUnzipped,
+     AssetType, AssetID, IsDownload, Variant, TransferUnzipped, AssetType, AssetID, IsDownload, Type
+   设备侧真实 AssetID = ../../airlift-src-72BDBB83/payload      ← 正是我们写进 Books.plist 的那条
+```
+
+**这是整个 airlift 问题第一次拿到 `AssetManifest`** —— 之前每一轮设备都在
+`FinishedSyncingMetadata` 之后**直接回 `SyncFinished`**。
+⇒ 「参考实现用 AFC 伪造 `Books/Sync/Books.plist` 来制造待下载 asset」这个根因**成立**；
+`DataclassAnchors` 从 `{}` 改成 `{"Book": 1}` 也生效（空 anchors = 「没有新东西」）。
+
+**旁证（同一趟 AFC 回读）**：设备上 `Books/Sync` 里本来就有
+`Artwork / Database / Books.plist / .bookSync.lock`，`Books/` 下还有
+`Managed / MetadataStore / Purchases / Backup-Books.plist` ——
+**`/var/mobile/Media/Books/` 确实是设备 Books 同步的真实目录**。
+
+### ★★ 同时暴露两个必须修的问题（本版修）
+
+#### ① stage 没落地 ⇒ 越界不可能发生
+
+同一趟实测：`airlift-src-72BDBB83` 在 AFC 里 **`ObjectNotFound`**（整个目录没被创建），
+而帧格式与 zip 内容跟**已跑通的 Pass A 完全同款** ⇒ 问题不在 zip。
+线索：那次 `recvPlistFrame` 读回来的「stage 响应」是 `{Request: RSDCheckin}` ——
+**checkin 的应答还没被取走**。
+
+⇒ 结论：`RSDCheckin` 发完**必须把应答读掉**，再发 `MediaSubdir` + zip。
+v0.3.472 当时刻意跳过了这一步（理由是「PoC 也不读」），设备在 checkin 应答还没发完时
+收到 `MediaSubdir`/zip，把这条连接当成**还没进入服务协议**的状态，整个归档被丢掉。
+已跑通的 `runStageProbe` 正是「checkin → 读掉应答 → 发 plist → 发 zip」，本版照它对齐。
+
+**铁律**：`RSDCheckin` 不只是「必须发」，还要**把应答读完**再进入服务协议。
+
+#### ② 我们**覆盖了设备上真实的** `Books/Sync/Books.plist`
+
+那个文件**本来就存在**（`Books/Sync` 里还有 `.bookSync.lock`，说明 Books 同步守护进程在跑）。
+参考实现的前置检查（`device_helper.m` 的 `AllTrackedBooksFilesAbsent`）会**拒绝运行**，
+正是怕覆盖真实数据；v0.3.472 没做这一步 ⇒ 把用户设备上的 Books 同步元数据覆盖成了我们的两行。
+
+⇒ 本版改为：写之前**先把原文件读出来另存到 `LoginLogs/books_plist_backup_<token>.bin`**，
+并在结论里报出备份文件名；**原文件存在但备份失败时直接跳过写、不覆盖**。
+
+**铁律**：往设备上的**已有路径**写任何东西之前，先备份；备份不成功就不写。
+
+### ★ 把参考实现的 `ManifestContains()` 判据做进来 —— 三种情况分开报
+
+参考实现的主机端在发 `SendAssetCompleted` **之前**会逐个校验（`airtraffic_host.m:56-65` 原文）：
+
+```objc
+NSArray *books = [manifest[@"Book"] isKindOfClass:NSArray.class] ? manifest[@"Book"] : nil;
+for (id entry in books)
+    if ([entry isKindOfClass:NSDictionary.class] &&
+        [entry[@"AssetID"] isEqual:identifier] &&
+        [entry[@"IsDownload"] boolValue]) return YES;
+```
+
+v0.3.472 的结论行只报「有没有收到 `AssetManifest`」。但**收到清单**与**清单里有我们那条**
+是两个完全不同的结论，混在一起会掩盖真问题：
+
+| 现象 | 含义 |
+|---|---|
+| **没收到清单** | `Books.plist` 这条路没被读 ⇒ 要换方向 |
+| **收到清单、但没有我们的 identifier** | `Books.plist` **被读了**，但我们那行被过滤/忽略了 ⇒ 要查「写进去的字符串设备不认」 |
+| **收到清单、且命中（`IsDownload=1`）** | 前置条件成立 ⇒ 可以往下做越界写 |
+
+⇒ 新增 `AirliftExploit.manifestMatch(xml:dataclass:identifier:)`，用 **libplist 真正解析**
+（不是字符串查找 —— `AssetID` 的值里含 `..` 与 `/`，字符串查找在这种内容上极易误判），
+遍历 `Params.AssetManifest[<dataclass>]` 里的每一条，报出**命中/未命中 + 实际条目清单**。
+
+### ★ 修 v0.3.472 引入的一个回归：目录名可能取到**过期的**那份
+
+v0.3.472 把 `stagedSourceNameFromLastStageRun()` 改成「先看 `airlift_books.txt`、
+再看 `airlift_stage.txt`」—— 固定优先级。但之后如果又跑了 `airlift`（四趟 stage 探测），
+它写的是**新的** `airlift_stage.txt`，而固定优先级会**仍然去用旧的 `airlift_books.txt`**
+⇒ `AssetID` 指向一个设备上可能已经不存在的目录 ⇒ `move` 根本不会发生，判据失去意义。
+
+⇒ 改成**读两份文件、按修改时间取最新的那份**。
+
+### ★ 离线预检：归档与参考实现**逐字节一致**
+
+本机没有 Swift 编译器，`makeAirliftArchive` / `Books.plist` 的条目、顺序、内容只能在 CI 编译、
+真机才知道对不对。新增 `_tmp_verify_v472.py`：在 PC 侧用 Python 复刻同一套构造，
+并**直接调用参考实现自己的 `build_archive()` / `build_books()` 逐条比对**：
+
+```
+参考 build_archive 大小 = 1411   我的 = 1411
+★ 条目清单一致? True        ★★★ 归档逐条一致? True
+★ Books.plist 一致? True
+```
+
+同时用 `zipfile` 校验了：CRC 全对（`testzip=None`）、`link` 内容
+`../../../var/mobile/Library/SpringBoard`、`link` 的 mode = `S_IFLNK`、带 `0x5A53` extra field、
+`version made by` 的 system = 3（Unix）、`ZipMetadata` 是二进制 plist 且 `{Version: 2}` 为整数。
+
+### 下一步
+
+stage 修好后重跑 `airlift3` → `airlift2 1`：这次 `airlift-src-<token>` 应该真的落地，
+`FileComplete` 的 `AssetID` 才指得到东西 —— 那时 `ATAirlock` 的 `move` 才会发生，
+AFC 回读落点才可能命中。
+
 ## [0.3.472] - 2026-09-19
 
 ### ★★★ 根因定案：**我们从来没写 `Books/Sync/Books.plist`**
