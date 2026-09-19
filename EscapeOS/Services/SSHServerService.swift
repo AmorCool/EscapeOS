@@ -353,16 +353,19 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** ——
             //    它会真建 RSD 隧道，挂在 UI 路径上会跟其它功能抢隧道
             //    （v0.3.419/421/424 那串「所有依赖配对文件的功能一起失效」的成因）。
-            // 用法：airlift [组号]   组号 ∈ {0, a, b, c}，省略 = 跑全部
+            // 用法：airlift [组号]   组号 ∈ {0, a, b, c, d}，**省略 = a**（不要跑全部，见下）
             //
-            // ★ 为什么要能指定组：真机实证（v0.3.456，两次运行一致）——
+            // ★ 为什么要能指定组、且默认只跑一组：真机实证（v0.3.457/460）——
             //   **同一次运行内的第 1 个服务连接正常，第 2 个连接会卡死在 `adapter_connect`
-            //   上永不返回**（8 分钟无日志、15s 读超时都没触发）。而实验设计是
-            //   「四组各用一条全新连接」⇒ 连跑必然卡在第 2 组 ⇒ 拿不到 (a)/(b) 的结果。
-            //   按组单独调用时，每次只建一条连接 = 那条能跑通的第一条。
-            let group = parts.count > 1 ? parts[1] : nil
+            //   上永不返回**（8 分钟无日志、15s 读超时都没触发）。
+            //   而实验设计是「四组各用一条全新连接」⇒ 连跑**必然卡在第 2 组**，
+            //   而且会**把整条串行队列永久堵死** ⇒ 之后所有探测都不再跑
+            //   （v0.3.460 真机就栽在这里：13:50:59 自动跑全部 ⇒ 队列堵死 ⇒
+            //     13:56/14:00 两次手动触发**一次都没执行**）。
+            //   ⇒ 省略组号时默认 **"a"**（一组 = 一条连接，不可能卡）。
+            let group = parts.count > 1 ? parts[1] : "a"
             AirliftExploit.forceProtocolProbe(group: group)
-            return "已触发 airlift 协议探测（组 = \(group ?? "全部")）。\n"
+            return "已触发 airlift 协议探测（组 = \(group)）。\n"
                  + "结果：logs 200 / cat LoginLogs/airlift_stage.txt / cat LoginLogs/airlift_grappa.txt"
         case "ddiprobe":
             // ★ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
