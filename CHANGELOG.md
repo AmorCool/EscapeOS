@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.3.466] - 2026-09-19
+
+### ★★★ v0.3.465 真机结果：**stage 通了** —— `RSDCheckin` 就是缺的那一步
+
+```
+★ 判据【Pass A】：link st_ifmt=S_IFLNK=true、link 存在=true、跟随对照文件=true ⇒ A = ✅
+★ 判据【Pass B】：link st_ifmt=S_IFLNK=false、link 存在=false、逃逸探针=false ⇒ B = ❌
+```
+
+Pass A 逐条回读（**这就是攻击链第 ① 步需要的全部东西**）：
+```
+airlift-src-CC00FF78/          → 成功 size=192 st_ifmt=S_IFDIR
+airlift-src-CC00FF78/p0/p1/p2/link → 成功 size=29 st_ifmt=S_IFLNK        ← ★ symlink 建成
+airlift-src-CC00FF78/airlift-stage-target/airlift-follow-probe-D29FA473.txt → 成功 size=12
+airlift-src-CC00FF78/payload   → 成功 size=7
+```
+⇒ **解压器会跟随 symlink**（第 ② 步 `moveItemAtPath:` 的前提）。
+
+**★ 帧格式同时定案（本版把结论写进注释）：**
+
+| 帧格式 | 结果 |
+|---|---|
+| **4 字节大端长度 + XML plist** | ✅ 成功 |
+| **4 字节大端长度 + 二进制 plist** | ✅ 成功 |
+| 小端长度 + 二进制 plist | ❌ ObjectNotFound |
+| 无长度前缀 + 二进制 plist | ❌ ObjectNotFound |
+
+⇒ **4 字节大端长度前缀 + plist**（与 lockdown 的 `service_client_send_plist` 同款）。
+ref 里当初「无源码可证 ⇒ 四种候选链式回退」到此收敛。
+
+### 新增 **Pass C**：区分「逃逸 symlink 本身被拒」与「写穿它才被拒」
+
+Pass B 是**整包被拒**（四种格式全 `ObjectNotFound`、连 `link` 都没建出来），
+所以「逃逸条目被**单独**拒/跳过」这个说法**不准**。现在拆成三种 mode：
+
+| mode | zip 内容 |
+|---|---|
+| `.control` | 没有任何 symlink **逃出**解压根（**不是**「一个 `..` 都没有」—— 见下） |
+| `.escapeWrite` | 逃逸 symlink + **写穿**它的文件条目（原 Pass B） |
+| `.escapeLinkOnly` | **只放**逃逸 symlink，**不写穿**（Pass C） |
+
+**Pass C 的第三条判据（关键）**：若 `out` 确实是 `S_IFLNK`，就用 **AFC 主动写穿它**
+（`<source>/p0/p1/p2/out/<probe>`，**纯相对路径、无 `..`**；`..` 在 symlink 内容里），
+**先 close 再回读** AFC 根下的 `<probe>`：
+- 落点逃出去 ⇒ 设备只在「zip 解压时写穿」那一环设防，**AFC 写穿不设防**
+  ⇒ **不需要 AT/Grappa 就能越界写，整条链立刻成立**
+- 没逃出去 ⇒ 防护在文件系统层，这条捷径彻底收口，只能回到 ② AT
+
+### ★ 一处口径更正：`control` 不是「一个 `..` 都没有」
+
+`link` 的目标是 `../../../airlift-stage-target` —— **含 3 个 `..`**，只是**不逃逸**。
+Pass A 真机通过**正好证明**：**设备允许不逃逸的 `..`**。
+所以准确口径是「**没有任何 symlink 逃出解压根**」（用 `normpath` 归一化判定，不是数 `..` 个数）。
+三趟的日志文案已统一改掉。
+
+### 四象限措辞修正
+
+`A✅+B❌` 原来只写一句「逃逸条目被单独拒/跳过」；现在按 `passB.linkPresent` 拆开：
+- `linkPresent == false` ⇒ **整包被拒**
+- `linkPresent == true` 而 `escapePresent == false` ⇒ **只有逃逸条目被跳过**
+
+自检：`_tools_paren_scan.py` → 最终深度 +0、无负行、无「参数列表少逗号」可疑位置；
+另用离线脚本 `_tmp_verify_stage_zip.py` 把三种 mode 的 zip 都跑了一遍
+（`zipfile` 全 CRC 通过、条目数/顺序/`0x5A53` extra field/Unix mode 全 PASS）。
+⚠️ 本机不能编译、不能连真机 ⇒ 实际效果待真机 `airlift a`。
+
 ## [0.3.465] - 2026-09-19
 
 ### ★★★ airlift stage 根因定案：**漏了 `RSDCheckin`**（v0.3.464 两趟拆分跑出 `A❌+B❌`）
