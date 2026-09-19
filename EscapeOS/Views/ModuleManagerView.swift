@@ -343,6 +343,9 @@ struct ModuleManagerView: View {
     private func moduleCard(_ module: EscapeModule) -> some View {
         let enabled = enabledMap[module.id] ?? true
         let hasWeb = ModuleService.shared.webrootURL(for: module) != nil
+        // v0.3.481：模块自带原生 SwiftUI 二级界面（注册名已在宿主内注册）时，
+        // 「打开」走原生界面而不是 WKWebView —— 两者都有时**原生优先**.
+        let hasNativeUI = ModuleUIRegistry.shared.hasTabs(named: module.nativeUIViewName)
         let running = BinaryModuleRunner.shared.isRunning(module: module)
 
         return VStack(alignment: .leading, spacing: 6) {
@@ -383,6 +386,15 @@ struct ModuleManagerView: View {
                     .foregroundColor(.green)
             }
 
+            // v1.3：模块声明了宿主能力（requires）而宿主不具备 —— 装载期就明说缺哪一项，
+            // 同时把下面的「执行 / 打开」入口置灰（而不是让用户点下去在运行时静默失败）.
+            if !module.isUsable {
+                Label("缺少宿主能力：\(module.missingCapabilities.joined(separator: "、"))（请升级 EscapeSpace）",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
             // 二进制模块运行区（自启动服务）
             if module.isBinaryModule && enabled {
                 binaryControls(module)
@@ -396,25 +408,43 @@ struct ModuleManagerView: View {
             HStack(spacing: 12) {
                 let showStart = enabled && module.isBinaryModule && !running
                 let showRun = enabled && !module.actions.isEmpty && (!module.isBinaryModule || running)
+                // v1.3：宿主能力缺失 → 「执行 / 打开」类入口一律置灰（.disabled 挡点击，
+                // .opacity 让「为什么点不动」一眼可见）
+                let usable = module.isUsable
                 if showStart {
                     pill(label: "启动", icon: "play.fill") {
                         BinaryModuleRunner.shared.start(module: module, automatic: false)
                     }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
                 }
                 if showRun {
                     pill(label: "执行", icon: "play.fill") {
                         handleRun(module: module)
                     }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
                 }
                 if enabled && module.isLuaModule {
                     pill(label: "运行", icon: "play.fill") {
                         runLua(module: module)
                     }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
                 }
-                if hasWeb && enabled {
+                // v0.3.481：原生 SwiftUI 二级界面优先；没有再退回 webroot 的 WKWebView
+                if hasNativeUI && enabled {
+                    pill(label: "打开", icon: "square.grid.2x2") {
+                        ModuleUIRouter.shared.open(module)
+                    }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
+                } else if hasWeb && enabled {
                     pill(label: "打开", icon: "chevron.left.forwardslash.chevron.right") {
                         webviewModule = module
                     }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
                 }
                 Spacer()
                 if ModuleService.shared.isInPlaceBundled(module.id) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import UniformTypeIdentifiers
 import UIKit
 
@@ -23,6 +24,10 @@ struct RootView: View {
     @ObservedObject private var copyFeedback = CopyFeedback.shared
     /// 全局 2FA 输入框：任何页面（含启动预热）触发的验证码请求都弹这里.
     @StateObject private var twoFactor = TwoFactorPromptCoordinator.shared
+    /// v0.3.481：模块「原生 SwiftUI 二级界面」的展示状态.
+    /// 二级界面用 `fullScreenCover` 盖住整个 TabView（看不到 App 默认底栏），
+    /// 由 `ModuleUIRouter` 驱动；本视图只负责把它盖上来 + 响应「回主页」通知.
+    @StateObject private var moduleUIRouter = ModuleUIRouter.shared
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -59,6 +64,21 @@ struct RootView: View {
                 hasAcknowledgedLimits = true
             }
             .interactiveDismissDisabled()
+        }
+        // v0.3.481：模块原生二级界面 —— 用 fullScreenCover 而不是 push/sheet，
+        // 目的是**完全盖住 TabView**（用户看到的底部导航栏是模块自己的，不是 App 默认底栏）。
+        // 顶栏常驻「返回上一级 / 主页」两个出口（见 ModuleHostShell）.
+        .fullScreenCover(item: Binding(
+            get: { moduleUIRouter.active },
+            set: { moduleUIRouter.active = $0 }
+        )) { m in
+            ModuleHostShell(module: m, tabs: ModuleUIRegistry.shared.tabs(for: m))
+        }
+        // 二级界面点「主页」→ 切回默认主页 tab.
+        // 走通知而不是直接改 selectedTab：`MainTab` 是本文件的 private 枚举，
+        // ModuleUIRouter 引用不到它（见 ModuleUIRouter.swift 顶部注释）.
+        .onReceive(NotificationCenter.default.publisher(for: .escSelectHomeTab)) { _ in
+            selectedTab = .home
         }
         .onAppear {
             // 预热不等免责声明确认：免 2FA 的静默会话恢复，越早启动

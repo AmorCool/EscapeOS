@@ -4,6 +4,11 @@ import UIKit
 @main
 struct EscapeSpaceApp: App {
     init() {
+        // v0.3.481：注册宿主内置的「模块原生 SwiftUI 界面」.
+        // 模块清单（module.json）里 `ui.view` 写的是**注册名**，SwiftUI 视图没法从
+        // zip 加载，必须编译进宿主；注册必须在任何 UI 构建之前完成 —— 模块卡片的
+        // 「打开」入口要靠注册表判断该注册名是否存在（缺失就不给入口）.
+        registerBuiltinModuleUIs()
         // Consume the LiveContainer host-issued container sandbox extensions
         // (read/write) so guest containers — including shared/"converted" App
         // Group data — are reachable for scanning and reclaim on iOS 26.
