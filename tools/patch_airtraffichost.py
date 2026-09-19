@@ -303,6 +303,53 @@ for p, cmd, sz in lcs:
 log("  共改 %d 条" % len(patched_c))
 assert patched_c, "一条 `Versions/` 路径都没改到 —— 前提不成立，请复核（不该静默通过）"
 
+# ---------------------------------------------------------------- 补丁 D
+log()
+log("== 补丁 D: LC_ID_DYLIB 改成全局唯一名（消除 dlopen 撞名） ==")
+#
+# 为什么必须改（v0.3.455 加，GP-10 指出）：
+#   `dlopen(path)` 的解析**按 install name 匹配已加载镜像**，不是按路径。
+#   我们这份补丁过的 AirTrafficHost，`LC_ID_DYLIB` 原本是
+#       /System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost
+#   （补丁 C 之后变成扁平形态，但**仍然是系统那个名字**）。
+#   ⇒ 若哪天系统上真有一份同名镜像已被加载，`dlopen` 会把**系统那份**还给我们，
+#     而调用方拿到的 handle 却是系统镜像 —— 但 `fileBacked` 仍按「bundle 路径」判为 true
+#     ⇒ **护栏被静默绕过**（该跳过的没跳过）。
+#   虽然 iOS 现在没有 AirTrafficHost（GP-20 受控枚举过），但这是**结构上不该留的口子**。
+#
+# 改法：设成一个**只有我们会用的名字**。更短 ⇒ 原地覆写 + \0 填充，`cmdsize` 不变。
+# 安全性：我们一律**按路径 dlopen**，从不按名字查它；而且这份二进制在 CI 里是**未签名**的
+#   （签名由侧载工具施加），改 load command 不会破坏任何有效签名。
+UNIQUE_ID = _opt("--unique-id", "@rpath/EscapeOSAirTrafficHost").encode()
+patched_d = None
+for p, cmd, sz in lcs:
+    if cmd != LC_ID_DYLIB:
+        continue
+    noff, = struct.unpack_from("<I", thin, p + 8)
+    end = thin.index(b"\0", p + noff)
+    raw = bytes(thin[p + noff:end])
+    oldlen = end - (p + noff)
+    assert len(UNIQUE_ID) + 1 <= oldlen, \
+        "唯一名比原 install name 长（%d > %d），不能在 cmdsize 内原地改写" % (len(UNIQUE_ID) + 1, oldlen)
+    region = p + noff
+    thin[region:region + oldlen] = UNIQUE_ID + b"\0" * (oldlen - len(UNIQUE_ID))
+    # 校验
+    noff2, = struct.unpack_from("<I", thin, p + 8)
+    end2 = thin.index(b"\0", p + noff2)
+    assert thin[p + noff2:end2] == UNIQUE_ID, "补丁 D 覆写校验失败"
+    assert p + noff2 + len(UNIQUE_ID) < p + sz, "补丁 D 写穿了 cmdsize 边界"
+    nxt = p + sz
+    if nxt < 32 + sum(s for _, _, s in lcs):
+        ncmd, = struct.unpack_from("<I", thin, nxt)
+        assert ncmd in LC_NAMES or (ncmd & ~LC_REQ_DYLD) in LC_NAMES, \
+            "补丁 D 之后下一个 LC 的 cmd 被破坏: 0x%x" % ncmd
+    log("  LC_ID_DYLIB @0x%04x cmdsize=%d（未变）" % (p, sz))
+    log("      旧: %s" % raw.decode())
+    log("      新: %s" % UNIQUE_ID.decode())
+    patched_d = (raw.decode(), UNIQUE_ID.decode())
+    break
+assert patched_d, "没找到 LC_ID_DYLIB —— 前提不成立，请复核（不该静默通过）"
+
 # ---------------------------------------------------------------- 枚举 undefined symbols
 log()
 log("== SYMTAB undefined symbols ==")

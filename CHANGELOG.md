@@ -1,5 +1,87 @@
 # Changelog
 
+## [0.3.455] - 2026-09-19
+
+### 日志诚实性 + 结构加固（GP-10 审计落实）+ CI 桩自检改为「对证」
+
+本版**不改实验逻辑**，只修「日志会说谎」和两处结构隐患。核心实验（Grappa 四组 + stage）
+与 v0.3.454 完全一致。
+
+#### 1. ★ 修两处**会误导判断**的日志措辞（GP-10 指出）
+
+| 位置 | 原文（错） | 改成 |
+|---|---|---|
+| iOS 同类框架结论 | 「既没有 export trie 也没有可读 LC_SYMTAB」 | 「**本次未解析符号表**（系统路径镜像按 `fileBacked` 护栏跳过）」 |
+| CoreFP 路径不存在 | 「两个候选路径都不存在」 | 「**所有候选路径都不存在（含 bundle 里的 `SAPAssets/CoreFP`）**」 |
+
+为什么必须改：前者的真相是**我们根本没去解析**（护栏提前返回），说成「读了但读不到」
+会让人**照着空结果去查一个不存在的 bug**；后者会让人以为「我们手上没有 CoreFP」——
+**而事实是我们有**（`SAPAssets/CoreFP`，29 MB，随包发布，只是架构不对）。
+日志一旦说谎，后面的所有判断都会建在错的前提上。
+
+#### 2. ★ CoreFP 探测把 **bundle 内那份**放进了候选路径（第 1 条）
+
+iOS 的 `/System/Library/...` 上**确实没有** CoreFP —— GP-20 用 iOS SDK 完整目录清单
+**受控枚举**过（16.5 私有框架 1743 条、10.3 602 条，`truncated:false`；`CoreFP`/`AirTrafficHost`
+两次 0 命中，而 `AirTraffic` 对照命中，证明清单**确实收录私有框架**）。
+⇒ 只探系统路径，日志永远只会说「路径不存在」，这个结论**没有信息量**。
+现在把 `Bundle.main.bundlePath + "/SAPAssets/CoreFP"` 放最前，设备日志会直接给出真相：
+**文件存在，但架构不对**（10.9 那份是 fat i386 + x86_64，没有 arm64/arm64e 切片）。
+
+#### 3. ★ 补丁 D：`LC_ID_DYLIB` 改成全局唯一名（结构加固）
+
+`dlopen(path)` 的解析**按 install name 匹配已加载镜像**，不是按路径。我们这份补丁过的
+AirTrafficHost，`LC_ID_DYLIB` 原本是系统那个名字
+（`/System/Library/PrivateFrameworks/AirTrafficHost.framework/...`，补丁 C 之后变扁平但**仍是同名**）。
+⇒ 若哪天系统上真有同名镜像已被加载，`dlopen` 会把**系统那份**还给我们，
+而调用方按「bundle 路径」判出的 `fileBacked` 仍是 true ⇒ **护栏被静默绕过**。
+iOS 现在没有 AirTrafficHost（已受控枚举），但这是**结构上不该留的口子**。
+
+改法：`--unique-id`（默认 `@rpath/EscapeOSAirTrafficHost`），更短 ⇒ 原地覆写、`cmdsize` 不变。
+我们一律**按路径 dlopen**、从不按名字查它；且这份二进制在 CI 里是**未签名**的
+（签名由侧载工具施加）⇒ 改 load command 不破坏任何有效签名。
+
+**本地实测（真 FAT 二进制）**：
+```
+补丁 C  LC_ID_DYLIB   @0x0550 cmdsize=112（未变）
+            旧: .../AirTrafficHost.framework/Versions/A/AirTrafficHost
+            新: .../AirTrafficHost.framework/AirTrafficHost
+补丁 D  LC_ID_DYLIB   @0x0550 cmdsize=112（未变）
+            旧: .../AirTrafficHost.framework/AirTrafficHost
+            新: @rpath/EscapeOSAirTrafficHost
+```
+独立复核产物：`ID_DYLIB=@rpath/EscapeOSAirTrafficHost`、`platform=2(iOS) minos=18.0.0`、
+桩路径正确、`CoreFoundation` 扁平、**全文件无 `/Versions/` 残留**、**不再自称系统 install name**、
+大小不变 332176 → 332176。
+
+#### 4. 补 `sizeofcmds` 上界（GP-10 指出）
+
+原来只挡了 `cmdsize < 8` 的**下界**；单个 `cmdsize` 合法但累计越出 load command 区时
+仍会读到区外。现在三个解析函数都加 `let cmdsEnd = 32 + sizeofcmds`，
+循环条件改成 `cmdsize < 8 || off + cmdsize > cmdsEnd { break }`。
+
+#### 5. ★ 措辞纪律：把「未实测的机制」降级为**推断**
+
+v0.3.450/v0.3.453 的注释与 CHANGELOG 把
+「**缓存构建器改写了 `__LINKEDIT.fileoff`**」当成**已证事实**写。
+GP-10 指出：**没有本地共享缓存样本可验，这是推断**。
+
+现在分两层写明：**实测确定的一层** = 崩溃就发生在对系统镜像做符号枚举的那处裸解引用；
+**推断的一层** = 头部字段与文件不再自洽（最可能是 `__LINKEDIT.fileoff`）。
+并写明「**护栏不依赖这层推断成立** —— 推断错也不会错杀它」。
+⇒ 对外只说「算出了不可信地址」，不把具体字段当已证事实。
+
+#### 6. CI：桩符号自检从「**自证**」改成「**对证**」（GP-20 发现）
+
+原来拿**硬编码的 17 个名字**去查桩自己 —— 那是自证：查的是「桩导出了这 17 个吗」，
+而不是「**这份 ATH 需要的是哪 17 个吗**」。而 ATH 是**从 runner 的 macOS 现取**的，
+macOS 一升级它的导入集就可能变。届时 CI 仍会打印「桩 17 个符号全部已导出 ✓」并放行
+⇒ 设备上 dlopen 才在 **bind 阶段**炸，而且失败码 `-0xa5a4` 与「桩文件不存在」**同码**。
+
+现在改用**同一次运行里 patch 脚本产出的 `mobiledevice-imports.txt`** 当清单
+（它读的就是**这份 ATH 的 import 表**）⇒ 才是「桩必须导出什么」的**唯一权威来源**。
+历史清单只做**警告**（差异本身是信号：说明 macOS 换版了，基于旧版的偏移/符号名结论都要重核）。
+
 ## [0.3.454] - 2026-09-19
 
 ### ★ 拦住一个即将发出去的回归：v0.3.453 修了「闪退」，但**放回了「抢隧道」**
