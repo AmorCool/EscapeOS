@@ -176,8 +176,19 @@ enum BatteryHealthService {
     }
 
     private static func query(client: OpaquePointer, productType: String?, iosMajor: Int?) throws -> BatteryHealthInfo {
-        guard let primary = try fetchRegistry(client: client, entryName: "IOPMPowerSource") else {
-            throw makeError("未返回电池数据（设备可能未解锁，或 iOS 版本不支持）")
+        let primary: [String: Any]
+        do {
+            guard let node = try fetchRegistry(client: client, entryName: "IOPMPowerSource") else {
+                LoginLogger.shared.log("电池：IOPMPowerSource 节点不存在（返回空）", category: .general)
+                throw makeError("未返回电池数据（设备可能未解锁，或 iOS 版本不支持）")
+            }
+            primary = node
+        } catch {
+            // ★ 必须留痕：v0.3.443~v0.3.454 期间这里失败是**静默**的
+            // （UI 只把错误塞进 errorText，日志里一行都没有），
+            // 于是「电池读不出来」只能靠推断 battery_dump.txt 不存在来定位，代价很大。
+            LoginLogger.shared.log("电池：主节点 IOPMPowerSource 查询失败：\(error.localizedDescription)", category: .general)
+            throw error
         }
         // v0.3.443：iOS 27 的 `IOPMPowerSource` 里**没有** `Temperature`（真机 dump 实证），
         // 爱思 9.0 在此分支改查另一个节点 —— 反汇编实锤：
@@ -190,7 +201,25 @@ enum BatteryHealthService {
         //   0x1800140ce  plist_dict_get_item(bd, "Temperature")  → 温度
         var pack: [String: Any]? = nil
         if (intValue("Temperature", in: primary) ?? 0) <= 0 {
-            pack = try fetchRegistry(client: client, entryName: "AppleSmartBatteryPack")
+            // ★★ v0.3.455 修回归：这里**必须**是「失败即放弃回退」，绝不能让整个读取失败。
+            //
+            // v0.3.443 用的是裸 `try`。于是只要 `AppleSmartBatteryPack` 这个节点
+            // 查不到（`diagnostics_relay_client_ioregistry` 的 name/class 两种形式都报错
+            // ⇒ `fetchRegistry` 抛错），**整个 `query` 直接抛出** ⇒ 电池板块报「无法读取」。
+            //
+            // 为什么这个分支**每次都会走到**：上面那行注释已经写明「iOS 27 的
+            // `IOPMPowerSource` 里没有 `Temperature`」⇒ `intValue(...) ?? 0` 恒为 0
+            // ⇒ `0 <= 0` 恒真。**主数据明明已经拿到了，却被一个可选的回退节点拖死。**
+            //
+            // 真机实证（v0.3.452，用户报告「电池健康没法读取电池数据」）：
+            //   `LoginLogs/battery_dump.txt` **不存在** —— 而它正是在本函数下一行写的，
+            //   说明执行**从未走到那里**，即上面这个 `try` 抛了。
+            do {
+                pack = try fetchRegistry(client: client, entryName: "AppleSmartBatteryPack")
+            } catch {
+                LoginLogger.shared.log("电池：温度回退节点 AppleSmartBatteryPack 查询失败（不影响主数据）：\(error.localizedDescription)", category: .general)
+                pack = nil
+            }
         }
         // 「生产日期」定案用：把两个节点的完整 plist 落盘（只读、覆盖式、失败静默）。
         dumpBatteryRegistry(primary: primary, pack: pack)
