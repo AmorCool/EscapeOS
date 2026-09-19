@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.3.450] - 2026-09-19
+
+### ★ 四组「Grappa 内容」实验 —— 直接判定设备**校不校 Grappa 内容**
+
+**为什么这是现在最有价值的一个实验**：Grappa 生成依赖 FairPlay（`CoreFP`），而证据指向
+**iOS 上没有 `CoreFP`**（三份独立 SDK 私有框架清单 + `CoreFP` 带 `fairplayd`/IOKit 内核组件 +
+Apple 自己的 dyld 源码把该路径包在 `#if TARGET_OS_OSX` 里）。若那条路真断，
+**唯一的转机就是「设备其实不校验 Grappa 内容」**。
+
+**四组对照**（都发 `RequestingSync`，只是 `HostInfo.Grappa` 不同）：
+
+| 组 | 内容 | 目的 |
+|---|---|---|
+| (0) | **不发** `Grappa` 键 | 基线（已知结果：被拒 `ErrorCode=4`） |
+| (a) | **84 字节全 0** | 探测「占位即可」 |
+| (b) | **`01 01` + 82 字节全 0** | 探测「前缀对就行」 |
+| (c) | **真 Grappa**（从 `LoginLogs/airlift_grappa.bin` 读） | 阳性对照 |
+
+**判据**（结论行原文）：
+- 任一组回 `ReadyForSync` ⇒ `★★★ 通过！`
+- **(a)/(b) 也通过** ⇒ `★★★ 关键结论：设备不校验 Grappa 内容（只当种子）` ⇒
+  **不需要 CoreFP，整条路救活**
+- **(c) 通过而 (a)/(b) 不通过** ⇒ `关键结论：内容被校验（但不一定绑主机身份）`
+- **(c) 因缺 `airlift_grappa.bin` 被跳过** ⇒ 明确标注 **「本次是不完整结论」**（不装作有结果）
+
+**★ 顺带修一个会让结论行说谎的缺陷**：原实现用 `last*` 变量拼结论，而设备在 `SyncFailed` 之后
+**还会继续发消息**（`AssetMetrics`/`Ping`/`IdleExit`）⇒ `last*` 被覆盖 ⇒ 结论会显示
+「Command=别的 ErrorCode=无」。改成**只认第一条 `SyncFailed`**。
+
+**关于 `deviceType`**：实测真机 `Capabilities.GrappaSupportInfo` 报的是 **0**
+（见 `ref-attraffic协议.md` 的真机抓包），macOS 侧也用 0 测出 `err=0/outLen=84`。
+**保持 0 不动** —— 之前提过的「6」没有依据，已撤回。
+
+**本版同时带上 v0.3.449 的构建修复**（桩被 xcodegen 拷到 bundle 根 ⇒ 改由 CI 显式拷进
+`Frameworks/`，并加硬自检）。v0.3.449 那次构建**已成功**，本版在其基础上加四组实验。
+
 ## [0.3.449] - 2026-09-19
 
 ### ★ 修 v0.3.448 的构建失败：桩被拷到了 **bundle 根**（而不是 `Frameworks/`）
