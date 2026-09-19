@@ -29,7 +29,10 @@ jobs:
 
     env:
       A64: ${{ github.workspace }}/Resources/Scripts/a64_verify
-      WORK: ${{ runner.temp }}/a64
+      # ⚠️ 不能写 `${{ runner.temp }}` —— `runner` 上下文在 **job 级 env 里不可用**
+      #    （GitHub 报 `Unrecognized named-value: 'runner'`，workflow 直接解析失败）。
+      #    改用 workspace 下的临时目录，跑完不需要清理（runner 是一次性的）。
+      WORK: ${{ github.workspace }}/_a64work
 
     steps:
       - name: Checkout
@@ -72,7 +75,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: a64-verify-log
-          path: ${{ runner.temp }}/a64/verify.log
+          path: ${{ env.WORK }}/verify.log
           if-no-files-found: warn
           retention-days: 7
 

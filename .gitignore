@@ -46,3 +46,4 @@ __pycache__/
 # Apple 二进制与补丁产物：绝不进公开仓库（v0.3.454 修正）
 _fw_out/
 *.orig
+_a64work/
