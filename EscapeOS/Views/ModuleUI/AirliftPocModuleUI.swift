@@ -762,10 +762,6 @@ private struct AirliftOverwriteTab: View {
         selectedAirName != nil && !target.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    private var rootDisplay: String {
-        root == "crash" ? "/var/mobile/Library/Logs/CrashReporter" : "/var/mobile/Media"
-    }
-
     private func byteText(_ size: Int) -> String {
         if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
         if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
@@ -1105,6 +1101,10 @@ private struct AirliftFilesTab: View {
     }
 
     // MARK: 展示小工具
+
+    private var rootDisplay: String {
+        root == "crash" ? "/var/mobile/Library/Logs/CrashReporter" : "/var/mobile/Media"
+    }
 
     private func byteText(_ size: Int) -> String {
         if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }

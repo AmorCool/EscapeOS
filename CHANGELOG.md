@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.491] - 2026-09-20
+
+### 修编译错误：`rootDisplay` 落在了错误的 tab 里
+
+CI 实测：
+```
+AirliftPocModuleUI.swift:766:9: error: cannot find 'root' in scope
+AirliftPocModuleUI.swift:957:40: error: cannot find 'rootDisplay' in scope
+```
+
+**根因**：我用字符串替换把 `rootDisplay` 插到「`private func byteText(...)` 之前」，
+但**两个 tab 里都有 `byteText`**（`AirliftOverwriteTab` 与 `AirliftFilesTab`）
+⇒ 替换打到了**第一处**（Overwrite tab），而那个类型里没有 `root` 状态。
+
+**修法**：把它移到 `AirliftFilesTab`。另加了一道自查 —— 按 struct 范围逐个统计
+`root` 的引用，确认 8 处全在 `AirliftFilesTab` 内、Overwrite tab 里一处都没有。
+
+> 与 v0.3.490 的内容相同（那个 tag 的构建失败了，没有产生 release），
+> 只是把编译错误修掉后重发。
+
+> ★ 教训（同一类错误今天第二次）：**用字符串锚点做插入时，锚点必须全局唯一。**
+> 不唯一时先定位到目标类型内部再插，或插入后按「类型范围」核对一遍引用。
+
+## [0.3.490] - 2026-09-20
 ## [0.3.490] - 2026-09-20
 
 ### ★★★ 修：`pocWriteFile` / `pocDeleteFile` 的成败判据**永远匹配不到** ⇒ 每次误报失败
