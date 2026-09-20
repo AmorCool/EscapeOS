@@ -24,7 +24,8 @@
 //
 
 import SwiftUI
-// `.fileImporter` 的 `allowedContentTypes` 要 UTType，`.item` 来自这个模块
+// 文件选择走 `SharedDocumentPicker`（`.documentPicker` 的 `allowedTypes` 要 UTType，
+// `.item` 来自这个模块）—— **不要**再用 `.fileImporter`
 import UniformTypeIdentifiers
 
 // MARK: - 调用记录器
@@ -143,6 +144,11 @@ func registerAirliftPocModuleUI() {
                         title: "自定义覆盖",
                         systemImage: "square.and.arrow.up.on.square") { m in
                 AirliftOverwriteTab(module: m)
+            },
+            ModuleUITab(id: "dirbrowse",
+                        title: "目录浏览",
+                        systemImage: "list.bullet.indent") { m in
+                AirliftDirTab(module: m)
             },
             ModuleUITab(id: "files",
                         title: "文件浏览",
@@ -386,12 +392,13 @@ private struct AirliftSupervisedTab: View {
                 if !module.isUsable {
                     Text("模块当前不可用，无法执行。")
                 } else {
-                    Text("全程走 airlift，共 5 次操作，约需 50~100 秒：\n"
-                         + "① 读回原文件（读是移动，文件先进 Media）\n"
-                         + "② 把原字节**写回原位** —— 「先写入拷贝回来的东西」\n"
-                         + "③ 改 IsSupervised → ④ **覆盖**目标文件 —— 「再覆盖目标文件回写」\n"
-                         + "⑤ 读回校验（不轻信写入返回值）\n"
-                         + "原文件会自动备份到 App 沙盒（AIR/<扁平名>.bak）。")
+                    Text("⚠️ 真机实测（v0.3.496）：这个**目标做不到**。\n"
+                         + "`CloudConfigurationDetails.plist` 在 SystemGroup 容器里，"
+                         + "沙盒**只允许读/移出、拒绝创建/写入** —— 读得到（412 字节），"
+                         + "但覆盖读回一点没变，连在同一个目录里**新建**一个文件都建不出来。\n"
+                         + "对照：`/var/mobile/Library/**` 下的文件**可以**正常覆盖"
+                         + "（CrashReporter 实测 202→32 字节；Logs、Preferences 新建都成功）。\n"
+                         + "流程已按「先写回拷贝的内容、再覆盖」改对，但**目标本身不允许写入**。")
                 }
             }
 
@@ -757,10 +764,22 @@ private struct AirliftOverwriteTab: View {
             }
         }
         .task { await refreshAirList() }
-        .fileImporter(isPresented: $importing,
-                      allowedContentTypes: [.item],
-                      allowsMultipleSelection: false) { result in
-            Task { await importPicked(result) }
+        // ★★★ v0.3.496：改用**统一文件选择调用点** `SharedDocumentPicker`
+        //（= 全 App 唯一的导入路径，见 `SharedDocumentPicker.swift` 头注释）。
+        //
+        // ## 原来为什么「选完没反应」（用户实测报的现象）
+        // 这里原来是 `.fileImporter(...)` + `startAccessingSecurityScopedResource()`。
+        // `.fileImporter` 返回的是 **security-scoped URL**，而 LiveContainer 的访客
+        // 沙盒**会拒掉** `startAccessingSecurityScopedResource()`（除非宿主开了
+        // "fix file picker" 钩子）⇒ `Data(contentsOf:)` 直接失败、界面静默什么都不做。
+        //
+        // `SharedDocumentPicker` 用 `UIDocumentPickerViewController(asCopy: true)` ——
+        // **系统先把文件拷进 App 沙盒**再回调 ⇒ 拿到的 URL 就在沙盒里，
+        // 不需要 security-scoped 那一套（也不再需要 `startAccessing…`）。
+        .documentPicker(isPresented: $importing,
+                        allowedTypes: [.item],
+                        allowsMultipleSelection: false) { urls in
+            Task { await importPicked(urls) }
         }
         .confirmationDialog(
             "确认覆盖目标文件？",
@@ -828,15 +847,13 @@ private struct AirliftOverwriteTab: View {
         await refreshAirList()
     }
 
-    private func importPicked(_ result: Result<[URL], Error>) async {
-        guard case .success(let urls) = result, let url = urls.first else {
-            if case .failure(let error) = result {
-                errorText = "选择文件失败：\(error.localizedDescription)"
-            }
-            return
-        }
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+    /// 导入用户选的文件到 AIR.
+    ///
+    /// ⚠️ 入参是**已经在 App 沙盒里**的 URL —— `SharedDocumentPicker` 用
+    /// `asCopy: true`，系统拷完才回调 ⇒ **不要**再调
+    /// `startAccessingSecurityScopedResource()`（LC 沙盒会拒，原来就是栽在这里）.
+    private func importPicked(_ urls: [URL]) async {
+        guard let url = urls.first else { return }
         guard let data = try? Data(contentsOf: url) else {
             errorText = "读不到所选文件：\(url.lastPathComponent)"
             return
@@ -909,6 +926,264 @@ private struct AirliftOverwriteTab: View {
             return "{}"
         }
         return text
+    }
+}
+
+// MARK: - 目录浏览（Media 之外的**任意目录**）
+
+/// 「目录浏览」——浏览 `/var/...` 下**任意目录**（含子目录），这是 airlift 唯一能
+/// 枚举目录的方式。
+///
+/// ## 机制（2026-09-20 真机实证）
+/// airlift 的「读」**能搬整个目录**（不只文件）：
+/// ```
+/// airlift-recovered-38EC6637 → 存在（成功 size=128 st_ifmt=S_IFDIR）
+/// afc.list  /airlift-recovered-38EC6637       → sub(目录) + a.txt
+/// afc.list  /airlift-recovered-38EC6637/sub   → b.txt
+/// afc.read  /airlift-recovered-38EC6637/a.txt → 内容正确
+/// ```
+/// 目录被搬进 Media 后，AFC（根 = Media）就能**递归列 + 读** —— 因为东西
+/// **物理上已经在 Media 里**了。（对照：**穿过 symlink** 去列 Media 外的目录会被
+/// 沙盒拒掉 —— `Afc(PermDenied)`，所以「挂载 symlink 免费列目录」那条路走不通。）
+///
+/// ## ⚠️⚠️ 目标目录在操作期间是**缺位**的（约 20~40 秒）
+/// 搬进 Media ⇒ 列 ⇒ 搬回。中间那段时间里原位置**是空的**。
+/// ⇒ 所以：默认只列目录（不读文件内容）、拒绝一批「一动就出事」的路径、
+/// 搬回失败时大声报错并给「重试搬回」按钮（**数据没丢**，就在 Media 里）。
+private struct AirliftDirTab: View {
+    let module: EscapeModule
+
+    @State private var path = "/var/mobile/Library/Logs/CrashReporter/DiagnosticLogs"
+    @State private var depth = 3
+    @State private var readFiles = false
+    @State private var working = false
+    @State private var entries: [[String: Any]] = []
+    @State private var files: [String: String] = [:]
+    @State private var steps: [String] = []
+    @State private var errorText: String?
+    @State private var okText: String?
+    /// 搬回失败时记住「原路径 + Media 里的条目名」，给「重试搬回」用
+    @State private var pendingRestore: (path: String, recovered: String)?
+    @State private var expandedFile: String?
+
+    var body: some View {
+        Form {
+            Section {
+                Text("⚠️ 目标目录在操作期间（约 20~40 秒）会被**搬进 Media 暂存**，"
+                     + "那段时间里原位置是空的 —— 这是 airlift 唯一能枚举目录的方式。"
+                     + "已自动拒绝 /var、/var/mobile/Library、/var/containers 这类"
+                     + "「一动就可能让系统起不来」的祖先目录。")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            Section {
+                TextField("/var/mobile/... 目录绝对路径", text: $path)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.system(.callout, design: .monospaced))
+                Picker("递归深度", selection: $depth) {
+                    Text("1 层").tag(1)
+                    Text("3 层").tag(3)
+                    Text("6 层").tag(6)
+                    Text("12 层").tag(12)
+                }
+                Toggle("同时读回小文件内容（≤64 KB）", isOn: $readFiles)
+                Button {
+                    Task { await browse() }
+                } label: {
+                    if working {
+                        HStack { ProgressView(); Text("搬入 → 列目录 → 搬回（约 20~60 秒）…") }
+                    } else {
+                        Label("浏览这个目录", systemImage: "list.bullet.indent")
+                    }
+                }
+                .disabled(working || path.trimmingCharacters(in: .whitespaces).isEmpty)
+            } header: {
+                Text("目标目录")
+            } footer: {
+                Text("读回文件内容会让目录缺位更久（要逐个文件走 AFC）；只列目录最快。")
+            }
+
+            if let pendingRestore {
+                Section {
+                    Text("⚠️ 上一次没能把条目搬回原位：\(pendingRestore.path)")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                    Text("条目仍在 Media 的 \(pendingRestore.recovered)（**数据没丢**）")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Button {
+                        Task { await retryRestore(pendingRestore) }
+                    } label: {
+                        Label("重试搬回", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(working)
+                } header: {
+                    Text("待搬回（重要）")
+                }
+            }
+
+            if !entries.isEmpty {
+                Section {
+                    ForEach(Array(entries.enumerated()), id: \.offset) { _, item in
+                        entryRow(item)
+                    }
+                } header: {
+                    Text("内容（\(entries.count) 项）")
+                }
+            }
+
+            if !files.isEmpty {
+                Section("已读回的小文件") {
+                    ForEach(Array(files.keys.sorted()), id: \.self) { key in
+                        Button {
+                            expandedFile = (expandedFile == key) ? nil : key
+                        } label: {
+                            HStack {
+                                Image(systemName: expandedFile == key
+                                      ? "chevron.down" : "chevron.right")
+                                    .font(.caption2)
+                                Text(key).font(.system(.caption2, design: .monospaced))
+                                    .lineLimit(1)
+                            }
+                        }
+                        if expandedFile == key, let b64 = files[key],
+                           let data = Data(base64Encoded: b64) {
+                            Text(String(data: data, encoding: .utf8)
+                                 ?? "（二进制，\(data.count) 字节，base64：\(b64.prefix(200))…）")
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+
+            if !steps.isEmpty {
+                Section("执行步骤") {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: step.contains("⚠️") || step.contains("⇒ 拒绝")
+                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(step.contains("⚠️") ? .orange : .secondary)
+                            Text(step).font(.caption)
+                        }
+                    }
+                }
+            }
+
+            if let okText {
+                Section("结果") { Text(okText).font(.callout).foregroundColor(.green) }
+            }
+            if let errorText {
+                Section("错误原文") {
+                    Text(errorText).font(.caption).foregroundColor(.red)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func entryRow(_ item: [String: Any]) -> some View {
+        let isDir = (item["isDir"] as? Bool) ?? false
+        let depth = (item["depth"] as? Int) ?? 0
+        let name = (item["name"] as? String) ?? "?"
+        let size = (item["size"] as? Int) ?? 0
+        HStack(spacing: 6) {
+            Spacer().frame(width: CGFloat(depth) * 12)
+            Image(systemName: isDir ? "folder.fill" : "doc")
+                .font(.caption2)
+                .foregroundColor(isDir ? .accentColor : .secondary)
+            Text(name)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+            Spacer()
+            if !isDir { Text(byteText(size)).font(.caption2).foregroundColor(.secondary) }
+        }
+    }
+
+    private func byteText(_ size: Int) -> String {
+        if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
+        if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
+        return "\(size) B"
+    }
+
+    private func call(_ capability: String, _ args: String) async -> String {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (_, json) = AirliftPocLog.callRaw(capability, args)
+                continuation.resume(returning: json)
+            }
+        }
+    }
+
+    private func jsonString(_ obj: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
+    }
+
+    private func browse() async {
+        working = true
+        entries = []
+        files = [:]
+        steps = []
+        errorText = nil
+        okText = nil
+        expandedFile = nil
+        defer { working = false }
+
+        let target = path.trimmingCharacters(in: .whitespaces)
+        let args = jsonString([
+            "path": target,
+            "maxDepth": depth,
+            "readFiles": readFiles,
+        ])
+        let json = await call("airlift.readdir", args)
+        applyResult(json, target: target)
+    }
+
+    private func retryRestore(_ pending: (path: String, recovered: String)) async {
+        working = true
+        defer { working = false }
+        let json = await call("airlift.restoredir", jsonString([
+            "path": pending.path,
+            "recoveredName": pending.recovered,
+        ]))
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        if CapJSON.bool(dict, "restored") == true {
+            pendingRestore = nil
+            okText = "已把条目搬回 \(pending.path)"
+            errorText = nil
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+    }
+
+    private func applyResult(_ json: String, target: String) {
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        entries = (dict?["entries"] as? [[String: Any]]) ?? []
+        files = (dict?["files"] as? [String: String]) ?? [:]
+        let restored = CapJSON.bool(dict, "restored") ?? false
+        if restored {
+            pendingRestore = nil
+        } else if let recovered = CapJSON.string(dict, "recoveredName"), !recovered.isEmpty {
+            // 搬回没成立 —— 记下来，界面给「重试搬回」
+            pendingRestore = (path: target, recovered: recovered)
+        }
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "列出 \(entries.count) 个条目"
+                + ((CapJSON.bool(dict, "truncated") == true) ? "（已达上限、被截断）" : "")
+            errorText = nil
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
     }
 }
 

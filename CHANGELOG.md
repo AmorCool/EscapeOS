@@ -1,5 +1,81 @@
 # Changelog
 
+## [0.3.496] - 2026-09-20
+
+### ★★★ 定案：写入**必须读回校验**；「监督模式」的**目标本身不允许写入**
+
+#### 真机对照实验（同一台设备，2026-09-20）
+
+| 实验 | 结果 |
+|---|---|
+| **读** `…/ConfigurationProfiles/CloudConfigurationDetails.plist` | ✅ 成功（412 字节） |
+| **覆盖** 同一个 plist（按用户说的顺序：读 → 写回 → 覆盖） | ❌ 读回仍是 412 字节原文 |
+| **覆盖** 同一个 plist（**不做**写回，直接覆盖） | ❌ 同样没落地 |
+| **新建** `…/ConfigurationProfiles/zt-test.bin`（系统不认识的名字） | ❌ **文件根本没被创建** |
+| 覆盖 `CrashReporter` 里一个已存在的文件（98480 → 31 字节 / 202 → 32 字节） | ✅ **成功** |
+| **新建** `/var/mobile/Library/Logs/zt-logs.bin` | ✅ **成功（32 字节）** |
+| **新建** `/var/mobile/Library/Preferences/zt-prefs.bin` | ✅ **成功（32 字节）** |
+| **新建** `/var/mobile/Documents/zt-docs.bin` | ❌ 失败 |
+
+**结论**：
+- **`/var/mobile/Library/**` 基本可写**（含覆盖已存在文件 —— `moveItemAtPath` 会覆盖）。
+- **SystemGroup 容器**（`/var/containers/Shared/SystemGroup/…`）**只允许读/移出，
+  拒绝创建/写入** ⇒ 「启用监督模式」= 写 SystemGroup 容器 = **沙盒不让做**。
+  这不是流程问题（顺序已按用户要求改对），是**目标不允许**。
+- `/var/mobile/Documents` 同样不可写（也可能是该目录不存在）。
+
+> ★ **更正**：v0.3.493 我曾拿「连着两次 `airlift.pull` 都读到 412 字节」推翻
+> v0.3.490 的「SystemGroup 写不进去」结论 —— **那个推翻是错的**。
+> 读能成功是因为**读只用到「移出」**；「移回/写入」一直被沙盒拒。
+> v0.3.490 原来的判断是对的。
+
+#### 真 bug：`pocWriteFile` 的 `ok` 只代表「清单命中」，不代表字节落盘
+
+设备回 `AssetManifest` 里有我们那条，只证明**消息发出去了**。
+旧版 `airlift.overwrite` / `supervisedSet` 只看清单就报「已覆盖写入」
+⇒ **对着一个没生效的写汇报成功，把排查带偏了好几个小时。**
+
+**修法**：
+- `airlift.overwrite` 新增 `verify`（**默认 `true`**）：覆盖后**读回比对**，
+  不一致就如实报「覆盖**未生效**：读回 N 字节 ≠ 写入 M 字节」。
+- `sys.supervised.set` 的 ⑦ 改口径为「已**发出**覆盖写入（清单命中；以 ⑧ 读回为准）」。
+- 模块界面「监督模式」页脚直说**这个目标做不到**，并列出对照实验。
+
+### 新增：`airlift.readdir` / `airlift.restoredir` / `airlift.delete`
+
+#### ★★★ airlift 的「读」**能搬目录**（真机实证）
+```
+airlift-recovered-38EC6637 → 存在（成功 size=128 st_ifmt=S_IFDIR）
+afc.list  /airlift-recovered-38EC6637       → sub(目录) + a.txt
+afc.list  /airlift-recovered-38EC6637/sub   → b.txt
+afc.read  /airlift-recovered-38EC6637/a.txt → 内容正确
+```
+目录搬进 Media 后，AFC（根 = Media）就能**递归列目录 + 读文件** ——
+因为东西**物理上已经在 Media 里**了。
+
+（对照：**穿过 symlink** 去列 Media 外的目录会被沙盒拒 —— `Afc(PermDenied)`，
+ 所以「挂 symlink 免费列目录」那条路**走不通**，已实测排除。）
+
+- **`airlift.readdir {path, maxDepth, maxEntries, readFiles, maxFileBytes, restore}`** ——
+  搬进 Media → 递归列 → **无论成败都搬回**（`defer` 语义，记账落盘保证可重试）。
+  拒绝 `/var`、`/var/mobile/Library`、`/var/containers` 等「一动就可能让系统起不来」的祖先路径。
+- **`airlift.restoredir {path, recoveredName}`** —— 只凭 path 就能**重试搬回**
+  （条目名从 `LoginLogs/airlift_pending_restore.txt` 取）。搬回失败时界面会给按钮。
+- **`airlift.delete {path}`** —— 删掉沙盒外的一个已知文件（**先确认备份落盘、再删**）。
+
+新增「目录浏览」tab（模块 `com.escapeos.airlift-poc` → **1.1.1**）。
+
+### ★★★ 修「自定义覆盖 → 从本机选择文件导入到 AIR」选完没反应
+
+**根因**：那里用的是原生 `.fileImporter` + `startAccessingSecurityScopedResource()`。
+`.fileImporter` 返回 **security-scoped URL**，而 **LiveContainer 访客沙盒会拒掉**
+`startAccessingSecurityScopedResource()`（除非宿主开了 "fix file picker" 钩子）
+⇒ `Data(contentsOf:)` 直接失败、界面静默什么都不做。
+
+**修法**：改用**统一文件选择调用点** `SharedDocumentPicker`
+（= 全 App 唯一的导入路径，`UIDocumentPickerViewController(asCopy: true)`，
+**系统先把文件拷进 App 沙盒**再回调 ⇒ 不需要 security-scoped 那一套）。
+
 ## [0.3.495] - 2026-09-20
 
 ### ★★★ 修「监督模式」—— 覆盖写入必须**先写回再覆盖**（用户指出的，真机对照实验证实）
