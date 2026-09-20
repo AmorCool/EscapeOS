@@ -835,29 +835,51 @@ enum HostCapabilityService {
         return (0, jsonText(extra))
     }
 
-    /// `airlift.overwrite` —— 用 AIR 里的文件（或 App 沙盒里的文件）覆盖任意沙盒外路径。
+    /// `airlift.overwrite` —— 用 AIR 里的文件（或 App 沙盒里的文件）覆盖/写入任意沙盒外路径。
+    ///
+    /// ## ★★★ v0.3.498：**target 可以是目录**
+    /// 旧版把 `target` 一律当**文件路径**，拆成「父目录 + 文件名」——
+    /// 于是填一个**目录**时，它会拿**目录名当文件名**去写（写成一个叫
+    /// `ConfigurationProfiles` 的文件！），这既是错的、也很危险。
+    ///
+    /// 现在三种写法都能用：
+    /// ```
+    /// target = "/var/mobile/Library/Logs/a.bin"                  // 明确给文件名
+    /// target = "/var/mobile/Library/Logs/"                        // 尾斜杠 ⇒ 当目录，用源文件名
+    /// target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是目录
+    /// ```
+    /// 目录时落点 = `target/<leafName ?? 源文件名>`。
     ///
     /// 参数：
-    /// - `target`：目标绝对路径（必填）
+    /// - `target`：目标绝对路径（必填；可以是文件，也可以是目录）
     /// - `airName`：AIR 里的源文件名（与 `source` 二选一）
     /// - `source`：App 沙盒内的源文件绝对路径（与 `airName` 二选一）
+    /// - `targetIsDirectory`：把 `target` 当**目录**（默认 `false`；`target` 以 `/` 结尾时自动为真）
+    /// - `leafName`：目录模式下写入的文件名（默认取源文件名）
     /// - `backup`：覆盖前是否把目标原内容备份到 AIR（默认 `true`）
     /// - `verify`：覆盖后是否**读回比对**（默认 `true`）——
     ///   ⚠️ 强烈建议保持默认：清单命中**不等于**字节落盘（见 `airOverwrite` 头注释）
     private static func airliftOverwrite(_ args: [String: Any]) -> (Int32, String) {
-        guard let target = args["target"] as? String, !target.isEmpty else {
+        guard let rawTarget = args["target"] as? String, !rawTarget.isEmpty else {
             return fail("airlift.overwrite 缺少 target（目标绝对路径）")
         }
         let airName = args["airName"] as? String
         let source = args["source"] as? String
         let backup = (args["backup"] as? Bool) ?? true
+        let verify = (args["verify"] as? Bool) ?? true
+        let explicitDir = (args["targetIsDirectory"] as? Bool) ?? false
+        let explicitLeaf = (args["leafName"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // 读源文件（AIR 或沙盒）
         let data: Data
         var sourceDesc: String
+        var sourceFileName: String
         if let airName, !airName.isEmpty {
             do {
                 data = try airRead(name: airName)
                 sourceDesc = "AIR/\(airName)"
+                sourceFileName = airName
             } catch {
                 return fail("读 AIR/\(airName) 失败：\(error.localizedDescription)")
             }
@@ -870,15 +892,40 @@ enum HostCapabilityService {
             }
             data = d
             sourceDesc = source
+            sourceFileName = (source as NSString).lastPathComponent
         } else {
             return fail("airlift.overwrite 需要 airName（AIR 里的文件）或 source（沙盒内文件）之一")
         }
 
-        let verify = (args["verify"] as? Bool) ?? true
-        let (rc, json) = airOverwrite(target: target, data: data, backup: backup, verify: verify)
-        guard rc == 0 else { return (rc, json) }
-        // 补一句源描述，方便 UI 显示「用谁覆盖了谁」
+        // ★ 目录模式：`target` 以 `/` 结尾，或显式声明，或给了 `leafName`
+        var target = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trailingSlash = target.hasSuffix("/") && target.count > 1
+        if trailingSlash { while target.hasSuffix("/") { target.removeLast() } }
+        let isDirectory = explicitDir || trailingSlash
+            || (explicitLeaf?.isEmpty == false)
+        var finalPath = target
+        if isDirectory {
+            let leaf = (explicitLeaf?.isEmpty == false ? explicitLeaf! : sourceFileName)
+            guard !leaf.isEmpty, !leaf.contains("/") else {
+                return fail("目录模式下 leafName 必须是一个文件名（不含 `/`）：\(leaf)")
+            }
+            finalPath = target + "/" + leaf
+        }
+
+        let (rc, json) = airOverwrite(target: finalPath, data: data,
+                                      backup: backup, verify: verify)
+        guard rc == 0 else {
+            var dict = parseArgs(json)
+            dict["target"] = finalPath
+            dict["resolvedFrom"] = target
+            dict["targetIsDirectory"] = isDirectory
+            dict["source"] = sourceDesc
+            return (rc, jsonText(dict))
+        }
         var dict = parseArgs(json)
+        dict["target"] = finalPath
+        dict["resolvedFrom"] = target
+        dict["targetIsDirectory"] = isDirectory
         dict["source"] = sourceDesc
         return (0, jsonText(dict))
     }
@@ -1078,7 +1125,41 @@ enum HostCapabilityService {
                         extra: ["path": target, "refused": true])
         }
 
+        // ★★★ v0.3.498：**默认拒绝搬目录** —— 这是一条血的教训（2026-09-20 真机实测）
+        //
+        // ## 为什么（4 处落点全部实测失败）
+        // 设备端 `ATAirlock` 是 `moveItemAtPath:`。实测：
+        //   · 把目录**搬进 Media**：✅ 成功
+        //   · 把目录**搬回 Media 之外**：❌ 全部失败
+        //     （试过 `/var/mobile/Library/Logs/CrashReporter`、`…/Logs`、
+        //       `…/Logs/CrashReporter/Retired`、`/var/mobile/Library/Caches`、
+        //       `/var/mobile/Library/Preferences` —— 5 个落点全失败）
+        //   · 同样的落点**建文件**：✅ 成功（`zt-logs.bin` / `zt-prefs.bin` 都建出来了）
+        //   · 把目录搬回 **Media 内**：✅ 成功
+        // ⇒ **沙盒允许在 Media 外创建「普通文件」，但不允许创建「目录」**
+        //   （vnode 类型过滤）。所以「搬目录出去」是**单向、不可逆**的。
+        //
+        // ## 后果（我踩了）
+        // 我把 `…/CrashReporter/DiagnosticLogs` 搬进 Media 后**搬不回去**，
+        // 那个目录（含 2 个子目录、2 个文件）至今卡在 Media 里。
+        // ⇒ 所以现在**默认直接拒绝**，要搬必须显式写 `allowOneWay: true`
+        //   并在界面上确认「知道这是单向的」。
+        let allowOneWay = (args["allowOneWay"] as? Bool) ?? false
+        if !allowOneWay {
+            return fail("拒绝：把 Media 之外的**目录**搬进来是**单向、不可逆**的"
+                        + "（实测：沙盒允许在 Media 外建**文件**，但**不允许建目录**"
+                        + " ⇒ 搬出去就回不来了）。"
+                        + "如果你**确实**要把它搬进来（当成「导出目录内容」用），"
+                        + "请显式传 `allowOneWay: true`。"
+                        + "只想浏览的话：CrashReporter 那棵树请用 `afc.list`（root=crash），"
+                        + "Media 用 root=media —— 这两处**不需要搬**。",
+                        extra: ["path": target, "refused": true,
+                                "reason": "directoryMoveIsOneWay",
+                                "hint": "allowOneWay"])
+        }
         var steps: [String] = []
+        steps.append("⚠️⚠️ 已开启 allowOneWay：目录会被搬进 Media，"
+                     + "**Media 之外搬不回去**（沙盒不允许在 Media 外创建目录）。")
         // 放行但先提醒（App 容器 / 守护进程目录 / SystemGroup 容器）
         let warning = warnForReaddir(target)
         if let warning { steps.append("⚠️ 提醒：\(warning)") }

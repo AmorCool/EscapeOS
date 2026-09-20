@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.3.498] - 2026-09-20
+
+### ★★★ 事故与更正：`airlift.readdir` 搬目录是**单向**的（我把 `DiagnosticLogs` 搬丢了）
+
+**我犯的错**：`airlift.readdir` 我按「搬进 Media → 列 → **一定能搬回**」写代码，
+**没有先验证搬回**。真机实测：`/var/mobile/Library/Logs/CrashReporter/DiagnosticLogs`
+被搬进 Media 后**搬不回去**，卡在 `Media/airlift-recovered-2AFCED9B`。
+
+**根因（4 处落点全部实测失败）**：
+
+| 落点 | 搬目录进去 |
+|---|---|
+| `/var/mobile/Library/Logs/CrashReporter` | ❌ |
+| `/var/mobile/Library/Logs` | ❌ |
+| `/var/mobile/Library/Logs/CrashReporter/Retired` | ❌ |
+| `/var/mobile/Library/Caches` | ❌ |
+| `/var/mobile/Library/Preferences` | ❌ |
+| `/var/mobile/Media`（对照） | ✅ |
+
+**同一条路径上「建文件」是成功的**（`Caches/zt-cache.bin` → `verified = true`）
+⇒ **沙盒允许在 Media 外创建「普通文件」，但不允许创建「目录」**（vnode 类型过滤）。
+⇒ 所以「把目录搬出 Media」是**单向、不可逆**的。
+
+**损失盘点**：那个目录里**只有 1 个真文件**
+（`Search/spotlight_heartbeat_last.plist`，16767 字节，**已读出并保存在本地**），
+其余全是**空目录**（`Search`/`sysdiagnose` + 8 + 18 个空目录）。
+**没有用户数据丢失。**
+
+**修法（安全闸）**：
+- `airlift.readdir` **默认直接拒绝**，并在错误里写清楚为什么；
+  要搬必须显式传 `allowOneWay: true`（当成「导出目录内容」用）。
+- 顺带纠正一个更早的错误认知：`refuseReasonForReaddir` 原来按前缀拒绝，
+  把每个 App 容器也拒了；现在**只精确拒绝祖先**，子树放行但带警告（见 0.3.497）。
+
+> ★★ **教训**：**破坏性操作要先验证「可回退」，再执行。**
+> 我验证了「搬得进去」，没验证「搬得回来」—— 而后者才是这个操作安全的前提。
+
+### ★★ 自定义覆盖：**目标可以是目录**（旧版会把目录名当文件名去写）
+
+旧版 `airlift.overwrite` 一律把 `target` 当**文件路径**，拆成「父目录 + 文件名」——
+于是填一个**目录**时，它会拿**目录名当文件名**去写（写成一个叫 `ConfigurationProfiles`
+的文件！），既错又危险。现在三种写法都行：
+
+```
+target = "/var/mobile/Library/Logs/a.bin"                  // 明确给文件名
+target = "/var/mobile/Library/Logs/"                        // 尾斜杠 ⇒ 当目录，用源文件名
+target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是目录
+```
+目录时落点 = `target/<leafName ?? 源文件名>`。返回里带 `resolvedFrom` / `targetIsDirectory`。
+
+### 界面：不再把技术判据糊在脸上（用户原话「一堆文字我看着就烦」）
+
+新增共用的 `CompactStepsView`：**默认只显示关键行**（编号步骤 / 结论 / 警告），
+`★ 判据①②③ …`、`books staging …`、`Grappa 实验 …`、`清单第 N 条命中 …`
+这类排障细节**折进「显示全部 N 行」**按钮里。**完整原文照样在「日志」tab 与
+`LoginLogs/` 里，没丢，只是不糊在脸上。**
+
+顺带：结果 / 错误改成**圆角横幅**（`BannerView`），步骤行改成状态点 + 文本
+（警告橙色、成功绿色），比原来的裸 `Text` 好看也好认。
+
+### 「自定义覆盖」新增「删除目标文件」（`airlift.delete`）
+
+读写删三件套补齐。机制与读同源：设备先把文件搬进 Media（原位置那一刻就空了），
+再把 Media 里的副本删掉 ⇒ 文件消失；实现里**先确认备份落盘、再删**（没备份就不删）。
+
 ## [0.3.497] - 2026-09-20
 
 ### 新增 `apps.lookup` —— 按 bundle id 查 **App 数据容器路径**（AirCard #2）

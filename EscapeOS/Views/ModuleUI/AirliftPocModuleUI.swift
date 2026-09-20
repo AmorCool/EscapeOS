@@ -122,6 +122,123 @@ private enum CapJSON {
     }
 }
 
+// MARK: - 共享 UI 组件
+
+/// 「步骤」的**紧凑**渲染 —— 默认只显示关键行，技术细节折起来.
+///
+/// ## 为什么要它（用户原话：「一堆文字我看着就烦」）
+/// 宿主能力返回的 `steps` 里混了大量**排障用**的技术细节：
+/// `★ 判据①②③ …`、`books staging …`、`Grappa 实验 …`、`清单第 N 条命中 …`、
+/// `Media 根前若干项 …`。这些对**看日志排障**有用，对**看界面**就是噪音。
+/// ⇒ 默认只显示「编号步骤 / 结论 / 警告」，其余折进「显示全部 N 行」。
+/// ⇒ 完整原文照样在「日志」tab 与 `LoginLogs/` 里，**没丢**，只是不糊在脸上。
+struct CompactStepsView: View {
+    let steps: [String]
+    let title: String
+    @State private var expanded = false
+
+    init(_ steps: [String], title: String = "执行步骤") {
+        self.steps = steps
+        self.title = title
+    }
+
+    /// 噪音行标记 —— 命中即默认折叠（不是删除）
+    private static let noise: [String] = [
+        "判据①", "判据②", "判据③", "books staging", "Grappa 实验",
+        "Media 根前若干项", "规范化 base", "linkIdentifier", "targetIdentifier",
+        "清单第", "帧前32字节", "响应 #", "已发 ", "攻击标识符",
+        "AssetID =", "linkDestination =", "读目标（", "搬回的条目（",
+        "【Grappa", "★ 结论 下一步", "★ 结论 本次", "★ 结论 books staging",
+    ]
+
+    private var keySteps: [String] {
+        steps.filter { line in !Self.noise.contains { line.contains($0) } }
+    }
+
+    var body: some View {
+        if !steps.isEmpty {
+            Section {
+                ForEach(Array((expanded ? steps : keySteps).enumerated()), id: \.offset) { _, step in
+                    StepRow(text: step)
+                }
+                if keySteps.count < steps.count {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                    } label: {
+                        Label(expanded
+                              ? "收起技术细节"
+                              : "显示全部 \(steps.count) 行（含技术判据）",
+                              systemImage: expanded ? "chevron.up" : "chevron.down")
+                            .font(.caption)
+                    }
+                }
+            } header: {
+                Text(title)
+            }
+        }
+    }
+}
+
+/// 单条步骤：一个状态点 + 文本（等宽只留给路径/数字那类内容）.
+struct StepRow: View {
+    let text: String
+
+    private var isWarn: Bool { text.contains("⚠️") || text.contains("失败") || text.contains("拒绝") }
+    private var isGood: Bool { text.contains("★") || text.contains("已") || text.contains("成立") }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isWarn ? "exclamationmark.triangle.fill"
+                                     : (isGood ? "checkmark.circle.fill" : "circle.dotted"))
+                .font(.system(size: 11))
+                .foregroundColor(isWarn ? .orange : (isGood ? .green : .secondary))
+                .padding(.top, 2)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundColor(isWarn ? .orange : .primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// 结果 / 错误横幅（圆角卡片，比裸 Text 好看也好认）.
+struct BannerView: View {
+    enum Kind { case ok, warn, error
+        var color: Color {
+            switch self {
+            case .ok: return .green
+            case .warn: return .orange
+            case .error: return .red
+            }
+        }
+        var icon: String {
+            switch self {
+            case .ok: return "checkmark.seal.fill"
+            case .warn: return "exclamationmark.triangle.fill"
+            case .error: return "xmark.octagon.fill"
+            }
+        }
+    }
+    let kind: Kind
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: kind.icon)
+                .foregroundColor(kind.color)
+            Text(text)
+                .font(.system(size: 12))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(kind.color.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+    }
+}
+
 // MARK: - 注册入口
 
 /// 把 airlift-poc 的原生界面注册进宿主.
@@ -402,27 +519,9 @@ private struct AirliftSupervisedTab: View {
                 }
             }
 
-            if !steps.isEmpty {
-                Section("执行步骤") {
-                    ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: stepIcon(step))
-                                .font(.caption)
-                                .foregroundColor(stepColor(step))
-                            Text(step).font(.caption)
-                        }
-                    }
-                }
-            }
+            CompactStepsView(steps)
 
-            if let errorText {
-                Section("错误原文") {
-                    Text(errorText)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .textSelection(.enabled)
-                }
-            }
+            if let errorText { BannerView(kind: .error, text: errorText) }
 
             if let lastBackup {
                 Section("原文件备份") {
@@ -745,19 +844,7 @@ private struct AirliftOverwriteTab: View {
                 }
             }
 
-            if !steps.isEmpty {
-                Section("执行步骤") {
-                    ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: step.hasPrefix("⚠️") || step.hasPrefix("② ⚠️")
-                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundColor(step.contains("⚠️") ? .orange : .secondary)
-                            Text(step).font(.caption)
-                        }
-                    }
-                }
-            }
+            CompactStepsView(steps)
 
             if let okText {
                 Section("结果") {
@@ -765,14 +852,7 @@ private struct AirliftOverwriteTab: View {
                 }
             }
 
-            if let errorText {
-                Section("错误原文") {
-                    Text(errorText)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .textSelection(.enabled)
-                }
-            }
+            if let errorText { BannerView(kind: .error, text: errorText) }
         }
         .task { await refreshAirList() }
         // ★★★ v0.3.496：改用**统一文件选择调用点** `SharedDocumentPicker`
@@ -1151,29 +1231,10 @@ private struct AirliftDirTab: View {
                 }
             }
 
-            if !steps.isEmpty {
-                Section("执行步骤") {
-                    ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: step.contains("⚠️") || step.contains("⇒ 拒绝")
-                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundColor(step.contains("⚠️") ? .orange : .secondary)
-                            Text(step).font(.caption)
-                        }
-                    }
-                }
-            }
+            CompactStepsView(steps)
 
-            if let okText {
-                Section("结果") { Text(okText).font(.callout).foregroundColor(.green) }
-            }
-            if let errorText {
-                Section("错误原文") {
-                    Text(errorText).font(.caption).foregroundColor(.red)
-                        .textSelection(.enabled)
-                }
-            }
+            if let okText { BannerView(kind: .ok, text: okText) }
+            if let errorText { BannerView(kind: .error, text: errorText) }
         }
     }
 
@@ -1397,14 +1458,7 @@ private struct AirliftFilesTab: View {
                      + "RSD 服务表（64 个服务）里没有服务把根设在它们上面。")
             }
 
-            if let errorText {
-                Section("错误原文") {
-                    Text(errorText)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .textSelection(.enabled)
-                }
-            }
+            if let errorText { BannerView(kind: .error, text: errorText) }
 
             Section {
                 if entries.isEmpty && !loading {
