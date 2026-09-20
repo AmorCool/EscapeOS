@@ -2,38 +2,324 @@
 //  AirliftPocModuleUI.swift
 //  EscapeSpace
 //
-//  v0.3.481：airlift-poc 模块的原生界面（概览 / 监督模式 / 日志）.
+//  airlift-poc 模块的原生界面. 卡片式布局，配色全部走系统语义色，跟随系统深浅色.
 //
 //  ## 这个模块为什么这么写
-//  它是**第一个**用 `escape.host.v1` 的模块.在此之前，任何需要「沙盒外读写 /
-//  改系统设置」的模块都得自己把整套漏洞利用重写一遍 —— airlift-poc 刻意**不**那么做：
-//  它只声明 `requires`，然后调宿主能力（`HostCapabilityService.call`）.
-//  好处是将来漏洞链被替换（bad_query → airlift → 下一个），本文件**一行都不用改**.
+//  它只声明 requires，然后调宿主能力（HostCapabilityService.call）. 将来漏洞链被替换
+//  （airlift -> 下一个），本文件一行都不用改.
 //
-//  ## 为什么这里直接调 Swift 而不用 C ABI
-//  本界面是**编译进宿主的 Swift 代码**，所以直接调 `HostCapabilityService` 即可.
-//  `escape_module_init` + `EscapeHostAPI` 函数表那条路是给**外部 dylib 模块**
-//  （C / Go 写的）用的 —— 两条路最终都汇到同一个 `call` 分发器.
-//
-//  ## 唯一功能：启用监督模式
-//  写 `CloudConfigurationDetails.plist` 的 `IsSupervised`.
-//  为什么这件事现在才做得成：现有实现靠 `escape.consume(path: configProfiles,
-//  isGroup: true)` 拿 bad_query 沙盒扩展，而 iOS 26.5/26.6 对
-//  `configurationprofiles` SystemGroup **拒绝签发沙盒扩展** ⇒ 写不进去.
-//  airlift 能写任意单个文件 ⇒ 正好补这个洞.
+//  ## 界面三条硬规则（用户明确要求，改之前先看这三条）
+//  1. 不用黄色感叹号 —— 不用 ⚠️，也不用 exclamationmark.triangle
+//  2. 注释是给开发者看的，界面上一个字都不显示（StepText.clean 负责清掉）
+//  3. 句号一律用英文 `.`，给用户看的描述要精简
 //
 
 import SwiftUI
-// 文件选择走 `SharedDocumentPicker`（`.documentPicker` 的 `allowedTypes` 要 UTType，
-// `.item` 来自这个模块）—— **不要**再用 `.fileImporter`
+import UIKit
 import UniformTypeIdentifiers
+
+// MARK: - 设计系统
+
+/// 模块内视觉常量. 只放尺寸，颜色一律用系统语义色（不写死深浅色）.
+private enum Look {
+    static let radius: CGFloat = 14
+    static let pad: CGFloat = 14
+    static let gap: CGFloat = 10
+    /// 卡片背景：跟随分组背景色，深浅色自动
+    static var cardFill: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+    /// 页面底色
+    static var pageFill: Color { Color(uiColor: .systemGroupedBackground) }
+}
+
+/// 顶部大卡：图标 + 标题 + 副标题 + 右侧状态胶囊.
+struct HeroCard: View {
+    let icon: String
+    let title: String
+    var subtitle: String = ""
+    var tint: Color = .accentColor
+    var pill: (text: String, color: Color)?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(tint.opacity(0.15))
+                    .frame(width: 40, height: 40)
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(tint)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 16, weight: .semibold))
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 6)
+            if let pill {
+                Pill(text: pill.text, color: pill.color)
+            }
+        }
+        .padding(Look.pad)
+        .background(Look.cardFill, in: RoundedRectangle(cornerRadius: Look.radius, style: .continuous))
+    }
+}
+
+/// 普通卡片容器.
+struct CardBox<Content: View>: View {
+    var title: String?
+    var icon: String?
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let title {
+                HStack(spacing: 6) {
+                    if let icon {
+                        Image(systemName: icon)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                    Text(title)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.bottom, 8)
+            }
+            VStack(alignment: .leading, spacing: Look.gap) { content() }
+        }
+        .padding(Look.pad)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Look.cardFill, in: RoundedRectangle(cornerRadius: Look.radius, style: .continuous))
+    }
+}
+
+/// 状态胶囊.
+struct Pill: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(color)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.14), in: Capsule())
+    }
+}
+
+/// 圆角动作按钮.
+struct CardButton: View {
+    enum Kind { case normal, danger
+        var tint: Color { self == .danger ? .red : .accentColor }
+    }
+    let title: String
+    let icon: String
+    var kind: Kind = .normal
+    var enabled: Bool = true
+    var busy: Bool = false
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                if busy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: icon).font(.system(size: 13, weight: .medium))
+                }
+                Text(title).font(.system(size: 14, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(enabled ? kind.tint : .secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(kind.tint.opacity(enabled ? 0.12 : 0.06),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled || busy)
+    }
+}
+
+/// 左标签 / 右值（值用等宽，方便看路径与数字）.
+struct KV: View {
+    let label: String
+    let value: String
+    var mono: Bool = false
+    var color: Color?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(mono ? .system(size: 12, design: .monospaced) : .system(size: 13))
+                .foregroundColor(color ?? .primary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+/// 输入框（等宽，自动纠正关闭）.
+struct PathField: View {
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        TextField(placeholder, text: $text)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(.system(size: 13, design: .monospaced))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(Color(uiColor: .tertiarySystemFill),
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+}
+
+/// 结果 / 错误横幅（圆角，不用感叹号）.
+struct BannerView: View {
+    enum Kind { case ok, warn, error
+        var color: Color {
+            switch self {
+            case .ok: return .green
+            case .warn: return .orange
+            case .error: return .red
+            }
+        }
+        var icon: String {
+            switch self {
+            case .ok: return "checkmark.circle.fill"
+            case .warn: return "info.circle.fill"
+            case .error: return "xmark.octagon.fill"
+            }
+        }
+    }
+    let kind: Kind
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: kind.icon).foregroundColor(kind.color)
+            Text(text)
+                .font(.system(size: 12))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(kind.color.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+// MARK: - 步骤文本清洗
+
+/// 把能力返回的「步骤」原文清成**给人看的短句**.
+///
+/// 能力返回的步骤里带大量给开发者的解释：`⚠️`、`★`、markdown 的 `**` 与反引号、
+/// 以及括号里那串「为什么 / 判据 / 边界」. 那些在**日志**里有用，在**界面**上是噪音.
+/// 这里只留「做了什么、成没成」；原文照样能在展开后的「全部行」和日志里看到.
+enum StepText {
+    static func clean(_ raw: String) -> String {
+        var t = raw
+        for junk in ["⚠️", "\u{FE0F}", "★", "**", "`", "❌", "✅"] {
+            t = t.replacingOccurrences(of: junk, with: "")
+        }
+        for pair in [("（", "）"), ("(", ")")] {
+            while let open = t.firstIndex(of: Character(pair.0)),
+                  let close = t[t.index(after: open)...].firstIndex(of: Character(pair.1)) {
+                t.removeSubrange(open...close)
+            }
+        }
+        t = t.split(separator: " ").joined(separator: " ")
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// 单条步骤：小圆点 + 文本.
+struct StepRow: View {
+    let text: String
+    var raw: Bool = false
+
+    private var shown: String { raw ? text : StepText.clean(text) }
+    private var isWarn: Bool {
+        text.contains("失败") || text.contains("拒绝") || text.contains("未成立")
+            || text.contains("不一致") || text.contains("缺位")
+    }
+    private var isGood: Bool {
+        text.contains("已") || text.contains("成立") || text.contains("成功")
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(isWarn ? Color.orange : (isGood ? Color.green : Color.secondary.opacity(0.45)))
+                .frame(width: 6, height: 6)
+                .padding(.top, 6)
+            Text(shown.isEmpty ? text : shown)
+                .font(.system(size: 12))
+                .foregroundColor(isWarn ? .orange : .primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// 步骤列表：默认只显示关键行，技术判据折起来.
+struct CompactStepsView: View {
+    let steps: [String]
+    @State private var expanded = false
+
+    /// 噪音行标记 —— 命中即默认折叠（不是删除）
+    private static let noise: [String] = [
+        "判据①", "判据②", "判据③", "books staging", "Grappa 实验",
+        "Media 根前若干项", "规范化 base", "linkIdentifier", "targetIdentifier",
+        "清单第", "帧前32字节", "响应 #", "已发 ", "攻击标识符",
+        "AssetID =", "linkDestination =", "读目标（", "搬回的条目（",
+        "【Grappa", "结论 下一步", "结论 本次",
+    ]
+
+    private var keySteps: [String] {
+        steps.filter { line in !Self.noise.contains { line.contains($0) } }
+    }
+
+    var body: some View {
+        if !steps.isEmpty {
+            CardBox(title: "执行步骤", icon: "list.bullet") {
+                ForEach(Array((expanded ? steps : keySteps).enumerated()), id: \.offset) { _, step in
+                    StepRow(text: step, raw: expanded)
+                }
+                if keySteps.count < steps.count {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            Text(expanded ? "收起技术细节" : "显示全部 \(steps.count) 行")
+                        }
+                        .font(.system(size: 12))
+                        .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
 
 // MARK: - 调用记录器
 
-/// 宿主能力调用的统一记录器（日志 tab 与各 tab 共用）.
-///
-/// 记的是**原始 JSON**（不美化、不截断到看不出问题），因为它的用途是排障 ——
-/// airlift 一次十几秒、失败可能断在六个不同环节，只有原文能定位.
+/// 宿主能力调用的内存记录（日志 tab 的兜底；主来源是 CapabilityLog/run.log）.
 @MainActor
 final class AirliftPocLog: ObservableObject {
     static let shared = AirliftPocLog()
@@ -49,8 +335,6 @@ final class AirliftPocLog: ObservableObject {
 
     @Published private(set) var entries: [Entry] = []
 
-    /// 单条记录里 JSON 原文的保留上限（超出标注「已截断」）——
-    /// 不是怕大，是怕一条几 MB 的记录把列表渲染拖死.
     private static let maxTextLength = 4000
 
     private init() {}
@@ -62,7 +346,6 @@ final class AirliftPocLog: ObservableObject {
                              result: Self.clip(result),
                              ok: ok),
                        at: 0)
-        // 只留最近 200 条：这是内存里的排障窗口，不是持久日志
         if entries.count > 200 { entries.removeLast(entries.count - 200) }
     }
 
@@ -73,10 +356,9 @@ final class AirliftPocLog: ObservableObject {
         return String(text.prefix(maxTextLength)) + "\n…（已截断，原文 \(text.count) 字符）"
     }
 
-    /// 统一的调用入口：调宿主能力并自动记一条日志.
+    /// 统一的调用入口：调宿主能力并自动记一条内存日志.
     ///
-    /// ⚠️ **同步阻塞**：沙盒外操作走 airlift，一次 10~20 秒. 调用方必须在后台线程调，
-    /// 否则卡界面.
+    /// 同步阻塞：沙盒外操作走 airlift，一次 10~20 秒，调用方必须在后台线程调.
     nonisolated static func callRaw(_ capability: String, _ jsonArgs: String) -> (rc: Int32, json: String) {
         let result = HostCapabilityService.call(capability: capability, jsonArgs: jsonArgs)
         let ok = result.0 == 0
@@ -90,12 +372,10 @@ final class AirliftPocLog: ObservableObject {
     }
 }
 
-// MARK: - JSON 读取小工具
+// MARK: - JSON 小工具
 
-/// 从能力返回值里安全取值.
-///
-/// 刻意不用 Codable 模型：宿主能力的返回结构会随版本加字段，用字典读能**向前兼容**，
-/// 而且解析失败时可以原样把文本交给 UI（排障时原文比「解析失败」有用得多）.
+/// 从能力返回值里安全取值. 刻意不用 Codable：宿主返回会加字段，用字典读能向前兼容，
+/// 解析失败时也能把原文交给界面（排障时原文比「解析失败」有用得多）.
 private enum CapJSON {
     static func dict(_ text: String) -> [String: Any]? {
         guard let data = text.data(using: .utf8),
@@ -104,167 +384,34 @@ private enum CapJSON {
         }
         return obj
     }
-
-    static func bool(_ dict: [String: Any]?, _ key: String) -> Bool? {
-        dict?[key] as? Bool
-    }
-
-    static func string(_ dict: [String: Any]?, _ key: String) -> String? {
-        dict?[key] as? String
-    }
-
-    static func int(_ dict: [String: Any]?, _ key: String) -> Int? {
-        dict?[key] as? Int
-    }
-
+    static func bool(_ dict: [String: Any]?, _ key: String) -> Bool? { dict?[key] as? Bool }
+    static func string(_ dict: [String: Any]?, _ key: String) -> String? { dict?[key] as? String }
+    static func int(_ dict: [String: Any]?, _ key: String) -> Int? { dict?[key] as? Int }
     static func strings(_ dict: [String: Any]?, _ key: String) -> [String] {
         dict?[key] as? [String] ?? []
     }
+    static func json(_ obj: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return "{}" }
+        return text
+    }
+    static func byteText(_ size: Int) -> String {
+        if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
+        if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
+        return "\(size) B"
+    }
 }
 
-// MARK: - 共享 UI 组件
-
-/// 「步骤」的**紧凑**渲染 —— 默认只显示关键行，技术细节折起来.
-///
-/// ## 为什么要它（用户原话：「一堆文字我看着就烦」）
-/// 宿主能力返回的 `steps` 里混了大量**排障用**的技术细节：
-/// `★ 判据①②③ …`、`books staging …`、`Grappa 实验 …`、`清单第 N 条命中 …`、
-/// `Media 根前若干项 …`.这些对**看日志排障**有用，对**看界面**就是噪音.
-/// ⇒ 默认只显示「编号步骤 / 结论 / 警告」，其余折进「显示全部 N 行」.
-/// ⇒ 完整原文照样在「日志」tab 与 `LoginLogs/` 里，**没丢**，只是不糊在脸上.
-struct CompactStepsView: View {
-    let steps: [String]
-    let title: String
-    @State private var expanded = false
-
-    init(_ steps: [String], title: String = "执行步骤") {
-        self.steps = steps
-        self.title = title
-    }
-
-    /// 噪音行标记 —— 命中即默认折叠（不是删除）
-    private static let noise: [String] = [
-        "判据①", "判据②", "判据③", "books staging", "Grappa 实验",
-        "Media 根前若干项", "规范化 base", "linkIdentifier", "targetIdentifier",
-        "清单第", "帧前32字节", "响应 #", "已发 ", "攻击标识符",
-        "AssetID =", "linkDestination =", "读目标（", "搬回的条目（",
-        "【Grappa", "★ 结论 下一步", "★ 结论 本次", "★ 结论 books staging",
-    ]
-
-    private var keySteps: [String] {
-        steps.filter { line in !Self.noise.contains { line.contains($0) } }
-    }
-
+/// 页面容器：滚动 + 卡片间距 + 统一底色.
+private struct Page<Content: View>: View {
+    @ViewBuilder var content: () -> Content
     var body: some View {
-        if !steps.isEmpty {
-            Section {
-                ForEach(Array((expanded ? steps : keySteps).enumerated()), id: \.offset) { _, step in
-                    StepRow(text: step, raw: expanded)
-                }
-                if keySteps.count < steps.count {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
-                    } label: {
-                        Label(expanded
-                              ? "收起技术细节"
-                              : "显示全部 \(steps.count) 行（含技术判据）",
-                              systemImage: expanded ? "chevron.up" : "chevron.down")
-                            .font(.caption)
-                    }
-                }
-            } header: {
-                Text(title)
-            }
+        ScrollView {
+            VStack(spacing: 14) { content() }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
         }
-    }
-}
-
-/// 把能力返回的「步骤」原文清成**给人看的短句**（v0.3.500）.
-///
-/// ## 为什么要清（用户原话）
-/// 「**注释不要给我看给你自己看的**」—— 能力返回的步骤里带大量**给开发者**的解释：
-/// `⚠️`、`★`、markdown 的 `**` 与反引号、以及括号里那一长串「为什么 / 判据 / 边界」.
-/// 那些在**日志**里有用，在**界面**上就是噪音.
-/// ⇒ 界面上只留「做了什么、成没成」；**原文照样能在展开后的「全部行」和日志里看到**.
-enum StepText {
-    static func clean(_ raw: String) -> String {
-        var t = raw
-        for junk in ["⚠️", "\u{FE0F}", "★", "**", "`"] {
-            t = t.replacingOccurrences(of: junk, with: "")
-        }
-        // 去掉成对括号里的解释性注释（中英文括号都去）
-        for pair in [("（", "）"), ("(", ")")] {
-            while let open = t.firstIndex(of: Character(pair.0)),
-                  let close = t[t.index(after: open)...].firstIndex(of: Character(pair.1)) {
-                t.removeSubrange(open...close)
-            }
-        }
-        // 压掉多余空格与首尾空白
-        t = t.split(separator: " ").joined(separator: " ")
-        return t.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-/// 单条步骤：一个状态点 + 文本.
-struct StepRow: View {
-    let text: String
-    /// 是否显示原文（展开时 true）
-    var raw: Bool = false
-
-    private var shown: String { raw ? text : StepText.clean(text) }
-    private var isWarn: Bool { text.contains("失败") || text.contains("拒绝") || text.contains("未成立") }
-    private var isGood: Bool { text.contains("已") || text.contains("成立") || text.contains("成功") }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            // 不用感叹号三角 —— 用一个小圆点，靠颜色区分状态
-            Circle()
-                .fill(isWarn ? Color.orange : (isGood ? Color.green : Color.secondary.opacity(0.5)))
-                .frame(width: 6, height: 6)
-                .padding(.top, 6)
-            Text(shown.isEmpty ? text : shown)
-                .font(.system(size: 12))
-                .foregroundColor(isWarn ? .orange : .primary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-/// 结果 / 错误横幅（圆角卡片，比裸 Text 好看也好认）.
-struct BannerView: View {
-    enum Kind { case ok, warn, error
-        var color: Color {
-            switch self {
-            case .ok: return .green
-            case .warn: return .orange
-            case .error: return .red
-            }
-        }
-        var icon: String {
-            switch self {
-            case .ok: return "checkmark.seal.fill"
-            case .warn: return "info.circle.fill"
-            case .error: return "xmark.octagon.fill"
-            }
-        }
-    }
-    let kind: Kind
-    let text: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: kind.icon)
-                .foregroundColor(kind.color)
-            Text(text)
-                .font(.system(size: 12))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .background(kind.color.opacity(0.10),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+        .background(Look.pageFill)
     }
 }
 
@@ -276,28 +423,23 @@ struct BannerView: View {
 func registerAirliftPocModuleUI() {
     ModuleUIRegistry.shared.register("airlift-poc") { module in
         [
-            ModuleUITab(id: "overview",
-                        title: "概览",
+            ModuleUITab(id: "overview", title: "概览",
                         systemImage: "gauge.with.dots.needle.33percent") { m in
                 AirliftOverviewTab(module: m)
             },
-            ModuleUITab(id: "supervised",
-                        title: "监督模式",
-                        systemImage: "lock.shield") { m in
-                AirliftSupervisedTab(module: m)
-            },
-            ModuleUITab(id: "overwrite",
-                        title: "自定义覆盖",
-                        systemImage: "square.and.arrow.up.on.square") { m in
-                AirliftOverwriteTab(module: m)
-            },
-            ModuleUITab(id: "files",
-                        title: "文件浏览",
+            ModuleUITab(id: "files", title: "文件",
                         systemImage: "folder") { m in
                 AirliftFilesTab(module: m)
             },
-            ModuleUITab(id: "log",
-                        title: "日志",
+            ModuleUITab(id: "overwrite", title: "写入",
+                        systemImage: "square.and.arrow.down") { m in
+                AirliftOverwriteTab(module: m)
+            },
+            ModuleUITab(id: "supervised", title: "监督模式",
+                        systemImage: "lock.shield") { m in
+                AirliftSupervisedTab(module: m)
+            },
+            ModuleUITab(id: "log", title: "日志",
                         systemImage: "text.alignleft") { m in
                 AirliftLogTab()
             },
@@ -307,144 +449,92 @@ func registerAirliftPocModuleUI() {
 
 // MARK: - 概览
 
-/// 概览：宿主版本、模块可用性、airlift 状态、能力清单.
 private struct AirliftOverviewTab: View {
     let module: EscapeModule
 
-    @State private var hostVersion = "查询中…"
+    @State private var hostVersion = "…"
     @State private var hostBuild = ""
-    /// airlift 的 poc 接口是否可用（**与设置开关无关** —— 见 HostCapabilityService.exploitStatus 注释）
     @State private var airliftRunnable: Bool?
-    /// 「更多 → 漏洞利用」里 airlift 的勾选状态
     @State private var airliftEnabled: Bool?
     @State private var exploitNote = ""
     @State private var supportedCapabilities: [String] = []
     @State private var loading = false
 
     var body: some View {
-        Form {
-            Section("模块") {
-                LabeledContent("名称", value: module.name)
-                LabeledContent("版本", value: "v\(module.version)")
-                availabilityRow
+        Page {
+            HeroCard(icon: "bolt.horizontal.circle.fill",
+                     title: module.name,
+                     subtitle: "v\(module.version) · 通过宿主能力接口工作",
+                     tint: .purple,
+                     pill: module.blockingIssues.isEmpty
+                        ? ("可用", .green)
+                        : ("不可用", .orange))
+
+            if !module.blockingIssues.isEmpty {
+                CardBox(title: "为什么不可用", icon: "info.circle") {
+                    ForEach(module.blockingIssues, id: \.self) { issue in
+                        Text(issue).font(.system(size: 12)).foregroundColor(.orange)
+                    }
+                }
             }
 
-            // ⚠️ 这里刻意分两行显示两个**不同**的东西：
-            //   · airlift 的 poc 接口能不能用（本模块靠它读写）
-            //   · 「更多 → 漏洞利用」里有没有勾选 airlift（影响别的功能和后台自检）
-            // 只显示一个必然误导 —— 详见 HostCapabilityService.exploitStatus 的注释.
-            Section {
-                LabeledContent("版本", value: hostBuild.isEmpty ? hostVersion : "\(hostVersion) (\(hostBuild))")
-                LabeledContent("airlift（本模块读写）") {
-                    if let airliftRunnable {
-                        Text(airliftRunnable ? "可用" : "不可用")
-                            .foregroundColor(airliftRunnable ? .green : .orange)
-                    } else {
-                        Text("查询中…").foregroundColor(.secondary)
-                    }
-                }
-                LabeledContent("「漏洞利用」设置里的 airlift") {
-                    if let airliftEnabled {
-                        Text(airliftEnabled ? "已启用" : "未启用")
-                            .foregroundColor(airliftEnabled ? .green : .orange)
-                    } else {
-                        Text("查询中…").foregroundColor(.secondary)
-                    }
-                }
-            } header: {
-                Text("宿主")
-            } footer: {
+            CardBox(title: "宿主", icon: "iphone") {
+                KV(label: "版本",
+                   value: hostBuild.isEmpty ? hostVersion : "\(hostVersion) (\(hostBuild))",
+                   mono: true)
+                KV(label: "airlift（本模块读写）",
+                   value: airliftRunnable == nil ? "查询中…" : (airliftRunnable! ? "可用" : "不可用"),
+                   color: airliftRunnable == nil ? .secondary : (airliftRunnable! ? .green : .orange))
+                KV(label: "「漏洞利用」里的 airlift",
+                   value: airliftEnabled == nil ? "查询中…" : (airliftEnabled! ? "已启用" : "未启用"),
+                   color: airliftEnabled == nil ? .secondary : (airliftEnabled! ? .green : .orange))
                 if !exploitNote.isEmpty {
                     Text(exploitNote)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            Section("本机支持的能力") {
+            CardBox(title: "本模块声明的能力", icon: "checklist") {
                 if supportedCapabilities.isEmpty {
                     Text(loading ? "查询中…" : "未取到能力清单")
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 12)).foregroundColor(.secondary)
                 } else {
-                    ForEach(declaredCapabilities, id: \.self) { cap in
-                        HStack {
+                    ForEach(module.requires ?? [], id: \.self) { cap in
+                        HStack(spacing: 8) {
                             Image(systemName: supportedCapabilities.contains(cap)
                                   ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .font(.system(size: 12))
                                 .foregroundColor(supportedCapabilities.contains(cap) ? .green : .red)
-                            Text(cap).font(.callout)
-                            Spacer()
+                            Text(cap).font(.system(size: 12, design: .monospaced))
+                            Spacer(minLength: 0)
                             if !supportedCapabilities.contains(cap) {
-                                Text("缺失").font(.caption).foregroundColor(.red)
+                                Text("缺失").font(.system(size: 11)).foregroundColor(.red)
                             }
                         }
                     }
                 }
             }
 
-            Section {
-                Text("本模块通过宿主能力接口工作，不自己实现漏洞利用."
-                     + "沙盒外操作依赖 airlift，而 airlift 只能读写**单个文件**、"
-                     + "无法枚举目录，所以「列目录」这类能力只支持 App 沙盒内路径."
-                     + "监督模式需要宿主 v0.3.481+.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            }
-
-            Section {
-                Button {
-                    Task { await refresh() }
-                } label: {
-                    if loading {
-                        HStack { ProgressView(); Text("查询中…") }
-                    } else {
-                        Label("刷新", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(loading)
+            CardButton(title: loading ? "查询中…" : "刷新", icon: "arrow.clockwise",
+                       busy: loading) {
+                Task { await refresh() }
             }
         }
         .task { await refresh() }
     }
 
-    /// 模块清单里声明的能力（module.json 的 requires）.
-    /// 用它而不是把 `capabilityList` 全列出来 —— 用户关心的是「我这个模块要的齐不齐」.
-    private var declaredCapabilities: [String] {
-        module.requires ?? []
-    }
-
-    private var availabilityRow: some View {
-        // blockingIssues 里每条已经是完整句子（「缺少宿主能力：…」/「需要宿主 v…，当前 v…」），
-        // 所以这里不再自己加前缀，否则会重复成「缺少宿主能力：缺少宿主能力：fs.read」.
-        Group {
-            if module.blockingIssues.isEmpty {
-                Label("可用", systemImage: "checkmark.seal.fill")
-                    .foregroundColor(.green)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(module.blockingIssues, id: \.self) { issue in
-                        Label(issue, systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
-                }
-            }
-        }
-    }
-
     private func refresh() async {
         loading = true
         defer { loading = false }
-
-        let versionJSON = await call("host.version")
-        let capabilitiesJSON = await call("host.capabilities")
-        let exploitJSON = await call("exploit.status")
-
-        let versionDict = CapJSON.dict(versionJSON)
+        let versionDict = CapJSON.dict(await call("host.version"))
         hostVersion = CapJSON.string(versionDict, "version") ?? "未知"
         hostBuild = CapJSON.string(versionDict, "build") ?? ""
 
-        let capsDict = CapJSON.dict(capabilitiesJSON)
-        supportedCapabilities = CapJSON.strings(capsDict, "list")
+        supportedCapabilities = CapJSON.strings(CapJSON.dict(await call("host.capabilities")), "list")
 
-        let exploitDict = CapJSON.dict(exploitJSON)
+        let exploitDict = CapJSON.dict(await call("exploit.status"))
         airliftRunnable = CapJSON.bool(exploitDict, "airliftRunnable")
         airliftEnabled = CapJSON.bool(exploitDict, "airliftEnabled")
         exploitNote = CapJSON.string(exploitDict, "note") ?? ""
@@ -461,140 +551,612 @@ private struct AirliftOverviewTab: View {
     }
 }
 
+// MARK: - 文件（AFC 两个根）
+
+private struct AirliftFilesTab: View {
+    let module: EscapeModule
+
+    @State private var root = "media"
+    @State private var path = "/"
+    @State private var entries: [AfcEntry] = []
+    @State private var loading = false
+    @State private var errorText: String?
+    @State private var previewName = ""
+    @State private var previewText = ""
+    @State private var previewLoading = false
+    @State private var deleteName = ""
+    @State private var confirmingDelete = false
+    @State private var newFolderName = ""
+    @State private var statPath = ""
+    @State private var statResult = ""
+
+    private struct AfcEntry: Identifiable {
+        let name: String
+        let path: String
+        let isDir: Bool
+        let size: Int
+        var id: String { path }
+    }
+
+    private var rootDisplay: String {
+        root == "crash" ? "/var/mobile/Library/Logs/CrashReporter" : "/var/mobile/Media"
+    }
+
+    var body: some View {
+        Page {
+            HeroCard(icon: "folder.fill",
+                     title: "文件",
+                     subtitle: "AFC 的两个根：Media 与 CrashReporter",
+                     tint: .accentColor,
+                     pill: (root == "crash" ? "CrashReporter" : "Media", .accentColor))
+
+            CardBox(title: "位置", icon: "externaldrive") {
+                Picker("根", selection: $root) {
+                    Text("/var/mobile/Media").tag("media")
+                    Text("CrashReporter").tag("crash")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: root) { _ in
+                    path = "/"
+                    Task { await load() }
+                }
+                Text(path == "/" ? rootDisplay : path)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                HStack(spacing: 8) {
+                    CardButton(title: "上一级", icon: "arrow.up",
+                               enabled: path != "/" && !loading) {
+                        Task { await goUp() }
+                    }
+                    CardButton(title: "刷新", icon: "arrow.clockwise",
+                               busy: loading) {
+                        Task { await load() }
+                    }
+                }
+            }
+
+            if let errorText { BannerView(kind: .error, text: errorText) }
+
+            CardBox(title: "内容（\(entries.count) 项）", icon: "list.bullet") {
+                if entries.isEmpty && !loading {
+                    Text("空目录").font(.system(size: 12)).foregroundColor(.secondary)
+                }
+                ForEach(entries) { entry in
+                    HStack(spacing: 9) {
+                        Image(systemName: entry.isDir ? "folder.fill" : "doc")
+                            .font(.system(size: 12))
+                            .foregroundColor(entry.isDir ? .accentColor : .secondary)
+                        Button {
+                            if entry.isDir {
+                                Task { await enter(entry) }
+                            } else {
+                                Task { await preview(entry) }
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(entry.name)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                if !entry.isDir {
+                                    Text(CapJSON.byteText(entry.size))
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            deleteName = entry.name
+                            confirmingDelete = true
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12))
+                                .foregroundColor(.red.opacity(0.8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            CardBox(title: "新建目录", icon: "folder.badge.plus") {
+                PathField(placeholder: "目录名", text: $newFolderName)
+                CardButton(title: "创建", icon: "plus",
+                           enabled: !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty) {
+                    Task { await makeFolder() }
+                }
+            }
+
+            CardBox(title: "探测任意路径（零 airlift）", icon: "scope") {
+                Text("Media 之外读/写/列都会被沙盒拒，但 **stat 能过** —— 一次 AFC 往返、几十毫秒.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                PathField(placeholder: "相对当前根的路径，可含 ..", text: $statPath)
+                CardButton(title: "查一下", icon: "magnifyingglass") {
+                    Task { await doStat() }
+                }
+                if !statResult.isEmpty {
+                    Text(statResult)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            }
+
+            CardBox(title: "说明", icon: "info.circle") {
+                Text("本页走 AFC（不是 airlift），在 Media 与 CrashReporter 上是完整文件管理器.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                Text("Media 之外：只有「单个已知文件」能读写（见「写入」页）；列目录做不到.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+            }
+        }
+        .sheet(isPresented: Binding(get: { !previewName.isEmpty },
+                                    set: { if !$0 { previewName = "" } })) {
+            previewSheet
+        }
+        .confirmationDialog("删除 \(deleteName)？", isPresented: $confirmingDelete,
+                            titleVisibility: .visible) {
+            Button("删除", role: .destructive) { Task { await deleteEntry() } }
+            Button("取消", role: .cancel) {}
+        }
+        .task { await load() }
+    }
+
+    private var previewSheet: some View {
+        NavigationStack {
+            ScrollView {
+                Text(previewLoading ? "读取中…" : previewText)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .textSelection(.enabled)
+            }
+            .navigationTitle(previewName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("关闭") { previewName = "" }
+                }
+            }
+        }
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        let json = await call("afc.list", CapJSON.json(["root": root, "path": path]))
+        let dict = CapJSON.dict(json)
+        guard CapJSON.bool(dict, "ok") == true else {
+            errorText = CapJSON.string(dict, "error") ?? json
+            entries = []
+            return
+        }
+        errorText = nil
+        let raw = (dict?["entries"] as? [[String: Any]]) ?? []
+        entries = raw.compactMap { item in
+            guard let name = item["name"] as? String else { return nil }
+            return AfcEntry(name: name,
+                            path: (item["path"] as? String) ?? name,
+                            isDir: (item["isDir"] as? Bool) ?? false,
+                            size: (item["size"] as? Int) ?? 0)
+        }.sorted { ($0.isDir ? 0 : 1, $0.name.lowercased()) < ($1.isDir ? 0 : 1, $1.name.lowercased()) }
+    }
+
+    private func enter(_ entry: AfcEntry) async {
+        path = entry.path.hasPrefix("/") ? entry.path : "/" + entry.path
+        await load()
+    }
+
+    private func goUp() async {
+        var comps = path.split(separator: "/").map(String.init)
+        if !comps.isEmpty { comps.removeLast() }
+        path = comps.isEmpty ? "/" : "/" + comps.joined(separator: "/")
+        await load()
+    }
+
+    private func preview(_ entry: AfcEntry) async {
+        previewName = entry.name
+        previewLoading = true
+        previewText = ""
+        defer { previewLoading = false }
+        let json = await call("afc.read", CapJSON.json(["root": root,
+                                                        "path": entry.path,
+                                                        "encoding": "utf8"]))
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "ok") == true {
+            previewText = CapJSON.string(dict, "data") ?? ""
+        } else {
+            previewText = CapJSON.string(dict, "error") ?? json
+        }
+    }
+
+    private func deleteEntry() async {
+        let json = await call("afc.delete", CapJSON.json(["root": root,
+                                                          "path": path + "/" + deleteName]))
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "ok") != true {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+        deleteName = ""
+        await load()
+    }
+
+    private func makeFolder() async {
+        let name = newFolderName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let base = path == "/" ? "" : path
+        let json = await call("afc.mkdir", CapJSON.json(["root": root, "path": "\(base)/\(name)"]))
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "ok") == true {
+            newFolderName = ""
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+        await load()
+    }
+
+    private func doStat() async {
+        let p = statPath.trimmingCharacters(in: .whitespaces)
+        guard !p.isEmpty else { return }
+        let json = await call("afc.stat", CapJSON.json(["root": root, "path": p]))
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "exists") == true {
+            statResult = "存在 · \(CapJSON.string(dict, "ifmt") ?? "?")"
+                + " · \(CapJSON.byteText(CapJSON.int(dict, "size") ?? 0))"
+        } else {
+            statResult = CapJSON.string(dict, "describe")
+                ?? CapJSON.string(dict, "error") ?? "取不到"
+        }
+    }
+
+    private func call(_ capability: String, _ args: String) async -> String {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (_, json) = AirliftPocLog.callRaw(capability, args)
+                continuation.resume(returning: json)
+            }
+        }
+    }
+}
+
+// MARK: - 写入（AIR + airlift）
+
+private struct AirliftOverwriteTab: View {
+    let module: EscapeModule
+
+    @State private var target = ""
+    @State private var airFiles: [AirFile] = []
+    @State private var selectedAirName: String?
+    @State private var targetIsDirectory = false
+    @State private var leafName = ""
+    @State private var backupFirst = true
+    @State private var working = false
+    @State private var importing = false
+    @State private var confirming = false
+    @State private var confirmingDelete = false
+    @State private var steps: [String] = []
+    @State private var errorText: String?
+    @State private var okText: String?
+
+    private struct AirFile: Identifiable {
+        let name: String
+        let size: Int
+        var id: String { name }
+    }
+
+    var body: some View {
+        Page {
+            HeroCard(icon: "square.and.arrow.down.fill",
+                     title: "写入",
+                     subtitle: "用 AIR 里的文件覆盖沙盒外的任意路径",
+                     tint: .orange,
+                     pill: (working ? "执行中" : "就绪", working ? .orange : .green))
+
+            CardBox(title: "目标", icon: "scope") {
+                PathField(placeholder: "/var/mobile/... 绝对路径", text: $target)
+                Toggle("目标是目录（写到它下面）", isOn: $targetIsDirectory)
+                    .font(.system(size: 13))
+                if targetIsDirectory {
+                    PathField(placeholder: "文件名（留空 = 用源文件名）", text: $leafName)
+                }
+                Text(targetIsDirectory
+                     ? "落点 = 目标目录 / 文件名"
+                     : "落点 = 你填的这个路径本身")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+            }
+
+            CardBox(title: "源文件（AIR）", icon: "tray.full") {
+                if airFiles.isEmpty {
+                    Text("AIR 里还没有文件. 点下面导入，或先用「读取」把目标拉回来.")
+                        .font(.system(size: 12)).foregroundColor(.secondary)
+                }
+                ForEach(airFiles) { file in
+                    HStack(spacing: 9) {
+                        Button {
+                            selectedAirName = file.name
+                        } label: {
+                            HStack(spacing: 9) {
+                                Image(systemName: selectedAirName == file.name
+                                      ? "largecircle.fill.circle" : "circle")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(selectedAirName == file.name
+                                                     ? .accentColor : .secondary)
+                                Text(file.name)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Text(CapJSON.byteText(file.size))
+                                    .font(.system(size: 11)).foregroundColor(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            Task { await deleteAirFile(file.name) }
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12)).foregroundColor(.red.opacity(0.8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                CardButton(title: "从本机选择文件导入到 AIR", icon: "square.and.arrow.down") {
+                    importing = true
+                }
+                CardButton(title: "把目标读回来（不改动目标）", icon: "arrow.down.doc",
+                           enabled: !target.trimmingCharacters(in: .whitespaces).isEmpty) {
+                    Task { await pullToAir() }
+                }
+            }
+
+            CardBox(title: "动作", icon: "bolt") {
+                Toggle("覆盖前先把目标备份到 AIR（.bak）", isOn: $backupFirst)
+                    .font(.system(size: 13))
+                CardButton(title: "覆盖目标", icon: "square.and.arrow.up.on.square",
+                           enabled: selectedAirName != nil
+                                 && !target.trimmingCharacters(in: .whitespaces).isEmpty) {
+                    confirming = true
+                }
+                CardButton(title: "删除目标文件", icon: "trash", kind: .danger,
+                           enabled: !target.trimmingCharacters(in: .whitespaces).isEmpty) {
+                    confirmingDelete = true
+                }
+            }
+
+            if let okText { BannerView(kind: .ok, text: okText) }
+            if let errorText { BannerView(kind: .error, text: errorText) }
+
+            CompactStepsView(steps: steps)
+        }
+        .task { await refreshAirList() }
+        .documentPicker(isPresented: $importing,
+                        allowedTypes: [.item],
+                        allowsMultipleSelection: false) { urls in
+            Task { await importPicked(urls) }
+        }
+        .confirmationDialog("确认覆盖？", isPresented: $confirming, titleVisibility: .visible) {
+            Button("覆盖", role: .destructive) { Task { await overwrite() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将用 AIR/\(selectedAirName ?? "?") 覆盖 \(target)."
+                 + (backupFirst ? "覆盖前会先备份原内容." : "已关闭备份."))
+        }
+        .confirmationDialog("确认删除？", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("删除", role: .destructive) { Task { await deleteTarget() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将彻底删除 \(target). 备份会留在 App 沙盒的 LoginLogs/ 下.")
+        }
+    }
+
+    private func call(_ capability: String, _ args: String) async -> String {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (_, json) = AirliftPocLog.callRaw(capability, args)
+                continuation.resume(returning: json)
+            }
+        }
+    }
+
+    private func refreshAirList() async {
+        let dict = CapJSON.dict(await call("airlift.air", CapJSON.json(["op": "list"])))
+        let raw = (dict?["entries"] as? [[String: Any]]) ?? []
+        airFiles = raw.compactMap { item in
+            guard let name = item["name"] as? String,
+                  (item["isDir"] as? Bool) != true else { return nil }
+            return AirFile(name: name, size: (item["size"] as? Int) ?? 0)
+        }
+        if let selected = selectedAirName, !airFiles.contains(where: { $0.name == selected }) {
+            selectedAirName = nil
+        }
+    }
+
+    private func deleteAirFile(_ name: String) async {
+        let dict = CapJSON.dict(await call("airlift.air",
+                                           CapJSON.json(["op": "delete", "name": name])))
+        if CapJSON.bool(dict, "ok") != true {
+            errorText = CapJSON.string(dict, "error") ?? ""
+        }
+        if selectedAirName == name { selectedAirName = nil }
+        await refreshAirList()
+    }
+
+    /// 导入用户选的文件到 AIR.
+    ///
+    /// 入参是**已经在 App 沙盒里**的 URL —— SharedDocumentPicker 用 asCopy: true，
+    /// 系统拷完才回调，所以不要再调 startAccessingSecurityScopedResource.
+    private func importPicked(_ urls: [URL]) async {
+        guard let url = urls.first else { return }
+        guard let data = try? Data(contentsOf: url) else {
+            errorText = "读不到所选文件：\(url.lastPathComponent)"
+            return
+        }
+        let args = CapJSON.json(["op": "write",
+                                 "name": url.lastPathComponent,
+                                 "data": data.base64EncodedString(),
+                                 "encoding": "base64"])
+        let dict = CapJSON.dict(await call("airlift.air", args))
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已导入 \(url.lastPathComponent)"
+            errorText = nil
+            await refreshAirList()
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? ""
+        }
+    }
+
+    private func pullToAir() async {
+        working = true
+        steps = []
+        errorText = nil
+        okText = nil
+        defer { working = false }
+        let p = target.trimmingCharacters(in: .whitespaces)
+        let json = await call("airlift.pull", CapJSON.json(["path": p]))
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已读到 AIR：\(CapJSON.string(dict, "airName") ?? "?")"
+            await refreshAirList()
+            if let name = CapJSON.string(dict, "airName"), !name.isEmpty {
+                selectedAirName = name
+            }
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+    }
+
+    private func deleteTarget() async {
+        working = true
+        steps = []
+        errorText = nil
+        okText = nil
+        defer { working = false }
+        let p = target.trimmingCharacters(in: .whitespaces)
+        let json = await call("airlift.delete", CapJSON.json(["path": p]))
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已删除 \(p)"
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+    }
+
+    private func overwrite() async {
+        working = true
+        steps = []
+        errorText = nil
+        okText = nil
+        defer { working = false }
+        var payload: [String: Any] = [
+            "target": target.trimmingCharacters(in: .whitespaces),
+            "airName": selectedAirName ?? "",
+            "backup": backupFirst,
+        ]
+        if targetIsDirectory {
+            payload["targetIsDirectory"] = true
+            let leaf = leafName.trimmingCharacters(in: .whitespaces)
+            if !leaf.isEmpty { payload["leafName"] = leaf }
+        }
+        let json = await call("airlift.overwrite", CapJSON.json(payload))
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已写入 \(CapJSON.string(dict, "target") ?? "")"
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+    }
+}
+
 // MARK: - 监督模式
 
-/// 监督模式：读当前状态 → 改 `IsSupervised` → 写回 → 读回校验.
 private struct AirliftSupervisedTab: View {
     let module: EscapeModule
 
     @State private var isSupervised: Bool?
-    @State private var plistPath = ""
     @State private var organizationName = ""
-    @State private var loading = false
     @State private var running = false
+    @State private var loading = false
     @State private var confirming = false
     @State private var steps: [String] = []
     @State private var errorText: String?
-    @State private var lastBackup: String?
 
     var body: some View {
-        Form {
-            // ⚠️ 带 footer 时必须用 `Section { } header: { } footer: { }` 这种形式 ——
-            // SwiftUI **没有** `Section("标题") { } footer: { }` 这个重载
-            //（v0.3.481 CI 实测：会报 "missing argument label 'content:'" +
-            // "cannot convert value of type 'String' to expected argument type '() -> Content'"）.
-            Section {
-                HStack {
-                    Image(systemName: isSupervised == true
-                          ? "lock.shield.fill" : "lock.open")
-                        .font(.title2)
-                        .foregroundColor(isSupervised == true ? .green : .secondary)
-                    Text(statusText)
-                        .font(.headline)
-                    Spacer()
-                    if loading { ProgressView() }
-                }
-                if !plistPath.isEmpty {
-                    Text(plistPath)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-                }
-                Button("重新读取") { Task { await readState() } }
-                    .disabled(loading || running)
-            } header: {
-                Text("当前状态")
-            } footer: {
-                Text("读取走 airlift 漏洞利用（沙盒外），单次约 10~20 秒；"
-                     + "airlift 的「读」是移动不是拷贝，所以读完会立刻把原文件写回原位，"
-                     + "整体约需 20~40 秒.")
+        Page {
+            HeroCard(icon: isSupervised == true ? "lock.shield.fill" : "lock.open",
+                     title: "监督模式",
+                     subtitle: isSupervised == nil ? "读取中…"
+                             : (isSupervised! ? "已开启" : "未开启"),
+                     tint: isSupervised == true ? .green : .secondary,
+                     pill: (isSupervised == nil ? "…" : (isSupervised! ? "开" : "关"),
+                            isSupervised == true ? .green : .secondary))
+
+            CardBox(title: "结论先说", icon: "info.circle") {
+                Text("这个目标做不到. 真机实测：CloudConfigurationDetails.plist 在 SystemGroup 容器里，"
+                     + "沙盒只允许读/移出、拒绝创建/写入 —— 读得到 412 字节，但覆盖读回一点没变，"
+                     + "连在同一个目录里新建一个文件都建不出来.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("对照：/var/mobile/Library/** 下的文件可以正常覆盖.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
             }
 
-            Section("组织名称（可选）") {
-                TextField("留空则不写 OrganizationName", text: $organizationName)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+            CardBox(title: "当前状态", icon: "shield") {
+                KV(label: "IsSupervised",
+                   value: isSupervised == nil ? "读取中…" : (isSupervised! ? "true" : "false"),
+                   mono: true,
+                   color: isSupervised == true ? .green : .secondary)
+                PathField(placeholder: "组织名称（可选）", text: $organizationName)
+                CardButton(title: "重新读取", icon: "arrow.clockwise", busy: loading) {
+                    Task { await readState() }
+                }
             }
 
-            Section {
-                Button {
+            CardBox(title: "操作", icon: "bolt") {
+                CardButton(title: isSupervised == true ? "关闭监督模式" : "启用监督模式",
+                           icon: isSupervised == true ? "lock.open.fill" : "lock.shield.fill",
+                           enabled: isSupervised != nil && !running,
+                           busy: running) {
                     confirming = true
-                } label: {
-                    if running {
-                        HStack { ProgressView(); Text("执行中（airlift 约需 50~100 秒）…") }
-                    } else {
-                        Label(isSupervised == true ? "关闭监督模式" : "启用监督模式",
-                              systemImage: isSupervised == true
-                              ? "lock.open.fill" : "lock.shield.fill")
-                    }
                 }
-                .disabled(running || loading || isSupervised == nil || !module.isUsable)
-            } footer: {
-                if !module.isUsable {
-                    Text("模块当前不可用，无法执行.")
-                } else {
-                    Text("真机实测（v0.3.496）：这个**目标做不到**.\n"
-                         + "`CloudConfigurationDetails.plist` 在 SystemGroup 容器里，"
-                         + "沙盒**只允许读/移出、拒绝创建/写入** —— 读得到（412 字节），"
-                         + "但覆盖读回一点没变，连在同一个目录里**新建**一个文件都建不出来.\n"
-                         + "对照：`/var/mobile/Library/**` 下的文件**可以**正常覆盖"
-                         + "（CrashReporter 实测 202→32 字节；Logs、Preferences 新建都成功）.\n"
-                         + "流程已按「先写回拷贝的内容、再覆盖」改对，但**目标本身不允许写入**.")
-                }
+                Text("流程：读回原文件 -> 把原字节写回原位 -> 覆盖新内容 -> 读回校验. 约 50~100 秒.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
             }
-
-            CompactStepsView(steps)
 
             if let errorText { BannerView(kind: .error, text: errorText) }
-
-            if let lastBackup {
-                Section("原文件备份") {
-                    Text(lastBackup)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
+            CompactStepsView(steps: steps)
         }
         .task { await readState() }
-        .confirmationDialog(
-            isSupervised == true ? "确认关闭监督模式？" : "确认启用监督模式？",
-            isPresented: $confirming,
-            titleVisibility: .visible
-        ) {
-            Button(isSupervised == true ? "关闭监督模式" : "启用监督模式",
-                   role: .destructive) {
+        .confirmationDialog(isSupervised == true ? "确认关闭监督模式？" : "确认启用监督模式？",
+                            isPresented: $confirming, titleVisibility: .visible) {
+            Button(isSupervised == true ? "关闭" : "启用", role: .destructive) {
                 Task { await apply(!(isSupervised ?? false)) }
             }
             Button("取消", role: .cancel) {}
-        } message: {
-            Text("将修改系统配置文件 CloudConfigurationDetails.plist 的 IsSupervised."
-                 + "这是不可逆的调试操作，可能影响系统行为，请确认已了解风险."
-                 + "原文件会自动备份到 App 沙盒.")
         }
     }
 
-    private var statusText: String {
-        guard let isSupervised else { return "读取中（airlift 约需 20~40 秒）…" }
-        return isSupervised ? "已开启监督模式" : "未开启监督模式"
-    }
-
-    /// 读当前状态（走 `sys.supervised.get`，非破坏性）.
     private func readState() async {
         loading = true
         defer { loading = false }
-        let json = await call("sys.supervised.get", "{}")
-        let dict = CapJSON.dict(json)
+        let dict = CapJSON.dict(await call("sys.supervised.get", "{}"))
         if let value = CapJSON.bool(dict, "isSupervised") {
             isSupervised = value
-            plistPath = CapJSON.string(dict, "path") ?? ""
             if let org = CapJSON.string(dict, "organizationName"), !org.isEmpty {
                 organizationName = org
             }
             errorText = nil
         } else {
             isSupervised = nil
-            errorText = CapJSON.string(dict, "error") ?? "读取失败，返回内容：\(json)"
+            errorText = CapJSON.string(dict, "error") ?? ""
         }
     }
 
@@ -603,43 +1165,23 @@ private struct AirliftSupervisedTab: View {
         steps = []
         errorText = nil
         defer { running = false }
-
         var payload: [String: Any] = ["enabled": enabled]
         let trimmed = organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
         if enabled, !trimmed.isEmpty { payload["organizationName"] = trimmed }
-        let argsJSON = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? "{\"enabled\":\(enabled)}"
-
-        let json = await call("sys.supervised.set", argsJSON)
-        let dict = CapJSON.dict(json)
+        let dict = CapJSON.dict(await call("sys.supervised.set", CapJSON.json(payload)))
         steps = CapJSON.strings(dict, "steps")
-        lastBackup = CapJSON.string(dict, "backup")
         if CapJSON.bool(dict, "ok") != true {
-            errorText = CapJSON.string(dict, "error") ?? "执行失败，返回内容：\(json)"
+            errorText = CapJSON.string(dict, "error") ?? ""
         }
-
-        // **不轻信写入返回值**：无论成败都要有「系统里到底是什么」的独立判据.
-        //
-        // ⚠️ 但**不要**在这里无条件再读一次 —— `sys.supervised.set` 在
-        // `verify: true`（默认）时**内部已经做过读回校验**（`verified = true`，
-        // 返回的 `isSupervised` 就是读回的真实值）.再读一次要多花 2 次 airlift
-        // 操作（约 20~40 秒），而设备端 RSD 隧道在连续多次建连后有卡死的先例
-        // （真机实测第 6 次 AT 会话卡在 conduit 建连、之后整条队列堵死）.
-        // ⇒ 已校验就直接采用读回值；没校验（verify=false）才补读.
         if CapJSON.bool(dict, "verified") == true,
            let value = CapJSON.bool(dict, "isSupervised") {
             isSupervised = value
-            plistPath = CapJSON.string(dict, "path") ?? plistPath
-            if let org = CapJSON.string(dict, "organizationName"), !org.isEmpty {
-                organizationName = org
-            }
             errorText = nil
         } else {
             await readState()
         }
     }
 
-    /// 同步宿主能力放后台线程（airlift 一次十几秒）.
     private func call(_ capability: String, _ args: String) async -> String {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -652,15 +1194,12 @@ private struct AirliftSupervisedTab: View {
 
 // MARK: - 日志
 
-/// 日志：宿主能力调用的原始 JSON 往来（排障用）.
 private struct AirliftLogTab: View {
-    /// 内存里的记录（本次运行的 UI 调用）—— 文件读不到时的兜底
     @ObservedObject private var memory = AirliftPocLog.shared
 
     @State private var entries: [FileEntry] = []
     @State private var loading = false
 
-    /// 一条能力调用（从持久化日志里解出来的）
     struct FileEntry: Identifiable {
         let id = UUID()
         let head: String
@@ -670,66 +1209,66 @@ private struct AirliftLogTab: View {
     }
 
     var body: some View {
-        Group {
-            if entries.isEmpty && memory.entries.isEmpty {
-                ContentUnavailableView("还没有调用记录",
-                                       systemImage: "text.alignleft",
-                                       description: Text("在任意 tab 里操作一次就会出现.\n"
-                                                         + "（也包含通过 SSH `cap` 发起的调用）"))
-            } else {
-                List {
-                    Section {
-                        Button {
-                            Task { await reload() }
-                        } label: {
-                            Label("刷新", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(loading)
-                        Button(role: .destructive) {
-                            clearAll()
-                        } label: {
-                            Label("清空日志（\(entries.count) 条）", systemImage: "trash")
-                        }
-                    } footer: {
-                        Text("日志落在 App 沙盒的 CapabilityLog/run.log，"
-                             + "**重启 App 不会丢**，SSH 的 cap 调用也在里面.")
-                    }
+        Page {
+            HeroCard(icon: "text.alignleft",
+                     title: "日志",
+                     subtitle: "宿主能力调用的原始 JSON 往来",
+                     tint: .blue,
+                     pill: ("\(entries.count) 条", .blue))
 
-                    ForEach(entries) { entry in
-                        DisclosureGroup {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("入参").font(.caption).foregroundColor(.secondary)
-                                Text(entry.args)
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .textSelection(.enabled)
-                                Text("返回").font(.caption).foregroundColor(.secondary)
-                                Text(entry.ret)
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .textSelection(.enabled)
-                            }
-                            .padding(.vertical, 2)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(entry.ok ? Color.green : Color.red)
-                                    .frame(width: 8, height: 8)
-                                Text(entry.head)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .lineLimit(2)
-                            }
+            CardBox(title: "操作", icon: "wrench") {
+                CardButton(title: loading ? "读取中…" : "刷新", icon: "arrow.clockwise",
+                           busy: loading) {
+                    Task { await reload() }
+                }
+                CardButton(title: "清空日志", icon: "trash", kind: .danger) {
+                    clearAll()
+                }
+                Text("日志落在 App 沙盒的 CapabilityLog/run.log，重启 App 不会丢，"
+                     + "SSH 的 cap 调用也在里面.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+            }
+
+            if entries.isEmpty {
+                CardBox {
+                    Text("还没有调用记录. 在任意 tab 里操作一次就会出现.")
+                        .font(.system(size: 12)).foregroundColor(.secondary)
+                }
+            }
+
+            ForEach(entries) { entry in
+                CardBox {
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("入参").font(.system(size: 11)).foregroundColor(.secondary)
+                            Text(entry.args)
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                            Text("返回").font(.system(size: 11)).foregroundColor(.secondary)
+                            Text(entry.ret)
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        .padding(.top, 6)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(entry.ok ? Color.green : Color.red)
+                                .frame(width: 7, height: 7)
+                            Text(entry.head)
+                                .font(.system(size: 12, design: .monospaced))
+                                .lineLimit(2)
                         }
                     }
+                    .font(.system(size: 12))
                 }
             }
         }
         .task { await reload() }
     }
 
-    /// 读持久化日志（`Documents/CapabilityLog/run.log`）的末尾.
-    ///
-    /// 为什么不只用内存里那份：内存里的随 App 重启清空，
-    /// 而且 SSH 的 `cap` 调用**不经过** UI 的 `AirliftPocLog` ⇒ 看不到.
-    /// 日志文件两者都有（宿主侧统一记的）.
+    /// 读持久化日志的末尾. 内存里那份随 App 重启清空，而且 SSH 的 cap 调用不经过它，
+    /// 所以主来源必须是文件.
     private func reload() async {
         loading = true
         defer { loading = false }
@@ -763,700 +1302,12 @@ private struct AirliftLogTab: View {
             }
         }
         flush()
-        entries = Array(out.suffix(80).reversed())
+        entries = Array(out.suffix(60).reversed())
     }
 
     private func clearAll() {
         try? FileManager.default.removeItem(at: HostCapabilityService.callLogURL)
         memory.clear()
         entries = []
-    }
-}
-
-// MARK: - 自定义覆盖
-
-/// 「自定义覆盖」——把 AIR 里的一个文件覆盖到任意沙盒外路径.
-///
-/// ## 产品形态参考 lara，但漏洞利用完全不同（别误解）
-/// 界面形态参考 `github.com/rooootdev/lara` 的 Custom Overwrite：
-/// 「填目标路径 + 选源文件 → 覆盖」.但**机制完全不同**：
-/// · lara 走 DarkSword 内核链，在**内核层原地覆盖字节** ⇒ 硬性要求「目标文件 ≥ 源文件」；
-/// · 我们走 airlift 的越界写 ⇒ **没有这个限制**，目标可以比源小/大、甚至可以不存在.
-///
-/// ## 为什么要经过 AIR
-/// `/var/mobile/Media/AIR` 是 AFC 的根目录之下，宿主能用**一条 AFC 连接**廉价读写；
-/// 而沙盒外的目标只能靠 airlift 搬（一趟 10~20 秒）.所以流程是：
-/// **源文件先落进 AIR → 再用 airlift 覆盖目标**.这样源文件的查看/替换/删除都是瞬时的.
-private struct AirliftOverwriteTab: View {
-    let module: EscapeModule
-
-    @State private var target = ""
-    @State private var airFiles: [AirFile] = []
-    @State private var selectedAirName: String?
-    @State private var backupFirst = true
-    @State private var loadingList = false
-    @State private var working = false
-    @State private var importing = false
-    @State private var confirming = false
-    @State private var confirmingDelete = false
-    @State private var steps: [String] = []
-    @State private var errorText: String?
-    @State private var okText: String?
-    @State private var airDir = ""
-
-    private struct AirFile: Identifiable {
-        let name: String
-        let size: Int
-        var id: String { name }
-    }
-
-    var body: some View {
-        Form {
-            // 同「当前状态」：带 footer 用 header/footer 形式，没有 `Section("标题") {} footer: {}`
-            Section {
-                TextField("/var/mobile/... 绝对路径", text: $target)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.system(.callout, design: .monospaced))
-                Button {
-                    Task { await pullToAir() }
-                } label: {
-                    Label("把目标读到 AIR（读取，不改动目标）", systemImage: "arrow.down.doc")
-                }
-                .disabled(working || target.trimmingCharacters(in: .whitespaces).isEmpty)
-            } header: {
-                Text("目标路径")
-            } footer: {
-                Text("读取会把目标文件拉一份副本到 AIR（原文件读后立刻写回原位，不会被搬走）.")
-            }
-
-            Section("源文件（AIR 中转站）") {
-                if loadingList {
-                    HStack { ProgressView(); Text("读取 AIR 目录…") }
-                } else if airFiles.isEmpty {
-                    Text("AIR 里还没有文件.点下面「从本机选择文件」导入，或先用上面的「把目标读到 AIR」.")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                } else {
-                    // 每行是「选择」+「删除」两个**平级**按钮，不用 `ForEach(...).onDelete` ——
-                    // onDelete 要求 ForEach 是 List/Form 的直接子视图，而这里它在 if/else 分支里，
-                    // 滑动删除不可靠（甚至不出现）.
-                    ForEach(airFiles) { file in
-                        HStack(spacing: 10) {
-                            Button {
-                                selectedAirName = file.name
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: selectedAirName == file.name
-                                          ? "largecircle.fill.circle" : "circle")
-                                        .foregroundColor(selectedAirName == file.name ? .accentColor : .secondary)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(file.name)
-                                            .font(.system(.caption, design: .monospaced))
-                                            .foregroundColor(.primary)
-                                            .lineLimit(2)
-                                        Text(byteText(file.size))
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-
-                            Button {
-                                Task { await deleteAirFile(file.name) }
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(working)
-                        }
-                    }
-                }
-
-                Button {
-                    importing = true
-                } label: {
-                    Label("从本机选择文件导入到 AIR", systemImage: "square.and.arrow.down")
-                }
-                .disabled(working || importing)
-
-                if !airDir.isEmpty {
-                    Text(airDir)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-
-            Section {
-                Toggle("覆盖前先把目标备份到 AIR（.bak）", isOn: $backupFirst)
-
-                Button {
-                    confirming = true
-                } label: {
-                    if working {
-                        HStack { ProgressView(); Text("执行中（airlift 约需 20~60 秒）…") }
-                    } else {
-                        Label("覆盖目标", systemImage: "square.and.arrow.up.on.square")
-                    }
-                }
-                .disabled(working || !canOverwrite)
-
-                // ★ v0.3.497：把 `airlift.delete` 也接出来 —— 读写删三件套补齐.
-                // 机制与读同源：设备把文件**搬进 Media**（原位置那一刻就空了），
-                // 实现里**先确认备份落盘、再删副本** ⇒ 文件彻底消失.
-                Button(role: .destructive) {
-                    confirmingDelete = true
-                } label: {
-                    Label("删除目标文件", systemImage: "trash")
-                }
-                .disabled(working || target.trimmingCharacters(in: .whitespaces).isEmpty)
-            } footer: {
-                if let selectedAirName {
-                    Text("将用 AIR/\(selectedAirName) 覆盖 \(target.isEmpty ? "（未填目标路径）" : target)")
-                } else {
-                    Text("先选一个源文件，再填目标路径.")
-                }
-            }
-
-            CompactStepsView(steps)
-
-            if let okText {
-                Section("结果") {
-                    Text(okText).font(.callout).foregroundColor(.green)
-                }
-            }
-
-            if let errorText { BannerView(kind: .error, text: errorText) }
-        }
-        .task { await refreshAirList() }
-        // ★★★ v0.3.496：改用**统一文件选择调用点** `SharedDocumentPicker`
-        //（= 全 App 唯一的导入路径，见 `SharedDocumentPicker.swift` 头注释）.
-        //
-        // ## 原来为什么「选完没反应」（用户实测报的现象）
-        // 这里原来是 `.fileImporter(...)` + `startAccessingSecurityScopedResource()`.
-        // `.fileImporter` 返回的是 **security-scoped URL**，而 LiveContainer 的访客
-        // 沙盒**会拒掉** `startAccessingSecurityScopedResource()`（除非宿主开了
-        // "fix file picker" 钩子）⇒ `Data(contentsOf:)` 直接失败、界面静默什么都不做.
-        //
-        // `SharedDocumentPicker` 用 `UIDocumentPickerViewController(asCopy: true)` ——
-        // **系统先把文件拷进 App 沙盒**再回调 ⇒ 拿到的 URL 就在沙盒里，
-        // 不需要 security-scoped 那一套（也不再需要 `startAccessing…`）.
-        .documentPicker(isPresented: $importing,
-                        allowedTypes: [.item],
-                        allowsMultipleSelection: false) { urls in
-            Task { await importPicked(urls) }
-        }
-        .confirmationDialog(
-            "确认覆盖目标文件？",
-            isPresented: $confirming,
-            titleVisibility: .visible
-        ) {
-            Button("覆盖", role: .destructive) {
-                Task { await overwrite() }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("将用 AIR/\(selectedAirName ?? "?") 的字节覆盖 \(target)."
-                 + (backupFirst ? "覆盖前会先把目标原内容备份到 AIR（.bak）." : "已关闭备份.")
-                 + " 这是不可逆操作，请确认目标路径无误.")
-        }
-        .confirmationDialog(
-            "确认删除目标文件？",
-            isPresented: $confirmingDelete,
-            titleVisibility: .visible
-        ) {
-            Button("删除", role: .destructive) {
-                Task { await deleteTarget() }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("将从设备上**彻底删除** \(target)."
-                 + "机制：设备先把文件搬进 Media（原位置那一刻就空了），"
-                 + "再把 Media 里的副本删掉 ⇒ 文件消失."
-                 + "备份会留在 App 沙盒的 LoginLogs/ 下（**但请自行确认可恢复**）.")
-        }
-    }
-
-    private var canOverwrite: Bool {
-        selectedAirName != nil && !target.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    private func byteText(_ size: Int) -> String {
-        if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
-        if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
-        return "\(size) B"
-    }
-
-    // MARK: 能力调用
-
-    private func call(_ capability: String, _ args: String) async -> String {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let (_, json) = AirliftPocLog.callRaw(capability, args)
-                continuation.resume(returning: json)
-            }
-        }
-    }
-
-    private func refreshAirList() async {
-        loadingList = true
-        defer { loadingList = false }
-        let json = await call("airlift.air", "{\"op\":\"list\"}")
-        let dict = CapJSON.dict(json)
-        airDir = CapJSON.string(dict, "dir") ?? ""
-        let raw = (dict?["entries"] as? [[String: Any]]) ?? []
-        airFiles = raw.compactMap { item in
-            guard let name = item["name"] as? String else { return nil }
-            let isDir = (item["isDir"] as? Bool) ?? false
-            guard !isDir else { return nil }
-            return AirFile(name: name, size: (item["size"] as? Int) ?? 0)
-        }
-        if let selected = selectedAirName, !airFiles.contains(where: { $0.name == selected }) {
-            selectedAirName = nil
-        }
-    }
-
-    private func deleteAirFile(_ name: String) async {
-        let args = jsonString(["op": "delete", "name": name])
-        let json = await call("airlift.air", args)
-        let dict = CapJSON.dict(json)
-        if CapJSON.bool(dict, "ok") != true {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
-        if selectedAirName == name { selectedAirName = nil }
-        await refreshAirList()
-    }
-
-    /// 导入用户选的文件到 AIR.
-    ///
-    /// ⚠️ 入参是**已经在 App 沙盒里**的 URL —— `SharedDocumentPicker` 用
-    /// `asCopy: true`，系统拷完才回调 ⇒ **不要**再调
-    /// `startAccessingSecurityScopedResource()`（LC 沙盒会拒，原来就是栽在这里）.
-    private func importPicked(_ urls: [URL]) async {
-        guard let url = urls.first else { return }
-        guard let data = try? Data(contentsOf: url) else {
-            errorText = "读不到所选文件：\(url.lastPathComponent)"
-            return
-        }
-        let args = jsonString([
-            "op": "write",
-            "name": url.lastPathComponent,
-            "data": data.base64EncodedString(),
-            "encoding": "base64",
-        ])
-        let json = await call("airlift.air", args)
-        let dict = CapJSON.dict(json)
-        if CapJSON.bool(dict, "ok") == true {
-            okText = "已导入 \(url.lastPathComponent)（\(data.count) 字节）到 AIR"
-            errorText = nil
-        } else {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
-        await refreshAirList()
-    }
-
-    /// 读取目标到 AIR（不改动目标）
-    private func pullToAir() async {
-        working = true
-        steps = []
-        errorText = nil
-        okText = nil
-        defer { working = false }
-        let path = target.trimmingCharacters(in: .whitespaces)
-        let json = await call("airlift.pull", jsonString(["path": path]))
-        let dict = CapJSON.dict(json)
-        steps = CapJSON.strings(dict, "steps")
-        if CapJSON.bool(dict, "ok") == true {
-            okText = "已读到 AIR：\(CapJSON.string(dict, "airName") ?? "?")"
-            await refreshAirList()
-            if let name = CapJSON.string(dict, "airName"), !name.isEmpty {
-                selectedAirName = name
-            }
-        } else {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
-    }
-
-    /// 删除目标文件（`airlift.delete`）—— 读写删三件套里的「删」.
-    private func deleteTarget() async {
-        working = true
-        steps = []
-        errorText = nil
-        okText = nil
-        defer { working = false }
-        let path = target.trimmingCharacters(in: .whitespaces)
-        let json = await call("airlift.delete", jsonString(["path": path]))
-        let dict = CapJSON.dict(json)
-        steps = CapJSON.strings(dict, "steps")
-        if CapJSON.bool(dict, "ok") == true {
-            okText = "已删除 \(path)"
-        } else {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
-    }
-
-    private func overwrite() async {
-        working = true
-        steps = []
-        errorText = nil
-        okText = nil
-        defer { working = false }
-        let payload: [String: Any] = [
-            "target": target.trimmingCharacters(in: .whitespaces),
-            "airName": selectedAirName ?? "",
-            "backup": backupFirst,
-        ]
-        let json = await call("airlift.overwrite", jsonString(payload))
-        let dict = CapJSON.dict(json)
-        steps = CapJSON.strings(dict, "steps")
-        if CapJSON.bool(dict, "ok") == true {
-            okText = "已覆盖 \(CapJSON.string(dict, "path") ?? "")"
-                + "（\(CapJSON.int(dict, "size") ?? 0) 字节）"
-                + ".要确认内容请用上面的「把目标读到 AIR」再检查."
-        } else {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
-    }
-
-    private func jsonString(_ obj: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return text
-    }
-}
-
-// MARK: - 文件浏览（AFC 根 = /var/mobile/Media）
-
-/// 文件浏览 —— 浏览 `/var/mobile/Media` 这一棵子树（`com.apple.afc` 的根）.
-///
-/// ## ★ 覆盖范围（界面上必须如实说清）
-/// RSD 服务表（64 个服务）里**没有任何服务把根设在 `/var`** —— 所以
-/// **`/var` 根、`/var/mobile/Library` 这些列不出来**.能枚举的只有：
-/// · `/var/mobile/Media`（AFC，本页）—— DCIM / Downloads / Books / 各 App 共享文件…
-/// · `/var/mobile/Library/Logs/CrashReporter`（crashreport AFC，见「概览」的说明）
-/// · AIR 中转站
-///
-/// 而 airlift **本体**只能读写**单个已知文件**、不能枚举目录 —— 所以
-/// 「随便输一个路径就能浏览」这种事在 airlift 这条路上做不到，界面上不要暗示可以.
-///
-/// ## 为什么不做「任意路径输入」
-/// 上一版加过一个走 `bad_query_list` 的任意路径入口，已随 v0.3.488 撤掉 ——
-/// 本项目走 airlift，不走 bad_query.
-private struct AirliftFilesTab: View {
-    let module: EscapeModule
-
-    /// 当前根（`media` = /var/mobile/Media；`crash` = /var/mobile/Library/Logs/CrashReporter）
-    @State private var root = "media"
-    /// 当前路径（**相对当前根**；`/` = 根）
-    @State private var path = "/"
-    @State private var entries: [AfcEntry] = []
-    @State private var loading = false
-    @State private var errorText: String?
-    @State private var previewEntry: AfcEntry?
-    @State private var previewText = ""
-    @State private var previewLoading = false
-    @State private var deleteTarget: AfcEntry?
-    @State private var newFolderName = ""
-    @State private var creatingFolder = false
-
-    private struct AfcEntry: Identifiable {
-        let name: String
-        let path: String
-        let isDir: Bool
-        let size: Int
-        var id: String { path }
-    }
-
-    var body: some View {
-        Form {
-            Section {
-                Picker("根", selection: $root) {
-                    Text("/var/mobile/Media").tag("media")
-                    Text("CrashReporter").tag("crash")
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: root) { _ in
-                    path = "/"
-                    Task { await load() }
-                }
-
-                HStack(spacing: 8) {
-                    Image(systemName: "externaldrive.fill")
-                        .foregroundColor(.accentColor)
-                    Text(path == "/" ? rootDisplay : path)
-                        .font(.system(.callout, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                    Spacer()
-                    if loading { ProgressView() }
-                }
-                HStack {
-                    Button {
-                        Task { await goUp() }
-                    } label: {
-                        Label("上一级", systemImage: "arrow.up")
-                    }
-                    .disabled(path == "/" || loading)
-                    Spacer()
-                    Button {
-                        Task { await load() }
-                    } label: {
-                        Label("刷新", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(loading)
-                }
-            } header: {
-                Text("位置")
-            } footer: {
-                Text("本页所有操作走的是 **AFC**（不是 airlift）—— AFC 在这两个根上是"
-                     + "**完整文件管理器**：读 / 写 / 删 / 列 / 建目录."
-                     + "airlift 用于**两个根之外**的单个已知文件（见「自定义覆盖」）.\n\n"
-                     + "两个根：**Media**（com.apple.afc）覆盖 DCIM / Downloads / Books / "
-                     + "各 App 共享文件；**CrashReporter**（com.apple.crashreportcopymobile）"
-                     + "覆盖 /var/mobile/Library/Logs/CrashReporter.\n\n"
-                     + "权限边界：由系统账号创建的条目（如 sysdiagnose 归档里的内容）"
-                     + "可以读和列，但**删/写会被拒**（AFC 报 PermDenied，airlift 也搬不动）.\n\n"
-                     + "❌ **列不出来**：/var 根、/var/mobile/Library、其他 App 容器 —— "
-                     + "RSD 服务表（64 个服务）里没有服务把根设在它们上面.")
-            }
-
-            if let errorText { BannerView(kind: .error, text: errorText) }
-
-            Section {
-                if entries.isEmpty && !loading {
-                    Text("（空目录）").foregroundColor(.secondary)
-                }
-                ForEach(entries) { entry in
-                    Button {
-                        if entry.isDir {
-                            Task { await enter(entry) }
-                        } else {
-                            Task { await preview(entry) }
-                        }
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: entry.isDir ? "folder.fill" : fileIcon(entry.name))
-                                .foregroundColor(entry.isDir ? .accentColor : .secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(entry.name)
-                                    .font(.callout)
-                                    .foregroundColor(.primary)
-                                    .lineLimit(1)
-                                if !entry.isDir {
-                                    Text(byteText(entry.size))
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Spacer()
-                            if entry.isDir {
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            deleteTarget = entry
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
-                    }
-                }
-            } header: {
-                Text("内容（\(entries.count) 项）")
-            }
-
-            Section {
-                HStack(spacing: 8) {
-                    TextField("新文件夹名", text: $newFolderName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Button("新建") { Task { await createFolder() } }
-                        .buttonStyle(.borderless)
-                        .disabled(creatingFolder
-                                  || newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            } header: {
-                Text("在当前目录新建文件夹")
-            }
-        }
-        .task { await load() }
-        .refreshable { await load() }
-        .sheet(item: $previewEntry) { entry in
-            NavigationView {
-                Group {
-                    if previewLoading {
-                        ProgressView("读取中…")
-                    } else {
-                        ScrollView {
-                            Text(previewText)
-                                .font(.system(.caption, design: .monospaced))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                        }
-                    }
-                }
-                .navigationTitle(entry.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("关闭") { previewEntry = nil }
-                    }
-                }
-            }
-        }
-        .confirmationDialog(
-            "确认删除？",
-            isPresented: Binding(get: { deleteTarget != nil },
-                                 set: { if !$0 { deleteTarget = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("删除", role: .destructive) {
-                if let target = deleteTarget {
-                    Task { await delete(target) }
-                }
-                deleteTarget = nil
-            }
-            Button("取消", role: .cancel) { deleteTarget = nil }
-        } message: {
-            if let target = deleteTarget {
-                Text("将删除 \(target.path)\(target.isDir ? "（含其中所有内容）" : "")."
-                     + "此操作不可撤销.\n\n"
-                     + "注：由系统账号创建的条目会被拒绝删除（权限限制，AFC 与 airlift 都不行）.")
-            }
-        }
-    }
-
-    // MARK: 展示小工具
-
-    private var rootDisplay: String {
-        root == "crash" ? "/var/mobile/Library/Logs/CrashReporter" : "/var/mobile/Media"
-    }
-
-    private func byteText(_ size: Int) -> String {
-        if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
-        if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
-        return "\(size) B"
-    }
-
-    private func fileIcon(_ name: String) -> String {
-        switch (name as NSString).pathExtension.lowercased() {
-        case "png", "jpg", "jpeg", "heic", "gif", "webp": return "photo"
-        case "mp4", "mov", "m4v": return "film"
-        case "plist": return "list.bullet.rectangle"
-        case "db", "sqlite", "sqlite3": return "cylinder"
-        case "zip", "ipa", "tar", "gz": return "archivebox"
-        case "log", "txt", "json", "xml": return "doc.text"
-        default: return "doc"
-        }
-    }
-
-    // MARK: 能力调用
-
-    private func call(_ capability: String, _ args: String) async -> String {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let (_, json) = AirliftPocLog.callRaw(capability, args)
-                continuation.resume(returning: json)
-            }
-        }
-    }
-
-    private func jsonString(_ obj: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else { return "{}" }
-        return text
-    }
-
-    // MARK: 操作
-
-    private func load() async {
-        loading = true
-        defer { loading = false }
-        let json = await call("afc.list", jsonString(["root": root, "path": path]))
-        let dict = CapJSON.dict(json)
-        guard CapJSON.bool(dict, "ok") == true else {
-            errorText = CapJSON.string(dict, "error") ?? json
-            entries = []
-            return
-        }
-        errorText = nil
-        let raw = (dict?["entries"] as? [[String: Any]]) ?? []
-        entries = raw.compactMap { item in
-            guard let name = item["name"] as? String,
-                  let p = item["path"] as? String else { return nil }
-            return AfcEntry(name: name,
-                            path: p,
-                            isDir: (item["isDir"] as? Bool) ?? false,
-                            size: (item["size"] as? Int) ?? 0)
-        }
-    }
-
-    private func enter(_ entry: AfcEntry) async {
-        path = entry.path
-        await load()
-    }
-
-    private func goUp() async {
-        guard path != "/" else { return }
-        var comps = path.split(separator: "/").map(String.init)
-        guard !comps.isEmpty else { return }
-        comps.removeLast()
-        path = comps.isEmpty ? "/" : "/" + comps.joined(separator: "/")
-        await load()
-    }
-
-    private func preview(_ entry: AfcEntry) async {
-        previewEntry = entry
-        previewLoading = true
-        previewText = ""
-        defer { previewLoading = false }
-        let json = await call("afc.read", jsonString(["root": root, "path": entry.path, "encoding": "utf8"]))
-        let dict = CapJSON.dict(json)
-        if CapJSON.bool(dict, "ok") == true, let text = CapJSON.string(dict, "data") {
-            previewText = text.isEmpty ? "（空文件）" : text
-        } else {
-            // 二进制按 utf8 读不出来是正常的 —— 如实说明，并提示可以走 AIR 取原始字节
-            previewText = (CapJSON.string(dict, "error") ?? json)
-                + "\n\n（若是二进制文件，请用「AIR」相关的能力取原始字节；本页只做文本预览.）"
-        }
-    }
-
-    private func delete(_ entry: AfcEntry) async {
-        let json = await call("afc.delete",
-                              jsonString(["root": root, "path": entry.path, "recursive": entry.isDir]))
-        let dict = CapJSON.dict(json)
-        if CapJSON.bool(dict, "ok") != true {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
-        await load()
-    }
-
-    private func createFolder() async {
-        let name = newFolderName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        creatingFolder = true
-        defer { creatingFolder = false }
-        let base = path == "/" ? "" : path
-        let json = await call("afc.mkdir", jsonString(["root": root, "path": "\(base)/\(name)"]))
-        let dict = CapJSON.dict(json)
-        if CapJSON.bool(dict, "ok") == true {
-            newFolderName = ""
-        } else {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
-        await load()
     }
 }
