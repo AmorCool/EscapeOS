@@ -959,16 +959,20 @@ enum HostCapabilityService {
         oldData = readData
         steps.append("① airlift 读到原文件 \(oldData.count) 字节（读是移动，文件已进 Media）")
 
-        // ①b 原内容立刻存进 AIR —— 这就是「覆盖前先拷贝目标文件」的那份备份
+        // ★★★ v0.3.493：**备份到 AIR 挪到最后做**（原来插在读与写之间）。
+        //
+        // 为什么必须挪：AIR 备份走的是 **AFC**（另一条隧道/另一条服务会话），
+        // 而 airlift 的「读」和「写」是**两次 AT 会话操作** ——
+        // **在它们之间插一次 AFC 操作，第 2 次 airlift 操作就会失败**
+        // （真机实测：`supervisedSet` 报「第 2 次 move 没发生」，
+        //   而 `airliftReadAndRestore` 因为读/写紧挨着、AFC 放在最后 ⇒ 一直成功）。
+        //
+        // 数据安全不受影响：`pocReadFile` 读的时候已经把原字节备份在
+        // `LoginLogs/airlift_read_<token>.bin`，AIR 这份是**第二重**备份。
+        //
+        // 位置：放在**校验之后**（见 ⑤b），这样读→写、读→写两对 airlift 操作
+        // 全程相邻，中间不夹任何 AFC 调用。
         var airBackup: String?
-        let backupName = airFlattenName(for: path) + ".bak"
-        do {
-            try airWrite(name: backupName, data: oldData)
-            airBackup = backupName
-            steps.append("①b 原内容已备份到 \(airDir)/\(backupName)")
-        } catch {
-            steps.append("①b ⚠️ 备份到 AIR 失败：\(error.localizedDescription)（继续，但请留意）")
-        }
 
         // ② 解析
         guard let dict = parsePlist(oldData) else {
@@ -1047,6 +1051,16 @@ enum HostCapabilityService {
             return fail("⑥ 内容已生效，但**没能把文件写回原位置**（它现在在 Media 里）",
                         extra: extra)
         }
+        // ⑤b 原内容备份到 AIR（**放在两次 airlift 操作之后**，见上面 ① 处的说明）
+        let backupName = airFlattenName(for: path) + ".bak"
+        do {
+            try airWrite(name: backupName, data: oldData)
+            airBackup = backupName
+            steps.append("⑤b 原内容已备份到 \(airDir)/\(backupName)")
+        } catch {
+            steps.append("⑤b ⚠️ 备份到 AIR 失败：\(error.localizedDescription)（继续，但请留意）")
+        }
+
         extra["verified"] = true
         extra["organizationName"] = checkDict["OrganizationName"] as? String ?? ""
         return ok(extra)
