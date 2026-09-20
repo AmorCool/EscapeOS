@@ -1325,9 +1325,22 @@ enum HostCapabilityService {
             }
             return ok(["root": root.rawValue, "path": path, "recursive": recursive])
         } catch {
-            return fail("删除失败：\(error.localizedDescription)",
+            let text = error.localizedDescription
+            // ★ 如实区分失败原因 —— 原来一律提示「目录非空需要 recursive」，
+            //   而真机上最常见的是**权限**（例：CrashReporter 里 `sysdiagnose` 归档
+            //   的内容由系统账号创建，AFC 以 mobile 身份删不动）。
+            //   误导性的 hint 会让人去改 recursive，白试一轮。
+            if text.contains("PermDenied") {
+                return fail("删除被拒（权限）：该条目不属于当前身份，"
+                            + "AFC 与 airlift 都无权删除它。",
+                            extra: ["root": root.rawValue, "path": path,
+                                    "note": "这类条目通常由系统账号创建（如 sysdiagnose 归档内容），"
+                                          + "读/列通常仍可用，但删/写不行。"])
+            }
+            return fail("删除失败：\(text)",
                         extra: ["root": root.rawValue, "path": path,
-                                "hint": "目录非空时需要 recursive: true"])
+                                "hint": recursive ? "已用 recursive，仍失败"
+                                                  : "目录非空时需要 recursive: true"])
         }
     }
 
@@ -1356,10 +1369,17 @@ enum HostCapabilityService {
             .appendingPathComponent("run.log")
     }
 
-    /// 单条记录里 args / result 各自的上限
-    private static let callLogTextLimit = 1200
-    /// 日志文件大小上限；超过就只留后半段（最近的调用才是排障要看的）
-    private static let callLogFileLimit = 512 * 1024
+    /// 单条记录里 args / result 各自的上限。
+    ///
+    /// ★ v0.3.492：从 **1200 提到 8192**。原来的 1200 太小 ——
+    /// airlift 的判据（`details`）动辄 1200~3600 字符，一截就把最关键的
+    /// 「清单里有没有我们那条」「删除成立」那几行切掉，
+    /// 于是每次排障都得再绕去 `cat LoginLogs/airlift_at2.txt` 看原文。
+    /// 8192 足以完整容纳这类判据，同时仍防止单条记录把日志撑爆。
+    private static let callLogTextLimit = 8192
+    /// 日志文件大小上限；超过就只留后半段（最近的调用才是排障要看的）。
+    /// ★ v0.3.492：512KB → 2MB（配合单条上限提高；仍是有限值，不会无限增长）。
+    private static let callLogFileLimit = 2 * 1024 * 1024
 
     /// 追加一笔能力调用记录.
     ///

@@ -975,12 +975,22 @@ private struct AirliftFilesTab: View {
             } header: {
                 Text("位置")
             } footer: {
-                Text("两个根各是一条 RSD 服务会话：**Media**（com.apple.afc）覆盖 "
-                     + "DCIM / Downloads / Books / 各 App 共享文件；**CrashReporter**"
-                     + "（com.apple.crashreportcopymobile）覆盖 /var/mobile/Library/Logs/CrashReporter。"
-                     + "两者都可读/写/删/建目录。"
-                     + "**/var 根与 /var/mobile/Library 列不出来** —— RSD 服务表（64 个服务）里"
-                     + "没有服务把根设在它们上面，airlift 本体也不能枚举目录。")
+                Text("本页所有操作走的是 **AFC**（不是 airlift）—— AFC 在这两个根上是"
+                     + "**完整文件管理器**：读 / 写 / 删 / 列 / 建目录。"
+                     + "airlift 用于**两个根之外**的单个已知文件（见「自定义覆盖」）。
+
+"
+                     + "两个根：**Media**（com.apple.afc）覆盖 DCIM / Downloads / Books / "
+                     + "各 App 共享文件；**CrashReporter**（com.apple.crashreportcopymobile）"
+                     + "覆盖 /var/mobile/Library/Logs/CrashReporter。
+
+"
+                     + "⚠️ **权限边界**：由**系统账号**创建的条目（如 sysdiagnose 归档里的内容）"
+                     + "可以读和列，但**删/写会被拒**（AFC 报 PermDenied，airlift 也搬不动）。
+
+"
+                     + "❌ **列不出来**：/var 根、/var/mobile/Library、其他 App 容器 —— "
+                     + "RSD 服务表（64 个服务）里没有服务把根设在它们上面。")
             }
 
             if let errorText {
@@ -1095,7 +1105,11 @@ private struct AirliftFilesTab: View {
             Button("取消", role: .cancel) { deleteTarget = nil }
         } message: {
             if let target = deleteTarget {
-                Text("将删除 \(target.path)\(target.isDir ? "（含其中所有内容）" : "")。此操作不可撤销。")
+                Text("将删除 \(target.path)\(target.isDir ? "（含其中所有内容）" : "")。"
+                     + "此操作不可撤销。
+
+"
+                     + "注：由系统账号创建的条目会被拒绝删除（权限限制，AFC 与 airlift 都不行）。")
             }
         }
     }
