@@ -1,5 +1,123 @@
 # Changelog
 
+## [0.3.482] - 2026-09-20
+
+### ★★ AIR 中转站 + 自定义覆盖 + 修监督模式读不到文件 + 新图标
+
+真机装 v0.3.481 后反馈的三件事，逐条修。
+
+#### ① ★ 监督模式读不到文件（我上一版的设计错误）
+
+现象：模块里读 `CloudConfigurationDetails.plist` 报**「配置文件不存在」**。
+
+**我错在哪**：我根据 `ConfigurationsStore.readCurrent()` 用
+`NSDictionary(contentsOfFile:)` 就读到了，推断「读不需要沙盒扩展」，
+于是直接用 `FileManager.fileExists`。但那个函数能读到，是因为 UI 路径
+**先调过 `probe()`/`ensureAccess()`**（消费并持有 bad_query 扩展）。
+单独一个 `fileExists` 在 SystemGroup 路径上因**无法穿越沙盒**返回 false
+⇒ 被我报成「不存在」——**文件其实在，是我的错误信息在撒谎**。
+
+**修法**：读写统一走 airlift（它不依赖沙盒扩展）。
+⚠️ 但 airlift 的**读是移动不是拷贝**，所以把「读 + 立刻写回原位」做成原子操作：
+
+- `sys.supervised.get`：读 → 立刻写回原位 → 解析 → 返回（约 20~40 秒）
+- `sys.supervised.set`：读 → 改 → 备份 → 写 → **读回校验** → 再写回原位
+  （`verify: true` 时 4 次操作，约 40~80 秒；`verify: false` 时 2 次）
+- **任何一步失败都调 `restoreOriginal()` 把原字节写回**，并在返回值里如实标出
+  「是否恢复成功」。绝不留下「文件不在原位而用户不知道」这种状态。
+- `fs.read` 沙盒外也改成**默认非破坏性**（读后写回），
+  只有显式 `allowMove: true` 才跳过写回。
+
+#### ② ★ AIR 中转站（`/var/mobile/Media/AIR`）
+
+读把目标**拷贝**到 AIR，写/覆盖从 AIR 取字节 —— 不再依赖隐式的「读后写回」闭环。
+
+**为什么是这个路径**：`/var/mobile/Media` 正是 `com.apple.afc` 的**根**
+（`AFCService` 里有实测结论）。所以这个目录宿主能用**一条 AFC 连接直接读/写/列/建/删**，
+**不用跑 airlift**（一趟 10~20 秒）。而沙盒外目标只能靠 airlift 搬 ⇒
+把字节落在 AIR，之后的查看 / 编辑 / 再覆盖就全是瞬时操作。
+
+**没有另造一套 AFC**：直接复用现成的 `AFCService`
+（`listDirectory` / `readFile` / `writeFile` / `makeDirectory` / `removePath`）。
+
+新增三个能力：
+
+| 能力 | 作用 | 成本 |
+|---|---|---|
+| `airlift.air` | AIR 目录操作（list/mkdir/read/write/delete） | 纯 AFC，廉价 |
+| `airlift.pull` | 目标 → airlift 读 → 原字节写回原位 → 副本落 AIR | 约 20~40 秒 |
+| `airlift.overwrite` | 用 AIR 文件（或沙盒内文件）覆盖任意沙盒外路径 | 含备份约 20~60 秒 |
+
+#### ③ ★ 自定义覆盖（界面形态参考 lara，漏洞利用完全不同）
+
+界面形态参考 `github.com/rooootdev/lara` 的 Custom Overwrite：
+「填目标路径 + 选源文件 → 覆盖」。但**机制完全不同**（已在代码注释与模块 README 写明）：
+
+| | lara | 我们 |
+|---|---|---|
+| 机制 | DarkSword 内核链，内核层**原地覆盖字节** | airlift 越界写 |
+| 大小限制 | **目标必须 ≥ 源** | **无限制**（目标可比源小/大、可不存在） |
+| 碰内核 | 是 | 否 |
+
+模块新增第 4 个 tab「自定义覆盖」：目标路径输入 + AIR 文件列表（选择/删除）+
+「从本机选择文件导入到 AIR」+ 覆盖前备份开关 + 确认弹窗 + 逐步结果。
+
+`airlift.overwrite` 的 `backup: true`（默认）会先 pull 目标存成 `<名>.bak`，
+**备份失败就中止覆盖** —— 要求是「先备份再覆盖」，不能反着来。
+
+#### ④ ★ airlift-poc 被误当成内置模块
+
+**根因**：构建脚本把 module-esc 里**所有**模块都拷进 `Resources/BundledModules`，
+只硬编码排除了 alist ⇒ 新加的 airlift-poc 被自动打成内置模块。
+而且这意味着每加一个不内置的模块都要回来改一次宿主 workflow ——
+典型的「为模块适配构建脚本」。
+
+**修法：声明式 `distribution` 字段**（默认 `external`）：
+- `bundled` = 内置进 app（随包发布，首次启动自动安装）
+- `external` = 独立模块，走 edge Release 的 .zip 按需导入
+
+新增 `Resources/Scripts/sync_bundled_modules.py` 按该字段同步，并**反向清理**
+（从 bundled 改成 external 后旧的 bundle 副本会被删掉）。
+workflow 里不再有任何模块名硬编码。
+
+> 注：v0.3.481 已经把 airlift-poc 装进了 `Documents/Modules/`，
+> 新构建不会再装它，但**已装的那份不会自动消失** —— 手动卸载一次即可。
+
+#### ⑤ SSH 查模块日志
+
+`runlog` / `mlog` 原来都写死给「第一个二进制模块」，而 airlift-poc 是
+**原生界面模块**（视图编译进宿主），既不是 binary 模块也没有数据目录 ⇒ 完全查不到。
+
+**修法**：在**宿主侧**统一记每一次能力调用（能力名 / 入参 / 返回 / 耗时 / 成败）
+到 `Documents/CapabilityLog/run.log` —— 任何模块形态都被覆盖，模块零改动。
+
+新增命令：`caplog [n]`（能力调用日志）、`modls [模块id]`、`modcat <模块id> <相对路径> [n]`。
+
+#### ⑥ App 图标换成新图（玻璃方块）
+
+`Resources/Scripts/make_app_icons.py` 从新源图生成 18 个尺寸。两个关键决定：
+- **不做透明背景** —— iOS 不允许图标带 alpha（透明区渲染成黑色），
+  所以保留源图浅色影棚背景（「通透感」在 iOS 上能做到的最接近形态）
+- **裁剪框按内容定，水印天然落在框外** —— 源图左下角有「文心AI生成」水印，
+  按内容取正方形并放大到画布 88% 后裁剪框下边界在 y≈1931、水印在 y 1954-2013
+  ⇒ **在框外**，不需要修补/涂抹，也就不会留涂抹痕迹
+- 尺寸从**现有文件名**推导而非写死列表，以后加尺寸不会漏改
+
+#### ⑦ CI 抓到的编译错误（本地 Windows 无法编译，只能靠 CI）
+
+```
+AirliftPocModuleUI.swift:303: error: generic parameter 'Content' could not be inferred
+                             error: missing argument label 'content:' in call
+                             error: cannot convert value of type 'String' to expected argument type '() -> Content'
+```
+
+**根因**：SwiftUI **没有** `Section("标题") { } footer: { }` 这个重载 ——
+带 footer 时必须写 `Section { } header: { } footer: { }`。
+
+顺带自查发现两处同类隐患：`.fileImporter` 的 `[.item]` 需要
+`import UniformTypeIdentifiers`；`ForEach(...).onDelete` 在 if/else 分支里
+不是 List/Form 直接子视图 ⇒ 滑动删除不可靠，改成平级按钮。
+
 ## [0.3.481] - 2026-09-20
 
 ### ★★★ 模块系统补上**反向通道**：`escape.host.v1` 宿主能力接口 + 原生 SwiftUI 二级界面
