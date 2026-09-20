@@ -620,6 +620,7 @@ private struct AirliftOverwriteTab: View {
     @State private var working = false
     @State private var importing = false
     @State private var confirming = false
+    @State private var confirmingDelete = false
     @State private var steps: [String] = []
     @State private var errorText: String?
     @State private var okText: String?
@@ -726,6 +727,16 @@ private struct AirliftOverwriteTab: View {
                     }
                 }
                 .disabled(working || !canOverwrite)
+
+                // ★ v0.3.497：把 `airlift.delete` 也接出来 —— 读写删三件套补齐。
+                // 机制与读同源：设备把文件**搬进 Media**（原位置那一刻就空了），
+                // 实现里**先确认备份落盘、再删副本** ⇒ 文件彻底消失。
+                Button(role: .destructive) {
+                    confirmingDelete = true
+                } label: {
+                    Label("删除目标文件", systemImage: "trash")
+                }
+                .disabled(working || target.trimmingCharacters(in: .whitespaces).isEmpty)
             } footer: {
                 if let selectedAirName {
                     Text("将用 AIR/\(selectedAirName) 覆盖 \(target.isEmpty ? "（未填目标路径）" : target)")
@@ -794,6 +805,21 @@ private struct AirliftOverwriteTab: View {
             Text("将用 AIR/\(selectedAirName ?? "?") 的字节覆盖 \(target)。"
                  + (backupFirst ? "覆盖前会先把目标原内容备份到 AIR（.bak）。" : "⚠️ 已关闭备份。")
                  + " 这是不可逆操作，请确认目标路径无误。")
+        }
+        .confirmationDialog(
+            "确认删除目标文件？",
+            isPresented: $confirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                Task { await deleteTarget() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将从设备上**彻底删除** \(target)。"
+                 + "机制：设备先把文件搬进 Media（原位置那一刻就空了），"
+                 + "再把 Media 里的副本删掉 ⇒ 文件消失。"
+                 + "备份会留在 App 沙盒的 LoginLogs/ 下（**但请自行确认可恢复**）。")
         }
     }
 
@@ -892,6 +918,24 @@ private struct AirliftOverwriteTab: View {
             if let name = CapJSON.string(dict, "airName"), !name.isEmpty {
                 selectedAirName = name
             }
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+    }
+
+    /// 删除目标文件（`airlift.delete`）—— 读写删三件套里的「删」.
+    private func deleteTarget() async {
+        working = true
+        steps = []
+        errorText = nil
+        okText = nil
+        defer { working = false }
+        let path = target.trimmingCharacters(in: .whitespaces)
+        let json = await call("airlift.delete", jsonString(["path": path]))
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已删除 \(path)"
         } else {
             errorText = CapJSON.string(dict, "error") ?? json
         }
