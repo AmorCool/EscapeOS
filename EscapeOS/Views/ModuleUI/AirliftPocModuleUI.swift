@@ -965,6 +965,15 @@ private struct AirliftDirTab: View {
     /// 搬回失败时记住「原路径 + Media 里的条目名」，给「重试搬回」用
     @State private var pendingRestore: (path: String, recovered: String)?
     @State private var expandedFile: String?
+    /// 已安装 App（走 `apps.lookup` = installation_proxy，**不依赖 airlift**）
+    @State private var apps: [AppEntry] = []
+    @State private var appsLoading = false
+
+    private struct AppEntry {
+        let bundleId: String
+        let name: String
+        let container: String
+    }
 
     var body: some View {
         Form {
@@ -982,6 +991,24 @@ private struct AirliftDirTab: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.system(.callout, design: .monospaced))
+                // ★ v0.3.497：App 容器路径里带随机 UUID，靠人猜不出来 ——
+                // 走 installation_proxy（不是漏洞、不依赖 airlift）把路径取回来填进去。
+                Menu {
+                    if appsLoading {
+                        Text("读取中…")
+                    } else if apps.isEmpty {
+                        Button("点这里加载已安装 App") { Task { await loadApps() } }
+                    } else {
+                        ForEach(apps, id: \.bundleId) { app in
+                            Button("\(app.name)  ·  \(app.bundleId)") {
+                                path = app.container
+                            }
+                        }
+                    }
+                } label: {
+                    Label("从已安装 App 选一个容器", systemImage: "square.grid.2x2")
+                }
+                .disabled(working || appsLoading)
                 Picker("递归深度", selection: $depth) {
                     Text("1 层").tag(1)
                     Text("3 层").tag(3)
@@ -1003,6 +1030,27 @@ private struct AirliftDirTab: View {
                 Text("目标目录")
             } footer: {
                 Text("读回文件内容会让目录缺位更久（要逐个文件走 AFC）；只列目录最快。")
+            }
+
+            if !apps.isEmpty {
+                Section("App 容器（\(apps.count) 个）") {
+                    ForEach(apps, id: \.bundleId) { app in
+                        Button {
+                            path = app.container
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(app.name).font(.callout).foregroundColor(.primary)
+                                Text(app.bundleId)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                Text(app.container.isEmpty ? "（系统应用，没有数据容器）" : app.container)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
+                }
             }
 
             if let pendingRestore {
@@ -1125,6 +1173,29 @@ private struct AirliftDirTab: View {
             return "{}"
         }
         return text
+    }
+
+    /// 拉一次已安装 App（含数据容器路径）—— 走 `apps.lookup`（installation_proxy）.
+    ///
+    /// 为什么放在这里：App 容器路径里带随机 UUID，靠人猜不出来；
+    /// 而 `airlift` 只能读写**已知绝对路径**。两边一拼就能浏览任意 App 的容器.
+    private func loadApps() async {
+        appsLoading = true
+        defer { appsLoading = false }
+        let json = await call("apps.lookup", "{}")
+        let dict = CapJSON.dict(json)
+        let raw = (dict?["apps"] as? [[String: Any]]) ?? []
+        apps = raw.compactMap { item in
+            guard let bundleId = item["bundleId"] as? String else { return nil }
+            return AppEntry(bundleId: bundleId,
+                            name: (item["name"] as? String) ?? bundleId,
+                            container: (item["container"] as? String) ?? "")
+        }
+        if apps.isEmpty {
+            errorText = CapJSON.string(dict, "error") ?? "没取到已安装 App（返回：\(json))"
+        } else {
+            errorText = nil
+        }
     }
 
     private func browse() async {

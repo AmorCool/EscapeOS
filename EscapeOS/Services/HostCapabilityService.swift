@@ -132,6 +132,7 @@ enum HostCapabilityService {
         "airlift.readdir",
         "airlift.restoredir",
         "airlift.delete",
+        "apps.lookup",
         "afc.list",
         "afc.read",
         "afc.write",
@@ -259,6 +260,7 @@ enum HostCapabilityService {
         case "airlift.readdir":       return airliftReaddir(args)
         case "airlift.restoredir":    return airliftRestoredir(args)
         case "airlift.delete":        return airliftDelete(args)
+        case "apps.lookup":           return appsLookup(args)
         case "afc.list":              return afcList(args)
         case "afc.read":              return afcRead(args)
         case "afc.write":             return afcWrite(args)
@@ -956,6 +958,14 @@ enum HostCapabilityService {
     /// 这不是能力限制（airlift 搬得动它们），是**安全闸**：把 `/var/mobile/Library`
     /// 整个搬进 Media 再搬回，中间那 20~40 秒里**全系统都在读写不存在的路径**。
     /// 返回 `nil` = 放行.
+    ///
+    /// ## ★ v0.3.497 修正：**只精确拒绝「祖先」，不再按前缀连带拒子目录**
+    /// 旧版用 `hasPrefix(prefix + "/")` 判前缀，于是
+    /// `/var/containers/Bundle` 这条把**每一个 App 的容器**
+    /// （`/var/containers/Bundle/Application/<uuid>`）也一起拒了 ——
+    /// 等于把「浏览 App 容器」这个正经用法堵死。
+    /// 现在：**祖先路径精确拒绝**（它们一搬全没），**子目录放行但带警告**
+    /// （见 `warnForReaddir`）—— 由用户自己判断。
     private static func refuseReasonForReaddir(_ path: String) -> String? {
         // 归一：`/private/var/...` 与 `/var/...` 视作同一个（内核里 /var 是 symlink）
         var p = path
@@ -970,24 +980,51 @@ enum HostCapabilityService {
             "/var/mobile/Media",              // 就是我们自己的根
             "/var/mobile/Containers",
             "/var/mobile/Documents",          // 用户文档根（一搬全没）
-        ]
-        if hardRefuse.contains(p) {
-            return "这是被全系统依赖的祖先/根目录，搬走期间整个系统都在读写不存在的路径"
-        }
-        // 前缀命中：`/var/containers/Bundle/Application` 这类「一个搬走就少一个 App」
-        let hardPrefixes: [String] = [
+            // ★ 容器/守护进程的**祖先**：搬走一个就少一批 App / 一批系统配置
             "/var/containers/Bundle",
+            "/var/containers/Bundle/Application",
             "/var/containers/Data",
+            "/var/containers/Data/Application",
             "/var/containers/Shared",
-            "/var/mobile/Library/Preferences",   // cfprefsd 正在写
+            "/var/containers/Shared/SystemGroup",
             "/var/mobile/Library/Caches",
+            "/var/mobile/Library/Preferences",
             "/var/mobile/Library/Keychains",
             "/var/mobile/Library/SMS",
             "/var/mobile/Library/AddressBook",
             "/var/mobile/Library/SpringBoard",
+            "/var/mobile/Library/Logs",
         ]
-        for prefix in hardPrefixes where p == prefix || p.hasPrefix(prefix + "/") {
-            return "这个目录正被系统守护进程读写（\(prefix)），搬走期间可能被重建 ⇒ 搬回时冲突"
+        if hardRefuse.contains(p) {
+            return "这是被全系统依赖的祖先/根目录，搬走期间整个系统都在读写不存在的路径"
+        }
+        return nil
+    }
+
+    /// 放行但**必须提醒**的路径（`airlift.readdir` 用）—— 返回 `nil` 表示没什么好提醒的.
+    ///
+    /// 这些目录搬走本身不会立刻出事，但**很可能被系统守护进程重建**
+    /// ⇒ 搬回时冲突（或搬回失败）。如实提示，由用户决定要不要继续.
+    private static func warnForReaddir(_ path: String) -> String? {
+        var p = path
+        if p.hasPrefix("/private/var/") { p = "/var/" + String(p.dropFirst("/private/var/".count)) }
+        while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
+
+        let appContainerPrefixes = [
+            "/var/containers/Bundle/Application/",
+            "/var/containers/Data/Application/",
+        ]
+        for prefix in appContainerPrefixes where p.hasPrefix(prefix) {
+            return "这是一个 **App 容器**：搬走期间该 App 会看不到自己的数据"
+                + "（可能闪退或被系统重建目录 ⇒ 搬回时冲突）。"
+                + "建议**先杀掉那个 App** 再浏览。"
+        }
+        if p.hasPrefix("/var/mobile/Library/Logs/") || p.hasPrefix("/var/mobile/Library/Preferences/") {
+            return "这个目录里的内容由系统守护进程读写，**可能被重建** ⇒ 搬回时冲突。"
+        }
+        if p.hasPrefix("/var/containers/Shared/") {
+            return "SystemGroup 共享容器：实测**只允许读/移出、拒绝创建/写入**；"
+                + "搬回（写入）很可能失败 ⇒ 目录会留在 Media 里，需要重试搬回。"
         }
         return nil
     }
@@ -1042,6 +1079,9 @@ enum HostCapabilityService {
         }
 
         var steps: [String] = []
+        // 放行但先提醒（App 容器 / 守护进程目录 / SystemGroup 容器）
+        let warning = warnForReaddir(target)
+        if let warning { steps.append("⚠️ 提醒：\(warning)") }
 
         // ① 把整个目录搬进 Media
         let entry = withAirlift { AirliftExploit.pocReadEntry(path: target) }
@@ -1128,6 +1168,7 @@ enum HostCapabilityService {
             "via": "airlift",
             "steps": steps,
         ]
+        if let warning { extra["warning"] = warning }
         if let walkError { extra["walkError"] = walkError }
         if !files.isEmpty { extra["files"] = files }
         if !restore || restored { return ok(extra) }
@@ -1466,6 +1507,52 @@ enum HostCapabilityService {
         extra["verified"] = true
         extra["organizationName"] = checkDict["OrganizationName"] as? String ?? ""
         return ok(extra)
+    }
+
+    // MARK: - apps.lookup（按 bundle id 查 App 容器路径）
+
+    /// `apps.lookup` —— 列已安装应用，**带 App 数据容器路径**（v0.3.497 新增）.
+    ///
+    /// ## 为什么需要它（AirCard 的 #2，用户点名要移植）
+    /// `airlift` 只能读写**已知绝对路径**，而 App 容器的路径里带一串随机 UUID
+    /// （`/var/containers/Bundle/Application/<UUID>/`）—— 靠人猜不出来。
+    /// 这个能力走 `installation_proxy`（**不是漏洞、不依赖 airlift**），
+    /// 直接把 `Container`（数据容器）/ 包路径给出来，配上 `airlift.readdir`
+    /// 就能浏览任意 App 的容器。
+    ///
+    /// ## 参数
+    /// - `bundleId`：可选；给了就只返回那一个 App（不区分大小写）
+    /// - `includeSystem`：是否包含系统应用（默认 `false` —— 系统应用通常没有数据容器）
+    private static func appsLookup(_ args: [String: Any]) -> (Int32, String) {
+        let wanted = (args["bundleId"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let includeSystem = (args["includeSystem"] as? Bool) ?? false
+        do {
+            let all = try AppDiscovery().fetchInstalledApps()
+            var rows: [[String: Any]] = []
+            for app in all {
+                if !includeSystem && app.isSystem { continue }
+                if let wanted, !wanted.isEmpty,
+                   app.bundleIdentifier.lowercased() != wanted { continue }
+                var row: [String: Any] = [
+                    "bundleId": app.bundleIdentifier,
+                    "name": app.name,
+                    "container": app.containerPath,
+                    "type": app.applicationType ?? "",
+                    "isSystem": app.isSystem,
+                ]
+                if let version = app.version { row["version"] = version }
+                rows.append(row)
+            }
+            if let wanted, !wanted.isEmpty, rows.isEmpty {
+                return fail("设备上没有这个 bundle id（或它是系统应用且未开 includeSystem）：\(wanted)",
+                            extra: ["bundleId": wanted, "count": 0, "via": "installation_proxy"])
+            }
+            return ok(["apps": rows, "count": rows.count, "via": "installation_proxy"])
+        } catch {
+            return fail("枚举已安装应用失败：\(error.localizedDescription)",
+                        extra: ["via": "installation_proxy"])
+        }
     }
 
     // MARK: - proc.*

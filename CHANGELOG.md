@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.497] - 2026-09-20
+
+### 新增 `apps.lookup` —— 按 bundle id 查 **App 数据容器路径**（AirCard #2）
+
+**为什么需要**：`airlift` 只能读写**已知绝对路径**，而 App 容器路径里带一串随机 UUID
+（`/var/containers/Bundle/Application/<UUID>/`）—— 靠人猜不出来。
+这个能力走 `installation_proxy`（**不是漏洞、不依赖 airlift**），
+直接把 `Container`（数据容器）给出来，配上 `airlift.readdir` 就能浏览任意 App 的容器。
+
+- 参数：`bundleId`（可选，不区分大小写）、`includeSystem`（默认 `false`）
+- 「目录浏览」tab 新增「从已安装 App 选一个容器」下拉 —— 点一下就把容器路径填进目标框
+
+### ★ 修我自己 v0.3.496 写错的过度拒绝
+
+`refuseReasonForReaddir` 原来用 `hasPrefix` 判前缀，于是 `/var/containers/Bundle`
+这条把**每一个 App 的容器**（`…/Bundle/Application/<uuid>`）也一起拒了 ——
+等于把「浏览 App 容器」这个正经用法堵死。
+
+**现在**：
+- **祖先路径精确拒绝**（`/var/containers/Bundle`、`/var/containers/Shared/SystemGroup`、
+  `/var/mobile/Library`、`/var/mobile/Documents` … 搬走一个就少一批东西，一搬全没）
+- **子目录放行但带警告**（`warnForReaddir`）——
+  · App 容器 ⇒ 提醒「该 App 会看不到自己的数据，建议先杀掉那个 App」
+  · SystemGroup 共享容器 ⇒ 提醒「实测只允许读/移出、**拒绝创建/写入**，
+    搬回（写入）很可能失败 ⇒ 目录会留在 Media 里，需要重试搬回」
+  · Logs / Preferences ⇒ 提醒「可能被守护进程重建 ⇒ 搬回时冲突」
+- 警告同时出现在 `steps` 与返回的 `warning` 字段里，界面直接显示
+
+模块 `com.escapeos.airlift-poc` → **1.2.0**（`requires` 17 项，`minHostVersion` 0.3.497）。
+
 ## [0.3.496] - 2026-09-20
 
 ### ★★★ 定案：写入**必须读回校验**；「监督模式」的**目标本身不允许写入**
