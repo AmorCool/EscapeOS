@@ -159,7 +159,7 @@ struct CompactStepsView: View {
         if !steps.isEmpty {
             Section {
                 ForEach(Array((expanded ? steps : keySteps).enumerated()), id: \.offset) { _, step in
-                    StepRow(text: step)
+                    StepRow(text: step, raw: expanded)
                 }
                 if keySteps.count < steps.count {
                     Button {
@@ -179,21 +179,50 @@ struct CompactStepsView: View {
     }
 }
 
-/// 单条步骤：一个状态点 + 文本（等宽只留给路径/数字那类内容）.
+/// 把能力返回的「步骤」原文清成**给人看的短句**（v0.3.500）.
+///
+/// ## 为什么要清（用户原话）
+/// 「**注释不要给我看给你自己看的**」—— 能力返回的步骤里带大量**给开发者**的解释：
+/// `⚠️`、`★`、markdown 的 `**` 与反引号、以及括号里那一长串「为什么 / 判据 / 边界」。
+/// 那些在**日志**里有用，在**界面**上就是噪音。
+/// ⇒ 界面上只留「做了什么、成没成」；**原文照样能在展开后的「全部行」和日志里看到**。
+enum StepText {
+    static func clean(_ raw: String) -> String {
+        var t = raw
+        for junk in ["⚠️", "\u{FE0F}", "★", "**", "`"] {
+            t = t.replacingOccurrences(of: junk, with: "")
+        }
+        // 去掉成对括号里的解释性注释（中英文括号都去）
+        for pair in [("（", "）"), ("(", ")")] {
+            while let open = t.firstIndex(of: Character(pair.0)),
+                  let close = t[t.index(after: open)...].firstIndex(of: Character(pair.1)) {
+                t.removeSubrange(open...close)
+            }
+        }
+        // 压掉多余空格与首尾空白
+        t = t.split(separator: " ").joined(separator: " ")
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// 单条步骤：一个状态点 + 文本.
 struct StepRow: View {
     let text: String
+    /// 是否显示原文（展开时 true）
+    var raw: Bool = false
 
-    private var isWarn: Bool { text.contains("⚠️") || text.contains("失败") || text.contains("拒绝") }
-    private var isGood: Bool { text.contains("★") || text.contains("已") || text.contains("成立") }
+    private var shown: String { raw ? text : StepText.clean(text) }
+    private var isWarn: Bool { text.contains("失败") || text.contains("拒绝") || text.contains("未成立") }
+    private var isGood: Bool { text.contains("已") || text.contains("成立") || text.contains("成功") }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: isWarn ? "exclamationmark.triangle.fill"
-                                     : (isGood ? "checkmark.circle.fill" : "circle.dotted"))
-                .font(.system(size: 11))
-                .foregroundColor(isWarn ? .orange : (isGood ? .green : .secondary))
-                .padding(.top, 2)
-            Text(text)
+            // 不用感叹号三角 —— 用一个小圆点，靠颜色区分状态
+            Circle()
+                .fill(isWarn ? Color.orange : (isGood ? Color.green : Color.secondary.opacity(0.5)))
+                .frame(width: 6, height: 6)
+                .padding(.top, 6)
+            Text(shown.isEmpty ? text : shown)
                 .font(.system(size: 12))
                 .foregroundColor(isWarn ? .orange : .primary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -214,7 +243,7 @@ struct BannerView: View {
         var icon: String {
             switch self {
             case .ok: return "checkmark.seal.fill"
-            case .warn: return "exclamationmark.triangle.fill"
+            case .warn: return "info.circle.fill"
             case .error: return "xmark.octagon.fill"
             }
         }
@@ -509,7 +538,7 @@ private struct AirliftSupervisedTab: View {
                 if !module.isUsable {
                     Text("模块当前不可用，无法执行。")
                 } else {
-                    Text("⚠️ 真机实测（v0.3.496）：这个**目标做不到**。\n"
+                    Text("真机实测（v0.3.496）：这个**目标做不到**。\n"
                          + "`CloudConfigurationDetails.plist` 在 SystemGroup 容器里，"
                          + "沙盒**只允许读/移出、拒绝创建/写入** —— 读得到（412 字节），"
                          + "但覆盖读回一点没变，连在同一个目录里**新建**一个文件都建不出来。\n"
@@ -553,17 +582,6 @@ private struct AirliftSupervisedTab: View {
     private var statusText: String {
         guard let isSupervised else { return "读取中（airlift 约需 20~40 秒）…" }
         return isSupervised ? "已开启监督模式" : "未开启监督模式"
-    }
-
-    private func stepIcon(_ step: String) -> String {
-        if step.hasPrefix("⚠️") { return "exclamationmark.triangle.fill" }
-        if step.contains("write:") { return "square.and.pencil" }
-        return "checkmark.circle.fill"
-    }
-
-    private func stepColor(_ step: String) -> Color {
-        if step.hasPrefix("⚠️") { return .orange }
-        return .secondary
     }
 
     /// 读当前状态（走 `sys.supervised.get`，非破坏性）.
@@ -641,27 +659,48 @@ private struct AirliftSupervisedTab: View {
 
 /// 日志：宿主能力调用的原始 JSON 往来（排障用）.
 private struct AirliftLogTab: View {
-    @ObservedObject private var log = AirliftPocLog.shared
+    /// 内存里的记录（本次运行的 UI 调用）—— 文件读不到时的兜底
+    @ObservedObject private var memory = AirliftPocLog.shared
+
+    @State private var entries: [FileEntry] = []
+    @State private var loading = false
+
+    /// 一条能力调用（从持久化日志里解出来的）
+    struct FileEntry: Identifiable {
+        let id = UUID()
+        let head: String
+        let ok: Bool
+        let args: String
+        let ret: String
+    }
 
     var body: some View {
         Group {
-            if log.entries.isEmpty {
+            if entries.isEmpty && memory.entries.isEmpty {
                 ContentUnavailableView("还没有调用记录",
                                        systemImage: "text.alignleft",
-                                       description: Text("在「概览」或「监督模式」里操作后会出现在这里。"))
+                                       description: Text("在任意 tab 里操作一次就会出现。\n"
+                                                         + "（也包含通过 SSH `cap` 发起的调用）"))
             } else {
                 List {
-                    // 「清空」放在列表首行而不是 `.toolbar` —— 模块二级界面**没有**
-                    // NavigationStack（外壳刻意不套，避免和常驻顶栏叠成双层栏），
-                    // 没有导航栏可挂，toolbar 里的按钮不会渲染出来.
                     Section {
-                        Button(role: .destructive) {
-                            log.clear()
+                        Button {
+                            Task { await reload() }
                         } label: {
-                            Label("清空记录（\(log.entries.count) 条）", systemImage: "trash")
+                            Label("刷新", systemImage: "arrow.clockwise")
                         }
+                        .disabled(loading)
+                        Button(role: .destructive) {
+                            clearAll()
+                        } label: {
+                            Label("清空日志（\(entries.count) 条）", systemImage: "trash")
+                        }
+                    } footer: {
+                        Text("日志落在 App 沙盒的 CapabilityLog/run.log，"
+                             + "**重启 App 不会丢**，SSH 的 cap 调用也在里面。")
                     }
-                    ForEach(log.entries) { entry in
+
+                    ForEach(entries) { entry in
                         DisclosureGroup {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("入参").font(.caption).foregroundColor(.secondary)
@@ -669,7 +708,7 @@ private struct AirliftLogTab: View {
                                     .font(.system(.caption2, design: .monospaced))
                                     .textSelection(.enabled)
                                 Text("返回").font(.caption).foregroundColor(.secondary)
-                                Text(entry.result)
+                                Text(entry.ret)
                                     .font(.system(.caption2, design: .monospaced))
                                     .textSelection(.enabled)
                             }
@@ -679,18 +718,63 @@ private struct AirliftLogTab: View {
                                 Circle()
                                     .fill(entry.ok ? Color.green : Color.red)
                                     .frame(width: 8, height: 8)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.capability).font(.callout)
-                                    Text(entry.time.formatted(date: .omitted, time: .standard))
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
+                                Text(entry.head)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .lineLimit(2)
                             }
                         }
                     }
                 }
             }
         }
+        .task { await reload() }
+    }
+
+    /// 读持久化日志（`Documents/CapabilityLog/run.log`）的末尾.
+    ///
+    /// 为什么不只用内存里那份：内存里的随 App 重启清空，
+    /// 而且 SSH 的 `cap` 调用**不经过** UI 的 `AirliftPocLog` ⇒ 看不到。
+    /// 日志文件两者都有（宿主侧统一记的）。
+    private func reload() async {
+        loading = true
+        defer { loading = false }
+        let url = HostCapabilityService.callLogURL
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            entries = []
+            return
+        }
+        var out: [FileEntry] = []
+        var head: String?
+        var args = ""
+        var ret = ""
+        var ok = true
+        func flush() {
+            guard let h = head else { return }
+            out.append(FileEntry(head: h, ok: ok, args: args, ret: ret))
+            head = nil; args = ""; ret = ""; ok = true
+        }
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.hasPrefix("[") {
+                flush()
+                head = line
+                ok = line.contains("] OK")
+            } else if line.hasPrefix("  args:") {
+                args = String(line.dropFirst("  args:".count)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("  ret :") {
+                ret = String(line.dropFirst("  ret :".count)).trimmingCharacters(in: .whitespaces)
+            } else if head != nil {
+                ret += "\n" + line
+            }
+        }
+        flush()
+        entries = Array(out.suffix(80).reversed())
+    }
+
+    private func clearAll() {
+        try? FileManager.default.removeItem(at: HostCapabilityService.callLogURL)
+        memory.clear()
+        entries = []
     }
 }
 
@@ -883,7 +967,7 @@ private struct AirliftOverwriteTab: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("将用 AIR/\(selectedAirName ?? "?") 的字节覆盖 \(target)。"
-                 + (backupFirst ? "覆盖前会先把目标原内容备份到 AIR（.bak）。" : "⚠️ 已关闭备份。")
+                 + (backupFirst ? "覆盖前会先把目标原内容备份到 AIR（.bak）。" : "已关闭备份。")
                  + " 这是不可逆操作，请确认目标路径无误。")
         }
         .confirmationDialog(
@@ -1102,12 +1186,10 @@ private struct AirliftDirTab: View {
     var body: some View {
         Form {
             Section {
-                Text("⚠️ 目标目录在操作期间（约 20~40 秒）会被**搬进 Media 暂存**，"
-                     + "那段时间里原位置是空的 —— 这是 airlift 唯一能枚举目录的方式。"
-                     + "已自动拒绝 /var、/var/mobile/Library、/var/containers 这类"
-                     + "「一动就可能让系统起不来」的祖先目录。")
-                    .font(.caption)
-                    .foregroundColor(.orange)
+                BannerView(kind: .warn,
+                           text: "这个功能会把目标目录**搬进 Media 暂存**（约 20~40 秒），"
+                               + "期间原位置是空的；已自动拒绝 /var、/var/mobile/Library、"
+                               + "/var/containers 这类「一动就可能让系统起不来」的祖先目录。")
             }
 
             Section {
@@ -1179,7 +1261,7 @@ private struct AirliftDirTab: View {
 
             if let pendingRestore {
                 Section {
-                    Text("⚠️ 上一次没能把条目搬回原位：\(pendingRestore.path)")
+                    Text("上一次没能把条目搬回原位：\(pendingRestore.path)")
                         .font(.caption)
                         .foregroundColor(.red)
                     Text("条目仍在 Media 的 \(pendingRestore.recovered)（**数据没丢**）")
@@ -1452,7 +1534,7 @@ private struct AirliftFilesTab: View {
                      + "两个根：**Media**（com.apple.afc）覆盖 DCIM / Downloads / Books / "
                      + "各 App 共享文件；**CrashReporter**（com.apple.crashreportcopymobile）"
                      + "覆盖 /var/mobile/Library/Logs/CrashReporter。\n\n"
-                     + "⚠️ **权限边界**：由**系统账号**创建的条目（如 sysdiagnose 归档里的内容）"
+                     + "权限边界：由系统账号创建的条目（如 sysdiagnose 归档里的内容）"
                      + "可以读和列，但**删/写会被拒**（AFC 报 PermDenied，airlift 也搬不动）。\n\n"
                      + "❌ **列不出来**：/var 根、/var/mobile/Library、其他 App 容器 —— "
                      + "RSD 服务表（64 个服务）里没有服务把根设在它们上面。")
