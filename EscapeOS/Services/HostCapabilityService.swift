@@ -271,14 +271,36 @@ enum HostCapabilityService {
         ok(["abi": Int(abiVersion), "list": capabilityList])
     }
 
+    /// 漏洞利用可用性.
+    ///
+    /// ## 为什么要报**两个**字段（不是一个布尔）
+    /// 「用户有没有在『更多 → 漏洞利用』里勾上 airlift」与「airlift 的 poc 接口
+    /// 能不能用」是**两件事**：
+    /// · `pocReadFile/pocWriteFile/pocDeleteFile` **不检查** `ExploitSettings` ——
+    ///   它们直接跑协议，所以即使设置里没勾也能用；
+    /// · 设置开关影响的是 `ExploitRegistry` 那条通用路由（空间回收 / 文件浏览等
+    ///   走 `SandboxEscape.consume` 的功能），以及**后台自检**是否跑
+    ///   （`triggerProtocolProbeOnce` 里有 `guard ... contains(.airlift)`）。
+    ///
+    /// 只报一个布尔必然误导：报设置状态 ⇒ 用户以为模块坏了；报「能用」⇒
+    /// 用户以为设置已开、自检在跑。所以两个都报，并附一句说明.
     private static func exploitStatus() -> (Int32, String) {
         // ExploitSettings 是 @MainActor，但它提供了 nonisolated 的快照读取
-        // （就是为了后台线程枚举目录用的）—— 这里正合用，不必跳主线程.
+        // （就是为了后台线程用的）—— 这里正合用，不必跳主线程.
         let enabled = ExploitSettings.snapshot()
+        let airliftOn = enabled.contains(.airlift)
         return ok([
-            "airlift": enabled.contains(.airlift),
-            "badQuery": enabled.contains(.badQueryList),
+            // 设置开关状态
+            "airliftEnabled": airliftOn,
+            "badQueryEnabled": enabled.contains(.badQueryList),
             "enabled": enabled.map(\.rawValue).sorted(),
+            // 代码路径可用性：poc 接口不依赖上面的开关 ⇒ 恒为 true
+            "airliftRunnable": true,
+            "note": airliftOn
+                ? "airlift 已在设置里启用。"
+                : "airlift 未在「更多 → 漏洞利用」里勾选。**不影响本模块的读/写/删**"
+                  + "（poc 接口不检查该开关）；但后台自检不会跑。"
+                  + "想要自检请去「更多 → 漏洞利用」勾上 airlift。",
         ])
     }
 

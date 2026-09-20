@@ -161,7 +161,11 @@ private struct AirliftOverviewTab: View {
 
     @State private var hostVersion = "查询中…"
     @State private var hostBuild = ""
-    @State private var airliftAvailable: Bool?
+    /// airlift 的 poc 接口是否可用（**与设置开关无关** —— 见 HostCapabilityService.exploitStatus 注释）
+    @State private var airliftRunnable: Bool?
+    /// 「更多 → 漏洞利用」里 airlift 的勾选状态
+    @State private var airliftEnabled: Bool?
+    @State private var exploitNote = ""
     @State private var supportedCapabilities: [String] = []
     @State private var loading = false
 
@@ -173,15 +177,33 @@ private struct AirliftOverviewTab: View {
                 availabilityRow
             }
 
-            Section("宿主") {
+            // ⚠️ 这里刻意分两行显示两个**不同**的东西：
+            //   · airlift 的 poc 接口能不能用（本模块靠它读写）
+            //   · 「更多 → 漏洞利用」里有没有勾选 airlift（影响别的功能和后台自检）
+            // 只显示一个必然误导 —— 详见 HostCapabilityService.exploitStatus 的注释.
+            Section {
                 LabeledContent("版本", value: hostBuild.isEmpty ? hostVersion : "\(hostVersion) (\(hostBuild))")
-                LabeledContent("airlift 漏洞利用") {
-                    if let airliftAvailable {
-                        Text(airliftAvailable ? "可用" : "不可用")
-                            .foregroundColor(airliftAvailable ? .green : .orange)
+                LabeledContent("airlift（本模块读写）") {
+                    if let airliftRunnable {
+                        Text(airliftRunnable ? "可用" : "不可用")
+                            .foregroundColor(airliftRunnable ? .green : .orange)
                     } else {
                         Text("查询中…").foregroundColor(.secondary)
                     }
+                }
+                LabeledContent("「漏洞利用」设置里的 airlift") {
+                    if let airliftEnabled {
+                        Text(airliftEnabled ? "已启用" : "未启用")
+                            .foregroundColor(airliftEnabled ? .green : .orange)
+                    } else {
+                        Text("查询中…").foregroundColor(.secondary)
+                    }
+                }
+            } header: {
+                Text("宿主")
+            } footer: {
+                if !exploitNote.isEmpty {
+                    Text(exploitNote)
                 }
             }
 
@@ -270,7 +292,10 @@ private struct AirliftOverviewTab: View {
         let capsDict = CapJSON.dict(capabilitiesJSON)
         supportedCapabilities = CapJSON.strings(capsDict, "list")
 
-        airliftAvailable = CapJSON.bool(CapJSON.dict(exploitJSON), "airlift")
+        let exploitDict = CapJSON.dict(exploitJSON)
+        airliftRunnable = CapJSON.bool(exploitDict, "airliftRunnable")
+        airliftEnabled = CapJSON.bool(exploitDict, "airliftEnabled")
+        exploitNote = CapJSON.string(exploitDict, "note") ?? ""
     }
 
     /// 宿主能力是同步阻塞的（沙盒外走 airlift 十几秒），所以放后台线程.

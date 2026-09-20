@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.484] - 2026-09-20
+
+### 修：`exploit.status` 会误导 —— 概览显示「airlift 不可用」但实际能用
+
+**问题**：`exploit.status` 报的是「用户在『更多 → 漏洞利用』里有没有勾选 airlift」，
+而 airlift 的 poc 接口（`pocReadFile` / `pocWriteFile` / `pocDeleteFile`）
+**根本不检查 `ExploitSettings`** —— 它直接跑协议。
+airlift 默认未启用 ⇒ 模块概览 tab 会显示橙色的「airlift 不可用」，
+而实际上读写删全都能用。用户看到那个橙色标记只会以为模块坏了。
+
+**修法**：`exploit.status` 改成报**两个**字段，把两件事分开：
+
+| 字段 | 含义 |
+|---|---|
+| `airliftRunnable` | poc 接口能否用（本模块靠它读写）—— 恒 true，因为不依赖开关 |
+| `airliftEnabled` | 「更多 → 漏洞利用」里的勾选状态（影响别的功能与**后台自检**） |
+
+并附一句 `note` 说明两者的关系（未勾选时提示去勾上，因为那样后台自检才会跑）。
+概览 tab 相应拆成两行显示，各带自己的颜色与说明 footer。
+
+> 只报一个布尔必然误导：报设置状态 ⇒ 用户以为模块坏了；
+> 报「能用」⇒ 用户以为设置已开、自检在跑。
+
+### 顺带（链路自检）
+
+把「导入 → 卡片 → 打开 → 界面 → 能力调用」整条链路自己先走了一遍，确认：
+- 注册名 `airlift-poc` 与 `module.json` 的 `ui.view` **完全一致**
+- `requires` 的 8 项能力在 v0.3.483 的 `capabilityList` 里**全部存在**
+- `posixRelativePath` 对 `/private/var/...`（与 airlockRoot 无公共前缀）的算术正确：
+  5 个 `..` 正好退到 `/`，再拼绝对路径 ⇒ **任意绝对路径都能读写**，
+  不限于 `/var/mobile/` 下
+- 卡片「打开」按钮的接线：`hasNativeUI && enabled` → `ModuleUIRouter.open`
+  → `RootView` 的 `fullScreenCover` → `ModuleHostShell`
+
 ## [0.3.483] - 2026-09-20
 
 ### ★ 修：宿主导入校验漏了 `ui`，导致「不声明 action」的原生界面模块装不上
