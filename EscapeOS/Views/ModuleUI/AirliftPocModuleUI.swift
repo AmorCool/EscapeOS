@@ -762,6 +762,10 @@ private struct AirliftOverwriteTab: View {
         selectedAirName != nil && !target.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    private var rootDisplay: String {
+        root == "crash" ? "/var/mobile/Library/Logs/CrashReporter" : "/var/mobile/Media"
+    }
+
     private func byteText(_ size: Int) -> String {
         if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
         if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
@@ -912,7 +916,9 @@ private struct AirliftOverwriteTab: View {
 private struct AirliftFilesTab: View {
     let module: EscapeModule
 
-    /// 当前路径（相对 Media 根；`/` = 根）
+    /// 当前根（`media` = /var/mobile/Media；`crash` = /var/mobile/Library/Logs/CrashReporter）
+    @State private var root = "media"
+    /// 当前路径（**相对当前根**；`/` = 根）
     @State private var path = "/"
     @State private var entries: [AfcEntry] = []
     @State private var loading = false
@@ -935,10 +941,20 @@ private struct AirliftFilesTab: View {
     var body: some View {
         Form {
             Section {
+                Picker("根", selection: $root) {
+                    Text("/var/mobile/Media").tag("media")
+                    Text("CrashReporter").tag("crash")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: root) { _ in
+                    path = "/"
+                    Task { await load() }
+                }
+
                 HStack(spacing: 8) {
                     Image(systemName: "externaldrive.fill")
                         .foregroundColor(.accentColor)
-                    Text(path == "/" ? "/var/mobile/Media" : path)
+                    Text(path == "/" ? rootDisplay : path)
                         .font(.system(.callout, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.head)
@@ -963,9 +979,12 @@ private struct AirliftFilesTab: View {
             } header: {
                 Text("位置")
             } footer: {
-                Text("根 = /var/mobile/Media（AFC 服务把根钉死在这里）。"
-                     + "DCIM / Downloads / Books / 各 App 共享出来的文件都在这一棵下。"
-                     + "**/var 根与 /var/mobile/Library 列不出来** —— RSD 服务表里没有服务把根设在它们上面。")
+                Text("两个根各是一条 RSD 服务会话：**Media**（com.apple.afc）覆盖 "
+                     + "DCIM / Downloads / Books / 各 App 共享文件；**CrashReporter**"
+                     + "（com.apple.crashreportcopymobile）覆盖 /var/mobile/Library/Logs/CrashReporter。"
+                     + "两者都可读/写/删/建目录。"
+                     + "**/var 根与 /var/mobile/Library 列不出来** —— RSD 服务表（64 个服务）里"
+                     + "没有服务把根设在它们上面，airlift 本体也不能枚举目录。")
             }
 
             if let errorText {
@@ -1127,7 +1146,7 @@ private struct AirliftFilesTab: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        let json = await call("afc.list", jsonString(["path": path]))
+        let json = await call("afc.list", jsonString(["root": root, "path": path]))
         let dict = CapJSON.dict(json)
         guard CapJSON.bool(dict, "ok") == true else {
             errorText = CapJSON.string(dict, "error") ?? json
@@ -1165,7 +1184,7 @@ private struct AirliftFilesTab: View {
         previewLoading = true
         previewText = ""
         defer { previewLoading = false }
-        let json = await call("afc.read", jsonString(["path": entry.path, "encoding": "utf8"]))
+        let json = await call("afc.read", jsonString(["root": root, "path": entry.path, "encoding": "utf8"]))
         let dict = CapJSON.dict(json)
         if CapJSON.bool(dict, "ok") == true, let text = CapJSON.string(dict, "data") {
             previewText = text.isEmpty ? "（空文件）" : text
@@ -1178,7 +1197,7 @@ private struct AirliftFilesTab: View {
 
     private func delete(_ entry: AfcEntry) async {
         let json = await call("afc.delete",
-                              jsonString(["path": entry.path, "recursive": entry.isDir]))
+                              jsonString(["root": root, "path": entry.path, "recursive": entry.isDir]))
         let dict = CapJSON.dict(json)
         if CapJSON.bool(dict, "ok") != true {
             errorText = CapJSON.string(dict, "error") ?? json
@@ -1192,7 +1211,7 @@ private struct AirliftFilesTab: View {
         creatingFolder = true
         defer { creatingFolder = false }
         let base = path == "/" ? "" : path
-        let json = await call("afc.mkdir", jsonString(["path": "\(base)/\(name)"]))
+        let json = await call("afc.mkdir", jsonString(["root": root, "path": "\(base)/\(name)"]))
         let dict = CapJSON.dict(json)
         if CapJSON.bool(dict, "ok") == true {
             newFolderName = ""

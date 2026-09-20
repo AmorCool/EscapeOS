@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.3.490] - 2026-09-20
+
+### ★★★ 修：`pocWriteFile` / `pocDeleteFile` 的成败判据**永远匹配不到** ⇒ 每次误报失败
+
+真机实测（v0.3.489）暴露：写到 `/var/mobile/Library/Logs/CrashReporter/airlift-wtest.txt`
+与删掉它，两次都报「未通过清单校验」/「删除未成立」，
+但 `airlift4` 盘点显示**两次实际都成功了**（判据 D 先出现 `airlift-wtest.txt size=18`，
+删除后又变成「没有 airlift-* 条目」）。
+
+**根因**：`runProtocolProbe` 只 `return lines`，而 `step2` 的结论（含最关键的
+「★★★ 清单里有没有我们那条：**有**」与 AFC 回读落点）写进的是**另一个数组**
+`step2Verdict` —— 那个数组只被落进 `airlift_at2.txt` 文件。
+⇒ `pocWriteFile` / `pocDeleteFile` 拿到的 `details` **永远不含 AT 侧判据**
+⇒ 它们的判据（找「清单里有没有我们那条」/「删除成立」）**永远匹配不到**。
+
+**修法**：`return lines + step2Verdict`。
+
+### ★★ 真机定案：airlift 越界写**成立**，但**写不进 SystemGroup 容器**
+
+同一轮对照实验（同一套代码，只换目标）：
+
+| 目标 | 第 1 次 move（link） | 第 2 次 move（payload） | 结果 |
+|---|---|---|---|
+| `/var/mobile/Library/Logs/CrashReporter/airlift-wtest.txt` | ✅ | ✅ | **写成功**（`airlift4` 判据 D 确认 size=18） |
+| `/private/var/containers/Shared/SystemGroup/…/CloudConfigurationDetails.plist` | ✅ | ❌ **没发生** | 写失败 |
+
+⇒ **airlift 能越界写，但目标路径必须是 ATAirlock 守护进程有写权限的地方**。
+SystemGroup 容器（`systemgroup.com.apple.configurationprofiles`）**不在其中**。
+
+**⇒ 结论：「启用监督模式」用 airlift 做不到** —— 它要改的正是那个 SystemGroup 容器里的
+`CloudConfigurationDetails.plist`。这条路到此为止，别再往里投时间。
+
+### 新增：`afc.*` 支持 `root` 参数（Media / CrashReporter 两个根）
+
+按需求加 CrashReporter 的目录浏览与读写删：
+
+| `root` | 服务 | 覆盖 | 能力 |
+|---|---|---|---|
+| `media`（默认） | `com.apple.afc` | `/var/mobile/Media` | 读 / 写 / 删 / 列 / 建目录 |
+| `crash` | `com.apple.crashreportcopymobile` | `/var/mobile/Library/Logs/CrashReporter` | 读 / 写 / 删 / 列 / 建目录 |
+
+实现上把 `AFCService` 里「拿着 client 干活」的部分抽成**静态方法**
+（`readFile(client:path:)` 等），两个根共用同一套实现；
+实例方法改为委托，避免重复。CrashReporter 那条会话由 `CrashLogService.withAfc` 借出
+（只有它知道怎么连 `crash_report_client_connect_rsd`）。
+
+模块「文件浏览」tab 相应加了根切换（分段控件），切换时自动回到根目录。
+
+## [0.3.489] - 2026-09-20
 ## [0.3.489] - 2026-09-20
 
 ### 新增 `afc.*` + 模块「文件浏览」tab（**只用已验证的通道**）

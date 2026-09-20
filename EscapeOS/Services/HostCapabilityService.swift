@@ -1166,29 +1166,67 @@ enum HostCapabilityService {
         return box.value
     }
 
-    // MARK: - afc.*（AFC 文件操作，根 = /var/mobile/Media）
+    // MARK: - afc.*（AFC 文件操作，支持多个根）
 
-    /// AFC 的根 —— `com.apple.afc` 服务把根**钉死**在 `/var/mobile/Media`。
+    /// `afc.*` 能用的根 —— 每个根是**一条不同的 RSD 服务会话**。
     ///
-    /// ## 为什么这条路是稳的（而且不是别的漏洞）
-    /// 它就在 airlift 走的那条 **RSD 隧道**上：设备广播服务 → host 直连端口。
-    /// `AFCService` 早就在用它（`AFCBrowserView` 也是）。
-    /// **不依赖 bad_query，也不依赖 MHA** —— 所以这条能力不随那两条被修而失效。
+    /// ## 为什么只有两个（如实说清，别让模块作者以为能浏览整个 /var）
+    /// RSD 服务表（64 个服务）里，**能枚举目录**的只有这两条：
     ///
-    /// ## ★ 覆盖范围（如实说清，别让模块作者以为能浏览整个 /var）
-    /// 只有 `/var/mobile/Media` 这一棵子树：`DCIM` / `Downloads` / `Books` /
-    /// `PublicStaging` / 各 App 共享出来的文件… 都在里面。
+    /// | 根 | 服务 | 覆盖 |
+    /// |---|---|---|
+    /// | `media` | `com.apple.afc` | `/var/mobile/Media`（DCIM / Downloads / Books / 各 App 共享文件） |
+    /// | `crash` | `com.apple.crashreportcopymobile` | `/var/mobile/Library/Logs/CrashReporter` |
     ///
-    /// **`/var` 根、`/var/mobile/Library` 等列不出来** —— RSD 服务表（64 个服务）里
-    /// **没有任何服务把根设在它们上面**。`house_arrest` 的 `VendContainer`
-    /// 在 iOS 27 实测被拒；airlift 本体只能碰单个文件、不能枚举目录。
+    /// **`/var` 根、`/var/mobile/Library`、其他 App 容器都列不出来** ——
+    /// 没有任何服务把根设在它们上面；`house_arrest` 的 `VendContainer` 在 iOS 27 实测被拒；
+    /// airlift **本体**只能读写**单个已知文件**、**不能枚举目录**。
     ///
-    /// ## 路径口径
-    /// 所有 `path` 都是**相对 Media 根**的（`"/"` 或空 = 根），与 `AFCService` 一致；
-    /// 返回值里的 `path` 也带前导 `/`，可直接回传给下一个调用。
-    static let afcRoot = "/var/mobile/Media"
+    /// ## 为什么这条路稳
+    /// 两条服务都在 airlift 走的**同一条 RSD 隧道**上（设备广播服务 → host 直连端口）。
+    /// **不依赖 bad_query，也不依赖 MHA** —— 不随那两条被修而失效。
+    enum AfcRoot: String {
+        case media
+        case crash
 
-    /// 规范化成 AFC 口径（去掉前导/尾随 `/`；拒绝 `..` —— AFC 的根就是边界）
+        var displayPath: String {
+            switch self {
+            case .media: return "/var/mobile/Media"
+            case .crash: return "/var/mobile/Library/Logs/CrashReporter"
+            }
+        }
+
+        var serviceName: String {
+            switch self {
+            case .media: return "com.apple.afc"
+            case .crash: return "com.apple.crashreportcopymobile"
+            }
+        }
+
+        static func parse(_ raw: String?) -> AfcRoot {
+            switch (raw ?? "").lowercased() {
+            case "crash", "crashreporter", "crashreport", "crashlog", "logs":
+                return .crash
+            default:
+                return .media
+            }
+        }
+    }
+
+    /// 在指定根上执行一段 AFC 操作（复用一条连接）。
+    private static func withAfcRoot<T>(_ root: AfcRoot,
+                                       _ body: (OpaquePointer) throws -> T) throws -> T {
+        switch root {
+        case .media:
+            // AFCService 自己会开/关连接，用 batch 复用同一条
+            return try AFCService.shared.batch { try body($0) }
+        case .crash:
+            // crashreport 是另一条服务会话，只有 CrashLogService 知道怎么连
+            return try CrashLogService.shared.withAfc { try body($0) }
+        }
+    }
+
+    /// 规范化成 AFC 口径（去掉前导/尾随 `/`；拒绝 `..` —— 根就是边界）
     private static func afcPath(_ raw: String?) -> String? {
         var p = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         while p.hasPrefix("/") { p.removeFirst() }
@@ -1197,12 +1235,24 @@ enum HostCapabilityService {
         return p.isEmpty ? "/" : p
     }
 
-    private static func afcList(_ args: [String: Any]) -> (Int32, String) {
+    /// 统一的「根 + 路径」解析：返回 (root, path) 或报错
+    private static func afcResolve(_ args: [String: Any],
+                                   needFile: Bool) -> (AfcRoot, String, (Int32, String)?) {
+        let root = AfcRoot.parse(args["root"] as? String)
         guard let path = afcPath(args["path"] as? String) else {
-            return fail("afc.list 的 path 非法（不接受 `..`）")
+            return (root, "/", fail("path 非法（不接受 `..`）"))
         }
+        if needFile && path == "/" {
+            return (root, path, fail("需要 path（不能是根目录）"))
+        }
+        return (root, path, nil)
+    }
+
+    private static func afcList(_ args: [String: Any]) -> (Int32, String) {
+        let (root, path, err) = afcResolve(args, needFile: false)
+        if let err { return err }
         do {
-            let items = try AFCService.shared.listDirectory(path)
+            let items = try withAfcRoot(root) { try AFCService.listDirectory(client: $0, path: path) }
             let entries: [[String: Any]] = items.map { item in
                 var entry: [String: Any] = [
                     "name": item.name,
@@ -1215,38 +1265,39 @@ enum HostCapabilityService {
                 }
                 return entry
             }
-            return ok(["root": afcRoot, "path": path,
+            return ok(["root": root.rawValue, "rootPath": root.displayPath,
+                       "service": root.serviceName, "path": path,
                        "entries": entries, "count": entries.count])
         } catch {
             return fail("列目录失败：\(error.localizedDescription)",
-                        extra: ["root": afcRoot, "path": path])
+                        extra: ["root": root.rawValue, "rootPath": root.displayPath,
+                                "path": path])
         }
     }
 
     private static func afcRead(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = afcPath(args["path"] as? String), path != "/" else {
-            return fail("afc.read 需要 path（不能是根目录）")
-        }
+        let (root, path, err) = afcResolve(args, needFile: true)
+        if let err { return err }
         let encoding = (args["encoding"] as? String) ?? "base64"
         guard encoding == "base64" || encoding == "utf8" else {
             return fail("afc.read 的 encoding 只支持 base64 / utf8")
         }
         do {
-            let data = try AFCService.shared.readFile(path)
+            let data = try withAfcRoot(root) { try AFCService.readFile(client: $0, path: path) }
             guard let text = encode(data, encoding: encoding) else {
                 return fail("读到了 \(data.count) 字节但按 \(encoding) 编码失败（可能是二进制）",
                             extra: ["size": data.count])
             }
-            return ok(["root": afcRoot, "path": path, "data": text, "size": data.count])
+            return ok(["root": root.rawValue, "path": path, "data": text, "size": data.count])
         } catch {
-            return fail("读失败：\(error.localizedDescription)", extra: ["path": path])
+            return fail("读失败：\(error.localizedDescription)",
+                        extra: ["root": root.rawValue, "path": path])
         }
     }
 
     private static func afcWrite(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = afcPath(args["path"] as? String), path != "/" else {
-            return fail("afc.write 需要 path（不能是根目录）")
-        }
+        let (root, path, err) = afcResolve(args, needFile: true)
+        if let err { return err }
         guard let text = args["data"] as? String else { return fail("afc.write 缺少 data") }
         let encoding = (args["encoding"] as? String) ?? "base64"
         guard encoding == "base64" || encoding == "utf8" else {
@@ -1256,36 +1307,39 @@ enum HostCapabilityService {
             return fail("data 按 \(encoding) 解码失败")
         }
         do {
-            try AFCService.shared.writeFile(data, to: path)
-            return ok(["root": afcRoot, "path": path, "size": data.count])
+            try withAfcRoot(root) { try AFCService.writeFile(client: $0, data: data, to: path) }
+            return ok(["root": root.rawValue, "path": path, "size": data.count])
         } catch {
-            return fail("写失败：\(error.localizedDescription)", extra: ["path": path])
+            return fail("写失败：\(error.localizedDescription)",
+                        extra: ["root": root.rawValue, "path": path])
         }
     }
 
     private static func afcDelete(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = afcPath(args["path"] as? String), path != "/" else {
-            return fail("afc.delete 需要 path（不能是根目录）")
-        }
+        let (root, path, err) = afcResolve(args, needFile: true)
+        if let err { return err }
         let recursive = (args["recursive"] as? Bool) ?? false
         do {
-            try AFCService.shared.removePath(path, includingContents: recursive)
-            return ok(["root": afcRoot, "path": path, "recursive": recursive])
+            try withAfcRoot(root) {
+                try AFCService.removePath(client: $0, path: path, includingContents: recursive)
+            }
+            return ok(["root": root.rawValue, "path": path, "recursive": recursive])
         } catch {
             return fail("删除失败：\(error.localizedDescription)",
-                        extra: ["path": path, "hint": "目录非空时需要 recursive: true"])
+                        extra: ["root": root.rawValue, "path": path,
+                                "hint": "目录非空时需要 recursive: true"])
         }
     }
 
     private static func afcMkdir(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = afcPath(args["path"] as? String), path != "/" else {
-            return fail("afc.mkdir 需要 path（不能是根目录）")
-        }
+        let (root, path, err) = afcResolve(args, needFile: true)
+        if let err { return err }
         do {
-            try AFCService.shared.makeDirectory(path)
-            return ok(["root": afcRoot, "path": path])
+            try withAfcRoot(root) { try AFCService.makeDirectory(client: $0, path: path) }
+            return ok(["root": root.rawValue, "path": path])
         } catch {
-            return fail("建目录失败：\(error.localizedDescription)", extra: ["path": path])
+            return fail("建目录失败：\(error.localizedDescription)",
+                        extra: ["root": root.rawValue, "path": path])
         }
     }
 

@@ -134,6 +134,23 @@ final class CrashLogService {
         throw lastError ?? makeError("连接崩溃日志服务失败")
     }
 
+    /// ★ v0.3.490：把 crashreport AFC 会话开放给宿主能力层
+    /// （根 = `/var/mobile/Library/Logs/CrashReporter`）。
+    ///
+    /// ## 为什么要开
+    /// `afc.*` 能力要支持**多个根**，而每个根是一条**不同的服务会话**：
+    /// · `com.apple.afc` 的根是 `/var/mobile/Media`
+    /// · `com.apple.crashreportcopymobile` 的根是 CrashReporter
+    ///
+    /// 后者只有本服务知道怎么连（`crash_report_client_connect_rsd` → `to_afc`），
+    /// 所以把会话借出去比在能力层重写一遍连接逻辑更稳。
+    ///
+    /// ⚠️ 与 `afc.list/read/...` 的 `root: "crash"` 对应；调用方拿到的 `path`
+    /// 是**相对 CrashReporter 根**的。
+    func withAfc<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+        try syncOnQueue { try withAfcClient { try body($0) } }
+    }
+
     /// 在串行队列上执行可能抛错的闭包（Theos 的 DispatchQueue.sync 无 throwing
     /// 重载，用 Result 包装绕开 —— v0.2.122 实锤）.
     private func syncOnQueue<T>(_ body: () throws -> T) throws -> T {

@@ -271,84 +271,27 @@ final class AFCService {
 
     // MARK: - 文件操作
 
-    /// 下载文件全部内容.
+    /// 下载文件全部内容（根 = Media）。实现委托给 `readFile(client:path:)`。
     func readFile(_ path: String) throws -> Data {
-        try syncOnQueue {
-            try withClient { client in
-                var handle: OpaquePointer?
-                if let ffiError = path.withCString({ afc_file_open(client, $0, AfcRdOnly, &handle) }) {
-                    throw error(from: ffiError, fallback: "打开文件失败：\(path)")
-                }
-                guard let handle else { throw makeError("打开文件失败：\(path)") }
-                defer { afc_file_close(handle) }
-
-                var data: UnsafeMutablePointer<UInt8>?
-                var length = 0
-                if let ffiError = afc_file_read_entire(handle, &data, &length) {
-                    throw error(from: ffiError, fallback: "读取文件失败：\(path)")
-                }
-                defer {
-                    if let data { afc_file_read_data_free(data, length) }
-                }
-                guard let data else { return Data() }
-                return Data(bytes: data, count: length)
-            }
-        }
+        try syncOnQueue { try withClient { try Self.readFile(client: $0, path: path) } }
     }
 
-    /// 上传文件（父目录必须已存在）.v0.2.127：改为 1MB 分块写入，
-    /// 避免超大文件（如 .ipcc）一次性提交超出 AFC 协议包限制.
+    /// 上传文件（父目录必须已存在；根 = Media）。
+    /// 实现委托给 `writeFile(client:data:to:)`（1MB 分块写入的逻辑在那里）。
     func writeFile(_ data: Data, to path: String) throws {
-        try syncOnQueue {
-            try withClient { client in
-                var handle: OpaquePointer?
-                if let ffiError = path.withCString({ afc_file_open(client, $0, AfcWrOnly, &handle) }) {
-                    throw error(from: ffiError, fallback: "创建文件失败：\(path)")
-                }
-                guard let handle else { throw makeError("创建文件失败：\(path)") }
-                defer { afc_file_close(handle) }
-
-                let chunkSize = 1_048_576
-                try data.withUnsafeBytes { buffer in
-                    let base = buffer.bindMemory(to: UInt8.self).baseAddress
-                    var offset = 0
-                    while offset < data.count {
-                        let chunk = min(chunkSize, data.count - offset)
-                        if let ffiError = afc_file_write(handle, base?.advanced(by: offset), chunk) {
-                            throw error(from: ffiError, fallback: "写入文件失败：\(path)")
-                        }
-                        offset += chunk
-                    }
-                }
-            }
-        }
+        try syncOnQueue { try withClient { try Self.writeFile(client: $0, data: data, to: path) } }
     }
 
-    /// 新建目录.
+    /// 新建目录（根 = Media）。实现委托给 `makeDirectory(client:path:)`。
     func makeDirectory(_ path: String) throws {
-        try syncOnQueue {
-            try withClient { client in
-                if let ffiError = path.withCString({ afc_make_directory(client, $0) }) {
-                    throw error(from: ffiError, fallback: "新建目录失败：\(path)")
-                }
-            }
-        }
+        try syncOnQueue { try withClient { try Self.makeDirectory(client: $0, path: path) } }
     }
 
-    /// 删除文件或目录（目录需为空，空目录用 `removePathAndContents`）.
+    /// 删除文件或目录（根 = Media）。实现委托给 `removePath(client:path:includingContents:)`。
     func removePath(_ path: String, includingContents: Bool = false) throws {
         try syncOnQueue {
-            try withClient { client in
-                let ffiError: UnsafeMutablePointer<IdeviceFfiError>? = path.withCString { p in
-                    if includingContents {
-                        afc_remove_path_and_contents(client, p)
-                    } else {
-                        afc_remove_path(client, p)
-                    }
-                }
-                if let ffiError {
-                    throw error(from: ffiError, fallback: "删除失败：\(path)")
-                }
+            try withClient {
+                try Self.removePath(client: $0, path: path, includingContents: includingContents)
             }
         }
     }
@@ -367,5 +310,85 @@ final class AFCService {
                 }
             }
         }
+    }
+
+    // MARK: ★ v0.3.490：可复用「调用方给的连接」的静态操作
+    //
+    // ## 为什么需要
+    // `afc.*` 能力要支持**多个根**（`Media` 与 `CrashReporter` 各是一条 AFC 会话，
+    // 服务名不同 ⇒ 根不同）。把「拿着 client 干活」抽成静态方法后，
+    // 两个根共用同一套读写删建实现，不必各写一遍。
+
+    /// 把 FFI 错误转成 NSError，并**释放** FFI 分配的错误对象
+    private static func ffiError(_ e: UnsafeMutablePointer<IdeviceFfiError>?,
+                                _ fallback: String) -> NSError {
+        let message = e?.pointee.message.map { String(cString: $0) } ?? fallback
+        let code = Int(e?.pointee.code ?? 0)
+        if let e { idevice_error_free(e) }
+        return NSError(domain: "AFCService", code: code,
+                       userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? fallback : message])
+    }
+
+    /// 读一个文件的全部内容（复用调用方的连接）
+    static func readFile(client: OpaquePointer, path: String) throws -> Data {
+        var handle: OpaquePointer?
+        if let e = path.withCString({ afc_file_open(client, $0, AfcRdOnly, &handle) }) {
+            throw ffiError(e, "打开文件失败：\(path)")
+        }
+        guard let handle else {
+            throw NSError(domain: "AFCService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "打开文件失败：\(path)"])
+        }
+        defer { afc_file_close(handle) }
+        var data: UnsafeMutablePointer<UInt8>?
+        var length = 0
+        if let e = afc_file_read_entire(handle, &data, &length) {
+            throw ffiError(e, "读取文件失败：\(path)")
+        }
+        defer { if let data { afc_file_read_data_free(data, length) } }
+        guard let data else { return Data() }
+        return Data(bytes: data, count: length)
+    }
+
+    /// 写一个文件的全部内容（复用调用方的连接；父目录须已存在）
+    static func writeFile(client: OpaquePointer, data: Data, to path: String) throws {
+        var handle: OpaquePointer?
+        if let e = path.withCString({ afc_file_open(client, $0, AfcWrOnly, &handle) }) {
+            throw ffiError(e, "创建文件失败：\(path)")
+        }
+        guard let handle else {
+            throw NSError(domain: "AFCService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "创建文件失败：\(path)"])
+        }
+        defer { afc_file_close(handle) }
+        let chunkSize = 1_048_576
+        try data.withUnsafeBytes { buffer in
+            let base = buffer.bindMemory(to: UInt8.self).baseAddress
+            var offset = 0
+            while offset < data.count {
+                let chunk = min(chunkSize, data.count - offset)
+                if let e = afc_file_write(handle, base?.advanced(by: offset), chunk) {
+                    throw ffiError(e, "写入文件失败：\(path)")
+                }
+                offset += chunk
+            }
+        }
+    }
+
+    /// 新建目录（复用调用方的连接）
+    static func makeDirectory(client: OpaquePointer, path: String) throws {
+        if let e = path.withCString({ afc_make_directory(client, $0) }) {
+            throw ffiError(e, "新建目录失败：\(path)")
+        }
+    }
+
+    /// 删除文件或目录（复用调用方的连接）
+    static func removePath(client: OpaquePointer, path: String,
+                           includingContents: Bool) throws {
+        let e: UnsafeMutablePointer<IdeviceFfiError>? = path.withCString { p in
+            if includingContents { afc_remove_path_and_contents(client, p) }
+            else { afc_remove_path(client, p) }
+        }
+        if let e { throw ffiError(e, "删除失败：\(path)") }
     }
 }
