@@ -443,6 +443,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let booksRead: String?
             let booksTarget: String?
             let booksPayload: String?
+            /// ★ v0.3.486：落点**文件名**（设备把 payload 落到「symlink 解析出的目录 + 它」）
+            let booksLeaf: String?
             if parts.count > 1 && parts[1] == "read" {
                 // `read` 必须带目标；没带就如实报用法，**不猜**（猜一个目标等于读错地方）。
                 guard parts.count > 2 else {
@@ -452,6 +454,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 booksRead = parts[2]
                 booksTarget = nil
                 booksPayload = nil
+                booksLeaf = nil
             } else if parts.count > 1 && parts[1] == "write" {
                 // ★ v0.3.480：`write <目标> <payload 相对路径>` —— 用**任意字节**写。
                 // payload 文件放在 **App 的 Documents** 里（相对路径，与 SSH 的 cat/ls 同口径）。
@@ -462,16 +465,29 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                          + "（例：airlift3 write /var/mobile/Library/Preferences/com.x.plist my.plist）"
                 }
                 booksRead = nil
-                booksTarget = parts[2]
+                // ★ v0.3.486：把目标拆成「父目录 + 文件名」。
+                //   设备落点 = 「穿过 symlink 解析出的目录」+ leaf ⇒ target 必须是**目录**、
+                //   leaf 必须是**文件名**。v0.3.480~485 一直把整条路径当 target、
+                //   leaf 写死成 canary 名 ⇒ 这条命令写不出**指定文件名**的文件
+                //   （真机表现：写入失败/落点名字不对）。
+                //   按组件切，不用路径 API（它们会标准化掉 `..`，而 `..` 是攻击本体）。
+                let comps = parts[2].split(separator: "/").map(String.init)
+                guard comps.count >= 2 else {
+                    return "目标必须是绝对路径且不能是根目录下的条目：\(parts[2])"
+                }
+                booksTarget = "/" + comps.dropLast().joined(separator: "/")
+                booksLeaf = comps[comps.count - 1]
                 booksPayload = parts[3]
             } else {
                 booksRead = nil
                 booksTarget = parts.count > 1 ? parts[1] : nil
                 booksPayload = nil
+                booksLeaf = nil
             }
             AirliftExploit.runBooksStagingProbe(target: booksTarget,
                                                 readTarget: booksRead,
-                                                payloadRelativePath: booksPayload)
+                                                payloadRelativePath: booksPayload,
+                                                leafName: booksLeaf)
             let targetText = booksRead.map { "读模式，目标 = " + $0 }
                 ?? (booksTarget ?? "（默认：Media 内部的 canary 目录，零风险）")
             return "已触发 airlift books staging 最小实验（stage + 写 Books.plist，不碰 AirTraffic）。\n"
@@ -885,7 +901,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       status          运行状态总览
       airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
       airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest 4=两段式（先搬 symlink 再穿过它写 payload，并回读落点）5=读（把 Media 之外的真实文件搬进 Media 再 AFC 读回，读目标由 airlift3 read 交接）6=删除（与 5 相同，读完删副本 ⇒ 原文件彻底消失；先确认备份落盘再删）（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
-      airlift3 [目标路径]  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；省略目标 = Media 内部 canary 目录（零风险，配套 airlift2 4 可自验），传值 = 真实目标（会写 Media 之外）；airlift3 read <路径> = 读模式（配套 airlift2 5）；airlift3 write <目标> <payload相对路径> = 用 Documents 里的**任意字节**写（配套 airlift2 4，是「还原」的前提）（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
+      airlift3 [目标路径]  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；省略目标 = Media 内部 canary 目录（零风险，配套 airlift2 4 可自验），传值 = 真实目标（会写 Media 之外）；airlift3 read <路径> = 读模式（配套 airlift2 5）；airlift3 write <目标文件> <payload相对路径> = 用 Documents 里的**任意字节**写**到指定文件名**（v0.3.486 起自动把目标拆成「父目录 + 文件名」—— 设备落点 = symlink 解析出的目录 + leaf，所以必须拆；配套 airlift2 4，是「还原」的前提）（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
       airlift4  只读盘点 Media 里的落点：列根目录 + 逐个 inspect 所有 airlift-* 条目（判据 A=payload 在 canary 目标目录里⇒机制成立；判据 B=在 airlift-link-* 里⇒没跟随）（结果 → LoginLogs/airlift_landing.txt）
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）

@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.3.486] - 2026-09-20
+
+### ★★★ 修：写方向从来就写不出「指定文件名」的文件（target/leaf 语义搞反了）
+
+**真机现象**（v0.3.485，日志实证）：读已经通了（AIR 里出现 178 字节的 plist），
+但写回失败：
+
+```
+sys.supervised.get → 读到内容了，但**没能把文件写回原位置**（它现在在 Media 里）
+sys.supervised.set → ⑤ 写入失败：未通过清单校验
+```
+
+#### 根因（两层，第二层更根本）
+
+设备端的落点是 **「穿过 symlink 解析出的目录」+ `<leaf>`**：
+
+- symlink（`p0/p1/p2/link`）的内容是 `../../../<stage 的 target>` ⇒ **它必须指向一个目录**；
+- `<leaf>` 是第 2 条 `FileComplete` 的 `assetPath` 末尾那段 ⇒ **它决定最终文件名**。
+
+而 v0.3.480 加的 `pocWriteFile(path:)`：
+
+1. 把**完整文件路径**当 `target` 传进去 ⇒ symlink 指向一个**文件**，
+   设备还要往它下面写 `<leaf>` ⇒ 根本创建不了；
+2. `leaf` 写死成 `airlift-canary-<token>.bin` ⇒ 就算写得成，文件名也不对。
+
+⇒ **这个编程接口从加进来那天起就写不了任何指定文件**。
+（同期的 SSH `airlift3 write <目标>` 有同样的问题 —— 它写出来的永远是
+`<目标>/airlift-canary-<token>.bin`。当时验证过的「越界写」用的是
+`airlift3 <目标目录>`，target 本来就是目录，所以没暴露。）
+
+#### 修法
+
+- `pocWriteFile`：把路径按**组件**拆成「父目录 + 文件名」
+  （不用 URL/NSString 路径 API —— 它们会标准化掉 `..`，而 `..` 是攻击本体），
+  分别作为 `target` 与 `leafName`
+- `leaf` 参数化：`runProtocolProbe(step2LeafName:)` /
+  `runBooksStagingProbe(leafName:)`；优先级
+  **显式参数 → stage 交接的 `airlift-leaf` 标记 → canary 名**
+  （标记机制与既有的 `airlift-target` 同款，让 `airlift3` / `airlift2`
+  两条独立 SSH 命令之间也能交接文件名）
+- `airlift3 write <目标文件>` 同步拆分成父目录 + 文件名
+- 变体 4 的 AFC 回读**必须用同一个 leaf**，否则会找错文件名 —— 已同步
+
+> 与 v0.3.485 的 `/var` 修复是**两个独立的 bug**：
+> 485 是「路径算错」（少一个 `..`），486 是「语义搞错」（target 该是目录、leaf 该是文件名）。
+> 两个都修完，读 → 改 → 写 → 读回校验 这条闭环才真正成立。
+
 ## [0.3.485] - 2026-09-20
 
 ### ★★★ 修根因：`/var` 是符号链接，读方向少算一个 `..` ⇒ 非 `/var/mobile/` 下的目标全部读不到
