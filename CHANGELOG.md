@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.3.489] - 2026-09-20
+
+### 新增 `afc.*` + 模块「文件浏览」tab（**只用已验证的通道**）
+
+上一版（0.3.487）我基于 MHA 加的能力已被回滚。这一版只做**确定能用**的：
+
+#### `afc.*` 五项能力（根 = `/var/mobile/Media`）
+
+`com.apple.afc` 就在 airlift 走的**同一条 RSD 隧道**上（设备广播服务 → host 直连端口），
+`AFCService` 早就在用。**不依赖 bad_query、不依赖 MHA** ⇒ 不随那两条被修而失效。
+
+| 能力 | 作用 |
+|---|---|
+| `afc.list` | 列目录 |
+| `afc.read` | 读文件（base64 / utf8） |
+| `afc.write` | 写文件 |
+| `afc.delete` | 删文件/目录（`recursive`） |
+| `afc.mkdir` | 建目录 |
+
+路径口径与 `AFCService` 一致：**相对 Media 根**，`"/"` = 根；拒绝 `..`。
+
+#### 模块第 5 个 tab「文件浏览」
+
+路径栏 + 上一级/刷新 + 目录列表（图标按扩展名）+ 文本预览 + 滑动删除 +
+新建文件夹 + 下拉刷新。
+
+#### ★★ 覆盖范围（界面上如实写清，避免误导）
+
+**能浏览**：`DCIM` / `Downloads` / `Books` / `PublicStaging` / 各 App 共享文件…
+**列不出来**：`/var` 根、`/var/mobile/Library`、其他 App 容器。
+
+**为什么不是实现问题**（这次有硬证据，不是猜）：
+- RSD 服务表**全量 64 个服务**里，**没有任何服务把根设在 `/var`**
+- `house_arrest` 的 `VendContainer` 在 **iOS 27 实测被拒**（`DeviceSlimService` 有记录）；
+  `VendDocuments` 要求目标 App 开了文档共享
+- airlift **本体**只能读写**单个已知文件**、**不能枚举目录**（设备端只做 `move`）
+
+⇒ 「随便输一个路径就能浏览」在 airlift 这条路上**做不到**。
+上一版我加过一个走 `bad_query_list` 的任意路径入口，已随 0.3.488 撤掉。
+
+## [0.3.488] - 2026-09-20
 ## [0.3.488] - 2026-09-20
 
 ### 回滚 v0.3.487 的 `container.*` —— 那套依赖 MHA，而 MHA 已经被修掉了

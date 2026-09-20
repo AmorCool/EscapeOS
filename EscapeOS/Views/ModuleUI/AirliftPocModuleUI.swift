@@ -144,6 +144,11 @@ func registerAirliftPocModuleUI() {
                         systemImage: "square.and.arrow.up.on.square") { m in
                 AirliftOverwriteTab(module: m)
             },
+            ModuleUITab(id: "files",
+                        title: "文件浏览",
+                        systemImage: "folder") { m in
+                AirliftFilesTab(module: m)
+            },
             ModuleUITab(id: "log",
                         title: "日志",
                         systemImage: "text.alignleft") { m in
@@ -884,5 +889,316 @@ private struct AirliftOverwriteTab: View {
             return "{}"
         }
         return text
+    }
+}
+
+// MARK: - 文件浏览（AFC 根 = /var/mobile/Media）
+
+/// 文件浏览 —— 浏览 `/var/mobile/Media` 这一棵子树（`com.apple.afc` 的根）。
+///
+/// ## ★ 覆盖范围（界面上必须如实说清）
+/// RSD 服务表（64 个服务）里**没有任何服务把根设在 `/var`** —— 所以
+/// **`/var` 根、`/var/mobile/Library` 这些列不出来**。能枚举的只有：
+/// · `/var/mobile/Media`（AFC，本页）—— DCIM / Downloads / Books / 各 App 共享文件…
+/// · `/var/mobile/Library/Logs/CrashReporter`（crashreport AFC，见「概览」的说明）
+/// · AIR 中转站
+///
+/// 而 airlift **本体**只能读写**单个已知文件**、不能枚举目录 —— 所以
+/// 「随便输一个路径就能浏览」这种事在 airlift 这条路上做不到，界面上不要暗示可以。
+///
+/// ## 为什么不做「任意路径输入」
+/// 上一版加过一个走 `bad_query_list` 的任意路径入口，已随 v0.3.488 撤掉 ——
+/// 本项目走 airlift，不走 bad_query。
+private struct AirliftFilesTab: View {
+    let module: EscapeModule
+
+    /// 当前路径（相对 Media 根；`/` = 根）
+    @State private var path = "/"
+    @State private var entries: [AfcEntry] = []
+    @State private var loading = false
+    @State private var errorText: String?
+    @State private var previewEntry: AfcEntry?
+    @State private var previewText = ""
+    @State private var previewLoading = false
+    @State private var deleteTarget: AfcEntry?
+    @State private var newFolderName = ""
+    @State private var creatingFolder = false
+
+    private struct AfcEntry: Identifiable {
+        let name: String
+        let path: String
+        let isDir: Bool
+        let size: Int
+        var id: String { path }
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "externaldrive.fill")
+                        .foregroundColor(.accentColor)
+                    Text(path == "/" ? "/var/mobile/Media" : path)
+                        .font(.system(.callout, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                    Spacer()
+                    if loading { ProgressView() }
+                }
+                HStack {
+                    Button {
+                        Task { await goUp() }
+                    } label: {
+                        Label("上一级", systemImage: "arrow.up")
+                    }
+                    .disabled(path == "/" || loading)
+                    Spacer()
+                    Button {
+                        Task { await load() }
+                    } label: {
+                        Label("刷新", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(loading)
+                }
+            } header: {
+                Text("位置")
+            } footer: {
+                Text("根 = /var/mobile/Media（AFC 服务把根钉死在这里）。"
+                     + "DCIM / Downloads / Books / 各 App 共享出来的文件都在这一棵下。"
+                     + "**/var 根与 /var/mobile/Library 列不出来** —— RSD 服务表里没有服务把根设在它们上面。")
+            }
+
+            if let errorText {
+                Section("错误原文") {
+                    Text(errorText)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Section {
+                if entries.isEmpty && !loading {
+                    Text("（空目录）").foregroundColor(.secondary)
+                }
+                ForEach(entries) { entry in
+                    Button {
+                        if entry.isDir {
+                            Task { await enter(entry) }
+                        } else {
+                            Task { await preview(entry) }
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: entry.isDir ? "folder.fill" : fileIcon(entry.name))
+                                .foregroundColor(entry.isDir ? .accentColor : .secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.name)
+                                    .font(.callout)
+                                    .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                if !entry.isDir {
+                                    Text(byteText(entry.size))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                            if entry.isDir {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            deleteTarget = entry
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
+                }
+            } header: {
+                Text("内容（\(entries.count) 项）")
+            }
+
+            Section {
+                HStack(spacing: 8) {
+                    TextField("新文件夹名", text: $newFolderName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button("新建") { Task { await createFolder() } }
+                        .buttonStyle(.borderless)
+                        .disabled(creatingFolder
+                                  || newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            } header: {
+                Text("在当前目录新建文件夹")
+            }
+        }
+        .task { await load() }
+        .refreshable { await load() }
+        .sheet(item: $previewEntry) { entry in
+            NavigationView {
+                Group {
+                    if previewLoading {
+                        ProgressView("读取中…")
+                    } else {
+                        ScrollView {
+                            Text(previewText)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                        }
+                    }
+                }
+                .navigationTitle(entry.name)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("关闭") { previewEntry = nil }
+                    }
+                }
+            }
+        }
+        .confirmationDialog(
+            "确认删除？",
+            isPresented: Binding(get: { deleteTarget != nil },
+                                 set: { if !$0 { deleteTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                if let target = deleteTarget {
+                    Task { await delete(target) }
+                }
+                deleteTarget = nil
+            }
+            Button("取消", role: .cancel) { deleteTarget = nil }
+        } message: {
+            if let target = deleteTarget {
+                Text("将删除 \(target.path)\(target.isDir ? "（含其中所有内容）" : "")。此操作不可撤销。")
+            }
+        }
+    }
+
+    // MARK: 展示小工具
+
+    private func byteText(_ size: Int) -> String {
+        if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
+        if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
+        return "\(size) B"
+    }
+
+    private func fileIcon(_ name: String) -> String {
+        switch (name as NSString).pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "heic", "gif", "webp": return "photo"
+        case "mp4", "mov", "m4v": return "film"
+        case "plist": return "list.bullet.rectangle"
+        case "db", "sqlite", "sqlite3": return "cylinder"
+        case "zip", "ipa", "tar", "gz": return "archivebox"
+        case "log", "txt", "json", "xml": return "doc.text"
+        default: return "doc"
+        }
+    }
+
+    // MARK: 能力调用
+
+    private func call(_ capability: String, _ args: String) async -> String {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (_, json) = AirliftPocLog.callRaw(capability, args)
+                continuation.resume(returning: json)
+            }
+        }
+    }
+
+    private func jsonString(_ obj: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return "{}" }
+        return text
+    }
+
+    // MARK: 操作
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        let json = await call("afc.list", jsonString(["path": path]))
+        let dict = CapJSON.dict(json)
+        guard CapJSON.bool(dict, "ok") == true else {
+            errorText = CapJSON.string(dict, "error") ?? json
+            entries = []
+            return
+        }
+        errorText = nil
+        let raw = (dict?["entries"] as? [[String: Any]]) ?? []
+        entries = raw.compactMap { item in
+            guard let name = item["name"] as? String,
+                  let p = item["path"] as? String else { return nil }
+            return AfcEntry(name: name,
+                            path: p,
+                            isDir: (item["isDir"] as? Bool) ?? false,
+                            size: (item["size"] as? Int) ?? 0)
+        }
+    }
+
+    private func enter(_ entry: AfcEntry) async {
+        path = entry.path
+        await load()
+    }
+
+    private func goUp() async {
+        guard path != "/" else { return }
+        var comps = path.split(separator: "/").map(String.init)
+        guard !comps.isEmpty else { return }
+        comps.removeLast()
+        path = comps.isEmpty ? "/" : "/" + comps.joined(separator: "/")
+        await load()
+    }
+
+    private func preview(_ entry: AfcEntry) async {
+        previewEntry = entry
+        previewLoading = true
+        previewText = ""
+        defer { previewLoading = false }
+        let json = await call("afc.read", jsonString(["path": entry.path, "encoding": "utf8"]))
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "ok") == true, let text = CapJSON.string(dict, "data") {
+            previewText = text.isEmpty ? "（空文件）" : text
+        } else {
+            // 二进制按 utf8 读不出来是正常的 —— 如实说明，并提示可以走 AIR 取原始字节
+            previewText = (CapJSON.string(dict, "error") ?? json)
+                + "\n\n（若是二进制文件，请用「AIR」相关的能力取原始字节；本页只做文本预览。）"
+        }
+    }
+
+    private func delete(_ entry: AfcEntry) async {
+        let json = await call("afc.delete",
+                              jsonString(["path": entry.path, "recursive": entry.isDir]))
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "ok") != true {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+        await load()
+    }
+
+    private func createFolder() async {
+        let name = newFolderName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        creatingFolder = true
+        defer { creatingFolder = false }
+        let base = path == "/" ? "" : path
+        let json = await call("afc.mkdir", jsonString(["path": "\(base)/\(name)"]))
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "ok") == true {
+            newFolderName = ""
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+        await load()
     }
 }
