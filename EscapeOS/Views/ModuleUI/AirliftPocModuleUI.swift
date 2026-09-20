@@ -24,6 +24,8 @@
 //
 
 import SwiftUI
+// `.fileImporter` 的 `allowedContentTypes` 要 UTType，`.item` 来自这个模块
+import UniformTypeIdentifiers
 
 // MARK: - 调用记录器
 
@@ -300,7 +302,11 @@ private struct AirliftSupervisedTab: View {
 
     var body: some View {
         Form {
-            Section("当前状态") {
+            // ⚠️ 带 footer 时必须用 `Section { } header: { } footer: { }` 这种形式 ——
+            // SwiftUI **没有** `Section("标题") { } footer: { }` 这个重载
+            //（v0.3.481 CI 实测：会报 "missing argument label 'content:'" +
+            // "cannot convert value of type 'String' to expected argument type '() -> Content'"）.
+            Section {
                 HStack {
                     Image(systemName: isSupervised == true
                           ? "lock.shield.fill" : "lock.open")
@@ -319,6 +325,8 @@ private struct AirliftSupervisedTab: View {
                 }
                 Button("重新读取") { Task { await readState() } }
                     .disabled(loading || running)
+            } header: {
+                Text("当前状态")
             } footer: {
                 Text("读取走 airlift 漏洞利用（沙盒外），单次约 10~20 秒；"
                      + "airlift 的「读」是移动不是拷贝，所以读完会立刻把原文件写回原位，"
@@ -568,7 +576,8 @@ private struct AirliftOverwriteTab: View {
 
     var body: some View {
         Form {
-            Section("目标路径") {
+            // 同「当前状态」：带 footer 用 header/footer 形式，没有 `Section("标题") {} footer: {}`
+            Section {
                 TextField("/var/mobile/... 绝对路径", text: $target)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -579,6 +588,8 @@ private struct AirliftOverwriteTab: View {
                     Label("把目标读到 AIR（读取，不改动目标）", systemImage: "arrow.down.doc")
                 }
                 .disabled(working || target.trimmingCharacters(in: .whitespaces).isEmpty)
+            } header: {
+                Text("目标路径")
             } footer: {
                 Text("读取会把目标文件拉一份副本到 AIR（原文件读后立刻写回原位，不会被搬走）。")
             }
@@ -591,29 +602,42 @@ private struct AirliftOverwriteTab: View {
                         .font(.callout)
                         .foregroundColor(.secondary)
                 } else {
+                    // 每行是「选择」+「删除」两个**平级**按钮，不用 `ForEach(...).onDelete` ——
+                    // onDelete 要求 ForEach 是 List/Form 的直接子视图，而这里它在 if/else 分支里，
+                    // 滑动删除不可靠（甚至不出现）。
                     ForEach(airFiles) { file in
-                        Button {
-                            selectedAirName = file.name
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: selectedAirName == file.name
-                                      ? "largecircle.fill.circle" : "circle")
-                                    .foregroundColor(selectedAirName == file.name ? .accentColor : .secondary)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(file.name)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .foregroundColor(.primary)
-                                        .lineLimit(2)
-                                    Text(byteText(file.size))
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+                        HStack(spacing: 10) {
+                            Button {
+                                selectedAirName = file.name
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: selectedAirName == file.name
+                                          ? "largecircle.fill.circle" : "circle")
+                                        .foregroundColor(selectedAirName == file.name ? .accentColor : .secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(file.name)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .foregroundColor(.primary)
+                                            .lineLimit(2)
+                                        Text(byteText(file.size))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                Task { await deleteAirFile(file.name) }
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(working)
                         }
-                        .buttonStyle(.plain)
-                    }
-                    .onDelete { indexSet in
-                        Task { await deleteAirFiles(indexSet) }
                     }
                 }
 
@@ -743,13 +767,14 @@ private struct AirliftOverwriteTab: View {
         }
     }
 
-    private func deleteAirFiles(_ indexSet: IndexSet) async {
-        for index in indexSet {
-            guard index < airFiles.count else { continue }
-            let name = airFiles[index].name
-            let args = jsonString(["op": "delete", "name": name])
-            _ = await call("airlift.air", args)
+    private func deleteAirFile(_ name: String) async {
+        let args = jsonString(["op": "delete", "name": name])
+        let json = await call("airlift.air", args)
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "ok") != true {
+            errorText = CapJSON.string(dict, "error") ?? json
         }
+        if selectedAirName == name { selectedAirName = nil }
         await refreshAirList()
     }
 
