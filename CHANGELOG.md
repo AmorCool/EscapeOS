@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.488] - 2026-09-20
+
+### 回滚 v0.3.487 的 `container.*` —— 那套依赖 MHA，而 MHA 已经被修掉了
+
+**我错在哪**：看到 AirCard-iOS 的 `al_find_app_container` 之后，我发现我们代码里
+已经有 `MCMIntegration`（`queryDataContainerPath` / `activate(class:)`），
+就把它包成了 5 个能力 + 改了 `fs.*` 的路由，**默认它会生效**。
+
+**但 MHA 那条路在新版本已经被修掉了，我们也不能走它。**
+而且本项目走的是 **airlift** 这条漏洞利用 —— 不该往 MHA / bad_query 上靠。
+
+**处理**：
+- `git revert` 掉 v0.3.487（`container.*` 五个能力 + `canUseDirectFileManager` 路由）
+- 模块仓库同步移除 `container.*`（`validate.py` / `module.schema.json` / README）
+- 能力清单回到 16 项（`host.*` / `fs.*` / `sys.supervised.*` / `airlift.*` / `proc.*` / `notify.post` / `exploit.status`）
+
+> v0.3.487 已经发布过（IPA 里含那批代码，但用不上 —— MHA 不生效时
+> `container.*` 只会返回 `notMHA`）。所以回滚走**新版本号**，不复用 486。
+
+### ★ 顺带把两条边界记清楚（避免以后再走错）
+
+| 机制 | 是什么 | 现状 |
+|---|---|---|
+| **airlift**（AirTraffic / ATAirlock） | **漏洞利用** —— 本项目走的就是这条 | ✅ 可用 |
+| bad_query（`bad_query_list` / 取沙盒扩展） | **另一套漏洞利用** | ❌ **不走它** |
+| MHA（containermanagerd 容器 API） | **身份伪装**（靠签名标识符，不是漏洞） | ❌ **已被修复** |
+
+⇒ **`/var` 目录浏览在 airlift 这条路上做不到** —— airlift 只能读写**单个已知文件**，
+**不能枚举目录**。「列目录」是 bad_query / MHA 才有的能力，而这两条我们都不走。
+所以这次我加的「任意路径浏览」入口也一并撤掉了。
+
+## [0.3.487] - 2026-09-20
+
+### ⚠️ 已回滚（见 v0.3.488）
+
+这一版加的 `container.*`（5 个能力）+ `fs.*` 路由改造**依赖 MHA**，
+而 MHA 在新版本已被修掉、本项目也不走那条路 ⇒ 已整体回滚。
+保留此条目仅为记录。
+
 ## [0.3.486] - 2026-09-20
 
 ### ★★★ 修：写方向从来就写不出「指定文件名」的文件（target/leaf 语义搞反了）
