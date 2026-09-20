@@ -129,6 +129,11 @@ enum HostCapabilityService {
         "airlift.air",
         "airlift.pull",
         "airlift.overwrite",
+        "container.status",
+        "container.find",
+        "container.activate",
+        "container.list",
+        "container.ids",
         "proc.list",
         "proc.signal",
         "notify.post",
@@ -248,6 +253,11 @@ enum HostCapabilityService {
         case "airlift.air":           return airliftAir(args)
         case "airlift.pull":          return airliftPull(args)
         case "airlift.overwrite":     return airliftOverwrite(args)
+        case "container.status":      return containerStatus()
+        case "container.find":        return containerFind(args)
+        case "container.activate":    return containerActivate(args)
+        case "container.list":        return containerList(args)
+        case "container.ids":         return containerIds(args)
         case "proc.list":             return procList()
         case "proc.signal":           return procSignal(args)
         case "notify.post":           return notifyPost(args)
@@ -312,6 +322,24 @@ enum HostCapabilityService {
         return path == home || path.hasPrefix(home + "/")
     }
 
+    /// 这个路径能不能**直接用 FileManager**（而不是走 airlift）？
+    ///
+    /// ## 三种情况
+    /// 1. 在本 App 沙盒内 ⇒ 能（本来就该能）
+    /// 2. 在**已激活的 MHA 容器 lease** 内 ⇒ **能** ——
+    ///    `MCMIntegration.activate()` 拿到的是**真实的沙盒扩展**，
+    ///    之后 FileManager 对该容器可读/可写/**可列目录**。
+    ///    这比 airlift 强得多（airlift 只能碰单个文件、**不能枚举目录**）。
+    /// 3. 其它 ⇒ 不能（只能靠 airlift，且只支持单文件）
+    ///
+    /// ⇒ `fs.read` / `fs.write` / `fs.delete` / `fs.exists` / `fs.list` 全部改用它，
+    ///   于是「激活过的 App 容器」自动获得完整文件能力（含 `fs.list`）。
+    private static func canUseDirectFileManager(_ path: String) -> Bool {
+        if isInSandbox(path) { return true }
+        // MHA 未生效时 pathHasActiveLease 恒 false，不会有副作用
+        return MCMIntegration.pathHasActiveLease(path)
+    }
+
     /// airlift 的调用必须串行化，两个原因：
     /// 1. 设备侧 AT 会话是**单例资源**（`pocStageAndAttack` 内部借 `protocolQueue.sync` 串行）；
     /// 2. `pocWriteFile` 的中转文件固定是 `Documents/airlift-poc-payload.bin`，
@@ -345,7 +373,7 @@ enum HostCapabilityService {
             return fail("fs.read 的 encoding 只支持 base64 / utf8")
         }
 
-        if isInSandbox(path) {
+        if canUseDirectFileManager(path) {
             guard let data = FileManager.default.contents(atPath: path) else {
                 return fail("读失败（沙盒内路径不存在或不可读）：\(path)", extra: ["via": "direct"])
             }
@@ -434,7 +462,7 @@ enum HostCapabilityService {
             }
         }
 
-        if isInSandbox(path) {
+        if canUseDirectFileManager(path) {
             do {
                 try data.write(to: URL(fileURLWithPath: path))
                 var extra: [String: Any] = ["size": data.count, "via": "direct"]
@@ -465,7 +493,7 @@ enum HostCapabilityService {
         guard let path = args["path"] as? String, !path.isEmpty else {
             return fail("fs.delete 缺少 path")
         }
-        if isInSandbox(path) {
+        if canUseDirectFileManager(path) {
             do {
                 try FileManager.default.removeItem(atPath: path)
                 return ok(["via": "direct"])
@@ -485,7 +513,7 @@ enum HostCapabilityService {
         guard let path = args["path"] as? String, !path.isEmpty else {
             return fail("fs.exists 缺少 path")
         }
-        if isInSandbox(path) {
+        if canUseDirectFileManager(path) {
             return ok(["exists": FileManager.default.fileExists(atPath: path), "via": "direct"])
         }
         // ⚠️ 刻意**不**用 airlift 探存在：它的读是「移动」，拿它做存在性检查
@@ -501,7 +529,7 @@ enum HostCapabilityService {
         guard let path = args["path"] as? String, !path.isEmpty else {
             return fail("fs.list 缺少 path")
         }
-        guard isInSandbox(path) else {
+        guard canUseDirectFileManager(path) else {
             // 如实说清限制：airlift 只能操作**单个文件**，无法枚举目录.
             // 宿主也没有别的沙盒外目录枚举原语（`escape.withHandle` + countTree 那条
             // 路要非负沙盒句柄，airlift 给不出来）.
@@ -793,8 +821,9 @@ enum HostCapabilityService {
                 return fail("读 AIR/\(airName) 失败：\(error.localizedDescription)")
             }
         } else if let source, !source.isEmpty {
-            guard isInSandbox(source) else {
-                return fail("source 必须是 App 沙盒内的路径（沙盒外的文件请先 airlift.pull 到 AIR 再用 airName）")
+            guard canUseDirectFileManager(source) else {
+                return fail("source 必须是 App 沙盒内（或已激活的容器 lease 内）的路径"
+                    + "（沙盒外的文件请先 airlift.pull 到 AIR 再用 airName）")
             }
             guard let d = FileManager.default.contents(atPath: source) else {
                 return fail("读不到沙盒内源文件：\(source)")
@@ -1154,6 +1183,168 @@ enum HostCapabilityService {
         }
         if sem.wait(timeout: .now() + timeout) == .timedOut { return false }
         return box.value
+    }
+
+    // MARK: - container.*（MCM / MobileHouseArrest 容器访问）
+
+    /// MHA 状态诊断.
+    ///
+    /// ## 为什么第一件事是这个
+    /// `MCMIntegration` 的**每个**方法开头都有 `guard Self.isMobileHouseArrest` ——
+    /// MHA 身份没生效时全部失败。所以排障必须先把这三个字段看清楚，
+    /// 否则会误判成「容器不存在」。
+    private static func containerStatus() -> (Int32, String) {
+        let mha = MCMIntegration.isMobileHouseArrest
+        let bridge = MCMIntegration.bridgeAvailable
+        let signed = MCMIntegration.signedCodeIdentifier
+        return ok([
+            "isMobileHouseArrest": mha,
+            "bridgeAvailable": bridge,
+            "signedCodeIdentifier": signed,
+            "note": mha
+                ? "MHA 身份已生效 ⇒ container.* 可用；激活过的容器支持**完整**文件操作（含 fs.list 列目录）"
+                : "MHA 身份未生效 ⇒ container.* 全部不可用（返回 notMHA）。"
+                  + "此时沙盒外文件只能靠 airlift：**单文件、不能列目录**。",
+        ])
+    }
+
+    /// 按 bundle id 查**数据容器根路径**（只查，不激活沙箱令牌）.
+    ///
+    /// 对应 `MCMIntegration.queryDataContainerPath`（其注释写明是 iOS 26 上做
+    /// App 发现用的）。⚠️ 拿到路径**不等于**能读写 —— 要读写还得
+    /// `container.activate` 拿沙盒 lease。
+    private static func containerFind(_ args: [String: Any]) -> (Int32, String) {
+        guard let bundleId = args["bundleId"] as? String, !bundleId.isEmpty else {
+            return fail("container.find 缺少 bundleId（例：com.tencent.xin）")
+        }
+        do {
+            let path = try MCMIntegration.queryDataContainerPath(bundleId)
+            return ok(["bundleId": bundleId, "path": path, "leased": false,
+                       "note": "只查到路径；要读写请再调 container.activate"])
+        } catch {
+            return fail("查容器失败：\(error.localizedDescription)",
+                        extra: ["bundleId": bundleId,
+                                "isMHA": MCMIntegration.isMobileHouseArrest,
+                                "bridgeAvailable": MCMIntegration.bridgeAvailable])
+        }
+    }
+
+    /// 激活某个 App 的数据容器（拿**真实的沙盒扩展**）.
+    ///
+    /// ## 激活之后能做什么（这才是关键）
+    /// 激活后该容器内的路径会被 `canUseDirectFileManager` 判定为「可直接操作」
+    /// ⇒ `fs.read` / `fs.write` / `fs.delete` / `fs.exists` / **`fs.list`** 全部可用。
+    ///
+    /// **`fs.list` 是 airlift 做不到的事**（它只能碰单个文件、不能枚举目录）——
+    /// 所以「浏览任意 App 容器」这条路只有 MHA 能走通。
+    ///
+    /// ## ⚠️ lease 是进程级的
+    /// 会一直持有到进程退出（或 `MCMIntegration.releaseAllLeases()`）。
+    /// **不要对几百个 App 逐个 activate** —— 按需激活、用完释放。
+    private static func containerActivate(_ args: [String: Any]) -> (Int32, String) {
+        guard let bundleId = args["bundleId"] as? String, !bundleId.isEmpty else {
+            return fail("container.activate 缺少 bundleId")
+        }
+        let cls = containerClass(from: args["class"] as? String)
+        do {
+            let path = try MCMIntegration.activate(bundleId, class: cls)
+            return ok(["bundleId": bundleId,
+                       "path": path,
+                       "class": containerClassLabel(cls),
+                       "leased": true,
+                       "note": "该容器内现在可以直接用 fs.read / fs.write / fs.delete / fs.list"])
+        } catch {
+            return fail("激活容器失败：\(error.localizedDescription)",
+                        extra: ["bundleId": bundleId,
+                                "class": containerClassLabel(cls),
+                                "isMHA": MCMIntegration.isMobileHouseArrest])
+        }
+    }
+
+    /// 列容器内的目录 —— **airlift 做不到的事**.
+    ///
+    /// 先 `activate` 拿 lease，再用 `FileManager` 枚举 ⇒ 能列**任意层级**
+    /// （`subpath` 为空 = 列容器根）。
+    private static func containerList(_ args: [String: Any]) -> (Int32, String) {
+        guard let bundleId = args["bundleId"] as? String, !bundleId.isEmpty else {
+            return fail("container.list 缺少 bundleId")
+        }
+        let cls = containerClass(from: args["class"] as? String)
+        let subpath = ((args["subpath"] as? String) ?? "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        do {
+            let root = try MCMIntegration.activate(bundleId, class: cls)
+            let target = subpath.isEmpty ? root : root + "/" + subpath
+            let items = try FileManager.default.contentsOfDirectory(
+                at: URL(fileURLWithPath: target),
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+                options: [])
+            let entries: [[String: Any]] = items.map { item in
+                let values = try? item.resourceValues(
+                    forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+                var entry: [String: Any] = [
+                    "name": item.lastPathComponent,
+                    "isDir": values?.isDirectory ?? false,
+                ]
+                if let size = values?.fileSize { entry["size"] = size }
+                if let mtime = values?.contentModificationDate {
+                    entry["mtime"] = ISO8601DateFormatter().string(from: mtime)
+                }
+                return entry
+            }
+            return ok(["bundleId": bundleId,
+                       "class": containerClassLabel(cls),
+                       "root": root,
+                       "path": target,
+                       "entries": entries,
+                       "count": entries.count])
+        } catch {
+            return fail("列容器目录失败：\(error.localizedDescription)",
+                        extra: ["bundleId": bundleId, "subpath": subpath,
+                                "isMHA": MCMIntegration.isMobileHouseArrest])
+        }
+    }
+
+    /// 枚举某一类容器**已注册的标识符**（App 发现用）.
+    private static func containerIds(_ args: [String: Any]) -> (Int32, String) {
+        let cls = containerClass(from: args["class"] as? String)
+        let limit = (args["limit"] as? Int) ?? 512
+        let ids = MCMIntegration.enumerate(cls, limit: max(1, min(limit, 4096)))
+        return ok([
+            "class": containerClassLabel(cls),
+            "ids": ids,
+            "count": ids.count,
+            "note": ids.isEmpty
+                ? "空 —— 该类在 iOS 26 上常常近乎为空，需配合 csstore / LaunchServices 发现"
+                  + "（见 `MCMIntegration.enumerate` 的注释）"
+                : "",
+        ])
+    }
+
+    /// `class` 参数 → MCM 容器类（默认 `appData` = 2，三方 App 数据容器）.
+    private static func containerClass(from name: String?) -> MCMContainerClass {
+        switch (name ?? "").lowercased() {
+        case "extension", "extensiondata", "4":   return .extensionData
+        case "appgroup", "group", "7":             return .appGroup
+        case "service", "servicedata", "10":       return .serviceData
+        case "systemdata", "12":                   return .systemData
+        case "systemgroup", "13":                  return .systemGroup
+        case "protected", "protecteddata", "15":   return .protectedData
+        default:                                   return .appData
+        }
+    }
+
+    private static func containerClassLabel(_ cls: MCMContainerClass) -> String {
+        switch cls {
+        case .appData:       return "appData(2)"
+        case .extensionData: return "extensionData(4)"
+        case .appGroup:      return "appGroup(7)"
+        case .serviceData:   return "serviceData(10)"
+        case .systemData:    return "systemData(12)"
+        case .systemGroup:   return "systemGroup(13)"
+        case .protectedData: return "protectedData(15)"
+        default:             return "class(\(cls.rawValue))"
+        }
     }
 
     // MARK: - 调用日志（给 SSH 排障用）
