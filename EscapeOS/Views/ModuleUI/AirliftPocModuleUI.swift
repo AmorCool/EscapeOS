@@ -439,6 +439,10 @@ func registerAirliftPocModuleUI() {
                         systemImage: "lock.shield") { m in
                 AirliftSupervisedTab(module: m)
             },
+            ModuleUITab(id: "theme", title: "主题",
+                        systemImage: "keyboard") { m in
+                AirliftThemeTab(module: m)
+            },
             ModuleUITab(id: "log", title: "日志",
                         systemImage: "text.alignleft") { m in
                 AirliftLogTab()
@@ -1179,6 +1183,204 @@ private struct AirliftSupervisedTab: View {
             errorText = nil
         } else {
             await readState()
+        }
+    }
+
+    private func call(_ capability: String, _ args: String) async -> String {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (_, json) = AirliftPocLog.callRaw(capability, args)
+                continuation.resume(returning: json)
+            }
+        }
+    }
+}
+
+// MARK: - 主题（密码键盘）
+
+/// 锁屏密码键盘主题：选 `.passthm` -> 预览 12 键 -> 一次批量写进 TelephonyUI 缓存.
+///
+/// 移植自 Mak5er/AirCard 的「Passcode Themes」. 机制与前提见 `PasscodeTheme` 的头注释.
+private struct AirliftThemeTab: View {
+    let module: EscapeModule
+
+    @State private var theme: PasscodeTheme.Theme?
+    @State private var importing = false
+    @State private var importingPoster = false
+    @State private var working = false
+    @State private var steps: [String] = []
+    @State private var errorText: String?
+    @State private var okText: String?
+    @State private var targetVersion = 10
+
+    private var targetDir: String {
+        "/var/mobile/Library/Caches/TelephonyUI-\(targetVersion)"
+    }
+
+    var body: some View {
+        Page {
+            HeroCard(icon: "keyboard.fill",
+                     title: "密码键盘主题",
+                     subtitle: "把 .passthm 的按键图写进系统的 TelephonyUI 缓存",
+                     tint: .pink,
+                     pill: (theme == nil ? "未选择" : "\(theme!.keys.count) 个按键", .pink))
+
+            CardBox(title: "前提（先说清楚）", icon: "info.circle") {
+                Text("需要 TelephonyUI-8 / 9 / 10 里至少有一个**已经存在** —— "
+                     + "airlift 在 Media 之外建不了目录，目录不存在时批量写会报 0/N.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            CardBox(title: "主题包", icon: "doc.zipper") {
+                CardButton(title: "选择 .passthm 文件", icon: "square.and.arrow.down") {
+                    importing = true
+                }
+                CardButton(title: "从一张壁纸切出 12 个按键", icon: "photo") {
+                    importingPoster = true
+                }
+                if let theme {
+                    KV(label: "名称", value: theme.name)
+                    KV(label: "按键数", value: "\(theme.keys.count)")
+                    Picker("目标版本", selection: $targetVersion) {
+                        Text("TelephonyUI-10").tag(10)
+                        Text("TelephonyUI-9").tag(9)
+                        Text("TelephonyUI-8").tag(8)
+                    }
+                    .pickerStyle(.segmented)
+                    Text(targetDir)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1).truncationMode(.head)
+                }
+            }
+
+            if let theme {
+                CardBox(title: "预览", icon: "keyboard") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                                             count: 3),
+                              spacing: 8) {
+                        ForEach(PasscodeTheme.keypadOrder, id: \.self) { digit in
+                            keyTile(digit: digit, theme: theme)
+                        }
+                    }
+                }
+
+                CardBox(title: "动作", icon: "bolt") {
+                    CardButton(title: "应用到设备", icon: "arrow.up.doc",
+                               busy: working) {
+                        Task { await apply(theme) }
+                    }
+                    CardButton(title: "导出为 .passthm", icon: "square.and.arrow.up") {
+                        exportTheme(theme)
+                    }
+                    Text("批量写：N 个文件只走 1 趟 airlift.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
+            }
+
+            if let okText { BannerView(kind: .ok, text: okText) }
+            if let errorText { BannerView(kind: .error, text: errorText) }
+            CompactStepsView(steps: steps)
+        }
+        .documentPicker(isPresented: $importing, allowedTypes: [.item]) { urls in
+            Task { await loadTheme(urls.first) }
+        }
+        .documentPicker(isPresented: $importingPoster, allowedTypes: [.image]) { urls in
+            Task { await slicePoster(urls.first) }
+        }
+    }
+
+    /// 一个键位的小预览（优先取「无副文本」那张，找不到就取该键位的第一张）.
+    @ViewBuilder
+    private func keyTile(digit: String, theme: PasscodeTheme.Theme) -> some View {
+        let candidates = theme.keys.filter { $0.digit == digit }
+        let key = candidates.first(where: { $0.subtext.isEmpty }) ?? candidates.first
+        VStack(spacing: 4) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(uiColor: .tertiarySystemFill))
+                    .frame(height: 54)
+                if let key, let image = UIImage(data: key.data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 54)
+                } else {
+                    Text(digit).font(.system(size: 18, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+            }
+            Text(digit).font(.system(size: 10)).foregroundColor(.secondary)
+        }
+    }
+
+    private func loadTheme(_ url: URL?) async {
+        guard let url else { return }
+        errorText = nil
+        okText = nil
+        do {
+            let loaded = try PasscodeTheme.load(url: url)
+            theme = loaded
+            targetVersion = loaded.guessedVersion
+            okText = "已载入 \(loaded.keys.count) 个按键"
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func slicePoster(_ url: URL?) async {
+        guard let url, let image = UIImage(contentsOfFile: url.path) else {
+            errorText = "读不到所选图片"
+            return
+        }
+        let keys = PasscodeTheme.slice(poster: image)
+        guard !keys.isEmpty else {
+            errorText = "切片失败（图片可能太小）"
+            return
+        }
+        theme = PasscodeTheme.Theme(name: url.deletingPathExtension().lastPathComponent,
+                                    keys: keys,
+                                    guessedVersion: targetVersion)
+        errorText = nil
+        okText = "已从壁纸切出 \(keys.count) 个按键"
+    }
+
+    private func exportTheme(_ theme: PasscodeTheme.Theme) {
+        do {
+            let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Themes", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("\(theme.name).passthm")
+            try PasscodeTheme.export(theme, to: url)
+            okText = "已导出到沙盒 Documents/Themes/\(theme.name).passthm"
+            errorText = nil
+        } catch {
+            errorText = "导出失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func apply(_ theme: PasscodeTheme.Theme) async {
+        working = true
+        steps = []
+        errorText = nil
+        okText = nil
+        defer { working = false }
+
+        let files = theme.keys.map { key -> [String: Any] in
+            ["name": key.fileName, "data": key.data.base64EncodedString()]
+        }
+        let json = await call("airlift.writeMany", CapJSON.json([
+            "dir": targetDir,
+            "files": files,
+            "encoding": "base64",
+        ]))
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已写入 \(theme.keys.count) 个按键到 \(targetDir)"
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
         }
     }
 
