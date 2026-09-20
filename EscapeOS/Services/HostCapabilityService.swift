@@ -132,6 +132,7 @@ enum HostCapabilityService {
         "airlift.readdir",
         "airlift.restoredir",
         "airlift.delete",
+        "airlift.writeMany",
         "apps.lookup",
         "afc.list",
         "afc.read",
@@ -260,6 +261,7 @@ enum HostCapabilityService {
         case "airlift.readdir":       return airliftReaddir(args)
         case "airlift.restoredir":    return airliftRestoredir(args)
         case "airlift.delete":        return airliftDelete(args)
+        case "airlift.writeMany":     return airliftWriteMany(args)
         case "apps.lookup":           return appsLookup(args)
         case "afc.list":              return afcList(args)
         case "afc.read":              return afcRead(args)
@@ -951,6 +953,61 @@ enum HostCapabilityService {
             "path": target, "via": "airlift",
             "steps": outcome.details,
         ]
+        return outcome.ok ? ok(extra) : fail(outcome.summary, extra: extra)
+    }
+
+    /// `airlift.writeMany` —— **一次 stage 写多个文件到同一个目录**（v0.3.499 新增）.
+    ///
+    /// ## 为什么需要它（AirCard 的 #1 能力，用户点名要移植）
+    /// 每个文件单独走一趟 airlift = 10~20 秒，而且**隧道连多了会卡死**
+    /// （真机实测第 6 次 AT 会话卡在 conduit 建连、之后整条 `protocolQueue` 堵死）。
+    /// 密码键盘主题一次要写 12~36 张按键图 ⇒ 逐个写根本不可行。
+    /// 批量之后：**N 个文件 = 1 趟 airlift**。
+    ///
+    /// ## ⚠️ 前提：目标**目录**必须已经存在
+    /// airlift 在 Media 之外**建不了目录**（真机实测：沙盒允许建普通文件、不允许建目录）。
+    ///
+    /// ## ⚠️ 判据的诚实边界
+    /// 只看「每条 `FileComplete` 有没有被处理」（= `payload_i` 被搬走），**不校验落点**。
+    /// 要确认内容，对其中任意一个文件调 `airlift.pull` 读回比对。
+    ///
+    /// 参数：
+    /// - `dir`：目标**目录**绝对路径（必填）
+    /// - `files`：`[{"name": "文件名", "data": "<base64>"}]`（必填；名字不能含斜杠）
+    /// - `encoding`：`data` 的编码（默认 `base64`）
+    private static func airliftWriteMany(_ args: [String: Any]) -> (Int32, String) {
+        guard let dir = args["dir"] as? String, !dir.isEmpty else {
+            return fail("airlift.writeMany 缺少 dir（目标目录绝对路径）")
+        }
+        guard let raw = args["files"] as? [[String: Any]], !raw.isEmpty else {
+            return fail("airlift.writeMany 缺少 files（形如 [{\"name\":\"a.png\",\"data\":\"<base64>\"}]）")
+        }
+        let encoding = (args["encoding"] as? String) ?? "base64"
+        var files: [(name: String, data: Data)] = []
+        for (index, item) in raw.enumerated() {
+            guard let name = item["name"] as? String, !name.isEmpty else {
+                return fail("files[\(index)] 缺少 name")
+            }
+            guard let text = item["data"] as? String,
+                  let data = decode(text, encoding: encoding) else {
+                return fail("files[\(index)] 的 data 非法（encoding=\(encoding)）")
+            }
+            files.append((name: name, data: data))
+        }
+        let outcome = withAirlift { AirliftExploit.pocWriteMany(dir: dir, files: files) }
+        var extra: [String: Any] = [
+            "dir": dir,
+            "count": files.count,
+            "bytes": files.reduce(0) { $0 + $1.data.count },
+            "names": files.map { $0.name },
+            "via": "airlift",
+            "steps": outcome.details,
+            "note": "批量写只看「每条 FileComplete 是否被处理」（payload_i 被搬走），"
+                  + "**不校验落点**；要确认内容请对任意一个文件调 airlift.pull 读回比对。",
+        ]
+        if let warn = refuseReasonForReaddir(dir) {
+            extra["warning"] = warn
+        }
         return outcome.ok ? ok(extra) : fail(outcome.summary, extra: extra)
     }
 

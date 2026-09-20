@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.3.499] - 2026-09-20
+
+### ★★★ 新增 `airlift.writeMany` —— **一次 stage 写多个文件**（AirCard 的 #1 能力）
+
+**为什么必须批量**：每个文件单独走一趟 airlift = 10~20 秒，而且**隧道连多了会卡死**
+（真机实测第 6 次 AT 会话卡在 conduit 建连、之后整条 `protocolQueue` 堵死）。
+密码键盘主题一次要写 12~36 张按键图 ⇒ 逐个写根本不可行。
+**批量之后：N 个文件 = 1 趟 airlift。**
+
+**实现**（照 AirCard 的 `build_archive_multi` / `al_exploit_write_dir` 同款）：
+
+- 新归档构造 `makeAirliftArchiveMulti(payloads:target:)` —— 归档里放 `payload_0..n`，
+  **symlink / 目录镜像 / META-INF 逐字不变**（那些是 stage 能被解压的前提）。
+- 新变体 `"9"`：`FileComplete(link)` → 逐个 `FileComplete(../../<source>/payload_i →
+  airlift-link-<t>/<文件名_i>)`，每条之间 `usleep(900_000)`（与参考实现同款）。
+- `Books.plist` 为**每个 payload 各留一行** —— 设备是按它生成 `AssetManifest` 的，
+  清单里没有的 identifier 设备**不会处理**。
+- 新能力 `airlift.writeMany {dir, files: [{name, data}], encoding}`。
+
+**⚠️ 前提**：目标**目录**必须已经存在 —— airlift 在 Media 之外**建不了目录**
+（真机实测：沙盒允许建普通文件、不允许建目录）。
+
+**⚠️ 判据的诚实边界**：只看「每条 `FileComplete` 有没有被处理」（`payload_i` 被搬走），
+**不校验落点**（真实目标在 Media 之外，AFC 读不回来）。要确认内容请对任意一个文件
+调 `airlift.pull` 读回比对。
+
+模块 `com.escapeos.airlift-poc` → **1.3.0**（`requires` 18 项，`minHostVersion` 0.3.499）。
+
+> 下一步：把 AirCard 的「密码键盘主题（`.passthm`）」做成模块 tab ——
+> 选主题 → 预览 12 键 → 用 `airlift.writeMany` 一次写进 `TelephonyUI-{8,9,10}`。
+> （前提：那三个目录存在；不存在时如实报错，因为目录建不出来。）
+
 ## [0.3.498] - 2026-09-20
 
 ### ★★★ 事故与更正：`airlift.readdir` 搬目录是**单向**的（我把 `DiagnosticLogs` 搬丢了）
