@@ -816,6 +816,30 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let all = text.components(separatedBy: "\n").filter { !$0.isEmpty }
             return all.isEmpty ? "（文件存在但为空）"
                 : all.suffix(min(max(n, 1), 2000)).joined(separator: "\n")
+        case "cap":
+            // 直接调一次宿主能力（排障用）：`cap <能力名> [JSON]`
+            //
+            // 与模块走的是**同一个** `HostCapabilityService.call`（所以也会进 `caplog`）——
+            // 有了它就能在 SSH 里逐个能力试，不用装模块、不用点界面。
+            //
+            // 例：cap exploit.status
+            //     cap airlift.air '{"op":"list"}'
+            //     cap airlift.pull '{"path":"/var/mobile/Library/Logs/CrashReporter/x.bin"}'
+            //
+            // ⚠️ 同步阻塞：沙盒外操作走 airlift，一次 10~20 秒。
+            guard parts.count > 1 else {
+                return "用法: cap <能力名> [JSON]\n"
+                    + "例: cap exploit.status\n"
+                    + "    cap airlift.air '{\"op\":\"list\"}'\n"
+                    + "    cap airlift.pull '{\"path\":\"/var/mobile/...\"}'\n"
+                    + "能力清单: " + HostCapabilityService.capabilityList.joined(separator: ", ")
+            }
+            let capability = parts[1]
+            let argText = parts.dropFirst(2).joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let (rc, result) = HostCapabilityService.call(capability: capability,
+                                                          jsonArgs: argText.isEmpty ? "{}" : argText)
+            return "rc=\(rc)\n\(result)"
         case "luaeval", "luaexec":
             // v0.3.95：Lua 模块宿主（Rust+mlua，编进 App）.luaeval=表达式求值，luaexec=语句块.
             let code = String(raw.dropFirst(cmd.count)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -869,6 +893,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       logs [n]        登录日志末尾 n 行（默认 30，最多 5000）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       caplog [n]      **宿主能力调用日志**末尾 n 行（默认 60）—— 任何模块（原生界面 / dylib / lua）调宿主能力的入参与返回原文，排障「模块为什么没生效」看这个
+      cap <能力名> [JSON]   直接调一次宿主能力（与模块同一个分发器，也会进 caplog）。例: cap exploit.status / cap airlift.air '{"op":"list"}'
       modls [模块id]  列任意模块的数据目录（省略 id = 第一个二进制模块）
       modcat <模块id> <相对路径> [n]   读任意模块数据目录下的文本文件（默认 80 行）
       invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）

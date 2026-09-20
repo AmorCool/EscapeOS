@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.3.485] - 2026-09-20
+
+### ★★★ 修根因：`/var` 是符号链接，读方向少算一个 `..` ⇒ 非 `/var/mobile/` 下的目标全部读不到
+
+**真机现象**（v0.3.483，日志实证）：
+
+```
+sys.supervised.get → ERR  airlift 读失败：没读到字节
+  ★ 判据① stage 已发出 = 是
+  ★ 判据② airlift-src-A0C7279E/p0/p1/p2/link → 成功 st_ifmt=S_IFLNK
+  ★ 判据③ Books/Sync/Books.plist → 成功 写 plist = 是；回读 plist 在 = 是
+  ★ 清单里有没有我们那条：**有**（targetIdentifier 命中、IsDownload=1）
+  ★ 第③步 AFC 回读：airlift-recovered-A0C7279E → 不存在（code=106 ObjectNotFound）
+```
+
+**清单命中了、两条 `FileComplete` 也发了，但设备就是没把文件搬进 Media。**
+`airlift4` 只读盘点确认：Media 内外**都没有**落点（所以文件没被搬走，原文件是安全的）。
+
+#### 根因
+
+`posixRelativePath(from: "/var/mobile/Media/Airlock/Book", to: target)` 数 `..`
+时用的是**词法**深度（5 段），但 iOS 上 **`/var` 是符号链接 → `private/var`**，
+内核解析路径时会跟随它 ⇒ **有效深度是 6 段**。少算一个 `..` ⇒ 落点偏一级。
+
+对配置路径 `/private/var/containers/.../CloudConfigurationDetails.plist`：
+
+| | 算出的 identifier | 内核解析结果 |
+|---|---|---|
+| 旧 | `../../../../../private/var/containers/...` | `/private/private/var/containers/...` ❌ **不存在** |
+| 新 | `../../../../containers/...` | `/private/var/containers/...` ✅ |
+
+#### 为什么之前一直没暴露
+
+真机验证过的目标**全在 `/var/mobile/...` 下**。此时 base 与 target 的公共前缀
+在两种算法下算出的 `ups` **恰好相同**（都是 3）⇒ 写方向一直是对的。
+一旦目标不在 `/var/mobile/` 下，公共前缀只剩 `private/var`，两种算法就差 1。
+
+**所以：写方向从来没被真正验证过非 `/var/mobile/` 的路径，读方向同理。**
+
+#### 修法
+
+新增 `canonicalParts(_:)`：切段前先把开头的 `/var/` 规范化成 `/private/var/`
+（对齐内核的符号链接解析），`posixRelativePath` 两侧都过它。
+另在判据里打印「规范化 base + 段数」，以后再遇到能一眼看出。
+
+**用 Python 复刻了旧算法/新算法/内核解析逐例验证**：
+- 配置路径：旧 ❌ / 新 ✅
+- `/var/mobile/Library/Logs/CrashReporter/x.bin`（之前验证过的）：旧 == 新 ✅ **无回归**
+- Media 内部 / airlock 内部：旧 == 新 ✅
+- 写方向用的是另一套 `payloadIdentifier`，**完全不受影响**
+
+#### 顺带：新增 `cap` 命令（排障用）
+
+`cap <能力名> [JSON]` —— 在 SSH 里直接调一次宿主能力，与模块走**同一个**
+`HostCapabilityService.call`（所以也进 `caplog`）。
+例：`cap exploit.status`、`cap airlift.air '{"op":"list"}'`、`cap airlift.pull '{"path":"..."}'`。
+有了它就能逐个能力试，不用装模块、不用点界面。
+
+> 模块仓库同步把 airlift-poc 的 `minHostVersion` 升到 0.3.485 ——
+> 在这个修复之前，它拿不到**任何**沙盒外文件（读方向对外面路径全不通）。
+
 ## [0.3.484] - 2026-09-20
 
 ### 修：`exploit.status` 会误导 —— 概览显示「airlift 不可用」但实际能用
