@@ -214,6 +214,23 @@ enum HostCapabilityService {
     /// **所有失败都如实返回 `error`，不吞、不粉饰成成功** —— 上层 UI 与模块
     /// 都要能看见「哪一步断的」.
     static func call(capability: String, jsonArgs: String) -> (Int32, String) {
+        // 记一笔调用日志（落盘，SSH `caplog` 可读）—— 见 appendCallLog 的注释说明
+        // 为什么在宿主侧统一记、而不是让每个模块自己记.
+        let started = Date()
+        let result = dispatch(capability: capability, jsonArgs: jsonArgs)
+        appendCallLog(capability: capability,
+                      jsonArgs: jsonArgs,
+                      result: result.1,
+                      ok: result.0 == 0,
+                      elapsedMS: Int(Date().timeIntervalSince(started) * 1000))
+        return result
+    }
+
+    /// 能力分发（真正的 switch）.
+    ///
+    /// 与 `call` 分开是因为 `call` 要包一层日志 —— 直接调 `dispatch` 可以跳过日志，
+    /// 但**不要在别处调它**，否则排障时会出现「日志缺一笔」这种最难查的情况.
+    private static func dispatch(capability: String, jsonArgs: String) -> (Int32, String) {
         let args = parseArgs(jsonArgs)
         switch capability {
         case "host.version":          return hostVersion()
@@ -311,33 +328,53 @@ enum HostCapabilityService {
             return ok(["data": text, "size": data.count, "via": "direct"])
         }
 
-        // ⚠️ 沙盒外：airlift 的「读」是**移动不是拷贝** —— 读完原位置就没这个文件了.
-        // 这是破坏性操作，所以必须由调用方**显式确认**（allowMove），不能默认执行.
-        guard (args["allowMove"] as? Bool) == true else {
-            return fail(
-                "拒绝执行：沙盒外读会**把文件从原位置搬走**（airlift 的读是移动不是拷贝）。"
-                + "确认要这么做请显式传 allowMove: true；"
-                + "若你只是想看内容，请改用宿主已有的配置读取通道（如 sys.supervised.get）。",
-                extra: ["via": "airlift", "requires": "allowMove"])
-        }
-
-        let outcome = withAirlift { AirliftExploit.pocReadFile(path: path) }
-        guard outcome.ok, let data = outcome.data else {
-            return fail(outcome.summary, extra: ["via": "airlift", "details": outcome.details])
+        // 沙盒外走 airlift。airlift 的「读」是**移动不是拷贝** —— 所以默认把原字节
+        // **立刻写回原位**（`airliftReadAndRestore`），默认行为是**非破坏性**的，
+        // 调用方可以像用普通读一样用它。
+        //
+        // 只有显式传 `allowMove: true` 才跳过写回（= 故意把文件搬进 Media），
+        // 那种用法会破坏性地移走文件，所以返回值里带 warning 说清楚。
+        let moveOnly = (args["allowMove"] as? Bool) == true
+        let data: Data
+        var details: [String]
+        if moveOnly {
+            let outcome = withAirlift { AirliftExploit.pocReadFile(path: path) }
+            guard outcome.ok, let d = outcome.data else {
+                return fail(outcome.summary, extra: ["via": "airlift", "details": outcome.details])
+            }
+            data = d
+            details = outcome.details
+        } else {
+            let result = airliftReadAndRestore(path: path)
+            guard let d = result.data else {
+                return fail("airlift 读失败：\(result.summary)",
+                            extra: ["via": "airlift", "details": result.details])
+            }
+            data = d
+            details = result.details
+            guard result.restored else {
+                return fail("读到内容了，但**没能把文件写回原位置**（它现在在 Media 里）",
+                            extra: ["via": "airlift", "details": result.details])
+            }
         }
         guard let text = encode(data, encoding: encoding) else {
             return fail("读到了 \(data.count) 字节但按 \(encoding) 编码失败（可能是二进制）",
                         extra: ["via": "airlift", "size": data.count])
         }
-        return ok([
+        var extra: [String: Any] = [
             "data": text,
             "size": data.count,
             "via": "airlift",
-            "details": outcome.details,
-            "warning": "airlift 的读是移动不是拷贝：原位置的文件已被搬走，"
-                + "字节同时备份在模块数据目录的 LoginLogs/airlift_read_*.bin；"
-                + "要保留请紧接着 fs.write 写回。",
-        ])
+            "details": details,
+        ]
+        if moveOnly {
+            extra["warning"] = "allowMove=true：airlift 的读是移动不是拷贝，"
+                + "原位置的文件已被搬走，字节备份在模块数据目录的 "
+                + "LoginLogs/airlift_read_*.bin；要保留请紧接着 fs.write 写回。"
+        } else {
+            extra["restored"] = true
+        }
+        return ok(extra)
     }
 
     private static func fsWrite(_ args: [String: Any]) -> (Int32, String) {
@@ -468,34 +505,96 @@ enum HostCapabilityService {
 
     // MARK: - sys.supervised.*
 
-    /// 监督模式的**读**走普通 FileManager，**不用 airlift**.
+    /// 一次「airlift 读 + 立刻写回原位」的结果.
+    private struct AirliftReadResult {
+        let data: Data?
+        let summary: String
+        let details: [String]
+        /// 是否成功把原字节写回原位置
+        let restored: Bool
+    }
+
+    /// airlift 读一个沙盒外文件，**并立刻把原字节写回原位**.
     ///
-    /// 依据：`ConfigurationsStore.readCurrent()` 就是用 `NSDictionary(contentsOfFile:)`
-    /// 读的 —— 读不需要任何沙盒扩展（只有写才需要 `ensureAccess()`）。
-    /// 若改用 airlift 读，会把 plist 从原位置搬走，一个「查询」接口造成破坏性副作用
-    /// 是不可接受的.
+    /// ## 为什么「读」必须配一次「写」
+    /// airlift 的读是**移动不是拷贝** —— 设备端把文件搬进 Media，再用 AFC 读出来
+    /// （见 `AirliftExploit.pocReadFile` 的注释）。所以**不写回的话，读一次就等于把
+    /// 用户的文件从原位置搬走了**。这里把「读 + 恢复」当成一个原子操作，
+    /// 让上层可以像用普通读一样用它。
+    ///
+    /// ## 为什么不用 FileManager / bad_query 扩展读
+    /// 本路径属于系统组（SystemGroup）。iOS 26.5/26.6 对 `configurationprofiles`
+    /// 拒绝签发沙盒扩展（`MDMBypassService` 有记），此时 `FileManager.fileExists`
+    /// 会因无法穿越沙盒而返回 false —— 表现为「配置文件不存在」这种**误导性**错误
+    /// （v0.3.481 真机实测踩到）。airlift 不依赖沙盒扩展，所以读写统一走它。
+    private static func airliftReadAndRestore(path: String) -> AirliftReadResult {
+        let read = withAirlift { AirliftExploit.pocReadFile(path: path) }
+        guard read.ok, let data = read.data else {
+            return AirliftReadResult(data: nil, summary: read.summary,
+                                     details: read.details, restored: false)
+        }
+        let restore = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
+        var details = read.details
+        details.append(restore.ok
+            ? "★ 已把原字节写回原位置（读是移动，不写回文件就留在 Media 里了）"
+            : "⚠️⚠️ 写回原位置失败：\(restore.summary) —— 文件当前**不在**原位置，"
+              + "原字节已备份在模块数据目录 LoginLogs/ 下，请尽快处理")
+        return AirliftReadResult(data: data, summary: read.summary,
+                                 details: details, restored: restore.ok)
+    }
+
+    /// 解析 plist（binary 与 XML 都能解）.
+    private static func parsePlist(_ data: Data) -> [String: Any]? {
+        guard let obj = try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil) else { return nil }
+        return obj as? [String: Any]
+    }
+
+    /// 读监督模式状态（走 airlift：读 + 立刻写回原位）.
     private static func supervisedGet() -> (Int32, String) {
         let path = ConfigPlistURL.cloudConfig.path
-        guard FileManager.default.fileExists(atPath: path) else {
-            return fail("配置文件不存在：\(path)", extra: ["path": path])
+        let result = airliftReadAndRestore(path: path)
+
+        guard let data = result.data else {
+            return fail("airlift 读失败：\(result.summary)",
+                        extra: ["path": path, "via": "airlift", "steps": result.details])
         }
-        guard let dict = NSDictionary(contentsOfFile: path) as? [String: Any] else {
-            return fail("配置文件存在但无法解析为 plist：\(path)", extra: ["path": path])
+        guard let dict = parsePlist(data) else {
+            return fail("读到了 \(data.count) 字节，但不是合法 plist",
+                        extra: ["path": path, "via": "airlift", "steps": result.details])
+        }
+        let supervised = dict["IsSupervised"] as? Bool ?? false
+        guard result.restored else {
+            // 内容读到了，但文件没回到原位 —— 这是必须让用户知道的严重情况
+            return fail("读到内容了，但**没能把文件写回原位置**（它现在在 Media 里）",
+                        extra: ["path": path, "via": "airlift",
+                                "steps": result.details, "isSupervised": supervised])
         }
         return ok([
-            "isSupervised": dict["IsSupervised"] as? Bool ?? false,
+            "isSupervised": supervised,
             "organizationName": dict["OrganizationName"] as? String ?? "",
             "path": path,
+            "via": "airlift",
+            "steps": result.details,
         ])
     }
 
-    /// 开关监督模式：读（普通 FileManager，非破坏性）→ 改 `IsSupervised` → 写回（airlift）→ 读回校验.
+    /// 开关监督模式：**全程走 airlift**（读 → 改 → 写 → 读回校验）.
     ///
-    /// 为什么写必须走 airlift：现有实现靠 `escape.consume(path: configProfiles, isGroup: true)`
-    /// 拿 bad_query 沙盒扩展，而 iOS 26.5/26.6 对 `configurationprofiles` SystemGroup
-    /// **拒绝签发沙盒扩展** ⇒ 写不进去（见 `MDMBypassService.swift`）.
+    /// ## 为什么读也要走 airlift
+    /// 本路径属于系统组（SystemGroup）。iOS 26.5/26.6 对 `configurationprofiles`
+    /// 拒绝签发沙盒扩展 ⇒ `FileManager` 连**读**都读不到（`fileExists` 因无法穿越沙盒
+    /// 返回 false，表现为「配置文件不存在」这种误导性错误 —— v0.3.481 真机实测踩到）。
+    /// airlift 不依赖沙盒扩展，所以读写统一走它。
     ///
-    /// 每一步都记进 `steps`，失败时标出卡在哪一步 —— 上层要能看见断点.
+    /// ## ⚠️ 读是移动，所以每一步失败都必须把原字节写回
+    /// airlift 的读会把文件搬进 Media。本实现把「读 + 恢复」串成闭环：
+    /// 任何一步失败都调 `restoreOriginal()` 把原字节写回原位置，
+    /// 并在返回结果里如实标出**是否恢复成功**。绝不留下「文件不在原位」而用户不知道。
+    ///
+    /// ## 成本
+    /// 一次 airlift 约 10~20 秒，本流程要 4 次（读 / 写 / 读回 / 写回），
+    /// 所以整轮约 40~80 秒。`steps` 会逐条记下来，上层可以边等边看。
     private static func supervisedSet(_ args: [String: Any]) -> (Int32, String) {
         guard let enabled = args["enabled"] as? Bool else {
             return fail("sys.supervised.set 缺少 enabled（布尔）")
@@ -503,85 +602,114 @@ enum HostCapabilityService {
         let orgName = (args["organizationName"] as? String) ?? ""
         let path = ConfigPlistURL.cloudConfig.path
         var steps: [String] = []
+        /// 原文件字节（① 读回来后填）。声明在 `restoreOriginal` **之前** ——
+        /// Swift 的嵌套函数不能引用在它之后声明的局部变量（"captures before declared"）.
+        var oldData = Data()
 
-        // 1) 读原内容（普通 FileManager，非破坏性）
-        guard FileManager.default.fileExists(atPath: path) else {
-            return fail("配置文件不存在：\(path)", extra: ["path": path, "steps": steps])
+        /// 把读到的原字节写回原位置（任何后续步骤失败时的兜底）.
+        /// 返回是否成功 —— 失败意味着用户的文件当前**不在原位**，必须让上层知道.
+        func restoreOriginal(_ why: String) -> Bool {
+            let restore = withAirlift { AirliftExploit.pocWriteFile(path: path, data: oldData) }
+            steps.append(restore.ok
+                ? "↩︎ \(why) ⇒ 已把原字节写回原位置"
+                : "⚠️⚠️ \(why) 且**写回原位失败**：\(restore.summary)"
+                  + "（文件当前不在原位，原字节已备份在模块数据目录 LoginLogs/ 下）")
+            return restore.ok
         }
-        guard let raw = FileManager.default.contents(atPath: path) else {
-            return fail("读不到配置文件（沙盒外无读权限）：\(path)",
-                        extra: ["path": path, "steps": steps])
+
+        // ① 读原文件（airlift）
+        let read = withAirlift { AirliftExploit.pocReadFile(path: path) }
+        guard read.ok, let readData = read.data else {
+            return fail("① airlift 读失败：\(read.summary)",
+                        extra: ["path": path, "via": "airlift",
+                                "steps": steps + read.details])
         }
-        steps.append("读到原文件 \(raw.count) 字节")
-        guard let dict = NSMutableDictionary(contentsOfFile: path) else {
-            return fail("无法把配置文件解析为 plist：\(path)",
-                        extra: ["path": path, "steps": steps])
+        oldData = readData
+        steps.append("① airlift 读到原文件 \(oldData.count) 字节（读是移动，文件已进 Media）")
+
+        // ② 解析
+        guard let dict = parsePlist(oldData) else {
+            let ok = restoreOriginal("原内容不是合法 plist")
+            return fail("① 读到的内容不是合法 plist（原文件\(ok ? "已" : "**未能**")写回原位）",
+                        extra: ["path": path, "via": "airlift", "steps": steps])
         }
         let before = dict["IsSupervised"] as? Bool ?? false
-        steps.append("当前 IsSupervised = \(before)")
+        steps.append("② 解析成功，当前 IsSupervised = \(before)")
 
-        // 2) 改字段
-        dict["IsSupervised"] = enabled
+        // ③ 改字段
+        let mutable = NSMutableDictionary(dictionary: dict)
+        mutable["IsSupervised"] = enabled
         if enabled, !orgName.isEmpty {
-            dict["OrganizationName"] = orgName
-            steps.append("OrganizationName = \(orgName)")
+            mutable["OrganizationName"] = orgName
+            steps.append("③ OrganizationName = \(orgName)")
         } else if !enabled {
-            dict.removeObject(forKey: "OrganizationName")
-            steps.append("已移除 OrganizationName")
+            mutable.removeObject(forKey: "OrganizationName")
+            steps.append("③ 已移除 OrganizationName")
         }
 
-        // 3) 备份原字节到 App 沙盒（覆盖前留后路；airlift 写不校验落点，更需要这条）
+        // ④ 序列化
+        guard let newData = try? PropertyListSerialization.data(
+            fromPropertyList: mutable, format: .binary, options: 0) else {
+            let ok = restoreOriginal("plist 序列化失败")
+            return fail("plist 序列化失败（原文件\(ok ? "已" : "**未能**")写回原位）",
+                        extra: ["path": path, "steps": steps])
+        }
+        steps.append("④ 新内容 \(newData.count) 字节（binary plist）")
+
+        // ⑤ 本地备份（覆盖前留后路；airlift 写不校验落点，更需要这条）
         var backupPath: String?
         let backupDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CapBackup", isDirectory: true)
         try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let backupURL = backupDir.appendingPathComponent("CloudConfigurationDetails-\(stamp).plist")
-        if (try? raw.write(to: backupURL)) != nil {
+        if (try? oldData.write(to: backupURL)) != nil {
             backupPath = backupURL.path
-            steps.append("原文件已备份到 \(backupURL.path)")
+            steps.append("⑤ 原文件已备份到 \(backupURL.path)")
         } else {
-            steps.append("⚠️ 原文件备份失败（继续，但请留意）")
+            steps.append("⑤ ⚠️ 原文件备份失败（继续，但请留意）")
         }
 
-        // 4) 序列化
-        guard let newData = try? PropertyListSerialization.data(
-            fromPropertyList: dict, format: .binary, options: 0) else {
-            return fail("plist 序列化失败", extra: ["path": path, "steps": steps])
-        }
-        steps.append("新内容 \(newData.count) 字节（binary plist）")
-
-        // 5) 写回 —— 走 airlift（沙盒外）
-        let writeOutcome = withAirlift { AirliftExploit.pocWriteFile(path: path, data: newData) }
-        steps.append(contentsOf: writeOutcome.details.map { "write: \($0)" })
-        guard writeOutcome.ok else {
-            return fail("写入失败：\(writeOutcome.summary)",
+        // ⑥ 写回新内容（airlift）
+        let write = withAirlift { AirliftExploit.pocWriteFile(path: path, data: newData) }
+        steps.append(contentsOf: write.details.map { "⑥ write: \($0)" })
+        guard write.ok else {
+            let ok = restoreOriginal("写入失败")
+            return fail("⑥ 写入失败：\(write.summary)（原文件\(ok ? "已" : "**未能**")写回原位）",
                         extra: ["path": path, "steps": steps,
                                 "backup": backupPath ?? "", "isSupervised": before])
         }
-        steps.append("已发出写入（airlift 不校验落点，下面用读回确认）")
+        steps.append("⑥ 已写入新内容")
 
-        // 6) 读回校验 —— **不轻信写入返回值**
-        guard let afterRaw = FileManager.default.contents(atPath: path) else {
-            return fail("写入后读不回来（无法确认结果）：\(path)",
-                        extra: ["path": path, "steps": steps,
-                                "backup": backupPath ?? "", "isSupervised": before])
+        // ⑦ 读回校验 —— **不轻信写入返回值**（airlift 写不校验落点）
+        //    这次读同样会移动文件，所以 airliftReadAndRestore 内部会再写回一次.
+        let check = airliftReadAndRestore(path: path)
+        steps.append(contentsOf: check.details.map { "⑦ \($0)" })
+        guard let checkData = check.data, let checkDict = parsePlist(checkData) else {
+            return fail("⑦ 写入后读回失败，无法确认结果（文件可能不在原位置）",
+                        extra: ["path": path, "steps": steps, "backup": backupPath ?? ""])
         }
-        let afterDict = NSDictionary(contentsOfFile: path) as? [String: Any]
-        let after = afterDict?["IsSupervised"] as? Bool ?? false
-        steps.append("读回：\(afterRaw.count) 字节，IsSupervised = \(after)")
+        let after = checkDict["IsSupervised"] as? Bool
+        steps.append("⑦ 读回：IsSupervised = \(after.map(String.init) ?? "读不到")")
 
         guard after == enabled else {
-            return fail("读回校验不一致：期望 \(enabled)，实际 \(after)（写入可能未生效）",
-                        extra: ["path": path, "steps": steps, "isSupervised": after,
-                                "backup": backupPath ?? ""])
+            return fail("⑦ 读回校验不一致：期望 \(enabled)，实际 \(after.map(String.init) ?? "读不到")",
+                        extra: ["path": path, "steps": steps, "backup": backupPath ?? "",
+                                "isSupervised": after ?? before])
+        }
+        guard check.restored else {
+            return fail("⑦ 内容已生效，但**没能把文件写回原位置**（它现在在 Media 里）",
+                        extra: ["path": path, "steps": steps, "backup": backupPath ?? "",
+                                "isSupervised": after ?? before])
         }
 
         var extra: [String: Any] = [
             "path": path,
             "steps": steps,
-            "isSupervised": after,
-            "organizationName": afterDict?["OrganizationName"] as? String ?? "",
+            "isSupervised": after ?? enabled,
+            "organizationName": checkDict["OrganizationName"] as? String ?? "",
+            "via": "airlift",
+            "restored": true,
         ]
         if let backupPath { extra["backup"] = backupPath }
         return ok(extra)
@@ -699,6 +827,74 @@ enum HostCapabilityService {
         }
         if sem.wait(timeout: .now() + timeout) == .timedOut { return false }
         return box.value
+    }
+
+    // MARK: - 调用日志（给 SSH 排障用）
+
+    /// 宿主能力调用日志文件（`Documents/CapabilityLog/run.log`）.
+    ///
+    /// 放 `Documents/` 而不是某个模块的数据目录：能力调用是**宿主级**行为，
+    /// 而且原生界面的模块（视图编译进宿主）本来就没有自己的数据目录，
+    /// 放这里才能保证「任何模块形态都查得到」.
+    static var callLogURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CapabilityLog", isDirectory: true)
+            .appendingPathComponent("run.log")
+    }
+
+    /// 单条记录里 args / result 各自的上限
+    private static let callLogTextLimit = 1200
+    /// 日志文件大小上限；超过就只留后半段（最近的调用才是排障要看的）
+    private static let callLogFileLimit = 512 * 1024
+
+    /// 追加一笔能力调用记录.
+    ///
+    /// ## 为什么在宿主侧统一记，而不是让模块自己记
+    /// · 原生界面的模块（视图编译进宿主）**没有自己的日志通道** —— 日志只在内存里，
+    ///   用户手机上出问题时看不到；
+    /// · dylib 模块虽然有 `data/` 目录，但「宿主到底收到什么、返回什么」只有宿主知道；
+    /// · 统一在这里记，任何模块形态都被覆盖，而且**模块一行代码都不用改**.
+    ///
+    /// 用 `NSLock` 保护：模块可能从非主线程调用，而 `FileHandle` 追加不是原子的.
+    private static let callLogLock = NSLock()
+
+    private static func appendCallLog(capability: String, jsonArgs: String,
+                                      result: String, ok: Bool, elapsedMS: Int) {
+        callLogLock.lock()
+        defer { callLogLock.unlock() }
+
+        let fm = FileManager.default
+        let url = callLogURL
+        let dir = url.deletingLastPathComponent()
+        if !fm.fileExists(atPath: dir.path) {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(stamp)] \(ok ? "OK " : "ERR") \(capability) (\(elapsedMS)ms)\n"
+            + "  args: \(clip(jsonArgs, callLogTextLimit))\n"
+            + "  ret : \(clip(result, callLogTextLimit))\n"
+
+        if let handle = FileHandle(forWritingAtPath: url.path) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? Data(line.utf8).write(to: url)
+        }
+
+        // 体积守卫
+        if let attrs = try? fm.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? Int, size > callLogFileLimit,
+           let data = fm.contents(atPath: url.path) {
+            let header = Data("…（日志超过上限，已截断，下面是最近的部分）\n".utf8)
+            try? (header + data.suffix(callLogFileLimit / 2)).write(to: url)
+        }
+    }
+
+    private static func clip(_ text: String, _ limit: Int) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit)) + "…（截断，原文 \(text.count) 字符）"
     }
 
     // MARK: - JSON 小工具

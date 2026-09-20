@@ -314,6 +314,10 @@ private struct AirliftSupervisedTab: View {
                 }
                 Button("重新读取") { Task { await readState() } }
                     .disabled(loading || running)
+            } footer: {
+                Text("读取走 airlift 漏洞利用（沙盒外），单次约 10~20 秒；"
+                     + "airlift 的「读」是移动不是拷贝，所以读完会立刻把原文件写回原位，"
+                     + "整体约需 20~40 秒。")
             }
 
             Section("组织名称（可选）") {
@@ -327,7 +331,7 @@ private struct AirliftSupervisedTab: View {
                     confirming = true
                 } label: {
                     if running {
-                        HStack { ProgressView(); Text("执行中…") }
+                        HStack { ProgressView(); Text("执行中（airlift 约需 40~80 秒）…") }
                     } else {
                         Label(isSupervised == true ? "关闭监督模式" : "启用监督模式",
                               systemImage: isSupervised == true
@@ -339,7 +343,8 @@ private struct AirliftSupervisedTab: View {
                 if !module.isUsable {
                     Text("模块当前不可用，无法执行。")
                 } else {
-                    Text("执行会修改系统配置文件，并自动把原文件备份到 App 沙盒。")
+                    Text("全程走 airlift：读 → 改 → 写 → 读回校验，共 4 次操作，"
+                         + "约需 40~80 秒。原文件会自动备份到 App 沙盒。")
                 }
             }
 
@@ -393,7 +398,7 @@ private struct AirliftSupervisedTab: View {
     }
 
     private var statusText: String {
-        guard let isSupervised else { return "读取中…" }
+        guard let isSupervised else { return "读取中（airlift 约需 20~40 秒）…" }
         return isSupervised ? "已开启监督模式" : "未开启监督模式"
     }
 

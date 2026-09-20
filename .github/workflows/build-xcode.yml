@@ -276,21 +276,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # 内置模块单一数据源：module-esc 仓库（modules/<id>/module.json）
-          # 克隆到临时目录后同步进 Resources/BundledModules（folder reference 打进 bundle）。
-          # 模块 .zip 的构建/发布在 module-esc 仓库自己的 CI（edge Release）。
+          # 内置模块单一数据源：module-esc 仓库（modules/<id>/module.json）。
+          # ⚠️ **哪些内置由模块自己声明**（module.json 的 `distribution: "bundled"`，
+          # 默认 external = 独立模块走 edge zip 按需导入），**不在这里硬编码排除名单**。
+          # 旧实现是 `cp -R modules/*` + 硬编码 `rm -rf .../com.escapeos.alist`，
+          # 于是 v0.3.481 新加的 airlift-poc 被自动打成了内置模块（用户要求它是独立的），
+          # 而且每加一个不内置的模块都要回来改一次 workflow。规则与理由见
+          # Resources/Scripts/sync_bundled_modules.py 的头注释。
           git clone --depth 1 https://github.com/AmorCool/module-esc.git _module-esc
-          mkdir -p Resources/BundledModules
-          # v0.3.92 模块化：OpenList 不内置（可拆卸 dylib 模块，edge 分发按需导入）
-          rm -rf _module-esc/modules/com.escapeos.alist
-          cp -R _module-esc/modules/* Resources/BundledModules/
+          python3 Resources/Scripts/sync_bundled_modules.py _module-esc
           rm -rf _module-esc
-          # OpenList（v0.3.73 方案 A）：不再需要 bin/ 下的 dylib——OpenListMain 已与
-          # Sap* 合并为单一 Go runtime 静态链接进宿主（build-sap.sh，见 project.yml
-          # preBuildScripts）。BundledModules 只带 module.json（UI 卡片）+ signature.sig。
           echo "=== BundledModules ==="
           find Resources/BundledModules -name module.json
-          ls -la Resources/BundledModules/com.escapeos.alist/bin/ || true
 
       - name: Build OpenSSL (libcrypto, ios arm64, cached)
         # v0.3.101：ZSign ad-hoc 重签名依赖 libcrypto。iphoneos-cross 无 asm 静态库。

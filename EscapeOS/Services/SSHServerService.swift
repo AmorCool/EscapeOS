@@ -762,6 +762,60 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             }
             let all = s.components(separatedBy: "\n").filter { !$0.isEmpty }
             return all.isEmpty ? "（空）" : all.suffix(min(max(n, 1), 400)).joined(separator: "\n")
+        case "caplog":
+            // 宿主能力调用日志（所有模块共用一份）—— 排障「模块为什么没生效」的第一现场.
+            //
+            // 由宿主在**每次**能力调用后追加（见 HostCapabilityService.appendCallLog）：
+            // 原生界面的模块（视图编译进宿主）没有自己的日志通道，dylib 模块的 data/
+            // 也看不到「宿主到底收到什么、返回什么」，所以统一记在宿主侧 ——
+            // 这样任何模块形态都查得到，而模块本身一行代码都不用改.
+            let n = Int(parts.count > 1 ? parts[1] : "60") ?? 60
+            let url = HostCapabilityService.callLogURL
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                return "（暂无能力调用日志）\n路径: \(url.path)\n（第一次调用宿主能力后才会创建）"
+            }
+            let all = text.components(separatedBy: "\n").filter { !$0.isEmpty }
+            guard !all.isEmpty else { return "（能力调用日志为空）\n路径: \(url.path)" }
+            let keep = min(max(n, 1), 2000)
+            return "=== 宿主能力调用日志（末尾 \(keep) 行）===\n路径: \(url.path)\n"
+                + all.suffix(keep).joined(separator: "\n")
+        case "modls":
+            // 列**任意模块**的数据目录（通用版 mlog —— mlog 只看二进制模块）
+            let id = parts.count > 1 ? parts[1] : Self.firstBinaryModuleID()
+            let dir = ModuleService.shared.dataURL(for: id)
+            var lines = ["=== \(id) 数据目录 ===", dir.path]
+            guard let items = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
+                lines.append("（目录不存在或不可读 —— 该模块可能还没写过数据）")
+                return lines.joined(separator: "\n")
+            }
+            if items.isEmpty { lines.append("（空目录）") }
+            for it in items.sorted() {
+                let full = dir.appendingPathComponent(it)
+                var isDir: ObjCBool = false
+                FileManager.default.fileExists(atPath: full.path, isDirectory: &isDir)
+                let size = (try? FileManager.default.attributesOfItem(atPath: full.path)[.size] as? Int) ?? nil
+                lines.append(isDir.boolValue ? "📁 \(it)/" : "📄 \(it)\((size.map { " (\($0)B)" }) ?? "")")
+            }
+            return lines.joined(separator: "\n")
+        case "modcat":
+            // 读**任意模块**数据目录下的文本文件（通用版 mlog）
+            // 用法: modcat <模块id> <相对路径> [n]
+            guard parts.count > 2 else { return "用法: modcat <模块id> <相对路径> [n]" }
+            let id = parts[1]
+            let rel = parts[2]
+            let n = parts.count > 3 ? (Int(parts[3]) ?? 80) : 80
+            let dir = ModuleService.shared.dataURL(for: id)
+            let target = dir.appendingPathComponent(rel)
+            // 防路径越界：标准化后必须仍在模块数据目录内
+            guard target.standardizedFileURL.path.hasPrefix(dir.standardizedFileURL.path) else {
+                return "拒绝：路径越出模块数据目录"
+            }
+            guard let text = try? String(contentsOf: target, encoding: .utf8) else {
+                return "（读不到 \(id)/\(rel)；先跑 modls \(id) 看该模块有什么）"
+            }
+            let all = text.components(separatedBy: "\n").filter { !$0.isEmpty }
+            return all.isEmpty ? "（文件存在但为空）"
+                : all.suffix(min(max(n, 1), 2000)).joined(separator: "\n")
         case "luaeval", "luaexec":
             // v0.3.95：Lua 模块宿主（Rust+mlua，编进 App）.luaeval=表达式求值，luaexec=语句块.
             let code = String(raw.dropFirst(cmd.count)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -814,6 +868,9 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30，最多 5000）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
+      caplog [n]      **宿主能力调用日志**末尾 n 行（默认 60）—— 任何模块（原生界面 / dylib / lua）调宿主能力的入参与返回原文，排障「模块为什么没生效」看这个
+      modls [模块id]  列任意模块的数据目录（省略 id = 第一个二进制模块）
+      modcat <模块id> <相对路径> [n]   读任意模块数据目录下的文本文件（默认 80 行）
       invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）
       store get <trackId> [email]   触发一次 App Store 下载（与界面「获取」同一条路径）
       devcert        创建开发证书（用已登录 Apple ID；原生模块签名用）
