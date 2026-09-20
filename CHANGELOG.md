@@ -1,49 +1,5 @@
 # Changelog
 
-## [0.3.487] - 2026-09-20
-
-### ★★★ 新增 `container.*`：终于能**列目录**了（airlift 做不到的事）
-
-参照 `github.com/Mak5er/AirCard-iOS` 的 `al_find_app_container` 补的能力。
-但查过之后发现：**这件事我们早就有一半了** —— `MCMIntegration` 里已经有
-
-- `queryDataContainerPath(bundleId)` —— 按 bundle id 查数据容器根路径（只查不激活）
-- `activate(bundleId, class: .appData)` —— **返回路径并激活真实沙盒扩展**
-- `enumerate(class:)` / `pathHasActiveLease(path)`
-
-只是**从没暴露给模块**。现在补上 5 个能力：
-
-| 能力 | 作用 |
-|---|---|
-| `container.status` | MHA 状态诊断（`isMobileHouseArrest` / `bridgeAvailable` / `signedCodeIdentifier`） |
-| `container.find` | 按 bundle id 查容器根路径（只查不激活） |
-| `container.activate` | 激活容器（拿真实沙盒扩展） |
-| `container.list` | **列容器内目录，任意层级** |
-| `container.ids` | 枚举某类容器已注册的标识符 |
-
-#### ★★ 顺带把 `fs.*` 的路由改成「认得 MHA lease」
-
-原来 `fs.read/write/delete/exists/list` 只认「在本 App 沙盒内」⇒ 容器路径会被判成
-「沙盒外」而走 airlift（**只能单文件、不能列目录**）。
-
-新增 `canUseDirectFileManager(path)`：**本 App 沙盒内 或 在已激活的 MHA 容器 lease 内**
-⇒ 直接用 FileManager。于是激活过的容器自动获得**完整**文件能力，**`fs.list` 也能用了**。
-
-#### ★ 两条路的真实能力边界（写进模块 README，避免模块作者误判）
-
-| | airlift | MHA 容器 |
-|---|---|---|
-| 读/写单个文件 | ✅ 任意路径 | ✅（先 activate） |
-| **列目录** | ❌ **不能** | ✅ **任意层级** |
-| 单次成本 | 10~20 秒 | 瞬时 |
-
-⇒ **要「浏览」必须走 MHA**；airlift 只能按已知路径读写单文件。
-
-> 参照实现对比见 `ref-airlift.md`：AirCard 用的是**同一个** airlift
-> （Credits 明写 AirLift by @0xjohnny / AirTraffic + ATAirlock），没有新链可换；
-> 但它那份 Rust 实现**逐字印证了 v0.3.485/486 两个修复**
-> （`format!("{}/{}", target, leaf)` + `build_archive(&target, …)`）。
-
 ## [0.3.486] - 2026-09-20
 
 ### ★★★ 修：写方向从来就写不出「指定文件名」的文件（target/leaf 语义搞反了）
