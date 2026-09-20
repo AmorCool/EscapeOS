@@ -137,6 +137,11 @@ func registerAirliftPocModuleUI() {
                         systemImage: "lock.shield") { m in
                 AirliftSupervisedTab(module: m)
             },
+            ModuleUITab(id: "overwrite",
+                        title: "自定义覆盖",
+                        systemImage: "square.and.arrow.up.on.square") { m in
+                AirliftOverwriteTab(module: m)
+            },
             ModuleUITab(id: "log",
                         title: "日志",
                         systemImage: "text.alignleft") { m in
@@ -522,5 +527,312 @@ private struct AirliftLogTab: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - 自定义覆盖
+
+/// 「自定义覆盖」——把 AIR 里的一个文件覆盖到任意沙盒外路径.
+///
+/// ## 产品形态参考 lara，但漏洞利用完全不同（别误解）
+/// 界面形态参考 `github.com/rooootdev/lara` 的 Custom Overwrite：
+/// 「填目标路径 + 选源文件 → 覆盖」。但**机制完全不同**：
+/// · lara 走 DarkSword 内核链，在**内核层原地覆盖字节** ⇒ 硬性要求「目标文件 ≥ 源文件」；
+/// · 我们走 airlift 的越界写 ⇒ **没有这个限制**，目标可以比源小/大、甚至可以不存在。
+///
+/// ## 为什么要经过 AIR
+/// `/var/mobile/Media/AIR` 是 AFC 的根目录之下，宿主能用**一条 AFC 连接**廉价读写；
+/// 而沙盒外的目标只能靠 airlift 搬（一趟 10~20 秒）。所以流程是：
+/// **源文件先落进 AIR → 再用 airlift 覆盖目标**。这样源文件的查看/替换/删除都是瞬时的。
+private struct AirliftOverwriteTab: View {
+    let module: EscapeModule
+
+    @State private var target = ""
+    @State private var airFiles: [AirFile] = []
+    @State private var selectedAirName: String?
+    @State private var backupFirst = true
+    @State private var loadingList = false
+    @State private var working = false
+    @State private var importing = false
+    @State private var confirming = false
+    @State private var steps: [String] = []
+    @State private var errorText: String?
+    @State private var okText: String?
+    @State private var airDir = ""
+
+    private struct AirFile: Identifiable {
+        let name: String
+        let size: Int
+        var id: String { name }
+    }
+
+    var body: some View {
+        Form {
+            Section("目标路径") {
+                TextField("/var/mobile/... 绝对路径", text: $target)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.system(.callout, design: .monospaced))
+                Button {
+                    Task { await pullToAir() }
+                } label: {
+                    Label("把目标读到 AIR（读取，不改动目标）", systemImage: "arrow.down.doc")
+                }
+                .disabled(working || target.trimmingCharacters(in: .whitespaces).isEmpty)
+            } footer: {
+                Text("读取会把目标文件拉一份副本到 AIR（原文件读后立刻写回原位，不会被搬走）。")
+            }
+
+            Section("源文件（AIR 中转站）") {
+                if loadingList {
+                    HStack { ProgressView(); Text("读取 AIR 目录…") }
+                } else if airFiles.isEmpty {
+                    Text("AIR 里还没有文件。点下面「从本机选择文件」导入，或先用上面的「把目标读到 AIR」。")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(airFiles) { file in
+                        Button {
+                            selectedAirName = file.name
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: selectedAirName == file.name
+                                      ? "largecircle.fill.circle" : "circle")
+                                    .foregroundColor(selectedAirName == file.name ? .accentColor : .secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(file.name)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundColor(.primary)
+                                        .lineLimit(2)
+                                    Text(byteText(file.size))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .onDelete { indexSet in
+                        Task { await deleteAirFiles(indexSet) }
+                    }
+                }
+
+                Button {
+                    importing = true
+                } label: {
+                    Label("从本机选择文件导入到 AIR", systemImage: "square.and.arrow.down")
+                }
+                .disabled(working || importing)
+
+                if !airDir.isEmpty {
+                    Text(airDir)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Section {
+                Toggle("覆盖前先把目标备份到 AIR（.bak）", isOn: $backupFirst)
+
+                Button {
+                    confirming = true
+                } label: {
+                    if working {
+                        HStack { ProgressView(); Text("执行中（airlift 约需 20~60 秒）…") }
+                    } else {
+                        Label("覆盖目标", systemImage: "square.and.arrow.up.on.square")
+                    }
+                }
+                .disabled(working || !canOverwrite)
+            } footer: {
+                if let selectedAirName {
+                    Text("将用 AIR/\(selectedAirName) 覆盖 \(target.isEmpty ? "（未填目标路径）" : target)")
+                } else {
+                    Text("先选一个源文件，再填目标路径。")
+                }
+            }
+
+            if !steps.isEmpty {
+                Section("执行步骤") {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: step.hasPrefix("⚠️") || step.hasPrefix("② ⚠️")
+                                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(step.contains("⚠️") ? .orange : .secondary)
+                            Text(step).font(.caption)
+                        }
+                    }
+                }
+            }
+
+            if let okText {
+                Section("结果") {
+                    Text(okText).font(.callout).foregroundColor(.green)
+                }
+            }
+
+            if let errorText {
+                Section("错误原文") {
+                    Text(errorText)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .task { await refreshAirList() }
+        .fileImporter(isPresented: $importing,
+                      allowedContentTypes: [.item],
+                      allowsMultipleSelection: false) { result in
+            Task { await importPicked(result) }
+        }
+        .confirmationDialog(
+            "确认覆盖目标文件？",
+            isPresented: $confirming,
+            titleVisibility: .visible
+        ) {
+            Button("覆盖", role: .destructive) {
+                Task { await overwrite() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将用 AIR/\(selectedAirName ?? "?") 的字节覆盖 \(target)。"
+                 + (backupFirst ? "覆盖前会先把目标原内容备份到 AIR（.bak）。" : "⚠️ 已关闭备份。")
+                 + " 这是不可逆操作，请确认目标路径无误。")
+        }
+    }
+
+    private var canOverwrite: Bool {
+        selectedAirName != nil && !target.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func byteText(_ size: Int) -> String {
+        if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
+        if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
+        return "\(size) B"
+    }
+
+    // MARK: 能力调用
+
+    private func call(_ capability: String, _ args: String) async -> String {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (_, json) = AirliftPocLog.callRaw(capability, args)
+                continuation.resume(returning: json)
+            }
+        }
+    }
+
+    private func refreshAirList() async {
+        loadingList = true
+        defer { loadingList = false }
+        let json = await call("airlift.air", "{\"op\":\"list\"}")
+        let dict = CapJSON.dict(json)
+        airDir = CapJSON.string(dict, "dir") ?? ""
+        let raw = (dict?["entries"] as? [[String: Any]]) ?? []
+        airFiles = raw.compactMap { item in
+            guard let name = item["name"] as? String else { return nil }
+            let isDir = (item["isDir"] as? Bool) ?? false
+            guard !isDir else { return nil }
+            return AirFile(name: name, size: (item["size"] as? Int) ?? 0)
+        }
+        if let selected = selectedAirName, !airFiles.contains(where: { $0.name == selected }) {
+            selectedAirName = nil
+        }
+    }
+
+    private func deleteAirFiles(_ indexSet: IndexSet) async {
+        for index in indexSet {
+            guard index < airFiles.count else { continue }
+            let name = airFiles[index].name
+            let args = jsonString(["op": "delete", "name": name])
+            _ = await call("airlift.air", args)
+        }
+        await refreshAirList()
+    }
+
+    private func importPicked(_ result: Result<[URL], Error>) async {
+        guard case .success(let urls) = result, let url = urls.first else {
+            if case .failure(let error) = result {
+                errorText = "选择文件失败：\(error.localizedDescription)"
+            }
+            return
+        }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            errorText = "读不到所选文件：\(url.lastPathComponent)"
+            return
+        }
+        let args = jsonString([
+            "op": "write",
+            "name": url.lastPathComponent,
+            "data": data.base64EncodedString(),
+            "encoding": "base64",
+        ])
+        let json = await call("airlift.air", args)
+        let dict = CapJSON.dict(json)
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已导入 \(url.lastPathComponent)（\(data.count) 字节）到 AIR"
+            errorText = nil
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+        await refreshAirList()
+    }
+
+    /// 读取目标到 AIR（不改动目标）
+    private func pullToAir() async {
+        working = true
+        steps = []
+        errorText = nil
+        okText = nil
+        defer { working = false }
+        let path = target.trimmingCharacters(in: .whitespaces)
+        let json = await call("airlift.pull", jsonString(["path": path]))
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已读到 AIR：\(CapJSON.string(dict, "airName") ?? "?")"
+            await refreshAirList()
+            if let name = CapJSON.string(dict, "airName"), !name.isEmpty {
+                selectedAirName = name
+            }
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+    }
+
+    private func overwrite() async {
+        working = true
+        steps = []
+        errorText = nil
+        okText = nil
+        defer { working = false }
+        let payload: [String: Any] = [
+            "target": target.trimmingCharacters(in: .whitespaces),
+            "airName": selectedAirName ?? "",
+            "backup": backupFirst,
+        ]
+        let json = await call("airlift.overwrite", jsonString(payload))
+        let dict = CapJSON.dict(json)
+        steps = CapJSON.strings(dict, "steps")
+        if CapJSON.bool(dict, "ok") == true {
+            okText = "已覆盖 \(CapJSON.string(dict, "path") ?? "")"
+                + "（\(CapJSON.int(dict, "size") ?? 0) 字节）"
+                + "。要确认内容请用上面的「把目标读到 AIR」再检查。"
+        } else {
+            errorText = CapJSON.string(dict, "error") ?? json
+        }
+    }
+
+    private func jsonString(_ obj: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
     }
 }

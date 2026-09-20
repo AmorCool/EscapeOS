@@ -126,6 +126,9 @@ enum HostCapabilityService {
         "fs.list",
         "sys.supervised.get",
         "sys.supervised.set",
+        "airlift.air",
+        "airlift.pull",
+        "airlift.overwrite",
         "proc.list",
         "proc.signal",
         "notify.post",
@@ -242,6 +245,9 @@ enum HostCapabilityService {
         case "fs.list":               return fsList(args)
         case "sys.supervised.get":    return supervisedGet()
         case "sys.supervised.set":    return supervisedSet(args)
+        case "airlift.air":           return airliftAir(args)
+        case "airlift.pull":          return airliftPull(args)
+        case "airlift.overwrite":     return airliftOverwrite(args)
         case "proc.list":             return procList()
         case "proc.signal":           return procSignal(args)
         case "notify.post":           return notifyPost(args)
@@ -503,35 +509,314 @@ enum HostCapabilityService {
         return ok(["entries": entries, "count": entries.count, "via": "direct"])
     }
 
+    // MARK: - AIR 工作目录（沙盒外文件的中转站）
+
+    /// AIR 工作目录 —— 沙盒外文件的**中转站**。
+    ///
+    /// ## 为什么是这个路径（不是随便挑的）
+    /// `/var/mobile/Media` 正是 `com.apple.afc` 的**根**（`AFCService` 里有实测结论：
+    /// 「`afc_client_connect_rsd` 根目录 = /var/mobile/media」）。放在它下面的目录，
+    /// 宿主可以用**一条 AFC 连接直接读/写/列/建/删**，不需要跑 airlift。
+    /// 而沙盒外的目标文件只能靠 airlift 搬（一趟 10~20 秒）——
+    /// 把读出来的字节落在 AIR，之后的查看 / 编辑 / 再次覆盖就全是廉价的 AFC 操作。
+    ///
+    /// ## 语义（对齐产品要求）
+    /// · **读**：目标文件 →（airlift 读 + 原字节写回原位）→ 副本落到 `AIR/<扁平化文件名>`
+    /// · **写 / 覆盖**：`AIR/<文件>` 的字节 → airlift 写回目标路径
+    ///
+    /// ## 与 lara 的关系（重要，别误解）
+    /// 「自定义覆盖」这个**产品形态**参考了 `github.com/rooootdev/lara`
+    /// （它的 Custom Overwrite = 「填目标路径 + 选源文件 → 覆盖」）。
+    /// 但**漏洞利用完全不同**：lara 走 DarkSword 内核链、在内核层**原地覆盖字节**
+    /// （所以它有「目标文件必须 ≥ 源文件」的硬限制）；我们走 airlift 的越界写，
+    /// **不要求目标文件更大**、目标甚至可以不存在，也完全不碰内核。
+    static let airDir = "/var/mobile/Media/AIR"
+
+    /// AIR 在 AFC 里的路径（AFC 根 = /var/mobile/Media，所以是相对路径）
+    private static let airAfcPath = "AIR"
+
+    /// 把完整路径**扁平化**成一个可读文件名（AIR 里副本的命名规则）。
+    ///
+    /// 例：`/private/var/mobile/Library/Logs/x.bin`
+    ///  → `private_var_mobile_Library_Logs_x.bin`
+    ///
+    /// 为什么不保留目录层级：AIR 是给人看的**中转站**，保留层级会让「里面有什么」
+    /// 变成要一层层点开；扁平名里带着原路径，一眼能看出是从哪儿来的。
+    static func airFlattenName(for path: String) -> String {
+        let trimmed = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        let flat = trimmed.replacingOccurrences(of: "/", with: "_")
+        return flat.isEmpty ? "unnamed" : flat
+    }
+
+    /// 确保 AIR 目录存在（幂等）。已存在不算失败。
+    private static func airEnsureDirectory() throws {
+        do {
+            try AFCService.shared.makeDirectory(airAfcPath)
+        } catch {
+            // 已存在时 afc_make_directory 会报错 —— 列一下确认目录真在，在就算成功
+            if (try? AFCService.shared.listDirectory(airAfcPath)) == nil {
+                throw error
+            }
+        }
+    }
+
+    private static func airWrite(name: String, data: Data) throws {
+        try airEnsureDirectory()
+        try AFCService.shared.writeFile(data, to: "\(airAfcPath)/\(name)")
+    }
+
+    private static func airRead(name: String) throws -> Data {
+        try AFCService.shared.readFile("\(airAfcPath)/\(name)")
+    }
+
+    private static func airList() throws -> [AFCService.Entry] {
+        // 目录不存在时 AFC 会报错 —— 当成「还没有中转文件」，而不是失败
+        (try? AFCService.shared.listDirectory(airAfcPath)) ?? []
+    }
+
+    /// `airlift.air` —— AIR 目录本身的操作（列 / 读 / 写 / 删 / 确认存在）。
+    ///
+    /// 全是**廉价 AFC**（不用跑 airlift），所以 UI 可以随便调。
+    private static func airliftAir(_ args: [String: Any]) -> (Int32, String) {
+        let op = (args["op"] as? String) ?? "list"
+        let name = args["name"] as? String
+        switch op {
+        case "list":
+            do {
+                let entries = try airList()
+                let list: [[String: Any]] = entries.map { entry in
+                    [
+                        "name": entry.name,
+                        "size": Int(entry.size),
+                        "isDir": entry.isDirectory,
+                    ]
+                }
+                return ok(["dir": airDir, "entries": list, "count": list.count])
+            } catch {
+                return fail("列 AIR 目录失败：\(error.localizedDescription)", extra: ["dir": airDir])
+            }
+        case "mkdir":
+            do {
+                try airEnsureDirectory()
+                return ok(["dir": airDir])
+            } catch {
+                return fail("建 AIR 目录失败：\(error.localizedDescription)", extra: ["dir": airDir])
+            }
+        case "read":
+            guard let name, !name.isEmpty else { return fail("airlift.air 的 op=read 需要 name") }
+            do {
+                let data = try airRead(name: name)
+                guard let text = encode(data, encoding: (args["encoding"] as? String) ?? "base64") else {
+                    return fail("读到了 \(data.count) 字节但编码失败")
+                }
+                return ok(["name": name, "data": text, "size": data.count])
+            } catch {
+                return fail("读 AIR/\(name) 失败：\(error.localizedDescription)")
+            }
+        case "write":
+            guard let name, !name.isEmpty else { return fail("airlift.air 的 op=write 需要 name") }
+            guard let text = args["data"] as? String,
+                  let data = decode(text, encoding: (args["encoding"] as? String) ?? "base64") else {
+                return fail("airlift.air 的 op=write 需要合法的 data（base64 或 utf8）")
+            }
+            do {
+                try airWrite(name: name, data: data)
+                return ok(["name": name, "size": data.count, "path": "\(airDir)/\(name)"])
+            } catch {
+                return fail("写 AIR/\(name) 失败：\(error.localizedDescription)")
+            }
+        case "delete":
+            guard let name, !name.isEmpty else { return fail("airlift.air 的 op=delete 需要 name") }
+            do {
+                try AFCService.shared.removePath("\(airAfcPath)/\(name)")
+                return ok(["name": name])
+            } catch {
+                return fail("删 AIR/\(name) 失败：\(error.localizedDescription)")
+            }
+        default:
+            return fail("airlift.air 不支持的 op「\(op)」（list / mkdir / read / write / delete）")
+        }
+    }
+
+    // MARK: - airlift.pull / airlift.overwrite
+
+    /// 读一个沙盒外文件，并把副本留在 AIR（= 产品说的「读取就把目标文件拷贝到 AIR」）。
+    ///
+    /// ## 为什么是「airlift 读 + 写回 + AFC 存副本」三步
+    /// airlift 的读是**移动不是拷贝** —— 它把文件搬进 Media。所以：
+    /// ① airlift 读（文件离开原位）
+    /// ② airlift 把原字节**写回原位**（原文件回位，这一步不能省）
+    /// ③ AFC 把字节写一份到 `AIR/<扁平名>`（廉价，宿主沙盒里也留一份 `data`）
+    ///
+    /// - Returns: `(ok, json, data)` —— `data` 给上层做后续处理（如改 plist 再覆盖）
+    private static func airPull(target: String, airName: String?) -> (Int32, String, Data?) {
+        let name = airName ?? airFlattenName(for: target)
+        var steps: [String] = []
+
+        // ① airlift 读
+        let read = withAirlift { AirliftExploit.pocReadFile(path: target) }
+        guard read.ok, let data = read.data else {
+            return (1, jsonText(["ok": false,
+                                "error": "airlift 读失败：\(read.summary)",
+                                "steps": read.details, "path": target, "via": "airlift"]), nil)
+        }
+        steps.append("① airlift 读到 \(data.count) 字节（读是移动，文件已进 Media）")
+
+        // ② 写回原位
+        let restore = withAirlift { AirliftExploit.pocWriteFile(path: target, data: data) }
+        steps.append(restore.ok
+            ? "② 已把原字节写回原位置"
+            : "② ⚠️⚠️ 写回原位失败：\(restore.summary)（原文件当前不在原位，"
+              + "原字节备份在模块数据目录 LoginLogs/ 下）")
+
+        // ③ 副本落 AIR
+        var airSaved = false
+        do {
+            try airWrite(name: name, data: data)
+            airSaved = true
+            steps.append("③ 副本已存到 \(airDir)/\(name)")
+        } catch {
+            steps.append("③ ⚠️ 副本存 AIR 失败：\(error.localizedDescription)")
+        }
+
+        guard restore.ok else {
+            return (1, jsonText(["ok": false,
+                                "error": "读到内容了，但**没能把原文件写回原位**",
+                                "steps": steps, "path": target, "via": "airlift",
+                                "size": data.count, "airName": airSaved ? name : ""]), nil)
+        }
+        return (0, jsonText(["ok": true,
+                             "path": target,
+                             "size": data.count,
+                             "airName": airSaved ? name : "",
+                             "airPath": airSaved ? "\(airDir)/\(name)" : "",
+                             "via": "airlift",
+                             "steps": steps]), data)
+    }
+
+    /// `airlift.pull` —— 把沙盒外文件读到 AIR（并返回字节）。
+    private static func airliftPull(_ args: [String: Any]) -> (Int32, String) {
+        guard let target = args["path"] as? String, !target.isEmpty else {
+            return fail("airlift.pull 缺少 path")
+        }
+        let (rc, json, _) = airPull(target: target, airName: args["name"] as? String)
+        return (rc, json)
+    }
+
+    /// 用一段字节**覆盖**一个沙盒外文件（= 「自定义覆盖」的核心动作）。
+    ///
+    /// ## 与 lara 的 Custom Overwrite 的差别（写清楚，别被误解）
+    /// lara 走 DarkSword 内核链、在内核层**原地覆盖字节** ⇒ 必须「目标文件 ≥ 源文件」。
+    /// 我们走 airlift 越界写 ⇒ **没有这个限制**，目标可以比源小/大、甚至可以不存在。
+    ///
+    /// ## 备份语义
+    /// `backup: true`（默认）时，覆盖前先 `airPull` 目标把原内容存到 `AIR/<名>.bak`。
+    /// **备份失败就中止覆盖** —— 产品要求是「先拷贝目标文件，再写入」，不能反着来。
+    ///
+    /// - Returns: `(rc, json, 是否真的写入了)`
+    private static func airOverwrite(target: String, data: Data,
+                                     backup: Bool) -> (Int32, String) {
+        var steps: [String] = []
+
+        if backup {
+            let (rc, json, _) = airPull(target: target, airName: airFlattenName(for: target) + ".bak")
+            steps.append(contentsOf: stringList(parseArgs(json)["steps"]).map { "备份: \($0)" })
+            guard rc == 0 else {
+                steps.append("⚠️ 覆盖前备份失败 —— 按「先备份再覆盖」的要求，**中止覆盖**")
+                return (1, jsonText(["ok": false,
+                                     "error": "备份失败，已中止覆盖（目标未被改动）",
+                                     "steps": steps, "path": target]))
+            }
+            steps.append("备份已存到 \(airDir)/\(airFlattenName(for: target)).bak")
+        }
+
+        let write = withAirlift { AirliftExploit.pocWriteFile(path: target, data: data) }
+        steps.append(contentsOf: write.details.map { "写入: \($0)" })
+        guard write.ok else {
+            return (1, jsonText(["ok": false,
+                                "error": "写入失败：\(write.summary)",
+                                "steps": steps, "path": target, "via": "airlift"]))
+        }
+        steps.append("已写入 \(data.count) 字节（airlift 不校验落点，要确认请再 pull 一次读回）")
+        return (0, jsonText(["ok": true,
+                             "path": target,
+                             "size": data.count,
+                             "via": "airlift",
+                             "backup": backup ? "\(airDir)/\(airFlattenName(for: target)).bak" : "",
+                             "steps": steps]))
+    }
+
+    /// `airlift.overwrite` —— 用 AIR 里的文件（或 App 沙盒里的文件）覆盖任意沙盒外路径。
+    ///
+    /// 参数：
+    /// - `target`：目标绝对路径（必填）
+    /// - `airName`：AIR 里的源文件名（与 `source` 二选一）
+    /// - `source`：App 沙盒内的源文件绝对路径（与 `airName` 二选一）
+    /// - `backup`：覆盖前是否把目标原内容备份到 AIR（默认 `true`）
+    private static func airliftOverwrite(_ args: [String: Any]) -> (Int32, String) {
+        guard let target = args["target"] as? String, !target.isEmpty else {
+            return fail("airlift.overwrite 缺少 target（目标绝对路径）")
+        }
+        let airName = args["airName"] as? String
+        let source = args["source"] as? String
+        let backup = (args["backup"] as? Bool) ?? true
+
+        let data: Data
+        var sourceDesc: String
+        if let airName, !airName.isEmpty {
+            do {
+                data = try airRead(name: airName)
+                sourceDesc = "AIR/\(airName)"
+            } catch {
+                return fail("读 AIR/\(airName) 失败：\(error.localizedDescription)")
+            }
+        } else if let source, !source.isEmpty {
+            guard isInSandbox(source) else {
+                return fail("source 必须是 App 沙盒内的路径（沙盒外的文件请先 airlift.pull 到 AIR 再用 airName）")
+            }
+            guard let d = FileManager.default.contents(atPath: source) else {
+                return fail("读不到沙盒内源文件：\(source)")
+            }
+            data = d
+            sourceDesc = source
+        } else {
+            return fail("airlift.overwrite 需要 airName（AIR 里的文件）或 source（沙盒内文件）之一")
+        }
+
+        let (rc, json) = airOverwrite(target: target, data: data, backup: backup)
+        guard rc == 0 else { return (rc, json) }
+        // 补一句源描述，方便 UI 显示「用谁覆盖了谁」
+        var dict = parseArgs(json)
+        dict["source"] = sourceDesc
+        return (0, jsonText(dict))
+    }
+
+    private static func stringList(_ value: Any?) -> [String] {
+        (value as? [String]) ?? []
+    }
+
     // MARK: - sys.supervised.*
 
-    /// 一次「airlift 读 + 立刻写回原位」的结果.
+    /// 一次「airlift 读 + 写回原位」的结果（`sys.supervised.*` 用）。
     private struct AirliftReadResult {
         let data: Data?
         let summary: String
         let details: [String]
         /// 是否成功把原字节写回原位置
         let restored: Bool
+        /// AIR 里的副本名（备份/中转用）
+        let airName: String?
     }
 
-    /// airlift 读一个沙盒外文件，**并立刻把原字节写回原位**.
+    /// 读一个沙盒外文件，**并立刻把原字节写回原位**，同时在 AIR 留一份副本。
     ///
-    /// ## 为什么「读」必须配一次「写」
-    /// airlift 的读是**移动不是拷贝** —— 设备端把文件搬进 Media，再用 AFC 读出来
-    /// （见 `AirliftExploit.pocReadFile` 的注释）。所以**不写回的话，读一次就等于把
-    /// 用户的文件从原位置搬走了**。这里把「读 + 恢复」当成一个原子操作，
-    /// 让上层可以像用普通读一样用它。
-    ///
-    /// ## 为什么不用 FileManager / bad_query 扩展读
-    /// 本路径属于系统组（SystemGroup）。iOS 26.5/26.6 对 `configurationprofiles`
-    /// 拒绝签发沙盒扩展（`MDMBypassService` 有记），此时 `FileManager.fileExists`
-    /// 会因无法穿越沙盒而返回 false —— 表现为「配置文件不存在」这种**误导性**错误
-    /// （v0.3.481 真机实测踩到）。airlift 不依赖沙盒扩展，所以读写统一走它。
+    /// 这是 `sys.supervised.*` 的读入口 —— 与 `airPull` 同一套机制，
+    /// 只是把 JSON 包装拆掉、直接给上层结构体。
     private static func airliftReadAndRestore(path: String) -> AirliftReadResult {
         let read = withAirlift { AirliftExploit.pocReadFile(path: path) }
         guard read.ok, let data = read.data else {
             return AirliftReadResult(data: nil, summary: read.summary,
-                                     details: read.details, restored: false)
+                                     details: read.details, restored: false, airName: nil)
         }
         let restore = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
         var details = read.details
@@ -539,8 +824,19 @@ enum HostCapabilityService {
             ? "★ 已把原字节写回原位置（读是移动，不写回文件就留在 Media 里了）"
             : "⚠️⚠️ 写回原位置失败：\(restore.summary) —— 文件当前**不在**原位置，"
               + "原字节已备份在模块数据目录 LoginLogs/ 下，请尽快处理")
+
+        // 顺手在 AIR 留一份副本（廉价 AFC；失败不影响读的结果，只记一句）
+        var airName: String?
+        let name = airFlattenName(for: path)
+        do {
+            try airWrite(name: name, data: data)
+            airName = name
+            details.append("★ 副本已存到 \(airDir)/\(name)")
+        } catch {
+            details.append("（副本存 AIR 失败：\(error.localizedDescription)）")
+        }
         return AirliftReadResult(data: data, summary: read.summary,
-                                 details: details, restored: restore.ok)
+                                 details: details, restored: restore.ok, airName: airName)
     }
 
     /// 解析 plist（binary 与 XML 都能解）.
@@ -550,7 +846,7 @@ enum HostCapabilityService {
         return obj as? [String: Any]
     }
 
-    /// 读监督模式状态（走 airlift：读 + 立刻写回原位）.
+    /// 读监督模式状态（走 airlift：读 + 立刻写回原位 + 副本进 AIR）.
     private static func supervisedGet() -> (Int32, String) {
         let path = ConfigPlistURL.cloudConfig.path
         let result = airliftReadAndRestore(path: path)
@@ -570,13 +866,18 @@ enum HostCapabilityService {
                         extra: ["path": path, "via": "airlift",
                                 "steps": result.details, "isSupervised": supervised])
         }
-        return ok([
+        var extra: [String: Any] = [
             "isSupervised": supervised,
             "organizationName": dict["OrganizationName"] as? String ?? "",
             "path": path,
             "via": "airlift",
             "steps": result.details,
-        ])
+        ]
+        if let airName = result.airName {
+            extra["airName"] = airName
+            extra["airPath"] = "\(airDir)/\(airName)"
+        }
+        return ok(extra)
     }
 
     /// 开关监督模式：**全程走 airlift**（读 → 改 → 写 → 读回校验）.
@@ -588,18 +889,18 @@ enum HostCapabilityService {
     /// airlift 不依赖沙盒扩展，所以读写统一走它。
     ///
     /// ## ⚠️ 读是移动，所以每一步失败都必须把原字节写回
-    /// airlift 的读会把文件搬进 Media。本实现把「读 + 恢复」串成闭环：
-    /// 任何一步失败都调 `restoreOriginal()` 把原字节写回原位置，
-    /// 并在返回结果里如实标出**是否恢复成功**。绝不留下「文件不在原位」而用户不知道。
+    /// 见 `airliftReadAndRestore` 与 `restoreOriginal` —— 绝不留下
+    /// 「文件不在原位而用户不知道」这种状态。
     ///
     /// ## 成本
-    /// 一次 airlift 约 10~20 秒，本流程要 4 次（读 / 写 / 读回 / 写回），
-    /// 所以整轮约 40~80 秒。`steps` 会逐条记下来，上层可以边等边看。
+    /// 一次 airlift 约 10~20 秒。`verify: true`（默认）时共 4 次操作
+    /// （读 / 写 / 读回 / 写回），约 40~80 秒；`verify: false` 时 2 次。
     private static func supervisedSet(_ args: [String: Any]) -> (Int32, String) {
         guard let enabled = args["enabled"] as? Bool else {
             return fail("sys.supervised.set 缺少 enabled（布尔）")
         }
         let orgName = (args["organizationName"] as? String) ?? ""
+        let verify = (args["verify"] as? Bool) ?? true
         let path = ConfigPlistURL.cloudConfig.path
         var steps: [String] = []
         /// 原文件字节（① 读回来后填）。声明在 `restoreOriginal` **之前** ——
@@ -607,7 +908,6 @@ enum HostCapabilityService {
         var oldData = Data()
 
         /// 把读到的原字节写回原位置（任何后续步骤失败时的兜底）.
-        /// 返回是否成功 —— 失败意味着用户的文件当前**不在原位**，必须让上层知道.
         func restoreOriginal(_ why: String) -> Bool {
             let restore = withAirlift { AirliftExploit.pocWriteFile(path: path, data: oldData) }
             steps.append(restore.ok
@@ -626,6 +926,17 @@ enum HostCapabilityService {
         }
         oldData = readData
         steps.append("① airlift 读到原文件 \(oldData.count) 字节（读是移动，文件已进 Media）")
+
+        // ①b 原内容立刻存进 AIR —— 这就是「覆盖前先拷贝目标文件」的那份备份
+        var airBackup: String?
+        let backupName = airFlattenName(for: path) + ".bak"
+        do {
+            try airWrite(name: backupName, data: oldData)
+            airBackup = backupName
+            steps.append("①b 原内容已备份到 \(airDir)/\(backupName)")
+        } catch {
+            steps.append("①b ⚠️ 备份到 AIR 失败：\(error.localizedDescription)（继续，但请留意）")
+        }
 
         // ② 解析
         guard let dict = parsePlist(oldData) else {
@@ -656,62 +967,56 @@ enum HostCapabilityService {
         }
         steps.append("④ 新内容 \(newData.count) 字节（binary plist）")
 
-        // ⑤ 本地备份（覆盖前留后路；airlift 写不校验落点，更需要这条）
-        var backupPath: String?
-        let backupDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("CapBackup", isDirectory: true)
-        try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
-        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let backupURL = backupDir.appendingPathComponent("CloudConfigurationDetails-\(stamp).plist")
-        if (try? oldData.write(to: backupURL)) != nil {
-            backupPath = backupURL.path
-            steps.append("⑤ 原文件已备份到 \(backupURL.path)")
-        } else {
-            steps.append("⑤ ⚠️ 原文件备份失败（继续，但请留意）")
-        }
-
-        // ⑥ 写回新内容（airlift）
+        // ⑤ 写回新内容（airlift）
         let write = withAirlift { AirliftExploit.pocWriteFile(path: path, data: newData) }
-        steps.append(contentsOf: write.details.map { "⑥ write: \($0)" })
+        steps.append(contentsOf: write.details.map { "⑤ write: \($0)" })
         guard write.ok else {
             let ok = restoreOriginal("写入失败")
-            return fail("⑥ 写入失败：\(write.summary)（原文件\(ok ? "已" : "**未能**")写回原位）",
+            return fail("⑤ 写入失败：\(write.summary)（原文件\(ok ? "已" : "**未能**")写回原位）",
                         extra: ["path": path, "steps": steps,
-                                "backup": backupPath ?? "", "isSupervised": before])
+                                "backup": airBackup ?? "", "isSupervised": before])
         }
-        steps.append("⑥ 已写入新内容")
-
-        // ⑦ 读回校验 —— **不轻信写入返回值**（airlift 写不校验落点）
-        //    这次读同样会移动文件，所以 airliftReadAndRestore 内部会再写回一次.
-        let check = airliftReadAndRestore(path: path)
-        steps.append(contentsOf: check.details.map { "⑦ \($0)" })
-        guard let checkData = check.data, let checkDict = parsePlist(checkData) else {
-            return fail("⑦ 写入后读回失败，无法确认结果（文件可能不在原位置）",
-                        extra: ["path": path, "steps": steps, "backup": backupPath ?? ""])
-        }
-        let after = checkDict["IsSupervised"] as? Bool
-        steps.append("⑦ 读回：IsSupervised = \(after.map(String.init) ?? "读不到")")
-
-        guard after == enabled else {
-            return fail("⑦ 读回校验不一致：期望 \(enabled)，实际 \(after.map(String.init) ?? "读不到")",
-                        extra: ["path": path, "steps": steps, "backup": backupPath ?? "",
-                                "isSupervised": after ?? before])
-        }
-        guard check.restored else {
-            return fail("⑦ 内容已生效，但**没能把文件写回原位置**（它现在在 Media 里）",
-                        extra: ["path": path, "steps": steps, "backup": backupPath ?? "",
-                                "isSupervised": after ?? before])
-        }
+        steps.append("⑤ 已写入新内容")
 
         var extra: [String: Any] = [
             "path": path,
             "steps": steps,
-            "isSupervised": after ?? enabled,
-            "organizationName": checkDict["OrganizationName"] as? String ?? "",
+            "isSupervised": enabled,
             "via": "airlift",
-            "restored": true,
+            "verified": false,
         ]
-        if let backupPath { extra["backup"] = backupPath }
+        if let airBackup { extra["backup"] = "\(airDir)/\(airBackup)" }
+
+        guard verify else {
+            extra["note"] = "verify=false：写入已发出但**未做读回校验**（airlift 写不校验落点）。"
+                + "要确认请点「重新读取」。"
+            return ok(extra)
+        }
+
+        // ⑥ 读回校验 —— **不轻信写入返回值**
+        //    这次读同样会移动文件，所以 airliftReadAndRestore 内部会再写回一次。
+        let check = airliftReadAndRestore(path: path)
+        steps.append(contentsOf: check.details.map { "⑥ \($0)" })
+        extra["steps"] = steps
+        guard let checkData = check.data, let checkDict = parsePlist(checkData) else {
+            return fail("⑥ 写入后读回失败，无法确认结果（文件可能不在原位置）",
+                        extra: extra)
+        }
+        let after = checkDict["IsSupervised"] as? Bool
+        steps.append("⑥ 读回：IsSupervised = \(after.map(String.init) ?? "读不到")")
+        extra["steps"] = steps
+        extra["isSupervised"] = after ?? enabled
+
+        guard after == enabled else {
+            return fail("⑥ 读回校验不一致：期望 \(enabled)，实际 \(after.map(String.init) ?? "读不到")",
+                        extra: extra)
+        }
+        guard check.restored else {
+            return fail("⑥ 内容已生效，但**没能把文件写回原位置**（它现在在 Media 里）",
+                        extra: extra)
+        }
+        extra["verified"] = true
+        extra["organizationName"] = checkDict["OrganizationName"] as? String ?? ""
         return ok(extra)
     }
 
