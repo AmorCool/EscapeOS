@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.3.483] - 2026-09-20
+
+### ★ 修：宿主导入校验漏了 `ui`，导致「不声明 action」的原生界面模块装不上
+
+真机现象（装 airlift-poc 的 zip）：
+
+```
+- 清单: com.escapeos.airlift-poc v1.0.0 (Airlift PoC)
+- 规范: escape.module.v1 ✓
+! 导入失败: 模块未声明任何 action
+```
+
+**根因**：宿主的导入校验是
+```swift
+guard !module.actions.isEmpty || module.isBinaryModule || module.isLuaModule else { ... }
+```
+—— **漏了 `hasNativeUI`**。airlift-poc 的功能全在原生界面里，`actions` 是空的，
+于是被拒。
+
+**我错在哪**：v0.3.481 加 `ui` 字段时，我同步改了**模块仓库的 `validate.py`**
+（允许 `ui` 模块 actions 为空），但**没改宿主自己的导入校验** ——
+同一个规则有两处实现，我只改了一处。这是典型的「两处校验必须同步」失误。
+
+**修法**：加上 `|| module.hasNativeUI`，并把报错文案改成
+「模块未声明任何 action，也没有 binary / lua / ui 入口」（说清到底缺什么）。
+
+**顺带排查**：把导入路径上所有 `throw ModuleError` 过了一遍，确认
+只有这一处会拦它 —— zip 解析 / module.json / spec 版本 / 签名（它没有
+binary/hotfix，不需要签名）都不会拦。
+
+> ⚠️ **教训**：同一规则在「宿主」和「模块仓库 CI」各有一份实现时，
+> 改一处必须同时改另一处。以后加清单字段，两边都要过一遍。
+
 ## [0.3.482] - 2026-09-20
 
 ### ★★ AIR 中转站 + 自定义覆盖 + 修监督模式读不到文件 + 新图标
