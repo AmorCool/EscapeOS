@@ -374,7 +374,7 @@ private struct AirliftSupervisedTab: View {
                     confirming = true
                 } label: {
                     if running {
-                        HStack { ProgressView(); Text("执行中（airlift 约需 40~80 秒）…") }
+                        HStack { ProgressView(); Text("执行中（airlift 约需 50~100 秒）…") }
                     } else {
                         Label(isSupervised == true ? "关闭监督模式" : "启用监督模式",
                               systemImage: isSupervised == true
@@ -386,8 +386,12 @@ private struct AirliftSupervisedTab: View {
                 if !module.isUsable {
                     Text("模块当前不可用，无法执行。")
                 } else {
-                    Text("全程走 airlift：读 → 改 → 写 → 读回校验，共 4 次操作，"
-                         + "约需 40~80 秒。原文件会自动备份到 App 沙盒。")
+                    Text("全程走 airlift，共 5 次操作，约需 50~100 秒：\n"
+                         + "① 读回原文件（读是移动，文件先进 Media）\n"
+                         + "② 把原字节**写回原位** —— 「先写入拷贝回来的东西」\n"
+                         + "③ 改 IsSupervised → ④ **覆盖**目标文件 —— 「再覆盖目标文件回写」\n"
+                         + "⑤ 读回校验（不轻信写入返回值）\n"
+                         + "原文件会自动备份到 App 沙盒（AIR/<扁平名>.bak）。")
                 }
             }
 
@@ -447,7 +451,7 @@ private struct AirliftSupervisedTab: View {
 
     private func stepIcon(_ step: String) -> String {
         if step.hasPrefix("⚠️") { return "exclamationmark.triangle.fill" }
-        if step.hasPrefix("write:") { return "square.and.pencil" }
+        if step.contains("write:") { return "square.and.pencil" }
         return "checkmark.circle.fill"
     }
 
@@ -495,9 +499,25 @@ private struct AirliftSupervisedTab: View {
             errorText = CapJSON.string(dict, "error") ?? "执行失败，返回内容：\(json)"
         }
 
-        // **不轻信写入返回值**：无论成败都重新读一次真实状态 ——
-        // 这是唯一能证明「系统里到底是什么」的判据.
-        await readState()
+        // **不轻信写入返回值**：无论成败都要有「系统里到底是什么」的独立判据。
+        //
+        // ⚠️ 但**不要**在这里无条件再读一次 —— `sys.supervised.set` 在
+        // `verify: true`（默认）时**内部已经做过读回校验**（`verified = true`，
+        // 返回的 `isSupervised` 就是读回的真实值）。再读一次要多花 2 次 airlift
+        // 操作（约 20~40 秒），而设备端 RSD 隧道在连续多次建连后有卡死的先例
+        // （真机实测第 6 次 AT 会话卡在 conduit 建连、之后整条队列堵死）。
+        // ⇒ 已校验就直接采用读回值；没校验（verify=false）才补读。
+        if CapJSON.bool(dict, "verified") == true,
+           let value = CapJSON.bool(dict, "isSupervised") {
+            isSupervised = value
+            plistPath = CapJSON.string(dict, "path") ?? plistPath
+            if let org = CapJSON.string(dict, "organizationName"), !org.isEmpty {
+                organizationName = org
+            }
+            errorText = nil
+        } else {
+            await readState()
+        }
     }
 
     /// 同步宿主能力放后台线程（airlift 一次十几秒）.

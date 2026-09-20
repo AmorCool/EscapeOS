@@ -912,7 +912,7 @@ enum HostCapabilityService {
         return ok(extra)
     }
 
-    /// 开关监督模式：**全程走 airlift**（读 → 改 → 写 → 读回校验）.
+    /// 开关监督模式：**全程走 airlift**（读 → 写回 → 覆盖 → 读回校验）.
     ///
     /// ## 为什么读也要走 airlift
     /// 本路径属于系统组（SystemGroup）。iOS 26.5/26.6 对 `configurationprofiles`
@@ -920,13 +920,37 @@ enum HostCapabilityService {
     /// 返回 false，表现为「配置文件不存在」这种误导性错误 —— v0.3.481 真机实测踩到）。
     /// airlift 不依赖沙盒扩展，所以读写统一走它。
     ///
+    /// ## ★★★ 覆盖写入的正确顺序（v0.3.495 真机定案）
+    ///
+    /// 用户原话：**「我们覆盖写入动作不能直接移动，是先写入拷贝回来的东西，
+    /// 再覆盖目标文件回写」**。落地成：
+    ///
+    /// ```
+    /// ① airlift 读            → 原字节（读是**移动**，目标位置此刻是空的）
+    /// ② airlift 写回原字节    → 「先写入拷贝回来的东西」：目标回位、内容 = 原文
+    /// ③ 内存里改 IsSupervised → newData
+    /// ④ airlift 写 newData    → 「再覆盖目标文件回写」：这一次是**覆盖已存在文件**
+    /// ⑤ 读回校验 + 写回       → 不轻信写入返回值
+    /// ```
+    ///
+    /// ### 真机证据（2026-09-20，同一台设备、同一条路径）
+    /// · `airlift.overwrite`（内部 = `airPull`[读 + **写回**] → 写）**成功**：
+    ///   CrashReporter 里一个 98480 字节的**已存在**文件被覆盖成 31 字节
+    ///   （AFC 回读确认 size=31）⇒ **覆盖已存在文件这件事本身是成立的**。
+    /// · 旧版 `supervisedSet`（读 **不写回** → 直接写）**失败**：
+    ///   `airlift_at2.txt` 判据「`airlift-src-*/payload` 已被搬走 = 否（第 2 次 move 没发生）」，
+    ///   而 `airlift-link-*/<leaf>`（穿过 symlink 看到的就是真实目标）**存在且 412 字节**
+    ///   ⇒ 目标根本没被改动。
+    /// ⇒ **差别就在「写回」那一步。少了它，后面的覆盖不成立。**
+    ///
     /// ## ⚠️ 读是移动，所以每一步失败都必须把原字节写回
-    /// 见 `airliftReadAndRestore` 与 `restoreOriginal` —— 绝不留下
-    /// 「文件不在原位而用户不知道」这种状态。
+    /// 见 `restoreOriginal` —— 绝不留下「文件不在原位而用户不知道」这种状态。
     ///
     /// ## 成本
-    /// 一次 airlift 约 10~20 秒。`verify: true`（默认）时共 4 次操作
-    /// （读 / 写 / 读回 / 写回），约 40~80 秒；`verify: false` 时 2 次。
+    /// 一次 airlift 约 10~20 秒。`verify: true`（默认）共 5 次操作
+    /// （读 / 写回 / 写 / 读回 / 写回），约 50~100 秒；`verify: false` 共 3 次。
+    /// ⚠️ 操作次数越少越好 —— 设备端 RSD 隧道在连续多次建连后有卡死的先例
+    /// （真机实测：第 6 次 AT 会话卡在 conduit 建连，之后整条 `protocolQueue` 堵死）。
     private static func supervisedSet(_ args: [String: Any]) -> (Int32, String) {
         guard let enabled = args["enabled"] as? Bool else {
             return fail("sys.supervised.set 缺少 enabled（布尔）")
@@ -939,7 +963,10 @@ enum HostCapabilityService {
         /// Swift 的嵌套函数不能引用在它之后声明的局部变量（"captures before declared"）.
         var oldData = Data()
 
-        /// 把读到的原字节写回原位置（任何后续步骤失败时的兜底）.
+        /// 把读到的原字节写回原位置（「覆盖写入」那一步失败时的兜底）.
+        ///
+        /// ⚠️ 只有在 ② 已经成功写回之后才需要它 —— 那时目标内容本来就是原文，
+        /// 再写一遍是幂等的。真正需要它的是 ⑦ 失败的情形（写了一半）。
         func restoreOriginal(_ why: String) -> Bool {
             let restore = withAirlift { AirliftExploit.pocWriteFile(path: path, data: oldData) }
             steps.append(restore.ok
@@ -949,70 +976,84 @@ enum HostCapabilityService {
             return restore.ok
         }
 
-        // ① 读原文件（airlift）
-        let read = withAirlift { AirliftExploit.pocReadFile(path: path) }
-        guard read.ok, let readData = read.data else {
-            return fail("① airlift 读失败：\(read.summary)",
-                        extra: ["path": path, "via": "airlift",
-                                "steps": steps + read.details])
+        // ★★★ ①②③ 读 + **写回** + 备份 —— **直接复用 `airPull`**（v0.3.495 真机定案）。
+        //
+        // ## 为什么复用而不是自己拼三步
+        // `airPull` 就是**已在真机上验证可行**的那条序列：它和「自定义覆盖」
+        // （`airlift.overwrite`，内部 = `airPull` → 写）用的是**同一段代码**。
+        //
+        // ## 2026-09-20 真机对照（同一台设备、同一时间段）
+        // · `airlift.overwrite {backup:true}`（= `airPull`[读 + **写回**] → 写）**成功**：
+        //   CrashReporter 里一个 98480 字节的**已存在**文件被覆盖成 31 字节
+        //   （AFC 回读确认 size=31）⇒ 「覆盖已存在文件」这件事本身成立。
+        // · 旧版 `supervisedSet`（读 **不写回** → 直接写）**失败**：
+        //   `airlift_at2.txt` 判据「`airlift-src-*/payload` 已被搬走 = 否（第 2 次 move 没发生）」，
+        //   而穿过 symlink 看到的真实目标**仍是 412 字节的原文**。
+        // ⇒ 结构性差别只有那一次「写回」。
+        //
+        // ## 用户原话（这就是需求）
+        // **「我们覆盖写入动作不能直接移动，是先写入拷贝回来的东西，
+        //    再覆盖目标文件回写」**
+        //
+        // ## 步骤编号沿用 `airPull` 自己的 ①②③
+        //   ① airlift 读到 N 字节（读是移动，文件已进 Media）
+        //   ② 已把原字节写回原位置   ← **「先写入拷贝回来的东西」**
+        //   ③ 副本已存到 AIR/<名>.bak（AFC；放在这对读写**之后**，不夹在中间）
+        let backupName = airFlattenName(for: path) + ".bak"
+        let (pullRC, pullJSON, pullData) = airPull(target: path, airName: backupName)
+        let pullDict = parseArgs(pullJSON)
+        steps.append(contentsOf: stringList(pullDict["steps"]))
+        guard pullRC == 0, let readData = pullData else {
+            return fail("①② airlift 读 + 写回失败："
+                        + ((pullDict["error"] as? String) ?? "未知错误"),
+                        extra: ["path": path, "via": "airlift", "steps": steps])
         }
         oldData = readData
-        steps.append("① airlift 读到原文件 \(oldData.count) 字节（读是移动，文件已进 Media）")
+        let airBackup: String? = (pullDict["airName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
 
-        // ★★★ v0.3.493：**备份到 AIR 挪到最后做**（原来插在读与写之间）。
-        //
-        // 为什么必须挪：AIR 备份走的是 **AFC**（另一条隧道/另一条服务会话），
-        // 而 airlift 的「读」和「写」是**两次 AT 会话操作** ——
-        // **在它们之间插一次 AFC 操作，第 2 次 airlift 操作就会失败**
-        // （真机实测：`supervisedSet` 报「第 2 次 move 没发生」，
-        //   而 `airliftReadAndRestore` 因为读/写紧挨着、AFC 放在最后 ⇒ 一直成功）。
-        //
-        // 数据安全不受影响：`pocReadFile` 读的时候已经把原字节备份在
-        // `LoginLogs/airlift_read_<token>.bin`，AIR 这份是**第二重**备份。
-        //
-        // 位置：放在**校验之后**（见 ⑤b），这样读→写、读→写两对 airlift 操作
-        // 全程相邻，中间不夹任何 AFC 调用。
-        var airBackup: String?
-
-        // ② 解析
+        // ④ 解析
         guard let dict = parsePlist(oldData) else {
             let ok = restoreOriginal("原内容不是合法 plist")
-            return fail("① 读到的内容不是合法 plist（原文件\(ok ? "已" : "**未能**")写回原位）",
+            return fail("④ 读到的内容不是合法 plist（原文件\(ok ? "已" : "**未能**")写回原位）",
                         extra: ["path": path, "via": "airlift", "steps": steps])
         }
         let before = dict["IsSupervised"] as? Bool ?? false
-        steps.append("② 解析成功，当前 IsSupervised = \(before)")
+        steps.append("④ 解析成功，当前 IsSupervised = \(before)")
 
-        // ③ 改字段
+        // ⑤ 改字段
         let mutable = NSMutableDictionary(dictionary: dict)
         mutable["IsSupervised"] = enabled
         if enabled, !orgName.isEmpty {
             mutable["OrganizationName"] = orgName
-            steps.append("③ OrganizationName = \(orgName)")
+            steps.append("⑤ OrganizationName = \(orgName)")
         } else if !enabled {
             mutable.removeObject(forKey: "OrganizationName")
-            steps.append("③ 已移除 OrganizationName")
+            steps.append("⑤ 已移除 OrganizationName")
         }
 
-        // ④ 序列化
+        // ⑥ 序列化
         guard let newData = try? PropertyListSerialization.data(
             fromPropertyList: mutable, format: .binary, options: 0) else {
             let ok = restoreOriginal("plist 序列化失败")
             return fail("plist 序列化失败（原文件\(ok ? "已" : "**未能**")写回原位）",
                         extra: ["path": path, "steps": steps])
         }
-        steps.append("④ 新内容 \(newData.count) 字节（binary plist）")
+        steps.append("⑥ 新内容 \(newData.count) 字节（binary plist）")
 
-        // ⑤ 写回新内容（airlift）
+        // ⑦ 覆盖写入新内容（airlift）—— **「再覆盖目标文件回写」**
+        //
+        // ⚠️ 这一步**只有在 ② 已经把原字节写回原位之后**才成立 —— 目标必须「在位」，
+        // 这才是一次真正的**覆盖**（见上面 ①②③ 处的真机对照实验）。
         let write = withAirlift { AirliftExploit.pocWriteFile(path: path, data: newData) }
-        steps.append(contentsOf: write.details.map { "⑤ write: \($0)" })
+        steps.append(contentsOf: write.details.map { "⑦ write: \($0)" })
         guard write.ok else {
-            let ok = restoreOriginal("写入失败")
-            return fail("⑤ 写入失败：\(write.summary)（原文件\(ok ? "已" : "**未能**")写回原位）",
+            let ok = restoreOriginal("覆盖写入失败")
+            return fail("⑦ 覆盖写入失败：\(write.summary)"
+                        + "（原文件\(ok ? "已" : "**未能**")写回原位）",
                         extra: ["path": path, "steps": steps,
                                 "backup": airBackup ?? "", "isSupervised": before])
         }
-        steps.append("⑤ 已写入新内容")
+        steps.append("⑦ 已覆盖写入新内容 —— 「再覆盖目标文件回写」")
 
         var extra: [String: Any] = [
             "path": path,
@@ -1029,37 +1070,32 @@ enum HostCapabilityService {
             return ok(extra)
         }
 
-        // ⑥ 读回校验 —— **不轻信写入返回值**
+        // ⑧ 读回校验 —— **不轻信写入返回值**
         //    这次读同样会移动文件，所以 airliftReadAndRestore 内部会再写回一次。
         let check = airliftReadAndRestore(path: path)
-        steps.append(contentsOf: check.details.map { "⑥ \($0)" })
+        steps.append(contentsOf: check.details.map { "⑧ \($0)" })
         extra["steps"] = steps
         guard let checkData = check.data, let checkDict = parsePlist(checkData) else {
-            return fail("⑥ 写入后读回失败，无法确认结果（文件可能不在原位置）",
+            return fail("⑧ 写入后读回失败，无法确认结果（文件可能不在原位置）",
                         extra: extra)
         }
         let after = checkDict["IsSupervised"] as? Bool
-        steps.append("⑥ 读回：IsSupervised = \(after.map(String.init) ?? "读不到")")
+        steps.append("⑧ 读回：IsSupervised = \(after.map(String.init) ?? "读不到")")
         extra["steps"] = steps
         extra["isSupervised"] = after ?? enabled
 
         guard after == enabled else {
-            return fail("⑥ 读回校验不一致：期望 \(enabled)，实际 \(after.map(String.init) ?? "读不到")",
+            return fail("⑧ 读回校验不一致：期望 \(enabled)，实际 \(after.map(String.init) ?? "读不到")",
                         extra: extra)
         }
         guard check.restored else {
-            return fail("⑥ 内容已生效，但**没能把文件写回原位置**（它现在在 Media 里）",
+            return fail("⑧ 内容已生效，但**没能把文件写回原位置**（它现在在 Media 里）",
                         extra: extra)
         }
-        // ⑤b 原内容备份到 AIR（**放在两次 airlift 操作之后**，见上面 ① 处的说明）
-        let backupName = airFlattenName(for: path) + ".bak"
-        do {
-            try airWrite(name: backupName, data: oldData)
-            airBackup = backupName
-            steps.append("⑤b 原内容已备份到 \(airDir)/\(backupName)")
-        } catch {
-            steps.append("⑤b ⚠️ 备份到 AIR 失败：\(error.localizedDescription)（继续，但请留意）")
-        }
+        // 原内容备份已在 ①②③ 那步（`airPull` 的 ③）落到 AIR，这里不重复做。
+        // ⚠️ 顺序说明：AIR 那份是 **AFC** 写的，而 ①读/②写 与 ⑧读/⑧写 是两对
+        // **紧挨着的 airlift 操作** —— AFC 只落在两对之间，绝不夹在任一对内部
+        // （v0.3.493 真机实测：夹在中间会让第 2 次 move 不发生）。
 
         extra["verified"] = true
         extra["organizationName"] = checkDict["OrganizationName"] as? String ?? ""

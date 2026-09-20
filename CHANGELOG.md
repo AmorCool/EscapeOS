@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.3.495] - 2026-09-20
+
+### ★★★ 修「监督模式」—— 覆盖写入必须**先写回再覆盖**（用户指出的，真机对照实验证实）
+
+用户原话：
+
+> **「我们覆盖写入动作不能直接移动，是先写入拷贝回来的东西，再覆盖目标文件回写」**
+
+#### 真机对照实验（同一台设备、同一时间段，2026-09-20）
+
+| 流程 | 结果 |
+|---|---|
+| `airlift.overwrite {backup:false}`（**裸写**一个已存在的 98480 字节文件） | ✅ **成功**（AFC 回读 size=31） |
+| `airlift.overwrite {backup:true}`（= `airPull`[读 + **写回**] → 写） | ✅ **成功** |
+| 旧版 `supervisedSet`（读 **不写回** → 直接写） | ❌ **失败** |
+
+旧版失败的判据（设备 `LoginLogs/airlift_at2.txt`）：
+```
+airlift-link-DB9A2FD1/CloudConfigurationDetails.plist → **存在**（成功 size=412 st_ifmt=S_IFREG）
+airlift-src-DB9A2FD1/payload 已被搬走 = 否（第 2 次 move 没发生）
+⇒ 目标根本没被改动
+```
+（`airlift-link-*/<leaf>` 穿过 symlink 看到的就是**真实目标** —— AFC 的 `get_file_info`
+会跟随中间那一段 symlink，所以这条 `size=412` 就是「目标没变」的直接证据。）
+
+⇒ **唯一的结构性差别就是那一次「写回」。** 结论：**覆盖 = ① 读（把文件搬进 Media）
+→ ② 把原字节写回原位（让目标「在位」）→ ③ 才写新内容**。
+
+#### 改法
+
+`sys.supervisedSet` **直接复用 `airPull`**（= 已在真机上验证可行、与「自定义覆盖」同一段代码）：
+
+```
+① airlift 读            → 原字节（读是移动，文件已进 Media）
+② airlift 写回原字节    ← 「先写入拷贝回来的东西」
+③ 副本存 AIR/*.bak（AFC，落在这对读写**之后**，不夹在中间）
+④ 解析 → ⑤ 改 IsSupervised → ⑥ 序列化
+⑦ airlift 覆盖写入新内容 ← 「再覆盖目标文件回写」
+⑧ 读回校验（不轻信写入返回值）
+```
+
+顺带：`verify: true` 时返回值里已有 `verified = true` + 读回的 `isSupervised`
+⇒ **模块界面不再多跑一次 `sys.supervised.get`**（省 2 次 airlift ≈ 20~40 秒）。
+真机实测第 6 次 AT 会话会卡在 conduit 建连、之后整条 `protocolQueue` 堵死
+⇒ **操作次数本身就是风险，能省则省**。
+
+模块 `com.escapeos.airlift-poc` → **1.0.1**（`minHostVersion` = 0.3.495）。
+
 ## [0.3.494] - 2026-09-20
 
 ### 修编译错误：Swift 字符串字面量里混进了**真实换行**
