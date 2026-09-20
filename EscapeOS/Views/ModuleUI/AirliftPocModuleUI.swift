@@ -5,7 +5,7 @@
 //  v0.3.481：airlift-poc 模块的原生界面（概览 / 监督模式 / 日志）.
 //
 //  ## 这个模块为什么这么写
-//  它是**第一个**用 `escape.host.v1` 的模块。在此之前，任何需要「沙盒外读写 /
+//  它是**第一个**用 `escape.host.v1` 的模块.在此之前，任何需要「沙盒外读写 /
 //  改系统设置」的模块都得自己把整套漏洞利用重写一遍 —— airlift-poc 刻意**不**那么做：
 //  它只声明 `requires`，然后调宿主能力（`HostCapabilityService.call`）.
 //  好处是将来漏洞链被替换（bad_query → airlift → 下一个），本文件**一行都不用改**.
@@ -129,9 +129,9 @@ private enum CapJSON {
 /// ## 为什么要它（用户原话：「一堆文字我看着就烦」）
 /// 宿主能力返回的 `steps` 里混了大量**排障用**的技术细节：
 /// `★ 判据①②③ …`、`books staging …`、`Grappa 实验 …`、`清单第 N 条命中 …`、
-/// `Media 根前若干项 …`。这些对**看日志排障**有用，对**看界面**就是噪音。
-/// ⇒ 默认只显示「编号步骤 / 结论 / 警告」，其余折进「显示全部 N 行」。
-/// ⇒ 完整原文照样在「日志」tab 与 `LoginLogs/` 里，**没丢**，只是不糊在脸上。
+/// `Media 根前若干项 …`.这些对**看日志排障**有用，对**看界面**就是噪音.
+/// ⇒ 默认只显示「编号步骤 / 结论 / 警告」，其余折进「显示全部 N 行」.
+/// ⇒ 完整原文照样在「日志」tab 与 `LoginLogs/` 里，**没丢**，只是不糊在脸上.
 struct CompactStepsView: View {
     let steps: [String]
     let title: String
@@ -183,9 +183,9 @@ struct CompactStepsView: View {
 ///
 /// ## 为什么要清（用户原话）
 /// 「**注释不要给我看给你自己看的**」—— 能力返回的步骤里带大量**给开发者**的解释：
-/// `⚠️`、`★`、markdown 的 `**` 与反引号、以及括号里那一长串「为什么 / 判据 / 边界」。
-/// 那些在**日志**里有用，在**界面**上就是噪音。
-/// ⇒ 界面上只留「做了什么、成没成」；**原文照样能在展开后的「全部行」和日志里看到**。
+/// `⚠️`、`★`、markdown 的 `**` 与反引号、以及括号里那一长串「为什么 / 判据 / 边界」.
+/// 那些在**日志**里有用，在**界面**上就是噪音.
+/// ⇒ 界面上只留「做了什么、成没成」；**原文照样能在展开后的「全部行」和日志里看到**.
 enum StepText {
     static func clean(_ raw: String) -> String {
         var t = raw
@@ -291,11 +291,6 @@ func registerAirliftPocModuleUI() {
                         systemImage: "square.and.arrow.up.on.square") { m in
                 AirliftOverwriteTab(module: m)
             },
-            ModuleUITab(id: "dirbrowse",
-                        title: "目录浏览",
-                        systemImage: "list.bullet.indent") { m in
-                AirliftDirTab(module: m)
-            },
             ModuleUITab(id: "files",
                         title: "文件浏览",
                         systemImage: "folder") { m in
@@ -385,10 +380,10 @@ private struct AirliftOverviewTab: View {
             }
 
             Section {
-                Text("本模块通过宿主能力接口工作，不自己实现漏洞利用。"
+                Text("本模块通过宿主能力接口工作，不自己实现漏洞利用."
                      + "沙盒外操作依赖 airlift，而 airlift 只能读写**单个文件**、"
-                     + "无法枚举目录，所以「列目录」这类能力只支持 App 沙盒内路径。"
-                     + "监督模式需要宿主 v0.3.481+。")
+                     + "无法枚举目录，所以「列目录」这类能力只支持 App 沙盒内路径."
+                     + "监督模式需要宿主 v0.3.481+.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
@@ -512,7 +507,7 @@ private struct AirliftSupervisedTab: View {
             } footer: {
                 Text("读取走 airlift 漏洞利用（沙盒外），单次约 10~20 秒；"
                      + "airlift 的「读」是移动不是拷贝，所以读完会立刻把原文件写回原位，"
-                     + "整体约需 20~40 秒。")
+                     + "整体约需 20~40 秒.")
             }
 
             Section("组织名称（可选）") {
@@ -536,15 +531,15 @@ private struct AirliftSupervisedTab: View {
                 .disabled(running || loading || isSupervised == nil || !module.isUsable)
             } footer: {
                 if !module.isUsable {
-                    Text("模块当前不可用，无法执行。")
+                    Text("模块当前不可用，无法执行.")
                 } else {
-                    Text("真机实测（v0.3.496）：这个**目标做不到**。\n"
+                    Text("真机实测（v0.3.496）：这个**目标做不到**.\n"
                          + "`CloudConfigurationDetails.plist` 在 SystemGroup 容器里，"
                          + "沙盒**只允许读/移出、拒绝创建/写入** —— 读得到（412 字节），"
-                         + "但覆盖读回一点没变，连在同一个目录里**新建**一个文件都建不出来。\n"
+                         + "但覆盖读回一点没变，连在同一个目录里**新建**一个文件都建不出来.\n"
                          + "对照：`/var/mobile/Library/**` 下的文件**可以**正常覆盖"
-                         + "（CrashReporter 实测 202→32 字节；Logs、Preferences 新建都成功）。\n"
-                         + "流程已按「先写回拷贝的内容、再覆盖」改对，但**目标本身不允许写入**。")
+                         + "（CrashReporter 实测 202→32 字节；Logs、Preferences 新建都成功）.\n"
+                         + "流程已按「先写回拷贝的内容、再覆盖」改对，但**目标本身不允许写入**.")
                 }
             }
 
@@ -573,9 +568,9 @@ private struct AirliftSupervisedTab: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将修改系统配置文件 CloudConfigurationDetails.plist 的 IsSupervised。"
-                 + "这是不可逆的调试操作，可能影响系统行为，请确认已了解风险。"
-                 + "原文件会自动备份到 App 沙盒。")
+            Text("将修改系统配置文件 CloudConfigurationDetails.plist 的 IsSupervised."
+                 + "这是不可逆的调试操作，可能影响系统行为，请确认已了解风险."
+                 + "原文件会自动备份到 App 沙盒.")
         }
     }
 
@@ -623,14 +618,14 @@ private struct AirliftSupervisedTab: View {
             errorText = CapJSON.string(dict, "error") ?? "执行失败，返回内容：\(json)"
         }
 
-        // **不轻信写入返回值**：无论成败都要有「系统里到底是什么」的独立判据。
+        // **不轻信写入返回值**：无论成败都要有「系统里到底是什么」的独立判据.
         //
         // ⚠️ 但**不要**在这里无条件再读一次 —— `sys.supervised.set` 在
         // `verify: true`（默认）时**内部已经做过读回校验**（`verified = true`，
-        // 返回的 `isSupervised` 就是读回的真实值）。再读一次要多花 2 次 airlift
+        // 返回的 `isSupervised` 就是读回的真实值）.再读一次要多花 2 次 airlift
         // 操作（约 20~40 秒），而设备端 RSD 隧道在连续多次建连后有卡死的先例
-        // （真机实测第 6 次 AT 会话卡在 conduit 建连、之后整条队列堵死）。
-        // ⇒ 已校验就直接采用读回值；没校验（verify=false）才补读。
+        // （真机实测第 6 次 AT 会话卡在 conduit 建连、之后整条队列堵死）.
+        // ⇒ 已校验就直接采用读回值；没校验（verify=false）才补读.
         if CapJSON.bool(dict, "verified") == true,
            let value = CapJSON.bool(dict, "isSupervised") {
             isSupervised = value
@@ -679,7 +674,7 @@ private struct AirliftLogTab: View {
             if entries.isEmpty && memory.entries.isEmpty {
                 ContentUnavailableView("还没有调用记录",
                                        systemImage: "text.alignleft",
-                                       description: Text("在任意 tab 里操作一次就会出现。\n"
+                                       description: Text("在任意 tab 里操作一次就会出现.\n"
                                                          + "（也包含通过 SSH `cap` 发起的调用）"))
             } else {
                 List {
@@ -697,7 +692,7 @@ private struct AirliftLogTab: View {
                         }
                     } footer: {
                         Text("日志落在 App 沙盒的 CapabilityLog/run.log，"
-                             + "**重启 App 不会丢**，SSH 的 cap 调用也在里面。")
+                             + "**重启 App 不会丢**，SSH 的 cap 调用也在里面.")
                     }
 
                     ForEach(entries) { entry in
@@ -733,8 +728,8 @@ private struct AirliftLogTab: View {
     /// 读持久化日志（`Documents/CapabilityLog/run.log`）的末尾.
     ///
     /// 为什么不只用内存里那份：内存里的随 App 重启清空，
-    /// 而且 SSH 的 `cap` 调用**不经过** UI 的 `AirliftPocLog` ⇒ 看不到。
-    /// 日志文件两者都有（宿主侧统一记的）。
+    /// 而且 SSH 的 `cap` 调用**不经过** UI 的 `AirliftPocLog` ⇒ 看不到.
+    /// 日志文件两者都有（宿主侧统一记的）.
     private func reload() async {
         loading = true
         defer { loading = false }
@@ -784,14 +779,14 @@ private struct AirliftLogTab: View {
 ///
 /// ## 产品形态参考 lara，但漏洞利用完全不同（别误解）
 /// 界面形态参考 `github.com/rooootdev/lara` 的 Custom Overwrite：
-/// 「填目标路径 + 选源文件 → 覆盖」。但**机制完全不同**：
+/// 「填目标路径 + 选源文件 → 覆盖」.但**机制完全不同**：
 /// · lara 走 DarkSword 内核链，在**内核层原地覆盖字节** ⇒ 硬性要求「目标文件 ≥ 源文件」；
-/// · 我们走 airlift 的越界写 ⇒ **没有这个限制**，目标可以比源小/大、甚至可以不存在。
+/// · 我们走 airlift 的越界写 ⇒ **没有这个限制**，目标可以比源小/大、甚至可以不存在.
 ///
 /// ## 为什么要经过 AIR
 /// `/var/mobile/Media/AIR` 是 AFC 的根目录之下，宿主能用**一条 AFC 连接**廉价读写；
-/// 而沙盒外的目标只能靠 airlift 搬（一趟 10~20 秒）。所以流程是：
-/// **源文件先落进 AIR → 再用 airlift 覆盖目标**。这样源文件的查看/替换/删除都是瞬时的。
+/// 而沙盒外的目标只能靠 airlift 搬（一趟 10~20 秒）.所以流程是：
+/// **源文件先落进 AIR → 再用 airlift 覆盖目标**.这样源文件的查看/替换/删除都是瞬时的.
 private struct AirliftOverwriteTab: View {
     let module: EscapeModule
 
@@ -832,20 +827,20 @@ private struct AirliftOverwriteTab: View {
             } header: {
                 Text("目标路径")
             } footer: {
-                Text("读取会把目标文件拉一份副本到 AIR（原文件读后立刻写回原位，不会被搬走）。")
+                Text("读取会把目标文件拉一份副本到 AIR（原文件读后立刻写回原位，不会被搬走）.")
             }
 
             Section("源文件（AIR 中转站）") {
                 if loadingList {
                     HStack { ProgressView(); Text("读取 AIR 目录…") }
                 } else if airFiles.isEmpty {
-                    Text("AIR 里还没有文件。点下面「从本机选择文件」导入，或先用上面的「把目标读到 AIR」。")
+                    Text("AIR 里还没有文件.点下面「从本机选择文件」导入，或先用上面的「把目标读到 AIR」.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                 } else {
                     // 每行是「选择」+「删除」两个**平级**按钮，不用 `ForEach(...).onDelete` ——
                     // onDelete 要求 ForEach 是 List/Form 的直接子视图，而这里它在 if/else 分支里，
-                    // 滑动删除不可靠（甚至不出现）。
+                    // 滑动删除不可靠（甚至不出现）.
                     ForEach(airFiles) { file in
                         HStack(spacing: 10) {
                             Button {
@@ -911,9 +906,9 @@ private struct AirliftOverwriteTab: View {
                 }
                 .disabled(working || !canOverwrite)
 
-                // ★ v0.3.497：把 `airlift.delete` 也接出来 —— 读写删三件套补齐。
+                // ★ v0.3.497：把 `airlift.delete` 也接出来 —— 读写删三件套补齐.
                 // 机制与读同源：设备把文件**搬进 Media**（原位置那一刻就空了），
-                // 实现里**先确认备份落盘、再删副本** ⇒ 文件彻底消失。
+                // 实现里**先确认备份落盘、再删副本** ⇒ 文件彻底消失.
                 Button(role: .destructive) {
                     confirmingDelete = true
                 } label: {
@@ -924,7 +919,7 @@ private struct AirliftOverwriteTab: View {
                 if let selectedAirName {
                     Text("将用 AIR/\(selectedAirName) 覆盖 \(target.isEmpty ? "（未填目标路径）" : target)")
                 } else {
-                    Text("先选一个源文件，再填目标路径。")
+                    Text("先选一个源文件，再填目标路径.")
                 }
             }
 
@@ -940,17 +935,17 @@ private struct AirliftOverwriteTab: View {
         }
         .task { await refreshAirList() }
         // ★★★ v0.3.496：改用**统一文件选择调用点** `SharedDocumentPicker`
-        //（= 全 App 唯一的导入路径，见 `SharedDocumentPicker.swift` 头注释）。
+        //（= 全 App 唯一的导入路径，见 `SharedDocumentPicker.swift` 头注释）.
         //
         // ## 原来为什么「选完没反应」（用户实测报的现象）
-        // 这里原来是 `.fileImporter(...)` + `startAccessingSecurityScopedResource()`。
+        // 这里原来是 `.fileImporter(...)` + `startAccessingSecurityScopedResource()`.
         // `.fileImporter` 返回的是 **security-scoped URL**，而 LiveContainer 的访客
         // 沙盒**会拒掉** `startAccessingSecurityScopedResource()`（除非宿主开了
-        // "fix file picker" 钩子）⇒ `Data(contentsOf:)` 直接失败、界面静默什么都不做。
+        // "fix file picker" 钩子）⇒ `Data(contentsOf:)` 直接失败、界面静默什么都不做.
         //
         // `SharedDocumentPicker` 用 `UIDocumentPickerViewController(asCopy: true)` ——
         // **系统先把文件拷进 App 沙盒**再回调 ⇒ 拿到的 URL 就在沙盒里，
-        // 不需要 security-scoped 那一套（也不再需要 `startAccessing…`）。
+        // 不需要 security-scoped 那一套（也不再需要 `startAccessing…`）.
         .documentPicker(isPresented: $importing,
                         allowedTypes: [.item],
                         allowsMultipleSelection: false) { urls in
@@ -966,9 +961,9 @@ private struct AirliftOverwriteTab: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将用 AIR/\(selectedAirName ?? "?") 的字节覆盖 \(target)。"
-                 + (backupFirst ? "覆盖前会先把目标原内容备份到 AIR（.bak）。" : "已关闭备份。")
-                 + " 这是不可逆操作，请确认目标路径无误。")
+            Text("将用 AIR/\(selectedAirName ?? "?") 的字节覆盖 \(target)."
+                 + (backupFirst ? "覆盖前会先把目标原内容备份到 AIR（.bak）." : "已关闭备份.")
+                 + " 这是不可逆操作，请确认目标路径无误.")
         }
         .confirmationDialog(
             "确认删除目标文件？",
@@ -980,10 +975,10 @@ private struct AirliftOverwriteTab: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将从设备上**彻底删除** \(target)。"
+            Text("将从设备上**彻底删除** \(target)."
                  + "机制：设备先把文件搬进 Media（原位置那一刻就空了），"
-                 + "再把 Media 里的副本删掉 ⇒ 文件消失。"
-                 + "备份会留在 App 沙盒的 LoginLogs/ 下（**但请自行确认可恢复**）。")
+                 + "再把 Media 里的副本删掉 ⇒ 文件消失."
+                 + "备份会留在 App 沙盒的 LoginLogs/ 下（**但请自行确认可恢复**）.")
         }
     }
 
@@ -1122,7 +1117,7 @@ private struct AirliftOverwriteTab: View {
         if CapJSON.bool(dict, "ok") == true {
             okText = "已覆盖 \(CapJSON.string(dict, "path") ?? "")"
                 + "（\(CapJSON.int(dict, "size") ?? 0) 字节）"
-                + "。要确认内容请用上面的「把目标读到 AIR」再检查。"
+                + ".要确认内容请用上面的「把目标读到 AIR」再检查."
         } else {
             errorText = CapJSON.string(dict, "error") ?? json
         }
@@ -1134,334 +1129,26 @@ private struct AirliftOverwriteTab: View {
             return "{}"
         }
         return text
-    }
-}
-
-// MARK: - 目录浏览（Media 之外的**任意目录**）
-
-/// 「目录浏览」——浏览 `/var/...` 下**任意目录**（含子目录），这是 airlift 唯一能
-/// 枚举目录的方式。
-///
-/// ## 机制（2026-09-20 真机实证）
-/// airlift 的「读」**能搬整个目录**（不只文件）：
-/// ```
-/// airlift-recovered-38EC6637 → 存在（成功 size=128 st_ifmt=S_IFDIR）
-/// afc.list  /airlift-recovered-38EC6637       → sub(目录) + a.txt
-/// afc.list  /airlift-recovered-38EC6637/sub   → b.txt
-/// afc.read  /airlift-recovered-38EC6637/a.txt → 内容正确
-/// ```
-/// 目录被搬进 Media 后，AFC（根 = Media）就能**递归列 + 读** —— 因为东西
-/// **物理上已经在 Media 里**了。（对照：**穿过 symlink** 去列 Media 外的目录会被
-/// 沙盒拒掉 —— `Afc(PermDenied)`，所以「挂载 symlink 免费列目录」那条路走不通。）
-///
-/// ## ⚠️⚠️ 目标目录在操作期间是**缺位**的（约 20~40 秒）
-/// 搬进 Media ⇒ 列 ⇒ 搬回。中间那段时间里原位置**是空的**。
-/// ⇒ 所以：默认只列目录（不读文件内容）、拒绝一批「一动就出事」的路径、
-/// 搬回失败时大声报错并给「重试搬回」按钮（**数据没丢**，就在 Media 里）。
-private struct AirliftDirTab: View {
-    let module: EscapeModule
-
-    @State private var path = "/var/mobile/Library/Logs/CrashReporter/DiagnosticLogs"
-    @State private var depth = 3
-    @State private var readFiles = false
-    @State private var working = false
-    @State private var entries: [[String: Any]] = []
-    @State private var files: [String: String] = [:]
-    @State private var steps: [String] = []
-    @State private var errorText: String?
-    @State private var okText: String?
-    /// 搬回失败时记住「原路径 + Media 里的条目名」，给「重试搬回」用
-    @State private var pendingRestore: (path: String, recovered: String)?
-    @State private var expandedFile: String?
-    /// 已安装 App（走 `apps.lookup` = installation_proxy，**不依赖 airlift**）
-    @State private var apps: [AppEntry] = []
-    @State private var appsLoading = false
-
-    private struct AppEntry {
-        let bundleId: String
-        let name: String
-        let container: String
-    }
-
-    var body: some View {
-        Form {
-            Section {
-                BannerView(kind: .warn,
-                           text: "这个功能会把目标目录**搬进 Media 暂存**（约 20~40 秒），"
-                               + "期间原位置是空的；已自动拒绝 /var、/var/mobile/Library、"
-                               + "/var/containers 这类「一动就可能让系统起不来」的祖先目录。")
-            }
-
-            Section {
-                TextField("/var/mobile/... 目录绝对路径", text: $path)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.system(.callout, design: .monospaced))
-                // ★ v0.3.497：App 容器路径里带随机 UUID，靠人猜不出来 ——
-                // 走 installation_proxy（不是漏洞、不依赖 airlift）把路径取回来填进去。
-                Menu {
-                    if appsLoading {
-                        Text("读取中…")
-                    } else if apps.isEmpty {
-                        Button("点这里加载已安装 App") { Task { await loadApps() } }
-                    } else {
-                        ForEach(apps, id: \.bundleId) { app in
-                            Button("\(app.name)  ·  \(app.bundleId)") {
-                                path = app.container
-                            }
-                        }
-                    }
-                } label: {
-                    Label("从已安装 App 选一个容器", systemImage: "square.grid.2x2")
-                }
-                .disabled(working || appsLoading)
-                Picker("递归深度", selection: $depth) {
-                    Text("1 层").tag(1)
-                    Text("3 层").tag(3)
-                    Text("6 层").tag(6)
-                    Text("12 层").tag(12)
-                }
-                Toggle("同时读回小文件内容（≤64 KB）", isOn: $readFiles)
-                Button {
-                    Task { await browse() }
-                } label: {
-                    if working {
-                        HStack { ProgressView(); Text("搬入 → 列目录 → 搬回（约 20~60 秒）…") }
-                    } else {
-                        Label("浏览这个目录", systemImage: "list.bullet.indent")
-                    }
-                }
-                .disabled(working || path.trimmingCharacters(in: .whitespaces).isEmpty)
-            } header: {
-                Text("目标目录")
-            } footer: {
-                Text("读回文件内容会让目录缺位更久（要逐个文件走 AFC）；只列目录最快。")
-            }
-
-            if !apps.isEmpty {
-                Section("App 容器（\(apps.count) 个）") {
-                    ForEach(apps, id: \.bundleId) { app in
-                        Button {
-                            path = app.container
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(app.name).font(.callout).foregroundColor(.primary)
-                                Text(app.bundleId)
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                                Text(app.container.isEmpty ? "（系统应用，没有数据容器）" : app.container)
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(2)
-                            }
-                        }
-                    }
-                }
-            }
-
-            if let pendingRestore {
-                Section {
-                    Text("上一次没能把条目搬回原位：\(pendingRestore.path)")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                    Text("条目仍在 Media 的 \(pendingRestore.recovered)（**数据没丢**）")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Button {
-                        Task { await retryRestore(pendingRestore) }
-                    } label: {
-                        Label("重试搬回", systemImage: "arrow.uturn.backward")
-                    }
-                    .disabled(working)
-                } header: {
-                    Text("待搬回（重要）")
-                }
-            }
-
-            if !entries.isEmpty {
-                Section {
-                    ForEach(Array(entries.enumerated()), id: \.offset) { _, item in
-                        entryRow(item)
-                    }
-                } header: {
-                    Text("内容（\(entries.count) 项）")
-                }
-            }
-
-            if !files.isEmpty {
-                Section("已读回的小文件") {
-                    ForEach(Array(files.keys.sorted()), id: \.self) { key in
-                        Button {
-                            expandedFile = (expandedFile == key) ? nil : key
-                        } label: {
-                            HStack {
-                                Image(systemName: expandedFile == key
-                                      ? "chevron.down" : "chevron.right")
-                                    .font(.caption2)
-                                Text(key).font(.system(.caption2, design: .monospaced))
-                                    .lineLimit(1)
-                            }
-                        }
-                        if expandedFile == key, let b64 = files[key],
-                           let data = Data(base64Encoded: b64) {
-                            Text(String(data: data, encoding: .utf8)
-                                 ?? "（二进制，\(data.count) 字节，base64：\(b64.prefix(200))…）")
-                                .font(.system(.caption2, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                    }
-                }
-            }
-
-            CompactStepsView(steps)
-
-            if let okText { BannerView(kind: .ok, text: okText) }
-            if let errorText { BannerView(kind: .error, text: errorText) }
-        }
-    }
-
-    @ViewBuilder
-    private func entryRow(_ item: [String: Any]) -> some View {
-        let isDir = (item["isDir"] as? Bool) ?? false
-        let depth = (item["depth"] as? Int) ?? 0
-        let name = (item["name"] as? String) ?? "?"
-        let size = (item["size"] as? Int) ?? 0
-        HStack(spacing: 6) {
-            Spacer().frame(width: CGFloat(depth) * 12)
-            Image(systemName: isDir ? "folder.fill" : "doc")
-                .font(.caption2)
-                .foregroundColor(isDir ? .accentColor : .secondary)
-            Text(name)
-                .font(.system(.caption, design: .monospaced))
-                .lineLimit(1)
-            Spacer()
-            if !isDir { Text(byteText(size)).font(.caption2).foregroundColor(.secondary) }
-        }
-    }
-
-    private func byteText(_ size: Int) -> String {
-        if size >= 1_048_576 { return String(format: "%.1f MB", Double(size) / 1_048_576) }
-        if size >= 1024 { return String(format: "%.1f KB", Double(size) / 1024) }
-        return "\(size) B"
-    }
-
-    private func call(_ capability: String, _ args: String) async -> String {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let (_, json) = AirliftPocLog.callRaw(capability, args)
-                continuation.resume(returning: json)
-            }
-        }
-    }
-
-    private func jsonString(_ obj: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return text
-    }
-
-    /// 拉一次已安装 App（含数据容器路径）—— 走 `apps.lookup`（installation_proxy）.
-    ///
-    /// 为什么放在这里：App 容器路径里带随机 UUID，靠人猜不出来；
-    /// 而 `airlift` 只能读写**已知绝对路径**。两边一拼就能浏览任意 App 的容器.
-    private func loadApps() async {
-        appsLoading = true
-        defer { appsLoading = false }
-        let json = await call("apps.lookup", "{}")
-        let dict = CapJSON.dict(json)
-        let raw = (dict?["apps"] as? [[String: Any]]) ?? []
-        apps = raw.compactMap { item in
-            guard let bundleId = item["bundleId"] as? String else { return nil }
-            return AppEntry(bundleId: bundleId,
-                            name: (item["name"] as? String) ?? bundleId,
-                            container: (item["container"] as? String) ?? "")
-        }
-        if apps.isEmpty {
-            errorText = CapJSON.string(dict, "error") ?? "没取到已安装 App（返回：\(json))"
-        } else {
-            errorText = nil
-        }
-    }
-
-    private func browse() async {
-        working = true
-        entries = []
-        files = [:]
-        steps = []
-        errorText = nil
-        okText = nil
-        expandedFile = nil
-        defer { working = false }
-
-        let target = path.trimmingCharacters(in: .whitespaces)
-        let args = jsonString([
-            "path": target,
-            "maxDepth": depth,
-            "readFiles": readFiles,
-        ])
-        let json = await call("airlift.readdir", args)
-        applyResult(json, target: target)
-    }
-
-    private func retryRestore(_ pending: (path: String, recovered: String)) async {
-        working = true
-        defer { working = false }
-        let json = await call("airlift.restoredir", jsonString([
-            "path": pending.path,
-            "recoveredName": pending.recovered,
-        ]))
-        let dict = CapJSON.dict(json)
-        steps = CapJSON.strings(dict, "steps")
-        if CapJSON.bool(dict, "restored") == true {
-            pendingRestore = nil
-            okText = "已把条目搬回 \(pending.path)"
-            errorText = nil
-        } else {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
-    }
-
-    private func applyResult(_ json: String, target: String) {
-        let dict = CapJSON.dict(json)
-        steps = CapJSON.strings(dict, "steps")
-        entries = (dict?["entries"] as? [[String: Any]]) ?? []
-        files = (dict?["files"] as? [String: String]) ?? [:]
-        let restored = CapJSON.bool(dict, "restored") ?? false
-        if restored {
-            pendingRestore = nil
-        } else if let recovered = CapJSON.string(dict, "recoveredName"), !recovered.isEmpty {
-            // 搬回没成立 —— 记下来，界面给「重试搬回」
-            pendingRestore = (path: target, recovered: recovered)
-        }
-        if CapJSON.bool(dict, "ok") == true {
-            okText = "列出 \(entries.count) 个条目"
-                + ((CapJSON.bool(dict, "truncated") == true) ? "（已达上限、被截断）" : "")
-            errorText = nil
-        } else {
-            errorText = CapJSON.string(dict, "error") ?? json
-        }
     }
 }
 
 // MARK: - 文件浏览（AFC 根 = /var/mobile/Media）
 
-/// 文件浏览 —— 浏览 `/var/mobile/Media` 这一棵子树（`com.apple.afc` 的根）。
+/// 文件浏览 —— 浏览 `/var/mobile/Media` 这一棵子树（`com.apple.afc` 的根）.
 ///
 /// ## ★ 覆盖范围（界面上必须如实说清）
 /// RSD 服务表（64 个服务）里**没有任何服务把根设在 `/var`** —— 所以
-/// **`/var` 根、`/var/mobile/Library` 这些列不出来**。能枚举的只有：
+/// **`/var` 根、`/var/mobile/Library` 这些列不出来**.能枚举的只有：
 /// · `/var/mobile/Media`（AFC，本页）—— DCIM / Downloads / Books / 各 App 共享文件…
 /// · `/var/mobile/Library/Logs/CrashReporter`（crashreport AFC，见「概览」的说明）
 /// · AIR 中转站
 ///
 /// 而 airlift **本体**只能读写**单个已知文件**、不能枚举目录 —— 所以
-/// 「随便输一个路径就能浏览」这种事在 airlift 这条路上做不到，界面上不要暗示可以。
+/// 「随便输一个路径就能浏览」这种事在 airlift 这条路上做不到，界面上不要暗示可以.
 ///
 /// ## 为什么不做「任意路径输入」
 /// 上一版加过一个走 `bad_query_list` 的任意路径入口，已随 v0.3.488 撤掉 ——
-/// 本项目走 airlift，不走 bad_query。
+/// 本项目走 airlift，不走 bad_query.
 private struct AirliftFilesTab: View {
     let module: EscapeModule
 
@@ -1529,15 +1216,15 @@ private struct AirliftFilesTab: View {
                 Text("位置")
             } footer: {
                 Text("本页所有操作走的是 **AFC**（不是 airlift）—— AFC 在这两个根上是"
-                     + "**完整文件管理器**：读 / 写 / 删 / 列 / 建目录。"
-                     + "airlift 用于**两个根之外**的单个已知文件（见「自定义覆盖」）。\n\n"
+                     + "**完整文件管理器**：读 / 写 / 删 / 列 / 建目录."
+                     + "airlift 用于**两个根之外**的单个已知文件（见「自定义覆盖」）.\n\n"
                      + "两个根：**Media**（com.apple.afc）覆盖 DCIM / Downloads / Books / "
                      + "各 App 共享文件；**CrashReporter**（com.apple.crashreportcopymobile）"
-                     + "覆盖 /var/mobile/Library/Logs/CrashReporter。\n\n"
+                     + "覆盖 /var/mobile/Library/Logs/CrashReporter.\n\n"
                      + "权限边界：由系统账号创建的条目（如 sysdiagnose 归档里的内容）"
-                     + "可以读和列，但**删/写会被拒**（AFC 报 PermDenied，airlift 也搬不动）。\n\n"
+                     + "可以读和列，但**删/写会被拒**（AFC 报 PermDenied，airlift 也搬不动）.\n\n"
                      + "❌ **列不出来**：/var 根、/var/mobile/Library、其他 App 容器 —— "
-                     + "RSD 服务表（64 个服务）里没有服务把根设在它们上面。")
+                     + "RSD 服务表（64 个服务）里没有服务把根设在它们上面.")
             }
 
             if let errorText { BannerView(kind: .error, text: errorText) }
@@ -1645,9 +1332,9 @@ private struct AirliftFilesTab: View {
             Button("取消", role: .cancel) { deleteTarget = nil }
         } message: {
             if let target = deleteTarget {
-                Text("将删除 \(target.path)\(target.isDir ? "（含其中所有内容）" : "")。"
-                     + "此操作不可撤销。\n\n"
-                     + "注：由系统账号创建的条目会被拒绝删除（权限限制，AFC 与 airlift 都不行）。")
+                Text("将删除 \(target.path)\(target.isDir ? "（含其中所有内容）" : "")."
+                     + "此操作不可撤销.\n\n"
+                     + "注：由系统账号创建的条目会被拒绝删除（权限限制，AFC 与 airlift 都不行）.")
             }
         }
     }
@@ -1743,7 +1430,7 @@ private struct AirliftFilesTab: View {
         } else {
             // 二进制按 utf8 读不出来是正常的 —— 如实说明，并提示可以走 AIR 取原始字节
             previewText = (CapJSON.string(dict, "error") ?? json)
-                + "\n\n（若是二进制文件，请用「AIR」相关的能力取原始字节；本页只做文本预览。）"
+                + "\n\n（若是二进制文件，请用「AIR」相关的能力取原始字节；本页只做文本预览.）"
         }
     }
 

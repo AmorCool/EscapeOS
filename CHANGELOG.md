@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.3.501] - 2026-09-20
+
+### ★★★ symlink 越界调研：结论是**不能**（`stat` 能，读/写/列全被沙盒拒）
+
+用户要求「研究一下能不能通过 symlink 越界浏览文件实现读写操作」。真机实测（同一台设备、
+同一条 symlink，指向 `/private/var/containers/Shared/SystemGroup/.../ConfigurationProfiles`）：
+
+| 穿过 symlink 的操作 | 结果 |
+|---|---|
+| `afc_get_file_info`（stat） | ✅ **成功**（拿到真实 size / `st_ifmt`） |
+| `afc.read` | ❌ `Afc(PermDenied)` |
+| `afc.write` | ❌ `Afc(PermDenied)` |
+| `afc.list`（`read_dir`） | ❌ `Afc(PermDenied)` |
+
+**结论**：AFC 沙盒校验的是**解析后的真实路径** ⇒ symlink **不扩权**。
+- `stat` 之所以能过，是因为沙盒只给了 `file-read-metadata`（不给 `file-read-data`）。
+- ⇒ symlink 唯一的用处是**点查元数据**（在不在 / 多大 / 是文件还是目录），**零 airlift 成本**；
+  **不能列目录**（`read_dir` 也要 `file-read-data`）。
+- ⇒ 「Media 之外读文件」仍然只能靠 airlift 搬进 Media；「写文件」靠 airlift 越界写；
+  「列目录」在 Media 之外**做不到**（CrashReporter 那棵树除外，它有自己的 AFC 根）。
+
+**顺带**：`afcPath` 不再拒绝 `..` —— 真正的边界是 AFC 服务自己的沙盒，字符串过滤既挡不住
+什么、又挡住了一个关键实验。现在放行，越界由设备侧给 `Afc(PermDenied)`。
+
+### 新增 `afc.stat` —— 零成本的路径探测
+
+按上面的结论，`stat` 是 Media 之外**唯一零 airlift 成本**的探测手段（一次 AFC 往返、
+几十毫秒）。参数 `{path, root}`，返回 `exists / isDir / size / ifmt / linkTarget / describe`。
+
+### 按用户要求：**去掉「搬目录」**
+
+用户原话：「**不要搬目录**」。已删除：
+- 能力 `airlift.readdir` / `airlift.restoredir`（含记账文件、`warnForReaddir` 等辅助）
+- 模块的「目录浏览」tab（以及它带来的 App 容器下拉）
+
+理由已在 CHANGELOG 0.3.498 写清：**把目录搬进 Media 是单向的**（沙盒允许在 Media 外建
+**文件**、不允许建**目录**）⇒ 搬出去就回不来。这个能力不该存在。
+
+### 界面文案：中文句号 → 英文句号（用户要求）
+
+模块界面里 66 处 `。` 全改成 `.`。同时删掉了上一版遗留的感叹号三角与死代码。
+
+模块 `com.escapeos.airlift-poc` → **1.4.0**（`requires` 17 项，`minHostVersion` 0.3.501）。
+
 ## [0.3.500] - 2026-09-20
 
 ### 界面：去掉黄色感叹号 + **注释不再糊在界面上**（用户明确要求）

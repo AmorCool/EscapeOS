@@ -129,12 +129,11 @@ enum HostCapabilityService {
         "airlift.air",
         "airlift.pull",
         "airlift.overwrite",
-        "airlift.readdir",
-        "airlift.restoredir",
         "airlift.delete",
         "airlift.writeMany",
         "apps.lookup",
         "afc.list",
+        "afc.stat",
         "afc.read",
         "afc.write",
         "afc.delete",
@@ -258,12 +257,11 @@ enum HostCapabilityService {
         case "airlift.air":           return airliftAir(args)
         case "airlift.pull":          return airliftPull(args)
         case "airlift.overwrite":     return airliftOverwrite(args)
-        case "airlift.readdir":       return airliftReaddir(args)
-        case "airlift.restoredir":    return airliftRestoredir(args)
         case "airlift.delete":        return airliftDelete(args)
         case "airlift.writeMany":     return airliftWriteMany(args)
         case "apps.lookup":           return appsLookup(args)
         case "afc.list":              return afcList(args)
+        case "afc.stat":              return afcStat(args)
         case "afc.read":              return afcRead(args)
         case "afc.write":             return afcWrite(args)
         case "afc.delete":            return afcDelete(args)
@@ -1017,47 +1015,7 @@ enum HostCapabilityService {
 
     // MARK: - ★★★ airlift.readdir / airlift.restoredir（浏览 Media 之外的任意目录）
 
-    /// 「缺位待搬回」的记账文件（`Documents/LoginLogs/airlift_pending_restore.txt`）.
-    ///
-    /// 为什么需要它：搬进 Media 的条目名带随机 token，调用方（模块界面）可能没记住；
-    /// 而**搬回是必须完成的动作**（不然目标目录就空了）。把「条目名 + 原路径」落到盘上，
-    /// 即使界面重启、或某一步失败，也能用 `airlift.restoredir` 只凭 path 重试.
-    private static var pendingRestoreURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("LoginLogs", isDirectory: true)
-            .appendingPathComponent("airlift_pending_restore.txt")
-    }
-
-    private static func readPendingRestores() -> [String: String] {
-        guard let text = try? String(contentsOf: pendingRestoreURL, encoding: .utf8) else { return [:] }
-        var out: [String: String] = [:]
-        for line in text.split(separator: "\n") {
-            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
-            if parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty { out[parts[1]] = parts[0] }
-        }
-        return out
-    }
-
-    private static func writePendingRestores(_ map: [String: String]) {
-        let text = map.map { "\($0.value)\t\($0.key)" }.joined(separator: "\n")
-        try? FileManager.default.createDirectory(at: pendingRestoreURL.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        try? text.write(to: pendingRestoreURL, atomically: true, encoding: .utf8)
-    }
-
-    private static func rememberPendingRestore(recovered: String, for path: String) {
-        var map = readPendingRestores()
-        map[path] = recovered
-        writePendingRestores(map)
-    }
-
-    private static func clearPendingRestore(for path: String) {
-        var map = readPendingRestores()
-        map.removeValue(forKey: path)
-        writePendingRestores(map)
-    }
-
-    /// 拒绝一批「**一动就可能让系统起不来**」的祖先路径.
+        /// 拒绝一批「**一动就可能让系统起不来**」的祖先路径.
     ///
     /// 这不是能力限制（airlift 搬得动它们），是**安全闸**：把 `/var/mobile/Library`
     /// 整个搬进 Media 再搬回，中间那 20~40 秒里**全系统都在读写不存在的路径**。
@@ -1103,256 +1061,6 @@ enum HostCapabilityService {
             return "这是被全系统依赖的祖先/根目录，搬走期间整个系统都在读写不存在的路径"
         }
         return nil
-    }
-
-    /// 放行但**必须提醒**的路径（`airlift.readdir` 用）—— 返回 `nil` 表示没什么好提醒的.
-    ///
-    /// 这些目录搬走本身不会立刻出事，但**很可能被系统守护进程重建**
-    /// ⇒ 搬回时冲突（或搬回失败）。如实提示，由用户决定要不要继续.
-    private static func warnForReaddir(_ path: String) -> String? {
-        var p = path
-        if p.hasPrefix("/private/var/") { p = "/var/" + String(p.dropFirst("/private/var/".count)) }
-        while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
-
-        let appContainerPrefixes = [
-            "/var/containers/Bundle/Application/",
-            "/var/containers/Data/Application/",
-        ]
-        for prefix in appContainerPrefixes where p.hasPrefix(prefix) {
-            return "这是一个 **App 容器**：搬走期间该 App 会看不到自己的数据"
-                + "（可能闪退或被系统重建目录 ⇒ 搬回时冲突）。"
-                + "建议**先杀掉那个 App** 再浏览。"
-        }
-        if p.hasPrefix("/var/mobile/Library/Logs/") || p.hasPrefix("/var/mobile/Library/Preferences/") {
-            return "这个目录里的内容由系统守护进程读写，**可能被重建** ⇒ 搬回时冲突。"
-        }
-        if p.hasPrefix("/var/containers/Shared/") {
-            return "SystemGroup 共享容器：实测**只允许读/移出、拒绝创建/写入**；"
-                + "搬回（写入）很可能失败 ⇒ 目录会留在 Media 里，需要重试搬回。"
-        }
-        return nil
-    }
-
-    /// `airlift.readdir` —— **浏览 Media 之外的任意目录**（v0.3.496 新增）.
-    ///
-    /// ## 机制（2026-09-20 真机实证）
-    /// 1. airlift 变体 5 把**整个目录**搬进 Media（`airlift-recovered-<t>`）——
-    ///    真机实测判据：`airlift-recovered-38EC6637 → 存在（成功 size=128 st_ifmt=S_IFDIR）`
-    ///    ⇒ **目录也能搬**（不只文件）；
-    /// 2. 条目此刻**物理上就在 Media 里** ⇒ AFC（根 = Media）可以**递归列目录 + 读文件**：
-    ///    ```
-    ///    afc.list  /airlift-recovered-38EC6637       → sub(目录) + a.txt
-    ///    afc.list  /airlift-recovered-38EC6637/sub   → b.txt
-    ///    afc.read  /airlift-recovered-38EC6637/a.txt → 内容正确
-    ///    ```
-    ///    （对照：**穿过 symlink** 去列 Media 外的目录会被拒 —— `Afc(PermDenied)`，
-    ///      因为沙盒对 `read_dir` 也要 `file-read-data`）；
-    /// 3. **立刻搬回原位**（变体 7）。这一步**无论如何都要执行**，
-    ///    否则目标目录就凭空消失了。
-    ///
-    /// ## ⚠️⚠️ 目标目录在 ①~③ 之间是**缺位**的（约 20~40 秒）
-    /// · 默认**只列目录**（`readFiles` 默认 false）⇒ 缺位窗口最短；
-    /// · 拒绝一批「一动就出事」的路径（见 `refuseReasonForReaddir`）；
-    /// · 搬回失败时**如实大声报**，并把「条目名 + 原路径」记到盘上，
-    ///   可用 `airlift.restoredir` 只凭 path 重试（数据没丢，就在 Media 里）。
-    ///
-    /// ## 参数
-    /// - `path`：目标目录绝对路径（必填）
-    /// - `maxDepth`：递归深度上限（默认 4）
-    /// - `maxEntries`：条目数上限（默认 400）
-    /// - `readFiles`：是否把小文件内容也读回来（默认 `false`）
-    /// - `maxFileBytes`：`readFiles` 时单文件上限（默认 65536）
-    /// - `restore`：是否搬回（默认 `true`；**只有排障才该设 false**）
-    private static func airliftReaddir(_ args: [String: Any]) -> (Int32, String) {
-        guard let raw = args["path"] as? String, !raw.isEmpty else {
-            return fail("airlift.readdir 缺少 path")
-        }
-        let maxDepth = max(1, min((args["maxDepth"] as? Int) ?? 4, 12))
-        let maxEntries = max(1, min((args["maxEntries"] as? Int) ?? 400, 5000))
-        let readFiles = (args["readFiles"] as? Bool) ?? false
-        let maxFileBytes = max(1, (args["maxFileBytes"] as? Int) ?? 65536)
-        let restore = (args["restore"] as? Bool) ?? true
-
-        var target = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !target.hasPrefix("/") { target = "/" + target }
-        if target.count > 1 && target.hasSuffix("/") { target.removeLast() }
-        if target == "/" { return fail("airlift.readdir 不接受根目录 /") }
-        if let reason = refuseReasonForReaddir(target) {
-            return fail("拒绝读取 \(target)：\(reason)",
-                        extra: ["path": target, "refused": true])
-        }
-
-        // ★★★ v0.3.498：**默认拒绝搬目录** —— 这是一条血的教训（2026-09-20 真机实测）
-        //
-        // ## 为什么（4 处落点全部实测失败）
-        // 设备端 `ATAirlock` 是 `moveItemAtPath:`。实测：
-        //   · 把目录**搬进 Media**：✅ 成功
-        //   · 把目录**搬回 Media 之外**：❌ 全部失败
-        //     （试过 `/var/mobile/Library/Logs/CrashReporter`、`…/Logs`、
-        //       `…/Logs/CrashReporter/Retired`、`/var/mobile/Library/Caches`、
-        //       `/var/mobile/Library/Preferences` —— 5 个落点全失败）
-        //   · 同样的落点**建文件**：✅ 成功（`zt-logs.bin` / `zt-prefs.bin` 都建出来了）
-        //   · 把目录搬回 **Media 内**：✅ 成功
-        // ⇒ **沙盒允许在 Media 外创建「普通文件」，但不允许创建「目录」**
-        //   （vnode 类型过滤）。所以「搬目录出去」是**单向、不可逆**的。
-        //
-        // ## 后果（我踩了）
-        // 我把 `…/CrashReporter/DiagnosticLogs` 搬进 Media 后**搬不回去**，
-        // 那个目录（含 2 个子目录、2 个文件）至今卡在 Media 里。
-        // ⇒ 所以现在**默认直接拒绝**，要搬必须显式写 `allowOneWay: true`
-        //   并在界面上确认「知道这是单向的」。
-        let allowOneWay = (args["allowOneWay"] as? Bool) ?? false
-        if !allowOneWay {
-            return fail("拒绝：把 Media 之外的**目录**搬进来是**单向、不可逆**的"
-                        + "（实测：沙盒允许在 Media 外建**文件**，但**不允许建目录**"
-                        + " ⇒ 搬出去就回不来了）。"
-                        + "如果你**确实**要把它搬进来（当成「导出目录内容」用），"
-                        + "请显式传 `allowOneWay: true`。"
-                        + "只想浏览的话：CrashReporter 那棵树请用 `afc.list`（root=crash），"
-                        + "Media 用 root=media —— 这两处**不需要搬**。",
-                        extra: ["path": target, "refused": true,
-                                "reason": "directoryMoveIsOneWay",
-                                "hint": "allowOneWay"])
-        }
-        var steps: [String] = []
-        steps.append("⚠️⚠️ 已开启 allowOneWay：目录会被搬进 Media，"
-                     + "**Media 之外搬不回去**（沙盒不允许在 Media 外创建目录）。")
-        // 放行但先提醒（App 容器 / 守护进程目录 / SystemGroup 容器）
-        let warning = warnForReaddir(target)
-        if let warning { steps.append("⚠️ 提醒：\(warning)") }
-
-        // ① 把整个目录搬进 Media
-        let entry = withAirlift { AirliftExploit.pocReadEntry(path: target) }
-        steps.append(contentsOf: entry.details)
-        guard let recovered = entry.recoveredName else {
-            return fail("① 把目录搬进 Media 失败：\(entry.summary)",
-                        extra: ["path": target, "via": "airlift", "steps": steps])
-        }
-        steps.append("① \(entry.summary)")
-        // 从这一刻起目标缺位 —— 先记账，保证「只凭 path 也能重试搬回」
-        rememberPendingRestore(recovered: recovered, for: target)
-
-        // ② 递归列（+ 可选读小文件）—— 条目此刻就在 Media 里，AFC 读得到
-        var entries: [[String: Any]] = []
-        var files: [String: String] = [:]
-        var walkError: String?
-        var truncated = false
-        do {
-            try withAfcRoot(.media) { client in
-                var stack: [(path: String, depth: Int)] = [(recovered, 0)]
-                while let current = stack.popLast() {
-                    let items = try AFCService.listDirectory(client: client, path: current.path)
-                    for item in items {
-                        if entries.count >= maxEntries { truncated = true; break }
-                        var row: [String: Any] = [
-                            "path": item.path,
-                            "name": item.name,
-                            "isDir": item.isDirectory,
-                            "size": Int(item.size),
-                            "depth": current.depth,
-                        ]
-                        if let modified = item.modified {
-                            row["mtime"] = ISO8601DateFormatter().string(from: modified)
-                        }
-                        entries.append(row)
-                        if item.isDirectory {
-                            if current.depth + 1 < maxDepth {
-                                stack.append((item.path, current.depth + 1))
-                            }
-                        } else if readFiles, item.size <= Int64(maxFileBytes) {
-                            if let data = try? AFCService.readFile(client: client, path: item.path),
-                               let text = encode(data, encoding: "base64") {
-                                files[item.path] = text
-                            }
-                        }
-                    }
-                    if truncated { break }
-                }
-            }
-        } catch {
-            walkError = error.localizedDescription
-        }
-        steps.append("② AFC 递归列出 \(entries.count) 个条目"
-                     + (truncated ? "（**已达 maxEntries=\(maxEntries) 上限、被截断**）" : "")
-                     + (walkError.map { "；⚠️ 中途出错：\($0)" } ?? ""))
-
-        // ③ **无论如何都要搬回**
-        var restored = false
-        if restore {
-            let back = withAirlift {
-                AirliftExploit.pocRestoreEntry(originalPath: target, recoveredName: recovered)
-            }
-            steps.append(contentsOf: back.details)
-            restored = back.ok
-            steps.append(restored
-                ? "③ ★ 已把 \(recovered) 搬回 \(target) —— 目标不再缺位"
-                : "③ ⚠️⚠️ **搬回失败**：条目仍在 Media 的 \(recovered)"
-                  + " ⇒ \(target) 此刻是**空的**！"
-                  + " 请立刻调 `airlift.restoredir {\"path\":\"\(target)\"}` 重试 —— **数据没丢**。")
-        } else {
-            steps.append("③ restore=false ⇒ **没有搬回**；\(target) 此刻是空的，"
-                         + "条目在 Media 的 \(recovered) —— 收尾请调 `airlift.restoredir`")
-        }
-        if restored { clearPendingRestore(for: target) }
-
-        var extra: [String: Any] = [
-            "path": target,
-            "recoveredName": recovered,
-            "isDirectory": entry.isDirectory,
-            "entries": entries,
-            "count": entries.count,
-            "truncated": truncated,
-            "restored": restored,
-            "via": "airlift",
-            "steps": steps,
-        ]
-        if let warning { extra["warning"] = warning }
-        if let walkError { extra["walkError"] = walkError }
-        if !files.isEmpty { extra["files"] = files }
-        if !restore || restored { return ok(extra) }
-        return fail("列到 \(entries.count) 个条目，但**没能搬回原位** ⇒ \(target) 缺位中，"
-                    + "请调 airlift.restoredir 重试（数据在 Media 的 \(recovered)）",
-                    extra: extra)
-    }
-
-    /// `airlift.restoredir` —— 把 `airlift.readdir` 搬进 Media 的条目**搬回原位**（重试入口）.
-    ///
-    /// 参数：
-    /// - `path`：**原路径**（必填）
-    /// - `recoveredName`：Media 里的条目名；**省略时从记账文件里按 path 取**
-    ///
-    /// 为什么单独开一个能力：搬回是**必须完成的动作**。一旦失败（RSD 卡死、隧道断了），
-    /// 目标目录就空着 —— 必须有一个**只凭 path 就能重试**的入口，而不是重新走一遍读。
-    private static func airliftRestoredir(_ args: [String: Any]) -> (Int32, String) {
-        guard let raw = args["path"] as? String, !raw.isEmpty else {
-            return fail("airlift.restoredir 缺少 path")
-        }
-        var target = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !target.hasPrefix("/") { target = "/" + target }
-        if target.count > 1 && target.hasSuffix("/") { target.removeLast() }
-
-        let explicit = (args["recoveredName"] as? String)?.trimmingCharacters(in: .whitespaces)
-        let recovered = (explicit?.isEmpty == false ? explicit : nil)
-            ?? readPendingRestores()[target]
-        guard let recovered else {
-            return fail("不知道要搬回哪个条目：记账文件里没有 \(target)"
-                        + "（请显式传 recoveredName，或先跑一次 airlift.readdir）",
-                        extra: ["path": target, "pending": readPendingRestores()])
-        }
-
-        let back = withAirlift {
-            AirliftExploit.pocRestoreEntry(originalPath: target, recoveredName: recovered)
-        }
-        var steps = back.details
-        steps.append(back.ok
-            ? "★ 已把 \(recovered) 搬回 \(target)"
-            : "⚠️ 搬回仍未成立（条目可能还在 Media 的 \(recovered)）—— 可再试一次")
-        if back.ok { clearPendingRestore(for: target) }
-        let extra: [String: Any] = [
-            "path": target, "recoveredName": recovered,
-            "restored": back.ok, "via": "airlift", "steps": steps,
-        ]
-        return back.ok ? ok(extra) : fail(back.summary, extra: extra)
     }
 
     // MARK: - sys.supervised.*
@@ -1867,12 +1575,22 @@ enum HostCapabilityService {
         }
     }
 
-    /// 规范化成 AFC 口径（去掉前导/尾随 `/`；拒绝 `..` —— 根就是边界）
+    /// 规范化成 AFC 口径（去掉前导/尾随 `/`）.
+    ///
+    /// ## ★ v0.3.501：**不再拒绝 `..`**
+    /// 原来见到 `..` 就直接拒，理由是「根就是边界」。但**真正的边界是 AFC 服务自己的沙盒**
+    /// （`com.apple.afc` 只被授权 `/var/mobile/Media`；`com.apple.crashreportcopymobile`
+    /// 只被授权 `/var/mobile/Library/Logs/CrashReporter`）—— 设备侧会独立做这个检查。
+    /// 我们这里的字符串过滤既挡不住什么，又挡住了一个**关键实验**：
+    /// 「crash 那个根的沙盒到底覆盖多大」—— 用 `..` 探一次就知道。
+    ///
+    /// ⇒ 现在放行 `..`，把判定权交回设备侧（越界会得到 `Afc(PermDenied)`）。
+    /// 仍然拒绝 NUL（那是真会造成 C 字符串截断的东西）。
     private static func afcPath(_ raw: String?) -> String? {
         var p = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if p.unicodeScalars.contains(where: { $0.value == 0 }) { return nil }
         while p.hasPrefix("/") { p.removeFirst() }
         while p.hasSuffix("/") { p.removeLast() }
-        if p.split(separator: "/").contains("..") { return nil }
         return p.isEmpty ? "/" : p
     }
 
@@ -1913,6 +1631,46 @@ enum HostCapabilityService {
             return fail("列目录失败：\(error.localizedDescription)",
                         extra: ["root": root.rawValue, "rootPath": root.displayPath,
                                 "path": path])
+        }
+    }
+
+    /// `afc.stat` —— 查**单条路径**的元数据（v0.3.501 新增）.
+    ///
+    /// ## 为什么它值得单独开一个能力（真机实测 2026-09-20）
+    /// `afc_get_file_info` 会**跟随中间那一段 symlink**，而且**不受 AFC 沙盒限制** ——
+    /// 同一条路径上 `afc.read` / `afc.write` / `afc.list` 全是 `Afc(PermDenied)`，
+    /// 只有 stat 能过。于是：在 Media 里放一条指向**目标父目录**的 symlink
+    /// （airlift 的 stage 本来就会建），就能对**任意路径**问
+    /// 「在不在 / 多大 / 是文件还是目录」，**不用跑 airlift**。
+    ///
+    /// ## 局限（诚实写出来）
+    /// 只能**点查**（给定名字），**不能列目录**。
+    ///
+    /// 参数：`path`（相对当前根的路径，可含 `..`）、`root`（`media` / `crash`）
+    private static func afcStat(_ args: [String: Any]) -> (Int32, String) {
+        let (root, path, err) = afcResolve(args, needFile: true)
+        if let err { return err }
+        do {
+            let result = try withAfcRoot(root) { client in
+                AirliftExploit.afcStat(client: client, path: path)
+            }
+            let extra: [String: Any] = [
+                "root": root.rawValue,
+                "rootPath": root.displayPath,
+                "path": path,
+                "exists": result.exists,
+                "isDir": result.isDirectory,
+                "size": result.size,
+                "ifmt": result.ifmt ?? "",
+                "linkTarget": result.linkTarget ?? "",
+                "describe": result.describe,
+            ]
+            return result.exists ? ok(extra)
+                                 : fail("这条路径取不到元数据（不存在，或被沙盒挡住）："
+                                        + result.describe, extra: extra)
+        } catch {
+            return fail("stat 失败：\(error.localizedDescription)",
+                        extra: ["root": root.rawValue, "path": path, "exists": false])
         }
     }
 
