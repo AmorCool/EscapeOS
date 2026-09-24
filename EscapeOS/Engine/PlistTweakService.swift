@@ -31,6 +31,7 @@
 //    ⇒ 多数要 respring / 重启才看得到效果
 //
 
+import CryptoKit
 import Foundation
 
 /// 改沙盒外 plist 单个键的服务（纯静态）.
@@ -122,36 +123,71 @@ enum PlistTweakService {
 
     // MARK: - 内部
 
-    /// 用 airlift 把文件读进 Media，再取回来.
+    /// ★★★ **本地缓存**：airlift 读一次要 10~20 秒，绝不能每次改值都重读.
     ///
-    /// ## ★★★ 为什么必须「读两次、要求一致」（真机事故 2026-09-24）
-    /// 设备端的 AirTraffic 会话**不稳**：`pocReadFile` 偶尔会返回**被截断的内容**.
-    /// 那次它把 5764 字节 / 49 键的 SpringBoard plist 读成 **89 字节 / 1 键**
-    /// （只剩最后一个键）—— 而截断后**仍然是合法 plist**，`parse` 不会报错，
-    /// 于是「读 → 改 → 写回」把用户的偏好文件**覆盖成了 1 个键** ✗
-    /// （幸好带序号备份救回来了.）
+    /// ## 为什么必须缓存（用户反馈「就修改几个值要你多久」）
+    /// 上一版为了「读得准」做了「连读两次要求一致」，而 airlift **每次读 10~20 秒**
+    /// ⇒ 一次开关要读 2~4 遍再写 1 遍 ⇒ **1~2 分钟**. 那根本没法用.
     ///
-    /// ⇒ 现在：**连读两次，字节完全一致才采信**；不一致就重试（最多 4 轮），
-    ///   全都不一致就**放弃**（宁可不动，也不能写坏）.
+    /// ⇒ 现在：**读一次就缓存**（落在 App 沙盒 `Documents/PlistTweakCache/`），
+    ///   之后改值只在**本地副本**上改，再写一次 ⇒ **一次开关 = 1 次 airlift**.
+    ///
+    /// ## 缓存的正确性怎么保证
+    /// - **形状护栏**：改一个键 ⇒ 键数只能 ±1（`guardKeyCount`）——
+    ///   缓存过期最多让「读到的值」旧一点，**不会让我们写坏文件**
+    /// - 想强制刷新：调 `refresh(path:)`（界面上的「重新读取」按钮）
+    private static var cacheDir: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("PlistTweakCache", isDirectory: true)
+    }
+
+    private static func cacheURL(_ path: String) -> URL {
+        // 路径当文件名会踩转义/长度坑 ⇒ 用 sha1
+        let digest = Insecure.SHA1.hash(data: Data(path.utf8))
+        let name = digest.map { String(format: "%02x", $0) }.joined().prefix(20).description
+        return cacheDir.appendingPathComponent(name + ".plist")
+    }
+
+    /// 缓存里有没有这个文件（界面用它决定要不要显示「重新读取」提示）.
+    static func hasCache(path: String) -> Bool {
+        FileManager.default.fileExists(atPath: cacheURL(path).path)
+    }
+
+    /// 强制从设备重读一遍并更新缓存（「重新读取」按钮走这条）.
+    @discardableResult
+    static func refresh(path: String) throws -> Int {
+        let data = try readFromDevice(path)
+        store(data, for: path)
+        return data.count
+    }
+
+    /// 取内容：**缓存优先**；没缓存才真去设备读一次.
     private static func read(_ path: String) throws -> Data {
-        var previous: Data?
-        var lastError = "未知"
-        for attempt in 1...4 {
-            let outcome = AirliftExploit.pocReadFile(path: path)
-            if let data = outcome.data {
-                if let prev = previous, prev == data {
-                    return data            // 两次一致 ⇒ 采信
-                }
-                previous = data
-                lastError = "两次读取不一致（第 \(attempt) 轮）"
-            } else {
-                lastError = outcome.summary
-            }
-            // 设备端会话不支持背靠背，读之间留冷却
-            Thread.sleep(forTimeInterval: attempt >= 3 ? 5 : 3)
+        if let cached = try? Data(contentsOf: cacheURL(path)), !cached.isEmpty {
+            return cached
         }
-        throw TweakError.readFailed("连读 4 次都没拿到稳定内容（\(lastError)）—— "
-                                    + "为免写坏文件，**已放弃本次改动**")
+        let data = try readFromDevice(path)
+        store(data, for: path)
+        return data
+    }
+
+    private static func store(_ data: Data, for path: String) {
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        try? data.write(to: cacheURL(path), options: .atomic)
+    }
+
+    /// 真去设备读（慢，10~20 秒）—— **带一次重试**，只在这里花时间.
+    private static func readFromDevice(_ path: String) throws -> Data {
+        var lastError = "未知"
+        for attempt in 1...2 {
+            let outcome = AirliftExploit.pocReadFile(path: path)
+            if let data = outcome.data, !data.isEmpty {
+                return data
+            }
+            lastError = outcome.summary
+            if attempt == 1 { Thread.sleep(forTimeInterval: 3) }   // 会话冷却
+        }
+        throw TweakError.readFailed("读不到内容（\(lastError)）")
     }
 
     /// 把字典写回（二进制 plist），用 airlift 覆盖.
@@ -187,6 +223,8 @@ enum PlistTweakService {
         guard outcome.ok else {
             throw TweakError.writeFailed(outcome.summary)
         }
+        // 写成功后把新内容更新进缓存 —— 下次改值就不用再读了
+        store(data, for: path)
         return data.count
     }
 

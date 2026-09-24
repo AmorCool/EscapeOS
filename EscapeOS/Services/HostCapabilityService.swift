@@ -1126,10 +1126,23 @@ enum HostCapabilityService {
         guard let path = args["path"] as? String, !path.isEmpty else {
             return fail("plist.tweak 缺少 path")
         }
+        // `refresh:true` ⇒ 强制从设备重读（慢，10~20 秒）并更新本地缓存
+        if (args["refresh"] as? Bool) == true {
+            do {
+                let bytes = try PlistTweakService.refresh(path: path)
+                return ok(["path": path, "refreshed": true, "bytes": bytes])
+            } catch {
+                return fail(error.localizedDescription, extra: ["path": path])
+            }
+        }
         if (args["list"] as? Bool) == true {
             do {
                 let keys = try PlistTweakService.readKeys(path: path)
-                return ok(["path": path, "count": keys.count, "keys": keys])
+                return ok(["path": path, "count": keys.count, "keys": keys,
+                           "cached": PlistTweakService.hasCache(path: path),
+                           "note": PlistTweakService.hasCache(path: path)
+                               ? "来自本地缓存（改值只写一次 airlift，约 10~20 秒）"
+                               : "刚从设备读回并已缓存"])
             } catch {
                 return fail(error.localizedDescription, extra: ["path": path])
             }
