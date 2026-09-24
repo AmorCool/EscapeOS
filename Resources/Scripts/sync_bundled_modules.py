@@ -84,8 +84,16 @@ def sync_ui_sources(src_root: str, root: str) -> list:
             continue
         if os.path.isdir(dst_ui):
             shutil.rmtree(dst_ui)
-        shutil.copytree(src_ui, dst_ui)
-        count = sum(1 for f in os.listdir(dst_ui) if f.endswith(".swift"))
+        os.makedirs(dst_ui, exist_ok=True)
+        # ★ 只拷 .swift —— ui/ 里的 README.md 之类**不能**进宿主源码树：
+        #   它们会被当资源拷进 .app 根目录，两个同名 README 直接报
+        #   「Multiple commands produce .../EscapeSpace.app/README.md」（v0.3.506 实锤）.
+        count = 0
+        for f in sorted(os.listdir(src_ui)):
+            if not f.endswith(".swift"):
+                continue
+            shutil.copy2(os.path.join(src_ui, f), os.path.join(dst_ui, f))
+            count += 1
         synced.append(f"{mid}({count} 个 .swift)")
 
     # 反向清理：宿主里已有、但模块仓库里已经不存在的模块目录

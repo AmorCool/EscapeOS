@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.507"
-    CURRENT_PROJECT_VERSION: "803"
+    MARKETING_VERSION: "0.3.508"
+    CURRENT_PROJECT_VERSION: "804"
     # 注：这里**刻意不写** `SWIFT_VERSION` —— 实测顶层 `settings.base` 的它**不被 xcodegen 采纳**，
     # 真正生效的是下面 target 层那一份（当前 `"6.0"` = Swift 6 语言模式）。
     # 另注：**编译器版本 ≠ 语言模式** —— CI 用 Xcode 27 自带的 Swift 6.4 编译器，
@@ -119,6 +119,11 @@ targets:
       # module-esc 仓库拷进来. **不要**再单独列 ：
       # 这一行是递归的，已经包含它；重复列会让同一批文件被编两次 ⇒ 重复符号.
       - path: EscapeOS
+        # ★ v0.3.508：排除所有 README.md —— 它们只是文档，但会被当资源拷进
+        # .app 根目录；两个同名 README 直接报
+        # 「Multiple commands produce .../EscapeSpace.app/README.md」。
+        excludes:
+          - "**/README.md"
       # ZSign 引擎（LC 同款签名器，v0.3.101：ad-hoc 重签名可拆卸 dylib 模块）
       - path: ZSign
       - path: Resources
