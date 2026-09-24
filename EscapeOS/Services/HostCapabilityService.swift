@@ -230,6 +230,12 @@ enum HostCapabilityService {
         // 为什么在宿主侧统一记、而不是让每个模块自己记.
         let started = Date()
         let result = dispatch(capability: capability, jsonArgs: jsonArgs)
+        // ★ v0.3.512：`airlift.*` 收尾 —— 清掉本次在 Media 根留下的临时目录.
+        // 用户反馈「一堆 airlift-canary-xxx 堆在 afc 目录，不要乱拉屎」.
+        // 放在这里（唯一入口）而不是每个能力里，是为了「一处生效、不会漏」.
+        if capability.hasPrefix("airlift.") {
+            _ = cleanupAirliftTemp()
+        }
         appendCallLog(capability: capability,
                       jsonArgs: jsonArgs,
                       result: result.1,
@@ -1573,6 +1579,50 @@ enum HostCapabilityService {
             // crashreport 是另一条服务会话，只有 CrashLogService 知道怎么连
             return try CrashLogService.shared.withAfc { try body($0) }
         }
+    }
+
+    /// 收尾：清掉 Media 根下 airlift 的临时目录（用户反馈「不要乱拉屎」）.
+    ///
+    /// ## 为什么敢「全删 `airlift-*`」而不是按时间挑
+    /// airlift 的**所有**设备端操作都串在 `AirliftExploit.protocolQueue` 上（串行），
+    /// 而本函数只在**一次能力调用结束之后**跑 ⇒ 此刻不存在「还在用」的临时目录.
+    ///
+    /// ⚠️ 曾经想按 mtime 挑（「只清 120 秒没动过的」），**实测行不通**：
+    /// airlift 的 zip 条目带**固定时间戳**，解压出来的目录 mtime 是旧的
+    /// ⇒ 按时间判断会把正在用的那个也判成「旧」. 所以只能靠「调用边界」保证安全.
+    ///
+    /// ## 刻意不碰
+    /// `AIR/`（用户自己的源文件）、`Airlock/`（固定工作根）、以及任何非 `airlift-` 前缀的条目.
+    ///
+    /// - Returns: 实际删掉的条目数（仅用于日志/调试）
+    @discardableResult
+    static func cleanupAirliftTemp() -> Int {
+        var removed = 0
+        _ = try? withAfcRoot(.media) { client in
+            // ① 旧版遗留在**根上**的 `airlift-*`（v0.3.512 之前的行为）—— 一并收掉
+            if let items = try? AFCService.listDirectory(client: client, path: "/") {
+                for item in items where item.name.hasPrefix("airlift-") {
+                    if (try? AFCService.removePath(client: client,
+                                                   path: "/" + item.name,
+                                                   includingContents: true)) != nil {
+                        removed += 1
+                    }
+                }
+            }
+            // ② 统一工作目录 `Airlift/` **里面的**内容（保留目录本身，
+            //    下次运行还要用；只清里面的临时项）
+            let workDir = "/" + AirliftExploit.workDirName
+            if let items = try? AFCService.listDirectory(client: client, path: workDir) {
+                for item in items where item.name.hasPrefix("airlift-") {
+                    if (try? AFCService.removePath(client: client,
+                                                   path: workDir + "/" + item.name,
+                                                   includingContents: true)) != nil {
+                        removed += 1
+                    }
+                }
+            }
+        }
+        return removed
     }
 
     /// 规范化成 AFC 口径（去掉前导/尾随 `/`）.

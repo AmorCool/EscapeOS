@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.3.512] - 2026-09-24
+
+> 这一版**一次把用户提的全部问题改完**再出包（用户反馈「你为什么发包那么快？要等好几个 CI」）.
+>
+> ⚠️ 同时更正一个流程问题：0.3.502 ~ 0.3.511 我连发了 10 个包却没写 CHANGELOG 条目 ——
+> 那是「改一点发一包」的坏习惯. 那几版的内容已合并记在下面.
+
+### ★★ 统一工作目录：airlift 的临时文件收进 `Media/Airlift/`
+
+用户反馈：「一堆 `airlift-canary-xxx` 的文件夹堆在 afc 目录，**不要乱拉屎**」
+「你能不能不要堆积在很多个文件，让你**从根源解决用统一的目录**下不行吗」
+
+原来所有临时项（`airlift-src-*` / `airlift-canary-*` / `airlift-link-*` /
+`airlift-recovered-*`）都直接建在 `/var/mobile/Media/` **根上** ⇒ 用户的 AFC 根目录被铺满.
+现在全部收进 `Media/Airlift/`.
+
+**这个改动动了两类东西，必须同时改对**（写进 `AirliftExploit.workDirName` 的注释）：
+
+1. **名字加 `Airlift/` 前缀** —— 源目录 `Media/airlift-src-<t>` → `Media/Airlift/airlift-src-<t>`.
+   `assetID` 是相对 `AIRLOCK_ROOT`（`Media/Airlock/Book`）算的 ⇒ **`..` 层数不变**.
+2. **symlink 内容从 3 个 `..` 变成 4 个** —— 唯一的硬性连带改动：那条 symlink 被搬到
+   `Media/Airlift/airlift-link-<t>`，它的**所在目录**从 `Media`（相对 `/` 深度 3）变成
+   `Media/Airlift`（深度 4），而 symlink 内容是**相对所在目录**解析的 ⇒ 要退到 `/` 就得多退一层.
+   ⚠️ 写错 = airlift 整条链失效.
+
+**连带修的三处（都很隐蔽，漏一处就静默失效）**：
+- `MediaSubdir = airlift-src-` 这个**字面 marker** 放宽成 `MediaSubdir = ` —— 否则
+  `stagedSourceNameFromLastStageRun()` 匹配不到，AT 会退回**随机新名**、找不到 stage 的目录.
+- token 提取散在 **10 处**，统一成 `sourceToken(_:)` 助手（兼容带/不带前缀）.
+- `ensureAirliftWorkDir()`：用 AFC 预先建好 `Media/Airlift` —— 设备端 `moveItemAtPath`
+  **不会**自动建中间目录，不预建第 1 条 move 就失败.
+
+### ★ 每次调用后自动清理（双保险）
+
+`HostCapabilityService.call` 里统一收尾：`airlift.*` 调用结束后清掉临时目录.
+**为什么敢「全删」而不是按时间挑**：airlift 的所有设备端操作都串在
+`AirliftExploit.protocolQueue` 上（串行），本函数只在**一次调用结束之后**跑 ⇒
+此刻不存在「还在用」的临时目录.
+
+⚠️ 曾经想按 mtime 挑（「只清 120 秒没动过的」），**实测行不通**：airlift 的 zip 条目带
+**固定时间戳**，解压出来的目录 mtime 是旧的 ⇒ 按时间判断会把正在用的那个也判成「旧」.
+
+### 模块界面：5 个 tab + 自己的「更多」页（照主程序 `MoreView`）
+
+- **tab 从 6 个减到 5 个**（概览 / 文件 / 写入 / 主题 / 更多）—— iOS 的 `TabView` 超过 5 个
+  会**自动**加一个系统溢出「更多」项，那个页面跟主程序完全不一样.
+- **新增「更多」页**，照 `EscapeOS/Views/MoreView.swift`：`List` + `.insetGrouped` +
+  `.scrollContentBackground(.hidden)` + Section header 用 `.footnote.weight(.semibold)`
+  + `.textCase(nil)`；行**直接复用主程序的 `MoreCard`**（不重画）.
+- 监督模式 / 调用日志 / 关于 收进「更多」；另加「清理临时文件」（兜底用）.
+
+### 文件 tab：批量选择 / 全选 / 批量删除
+
+用户要求「不能批量选择/全选删除操作吗」. 内容区右上「选择」进多选，底部材质条
+「全选 / 删除所选(N)」；删除逐个走 AFC，失败时如实报「有 N 项没删掉」.
+
+### ★ 顶栏改成真正的导航栏
+
+用户反馈「这个顶栏好丑 其实我一直不喜欢这个」. 旧实现是自绘一行：左边两个**带文字**的
+按钮 + 标题靠右 + 一条 Divider. 新实现用 `NavigationStack` +
+`.navigationBarTitleDisplayMode(.inline)`：标题**居中**、系统毛玻璃底、出口改成**图标按钮**
+（返回 `chevron.left` / 主页 `house`）.
+
+> 旧注释说「不能套 NavigationStack，会变双层栏」—— 那是因为**当时有自绘顶栏**.
+> 现在自绘栏已删，系统导航栏就是唯一那条 ⇒ 不存在双层问题，而且模块的 tab 内容正好需要它
+> （`NavigationLink` 下钻）.
+
+### 模块 UI 改回**完全跟随主程序**（0.3.511 的内容）
+
+删掉自造的 `AirliftUI.swift`（cyan 卡片系统）. 用户原话：「UI 界面不像主程序的，
+没有主程序那样好看的 UI」. 现在用 `AppTheme` / `AppRowIcon` / `SizePill` /
+`List(.insetGrouped)`，并补上主程序招牌的**材质忙碌遮罩**（`AppDetailView` /
+`DeviceControlView` / `ReclaimTabView` 同款）与底部 `safeAreaInset` 操作条.
+
+### ★ 更正：AFC 服务**自己就拒绝越出根的 `..`**
+
+实测：`afc.stat` 对 `/Airlock/../Airlock` 正常（`..` 留在根内没问题），但对
+`/../Airlock`、`/Airlock/../../Media/Airlock` 一律 `Afc(InvalidArg)`.
+⇒ 之前以为「`afcPath` 放开 `..` 就能探到 Media 之外」是**错的** ——
+真正的边界有两层：AFC 自己的路径校验（越根 = `InvalidArg`）+ 沙盒（越权 = `PermDenied`）.
+
+模块 `com.escapeos.airlift-poc` → **1.8.0**（`minHostVersion` 0.3.512）.
+
 ## [0.3.501] - 2026-09-20
 
 ### ★★★ symlink 越界调研：结论是**不能**（`stat` 能，读/写/列全被沙盒拒）

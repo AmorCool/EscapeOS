@@ -4,13 +4,27 @@
 //
 //  v0.3.481：模块「原生 SwiftUI 二级界面」的外壳.
 //
-//  形态（产品要求）：
-//    · 全屏盖住 App 的 TabView ⇒ 看不到 App 默认底栏；
-//    · 底部导航栏是**模块自己的**（由 ModuleUITab 列表组装）；
-//    · 顶部常驻两个出口：左上「返回上一级」+ 紧邻的「主页」（一键回默认界面）；
-//    · 标题放顶栏中间，**不用** `.navigationTitle` —— 避免和 App 默认导航栏混淆.
+//  ## ★ v0.3.512：顶栏改成**真正的导航栏**（用户反馈「这个顶栏好丑 其实我一直不喜欢这个」）
 //
-//  本文件刻意不 import UIKit：外壳只用 SwiftUI 原生件.
+//  旧实现是自绘的一行：左边两个**带文字**的按钮（「返回上一级」「主页」）+ 标题靠右 +
+//  一条 Divider. 问题有三个：
+//    1. 标题在右边 —— 不符合 iOS 习惯（应居中）
+//    2. 两个文字按钮挤在左边，占掉一半宽度，视觉很重
+//    3. 自绘栏 + `.background(.bar)` 与系统导航栏的毛玻璃质感对不上
+//
+//  新实现直接用 `NavigationStack` + `.navigationBarTitleDisplayMode(.inline)`：
+//    · 标题**居中**、系统毛玻璃底、与主程序所有二级页完全一致
+//    · 出口改成**图标按钮**（返回 = `chevron.left`，主页 = `house`），放左右两侧
+//    · 不再自绘 Divider —— 导航栏自带分隔
+//
+//  ⚠️ 为什么现在**可以**套 NavigationStack 了（旧注释说不能）
+//  旧注释的理由是「外壳已有自绘顶栏，再叠系统导航栏会变双层栏」.
+//  现在自绘顶栏**已经删掉**，系统导航栏就是唯一那条 ⇒ 不存在双层问题.
+//  而且模块的 tab 内容正好需要它（NavigationLink 下钻、`.navigationTitle`）.
+//
+//  形态（产品要求，未变）：
+//    · 全屏盖住 App 的 TabView ⇒ 看不到 App 默认底栏；
+//    · 底部导航栏是**模块自己的**（由 ModuleUITab 列表组装）.
 //
 
 import SwiftUI
@@ -25,54 +39,40 @@ struct ModuleHostShell: View {
     @State private var selection: String = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
+        NavigationStack {
             content
+                .navigationTitle(module.ui?.title ?? module.name)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            // 先关二级界面，再 dismiss（cover 由 router.active 驱动，两者幂等）
+                            router.back()
+                            dismiss()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .imageScale(.large)
+                                .fontWeight(.semibold)
+                        }
+                        .accessibilityLabel("返回上一级")
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            router.goHome()
+                            dismiss()
+                        } label: {
+                            Image(systemName: "house")
+                                .imageScale(.large)
+                        }
+                        .accessibilityLabel("回主页")
+                    }
+                }
         }
-        // 让模块自己的底栏贴到屏幕底边（顶栏仍尊重顶部安全区）
+        // 让模块自己的底栏贴到屏幕底边
         .ignoresSafeArea(.container, edges: .bottom)
         .onAppear {
             selection = tabs.first?.id ?? ""
         }
-    }
-
-    // MARK: 顶栏（常驻，不随 tab 切换消失）
-
-    private var topBar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Button {
-                    // 先关二级界面，再 dismiss（cover 由 router.active 驱动，两者幂等）
-                    router.back()
-                    dismiss()
-                } label: {
-                    Label("返回上一级", systemImage: "chevron.left")
-                        .font(.subheadline)
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    router.goHome()
-                    dismiss()
-                } label: {
-                    Label("主页", systemImage: "house.fill")
-                        .font(.subheadline)
-                }
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 8)
-
-                Text(module.ui?.title ?? module.name)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-            Divider()
-        }
-        .background(.bar)
     }
 
     // MARK: 内容（模块自己的 TabView = 模块自己的底栏）
@@ -87,10 +87,6 @@ struct ModuleHostShell: View {
                 description: Text("模块声明的原生界面未在宿主内注册。")
             )
         } else {
-            // 注意：这里**刻意不套 NavigationStack**。
-            // 外壳已经有自己的常驻顶栏，再叠一层系统导航栏会在顶栏下面多出一条
-            // 空的细条（tab 内容通常不设 navigationTitle），视觉上变成双层栏。
-            // 需要下钻/自带导航栏的模块，由它**自己的 tab 内容内部**去套 NavigationStack.
             TabView(selection: $selection) {
                 ForEach(tabs) { tab in
                     tab.content(module)
