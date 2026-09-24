@@ -106,6 +106,11 @@ enum PlistTweakService {
     }
 
     /// 把字典写回（二进制 plist），用 airlift 覆盖.
+    ///
+    /// ## 写入前先存快照
+    /// 这里**不走** `airlift.overwrite`（那是能力层），所以备份要自己做 ——
+    /// 用同一套 `AirliftBackupStore`：**1 号 = 初始备份（永不覆盖）**，
+    /// 之后每次写前各存一份. 少了这一步，「还原」就没有回滚点.
     private static func write(_ path: String, dict: [String: Any]) throws -> Int {
         let data: Data
         do {
@@ -114,14 +119,19 @@ enum PlistTweakService {
         } catch {
             throw TweakError.parseFailed("重新序列化失败：\(error.localizedDescription)")
         }
-        // 先落进 AIR（AFC 根下，廉价），再 airlift 覆盖目标
-        let name = "plisttweak-\(UUID().uuidString.prefix(8)).plist"
-        do {
-            try airWrite(name: name, data: data)
-        } catch {
-            throw TweakError.writeFailed("写 AIR 失败：\(error.localizedDescription)")
+
+        // ★ 写前快照（1 号 = 初始备份）
+        if let original = AirliftExploit.pocReadFile(path: path).data {
+            _ = AirliftBackupStore.snapshot(path: path, data: original, note: "plist tweak 前")
         }
-        let outcome = AirliftExploit.pocWriteFile(path: path, data: data, backup: true)
+
+        // 再落进 AIR（AFC 根下，廉价），最后 airlift 覆盖目标
+        let name = "plisttweak-\(UUID().uuidString.prefix(8)).plist"
+        try? airWrite(name: name, data: data)
+
+        // ⚠️ `pocWriteFile` 的签名是 `(path:data:)` —— **没有 backup 参数**
+        //   （备份由调用方负责，见上面那步）
+        let outcome = AirliftExploit.pocWriteFile(path: path, data: data)
         guard outcome.ok else {
             throw TweakError.writeFailed(outcome.summary)
         }
@@ -160,7 +170,8 @@ enum PlistTweakService {
                 .contains(where: { $0.name == "AIR" }) != true {
                 try? AFCService.makeDirectory(client: client, path: dir)
             }
-            try AFCService.writeFile(client: client, path: dir + "/" + name, data: data)
+            // ⚠️ 真实签名是 `writeFile(client:data:to:)` —— 标签是 `to:`
+            try AFCService.writeFile(client: client, data: data, to: dir + "/" + name)
         }
     }
 }
