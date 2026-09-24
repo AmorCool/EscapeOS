@@ -131,6 +131,8 @@ enum HostCapabilityService {
         "airlift.overwrite",
         "airlift.delete",
         "airlift.writeMany",
+        "airlift.changes",
+        "airlift.changes.clear",
         "apps.lookup",
         "afc.list",
         "afc.stat",
@@ -265,6 +267,8 @@ enum HostCapabilityService {
         case "airlift.overwrite":     return airliftOverwrite(args)
         case "airlift.delete":        return airliftDelete(args)
         case "airlift.writeMany":     return airliftWriteMany(args)
+        case "airlift.changes":       return airliftChanges(args)
+        case "airlift.changes.clear": return airliftChangesClear(args)
         case "apps.lookup":           return appsLookup(args)
         case "afc.list":              return afcList(args)
         case "afc.stat":              return afcStat(args)
@@ -944,6 +948,12 @@ enum HostCapabilityService {
             dict["resolvedFrom"] = target
             dict["targetIsDirectory"] = isDirectory
             dict["source"] = sourceDesc
+            // 失败也记 —— 「改失败过」同样要留痕，否则下次会重复踩
+            AirliftChangeLog.append(action: "write-failed",
+                                    path: finalPath,
+                                    bytes: data.count,
+                                    verified: false,
+                                    note: "未落地（可能目标目录不允许写）")
             return (rc, jsonText(dict))
         }
         var dict = parseArgs(json)
@@ -951,6 +961,13 @@ enum HostCapabilityService {
         dict["resolvedFrom"] = target
         dict["targetIsDirectory"] = isDirectory
         dict["source"] = sourceDesc
+        // 改动记录（用户要求「防止以后不知道改了啥」）
+        AirliftChangeLog.append(action: "write",
+                                path: finalPath,
+                                bytes: data.count,
+                                backup: (dict["backup"] as? String) ?? "",
+                                verified: (dict["verified"] as? Bool) ?? false,
+                                note: isDirectory ? "目标是目录，落点 \(finalPath)" : "")
         return (0, jsonText(dict))
     }
 
@@ -975,7 +992,39 @@ enum HostCapabilityService {
             "path": target, "via": "airlift",
             "steps": outcome.details,
         ]
+        AirliftChangeLog.append(action: outcome.ok ? "delete" : "delete-failed",
+                                path: target, bytes: 0, verified: outcome.ok)
         return outcome.ok ? ok(extra) : fail(outcome.summary, extra: extra)
+    }
+
+    /// `airlift.changes` —— 读**改动记录**（v0.3.518 新增）.
+    ///
+    /// ## 为什么要有它（用户要求）
+    /// 「如果新增的文件要记忆防止以后不知道改了啥文件加了啥东西」.
+    /// airlift 往 `/var/mobile/Library/**` 写完之后，**设备上没有任何痕迹**
+    /// 说明「这个文件是谁什么时候加的」⇒ 时间一长就成了「不知道哪来的文件」，
+    /// 想回滚也无从下手. 所以宿主侧统一记一份，界面能查、SSH 也能 `cat`.
+    ///
+    /// 参数：`limit`（最多返回多少条，默认 100）
+    private static func airliftChanges(_ args: [String: Any]) -> (Int32, String) {
+        let limit = (args["limit"] as? Int) ?? 100
+        let all = AirliftChangeLog.readAll()
+        let rows: [[String: Any]] = all.prefix(limit).map { entry in
+            ["time": entry.time, "action": entry.action, "path": entry.path,
+             "bytes": entry.bytes, "backup": entry.backup,
+             "verified": entry.verified, "note": entry.note]
+        }
+        return ok(["count": all.count,
+                   "returned": rows.count,
+                   "changes": rows,
+                   "markdownPath": AirliftChangeLog.markdownPath,
+                   "via": "airlift"])
+    }
+
+    /// `airlift.changes.clear` —— 清空记录（**不动设备上的文件**）.
+    private static func airliftChangesClear(_ args: [String: Any]) -> (Int32, String) {
+        AirliftChangeLog.clear()
+        return ok(["note": "记录已清空. 设备上的文件**没有**被动过."])
     }
 
     /// `airlift.writeMany` —— **一次 stage 写多个文件到同一个目录**（v0.3.499 新增）.
@@ -1029,6 +1078,13 @@ enum HostCapabilityService {
         ]
         if let warn = refuseReasonForReaddir(dir) {
             extra["warning"] = warn
+        }
+        for file in files {
+            AirliftChangeLog.append(action: outcome.ok ? "write" : "write-failed",
+                                    path: dir + "/" + file.name,
+                                    bytes: file.data.count,
+                                    verified: false,
+                                    note: "批量写（\(files.count) 个文件，1 趟 airlift）")
         }
         return outcome.ok ? ok(extra) : fail(outcome.summary, extra: extra)
     }
