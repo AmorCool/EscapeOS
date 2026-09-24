@@ -42,7 +42,7 @@ enum AirliftChangeLog {
         let verified: Bool
         /// 备注（比如「批量写 12 个文件」）
         let note: String
-        /// ★ **值的变化**（用户要求「动作是改了什么值 应该显示在改动记录里」）.
+        /// **值的变化**（用户要求「动作是改了什么值 应该显示在改动记录里」）.
         ///
         /// 形如 `SBDontLockAfterCrash: 未设置 → true`、`原 5764 B → 新 5535 B`.
         /// 用 `String?` 是为了兼容**旧记录**（那时没这个字段，解码成 nil）.

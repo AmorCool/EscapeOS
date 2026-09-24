@@ -582,7 +582,7 @@ static bool uloader_chained_fixups(struct uloader_image *img) {
                 }
 
                 if (next == 0) break;
-                offsetInPage += (uint64_t)next * CHAIN_STRIDE;   // ★ 规范：next 单位是 4 字节
+                offsetInPage += (uint64_t)next * CHAIN_STRIDE;   // 规范：next 单位是 4 字节
                 if (offsetInPage >= pageSize) break;   // 链走出本页即结束
             }
         }

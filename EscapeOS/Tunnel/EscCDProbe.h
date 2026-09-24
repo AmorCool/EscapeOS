@@ -26,12 +26,12 @@
 //      → tunnel_info().server_rsd_port
 //      → create_software_tunnel()
 //      → adapter.connect(rsd_port)          ← 隧道内新开一条流
-//      → RsdHandshake::new(stream)          ← ★ 第二个握手，app_service 要的是它
+//      → RsdHandshake::new(stream)          ← 第二个握手，app_service 要的是它
 //      → AppServiceClient::connect_rsd(&mut adapter, &mut handshake)
 //  本仓 `DeviceControlService.withAppService` 用的是**第一条**（RPPairing）握手。
 //  **本轮只做探针，不改 withAppService。**
 //
-//  ## ★ 为什么入口不是 lockdown provider（v0.3.463 真机纠正）
+//  ## 为什么入口不是 lockdown provider（v0.3.463 真机纠正）
 //  第一版探针走的是 `idevice_pairing_file_read` + `idevice_tcp_provider_new` +
 //  `core_device_proxy_connect(provider)`。**真机在第一步就失败了**：
 //      code=13 sub_code=0 message=UnexpectedResponse("failed to parse raw pairing file from bytes")
@@ -64,14 +64,14 @@
 //                                                  —— 取 `info->port`；不在表里就如实报并终止
 //    [4] `idevice_new_tcp_socket(ip:info->port, ...)`  —— 直连该端口，包成 `Idevice`
 //    [5] `core_device_proxy_new(idevice, &proxy)`  —— ⚠️ **消费 idevice**，此后不再 free
-//    [6] `core_device_proxy_get_server_rsd_port`   —— ★ 必须在 [7] 之前（[7] 消费 proxy）
+//    [6] `core_device_proxy_get_server_rsd_port`   —— 必须在 [7] 之前（[7] 消费 proxy）
 //    [7] `core_device_proxy_create_tcp_adapter`    —— ⚠️ **消费 proxy**，此后不再 free 它
 //    [8] `adapter_connect(cdAdapter, rsdPort)`     —— 拿 `struct ReadWriteOpaque *`
 //    [9] `rsd_handshake_new(stream)`               —— ⚠️ **消费 stream**；这就是第二个 RSD 握手
 //    [10] `rsd_get_services`                       —— 只读内存结构，不建连；全量列 name/port/remoteXPC
-//    [11] `app_service_connect_rsd` → `app_service_list_processes` —— ★ 端到端，报进程条数
+//    [11] `app_service_connect_rsd` → `app_service_list_processes` —— 端到端，报进程条数
 //
-//  **★ 刻意不做 `idevice_rsd_checkin`**：上游 `CoreDeviceProxy::new` 只做
+//  **刻意不做 `idevice_rsd_checkin`**：上游 `CoreDeviceProxy::new` 只做
 //  `idevice.socket.take()` + `CdTunnel::handshake(socket)`，**没有 RSDCheckin 这一步**；
 //  而且本仓 v0.3.420 正是在这里加了 `idevice_new_tcp_socket` + `idevice_rsd_checkin` 之后出的事故。
 //  少做一步就少一分风险。

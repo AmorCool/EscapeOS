@@ -52,6 +52,24 @@ def lint(path):
     return bad
 
 
+def check_forbidden(path):
+    """扫**禁用字符** —— 目前只有一个：星号星（U+2605）.
+
+    用户要求「任何地方都不可以出现」. 这个字符曾被我当装饰写进注释与提交信息，
+    清过 800+ 处又反复冒出来 ⇒ 必须由工具拦住，不能靠记性.
+    """
+    star = chr(0x2605)
+    bad = []
+    try:
+        text = io.open(path, encoding="utf-8").read()
+    except Exception:
+        return bad
+    for i, line in enumerate(text.split(chr(10)), 1):
+        if star in line:
+            bad.append((i, line.strip()[:80]))
+    return bad
+
+
 def collect(args):
     out = []
     for a in args:
@@ -70,6 +88,10 @@ def main():
         return 1
     ok = True
     for p in files:
+        # 禁用字符
+        for i, txt in check_forbidden(p)[:5]:
+            ok = False
+            print("FORBIDDEN", p, "L%d" % i, txt)
         bad = lint(p)
         if bad:
             ok = False

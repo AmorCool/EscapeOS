@@ -108,7 +108,7 @@ static unsigned char *esc_text_finish(EscTextBuf *b, unsigned int *out_len, char
 
 // MARK: - 探针主体
 
-// ★ 这条链要连的 RSD 服务名（真机 64 条服务里有它，**没有** `.shim.remote` 后缀）。
+// 这条链要连的 RSD 服务名（真机 64 条服务里有它，**没有** `.shim.remote` 后缀）。
 #define ESC_CD_PROXY_SERVICE "com.apple.internal.devicecompute.CoreDeviceProxy"
 
 // 第二个握手要连的服务（判据用）
@@ -314,8 +314,8 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
     }
     esc_text_puts(&buf, "  · OK\n");
 
-    // [6] ★ 必须在下一次调用之前取端口（下一次会消费 proxy）
-    esc_text_puts(&buf, "\n[6] core_device_proxy_get_server_rsd_port（★ 必须在 [7] 之前）\n");
+    // [6] 必须在下一次调用之前取端口（下一次会消费 proxy）
+    esc_text_puts(&buf, "\n[6] core_device_proxy_get_server_rsd_port（必须在 [7] 之前）\n");
     uint16_t rsdPort = 0;
     err = core_device_proxy_get_server_rsd_port(proxy, &rsdPort);
     if (err != NULL) {
@@ -374,8 +374,8 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
     }
     esc_text_puts(&buf, "  · OK\n");
 
-    // [9] ★ 第二个 RSD 握手 —— ⚠️ 本调用**消费** stream
-    esc_text_puts(&buf, "\n[9] ★ rsd_handshake_new(stream) —— 第二个 RSD 握手（⚠️ 消费 stream）\n");
+    // [9] 第二个 RSD 握手 —— ⚠️ 本调用**消费** stream
+    esc_text_puts(&buf, "\n[9] rsd_handshake_new(stream) —— 第二个 RSD 握手（⚠️ 消费 stream）\n");
     struct RsdHandshakeHandle *cdHandshake = NULL;
     err = rsd_handshake_new(stream, &cdHandshake);
     stream = NULL;    // 已被消费：置空以防后续误用（不是释放）
@@ -446,14 +446,14 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
         }
     }
 
-    esc_text_puts(&buf, "\n[10.1] ★ 判据\n");
+    esc_text_puts(&buf, "\n[10.1] 判据\n");
     esc_text_printf(&buf, "  · %s → %s\n", kTargetService,
                     targetFound ? "在表里 ✅" : "❌ 不在表里");
     esc_text_printf(&buf, "  · com.apple.coredevice.* 共 %lu 条\n", (unsigned long)coreDeviceCount);
     esc_text_puts(&buf, "  · 对照：RPPairing 隧道那条握手 19 次真机 dump 里 coredevice 整块 0 条\n");
 
-    // [11] ★ 端到端：**即使服务不在表里也照跑** —— 失败原文本身就是证据
-    esc_text_puts(&buf, "\n[11] ★ 端到端：app_service_connect_rsd(cdAdapter, cdHandshake)\n");
+    // [11] 端到端：**即使服务不在表里也照跑** —— 失败原文本身就是证据
+    esc_text_puts(&buf, "\n[11] 端到端：app_service_connect_rsd(cdAdapter, cdHandshake)\n");
     if (!targetFound) {
         esc_text_puts(&buf, "  （服务不在表里，仍按任务要求继续尝试：预期失败，失败原文即证据）\n");
     }
@@ -482,7 +482,7 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
     }
     esc_text_puts(&buf, "  · 连接成功 ✅\n");
 
-    esc_text_puts(&buf, "\n[12] ★ 端到端：app_service_list_processes\n");
+    esc_text_puts(&buf, "\n[12] 端到端：app_service_list_processes\n");
     struct ProcessTokenC *processes = NULL;
     uintptr_t pcount = 0;
     err = app_service_list_processes(appService, &processes, &pcount);
@@ -499,7 +499,7 @@ unsigned char *esc_cd_probe_run(const char *pairing_path,
         return esc_text_finish(&buf, out_len, out_err);
     }
 
-    esc_text_printf(&buf, "  ★ 返回进程条数 = %lu\n", (unsigned long)pcount);
+    esc_text_printf(&buf, "  返回进程条数 = %lu\n", (unsigned long)pcount);
     if (processes != NULL) {
         // 全量可能上千条；只列前 50 条（条数本身已是判据，明细仅供核对）。
         uintptr_t shown = pcount < 50 ? pcount : 50;

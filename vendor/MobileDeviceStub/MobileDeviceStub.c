@@ -22,7 +22,7 @@
 // 这 17 个符号只是 dyld 在 dlopen 时必须能解析出来的**占位**（chained fixups 在加载期
 // 就会把全部 import 绑定完，缺一个就 dlopen 失败）。
 //
-// ## ★ 返回值：**故意返回失败码，而不是 0**
+// ## 返回值：**故意返回失败码，而不是 0**
 // 约定：`AMDevice*` 系列 **0 = 成功**。若将来真走到 `ATHostConnectionCreate` 那条路径，
 // 这些函数会被调用；此时若返回 0，调用方会认为「连上了」，然后拿着我们返回的 **NULL 句柄**
 // 继续往下走 → 直接崩。返回非 0 则让框架**认为失败并干净退出**（正是我们要的结果：
@@ -53,7 +53,7 @@ int AMDeviceStartSession(AMDeviceRef device) { (void)device; return kStubFailure
 int AMDeviceStopSession(AMDeviceRef device) { (void)device; return kStubFailure; }
 int AMDeviceValidatePairing(AMDeviceRef device) { (void)device; return kStubFailure; }
 
-// ★ `AMDeviceGetInterfaceType` 单独说明：它是**取值接口**，不是错误码接口 ——
+// `AMDeviceGetInterfaceType` 单独说明：它是**取值接口**，不是错误码接口 ——
 // 返回的是设备当前走哪种传输的**枚举**（USB / 网络 / …），语义上**没有「失败」这一档**，
 // 所以这里**不返回 kStubFailure**：
 //   · `-1` 不是合法枚举值，调用方若拿它查表 / 索引 / 走 switch 可能落到未定义分支；

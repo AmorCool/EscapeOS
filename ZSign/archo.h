@@ -1,5 +1,5 @@
 #pragma once
-// ★ Xcode 27 兼容（2026-09-18）：本头文件用到 `set<string>` / `string`，
+// Xcode 27 兼容（2026-09-18）：本头文件用到 `set<string>` / `string`，
 //   此前依赖 `mach-o.h` → `openssl.h` → `json.h` 的**传递包含**（json.h 里有 <string> 但**没有 <set>**）。
 //   Xcode 27 的新 libc++ 不再传递提供这些符号，会报 `error: no template named 'set'`。
 //   ⇒ 按「头文件自包含」原则显式补上。**不要删**。

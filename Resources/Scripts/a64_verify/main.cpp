@@ -42,7 +42,7 @@
 
 // ─── 基址布局：与 SapMachine.cpp:187-198 同款，只多一个 kATHostBase ────────────
 //
-// ★ 关于「两个镜像的 __TEXT vmaddr 都是 0 会不会撞车」：
+// 关于「两个镜像的 __TEXT vmaddr 都是 0 会不会撞车」：
 //   MachImage 的 Load() 把镜像映射到**调用方给的 loadBase**，段内偏移是
 //   `loadBase + (seg.vmaddr - imageBase_)`。CoreFP 与 ATH 的 imageBase_ 都是 0，
 //   但两者的 loadBase 不同（下面两个常量），所以**不会算出同一段地址**。
@@ -93,7 +93,7 @@ static std::vector<uint8_t> ReadFile(const std::string& path) {
 
 // 与 SapMachine::Invoke 同款：SysV 传参 + 在 kReturnAddr 处放 HLT 作停止哨兵。
 //
-// ★ 故障判定顺序**刻意照抄 SapMachine::Invoke**（SapMachine.cpp:748-762）：
+// 故障判定顺序**刻意照抄 SapMachine::Invoke**（SapMachine.cpp:748-762）：
 //   先 BeforeInvoke() 清上一次的 fault → emu_start → 先查 HasFault()、再查 RIP。
 //   为什么顺序重要：未注册的 import 会被 Resolve 建成「抛异常桩」，
 //   它的 handler 在 Dispatch 里被 catch 后走 Fail() → uc_emu_stop。
@@ -166,8 +166,8 @@ static void HexDump(const std::vector<uint8_t>& b) {
 //              （实测出现过 0x4003 / 0x4001 / 0x4000）
 //   [20..83] = 64 字节          每次不同
 //
-// ★ 注意偏移是**十进制字节偏移**（18..19 就是 0x12..0x13）。
-// ★ 2 + 16 + 2 + 64 = 84 —— 分区长度之和恰好等于总长，这本身就独立佐证了分区正确。
+// 注意偏移是**十进制字节偏移**（18..19 就是 0x12..0x13）。
+// 2 + 16 + 2 + 64 = 84 —— 分区长度之和恰好等于总长，这本身就独立佐证了分区正确。
 //
 // 为什么值得做这个核对：`err=0 / outLen=84` 是**弱判据** —— 项目历史实验
 // （CHANGELOG.md:631）证明「84 字节全 0」与「`01 01`+82 个 0」在真机上也返回成功。
@@ -189,7 +189,7 @@ static bool CheckStructure(const std::vector<uint8_t>& b, const char* tag) {
         std::printf("  ✗ %s [0..1] = %02x %02x，期望 01 01\n", tag, unsigned(b[0]), unsigned(b[1]));
         ok = false;
     } else {
-        std::printf("  ★ %s [0..1]   = 01 01 ✓（常量）\n", tag);
+        std::printf("  %s [0..1]   = 01 01 ✓（常量）\n", tag);
     }
 
     // [2..17] 16 字节可变段
@@ -197,7 +197,7 @@ static bool CheckStructure(const std::vector<uint8_t>& b, const char* tag) {
         std::printf("  ✗ %s [2..17]  16 字节全 0\n", tag);
         ok = false;
     } else {
-        std::printf("  ★ %s [2..17]  16 字节非全零 ✓\n", tag);
+        std::printf("  %s [2..17]  16 字节非全零 ✓\n", tag);
     }
 
     // [18..19] u16LE，高 14 位应为 0x4000
@@ -208,7 +208,7 @@ static bool CheckStructure(const std::vector<uint8_t>& b, const char* tag) {
                     tag, unsigned(w), unsigned(hi));
         ok = false;
     } else {
-        std::printf("  ★ %s [18..19] = %#06x ✓（高 14 位 0x4000，低 2 位 flag = %u）\n",
+        std::printf("  %s [18..19] = %#06x ✓（高 14 位 0x4000，低 2 位 flag = %u）\n",
                     tag, unsigned(w), unsigned(w & 0x0003u));
     }
 
@@ -217,7 +217,7 @@ static bool CheckStructure(const std::vector<uint8_t>& b, const char* tag) {
         std::printf("  ✗ %s [20..83] 64 字节全 0\n", tag);
         ok = false;
     } else {
-        std::printf("  ★ %s [20..83] 64 字节非全零 ✓\n", tag);
+        std::printf("  %s [20..83] 64 字节非全零 ✓\n", tag);
     }
     return ok;
 }
@@ -351,7 +351,7 @@ int main(int argc, char** argv) {
                     c1.err, (unsigned long long)c1.outPtr, c1.outLen, c1.sid);
 
         std::printf("[a64] 调用 #2：同样入参再跑一次 …\n");
-        // ★ #2 只是**诊断**，不是判据 —— 所以它连异常都不许往外抛。
+        // #2 只是**诊断**，不是判据 —— 所以它连异常都不许往外抛。
         //
         // 为什么必须就地收口（这是一处真缺陷，不是防御性编程）：
         //   Invoke() 在 **fault / 跑飞 / 超时** 三种情况下都是**抛异常**（见 Invoke 末尾）。
@@ -385,7 +385,7 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // #2 只用于判「输出是否随机」。★ 它失败**不能**推翻 #1 的结论 ——
+        // #2 只用于判「输出是否随机」。它失败**不能**推翻 #1 的结论 ——
         // 这个函数可能就是一次性的（会话状态被 #1 消费掉），
         // 若把 #2 也当硬判据，就会凭空造出一个假失败，把已证明的结论推翻。
         const bool twoOk = (c2.err == 0 && c2.outLen == 84 && c2.outPtr != 0 && !c2.blob.empty());
@@ -428,9 +428,9 @@ int main(int argc, char** argv) {
                         unsigned(c1.blob[0]), unsigned(c1.blob[1]),
                         unsigned(c2.blob[0]), unsigned(c2.blob[1]),
                         (c1.blob[0] == c2.blob[0] && c1.blob[1] == c2.blob[1])
-                            ? "一致（应为常量）✓" : "★ 不一致（常量都变了）");
+                            ? "一致（应为常量）✓" : "不一致（常量都变了）");
             std::printf("[a64]   sessionId #1=%u  #2=%u   %s\n", c1.sid, c2.sid,
-                        c1.sid == c2.sid ? "★ 两次相同（可疑）" : "不同 ✓");
+                        c1.sid == c2.sid ? "两次相同（可疑）" : "不同 ✓");
         }
 
         if (!s1 || !s2) {
@@ -442,11 +442,11 @@ int main(int argc, char** argv) {
             return 1;
         }
         if (!twoOk) {
-            std::printf("\n[a64] 结果：★ 通过（仅 #1）—— err=0, outLen=84, 结构符合已知布局；"
+            std::printf("\n[a64] 结果：通过（仅 #1）—— err=0, outLen=84, 结构符合已知布局；"
                         "#2 未跑成 ⇒ 随机性**未验**\n");
             return 0;
         }
-        // ★ 分段差异全为 0 时，**不能**靠「diff != 0」就说随机性过了：
+        // 分段差异全为 0 时，**不能**靠「diff != 0」就说随机性过了：
         //   两次的结构核对都通过 ⇒ [0..1] 都是 01 01，所以差异只可能落在 [18..19]。
         //   即 16 字节段与 64 字节段**逐字节相同**，唯一变化的是 flag 低 2 位 ——
         //   这正是「常量填充 + 自增计数器」的指纹，而不是随机源。
@@ -458,7 +458,7 @@ int main(int argc, char** argv) {
                         "不是随机源。随机性**未验**，不要当作已验证。\n");
             return 0;
         }
-        std::printf("\n[a64] 结果：★ 通过 —— err=0, outLen=84, 结构符合已知布局, 两次输出不同（%zu/84 字节）\n", diff);
+        std::printf("\n[a64] 结果：通过 —— err=0, outLen=84, 结构符合已知布局, 两次输出不同（%zu/84 字节）\n", diff);
         return 0;
     } catch (const std::exception& e) {
         std::printf("\n[a64] 异常：%s\n", e.what());
