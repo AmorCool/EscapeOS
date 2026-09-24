@@ -21,6 +21,12 @@
 //  路径里有 `/`、空格、中文 ⇒ 当目录名会踩转义/长度坑. 用 `sha1(路径)` 的十六进制
 //  当目录名，再用 `index.json` 把哈希映射回真实路径（人可读）.
 //
+//  ## 为什么不自动挑「哪一份是好的」（用户否决）
+//  曾想按「最大/最全」自动挑一份来还原 —— **错的**：文件变小不等于坏
+//  （正常删键也会变小），拿大小当判据会**误判**，可能把用户主动删过的状态
+//  当成「坏的」而拒绝还原. ⇒ 本仓库**只存、只列、只回放**，把
+//  **键数 / 字节 / 时间**摊开给用户自己看，选择权完全交给用户.
+//
 
 import CryptoKit
 import Foundation
@@ -111,6 +117,26 @@ enum AirliftBackupStore {
         lock.lock()
         defer { lock.unlock() }
         return try? Data(contentsOf: fileURL(for: path, index: index))
+    }
+
+    /// 一份数据的「顶层键数」—— 能解析成**字典 plist** 时才有值，否则 `nil`.
+    ///
+    /// ## 为什么在**读取时**算，而不是存的时候记进 index.json
+    /// 一是老备份（已经躺在设备上的那些）当时没记，事后补不上；
+    /// 二是算一次就是一次本地文件解析，**毫秒级**，比让它跟 index 不同步划算.
+    static func plistKeyCount(_ data: Data) -> Int? {
+        var format = PropertyListSerialization.PropertyListFormat.binary
+        guard let object = try? PropertyListSerialization.propertyList(from: data,
+                                                                      options: [],
+                                                                      format: &format),
+              let dict = object as? [String: Any] else { return nil }
+        return dict.count
+    }
+
+    /// 某一份备份的顶层键数（非字典 plist ⇒ `nil`）.
+    static func keyCount(path: String, index: Int) -> Int? {
+        guard let data = data(path: path, index: index) else { return nil }
+        return plistKeyCount(data)
     }
 
     /// 全部有备份的路径（界面用）.

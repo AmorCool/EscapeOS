@@ -1006,6 +1006,9 @@ enum HostCapabilityService {
         dict["resolvedFrom"] = target
         dict["targetIsDirectory"] = isDirectory
         dict["source"] = sourceDesc
+        // 目标若在 Preferences 下 ⇒ 必须杀 cfprefsd，否则它会把内存里的旧副本刷回来，
+        // 覆盖我们刚写进去的内容（「写完看着生效、过一会儿又变回去」的根因）
+        PlistTweakService.settlePreferences(path: finalPath, note: "airlift.write 后")
         // 改动记录（用户要求「防止以后不知道改了啥」）
         let backupCount = AirliftBackupStore.versions(path: finalPath).count
         AirliftChangeLog.append(action: "write",
@@ -1084,7 +1087,14 @@ enum HostCapabilityService {
     /// ⇒ `1.bak` 是**我们第一次介入之前**的原文件，**永不覆盖**；`2.bak`、`3.bak` … 是
     /// 每次覆盖前的快照. 还原默认回 1 号.
     ///
-    /// 参数：`path`（必填）
+    /// ## 为什么每份都回报**键数**（用户指出）
+    /// 用户指出：「『1 号 = 初始』在首次快照已坏时救不回」—— 对. 1 号只保证「最早」，
+    /// **不保证「完好」**（若我们第一次读就已经读到坏内容，1 号就是坏的）.
+    /// 我原本想按「最大/最全」自动挑一份 —— **被用户否决，而且确实是错的**：
+    /// 文件变小不等于坏（正常删键也会变小），拿大小当判据会误判.
+    /// ⇒ 现在**不自动挑**，把 `键数 / 字节 / 时间` 摊开，哪份是好的由用户判断.
+    ///
+    /// 参数：`path`（必填；不传 ⇒ 列出所有有备份的路径）
     private static func airliftBackups(_ args: [String: Any]) -> (Int32, String) {
         // 不传 path ⇒ 列出**所有**有备份的路径（界面「备份与还原」页要用）
         guard let path = args["path"] as? String, !path.isEmpty else {
@@ -1095,12 +1105,26 @@ enum HostCapabilityService {
                        "root": AirliftBackupStore.rootPath])
         }
         let versions = AirliftBackupStore.versions(path: path)
-        let rows: [[String: Any]] = versions.map { v in
-            ["index": v.index, "time": v.time, "bytes": v.bytes, "note": v.note,
-             "isOriginal": v.index == 1]
+        let rows: [[String: Any]] = versions.map { v -> [String: Any] in
+            var row: [String: Any] = ["index": v.index, "time": v.time, "bytes": v.bytes,
+                                      "note": v.note, "isOriginal": v.index == 1]
+            // 键数（只有能解析成字典 plist 的备份才有）—— 判「这份是不是坏/是不是被截断」
+            if let keys = AirliftBackupStore.keyCount(path: path, index: v.index) {
+                row["keys"] = keys
+            }
+            return row
+        }
+        // 「当前」= 设备上现在的内容. 走**本地缓存**，不触发 airlift（否则这一页要等十几秒）.
+        // 缓存可能过期 ⇒ 明确回报 `currentFromCache`，界面据此提示「可能不是最新」.
+        var extra: [String: Any] = [:]
+        if let stats = PlistTweakService.cachedStats(path: path) {
+            extra["currentBytes"] = stats.bytes
+            extra["currentFromCache"] = true
+            if let keys = stats.keys { extra["currentKeys"] = keys }
         }
         return ok(["path": path, "count": versions.count, "versions": rows,
-                   "root": AirliftBackupStore.rootPath, "via": "airlift"])
+                   "root": AirliftBackupStore.rootPath, "via": "airlift"]
+                  .merging(extra) { _, new in new })
     }
 
     /// `airlift.restore` —— 用某一份备份**还原**目标（v0.3.519）.
@@ -1108,6 +1132,11 @@ enum HostCapabilityService {
     /// ## 为什么默认回 1 号
     /// 1 号是「我们介入之前」的原文件 ⇒ 那才是用户心里的「还原」.
     /// 想回到中间某一步，显式传 `version`.
+    ///
+    /// ## 但 1 号不保证**完好**（用户指出）
+    /// 「1 号 = 初始」只保证**最早**：若我们第一次读就已经读到坏内容，1 号本身就是坏的.
+    /// ⇒ 界面把每份的**键数/字节/时间**都摆出来，让用户自己挑；
+    /// 本能力**不做任何自动挑选**，传几号就还原几号.
     ///
     /// 参数：`path`（必填）、`version`（可选，默认 1）
     private static func airliftRestore(_ args: [String: Any]) -> (Int32, String) {
@@ -1125,11 +1154,19 @@ enum HostCapabilityService {
             _ = AirliftBackupStore.snapshot(path: path, data: current, note: "还原前自动快照")
         }
         let write = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
+        // 还原后同样要收尾：目标在 Preferences 下就杀 cfprefsd，
+        // 否则它会把「内存里的旧副本」刷回来，把刚还原的内容又覆盖掉
+        if write.ok {
+            PlistTweakService.settlePreferences(path: path, note: "备份还原后")
+        }
+        // 还原后的键数（记录里写清楚「变成了几个键」，便于判断这份备份是不是好的）
+        let keys = AirliftBackupStore.plistKeyCount(data)
         AirliftChangeLog.append(action: write.ok ? "restore" : "restore-failed",
                                 path: path, bytes: data.count, verified: false,
                                 note: "从第 \(version) 份备份还原"
-                                    + (version == 1 ? "（初始备份）" : ""),
-                                detail: "还原为 \(data.count) 字节")
+                                    + (version == 1 ? "（最早的一份）" : ""),
+                                detail: "还原为 \(data.count) 字节"
+                                    + (keys.map { " / \($0) 键" } ?? ""))
         return write.ok
             ? ok(["path": path, "version": version, "bytes": data.count,
                   "steps": write.details])
