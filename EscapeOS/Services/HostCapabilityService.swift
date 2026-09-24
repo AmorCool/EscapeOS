@@ -133,6 +133,9 @@ enum HostCapabilityService {
         "airlift.writeMany",
         "airlift.changes",
         "airlift.changes.clear",
+        "airlift.backups",
+        "airlift.restore",
+        "plist.tweak",
         "apps.lookup",
         "afc.list",
         "afc.stat",
@@ -269,6 +272,9 @@ enum HostCapabilityService {
         case "airlift.writeMany":     return airliftWriteMany(args)
         case "airlift.changes":       return airliftChanges(args)
         case "airlift.changes.clear": return airliftChangesClear(args)
+        case "airlift.backups":      return airliftBackups(args)
+        case "airlift.restore":      return airliftRestore(args)
+        case "plist.tweak":          return plistTweak(args)
         case "apps.lookup":           return appsLookup(args)
         case "afc.list":              return afcList(args)
         case "afc.stat":              return afcStat(args)
@@ -782,15 +788,27 @@ enum HostCapabilityService {
         var steps: [String] = []
 
         if backup {
-            let (rc, json, _) = airPull(target: target, airName: airFlattenName(for: target) + ".bak")
-            steps.append(contentsOf: stringList(parseArgs(json)["steps"]).map { "备份: \($0)" })
-            guard rc == 0 else {
-                steps.append("⚠️ 覆盖前备份失败 —— 按「先备份再覆盖」的要求，**中止覆盖**")
-                return (1, jsonText(["ok": false,
-                                     "error": "备份失败，已中止覆盖（目标未被改动）",
-                                     "steps": steps, "path": target]))
+            // ★ v0.3.519：**带序号的备份**（用户指出「应该记录第一次的备份，而不是每次覆盖」）
+            //
+            // 原来只往 `AIR/<名>.bak` 存一份、**每次覆盖** ⇒ 写第 3 次之后最初的原文件就没了.
+            // 现在：先把原内容读回来，存进 `AirliftBackups/<路径哈希>/<序号>.bak`：
+            //   1.bak = **初始备份**（第一次写入前，永不覆盖）
+            //   2.bak / 3.bak … = 每次写入前的快照
+            let pulled = airPull(target: target, airName: nil)
+            if let original = pulled.2 {
+                let index = AirliftBackupStore.snapshot(
+                    path: target, data: original,
+                    note: "第 \(AirliftBackupStore.versions(path: target).count + 1) 次覆盖前")
+                if index == 1 {
+                    steps.append("已存**初始备份**（1.bak，\(original.count) 字节）—— 还原时默认回这一份")
+                } else {
+                    steps.append("已存第 \(index) 份备份（\(original.count) 字节）；初始备份仍是 1.bak")
+                }
+            } else {
+                steps.append("目标当前读不到（可能还不存在）⇒ 跳过备份")
             }
-            steps.append("备份已存到 \(airDir)/\(airFlattenName(for: target)).bak")
+            // 顺带在 AIR 里留一份（方便界面直接看），失败不影响主流程
+            _ = airPull(target: target, airName: airFlattenName(for: target) + ".bak")
         }
 
         let write = withAirlift { AirliftExploit.pocWriteFile(path: target, data: data) }
@@ -962,12 +980,17 @@ enum HostCapabilityService {
         dict["targetIsDirectory"] = isDirectory
         dict["source"] = sourceDesc
         // 改动记录（用户要求「防止以后不知道改了啥」）
+        let backupCount = AirliftBackupStore.versions(path: finalPath).count
         AirliftChangeLog.append(action: "write",
                                 path: finalPath,
                                 bytes: data.count,
-                                backup: (dict["backup"] as? String) ?? "",
+                                backup: backupCount > 0
+                                    ? "\(AirliftBackupStore.rootPath)（\(backupCount) 份，1 = 初始）"
+                                    : "",
                                 verified: (dict["verified"] as? Bool) ?? false,
-                                note: isDirectory ? "目标是目录，落点 \(finalPath)" : "")
+                                note: isDirectory ? "目标是目录，落点 \(finalPath)" : "",
+                                detail: "写入 \(data.count) 字节"
+                                    + (backupCount > 0 ? "；初始备份 1.bak" : ""))
         return (0, jsonText(dict))
     }
 
@@ -1025,6 +1048,110 @@ enum HostCapabilityService {
     private static func airliftChangesClear(_ args: [String: Any]) -> (Int32, String) {
         AirliftChangeLog.clear()
         return ok(["note": "记录已清空. 设备上的文件**没有**被动过."])
+    }
+
+    /// `airlift.backups` —— 列某个沙盒外文件的**带序号备份**（v0.3.519）.
+    ///
+    /// ## 语义（用户要求）
+    /// 「备份应该记录第一次的备份，而不是每次写入都备份一次；序号 1 即初始备份」.
+    /// ⇒ `1.bak` 是**我们第一次介入之前**的原文件，**永不覆盖**；`2.bak`、`3.bak` … 是
+    /// 每次覆盖前的快照. 还原默认回 1 号.
+    ///
+    /// 参数：`path`（必填）
+    private static func airliftBackups(_ args: [String: Any]) -> (Int32, String) {
+        // 不传 path ⇒ 列出**所有**有备份的路径（界面「备份与还原」页要用）
+        guard let path = args["path"] as? String, !path.isEmpty else {
+            let paths = AirliftBackupStore.allPaths().map { p -> [String: Any] in
+                ["path": p, "count": AirliftBackupStore.versions(path: p).count]
+            }
+            return ok(["paths": paths, "count": paths.count,
+                       "root": AirliftBackupStore.rootPath])
+        }
+        let versions = AirliftBackupStore.versions(path: path)
+        let rows: [[String: Any]] = versions.map { v in
+            ["index": v.index, "time": v.time, "bytes": v.bytes, "note": v.note,
+             "isOriginal": v.index == 1]
+        }
+        return ok(["path": path, "count": versions.count, "versions": rows,
+                   "root": AirliftBackupStore.rootPath, "via": "airlift"])
+    }
+
+    /// `airlift.restore` —— 用某一份备份**还原**目标（v0.3.519）.
+    ///
+    /// ## 为什么默认回 1 号
+    /// 1 号是「我们介入之前」的原文件 ⇒ 那才是用户心里的「还原」.
+    /// 想回到中间某一步，显式传 `version`.
+    ///
+    /// 参数：`path`（必填）、`version`（可选，默认 1）
+    private static func airliftRestore(_ args: [String: Any]) -> (Int32, String) {
+        guard let path = args["path"] as? String, !path.isEmpty else {
+            return fail("airlift.restore 缺少 path")
+        }
+        let version = (args["version"] as? Int) ?? 1
+        guard let data = AirliftBackupStore.data(path: path, index: version) else {
+            let have = AirliftBackupStore.versions(path: path).map(\.index)
+            return fail("没有第 \(version) 份备份（现有：\(have.isEmpty ? "无" : have.map(String.init).joined(separator: ", "))）",
+                        extra: ["path": path, "version": version])
+        }
+        // 还原前先把「当前内容」也存一份 —— 免得还原错了没法回头
+        if let current = airPull(target: path, airName: nil).2 {
+            _ = AirliftBackupStore.snapshot(path: path, data: current, note: "还原前自动快照")
+        }
+        let write = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
+        AirliftChangeLog.append(action: write.ok ? "restore" : "restore-failed",
+                                path: path, bytes: data.count, verified: false,
+                                note: "从第 \(version) 份备份还原"
+                                    + (version == 1 ? "（初始备份）" : ""),
+                                detail: "还原为 \(data.count) 字节")
+        return write.ok
+            ? ok(["path": path, "version": version, "bytes": data.count,
+                  "steps": write.details])
+            : fail("还原未成立：\(write.summary)", extra: ["path": path, "version": version,
+                                                          "steps": write.details])
+    }
+
+    /// `plist.tweak` —— 改沙盒外 plist 的**单个键**（v0.3.519）.
+    ///
+    /// ## 这是干什么的
+    /// 移植 Nugget 的「系统选项」用的底座：Nugget 的功能本质就是往某个 plist 写键，
+    /// 而它自己的机制（SparseRestore）**在 iOS 27 上已被 Apple 补掉**（它 README 自己写的）.
+    /// 我们的 airlift 能直接读写文件 ⇒ 只要目标 plist 在可写区就行.
+    ///
+    /// ## 参数
+    /// - `path`：目标 plist 绝对路径
+    /// - `key`：键名
+    /// - `value`：要设的值（`true`/`false`/数字/字符串）；**不传 = 删键（回到系统默认）**
+    /// - `list`：`true` 时只列出现有键，不改动
+    private static func plistTweak(_ args: [String: Any]) -> (Int32, String) {
+        guard let path = args["path"] as? String, !path.isEmpty else {
+            return fail("plist.tweak 缺少 path")
+        }
+        if (args["list"] as? Bool) == true {
+            do {
+                let keys = try PlistTweakService.readKeys(path: path)
+                return ok(["path": path, "count": keys.count, "keys": keys])
+            } catch {
+                return fail(error.localizedDescription, extra: ["path": path])
+            }
+        }
+        guard let key = args["key"] as? String, !key.isEmpty else {
+            return fail("plist.tweak 需要 key（或 list:true 只列出）")
+        }
+        do {
+            if let value = args["value"] {
+                let bytes = try PlistTweakService.set(path: path, key: key, value: value)
+                return ok(["path": path, "key": key, "action": "set",
+                           "value": "\(value)", "bytes": bytes,
+                           "note": "改完**不一定立刻生效** —— SpringBoard 在启动时读这些偏好，"
+                                 + "多数要 respring / 重启才看得到"])
+            }
+            let changed = try PlistTweakService.unset(path: path, key: key)
+            return ok(["path": path, "key": key, "action": changed ? "unset" : "noop",
+                       "note": changed ? "已删键 ⇒ 回到系统默认"
+                                       : "这个键本来就没有，无需改动"])
+        } catch {
+            return fail(error.localizedDescription, extra: ["path": path, "key": key])
+        }
     }
 
     /// `airlift.writeMany` —— **一次 stage 写多个文件到同一个目录**（v0.3.499 新增）.

@@ -42,6 +42,11 @@ enum AirliftChangeLog {
         let verified: Bool
         /// 备注（比如「批量写 12 个文件」）
         let note: String
+        /// ★ **值的变化**（用户要求「动作是改了什么值 应该显示在改动记录里」）.
+        ///
+        /// 形如 `SBDontLockAfterCrash: 未设置 → true`、`原 5764 B → 新 5535 B`.
+        /// 用 `String?` 是为了兼容**旧记录**（那时没这个字段，解码成 nil）.
+        let detail: String?
     }
 
     /// 最多保留多少条（超出丢最旧的）
@@ -58,14 +63,16 @@ enum AirliftChangeLog {
 
     /// 追加一条. **任何失败都静默** —— 记录不能影响主流程.
     static func append(action: String, path: String, bytes: Int,
-                       backup: String = "", verified: Bool = false, note: String = "") {
+                       backup: String = "", verified: Bool = false, note: String = "",
+                       detail: String? = nil) {
         lock.lock()
         defer { lock.unlock() }
 
         var all = readAllUnlocked()
         all.append(Entry(time: ISO8601DateFormatter().string(from: Date()),
                          action: action, path: path, bytes: bytes,
-                         backup: backup, verified: verified, note: note))
+                         backup: backup, verified: verified, note: note,
+                         detail: detail))
         if all.count > limit { all.removeFirst(all.count - limit) }
 
         try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
@@ -101,11 +108,11 @@ enum AirliftChangeLog {
         var out = "# airlift 改动记录\n\n"
         out += "> 由 EscapeSpace 的 airlift 模块自动记录. 共 \(all.count) 条（新→旧）.\n"
         out += "> `verified` = 读回校验通过；`false` **不代表没写进去**（校验会被会话冷却影响）.\n\n"
-        out += "| 时间 | 动作 | 目标 | 字节 | 校验 | 备份 |\n|---|---|---|---|---|---|\n"
+        out += "| 时间 | 动作 | 目标 | 变化 | 字节 | 校验 |\n|---|---|---|---|---|---|\n"
         for e in all.reversed() {
-            let backup = e.backup.isEmpty ? "—" : "`\(e.backup)`"
-            out += "| \(e.time) | \(e.action) | `\(e.path)` | \(e.bytes) | "
-                + (e.verified ? "✓" : "—") + " | \(backup) |\n"
+            let detail = (e.detail ?? "").replacingOccurrences(of: "|", with: "\\|")
+            out += "| \(e.time) | \(e.action) | `\(e.path)` | \(detail.isEmpty ? "—" : detail) | "
+                + "\(e.bytes) | " + (e.verified ? "✓" : "—") + " |\n"
         }
         return out
     }
