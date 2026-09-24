@@ -230,7 +230,7 @@ enum HostCapabilityService {
         // 为什么在宿主侧统一记、而不是让每个模块自己记.
         let started = Date()
         let result = dispatch(capability: capability, jsonArgs: jsonArgs)
-        // ★ v0.3.512：`airlift.*` 收尾 —— 清掉本次在 Media 根留下的临时目录.
+        // ▸ v0.3.512：`airlift.*` 收尾 —— 清掉本次在 Media 根留下的临时目录.
         // 用户反馈「一堆 airlift-canary-xxx 堆在 afc 目录，不要乱拉屎」.
         // 放在这里（唯一入口）而不是每个能力里，是为了「一处生效、不会漏」.
         if capability.hasPrefix("airlift.") {
@@ -755,7 +755,7 @@ enum HostCapabilityService {
     /// lara 走 DarkSword 内核链、在内核层**原地覆盖字节** ⇒ 必须「目标文件 ≥ 源文件」。
     /// 我们走 airlift 越界写 ⇒ **没有这个限制**，目标可以比源小/大、甚至可以不存在。
     ///
-    /// ## ★★★ v0.3.496：**必须读回校验**（这条是血的教训）
+    /// ## ▸▸▸ v0.3.496：**必须读回校验**（这条是血的教训）
     /// `pocWriteFile` 的成败只看「设备回的 `AssetManifest` 里有没有我们那条」——
     /// 那只证明**消息发出去了**，**不证明字节落到盘上**。真机 2026-09-20 实测：
     /// 写 SystemGroup 容器（`…/systemgroup.com.apple.configurationprofiles/Library/
@@ -835,7 +835,7 @@ enum HostCapabilityService {
                          + "（清单命中了，但字节没落盘）"
             ]) { _, new in new }))
         }
-        steps.append("★ 读回一致（\(back.count) 字节）⇒ **覆盖确实落地了**")
+        steps.append("▸ 读回一致（\(back.count) 字节）⇒ **覆盖确实落地了**")
         extra["steps"] = steps
         extra["verified"] = true
         return (0, jsonText(extra))
@@ -843,7 +843,7 @@ enum HostCapabilityService {
 
     /// `airlift.overwrite` —— 用 AIR 里的文件（或 App 沙盒里的文件）覆盖/写入任意沙盒外路径。
     ///
-    /// ## ★★★ v0.3.498：**target 可以是目录**
+    /// ## ▸▸▸ v0.3.498：**target 可以是目录**
     /// 旧版把 `target` 一律当**文件路径**，拆成「父目录 + 文件名」——
     /// 于是填一个**目录**时，它会拿**目录名当文件名**去写（写成一个叫
     /// `ConfigurationProfiles` 的文件！），这既是错的、也很危险。
@@ -903,7 +903,7 @@ enum HostCapabilityService {
             return fail("airlift.overwrite 需要 airName（AIR 里的文件）或 source（沙盒内文件）之一")
         }
 
-        // ★ 目录模式：`target` 以 `/` 结尾，或显式声明，或给了 `leafName`
+        // ▸ 目录模式：`target` 以 `/` 结尾，或显式声明，或给了 `leafName`
         var target = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
         let trailingSlash = target.hasSuffix("/") && target.count > 1
         if trailingSlash { while target.hasSuffix("/") { target.removeLast() } }
@@ -1019,7 +1019,7 @@ enum HostCapabilityService {
         (value as? [String]) ?? []
     }
 
-    // MARK: - ★★★ airlift.readdir / airlift.restoredir（浏览 Media 之外的任意目录）
+    // MARK: - ▸▸▸ airlift.readdir / airlift.restoredir（浏览 Media 之外的任意目录）
 
         /// 拒绝一批「**一动就可能让系统起不来**」的祖先路径.
     ///
@@ -1027,7 +1027,7 @@ enum HostCapabilityService {
     /// 整个搬进 Media 再搬回，中间那 20~40 秒里**全系统都在读写不存在的路径**。
     /// 返回 `nil` = 放行.
     ///
-    /// ## ★ v0.3.497 修正：**只精确拒绝「祖先」，不再按前缀连带拒子目录**
+    /// ## ▸ v0.3.497 修正：**只精确拒绝「祖先」，不再按前缀连带拒子目录**
     /// 旧版用 `hasPrefix(prefix + "/")` 判前缀，于是
     /// `/var/containers/Bundle` 这条把**每一个 App 的容器**
     /// （`/var/containers/Bundle/Application/<uuid>`）也一起拒了 ——
@@ -1048,7 +1048,7 @@ enum HostCapabilityService {
             "/var/mobile/Media",              // 就是我们自己的根
             "/var/mobile/Containers",
             "/var/mobile/Documents",          // 用户文档根（一搬全没）
-            // ★ 容器/守护进程的**祖先**：搬走一个就少一批 App / 一批系统配置
+            // ▸ 容器/守护进程的**祖先**：搬走一个就少一批 App / 一批系统配置
             "/var/containers/Bundle",
             "/var/containers/Bundle/Application",
             "/var/containers/Data",
@@ -1095,7 +1095,7 @@ enum HostCapabilityService {
         let restore = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
         var details = read.details
         details.append(restore.ok
-            ? "★ 已把原字节写回原位置（读是移动，不写回文件就留在 Media 里了）"
+            ? "▸ 已把原字节写回原位置（读是移动，不写回文件就留在 Media 里了）"
             : "⚠️⚠️ 写回原位置失败：\(restore.summary) —— 文件当前**不在**原位置，"
               + "原字节已备份在模块数据目录 LoginLogs/ 下，请尽快处理")
 
@@ -1105,7 +1105,7 @@ enum HostCapabilityService {
         do {
             try airWrite(name: name, data: data)
             airName = name
-            details.append("★ 副本已存到 \(airDir)/\(name)")
+            details.append("▸ 副本已存到 \(airDir)/\(name)")
         } catch {
             details.append("（副本存 AIR 失败：\(error.localizedDescription)）")
         }
@@ -1162,7 +1162,7 @@ enum HostCapabilityService {
     /// 返回 false，表现为「配置文件不存在」这种误导性错误 —— v0.3.481 真机实测踩到）。
     /// airlift 不依赖沙盒扩展，所以读写统一走它。
     ///
-    /// ## ★★★ 覆盖写入的正确顺序（v0.3.495/496 真机定案）
+    /// ## ▸▸▸ 覆盖写入的正确顺序（v0.3.495/496 真机定案）
     ///
     /// 用户原话：**「我们覆盖写入动作不能直接移动，是先写入拷贝回来的东西，
     /// 再覆盖目标文件回写」**。落地成：
@@ -1197,7 +1197,7 @@ enum HostCapabilityService {
     /// ⇒ **「启用监督模式」= 写 SystemGroup 容器 = 沙盒不让做。**
     ///   这不是流程问题（顺序已经按用户说的改对了），是**目标不允许**。
     ///
-    /// ## ★★ 教训：`pocWriteFile` 的 `ok` 只代表「清单命中」
+    /// ## ▸▸ 教训：`pocWriteFile` 的 `ok` 只代表「清单命中」
     /// 设备回 `AssetManifest` 里有我们那条，只证明**消息发出去了**，
     /// **不证明字节落盘**。旧版 `airlift.overwrite` / `supervisedSet` 只看清单就报
     /// 「已覆盖写入」⇒ **对着一个没生效的写汇报成功，把排查带偏了好几个小时**。
@@ -1234,7 +1234,7 @@ enum HostCapabilityService {
             return restore.ok
         }
 
-        // ★★★ ①②③ 读 + **写回** + 备份 —— **直接复用 `airPull`**（v0.3.495 真机定案）。
+        // ▸▸▸ ①②③ 读 + **写回** + 备份 —— **直接复用 `airPull`**（v0.3.495 真机定案）。
         //
         // ## 为什么复用而不是自己拼三步
         // `airPull` 就是**已在真机上验证可行**的那条序列：它和「自定义覆盖」
@@ -1627,7 +1627,7 @@ enum HostCapabilityService {
 
     /// 规范化成 AFC 口径（去掉前导/尾随 `/`）.
     ///
-    /// ## ★ v0.3.501：**不再拒绝 `..`**
+    /// ## ▸ v0.3.501：**不再拒绝 `..`**
     /// 原来见到 `..` 就直接拒，理由是「根就是边界」。但**真正的边界是 AFC 服务自己的沙盒**
     /// （`com.apple.afc` 只被授权 `/var/mobile/Media`；`com.apple.crashreportcopymobile`
     /// 只被授权 `/var/mobile/Library/Logs/CrashReporter`）—— 设备侧会独立做这个检查。
@@ -1775,7 +1775,7 @@ enum HostCapabilityService {
             return ok(["root": root.rawValue, "path": path, "recursive": recursive])
         } catch {
             let text = error.localizedDescription
-            // ★ 如实区分失败原因 —— 原来一律提示「目录非空需要 recursive」，
+            // ▸ 如实区分失败原因 —— 原来一律提示「目录非空需要 recursive」，
             //   而真机上最常见的是**权限**（例：CrashReporter 里 `sysdiagnose` 归档
             //   的内容由系统账号创建，AFC 以 mobile 身份删不动）。
             //   误导性的 hint 会让人去改 recursive，白试一轮。
@@ -1820,14 +1820,14 @@ enum HostCapabilityService {
 
     /// 单条记录里 args / result 各自的上限。
     ///
-    /// ★ v0.3.492：从 **1200 提到 8192**。原来的 1200 太小 ——
+    /// ▸ v0.3.492：从 **1200 提到 8192**。原来的 1200 太小 ——
     /// airlift 的判据（`details`）动辄 1200~3600 字符，一截就把最关键的
     /// 「清单里有没有我们那条」「删除成立」那几行切掉，
     /// 于是每次排障都得再绕去 `cat LoginLogs/airlift_at2.txt` 看原文。
     /// 8192 足以完整容纳这类判据，同时仍防止单条记录把日志撑爆。
     private static let callLogTextLimit = 8192
     /// 日志文件大小上限；超过就只留后半段（最近的调用才是排障要看的）。
-    /// ★ v0.3.492：512KB → 2MB（配合单条上限提高；仍是有限值，不会无限增长）。
+    /// ▸ v0.3.492：512KB → 2MB（配合单条上限提高；仍是有限值，不会无限增长）。
     private static let callLogFileLimit = 2 * 1024 * 1024
 
     /// 追加一笔能力调用记录.

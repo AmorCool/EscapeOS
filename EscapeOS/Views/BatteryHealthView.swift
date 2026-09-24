@@ -280,7 +280,7 @@ struct BatteryHealthView: View {
             batteryCardRow("电池厂商", info.batteryManufacturer ?? "未知", icon: "hammer.fill")
             batteryCardRow("生产日期", manufactureDateText(info), icon: "calendar")
             batteryCardRow("出厂容量", info.designCapacity.map { "\($0) mAh" }, icon: "battery.0")
-            // ★ v0.3.457：原「当前容量」与「额定容量」**两行是同一个字段**
+            // ▸ v0.3.457：原「当前容量」与「额定容量」**两行是同一个字段**
             //   （都取 `NominalChargeCapacity`）⇒ 显示成两个一模一样的 2709，看着就像 bug
             //   （用户报告「数值怎么是一样的」）。合并成一行。
             //

@@ -34,7 +34,7 @@ STUB_PATH = _opt("--stub-path",
                  "@executable_path/Frameworks/libMobileDeviceStub.dylib").encode()
 
 # ---- 输入：macOS 的 AirTrafficHost（FAT 通用二进制）----
-# ★ 默认值就是 macOS 系统里的**真实路径**：CI 的 `macos-latest` runner 上直接可取。
+# 默认值就是 macOS 系统里的**真实路径**：CI 的 `macos-latest` runner 上直接可取。
 #   所以**这个二进制不需要进仓库** —— 避免把 Apple 的专有代码再分发到公开仓库里。
 #   本地想跑就 `--src <本机解包出来的路径>`。
 SRC = _opt("--src",
@@ -280,7 +280,7 @@ log("== 补丁 C: macOS 的 `.../Versions/<X>/...` 依赖路径 -> iOS 扁平形
 #   而 macOS 侧记录的是：
 #       /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
 #   ⇒ 在 iOS 上会直接 `Library not loaded: .../Versions/A/CoreFoundation` 失败。
-#   ★ 这一条与「platform/minos 不匹配」是**两个独立**的加载期拦路虎，
+#   这一条与「platform/minos 不匹配」是**两个独立**的加载期拦路虎，
 #     只改 LC_BUILD_VERSION 不够。
 #   扁平形态**一定更短**（少掉 `/Versions/<X>`）⇒ 原地覆写 + \0 填充，`cmdsize` 不变。
 

@@ -7,7 +7,7 @@
 > ⚠️ 同时更正一个流程问题：0.3.502 ~ 0.3.511 我连发了 10 个包却没写 CHANGELOG 条目 ——
 > 那是「改一点发一包」的坏习惯. 那几版的内容已合并记在下面.
 
-### ★★ 统一工作目录：airlift 的临时文件收进 `Media/Airlift/`
+### 统一工作目录：airlift 的临时文件收进 `Media/Airlift/`
 
 用户反馈：「一堆 `airlift-canary-xxx` 的文件夹堆在 afc 目录，**不要乱拉屎**」
 「你能不能不要堆积在很多个文件，让你**从根源解决用统一的目录**下不行吗」
@@ -32,7 +32,7 @@
 - `ensureAirliftWorkDir()`：用 AFC 预先建好 `Media/Airlift` —— 设备端 `moveItemAtPath`
   **不会**自动建中间目录，不预建第 1 条 move 就失败.
 
-### ★ 每次调用后自动清理（双保险）
+### 每次调用后自动清理（双保险）
 
 `HostCapabilityService.call` 里统一收尾：`airlift.*` 调用结束后清掉临时目录.
 **为什么敢「全删」而不是按时间挑**：airlift 的所有设备端操作都串在
@@ -56,7 +56,7 @@
 用户要求「不能批量选择/全选删除操作吗」. 内容区右上「选择」进多选，底部材质条
 「全选 / 删除所选(N)」；删除逐个走 AFC，失败时如实报「有 N 项没删掉」.
 
-### ★ 顶栏改成真正的导航栏
+### 顶栏改成真正的导航栏
 
 用户反馈「这个顶栏好丑 其实我一直不喜欢这个」. 旧实现是自绘一行：左边两个**带文字**的
 按钮 + 标题靠右 + 一条 Divider. 新实现用 `NavigationStack` +
@@ -74,7 +74,7 @@
 `List(.insetGrouped)`，并补上主程序招牌的**材质忙碌遮罩**（`AppDetailView` /
 `DeviceControlView` / `ReclaimTabView` 同款）与底部 `safeAreaInset` 操作条.
 
-### ★ 更正：AFC 服务**自己就拒绝越出根的 `..`**
+### 更正：AFC 服务**自己就拒绝越出根的 `..`**
 
 实测：`afc.stat` 对 `/Airlock/../Airlock` 正常（`..` 留在根内没问题），但对
 `/../Airlock`、`/Airlock/../../Media/Airlock` 一律 `Afc(InvalidArg)`.
@@ -85,7 +85,7 @@
 
 ## [0.3.501] - 2026-09-20
 
-### ★★★ symlink 越界调研：结论是**不能**（`stat` 能，读/写/列全被沙盒拒）
+### symlink 越界调研：结论是**不能**（`stat` 能，读/写/列全被沙盒拒）
 
 用户要求「研究一下能不能通过 symlink 越界浏览文件实现读写操作」。真机实测（同一台设备、
 同一条 symlink，指向 `/private/var/containers/Shared/SystemGroup/.../ConfigurationProfiles`）：
@@ -134,7 +134,7 @@
 用户原话：「**不要用黄色感叹号**」「**注释不要给我看给你自己看的**」。
 
 - **步骤文本自动清洗**（新增 `StepText.clean`）：能力返回的步骤里带大量**给开发者**的
-  解释 —— `⚠️`、`★`、markdown 的 `**` 与反引号、以及括号里那一长串
+  解释 —— `⚠️`、``、markdown 的 `**` 与反引号、以及括号里那一长串
   「为什么 / 判据 / 边界」。界面上现在只留「**做了什么、成没成**」，
   括号注释整段去掉。**原文照样能在展开后的「全部行」和日志里看到。**
 - **所有感叹号三角都换掉**：状态点改成 6px 小圆点（靠颜色区分），
@@ -155,7 +155,7 @@
 
 ## [0.3.499] - 2026-09-20
 
-### ★★★ 新增 `airlift.writeMany` —— **一次 stage 写多个文件**（AirCard 的 #1 能力）
+### 新增 `airlift.writeMany` —— **一次 stage 写多个文件**（AirCard 的 #1 能力）
 
 **为什么必须批量**：每个文件单独走一趟 airlift = 10~20 秒，而且**隧道连多了会卡死**
 （真机实测第 6 次 AT 会话卡在 conduit 建连、之后整条 `protocolQueue` 堵死）。
@@ -187,7 +187,7 @@
 
 ## [0.3.498] - 2026-09-20
 
-### ★★★ 事故与更正：`airlift.readdir` 搬目录是**单向**的（我把 `DiagnosticLogs` 搬丢了）
+### 事故与更正：`airlift.readdir` 搬目录是**单向**的（我把 `DiagnosticLogs` 搬丢了）
 
 **我犯的错**：`airlift.readdir` 我按「搬进 Media → 列 → **一定能搬回**」写代码，
 **没有先验证搬回**。真机实测：`/var/mobile/Library/Logs/CrashReporter/DiagnosticLogs`
@@ -219,10 +219,10 @@
 - 顺带纠正一个更早的错误认知：`refuseReasonForReaddir` 原来按前缀拒绝，
   把每个 App 容器也拒了；现在**只精确拒绝祖先**，子树放行但带警告（见 0.3.497）。
 
-> ★★ **教训**：**破坏性操作要先验证「可回退」，再执行。**
+> **教训**：**破坏性操作要先验证「可回退」，再执行。**
 > 我验证了「搬得进去」，没验证「搬得回来」—— 而后者才是这个操作安全的前提。
 
-### ★★ 自定义覆盖：**目标可以是目录**（旧版会把目录名当文件名去写）
+### 自定义覆盖：**目标可以是目录**（旧版会把目录名当文件名去写）
 
 旧版 `airlift.overwrite` 一律把 `target` 当**文件路径**，拆成「父目录 + 文件名」——
 于是填一个**目录**时，它会拿**目录名当文件名**去写（写成一个叫 `ConfigurationProfiles`
@@ -238,7 +238,7 @@ target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是�
 ### 界面：不再把技术判据糊在脸上（用户原话「一堆文字我看着就烦」）
 
 新增共用的 `CompactStepsView`：**默认只显示关键行**（编号步骤 / 结论 / 警告），
-`★ 判据①②③ …`、`books staging …`、`Grappa 实验 …`、`清单第 N 条命中 …`
+`判据①②③ …`、`books staging …`、`Grappa 实验 …`、`清单第 N 条命中 …`
 这类排障细节**折进「显示全部 N 行」**按钮里。**完整原文照样在「日志」tab 与
 `LoginLogs/` 里，没丢，只是不糊在脸上。**
 
@@ -262,7 +262,7 @@ target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是�
 - 参数：`bundleId`（可选，不区分大小写）、`includeSystem`（默认 `false`）
 - 「目录浏览」tab 新增「从已安装 App 选一个容器」下拉 —— 点一下就把容器路径填进目标框
 
-### ★ 修我自己 v0.3.496 写错的过度拒绝
+### 修我自己 v0.3.496 写错的过度拒绝
 
 `refuseReasonForReaddir` 原来用 `hasPrefix` 判前缀，于是 `/var/containers/Bundle`
 这条把**每一个 App 的容器**（`…/Bundle/Application/<uuid>`）也一起拒了 ——
@@ -282,7 +282,7 @@ target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是�
 
 ## [0.3.496] - 2026-09-20
 
-### ★★★ 定案：写入**必须读回校验**；「监督模式」的**目标本身不允许写入**
+### 定案：写入**必须读回校验**；「监督模式」的**目标本身不允许写入**
 
 #### 真机对照实验（同一台设备，2026-09-20）
 
@@ -304,7 +304,7 @@ target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是�
   这不是流程问题（顺序已按用户要求改对），是**目标不允许**。
 - `/var/mobile/Documents` 同样不可写（也可能是该目录不存在）。
 
-> ★ **更正**：v0.3.493 我曾拿「连着两次 `airlift.pull` 都读到 412 字节」推翻
+> **更正**：v0.3.493 我曾拿「连着两次 `airlift.pull` 都读到 412 字节」推翻
 > v0.3.490 的「SystemGroup 写不进去」结论 —— **那个推翻是错的**。
 > 读能成功是因为**读只用到「移出」**；「移回/写入」一直被沙盒拒。
 > v0.3.490 原来的判断是对的。
@@ -323,7 +323,7 @@ target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是�
 
 ### 新增：`airlift.readdir` / `airlift.restoredir` / `airlift.delete`
 
-#### ★★★ airlift 的「读」**能搬目录**（真机实证）
+#### airlift 的「读」**能搬目录**（真机实证）
 ```
 airlift-recovered-38EC6637 → 存在（成功 size=128 st_ifmt=S_IFDIR）
 afc.list  /airlift-recovered-38EC6637       → sub(目录) + a.txt
@@ -345,7 +345,7 @@ afc.read  /airlift-recovered-38EC6637/a.txt → 内容正确
 
 新增「目录浏览」tab（模块 `com.escapeos.airlift-poc` → **1.1.1**）。
 
-### ★★★ 修「自定义覆盖 → 从本机选择文件导入到 AIR」选完没反应
+### 修「自定义覆盖 → 从本机选择文件导入到 AIR」选完没反应
 
 **根因**：那里用的是原生 `.fileImporter` + `startAccessingSecurityScopedResource()`。
 `.fileImporter` 返回 **security-scoped URL**，而 **LiveContainer 访客沙盒会拒掉**
@@ -358,7 +358,7 @@ afc.read  /airlift-recovered-38EC6637/a.txt → 内容正确
 
 ## [0.3.495] - 2026-09-20
 
-### ★★★ 修「监督模式」—— 覆盖写入必须**先写回再覆盖**（用户指出的，真机对照实验证实）
+### 修「监督模式」—— 覆盖写入必须**先写回再覆盖**（用户指出的，真机对照实验证实）
 
 用户原话：
 
@@ -421,7 +421,7 @@ heredoc 会把源码里的 `\n` **折成** `
 **修法**：改用 `bs = chr(92)` 显式拼 `
 `，绕开 heredoc 的折叠。
 
-> ★ **教训：用 heredoc 往文件里写带反斜杠的内容（`
+> **教训：用 heredoc 往文件里写带反斜杠的内容（`
 `、正则、转义序列）时，
 > 反斜杠会被折叠一层。** 要么用 `chr(92)` 显式构造，要么改用 `Write` 工具直接写文件。
 > 这个坑今天就踩了两次（另一次是 `\(` 被折成 `\(` 触发 Python 的 SyntaxWarning）。
@@ -431,7 +431,7 @@ heredoc 会把源码里的 `\n` **折成** `
 ## [0.3.493] - 2026-09-20
 ## [0.3.493] - 2026-09-20
 
-### ★★★ 更正 v0.3.490 的错误结论：SystemGroup **写得进去**，监督模式**不是做不到**
+### 更正 v0.3.490 的错误结论：SystemGroup **写得进去**，监督模式**不是做不到**
 
 v0.3.490 我写过「airlift 越界写成立，但写不进 SystemGroup 容器 ⇒ 启用监督模式做不到」。
 **这个结论是错的**，我在这里更正。
@@ -458,7 +458,7 @@ AIR 备份走的是 **AFC**（另一条隧道 / 另一条服务会话），而 a
 > 数据安全不受影响：`pocReadFile` 读的时候已把原字节备份在
 > `LoginLogs/airlift_read_<token>.bin`，AIR 那份是第二重备份。
 
-### ★★ 教训：**我上次是「用一次失败推断出一个能力不存在」**
+### 教训：**我上次是「用一次失败推断出一个能力不存在」**
 
 v0.3.490 那次对照实验只比了「不同目标」，**没有比「不同流程顺序」**，
 于是把「流程顺序问题」误判成「目标不可写」—— 还顺手给用户下了
@@ -470,7 +470,7 @@ v0.3.490 那次对照实验只比了「不同目标」，**没有比「不同流
 ## [0.3.492] - 2026-09-20
 ## [0.3.492] - 2026-09-20
 
-### ★ 取消/提高字符上限（这些截断反复拖慢排障）
+### 取消/提高字符上限（这些截断反复拖慢排障）
 
 | 位置 | 原值 | 现值 | 为什么 |
 |---|---|---|---|
@@ -530,13 +530,13 @@ AirliftPocModuleUI.swift:957:40: error: cannot find 'rootDisplay' in scope
 > 与 v0.3.490 的内容相同（那个 tag 的构建失败了，没有产生 release），
 > 只是把编译错误修掉后重发。
 
-> ★ 教训（同一类错误今天第二次）：**用字符串锚点做插入时，锚点必须全局唯一。**
+> 教训（同一类错误今天第二次）：**用字符串锚点做插入时，锚点必须全局唯一。**
 > 不唯一时先定位到目标类型内部再插，或插入后按「类型范围」核对一遍引用。
 
 ## [0.3.490] - 2026-09-20
 ## [0.3.490] - 2026-09-20
 
-### ★★★ 修：`pocWriteFile` / `pocDeleteFile` 的成败判据**永远匹配不到** ⇒ 每次误报失败
+### 修：`pocWriteFile` / `pocDeleteFile` 的成败判据**永远匹配不到** ⇒ 每次误报失败
 
 真机实测（v0.3.489）暴露：写到 `/var/mobile/Library/Logs/CrashReporter/airlift-wtest.txt`
 与删掉它，两次都报「未通过清单校验」/「删除未成立」，
@@ -544,14 +544,14 @@ AirliftPocModuleUI.swift:957:40: error: cannot find 'rootDisplay' in scope
 删除后又变成「没有 airlift-* 条目」）。
 
 **根因**：`runProtocolProbe` 只 `return lines`，而 `step2` 的结论（含最关键的
-「★★★ 清单里有没有我们那条：**有**」与 AFC 回读落点）写进的是**另一个数组**
+「清单里有没有我们那条：**有**」与 AFC 回读落点）写进的是**另一个数组**
 `step2Verdict` —— 那个数组只被落进 `airlift_at2.txt` 文件。
 ⇒ `pocWriteFile` / `pocDeleteFile` 拿到的 `details` **永远不含 AT 侧判据**
 ⇒ 它们的判据（找「清单里有没有我们那条」/「删除成立」）**永远匹配不到**。
 
 **修法**：`return lines + step2Verdict`。
 
-### ★★ 真机定案：airlift 越界写**成立**，但**写不进 SystemGroup 容器**
+### 真机定案：airlift 越界写**成立**，但**写不进 SystemGroup 容器**
 
 同一轮对照实验（同一套代码，只换目标）：
 
@@ -609,7 +609,7 @@ SystemGroup 容器（`systemgroup.com.apple.configurationprofiles`）**不在其
 路径栏 + 上一级/刷新 + 目录列表（图标按扩展名）+ 文本预览 + 滑动删除 +
 新建文件夹 + 下拉刷新。
 
-#### ★★ 覆盖范围（界面上如实写清，避免误导）
+#### 覆盖范围（界面上如实写清，避免误导）
 
 **能浏览**：`DCIM` / `Downloads` / `Books` / `PublicStaging` / 各 App 共享文件…
 **列不出来**：`/var` 根、`/var/mobile/Library`、其他 App 容器。
@@ -643,7 +643,7 @@ SystemGroup 容器（`systemgroup.com.apple.configurationprofiles`）**不在其
 > v0.3.487 已经发布过（IPA 里含那批代码，但用不上 —— MHA 不生效时
 > `container.*` 只会返回 `notMHA`）。所以回滚走**新版本号**，不复用 486。
 
-### ★ 顺带把两条边界记清楚（避免以后再走错）
+### 顺带把两条边界记清楚（避免以后再走错）
 
 | 机制 | 是什么 | 现状 |
 |---|---|---|
@@ -665,7 +665,7 @@ SystemGroup 容器（`systemgroup.com.apple.configurationprofiles`）**不在其
 
 ## [0.3.486] - 2026-09-20
 
-### ★★★ 修：写方向从来就写不出「指定文件名」的文件（target/leaf 语义搞反了）
+### 修：写方向从来就写不出「指定文件名」的文件（target/leaf 语义搞反了）
 
 **真机现象**（v0.3.485，日志实证）：读已经通了（AIR 里出现 178 字节的 plist），
 但写回失败：
@@ -712,17 +712,17 @@ sys.supervised.set → ⑤ 写入失败：未通过清单校验
 
 ## [0.3.485] - 2026-09-20
 
-### ★★★ 修根因：`/var` 是符号链接，读方向少算一个 `..` ⇒ 非 `/var/mobile/` 下的目标全部读不到
+### 修根因：`/var` 是符号链接，读方向少算一个 `..` ⇒ 非 `/var/mobile/` 下的目标全部读不到
 
 **真机现象**（v0.3.483，日志实证）：
 
 ```
 sys.supervised.get → ERR  airlift 读失败：没读到字节
-  ★ 判据① stage 已发出 = 是
-  ★ 判据② airlift-src-A0C7279E/p0/p1/p2/link → 成功 st_ifmt=S_IFLNK
-  ★ 判据③ Books/Sync/Books.plist → 成功 写 plist = 是；回读 plist 在 = 是
-  ★ 清单里有没有我们那条：**有**（targetIdentifier 命中、IsDownload=1）
-  ★ 第③步 AFC 回读：airlift-recovered-A0C7279E → 不存在（code=106 ObjectNotFound）
+  判据① stage 已发出 = 是
+  判据② airlift-src-A0C7279E/p0/p1/p2/link → 成功 st_ifmt=S_IFLNK
+  判据③ Books/Sync/Books.plist → 成功 写 plist = 是；回读 plist 在 = 是
+  清单里有没有我们那条：**有**（targetIdentifier 命中、IsDownload=1）
+  第③步 AFC 回读：airlift-recovered-A0C7279E → 不存在（code=106 ObjectNotFound）
 ```
 
 **清单命中了、两条 `FileComplete` 也发了，但设备就是没把文件搬进 Media。**
@@ -807,7 +807,7 @@ airlift 默认未启用 ⇒ 模块概览 tab 会显示橙色的「airlift 不可
 
 ## [0.3.483] - 2026-09-20
 
-### ★ 修：宿主导入校验漏了 `ui`，导致「不声明 action」的原生界面模块装不上
+### 修：宿主导入校验漏了 `ui`，导致「不声明 action」的原生界面模块装不上
 
 真机现象（装 airlift-poc 的 zip）：
 
@@ -840,11 +840,11 @@ binary/hotfix，不需要签名）都不会拦。
 
 ## [0.3.482] - 2026-09-20
 
-### ★★ AIR 中转站 + 自定义覆盖 + 修监督模式读不到文件 + 新图标
+### AIR 中转站 + 自定义覆盖 + 修监督模式读不到文件 + 新图标
 
 真机装 v0.3.481 后反馈的三件事，逐条修。
 
-#### ① ★ 监督模式读不到文件（我上一版的设计错误）
+#### ① 监督模式读不到文件（我上一版的设计错误）
 
 现象：模块里读 `CloudConfigurationDetails.plist` 报**「配置文件不存在」**。
 
@@ -866,7 +866,7 @@ binary/hotfix，不需要签名）都不会拦。
 - `fs.read` 沙盒外也改成**默认非破坏性**（读后写回），
   只有显式 `allowMove: true` 才跳过写回。
 
-#### ② ★ AIR 中转站（`/var/mobile/Media/AIR`）
+#### ② AIR 中转站（`/var/mobile/Media/AIR`）
 
 读把目标**拷贝**到 AIR，写/覆盖从 AIR 取字节 —— 不再依赖隐式的「读后写回」闭环。
 
@@ -886,7 +886,7 @@ binary/hotfix，不需要签名）都不会拦。
 | `airlift.pull` | 目标 → airlift 读 → 原字节写回原位 → 副本落 AIR | 约 20~40 秒 |
 | `airlift.overwrite` | 用 AIR 文件（或沙盒内文件）覆盖任意沙盒外路径 | 含备份约 20~60 秒 |
 
-#### ③ ★ 自定义覆盖（界面形态参考 lara，漏洞利用完全不同）
+#### ③ 自定义覆盖（界面形态参考 lara，漏洞利用完全不同）
 
 界面形态参考 `github.com/rooootdev/lara` 的 Custom Overwrite：
 「填目标路径 + 选源文件 → 覆盖」。但**机制完全不同**（已在代码注释与模块 README 写明）：
@@ -903,7 +903,7 @@ binary/hotfix，不需要签名）都不会拦。
 `airlift.overwrite` 的 `backup: true`（默认）会先 pull 目标存成 `<名>.bak`，
 **备份失败就中止覆盖** —— 要求是「先备份再覆盖」，不能反着来。
 
-#### ④ ★ airlift-poc 被误当成内置模块
+#### ④ airlift-poc 被误当成内置模块
 
 **根因**：构建脚本把 module-esc 里**所有**模块都拷进 `Resources/BundledModules`，
 只硬编码排除了 alist ⇒ 新加的 airlift-poc 被自动打成内置模块。
@@ -958,7 +958,7 @@ AirliftPocModuleUI.swift:303: error: generic parameter 'Content' could not be in
 
 ## [0.3.481] - 2026-09-20
 
-### ★★★ 模块系统补上**反向通道**：`escape.host.v1` 宿主能力接口 + 原生 SwiftUI 二级界面
+### 模块系统补上**反向通道**：`escape.host.v1` 宿主能力接口 + 原生 SwiftUI 二级界面
 
 #### ① 为什么做这个（这是一直缺的一块）
 
@@ -985,14 +985,14 @@ AirliftPocModuleUI.swift:303: error: generic parameter 'Content' could not be in
 两条路径都汇到同一个 `call` 分发器：
 
 - **外部 dylib 模块**（C/Go）：宿主加载时把 `EscapeHostAPI` 函数表指针交给模块可选的
-  `escape_module_init`。★ **刻意不用 dlsym 宿主符号** —— 主可执行文件的符号不保证对
+  `escape_module_init`。**刻意不用 dlsym 宿主符号** —— 主可执行文件的符号不保证对
   `dlsym(RTLD_DEFAULT)` 可见（本仓库自己就是因为这个才写了
   `uloader_symbols_with_suffix` 去读符号表）。传指针对 dlopen 的 dylib 与静态链接的
   模块都成立。
 - **原生 SwiftUI 模块界面**：视图是编译进宿主的 Swift 代码，直接调
   `HostCapabilityService.call(...)`，根本不需要 C ABI。
 
-#### ③ ★ 三个安全判断（都是读源码后改的设计）
+#### ③ 三个安全判断（都是读源码后改的设计）
 
 1. **`fs.read` 对沙盒外路径是破坏性的** —— airlift 的「读」是**移动不是拷贝**，
    读完原位置就没这个文件了。所以必须调用方显式传 `allowMove: true` 才执行，
@@ -1017,7 +1017,7 @@ SwiftUI 视图没法从 zip 里加载，所以 `view` 是**宿主内的注册名
 > 外壳**刻意不套 `NavigationStack`** —— 已经有常驻顶栏了，再叠一层系统导航栏会多出
 > 一条空细条（双层栏）。需要下钻的模块由它自己的 tab 内容内部去套。
 
-#### ⑤ 清单新增 `requires` + ★ `minHostVersion` 真正生效
+#### ⑤ 清单新增 `requires` + `minHostVersion` 真正生效
 
 - `requires: ["fs.read", "fs.write", ...]`：声明需要的宿主能力。
   宿主装载时校验，缺任何一项 ⇒ 模块标记为**不可用**（卡片橙字显示缺哪项，
@@ -1055,7 +1055,7 @@ SwiftUI 视图没法从 zip 里加载，所以 `view` 是**宿主内的注册名
 
 ## [0.3.480] - 2026-09-19
 
-### ★★★ 补上「删除」+「任意字节写」+ **编程接口层**（模块化的前提）
+### 补上「删除」+「任意字节写」+ **编程接口层**（模块化的前提）
 
 #### ① `airlift3 write <目标> <payload 相对路径>` —— 任意字节写
 
@@ -1092,11 +1092,11 @@ static func pocDeleteFile(path: String) -> PocOutcome          // 越界删
    ⚠️ **调用方必须在后台线程调**（在主线程调会把主线程阻塞十几秒）。
 3. **`PocOutcome` 带 `details` 而不是只回 `Bool`** —— 两趟流程里失败可能发生在**六个环节**
    （stage 没落地 / 清单没命中 / 第 1 次 move 没发生 / 第 2 次没发生 / AFC 读不到 / 备份写盘失败），
-   只回 `false` 会让调用方与用户都无从下手。`details` 就是两趟里所有 `★` 判据行。
+   只回 `false` 会让调用方与用户都无从下手。`details` 就是两趟里所有 `` 判据行。
 4. **`pocWriteFile` 诚实标注「不校验落点」** —— 真实目标在 Media 之外，`com.apple.afc` 读不回来
    ⇒ 无法在这里做 AFC 回读。要确认写成功，请再调一次 `pocReadFile` 读回比对（唯一通用判据）。
 
-### ★ App 图标换成透明背景玻璃方块
+### App 图标换成透明背景玻璃方块
 
 `Resources/AppIcon*.png` **18 个尺寸全部换新**（RGBA）。抠图脚本 `_tmp_icon.py`：
 
@@ -1111,7 +1111,7 @@ static func pocDeleteFile(path: String) -> PocOutcome          // 越界删
 
 ## [0.3.479] - 2026-09-19
 
-### ★★★★ 补上「**读**」—— 逃逸现在读写双向打通
+### 补上「**读**」—— 逃逸现在读写双向打通
 
 「写」在 v0.3.478 已经真机验证（文件落到了 Media 之外的 `/var/mobile/Library/Logs/CrashReporter/`）。
 参考实现还有「读」（`AldazActivator/airlift-rw` 的 `airlift.py:504-563`，逐字）：
@@ -1169,7 +1169,7 @@ cat LoginLogs/airlift_read_<token>.bin                        #    读到的**�
 
 ## [0.3.478] - 2026-09-19
 
-### ★ 为最后一步（写 Media 之外）补上验证手段：`airlift4` 也盘 **Media 之外**
+### 为最后一步（写 Media 之外）补上验证手段：`airlift4` 也盘 **Media 之外**
 
 真实目标的落点在 `/var/mobile/Library/Logs/CrashReporter`
 （= `com.apple.crashreportcopymobile` 的 AFC 根），**在 Media 之外**
@@ -1206,7 +1206,7 @@ airlift4                                          # 只读盘点（判据 A/B/C 
 
 ## [0.3.477] - 2026-09-19
 
-### ★★★★★ 真机实证：**机制成立** —— 攻击链七环全部打通
+### 真机实证：**机制成立** —— 攻击链七环全部打通
 
 `airlift4` 的只读盘点（`LoginLogs/airlift_landing.txt`）：
 
@@ -1242,7 +1242,7 @@ airlift4                                          # 只读盘点（判据 A/B/C 
 **⇒ 只剩最后一步：把目标从 Media 内部的 canary 目录换成真实路径
 （例如参考实现的 `/var/mobile/Library/SpringBoard`）—— 那一步会写 Media 之外，需显式授权。**
 
-### ★ 修 `airlift4` 的判据 bug（差点把成功读成失败）
+### 修 `airlift4` 的判据 bug（差点把成功读成失败）
 
 原判据是「A（payload 在 canary 目录）与 B（payload 在 `airlift-link-*` 里）**同时为真 ⇒ 没跟随**」
 —— **错了**。
@@ -1259,15 +1259,15 @@ airlift4                                          # 只读盘点（判据 A/B/C 
 
 ## [0.3.476] - 2026-09-19
 
-### ★★★★ 真机实证：**stage 修复成功** + **清单命中（`IsDownload=1`）**
+### 真机实证：**stage 修复成功** + **清单命中（`IsDownload=1`）**
 
 `airlift3` 的结论（对比 0.3.472 那趟三条全是 `ObjectNotFound`）：
 
 ```
-★ 判据② airlift-src-020697C4/             → 成功 size=192 st_ifmt=S_IFDIR   ← 目录建出来了
-★ 判据② airlift-src-020697C4/p0/p1/p2/link → 成功 size=49  st_ifmt=S_IFLNK  ← symlink 建出来了
-★ 判据② airlift-src-020697C4/payload       → 成功 size=30  st_ifmt=S_IFREG
-★ 结论 Books.plist 备份：LoginLogs/books_plist_backup_020697C4.bin（原文件存在，已备份后覆盖）
+判据② airlift-src-020697C4/             → 成功 size=192 st_ifmt=S_IFDIR   ← 目录建出来了
+判据② airlift-src-020697C4/p0/p1/p2/link → 成功 size=49  st_ifmt=S_IFLNK  ← symlink 建出来了
+判据② airlift-src-020697C4/payload       → 成功 size=30  st_ifmt=S_IFREG
+结论 Books.plist 备份：LoginLogs/books_plist_backup_020697C4.bin（原文件存在，已备份后覆盖）
 ```
 
 `link` 的 **size=49** 正好等于 `../../../var/mobile/Media/airlift-canary-020697C4` 的长度
@@ -1281,7 +1281,7 @@ airlift4                                          # 只读盘点（判据 A/B/C 
 0) 变体 4
    airlift3 交接的越界目标 = /var/mobile/Media/airlift-canary-020697C4      ← 目标交接生效
 1) 读（上限 6 条）：AssetManifest
-   ★★★ 清单里有没有我们那条：**有** ⇒ 前置条件成立，可以往下做越界写
+   清单里有没有我们那条：**有** ⇒ 前置条件成立，可以往下做越界写
        判据：清单第 0 条**命中**：AssetID = ../../airlift-src-020697C4/p0/p1/p2/link、IsDownload = 1
 2) 已发 FileComplete(link → airlift-link-020697C4)（**刻意不读** …）
 3) 已发 FileComplete(payload → airlift-link-020697C4/airlift-canary-020697C4.bin）
@@ -1290,7 +1290,7 @@ airlift4                                          # 只读盘点（判据 A/B/C 
 **这是第一次拿到「清单里有我们那条、且 `IsDownload=1`」** —— 正是参考实现
 `ManifestContains()` 的那道门（`airtraffic_host.m:56-65`）。
 
-### ★ 但落点回读**被自己的字节上限截掉了** —— 本版修这个「测量问题」
+### 但落点回读**被自己的字节上限截掉了** —— 本版修这个「测量问题」
 
 `airlift_at2.txt` 的上限是 **1800 字节**，而落点回读写在**文件末尾**
 ⇒ 前面的行把它挤了出去 ⇒ **判据看不到，一趟白跑**。
@@ -1305,14 +1305,14 @@ airlift4                                          # 只读盘点（判据 A/B/C 
 
 | 判据 | 含义 |
 |---|---|
-| **A**：payload 落在 `airlift-canary-*` **目标目录**里 | ★★★ **机制成立**（跟随了 symlink、两次 move 都执行了） |
+| **A**：payload 落在 `airlift-canary-*` **目标目录**里 | **机制成立**（跟随了 symlink、两次 move 都执行了） |
 | **B**：payload 落在 `airlift-link-*` 下面 | **没有跟随 symlink**（symlink 被当普通目录替换了） |
 | 两个都没有 | 两次 move 至少有一次没发生 |
 
 `airlift4` **只读**：只 `afc_list_directory` / `afc_get_file_info`，不建/不写/不删，
 且只挑 `airlift-` 前缀的条目 —— 设备自己的条目一个都不碰。
 
-### ★ 顺带记一个工具缺陷：`version` 命令会报**过期**的版本号
+### 顺带记一个工具缺陷：`version` 命令会报**过期**的版本号
 
 真机实测：设备上跑的明明是新版（`help` 里有 `airlift2 … 4` 与 `airlift3 [目标路径]`），
 但 `version` 报 `0.3.473` —— 因为它读的是 `login.log` 里的**启动行**，
@@ -1331,7 +1331,7 @@ airlift4            →  cat LoginLogs/airlift_landing.txt          # 只读盘�
 
 ## [0.3.475] - 2026-09-19
 
-### ★★ 修一个会让两段式直接失败的写法：两条 `FileComplete` 之间**不能插读**
+### 修一个会让两段式直接失败的写法：两条 `FileComplete` 之间**不能插读**
 
 v0.3.474 的变体 4 用 `sendAndRecord` 发那两条 `FileComplete` —— 而 `sendAndRecord` **发完会读最多 3 条**。
 参考实现在两次发送之间**没有任何读**（`airtraffic_host.m:183-191` 原文）：
@@ -1369,7 +1369,7 @@ sleep(2);
 
 ## [0.3.474] - 2026-09-19
 
-### ★★★ 把参考实现的**两段式**做进来（`airlift2 4`）—— 越界写本体
+### 把参考实现的**两段式**做进来（`airlift2 4`）—— 越界写本体
 
 之前 `airlift2` 只发**一条** `FileComplete`，形状跟参考实现不一样 ⇒ 即使 stage 落地了也写不出去。
 参考实现是**两条、顺序不能反**（`airlift.py:379-392` 的 `keep=false` 那组）：
@@ -1392,7 +1392,7 @@ sleep(2);
 第 2 条的 destination **字符串**仍以 `/var/mobile/Media/` 开头（过得了 `hasPrefix`），
 但解析时**跟随那条 symlink** ⇒ 真正落到目标目录里。
 
-### ★ 落点默认放在 Media **内部**（零风险 + 可自验）
+### 落点默认放在 Media **内部**（零风险 + 可自验）
 
 参考实现依赖目标目录**已经存在**（它的 `DEFAULT_TARGET` `/var/mobile/Library/SpringBoard`
 在设备上本来就有）。v0.3.474 起 `airlift3` 的默认目标改成
@@ -1403,7 +1403,7 @@ sleep(2);
 
 | 现象 | 结论 |
 |---|---|
-| `<交接目标>/<leaf>` 出现 | ★★★ **机制成立**：设备**跟随了 symlink**、两次 move 都执行了 |
+| `<交接目标>/<leaf>` 出现 | **机制成立**：设备**跟随了 symlink**、两次 move 都执行了 |
 | `airlift-link-<t>/<leaf>` 出现 | **没有跟随 symlink**：symlink 被当普通目录替换了 |
 | 两个都没有 | 两次 move 至少有一次没发生（看「已被搬走」那两行定位是哪一次） |
 
@@ -1427,16 +1427,16 @@ airlift2 4          →  cat LoginLogs/airlift_at2.txt             # 两段式 +
 ```
 
 要看的：
-1. `★ 判据② airlift-src-<token>/` **成功**（stage 真落地 —— v0.3.473 修的）；
-2. `★★★ 清单里有没有我们那条：` = **有**（v0.3.472/473 已验过）；
-3. `★★★ 机制成立` —— payload 落在**交接目标目录**里，而不是 `airlift-link-*` 下面。
+1. `判据② airlift-src-<token>/` **成功**（stage 真落地 —— v0.3.473 修的）；
+2. `清单里有没有我们那条：` = **有**（v0.3.472/473 已验过）；
+3. `机制成立` —— payload 落在**交接目标目录**里，而不是 `airlift-link-*` 下面。
 
 第 3 条一旦出现，把 `airlift3` 的目标换成真实路径（例如 `/var/mobile/Library/SpringBoard`）
 就是**真正的越界写** —— 那一步会写 Media 之外，需要显式授权后再做。
 
 ## [0.3.473] - 2026-09-19
 
-### ★★★★ 真机实证：**根因成立** —— 设备第一次发出了 `AssetManifest`
+### 真机实证：**根因成立** —— 设备第一次发出了 `AssetManifest`
 
 v0.3.472 的 `airlift3`（stage + AFC 写 `Books/Sync/Books.plist`）→ `airlift2 1` 真机结果：
 
@@ -1444,7 +1444,7 @@ v0.3.472 的 `airlift3`（stage + AFC 写 `Books/Sync/Books.plist`）→ `airlif
 0) 变体 1：先发 FinishedSyncingMetadata → 读 AssetManifest → 发 FileComplete
    AssetID = ../../airlift-src-72BDBB83/p0/p1/p2/link
 1) 读（上限 6 条）：AssetManifest
-   ★ 读到 AssetManifest（设备→主机）：子树键序（前 12）= Book, Variant, TransferUnzipped,
+   读到 AssetManifest（设备→主机）：子树键序（前 12）= Book, Variant, TransferUnzipped,
      AssetType, AssetID, IsDownload, Variant, TransferUnzipped, AssetType, AssetID, IsDownload, Type
    设备侧真实 AssetID = ../../airlift-src-72BDBB83/payload      ← 正是我们写进 Books.plist 的那条
 ```
@@ -1459,7 +1459,7 @@ v0.3.472 的 `airlift3`（stage + AFC 写 `Books/Sync/Books.plist`）→ `airlif
 `Managed / MetadataStore / Purchases / Backup-Books.plist` ——
 **`/var/mobile/Media/Books/` 确实是设备 Books 同步的真实目录**。
 
-### ★★ 同时暴露两个必须修的问题（本版修）
+### 同时暴露两个必须修的问题（本版修）
 
 #### ① stage 没落地 ⇒ 越界不可能发生
 
@@ -1486,7 +1486,7 @@ v0.3.472 当时刻意跳过了这一步（理由是「PoC 也不读」），设�
 
 **铁律**：往设备上的**已有路径**写任何东西之前，先备份；备份不成功就不写。
 
-### ★ 把参考实现的 `ManifestContains()` 判据做进来 —— 三种情况分开报
+### 把参考实现的 `ManifestContains()` 判据做进来 —— 三种情况分开报
 
 参考实现的主机端在发 `SendAssetCompleted` **之前**会逐个校验（`airtraffic_host.m:56-65` 原文）：
 
@@ -1511,7 +1511,7 @@ v0.3.472 的结论行只报「有没有收到 `AssetManifest`」。但**收到�
 （不是字符串查找 —— `AssetID` 的值里含 `..` 与 `/`，字符串查找在这种内容上极易误判），
 遍历 `Params.AssetManifest[<dataclass>]` 里的每一条，报出**命中/未命中 + 实际条目清单**。
 
-### ★ 修 v0.3.472 引入的一个回归：目录名可能取到**过期的**那份
+### 修 v0.3.472 引入的一个回归：目录名可能取到**过期的**那份
 
 v0.3.472 把 `stagedSourceNameFromLastStageRun()` 改成「先看 `airlift_books.txt`、
 再看 `airlift_stage.txt`」—— 固定优先级。但之后如果又跑了 `airlift`（四趟 stage 探测），
@@ -1520,7 +1520,7 @@ v0.3.472 把 `stagedSourceNameFromLastStageRun()` 改成「先看 `airlift_books
 
 ⇒ 改成**读两份文件、按修改时间取最新的那份**。
 
-### ★ 离线预检：归档与参考实现**逐字节一致**
+### 离线预检：归档与参考实现**逐字节一致**
 
 本机没有 Swift 编译器，`makeAirliftArchive` / `Books.plist` 的条目、顺序、内容只能在 CI 编译、
 真机才知道对不对。新增 `_tmp_verify_v472.py`：在 PC 侧用 Python 复刻同一套构造，
@@ -1528,8 +1528,8 @@ v0.3.472 把 `stagedSourceNameFromLastStageRun()` 改成「先看 `airlift_books
 
 ```
 参考 build_archive 大小 = 1411   我的 = 1411
-★ 条目清单一致? True        ★★★ 归档逐条一致? True
-★ Books.plist 一致? True
+条目清单一致? True        归档逐条一致? True
+Books.plist 一致? True
 ```
 
 同时用 `zipfile` 校验了：CRC 全对（`testzip=None`）、`link` 内容
@@ -1544,7 +1544,7 @@ AFC 回读落点才可能命中。
 
 ## [0.3.472] - 2026-09-19
 
-### ★★★ 根因定案：**我们从来没写 `Books/Sync/Books.plist`**
+### 根因定案：**我们从来没写 `Books/Sync/Books.plist`**
 
 依据：`https://github.com/AldazActivator/airlift-rw`（**有完整源码**，README 写明
 Tested on iOS 27.0 RC `24A435`，`airlift_target.h` 的 `AIRLIFT_TESTED_BUILDS` 还列了 `24A5390f`）。
@@ -1566,7 +1566,7 @@ Tested on iOS 27.0 RC `24A435`，`airlift_target.h` 的 `AIRLIFT_TESTED_BUILDS` 
 这与 v0.3.471 真机实测（`FinishedSyncingMetadata` 之后设备**直接回 `SyncFinished`**）
 **完全自洽**。
 
-### ★ 越界机制（README「ATAirlock path validation」段 + `airlift.py:362-401`）
+### 越界机制（README「ATAirlock path validation」段 + `airlift.py:362-401`）
 
 `ATAirlock` 两个缺陷：`asset.identifier` **无路径校验**地拼进 `source`；
 `destination` 只做**字符串**前缀检查（`stringByStandardizingPath` **不解析 symlink**）。
@@ -1581,7 +1581,7 @@ zip 里 symlink `p0/p1/p2/link` 的内容 = **`../../../` + `target[1:]`**，一
 ⇒ 第 2 次 move 的 destination 字符串仍以 `/var/mobile/Media/` 开头（**过检查**），
 实际落点已在 Media 外。**这解释了 v0.3.465 Pass A 里「`link` 含 3 个 `..` 却被接受」。**
 
-### ★ 本版改动（**只做前置条件，不碰 AirTraffic**）
+### 本版改动（**只做前置条件，不碰 AirTraffic**）
 
 1. **新增 SSH 命令 `airlift3`** → `AirliftExploit.runBooksStagingProbe()`：
    - 用**真实的**归档（`makeAirliftArchive`，条目逐字照抄 `airlift.py:262-287`：
@@ -1601,7 +1601,7 @@ zip 里 symlink `p0/p1/p2/link` 的内容 = **`../../../` + `target[1:]`**，一
 **下一步（真机）**：`airlift3` → `airlift2 1` → `cat LoginLogs/airlift_at2.txt`，
 看**有没有 `AssetManifest`**。有 = 根因定案；没有 = 这条前置条件不成立，如实报出。
 
-### ★ 铁律（本版新增两条）
+### 铁律（本版新增两条）
 
 1. **读 PoC 先确认拿的不是被改过的 fork**（尤其看校验有没有被注释掉）。
    我们上一轮读的是 `marksvia/airlift-HideAccount`，它的 `airtraffic_host.m`
@@ -1617,7 +1617,7 @@ zip 里 symlink `p0/p1/p2/link` 的内容 = **`../../../` + `target[1:]`**，一
 
 ## [0.3.471] - 2026-09-19
 
-### ★★ 变体 2/3 真机结果：**响应层面判不出成败** ⇒ 必须靠 AFC 回读
+### 变体 2/3 真机结果：**响应层面判不出成败** ⇒ 必须靠 AFC 回读
 
 **变体 2**（趁会话活着先发 `FileComplete`）：
 ```
@@ -1628,7 +1628,7 @@ zip 里 symlink `p0/p1/p2/link` 的内容 = **`../../../` + `target[1:]`**，一
 **变体 3**（主机先发 `AssetManifest`，再发 `FileComplete`）：
 ```
 1) 发 AssetManifest 后，设备回：（一条都没读到）
-2) 发 FileComplete 后，设备回：Ping, Ping, Ping          ← ★ 变体 2 里这里是「无响应」
+2) 发 FileComplete 后，设备回：Ping, Ping, Ping          ← 变体 2 里这里是「无响应」
 3) 发 FinishedSyncingMetadata 后，设备回：SyncFinished, SyncAllowed, AssetMetrics
 ```
 
@@ -1637,7 +1637,7 @@ zip 里 symlink `p0/p1/p2/link` 的内容 = **`../../../` + `target[1:]`**，一
 
 ⇒ **响应层面既判不出「成功」也判不出「失败」** —— **唯一判据是回读落点。**
 
-### ★ 本版解决一个「测量问题」：落点必须在 Media 之外，但我们只能读 Media
+### 本版解决一个「测量问题」：落点必须在 Media 之外，但我们只能读 Media
 
 - 落点必须在 **AFC 根（`/var/mobile/Media`）之外**才能证明逃逸；
 - 而 **AFC 读不出 Media**（`airlift_afc_probe.txt` 已证）。
@@ -1672,10 +1672,10 @@ zip 里 symlink `p0/p1/p2/link` 的内容 = **`../../../` + `target[1:]`**，一
 
 ## [0.3.470] - 2026-09-19
 
-### ★★★ `airlift2` 真机结果（v0.3.469）：**不是「被拒绝」，是「发晚了」**
+### `airlift2` 真机结果（v0.3.469）：**不是「被拒绝」，是「发晚了」**
 
 ```
-0) AssetID = ../../airlift-src-AB5045F8/p0/p1/p2/link      ← ★ 指向 stage 真实目录 ✓
+0) AssetID = ../../airlift-src-AB5045F8/p0/p1/p2/link      ← 指向 stage 真实目录 ✓
 1) 读（等 AssetManifest，上限 6 条）：SyncFinished
    ⚠️ 没读到 AssetManifest（设备先回了 SyncFinished）⇒ 设备本次没有待下载资产 ⇒ FileComplete 是盲发
 2) 发 FileComplete 后，设备回：SyncAllowed, AssetMetrics
@@ -1761,10 +1761,10 @@ step2Verdict.append("   ⚠️ **没读到 AssetManifest**（设备先回了 "
 
 ## [0.3.468] - 2026-09-19
 
-### ★★★★★ `airlift d` 真机结果：**Grappa 认证通过了**（推翻「必须现造 Grappa」的结论）
+### `airlift d` 真机结果：**Grappa 认证通过了**（推翻「必须现造 Grappa」的结论）
 
 ```
-【Grappa 实验】组(d) 真实 macOS 样本（硬编码，84 字节） → 设备回 Command=ReadyForSync ★★★ 通过！
+【Grappa 实验】组(d) 真实 macOS 样本（硬编码，84 字节） → 设备回 Command=ReadyForSync 通过！
 已发 FinishedSyncingMetadata（二进制 plist 153 字节，小端长度前缀）
 读 #1（等 AssetManifest）：XML plist 101 字节，消息名 = SyncFinished
 ```
@@ -1772,7 +1772,7 @@ step2Verdict.append("   ⚠️ **没读到 AssetManifest**（设备先回了 "
 
 **⇒ 设备回的是 `ReadyForSync`，不是 `SyncFailed{ErrorCode:4}` ⇒ Grappa 认证通过。**
 
-**★ 这推翻了此前那句「所有组都不通过 ⇒ 内容被校验、且绑主机身份 ⇒ 必须现造 A-64」**
+**这推翻了此前那句「所有组都不通过 ⇒ 内容被校验、且绑主机身份 ⇒ 必须现造 A-64」**
 —— 那句话**只跑了组(a) 就下了结论**，而**组(d)（硬编码真实 macOS 样本）直接通过**。
 
 `AirliftExploit.swift:444-447` 的注释早就写明这个分支的含义：
@@ -1791,13 +1791,13 @@ step2Verdict.append("   ⚠️ **没读到 AssetManifest**（设备先回了 "
 
 ```
 读 SyncAllowed → 发 HostInfo → 发 RequestingSync（带 Grappa）→ 读 ReadyForSync
-→ 发 FinishedSyncingMetadata → ★读 AssetManifest → ★★发 FileComplete → 读终止消息
+→ 发 FinishedSyncingMetadata → 读 AssetManifest → 发 FileComplete → 读终止消息
 ```
 
-**★ 方向依据 `ref-attraffic协议.md` §9.2 的消息方向表**（该表 §9.3 把「发 `AssetManifest`」
+**方向依据 `ref-attraffic协议.md` §9.2 的消息方向表**（该表 §9.3 把「发 `AssetManifest`」
 明确列为**旧实现犯过的错**，本次就是修这条）：
 ```
-| `AssetManifest` | 设备 → 主机 | 读 ← ★ 我们原先发它，方向反了 |
+| `AssetManifest` | 设备 → 主机 | 读 ← 我们原先发它，方向反了 |
 | `FileBegin` / `FileProgress` | 主机 → 设备 | PoC 的最小路径里没有，可省 |
 | `FileComplete` | 主机 → 设备 | 发 ← 攻击落点（ATHostConnectionSendAssetCompleted） |
 ```
@@ -1818,22 +1818,22 @@ step2Verdict.append("   ⚠️ **没读到 AssetManifest**（设备先回了 "
 ### 修工作流缺陷：结论读不回来
 
 `airlift_stage.txt` 已 37 KB，而 SSH `cat` 在 ~31 KB 处**截断并保留开头** ⇒ 末尾的
-`★ 判据` / `★ 结论` **全部读不回来**；`logs n` 也够不到（`fullLog()` 顺序是
+`判据` / `结论` **全部读不回来**；`logs n` 也够不到（`fullLog()` 顺序是
 「最新 500 行 + 更早的行」，窗口落在更早那段）。本次是靠 `logs 2600` 这个**猜测值**才捞出来的。
 
 ⇒ 新增 `LoginLogs/airlift_verdict.txt`（**1.67–1.86 KB，恒 < 2 KB**），只收
-`★ 判据` / `★ 结论` + AFC 写穿诊断行 + 中止时的第一条 `失败：` 行；
+`判据` / `结论` + AFC 写穿诊断行 + 中止时的第一条 `失败：` 行；
 `record()` 加 **4096 字节**单次上限（按 UTF-8 字节截断、注明原长，**只截断不删除**）。
 
 ## [0.3.467] - 2026-09-19
 
-### ★★★ v0.3.466 真机结果：Pass C 定案 **(甲)** —— zip-slip 捷径收口
+### v0.3.466 真机结果：Pass C 定案 **(甲)** —— zip-slip 捷径收口
 
 ```
-★ 判据【Pass A】：link st_ifmt=S_IFLNK=true、link 存在=true、跟随对照文件=true ⇒ A = ✅
-★ 判据【Pass B】：link 存在=false、逃逸探针=false ⇒ B = ❌
-★ 判据【Pass C】：link 存在=false、跟随对照文件=false、out 存在=false、out 是 symlink=false
-★ 结论【Pass C】(甲) 逃逸 symlink 内容本身触发整包拒绝
+判据【Pass A】：link st_ifmt=S_IFLNK=true、link 存在=true、跟随对照文件=true ⇒ A = ✅
+判据【Pass B】：link 存在=false、逃逸探针=false ⇒ B = ❌
+判据【Pass C】：link 存在=false、跟随对照文件=false、out 存在=false、out 是 symlink=false
+结论【Pass C】(甲) 逃逸 symlink 内容本身触发整包拒绝
 ```
 
 ⇒ **设备在解压前做静态检查：zip 里只要有一条「解析后逃出解压根」的 symlink，就整包拒绝**，
@@ -1874,23 +1874,23 @@ Pass C 的 `../../../../` 落在根外 ⇒ 拒）。这条口径已写进结论�
 
 ## [0.3.466] - 2026-09-19
 
-### ★★★ v0.3.465 真机结果：**stage 通了** —— `RSDCheckin` 就是缺的那一步
+### v0.3.465 真机结果：**stage 通了** —— `RSDCheckin` 就是缺的那一步
 
 ```
-★ 判据【Pass A】：link st_ifmt=S_IFLNK=true、link 存在=true、跟随对照文件=true ⇒ A = ✅
-★ 判据【Pass B】：link st_ifmt=S_IFLNK=false、link 存在=false、逃逸探针=false ⇒ B = ❌
+判据【Pass A】：link st_ifmt=S_IFLNK=true、link 存在=true、跟随对照文件=true ⇒ A = ✅
+判据【Pass B】：link st_ifmt=S_IFLNK=false、link 存在=false、逃逸探针=false ⇒ B = ❌
 ```
 
 Pass A 逐条回读（**这就是攻击链第 ① 步需要的全部东西**）：
 ```
 airlift-src-CC00FF78/          → 成功 size=192 st_ifmt=S_IFDIR
-airlift-src-CC00FF78/p0/p1/p2/link → 成功 size=29 st_ifmt=S_IFLNK        ← ★ symlink 建成
+airlift-src-CC00FF78/p0/p1/p2/link → 成功 size=29 st_ifmt=S_IFLNK        ← symlink 建成
 airlift-src-CC00FF78/airlift-stage-target/airlift-follow-probe-D29FA473.txt → 成功 size=12
 airlift-src-CC00FF78/payload   → 成功 size=7
 ```
 ⇒ **解压器会跟随 symlink**（第 ② 步 `moveItemAtPath:` 的前提）。
 
-**★ 帧格式同时定案（本版把结论写进注释）：**
+**帧格式同时定案（本版把结论写进注释）：**
 
 | 帧格式 | 结果 |
 |---|---|
@@ -1920,7 +1920,7 @@ Pass B 是**整包被拒**（四种格式全 `ObjectNotFound`、连 `link` 都�
   ⇒ **不需要 AT/Grappa 就能越界写，整条链立刻成立**
 - 没逃出去 ⇒ 防护在文件系统层，这条捷径彻底收口，只能回到 ② AT
 
-### ★ 一处口径更正：`control` 不是「一个 `..` 都没有」
+### 一处口径更正：`control` 不是「一个 `..` 都没有」
 
 `link` 的目标是 `../../../airlift-stage-target` —— **含 3 个 `..`**，只是**不逃逸**。
 Pass A 真机通过**正好证明**：**设备允许不逃逸的 `..`**。
@@ -1940,14 +1940,14 @@ Pass A 真机通过**正好证明**：**设备允许不逃逸的 `..`**。
 
 ## [0.3.465] - 2026-09-19
 
-### ★★★ airlift stage 根因定案：**漏了 `RSDCheckin`**（v0.3.464 两趟拆分跑出 `A❌+B❌`）
+### airlift stage 根因定案：**漏了 `RSDCheckin`**（v0.3.464 两趟拆分跑出 `A❌+B❌`）
 
 v0.3.464 的两趟拆分跑通了，真机结论：
 
 ```
-★ 判据【Pass A】：link st_ifmt=S_IFLNK=false、link 存在=false、跟随对照文件=false ⇒ A = ❌
-★ 判据【Pass B】：link st_ifmt=S_IFLNK=false、link 存在=false、逃逸探针=false ⇒ B = ❌
-★ 结论【四象限】A❌+B❌：连纯对照 zip 都被拒 ⇒ 问题在 zip 格式或帧格式，不在逃逸条目
+判据【Pass A】：link st_ifmt=S_IFLNK=false、link 存在=false、跟随对照文件=false ⇒ A = ❌
+判据【Pass B】：link st_ifmt=S_IFLNK=false、link 存在=false、逃逸探针=false ⇒ B = ❌
+结论【四象限】A❌+B❌：连纯对照 zip 都被拒 ⇒ 问题在 zip 格式或帧格式，不在逃逸条目
 ```
 
 而 Pass A **每一步都成功了、却什么都没留下**：
@@ -1991,7 +1991,7 @@ v0.3.464 的两趟拆分跑通了，真机结论：
 
 ## [0.3.464] - 2026-09-19
 
-### ★★★ 更正：前两版「成因」都是**我猜的**，全部作废 —— `ServiceNotFound` 是**设备侧服务状态**问题，**重启手机即恢复**
+### 更正：前两版「成因」都是**我猜的**，全部作废 —— `ServiceNotFound` 是**设备侧服务状态**问题，**重启手机即恢复**
 
 **事实（用户实测 + PC 侧标准工具交叉验证）**：
 
@@ -2070,7 +2070,7 @@ EscapeOS/Views/AppStoreLogView.swift:29:14: error: Expected ',' separator
 
 ## [0.3.462] - 2026-09-19
 
-### ~~★★★ 更正：`ServiceNotFound` 的真根因是「我们接错了隧道」~~ ⚠️ **本段结论也是错的，见 `[0.3.464]`**
+### ~~更正：`ServiceNotFound` 的真根因是「我们接错了隧道」~~ ⚠️ **本段结论也是错的，见 `[0.3.464]`**
 
 > **保留作反面教材。** 本节当时给出的「接错隧道」结论，在 `[0.3.464]` 被真机 + PC 侧标准工具
 > 交叉验证推翻。下面这段的技术描述（官方 `app-service` 走 CoreDeviceProxy → 第二个 RSD 握手）
@@ -2147,7 +2147,7 @@ v0.3.460 的「重置精选集」按「目录内 identifier 是整数」判自�
 
 ## [0.3.461] - 2026-09-19
 
-### ★ 修「探测队列被永久堵死」—— 自动路径跑全部组 ⇒ 卡死 ⇒ 之后所有探测都不再执行
+### 修「探测队列被永久堵死」—— 自动路径跑全部组 ⇒ 卡死 ⇒ 之后所有探测都不再执行
 
 **真机实证**（v0.3.460）：
 ```
@@ -2195,7 +2195,7 @@ v0.3.460 的「重置精选集」按「目录内 identifier 是整数」判自�
 确认框文案也改成如实说明两件事：
 「将清空 App 内的壁纸包，并从系统移除已应用的自定义壁纸.」
 
-#### 2. ★ 新增只读 DDI 探针（`ddiprobe` SSH 命令）
+#### 2. 新增只读 DDI 探针（`ddiprobe` SSH 命令）
 
 **为什么需要**：`ServiceNotFound` 的根因是「**设备没挂 DDI**」——
 CoreDevice 那批服务（`com.apple.coredevice.*`）是 DDI 门控的，没挂 DDI ⇒ 整块不广播
@@ -2214,7 +2214,7 @@ CoreDevice 那批服务（`com.apple.coredevice.*`）是 DDI 门控的，没挂 
 ⚠️ 为什么这么小心：v0.3.419/420 就是因为在自检/detached 路径对 RSD 服务建连，
 把设备端 RPPairing pair-verify 搞到**连续 63 次零响应**，**所有走隧道的功能一起挂**。
 
-#### 3. ★★ 走 C 垫片（本仓验证过的唯一路径）
+#### 3. 走 C 垫片（本仓验证过的唯一路径）
 
 `image_mounter_connect_rsd` 的出参是 `ImageMounterHandle **`、
 `image_mounter_copy_devices` 的是 `plist_t **`（`plist_t` 是 `typedef void *`）——
@@ -2266,7 +2266,7 @@ Apple 内置用 UUID，我们自己导入的用整数（`randomizeWallpaperIDs(_
 **安全护栏（一条不少）**：只删目录 / 拒绝符号链接 / 路径包含性校验（防穿越）/
 容器根合法性校验 / 400 文件上限。
 
-**★ 报错必须与事实一致**（本轮改了三轮才收干净）：
+**报错必须与事实一致**（本轮改了三轮才收干净）：
 - **两遍循环**：先把三个 provider 的沙盒扩展**全部拿到**，再开始删 ——
   否则「provider 3 拿不到权限」会在**前两个已经删完**之后才抛，报出来的话是错的；
 - **删除失败只计数不中断**，最后把三个数字**一起**如实报：
@@ -2299,7 +2299,7 @@ Apple 内置用 UUID，我们自己导入的用整数（`randomizeWallpaperIDs(_
 
 ## [0.3.458] - 2026-09-19
 
-### ★★ 修「点空间回收扫描闪退」—— 根因：拿**算错的地址**去调用
+### 修「点空间回收扫描闪退」—— 根因：拿**算错的地址**去调用
 
 **真机实证**（v0.3.457，两条启动行夹着一次崩溃 ⇒ 崩后重启）：
 ```
@@ -2382,7 +2382,7 @@ Apple 内置用 UUID，我们自己导入的用整数（`randomizeWallpaperIDs(_
 **「剩余容量」不动** —— 核过了，2226 mAh 是对的（80% × 满充 2805 = 2244，差 0.6%
 是电量取整）。之前的「看着不对」来自上面那个标签歧义，合并后就不打架了。
 
-#### 2. ★ airlift 探测：同一次运行里**第 2 个服务连接必卡**
+#### 2. airlift 探测：同一次运行里**第 2 个服务连接必卡**
 
 真机实证（v0.3.456，**两次运行完全一致**）：
 ```
@@ -2436,7 +2436,7 @@ CoreFP dlopen 失败：... (fat file, but missing compatible architecture
 （`FullChargeCapacity` 确实存在于 registry）。**这里不跟着爱思改** ——
 为了对齐而把一个**读得到的真值**降级成 -1，是拿准确性换一致性，不划算。
 
-#### 2. ★ 新增设备端 SSH 命令 `airlift`
+#### 2. 新增设备端 SSH 命令 `airlift`
 
 ```
 ssh_run.py airlift      # 强制再跑一遍 airlift 协议探测（忽略单飞标志）
@@ -2459,7 +2459,7 @@ ssh_run.py airlift      # 强制再跑一遍 airlift 协议探测（忽略单飞
 本版**不改实验逻辑**，只修「日志会说谎」和两处结构隐患。核心实验（Grappa 四组 + stage）
 与 v0.3.454 完全一致。
 
-#### 1. ★ 修两处**会误导判断**的日志措辞（GP-10 指出）
+#### 1. 修两处**会误导判断**的日志措辞（GP-10 指出）
 
 | 位置 | 原文（错） | 改成 |
 |---|---|---|
@@ -2471,7 +2471,7 @@ ssh_run.py airlift      # 强制再跑一遍 airlift 协议探测（忽略单飞
 **而事实是我们有**（`SAPAssets/CoreFP`，29 MB，随包发布，只是架构不对）。
 日志一旦说谎，后面的所有判断都会建在错的前提上。
 
-#### 2. ★ CoreFP 探测把 **bundle 内那份**放进了候选路径（第 1 条）
+#### 2. CoreFP 探测把 **bundle 内那份**放进了候选路径（第 1 条）
 
 iOS 的 `/System/Library/...` 上**确实没有** CoreFP —— GP-20 用 iOS SDK 完整目录清单
 **受控枚举**过（16.5 私有框架 1743 条、10.3 602 条，`truncated:false`；`CoreFP`/`AirTrafficHost`
@@ -2480,7 +2480,7 @@ iOS 的 `/System/Library/...` 上**确实没有** CoreFP —— GP-20 用 iOS SD
 现在把 `Bundle.main.bundlePath + "/SAPAssets/CoreFP"` 放最前，设备日志会直接给出真相：
 **文件存在，但架构不对**（10.9 那份是 fat i386 + x86_64，没有 arm64/arm64e 切片）。
 
-#### 3. ★ 补丁 D：`LC_ID_DYLIB` 改成全局唯一名（结构加固）
+#### 3. 补丁 D：`LC_ID_DYLIB` 改成全局唯一名（结构加固）
 
 `dlopen(path)` 的解析**按 install name 匹配已加载镜像**，不是按路径。我们这份补丁过的
 AirTrafficHost，`LC_ID_DYLIB` 原本是系统那个名字
@@ -2512,7 +2512,7 @@ iOS 现在没有 AirTrafficHost（已受控枚举），但这是**结构上不�
 仍会读到区外。现在三个解析函数都加 `let cmdsEnd = 32 + sizeofcmds`，
 循环条件改成 `cmdsize < 8 || off + cmdsize > cmdsEnd { break }`。
 
-#### 5. ★ 措辞纪律：把「未实测的机制」降级为**推断**
+#### 5. 措辞纪律：把「未实测的机制」降级为**推断**
 
 v0.3.450/v0.3.453 的注释与 CHANGELOG 把
 「**缓存构建器改写了 `__LINKEDIT.fileoff`**」当成**已证事实**写。
@@ -2536,7 +2536,7 @@ macOS 一升级它的导入集就可能变。届时 CI 仍会打印「桩 17 个
 
 ---
 
-### ★★ 追加：v0.3.454 真机上的两个故障（用户报告），都已修
+### 追加：v0.3.454 真机上的两个故障（用户报告），都已修
 
 用户报告（v0.3.454 / build 750）：「点空间回收扫描**闪退**」+「电池健康**仍然无法读取**」。
 
@@ -2602,7 +2602,7 @@ guard let node else { return nil }    // ← name 形式「没报错但返回空
 
 ## [0.3.454] - 2026-09-19
 
-### ★ 拦住一个即将发出去的回归：v0.3.453 修了「闪退」，但**放回了「抢隧道」**
+### 拦住一个即将发出去的回归：v0.3.453 修了「闪退」，但**放回了「抢隧道」**
 
 **v0.3.453 的构建被我在构建途中取消，没有发给用户。** 原因如下。
 
@@ -2660,7 +2660,7 @@ v0.3.453 把四个探测**全部接回**自动路径，其中三条会 `withTunn
 **有副作用（建隧道 / 裸读内存）的自检，不能挂在会被普通功能自动命中的路径上。**
 修 bug 与挪位置是两件事，必须分开做、分开验证。
 
-#### 5. ★ 更正上面第 1 句 + 本版补的编译修复
+#### 5. 更正上面第 1 句 + 本版补的编译修复
 
 上面写的「**v0.3.453 的构建被我在构建途中取消，没有发给用户**」**不完整**，据实更正：
 
@@ -2698,7 +2698,7 @@ v0.3.453 把四个探测**全部接回**自动路径，其中三条会 `withTunn
 自检：括号平衡 +0；无 `mach_vm_region` / `mach_task_self_` / `VM_PROT_READ` 等残留引用
 （仅保留在「为什么不用它」的说明注释里）；`isReadable` 字样已全部清掉。
 
-#### 6. ★ 恢复 `runProtocolProbe`：它**不是「已死」，是「还没测」**
+#### 6. 恢复 `runProtocolProbe`：它**不是「已死」，是「还没测」**
 
 「补 3」把 Grappa 内容实验整个删掉了，理由写的是「AT/Grappa 这条线已死」。**这个理由不成立**，
 而且它把**两个不同的问题**混成了一个：
@@ -2720,7 +2720,7 @@ v0.3.453 把四个探测**全部接回**自动路径，其中三条会 `withTunn
 （探测路径全是系统路径、从未探 bundle 里的 `SAPAssets/CoreFP`；与生产中的 Unicorn 链路直接冲突；
 `dlopen` 失败不构成证据），防止后人再照着那条错误结论删东西。
 
-#### 7. ★ 补丁 C：修掉**第二个**加载期拦路虎（`Versions/A` 路径形态）
+#### 7. 补丁 C：修掉**第二个**加载期拦路虎（`Versions/A` 路径形态）
 
 **这是 GP-20 发现的，与「闪退」「隧道抢占」都独立的第三个问题。**
 
@@ -2763,7 +2763,7 @@ LC_LOAD_DYLIB @0x0710 cmdsize=104（未变）
 
 同一函数 `flatten_versions()` 之后 CoreFP 也要用（那边有 5+ 条同类路径）。
 
-### ★ 同版附带：修「电池健康读不出数据」回归（用户报告）
+### 同版附带：修「电池健康读不出数据」回归（用户报告）
 
 **现象**：用户报告「电池健康板块出问题，没法读取电池数据了」。
 
@@ -2797,7 +2797,7 @@ UI 只把错误塞进 `errorText`，`login.log` 里一行都没有，
 **修法**：回退节点改为「**失败即放弃回退**」，绝不让它拖死主数据 ——
 主数据已经在手，一个可选的温度来源不该有否决权。
 
-### ★ 同版附带：恢复**自动触发**（撤销「手动按钮」，并撤回一条错误判断）
+### 同版附带：恢复**自动触发**（撤销「手动按钮」，并撤回一条错误判断）
 
 #### 1. 撤销「把探测改成手动按钮」
 
@@ -2815,7 +2815,7 @@ UI 只把错误塞进 `errorText`，`login.log` 里一行都没有，
 ⇒ 恢复自动触发。若日后**真的**出现抢占，正确修法是**全局共享一条隧道队列**
 （各服务现在各有一条、互不排斥），**不是**把动作推给用户。
 
-#### 2. ★ 撤回「AT/Grappa 这条线已死」
+#### 2. 撤回「AT/Grappa 这条线已死」
 
 我在「补 3」里以「AT/Grappa 这条线已死」为由把 Grappa 内容实验删掉了。**该理由不成立** ——
 它把**两个不同问题**混成了一个：
@@ -2851,7 +2851,7 @@ PoC 的 zip 里**故意没有**这种条目 ⇒ 这一点从没被验证过。
    再放 `p0/p1/p2/link/<follow-probe>`。**只回答「跟不跟随」，不触发 zip-slip 防护。**
 2. **逃逸探针**：`p0/p1/p2/out` → `../../../../`，再放 `p0/p1/p2/out/<escape-probe>`。
 
-★ 为什么必须有第 1 条：只有第 2 条时，整包若被 zip-slip 防护拒掉，
+为什么必须有第 1 条：只有第 2 条时，整包若被 zip-slip 防护拒掉，
 就分不清「不跟随」与「整包被拒」—— 两者后续动作完全不同。
 代码里 `!linkPresent` 时的结论是「**无法判定**」，**不是**「不跟随」。
 
@@ -2862,7 +2862,7 @@ PoC 的 zip 里**故意没有**这种条目 ⇒ 这一点从没被验证过。
 
 ## [0.3.453] - 2026-09-19
 
-### ★ 闪退真修 + 四个探测全部恢复 + 撤回一条被写进代码的**错误结论**
+### 闪退真修 + 四个探测全部恢复 + 撤回一条被写进代码的**错误结论**
 
 #### 1. 闪退的**真正**修法（v0.3.452 只找到了位置，没修根因）
 
@@ -2892,7 +2892,7 @@ symTab = slide + (__LINKEDIT.vmaddr − __LINKEDIT.fileoff) + symoff
 | `ncmds` 封顶 4096 | 畸形 `ncmds` 会让 load command 循环一直往后读 |
 | `boundedCString` 取代 `String(cString:)` | 后者**无上界**，字符串表畸形时会扫出界（另一条越界读） |
 
-★ **不可读时必须报「本次无法判定」，绝不退化成「没找到」** —— 后者是假阴性，会把结论带偏。
+**不可读时必须报「本次无法判定」，绝不退化成「没找到」** —— 后者是假阴性，会把结论带偏。
 
 #### 2. 四个探测全部恢复
 
@@ -2901,7 +2901,7 @@ symTab = slide + (__LINKEDIT.vmaddr − __LINKEDIT.fileoff) + symoff
 （用户明确要求的设计：功能真的需要时自动拉起，而不是让用户手动勾选/取消勾选）。
 所有探测都在串行后台队列，不阻塞 UI，连接一律 `defer` 释放。
 
-#### 3. ★ 撤回 v0.3.451 写进代码/CHANGELOG 的错误结论
+#### 3. 撤回 v0.3.451 写进代码/CHANGELOG 的错误结论
 
 v0.3.451 写的是：
 > 「iOS 上没有 CoreFP（实测，dlopen `no such file` + not in dyld cache）
@@ -2941,7 +2941,7 @@ v0.3.451 写的是：
 
 ## [0.3.452] - 2026-09-19
 
-### ★ 闪退真正的位置找到了：不是 AFC，是 `runGrappaProbe()` 里的**越界读**。全部探测归零。
+### 闪退真正的位置找到了：不是 AFC，是 `runGrappaProbe()` 里的**越界读**。全部探测归零。
 
 **v0.3.451 我判断错了**，真机日志纠正了我：
 
@@ -2968,7 +2968,7 @@ symTab  = slide + (__LINKEDIT.vmaddr − __LINKEDIT.fileoff) + symoff
 **四个调用点全部注释掉**（函数体保留）。App 稳定性优先。
 
 **停掉不损失信息 —— 该拿的答案都已经拿到了**：
-- ★ **iOS 上没有 `CoreFP`**（实测：`no such file`，且 `not in dyld cache`）
+- **iOS 上没有 `CoreFP`**（实测：`no such file`，且 `not in dyld cache`）
 - **`AirTrafficHost` 也没有**；只有**设备侧**的 `AirTraffic`（不含 Grappa 生成逻辑）
 ⇒ **AT/Grappa 这条线在纯手机端走不通**（结论已定）。
 
@@ -2983,7 +2983,7 @@ v0.3.419 栽过一次（真连设备），这次又栽一次（裸读内存）�
 
 ## [0.3.451] - 2026-09-19
 
-### ★ 紧急修回归：停用三条「真连设备」的探测（空间回收扫描闪退 + 配对功能全废）
+### 紧急修回归：停用三条「真连设备」的探测（空间回收扫描闪退 + 配对功能全废）
 
 **用户反馈**：「空间回收板块点击扫描又闪退了」+「涉及配对功能的都没法用」。
 
@@ -3007,7 +3007,7 @@ v0.3.419 栽过一次（真连设备），这次又栽一次（裸读内存）�
 - **`runAfcEscapeProbe()` / `runStageProbe()` / `runProtocolProbe()` 全部停用**（源码保留，调用点注释掉）。
   等各自单独排掉闪退、并且**改成手动触发**（不再挂在功能调用路径上）之后再逐条放开。
 
-### ★★ 顺带定案：iOS 上**没有 CoreFP**（实测，不再是推断）
+### 顺带定案：iOS 上**没有 CoreFP**（实测，不再是推断）
 
 同一次日志里，`runGrappaProbe()` 给出了决定性结果：
 ```
@@ -3029,7 +3029,7 @@ CoreFP dlopen 失败（/System/Library/PrivateFrameworks/CoreFP.framework/CoreFP
 
 ## [0.3.450] - 2026-09-19
 
-### ★ 四组「Grappa 内容」实验 —— 直接判定设备**校不校 Grappa 内容**
+### 四组「Grappa 内容」实验 —— 直接判定设备**校不校 Grappa 内容**
 
 **为什么这是现在最有价值的一个实验**：Grappa 生成依赖 FairPlay（`CoreFP`），而证据指向
 **iOS 上没有 `CoreFP`**（三份独立 SDK 私有框架清单 + `CoreFP` 带 `fairplayd`/IOKit 内核组件 +
@@ -3046,13 +3046,13 @@ Apple 自己的 dyld 源码把该路径包在 `#if TARGET_OS_OSX` 里）。若�
 | (c) | **真 Grappa**（从 `LoginLogs/airlift_grappa.bin` 读） | 阳性对照 |
 
 **判据**（结论行原文）：
-- 任一组回 `ReadyForSync` ⇒ `★★★ 通过！`
-- **(a)/(b) 也通过** ⇒ `★★★ 关键结论：设备不校验 Grappa 内容（只当种子）` ⇒
+- 任一组回 `ReadyForSync` ⇒ `通过！`
+- **(a)/(b) 也通过** ⇒ `关键结论：设备不校验 Grappa 内容（只当种子）` ⇒
   **不需要 CoreFP，整条路救活**
 - **(c) 通过而 (a)/(b) 不通过** ⇒ `关键结论：内容被校验（但不一定绑主机身份）`
 - **(c) 因缺 `airlift_grappa.bin` 被跳过** ⇒ 明确标注 **「本次是不完整结论」**（不装作有结果）
 
-**★ 顺带修一个会让结论行说谎的缺陷**：原实现用 `last*` 变量拼结论，而设备在 `SyncFailed` 之后
+**顺带修一个会让结论行说谎的缺陷**：原实现用 `last*` 变量拼结论，而设备在 `SyncFailed` 之后
 **还会继续发消息**（`AssetMetrics`/`Ping`/`IdleExit`）⇒ `last*` 被覆盖 ⇒ 结论会显示
 「Command=别的 ErrorCode=无」。改成**只认第一条 `SyncFailed`**。
 
@@ -3063,7 +3063,7 @@ Apple 自己的 dyld 源码把该路径包在 `#if TARGET_OS_OSX` 里）。若�
 **本版同时带上 v0.3.449 的构建修复**（桩被 xcodegen 拷到 bundle 根 ⇒ 改由 CI 显式拷进
 `Frameworks/`，并加硬自检）。v0.3.449 那次构建**已成功**，本版在其基础上加四组实验。
 
-**★ 本版修正一处发版缺陷（复核时抓到，非本次实验代码）**：
+**本版修正一处发版缺陷（复核时抓到，非本次实验代码）**：
 `CURRENT_PROJECT_VERSION` 曾误沿用 v0.3.449 的 **746**（应递增）。
 `ModuleService.bootstrapBundledModules()` 以 `CFBundleVersion` 作**安装版本锚点**
 （`ModuleService.swift:259-261`：「CFBundleVersion 每次发版必变」），
@@ -3073,7 +3073,7 @@ Apple 自己的 dyld 源码把该路径包在 `#if TARGET_OS_OSX` 里）。若�
 
 ## [0.3.449] - 2026-09-19
 
-### ★ 修 v0.3.448 的构建失败：桩被拷到了 **bundle 根**（而不是 `Frameworks/`）
+### 修 v0.3.448 的构建失败：桩被拷到了 **bundle 根**（而不是 `Frameworks/`）
 
 **v0.3.448 的构建挂在 `Embed AirTrafficHost into Frameworks` 这一步 —— 是那道自检自己抓出来的。**
 
@@ -3092,7 +3092,7 @@ CpResource .../EscapeSpace.app/libMobileDeviceStub.dylib   ← 拷到了 **bundl
 并加自检：`test -f "$APP/Frameworks/libMobileDeviceStub.dylib"`（**硬失败**）+
 「桩若同时出现在 bundle 根则警告」（软提示 `embed` 又被打开了）。
 
-★ **顺带确认：v0.3.448 的另外 3 个修复全部生效**（日志可证）：
+**顺带确认：v0.3.448 的另外 3 个修复全部生效**（日志可证）：
 - step 22 `Build (compile/link)` **成功**；
 - 桩链接参数里**只剩 `-framework CoreFoundation`**（SAP/openssl 那堆继承设置被覆盖掉了 ✓）；
 - 产物名**确实是 `libMobileDeviceStub.dylib`**（`productName` 修法生效 ✓）；
@@ -3125,7 +3125,7 @@ iOS 设备侧很可能**只消费 Grappa、不生成它**。
 /System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost
 /System/Library/PrivateFrameworks/AirTrafficHost.framework/Versions/A/AirTrafficHost
 ```
-★ **判据升级（比原计划更可靠）**：不看混淆符号 `_uhO2GULXwfgKwPcp4YR2`
+**判据升级（比原计划更可靠）**：不看混淆符号 `_uhO2GULXwfgKwPcp4YR2`
 （它是 **private external**，只存在于 `LC_SYMTAB`；iOS 系统镜像常把 symtab 整个剥掉 ⇒ 会**假阴性**），
 改为查 **`grappaPublic`** —— **公开导出里含 `grappa` 的**（如 `_ATHostConnectionGetGrappaSessionId`）。
 **理由**：公开导出**在 export trie 里**，**不依赖 `LC_SYMTAB`**，**shared cache 场景照样拿得到**。
@@ -3138,7 +3138,7 @@ iOS 设备侧很可能**只消费 Grappa、不生成它**。
   `_uhO2GULXwfgKwPcp4YR2` **不在** AirTrafficHost 的 58 个 trie 名字里）⇒ 两者**互补**。
 - 支持两种承载：`LC_DYLD_EXPORTS_TRIE`(0x80000033) 优先，`LC_DYLD_INFO(_ONLY)`(0x22/0x80000022)
   的 `export_off`(cmd+40) / `export_size`(cmd+44) 作回退。
-- ★ **`trieOff` 是文件偏移、不是 vmaddr** ⇒ 必须按段折算（`__LINKEDIT` 的 `vmaddr − fileoff`）。
+- **`trieOff` 是文件偏移、不是 vmaddr** ⇒ 必须按段折算（`__LINKEDIT` 的 `vmaddr − fileoff`）。
   普通 dylib 里恰好相等，**shared cache 里不保证** —— 不能偷懒写 `header + trieOff`。
 
 **3. 验证方式：把 Swift 逐行照搬成 Python，跑真实二进制对比**
@@ -3147,14 +3147,14 @@ iOS 设备侧很可能**只消费 Grappa、不生成它**。
 | `_tmp_fw/AirTrafficHost` | 1320 B | 87 | **58** | 58 | **PASS** |
 | `_tmp_corefp/fwx/A/CoreFP` | 176 B | 10 | **8** | 8 | **PASS** |
 
-★ CoreFP 那例的 `__LINKEDIT` **delta = 32768 ≠ 0**，正好走到「shared cache 折算」那条分支
+CoreFP 那例的 `__LINKEDIT` **delta = 32768 ≠ 0**，正好走到「shared cache 折算」那条分支
 ⇒ **公式被真实数据验证过，不是纸上推导**。
 
 **4. 日志补 `nsyms` / `nValue` / `slide`**
 用于核对「符号表到底有没有被剥」—— 若 `nsyms = 0` 就说明是 shared-cache 镜像，
 此时**按名字定位会失败，但这**不等于**「没有这个能力」**。
 
-**5. ★ 修一处会造成假阴性的结论措辞**
+**5. 修一处会造成假阴性的结论措辞**
 iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」时写的是
 **「本次无法判定（注意：不是「没有」）」**，并单独加一行说明
 「混淆符号未出现 —— 它是 private external，只在 `LC_SYMTAB` 里；若该镜像 symtab 被剥，
@@ -3165,12 +3165,12 @@ iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」�
 - **Windows 的 `0x6560` 不是「无脑硬桩」** —— 行为上像（827 组输入恒同一错误码、不读入参、
   不写出参），**结构上是真实现**（42 状态控制流平坦化 + MBA 混淆；**有成功哨兵 `0x0FE8DD8F`**，
   在 `0x6560`–`0x8650` 内的 `0x6753` 处）。准确说法：**真实现，卡在某个早期 gate**。
-- ★ **「Windows 也卡在 CoreFP 缺失」这个推断被推翻**（我自己推错的）：
+- **「Windows 也卡在 CoreFP 缺失」这个推断被推翻**（我自己推错的）：
   我拿「`0xFFFF5A5C` 有符号读 = `-0xa5a4`，与 macOS 上 CoreFP 缺失的失败码同值」直接推出「同因」——
   **「同码 ⇒ 同因」不成立**。硬证据：**Windows 版全文件扫 `CoreFP` = 0 命中**，
   导入表里没有能 dlopen 它的东西；**`0xFFFF5A5C` 全文件 0 处** ⇒ 返回值是**算出来的**
   （对照 `0xFFFF5BD9` 有 12 处）。
-- ★ 但**「Grappa 依赖 FairPlay」这条站得住**：Windows 版**内嵌完整 FairPlay 证书链**
+- 但**「Grappa 依赖 FairPlay」这条站得住**：Windows 版**内嵌完整 FairPlay 证书链**
   （CN = `GrappaForATH.3333AF110510AF0000011` 一族），字符串里还有
   `Grappa host init failed` / `Grappa host verify fail` / `Grappa key could not be established`
   ⇒ **「Grappa 算法自包含、可纯 Swift 重实现」这个前提不成立**。
@@ -3195,7 +3195,7 @@ iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」�
 **2. 修产物文件名不匹配（即使编译过，dlopen 也会失败）**
 实际产物是 `MobileDeviceStub.dylib`（**无 `lib` 前缀**），而框架的 `LC_LOAD_DYLIB` 写的是
 `libMobileDeviceStub.dylib` ⇒ **dyld 找不到桩**。
-★ 我最初建议的 `EXECUTABLE_PREFIX: lib` **单独用不行** —— xcodegen 的产物引用路径是
+我最初建议的 `EXECUTABLE_PREFIX: lib` **单独用不行** —— xcodegen 的产物引用路径是
 `Target.filename`，而它**只对 `staticLibrary` 自动加 `lib`**（`dynamicLibrary` 不加）⇒
 加了只会让**实际产物**带 `lib`，pbxproj 的 embed 阶段仍引用不带 `lib` 的名字 ⇒ **拷贝阶段找不到文件**。
 修法：**三处一起钉死** —— `productName` + `PRODUCT_NAME: libMobileDeviceStub` + `EXECUTABLE_PREFIX: ""`。
@@ -3209,18 +3209,18 @@ iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」�
 - **地址换算**：`slide = base − __TEXT.vmaddr`；`symTab = slide + (__LINKEDIT.vmaddr − __LINKEDIT.fileoff) + symoff`
   （把文件偏移转成运行时地址）。
 - **过滤**：跳 `N_STAB`、只取 `N_SECT`、跳 `n_value == 0`。
-- ★ **对照值**：本机那份二进制里该符号 `n_value = 0x2ecb8`；runner 上算出的运行时地址
+- **对照值**：本机那份二进制里该符号 `n_value = 0x2ecb8`；runner 上算出的运行时地址
   `0x100c16cb8 − 0x2ecb8 = 0x100be8000`（**页对齐的 slide**）⇒ 两个独立来源自洽。
-  ★ 但**不把它做成硬失败判据** —— CI 是当次 runner 现场取框架，版本不同则 `n_value` 也会不同。
+  但**不把它做成硬失败判据** —— CI 是当次 runner 现场取框架，版本不同则 `n_value` 也会不同。
 
 **4. CoreFP 探测：改判据 + 修一个会造成假阴性的 bug**
-- ★ **`dlsym(CoreFP, "appHelloImp")` 是错的判据**：那 5 个 `xxxImp` 只是 `AirTrafficHost` 用
+- **`dlsym(CoreFP, "appHelloImp")` 是错的判据**：那 5 个 `xxxImp` 只是 `AirTrafficHost` 用
   `puts` 打的**人类可读标签**；**真正传给 dlsym 的是混淆名**
   （`appHelloImp→WIn9UJ86JKdV4dM`、`appSetupSessionImp→X46O5IeS`、`runCommandImp→YlCJ3lg`、
   `getDLLVersionImp→lxpgvVMLd0S7uRl`、`teardownImp→dku592fbFAj`，在 loader `0x5abc` 处逐字节核对过）。
   这 5 个**全在 CoreFP 的导出表里**（CoreFP arm64e 切片只导出 8 个，全是混淆名）。
   ⇒ 改成**枚举 iOS CoreFP 的导出符号、逐个对照那 5 个 macOS 混淆名**。
-- ★★ **修 `!exists → continue` 的假阴性**：iOS 的系统私有框架**大量只存在于 dyld shared cache**，
+- **修 `!exists → continue` 的假阴性**：iOS 的系统私有框架**大量只存在于 dyld shared cache**，
   磁盘上没有独立文件，而 `dlopen` 走 dyld、**不看文件系统**。原写法会「连试都不试 dlopen」
   就报「两个候选路径都不存在」——**恰好把最想回答的问题答错**。
   修法：`fileExists` 降级为纯日志，**dlopen 无条件试**（CoreFP 段与 iOS 段**两处都改**）。
@@ -3228,7 +3228,7 @@ iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」�
 **5. 新增：iOS 自带 `AirTrafficHost` 探测**
 `dlopen("/System/Library/PrivateFrameworks/AirTrafficHost.framework/AirTrafficHost")`（失败再试 `Versions/A/`）
 → 成功则列导出符号并查有没有 Grappa 符号；失败则打 `dlerror()` 原文。
-★ **为什么值得加**：若 iOS 自带同款实现，它内部 dlsym 的是 **iOS 自己的 CoreFP 混淆名**（天然匹配）
+**为什么值得加**：若 iOS 自带同款实现，它内部 dlsym 的是 **iOS 自己的 CoreFP 混淆名**（天然匹配）
 ⇒ **可能根本不用移植 macOS 那份**（无平台补丁、无桩、无名字不匹配）。
 
 **6. 修一处会误导用户的日志**
@@ -3245,14 +3245,14 @@ iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」�
 > ⚠️ **说明**：原本规划的 `v0.3.446`（stage 探针那一版）**只改了版本号与 CHANGELOG，没有提交、没有打 tag
 > ⇒ 那一版从未存在过**。本版把它的全部内容与「Grappa 框架移植」合并发布，**一次构建覆盖两件事**。
 
-### ★ 把 macOS 的 `AirTrafficHost`（arm64e）移植到 iOS 上跑 —— 直接**调用**它生成 Grappa
+### 把 macOS 的 `AirTrafficHost`（arm64e）移植到 iOS 上跑 —— 直接**调用**它生成 Grappa
 
 **背景**：AT 协议只剩 `Grappa` 认证块没解决。已查明：
 - **Windows 版造不出 Grappa**（无条件硬失败 `-42404`，与输入/连接状态/外部环境全无关；
   IAT hook 17 个导入全程监控，执行期间**只调了一次 `CreateMutexA`**）；
 - **macOS 版能造**（在 GitHub Actions 的 `macos-latest` runner 上**直调成功**：
   输入 12 字节 `01 00 00 00 | 00 00 00 00 | 01 00 00 00` → `err=0`、`outLen=84`）；
-- ★ 但 **Grappa 每次输出都不同**（前缀 `0101` 固定，其余含随机密钥）⇒ **不能硬编码**。
+- 但 **Grappa 每次输出都不同**（前缀 `0101` 固定，其余含随机密钥）⇒ **不能硬编码**。
 
 ⇒ 所以**不再逆算法，改成把那个框架搬到手机上、直接调用它**（我们不需要理解它，只需要能跑）。
 
@@ -3263,14 +3263,14 @@ iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」�
    · `LC_LOAD_DYLIB` 里 macOS 专有的 `MobileDevice.framework` → `@executable_path/Frameworks/libMobileDeviceStub.dylib`
      （新路径 53 字节 < 原 80 字节，**同 `cmdsize` 内改写、尾部补 27 个 `\0`**，`offset`/`cmdsize` 未变）。
    ⚠️ 改过 load command ⇒ **原签名必然失效** ⇒ 必须靠侧载工具重签。
-   ★★ **那个二进制不进仓库** —— 仓库是 **public**，再分发 Apple 的专有框架不合适。
+   **那个二进制不进仓库** —— 仓库是 **public**，再分发 Apple 的专有框架不合适。
    改为 **CI 在 runner 上现场取 + 现场打补丁**（`macos-latest` runner 上本来就有这个框架，
    而且拿到的是**与 runner 同版本**的那份）。仓库里只有补丁脚本、**没有任何 Apple 二进制**。
    （本地验证：用同一份输入跑，产出与手工产物 **sha256 逐字节一致**。）
 2. **`vendor/MobileDeviceStub/MobileDeviceStub.c`** + `project.yml` 新增 `library.dynamic` target `MobileDeviceStub`
    —— 导出框架需要的 **17 个 `AMDevice*`/`AMD*` 符号**（清单来自 `LC_DYLD_CHAINED_FIXUPS` import 表
    `ordinal 1`，与 `LC_SYMTAB` undefined **17/17 对上**；总数 138 = 17 + 45(CoreFoundation) + 76(libSystem)）。
-   · ★ **故意返回失败码**（`-1`）而不是 `0`：`AMDevice*` 的 `0` 语义是「成功」，若真被调用，
+   · **故意返回失败码**（`-1`）而不是 `0`：`AMDevice*` 的 `0` 语义是「成功」，若真被调用，
      框架会拿着我们返回的 **NULL 句柄**继续走 → 崩；返回非 0 让它**干净失败退出**。
      （`AMDeviceGetInterfaceType` 例外，返回 `0`：它返回**传输类型枚举**，没有「失败」档，
      `-1` 不是合法枚举值反而可能让调用方落到未定义分支。）
@@ -3278,7 +3278,7 @@ iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」�
 3. **`.github/workflows/build-xcode.yml` 新增 `Embed AirTrafficHost into Frameworks`**（在 Build 之后、打包之前）：
    在 runner 上取 macOS 系统里的 `AirTrafficHost` → 跑 `tools/patch_airtraffichost.py` →
    产出落到 **`.app/Frameworks/AirTrafficHost`**；并把 `PATCH-REPORT.txt` 打进构建日志（补丁前后对照 + 17 个桩符号清单）。
-   ★ **为什么必须放 `Frameworks/`**：我们出的是**未签名 IPA**，签名完全靠侧载工具，
+   **为什么必须放 `Frameworks/`**：我们出的是**未签名 IPA**，签名完全靠侧载工具，
    而它们递归签名的范围是**约定位置**（`Frameworks/` / `PlugIns/` / `Watch/`）——
    **bundle 根下的散装 dylib 会被漏签**，而签名无效的镜像在 iOS 上**根本 dlopen 不了**。
    另加**桩符号自检**：`nm -gU` 逐个核对 17 个符号都导出了 ——
@@ -3286,7 +3286,7 @@ iOS ATH 的结论改成**四段式**，其中「trie 与 symtab 都读不到」�
 4. **`AirliftExploit.runGrappaProbe()`**：`dlopen` → `dlsym`（先试带下划线 `_uhO2GULXwfgKwPcp4YR2`，再试不带）
    → `unsafeBitCast` 成 `@convention(c)` 调用 → `err`/`outLen`/前 16 字节 hex 全写日志，
    成功则 84 字节全 hex 落盘 `LoginLogs/airlift_grappa.txt`。
-   ★ **`dlerror()` 原文必须记** —— 它区分「平台补丁不够 / 签名无效 / 桩没生效 / CoreFP 权限被拒」。
+   **`dlerror()` 原文必须记** —— 它区分「平台补丁不够 / 签名无效 / 桩没生效 / CoreFP 权限被拒」。
 
 **已提前排掉/标出的坑**：平台补丁 ✓、桩 ✓、签名位置 ✓、桩返回值语义 ✓、`LC_CODE_SIGNATURE` 必然失效 ✓。
 **唯一剩下的真未知**：iOS 上框架内部 `dlopen` 的 `CoreFP.framework`（FairPlay）**会不会因权限被拒** —— 只能实测。
@@ -3312,7 +3312,7 @@ PoC 的 zip 里**故意没有**任何「穿过 symlink 的条目」（它的 sym
 **`..` 层数复核过**：`out` 在 `p0/p1/p2/` 下，相对目标从**它所在目录**解析 ⇒
 `p0/p1/p2 → p0/p1 → p0 → <source> → /var/mobile/Media` = **4 个 `..`**。
 
-**★ 为什么还要那个「不逃逸」的对照项**：`out` 是**逃出解压根**的，若解压器有 zip-slip 防护，
+**为什么还要那个「不逃逸」的对照项**：`out` 是**逃出解压根**的，若解压器有 zip-slip 防护，
 可能**整包拒绝** ⇒ 连 `link` 都没有 ⇒ **分不清「不跟随」和「整包被拒」**。
 （注意 PoC 自己的 `link` → `../../../airlift-stage-target` **没逃逸** —— `../../../` 从 `p0/p1/p2/`
 数上去正好是 `<root>/`，落点仍在根内。它是**故意**这么设计的，好过任何 zip-slip 校验。）
@@ -3332,10 +3332,10 @@ META-INF/ → META-INF/com.apple.ZipMetadata.plist
 → airlift-stage-target/        ← 必须在所有穿透条目之前（否则目标目录还不存在，对照项必然 ENOENT）
 → p0/ p0/p1/ p0/p1/p2/
 → p0/p1/p2/link（symlink，不逃逸）
-→ p0/p1/p2/link/<follow-probe>（★ 零风险对照）
+→ p0/p1/p2/link/<follow-probe>（零风险对照）
 → payload
 → p0/p1/p2/out（symlink，逃逸）
-→ p0/p1/p2/out/<escape-probe>（★ 越界写探针，必须最后）
+→ p0/p1/p2/out/<escape-probe>（越界写探针，必须最后）
 ```
 （`out` 与穿透文件必须排最后：反过来的话解压器会先自建一个**真目录** `out/`，逃逸测试就废了。）
 
@@ -3365,16 +3365,16 @@ META-INF/ → META-INF/com.apple.ZipMetadata.plist
    `<source>/` 在不在、`<source>/p0/p1/p2/link` 的 **`st_ifmt` 是不是 `S_IFLNK`**（并打 `st_link_target`）、
    `<source>/payload` 在不在。
 
-**★ 成功判据是 AFC，不是响应** —— PoC 自己也不看响应。
+**成功判据是 AFC，不是响应** —— PoC 自己也不看响应。
 
 **新增 zip 构造器 `makeStageTestZip()`**（照抄 PoC 的 `build_archive()`）：
 `META-INF/`、`META-INF/com.apple.ZipMetadata.plist`（二进制 plist `{Version: 2}`）、
 `p0/ p0/p1/ p0/p1/p2/`、**`p0/p1/p2/link`（symlink，内容 `../../../airlift-stage-target`）**、
 `airlift-stage-target/`（让 symlink 有落点）、`payload`。
-★ 每个条目都带 **`0x5A53` 这个 zip extra field** + `external_attr` 里的 Unix mode ——
+每个条目都带 **`0x5A53` 这个 zip extra field** + `external_attr` 里的 Unix mode ——
 **只设 `external_attr` 解压器认不出 symlink**（PoC 源码里挖出来的）。
 
-**★ 为什么必须新增一个 Rust FFI（超出「只改 Swift」的范围，但没得选）**
+**为什么必须新增一个 Rust FFI（超出「只改 Swift」的范围，但没得选）**
 PoC 的 `SendAll` 用的是 `AMDServiceConnectionSend`（**纯 socket send、无帧头**）来发 zip。
 我们现有的 `stream_send_bytes` 会多写 4 字节长度前缀 —— 设备会把那 4 字节当成 zip 开头，**必然失败**。
 故新增：
@@ -3443,7 +3443,7 @@ struct IdeviceFfiError *stream_send_raw(struct ReadWriteOpaque *, const uint8_t 
 两条汇入路径是 `"Grappa key could not be established"` 与
 `"Grappa could not verify message, sending auth error"`。
 
-**4. ★ 当前卡点（诚实记录）**：`Grappa` 的派生函数 `sub_180011110` 是 **VM 混淆**
+**4. 当前卡点（诚实记录）**：`Grappa` 的派生函数 `sub_180011110` 是 **VM 混淆**
 （状态加密 + 加密函数指针表 `0x180049ae0` + 分发器 `sub_180003360`），
 **人工逆向不现实**；且 `sub_1800125a0` 里 `rdtsc % 9` 选 9 个 16 字节常量之一，
 **有可能每次都不一样**。`sub_180003430`（建密钥）同样是 VM。
@@ -3480,7 +3480,7 @@ iOS 27 上这个入口的 `Temperature` 是 0。
 - **公式不同**：改用 `NominalChargeCapacity / DesignCapacity`。
   依据（很硬）：爱思截图里**「满充容量」显示 -1**（即它读不到 `FullChargeCapacity`）却仍给出
   **81%**；而 `2724 / 3329 = 81.8% ≈ 81%` ⇒ 它用的不是 `FullChargeCapacity`。
-- **★ 删掉 `BatteryHealthBaselinePct`「单调基线」闩锁**（连带 `isChargingNow`）。
+- **删掉 `BatteryHealthBaselinePct`「单调基线」闩锁**（连带 `isChargingNow`）。
   它把**历史最低值锁死**，这本身就是「寿命不准」的直接原因；而且换公式后旧基线还会继续
   夹住新值，导致修复**完全无效**。
 - 回退链保留：`nominal` 取不到时回退 `maxCapacity`。
@@ -3495,7 +3495,7 @@ F5 惠州德赛、F8 深圳欣旺达、C0 苏州顺达、LN 乐金化学），2 
 
 **4. 序列号**：首选键改为 `BatterySerialNumber`（空串也回退），再回退 `Serial`。
 
-**5. ★ 新增「电池 IORegistry 全量 dump」（为了搞定「生产日期」）**
+**5. 新增「电池 IORegistry 全量 dump」（为了搞定「生产日期」）**
 
 新增 `dumpBatteryRegistry(primary:pack:)` → `Documents/LoginLogs/battery_dump.txt`：
 把 `IOPMPowerSource` 与 `AppleSmartBatteryPack` 两个节点的**顶层全键 + `BatteryData` 全键**
@@ -3518,7 +3518,7 @@ F5 惠州德赛、F8 深圳欣旺达、C0 苏州顺达、LN 乐金化学），2 
 
 ### AT 链路打通到「读 SyncAllowed + 发 HostInfo」；修「发完等响应」的错
 
-**1. ★ 二进制 plist 判定被证实，AT 链路大幅推进**
+**1. 二进制 plist 判定被证实，AT 链路大幅推进**
 
 真机落盘记录（`LoginLogs/airlift_probe.txt`）：
 ```
@@ -3565,7 +3565,7 @@ com.apple.afc：同样 4 条全失败，对照 "." 成功
 
 ### AT 帧改**二进制 plist** 收发（重大发现）+ Gestalt 入口移入主页百宝箱
 
-**1. ★ AT 帧不是 XML，是「小端长度前缀 + 二进制 plist」**
+**1. AT 帧不是 XML，是「小端长度前缀 + 二进制 plist」**
 
 v0.3.439 真机日志给出了决定性证据：
 ```
@@ -3637,16 +3637,16 @@ struct IdeviceFfiError *stream_recv_frame_raw(struct ReadWriteOpaque *, uint8_t 
 路径表（**只用 `afc_get_file_info`，只查属性**）：
 ```
 Accounts3.sqlite                                   ← 纯相对，作对照（不算逃逸）
-/var/mobile/Library/Accounts/Accounts3.sqlite      ← ★ 绝对路径（参考项目的目标）
-/var/mobile/Library/Preferences                    ← ★ 绝对路径（目录）
-../../Library/Accounts/Accounts3.sqlite            ← 相对 + .. 回溯（★ 也算逃逸）
+/var/mobile/Library/Accounts/Accounts3.sqlite      ← 绝对路径（参考项目的目标）
+/var/mobile/Library/Preferences                    ← 绝对路径（目录）
+../../Library/Accounts/Accounts3.sqlite            ← 相对 + .. 回溯（也算逃逸）
 /var/mobile/Media                                  ← 绝对路径
 + 对照项：列根目录拿到的第一条（必然存在，用来证明连接是好的）
 ```
 判定：**除「纯相对」那条外，任意一条成功 = 绝对路径能逃出 AFC 根目录**。
 （不能只看「以 `/` 开头」——`../../` 那条走的是回溯，只按前缀判会漏掉它。）
 
-**★ 全程只读：只做 `afc_get_device_info` / `afc_list_directory` / `afc_get_file_info`，
+**全程只读：只做 `afc_get_device_info` / `afc_list_directory` / `afc_get_file_info`，
 绝不写、绝不删、绝不改设备上任何文件。** 完整记录落盘 `LoginLogs/airlift_afc_probe.txt`。
 
 挂载点：`triggerProtocolProbeOnce()` 里**先跑本探测**（只读、快、可能直接给出答案），
@@ -3666,14 +3666,14 @@ Accounts3.sqlite                                   ← 纯相对，作对照（�
 
 ```objc
 ATHostConnectionCreate(udid);                                   // 建连接
-// ★ 先「读」—— 设备会主动发 SyncAllowed（最多读 8 条）
+// 先「读」—— 设备会主动发 SyncAllowed（最多读 8 条）
 ATHostConnectionSendHostInfo(c, hostInfo);                      // 发 HostInfo
 usleep(200000);
 ATHostConnectionSendSyncRequest(c, @[@"Book"], @{}, hostInfo);   // 发 RequestingSync
-// ★ 再「读」—— 设备发 ReadyForSync（最多读 12 条）
+// 再「读」—— 设备发 ReadyForSync（最多读 12 条）
 ATHostConnectionSendMetadataSyncFinished(c, @{@"Book": @1}, @{}); // 发 FinishedSyncingMetadata
-// ★ 读 —— 设备发 AssetManifest（最多读 20 条）
-ATHostConnectionSendAssetCompleted(c, id, @"Book", dest);        // ★ 攻击：发 FileComplete
+// 读 —— 设备发 AssetManifest（最多读 20 条）
+ATHostConnectionSendAssetCompleted(c, id, @"Book", dest);        // 攻击：发 FileComplete
 ```
 
 **上一版的 6 个错**：① 把 `ReadyForSync` 当**发送**消息（它是**设备→主机**的）；

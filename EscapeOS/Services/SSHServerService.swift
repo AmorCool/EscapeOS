@@ -342,7 +342,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             lines.append("  实测帧率: \(HighRefreshService.shared.measuredFPS) FPS")
             return lines.joined(separator: "\n")
         case "airlift":
-            // ★ 开发期入口：**强制**再跑一遍 airlift 协议探测（忽略单飞标志）。
+            // ▸ 开发期入口：**强制**再跑一遍 airlift 协议探测（忽略单飞标志）。
             //
             // 为什么需要：探测的设计是「功能首次调用 airlift 时自动跑一次」
             // （空间回收→扫描 / 文件共享进界面就会调到）。但开发期要**反复取结果**，
@@ -355,7 +355,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             //    （v0.3.419/421/424 那串「所有依赖配对文件的功能一起失效」的成因）。
             // 用法：airlift [组号]   组号 ∈ {0, a, b, c, d}，**省略 = a**（不要跑全部，见下）
             //
-            // ★ 为什么要能指定组、且默认只跑一组：真机实证（v0.3.457/460）——
+            // ▸ 为什么要能指定组、且默认只跑一组：真机实证（v0.3.457/460）——
             //   **同一次运行内的第 1 个服务连接正常，第 2 个连接会卡死在 `adapter_connect`
             //   上永不返回**（8 分钟无日志、15s 读超时都没触发）。
             //   而实验设计是「四组各用一条全新连接」⇒ 连跑**必然卡在第 2 组**，
@@ -368,7 +368,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             return "已触发 airlift 协议探测（组 = \(group)）。\n"
                  + "结果：logs 200 / cat LoginLogs/airlift_stage.txt / cat LoginLogs/airlift_grappa.txt"
         case "airlift2":
-            // ★ 开发期入口：**只**跑攻击链第 ② 步的最小闭环。
+            // ▸ 开发期入口：**只**跑攻击链第 ② 步的最小闭环。
             //
             // 为什么单独一条命令、不复用 `airlift d`：`airlift` 走的是
             // `triggerProtocolProbeOnce`，它会**依次**跑 Grappa 探测 + 协议探测 + stage 探测
@@ -380,25 +380,25 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 并把设备对**每一条**的响应原文拿回来 —— 拿到清单是进展、被拒也是结论。
             // （`FileBegin` 按 §9.2 不发。）
             //
-            // ★ 变体（真机 19:24 / v0.3.469 实证：设备在 `FinishedSyncingMetadata` 之后
+            // ▸ 变体（真机 19:24 / v0.3.469 实证：设备在 `FinishedSyncingMetadata` 之后
             //   **直接回 `SyncFinished`** ⇒ 会话那时就结束了 ⇒ 变体 1 的 `FileComplete`
             //   落进**死会话**，设备把它当**新会话开场**回 `SyncAllowed`+`AssetMetrics`）：
             //     1（默认）= FinishedSyncingMetadata → 读 AssetManifest → 发 FileComplete
             //     2        = 发 FileComplete → 发 FinishedSyncingMetadata → 读（趁会话活着）
             //     3        = 发 AssetManifest（主机侧）→ 发 FileComplete → 发 FinishedSyncingMetadata → 读
-            //     4        = ★ 参考实现的**两段式**（v0.3.474）：读 AssetManifest →
+            //     4        = ▸ 参考实现的**两段式**（v0.3.474）：读 AssetManifest →
             //                发 FileComplete(link → `airlift-link-<t>`) → sleep 0.9s →
             //                发 FileComplete(payload → `airlift-link-<t>/<leaf>`) →
             //                用 `com.apple.afc` 回读**三个位置**（跟随 symlink / 被当目录替换 / 都没发生）。
             //                落点由 `airlift3` 交接（`airlift-target = …`）决定，
             //                默认在 Media 内部 ⇒ 零风险且可自验。
-            //     5        = ★ 参考实现的**读**（v0.3.479，`airlift.py:504-563`）：读 AssetManifest →
+            //     5        = ▸ 参考实现的**读**（v0.3.479，`airlift.py:504-563`）：读 AssetManifest →
             //                发 FileComplete(link → `airlift-link-<t>`) → sleep 0.9s →
             //                发 FileComplete(target → `airlift-recovered-<t>`) →
             //                用 `com.apple.afc`（根 = Media）读回 `airlift-recovered-<t>`。
             //                读目标由 `airlift3 read <路径>` 交接（`airlift-target = …`）；
             //                判据 = `recovered` 存在且大小 > 0 ⇒ 越界读成立。
-            //     6        = ★ 与变体 5 **完全相同**，读完再删掉 Media 里的副本（v0.3.480）。
+            //     6        = ▸ 与变体 5 **完全相同**，读完再删掉 Media 里的副本（v0.3.480）。
             //                `move` 是移动不是拷贝 ⇒ 副本一删，**原位置的文件就彻底消失** = **删除**。
             //                ⚠️ **先确认备份落盘再删**（备份是唯一一份；没备份就不删，如实报出副本路径）。
             //   **一次只跑一个变体**。
@@ -412,7 +412,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                  + "结果：cat LoginLogs/airlift_at2.txt（结论，< 2 KB）"
                  + " / cat LoginLogs/airlift_at2_full.txt（每帧原文）"
         case "airlift3":
-            // ★ 开发期入口：**只做** airlift 攻击链的「前置条件」那一步 ——
+            // ▸ 开发期入口：**只做** airlift 攻击链的「前置条件」那一步 ——
             // ① stage 真实归档（zip 落地到 `/var/mobile/Media/airlift-src-<token>/`）
             // ② AFC 建 `Books`、`Books/Sync` 并写 `Books/Sync/Books.plist`
             // **不发任何 AirTraffic 消息**（第 ③ 步用已有的 `airlift2 1`）。
@@ -430,7 +430,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
             //    挂在 UI 路径上会跟其它功能抢隧道（v0.3.419/421/424 那串事故的成因）。
             // 用法：airlift3 [越界目标路径]          —— 写模式
-            //       airlift3 read <目标绝对路径>    —— ★ v0.3.479 读模式
+            //       airlift3 read <目标绝对路径>    —— ▸ v0.3.479 读模式
             //   · 省略 = `/var/mobile/Media/airlift-canary-<token>`（**Media 内部，零风险**）
             //     —— 配套的 `airlift2 4` 会穿过 symlink 写到那里，落点**能用 AFC 读回来**
             //     ⇒ 「机制成立与否」当场可验；
@@ -443,7 +443,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let booksRead: String?
             let booksTarget: String?
             let booksPayload: String?
-            /// ★ v0.3.486：落点**文件名**（设备把 payload 落到「symlink 解析出的目录 + 它」）
+            /// ▸ v0.3.486：落点**文件名**（设备把 payload 落到「symlink 解析出的目录 + 它」）
             let booksLeaf: String?
             if parts.count > 1 && parts[1] == "read" {
                 // `read` 必须带目标；没带就如实报用法，**不猜**（猜一个目标等于读错地方）。
@@ -456,7 +456,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 booksPayload = nil
                 booksLeaf = nil
             } else if parts.count > 1 && parts[1] == "write" {
-                // ★ v0.3.480：`write <目标> <payload 相对路径>` —— 用**任意字节**写。
+                // ▸ v0.3.480：`write <目标> <payload 相对路径>` —— 用**任意字节**写。
                 // payload 文件放在 **App 的 Documents** 里（相对路径，与 SSH 的 cat/ls 同口径）。
                 // 这是「把读到的字节写回去」（= 还原）与「任意内容写入」的前提
                 // —— 也是 `airlift2 6`（删除）敢于删副本的底气：备份能放回去。
@@ -465,7 +465,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                          + "（例：airlift3 write /var/mobile/Library/Preferences/com.x.plist my.plist）"
                 }
                 booksRead = nil
-                // ★ v0.3.486：把目标拆成「父目录 + 文件名」。
+                // ▸ v0.3.486：把目标拆成「父目录 + 文件名」。
                 //   设备落点 = 「穿过 symlink 解析出的目录」+ leaf ⇒ target 必须是**目录**、
                 //   leaf 必须是**文件名**。v0.3.480~485 一直把整条路径当 target、
                 //   leaf 写死成 canary 名 ⇒ 这条命令写不出**指定文件名**的文件
@@ -499,7 +499,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                     ? "下一步：airlift2 4 → cat LoginLogs/airlift_at2.txt（两段式 + 落点回读）"
                     : "下一步：airlift2 5 → cat LoginLogs/airlift_at2.txt（读 + AFC 回读）")
         case "airlift4":
-            // ★ 开发期入口（v0.3.476）：**只读**盘点 `/var/mobile/Media` 里的落点。
+            // ▸ 开发期入口（v0.3.476）：**只读**盘点 `/var/mobile/Media` 里的落点。
             //
             // 为什么需要：`airlift2 4` 的落点回读写在 `airlift_at2.txt` 的**末尾**，
             // 而那个文件有字节上限 —— 真机实测（v0.3.475）判据正好被截掉，**一趟白跑**。
@@ -515,7 +515,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                  + "结果：cat LoginLogs/airlift_landing.txt\n"
                  + "（判据 A = payload 落在 canary 目标目录里 ⇒ 机制成立；判据 B = 落在 airlift-link-* 里 ⇒ 没跟随）"
         case "ddiprobe":
-            // ★ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
+            // ▸ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
             //
             // 为什么需要：主页两个内置模块（locache / wifirefresh）走
             // `app_service_connect_rsd` 时会出现 `ServiceNotFound`(21)。
@@ -536,7 +536,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 用法：ddiprobe   （同步阻塞执行，结束后直接读结果）
             return DDIMountProbe.runOnce()
         case "cdprobe":
-            // ★ 只读诊断：走「CoreDeviceProxy 隧道内的**第二个** RSD 握手」，
+            // ▸ 只读诊断：走「CoreDeviceProxy 隧道内的**第二个** RSD 握手」，
             // dump CoreDevice 服务表并端到端跑一次 app_service_list_processes。
             //
             // 为什么需要：主页两个内置模块（locache / wifirefresh）与「进程管理」走

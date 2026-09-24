@@ -1,6 +1,6 @@
 import Foundation
 
-/// ★ 只读诊断探针（svc-notfound / 2026-09-19）：走一遍 CoreDeviceProxy 隧道内的
+/// ▸ 只读诊断探针（svc-notfound / 2026-09-19）：走一遍 CoreDeviceProxy 隧道内的
 /// 「第二个 RSD 握手」，看 `com.apple.coredevice.appservice` 能不能连上。
 ///
 /// ## 为什么要这个探针
@@ -33,7 +33,7 @@ import Foundation
 /// 本仓 `DeviceControlService.withAppService` 用的是**第一条**（RPPairing）握手。
 /// **本轮只做探针，不动 `withAppService`。**
 ///
-/// ## ★ 入口已按 v0.3.463 真机结果换掉（**重要**）
+/// ## ▸ 入口已按 v0.3.463 真机结果换掉（**重要**）
 /// 第一版探针走 `idevice_pairing_file_read` + `idevice_tcp_provider_new` +
 /// `core_device_proxy_connect(provider)`。**真机在第一步就失败**：
 /// ```
@@ -58,7 +58,7 @@ import Foundation
 /// **刻意不做 `idevice_rsd_checkin`**（上游 `CoreDeviceProxy::new` 没有这一步；
 /// 本仓 v0.3.420 正是在那里加 checkin 之后出的配对事故）。
 ///
-/// ## ★ 为什么走 C 垫片（`EscCDProbe.c`），而不是 Swift 直调 FFI
+/// ## ▸ 为什么走 C 垫片（`EscCDProbe.c`），而不是 Swift 直调 FFI
 /// 本 FFI 头里 `plist_t` 是 `typedef void *`（`idevice.h:317`），且这条链每一步的出参
 /// 都是 opaque 结构指针。项目记忆 `.workbuddy/memory/2026-09-10.md`
 /// 「v0.3.279 八轮攻坚终结（C 垫片方案）」原文：
@@ -108,7 +108,7 @@ enum CDProbe {
         lines.append("")
 
         do {
-            // ★ 唯一入口：整段跑在 AFCService 的串行队列上（RSD 隧道并发铁律）
+            // ▸ 唯一入口：整段跑在 AFCService 的串行队列上（RSD 隧道并发铁律）
             lines.append(try AFCService.shared.runExclusively { probeBody() })
         } catch {
             lines.append("❌ 探针失败：\(error.localizedDescription)")
@@ -138,7 +138,7 @@ enum CDProbe {
             return out.joined(separator: "\n")
         }
 
-        // ★ 整条 FFI 链关在 C 垫片里 —— 理由见本文件头注释「为什么走 C 垫片」。
+        // ▸ 整条 FFI 链关在 C 垫片里 —— 理由见本文件头注释「为什么走 C 垫片」。
         //    一句话：这个 FFI 头的 typedef void* 指针在 Swift 侧不可靠，
         //    `EscCDProbe.c` 是本仓唯一被验证过的形态（v0.3.279 八轮 CI 的结论）。
         var byteLen: UInt32 = 0
@@ -173,7 +173,7 @@ enum CDProbe {
         let markers = [
             "com.apple.coredevice.appservice →",
             "com.apple.coredevice.* 共",
-            "★ 返回进程条数 =",
+            "▸ 返回进程条数 =",
             "❌ app_service_connect_rsd",
             "❌ app_service_list_processes",
             "❌ rsd_get_services",

@@ -184,7 +184,7 @@ enum BatteryHealthService {
             }
             primary = node
         } catch {
-            // ★ 必须留痕：v0.3.443~v0.3.454 期间这里失败是**静默**的
+            // ▸ 必须留痕：v0.3.443~v0.3.454 期间这里失败是**静默**的
             // （UI 只把错误塞进 errorText，日志里一行都没有），
             // 于是「电池读不出来」只能靠推断 battery_dump.txt 不存在来定位，代价很大。
             LoginLogger.shared.log("电池：主节点 IOPMPowerSource 查询失败：\(error.localizedDescription)", category: .general)
@@ -201,7 +201,7 @@ enum BatteryHealthService {
         //   0x1800140ce  plist_dict_get_item(bd, "Temperature")  → 温度
         var pack: [String: Any]? = nil
         if (intValue("Temperature", in: primary) ?? 0) <= 0 {
-            // ★★ v0.3.455 修回归：这里**必须**是「失败即放弃回退」，绝不能让整个读取失败。
+            // ▸▸ v0.3.455 修回归：这里**必须**是「失败即放弃回退」，绝不能让整个读取失败。
             //
             // v0.3.443 用的是裸 `try`。于是只要 `AppleSmartBatteryPack` 这个节点
             // 查不到（`diagnostics_relay_client_ioregistry` 的 name/class 两种形式都报错
@@ -231,7 +231,7 @@ enum BatteryHealthService {
     /// ⚠️ `diagnostics_relay_client_ioregistry(client, current_plane, entry_name, entry_class, res)`
     /// —— `DeviceEnrichService` 把节点名放第 3 参（entry_name），本文件历史上放第 4 参（entry_class）。
     ///
-    /// ★★ v0.3.455 修：**两种查法都要试，判据是「有没有拿到节点」，不是「有没有报错」。**
+    /// ▸▸ v0.3.455 修：**两种查法都要试，判据是「有没有拿到节点」，不是「有没有报错」。**
     ///
     /// v0.3.443 把顺序改成「先 name 查」，但退回 class 的条件写成了 `if let e`（**报错才退回**）。
     /// 真机实证（v0.3.454，2026-09-19 10:32:48）：
@@ -259,7 +259,7 @@ enum BatteryHealthService {
                 if firstError == nil { firstError = e } else { idevice_error_free(e) }
                 continue
             }
-            guard let node else { continue }   // ★ 没报错但也没节点 ⇒ 继续试下一种
+            guard let node else { continue }   // ▸ 没报错但也没节点 ⇒ 继续试下一种
             if let firstError { idevice_error_free(firstError) }
             defer { plist_free(node) }
             var binPtr: UnsafeMutablePointer<CChar>?
@@ -412,7 +412,7 @@ enum BatteryHealthService {
         //    回退链保留：nominal 取不到时用 maxCapacity（现有能力不丢）.
         var health: Int? = nil
         if let design, design > 0, let healthBase = nominal ?? maxCapacity {
-            // ★ v0.3.457：改成**四舍五入**（原来是 `Int(...)` 截断）。
+            // ▸ v0.3.457：改成**四舍五入**（原来是 `Int(...)` 截断）。
             //   爱思的反汇编显示它对 `Nominal/Design*100` 做四舍五入。
             //   实机值 2709/3329 = 81.37% ⇒ 两者同为 81，分不出；但 81.6% 这种值
             //   截断会给 81、四舍五入给 82 —— 差 1 就可能跨过评级档位边界。
@@ -552,7 +552,7 @@ enum BatteryHealthService {
             .flatMap { num("AverageBattSkinTemp", in: $0) }
         // v0.3.291：当前容量 = BatteryData.AbsoluteCapacity（mA·h 实测值）；
         // 老版本回退 AppleRawCurrentCapacity；BatteryData.BatteryPower 为 mW 功率.
-        // 「当前容量」—— ★ v0.3.456 改成 `NominalChargeCapacity`（对齐爱思）。
+        // 「当前容量」—— ▸ v0.3.456 改成 `NominalChargeCapacity`（对齐爱思）。
         //
         // 真机实证（同一台设备、同一时刻，2026-09-19）：
         //   爱思「当前容量」= **2709**；设备 registry 里

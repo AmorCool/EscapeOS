@@ -562,7 +562,7 @@ final class SpoofSession: ObservableObject {
                     return
                 }
 
-                // ★ 退避窗口：连续失败时把重试间隔指数放大（5s→10s→20s→40s→60s 封顶）。
+                // ▸ 退避窗口：连续失败时把重试间隔指数放大（5s→10s→20s→40s→60s 封顶）。
                 // 目的：对方不响应时**不再每 5 秒硬撞**，给设备端与其它功能让路。
                 if let last = self.lastHealthRetryAt {
                     let backoff = min(60, self.healthInterval * pow(2, Double(min(self.healthFailureStreak, 4))))

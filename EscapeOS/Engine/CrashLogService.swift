@@ -134,7 +134,7 @@ final class CrashLogService {
         throw lastError ?? makeError("连接崩溃日志服务失败")
     }
 
-    /// ★ v0.3.490：把 crashreport AFC 会话开放给宿主能力层
+    /// ▸ v0.3.490：把 crashreport AFC 会话开放给宿主能力层
     /// （根 = `/var/mobile/Library/Logs/CrashReporter`）。
     ///
     /// ## 为什么要开

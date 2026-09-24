@@ -34,6 +34,9 @@ def lint(path):
         st = line.strip()
         if not st or st.startswith("//"):
             continue
+        # 三引号多行字符串的定界行（`"""`）是**合法**的奇数引号 —— 跳过
+        if line.count(Q * 3) > 0:
+            continue
         count = 0
         j = 0
         while j < len(line):

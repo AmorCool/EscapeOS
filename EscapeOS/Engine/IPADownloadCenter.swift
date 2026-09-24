@@ -457,7 +457,7 @@ final class IPADownloadCenter: ObservableObject {
                         LoginLogger.shared.log("[下载中心] \(line)", category: .appStore)
                     })
                 await MainActor.run {
-                    // ★★★ v0.3.392 根因修复：**这条链路必须自己写台账**。
+                    // ▸▸▸ v0.3.392 根因修复：**这条链路必须自己写台账**。
                     //
                     // AppleID 通道**不走 `startDownload` → 从不经过 `handle`**，
                     // 而写台账（含 `sourceURL` / `storeItemId`）的逻辑在 `handle` 里。
@@ -520,7 +520,7 @@ final class IPADownloadCenter: ObservableObject {
         job.localFileName = fileName
         jobs.insert(job, at: 0)
         let id = job.id
-        // ★★★ v0.3.413（D8 修法 B）：**安装前把台账里的 sinf 写回包内**。
+        // ▸▸▸ v0.3.413（D8 修法 B）：**安装前把台账里的 sinf 写回包内**。
         //
         // 这是 D8 的核心修复。牛蛙源的加密包只有包内有 `SC_Info/<CFBundleExecutable>.sinf`
         // 才能过 FairPlay 验证；而「下载管理 → 重装」走的是本方法（`installLocal`），
@@ -856,7 +856,7 @@ final class IPADownloadCenter: ObservableObject {
 /// · v0.3.412：写入时机从「自动装之前」改为「下载落盘之后」，与「是否自动装」解耦。
 ///   哪怕用户手动点安装也得先有 sinf 才能过 FairPlay 验证。
 ///
-/// ## ★★ 复现样本：**别删工作区里的 `_tmp_ssh/syllabic/` 解压目录**
+/// ## ▸▸ 复现样本：**别删工作区里的 `_tmp_ssh/syllabic/` 解压目录**
 /// 那个目录是牛蛙客户端（`JCD.app`，`com.dinh.syllabic` 9.0.1）的**解压产物**，
 /// **包内自带 `SC_Info/`** —— 它是 v0.3.407「加密包…缺少 SC_Info/*.sinf」这个问题的
 /// **唯一复现来源**：既能复现"包内没有可用 sinf"的失败，也能验证本写入器追加后的成品。

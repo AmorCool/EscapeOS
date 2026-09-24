@@ -312,7 +312,7 @@ final class AFCService {
         }
     }
 
-    // MARK: ★ v0.3.490：可复用「调用方给的连接」的静态操作
+    // MARK: ▸ v0.3.490：可复用「调用方给的连接」的静态操作
     //
     // ## 为什么需要
     // `afc.*` 能力要支持**多个根**（`Media` 与 `CrashReporter` 各是一条 AFC 会话，

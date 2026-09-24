@@ -1,6 +1,6 @@
 import Foundation
 
-/// ★ 只读诊断探针（svc-notfound / 2026-09-19）：回答「设备上到底挂没挂 DDI」这个**独立**问题。
+/// ▸ 只读诊断探针（svc-notfound / 2026-09-19）：回答「设备上到底挂没挂 DDI」这个**独立**问题。
 ///
 /// ## ⚠️ 先读这段：这份探针当初是为一个**已被推翻的假设**写的
 /// 它当初要验证的**主导假设**是「CoreDevice 那块是 **DDI 门控**的 —— 设备没挂 DDI ⇒
@@ -13,7 +13,7 @@ import Foundation
 /// `pymobiledevice3` 拿到的 RSD 服务表与我们**逐条一致**（64 条），调同一个服务**同样失败**。
 /// **原理未知** —— 不要再往这个方向补推测。
 ///
-/// ## ★ `ddiprobe` 现在还有没有用？有。
+/// ## ▸ `ddiprobe` 现在还有没有用？有。
 /// 它回答的是「**DDI 挂没挂**」这个**独立**问题（设备侧已挂载的开发者镜像列表），
 /// 与 `ServiceNotFound` 无关 —— 所以**本文件与 `ddiprobe` 命令都保留**。
 /// 只是**不要再拿它的结果去解释 `ServiceNotFound`**。
@@ -32,7 +32,7 @@ import Foundation
 ///
 /// **本探针只回答一个问题：设备上已挂载的开发者镜像列表是空还是非空。**
 ///
-/// ## ★ 为什么走 C 垫片（`EscDDIProbe.c`），而不是 Swift 直调 FFI
+/// ## ▸ 为什么走 C 垫片（`EscDDIProbe.c`），而不是 Swift 直调 FFI
 /// 本探针要用的两个函数的出参都是 **opaque 指针数组**形状：
 ///   · `image_mounter_connect_rsd(..., struct ImageMounterHandle **client)`
 ///   · `image_mounter_copy_devices(..., plist_t **devices, size_t *devices_len)`
@@ -86,7 +86,7 @@ enum DDIMountProbe {
         lines.append("")
 
         do {
-            // ★ 唯一入口：整段跑在 AFCService 的串行队列上（RSD 隧道并发铁律）
+            // ▸ 唯一入口：整段跑在 AFCService 的串行队列上（RSD 隧道并发铁律）
             let body = try AFCService.shared.runExclusively { try probeBody() }
             lines.append(contentsOf: body)
         } catch {
@@ -143,9 +143,9 @@ enum DDIMountProbe {
         out.append("[2] RSD 服务表（rsd_get_services，只读内存，不建连）")
         dumpServiceTable(handshake, into: &out)
 
-        // 3) ★ 唯一一条服务连接 + 唯一判据 —— **全部在 C 垫片里完成**
+        // 3) ▸ 唯一一条服务连接 + 唯一判据 —— **全部在 C 垫片里完成**
         out.append("")
-        out.append("[3] ★ 判据 esc_ddi_copy_devices（C 垫片）")
+        out.append("[3] ▸ 判据 esc_ddi_copy_devices（C 垫片）")
         out.append("    垫片内部：image_mounter_connect_rsd → copy_devices → image_mounter_free")
         //
         // ⚠️ 这里**刻意不出现任何 FFI 指针** —— 理由见本文件头注释「为什么走 C 垫片」。
@@ -166,7 +166,7 @@ enum DDIMountProbe {
         defer { plist_mem_free(bytes) }                 // bplist 字节由 libplist 分配 ⇒ plist_mem_free
         out.append("  · 返回 bplist 字节数 = \(byteLen)")
 
-        // ★ 解析失败必须与「列表为空」区分开 —— 否则会把「查不了」误报成「没挂 DDI」。
+        // ▸ 解析失败必须与「列表为空」区分开 —— 否则会把「查不了」误报成「没挂 DDI」。
         guard let images = parsePlistArray(bytes, byteLen) else {
             out.append("  ❌ 垫片返回的字节解析失败（length=\(byteLen)）")
             out.append("")
@@ -174,9 +174,9 @@ enum DDIMountProbe {
             return out
         }
 
-        // 4) ★ 判据：列表空 / 非空
+        // 4) ▸ 判据：列表空 / 非空
         out.append("")
-        out.append("[4] ★ 判据：设备上已挂载的开发者镜像列表（**空 = 未挂 DDI**）")
+        out.append("[4] ▸ 判据：设备上已挂载的开发者镜像列表（**空 = 未挂 DDI**）")
         out.append("  · 已挂载开发者镜像数量 = \(images.count)")
         for (index, image) in images.enumerated() {
             out.append("  --- 镜像 #\(index + 1) plist 原文 ---")

@@ -10,7 +10,7 @@ import Foundation
 /// 4. v0.3.100：以上全修好后设备端仍 invalid —— **内核按 vnode 缓存校验判决**：
 ///    曾被 dlopen 拒过的文件，原地改签名不失效缓存（Apple 官方文档、LC zsign.mm
 ///    注释、Nyxian vnode_recover 三方印证）.
-/// 5. ★ v0.3.101：放弃手搓签名——**嵌入 LC/Nyxian 同款 ZSign 引擎**（其 ad-hoc
+/// 5. ▸ v0.3.101：放弃手搓签名——**嵌入 LC/Nyxian 同款 ZSign 引擎**（其 ad-hoc
 ///    产物在本环境被证明可加载：LC 访客二进制与 tweak dylib 全部在跑）.
 ///    流程：复制到全新 UUID 文件（全新 vnode）→ zsign 就地重签 → dlopen 新路径.
 enum MachoReSign {

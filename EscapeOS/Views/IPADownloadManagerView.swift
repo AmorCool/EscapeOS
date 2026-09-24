@@ -153,7 +153,7 @@ struct IPADownloadManagerView: View {
     private var mergedRows: [ListRow] {
         let known = Set(items.map(\.fileName))
         let orphanJobs = center.jobs.filter { job in
-            // ★★★ v0.3.413 真机 bug 修复（用户截图）：「显示已完成 100%，但没有安装按钮」。
+            // ▸▸▸ v0.3.413 真机 bug 修复（用户截图）：「显示已完成 100%，但没有安装按钮」。
             //
             // 根因：下载完成的那一刻，台账**已经写盘**，但页面 `items` 是**上一次 reload 的
             // 快照**，`finishedTick` 的 reload 可能还没跑到。这一刻用 `items` 去重会失败，

@@ -57,7 +57,7 @@ jobs:
           fi
 
       - name: Select Xcode (27 trial - prefer 27, fall back to 26)
-        # ★ Xcode 27 专用（原 `xcode27-trial` 分支的实验，现已合入 `migrate-xcode`）：
+        # Xcode 27 专用（原 `xcode27-trial` 分支的实验，现已合入 `migrate-xcode`）：
         #   runs-on 写 `xcode-27` —— 该镜像上只有 Xcode 27，没有 Xcode_26*.app。
         #   ⚠️ 别写成 `xcode-27-arm64`：那只是**镜像文件名**，写成 runs-on 会**永久排队**（踩过）。
         #   ⚠️ 注意 `set -e`：`ls` 没匹配时返回非 0 会直接中断脚本，所以每处都加 `|| true`。
@@ -74,7 +74,7 @@ jobs:
           grep -n "IPHONEOS_DEPLOYMENT_TARGET" project.yml || true
 
       - name: Install Metal Toolchain (Xcode 27 splits it out)
-        # ★ Xcode 27 实测结论（原 `xcode27-trial` 分支，现已合入 `migrate-xcode`）：
+        # Xcode 27 实测结论（原 `xcode27-trial` 分支，现已合入 `migrate-xcode`）：
         #   Xcode 27 起 **Metal 工具链是单独下载的组件**，
         #   不装就会在编译阶段报：
         #     error: cannot execute tool 'metal' due to missing Metal Toolchain;
@@ -91,7 +91,7 @@ jobs:
       - name: Install build tooling (xcodegen, cmake)
         # 本轨道出【未签名 IPA】：不调用 ldid，entitlements 随 .app 携带、交给侧载工具施加
         # （见「Package unsigned IPA」步骤）。
-        # ★ ldid 已从依赖里删除（2026-09-18）：全流程从不调用它，装着只是白装 ——
+        # ldid 已从依赖里删除（2026-09-18）：全流程从不调用它，装着只是白装 ——
         #   将来要恢复签名才需要把它加回来。
         run: brew install xcodegen cmake
 
@@ -388,7 +388,7 @@ jobs:
           find build -name 'EscapeSpace.app' -type d || true
 
       - name: Embed AirTrafficHost into Frameworks
-        # ★ v0.3.446（airlift Grappa 移植）：把移植到 iOS 的 macOS `AirTrafficHost`
+        # v0.3.446（airlift Grappa 移植）：把移植到 iOS 的 macOS `AirTrafficHost`
         # (arm64e) 放进 `.app/Frameworks/`。
         #
         # 为什么不走 xcodegen 资源：`Resources/` 下的文件会被拷到 bundle **根**，
@@ -398,7 +398,7 @@ jobs:
         # 在 iOS 上根本 dlopen 不了（dlerror 会说 code signature invalid）。
         # 所以必须落在 Frameworks/ —— 那里才会被侧载工具签名。
         #
-        # ★★ 这个二进制**不进仓库**（仓库是 public，再分发 Apple 的专有框架不合适）。
+        # 这个二进制**不进仓库**（仓库是 public，再分发 Apple 的专有框架不合适）。
         #    改为**在本步骤里从 runner 自己的 macOS 系统取**，再用 `tools/patch_airtraffichost.py`
         #    现场抽出 arm64e 切片并打两个补丁。仓库里只有**补丁脚本**（我们自己的代码），
         #    没有任何 Apple 二进制。这也顺便保证拿到的是**与 runner 同版本**的框架。
@@ -430,7 +430,7 @@ jobs:
           # 把补丁详情落到构建日志里（可观测性：补丁前后对照 + 17 个桩符号清单）
           cat /tmp/fw_patch/PATCH-REPORT.txt || true
 
-          # ★★ ATH **源文件**的 sha256 必须与「A-64 已实测通过的那一份」一致。
+          # ATH **源文件**的 sha256 必须与「A-64 已实测通过的那一份」一致。
           #
           # 为什么是**硬失败**而不是警告（GP-13 指出）：
           #   A-64（在 Unicorn 里跑 x86_64 ATH + 10.9 CoreFP 生成 Grappa）的结论
@@ -453,7 +453,7 @@ jobs:
           #   2) 确认 `err=0 / outLen=84 / 结构核对通过`；
           #   3) 用日志里新打出的 `sha256 = …` 替换下面的常量，
           #      并**在提交信息里写明重跑过 A-64**。
-          # ★★ v0.3.510：改成**已复核值列表**（原来是单个常量，必然一半失败）
+          # v0.3.510：改成**已复核值列表**（原来是单个常量，必然一半失败）
           #
           # 实测（2026-09-24）：GitHub 的 runner **机队里同时存在两种 macOS 镜像**，
           # 同一个仓库、同一天、连续两次构建，$FW_SRC 是**两份不同的 ATH**：
@@ -470,7 +470,7 @@ jobs:
           # 已复核记录：
           #   · e21ab638…aeb0 —— A-64 原始验证（run#4）
           #   · 43b6655c…7b8e —— 2026-09-24 重跑 A-64（run 35978782998）⇒ 通过：
-          #       [a64] 结果：★ 通过 —— err=0, outLen=84, 结构符合已知布局, 两次输出不同（81/84 字节）
+          #       [a64] 结果：通过 —— err=0, outLen=84, 结构符合已知布局, 两次输出不同（81/84 字节）
           #     对应 x86_64 切片 = 639a4a4c…906b
           #   · e21ab638…aeb0 的切片 = be9cad41…9a25（run 35979053062 记录）
           ATH_SRC_KNOWN_SHA256S="
@@ -497,7 +497,7 @@ jobs:
           # 显式设一次，避免被工具链拒绝。
           chmod 755 "$APP/Frameworks/AirTrafficHost"
 
-          # ★ 桩也要拷进 Frameworks/。
+          # 桩也要拷进 Frameworks/。
           # 为什么不能靠 xcodegen 的 `embed: true`（v0.3.448 构建日志实锤）：
           #   xcodegen 对 `library.dynamic` 的 embed **没有**生成「Embed Frameworks」阶段，
           #   而是当**普通资源**拷到了 **bundle 根** ——
@@ -528,7 +528,7 @@ jobs:
           fi
           echo "AirTrafficHost embedded at $APP/Frameworks/AirTrafficHost"
 
-          # ★ 自检：桩必须真的把 17 个符号**导出**出去。
+          # 自检：桩必须真的把 17 个符号**导出**出去。
           # 为什么要在 CI 里查而不是靠「默认可见性」：dyld 在 dlopen 时是**按名字**解析
           # chained fixups 的 import 表，缺任何一个都会让 dlopen 整体失败。而「非 static 的 C
           # 函数默认导出」这件事受 Xcode 的符号可见性设置影响（GCC_SYMBOLS_PRIVATE_EXTERN /
@@ -538,7 +538,7 @@ jobs:
             echo "ERROR: 桩没被 embed 进 Frameworks/（xcodegen 的 embed 落点可能不是这里）"
             exit 1
           fi
-          # ★ 用哪个工具查符号？**优先 `dyld_info -exports`**，它是 dyld 真正用来解析 import 的
+          # 用哪个工具查符号？**优先 `dyld_info -exports`**，它是 dyld 真正用来解析 import 的
           #   那张导出表；`nm -gU` 读的是符号表，**Release 下被 strip 掉就会误报「没有」**，
           #   而误报会让构建直接失败（白烧一次 CI）。所以先试权威工具，读不到再退回 nm。
           EXPORTS=/tmp/stub-exports.txt
@@ -553,7 +553,7 @@ jobs:
             grep " _AM" "$EXPORTS" || true
             LOOKUP() { grep -q "_${1}\$" "$EXPORTS"; }
           fi
-          # ★★ v0.3.455 修：原来自检是**自证**，现在改成**对证**。
+          # v0.3.455 修：原来自检是**自证**，现在改成**对证**。
           #
           # 原来拿**硬编码的 17 个名字**去查桩自己 —— 那是自证：查的是「桩导出了这 17 个吗」，
           # 而不是「这份 ATH **需要**的是哪 17 个吗」。而 ATH 是**从 runner 的 macOS 现取**的

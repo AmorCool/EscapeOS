@@ -26,7 +26,7 @@ v0.3.481 真机踩到的坑：旧实现是 `cp -R _module-esc/modules/*` + 硬�
 默认取 `external` 是刻意的：**「不内置」是安全的默认值** —— 忘了写字段时，
 模块不会被悄悄塞进 app。
 
-## ★ v0.3.505：原生 UI 源码也由模块仓库拥有
+## v0.3.505：原生 UI 源码也由模块仓库拥有
 
 用户的意见：「模块没真正独立，SwiftUI 界面得集成在模块里，而不是散在宿主仓库」.
 
@@ -85,7 +85,7 @@ def sync_ui_sources(src_root: str, root: str) -> list:
         if os.path.isdir(dst_ui):
             shutil.rmtree(dst_ui)
         os.makedirs(dst_ui, exist_ok=True)
-        # ★ 只拷 .swift —— ui/ 里的 README.md 之类**不能**进宿主源码树：
+        # 只拷 .swift —— ui/ 里的 README.md 之类**不能**进宿主源码树：
         #   它们会被当资源拷进 .app 根目录，两个同名 README 直接报
         #   「Multiple commands produce .../EscapeSpace.app/README.md」（v0.3.506 实锤）.
         count = 0

@@ -23,7 +23,7 @@ import CryptoKit
 /// **我们过去一直发明文 JSON**，而不是解密不出来。
 private enum NiuwaCrypto {
 
-    /// ★ 本次请求加密时**实际发出去的那个 T**（= 拼在请求体尾部的那串数字）。
+    /// ▸ 本次请求加密时**实际发出去的那个 T**（= 拼在请求体尾部的那串数字）。
     ///
     /// 为什么必须记住它（反汇编证据，`NiuwaCore`）：
     /// `nwcore_decryptByAESWithCipher:timeSlide:` 的 IMP `0x60a50` 里，
@@ -77,7 +77,7 @@ private enum NiuwaCrypto {
     /// 明文 → 可发送的报文串
     static func encrypt(_ plain: Data) -> String? {
         let n = newN()
-        // ★ 记住本次发出去的 T —— 解密时要用 `尾部 + T` 派生密钥（见 `lastRequestT` 注释）
+        // ▸ 记住本次发出去的 T —— 解密时要用 `尾部 + T` 派生密钥（见 `lastRequestT` 注释）
         lastRequestT = n
         let (key, iv) = deriveKeyIV(n: n)
         guard let nonce = try? AES.GCM.Nonce(data: iv),
@@ -89,13 +89,13 @@ private enum NiuwaCrypto {
 
     /// 报文串 → 明文
     static func decrypt(_ s: String) -> Data? {
-        // ★ 关键（v0.3.395）：**先去掉整段的 base64 padding 再切分**。
+        // ▸ 关键（v0.3.395）：**先去掉整段的 base64 padding 再切分**。
         // 服务端可能带 `=` 返回：小响应恰好是 4 的倍数（92 字）看不出问题，
         // 而大响应真机实测 9106 字、`9106 % 4 == 2` → 一定以 `==` 结尾。
         // 那时「末尾 14 个字符」里会混进 `=` → 尾部取到的不是时间数字 → **分段错误 → 解密必败**。
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "=", with: "")
-        // ★ 诊断（v0.3.395）：真机出现「小响应能解开、大响应解不开」——
+        // ▸ 诊断（v0.3.395）：真机出现「小响应能解开、大响应解不开」——
         // 小响应 92 字符（密文 78 + 尾 14），大响应 9106 字符。**结构可能不同**，
         // 而整体响应被日志截断到 2000 字，看不到尾部，所以这里把**关键分段信息**单独记一份。
         LoginLogger.shared.log("[牛蛙源·诊断] 报文长度=\(trimmed.count) 尾部20=[\(String(trimmed.suffix(20)))]",
@@ -114,7 +114,7 @@ private enum NiuwaCrypto {
         let tag = Data(blob.suffix(16))
         let tailN = n                       // 响应尾部那串数字
         let t = lastRequestT                 // 本次请求发出去的 T
-        // ★★ 候选 N，按证据强度排序：
+        // ▸▸ 候选 N，按证据强度排序：
         // ① `尾部 + T` —— 反汇编证据 `add x21, x0, x24`（x0=尾部、x24=timeSlide 参数=我们发的 T）；
         // ② `尾部`     —— T=0 的老路径（早期那个 92 字样本就是这种，所以它能解开）；
         // ③ `T`        —— 兜底。
@@ -223,7 +223,7 @@ enum NiuwaStoreClient {
 
     /// 响应里「应用数组」的候选键（按可能性排序，命中即用）。
     ///
-    /// **★ v0.3.403：`ba_apps` 排第一 —— 这是真机实测出来的真实键名。**
+    /// **▸ v0.3.403：`ba_apps` 排第一 —— 这是真机实测出来的真实键名。**
     /// 真机拿到（解密成功后的）真实响应结构：
     /// ```json
     /// {"pub_code":0,"pub_desc":"接口调用成功","body":{"ba_apps":[{"trackName":"Via 浏览器","bundleId":"com.tuyafeng.Via", …}]}}
@@ -243,14 +243,14 @@ enum NiuwaStoreClient {
     /// 见类型注释 1：`nwcore_region` 的 objc 类型是 `NSInteger`，线上就是**数字**。
     /// 请求侧**只发数字**（`withRegionShapes` 里只剩数字形态；`rawValue` 现在只用于持久化与回落）。
     ///
-    /// ## ★ 只保留「中国 / 美国」两档
+    /// ## ▸ 只保留「中国 / 美国」两档
     ///
     /// **`region` 数值语义：`0 = 中国` / `1 = 美国` / `2 = 香港`**（交接文档结论 + 机器码/UI 证据；
     /// 真机侧另有旁证：`0` 返回中文名、`1`/`2` 返回英文名）。
     /// **原版牛蛙 UI 只有「中国 / 美国」两档**（区域切换控件 `nwcore_regionSegmented`
     /// 是个 `QMUISegmentedControl`，由 `nwcore_regionItemClicked:` 弹出），香港档**没有入口**。
     ///
-    /// ### ★★ 实测证据（2026-09-14 真机日志，同一个 `com.tuyafeng.Via`）
+    /// ### ▸▸ 实测证据（2026-09-14 真机日志，同一个 `com.tuyafeng.Via`）
     /// | region | `/appstore/search` | `/appstore/download` |
     /// |---|---|---|
     /// | `0`（中国） | ✓ 15/15、16/16 | 失败 1~2 次后重试**成功**（`sinf 1376 字符`） |
@@ -559,7 +559,7 @@ enum NiuwaStoreClient {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        // ★ v0.3.392：**请求体必须加密**。
+        // ▸ v0.3.392：**请求体必须加密**。
         // 过去我们发的是明文 JSON，服务端直接回 `{"pub_code":650,"pub_desc":"unknow error"}`
         // （HTTP 状态还是 200）—— 这就是「HTTP 200 但不是 JSON」的真正原因。
         // 报文格式与响应一致：`base64NoPad(密文‖tag) + base64NoPad(str(N))`。
@@ -687,7 +687,7 @@ enum NiuwaStoreClient {
         }
 
         let raw = String(data: data, encoding: .utf8) ?? "<非 UTF-8 \(data.count) 字节>"
-        // ★ v0.3.399：**把完整响应单独落盘**（覆盖式，只留最后一次）。
+        // ▸ v0.3.399：**把完整响应单独落盘**（覆盖式，只留最后一次）。
         //
         // 为什么必须在日志之外再存一份：日志里的响应被 `truncate()` 截到 **2000 字**，
         // 而真实大响应有 **9106 字** —— 尾部的 14 个字符（= `base64(时间数字)`）
@@ -696,7 +696,7 @@ enum NiuwaStoreClient {
         dumpResponse(raw)
         log.log("\(logTag) ← 原始响应 \(truncate(raw))", category: .appStore)
 
-        // ★ v0.3.392：响应是**加密体**，先解密再解析。
+        // ▸ v0.3.392：响应是**加密体**，先解密再解析。
         // 解密失败时把原始体前 200 字符留档（否则以后又是「什么都看不到」）。
         guard let plain = NiuwaCrypto.decrypt(raw) else {
             log.log("\(logTag) ✗ 响应解密失败；原始体（前 200）：\(String(raw.prefix(200)))",
@@ -711,7 +711,7 @@ enum NiuwaStoreClient {
             throw StoreError.decode
         }
 
-        // ★ v0.3.403：状态码/描述的真实键名是 `pub_code` / `pub_desc`
+        // ▸ v0.3.403：状态码/描述的真实键名是 `pub_code` / `pub_desc`
         // （真机实测响应：`{"pub_code":0,"pub_desc":"接口调用成功","body":{…}}`）。
         // 旧的 `nwcore_code` / `code` 保留兜底 —— 它们是从二进制字符串推的、至今未在真机命中。
         let code = string(obj["pub_code"]) ?? string(obj["nwcore_code"]) ?? string(obj["code"]) ?? "-"
@@ -721,7 +721,7 @@ enum NiuwaStoreClient {
             ?? string(obj["message"])
             ?? ""
 
-        // ★★ v0.3.407：**把「服务端没有包」与「我们解析漏了形态」分开**（只对下载请求生效）。
+        // ▸▸ v0.3.407：**把「服务端没有包」与「我们解析漏了形态」分开**（只对下载请求生效）。
         //
         // 起因（真机日志）：同一个接口、同一个 region，`Via` / `SogouExplorer` 成功，
         // `msedge` / `TakeBrowser` 失败，而失败的都掉进下面那条「找数组」分支 ——
@@ -759,7 +759,7 @@ enum NiuwaStoreClient {
             }
         }
 
-        // ★★ v0.3.404：**下载接口的响应没有数组** —— `body` 直接给两个字段：
+        // ▸▸ v0.3.404：**下载接口的响应没有数组** —— `body` 直接给两个字段：
         //   `ba_ipaURL`（安装包直链）、`ba_sinfs`（base64 的 sinf）。
         // 真机实测（v0.3.403 日志）：
         //   {"body":{"ba_ipaURL":"https://iosapps.itunes.apple.com/…signed.dpkg.ipa?accessKey=…",
@@ -784,7 +784,7 @@ enum NiuwaStoreClient {
                              sinfBase64: sinfB64)]
         }
 
-        // ★★ v0.3.403：**数组可能嵌在 `body` 里**（真机实测就是 `body.ba_apps`）。
+        // ▸▸ v0.3.403：**数组可能嵌在 `body` 里**（真机实测就是 `body.ba_apps`）。
         // 先在 `body` 里找，再回落到顶层 —— 之前的实现只看顶层，
         // 于是明明解密成功、数据也拿到了，却报「无候选数组键命中」。
         var scopes: [[String: Any]] = []
@@ -796,7 +796,7 @@ enum NiuwaStoreClient {
                 guard let arr = scope[key] as? [[String: Any]] else { continue }
                 let apps = arr.compactMap(parse)
                 if apps.isEmpty && !arr.isEmpty {
-                    // ★ 最关键的诊断：命中了数组、却一条都没解析出来 → 说明**字段键名**不对。
+                    // ▸ 最关键的诊断：命中了数组、却一条都没解析出来 → 说明**字段键名**不对。
                     // 把服务端首条记录的**实际键名**打出来，一次真机搜索就能定死键名
                     // （上一版就是静默丢弃，白丢了一轮）。
                     let firstKeys = arr[0].keys.sorted().joined(separator: ", ")

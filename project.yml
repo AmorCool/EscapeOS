@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.514"
-    CURRENT_PROJECT_VERSION: "810"
+    MARKETING_VERSION: "0.3.515"
+    CURRENT_PROJECT_VERSION: "811"
     # 注：这里**刻意不写** `SWIFT_VERSION` —— 实测顶层 `settings.base` 的它**不被 xcodegen 采纳**，
     # 真正生效的是下面 target 层那一份（当前 `"6.0"` = Swift 6 语言模式）。
     # 另注：**编译器版本 ≠ 语言模式** —— CI 用 Xcode 27 自带的 Swift 6.4 编译器，
@@ -92,7 +92,7 @@ targets:
       - framework: rust-libs/libidevice_ffi.xcframework
         embed: false
         link: true
-      # ★ MobileDevice 桩（v0.3.446，airlift Grappa 移植）：
+      # MobileDevice 桩（v0.3.446，airlift Grappa 移植）：
       #   移植到 iOS 的 macOS AirTrafficHost(arm64e) 里有一条 LC_LOAD_DYLIB 指向
       #   `@executable_path/Frameworks/libMobileDeviceStub.dylib`（原为 macOS 专有的
       #   MobileDevice.framework，iOS 上没有）。这里提供那 17 个符号的空实现。
@@ -114,12 +114,12 @@ targets:
         embed: false
         link: false
     sources:
-      # ★ 模块原生 UI 源码（生成目录，见 EscapeOS/Modules/README.md）——
+      # 模块原生 UI 源码（生成目录，见 EscapeOS/Modules/README.md）——
       # 由 Resources/Scripts/sync_bundled_modules.py 在 xcodegen **之前**从
       # module-esc 仓库拷进来. **不要**再单独列 ：
       # 这一行是递归的，已经包含它；重复列会让同一批文件被编两次 ⇒ 重复符号.
       - path: EscapeOS
-        # ★ v0.3.508：排除所有 README.md —— 它们只是文档，但会被当资源拷进
+        # v0.3.508：排除所有 README.md —— 它们只是文档，但会被当资源拷进
         # .app 根目录；两个同名 README 直接报
         # 「Multiple commands produce .../EscapeSpace.app/README.md」。
         excludes:
@@ -166,7 +166,7 @@ targets:
           - "**/PrivacyInfo.xcprivacy"
     settings:
       base:
-        # ★★ Swift 6 语言模式迁移（原 `swift6-migration` 分支，2026-09-18 已合入 `migrate-xcode`）。
+        # Swift 6 语言模式迁移（原 `swift6-migration` 分支，2026-09-18 已合入 `migrate-xcode`）。
         #   ⚠️ 必须写在 **target** 这一层：实测顶层 `settings.base` 的 SWIFT_VERSION **不被 xcodegen 采纳**。
         #   只作用于本 target，**不会**波及 SwiftPM 依赖（Citadel / swift-crypto 等）。
         #   ⚠️ 刻意**不开** `SWIFT_APPROACHABLE_CONCURRENCY` / `SWIFT_DEFAULT_ACTOR_ISOLATION`：
@@ -174,7 +174,7 @@ targets:
         #     开默认 MainActor 隔离反而涨到 336（把引擎层的 nonisolated 代码全变成跨 actor 错误）。
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
-        # ★ 实测项（2026-09-18 第 6 轮）：对**完整**错误集重测「易用并发」。
+        # 实测项（2026-09-18 第 6 轮）：对**完整**错误集重测「易用并发」。
         #   此前三档对照（134/336/134）是在**残缺**错误集上测的（编译提前中止），结论作废。
         #   SE-0461 NonisolatedNonsendingByDefault 正是用来减少 sending 诊断的。
         SWIFT_APPROACHABLE_CONCURRENCY: "YES"
@@ -195,7 +195,7 @@ targets:
           - "$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a"
           - "$(DERIVED_FILE_DIR)/SAP/source/include/unicorn/unicorn.h"
 
-  # ★ MobileDevice 桩（v0.3.446）—— 只服务 airlift 的 Grappa 移植，App 不引用它。
+  # MobileDevice 桩（v0.3.446）—— 只服务 airlift 的 Grappa 移植，App 不引用它。
   #
   # 为什么需要：移植到 iOS 的 macOS `AirTrafficHost`(arm64e) 的 arm64e 切片里，
   # ordinal 1 那条 `LC_LOAD_DYLIB` 原本指向 macOS 专有的 `MobileDevice.framework`
@@ -212,12 +212,12 @@ targets:
   # 配套：AirTrafficHost 本体由 CI 的「Embed AirTrafficHost into Frameworks」步骤
   # **从 runner 自己的 macOS 系统里现场取 + 现场打补丁**（脚本 `tools/patch_airtraffichost.py`），
   # 直接落到 `.app/Frameworks/`。
-  # ★ 那个二进制**故意不进仓库**（仓库是 public，再分发 Apple 的专有框架不合适），
+  # 那个二进制**故意不进仓库**（仓库是 public，再分发 Apple 的专有框架不合适），
   #   也**故意不放 `Resources/`**（免得被当普通资源拷到 bundle 根，躲过侧载工具的递归签名）。
   MobileDeviceStub:
     type: library.dynamic
     platform: iOS
-    # ★★ 产物文件名必须**真的**是 `libMobileDeviceStub.dylib`（与 AirTrafficHost 里那条
+    # 产物文件名必须**真的**是 `libMobileDeviceStub.dylib`（与 AirTrafficHost 里那条
     #    `@executable_path/Frameworks/libMobileDeviceStub.dylib` 逐字对应），否则 dyld
     #    找不到桩 ⇒ `Library not loaded` ⇒ 整个框架 dlopen 失败。
     #
@@ -244,7 +244,7 @@ targets:
         EXECUTABLE_PREFIX: ""
         PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos.mobiledevicestub
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
-        # ★★ 覆盖从顶层 `settings.base` 继承来的链接/搜索设置。
+        # 覆盖从顶层 `settings.base` 继承来的链接/搜索设置。
         #    顶层那份是给 app 主体用的（SAP 的 `$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a`
         #    + openssl 的 -L/-lcrypto + QuickLook/PDFKit/AVKit/... 一堆 framework）。
         #    本 target **不跑** `prepare.sap.py` 那个 preBuildScript，继承了就会去链一个
