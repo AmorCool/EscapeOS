@@ -815,7 +815,25 @@ enum HostCapabilityService {
         }
 
         // 读回校验：唯一能证明「字节真的落盘了」的判据。
-        let check = airliftReadAndRestore(path: target)
+        //
+        // ## ★ v0.3.517：**先冷却、失败再重试一次**
+        //
+        // 真机实测（2026-09-24）暴露的问题：**写入本身是成功的**，失败的是这次校验.
+        // 证据：用 `verify:false` 写完之后，**另一次独立调用** `airlift.pull` 能读回
+        // 正确的字节（Caches / Preferences 都是 `ok=true size=10`）；
+        // 但同一次调用里**紧跟着**再跑一轮 stage+AT 做校验就经常失败 ——
+        // 同一目标连写三次得到 `True / False / False`，间隔 15 秒也一样.
+        //
+        // ⇒ 设备端的 AirTraffic 会话**不支持连续两次背靠背**，中间要留冷却时间.
+        // 不修的话界面会**随机报「覆盖失败」**，而字节其实写进去了 —— 那是更糟的误导
+        //（用户会以为功能坏了）.
+        Thread.sleep(forTimeInterval: 3)
+        var check = airliftReadAndRestore(path: target)
+        if check.data == nil {
+            steps.append("校验: 第 1 次读回没读到 —— 等 5 秒重试（设备端会话需要冷却）")
+            Thread.sleep(forTimeInterval: 5)
+            check = airliftReadAndRestore(path: target)
+        }
         steps.append(contentsOf: check.details.map { "校验: \($0)" })
         guard let back = check.data else {
             extra["steps"] = steps
