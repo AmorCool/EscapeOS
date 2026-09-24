@@ -69,9 +69,12 @@ enum PlistTweakService {
     @discardableResult
     static func set(path: String, key: String, value: Any) throws -> Int {
         guard !key.isEmpty else { throw TweakError.badArgs("key 不能为空") }
-        var dict = try parse(try read(path))
+        let raw = try read(path)
+        let original = try parse(raw)
+        var dict = original
         dict[key] = value
-        let bytes = try write(path, dict: dict)
+        try guardKeyCount(before: original.count, after: dict.count, op: "设置")
+        let bytes = try write(path, dict: dict, originalData: raw)
         AirliftChangeLog.append(action: "plist-set", path: path,
                                 bytes: bytes, verified: false,
                                 note: "\(key) = \(describe(value))")
@@ -84,25 +87,71 @@ enum PlistTweakService {
     @discardableResult
     static func unset(path: String, key: String) throws -> Bool {
         guard !key.isEmpty else { throw TweakError.badArgs("key 不能为空") }
-        var dict = try parse(try read(path))
+        let raw = try read(path)
+        let original = try parse(raw)
+        var dict = original
         guard dict[key] != nil else { return false }
         dict.removeValue(forKey: key)
-        let bytes = try write(path, dict: dict)
+        try guardKeyCount(before: original.count, after: dict.count, op: "删除")
+        let bytes = try write(path, dict: dict, originalData: raw)
         AirliftChangeLog.append(action: "plist-unset", path: path,
                                 bytes: bytes, verified: false,
                                 note: "删键 \(key)（回到系统默认）")
         return true
     }
 
+    /// ★★★ **灾难护栏**：键数变化必须是「一个键之内」，否则中止.
+    ///
+    /// ## 为什么（真机事故 2026-09-24）
+    /// 那次读到的内容被截断成 1 个键（原 49 键），而我**照写不误**
+    /// ⇒ 把用户的 SpringBoard 偏好文件覆盖没了.
+    /// 事后看：**set / unset 只可能让键数不变或 ±1**，任何更大的变化
+    /// 都说明「读坏了」或「逻辑错了」⇒ **宁可不动**.
+    private static func guardKeyCount(before: Int, after: Int, op: String) throws {
+        guard abs(after - before) <= 1 else {
+            throw TweakError.parseFailed(
+                "\(op)后键数从 \(before) 变成 \(after) —— 相差超过 1 个，"
+                + "判定为**读到了被截断的内容**，已中止（**文件未被改动**）")
+        }
+        // 另一道：本来有一堆键、突然变成 1 个，几乎肯定是读坏了
+        guard !(before > 3 && after <= 1) else {
+            throw TweakError.parseFailed(
+                "键数从 \(before) 掉到 \(after) —— 判定为读坏了，已中止（**文件未被改动**）")
+        }
+    }
+
     // MARK: - 内部
 
     /// 用 airlift 把文件读进 Media，再取回来.
+    ///
+    /// ## ★★★ 为什么必须「读两次、要求一致」（真机事故 2026-09-24）
+    /// 设备端的 AirTraffic 会话**不稳**：`pocReadFile` 偶尔会返回**被截断的内容**.
+    /// 那次它把 5764 字节 / 49 键的 SpringBoard plist 读成 **89 字节 / 1 键**
+    /// （只剩最后一个键）—— 而截断后**仍然是合法 plist**，`parse` 不会报错，
+    /// 于是「读 → 改 → 写回」把用户的偏好文件**覆盖成了 1 个键** ✗
+    /// （幸好带序号备份救回来了.）
+    ///
+    /// ⇒ 现在：**连读两次，字节完全一致才采信**；不一致就重试（最多 4 轮），
+    ///   全都不一致就**放弃**（宁可不动，也不能写坏）.
     private static func read(_ path: String) throws -> Data {
-        let outcome = AirliftExploit.pocReadFile(path: path)
-        guard let data = outcome.data else {
-            throw TweakError.readFailed(outcome.summary)
+        var previous: Data?
+        var lastError = "未知"
+        for attempt in 1...4 {
+            let outcome = AirliftExploit.pocReadFile(path: path)
+            if let data = outcome.data {
+                if let prev = previous, prev == data {
+                    return data            // 两次一致 ⇒ 采信
+                }
+                previous = data
+                lastError = "两次读取不一致（第 \(attempt) 轮）"
+            } else {
+                lastError = outcome.summary
+            }
+            // 设备端会话不支持背靠背，读之间留冷却
+            Thread.sleep(forTimeInterval: attempt >= 3 ? 5 : 3)
         }
-        return data
+        throw TweakError.readFailed("连读 4 次都没拿到稳定内容（\(lastError)）—— "
+                                    + "为免写坏文件，**已放弃本次改动**")
     }
 
     /// 把字典写回（二进制 plist），用 airlift 覆盖.
@@ -111,7 +160,8 @@ enum PlistTweakService {
     /// 这里**不走** `airlift.overwrite`（那是能力层），所以备份要自己做 ——
     /// 用同一套 `AirliftBackupStore`：**1 号 = 初始备份（永不覆盖）**，
     /// 之后每次写前各存一份. 少了这一步，「还原」就没有回滚点.
-    private static func write(_ path: String, dict: [String: Any]) throws -> Int {
+    private static func write(_ path: String, dict: [String: Any],
+                              originalData: Data) throws -> Int {
         let data: Data
         do {
             data = try PropertyListSerialization.data(fromPropertyList: dict,
@@ -121,9 +171,11 @@ enum PlistTweakService {
         }
 
         // ★ 写前快照（1 号 = 初始备份）
-        if let original = AirliftExploit.pocReadFile(path: path).data {
-            _ = AirliftBackupStore.snapshot(path: path, data: original, note: "plist tweak 前")
-        }
+        //
+        // 用**调用方已经读到的** `originalData`，**不再重读一遍** ——
+        // 每次 airlift 读要 10~20 秒，而设备端会话不稳、读多了还会失败；
+        // 少一次读 = 少一次失败机会 + 快一半.
+        _ = AirliftBackupStore.snapshot(path: path, data: originalData, note: "plist tweak 前")
 
         // 再落进 AIR（AFC 根下，廉价），最后 airlift 覆盖目标
         let name = "plisttweak-\(UUID().uuidString.prefix(8)).plist"
