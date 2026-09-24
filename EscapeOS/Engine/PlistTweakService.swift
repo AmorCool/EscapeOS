@@ -223,8 +223,16 @@ enum PlistTweakService {
         try? data.write(to: cacheURL(path), options: .atomic)
     }
 
-    /// 真去设备读（慢，10~20 秒）—— **带一次重试**，只在这里花时间.
+    /// 真去设备读（慢，10~20 秒）—— **带 3 次重试**，只在这里花时间.
+    ///
+    /// ## 读之前先杀 `cfprefsd`（2026-09-24 真机定案，这条是关键）
+    /// airlift 的读是**移动**（移进 Media → 读 → 写回），而 `cfprefsd` 会**持有**
+    /// 它管的 plist ⇒ 设备端那次 move 做不成 ⇒ 「连读 3 次都读不到」.
+    /// 对照实验：非 Preferences 的文件（CallServices 的 m4a）读得到 51774 字节，
+    /// 而 `Preferences/` 下的两个 plist 全失败；**杀完 cfprefsd 立刻读就成功**.
+    /// ⇒ 所以这里在读之前先腾开文件. 详见 `PreferencesSettle.releaseForRead`.
     private static func readFromDevice(_ path: String) throws -> Data {
+        PreferencesSettle.releaseForRead(path: path, note: "plist 读之前")
         var lastError = "未知"
         // 3 次 + 退避（与 AirCard 的 retries=3 同款思路）
         for attempt in 1...3 {
@@ -233,7 +241,11 @@ enum PlistTweakService {
                 return data
             }
             lastError = outcome.summary
-            if attempt < 3 { Thread.sleep(forTimeInterval: 2 + 0.4 * Double(attempt)) }
+            // 每次重试前再腾一次 —— cfprefsd 会被 launchd 拉起来重新占住文件
+            if attempt < 3 {
+                PreferencesSettle.releaseForRead(path: path, note: "plist 读重试 \(attempt + 1)")
+                Thread.sleep(forTimeInterval: 2 + 0.4 * Double(attempt))
+            }
         }
         throw TweakError.readFailed("连读 3 次都读不到（\(lastError)）")
     }
@@ -274,56 +286,10 @@ enum PlistTweakService {
         // 写成功后更新缓存（下次**显示**不用再读）
         store(data, for: path)
 
-        // 关键一步：杀掉 cfprefsd，逼它从磁盘重读（否则写入会被它的内存副本覆盖回去）
-        settlePreferences(path: path, note: "plist tweak 后")
+        // 收尾（杀 cfprefsd）**不在这里做** —— 它挂在底层原语 `AirliftExploit.pocWriteFile`
+        // 里（见 `PreferencesSettle` 头注释）：那里是**所有**越界写的唯一出口，
+        // 而挂在这一条路上会漏掉另外 8 条（第一版就是这么漏的）.
         return data.count
-    }
-
-    /// **写完 plist 之后的收尾** —— 唯一能让偏好改动真正生效的办法.
-    ///
-    /// ## 为什么必须做（用户反馈「respring 了好像没有效果」）
-    /// `Preferences/` 下的 plist 归 `cfprefsd` 管：它把偏好缓存在**内存**里，
-    /// 而且会**间歇性把内存副本刷回磁盘**（实测：还原成 5764 B 后两分钟又被改回 3556 B）.
-    /// 不杀它：一是设置不生效（进程读的是它的缓存，respring 也没用）；
-    ///         二是我们的写入随时被它覆盖.
-    /// 杀掉后 launchd 会立刻重启它，重启时从磁盘重读，我们的写入才真正生效.
-    ///
-    /// ## 为什么做成公开方法
-    /// 一开始只在 `plist.tweak` 的写路径里杀了它 —— 而**「备份与还原」页是另一条路**
-    /// （直接走 `AirliftExploit.pocWriteFile`），那条路没杀 ⇒ 从备份还原一个
-    /// SpringBoard plist 之后，cfprefsd 会**把我们刚还原的内容再覆盖回去**.
-    /// 两条路必须共用同一套收尾.
-    ///
-    /// - Returns: 杀掉的实例数；`0` = 没找到（可能对宿主不可见）
-    @discardableResult
-    static func settlePreferences(path: String, note: String) -> Int {
-        // 只对 Preferences 下的文件做 —— 其它路径（如 Caches）不归 cfprefsd 管
-        guard path.contains("/Library/Preferences/") else { return 0 }
-        let killed = killCfprefsd()
-        AirliftChangeLog.append(action: "kill-cfprefsd", path: path, bytes: 0,
-                                verified: false,
-                                note: killed > 0
-                                    ? "已杀掉 \(killed) 个 cfprefsd 实例，逼它从磁盘重读（\(note)）"
-                                    : "没找到 cfprefsd 进程（\(note)：设置可能不会立刻生效）")
-        return killed
-    }
-
-    /// 杀掉 cfprefsd（用户态的偏好守护进程）.
-    ///
-    /// 用宿主现成的进程控制（与 proc.signal 同一条路），不自己发 signal.
-    ///
-    /// - Returns: 实际杀掉的实例数（0 = 没找到，可能对宿主不可见）
-    private static func killCfprefsd() -> Int {
-        guard let entries = try? ProcessManagerService.shared.listProcesses() else { return 0 }
-        var killed = 0
-        for entry in entries
-        where entry.displayName.localizedCaseInsensitiveContains("cfprefsd")
-            || entry.executablePath.localizedCaseInsensitiveContains("cfprefsd") {
-            if (try? ProcessManagerService.shared.sendSignal(.kill, toPID: entry.pid)) != nil {
-                killed += 1
-            }
-        }
-        return killed
     }
 
     private static func parse(_ data: Data) throws -> [String: Any] {

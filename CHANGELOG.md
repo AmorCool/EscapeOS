@@ -1,5 +1,86 @@
 # Changelog
 
+## [0.3.525] - 2026-09-24
+
+> 这一版起因是用户的一串反馈：「nugget 的功能它好像是读取本地的键值对是吗」
+> 「进入不会自动读取 导致缓存上一轮的修改」「点从设备重读 怎么显示是写入中」
+> 「写的过程注释太多了 精简掉 废话那么多」「**而且还有问题 你自己看**」
+> 「不要有手动开关目标路径是否为目录还是文件 你不能自动识别吗」
+> 「源文件也不能批量选择/全选删除」「文件板块那些探测路径的无关功能移除掉」
+
+### 找到了用户说的「还有问题」：**成功的写入被显示成失败**
+
+`airOverwrite` 的**成功路径漏了 `ok` 字段**（只有失败路径有）.
+而模块界面按「没有 `ok` = 失败」处理 ⇒ 一次**成功的写入被显示成失败**，
+还把**整段原始 JSON 糊在错误框里** —— 用户看到的「废话那么多」有一半就是这段 JSON.
+
+修法：
+- `airOverwrite` 成功/失败**都显式给 `ok`**（顺带修：两条失败分支原来会继承 `ok:true`）；
+- 模块侧再加一层兜底 `airliftOK()`：`ok` 缺失时看 `error`，没有 `error` 就当成功
+  —— 免得将来再有一条路径漏字段，又把成功报成失败.
+
+### 读写 `Preferences/*.plist` 的真因（真机对照实验定案）
+
+**airlift 的「读」是移动**（移进 Media → 读 → 写回），而 `cfprefsd` 会**持有**
+它管的那几个 plist ⇒ 设备端那次 move **做不成** ⇒ 表现为「连读 3 次都读不到」.
+
+同一台设备、同一时刻的对照：
+
+| 目标 | 归 cfprefsd 管 | 读结果 |
+|---|---|---|
+| `/var/mobile/Library/CallServices/…/StartDisclosureWithTone.m4a` | 否 | **成功 51774 字节** |
+| `/var/mobile/Library/Preferences/com.apple.UIKit.plist` | 是 | **失败** |
+| `/var/mobile/Library/Preferences/com.apple.springboard.plist` | 是 | **失败** |
+| 上面那个 springboard plist，**杀完 cfprefsd 立刻读** | 是 | **成功** |
+
+⇒ **不是读坏了，是文件被占着.** 修法：新增 `PreferencesSettle.releaseForRead(path:note:)`，
+在**所有读的唯一出口**（`airPull`）和 `PlistTweakService.readFromDevice` 里，
+**读之前先杀 cfprefsd**（重试前也再腾一次 —— `launchd` 会把它拉起来重新占住）.
+
+### 收尾动作挂到了**唯一的底层写原语**上（我第一版挂错了层）
+
+0.3.524 我把「写完 Preferences 要杀 cfprefsd」写在 `airliftOverwrite` 里 ——
+那只覆盖 **9 条写路径中的 1 条**（`airlift.writeMany` / `sys.supervised.set` / 模块的
+`plist.tweak` 都漏了）. 真机复现：调 `airlift.overwrite` 还原 SpringBoard 偏好时
+**那个收尾根本没被触发**.
+
+⇒ 抽成 `PreferencesSettle`（新文件），挂点改到 `AirliftExploit.pocWriteFile` / `pocWriteMany`
+—— **所有越界写（含将来新增的）的唯一出口**，不可能再漏.
+
+### 备份页：把 `Media/AIR/` 里的同源副本也摆出来
+
+用户那次「救不回」的真正原因不是没数据，而是**看不见**：
+`AirliftBackups/` 里 10 份全是坏的（1 号 = 89 B / 1 键），
+而真正能救数据的 **5764 B / 49 键** 一直躺在 `Media/AIR/` 里.
+
+现在 `airlift.backups` 会一并回报 `airSources`（**AFC 直读，秒级**，不触发 airlift），
+备份页每份显示 `字节 · 键数`，点一下就用「写入」那条路还原.
+（真机实测：用这份副本把被改坏的 SpringBoard 偏好还原回 **5764 B / 49 键**，读回校验一致.）
+
+### 模块界面（2.0.4）
+
+- **系统选项**：进页面**真的从设备读一遍**（不再拿上一轮的缓存糊弄），带 `读取中 2/3…` 进度；
+  遮罩文案修掉「读取时显示写入中」.
+- **文件**：移除「探测任意路径」—— 实测 `afc.stat` 对 Media 之外的路径一律
+  `Afc(InvalidArg)`（AFC 服务自己就是边界），这个功能没有任何用.
+- **写入**：
+  - 去掉「目标是目录」手动开关 ⇒ **自动识别**（`afc.stat` 问设备，识别不出来按文件处理），
+    并且**确认弹窗里把落点写清楚**，不会有「悄悄写错地方」；
+  - 执行步骤从「黑名单过滤」改成**白名单**（只留 2~4 行「做了什么 / 成没成」），
+    判据原文收进「技术细节 N 行」—— 之前一次写入能刷十几行给开发者看的原文；
+  - **源文件支持批量选择 / 全选 / 批量删除**；
+  - 修掉确认框里过时的「备份会留在 LoginLogs/ 下」（备份在 `AirliftBackups/`）.
+
+### 真机核验（本次全部走设备实测）
+
+- 宿主 0.3.524 / 模块 2.0.3 已在设备上跑通；`airlift.backups` 新字段
+  （`keys` / `currentBytes` / `currentKeys`）实测有值.
+- **`/var/mobile/Library/CallServices/Greetings/default/` 可以写**：
+  写入 11 字节测试文件 → `airlift.pull` 读回 **11 字节** ⇒ 字节真的落盘，测试文件已删除.
+  （⇒ `Disable-Call-Recording-BookRestore-` 那类功能在我们这条路上是可行的：
+  它改的就是这个目录下的 `StartDisclosureWithTone.m4a` / `StopDisclosure.caf`，
+  普通文件、不归 cfprefsd 管.）
+
 ## [0.3.524] - 2026-09-24
 
 > 这一版是**正确性 / 数据安全**批次. 起因是用户的两句话：

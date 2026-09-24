@@ -730,6 +730,12 @@ enum HostCapabilityService {
         var steps: [String] = []
 
         // ① airlift 读
+        //
+        // ⚠️ 读之前先腾开文件（2026-09-24 真机定案）：airlift 的读是**移动**，
+        // 而 `cfprefsd` 会**持有**它管的 `Preferences/*.plist` ⇒ 设备端那次 move 做不成
+        // ⇒ 「连读 3 次都读不到」. 放在**这一层**（所有读的唯一出口）而不是各调用点，
+        // 是为了「一处生效、不会漏」—— 与 `PreferencesSettle.after` 同一个道理.
+        PreferencesSettle.releaseForRead(path: target, note: "airlift 读之前")
         let read = withAirlift { AirliftExploit.pocReadFile(path: target) }
         guard read.ok, let data = read.data else {
             return (1, jsonText(["ok": false,
@@ -775,6 +781,7 @@ enum HostCapabilityService {
         guard let target = args["path"] as? String, !target.isEmpty else {
             return fail("airlift.pull 缺少 path")
         }
+        // 读之前的「腾开文件」在 `airPull` 里统一做（所有读的唯一出口）
         let (rc, json, _) = airPull(target: target, airName: args["name"] as? String)
         return (rc, json)
     }
@@ -843,6 +850,11 @@ enum HostCapabilityService {
                      + (verify ? "下面读回校验落点" : "未校验落点") + "）")
 
         var extra: [String: Any] = [
+            // ⚠️ `ok` 必须显式给（用户反馈「写入还有问题 你自己看」的真因）：
+            // 这条成功路径**漏了 `ok` 字段** ⇒ 模块界面按「没有 ok = 失败」处理，
+            // 于是一次**成功的写入被显示成失败**，还把整段原始 JSON 糊在错误框里
+            //（用户看到的「废话那么多」就是这段 JSON）.
+            "ok": true,
             "path": target,
             "size": data.count,
             "via": "airlift",
@@ -880,6 +892,7 @@ enum HostCapabilityService {
         guard let back = check.data else {
             extra["steps"] = steps
             return (1, jsonText(extra.merging([
+                "ok": false,
                 "error": "覆盖后**读回失败**，无法确认落点（字节可能没落盘）：\(check.summary)"
             ]) { _, new in new }))
         }
@@ -891,6 +904,7 @@ enum HostCapabilityService {
             extra["steps"] = steps
             extra["readBackSize"] = back.count
             return (1, jsonText(extra.merging([
+                "ok": false,
                 "error": "覆盖**未生效**：读回 \(back.count) 字节 ≠ 写入 \(data.count) 字节"
                          + "（清单命中了，但字节没落盘）"
             ]) { _, new in new }))
@@ -1006,9 +1020,9 @@ enum HostCapabilityService {
         dict["resolvedFrom"] = target
         dict["targetIsDirectory"] = isDirectory
         dict["source"] = sourceDesc
-        // 目标若在 Preferences 下 ⇒ 必须杀 cfprefsd，否则它会把内存里的旧副本刷回来，
-        // 覆盖我们刚写进去的内容（「写完看着生效、过一会儿又变回去」的根因）
-        PlistTweakService.settlePreferences(path: finalPath, note: "airlift.write 后")
+        // 收尾（杀 cfprefsd）**不在这里做** —— 它挂在底层原语 `AirliftExploit.pocWriteFile`
+        // 里（见 `PreferencesSettle` 头注释）：这里是 9 条写路径中的 1 条，
+        // 挂在这里会漏掉另外 8 条（第一版就是这么漏的）.
         // 改动记录（用户要求「防止以后不知道改了啥」）
         let backupCount = AirliftBackupStore.versions(path: finalPath).count
         AirliftChangeLog.append(action: "write",
@@ -1080,6 +1094,44 @@ enum HostCapabilityService {
         return ok(["note": "记录已清空. 设备上的文件**没有**被动过."])
     }
 
+    /// 列出 `Media/AIR/` 里和某个目标**同源**的副本（AFC 直读，秒级）.
+    ///
+    /// ## 为什么必须把这一路也摆出来（用户指出的缺陷的真正修法）
+    /// 用户的 SpringBoard 偏好被写坏后，**`AirliftBackups/` 里 10 份全是坏的**
+    /// （1 号 = 89 B / 1 键 —— 正是用户预言的那个情况：首次快照本身就坏）.
+    /// 真正救回数据的那份 **5764 B / 49 键**，躺在 `Media/AIR/` 里 ——
+    /// 而那一份**在备份页上根本看不到** ⇒ 用户「救不回」不是因为没数据，是因为**看不见**.
+    ///
+    /// ⇒ 现在把 `AIR/` 里同源的副本一并列出（含 `.bak`），每份给出 **字节 / 键数 / 时间**.
+    /// 读取全走 **AFC**（Media 之内）⇒ **不触发 airlift**，不会让这一页变慢.
+    ///
+    /// ## 命名约定
+    /// `AIR/` 里的文件名 = 目标绝对路径把 `/` 换成 `_`，覆盖式备份再追加 `.bak`.
+    /// 例：`/var/mobile/Library/Preferences/com.apple.springboard.plist`
+    /// → `var_mobile_Library_Preferences_com.apple.springboard.plist[.bak]`
+    ///
+    /// - Returns: 每项 `[name, bytes, keys?, time]`；拿不到就返回空数组（**不报错**，
+    ///   因为「没有 AIR 副本」是正常情况，不该让整页失败）
+    private static func airCopies(for target: String) -> [[String: Any]] {
+        let prefix = target.replacingOccurrences(of: "/", with: "_")
+        var out: [[String: Any]] = []
+        _ = try? withAfcRoot(.media) { client in
+            guard let items = try? AFCService.listDirectory(client: client, path: "/AIR") else {
+                return
+            }
+            for item in items where !item.isDir && item.name.hasPrefix(prefix) {
+                var row: [String: Any] = ["name": item.name, "bytes": item.size]
+                // 键数：能解析成字典 plist 才有（本地解析，毫秒级）
+                if let data = try? AFCService.readFile(client: client, path: "/AIR/" + item.name),
+                   let keys = AirliftBackupStore.plistKeyCount(data) {
+                    row["keys"] = keys
+                }
+                out.append(row)
+            }
+        }
+        return out.sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+    }
+
     /// `airlift.backups` —— 列某个沙盒外文件的**带序号备份**（v0.3.519）.
     ///
     /// ## 语义（用户要求）
@@ -1122,6 +1174,9 @@ enum HostCapabilityService {
             extra["currentFromCache"] = true
             if let keys = stats.keys { extra["currentKeys"] = keys }
         }
+        // `Media/AIR/` 里同源的副本（AFC 直读，秒级）—— 用户「救不回」的真正修法见 airCopies 注释
+        let airSources = airCopies(for: path)
+        if !airSources.isEmpty { extra["airSources"] = airSources }
         return ok(["path": path, "count": versions.count, "versions": rows,
                    "root": AirliftBackupStore.rootPath, "via": "airlift"]
                   .merging(extra) { _, new in new })
@@ -1154,11 +1209,7 @@ enum HostCapabilityService {
             _ = AirliftBackupStore.snapshot(path: path, data: current, note: "还原前自动快照")
         }
         let write = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
-        // 还原后同样要收尾：目标在 Preferences 下就杀 cfprefsd，
-        // 否则它会把「内存里的旧副本」刷回来，把刚还原的内容又覆盖掉
-        if write.ok {
-            PlistTweakService.settlePreferences(path: path, note: "备份还原后")
-        }
+        // 收尾（杀 cfprefsd）由 pocWriteFile 内部统一做（见 `PreferencesSettle` 头注释）
         // 还原后的键数（记录里写清楚「变成了几个键」，便于判断这份备份是不是好的）
         let keys = AirliftBackupStore.plistKeyCount(data)
         AirliftChangeLog.append(action: write.ok ? "restore" : "restore-failed",
