@@ -352,10 +352,30 @@ enum HostCapabilityService {
     ///    并发写会互相覆盖.
     private static let airliftLock = NSLock()
 
-    private static func withAirlift<T>(_ body: () -> T) -> T {
+    /// 跑一次 airlift 操作，**失败自动整趟重试**（抄 AirCard 的 retries=3）.
+    ///
+    /// ## 为什么在**这一层**重试
+    /// airlift 失败的点很分散：stage 没上、AT 会话没建起来、设备端 move 没发生……
+    /// 逐个子步骤判断「错在哪」很脆；**整趟重来**只要看「最终成没成」——
+    /// AirCard 的 write_file / write_files_batch 就是这么做的：
+    /// for attempt in 1...3 { 全流程; if ok: return; sleep(0.3 * attempt) }
+    ///
+    /// ## 代价可接受（关键）
+    /// **只在失败时**才重试 ⇒ 正常路径仍是一趟（10~20 秒），**不会变慢**.
+    ///
+    /// ## 为什么参数类型写成 PocOutcome 而不是泛型
+    /// 12 个调用点**全部**返回 PocOutcome（read/write/delete/writeMany），
+    /// 泛型没法判断「成没成」，而 PocOutcome.ok 正好是判据.
+    private static func withAirlift(_ attempts: Int = 3,
+                                    _ body: () -> AirliftExploit.PocOutcome) -> AirliftExploit.PocOutcome {
         airliftLock.lock()
         defer { airliftLock.unlock() }
-        return body()
+        var outcome = body()
+        for attempt in 2...max(1, attempts) where !outcome.ok {
+            Thread.sleep(forTimeInterval: 0.4 * Double(attempt - 1))   // 退避
+            outcome = body()
+        }
+        return outcome
     }
 
     /// 按 `encoding` 把字节编码成 JSON 可放的字符串（默认 base64）
@@ -784,7 +804,7 @@ enum HostCapabilityService {
     /// - Returns: `(rc, json, 是否真的写入了)`
     private static func airOverwrite(target: String, data: Data,
                                      backup: Bool,
-                                     verify: Bool = true) -> (Int32, String) {
+                                     verify: Bool = false) -> (Int32, String) {
         var steps: [String] = []
 
         if backup {
@@ -912,7 +932,14 @@ enum HostCapabilityService {
         let airName = args["airName"] as? String
         let source = args["source"] as? String
         let backup = (args["backup"] as? Bool) ?? true
-        let verify = (args["verify"] as? Bool) ?? true
+        // v0.3.523：默认**不做读回校验** —— 跟 AirCard / airlift-rw 一致.
+        //
+        // 读回校验 = **再跑一整遍 airlift**（stage + AT）= 多 10~20 秒，
+        // 而且设备端会话不稳 ⇒ 校验经常失败 ⇒ 界面**误报「覆盖失败」**.
+        // AirCard 的 write_file 与 airlift-rw 的 attempt **都不做读回**：
+        // 只发 [link, payload] 两条 FileComplete，写完就结束.
+        // ⇒ 想确认落点，用 airlift.pull 单独查（显式动作，慢但由用户决定）.
+        let verify = (args["verify"] as? Bool) ?? false
         let explicitDir = (args["targetIsDirectory"] as? Bool) ?? false
         let explicitLeaf = (args["leafName"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
