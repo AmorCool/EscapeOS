@@ -1119,8 +1119,8 @@ enum HostCapabilityService {
             guard let items = try? AFCService.listDirectory(client: client, path: "/AIR") else {
                 return
             }
-            for item in items where !item.isDir && item.name.hasPrefix(prefix) {
-                var row: [String: Any] = ["name": item.name, "bytes": item.size]
+            for item in items where !item.isDirectory && item.name.hasPrefix(prefix) {
+                var row: [String: Any] = ["name": item.name, "bytes": Int(item.size)]
                 // 键数：能解析成字典 plist 才有（本地解析，毫秒级）
                 if let data = try? AFCService.readFile(client: client, path: "/AIR/" + item.name),
                    let keys = AirliftBackupStore.plistKeyCount(data) {
