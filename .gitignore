@@ -47,3 +47,8 @@ __pycache__/
 _fw_out/
 *.orig
 _a64work/
+
+# 模块原生 UI 源码是**生成目录**（由 Resources/Scripts/sync_bundled_modules.py
+# 从 module-esc 仓库拷来）—— 不重复入库，只保留说明文件
+EscapeOS/Modules/*
+!EscapeOS/Modules/README.md

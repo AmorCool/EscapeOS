@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.504"
-    CURRENT_PROJECT_VERSION: "800"
+    MARKETING_VERSION: "0.3.505"
+    CURRENT_PROJECT_VERSION: "801"
     # 注：这里**刻意不写** `SWIFT_VERSION` —— 实测顶层 `settings.base` 的它**不被 xcodegen 采纳**，
     # 真正生效的是下面 target 层那一份（当前 `"6.0"` = Swift 6 语言模式）。
     # 另注：**编译器版本 ≠ 语言模式** —— CI 用 Xcode 27 自带的 Swift 6.4 编译器，
@@ -115,6 +115,10 @@ targets:
         link: false
     sources:
       - path: EscapeOS
+      # 模块原生 UI 源码（生成目录，见 EscapeOS/Modules/README.md）——
+      # 由 Resources/Scripts/sync_bundled_modules.py 在 xcodegen **之前**从
+      # module-esc 仓库拷进来。列在这里是为了让 xcodegen 把它编进宿主。
+      - path: EscapeOS/Modules
       # ZSign 引擎（LC 同款签名器，v0.3.101：ad-hoc 重签名可拆卸 dylib 模块）
       - path: ZSign
       - path: Resources

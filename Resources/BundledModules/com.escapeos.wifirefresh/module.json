@@ -11,6 +11,7 @@
   "notes": "执行后 Wi-Fi 会短暂断开并在数秒内自动重连。",
   "category": "系统维护",
   "minHostVersion": "0.3.48",
+  "distribution": "bundled",
   "actions": [
     {
       "id": "refresh",
