@@ -453,25 +453,44 @@ jobs:
           #   2) 确认 `err=0 / outLen=84 / 结构核对通过`；
           #   3) 用日志里新打出的 `sha256 = …` 替换下面的常量，
           #      并**在提交信息里写明重跑过 A-64**。
-          # ★ v0.3.509 更新：runner 的 macOS 镜像升级，$FW_SRC 换成另一份 ATH。
-          #   已按上面的流程重跑 A-64 验证（run 35978782998），结论：
-          #     [a64] 结果：★ 通过 —— err=0, outLen=84, 结构符合已知布局, 两次输出不同（81/84 字节）
-          #   新值（run 35977876055 日志读出）：
-          #     ATH 源文件  sha256 = 43b6655c…7b8e
-          #     x86_64 切片 sha256 = 639a4a4c…906b（记录用，供下次钉住）
-          ATH_SRC_KNOWN_SHA256="43b6655cd39cfba9a89029bc6ecd9512db84259c807369aeab9875a23ddd7b8e"
+          # ★★ v0.3.510：改成**已复核值列表**（原来是单个常量，必然一半失败）
+          #
+          # 实测（2026-09-24）：GitHub 的 runner **机队里同时存在两种 macOS 镜像**，
+          # 同一个仓库、同一天、连续两次构建，$FW_SRC 是**两份不同的 ATH**：
+          #   run 35977876055 → 43b6655c…7b8e
+          #   run 35979053062 → e21ab638…aeb0（就是原来钉的那个「旧值」）
+          # ⇒ 钉单个值 ⇒ 命中另一种镜像的构建必挂，且**看起来像代码问题**，非常误导。
+          #
+          # ⇒ 改成列表：只要当前 ATH 是**任何一个已复核过的**就放行；
+          #   出现**全新**的 ATH 才失败（守卫的本意 —— 挡住「结论静默过期」）。
+          #
+          # ⚠️ 往列表里加值之前**必须**先重跑 A-64 验证并确认：
+          #      err=0 / outLen=84 / 结构核对通过 / 两次输出不同
+          #
+          # 已复核记录：
+          #   · e21ab638…aeb0 —— A-64 原始验证（run#4）
+          #   · 43b6655c…7b8e —— 2026-09-24 重跑 A-64（run 35978782998）⇒ 通过：
+          #       [a64] 结果：★ 通过 —— err=0, outLen=84, 结构符合已知布局, 两次输出不同（81/84 字节）
+          #     对应 x86_64 切片 = 639a4a4c…906b
+          #   · e21ab638…aeb0 的切片 = be9cad41…9a25（run 35979053062 记录）
+          ATH_SRC_KNOWN_SHA256S="
+          e21ab638836879eed0221d32555eae3bc4417b9b8b2f4f359d8536f00375aeb0
+          43b6655cd39cfba9a89029bc6ecd9512db84259c807369aeab9875a23ddd7b8e
+          "
           ATH_SRC_SHA256="$(shasum -a 256 "$FW_SRC" | awk '{print $1}')"
           ATH_X86_SHA256="$(shasum -a 256 "$APP/SAPAssets/AirTrafficHost.x86_64" | awk '{print $1}')"
           echo "ATH 源文件   sha256 = $ATH_SRC_SHA256"
-          echo "  已实测通过 A-64 的那份 = $ATH_SRC_KNOWN_SHA256"
+          echo "  已复核过的那些 =$(echo "$ATH_SRC_KNOWN_SHA256S" | tr -s ' \n' ' ')"
           echo "x86_64 切片  sha256 = ${ATH_X86_SHA256}（记录用，供下次钉住）"
-          if [ "$ATH_SRC_SHA256" != "$ATH_SRC_KNOWN_SHA256" ]; then
-            echo "::error::ATH 源文件与「A-64 已实测通过的那一份」不一致 ⇒ A-64 结论已过期。"
+          if ! echo "$ATH_SRC_KNOWN_SHA256S" | grep -q "$ATH_SRC_SHA256"; then
+            echo "::error::这一份 ATH 源文件**从未复核过** ⇒ A-64 结论对它不成立。"
             echo "::error::请先重跑 A-64 验证（Actions → A-64 Grappa verify → Run workflow），"
-            echo "::error::确认 err=0 / outLen=84 / 结构核对通过后，再用日志里的新 sha256 更新本文件常量。"
-            echo "::error::（runner 的 macOS 很可能刚升级过，$FW_SRC 换了另一份 ATH。）"
+            echo "::error::确认 err=0 / outLen=84 / 结构核对通过后，把本行的 sha256 **加进**"
+            echo "::error::ATH_SRC_KNOWN_SHA256S 列表（runner 机队可能同时有多个 macOS 镜像，"
+            echo "::error::所以是列表而不是单个常量）。"
             exit 1
           fi
+          echo "✅ 这一份 ATH 在已复核列表里，放行。"
           ls -la "$APP/SAPAssets/AirTrafficHost.x86_64"
 
           # dlopen 不看可执行位，但侧载工具/签名器对可执行镜像通常要求 0755，
