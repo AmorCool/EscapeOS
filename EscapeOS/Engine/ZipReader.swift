@@ -221,6 +221,120 @@ final class ZipReader {
         return payload
     }
 
+    /// Stream one entry to `sink` in `chunkSize`-byte pieces instead of
+    /// returning the whole payload as `Data`.
+    ///
+    /// This is what makes restoring a *single* multi-gigabyte file possible:
+    /// `readEntry` would materialise the whole 4 GiB+ entry in memory and get
+    /// the process jetsam-killed, while this method touches at most one chunk
+    /// at a time through the same `ZipByteSource` the reader already uses.
+    ///
+    /// Only plain *stored* entries (compression method 0, no encryption) take
+    /// the streaming path - and that is exactly what a backup archive contains,
+    /// because `ZipWriter` is store-only. Any other entry (deflate, AES,
+    /// ZipCrypto) is decoded whole through `readEntry` and handed to `sink` in
+    /// a single call, so those flavours keep the exact same decoding and
+    /// validation as before instead of getting a second implementation.
+    ///
+    /// Returns the number of uncompressed bytes written to `sink`.
+    ///
+    /// Validation is *not* weakened by streaming: the stored bytes are CRC32
+    /// checked incrementally against the central directory, and the byte count
+    /// is checked against the declared uncompressed size, mirroring `readEntry`.
+    /// Note that an error (a failed CRC, a truncated archive, a `sink` failure
+    /// such as a full disk) can therefore be thrown *after* `sink` has already
+    /// received a prefix of the data. Callers that write to disk must stream
+    /// into a temporary file and only publish it once this method returns.
+    @discardableResult
+    func streamEntry(
+        named name: String,
+        password: String? = nil,
+        chunkSize: Int = 1 << 20,
+        sink: (Data) throws -> Void
+    ) throws -> Int64 {
+        guard let entry = entries[name] else {
+            throw ZipReaderError.entryNotFound(name)
+        }
+        return try streamEntry(entry, password: password, chunkSize: chunkSize, sink: sink)
+    }
+
+    /// Streaming variant of `readEntry(_:password:)`. See `streamEntry(named:)`.
+    @discardableResult
+    func streamEntry(
+        _ entry: ZipMember,
+        password: String? = nil,
+        chunkSize: Int = 1 << 20,
+        sink: (Data) throws -> Void
+    ) throws -> Int64 {
+        guard let range = try storedPayloadRange(for: entry) else {
+            // Compressed or encrypted: decode the whole entry through the
+            // existing, fully validated path, then hand the bytes over in one
+            // piece. Backups never hit this branch, so the multi-gigabyte case
+            // always streams.
+            let payload = try readEntry(entry, password: password)
+            try sink(payload)
+            return Int64(payload.count)
+        }
+
+        let step = max(chunkSize, 1)
+        var crc: uLong = crc32(0, nil, 0)
+        var written = 0
+        var cursor = range.lowerBound
+        while cursor < range.upperBound {
+            let length = min(step, range.upperBound - cursor)
+            let chunk = try source.read(at: cursor, length: length)
+            guard !chunk.isEmpty else {
+                throw ZipReaderError.invalidArchive("Truncated archive")
+            }
+            chunk.withUnsafeBytes { ptr in
+                if let base = ptr.baseAddress {
+                    crc = crc32(crc, base.assumingMemoryBound(to: Bytef.self), uInt(chunk.count))
+                }
+            }
+            try sink(chunk)
+            written += chunk.count
+            cursor += chunk.count
+        }
+
+        // Same checks `readEntry` performs, just accumulated while streaming.
+        if entry.crc32 != 0, UInt32(truncatingIfNeeded: crc) != entry.crc32 {
+            throw ZipReaderError.checksumMismatch(entry.name)
+        }
+        if entry.uncompressedSize > 0, written != entry.uncompressedSize {
+            throw ZipReaderError.invalidArchive("Size mismatch for \(entry.name)")
+        }
+        return Int64(written)
+    }
+
+    /// Byte range of the raw payload for a plain stored (method 0, unencrypted)
+    /// entry, or `nil` when the entry needs decompression or decryption and
+    /// must go through `readEntry` instead.
+    ///
+    /// The local header is re-read rather than trusted from the central
+    /// directory: if it disagrees about the compression method, returning `nil`
+    /// routes the entry through the validating whole-entry read instead of
+    /// silently streaming bytes that were never meant to be stored verbatim.
+    private func storedPayloadRange(for entry: ZipMember) throws -> Range<Int>? {
+        guard entry.compression == 0, !entry.isEncrypted else { return nil }
+        let localOffset = entry.localHeaderOffset
+        guard localOffset >= 0, localOffset + 30 <= source.size else {
+            throw ZipReaderError.invalidArchive("Truncated local header for \(entry.name)")
+        }
+        guard try source.readUInt32(at: localOffset) == 0x04034b50 else {
+            throw ZipReaderError.invalidArchive("Bad local header for \(entry.name)")
+        }
+        let localCompression = Int(try source.readUInt16(at: localOffset + 8))
+        guard localCompression == 0 else { return nil }
+        let nameLen = Int(try source.readUInt16(at: localOffset + 26))
+        let extraLen = Int(try source.readUInt16(at: localOffset + 28))
+        let start = localOffset + 30 + nameLen + extraLen
+        let end = start + entry.compressedSize
+        guard end <= source.size else {
+            throw ZipReaderError.invalidArchive("Truncated payload for \(entry.name)")
+        }
+        return start..<end
+    }
+
     /// Unpack every entry under `destDir`. Rejects `..` paths.
     func extract(into destDir: String, files: FileService, password: String? = nil) throws {
         if needsPassword, password == nil || password?.isEmpty == true {

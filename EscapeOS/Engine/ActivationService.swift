@@ -13,8 +13,15 @@ import UIKit
 /// 我们手上只有 RpPairingFile（RSD / 无线配对格式），**没有** lockdown 配对文件，
 /// 所以仓库里已有的 `mobileactivationd_connect(provider)` 那条路走不通
 /// （它内部要 `provider.get_pairing_file()`，见 `CDProbe.swift` 实测）.
-/// `mobileactivationd_deactivate_rsd(adapter, handshake)` 在 FFI 层用 RSD 通道
-/// 自建 LockdownClient → StartService → adapter.connect → 发 plist，是本项目唯一可用的一条.
+/// `mobileactivationd_deactivate_rsd(adapter, handshake)` 在 FFI 层用 RSD 通道：
+/// RSD 服务表查表拿端口 → `adapter.connect(port)` → `rsd_checkin` → 发二进制 plist，
+/// 是本项目唯一可用的一条.
+///
+/// ▸ 为什么不是 lockdownd 的 `StartService`：v0.3.530 曾用
+/// `LockdownClient::connect_rsd` → `start_service(...)`，真机回
+/// `Socket(BrokenPipe, "channel closed")` —— RSD 通道不支持该 RPC.
+/// v0.3.531 改走服务表路线（与已在生产跑通的 MCInstall 同款范式），
+/// 并在 FFI 内做**分步诊断**（`[反激活诊断][步骤N-…]`），一次真机即可定案.
 ///
 /// ## 安全闸（三条，缺一不可）
 /// 反激活**不可逆**：执行后设备停在激活界面，必须走 Apple 官方激活才能回桌面；
@@ -294,8 +301,9 @@ enum ActivationService {
             guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
                 throw DeactivateError.tunnelFailed("隧道未建立")
             }
-            // 动作型 `_rsd` FFI：只吃 adapter + handshake，内部自建 lockdown 连接、
-            // StartService("com.apple.mobileactivationd")、连端口、发二进制 plist.
+            // 动作型 `_rsd` FFI：只吃 adapter + handshake，内部走 RSD 服务表查表拿端口
+            // （com.apple.mobileactivationd，命中不到则回退 .shim.remote 变体）→
+            // adapter.connect → rsd_checkin → 发二进制 plist { Command = "DeactivateRequest" }.
             if let ffiError = mobileactivationd_deactivate_rsd(adapter, handshake) {
                 throw DeactivateError.failed(message(from: ffiError, fallback: "反激活失败"))
             }

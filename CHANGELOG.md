@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.3.532] - 2026-09-25
+
+> 两件事：**备份「恢复单个 >4 GB 文件」不再 OOM**、**修两处会误导排查的过期注释**。
+
+### 一、备份恢复：单个 >4 GB 文件改成**流式**（不再 OOM）
+
+v0.3.531 解决了**导出** >4 GB，但**恢复**那一侧还留着洞：
+`RestoreService` 仍用 `readEntry` 把**整个条目读进 `Data`** ⇒
+**归档里若有「单个 >4 GB 的文件」，恢复时会把 4 GB 读进内存 ⇒ 被系统杀掉** ✗
+（**总档 >4 GB（多文件）本来就没问题**，只有「单个大文件」这一种情况会炸。）
+
+本版改成**分块流式**：
+
+- **`ZipReader`** 新增 `streamEntry(...)` —— 复用已有 `ZipByteSource` 按需读，**1 MiB 分块**，
+  **边读边累计 CRC32 与字节数**，流结束再校验 CRC 与 `uncompressedSize`（**与 `readEntry` 同强度**）。
+  **只对「store + 未加密」流式**（备份正是 store-only）；deflate / AES / ZipCrypto **原样回落 `readEntry`**，
+  **不新造第二套解码器**。
+- **`RestoreService`** 改成 `writeEntryStreaming(...)`：
+  在**目标同目录**建 `.escapeos-restore-<uuid>.tmp` → 分块写 temp 并**增量 SHA256**
+  → 流结束才跑两道 guard → 通过后**原子 `rename(2)`** 替换 → 任一失败路径 `defer` 删 temp。
+
+**★ 恢复的校验一点没削弱**（逐条保留）：`manifest.json` + `backup.json` 存在性、bundleId 匹配、
+`manifestSHA256 == SHA256(manifest.json)`、文件数/总量护栏、路径根 ∈ `{Documents, Library, tmp}` 且无 `..`/绝对路径；
+**每个条目的 `sha256` 与 `size` 仍逐个校验**（只是从「读完整块再算」变成「边读边算」）。
+**新增保证**：校验失败时**目标位置的旧文件完全不动、也不会留下半成品**。
+
+> **待真机验证**（这是本次唯一没被静态覆盖到的路径）：
+> ① **目标文件已存在**时恢复（走 `rename` **覆盖**）② 目标文件不存在时恢复（首次创建）
+> ③ **故意改坏 manifest 里某个 `sha256`** ⇒ 应报校验失败，且**原文件内容不变、目录下无 `.escapeos-restore-*.tmp` 残留**
+
+### 二、修两处过期注释（不影响编译）
+
+- `Engine/ActivationService.swift` 的注释还写着 v0.3.530 的旧流程（「自建 LockdownClient → StartService」），
+  与 v0.3.531 的「RSD 服务表查表 → `adapter.connect` → `rsd_checkin`」矛盾 ⇒ 改成新流程
+- `rust/idevice-ffi/src/mobileactivationd.rs` 里两处「与 mcinstall 同款」措辞不精确
+  （mcinstall 用**裸流**手写 XML，这里用上游 crate 的 `Idevice::rsd_checkin`，**机制不同**）⇒ 点明「同款范式、函数不同」
+
+> **三层安全闸一个字都没动**（`git diff` 逐行确认改动全部落在注释行）。
+
+### 静态自检
+改动 `.swift` 配平通过 / `LINT PASS（234 文件）` / 两个 `idevice.h` sha256 相同 /
+调用点逐一核对 / **本机不能编译，编译验证靠 CI**.
+
 ## [0.3.531] - 2026-09-25
 
 > 本版四件事：**备份放开 512MiB / 解决 4GB 上限**、**生产日期改离线**、

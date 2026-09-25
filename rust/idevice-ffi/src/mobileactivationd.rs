@@ -182,7 +182,10 @@ pub unsafe extern "C" fn mobileactivationd_deactivate(
 /// 设备对这条 RPC 直接关连接 ⇒ `jktcp` 用户态 TCP 栈任务退出 ⇒ 下一次 I/O 报
 /// `BrokenPipe("channel closed")`.
 ///
-/// ## 协议（= 项目已在生产跑通的 `mcinstall_set_wifi_power_rsd` 同款范式）
+/// ## 协议（= 项目已在生产跑通的 `mcinstall_set_wifi_power_rsd` 同款**范式**）
+/// 即：服务表查表 → `adapter.connect` → RSDCheckin.
+/// ⚠️ 但**不是同一个函数** —— mcinstall 在**裸流**上手写 XML（见 mcinstall.rs:122-151），
+/// 这里用上游 crate 的 **`Idevice::rsd_checkin()`**；排查时**不要照抄 mcinstall 的代码**.
 /// 1. RSD 服务表**本地查表**拿端口（先标准名，再 `.shim.remote` 变体）—— 不发 StartService.
 /// 2. `adapter.connect(port)` —— 在隧道内新开一条流连到该端口（非裸 TCP）.
 /// 3. `Idevice::rsd_checkin()` —— RSD 语义下真正的「启动服务」；
@@ -292,7 +295,8 @@ pub unsafe extern "C" fn mobileactivationd_deactivate_rsd(
             "mobileactivationd_deactivate_rsd: RSD 服务表命中 {svc_name}, port={port}"
         );
 
-        // 2) 隧道内新开一条流连到该端口（与 mcinstall.rs:262 同款）.
+        // 2) 隧道内新开一条流连到该端口（与 mcinstall 的 RSD 服务连接同款：
+        //    服务表查表拿端口 -> adapter.connect；先例 mcinstall.rs:257-262）.
         let stream: Box<dyn ReadWrite> = match adapter_ref.connect(port).await {
             Ok(s) => Box::new(s),
             Err(e) => {
@@ -305,7 +309,11 @@ pub unsafe extern "C" fn mobileactivationd_deactivate_rsd(
         let mut dev = Idevice::new(stream, MOBILEACTIVATIOND_SERVICE);
 
         // 3) RSDCheckin —— RSD 语义下真正的「启动服务」，不发设备会直接关连接
-        //    （v0.3.465 已定案）. 与 mcinstall.rs:263 同款.
+        //    （v0.3.465 已定案）. 与 mcinstall 的 RSDCheckin **握手语义**相同
+        //    （都发 XML plist {Label, ProtocolVersion:2, Request:RSDCheckin} 并读两条应答），
+        //    但**机制不同**：mcinstall 在**裸流**上手写 XML（`rsd_checkin(&mut stream)`，
+        //    Label 固定 `EscapeSpaceMCInstall`，见 mcinstall.rs:122-151）；
+        //    这里走上游 crate 的 **`Idevice::rsd_checkin()`**（Label 用 Idevice 的服务名）.
         if let Err(e) = dev.rsd_checkin().await {
             return Err(IdeviceError::UnexpectedResponse(format!(
                 "[反激活诊断][步骤3-RSDCheckin] rsd_checkin 失败（服务 {svc_name}）: {e:?}"

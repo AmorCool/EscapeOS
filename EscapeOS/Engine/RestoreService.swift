@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Darwin
 
 /// Progress callback for restore operations.
 typealias RestoreProgress = (_ filesRestored: Int, _ totalFiles: Int, _ currentFile: String) -> Void
@@ -165,24 +166,22 @@ final class RestoreService {
                     throw BackupError.invalidArchive("Archive is missing \(entry.path)")
                 }
 
-                let data = try reader.readEntry(named: entry.path)
-                let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                guard hash == entry.sha256 else {
-                    throw BackupError.invalidArchive("Checksum mismatch for \(entry.path)")
-                }
-                guard data.count == entry.size else {
-                    throw BackupError.invalidArchive("Size mismatch for \(entry.path)")
-                }
-
                 let absolute = (app.containerPath as NSString).appendingPathComponent(entry.path)
                 let parent = (absolute as NSString).deletingLastPathComponent
                 if !files.exists(at: parent) {
                     try files.createDirectory(at: parent)
                 }
 
-                try files.writeFile(data: data, to: absolute)
+                // Stream the entry to disk in fixed-size chunks. This is the
+                // v0.3.532 fix for "restoring a single >4 GiB file runs out of
+                // memory": the old code read the whole entry into `Data` before
+                // writing it, so one big file was enough to get the process
+                // jetsam-killed. See `writeEntryStreaming` for how the manifest
+                // checksum stays just as strict while the bytes never sit in
+                // memory all at once.
+                let written = try writeEntryStreaming(from: reader, entry: entry, to: absolute)
                 filesRestored += 1
-                bytesWritten += Int64(data.count)
+                bytesWritten += written
                 progress?(filesRestored, manifest.count, entry.path)
             }
         }
@@ -193,6 +192,121 @@ final class RestoreService {
             targetApp: app,
             backupMetadata: metadata
         )
+    }
+
+    /// Stream one manifest entry into `destination` with constant memory, and
+    /// publish it only once the entry has been fully verified.
+    ///
+    /// Ordering (this is the part that must not be reordered):
+    /// 1. The entry is streamed straight from the archive into a sibling temp
+    ///    file while SHA-256 is accumulated incrementally and the byte count is
+    ///    tallied. `destination` is not touched yet, so a corrupt, truncated or
+    ///    mismatching archive can never destroy the file already sitting there.
+    /// 2. When the stream ends, the byte count must equal `entry.size` and the
+    ///    accumulated digest must equal `entry.sha256`. These are the same two
+    ///    manifest checks the old read-whole-entry code ran - only now they are
+    ///    computed in the single streaming pass instead of after buffering the
+    ///    entire file. The archive's own CRC32 is additionally verified inside
+    ///    `ZipReader.streamEntry`.
+    /// 3. Only after both checks pass is the verified temp file atomically
+    ///    swapped onto `destination`.
+    ///
+    /// Failure handling: the temp file is deleted on every failing path
+    /// (checksum/size mismatch, disk full, cancellation, read error), so a
+    /// failed restore never leaves a half-written file behind, and the previous
+    /// contents of `destination` survive a verification failure untouched.
+    ///
+    /// Memory stays at one `ZipReader.streamEntry` chunk (1 MiB) no matter how
+    /// large the entry is.
+    private func writeEntryStreaming(
+        from reader: ZipReader,
+        entry: BackupManifestEntry,
+        to destination: String
+    ) throws -> Int64 {
+        let fm = FileManager.default
+        let directory = (destination as NSString).deletingLastPathComponent
+        // The temp file lives in the destination's own directory so the final
+        // step is a rename within one filesystem (atomic) rather than a
+        // cross-volume copy. The dotted prefix keeps it out of the way if a
+        // crash ever leaves one behind.
+        let tempPath = (directory as NSString)
+            .appendingPathComponent(".escapeos-restore-\(UUID().uuidString).tmp")
+
+        guard fm.createFile(atPath: tempPath, contents: nil) else {
+            throw BackupError.writeFailed("Could not create a temporary file next to \(destination)")
+        }
+        var published = false
+        defer {
+            // Also runs on success, where the temp file has already been moved
+            // away and this removal is a harmless no-op.
+            if !published { try? fm.removeItem(atPath: tempPath) }
+        }
+
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forWritingTo: URL(fileURLWithPath: tempPath))
+        } catch {
+            throw BackupError.writeFailed("Could not open temporary file: \(error.localizedDescription)")
+        }
+
+        var hasher = SHA256()
+        var written: Int64 = 0
+        do {
+            try reader.streamEntry(named: entry.path) { chunk in
+                try handle.write(contentsOf: chunk)
+                hasher.update(data: chunk)
+                written += Int64(chunk.count)
+            }
+            try handle.close()
+        } catch {
+            // Disk full, cancellation, a CRC failure inside the reader, or any
+            // other read error. Close first (idempotent), then let `defer`
+            // remove the partial temp file before the error propagates.
+            try? handle.close()
+            throw error
+        }
+
+        // Same two guards, in the same order, as the previous read-whole-entry
+        // implementation: checksum first, then size.
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        guard digest == entry.sha256 else {
+            throw BackupError.invalidArchive("Checksum mismatch for \(entry.path)")
+        }
+        guard written == Int64(entry.size) else {
+            throw BackupError.invalidArchive("Size mismatch for \(entry.path)")
+        }
+
+        try publish(tempPath: tempPath, to: destination)
+        published = true
+        return written
+    }
+
+    /// Move a fully verified temp file onto `destination`, replacing it.
+    ///
+    /// Only `rename(2)` is used, and deliberately so:
+    /// - it is atomic on APFS, so a reader never observes a half-written file;
+    /// - it replaces an existing destination in the same single step, so there
+    ///   is no window in which the file is missing;
+    /// - it is exactly the primitive `Data.write(options: .atomic)` uses, so the
+    ///   end result matches the previous implementation (the destination inode
+    ///   is swapped, it is not modified in place).
+    /// The temp file is always in the destination's own directory, so both
+    /// paths are guaranteed to live on the same filesystem.
+    private func publish(tempPath: String, to destination: String) throws {
+        // `errno` is captured inside the closure, right after `rename`, because
+        // anything else that runs in between could overwrite it.
+        var failure: Int32 = 0
+        let result = tempPath.withCString { from in
+            destination.withCString { to in
+                let rc = rename(from, to)
+                if rc != 0 { failure = errno }
+                return rc
+            }
+        }
+        guard result == 0 else {
+            let reason = String(cString: strerror(failure))
+            throw BackupError.writeFailed("Could not replace \(destination): \(reason)")
+        }
     }
 
     private func validateRelativePath(_ path: String) throws {
