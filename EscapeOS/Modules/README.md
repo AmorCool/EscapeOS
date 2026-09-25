@@ -13,7 +13,7 @@
 
 ## ⚠️ 本地开发
 
-克隆后**必须**先跑一次（否则这里为空、`registerAirliftPocModuleUI` 找不到符号、编译失败）：
+克隆后**必须**先跑一次（否则这里为空、内置模块的原生界面符号找不到、编译失败）：
 
 ```bash
 git clone --depth 1 https://github.com/AmorCool/module-esc.git _module-esc

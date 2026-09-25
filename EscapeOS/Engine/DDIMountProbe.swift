@@ -46,7 +46,7 @@ import Foundation
 /// Swift 侧只传两个 `OpaquePointer`、拿回 bplist 字节，**零 `plist_t` / 零 opaque 指针出参**。
 ///
 /// ## 安全约束（必须遵守）
-/// 依据：`_tmp_svc_结论.md` §7.1 / `AirliftExploit.swift:2590-2603` 的真机事故 ——
+/// 依据：v0.3.419/420 的真机事故 ——
 /// v0.3.419/420 在自检/detached 路径对 RSD 服务做 `adapter_connect` + `rsd_checkin`，
 /// 导致设备端 RPPairing `attemptPairVerify` **此后全部零响应**（连续 63 次超时），
 /// **所有走 RSD 隧道的功能一起失效**。

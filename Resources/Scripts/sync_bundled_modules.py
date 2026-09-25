@@ -10,8 +10,8 @@
 所以「哪些内置」必须由**模块自己声明**，不能靠 CI 里硬编码。
 
 v0.3.481 真机踩到的坑：旧实现是 `cp -R _module-esc/modules/*` + 硬编码
-`rm -rf .../com.escapeos.alist`，于是新加的 `airlift-poc` 被自动打包成了内置模块
-（用户明确要求它是独立模块）。而且每加一个不内置的模块都要回来改一次 workflow ——
+`rm -rf .../com.escapeos.alist`，于是新加的模块被自动打包成了内置模块
+（而那个模块用户明确要求它是独立的）。而且每加一个不内置的模块都要回来改一次 workflow ——
 典型的「为模块适配构建脚本」。
 
 ## 规则
@@ -45,8 +45,8 @@ v0.3.481 真机踩到的坑：旧实现是 `cp -R _module-esc/modules/*` + 硬�
     python3 Resources/Scripts/sync_bundled_modules.py <module-esc 克隆目录> [目标目录]
 
 目标目录默认 `Resources/BundledModules`（相对仓库根，脚本会自己找根）。
-⚠️ **本地开发也要跑一次**，否则 `EscapeOS/Modules/` 是空的、`registerAirliftPocModuleUI`
-找不到符号、编译失败.
+⚠️ **本地开发也要跑一次**，否则 `EscapeOS/Modules/` 是空的、
+内置模块的原生界面符号找不到、编译失败.
 
 退出码：0 成功；1 参数/IO 错误。
 """

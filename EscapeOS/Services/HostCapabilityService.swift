@@ -9,8 +9,8 @@
 //  后果是任何需要「沙盒外读写 / 改系统设置 / 枚举进程」的模块，都得自己把整套
 //  漏洞利用重写一遍 —— 既是重复劳动，也是模块之间耦合的根源。
 //
-//  有了这层接口，模块只说「我要 fs.read」，由宿主决定底层走 bad_query 还是 airlift；
-//  将来漏洞链被替换，模块**零改动**. 加新能力也只需要改这一个文件.
+//  有了这层接口，模块只说「我要 fs.read」，由宿主决定底层怎么实现；
+//  将来底层换了，模块**零改动**. 加新能力也只需要改这一个文件.
 //
 //  ## 两条调用路径（都汇到本文件的 `call`）
 //  · **外部 dylib 模块**（C/Go）：宿主加载时把 `EscapeHostAPI` 函数表指针交给模块的
@@ -22,8 +22,8 @@
 //    `HostCapabilityService.call(...)`，根本不需要 C ABI.
 //
 //  ## 调用线程
-//  `call` 是**同步**的，而且沙盒外路径会走 airlift（一次 10~20 秒，内部
-//  `protocolQueue.sync`）. **调用方必须在后台线程调用**，主线程调用会卡住界面.
+//  `call` 是**同步**的，有些能力会真的连设备（一次可能十几秒）.
+//  **调用方必须在后台线程调用**，主线程调用会卡住界面.
 //
 
 import Foundation
@@ -104,7 +104,7 @@ func escape_host_free(_ p: UnsafeMutablePointer<CChar>?) {
 
 /// 宿主能力服务（纯静态，无实例）.
 ///
-/// **不做 MainActor 隔离**：模块在**非主线程**调用它（airlift 一次十几秒，主线程
+/// **不做 MainActor 隔离**：模块在**非主线程**调用它（有些能力一次要十几秒，主线程
 /// 调用会卡界面）. 内部若需要主线程资源，用 `runOnMain` 显式跳一次.
 enum HostCapabilityService {
 
@@ -124,18 +124,6 @@ enum HostCapabilityService {
         "fs.delete",
         "fs.exists",
         "fs.list",
-        "sys.supervised.get",
-        "sys.supervised.set",
-        "airlift.air",
-        "airlift.pull",
-        "airlift.overwrite",
-        "airlift.delete",
-        "airlift.writeMany",
-        "airlift.changes",
-        "airlift.changes.clear",
-        "airlift.backups",
-        "airlift.restore",
-        "plist.tweak",
         "apps.lookup",
         "afc.list",
         "afc.stat",
@@ -146,7 +134,6 @@ enum HostCapabilityService {
         "proc.list",
         "proc.signal",
         "notify.post",
-        "exploit.status",
     ]
 
     // MARK: 当前模块上下文（供 @convention(c) 闭包读取）
@@ -235,12 +222,6 @@ enum HostCapabilityService {
         // 为什么在宿主侧统一记、而不是让每个模块自己记.
         let started = Date()
         let result = dispatch(capability: capability, jsonArgs: jsonArgs)
-        // ▸ v0.3.512：`airlift.*` 收尾 —— 清掉本次在 Media 根留下的临时目录.
-        // 用户反馈「一堆 airlift-canary-xxx 堆在 afc 目录，不要乱拉屎」.
-        // 放在这里（唯一入口）而不是每个能力里，是为了「一处生效、不会漏」.
-        if capability.hasPrefix("airlift.") {
-            _ = cleanupAirliftTemp()
-        }
         appendCallLog(capability: capability,
                       jsonArgs: jsonArgs,
                       result: result.1,
@@ -263,18 +244,6 @@ enum HostCapabilityService {
         case "fs.delete":             return fsDelete(args)
         case "fs.exists":             return fsExists(args)
         case "fs.list":               return fsList(args)
-        case "sys.supervised.get":    return supervisedGet()
-        case "sys.supervised.set":    return supervisedSet(args)
-        case "airlift.air":           return airliftAir(args)
-        case "airlift.pull":          return airliftPull(args)
-        case "airlift.overwrite":     return airliftOverwrite(args)
-        case "airlift.delete":        return airliftDelete(args)
-        case "airlift.writeMany":     return airliftWriteMany(args)
-        case "airlift.changes":       return airliftChanges(args)
-        case "airlift.changes.clear": return airliftChangesClear(args)
-        case "airlift.backups":      return airliftBackups(args)
-        case "airlift.restore":      return airliftRestore(args)
-        case "plist.tweak":          return plistTweak(args)
         case "apps.lookup":           return appsLookup(args)
         case "afc.list":              return afcList(args)
         case "afc.stat":              return afcStat(args)
@@ -285,7 +254,6 @@ enum HostCapabilityService {
         case "proc.list":             return procList()
         case "proc.signal":           return procSignal(args)
         case "notify.post":           return notifyPost(args)
-        case "exploit.status":        return exploitStatus()
         default:
             return fail("未知能力「\(capability)」",
                         extra: ["supported": capabilityList])
@@ -305,77 +273,12 @@ enum HostCapabilityService {
         ok(["abi": Int(abiVersion), "list": capabilityList])
     }
 
-    /// 漏洞利用可用性.
-    ///
-    /// ## 为什么要报**两个**字段（不是一个布尔）
-    /// 「用户有没有在『更多 → 漏洞利用』里勾上 airlift」与「airlift 的 poc 接口
-    /// 能不能用」是**两件事**：
-    /// · `pocReadFile/pocWriteFile/pocDeleteFile` **不检查** `ExploitSettings` ——
-    ///   它们直接跑协议，所以即使设置里没勾也能用；
-    /// · 设置开关影响的是 `ExploitRegistry` 那条通用路由（空间回收 / 文件浏览等
-    ///   走 `SandboxEscape.consume` 的功能），以及**后台自检**是否跑
-    ///   （`triggerProtocolProbeOnce` 里有 `guard ... contains(.airlift)`）。
-    ///
-    /// 只报一个布尔必然误导：报设置状态 ⇒ 用户以为模块坏了；报「能用」⇒
-    /// 用户以为设置已开、自检在跑。所以两个都报，并附一句说明.
-    private static func exploitStatus() -> (Int32, String) {
-        // ExploitSettings 是 @MainActor，但它提供了 nonisolated 的快照读取
-        // （就是为了后台线程用的）—— 这里正合用，不必跳主线程.
-        let enabled = ExploitSettings.snapshot()
-        let airliftOn = enabled.contains(.airlift)
-        return ok([
-            // 设置开关状态
-            "airliftEnabled": airliftOn,
-            "badQueryEnabled": enabled.contains(.badQueryList),
-            "enabled": enabled.map(\.rawValue).sorted(),
-            // 代码路径可用性：poc 接口不依赖上面的开关 ⇒ 恒为 true
-            "airliftRunnable": true,
-            "note": airliftOn
-                ? "airlift 已在设置里启用。"
-                : "airlift 未在「更多 → 漏洞利用」里勾选。**不影响本模块的读/写/删**"
-                  + "（poc 接口不检查该开关）；但后台自检不会跑。"
-                  + "想要自检请去「更多 → 漏洞利用」勾上 airlift。",
-        ])
-    }
-
     // MARK: - fs.*
 
     /// 路径是否在 App 沙盒内（沙盒内直接用 FileManager，不需要漏洞利用）
     private static func isInSandbox(_ path: String) -> Bool {
         let home = NSHomeDirectory()
         return path == home || path.hasPrefix(home + "/")
-    }
-
-    /// airlift 的调用必须串行化，两个原因：
-    /// 1. 设备侧 AT 会话是**单例资源**（`pocStageAndAttack` 内部借 `protocolQueue.sync` 串行）；
-    /// 2. `pocWriteFile` 的中转文件固定是 `Documents/airlift-poc-payload.bin`，
-    ///    并发写会互相覆盖.
-    private static let airliftLock = NSLock()
-
-    /// 跑一次 airlift 操作，**失败自动整趟重试**（抄 AirCard 的 retries=3）.
-    ///
-    /// ## 为什么在**这一层**重试
-    /// airlift 失败的点很分散：stage 没上、AT 会话没建起来、设备端 move 没发生……
-    /// 逐个子步骤判断「错在哪」很脆；**整趟重来**只要看「最终成没成」——
-    /// AirCard 的 write_file / write_files_batch 就是这么做的：
-    /// for attempt in 1...3 { 全流程; if ok: return; sleep(0.3 * attempt) }
-    ///
-    /// ## 代价可接受（关键）
-    /// **只在失败时**才重试 ⇒ 正常路径仍是一趟（10~20 秒），**不会变慢**.
-    ///
-    /// ## 为什么参数类型写成 PocOutcome 而不是泛型
-    /// 12 个调用点**全部**返回 PocOutcome（read/write/delete/writeMany），
-    /// 泛型没法判断「成没成」，而 PocOutcome.ok 正好是判据.
-    private static func withAirlift(_ attempts: Int = 3,
-                                    _ body: () -> AirliftExploit.PocOutcome) -> AirliftExploit.PocOutcome {
-        airliftLock.lock()
-        defer { airliftLock.unlock() }
-        var outcome = body()
-        for attempt in 2...max(1, attempts) where !outcome.ok {
-            Thread.sleep(forTimeInterval: 0.4 * Double(attempt - 1))   // 退避
-            outcome = body()
-        }
-        return outcome
     }
 
     /// 按 `encoding` 把字节编码成 JSON 可放的字符串（默认 base64）
@@ -410,53 +313,11 @@ enum HostCapabilityService {
             return ok(["data": text, "size": data.count, "via": "direct"])
         }
 
-        // 沙盒外走 airlift。airlift 的「读」是**移动不是拷贝** —— 所以默认把原字节
-        // **立刻写回原位**（`airliftReadAndRestore`），默认行为是**非破坏性**的，
-        // 调用方可以像用普通读一样用它。
-        //
-        // 只有显式传 `allowMove: true` 才跳过写回（= 故意把文件搬进 Media），
-        // 那种用法会破坏性地移走文件，所以返回值里带 warning 说清楚。
-        let moveOnly = (args["allowMove"] as? Bool) == true
-        let data: Data
-        var details: [String]
-        if moveOnly {
-            let outcome = withAirlift { AirliftExploit.pocReadFile(path: path) }
-            guard outcome.ok, let d = outcome.data else {
-                return fail(outcome.summary, extra: ["via": "airlift", "details": outcome.details])
-            }
-            data = d
-            details = outcome.details
-        } else {
-            let result = airliftReadAndRestore(path: path)
-            guard let d = result.data else {
-                return fail("airlift 读失败：\(result.summary)",
-                            extra: ["via": "airlift", "details": result.details])
-            }
-            data = d
-            details = result.details
-            guard result.restored else {
-                return fail("读到内容了，但**没能把文件写回原位置**（它现在在 Media 里）",
-                            extra: ["via": "airlift", "details": result.details])
-            }
-        }
-        guard let text = encode(data, encoding: encoding) else {
-            return fail("读到了 \(data.count) 字节但按 \(encoding) 编码失败（可能是二进制）",
-                        extra: ["via": "airlift", "size": data.count])
-        }
-        var extra: [String: Any] = [
-            "data": text,
-            "size": data.count,
-            "via": "airlift",
-            "details": details,
-        ]
-        if moveOnly {
-            extra["warning"] = "allowMove=true：airlift 的读是移动不是拷贝，"
-                + "原位置的文件已被搬走，字节备份在模块数据目录的 "
-                + "LoginLogs/airlift_read_*.bin；要保留请紧接着 fs.write 写回。"
-        } else {
-            extra["restored"] = true
-        }
-        return ok(extra)
+        // 沙盒外**没有**可用原语了：宿主唯一能碰沙盒外的机制是 airlift 漏洞利用，
+        // 而它已整体移除（用户 2026-09-25 决定不再使用）。如实报错，不假装知道.
+        return fail(
+            "fs.read 只支持 App 沙盒内路径：沙盒外的读取原语（airlift）已从宿主移除。",
+            extra: ["via": "none"])
     }
 
     private static func fsWrite(_ args: [String: Any]) -> (Int32, String) {
@@ -500,19 +361,10 @@ enum HostCapabilityService {
             }
         }
 
-        let outcome = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
-        guard outcome.ok else {
-            return fail(outcome.summary, extra: ["via": "airlift", "details": outcome.details])
-        }
-        var extra: [String: Any] = [
-            "size": data.count,
-            "via": "airlift",
-            "details": outcome.details,
-            "warning": "本调用**不校验落点**（真实目标在 Media 之外，AFC 读不回来）。"
-                + "要确认写成功，请再调一次 fs.read 读回比对。",
-        ]
-        if let backupPath { extra["backup"] = backupPath }
-        return ok(extra)
+        // 沙盒外**没有**可用原语了（见 `fsRead`）.
+        return fail(
+            "fs.write 只支持 App 沙盒内路径：沙盒外的写入原语（airlift）已从宿主移除。",
+            extra: ["via": "none"])
     }
 
     private static func fsDelete(_ args: [String: Any]) -> (Int32, String) {
@@ -527,12 +379,10 @@ enum HostCapabilityService {
                 return fail("删除失败（沙盒内）：\(error.localizedDescription)", extra: ["via": "direct"])
             }
         }
-        let outcome = withAirlift { AirliftExploit.pocDeleteFile(path: path) }
-        guard outcome.ok else {
-            return fail(outcome.summary, extra: ["via": "airlift", "details": outcome.details])
-        }
-        return ok(["via": "airlift", "details": outcome.details,
-                   "note": "备份留在模块数据目录的 LoginLogs/ 下"])
+        // 沙盒外**没有**可用原语了（见 `fsRead`）.
+        return fail(
+            "fs.delete 只支持 App 沙盒内路径：沙盒外的删除原语（airlift）已从宿主移除。",
+            extra: ["via": "none"])
     }
 
     private static func fsExists(_ args: [String: Any]) -> (Int32, String) {
@@ -542,12 +392,9 @@ enum HostCapabilityService {
         if isInSandbox(path) {
             return ok(["exists": FileManager.default.fileExists(atPath: path), "via": "direct"])
         }
-        // ⚠️ 刻意**不**用 airlift 探存在：它的读是「移动」，拿它做存在性检查
-        // 会把文件搬走 —— 一个查询接口造成破坏性副作用是不能接受的.
-        // 宿主也没有别的沙盒外「只 stat 不搬动」的原语，所以如实报错，不假装知道.
+        // 宿主没有沙盒外「只 stat 不搬动」的原语（airlift 已移除），如实报错.
         return fail(
-            "沙盒外无法只做存在性检查：airlift 的读是移动不是拷贝，"
-            + "用它探存在会把文件搬走，故本能力不提供沙盒外路径。",
+            "fs.exists 只支持 App 沙盒内路径：沙盒外的查询原语已从宿主移除。",
             extra: ["via": "none"])
     }
 
@@ -556,11 +403,9 @@ enum HostCapabilityService {
             return fail("fs.list 缺少 path")
         }
         guard isInSandbox(path) else {
-            // 如实说清限制：airlift 只能操作**单个文件**，无法枚举目录.
-            // 宿主也没有别的沙盒外目录枚举原语（`escape.withHandle` + countTree 那条
-            // 路要非负沙盒句柄，airlift 给不出来）.
+            // 宿主没有沙盒外目录枚举原语，如实报错.
             return fail(
-                "fs.list 目前只支持 App 沙盒内路径：airlift 只能操作单个文件、无法枚举目录。",
+                "fs.list 只支持 App 沙盒内路径：沙盒外的枚举原语已从宿主移除。",
                 extra: ["via": "none"])
         }
         let url = URL(fileURLWithPath: path)
@@ -585,1121 +430,17 @@ enum HostCapabilityService {
         return ok(["entries": entries, "count": entries.count, "via": "direct"])
     }
 
-    // MARK: - AIR 工作目录（沙盒外文件的中转站）
-
-    /// AIR 工作目录 —— 沙盒外文件的**中转站**。
-    ///
-    /// ## 为什么是这个路径（不是随便挑的）
-    /// `/var/mobile/Media` 正是 `com.apple.afc` 的**根**（`AFCService` 里有实测结论：
-    /// 「`afc_client_connect_rsd` 根目录 = /var/mobile/media」）。放在它下面的目录，
-    /// 宿主可以用**一条 AFC 连接直接读/写/列/建/删**，不需要跑 airlift。
-    /// 而沙盒外的目标文件只能靠 airlift 搬（一趟 10~20 秒）——
-    /// 把读出来的字节落在 AIR，之后的查看 / 编辑 / 再次覆盖就全是廉价的 AFC 操作。
-    ///
-    /// ## 语义（对齐产品要求）
-    /// · **读**：目标文件 →（airlift 读 + 原字节写回原位）→ 副本落到 `AIR/<扁平化文件名>`
-    /// · **写 / 覆盖**：`AIR/<文件>` 的字节 → airlift 写回目标路径
-    ///
-    /// ## 与 lara 的关系（重要，别误解）
-    /// 「自定义覆盖」这个**产品形态**参考了 `github.com/rooootdev/lara`
-    /// （它的 Custom Overwrite = 「填目标路径 + 选源文件 → 覆盖」）。
-    /// 但**漏洞利用完全不同**：lara 走 DarkSword 内核链、在内核层**原地覆盖字节**
-    /// （所以它有「目标文件必须 ≥ 源文件」的硬限制）；我们走 airlift 的越界写，
-    /// **不要求目标文件更大**、目标甚至可以不存在，也完全不碰内核。
-    static let airDir = "/var/mobile/Media/AIR"
-
-    /// AIR 在 AFC 里的路径（AFC 根 = /var/mobile/Media，所以是相对路径）
-    private static let airAfcPath = "AIR"
-
-    /// 把完整路径**扁平化**成一个可读文件名（AIR 里副本的命名规则）。
-    ///
-    /// 例：`/private/var/mobile/Library/Logs/x.bin`
-    ///  → `private_var_mobile_Library_Logs_x.bin`
-    ///
-    /// 为什么不保留目录层级：AIR 是给人看的**中转站**，保留层级会让「里面有什么」
-    /// 变成要一层层点开；扁平名里带着原路径，一眼能看出是从哪儿来的。
-    static func airFlattenName(for path: String) -> String {
-        let trimmed = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        let flat = trimmed.replacingOccurrences(of: "/", with: "_")
-        return flat.isEmpty ? "unnamed" : flat
-    }
-
-    /// 确保 AIR 目录存在（幂等）。已存在不算失败。
-    private static func airEnsureDirectory() throws {
-        do {
-            try AFCService.shared.makeDirectory(airAfcPath)
-        } catch {
-            // 已存在时 afc_make_directory 会报错 —— 列一下确认目录真在，在就算成功
-            if (try? AFCService.shared.listDirectory(airAfcPath)) == nil {
-                throw error
-            }
-        }
-    }
-
-    private static func airWrite(name: String, data: Data) throws {
-        try airEnsureDirectory()
-        try AFCService.shared.writeFile(data, to: "\(airAfcPath)/\(name)")
-    }
-
-    private static func airRead(name: String) throws -> Data {
-        try AFCService.shared.readFile("\(airAfcPath)/\(name)")
-    }
-
-    private static func airList() throws -> [AFCService.Entry] {
-        // 目录不存在时 AFC 会报错 —— 当成「还没有中转文件」，而不是失败
-        (try? AFCService.shared.listDirectory(airAfcPath)) ?? []
-    }
-
-    /// `airlift.air` —— AIR 目录本身的操作（列 / 读 / 写 / 删 / 确认存在）。
-    ///
-    /// 全是**廉价 AFC**（不用跑 airlift），所以 UI 可以随便调。
-    private static func airliftAir(_ args: [String: Any]) -> (Int32, String) {
-        let op = (args["op"] as? String) ?? "list"
-        let name = args["name"] as? String
-        switch op {
-        case "list":
-            do {
-                let entries = try airList()
-                let list: [[String: Any]] = entries.map { entry in
-                    [
-                        "name": entry.name,
-                        "size": Int(entry.size),
-                        "isDir": entry.isDirectory,
-                    ]
-                }
-                return ok(["dir": airDir, "entries": list, "count": list.count])
-            } catch {
-                return fail("列 AIR 目录失败：\(error.localizedDescription)", extra: ["dir": airDir])
-            }
-        case "mkdir":
-            do {
-                try airEnsureDirectory()
-                return ok(["dir": airDir])
-            } catch {
-                return fail("建 AIR 目录失败：\(error.localizedDescription)", extra: ["dir": airDir])
-            }
-        case "read":
-            guard let name, !name.isEmpty else { return fail("airlift.air 的 op=read 需要 name") }
-            do {
-                let data = try airRead(name: name)
-                guard let text = encode(data, encoding: (args["encoding"] as? String) ?? "base64") else {
-                    return fail("读到了 \(data.count) 字节但编码失败")
-                }
-                return ok(["name": name, "data": text, "size": data.count])
-            } catch {
-                return fail("读 AIR/\(name) 失败：\(error.localizedDescription)")
-            }
-        case "write":
-            guard let name, !name.isEmpty else { return fail("airlift.air 的 op=write 需要 name") }
-            guard let text = args["data"] as? String,
-                  let data = decode(text, encoding: (args["encoding"] as? String) ?? "base64") else {
-                return fail("airlift.air 的 op=write 需要合法的 data（base64 或 utf8）")
-            }
-            do {
-                try airWrite(name: name, data: data)
-                return ok(["name": name, "size": data.count, "path": "\(airDir)/\(name)"])
-            } catch {
-                return fail("写 AIR/\(name) 失败：\(error.localizedDescription)")
-            }
-        case "delete":
-            guard let name, !name.isEmpty else { return fail("airlift.air 的 op=delete 需要 name") }
-            do {
-                try AFCService.shared.removePath("\(airAfcPath)/\(name)")
-                return ok(["name": name])
-            } catch {
-                return fail("删 AIR/\(name) 失败：\(error.localizedDescription)")
-            }
-        default:
-            return fail("airlift.air 不支持的 op「\(op)」（list / mkdir / read / write / delete）")
-        }
-    }
-
-    // MARK: - airlift.pull / airlift.overwrite
-
-    /// 读一个沙盒外文件，并把副本留在 AIR（= 产品说的「读取就把目标文件拷贝到 AIR」）。
-    ///
-    /// ## 为什么是「airlift 读 + 写回 + AFC 存副本」三步
-    /// airlift 的读是**移动不是拷贝** —— 它把文件搬进 Media。所以：
-    /// ① airlift 读（文件离开原位）
-    /// ② airlift 把原字节**写回原位**（原文件回位，这一步不能省）
-    /// ③ AFC 把字节写一份到 `AIR/<扁平名>`（廉价，宿主沙盒里也留一份 `data`）
-    ///
-    /// - Returns: `(ok, json, data)` —— `data` 给上层做后续处理（如改 plist 再覆盖）
-    private static func airPull(target: String, airName: String?) -> (Int32, String, Data?) {
-        let name = airName ?? airFlattenName(for: target)
-        var steps: [String] = []
-
-        // ① airlift 读
-        //
-        // ⚠️ 读之前先腾开文件（2026-09-24 真机定案）：airlift 的读是**移动**，
-        // 而 `cfprefsd` 会**持有**它管的 `Preferences/*.plist` ⇒ 设备端那次 move 做不成
-        // ⇒ 「连读 3 次都读不到」. 放在**这一层**（所有读的唯一出口）而不是各调用点，
-        // 是为了「一处生效、不会漏」—— 与 `PreferencesSettle.after` 同一个道理.
-        let read = withAirlift { AirliftExploit.pocReadFile(path: target) }
-        guard read.ok, let data = read.data else {
-            return (1, jsonText(["ok": false,
-                                "error": "airlift 读失败：\(read.summary)",
-                                "steps": read.details, "path": target, "via": "airlift"]), nil)
-        }
-        steps.append("① airlift 读到 \(data.count) 字节"
-            + "（设备把它搬进 Media，AFC 读出后**再写回原位覆盖**）")
-
-        // ② 写回原位（**读机制本身的一半**：读 = 搬进 Media → AFC 读出 → 写回原位覆盖）
-        let restore = withAirlift { AirliftExploit.pocWriteFile(path: target, data: data) }
-        steps.append(restore.ok
-            ? "② 已把原字节写回原位置"
-            : "② ⚠️⚠️ 写回原位失败：\(restore.summary)（原文件当前不在原位，"
-              + "原字节备份在模块数据目录 LoginLogs/ 下）")
-
-        // ③ 副本落 AIR
-        var airSaved = false
-        do {
-            try airWrite(name: name, data: data)
-            airSaved = true
-            steps.append("③ 副本已存到 \(airDir)/\(name)")
-        } catch {
-            steps.append("③ ⚠️ 副本存 AIR 失败：\(error.localizedDescription)")
-        }
-
-        guard restore.ok else {
-            return (1, jsonText(["ok": false,
-                                "error": "读到内容了，但**没能把原文件写回原位**",
-                                "steps": steps, "path": target, "via": "airlift",
-                                "size": data.count, "airName": airSaved ? name : ""]), nil)
-        }
-        return (0, jsonText(["ok": true,
-                             "path": target,
-                             "size": data.count,
-                             "airName": airSaved ? name : "",
-                             "airPath": airSaved ? "\(airDir)/\(name)" : "",
-                             "via": "airlift",
-                             "steps": steps]), data)
-    }
-
-    /// `airlift.pull` —— 把沙盒外文件读到 AIR（并返回字节）。
-    private static func airliftPull(_ args: [String: Any]) -> (Int32, String) {
-        guard let target = args["path"] as? String, !target.isEmpty else {
-            return fail("airlift.pull 缺少 path")
-        }
-        // 读之前的「腾开文件」在 `airPull` 里统一做（所有读的唯一出口）
-        let (rc, json, _) = airPull(target: target, airName: args["name"] as? String)
-        return (rc, json)
-    }
-
-    /// 用一段字节**覆盖**一个沙盒外文件（= 「自定义覆盖」的核心动作）。
-    ///
-    /// ## 与 lara 的 Custom Overwrite 的差别（写清楚，别被误解）
-    /// lara 走 DarkSword 内核链、在内核层**原地覆盖字节** ⇒ 必须「目标文件 ≥ 源文件」。
-    /// 我们走 airlift 越界写 ⇒ **没有这个限制**，目标可以比源小/大、甚至可以不存在。
-    ///
-    /// ## ▸▸▸ v0.3.496：**必须读回校验**（这条是血的教训）
-    /// `pocWriteFile` 的成败只看「设备回的 `AssetManifest` 里有没有我们那条」——
-    /// 那只证明**消息发出去了**，**不证明字节落到盘上**。真机 2026-09-20 实测：
-    /// 写 SystemGroup 容器（`…/systemgroup.com.apple.configurationprofiles/Library/
-    /// ConfigurationProfiles/`）时，清单**命中**、`pocWriteFile` 报 `ok:true`，
-    /// 但读回**一点没变**（412 字节原文），连**新建**一个文件都建不出来。
-    /// ⇒ 那个容器允许「读/移出」，但沙盒**拒绝「创建/写入」**。
-    ///
-    /// 只看清单就报成功 ⇒ 上层会显示「已覆盖写入」而实际什么都没发生
-    /// —— **这个谎话让我们追了好几个小时**。所以现在 `verify: true`（默认）时
-    /// 一定读回比对，不一致就**如实报失败**。
-    ///
-    /// ## 备份语义
-    /// `backup: true`（默认）时，覆盖前先 `airPull` 目标把原内容存到 `AIR/<名>.bak`。
-    /// **备份失败就中止覆盖** —— 产品要求是「先拷贝目标文件，再写入」，不能反着来。
-    ///
-    /// - Returns: `(rc, json, 是否真的写入了)`
-    private static func airOverwrite(target: String, data: Data,
-                                     backup: Bool,
-                                     verify: Bool = false) -> (Int32, String) {
-        var steps: [String] = []
-
-        if backup {
-            // v0.3.519：**带序号的备份**（用户指出「应该记录第一次的备份，而不是每次覆盖」）
-            //
-            // 原来只往 `AIR/<名>.bak` 存一份、**每次覆盖** ⇒ 写第 3 次之后最初的原文件就没了.
-            // 现在：先把原内容读回来，存进 `AirliftBackups/<路径哈希>/<序号>.bak`：
-            //   1.bak = **初始备份**（第一次写入前，永不覆盖）
-            //   2.bak / 3.bak … = 每次写入前的快照
-            let pulled = airPull(target: target, airName: nil)
-            if let original = pulled.2 {
-                let index = AirliftBackupStore.snapshot(
-                    path: target, data: original,
-                    note: "第 \(AirliftBackupStore.versions(path: target).count + 1) 次覆盖前")
-                if index == 1 {
-                    steps.append("已存**初始备份**（1.bak，\(original.count) 字节）—— 还原时默认回这一份")
-                } else {
-                    steps.append("已存第 \(index) 份备份（\(original.count) 字节）；初始备份仍是 1.bak")
-                }
-            } else {
-                steps.append("目标当前读不到（可能还不存在）⇒ 跳过备份")
-            }
-            // 顺带在 AIR 里留一份（方便界面直接看），失败不影响主流程
-            _ = airPull(target: target, airName: airFlattenName(for: target) + ".bak")
-        }
-
-        let write = withAirlift { AirliftExploit.pocWriteFile(path: target, data: data) }
-        steps.append(contentsOf: write.details.map { "写入: \($0)" })
-        guard write.ok else {
-            return (1, jsonText(["ok": false,
-                                "error": "写入失败：\(write.summary)",
-                                "steps": steps, "path": target, "via": "airlift"]))
-        }
-        // ⚠️ 到这里的 `ok` **只代表「清单命中」**，不代表落点写成了 —— 见函数头注释。
-        steps.append("已发出覆盖写入 \(data.count) 字节（**清单命中**；"
-                     + (verify ? "下面读回校验落点" : "未校验落点") + "）")
-
-        var extra: [String: Any] = [
-            // ⚠️ `ok` 必须显式给（用户反馈「写入还有问题 你自己看」的真因）：
-            // 这条成功路径**漏了 `ok` 字段** ⇒ 模块界面按「没有 ok = 失败」处理，
-            // 于是一次**成功的写入被显示成失败**，还把整段原始 JSON 糊在错误框里
-            //（用户看到的「废话那么多」就是这段 JSON）.
-            "ok": true,
-            "path": target,
-            "size": data.count,
-            "via": "airlift",
-            "backup": backup ? "\(airDir)/\(airFlattenName(for: target)).bak" : "",
-            "verified": false,
-        ]
-        guard verify else {
-            extra["note"] = "verify=false：**落点未校验** —— 清单命中不等于字节落盘。"
-                + "要确认请再调一次 `airlift.pull` 读回比对。"
-            extra["steps"] = steps
-            return (0, jsonText(extra))
-        }
-
-        // 读回校验：唯一能证明「字节真的落盘了」的判据。
-        //
-        // ## v0.3.517：**先冷却、失败再重试一次**
-        //
-        // 真机实测（2026-09-24）暴露的问题：**写入本身是成功的**，失败的是这次校验.
-        // 证据：用 `verify:false` 写完之后，**另一次独立调用** `airlift.pull` 能读回
-        // 正确的字节（Caches / Preferences 都是 `ok=true size=10`）；
-        // 但同一次调用里**紧跟着**再跑一轮 stage+AT 做校验就经常失败 ——
-        // 同一目标连写三次得到 `True / False / False`，间隔 15 秒也一样.
-        //
-        // ⇒ 设备端的 AirTraffic 会话**不支持连续两次背靠背**，中间要留冷却时间.
-        // 不修的话界面会**随机报「覆盖失败」**，而字节其实写进去了 —— 那是更糟的误导
-        //（用户会以为功能坏了）.
-        Thread.sleep(forTimeInterval: 3)
-        var check = airliftReadAndRestore(path: target)
-        if check.data == nil {
-            steps.append("校验: 第 1 次读回没读到 —— 等 5 秒重试（设备端会话需要冷却）")
-            Thread.sleep(forTimeInterval: 5)
-            check = airliftReadAndRestore(path: target)
-        }
-        steps.append(contentsOf: check.details.map { "校验: \($0)" })
-        guard let back = check.data else {
-            extra["steps"] = steps
-            return (1, jsonText(extra.merging([
-                "ok": false,
-                "error": "覆盖后**读回失败**，无法确认落点（字节可能没落盘）：\(check.summary)"
-            ]) { _, new in new }))
-        }
-        guard back == data else {
-            steps.append("⚠️⚠️ 读回 \(back.count) 字节 ≠ 写入 \(data.count) 字节"
-                         + " ⇒ **覆盖没落地**（设备端那次 move 没发生）")
-            steps.append("常见原因：目标目录**不允许创建/写入**（真机实测 SystemGroup 容器"
-                         + "就是这种 —— 读得到、写不进）。这是**目标的问题，不是流程的问题**。")
-            extra["steps"] = steps
-            extra["readBackSize"] = back.count
-            return (1, jsonText(extra.merging([
-                "ok": false,
-                "error": "覆盖**未生效**：读回 \(back.count) 字节 ≠ 写入 \(data.count) 字节"
-                         + "（清单命中了，但字节没落盘）"
-            ]) { _, new in new }))
-        }
-        steps.append("▸ 读回一致（\(back.count) 字节）⇒ **覆盖确实落地了**")
-        extra["steps"] = steps
-        extra["verified"] = true
-        return (0, jsonText(extra))
-    }
-
-    /// `airlift.overwrite` —— 用 AIR 里的文件（或 App 沙盒里的文件）覆盖/写入任意沙盒外路径。
-    ///
-    /// ## ▸▸▸ v0.3.498：**target 可以是目录**
-    /// 旧版把 `target` 一律当**文件路径**，拆成「父目录 + 文件名」——
-    /// 于是填一个**目录**时，它会拿**目录名当文件名**去写（写成一个叫
-    /// `ConfigurationProfiles` 的文件！），这既是错的、也很危险。
-    ///
-    /// 现在三种写法都能用：
-    /// ```
-    /// target = "/var/mobile/Library/Logs/a.bin"                  // 明确给文件名
-    /// target = "/var/mobile/Library/Logs/"                        // 尾斜杠 ⇒ 当目录，用源文件名
-    /// target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是目录
-    /// ```
-    /// 目录时落点 = `target/<leafName ?? 源文件名>`。
-    ///
-    /// 参数：
-    /// - `target`：目标绝对路径（必填；可以是文件，也可以是目录）
-    /// - `airName`：AIR 里的源文件名（与 `source` 二选一）
-    /// - `source`：App 沙盒内的源文件绝对路径（与 `airName` 二选一）
-    /// - `targetIsDirectory`：把 `target` 当**目录**（默认 `false`；`target` 以 `/` 结尾时自动为真）
-    /// - `leafName`：目录模式下写入的文件名（默认取源文件名）
-    /// - `backup`：覆盖前是否把目标原内容备份到 AIR（默认 `true`）
-    /// - `verify`：覆盖后是否**读回比对**（默认 `true`）——
-    ///   ⚠️ 强烈建议保持默认：清单命中**不等于**字节落盘（见 `airOverwrite` 头注释）
-    private static func airliftOverwrite(_ args: [String: Any]) -> (Int32, String) {
-        guard let rawTarget = args["target"] as? String, !rawTarget.isEmpty else {
-            return fail("airlift.overwrite 缺少 target（目标绝对路径）")
-        }
-        let airName = args["airName"] as? String
-        let source = args["source"] as? String
-        let backup = (args["backup"] as? Bool) ?? true
-        // v0.3.523：默认**不做读回校验** —— 跟 AirCard / airlift-rw 一致.
-        //
-        // 读回校验 = **再跑一整遍 airlift**（stage + AT）= 多 10~20 秒，
-        // 而且设备端会话不稳 ⇒ 校验经常失败 ⇒ 界面**误报「覆盖失败」**.
-        // AirCard 的 write_file 与 airlift-rw 的 attempt **都不做读回**：
-        // 只发 [link, payload] 两条 FileComplete，写完就结束.
-        // ⇒ 想确认落点，用 airlift.pull 单独查（显式动作，慢但由用户决定）.
-        let verify = (args["verify"] as? Bool) ?? false
-        let explicitDir = (args["targetIsDirectory"] as? Bool) ?? false
-        let explicitLeaf = (args["leafName"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // 读源文件（AIR 或沙盒）
-        let data: Data
-        var sourceDesc: String
-        var sourceFileName: String
-        if let airName, !airName.isEmpty {
-            do {
-                data = try airRead(name: airName)
-                sourceDesc = "AIR/\(airName)"
-                sourceFileName = airName
-            } catch {
-                return fail("读 AIR/\(airName) 失败：\(error.localizedDescription)")
-            }
-        } else if let source, !source.isEmpty {
-            guard isInSandbox(source) else {
-                return fail("source 必须是 App 沙盒内的路径（沙盒外的文件请先 airlift.pull 到 AIR 再用 airName）")
-            }
-            guard let d = FileManager.default.contents(atPath: source) else {
-                return fail("读不到沙盒内源文件：\(source)")
-            }
-            data = d
-            sourceDesc = source
-            sourceFileName = (source as NSString).lastPathComponent
-        } else {
-            return fail("airlift.overwrite 需要 airName（AIR 里的文件）或 source（沙盒内文件）之一")
-        }
-
-        // ▸ 目录模式：`target` 以 `/` 结尾，或显式声明，或给了 `leafName`
-        var target = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trailingSlash = target.hasSuffix("/") && target.count > 1
-        if trailingSlash { while target.hasSuffix("/") { target.removeLast() } }
-        let isDirectory = explicitDir || trailingSlash
-            || (explicitLeaf?.isEmpty == false)
-        var finalPath = target
-        if isDirectory {
-            let leaf = (explicitLeaf?.isEmpty == false ? explicitLeaf! : sourceFileName)
-            guard !leaf.isEmpty, !leaf.contains("/") else {
-                return fail("目录模式下 leafName 必须是一个文件名（不含 `/`）：\(leaf)")
-            }
-            finalPath = target + "/" + leaf
-        }
-
-        let (rc, json) = airOverwrite(target: finalPath, data: data,
-                                      backup: backup, verify: verify)
-        guard rc == 0 else {
-            var dict = parseArgs(json)
-            dict["target"] = finalPath
-            dict["resolvedFrom"] = target
-            dict["targetIsDirectory"] = isDirectory
-            dict["source"] = sourceDesc
-            // 失败也记 —— 「改失败过」同样要留痕，否则下次会重复踩
-            AirliftChangeLog.append(action: "write-failed",
-                                    path: finalPath,
-                                    bytes: data.count,
-                                    verified: false,
-                                    note: "未落地（可能目标目录不允许写）")
-            return (rc, jsonText(dict))
-        }
-        var dict = parseArgs(json)
-        dict["target"] = finalPath
-        dict["resolvedFrom"] = target
-        dict["targetIsDirectory"] = isDirectory
-        dict["source"] = sourceDesc
-        // 收尾（杀 cfprefsd）**不在这里做** —— 它挂在底层原语 `AirliftExploit.pocWriteFile`
-        // 里（见 `PreferencesSettle` 头注释）：这里是 9 条写路径中的 1 条，
-        // 挂在这里会漏掉另外 8 条（第一版就是这么漏的）.
-        // 改动记录（用户要求「防止以后不知道改了啥」）
-        let backupCount = AirliftBackupStore.versions(path: finalPath).count
-        AirliftChangeLog.append(action: "write",
-                                path: finalPath,
-                                bytes: data.count,
-                                backup: backupCount > 0
-                                    ? "\(AirliftBackupStore.rootPath)（\(backupCount) 份，1 = 初始）"
-                                    : "",
-                                verified: (dict["verified"] as? Bool) ?? false,
-                                note: isDirectory ? "目标是目录，落点 \(finalPath)" : "",
-                                detail: "写入 \(data.count) 字节"
-                                    + (backupCount > 0 ? "；初始备份 1.bak" : ""))
-        return (0, jsonText(dict))
-    }
-
-    /// `airlift.delete` —— 删掉一个**沙盒外**的已知文件（v0.3.496 新增）.
-    ///
-    /// ## 机制（与读同源）
-    /// 设备端把文件**搬进 Media**（move 不是 copy ⇒ 原位置那一刻就空了），
-    /// 实现里**先确认备份落盘、再删 Media 里的副本** ⇒ 文件彻底消失。
-    ///
-    /// ## ⚠️ 为什么「先备份再删」
-    /// 搬进 Media 之后那份副本是数据的**唯一一份**（原位置已空）。备份没落盘就删
-    /// = 直接丢数据 ⇒ **宁可不删**，并如实报出副本还在 Media 的哪个路径（还能救）。
-    ///
-    /// ## 参数
-    /// - `path`：目标文件绝对路径（必填）
-    private static func airliftDelete(_ args: [String: Any]) -> (Int32, String) {
-        guard let target = args["path"] as? String, !target.isEmpty else {
-            return fail("airlift.delete 缺少 path")
-        }
-        let outcome = withAirlift { AirliftExploit.pocDeleteFile(path: target) }
-        let extra: [String: Any] = [
-            "path": target, "via": "airlift",
-            "steps": outcome.details,
-        ]
-        AirliftChangeLog.append(action: outcome.ok ? "delete" : "delete-failed",
-                                path: target, bytes: 0, verified: outcome.ok)
-        return outcome.ok ? ok(extra) : fail(outcome.summary, extra: extra)
-    }
-
-    /// `airlift.changes` —— 读**改动记录**（v0.3.518 新增）.
-    ///
-    /// ## 为什么要有它（用户要求）
-    /// 「如果新增的文件要记忆防止以后不知道改了啥文件加了啥东西」.
-    /// airlift 往 `/var/mobile/Library/**` 写完之后，**设备上没有任何痕迹**
-    /// 说明「这个文件是谁什么时候加的」⇒ 时间一长就成了「不知道哪来的文件」，
-    /// 想回滚也无从下手. 所以宿主侧统一记一份，界面能查、SSH 也能 `cat`.
-    ///
-    /// 参数：`limit`（最多返回多少条，默认 100）
-    private static func airliftChanges(_ args: [String: Any]) -> (Int32, String) {
-        let limit = (args["limit"] as? Int) ?? 100
-        let all = AirliftChangeLog.readAll()
-        let rows: [[String: Any]] = all.prefix(limit).map { entry in
-            ["time": entry.time, "action": entry.action, "path": entry.path,
-             "bytes": entry.bytes, "backup": entry.backup,
-             "verified": entry.verified, "note": entry.note]
-        }
-        return ok(["count": all.count,
-                   "returned": rows.count,
-                   "changes": rows,
-                   "markdownPath": AirliftChangeLog.markdownPath,
-                   "via": "airlift"])
-    }
-
-    /// `airlift.changes.clear` —— 清空记录（**不动设备上的文件**）.
-    private static func airliftChangesClear(_ args: [String: Any]) -> (Int32, String) {
-        AirliftChangeLog.clear()
-        return ok(["note": "记录已清空. 设备上的文件**没有**被动过."])
-    }
-
-    /// 列出 `Media/AIR/` 里和某个目标**同源**的副本（AFC 直读，秒级）.
-    ///
-    /// ## 为什么必须把这一路也摆出来（用户指出的缺陷的真正修法）
-    /// 用户的 SpringBoard 偏好被写坏后，**`AirliftBackups/` 里 10 份全是坏的**
-    /// （1 号 = 89 B / 1 键 —— 正是用户预言的那个情况：首次快照本身就坏）.
-    /// 真正救回数据的那份 **5764 B / 49 键**，躺在 `Media/AIR/` 里 ——
-    /// 而那一份**在备份页上根本看不到** ⇒ 用户「救不回」不是因为没数据，是因为**看不见**.
-    ///
-    /// ⇒ 现在把 `AIR/` 里同源的副本一并列出（含 `.bak`），每份给出 **字节 / 键数 / 时间**.
-    /// 读取全走 **AFC**（Media 之内）⇒ **不触发 airlift**，不会让这一页变慢.
-    ///
-    /// ## 命名约定
-    /// `AIR/` 里的文件名 = 目标绝对路径把 `/` 换成 `_`，覆盖式备份再追加 `.bak`.
-    /// 例：`/var/mobile/Library/Preferences/com.apple.springboard.plist`
-    /// → `var_mobile_Library_Preferences_com.apple.springboard.plist[.bak]`
-    ///
-    /// - Returns: 每项 `[name, bytes, keys?, time]`；拿不到就返回空数组（**不报错**，
-    ///   因为「没有 AIR 副本」是正常情况，不该让整页失败）
-    private static func airCopies(for target: String) -> [[String: Any]] {
-        let prefix = target.replacingOccurrences(of: "/", with: "_")
-        var out: [[String: Any]] = []
-        _ = try? withAfcRoot(.media) { client in
-            guard let items = try? AFCService.listDirectory(client: client, path: "/AIR") else {
-                return
-            }
-            for item in items where !item.isDirectory && item.name.hasPrefix(prefix) {
-                var row: [String: Any] = ["name": item.name, "bytes": Int(item.size)]
-                // 键数：能解析成字典 plist 才有（本地解析，毫秒级）
-                if let data = try? AFCService.readFile(client: client, path: "/AIR/" + item.name),
-                   let keys = AirliftBackupStore.plistKeyCount(data) {
-                    row["keys"] = keys
-                }
-                out.append(row)
-            }
-        }
-        return out.sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
-    }
-
-    /// `airlift.backups` —— 列某个沙盒外文件的**带序号备份**（v0.3.519）.
-    ///
-    /// ## 语义（用户要求）
-    /// 「备份应该记录第一次的备份，而不是每次写入都备份一次；序号 1 即初始备份」.
-    /// ⇒ `1.bak` 是**我们第一次介入之前**的原文件，**永不覆盖**；`2.bak`、`3.bak` … 是
-    /// 每次覆盖前的快照. 还原默认回 1 号.
-    ///
-    /// ## 为什么每份都回报**键数**（用户指出）
-    /// 用户指出：「『1 号 = 初始』在首次快照已坏时救不回」—— 对. 1 号只保证「最早」，
-    /// **不保证「完好」**（若我们第一次读就已经读到坏内容，1 号就是坏的）.
-    /// 我原本想按「最大/最全」自动挑一份 —— **被用户否决，而且确实是错的**：
-    /// 文件变小不等于坏（正常删键也会变小），拿大小当判据会误判.
-    /// ⇒ 现在**不自动挑**，把 `键数 / 字节 / 时间` 摊开，哪份是好的由用户判断.
-    ///
-    /// 参数：`path`（必填；不传 ⇒ 列出所有有备份的路径）
-    private static func airliftBackups(_ args: [String: Any]) -> (Int32, String) {
-        // 不传 path ⇒ 列出**所有**有备份的路径（界面「备份与还原」页要用）
-        guard let path = args["path"] as? String, !path.isEmpty else {
-            let paths = AirliftBackupStore.allPaths().map { p -> [String: Any] in
-                ["path": p, "count": AirliftBackupStore.versions(path: p).count]
-            }
-            return ok(["paths": paths, "count": paths.count,
-                       "root": AirliftBackupStore.rootPath])
-        }
-        let versions = AirliftBackupStore.versions(path: path)
-        let rows: [[String: Any]] = versions.map { v -> [String: Any] in
-            var row: [String: Any] = ["index": v.index, "time": v.time, "bytes": v.bytes,
-                                      "note": v.note, "isOriginal": v.index == 1]
-            // 键数（只有能解析成字典 plist 的备份才有）—— 判「这份是不是坏/是不是被截断」
-            if let keys = AirliftBackupStore.keyCount(path: path, index: v.index) {
-                row["keys"] = keys
-            }
-            return row
-        }
-        // 「当前」= 设备上现在的内容. 走**本地缓存**，不触发 airlift（否则这一页要等十几秒）.
-        // 缓存可能过期 ⇒ 明确回报 `currentFromCache`，界面据此提示「可能不是最新」.
-        var extra: [String: Any] = [:]
-        if let stats = PlistTweakService.cachedStats(path: path) {
-            extra["currentBytes"] = stats.bytes
-            extra["currentFromCache"] = true
-            if let keys = stats.keys { extra["currentKeys"] = keys }
-        }
-        // `Media/AIR/` 里同源的副本（AFC 直读，秒级）—— 用户「救不回」的真正修法见 airCopies 注释
-        let airSources = airCopies(for: path)
-        if !airSources.isEmpty { extra["airSources"] = airSources }
-        return ok(["path": path, "count": versions.count, "versions": rows,
-                   "root": AirliftBackupStore.rootPath, "via": "airlift"]
-                  .merging(extra) { _, new in new })
-    }
-
-    /// `airlift.restore` —— 用某一份备份**还原**目标（v0.3.519）.
-    ///
-    /// ## 为什么默认回 1 号
-    /// 1 号是「我们介入之前」的原文件 ⇒ 那才是用户心里的「还原」.
-    /// 想回到中间某一步，显式传 `version`.
-    ///
-    /// ## 但 1 号不保证**完好**（用户指出）
-    /// 「1 号 = 初始」只保证**最早**：若我们第一次读就已经读到坏内容，1 号本身就是坏的.
-    /// ⇒ 界面把每份的**键数/字节/时间**都摆出来，让用户自己挑；
-    /// 本能力**不做任何自动挑选**，传几号就还原几号.
-    ///
-    /// 参数：`path`（必填）、`version`（可选，默认 1）
-    private static func airliftRestore(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = args["path"] as? String, !path.isEmpty else {
-            return fail("airlift.restore 缺少 path")
-        }
-        let version = (args["version"] as? Int) ?? 1
-        guard let data = AirliftBackupStore.data(path: path, index: version) else {
-            let have = AirliftBackupStore.versions(path: path).map(\.index)
-            return fail("没有第 \(version) 份备份（现有：\(have.isEmpty ? "无" : have.map(String.init).joined(separator: ", "))）",
-                        extra: ["path": path, "version": version])
-        }
-        // 还原前先把「当前内容」也存一份 —— 免得还原错了没法回头
-        if let current = airPull(target: path, airName: nil).2 {
-            _ = AirliftBackupStore.snapshot(path: path, data: current, note: "还原前自动快照")
-        }
-        let write = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
-        // 收尾（杀 cfprefsd）由 pocWriteFile 内部统一做（见 `PreferencesSettle` 头注释）
-        // 还原后的键数（记录里写清楚「变成了几个键」，便于判断这份备份是不是好的）
-        let keys = AirliftBackupStore.plistKeyCount(data)
-        AirliftChangeLog.append(action: write.ok ? "restore" : "restore-failed",
-                                path: path, bytes: data.count, verified: false,
-                                note: "从第 \(version) 份备份还原"
-                                    + (version == 1 ? "（最早的一份）" : ""),
-                                detail: "还原为 \(data.count) 字节"
-                                    + (keys.map { " / \($0) 键" } ?? ""))
-        return write.ok
-            ? ok(["path": path, "version": version, "bytes": data.count,
-                  "steps": write.details])
-            : fail("还原未成立：\(write.summary)", extra: ["path": path, "version": version,
-                                                          "steps": write.details])
-    }
-
-    /// `plist.tweak` —— 改沙盒外 plist 的**单个键**（v0.3.519）.
-    ///
-    /// ## 这是干什么的
-    /// 移植 Nugget 的「系统选项」用的底座：Nugget 的功能本质就是往某个 plist 写键，
-    /// 而它自己的机制（SparseRestore）**在 iOS 27 上已被 Apple 补掉**（它 README 自己写的）.
-    /// 我们的 airlift 能直接读写文件 ⇒ 只要目标 plist 在可写区就行.
-    ///
-    /// ## 参数
-    /// - `path`：目标 plist 绝对路径
-    /// - `key`：键名
-    /// - `value`：要设的值（`true`/`false`/数字/字符串）；**不传 = 删键（回到系统默认）**
-    /// - `list`：`true` 时只列出现有键，不改动
-    private static func plistTweak(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = args["path"] as? String, !path.isEmpty else {
-            return fail("plist.tweak 缺少 path")
-        }
-        // `refresh:true` ⇒ 强制从设备重读（慢，10~20 秒）并更新本地缓存
-        if (args["refresh"] as? Bool) == true {
-            do {
-                let bytes = try PlistTweakService.refresh(path: path)
-                return ok(["path": path, "refreshed": true, "bytes": bytes])
-            } catch {
-                return fail(error.localizedDescription, extra: ["path": path])
-            }
-        }
-        if (args["list"] as? Bool) == true {
-            do {
-                let keys = try PlistTweakService.readKeys(path: path)
-                return ok(["path": path, "count": keys.count, "keys": keys,
-                           "cached": PlistTweakService.hasCache(path: path),
-                           "note": PlistTweakService.hasCache(path: path)
-                               ? "来自本地缓存（改值只写一次 airlift，约 10~20 秒）"
-                               : "刚从设备读回并已缓存"])
-            } catch {
-                return fail(error.localizedDescription, extra: ["path": path])
-            }
-        }
-        guard let key = args["key"] as? String, !key.isEmpty else {
-            return fail("plist.tweak 需要 key（或 list:true 只列出）")
-        }
-        do {
-            if let value = args["value"] {
-                let bytes = try PlistTweakService.set(path: path, key: key, value: value)
-                return ok(["path": path, "key": key, "action": "set",
-                           "value": "\(value)", "bytes": bytes,
-                           "note": "改完**不一定立刻生效** —— SpringBoard 在启动时读这些偏好，"
-                                 + "多数要 respring / 重启才看得到"])
-            }
-            let changed = try PlistTweakService.unset(path: path, key: key)
-            return ok(["path": path, "key": key, "action": changed ? "unset" : "noop",
-                       "note": changed ? "已删键 ⇒ 回到系统默认"
-                                       : "这个键本来就没有，无需改动"])
-        } catch {
-            return fail(error.localizedDescription, extra: ["path": path, "key": key])
-        }
-    }
-
-    /// `airlift.writeMany` —— **一次 stage 写多个文件到同一个目录**（v0.3.499 新增）.
-    ///
-    /// ## 为什么需要它（AirCard 的 #1 能力，用户点名要移植）
-    /// 每个文件单独走一趟 airlift = 10~20 秒，而且**隧道连多了会卡死**
-    /// （真机实测第 6 次 AT 会话卡在 conduit 建连、之后整条 `protocolQueue` 堵死）。
-    /// 密码键盘主题一次要写 12~36 张按键图 ⇒ 逐个写根本不可行。
-    /// 批量之后：**N 个文件 = 1 趟 airlift**。
-    ///
-    /// ## ⚠️ 前提：目标**目录**必须已经存在
-    /// airlift 在 Media 之外**建不了目录**（真机实测：沙盒允许建普通文件、不允许建目录）。
-    ///
-    /// ## ⚠️ 判据的诚实边界
-    /// 只看「每条 `FileComplete` 有没有被处理」（= `payload_i` 被搬走），**不校验落点**。
-    /// 要确认内容，对其中任意一个文件调 `airlift.pull` 读回比对。
-    ///
-    /// 参数：
-    /// - `dir`：目标**目录**绝对路径（必填）
-    /// - `files`：`[{"name": "文件名", "data": "<base64>"}]`（必填；名字不能含斜杠）
-    /// - `encoding`：`data` 的编码（默认 `base64`）
-    private static func airliftWriteMany(_ args: [String: Any]) -> (Int32, String) {
-        guard let dir = args["dir"] as? String, !dir.isEmpty else {
-            return fail("airlift.writeMany 缺少 dir（目标目录绝对路径）")
-        }
-        guard let raw = args["files"] as? [[String: Any]], !raw.isEmpty else {
-            return fail("airlift.writeMany 缺少 files（形如 [{\"name\":\"a.png\",\"data\":\"<base64>\"}]）")
-        }
-        let encoding = (args["encoding"] as? String) ?? "base64"
-        var files: [(name: String, data: Data)] = []
-        for (index, item) in raw.enumerated() {
-            guard let name = item["name"] as? String, !name.isEmpty else {
-                return fail("files[\(index)] 缺少 name")
-            }
-            guard let text = item["data"] as? String,
-                  let data = decode(text, encoding: encoding) else {
-                return fail("files[\(index)] 的 data 非法（encoding=\(encoding)）")
-            }
-            files.append((name: name, data: data))
-        }
-        let outcome = withAirlift { AirliftExploit.pocWriteMany(dir: dir, files: files) }
-        var extra: [String: Any] = [
-            "dir": dir,
-            "count": files.count,
-            "bytes": files.reduce(0) { $0 + $1.data.count },
-            "names": files.map { $0.name },
-            "via": "airlift",
-            "steps": outcome.details,
-            "note": "批量写只看「每条 FileComplete 是否被处理」（payload_i 被搬走），"
-                  + "**不校验落点**；要确认内容请对任意一个文件调 airlift.pull 读回比对。",
-        ]
-        if let warn = refuseReasonForReaddir(dir) {
-            extra["warning"] = warn
-        }
-        for file in files {
-            AirliftChangeLog.append(action: outcome.ok ? "write" : "write-failed",
-                                    path: dir + "/" + file.name,
-                                    bytes: file.data.count,
-                                    verified: false,
-                                    note: "批量写（\(files.count) 个文件，1 趟 airlift）")
-        }
-        return outcome.ok ? ok(extra) : fail(outcome.summary, extra: extra)
-    }
-
-    private static func stringList(_ value: Any?) -> [String] {
-        (value as? [String]) ?? []
-    }
-
-    // MARK: - ▸▸▸ airlift.readdir / airlift.restoredir（浏览 Media 之外的任意目录）
-
-        /// 拒绝一批「**一动就可能让系统起不来**」的祖先路径.
-    ///
-    /// 这不是能力限制（airlift 搬得动它们），是**安全闸**：把 `/var/mobile/Library`
-    /// 整个搬进 Media 再搬回，中间那 20~40 秒里**全系统都在读写不存在的路径**。
-    /// 返回 `nil` = 放行.
-    ///
-    /// ## ▸ v0.3.497 修正：**只精确拒绝「祖先」，不再按前缀连带拒子目录**
-    /// 旧版用 `hasPrefix(prefix + "/")` 判前缀，于是
-    /// `/var/containers/Bundle` 这条把**每一个 App 的容器**
-    /// （`/var/containers/Bundle/Application/<uuid>`）也一起拒了 ——
-    /// 等于把「浏览 App 容器」这个正经用法堵死。
-    /// 现在：**祖先路径精确拒绝**（它们一搬全没），**子目录放行但带警告**
-    /// （见 `warnForReaddir`）—— 由用户自己判断。
-    private static func refuseReasonForReaddir(_ path: String) -> String? {
-        // 归一：`/private/var/...` 与 `/var/...` 视作同一个（内核里 /var 是 symlink）
-        var p = path
-        if p.hasPrefix("/private/var/") { p = "/var/" + String(p.dropFirst("/private/var/".count)) }
-        while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
-
-        let hardRefuse: Set<String> = [
-            "/", "/var", "/private", "/var/mobile", "/var/containers", "/var/db",
-            "/var/stash", "/var/tmp", "/var/log", "/var/root",
-            "/System", "/usr", "/bin", "/sbin", "/dev", "/etc", "/Applications",
-            "/var/mobile/Library",            // 太大且被全系统依赖
-            "/var/mobile/Media",              // 就是我们自己的根
-            "/var/mobile/Containers",
-            "/var/mobile/Documents",          // 用户文档根（一搬全没）
-            // ▸ 容器/守护进程的**祖先**：搬走一个就少一批 App / 一批系统配置
-            "/var/containers/Bundle",
-            "/var/containers/Bundle/Application",
-            "/var/containers/Data",
-            "/var/containers/Data/Application",
-            "/var/containers/Shared",
-            "/var/containers/Shared/SystemGroup",
-            "/var/mobile/Library/Caches",
-            "/var/mobile/Library/Preferences",
-            "/var/mobile/Library/Keychains",
-            "/var/mobile/Library/SMS",
-            "/var/mobile/Library/AddressBook",
-            "/var/mobile/Library/SpringBoard",
-            "/var/mobile/Library/Logs",
-        ]
-        if hardRefuse.contains(p) {
-            return "这是被全系统依赖的祖先/根目录，搬走期间整个系统都在读写不存在的路径"
-        }
-        return nil
-    }
-
-    // MARK: - sys.supervised.*
-
-    /// 一次「airlift 读 + 写回原位」的结果（`sys.supervised.*` 用）。
-    private struct AirliftReadResult {
-        let data: Data?
-        let summary: String
-        let details: [String]
-        /// 是否成功把原字节写回原位置
-        let restored: Bool
-        /// AIR 里的副本名（备份/中转用）
-        let airName: String?
-    }
-
-    /// 读一个沙盒外文件，**并立刻把原字节写回原位**，同时在 AIR 留一份副本。
-    ///
-    /// 这是 `sys.supervised.*` 的读入口 —— 与 `airPull` 同一套机制，
-    /// 只是把 JSON 包装拆掉、直接给上层结构体。
-    private static func airliftReadAndRestore(path: String) -> AirliftReadResult {
-        let read = withAirlift { AirliftExploit.pocReadFile(path: path) }
-        guard read.ok, let data = read.data else {
-            return AirliftReadResult(data: nil, summary: read.summary,
-                                     details: read.details, restored: false, airName: nil)
-        }
-        let restore = withAirlift { AirliftExploit.pocWriteFile(path: path, data: data) }
-        var details = read.details
-        details.append(restore.ok
-            ? "▸ 已把原字节写回原位置（读是移动，不写回文件就留在 Media 里了）"
-            : "⚠️⚠️ 写回原位置失败：\(restore.summary) —— 文件当前**不在**原位置，"
-              + "原字节已备份在模块数据目录 LoginLogs/ 下，请尽快处理")
-
-        // 顺手在 AIR 留一份副本（廉价 AFC；失败不影响读的结果，只记一句）
-        var airName: String?
-        let name = airFlattenName(for: path)
-        do {
-            try airWrite(name: name, data: data)
-            airName = name
-            details.append("▸ 副本已存到 \(airDir)/\(name)")
-        } catch {
-            details.append("（副本存 AIR 失败：\(error.localizedDescription)）")
-        }
-        return AirliftReadResult(data: data, summary: read.summary,
-                                 details: details, restored: restore.ok, airName: airName)
-    }
-
     /// 解析 plist（binary 与 XML 都能解）.
-    private static func parsePlist(_ data: Data) -> [String: Any]? {
-        guard let obj = try? PropertyListSerialization.propertyList(
-                from: data, options: [], format: nil) else { return nil }
-        return obj as? [String: Any]
-    }
-
-    /// 读监督模式状态（走 airlift：读 + 立刻写回原位 + 副本进 AIR）.
-    private static func supervisedGet() -> (Int32, String) {
-        let path = ConfigPlistURL.cloudConfig.path
-        let result = airliftReadAndRestore(path: path)
-
-        guard let data = result.data else {
-            return fail("airlift 读失败：\(result.summary)",
-                        extra: ["path": path, "via": "airlift", "steps": result.details])
-        }
-        guard let dict = parsePlist(data) else {
-            return fail("读到了 \(data.count) 字节，但不是合法 plist",
-                        extra: ["path": path, "via": "airlift", "steps": result.details])
-        }
-        let supervised = dict["IsSupervised"] as? Bool ?? false
-        guard result.restored else {
-            // 内容读到了，但文件没回到原位 —— 这是必须让用户知道的严重情况
-            return fail("读到内容了，但**没能把文件写回原位置**（它现在在 Media 里）",
-                        extra: ["path": path, "via": "airlift",
-                                "steps": result.details, "isSupervised": supervised])
-        }
-        var extra: [String: Any] = [
-            "isSupervised": supervised,
-            "organizationName": dict["OrganizationName"] as? String ?? "",
-            "path": path,
-            "via": "airlift",
-            "steps": result.details,
-        ]
-        if let airName = result.airName {
-            extra["airName"] = airName
-            extra["airPath"] = "\(airDir)/\(airName)"
-        }
-        return ok(extra)
-    }
-
-    /// 开关监督模式：**全程走 airlift**（读 → 写回 → 覆盖 → 读回校验）.
-    ///
-    /// ## 为什么读也要走 airlift
-    /// 本路径属于系统组（SystemGroup）。iOS 26.5/26.6 对 `configurationprofiles`
-    /// 拒绝签发沙盒扩展 ⇒ `FileManager` 连**读**都读不到（`fileExists` 因无法穿越沙盒
-    /// 返回 false，表现为「配置文件不存在」这种误导性错误 —— v0.3.481 真机实测踩到）。
-    /// airlift 不依赖沙盒扩展，所以读写统一走它。
-    ///
-    /// ## ▸▸▸ 覆盖写入的正确顺序（v0.3.495/496 真机定案）
-    ///
-    /// 用户原话：**「我们覆盖写入动作不能直接移动，是先写入拷贝回来的东西，
-    /// 再覆盖目标文件回写」**。落地成：
-    ///
-    /// ```
-    /// ① airlift 读            → 原字节（读是**移动**，目标位置此刻是空的）
-    /// ② airlift 写回原字节    → 「先写入拷贝回来的东西」：目标回位、内容 = 原文
-    /// ③ 内存里改 IsSupervised → newData
-    /// ④ airlift 写 newData    → 「再覆盖目标文件回写」
-    /// ⑤ 读回校验 + 写回       → **唯一能证明字节落盘的判据**
-    /// ```
-    ///
-    /// ## ⚠️⚠️ 但真机实测（2026-09-20）：**这条路对这个目标做不到**
-    ///
-    /// 目标 `/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.
-    /// configurationprofiles/Library/ConfigurationProfiles/CloudConfigurationDetails.plist`
-    /// 所在的 **SystemGroup 容器，沙盒拒绝「创建/写入」，只允许「读/移出」**：
-    ///
-    /// | 实验（同一台设备） | 结果 |
-    /// |---|---|
-    /// | **读**这个 plist | ✅ 成功（412 字节） |
-    /// | **覆盖**这个 plist | ❌ 读回仍是 412 字节原文 |
-    /// | **新建** `…/ConfigurationProfiles/zt-test.bin` | ❌ 文件根本没被创建 |
-    /// | 覆盖 `CrashReporter` 里一个已存在的文件（202→32 字节） | ✅ **成功** |
-    /// | **新建** `/var/mobile/Library/Logs/zt-logs.bin` | ✅ **成功（32 字节）** |
-    /// | **新建** `/var/mobile/Library/Preferences/zt-prefs.bin` | ✅ **成功（32 字节）** |
-    /// | **新建** `/var/mobile/Documents/zt-docs.bin` | ❌ 失败 |
-    ///
-    /// ⇒ 结论：**`/var/mobile/Library/**` 基本可写**；被拒的是
-    /// **SystemGroup 容器**（`/var/containers/Shared/SystemGroup/…`）与
-    /// `/var/mobile/Documents`。
-    /// ⇒ **「启用监督模式」= 写 SystemGroup 容器 = 沙盒不让做。**
-    ///   这不是流程问题（顺序已经按用户说的改对了），是**目标不允许**。
-    ///
-    /// ## ▸▸ 教训：`pocWriteFile` 的 `ok` 只代表「清单命中」
-    /// 设备回 `AssetManifest` 里有我们那条，只证明**消息发出去了**，
-    /// **不证明字节落盘**。旧版 `airlift.overwrite` / `supervisedSet` 只看清单就报
-    /// 「已覆盖写入」⇒ **对着一个没生效的写汇报成功，把排查带偏了好几个小时**。
-    /// ⇒ 现在 `airlift.overwrite` 默认 `verify: true`（读回比对），
-    ///   `supervisedSet` 的 ⑦ 也改口径为「已**发出**」。
-    ///
-    /// ## 成本
-    /// 一次 airlift 约 10~20 秒。`verify: true`（默认）共 5 次操作
-    /// （读 / 写回 / 写 / 读回 / 写回），约 50~100 秒；`verify: false` 共 3 次。
-    /// ⚠️ 操作次数越少越好 —— 设备端 RSD 隧道在连续多次建连后有卡死的先例
-    /// （真机实测：第 6 次 AT 会话卡在 conduit 建连，之后整条 `protocolQueue` 堵死）。
-    private static func supervisedSet(_ args: [String: Any]) -> (Int32, String) {
-        guard let enabled = args["enabled"] as? Bool else {
-            return fail("sys.supervised.set 缺少 enabled（布尔）")
-        }
-        let orgName = (args["organizationName"] as? String) ?? ""
-        let verify = (args["verify"] as? Bool) ?? true
-        let path = ConfigPlistURL.cloudConfig.path
-        var steps: [String] = []
-        /// 原文件字节（① 读回来后填）。声明在 `restoreOriginal` **之前** ——
-        /// Swift 的嵌套函数不能引用在它之后声明的局部变量（"captures before declared"）.
-        var oldData = Data()
-
-        /// 把读到的原字节写回原位置（「覆盖写入」那一步失败时的兜底）.
-        ///
-        /// ⚠️ 只有在 ② 已经成功写回之后才需要它 —— 那时目标内容本来就是原文，
-        /// 再写一遍是幂等的。真正需要它的是 ⑦ 失败的情形（写了一半）。
-        func restoreOriginal(_ why: String) -> Bool {
-            let restore = withAirlift { AirliftExploit.pocWriteFile(path: path, data: oldData) }
-            steps.append(restore.ok
-                ? "↩︎ \(why) ⇒ 已把原字节写回原位置"
-                : "⚠️⚠️ \(why) 且**写回原位失败**：\(restore.summary)"
-                  + "（文件当前不在原位，原字节已备份在模块数据目录 LoginLogs/ 下）")
-            return restore.ok
-        }
-
-        // ▸▸▸ ①②③ 读 + **写回** + 备份 —— **直接复用 `airPull`**（v0.3.495 真机定案）。
-        //
-        // ## 为什么复用而不是自己拼三步
-        // `airPull` 就是**已在真机上验证可行**的那条序列：它和「自定义覆盖」
-        // （`airlift.overwrite`，内部 = `airPull` → 写）用的是**同一段代码**。
-        //
-        // ## 2026-09-20 真机对照（同一台设备、同一时间段）
-        // · `airlift.overwrite {backup:true}`（= `airPull`[读 + **写回**] → 写）**成功**：
-        //   CrashReporter 里一个 98480 字节的**已存在**文件被覆盖成 31 字节
-        //   （AFC 回读确认 size=31）⇒ 「覆盖已存在文件」这件事本身成立。
-        // · 旧版 `supervisedSet`（读 **不写回** → 直接写）**失败**：
-        //   `airlift_at2.txt` 判据「`airlift-src-*/payload` 已被搬走 = 否（第 2 次 move 没发生）」，
-        //   而穿过 symlink 看到的真实目标**仍是 412 字节的原文**。
-        // ⇒ 结构性差别只有那一次「写回」。
-        //
-        // ## 用户原话（这就是需求）
-        // **「我们覆盖写入动作不能直接移动，是先写入拷贝回来的东西，
-        //    再覆盖目标文件回写」**
-        //
-        // ## 步骤编号沿用 `airPull` 自己的 ①②③
-        //   ① airlift 读到 N 字节（读是移动，文件已进 Media）
-        //   ② 已把原字节写回原位置   ← **「先写入拷贝回来的东西」**
-        //   ③ 副本已存到 AIR/<名>.bak（AFC；放在这对读写**之后**，不夹在中间）
-        let backupName = airFlattenName(for: path) + ".bak"
-        let (pullRC, pullJSON, pullData) = airPull(target: path, airName: backupName)
-        let pullDict = parseArgs(pullJSON)
-        steps.append(contentsOf: stringList(pullDict["steps"]))
-        guard pullRC == 0, let readData = pullData else {
-            return fail("①② airlift 读 + 写回失败："
-                        + ((pullDict["error"] as? String) ?? "未知错误"),
-                        extra: ["path": path, "via": "airlift", "steps": steps])
-        }
-        oldData = readData
-        let airBackup: String? = (pullDict["airName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-
-        // ④ 解析
-        guard let dict = parsePlist(oldData) else {
-            let ok = restoreOriginal("原内容不是合法 plist")
-            return fail("④ 读到的内容不是合法 plist（原文件\(ok ? "已" : "**未能**")写回原位）",
-                        extra: ["path": path, "via": "airlift", "steps": steps])
-        }
-        let before = dict["IsSupervised"] as? Bool ?? false
-        steps.append("④ 解析成功，当前 IsSupervised = \(before)")
-
-        // ⑤ 改字段
-        let mutable = NSMutableDictionary(dictionary: dict)
-        mutable["IsSupervised"] = enabled
-        if enabled, !orgName.isEmpty {
-            mutable["OrganizationName"] = orgName
-            steps.append("⑤ OrganizationName = \(orgName)")
-        } else if !enabled {
-            mutable.removeObject(forKey: "OrganizationName")
-            steps.append("⑤ 已移除 OrganizationName")
-        }
-
-        // ⑥ 序列化
-        guard let newData = try? PropertyListSerialization.data(
-            fromPropertyList: mutable, format: .binary, options: 0) else {
-            let ok = restoreOriginal("plist 序列化失败")
-            return fail("plist 序列化失败（原文件\(ok ? "已" : "**未能**")写回原位）",
-                        extra: ["path": path, "steps": steps])
-        }
-        steps.append("⑥ 新内容 \(newData.count) 字节（binary plist）")
-
-        // ⑦ 覆盖写入新内容（airlift）—— **「再覆盖目标文件回写」**
-        //
-        // ⚠️ 这一步**只有在 ② 已经把原字节写回原位之后**才成立 —— 目标必须「在位」，
-        // 这才是一次真正的**覆盖**（见上面 ①②③ 处的真机对照实验）。
-        let write = withAirlift { AirliftExploit.pocWriteFile(path: path, data: newData) }
-        steps.append(contentsOf: write.details.map { "⑦ write: \($0)" })
-        guard write.ok else {
-            let ok = restoreOriginal("覆盖写入失败")
-            return fail("⑦ 覆盖写入失败：\(write.summary)"
-                        + "（原文件\(ok ? "已" : "**未能**")写回原位）",
-                        extra: ["path": path, "steps": steps,
-                                "backup": airBackup ?? "", "isSupervised": before])
-        }
-        steps.append("⑦ 已**发出**覆盖写入（清单命中；⚠️ 清单命中**不等于**字节落盘"
-            + " ⇒ 以 ⑧ 读回为准）")
-
-        var extra: [String: Any] = [
-            "path": path,
-            "steps": steps,
-            "isSupervised": enabled,
-            "via": "airlift",
-            "verified": false,
-        ]
-        if let airBackup { extra["backup"] = "\(airDir)/\(airBackup)" }
-
-        guard verify else {
-            extra["note"] = "verify=false：写入已发出但**未做读回校验**（airlift 写不校验落点）。"
-                + "要确认请点「重新读取」。"
-            return ok(extra)
-        }
-
-        // ⑧ 读回校验 —— **不轻信写入返回值**
-        //    这次读同样会移动文件，所以 airliftReadAndRestore 内部会再写回一次。
-        let check = airliftReadAndRestore(path: path)
-        steps.append(contentsOf: check.details.map { "⑧ \($0)" })
-        extra["steps"] = steps
-        guard let checkData = check.data, let checkDict = parsePlist(checkData) else {
-            return fail("⑧ 写入后读回失败，无法确认结果（文件可能不在原位置）",
-                        extra: extra)
-        }
-        let after = checkDict["IsSupervised"] as? Bool
-        steps.append("⑧ 读回：IsSupervised = \(after.map(String.init) ?? "读不到")")
-        extra["steps"] = steps
-        extra["isSupervised"] = after ?? enabled
-
-        guard after == enabled else {
-            return fail("⑧ 读回校验不一致：期望 \(enabled)，实际 \(after.map(String.init) ?? "读不到")",
-                        extra: extra)
-        }
-        guard check.restored else {
-            return fail("⑧ 内容已生效，但**没能把文件写回原位置**（它现在在 Media 里）",
-                        extra: extra)
-        }
-        // 原内容备份已在 ①②③ 那步（`airPull` 的 ③）落到 AIR，这里不重复做。
-        // ⚠️ 顺序说明：AIR 那份是 **AFC** 写的，而 ①读/②写 与 ⑧读/⑧写 是两对
-        // **紧挨着的 airlift 操作** —— AFC 只落在两对之间，绝不夹在任一对内部
-        // （v0.3.493 真机实测：夹在中间会让第 2 次 move 不发生）。
-
-        extra["verified"] = true
-        extra["organizationName"] = checkDict["OrganizationName"] as? String ?? ""
-        return ok(extra)
-    }
 
     // MARK: - apps.lookup（按 bundle id 查 App 容器路径）
 
     /// `apps.lookup` —— 列已安装应用，**带 App 数据容器路径**（v0.3.497 新增）.
     ///
-    /// ## 为什么需要它（AirCard 的 #2，用户点名要移植）
-    /// `airlift` 只能读写**已知绝对路径**，而 App 容器的路径里带一串随机 UUID
+    /// ## 为什么需要它
+    /// App 容器的路径里带一串随机 UUID
     /// （`/var/containers/Bundle/Application/<UUID>/`）—— 靠人猜不出来。
-    /// 这个能力走 `installation_proxy`（**不是漏洞、不依赖 airlift**），
-    /// 直接把 `Container`（数据容器）/ 包路径给出来，配上 `airlift.readdir`
-    /// 就能浏览任意 App 的容器。
+    /// 这个能力走 `installation_proxy`（**不是漏洞**），
+    /// 直接把 `Container`（数据容器）/ 包路径给出来，用于定位 App 容器。
     ///
     /// ## 参数
     /// - `bundleId`：可选；给了就只返回那一个 App（不区分大小写）
@@ -1863,11 +604,10 @@ enum HostCapabilityService {
     /// | `crash` | `com.apple.crashreportcopymobile` | `/var/mobile/Library/Logs/CrashReporter` |
     ///
     /// **`/var` 根、`/var/mobile/Library`、其他 App 容器都列不出来** ——
-    /// 没有任何服务把根设在它们上面；`house_arrest` 的 `VendContainer` 在 iOS 27 实测被拒；
-    /// airlift **本体**只能读写**单个已知文件**、**不能枚举目录**。
+    /// 没有任何服务把根设在它们上面；`house_arrest` 的 `VendContainer` 在 iOS 27 实测被拒。
     ///
     /// ## 为什么这条路稳
-    /// 两条服务都在 airlift 走的**同一条 RSD 隧道**上（设备广播服务 → host 直连端口）。
+    /// 两条服务都在同一条 RSD 隧道上（设备广播服务 → host 直连端口）。
     /// **不依赖 bad_query，也不依赖 MHA** —— 不随那两条被修而失效。
     enum AfcRoot: String {
         case media
@@ -1908,50 +648,6 @@ enum HostCapabilityService {
             // crashreport 是另一条服务会话，只有 CrashLogService 知道怎么连
             return try CrashLogService.shared.withAfc { try body($0) }
         }
-    }
-
-    /// 收尾：清掉 Media 根下 airlift 的临时目录（用户反馈「不要乱拉屎」）.
-    ///
-    /// ## 为什么敢「全删 `airlift-*`」而不是按时间挑
-    /// airlift 的**所有**设备端操作都串在 `AirliftExploit.protocolQueue` 上（串行），
-    /// 而本函数只在**一次能力调用结束之后**跑 ⇒ 此刻不存在「还在用」的临时目录.
-    ///
-    /// ⚠️ 曾经想按 mtime 挑（「只清 120 秒没动过的」），**实测行不通**：
-    /// airlift 的 zip 条目带**固定时间戳**，解压出来的目录 mtime 是旧的
-    /// ⇒ 按时间判断会把正在用的那个也判成「旧」. 所以只能靠「调用边界」保证安全.
-    ///
-    /// ## 刻意不碰
-    /// `AIR/`（用户自己的源文件）、`Airlock/`（固定工作根）、以及任何非 `airlift-` 前缀的条目.
-    ///
-    /// - Returns: 实际删掉的条目数（仅用于日志/调试）
-    @discardableResult
-    static func cleanupAirliftTemp() -> Int {
-        var removed = 0
-        _ = try? withAfcRoot(.media) { client in
-            // ① 旧版遗留在**根上**的 `airlift-*`（v0.3.512 之前的行为）—— 一并收掉
-            if let items = try? AFCService.listDirectory(client: client, path: "/") {
-                for item in items where item.name.hasPrefix("airlift-") {
-                    if (try? AFCService.removePath(client: client,
-                                                   path: "/" + item.name,
-                                                   includingContents: true)) != nil {
-                        removed += 1
-                    }
-                }
-            }
-            // ② 统一工作目录 `Airlift/` **里面的**内容（保留目录本身，
-            //    下次运行还要用；只清里面的临时项）
-            let workDir = "/" + AirliftExploit.workDirName
-            if let items = try? AFCService.listDirectory(client: client, path: workDir) {
-                for item in items where item.name.hasPrefix("airlift-") {
-                    if (try? AFCService.removePath(client: client,
-                                                   path: workDir + "/" + item.name,
-                                                   includingContents: true)) != nil {
-                        removed += 1
-                    }
-                }
-            }
-        }
-        return removed
     }
 
     /// 规范化成 AFC 口径（去掉前导/尾随 `/`）.
@@ -2018,9 +714,8 @@ enum HostCapabilityService {
     /// ## 为什么它值得单独开一个能力（真机实测 2026-09-20）
     /// `afc_get_file_info` 会**跟随中间那一段 symlink**，而且**不受 AFC 沙盒限制** ——
     /// 同一条路径上 `afc.read` / `afc.write` / `afc.list` 全是 `Afc(PermDenied)`，
-    /// 只有 stat 能过。于是：在 Media 里放一条指向**目标父目录**的 symlink
-    /// （airlift 的 stage 本来就会建），就能对**任意路径**问
-    /// 「在不在 / 多大 / 是文件还是目录」，**不用跑 airlift**。
+    /// 只有 stat 能过。于是：在 Media 里放一条指向**目标父目录**的 symlink，
+    /// 就能对**任意路径**问「在不在 / 多大 / 是文件还是目录」。
     ///
     /// ## 局限（诚实写出来）
     /// 只能**点查**（给定名字），**不能列目录**。
@@ -2031,7 +726,7 @@ enum HostCapabilityService {
         if let err { return err }
         do {
             let result = try withAfcRoot(root) { client in
-                AirliftExploit.afcStat(client: client, path: path)
+                AFCService.statFile(client: client, path: path)
             }
             let extra: [String: Any] = [
                 "root": root.rawValue,
@@ -2110,7 +805,7 @@ enum HostCapabilityService {
             //   误导性的 hint 会让人去改 recursive，白试一轮。
             if text.contains("PermDenied") {
                 return fail("删除被拒（权限）：该条目不属于当前身份，"
-                            + "AFC 与 airlift 都无权删除它。",
+                            + "AFC 无权删除它。",
                             extra: ["root": root.rawValue, "path": path,
                                     "note": "这类条目通常由系统账号创建（如 sysdiagnose 归档内容），"
                                           + "读/列通常仍可用，但删/写不行。"])
@@ -2150,9 +845,8 @@ enum HostCapabilityService {
     /// 单条记录里 args / result 各自的上限。
     ///
     /// ▸ v0.3.492：从 **1200 提到 8192**。原来的 1200 太小 ——
-    /// airlift 的判据（`details`）动辄 1200~3600 字符，一截就把最关键的
-    /// 「清单里有没有我们那条」「删除成立」那几行切掉，
-    /// 于是每次排障都得再绕去 `cat LoginLogs/airlift_at2.txt` 看原文。
+    /// 有些能力的 `details` 判据动辄 1200~3600 字符，一截就把最关键的
+    /// 那几行切掉，于是每次排障都得再绕去设备上 `cat` 原文。
     /// 8192 足以完整容纳这类判据，同时仍防止单条记录把日志撑爆。
     private static let callLogTextLimit = 8192
     /// 日志文件大小上限；超过就只留后半段（最近的调用才是排障要看的）。

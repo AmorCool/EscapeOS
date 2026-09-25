@@ -623,7 +623,7 @@ final class ModuleService {
         // actions 为空是合法的 —— 前提是模块有**别的入口**：
         // binary（自启动服务）/ lua（脚本）/ ui（原生 SwiftUI 界面）。
         // ⚠️ v0.3.482 修：原来漏了 `hasNativeUI`，导致「功能全在原生界面里、
-        // 不声明任何 action」的模块（airlift-poc）在导入时被拒
+        // 不声明任何 action」的模块在导入时被拒
         //（真机报「模块未声明任何 action」）。模块仓库的 validate.py 早就允许了，
         // 宿主这里没跟上 —— 两处校验必须同步改。
         guard !module.actions.isEmpty

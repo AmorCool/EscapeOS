@@ -330,6 +330,51 @@ final class AFCService {
     }
 
     /// 读一个文件的全部内容（复用调用方的连接）
+    /// `afc_get_file_info` 的可读结果（`afc.stat` 能力用）.
+    struct StatResult {
+        let exists: Bool
+        let size: Int64
+        let isDirectory: Bool
+        let ifmt: String?
+        let linkTarget: String?
+        let describe: String
+    }
+
+    /// 查一条路径的元数据（`afc_get_file_info`）.
+    ///
+    /// ## 为什么它不受 AFC 沙盒限制（真机实测 2026-09-20）
+    /// `afc_get_file_info` 会**跟随中间那一段 symlink**，而且不像
+    /// read / write / list 那样被 AFC 的根沙盒挡住 —— 同一条路径上
+    /// `read` / `write` / `list` 全是 `Afc(PermDenied)`，只有 stat 能过。
+    /// 于是「在 Media 里放一条指向目标父目录的 symlink」就能对**任意路径**问
+    /// 「在不在 / 多大 / 是文件还是目录」。
+    ///
+    /// ## 局限（诚实写出来）
+    /// 只能**点查**（给定名字），**不能列目录**。
+    ///
+    /// - Note: `client` 由调用方连接/释放；`path` 是 AFC 口径（相对根，可含 `..`）。
+    static func statFile(client: OpaquePointer, path: String) -> StatResult {
+        var info = AfcFileInfo()
+        if let e = path.withCString({ afc_get_file_info(client, $0, &info) }) {
+            let code = e.pointee.code
+            let message = e.pointee.message.map { String(cString: $0) } ?? ""
+            idevice_error_free(e)
+            return StatResult(exists: false, size: 0, isDirectory: false,
+                              ifmt: nil, linkTarget: nil,
+                              describe: "失败 code=\(code) \(message)")
+        }
+        let ifmt = info.st_ifmt.map { String(cString: $0) }
+        let linkTarget = info.st_link_target.map { String(cString: $0) }
+        let size = Int64(info.size)
+        afc_file_info_free(&info)
+        var text = "成功 size=\(size) st_ifmt=\(ifmt ?? "?")"
+        // `st_link_target` 只有 symlink 才有 —— 它是「link 真的指向哪」的直接证据。
+        if let linkTarget { text += " st_link_target=\(linkTarget)" }
+        return StatResult(exists: true, size: size,
+                          isDirectory: ifmt == "S_IFDIR", ifmt: ifmt,
+                          linkTarget: linkTarget, describe: text)
+    }
+
     static func readFile(client: OpaquePointer, path: String) throws -> Data {
         var handle: OpaquePointer?
         if let e = path.withCString({ afc_file_open(client, $0, AfcRdOnly, &handle) }) {

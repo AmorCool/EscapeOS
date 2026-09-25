@@ -341,179 +341,6 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             lines.append("  模块数量: \(ModuleService.shared.listModules().count)")
             lines.append("  实测帧率: \(HighRefreshService.shared.measuredFPS) FPS")
             return lines.joined(separator: "\n")
-        case "airlift":
-            // ▸ 开发期入口：**强制**再跑一遍 airlift 协议探测（忽略单飞标志）。
-            //
-            // 为什么需要：探测的设计是「功能首次调用 airlift 时自动跑一次」
-            // （空间回收→扫描 / 文件共享进界面就会调到）。但开发期要**反复取结果**，
-            // 没有这个入口就只能靠「请用户去点一次扫描」来触发 ——
-            // **那是把系统的活推给用户**（本项目已犯过的错）。
-            // 有了它，取结果在 SSH 里一条命令完成。
-            //
-            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** ——
-            //    它会真建 RSD 隧道，挂在 UI 路径上会跟其它功能抢隧道
-            //    （v0.3.419/421/424 那串「所有依赖配对文件的功能一起失效」的成因）。
-            // 用法：airlift [组号]   组号 ∈ {0, a, b, c, d}，**省略 = a**（不要跑全部，见下）
-            //
-            // ▸ 为什么要能指定组、且默认只跑一组：真机实证（v0.3.457/460）——
-            //   **同一次运行内的第 1 个服务连接正常，第 2 个连接会卡死在 `adapter_connect`
-            //   上永不返回**（8 分钟无日志、15s 读超时都没触发）。
-            //   而实验设计是「四组各用一条全新连接」⇒ 连跑**必然卡在第 2 组**，
-            //   而且会**把整条串行队列永久堵死** ⇒ 之后所有探测都不再跑
-            //   （v0.3.460 真机就栽在这里：13:50:59 自动跑全部 ⇒ 队列堵死 ⇒
-            //     13:56/14:00 两次手动触发**一次都没执行**）。
-            //   ⇒ 省略组号时默认 **"a"**（一组 = 一条连接，不可能卡）。
-            let group = parts.count > 1 ? parts[1] : "a"
-            AirliftExploit.forceProtocolProbe(group: group)
-            return "已触发 airlift 协议探测（组 = \(group)）。\n"
-                 + "结果：logs 200 / cat LoginLogs/airlift_stage.txt / cat LoginLogs/airlift_grappa.txt"
-        case "airlift2":
-            // ▸ 开发期入口：**只**跑攻击链第 ② 步的最小闭环。
-            //
-            // 为什么单独一条命令、不复用 `airlift d`：`airlift` 走的是
-            // `triggerProtocolProbeOnce`，它会**依次**跑 Grappa 探测 + 协议探测 + stage 探测
-            // ⇒ 要建**两条**服务连接；而真机实证「同一次运行里第 2 个服务连接会卡死在
-            // `adapter_connect` 上永不返回」⇒ 第 ② 步会被堵死。本命令**只跑一条链**。
-            //
-            // 做什么：组(d) 的真实 macOS 样本过 Grappa 认证之后，继续走第 ② 步 ——
-            // **读** `AssetManifest`（设备→主机，§9.2 方向表）→ 发 `FileComplete`（攻击落点），
-            // 并把设备对**每一条**的响应原文拿回来 —— 拿到清单是进展、被拒也是结论。
-            // （`FileBegin` 按 §9.2 不发。）
-            //
-            // ▸ 变体（真机 19:24 / v0.3.469 实证：设备在 `FinishedSyncingMetadata` 之后
-            //   **直接回 `SyncFinished`** ⇒ 会话那时就结束了 ⇒ 变体 1 的 `FileComplete`
-            //   落进**死会话**，设备把它当**新会话开场**回 `SyncAllowed`+`AssetMetrics`）：
-            //     1（默认）= FinishedSyncingMetadata → 读 AssetManifest → 发 FileComplete
-            //     2        = 发 FileComplete → 发 FinishedSyncingMetadata → 读（趁会话活着）
-            //     3        = 发 AssetManifest（主机侧）→ 发 FileComplete → 发 FinishedSyncingMetadata → 读
-            //     4        = ▸ 参考实现的**两段式**（v0.3.474）：读 AssetManifest →
-            //                发 FileComplete(link → `airlift-link-<t>`) → sleep 0.9s →
-            //                发 FileComplete(payload → `airlift-link-<t>/<leaf>`) →
-            //                用 `com.apple.afc` 回读**三个位置**（跟随 symlink / 被当目录替换 / 都没发生）。
-            //                落点由 `airlift3` 交接（`airlift-target = …`）决定，
-            //                默认在 Media 内部 ⇒ 零风险且可自验。
-            //     5        = ▸ 参考实现的**读**（v0.3.479，`airlift.py:504-563`）：读 AssetManifest →
-            //                发 FileComplete(link → `airlift-link-<t>`) → sleep 0.9s →
-            //                发 FileComplete(target → `airlift-recovered-<t>`) →
-            //                用 `com.apple.afc`（根 = Media）读回 `airlift-recovered-<t>`。
-            //                读目标由 `airlift3 read <路径>` 交接（`airlift-target = …`）；
-            //                判据 = `recovered` 存在且大小 > 0 ⇒ 越界读成立。
-            //     6        = ▸ 与变体 5 **完全相同**，读完再删掉 Media 里的副本（v0.3.480）。
-            //                `move` 是移动不是拷贝 ⇒ 副本一删，**原位置的文件就彻底消失** = **删除**。
-            //                ⚠️ **先确认备份落盘再删**（备份是唯一一份；没备份就不删，如实报出副本路径）。
-            //   **一次只跑一个变体**。
-            //
-            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
-            //    挂在 UI 路径上会跟其它功能抢隧道（v0.3.419/421/424 那串事故的成因）。
-            // 用法：airlift2 [变体号]   变体号 ∈ {1, 2, 3, 4, 5, 6}，**省略 = 1**
-            let variant = parts.count > 1 ? parts[1] : "1"
-            AirliftExploit.forceAttackStep2Probe(variant: variant)
-            return "已触发 airlift 攻击链第②步探测（变体 \(variant)）。\n"
-                 + "结果：cat LoginLogs/airlift_at2.txt（结论，< 2 KB）"
-                 + " / cat LoginLogs/airlift_at2_full.txt（每帧原文）"
-        case "airlift3":
-            // ▸ 开发期入口：**只做** airlift 攻击链的「前置条件」那一步 ——
-            // ① stage 真实归档（zip 落地到 `/var/mobile/Media/airlift-src-<token>/`）
-            // ② AFC 建 `Books`、`Books/Sync` 并写 `Books/Sync/Books.plist`
-            // **不发任何 AirTraffic 消息**（第 ③ 步用已有的 `airlift2 1`）。
-            //
-            // 为什么需要（根因，依据 `AldazActivator/airlift-rw` 源码）：
-            //   参考实现自己用 AFC **伪造了设备上的 Books 同步元数据**，
-            //   设备端 Books 同步客户端读到它才会在 `AssetManifest` 里播报
-            //   那个「待下载 asset」。我们从来没写过这个文件 ⇒ 设备无待下载 asset
-            //   ⇒ 不发 AssetManifest ⇒ 第 ③ 步的 `FileComplete` 成了孤立应答 ⇒ 被忽略。
-            //   详见 `AirliftExploit.runBooksStagingProbe()` 的头注释。
-            //
-            // 跑完接着跑 `airlift2 1`，看 `LoginLogs/airlift_at2.txt` 里**有没有
-            // `AssetManifest`** —— 有 = 根因定案；没有 = 这条前置条件不成立，如实报出。
-            //
-            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
-            //    挂在 UI 路径上会跟其它功能抢隧道（v0.3.419/421/424 那串事故的成因）。
-            // 用法：airlift3 [越界目标路径]          —— 写模式
-            //       airlift3 read <目标绝对路径>    —— ▸ v0.3.479 读模式
-            //   · 省略 = `/var/mobile/Media/airlift-canary-<token>`（**Media 内部，零风险**）
-            //     —— 配套的 `airlift2 4` 会穿过 symlink 写到那里，落点**能用 AFC 读回来**
-            //     ⇒ 「机制成立与否」当场可验；
-            //   · 传值 = 用真实目标（例如参考实现的 `/var/mobile/Library/SpringBoard`）
-            //     —— **那会写 Media 之外**，必须显式指定、并自行确认授权。
-            //   · `read <路径>` = **读模式**：Books.plist 的第 2 条 identifier 换成
-            //     `relpath(<路径>, /var/mobile/Media/Airlock/Book)`（参考实现 `airlift.py:504-563`）
-            //     ⇒ 配套的 `airlift2 5` 会让设备把那个**真实文件搬进 Media**，再 AFC 读回来。
-            //     ⚠️ 读是**移动**不是拷贝 —— 目标文件读完就不在原位了（还原见 `airlift2 5` 的注释）。
-            let booksRead: String?
-            let booksTarget: String?
-            let booksPayload: String?
-            /// ▸ v0.3.486：落点**文件名**（设备把 payload 落到「symlink 解析出的目录 + 它」）
-            let booksLeaf: String?
-            if parts.count > 1 && parts[1] == "read" {
-                // `read` 必须带目标；没带就如实报用法，**不猜**（猜一个目标等于读错地方）。
-                guard parts.count > 2 else {
-                    return "用法：airlift3 read <目标绝对路径>\n"
-                         + "（`read` 后必须跟目标；省略整个 `read` 才是写模式）"
-                }
-                booksRead = parts[2]
-                booksTarget = nil
-                booksPayload = nil
-                booksLeaf = nil
-            } else if parts.count > 1 && parts[1] == "write" {
-                // ▸ v0.3.480：`write <目标> <payload 相对路径>` —— 用**任意字节**写。
-                // payload 文件放在 **App 的 Documents** 里（相对路径，与 SSH 的 cat/ls 同口径）。
-                // 这是「把读到的字节写回去」（= 还原）与「任意内容写入」的前提
-                // —— 也是 `airlift2 6`（删除）敢于删副本的底气：备份能放回去。
-                guard parts.count > 3 else {
-                    return "用法：airlift3 write <目标绝对路径> <payload 相对路径（相对 App Documents）>\n"
-                         + "（例：airlift3 write /var/mobile/Library/Preferences/com.x.plist my.plist）"
-                }
-                booksRead = nil
-                // ▸ v0.3.486：把目标拆成「父目录 + 文件名」。
-                //   设备落点 = 「穿过 symlink 解析出的目录」+ leaf ⇒ target 必须是**目录**、
-                //   leaf 必须是**文件名**。v0.3.480~485 一直把整条路径当 target、
-                //   leaf 写死成 canary 名 ⇒ 这条命令写不出**指定文件名**的文件
-                //   （真机表现：写入失败/落点名字不对）。
-                //   按组件切，不用路径 API（它们会标准化掉 `..`，而 `..` 是攻击本体）。
-                let comps = parts[2].split(separator: "/").map(String.init)
-                guard comps.count >= 2 else {
-                    return "目标必须是绝对路径且不能是根目录下的条目：\(parts[2])"
-                }
-                booksTarget = "/" + comps.dropLast().joined(separator: "/")
-                booksLeaf = comps[comps.count - 1]
-                booksPayload = parts[3]
-            } else {
-                booksRead = nil
-                booksTarget = parts.count > 1 ? parts[1] : nil
-                booksPayload = nil
-                booksLeaf = nil
-            }
-            AirliftExploit.runBooksStagingProbe(target: booksTarget,
-                                                readTarget: booksRead,
-                                                payloadRelativePath: booksPayload,
-                                                leafName: booksLeaf)
-            let targetText = booksRead.map { "读模式，目标 = " + $0 }
-                ?? (booksTarget ?? "（默认：Media 内部的 canary 目录，零风险）")
-            return "已触发 airlift books staging 最小实验（stage + 写 Books.plist，不碰 AirTraffic）。\n"
-                 + "越界目标 = \(targetText)\n"
-                 + (booksPayload.map { "payload 来源 = Documents/" + $0 + "\n" } ?? "")
-                 + "结果：cat LoginLogs/airlift_books_verdict.txt（结论）"
-                 + " / cat LoginLogs/airlift_books.txt（完整过程）\n"
-                 + (booksRead == nil
-                    ? "下一步：airlift2 4 → cat LoginLogs/airlift_at2.txt（两段式 + 落点回读）"
-                    : "下一步：airlift2 5 → cat LoginLogs/airlift_at2.txt（读 + AFC 回读）")
-        case "airlift4":
-            // ▸ 开发期入口（v0.3.476）：**只读**盘点 `/var/mobile/Media` 里的落点。
-            //
-            // 为什么需要：`airlift2 4` 的落点回读写在 `airlift_at2.txt` 的**末尾**，
-            // 而那个文件有字节上限 —— 真机实测（v0.3.475）判据正好被截掉，**一趟白跑**。
-            // 而**落点状态还留在设备上**，所以补这条只读命令：不必重跑整条链就能看清
-            // 「payload 落在 canary 目标目录（= 跟随了 symlink）还是落在 airlift-link-* 下面
-            // （= symlink 被当普通目录替换）」。上限已同时提到 3600 字节。
-            //
-            // ⚠️ **只读**：只列目录 / 查文件信息，不建、不写、不删；只挑 `airlift-` 前缀的条目。
-            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上**（会真建 RSD 隧道）。
-            // 用法：airlift4
-            AirliftExploit.runAfcLandingProbe()
-            return "已触发 Media 落点只读盘点。\n"
-                 + "结果：cat LoginLogs/airlift_landing.txt\n"
-                 + "（判据 A = payload 落在 canary 目标目录里 ⇒ 机制成立；判据 B = 落在 airlift-link-* 里 ⇒ 没跟随）"
         case "ddiprobe":
             // ▸ 只读诊断：判定设备上到底挂没挂 DDI（Developer Disk Image）。
             //
@@ -530,8 +357,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             //    只是**不再用来解释 `ServiceNotFound`**。
             // 本命令只回答一个问题：`image_mounter_copy_devices` 返回空还是非空。
             //
-            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道
-            //    （理由与上面的 airlift 相同；且它开的服务连接**每次只允许一条**）。
+            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
+            //    而且它开的服务连接**每次只允许一条**。
             // 安全约束全部落在 `DDIMountProbe` 头注释里（复用 AFC 串行队列 / 单连接 / 只读）。
             // 用法：ddiprobe   （同步阻塞执行，结束后直接读结果）
             return DDIMountProbe.runOnce()
@@ -838,16 +665,15 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 与模块走的是**同一个** `HostCapabilityService.call`（所以也会进 `caplog`）——
             // 有了它就能在 SSH 里逐个能力试，不用装模块、不用点界面。
             //
-            // 例：cap exploit.status
-            //     cap airlift.air '{"op":"list"}'
-            //     cap airlift.pull '{"path":"/var/mobile/Library/Logs/CrashReporter/x.bin"}'
+            // 例：cap host.version
+            //     cap afc.list '{"path":"/DCIM"}'
+            //     cap proc.list
             //
-            // ⚠️ 同步阻塞：沙盒外操作走 airlift，一次 10~20 秒。
+            // ⚠️ 同步阻塞：有些能力会真的连设备，一次可能十几秒。
             guard parts.count > 1 else {
                 return "用法: cap <能力名> [JSON]\n"
-                    + "例: cap exploit.status\n"
-                    + "    cap airlift.air '{\"op\":\"list\"}'\n"
-                    + "    cap airlift.pull '{\"path\":\"/var/mobile/...\"}'\n"
+                    + "例: cap host.version\n"
+                    + "    cap afc.list '{\"path\":\"/DCIM\"}'\n"
                     + "能力清单: " + HostCapabilityService.capabilityList.joined(separator: ", ")
             }
             let capability = parts[1]
@@ -899,17 +725,13 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     static let helpText = """
     EscapeSpace SSH 调试 · 可用命令:
       status          运行状态总览
-      airlift [组号]   强制再跑一遍 airlift 协议探测；组号 0/a/b/c 可只跑一组（推荐，见注释）
-      airlift2 [变体号]  只跑攻击链第②步最小闭环；变体 1=读 AssetManifest→FileComplete（默认）2=先发 FileComplete 3=先发 AssetManifest 4=两段式（先搬 symlink 再穿过它写 payload，并回读落点）5=读（把 Media 之外的真实文件搬进 Media 再 AFC 读回，读目标由 airlift3 read 交接）6=删除（与 5 相同，读完删副本 ⇒ 原文件彻底消失；先确认备份落盘再删）（结果 → LoginLogs/airlift_at2.txt，全文 → airlift_at2_full.txt）
-      airlift3 [目标路径]  只做攻击链的前置条件：stage 真实归档 + AFC 写 Books/Sync/Books.plist（**不发 AirTraffic**）；省略目标 = Media 内部 canary 目录（零风险，配套 airlift2 4 可自验），传值 = 真实目标（会写 Media 之外）；airlift3 read <路径> = 读模式（配套 airlift2 5）；airlift3 write <目标文件> <payload相对路径> = 用 Documents 里的**任意字节**写**到指定文件名**（v0.3.486 起自动把目标拆成「父目录 + 文件名」—— 设备落点 = symlink 解析出的目录 + leaf，所以必须拆；配套 airlift2 4，是「还原」的前提）（结果 → LoginLogs/airlift_books_verdict.txt，全文 → airlift_books.txt）
-      airlift4  只读盘点 Media 里的落点：列根目录 + 逐个 inspect 所有 airlift-* 条目（判据 A=payload 在 canary 目标目录里⇒机制成立；判据 B=在 airlift-link-* 里⇒没跟随）（结果 → LoginLogs/airlift_landing.txt）
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）
       modules         已安装模块列表
       logs [n]        登录日志末尾 n 行（默认 30，最多 5000）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       caplog [n]      **宿主能力调用日志**末尾 n 行（默认 60）—— 任何模块（原生界面 / dylib / lua）调宿主能力的入参与返回原文，排障「模块为什么没生效」看这个
-      cap <能力名> [JSON]   直接调一次宿主能力（与模块同一个分发器，也会进 caplog）。例: cap exploit.status / cap airlift.air '{"op":"list"}'
+      cap <能力名> [JSON]   直接调一次宿主能力（与模块同一个分发器，也会进 caplog）。例: cap host.version / cap afc.list '{"path":"/DCIM"}'
       modls [模块id]  列任意模块的数据目录（省略 id = 第一个二进制模块）
       modcat <模块id> <相对路径> [n]   读任意模块数据目录下的文本文件（默认 80 行）
       invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）

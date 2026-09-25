@@ -291,8 +291,7 @@ enum BatteryHealthService {
     /// v0.3.443：一次性把电池相关的两个 IORegistry 节点**完整**落盘，
     /// 用于给「生产日期到底在设备侧还是在爱思服务端」定案（本次逆向唯一没算准的一项）.
     ///
-    /// - 位置：`Documents/LoginLogs/battery_dump.txt`（覆盖式，写法参照
-    ///   `AirliftExploit.dumpTranscript(_:)`）；
+    /// - 位置：`Documents/LoginLogs/battery_dump.txt`（覆盖式落盘）；
     /// - 内容：每个节点的顶层**全部键 + 值**、`BatteryData` 的全部键 + 值，
     ///   外加一节「键名含 date / time / manufactur / produc / firstuse / factory
     ///   的键」（大小写不敏感）；

@@ -39,9 +39,6 @@ struct EscapeSpaceApp: App {
             + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")
             + " (" + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?") + ") 启动",
             category: .general)
-        // v0.3.428：若 airlift 已勾选，启动后（延迟 5s）自动跑一次连通性自检 ——
-        // 用户勾选过一次之后什么都不用做，每次启动都会自动跑并写日志。
-        AirliftExploit.scheduleSelfTestAfterLaunch()
         // v0.3.164：后台保活恢复——开关已开但上次进程已死时，启动即恢复保活
         // （audio 静音播放，UIBackgroundModes audio）; 否则开关开了也没人 start.
         if KeepAliveManager.shared.isEnabled {

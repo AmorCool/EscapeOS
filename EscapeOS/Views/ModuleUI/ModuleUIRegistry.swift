@@ -8,9 +8,9 @@
 //  但 SwiftUI 视图**没法从 zip 里加载** —— 它必须编译进宿主。所以清单里写的
 //  只是一个**注册名**，真正的视图由宿主内的代码向本表注册：
 //
-//      ModuleUIRegistry.shared.register("airlift-poc") { module in
+//      ModuleUIRegistry.shared.register("my-module") { module in
 //          [ModuleUITab(id: "main", title: "概览", systemImage: "square.grid.2x2") { m in
-//              AirliftModuleView(module: m)     // 视图本身由宿主编译，这里只是登记
+//              MyModuleView(module: m)     // 视图本身由宿主编译，这里只是登记
 //          }]
 //      }
 //
@@ -100,6 +100,7 @@ final class ModuleUIRegistry {
 /// 而不是散落在各处的副作用.
 @MainActor
 func registerBuiltinModuleUIs() {
-    // 各模块的原生界面分别在自己的文件里注册（见 AirliftPocModuleUI.swift）
-    registerAirliftPocModuleUI()
+    // 目前**没有**内置「原生 SwiftUI 界面」的模块.
+    // 以后哪个模块要原生界面，就在它自己的文件里向 `ModuleUIRegistry.shared` 注册，
+    // 然后在这里加一行调用 —— 保持「宿主支持哪些模块原生界面」有单一可读清单.
 }

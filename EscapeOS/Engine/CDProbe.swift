@@ -41,8 +41,8 @@ import Foundation
 ///   ❌ 失败：code=13 sub_code=0 message=UnexpectedResponse("failed to parse raw pairing file from bytes")
 /// ```
 /// ⇒ `Documents/pairingFile.plist` 是 **RpPairingFile**（RSD/无线配对格式），
-/// **不是** lockdown 配对文件（旁证：`rp_pairing_file_read` 对它一直正常 —— RP 隧道能建、
-/// airlift 报「配对文件 OK」）。⇒ **lockdown provider 这条路在设备侧不可用，已整体删掉。**
+/// **不是** lockdown 配对文件（旁证：`rp_pairing_file_read` 对它一直正常 —— RP 隧道能建）。
+/// ⇒ **lockdown provider 这条路在设备侧不可用，已整体删掉。**
 ///
 /// 改用：**我们自己的 RSD 服务表里就有** `com.apple.internal.devicecompute.CoreDeviceProxy`
 /// （真机 64 条服务之一，**无** `.shim.remote` 后缀，直连 TCP 端口即可），
