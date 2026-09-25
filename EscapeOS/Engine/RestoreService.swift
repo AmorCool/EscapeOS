@@ -30,8 +30,10 @@ final class RestoreService {
     private let escape = SandboxEscape()
     private let files = FileService()
 
-    private let maxFiles = 5000
-    private let maxTotalBytes: Int64 = 512 * 1024 * 1024
+    // Safety limits live in `BackupLimits` and are resolved per call. The old
+    // hard-coded 5,000 files / 512 MiB gate rejected archives that the (now
+    // unlimited) export side happily produced, so both sides share the same
+    // dynamic budget.
 
     /// Evaluate whether a backup can be restored right now.
     func eligibility(for record: BackupRecord, installedApps: [InstalledApp]) -> RestoreEligibility {
@@ -134,13 +136,21 @@ final class RestoreService {
         guard !manifest.isEmpty else {
             throw BackupError.invalidArchive("Backup manifest is empty.")
         }
-        guard manifest.count <= maxFiles else {
-            throw BackupError.restoreBlocked("Backup exceeds the maximum supported file count.")
+        guard manifest.count <= BackupLimits.maxFiles else {
+            throw BackupError.restoreBlocked(
+                "Backup contains \(manifest.count) files, which exceeds the supported limit of \(BackupLimits.maxFiles)."
+            )
         }
 
         let totalBytes = manifest.reduce(Int64(0)) { $0 + Int64($1.size) }
+        let maxTotalBytes = BackupLimits.maxTotalBytes()
         guard totalBytes <= maxTotalBytes else {
-            throw BackupError.restoreBlocked("Backup exceeds the maximum supported size.")
+            throw BackupError.restoreBlocked(
+                "Backup is \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))"
+                    + " which exceeds the current size limit of "
+                    + ByteCountFormatter.string(fromByteCount: maxTotalBytes, countStyle: .file)
+                    + ". Free up space and try again."
+            )
         }
 
         var filesRestored = 0

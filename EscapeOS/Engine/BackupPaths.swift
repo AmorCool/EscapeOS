@@ -151,7 +151,13 @@ final class BackupCatalog {
     }
 
     func loadRecord(at url: URL) throws -> BackupRecord {
+        // The reader keeps a file handle open (it reads the archive on demand
+        // instead of loading it into memory), so release it as soon as the
+        // metadata has been decoded. `loadRecords()` calls this once per
+        // archive; leaking handles there used to mean holding every backup's
+        // bytes in RAM at the same time.
         let reader = try ZipReader(url: url)
+        defer { reader.close() }
         guard reader.entries[BackupPaths.metadataFileName] != nil else {
             throw BackupError.invalidArchive("Missing \(BackupPaths.metadataFileName)")
         }

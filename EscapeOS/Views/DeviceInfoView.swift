@@ -18,9 +18,9 @@ struct DeviceInfoView: View {
     @State private var info: DeviceInfoModel?
     @State private var errorText: String?
     @State private var loading = true
-    /// v0.3.530：生产日期（爱思服务端按 mlbSerial 查表，见 `I4ProdateClient`）.
-    /// 面板先出，联网结果到了再刷新该行；未取到则保持 nil -> 显示「未知」.
-    @State private var productionDate: String?
+    /// v0.3.531：保修期限（爱思服务端按设备 SN 查表，见 `I4WarrantyClient`）.
+    /// 面板先出，联网结果到了再刷新该行；未取到则保持 nil -> 显示原来的「—」.
+    @State private var warrantyTime: String?
     /// 隐私敏感字段统一小眼睛状态（默认全部隐藏）
     @State private var showSensitive = false
     /// 内置浏览器（保修期限等外链查询，不静默跳外部 App）
@@ -81,7 +81,7 @@ struct DeviceInfoView: View {
 
     private func load() async {
         loading = true
-        productionDate = nil
+        warrantyTime = nil
         defer { loading = false }
         do {
             // Swift 6：经 DeviceInfoBox 把非 Sendable 的 DeviceInfoModel 转移回主线程
@@ -90,16 +90,13 @@ struct DeviceInfoView: View {
             }.value
             info = boxed.value
             errorText = nil
-            // v0.3.530：生产日期只存在于爱思服务端（按主板序列号查表）.
-            // 单独异步取，**不阻塞**面板渲染；失败就保持「未知」.
-            let productType = boxed.value.productType
+            // v0.3.531：保修期限只在爱思服务端（按设备 SN 查表，不是 MLB）.
+            // 面板出完后异步取，不阻塞渲染；失败保持「—」.
+            // ⚠️ 该请求会把设备序列号发到爱思服务器（见 `I4WarrantyClient` 顶部隐私说明）.
             let serialNumber = boxed.value.serialNumber
-            let mlbSerial = boxed.value.mlbSerial
             Task { @MainActor in
-                if let date = await I4ProdateClient.fetch(productType: productType,
-                                                          serialNumber: serialNumber,
-                                                          mlbSerial: mlbSerial) {
-                    productionDate = date
+                if let warranty = await I4WarrantyClient.fetch(serialNumber: serialNumber) {
+                    warrantyTime = warranty
                 }
             }
         } catch {
@@ -111,8 +108,9 @@ struct DeviceInfoView: View {
         UIPasteboard.general.string = s
     }
 
-    /// 保修期限只能联网查（Apple 要过验证码，爱思自己也有 Capcha 任务）——
-    /// 这里给官方查询页并在内置浏览器打开，序列号带上省得手输。
+    /// v0.3.531：保修期限已由 `I4WarrantyClient` 联网取回（爱思服务端）.
+    /// 行尾这里保留 Apple 官方查询页作为**兜底入口**（Apple 要过验证码，
+    /// 爱思自己也有 Capcha 任务）—— 在内置浏览器打开，序列号带上省得手输.
     private func warrantyURL(_ info: DeviceInfoModel) -> String {
         guard let sn = info.serialNumber, !sn.isEmpty else {
             return "https://checkcoverage.apple.com/cn/zh/"
@@ -177,8 +175,11 @@ struct DeviceInfoView: View {
             .init(id: 11, label: "iCloud",
                   value: info.iCloudSignedIn.map { $0 ? "已开启" : "未开启" },
                   sensitive: false),
-            .init(id: 12, label: "生产日期", value: productionDateText, sensitive: false),
-            .init(id: 13, label: "保修期限", value: nil, sensitive: false, link: warrantyURL(info)),
+            .init(id: 12, label: "生产日期", value: productionDateText(info), sensitive: false),
+            // v0.3.531：保修期限改为联网取爱思服务端 `warrantyTime` 字符串**原样透传**
+            // （见 `I4WarrantyClient`）；未取到则 value 为 nil -> 显示「—」.
+            // 行尾的「查询 ›」仍保留为 Apple 官方保修页兜底入口（爱思自己的 fallback，需过验证码）.
+            .init(id: 13, label: "保修期限", value: warrantyTime, sensitive: false, link: warrantyURL(info)),
             .init(id: 14, label: "崩溃日志",
                   value: info.crashLogCount.map { "\($0) 次" },
                   sensitive: false),
@@ -304,9 +305,13 @@ struct DeviceInfoView: View {
         return cap
     }
 
-    /// v0.3.530：生产日期由 `I4ProdateClient` 联网查（爱思服务端按主板序列号查表）.
-    /// 未取到（无网络 / 无 mlbSerial / 服务端无该机记录）时保持「未知」.
-    private var productionDateText: String { productionDate ?? "未知" }
+    /// v0.3.531：生产日期改为**纯本地**由主板序列号算出（`DeviceSerialDate`，不联网、不外发）.
+    /// 输入就是 lockdown 的 `MLBSerialNumber`（已在设备上）；长度/字符不合法或走数字分支
+    /// 时返回 nil，界面保持「未知」.
+    private func productionDateText(_ info: DeviceInfoModel) -> String {
+        guard let mlb = info.mlbSerial else { return "未知" }
+        return DeviceSerialDate.productionDate(from: mlb) ?? "未知"
+    }
 
     /// 「固件版本」= iOS 版本 (构建号) —— 爱思把 iOS 版本这一行叫「固件版本」
     private func versionText(_ info: DeviceInfoModel) -> String? {

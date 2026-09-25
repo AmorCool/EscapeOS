@@ -45,9 +45,11 @@ final class BackupService {
     /// Subtrees of a Data container we export and restore.
     static let backupRoots = ["Documents", "Library", "tmp"]
 
-    /// Maximum number of files / total bytes as a safety guard.
-    private let maxFiles = 5000
-    private let maxTotalBytes: Int64 = 512 * 1024 * 1024
+    // Safety limits live in `BackupLimits`. The previous hard-coded
+    // 5,000 files / 512 MiB gate was removed in v0.3.531: it was not a ZIP
+    // limit and it silently rejected valid containers. The byte ceiling is now
+    // derived from the volume's free space, and the file ceiling only guards
+    // against runaway trees (ZIP64 removed the 65,535-entry format limit).
 
     /// Export the given app's container to a zip inside Documents/Backups.
     func exportBackup(
@@ -79,6 +81,11 @@ final class BackupService {
         }
         let outURL = backupsDir.appendingPathComponent("\(safeName)_backup_\(stamp).zip")
 
+        // Resolve the limits once per export. The byte ceiling depends on the
+        // free space of the volume we are about to write the archive to.
+        let maxFiles = BackupLimits.maxFiles
+        let maxTotalBytes = BackupLimits.maxTotalBytes(for: backupsDir)
+
         var manifest: [BackupManifestEntry] = []
         var totalBytes: Int64 = 0
 
@@ -103,6 +110,8 @@ final class BackupService {
                         zip: zip,
                         manifest: &manifest,
                         totalBytes: &totalBytes,
+                        maxFiles: maxFiles,
+                        maxTotalBytes: maxTotalBytes,
                         progress: progress,
                         isCancelled: isCancelled
                     )
@@ -166,13 +175,12 @@ final class BackupService {
         zip: ZipWriter,
         manifest: inout [BackupManifestEntry],
         totalBytes: inout Int64,
+        maxFiles: Int,
+        maxTotalBytes: Int64,
         progress: BackupProgress?,
         isCancelled: () -> Bool
     ) throws {
         if isCancelled() { throw BackupError.cancelled }
-        if manifest.count >= maxFiles || totalBytes > maxTotalBytes {
-            throw BackupError.writeFailed("Safety limit exceeded (too many files or too much data).")
-        }
 
         let entries: [FileItem]
         do {
@@ -192,22 +200,43 @@ final class BackupService {
                     zip: zip,
                     manifest: &manifest,
                     totalBytes: &totalBytes,
+                    maxFiles: maxFiles,
+                    maxTotalBytes: maxTotalBytes,
                     progress: progress,
                     isCancelled: isCancelled
                 )
             } else if entry.kind == .regular {
-                let data: Data
+                let added: ZipAddedFile
                 do {
-                    data = try files.readFile(at: entry.path)
-                } catch {
+                    // Stream from disk: the file is never held in memory, so a
+                    // multi-gigabyte file no longer risks a jetsam kill. The
+                    // SHA-256 the manifest needs is computed in the same pass.
+                    added = try zip.addFile(name: rel, path: entry.path, expectedSize: entry.size)
+                } catch ZipWriterError.cannotReadSource {
+                    // Locked or removed between listing and read. Nothing was
+                    // written for this file, so skipping keeps the archive
+                    // consistent (same as the previous behaviour).
                     continue
+                } catch {
+                    // The local header is already on disk with a partial
+                    // payload, so the archive must be discarded by the caller.
+                    throw BackupError.writeFailed(error.localizedDescription)
                 }
 
-                let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                try zip.addFile(name: rel, data: data)
-                manifest.append(BackupManifestEntry(path: rel, size: data.count, sha256: hash))
-                totalBytes += Int64(data.count)
+                manifest.append(BackupManifestEntry(path: rel, size: Int(added.size), sha256: added.sha256))
+                totalBytes += added.size
                 progress?(manifest.count, totalBytes, rel)
+
+                // Guard after every file rather than once per directory. The
+                // old entry-level check could be skipped entirely when the
+                // overflow happened inside the last existing root.
+                if manifest.count > maxFiles || totalBytes > maxTotalBytes {
+                    throw BackupError.writeFailed(
+                        "Safety limit exceeded (over \(maxFiles) files or over "
+                            + ByteCountFormatter.string(fromByteCount: maxTotalBytes, countStyle: .file)
+                            + " of data)."
+                    )
+                }
             }
         }
     }

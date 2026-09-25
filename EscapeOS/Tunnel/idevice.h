@@ -5040,11 +5040,15 @@ struct IdeviceFfiError *mobileactivationd_is_activated(struct MobileActivationdC
 struct IdeviceFfiError *mobileactivationd_deactivate(struct MobileActivationdClientHandle *client);
 
 /**
- * v0.3.530：反激活 —— RSD 通道变体（mobileactivationd_deactivate 的 RSD 版）.
+ * v0.3.531：反激活 —— RSD 通道变体（mobileactivationd_deactivate 的 RSD 版）.
  *
- * 走 LockdownClient::connect_rsd → start_service("com.apple.mobileactivationd")
- * → adapter.connect(port) → 发二进制 plist { Command = "DeactivateRequest" }，
- * 与 libimobiledevice mobileactivation_deactivate() 逐字一致.
+ * 走「RSD 服务表查端口 → adapter.connect(port) → Idevice::rsd_checkin()
+ * → 发二进制 plist { Command = "DeactivateRequest" }」，
+ * 与项目已在生产跑通的 mcinstall_set_wifi_power_rsd 同款范式.
+ *
+ * v0.3.530 用的 lockdownd StartService 在 RSD 通道上不成立（真机回
+ * Socket(BrokenPipe, "channel closed")），故 v0.3.531 改走服务表路线.
+ * 每一步失败都有不同的 [反激活诊断][步骤N-...] 文案，便于一次真机定案.
  *
  * 为什么不用 mobileactivationd_deactivate(provider)：上游内部要
  * provider.get_pairing_file()（lockdown 配对文件），本项目只有 RpPairingFile，

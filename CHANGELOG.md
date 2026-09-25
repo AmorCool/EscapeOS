@@ -1,5 +1,86 @@
 # Changelog
 
+## [0.3.531] - 2026-09-25
+
+> 本版四件事：**备份放开 512MiB / 解决 4GB 上限**、**生产日期改离线**、
+> **保修期限移植**、**反激活修复（改用 RSD 正解）**。
+
+### 一、备份：放开 512 MiB 闸 + 解决 4 GB 上限
+
+**500MB 的根因不是 zip，是代码里一道硬闸**（`maxFiles=5000` / `maxTotalBytes=512MiB`，
+而且**导出侧与恢复侧各有一份**，且从未写进 CHANGELOG）。本版：
+
+- **新增 `Engine/BackupLimits.swift`** —— 护栏改成**动态**：按卷可用空间算
+  （下限 1 GiB / 上限 64 GiB），导出与恢复**共用同一份**
+- **`ZipReader` 改成按需读**（新增 `ZipByteSource` 抽象：内存源 + `FileHandle` 源）——
+  EOCD 只读文件尾部、中央目录与条目按需读，**不再整份 `Data(contentsOf:)`**
+- **`BackupPaths.loadRecord` 加 `defer close()`** —— 打开「备份」列表**不再让每个归档常驻内存**
+  （这是放开闸的前置：不修它，一备份大档、一开列表就会被系统杀掉）
+- **`ZipWriter` 加 ZIP64 + 流式写** —— size/offset 超 4 GiB 写 ZIP64 extra、
+  条目数超 65535 写 EOCD64+locator；新增 `addFile(name:path:)` 按 1 MiB 分块、
+  增量 CRC32 + 增量 SHA-256
+- **护栏判定从 `walk()` 入口挪到每文件累加后**（原来有个「溢出恰好发生在最后一个 root 内则不抛错」的漏洞）
+
+**旧备份兼容性（命脉）**：**格式零改动** —— 小档（<4 GiB、<65535 条目、单文件 <4 GiB）
+**不进 ZIP64 分支**，本地头/中央目录/EOCD 字节与旧版**逐字节一致**（已用 Python 复刻新旧写入器
++ 标准库 `zipfile` 做**离线字节级验证，6/6 通过**）。
+
+> **待真机验证**：ZIP64 的 `version needed = 45` 与 `0xFFFFFFFF` 哨兵在 iOS 解压工具上的接受度。
+> **已知限制**：**恢复单个 >4 GiB 的文件仍会 OOM** —— 恢复侧的分块流式写本次未做
+> （会动到恢复命脉，本机不能编译不敢上）。**总档 >4 GB（多文件）已完全可用**。
+
+**其它备份入口核对**：应用管理 / 空间回收 / 更多→备份 **共用同一实现，已一并修好**；
+更多→配置管理（直接用 `ZipWriter` 打 2 个 plist）、更多→MDM（目录拷贝）**不经该闸，无需改**
+（但顺带受益于 ZIP64/流式）。
+
+### 二、生产日期（整机）改成**完全离线**
+
+原来 v0.3.530 是**查爱思服务器**（会把 `ProductType` / 序列号 / 主板序列号发出去）。
+本版证明**服务端只是个解码器**，于是改成**本地算**：
+
+```
+days = base34( mlbSerial[3:6] )     # 三个字符；字母表 0123456789ABCDEFGHJKLMNPQRSTUVWXYZ（缺 I/O）
+日期 = 1970-01-01 + days
+```
+- 新增 `Engine/DeviceSerialDate.swift`（纯整数换算，**不用 Calendar/DateFormatter**，避免时区偏差）
+- **删掉 `Engine/I4ProdateClient.swift`** —— **本功能不再有任何联网**
+- 验证：`F3XH89002VT00008LH` → `2024年07月29日(第31周)`，与爱思服务端**逐字一致**（Python 复刻 6/6 通过）
+
+### 三、保修期限（原来显示 `-`）
+
+爱思那个「已过保修期」是**查爱思服务端**（`app4.i4.cn/getSerialWarrantyTime.xhtml`）拿的。
+本版新增 `Engine/I4WarrantyClient.swift`，复用与生产日期**同一把公钥 + 同一套裸 base64(RSA)**：
+
+- ★ **`Content-Type` 必须是 `text/plain`** —— 之前一直回「参数异常」**不是参数名错，是这个头错**
+- `serial` 用**设备 SN**（不是 MLB）；**UI 原样透传 `warrantyTime` 字符串**，不自己解析格式化
+  （未过保的格式本机没设备可验）
+- 实测真机拿到 `"warrantyTime":"已过保修期"` ✓
+
+> **⚠️ 隐私**：这个请求会把**设备序列号**发到爱思的服务器（设备自己不上报保修）。
+> 用户已决定**界面不加提示**，故仅写在代码注释里。
+
+### 四、反激活修复（改用 RSD 正解）
+
+v0.3.530 真机报 `Socket(BrokenPipe, "channel closed")`。
+**三个独立 agent 收敛到同一根因**：**RSD 通道不支持 lockdownd 的 `StartService` RPC**
+（项目自己 v0.3.418 就得过这个结论）。本版改成 RSD 正解：
+
+```
+RSD 服务表本地查表拿 port（标准名 → .shim.remote 兜底）
+  → adapter.connect(port) → Idevice::rsd_checkin() → 发二进制 plist {Command:"DeactivateRequest"}
+```
+- **不再调 `lockdown.start_service` / `connect_rsd`**（删掉两个 import）
+- **加了分步诊断文案**（`[反激活诊断][步骤N-…]`）—— 原来所有失败都塌成同一个 `BrokenPipe`，
+  等于在猜；现在**一次真机就能定案**。查不到服务时还会**列出表里所有含 activation 的服务名**
+- 两个 `idevice.h` **sha256 相同** ✓；**未动上层三层安全闸**（激活锁开启/读不到都拦）
+
+> **待真机验证**：服务表里登记的到底是标准名还是 `.shim.remote`、该服务是否吃 RSDCheckin。
+> **反预测**：若报 `ServiceNotFound` ⇒ RSD 服务表里根本没有该服务 ⇒ 这条路无解。
+
+### 静态自检
+9 个改动 `.swift` 配平通过 / `LINT PASS（234 文件）` / 两个 `idevice.h` sha256 相同 /
+调用点逐一核对 / **本机不能编译，编译验证靠 CI**.
+
 ## [0.3.530] - 2026-09-25
 
 > 本版是**三个功能一起发**：生产日期（电池）、生产日期（整机）、反激活设备.

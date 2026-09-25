@@ -38,20 +38,102 @@ enum ZipReaderError: Error, LocalizedError {
     }
 }
 
-/// ZIP reader for store (method 0) and deflate (method 8). Used by backup restore and Extract.
+/// Random-access byte source behind a `ZipReader`.
+///
+/// Two implementations exist: an in-memory blob (for callers that already hold
+/// the archive as `Data`) and an on-disk file handle. The file-backed source is
+/// what keeps a large backup readable: the reader only ever touches the end of
+/// central directory plus the bytes of the entries it actually needs, instead
+/// of loading the whole archive into RAM.
+protocol ZipByteSource: AnyObject {
+    /// Total number of bytes in the archive.
+    var size: Int { get }
+    /// Read exactly `length` bytes starting at `offset`.
+    func read(at offset: Int, length: Int) throws -> Data
+    /// Release the underlying resource. Safe to call more than once.
+    func close()
+}
+
+/// In-memory archive source.
+final class ZipDataByteSource: ZipByteSource {
+    private let data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    var size: Int { data.count }
+
+    func read(at offset: Int, length: Int) throws -> Data {
+        guard length >= 0, offset >= 0, offset + length <= data.count else {
+            throw ZipReaderError.invalidArchive("Read out of range")
+        }
+        return data.subdata(in: offset..<(offset + length))
+    }
+
+    func close() {}
+}
+
+/// File-backed archive source using `FileHandle` seek + read.
+final class ZipFileByteSource: ZipByteSource {
+    private let handle: FileHandle
+    let size: Int
+
+    init(url: URL) throws {
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        self.size = (attrs[.size] as? NSNumber)?.intValue ?? 0
+        self.handle = try FileHandle(forReadingFrom: url)
+    }
+
+    func read(at offset: Int, length: Int) throws -> Data {
+        guard length >= 0, offset >= 0, offset + length <= size else {
+            throw ZipReaderError.invalidArchive("Read out of range")
+        }
+        guard length > 0 else { return Data() }
+        try handle.seek(toOffset: UInt64(offset))
+        var remaining = length
+        var buffer = Data()
+        buffer.reserveCapacity(length)
+        while remaining > 0 {
+            guard let chunk = try handle.read(upToCount: remaining), !chunk.isEmpty else {
+                throw ZipReaderError.invalidArchive("Truncated archive")
+            }
+            buffer.append(chunk)
+            remaining -= chunk.count
+        }
+        return buffer
+    }
+
+    func close() {
+        try? handle.close()
+    }
+
+    deinit {
+        try? handle.close()
+    }
+}
+
+/// ZIP reader for store (method 0) and deflate (method 8). Used by backup
+/// restore and Extract. Supports ZIP64 sizes / offsets and, for file-backed
+/// archives, never loads the whole archive into memory.
 final class ZipReader {
 
-    private let data: Data
+    private let source: ZipByteSource
     private(set) var entries: [String: ZipMember] = [:]
 
     init(url: URL) throws {
-        self.data = try Data(contentsOf: url)
+        self.source = try ZipFileByteSource(url: url)
         try parseCentralDirectory()
     }
 
     init(data: Data) throws {
-        self.data = data
+        self.source = ZipDataByteSource(data: data)
         try parseCentralDirectory()
+    }
+
+    /// Release the underlying file handle. No-op for in-memory archives.
+    func close() {
+        source.close()
     }
 
     func entryNames() -> [String] {
@@ -71,25 +153,25 @@ final class ZipReader {
 
     func readEntry(_ entry: ZipMember, password: String? = nil) throws -> Data {
         let localOffset = entry.localHeaderOffset
-        guard localOffset + 30 <= data.count else {
+        guard localOffset >= 0, localOffset + 30 <= source.size else {
             throw ZipReaderError.invalidArchive("Truncated local header for \(entry.name)")
         }
 
-        let sig = data.readUInt32(at: localOffset)
+        let sig = try source.readUInt32(at: localOffset)
         guard sig == 0x04034b50 else {
             throw ZipReaderError.invalidArchive("Bad local header for \(entry.name)")
         }
 
-        let compression = Int(data.readUInt16(at: localOffset + 8))
-        let nameLen = Int(data.readUInt16(at: localOffset + 26))
-        let extraLen = Int(data.readUInt16(at: localOffset + 28))
+        let compression = Int(try source.readUInt16(at: localOffset + 8))
+        let nameLen = Int(try source.readUInt16(at: localOffset + 26))
+        let extraLen = Int(try source.readUInt16(at: localOffset + 28))
         let payloadStart = localOffset + 30 + nameLen + extraLen
         let payloadEnd = payloadStart + entry.compressedSize
-        guard payloadEnd <= data.count else {
+        guard payloadEnd <= source.size else {
             throw ZipReaderError.invalidArchive("Truncated payload for \(entry.name)")
         }
 
-        let stored = data.subdata(in: payloadStart..<payloadEnd)
+        let stored = try source.read(at: payloadStart, length: entry.compressedSize)
         var working = stored
         var method = compression
         if entry.isEncrypted {
@@ -214,53 +296,87 @@ final class ZipReader {
     }
 
     private func parseCentralDirectory() throws {
-        guard data.count >= 22 else {
+        guard source.size >= 22 else {
             throw ZipReaderError.invalidArchive("File too small")
         }
 
-        var eocdOffset: Int?
-        let searchStart = max(0, data.count - 65557)
-        for i in stride(from: data.count - 22, through: searchStart, by: -1) {
-            if data.readUInt32(at: i) == 0x06054b50 {
-                eocdOffset = i
-                break
+        // The EOCD record sits at the very end of the file, optionally followed
+        // by a comment of up to 65,535 bytes. Read only that tail instead of the
+        // whole archive, then scan it backwards for the signature.
+        let tailLength = min(source.size, 22 + 65_535)
+        let tailStart = source.size - tailLength
+        let tail = try source.read(at: tailStart, length: tailLength)
+
+        // Prefer an EOCD whose comment length lands exactly on the end of the
+        // file (that rules out a signature that merely appears inside file
+        // data). Archives with trailing bytes after the EOCD fall back to the
+        // last signature found, matching the previous reader's behaviour.
+        var eocdIndex: Int?
+        var fallbackIndex: Int?
+        var i = tail.count - 22
+        while i >= 0 {
+            if tail[i] == 0x50, tail[i + 1] == 0x4B, tail[i + 2] == 0x05, tail[i + 3] == 0x06 {
+                if fallbackIndex == nil { fallbackIndex = i }
+                let commentLength = Int(readLE16(tail, i + 20))
+                if i + 22 + commentLength == tail.count {
+                    eocdIndex = i
+                    break
+                }
             }
+            i -= 1
         }
-        guard let eocd = eocdOffset else {
+        guard let eocdIndex = eocdIndex ?? fallbackIndex else {
             throw ZipReaderError.invalidArchive("End-of-central-directory not found")
         }
+        let eocd = tailStart + eocdIndex
 
-        let centralSize = Int(data.readUInt32(at: eocd + 12))
-        let centralOffset = Int(data.readUInt32(at: eocd + 16))
-        guard centralOffset >= 0, centralOffset + centralSize <= data.count else {
+        var centralSize = Int(readLE32(tail, eocdIndex + 12))
+        var centralOffset = Int(readLE32(tail, eocdIndex + 16))
+
+        // ZIP64: the locator sits immediately before the EOCD and points at a
+        // record carrying the 64-bit central directory position. Every step is
+        // validated, because the 20 bytes in front of the EOCD can
+        // coincidentally look like a locator signature in a plain 32-bit
+        // archive. When validation fails the 32-bit values are kept; if they
+        // were the 0xFFFFFFFF sentinel the range guard below rejects them.
+        if eocd >= 20,
+           try source.readUInt32(at: eocd - 20) == ZipFormat.zip64LocatorSignature,
+           let zip64Raw = try? source.readUInt64(at: eocd - 12),
+           let zip64Offset = Int(exactly: zip64Raw),
+           zip64Offset <= eocd - 56,
+           (try? source.readUInt32(at: zip64Offset)) == ZipFormat.zip64EOCDSignature {
+            centralSize = Int(try source.readUInt64(at: zip64Offset + 40))
+            centralOffset = Int(try source.readUInt64(at: zip64Offset + 48))
+        }
+
+        guard centralOffset >= 0, centralSize >= 0, centralOffset + centralSize <= source.size else {
             throw ZipReaderError.invalidArchive("Central directory out of range")
         }
 
-        var offset = centralOffset
-        let end = centralOffset + centralSize
+        let central = try source.read(at: centralOffset, length: centralSize)
+        var offset = 0
         var parsed: [String: ZipMember] = [:]
 
-        while offset + 46 <= end {
-            let sig = data.readUInt32(at: offset)
-            guard sig == 0x02014b50 else { break }
+        while offset + 46 <= central.count {
+            guard readLE32(central, offset) == 0x02014b50 else { break }
 
-            let flags = data.readUInt16(at: offset + 8)
-            let compression = Int(data.readUInt16(at: offset + 10))
-            let dosTime = data.readUInt16(at: offset + 12)
-            let crc = data.readUInt32(at: offset + 16)
-            let compressed = Int(data.readUInt32(at: offset + 20))
-            let uncompressed = Int(data.readUInt32(at: offset + 24))
-            let nameLen = Int(data.readUInt16(at: offset + 28))
-            let extraLen = Int(data.readUInt16(at: offset + 30))
-            let commentLen = Int(data.readUInt16(at: offset + 32))
-            let localHeaderOffset = Int(data.readUInt32(at: offset + 42))
+            let flags = readLE16(central, offset + 8)
+            let compression = Int(readLE16(central, offset + 10))
+            let dosTime = readLE16(central, offset + 12)
+            let crc = readLE32(central, offset + 16)
+            var compressed = Int(readLE32(central, offset + 20))
+            var uncompressed = Int(readLE32(central, offset + 24))
+            let nameLen = Int(readLE16(central, offset + 28))
+            let extraLen = Int(readLE16(central, offset + 30))
+            let commentLen = Int(readLE16(central, offset + 32))
+            var localHeaderOffset = Int(readLE32(central, offset + 42))
 
             let nameStart = offset + 46
             let nameEnd = nameStart + nameLen
-            guard nameEnd <= data.count else {
+            guard nameEnd <= central.count else {
                 throw ZipReaderError.invalidArchive("Truncated entry name")
             }
-            let nameData = data.subdata(in: nameStart..<nameEnd)
+            let nameData = central.subdata(in: nameStart..<nameEnd)
             let name = String(data: nameData, encoding: .utf8)
                 ?? String(data: nameData, encoding: .isoLatin1)
             guard let name else {
@@ -269,8 +385,21 @@ final class ZipReader {
 
             let extraStart = nameEnd
             let extraEnd = extraStart + extraLen
-            let extra = extraEnd <= data.count ? data.subdata(in: extraStart..<extraEnd) : Data()
+            let extra = extraEnd <= central.count ? central.subdata(in: extraStart..<extraEnd) : Data()
             let aes = Self.parseAESExtra(extra)
+
+            // ZIP64 extended information: substitute the 64-bit values for the
+            // fields whose 32-bit counterparts hold the 0xFFFFFFFF sentinel.
+            if let zip64 = Self.parseZip64Extra(
+                extra,
+                needsUncompressedSize: uncompressed == 0xFFFF_FFFF,
+                needsCompressedSize: compressed == 0xFFFF_FFFF,
+                needsOffset: localHeaderOffset == 0xFFFF_FFFF
+            ) {
+                if let value = zip64.uncompressedSize { uncompressed = value }
+                if let value = zip64.compressedSize { compressed = value }
+                if let value = zip64.localHeaderOffset { localHeaderOffset = value }
+            }
 
             parsed[name] = ZipMember(
                 name: name,
@@ -296,8 +425,8 @@ final class ZipReader {
     private static func parseAESExtra(_ extra: Data) -> ZipAESInfo? {
         var i = 0
         while i + 4 <= extra.count {
-            let id = extra.readUInt16(at: i)
-            let size = Int(extra.readUInt16(at: i + 2))
+            let id = readLE16(extra, i)
+            let size = Int(readLE16(extra, i + 2))
             let bodyStart = i + 4
             let bodyEnd = bodyStart + size
             guard bodyEnd <= extra.count else { break }
@@ -305,7 +434,7 @@ final class ZipReader {
                 let vendor = extra.subdata(in: (bodyStart + 2)..<(bodyStart + 4))
                 if vendor == Data([0x41, 0x45]) { // "AE"
                     let strength = extra[bodyStart + 4]
-                    let method = Int(extra.readUInt16(at: bodyStart + 5))
+                    let method = Int(readLE16(extra, bodyStart + 5))
                     let bits: Int
                     switch strength {
                     case 1: bits = 128
@@ -320,16 +449,80 @@ final class ZipReader {
         }
         return nil
     }
+
+    /// Parse the ZIP64 extended information extra field (`0x0001`). Only the
+    /// values whose fixed field was the 0xFFFFFFFF sentinel are present, and
+    /// they appear in the fixed order: uncompressed size, compressed size,
+    /// relative header offset, disk start number.
+    private static func parseZip64Extra(
+        _ extra: Data,
+        needsUncompressedSize: Bool,
+        needsCompressedSize: Bool,
+        needsOffset: Bool
+    ) -> (uncompressedSize: Int?, compressedSize: Int?, localHeaderOffset: Int?)? {
+        guard needsUncompressedSize || needsCompressedSize || needsOffset else { return nil }
+        var i = 0
+        while i + 4 <= extra.count {
+            let id = readLE16(extra, i)
+            let size = Int(readLE16(extra, i + 2))
+            let bodyStart = i + 4
+            let bodyEnd = bodyStart + size
+            guard bodyEnd <= extra.count else { break }
+            if id == ZipFormat.zip64ExtraID {
+                var cursor = bodyStart
+                var uncompressed: Int?
+                var compressed: Int?
+                var headerOffset: Int?
+                if needsUncompressedSize, cursor + 8 <= bodyEnd {
+                    uncompressed = Int(readLE64(extra, cursor))
+                    cursor += 8
+                }
+                if needsCompressedSize, cursor + 8 <= bodyEnd {
+                    compressed = Int(readLE64(extra, cursor))
+                    cursor += 8
+                }
+                if needsOffset, cursor + 8 <= bodyEnd {
+                    headerOffset = Int(readLE64(extra, cursor))
+                }
+                return (uncompressed, compressed, headerOffset)
+            }
+            i = bodyEnd
+        }
+        return nil
+    }
 }
 
-private extension Data {
-    func readUInt16(at offset: Int) -> UInt16 {
-        let slice = subdata(in: offset..<(offset + 2))
-        return slice.withUnsafeBytes { $0.load(as: UInt16.self).littleEndian }
+// MARK: - Little-endian byte helpers
+
+private func readLE16(_ data: Data, _ offset: Int) -> UInt16 {
+    UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+}
+
+private func readLE32(_ data: Data, _ offset: Int) -> UInt32 {
+    UInt32(data[offset])
+        | (UInt32(data[offset + 1]) << 8)
+        | (UInt32(data[offset + 2]) << 16)
+        | (UInt32(data[offset + 3]) << 24)
+}
+
+private func readLE64(_ data: Data, _ offset: Int) -> UInt64 {
+    var value: UInt64 = 0
+    for i in 0..<8 {
+        value |= UInt64(data[offset + i]) << (8 * i)
+    }
+    return value
+}
+
+private extension ZipByteSource {
+    func readUInt16(at offset: Int) throws -> UInt16 {
+        readLE16(try read(at: offset, length: 2), 0)
     }
 
-    func readUInt32(at offset: Int) -> UInt32 {
-        let slice = subdata(in: offset..<(offset + 4))
-        return slice.withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+    func readUInt32(at offset: Int) throws -> UInt32 {
+        readLE32(try read(at: offset, length: 4), 0)
+    }
+
+    func readUInt64(at offset: Int) throws -> UInt64 {
+        readLE64(try read(at: offset, length: 8), 0)
     }
 }
