@@ -742,9 +742,10 @@ enum HostCapabilityService {
                                 "error": "airlift 读失败：\(read.summary)",
                                 "steps": read.details, "path": target, "via": "airlift"]), nil)
         }
-        steps.append("① airlift 读到 \(data.count) 字节（读是移动，文件已进 Media）")
+        steps.append("① airlift 读到 \(data.count) 字节"
+            + "（设备把它搬进 Media，AFC 读出后**再写回原位覆盖**）")
 
-        // ② 写回原位
+        // ② 写回原位（**读机制本身的一半**：读 = 搬进 Media → AFC 读出 → 写回原位覆盖）
         let restore = withAirlift { AirliftExploit.pocWriteFile(path: target, data: data) }
         steps.append(restore.ok
             ? "② 已把原字节写回原位置"
