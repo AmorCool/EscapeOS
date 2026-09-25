@@ -57,15 +57,27 @@ final class SandboxEscape {
     ///   - isGroup: Whether the target is an App Group container.
     ///   - create: When `true`, skip the existence (`lstat`) pre-check. Used by
     ///     diagnostics that probe paths whose UUID is not yet known.
+    ///   - forceRealExtension: Skip the LiveContainer sentinel shortcut and always
+    ///     attempt a real `bad_query` extension. Callers that actually have to
+    ///     *read* a file use this as a retry: the sentinel only encodes "the host
+    ///     already granted us these roots", which is inferred from a path prefix
+    ///     plus a **global** token count and therefore is not proof that this
+    ///     particular path is reachable.
     /// - Returns: A `Handle` that must later be passed to `release(_:)`.
     /// - Throws: `SandboxEscapeError` on failure.
-    func consume(path: String, groupIdentifier: String? = nil, isGroup: Bool = false, create: Bool = false) throws -> Handle {
+    func consume(
+        path: String,
+        groupIdentifier: String? = nil,
+        isGroup: Bool = false,
+        create: Bool = false,
+        forceRealExtension: Bool = false
+    ) throws -> Handle {
         // When LiveContainer has already granted us a sandbox extension for the
         // LC data/AppGroup roots, any subpath inside those roots is reachable
         // without calling bad_query — which on iOS 26 returns -4 (kernelRejected)
         // for arbitrary containers. Return a sentinel handle so callers can keep
         // using withHandle() transparently.
-        if Self.isCoveredByLCContainerExtensions(path: path) {
+        if !forceRealExtension, Self.isCoveredByLCContainerExtensions(path: path) {
             return Handle(raw: -1)
         }
 
