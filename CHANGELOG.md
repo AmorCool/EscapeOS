@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.3.528] - 2026-09-25
+
+> 用户决定**不再使用 airlift**（原话「把airlift删掉吧 我不会再用了」）⇒ 整块删除；
+> 同时按用户要求移植爱思 9.0 的**顽固图标清理**进主页百宝箱.
+
+### 一、airlift **整体删除**（−11925 行）
+
+| 删了什么 | 说明 |
+|---|---|
+| `AirliftExploit.swift`（6676 行） | 漏洞利用本体 |
+| `AirliftChangeLog` / `AirliftBackupStore` / `PlistTweakService` / `PreferencesSettle` | 只服务 airlift 的辅助 |
+| 宿主能力 `airlift.*`(9) / `plist.tweak` / `sys.supervised.*` / `exploit.status` | `HostCapabilityService` **2285 → 947 行** |
+| `com.escapeos.airlift-poc` 模块 | 宿主内置副本 + 模块仓库整目录 |
+| `MobileDeviceStub` 桩 / AirTrafficHost 移植脚本 / a64 Grappa 验证工作流 | 整套构建配套 |
+| Rust `adapter.rs` 的 12 个函数 + 两个 `idevice.h` 的声明 | **保留 `adapter_connect`**（`cdprobe` 在调）|
+
+**顺带修的**：`afc.stat` 原来调 `AirliftExploit.afcStat` —— airlift 删了它会编译失败，
+把那段搬进 `AFCService.statFile(client:path:)`（它本来就是通用 AFC 操作）.
+
+**`fs.*` 的边界变化（如实写）**：沙盒外那条路随 airlift 一起没了 ⇒
+`fs.read/write/delete` 现在**只能读写 App 沙盒内**，沙盒外如实报错.
+（`sys.supervised.*` 也一起删了 —— 它读写**全程依赖 airlift**，且只有 airlift 模块在调；
+App 自己那套监督模式走 `ConfigurationsView` 的 FileManager，**不受影响**。）
+
+### 二、新增「顽固图标清理」（百宝箱）
+
+**逆向爱思 9.0 的结论**：`idm_app.dll` 走 `com.apple.springboardservices` 的
+`getIconState` → 改 → `setIconState`；界面串写着顽固图标 = **白图标 / 灰图标 / 无名称图标**，
+且**改之前先「备份图标位置」**.
+
+**实现**：
+- Rust FFI 加 `springboard_services_get_icon_state` / `_set_icon_state`
+  （以**二进制 plist 字节**进出，Swift 侧直接用 `PropertyListSerialization`）；
+- `Engine/IconCleanupService.swift`（扫描 / 清理 / 备份 / 恢复）+
+  `Views/IconCleanupView.swift` + 百宝箱入口.
+
+**判据**：布局里的 `bundleIdentifier` **不在「已安装应用清单」里** = 顽固图标.
+必须按 **bundle id** 比对，**不能按显示名**（同名应用存在，且 WhatsApp 的显示名里带不可见字符）.
+
+**安全设计**：扫描**只读** → 列出来给用户看 → **默认只勾**「应用已不在设备上」那一类
+（判据最硬）→ 写回**之前**先备份到 `Documents/IconStateBackup/` → 界面可一键「恢复图标位置」.
+
+> ⚠️ **待真机验证**：`setIconState` 是**写**操作，本机（无编译器、无设备）验不了.
+> 公开资料把「走网络（非 USB）」标为**无效** ⇒ 「RSD 隧道能不能写成功」是唯一没底的环节.
+> 读（`getIconState`）这一侧风险很低 —— `springboard_services_connect_rsd` 早就在用
+> （`JITEnableService.getAppIcon` 取应用图标是生产路径）.
+
+### 三、别的清理
+
+`pocWriteMany` 的同类假成功（`ok` 只判「全部搬走」、没判 symlink 在位）已修；
+删掉 `pocLoginLogsURL`（0 处调用）与 `PreferencesSettle.releaseForRead`
+（建立在已被推翻的「cfprefsd 占着文件」误判上）.
+
 ## [0.3.527] - 2026-09-25
 
 > 用户反馈：**「你告诉我写入成功，然后呢 根本没有写入成功，你在逗我吗？」**
