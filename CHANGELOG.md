@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.3.529] - 2026-09-25
+
+> 用户要求：**在容器管理里加上「浏览 Bundle」的能力** ——
+> 「我们只浏览容器、不浏览 bundle」，而改 Info.plist / 塞 dylib **必须先能进 `.app` 包**.
+
+### 新增「浏览 Bundle」（只对 LiveContainer 访客应用）
+
+**位置**：空间回收 → **容器管理** → 点任一访客应用 → 「容器内容」区块，
+在「浏览文件」下面多一行 **「浏览 Bundle」**.
+
+**进得去什么**：该访客的 `.app` 包内部 —— `Info.plist` / 可执行文件 / 资源 / 内嵌框架.
+
+### 通道：**不依赖漏洞利用**
+
+这条路径落在**宿主 LiveContainer 已签发的容器扩展范围内**
+（`<LC Data container>/Documents/Applications/<name>.app`，
+或 AppGroup 下的同款目录），与「浏览文件」走**同一条通道** ——
+`SandboxEscape.withHandle` 签发失败时**退回原生 FileManager 直接读**
+（`FileBrowserViewModel.list(at:)` 的既有兜底，注释原话：
+「特定 LiveContainer 扩展已覆盖的路径不需要显式签发就能用 FileManager 直接列出」）.
+
+⚠️ 开发过程中我先走错了路：一开始给 `FileBrowserView` 加了个 `forceContainerRoot`，
+它会走 `FileService.listContainerRoot`，而那条路的兜底是
+**`ExploitRegistry.run`（漏洞利用注册表）** —— 已被用户当场纠正并**全部回退**.
+本版**没有**引入任何新的漏洞依赖.
+
+### 改动（3 个文件，全在 EscapeSpace）
+
+| 文件 | 改动 |
+|---|---|
+| `Engine/LiveContainerDiscovery.swift` | `LiveContainerGuest` 加 `bundlePath` 字段；3 个构造点从**已经算好的** `GuestBundle.appBundlePath` 填入（原来算出来就丢了）|
+| `Views/ReclaimAppView.swift` | 加 `bundlePath` 入参（默认 nil）+ 「浏览 Bundle」行 |
+| `Views/LiveCleanTabView.swift` | 把 `row.guest.bundlePath` 传下去 |
+
+### 范围说明（如实写）
+
+- **只对 LiveContainer 访客应用有效** —— 它们的 bundle 在已授权范围内.
+- **系统 / App Store 应用不显示这一行**：它们的 bundle 在
+  `/var/containers/Bundle/Application/<UUID>/`，`house_arrest` 只 vend 数据容器
+  （FFI 里只有 `vend_container` / `vend_documents`，**没有 bundle**），
+  已签发的访客扩展也覆盖不到 ⇒ **不靠漏洞就拿不到**，所以**如实不显示**，不做兜底.
+
 ## [0.3.528] - 2026-09-25
 
 > 用户决定**不再使用 airlift**（原话「把airlift删掉吧 我不会再用了」）⇒ 整块删除；

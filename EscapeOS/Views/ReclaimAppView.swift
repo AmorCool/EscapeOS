@@ -11,6 +11,14 @@ struct ReclaimAppView: View {
     /// Optional container UUID shown beneath the app name (LiveContainer
     /// guests). Pass `LiveCleanAppRank.containerUUID` from the caller.
     var containerUUID: String? = nil
+    /// v0.3.529：LiveContainer 访客应用的 `.app` 包路径（`LiveContainerGuest.bundlePath`）.
+    ///
+    /// 有值时「容器内容」多一行「浏览 Bundle」，进去看 Info.plist / 可执行文件 /
+    /// 资源 / 内嵌框架 —— 改 Info.plist 或塞 dylib 必须先能进 `.app` 包.
+    /// 路径在**宿主已签发的容器扩展范围内**，与「浏览文件」走同一条通道
+    /// （原生 FileManager），**不依赖漏洞利用**.
+    /// 系统应用没有这个路径，传 nil（默认）即不显示该行.
+    var bundlePath: String? = nil
     @StateObject private var vm = ReclaimAppViewModel()
     /// Mirrors `AppDetailView`: checks the container is reachable through the
     /// sandbox extension before exposing the file browser.
@@ -159,6 +167,19 @@ struct ReclaimAppView: View {
                     .foregroundColor(AppTheme.accent)
             }
             .disabled(!access.isGranted)
+
+            // v0.3.529：访客应用的 .app 包（改 Info.plist / 塞 dylib 必须能进这里）.
+            // 与上面「浏览文件」同一条通道，不依赖漏洞利用.
+            if let bundlePath, !bundlePath.isEmpty {
+                NavigationLink(destination: FileBrowserView(
+                    rootPath: bundlePath,
+                    title: "\(app.name) · Bundle"
+                )) {
+                    Label("浏览 Bundle", systemImage: "shippingbox.fill")
+                        .foregroundColor(AppTheme.accent)
+                }
+                .disabled(!access.isGranted)
+            }
 
             Button {
                 backup.start(app: app, isContainerApp: true, iconData: guestIcon)

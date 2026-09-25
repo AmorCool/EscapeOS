@@ -203,7 +203,7 @@ struct LiveCleanTabView: View {
                     }
                     .disabled(row.failed || row.safeBytes == 0)
                 } else {
-                    NavigationLink(destination: ReclaimAppView(app: row.installedApp, viewModel: appList, guestIcon: row.guest.iconData, containerUUID: row.containerUUID)) {
+                    NavigationLink(destination: ReclaimAppView(app: row.installedApp, viewModel: appList, guestIcon: row.guest.iconData, containerUUID: row.containerUUID, bundlePath: row.guest.bundlePath)) {
                         rankRow(row, selected: false)
                     }
                 }

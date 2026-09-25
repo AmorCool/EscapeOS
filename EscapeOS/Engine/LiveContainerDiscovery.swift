@@ -35,13 +35,26 @@ struct LiveContainerGuest: Identifiable {
     /// "converted"/shared by LiveContainer. Surfaced in the UI as a "共享" pill.
     let isShared: Bool
 
+    /// v0.3.529：该访客应用的 `.app` 包路径 ——
+    /// `<LC Data container>/Documents/Applications/<name>.app`，
+    /// 或 AppGroup 下的同款目录（共享/转换过的访客）.
+    ///
+    /// 用途：容器管理里多一行「浏览 Bundle」，进去看 Info.plist / 可执行文件 /
+    /// 资源 / 内嵌框架 —— 改 Info.plist 或塞 dylib 必须先能进 `.app` 包.
+    ///
+    /// 这条路径**落在宿主已签发的容器扩展范围内**，和「浏览文件」走同一条通道
+    /// （原生 FileManager 直接读），**不依赖漏洞利用**.
+    /// 没定位到 `.app` 时为空串，UI 据此不显示该行.
+    let bundlePath: String
+
     init(id: String,
          bundleIdentifier: String,
          displayName: String,
          containerPath: String,
          iconData: Data?,
          hostName: String,
-         isShared: Bool = false) {
+         isShared: Bool = false,
+         bundlePath: String = "") {
         self.id = id
         self.bundleIdentifier = bundleIdentifier
         self.displayName = displayName
@@ -49,6 +62,7 @@ struct LiveContainerGuest: Identifiable {
         self.iconData = iconData
         self.hostName = hostName
         self.isShared = isShared
+        self.bundlePath = bundlePath
     }
 
     /// Synthesized `InstalledApp` so the existing `ReclaimService.scan /
@@ -159,7 +173,8 @@ final class LiveContainerDiscovery {
                                 displayName: bundle.displayName,
                                 containerPath: containerPath,
                                 iconData: bundle.iconData,
-                                hostName: host.name
+                                hostName: host.name,
+                                bundlePath: bundle.appBundlePath
                             )
                         }
                     }
@@ -185,7 +200,8 @@ final class LiveContainerDiscovery {
                             displayName: displayName,
                             containerPath: uuidPath,
                             iconData: appRef?.iconData,
-                            hostName: host.name
+                            hostName: host.name,
+                            bundlePath: appRef?.appBundlePath ?? ""
                         )
                     }
 
@@ -221,7 +237,8 @@ final class LiveContainerDiscovery {
                                 containerPath: uuidPath,
                                 iconData: appRef?.iconData,
                                 hostName: host.name,
-                                isShared: true
+                                isShared: true,
+                                bundlePath: appRef?.appBundlePath ?? ""
                             )
                         }
                     }
