@@ -17,6 +17,9 @@ struct TreasureBoxView: View {
     /// 再等 onDismiss 把 GestaltView push 到主页的导航栈上（本视图自己不 push，
     /// 因为在 sheet 里 push 会落到 sheet 自己那层导航栈，页面就没有返回按钮了）。
     let onOpenGestalt: () -> Void
+    /// 打开「顽固图标清理」页。与 `onOpenGestalt` 同款：由 HomeView 在 sheet
+    /// **完全关闭后**再 push（直接在本 sheet 里 push 会套第二层导航栈，页面没返回按钮）。
+    let onOpenIconCleanup: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -262,6 +265,30 @@ struct TreasureBoxView: View {
                         Text("Gestalt 编辑")
                             .font(.subheadline)
                         Text("查询 / 修改 MobileGestalt 键值（含备份）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
+            Button {
+                onOpenIconCleanup()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "trash.slash")
+                        .foregroundStyle(.orange)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("顽固图标清理")
+                            .font(.subheadline)
+                        Text("删除装 App 失败残留的图标（含备份）")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

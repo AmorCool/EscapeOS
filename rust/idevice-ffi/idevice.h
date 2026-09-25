@@ -6412,6 +6412,39 @@ struct IdeviceFfiError *springboard_services_get_homescreen_icon_metrics(struct 
                                                                          plist_t *res);
 
 /**
+ * Reads the whole home screen icon layout (SpringBoard getIconState).
+ *
+ * \param client A valid SpringBoardServicesClient handle
+ * \param format_version Optional C string: "2" = flat list (most complete),
+ *        "1"/"3" = fixed grid (trailing cells are false filler), "4" = row matrix.
+ *        Pass NULL for the device default. Read and write MUST use the same value.
+ * \param out_result On success, points to a newly allocated binary plist blob
+ * \param out_result_len On success, contains the byte length of that blob
+ *
+ * eturns An IdeviceFfiError on error, null on success
+ */
+struct IdeviceFfiError *springboard_services_get_icon_state(struct SpringBoardServicesClientHandle *client,
+                                                            const char *format_version,
+                                                            void **out_result,
+                                                            size_t *out_result_len);
+
+/**
+ * Writes a home screen icon layout back to SpringBoard (setIconState).
+ *
+ * \param client A valid SpringBoardServicesClient handle
+ * \param data A binary plist blob (usually the one from get_icon_state, modified)
+ * \param len Byte length of data
+ * \param format_version Optional C string, MUST match the value used when reading.
+ *        NULL = send no formatVersion.
+ *
+ * eturns An IdeviceFfiError on error, null on success
+ */
+struct IdeviceFfiError *springboard_services_set_icon_state(struct SpringBoardServicesClientHandle *client,
+                                                            const uint8_t *data,
+                                                            size_t len,
+                                                            const char *format_version);
+
+/**
  * Frees an SpringBoardServicesClient handle
  *
  * # Arguments

@@ -17,6 +17,9 @@ struct HomeView: View {
     /// 所以用 sheet 的 onDismiss 作为时机。
     @State private var showGestalt = false
     @State private var pendingGestalt = false
+    /// 顽固图标清理页（与 Gestalt 同一套「sheet 关闭后再 push」的中转）
+    @State private var showIconCleanup = false
+    @State private var pendingIconCleanup = false
 
     var body: some View {
         ScrollView {
@@ -39,10 +42,17 @@ struct HomeView: View {
                 pendingGestalt = false
                 showGestalt = true
             }
+            if pendingIconCleanup {
+                pendingIconCleanup = false
+                showIconCleanup = true
+            }
         }) {
             // 原生 sheet：0.4↔1.0 detent 上拉展开、下拉关闭
             TreasureBoxView(onOpenGestalt: {
                 pendingGestalt = true
+                treasureOpen = false
+            }, onOpenIconCleanup: {
+                pendingIconCleanup = true
                 treasureOpen = false
             })
             .presentationDetents([.fraction(0.4), .large])
@@ -54,6 +64,9 @@ struct HomeView: View {
         // `NavigationStack { HomeView(...) }` 的内容视图，本修饰符链天然位于该栈内部。
         .navigationDestination(isPresented: $showGestalt) {
             GestaltView()
+        }
+        .navigationDestination(isPresented: $showIconCleanup) {
+            IconCleanupView()
         }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {
