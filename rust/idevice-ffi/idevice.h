@@ -5040,6 +5040,35 @@ struct IdeviceFfiError *mobileactivationd_is_activated(struct MobileActivationdC
 struct IdeviceFfiError *mobileactivationd_deactivate(struct MobileActivationdClientHandle *client);
 
 /**
+ * v0.3.530：反激活 —— RSD 通道变体（mobileactivationd_deactivate 的 RSD 版）.
+ *
+ * 走 LockdownClient::connect_rsd → start_service("com.apple.mobileactivationd")
+ * → adapter.connect(port) → 发二进制 plist { Command = "DeactivateRequest" }，
+ * 与 libimobiledevice mobileactivation_deactivate() 逐字一致.
+ *
+ * 为什么不用 mobileactivationd_deactivate(provider)：上游内部要
+ * provider.get_pairing_file()（lockdown 配对文件），本项目只有 RpPairingFile，
+ * 那条路连不上.
+ *
+ * WARNING: 本函数会让设备变成未激活状态（回到 Hello / 激活界面）. 带激活锁时
+ * 反激活后必须知道原 Apple ID 密码才能重新激活，否则变砖；执行前必须关闭设备网络.
+ * 不可逆. 安全闸在上层 ActivationService.swift，绝对不要在真机上裸调本函数.
+ *
+ * # Arguments
+ * * [`adapter`] - An adapter created by this library
+ * * [`handshake`] - An RSD handshake from the same provider
+ *
+ * # Returns
+ * An IdeviceFfiError on error, null on success
+ *
+ * # Safety
+ * `adapter` must be a valid pointer to a handle allocated by this library
+ * `handshake` must be a valid pointer to a handle allocated by this library
+ */
+struct IdeviceFfiError *mobileactivationd_deactivate_rsd(struct AdapterHandle *adapter,
+                                                         struct RsdHandshakeHandle *handshake);
+
+/**
  * Frees a MobileActivationd client handle
  *
  * # Arguments

@@ -1,5 +1,78 @@
 # Changelog
 
+## [0.3.530] - 2026-09-25
+
+> 本版是**三个功能一起发**：生产日期（电池）、生产日期（整机）、反激活设备.
+> 三个都来自爱思 9.0 的逆向结论，**都不依赖漏洞利用**.
+
+### 一、生产日期（电池）—— 本地解码，不联网
+
+`BatteryHealthService` 的「生产日期」原来显示「未知」（旧实现只是**猜设备键名**，iOS 27 上没有那些键）.
+现在改为**从电池序列号本地解码**（新增 `Engine/BatterySerialDate.swift`）:
+
+```
+字母表 = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ"   (34 个，只缺 I 和 O)
+days   = 34 * v + (v mod 34)                     # v = 34*idx(sn[3]) + idx(sn[4])
+日期   = 1970-01-01 + days 天
+```
+电池 SN `F8YH7Y22SC600006TY` → **2024-06-23**（与爱思面板逐字一致）.
+
+> **⚠️ 待真机验证 + 语义存疑（如实写）**
+> 独立复核 agent **自己反汇编**确认了：公式**确实是爱思 9.0 的实现**（两个系数是硬编码立即数，
+> 全二进制唯一），但它**证伪了「base-34」**这个说法，并发现
+> **字母表与这段代码在爱思 8.0 里完全不存在**（8.0 只有另一条分支）.
+> ⇒ 它**更像爱思自研的兜底启发式，而不是 Apple 的真实编码**.
+> **本机只有 1 台设备可验**，换机型可能不准 ⇒ **需第二台真机配对验证**.
+> 代码注释里已写明「若日期不符优先怀疑系数」.
+
+### 二、生产日期（整机）—— 查爱思服务端
+
+`DeviceInfoView` 的「生产日期」原来硬编码「未知」，现在改为**按主板序列号查爱思服务端**
+（新增 `Engine/I4ProdateClient.swift`）:
+
+```
+POST https://app4.i4.cn/getProdate.xhtml
+body = 裸 base64( RSA_PKCS1v15( json ) )   # json 键按 ASCII 升序，末尾带 
+
+json = {"ProductType":…, "SerialNumber":…, "mlbSerial":…}
+→ data.prodate = "2024年07月29日(第31周)"
+```
+- **`mlbSerial` 是唯一决定字段**；它为空时**直接不发请求**（省一次无用请求，也少一次外发）
+- 公钥内置（PKCS#1 base64）—— 与既有 `I4StoreClient` 同款写法（那条路已在本 App 跑通）
+- 9 秒超时；失败**保持「未知」**，不弹错、不重试
+- 两段式加载：**面板先渲染**，日期后台补 —— 不让首屏等网络
+
+> **⚠️ 隐私**：这个请求会把 `ProductType` / 序列号 / 主板序列号**发到爱思的服务器**（代码注释已写明）.
+
+### 三、反激活设备（百宝箱）—— Apple 官方通道
+
+新增 `Engine/ActivationService.swift` + `Views/ActivationView.swift`，入口在百宝箱.
+
+- 走 **`com.apple.mobileactivationd`**，发二进制 plist `{Command: "DeactivateRequest"}`
+  —— **与 libimobiledevice 的 `mobileactivation_deactivate()` 一致，无漏洞、无越狱、无凭据**
+- 新增 Rust FFI `mobileactivationd_deactivate_rsd(adapter, handshake)`（照 `mcinstall_request_rsd` 风格）
+
+> **⚠️⚠️ 三层安全闸（这是本功能的重点）**
+> 1. 读 `ActivationState` + `com.apple.fmip.IsAssociated`：非已激活 → 拦；**激活锁开启 → 拦**；
+>    **激活锁读不到（未知）→ 同样拦**（不可逆操作不建立在「没读到就当没有」上）
+> 2. **服务层硬闸**：`deactivate()` 内部**自己再读一次**，不合格就抛错
+>    —— **不依赖界面禁用按钮，绕不过去**
+> 3. 界面：前置状态行 + 按钮禁用 + 红色原因；点击后**不可跳过的确认**，
+>    **没有「跳过 / 不再提示」**
+>
+> **带激活锁反激活 = 变砖**，所以第 1、2 层是硬拦，不是提示.
+> **待真机验证**：`EnableServiceSSL` 是否出现（出现则直接报错拒绝，不静默降级）、
+> 是否需要 `lockdownd_start_session`、反激活动作是否有应答.
+> **本机未在真机执行过**（不可逆，不能试）.
+
+### 开发过程（如实记录）
+
+- 本版**没有引入任何新的漏洞依赖** —— 中途我曾把「浏览 Bundle」接到 `ExploitRegistry` 上，
+  被用户当场纠正后**全部回退**（记入 `MY-FAULTS.md` 缺陷 48）.
+- **改动的静态自检**：9 个 Swift 文件配平通过 / 字符串自检 `LINT PASS（232 文件）` /
+  两个 `idevice.h` **sha256 相同** / 调用点与 FFI 声明签名逐一核对.
+- **本机不能编译，编译验证靠 CI**.
+
 ## [0.3.529] - 2026-09-25
 
 > 用户要求：**在容器管理里加上「浏览 Bundle」的能力** ——

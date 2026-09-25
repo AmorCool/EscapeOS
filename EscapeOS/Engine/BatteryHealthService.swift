@@ -9,6 +9,10 @@ struct BatteryHealthInfo {
     var currentPercent: Int?      // 当前电量 %  BatteryData.CurrentCapacity
     var healthPercent: Int?       // 健康度 % = 满充/设计*100
     var serial: String?
+    /// v0.3.530：生产日期 `yyyy-MM-dd` —— 由**电池序列号本地解码**得到
+    /// （爱思 9.0 同款 Path B，见 `BatterySerialDate`），解不出为 nil（UI 显示「未知」）.
+    /// 与 `serial` 放在一起：它是 `serial` 的纯函数派生值，不是设备给的独立字段.
+    var manufactureDate: String?
     var isCharging: Bool?
     var fullyCharged: Bool?
     // v0.3.205：适配器（电源/电压）
@@ -443,6 +447,21 @@ enum BatteryHealthService {
         // BatterySerialNumber，为空才回退 Serial），为空时回退 `Serial`.
         let serial = (dict["BatterySerialNumber"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ?? (dict["Serial"] as? String)
+        // ▸ v0.3.530：「生产日期」**不再靠猜设备键名**，改为从电池序列号**本地解码**.
+        //
+        // 为什么换：`DateOfFirstUse` / `ManufactureDate` / `ProductionDate` /
+        // `ManufacturingDate` 这一串键名在 iOS 27 的 `IOPMPowerSource`（含
+        // `AppleSmartBatteryPack`）里**一个都不存在** ⇒ 旧写法恒回「未知」.
+        // 而爱思 9.0 面板上那个日期根本不是读设备键，是它自己算的 —— 反汇编实锤
+        // （`i4Tools.exe!0x140234430` 的 Path B，见 `BatterySerialDate` 的详细注解）.
+        //
+        // 解码失败（序列号为空 / 短于 5 位 / 第 4、5 位不在 base-34 字母表里）→ 保持 nil，
+        // 由 UI 继续显示「未知」. **不编默认值、不做「最接近的猜测」**.
+        let manufactureDate = serial.flatMap { BatterySerialDate.productionDate(from: $0) }
+        // 留痕：真机排查时一眼能看出「是解码没命中」还是「序列号本身没读到」.
+        LoginLogger.shared.log("电池生产日期：\(manufactureDate ?? "未知")"
+                               + "（序列号本地解码\(manufactureDate == nil ? "未命中" : "命中")"
+                               + "；序列号\(serial == nil ? "未读到" : "已读到")）")
         // v0.3.291：真机 ChargerData.IsCharging 是 1/0 整数而非 Bool，补数值形态
         let isCharging: Bool? = (dict["IsCharging"] as? Bool)
             ?? num("IsCharging", in: dict).map { $0 != 0 }
@@ -574,6 +593,7 @@ enum BatteryHealthService {
             currentPercent: currentPercent,
             healthPercent: health,
             serial: serial,
+            manufactureDate: manufactureDate,
             isCharging: isCharging,
             fullyCharged: fullyCharged,
             adapterWatts: adapterWatts,

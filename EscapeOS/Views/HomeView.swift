@@ -20,6 +20,9 @@ struct HomeView: View {
     /// 顽固图标清理页（与 Gestalt 同一套「sheet 关闭后再 push」的中转）
     @State private var showIconCleanup = false
     @State private var pendingIconCleanup = false
+    /// 反激活设备页（同一套「sheet 关闭后再 push」的中转）
+    @State private var showDeactivate = false
+    @State private var pendingDeactivate = false
 
     var body: some View {
         ScrollView {
@@ -46,6 +49,10 @@ struct HomeView: View {
                 pendingIconCleanup = false
                 showIconCleanup = true
             }
+            if pendingDeactivate {
+                pendingDeactivate = false
+                showDeactivate = true
+            }
         }) {
             // 原生 sheet：0.4↔1.0 detent 上拉展开、下拉关闭
             TreasureBoxView(onOpenGestalt: {
@@ -53,6 +60,9 @@ struct HomeView: View {
                 treasureOpen = false
             }, onOpenIconCleanup: {
                 pendingIconCleanup = true
+                treasureOpen = false
+            }, onOpenDeactivate: {
+                pendingDeactivate = true
                 treasureOpen = false
             })
             .presentationDetents([.fraction(0.4), .large])
@@ -67,6 +77,9 @@ struct HomeView: View {
         }
         .navigationDestination(isPresented: $showIconCleanup) {
             IconCleanupView()
+        }
+        .navigationDestination(isPresented: $showDeactivate) {
+            ActivationView()
         }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {

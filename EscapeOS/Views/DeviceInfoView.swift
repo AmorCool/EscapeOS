@@ -18,6 +18,9 @@ struct DeviceInfoView: View {
     @State private var info: DeviceInfoModel?
     @State private var errorText: String?
     @State private var loading = true
+    /// v0.3.530：生产日期（爱思服务端按 mlbSerial 查表，见 `I4ProdateClient`）.
+    /// 面板先出，联网结果到了再刷新该行；未取到则保持 nil -> 显示「未知」.
+    @State private var productionDate: String?
     /// 隐私敏感字段统一小眼睛状态（默认全部隐藏）
     @State private var showSensitive = false
     /// 内置浏览器（保修期限等外链查询，不静默跳外部 App）
@@ -78,6 +81,7 @@ struct DeviceInfoView: View {
 
     private func load() async {
         loading = true
+        productionDate = nil
         defer { loading = false }
         do {
             // Swift 6：经 DeviceInfoBox 把非 Sendable 的 DeviceInfoModel 转移回主线程
@@ -86,6 +90,18 @@ struct DeviceInfoView: View {
             }.value
             info = boxed.value
             errorText = nil
+            // v0.3.530：生产日期只存在于爱思服务端（按主板序列号查表）.
+            // 单独异步取，**不阻塞**面板渲染；失败就保持「未知」.
+            let productType = boxed.value.productType
+            let serialNumber = boxed.value.serialNumber
+            let mlbSerial = boxed.value.mlbSerial
+            Task { @MainActor in
+                if let date = await I4ProdateClient.fetch(productType: productType,
+                                                          serialNumber: serialNumber,
+                                                          mlbSerial: mlbSerial) {
+                    productionDate = date
+                }
+            }
         } catch {
             errorText = error.localizedDescription
         }
@@ -288,8 +304,9 @@ struct DeviceInfoView: View {
         return cap
     }
 
-    /// 爱思也取不到本机项（随机序列号推算失败 / 系统已移除该键）时统一显示「未知」
-    private var productionDateText: String { "未知" }
+    /// v0.3.530：生产日期由 `I4ProdateClient` 联网查（爱思服务端按主板序列号查表）.
+    /// 未取到（无网络 / 无 mlbSerial / 服务端无该机记录）时保持「未知」.
+    private var productionDateText: String { productionDate ?? "未知" }
 
     /// 「固件版本」= iOS 版本 (构建号) —— 爱思把 iOS 版本这一行叫「固件版本」
     private func versionText(_ info: DeviceInfoModel) -> String? {

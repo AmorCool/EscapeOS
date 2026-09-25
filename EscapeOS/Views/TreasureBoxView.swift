@@ -20,6 +20,8 @@ struct TreasureBoxView: View {
     /// 打开「顽固图标清理」页。与 `onOpenGestalt` 同款：由 HomeView 在 sheet
     /// **完全关闭后**再 push（直接在本 sheet 里 push 会套第二层导航栈，页面没返回按钮）。
     let onOpenIconCleanup: () -> Void
+    /// 打开「反激活设备」页.同样走「先关 sheet 再 push」的中转，理由同上.
+    let onOpenDeactivate: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -289,6 +291,32 @@ struct TreasureBoxView: View {
                         Text("顽固图标清理")
                             .font(.subheadline)
                         Text("删除装 App 失败残留的图标（含备份）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
+            // 反激活设备：不可逆操作，安全闸（激活锁检测 + 不可跳过确认）在 ActivationView 里.
+            // 图标用 `bolt.slash`（不用黄色感叹号，项目铁律）.
+            Button {
+                onOpenDeactivate()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "bolt.slash")
+                        .foregroundStyle(.red)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("反激活设备")
+                            .font(.subheadline)
+                        Text("让设备回到激活界面（不可逆，需先关查找）")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

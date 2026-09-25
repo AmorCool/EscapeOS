@@ -346,16 +346,17 @@ struct BatteryHealthView: View {
         return v ? "是" : "否"
     }
 
-    /// 生产日期：键序按 idm_info.dll 读的同名字段（`DateOfFirstUse` 等）.
-    /// 旧系统能返回就直接显示；iOS 27 全 plane 已无该键 → 显示「未知」.
+    /// 生产日期 —— **优先用「电池序列号本地解码」的结果**（`info.manufactureDate`）.
     ///
-    /// v0.3.443 更正：爱思面板里那个日期**不是**服务端按序列号查的保修/启用时间 ——
-    /// `getProdate.xhtml` 本机实测回 `"未知"`（协议已 100% 复刻，服务端就是不认），
-    /// 而 `cache/` 里也 grep 不到该日期；证据指向爱思**本地**算的
-    /// （idm_info.dll!ios_parse_production_date @0x18000fb80：按序列号长度 11/12/10
-    /// 分支 + base-32 字母表 + mktime64 推算年/周/日）。本地算不出本机那个日期的原因
-    /// 尚未定案，故此处仍如实显示「未知」，等 `battery_dump.txt` 实测数据再定.
+    /// v0.3.530：爱思 9.0 面板上那个日期是它**本地算的**，不是读设备键、也不是服务端查的
+    /// （`getProdate.xhtml` 本机实测回「未知」，型号表 `ReleaseDate` 只在另一条分支当消歧用）.
+    /// 反汇编实锤：`i4Tools.exe!0x140234430` 的 Path B —— 电池序列号第 4、5 位查 base-34
+    /// 字母表 → 天数 → 1970-01-01 + 天数. 移植见 `BatterySerialDate`（纯本地、不联网、无需特权）.
+    ///
+    /// 下面的旧键名启发式**保留作兜底**（能力不丢）：它在 iOS 27 上恒不命中（那几个键都不存在）
+    /// ⇒ 解码也没命中时仍然显示「未知」，**不编默认值**.
     private func manufactureDateText(_ info: BatteryHealthInfo) -> String? {
+        if let decoded = info.manufactureDate { return decoded }
         let keys = ["DateOfFirstUse", "ManufactureDate", "ProductionDate", "ManufacturingDate"]
         for k in keys {
             if let d = info.raw[k] as? String, !d.isEmpty { return d }
