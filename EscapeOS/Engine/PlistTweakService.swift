@@ -284,14 +284,12 @@ enum PlistTweakService {
 
     /// 真去设备读（慢，10~20 秒）—— **带 3 次重试**，只在这里花时间.
     ///
-    /// ## 读之前先杀 `cfprefsd`（2026-09-24 真机定案，这条是关键）
-    /// airlift 的读是**移动**（移进 Media → 读 → 写回），而 `cfprefsd` 会**持有**
-    /// 它管的 plist ⇒ 设备端那次 move 做不成 ⇒ 「连读 3 次都读不到」.
-    /// 对照实验：非 Preferences 的文件（CallServices 的 m4a）读得到 51774 字节，
-    /// 而 `Preferences/` 下的两个 plist 全失败；**杀完 cfprefsd 立刻读就成功**.
-    /// ⇒ 所以这里在读之前先腾开文件. 详见 `PreferencesSettle.releaseForRead`.
+    /// ## 读不到的地方（2026-09-25 真机定案）
+    /// `Preferences/` 下的文件**搬不走**（写入允许、unlink 被拒）⇒ 那边**必然失败**，
+    /// 不是不稳定. 详见 `writeBase` 头注释里的对照表.
+    /// 以前这里还会在读前杀 `cfprefsd` —— 那个做法是**基于已被推翻的误判**
+    /// （「cfprefsd 占着文件」是看错了；真正原因是那个目录不允许 unlink），已删.
     private static func readFromDevice(_ path: String) throws -> Data {
-        PreferencesSettle.releaseForRead(path: path, note: "plist 读之前")
         var lastError = "未知"
         // 3 次 + 退避（与 AirCard 的 retries=3 同款思路）
         for attempt in 1...3 {
@@ -302,7 +300,6 @@ enum PlistTweakService {
             lastError = outcome.summary
             // 每次重试前再腾一次 —— cfprefsd 会被 launchd 拉起来重新占住文件
             if attempt < 3 {
-                PreferencesSettle.releaseForRead(path: path, note: "plist 读重试 \(attempt + 1)")
                 Thread.sleep(forTimeInterval: 2 + 0.4 * Double(attempt))
             }
         }

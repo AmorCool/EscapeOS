@@ -735,7 +735,6 @@ enum HostCapabilityService {
         // 而 `cfprefsd` 会**持有**它管的 `Preferences/*.plist` ⇒ 设备端那次 move 做不成
         // ⇒ 「连读 3 次都读不到」. 放在**这一层**（所有读的唯一出口）而不是各调用点，
         // 是为了「一处生效、不会漏」—— 与 `PreferencesSettle.after` 同一个道理.
-        PreferencesSettle.releaseForRead(path: target, note: "airlift 读之前")
         let read = withAirlift { AirliftExploit.pocReadFile(path: target) }
         guard read.ok, let data = read.data else {
             return (1, jsonText(["ok": false,

@@ -76,39 +76,4 @@ enum PreferencesSettle {
         }
         return killed
     }
-
-    // MARK: - 读之前的「腾开文件」
-
-    /// **读** `Preferences/` 下的文件之前调用：把 `cfprefsd` 杀掉，腾开被它占着的文件.
-    ///
-    /// ## 为什么读也要杀（2026-09-24 真机定案）
-    /// airlift 的「读」是**移动**（把文件移进 Media、读完再写回原位置）.
-    /// 而 `cfprefsd` 会**持有**它管的那几个 plist（mmap / 打开着）⇒ 设备端那次 move
-    /// **做不成** ⇒ 表现为「连读 3 次都读不到」，判据日志里是
-    /// `airlift-recovered-* 不存在 ⇒ 设备没执行第 2 次 move`.
-    ///
-    /// **对照实验（同一台设备、同一时刻）**：
-    /// | 目标 | 归 cfprefsd 管 | 读结果 |
-    /// |---|---|---|
-    /// | `/var/mobile/Library/CallServices/.../StartDisclosureWithTone.m4a` | 否 | **成功 51774 字节** |
-    /// | `/var/mobile/Library/Preferences/com.apple.UIKit.plist` | 是 | **失败** |
-    /// | `/var/mobile/Library/Preferences/com.apple.springboard.plist` | 是 | **失败** |
-    /// 杀完 `cfprefsd` 后**立刻**读同一个 springboard plist ⇒ **成功**.
-    /// ⇒ 结论坐实：**不是读坏了，是文件被占着.**
-    ///
-    /// 杀完 `launchd` 会立刻重启它，重启时**从磁盘重读** ⇒ 不会丢状态.
-    ///
-    /// - Returns: 杀掉的实例数
-    @discardableResult
-    static func releaseForRead(path: String, note: String) -> Int {
-        guard path.contains("/Library/Preferences/") else { return 0 }
-        let killed = killCfprefsd()
-        // 读路径上「没找到」是常态（它已经被上一次调用杀掉了）⇒ 不记，免得刷屏
-        if killed > 0 {
-            AirliftChangeLog.append(action: "kill-cfprefsd", path: path, bytes: 0,
-                                    verified: false,
-                                    note: "读之前杀掉 \(killed) 个 cfprefsd 实例，腾开文件（\(note)）")
-        }
-        return killed
-    }
 }
