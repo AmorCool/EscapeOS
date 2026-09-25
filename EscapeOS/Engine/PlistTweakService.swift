@@ -64,21 +64,72 @@ enum PlistTweakService {
         return out
     }
 
+    /// **写入底稿**：按可靠性排序取一份内容.
+    ///
+    /// ## 为什么不能只靠「真读」（真机定案 2026-09-25）
+    /// 实测：**`Preferences/` 下的文件搬不走** ——
+    /// `airlift.pull`（读）和 `airlift.delete`（删）用的都是「把文件搬进 Media」这一步，
+    /// 而设备**允许往 `Preferences/` 创建/替换文件、不允许 unlink（搬走）**：
+    /// ```
+    /// 往 /var/mobile/Library/Preferences/ 写   → 成功（create 允许）
+    /// 从 /var/mobile/Library/Preferences/ 读   → 失败（unlink 被拒）
+    /// 删 /var/mobile/Library/Preferences/ 里的 → 失败（同一个原因）
+    /// 对照：/var/mobile/Library/CallServices/... 读写都成功
+    /// ```
+    /// 连**我们自己刚写进去、没有任何进程占用**的文件也读不回来 ⇒ 不是 cfprefsd 的问题，
+    /// 是那个目录的权限不对称.
+    ///
+    /// ⇒ 而 `set` / `unset` 要「改一个键、写回整个文件」，**必须先有一份底稿**.
+    /// 只认真读的话，`Preferences/` 上的开关**永远点不动**（写卡在第一步）——
+    /// 这正是用户看到的「开关没反应」.
+    ///
+    /// ## 优先级（可靠 → 不可靠）
+    /// 1. **真读**（非 Preferences 路径会成功，拿到的就是最新的）
+    /// 2. **AIR 副本**（`Media/AIR/<路径把 / 换成 _>`，AFC 直读 —— 稳且快；
+    ///    每次读/写都会更新它，所以它是「我们已知的最新内容」）
+    /// 3. **本地缓存**（上次读/写留下的）
+    /// 4. 都没有 ⇒ **报错**（不许凭空造一个 plist 出来）
+    ///
+    /// 安全：底稿再旧也不会写坏文件 —— `guardKeyCount` 保证键数只可能 ±1，
+    /// 而 `set`/`unset` 本来就只动一个键.
+    private static func writeBase(_ path: String) throws -> (data: Data, source: String) {
+        if let fresh = try? readFromDevice(path) {
+            return (fresh, "设备真读")
+        }
+        if let air = airCopy(path), !air.isEmpty {
+            store(air, for: path)
+            return (air, "AIR 副本")
+        }
+        if let cached = try? Data(contentsOf: cacheURL(path)), !cached.isEmpty {
+            return (cached, "本地缓存")
+        }
+        throw TweakError.readFailed(
+            "拿不到写入底稿：设备真读失败（这个目录可能不允许搬走文件），"
+            + "AIR 里也没有副本，本地也没有缓存 ⇒ **不能凭空造一个 plist 写上去**")
+    }
+
+    /// AIR 里这个路径的副本（文件名 = 绝对路径把 `/` 换成 `_`）；没有 ⇒ `nil`.
+    private static func airCopy(_ path: String) -> Data? {
+        let name = path.replacingOccurrences(of: "/", with: "_")
+        return try? AFCService.shared.readFile("/var/mobile/Media/AIR/" + name)
+    }
+
     /// 设置一个键（值支持 `bool` / `int` / `double` / `string`）.
     ///
     /// - Returns: 写回后的文件字节数
     @discardableResult
     static func set(path: String, key: String, value: Any) throws -> Int {
         guard !key.isEmpty else { throw TweakError.badArgs("key 不能为空") }
-        let raw = try readFresh(path)          // 写入底稿必须真读
-        let original = try parse(raw)
+        let base = try writeBase(path)
+        let original = try parse(base.data)
         var dict = original
         dict[key] = value
         try guardKeyCount(before: original.count, after: dict.count, op: "设置")
-        let bytes = try write(path, dict: dict, originalData: raw)
+        let bytes = try write(path, dict: dict, originalData: base.data)
         AirliftChangeLog.append(action: "plist-set", path: path,
                                 bytes: bytes, verified: false,
-                                note: "\(key) = \(describe(value))")
+                                note: "\(key) = \(describe(value))",
+                                detail: "底稿来自\(base.source)")
         return bytes
     }
 
@@ -88,16 +139,17 @@ enum PlistTweakService {
     @discardableResult
     static func unset(path: String, key: String) throws -> Bool {
         guard !key.isEmpty else { throw TweakError.badArgs("key 不能为空") }
-        let raw = try readFresh(path)          // 写入底稿必须真读
-        let original = try parse(raw)
+        let base = try writeBase(path)
+        let original = try parse(base.data)
         var dict = original
         guard dict[key] != nil else { return false }
         dict.removeValue(forKey: key)
         try guardKeyCount(before: original.count, after: dict.count, op: "删除")
-        let bytes = try write(path, dict: dict, originalData: raw)
+        let bytes = try write(path, dict: dict, originalData: base.data)
         AirliftChangeLog.append(action: "plist-unset", path: path,
                                 bytes: bytes, verified: false,
-                                note: "删键 \(key)（回到系统默认）")
+                                note: "删键 \(key)（回到系统默认）",
+                                detail: "底稿来自\(base.source)")
         return true
     }
 
@@ -183,6 +235,13 @@ enum PlistTweakService {
     private static func read(_ path: String) throws -> Data {
         if let cached = try? Data(contentsOf: cacheURL(path)), !cached.isEmpty {
             return cached
+        }
+        // 没有缓存时**先看 AIR 副本**（AFC 直读，稳且快）—— 再退到真读.
+        // 为什么：`Preferences/` 下的文件**搬不走**（见 `writeBase` 头注释），
+        // 真读必然失败；而 AIR 里那份就是「我们已知的最新内容」.
+        if let air = airCopy(path), !air.isEmpty {
+            store(air, for: path)
+            return air
         }
         return try readFresh(path)
     }
