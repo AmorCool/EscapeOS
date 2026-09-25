@@ -83,6 +83,11 @@ struct IconCleanupView: View {
 
     // MARK: - 结果
 
+    /// ⚠️ **必须标 `@ViewBuilder`**：本函数体里有**两个** `Section`。
+    /// 只有 `body` 有隐式 `@ViewBuilder`，普通函数/计算属性没有 ——
+    /// 多语句时会报 `function declares an opaque return type, but has no return
+    /// statements in its body from which to infer an underlying type`（v0.3.528 CI 实测）。
+    @ViewBuilder
     private func ghostSection(_ result: IconCleanupService.ScanResult) -> some View {
         Section {
             ForEach(result.ghosts) { ghost in
