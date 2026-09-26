@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.3.533] - 2026-09-26
+
+> 三件事：**容器根里 `.plist` 不再显示成文件夹**、**搜索「搜不全」补完**、**文件预览落盘策略修正**.
+
+### 一、容器根里带扩展名的条目不再被画成文件夹
+
+反馈的现象：App Group 里 `.com.apple.mobile_container_manager.metadata.plist`
+显示成**一个文件夹**，点进去还提示没有权限。
+
+根因在 `FileService.buildFileItems` 的 fallback 分支：属性读取失败时，以前**一律**
+套用调用方传进来的 `fallbackKind`，而容器根走 `listContainerRoot` 传的是 `.directory`。
+App Group / 容器根这类目录的属性会被沙盒裁剪，`attributesOfItem` 取不到，
+于是凡是带扩展名的文件（`.plist` 尤其明显）都被标成目录。
+
+改法：**保留 fallback**（回退枚举出来的路径上 `lstat` 确实可能失败，条目不能整条丢掉），
+但按名字有无扩展名推断 —— 有扩展名按 `.regular`，没有的才用 `fallbackKind`
+（容器根下的 UUID 目录都无扩展名，判断成立）。属性拿不到，可读性仍保守标 `false`。
+
+### 二、搜索「搜不全」：未解析容器数带到界面上
+
+搜索能匹配目录名（UUID）和解析出的标识（App 名 / bundle id）。而 `ContainerNameResolver`
+对读不到 metadata 的容器**静默跳过** ⇒ 这些容器**永远搜不到**，只能按 UUID 找，
+用户会以为「没有这个容器」。
+
+这一版把整条链路补完：
+
+- **失败原因分类**（`ResolveFailure`，四种）—— 不再一律 `continue`
+- **哨兵句柄时强制真取扩展重试**（`SandboxEscape.consume(forceRealExtension:)`）——
+  LiveContainer 的「已覆盖」判定基于**路径前缀 + 全局 token 计数**，不保证这条路径真能读
+- **容器根顶部提示一行**：「有 N 个容器未能读出标识，这些容器只能按 UUID 搜索.」
+
+于是「搜不全」从「用户以为自己关键词打错」变成「系统明确告知是解析失败」。
+
+### 三、文件预览：只在需要时落盘
+
+`FileViewerView` 以前**无条件**把打开的文件复制到 `Caches/EscapeOSPreviews/`，
+并且把这次写入的成败当成整个打开流程的成败：
+
+- 只有 `.pdf` / `.media` / `.preview` 三种模式吃 URL，`.text` / `.plist` / `.hex` /
+  `.auto` / `.image` 全部直接读内存 —— 却所有文件都写一遍盘
+- guest 容器里 Caches 写权限可能被裁剪 ⇒ **连纯文本文件都会打不开**，
+  而报错内容跟文本本身毫无关系
+
+改法：按 `body` 的 switch 逐项对齐，只有三种模式落盘；落盘改成 `try?`，
+失败就 `previewURL = nil`，走视图侧已有的 `fallbackHex` 兜底而不是报错。
+
+顺带修同名覆盖：预览目录是所有文件共用的，落盘名以前就是文件名本身
+（只把 `/` 换成 `_`），两个不同容器里的同名文件会互相覆盖，先打开的查看器
+读到的会变成后一个文件的内容。现在把源路径的 64 位 FNV-1a 混进暂存名，
+扩展名保留（QuickLook / PDFKit / AVFoundation 靠它选解析器）。
+
+### 静态自检
+改动文件括号全部配平 / 调用点逐一核对 / **本机不能编译，编译验证靠 CI**.
+
 ## [0.3.532] - 2026-09-25
 
 > 两件事：**备份「恢复单个 >4 GB 文件」不再 OOM**、**修两处会误导排查的过期注释**。
