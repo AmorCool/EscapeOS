@@ -31,6 +31,14 @@ final class FileBrowserViewModel: ObservableObject {
     /// 目录路径 → 解析出的容器名（App 名），仅在容器根浏览时有值.
     @Published var containerNames: [String: String] = [:]
 
+    /// 容器根里**没能解析出标识**的目录数.
+    ///
+    /// 为什么需要：搜索只能匹配「已解析」出的名字（App 名 / bundle id），解析失败的
+    /// 容器**永远搜不到**，用户只能按 UUID 找 —— 以前这种情况完全静默，看起来就像
+    /// 「这个容器不存在」.把这个数字暴露出来，用户才知道「搜不全」是解析失败导致的、
+    /// 而不是自己的关键词打错了.
+    @Published var unresolvedContainerCount: Int = 0
+
     let rootPath: String
     let title: String
     /// 当前根是否是「容器根」.容器根走 `bad_query_list` 枚举，不消费沙盒扩展.
@@ -165,6 +173,7 @@ final class FileBrowserViewModel: ObservableObject {
     private func resolveContainerNames() {
         guard FileSystemRoots.containerNameRoots.contains(currentPath) else {
             if !containerNames.isEmpty { containerNames = [:] }
+            if unresolvedContainerCount != 0 { unresolvedContainerCount = 0 }
             return
         }
         let paths = items.filter(\.isDirectory).map(\.path)
@@ -174,19 +183,24 @@ final class FileBrowserViewModel: ObservableObject {
             guard let self else { return }
             // 直接引用 shared（nonisolated(unsafe) static let，作者已用 NSLock 保证
             // 线程安全）：避免把非 Sendable 的局部引用捕获进 @Sendable 闭包.
-            let resolved = ContainerNameResolver.shared.resolveAll(containerPaths: paths)
+            //
+            // 用 reporting 版本而不是 resolveAll：失败数要带到 UI 上（见
+            // `unresolvedContainerCount` 的注释），只拿 names 的话这个信息就丢了.
+            let outcome = ContainerNameResolver.shared.resolveAllReportingFailures(containerPaths: paths)
             // bundle id → 显示名（有则组合，无则原样）
             var display: [String: String] = [:]
-            for (path, identifier) in resolved {
+            for (path, identifier) in outcome.names {
                 if let name = nameIndex[identifier], !name.isEmpty {
                     display[path] = "\(name) (\(identifier))"
                 } else {
                     display[path] = identifier
                 }
             }
+            let unresolved = outcome.failures.count
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.containerNames = display
+                self.unresolvedContainerCount = unresolved
             }
         }
     }

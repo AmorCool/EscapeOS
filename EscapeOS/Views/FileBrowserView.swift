@@ -316,6 +316,20 @@ struct FileBrowserView: View {
 
     private var fileList: some View {
         List {
+            // 容器根里若有目录没解析出标识，说明这些容器搜不到 App 名 / bundle id.
+            // 提示一行，用户才知道「搜不全」是解析失败，而不是关键词不对.
+            if vm.isContainerRoot, vm.unresolvedContainerCount > 0 {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundColor(.secondary)
+                    Text("有 \(vm.unresolvedContainerCount) 个容器未能读出标识，这些容器只能按 UUID 搜索.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .listRowBackground(Color.secondary.opacity(0.08))
+            }
+
             ForEach(visibleItems) { item in
                 if selecting {
                     Button {
