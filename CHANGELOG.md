@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.534] - 2026-09-26
+
+> 与 0.3.533 内容相同，修一个编译错误后重发（v0.3.533 的 tag 构建失败，未产出 Release）。
+> 依据 `docs/releasing.md` 第 7 节：修完代码要**用新版本号**重来，**不重推已有 tag**。
+
+**修的编译错误**（CI run `36208612640`，第 22 步 Build，注解只有一条）：
+
+```
+ContainerNameResolver.swift:115:55: error:
+type 'ContainerNameResolver.ResolveFailure' does not conform to protocol 'Error'
+```
+
+`resolveOne` 声明的是 `Result<String, ResolveFailure>`，而 `Result` 要求失败类型
+符合 `Error`；`ResolveFailure` 当时只写了 `Sendable`。补上 `Error` 并实现
+`LocalizedError`（四种 Reason 各配一句 `errorDescription`），
+与项目里其它自定义错误（`BackupError` / `AppDiscoveryError` / `LocationEngineError`）
+写法一致。
+
+> 教训记在这里：**自定义错误类型一律写成 `Error, LocalizedError`**，
+> 漏掉 `Error` 只有在真正被放进 `Result` 时才报错，静态自检（括号配平、
+> 调用点核对）抓不到这一类 —— 只能靠 CI 编译。
+
 ## [0.3.533] - 2026-09-26
 
 > 三件事：**容器根里 `.plist` 不再显示成文件夹**、**搜索「搜不全」补完**、**文件预览落盘策略修正**.
