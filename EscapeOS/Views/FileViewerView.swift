@@ -160,7 +160,19 @@ final class FileViewerViewModel: ObservableObject {
                 }
                 let kind = FileContentKind.classify(name: item.name, isDirectory: false)
                 let resolved = self.resolve(mode: mode, kind: kind, data: data)
-                let preview = try self.stagePreview(named: item.name, data: data)
+                // Only the PDF / media / QuickLook viewers need a file on disk; the
+                // text, plist, hex and image viewers read `data` directly. Staging
+                // unconditionally used to make the whole load fail whenever the
+                // caches directory was not writable -- a text file was then
+                // unopenable for a reason that had nothing to do with text. Stage
+                // only when needed, and treat a failure as "no preview URL" so the
+                // caller falls back to the hex view instead of an error.
+                var preview: URL?
+                if Self.needsStagedPreview(resolved) {
+                    preview = try? self.stagePreview(named: item.name,
+                                                     sourcePath: item.path,
+                                                     data: data)
+                }
                 DispatchQueue.main.async {
                     self.originalData = data
                     self.previewURL = preview
@@ -302,13 +314,45 @@ final class FileViewerViewModel: ObservableObject {
         return String(data: xml, encoding: .utf8)
     }
 
+    /// Whether a resolved open mode renders from a file URL rather than from the
+    /// bytes already in memory.
+    ///
+    /// The `body` switch is the source of truth: `.pdf` (PDFKitView), `.media`
+    /// (MediaPlayerView) and `.preview` (QuickLookPreview) take a `URL`; `.text`,
+    /// `.plist`, `.hex`, `.auto` and `.image` never read `previewURL`.
+    private static func needsStagedPreview(_ mode: FileOpenMode) -> Bool {
+        switch mode {
+        case .pdf, .media, .preview:
+            return true
+        case .auto, .text, .hex, .image, .plist:
+            return false
+        }
+    }
+
     /// Swift 6：只做 FileManager 文件操作，不读写实例状态 → nonisolated（同 resolve）。
-    private nonisolated func stagePreview(named name: String, data: Data) throws -> URL {
+    ///
+    /// `sourcePath` is mixed into the staged file name. Two unrelated containers can
+    /// hold a same-named file (e.g. two `report.pdf`), and the preview directory is
+    /// shared, so naming the copy after the file name alone let a later load
+    /// overwrite the file a still-open viewer was reading. The extension is kept,
+    /// because QuickLook / PDFKit / AVFoundation pick their parser from it.
+    private nonisolated func stagePreview(named name: String, sourcePath: String, data: Data) throws -> URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("EscapeOSPreviews", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let safe = name.replacingOccurrences(of: "/", with: "_")
-        let url = dir.appendingPathComponent(safe)
+        // Keep only the last path component and strip characters that cannot appear
+        // in a file name; `standardizingPath` alone does not remove ":".
+        let base = (name as NSString).lastPathComponent
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        // 64-bit FNV-1a of the full source path: stable for the same file, and
+        // different for two same-named files in different containers.
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in sourcePath.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+        }
+        let stagedName = String(format: "%016llx-%@", hash, base)
+        let url = dir.appendingPathComponent(stagedName)
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
