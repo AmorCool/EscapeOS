@@ -20,7 +20,11 @@ final class ContainerNameResolver {
     /// 为什么要分类：搜索只能匹配「已解析」出的名字，解析失败的容器**永远搜不到**.
     /// 以前失败静默 `continue`，用户只会以为「没有这个容器」——把原因带出来，
     /// 用户才能知道为什么某个 UUID 只能用 UUID 搜.
-    struct ResolveFailure: Sendable {
+    ///
+    /// `Error` 不是为了满足 `Result` 才加的：它本来就是「解析失败」这件事的类型化
+    /// 描述，实现 `LocalizedError` 让调用方可以直接把 `errorDescription` 放进提示里，
+    /// 不必再为每种 `Reason` 手写一遍文案.
+    struct ResolveFailure: Error, Sendable, LocalizedError {
         enum Reason: Sendable {
             /// `consume` 抛错（附 SandboxEscape 的错误文本）.
             case consumeFailed
@@ -37,6 +41,24 @@ final class ContainerNameResolver {
         let reason: Reason
         /// 补充信息：失败时的具体错误文本或文件路径，供明细展示.
         let detail: String?
+
+        var errorDescription: String? {
+            let base: String
+            switch reason {
+            case .consumeFailed:
+                base = "无法获取沙盒扩展."
+            case .sentinelHandle:
+                base = "被 LiveContainer 容器扩展覆盖，但读取仍失败."
+            case .metadataUnreadable:
+                base = "读不出容器元数据."
+            case .missingIdentifier:
+                base = "容器元数据里没有标识键."
+            }
+            if let detail, !detail.isEmpty {
+                return "\(base)（\(detail)）"
+            }
+            return base
+        }
     }
 
     /// Swift 6 并发检查：本类型非 Sendable，但唯一的可变状态 `cache` 的**全部**读写
