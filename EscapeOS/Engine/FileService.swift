@@ -130,11 +130,18 @@ final class FileService {
             let full = (basePath as NSString).appendingPathComponent(name)
             // 属性查不到时仍保留该条目（回退枚举出来的路径上 lstat 可能失败），
             // 至少让用户看到文件存在，而不是整个目录显示为空.
+            //
+            // 但**不能**一律塞 `fallbackKind`：容器根的 fallbackKind 是 `.directory`，
+            // 于是在 App Group / 容器根这类属性被沙盒裁剪的目录里，`.foo.plist` 这种
+            // 明明带扩展名的文件也会被画成文件夹（用户看到的「metadata.plist 是个文件夹」）。
+            // 名字里有扩展名的按文件处理，没有的才按 fallbackKind（容器根里的 UUID 目录
+            // 都是无扩展名的，判断成立）。属性拿不到，所以可读性保守标 false.
             guard let attrs = try? fm.attributesOfItem(atPath: full) else {
+                let nameExtension = (name as NSString).pathExtension
                 items.append(FileItem(
                     name: name,
                     path: full,
-                    kind: fallbackKind,
+                    kind: nameExtension.isEmpty ? fallbackKind : .regular,
                     size: 0,
                     modified: nil,
                     isReadable: false,
