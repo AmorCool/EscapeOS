@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.536] - 2026-10-01
+
+> 与 0.3.535 内容相同，修一个编译错误后重发（v0.3.535 的 tag 构建失败，未产出 Release）。
+> 依据 `docs/releasing.md` 第 7 节：修完代码要**用新版本号**重来，**不重推已有 tag**。
+
+**修的编译错误**（CI run `36877321868`，第 22 步 Build）：
+
+```
+I4StoreFreeView.swift:682:57: error:
+value of optional type 'String?' must be unwrapped to refer to member 'isEmpty'
+of wrapped base type 'String'
+```
+
+`NBStoreClient.NBPackage.version` 声明的是 `String?`，而 `startNBDownload` 里
+直接写了 `package.version.isEmpty` —— 可选值要先解包。改为
+`(package.version?.isEmpty == false) ? package.version : nil`，
+语义不变（空版本号传 nil，非空才传）。
+
 ## [0.3.535] - 2026-10-01
 
 > 免登录商店新增**第三个来源 NB**（NB Pro）。协议由真机抓包 + IDA 反编译双向确认，

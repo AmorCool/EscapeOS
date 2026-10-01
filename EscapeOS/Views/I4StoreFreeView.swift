@@ -679,7 +679,7 @@ func startNBDownload(trackID: String, package: NBStoreClient.NBPackage) async {
     }
     _ = IPADownloadCenter.shared.start(name: "App \(trackID)",
                                        bundleId: nil,
-                                       version: package.version.isEmpty ? nil : package.version,
+                                       version: (package.version?.isEmpty == false) ? package.version : nil,
                                        iconURL: nil,
                                        remoteURL: package.ipaURL,
                                        source: .nb,
