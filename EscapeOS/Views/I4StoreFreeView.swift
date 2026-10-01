@@ -73,12 +73,12 @@ struct I4StoreFreeView: View {
 
     /// v0.3.382：搜索框提示随来源变（牛蛙要多说一句区域）
     ///
-    /// v0.3.414：NB 源形态不同 —— 它没有搜索接口，收的是 **App Store 链接或数字 ID**。
+    /// v0.3.538：NB 源现在两种输入都收 —— 关键词（转爱思搜索）或 App Store 链接 / 数字 ID。
     private var searchPrompt: String {
         switch source {
         case .i4:    return "搜索应用（无需登录）"
         case .niuwa: return "搜索应用（无需登录 · \(region.title)）"
-        case .nb:    return "粘贴 App Store 链接或填数字 ID"
+        case .nb:    return "搜应用名，或填 App Store ID"
         }
     }
 
@@ -236,9 +236,9 @@ struct I4StoreFreeView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         } else if source == .nb {
-            // v0.3.414：NB 源既没有榜单也没有搜索接口 —— 只能按 App Store ID 取包
+            // v0.3.538：NB 源没有榜单；搜索框既能搜名字（转爱思），也能填 ID / 链接直接取包
             Section {
-                Text("NB 源请用上方搜索框粘贴 App Store 链接，或直接填数字 ID。")
+                Text("NB 源没有榜单。用上方搜索框搜应用名，或粘贴 App Store 链接 / 填数字 ID。")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         } else if apps.isEmpty {
@@ -288,7 +288,9 @@ struct I4StoreFreeView: View {
                 }
             }
         } else {
-            // v0.3.414：NB 源 —— 一个 trackId 只对应一个结果
+            // NB 源两种结果形态：
+            //   · 输入是 ID/链接 → 单个取包结果（`nbPackage`）
+            //   · 输入是关键词   → 借爱思搜出的候选列表（`searchResults`），点进详情走 NB 取包
             if let pkg = nbPackage {
                 Section("App Store ID \(nbTrackID)") {
                     nbRow(trackID: nbTrackID, package: pkg)
@@ -300,34 +302,52 @@ struct I4StoreFreeView: View {
                         Text("正在取包…").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
+            } else if !searchResults.isEmpty {
+                Section("搜索结果 · \(searchResults.count) 款") {
+                    ForEach(searchResults) { app in
+                        row(app, nbMode: true)
+                    }
+                }
             } else {
                 Section {
-                    Text("粘贴 App Store 链接或填数字 ID，回车即可取包。")
+                    Text("搜应用名，或粘贴 App Store 链接 / 填数字 ID。")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
         }
     }
 
-    /// v0.3.414：NB 源的结果行。
+    /// NB 源的结果行。
     ///
     /// NB 接口只回 `url` + `sinfs`，**没有名称、图标、版本号**，所以这一行展示的是
     /// 「trackId + 直链是否拿到」，而不是仿照前两源做一张有图有字的卡片 ——
     /// 没有的数据不硬凑。
+    ///
+    /// v0.3.538：**左侧整块可点进详情页**（对齐另外两个免登录来源）。
+    /// 详情页里列历史版本（走 bilin 目录），每个版本单独取包 ——
+    /// 这才对得上「NB 助手能选历史版本下载」的形态。
     private func nbRow(trackID: String, package: NBStoreClient.NBPackage) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "shippingbox")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-                .frame(width: 54, height: 54)
-                .background(Color.secondary.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            NavigationLink {
+                NBStoreDetailView(trackID: trackID, country: regionRaw, displayName: nil)
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: "shippingbox")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 54, height: 54)
+                        .background(Color.secondary.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("App Store ID \(trackID)").font(.body).lineLimit(1)
-                Text(package.sinfBase64 == nil ? "已取到直链（无 sinf）" : "已取到直链 + sinf")
-                    .font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("App Store ID \(trackID)").font(.body).lineLimit(1)
+                        Text(package.sinfBase64 == nil ? "已取到直链（无 sinf）" : "已取到直链 + sinf")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
+            .buttonStyle(.plain)
+
             Spacer(minLength: 8)
 
             if nbFetching {
@@ -345,11 +365,19 @@ struct I4StoreFreeView: View {
 
     // MARK: - 行
 
-    /// v0.3.364：左侧（图标 + 文案）整块可点进**应用详情**，右侧仍是原有的下载/进度控件。
-    private func row(_ app: I4PCStoreClient.I4App) -> some View {
+    /// 左侧（图标 + 文案）整块可点进**应用详情**，右侧仍是原有的下载/进度控件。
+    ///
+    /// `nbMode` 为真时（NB 源搜索出来的候选）：
+    ///   · 点进去是 **NB 详情页** —— 列历史版本，每版走 NB 取包
+    ///   · 右侧「获取」也走 NB 取包，而不是爱思自己那份 `ipaURL`
+    private func row(_ app: I4PCStoreClient.I4App, nbMode: Bool = false) -> some View {
         HStack(alignment: .center, spacing: 12) {
             NavigationLink {
-                I4StoreFreeDetailView(app: app)
+                if nbMode {
+                    NBStoreDetailView(trackID: app.itemId ?? "", country: regionRaw, displayName: app.name)
+                } else {
+                    I4StoreFreeDetailView(app: app)
+                }
             } label: {
                 HStack(alignment: .center, spacing: 12) {
                     AsyncImage(url: URL(string: app.icon ?? "")) { phase in
@@ -382,7 +410,13 @@ struct I4StoreFreeView: View {
                 }
             }
 
-            trailingControl(name: app.name, bundleId: app.bundleId) { install(app) }
+            if nbMode {
+                trailingControl(name: app.name, bundleId: app.bundleId) {
+                    Task { await installViaNB(app) }
+                }
+            } else {
+                trailingControl(name: app.name, bundleId: app.bundleId) { install(app) }
+            }
         }
         .padding(.vertical, 3)
         // v0.3.399：长按弹「查看图标 / 提取图标」。
@@ -394,6 +428,27 @@ struct I4StoreFreeView: View {
                 // v0.3.408：图数组由 `showIconPreview` 写进 target
                 showIconPreview(app.icon, target: $previewTarget)
             }
+        }
+    }
+
+    /// NB 源「获取」：拿爱思候选的 trackId → 走 NB 取包 → 交给统一下载中心。
+    ///
+    /// 这条路径与 `install(_:)`（用爱思自己的 `ipaURL`）**刻意分开**：
+    /// NB 源的意义就是用 NB 的通道取包（含 sinf），所以列表行的「获取」也必须走 NB。
+    @MainActor
+    private func installViaNB(_ app: I4PCStoreClient.I4App) async {
+        guard let tid = app.itemId, !tid.isEmpty else {
+            ToastCenter.shared.show("缺少 App Store ID，无法用 NB 取包")
+            return
+        }
+        do {
+            guard let pkg = try await NBStoreClient.package(appID: tid, country: regionRaw) else {
+                ToastCenter.shared.show("该应用没有可用的安装包")
+                return
+            }
+            await startNBDownload(trackID: tid, package: pkg, name: app.name, version: app.version)
+        } catch {
+            ToastCenter.shared.show("NB 取包失败：\(error.localizedDescription)")
         }
     }
 
@@ -605,9 +660,22 @@ struct I4StoreFreeView: View {
                     ToastCenter.shared.show("搜索失败")
                 }
             case .nb:
-                // v0.3.414：NB 没有搜索接口 —— 这里把输入当 **trackId 或 App Store 链接**，
-                // 直接去取该应用的包。取到即显示一行，点「获取」下载。
-                await runNBFetch(kw)
+                // NB 自身**没有搜索接口**（逆向结论：它的常规搜索就是转调爱思）。
+                // 所以 NB 源按输入形态分流：
+                //   · 数字 ID / App Store 链接 → 直接取包（原行为）
+                //   · 纯文字关键词           → 借爱思搜索接口搜出候选，点进详情再走 NB 取包
+                // 这样 NB 源也能「搜 App 名字」，与 NB 助手一致。
+                if nbParseTrackIDOnly(kw) != nil || kw.lowercased().contains("apple.com") {
+                    await runNBFetch(kw)
+                } else {
+                    do {
+                        searchResults = try await I4PCStoreClient.search(keyword: kw)
+                    } catch {
+                        searchResults = []
+                        errorText = "NB 源搜索失败：\(error.localizedDescription)"
+                        ToastCenter.shared.show("搜索失败")
+                    }
+                }
             }
             searching = false
         }
@@ -644,6 +712,19 @@ struct I4StoreFreeView: View {
         return digits.isEmpty ? nil : String(digits)
     }
 
+    /// 只在输入**确实是 ID 或链接**时返回 trackId；纯关键词（含空格/字母）返回 nil。
+    ///
+    /// 与 `nbParseTrackID` 的差别：那个是「尽力解析」，链接里抽不到数字也返回 nil；
+    /// 这个是「判定输入类型」，用来决定 NB 源该走取包还是走搜索。
+    /// 注意「Reddit」这种纯字母词不能被当成 ID —— 所以这里要求全数字，或带 `apple.com`。
+    private func nbParseTrackIDOnly(_ raw: String) -> String? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        if s.allSatisfy({ $0.isNumber }) { return s }
+        guard s.lowercased().contains("apple.com") else { return nil }
+        return nbParseTrackID(s)
+    }
+
     /// NB 源取包：输入 → trackId → 取直链与 sinf。
     @MainActor
     private func runNBFetch(_ raw: String) async {
@@ -671,15 +752,23 @@ struct I4StoreFreeView: View {
 
 /// NB 源的下载入口。与 `startNiuwaDownload` 同构：
 /// NB 下发的同样是 **Apple 原始加密包**，所以必须把 sinf 一起交给下载中心写回包内。
+///
+/// v0.3.538：`name` 与 `version` 改为可传入 —— NB 详情页里同一个 trackId 会有多个
+/// 历史版本，只按 trackId 命名会让几行在「下载管理」里长得一模一样、分不清是哪个版本。
 @MainActor
-func startNBDownload(trackID: String, package: NBStoreClient.NBPackage) async {
+func startNBDownload(trackID: String,
+                     package: NBStoreClient.NBPackage,
+                     name: String? = nil,
+                     version: String? = nil) async {
     guard !package.ipaURL.isEmpty else {
         ToastCenter.shared.show("该应用没有可用的安装包")
         return
     }
-    _ = IPADownloadCenter.shared.start(name: "App \(trackID)",
+    let shownName = (name?.isEmpty == false) ? name! : "App \(trackID)"
+    let shownVersion = (version?.isEmpty == false) ? version : package.version
+    _ = IPADownloadCenter.shared.start(name: shownName,
                                        bundleId: nil,
-                                       version: (package.version?.isEmpty == false) ? package.version : nil,
+                                       version: (shownVersion?.isEmpty == false) ? shownVersion : nil,
                                        iconURL: nil,
                                        remoteURL: package.ipaURL,
                                        source: .nb,

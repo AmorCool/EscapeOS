@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.538] - 2026-10-02
+
+> 免登录商店 **NB 源补齐搜索与历史版本** —— 对齐 NB 助手「能搜名字、能选版本下载」的形态。
+> NB 自身没有搜索接口、也没有版本列表接口（逆向结论），所以这两段都**复用项目里已有的通路**，
+> 不新增外部依赖、不造轮胎。
+
+### 新增：NB 源搜索
+
+此前 NB 源只能填 App Store ID / 链接，**搜不了应用名**。现在两种输入都收：
+
+- 纯数字 / App Store 链接 → 直接取包（原行为）
+- 关键词 → 转调爱思搜索接口（`I4PCStoreClient.search`）搜出候选，列表里点进去走 NB 取包
+
+分流靠 `nbParseTrackIDOnly`：只有全数字、或带 `apple.com` 的串才当 ID 处理，
+避免把 `Reddit` 这类纯字母词误判成 ID。
+
+### 新增：NB 应用详情页（`NBStoreDetailView`）
+
+此前 NB 的结果只有一行死的 HStack，**点不进去、看不到历史版本**。现在：
+
+- 左侧整块可点进详情页，与爱思 / 牛蛙两个来源一致
+- 详情页列**历史版本**（每行版本号 + 发布日期 + 体积），每行单独「获取」
+- 「获取」把该版本的 `external_identifier` 作为 `appVerId` 打 `/nb/app-downgrade` 取包
+  （Apple CDN 直链 + `sinfs[].dataHex`），交给统一下载中心
+
+### 版本列表为什么走 bilin 目录
+
+NB 的 `getAppHistoryList` **名字像列表、实测是取单版本的包**（抓包见
+`P3_爱思助手_NB逆向工作区/NB下载接口逆向报告.md` 第十节），它没有「一次回全量版本」
+的接口 —— 硬要只能逐版本试错。所以版本列表**复用** `apis.bilin.eu.org/history/<trackId>`
+（AppleID 商店的历史版本走的同一份目录），每项带 `external_identifier`，
+与 NB 的 `appVerId` 是**同一个编号体系**，直接原样传下去，不做换算。
+
+### 顺带：历史版本列表补上「体积」
+
+三方目录（bilin）返回体里本来就有 `size`（字节），此前被丢掉了。
+`AppStoreVersion` 新增 `sizeBytes`（带默认值，不影响账号通道 / 商品页通道的构造点）
+与 `sizeText`，历史版本列表由此能显示包大小。
+
 ## [0.3.537] - 2026-10-01
 
 > 针对「AppStore 商店默认 AppleID 下载 502」的取包链路加固。

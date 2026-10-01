@@ -446,6 +446,33 @@ enum NBStoreClient {
                                    "cacheOriginalKey": "appHistoryVersionOriginal_\(appID)_\(appExtID)"])
     }
 
+    /// 历史版本列表。
+    ///
+    /// ## 为什么不用 NB 自己出列表
+    /// NB 的 `getAppHistoryList` 名字像「列表」，**实测是取单个版本的包**
+    /// （抓包见报告第十节：传 `appVerId` 回 `data.url`，不传则回当前版本）。
+    /// 它没有「一次给全量版本」的接口 —— 硬要的话只能逐版本试错，代价太高。
+    ///
+    /// ## 用 bilin 目录补上
+    /// `apis.bilin.eu.org/history/{trackId}` 一次回**全量版本**，每项带
+    /// `external_identifier`（= NB 要的 `appVerId`）。这条目录路径本项目
+    /// **已经在用**（`AppStoreService.versionHistoryFromCatalog`，AppleID 商店的历史版本走它），
+    /// 这里只是把它的结果**转给 NB 的取包链路**，不新增任何外部依赖。
+    ///
+    /// ⇒ 落到 UI 上就是：列出版本 → 点某个版本 → 用它的 `externalVersionID`
+    /// 打 `/nb/app-downgrade` 取该版本的直链 + sinf。与 NB 客户端的形态一致。
+    ///
+    /// `trackID` 必须是 App Store 数字 ID（NB 的 `appID` 字段与 bilin 的路径参数同源）。
+    static func versionList(trackID: String) async throws -> [NBVersion] {
+        let versions = try await AppStoreService.versionHistoryFromCatalog(appId: trackID)
+        return versions.map { v in
+            NBVersion(externalIdentifier: v.externalVersionID ?? v.version,
+                      version: v.version,
+                      releaseTime: v.dateText,
+                      sizeText: v.sizeText)
+        }
+    }
+
     /// ATS：明文 http 一律升 https（爱思侧踩过同一个坑，见 `I4PCStoreClient.normalizeAssetURL`）
     private static func normalizeAsset(_ raw: String) -> String {
         raw.hasPrefix("http://") ? "https://" + String(raw.dropFirst(7)) : raw

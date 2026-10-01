@@ -75,8 +75,19 @@ struct AppStoreVersion: Identifiable, Hashable {
     var externalVersionID: String?
     /// 账号通道直接给出的发布日期
     var dateValue: Date?
+    /// 安装包大小（字节）。三方目录（bilin）会带 `size` 字段，账号通道不带。
+    ///
+    /// 给默认值：`AppStoreVersion` 有多处构造点（账号通道 / 商品页通道 / 三方目录），
+    /// 只有三方目录这一路拿得到大小，其余不传即可，不必逐个改。
+    var sizeBytes: Int64? = nil
 
     var id: String { externalVersionID ?? version }
+
+    /// 展示用大小（`613.1 MB`）。没有数据时不显示，不编造。
+    var sizeText: String? {
+        guard let sizeBytes, sizeBytes > 0 else { return nil }
+        return IPADownloadLibrary.sizeText(sizeBytes)
+    }
 
     /// 解析后的发布日期
     var date: Date? {

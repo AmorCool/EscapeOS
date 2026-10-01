@@ -692,13 +692,16 @@ enum AppStoreService {
             let raw = item["created_at"] as? String
             let identifier = (item["external_identifier"] as? NSNumber).map { "\($0.int64Value)" }
                 ?? (item["external_identifier"] as? String)
+            // 三方目录带 `size`（字节）。有就带上 —— 历史版本列表里体积是用户要看的项。
+            let size = (item["size"] as? NSNumber)?.int64Value
             let key = identifier ?? version
             guard seen.insert(key).inserted else { continue }
             out.append(AppStoreVersion(version: version,
                                        dateRaw: raw,
                                        notes: nil,
                                        externalVersionID: identifier,
-                                       dateValue: raw.flatMap { formatter.date(from: $0) }))
+                                       dateValue: raw.flatMap { formatter.date(from: $0) },
+                                       sizeBytes: size))
         }
         return out.isEmpty ? nil : out
     }
