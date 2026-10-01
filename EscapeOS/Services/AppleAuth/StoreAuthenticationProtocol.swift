@@ -214,7 +214,8 @@ enum StoreAuthenticationProtocol {
               url.port == nil || url.port == 443,
               let host = url.host?.lowercased(),
               paths.contains(url.path),
-              isBuyHost(host) || (host == "downloaddispatch.itunes.apple.com" && url.path == "/r/redownload")
+              isBuyHost(host) || (host == "downloaddispatch.itunes.apple.com"
+                  && (url.path == "/r/redownload" || url.path == "/up/updateProduct"))
         else { throw StoreAuthenticationError.invalidRedirect }
         return url
     }

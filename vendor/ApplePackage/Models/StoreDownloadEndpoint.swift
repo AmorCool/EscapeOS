@@ -69,4 +69,21 @@ extension StoreDownloadEndpoint {
         path: "/r/redownload",
         externalVersionIDKey: "appExtVrsId"
     )
+
+    /// updateProduct 端点（v0.3.537，移植 ipatool `50312a928b` / `acd9e7a972` /
+    /// `387d1a4f47`）。Apple 的 `/up/updateProduct` 能在 redownload 返回
+    /// **空 HTTP 500** 或**仅消息的 no-longer-available** 时，仍然按固定的
+    /// `externalVersionId` 给出包 —— 这是一条与 volumeStore / redownload **并列的第三条取包路径**。
+    ///
+    /// ipatool 原注释（`appstore_download_product.go`）：
+    /// > The bag's updateProduct can serve pinned iOS, macOS, and tvOS versions
+    /// > when redownload returns an empty HTTP 500 or a message-only availability error.
+    ///
+    /// bag 里的键名是 `updateProduct`（下载分派域下的 `/up/updateProduct`）。
+    /// 字段名沿用 redownload 同款的 `appExtVrsId`。
+    public static let updateProduct = StoreDownloadEndpoint(
+        host: "downloaddispatch.itunes.apple.com",
+        path: "/up/updateProduct",
+        externalVersionIDKey: "appExtVrsId"
+    )
 }

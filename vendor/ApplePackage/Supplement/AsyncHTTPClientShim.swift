@@ -501,16 +501,50 @@ private final class ApplePackageRedirectDelegate: NSObject, URLSessionTaskDelega
             // .disallow：不跟随，把 302 交还给调用方自行处理。
             completionHandler(nil)
         } else {
-            // Authenticated store requests use .disallow and explicit allowlisted redirects.
-            // Defense in depth: never auto-forward a credential-bearing request across origins.
+            // v0.3.537：**同族 Apple store 主机之间的重定向必须放行**（移植 ipatool
+            // `1ec8b3e5dc` fix: preserve signed authentication requests across redirects）。
+            //
+            // 背景：Apple 的 store 端点常态用 302 把请求导到同一个 pod 家族的另一台主机
+            // （`buy.itunes.apple.com` → `p39-buy.itunes.apple.com`，
+            //  `downloaddispatch.itunes.apple.com` ↔ `pXX-buy.itunes.apple.com`）。
+            // 这些目标**仍在 Apple 自有域内、仍是 https**，是协议的一部分，不是跨域泄露。
+            //
+            // 老逻辑是「只要带凭据头且 host 变了就一律拒绝」，于是 Apple 的正常 302 被就地
+            // 掐断 —— 响应停在 3xx / 边缘兜底页，表现就是「商店 502 / 下载失败」。
+            // 现在改为：**目标 host 与来源 host 属于同一 Apple store 主机族时放行**，
+            // 只有真正跨域（非 apple.com / mzstatic.com）或降级到非 https 才拒绝。
             let headers = task.originalRequest?.allHTTPHeaderFields ?? [:]
-            let sensitive = headers.keys.contains { ["cookie", "authorization", "x-token", "x-dsid", "icloud-dsid", "x-apple-actionsignature"].contains($0.lowercased()) }
-            if sensitive && (request.url?.host != task.originalRequest?.url?.host || request.url?.scheme != "https") {
+            let sensitive = headers.keys.contains {
+                ["cookie", "authorization", "x-token", "x-dsid", "icloud-dsid", "x-apple-actionsignature"]
+                    .contains($0.lowercased())
+            }
+            let fromHost = task.originalRequest?.url?.host?.lowercased() ?? ""
+            let toHost = request.url?.host?.lowercased() ?? ""
+            let sameStoreFamily = ApplePackageRedirectDelegate.isStoreHost(fromHost)
+                && ApplePackageRedirectDelegate.isStoreHost(toHost)
+            let isSecure = request.url?.scheme == "https"
+            if sensitive && !(isSecure && sameStoreFamily) {
                 completionHandler(nil)
             } else {
                 completionHandler(request)
             }
         }
+    }
+
+    /// 判定 host 是否属于 Apple 的 store 主机族。
+    ///
+    /// 放行范围（与 `StoreAuthenticationProtocol.storeURL` 的白名单口径一致）：
+    ///   · `buy.itunes.apple.com` / `p<数字>-buy.itunes.apple.com`
+    ///   · `downloaddispatch.itunes.apple.com`
+    /// 外加 Apple 自有域兜底（`*.apple.com` / `*.mzstatic.com`）—— 这两个域下的跳转
+    /// 始终在 Apple 网内，带凭据也不构成跨域泄露。
+    static func isStoreHost(_ host: String) -> Bool {
+        if host == "buy.itunes.apple.com" || host == "downloaddispatch.itunes.apple.com" { return true }
+        if host.range(of: #"^p[0-9]+-buy\.itunes\.apple\.com$"#, options: .regularExpression) != nil {
+            return true
+        }
+        return host == "apple.com" || host.hasSuffix(".apple.com")
+            || host == "mzstatic.com" || host.hasSuffix(".mzstatic.com")
     }
 }
 

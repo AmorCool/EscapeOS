@@ -8,10 +8,11 @@
 import Foundation
 
 extension StoreDownloadEndpoint {
-    /// 完整取下载信息（v0.3.361 起为**有界三段**）：
+    /// 完整取下载信息（v0.3.537 起为**有界四段**）：
     ///   ① volumeStore（带调用方给的 `externalVersionID`）；
     ///   ② ① 为空包、调用方没指定版本且给了 `versionCandidates` → 逐个用候选打 volumeStore（最多 6 个，命中即停）；
-    ///   ③ 候选也没包 → redownload 兜底。
+    ///   ③ redownload 兜底；
+    ///   ④ ③ 也没有包 → **`/up/updateProduct` 兜底**（v0.3.537 新增，移植 ipatool `acd9e7a972`）。
     ///
     /// 回退判定对齐 Asspp dev `65be5b04`（fix: recover empty store downloads）：
     /// 不只看 failureType 5002 —— Apple 还会**静默返回空包**（什么错误字段都没有、
@@ -99,7 +100,22 @@ extension StoreDownloadEndpoint {
                 // （v0.3.351 就是漏了这里：空包走到 redownload 5xx 后抛的是裸 HTTP 错误，
                 //  上层 catch 不匹配 → 直接失败，真机日志里 ChatGPT 就是这样挂的）。
                 if let reason = fallbackReason(dict) {
-                    storeLog("redownload 同样没有包（\(reason)）→ 判定为缺少下载授权")
+                    // v0.3.537：redownload 也空包时，**先试 `/up/updateProduct`**（移植 ipatool
+                    // `acd9e7a972` / `387d1a4f47`）。Apple 的 updateProduct 端点在 redownload
+                    // 回「空 500」或「No Longer Available」时，仍能按同一个 externalVersionId 出包；
+                    // 这条链对**下架应用**（delisted）尤其有效 —— ipatool 早期只认 volumeStore/redownload，
+                    // 下架应用的下载会卡死，`updateProduct` 就是它补上的第三跳。
+                    //
+                    // 只有在连 updateProduct 也没包时，才判定「该账号没有下载权」并抛 emptyPackage。
+                    storeLog("redownload 同样没有包（\(reason)）→ 试 updateProduct")
+                    if let rescued = try await fetchViaUpdateProduct(
+                        client: client, account: &account, app: app,
+                        deviceIdentifier: deviceIdentifier, externalVersionID: version
+                    ) {
+                        storeLog("updateProduct 命中；\(summary(rescued))")
+                        return rescued
+                    }
+                    storeLog("updateProduct 也没有包 → 判定为缺少下载授权")
                     throw ApplePackageError.emptyPackage
                 }
             } catch let error as ApplePackageError {
@@ -116,6 +132,38 @@ extension StoreDownloadEndpoint {
         }
 
         return dict
+    }
+
+    /// 用 `/up/updateProduct` 端点取包（v0.3.537 新增）。
+    ///
+    /// 与 ipatool `sendUpdateProduct` 同语义：**同一份会话 + 同一个版本号**，
+    /// 只换端点。任何异常都不上抛 —— 它只是兜底的一跳，失败就返回 nil，
+    /// 让调用方走原本的 `emptyPackage` 结论。
+    ///
+    /// - Returns: 有包时返回响应字典；端点不可用/无包/报错时返回 `nil`。
+    static func fetchViaUpdateProduct(
+        client: HTTPClient,
+        account: inout AppStoreAccount,
+        app: Software,
+        deviceIdentifier: String,
+        externalVersionID: String
+    ) async throws -> [String: Any]? {
+        do {
+            let dict = try await StoreDownloadEndpoint.updateProduct.fetchProduct(
+                client: client,
+                account: &account,
+                app: app,
+                deviceIdentifier: deviceIdentifier,
+                externalVersionID: externalVersionID
+            )
+            // 只有真正拿到包才算命中；其它（空包 / 业务拒绝）一律返回 nil 走原结论。
+            return fallbackReason(dict) == nil ? dict : nil
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            storeLog("updateProduct 请求失败：\(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Apple 在大体上「没有包可给」时长这样：5xx + 空 body（redownload 经典形态）、
@@ -207,7 +255,9 @@ extension StoreDownloadEndpoint {
                     throw StoreAuthenticationError.invalidRedirect
                 }
                 currentURL = try StoreAuthenticationProtocol.storeURL(next.absoluteString,
-                    paths: [StoreDownloadEndpoint.volumeStore.path, StoreDownloadEndpoint.redownload.path])
+                    paths: [StoreDownloadEndpoint.volumeStore.path,
+                            StoreDownloadEndpoint.redownload.path,
+                            StoreDownloadEndpoint.updateProduct.path])
                 redirectAttempt += 1
                 continue
             }

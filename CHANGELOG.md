@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.3.537] - 2026-10-01
+
+> 针对「AppStore 商店默认 AppleID 下载 502」的取包链路加固。
+> 移植 ipatool 上游 2026-10-01 的四条对症修复（`acd9e7a972` / `387d1a4f47` /
+> `50312a928b` / `1ec8b3e5dc`），都在 `pkg/appstore/appstore_download_product.go`
+> 与 `pkg/http/client.go` 有原文可对。
+
+### 新增：`/up/updateProduct` 兜底端点
+
+`StoreDownloadEndpoint.updateProduct` —— 与 volumeStore / redownload **并列的第三条取包路径**。
+
+Apple 的 `/up/updateProduct` 在 redownload 回「空 HTTP 500」或「仅消息的
+No Longer Available」时，**仍能按同一个 `externalVersionId` 给出包**。ipatool 上游原注：
+
+> The bag's updateProduct can serve pinned iOS, macOS, and tvOS versions
+> when redownload returns an empty HTTP 500 or a message-only availability error.
+
+取包链由**三段扩到四段**：volumeStore → 候选版本重试 → redownload → **updateProduct**。
+只有连 updateProduct 都没包，才判定「该账号没有下载权」抛 `emptyPackage`。
+对**已下架应用**（delisted）尤其关键 —— 此前这一档直接卡死。
+
+### 修复：同族 store 主机之间的重定向被就地掐断
+
+`ApplePackageRedirectDelegate` 此前是「只要请求带凭据头且 host 变了就一律拒绝」。
+但 Apple 的 store 端点**常态用 302 把请求导到同一个 pod 家族的另一台主机**
+（`buy.itunes.apple.com` → `p39-buy.itunes.apple.com`，
+ `downloaddispatch.itunes.apple.com` ↔ `pXX-buy.itunes.apple.com`）——
+这些目标仍在 Apple 自有域内、仍是 https，是协议的一部分。
+
+老逻辑把 Apple 的正常 302 就地掐断，响应停在 3xx / 边缘兜底页，
+**这正是「商店 502」的直接放大器**。
+
+现在改为：目标 host 与来源 host 同属 Apple store 主机族
+（`*-buy.itunes.apple.com` / `downloaddispatch.itunes.apple.com` / `*.apple.com` /
+`*.mzstatic.com`）且为 https 时**放行**；只有真正跨域或降级到非 https 才拒绝。
+对齐 ipatool `1ec8b3e5dc`（fix: preserve signed authentication requests across redirects）。
+
+### 修复：重定向白名单补齐 updateProduct 路径
+
+`StoreDownloadEndpoint.fetchProduct` 的手动重定向循环只放行
+`volumeStore.path` / `redownload.path`，新端点会被 `invalidRedirect` 拒掉。
+已补 `updateProduct.path`；`StoreAuthenticationProtocol.storeURL` 的 host 校验
+同步放开 `downloaddispatch.itunes.apple.com` 下的 `/up/updateProduct`。
+
 ## [0.3.536] - 2026-10-01
 
 > 与 0.3.535 内容相同，修一个编译错误后重发（v0.3.535 的 tag 构建失败，未产出 Release）。
