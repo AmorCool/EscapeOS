@@ -18,9 +18,15 @@ import SwiftUI
 struct I4StoreFreeView: View {
 
     /// v0.3.382：免登录商店的**来源**（接口一 = 爱思，接口二 = 牛蛙）
+    ///
+    /// v0.3.414：新增**第三来源 NB**（NB Pro）。它与前两者形态不同：
+    /// NB 没有「榜单 / 搜索列表」接口，只有**按 App Store trackId 取包**这一条路
+    /// （实测 `getAppHistoryList` 传空 `appVerId` 也只回当前版本，不是版本列表）。
+    /// 所以 NB 源不显示榜单，只让用户在搜索框里填 App Store 链接或数字 ID。
     enum StoreSource: String, CaseIterable, Identifiable {
         case i4 = "爱思"
         case niuwa = "牛蛙"
+        case nb = "NB"
 
         var id: String { rawValue }
     }
@@ -43,6 +49,14 @@ struct I4StoreFreeView: View {
     /// 存 bundleId 而不是 Bool：同一时刻只允许一行在取，且要能对上具体是哪一行。
     @State private var niuwaFetching: String?
 
+    /// v0.3.414：NB 源的取包结果。
+    ///
+    /// NB 没有列表接口，一次查询只对应一个 trackId，所以这里存的是**单个**结果，
+    /// 而不是像前两源那样的数组。`nbTrackID` 记下它是哪个 ID 的包（下载时要上报）。
+    @State private var nbPackage: NBStoreClient.NBPackage?
+    @State private var nbTrackID = ""
+    @State private var nbFetching = false
+
     /// v0.3.305：已下载数量（进入页面时读一次磁盘台账）
     @State private var downloadedCount = 0
     /// 统一下载中心（免登录源与 Apple ID 共用）
@@ -58,8 +72,14 @@ struct I4StoreFreeView: View {
     private var isSearchMode: Bool { !keyword.trimmingCharacters(in: .whitespaces).isEmpty }
 
     /// v0.3.382：搜索框提示随来源变（牛蛙要多说一句区域）
+    ///
+    /// v0.3.414：NB 源形态不同 —— 它没有搜索接口，收的是 **App Store 链接或数字 ID**。
     private var searchPrompt: String {
-        source == .i4 ? "搜索应用（无需登录）" : "搜索应用（无需登录 · \(region.title)）"
+        switch source {
+        case .i4:    return "搜索应用（无需登录）"
+        case .niuwa: return "搜索应用（无需登录 · \(region.title)）"
+        case .nb:    return "粘贴 App Store 链接或填数字 ID"
+        }
     }
 
     var body: some View {
@@ -83,11 +103,20 @@ struct I4StoreFreeView: View {
         .onSubmit(of: .search) { runSearch() }
         .onChange(of: rank) { _, _ in Task { await load() } }
         // v0.3.382：切来源 / 切区域都要重新取数（搜索态重搜，列表态重载）
-        .onChange(of: source) { _, _ in
+        //
+        // v0.3.414：切到 NB 时**先清掉上一个来源的结果** —— NB 的结果行只在
+        // `source == .nb` 时渲染，但 `nbPackage` 本身不清会串到下一次查询。
+        .onChange(of: source) { _, newValue in
+            if newValue == .nb {
+                nbPackage = nil
+                nbTrackID = ""
+                errorText = nil
+            }
             if isSearchMode { runSearch() } else { Task { await load() } }
         }
         .onChange(of: regionRaw) { _, _ in
-            guard source == .niuwa else { return }
+            // v0.3.414：NB 源也要响应区域切换（它的 `country` 参数随之变）
+            guard source == .niuwa || source == .nb else { return }
             if isSearchMode { runSearch() } else { Task { await load() } }
         }
         .toolbar {
@@ -123,7 +152,8 @@ struct I4StoreFreeView: View {
             }
             .pickerStyle(.segmented)
 
-            if source == .niuwa {
+            // v0.3.414：NB 源也有区域（ID 反编译确认 `country` 参数，`DXSTSegmentController` 就是它的控件）
+            if source == .niuwa || source == .nb {
                 Picker("区域", selection: $regionRaw) {
                     ForEach(NiuwaStoreClient.NiuwaRegion.allCases) { r in
                         Text(r.title).tag(r.rawValue)
@@ -196,13 +226,19 @@ struct I4StoreFreeView: View {
             }
         } else if let errorText {
             Section {
-                Label(errorText, systemImage: "exclamationmark.triangle.fill")
+                Label(errorText, systemImage: "xmark.circle.fill")
                     .font(.subheadline).foregroundStyle(.orange)
             }
         } else if source == .niuwa {
             // v0.3.382：牛蛙源只有搜索，不做榜单（接口文档里只有 /appstore/search + /download）
             Section {
                 Text("牛蛙源请用上方搜索框按关键词找应用。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        } else if source == .nb {
+            // v0.3.414：NB 源既没有榜单也没有搜索接口 —— 只能按 App Store ID 取包
+            Section {
+                Text("NB 源请用上方搜索框粘贴 App Store 链接，或直接填数字 ID。")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         } else if apps.isEmpty {
@@ -239,7 +275,7 @@ struct I4StoreFreeView: View {
                     }
                 }
             }
-        } else {
+        } else if source == .niuwa {
             if niuwaSearchResults.isEmpty {
                 Section {
                     Text("没有找到匹配的应用。").font(.subheadline).foregroundStyle(.secondary)
@@ -251,7 +287,60 @@ struct I4StoreFreeView: View {
                     }
                 }
             }
+        } else {
+            // v0.3.414：NB 源 —— 一个 trackId 只对应一个结果
+            if let pkg = nbPackage {
+                Section("App Store ID \(nbTrackID)") {
+                    nbRow(trackID: nbTrackID, package: pkg)
+                }
+            } else if nbFetching {
+                Section {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("正在取包…").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Section {
+                    Text("粘贴 App Store 链接或填数字 ID，回车即可取包。")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
         }
+    }
+
+    /// v0.3.414：NB 源的结果行。
+    ///
+    /// NB 接口只回 `url` + `sinfs`，**没有名称、图标、版本号**，所以这一行展示的是
+    /// 「trackId + 直链是否拿到」，而不是仿照前两源做一张有图有字的卡片 ——
+    /// 没有的数据不硬凑。
+    private func nbRow(trackID: String, package: NBStoreClient.NBPackage) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "shippingbox")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .frame(width: 54, height: 54)
+                .background(Color.secondary.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("App Store ID \(trackID)").font(.body).lineLimit(1)
+                Text(package.sinfBase64 == nil ? "已取到直链（无 sinf）" : "已取到直链 + sinf")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+
+            if nbFetching {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("获取") {
+                    Task { await startNBDownload(trackID: trackID, package: package) }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - 行
@@ -495,14 +584,15 @@ struct I4StoreFreeView: View {
         let src = source
         let reg = region
         Task {
-            if src == .i4 {
+            switch src {
+            case .i4:
                 do {
                     searchResults = try await I4PCStoreClient.search(keyword: kw)
                 } catch {
                     searchResults = []
                     ToastCenter.shared.show("搜索失败：\(error.localizedDescription)")
                 }
-            } else {
+            case .niuwa:
                 do {
                     niuwaSearchResults = try await NiuwaStoreClient.search(keyword: kw, region: reg)
                 } catch {
@@ -514,6 +604,10 @@ struct I4StoreFreeView: View {
                     errorText = "牛蛙源搜索失败：\(error.localizedDescription)"
                     ToastCenter.shared.show("搜索失败")
                 }
+            case .nb:
+                // v0.3.414：NB 没有搜索接口 —— 这里把输入当 **trackId 或 App Store 链接**，
+                // 直接去取该应用的包。取到即显示一行，点「获取」下载。
+                await runNBFetch(kw)
             }
             searching = false
         }
@@ -533,6 +627,63 @@ struct I4StoreFreeView: View {
                                            remoteURL: ipaURL.absoluteString)
         downloadedCount = IPADownloadLibrary.shared.items().count
     }
+
+    // MARK: - v0.3.414 NB 源（按 App Store ID 取包）
+
+    /// 从用户输入里取出 App Store trackId。
+    ///
+    /// 三种写法都认：纯数字 `6451407032`、`id6451407032`、
+    /// 完整链接 `https://apps.apple.com/cn/app/xxx/id6451407032`。
+    private func nbParseTrackID(_ raw: String) -> String? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        if s.allSatisfy({ $0.isNumber }) { return s }
+        // 链接：取最后一处 `id` 后面连续的数字
+        guard let r = s.range(of: "id", options: .backwards) else { return nil }
+        let digits = s[r.upperBound...].prefix { $0.isNumber }
+        return digits.isEmpty ? nil : String(digits)
+    }
+
+    /// NB 源取包：输入 → trackId → 取直链与 sinf。
+    @MainActor
+    private func runNBFetch(_ raw: String) async {
+        nbPackage = nil
+        errorText = nil
+        guard let tid = nbParseTrackID(raw) else {
+            errorText = "NB 源需要 App Store 链接或数字 ID（例如 6451407032）"
+            searching = false
+            return
+        }
+        nbTrackID = tid
+        nbFetching = true
+        do {
+            nbPackage = try await NBStoreClient.package(appID: tid, country: regionRaw)
+            if nbPackage == nil { errorText = "该应用没有可用的安装包" }
+        } catch {
+            errorText = "NB 源取包失败：\(error.localizedDescription)"
+        }
+        nbFetching = false
+        searching = false
+    }
+}
+
+// MARK: - v0.3.414 NB 源：取直链 → 交给统一下载中心
+
+/// NB 源的下载入口。与 `startNiuwaDownload` 同构：
+/// NB 下发的同样是 **Apple 原始加密包**，所以必须把 sinf 一起交给下载中心写回包内。
+@MainActor
+func startNBDownload(trackID: String, package: NBStoreClient.NBPackage) async {
+    guard !package.ipaURL.isEmpty else {
+        ToastCenter.shared.show("该应用没有可用的安装包")
+        return
+    }
+    _ = IPADownloadCenter.shared.start(name: "App \(trackID)",
+                                       bundleId: nil,
+                                       version: package.version.isEmpty ? nil : package.version,
+                                       iconURL: nil,
+                                       remoteURL: package.ipaURL,
+                                       source: .nb,
+                                       sinfBase64: package.sinfBase64)
 }
 
 // MARK: - v0.3.406 牛蛙源：取直链 → 交给统一下载中心

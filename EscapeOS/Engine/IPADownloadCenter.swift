@@ -23,7 +23,22 @@ final class IPADownloadCenter: ObservableObject {
         /// 所以只是"来源"这一栏的口径不同 —— 以前借用 `.i4Free`，
         /// 下载管理页那一行会把牛蛙的包标成「爱思免登录」。
         case niuwa = "牛蛙免登录"
+        /// v0.3.414：免登录商店的**第三个来源**（NB Pro，bundle id `com.nbmaster.app`）。
+        /// 与牛蛙同构：服务端随直链下发 `sinfs[].dataHex`，安装前必须写回包内 `SC_Info/`。
+        case nb = "NB免登录"
         case appleID = "Apple ID"
+
+        /// 安装前是否需要把服务端下发的 sinf 写回包内 `SC_Info/`。
+        ///
+        /// 牛蛙与 NB 下发的都是 **Apple 原始加密包**（FairPlay 未剥离），
+        /// 必须补上本机专用 sinf 才能过验证；爱思源的服务端包已签名、
+        /// AppleID 通道由 `SignatureInjector` 自行写回，均不需要。
+        var needsSinfWriteback: Bool {
+            switch self {
+            case .niuwa, .nb: return true
+            case .i4Free, .appleID: return false
+            }
+        }
     }
 
     enum Phase: Equatable {
@@ -747,8 +762,9 @@ final class IPADownloadCenter: ObservableObject {
                 // 牛蛙源的用户即使手动点安装也必须有 sinf 才能过 FairPlay 验证。
                 // 以前 `installAfterDownload` 顺手做这一步；现在彻底不自动装，这一步独立出来：
                 // 在主 actor 上 dispatch 到后台队列跑（写几百 MB 的 IPA 不能卡 UI）。
-                // 只对**牛蛙源**做（爱思源的服务端包已签名、AppleID 通道由 SignatureInjector 自己写回）。
-                if current.source == .niuwa, let sinf = current.sinfBase64 {
+                // 只对**牛蛙源 / NB 源**做（两者都是 Apple 原始加密包 + 服务端下发 sinf）；
+                // 爱思源的服务端包已签名、AppleID 通道由 SignatureInjector 自己写回，都不需要。
+                if current.source.needsSinfWriteback, let sinf = current.sinfBase64 {
                     let ipaPath = dest.path
                     Task.detached(priority: .userInitiated) {
                         PackageSINFWriter.writeIfNeeded(sinfBase64: sinf, ipaPath: ipaPath)

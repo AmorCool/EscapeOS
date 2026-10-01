@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.535] - 2026-10-01
+
+> 免登录商店新增**第三个来源 NB**（NB Pro）。协议由真机抓包 + IDA 反编译双向确认，
+> 不是推测值 —— 抓包样本 `nb_live.jsonl` 与反编译产物 `_nb_ida_dec.txt` 都在工作区留档。
+
+### 新增：NB 源
+
+- `NBStoreClient.swift` —— 与爱思、牛蛙并列的第三来源。
+  - **加密**：AES-128-CBC + PKCS7；请求 `hex(密文)` 后 `E→-`、`FF→.`，
+    响应是 **`gzip(base64(密文))`**（响应头带 `Content-Encoding: gzip`，
+    所以解密前必须先 gunzip —— 这一步漏掉会一直解不开）。
+  - **密钥派生**：`MD5(base64("UmZnOVRHVXNVcld5M01QVA==").replace("T","i") + "nbsigner")`，
+    前 16 字符为 key、后 16 字符为 iv（都是 hex 字符串的 UTF8 字节，不是 MD5 原始字节）。
+  - **取包接口**：`POST {host}/nb/app-downgrade`，`method=nb9527_getAppHistoryList`，
+    参数 `{plusID, appID, bundleID, country, appVerId}`。
+    实测 **`plusID` 传字符串 `"0"`**、**`bundleID` 可省**、**`appVerId` 为空则取当前版本**。
+  - 响应 `data` 直接给出 `url`（Apple CDN 直链）+ `sinfs[].dataHex`（完整 sinf 授权块）。
+    **全程无需账号、无需 Anisette。**
+  - 新增原生 `gunzip` / `inflate` / `gzipPayload`（走 `Compression`，不引第三方依赖）。
+
+- `I4StoreFreeView` —— 来源选择器加第三档 **NB**。
+  - NB 源**没有榜单、也没有搜索接口**（IDA 反编译确认：服务端只提供「取包」，
+    `getAppHistoryList` 传空 `appVerId` 只回当前版本，不返回版本列表）。
+    所以它的搜索框收的是 **App Store 链接或数字 ID**，取到即显示一行结果。
+  - 区域档复用现有 `NiuwaRegion`（中国 / 美国）—— 对应请求里的 `country` 参数，
+    与客户端 `DXSTSegmentController` 是同一个语义（IDA 已确认该参数键名 `0x7972746E756F63`）。
+
+- `IPADownloadCenter` —— `Source` 加 `case nb`；把原先写死的
+  `current.source == .niuwa` 换成 `current.source.needsSinfWriteback`，
+  让 NB 的包也能在安装前把 sinf 写回 `SC_Info/`（NB 下发的同样是 Apple 原始加密包）。
+
+### 已知边界（明确记录，不是遗漏）
+
+- **版本列表不来自 NB 服务端**。客户端是把第三方源（爱思）的版本列表聚合后，
+  再拿 `appVerId` 去 NB 取包。所以「历史版本」这个能力要落地，
+  得把爱思源的版本列表接进来做数据源，NB 只负责最后一步取包。
+- **`country` 参数的效果未验出差异**：用同一个 App 分别传 `cn` / `us`，
+  返回的是同一个包（该 App 只在国区上架）。需要用美区独有 App 才能验出区别。
+
 ## [0.3.534] - 2026-09-26
 
 > 与 0.3.533 内容相同，修一个编译错误后重发（v0.3.533 的 tag 构建失败，未产出 Release）。
