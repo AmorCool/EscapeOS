@@ -186,6 +186,23 @@ final class SpoofSession: ObservableObject {
         apply(coordinate, markRecent: true)
     }
 
+    /// 蓝牙链路下发的坐标入口（v0.3.540）.
+    ///
+    /// 与 `teleport` 的差别只有**错误文案**：链路场景下用户是在 B 机上等着看结果，
+    /// 一句「请先在设置里导入配对文件」比 `teleport` 的通用提示更直接
+    /// （用户实测就是「收得到但应用不了，也不知道为什么」）.
+    ///
+    /// 行为完全一致 —— 都写 `pin` 并 `apply`，所以 A 机侧的「图钉变化即下发」
+    /// 与 B 机侧的回环抑制都仍然成立.
+    func applyRemoteCoordinate(_ coordinate: CLLocationCoordinate2D) {
+        guard hasPairing else {
+            lastError = "信号端需要配对文件才能应用坐标.请在「设置 → 配对文件」导入后重试."
+            return
+        }
+        pin = coordinate
+        apply(coordinate, markRecent: false)
+    }
+
     var isMoving: Bool { routeActive || joystickActive }
     var canResumeRoute: Bool { routePaused && activeRoute.count >= 2 && simulated != nil }
 

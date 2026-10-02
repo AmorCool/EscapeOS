@@ -17,6 +17,8 @@ final class BLECoordinator: NSObject, ObservableObject {
 
     @Published private(set) var state: BluetoothLinkState = .off
     @Published private(set) var isActive = false
+    /// 当前角色（v0.3.540：桥接层要按角色决定「谁下发、谁请求」，故对外只读开放）.
+    @Published private(set) var currentRole: BluetoothLinkRole = .broadcaster
     @Published private(set) var peerName: String?
     @Published private(set) var lastSent: CLLocationCoordinate2D?
     @Published private(set) var lastReport: BluetoothStatusReport?
@@ -35,6 +37,11 @@ final class BLECoordinator: NSObject, ObservableObject {
     var onCoordinate: ((CLLocationCoordinate2D) -> Void)?
     /// A 机收到 B 机的状态回报.
     var onReport: ((BluetoothStatusReport) -> Void)?
+    /// A 机收到 B 机的「请求下发」—— 参数是 B 机选的图钉坐标（回调在 BLE 队列）.
+    ///
+    /// v0.3.540：B 机选图钉模式的反向链路。A 机收到后应把该坐标当成
+    /// 「本次要下发的目标」，走 `send(latitude:longitude:)` 推回去。
+    var onPushRequest: ((CLLocationCoordinate2D) -> Void)?
 
     private let queue = DispatchQueue(label: "com.escapeos.ble")
     private var role: BluetoothLinkRole = .broadcaster
@@ -106,6 +113,7 @@ final class BLECoordinator: NSObject, ObservableObject {
             // 两种角色都要看门狗：A 侧防「对端消失后无法再被发现」，B 侧防「已连但收不到」.
             self.startWatchdogLocked()
             self.publish {
+                self.currentRole = role
                 self.isActive = true
                 self.state = role == .broadcaster ? .advertising : .scanning
                 self.lastError = nil
@@ -140,6 +148,15 @@ final class BLECoordinator: NSObject, ObservableObject {
     func report(_ report: BluetoothStatusReport) {
         queue.async { [weak self] in
             self?.reportLocked(report)
+        }
+    }
+
+    /// B 机请求 A 机下发指定坐标（v0.3.540：B 机选图钉模式）.
+    ///
+    /// 走的是与状态回报**同一条**上行特征，靠首字节类型标签区分（见 `BluetoothUplinkMessage`）.
+    func requestPush(latitude: Double, longitude: Double) {
+        queue.async { [weak self] in
+            self?.requestPushLocked(latitude: latitude, longitude: longitude)
         }
     }
 
@@ -359,6 +376,22 @@ final class BLECoordinator: NSObject, ObservableObject {
         peripheral.writeValue(report.encoded(), for: characteristic, type: .withResponse)
     }
 
+    /// B 机请求 A 机下发坐标（v0.3.540）.
+    ///
+    /// 与 `reportLocked` 走同一特征、同一 `.withResponse` 写类型；
+    /// 差别只在载荷 —— 这里发的是 `BluetoothUplinkMessage`（首字节 `0x80`）.
+    private func requestPushLocked(latitude: Double, longitude: Double) {
+        guard role == .receiver,
+              CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: latitude, longitude: longitude)),
+              let peripheral = target,
+              let characteristic = statusWriteCharacteristic,
+              peripheral.state == .connected else { return }
+        let message = BluetoothUplinkMessage(
+            requestedCoordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        )
+        peripheral.writeValue(message.encoded(), for: characteristic, type: .withResponse)
+    }
+
     private func startAdvertisingLocked(_ peripheral: CBPeripheralManager) {
         guard !peripheral.isAdvertising else { return }
         peripheral.startAdvertising([
@@ -511,6 +544,11 @@ final class BLECoordinator: NSObject, ObservableObject {
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: Date())
     }
+
+    /// 坐标的日志文案（点名到 5 位小数，够分辨相邻图钉）.
+    private static func coordinateText(_ coordinate: CLLocationCoordinate2D) -> String {
+        String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude)
+    }
 }
 
 extension BLECoordinator: CBPeripheralManagerDelegate {
@@ -596,12 +634,24 @@ extension BLECoordinator: CBPeripheralManagerDelegate {
             let authorized = subscribedCentrals.contains { $0.identifier == request.central.identifier }
             if authorized,
                request.characteristic.uuid == BluetoothLink.statusCharacteristicUUID,
-               let value = request.value,
-               let report = BluetoothStatusReport(data: value) {
-                lastPeerActivity = Date()
-                publish { self.lastReport = report }
-                onReport?(report)
-                append("收到回报：\(report.label)")
+               let value = request.value {
+                // v0.3.540：上行通道现在有两种载荷，靠首字节区分：
+                //   · 首字节 ≥ 0x80 → `BluetoothUplinkMessage`（B 机请求下发）
+                //   · 否则           → 老格式的状态回报（2 字节）
+                if let message = BluetoothUplinkMessage(data: value) {
+                    lastPeerActivity = Date()
+                    switch message.kind {
+                    case .requestPush:
+                        let coordinate = message.requestedCoordinate
+                        append("对端请求下发 \(Self.coordinateText(coordinate))")
+                        onPushRequest?(coordinate)
+                    }
+                } else if let report = BluetoothStatusReport(data: value) {
+                    lastPeerActivity = Date()
+                    publish { self.lastReport = report }
+                    onReport?(report)
+                    append("收到回报：\(report.label)")
+                }
             }
             if request.characteristic.properties.contains(.write) {
                 // 这是 write 请求 → 拒绝必须用 .writeNotPermitted（CBATTError.Code 里没有 .notPermitted）。

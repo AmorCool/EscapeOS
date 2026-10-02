@@ -59,7 +59,9 @@ struct BluetoothPanelView: View {
     private var usageSection: some View {
         Section {
             Text("两台设备各装本 App：A 机选「模拟终端」，B 机选「信号端」。")
-            Text("B 机在「附近设备」里点 A 机，A 机弹窗点「允许」后开始应用坐标。")
+            // v0.3.540：选图钉的位置改到 B 机（用户拍板）—— 谁要用谁选，符合直觉.
+            Text("B 机在「附近设备」里点 A 机，A 机弹窗点「允许」。")
+            Text("之后在 B 机地图上放图钉，坐标会经 A 机回传并应用；A 机的图钉变化同样会下发。")
             Text("双方需保持 App 在前台。")
             Text("蓝牙为可选的跨设备扩展；单机无需第二台设备，直接用上方虚拟定位。")
             Text("被拒绝后需点「重新开始广播」才能再次配对。")
@@ -148,20 +150,21 @@ struct BluetoothPanelView: View {
                 infoRow("本机模拟", session.status.label)
             }
 
-            if role == .broadcaster {
-                Button {
-                    hint = BluetoothSpoofBridge.shared.pushCurrentPin() ? nil : "请先在地图上放置图钉。"
-                } label: {
-                    Label("立即下发图钉坐标", systemImage: "location.fill")
-                }
-                .disabled(!enabled || session.pin == nil)
+            // v0.3.540：两种角色都能「主动推当前图钉」——
+            // A 机是下发，B 机是请求下发（走的都是各自那一条链路）。
+            Button {
+                hint = BluetoothSpoofBridge.shared.pushCurrentPin() ? nil : "请先在地图上放置图钉。"
+            } label: {
+                Label(role == .broadcaster ? "立即下发图钉坐标" : "用本机图钉定位",
+                      systemImage: "location.fill")
+            }
+            .disabled(!enabled || session.pin == nil)
 
-                if coordinator.hasDeniedPeers {
-                    Button {
-                        coordinator.resumeAdvertising()
-                    } label: {
-                        Label("重新开始广播", systemImage: "arrow.clockwise")
-                    }
+            if role == .broadcaster && coordinator.hasDeniedPeers {
+                Button {
+                    coordinator.resumeAdvertising()
+                } label: {
+                    Label("重新开始广播", systemImage: "arrow.clockwise")
                 }
             }
 

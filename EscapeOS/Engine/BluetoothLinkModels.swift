@@ -167,6 +167,88 @@ struct BluetoothLocationPayload {
     }
 }
 
+/// B→A 回报：1 字节消息类型 + 负载.
+///
+/// ## v0.3.540：上行通道从「只报状态」扩成「带类型的消息」
+///
+/// 背景：用户拍板把选图钉的位置改到 **B 机**（符合直觉 —— 谁要用谁选）。
+/// 这需要一条 **B→A 的反向请求**：B 机放图钉后告诉 A 机「请把这个坐标下发给我」。
+///
+/// 设计上**不新增特征**，直接复用既有的「状态」write 特征（`E5C0A102-…`）：
+/// 所有上行消息共用它，靠**首字节的类型标签**区分。
+///
+/// ## ⚠️ 类型标签为什么从 0x80 起（不能从 0/1 起）
+///
+/// 历史线格式里，状态消息的首字节是**状态码 0~4**（idle / connecting / active /
+/// reconnecting / dropped）。若把 `requestPush` 的标签取成 `1`，就会和
+/// 「正在连接」这个状态码**撞车**，A 机无法区分两者。
+/// 所以新类型的标签一律取 **`0x80` 以上**（状态码永远 ≤ 4），
+/// A 机读到 `≥ 0x80` 就当新消息处理，读到 `≤ 4` 就当老格式的状态回报 —— 天然不冲突。
+///
+/// ## 线格式
+/// ```
+/// status       ：[code(0~4)][error]                     共 2 字节（与 v0.3.539 一致）
+/// requestPush  ：[0x80][纬度 8 字节小端][经度 8 字节小端]  共 17 字节
+/// ```
+struct BluetoothUplinkMessage: Equatable {
+    /// 上行消息类型标签.
+    ///
+    /// 取值从 `0x80` 起 —— 见类型注释里「为什么不能从 0/1 起」.
+    enum Kind: UInt8 {
+        /// B 机请求 A 机下发指定坐标（新协议）.
+        case requestPush = 0x80
+    }
+
+    /// `requestPush` 的线上字节数：1 + 8 + 8.
+    static let requestPushByteCount = 17
+
+    let kind: Kind
+    /// B 机当前选的图钉坐标.
+    let requestedCoordinate: CLLocationCoordinate2D
+
+    init?(data: Data) {
+        let bytes = [UInt8](data)
+        // 首字节 ≥ 0x80 才是新消息；否则是状态回报，不由本类型解析.
+        guard let first = bytes.first,
+              first >= 0x80,
+              let kind = Kind(rawValue: first) else { return nil }
+        switch kind {
+        case .requestPush:
+            guard bytes.count == Self.requestPushByteCount,
+                  let lat = Self.readDouble(bytes, at: 1),
+                  let lon = Self.readDouble(bytes, at: 9) else { return nil }
+            self.kind = .requestPush
+            self.requestedCoordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+    }
+
+    init(requestedCoordinate: CLLocationCoordinate2D) {
+        self.kind = .requestPush
+        self.requestedCoordinate = requestedCoordinate
+    }
+
+    func encoded() -> Data {
+        var data = Data([kind.rawValue])
+        Self.append(requestedCoordinate.latitude, to: &data)
+        Self.append(requestedCoordinate.longitude, to: &data)
+        return data
+    }
+
+    private static func append(_ value: Double, to data: inout Data) {
+        var bits = value.bitPattern.littleEndian
+        withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+    }
+
+    private static func readDouble(_ bytes: [UInt8], at offset: Int) -> Double? {
+        guard offset >= 0, bytes.count >= offset + 8 else { return nil }
+        var bits: UInt64 = 0
+        for index in 0..<8 {
+            bits |= UInt64(bytes[offset + index]) << UInt64(8 * index)
+        }
+        return Double(bitPattern: bits)
+    }
+}
+
 /// B→A 回报：1 字节状态码 + 1 字节错误码（0 = 无错误），共 2 字节.
 struct BluetoothStatusReport: Equatable {
     static let byteCount = 2

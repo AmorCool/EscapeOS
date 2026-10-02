@@ -55,9 +55,6 @@ extension StoreDownloadEndpoint {
     /// 4. redownload 若回「裸 HTTP 500（无 body）」或「`no longer available` 消息」→
     ///    用**同一个版本**打 **一次** `updateProduct`（上游 4 个必要条件见 `fetchViaUpdateProduct`）；
     /// 5. 其余一切（含带 body 的 5xx）→ 抛 `transportFailure`，原样上抛、不补救。
-    ///    - 没给 → 调 `resolveVersion()`；**解析失败或为空 → 抛 `catalogUnavailable`**，
-    ///      绝不发出不带版本号的 redownload；
-    /// 5. 其余一切（含带 body 的 5xx）→ 抛 `transportFailure`，原样上抛、不补救。
     static func fetchProductWithFallback(
         client: HTTPClient,
         account: inout AppStoreAccount,

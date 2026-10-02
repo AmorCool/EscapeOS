@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.3.540] - 2026-10-02
+
+> **三件事**：① NB 源「点获取闪退」真因定案并修复；② NB 的榜单与搜索改接
+> **Apple 官方接口**（原先误借爱思，导致美区搜不到、国区软件少）；③ 蓝牙模拟
+> 按拍板结果改为 **B 机选图钉**（新增 B→A 请求下发链路）。
+
+### 修复：NB 源「点获取就闪退」—— Swift 字典字面量重复键
+
+**真因**：`NBStoreClient.pubParams` 的字典字面量把 `phoneName` / `deviceType` /
+`productType` **各写了两遍**。Swift 的字典字面量遇到重复键**不是后者覆盖前者**，
+而是编译期插入 `_preconditionFailure` ⇒ 运行到那里就是
+
+```
+Fatal error: Dictionary literal contains duplicate keys
+```
+
+**进程当场死、无法 catch**。任何 NB 请求的第一步都是构造这一组公共参数，
+所以崩在发 HTTP **之前** —— 这也解释了为什么设备日志里 `[NB源]` 一行都没有
+（早于 `LoginLogger.log("→ POST …")`）。
+
+**修法**：改为先建基底字典 `var p: [String: Any] = [...]`，缺省值用下标写回；
+新增 `deviceModelIdentifier()` 直接读 `hw.machine` 作为 `productType`
+（原先是写死的 `iPhone12,1`，那只是抓包那台机器的值，不是协议常量）。
+
+**防复发**：新增静态扫描器 `P0_工作产物标准区/scripts/_tools_dupkey_scan.py`
+（单遍词法扫描，能区分字面量与函数实参、跳过字符串/注释）。全仓 237 个 Swift
+文件扫描结果 **零重复键**；该步骤已写进发版自检清单。
+
+### 修复：NB 的 4 个服务主机全是明文 HTTP，ATS 全数拦掉
+
+`Info.plist` 的 `NSAppTransportSecurity → NSExceptionDomains` 原来**只有 `i4.cn`**，
+而 NB 的 `hosts` 是 `47.243.71.210:9527` / `124.222.32.246` / `117.72.39.157:9527` /
+`nbtool8.com:9666`，**全是 `http://`** ⇒ 请求连发都发不出去。现已逐个补入例外。
+
+### 修正：NB 的榜单与搜索改接 Apple 官方接口
+
+此前判断「NB 没有榜单接口」是**错的**。实测逐字对照后确认 NB 直接读 **Apple 公开 RSS**：
+
+| 界面 | 来源 |
+|---|---|
+| 免费榜 / 付费榜 | `itunes.apple.com/{cc}/rss/topfreeapplications` / `toppaidapplications` |
+| 游戏榜 | 同上 + `/genre=6014` |
+| 搜索 | `itunes.apple.com/search?term=&country=&entity=software` |
+
+**中国区实测逐字复现**（与截图一致）：免费榜 抖音商城 / 红果短剧 / 红果漫剧；
+游戏榜 跃动小子 / 王者万象棋 / 王者荣耀；付费榜 潜水员戴夫 / 喵斯快跑 / 王国保卫战5。
+
+**美区同样出数据**（Muse from Meta / ChatGPT / Vinted）—— 原先「美区一个搜不到、
+国区那么点软件」的病根就是**借了爱思的接口**，接 Apple 后自动消失。
+
+新增 `EscapeOS/Engine/NBStoreRankClient.swift`（`fetch` / `search` / `RankItem`）；
+`I4StoreFreeView` 加 `nbRank` 分组 Picker、榜单行 `nbRankRow`（图标 / 名次角标 /
+价格与分类胶囊 / 开发者与分类副标题 / 可进详情）。同时**删掉**「NB 关键词搜索借
+爱思」的分支与随之失去调用点的 `installViaNB`。
+
+### 变更：蓝牙模拟改为「B 机选图钉」
+
+原设计是 A 机（广播端）选图钉下发；用户按直觉拍板**改为 B 机（信号端）选图钉**。
+这需要一条**反向链路**，因此 BLE 协议新增一条上行消息：
+
+```
+BluetoothUplinkMessage.Kind.requestPush = 0x80
+线格式 = [0x80][纬度 8 字节小端][经度 8 字节小端]   共 17 字节
+```
+
+> 类型标签为什么从 `0x80` 起：状态回报的首字节是状态码 `0~4`，若新类型取 `1`
+> 会与「正在连接」撞车。`BluetoothUplinkMessage.init?(data:)` 对首字节 `< 0x80`
+> 返回 `nil`，交给状态回报分支解析 —— 两种形态在同一特征上共存。
+
+`BLECoordinator` 新增 `currentRole` / `onPushRequest` / `requestPush(...)`；
+`didReceiveWrite` 改为双形态解析。`BluetoothSpoofBridge` 双向订阅并**限定角色防回环**
+（只有 broadcaster 的图钉变化才下发，只有 receiver 的图钉变化才请求）。
+`SpoofSession` 新增 `applyRemoteCoordinate(_:)`（行为同 `teleport`，错误文案更贴合链路场景）。
+面板侧「立即下发图钉坐标」改为两种角色共用。
+
 ## [0.3.539] - 2026-10-02
 
 > **AppleID 商店 502 真因定位 + 下载链路全量对齐上游**。

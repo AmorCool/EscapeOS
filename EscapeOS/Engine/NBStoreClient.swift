@@ -235,26 +235,59 @@ enum NBStoreClient {
     ///
     /// 这一组**必须齐**，否则服务端回「请更新到最新版」（那是闸门，不是真要求升级）。
     /// 字段与取值来自 `sub_1000046F4` 反编译。
+    ///
+    /// ## v0.3.540 修复：**字典字面量里的重复键会让 App 直接崩**
+    ///
+    /// 原实现把 `phoneName` / `deviceType` / `productType` 各写了**两遍**。
+    /// Swift 的字典字面量遇到重复键不是"后者覆盖前者"，而是编译期插入
+    /// `_preconditionFailure` —— 运行到这里就是
+    /// `Fatal error: Dictionary literal contains duplicate keys`，**进程当场死**。
+    ///
+    /// 这正是「点 NB 源获取就闪退」的真因：任何 NB 请求的第一步都是构造这一组参数，
+    /// 所以还没轮到发 HTTP 就崩了 —— 也解释了为什么日志里 `[NB源]` 一行都没有
+    /// （崩溃发生在 `LoginLogger.log("→ POST …")` 之前）。
+    ///
+    /// 改为在**构造后再赋值**：先建好不发重复键的基底，缺省值用下标写回，
+    /// 这样即使将来再加字段也不会重复触发这个坑。
     private static func pubParams(iPad: Bool) -> [String: Any] {
-        [
+        // 实测抓包值（2026-10-01）：客户端 3.9.1 / build 1。
+        // 与请求体里的 appVersion 是同一个值，服务端会校验，勿随意改小。
+        var p: [String: Any] = [
             "mainBundleID": "com.nbmaster.app",
             "mainEmbedded": 0,
             "apiVersion": "1.0",
-            // 实测抓包值（2026-10-01）：客户端 3.9.1 / build 1。
-            // 与请求体里的 appVersion 是同一个值，服务端会校验，勿随意改小。
             "version": "3.9.1",
             "build": "1",
             "appVersion": "3.9.1",
-            "phoneName": "iPhone",
-            "deviceType": "iPhone",
-            "productType": "iPhone12,1",
             "osVersion": UIDevice.current.systemVersion,
             "udid": udid,
             "lang": "zh-cn",
+            // 反编译里这几项在请求体中是「有值就用真机值」；
+            // `UIDevice.current.name` 在 iOS 16+ 未授权时会回落到 "iPhone"，
+            // 所以这里不需要额外的空值保护。
             "phoneName": UIDevice.current.name,
-            "productType": "iPhone12,1",
+            "productType": deviceModelIdentifier(),
             "deviceType": iPad ? "iPad" : "iPhone",
         ]
+        // 机型标识再兜一次：真机取不到时保持与反编译样本一致的形状。
+        if (p["productType"] as? String)?.isEmpty != false {
+            p["productType"] = "iPhone12,1"
+        }
+        return p
+    }
+
+    /// 机型标识（`hw.machine`，如 `iPhone15,4`）。
+    ///
+    /// 反编译样本里是 `iPhone12,1`，但那是**抓包那台机器**的值，不是协议常量 ——
+    /// 服务端只把它当"这个客户端跑在什么设备上"的信息字段。
+    /// 直接读本机 `hw.machine`，取不到才回落到样本值。
+    /// 用 `sysctlbyname` 而不是 `uname`，避免 `utsname.machine` 那串 C 数组转字符串的噪音。
+    private static func deviceModelIdentifier() -> String {
+        var size = 0
+        guard sysctlbyname("hw.machine", nil, &size, nil, 0) == 0, size > 0 else { return "" }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("hw.machine", &buffer, &size, nil, 0) == 0 else { return "" }
+        return String(cString: buffer)
     }
 
     // MARK: - 模型

@@ -19,10 +19,18 @@ struct I4StoreFreeView: View {
 
     /// v0.3.382：免登录商店的**来源**（接口一 = 爱思，接口二 = 牛蛙）
     ///
-    /// v0.3.414：新增**第三来源 NB**（NB Pro）。它与前两者形态不同：
-    /// NB 没有「榜单 / 搜索列表」接口，只有**按 App Store trackId 取包**这一条路
-    /// （实测 `getAppHistoryList` 传空 `appVerId` 也只回当前版本，不是版本列表）。
-    /// 所以 NB 源不显示榜单，只让用户在搜索框里填 App Store 链接或数字 ID。
+    /// v0.3.414：新增**第三来源 NB**（NB Pro）。
+    ///
+    /// v0.3.540：**修正对 NB 的误判**。此前以为「NB 没有榜单、也没有搜索，常规搜索就是转调爱思」——
+    /// 这是只看了一个来源就外推的结论，实际是错的：
+    ///   · **NB 有榜单** —— 逐条比对确认它就是 **Apple 官方排行榜**（RSS），
+    ///     `NBStoreRankClient` 直接接 Apple，不再假装没有；
+    ///   · **NB 有搜索** —— 走 **Apple 官方 search**，区域随 `regionRaw` 走，
+    ///     所以美区能搜到美区应用、国区能搜到国区全部上架应用；
+    ///   · 原来「借爱思搜索」的做法已删 —— 爱思是中国区商店，借它必然「美区空、国区少」。
+    ///
+    /// NB 与 Apple 的分工：**榜单/搜索的元数据用 Apple**（NB 自己也是转发的），
+    /// **安装包仍然由 NB 通道取**（`NBStoreClient`，Apple RSS 不给包）。
     enum StoreSource: String, CaseIterable, Identifiable {
         case i4 = "爱思"
         case niuwa = "牛蛙"
@@ -37,7 +45,11 @@ struct I4StoreFreeView: View {
     @State private var source: StoreSource = .i4
     @State private var regionRaw = "cn"
     @State private var rank: I4PCStoreClient.Rank = .recommend
+    /// v0.3.540：NB 源的榜单分组（走 Apple RSS，与爱思那份是两套数据）.
+    @State private var nbRank: NBStoreRankClient.Rank = .freeApps
     @State private var apps: [I4PCStoreClient.I4App] = []
+    /// v0.3.540：NB 源榜单结果（Apple RSS）.
+    @State private var nbRankItems: [NBStoreRankClient.RankItem] = []
     @State private var loading = true
     @State private var errorText: String?
     @State private var keyword = ""
@@ -56,6 +68,12 @@ struct I4StoreFreeView: View {
     @State private var nbPackage: NBStoreClient.NBPackage?
     @State private var nbTrackID = ""
     @State private var nbFetching = false
+    /// v0.3.540：NB 源的搜索结果（Apple 官方 search，区域随 `regionRaw` 走）.
+    ///
+    /// 与 `searchResults`（爱思）**刻意分开** —— 两者数据源完全不同，
+    /// 混用一个数组会让「切来源后残留上一个源的条目」，
+    /// 而 NB 的行必须走 NB 取包（不能用爱思的 `ipaURL`）.
+    @State private var nbSearchResults: [NBStoreRankClient.RankItem] = []
 
     /// v0.3.305：已下载数量（进入页面时读一次磁盘台账）
     @State private var downloadedCount = 0
@@ -73,12 +91,13 @@ struct I4StoreFreeView: View {
 
     /// v0.3.382：搜索框提示随来源变（牛蛙要多说一句区域）
     ///
-    /// v0.3.538：NB 源现在两种输入都收 —— 关键词（转爱思搜索）或 App Store 链接 / 数字 ID。
+    /// v0.3.538：NB 源两种输入都收 —— 关键词或 App Store 链接 / 数字 ID。
+    /// v0.3.540：关键词这一路已改用 Apple 官方搜索（区域随上方区域选择走）.
     private var searchPrompt: String {
         switch source {
         case .i4:    return "搜索应用（无需登录）"
         case .niuwa: return "搜索应用（无需登录 · \(region.title)）"
-        case .nb:    return "搜应用名，或填 App Store ID"
+        case .nb:    return "搜应用名（\(regionRaw.uppercased())区），或填 App Store ID"
         }
     }
 
@@ -89,7 +108,8 @@ struct I4StoreFreeView: View {
             if isSearchMode {
                 searchSection
             } else {
-                if source == .i4 { rankSection }
+                // v0.3.540：NB 源也有榜单了（Apple RSS）—— 不再是「没有榜单」那句话.
+                if source == .i4 || source == .nb { rankSection }
                 listSection
             }
         }
@@ -102,20 +122,25 @@ struct I4StoreFreeView: View {
                     prompt: searchPrompt)
         .onSubmit(of: .search) { runSearch() }
         .onChange(of: rank) { _, _ in Task { await load() } }
+        // v0.3.540：NB 榜切换分组要重拉（走的是 Apple RSS，与爱思那份数据无关）.
+        .onChange(of: nbRank) { _, _ in Task { await load() } }
         // v0.3.382：切来源 / 切区域都要重新取数（搜索态重搜，列表态重载）
         //
         // v0.3.414：切到 NB 时**先清掉上一个来源的结果** —— NB 的结果行只在
         // `source == .nb` 时渲染，但 `nbPackage` 本身不清会串到下一次查询。
+        // v0.3.540：`nbSearchResults` 同理（它是 Apple 搜索的结果，与爱思的 `searchResults` 分开存）.
         .onChange(of: source) { _, newValue in
             if newValue == .nb {
                 nbPackage = nil
                 nbTrackID = ""
                 errorText = nil
             }
+            nbSearchResults = []
             if isSearchMode { runSearch() } else { Task { await load() } }
         }
         .onChange(of: regionRaw) { _, _ in
             // v0.3.414：NB 源也要响应区域切换（它的 `country` 参数随之变）
+            // v0.3.540：NB 的榜单/搜索现在都跟 `country` 走，所以区域变了必须重取.
             guard source == .niuwa || source == .nb else { return }
             if isSearchMode { runSearch() } else { Task { await load() } }
         }
@@ -198,16 +223,31 @@ struct I4StoreFreeView: View {
 
     private var rankSection: some View {
         Section {
-            Picker("分组", selection: $rank) {
-                ForEach(I4PCStoreClient.Rank.allCases) { r in
-                    Text(r.title).tag(r)
+            // v0.3.540：两个来源的榜单是**两套数据**（爱思自己的服务端 / Apple RSS），
+            // 分组取值也不同，所以用各自的 Picker，不硬凑成一个.
+            if source == .nb {
+                Picker("分组", selection: $nbRank) {
+                    ForEach(NBStoreRankClient.Rank.allCases) { r in
+                        Text(r.title).tag(r)
+                    }
                 }
+                .pickerStyle(.menu)
+                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                .listRowBackground(Color.clear)
+            } else {
+                Picker("分组", selection: $rank) {
+                    ForEach(I4PCStoreClient.Rank.allCases) { r in
+                        Text(r.title).tag(r)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                .listRowBackground(Color.clear)
             }
-            .pickerStyle(.segmented)
-            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-            .listRowBackground(Color.clear)
         } footer: {
-            Text("数据来自爱思 PC 端同款公开接口，安装包由服务端提供（已签名），无需登录 Apple ID。")
+            Text(source == .nb
+                 ? "榜单来自 Apple 官方排行榜（与 NB 助手同一来源）。点「获取」由 NB 通道取包。"
+                 : "数据来自爱思 PC 端同款公开接口，安装包由服务端提供（已签名），无需登录 Apple ID。")
                 .font(.caption2)
         }
     }
@@ -236,10 +276,17 @@ struct I4StoreFreeView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         } else if source == .nb {
-            // v0.3.538：NB 源没有榜单；搜索框既能搜名字（转爱思），也能填 ID / 链接直接取包
-            Section {
-                Text("NB 源没有榜单。用上方搜索框搜应用名，或粘贴 App Store 链接 / 填数字 ID。")
-                    .font(.subheadline).foregroundStyle(.secondary)
+            // v0.3.540：NB 源有榜单了（Apple RSS）—— 点行右侧「获取」走 NB 取包.
+            if nbRankItems.isEmpty {
+                Section {
+                    Text("该榜单暂时没有数据。").font(.subheadline).foregroundStyle(.secondary)
+                }
+            } else {
+                Section("\(nbRank.title)榜 · \(nbRankItems.count) 款") {
+                    ForEach(nbRankItems) { item in
+                        nbRankRow(item)
+                    }
+                }
             }
         } else if apps.isEmpty {
             Section {
@@ -290,7 +337,8 @@ struct I4StoreFreeView: View {
         } else {
             // NB 源两种结果形态：
             //   · 输入是 ID/链接 → 单个取包结果（`nbPackage`）
-            //   · 输入是关键词   → 借爱思搜出的候选列表（`searchResults`），点进详情走 NB 取包
+            //   · 输入是关键词   → Apple 官方搜索的候选列表（`nbSearchResults`），
+            //                      点「获取」走 NB 取包（v0.3.540：不再借爱思）
             if let pkg = nbPackage {
                 Section("App Store ID \(nbTrackID)") {
                     nbRow(trackID: nbTrackID, package: pkg)
@@ -302,10 +350,10 @@ struct I4StoreFreeView: View {
                         Text("正在取包…").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-            } else if !searchResults.isEmpty {
-                Section("搜索结果 · \(searchResults.count) 款") {
-                    ForEach(searchResults) { app in
-                        row(app, nbMode: true)
+            } else if !nbSearchResults.isEmpty {
+                Section("搜索结果 · \(nbSearchResults.count) 款") {
+                    ForEach(nbSearchResults) { item in
+                        nbRankRow(item)
                     }
                 }
             } else {
@@ -365,19 +413,113 @@ struct I4StoreFreeView: View {
 
     // MARK: - 行
 
-    /// 左侧（图标 + 文案）整块可点进**应用详情**，右侧仍是原有的下载/进度控件。
+    /// NB 源榜单 / 搜索结果的卡片行（v0.3.540）.
     ///
-    /// `nbMode` 为真时（NB 源搜索出来的候选）：
-    ///   · 点进去是 **NB 详情页** —— 列历史版本，每版走 NB 取包
-    ///   · 右侧「获取」也走 NB 取包，而不是爱思自己那份 `ipaURL`
-    private func row(_ app: I4PCStoreClient.I4App, nbMode: Bool = false) -> some View {
+    /// 与 `nbRow`（裸 trackId 那行）的差别：这一行**有 Apple 给的元数据**
+    /// （图标 / 名字 / 开发者 / 分类 / 价格），所以按前两源同款排版渲染，
+    /// 不再是「只有一串数字」.
+    ///
+    /// 右侧「获取」走 `installViaNBRank` → `NBStoreClient.package` ——
+    /// 榜单数据是 Apple 的，**包仍然由 NB 取**（Apple RSS 不给安装包）.
+    private func nbRankRow(_ item: NBStoreRankClient.RankItem) -> some View {
         HStack(alignment: .center, spacing: 12) {
             NavigationLink {
-                if nbMode {
-                    NBStoreDetailView(trackID: app.itemId ?? "", country: regionRaw, displayName: app.name)
-                } else {
-                    I4StoreFreeDetailView(app: app)
+                // 进 NB 详情页可以选历史版本（版本列表走 bilin 目录，与 AppleID 商店同一份）.
+                NBStoreDetailView(trackID: item.trackID, country: regionRaw, displayName: item.name)
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    ZStack(alignment: .topLeading) {
+                        AsyncImage(url: URL(string: item.icon ?? "")) { phase in
+                            switch phase {
+                            case .success(let img): img.resizable().scaledToFit()
+                            case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
+                            default: ProgressView().controlSize(.mini)
+                            }
+                        }
+                        .frame(width: 54, height: 54)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        // 名次角标：榜单页最有信息量的那一项.
+                        Text("\(item.rank)")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.black.opacity(0.55), in: Capsule())
+                            .offset(x: -2, y: -2)
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.name).font(.subheadline.weight(.medium)).lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ChipFlow(spacing: 6) {
+                            ForEach(nbChips(item), id: \.text) { c in
+                                chip(c.text, c.tint)
+                            }
+                        }
+                        if !item.subtitle.isEmpty {
+                            Text(item.subtitle).font(.caption2).foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: 6)
                 }
+            }
+            .buttonStyle(.plain)
+
+            trailingControl(name: item.name, bundleId: item.bundleID) {
+                Task { await installViaNBRank(item) }
+            }
+        }
+        .padding(.vertical, 3)
+        .contextMenu {
+            iconMenuItems(iconURL: item.icon, fileNameBase: item.bundleID ?? item.name) {
+                showIconPreview(item.icon, target: $previewTarget)
+            }
+        }
+    }
+
+    /// NB 榜单行的胶囊（分类 / 价格）.
+    ///
+    /// 只放**确实有值**的项：Apple RSS 的免费榜 `im:price.label` 是「获取」，
+    /// 付费榜是「¥ xx」—— 两者都是有效信息，照原样显示，不硬转成「免费」二字.
+    private func nbChips(_ item: NBStoreRankClient.RankItem) -> [ChipItem] {
+        var out: [ChipItem] = []
+        if let p = item.priceText, !p.isEmpty { out.append(ChipItem(text: p, tint: .orange)) }
+        if let c = item.category, !c.isEmpty { out.append(ChipItem(text: c, tint: .blue)) }
+        return out
+    }
+
+    /// NB 榜单行「获取」：拿 Apple 给的 trackId → 走 NB 取包 → 交给统一下载中心.
+    ///
+    /// 数据来自 Apple 榜单，但**包必须由 NB 通道取**（Apple RSS 不给安装包），
+    /// 所以这里走 `NBStoreClient.package` + `startNBDownload` ——
+    /// 与 `install(_:)`（用爱思自己的 `ipaURL`）刻意分开，两条通道的包不是一回事.
+    @MainActor
+    private func installViaNBRank(_ item: NBStoreRankClient.RankItem) async {
+        do {
+            guard let pkg = try await NBStoreClient.package(appID: item.trackID,
+                                                            bundleID: item.bundleID ?? "",
+                                                            country: regionRaw) else {
+                ToastCenter.shared.show("该应用没有可用的安装包")
+                return
+            }
+            await startNBDownload(trackID: item.trackID, package: pkg,
+                                  name: item.name, version: nil)
+        } catch {
+            ToastCenter.shared.show("NB 取包失败：\(error.localizedDescription)")
+        }
+    }
+
+    /// 左侧（图标 + 文案）整块可点进**应用详情**，右侧仍是原有的下载/进度控件。
+    ///
+    /// v0.3.540：`nbMode` 参数**删掉**了。NB 源的搜索/榜单结果现在有自己的行
+    /// （`nbRankRow`，数据来自 Apple），不再借用爱思的候选列表走 NB 取包 ——
+    /// 这个方法回归成**纯爱思行**，一个参数、一种行为.
+    private func row(_ app: I4PCStoreClient.I4App) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            NavigationLink {
+                I4StoreFreeDetailView(app: app)
             } label: {
                 HStack(alignment: .center, spacing: 12) {
                     AsyncImage(url: URL(string: app.icon ?? "")) { phase in
@@ -410,13 +552,7 @@ struct I4StoreFreeView: View {
                 }
             }
 
-            if nbMode {
-                trailingControl(name: app.name, bundleId: app.bundleId) {
-                    Task { await installViaNB(app) }
-                }
-            } else {
-                trailingControl(name: app.name, bundleId: app.bundleId) { install(app) }
-            }
+            trailingControl(name: app.name, bundleId: app.bundleId) { install(app) }
         }
         .padding(.vertical, 3)
         // v0.3.399：长按弹「查看图标 / 提取图标」。
@@ -428,27 +564,6 @@ struct I4StoreFreeView: View {
                 // v0.3.408：图数组由 `showIconPreview` 写进 target
                 showIconPreview(app.icon, target: $previewTarget)
             }
-        }
-    }
-
-    /// NB 源「获取」：拿爱思候选的 trackId → 走 NB 取包 → 交给统一下载中心。
-    ///
-    /// 这条路径与 `install(_:)`（用爱思自己的 `ipaURL`）**刻意分开**：
-    /// NB 源的意义就是用 NB 的通道取包（含 sinf），所以列表行的「获取」也必须走 NB。
-    @MainActor
-    private func installViaNB(_ app: I4PCStoreClient.I4App) async {
-        guard let tid = app.itemId, !tid.isEmpty else {
-            ToastCenter.shared.show("缺少 App Store ID，无法用 NB 取包")
-            return
-        }
-        do {
-            guard let pkg = try await NBStoreClient.package(appID: tid, country: regionRaw) else {
-                ToastCenter.shared.show("该应用没有可用的安装包")
-                return
-            }
-            await startNBDownload(trackID: tid, package: pkg, name: app.name, version: app.version)
-        } catch {
-            ToastCenter.shared.show("NB 取包失败：\(error.localizedDescription)")
         }
     }
 
@@ -615,6 +730,17 @@ struct I4StoreFreeView: View {
     private func load() async {
         loading = true
         errorText = nil
+        // v0.3.540：NB 源现在也有榜单了（Apple RSS）—— 只有牛蛙源是真的没有榜单接口.
+        if source == .nb {
+            do {
+                nbRankItems = try await NBStoreRankClient.fetch(rank: nbRank, country: regionRaw)
+            } catch {
+                nbRankItems = []
+                errorText = "NB 榜单加载失败：\(error.localizedDescription)"
+            }
+            loading = false
+            return
+        }
         // v0.3.382：牛蛙源没有榜单接口 —— 不请求，仅在列表处提示走搜索
         guard source == .i4 else {
             loading = false
@@ -633,6 +759,7 @@ struct I4StoreFreeView: View {
         guard !kw.isEmpty else {
             searchResults = []
             niuwaSearchResults = []
+            nbSearchResults = []
             return
         }
         searching = true
@@ -660,18 +787,23 @@ struct I4StoreFreeView: View {
                     ToastCenter.shared.show("搜索失败")
                 }
             case .nb:
-                // NB 自身**没有搜索接口**（逆向结论：它的常规搜索就是转调爱思）。
-                // 所以 NB 源按输入形态分流：
-                //   · 数字 ID / App Store 链接 → 直接取包（原行为）
-                //   · 纯文字关键词           → 借爱思搜索接口搜出候选，点进详情再走 NB 取包
-                // 这样 NB 源也能「搜 App 名字」，与 NB 助手一致。
+                // v0.3.540：**不再借爱思的搜索接口**。
+                //
+                // 用户反馈「美区一个搜索不到、国区还那么点软件」—— 根因就是这里原来
+                // 调的是 `I4PCStoreClient.search`，而爱思是**中国区商店**：
+                // 它的库里没有美区应用（美区空），国区也只覆盖它自己收录的那点量。
+                //
+                // 现在按输入形态分流：
+                //   · 数字 ID / App Store 链接 → 直接走 NB 取包（原行为）
+                //   · 纯文字关键词           → 走 **Apple 官方 search**（区域跟着 `regionRaw` 走）
+                // 这样美区能搜到美区商店的应用，国区能搜到国区商店的全部上架应用。
                 if nbParseTrackIDOnly(kw) != nil || kw.lowercased().contains("apple.com") {
                     await runNBFetch(kw)
                 } else {
                     do {
-                        searchResults = try await I4PCStoreClient.search(keyword: kw)
+                        nbSearchResults = try await NBStoreRankClient.search(keyword: kw, country: regionRaw)
                     } catch {
-                        searchResults = []
+                        nbSearchResults = []
                         errorText = "NB 源搜索失败：\(error.localizedDescription)"
                         ToastCenter.shared.show("搜索失败")
                     }
