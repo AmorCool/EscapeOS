@@ -149,6 +149,15 @@ struct NBStoreDetailView: View {
                 }
                 .frame(width: 64, height: 64)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // 图标长按 = 「查看图标 / 提取图标」，与其它免登录源（I4）、AppleID 商店、
+                // 列表行三处走**同一个** `ImagePreviewSupport.iconMenuItems` —— 不再各写一套。
+                .contextMenu {
+                    iconMenuItems(iconURL: iconURL,
+                                  fileNameBase: detail?.bundleID ?? title) {
+                        showIconPreview(iconURL, target: $previewTarget)
+                    }
+                }
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(title)

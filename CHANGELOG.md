@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.561] - 2026-10-02
+
+> **NB 源详情页补上图标菜单（查看 / 提取），对齐其它免登录源。**
+
+### 问题
+
+NB 源详情页的 App 图标**没有长按菜单**，其它免登录源（I4）和 AppleID 商店都有。
+截图那条路本来就通（点开全屏、长按存图），只有图标缺。
+
+### 修法
+
+`NBStoreDetailView.headerSection` 的图标加 `.contextMenu`，
+调用**已有的共用实现** `ImagePreviewSupport.iconMenuItems(iconURL:fileNameBase:viewIcon:)`
++ `showIconPreview(_:target:)` —— 与 I4 详情页、AppleID 详情页、列表行三处一字不差，
+不新造第四套。
+
+- 「查看图标」→ 开全屏预览（预览里长按即可存进相册）
+- 「提取图标」→ 走 `IconExporter.save`
+
+`fileNameBase` 用 `detail?.bundleID`，退回标题。
+
 ## [0.3.560] - 2026-10-02
 
 > **NB 源加密包安装失败：改为整包重写注入 sinf，不再原地改 ZIP。**
