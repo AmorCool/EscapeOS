@@ -551,6 +551,71 @@ enum NBStoreClient {
         }
     }
 
+    // MARK: - v0.3.545 下架应用（对应 NB 助手的 DXSTOffSaleController）
+
+    /// **下架应用**的取包。
+    ///
+    /// ## 怎么找到这条路的（反编译 NB 助手，不是猜的）
+    ///
+    /// NB 助手有一整套下架应用页面：
+    /// `DXSTOffSaleController`（列表）/ `DXSTOffSaleDetailController`（详情）/
+    /// `DXSTOffSaleHistoryListController`（历史版本），配套模型 `DXSTOffSaleAppModel`。
+    ///
+    /// 反编译 `sub_10031D260`（`getOffSaleAppHistoryList` 的唯一调用点）得到
+    /// 真实的请求构造 —— 键名由小端立即数逐字还原：
+    ///
+    /// ```c
+    /// aBlock = 0x4449617069LL;        // "ipaID"
+    /// aBlock = 0x496E6F6973726576LL;  // "versionID"
+    /// aBlock = 0x4449747845707061LL;  // "appExtID"
+    /// aBlock = 0x437972746E756F63LL;  // "countryCode"
+    /// // path = "/nb/app-downgrade"，method = "nb9527_getOffSaleAppHistoryList"
+    /// ```
+    ///
+    /// ⇒ **与上架应用走同一个端点，差别只有两处**：
+    /// 1. `method` 换成 `getOffSaleAppHistoryList`；
+    /// 2. 应用 ID 的键名是 **`ipaID`**（不是 `appID`），区域键是 **`countryCode`**（不是 `country`）。
+    ///
+    /// ⚠️ **别去找 `nb9527_search_offsale_app`** —— 那个字符串确实存在，
+    /// 但它是本地弹窗菜单项的标识符，**服务端没有这个 action**（报告第十二/十三节）。
+    /// 「下架列表」在 NB 那边是本地 SQLite 表 `load_list` 缓存的。
+    /// 我们的做法：**下架状态由 lookup 结果判定 + 用本方法取包**，不建本地库。
+    ///
+    /// ## 参数
+    /// - `trackID`: App Store 数字 ID（作为 `ipaID` 发出去）。
+    /// - `appVerId`: 版本的 external identifier（不传则取当前最靠后的那版）。
+    /// - `country`: 区域码（`cn` / `us`）。
+    static func offSalePackage(ipaID: String,
+                               appVerId: String = "",
+                               country: String = "cn") async throws -> NBPackage? {
+        var p: [String: Any] = [
+            "ipaID": ipaID,
+            "countryCode": country,
+        ]
+        if !appVerId.isEmpty {
+            p["versionID"] = appVerId
+            p["appExtID"] = appVerId
+        }
+
+        let obj = try await perform(path: "/nb/app-downgrade",
+                                    method: "getOffSaleAppHistoryList",
+                                    params: p)
+        let d = (obj["data"] as? [String: Any]) ?? obj
+        guard let url = string(d["url"]), !url.isEmpty else { return nil }
+
+        var sinf: String?
+        if let arr = d["sinfs"] as? [[String: Any]], let first = arr.first {
+            sinf = string(first["dataHex"]) ?? string(first["data"])
+        }
+        if sinf == nil {
+            LoginLogger.shared.log("\(logTag) ○ 下架包直链已取到，但服务端没回 sinf（ipaID=\(ipaID)）",
+                                   category: .appStore)
+        }
+        return NBPackage(ipaURL: normalizeAsset(url),
+                         sinfBase64: sinf,
+                         version: appVerId)
+    }
+
     /// ATS：明文 http 一律升 https（爱思侧踩过同一个坑，见 `I4PCStoreClient.normalizeAssetURL`）
     private static func normalizeAsset(_ raw: String) -> String {
         raw.hasPrefix("http://") ? "https://" + String(raw.dropFirst(7)) : raw

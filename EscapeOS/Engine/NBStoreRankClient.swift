@@ -336,4 +336,159 @@ enum NBStoreRankClient {
         guard s.count == 2, s.allSatisfy({ $0.isLetter }) else { return "cn" }
         return s
     }
+
+    // MARK: - v0.3.545 详情页元数据（照搬 NB 助手的 DXSTiTunesAPI）
+
+    /// 详情页要显示的全部元数据 —— 字段**逐条对齐 NB 助手**的 `DXSTDetailModel`。
+    ///
+    /// ## 这份清单从哪来（不是自己想的）
+    ///
+    /// 反编译 NB 助手（`XNZS`）拿到的 `DXSTDetailModel` 属性表（Swift 反射串段，原序）：
+    ///
+    /// ```
+    /// averageUserRatingForCurrentVersion  subtitle        wrapperType
+    /// currency                            oldVersion      trackId
+    /// version                             descriptionStr  trackName
+    /// price                               artistId        artistName
+    /// genres                              userRatingCount
+    /// ```
+    ///
+    /// 配套的 `artworkUrl60/100/512`、`screenshotUrls`、`sellerName`、`releaseNotes`、
+    /// `minimumOSVersion`、`fileSizeBytes`、`formattedPrice` 等也都在同一段里
+    /// —— 而且这些键名与 **Apple 官方 lookup 的响应的键名逐字一致**。
+    ///
+    /// ⇒ 结论：NB 助手的详情页就是拿 `itunes.apple.com/lookup` 的响应对进这个模型。
+    /// 我们照做即可（这是「搬过来」最直白的形态）。
+    struct AppDetail: Hashable {
+        var trackID: String
+        var name: String
+        var bundleID: String?
+        /// 512×512 图标（列表用 100，详情页用 512）
+        var artwork512: String?
+        var artwork100: String?
+        /// 开发者（`sellerName`，公司名；`artistName` 是作者名，两个都留）
+        var sellerName: String?
+        var artistName: String?
+        /// 版本号（`version`）与发布日期（`currentVersionReleaseDate`）
+        var version: String?
+        var releaseDate: String?
+        /// 「新功能」文案（`releaseNotes`）
+        var releaseNotes: String?
+        /// 简介（Apple 的键是 `description`，NB 模型里叫 `descriptionStr`）
+        var descriptionText: String?
+        /// 副标题（`subtitle`）
+        var subtitle: String?
+        /// 价格：`formattedPrice` 是本地化文案（「免费」/「¥ 30.00」），`price` 是数值
+        var formattedPrice: String?
+        /// 评分（`averageUserRating`）与评分人数（`userRatingCount`）
+        var averageRating: Double?
+        var ratingCount: Int?
+        /// 包大小（字节，`fileSizeBytes`）
+        var fileSizeBytes: Int64?
+        /// 最低系统（`minimumOSVersion`）
+        var minimumOSVersion: String?
+        /// 分类（`genres` 数组 + `primaryGenreName`）
+        var genres: [String]
+        /// **截图（预览图的来源）** —— `screenshotUrls` 是 iPhone 的，
+        /// `ipadScreenshotUrls` / `appletvScreenshotUrls` 是另外两端的。
+        /// NB 助手的 `DXSTDetailADView` 就是横向翻页显示这一组。
+        var screenshotURLs: [String]
+
+        /// 包大小的可读文案（与 Apple 在 App Store 里显示的口径一致：十进制 MB/GB）
+        var sizeText: String? {
+            guard let b = fileSizeBytes, b > 0 else { return nil }
+            let mb = Double(b) / 1_000_000
+            if mb >= 1000 { return String(format: "%.2f GB", mb / 1000) }
+            if mb >= 1 { return String(format: "%.1f MB", mb) }
+            return String(format: "%.0f KB", Double(b) / 1000)
+        }
+
+        /// 评分文案（一位小数）
+        var ratingText: String? {
+            guard let r = averageRating, r > 0 else { return nil }
+            return String(format: "%.1f", r)
+        }
+    }
+
+    /// 用 `itunes.apple.com/lookup` 取一个 App 的**完整详情**.
+    ///
+    /// ## 与 `fetch` / `search` 的关系
+    ///
+    /// 那两条给的是**列表形态**（RSS / search 的扁平字段）；这一条给的是**详情形态**
+    /// （lookup 的完整字段，含截图与简介）。两者刻意分开：列表 50 条不需要
+    /// 每条都带 12 张截图，那样响应体要大一两个数量级。
+    ///
+    /// ## 参数口径
+    /// - `trackID`：App Store 数字 ID（= NB 的 `appID`）。
+    /// - `country`：区域 —— lookup **必须带**，否则拿到的价格/上架状态是美区的。
+    /// - `entity=software`：只要 iOS 应用（不加会混进 Mac / iPad 版本）。
+    static func detail(trackID: String, country: String) async throws -> AppDetail? {
+        let tid = trackID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tid.isEmpty else { return nil }
+        let cc = normalizeCountry(country)
+
+        var comps = URLComponents(string: host + "/lookup")
+        comps?.queryItems = [
+            URLQueryItem(name: "id", value: tid),
+            URLQueryItem(name: "country", value: cc),
+            URLQueryItem(name: "entity", value: "software"),
+        ]
+        guard let url = comps?.url else { throw StoreError.badURL }
+
+        var req = URLRequest(url: url)
+        req.setValue("com.apple.appstored/1.0", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        LoginLogger.shared.log("\(logTag) → GET /lookup id=\(tid) country=\(cc)", category: .appStore)
+
+        let data: Data
+        do {
+            let (d, resp) = try await session.data(for: req)
+            if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                throw StoreError.http(http.statusCode)
+            }
+            data = d
+        } catch let e as StoreError {
+            throw e
+        } catch {
+            throw StoreError.network(error.localizedDescription)
+        }
+
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let results = root["results"] as? [[String: Any]] else {
+            throw StoreError.decode("lookup 响应里没有 results 数组")
+        }
+        guard let obj = results.first else {
+            LoginLogger.shared.log("\(logTag) ○ lookup 无结果（id=\(tid) cc=\(cc)）", category: .appStore)
+            return nil
+        }
+
+        let detail = AppDetail(
+            trackID: Self.string(obj["trackId"]) ?? tid,
+            name: Self.string(obj["trackName"]) ?? "App \(tid)",
+            bundleID: Self.string(obj["bundleId"]),
+            artwork512: Self.string(obj["artworkUrl512"]),
+            artwork100: Self.string(obj["artworkUrl100"]) ?? Self.string(obj["artworkUrl60"]),
+            sellerName: Self.string(obj["sellerName"]),
+            artistName: Self.string(obj["artistName"]),
+            version: Self.string(obj["version"]),
+            releaseDate: Self.string(obj["currentVersionReleaseDate"]) ?? Self.string(obj["releaseDate"]),
+            releaseNotes: Self.string(obj["releaseNotes"]),
+            descriptionText: Self.string(obj["description"]),
+            subtitle: Self.string(obj["subtitle"]),
+            formattedPrice: Self.string(obj["formattedPrice"]),
+            averageRating: (obj["averageUserRating"] as? NSNumber)?.doubleValue,
+            ratingCount: (obj["userRatingCount"] as? NSNumber)?.intValue,
+            fileSizeBytes: (obj["fileSizeBytes"] as? NSNumber)?.int64Value
+                ?? Int64(Self.string(obj["fileSizeBytes"]) ?? ""),
+            minimumOSVersion: Self.string(obj["minimumOsVersion"]),
+            genres: (obj["genres"] as? [String]) ?? [],
+            screenshotURLs: (obj["screenshotUrls"] as? [String]) ?? []
+        )
+        LoginLogger.shared.log("\(logTag) ✓ lookup「\(detail.name)」"
+                               + "截图 \(detail.screenshotURLs.count) 张"
+                               + (detail.descriptionText == nil ? " · 无简介" : ""),
+                               category: .appStore)
+        return detail
+    }
 }

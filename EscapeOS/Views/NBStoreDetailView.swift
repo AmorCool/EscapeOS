@@ -2,28 +2,32 @@ import SwiftUI
 
 /// NB 源（NB Pro）的应用详情页。
 ///
-/// ## 为什么需要它
-/// 免登录商店的前两个来源（爱思、牛蛙）在列表里点一行就能进详情页，
-/// 而 NB 源的入口是「粘贴 App Store 链接 / 数字 ID」——原实现只有一行结果卡，
-/// **点不进去，也看不到历史版本**。用户要的是「NB 助手能搜到 App、能选历史版本下载」，
-/// 所以这里把 NB 的结果也做成可进的详情页。
+/// ## 这一版做了什么（v0.3.545）
 ///
-/// ## 数据来源（两段拼起来，都已在本项目里通着）
-/// 1. **版本列表** → `NBStoreClient.versionList(trackID:)`，
-///    实际走 `apis.bilin.eu.org/history/<trackId>`（与 AppleID 商店的历史版本同一份目录），
-///    每项带 `external_identifier`（= NB 要的 `appVerId`）。
-/// 2. **取包** → `NBStoreClient.package(appID:appVerId:)`，走 `/nb/app-downgrade`，
-///    回 Apple CDN 直链 + `sinfs[].dataHex`。
+/// 用户反馈：「**NB 源的应用详情界面没有详情和预览界面，NB 助手是有的**」——
+/// 于是去反编译了 NB 助手（`XNZS`），把它的详情页实现搬了过来：
 ///
-/// NB 自己**没有**「一次回全量版本」的接口（`getAppHistoryList` 是取单版本的包，
-/// 见 `P3_爱思助手_NB逆向工作区/NB下载接口逆向报告.md` 第十节），
-/// 所以版本列表这一段**复用**已有的 bilin 目录，不新增外部依赖、不造轮胎。
+/// | NB 助手的区块 | 我们的落地 |
+/// |---|---|
+/// | `DXSTDetailLogoView`（图标） | `headerSection` 的大图标 |
+/// | `DXSTDetailInfoView`（名称/开发者/评分/大小） | `headerSection` + `metaSection` |
+/// | `DXSTDetailADView` / `DXSTDetailADImageCell`（**截图画廊**） | `screenshotSection` |
+/// | `DXSTDetailDescView`（简介） | `descriptionSection` |
+/// | `DXSTDetailVersionView`（最近更新） | `releaseSection` |
+///
+/// **数据来源照搬 NB 的做法**：`itunes.apple.com/lookup`（NB 的 `DXSTiTunesAPI` 就是它）。
+/// 反编译出的 `DXSTDetailModel` 字段表与 Apple lookup 的响应键**逐字一致**，
+/// 所以这一层没有自创协议，就是把 lookup 的响应对进模型。
 ///
 /// ## 与另外两个免登录详情页的关系
-/// NB 接口回的字段只有 `url` / `sinfs`，**没有名称、图标、截图、简介**——
-/// 没有的数据不硬凑，所以这个页面不长成爱思详情页那样。
+///
 /// 「下载中」区块与安装按钮**复用**同款共用组件（`DownloadJobSection` / `InstallButton`），
 /// 全项目仍然只有一套下载/安装实现。
+///
+/// ## 取包链路（没变）
+/// 1. **版本列表** → `NBStoreClient.versionList(trackID:)`（走 bilin 目录）
+/// 2. **取包** → `NBStoreClient.package(appID:appVerId:)`（走 `/nb/app-downgrade`）
+/// 3. **装包** → `startNBDownload(...)` → `IPADownloadCenter`（sinf 写回在同一处）
 struct NBStoreDetailView: View {
 
     /// App Store 数字 ID（NB 的 `appID` 与 bilin 路径参数同源）
@@ -31,11 +35,22 @@ struct NBStoreDetailView: View {
     /// 区域（NB 的 `country` 参数；`cn` / `us` / `hk`）
     let country: String
 
-    /// 可选的展示名：从爱思/NB 列表跳进来时带上，直接粘贴 ID 时为空。
-    /// NB 接口本身不回名字，所以这里是「有就显示，没有就不显示」，不编造。
+    /// 可选的展示名：从榜单/搜索跳进来时带上，直接粘贴 ID 时为空。
+    /// 详情 lookup 回来后会被真名覆盖，所以这里只是「还没加载完时先显示什么」。
     let displayName: String?
 
     @ObservedObject private var center = IPADownloadCenter.shared
+
+    /// 列表页带进来的图标（不用等 lookup 回来就能显示）
+    private let seedIcon: String?
+
+    /// 是否处于「下架」筛选（从列表页带进来）。
+    /// 决定取包走 `getAppHistoryList` 还是 `getOffSaleAppHistoryList`（见 `NBStoreClient`）。
+    private let offSale: Bool
+
+    @State private var detail: NBStoreRankClient.AppDetail?
+    @State private var detailLoading = false
+    @State private var detailErrorText: String?
 
     @State private var versions: [NBStoreClient.NBVersion] = []
     @State private var loading = true
@@ -43,12 +58,38 @@ struct NBStoreDetailView: View {
     @State private var showAllVersions = false
     /// 正在取包的那一行（存 `externalIdentifier`，同一时刻只允许一行在取）
     @State private var fetchingID: String?
+    /// 截图全屏预览（**复用** AppleID 商店详情页那套 `ImageGalleryViewer`）
+    @State private var previewTarget: ImagePreviewTarget?
+    /// 简介是否展开（NB 的 `DXSTDetailDescView` 同样有「展开/收起」）
+    @State private var descExpanded = false
 
     private let versionPageSize = 12
 
+    init(trackID: String,
+         country: String,
+         displayName: String? = nil,
+         icon: String? = nil,
+         offSale: Bool = false) {
+        self.trackID = trackID
+        self.country = country
+        self.displayName = displayName
+        self.seedIcon = icon
+        self.offSale = offSale
+    }
+
+    /// 标题：详情回来后用真名，否则用带进来的名字，最后才回落 ID
     private var title: String {
+        if let n = detail?.name, !n.isEmpty { return n }
         if let n = displayName, !n.isEmpty { return n }
         return "App \(trackID)"
+    }
+
+    /// 图标：详情回来的 512 优先，其次是列表带进来的
+    private var iconURL: String? {
+        if let u = detail?.artwork512, !u.isEmpty { return u }
+        if let u = detail?.artwork100, !u.isEmpty { return u }
+        if let u = seedIcon, !u.isEmpty { return u }
+        return nil
     }
 
     private var busyJob: IPADownloadCenter.Job? {
@@ -62,6 +103,15 @@ struct NBStoreDetailView: View {
     var body: some View {
         List {
             if let job = busyJob { jobSection(job) }
+            headerSection
+            if let d = detail {
+                if !d.screenshotURLs.isEmpty { screenshotSection(d) }
+                if let desc = d.descriptionText, !desc.isEmpty { descriptionSection(desc) }
+                metaSection(d)
+                if let notes = d.releaseNotes, !notes.isEmpty { releaseSection(d, notes) }
+            } else if detailLoading {
+                detailLoadingSection
+            }
             idSection
             if loading {
                 loadingSection
@@ -75,17 +125,162 @@ struct NBStoreDetailView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toastHost()
-        .task { await load() }
+        .fullScreenCover(item: $previewTarget) { target in
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
+        }
+        .task { await loadAll() }
+    }
+
+    // MARK: - 头部（图标 + 名称 + 开发者 + 价格）
+
+    private var headerSection: some View {
+        Section {
+            HStack(alignment: .center, spacing: 14) {
+                AsyncImage(url: URL(string: iconURL ?? "")) { phase in
+                    switch phase {
+                    case .success(let img): img.resizable().scaledToFit()
+                    case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
+                    default: ProgressView().controlSize(.small)
+                    }
+                }
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let sub = subtitleText {
+                        Text(sub).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+
+                    HStack(spacing: 6) {
+                        if let price = detail?.formattedPrice, !price.isEmpty {
+                            chip(price, .blue)
+                        }
+                        if let v = detail?.version ?? versions.first?.version, !v.isEmpty {
+                            chip("v\(v)", .gray)
+                        }
+                        if let s = detail?.sizeText {
+                            chip(s, .green)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var subtitleText: String? {
+        guard let d = detail else { return nil }
+        var parts: [String] = []
+        if let s = d.sellerName, !s.isEmpty { parts.append(s) }
+        else if let a = d.artistName, !a.isEmpty { parts.append(a) }
+        if let g = d.genres.first, !g.isEmpty { parts.append(g) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    // MARK: - 截图（预览）—— 对应 NB 的 DXSTDetailADView
+
+    /// 截图画廊：横向滚动，点一张进全屏查看器。
+    ///
+    /// **为什么要横向滚动**：NB 的 `DXSTDetailADView` 就是一个横向翻页容器；
+    /// App Store 详情页也是同样的形态。用 `List` 里的 `ScrollView(.horizontal)`
+    /// 而非 `TabView` —— 后者在列表行里高度会塌成 0（SwiftUI 的已知行为）。
+    private func screenshotSection(_ d: NBStoreRankClient.AppDetail) -> some View {
+        Section("预览") {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Array(d.screenshotURLs.enumerated()), id: \.offset) { index, url in
+                        Button {
+                            previewTarget = ImagePreviewTarget(urls: d.screenshotURLs, index: index)
+                        } label: {
+                            AsyncImage(url: URL(string: url)) { phase in
+                                switch phase {
+                                case .success(let img):
+                                    img.resizable().aspectRatio(contentMode: .fill)
+                                case .failure:
+                                    Image(systemName: "photo").foregroundStyle(.secondary)
+                                default:
+                                    ProgressView().controlSize(.small)
+                                }
+                            }
+                            .frame(width: 132, height: 234)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 0))
+        }
+    }
+
+    // MARK: - 简介 —— 对应 NB 的 DXSTDetailDescView
+
+    private func descriptionSection(_ text: String) -> some View {
+        Section("简介") {
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .lineLimit(descExpanded ? nil : 4)
+                .fixedSize(horizontal: false, vertical: true)
+            if text.count > 120 {
+                Button(descExpanded ? "收起" : "展开") {
+                    withAnimation(.easeInOut(duration: 0.18)) { descExpanded.toggle() }
+                }
+                .font(.subheadline)
+            }
+        }
+    }
+
+    // MARK: - 信息表 —— 对应 NB 的 DXSTDetailInfoView
+
+    private func metaSection(_ d: NBStoreRankClient.AppDetail) -> some View {
+        Section("信息") {
+            if let r = d.ratingText {
+                infoRow("评分",
+                        d.ratingCount.map { "\(r) · \($0) 个评分" } ?? r)
+            }
+            if let s = d.sellerName, !s.isEmpty { infoRow("开发者", s) }
+            if !d.genres.isEmpty { infoRow("分类", d.genres.joined(separator: " ")) }
+            if let mv = d.minimumOSVersion, !mv.isEmpty { infoRow("最低系统", "iOS \(mv)") }
+            if let sz = d.sizeText { infoRow("大小", sz) }
+            if let b = d.bundleID, !b.isEmpty { infoRow("Bundle ID", b) }
+        }
+    }
+
+    // MARK: - 最近更新 —— 对应 NB 的 DXSTDetailVersionView
+
+    private func releaseSection(_ d: NBStoreRankClient.AppDetail, _ notes: String) -> some View {
+        Section {
+            Text(notes)
+                .font(.subheadline)
+                .lineLimit(descExpanded ? nil : 5)
+                .fixedSize(horizontal: false, vertical: true)
+        } header: {
+            HStack {
+                Text("新功能")
+                if let v = d.version, !v.isEmpty { Text("· v\(v)").foregroundStyle(.secondary) }
+                Spacer()
+                if let date = d.releaseDate, !date.isEmpty {
+                    Text(date).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     // MARK: - 下载中
 
     /// 「下载中」区块 —— 与爱思/牛蛙详情页同款布局。
-    ///
-    /// 那两页共用的是 `I4StoreFreeDetailView.swift` 里的 `private struct DownloadJobSection`，
-    /// 访问级别是 `private`（只在本文件可见）。为了不动那份既有代码、也不把它的访问级别
-    /// 放大到模块级，这里按同样的排版写一份 —— 布局与行为一致，读的是同一个
-    /// `IPADownloadCenter`（**下载状态仍然只有一套**，这只是渲染）。
     private func jobSection(_ job: IPADownloadCenter.Job) -> some View {
         Section("下载中") {
             VStack(alignment: .leading, spacing: 8) {
@@ -204,7 +399,7 @@ struct NBStoreDetailView: View {
         HStack {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 8)
-            Text(value).font(.subheadline.monospacedDigit()).lineLimit(1).truncationMode(.middle)
+            Text(value).font(.subheadline).lineLimit(1).truncationMode(.middle)
         }
     }
 
@@ -227,6 +422,15 @@ struct NBStoreDetailView: View {
         }
     }
 
+    private var detailLoadingSection: some View {
+        Section {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("正在读取应用详情…").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private func errorSection(_ text: String) -> some View {
         Section {
             Text(text).font(.subheadline).foregroundStyle(.red)
@@ -235,7 +439,32 @@ struct NBStoreDetailView: View {
 
     // MARK: - 加载 / 下载
 
-    private func load() async {
+    /// 详情与版本列表并行拉 —— 两者互不依赖，串行会让页面多等一个来回。
+    private func loadAll() async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await loadDetail() }
+            group.addTask { await loadVersions() }
+        }
+    }
+
+    /// 拉详情（`itunes.apple.com/lookup`）。
+    ///
+    /// **失败不挡主要内容**：详情拿不到只是少几个区块，版本列表与取包照常，
+    /// 所以这里只把错误记进日志，不占页面的 error 区块（那是给版本列表用的）。
+    private func loadDetail() async {
+        guard !trackID.isEmpty else { return }
+        detailLoading = true
+        defer { detailLoading = false }
+        do {
+            detail = try await NBStoreRankClient.detail(trackID: trackID, country: country)
+        } catch {
+            detailErrorText = error.localizedDescription
+            LoginLogger.shared.log("[NB详情] ○ 详情拉取失败：\(error.localizedDescription)",
+                                   category: .appStore)
+        }
+    }
+
+    private func loadVersions() async {
         loading = true
         errorText = nil
         guard !trackID.isEmpty else {
@@ -252,24 +481,31 @@ struct NBStoreDetailView: View {
     }
 
     /// 取某个版本的包并交给统一下载中心。
-    ///
-    /// NB 的 `appVerId` 就是 bilin 目录里的 `external_identifier` —— 两者同一个编号体系，
-    /// 所以这里直接把 `externalIdentifier` 原样传下去，不做任何换算。
     @MainActor
     private func installVersion(_ v: NBStoreClient.NBVersion) async {
         fetchingID = v.externalIdentifier
         defer { fetchingID = nil }
         do {
-            guard let pkg = try await NBStoreClient.package(appID: trackID,
-                                                            appVerId: v.externalIdentifier,
-                                                            country: country) else {
+            // v0.3.545：按「上架 / 下架」走不同 method（同一端点）。
+            let pkg: NBStoreClient.NBPackage?
+            if offSale {
+                pkg = try await NBStoreClient.offSalePackage(ipaID: trackID,
+                                                             appVerId: v.externalIdentifier,
+                                                             country: country)
+            } else {
+                pkg = try await NBStoreClient.package(appID: trackID,
+                                                      appVerId: v.externalIdentifier,
+                                                      country: country)
+            }
+            guard let pkg else {
                 ToastCenter.shared.show("该版本没有可用的安装包")
                 return
             }
             await startNBDownload(trackID: trackID,
                                   package: pkg,
-                                  name: displayName,
-                                  version: v.version)
+                                  name: title,
+                                  version: v.version,
+                                  iconURL: iconURL)
         } catch {
             ToastCenter.shared.show("取包失败：\(error.localizedDescription)")
         }

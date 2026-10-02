@@ -2,27 +2,49 @@ import CoreLocation
 import SwiftUI
 
 /// 蓝牙位置模拟面板（虚拟定位的辅助功能，默认关闭）.
+///
+/// ## v0.3.546 的两处改动（按用户反馈）
+///
+/// 1. **「停止蓝牙模拟」是独立动作**，不等于关面板。
+///    之前只有顶部那个 `Toggle` 能停，用户的理解是「关掉面板 = 结束」会被动停掉，
+///    但事实上面板一关链路还在跑（链路跟随开关，不跟随 sheet 生命周期）——
+///    开关与面板混在一起，谁都说不清「现在到底停没停」。
+///    现在把「启用 / 停止」做成两个**显式按钮**：停止就是不依赖面板、不依赖开关状态的
+///    一键动作，随时可点，点完立刻断链路 + 解绑桥接。
+///
+/// 2. **精简**：原来的「使用说明」6 条文字、「链路状态」6 行键值、「回报与日志」
+///    全量列表，加起来一屏装不下，用户评价「太复杂不友好」。
+///    现在拆成：`状态`（一个胶囊 + 启停按钮）/ `角色`（选择器，仅未启用时可改）/
+///    `附近设备`（仅信号端）/ `更多`（下发、重扫、重广播收进这一组）/ 日志**只留入口**。
+///    详细日志与排查信息全部移到独立的日志页，主面板不再承担阅读日志的职责。
 struct BluetoothPanelView: View {
     @ObservedObject private var coordinator = BLECoordinator.shared
     @ObservedObject private var session = SpoofSession.shared
     @Environment(\.dismiss) private var dismiss
 
     @State private var role: BluetoothLinkRole = .broadcaster
-    @State private var enabled = false
     @State private var hint: String?
+    @State private var showLog = false
 
     private static let roleKey = "escape.bluetoothRole"
 
     var body: some View {
         NavigationStack {
             List {
-                usageSection
-                roleSection
-                if role == .receiver {
+                statusSection
+                if !coordinator.isActive {
+                    roleSection
+                    if role == .receiver && !session.hasPairing {
+                        pairingNoticeSection
+                    }
+                }
+                if coordinator.isActive && role == .receiver {
                     nearbySection
                 }
-                linkSection
-                reportSection
+                if coordinator.isActive {
+                    actionsSection
+                }
+                logEntrySection
             }
             .navigationTitle("蓝牙位置模拟")
             .toolbar {
@@ -30,74 +52,101 @@ struct BluetoothPanelView: View {
                     Button("完成") { dismiss() }
                 }
             }
+            .navigationDestination(isPresented: $showLog) {
+                BluetoothLogView()
+            }
             .alert(requestTitle, isPresented: requestBinding) {
                 Button("允许") { coordinator.approvePendingConnection() }
                 Button("拒绝", role: .cancel) { coordinator.denyPendingConnection() }
             }
             .onAppear {
-                enabled = coordinator.isActive
                 if let saved = UserDefaults.standard.string(forKey: Self.roleKey),
                    let stored = BluetoothLinkRole(rawValue: saved) {
                     role = stored
                 }
             }
-            .onChange(of: enabled) { _, isOn in
-                if isOn {
-                    UserDefaults.standard.set(role.rawValue, forKey: Self.roleKey)
-                    BluetoothSpoofBridge.shared.attach()
-                    coordinator.start(role: role)
-                } else {
-                    coordinator.stop()
-                    BluetoothSpoofBridge.shared.detach()
+        }
+    }
+
+    // MARK: - 状态与启停
+
+    private var statusSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(stateColor)
+                    .frame(width: 8, height: 8)
+                Text(coordinator.isActive ? coordinator.state.label : "未启用")
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 8)
+                if coordinator.isActive {
+                    Text(role.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
+
+            if coordinator.isActive {
+                Button(role: .destructive) {
+                    stopSpoof()
+                } label: {
+                    Label("停止蓝牙模拟", systemImage: "stop.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+            } else {
+                Button {
+                    startSpoof()
+                } label: {
+                    Label("启用蓝牙模拟", systemImage: "play.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(role == .receiver && !session.hasPairing)
+            }
+
+            if let error = coordinator.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(LocusTheme.statusBad)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } footer: {
+            Text(coordinator.isActive
+                 ? "停止后链路立即断开，两台设备的坐标同步随之中止."
+                 : "两台设备各装本 App：A 机选「模拟终端」，B 机选「信号端」.")
         }
     }
 
-    // MARK: - 使用说明
-
-    private var usageSection: some View {
-        Section {
-            Text("两台设备各装本 App：A 机选「模拟终端」，B 机选「信号端」。")
-            // v0.3.540：选图钉的位置改到 B 机（用户拍板）—— 谁要用谁选，符合直觉.
-            Text("B 机在「附近设备」里点 A 机，A 机弹窗点「允许」。")
-            Text("之后在 B 机地图上放图钉，坐标会经 A 机回传并应用；A 机的图钉变化同样会下发。")
-            Text("双方需保持 App 在前台。")
-            Text("蓝牙为可选的跨设备扩展；单机无需第二台设备，直接用上方虚拟定位。")
-            Text("被拒绝后需点「重新开始广播」才能再次配对。")
-        }
-        .foregroundStyle(.secondary)
-    }
-
-    // MARK: - 角色与开关
+    // MARK: - 角色
 
     private var roleSection: some View {
-        Section("角色与开关") {
+        Section("角色") {
             Picker("角色", selection: $role) {
                 ForEach(BluetoothLinkRole.allCases) { item in
                     Text(item.title).tag(item)
                 }
             }
             .pickerStyle(.segmented)
-            .disabled(enabled)
-
-            Toggle("启用蓝牙链路", isOn: $enabled)
-                .disabled(role == .receiver && !session.hasPairing)
-
-            if role == .receiver && !session.hasPairing {
-                Text("信号端需要配对文件才能应用坐标。")
-                    .foregroundStyle(LocusTheme.statusWarn)
-                    .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: role) { _, newValue in
+                UserDefaults.standard.set(newValue.rawValue, forKey: Self.roleKey)
             }
         }
     }
 
-    // MARK: - 附近设备
+    private var pairingNoticeSection: some View {
+        Section {
+            Text("信号端需要配对文件才能应用坐标，请先在「设置」里导入.")
+                .font(.caption)
+                .foregroundStyle(LocusTheme.statusWarn)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - 附近设备（信号端）
 
     private var nearbySection: some View {
         Section("附近设备") {
             if coordinator.nearby.isEmpty {
-                Text(enabled ? "未发现设备" : "打开开关后开始扫描")
+                Text("未发现设备")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(coordinator.nearby) { peer in
@@ -123,42 +172,31 @@ struct BluetoothPanelView: View {
                     }
                     .disabled(coordinator.connectedPeerID != nil)
                 }
+            }
+        }
+    }
 
+    // MARK: - 操作
+
+    private var actionsSection: some View {
+        Section {
+            // v0.3.540：两种角色都能「主动推当前图钉」——
+            // A 机是下发，B 机是请求下发（走的都是各自那一条链路）。
+            Button {
+                hint = BluetoothSpoofBridge.shared.pushCurrentPin() ? nil : "请先在地图上放置图钉."
+            } label: {
+                Label(role == .broadcaster ? "立即下发图钉坐标" : "用本机图钉定位",
+                      systemImage: "location.fill")
+            }
+            .disabled(session.pin == nil)
+
+            if role == .receiver {
                 Button {
                     coordinator.rescan()
                 } label: {
                     Label("重新扫描", systemImage: "arrow.clockwise")
                 }
             }
-        }
-    }
-
-    // MARK: - 链路状态
-
-    private var linkSection: some View {
-        Section("链路状态") {
-            infoRow("状态", coordinator.state.label, tint: stateColor)
-            infoRow("角色", role.title)
-            infoRow("本机标识", BluetoothLink.displayName(for: role))
-            if let peer = coordinator.peerName {
-                infoRow("对端", peer)
-            }
-            if let sent = coordinator.lastSent {
-                infoRow("最后下发", coordinateText(sent))
-            }
-            if role == .receiver {
-                infoRow("本机模拟", session.status.label)
-            }
-
-            // v0.3.540：两种角色都能「主动推当前图钉」——
-            // A 机是下发，B 机是请求下发（走的都是各自那一条链路）。
-            Button {
-                hint = BluetoothSpoofBridge.shared.pushCurrentPin() ? nil : "请先在地图上放置图钉。"
-            } label: {
-                Label(role == .broadcaster ? "立即下发图钉坐标" : "用本机图钉定位",
-                      systemImage: "location.fill")
-            }
-            .disabled(!enabled || session.pin == nil)
 
             if role == .broadcaster && coordinator.hasDeniedPeers {
                 Button {
@@ -170,41 +208,52 @@ struct BluetoothPanelView: View {
 
             if let hint = hint {
                 Text(hint)
+                    .font(.caption)
                     .foregroundStyle(LocusTheme.statusWarn)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let error = coordinator.lastError {
-                Text(error)
-                    .foregroundStyle(LocusTheme.statusBad)
-                    .fixedSize(horizontal: false, vertical: true)
+        } header: {
+            Text("操作")
+        } footer: {
+            if let sent = coordinator.lastSent {
+                Text("最后下发 \(coordinateText(sent))")
             }
         }
     }
 
-    // MARK: - 回报与日志
+    // MARK: - 日志入口
 
-    private var reportSection: some View {
-        Section("回报与日志") {
-            infoRow("状态回报", reportText)
-
-            if coordinator.log.isEmpty {
-                Text("暂无记录")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(coordinator.log, id: \.self) { line in
-                    Text(line)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Button {
-                    coordinator.clearLog()
-                } label: {
-                    Label("清空日志", systemImage: "trash")
+    private var logEntrySection: some View {
+        Section {
+            Button {
+                showLog = true
+            } label: {
+                HStack {
+                    Label("查看蓝牙日志", systemImage: "doc.text.magnifyingglass")
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
             }
+        } footer: {
+            Text("蓝牙日志独立存储，不与登录 / 商店等其它日志混在一起.")
         }
+    }
+
+    // MARK: - 动作
+
+    private func startSpoof() {
+        UserDefaults.standard.set(role.rawValue, forKey: Self.roleKey)
+        BluetoothSpoofBridge.shared.attach()
+        coordinator.start(role: role)
+    }
+
+    /// 一键停止（用户明确要求：不要「关面板 = 结束」这种隐式语义）.
+    private func stopSpoof() {
+        hint = nil
+        coordinator.stop()
+        BluetoothSpoofBridge.shared.detach()
     }
 
     // MARK: - 辅助
@@ -220,36 +269,12 @@ struct BluetoothPanelView: View {
         "\(coordinator.pendingRequest?.displayName ?? "设备") 请求连接"
     }
 
-    private var reportText: String {
-        if role == .broadcaster {
-            return coordinator.lastReport?.label ?? "暂无"
-        }
-        return BluetoothStatusReport.from(
-            status: session.status,
-            hasError: session.lastError != nil
-        ).label
-    }
-
     private var stateColor: Color {
+        guard coordinator.isActive else { return .primary.opacity(0.55) }
         switch coordinator.state {
         case .off: return .primary.opacity(0.55)
         case .advertising, .scanning, .connecting, .suspended: return LocusTheme.statusWarn
         case .connected, .synced: return LocusTheme.statusGood
-        }
-    }
-
-    /// 键值行：键固定 76pt 等宽前导，值左对齐可换行（避免各行参差与省略号）.
-    private func infoRow(_ key: String, _ value: String, tint: Color? = nil) -> some View {
-        LabeledContent {
-            Text(value)
-                .font(.caption.monospaced())
-                .foregroundStyle(tint ?? .secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-        } label: {
-            Text(key)
-                .frame(width: 76, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

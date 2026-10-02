@@ -161,7 +161,9 @@ final class BLECoordinator: NSObject, ObservableObject {
     }
 
     func clearLog() {
+        // 面板预览与独立存储一起清 —— 否则「清空」之后进独立日志页还看得到旧内容。
         publish { self.log.removeAll() }
+        BluetoothLogStore.shared.clear()
     }
 
     /// B 机：用户点选附近设备后连接（不再自动连第一个）.
@@ -532,6 +534,12 @@ final class BLECoordinator: NSObject, ObservableObject {
         lastLogLine = line
         lastLogAt = now
         let stamped = "\(Self.timeString()) \(line)"
+        // v0.3.546：**先落独立存储**，再更新面板用的内存预览。
+        //
+        // 面板里那个 `log` 数组只留 60 行（下面那句），**不能**当成日志本体 ——
+        // 用户要求的「独立日志界面」读的是 `BluetoothLogStore`（无 60 行限制、
+        // 与 LoginLogger 的各板块完全隔离）。两处一起写，读法各取所需。
+        BluetoothLogStore.shared.append(line)
         let run = {
             self.log.insert(stamped, at: 0)
             if self.log.count > 60 { self.log.removeLast(self.log.count - 60) }

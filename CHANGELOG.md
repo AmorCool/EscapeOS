@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.3.546] - 2026-10-02
+
+> **修 v0.3.545 的编译错误（`.mm` 与 `.h` 出参没对上）+ 蓝牙位置模拟面板重做**。
+
+### 修复：`KBSyncProvider.swift:74` 仍报 `extra argument 'error' in call`（v0.3.545 CI 报错）
+
+v0.3.545 只改了 `SAPContext.h`，**`.mm` 里的实现签名没跟着改** ——
+声明与实现不一致，编译器取了实现那一份（`(NSError **)error`），
+`NS_ASSUME_NONNULL_BEGIN` 下被当成「非空指针的出参」，
+Swift importer 直接把该参数从签名里丢掉，于是调用处永远报「多了个 error 参数」。
+
+修法（这回**声明与实现两边都改**）：
+
+| 文件 | 改法 |
+|---|---|
+| `SAPContext.h` | 三个方法出参 = `NSError * _Nullable * _Nullable`（v0.3.545 已改） |
+| `SAPContext.mm` | `decrypterWithAssetsURL:` / `decryptChunk:` / `generateKBSyncWithAssetsURL:` 三处实现签名同步改为 `NSError * _Nullable * _Nullable`（本轮补） |
+| `KBSyncProvider.swift` | 回到正常的 `var failure: NSError?` + `error: &failure`（签名对了，语法糖自然能用） |
+
+> 教训：ObjC 的「出参类型不匹配」**既可能在头文件、也可能只在实现文件**，
+> 只改一侧 CI 照样红。以后碰到 `extra argument` 先 `grep` 两边的签名对不对得上。
+
+### 重做：蓝牙位置模拟面板（按用户三条反馈）
+
+**① 「停止蓝牙模拟」是独立动作，不再等于关面板**
+
+原设计的 `Toggle` 绑在面板的 `@State` 上，链路是否在跑跟面板生命周期纠缠不清。
+现在拆成两个显式按钮：`启用蓝牙模拟` / `停止蓝牙模拟`，
+状态从 `BLECoordinator.isActive` 读（不再依赖面板内的开关状态）。
+「停止」随时可点，点完立刻 `stop()` + `detach()` 桥接层。
+
+**② 面板精简**
+
+原面板 5 个 Section：6 条文字说明 + 6 行键值状态 + 全量日志列表，一屏装不下。
+现在：
+
+| 原 | 现 |
+|---|---|
+| 6 条「使用说明」Section | 折成状态区的一行 footer（未启用时才显示） |
+| 「角色与开关」（Picker + Toggle + 告警） | 「角色」Picker（**仅未启用时可改**）+ 状态区启停按钮 |
+| 「链路状态」6 行键值 | 折成状态区一个胶囊（状态点 + 文案 + 角色） |
+| 「回报与日志」全量列表 | 只留一个入口按钮，详细日志进独立页 |
+
+**③ 独立的蓝牙日志界面（独立存储，不与其它日志混用）**
+
+新增 `BluetoothLogStore`（`Documents/BLELogs/ble.log`）——
+**单开一份存储**，不写 `LoginLogger`，与 Apple 登录 / AppStore / 爱思源 / 证书 等板块完全隔离。
+排版照 AppStore 商店日志板块（`LogConsoleView` + 2s 轮询 + 清除二次确认）。
+
+`BLECoordinator.append` 改为**双写**：独立存储（全量，按 2MB 滚动截断）
++ 面板内 60 行预览数组（`@Published`，只服务主面板的小窗）。
+`clearLog()` 也两处一起清，避免「清空后进独立页还看得到旧内容」。
+
 ## [0.3.545] - 2026-10-02
 
 > **修 v0.3.544 的编译错误 + NB 源「装了闪退」真因修复（伪 UDID → 真 UDID）**。

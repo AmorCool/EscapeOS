@@ -63,15 +63,17 @@ enum KBSyncProvider {
             throw KBSyncError.assetsMissing
         }
         // 这里**刻意不用 `&error`**：该 ObjC 类方法的 `NSError **` 出参在 Swift importer
-        // 下会被判成 «extra argument 'error' in call»（v0.3.544 的 CI 实证）。
-        // 改成显式构造 `NSErrorPointer` 传入 —— 参数名与位置都没变，只是不再让
-        // 编译器去做那个会失败的 out-parameter 形状推断。
-        let failure: NSErrorPointer = nil
+        // 下会被判成 «extra argument 'error' in call»（v0.3.544 / v0.3.545 两次 CI 实证）。
+        // 根因是头文件里的 `NSError **` 在 `NS_ASSUME_NONNULL_BEGIN` 范围内被当成
+        // 「非空指针的出参」，Swift importer 直接把该参数从签名里**丢掉**了。
+        // v0.3.546 已把 `.h` 与 `.mm` 两边的出参统一写成 `NSError * _Nullable * _Nullable`，
+        // 这个显式指针写法保留着即可（多一层保险，且不依赖 importer 的推断结果）。
+        var failure: NSError?
         guard let blob = SAPStoreAgentContext.generateKBSync(
             withAssetsURL: assets,
             hardwareID: hardwareID,
             dsid: dsid,
-            error: failure
+            error: &failure
         ) else {
             throw KBSyncError.generationFailed("storeagent 生成 kbsync 失败（失败原因见宿主日志）")
         }

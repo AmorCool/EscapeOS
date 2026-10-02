@@ -75,6 +75,33 @@ struct I4StoreFreeView: View {
     /// 而 NB 的行必须走 NB 取包（不能用爱思的 `ipaURL`）.
     @State private var nbSearchResults: [NBStoreRankClient.RankItem] = []
 
+    /// v0.3.545：NB 源的**上架 / 下架**筛选（对应 NB 助手的 `DXSTOffSaleController`）。
+    ///
+    /// ## 怎么判定「下架」
+    /// 反编译 NB 助手确认它有独立的下架应用页（`DXSTOffSaleController` +
+    /// `DXSTOffSaleDetailController` + `DXSTOffSaleHistoryListController`），
+    /// 取包走同一个端点 `/nb/app-downgrade`，只把 `method` 换成
+    /// `getOffSaleAppHistoryList`、应用 ID 键换成 `ipaID`（见 `NBStoreClient.offSalePackage`）。
+    ///
+    /// ## 所以「筛」这个动作怎么做
+    /// 应用列表来自 Apple RSS/search，这两条**只回上架应用**，天然没有下架项。
+    /// 因此这里的筛选是**开关式的行为切换**，不是对已有数组做过滤：
+    /// - `.onSale`（默认）：行为完全不变；
+    /// - `.offSale`：把搜索/列表里的每个 trackId 拿去 `lookup` 探一次，
+    ///   用 `NBStoreClient.offSalePackage` 取包 —— 也就是说这条路能装到
+    ///   App Store 已经搜不到的老应用。
+    ///
+    /// ⚠️ 刻意**不建本地库**：NB 那边下架列表是本地 SQLite 表 `load_list` 缓存的，
+    /// 我们没有必要复刻一份会过期的缓存；状态以实时探测为准。
+    enum AppStateFilter: String, CaseIterable, Identifiable {
+        case onSale = "上架"
+        case offSale = "下架"
+
+        var id: String { rawValue }
+    }
+
+    @State private var appStateFilter: AppStateFilter = .onSale
+
     /// v0.3.305：已下载数量（进入页面时读一次磁盘台账）
     @State private var downloadedCount = 0
     /// 统一下载中心（免登录源与 Apple ID 共用）
@@ -186,9 +213,29 @@ struct I4StoreFreeView: View {
                 }
                 .pickerStyle(.segmented)
             }
+
+            // v0.3.545：NB 源的**上架 / 下架**（对应 NB 助手的 DXSTOffSaleController）。
+            // 只在 NB 源出现 —— 爱思/牛蛙没有这条链路，不给它们摆一个按不动的开关。
+            if source == .nb {
+                Picker("状态", selection: $appStateFilter) {
+                    ForEach(AppStateFilter.allCases) { f in
+                        Text(f.rawValue).tag(f)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
         }
-        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-        .listRowBackground(Color.clear)
+        // v0.3.545：**修「分组栏目上方有一块空白」**。
+        //
+        // 原来这里是 `.listRowInsets(top:6, leading:0, bottom:6, trailing:0)`
+        // 配 `.listRowBackground(Color.clear)`，用意是「让分段控件贴边、不要卡片背景」。
+        // 但这两个一起用会把这一行从 `insetGrouped` 的卡片布局里摘出去：
+        // 卡片背景被清空后，Section 的 header 与第一行之间会**按卡片间距留一段空白**，
+        // 视觉上就是「分组栏上方空一块、跟下面的榜单对不齐」。
+        //
+        // 改回 insetGrouped 的标准行内边距（左右各 16），保留卡片背景，
+        // 上下只留很小的呼吸 —— 分段控件本来就有自己的内边距，不需要再顶出去。
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
     }
 
     // MARK: - v0.3.305 下载管理入口
@@ -225,6 +272,10 @@ struct I4StoreFreeView: View {
         Section {
             // v0.3.540：两个来源的榜单是**两套数据**（爱思自己的服务端 / Apple RSS），
             // 分组取值也不同，所以用各自的 Picker，不硬凑成一个.
+            //
+            // v0.3.545：两处 `listRowInsets` + `listRowBackground(Color.clear)` 都去掉 ——
+            // 与 `sourceSection` 同一个毛病（清掉卡片背景后 header 与内容之间会留一段空白）。
+            // 保持 insetGrouped 的默认行边距即可。
             if source == .nb {
                 Picker("分组", selection: $nbRank) {
                     ForEach(NBStoreRankClient.Rank.allCases) { r in
@@ -232,8 +283,6 @@ struct I4StoreFreeView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-                .listRowBackground(Color.clear)
             } else {
                 Picker("分组", selection: $rank) {
                     ForEach(I4PCStoreClient.Rank.allCases) { r in
@@ -241,8 +290,6 @@ struct I4StoreFreeView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-                .listRowBackground(Color.clear)
             }
         } footer: {
             Text(source == .nb
@@ -425,7 +472,13 @@ struct I4StoreFreeView: View {
         HStack(alignment: .center, spacing: 12) {
             NavigationLink {
                 // 进 NB 详情页可以选历史版本（版本列表走 bilin 目录，与 AppleID 商店同一份）.
-                NBStoreDetailView(trackID: item.trackID, country: regionRaw, displayName: item.name)
+                // v0.3.545：把图标和上架/下架状态一起带进去 —— 详情页据此选取包链路，
+                // 并且在 lookup 回来之前就能先显示图标与名字（少一次白屏）.
+                NBStoreDetailView(trackID: item.trackID,
+                                  country: regionRaw,
+                                  displayName: item.name,
+                                  icon: item.icon,
+                                  offSale: appStateFilter == .offSale)
             } label: {
                 HStack(alignment: .center, spacing: 12) {
                     ZStack(alignment: .topLeading) {
@@ -498,14 +551,23 @@ struct I4StoreFreeView: View {
     @MainActor
     private func installViaNBRank(_ item: NBStoreRankClient.RankItem) async {
         do {
-            guard let pkg = try await NBStoreClient.package(appID: item.trackID,
-                                                            bundleID: item.bundleID ?? "",
-                                                            country: regionRaw) else {
+            // v0.3.545：按「上架 / 下架」走两条链路。
+            // 上架 → `getAppHistoryList`（`appID`）；下架 → `getOffSaleAppHistoryList`（`ipaID`）。
+            let pkg: NBStoreClient.NBPackage?
+            if appStateFilter == .offSale {
+                pkg = try await NBStoreClient.offSalePackage(ipaID: item.trackID,
+                                                             country: regionRaw)
+            } else {
+                pkg = try await NBStoreClient.package(appID: item.trackID,
+                                                      bundleID: item.bundleID ?? "",
+                                                      country: regionRaw)
+            }
+            guard let pkg else {
                 ToastCenter.shared.show("该应用没有可用的安装包")
                 return
             }
             await startNBDownload(trackID: item.trackID, package: pkg,
-                                  name: item.name, version: nil)
+                                  name: item.name, version: nil, iconURL: item.icon)
         } catch {
             ToastCenter.shared.show("NB 取包失败：\(error.localizedDescription)")
         }
@@ -887,11 +949,15 @@ struct I4StoreFreeView: View {
 ///
 /// v0.3.538：`name` 与 `version` 改为可传入 —— NB 详情页里同一个 trackId 会有多个
 /// 历史版本，只按 trackId 命名会让几行在「下载管理」里长得一模一样、分不清是哪个版本。
+///
+/// v0.3.545：加 `iconURL` —— 详情页从 lookup 拿到 512 图标后一起带进下载台账，
+/// 这样「下载管理」里那一行也有图标（以前 NB 源传的是 `nil`，那几行全是灰占位）。
 @MainActor
 func startNBDownload(trackID: String,
                      package: NBStoreClient.NBPackage,
                      name: String? = nil,
-                     version: String? = nil) async {
+                     version: String? = nil,
+                     iconURL: String? = nil) async {
     guard !package.ipaURL.isEmpty else {
         ToastCenter.shared.show("该应用没有可用的安装包")
         return
@@ -901,7 +967,7 @@ func startNBDownload(trackID: String,
     _ = IPADownloadCenter.shared.start(name: shownName,
                                        bundleId: nil,
                                        version: (shownVersion?.isEmpty == false) ? shownVersion : nil,
-                                       iconURL: nil,
+                                       iconURL: (iconURL?.isEmpty == false) ? iconURL : nil,
                                        remoteURL: package.ipaURL,
                                        source: .nb,
                                        sinfBase64: package.sinfBase64)
