@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.3.562] - 2026-10-02
+
+> **宿主能力补完：SSH 不再够不到 App 沙盒，且能直接读 IPA 内部。**
+
+### 背景
+
+排查 NB 源「装得上但打开闪退」时，卡在**取不到设备上那个改过的 IPA**：
+
+- `cap fs.read` 只认 `NSHomeDirectory()` 开头的**绝对路径**，而容器 UUID 是随机且会变的
+  → 拿不到，只能绕道
+- `afc.*` 的根是 `/var/mobile/Media`，**根本够不到 `/var/mobile/Containers/`**
+  （App 沙盒在 Containers 下）→ 绕了也是白绕
+- `cat` 只能读 UTF-8 文本且默认限 1MB → 3.5MB 的二进制 IPA 读不了
+
+### 新增能力（7 个）
+
+| 能力 | 作用 |
+|---|---|
+| `host.info` | 一次给出 `home` / `containerUUID` / `documents` / 机型 / 系统 / 磁盘。**以后不用再猜容器 UUID** |
+| `fs.hash` | 设备上算 md5 / sha1 / sha256，比对文件不用传回本地 |
+| `fs.find` | 按文件名子串递归查找 |
+| `fs.copy` | 沙盒内复制（改包前先留原件） |
+| `pkg.list` | 列 IPA / ZIP 内条目（含 `localHeaderOffset` / 压缩方式 / 大小） |
+| `pkg.read` | 读 IPA 内**单个**条目（stored 直读 / deflate 解压）—— 几 KB 的 `SC_Info/*.sinf` 单独取出，不必传 3.5MB 整包 |
+
+### 改动能力（5 个）
+
+- **`fs.read`**：加 `offset` / `length` 分块，返回 `total` / `eof`。大二进制可分次取
+- **`fs.read` / `write` / `delete` / `exists` / `list`**：统一走新的 `resolvePath`，
+  四种写法都认 —— `Documents/a.ipa`（相对 Documents）/ `~/Documents/a.ipa` /
+  `/Documents/a.ipa` / `/var/mobile/...`（绝对）
+- **`fs.exists`**：顺带返回 `isDir` / `size`
+- **`fs.write`**：父目录不存在自动创建
+
+### 实现要点
+
+- `pkg.*` 是**纯中央目录解析**（EOCD → central directory），含 zip64 兜底；
+  deflate 用 Apple `Compression` 的 `COMPRESSION_ZLIB`（与 ZIP 的 raw deflate 一致）
+- `pkg.list` 默认上限 500 条并带 `truncated` 标记 —— 大 IPA 有几千条目，
+  全吐出来会把 SSH 通道撑爆
+- 模块仓库 `validate.py` 的 `KNOWN_CAPABILITIES` 已同步（两边必须一致）
+
 ## [0.3.561] - 2026-10-02
 
 > **NB 源详情页补上图标菜单（查看 / 提取），对齐其它免登录源。**

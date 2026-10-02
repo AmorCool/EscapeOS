@@ -28,6 +28,9 @@
 
 import Foundation
 import UserNotifications
+import CryptoKit       // fs.hash：md5 / sha1 / sha256
+import Compression     // pkg.read：ZIP 里 deflate 条目的解压
+import Darwin          // host.info：sysctlbyname 取 hw.machine
 
 // MARK: - 交给模块的 C 函数表
 
@@ -119,11 +122,17 @@ enum HostCapabilityService {
     static let capabilityList: [String] = [
         "host.version",
         "host.capabilities",
-        "fs.read",
+        "host.info",          // 沙盒路径 / 设备信息（省得每次猜容器 UUID）
+        "fs.read",            // 支持 offset / length 分块（大二进制不用一次读完）
         "fs.write",
         "fs.delete",
         "fs.exists",
         "fs.list",
+        "fs.hash",            // md5 / sha1 / sha256（比对文件不用传回本地）
+        "fs.find",            // 递归按名查找
+        "fs.copy",            // 沙盒内复制
+        "pkg.list",           // 列 IPA/ZIP 内条目（含偏移，配合 fs.read 取单个文件）
+        "pkg.read",           // 读 IPA/ZIP 内单个条目（stored 直读 / deflate 解压）
         "apps.lookup",
         "afc.list",
         "afc.stat",
@@ -239,11 +248,17 @@ enum HostCapabilityService {
         switch capability {
         case "host.version":          return hostVersion()
         case "host.capabilities":     return hostCapabilities()
+        case "host.info":             return hostInfo()
         case "fs.read":               return fsRead(args)
         case "fs.write":              return fsWrite(args)
         case "fs.delete":             return fsDelete(args)
         case "fs.exists":             return fsExists(args)
         case "fs.list":               return fsList(args)
+        case "fs.hash":               return fsHash(args)
+        case "fs.find":               return fsFind(args)
+        case "fs.copy":               return fsCopy(args)
+        case "pkg.list":              return pkgList(args)
+        case "pkg.read":              return pkgRead(args)
         case "apps.lookup":           return appsLookup(args)
         case "afc.list":              return afcList(args)
         case "afc.stat":              return afcStat(args)
@@ -275,10 +290,102 @@ enum HostCapabilityService {
 
     // MARK: - fs.*
 
+    /// 沙盒根（App 的 home：`/var/mobile/Containers/Data/Application/<UUID>`）
+    private static var homeDir: String { NSHomeDirectory() }
+
+    /// 把调用方给的路径**归一化成沙盒内的绝对路径**。
+    ///
+    /// 加这层的原因：以前 `fs.*` 只认 `NSHomeDirectory()` 开头的绝对路径，而容器
+    /// UUID 是随机且会变的 —— 调用方（尤其 SSH 里的排查脚本）拿不到它，就只能绕道
+    /// afc，而 afc 的根是 `/var/mobile/Media`，**根本够不到 App 沙盒**。
+    ///
+    /// 现在四种写法都行：
+    /// - `Documents/a.ipa`        → 相对 Documents（最常用，与 `ls` / `cat` 同口径）
+    /// - `~/Documents/a.ipa`      → 相对沙盒根
+    /// - `/Documents/a.ipa`       → 同上（开头的 `/` 当沙盒根）
+    /// - `/var/mobile/...`        → 已是绝对路径，原样用（仍需落在沙盒内才放行）
+    private static func resolvePath(_ raw: String) -> String {
+        let home = homeDir
+        let joined: String
+        if raw.hasPrefix("/var/") || raw.hasPrefix("/private/") || raw.hasPrefix("/System/") {
+            joined = raw
+        } else if raw == "~" {
+            joined = home
+        } else if raw.hasPrefix("~/") {
+            joined = home + "/" + String(raw.dropFirst(2))
+        } else if raw.hasPrefix("/") {
+            joined = home + raw
+        } else {
+            joined = home + "/Documents/" + raw
+        }
+        return (joined as NSString).standardizingPath
+    }
+
     /// 路径是否在 App 沙盒内（沙盒内直接用 FileManager，不需要漏洞利用）
     private static func isInSandbox(_ path: String) -> Bool {
-        let home = NSHomeDirectory()
+        let home = homeDir
         return path == home || path.hasPrefix(home + "/")
+    }
+
+    /// `host.info`：一次把「沙盒在哪、设备是什么」全给出来.
+    ///
+    /// 存在的意义：以前每次要读沙盒文件都得先想办法问出容器 UUID（要么翻日志、
+    /// 要么二分猜），现在一条命令就有.
+    private static func hostInfo() -> (Int32, String) {
+        let home = homeDir
+        let fm = FileManager.default
+        var docs = home + "/Documents"
+        if let u = fm.urls(for: .documentDirectory, in: .userDomainMask).first { docs = u.path }
+        var caches = ""
+        if let u = fm.urls(for: .cachesDirectory, in: .userDomainMask).first { caches = u.path }
+        var tmp = NSTemporaryDirectory()
+        if tmp.hasSuffix("/") { tmp = String(tmp.dropLast()) }
+
+        // 沙盒根的属主：从 home 路径里把容器 UUID 抠出来
+        var containerUUID = ""
+        if let r = home.range(of: "/Data/Application/") {
+            containerUUID = String(home[r.upperBound...])
+        }
+
+        let pi = ProcessInfo.processInfo
+        let osv = pi.operatingSystemVersion
+        let osVersion = "\(osv.majorVersion).\(osv.minorVersion).\(osv.patchVersion)"
+
+        var diskTotal: Int64 = 0, diskFree: Int64 = 0
+        if let a = try? fm.attributesOfFileSystem(forPath: NSHomeDirectory()) {
+            diskTotal = (a[.systemSize] as? NSNumber)?.int64Value ?? 0
+            diskFree = (a[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
+        }
+
+        return ok([
+            "home": home,
+            "containerUUID": containerUUID,
+            "documents": docs,
+            "caches": caches,
+            "tmp": tmp,
+            "bundleID": Bundle.main.bundleIdentifier ?? "",
+            "appVersion": (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "",
+            "appBuild": (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "",
+            "osVersion": osVersion,
+            "model": hwMachine(),
+            "name": pi.hostName,
+            "processorCount": pi.processorCount,
+            "physicalMemory": pi.physicalMemory,
+            "diskTotal": diskTotal,
+            "diskFree": diskFree,
+            "uptime": pi.systemUptime,
+            // 列一下 Documents 顶层，省得再单独发一次 fs.list
+            "documentsTop": (try? fm.contentsOfDirectory(atPath: docs).sorted()) ?? [],
+        ])
+    }
+
+    /// 硬件机型标识（`sysctlbyname("hw.machine")`），如 `iPhone12,1`
+    private static func hwMachine() -> String {
+        var size = 0
+        guard sysctlbyname("hw.machine", nil, &size, nil, 0) == 0, size > 0 else { return "" }
+        var buf = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("hw.machine", &buf, &size, nil, 0) == 0 else { return "" }
+        return String(cString: buf)
     }
 
     /// 按 `encoding` 把字节编码成 JSON 可放的字符串（默认 base64）
@@ -294,34 +401,57 @@ enum HostCapabilityService {
     }
 
     private static func fsRead(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = args["path"] as? String, !path.isEmpty else {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty else {
             return fail("fs.read 缺少 path")
         }
         let encoding = (args["encoding"] as? String) ?? "base64"
         guard encoding == "base64" || encoding == "utf8" else {
             return fail("fs.read 的 encoding 只支持 base64 / utf8")
         }
-
-        if isInSandbox(path) {
-            guard let data = FileManager.default.contents(atPath: path) else {
-                return fail("读失败（沙盒内路径不存在或不可读）：\(path)", extra: ["via": "direct"])
-            }
-            guard let text = encode(data, encoding: encoding) else {
-                return fail("读到了 \(data.count) 字节但按 \(encoding) 编码失败（可能是二进制）",
-                            extra: ["via": "direct", "size": data.count])
-            }
-            return ok(["data": text, "size": data.count, "via": "direct"])
+        let path = resolvePath(rawPath)
+        guard isInSandbox(path) else {
+            // 沙盒外**没有**可用原语了：宿主唯一能碰沙盒外的机制是 airlift 漏洞利用，
+            // 而它已整体移除（用户 2026-09-25 决定不再使用）。如实报错，不假装知道.
+            return fail(
+                "fs.read 只支持 App 沙盒内路径：沙盒外的读取原语（airlift）已从宿主移除。",
+                extra: ["via": "none", "resolved": path, "home": homeDir])
         }
 
-        // 沙盒外**没有**可用原语了：宿主唯一能碰沙盒外的机制是 airlift 漏洞利用，
-        // 而它已整体移除（用户 2026-09-25 决定不再使用）。如实报错，不假装知道.
-        return fail(
-            "fs.read 只支持 App 沙盒内路径：沙盒外的读取原语（airlift）已从宿主移除。",
-            extra: ["via": "none"])
+        guard let fh = FileHandle(forReadingAtPath: path) else {
+            return fail("读失败（不存在或不可读）：\(path)",
+                        extra: ["via": "direct", "resolved": path])
+        }
+        defer { try? fh.close() }
+
+        let total = (try? fh.seekToEnd()) ?? 0
+        let offset = max(0, UInt64((args["offset"] as? Int) ?? 0))
+        guard offset <= total else {
+            return fail("offset \(offset) 超出文件大小 \(total)",
+                        extra: ["size": Int(total), "resolved": path])
+        }
+        try? fh.seek(toOffset: offset)
+        let want = (args["length"] as? Int) ?? 0
+        let avail = total - offset
+        let take: Int = want > 0 ? Int(min(UInt64(want), avail)) : Int(avail)
+        let data = (try? fh.read(upToCount: take)) ?? Data()
+
+        guard let text = encode(data, encoding: encoding) else {
+            return fail("读到了 \(data.count) 字节但按 \(encoding) 编码失败（可能是二进制）",
+                        extra: ["via": "direct", "size": data.count, "resolved": path])
+        }
+        return ok([
+            "data": text,
+            "size": data.count,
+            "offset": Int(offset),
+            "total": Int(total),
+            "eof": offset + UInt64(data.count) >= total,
+            "via": "direct",
+            "resolved": path,
+        ])
     }
 
     private static func fsWrite(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = args["path"] as? String, !path.isEmpty else {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty else {
             return fail("fs.write 缺少 path")
         }
         guard let text = args["data"] as? String else {
@@ -334,8 +464,15 @@ enum HostCapabilityService {
         guard let data = decode(text, encoding: encoding) else {
             return fail("data 按 \(encoding) 解码失败")
         }
+        let path = resolvePath(rawPath)
+        guard isInSandbox(path) else {
+            // 沙盒外**没有**可用原语了（见 `fsRead`）.
+            return fail(
+                "fs.write 只支持 App 沙盒内路径：沙盒外的写入原语（airlift）已从宿主移除。",
+                extra: ["via": "none", "resolved": path, "home": homeDir])
+        }
 
-        // 可选：写前把原内容备份到 App 沙盒（沙盒外覆盖前留一条后路）
+        // 可选：写前把原内容备份到 App 沙盒（覆盖前留一条后路）
         var backupPath: String?
         if (args["backup"] as? Bool) == true {
             if let old = FileManager.default.contents(atPath: path) {
@@ -349,71 +486,77 @@ enum HostCapabilityService {
             }
         }
 
-        if isInSandbox(path) {
-            do {
-                try data.write(to: URL(fileURLWithPath: path))
-                var extra: [String: Any] = ["size": data.count, "via": "direct"]
-                if let backupPath { extra["backup"] = backupPath }
-                return ok(extra)
-            } catch {
-                return fail("写失败（沙盒内）：\(error.localizedDescription)",
-                            extra: ["via": "direct"])
-            }
-        }
+        // 父目录不存在就建（写新文件时省一次 fs.mkdir）
+        let parent = (path as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
 
-        // 沙盒外**没有**可用原语了（见 `fsRead`）.
-        return fail(
-            "fs.write 只支持 App 沙盒内路径：沙盒外的写入原语（airlift）已从宿主移除。",
-            extra: ["via": "none"])
+        do {
+            try data.write(to: URL(fileURLWithPath: path))
+            var extra: [String: Any] = ["size": data.count, "via": "direct", "resolved": path]
+            if let backupPath { extra["backup"] = backupPath }
+            return ok(extra)
+        } catch {
+            return fail("写失败（沙盒内）：\(error.localizedDescription)",
+                        extra: ["via": "direct", "resolved": path])
+        }
     }
 
     private static func fsDelete(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = args["path"] as? String, !path.isEmpty else {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty else {
             return fail("fs.delete 缺少 path")
         }
-        if isInSandbox(path) {
-            do {
-                try FileManager.default.removeItem(atPath: path)
-                return ok(["via": "direct"])
-            } catch {
-                return fail("删除失败（沙盒内）：\(error.localizedDescription)", extra: ["via": "direct"])
-            }
+        let path = resolvePath(rawPath)
+        guard isInSandbox(path) else {
+            return fail(
+                "fs.delete 只支持 App 沙盒内路径：沙盒外的删除原语（airlift）已从宿主移除。",
+                extra: ["via": "none", "resolved": path, "home": homeDir])
         }
-        // 沙盒外**没有**可用原语了（见 `fsRead`）.
-        return fail(
-            "fs.delete 只支持 App 沙盒内路径：沙盒外的删除原语（airlift）已从宿主移除。",
-            extra: ["via": "none"])
+        do {
+            try FileManager.default.removeItem(atPath: path)
+            return ok(["via": "direct", "resolved": path])
+        } catch {
+            return fail("删除失败（沙盒内）：\(error.localizedDescription)",
+                        extra: ["via": "direct", "resolved": path])
+        }
     }
 
     private static func fsExists(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = args["path"] as? String, !path.isEmpty else {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty else {
             return fail("fs.exists 缺少 path")
         }
-        if isInSandbox(path) {
-            return ok(["exists": FileManager.default.fileExists(atPath: path), "via": "direct"])
+        let path = resolvePath(rawPath)
+        guard isInSandbox(path) else {
+            return fail(
+                "fs.exists 只支持 App 沙盒内路径：沙盒外的查询原语已从宿主移除。",
+                extra: ["via": "none", "resolved": path, "home": homeDir])
         }
-        // 宿主没有沙盒外「只 stat 不搬动」的原语（airlift 已移除），如实报错.
-        return fail(
-            "fs.exists 只支持 App 沙盒内路径：沙盒外的查询原语已从宿主移除。",
-            extra: ["via": "none"])
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        var size = 0
+        if exists, let a = try? FileManager.default.attributesOfItem(atPath: path),
+           let s = a[.size] as? Int { size = s }
+        return ok(["exists": exists, "isDir": isDir.boolValue, "size": size,
+                   "via": "direct", "resolved": path])
     }
 
     private static func fsList(_ args: [String: Any]) -> (Int32, String) {
-        guard let path = args["path"] as? String, !path.isEmpty else {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty else {
             return fail("fs.list 缺少 path")
         }
+        let path = resolvePath(rawPath)
         guard isInSandbox(path) else {
             // 宿主没有沙盒外目录枚举原语，如实报错.
             return fail(
                 "fs.list 只支持 App 沙盒内路径：沙盒外的枚举原语已从宿主移除。",
-                extra: ["via": "none"])
+                extra: ["via": "none", "resolved": path, "home": homeDir])
         }
         let url = URL(fileURLWithPath: path)
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
             options: []) else {
-            return fail("列目录失败（不存在或不可读）：\(path)", extra: ["via": "direct"])
+            return fail("列目录失败（不存在或不可读）：\(path)",
+                        extra: ["via": "direct", "resolved": path])
         }
         let entries: [[String: Any]] = items.map { item in
             let values = try? item.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
@@ -475,6 +618,330 @@ enum HostCapabilityService {
             return fail("枚举已安装应用失败：\(error.localizedDescription)",
                         extra: ["via": "installation_proxy"])
         }
+    }
+
+    // MARK: - fs.hash / fs.find / fs.copy
+
+    /// `fs.hash`：在设备上算摘要，省得把整个文件传回本地再比.
+    private static func fsHash(_ args: [String: Any]) -> (Int32, String) {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty else {
+            return fail("fs.hash 缺少 path")
+        }
+        let algo = ((args["algo"] as? String) ?? "md5").lowercased()
+        let path = resolvePath(rawPath)
+        guard isInSandbox(path) else {
+            return fail("fs.hash 只支持 App 沙盒内路径",
+                        extra: ["resolved": path, "home": homeDir])
+        }
+        guard let data = FileManager.default.contents(atPath: path) else {
+            return fail("读失败（不存在或不可读）：\(path)", extra: ["resolved": path])
+        }
+        let hex: String
+        switch algo {
+        case "md5":
+            hex = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        case "sha1":
+            hex = Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        case "sha256":
+            hex = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        default:
+            return fail("algo 只支持 md5 / sha1 / sha256")
+        }
+        return ok(["algo": algo, "hex": hex, "size": data.count, "resolved": path])
+    }
+
+    /// `fs.find`：按文件名子串递归查找（不区分大小写）.
+    private static func fsFind(_ args: [String: Any]) -> (Int32, String) {
+        let needle = ((args["name"] as? String) ?? "").lowercased()
+        guard !needle.isEmpty else {
+            return fail("fs.find 缺少 name（文件名子串，不区分大小写）")
+        }
+        let root = resolvePath((args["path"] as? String) ?? "Documents")
+        guard isInSandbox(root) else {
+            return fail("fs.find 只支持 App 沙盒内路径",
+                        extra: ["resolved": root, "home": homeDir])
+        }
+        let limit = (args["limit"] as? Int) ?? 200
+        let fm = FileManager.default
+        var hits: [[String: Any]] = []
+        var truncated = false
+        if let en = fm.enumerator(atPath: root) {
+            for case let rel as String in en {
+                if hits.count >= limit { truncated = true; break }
+                guard rel.lowercased().contains(needle) else { continue }
+                let full = root + "/" + rel
+                var isDir: ObjCBool = false
+                _ = fm.fileExists(atPath: full, isDirectory: &isDir)
+                var size = 0
+                if !isDir.boolValue, let a = try? fm.attributesOfItem(atPath: full),
+                   let s = a[.size] as? Int { size = s }
+                hits.append(["path": full, "rel": rel, "isDir": isDir.boolValue, "size": size])
+            }
+        }
+        return ok(["count": hits.count, "root": root, "truncated": truncated, "hits": hits])
+    }
+
+    /// `fs.copy`：沙盒内复制（改包前先留一份原件）.
+    private static func fsCopy(_ args: [String: Any]) -> (Int32, String) {
+        guard let fromRaw = args["from"] as? String, let toRaw = args["to"] as? String,
+              !fromRaw.isEmpty, !toRaw.isEmpty else {
+            return fail("fs.copy 需要 from / to")
+        }
+        let from = resolvePath(fromRaw)
+        let to = resolvePath(toRaw)
+        guard isInSandbox(from), isInSandbox(to) else {
+            return fail("fs.copy 只支持 App 沙盒内路径", extra: ["from": from, "to": to])
+        }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: from) else {
+            return fail("源不存在：\(from)")
+        }
+        try? fm.createDirectory(atPath: (to as NSString).deletingLastPathComponent,
+                                withIntermediateDirectories: true)
+        if fm.fileExists(atPath: to) {
+            guard (args["overwrite"] as? Bool) == true else {
+                return fail("目标已存在（要覆盖请传 overwrite:true）：\(to)")
+            }
+            try? fm.removeItem(atPath: to)
+        }
+        do {
+            try fm.copyItem(atPath: from, toPath: to)
+            var size = 0
+            if let a = try? fm.attributesOfItem(atPath: to), let s = a[.size] as? Int { size = s }
+            return ok(["from": from, "to": to, "size": size])
+        } catch {
+            return fail("复制失败：\(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - pkg.*（IPA / ZIP 内条目读取）
+
+    /// ZIP 小端读整（越界返回 0，不崩）
+    private static func le16(_ d: Data, _ o: Int) -> Int {
+        guard o >= 0, o + 2 <= d.count else { return 0 }
+        return Int(d[o]) | Int(d[o + 1]) << 8
+    }
+
+    private static func le32(_ d: Data, _ o: Int) -> UInt64 {
+        guard o >= 0, o + 4 <= d.count else { return 0 }
+        return UInt64(d[o]) | UInt64(d[o + 1]) << 8
+            | UInt64(d[o + 2]) << 16 | UInt64(d[o + 3]) << 24
+    }
+
+    /// 解析 ZIP 的中央目录，返回条目表（含 `localHeaderOffset`）.
+    ///
+    /// **只解析不解压** —— 配合 `fs.read` 的 offset/length，就能把 IPA 里任意
+    /// 一个文件（如 `SC_Info/Via.sinf`，几 KB）单独取出来，
+    /// 不必把 3.5MB 整包传回本地.
+    private static func zipEntries(path: String) -> ([[String: Any]]?, String) {
+        guard let fh = FileHandle(forReadingAtPath: path) else {
+            return (nil, "打开失败：\(path)")
+        }
+        defer { try? fh.close() }
+        let total = (try? fh.seekToEnd()) ?? 0
+        guard total > 22 else { return (nil, "文件太小，不是 zip") }
+
+        let tailLen = Int(min(total, 70_000))
+        try? fh.seek(toOffset: total - UInt64(tailLen))
+        guard let tail = try? fh.read(upToCount: tailLen), tail.count >= 22 else {
+            return (nil, "读尾部失败")
+        }
+        var eocd = -1
+        var i = tail.count - 22
+        while i >= 0 {
+            if tail[i] == 0x50, tail[i + 1] == 0x4b, tail[i + 2] == 0x05, tail[i + 3] == 0x06 {
+                eocd = i
+                break
+            }
+            i -= 1
+        }
+        guard eocd >= 0 else { return (nil, "找不到 EOCD，不是有效 zip") }
+
+        var entryCount = le16(tail, eocd + 10)
+        var cdSize = le32(tail, eocd + 12)
+        var cdOffset = le32(tail, eocd + 16)
+
+        // zip64 兜底：上面三个字段全 FFFF/FFFFFFFF 时去 zip64 EOCD locator 取真值
+        if entryCount == 0xFFFF || cdSize == 0xFFFF_FFFF || cdOffset == 0xFFFF_FFFF {
+            let loc = eocd - 20
+            if loc >= 0, tail[loc] == 0x50, tail[loc + 1] == 0x4b,
+               tail[loc + 2] == 0x06, tail[loc + 3] == 0x07 {
+                try? fh.seek(toOffset: le32(tail, loc + 8))
+                if let z = try? fh.read(upToCount: 56), z.count >= 56 {
+                    entryCount = Int(le32(z, 32))
+                    cdSize = le32(z, 40)
+                    cdOffset = le32(z, 48)
+                }
+            }
+        }
+        guard cdOffset + cdSize <= total else { return (nil, "中央目录越界") }
+        try? fh.seek(toOffset: cdOffset)
+        guard let cd = try? fh.read(upToCount: Int(cdSize)) else { return (nil, "读中央目录失败") }
+
+        var out: [[String: Any]] = []
+        var p = 0
+        while p + 46 <= cd.count && (entryCount == 0 || out.count < entryCount) {
+            guard cd[p] == 0x50, cd[p + 1] == 0x4b,
+                  cd[p + 2] == 0x01, cd[p + 3] == 0x02 else { break }
+            let method = le16(cd, p + 10)
+            var csize = le32(cd, p + 20)
+            var usize = le32(cd, p + 24)
+            let nameLen = le16(cd, p + 28)
+            let extraLen = le16(cd, p + 30)
+            let commentLen = le16(cd, p + 32)
+            var lho = le32(cd, p + 42)
+            let nameEnd = min(p + 46 + nameLen, cd.count)
+            let name = String(data: cd.subdata(in: (p + 46)..<nameEnd), encoding: .utf8) ?? ""
+
+            // zip64 扩展字段（id 0x0001）：顺序固定 usize / csize / lho
+            var e = p + 46 + nameLen
+            let exEnd = min(e + extraLen, cd.count)
+            while e + 4 <= exEnd {
+                let hid = le16(cd, e)
+                let hsz = le16(cd, e + 2)
+                if hid == 0x0001 {
+                    var q = e + 4
+                    if usize == 0xFFFF_FFFF, q + 8 <= exEnd { usize = le32(cd, q); q += 8 }
+                    if csize == 0xFFFF_FFFF, q + 8 <= exEnd { csize = le32(cd, q); q += 8 }
+                    if lho == 0xFFFF_FFFF, q + 8 <= exEnd { lho = le32(cd, q); q += 8 }
+                    break
+                }
+                e += 4 + hsz
+            }
+            out.append([
+                "name": name,
+                "method": method,                    // 0=stored 8=deflate
+                "compressedSize": Int(csize),
+                "size": Int(usize),
+                "localHeaderOffset": Int(lho),
+            ])
+            p += 46 + nameLen + extraLen + commentLen
+        }
+        return (out, "")
+    }
+
+    /// `pkg.list`：列 IPA / ZIP 内条目（可 `match` 过滤）.
+    private static func pkgList(_ args: [String: Any]) -> (Int32, String) {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty else {
+            return fail("pkg.list 缺少 path")
+        }
+        let path = resolvePath(rawPath)
+        guard isInSandbox(path) else {
+            return fail("pkg.list 只支持 App 沙盒内路径",
+                        extra: ["resolved": path, "home": homeDir])
+        }
+        let (entries, err) = zipEntries(path: path)
+        guard let entries else {
+            return fail("解析 zip 失败：\(err)", extra: ["resolved": path])
+        }
+        let filter = ((args["match"] as? String) ?? "").lowercased()
+        let filtered = filter.isEmpty ? entries
+            : entries.filter { (($0["name"] as? String) ?? "").lowercased().contains(filter) }
+        // 默认上限 500 条：大 IPA 有几千个条目，全吐出来会把 SSH 通道撑爆.
+        // 要看全部就显式传 limit:0，或先用 match 过滤.
+        let limit = (args["limit"] as? Int) ?? 500
+        let shown = limit > 0 ? Array(filtered.prefix(limit)) : filtered
+        return ok([
+            "count": filtered.count,
+            "totalEntries": entries.count,
+            "returned": shown.count,
+            "truncated": shown.count < filtered.count,
+            "entries": shown,
+            "resolved": path,
+        ])
+    }
+
+    /// `pkg.read`：读 IPA / ZIP 内单个条目（stored 直读 / deflate 解压）.
+    private static func pkgRead(_ args: [String: Any]) -> (Int32, String) {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty,
+              let want = args["entry"] as? String, !want.isEmpty else {
+            return fail("pkg.read 需要 path + entry")
+        }
+        let path = resolvePath(rawPath)
+        guard isInSandbox(path) else {
+            return fail("pkg.read 只支持 App 沙盒内路径",
+                        extra: ["resolved": path, "home": homeDir])
+        }
+        let (entries, err) = zipEntries(path: path)
+        guard let entries else {
+            return fail("解析 zip 失败：\(err)", extra: ["resolved": path])
+        }
+
+        // 精确匹配 → 路径后缀匹配（IPA 内都是 Payload/X.app/... 长路径）
+        var hit = entries.first { ($0["name"] as? String) == want }
+        if hit == nil {
+            hit = entries.first { (($0["name"] as? String) ?? "").hasSuffix("/" + want) }
+        }
+        if hit == nil {
+            hit = entries.first {
+                (($0["name"] as? String) ?? "").lowercased().hasSuffix(want.lowercased())
+            }
+        }
+        guard let entry = hit,
+              let name = entry["name"] as? String,
+              let lho = entry["localHeaderOffset"] as? Int,
+              let method = entry["method"] as? Int,
+              let csize = entry["compressedSize"] as? Int,
+              let usize = entry["size"] as? Int else {
+            return fail("包内没有这个条目：\(want)",
+                        extra: ["resolved": path, "totalEntries": entries.count])
+        }
+
+        guard let fh = FileHandle(forReadingAtPath: path) else { return fail("打开失败：\(path)") }
+        defer { try? fh.close() }
+        // 本地头 30 字节固定 + 文件名 + 扩展字段
+        try? fh.seek(toOffset: UInt64(lho))
+        guard let lh = try? fh.read(upToCount: 30), lh.count >= 30 else {
+            return fail("读本地头失败", extra: ["entry": name])
+        }
+        let dataStart = UInt64(lho + 30 + le16(lh, 26) + le16(lh, 28))
+        try? fh.seek(toOffset: dataStart)
+        guard let raw = try? fh.read(upToCount: csize) else {
+            return fail("读条目数据失败", extra: ["entry": name])
+        }
+
+        let out: Data
+        if method == 0 {
+            out = raw
+        } else if method == 8 {
+            guard let inflated = inflateRaw(raw, expected: usize) else {
+                return fail("deflate 解压失败",
+                            extra: ["entry": name, "method": method, "compressedSize": csize])
+            }
+            out = inflated
+        } else {
+            return fail("不支持的压缩方式 method=\(method)", extra: ["entry": name])
+        }
+
+        let encoding = (args["encoding"] as? String) ?? "base64"
+        guard let text = encode(out, encoding: encoding) else {
+            return fail("按 \(encoding) 编码失败", extra: ["size": out.count])
+        }
+        return ok([
+            "entry": name,
+            "method": method,
+            "size": out.count,
+            "declaredSize": usize,
+            "data": text,
+            "encoding": encoding,
+            "resolved": path,
+        ])
+    }
+
+    /// 解 ZIP 的 method 8（raw deflate）.
+    /// Apple 的 `COMPRESSION_ZLIB` 吃的就是 raw deflate（无 zlib 头），与 ZIP 一致.
+    private static func inflateRaw(_ src: Data, expected: Int) -> Data? {
+        let cap = max(expected, 64)
+        var dst = Data(count: cap)
+        let n = dst.withUnsafeMutableBytes { (d: UnsafeMutableRawBufferPointer) -> Int in
+            src.withUnsafeBytes { (s: UnsafeRawBufferPointer) -> Int in
+                guard let dBase = d.bindMemory(to: UInt8.self).baseAddress,
+                      let sBase = s.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(dBase, cap, sBase, src.count, nil, COMPRESSION_ZLIB)
+            }
+        }
+        guard n > 0 else { return nil }
+        return dst.prefix(n)
     }
 
     // MARK: - proc.*
