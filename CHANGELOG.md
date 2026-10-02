@@ -1,8 +1,39 @@
 # Changelog
 
-## [0.3.554] - 2026-10-02
+## [0.3.555] - 2026-10-02
 
 > 这一版全部结论来自**真机抓包**（iPhone 11 / iOS 26.0.1 / USB pcapd），不是推测。
+
+### 修复：下架搜索搜不到 —— `deviceType` 一直在发 `iPad`
+
+`perform(path:method:params:iPad:)` 的签名是 `iPad: Bool = true`，
+而**四个调用点没有一个传这个参数** —— 于是所有 NB 请求都发 `"deviceType":"iPad"`。
+
+真机抓包显示 NB 官方客户端发的是 `"deviceType":"iPhone"` + `"productType":"iPhone12,1"`。
+**下架库是按设备类型分的**，拿 iPad 身份去查 iPhone 的下架库，命中数自然是 0 ——
+这就是「下架应用怎么搜都搜不到」的根因，与区域选择无关。
+
+```swift
+// 改前：默认 true，调用方全都不传 → 一律 iPad
+iPad: Bool = true
+// 改后：默认按设备判定，调用方无需关心
+iPad: Bool? = nil
+let isPad = iPad ?? (UIDevice.current.userInterfaceIdiom == .pad)
+```
+
+### 修复：公共参数与真机逐字段对齐（三处类型/取值不符）
+
+| 字段 | 改前 | 真机值 |
+|---|---|---|
+| `mainEmbedded` | `0`（整数） | `false`（布尔） |
+| `phoneName` | `UIDevice.current.name`（随用户改设备名而变） | 固定字面量 `"iPhone"` |
+| `productType` 兜底 | 写死 `"iPhone12,1"`（抓包那台机的值当常量） | 按设备族兜底 |
+| `recordDownload.isPad` | 写死 `false` | 按设备判定（与 `deviceType` 同源，别自相矛盾） |
+
+### 界面：说明下架库不分区域
+
+实测 NB 的下架搜索请求里**没有任何区域键**，下架库是全量、不分区域的。
+所以上方区域选择在下架态下不生效 —— 不说明的话用户会以为是「美区搜不到」，反复切区域白试。
 
 ### 修复：`no-udid`「本机设备身份未就绪」—— lockdown 键名拼错
 
@@ -14,14 +45,9 @@
 为什么藏了这么久：`isUsable` 只看 `serialNumber`。序列号读得到 → 快照被写进缓存
 → `udid` 是 nil 也没人发现。
 
-两处修：
-
 ```swift
-// ① 键名改对
 s.udid = root["UniqueDeviceID"] as? String        // 原：UniqueDeviceIdentifier
-
-// ② 判据加严，别让「序列号够用」掩盖下游真正要的字段
-var isUsable: Bool {
+var isUsable: Bool {                              // 判据加严
     !(serialNumber ?? "").isEmpty && !(udid ?? "").isEmpty
 }
 ```

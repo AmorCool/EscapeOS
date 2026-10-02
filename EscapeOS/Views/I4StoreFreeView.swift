@@ -340,7 +340,11 @@ struct I4StoreFreeView: View {
             // 下架库只能搜，没有榜单，所以这里如实说明，把入口指到搜索框。
             if appStateFilter == .offSale {
                 Section {
-                    Text("下架应用没有榜单，请用上方搜索框按名字找（下架库来自 NB）")
+                    // ★ v0.3.554：实测 NB 的下架搜索请求里**没有任何区域键**，
+                    // 下架库是全量、不分区域的 —— 所以上方的区域选择在下架态下不生效。
+                    // 不说明的话，用户会以为是「美区搜不到」，反复切区域白试。
+                    Text("下架应用没有榜单，请用上方搜索框按名字找"
+                         + "（下架库来自 NB，不分区域，上方区域选择在下架态下不生效）")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             } else if nbRankItems.isEmpty {

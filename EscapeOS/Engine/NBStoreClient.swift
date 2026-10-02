@@ -301,11 +301,13 @@ enum NBStoreClient {
             throw StoreError.server(code: "no-udid",
                                     message: "本机设备身份未就绪，请稍后重试")
         }
-        // 实测抓包值（2026-10-01）：客户端 3.9.1 / build 1。
+        // 实测抓包值（2026-10-01 / 10-02）：客户端 3.9.1 / build 1。
         // 与请求体里的 appVersion 是同一个值，服务端会校验，勿随意改小。
         var p: [String: Any] = [
             "mainBundleID": "com.nbmaster.app",
-            "mainEmbedded": 0,
+            // ★ v0.3.554：真机发的是**布尔** `false`，原来写的是整数 `0`。
+            // 逐字段对齐真机抓包，别让类型差异成为服务端判参数不合法的理由。
+            "mainEmbedded": false,
             "apiVersion": "1.0",
             "version": "3.9.1",
             "build": "1",
@@ -313,16 +315,18 @@ enum NBStoreClient {
             "osVersion": UIDevice.current.systemVersion,
             "udid": realUDID,
             "lang": "zh-cn",
-            // 反编译里这几项在请求体中是「有值就用真机值」；
-            // `UIDevice.current.name` 在 iOS 16+ 未授权时会回落到 "iPhone"，
-            // 所以这里不需要额外的空值保护。
-            "phoneName": UIDevice.current.name,
+            // ★ v0.3.554：真机两次抓包都是字面量 `"iPhone"`（不是设备名「XX的 iPhone」）。
+            // 我们原来发 `UIDevice.current.name`，取值随用户改设备名而变 ——
+            // 这属于**身份字段**，客户端自己发的是固定字面量，跟着对齐。
+            "phoneName": "iPhone",
+            // 机型标识读真机 `hw.machine`（如 `iPhone12,1`）；读不到才兜底。
             "productType": deviceModelIdentifier(),
             "deviceType": iPad ? "iPad" : "iPhone",
         ]
-        // 机型标识再兜一次：真机取不到时保持与反编译样本一致的形状。
+        // 机型标识兜底：`hw.machine` 拿不到时用 `UIDevice` 的机型族，**不再写死 `iPhone12,1`**
+        // —— 那是抓包那台设备的值，当常量会让 iPad 请求也报 iPhone 机型。
         if (p["productType"] as? String)?.isEmpty != false {
-            p["productType"] = "iPhone12,1"
+            p["productType"] = iPad ? "iPad" : "iPhone"
         }
         return p
     }
@@ -395,14 +399,27 @@ enum NBStoreClient {
     /// 发一次请求：加密请求体 → POST → 解密响应。
     ///
     /// `path` 是 `pav`（如 `/nb/appstore-plus`）；为空时服务端回落 `/nb/app`。
+    ///
+    /// ## ★ v0.3.554 修：`iPad` 默认值从 `true` 改成**自动判定**
+    ///
+    /// 原来 `iPad: Bool = true`，而四个调用点**没有一个传这个参数** ——
+    /// 于是所有 NB 请求都发 `"deviceType":"iPad"`。
+    /// 真机抓包（iPhone 11 / iOS 26.0.1）显示 NB 官方客户端发的是
+    /// `"deviceType":"iPhone"` + `"productType":"iPhone12,1"`。
+    ///
+    /// 后果：**下架库是按设备类型分的**，服务端拿 iPad 身份去 iPhone 的下架库里查，
+    /// 命中数为 0 —— 表现就是「下架应用怎么搜都搜不到」。
+    ///
+    /// 现在默认走 `UIDevice` 判定（iPad 才发 iPad），调用方无需再传。
     private static func perform(path: String,
                                 method: String,
                                 params: [String: Any],
-                                iPad: Bool = true) async throws -> [String: Any] {
+                                iPad: Bool? = nil) async throws -> [String: Any] {
+        let isPad = iPad ?? (UIDevice.current.userInterfaceIdiom == .pad)
         let url = path.isEmpty ? (host + "/nb/app") : (host + path)
         guard let u = URL(string: url) else { throw StoreError.badURL }
 
-        var merged = try pubParams(iPad: iPad)
+        var merged = try pubParams(iPad: isPad)
         for (k, v) in params { merged[k] = v }
         let body: [String: Any] = ["method": "nb9527_" + method, "params": merged]
 
@@ -531,7 +548,9 @@ enum NBStoreClient {
                           method: "recordDownload",
                           params: ["appID": appID, "appExtID": appExtID,
                                    "bundleId": bundleId, "name": name, "version": version,
-                                   "isPad": false,
+                                   // ★ v0.3.554：原来是写死的 `false`，改成按设备判定 ——
+                                   // 与 `deviceType` 同源，别让同一发请求里两个字段互相矛盾。
+                                   "isPad": UIDevice.current.userInterfaceIdiom == .pad,
                                    "cacheKey": "appHistoryVersion_\(appID)_\(appExtID)",
                                    "cacheOriginalKey": "appHistoryVersionOriginal_\(appID)_\(appExtID)"])
     }
