@@ -243,31 +243,31 @@ enum NBStoreClient {
     /// ② `LocalDeviceIdentity.load()`（冷缓存，同步读一次、建隧道秒级 —— 值得）
     /// ③ 兜底仍留一份稳定的伪值 —— **但要留下日志**，因为这份包大概率装不上，
     ///    不能静默降级（静默降级是上一轮排查绕远的根源）。
-    private static var udid: String {
+    /// **只有真 UDID 才允许取包**（v0.3.550 收紧）。
+    ///
+    /// 为什么把兜底伪值这条删掉：真机日志（2026-10-02）实证伪值仍在被用 ——
+    /// ```
+    /// [11:45:04] ○ 本次请求用历史伪 UDID（非本机真值）：c497e4c8…
+    ///            —— 取回的 sinf 大概率装不上/装后闪退
+    /// ```
+    /// 后果是**用户白下一个 100MB+ 的包**，装上去还闪退，而且我们自己的日志
+    /// 早就写明了「大概率装不上」。既然已经知道它必坏，就不该再发这一发请求。
+    ///
+    /// 伪值本身也不再生成/复用：它只会让包看起来「有 sinf」，
+    /// 把「缺 sinf」这个明确错误伪饰成「装后闪退」这种难查的形态。
+    ///
+    /// 返回 `nil` 时调用方直接报错，提示先让设备身份就绪（隧道起来）再重试。
+    private static var udid: String? {
         if let real = LocalDeviceIdentity.cachedSnapshot()?.udid, !real.isEmpty {
             return real
         }
-        // 冷缓存 → 同步读一次真 UDID。这一步会建 RSD 隧道（秒级），
-        // 但：① NB 取包本来就要求用户点一下「获取」，不是下载启动的关键路径；
-        //     ② 伪 UDID 会直接导致「装了闪退」，宁可慢一次也不许再假。
-        // 读不到（隧道没起来）才落到下面的伪值兜底，并留下日志。
         if let real = LocalDeviceIdentity.load().udid, !real.isEmpty {
             return real
         }
-        let key = "nb.pseudoUDID"
-        if let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty {
-            LoginLogger.shared.log("\(logTag) ○ 本次请求用历史伪 UDID（非本机真值）：\(saved)"
-                                   + " —— 取回的 sinf 大概率装不上/装后闪退",
-                                   category: .appStore)
-            return saved
-        }
-        let digits = "0123456789abcdef"
-        let v = String((0..<40).map { _ in digits.randomElement() ?? "0" })
-        UserDefaults.standard.set(v, forKey: key)
-        LoginLogger.shared.log("\(logTag) ○ 本机真 UDID 不可用，改用伪 UDID：\(v)"
-                               + " —— 取回的 sinf 与本机不匹配，装了会闪退",
+        LoginLogger.shared.log("\(logTag) ✕ 拿不到本机真 UDID（RSD 隧道未就绪）—— 不发这一发，"
+                               + "因为伪 UDID 换回的 sinf 必然与本机不匹配",
                                category: .appStore)
-        return v
+        return nil
     }
 
     /// 公共参数 —— 就是 NB 的"免登录"身份，没有 token / Authorization / uid。
@@ -288,7 +288,15 @@ enum NBStoreClient {
     ///
     /// 改为在**构造后再赋值**：先建好不发重复键的基底，缺省值用下标写回，
     /// 这样即使将来再加字段也不会重复触发这个坑。
-    private static func pubParams(iPad: Bool) -> [String: Any] {
+    private static func pubParams(iPad: Bool) throws -> [String: Any] {
+        // v0.3.550：**没有真 UDID 就不发这一发**。
+        //
+        // 伪 UDID 换回的 sinf 必然与本机不匹配 —— 这一发跑到底只会让用户
+        // 白下一个 100MB+ 的包，装上去还闪退。已知必坏就不要发。
+        guard let realUDID = udid else {
+            throw StoreError.server(code: "no-udid",
+                                    message: "本机设备身份未就绪，请稍后重试")
+        }
         // 实测抓包值（2026-10-01）：客户端 3.9.1 / build 1。
         // 与请求体里的 appVersion 是同一个值，服务端会校验，勿随意改小。
         var p: [String: Any] = [
@@ -299,7 +307,7 @@ enum NBStoreClient {
             "build": "1",
             "appVersion": "3.9.1",
             "osVersion": UIDevice.current.systemVersion,
-            "udid": udid,
+            "udid": realUDID,
             "lang": "zh-cn",
             // 反编译里这几项在请求体中是「有值就用真机值」；
             // `UIDevice.current.name` 在 iOS 16+ 未授权时会回落到 "iPhone"，
@@ -390,7 +398,7 @@ enum NBStoreClient {
         let url = path.isEmpty ? (host + "/nb/app") : (host + path)
         guard let u = URL(string: url) else { throw StoreError.badURL }
 
-        var merged = pubParams(iPad: iPad)
+        var merged = try pubParams(iPad: iPad)
         for (k, v) in params { merged[k] = v }
         let body: [String: Any] = ["method": "nb9527_" + method, "params": merged]
 
@@ -495,7 +503,7 @@ enum NBStoreClient {
         }
         // v0.3.545：拿不到 sinf 不许静默 —— 加密包缺 sinf 装不上，这条日志是唯一的线索
         if sinf == nil {
-            LoginLogger.shared.log("\(logTag) ○ 直链已取到，但服务端没回 sinf（udid=\(udid)）"
+            LoginLogger.shared.log("\(logTag) ○ 直链已取到，但服务端没回 sinf（udid=\(udid ?? "?")）"
                                    + " —— 若包是加密的，安装会报「缺少 SC_Info/*.sinf」",
                                    category: .appStore)
         }

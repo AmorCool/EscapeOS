@@ -1,5 +1,89 @@
 # Changelog
 
+## [0.3.551] - 2026-10-02
+
+> **连上设备抓到了真机日志，两个「NB 源装不上」的真因一次定案。**
+> 都不是猜的 —— 下面每条都有日志原文。
+
+### ★★★ 真因一：ZIP 写入器**不截断文件** → 包被写坏
+
+真机日志（2026-10-02，用户点 NB 源获取 ChatGPT）：
+
+```
+[11:46:32] sinf 注入：包内已有 Payload/ChatGPT.app/SC_Info/ChatGPT.sinf（非本机签发），
+           先摘除旧条目再写入服务端下发的那份
+[11:46:32] sinf 注入：已把 sinf 写进包内：Payload/ChatGPT.app/SC_Info/ChatGPT.sinf（1608 字节）
+[11:46:32] [检测] com.openai.chat 1.2026.266 · FairPlay 加密（cryptid=1，cryptsize=131072）
+[11:46:32] [安装] 加密包：携带 ApplicationSINF（1608 字节） 交给 installd 解密安装
+[11:46:43] 安装失败 ChatGPT-x.ipa：
+           UnknownErrorType("PackageExtractionFailed (Could not extract archive)")
+```
+
+**「摘除旧条目再写入」这条路一跑，包就解不开了。**
+
+**根因**：`ApplePackageArchive.flushPendingAdds()` 从**旧中央目录的起点**开始覆写，
+但**从头到尾没有一次截断**（全文件 grep `truncate` = 0 处）：
+
+```
+centralDirOffset ─┬─ 旧中央目录 ─┬─ 旧 EOCD
+                  └─ 新条目 + 新中央目录 + 新 EOCD（长度与旧的**不同**）
+```
+
+「摘掉一条、加回一条」之后新内容**比旧的短**，文件尾部就残留了**旧 EOCD 的一部分**。
+解压器找 EOCD 是**从文件末尾往回扫**，先撞上那个残留的假 EOCD ——
+它指向的中央目录区已被新内容覆盖，结构对不上 → `Could not extract archive`.
+
+**这也解释了为什么它是「部分失败」**：
+- 包内**原本没有** `SC_Info/*.sinf`（走 `addEntry`、无 `removeEntry`）→
+  新内容**更长**，旧尾巴被完整盖住 → **安装成功**（日志里 Surge / Loon 就是这情况）；
+- 包内**已有** sinf（走「摘除 + 追加」）→ 新内容**更短** → 残留旧 EOCD → **解压失败**。
+
+§ 修法（两处）：
+1. `fileHandle.write(eocd)` 之后加 **`try fileHandle.truncate(atOffset: fileHandle.offsetInFile)`** ——
+   按当前句柄位置截断，正好落在新 EOCD 末尾，残留字节一律砍掉；
+2. sinf 改用 **`.none`（存储，method=0）** 写入，**不再走 deflate**。
+   我们的 deflate 是 SWCompression 里那个**自陈为 "a band-aid solution"** 的静态
+   Huffman 实现（只生成单个 block、超 65535 字节还退化）—— 为 1.5KB 的 sinf
+   冒这个险不值。存储方式是 ZIP 标准做法，任何解压器都认。
+
+### ★★★ 真因二：**在用伪 UDID 取包** → sinf 必然不是本机的
+
+同一次会话的日志：
+
+```
+[11:45:04] ○ 本次请求用历史伪 UDID（非本机真值）：c497e4c842060e786661fe3cb94957cac99f578c
+           —— 取回的 sinf 大概率装不上/装后闪退
+```
+
+自己的日志已经写明「大概率装不上」，但这发请求**还是发出去了** ——
+结果就是用户白下一个 **100MB+** 的包（ChatGPT 102.5MB），装上去还闪退。
+
+**根因**：`NBStoreClient.udid` 有三级兜底，第三级会**生成并复用**一个随机 40 位 hex 当 UDID。
+而 NB 服务端拿这个 UDID 去 Apple 换 FairPlay 授权（sinf）——
+伪 UDID 换回来的那份**与本机硬件不匹配**，`installd` 解出来的 `__TEXT` 是垃圾。
+
+§ 修法：**把伪值兜底整条删掉**。
+- `udid` 改为 `String?`，拿不到真值返回 `nil`；
+- `pubParams(iPad:)` 改为 `throws`，`nil` 时直接抛
+  「本机设备身份未就绪，请稍后重试」—— **已知必坏就不发这一发**；
+- 伪值也不再生成：它只会把「缺 sinf」这个**明确**错误伪饰成「装后闪退」这种**难查**的形态。
+
+> 这一条直接改掉了之前的设计取向：以前是「宁可用假的也别失败」，
+> 现在是「宁可明确失败也别用假的」—— 因为假的失败形态（装后闪退）排查成本高得多。
+
+### 订正：`ipaID` 该传什么（实测矩阵）
+
+直连服务端多轮对照（同时验证了真机上出现的 `code=7`）：
+
+| `ipaID` 传什么 | 结果 |
+|---|---|
+| NB 行号 `id`（15993 / 58 / 701） | `code=7 msg="未获取到数据"` |
+| `appStoreID`（6744045754 / …） | `code=7 msg="未获取c密钥"` |
+
+⇒ **`ipaID` 只能是 App Store 数字 ID**（NB 行号不行）；
+但只传它不够 —— 还缺一个服务端下发的设备侧凭据（不在客户端本地字符串表里），
+需要真机抓包补齐。详见逆向报告第十七章。
+
 ## [0.3.550] - 2026-10-02
 
 > **NB 源「缺 sinf」正式排除；下架取包定案到「缺设备密钥」这一步。**

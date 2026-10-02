@@ -951,7 +951,13 @@ private enum PackageSINFWriter {
 
             try archive.addEntry(with: target,
                                  uncompressedSize: Int64(sinf.count),
-                                 compressionMethod: .deflate,
+                                 // v0.3.550：**用存储方式（method=0），不压缩**。
+                                 // 两个理由：① sinf 只有 1.5KB，压不压没差别；
+                                 // ② 我们的 deflate 是 SWCompression 里那个自陈
+                                 // 「a band-aid solution」的静态 Huffman 实现，
+                                 // 只生成单个 block —— 没必要为一个 1.5KB 的文件冒这个险。
+                                 // 存储方式是 ZIP 标准做法，任何解压器都认。
+                                 compressionMethod: ZipCompressionMethod.none,
                                  provider: { (position: Int64, size: Int) -> Data in
                 let start = sinf.startIndex.advanced(by: Int(position))
                 return sinf.subdata(in: start ..< (start + size))

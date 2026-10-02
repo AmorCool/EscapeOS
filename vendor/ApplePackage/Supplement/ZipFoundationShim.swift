@@ -48,7 +48,7 @@ public final class ApplePackageArchive {
     private(set) public var entries: [ZipEntryRef] = []
     /// 中央目录在文件中的起始偏移（追加新条目时从这里截断）。
     private var centralDirOffset: UInt64 = 0
-    private var pendingAdds: [(path: String, data: Data)] = []
+    private var pendingAdds: [(path: String, data: Data, method: ZipCompressionMethod)] = []
 
     public init(url: URL, accessMode: ZipAccessMode) throws {
         self.url = url
@@ -118,7 +118,17 @@ public final class ApplePackageArchive {
 
     // MARK: - 追加
 
-    /// 追加一个条目（deflate 压缩）。真正的写入在 `flush()` 时统一完成。
+    /// 追加一个条目。真正的写入在 `flush()` 时统一完成。
+    ///
+    /// ★ v0.3.550：**支持 `compressionMethod: .none`（存储）**。
+    ///
+    /// 之前这里只有一条 deflate 路，写死 `method = 8` —— 但我们这个压缩器
+    /// 是 SWCompression 里那个**自陈为 "a band-aid solution"** 的静态 Huffman 实现
+    /// （`Deflate+Compress.swift` 注释原话），只生成**单个** block，超过 65535 字节
+    /// 还会退化。sinf 这种小文件完全没必要冒这个险：**存储方式（method=0）**
+    /// 在 ZIP 里是合法的，任何解压器都认，而且省掉一次编码。
+    ///
+    /// 需要压缩的调用点（如注入大文件）仍可传 `.deflate`，行为不变。
     public func addEntry(
         with path: String,
         type: ZipEntryType = .file,
@@ -134,7 +144,7 @@ public final class ApplePackageArchive {
             data.append(provider(position, size))
             position += Int64(size)
         }
-        pendingAdds.append((path: path, data: data))
+        pendingAdds.append((path: path, data: data, method: compressionMethod))
     }
 
     public enum ZipEntryType { case file, directory, symlink }
@@ -158,23 +168,26 @@ public final class ApplePackageArchive {
         for add in adds {
             let nameData = Data(add.path.utf8)
             let crc = CRC32.data(add.data)
-            let compressed = Deflate.compress(data: add.data)
+            // v0.3.550：按调用方指定的方式写（`.none` = 存储，method 0；`.deflate` = 8）。
+            let useDeflate = (add.method == .deflate)
+            let payload = useDeflate ? Deflate.compress(data: add.data) : add.data
+            let methodCode: UInt16 = useDeflate ? 8 : 0
             let localOffset = UInt64(centralDirOffset) + UInt64(output.count)
 
             var local = Data()
             local.append(uint32Le(0x04034B50))
             local.append(uint16Le(20))          // version needed
             local.append(uint16Le(0))           // flags
-            local.append(uint16Le(8))           // method: deflate
+            local.append(uint16Le(methodCode))  // method
             local.append(uint16Le(0))           // mod time
             local.append(uint16Le(0))           // mod date
             local.append(uint32Le(crc))
-            local.append(uint32Le(UInt32(compressed.count)))
+            local.append(uint32Le(UInt32(payload.count)))
             local.append(uint32Le(UInt32(add.data.count)))
             local.append(uint16Le(UInt16(nameData.count)))
             local.append(uint16Le(0))           // extra length
             local.append(nameData)
-            local.append(compressed)
+            local.append(payload)
             output.append(local)
 
             // 中央目录记录
@@ -183,11 +196,11 @@ public final class ApplePackageArchive {
             central.append(uint16Le(20))        // version made by
             central.append(uint16Le(20))        // version needed
             central.append(uint16Le(0))         // flags
-            central.append(uint16Le(8))         // method
+            central.append(uint16Le(methodCode))// method
             central.append(uint16Le(0))         // time
             central.append(uint16Le(0))         // date
             central.append(uint32Le(crc))
-            central.append(uint32Le(UInt32(compressed.count)))
+            central.append(uint32Le(UInt32(payload.count)))
             central.append(uint32Le(UInt32(add.data.count)))
             central.append(uint16Le(UInt16(nameData.count)))
             central.append(uint16Le(0))         // extra
@@ -199,10 +212,10 @@ public final class ApplePackageArchive {
             central.append(nameData)
             newEntries.append(ZipEntryRef(path: add.path,
                                           localHeaderOffset: UInt32(localOffset),
-                                          compressedSize: UInt32(compressed.count),
+                                          compressedSize: UInt32(payload.count),
                                           uncompressedSize: UInt32(add.data.count),
                                           crc32: crc,
-                                          compressionMethod: 8,
+                                          compressionMethod: methodCode,
                                           centralDirRecord: central))
         }
 
@@ -224,6 +237,25 @@ public final class ApplePackageArchive {
         eocd.append(uint32Le(UInt32(centralDirOffset + UInt64(output.count))))
         eocd.append(uint16Le(0))            // comment length
         fileHandle.write(eocd)
+
+        // ★ v0.3.550：**必须截断**，否则包会被写坏（真机实证）。
+        //
+        // 我们是从**旧中央目录的起点**开始覆写的：
+        //     centralDirOffset ─┬─ 旧中央目录 ─┬─ 旧 EOCD
+        //                       └─ 新条目 + 新中央目录 + 新 EOCD（长度通常与旧的不同）
+        //
+        // 若新写的总长 **比旧的短**（删掉一个条目又只加一个更小的，就可能短），
+        // 文件尾部会残留**旧 EOCD 的一部分字节**。解压器找 EOCD 是**从文件末尾往回扫**，
+        // 于是先撞上那个残留的假 EOCD —— 它指向的中央目录区已经被新内容覆盖，
+        // 结构对不上 → 解压直接失败。
+        //
+        // 真机上的表现（2026-10-02 日志）：
+        //   [下载中心] 安装失败 ChatGPT-x.ipa：
+        //     UnknownErrorType("PackageExtractionFailed (Could not extract archive)")
+        // 就是这条 —— 下载好的 IPA 在写入 sinf 之后解不开了。
+        //
+        // `truncate(atOffset:)` 按当前句柄位置截断，正好落在新 EOCD 的末尾。
+        try fileHandle.truncate(atOffset: fileHandle.offsetInFile)
         try fileHandle.synchronize()
 
         entries.append(contentsOf: newEntries)
