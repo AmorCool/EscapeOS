@@ -165,7 +165,11 @@ public final class ApplePackageArchive {
         let tmpURL = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).rewrite-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: tmpURL.path, contents: nil)
-        guard let out = FileHandle(forWritingTo: tmpURL) else {
+        // 新版 SDK 里 `FileHandle(forWritingTo:)` 是 throwing 且非 Optional
+        let out: FileHandle
+        do {
+            out = try FileHandle(forWritingTo: tmpURL)
+        } catch {
             throw ApplePackageZipError.cannotOpen(tmpURL.path)
         }
 
