@@ -1,6 +1,73 @@
 # Changelog
 
-## [0.3.555] - 2026-10-02
+## [0.3.557] - 2026-10-02
+
+> ★ 这一版**推翻了 0.3.554/555/556 里关于「下架取包」的全部结论**。
+> 真根因是：**我们用错了接口**。
+
+### 修复：下架取包 —— 包在**搜索结果**里，不用调第二个接口
+
+直连实测发现：`searchOffSaleApp` 的每条记录都带一个 `appStoreData`
+（内嵌 JSON 字符串），**包直链和 sinf 就在里面**：
+
+```
+appStoreData.url              → 499 字符的 Apple CDN 直链（带 accessKey）
+appStoreData.sinfs[0].dataHex → 2144 字符 hex = 1072 字节 sinf
+                                 (magic: 00 00 04 30 "sinf" 00 00 00 0c "frma")
+appStoreData.hashMD5          → 服务端算好的包 MD5
+appStoreData.metadata         → bundleShortVersionString / itemId 等
+```
+
+⇒ **`getOffSaleAppHistoryList` 根本不是取包接口**（语义是「查版本历史」）。
+实测它对任何参数组合都只回 `code=7 未获取到数据 / 参数不合法`，
+NB 官方客户端点「获取」也一样失败。围绕它的那些推断
+（「付费通道」「c 密钥是凭据」「ipaID 要传 0」「靠 versionID 定位」）
+**全部作废**。
+
+现在 `offSalePackage(from:)` 只做一件事：把搜索结果里那份现成的包
+翻译成 `NBPackage`。取包从「两次请求 + 必失败」变成「零额外请求 + 必成功」。
+
+### 修复：sinf 编码搞错了 —— hex 当 base64 用
+
+上游给的 `dataHex` 是**十六进制**，而下游 `PackageSINFWriter` 吃的是 **base64**
+（它调 `Data(base64Encoded:)`）。以前直接把 hex 串塞进 `sinfBase64`，
+解码必然失败 → 包内写不进 sinf → 安装报「缺少 SC_Info/*.sinf」。
+
+新增 `hexToBase64(_:)` 做转换，写回链路才真正可用。
+
+### 修复：`no-udid`「本机设备身份未就绪」—— lockdown 键名拼错
+
+`LocalDeviceIdentity` 读 UDID 用的键是 `UniqueDeviceIdentifier`，
+真实键名是 **`UniqueDeviceID`**（本仓 `DeviceInfoService.swift:299` 拼写是对的）。
+写错 → `as? String` 静默回 nil → `udid` 恒为 nil → NB 全链路抛 `no-udid`。
+
+```swift
+s.udid = root["UniqueDeviceID"] as? String        // 原：UniqueDeviceIdentifier
+var isUsable: Bool {                              // 判据加严，别让序列号掩盖它
+    !(serialNumber ?? "").isEmpty && !(udid ?? "").isEmpty
+}
+```
+
+### 修复：`deviceType` 一直在发 `iPad`
+
+`perform(…, iPad: Bool = true)` 的默认值，而四个调用点**没有一个传它** ——
+所有 NB 请求都发 `"deviceType":"iPad"`，真机发的是 `"iPhone"`。
+
+### 修正：公共参数与真机逐字段对齐
+
+| 字段 | 改前 | 真机值 |
+|---|---|---|
+| `mainEmbedded` | `0`（整数） | `false`（布尔） |
+| `phoneName` | `UIDevice.current.name` | 固定字面量 `"iPhone"` |
+| `productType` 兜底 | 写死 `"iPhone12,1"` | 按设备族兜底 |
+| `recordDownload.isPad` | 写死 `false` | 按设备判定 |
+
+### 清理：两条走不通的下架分支
+
+- `installViaNBRank` 的下架分支（下架态已不摆榜单，是死代码）
+- `NBStoreDetailView.installVersion` 的下架分支（历史版本链路只对在架应用有效）
+
+保留的部分见上方 0.3.556 的条目（那些仍然成立）。
 
 > 这一版全部结论来自**真机抓包**（iPhone 11 / iOS 26.0.1 / USB pcapd），不是推测。
 

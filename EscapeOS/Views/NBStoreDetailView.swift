@@ -564,22 +564,23 @@ struct NBStoreDetailView: View {
     }
 
     /// 取某个版本的包并交给统一下载中心。
+    ///
+    /// ★ v0.3.556：历史版本这条链路**只对在架应用有效**。
+    /// 下架应用的包只能在**搜索结果**里拿（`searchOffSaleApp` 的 `appStoreData`），
+    /// 用 trackId + externalVersionID 去查是查不到的（实测 `getOffSaleAppHistoryList`
+    /// 对任何参数组合都取不到包）。所以下架态直接如实说明，不发这一发。
     @MainActor
     private func installVersion(_ v: NBStoreClient.NBVersion) async {
+        guard !offSale else {
+            ToastCenter.shared.show("下架应用请回列表页点「获取」")
+            return
+        }
         fetchingID = v.externalIdentifier
         defer { fetchingID = nil }
         do {
-            // v0.3.545：按「上架 / 下架」走不同 method（同一端点）。
-            let pkg: NBStoreClient.NBPackage?
-            if offSale {
-                pkg = try await NBStoreClient.offSalePackage(ipaID: trackID,
-                                                             appVerId: v.externalIdentifier,
-                                                             country: country)
-            } else {
-                pkg = try await NBStoreClient.package(appID: trackID,
+            let pkg = try await NBStoreClient.package(appID: trackID,
                                                       appVerId: v.externalIdentifier,
                                                       country: country)
-            }
             guard let pkg else {
                 ToastCenter.shared.show("该版本没有可用的安装包")
                 return

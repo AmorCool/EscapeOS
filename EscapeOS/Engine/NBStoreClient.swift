@@ -627,6 +627,29 @@ enum NBStoreClient {
         /// Apple 的 external version identifier（下架取包要当 `appExtID` 发出去）.
         var appExtID: String?
 
+        /// ★★ v0.3.556：**下架包的直链与 sinf 就在搜索响应里**，不用再调第二个接口.
+        ///
+        /// 搜索响应的每条记录带一个 `appStoreData`（**JSON 字符串**），里面是完整的包信息：
+        /// ```json
+        /// {"url":"https://iosapps.itunes.apple.com/…/xxx.signed.dpkg.ipa?accessKey=…",
+        ///  "sinfs":[{"id":0,"data":null,"dataHex":"0000043073696e66…"}],
+        ///  "hashMD5":"4b634d7e…","metadata":{"bundleShortVersionString":"2.3.4", …}}
+        /// ```
+        /// 实测（2026-10-02 直连）：`url` 499 字符、`dataHex` 2144 字符（1072 字节，
+        /// magic 头 `\x00\x00\x040sinf\x00\x00\x00\x0cfrma`，与上架取包同格式）。
+        ///
+        /// ⇒ **`getOffSaleAppHistoryList` 那条路是错的**：那个 action 语义是
+        /// 「查某个版本的历史记录」，不是取包；实测它对任何参数组合都只回
+        /// `code=7 未获取到数据 / 参数不合法`，NB 官方客户端点「获取」也一样失败。
+        /// 真正取包只需要这一发搜索。**别再走那条路**。
+        var packageURL: String?
+        /// 服务端算好的包 MD5（`appStoreData.hashMD5`）.
+        var packageMD5: String?
+        /// 包对应的 sinf（`appStoreData.sinfs[0].dataHex`，十六进制字符串）.
+        var packageSinf: String?
+        /// 内嵌包信息的原始 JSON 字符串，原样留着备查.
+        var appStoreDataRaw: String?
+
         /// 给取包/详情用的 App Store ID —— 先 `appStoreID`，退回 `lookupData.trackId`.
         var storeID: String? {
             if let s = appStoreID, !s.isEmpty { return s }
@@ -707,6 +730,37 @@ enum NBStoreClient {
                 lookupArtwork = string(o["artworkUrl512"]) ?? string(o["artworkUrl100"])
                     ?? string(o["artworkUrl60"])
             }
+
+            // ★★ v0.3.556：从 `appStoreData`（内嵌 JSON 字符串）里直接取**包直链与 sinf**。
+            // 这是「下架取包」的正确来源 —— 不用再调 `getOffSaleAppHistoryList`。
+            var pkgURL: String?
+            var pkgMD5: String?
+            var rawStoreData: String?
+            var pkgSinf: String?
+            if let raw = item["appStoreData"] as? String, !raw.isEmpty {
+                rawStoreData = raw
+                if let d = raw.data(using: .utf8),
+                   let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+                    pkgURL = string(o["url"])
+                    pkgMD5 = string(o["hashMD5"])
+                    if let arr2 = o["sinfs"] as? [[String: Any]], let first = arr2.first {
+                        pkgSinf = string(first["dataHex"]) ?? string(first["data"])
+                    }
+                    // 版本号也以内嵌 metadata 为准（实测 top-level `version` 有时比它新一档）
+                    if let md = o["metadata"] as? [String: Any],
+                       let v = string(md["bundleShortVersionString"]), !v.isEmpty {
+                        lookupVersion = v
+                    }
+                }
+            }
+            if pkgURL == nil, let inline = item["appStoreData"] as? [String: Any] {
+                pkgURL = string(inline["url"])
+                pkgMD5 = string(inline["hashMD5"])
+                if let arr2 = inline["sinfs"] as? [[String: Any]], let first = arr2.first {
+                    pkgSinf = string(first["dataHex"]) ?? string(first["data"])
+                }
+            }
+
             return OffSaleApp(
                 id: nid,
                 name: string(item["name"]) ?? "",
@@ -720,9 +774,16 @@ enum NBStoreClient {
                 lookupArtwork: lookupArtwork,
                 appStoreID: string(item["appStoreID"]),
                 versionID: string(item["versionID"]),
-                appExtID: string(item["appExtID"]))
+                appExtID: string(item["appExtID"]),
+                packageURL: pkgURL,
+                packageMD5: pkgMD5,
+                packageSinf: pkgSinf,
+                appStoreDataRaw: rawStoreData)
         }
-        LoginLogger.shared.log("\(logTag) ✓ 下架搜索「\(kw)」· \(apps.count) 条", category: .appStore)
+        // 日志只说结论：命中几条、其中几条**可直接取包**（带直链）
+        let ready = apps.filter { ($0.packageURL ?? "").isEmpty == false }.count
+        LoginLogger.shared.log("\(logTag) ✓ 下架搜索「\(kw)」· \(apps.count) 条"
+                               + "（其中 \(ready) 条带包直链）", category: .appStore)
         return apps
     }
 
@@ -754,83 +815,62 @@ enum NBStoreClient {
     /// 「下架列表」在 NB 那边是本地 SQLite 表 `load_list` 缓存的。
     /// 我们的做法：**下架状态由 lookup 结果判定 + 用本方法取包**，不建本地库。
     ///
-    /// ## 参数（2026-10-02 真机抓包定案，取代 v0.3.550 的直连推测）
-    /// - `ipaID`: **传 `"0"`**。真机发什么就发什么，别自作聪明填 ID。
-    ///   - 传 NB 行号（如 `15993`） → `code=7 msg="未获取到数据"`
-    ///   - 传 `"0"`（真机值） → 进入通道校验，回 `通道已关闭，请开通会员`
-    /// - `appExtID`: 版本的 external identifier（真机发空串，有值就带上）。
-    /// - `versionID`: NB 侧的版本行号 —— **定位包靠的就是它**，不能空。
-    /// - `country`: 区域码（`cn` / `us`）。
+    /// ## ★★ v0.3.556 重写：优先用**搜索结果里自带的包**，不走第二个接口
     ///
-    /// ## ★★ 结论：下架取包是 NB 的**付费通道**（2026-10-02 真机抓包定案）
-    /// 真机抓包（iPhone 11 / iOS 26.0.1 / USB pcapd，NB全能助手 3.9.1）
-    /// 拿到了 NB 自己点「获取」时发出的**完整请求**，参数与本函数**一字不差**：
+    /// 真机抓包 + 直连实测发现：`searchOffSaleApp` 的每条记录里都带一个
+    /// `appStoreData`（内嵌 JSON 字符串），**包直链和 sinf 就在里面** ——
+    /// 也就是说搜索这一发已经把包给了，根本不需要再来第二发。
+    ///
     /// ```
-    /// {"method":"nb9527_getOffSaleAppHistoryList","params":{
-    ///   "mainEmbedded":false,"udid":"…","apiVersion":"1.0","productType":"iPhone12,1",
-    ///   "appExtID":"","mainBundleID":"com.nbmaster.app","osVersion":"26.0.1",
-    ///   "countryCode":"cn","phoneName":"iPhone","deviceType":"iPhone",
-    ///   "ipaID":"0","lang":"zh-cn","appVersion":"3.9.1","versionID":"102518","build":"1"}}
+    /// appStoreData.url              → 499 字符的 Apple CDN 直链（带 accessKey）
+    /// appStoreData.sinfs[0].dataHex → 2144 字符 hex = 1072 字节 sinf
+    ///                                 （magic `\x00\x00\x040sinf\x00\x00\x00\x0cfrma`）
+    /// appStoreData.hashMD5          → 服务端算好的包 MD5
     /// ```
-    /// 服务端回应：`{"code":7,"msg":"通道已关闭，请开通会员"}`
     ///
-    /// ⇒ 三点定论：
-    /// 1. **`ipaID` 传 `"0"` 才对**（不是 `appStoreID`，也不是 NB 行号）——
-    ///    定位完全靠 `versionID`。传 `"15993"` 得到的是 `msg="未获取到数据"`。
-    /// 2. **`c 密钥` = 通道凭据**，服务端原话是「通道已关闭，请开通会员」。
-    ///    它不是某个请求参数，所以**再怎么补键都拿不到** ——
-    ///    之前注释里「还有第五个来自设备侧的凭据」这个推断是**错的**，已推翻。
-    /// 3. NB 官方客户端**同样失败**（同样 code=7）。所以这不是我们接错，
-    ///    而是**该账号没有开通下架取包通道**。
+    /// ## 那条走不通的路（留档，别再重踩）
+    /// `getOffSaleAppHistoryList` 曾经是唯一的取包尝试，**实测无论怎么传都取不到**：
+    /// `ipaID` 传 NB 行号回 `未获取到数据`，传 `"0"` 回 `参数不合法`；
+    /// 真机抓包显示 NB 官方客户端点「获取」发出的参数与我们**一字不差**，
+    /// 服务端同样只回 `code=7`。⇒ **这个 action 不是取包用的**（语义是查版本历史），
+    /// 早先「下架取包是付费通道」「c 密钥是凭据」那些推断**全部作废**。
     ///
-    /// ## 界面该怎么呈现
-    /// 不要把这种情况说成「该下架应用没有可用的安装包」——那是两回事。
-    /// 服务端 `msg` 原样抛出，「通道已关闭，请开通会员」本身就是最准确的说明。
-    static func offSalePackage(ipaID: String,
-                               appVerId: String = "",
-                               versionID: String = "",
-                               country: String = "cn") async throws -> NBPackage? {
-        var p: [String: Any] = [
-            // ★ 实测：真机发的就是 "0"，定位靠 versionID。
-            "ipaID": "0",
-            "countryCode": country,
-        ]
-        // 四个键一个都不能少（服务端对缺键直接 500，实测）。
-        // `versionID` 与 `appExtID` 是两个**不同**的字段，不能互相顶替 ——
-        // 下架记录里分别叫 `versionID`（NB 行号）和 `appExtID`（Apple external id）。
-        p["versionID"] = versionID.isEmpty ? appVerId : versionID
-        p["appExtID"] = appVerId
-
-        let obj = try await perform(path: "/nb/app-downgrade",
-                                    method: "getOffSaleAppHistoryList",
-                                    params: p)
-
-        // 服务端说不行就如实说，不要静默返回 nil ——
-        // 静默会让界面把「通道关了」显示成「该下架应用没有可用的安装包」。
-        if let code = obj["code"] as? Int, code != 0 {
-            let msg = string(obj["msg"]) ?? ""
-            LoginLogger.shared.log("\(logTag) ✕ 下架取包被拒 code=\(code) msg=\"\(msg)\" "
-                                   + "ipaID=\(ipaID) versionID=\(p["versionID"] ?? "") "
-                                   + "appExtID=\(p["appExtID"] ?? "") country=\(country)",
+    /// 现在本函数只做一件事：把搜索结果里那份现成的包**翻译成 `NBPackage`**。
+    static func offSalePackage(from app: OffSaleApp) -> NBPackage? {
+        guard let url = app.packageURL, !url.isEmpty else {
+            LoginLogger.shared.log("\(logTag) ○ 这条下架记录没带包直链（\(app.name)）",
                                    category: .appStore)
-            throw StoreError.server(code: "\(code)",
-                                    message: msg.isEmpty ? "下架取包被拒" : msg)
+            return nil
         }
-
-        let d = (obj["data"] as? [String: Any]) ?? obj
-        guard let url = string(d["url"]), !url.isEmpty else { return nil }
-
-        var sinf: String?
-        if let arr = d["sinfs"] as? [[String: Any]], let first = arr.first {
-            sinf = string(first["dataHex"]) ?? string(first["data"])
-        }
-        if sinf == nil {
-            LoginLogger.shared.log("\(logTag) ○ 下架包直链已取到，但服务端没回 sinf（ipaID=\(ipaID)）",
+        // `dataHex` 是 **hex**，而下游 `PackageSINFWriter` 吃的是 **base64** —— 这里必须转。
+        // 以前直接把 hex 塞进 `sinfBase64`，`Data(base64Encoded:)` 必然失败 →
+        // 包内写不进 sinf → 安装报「缺少 SC_Info/*.sinf」。
+        let sinfB64 = app.packageSinf.flatMap { hexToBase64($0) }
+        if sinfB64 == nil, (app.packageSinf ?? "").isEmpty == false {
+            LoginLogger.shared.log("\(logTag) ✕ sinf hex 转 base64 失败（\(app.name)）",
                                    category: .appStore)
         }
         return NBPackage(ipaURL: normalizeAsset(url),
-                         sinfBase64: sinf,
-                         version: appVerId)
+                         sinfBase64: sinfB64,
+                         version: app.displayVersion)
+    }
+
+    /// 十六进制字符串 → base64 字符串（NB 的 sinf 是 hex，下游要 base64）。
+    ///
+    /// 输入可能带空格/换行（服务端偶尔分行发），先清掉再解。
+    private static func hexToBase64(_ hex: String) -> String? {
+        let cleaned = hex.filter { !$0.isWhitespace }
+        guard !cleaned.isEmpty, cleaned.count % 2 == 0 else { return nil }
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(cleaned.count / 2)
+        var idx = cleaned.startIndex
+        while idx < cleaned.endIndex {
+            let next = cleaned.index(idx, offsetBy: 2)
+            guard let b = UInt8(cleaned[idx..<next], radix: 16) else { return nil }
+            bytes.append(b)
+            idx = next
+        }
+        return Data(bytes).base64EncodedString()
     }
 
     /// ATS：明文 http 一律升 https（爱思侧踩过同一个坑，见 `I4PCStoreClient.normalizeAssetURL`）

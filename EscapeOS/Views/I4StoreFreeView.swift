@@ -340,11 +340,7 @@ struct I4StoreFreeView: View {
             // 下架库只能搜，没有榜单，所以这里如实说明，把入口指到搜索框。
             if appStateFilter == .offSale {
                 Section {
-                    // ★ v0.3.554：实测 NB 的下架搜索请求里**没有任何区域键**，
-                    // 下架库是全量、不分区域的 —— 所以上方的区域选择在下架态下不生效。
-                    // 不说明的话，用户会以为是「美区搜不到」，反复切区域白试。
-                    Text("下架应用没有榜单，请用上方搜索框按名字找"
-                         + "（下架库来自 NB，不分区域，上方区域选择在下架态下不生效）")
+                    Text("下架应用请用搜索框按名字查找")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             } else if nbRankItems.isEmpty {
@@ -570,38 +566,22 @@ struct I4StoreFreeView: View {
         }
     }
 
-    /// 下架行「获取」：用 NB 的下架链路取包 → 交给统一下载中心.
+    /// 下架行「获取」：把**搜索结果里自带的包**交给统一下载中心.
     ///
-    /// **实测（2026-10-02 真机抓包）**：下架取包**只认 `versionID`**，
-    /// `ipaID` 真机发的是 `"0"`，`appExtID` 真机发的是 `""`. 三者里只有
-    /// `versionID` 参与定位 —— 所以 `versionID` 空的时候这条路走不通.
-    ///
-    /// **下架取包是 NB 的付费通道**：NB 官方客户端点「获取」同样会收到
-    /// `code=7 通道已关闭，请开通会员`. 这不是我们接错，是账号没开通.
-    /// 所以这里把服务端 `msg` 原样报出来，用户看到的就是最准确的说明.
+    /// 不需要再发第二个请求 —— `searchOffSaleApp` 的每条记录里已经带了
+    /// `appStoreData`（包直链 + sinf）。见 `NBStoreClient.offSalePackage(from:)`.
     @MainActor
     private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
-        guard let sid = app.storeID, !sid.isEmpty else {
-            ToastCenter.shared.show("这条下架记录没有 App Store ID，无法取包")
+        guard let pkg = NBStoreClient.offSalePackage(from: app) else {
+            ToastCenter.shared.show("这个版本暂时取不到安装包")
             return
         }
-        do {
-            let pkg = try await NBStoreClient.offSalePackage(ipaID: sid,
-                                                            appVerId: app.appExtID ?? "",
-                                                            versionID: app.versionID ?? "",
-                                                            country: regionRaw)
-            guard let pkg else {
-                ToastCenter.shared.show("该下架应用没有可用的安装包")
-                return
-            }
-            await startNBDownload(trackID: sid,
-                                  package: pkg,
-                                  name: app.displayName,
-                                  version: app.displayVersion,
-                                  iconURL: app.displayIcon)
-        } catch {
-            ToastCenter.shared.show("NB 取包失败：\(error.localizedDescription)")
-        }
+        let sid = app.storeID ?? String(app.id)
+        await startNBDownload(trackID: sid,
+                              package: pkg,
+                              name: app.displayName,
+                              version: app.displayVersion,
+                              iconURL: app.displayIcon)
     }
 
     // MARK: - 行
@@ -700,18 +680,13 @@ struct I4StoreFreeView: View {
     @MainActor
     private func installViaNBRank(_ item: NBStoreRankClient.RankItem) async {
         do {
-            // v0.3.545：按「上架 / 下架」走两条链路。
-            // 上架 → `getAppHistoryList`（`appID`）；下架 → `getOffSaleAppHistoryList`（`ipaID`）。
-            // v0.3.550：下架分支补上 `versionID` / `appExtID` —— 服务端对缺键直接 500.
-            let pkg: NBStoreClient.NBPackage?
-            if appStateFilter == .offSale {
-                pkg = try await NBStoreClient.offSalePackage(ipaID: item.trackID,
-                                                             country: regionRaw)
-            } else {
-                pkg = try await NBStoreClient.package(appID: item.trackID,
+            // ★ v0.3.556：这里只走**上架**通道（`getAppHistoryList`）。
+            // 下架态已经不摆榜单了（榜单来自 Apple RSS，里面没有下架应用），
+            // 下架应用一律从搜索结果取包 —— 原来的下架分支是死代码，
+            // 而且它调的 `getOffSaleAppHistoryList` 已被证明取不到包，删掉。
+            let pkg = try await NBStoreClient.package(appID: item.trackID,
                                                       bundleID: item.bundleID ?? "",
                                                       country: regionRaw)
-            }
             guard let pkg else {
                 ToastCenter.shared.show("该应用没有可用的安装包")
                 return
