@@ -31,7 +31,11 @@ import SwiftUI
 struct NBStoreDetailView: View {
 
     /// App Store 数字 ID（NB 的 `appID` 与 bilin 路径参数同源）
-    let trackID: String
+    ///
+    /// v0.3.549：从 `let` 改成 `@State` —— 下架记录的 `id` 是 NB 自己的行号，
+    /// 真实 App Store ID 要**进页面后解析**（见 `resolveTrackIDIfNeeded`），
+    /// 解析出来才能查版本、取包、查详情.
+    @State private var trackID: String
     /// 区域（NB 的 `country` 参数；`cn` / `us` / `hk`）
     let country: String
 
@@ -70,7 +74,7 @@ struct NBStoreDetailView: View {
          displayName: String? = nil,
          icon: String? = nil,
          offSale: Bool = false) {
-        self.trackID = trackID
+        _trackID = State(initialValue: trackID)
         self.country = country
         self.displayName = displayName
         self.seedIcon = icon
@@ -440,10 +444,40 @@ struct NBStoreDetailView: View {
     // MARK: - 加载 / 下载
 
     /// 详情与版本列表并行拉 —— 两者互不依赖，串行会让页面多等一个来回。
+    ///
+    /// v0.3.549：前面先插一步 **ID 解析**（下架记录带的是 NB 行号，不是 App Store ID）.
     private func loadAll() async {
+        await resolveTrackIDIfNeeded()
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await loadDetail() }
             group.addTask { await loadVersions() }
+        }
+    }
+
+    /// 确保 `trackID` 是**真正的 App Store 数字 ID**（v0.3.549）.
+    ///
+    /// ## 为什么需要这一步
+    /// 下架记录里 `id` 是 NB 自己的行号（如 15993），`appStoreID` 与 `lookupData.trackId`
+    /// 才可能有一个是真 ID。列表页传进来时已经优先挑了真 ID（`OffSaleApp.storeID`），
+    /// 但**两个都空**的场合仍会传空串 —— 那时就只能靠名字去下架库反查.
+    ///
+    /// 拿不到就保持原样，由 `loadVersions` 报那句「缺少 App Store ID」——
+    /// 这个错必须留在界面上（用户要能看出是缺 ID，而不是「点了没反应」）.
+    private func resolveTrackIDIfNeeded() async {
+        let sid = trackID.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 已经是纯数字 → 就是 App Store ID，不用解析.
+        if !sid.isEmpty, sid.allSatisfy({ $0.isNumber }) { return }
+        guard let hint = displayName, !hint.isEmpty else { return }
+        do {
+            let hits = try await NBStoreClient.searchOffSaleApp(keyword: hint)
+            let match = hits.first { $0.displayName.caseInsensitiveCompare(hint) == .orderedSame } ?? hits.first
+            if let real = match?.storeID, !real.isEmpty {
+                LoginLogger.shared.log("[NB详情] 解析 App Store ID：「\(hint)」→ \(real)", category: .appStore)
+                trackID = real
+            }
+        } catch {
+            LoginLogger.shared.log("[NB详情] 解析 App Store ID 失败：\(error.localizedDescription)",
+                                   category: .appStore)
         }
     }
 
@@ -451,6 +485,18 @@ struct NBStoreDetailView: View {
     ///
     /// **失败不挡主要内容**：详情拿不到只是少几个区块，版本列表与取包照常，
     /// 所以这里只把错误记进日志，不占页面的 error 区块（那是给版本列表用的）。
+    ///
+    /// ## v0.3.549：**下架应用必须走 NB 自己的详情**
+    ///
+    /// 用户反馈「NB 源的应用详情界面还是没有详情和预览」—— 真因就在这一句 lookup：
+    /// **下架应用在 Apple 的 lookup 里根本查不到**（它就是被下架了才搜不到），
+    /// 所以 `results` 为空 → `detail` 为 nil → 页面上「预览 / 简介 / 信息 / 新功能」
+    /// 四个区块**整组不渲染**，只剩「来源」和「历史版本」，正是用户那张截图的样子.
+    ///
+    /// 修法：lookup 拿不到时，**回退到 NB 下架库**（`searchOffSaleApp` 按名字查，
+    /// 它回的 `lookupData` 里就带着 trackId / 名字 / 版本 / 图标，而拿到 trackId 之后
+    /// 再用它打一次 lookup 就能取到截图与简介 —— 下架应用的元数据 Apple 那边其实还在，
+    /// 只是 search 不出来，按 id 直查是可以的）.
     private func loadDetail() async {
         guard !trackID.isEmpty else { return }
         detailLoading = true
@@ -461,6 +507,43 @@ struct NBStoreDetailView: View {
             detailErrorText = error.localizedDescription
             LoginLogger.shared.log("[NB详情] ○ 详情拉取失败：\(error.localizedDescription)",
                                    category: .appStore)
+        }
+        // 第一跳就拿到了 → 直接结束.
+        if detail != nil { return }
+
+        // ── 回退：把名字拿去 NB 下架库找一次，拿到真正的 trackId 再直查 lookup ──
+        guard let hint = displayName, !hint.isEmpty else {
+            await loadDetailViaOffSaleID()
+            return
+        }
+        do {
+            let hits = try await NBStoreClient.searchOffSaleApp(keyword: hint)
+            // 先挑同名的（`displayName` 是列表带进来的，通常就是准的）.
+            let match = hits.first { $0.displayName.caseInsensitiveCompare(hint) == .orderedSame } ?? hits.first
+            guard let sid = match?.storeID, !sid.isEmpty, sid != trackID else {
+                await loadDetailViaOffSaleID()
+                return
+            }
+            LoginLogger.shared.log("[NB详情] 下架回退：用「\(hint)」查到 trackId=\(sid)，直查 lookup",
+                                   category: .appStore)
+            detail = try await NBStoreRankClient.detail(trackID: sid, country: country)
+        } catch {
+            LoginLogger.shared.log("[NB详情] 下架回退失败：\(error.localizedDescription)",
+                                   category: .appStore)
+        }
+    }
+
+    /// 下架详情兜底（v0.3.549）：`trackID` 已经就是 App Store ID 的场合，直查一次.
+    ///
+    /// 与 `loadDetail` 的差别：这里**换区域再试一次** —— 下架应用常常是「在本区下架、
+    /// 别的区还在架」，澳洲/美国区查得到的话就能把截图与简介补上.
+    private func loadDetailViaOffSaleID() async {
+        for cc in ["us", "cn", "hk"].filter({ $0 != country.lowercased() }) {
+            if let d = try? await NBStoreRankClient.detail(trackID: trackID, country: cc) {
+                LoginLogger.shared.log("[NB详情] 换区 \(cc) 查到详情（原区 \(country)）", category: .appStore)
+                detail = d
+                return
+            }
         }
     }
 

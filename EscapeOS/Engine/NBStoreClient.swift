@@ -553,6 +553,142 @@ enum NBStoreClient {
 
     // MARK: - v0.3.545 下架应用（对应 NB 助手的 DXSTOffSaleController）
 
+    /// **下架应用**列表里的一项（`searchOffSaleApp` 响应）.
+    ///
+    /// ## 字段来源（逐字对齐 `DXSTOffSaleAppModel`，不是猜的）
+    ///
+    /// 反编译 NB 助手得到的属性表（`_OBJC_IVAR_$__TtC4XNZS19DXSTOffSaleAppModel`）：
+    /// ```
+    /// id  versionID  createTime  name  bundleID  iconPath  size  version
+    /// lookupData  appstoreData  appStoreID  appExtID  lookupResult  historyList
+    /// ```
+    /// 与接口实测响应逐字一致 —— 所以这里不做改名、不做重组，原样承载.
+    ///
+    /// ## 两个「应用 ID」都要留
+    /// `appStoreID` 与 `lookupData.trackId` 都是 App Store 数字 ID，
+    /// 但**实测只有其中一边有值**：
+    /// - `"StikDebug"` 那条：`appStoreID` 空、`lookupData` 里是完整 JSON（含 trackId）；
+    /// - `"微信"` 那条：反过来，`appStoreID` 有值、`lookupData` 是空串。
+    /// ⇒ 所以取包时要按「哪个有值用哪个」兜底，不能只认一个.
+    struct OffSaleApp: Identifiable, Hashable {
+        /// NB 自己的行号（`id`），不是 App Store ID —— 只用于 `Identifiable`.
+        var id: Int
+        var name: String
+        var bundleID: String?
+        /// 图标直链（`iconPath`，mzstatic CDN）.
+        var iconPath: String?
+        /// 包大小（字节）.
+        var size: Int64?
+        /// 版本号（可能为空串 —— 实测「微信」那条就是）.
+        var version: String?
+        /// `lookupData` 是**内嵌的 JSON 字符串**（Apple lookup 的响应体），
+        /// 解出来是 `trackId` / `trackName` / `version` / `artworkUrl60` 等.
+        /// 用它补 `appStoreID` 缺失的场合，也用它拿图标与版本.
+        var lookupTrackID: String?
+        var lookupName: String?
+        var lookupVersion: String?
+        var lookupArtwork: String?
+
+        /// 接口直接给的 `appStoreID`（实测可能与 `lookupData.trackId` 二选一有值）.
+        var appStoreID: String?
+
+        /// 给取包/详情用的 App Store ID —— 先 `appStoreID`，退回 `lookupData.trackId`.
+        var storeID: String? {
+            if let s = appStoreID, !s.isEmpty { return s }
+            return lookupTrackID
+        }
+
+        /// 界面显示用的名字.
+        var displayName: String { (lookupName?.isEmpty == false) ? lookupName! : name }
+        /// 界面显示用的版本.
+        var displayVersion: String? { (version?.isEmpty == false) ? version : lookupVersion }
+        /// 界面显示用的图标.
+        var displayIcon: String? {
+            if let p = iconPath, !p.isEmpty { return p }
+            return lookupArtwork
+        }
+
+        /// 包大小文案（与 App Store 同口径：十进制 MB）.
+        var sizeText: String? {
+            guard let b = size, b > 0 else { return nil }
+            let mb = Double(b) / 1_000_000
+            if mb >= 1000 { return String(format: "%.2f GB", mb / 1000) }
+            if mb >= 1 { return String(format: "%.1f MB", mb) }
+            return String(format: "%.0f KB", Double(b) / 1000)
+        }
+    }
+
+    /// **下架应用的搜索** —— `nb9527_searchOffSaleApp`.
+    ///
+    /// ## 这一条是怎么定的（先反编译，再抓包实测）
+    ///
+    /// 反编译 `DXSTOffSaleController.textFieldShouldReturn:` → `sub_1001590DC`
+    /// → `sub_10020C044` → `sub_10020C11C`，在 `sub_10020C11C` 里逐条指令读出：
+    /// ```
+    /// 0x10020c160  ADRL X8, aSearchoffsalea   ; "searchOffSaleApp"
+    /// 0x10020c188  ADRL X8, aNbAppDowngrade   ; "/nb/app-downgrade"
+    /// 0x10020c16c  MOV  X21, #0xD000000000000010   ; 长度 16（"searchOffSaleApp" 正好 16）
+    /// ```
+    /// 参数字典的键是一个小端立即数 `30571 = 0x776B` → 字节 `6B 77` = **`"kw"`**.
+    ///
+    /// ## 实测（2026-10-02，本机抓包）
+    /// ```
+    /// POST http://47.243.71.210:9527/nb/app-downgrade
+    /// {"method":"nb9527_searchOffSaleApp","params":{"kw":"stikdebug", …公共参数}}
+    /// → {"code":0,"data":[{"id":15993,"name":"StikDebug","bundleID":"com.stik.sj",
+    ///                      "iconPath":"https://is1-ssl.mzstatic.com/…",
+    ///                      "size":11688960,"version":"2.3.5",
+    ///                      "lookupData":"{\"trackId\":6744045754,…}"}]}
+    /// ```
+    /// `data` 是**数组**；无结果时 `data` 为 `null`.
+    ///
+    /// ## 为什么界面上必须走这一条
+    /// 「下架」在 App Store 里**就是搜不到的**（Apple 的 search/RSS 只回在架应用）——
+    /// 实测 `term=stikdebug&country=us` 回的是 TestFlight / GitHub / Debug Anywhere 那批
+    /// **在架**应用，恰好是用户截图里看到的错误结果。下架库只有 NB 服务端有.
+    static func searchOffSaleApp(keyword: String) async throws -> [OffSaleApp] {
+        let kw = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !kw.isEmpty else { return [] }
+
+        let obj = try await perform(path: "/nb/app-downgrade",
+                                    method: "searchOffSaleApp",
+                                    params: ["kw": kw])
+        // `data` 为 null（无结果）时按空数组处理，不抛错.
+        guard let arr = obj["data"] as? [[String: Any]] else { return [] }
+
+        let apps = arr.compactMap { item -> OffSaleApp? in
+            guard let nid = (item["id"] as? NSNumber)?.intValue else { return nil }
+            // lookupData 是**字符串形式的 JSON**，单独解一次
+            var lookupTrackID: String?
+            var lookupName: String?
+            var lookupVersion: String?
+            var lookupArtwork: String?
+            if let raw = item["lookupData"] as? String, !raw.isEmpty,
+               let d = raw.data(using: .utf8),
+               let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+                lookupTrackID = string(o["trackId"])
+                lookupName = string(o["trackName"])
+                lookupVersion = string(o["version"])
+                lookupArtwork = string(o["artworkUrl512"]) ?? string(o["artworkUrl100"])
+                    ?? string(o["artworkUrl60"])
+            }
+            return OffSaleApp(
+                id: nid,
+                name: string(item["name"]) ?? "",
+                bundleID: string(item["bundleID"]),
+                iconPath: string(item["iconPath"]),
+                size: (item["size"] as? NSNumber)?.int64Value,
+                version: string(item["version"]),
+                lookupTrackID: lookupTrackID,
+                lookupName: lookupName,
+                lookupVersion: lookupVersion,
+                lookupArtwork: lookupArtwork,
+                appStoreID: string(item["appStoreID"]))
+        }
+        LoginLogger.shared.log("\(logTag) ✓ 下架搜索「\(kw)」· \(apps.count) 条", category: .appStore)
+        return apps
+    }
+
     /// **下架应用**的取包。
     ///
     /// ## 怎么找到这条路的（反编译 NB 助手，不是猜的）

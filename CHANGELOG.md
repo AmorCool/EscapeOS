@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.3.549] - 2026-10-02
+
+> **「下架」筛选以前是个空开关。** 这一版把它接到 NB 真正的下架库上（协议已抓包实测）。
+
+### 修复：NB 源选「下架」搜不到下架应用（用户报「下架应用搜索完全没用」）
+
+**真因**：`I4StoreFreeView.runSearch()` 的 `.nb` 分支里，**选上架还是下架走的是同一条
+Apple search**（`NBStoreRankClient.search`），而 Apple 的 search/RSS **只回在架应用**。
+
+实测复现（本机直接打 Apple 接口）：
+```
+GET /search?term=stikdebug&country=us
+→ TestFlight / GitHub / Debug Anywhere / Apple Developer / Vevisec …
+```
+全是**在架**应用 —— 正是用户截图里「选了下架却搜出一堆在架 App」的那几行。
+`appStateFilter` 在搜索/榜单的数据源选择里**一次都没被读过**，所以它从来没生效过。
+
+**修法**：反编译 `DXSTOffSaleController` 拿到 NB 的下架搜索协议，并**抓包实测通过**：
+
+```
+POST http://47.243.71.210:9527/nb/app-downgrade
+{"method":"nb9527_searchOffSaleApp","params":{"kw":"stikdebug", …公共参数}}
+→ {"code":0,"data":[{"id":15993,"name":"StikDebug","bundleID":"com.stik.sj",
+                    "iconPath":"https://is1-ssl.mzstatic.com/…","size":11688960,
+                    "version":"2.3.5","lookupData":"{\"trackId\":6744045754,…}"}]}
+```
+
+§ 协议是怎么定下来的（不是猜的）：
+`textFieldShouldReturn:` → `sub_1001590DC` → `sub_10020C044` → `sub_10020C11C`，
+在 `sub_10020C11C` 里逐条指令读出两个字符串常量与参数字典键：
+```
+0x10020c160  ADRL X8, aSearchoffsalea   ; "searchOffSaleApp"（长度 0x10 = 16，正好）
+0x10020c188  ADRL X8, aNbAppDowngrade   ; "/nb/app-downgrade"
+0x10020c16c  MOV  X21, #0xD000000000000010
+参数字典键：立即数 30571 = 0x776B → 字节 6B 77 = "kw"
+```
+
+§ 落地：
+- `NBStoreClient.searchOffSaleApp(keyword:)` —— 新接口 + `OffSaleApp` 模型
+  （字段逐条对齐 `DXSTOffSaleAppModel`：`id / versionID / name / bundleID / iconPath /
+  size / version / lookupData / appStoreID / appExtID / …`）；
+- `runSearch()` 的 `.nb` 分支：**下架态一律走 `searchOffSaleApp`**，不再碰 Apple search；
+- 「下架」态下**不显示榜单**（Apple RSS 里没有下架应用，摆出来就是拿在架冒充下架），
+  榜单分组选择器一并隐藏，只留搜索入口。
+
+### 修复：NB 源应用详情页「没有详情和预览」
+
+**真因**：详情靠 `itunes.apple.com/lookup`，而**下架应用在 lookup 里查不到**
+（下架就是 search + lookup 都取不到）。`results` 为空 → `detail` 为 nil
+→ 「预览 / 简介 / 信息 / 新功能」四个区块**整组不渲染**，只剩「来源 / 历史版本」——
+正是截图里那个页面。
+
+§ 落地（`NBStoreDetailView`）：
+- `trackID` 从 `let` 改为 `@State`，进页面先跑 `resolveTrackIDIfNeeded()` ——
+  下架记录带的是 NB 行号，先用名字去下架库解析出**真正的 App Store ID**；
+- `loadDetail()` 加**两级回退**：① 用名字去下架库查 trackId 再直查 lookup；
+  ② 换区再试（下架应用常常是「本区下架、别区还在架」）。
+
+### 修复：NB 源从「列表行」进详情后取包走错 method
+
+`nbRow(trackID:package:)` 里调的还是**三参数**旧构造
+`NBStoreDetailView(trackID:country:displayName:)` → `offSale` 永远取到默认 `false`
+→ 从这条路径进详情后取包会走 `getAppHistoryList`（上架链路），下架包必然取不到。
+改成与 `nbRankRow` 一致的五参数构造。
+
+### 修复：NB 源行内不显示下载进度 / 暂停
+
+`nbRankRow` / 下架行把 `bundleId` 传给 `trailingControl`，但 `startNBDownload` 建任务时
+`bundleId` 传的是 `nil` —— `activeJob(bundleId:name:)` 在「行有、任务没有」时**直接判不等**，
+进度控件永远挂不上这一行。改传 `nil`，退化成按名字匹配。
+
+### 修复：界面上若干中文句号
+
+用户规则「界面上不要中文句号」。清掉 `I4StoreFreeView` 里 6 处 `Text("…。")`。
+
+### 反编译订正（写进报告）
+
+`nb9527_search_offsale_app`（带下划线的那个）**确实不是网络接口** ——
+它是 `xnS2CreateFormView`（一个**输入框弹窗**，参数字典是 `{"kw": ...}`）的
+表单标识符。**真正的下架搜索 action 是 `nb9527_searchOffSaleApp`**（驼峰，
+由 `nb9527_%@` 模板拼出）。此前报告里「下架来自本地 SQLite 表」的判断由此订正：
+下架列表**是服务端接口**，`searchOffSaleApp` 负责搜、`getOffSaleAppHistoryList` 负责取包。
+
 ## [0.3.548] - 2026-10-02
 
 > **修 v0.3.546 的三条编译错误。** 其中 kbsync 那条是**连着三版的同一个坑**，这次终于定案。

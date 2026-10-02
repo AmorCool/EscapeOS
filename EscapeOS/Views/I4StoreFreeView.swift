@@ -75,6 +75,13 @@ struct I4StoreFreeView: View {
     /// 而 NB 的行必须走 NB 取包（不能用爱思的 `ipaURL`）.
     @State private var nbSearchResults: [NBStoreRankClient.RankItem] = []
 
+    /// v0.3.549：NB 源**下架**搜索结果。
+    ///
+    /// 与 `nbSearchResults` 分开存：两者数据源、字段、可做的动作都不同 ——
+    /// 下架项只能走 `getOffSaleAppHistoryList` 取包，混在一个数组里会让「这一行该走哪条链路」
+    /// 变成靠猜。分开存则行类型本身就决定了链路（见 `nbOffSaleRow`）。
+    @State private var nbOffSaleResults: [NBStoreClient.OffSaleApp] = []
+
     /// v0.3.545：NB 源的**上架 / 下架**筛选（对应 NB 助手的 `DXSTOffSaleController`）。
     ///
     /// ## 怎么判定「下架」
@@ -277,12 +284,15 @@ struct I4StoreFreeView: View {
             // 与 `sourceSection` 同一个毛病（清掉卡片背景后 header 与内容之间会留一段空白）。
             // 保持 insetGrouped 的默认行边距即可。
             if source == .nb {
-                Picker("分组", selection: $nbRank) {
-                    ForEach(NBStoreRankClient.Rank.allCases) { r in
-                        Text(r.title).tag(r)
+                // v0.3.549：下架态下榜单单不存在 —— 不摆一个选了也没用的下拉.
+                if appStateFilter == .onSale {
+                    Picker("分组", selection: $nbRank) {
+                        ForEach(NBStoreRankClient.Rank.allCases) { r in
+                            Text(r.title).tag(r)
+                        }
                     }
+                    .pickerStyle(.menu)
                 }
-                .pickerStyle(.menu)
             } else {
                 Picker("分组", selection: $rank) {
                     ForEach(I4PCStoreClient.Rank.allCases) { r in
@@ -319,14 +329,23 @@ struct I4StoreFreeView: View {
         } else if source == .niuwa {
             // v0.3.382：牛蛙源只有搜索，不做榜单（接口文档里只有 /appstore/search + /download）
             Section {
-                Text("牛蛙源请用上方搜索框按关键词找应用。")
+                Text("牛蛙源请用上方搜索框按关键词找应用")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         } else if source == .nb {
-            // v0.3.540：NB 源有榜单了（Apple RSS）—— 点行右侧「获取」走 NB 取包.
-            if nbRankItems.isEmpty {
+            // v0.3.549：**下架态下不摆榜单**。
+            //
+            // 榜单来自 Apple RSS，那里面**没有下架应用** —— 在下架态继续显示榜单，
+            // 等于用一批在架应用冒充下架结果（用户报的「下架应用搜索完全没用」就是这一类观感）。
+            // 下架库只能搜，没有榜单，所以这里如实说明，把入口指到搜索框。
+            if appStateFilter == .offSale {
                 Section {
-                    Text("该榜单暂时没有数据。").font(.subheadline).foregroundStyle(.secondary)
+                    Text("下架应用没有榜单，请用上方搜索框按名字找（下架库来自 NB）")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            } else if nbRankItems.isEmpty {
+                Section {
+                    Text("该榜单暂时没有数据").font(.subheadline).foregroundStyle(.secondary)
                 }
             } else {
                 Section("\(nbRank.title)榜 · \(nbRankItems.count) 款") {
@@ -337,7 +356,7 @@ struct I4StoreFreeView: View {
             }
         } else if apps.isEmpty {
             Section {
-                Text("该分组暂时没有数据。").font(.subheadline).foregroundStyle(.secondary)
+                Text("该分组暂时没有数据").font(.subheadline).foregroundStyle(.secondary)
             }
         } else {
             Section("\(rank.title) · \(apps.count) 款") {
@@ -360,7 +379,7 @@ struct I4StoreFreeView: View {
         } else if source == .i4 {
             if searchResults.isEmpty {
                 Section {
-                    Text("没有找到匹配的应用。").font(.subheadline).foregroundStyle(.secondary)
+                    Text("没有找到匹配的应用").font(.subheadline).foregroundStyle(.secondary)
                 }
             } else {
                 Section("搜索结果 · \(searchResults.count) 款") {
@@ -372,7 +391,7 @@ struct I4StoreFreeView: View {
         } else if source == .niuwa {
             if niuwaSearchResults.isEmpty {
                 Section {
-                    Text("没有找到匹配的应用。").font(.subheadline).foregroundStyle(.secondary)
+                    Text("没有找到匹配的应用").font(.subheadline).foregroundStyle(.secondary)
                 }
             } else {
                 Section("搜索结果 · \(niuwaSearchResults.count) 款") {
@@ -382,11 +401,26 @@ struct I4StoreFreeView: View {
                 }
             }
         } else {
-            // NB 源两种结果形态：
+            // NB 源三种结果形态：
+            //   · 「下架」态 → NB 自己的下架库（`nbOffSaleResults`，v0.3.549）
             //   · 输入是 ID/链接 → 单个取包结果（`nbPackage`）
             //   · 输入是关键词   → Apple 官方搜索的候选列表（`nbSearchResults`），
             //                      点「获取」走 NB 取包（v0.3.540：不再借爱思）
-            if let pkg = nbPackage {
+            if appStateFilter == .offSale {
+                // 下架库是**独立的**：它的条目不能走 Apple 那套行（字段与链路都不同）。
+                if nbOffSaleResults.isEmpty {
+                    Section {
+                        Text("下架库里没有匹配的应用，换个关键词试试，或确认区域")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Section("下架应用 · \(nbOffSaleResults.count) 款") {
+                        ForEach(nbOffSaleResults) { app in
+                            nbOffSaleRow(app)
+                        }
+                    }
+                }
+            } else if let pkg = nbPackage {
                 Section("App Store ID \(nbTrackID)") {
                     nbRow(trackID: nbTrackID, package: pkg)
                 }
@@ -405,7 +439,7 @@ struct I4StoreFreeView: View {
                 }
             } else {
                 Section {
-                    Text("搜应用名，或粘贴 App Store 链接 / 填数字 ID。")
+                    Text("搜应用名，或粘贴 App Store 链接 / 填数字 ID")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
@@ -424,7 +458,15 @@ struct I4StoreFreeView: View {
     private func nbRow(trackID: String, package: NBStoreClient.NBPackage) -> some View {
         HStack(alignment: .center, spacing: 12) {
             NavigationLink {
-                NBStoreDetailView(trackID: trackID, country: regionRaw, displayName: nil)
+                // v0.3.549：改走**五参数**构造 —— 原来这里是旧的 `(trackID:country:displayName:)`
+                // 三参数版，与 `nbRankRow` 的调用形态不一致（同一个类型两种调法，
+                // 详情页里 `offSale` 永远取到默认的 false → 从这条路径进去取包会走错 method）。
+                // `offSale` 跟着当前筛选走，与列表行保持同一个口径。
+                NBStoreDetailView(trackID: trackID,
+                                  country: regionRaw,
+                                  displayName: nil,
+                                  icon: nil,
+                                  offSale: appStateFilter == .offSale)
             } label: {
                 HStack(alignment: .center, spacing: 12) {
                     Image(systemName: "shippingbox")
@@ -456,6 +498,98 @@ struct I4StoreFreeView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// **下架应用**的结果行（v0.3.549）.
+    ///
+    /// 与 `nbRankRow`（Apple 榜单/搜索行）的区别：数据来自 NB 的下架库
+    /// （`nb9527_searchOffSaleApp`），字段也就跟着 NB 的 `DXSTOffSaleAppModel` 走 ——
+    /// 名字 / 图标 / 版本 / 大小都有，所以按前两源同款排版渲染，不是「只有一串数字」.
+    ///
+    /// 右侧「获取」直接走 `installOffSale` → `NBStoreClient.offSalePackage`（`getOffSaleAppHistoryList`），
+    /// 与上架链路（`getAppHistoryList`）分开 —— 两条路的 method 不同，不能混.
+    private func nbOffSaleRow(_ app: NBStoreClient.OffSaleApp) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            NavigationLink {
+                // 下架详情：`offSale: true` 决定详情页里取包走 `getOffSaleAppHistoryList`.
+                NBStoreDetailView(trackID: app.storeID ?? "",
+                                  country: regionRaw,
+                                  displayName: app.displayName,
+                                  icon: app.displayIcon,
+                                  offSale: true)
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    AsyncImage(url: URL(string: app.displayIcon ?? "")) { phase in
+                        switch phase {
+                        case .success(let img): img.resizable().scaledToFit()
+                        case .failure: Image(systemName: "app.dashed").foregroundStyle(.secondary)
+                        default: ProgressView().controlSize(.mini)
+                        }
+                    }
+                    .frame(width: 54, height: 54)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(app.displayName.isEmpty ? "App \(app.id)" : app.displayName)
+                            .font(.subheadline.weight(.medium)).lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ChipFlow(spacing: 6) {
+                            chip("下架", .red)
+                            if let v = app.displayVersion, !v.isEmpty {
+                                chip("v\(v)", .blue)
+                            }
+                            if let s = app.sizeText { chip(s, .green) }
+                        }
+                        if let b = app.bundleID, !b.isEmpty {
+                            Text(b).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 6)
+                }
+            }
+            .buttonStyle(.plain)
+
+            // v0.3.549：`bundleId` 传 **nil**，与 `startNBDownload`（它以 `bundleId: nil` 建任务）
+            // 保持同一口径 —— `activeJob(bundleId:name:)` 在「行有 bundleId、任务没有」时
+            // 会直接判不等，进度控件就永远挂不上这一行（用户看到的是「点了获取，行里没反应」）。
+            // 传 nil 则退化成按**名字**匹配，与任务侧对得上。
+            trailingControl(name: app.displayName, bundleId: nil) {
+                Task { await installOffSale(app) }
+            }
+        }
+        .padding(.vertical, 3)
+        .contextMenu {
+            iconMenuItems(iconURL: app.displayIcon,
+                          fileNameBase: app.bundleID ?? app.displayName) {
+                showIconPreview(app.displayIcon, target: $previewTarget)
+            }
+        }
+    }
+
+    /// 下架行「获取」：用 NB 的下架链路取包 → 交给统一下载中心.
+    ///
+    /// `ipaID` 用 `app.storeID`（`appStoreID` 或 `lookupData.trackId`，两个哪个有值用哪个）.
+    /// 服务端没给 ID 时明确报错，不静默 —— 静默会让用户看到「点了没反应」.
+    @MainActor
+    private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
+        guard let sid = app.storeID, !sid.isEmpty else {
+            ToastCenter.shared.show("这条下架记录没有 App Store ID，无法取包")
+            return
+        }
+        do {
+            let pkg = try await NBStoreClient.offSalePackage(ipaID: sid, country: regionRaw)
+            guard let pkg else {
+                ToastCenter.shared.show("该下架应用没有可用的安装包")
+                return
+            }
+            await startNBDownload(trackID: sid,
+                                  package: pkg,
+                                  name: app.displayName,
+                                  version: app.displayVersion,
+                                  iconURL: app.displayIcon)
+        } catch {
+            ToastCenter.shared.show("NB 取包失败：\(error.localizedDescription)")
+        }
     }
 
     // MARK: - 行
@@ -520,7 +654,10 @@ struct I4StoreFreeView: View {
             }
             .buttonStyle(.plain)
 
-            trailingControl(name: item.name, bundleId: item.bundleID) {
+            // v0.3.549：与下架行同因 —— `startNBDownload` 建任务时 `bundleId` 是 nil，
+            // 而这一行以前传的是 `item.bundleID`，`activeJob` 在「行有、任务没有」时直接判不等
+            // → 行内不显示下载进度 / 暂停按钮。改传 nil，退化成按名字匹配。
+            trailingControl(name: item.name, bundleId: nil) {
                 Task { await installViaNBRank(item) }
             }
         }
@@ -822,6 +959,7 @@ struct I4StoreFreeView: View {
             searchResults = []
             niuwaSearchResults = []
             nbSearchResults = []
+            nbOffSaleResults = []
             return
         }
         searching = true
@@ -859,7 +997,27 @@ struct I4StoreFreeView: View {
                 //   · 数字 ID / App Store 链接 → 直接走 NB 取包（原行为）
                 //   · 纯文字关键词           → 走 **Apple 官方 search**（区域跟着 `regionRaw` 走）
                 // 这样美区能搜到美区商店的应用，国区能搜到国区商店的全部上架应用。
-                if nbParseTrackIDOnly(kw) != nil || kw.lowercased().contains("apple.com") {
+                //
+                // v0.3.549：**「下架」必须走 NB 自己的搜索**。
+                //
+                // 用户反馈「NB 源选美区下架的应用根本搜索不到，你这下架应用搜索完全没用」——
+                // 真因就在这一支：以前无论选上架还是下架，走的都是同一条 Apple search，
+                // 而 Apple 的 search/RSS **只回在架应用**（实测 `term=stikdebug&country=us`
+                // 回的是 TestFlight / GitHub / Debug Anywhere 这批在架应用，正是截图里那几行）——
+                // 所以「下架」这个筛选在数据源上根本不曾生效，是个空开关。
+                //
+                // 下架库只有 NB 服务端有（`nb9527_searchOffSaleApp`，见 `NBStoreClient`）。
+                // 数字 ID 这一支在下架态下也走下架接口 —— 下架应用只能这样取包。
+                if appStateFilter == .offSale {
+                    // 下架态：一律走 NB 下架搜索（输入是 ID 或名字都一样，接口只吃 `kw`）。
+                    do {
+                        nbOffSaleResults = try await NBStoreClient.searchOffSaleApp(keyword: kw)
+                    } catch {
+                        nbOffSaleResults = []
+                        errorText = "NB 下架搜索失败：\(error.localizedDescription)"
+                        ToastCenter.shared.show("搜索失败")
+                    }
+                } else if nbParseTrackIDOnly(kw) != nil || kw.lowercased().contains("apple.com") {
                     await runNBFetch(kw)
                 } else {
                     do {
