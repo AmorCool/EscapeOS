@@ -957,7 +957,7 @@ private enum PackageSINFWriter {
                                  // 「a band-aid solution」的静态 Huffman 实现，
                                  // 只生成单个 block —— 没必要为一个 1.5KB 的文件冒这个险。
                                  // 存储方式是 ZIP 标准做法，任何解压器都认。
-                                 compressionMethod: ZipCompressionMethod.none,
+                                 compressionMethod: ApplePackageArchive.ZipCompressionMethod.none,
                                  provider: { (position: Int64, size: Int) -> Data in
                 let start = sinf.startIndex.advanced(by: Int(position))
                 return sinf.subdata(in: start ..< (start + size))
