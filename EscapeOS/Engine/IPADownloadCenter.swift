@@ -883,20 +883,22 @@ final class IPADownloadCenter: ObservableObject {
 /// **唯一复现来源**：既能复现"包内没有可用 sinf"的失败，也能验证本写入器追加后的成品。
 /// 删了它 = 这条链路以后**没法在本地复现/回归**（真机重下一次代价大得多）。
 ///
-/// ## ▸▸ v0.3.558：`removeEntry` 只在内存里删，**必须紧跟一次 `flush()`**
+/// ## ▸▸ v0.3.560：整包重写替换，不再原地改 ZIP
 ///
-/// 本类只提供 `flushPendingAdds()` 一条落盘路径，而它拼中央目录时用的是
-/// `entries + newEntries`。所以「先删再加」这个组合**只有删也落盘了**才成立；
-/// 否则旧记录会被原样带上，中央目录里出现**同名两条**，解压器在苹果这边直接报
-/// `PackageExtractionFailed (Could not extract archive)`。
-/// 真机对照（2026-10-02 日志）：
-/// ```
-/// 13:44:21  sinf 注入：已把 sinf 写进包内：…/Via.sinf（1584 字节）   ← 包内原本没有，只 add
-/// 13:44:24  sinf 注入：包内已有 …/Via.sinf，先摘除旧条目再写入…     ← remove + add
-/// 13:44:24  [安装] 加密包：携带 ApplicationSINF（1584 字节）交给 installd
-/// 13:44:24  安装失败 Via 浏览器-x.ipa：PackageExtractionFailed      ← 0.4 秒后
-/// ```
-/// **有旧条目 = 失败，没旧条目 = 成功** —— 唯一差别就是那次 remove 有没有落盘。
+/// 0.3.546 → 0.3.559 用的是「摘中央目录记录 + 在旧中央目录起点追加新条目」的原地改法，
+/// 真机上加密包**一直**报 `PackageExtractionFailed (Could not extract archive)`
+/// —— 从 3.5MB 的 Via 到 230MB 的 ChatGPT 全都失败，而**未加密**的包（不注入 sinf）
+/// 走同一条 AFC 上传链路就能装成功。⇒ 问题出在「我们改过的那个 ZIP」本身。
+///
+/// 原地改法会留下两个苹果解压通道不吃的痕迹：
+/// 1. 旧 sinf 的 local header + 数据块还在文件里（只摘了索引）
+///    → 文件里多一个**无中央目录记录指向的 `PK\x03\x04`**；
+/// 2. 新条目属性是自己拼的（`version made by = 20`、无 extra），
+///    与苹果自己的条目（`0x314` = Unix + 2.0，带 extra）不同源。
+///
+/// 现在改为 `ApplePackageArchive.replaceEntry(with:data:)`：逐条复制成一份新包，
+/// 被替换的那条写新内容。产物与「苹果自己压的包」同构，无孤儿字节、无属性差异。
+///
 /// 每次写包的每一步（成功 / 跳过 / 失败原因）都写 `[下载中心]` 日志 —— 不许静默。
 private enum PackageSINFWriter {
 
@@ -942,60 +944,23 @@ private enum PackageSINFWriter {
             }
 
             let target = "\(appPrefix).app/SC_Info/\(exe).sinf"
-            // v0.3.546：**包内已有时改为替换，不再跳过**。
-            //
-            // 为什么这条必须改（真机日志实证，2026-10-02）：
-            //   [10:35:44] sinf 注入：包内已有 Payload/Surge-iOS.app/SC_Info/Surge-iOS.sinf；
-            //              本写入器只能追加、不能替换，跳过（安装可能解密失败）
-            //   [10:39:04] sinf 注入：包内已有 Payload/HatchApp.app/SC_Info/HatchApp.sinf；…
-            //
-            // NB 源拿到的 Apple CDN 直链 IPA **自带一份 sinf**，但那份 sinf 是
-            // **Apple 为直链签发场景准备的、不绑定本机**；服务端（NB）下发的
-            // `sinfs[].dataBase64` 才是**为本设备**签的。跳过的后果 = 装的是包里
-            // 那份不属于本机的 sinf → installd 向 Apple 要不到本机解密密钥 →
-            // **装得上，一启动就崩**（正是用户报的「缺 Sinf / 安装后闪退」）。
-            //
-            // 覆盖能力见 `ApplePackageArchive.removeEntry(with:)`：
-            // 先从中央目录摘掉旧条目，再追加同路径的新条目 —— 中央目录里只剩一份，
-            // 解压以新的为准。**顺序不能反**（先 add 再 remove 会产出重名条目）。
-            //
-            // ★★ v0.3.558 关键：**光调 `removeEntry` 是不生效的**。
-            //
-            // `removeEntry` 只在内存里改 `entries` 数组，不动文件；真正落盘的是 L965 那次
-            // `addEntry`（把数据读进 `pendingAdds`）+ L966 那次 `flush()`。
-            // 问题在 L966 的 `flush()` 跑的是 `flushPendingAdds()`，它直接覆盖 `output` 那段，
-            // **重新拼的中央目录是 `entries + newEntries`** —— 只要不是在 add 之前就摘掉了旧条目，
-            // 旧记录就会被原样带上，产出**重名条目**：
-            //     central = [旧 sinf 记录] + [新 sinf 记录]   （同名两条）
-            // 真机日志（2026-10-02）与「有旧条目就 0.4~1.2 秒内包解压失败」完全对得上。
-            //
-            // 修法：**摘条目这一步必须自己单独 flush 一次**，把「删」这件事真正落盘、
-            // 并把内存 `entries` 落定；之后那次 `flush()` 里 `pendingAdds` 只剩新条目。
-            if archive[target] != nil {
-                archive.removeEntry(with: target)
-                // ★ v0.3.558：**必须在这里单独落盘一次**。
-                // `removeEntry` 是纯内存操作，而紧跟着的 `flush()` 只在 `pendingAdds` 非空时干活 ——
-                // 如果不在这一步把「删」写进文件，L966 那次 flush 重新拼中央目录时
-                // 旧记录会被原样带上，与新增的同名条目一起进中央目录 → **重名** → 苹果解压器失败。
-                // 中间态是合法 ZIP（中央目录里就是少了那份 sinf），所以这一步本身不会写坏包。
-                try archive.flushCentralDirectory()
-                log("包内已有 \(target)（非本机签发），先摘除旧条目再写入服务端下发的那份")
-            }
 
-            try archive.addEntry(with: target,
-                                 uncompressedSize: Int64(sinf.count),
-                                 // v0.3.550：**用存储方式（method=0），不压缩**。
-                                 // 两个理由：① sinf 只有 1.5KB，压不压没差别；
-                                 // ② 我们的 deflate 是 SWCompression 里那个自陈
-                                 // 「a band-aid solution」的静态 Huffman 实现，
-                                 // 只生成单个 block —— 没必要为一个 1.5KB 的文件冒这个险。
-                                 // 存储方式是 ZIP 标准做法，任何解压器都认。
-                                 compressionMethod: ApplePackageArchive.ZipCompressionMethod.none,
-                                 provider: { (position: Int64, size: Int) -> Data in
-                let start = sinf.startIndex.advanced(by: Int(position))
-                return sinf.subdata(in: start ..< (start + size))
-            })
-            try archive.flush()
+            // v0.3.560：整包重写替换。
+            //
+            // 旧做法（0.3.546 → 0.3.559）是「摘中央目录记录 + 在旧中央目录起点追加新条目」：
+            // 原地改。真机上加密包**一直**报
+            // `PackageExtractionFailed (Could not extract archive)`，
+            // 从 3.5MB 的 Via 到 230MB 的 ChatGPT 全都是（0.4~11 秒）。
+            //
+            // 原地改法在 ZIP 层会留下两个苹果解压通道不吃的痕迹：
+            //   ① 旧 sinf 那条的 local header + 数据块还在文件里（只摘了索引），
+            //      文件里多出一个**没有中央目录记录指向的 `PK\x03\x04`**；
+            //   ② 新条目的属性是自己拼的（`version made by = 20`、无 extra），
+            //      与苹果自己的条目（`0x314` = Unix + 2.0，带 extra）不同源。
+            //
+            // 整包重写后产物与「苹果自己压的包」同构：条目顺序、属性、偏移全部连续，
+            // 无孤儿字节，无自拼属性差异。代价是整包按字节复制一遍，不解压不重压缩。
+            try archive.replaceEntry(with: target, data: sinf)
             log("已把 sinf 写进包内：\(target)（\(sinf.count) 字节）")
         } catch {
             log("写 sinf 失败（\(error.localizedDescription)），包内不会带 sinf")

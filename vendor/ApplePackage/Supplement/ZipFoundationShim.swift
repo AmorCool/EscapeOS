@@ -45,6 +45,8 @@ public final class ApplePackageArchive {
 
     public let url: URL
     private let fileHandle: FileHandle
+    /// `replaceEntry` 整包重写后置位 —— 之后的 `deinit` 不再尝试落盘。
+    private var didRewrite = false
     private(set) public var entries: [ZipEntryRef] = []
     /// 中央目录在文件中的起始偏移（追加新条目时从这里截断）。
     private var centralDirOffset: UInt64 = 0
@@ -61,10 +63,12 @@ public final class ApplePackageArchive {
     }
 
     deinit {
-        do {
-            try flushPendingAdds()
-        } catch {
-            // 追加失败不抛（deinit 不能抛）
+        if !didRewrite {
+            do {
+                try flushPendingAdds()
+            } catch {
+                // 追加失败不抛（deinit 不能抛）
+            }
         }
         try? fileHandle.close()
     }
@@ -130,6 +134,192 @@ public final class ApplePackageArchive {
     /// ```
     public func removeEntry(with path: String) {
         entries.removeAll { $0.path == path }
+    }
+
+    // MARK: - 整包重写替换（v0.3.560）
+
+    /// 把 `path` 换成新数据：**逐条把原包复制成一份新包**，替换的那条写新内容。
+    ///
+    /// ## 为什么必须整包重写（真机实证）
+    ///
+    /// 之前用的是「摘中央目录记录 + 在旧中央目录起点追加新条目」的原地改法。
+    /// 真机上（0.3.546 → 0.3.559）加密包**一直**报
+    /// `PackageExtractionFailed (Could not extract archive)`。
+    ///
+    /// 原地改法在 ZIP 层会被留下两个痕迹，苹果的解压通道不吃：
+    /// 1. **旧 sinf 那条的 local header + 数据块还在文件里**（只摘了索引），
+    ///    文件里多出一个**没有任何中央目录记录指向的 `PK\x03\x04`**；
+    /// 2. 新条目的属性是我们自己拼的（`version made by = 20`、无 extra），
+    ///    与苹果自己的条目（`0x314` = Unix + 2.0，带 extra）不同源。
+    ///
+    /// 整包重写后产物与「苹果自己压的包」同构：条目顺序、属性、偏移全部连续，
+    /// 没有孤儿字节，没有自拼的属性差异。
+    ///
+    /// 代价是要把整包复制一遍（3.5MB ~ 500MB 按字节顺序 copy，无解压/重压缩），
+    /// 换取的是**产物结构必然合法**。
+    ///
+    /// - Parameters:
+    ///   - path: 要替换的条目路径（不存在时按追加处理）。
+    ///   - data: 新数据（存储方式写入，method=0）。
+    public func replaceEntry(with path: String, data: Data) throws {
+        let tmpURL = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).rewrite-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: tmpURL.path, contents: nil)
+        guard let out = FileHandle(forWritingTo: tmpURL) else {
+            throw ApplePackageZipError.cannotOpen(tmpURL.path)
+        }
+
+        // 源文件整体映射读（不整块载入内存）
+        let src = try Data(contentsOf: url, options: .mappedIfSafe)
+
+        var newCentral = Data()
+        var offset: UInt64 = 0
+        var replaced = false
+
+        for entry in entries {
+            if entry.path == path {
+                // 命中：写入新数据的 local header + 数据
+                let nameData = Data(path.utf8)
+                let crc = CRC32.data(data)
+                var local = Data()
+                local.append(uint32Le(0x04034B50))
+                local.append(uint16Le(20))          // version needed
+                local.append(uint16Le(0))           // flags
+                local.append(uint16Le(0))           // method = 存储
+                local.append(uint16Le(0))           // mod time
+                local.append(uint16Le(0))           // mod date
+                local.append(uint32Le(crc))
+                local.append(uint32Le(UInt32(data.count)))
+                local.append(uint32Le(UInt32(data.count)))
+                local.append(uint16Le(UInt16(nameData.count)))
+                local.append(uint16Le(0))           // extra length
+                local.append(nameData)
+                local.append(data)
+                out.write(local)
+
+                var central = Data()
+                central.append(uint32Le(0x02014B50))
+                // 与苹果条目同源：version made by = 0x314（Unix + 2.0）
+                central.append(uint16Le(0x0314))
+                central.append(uint16Le(20))
+                central.append(uint16Le(0))         // flags
+                central.append(uint16Le(0))         // method = 存储
+                central.append(uint16Le(0))         // time
+                central.append(uint16Le(0))         // date
+                central.append(uint32Le(crc))
+                central.append(uint32Le(UInt32(data.count)))
+                central.append(uint32Le(UInt32(data.count)))
+                central.append(uint16Le(UInt16(nameData.count)))
+                central.append(uint16Le(0))         // extra
+                central.append(uint16Le(0))         // comment
+                central.append(uint16Le(0))         // disk
+                central.append(uint16Le(0))         // internal attrs
+                central.append(uint32Le(0))         // external attrs
+                central.append(uint32Le(UInt32(offset)))
+                central.append(nameData)
+                newCentral.append(central)
+
+                offset += UInt64(local.count)
+                replaced = true
+                continue
+            }
+
+            // 其余条目：原样搬运 local header + 数据
+            let start = Int(entry.localHeaderOffset)
+            let header = src.subdata(in: start ..< (start + 30))
+            guard header.count == 30, header.uint32(at: 0) == 0x04034B50 else {
+                try? FileManager.default.removeItem(at: tmpURL)
+                throw ApplePackageZipError.malformed("local header 异常：\(entry.path)")
+            }
+            let nameLen = Int(header.uint16(at: 26))
+            let extraLen = Int(header.uint16(at: 28))
+            let payloadStart = start + 30 + nameLen + extraLen
+            // 该条目的物理占用：local header + 数据（用中央目录里的压缩后长度）
+            let payloadLen = Int(entry.compressedSize)
+            let payload = src.subdata(in: payloadStart ..< (payloadStart + payloadLen))
+            guard payload.count == payloadLen else {
+                try? FileManager.default.removeItem(at: tmpURL)
+                throw ApplePackageZipError.malformed("条目数据不完整：\(entry.path)")
+            }
+
+            out.write(header)
+            out.write(src.subdata(in: (start + 30) ..< payloadStart))   // name + extra
+            out.write(payload)
+
+            // 中央目录记录：拷原记录，只把 localHeaderOffset 改成新偏移
+            var central = entry.centralDirRecord
+            central.replaceSubrange(42 ..< 46, with: uint32Le(UInt32(offset)))
+            newCentral.append(central)
+
+            offset += UInt64(30 + nameLen + extraLen + payloadLen)
+        }
+
+        if !replaced {
+            // 原包没有这条 → 追加
+            let nameData = Data(path.utf8)
+            let crc = CRC32.data(data)
+            var local = Data()
+            local.append(uint32Le(0x04034B50))
+            local.append(uint16Le(20))
+            local.append(uint16Le(0))
+            local.append(uint16Le(0))
+            local.append(uint16Le(0))
+            local.append(uint16Le(0))
+            local.append(uint32Le(crc))
+            local.append(uint32Le(UInt32(data.count)))
+            local.append(uint32Le(UInt32(data.count)))
+            local.append(uint16Le(UInt16(nameData.count)))
+            local.append(uint16Le(0))
+            local.append(nameData)
+            local.append(data)
+            out.write(local)
+
+            var central = Data()
+            central.append(uint32Le(0x02014B50))
+            central.append(uint16Le(0x0314))
+            central.append(uint16Le(20))
+            central.append(uint16Le(0))
+            central.append(uint16Le(0))
+            central.append(uint16Le(0))
+            central.append(uint16Le(0))
+            central.append(uint32Le(crc))
+            central.append(uint32Le(UInt32(data.count)))
+            central.append(uint32Le(UInt32(data.count)))
+            central.append(uint16Le(UInt16(nameData.count)))
+            central.append(uint16Le(0))
+            central.append(uint16Le(0))
+            central.append(uint16Le(0))
+            central.append(uint16Le(0))
+            central.append(uint32Le(0))
+            central.append(uint32Le(UInt32(offset)))
+            central.append(nameData)
+            newCentral.append(central)
+            offset += UInt64(local.count)
+        }
+
+        // 中央目录 + EOCD
+        out.write(newCentral)
+        let total = entries.count + (replaced ? 0 : 1)
+        guard total <= Int(UInt16.max) else {
+            try? FileManager.default.removeItem(at: tmpURL)
+            throw ApplePackageZipError.malformed("条目数超出 ZIP 上限")
+        }
+        out.write(eocdData(entryCount: UInt16(total),
+                           centralSize: UInt32(newCentral.count),
+                           centralOffset: UInt32(offset)))
+        try out.synchronize()
+        try out.close()
+
+        // 原子替换（先把原句柄关掉，再换文件）
+        try? fileHandle.close()
+        didRewrite = true
+        do {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
+        } catch {
+            // 回退：删原文件再移动（`replaceItemAt` 在某些沙盒属性下会失败）
+            try? FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: tmpURL, to: url)
+        }
     }
 
     // MARK: - 追加
