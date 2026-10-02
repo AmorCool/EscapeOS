@@ -939,3 +939,142 @@ void SapMachine::Teardown(uint64_t ctx) {
     int32_t st = static_cast<int32_t>(Invoke(entry_.teardown, { ctx }));
     if (st != 0) throw std::runtime_error(std::format("Teardown returned {}", st));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  StoreAgent —— `ent/download` 的包解密器
+//
+//  逐段对齐上游 ipatool `internal/sap/machine/storeagent.go`：
+//    openStoreAgent        → SapMachine::OpenStoreAgent
+//    initializeGlobal      → 0x0c5fc0(hardware, "/Users/Shared/SC Info", ctxField)
+//    initializeSession     → 0x0debd0(globalCtx, dpInfo, len, sessionField)
+//    decryptChunk          → 0x0ee700(session, buf, len, buf, 0)
+//    Close                 → 0x1212d0(session)
+//
+//  ⚠️ 上游 openStoreAgent 还会给 shims 加一组 `zeroReturnAliases`
+//     （`_pthread_rwlock_rdlock` / `_pthread_mutex_init` / `_pthread_mutex_destroy`
+//      / `_pthread_rwlock_destroy` 及 `$UNIX2003` 变体）。
+//     我们的 `SapShims` 是否已实现这些 symbol 决定要不要补 ——
+//     缺失时 guest 会在 `Resolve` 处 fault，届时按 fault 文案补即可。
+// ═══════════════════════════════════════════════════════════════════════════
+
+std::unique_ptr<SapMachine::StoreAgent> SapMachine::StoreAgent::Open(
+    SapMachine& machine,
+    std::span<const uint8_t> hardwareID,
+    std::span<const uint8_t> dpInfo)
+{
+    // 上游硬门：dpInfo 为空直接拒绝（没有它解密器拿不到密钥材料）。
+    if (dpInfo.empty()) {
+        throw std::runtime_error("StoreAgent dpInfo is empty");
+    }
+    // 入口必须真的解析出来了才可能跑 —— 否则大概是用 Create() 而非
+    // CreateWithStoreAgent() 建的机器，报清楚一点省得排到别处。
+    if (machine.kStoreAgentGlobalInit == 0 || machine.kStoreAgentSessionInit == 0 ||
+        machine.kStoreAgentDecryptEntry == 0 || machine.kStoreAgentSessionClose == 0) {
+        throw std::runtime_error("StoreAgent entry points are unavailable "
+                                 "(create the machine with CreateWithStoreAgent)");
+    }
+
+    auto hw = HardwareBlock(hardwareID);
+
+    // ── ① global init ────────────────────────────────────────────────────────
+    // 上游：invoke(storeAgentGlobalInit, 0, hardwareAddress, pathAddress, contextField)
+    //       要求返回 0，且 contextField 里的 uint32 非 0。
+    uint32_t globalContext = 0;
+    {
+        machine.BeginCall();
+        const ScratchCleanup cleanup{machine};
+        uint64_t hwAddr   = machine.Scratch(hw.data(), hw.size());
+        // 上游把路径**连尾零**一起写进去（`append([]byte(path), 0)`）。
+        std::string pathWithNul(kStoreAgentSCInfoPath);
+        pathWithNul.push_back('\0');
+        uint64_t pathAddr = machine.Scratch(pathWithNul.data(), pathWithNul.size());
+        uint64_t ctxFld   = machine.Scratch(4);
+
+        int32_t status = static_cast<int32_t>(machine.Invoke(kStoreAgentGlobalInit,
+                                                             { 0, hwAddr, pathAddr, ctxFld }));
+        if (status != 0) {
+            throw std::runtime_error(std::format("StoreAgent global initialization returned {}", status));
+        }
+        globalContext = machine.GuestRead32(ctxFld);
+        if (globalContext == 0) {
+            throw std::runtime_error("StoreAgent global initialization returned a null context");
+        }
+    }
+
+    // ── ② session init ───────────────────────────────────────────────────────
+    // 上游：invoke(storeAgentSessionInit, globalContext, dpInfoAddress,
+    //              len(dpInfo), sessionField)，要求返回 0、session 非 0。
+    uint64_t session = 0;
+    {
+        machine.BeginCall();
+        const ScratchCleanup cleanup{machine};
+        uint64_t dpAddr       = machine.Scratch(dpInfo.data(), dpInfo.size());
+        uint64_t sessionField = machine.Scratch(8);
+
+        int32_t status = static_cast<int32_t>(machine.Invoke(kStoreAgentSessionInit,
+                                                             { uint64_t(globalContext), dpAddr,
+                                                               uint64_t(dpInfo.size()), sessionField }));
+        if (status != 0) {
+            throw std::runtime_error(std::format("StoreAgent session initialization returned {}", status));
+        }
+        session = machine.GuestRead64(sessionField);
+        if (session == 0) {
+            throw std::runtime_error("StoreAgent session initialization returned a null session");
+        }
+    }
+
+    return std::unique_ptr<StoreAgent>(new StoreAgent(
+        machine, session, kStoreAgentDecryptEntry, kStoreAgentSessionClose));
+}
+
+SapMachine::StoreAgent::~StoreAgent() {
+    // 析构不抛（与上游 defer Close() 同义）。
+    try { Close(); } catch (...) {}
+}
+
+size_t SapMachine::StoreAgent::DecryptChunk(std::span<uint8_t> buffer) {
+    if (closed_) throw std::runtime_error("StoreAgent is closed");
+    if (buffer.empty()) return 0;
+    if (buffer.size() > kChunkSize) {
+        throw std::runtime_error(std::format("StoreAgent chunk exceeds {} bytes", kChunkSize));
+    }
+
+    // 上游：invoke(decryptEntry, session, address, len, address, 0)
+    //       —— 输入输出**同一块缓冲区**（原地解密），第五个参数恒为 0。
+    //       返回后必须**把 guest 内存读回来**（data 被就地改写了）。
+    machine_.BeginCall();
+    const ScratchCleanup cleanup{machine_};
+    uint64_t address = machine_.Scratch(buffer.data(), buffer.size());
+
+    int32_t status = static_cast<int32_t>(machine_.Invoke(
+        decryptEntry_,
+        { session_, address, uint64_t(buffer.size()), address, 0 }));
+    if (status != 0) {
+        throw std::runtime_error(std::format("StoreAgent decryption returned {}", status));
+    }
+
+    UC_CHECK(uc_mem_read(machine_.uc_, address, buffer.data(), buffer.size()),
+             "read decrypted StoreAgent chunk");
+    return buffer.size();
+}
+
+void SapMachine::StoreAgent::Close() {
+    if (closed_) return;
+    closed_ = true;
+    if (session_ == 0) return;
+
+    machine_.BeginCall();
+    const ScratchCleanup cleanup{machine_};
+    int32_t status = static_cast<int32_t>(machine_.Invoke(closeEntry_, { session_ }));
+    session_ = 0;
+    if (status != 0) {
+        throw std::runtime_error(std::format("StoreAgent session close returned {}", status));
+    }
+}
+
+std::unique_ptr<SapMachine::StoreAgent> SapMachine::OpenStoreAgent(
+    std::span<const uint8_t> hardwareID,
+    std::span<const uint8_t> dpInfo)
+{
+    return StoreAgent::Open(*this, hardwareID, dpInfo);
+}

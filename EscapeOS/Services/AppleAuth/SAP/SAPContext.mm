@@ -200,3 +200,74 @@ static void SetError(NSError **error, const std::exception &exception) {
     }
 }
 @end
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  StoreAgent 解密器（`ent/download` 用）
+//
+//  与上面的 SAP 签名会话是**两个独立对象**：本类自己持有一台带 `storeagent`
+//  镜像的 SapMachine，生命周期只覆盖「一次包解密」。
+// ─────────────────────────────────────────────────────────────────────────────
+@implementation SAPStoreAgentContext {
+    std::unique_ptr<SapMachine> _machine;
+    std::unique_ptr<SapMachine::StoreAgent> _agent;
+}
+
++ (instancetype)decrypterWithAssetsURL:(NSURL *)storeAgentURL
+                            hardwareID:(NSData *)hardwareID
+                                dpInfo:(NSData *)dpInfo
+                                 error:(NSError **)error {
+    SAPStoreAgentContext *context = [[SAPStoreAgentContext alloc] init];
+    @try {
+        if (hardwareID.length != 6) throw std::runtime_error("Invalid SAP device identifier.");
+        if (dpInfo.length == 0) throw std::runtime_error("StoreAgent dpInfo is empty.");
+
+        // `storeagent` 是独立可执行 Mach-O，跟另外四个资产在**同一个目录**。
+        // 它同时也是第十个 fileSpec（见 prepare.sap.py 的 ASSETS）。
+        context->_machine = SapMachine::CreateWithStoreAgent(
+            ReadVerifiedAsset(storeAgentURL, @"CoreFP", 29014912, @"f19141336be4198d0f8991bb00017c915efc7aeaece36c345f7faa1237ea6074"),
+            ReadVerifiedAsset(storeAgentURL, @"CommerceCore", 207744, @"c5401e57402230f3c876409d295319ddf1e61287bc882683c5d61277be7bc1f2"),
+            ReadVerifiedAsset(storeAgentURL, @"CommerceKit", 3271840, @"b84ff12c21987856c0a17b78f1ad82b73195a6dec5f3b208a17d245555a2c8a2"),
+            ReadVerifiedAsset(storeAgentURL, @"CoreFP.icxs", 5288352, @"473e78af86979f5bd4f6269561caf770b3d16c098d918846eeac8cdd2fe6566a"),
+            ReadVerifiedAsset(storeAgentURL, @"storeagent", 2580176, @"70ce036f9dbcbc04db9511ebd08de0dd3cbc35ccc9d44b089c90170cb5453c59"),
+            std::vector<uint8_t>(static_cast<const uint8_t *>(hardwareID.bytes),
+                                 static_cast<const uint8_t *>(hardwareID.bytes) + hardwareID.length)
+        );
+
+        auto hw = std::span<const uint8_t>(static_cast<const uint8_t *>(hardwareID.bytes), hardwareID.length);
+        auto dp = std::span<const uint8_t>(static_cast<const uint8_t *>(dpInfo.bytes), dpInfo.length);
+        context->_agent = context->_machine->OpenStoreAgent(hw, dp);
+        return context;
+    } @catch (const std::exception &exception) {
+        SetError(error, exception);
+        return nil;
+    }
+}
+
+- (NSData *)decryptChunk:(NSData *)chunk error:(NSError **)error {
+    @try {
+        if (!_agent) throw std::runtime_error("StoreAgent session is not open.");
+        if (chunk.length == 0) return [NSData data];
+        if (chunk.length > SapMachine::StoreAgent::kChunkSize)
+            throw std::runtime_error("StoreAgent chunk exceeds 0x8000 bytes.");
+
+        std::vector<uint8_t> buffer(static_cast<const uint8_t *>(chunk.bytes),
+                                    static_cast<const uint8_t *>(chunk.bytes) + chunk.length);
+        _agent->DecryptChunk(buffer);
+        return [NSData dataWithBytes:buffer.data() length:buffer.size()];
+    } @catch (const std::exception &exception) {
+        SetError(error, exception);
+        return nil;
+    }
+}
+
+- (void)closeDecrypter {
+    if (_agent) {
+        try { _agent->Close(); } catch (...) { /* Destructors must not throw. */ }
+        _agent.reset();
+    }
+}
+
+- (void)dealloc {
+    [self closeDecrypter];
+}
+@end

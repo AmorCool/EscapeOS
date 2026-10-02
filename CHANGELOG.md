@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.3.542] - 2026-10-02
+
+> **`ent/download` 步骤 2：StoreAgent 包解密器**。v0.3.541 已验证通过 CI
+> （Build / Package IPA / Verify SAP assets / Publish Release 全绿）。
+
+### 新增：`SapMachine::StoreAgent`（C++，对齐上游 `machine/storeagent.go`）
+
+三段式，偏移逐字取自上游常量：
+
+```
+global   = kStoreAgentBase + 0x0c5fc0
+session  = kStoreAgentBase + 0x0debd0
+decrypt  = kStoreAgentBase + 0x0ee700
+close    = kStoreAgentBase + 0x1212d0
+```
+
+| 上游 | 我们 |
+|---|---|
+| `openStoreAgent` | `SapMachine::OpenStoreAgent(hardwareID, dpInfo)` |
+| `initializeGlobal` | `StoreAgent::Open` 第一段：`0x0c5fc0(0, hw, "/Users/Shared/SC Info", ctxField)` |
+| `initializeSession` | 第二段：`0x0debd0(globalCtx, dpInfo, len, sessionField)` |
+| `decryptChunk` | `StoreAgent::DecryptChunk(buffer)`：`0x0ee700(session, buf, len, buf, 0)` **原地解密** |
+| `Close` | `0x1212d0(session)` |
+
+两处硬门照搬上游：**`dpInfo` 为空直接报错**（没有它解密器拿不到密钥材料）；
+global init 返回的上下文非 0、session 非 0。
+
+### 新增：`SAPStoreAgentContext`（ObjC++ 桥）
+
+`SAPContext.mm` 里新增独立类，与 SAP 签名会话**不共用机器** ——
+`storeagent` 是额外挂载的镜像。它自己持有一台 `CreateWithStoreAgent(...)`
+建的 SapMachine，生命周期只覆盖一次包解密；`dealloc` 自动关会话。
+
+接口：`decrypterWithAssetsURL:hardwareID:dpInfo:error:` → `decryptChunk:error:`
+（≤ `0x8000`）→ `closeDecrypter`。
+
+### 风险与未验证
+
+- **C++ `StoreAgent` 与 ObjC++ 桥均未经编译**，本机无编译器，只能等 CI
+- 上游给 `storeagent` 的 shims 加了 `zeroReturnAliases`
+  （`_pthread_rwlock_rdlock` / `_pthread_mutex_init` / `_pthread_mutex_destroy`
+  / `_pthread_rwlock_destroy`，含 `$UNIX2003` 变体）。我们 `SapShims` 是否已实现
+  这几项**未核实** —— 缺失时 guest 会在 `Resolve` 处 fault，届时按 fault 文案补
+- **`ent/download` 请求链**（bag 拉取 / `kbsync` 生成 / `NoRedirects`）尚未接入，
+  属步骤 2 剩余部分
+
 ## [0.3.541] - 2026-10-02
 
 > **修 v0.3.540 的编译错误 + `ent/download` 步骤 1 落地**。

@@ -197,6 +197,54 @@ public:
     std::vector<uint8_t>  Sign(uint64_t ctx, std::span<const uint8_t> input);
     void                  Teardown(uint64_t ctx);
 
+    // ── StoreAgent（`ent/download` 的包解密器）────────────────────────────────
+    //
+    // 对齐上游 ipatool `internal/sap/machine/storeagent.go`。三段式：
+    //   global(0x0c5fc0) → session(0x0debd0) → decrypt(0x0ee700)  ← 偏移相对 kStoreAgentBase
+    //
+    // 用法：
+    //     auto agent = machine->OpenStoreAgent(hardwareID, dpInfo);
+    //     agent->Decrypt(ctx, dst, src);   // 流式，按 0x8000 分块
+    //     agent->Close();
+    //
+    // ⚠️ 必须先经 `CreateWithStoreAgent(...)` 创建机器，否则三个入口都是 0。
+
+    /// StoreAgent 会话。持有机器引用，**机器必须先于它存活**。
+    class StoreAgent {
+    public:
+        /// 初始化全局上下文 + 会话。
+        /// - Parameter dpInfo: 下载响应里 `sinfs[].dpInfo`（缺失或为空会直接报错，
+        ///   上游明确 `if len(dpInfo) == 0 { return error }`）。
+        static std::unique_ptr<StoreAgent> Open(SapMachine& machine,
+                                                std::span<const uint8_t> hardwareID,
+                                                std::span<const uint8_t> dpInfo);
+
+        ~StoreAgent();
+
+        /// 解密一段（≤ `kChunkSize`）。返回解密后的字节数。
+        size_t DecryptChunk(std::span<uint8_t> buffer);
+
+        /// 关会话（幂等）。
+        void Close();
+
+        /// 上游分块大小 `storeAgentChunkSize = 0x8000`。
+        static constexpr size_t kChunkSize = 0x8000;
+
+    private:
+        StoreAgent(SapMachine& machine, uint64_t session, uint64_t decryptEntry, uint64_t closeEntry)
+            : machine_(machine), session_(session), decryptEntry_(decryptEntry), closeEntry_(closeEntry) {}
+
+        SapMachine& machine_;
+        uint64_t    session_;
+        uint64_t    decryptEntry_;
+        uint64_t    closeEntry_;
+        bool        closed_ = false;
+    };
+
+    /// 打开 StoreAgent 会话。见 `StoreAgent` 用法。
+    std::unique_ptr<StoreAgent> OpenStoreAgent(std::span<const uint8_t> hardwareID,
+                                               std::span<const uint8_t> dpInfo);
+
 private:
     SapMachine() = default;
 
@@ -217,6 +265,17 @@ private:
     static constexpr uint64_t kKitBase     = 0x0000100080000000ULL;
     /// `storeagent` 镜像基址 —— 对齐上游 `storeAgentBase`（machine/storeagent.go:14）。
     static constexpr uint64_t kStoreAgentBase = 0x00001000C0000000ULL;
+    // `storeagent` 的三个入口（偏移取自上游常量，逐字对应）：
+    //   storeAgentGlobalInit   = storeAgentBase + 0x0c5fc0
+    //   storeAgentSessionInit  = storeAgentBase + 0x0debd0
+    //   storeAgentDecryptEntry = storeAgentBase + 0x0ee700
+    //   storeAgentSessionClose = storeAgentBase + 0x1212d0
+    static constexpr uint64_t kStoreAgentGlobalInit   = kStoreAgentBase + 0x0c5fc0ULL;
+    static constexpr uint64_t kStoreAgentSessionInit  = kStoreAgentBase + 0x0debd0ULL;
+    static constexpr uint64_t kStoreAgentDecryptEntry = kStoreAgentBase + 0x0ee700ULL;
+    static constexpr uint64_t kStoreAgentSessionClose = kStoreAgentBase + 0x1212d0ULL;
+    /// `/Users/Shared/SC Info` —— 上游 `storeAgentSCInfoPath`，作为 global init 的路径参数。
+    static constexpr const char* kStoreAgentSCInfoPath = "/Users/Shared/SC Info";
     static constexpr uint64_t kScratchBase = 0x0000300000000000ULL;
     static constexpr uint64_t kScratchSize = uint64_t(32) << 20; // 32 MB
     static constexpr uint64_t kHeapBase    = 0x0000400000000000ULL;
