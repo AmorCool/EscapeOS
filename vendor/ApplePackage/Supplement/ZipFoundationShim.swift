@@ -112,6 +112,22 @@ public final class ApplePackageArchive {
     ///
     /// 必须**在 `addEntry` 之前**调用。若先 `addEntry` 再删，删的会是旧条目、
     /// 而新条目已经挂进 `pendingAdds` —— 结果两个都进中央目录（重名），比不删更糟。
+    ///
+    /// ## ★★ v0.3.558：本方法是**纯内存操作**，删完必须自己落盘
+    ///
+    /// 它只改 `entries` 数组，不碰文件。而 `flush()` 在 `pendingAdds` 为空时是 no-op，
+    /// 所以「`removeEntry` + 之后某次 `flush()`」这个组合**不会让删除生效**：
+    /// 那次 flush 重新拼中央目录时，`entries` 里旧记录还在（除非删的时候正好也有 pending）
+    /// → 中央目录里出现**同名两条** → 苹果解压器报
+    /// `PackageExtractionFailed (Could not extract archive)`（真机 0.4 秒内失败）。
+    ///
+    /// 正确用法（见 `PackageSINFWriter`）：
+    /// ```
+    /// archive.removeEntry(with: path)
+    /// try archive.flushCentralDirectory()   // 让「删」真正落盘
+    /// try archive.addEntry(with: path, …)
+    /// try archive.flush()
+    /// ```
     public func removeEntry(with path: String) {
         entries.removeAll { $0.path == path }
     }
@@ -151,8 +167,52 @@ public final class ApplePackageArchive {
     public enum ZipCompressionMethod { case none, deflate }
 
     /// 把待追加条目写入文件，并重写中央目录。
+    ///
+    /// ⚠️ `pendingAdds` 为空时本方法**直接 return、什么都不做** ——
+    /// 所以它**不能**用来「把 removeEntry 的效果落盘」。
+    /// 摘条目之后必须走 `flushCentralDirectory()`（v0.3.558 新增）。
     public func flush() throws {
         try flushPendingAdds()
+    }
+
+    /// 只重写中央目录 + EOCD（不动条目数据）。
+    ///
+    /// ★ v0.3.558：给 `removeEntry(with:)` 配的落盘口。
+    ///
+    /// `removeEntry` 只改内存 `entries`，而 `flush()` 在 `pendingAdds` 为空时是 no-op，
+    /// 于是「删」根本没有落到文件上 → 下次 `flush()` 重新拼中央目录时
+    /// **旧记录被原样带上**，与新增的同名条目一起写进中央目录（**重名**）。
+    /// 真机表现就是 0.4~1.2 秒内 `PackageExtractionFailed (Could not extract archive)`。
+    ///
+    /// 本方法在「旧中央目录起点」原地重写一份**合法**的中央目录 + EOCD：
+    /// 条目数、总长、偏移全部按当前 `entries` 重算，尾部截断到新 EOCD 末尾。
+    /// 中间态永远是**结构完整**的 ZIP，所以即便后续 add 失败，包也不会被写坏。
+    public func flushCentralDirectory() throws {
+        fileHandle.seek(toFileOffset: centralDirOffset)
+
+        var allCentral = Data()
+        for entry in entries { allCentral.append(entry.centralDirRecord) }
+
+        fileHandle.write(allCentral)
+        fileHandle.write(eocdData(entryCount: UInt16(entries.count),
+                                  centralSize: UInt32(allCentral.count),
+                                  centralOffset: UInt32(centralDirOffset)))
+        try fileHandle.truncate(atOffset: fileHandle.offsetInFile)
+        try fileHandle.synchronize()
+    }
+
+    /// 拼一份 EOCD（22 字节，无注释）。
+    private func eocdData(entryCount: UInt16, centralSize: UInt32, centralOffset: UInt32) -> Data {
+        var eocd = Data()
+        eocd.append(uint32Le(0x06054B50))
+        eocd.append(uint16Le(0))            // disk number
+        eocd.append(uint16Le(0))            // disk with cd
+        eocd.append(uint16Le(entryCount))
+        eocd.append(uint16Le(entryCount))
+        eocd.append(uint32Le(centralSize))
+        eocd.append(uint32Le(centralOffset))
+        eocd.append(uint16Le(0))            // comment length
+        return eocd
     }
 
     private func flushPendingAdds() throws {
@@ -227,16 +287,9 @@ public final class ApplePackageArchive {
         for entry in newEntries { allCentral.append(entry.centralDirRecord) }
         fileHandle.write(allCentral)
 
-        var eocd = Data()
-        eocd.append(uint32Le(0x06054B50))
-        eocd.append(uint16Le(0))            // disk number
-        eocd.append(uint16Le(0))            // disk with cd
-        eocd.append(uint16Le(UInt16(entries.count + newEntries.count)))
-        eocd.append(uint16Le(UInt16(entries.count + newEntries.count)))
-        eocd.append(uint32Le(UInt32(allCentral.count)))
-        eocd.append(uint32Le(UInt32(centralDirOffset + UInt64(output.count))))
-        eocd.append(uint16Le(0))            // comment length
-        fileHandle.write(eocd)
+        fileHandle.write(eocdData(entryCount: UInt16(entries.count + newEntries.count),
+                                  centralSize: UInt32(allCentral.count),
+                                  centralOffset: UInt32(centralDirOffset + UInt64(output.count))))
 
         // ★ v0.3.550：**必须截断**，否则包会被写坏（真机实证）。
         //

@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.3.558] - 2026-10-02
+
+> **NB 源「加密包安装失败」定案：`removeEntry` 没落盘，写出重名条目。**
+> 这一版用真机日志 + 离线精确复刻把根因钉死。
+
+### 根因：覆盖旧 sinf 时，中央目录里出现了**两条同名记录**
+
+真机日志（2026-10-02）给出的规律非常干净：
+
+| 时间 | 包内原本有没有 sinf | 走的路径 | 结果 |
+| --- | --- | --- | --- |
+| 13:44:21 | **没有** | 只 add | 注入成功 |
+| 13:44:24 | **已有** | remove + add | 注入成功，**0.4 秒后安装失败** |
+| 13:42:35 | **没有** | 只 add | 注入成功 |
+| 13:43:57 | **已有** | remove + add | 注入成功，**1.2 秒后安装失败** |
+
+失败报的是 `PackageExtractionFailed (Could not extract archive)`，
+耗时 0.4~1.2 秒 —— **本机解压阶段就挂了，还没走到 installd**。
+
+统计「包内已有 sinf 的包」与「没有 sinf 的包」，唯一的差别就是那次 `removeEntry`。
+
+### 为什么没生效
+
+`ApplePackageArchive.removeEntry(with:)` **是纯内存操作**：它只改 `entries` 数组，
+不碰文件。而唯一负责落盘的 `flushPendingAdds()` 有这样的开头：
+
+```swift
+guard !pendingAdds.isEmpty else { return }   // ← pendingAdds 为空 = 直接返回
+```
+
+所以「`removeEntry` → `addEntry` → `flush()`」这个组合里，
+`flush()` 重新拼中央目录时用的是 `entries + newEntries` ——
+`entries` 里那份**旧 sinf 记录还在**，于是旧记录和新记录**一起**写进中央目录：
+
+```
+central = [ … 其它 1307 条 … ] + [旧 XNZS.sinf 记录] + [新 XNZS.sinf 记录]
+                                  ↑ 重名
+```
+
+离线复刻（真包 `nb.ipa`，1308 条目，真 sinf 长度）对着实测：
+
+| | 声明条目数 | 中央目录实际条目 | 重名 |
+| --- | --- | --- | --- |
+| 原包 | 1308 | 1308 | 无 |
+| **当前实现** | **1309** | **1309** | **`XNZS.sinf` × 2** |
+| 本版修法 | 1308 | 1308 | 无 |
+
+条目数从 1308 变成 1309，且多出来的是一条**重名**记录 —— 苹果的解压通道在校验到
+这一点时直接失败，与「0.4 秒就报 `PackageExtractionFailed`」的时序吻合。
+
+### 修法
+
+`removeEntry` 之后**立刻单独落盘一次**，让「删」真正写进文件：
+
+```swift
+archive.removeEntry(with: target)
+try archive.flushCentralDirectory()   // v0.3.558 新增
+```
+
+为此在 `ApplePackageArchive` 上加了 `flushCentralDirectory()`：
+它只重写中央目录 + EOCD（不动条目数据），条目数 / 总长 / 偏移全部按当前
+`entries` 重算。**中间态是合法 ZIP**（就是少了那份 sinf），
+所以即使后续 `addEntry` 失败，包也不会被写坏。
+
+顺手把 `flushPendingAdds()` 里那份内联 EOCD 拼接换成共用的 `eocdData(...)`，
+两条落盘路径只有一份实现。
+
+### 影响范围
+
+`PackageSINFWriter` 是 NB 源 / 牛蛙源共用的 sinf 写回实现，
+所以**两个源都吃到这个修复**（牛蛙源同样会给自带 sinf 的包做覆盖）。
+
 ## [0.3.557] - 2026-10-02
 
 > ★ 这一版**推翻了 0.3.554/555/556 里关于「下架取包」的全部结论**。

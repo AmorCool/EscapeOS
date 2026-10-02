@@ -883,7 +883,21 @@ final class IPADownloadCenter: ObservableObject {
 /// **唯一复现来源**：既能复现"包内没有可用 sinf"的失败，也能验证本写入器追加后的成品。
 /// 删了它 = 这条链路以后**没法在本地复现/回归**（真机重下一次代价大得多）。
 ///
-/// 每一步的结果（成功 / 跳过 / 失败原因）都写 `[下载中心]` 日志 —— 不许静默。
+/// ## ▸▸ v0.3.558：`removeEntry` 只在内存里删，**必须紧跟一次 `flush()`**
+///
+/// 本类只提供 `flushPendingAdds()` 一条落盘路径，而它拼中央目录时用的是
+/// `entries + newEntries`。所以「先删再加」这个组合**只有删也落盘了**才成立；
+/// 否则旧记录会被原样带上，中央目录里出现**同名两条**，解压器在苹果这边直接报
+/// `PackageExtractionFailed (Could not extract archive)`。
+/// 真机对照（2026-10-02 日志）：
+/// ```
+/// 13:44:21  sinf 注入：已把 sinf 写进包内：…/Via.sinf（1584 字节）   ← 包内原本没有，只 add
+/// 13:44:24  sinf 注入：包内已有 …/Via.sinf，先摘除旧条目再写入…     ← remove + add
+/// 13:44:24  [安装] 加密包：携带 ApplicationSINF（1584 字节）交给 installd
+/// 13:44:24  安装失败 Via 浏览器-x.ipa：PackageExtractionFailed      ← 0.4 秒后
+/// ```
+/// **有旧条目 = 失败，没旧条目 = 成功** —— 唯一差别就是那次 remove 有没有落盘。
+/// 每次写包的每一步（成功 / 跳过 / 失败原因）都写 `[下载中心]` 日志 —— 不许静默。
 private enum PackageSINFWriter {
 
     static func writeIfNeeded(sinfBase64: String?, ipaPath: String) {
@@ -944,8 +958,27 @@ private enum PackageSINFWriter {
             // 覆盖能力见 `ApplePackageArchive.removeEntry(with:)`：
             // 先从中央目录摘掉旧条目，再追加同路径的新条目 —— 中央目录里只剩一份，
             // 解压以新的为准。**顺序不能反**（先 add 再 remove 会产出重名条目）。
+            //
+            // ★★ v0.3.558 关键：**光调 `removeEntry` 是不生效的**。
+            //
+            // `removeEntry` 只在内存里改 `entries` 数组，不动文件；真正落盘的是 L965 那次
+            // `addEntry`（把数据读进 `pendingAdds`）+ L966 那次 `flush()`。
+            // 问题在 L966 的 `flush()` 跑的是 `flushPendingAdds()`，它直接覆盖 `output` 那段，
+            // **重新拼的中央目录是 `entries + newEntries`** —— 只要不是在 add 之前就摘掉了旧条目，
+            // 旧记录就会被原样带上，产出**重名条目**：
+            //     central = [旧 sinf 记录] + [新 sinf 记录]   （同名两条）
+            // 真机日志（2026-10-02）与「有旧条目就 0.4~1.2 秒内包解压失败」完全对得上。
+            //
+            // 修法：**摘条目这一步必须自己单独 flush 一次**，把「删」这件事真正落盘、
+            // 并把内存 `entries` 落定；之后那次 `flush()` 里 `pendingAdds` 只剩新条目。
             if archive[target] != nil {
                 archive.removeEntry(with: target)
+                // ★ v0.3.558：**必须在这里单独落盘一次**。
+                // `removeEntry` 是纯内存操作，而紧跟着的 `flush()` 只在 `pendingAdds` 非空时干活 ——
+                // 如果不在这一步把「删」写进文件，L966 那次 flush 重新拼中央目录时
+                // 旧记录会被原样带上，与新增的同名条目一起进中央目录 → **重名** → 苹果解压器失败。
+                // 中间态是合法 ZIP（中央目录里就是少了那份 sinf），所以这一步本身不会写坏包。
+                try archive.flushCentralDirectory()
                 log("包内已有 \(target)（非本机签发），先摘除旧条目再写入服务端下发的那份")
             }
 
