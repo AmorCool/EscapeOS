@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.547] - 2026-10-02
+
+> **修 NB 源「安装后闪退」的第二个真因：sinf 注入遇到包内已有条目就跳过**。
+
+### 修复：`PackageSINFWriter` 现在会**替换**包里那份不属于本机的 sinf
+
+真机日志（`logs` 拉的 0.3.539 现场）：
+
+```
+[10:35:44.203][AppStore] [下载中心] sinf 注入：包内已有 Payload/Surge-iOS.app/SC_Info/Surge-iOS.sinf；
+                         本写入器只能追加、不能替换，跳过（安装可能解密失败）
+[10:39:04.304][AppStore] [下载中心] sinf 注入：包内已有 Payload/HatchApp.app/SC_Info/HatchApp.sinf；
+                         本写入器只能追加、不能替换，跳过（安装可能解密失败）
+```
+
+两组要点：
+
+1. **NB 源取包 + sinf 写回本身是通的** —— 同一份日志里有
+   `[NB源] ← code=0` 和 `sinf 注入：已把 sinf 写进包内：…（1584 字节）`，
+   说明伪 UDID 那条（v0.3.545 修的）之外，这条链没有断。
+2. **但「包内已有」这一支走的是跳过** —— 而 NB 源拿到的 Apple CDN 直链 IPA
+   **自带一份 sinf**（不绑定本机）。跳过 = 装的是错的那份 →
+   **装得上、一启动就崩**，正是用户报的「缺 Sinf / 安装后闪退」。
+
+修法：
+
+| 文件 | 改动 |
+|---|---|
+| `vendor/…/ZipFoundationShim.swift` | 新增 `removeEntry(with:)`：从**中央目录**摘除同名条目（ZIP 的权威索引是中央目录，摘掉即可让解压器看不到旧数据；不做字节级前移，避免搬 200MB） |
+| `EscapeOS/Engine/IPADownloadCenter.swift` | `PackageSINFWriter.writeIfNeeded` 命中「包内已有」时改为 **先 `removeEntry` 再 `addEntry`**，不再跳过 |
+
+顺序约束（写进代码注释了）：**必须先 remove 再 add** —— 反了会产出重名条目，
+比不删更糟。
+
 ## [0.3.546] - 2026-10-02
 
 > **修 v0.3.545 的编译错误（`.mm` 与 `.h` 出参没对上）+ 蓝牙位置模拟面板重做**。

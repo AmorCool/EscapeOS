@@ -858,10 +858,15 @@ final class IPADownloadCenter: ObservableObject {
 /// `CFBundleExecutable` **唯一确定**的那一个路径，并且「已存在」时正确的动作是
 /// **不写**（见下），所以直接调底层 ZIP 写入器更可控。
 ///
-/// ## 覆盖策略（重要）
-/// 现有 ZIP 写入器（`vendor/ApplePackage/Supplement/ZipFoundationShim.swift`）只会**追加**条目、
-/// **没有删除能力**，所以"覆盖"其实做不到 —— 硬写只会产出**重名条目**（更坏的包）。
-/// 因此：条目**不存在**才写；**已存在**就记一行日志跳过。
+/// ## 覆盖策略（重要，v0.3.546 改）
+/// 现有 ZIP 写入器（`vendor/ApplePackage/Supplement/ZipFoundationShim.swift`）
+/// 追加条目时会重写中央目录 —— v0.3.546 起给它加了 `removeEntry(with:)`：
+/// **先从中央目录摘掉同名旧条目、再追加新条目**，从而真正做到「替换」。
+///
+/// v0.3.546 **之前**的做法是「已存在就跳过」，那是个真 bug（真机日志实证）：
+/// NB 源拿到的 Apple CDN 直链 IPA 自带一份 sinf，但那是**不绑定本机**的；
+/// 跳过 = 装的是错的那份 → **装得上、一启动就崩**。
+/// 现在改成替换，装的是服务端为本设备签发的那份。
 ///
 /// ## 只做该做的事
 /// · 调用方（`IPADownloadCenter.handle`）已经限定**只有牛蛙源**才传 sinf 进来
@@ -923,9 +928,25 @@ private enum PackageSINFWriter {
             }
 
             let target = "\(appPrefix).app/SC_Info/\(exe).sinf"
+            // v0.3.546：**包内已有时改为替换，不再跳过**。
+            //
+            // 为什么这条必须改（真机日志实证，2026-10-02）：
+            //   [10:35:44] sinf 注入：包内已有 Payload/Surge-iOS.app/SC_Info/Surge-iOS.sinf；
+            //              本写入器只能追加、不能替换，跳过（安装可能解密失败）
+            //   [10:39:04] sinf 注入：包内已有 Payload/HatchApp.app/SC_Info/HatchApp.sinf；…
+            //
+            // NB 源拿到的 Apple CDN 直链 IPA **自带一份 sinf**，但那份 sinf 是
+            // **Apple 为直链签发场景准备的、不绑定本机**；服务端（NB）下发的
+            // `sinfs[].dataBase64` 才是**为本设备**签的。跳过的后果 = 装的是包里
+            // 那份不属于本机的 sinf → installd 向 Apple 要不到本机解密密钥 →
+            // **装得上，一启动就崩**（正是用户报的「缺 Sinf / 安装后闪退」）。
+            //
+            // 覆盖能力见 `ApplePackageArchive.removeEntry(with:)`：
+            // 先从中央目录摘掉旧条目，再追加同路径的新条目 —— 中央目录里只剩一份，
+            // 解压以新的为准。**顺序不能反**（先 add 再 remove 会产出重名条目）。
             if archive[target] != nil {
-                log("包内已有 \(target)；本写入器只能追加、不能替换，跳过（安装可能解密失败）")
-                return
+                archive.removeEntry(with: target)
+                log("包内已有 \(target)（非本机签发），先摘除旧条目再写入服务端下发的那份")
             }
 
             try archive.addEntry(with: target,
