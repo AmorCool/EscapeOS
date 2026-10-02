@@ -568,8 +568,15 @@ struct I4StoreFreeView: View {
 
     /// 下架行「获取」：用 NB 的下架链路取包 → 交给统一下载中心.
     ///
-    /// `ipaID` 用 `app.storeID`（`appStoreID` 或 `lookupData.trackId`，两个哪个有值用哪个）.
-    /// 服务端没给 ID 时明确报错，不静默 —— 静默会让用户看到「点了没反应」.
+    /// `ipaID` 用 `app.storeID`（`appStoreID` 或 `lookupData.trackId`，两个哪个有值用哪个）。
+    /// **实测（2026-10-02）**：传 NB 行号会回 `未获取到数据`，传 `appStoreID` 才回
+    /// `未获取c密钥` —— 后者说明服务端认这个 ID，所以取包只能走 `appStoreID`.
+    ///
+    /// `versionID` / `appExtID` 也必须带上（服务端缺键直接 500）——
+    /// 两个是**不同**字段，不能互相顶替，所以从下架记录里各取各的.
+    ///
+    /// 服务端说不行时**原样报出来**（例如「未获取c密钥」），不改成笼统的「没有包」——
+    /// 两回事，混在一起用户没法判断是重试有用还是根本取不到.
     @MainActor
     private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
         guard let sid = app.storeID, !sid.isEmpty else {
@@ -577,7 +584,10 @@ struct I4StoreFreeView: View {
             return
         }
         do {
-            let pkg = try await NBStoreClient.offSalePackage(ipaID: sid, country: regionRaw)
+            let pkg = try await NBStoreClient.offSalePackage(ipaID: sid,
+                                                            appVerId: app.appExtID ?? "",
+                                                            versionID: app.versionID ?? "",
+                                                            country: regionRaw)
             guard let pkg else {
                 ToastCenter.shared.show("该下架应用没有可用的安装包")
                 return
@@ -690,6 +700,7 @@ struct I4StoreFreeView: View {
         do {
             // v0.3.545：按「上架 / 下架」走两条链路。
             // 上架 → `getAppHistoryList`（`appID`）；下架 → `getOffSaleAppHistoryList`（`ipaID`）。
+            // v0.3.550：下架分支补上 `versionID` / `appExtID` —— 服务端对缺键直接 500.
             let pkg: NBStoreClient.NBPackage?
             if appStateFilter == .offSale {
                 pkg = try await NBStoreClient.offSalePackage(ipaID: item.trackID,

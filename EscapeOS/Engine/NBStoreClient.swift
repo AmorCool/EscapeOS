@@ -591,6 +591,10 @@ enum NBStoreClient {
 
         /// 接口直接给的 `appStoreID`（实测可能与 `lookupData.trackId` 二选一有值）.
         var appStoreID: String?
+        /// NB 侧的版本行号（下架取包要当 `versionID` 发出去；实测「微信」那条是 `0`）.
+        var versionID: String?
+        /// Apple 的 external version identifier（下架取包要当 `appExtID` 发出去）.
+        var appExtID: String?
 
         /// 给取包/详情用的 App Store ID —— 先 `appStoreID`，退回 `lookupData.trackId`.
         var storeID: String? {
@@ -683,7 +687,9 @@ enum NBStoreClient {
                 lookupName: lookupName,
                 lookupVersion: lookupVersion,
                 lookupArtwork: lookupArtwork,
-                appStoreID: string(item["appStoreID"]))
+                appStoreID: string(item["appStoreID"]),
+                versionID: string(item["versionID"]),
+                appExtID: string(item["appExtID"]))
         }
         LoginLogger.shared.log("\(logTag) ✓ 下架搜索「\(kw)」· \(apps.count) 条", category: .appStore)
         return apps
@@ -717,27 +723,56 @@ enum NBStoreClient {
     /// 「下架列表」在 NB 那边是本地 SQLite 表 `load_list` 缓存的。
     /// 我们的做法：**下架状态由 lookup 结果判定 + 用本方法取包**，不建本地库。
     ///
-    /// ## 参数
-    /// - `trackID`: App Store 数字 ID（作为 `ipaID` 发出去）。
-    /// - `appVerId`: 版本的 external identifier（不传则取当前最靠后的那版）。
+    /// ## 参数（v0.3.550 实测定案）
+    /// - `ipaID`: **必须传 App Store 数字 ID**（`appStoreID` / `lookupData.trackId`）。
+    ///   实测（2026-10-02，直连服务端多轮对照）：
+    ///   - 传 NB 行号 `id`（如 `15993`） → `code=7 msg="未获取到数据"`
+    ///   - 传 `appStoreID`（如 `6744045754`） → `code=7 msg="未获取c密钥"`
+    ///   第二条的措辞说明**服务端认得这个 ipaID**，只是还缺一个客户端密钥。
+    /// - `appExtID`: 版本的 external identifier（下架记录里叫 `appExtID`）。
+    /// - `versionID`: NB 侧的版本行号（下架记录里叫 `versionID`）。
     /// - `country`: 区域码（`cn` / `us`）。
+    ///
+    /// ## ⚠️ 已知未通（写在注释里，别让下一个人重踩）
+    /// 四个字段（`ipaID` / `versionID` / `appExtID` / `countryCode`）是**从反编译实读**
+    /// 的完整形状（`sub_10031D260` 里四个 `AnyHashable` 键的立即数逐条对过），
+    /// 但直连仍回 `code=7 "未获取c密钥"` —— 说明**还有第五个来自设备侧的凭据**没带上。
+    /// 那个凭据应由 NB 客户端在**更早的一发请求**里换取（本函数没有），
+    /// 靠静态分析定不下来，需要真机抓包补齐。**在此之前下架取包大概率失败**，
+    /// 所以这里把服务端 `msg` 原样抛出，让界面能说清是「缺密钥」而不是「没这个包」。
     static func offSalePackage(ipaID: String,
                                appVerId: String = "",
+                               versionID: String = "",
                                country: String = "cn") async throws -> NBPackage? {
         var p: [String: Any] = [
             "ipaID": ipaID,
             "countryCode": country,
         ]
-        if !appVerId.isEmpty {
-            p["versionID"] = appVerId
-            p["appExtID"] = appVerId
-        }
+        // 四个键一个都不能少（服务端对缺键直接 500，实测）。
+        // `versionID` 与 `appExtID` 是两个**不同**的字段，不能互相顶替 ——
+        // 下架记录里分别叫 `versionID`（NB 行号）和 `appExtID`（Apple external id）。
+        p["versionID"] = versionID.isEmpty ? appVerId : versionID
+        p["appExtID"] = appVerId
 
         let obj = try await perform(path: "/nb/app-downgrade",
                                     method: "getOffSaleAppHistoryList",
                                     params: p)
+
+        // v0.3.550：**服务端说不行就如实说**，不要静默返回 nil。
+        // `code=7` 一直是「有这个 ipaID 但缺密钥」，静默会让界面把
+        // 「缺密钥」显示成「该下架应用没有可用的安装包」—— 两回事，用户没法排查。
+        if let code = obj["code"] as? Int, code != 0 {
+            let msg = string(obj["msg"]) ?? ""
+            LoginLogger.shared.log("\(logTag) ✕ 下架取包被拒 code=\(code) msg=\"\(msg)\" "
+                                   + "ipaID=\(ipaID) versionID=\(p["versionID"] ?? "") "
+                                   + "appExtID=\(p["appExtID"] ?? "") country=\(country)",
+                                   category: .appStore)
+            throw StoreError.server(code: "\(code)",
+                                    message: msg.isEmpty ? "下架取包被拒" : msg)
+        }
+
         let d = (obj["data"] as? [String: Any]) ?? obj
-        guard let url = string(d["url"]), !url.isEmpty else { return nil }
+        guard let url = string(d["url"]), !url.isEmpty { return nil }
 
         var sinf: String?
         if let arr = d["sinfs"] as? [[String: Any]], let first = arr.first {
