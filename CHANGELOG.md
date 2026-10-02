@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.559] - 2026-10-02
+
+> **NB 源下架应用详情页：不再向 Apple 要元数据，直接吃 NB 存下来的那一份。**
+
+### 问题
+
+下架应用进详情页，只有「来源」和「历史版本」两块，
+「预览 / 简介 / 信息 / 新功能」整组不渲染 —— 因为详情走的是
+`itunes.apple.com/lookup`，而**下架应用在 Apple 那边就是查不到的**（下架才搜不到）。
+
+### 真因
+
+NB 的 `searchOffSaleApp` 每条记录里带一个 `lookupData`，
+它是**NB 收录时存下的那份完整 Apple lookup 响应**（43 个键）：
+`description` / `screenshotUrls` / `ipadScreenshotUrls` / `genres` / `releaseNotes` /
+`sellerName` / `artistName` / `averageUserRating` / `userRatingCount` /
+`minimumOSVersion` / `fileSizeBytes` / `artworkUrl512` …
+
+⇒ 详情页要的东西**全在里面**，根本不需要再碰 Apple。
+
+### 改动
+
+| 文件 | 改了什么 |
+| --- | --- |
+| `NBStoreRankClient` | 抽出 `detail(fromLookup:fallbackTrackID:)` —— 现场 lookup 与 NB 内嵌 lookup **共用一份字段映射**；截图补 iPad 兜底 |
+| `NBStoreClient.OffSaleApp` | 新增 `lookupDetail`（解析 `lookupData` 时顺手映射），`storeID` 也补上 `lookupDetail.trackID` 这一级兜底 |
+| `NBStoreDetailView` | 下架态把「读 NB 下架库」提到**第一跳**，命中即返回；失败才走现场 lookup → 换区兜底 |
+
+在架应用的主路径不变，仍然打 Apple。
+
 ## [0.3.558] - 2026-10-02
 
 > **NB 源「加密包安装失败」定案：`removeEntry` 没落盘，写出重名条目。**

@@ -493,14 +493,28 @@ struct NBStoreDetailView: View {
     /// 所以 `results` 为空 → `detail` 为 nil → 页面上「预览 / 简介 / 信息 / 新功能」
     /// 四个区块**整组不渲染**，只剩「来源」和「历史版本」，正是用户那张截图的样子.
     ///
-    /// 修法：lookup 拿不到时，**回退到 NB 下架库**（`searchOffSaleApp` 按名字查，
-    /// 它回的 `lookupData` 里就带着 trackId / 名字 / 版本 / 图标，而拿到 trackId 之后
-    /// 再用它打一次 lookup 就能取到截图与简介 —— 下架应用的元数据 Apple 那边其实还在，
-    /// 只是 search 不出来，按 id 直查是可以的）.
+    /// ## v0.3.559：下架态**第一跳就走 NB 下架库**
+    ///
+    /// 上一版把下架回退放在 lookup 之后，等于每次都要先白等一次必然为空的请求，
+    /// 而且回退里还指望「拿到 trackId 再直查 lookup」能中 —— Apple 对已下架的 id
+    /// 也常常回空，所以经常整页仍然没详情.
+    ///
+    /// 现在 `searchOffSaleApp` 的每条记录里**内嵌着 NB 收录时存下的那份完整 lookup**
+    /// （`lookupData`，43 个键，含 `description` / `screenshotUrls` / `genres` /
+    /// `releaseNotes`），直接映射成 `AppDetail` 就能填满整个页面，**不用再碰 Apple**.
+    /// 所以下架态把它提到第一跳，命中即返回.
     private func loadDetail() async {
         guard !trackID.isEmpty else { return }
         detailLoading = true
         defer { detailLoading = false }
+
+        // ── ① 下架态：先吃 NB 下架库内嵌的那份 lookup（最全，且不依赖 Apple）──
+        if offSale, let d = await offSaleDetail() {
+            detail = d
+            return
+        }
+
+        // ── ② 现场 lookup（在架应用的主路径）──
         do {
             detail = try await NBStoreRankClient.detail(trackID: trackID, country: country)
         } catch {
@@ -508,28 +522,42 @@ struct NBStoreDetailView: View {
             LoginLogger.shared.log("[NB详情] ○ 详情拉取失败：\(error.localizedDescription)",
                                    category: .appStore)
         }
-        // 第一跳就拿到了 → 直接结束.
+        // 这一跳拿到 → 直接结束.
         if detail != nil { return }
 
-        // ── 回退：把名字拿去 NB 下架库找一次，拿到真正的 trackId 再直查 lookup ──
-        guard let hint = displayName, !hint.isEmpty else {
-            await loadDetailViaOffSaleID()
+        // ── ③ 回退：按名字去 NB 下架库找，用内嵌 lookup 补详情 ──
+        if let d = await offSaleDetail() {
+            detail = d
             return
         }
+
+        // ── ④ 兜底：换区域直查一次（下架应用可能只是本区下线）──
+        await loadDetailViaOffSaleID()
+    }
+
+    /// 去 NB 下架库按名字找，命中就把内嵌的 `lookupData` 变成详情.
+    ///
+    /// 名字取 `displayName`（列表带进来的就是准的）；没带名字时用当前 `trackID`
+    /// 对上一条即可（下架库的 `storeID` 里也有 trackId）.
+    private func offSaleDetail() async -> NBStoreRankClient.AppDetail? {
+        let hint = (displayName?.isEmpty == false) ? displayName! : ""
+        guard !hint.isEmpty || !trackID.isEmpty else { return nil }
         do {
-            let hits = try await NBStoreClient.searchOffSaleApp(keyword: hint)
-            // 先挑同名的（`displayName` 是列表带进来的，通常就是准的）.
-            let match = hits.first { $0.displayName.caseInsensitiveCompare(hint) == .orderedSame } ?? hits.first
-            guard let sid = match?.storeID, !sid.isEmpty, sid != trackID else {
-                await loadDetailViaOffSaleID()
-                return
-            }
-            LoginLogger.shared.log("[NB详情] 下架回退：用「\(hint)」查到 trackId=\(sid)，直查 lookup",
+            let hits = try await NBStoreClient.searchOffSaleApp(keyword: hint.isEmpty ? trackID : hint)
+            guard !hits.isEmpty else { return nil }
+            // 同名的优先；其次是 trackId 对得上的；再退第一条.
+            let sameName = hits.first { $0.displayName.caseInsensitiveCompare(hint) == .orderedSame }
+            let sameID = hits.first { ($0.storeID ?? "") == trackID }
+            guard let match = sameName ?? sameID ?? hits.first,
+                  let d = match.lookupDetail else { return nil }
+            LoginLogger.shared.log("[NB详情] 下架库内嵌详情命中：「\(d.name)」"
+                                   + "截图 \(d.screenshotURLs.count) 张",
                                    category: .appStore)
-            detail = try await NBStoreRankClient.detail(trackID: sid, country: country)
+            return d
         } catch {
-            LoginLogger.shared.log("[NB详情] 下架回退失败：\(error.localizedDescription)",
+            LoginLogger.shared.log("[NB详情] 下架库详情失败：\(error.localizedDescription)",
                                    category: .appStore)
+            return nil
         }
     }
 

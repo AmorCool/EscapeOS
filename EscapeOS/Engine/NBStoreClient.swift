@@ -620,6 +620,14 @@ enum NBStoreClient {
         var lookupVersion: String?
         var lookupArtwork: String?
 
+        /// ★★ v0.3.559：`lookupData` 里**本来就带完整详情**（43 个键），原样承载.
+        ///
+        /// 下架应用在 Apple 的 `/lookup` 里查不到 —— 它就是因为下架才搜不到，
+        /// 但 NB 在收录时把当初那份 lookup 响应**整段存了下来**，字段与 Apple 官方
+        /// 逐字一致（`description` / `screenshotUrls` / `genres` / `releaseNotes` …）。
+        /// 所以详情页不再需要打 Apple，直接吃这一份.
+        var lookupDetail: NBStoreRankClient.AppDetail?
+
         /// 接口直接给的 `appStoreID`（实测可能与 `lookupData.trackId` 二选一有值）.
         var appStoreID: String?
         /// NB 侧的版本行号（下架取包要当 `versionID` 发出去；实测「微信」那条是 `0`）.
@@ -653,7 +661,9 @@ enum NBStoreClient {
         /// 给取包/详情用的 App Store ID —— 先 `appStoreID`，退回 `lookupData.trackId`.
         var storeID: String? {
             if let s = appStoreID, !s.isEmpty { return s }
-            return lookupTrackID
+            if let s = lookupTrackID, !s.isEmpty { return s }
+            if let s = lookupDetail?.trackID, !s.isEmpty { return s }
+            return nil
         }
 
         /// 界面显示用的名字.
@@ -721,6 +731,7 @@ enum NBStoreClient {
             var lookupName: String?
             var lookupVersion: String?
             var lookupArtwork: String?
+            var lookupDetail: NBStoreRankClient.AppDetail?
             if let raw = item["lookupData"] as? String, !raw.isEmpty,
                let d = raw.data(using: .utf8),
                let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
@@ -729,6 +740,9 @@ enum NBStoreClient {
                 lookupVersion = string(o["version"])
                 lookupArtwork = string(o["artworkUrl512"]) ?? string(o["artworkUrl100"])
                     ?? string(o["artworkUrl60"])
+                // ★★ v0.3.559：整段映射成详情模型，详情页直接用它渲染.
+                lookupDetail = NBStoreRankClient.detail(fromLookup: o,
+                                                        fallbackTrackID: lookupTrackID ?? "")
             }
 
             // ★★ v0.3.556：从 `appStoreData`（内嵌 JSON 字符串）里直接取**包直链与 sinf**。
@@ -772,6 +786,7 @@ enum NBStoreClient {
                 lookupName: lookupName,
                 lookupVersion: lookupVersion,
                 lookupArtwork: lookupArtwork,
+                lookupDetail: lookupDetail,
                 appStoreID: string(item["appStoreID"]),
                 versionID: string(item["versionID"]),
                 appExtID: string(item["appExtID"]),

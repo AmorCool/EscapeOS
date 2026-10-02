@@ -463,9 +463,33 @@ enum NBStoreRankClient {
             return nil
         }
 
-        let detail = AppDetail(
-            trackID: Self.string(obj["trackId"]) ?? tid,
-            name: Self.string(obj["trackName"]) ?? "App \(tid)",
+        let detail = Self.detail(fromLookup: obj, fallbackTrackID: tid)
+        LoginLogger.shared.log("\(logTag) ✓ lookup「\(detail.name)」"
+                               + "截图 \(detail.screenshotURLs.count) 张"
+                               + (detail.descriptionText == nil ? " · 无简介" : ""),
+                               category: .appStore)
+        return detail
+    }
+
+    /// 把一份 **Apple lookup 形态的字典**映射成 `AppDetail`.
+    ///
+    /// ## 为什么要有这个入口（v0.3.559）
+    ///
+    /// 两个调用方吃的其实是**同一种字典**：
+    /// 1. `detail(trackID:country:)` —— 现场打 `itunes.apple.com/lookup` 拿到的 `results[0]`；
+    /// 2. `NBStoreClient.searchOffSaleApp` —— 下架记录里内嵌的 `lookupData`（NB 当初存下的
+    ///    那一份完整 lookup 响应，键名逐字一致，43 个键）。
+    ///
+    /// 下架应用在 Apple 那边**查不到**（它就是被下架了才搜不到），现场 lookup 必然为空 ——
+    /// 所以详情页要靠第 2 条。两条路共用一份映射，避免字段两处各写一遍走偏.
+    ///
+    /// - Parameters:
+    ///   - obj: Apple lookup 响应里的一个对象（或 NB `lookupData` 解开后的对象）.
+    ///   - fallbackTrackID: `trackId` 缺失时的兜底（用外面已知的 ID）.
+    static func detail(fromLookup obj: [String: Any], fallbackTrackID: String) -> AppDetail {
+        AppDetail(
+            trackID: Self.string(obj["trackId"]) ?? fallbackTrackID,
+            name: Self.string(obj["trackName"]) ?? "App \(fallbackTrackID)",
             bundleID: Self.string(obj["bundleId"]),
             artwork512: Self.string(obj["artworkUrl512"]),
             artwork100: Self.string(obj["artworkUrl100"]) ?? Self.string(obj["artworkUrl60"]),
@@ -481,14 +505,11 @@ enum NBStoreRankClient {
             ratingCount: (obj["userRatingCount"] as? NSNumber)?.intValue,
             fileSizeBytes: (obj["fileSizeBytes"] as? NSNumber)?.int64Value
                 ?? Int64(Self.string(obj["fileSizeBytes"]) ?? ""),
-            minimumOSVersion: Self.string(obj["minimumOsVersion"]),
+            minimumOSVersion: Self.string(obj["minimumOSVersion"]),
             genres: (obj["genres"] as? [String]) ?? [],
-            screenshotURLs: (obj["screenshotUrls"] as? [String]) ?? []
+            // iPhone 截图优先；只有 iPad 截图的场合也拿来用（聊胜于无，且是真实元数据）.
+            screenshotURLs: (obj["screenshotUrls"] as? [String])
+                ?? (obj["ipadScreenshotUrls"] as? [String]) ?? []
         )
-        LoginLogger.shared.log("\(logTag) ✓ lookup「\(detail.name)」"
-                               + "截图 \(detail.screenshotURLs.count) 张"
-                               + (detail.descriptionText == nil ? " · 无简介" : ""),
-                               category: .appStore)
-        return detail
     }
 }
