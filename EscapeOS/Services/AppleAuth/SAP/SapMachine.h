@@ -245,6 +245,27 @@ public:
     std::unique_ptr<StoreAgent> OpenStoreAgent(std::span<const uint8_t> hardwareID,
                                                std::span<const uint8_t> dpInfo);
 
+    // ── StoreAgent：kbsync 生成（`ent/download` 的请求凭据）──────────────────
+    //
+    // 对齐上游 ipatool `internal/sap/machine/kbsync.go` 的 `GenerateKBSync`。
+    //
+    // ⚠️ **和 `StoreAgent::Open` 不是一回事**：kbsync **不开会话**（不需要 dpInfo），
+    // 只要全局上下文 + DSID 就能算出来。上游注释原话：
+    //   > creates the account and hardware bound FairPlay data required by the bag's
+    //   > ent/download endpoint, **without opening a decryption session**.
+    // 所以它是**独立的一次 guest 调用**，调用完立刻关掉全局上下文。
+    //
+    // 上游 guest 调用签名（`kbsync.go:56`）：
+    //     invoke(storeAgentKBSyncEntry, globalContext, dsid, 0, 1, pointerField, lengthField)
+    // 输出走与 SAP 同一套 `consumeOutput`（pointerField 指向缓冲区、lengthField 是
+    // uint32 长度但占 8 字节，高 4 字节为 0）。
+    //
+    /// 生成 kbsync 凭据。**必须先经 `CreateWithStoreAgent(...)` 建机器。**
+    /// - Parameter dsid: 账号的 DirectoryServicesIdentifier，**必须非 0**（上游硬门）。
+    /// - Returns: 供 `ent/download` 请求体 `kbsync` 字段使用的字节串。
+    /// - Throws: 入口未解析、DSID 为 0、guest 返回非 0、输出为空。
+    std::vector<uint8_t> GenerateKBSync(std::span<const uint8_t> hardwareID, uint64_t dsid);
+
 private:
     SapMachine() = default;
 
@@ -265,12 +286,16 @@ private:
     static constexpr uint64_t kKitBase     = 0x0000100080000000ULL;
     /// `storeagent` 镜像基址 —— 对齐上游 `storeAgentBase`（machine/storeagent.go:14）。
     static constexpr uint64_t kStoreAgentBase = 0x00001000C0000000ULL;
-    // `storeagent` 的三个入口（偏移取自上游常量，逐字对应）：
+    // `storeagent` 的入口（偏移取自上游常量，逐字对应）：
     //   storeAgentGlobalInit   = storeAgentBase + 0x0c5fc0
+    //   storeAgentKBSyncEntry  = storeAgentBase + 0x0c93c0
     //   storeAgentSessionInit  = storeAgentBase + 0x0debd0
     //   storeAgentDecryptEntry = storeAgentBase + 0x0ee700
     //   storeAgentSessionClose = storeAgentBase + 0x1212d0
     static constexpr uint64_t kStoreAgentGlobalInit   = kStoreAgentBase + 0x0c5fc0ULL;
+    /// kbsync 生成入口 —— 上游 `storeAgentKBSyncEntry`（machine/storeagent.go:16）。
+    /// `GenerateKBSync` 用它，**不经过 session**。
+    static constexpr uint64_t kStoreAgentKBSyncEntry  = kStoreAgentBase + 0x0c93c0ULL;
     static constexpr uint64_t kStoreAgentSessionInit  = kStoreAgentBase + 0x0debd0ULL;
     static constexpr uint64_t kStoreAgentDecryptEntry = kStoreAgentBase + 0x0ee700ULL;
     static constexpr uint64_t kStoreAgentSessionClose = kStoreAgentBase + 0x1212d0ULL;

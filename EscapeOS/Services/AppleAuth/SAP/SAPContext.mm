@@ -212,39 +212,51 @@ static void SetError(NSError **error, const std::exception &exception) {
     std::unique_ptr<SapMachine::StoreAgent> _agent;
 }
 
+/// 建一台挂了 `storeagent` 镜像的 SapMachine（四个基础资产 + storeagent）。
+///
+/// 解密器与 kbsync 都要它，所以抽出来 —— 两处的资产清单必须**逐字一致**，
+/// 否则一个能跑一个报「资产缺失」，排查时极易误导。
+///
+/// ⚠️ **不要**给这一个函数加 `@synchronized`：它只在调用方已经做过参数校验后跑，
+/// 且内部只做只读资产加载，没有共享状态。
+static std::unique_ptr<SapMachine> MakeStoreAgentMachine(NSURL *directory,
+                                                         NSData *hardwareID) {
+    return SapMachine::CreateWithStoreAgent(
+        ReadVerifiedAsset(directory, @"CoreFP", 29014912, @"f19141336be4198d0f8991bb00017c915efc7aeaece36c345f7faa1237ea6074"),
+        ReadVerifiedAsset(directory, @"CommerceCore", 207744, @"c5401e57402230f3c876409d295319ddf1e61287bc882683c5d61277be7bc1f2"),
+        ReadVerifiedAsset(directory, @"CommerceKit", 3271840, @"b84ff12c21987856c0a17b78f1ad82b73195a6dec5f3b208a17d245555a2c8a2"),
+        ReadVerifiedAsset(directory, @"CoreFP.icxs", 5288352, @"473e78af86979f5bd4f6269561caf770b3d16c098d918846eeac8cdd2fe6566a"),
+        ReadVerifiedAsset(directory, @"storeagent", 2580176, @"70ce036f9dbcbc04db9511ebd08de0dd3cbc35ccc9d44b089c90170cb5453c59"),
+        std::vector<uint8_t>(static_cast<const uint8_t *>(hardwareID.bytes),
+                             static_cast<const uint8_t *>(hardwareID.bytes) + hardwareID.length)
+    );
+}
+
 + (instancetype)decrypterWithAssetsURL:(NSURL *)storeAgentURL
                             hardwareID:(NSData *)hardwareID
                                 dpInfo:(NSData *)dpInfo
                                  error:(NSError **)error {
     SAPStoreAgentContext *context = [[SAPStoreAgentContext alloc] init];
-    @try {
+    try {
         if (hardwareID.length != 6) throw std::runtime_error("Invalid SAP device identifier.");
         if (dpInfo.length == 0) throw std::runtime_error("StoreAgent dpInfo is empty.");
 
         // `storeagent` 是独立可执行 Mach-O，跟另外四个资产在**同一个目录**。
         // 它同时也是第十个 fileSpec（见 prepare.sap.py 的 ASSETS）。
-        context->_machine = SapMachine::CreateWithStoreAgent(
-            ReadVerifiedAsset(storeAgentURL, @"CoreFP", 29014912, @"f19141336be4198d0f8991bb00017c915efc7aeaece36c345f7faa1237ea6074"),
-            ReadVerifiedAsset(storeAgentURL, @"CommerceCore", 207744, @"c5401e57402230f3c876409d295319ddf1e61287bc882683c5d61277be7bc1f2"),
-            ReadVerifiedAsset(storeAgentURL, @"CommerceKit", 3271840, @"b84ff12c21987856c0a17b78f1ad82b73195a6dec5f3b208a17d245555a2c8a2"),
-            ReadVerifiedAsset(storeAgentURL, @"CoreFP.icxs", 5288352, @"473e78af86979f5bd4f6269561caf770b3d16c098d918846eeac8cdd2fe6566a"),
-            ReadVerifiedAsset(storeAgentURL, @"storeagent", 2580176, @"70ce036f9dbcbc04db9511ebd08de0dd3cbc35ccc9d44b089c90170cb5453c59"),
-            std::vector<uint8_t>(static_cast<const uint8_t *>(hardwareID.bytes),
-                                 static_cast<const uint8_t *>(hardwareID.bytes) + hardwareID.length)
-        );
+        context->_machine = MakeStoreAgentMachine(storeAgentURL, hardwareID);
 
         auto hw = std::span<const uint8_t>(static_cast<const uint8_t *>(hardwareID.bytes), hardwareID.length);
         auto dp = std::span<const uint8_t>(static_cast<const uint8_t *>(dpInfo.bytes), dpInfo.length);
         context->_agent = context->_machine->OpenStoreAgent(hw, dp);
         return context;
-    } @catch (const std::exception &exception) {
+    } catch (const std::exception &exception) {
         SetError(error, exception);
         return nil;
     }
 }
 
 - (NSData *)decryptChunk:(NSData *)chunk error:(NSError **)error {
-    @try {
+    try {
         if (!_agent) throw std::runtime_error("StoreAgent session is not open.");
         if (chunk.length == 0) return [NSData data];
         if (chunk.length > SapMachine::StoreAgent::kChunkSize)
@@ -254,7 +266,7 @@ static void SetError(NSError **error, const std::exception &exception) {
                                     static_cast<const uint8_t *>(chunk.bytes) + chunk.length);
         _agent->DecryptChunk(buffer);
         return [NSData dataWithBytes:buffer.data() length:buffer.size()];
-    } @catch (const std::exception &exception) {
+    } catch (const std::exception &exception) {
         SetError(error, exception);
         return nil;
     }
@@ -269,5 +281,32 @@ static void SetError(NSError **error, const std::exception &exception) {
 
 - (void)dealloc {
     [self closeDecrypter];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  kbsync 生成 —— 对齐上游 `internal/sap/machine/kbsync.go`
+//
+//  做成**类方法**是对的，理由见头文件：它不持有会话，本就要算完即弃。
+//  内部比 `GenerateKBSync` 多做的只有一件事 —— 自己建机器（Swift 侧不该知道
+//  `CreateWithStoreAgent` 这个 C++ 细节）。
+// ─────────────────────────────────────────────────────────────────────────────
++ (NSData *)generateKBSyncWithAssetsURL:(NSURL *)storeAgentURL
+                             hardwareID:(NSData *)hardwareID
+                                   dsid:(uint64_t)dsid
+                                  error:(NSError **)error {
+    try {
+        if (hardwareID.length != 6) throw std::runtime_error("Invalid SAP device identifier.");
+        // 上游第一道硬门（`kbsync.go:22-24`）。在这里也拦一次，是为了让 Swift 侧
+        // 拿到「DSID 非数值/为 0」这句明确报错，而不是等到 guest 里跑出个看不懂的码。
+        if (dsid == 0) throw std::runtime_error("kbsync requires a nonzero account DSID.");
+
+        auto machine = MakeStoreAgentMachine(storeAgentURL, hardwareID);
+        auto hw = std::span<const uint8_t>(static_cast<const uint8_t *>(hardwareID.bytes), hardwareID.length);
+        auto blob = machine->GenerateKBSync(hw, dsid);
+        return [NSData dataWithBytes:blob.data() length:blob.size()];
+    } catch (const std::exception &exception) {
+        SetError(error, exception);
+        return nil;
+    }
 }
 @end

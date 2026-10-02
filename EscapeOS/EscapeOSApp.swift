@@ -33,6 +33,10 @@ struct EscapeSpaceApp: App {
         setenv("GOMAXPROCS", "4", 1)         // 6 核设备限制 P 数，减少线程与结构开销
         // SSH Debug 模式：开启后随 App 启动自动拉起 SSH 服务（见 SSH 调试页开关）
         SSHServerService.shared.autoStartIfNeeded()
+        // v0.3.543：装配 kbsync 生成器 —— `ent/download` 免登录下载链的唯一前置。
+        // 用 storeagent 解释执行生成机器绑定凭据（见 Services/AppleAuth/KBSyncProvider.swift）。
+        // 装配失败不报错：`ent/download` 那一跳会静默跳过，下载照常走旧链。
+        KBSyncProvider.install()
         // v0.3.361：启动就在日志里写下版本号 —— 排查时先看这一行，别再靠截图猜用户跑的是哪个包
         // （2026-09-13 真就为「界面改了没生效」来回确认过一轮版本）。
         LoginLogger.shared.log("EscapeSpace "

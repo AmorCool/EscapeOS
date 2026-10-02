@@ -29,13 +29,30 @@ public enum Download {
         // 这两条门现在都收在 `fetchProductWithFallback` 内部。
         let region = Configuration.countryCode(for: account.store) ?? Configuration.countryCode
         let appID = app.id
+
+        // v0.3.543：**先试 `ent/download`**（上游把它贴在最前面）。
+        //
+        // bag 拉不到 / 键缺失 → `endpoint` 为 nil → `fetchProductWithFallback` 里
+        // 那一跳自然跳过，静默落回 volumeStore 链。所以这里**不需要**判错。
+        //
+        // ⚠️ 顺序有讲究：**必须先算 `endpoint` 再进 fallback**。放进闭包里会有两个问题：
+        //   ① 版本解析那一跳本可以并行做，被 bag 串行挡住；
+        //   ② 上游的 bag 是「第一次失败后再复用」的（`appstore_download_product.go:52-88`），
+        //      我们这里没有后续用 bag 的地方，所以拉一次就够。
+        let entEndpoint = await EntDownload.endpointFromBag(
+            client: client,
+            account: &account,
+            deviceIdentifier: deviceIdentifier
+        )
+
         let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
             client: client,
             account: &account,
             app: app,
             deviceIdentifier: deviceIdentifier,
             externalVersionID: externalVersionID ?? "",
-            resolveVersion: { try await StoreCatalog.externalVersionID(appID: appID, countryCode: region) }
+            resolveVersion: { try await StoreCatalog.externalVersionID(appID: appID, countryCode: region) },
+            entDownloadEndpoint: entEndpoint
         )
 
         if let failureType = dict["failureType"] as? String {

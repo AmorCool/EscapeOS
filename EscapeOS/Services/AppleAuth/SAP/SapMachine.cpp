@@ -1085,3 +1085,97 @@ std::unique_ptr<SapMachine::StoreAgent> SapMachine::OpenStoreAgent(
 {
     return StoreAgent::Open(*this, hardwareID, dpInfo);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  kbsync 生成 —— 对齐上游 `internal/sap/machine/kbsync.go`
+//
+//  上游 `GenerateKBSync` 的完整流程（`kbsync.go:13-38`）：
+//
+//    1. ctx / ctx.Err() 检查；
+//    2. `dsid == 0` → 直接报错（硬门，注释原话 "kbsync requires a nonzero account DSID"）；
+//    3. 加载 storeagent 镜像；
+//    4. `openStoreAgentGlobal(...)` —— **只做 global init，不开 session**；
+//    5. `defer agent.Close()` —— 用完立刻关全局上下文；
+//    6. `agent.guest.generateKBSync(storeAgentKBSyncEntry, globalContext, dsid)`。
+//
+//  所以它跟 `StoreAgent::Open` 是**两条独立路径**：不需要 dpInfo，也不需要 session。
+//  下面的实现就是这个形状。
+// ═══════════════════════════════════════════════════════════════════════════
+
+std::vector<uint8_t> SapMachine::GenerateKBSync(std::span<const uint8_t> hardwareID, uint64_t dsid) {
+    // ── 上游硬门 ─────────────────────────────────────────────────────────────
+    if (dsid == 0) {
+        throw std::runtime_error("kbsync requires a nonzero account DSID");
+    }
+    if (kStoreAgentGlobalInit == 0 || kStoreAgentKBSyncEntry == 0) {
+        throw std::runtime_error("StoreAgent entry points are unavailable "
+                                 "(create the machine with CreateWithStoreAgent)");
+    }
+
+    auto hw = HardwareBlock(hardwareID);
+
+    // ── ① global init（与 StoreAgent::Open 第一段完全一致）───────────────────
+    uint32_t globalContext = 0;
+    {
+        BeginCall();
+        const ScratchCleanup cleanup{*this};
+        uint64_t hwAddr   = Scratch(hw.data(), hw.size());
+        std::string pathWithNul(kStoreAgentSCInfoPath);
+        pathWithNul.push_back('\0');
+        uint64_t pathAddr = Scratch(pathWithNul.data(), pathWithNul.size());
+        uint64_t ctxFld   = Scratch(4);
+
+        int32_t status = static_cast<int32_t>(Invoke(kStoreAgentGlobalInit,
+                                                     { 0, hwAddr, pathAddr, ctxFld }));
+        if (status != 0) {
+            throw std::runtime_error(std::format("StoreAgent global initialization returned {}", status));
+        }
+        globalContext = GuestRead32(ctxFld);
+        if (globalContext == 0) {
+            throw std::runtime_error("StoreAgent global initialization returned a null context");
+        }
+    }
+
+    // ── ② kbsync 调用 ────────────────────────────────────────────────────────
+    // 上游 `kbsync.go:40-75`：
+    //   pointerField = scratch(nil, 8)   ← 输出缓冲区指针
+    //   lengthField  = scratch(nil, 8)   ← uint32 长度；**高 4 字节清 0**，
+    //                                       这样能复用 SAP 的 consumeOutput 边界检查
+    //   invoke(entry, globalContext, dsid, 0, 1, pointerField, lengthField)
+    //
+    // 注意第 3、4 个参数是**字面 0 和 1**（上游写死），不是长度。
+    std::vector<uint8_t> output;
+    {
+        BeginCall();
+        const ScratchCleanup cleanup{*this};
+        uint64_t pointerField = Scratch(8);
+        uint64_t lengthField  = Scratch(8);
+
+        int32_t status = static_cast<int32_t>(Invoke(
+            kStoreAgentKBSyncEntry,
+            { uint64_t(globalContext), dsid, 0, 1, pointerField, lengthField }));
+
+        // 上游先 consumeOutput（**无条件**，因为要 dispose 那块缓冲区），再判 status：
+        //   output, outputErr := m.consumeOutput(pointerField, lengthField)
+        //   if int32(status) != 0 { return nil, errors.Join(kbsync returned N, outputErr) }
+        //   if outputErr != nil { return nil, outputErr }
+        //   if len(output) == 0 { return nil, "returned an empty buffer" }
+        // 这里的顺序必须一致 —— 非 0 状态时也不能漏掉 dispose。
+        auto out = ConsumeOutput(pointerField, lengthField);
+
+        if (status != 0) {
+            throw std::runtime_error(std::format("StoreAgent kbsync returned {}", status));
+        }
+        output = std::move(out);
+    }
+
+    if (output.empty()) {
+        throw std::runtime_error("StoreAgent kbsync returned an empty buffer");
+    }
+
+    // ── ③ 关掉全局上下文（上游 `defer agent.Close()`）─────────────────────────
+    // 上游只关 session（`storeagent.go:306-340` 的 `Close` 在 session==0 时跳过 close 调用，
+    // 但仍 `guest.Close()`）。这里没有 session，所以只需关机器级资源 ——
+    // 由 `ScratchCleanup` + 调用方决定机器生命周期，本函数不额外持有。
+    return output;
+}

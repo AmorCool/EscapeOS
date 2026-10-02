@@ -1,5 +1,117 @@
 # Changelog
 
+## [0.3.544] - 2026-10-02
+
+> **修 v0.3.543 的编译错误 + `ent/download` 请求链接通（步骤 3 完成）**。
+
+### 修复：`SAPContext.mm` 三处 `@catch` 语法错误（v0.3.543 CI 报错）
+
+v0.3.543 的 CI 在 Build 阶段失败，只报了这两条（同一个文件）：
+
+```
+SAPContext.mm:240:37: error: @catch parameter is not a pointer to an interface type
+SAPContext.mm:257:37: error: @catch parameter is not a pointer to an interface type
+```
+
+真因：v0.3.542 写 `SAPStoreAgentContext` 时把 `@try` / `@catch` 用在了
+**C++ 异常**上。`@catch` 只接受 ObjC 对象指针（`NSError *` 之类）；
+捕获 `std::exception` 必须用不带 `@` 的 `try` / `catch`。
+本文件里原有的 SAP 会话代码一直是正确的 `try`/`catch`，只有新加的三处写错了。
+
+修法：三处全改为 `try` / `catch`（现全文件 `@try`/`@catch` 计数为 0）。
+
+> ⚠️ 这是 v0.3.543 里的**第二个**错误 —— 当时先被 `@end` 挡住，
+> 编译器没走到这一步。所以一次修一个语法错时，要预期「修完还会再报一个」。
+
+### 新增：kbsync 生成（`SapMachine::GenerateKBSync`）
+
+对齐上游 `internal/sap/machine/kbsync.go`。**与 `StoreAgent::Open` 是两条独立路径**：
+
+| | `StoreAgent::Open` | `GenerateKBSync` |
+|---|---|---|
+| 需要 `dpInfo` | 是 | **否** |
+| 开解密 session | 是 | **否** |
+| 入口偏移 | `+0x0debd0` / `+0x0ee700` | **`+0x0c93c0`** |
+| 用途 | 解包 | 生成 `ent/download` 的请求凭据 |
+
+上游注释原话：
+> creates the account and hardware bound FairPlay data required by the bag's
+> ent/download endpoint, **without opening a decryption session**.
+
+guest 调用签名（上游 `kbsync.go:56`）：
+```
+invoke(storeAgentKBSyncEntry, globalContext, dsid, 0, 1, pointerField, lengthField)
+```
+第 3、4 个参数是**字面 0 和 1**（上游写死）。输出复用 SAP 同一套
+`ConsumeOutput`（pointerField 指缓冲区、lengthField 是零扩展的 uint32）——
+非 0 状态时**也不能漏掉 dispose**，所以先 consume 再判 status。
+
+硬门两条：`dsid == 0` 直接报错；入口未解析（用 `Create()` 而非
+`CreateWithStoreAgent()` 建机器）直接报错。
+
+### 新增：`SAPStoreAgentContext.generateKBSyncWithAssetsURL:...`（ObjC++ 桥）
+
+做成**类方法**（不持有会话）。内部自建一台 `CreateWithStoreAgent` 机器、
+算完即弃。同时把「建 storeagent 机器」抽成 `MakeStoreAgentMachine` ——
+解密器与 kbsync 两处的资产清单必须逐字一致，否则一个能跑一个报「资产缺失」。
+
+### 新增：`EntDownload`（`ent/download` 端点，vendor 层）
+
+对齐上游 `pkg/appstore/appstore_kbsync.go`：
+
+```
+POST {bag 的 volumeStoreDownloadProduct}?guid={guid}
+Content-Type: application/x-www-form-urlencoded; charset=utf-8
+X-Token: {passwordToken}
+body: creditDisplay / guid / kbsync / salableAdamId / serialNumber / externalVersionId
+```
+
+**键名有个坑**：bag 里 `volumeStoreDownloadProduct` 这个键的值**本身就是
+ent/download 的完整 URL**（host = `downloaddispatch.itunes.apple.com`，
+路径 = `/WebObjects/DownloadDispatch.woa/wa/ent/download`）—— 不是 pXX-buy。
+上游 `newDownloadEndpoint` 会逐条校验 scheme/host/path/query/fragment，照搬。
+
+另外两处：
+- `serialNumber` = base64(`[0x54,0xc8,0xb0,0xa9,0x88] + hardwareID[2:]`)；
+- UA 是 **`Configurator/2.18`**（与旧链的 2.17 不同）。
+
+**三个硬前置**在请求前就地拦掉（返回 nil 而不是 throw，因为这一跳按上游语义
+是「**可失败退出的附加一跳**」）：guid 十六进制解码恰好 6 字节 / DSID 非零十进制 /
+版本号非空。
+
+`NoRedirects` 语义由 client 层的 `RedirectConfiguration.disallow` 保证
+（`Download.download` 建 client 时已用 `.disallow`），所以 X-Token 不会被
+跟随重定向带到别的域。
+
+### 新增：接入 `fetchProductWithFallback`（体积不变的「第 ⓪ 跳」）
+
+上游把 `ent/download` 贴在**整条链的最前面**：成功就用它的结果，
+失败（任何原因）静默落回 volumeStore → redownload → updateProduct。
+`fetchProductWithFallback` 新增可选参数 `entDownloadEndpoint: String?`，
+为 nil 时行为与旧版**完全一致**。
+
+`Download.download` 里先拉 bag 取端点（`EntDownload.endpointFromBag`），
+拉不到就是 nil，不报错。
+
+### 新增：`KBSyncProvider`（宿主装配）
+
+kbsync 要跑 Unicorn 解释 `storeagent`，这是宿主能力；而请求构造在 vendor。
+所以走依赖注入：新增 `Configuration.kbsyncGenerator`（`@Sendable` 闭包类型），
+宿主在 `EscapeOSApp.init` 装配一次。跑在 `Task.detached` 里（纯 CPU，可能几秒，
+不能占主线程）。
+
+装配失败（资产不在）只写日志、不抛错 —— 下载照常走旧链。
+
+### 风险与未验证
+
+- **kbsync 从未真正跑过**。`SapMachine.cpp` 在 v0.3.543 的 CI 里**编译通过**了，
+  但 guest 执行（global init + `+0x0c93c0`）尚未在真机验证 —— 偏移取自上游常量，
+  若 storeagent 版本与上游不同需按 fault 调整；
+- **`ent/download` 请求链从未真机跑过**：bag 键名、UA、Content-Type 均按上游
+  逐字对齐，但 Apple 是否按 `Configurator/2.18` + urlencoded 接受这个形状未验证；
+- **`_pthread_rwlock_rdlock` 等 4 个符号（v0.3.542 补的）** 是否确实被 storeagent
+  取到仍未验证 —— 补上只是「不再缺」，不等于「一定会被调用」。
+
 ## [0.3.543] - 2026-10-02
 
 > **修 v0.3.542 的编译错误 + 补 `storeagent` 缺失的四个锁符号**。

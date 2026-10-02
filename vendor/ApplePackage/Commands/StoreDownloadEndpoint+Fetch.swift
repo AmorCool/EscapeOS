@@ -61,8 +61,38 @@ extension StoreDownloadEndpoint {
         app: Software,
         deviceIdentifier: String,
         externalVersionID: String,
-        resolveVersion: (() async throws -> String)? = nil
+        resolveVersion: (() async throws -> String)? = nil,
+        entDownloadEndpoint: String? = nil
     ) async throws -> [String: Any] {
+        // ⓪ **首选 `ent/download`** —— 上游把它贴在整条链的**最前面**，且是
+        //    「可失败退出的附加一跳」：资产缺失 / 网络失败 / 响应不合规都**静默**
+        //    落回下面的旧链，**不报错**（`appstore_download_product.go:31-70`）。
+        //
+        //    为什么它不是替代而是附加：`ent/download` 需要 storeagent + kbsync，
+        //    这两样依赖 JIT 与本地资产，实在跑不了时就该退回旧链 ——
+        //    否则一个环境问题会把整条下载链拖死。
+        if let endpoint = entDownloadEndpoint, !endpoint.isEmpty {
+            // 版本必须固定：上游在 `sendPreferredDownload` 里，空版本会去查目录补，
+            // 补不到就报错。我们这里沿用调用方给的版本；为空时**不试**这一跳
+            // （`EntDownload.fetchProduct` 内部也会再拦一次），让旧链按它自己的
+            // 有界回退去处理。
+            if !externalVersionID.isEmpty {
+                if let preferred = try await EntDownload.fetchProduct(
+                    client: client,
+                    account: &account,
+                    app: app,
+                    deviceIdentifier: deviceIdentifier,
+                    externalVersionID: externalVersionID,
+                    endpoint: endpoint
+                ) {
+                    return preferred
+                }
+                storeLog("ent/download 没拿到包 → 落回 volumeStore 链")
+            } else {
+                storeLog("ent/download 跳过：版本号为空")
+            }
+        }
+
         let primary = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
             client: client,
             account: &account,

@@ -38,5 +38,28 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 关闭会话（幂等）。dealloc 时也会自动关闭。
 - (void)closeDecrypter;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  kbsync 生成 —— `ent/download` 的请求凭据
+//
+//  对齐上游 ipatool `internal/sap/machine/kbsync.go` 的 `GenerateKBSync`。
+//
+//  ⚠️ **与解密器不是同一条路径**：kbsync 不需要 `dpInfo`、也**不开解密会话**，
+//     只要「带 storeagent 的机器 + hardwareID + DSID」就能算出来。
+//     上游注释原话：
+//       > creates the account and hardware bound FairPlay data required by the
+//       > bag's ent/download endpoint, without opening a decryption session.
+//
+//  因此做成**类方法**（一次性调用，不持有对象）；内部会自己建一台
+//  `CreateWithStoreAgent` 机器、算完即弃。
+// ─────────────────────────────────────────────────────────────────────────────
+/// 生成 `ent/download` 请求体里 `kbsync` 字段用的字节串。
+/// - Parameter storeAgentURL: 含 `storeagent` 文件的目录（与另外四个资产同目录）。
+/// - Parameter hardwareID: 6 字节设备标识（= guid 的十六进制解码，与 SAP 会话同一个）。
+/// - Parameter dsid: 账号 DirectoryServicesIdentifier 的**数值**；为 0 直接报错（上游硬门）。
++ (nullable NSData *)generateKBSyncWithAssetsURL:(NSURL *)storeAgentURL
+                                      hardwareID:(NSData *)hardwareID
+                                            dsid:(uint64_t)dsid
+                                           error:(NSError **)error;
 @end
 NS_ASSUME_NONNULL_END
