@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.3.554] - 2026-10-02
+
+> 这一版全部结论来自**真机抓包**（iPhone 11 / iOS 26.0.1 / USB pcapd），不是推测。
+
+### 修复：`no-udid`「本机设备身份未就绪」—— lockdown 键名拼错
+
+`LocalDeviceIdentity` 读 UDID 时用的键是 `UniqueDeviceIdentifier`，
+**lockdown 根字典里的真实键名是 `UniqueDeviceID`**（本仓 `DeviceInfoService.swift:299`
+用的就是正确拼写）。写错的键 → `as? String` 静默回 nil → `udid` 恒为 nil
+→ NB 全链路走 `pubParams` 时抛 `no-udid`。
+
+为什么藏了这么久：`isUsable` 只看 `serialNumber`。序列号读得到 → 快照被写进缓存
+→ `udid` 是 nil 也没人发现。
+
+两处修：
+
+```swift
+// ① 键名改对
+s.udid = root["UniqueDeviceID"] as? String        // 原：UniqueDeviceIdentifier
+
+// ② 判据加严，别让「序列号够用」掩盖下游真正要的字段
+var isUsable: Bool {
+    !(serialNumber ?? "").isEmpty && !(udid ?? "").isEmpty
+}
+```
+
+### 修正：下架取包的参数与结论（推翻 v0.3.550 的直连推测）
+
+真机抓包拿到 NB 官方客户端点「获取」时发出的**完整请求**，参数与本项目**一字不差**：
+
+```json
+{"method":"nb9527_getOffSaleAppHistoryList","params":{
+  "ipaID":"0", "versionID":"102518", "appExtID":"", "countryCode":"cn", …}}
+```
+
+⇒ 三点纠正：
+
+1. **`ipaID` 传 `"0"`**，不是 `appStoreID`。定位包**完全靠 `versionID`**。
+   - 传 NB 行号（`15993`）→ `code=7 "未获取到数据"`
+   - 传 `"0"`（真机值）→ 进入下一层校验
+2. **`c 密钥` 不是请求参数**。v0.3.550 注释里「还有第五个来自设备侧的凭据没带上」
+   这个推断**是错的** —— 参数已经与真机完全一致，再怎么补键也补不出东西。
+3. **NB 官方客户端点「获取」同样失败**（`code=7`）。所以这不是我们接错。
+
+界面文案：服务端 `msg` 原样透出，不改成笼统的「该下架应用没有可用的安装包」——
+「没包」和「取不到」是两回事，混在一起用户没法判断重试有没有用。
+
 ## [0.3.553] - 2026-10-02
 
 > 修 v0.3.551 / 552 两条**本机抓不到、只能等 CI** 的编译错。两次都栽在同一类事上。

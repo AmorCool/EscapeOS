@@ -38,8 +38,14 @@ enum LocalDeviceIdentity {
         var productType: String?
 
         /// 是否拿到了可用的本机身份
+        ///
+        /// ★ v0.3.554：判据从「序列号非空」改成「序列号**且** UDID 都非空」。
+        /// 旧判据让一个拼错的键（`UniqueDeviceIdentifier`）藏了很久 ——
+        /// 序列号读得到就把快照写进缓存，`udid` 是 nil 也没人管，
+        /// 直到 NB 链路因为缺 UDID 报 `no-udid` 才暴露。
+        /// 身份快照的用途就是给下游取 UDID，只判序列号等于没校验。
         var isUsable: Bool {
-            !(serialNumber ?? "").isEmpty
+            !(serialNumber ?? "").isEmpty && !(udid ?? "").isEmpty
         }
 
         var summary: String {
@@ -114,7 +120,14 @@ enum LocalDeviceIdentity {
         var s = Snapshot()
         if let root = try? DeviceInfoService.lockdownFullDict() {
             s.serialNumber = root["SerialNumber"] as? String
-            s.udid = root["UniqueDeviceIdentifier"] as? String
+            // ★ v0.3.554 修：这里原写作 `UniqueDeviceIdentifier`（多一个 `ifier`），
+            // 而 lockdown 根字典里的真实键名是 **`UniqueDeviceID`**
+            // （同一仓的 `DeviceInfoService.swift:299` 用的就是正确拼写）。
+            // 写错键 → `as? String` 静默返回 nil → `udid` 恒为 nil →
+            // NB 链路一律报 `no-udid`「本机设备身份未就绪」。
+            // 之所以一直没被发现：`isUsable` 只看 `serialNumber`，序列号读得到，
+            // 快照就被写进了缓存，把「udid 是 nil」这个事实盖住了。
+            s.udid = root["UniqueDeviceID"] as? String
             s.productType = root["ProductType"] as? String
         }
         // 变量名不用 `ms`：本类型里没有同名方法，但另一个文件的 `ms(since:)` 同名容易被误读

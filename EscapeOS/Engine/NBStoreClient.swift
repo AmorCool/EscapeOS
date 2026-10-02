@@ -241,8 +241,12 @@ enum NBStoreClient {
     /// ## 取值顺序（与全项目其它地方一致，都走 `LocalDeviceIdentity`）
     /// ① `LocalDeviceIdentity.cachedSnapshot()`（缓存已热 → 0 成本）
     /// ② `LocalDeviceIdentity.load()`（冷缓存，同步读一次、建隧道秒级 —— 值得）
-    /// ③ 兜底仍留一份稳定的伪值 —— **但要留下日志**，因为这份包大概率装不上，
-    ///    不能静默降级（静默降级是上一轮排查绕远的根源）。
+    /// ③ **拿不到就返回 nil，不发请求**（v0.3.550 起，不再有伪值兜底）。
+    ///
+    /// ★ v0.3.554 修了一个上游 bug：`LocalDeviceIdentity` 之前把 lockdown 的键名
+    /// 写成了 `UniqueDeviceIdentifier`（真实键是 `UniqueDeviceID`），导致 ① ②
+    /// **两条路都必然取不到**，`no-udid` 是这么来的，不是隧道没起来。
+    /// 现在键名已修正，这里的兜底路径不会再被误触发。
     /// **只有真 UDID 才允许取包**（v0.3.550 收紧）。
     ///
     /// 为什么把兜底伪值这条删掉：真机日志（2026-10-02）实证伪值仍在被用 ——
@@ -731,29 +735,45 @@ enum NBStoreClient {
     /// 「下架列表」在 NB 那边是本地 SQLite 表 `load_list` 缓存的。
     /// 我们的做法：**下架状态由 lookup 结果判定 + 用本方法取包**，不建本地库。
     ///
-    /// ## 参数（v0.3.550 实测定案）
-    /// - `ipaID`: **必须传 App Store 数字 ID**（`appStoreID` / `lookupData.trackId`）。
-    ///   实测（2026-10-02，直连服务端多轮对照）：
-    ///   - 传 NB 行号 `id`（如 `15993`） → `code=7 msg="未获取到数据"`
-    ///   - 传 `appStoreID`（如 `6744045754`） → `code=7 msg="未获取c密钥"`
-    ///   第二条的措辞说明**服务端认得这个 ipaID**，只是还缺一个客户端密钥。
-    /// - `appExtID`: 版本的 external identifier（下架记录里叫 `appExtID`）。
-    /// - `versionID`: NB 侧的版本行号（下架记录里叫 `versionID`）。
+    /// ## 参数（2026-10-02 真机抓包定案，取代 v0.3.550 的直连推测）
+    /// - `ipaID`: **传 `"0"`**。真机发什么就发什么，别自作聪明填 ID。
+    ///   - 传 NB 行号（如 `15993`） → `code=7 msg="未获取到数据"`
+    ///   - 传 `"0"`（真机值） → 进入通道校验，回 `通道已关闭，请开通会员`
+    /// - `appExtID`: 版本的 external identifier（真机发空串，有值就带上）。
+    /// - `versionID`: NB 侧的版本行号 —— **定位包靠的就是它**，不能空。
     /// - `country`: 区域码（`cn` / `us`）。
     ///
-    /// ## ⚠️ 已知未通（写在注释里，别让下一个人重踩）
-    /// 四个字段（`ipaID` / `versionID` / `appExtID` / `countryCode`）是**从反编译实读**
-    /// 的完整形状（`sub_10031D260` 里四个 `AnyHashable` 键的立即数逐条对过），
-    /// 但直连仍回 `code=7 "未获取c密钥"` —— 说明**还有第五个来自设备侧的凭据**没带上。
-    /// 那个凭据应由 NB 客户端在**更早的一发请求**里换取（本函数没有），
-    /// 靠静态分析定不下来，需要真机抓包补齐。**在此之前下架取包大概率失败**，
-    /// 所以这里把服务端 `msg` 原样抛出，让界面能说清是「缺密钥」而不是「没这个包」。
+    /// ## ★★ 结论：下架取包是 NB 的**付费通道**（2026-10-02 真机抓包定案）
+    /// 真机抓包（iPhone 11 / iOS 26.0.1 / USB pcapd，NB全能助手 3.9.1）
+    /// 拿到了 NB 自己点「获取」时发出的**完整请求**，参数与本函数**一字不差**：
+    /// ```
+    /// {"method":"nb9527_getOffSaleAppHistoryList","params":{
+    ///   "mainEmbedded":false,"udid":"…","apiVersion":"1.0","productType":"iPhone12,1",
+    ///   "appExtID":"","mainBundleID":"com.nbmaster.app","osVersion":"26.0.1",
+    ///   "countryCode":"cn","phoneName":"iPhone","deviceType":"iPhone",
+    ///   "ipaID":"0","lang":"zh-cn","appVersion":"3.9.1","versionID":"102518","build":"1"}}
+    /// ```
+    /// 服务端回应：`{"code":7,"msg":"通道已关闭，请开通会员"}`
+    ///
+    /// ⇒ 三点定论：
+    /// 1. **`ipaID` 传 `"0"` 才对**（不是 `appStoreID`，也不是 NB 行号）——
+    ///    定位完全靠 `versionID`。传 `"15993"` 得到的是 `msg="未获取到数据"`。
+    /// 2. **`c 密钥` = 通道凭据**，服务端原话是「通道已关闭，请开通会员」。
+    ///    它不是某个请求参数，所以**再怎么补键都拿不到** ——
+    ///    之前注释里「还有第五个来自设备侧的凭据」这个推断是**错的**，已推翻。
+    /// 3. NB 官方客户端**同样失败**（同样 code=7）。所以这不是我们接错，
+    ///    而是**该账号没有开通下架取包通道**。
+    ///
+    /// ## 界面该怎么呈现
+    /// 不要把这种情况说成「该下架应用没有可用的安装包」——那是两回事。
+    /// 服务端 `msg` 原样抛出，「通道已关闭，请开通会员」本身就是最准确的说明。
     static func offSalePackage(ipaID: String,
                                appVerId: String = "",
                                versionID: String = "",
                                country: String = "cn") async throws -> NBPackage? {
         var p: [String: Any] = [
-            "ipaID": ipaID,
+            // ★ 实测：真机发的就是 "0"，定位靠 versionID。
+            "ipaID": "0",
             "countryCode": country,
         ]
         // 四个键一个都不能少（服务端对缺键直接 500，实测）。
@@ -766,9 +786,8 @@ enum NBStoreClient {
                                     method: "getOffSaleAppHistoryList",
                                     params: p)
 
-        // v0.3.550：**服务端说不行就如实说**，不要静默返回 nil。
-        // `code=7` 一直是「有这个 ipaID 但缺密钥」，静默会让界面把
-        // 「缺密钥」显示成「该下架应用没有可用的安装包」—— 两回事，用户没法排查。
+        // 服务端说不行就如实说，不要静默返回 nil ——
+        // 静默会让界面把「通道关了」显示成「该下架应用没有可用的安装包」。
         if let code = obj["code"] as? Int, code != 0 {
             let msg = string(obj["msg"]) ?? ""
             LoginLogger.shared.log("\(logTag) ✕ 下架取包被拒 code=\(code) msg=\"\(msg)\" "

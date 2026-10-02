@@ -568,15 +568,13 @@ struct I4StoreFreeView: View {
 
     /// 下架行「获取」：用 NB 的下架链路取包 → 交给统一下载中心.
     ///
-    /// `ipaID` 用 `app.storeID`（`appStoreID` 或 `lookupData.trackId`，两个哪个有值用哪个）。
-    /// **实测（2026-10-02）**：传 NB 行号会回 `未获取到数据`，传 `appStoreID` 才回
-    /// `未获取c密钥` —— 后者说明服务端认这个 ID，所以取包只能走 `appStoreID`.
+    /// **实测（2026-10-02 真机抓包）**：下架取包**只认 `versionID`**，
+    /// `ipaID` 真机发的是 `"0"`，`appExtID` 真机发的是 `""`. 三者里只有
+    /// `versionID` 参与定位 —— 所以 `versionID` 空的时候这条路走不通.
     ///
-    /// `versionID` / `appExtID` 也必须带上（服务端缺键直接 500）——
-    /// 两个是**不同**字段，不能互相顶替，所以从下架记录里各取各的.
-    ///
-    /// 服务端说不行时**原样报出来**（例如「未获取c密钥」），不改成笼统的「没有包」——
-    /// 两回事，混在一起用户没法判断是重试有用还是根本取不到.
+    /// **下架取包是 NB 的付费通道**：NB 官方客户端点「获取」同样会收到
+    /// `code=7 通道已关闭，请开通会员`. 这不是我们接错，是账号没开通.
+    /// 所以这里把服务端 `msg` 原样报出来，用户看到的就是最准确的说明.
     @MainActor
     private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
         guard let sid = app.storeID, !sid.isEmpty else {
