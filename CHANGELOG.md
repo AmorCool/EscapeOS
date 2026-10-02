@@ -75,6 +75,45 @@ POST http://47.243.71.210:9527/nb/app-downgrade
 
 用户规则「界面上不要中文句号」。清掉 `I4StoreFreeView` 里 6 处 `Text("…。")`。
 
+### 修复：点「暂停下载」后进度还在往前走（用户报「点击暂停下载是没有用的」）
+
+**真因**：暂停是靠 `URLSession` 的 `cancel(byProducingResumeData:)` 实现的，
+而**取消是异步生效的** —— 在它真正落地之前，已经在网络上的数据包仍会打进
+`didWriteData`。而 `didWriteData` 里**从来没看过 `paused`**，于是进度条继续爬：
+
+```swift
+func urlSession(… didWriteData bytesWritten: Int64, …) {
+    guard totalBytesExpectedToWrite > 0 else { return }   // ← 以前只有这一道
+    onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+}
+```
+
+用户看到的就是「我明明按了暂停，进度还在动」。
+
+§ 两处补丁（`RemoteDownloader`）：
+1. `didWriteData` 开头加 `guard !isPausedOrFinished() else { return }` ——
+   一进暂停态就不再上报，界面立刻停住；`resume()` 归 false 后自然继续；
+2. `didFinishDownloadingTo` 同样加检查 —— 挡住「暂停」与「刚好下完」撞车：
+   `cancel(byProducingResumeData:)` 对**已完成**的任务是 no-op，回调解不出
+   `resumeData`，而文件已经躺在 `location` 里了。不挡的话这次暂停等于没发生
+   （文件照常落盘、任务照常进 `.done`）。现在直接丢弃临时文件，用户仍留在「已暂停」。
+
+### 修复：暂停 / 继续的竞态（`resumeData` / `task` 跨线程裸读写）
+
+`paused` / `finished` / `task` / `resumeData` 会被**两条线程**碰：`URLSession` 的
+delegate 回调（后台队列）和主 actor 上的 `pause()` / `resume()`。以前它们全是裸变量：
+
+- 点「暂停」后**立刻**点「继续」→ 回调还没给 `resumeData`，`resume()` 读到 `nil`
+  → **白白从头重下**；
+- `pause()` 期间挤进 `resume()` → 新 task 被漏掉，旧 task 已经 cancel，下载卡死。
+
+§ 落地：加一把 `NSLock` 把读写全部收口，并注意三处坑（都是自查时发现并避开的）：
+1. `pause()` **不能持锁调** `cancel(byProducingResumeData:)` —— 它**可能同步执行回调**，
+   回调里再 `lock.lock()` 就会**自锁死**。改为先解锁、再调 cancel；
+2. `resume()` 里「创建 task」与「赋值给 `task`」必须待在**同一段持锁区**，
+   中间不留空档（否则解锁/上锁之间挤进 `pause()` 会把新 task 漏掉）；
+3. `start()` / `abort()` / `finish()` 一并收口到锁。
+
 ### 反编译订正（写进报告）
 
 `nb9527_search_offsale_app`（带下划线的那个）**确实不是网络接口** ——

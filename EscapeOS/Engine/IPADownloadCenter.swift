@@ -985,6 +985,12 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
     private var finished = false
     private var paused = false
 
+    /// v0.3.549：`paused` / `finished` / `task` / `resumeData` 会被**两条线程**碰 ——
+    /// `URLSession` 的 delegate 回调（后台队列）与主 actor 上的 `pause()` / `resume()`。
+    /// 以前它们全是裸变量：暂停后进度还在走、暂停后立刻继续会丢续传数据，
+    /// 都出在这个竞态上。加一把锁把读写收口.
+    private let lock = NSLock()
+
     init(request: URLRequest,
          onProgress: @escaping (Int64, Int64) -> Void,
          onFinish: @escaping (Result<URL, Error>) -> Void) {
@@ -994,53 +1000,82 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
         super.init()
     }
 
+    /// 读一个受锁保护的布尔量
+    private func isPausedOrFinished() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return paused || finished
+    }
+
     func start() {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 120
         let s = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
+        lock.lock()
         session = s
         let t = s.downloadTask(with: request)
         task = t
+        lock.unlock()
         t.resume()
     }
 
     func pause() {
-        guard !finished, let t = task else { return }
+        lock.lock()
+        guard !finished, let t = task else { lock.unlock(); return }
         paused = true
+        lock.unlock()
+        // v0.3.549：`resumeData` 是**回调异步**给的，而 `resume()` 会立刻来读它 ——
+        // 两条线程（delegate 队列 vs 主 actor）之间必须有锁，
+        // 否则用户「暂停后马上继续」很可能读到 nil → 白白从头重下.
+        //
+        // ⚠️ `cancel(byProducingResumeData:)` **可能在当前线程同步执行回调**，
+        // 所以它必须在**不持锁**的状态下调 —— 否则回调里的 `lock.lock()` 会自锁死.
         t.cancel(byProducingResumeData: { [weak self] data in
-            self?.resumeData = data
+            guard let self else { return }
+            self.lock.lock(); self.resumeData = data; self.lock.unlock()
         })
     }
 
     func resume() {
-        guard !finished else { return }
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
         paused = false
-        if let data = resumeData {
-            let t = session?.downloadTask(withResumeData: data)
-            task = t
-            t?.resume()
+        let data = resumeData
+        // 从暂停态恢复时，用一个全新的 task（旧的那个已被 cancel）。
+        // 创建 task 与赋值在**同一段持锁区**内完成 —— 中间不留空档，
+        // 否则「解锁 → 建 task → 再上锁」之间挤进一次 `pause()` 就会把新 task 漏掉.
+        let t: URLSessionDownloadTask?
+        if let data {
+            t = session?.downloadTask(withResumeData: data)
         } else {
             // 没有续传数据（服务器不支持 Range / 刚起步）→ 重新下
-            let t = session?.downloadTask(with: request)
-            task = t
-            t?.resume()
+            t = session?.downloadTask(with: request)
         }
+        task = t
+        lock.unlock()
+        t?.resume()
     }
 
     func abort() {
-        guard !finished else { return }
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
         finished = true
         paused = true
-        task?.cancel()
-        session?.finishTasksAndInvalidate()
+        let t = task
+        let s = session
         session = nil
+        lock.unlock()
+        t?.cancel()
+        s?.finishTasksAndInvalidate()
     }
 
     private func finish(_ result: Result<URL, Error>) {
-        guard !finished else { return }
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
         finished = true
-        session?.finishTasksAndInvalidate()
+        let s = session
         session = nil
+        lock.unlock()
+        s?.finishTasksAndInvalidate()
         onFinish(result)
     }
 
@@ -1051,6 +1086,14 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
                     didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
+        // v0.3.549：**暂停后不再上报进度**.
+        //
+        // 「暂停」是靠 `cancel(byProducingResumeData:)` 实现的，而取消是**异步生效**的 ——
+        // 在它真正落地之前，已经在网络上的数据包仍会送到这里。以前这里不看 `paused`，
+        // 于是用户点完暂停之后进度条**还在往前爬**（用户报的「点击暂停下载是没有用的，
+        // 我发现它会继续下载」就是这个）。这里加一道：一旦进入暂停态就不再上报，
+        // 界面立刻停住；`resume()` 会把 `paused` 归 false，进度自然继续.
+        guard !isPausedOrFinished() else { return }
         guard totalBytesExpectedToWrite > 0 else { return }
         onProgress(totalBytesWritten, totalBytesExpectedToWrite)
     }
@@ -1058,6 +1101,17 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession,
                     downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
+        // v0.3.549：**暂停期间落地的文件不算下载完成**.
+        //
+        // `pause()` 与「下载刚好完成」这两件事可能撞在一起：`cancel(byProducingResumeData:)`
+        // 对**已完成**的任务是 no-op，回调解不成 `resumeData`，而文件已经躺在 `location` 了。
+        // 不挡的话这次暂停等于没发生 —— 文件照常落盘、任务照常进 `.done`，
+        // 与用户「我明明按了暂停」的预期完全相反。这里直接丢弃并结束，
+        // 磁盘与状态都不动（用户仍留在「已暂停」，可以再点继续）.
+        if isPausedOrFinished() {
+            try? FileManager.default.removeItem(at: location)
+            return
+        }
         // 系统随后删除该临时文件 → 先搬到稳定位置
         let keep = FileManager.default.temporaryDirectory
             .appendingPathComponent("dl-\(UUID().uuidString).part")
@@ -1080,7 +1134,12 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession,
                     task: URLSessionTask,
                     didCompleteWithError error: Error?) {
-        if finished { return }
+        // v0.3.549：`finished` / `paused` 统一走锁读（与 `pause()` / `resume()` 收口）.
+        lock.lock()
+        let done = finished
+        let isPaused = paused
+        lock.unlock()
+        if done { return }
         // v0.3.398：**本地取消永远不是「下载失败」** —— 这是「暂停后几率变失败」的根因层。
         //
         // 暂停是靠 `cancel(byProducingResumeData:)` 实现的，它必然产生一个 `URLError.cancelled`。
@@ -1091,7 +1150,7 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
         // 网络层的断开/超时是 `networkConnectionLost` / `timedOut` 等**别的**码，
         // 所以这里无条件丢弃它最稳，而且不依赖任何跨线程状态的读数时序。
         if let urlError = error as? URLError, urlError.code == .cancelled { return }
-        if paused {
+        if isPaused {
             // 暂停/取消产生的取消错误：不当作失败
             return
         }
