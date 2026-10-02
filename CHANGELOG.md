@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.3.545] - 2026-10-02
+
+> **修 v0.3.544 的编译错误 + NB 源「装了闪退」真因修复（伪 UDID → 真 UDID）**。
+
+### 修复：`KBSyncProvider.swift:70` `extra argument 'error' in call`（v0.3.544 CI 报错）
+
+```
+EscapeOS/Services/AppleAuth/KBSyncProvider.swift:70:20: error: extra argument 'error' in call
+70 |             error: &error
+```
+
+真因：`SAPStoreAgentContext.generateKBSyncWithAssetsURL:` 的 `NSError **` 出参
+在 `NS_ASSUME_NONNULL_BEGIN` 下被 Swift importer 判成了别的形状
+（同文件里 `SAPContext` 的方法反而没事 —— 所以这不是"某一行写错"，
+而是这两个类在 importer 眼里的可见性不一致）。
+
+修法（**两侧一起改**，只改一侧还会再报）：
+1. `SAPContext.h`：该类的三个方法出参统一写成 `NSError * _Nullable * _Nullable`；
+2. `KBSyncProvider.swift`：`generate` 里传入显式的 `NSErrorPointer`（`let failure: NSErrorPointer = nil`），
+   **不再用 `&error` 语法糖**。语义不变（失败照样抛 `KBSyncError`），
+   只是不再触发那个会失败的 out-parameter 形状推断。
+
+### 修复：NB 源下载的包**安装后闪退**（= 请求体里的 `udid` 是编的）
+
+原实现发的是**随机生成的 40 位伪 UDID**（`NBStoreClient.udid`）。
+抓包对照 NB 助手真机：它发的是**真 UDID**（`00008030-001A446A0260402E`）。
+
+这个字段决定生死 —— NB 服务端拿它去 Apple 换取**针对该设备的 FairPlay 授权
+（sinf）**。两种失败形态都撞过：
+
+| 伪 UDID 的后果 | 表面症状 |
+|---|---|
+| 服务端识破 → `sinfs` 给空串 | 装的时候报「该 IPA 是加密包，但缺少 SC_Info/*.sinf」 |
+| 服务端照发一份 sinf，但不是为本机签的 | **装得上，一启动就崩** ← 用户报的就是这个 |
+
+所以修法不是"补 sinf 写回"（那套逻辑 `v0.3.413` 就有了，没坏），
+而是**把真 UDID 喂进去**：改为走 `LocalDeviceIdentity`
+（缓存命中 0 成本；冷缓存同步读一次，建 RSD 隧道秒级 ——
+NB 取包本来就是用户点「获取」触发的，不在下载启动的关键路径上）。
+真的取不到才回落伪值，**并且写日志**（不许再静默降级 —— 那是上一轮排查绕远的根源）。
+
+顺带把「直链取到了但服务端没回 sinf」也加上日志（以前是静默的）。
+
 ## [0.3.544] - 2026-10-02
 
 > **修 v0.3.543 的编译错误 + `ent/download` 请求链接通（步骤 3 完成）**。

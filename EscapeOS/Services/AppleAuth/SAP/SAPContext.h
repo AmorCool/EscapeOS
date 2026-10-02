@@ -13,6 +13,19 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSString *)assetNotes;
 @end
 
+typedef NS_ENUM(NSInteger, SAPStoreAgentErrorCode) {
+    /// 成功
+    SAPStoreAgentErrorNone = 0,
+    /// 资产缺失 / 长度或摘要与官方值不符
+    SAPStoreAgentErrorAssets = 1,
+    /// 参数不合法（hardwareID 不是 6 字节、dpInfo 为空、DSID 为 0 …）
+    SAPStoreAgentErrorInvalidArgument = 2,
+    /// 解释执行 `storeagent` 失败
+    SAPStoreAgentErrorMachine = 3,
+    /// 生成结果为空
+    SAPStoreAgentErrorEmptyResult = 4,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  SAPStoreAgentContext —— `ent/download` 的包解密器
 //
@@ -22,6 +35,19 @@ NS_ASSUME_NONNULL_BEGIN
 //
 //  ⚠️ 与上面的 `SAPContext`（SAP 签名会话）**不共用**机器 ——
 //     `storeagent` 是额外挂载的镜像，需要一个带它的新 SapMachine。
+//
+//  ⚠️ v0.3.545：本类的**解密会话**部分（`-initWithAssetsURL:hardwareID:dpInfo:error:`
+//     / `-decryptChunk:error:` / `-closeDecrypter`）在 Swift 侧**目前没有任何调用点**
+//     —— 也就是说这部分还没真正接进下载链，只有下面的 kbsync 在用 storeagent。
+//     留着是为了下一步接包解密；不要据此以为解密已经通了。
+//
+//  ⚠️ v0.3.545（CI 修复）：**这里的报错一律用 `NSError **`，不用 `NSError **` 的
+//     `nullable` 修饰** —— v0.3.544 的 CI 在
+//     `KBSyncProvider.swift:70` 报 `error: extra argument 'error' in call`。
+//     成因是 `NS_ASSUME_NONNULL_BEGIN` 让出参带上非空假设，Swift importer 对
+//     `NSError **` 的形状判定不一致（同一个文件里 `SAPContext` 的方法却没事）。
+//     统一改成返回 `NSError * _Nullable *`，并在 Swift 侧**不用 `try` 语法糖**
+//     （见 `KBSyncProvider.generate`）—— 两处一起改才稳。
 // ─────────────────────────────────────────────────────────────────────────────
 @interface SAPStoreAgentContext : NSObject
 /// 用 `storeagent` 资产打开一个解密会话。
@@ -31,10 +57,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable instancetype)decrypterWithAssetsURL:(NSURL *)storeAgentURL
                                      hardwareID:(NSData *)hardwareID
                                          dpInfo:(NSData *)dpInfo
-                                          error:(NSError **)error;
+                                          error:(NSError * _Nullable * _Nullable)error;
 
 /// 解密一段（≤ 0x8000 字节）。返回解密后的新 `NSData`；nil 表示失败（error 有值）。
-- (nullable NSData *)decryptChunk:(NSData *)chunk error:(NSError **)error;
+- (nullable NSData *)decryptChunk:(NSData *)chunk error:(NSError * _Nullable * _Nullable)error;
 
 /// 关闭会话（幂等）。dealloc 时也会自动关闭。
 - (void)closeDecrypter;
@@ -60,6 +86,6 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable NSData *)generateKBSyncWithAssetsURL:(NSURL *)storeAgentURL
                                       hardwareID:(NSData *)hardwareID
                                             dsid:(uint64_t)dsid
-                                           error:(NSError **)error;
+                                           error:(NSError * _Nullable * _Nullable)error;
 @end
 NS_ASSUME_NONNULL_END

@@ -218,16 +218,55 @@ enum NBStoreClient {
 
     // MARK: - 公共参数
 
-    /// 一个稳定、形状合法的 40 位十六进制伪 UDID。
+    /// 请求体里的 `udid`。
     ///
-    /// 与牛蛙源同款理由：请求体**必须带这个键**，而真 UDID 在部分环境取不到。
-    /// 宁可给个形状合法的稳定值，也不要在探测阶段因为一个字段把整次请求变成畸形。
+    /// ## v0.3.545：**不再造假 UDID —— 这就是「NB 源下的包装上闪退」的真因**
+    ///
+    /// 旧实现（v0.3.53x）随便生成一个 40 位 hex 冒充 UDID。抓包对照过 NB 助手真机：
+    /// 它发的是**真 UDID**（`00008030-001A446A0260402E`）。
+    ///
+    /// 为什么这个字段决定生死：NB 服务端拿到 `udid` 去 Apple 那边换取
+    /// **针对该设备的 FairPlay 授权（sinf）**。伪 UDID 换回来的 sinf 是无效的 ——
+    /// 但注意它的失败形态**分两种**（这也是之前判断跑偏的地方）：
+    ///
+    /// - 服务端「识破」伪 UDID（比如形状/校验位不过）→ `sinfs` 直接给空串
+    ///   → 客户端 `PackageSINFWriter` 记一行「这一份没有 sinf，跳过」
+    ///   → 装的时候报「该 IPA 是加密包，但缺少 SC_Info/*.sinf」。
+    /// - 服务端「照发一份 sinf」但那份不是为本机签的 → **装得上，一启动就崩**
+    ///   （`ApplicationSINF` 与本机硬件不匹配，解密出来的 `__TEXT` 是垃圾）。
+    ///
+    /// 第二种形态正是用户报的「不缺 sinf，但安装后闪退」——所以修法不是
+    /// 「补 sinf 写回」（那个逻辑早就有了），而是**把真 UDID 喂进去**。
+    ///
+    /// ## 取值顺序（与全项目其它地方一致，都走 `LocalDeviceIdentity`）
+    /// ① `LocalDeviceIdentity.cachedSnapshot()`（缓存已热 → 0 成本）
+    /// ② `LocalDeviceIdentity.load()`（冷缓存，同步读一次、建隧道秒级 —— 值得）
+    /// ③ 兜底仍留一份稳定的伪值 —— **但要留下日志**，因为这份包大概率装不上，
+    ///    不能静默降级（静默降级是上一轮排查绕远的根源）。
     private static var udid: String {
+        if let real = LocalDeviceIdentity.cachedSnapshot()?.udid, !real.isEmpty {
+            return real
+        }
+        // 冷缓存 → 同步读一次真 UDID。这一步会建 RSD 隧道（秒级），
+        // 但：① NB 取包本来就要求用户点一下「获取」，不是下载启动的关键路径；
+        //     ② 伪 UDID 会直接导致「装了闪退」，宁可慢一次也不许再假。
+        // 读不到（隧道没起来）才落到下面的伪值兜底，并留下日志。
+        if let real = LocalDeviceIdentity.load().udid, !real.isEmpty {
+            return real
+        }
         let key = "nb.pseudoUDID"
-        if let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty { return saved }
+        if let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty {
+            LoginLogger.shared.log("\(logTag) ○ 本次请求用历史伪 UDID（非本机真值）：\(saved)"
+                                   + " —— 取回的 sinf 大概率装不上/装后闪退",
+                                   category: .appStore)
+            return saved
+        }
         let digits = "0123456789abcdef"
         let v = String((0..<40).map { _ in digits.randomElement() ?? "0" })
         UserDefaults.standard.set(v, forKey: key)
+        LoginLogger.shared.log("\(logTag) ○ 本机真 UDID 不可用，改用伪 UDID：\(v)"
+                               + " —— 取回的 sinf 与本机不匹配，装了会闪退",
+                               category: .appStore)
         return v
     }
 
@@ -453,6 +492,12 @@ enum NBStoreClient {
         var sinf: String?
         if let arr = d["sinfs"] as? [[String: Any]], let first = arr.first {
             sinf = string(first["dataHex"]) ?? string(first["data"])
+        }
+        // v0.3.545：拿不到 sinf 不许静默 —— 加密包缺 sinf 装不上，这条日志是唯一的线索
+        if sinf == nil {
+            LoginLogger.shared.log("\(logTag) ○ 直链已取到，但服务端没回 sinf（udid=\(udid)）"
+                                   + " —— 若包是加密的，安装会报「缺少 SC_Info/*.sinf」",
+                                   category: .appStore)
         }
         return NBPackage(ipaURL: normalizeAsset(url),
                          sinfBase64: sinf,
