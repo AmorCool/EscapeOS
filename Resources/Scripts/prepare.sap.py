@@ -22,6 +22,10 @@ ASSETS = {
     'CommerceCore': (207744, 'c5401e57402230f3c876409d295319ddf1e61287bc882683c5d61277be7bc1f2'),
     'CoreFP': (29014912, 'f19141336be4198d0f8991bb00017c915efc7aeaece36c345f7faa1237ea6074'),
     'CoreFP.icxs': (5288352, '473e78af86979f5bd4f6269561caf770b3d16c098d918846eeac8cdd2fe6566a'),
+    # v0.3.540：`ent/download` 免登录下载链要用的解密器镜像（上游 ipatool `internal/sap/
+    # assets/storeagent.go` 同款 path/size/digest）。与上面四个**同源**——都在同一个
+    # OSXUpd10.9.pkg 的 Payload CPIO 里，所以复用同一条 Range 通道，无需另开下载路径。
+    'storeagent': (2580176, '70ce036f9dbcbc04db9511ebd08de0dd3cbc35ccc9d44b089c90170cb5453c59'),
 }
 
 
@@ -64,10 +68,15 @@ def fetch_assets(directory, reuse_cache=True):
     if all(valid_asset(directory / name, spec) for name, spec in ASSETS.items()):
         return
     # The same verified cache is used by official ipatool; never copy unverified bytes.
-    existing = Path.home() / 'Library/Caches/ipatool/sap/apple-assets-v2'
-    for name, spec in ASSETS.items():
-        if reuse_cache and valid_asset(existing / name, spec):
-            shutil.copy2(existing / name, directory / name)
+    #
+    # 注意上游把资产放**两个**缓存目录（`internal/sap/assets/assets.go` 的
+    # `apple-assets-v2` 与 `storeagent.go` 的 `apple-storeagent-v1`），
+    # 所以这里两个都要探，否则本机已缓存 storeagent 时仍会去重下 2.5MB。
+    ipatool_sap = Path.home() / 'Library/Caches/ipatool/sap'
+    for cache in (ipatool_sap / 'apple-assets-v2', ipatool_sap / 'apple-storeagent-v1'):
+        for name, spec in ASSETS.items():
+            if reuse_cache and not (directory / name).exists() and valid_asset(cache / name, spec):
+                shutil.copy2(cache / name, directory / name)
     if all(valid_asset(directory / name, spec) for name, spec in ASSETS.items()):
         return
     print('Downloading SAP assets from Apple…', flush=True)

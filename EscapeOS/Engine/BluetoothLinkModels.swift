@@ -206,6 +206,17 @@ struct BluetoothUplinkMessage: Equatable {
     /// B 机当前选的图钉坐标.
     let requestedCoordinate: CLLocationCoordinate2D
 
+    /// 手写 `==`：`CLLocationCoordinate2D` 是 C 结构体，**不满足 `Equatable`**，
+    /// 所以编译器无法合成 `Equatable` 一致性（v0.3.540 CI 实测报错：
+    /// `stored property type 'CLLocationCoordinate2D' does not conform to protocol 'Equatable'`）。
+    /// 按经纬度逐字段比较即可 —— 浮点用 `==` 是有意的：这里比的是「同一个坐标原样往返」，
+    /// 不涉及计算，位级相等才说明编码/解码没丢精度。
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.kind == rhs.kind
+            && lhs.requestedCoordinate.latitude == rhs.requestedCoordinate.latitude
+            && lhs.requestedCoordinate.longitude == rhs.requestedCoordinate.longitude
+    }
+
     init?(data: Data) {
         let bytes = [UInt8](data)
         // 首字节 ≥ 0x80 才是新消息；否则是状态回报，不由本类型解析.

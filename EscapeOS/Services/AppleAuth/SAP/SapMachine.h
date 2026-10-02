@@ -168,6 +168,23 @@ public:
         std::vector<uint8_t> coreFPIcxs,
         std::vector<uint8_t> hardwareID = {}); // used for _get_mac_address shim
 
+    /// 有 StoreAgent 镜像时加载它并返回一个新的 SapMachine。
+    ///
+    /// 上游 ipatool 的 `openRuntime(ctx, bundle, runtimeOptions{extraImages: [...]})`
+    /// 就是「在 CoreFP/CommerceCore/CommerceKit 之外**再挂一个镜像**」。
+    /// `storeagent` 是独立可执行 Mach-O（不是 dylib），基址 `0x00001000C0000000`，
+    /// 由 `ent/download` 的包解密链使用（见 `SapStoreAgent`）。
+    ///
+    /// - Parameter storeAgent: `CommerceKit.framework/.../Resources/storeagent`
+    /// - Returns: 新实例；镜像解析/重定位失败抛 `std::runtime_error`。
+    static std::unique_ptr<SapMachine> CreateWithStoreAgent(
+        std::vector<uint8_t> coreFP,
+        std::vector<uint8_t> commerceCore,
+        std::vector<uint8_t> commerceKit,
+        std::vector<uint8_t> coreFPIcxs,
+        std::vector<uint8_t> storeAgent,
+        std::vector<uint8_t> hardwareID = {});
+
     ~SapMachine();
 
     // SAP protocol operations — match the Go Machine API exactly.
@@ -183,11 +200,23 @@ public:
 private:
     SapMachine() = default;
 
+    /// `Create` / `CreateWithStoreAgent` 的公共实现。
+    /// `storeAgent` 为空 ⇒ 与旧 `Create` 行为完全一致（不挂额外镜像）。
+    static std::unique_ptr<SapMachine> Build(
+        std::vector<uint8_t> coreFP,
+        std::vector<uint8_t> commerceCore,
+        std::vector<uint8_t> commerceKit,
+        std::vector<uint8_t> coreFPIcxs,
+        std::vector<uint8_t> storeAgent,
+        std::vector<uint8_t> hardwareID);
+
     // ── guest address space ───────────────────────────────────────────────────
     static constexpr uint64_t kReturnAddr  = 0x0000000100000000ULL;
     static constexpr uint64_t kCoreFPBase  = 0x0000100000000000ULL;
     static constexpr uint64_t kCommerceBase= 0x0000100040000000ULL;
     static constexpr uint64_t kKitBase     = 0x0000100080000000ULL;
+    /// `storeagent` 镜像基址 —— 对齐上游 `storeAgentBase`（machine/storeagent.go:14）。
+    static constexpr uint64_t kStoreAgentBase = 0x00001000C0000000ULL;
     static constexpr uint64_t kScratchBase = 0x0000300000000000ULL;
     static constexpr uint64_t kScratchSize = uint64_t(32) << 20; // 32 MB
     static constexpr uint64_t kHeapBase    = 0x0000400000000000ULL;

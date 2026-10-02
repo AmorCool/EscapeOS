@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.3.541] - 2026-10-02
+
+> **修 v0.3.540 的编译错误 + `ent/download` 步骤 1 落地**。
+
+### 修复：`BluetoothUplinkMessage` 无法合成 `Equatable`（v0.3.540 CI 报错）
+
+v0.3.540 的 CI 在 `Build (compile/link)` 阶段失败，全仓**仅此一处**错误：
+
+```
+BluetoothLinkModels.swift:193:8: error: type 'BluetoothUplinkMessage' does not conform to protocol 'Equatable'
+  note: stored property type 'CLLocationCoordinate2D' does not conform to protocol 'Equatable',
+        preventing synthesized conformance of 'BluetoothUplinkMessage' to 'Equatable'
+```
+
+`CLLocationCoordinate2D` 是 C 结构体，Swift 不会为它合成 `Equatable`，
+所以含它的结构体也拿不到合成一致性。改为手写 `==`（按 `kind` + 经纬度逐字段比较）。
+浮点用 `==` 是有意的：这里比较的是「同一个坐标原样往返」，位级相等才说明编解码没丢精度。
+
+### 新增：`ent/download` 步骤 1 —— `storeagent` 资产
+
+`prepare.sap.py` 的 `ASSETS` 增加 `storeagent`（2580176 B /
+`70ce036f9dbcbc04db9511ebd08de0dd3cbc35ccc9d44b089c90170cb5453c59`），
+**与现有四个资产同源** —— 都在同一个 `OSXUpd10.9.pkg` 的 Payload CPIO 里，
+所以复用同一条 Range 通道，无需新开下载路径。
+
+同时修正上游缓存目录：ipatool 把资产放**两个**目录
+（`apple-assets-v2` 与 storeagent 专属的 `apple-storeagent-v1`），
+原实现只探前者，会白白重下 2.5 MB。
+
+**离线验证**（新增 `_tools_sap_storeagent_probe.py`，只读不落盘）：
+实测 5 个资产的 size 与 sha256 **全部与上游一致**，路径也对得上。
+
+### 新增：`SapMachine` 支持挂载额外镜像
+
+上游 `openRuntime(ctx, bundle, runtimeOptions{extraImages: [...]})` 允许在
+CoreFP / CommerceCore / CommerceKit 之外再挂镜像。我们原先硬编码三个，
+现拆出 `Build(...)` 并把 `Create` 转为薄封装，新增
+`CreateWithStoreAgent(...)` 走 `storeagent`（基址 `0x00001000C0000000`，
+对齐上游 `storeAgentBase`）。`storeagent` 为空时行为与旧 `Create` **完全一致**。
+
+> 解密器本体（`SapStoreAgent`：`Decrypt` / `Close`）与 `ent/download` 请求链
+> 属步骤 2 剩余部分，下一版接入。
+
 ## [0.3.540] - 2026-10-02
 
 > **三件事**：① NB 源「点获取闪退」真因定案并修复；② NB 的榜单与搜索改接

@@ -645,7 +645,7 @@ void SapShims::RegisterPlatformServices() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SapMachine::Create
+//  SapMachine::Create / CreateWithStoreAgent
 // ═══════════════════════════════════════════════════════════════════════════
 
 std::unique_ptr<SapMachine> SapMachine::Create(
@@ -653,6 +653,30 @@ std::unique_ptr<SapMachine> SapMachine::Create(
     std::vector<uint8_t> commerceCore,
     std::vector<uint8_t> commerceKit,
     std::vector<uint8_t> coreFPIcxs,
+    std::vector<uint8_t> hardwareID)
+{
+    return Build(std::move(coreFP), std::move(commerceCore), std::move(commerceKit),
+                 std::move(coreFPIcxs), /*storeAgent=*/{}, std::move(hardwareID));
+}
+
+std::unique_ptr<SapMachine> SapMachine::CreateWithStoreAgent(
+    std::vector<uint8_t> coreFP,
+    std::vector<uint8_t> commerceCore,
+    std::vector<uint8_t> commerceKit,
+    std::vector<uint8_t> coreFPIcxs,
+    std::vector<uint8_t> storeAgent,
+    std::vector<uint8_t> hardwareID)
+{
+    return Build(std::move(coreFP), std::move(commerceCore), std::move(commerceKit),
+                 std::move(coreFPIcxs), std::move(storeAgent), std::move(hardwareID));
+}
+
+std::unique_ptr<SapMachine> SapMachine::Build(
+    std::vector<uint8_t> coreFP,
+    std::vector<uint8_t> commerceCore,
+    std::vector<uint8_t> commerceKit,
+    std::vector<uint8_t> coreFPIcxs,
+    std::vector<uint8_t> storeAgent,
     std::vector<uint8_t> hardwareID)
 {
     auto m = std::unique_ptr<SapMachine>(new SapMachine());
@@ -676,6 +700,16 @@ std::unique_ptr<SapMachine> SapMachine::Create(
     auto imgCoreFP       = MachImage::Open("CoreFP",       std::move(coreFP));
     auto imgCommerceCore = MachImage::Open("CommerceCore", std::move(commerceCore));
     auto imgCommerceKit  = MachImage::Open("CommerceKit",  std::move(commerceKit));
+
+    // 3b. storeagent —— 可选额外镜像（`ent/download` 的包解密器）。
+    //     对齐上游 ipatool `runtimeOptions.extraImages`（machine.go:96-102）：
+    //     与三个基础镜像**同一套** Open/Relocate/Load 流程，只是多一层 map。
+    //     `storeagent` 是独立可执行 Mach-O（非 dylib），所以自有入口符号，
+    //     不参与 CommerceKit 那五个入口的解析。
+    std::unique_ptr<MachImage> imgStoreAgent;
+    if (!storeAgent.empty()) {
+        imgStoreAgent = MachImage::Open("storeagent", std::move(storeAgent));
+    }
 
     // 4. Collect CoreFP real exports (the 6 obfuscated names + get_mac_address)
     static const char* kCoreFPExportNames[] = {
@@ -702,11 +736,13 @@ std::unique_ptr<SapMachine> SapMachine::Create(
     imgCoreFP      ->Relocate(kCoreFPBase,   resolver);
     imgCommerceCore->Relocate(kCommerceBase, resolver);
     imgCommerceKit ->Relocate(kKitBase,      resolver);
+    if (imgStoreAgent) imgStoreAgent->Relocate(kStoreAgentBase, resolver);
 
     // 8. Load into Unicorn memory
     imgCoreFP      ->Load(m->uc_);
     imgCommerceCore->Load(m->uc_);
     imgCommerceKit ->Load(m->uc_);
+    if (imgStoreAgent) imgStoreAgent->Load(m->uc_);
 
     // 9. Resolve CommerceKit entry points
     m->entry_.initialize = imgCommerceKit->Export("_cp2g1b9ro",   kKitBase);
