@@ -235,7 +235,7 @@ static std::unique_ptr<SapMachine> MakeStoreAgentMachine(NSURL *directory,
 + (instancetype)decrypterWithAssetsURL:(NSURL *)storeAgentURL
                             hardwareID:(NSData *)hardwareID
                                 dpInfo:(NSData *)dpInfo
-                                 error:(NSError * _Nullable * _Nullable)error {
+                                 error:(NSError **)error {
     SAPStoreAgentContext *context = [[SAPStoreAgentContext alloc] init];
     try {
         if (hardwareID.length != 6) throw std::runtime_error("Invalid SAP device identifier.");
@@ -255,7 +255,7 @@ static std::unique_ptr<SapMachine> MakeStoreAgentMachine(NSURL *directory,
     }
 }
 
-- (NSData *)decryptChunk:(NSData *)chunk error:(NSError * _Nullable * _Nullable)error {
+- (NSData *)decryptChunk:(NSData *)chunk error:(NSError **)error {
     try {
         if (!_agent) throw std::runtime_error("StoreAgent session is not open.");
         if (chunk.length == 0) return [NSData data];
@@ -293,7 +293,7 @@ static std::unique_ptr<SapMachine> MakeStoreAgentMachine(NSURL *directory,
 + (NSData *)generateKBSyncWithAssetsURL:(NSURL *)storeAgentURL
                              hardwareID:(NSData *)hardwareID
                                    dsid:(uint64_t)dsid
-                                  error:(NSError * _Nullable * _Nullable)error {
+                                  error:(NSError **)error {
     try {
         if (hardwareID.length != 6) throw std::runtime_error("Invalid SAP device identifier.");
         // 上游第一道硬门（`kbsync.go:22-24`）。在这里也拦一次，是为了让 Swift 侧

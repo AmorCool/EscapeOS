@@ -41,13 +41,25 @@ typedef NS_ENUM(NSInteger, SAPStoreAgentErrorCode) {
 //     —— 也就是说这部分还没真正接进下载链，只有下面的 kbsync 在用 storeagent。
 //     留着是为了下一步接包解密；不要据此以为解密已经通了。
 //
-//  ⚠️ v0.3.545（CI 修复）：**这里的报错一律用 `NSError **`，不用 `NSError **` 的
-//     `nullable` 修饰** —— v0.3.544 的 CI 在
-//     `KBSyncProvider.swift:70` 报 `error: extra argument 'error' in call`。
-//     成因是 `NS_ASSUME_NONNULL_BEGIN` 让出参带上非空假设，Swift importer 对
-//     `NSError **` 的形状判定不一致（同一个文件里 `SAPContext` 的方法却没事）。
-//     统一改成返回 `NSError * _Nullable *`，并在 Swift 侧**不用 `try` 语法糖**
-//     （见 `KBSyncProvider.generate`）—— 两处一起改才稳。
+//  ⚠️ v0.3.548 定案（前三版都在这里栽了，写清楚免得再踩）：
+//
+//     v0.3.544 / 545 / 546 连续三版 CI 都报同一条
+//     `KBSyncProvider.swift: error: extra argument 'error' in call`。
+//     真因**不是** `.h` 的出参类型写得不对 ——
+//     是 Swift 侧调用时多传了一个 `error:` 实参。
+//
+//     ObjC 的 `NSError **` 出参在 Swift 侧会被 importer **改写进 `throws`**：
+//       · 参数列表里**没有** `error` 这个 label 了；
+//       · 返回类型包成 `Optional`，失败原因走抛错。
+//     所以正确写法是：
+//       `let blob = try SAPStoreAgentContext.generateKBSync(withAssetsURL:hardwareID:dsid:)`
+//     **不带 error 实参、要带 try**。
+//
+//     判据：同文件的 `SAPContext` 一直是这么调的（`try signer.exchangeData(cert, version: 200)`），
+//     从来没报错 —— 两个类用的是同一套 ObjC 出参约定，写法当然也一样。
+//
+//     ⇒ 出参类型**全文件统一用 `NSError **`**，不要加 `_Nullable * _Nullable`
+//       （v0.3.545/546 试过，没用，还制造了 `.h` 与 `.mm` 不一致这个新问题）。
 // ─────────────────────────────────────────────────────────────────────────────
 @interface SAPStoreAgentContext : NSObject
 /// 用 `storeagent` 资产打开一个解密会话。
@@ -57,10 +69,10 @@ typedef NS_ENUM(NSInteger, SAPStoreAgentErrorCode) {
 + (nullable instancetype)decrypterWithAssetsURL:(NSURL *)storeAgentURL
                                      hardwareID:(NSData *)hardwareID
                                          dpInfo:(NSData *)dpInfo
-                                          error:(NSError * _Nullable * _Nullable)error;
+                                          error:(NSError **)error;
 
 /// 解密一段（≤ 0x8000 字节）。返回解密后的新 `NSData`；nil 表示失败（error 有值）。
-- (nullable NSData *)decryptChunk:(NSData *)chunk error:(NSError * _Nullable * _Nullable)error;
+- (nullable NSData *)decryptChunk:(NSData *)chunk error:(NSError **)error;
 
 /// 关闭会话（幂等）。dealloc 时也会自动关闭。
 - (void)closeDecrypter;
@@ -86,6 +98,6 @@ typedef NS_ENUM(NSInteger, SAPStoreAgentErrorCode) {
 + (nullable NSData *)generateKBSyncWithAssetsURL:(NSURL *)storeAgentURL
                                       hardwareID:(NSData *)hardwareID
                                             dsid:(uint64_t)dsid
-                                           error:(NSError * _Nullable * _Nullable)error;
+                                           error:(NSError **)error;
 @end
 NS_ASSUME_NONNULL_END

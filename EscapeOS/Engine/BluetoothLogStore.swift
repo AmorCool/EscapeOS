@@ -87,8 +87,10 @@ final class BluetoothLogStore: @unchecked Sendable {
     /// 按**字节**截断会把某一行的 UTF-8 序列切一半，所以这里按行重组：
     /// 从尾部往前凑够「目标字节数的 90%」即可（少留一点，避免下次写入立刻又超限）。
     private func rotateIfNeeded() {
+        // 注意 `attributesOfItem` 抛错时整个表达式走 `?? 0`，
+        // 所以这里拿到的是**非可选** Int —— 不能再写 `guard let size`（CI 实证报错）。
         let size = (try? FileManager.default.attributesOfItem(atPath: logFileURL.path)[.size] as? Int) ?? 0
-        guard let size, size > Self.maxFileBytes else { return }
+        guard size > Self.maxFileBytes else { return }
         guard let raw = try? String(contentsOf: logFileURL, encoding: .utf8) else { return }
         let lines = raw.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
         var kept: [String] = []

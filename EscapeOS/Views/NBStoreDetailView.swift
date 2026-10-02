@@ -196,7 +196,7 @@ struct NBStoreDetailView: View {
                 HStack(spacing: 10) {
                     ForEach(Array(d.screenshotURLs.enumerated()), id: \.offset) { index, url in
                         Button {
-                            previewTarget = ImagePreviewTarget(urls: d.screenshotURLs, index: index)
+                            previewTarget = ImagePreviewTarget(index: index, urls: d.screenshotURLs)
                         } label: {
                             AsyncImage(url: URL(string: url)) { phase in
                                 switch phase {

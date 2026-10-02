@@ -59,29 +59,87 @@ enum KBSyncProvider {
     /// `nonisolated`：这个是纯函数（读资产 → 跑 guest → 返回字节），
     /// 不需要任何隔离域的上下文。加了它，`Task.detached` 里的调用才不需要 hop。
     private nonisolated static func generate(hardwareID: Data, dsid: UInt64) throws -> Data {
+        // v0.3.548：**先查缓存** —— 对齐上游 `appstore_kbsync_cache.go`。
+        //
+        // 为什么必须有缓存：kbsync 要在 Unicorn 里解释执行 `storeagent`
+        // （纯 CPU，几秒），而这个 blob 的输入只有「hardwareID + DSID」两项 ——
+        // 同一台设备同一次登录下**每次都算出同一个值**。
+        // 不缓存 = 每下一次包白烧几秒 CPU（上游专门为它加了缓存文件）。
+        //
+        // 键选择：上游用 (DSID, GUID) 双键。我们这边 hardwareID 就来自本机
+        // （唯一），所以 DSID 单独做键已经够区分（换账号 = 换 DSID）。
+        if let cached = cache.value(for: dsid) {
+            return cached
+        }
+
         guard let assets = SAPAssetsLocator.url else {
             throw KBSyncError.assetsMissing
         }
-        // 这里**刻意不用 `&error`**：该 ObjC 类方法的 `NSError **` 出参在 Swift importer
-        // 下会被判成 «extra argument 'error' in call»（v0.3.544 / v0.3.545 两次 CI 实证）。
-        // 根因是头文件里的 `NSError **` 在 `NS_ASSUME_NONNULL_BEGIN` 范围内被当成
-        // 「非空指针的出参」，Swift importer 直接把该参数从签名里**丢掉**了。
-        // v0.3.546 已把 `.h` 与 `.mm` 两边的出参统一写成 `NSError * _Nullable * _Nullable`，
-        // 这个显式指针写法保留着即可（多一层保险，且不依赖 importer 的推断结果）。
-        var failure: NSError?
-        guard let blob = SAPStoreAgentContext.generateKBSync(
+        // ★ v0.3.548 定案：**ObjC 的 `NSError **` 出参在 Swift 侧就是 `throws`** ——
+        //   调用时写 `try`、**不要**再显式传 `error:` 实参。
+        //
+        //   这个坑连着坑了三版（v0.3.544/545/546 全是同一条
+        //   `error: extra argument 'error' in call`）。根因是把 ObjC 的
+        //   NSError-out-parameter **当成了普通的带 error 参数的方法**：
+        //   Swift importer 看到 `NSError **` 会把它**从参数列表里拿走**、
+        //   改写成 `throws`（`NSError` → `Error`），所以调用处**根本没有 error 这个 label**。
+        //
+        //   判据：本仓同文件的 `SAPContext` 一直是这么用的、从来没报过错 ——
+        //     `let signer = try SAPContext(assetsURL:hardwareID:)`（不带 error）
+        //     `try signer.exchangeData(cert, version: 200)`（不带 error）
+        //   照着它的写法就对了。
+        //
+        //   ⚠️ 不要去改 `.h` 里 `NSError **` 的写法（v0.3.545/546 试过
+        //   `NSError * _Nullable * _Nullable`，不仅没用、还让 `.h` 与 `.mm` 不一致）。
+        //   出参类型保持全文件统一的 `NSError **` 即可。
+        let blob = try SAPStoreAgentContext.generateKBSync(
             withAssetsURL: assets,
             hardwareID: hardwareID,
-            dsid: dsid,
-            error: &failure
-        ) else {
-            throw KBSyncError.generationFailed("storeagent 生成 kbsync 失败（失败原因见宿主日志）")
-        }
+            dsid: dsid
+        )
         guard !blob.isEmpty else {
             throw KBSyncError.generationFailed("生成结果为空")
         }
-        return blob as Data
+        let data = blob as Data
+        cache.store(data, for: dsid)
+        return data
     }
+
+    // MARK: - kbsync 缓存
+
+    /// 进程内缓存（对齐上游 `appstore_kbsync_cache.go` 的语义）。
+    ///
+    /// **只在进程内**，不落盘：上游是 CLI，跨次运行要落盘才有意义；
+    /// 我们是常驻 App，进程内缓存已经覆盖了「连续装多个包」这个真实场景，
+    /// 而落盘会多出一份「设备绑定凭据躺在沙盒里」的东西，不划算。
+    ///
+    /// 上游那条**「只存已经成功服务过 ent/download 的 blob」**的规则我们**不照搬**：
+    /// 那条规则是为了避免把一个算对了但服务端不认的 blob 缓存下来反复用。
+    /// 我们这边的 `generate` 是纯函数（同样的输入必然同样输出），
+    /// 缓存一个「算出来了但服务端不认」的值，和重新算一遍得到的结果**完全一样**，
+    /// 所以那条规则对我们没有收益，只会让实现变复杂。
+    /// （若将来发现某种 DSID 下服务端会拒，再按「只在拿到 HTTP 200 后 store」改。）
+    private final class KBSyncCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [UInt64: Data] = [:]
+
+        func value(for dsid: UInt64) -> Data? {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries[dsid]
+        }
+
+        func store(_ data: Data, for dsid: UInt64) {
+            lock.lock()
+            defer { lock.unlock() }
+            // 只服务「当前正在用的账号」，实际不会超过一两个；
+            // 加个上限纯粹是防御（账号换了又换时不至于无限涨）。
+            if entries.count > 8 { entries.removeAll() }
+            entries[dsid] = data
+        }
+    }
+
+    private static let cache = KBSyncCache()
 
     enum KBSyncError: LocalizedError {
         case assetsMissing

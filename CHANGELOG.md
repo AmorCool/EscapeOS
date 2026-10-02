@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.3.548] - 2026-10-02
+
+> **修 v0.3.546 的三条编译错误。** 其中 kbsync 那条是**连着三版的同一个坑**，这次终于定案。
+
+### 修复：`KBSyncProvider.swift:76` `extra argument 'error' in call`（**第三版**，定案）
+
+v0.3.544 / 545 / 546 三版 CI 都死在这一条上。前两版的判断都错了：
+
+| 版本 | 以为的原因 | 实际 |
+|---|---|---|
+| 0.3.544 | 传 `&error` 的方式不对 | ❌ |
+| 0.3.545 | `.h` 里 `NSError **` 在 `NS_ASSUME_NONNULL_BEGIN` 下形状不对 → 改成 `NSError * _Nullable * _Nullable`，Swift 侧保留显式 error | ❌（且只改 `.h` 没改 `.mm`） |
+| 0.3.546 | `.mm` 没跟着改 → 两边一起改成新写法 | ❌ |
+
+**真因**：ObjC 的 `NSError **` 出参在 Swift 侧会被 importer **改写进 `throws`** ——
+参数列表里**根本没有 `error` 这个 label**，返回类型包成 Optional、失败原因走抛错。
+所以调用处多传 `error:` 实参，无论传什么（`&error` / `NSErrorPointer` / `NSError?`）
+都必然报「extra argument」。
+
+**判据一直在本文件里**：同文件的 `SAPContext` 是这么调的，从来没报过错 ——
+
+```swift
+let signer = try SAPContext(assetsURL: assets, hardwareID: Data(bytes))  // 不带 error
+let exchange = try signer.exchangeData(cert, version: 200)               // 不带 error
+```
+
+正确写法：
+
+```swift
+let blob = try SAPStoreAgentContext.generateKBSync(
+    withAssetsURL: assets, hardwareID: hardwareID, dsid: dsid)          // 不带 error、要 try
+```
+
+同时把 `.h` / `.mm` 的出参**统一回 `NSError **`**（与 `SAPContext` 一致）——
+`_Nullable * _Nullable` 那个改法无用，还制造了 `.h` 与 `.mm` 不一致这个新问题。
+
+> 教训：ObjC 与 Swift 之间 `NSError **` **只走 `throws` 一条路**。
+> 报 `extra argument` 时不要去改出参类型，先看「同一个文件里已经能跑的那个类是怎么调的」。
+
+### 修复：`BluetoothLogStore.swift:91` `initializer for conditional binding must have Optional type, not 'Int'`
+
+```swift
+let size = (try? …attributesOfItem(…)[.size] as? Int) ?? 0
+guard let size, size > …        // ❌ size 已被 ?? 0 洗成非可选
+```
+
+`?? 0` 已经把可选性吃掉了，`guard let` 自然不成立。去掉 `let`：
+
+```swift
+guard size > Self.maxFileBytes else { return }
+```
+
+### 修复：`NBStoreDetailView.swift:199` `argument 'index' must precede argument 'urls'`
+
+`ImagePreviewTarget` 的参数顺序是 `(index:urls:)`，调用处写反了。已对调。
+
+### 新增：kbsync 进程内缓存（对齐上游 `appstore_kbsync_cache.go`）
+
+看上游仓库时发现它除了 `appstore_kbsync.go` 还有一个
+`appstore_kbsync_cache.go` —— **我们少了这一块**。
+
+kbsync 要在 Unicorn 里解释执行 `storeagent`（纯 CPU，几秒），
+而它的输入只有「hardwareID + DSID」两项 ⇒ 同设备同账号下**每次算出同一个值**。
+不缓存 = 每装一个包白烧几秒 CPU。
+
+键用 DSID（hardwareID 恒为本机，无需参与）。**只在进程内**，不落盘：
+上游是 CLI 需要跨次运行，我们是常驻 App，进程内已覆盖「连装多个包」这个真实场景；
+落盘反而多出一份「设备绑定凭据躺在沙盒里」的东西，不划算。
+
+上游那条「只缓存已经成功服务过 `ent/download` 的 blob」的规则**有意不照搬**：
+`generate` 是纯函数，缓存一个「服务端不认」的值与重算结果完全相同，
+那条规则对我们没有收益。（注释里写了：若将来发现某种 DSID 下服务端会拒，再改成
+「只在拿到 HTTP 200 后 store」。）
+
 ## [0.3.547] - 2026-10-02
 
 > **修 NB 源「安装后闪退」的第二个真因：sinf 注入遇到包内已有条目就跳过**。
