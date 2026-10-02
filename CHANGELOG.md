@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.553] - 2026-10-02
+
+> 修 v0.3.551 / 552 两条**本机抓不到、只能等 CI** 的编译错。两次都栽在同一类事上。
+
+### 修复：`NBStoreClient.swift:783` `Expected 'else' after 'guard' condition`
+
+```swift
+guard let url = string(d["url"]), !url.isEmpty { return nil }        // ✗ 551 写的
+guard let url = string(d["url"]), !url.isEmpty else { return nil }   // ✓
+```
+
+`guard` 的语法就是 `guard <条件> else { … }`，漏了 `else`。
+**这类错 grep 得出来**：`grep -n "guard .*{ return" <file> | grep -v "else {"`。
+
+### 修复：`IPADownloadCenter.swift:960` `cannot find 'ZipCompressionMethod' in scope`
+
+`ZipCompressionMethod` 是**嵌套在 `ApplePackageArchive` 里**的枚举。
+同一个文件里写 `.deflate` 能推断，**跨文件就必须写全路径**：
+
+```swift
+compressionMethod: ZipCompressionMethod.none                    // ✗
+compressionMethod: ApplePackageArchive.ZipCompressionMethod.none // ✓
+```
+
+⇒ 口诀：**跨文件引用嵌套类型 → 从最外层类型名开始写全**。
+
+> 这两条都已写进 `escapeos-release` skill 的「本机自检」清单。
+
 ## [0.3.551] - 2026-10-02
 
 > **连上设备抓到了真机日志，两个「NB 源装不上」的真因一次定案。**
