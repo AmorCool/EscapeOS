@@ -780,7 +780,7 @@ enum NBStoreClient {
         }
 
         let d = (obj["data"] as? [String: Any]) ?? obj
-        guard let url = string(d["url"]), !url.isEmpty { return nil }
+        guard let url = string(d["url"]), !url.isEmpty else { return nil }
 
         var sinf: String?
         if let arr = d["sinfs"] as? [[String: Any]], let first = arr.first {
