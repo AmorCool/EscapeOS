@@ -90,22 +90,22 @@ enum AppStoreLocalInstallService {
     private static func downloadInformation(software: Software, account: inout AppStoreAccount,
                                             email: String, externalVersionID: String?,
                                             onLog: ((String) -> Void)?) async throws -> DownloadOutput {
-        // 有界状态机（v0.3.352 重写，v0.3.361 加入历史版本候选）：
+        // 有界状态机（v0.3.352 重写，v0.3.361 加入历史版本候选，v0.3.539 收紧）：
         //   下载 → 票据失效（2002/2034/2042）→ 刷新会话一次 → 继续
-        //        → 空包 → **先用候选 externalVersionId 重打一次 volumeStore**（v0.3.361：
-        //                 ChatGPT 这类应用只有带旧版本 ID 才出包；v0.3.366 候选来源为
-        //                 「三方目录 → 爱思 appinfo historyversion」两条，见 candidateVersionIDs）
-        //                → 仍为空 → 先刷新会话确认一次（Apple 用「合法空包」表达票据不被认可）
+        //        → 空包 → **改用候选列表里最可能可下的那一个版本号**（v0.3.539：只挑一个，
+        //                 不再把 6 个候选交给下层循环重打）→ 仍为空 → 刷新会话一次
         //                → 仍为空 → 获取许可一次 → 再下载
         //        → 9610 → 获取许可一次 → 再下载
-        // Apple 的两种「没有下载权」表达方式（`failureType 9610` 与 HTTP 200 + 空 songList，
-        // 后者会被 redownload 的 5xx 包住）都必须触发同一段补救逻辑 —— 老实现只认 9610，
-        // 且 351 把 redownload 失败还原成裸错误，导致空包这一档永远走不到购买。
+        //        → **传输层失败（502/带 body 的 5xx/网络错误）→ 直接上抛，不补救**
+        // Apple 的两种「没有下载权」表达方式（`failureType 9610` 与 HTTP 200 + 空 songList）
+        // 都必须触发同一段补救逻辑。而 5xx 是**基础设施状态**，与许可无关，不参与补救。
         var refreshed = false
         var licensed = false
         var emptyRetried = false
-        /// v0.3.361：空包时改用的历史版本候选（`externalVersionId`）
-        var versionCandidates: [String] = []
+        /// v0.3.361：空包时改用的历史版本 ID。
+        /// v0.3.539：语义改为「**本轮实际要用的版本号**」—— 一旦选定就直接驱动
+        /// `externalVersionID` 下发，不再让 ApplePackage 内部做候选循环。
+        var selectedVersionID: String?
         var triedVersionCandidates = false
         /// v0.3.361：候选里「最新版」的版本号 —— 仅用于最终日志说明
         /// （拿到包后版本号 != 它，才说明真的改用了旧版）。
@@ -119,14 +119,11 @@ enum AppStoreLocalInstallService {
             try Task.checkCancellation()
             do {
                 onLog?("[AppleID] 请求下载信息…")
-                // v0.3.365（请求放大审计）：候选**只吃一轮** —— 原来 versionCandidates 常驻，
-                // attempt 每轮都会重新进候选循环，同一批 6 个候选被重打 2 次（一次动作纯重复 12 次请求），
-                // 而连发会撞 429、正好把本轮的修复打坏。这里在调用前就清空（成败都不再重复）。
-                let pendingCandidates = versionCandidates
-                versionCandidates = []
+                // v0.3.539：选定版本（若有）直接作为主体版本下发 —— 这就是「用候选」的实现，
+                // 只是把循环从 ApplePackage 内部挪回了调用方（上游 download 没有候选参数）。
+                let effectiveVersion = selectedVersionID ?? externalVersionID
                 let output = try await Download.download(account: &account, app: software,
-                                                         externalVersionID: externalVersionID,
-                                                         versionCandidates: pendingCandidates)
+                                                         externalVersionID: effectiveVersion)
                 if let newest = newestCatalogVersion, output.bundleShortVersionString != newest {
                     onLog?("[AppleID] Apple 拒绝了最新版，已改用该账号可下的版本 \(output.bundleShortVersionString)")
                     // 记住这一版，下次直接先试它（否则窗口滑走后又变回空包）
@@ -135,14 +132,35 @@ enum AppStoreLocalInstallService {
                                       bundleId: software.bundleID)
                 }
                 return output
+            } catch ApplePackageError.transportFailure {
+                // v0.3.539：**传输层失败绝不补救，直接上抛。**
+                //
+                // 502 / 带 body 的 5xx / 网络错误都不是「Apple 没给你包」，而是基础设施状态。
+                // 原来这类会被归一成 emptyPackage，于是走进下面「刷新会话 → 获取许可 → 重试」，
+                // 每次都再撞一次 10 秒网关超时 —— 真机日志实测一次点击放大成
+                // 4 次 5xx + 10 次 volumeStore 请求。现在如实报错，让用户稍后重试。
+                onLog?("[AppleID] Apple 下载服务不可用（非许可问题），不再重试")
+                throw ApplePackageError.transportFailure(status: -1)
             } catch ApplePackageError.emptyPackage where !triedVersionCandidates {
-                // 第一优先：用历史版本候选重打 volumeStore（真机实测这才是能出包的那一档，
+                // 第一优先：改用历史版本（真机实测这才是能出包的那一档，
                 // 不需要刷新会话也不需要购买）。候选为空会自动落到下面「刷新会话」那条分支。
                 triedVersionCandidates = true
                 onLog?("[AppleID] Apple 未返回可下载内容 → 换该账号可下的历史版本重试")
                 let candidates = await candidateVersionIDs(
                     software: software, dsid: account.directoryServicesIdentifier, onLog: onLog)
-                versionCandidates = candidates.ids
+                // v0.3.539：候选改为**在调用方选一个**，作为下一轮的主体版本下发。
+                //
+                // 原来是把 6 个候选塞进 `versionCandidates` 让 ApplePackage 内部逐个重打 ——
+                // 「一层循环套在另一层循环」，真机日志显示 6 个候选全被拒后还要退回
+                // redownload 撞 10 秒网关超时，一次点击放大成 14 次请求。
+                // 现在 `candidateVersionIDs` 回来的列表已经把「缓存命中」排在第 1 位，
+                // 所以取 `.first` 就是「最可能可下的那一个」。
+                selectedVersionID = candidates.ids.first
+                if let picked = selectedVersionID {
+                    onLog?("[AppleID] 历史版本候选 \(candidates.ids.count) 个，本轮先用 \(picked)")
+                } else {
+                    onLog?("[AppleID] 没有可用的历史版本候选")
+                }
                 newestCatalogVersion = candidates.newestVersion
                 versionByNumber = candidates.byVersion
             } catch ApplePackageError.passwordTokenExpired where !refreshed {

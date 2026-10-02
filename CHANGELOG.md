@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.3.539] - 2026-10-02
+
+> **AppleID 商店 502 真因定位 + 下载链路全量对齐上游**。
+> 拿到 iPhone 15 / iOS 27.0 真机日志后定案；并按 ipatool PR #554 与 Asspp `b3c8574a`
+> 重写 `vendor/ApplePackage` 的取包主链。
+
+### 修复：`/r/redownload` 带「已解析版本」请求导致 9–10 秒超时后 502
+
+**真因**（真机日志）：`/r/redownload` 请求时该账号对**当前版本**没有下载记录
+⇒ Apple 现算授权耗时 9–10s ⇒ 金山云网关（`kngx/1.10.2`）上游超时兜底返回 **502 HTML**
+（`Set-Cookie=0`，请求未进业务层）。
+
+同一时刻 PC 侧打同一端点 **8/8 全 200 / 0.3s**，`/up/updateProduct` 同样 200
+⇒ **端点完全可用，问题在「我们用错了」**。
+
+**对齐上游后修正的三处：**
+
+1. **版本不再被覆盖。** 原来 `resolveVersion()` 会把版本覆盖成「当前版本」，
+   而当前版本恰恰是该账号没有下载记录的那一版。上游是：
+   > A failed catalog lookup must not turn into an unpinned redownload,
+   > and historical requests must keep their version ID.
+
+   现在：有版本**一直用它**；解析失败抛 `catalogUnavailable`，
+   **绝不发出不带版本号的 redownload**（那种请求会走「现算授权」路径并超时）。
+
+2. **5xx 不再伪装成「没有包」。** 原来带 body 的 5xx 被归一成 `emptyPackage`，
+   于是上层走进「刷新会话 → 获取许可 → 重试」，每次再撞一次 10 秒超时 ——
+   真机日志实测**一次点击放大成 4 次 5xx + 10 次 volumeStore**。
+   现在新增 `transportFailure(status:)`，与 `emptyPackage` **严格分开**，
+   传输层失败**直接上抛、不补救**。
+
+3. **updateProduct 第三跳按上游条件触发（exactly once）。**
+   上游（ipatool PR #554 / Asspp `b3c8574a`）的 4 个必要条件：
+   ① bag 有 `updateProduct` 端点；② 版本非空；③ 平台为 iOS 系；
+   ④ redownload 失败形态是 **裸 HTTP 500（`Snippet == ""`）** 或 **`no longer available`** 消息。
+   —— 带 body 的 502（`kngx` HTML 页）按标准**不满足第 ④ 条**，不该走这一跳。
+
+### 修正：候选版本循环从 ApplePackage 内部挪回调用方
+
+原来 `Download.download(versionCandidates:)` 让 ApplePackage 内部逐个重打最多 6 个候选，
+与调用方自身的状态机形成**双层循环**。现在候选在调用方选定**一个**版本号下发，
+`Download.download` 签名回到上游同款（无候选参数）。
+
+### 修正：`updateProduct` 端点注释里的错误引用
+
+v0.3.537 的注释引用 `appstore_download_product.go` 与三个 commit 无法对应，
+一度被误判为「编造的端点」。**实为上游功能，来源是 ipatool PR #554**
+（本地 `P3_爱思助手_上游ipatool参考` 停在 `a9bd16c`，**早于该 PR**，所以 grep 不到）。
+注释已改写为可核查的真实来源。
+
 ## [0.3.538] - 2026-10-02
 
 > 免登录商店 **NB 源补齐搜索与历史版本** —— 对齐 NB 助手「能搜名字、能选版本下载」的形态。

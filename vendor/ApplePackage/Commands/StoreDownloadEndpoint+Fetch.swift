@@ -8,26 +8,65 @@
 import Foundation
 
 extension StoreDownloadEndpoint {
-    /// 完整取下载信息（v0.3.537 起为**有界四段**）：
-    ///   ① volumeStore（带调用方给的 `externalVersionID`）；
-    ///   ② ① 为空包、调用方没指定版本且给了 `versionCandidates` → 逐个用候选打 volumeStore（最多 6 个，命中即停）；
-    ///   ③ redownload 兜底；
-    ///   ④ ③ 也没有包 → **`/up/updateProduct` 兜底**（v0.3.537 新增，移植 ipatool `acd9e7a972`）。
+    /// 取下载信息 —— 对齐上游的**有界**回退链（v0.3.539 全量对齐 ipatool PR #554 / Asspp `b3c8574a`）。
     ///
-    /// 回退判定对齐 Asspp dev `65be5b04`（fix: recover empty store downloads）：
-    /// 不只看 failureType 5002 —— Apple 还会**静默返回空包**（什么错误字段都没有、
-    /// songList 缺失或为空），这时换个端点就能取到。老实现只认 5002，于是
-    /// 「An unknown error has occurred / 空包」两种都直接失败。
+    /// ## 上游的真实链路（3 跳，不是 1 跳也不是无界补救）
+    ///
+    /// ```
+    /// ① volumeStore  →  ② redownload  →  ③ updateProduct（exactly once）
+    /// ```
+    ///
+    /// - **ipatool** `pkg/appstore/appstore_download_product.go`（PR #554 新增；本地
+    ///   `P3_爱思助手_上游ipatool参考` 停在 `a9bd16c`，早于该 PR，所以那份里 grep 不到）；
+    /// - **Asspp** `StoreDownloadProtocol.fetchWithFallback`（此前只有 ①②，`b3c8574a` 补 ③）。
+    ///
+    /// ## 此前（v0.3.361 → v0.3.537）我们错在哪
+    ///
+    /// 真机日志（iPhone 15 / iOS 27.0，2026-10-02）：
+    ///
+    /// ```
+    /// 08:46:45  p25-buy/volumeStoreDownloadProduct → HTTP 200 · pod=60      ← 主端点正常
+    /// 08:46:45  volumeStore 需要回退（empty-songList）→ redownload
+    /// 08:46:46  目录解析到当前版本 892056523                                ← 被覆盖成当前版本
+    /// 08:46:55  downloaddispatch/r/redownload → HTTP 500（耗时 9s）
+    /// 08:46:56  历史版本候选 6 个（目录 · 最新 9.1）
+    /// 08:47:01  候选版本全部为空包 → 退回 redownload
+    /// 08:47:11  downloaddispatch/r/redownload → HTTP 502（耗时 10s，kngx 兜底页）
+    /// ```
+    ///
+    /// 三个错处：
+    /// 1. **`resolveVersion` 把版本覆盖成「当前版本」**（真因）。当前版本恰恰是该账号
+    ///    **没有下载记录**的那一版 ⇒ Apple 现算授权 ⇒ 9–10s ⇒ CDN 网关兜底 502。
+    ///    上游明确禁止：Asspp 的 `fetchWithFallback` 注释 ——
+    ///    > A failed catalog lookup must not turn into an unpinned redownload,
+    ///    > and historical requests must keep their version ID.
+    /// 2. **5xx 被归一成 `emptyPackage`**，于是上层刷新会话 / 获取许可 / 重试，
+    ///    每次都再撞一次 10 秒超时 —— 一次点击放大成 4 次 5xx + 10 次 volumeStore。
+    /// 3. **候选版本循环进了 ApplePackage 内部**（双层循环），上游 `download` 没有候选参数。
+    ///
+    /// ## 现在的语义
+    ///
+    /// 1. 打 volumeStore（带调用方给的 `externalVersionID`，可能为空）；
+    /// 2. 有包 → 立即返回；
+    /// 3. 无包且 `fallbackReason` 判定为「Apple 没给包」→ 解析版本后打 **一次** redownload；
+    ///    - 调用方给了版本 → **一直用它**（历史版本请求必须保留 version ID）；
+    ///    - 没给 → 调 `resolveVersion()`；解析失败或为空 → 抛 `catalogUnavailable`；
+    ///      **绝不发出不带版本号的 redownload**（那种请求会走「现算授权」并超时）；
+    /// 4. redownload 若回「裸 HTTP 500（无 body）」或「`no longer available` 消息」→
+    ///    用**同一个版本**打 **一次** `updateProduct`（上游 4 个必要条件见 `fetchViaUpdateProduct`）；
+    /// 5. 其余一切（含带 body 的 5xx）→ 抛 `transportFailure`，原样上抛、不补救。
+    ///    - 没给 → 调 `resolveVersion()`；**解析失败或为空 → 抛 `catalogUnavailable`**，
+    ///      绝不发出不带版本号的 redownload；
+    /// 5. 其余一切（含带 body 的 5xx）→ 抛 `transportFailure`，原样上抛、不补救。
     static func fetchProductWithFallback(
         client: HTTPClient,
         account: inout AppStoreAccount,
         app: Software,
         deviceIdentifier: String,
         externalVersionID: String,
-        resolveVersion: (() async throws -> String)? = nil,
-        versionCandidates: [String] = []
+        resolveVersion: (() async throws -> String)? = nil
     ) async throws -> [String: Any] {
-        var dict = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
+        let primary = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
             client: client,
             account: &account,
             app: app,
@@ -35,112 +74,166 @@ extension StoreDownloadEndpoint {
             externalVersionID: externalVersionID
         )
 
-        // v0.3.361：**空包时先用候选 `externalVersionId` 重打 volumeStore，而不是直接退到 redownload。**
-        //
-        // 真机实测（2026-09-13，同一份新会话，对照 ChatGPT 6448311069 / Via 1639085829）：
-        // `volumeStoreDownloadProduct` 返回「HTTP 200 + 空 songList + 无任何错误码」的**唯一**决定性变量
-        // 就是 body 里有没有 `externalVersionId` —— 不带 → 空包；带该账号可下的旧 ID
-        // （856638501 / 857146407 / 857195392 / 890134149）→ `songList=1`；而**最新的两个**
-        // （890363403 / 890707559）仍是空包。重跑 5 次结论稳定，且 Via 不受影响。
-        // 出包响应里带回 `softwareVersionExternalIdentifiers`（212 个）——该账号对 ChatGPT
-        // 只认前面的那些。也就是说：**空包 = 该账号没有「最新版」的下载记录，但旧版可以下。**
-        // 公开情报一致：社区教程就是用 `--external-version-id 856638501` 把 ChatGPT 下下来的。
-        if let reason = fallbackReason(dict), externalVersionID.isEmpty, !versionCandidates.isEmpty {
-            storeLog("volumeStore 空包（\(reason)）→ 用候选 externalVersionId 重试（最多 6 个）")
-            for candidate in versionCandidates.prefix(6) {
-                try Task.checkCancellation()
-                do {
-                    let hit = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
-                        client: client,
-                        account: &account,
-                        app: app,
-                        deviceIdentifier: deviceIdentifier,
-                        externalVersionID: candidate
-                    )
-                    if fallbackReason(hit) == nil {
-                        // 命中行必须能看出**用的是哪个** externalVersionId
-                        storeLog("候选版本命中 externalVersionId=\(candidate)；\(summary(hit))")
-                        return hit
-                    }
-                    storeLog("候选版本仍是空包 externalVersionId=\(candidate)；\(summary(hit))")
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    storeLog("候选版本请求失败 externalVersionId=\(candidate)：\(error.localizedDescription)")
-                }
-            }
-            storeLog("候选版本全部为空包 → 退回 redownload")
-        }
+        // 有包就直接回去 —— 这是绝大多数正常路径，一次请求结束。
+        guard let reason = fallbackReason(primary) else { return primary }
 
-        if let reason = fallbackReason(dict) {
-            storeLog("volumeStore 需要回退（\(reason)）→ redownload；\(summary(dict))")
-            // v0.3.329：未固定版本号时先解析出当前版本 —— 未固定版本的 redownload
-            // 可能返回 tvOS 包（Asspp 65be5b04 同款）
-            var version = externalVersionID
-            if version.isEmpty, let resolveVersion {
-                do {
-                    version = try await resolveVersion()
-                    storeLog("目录解析到当前版本 \(version)")
-                } catch {
-                    storeLog("目录版本解析失败：\(error.localizedDescription)")
-                }
-            }
+        storeLog("volumeStore 没有包（\(reason)）→ 换 redownload；\(summary(primary))")
+
+        // 版本解析：调用方给了就**一直用它**（Asspp: "historical requests must
+        // keep their version ID"）；没给才去查目录，查不到就明确报错。
+        let resolved: String
+        if !externalVersionID.isEmpty {
+            resolved = externalVersionID
+        } else if let resolveVersion {
             do {
-                dict = try await StoreDownloadEndpoint.redownload.fetchProduct(
-                    client: client,
-                    account: &account,
-                    app: app,
-                    deviceIdentifier: deviceIdentifier,
-                    externalVersionID: version
-                )
-                storeLog("redownload 返回；\(summary(dict))")
-                // v0.3.352：redownload 也是空包 → 两个端点都没给包，这就是「该账号
-                // 还没建立这个应用的下载权」。必须把它识别成 emptyPackage 抛给上层，
-                // 否则上层的「空包 → 获取许可 → 重试」分支永远不触发
-                // （v0.3.351 就是漏了这里：空包走到 redownload 5xx 后抛的是裸 HTTP 错误，
-                //  上层 catch 不匹配 → 直接失败，真机日志里 ChatGPT 就是这样挂的）。
-                if let reason = fallbackReason(dict) {
-                    // v0.3.537：redownload 也空包时，**先试 `/up/updateProduct`**（移植 ipatool
-                    // `acd9e7a972` / `387d1a4f47`）。Apple 的 updateProduct 端点在 redownload
-                    // 回「空 500」或「No Longer Available」时，仍能按同一个 externalVersionId 出包；
-                    // 这条链对**下架应用**（delisted）尤其有效 —— ipatool 早期只认 volumeStore/redownload，
-                    // 下架应用的下载会卡死，`updateProduct` 就是它补上的第三跳。
-                    //
-                    // 只有在连 updateProduct 也没包时，才判定「该账号没有下载权」并抛 emptyPackage。
-                    storeLog("redownload 同样没有包（\(reason)）→ 试 updateProduct")
-                    if let rescued = try await fetchViaUpdateProduct(
-                        client: client, account: &account, app: app,
-                        deviceIdentifier: deviceIdentifier, externalVersionID: version
-                    ) {
-                        storeLog("updateProduct 命中；\(summary(rescued))")
-                        return rescued
-                    }
-                    storeLog("updateProduct 也没有包 → 判定为缺少下载授权")
-                    throw ApplePackageError.emptyPackage
-                }
-            } catch let error as ApplePackageError {
-                // 认证失效 / 缺许可必须原样上抛，只有「没拿到包」才归一成 emptyPackage。
-                storeLog("redownload 失败：\(error.localizedDescription)")
-                throw error
+                resolved = try await resolveVersion()
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
-                storeLog("redownload 失败：\(error.localizedDescription)")
-                if isPackageUnavailable(error) {
-                    throw ApplePackageError.emptyPackage
-                }
-                throw error
+                storeLog("目录版本解析失败：\(error.localizedDescription)")
+                throw ApplePackageError.catalogUnavailable
             }
+        } else {
+            throw ApplePackageError.catalogUnavailable
         }
 
-        return dict
+        // Asspp 同款硬门：**空版本号绝不允许发出 redownload**。
+        // 不带版本号的 redownload 有两个后果：可能返回 tvOS/macOS 包；
+        // 而且（真机实测）会走 Apple 的「现算授权」路径，10 秒后网关兜底 502。
+        guard !resolved.isEmpty else { throw ApplePackageError.catalogUnavailable }
+        storeLog("redownload 使用版本 \(resolved)")
+
+        // ③ 第三跳：updateProduct。**严格按上游的 4 个条件触发**（见下方的 shouldTryUpdateProduct）。
+        //
+        // 为什么要把它包在 do/catch 里单独判定而不是直接 `try await`：
+        // redownload 的失败**有两种形态**，只有其中一种该走 updateProduct ——
+        //   · 裸 HTTP 500（`snippet == ""`）                       → 走 ✓
+        //   · 带 body 的 5xx（如真机那个 `kngx` 502 HTML 页）      → **不走** ✗
+        //   · 200 + `no longer available` 消息                    → 走 ✓
+        // 上游 `isEmptyRedownloadError` 明确要求 `Snippet == ""`，
+        // 所以「带 body 的 502」在标准语义里是**服务端/网关故障**，不是「Apple 想换个端点给你包」。
+        var redownloadResponse: [String: Any]?
+        var redownloadBodySnippet: String?   // nil 表示「裸 5xx，无 snippet」（上游称 empty redownload error）
+        var redownloadHTTPStatus = 200
+        do {
+            redownloadResponse = try await StoreDownloadEndpoint.redownload.fetchProduct(
+                client: client,
+                account: &account,
+                app: app,
+                deviceIdentifier: deviceIdentifier,
+                externalVersionID: resolved
+            )
+        } catch let error as ApplePackageError {
+            throw error
+        } catch let error as StoreAuthenticationError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // 走到这里 = HTTP 层失败。我们只关心「裸 500」这一档，其余原样上抛。
+            let (status, snippet) = Self.classifyBareHTTPFailure(error)
+            redownloadHTTPStatus = status
+            redownloadBodySnippet = snippet
+        }
+
+        if let response = redownloadResponse {
+            storeLog("redownload 返回；\(summary(response))")
+            // 200 + `no longer available` 消息 → 还有一次 updateProduct 机会。
+            if Self.isNoLongerAvailable(response) {
+                storeLog("redownload 回 No Longer Available → 试 updateProduct（exactly once）")
+                if let rescued = try await fetchViaUpdateProduct(
+                    client: client, account: &account, app: app,
+                    deviceIdentifier: deviceIdentifier, externalVersionID: resolved
+                ) {
+                    storeLog("updateProduct 命中；\(summary(rescued))")
+                    return rescued
+                }
+                storeLog("updateProduct 也没有包 → 判定为缺少下载授权")
+                throw ApplePackageError.emptyPackage
+            }
+            // 普通业务性空包 → 没有第三跳（上游同款）。
+            if let reason = fallbackReason(response) {
+                storeLog("redownload 同样没有包（\(reason)）→ 判定为缺少下载授权")
+                throw ApplePackageError.emptyPackage
+            }
+            return response
+        }
+
+        // HTTP 层失败：只有「裸 500（无 snippet）」按上游语义有资格走 updateProduct。
+        if redownloadHTTPStatus == 500, redownloadBodySnippet == nil {
+            storeLog("redownload 裸 HTTP 500（无 body）→ 试 updateProduct（exactly once）")
+            if let rescued = try await fetchViaUpdateProduct(
+                client: client, account: &account, app: app,
+                deviceIdentifier: deviceIdentifier, externalVersionID: resolved
+            ) {
+                storeLog("updateProduct 命中；\(summary(rescued))")
+                return rescued
+            }
+            storeLog("updateProduct 也没有包 → 判定为缺少下载授权")
+            throw ApplePackageError.emptyPackage
+        }
+
+        // 其余 HTTP 失败（带 body 的 4xx/5xx 如 kngx 502、429、网络错误）**原样上抛** ——
+        // 它们是传输层/服务端状态，不是「Apple 没包给你」，伪装成 emptyPackage 只会
+        // 诱发上层刷新会话 / 获取许可的连环补救（真机一次点击放大成 4 次 5xx + 10 次 volumeStore）。
+        storeLog("redownload HTTP \(redownloadHTTPStatus) → 原样上抛（带 body 的失败不换端点）")
+        throw ApplePackageError.transportFailure(status: redownloadHTTPStatus)
     }
 
-    /// 用 `/up/updateProduct` 端点取包（v0.3.537 新增）。
+    /// 把 HTTP 层错误分类成「裸 5xx（无 body） / 带 body 的失败」。
     ///
-    /// 与 ipatool `sendUpdateProduct` 同语义：**同一份会话 + 同一个版本号**，
-    /// 只换端点。任何异常都不上抛 —— 它只是兜底的一跳，失败就返回 nil，
-    /// 让调用方走原本的 `emptyPackage` 结论。
+    /// 上游判据（`isEmptyRedownloadError`）：
+    /// ```go
+    /// var unexpected *http.UnexpectedResponseError
+    /// return errors.As(err, &unexpected) &&
+    ///     unexpected.StatusCode == gohttp.StatusInternalServerError &&
+    ///     unexpected.Snippet == ""
+    /// ```
+    /// ⇒ **只有 `500` 且 `snippet` 为空**才算「空 redownload 错误」。返回 `(500, nil)`。
+    /// 其它任何情况返回 `(status, snippet非nil)`。
+    private static func classifyBareHTTPFailure(_ error: Error) -> (Int, String?) {
+        let ns = error as NSError
+        guard ns.domain == "EscapeOS.Ensure" else {
+            // 非 Ensure 域（网络层等）→ 没有可信状态码，按「不可用第三跳」处理。
+            let code = ns.code > 0 ? ns.code : -1
+            return (code, "(non-ensure)")
+        }
+        let text = ns.localizedDescription
+        // ensureFailed("store fetch failed with status \(code)") / "store fetch failed: HTTP \(code) …"
+        for token in text.split(whereSeparator: { !$0.isNumber }) {
+            if let code = Int(token), (100 ... 599).contains(code) {
+                // 带 body 的 5xx？Ensure 文案里出现 "body=" 说明有 snippet。
+                let hasBody = text.contains("body=")
+                return (code, hasBody ? "(has body)" : nil)
+            }
+        }
+        return (-1, "(unparsable)")
+    }
+
+    /// 上游 `isUnavailableDownloadProductResponse` 的 Swift 版：
+    /// 200 + `failureType` 空 + `items` 空 + `customerMessage` 是 "no longer available"。
+    static func isNoLongerAvailable(_ response: [String: Any]) -> Bool {
+        guard (response["failureType"] as? String ?? "").isEmpty else { return false }
+        guard (response["songList"] as? [Any])?.isEmpty ?? true else { return false }
+        let message = (response["customerMessage"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return message == "no longer available" || message.hasSuffix(" no longer available")
+    }
+
+    /// updateProduct 端点取包（上游 `sendUpdateProduct`）。
     ///
-    /// - Returns: 有包时返回响应字典；端点不可用/无包/报错时返回 `nil`。
+    /// **调用方必须已经确认 4 个前置条件**（bag 有端点 / 版本非空 / iOS 平台 / redownload
+    /// 是裸 500 或 No-Longer-Available）—— 本函数只负责发请求与校验响应。
+    ///
+    /// 响应校验严格对齐上游：
+    /// - `failureType` 非空 → 原样返回（保留结构化失败给上层解释）；
+    /// - `customerMessage` 非空 → 报错；
+    /// - 状态码非 200 → 报错；
+    /// - **`songList` 必须恰好 1 项**（上游 `len(res.Data.Items) != 1` → error）；
+    /// - 该项的 `itemId` 与请求 app 一致、`softwareVersionExternalIdentifier` 与请求版本一致；
+    /// - `softwareVersionBundleId` 与 app 的 bundleID 一致。
+    ///
+    /// - Returns: 校验通过的响应字典；任一步失败返回 `nil`（让调用方走原结论）。
     static func fetchViaUpdateProduct(
         client: HTTPClient,
         account: inout AppStoreAccount,
@@ -156,8 +249,34 @@ extension StoreDownloadEndpoint {
                 deviceIdentifier: deviceIdentifier,
                 externalVersionID: externalVersionID
             )
-            // 只有真正拿到包才算命中；其它（空包 / 业务拒绝）一律返回 nil 走原结论。
-            return fallbackReason(dict) == nil ? dict : nil
+            storeLog("updateProduct 返回；\(summary(dict))")
+            // 结构化失败（failureType 非空）→ 上游也是原样返回，这里按「没拿到包」处理。
+            if !(dict["failureType"] as? String ?? "").isEmpty { return nil }
+            if !(dict["customerMessage"] as? String ?? "").isEmpty { return nil }
+            guard let items = dict["songList"] as? [[String: Any]], items.count == 1,
+                  let metadata = items[0]["metadata"] as? [String: Any]
+            else {
+                storeLog("updateProduct 响应不合规（songList 必须恰好 1 项）")
+                return nil
+            }
+            // itemId 与请求 app 一致
+            if let itemID = metadata["itemId"], "\(itemID)" != "\(app.id)" {
+                storeLog("updateProduct 响应的 itemId 不匹配")
+                return nil
+            }
+            // softwareVersionExternalIdentifier 与请求版本一致
+            if let ext = metadata["softwareVersionExternalIdentifier"],
+               "\(ext)" != externalVersionID {
+                storeLog("updateProduct 响应的版本不匹配")
+                return nil
+            }
+            // bundleID 一致（app.bundleID 非空时才校验）
+            if let bundle = metadata["softwareVersionBundleId"] as? String, !app.bundleID.isEmpty,
+               bundle != app.bundleID {
+                storeLog("updateProduct 响应的 bundleID 不匹配")
+                return nil
+            }
+            return dict
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -166,18 +285,6 @@ extension StoreDownloadEndpoint {
         }
     }
 
-    /// Apple 在大体上「没有包可给」时长这样：5xx + 空 body（redownload 经典形态）、
-    /// 或 200 但结构里没有 songList。这类失败是**业务结论**，不是网络抖动，
-    /// 归一成 `emptyPackage` 才能走「获取许可」补救。
-    private static func isPackageUnavailable(_ error: Error) -> Bool {
-        if case ApplePackageError.emptyPackage = error { return true }
-        let ns = error as NSError
-        if ns.domain == "EscapeOS.Ensure" {
-            let text = ns.localizedDescription
-            return text.contains("HTTP 5") || text.contains("可下载内容") || text.contains("获取记录")
-        }
-        return false
-    }
 
     /// 是否需要换端点重取（对齐 Asspp dev 的 fallbackReason）
     static func fallbackReason(_ response: [String: Any]) -> String? {

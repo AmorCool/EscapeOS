@@ -13,8 +13,7 @@ public enum Download {
     public static func download(
         account: inout AppStoreAccount,
         app: Software,
-        externalVersionID: String? = nil,
-        versionCandidates: [String] = []
+        externalVersionID: String? = nil
     ) async throws -> DownloadOutput {
         let deviceIdentifier = Configuration.deviceIdentifier
 
@@ -22,9 +21,12 @@ public enum Download {
         let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
 
-        // fetchProductWithFallback 内部处理 302 pod 重定向 + 空包/5002 → redownload 回退。
-        // v0.3.329：回退前先解析「当前版本号」再打 redownload（未固定版本的 redownload
-        // 可能返回 tvOS 包）。region 在这里先取出来，避免闭包捕获 inout 的 account。
+        // v0.3.539：对齐 Asspp `StoreDownloadService.download` —— **至多一次回退**。
+        //
+        // 回退前解析「当前版本号」再打 redownload 的**理由仍然成立**（未固定版本的
+        // redownload 可能返回 tvOS 包）；但**版本一旦有值就必须一直用它**，
+        // 且解析失败要抛 `catalogUnavailable` 而不是发出不带版本号的请求。
+        // 这两条门现在都收在 `fetchProductWithFallback` 内部。
         let region = Configuration.countryCode(for: account.store) ?? Configuration.countryCode
         let appID = app.id
         let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
@@ -33,8 +35,7 @@ public enum Download {
             app: app,
             deviceIdentifier: deviceIdentifier,
             externalVersionID: externalVersionID ?? "",
-            resolveVersion: { try await StoreCatalog.externalVersionID(appID: appID, countryCode: region) },
-            versionCandidates: versionCandidates
+            resolveVersion: { try await StoreCatalog.externalVersionID(appID: appID, countryCode: region) }
         )
 
         if let failureType = dict["failureType"] as? String {

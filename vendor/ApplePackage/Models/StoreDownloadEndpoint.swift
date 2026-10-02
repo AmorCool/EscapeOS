@@ -70,17 +70,42 @@ extension StoreDownloadEndpoint {
         externalVersionIDKey: "appExtVrsId"
     )
 
-    /// updateProduct 端点（v0.3.537，移植 ipatool `50312a928b` / `acd9e7a972` /
-    /// `387d1a4f47`）。Apple 的 `/up/updateProduct` 能在 redownload 返回
-    /// **空 HTTP 500** 或**仅消息的 no-longer-available** 时，仍然按固定的
-    /// `externalVersionId` 给出包 —— 这是一条与 volumeStore / redownload **并列的第三条取包路径**。
+    /// updateProduct 端点 —— **这确实是上游功能**（v0.3.537 移植正确，v0.3.539 修正引用）。
     ///
-    /// ipatool 原注释（`appstore_download_product.go`）：
-    /// > The bag's updateProduct can serve pinned iOS, macOS, and tvOS versions
-    /// > when redownload returns an empty HTTP 500 or a message-only availability error.
+    /// 权威来源（2026-10-02 核对，此前我一度误判为「编造的端点」，特此更正）：
+    /// - **ipatool PR #554**（`pkg/appstore/appstore_download_product.go`，新增文件）
+    ///   —— 本地 `P3_爱思助手_上游ipatool参考` 是 `a9bd16c`，**早于该 PR**，所以 grep 不到。
+    /// - **Asspp `b3c8574a1943d846c4d6b7f023e95fc19bdfd4b4`**（2026-09-15，zetxtech 分叉）：
+    ///   > feat: recover empty iOS downloads through the update product endpoint
+    ///   > Mirror ipatool's redownload/update recovery chain (majd/ipatool#554) …
+    ///   > when redownload still comes back empty, an iOS request (iPhone/iPad)
+    ///   > draws the updateProduct endpoint **exactly once** with the **already resolved version**.
     ///
-    /// bag 里的键名是 `updateProduct`（下载分派域下的 `/up/updateProduct`）。
-    /// 字段名沿用 redownload 同款的 `appExtVrsId`。
+    /// ## 上游的触发条件（4 个必须同时满足）
+    ///
+    /// ```
+    /// if bag.UpdateEndpoint != "" && externalVersionID != "" &&
+    ///    (platform == "" || platform == PlatformIPhone || platform == PlatformIPad) &&
+    ///    (isEmptyRedownloadError(err) || (err == nil && isUnavailableDownloadProductResponse(redownloadRes)))
+    /// ```
+    ///
+    /// 1. bag 里 `updateProduct` 非空（**端点是服务端下发的，不是硬编码常量**）；
+    /// 2. `externalVersionID` 非空（必须 pinned）；
+    /// 3. 平台是 iOS 系（**排除 macOS / tvOS / visionOS**）；
+    /// 4. redownload 的失败形态必须是这两种之一：
+    ///    - `isEmptyRedownloadError`：**裸 HTTP 500，且 `Snippet == ""`**；
+    ///    - `isUnavailableDownloadProductResponse`：200 + `failureType` 空 + `items` 空 +
+    ///      `customerMessage` 是 `"no longer available"`（或以 `" no longer available"` 结尾）。
+    ///
+    /// ⚠️ **注意第 4 条**：带 body 的 5xx（如我们真机日志里的 **502 + `kngx` HTML 页**）
+    /// 按上游标准 **`Snippet != ""` ⇒ 不满足**，**不应**走 updateProduct。
+    ///
+    /// ## 本仓保留为常量（与上游差异，需知悉）
+    ///
+    /// 上游从 bag 动态取 `updateProduct` 地址；本仓没有 bag 拉取链路，
+    /// 因此按 `downloaddispatch.itunes.apple.com/up/updateProduct` 硬编码 ——
+    /// 与 ipatool `downloadDispatchDomain` + `updateProductPath` 的拼法一致。
+    /// 若 Apple 改下发地址，需要补 bag 支持。
     public static let updateProduct = StoreDownloadEndpoint(
         host: "downloaddispatch.itunes.apple.com",
         path: "/up/updateProduct",
