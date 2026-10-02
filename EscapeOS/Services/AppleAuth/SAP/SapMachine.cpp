@@ -456,6 +456,13 @@ void SapShims::RegisterPlatformServices() {
         "_pthread_rwlock_init",  "_pthread_rwlock_init$UNIX2003",
         "_pthread_rwlock_unlock","_pthread_rwlock_unlock$UNIX2003",
         "_pthread_rwlock_wrlock","_pthread_rwlock_wrlock$UNIX2003",
+        // v0.3.542：`storeagent` 需要的四个锁原语（上游 machine/storeagent.go 的
+        // `storeAgentZeroReturnAliases`）。它们都没被真正用到 —— 单线程 guest 里
+        // 拿锁只有一个行为可接受，就是「成功」。缺了会在 Resolve 处 fault。
+        "_pthread_rwlock_rdlock",  "_pthread_rwlock_rdlock$UNIX2003",
+        "_pthread_mutex_init",     "_pthread_mutex_init$UNIX2003",
+        "_pthread_mutex_destroy",  "_pthread_mutex_destroy$UNIX2003",
+        "_pthread_rwlock_destroy", "_pthread_rwlock_destroy$UNIX2003",
     }, [this]() { SetResult(0); });
 
     // ── returnMinusOne group ───────────────────────────────────────────────────

@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.3.543] - 2026-10-02
+
+> **修 v0.3.542 的编译错误 + 补 `storeagent` 缺失的四个锁符号**。
+
+### 修复：`SAPContext.h` 缺 `@end`（v0.3.542 CI 报错）
+
+v0.3.542 的 CI 在 Build 阶段失败：
+
+```
+SAPContext.h:25:1: error: missing '@end'
+failed to emit precompiled header ... EscapeOS-Bridging-header.pch
+```
+
+真因：新增 `SAPStoreAgentContext` 时，`@interface` 被插在了 `SAPContext` 的
+`@end` **之前**，前一个 interface 没闭合，桥接头 pch 连带生成失败。
+已补回 `@end`，现配对为 `5↔14`、`26↔41`（`NS_ASSUME_NONNULL_END` 收尾）。
+
+### 修复：补 `storeagent` 需要的四个锁原语
+
+v0.3.542 CHANGELOG 里自己点出的「待核实项」已验证：上游
+`machine/storeagent.go` 的 `storeAgentZeroReturnAliases` 共四项，
+**在 `SapMachine.cpp` 里出现次数均为 0**：
+
+| 符号 | 补前 | 补后 |
+|---|---|---|
+| `_pthread_rwlock_rdlock` | 0 | ✓（含 `$UNIX2003`） |
+| `_pthread_mutex_init` | 0 | ✓（含 `$UNIX2003`） |
+| `_pthread_mutex_destroy` | 0 | ✓（含 `$UNIX2003`） |
+| `_pthread_rwlock_destroy` | 0 | ✓（含 `$UNIX2003`） |
+
+归入既有的 `returnZero (release/mutex) group` —— 语义一致，都是「返回 0 = 成功」。
+它们并未被真正取到，缺了只会在 `Resolve` 处 fault。
+
+### 说明
+
+本版**不含新功能**，只是把 v0.3.542 推到能编译。`SapMachine::StoreAgent` 与
+`SAPStoreAgentContext` 此前从未编译通过，本版是它们第一次真正过编译器。
+
 ## [0.3.542] - 2026-10-02
 
 > **`ent/download` 步骤 2：StoreAgent 包解密器**。v0.3.541 已验证通过 CI
