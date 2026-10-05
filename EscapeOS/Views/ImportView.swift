@@ -254,15 +254,15 @@ struct ImportView: View {
     /// 顶部步骤条：导入 → 修补 → 安装。只做可视化，不承担任何动作语义。
     /// 当前处于流程的哪一段 —— 供共享组件 `ImportFlowBanner` 高亮。
     ///
-    /// 映射依据（与旧 `flowSection` 的三态判定等价）：
+    /// 映射依据（`ShareStage` 的实际 case：`empty / pending / repairing / repaired / installed / failed`）：
     ///   · 已修补 / 已安装 ⇒ 当前段是「安装」（导入与修补视为已完成）；
     ///   · 待修补 / 修补中 ⇒ 当前段是「修补」；
-    ///   · 其余（含刚导入、导入中、无包）⇒ 当前段是「导入」。
+    ///   · 空 / 失败 ⇒ 当前段是「导入」（失败可能发生在任一步，回到起点最不误导）。
     private var flowStage: ImportFlowStage {
         switch stage {
-        case .installed, .repaired:      return .install
-        case .pending, .repairing:       return .repair
-        case .idle, .importing:          return .importFile
+        case .installed, .repaired: return .install
+        case .pending, .repairing:  return .repair
+        case .empty, .failed:       return .importFile
         }
     }
 
