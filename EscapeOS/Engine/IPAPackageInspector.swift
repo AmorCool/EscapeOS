@@ -20,21 +20,44 @@ import Compression
 enum IPAPackageInspector {
 
     struct Inspection {
+        /// 主二进制的加密状态（v0.3.570：三态）。
+        ///
+        /// **为什么必须三态**：此前是 `isEncrypted: Bool`，读不出主二进制时被写成 `false`
+        /// ——「没能观察到」被当成了「确定未加密」，于是加密包被判成明文包、跳过 sinf 注入。
+        /// 现在读不出 = `.unknown`，任何消费点都必须显式处理，不得默认成 `.plaintext`。
+        enum Encryption {
+            case encrypted   // cryptid != 0
+            case plaintext   // cryptid == 0（明确读到）
+            case unknown     // 主二进制读不出 / 无法判定 —— **不等于**未加密
+        }
+
         var bundleIdentifier: String?
         var bundleVersion: String?
         var displayName: String?
         var executable: String?
-        /// 主二进制是否 FairPlay 加密
-        var isEncrypted: Bool
-        /// 原始 cryptid（0 = 明文）
+        /// 主二进制加密状态（三态）
+        var encryption: Encryption
+        /// 兼容只读投影：`nil` = 未知（**不要**用它做「是否明文」的判定）
+        var isEncrypted: Bool? {
+            switch encryption {
+            case .encrypted: return true
+            case .plaintext: return false
+            case .unknown: return nil
+            }
+        }
+        /// 原始 cryptid（仅当 encryption != .unknown 时有意义；unknown 时为 0）
         var cryptid: UInt32
         /// 加密段长度（cryptsize）
         var cryptSize: UInt32
-        /// 主二进制文件名缺失（打包异常）
+        /// 主二进制读不出（缺失 / Deflate 解不出 / 无 CFBundleExecutable）
         var missingExecutable: Bool = false
 
         var summary: String {
-            isEncrypted ? "FairPlay 加密（cryptid=1，cryptsize=\(cryptSize)）" : "已解密（cryptid=0）"
+            switch encryption {
+            case .encrypted: return "FairPlay 加密（cryptid=\(cryptid)，cryptsize=\(cryptSize)）"
+            case .plaintext: return "已解密（cryptid=0）"
+            case .unknown:   return "加密状态未知（主二进制读不出）"
+            }
         }
     }
 
@@ -65,7 +88,7 @@ enum IPAPackageInspector {
                                 bundleVersion: version,
                                 displayName: display,
                                 executable: exe,
-                                isEncrypted: false,
+                                encryption: .unknown,
                                 cryptid: 0,
                                 cryptSize: 0,
                                 missingExecutable: exe == nil)
@@ -83,13 +106,14 @@ enum IPAPackageInspector {
         result.missingExecutable = false
         result.cryptid = enc.cryptid
         result.cryptSize = enc.cryptSize
-        result.isEncrypted = enc.cryptid != 0
+        result.encryption = enc.cryptid != 0 ? .encrypted : .plaintext
         return result
     }
 
-    /// 快速判定是否 FairPlay 加密（nil = 读不出来）
+    /// 快速判定是否 FairPlay 加密。`nil` = **读不出来 / 无法判定**（不等于「未加密」）。
     static func isFairPlayEncrypted(ipaPath: String) -> Bool? {
-        inspect(ipaPath: ipaPath)?.isEncrypted
+        guard let ins = inspect(ipaPath: ipaPath) else { return nil }
+        return ins.isEncrypted
     }
 
     // MARK: - 提取安装所需的 sidecar（sinf / iTunesMetadata）

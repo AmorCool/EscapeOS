@@ -90,28 +90,90 @@ final class AppStoreDownloadStore {
     // Calls also originate in detached downloads; serialize reads, writes and persistence.
     private let lock = NSRecursiveLock()
     private var storedAccounts: [AppStoreAccount] = []
+    /// v0.3.570：最近一次 `load()` 是否**完整读出**了台账。
+    /// `save()` 据此决定能不能回写 —— 读不全时绝不回写（否则会把没读到的账号覆盖掉）。
+    private var lastLoadWritable = false
     private(set) var accounts: [AppStoreAccount] {
         get { lock.lock(); defer { lock.unlock() }; return storedAccounts }
         set { lock.lock(); defer { lock.unlock() }; storedAccounts = newValue }
     }
 
-    func load() {
+    /// 账号台账读取结果。
+    ///
+    /// `writable == false` = **这一次没能完整读出台账**（文件读不出 / JSON 整份坏 / 有记录解不出）。
+    /// 调用方**必须只读、绝不回写** —— 否则会把没读到的账号当成「不存在」而覆盖掉。
+    private struct AccountsLoad {
+        let accounts: [AppStoreAccount]
+        let writable: Bool
+        let note: String?
+        /// 面向用户的简短原因（写被拒时弹给用户看）；`writable == true` 时为 nil。
+        let userReason: String?
+    }
+
+    /// 读盘并把结果装进内存。返回是否可写（`writable == false` 时任何写盘都必须被拒绝）。
+    @discardableResult
+    private func load() -> AccountsLoad {
         lock.lock(); defer { lock.unlock() }
-        guard let data = try? Data(contentsOf: fileURL),
-              let list = try? JSONDecoder().decode([AppStoreAccount].self, from: data) else {
-            accounts = []
-            return
+
+        func finish(_ list: [AppStoreAccount], _ writable: Bool, _ note: String?,
+                    _ userReason: String?) -> AccountsLoad {
+            storedAccounts = list
+            lastLoadWritable = writable
+            return AccountsLoad(accounts: list, writable: writable, note: note, userReason: userReason)
         }
-        accounts = list.map { account in
-            var migrated = Self.normalized(account)
-            if migrated.sessionRevision == nil { migrated.sessionRevision = UUID() }
-            return migrated
+
+        // 文件确实不存在 = 合法空台账（首次运行 / 从没登录过），可以写。
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return finish([], true, nil, nil)
         }
+        guard let data = try? Data(contentsOf: fileURL) else {
+            return finish([], false,
+                          "账号台账存在但读取失败（被占用 / 磁盘错误），本次按只读处理，不回写",
+                          "账号台账无法读取")
+        }
+        let dec = JSONDecoder()
+        func migrate(_ list: [AppStoreAccount]) -> [AppStoreAccount] {
+            list.map { account in
+                var migrated = Self.normalized(account)
+                if migrated.sessionRevision == nil { migrated.sessionRevision = UUID() }
+                return migrated
+            }
+        }
+
+        // 1) 快路径：整份解得出
+        if let list = try? dec.decode([AppStoreAccount].self, from: data) {
+            return finish(migrate(list), true, nil, nil)
+        }
+
+        // 2) 整份解失败 → **逐条**解，能救多少救多少（单条坏记录不再拖垮整份台账）。
+        guard let raw = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            return finish([], false,
+                          "账号台账 JSON 解析失败（文件损坏），本次按只读处理，不回写",
+                          "账号台账文件损坏")
+        }
+        var salvaged: [AppStoreAccount] = []
+        for element in raw {
+            guard let d = try? JSONSerialization.data(withJSONObject: element),
+                  let a = try? dec.decode(AppStoreAccount.self, from: d) else { continue }
+            salvaged.append(a)
+        }
+        let migrated = migrate(salvaged)
+        guard !migrated.isEmpty else {
+            return finish([], false,
+                          "账号台账 \(raw.count) 条全部无法解析，本次按只读处理，不回写",
+                          "账号台账文件损坏")
+        }
+        // 有救回来的条目，但仍**不写盘**：写回会把解不出的那几条永久抹掉。
+        return finish(migrated, false,
+                      "账号台账 \(raw.count) 条里有 \(raw.count - migrated.count) 条无法解析，"
+                          + "本次按只读处理，不回写（原文件保留）",
+                      "账号台账文件损坏")
     }
 
     func add(_ account: AppStoreAccount) {
         lock.lock(); defer { lock.unlock() }
-        load()
+        let load = load()
+        guard load.writable else { logReadOnly(load.note); notifyWriteRejected(load.userReason); return }
         var account = Self.normalized(account)
         account.sessionRevision = UUID()
         accounts.removeAll { $0.email.caseInsensitiveCompare(account.email) == .orderedSame }
@@ -186,7 +248,8 @@ final class AppStoreDownloadStore {
 
     func remove(_ email: String) {
         lock.lock(); defer { lock.unlock() }
-        load()
+        let load = load()
+        guard load.writable else { logReadOnly(load.note); notifyWriteRejected(load.userReason); return }
         accounts.removeAll { $0.email.caseInsensitiveCompare(email) == .orderedSame }
         save()
     }
@@ -248,14 +311,51 @@ final class AppStoreDownloadStore {
     func signOutAll() {
         lock.lock(); defer { lock.unlock() }
         accounts = []
-        save()
+        // 用户**显式**「退出全部账号」（确认弹窗，role: .destructive）—— 这是删除命令，
+        // 不是「读失败当成空」。强制写空，因此台账损坏时也照常生效。
+        save(force: true)
         selectedEmail = nil
     }
 
     /// 批量登录结果（供账号管理页展示）
-    private func save() {
+    ///
+    /// v0.3.570：`force == false` 时，只要最近一次 `load()` 没能**完整读出**台账，
+    /// 就**不写盘**（否则会把没读到的账号覆盖掉）。`force` 仅用于用户显式「清空」类操作。
+    private func save(force: Bool = false) {
         lock.lock(); defer { lock.unlock() }
-        guard let data = try? JSONEncoder().encode(accounts) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+        guard force || lastLoadWritable else {
+            logReadOnly("账号台账未完整读出，本次按只读处理，不回写")
+            return
+        }
+        guard let data = try? JSONEncoder().encode(storedAccounts) else {
+            LoginLogger.shared.log("[AppStore] 账号台账编码失败，未写盘（\(storedAccounts.count) 条）",
+                                   category: .appStore)
+            return
+        }
+        do {
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            // 写失败**不能静默**：调用方以为已持久化。
+            LoginLogger.shared.log("[AppStore] 账号台账写盘失败：\(error)（\(storedAccounts.count) 条未持久化）",
+                                   category: .appStore)
+        }
+    }
+
+    /// 台账没完整读出来时的统一日志（说明本次为何只读、不回写）。
+    private func logReadOnly(_ note: String?) {
+        guard let note else { return }
+        LoginLogger.shared.log("[AppStore] \(note)", category: .appStore)
+    }
+
+    /// 写被拒时给**用户可见**的反馈：日志不是反馈，用户改了却看不到变化会以为「点了没反应」。
+    /// 文案点明原因与后果。`ToastCenter` 是 `@MainActor` 类，按全仓既有写法显式切回主 actor。
+    ///
+    /// 只在**用户直接发起**的写（`add` / `remove`）被拒时调用；后台会话刷新
+    /// （`update` / `commitRefresh`）走 `save()` 的日志分支，不弹提示，免得下载过程中反复打扰。
+    private func notifyWriteRejected(_ userReason: String?) {
+        let reason = userReason ?? "账号台账读取异常"
+        Task { @MainActor in
+            ToastCenter.shared.show("\(reason)，本次改动未保存")
+        }
     }
 }

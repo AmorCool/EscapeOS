@@ -4,13 +4,16 @@ import CryptoKit
 // 共享转换 · 目标设备「修补」服务
 //
 // 职责：把用户自己传到本机的共享 IPA 修补成「本机能装的包」并安装。
-//   · 加密包（cryptid=1）：取包内既有 sinf → 全铺到全部 SC_Info/*.sinf → 不重签 → 安装 → 启动自检。
+//   · 加密包（cryptid=1）：取包内既有 sinf → 替换包内已存在的全部 SC_Info/*.sinf 并补写主路径（不新增包内不存在的路径）→ 不重签 → 安装 → 启动自检。
 //   · 明文包（cryptid=0）：跳过 sinf，但**同样**走「安装前确认 + 实装实跑自检」后安装
 //     （现状：设备内无整包 zsign，重签分支落不实）。
 //
 // 事实依据（详见 `P0_工作产物标准区/EscapeSpace-共享转换/repair/报告-目标设备修补流程.md`）：
 //   · sinf 与「请求 udid / 设备硬件」无关（绑服务端账号 + 内容密钥）⇒ 不重取，直接用包内那份。
-//   · 同一 IPA 内所有 sinf 逐字节相同 ⇒ 「一份 sinf 铺满全部路径」在语义上完备。
+//   · **部分包**内多份 sinf 逐字节相同（如 XNZS）；**真实 App Store 包可只有 1 份** ——
+//     实测 Loon（2026-10-05）：`SinfReplicationPaths` 列 22 条，包内仅 `SC_Info/Loon.sinf` 1 份。
+//     ⇒ 「一份 sinf 铺满全部路径」的**必要性未证实**，须先在真实包上确认「包内到底有几份」。
+//     在包内仅 1 份的包上，只写主包即与 Apple 一致，不构成漏注。【实测 + 未证实】
 //   · 【顺序铁律】重签包把 SC_Info 封进了 `_CodeSignature/CodeResources` 的 files ⇒
 //     任何「换 sinf + 重签」的组合都必须 **先换 sinf、后签名**，否则签名失效。
 //     本线加密包不重签（保留 Apple 原始签名，走 installd 的 Customer / ApplicationSINF 通道），
@@ -68,7 +71,7 @@ struct SinfInfo {
     let song: UInt32?            // = trackId 低 32 位
     let accountName: String?     // schi.name（展示时脱敏）
     let sha256: String
-    let writtenPaths: [String]   // 实际写入包内的全部 SC_Info 路径（含 framework / appex）
+    let writtenPaths: [String]   // 实际写入的 SC_Info 路径（包内已有的全替换 + 补写主路径；多份包才含 framework / appex）
 }
 
 /// 修补结果（对应报告 Q4.3）。
@@ -79,7 +82,7 @@ struct RepairResult {
         case checkSinf       // (4) 包内 sinf 体检
         case gatherSinf      // (5) 取定「要铺的那份 sinf」= 包内既有（不重取）
         case validateSinf    // (6) 自检（防垃圾件）
-        case injectSinf      // (7) 全铺到全部 SC_Info 路径
+        case injectSinf      // (7) 写 sinf（路径策略待复核，见 IPADownloadCenter.injectAllPaths）
         case resign          // (8) 明文包重签（先换 sinf 后签名）
         case install         // (9) 安装
         case ledger          // (10) 台账
@@ -181,11 +184,24 @@ enum RepairService {
             note("pkg.stat 不可用，跳过结构体检（降级：仅用 IPAPackageInspector）")
         }
 
-        // ── (3A) 明文包分支 ─────────────────────────────────────────
-        if ins.isEncrypted == false {
+        // ── (3A) 按加密状态分流（v0.3.570：三态）─────────────────────
+        //
+        // **不能**再把「读不出主二进制」当成「明文包」：旧代码写 `if ins.isEncrypted == false`
+        // 就走明文分支，于是主二进制读不出的**加密包**被判成明文包 → 跳过 sinf 替换 →
+        // UI 却说「这是明文包，无需修补」，而导入页同时在警告「主二进制缺失」——两页互相矛盾。
+        // 现在 `.unknown`（结构不可判定）**拒绝修补**，绝不默认走明文分支。
+        switch ins.encryption {
+        case .plaintext:
             note("明文包（cryptid=0），不需要 sinf")
             return await installPlainPackage(req, ins: ins, log: log, note: note,
                                              progress: progress, confirmInstall: confirmInstall)
+        case .unknown:
+            return .failure(.inspectPackage, code: "E3b",
+                message: "无法判定这个包是否加密（主二进制读不出）.",
+                suggestion: "请重新获取一份完整的安装包再试；持续失败请反馈日志.",
+                details: log + ["missingExecutable=\(ins.missingExecutable) cryptid 未读到"])
+        case .encrypted:
+            break   // 继续走加密分支
         }
 
         // ── (4) 包内 sinf 体检 ───────────────────────────────────────
@@ -218,7 +234,7 @@ enum RepairService {
         note("sinf 自检通过：\(sinfData.count) 字节 · \(parsed.format)"
              + (parsed.song.map { " · song=\($0)" } ?? ""))
 
-        // ── (7) 全铺 sinf（全部 SC_Info 路径）────────────────────────
+        // ── (7) 替换 sinf（包内已有路径全替换 + 补写主路径）──────────
         // 复用 PackageSINFWriter.injectAllPaths（一次整包重写批量替换 + 写后逐条复读）。
         let written: [String]
         do {
@@ -478,31 +494,47 @@ enum LaunchProbe {
         }
 
         let needle = (executable?.isEmpty == false ? executable! : bundleId)
-        // 2) 采样：0 / 1 / 3 / 5 秒
-        var everSeen = processExists(needle)
+        // 2) 采样：0 / 1 / 3 / 5 秒。
+        //
+        // **任一次采样返回 `nil`（探针不可用）→ 整个自检降级为 `.unavailable`**。
+        // 旧实现把 `proc.list` 的失败（rc!=0 / JSON 解析失败）压成 `false`，
+        // 于是「没能观察到」被当成「确定没在跑」，误报 E10「应用启动后没能运行起来」
+        // 并建议用户退包 —— 而应用可能完全正常。
+        var probeUnavailable = false
+        func sample() -> Bool {
+            if let v = processExists(needle) { return v }
+            probeUnavailable = true
+            return false
+        }
+        var everSeen = sample()
         if !everSeen {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
-            everSeen = processExists(needle)
+            everSeen = sample()
         }
         if !everSeen {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            everSeen = processExists(needle)
+            everSeen = sample()
         }
         try? await Task.sleep(nanoseconds: 2_000_000_000)
-        let stillAlive = processExists(needle)
+        let stillAlive = sample()
 
+        if probeUnavailable { return .unavailable }
         if everSeen && stillAlive { return .alive }
         if everSeen && !stillAlive { return .crashed }
         return .neverAppeared
     }
 
     /// 目标进程是否在 `proc.list` 里（按可执行名 / bundleId 匹配 name 或 path）。
-    private static func processExists(_ needle: String) -> Bool {
+    ///
+    /// - Returns: `true`/`false` = **确实读到了进程表**时的结论；
+    ///   `nil` = `proc.list` 不可用（rc != 0 / JSON 解析失败 / 缺 `processes` 键）——
+    ///   「没能观察」**不等于**「进程不存在」，调用方必须按「探针不可用」降级。
+    private static func processExists(_ needle: String) -> Bool? {
         let (rc, json) = HostCapabilityService.call(capability: "proc.list", jsonArgs: "{}")
         guard rc == 0,
               let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let procs = obj["processes"] as? [[String: Any]] else { return false }
+              let procs = obj["processes"] as? [[String: Any]] else { return nil }
         return procs.contains { p in
             let name = (p["name"] as? String) ?? ""
             let path = (p["path"] as? String) ?? ""

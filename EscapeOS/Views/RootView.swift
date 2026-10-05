@@ -87,6 +87,13 @@ struct RootView: View {
                 selectedTab = .more
                 ToastCenter.shared.show("请到 更多 → 应用安装 → 共享转换 里手动选择文件")
             }, completion: { r in
+                // D4：导入成功时把 record **交接**给「共享转换」页（挂起值，等它挂载 / 回前台后
+                // 一次性消费，见 `PendingImportHandoff`）。以前这里只切 tab + 弹 toast，record 被就地
+                // 丢弃 ⇒ 用户只能去点「扫描新文件」，那会把同一个包**再复制一份**（重复包 +
+                // 第一条 record 永久丢失）。**只接上记录，不自动修补 / 安装**，三步确认语义不变。
+                if r.status == .ok, let rec = r.record {
+                    PendingImportHandoff.post(rec)
+                }
                 selectedTab = .more
                 ToastCenter.shared.show(r.message)
             })

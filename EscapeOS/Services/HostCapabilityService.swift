@@ -1811,6 +1811,25 @@ enum HostCapabilityService {
         return (root, path, nil)
     }
 
+    /// 写门禁（SSH exec 暴露面）：只读根 ⇒ **明确报错**（错误码 + 人话），
+    /// **不静默成功、不静默 no-op**。
+    ///
+    /// 判据来自**共享**的 `AfcRootPolicy`（`AFCService.swift`），与 SFTP 侧
+    /// `AfcFileProvider` 用的是**同一份** —— 避免「两处各写一份 `== .crash`」再次漂移，
+    /// 那正是本次绕过漏洞（`afc.delete {root:"crash",recursive:true}` 递归删崩溃日志）的根因。
+    ///
+    /// - Returns: `nil` 表示放行；非 `nil` 即拒绝用的 `(code, json)` 结果。
+    private static func afcReadOnlyGuard(_ root: AfcRoot, op: String,
+                                         path: String) -> (Int32, String)? {
+        guard AfcRootPolicy.isReadOnly(root.rawValue) else { return nil }
+        return fail("\(root.rawValue) 根只读（设计不变量 I1）：不允许 \(op)",
+                    extra: ["code": "READONLY_ROOT",
+                            "root": root.rawValue,
+                            "rootPath": root.displayPath,
+                            "path": path,
+                            "reason": "崩溃日志是排查闪退的唯一现场，暴露面默认只读"])
+    }
+
     private static func afcList(_ args: [String: Any]) -> (Int32, String) {
         let (root, path, err) = afcResolve(args, needFile: false)
         if let err { return err }
@@ -1900,6 +1919,8 @@ enum HostCapabilityService {
     private static func afcWrite(_ args: [String: Any]) -> (Int32, String) {
         let (root, path, err) = afcResolve(args, needFile: true)
         if let err { return err }
+        // I1 写门禁：crash 根只读 —— 先于任何连接/写入动作拒绝（共享判据）
+        if let deny = afcReadOnlyGuard(root, op: "afc.write", path: path) { return deny }
         guard let text = args["data"] as? String else { return fail("afc.write 缺少 data") }
         let encoding = (args["encoding"] as? String) ?? "base64"
         guard encoding == "base64" || encoding == "utf8" else {
@@ -1921,6 +1942,8 @@ enum HostCapabilityService {
         let (root, path, err) = afcResolve(args, needFile: true)
         if let err { return err }
         let recursive = (args["recursive"] as? Bool) ?? false
+        // I1 写门禁：crash 根只读 —— **recursive 与否都挡**（共享判据，先于任何连接/删除动作）
+        if let deny = afcReadOnlyGuard(root, op: "afc.delete", path: path) { return deny }
         do {
             try withAfcRoot(root) {
                 try AFCService.removePath(client: $0, path: path, includingContents: recursive)
@@ -1949,6 +1972,8 @@ enum HostCapabilityService {
     private static func afcMkdir(_ args: [String: Any]) -> (Int32, String) {
         let (root, path, err) = afcResolve(args, needFile: true)
         if let err { return err }
+        // I1 写门禁：crash 根只读 —— 先于任何连接/建目录动作拒绝（共享判据）
+        if let deny = afcReadOnlyGuard(root, op: "afc.mkdir", path: path) { return deny }
         do {
             try withAfcRoot(root) { try AFCService.makeDirectory(client: $0, path: path) }
             return ok(["root": root.rawValue, "path": path])

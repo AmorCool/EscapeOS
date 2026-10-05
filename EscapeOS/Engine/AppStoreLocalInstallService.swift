@@ -78,8 +78,13 @@ enum AppStoreLocalInstallService {
         // 那是把「这个链接单独能用吗」和「这个链接有没有留档」混为一谈了 —— 用户要的是后者。
         onResolvedURL?(output.downloadURL)
         let name = "\(software.bundleID)-\(output.bundleShortVersionString).ipa"
+        // v0.3.571：下载源必须是 Apple 自有域（初始 URL + 每次重定向都查）。
+        // 这条是 `SignatureInjector`「输入来自 Apple 正版包」这一前提的**强制点**：
+        // 商店 API 响应里的 `downloadURL` 逐字进入下载，若被引到第三方域，包内的
+        // `SC_Info/Manifest.plist` 就不可信（vendor 侧有意不做路径校验，正是以此为前提）。
         let dest = try await AppStoreInstallService.downloadIPA(urlString: output.downloadURL,
-            suggestedName: name, progress: downloadProgress, onLog: onLog)
+            suggestedName: name, progress: downloadProgress,
+            hostPolicy: StoreAuthenticationProtocol.isAppleHost, onLog: onLog)
         try Task.checkCancellation()
         onLog?("[注入] 写入 SC_Info…")
         try await SignatureInjector.inject(sinfs: output.sinfs, into: dest.path)

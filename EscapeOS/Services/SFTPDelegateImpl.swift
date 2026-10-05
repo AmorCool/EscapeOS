@@ -34,8 +34,14 @@
 //     addSymlink/write）一律 catch 后返回映射状态码，**绝不外抛**；
 //   - `openFile` 不做 stat 探活（避免自己制造挂起）；
 //   - `fileAttributes` / `openDirectory` 返回的是 attributes/handle，**协议上无法回状态码**
-//     ⇒ 只能抛错，此时上游会挂起。**彻底修好需给 Citadel 打补丁**（补丁文本见
-//     `P0_工作产物标准区/EscapeSpace-SSH升级/impl-sftp/citadel_patch_sftp_error_status.md`）。
+//     ⇒ 不抛错（抛错会让客户端挂起到自身超时）。
+//       · `fileAttributes`：兜底回空 attributes（假阳性「存在」），不产生数据损坏。
+//       · `openDirectory`：**不**回空 listing —— 失败回一条**可见的错误标记**，
+//         截断在末尾追加**可见的截断标记**，绝不把「失败 / 截断」伪装成「空 / 完整目录」
+//         （R1，见 `sftpMaxDirectoryEntries` 的说明）。此档亦不产生数据损坏
+//         （`read` 仍 throw、写失败仍回状态码）。
+//     彻底修好（回真正的 `SSH_FX_NO_SUCH_FILE` / 状态码）仍需给 Citadel 打补丁
+//     （补丁文本见 `P0_工作产物标准区/EscapeSpace-SSH升级/impl-sftp/citadel_patch_sftp_error_status.md`）。
 //
 
 import Citadel
@@ -70,6 +76,29 @@ private let sftpReadAheadBytes = 256 * 1024
 /// 写合并阈值：攒够这么多才落盘一次（每次落盘 = 一次 RSD 隧道）。
 /// 客户端按 32KiB 发 WRITE 包 ⇒ 3MiB 上传从 96 次隧道降到 3 次。
 private let sftpWriteCoalesceBytes = 1 << 20
+
+/// 单次列目录**建元数据**（逐条 stat）的条目数上限（R1）。
+///
+/// ## 为什么需要（2026-10-05 真实客户端评估）
+/// `openDirectory` 一次性取全目录。AFC 后端的成本是**逐条** `afc_get_file_info`
+/// （真机实测 ~7.5ms/条）：`/media/DCIM/104APPLE` 1030 条 = **7.72s**；
+/// 外推约 **1.2 万条**即触及 AFC 后端 `operationTimeout = 90s` ⇒ `provider.list`
+/// 抛 `.timedOut` ⇒ 旧兜底回**空 listing** ⇒ 客户端把大目录显示成**空文件夹**
+/// （静默假空，即本项目最忌讳的「静默错误答案」）。
+///
+/// ## 修法
+/// 把「逐条 stat」的条目数**封顶**：名字由一次 `afc_list_directory` 廉价取回
+/// （见 `AFCService.listNames`），超限的部分**不再 stat**；listing 末尾追加一条
+/// **可见的截断标记**。失败时改回一条**可见的错误标记**（不再回空）。
+/// 两者都让客户端**不可能**把「失败 / 截断」误当成「空目录 / 完整目录」。
+///
+/// 取值 3000：约 3000 × 7.5ms ≈ **22.5s**，低于客户端单操作硬超时（~40s）
+/// 与 AFC `operationTimeout`（90s），留足余量。
+private let sftpMaxDirectoryEntries = 3000
+
+/// 标记条目的名字前缀：用**醒目的 `!!_`**（而非 `.` 开头）确保不会被客户端
+/// 当隐藏文件过滤掉 —— 标记若被隐藏就失去了「可区分」的意义。
+private let sftpMarkerPrefix = "!!_ESCAPESPACE_"
 
 
 // MARK: - FileProviderError → SFTP 状态码
@@ -129,6 +158,28 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
         let perms = entry.isDirectory ? "rwxr-xr-x" : "rw-r--r--"
         let date = formatter.string(from: entry.modified ?? Date(timeIntervalSince1970: 0))
         return "\(type)\(perms) 1 mobile mobile \(entry.size) \(date) \(entry.name)"
+    }
+
+    /// 生成一条**可见的标记条目**，用于把「失败 / 截断」显式告诉客户端。
+    ///
+    /// 为什么不抛错也不回状态码：Citadel 的 `openDir` 处理器是
+    /// `.flatMapErrorThrowing { _ in }`（吞错、不回包）⇒ 抛错 = 客户端**永久挂起**；
+    /// 且 `openDirectory` 返回的是 handle，**协议上无法回状态码**（见文件头）。
+    /// 因此唯一能传「这不是空目录 / 这不是完整目录」的通道，就是 **listing 的内容本身**。
+    ///
+    /// - Note: 标记是**普通文件条目**（size 0、非目录），故客户端可能尝试下载/删除它 ——
+    ///   它会失败（该路径并不真实存在）。这是「可区分」的必要代价：宁可让用户看到一条
+    ///   打不开的标记，也不要把失败伪装成空目录。名字前缀 `!!_ESCAPESPACE_` 使其一眼可辨。
+    private static func markerListing(_ name: String, formatter: DateFormatter) -> SFTPFileListing {
+        let entry = FileEntry(path: "/" + name, name: name, isDirectory: false, size: 0,
+                              modified: nil, permissions: 0o100644)
+        return SFTPFileListing(path: [
+            SFTPPathComponent(
+                filename: name,
+                longname: longname(for: entry, formatter: formatter),
+                attributes: attributes(for: entry)
+            )
+        ])
     }
 
     // MARK: SFTPDelegate
@@ -235,23 +286,35 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
     }
 
     func openDirectory(atPath path: String, context: SSHContext) async throws -> SFTPDirectoryHandle {
-        // 同 `fileAttributes`：兜底为**空 listing**，**不抛**（抛错会让客户端挂起）。
-        // 准确语义：空 listing 是一个**合法的 OPENDIR 成功**（零条目）=「该目录存在但为空」
-        // ⇒ 对不存在的路径会**显示为空目录**（假阳性，非协议级状态码）。
-        // 与「禁止伪造成功」不冲突 —— 那条针对**数据损坏类**；这一档不产生数据损坏。
-        let entries: [FileEntry]
-        do {
-            entries = try await runFileOpWithTimeout(provider.operationTimeout, "list \(path)") {
-                try self.provider.list(path)
-            }
-        } catch {
-            LoginLogger.shared.log("[SFTP] opendir 失败 → 回空 listing（假阳性空目录，已知限制）：\(path) — \(error)")
-            return ProviderDirectoryHandle(listings: [])
-        }
+        // 兜底**绝不回空 listing**（R1）。
+        //
+        // 旧兜底回空 listing 的语义是「一个合法的 OPENDIR 成功（零条目）」=「该目录存在但为空」
+        // ⇒ 对**失败**（超时 / IO / 越界）与**不存在的路径**，客户端都会显示成
+        // **空文件夹**，与「真实空目录」**无法区分** —— 这正是本项目最忌讳的
+        // 「静默错误答案」。抛错又不可行：Citadel 的 `openDir` 是
+        // `.flatMapErrorThrowing { _ in }`（吞错不回包）⇒ 客户端**永久挂起**。
+        //
+        // 唯一可行的可区分信号是 **listing 的内容本身**：失败回一条**可见的错误标记**，
+        // 截断在末尾追加一条**可见的截断标记**。两者都**不可能**被当成空 / 完整目录。
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "MMM d HH:mm"
-        let listings = entries.map { entry in
+
+        // 有界列举：最多 stat `sftpMaxDirectoryEntries` 条（AFC 后端会先廉价取名字、
+        // 超限即停止逐条 stat ⇒ 单次 opendir 成本封在超时内）。
+        let result: (entries: [FileEntry], total: Int)
+        do {
+            result = try await runFileOpWithTimeout(provider.operationTimeout, "list \(path)") {
+                try self.provider.list(path, limit: sftpMaxDirectoryEntries)
+            }
+        } catch {
+            LoginLogger.shared.log("[SFTP] opendir 失败 → 回**错误标记**条目（不再静默假空）：\(path) — \(error)")
+            return ProviderDirectoryHandle(listings: [
+                Self.markerListing("\(sftpMarkerPrefix)LISTING_FAILED", formatter: formatter)
+            ])
+        }
+
+        var listings = result.entries.map { entry in
             SFTPFileListing(path: [
                 SFTPPathComponent(
                     filename: entry.name,
@@ -259,6 +322,15 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
                     attributes: Self.attributes(for: entry)
                 )
             ])
+        }
+        if result.total > result.entries.count {
+            // 截断：把已取到的前 N 条 + 一条**可见的截断标记**回给客户端。
+            // 标记里带上「已回条数 / 全部条数」，让用户知道被截断了多少。
+            LoginLogger.shared.log("[SFTP] opendir 截断：\(path) 共 \(result.total) 条，超过上限 \(sftpMaxDirectoryEntries)，只回前 \(result.entries.count) 条（已追加截断标记）")
+            listings.append(Self.markerListing(
+                "\(sftpMarkerPrefix)TRUNCATED_\(result.entries.count)_OF_\(result.total)",
+                formatter: formatter
+            ))
         }
         return ProviderDirectoryHandle(listings: listings)
     }
@@ -304,19 +376,36 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
 ///
 /// 合并只发生在本句柄的内存里：**不持有隧道、不持有 AFC 连接**，
 /// 每次落盘仍是既有 `AFCService.batch`（遵守 RSD 隧道铁律，绝不并发建隧道）。
-/// 代价（如实标注）：未落盘的数据在 `close()` 之前只在内存中；若会话异常中断且
-/// 客户端未发 CLOSE，最后不足一个窗口/阈值的数据会丢 —— 与常规写缓冲语义一致。
+///
+/// ## ⚠️ 耐久性已知限制（R2，2026-10-05 评估，**刻意保留、如实标注**）
+/// `write` 返回 `.ok` 只表示「已进入内存缓冲」，**不表示已落盘** —— 最多
+/// `sftpWriteCoalesceBytes`（1 MiB）仍在内存。后果：
+/// - **优雅关闭（客户端发 `CLOSE`）：正确**。`close()` 强制 flush 尾巴，文件完整；
+///   落盘失败还会重试一次（见 `close()`），**绝不静默丢**。
+/// - **异常断开（未发 `CLOSE`）：已回 `.ok` 的 ≤1 MiB 会随句柄销毁而丢**。
+///   若客户端随后**从「已确认偏移」续传**（跳过已 ack 的部分），文件会出现
+///   **空洞 / 内容错位**（本子系统**唯一的静默损坏面**）；若客户端重传整文件、
+///   或从**服务器实测 size** 续传，则无碍。
+///
+/// **为什么不用「写即落盘」消除它**：那等于退回「逐包一次隧道」，
+/// 会把刚修好的 63.5s 超时（见上）原样带回。折中（调小阈值 / 定时 flush）
+/// 只是**缩小**而非消除窗口，且会**改变**刚引入的性能特性，属需单独决策的调参，
+/// 不宜在本次修复里静默改动。真正的根治是**会话级写穿透**（写即落盘），
+/// 代价是慢 —— 留作后续架构项。**故本次选择「文档化」而非「修改」。**
 final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     private let provider: FileProvider
     private let path: String
 
-    /// 保护下面三个缓冲状态。Citadel 已用 `previousTask` 把同一会话的
+    /// 保护下面的读窗口 / 写缓冲状态。Citadel 已用 `previousTask` 把同一会话的
     /// read/write/close 串行化，这里的锁只为满足 Swift 6 的 Sendable 检查。
     private let bufferLock = NSLock()
     /// 预读窗口（一次 AFC 往返取一个窗口，后续读包命中缓存）。
     private var readWindow = Data()
     private var readWindowStart: UInt64 = 0
     private var readWindowValid = false
+    /// 读窗口代际：**每次写**都 +1。用于让「fetch 期间发生了写」的读窗口作废，
+    /// 与写侧的 `clearWriteBufferIfUnchanged(base:count:)` 对称（见其说明）。
+    private var readWindowGeneration: UInt64 = 0
     /// 写合并缓冲（连续写包攒到阈值才落盘一次）。
     private var writeBuffer = Data()
     private var writeBufferStart: UInt64 = 0
@@ -336,18 +425,64 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
         // 真错误只能抛（Citadel 的 readFile 处理器会关通道 = 断连，不是挂起）。
         // 刻意**不**把「读不到」转成空 buffer —— 那会被 Citadel 当作 EOF，
         // 客户端会生成一个 0 字节文件 = 假成功，比断连更糟。
-        let want = min(Int(length), sftpMaxReadBytes)
+        //
+        // ⚠️⚠️ 入口校验的对象是**整个访问区间 `[offset, offset + length)`**，
+        //      **不是 `offset` 单值**。只校验 `offset <= Int64.max` 是**不够**的：
+        //      `offset == Int64.max` 能通过单值校验，但其后 helper 里的
+        //      `rel + length`（即 `offset - base + length`）与 provider 侧的
+        //      `Int(offset) + window` 仍会**溢出陷阱 = SIGILL**（独立复现）。
+        //      只要保证「区间右端 ≤ Int64.max」，其后的 `offset - base + length` 必然也 ≤ Int64.max。
+        //
+        // 先钳制再转换：`sftpMaxReadBytes`(256KiB) 远小于 `UInt32.max`，钳制后 `Int(...)`
+        // 不可能 trap（即便上游将来把 `length` 放宽成 UInt64，此处写法依然安全）。
+        //
+        // offset 单值就超出 Int64（> 8 EiB）⇒ 不可能是合法文件位置。
+        //
+        // ⚠️ 这里**有意抛错**，**不是**返回空 buffer / 0 字节 —— **不要**改成回空：
+        //    越界读返回空会被 Citadel 当作 EOF ⇒ 客户端可能据此生成 0 字节文件 = 假成功
+        //    （正是本函数开头禁止的那类静默截断）。抛错会让 Citadel 关闭通道（断连），
+        //    这是**刻意**的取舍：宁可断连也不给出「看起来确定的错误答案」。
+        guard offset <= UInt64(Int64.max) else {
+            throw FileProviderError.unsupported("read offset 越界（超出 Int64）：\(offset)")
+        }
+        // 区间右端余量：上面的 guard 保证 `Int64(offset)` 合法且该差非负、不溢出。
+        let maxReadable = Int64.max - Int64(offset)
+        var want = Int(min(UInt64(length), UInt64(sftpMaxReadBytes)))
+        // 把 want 收进区间右端（**短读**，SFTP 协议本就允许短读）⇒ 恒有 `offset + want <= Int64.max`。
+        // 刻意**不**在此时抛错：offset 仍在 Int64 内的读**不该被误杀**
+        // （如 `read(Int64.max - 10, 100)`，短读 10 字节即可，无需断连）。
+        if Int64(want) > maxReadable { want = Int(maxReadable) }
         guard want > 0 else { return Self.makeBuffer(Data()) }
+
+        // 未落盘的写必须对**同一句柄**的读可见（写后读一致性）：
+        //  - 读范围被写缓冲**完全覆盖** → 直接切片返回（零隧道，覆盖「写完立刻读回」的常见路径）；
+        //  - 只**部分相交** → 先落盘（一次隧道），再走正常读路径读回最新数据。
+        // 不这样做的话，`appendToWriteBuffer` 已把读窗口置为失效，读会退回 provider，
+        // 而此刻磁盘尚未更新 ⇒ 返回**旧字节**（独立验证报告的反例 1）。
+        //
+        // ⚠️ 这里 `flushWriteBuffer` **不 catch**：落盘失败即让 read 抛错（Citadel 关通道）。
+        //    与写路径（catch 成状态码）**刻意不一致** —— 读侧宁可断连也**绝不**返回过期字节。
+        if let hit = bufferedWriteRead(offset: offset, length: want) {
+            return Self.makeBuffer(hit)
+        }
+        if writeBufferIntersects(offset: offset, length: want) {
+            try await flushWriteBuffer()
+        }
 
         if let hit = cachedRead(offset: offset, length: want) {
             return Self.makeBuffer(hit)
         }
         // 未命中：一次取满一个预读窗口，后续读包都命中缓存。
-        let window = max(want, sftpReadAheadBytes)
+        // 窗口同样收进区间右端（`maxReadable`）：否则 provider 侧 `Int(offset) + window` 仍会溢出。
+        let window = Int(min(Int64(max(want, sftpReadAheadBytes)), maxReadable))
+        // 记下发起 fetch 时的读窗口代际；fetch 期间若发生写，代际会 +1，
+        // 返回后就不再把这个（可能已过期的）窗口标为有效 —— 否则会覆盖写侧刚做的失效
+        // （独立验证报告的反例 2）。
+        let generation = currentReadWindowGeneration()
         let data = try await runFileOpWithTimeout(provider.operationTimeout, "read \(path)@\(offset)") {
             try self.provider.read(self.path, offset: offset, length: window)
         }
-        storeReadWindow(data, start: offset)
+        storeReadWindowIfUnchanged(data, start: offset, generation: generation)
         return Self.makeBuffer(Data(data.prefix(want)))
     }
 
@@ -356,6 +491,14 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
         // 而这里要的就是「当前可读区间的全部字节」。
         let payload = Data(data.readableBytesView)
         guard !payload.isEmpty else { return .ok }
+        // 同 read：入口校验的是**整个写入区间 `[offset, offset + payload.count)`**，
+        // **不是 `offset` 单值**。只校验 offset 会让 `offset == Int64.max` 通过，
+        // 随后 `shouldFlushBeforeAppending` 的 `writeBufferStart + count` 与
+        // `writeBufferIntersects` 的 `offset + length` 触发**溢出陷阱 = 进程崩溃**（SIGILL）。
+        // 写**无法短写**（不能丢字节），故直接回状态码拒绝；**不抛错**
+        // （Citadel 的 writeFile 处理器抛错会直接断连，回状态码客户端才能收到明确错误）。
+        guard offset <= UInt64(Int64.max),
+              UInt64(payload.count) <= UInt64(Int64.max) - offset else { return .failure }
         do {
             // 偏移不连续 ⇒ 先落盘旧缓冲（保证 offset 语义正确）。
             if shouldFlushBeforeAppending(offset: offset) {
@@ -378,6 +521,26 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
 
     func close() async throws -> SFTPStatusCode {
         // 收尾：把不足一个阈值的尾巴落盘（文件大小/内容以此刻为准）。
+        //
+        // 失败时**重试一次**，但**只对 `.io`**（隧道抖动这类瞬态故障）：落盘是幂等的
+        // （同一 offset 写同一份字节），且失败不会清空缓冲（见 `flushWriteBuffer`），故重试
+        // **数据安全**；它给瞬态故障一次补救机会 —— 否则最后一次 close 失败时，缓冲尾巴会随
+        // 句柄销毁而丢（独立验证报告的反例 3）。
+        //
+        // 其余错误**不重试**：
+        //  - `.timedOut`：`runFileOpWithTimeout` 不可抢占，超时后底层 FFI 线程仍在跑，重试只会
+        //    排在它后面，把 close 拖到 2×超时（AFC 为 2×90s）；
+        //  - `.notFound` / `.permissionDenied` / `.unsupported` 等**确定性**错误必再失败，
+        //    重试只是白开一条隧道。
+        do {
+            try await flushWriteBuffer()
+            return .ok
+        } catch let e as FileProviderError {
+            guard case .io = e else { return e.sftpStatus }
+        } catch {
+            return .failure
+        }
+        // 第一次是瞬态失败：缓冲仍在，重试一次。
         do {
             try await flushWriteBuffer()
             return .ok
@@ -394,14 +557,30 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     private func cachedRead(offset: UInt64, length: Int) -> Data? {
         bufferLock.lock(); defer { bufferLock.unlock() }
         guard readWindowValid, offset >= readWindowStart else { return nil }
-        let rel = Int(offset - readWindowStart)
-        guard rel < readWindow.count else { return nil }
+        // 纵深防御：**不依赖溢出**的写法 —— 先比较、后相减
+        // （`offset >= readWindowStart` 保证差非负，无需 `Int(offset - start)` 直接转）。
+        let delta = offset - readWindowStart
+        guard delta < UInt64(readWindow.count) else { return nil }
+        let rel = Int(delta)   // delta < readWindow.count ⇒ 转 Int 安全
         let n = min(length, readWindow.count - rel)
+        // rel + n <= readWindow.count ⇒ 不可能溢出。
         return readWindow.subdata(in: rel..<(rel + n))
     }
 
-    private func storeReadWindow(_ data: Data, start: UInt64) {
+    /// 取当前读窗口代际（**同步**方法，不持锁跨越 await）。
+    private func currentReadWindowGeneration() -> UInt64 {
         bufferLock.lock(); defer { bufferLock.unlock() }
+        return readWindowGeneration
+    }
+
+    /// 落读缓存 —— **仅当 fetch 期间没有写发生**（代际未变）时才写入。
+    ///
+    /// 与写侧的 `clearWriteBufferIfUnchanged(base:count:)` 对称：`read` 的「取数 → 落缓存」
+    /// 跨越了 `await`，若期间有写把 `readWindowValid` 置为 false，无条件落缓存会把
+    /// **过期窗口重新标为有效**，后续读就会命中旧数据。代际守卫让这种 in-flight 结果被丢弃。
+    private func storeReadWindowIfUnchanged(_ data: Data, start: UInt64, generation: UInt64) {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        guard readWindowGeneration == generation else { return }
         readWindow = data
         readWindowStart = start
         readWindowValid = true
@@ -411,7 +590,12 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
 
     private func shouldFlushBeforeAppending(offset: UInt64) -> Bool {
         bufferLock.lock(); defer { bufferLock.unlock() }
-        return writeBufferActive && offset != writeBufferStart + UInt64(writeBuffer.count)
+        guard writeBufferActive else { return false }
+        // 纵深防御：**不依赖溢出**的写法 —— 旧写法 `writeBufferStart + UInt64(writeBuffer.count)`
+        // 在 `writeBufferStart` 接近 UInt64.max 时会溢出（SIGILL 向量 4）。这里改成先比较、后相减。
+        let count = UInt64(writeBuffer.count)
+        guard offset >= writeBufferStart else { return true }   // 落后于缓冲起点 ⇒ 必不连续
+        return offset - writeBufferStart != count
     }
 
     private func shouldFlushWriteBuffer() -> Bool {
@@ -422,12 +606,47 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     private func appendToWriteBuffer(offset: UInt64, payload: Data) {
         bufferLock.lock(); defer { bufferLock.unlock() }
         readWindowValid = false          // 写过之后读缓存可能过期
+        readWindowGeneration &+= 1       // 让 in-flight 的读窗口 fetch 作废（见 storeReadWindowIfUnchanged）
         if !writeBufferActive {
             writeBufferStart = offset
             writeBuffer = Data()
             writeBufferActive = true
         }
         writeBuffer.append(payload)
+    }
+
+    /// 若写缓冲**完全覆盖** `[offset, offset+length)`，返回对应切片；否则返回 nil。
+    /// 供 `read` 在落盘前读到未落盘的写（**同步**方法，不持锁跨越 await）。
+    private func bufferedWriteRead(offset: UInt64, length: Int) -> Data? {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        guard writeBufferActive, !writeBuffer.isEmpty, offset >= writeBufferStart else { return nil }
+        // 纵深防御：**不依赖溢出**的写法 —— 旧写法 `rel + length` 在 `rel` 接近 Int.max 时
+        // 溢出（SIGILL 向量 2）。这里全部用 UInt64 比较区间，再在已证安全后才转 Int。
+        let delta = offset - writeBufferStart          // offset >= writeBufferStart ⇒ 非负
+        let count = UInt64(writeBuffer.count)
+        guard delta < count, UInt64(length) <= count - delta else { return nil }
+        let rel = Int(delta)                            // delta < count ⇒ 转 Int 安全
+        // rel + length <= count ⇒ 不可能溢出。
+        return writeBuffer.subdata(in: rel..<(rel + length))
+    }
+
+    /// 写缓冲是否与 `[offset, offset+length)` **相交**（半开区间）。**同步**方法。
+    private func writeBufferIntersects(offset: UInt64, length: Int) -> Bool {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        guard writeBufferActive, !writeBuffer.isEmpty else { return false }
+        let start = writeBufferStart
+        let count = UInt64(writeBuffer.count)
+        // 纵深防御：半开区间相交 = `offset < start+count && start < offset+length`。
+        // 两处都不做裸加法（`start + count` / `offset + length` 都可能溢出，SIGILL 向量 4）。
+        let beforeEnd: Bool
+        if offset >= start {
+            beforeEnd = offset - start < count      // 减法非负
+        } else {
+            beforeEnd = true                        // offset 在缓冲起点之前 ⇒ 必 < 右端
+        }
+        let sum = offset.addingReportingOverflow(UInt64(length))
+        let afterStart = sum.overflow ? true : (start < sum.partialValue)
+        return beforeEnd && afterStart
     }
 
     /// 取写缓冲快照（**同步**方法，不持锁跨越 await）。

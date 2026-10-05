@@ -53,8 +53,10 @@ struct ImportRecord: Codable {
         var storeItemId: String?
     }
     struct PayloadInfo: Codable {
-        var kind: String        // "encryptedIPA" | "decryptedIPA"
-        var encrypted: Bool
+        /// "encryptedIPA" | "decryptedIPA" | "unknownIPA"（v0.3.570：主二进制读不出时为 unknownIPA）
+        var kind: String
+        /// `nil` = 加密状态未知（**不等于**未加密）
+        var encrypted: Bool?
         var cryptid: UInt32
     }
     struct SinfPresence: Codable {
@@ -234,6 +236,10 @@ enum ImportService {
         // ── (10) 算 sha256（流式，不整包读内存）──────────────────────
         progress?(0.5, "校验中")
         guard let sha = RepairService.sha256Hex(ofFileAt: destURL.path) else {
+            // v0.3.570：读失败必须**清掉已落盘的副本**。
+            // 否则 `Imports/` 里会留一个**无台账记录的孤儿包**（用户看不到、也不会被清理）。
+            // 其余拒收分支（I4 / I5 / I6）都清理，唯独这处漏了 —— 审计 D2。
+            try? FileManager.default.removeItem(at: destURL)
             return .init(status: .rejected, code: "I6",
                          message: "读取文件失败.", suggestion: "重试.",
                          record: nil, details: log)
@@ -242,6 +248,20 @@ enum ImportService {
 
         // ── (11) 组装 ImportRecord ──────────────────────────────────
         let itemId = extractStoreItemId(ipaPath: destURL.path)
+        // v0.3.570：加密状态三态 —— 主二进制读不出时是 unknownIPA，**不得**记成 decryptedIPA。
+        let payloadKind: String
+        let payloadSuggestion: String
+        switch ins.encryption {
+        case .encrypted:
+            payloadKind = "encryptedIPA"
+            payloadSuggestion = "下一步将把包内解密授权铺满并安装."
+        case .plaintext:
+            payloadKind = "decryptedIPA"
+            payloadSuggestion = "这是明文包，可直接安装."
+        case .unknown:
+            payloadKind = "unknownIPA"
+            payloadSuggestion = "无法判定这个包是否加密（主二进制读不出），请确认包是否完整."
+        }
         let record = ImportRecord(
             id: UUID().uuidString,
             importedAt: Date(),
@@ -255,7 +275,7 @@ enum ImportService {
                        version: ins.bundleVersion,
                        displayName: ins.displayName,
                        storeItemId: itemId),
-            payload: .init(kind: ins.isEncrypted ? "encryptedIPA" : "decryptedIPA",
+            payload: .init(kind: payloadKind,
                            encrypted: ins.isEncrypted,
                            cryptid: ins.cryptid),
             sinf: .init(present: sinfData != nil, sha256: sinfSha,
@@ -264,7 +284,7 @@ enum ImportService {
             trust: .init(sourceUntrusted: true, entryCount: entryCount, notes: warnings),
             repairHandoff: .init(bundleId: ins.bundleIdentifier,
                                  storeItemId: itemId,
-                                 payloadKind: ins.isEncrypted ? "encryptedIPA" : "decryptedIPA",
+                                 payloadKind: payloadKind,
                                  payloadSha256: sha,
                                  sourceHint: nil)
         )
@@ -272,9 +292,7 @@ enum ImportService {
 
         return .init(status: .ok, code: "I0",
                      message: "已导入：\(ins.displayName ?? destURL.lastPathComponent).",
-                     suggestion: ins.isEncrypted
-                        ? "下一步将把包内解密授权铺满并安装."
-                        : "这是明文包，可直接安装.",
+                     suggestion: payloadSuggestion,
                      record: record, details: log)
     }
 
@@ -318,9 +336,13 @@ enum ImportService {
     ///    （而非 `Inbox/` 副本），安全作用域访问在 LC guest 下常被拒 ⇒ **先试，失败降级**。
     ///    降级动作由调用方通过 `fallbackToPicker` 决定（当前实现：切到共享转换页并提示手动选择，
     ///    **不会**自动弹出文件选择器）。
+    ///
+    /// ⚠️ 两个回调都声明为 `@MainActor`（它们本就是 UI 回调）。这同时解决 Swift 6 严格并发：
+    ///    全局 actor 隔离的闭包**隐式 `Sendable`**，因此可以合法地被下方 `Task {}` 捕获并送进
+    ///    `MainActor.run`，无需 `@unchecked Sendable` / `nonisolated(unsafe)` 之类的逃生舱。
     static func handleOpenURL(_ url: URL,
-                              fallbackToPicker: @escaping () -> Void,
-                              completion: @escaping (ImportResult) -> Void) {
+                              fallbackToPicker: @escaping @MainActor () -> Void,
+                              completion: @escaping @MainActor (ImportResult) -> Void) {
         let scoped = url.startAccessingSecurityScopedResource()
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + "-" + url.lastPathComponent)
@@ -330,15 +352,27 @@ enum ImportService {
             if scoped { url.stopAccessingSecurityScopedResource() }
             LoginLogger.shared.log("[导入] onOpenURL 读取失败（可能是 LC 安全作用域限制），降级到应用内选择",
                                    category: .appStore)
-            fallbackToPicker()
-            completion(.init(status: .needsUserChoice, code: "I7",
-                             message: "无法直接读取这个文件.",
-                             suggestion: "请到「更多 → 应用安装 → 共享转换」里手动选择这个文件.",
-                             record: nil, details: ["\(error)"]))
+            // 两个回调都是 UI 回调（切 tab + toast），签名上已是 `@MainActor`。
+            // 本函数**刻意保持 nonisolated**（理由见下方 Task 处），所以这里显式回主 actor 再调。
+            Task { @MainActor in
+                fallbackToPicker()
+                completion(.init(status: .needsUserChoice, code: "I7",
+                                 message: "无法直接读取这个文件.",
+                                 suggestion: "请到「更多 → 应用安装 → 共享转换」里手动选择这个文件.",
+                                 record: nil, details: ["\(error)"]))
+            }
             return
         }
         if scoped { url.stopAccessingSecurityScopedResource() }
 
+        // ⚠️ 本函数**必须保持 nonisolated**，且这里**必须**是 `Task {}`（不是 `Task.detached`）。
+        //    原因：`Task {}` 只在**非隔离**上下文里才不会被主 actor 继承 —— 而 `importFile`
+        //    要做几百 MB 的整包复制 + 流式 sha256 + 解 ZIP 中央目录，必须留在主线程之外。
+        //    若把本函数标成 `@MainActor`（或在 `@MainActor` 上下文里 `Task {}`），在
+        //    `SWIFT_APPROACHABLE_CONCURRENCY=YES`（SE-0461 NonisolatedNonsendingByDefault）下
+        //    `await importFile` 会**跑在主线程** → 导入大包时界面卡死。
+        //    实测见 `_verify_swift6/_runtime/option_probe.swift`（mode a 命中主 actor，mode d 不命中）。
+        //    两个回调改成 `@MainActor` 后即隐式 `Sendable`，因此可以合法地跨进这个 Task。
         Task {
             let r = await importFile(at: tmp, sourceKind: .openInURL)
             try? FileManager.default.removeItem(at: tmp)

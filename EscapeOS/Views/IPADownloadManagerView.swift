@@ -732,11 +732,23 @@ struct IPADownloadManagerView: View {
                         lastInstalledAt: nil)
     }
 
-    /// v0.3.378：删除一个安装包（文件 + 台账），操作面板调用
+    /// v0.3.378：删除一个安装包（文件 + 台账），操作面板调用。
+    ///
+    /// v0.3.571（一致性修复）：**按实际结果**提示，不再无条件弹「已删除安装包」。
+    /// 台账只读（损坏）时删除被拒 —— 文件与台账都没动，此时若还说「已删除」就是**假成功**：
+    /// 用户以为删掉了，重进列表条目还在，反而以为是「删除按钮坏了」。
     private func delete(_ item: IPADownloadItem) {
-        IPADownloadLibrary.shared.remove(item)
+        let result = IPADownloadLibrary.shared.remove(item)
         reload()
-        ToastCenter.shared.show("已删除安装包")
+        switch result {
+        case .removed:
+            ToastCenter.shared.show("已删除安装包")
+        case .rejectedReadOnly:
+            // 说清**原因**与后果，别只丢一句「失败」。
+            ToastCenter.shared.show("未删除安装包：下载台账文件损坏，本次改动未保存")
+        case .fileRemovalFailed:
+            ToastCenter.shared.show("未删除安装包：文件无法删除（可能被占用）")
+        }
     }
 
     /// 补齐列表图标：历史记录没存 `iconURL`，按 bundleId 逐个查 App Store。

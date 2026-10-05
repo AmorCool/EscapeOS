@@ -70,11 +70,19 @@ struct IPADownloadItem: Codable, Identifiable, Hashable {
     /// v0.3.568：加密包再细分一层 —— 「缺 sinf」（真没有，装不上）与
     /// 「sinf 异常」（有、但结构写坏了，同样装不上/装后崩）是**两件不同的处置**，
     /// 不能再都显示成「缺 sinf」。
+    ///
+    /// v0.3.570：再拆出**第四态** —— `sinfStructurallyValid == nil` 是「**未校验**」
+    /// （旧台账没这一位、或 sinf 格式我们不认识），不能再和「已验为真」共用一个「带 sinf」。
+    /// 「已校验」与「从未校验」必须能分辨，否则标签给出的确定性超过实际掌握。
     var kindText: String {
         switch isEncrypted {
         case true:
             if hasSINF != true { return "加密包 · 缺 sinf" }
-            return sinfStructurallyValid == false ? "加密包 · sinf 异常" : "加密包 · 带 sinf"
+            switch sinfStructurallyValid {
+            case .some(false): return "加密包 · sinf 异常"
+            case .some(true):  return "加密包 · 带 sinf"
+            case nil:          return "加密包 · 带 sinf（未校验）"
+            }
         case false: return "明文包"
         default: return "未检测"
         }
@@ -90,6 +98,49 @@ final class IPADownloadLibrary: @unchecked Sendable {
 
     static let shared = IPADownloadLibrary()
     private init() {}
+
+    /// 删除结果 —— 让调用方能给**真实**反馈，而不是无条件报「已删除」。
+    ///
+    /// 为什么必须返回：删除是「文件 + 台账」两件事。台账只读（读失败加固）时**两件都不能做**，
+    /// 调用方若照旧弹「已删除安装包」就是**假成功** —— 文件还在、列表也没变。
+    enum RemoveResult: Equatable {
+        /// 台账可写，删除已生效（文件若存在已移除，索引已更新）。
+        case removed
+        /// 台账没能完整读出（只读）—— **文件未删、索引未改**，本次删除被拒。
+        case rejectedReadOnly
+        /// 台账可写，但**文件删除失败**（被占用 / 权限），索引未改，条目仍原样保留。
+        case fileRemovalFailed
+    }
+
+    /// 写被拒时给**用户可见**的反馈：日志不是反馈，用户改了却看不到变化会以为「点了没反应」。
+    ///
+    /// 与 `AppFavoritesStore` / `AppStoreDownloadStore` 的同类方法一致（文案点明原因与后果），
+    /// 但多一层**会话内去重**：IPA 台账的写有大量**后台/自动**触发（列表刷新时的图标回填、
+    /// 直链回填、sinf 标记…），台账坏一次后每次列表都会走到写被拒 —— 若每次都弹就会刷屏。
+    /// 因此同一会话内只提示**一次**，用户已经被明确告知过「台账坏了、改动没保存」。
+    ///
+    /// `prefix`：动作前缀（删除类传「未删除安装包」，其余为 nil）。加前缀是为了让文案说清
+    /// **这次想做的事没做成**，而不是只丢一句「失败」。
+    private func notifyWriteRejected(_ userReason: String?, prefix: String? = nil) {
+        let reason = userReason ?? "下载台账文件损坏"
+        let text = prefix.map { "\($0)：\(reason)，本次改动未保存" }
+            ?? "\(reason)，本次改动未保存"
+        // `ToastCenter` 是 `@MainActor` 类，按全仓既有写法显式切回主 actor。
+        // 去重标志也只在主 actor 上读写（本类其余访问都在主线程），实际无竞争。
+        Task { @MainActor in
+            guard !Self.didNotifyWriteRejected else { return }
+            Self.didNotifyWriteRejected = true
+            ToastCenter.shared.show(text)
+        }
+    }
+
+    /// 会话内是否已经提示过「台账只读、写被拒」。只写不读回，进程重启即复位。
+    ///
+    /// `@MainActor` 隔离：唯一的读写都在 `notifyWriteRejected` 的 `Task { @MainActor in }`
+    /// 闭包内（即主 actor），所以**不需要** `nonisolated(unsafe)` 逃生舱 —— 那个标注等于
+    /// 「我知道这里有数据竞争、我自己负责」，而本字段的读-改-写（判断→置位）本就不是原子操作。
+    /// 交给 MainActor 串行执行，比「声明无竞争」更诚实、也更省事。
+    @MainActor private static var didNotifyWriteRejected = false
 
     /// 下载目录：`Documents/AppStoreDownloads`
     var directory: URL {
@@ -121,8 +172,15 @@ final class IPADownloadLibrary: @unchecked Sendable {
 
     /// 列出全部已下载 IPA（按下载时间倒序）.
     /// 会顺带做一次索引/磁盘对齐，所以新增/删除文件都能反映出来。
+    ///
+    /// v0.3.570：**台账没能完整读出来时只读、不回写**。
+    /// 旧实现把「读失败」与「没有台账」压成同一个 `[]`，于是 `items()` 会把磁盘上的包
+    /// 全部当新条目重建（丢直链 / sinf / 商品号 / 显示名），随后 `saveIndex` 覆盖原文件
+    /// —— 好数据被残缺数据静默替换且不可恢复。现在只要 `loadIndex()` 报告有任何丢失
+    /// （文件读不出、JSON 坏、或有记录解不出），就**不写盘**，只把能读到的那部分返回给界面。
     func items() -> [IPADownloadItem] {
-        var index = loadIndex()
+        let load = loadIndex()
+        var index = load.items
         let onDisk = diskFiles()
 
         // 1) 磁盘上新增的（索引里没有）→ 读包补登记
@@ -139,7 +197,9 @@ final class IPADownloadLibrary: @unchecked Sendable {
                 index[i].packageName = index[i].packageName ?? ins?.displayName
                 index[i].bundleId = index[i].bundleId ?? ins?.bundleIdentifier
                 index[i].version = index[i].version ?? ins?.bundleVersion
-                index[i].isEncrypted = ins?.isEncrypted ?? index[i].isEncrypted
+                // 只在**明确读到**加密状态时才覆盖：`ins.isEncrypted` 为 nil（主二进制读不出）
+                // 表示「不知道」，不能把已有值抹成未知。
+                if index[i].isEncrypted == nil, let e = ins?.isEncrypted { index[i].isEncrypted = e }
             }
             // v0.3.568：加密包的 `hasSINF` **必须现算** —— 台账里的值是个「下载瞬间」的旧快照。
             //
@@ -148,18 +208,29 @@ final class IPADownloadLibrary: @unchecked Sendable {
             // 于是每个走写回链路的加密包（NB / 牛蛙源）都被记成 `false`，而写回成功后
             // **没有任何代码把它改回 true** ⇒ 下载管理永久显示「缺 sinf」（假阳性）。
             //
-            // 性能取舍：只在「还不是 true」时开包（修正后即持久化，后续不再开）；
+            // v0.3.570：门槛补上 `sinfStructurallyValid == false` —— 旧门槛 `hasSINF != true`
+            // 会让「已判为 sinf 异常」的条目**永不复核**：若那次是瞬时短读（`extractSINF`
+            // 返回非 nil 的残缺数据），就会把 `sinf 异常` 永久冻结在台账里。补上后这类条目
+            // 每次列表都会重算，读成功即自愈。
+            //
+            // 性能取舍：只在「还不是 true」或「判为异常」时开包（修正后即持久化，后续不再开）；
             // 明文包的标签不看 `hasSINF`，直接跳过。真正缺 sinf 的包会每次重开 ——
             // 但这类包本就少见（本机 20 条里 2 条），且它们正需要被标出来。
-            if index[i].isEncrypted == true, index[i].hasSINF != true {
+            if index[i].isEncrypted == true,
+               index[i].hasSINF != true || index[i].sinfStructurallyValid == false {
                 let sinf = IPAPackageInspector.extractSINF(ipaPath: path(for: index[i]))
                 index[i].hasSINF = sinf != nil
-                index[i].sinfStructurallyValid = sinf.map {
-                    PackageSINFWriter.isStructurallyValidSinf($0)
+                // 三态：`unrecognized`（格式不认识）→ nil（未校验），不写成 false 冻死成「sinf 异常」
+                index[i].sinfStructurallyValid = sinf.flatMap {
+                    PackageSINFWriter.sinfStructure($0).isValid
                 }
             }
         }
-        saveIndex(index)
+        if load.writable {
+            saveIndex(index)
+        } else {
+            logReadOnly(load.note)
+        }
         return index.sorted { $0.downloadedAt > $1.downloadedAt }
     }
 
@@ -178,7 +249,10 @@ final class IPADownloadLibrary: @unchecked Sendable {
                 storeItemId: String? = nil,
                 sinfBase64: String? = nil) {
         let name = fileURL.lastPathComponent
-        var index = loadIndex()
+        let load = loadIndex()
+        // 台账没完整读出来时**不写盘**：否则会把没读到的条目当成「不存在」而覆盖掉。
+        guard load.writable else { logReadOnly(load.note); notifyWriteRejected(load.userReason); return }
+        var index = load.items
         index.removeAll { $0.fileName == name }
         var item = makeItem(fileName: name)
         item.displayName = displayName
@@ -202,7 +276,7 @@ final class IPADownloadLibrary: @unchecked Sendable {
     /// 用途：`IPADownloadCenter.installLocal` 在安装前把它写回包内 `SC_Info/`，
     /// 让「下载管理 → 重装」也能过 FairPlay 验证（以前必然报「缺少 SC_Info/*.sinf」）。
     func sinf(forFileName fileName: String) -> String? {
-        loadIndex().first { $0.fileName == fileName }?.sinfBase64
+        loadIndex().items.first { $0.fileName == fileName }?.sinfBase64
     }
 
     /// v0.3.568：**sinf 写回包内成功后**，把台账的 `hasSINF` / `sinfStructurallyValid` 定正。
@@ -211,8 +285,13 @@ final class IPADownloadLibrary: @unchecked Sendable {
     /// 所以新下载的加密包一开始必然是 `hasSINF == false`。写完不更新，标签就会一直
     /// 显示「缺 sinf」（本仓实测的假阳性来源）。`items()` 的现算能兜住历史记录，
     /// 这里让**新下载**当场就正确、不必等下一次重算。
-    func markSinf(fileName: String, structurallyValid: Bool) {
-        var index = loadIndex()
+    ///
+    /// v0.3.570：`structurallyValid` 改为 `Bool?` —— 包内 sinf 存在但**格式不认识**时传 `nil`
+    /// （标签落「未校验」），不得把「不知道」写成 `false` 冻死成「sinf 异常」。
+    func markSinf(fileName: String, structurallyValid: Bool?) {
+        let load = loadIndex()
+        guard load.writable else { logReadOnly(load.note); notifyWriteRejected(load.userReason); return }
+        var index = load.items
         guard let i = index.firstIndex(where: { $0.fileName == fileName }) else { return }
         // 幂等：值没变就不写盘
         guard index[i].hasSINF != true || index[i].sinfStructurallyValid != structurallyValid else { return }
@@ -223,7 +302,9 @@ final class IPADownloadLibrary: @unchecked Sendable {
 
     /// 安装成功后打时间戳
     func markInstalled(fileName: String) {
-        var index = loadIndex()
+        let load = loadIndex()
+        guard load.writable else { logReadOnly(load.note); notifyWriteRejected(load.userReason); return }
+        var index = load.items
         guard let i = index.firstIndex(where: { $0.fileName == fileName }) else { return }
         index[i].lastInstalledAt = Date()
         saveIndex(index)
@@ -237,7 +318,9 @@ final class IPADownloadLibrary: @unchecked Sendable {
     /// **这里把结果持久化**，避免每次进页面都重新发一轮 lookup 请求（条目多了会变成请求风暴）。
     func updateIconURL(fileName: String, url: String) {
         guard !url.isEmpty else { return }
-        var index = loadIndex()
+        let load = loadIndex()
+        guard load.writable else { logReadOnly(load.note); notifyWriteRejected(load.userReason); return }
+        var index = load.items
         guard let i = index.firstIndex(where: { $0.fileName == fileName }) else { return }
         guard index[i].iconURL != url else { return }
         index[i].iconURL = url
@@ -251,7 +334,9 @@ final class IPADownloadLibrary: @unchecked Sendable {
     func updateSourceURL(fileName: String, url: String) {
         let link = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !link.isEmpty else { return }
-        var index = loadIndex()
+        let load = loadIndex()
+        guard load.writable else { logReadOnly(load.note); notifyWriteRejected(load.userReason); return }
+        var index = load.items
         guard let i = index.firstIndex(where: { $0.fileName == fileName }) else { return }
         guard index[i].sourceURL != link else { return }
         index[i].sourceURL = link
@@ -260,30 +345,97 @@ final class IPADownloadLibrary: @unchecked Sendable {
 
     // MARK: - 删除
 
-    /// 删除一个下载包（文件 + 索引）
-    func remove(_ item: IPADownloadItem) {
-        try? FileManager.default.removeItem(atPath: path(for: item))
-        var index = loadIndex()
+    /// 删除一个下载包（文件 + 索引）。
+    ///
+    /// v0.3.571（一致性修复）：**先判台账可写，再动文件**。
+    /// 旧实现把 `removeItem` 放在 `guard writable` **之前** —— 台账损坏（只读）时
+    /// **文件已经删掉、台账却没改**：磁盘与台账对不上，用户重进列表看到条目「又回来了」
+    /// （`items()` 从磁盘重建），而包其实已经没了。现在只读时**一个文件都不碰**，
+    /// 并把结果返回给调用方，由它给**真实**反馈（而不是照旧弹「已删除」）。
+    ///
+    /// 返回值 `@discardableResult`：既有调用方（左滑 / 批量 / 取消任务）不关心结果时可忽略。
+    @discardableResult
+    func remove(_ item: IPADownloadItem) -> RemoveResult {
+        let load = loadIndex()
+        guard load.writable else {
+            logReadOnly(load.note)
+            notifyWriteRejected(load.userReason, prefix: "未删除安装包")
+            return .rejectedReadOnly
+        }
+        let filePath = path(for: item)
+        do {
+            try FileManager.default.removeItem(atPath: filePath)
+        } catch {
+            // 文件**本就不存在**（早已删）不算失败；仍存在 = 真删不掉（被占用 / 权限）。
+            // 删不掉时**不动台账**：条目仍原样保留，磁盘与台账继续一致。
+            if FileManager.default.fileExists(atPath: filePath) {
+                LoginLogger.shared.log("[下载库] 安装包删除失败：\(error)（\(item.fileName)）",
+                                       category: .appStore)
+                return .fileRemovalFailed
+            }
+        }
+        var index = load.items
         index.removeAll { $0.fileName == item.fileName }
         saveIndex(index)
+        return .removed
     }
 
-    /// 删除单个包（按文件名）—— 下载中心取消任务时用
-    func remove(fileName: String) {
-        try? FileManager.default.removeItem(at: directory.appendingPathComponent(fileName))
-        var index = loadIndex()
+    /// 删除单个包（按文件名）—— 下载中心取消任务时用。
+    /// 顺序与返回值语义同 `remove(_:)`：只读时**不删文件**、返回 `.rejectedReadOnly`。
+    @discardableResult
+    func remove(fileName: String) -> RemoveResult {
+        let load = loadIndex()
+        guard load.writable else {
+            logReadOnly(load.note)
+            notifyWriteRejected(load.userReason, prefix: "未删除安装包")
+            return .rejectedReadOnly
+        }
+        let filePath = directory.appendingPathComponent(fileName)
+        do {
+            try FileManager.default.removeItem(at: filePath)
+        } catch {
+            if FileManager.default.fileExists(atPath: filePath.path) {
+                LoginLogger.shared.log("[下载库] 安装包删除失败：\(error)（\(fileName)）",
+                                       category: .appStore)
+                return .fileRemovalFailed
+            }
+        }
+        var index = load.items
         index.removeAll { $0.fileName == fileName }
         saveIndex(index)
+        return .removed
     }
 
-    /// 批量删除（配合列表编辑模式）
-    func remove(fileNames: Set<String>) {
-        for name in fileNames {
-            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+    /// 批量删除（配合列表编辑模式）。
+    /// 顺序与返回值语义同 `remove(_:)`：只读时**整批都不删**、返回 `.rejectedReadOnly`。
+    /// 可写但个别文件删不掉时，**只把删成功的从台账剔除**（删不掉的留在台账里，保持一致）。
+    @discardableResult
+    func remove(fileNames: Set<String>) -> RemoveResult {
+        guard !fileNames.isEmpty else { return .removed }
+        let load = loadIndex()
+        guard load.writable else {
+            logReadOnly(load.note)
+            notifyWriteRejected(load.userReason, prefix: "未删除安装包")
+            return .rejectedReadOnly
         }
-        var index = loadIndex()
-        index.removeAll { fileNames.contains($0.fileName) }
+        var index = load.items
+        var anyFailed = false
+        for name in fileNames {
+            let filePath = directory.appendingPathComponent(name)
+            do {
+                try FileManager.default.removeItem(at: filePath)
+            } catch {
+                if FileManager.default.fileExists(atPath: filePath.path) {
+                    LoginLogger.shared.log("[下载库] 安装包删除失败：\(error)（\(name)）",
+                                           category: .appStore)
+                    anyFailed = true
+                    continue
+                }
+            }
+            index.removeAll { $0.fileName == name }
+        }
         saveIndex(index)
+        return anyFailed ? .fileRemovalFailed : .removed
     }
 
     // MARK: - 内部
@@ -320,26 +472,94 @@ final class IPADownloadLibrary: @unchecked Sendable {
                                packageName: ins?.displayName,
                                isEncrypted: ins?.isEncrypted,
                                hasSINF: sinf != nil,
-                               sinfStructurallyValid: sinf.map {
-                                   PackageSINFWriter.isStructurallyValidSinf($0)
+                               // 三态：格式不认识 → nil（未校验），不当成「坏」
+                               sinfStructurallyValid: sinf.flatMap {
+                                   PackageSINFWriter.sinfStructure($0).isValid
                                },
                                lastInstalledAt: nil)
     }
 
-    private func loadIndex() -> [IPADownloadItem] {
-        guard let data = try? Data(contentsOf: indexURL) else { return [] }
+    /// 台账读取结果。
+    ///
+    /// `writable == false` = **这一次没能完整读出台账**（文件读不出 / JSON 坏 / 有记录解不出）。
+    /// 调用方**必须只读、绝不回写**：否则会把没读到的条目当成「不存在」而覆盖掉
+    /// ——这正是本项目反复踩过的「没能观察到 ≠ 确定没有」。
+    private struct IndexLoad {
+        let items: [IPADownloadItem]
+        let writable: Bool
+        let note: String?
+        /// 面向用户的简短原因（写被拒时弹给用户看）；`writable == true` 时为 nil。
+        ///
+        /// 与 `note` 分开：`note` 是给日志的**技术细节**（文件被占用 / 第几条解不出），
+        /// `userReason` 是给界面的一句话（用户不需要知道 JSONSerialization 是什么）。
+        let userReason: String?
+    }
+
+    private func loadIndex() -> IndexLoad {
+        // 文件确实不存在 = 合法空台账（首次运行 / 从没下载过），可以写。
+        guard FileManager.default.fileExists(atPath: indexURL.path) else {
+            return IndexLoad(items: [], writable: true, note: nil, userReason: nil)
+        }
+        guard let data = try? Data(contentsOf: indexURL) else {
+            return IndexLoad(items: [], writable: false,
+                             note: "台账文件存在但读取失败（被占用 / 磁盘错误），本次按只读处理，不回写",
+                             userReason: "下载台账无法读取")
+        }
         let dec = JSONDecoder()
         // 与 saveIndex 的 .iso8601 必须成对，否则解码日期失败整份台账读不出来
         dec.dateDecodingStrategy = .iso8601
-        guard let list = try? dec.decode([IPADownloadItem].self, from: data) else { return [] }
-        return list
+
+        // 1) 快路径：整份解得出
+        if let list = try? dec.decode([IPADownloadItem].self, from: data) {
+            return IndexLoad(items: list, writable: true, note: nil, userReason: nil)
+        }
+
+        // 2) 整份解失败 → **逐条**解，能救多少救多少。
+        //    单条坏记录（例如一个非法 ISO8601 的 downloadedAt）不再拖垮整份台账。
+        guard let raw = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            return IndexLoad(items: [], writable: false,
+                             note: "台账 JSON 解析失败（文件损坏），本次按只读处理，不回写",
+                             userReason: "下载台账文件损坏")
+        }
+        var salvaged: [IPADownloadItem] = []
+        for element in raw {
+            guard let d = try? JSONSerialization.data(withJSONObject: element),
+                  let item = try? dec.decode(IPADownloadItem.self, from: d) else { continue }
+            salvaged.append(item)
+        }
+        guard !salvaged.isEmpty else {
+            return IndexLoad(items: [], writable: false,
+                             note: "台账 \(raw.count) 条记录全部无法解析，本次按只读处理，不回写",
+                             userReason: "下载台账文件损坏")
+        }
+        // 有救回来的条目，但仍**不写盘**：写回会把解不出的那几条永久抹掉。
+        return IndexLoad(items: salvaged, writable: false,
+                         note: "台账 \(raw.count) 条里有 \(raw.count - salvaged.count) 条无法解析，"
+                             + "本次按只读处理，不回写（原文件保留）",
+                         userReason: "下载台账文件损坏")
     }
 
     private func saveIndex(_ list: [IPADownloadItem]) {
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
-        guard let data = try? enc.encode(list) else { return }
-        try? data.write(to: indexURL, options: .atomic)
+        guard let data = try? enc.encode(list) else {
+            LoginLogger.shared.log("[下载库] 台账编码失败，未写盘（\(list.count) 条）", category: .appStore)
+            return
+        }
+        do {
+            try data.write(to: indexURL, options: .atomic)
+        } catch {
+            // 写失败**不能静默**：调用方（record / markSinf / markInstalled…）都以为已持久化，
+            // 用户以为「重装不用重下」可用，实际台账没写。
+            LoginLogger.shared.log("[下载库] 台账写盘失败：\(error)（\(list.count) 条未持久化）",
+                                   category: .appStore)
+        }
+    }
+
+    /// 台账没完整读出来时的统一日志（说明本次为何只读、不回写）。
+    private func logReadOnly(_ note: String?) {
+        guard let note else { return }
+        LoginLogger.shared.log("[下载库] \(note)", category: .appStore)
     }
 
     /// 字节数 → 可读文本

@@ -108,7 +108,7 @@ struct BackupsListView: View {
 
     private var mainContent: some View {
         List {
-            if vm.isLoading && vm.records.isEmpty {
+            if vm.isLoading && vm.isEmpty {
                 Section {
                     InfoActionCard(
                         icon: "externaldrive.fill.badge.timemachine",
@@ -116,7 +116,7 @@ struct BackupsListView: View {
                         message: "读取 EscapeSpace/Backups 目录中的备份归档."
                     )
                 }
-            } else if let error = vm.errorMessage, vm.records.isEmpty {
+            } else if let error = vm.errorMessage, vm.isEmpty {
                 Section {
                     InfoActionCard(
                         icon: "info.circle",
@@ -127,7 +127,7 @@ struct BackupsListView: View {
                         action: { vm.reload() }
                     )
                 }
-            } else if vm.records.isEmpty {
+            } else if vm.isEmpty {
                 Section {
                     InfoActionCard(
                         icon: "tray.full",
@@ -137,6 +137,7 @@ struct BackupsListView: View {
                 }
             } else {
                 recordsSection
+                unreadableSection
             }
         }
         .listStyle(.insetGrouped)
@@ -185,6 +186,25 @@ struct BackupsListView: View {
         }
         .onDelete { offsets in
             vm.delete(at: offsets)
+        }
+    }
+
+    /// 读取失败的归档：**仍然列出**（标为「无法读取」），而不是从列表里消失。
+    @ViewBuilder
+    private var unreadableSection: some View {
+        if !vm.unreadable.isEmpty {
+            Section(header: Text("无法读取 (\(vm.unreadable.count))")) {
+                ForEach(vm.unreadable) { item in
+                    UnreadableBackupRow(item: item)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) {
+                                vm.deleteUnreadable(item)
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
+                }
+            }
         }
     }
 
@@ -302,6 +322,34 @@ private struct BackupRow: View {
             }
         }
         .padding(.vertical, 6)
+    }
+}
+
+/// 读取失败的备份归档行：明确标为「无法读取（原因）」，让用户能区分
+/// 「真的没有备份」与「有备份但读不出」。
+private struct UnreadableBackupRow: View {
+    let item: UnreadableBackupRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text(item.archiveFileName)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Label("无法读取：\(item.reason)", systemImage: "xmark.octagon.fill")
+                .font(.footnote)
+                .foregroundColor(.orange)
+            if let modified = item.modified {
+                Text(BackupPaths.displayStamp.string(from: modified))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -754,6 +802,8 @@ struct IdentifiedAlert: Identifiable {
 @MainActor
 final class BackupsListViewModel: ObservableObject {
     @Published var records: [BackupRecord] = []
+    /// 读取失败的归档（仍会列出，标为「无法读取」）。
+    @Published var unreadable: [UnreadableBackupRecord] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var activeRestore: RestoreSession?
@@ -762,23 +812,34 @@ final class BackupsListViewModel: ObservableObject {
     private let catalog = BackupCatalog()
     private let restoreService = RestoreService()
 
+    /// 一个备份都没有 —— 可读的与读失败的都没有。
+    var isEmpty: Bool { records.isEmpty && unreadable.isEmpty }
+
     func reload() {
         isLoading = true
         errorMessage = nil
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let found = try self.catalog.loadRecords()
+                let listing = try self.catalog.loadRecords()
                 DispatchQueue.main.async {
-                    self.records = found
+                    self.records = listing.records
+                    self.unreadable = listing.unreadable
                     self.isLoading = false
                 }
             } catch {
+                // 目录整体列举失败：**明确报错**，绝不回空列表（回空 = 假空）。
                 DispatchQueue.main.async {
                     self.errorMessage = error.localizedDescription
                     self.isLoading = false
                 }
             }
         }
+    }
+
+    /// 删除一个读取失败的归档（用户确认这是垃圾/损坏文件时）。
+    func deleteUnreadable(_ item: UnreadableBackupRecord) {
+        try? FileManager.default.removeItem(at: item.archiveURL)
+        unreadable.removeAll { $0.id == item.id }
     }
 
     func eligibility(for record: BackupRecord, apps: [InstalledApp]) -> RestoreEligibility {

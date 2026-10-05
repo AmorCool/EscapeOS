@@ -12,7 +12,9 @@ struct NotificationEntry: Identifiable, Codable {
 
 struct NotificationManageView: View {
     @State private var nsCurrentDict = NSMutableDictionary()
-    @State private var catalog: [NotificationEntry] = UserDefaults.standard.esc_notificationApps
+    @State private var catalog: [NotificationEntry]
+    /// 目录是否完整读出（`false` = 读不全，本次会话**拒绝回写**，防止把真台账覆盖成空）。
+    @State private var catalogWritable: Bool
 
     @State private var newName = ""
     @State private var newBID = ""
@@ -27,6 +29,13 @@ struct NotificationManageView: View {
     @State private var safariTarget: SafariTarget?
     @State private var errorMessage = ""
     @State private var showError = false
+
+    init() {
+        // 读取「通知管理 App」目录，并记下它是否完整读出（读不全则本会话只读、不回写）。
+        let load = UserDefaults.standard.loadEscNotificationApps()
+        _catalog = State(initialValue: load.items)
+        _catalogWritable = State(initialValue: load.writable)
+    }
 
     var body: some View {
         List {
@@ -290,7 +299,14 @@ struct NotificationManageView: View {
     }
 
     private func persistCatalog() {
-        UserDefaults.standard.esc_notificationApps = catalog
+        // 目录没完整读出来时**不写盘**：否则会把没读到的登记项当成「不存在」而覆盖掉
+        // （读失败 ⇒ 空数组 ⇒ 界面显示「没有」⇒ 一保存就把真台账清空）。
+        guard catalogWritable else {
+            LoginLogger.shared.log("[监督模式] 通知管理目录读取不完整，本次改动未保存（原值保留）",
+                                   category: .general)
+            return
+        }
+        UserDefaults.standard.saveEscNotificationApps(catalog)
     }
 
     private func exportProfile() {

@@ -141,19 +141,34 @@ struct AppDetailView: View {
                 header: Text(appBackups.records.isEmpty ? "备份" : "备份 (\(appBackups.records.count))"),
                 footer: Text("恢复操作将写入该应用当前容器.请先关闭应用.")
             ) {
-                if appBackups.isLoading && appBackups.records.isEmpty {
+                if appBackups.isLoading && appBackups.records.isEmpty && appBackups.errorMessage == nil {
                     HStack {
                         ProgressView()
                         Text("正在加载备份…").foregroundColor(.secondary)
                     }
+                } else if let error = appBackups.errorMessage {
+                    // 列举失败**明确报错**，不落成空数组（回空 = 假空，用户会以为备份丢了）。
+                    Label("无法读取备份列表：\(error)", systemImage: "xmark.octagon.fill")
+                        .font(.footnote)
+                        .foregroundColor(.red)
                 } else if appBackups.records.isEmpty {
-                    Text("暂无 \(app.name) 的备份.")
-                        .foregroundColor(.secondary)
+                    if appBackups.unreadableCount > 0 {
+                        Text("暂无 \(app.name) 的备份。另有 \(appBackups.unreadableCount) 个归档无法读取（无法判断所属应用）。")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("暂无 \(app.name) 的备份.")
+                            .foregroundColor(.secondary)
+                    }
                 } else {
                     ForEach(appBackups.records) { record in
                         AppBackupRow(record: record) {
                             beginRestore(record)
                         }
+                    }
+                    if appBackups.unreadableCount > 0 {
+                        Label("另有 \(appBackups.unreadableCount) 个归档无法读取", systemImage: "exclamationmark.triangle")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
                     }
                 }
             }
@@ -356,17 +371,30 @@ private struct AppBackupRow: View {
 @MainActor
 final class AppBackupsModel: ObservableObject {
     @Published var records: [BackupRecord] = []
+    /// 全局读取失败的归档数（无法判断是否属于本应用，仅作提示）。
+    @Published var unreadableCount = 0
     @Published var isLoading = false
+    /// 列举失败原因（`nil` = 成功）。**不得**把失败落成空数组 —— 回空 = 假空。
+    @Published var errorMessage: String?
 
     private let catalog = BackupCatalog()
 
     func reload(bundleIdentifier: String) {
         isLoading = true
+        errorMessage = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let found = (try? self.catalog.loadRecords(forBundleIdentifier: bundleIdentifier)) ?? []
-            DispatchQueue.main.async {
-                self.records = found
-                self.isLoading = false
+            do {
+                let listing = try self.catalog.loadRecords(forBundleIdentifier: bundleIdentifier)
+                DispatchQueue.main.async {
+                    self.records = listing.records
+                    self.unreadableCount = listing.unreadable.count
+                    self.isLoading = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = error.localizedDescription
+                    self.isLoading = false
+                }
             }
         }
     }

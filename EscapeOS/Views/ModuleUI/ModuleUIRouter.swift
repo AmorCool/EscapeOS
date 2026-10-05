@@ -16,6 +16,12 @@ import Combine
 extension Notification.Name {
     /// 二级界面点「主页」时发；RootView 收到后切到主页 tab
     static let escSelectHomeTab = Notification.Name("esc.selectHomeTab")
+
+    /// `PendingImportHandoff.post(_:)` 写入挂起记录后广播（裸通知，**不带 payload**）。
+    /// `ImportView` 收到后去消费挂起值。载荷只走挂起值这**一个真相源**，通知只作唤醒信号：
+    /// 覆盖「页面已挂载、AirDrop 回前台把 App 带回」时 `scenePhase` 早于 `post` 触发、
+    /// 之后再无触发点的那条路径（见 `PendingImportHandoff` 顶部注释）。
+    static let escPendingImportHandoff = Notification.Name("esc.pendingImportHandoff")
 }
 
 /// 模块原生二级界面的展示状态（单例，全局只有一个二级界面）.

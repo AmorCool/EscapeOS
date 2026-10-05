@@ -208,10 +208,17 @@ enum OnlineInstallService {
             LoginLogger.shared.log("[在线安装] 包信息：\(where_)（\(sizeText)）· \(inspection.summary)",
                                    category: logCategory)
 
-            if inspection.isEncrypted {
+            switch inspection.encryption {
+            case .encrypted:
                 // 只记录、不拦截：OTA 通道本身不检查 FairPlay；能否安装取决于签名有效性与许可。
                 LoginLogger.shared.log("[在线安装] 包信息：FairPlay 加密（cryptid=\(inspection.cryptid)），不拦截",
                                        category: logCategory)
+            case .unknown:
+                // 读不出加密状态**不等于**未加密 —— 只记事实，不下「明文」结论。
+                LoginLogger.shared.log("[在线安装] 包信息：加密状态未知（主二进制读不出），不拦截",
+                                       category: logCategory)
+            case .plaintext:
+                break
             }
         } else if ipaPath != nil {
             LoginLogger.shared.log("[在线安装] ⚠ 未能解析包内 Info.plist，将用台账里的 bundleId 兜底",

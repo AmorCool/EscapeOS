@@ -70,6 +70,22 @@ public enum SignatureInjector {
         sinfs: [Sinf],
         bundleName: String
     ) throws {
+        // ⚠️ 这里**有意不做**路径校验（不判 `..`/绝对路径/封存路径），不是遗漏 —— 说明如下，
+        // 以免后来者按「Engine 侧有校验、这里没有」误判为漏洞：
+        //
+        // · 本方法只走 **AppleID 正版下载通道**（唯一调用点：
+        //   `AppStoreLocalInstallService.downloadAndInstall`）。它读的 `Manifest.plist` 来自
+        //   **刚从 Apple CDN 下载的那个 IPA 自带**，不是用户/第三方可提供的输入。
+        // · 「下载地址必须落在 Apple 自有域」这条前提由上游**强制**（v0.3.571：
+        //   `AppStoreInstallService.downloadIPA(hostPolicy:)` 对初始 URL 与每次重定向都查
+        //   `StoreAuthenticationProtocol.isAppleHost`）。该前提一旦不成立，本方法的输入就不可信。
+        // · 真正处理**不可信输入**（用户导入 / 免登录源包）的是 Engine 侧
+        //   `IPADownloadCenter.collectSinfTargets`，那里有完整的 ZIP-slip 校验 + 封存三判据 + 写后复读。
+        // · 另注：`archive[fullPath] != nil` 的存在性检查顺带挡住了「覆盖已存在条目」
+        //   （例如 `SC_Info/Manifest.plist`）；但它**看不到本轮已追加的条目**，故不防重名。
+        //
+        // ⇒ 若将来出现「把非 Apple 来源的 IPA 送进本方法」的新入口，**必须先补路径校验**，
+        //    否则此处会成为无校验的写入原语。
         for (index, sinfPath) in manifest.sinfPaths.enumerated() {
             guard index < sinfs.count else { continue }
             let sinf = sinfs[index]

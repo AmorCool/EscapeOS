@@ -859,9 +859,10 @@ final class IPADownloadCenter: ObservableObject {
     /// 让它留在调用方（detached 后台任务）的线程上，只有写台账那一步回主 actor。
     nonisolated private static func syncLedgerSinf(fileName: String, ipaPath: String) async {
         guard let sinf = IPAPackageInspector.extractSINF(ipaPath: ipaPath) else { return }
-        let valid = PackageSINFWriter.isStructurallyValidSinf(sinf)
+        // 三态：`unrecognized`（格式不认识）→ nil（未知），不写成 false 冻死成「sinf 异常」
+        let structure = PackageSINFWriter.sinfStructure(sinf).isValid
         await MainActor.run {
-            IPADownloadLibrary.shared.markSinf(fileName: fileName, structurallyValid: valid)
+            IPADownloadLibrary.shared.markSinf(fileName: fileName, structurallyValid: structure)
         }
     }
 }
@@ -921,7 +922,7 @@ final class IPADownloadCenter: ObservableObject {
 /// 2. 新条目属性是自己拼的（`version made by = 20`、无 extra），
 ///    与苹果自己的条目（`0x314` = Unix + 2.0，带 extra）不同源。
 ///
-/// 现在改为 `ApplePackageArchive.replaceEntry(with:data:)`：逐条复制成一份新包，
+/// 现在改为「整包重写」（`ApplePackageArchive.replaceEntries`）：逐条复制成一份新包，
 /// 被替换的那条写新内容。产物与「苹果自己压的包」同构，无孤儿字节、无属性差异。
 ///
 /// 每次写包的每一步（成功 / 跳过 / 失败原因）都写 `[下载中心]` 日志 —— 不许静默。
@@ -958,10 +959,19 @@ enum PackageSINFWriter {
             return
         }
 
-        // 3) 只有加密包需要 sinf
-        guard IPAPackageInspector.isFairPlayEncrypted(ipaPath: ipaPath) == true else {
-            log("包未加密（cryptid=0），不需要 sinf，跳过")
+        // 3) 只有加密包需要 sinf。**读不出加密状态 ≠ 未加密** ——
+        //    `isFairPlayEncrypted` 返回 nil（包读不出 / 主二进制读不出）时，
+        //    旧代码用 `== true` 判定，把「没能观察」当成了「确定未加密」并跳过写 sinf，
+        //    日志还谎称「包未加密（cryptid=0）」。现在三态显式处理：
+        //    只有**明确读到 cryptid=0** 才跳过；未知一律按「不排除加密」继续尝试写入。
+        switch IPAPackageInspector.inspect(ipaPath: ipaPath)?.encryption {
+        case .plaintext:
+            log("包是明文（明确读到 cryptid=0），不需要 sinf，跳过")
             return
+        case .encrypted:
+            break
+        case .unknown, .none:
+            log("无法判定包是否加密（主二进制读不出）—— 不按「未加密」跳过，继续尝试写入 sinf")
         }
 
         do {
@@ -975,12 +985,19 @@ enum PackageSINFWriter {
 
     /// **把同一份 sinf 写进包内全部 `SC_Info/*.sinf` 路径**（v0.3.568：主包单路径 → 全部路径）。
     ///
-    /// ## 为什么必须全铺
+    /// ## 为什么全铺（前提已按实测收窄）
     ///
-    /// Apple CDN 的包对 `SC_Info` 是「每个二进制一套」（主包 + 每个 framework + 每个 appex），
-    /// 而同一 IPA 内所有 sinf **逐字节相同**（一份会话 sinf 被复制到各路径）。
-    /// 旧实现只写主包一条，framework / appex 仍是包内另一份 → 若两份不一致则 `dlopen` 时
-    /// 解密失败 → 崩。这是**既有缺陷**，同时影响 NB 下载路径与共享修补路径。
+    /// Apple CDN 的包对 `SC_Info` 是「每个二进制一套」（主包 + 每个 framework + 每个 appex）。
+    /// **部分包**（如 XNZS）内多份 sinf 逐字节相同（一份会话 sinf 被复制到各路径）；
+    /// 但**真实 App Store 包可以只有 1 份**——实测 Loon（`Loon_3.3.0_NBTool.ipa`，2026-10-05）：
+    /// `Manifest.plist` 的 `SinfReplicationPaths` 列 22 条，包内实际只有 `SC_Info/Loon.sinf` 1 份。
+    /// ⇒ 不能假定「一定有多份」。
+    ///
+    /// 旧实现只写主包一条：在**包内确实有多份 sinf 的包**上会漏掉 framework / appex 那份，
+    /// 若两份不一致则 `dlopen` 时解密失败 → 崩；但在**包内仅 1 份的真实包**上，
+    /// 「只写主包」与 Apple 发布内容一致，**不构成漏注**。
+    /// 「全铺」的收益**未在真实多份包上验证**，且会**追加 Apple 未发布的条目**（Loon 情形下多出 21 条），
+    /// 其安全性**待复核**。【实测 + 未证实】
     ///
     /// ## 目标路径来源（按优先级）
     ///
@@ -992,7 +1009,7 @@ enum PackageSINFWriter {
     ///
     /// ## 写入方式
     ///
-    /// 一次整包重写批量替换（`ApplePackageArchive.replaceEntries`）—— `replaceEntry`
+    /// 一次整包重写批量替换（`ApplePackageArchive.replaceEntries`）—— 逐条替换
     /// 一次只能安全换一条，逐条各开一次 = N 次整包重写，性能不可接受。
     /// 写后**逐条复读**长度与内容（须重开新实例，原实例偏移已失效）；不一致则抛错，**不静默**。
     ///
@@ -1019,9 +1036,10 @@ enum PackageSINFWriter {
         }
 
         let mainPath = "\(appPrefix).app/SC_Info/\(exe).sinf"
-        // `collectSinfTargets` **始终**并入 `mainPath`（见其步骤 3）⇒ 返回集至少 1 条、绝不为空。
-        // 即便包里连主路径那条都不存在，`replaceEntries` 也会**追加**它（不是跳过）——
-        // 所以「收集不到」不会导致「静默不写」；本 guard 只是防御性断言。
+        // `collectSinfTargets` 会并入 `mainPath`（见其步骤 3），但**出口做签名封存过滤**
+        // （步骤 4）—— 若主路径的兄弟二进制不存在（畸形包），它同样会被丢弃 ⇒ 返回集**可能为空**。
+        // 故本 guard 不再是「防御性断言」而是**硬约束**：畸形包宁可拒写（fail closed），
+        // 也不写出会落进 `^.*` 兜底规则、破坏代码签名的条目。
         let targets = collectSinfTargets(archive: archive, appPrefix: appPrefix, mainPath: mainPath)
         guard !targets.isEmpty else { throw SinfInjectError.noTargets }
 
@@ -1040,7 +1058,12 @@ enum PackageSINFWriter {
         return written
     }
 
-    /// 收集「要铺 sinf 的全部路径」（相对 IPA 根）。优先级见 `injectAllPaths`。
+    /// 收集「要写 sinf 的全部路径」（相对 IPA 根）。优先级见 `injectAllPaths`。
+    ///
+    /// **注意**：`SinfReplicationPaths` 是**声明清单**，不等于包内实际存在的条目
+    /// （实测 Loon：声明 22 条、包内仅 1 条）。**声明的用途是「告诉系统安装期把主包那份
+    /// sinf 复制到哪些路径」，不是「包里必须预先存在这些文件」** —— 所以本函数**只替换
+    /// 包内已存在的条目**，不按声明追加（见出口判据 4；主路径例外）。
     private static func collectSinfTargets(archive: ApplePackageArchive,
                                            appPrefix: String,
                                            mainPath: String) -> [String] {
@@ -1064,23 +1087,123 @@ enum PackageSINFWriter {
             }
         }
 
-        // 2) 兜底：扫描包内**所有** `.sinf`（忽略大小写，且**不要求**在 `/SC_Info/` 目录下）
+        // 2) 兜底：扫描包内**所有** `Payload/…/SC_Info/*.sinf`
         //
-        // 为什么放宽（独立验证实测）：原来写 `contains("/SC_Info/") && hasSuffix(".sinf")`，
-        // 大小写敏感 + 依赖目录名 ⇒ `.SINF` / `sc_info` / **不在 SC_Info/ 下的 .sinf 全漏**。
-        // 漏一条的后果是那条不被替换 ⇒ 换机后加载到旧 sinf 而崩。**宁可多收，不可漏收。**
-        // 注：与上面 Manifest 那步是**并集**（不是「优先级回退」）——
+        // 收集条件与出口判据 `isSealingSafe`（判据 1-2）**严格对齐**：父目录名必须**恰好**
+        // 是 `SC_Info`、文件名必须以**小写** `.sinf` 结尾。
+        //
+        // 为什么不「放宽」：本步历史上曾放宽为「忽略大小写 + 不要求位于 `SC_Info/` 目录」，
+        // 但下游 `isSealingSafe` 又把父目录不是 `SC_Info` / 后缀不是小写 `.sinf` 的条目
+        // **全部丢弃** ⇒ 那段放宽**从不产生任何存活目标**（死代码），其注释还会误导读者以为
+        // 「非 `SC_Info` 下的 `.sinf` 也会被替换」。故收紧到与判据一致：少一次无效遍历，
+        // 也不再暗示存在这样一条路径。
+        //   · `.sinf` 大小写敏感：`.SINF`/`.Sinf` 不受 `CodeResources` 的 omit 规则覆盖
+        //     （见判据 2 注释），收进来也必被丢弃，故此处同样只收小写。
+        //   · `payload/` 前缀仍忽略大小写：`isSealingSafe` **不**校验前缀，真实条目名若为
+        //     小写 `payload/…` 仍应被替换，故此处保持原判定不变。
+        // 本步只收**包内已存在**的条目（遍历 `archive.entries`），因此不会引入新条目；
+        // 与出口判据 4 一致。注：与上面 Manifest 那步是**并集**（不是「优先级回退」）——
         //     「只要发现多于一条 SC_Info/*.sinf 就必须全部替换」。
         for e in archive.entries {
-            let lower = e.path.lowercased()
-            if lower.hasPrefix("payload/") && lower.hasSuffix(".sinf") {
-                add(e.path)
-            }
+            let comps = e.path.split(separator: "/", omittingEmptySubsequences: false)
+            guard comps.count >= 2,
+                  comps[comps.count - 2] == "SC_Info",
+                  comps[comps.count - 1].hasSuffix(".sinf"),
+                  e.path.lowercased().hasPrefix("payload/") else { continue }
+            add(e.path)
         }
 
         // 3) 始终并入主路径
         add(mainPath)
-        return paths
+
+        // 4) **签名封存过滤（判据 1-3，2026-10-05 加固）**：只保留满足三条判据的候选目标。
+        //
+        // ## 为什么必须过滤
+        // 候选目标来自**不可信**的包内容（Manifest 的 `SinfReplicationPaths`/`SinfPaths`、
+        // 中央目录条目名、`CFBundleExecutable`）。而 `_CodeSignature/CodeResources` 用
+        // 「逐二进制一条 omit 规则 + `^.* = True` 兜底」决定封存：
+        //   · omit 正则形如 `SC_Info/<该二进制名>\.(sinf|supp|supf|supx)$`，其中
+        //     **`(sinf|supp|supf|supx)` 全小写、整个正则大小写敏感**（实测：`SC_Info/Loon.SINF`
+        //     不命中 `SC_Info/Loon\.(sinf|supp|supf|supx)$`）；
+        //   · 任何不匹配更具体规则的文件，都被 `^.* = True` **封存**（Loon 实测：`files2`
+        //     里的 `hash`/`hash2` 就是文件内容哈希，改动即失配）。
+        // ⇒ 只要写出一个「目录不是 `SC_Info` / 后缀不是小写 `.sinf` / 名字不是任何真实二进制名」
+        //    的条目，它就会落进兜底规则：覆盖已封存文件 = 封存失配；新增 = 包内出现未封存内容。
+        //    两者都会**破坏代码签名**。过滤即把这类目标挡在写入之前（fail closed，不静默）。
+        //
+        // ## ⚠️ 本判据是「近似」，**不是** `CodeResources` omit 规则的实现
+        // 上面三条判据（父目录 `SC_Info` / 小写 `.sinf` / 兄弟二进制存在）**只是**对
+        // `CodeResources` omit 规则的**结构近似** —— 本函数**从不读** `_CodeSignature/CodeResources`，
+        // 更不解析其 omit 正则。为什么这样是安全的（而非偷懒）：
+        //   · **Apple 原生加密包**：`cryptid=1` 由 FairPlay 打包产生，而 `SC_Info/*.sinf`
+        //     正是**同一步**在资源封存之后注入 ⇒ `CodeResources` **必然**带 SC_Info omit 规则。
+        //     此时近似判据与真实 omit 规则**必然等价**（`verify-omit-reachability` 实测：
+        //     45 个 `cryptid=1` 包中 24 个带 `CodeResources`，**24/24 全含 omit 规则**）。
+        //   · **无 `CodeResources` 的包**（NB 源 / 重签派生物 / `_work_*`）：签名已被上游剥离
+        //     ⇒ **无封存**，写 sinf 本来就安全，近似判据**恰好正确**（实测：21 个 `cryptid=1`
+        //     包根本没有 `CodeResources`）。
+        //   · **唯一反例 `Syllabic`**（`CodeResources` 存在但无 omit 规则、31 份 sinf 全被封存）
+        //     是 **`cryptid=0`** 的**解密后重签**包（解密 ⇒ cryptid=0，与「有无 omit 规则」
+        //     **反相关**）⇒ `RepairService` 判明文包、**跳过注入**，本判据根本不会执行。
+        // ⇒ **不要**为了「更严谨」改成真读 `CodeResources`：那会让上述 21 个无 `CodeResources`
+        //    的包**全部无法修补**（净损失），而收益为 0（可达性交集为空）。
+        //
+        // 说明：本过滤与 `validateSinfTarget`（ZIP-slip 防线）**互补、不合并** ——
+        // 后者防「条目名越界（`..`/绝对路径）」，本条防「落进签名封印规则」，两件事不同。
+        func isSealingSafe(_ path: String) -> Bool {
+            // 按 `/` 手工切分（不用 NSString 路径 API，避免其规范化改变语义）。
+            let comps = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+            guard comps.count >= 2 else { return false }
+            let fileName = comps[comps.count - 1]
+            // 判据 1：父目录名必须**恰好**是 `SC_Info`（大小写敏感；`sc_info` 不受 omit 覆盖）。
+            guard comps[comps.count - 2] == "SC_Info" else { return false }
+            // 判据 2：必须以**小写** `.sinf` 结尾（`.SINF`/`.Sinf` 都不受 omit 覆盖）。
+            guard fileName.hasSuffix(".sinf") else { return false }
+            let stem = String(fileName.dropLast(".sinf".count))
+            guard !stem.isEmpty else { return false }
+            // 判据 3：兄弟二进制必须存在 —— `<dir>/SC_Info/<stem>.sinf` ⇒ 归档里要有 `<dir>/<stem>`。
+            // omit 规则的 `<该二进制名>` 恒等于真实二进制文件名，故此判据一次挡掉
+            // 「目录对但名字错」（如 `SC_Info/evil.sinf`：没有名为 `evil` 的兄弟二进制）。
+            let sibling = comps.dropLast(2).joined(separator: "/") + "/" + stem
+            return archive[sibling] != nil
+        }
+
+        // 可观测性（**只记录、不阻断、不改变行为**）：本判据从不核对真实 omit 规则，
+        // 一旦包内缺 `CodeResources`（或读不出），「近似 vs 真实」的差异就**不可交叉验证**。
+        // 此处记一行（**一次修补仅一行**，不刷屏），使将来包形态变化时能被发现。
+        let codeResourcesPath = "\(appPrefix).app/_CodeSignature/CodeResources"
+        var canCrossCheckOmitRules = false
+        if let crEntry = archive[codeResourcesPath] {
+            canCrossCheckOmitRules = (try? archive.extract(crEntry) { _ in }) != nil
+        }
+        if !canCrossCheckOmitRules {
+            log("包内无 _CodeSignature/CodeResources（或读不出），无法核对 omit 规则，按结构近似放行")
+        }
+
+        // 5) **存在性过滤（判据 4，2026-10-05 加固）**：只写「包内本来就有的」目标 + 主路径例外。
+        //
+        // ## 为什么还需要这一条（判据 1-3 不够）
+        // 判据 1-3 只保证「**写的地方**签名安全」，但它**不阻止往包里塞 Apple 从没发过的条目**。
+        // `SinfReplicationPaths` 是「给系统的**安装期复制指令**」，**不是包内必须存在的文件清单**
+        // （实测 Loon：声明 22 条、包内实际只有 1 份 `SC_Info/Loon.sinf`）。旧行为按声明全铺
+        // ⇒ 会**追加 21 条 Apple 未发布的条目**，把包改成非原生形态（且对「只发 1 份」的真实包
+        // 没有已知收益）。本条只保留**包内已存在**的目标，从根上避免「凭空新增」。
+        //   · 真实 Loon ⇒ 21 条 framework/appex 目标包内不存在 ⇒ 全部丢弃，只剩 1 条主路径；
+        //   · `nb.ipa`（41 份 sinf 全部存在）⇒ 41 条全部保留，**「替换已存在」语义不变**。
+        //
+        // ## 主路径例外（豁免「存在性」，**不**豁免签名封存）
+        // `mainPath`（`SC_Info/<CFBundleExecutable>.sinf`）**在通过 `isSealingSafe` 之后**，
+        // **不再要求它已存在于包内**（即豁免判据 4 的「存在性」）：它是本功能的根本目的
+        // —— NB 源下发的 sinf 在包内**常常缺失**，必须由我们写进去（旧日志里的「缺少
+        // SC_Info/*.sinf」正是这一情形），不能因为「包内没有」就丢弃。
+        // **注意：这不是「无条件保留」。** `mainPath` 仍须通过上面的 `isSealingSafe`（判据 1-3）
+        // 才可能进入 `sealingSafe`，本行只豁免判据 4。对抗审计实测：恶意 `CFBundleExecutable`
+        // （如 `../../evil`、`a/b`）构造出的 `mainPath` 会因父目录不是 `SC_Info`
+        // （`comps[-2] != "SC_Info"`）被 `isSealingSafe` 丢弃 ⇒ fail closed。
+        // 正常包里 `<exe>` 兄弟二进制恒存在，故主路径必然通过。
+        let existing = Set(archive.entries.map { $0.path })
+        let sealingSafe = paths.filter(isSealingSafe)
+        return sealingSafe.filter { $0 == mainPath || existing.contains($0) }
     }
 
     /// 校验一条「将被写成 ZIP 条目名」的目标路径。**来源不可信**，必须全部过关才允许写入。
@@ -1089,9 +1212,13 @@ enum PackageSINFWriter {
     /// 不覆盖，故在此显式判定；后两项复用该函数（本仓唯一的 ZIP-slip 防线）。
     /// 路径是「ZIP 条目名（相对 IPA 根）」，故传入一个固定哨兵根，仅用于触发其越界判定。
     private static func validateSinfTarget(_ path: String) throws {
+        // 绝对路径判定必须在**反斜杠归一化之后**：`\etc\passwd` 归一成 `/etc/passwd`，
+        // 否则会绕过 `hasPrefix("/")`，再经 `resolve` 丢掉前导空段变成相对名 `etc/passwd`。
+        // 归一化仅用于这处「空 / NUL / 绝对路径」前置判定；越界判定仍唯一交给 `ArchiveEntryPath.resolve`。
+        let normalized = path.replacingOccurrences(of: "\\", with: "/")
         guard !path.isEmpty,
               !path.contains("\0"),
-              !path.hasPrefix("/") else {
+              !normalized.hasPrefix("/") else {
             throw SinfInjectError.unsafeTarget(path)
         }
         do {
@@ -1143,6 +1270,49 @@ enum PackageSINFWriter {
         return nil
     }
 
+    /// sinf 容器的结构判定（v0.3.570：三态）。
+    ///
+    /// **为什么必须三态**：旧实现只返回 `Bool`，于是「**格式不认识**」（可能是我们尚未见过的
+    /// 第三种合法形态）与「**格式认识但结构坏了**」被压成同一个 `false` —— 前者是「不知道」，
+    /// 后者是「确定坏」。v0.3.565 已经因为「只认一种格式」误杀过合法 SuperBlob；
+    /// 把「不认识」当成「坏」并写进台账，就会被标签永久冻结成「sinf 异常」。
+    enum SinfStructure {
+        case valid          // 格式可识别且自洽
+        case invalid        // 格式可识别但结构坏了（长度对不上等）
+        case unrecognized   // 格式不认识 —— **未知**，不等于坏
+
+        /// 存台账用：`unrecognized → nil`（未知），绝不当成「坏」。
+        var isValid: Bool? {
+            switch self {
+            case .valid: return true
+            case .invalid: return false
+            case .unrecognized: return nil
+            }
+        }
+    }
+
+    /// 判定 sinf 容器结构。判据见 `isStructurallyValidSinf`。
+    static func sinfStructure(_ d: Data) -> SinfStructure {
+        let b = [UInt8](d)
+        guard b.count >= 8 else { return .unrecognized }
+
+        // 格式一：`{4B 长度}"sinf" + TLV`
+        if Array(b[4..<8]) == Array("sinf".utf8) {
+            let declared = (Int(b[0]) << 24) | (Int(b[1]) << 16) | (Int(b[2]) << 8) | Int(b[3])
+            return declared == b.count ? .valid : .invalid
+        }
+
+        // 格式二：SuperBlob（magic 0xFADE0CC0 + 总长 + count）
+        let magic = (UInt32(b[0]) << 24) | (UInt32(b[1]) << 16)
+                  | (UInt32(b[2]) << 8) | UInt32(b[3])
+        if magic == 0xFADE0CC0 {
+            let declared = (Int(b[4]) << 24) | (Int(b[5]) << 16) | (Int(b[6]) << 8) | Int(b[7])
+            return declared == b.count ? .valid : .invalid
+        }
+
+        return .unrecognized
+    }
+
     /// sinf 容器结构自检。**两种真实格式都要认**，否则会误杀合法件。
     ///
     /// 格式一（本项目实测的主流形态，`SC_Info` 里常见）：
@@ -1160,25 +1330,12 @@ enum PackageSINFWriter {
     /// ⚠️ 2026-10-05 修正：本函数**最初只认格式一**，结果把合法的 SuperBlob sinf
     /// 判成「不合法」⇒ 跳过写入 + 打出「缺 sinf」的日志（真机反馈的现象）。
     /// 两种格式都实测存在于 `SC_Info` 里，必须都放行。
+    ///
+    /// v0.3.570：本函数退化为 `sinfStructure(_:) == .valid` 的兼容壳 ——
+    /// **只有确定合法才 true**；`.unrecognized`（不认识）与 `.invalid`（坏）都返回 false。
+    /// 需要区分「未知」时请直接用 `sinfStructure(_:)`。
     static func isStructurallyValidSinf(_ d: Data) -> Bool {
-        let b = [UInt8](d)
-        guard b.count >= 8 else { return false }
-
-        // 格式一：`{4B 长度}"sinf" + TLV`
-        if Array(b[4..<8]) == Array("sinf".utf8) {
-            let declared = (Int(b[0]) << 24) | (Int(b[1]) << 16) | (Int(b[2]) << 8) | Int(b[3])
-            return declared == b.count
-        }
-
-        // 格式二：SuperBlob（magic 0xFADE0CC0 + 总长 + count）
-        let magic = (UInt32(b[0]) << 24) | (UInt32(b[1]) << 16)
-                  | (UInt32(b[2]) << 8) | UInt32(b[3])
-        if magic == 0xFADE0CC0 {
-            let declared = (Int(b[4]) << 24) | (Int(b[5]) << 16) | (Int(b[6]) << 8) | Int(b[7])
-            return declared == b.count
-        }
-
-        return false
+        sinfStructure(d) == .valid
     }
 
     /// hex 字符串 → Data。容忍空格/换行（服务端偶尔分行发）。
