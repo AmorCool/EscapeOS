@@ -920,8 +920,13 @@ private enum PackageSINFWriter {
         // 顺序：先按 base64 解，结构不对再按 hex 解（兼容旧台账里的 hex 值）；
         // 两个都不对就**明确报错不写** —— 宁可装不上报「缺少 SC_Info/*.sinf」，也不写垃圾进包。
         guard let sinf = decodeSinfPayload(raw) else {
-            log("sinf 载荷解不出合法结构（\(raw.count) 字符）—— base64 与 hex 都不成立，"
-                + "包内不会带 sinf")
+            // 注意措辞：这里只是「**本次跳过写入**」，**不等于**「包内没有 sinf」——
+            // 如果包内本来就有 sinf（Apple CDN 的包都有 `SC_Info/<exe>.sinf`），它会原样保留。
+            // 以前这句写成「包内不会带 sinf」，会让人以为包被写坏了，真机上就出现过这个误读。
+            let head = raw.count >= 16 ? String(raw.prefix(16)) : raw
+            log("sinf 载荷解不出合法结构（\(raw.count) 字符，开头 \(head)）——"
+                + " base64 与 hex 两种解法的结果都不像 sinf（既非「长度+sinf+TLV」也非 SuperBlob）。"
+                + "本次跳过写入，包内原有的 sinf 会保留")
             return
         }
 
@@ -991,18 +996,42 @@ private enum PackageSINFWriter {
         return nil
     }
 
-    /// sinf 容器结构自检。判据两条，**都要满足**：
-    ///   ① 头 4 字节大端值 == 数据实际长度
-    ///   ② 第 5-8 字节 == `"sinf"`
+    /// sinf 容器结构自检。**两种真实格式都要认**，否则会误杀合法件。
     ///
-    /// 注意**不能**把 `00 00 04 30` 当固定魔数 —— 前 4 字节是**长度**。
+    /// 格式一（本项目实测的主流形态，`SC_Info` 里常见）：
+    ///   `{4B 大端总长}` + `"sinf"` + TLV 块序列（每块 `{4B tag}{4B 大端块长}{body}`）
+    ///   判据：头 4 字节大端 == 实际长度
+    ///
+    /// 格式二（Apple 经典容器）：
+    ///   `SuperBlob` = `{4B magic 0xFADE0CC0}{4B 大端总长}{4B 大端 count}` + BlobIndex[]
+    ///   判据：magic 命中 **且** 长度字段 == 实际长度
+    ///
+    /// ⚠️ **不能**把 `00 00 04 30` 当固定魔数 —— 前 4 字节是**长度**。
     /// 1056 字节的合法 sinf 头是 `00 00 04 20 73 69 6e 66`；
     /// 拿 `00000430` 去校验会**误杀合法件**。
+    ///
+    /// ⚠️ 2026-10-05 修正：本函数**最初只认格式一**，结果把合法的 SuperBlob sinf
+    /// 判成「不合法」⇒ 跳过写入 + 打出「缺 sinf」的日志（真机反馈的现象）。
+    /// 两种格式都实测存在于 `SC_Info` 里，必须都放行。
     static func isStructurallyValidSinf(_ d: Data) -> Bool {
         let b = [UInt8](d)
         guard b.count >= 8 else { return false }
-        let declared = (Int(b[0]) << 24) | (Int(b[1]) << 16) | (Int(b[2]) << 8) | Int(b[3])
-        return declared == b.count && Array(b[4..<8]) == Array("sinf".utf8)
+
+        // 格式一：`{4B 长度}"sinf" + TLV`
+        if Array(b[4..<8]) == Array("sinf".utf8) {
+            let declared = (Int(b[0]) << 24) | (Int(b[1]) << 16) | (Int(b[2]) << 8) | Int(b[3])
+            return declared == b.count
+        }
+
+        // 格式二：SuperBlob（magic 0xFADE0CC0 + 总长 + count）
+        let magic = (UInt32(b[0]) << 24) | (UInt32(b[1]) << 16)
+                  | (UInt32(b[2]) << 8) | UInt32(b[3])
+        if magic == 0xFADE0CC0 {
+            let declared = (Int(b[4]) << 24) | (Int(b[5]) << 16) | (Int(b[6]) << 8) | Int(b[7])
+            return declared == b.count
+        }
+
+        return false
     }
 
     /// hex 字符串 → Data。容忍空格/换行（服务端偶尔分行发）。
