@@ -430,27 +430,35 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
         writeBuffer.append(payload)
     }
 
-    /// 把写缓冲落盘一次；**成功才清空**，失败保留（下次 write/close 可重试，绝不静默丢）。
-    private func flushWriteBuffer() async throws {
-        bufferLock.lock()
-        guard writeBufferActive, !writeBuffer.isEmpty else {
-            bufferLock.unlock()
-            return
-        }
-        let base = writeBufferStart
-        let bytes = writeBuffer
-        bufferLock.unlock()
+    /// 取写缓冲快照（**同步**方法，不持锁跨越 await）。
+    ///
+    /// Swift 6 禁止在 async 上下文里调用 `NSLock.lock()/unlock()`
+    /// （`error: instance method 'lock' is unavailable from asynchronous contexts`）。
+    /// 所以把临界区**抽成同步方法**，async 函数只调用它们 —— 不依赖 `withLock` 的可用性。
+    private func takeWriteBufferSnapshot() -> (base: UInt64, bytes: Data)? {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        guard writeBufferActive, !writeBuffer.isEmpty else { return nil }
+        return (writeBufferStart, writeBuffer)
+    }
 
-        try await runFileOpWithTimeout(provider.operationTimeout, "write \(path)@\(base)") {
-            try self.provider.write(self.path, offset: base, data: bytes)
-        }
-
-        bufferLock.lock()
-        if writeBufferActive && writeBufferStart == base && writeBuffer.count == bytes.count {
+    /// 落盘成功后清空缓冲 —— **仅当缓冲未被并发改动过**（base 与长度都没变）。
+    private func clearWriteBufferIfUnchanged(base: UInt64, count: Int) {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        if writeBufferActive && writeBufferStart == base && writeBuffer.count == count {
             writeBuffer = Data()
             writeBufferActive = false
         }
-        bufferLock.unlock()
+    }
+
+    /// 把写缓冲落盘一次；**成功才清空**，失败保留（下次 write/close 可重试，绝不静默丢）。
+    private func flushWriteBuffer() async throws {
+        guard let snap = takeWriteBufferSnapshot() else { return }
+
+        try await runFileOpWithTimeout(provider.operationTimeout, "write \(path)@\(snap.base)") {
+            try self.provider.write(self.path, offset: snap.base, data: snap.bytes)
+        }
+
+        clearWriteBufferIfUnchanged(base: snap.base, count: snap.bytes.count)
     }
 
     private static func makeBuffer(_ data: Data) -> NIOCore.ByteBuffer {

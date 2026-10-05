@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.569] - 2026-10-05
+
+> **修 v0.3.568 的构建失败。内容与 0.3.568 相同。**
+
+`v0.3.568` 的 tag 已推但**构建失败、未产出发布产物**，故本版为修复重切。
+
+### 修复（构建）
+
+- `SFTPDelegateImpl.swift` 的 `flushWriteBuffer()`（`async`）里直接调用了 `NSLock.lock()/unlock()` ——
+  Swift 6 报 5 处
+  `error: instance method 'lock' is unavailable from asynchronous contexts;
+  Use async-safe scoped locking instead`。
+- 修法：把两段临界区**抽成同步方法** `takeWriteBufferSnapshot()` /
+  `clearWriteBufferIfUnchanged(base:count:)`，`async` 函数只调用它们，
+  **不持锁跨越 `await`**（这样也不依赖 `withLock` 的可用性）。
+- 复核：该文件全部 8 处 `lock()`/`unlock()` 现在都位于**非 async** 函数内。
+
+> 教训：`swiftc -parse` **只查语法**，查不出这类「async 上下文禁用 API」的错误 ——
+> 只有真机构建能发现。同一天还栽过另一次同类（`RepairResult.Stage` 未限定引用）。
+
 ## [0.3.568] - 2026-10-05
 
 > **共享转换上线 + SFTP 大文件修复 + 下载管理标签修正 + 一批「静默错误」类缺陷加固。**
