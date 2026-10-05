@@ -27,7 +27,7 @@ import CryptoKit
 /// 修补请求。落盘后的 IPA 路径 + 发送端 / 导入侧 manifest 里的关键字段。
 struct RepairRequest {
     /// **原件**路径 `Documents/Imports/<包名>/original.ipa`（导入落盘处；也兼容老平铺 `Imports/<name>.ipa`）。
-    /// 修补**只读**它，产物另落同目录的 `repaired.ipa`（见 `repairedOutputPath(forOriginal:)`）。
+    /// 修补**只读**它，产物另落（见 `repairedOutputPath(forOriginal:)`）。
     let ipaPath: String
     let manifest: RepairManifest
     /// 安装完成后是否做「实装实跑」自检（默认 true）
@@ -103,7 +103,7 @@ struct RepairResult {
     /// 各步骤原始细节（日志 / 字节数 / 错误原文），供「详情」折叠区展示
     let details: [String]
     let sinf: SinfInfo?
-    /// 修补产物路径（加密包 = 同目录 `repaired.ipa`；明文包无需修补 = 原件）。
+    /// 修补产物路径（加密包 = 注入 sinf 的 `repaired.ipa`；明文包 = 原件的整包副本 `repaired.ipa`）。
     /// **绝不指向被就地改写的原件** —— 原件始终是 `req.ipaPath` 指向的那份。
     let repairedIPAPath: String?
     /// 修补产物的 sha256（与 `ImportRecord.sha256`（原件指纹）**分开**，不覆盖它）。
@@ -250,6 +250,10 @@ enum RepairService {
         // 且再次修补会因 sha256 与台账不符而误报 E2「安装包不完整」。
         let outputPath = repairedOutputPath(forOriginal: req.ipaPath)
         do {
+            // 老平铺包的产物落在 Imports/repaired/ 子目录下，父目录可能尚不存在 —— 先建。
+            let outputDir = (outputPath as NSString).deletingLastPathComponent
+            try FileManager.default.createDirectory(atPath: outputDir,
+                                                    withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: outputPath) {
                 try FileManager.default.removeItem(atPath: outputPath)
             }
@@ -283,12 +287,13 @@ enum RepairService {
         // 顺序铁律（若将来引入整包重签）：先换 sinf、后签名 —— 见文件头注释。
 
         // ── (9) 安装（三步确认的第三步：安装前确认）────────────────────
-        // 取消安装：产物已生成（原件**未动**），返回 .skipped 供稍后重试。
+        // 「只修补，不安装」：产物已生成（原件**未动**），返回 .skipped —— 这是**正常结束**（非失败），
+        // 产物保留、供稍后在「已修补」里安装。
         if let confirmInstall, !(await confirmInstall()) {
-            note("用户在安装前取消（原件未动，产物已保留）")
+            note("用户在安装前选择只修补、不安装（原件未动，产物已保留）")
             return RepairResult(status: .skipped, stage: .install, code: nil,
-                message: "已取消安装（安装包已修补，可稍后重试）.",
-                suggestion: "如需继续，请重新点一次安装.",
+                message: "已修补，未安装（产物已保留）.",
+                suggestion: "如需安装，可在「已修补」里进行.",
                 details: log, sinf: nil,
                 repairedIPAPath: outputPath, repairedIPASha256: repairedSha)
         }
@@ -367,6 +372,10 @@ enum RepairService {
     /// `_CodeSignature/CodeResources`）⇒ 需要重签的明文包这条分支**当前落不实**。
     /// 顺序铁律（若未来落地）：先换 sinf、后签名。
     ///
+    /// **产物另落、原件只读**：明文包虽不改字节，仍把原件整包复制成独立产物 `repaired.ipa`
+    /// （见 `repairedOutputPath(forOriginal:)`）再安装。这样「修补成功后删原件」才有可归属的产物，
+    /// 不会把原件删成「原件 + 产物全无」。
+    ///
     /// **三步确认的第三步同样适用**：安装前 `await confirmInstall`，取消 → `.skipped`、不安装；
     /// 安装后与加密包分支一致地做「实装实跑」自检（`runLaunchCheck`）。
     private static func installPlainPackage(_ req: RepairRequest,
@@ -375,19 +384,41 @@ enum RepairService {
                                             note: @escaping (String) -> Void,
                                             progress: (@Sendable (Double, String) -> Void)?,
                                             confirmInstall: (@MainActor () async -> Bool)?) async -> RepairResult {
-        // 安装前确认（与加密包分支一致）：用户取消 → 不安装，返回 .skipped。
-        // 明文包无需修补，原件即产物，**不存在就地改写**。
+        // 明文包虽不注入 sinf，仍**另落一份独立产物** `repaired.ipa`（与加密包分支对齐）：
+        // 否则「修补成功后删原件」会连产物一起没有 —— 原件 + 产物全无，包从两个列表静默消失。
+        // 产物是原件的整包副本，内容与原件一致（明文包无需改字节）。
+        let outputPath = repairedOutputPath(forOriginal: req.ipaPath)
+        do {
+            // 老平铺包的产物落在 Imports/repaired/ 子目录下，父目录可能尚不存在 —— 先建。
+            let outputDir = (outputPath as NSString).deletingLastPathComponent
+            try FileManager.default.createDirectory(atPath: outputDir,
+                                                    withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: outputPath) {
+                try FileManager.default.removeItem(atPath: outputPath)
+            }
+            try FileManager.default.copyItem(atPath: req.ipaPath, toPath: outputPath)
+        } catch {
+            return .failure(.injectSinf, code: "E6",
+                message: "生成安装产物时失败.",
+                suggestion: "确认存储空间充足后重试；持续失败请反馈.",
+                details: log + ["\(error)"])
+        }
+        note("已生成独立产物：\((outputPath as NSString).lastPathComponent)")
+        let repairedSha = sha256Hex(ofFileAt: outputPath)
+
+        // 安装前确认（与加密包分支一致）：用户选择「只修补，不安装」→ 不安装，返回 .skipped
+        // （**正常结束**：产物已生成、原件未动，供稍后在「已修补」里安装）。
         if let confirmInstall, !(await confirmInstall()) {
-            note("用户在安装前取消")
+            note("用户在安装前选择只修补、不安装")
             return RepairResult(status: .skipped, stage: .install, code: nil,
-                message: "已取消安装（明文包无需修补，可稍后重试）.",
-                suggestion: "如需继续，请重新点一次安装.",
+                message: "已修补，未安装（明文包无需修补，产物已保留）.",
+                suggestion: "如需安装，可在「已修补」里进行.",
                 details: log, sinf: nil,
-                repairedIPAPath: req.ipaPath, repairedIPASha256: nil)
+                repairedIPAPath: outputPath, repairedIPASha256: repairedSha)
         }
         do {
             try await AppStoreInstallService.installLocalIPA(
-                req.ipaPath,
+                outputPath,
                 progress: { p in progress?(p, "安装中") },
                 onLog: { note($0) })
         } catch {
@@ -430,20 +461,28 @@ enum RepairService {
         return RepairResult(status: .ok, stage: launchStage, code: launchCode,
             message: launchMsg, suggestion: launchSuggest,
             details: log, sinf: nil,
-            repairedIPAPath: req.ipaPath, repairedIPASha256: nil)
+            repairedIPAPath: outputPath, repairedIPASha256: repairedSha)
     }
 
     // MARK: 小工具
 
-    /// 修补产物落点：与**原件同目录**、固定名 `repaired.ipa`。
+    /// 修补产物落点：**按包归属**，绝不落到共享路径（否则多个老平铺包会互相覆盖）。
     ///
-    ///   · 新落点：`Imports/<包名>/original.ipa` ⇒ `Imports/<包名>/repaired.ipa`
-    ///   · 老平铺：`Imports/<name>.ipa`         ⇒ `Imports/repaired.ipa`
+    ///   · 新落点：`Imports/<包名>/original.ipa` ⇒ `Imports/<包名>/repaired.ipa`（与原件同目录、不同名）
+    ///   · 老平铺：`Imports/<包名>.ipa`         ⇒ `Imports/repaired/<包名>.ipa`（按包名归属到独立子目录）
     ///
-    /// 无论哪种形态都**绝不覆盖原件**（同目录不同名）。
+    /// 无论哪种形态都**绝不覆盖原件**，也**绝不与其它包的产物重名**。
     static func repairedOutputPath(forOriginal ipaPath: String) -> String {
         let dir = (ipaPath as NSString).deletingLastPathComponent
-        return (dir as NSString).appendingPathComponent("repaired.ipa")
+        let leaf = (ipaPath as NSString).lastPathComponent
+        if leaf == "original.ipa" {
+            return (dir as NSString).appendingPathComponent("repaired.ipa")
+        }
+        // 老平铺包：产物落 Imports/repaired/<包名>.ipa。
+        // 旧实现落共享的 Imports/repaired.ipa ⇒ 多个老平铺包互相覆盖，且无法归因到具体包名。
+        let base = (leaf as NSString).deletingPathExtension
+        return ((dir as NSString).appendingPathComponent("repaired") as NSString)
+            .appendingPathComponent("\(base).ipa")
     }
 
     /// trackId 低 32 位（用于 `song` 校验）；manifest 没有就兜底读包内 `iTunesMetadata.itemId`。

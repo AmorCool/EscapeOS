@@ -154,13 +154,20 @@ enum ImportService {
         // 这样修补产物可落在同目录的 repaired.ipa，**原件 original.ipa 永不被就地改写**
         // （否则「修补后取消安装」会破坏原件、且无副本可退，见 RepairService）。
         //
+        // 目录名去掉 `.ipa` 后缀：目录名若以 .ipa 结尾（如 Imports/MyApp.ipa/），会被扫描器当成
+        // 「平铺 ipa 文件」形态（形态判定先看扩展名），于是把包自己的**目录**当成新包，
+        // 导入时报 I1「没找到要导入的文件」。
+        let folderBase = (safeLeaf as NSString).pathExtension.lowercased() == "ipa"
+            ? (safeLeaf as NSString).deletingPathExtension
+            : safeLeaf
+        //
         // 并发安全：这里用 `reserveUniqueDirectory` **原子抢占**目录名（`mkdir(2)`，EEXIST 换名），
         // 不再用 `uniqueDestination` 的 check-then-act —— 后者在 `handleOpenURL` 的 nonisolated
         // `Task` 与 picker 的 `startImport` 并发进 `importFile` 时，会让两者算到**同一目录**，
         // 互相覆写 `original.ipa`，并在复制失败时删掉对方已落盘的目录（跨任务误删 / 静默损坏）。
         let folderURL: URL
         do {
-            folderURL = try FileService().reserveUniqueDirectory(in: destDir.path, preferredName: safeLeaf)
+            folderURL = try FileService().reserveUniqueDirectory(in: destDir.path, preferredName: folderBase)
         } catch {
             return .init(status: .rejected, code: "I4",
                          message: "创建导入目录失败.",
@@ -338,7 +345,9 @@ enum ImportService {
     /// 双形态兼容（一个包一个文件夹的新落点上线后，老平铺包**必须仍能列出**）：
     ///   · 老平铺：`Imports/*.ipa`（直接认这个 .ipa 文件）
     ///   · 新落点：`Imports/<包名>/original.ipa`（认目录里的 original.ipa）
-    /// 修补产物 `repaired.ipa` **一律排除** —— 它不是新导入的包，认了会被重复导入。
+    /// 修补产物**一律排除** —— 它不是新导入的包，认了会被重复导入：
+    ///   · 新落点同目录的 `repaired.ipa`；
+    ///   · 老平铺的 `Imports/repaired/<包名>.ipa`（`Imports/repaired/` 目录不含 `original.ipa`，天然不被认）。
     ///
     /// 返回 `ScanResult`（`urls` 按「最近修改优先」排序 —— `contentsOfDirectory` 顺序不保证，
     /// 调用方取 `.first` 必须得到确定结果）；`known` 命中的（已导入的）会被过滤掉。
@@ -368,6 +377,21 @@ enum ImportService {
                 continue
             }
             for u in items {
+                // **先判「是不是目录」**：新落点（含 v0.3.571 已落盘的 `Imports/<包名>.ipa/` 目录）
+                // 必须是「目录」形态。若先判扩展名，`Imports/MyApp.ipa/` 这种以 .ipa 结尾的目录会被
+                // 误判成平铺包文件，形态二分支对它永不可达。
+                var isDir: ObjCBool = false
+                let exists = fm.fileExists(atPath: u.path, isDirectory: &isDir)
+                if exists && isDir.boolValue {
+                    // 形态二（新落点）：`Imports/<包名>/original.ipa`。
+                    // 只对 Imports/ 目录做一级下探；Documents/ 根不做（新落点只会在 Imports/ 下）。
+                    guard dir.path == importsDir.path else { continue }
+                    let original = u.appendingPathComponent("original.ipa")
+                    guard fm.fileExists(atPath: original.path) else { continue }
+                    if known.contains(where: { $0.storedPath == original.path }) { continue }
+                    out.append(original)
+                    continue
+                }
                 // 形态一（老平铺）：`Imports/*.ipa`。排除修补产物 repaired.ipa。
                 if u.pathExtension.lowercased() == "ipa" {
                     if u.lastPathComponent == "repaired.ipa" { continue }
@@ -375,15 +399,6 @@ enum ImportService {
                     out.append(u)
                     continue
                 }
-                // 形态二（新落点）：`Imports/<包名>/original.ipa`。
-                // 只对 Imports/ 目录做一级下探；Documents/ 根不做（新落点只会在 Imports/ 下）。
-                guard dir.path == importsDir.path else { continue }
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { continue }
-                let original = u.appendingPathComponent("original.ipa")
-                guard fm.fileExists(atPath: original.path) else { continue }
-                if known.contains(where: { $0.storedPath == original.path }) { continue }
-                out.append(original)
             }
         }
         let sorted = out.sorted { a, b in
@@ -536,30 +551,39 @@ enum ImportService {
 
     // MARK: 修补成功后删除原件（用户需求 #17）
 
-    /// 修补成功后删除**原件 `original.ipa`**（需求 #17：修好后自动删掉那份待修补的包）。
+    /// 修补成功后删除**原件**（需求 #17：修好后自动删掉那份待修补的包）。
     ///
-    /// **只删原件，`repaired.ipa` 保留** —— 产物才是后续安装 / 导出的对象。
-    /// 原件删掉后，该包目录只剩 `repaired.ipa`，`ImportedPackageList` 会把它归到「已修补」块。
+    /// **只删原件，产物保留** —— 产物才是后续安装 / 导出的对象。原件删掉后，该包目录只剩产物，
+    /// `ImportedPackageList` 会据磁盘现状把它归到「已修补」块（新落点看同目录 `repaired.ipa`；
+    /// 老平铺看 `Imports/repaired/<包名>.ipa`）。
+    ///
+    /// **自证安全（不依赖调用方传对）**：删除前必须确认「产物路径 ≠ 原件路径，且产物存在且是普通文件」。
+    /// 任一条不满足就**不删**并返回 `false` —— 否则一旦产物没落成独立文件（例如旧明文分支把原件当产物），
+    /// 删原件会让该包从两个列表静默消失（原件 + 产物全无）。
     ///
     /// 只在**修补成功**（`RepairResult.status == .ok`）后由调用方调用；失败 / 取消（`.skipped`）
     /// **绝不**调用 —— 那两种情形原件必须完好（与需求 #10 一致）。
     ///
-    /// 只处理**新落点** `Imports/<包名>/original.ipa`：文件名恰为 `original.ipa` 才删。
-    /// 老平铺的 `<包名>.ipa` 不删 —— 它的 `repaired.ipa` 落在共享的 `Imports/` 根目录、无法归因到
-    /// 具体包名，删了原件会让该条目从两个列表里都消失，反而丢失产物。
-    ///
-    /// - Returns: 确实删掉了原件返回 `true`；非新落点或删除失败返回 `false`（不抛、不静默阻断）。
+    /// - Returns: 确实删掉了原件返回 `true`；产物不满足安全前提或删除失败返回 `false`（不抛、不静默阻断）。
     @discardableResult
     static func deleteOriginalAfterRepairSuccess(_ record: ImportRecord) -> Bool {
-        let path = record.storedPath
-        guard (path as NSString).lastPathComponent == "original.ipa" else { return false }
+        let original = record.storedPath
+        // 产物路径由原件路径推导（新落点 Imports/<包名>/repaired.ipa；老平铺 Imports/repaired/<包名>.ipa）。
+        let product = RepairService.repairedOutputPath(forOriginal: original)
+        guard product != original else { return false }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: product, isDirectory: &isDir), !isDir.boolValue else {
+            LoginLogger.shared.log("[共享修补] 未发现独立产物，保留原件不删：\(product)",
+                                   category: .shareConvert)
+            return false
+        }
         do {
-            try FileManager.default.removeItem(atPath: path)
-            LoginLogger.shared.log("[共享修补] 修补成功，已删除原件 original.ipa（保留 repaired.ipa）",
+            try FileManager.default.removeItem(atPath: original)
+            LoginLogger.shared.log("[共享修补] 修补成功，已删除原件（保留产物 \(product)）",
                                    category: .shareConvert)
             return true
         } catch {
-            LoginLogger.shared.log("[共享修补] 删除原件 original.ipa 失败：\(error)",
+            LoginLogger.shared.log("[共享修补] 删除原件失败：\(error)",
                                    category: .shareConvert)
             return false
         }

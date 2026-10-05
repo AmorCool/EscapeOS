@@ -33,31 +33,14 @@ struct ImportView: View {
     @State private var showInstallConfirm = false
     @State private var installContinuation: CheckedContinuation<Bool, Never>?
 
-    // 已导入的包列表（用户需求：把已导入的包列出来）
-    // 两个块：`packages` = 已导入（还有 original.ipa，可修补）；`repairedPackages` = 已修补
-    // （原件已按需求 #17 删除，只剩 repaired.ipa，只支持安装）。
+    // 已导入 / 已修补的包。主页**只**用它们给「已导入 (N)」「已修补 (N)」两个入口计数；
+    // 列表、选择、批量修补、移除、安装、导出全部在二级页 `ImportedListPage` / `RepairedListPage` 里。
     @State private var packages: [ImportedPackage] = []
     @State private var repairedPackages: [ImportedPackage] = []
-    @State private var preparingPackageId: String?   // 正在重读原件、准备进入修补流程
 
-    // 需求 #18：两个块可展开 / 收拢。默认展开「已导入」（待办），收拢「已修补」（已完成，条目多时不占屏）。
-    @State private var importedExpanded = true
-    @State private var repairedExpanded = false
-
-    // 需求 #19：已导入列表多选 + 批量修补（逐条串行）。
-    @State private var selectedPackageIds: Set<String> = []
-    @State private var showBatchRepairConfirm = false
-    @State private var batchRepairing = false
-    @State private var batchProgressText = ""
-    @State private var batchLog: [BatchLogItem] = []
-
-    // 需求 #20：已修补条目的安装状态（在线安装 / 覆盖升级各自一条在跑）。
-    @State private var onlineInstallingPackageId: String?
-    @State private var installingPackageId: String?
-
-    /// 页面是否仍在屏上。批量修补逐条串行时用它兜底：中途离开本页就停止后续条目，
-    /// 避免「安装前确认」对话框已无处可显示、`CheckedContinuation` 永久挂起。
-    @State private var viewActive = true
+    // 「扫描新文件」的候选（**只列举、不复制**）：扫到的包先落这里，由用户点「导入」才真正收进本机。
+    // 旧实现把扫到的第一个包直接送进「导入前确认」⇒ 扫一遍 = 把 `Imports/` 里已存在的包再复制一份。
+    @State private var scanCandidates: [URL] = []
 
     /// 「在线安装」前置检查结果（修补完成后算一次，驱动按钮可用性与说明）。
     /// 有产物 / 无产物 / 读不出应用标识三态 —— 点之前就给出结论，不让用户点了才报错。
@@ -71,10 +54,10 @@ struct ImportView: View {
     var body: some View {
         List {
             flowSection
-            pickerSection
-            importedSection
-            repairedSection
-            if !batchLog.isEmpty { batchResultSection }
+            if !scanCandidates.isEmpty { candidateSection }
+            pendingLinkSection
+            importedLinkSection
+            repairedLinkSection
             if let importResult { importStatusSection(importResult) }
             if record == nil && importResult == nil && !importing && packages.isEmpty && repairedPackages.isEmpty { emptySection }
             if let record { packageSection(record) }
@@ -87,9 +70,26 @@ struct ImportView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("共享转换")
         .navigationBarTitleDisplayMode(.inline)
-        // 右上角「日志板块」入口：只打开共享转换这一类的日志（`ShareConvertLogView`
-        // 内部按 `.shareConvert` 分类筛），与 AppStore 商店日志互不串台。
+        // 右上角：导入 / 扫描 / 日志。原来「导入」栏目里的两个入口（从文件导入、扫描新文件）挪到这里。
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showPicker = true
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                }
+                .disabled(importing || repairing)
+                .accessibilityLabel("从文件导入")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    scanNew()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(importing || repairing)
+                .accessibilityLabel("扫描新文件")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
                     ShareConvertLogView()
@@ -100,46 +100,38 @@ struct ImportView: View {
             }
         }
         .documentPicker(isPresented: $showPicker, allowedTypes: [.data]) { urls in
-            guard let u = urls.first else { return }
-            pendingURL = u
-            showImportConfirm = true
+            requestImport(urls.first)
         }
         // ① 导入前确认
-        .confirmationDialog("导入前确认", isPresented: $showImportConfirm, titleVisibility: .visible) {
+        .alert("导入前确认", isPresented: $showImportConfirm) {
             Button("继续导入") { startImport() }
             Button("取消", role: .cancel) { pendingURL = nil }
         } message: {
             Text("你要导入的是别人给的安装包，不是从 App Store 下载的. 它可能被篡改或伪装，也可能带有别人的账号信息. 只导入来源可信的包.")
         }
         // ② 修补前确认
-        .confirmationDialog("修补前确认", isPresented: $showRepairConfirm, titleVisibility: .visible) {
+        .alert("修补前确认", isPresented: $showRepairConfirm) {
             Button("开始修补") { runRepair() }
             Button("取消", role: .cancel) { }
         } message: {
             Text(repairConfirmMessage)
         }
-        // ② 修补前确认（批量，需求 #19）：同样在动手前确认一次；每条安装前仍会各自再确认一次。
-        .confirmationDialog("修补前确认", isPresented: $showBatchRepairConfirm, titleVisibility: .visible) {
-            Button("开始修补") { runBatchRepair() }
-            Button("取消", role: .cancel) { }
-        } message: {
-            Text("将对选中的 \(selectedPackageIds.count) 个安装包逐个修补并安装；每个在安装前还会再确认一次. 仅适用于来源可信、且与你登录相同 Apple ID 的设备分享的包.")
-        }
         // ③ 安装前确认（由 RepairService 在调用 installd 之前 await）
-        .confirmationDialog("安装前确认", isPresented: $showInstallConfirm, titleVisibility: .visible) {
+        // 取消 = 「只修补，不安装」：产物已落盘、原件保留，按正常结束处理（不再当作半途退出）。
+        .alert("安装前确认", isPresented: $showInstallConfirm) {
             Button("继续安装") { resumeInstall(true) }
-            Button("取消", role: .cancel) { resumeInstall(false) }
+            Button("只修补，不安装", role: .cancel) { resumeInstall(false) }
         } message: {
-            Text("即将把这个应用安装到本机.")
+            Text("即将把这个应用安装到本机. 选择「只修补，不安装」会保留修补产物，稍后可在「已修补」里安装.")
         }
         // 兜底（审计 D1）：安装前确认挂起期间用户离开本页 / 对话框被关掉而**没点任何按钮** ⇒
         // continuation 永不 resume，`runRepair` 的 Task 会**永久挂起**（此时 sinf 已注入、安装未执行，
-        // 包停在「已修补未安装」而 UI 已不在）。两处兜底都按「取消安装」处理。
+        // 包停在「已修补未安装」而 UI 已不在）。两处兜底都按「只修补，不安装」处理（保留产物，正常结束）。
         // `resumeInstall` 幂等（resume 后置 nil），与按钮作答、与两处兜底互相之间都不会重复 resume。
         .onChange(of: showInstallConfirm) { _, presented in
             if !presented { resumeInstall(false) }
         }
-        .onDisappear { viewActive = false; resumeInstall(false) }
+        .onDisappear { resumeInstall(false) }
         // D4：消费 onOpenURL 交接过来的导入记录（一次性，见 `PendingImportHandoff`）。
         // 三处互补，覆盖全部挂载/时序状态：
         //   · `onReceive` 覆盖「本页已挂载、AirDrop / 用其他应用打开把 App 从后台带回前台」
@@ -151,9 +143,8 @@ struct ImportView: View {
         .onReceive(NotificationCenter.default.publisher(for: .escPendingImportHandoff)) { _ in
             consumePendingImport()
         }
-        .onAppear { viewActive = true; consumePendingImport(); reloadPackages() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { viewActive = true }
+        .onAppear { consumePendingImport(); reloadPackages() }
+        .onChange(of: scenePhase) { _, _ in
             consumePendingImport(); reloadPackages()
         }
         .toastHost()
@@ -205,7 +196,7 @@ struct ImportView: View {
         if let r = repairResult {
             switch r.status {
             case .ok:             return .installed   // RepairService 只在安装完成后才返回 .ok
-            case .skipped:        return .repaired    // 已修补但用户取消了安装
+            case .skipped:        return .repaired    // 只修补、未安装（用户选择不装，产物已保留）
             case .failed:         return .failed
             case .needsUserChoice: return .pending
             }
@@ -245,46 +236,6 @@ struct ImportView: View {
         }
     }
 
-    /// 批量修补里单条的成败（需求 #19：每条分别可见，不用一个总的「完成 / 失败」）。
-    private enum BatchOutcome {
-        case success
-        case failed(String)
-
-        var text: String {
-            switch self {
-            case .success:        return "成功"
-            case .failed:         return "失败"
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            case .success:        return "checkmark.circle.fill"
-            case .failed:         return "xmark.octagon.fill"
-            }
-        }
-
-        var tint: Color {
-            switch self {
-            case .success:        return LocusTheme.statusGood
-            case .failed:         return LocusTheme.statusBad
-            }
-        }
-
-        /// 失败原因（成功时为 nil）。
-        var reason: String? {
-            if case .failed(let r) = self { return r }
-            return nil
-        }
-    }
-
-    /// 批量修补结果里的一行。
-    private struct BatchLogItem: Identifiable {
-        let id: String
-        let name: String
-        let outcome: BatchOutcome
-    }
-
     // MARK: Sections
 
     /// 「修补前确认」的说明文案（v0.3.570：三态）。
@@ -301,118 +252,105 @@ struct ImportView: View {
     }
 
     /// 顶部步骤条：导入 → 修补 → 安装。只做可视化，不承担任何动作语义。
-    private var flowSection: some View {
-        Section {
-            HStack(spacing: 0) {
-                flowStep("导入", "square.and.arrow.down",
-                         state: record != nil ? .done : (importing ? .active : .idle))
-                flowArrow
-                flowStep("修补", "wrench.and.screwdriver",
-                         state: stage == .repaired || stage == .installed ? .done
-                              : (stage == .pending || stage == .repairing ? .active : .idle))
-                flowArrow
-                flowStep("安装", "checkmark.circle",
-                         state: stage == .installed ? .done
-                              : (stage == .repaired ? .active : .idle))
-            }
-            .padding(.vertical, 6)
-        } footer: {
-            Text("三步都需你确认，包来源要可信.")
-        }
-    }
-
-    private func flowStep(_ title: String, _ symbol: String, state: StepState) -> some View {
-        VStack(spacing: 5) {
-            ZStack {
-                Circle()
-                    .fill(state.tint.opacity(0.14))
-                    .frame(width: 34, height: 34)
-                Image(systemName: state == .done ? "checkmark" : symbol)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(state.tint)
-            }
-            Text(title)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(state.tint)
-        }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var flowArrow: some View {
-        Image(systemName: "chevron.right")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.tertiary)
-    }
-
-    private var pickerSection: some View {
-        Section {
-            Button {
-                showPicker = true
-            } label: {
-                Label("从文件导入", systemImage: "square.and.arrow.down")
-            }
-            .disabled(importing || repairing)
-
-            Button {
-                scanNew()
-            } label: {
-                Label("扫描新文件", systemImage: "arrow.clockwise")
-            }
-            .disabled(importing || repairing)
-        } header: {
-            Text("导入")
-        } footer: {
-            Text("把你从别处收到的 .ipa 放到本机后，从这里导入.")
-        }
-    }
-
-    /// 已导入的包列表（可折叠块，需求 #18）：每行 包名 / 状态 / 导入时间 / 大小。
+    /// 当前处于流程的哪一段 —— 供共享组件 `ImportFlowBanner` 高亮。
     ///
-    /// 有原件 `original.ipa` 的包落在这里，可修补、可勾选批量修补（需求 #19）。
-    /// 状态与元数据都来自 `ImportedPackageList.scanListing` 的磁盘证据（见该文件），本视图不另做推断。
-    private var importedSection: some View {
+    /// 映射依据（与旧 `flowSection` 的三态判定等价）：
+    ///   · 已修补 / 已安装 ⇒ 当前段是「安装」（导入与修补视为已完成）；
+    ///   · 待修补 / 修补中 ⇒ 当前段是「修补」；
+    ///   · 其余（含刚导入、导入中、无包）⇒ 当前段是「导入」。
+    private var flowStage: ImportFlowStage {
+        switch stage {
+        case .installed, .repaired:      return .install
+        case .pending, .repairing:       return .repair
+        case .idle, .importing:          return .importFile
+        }
+    }
+
+    /// 步骤条 —— 用共享组件（与三个二级页同一套观感，避免两处各画一份）。
+    private var flowSection: some View {
+        ImportFlowBanner(stage: flowStage)
+    }
+
+    // 旧的内联步骤条（flowStep / flowArrow）已删除 ——
+    // 现在由共享组件 `ImportFlowBanner` 绘制，主页与三个二级页共用同一套观感。
+
+    /// 「扫描到的新文件」候选区（**只列举、不复制**）：点「导入」才真正把这个包收进本机。
+    /// 与「待修补」（`PendingRepairPage`）区分开 —— 这里是**还没进系统的新文件**，不是待修补的包。
+    private var candidateSection: some View {
         Section {
-            DisclosureGroup(isExpanded: $importedExpanded) {
-                if packages.isEmpty {
-                    Text("还没有导入过安装包.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(packages) { p in
-                        importedRowView(p)
+            ForEach(scanCandidates, id: \.self) { url in
+                HStack(spacing: 12) {
+                    AppRowIcon(systemName: "clock", tint: .orange, symbolSize: 16, frameSize: 30)
+                    Text(url.lastPathComponent)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    Button("导入") {
+                        requestImport(url)
                     }
-                    batchControls
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(importing || repairing)
                 }
+            }
+        } header: {
+            Text("扫描到的新文件 (\(scanCandidates.count))")
+        } footer: {
+            Text("扫描只列举、不复制；点「导入」才会把这个包收进本机.")
+        }
+    }
+
+    /// 「待修补」栏目计数：已导入里还没修补、还没安装的那些（与 `PendingRepairPage` 数据源同口径）。
+    private var awaitingRepairCount: Int {
+        packages.filter { $0.status == .awaitingRepair }.count
+    }
+
+    /// 「待修补」栏目入口：点进去是二级页 `PendingRepairPage`（需求 #2 新增栏目）。
+    private var pendingLinkSection: some View {
+        Section {
+            NavigationLink {
+                PendingRepairPage()
+            } label: {
+                blockLabel("待修补", count: awaitingRepairCount,
+                           symbol: "clock", tint: .orange)
+            }
+        } footer: {
+            Text("点一行进入二级页：批量修补、移除（仅从列表移除，不删安装包）.")
+        }
+    }
+
+    /// 「已导入」栏目入口：点进去是二级页 `ImportedListPage`（用户需求：不再内联展开 / 收拢）。
+    /// 主页只留一行入口 + 计数；列表、选择、批量修补、移除都在二级页里。
+    private var importedLinkSection: some View {
+        Section {
+            NavigationLink {
+                ImportedListPage()
             } label: {
                 blockLabel("已导入", count: packages.count,
                            symbol: "tray.and.arrow.down", tint: AppTheme.accent)
             }
         } footer: {
-            Text("勾选后可批量修补；点一行进入这个包的修补流程.")
+            Text("点一行进入二级页：查看、选择、批量修补、移除.")
         }
     }
 
-    /// 已修补的包列表（可折叠块，需求 #18）：原件已删、只剩 `repaired.ipa`。
-    ///
-    /// 需求 #20：这里只提供**在线安装**与**覆盖/升级安装**；不提供重新修补与本地安装 ——
-    /// 已修补的包无需再修，且原件已按需求 #17 删除，重新修补无从下手。
-    private var repairedSection: some View {
+    /// 「已修补」栏目入口：点进去是二级页 `RepairedListPage`。
+    /// 主页只留一行入口 + 计数；在线安装 / 覆盖升级安装、导出都在二级页里。
+    private var repairedLinkSection: some View {
         Section {
-            DisclosureGroup(isExpanded: $repairedExpanded) {
-                ForEach(repairedPackages) { p in
-                    repairedRow(p)
-                }
+            NavigationLink {
+                RepairedListPage()
             } label: {
                 blockLabel("已修补", count: repairedPackages.count,
                            symbol: "checkmark.seal.fill", tint: LocusTheme.accent)
             }
         } footer: {
-            Text("已修补的包只支持在线安装与覆盖/升级安装；原件已删除，不再提供重新修补.")
+            Text("点一行进入二级页：在线安装 / 覆盖升级安装、导出.")
         }
     }
 
-    /// 折叠块标题：图标 + 「标题 (条数)」。
+    /// 栏目入口标题：图标 + 「标题 (条数)」。
     private func blockLabel(_ title: String, count: Int, symbol: String, tint: Color) -> some View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
@@ -420,205 +358,6 @@ struct ImportView: View {
                 .foregroundStyle(tint)
             Text("\(title) (\(count))")
                 .font(.subheadline.weight(.semibold))
-        }
-    }
-
-    /// 批量修补结果（需求 #19）：每条分别给出成败，不用一个总的「完成 / 失败」。
-    private var batchResultSection: some View {
-        Section {
-            ForEach(batchLog) { item in
-                HStack(alignment: .top, spacing: 10) {
-                    AppRowIcon(systemName: item.outcome.symbol, tint: item.outcome.tint,
-                               symbolSize: 14, frameSize: 26)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.name)
-                            .font(.subheadline)
-                            .lineLimit(1)
-                        if let reason = item.outcome.reason {
-                            Text(reason)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    chip(item.outcome.text, item.outcome.tint)
-                }
-                .padding(.vertical, 2)
-            }
-        } header: {
-            Text("批量修补结果")
-        }
-    }
-
-    /// 已导入行：左侧勾选框（多选，需求 #19）+ 行体（点进入修补流程）。
-    private func importedRowView(_ p: ImportedPackage) -> some View {
-        let locked = importing || repairing || batchRepairing || preparingPackageId != nil
-        return HStack(spacing: 10) {
-            Button {
-                toggleSelection(p)
-            } label: {
-                Image(systemName: selectedPackageIds.contains(p.id) ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20))
-                    .foregroundStyle(selectedPackageIds.contains(p.id)
-                                     ? AppTheme.accent
-                                     : Color.secondary.opacity(0.5))
-            }
-            .buttonStyle(.plain)
-            .disabled(locked)
-            .accessibilityLabel(selectedPackageIds.contains(p.id) ? "取消选择" : "选择")
-
-            Button {
-                openPackage(p)
-            } label: {
-                importedRow(p)
-            }
-            .buttonStyle(.plain)
-            .disabled(locked)
-        }
-    }
-
-    private func importedRow(_ p: ImportedPackage) -> some View {
-        HStack(spacing: 12) {
-            AppRowIcon(systemName: importedStatusSymbol(p.status),
-                       tint: importedStatusTint(p.status),
-                       symbolSize: 16, frameSize: 30)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(p.name)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                HStack(spacing: 8) {
-                    Text(p.importedAt.formatted(date: .numeric, time: .shortened))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text(p.sizeText)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                // 批量修补里这条失败的原因（成功条目已移出本块，不在此行）。
-                if let reason = failedReason(for: p.id) {
-                    Text(reason)
-                        .font(.caption2)
-                        .foregroundStyle(LocusTheme.statusBad)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 0)
-            if preparingPackageId == p.id {
-                ProgressView()
-            } else {
-                chip(p.status.text, importedStatusTint(p.status))
-            }
-        }
-        .contentShape(Rectangle())
-    }
-
-    /// 批量修补里某条的失败原因（成功 / 未参与时为 nil）。
-    private func failedReason(for id: String) -> String? {
-        batchLog.first { $0.id == id }?.outcome.reason
-    }
-
-    /// 已修补行（需求 #20）：只给「在线安装」「覆盖/升级安装」两个入口。
-    private func repairedRow(_ p: ImportedPackage) -> some View {
-        let busy = installingPackageId == p.id || onlineInstallingPackageId == p.id
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                AppRowIcon(systemName: "checkmark.seal.fill",
-                           tint: LocusTheme.accent, symbolSize: 16, frameSize: 30)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(p.name)
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                    HStack(spacing: 8) {
-                        Text(p.importedAt.formatted(date: .numeric, time: .shortened))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(p.sizeText)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer(minLength: 0)
-                chip(p.status == .installed ? "已安装" : "已修补",
-                     p.status == .installed ? LocusTheme.statusGood : LocusTheme.accent)
-            }
-
-            HStack(spacing: 8) {
-                Button {
-                    performRepairedOnlineInstall(p)
-                } label: {
-                    Label("在线安装", systemImage: "icloud.and.arrow.down")
-                }
-                .disabled(!canOnlineInstall(p) || busy)
-
-                Button {
-                    performOverwriteInstall(p)
-                } label: {
-                    Label("覆盖/升级安装", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .disabled(!canOverwriteInstall(p) || busy)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            if busy {
-                ProgressView().controlSize(.small)
-            } else if let reason = repairedInstallBlockReason(p) {
-                Text(reason)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    /// 批量修补控制条（需求 #19）：显示进度，或「批量修补 (n)」入口。
-    private var batchControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if batchRepairing {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(batchProgressText.isEmpty ? "批量修补中" : batchProgressText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                HStack(spacing: 12) {
-                    Button {
-                        showBatchRepairConfirm = true
-                    } label: {
-                        Text("批量修补（\(selectedPackageIds.count)）")
-                    }
-                    .disabled(selectedPackageIds.isEmpty || importing || repairing)
-
-                    if !selectedPackageIds.isEmpty {
-                        Button("清除选择") { selectedPackageIds.removeAll() }
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    /// 状态图标（语义对齐本页 `ShareStage`：待修补=clock / 已修补=seal / 已安装=check）。
-    private func importedStatusSymbol(_ s: ImportedPackage.Status) -> String {
-        switch s {
-        case .awaitingRepair: return "clock"
-        case .repaired:       return "checkmark.seal.fill"
-        case .installed:      return "checkmark.circle.fill"
-        }
-    }
-
-    private func importedStatusTint(_ s: ImportedPackage.Status) -> Color {
-        switch s {
-        case .awaitingRepair: return .orange
-        case .repaired:       return LocusTheme.accent
-        case .installed:      return LocusTheme.statusGood
         }
     }
 
@@ -774,7 +513,7 @@ struct ImportView: View {
                 HStack(spacing: 10) {
                     AppRowIcon(systemName: "wrench.and.screwdriver.fill",
                                tint: AppTheme.accent, symbolSize: 16, frameSize: 30)
-                    Text(progressText.isEmpty ? "修补并安装中" : progressText)
+                    Text(progressText.isEmpty ? "修补中" : progressText)
                         .font(.subheadline.weight(.medium))
                     Spacer(minLength: 0)
                 }
@@ -886,83 +625,6 @@ struct ImportView: View {
         }
     }
 
-    // MARK: - 已修补条目的安装（需求 #20）
-
-    /// 「已修补」条目**只**提供在线安装与覆盖/升级安装：
-    ///   · 不提供重新修补 —— 已修补的包无需再修，且原件已按需求 #17 删除，无从下手；
-    ///   · 不提供本地安装（修补流程里那一步）—— 它属于「开始修补」链路，不属于已修补清单。
-    ///
-    /// 在线安装前置：包内有应用标识（bundle id）。
-    private func canOnlineInstall(_ p: ImportedPackage) -> Bool {
-        guard let path = p.repairedPath, !path.isEmpty else { return false }
-        return !(p.bundleId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// 覆盖/升级安装前置：本机已装同 bundleId 的应用（否则无「已装」可覆盖）。
-    /// `isInstalled == nil`（查不到清单）时不可点，不让用户点了才报错。
-    private func canOverwriteInstall(_ p: ImportedPackage) -> Bool {
-        guard let path = p.repairedPath, !path.isEmpty else { return false }
-        return p.isInstalled == true
-    }
-
-    /// 已修补条目不可安装时的原因（两个入口都可用时返回 nil）。
-    private func repairedInstallBlockReason(_ p: ImportedPackage) -> String? {
-        if let path = p.repairedPath, !path.isEmpty, canOnlineInstall(p), canOverwriteInstall(p) {
-            return nil
-        }
-        guard let path = p.repairedPath, !path.isEmpty else {
-            return "找不到修补产物，无法安装."
-        }
-        var reasons: [String] = []
-        if !canOnlineInstall(p) { reasons.append("包内读不出应用标识，无法在线安装") }
-        if !canOverwriteInstall(p) {
-            reasons.append(p.isInstalled == nil
-                           ? "无法确认本机安装状态，覆盖升级不可用"
-                           : "本机未安装同款应用，无法覆盖升级")
-        }
-        return reasons.joined(separator: "；") + "."
-    }
-
-    /// 已修补条目的在线安装（OTA / `itms-services`，装的就是这份修补产物）。
-    private func performRepairedOnlineInstall(_ p: ImportedPackage) {
-        guard canOnlineInstall(p), let path = p.repairedPath,
-              let bundleId = p.bundleId else { return }
-        onlineInstallingPackageId = p.id
-        let url = URL(fileURLWithPath: path)
-        OnlineInstallService.install(ipaURL: url, bundleId: bundleId) { result in
-            Task { @MainActor in
-                onlineInstallingPackageId = nil
-                switch result {
-                case .success:
-                    ToastCenter.shared.show("正在安装")
-                case .failure(let error):
-                    ToastCenter.shared.show(error.localizedDescription)
-                }
-            }
-        }
-    }
-
-    /// 已修补条目的覆盖/升级安装：本地装这份产物，覆盖本机已装的同 bundleId 应用。
-    /// `allowDowngrade: true` 走 installd 的 Upgrade 命令，正是「覆盖 / 升级」语义。
-    private func performOverwriteInstall(_ p: ImportedPackage) {
-        guard canOverwriteInstall(p), let path = p.repairedPath else { return }
-        installingPackageId = p.id
-        Task {
-            do {
-                try await AppStoreInstallService.installLocalIPA(
-                    path,
-                    allowDowngrade: true,
-                    progress: { _ in },
-                    onLog: { _ in })
-                ToastCenter.shared.show("覆盖/升级安装完成")
-            } catch {
-                ToastCenter.shared.show(error.localizedDescription)
-            }
-            installingPackageId = nil
-            reloadPackages()
-        }
-    }
-
     /// 修补完成后算一次「在线安装」前置检查结果。
     ///
     /// bundle id 取**包内 Info.plist** 优先（修补产物才是真正要装的包），
@@ -1020,7 +682,7 @@ struct ImportView: View {
         switch s {
         case .ok:             return "checkmark.seal.fill"
         case .failed:         return "xmark.octagon.fill"
-        case .skipped:        return "pause.circle.fill"
+        case .skipped:        return "checkmark.seal.fill"   // 只修补、未安装：正常结束态
         case .needsUserChoice: return "questionmark.circle.fill"
         }
     }
@@ -1029,7 +691,7 @@ struct ImportView: View {
         switch s {
         case .ok:             return LocusTheme.statusGood
         case .failed:         return LocusTheme.statusBad
-        case .skipped:        return .orange
+        case .skipped:        return LocusTheme.accent
         case .needsUserChoice: return AppTheme.accent
         }
     }
@@ -1088,6 +750,16 @@ struct ImportView: View {
         record = rec            // 进入「待修补」态（packageSection 里出现「开始修补」）
     }
 
+    /// 发起一次「从文件导入」：记下待导入 URL 并弹出导入前确认。
+    ///
+    /// **唯一**设置 `showImportConfirm` 的地方 —— 文件选择器与「扫描到的新文件」候选的「导入」都走这里。
+    /// 「扫描新文件」**不**经过此函数（扫描只列举、不复制，见 `scanNew`）。
+    private func requestImport(_ url: URL?) {
+        guard let url else { return }
+        pendingURL = url
+        showImportConfirm = true
+    }
+
     private func startImport() {
         guard let url = pendingURL else { return }
         pendingURL = nil
@@ -1113,19 +785,22 @@ struct ImportView: View {
             importResult = r
             record = r.record
             reloadPackages()
+            // 导入成功的候选已进系统（落进 `Imports/`），从候选区移除，避免「已导入」还挂在候选里。
+            if r.status == .ok { scanCandidates.removeAll { $0 == url } }
             if r.status != .ok { ToastCenter.shared.show(r.message) }
         }
     }
 
+    /// 「扫描新文件」：**只列举、不复制**。
+    ///
+    /// 扫到的包进「扫描到的新文件」候选区（`scanCandidates`），由用户点「导入」才真正收进本机；
+    /// 扫描本身**绝不**触发导入 / 复制 —— 旧实现把扫到的第一个包直接送进「导入前确认」，
+    /// 于是「扫一遍」就等于把 `Imports/` 里已存在的包**再复制一份**（重复包 + 第一条记录丢失）。
+    ///
+    /// **去重**：候选区只留「`ImportedPackageList` 覆盖不到的」那些（即**还没进系统的新文件**），
+    /// 已能从 `Imports/` 列出来的包一律滤掉 —— 否则候选区与「已导入 / 待修补」两处重复展示。
     private func scanNew() {
         // 把本次会话已导入的包排除掉（否则「扫描新文件」会反复选中同一个旧包）。
-        // 已知限制（登记 D5，非缺陷）：`known` **只含当前这一条 record**，所以「已在 Imports/ 但
-        // 不是当前 record」的包会被当成新包**再复制一份**（例：导入 A → 导入 B → 点扫描 → 生成
-        // `A 2.ipa`）；**单线程即可命中**，不需要并发。重启后 `record` 为 nil、`known` 为空，
-        // `Imports/` 里的包会**全部**被当成新的（比 A→B 更常见）。
-        // 后果只是多一个重复文件，**不是数据丢失**（原包仍在 `Imports/`，仍可修补）。
-        // 治本 = `ImportRecord` 持久化（D5）。注意：把 `PendingImportHandoff` 的单槽改成队列
-        // **收不了这个问题** —— 队列只解决并发覆盖，管不到 `known` 的单条语义，别再走那条路。
         let known = record.map { [$0] } ?? []
         let result = ImportService.scanForNewImports(known: known)
         // 读不出来 ≠ 确定没有：只要有任何目录枚举失败，就**不能**落入「没有新包」分支，
@@ -1134,22 +809,34 @@ struct ImportView: View {
             ToastCenter.shared.show("无法读取导入目录，未能确认是否有新包，请重试")
             return
         }
-        guard let first = result.urls.first else {
-            ToastCenter.shared.show("没有发现新的安装包")
-            return
-        }
-        if result.urls.count > 1 {
-            ToastCenter.shared.show("发现 \(result.urls.count) 个安装包，已选中最近修改的一个.")
-        }
-        pendingURL = first
-        showImportConfirm = true
+        // 已进系统的包名（来自 `ImportedPackageList.scanListing()`，两个块合并）—— 用于去重。
+        let listed = ImportedPackageList.scanListing(installedBundleIds: nil)
+        let knownNames = Set((listed.imported + listed.repaired).map(\.name))
+        let fresh = result.urls.filter { !knownNames.contains(Self.packageName(ofCandidate: $0)) }
+        scanCandidates = fresh
+        ToastCenter.shared.show(fresh.isEmpty
+            ? "没有发现新的安装包"
+            : "发现 \(fresh.count) 个新文件")
+    }
+
+    /// 候选 URL → **包名**（去重比对键）。
+    ///
+    /// 用包名而不是 `url.lastPathComponent`：`ImportedPackageList.name` 是包名，而候选 URL 的末段
+    /// 在两种落点形态下不一致（新落点是 `original.ipa`、老平铺是 `<包名>.ipa`）——只有「归一化到包名」
+    /// 这一个键能同时匹配两者：
+    ///   · `Imports/<包名>/original.ipa` ⇒ 取**父目录名**；
+    ///   · `Imports/<包名>.ipa` / `Documents/<包名>.ipa` ⇒ 取**去扩展名的文件名**。
+    private static func packageName(ofCandidate url: URL) -> String {
+        url.lastPathComponent == "original.ipa"
+            ? url.deletingLastPathComponent().lastPathComponent
+            : url.deletingPathExtension().lastPathComponent
     }
 
     private func runRepair() {
         guard let rec = record else { return }
         repairing = true
         repairFraction = nil
-        progressText = "修补并安装中"
+        progressText = "修补中"
         repairResult = nil
         // 新一轮修补开始：在线安装的前置结论作废，等产物出来再算（避免拿上一轮产物误判可点）。
         onlineReadiness = .noArtifact
@@ -1172,7 +859,8 @@ struct ImportView: View {
             // 修补产物指纹回填到**新字段** `repairedSha256`；原件指纹 `sha256` 保持不变。
             if let sha = r.repairedIPASha256 { record?.repairedSha256 = sha }
             // 需求 #17：**修补成功**（.ok）后删除原件 `original.ipa`，条目随即移入「已修补」块
-            // （reloadPackages 扫到该目录只剩 repaired.ipa 即归类）。失败 / 取消（.skipped）绝不删。
+            // （reloadPackages 扫到该目录只剩 repaired.ipa 即归类）。只修补不装（.skipped）与失败绝不删 ——
+            // 产物已在盘上，`ImportedPackageList` 按「有产物即归已修补」会自动归块。
             if r.status == .ok {
                 ImportService.deleteOriginalAfterRepairSuccess(rec)
             }
@@ -1180,78 +868,6 @@ struct ImportView: View {
             onlineReadiness = Self.resolveOnlineReadiness(result: r, record: record)
             reloadPackages()
             if r.status == .failed { ToastCenter.shared.show(r.message) }
-        }
-    }
-
-    // MARK: 批量修补（需求 #19）
-
-    /// 勾选 / 取消勾选一条已导入的包。
-    private func toggleSelection(_ p: ImportedPackage) {
-        if selectedPackageIds.contains(p.id) {
-            selectedPackageIds.remove(p.id)
-        } else {
-            selectedPackageIds.insert(p.id)
-        }
-    }
-
-    /// 批量修补：对选中的包**逐条串行**执行（不并发 —— 修补是重 I/O，且会踩已知并发问题）。
-    ///
-    /// 每条各自走完整流程（含「安装前确认」），成败分别记入 `batchLog`：
-    ///   · 成功（.ok）⇒ 按需求 #17 删原件，条目移入「已修补」块；
-    ///   · 失败 / 取消 ⇒ 原件保留，条目留在「已导入」块并标出原因。
-    /// 中途离开本页（`viewActive == false`）⇒ 停止后续条目，避免对话框无处显示导致永久挂起。
-    private func runBatchRepair() {
-        let targets = packages.filter { selectedPackageIds.contains($0.id) }
-        guard !targets.isEmpty else { return }
-        batchRepairing = true
-        batchLog = []
-        batchProgressText = "准备中"
-        onlineReadiness = .noArtifact
-        onlineInstalling = false
-
-        Task {
-            for (idx, p) in targets.enumerated() {
-                guard viewActive else { break }
-                batchProgressText = "正在修补 \(idx + 1)/\(targets.count)：\(p.name)"
-
-                guard let path = p.originalPath else {
-                    batchLog.append(.init(id: p.id, name: p.name,
-                                          outcome: .failed("找不到原件.")))
-                    continue
-                }
-                let rebuilt: ImportRecord? = await Task.detached(priority: .userInitiated) {
-                    ImportService.rebuildRecord(forOriginalAt: path)
-                }.value
-                guard let rec = rebuilt else {
-                    batchLog.append(.init(id: p.id, name: p.name,
-                                          outcome: .failed("无法读取这个安装包.")))
-                    continue
-                }
-
-                let r = await ImportService.handOffToRepair(
-                    rec,
-                    runLaunchCheck: true,
-                    progress: nil,
-                    confirmInstall: { await awaitInstallConfirm() })
-
-                switch r.status {
-                case .ok:
-                    // 需求 #17：修补成功后删原件，条目移入「已修补」块。
-                    ImportService.deleteOriginalAfterRepairSuccess(rec)
-                    batchLog.append(.init(id: p.id, name: p.name, outcome: .success))
-                case .skipped:
-                    batchLog.append(.init(id: p.id, name: p.name,
-                                          outcome: .failed("已取消安装，原件保留.")))
-                case .failed, .needsUserChoice:
-                    batchLog.append(.init(id: p.id, name: p.name, outcome: .failed(r.message)))
-                }
-                reloadPackages()
-            }
-            batchRepairing = false
-            batchProgressText = ""
-            selectedPackageIds.removeAll()
-            let ok = batchLog.filter { if case .success = $0.outcome { return true } else { return false } }.count
-            ToastCenter.shared.show("批量修补完成：成功 \(ok) 个，失败 \(batchLog.count - ok) 个")
         }
     }
 
@@ -1275,13 +891,13 @@ struct ImportView: View {
         installContinuation = nil
     }
 
-    // MARK: 已导入的包列表
+    // MARK: 主页栏目计数
 
-    /// 刷新两个块：已导入（还有 `original.ipa`）与已修补（原件已删、只剩 `repaired.ipa`）。
+    /// 刷新主页两个入口的计数：已导入（还有 `original.ipa`）与已修补（只剩 `repaired.ipa`）。
+    /// 列表本体在二级页 `ImportedListPage` / `RepairedListPage`，这里只取 `count`。
     ///
     /// 「已安装」判定需要本机应用清单（`AppDiscovery`，依赖配对 / 隧道）；**查不到就传 nil**，
-    /// 列表只落「待修补 / 已修补」且 `isInstalled` 保持 nil，绝不凭空断言已安装。
-    /// 扫描（判已安装时会解包读 bundleId）放后台。
+    /// `isInstalled` 保持 nil，绝不凭空断言已安装。扫描（判已安装时会解包读 bundleId）放后台。
     private func reloadPackages() {
         Task {
             let installed: Set<String>? = await Task.detached(priority: .userInitiated) { () -> Set<String>? in
@@ -1293,30 +909,6 @@ struct ImportView: View {
             }.value
             packages = listing.imported
             repairedPackages = listing.repaired
-            // 选择集只保留仍在「已导入」块里的条目（成功的已移走，不能留着悬空选择）。
-            selectedPackageIds.formIntersection(Set(listing.imported.map(\.id)))
-        }
-    }
-
-    /// 点一行：重读原件、重建记录，复用既有的「包信息 → 开始修补」入口。
-    /// 原件读不出时给一句反馈，不静默。
-    private func openPackage(_ p: ImportedPackage) {
-        guard !importing, !repairing, preparingPackageId == nil else { return }
-        guard let path = p.originalPath else { return }
-        preparingPackageId = p.id
-        Task {
-            let rec = await Task.detached(priority: .userInitiated) {
-                ImportService.rebuildRecord(forOriginalAt: path)
-            }.value
-            preparingPackageId = nil
-            guard let rec else {
-                ToastCenter.shared.show("无法读取这个安装包.")
-                return
-            }
-            importResult = nil
-            repairResult = nil
-            onlineReadiness = .noArtifact   // 换包了：上一轮产物的在线安装结论作废
-            record = rec
         }
     }
 }

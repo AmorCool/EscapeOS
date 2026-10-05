@@ -22,6 +22,9 @@ struct IPADownloadManagerView: View {
     /// 进入页面时按 bundleId 查回来补上；查不到就退回字母块。
     @State private var icons: [String: String] = [:]
     @State private var selection = Set<String>()
+    /// 长按安装包 → 「查看图标」打开的全屏预览。图数组随 target 一起写（`ImagePreviewTarget`），
+    /// 页面上不再单独留一份预览数组 —— 两次独立写入会让弹窗读到旧的空数组.
+    @State private var previewTarget: ImagePreviewTarget?
     /// v0.3.383：右上角「在线安装设置」sheet（GitHub Token）
     @State private var showOnlineInstallSettings = false
     /// v0.3.382：在列表里出现**多于一次**的 bundleId。
@@ -105,6 +108,11 @@ struct IPADownloadManagerView: View {
                 // 以前这里写死 `true` —— 于是一个**已完成**的任务行（若因去重时序残留）
                 // 点开会显示"下载中"，与行上的「已完成 100%」自相矛盾（用户截图）。
                 isPendingDownload: job.phase.isBusy)
+        }
+        // 长按安装包 → 「查看图标」→ 全屏预览。长按图片「保存到相册」由 `ImageGalleryViewer` 自带
+        //（二次确认 → `MediaSaver`，无权限自动回落 `Documents/AppIcons`），这里只负责把 target 递进去.
+        .fullScreenCover(item: $previewTarget) { target in
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
         }
         // v0.3.394（用户硬要求）：**装完不用退出这一页就能自己刷新**。
         //
@@ -565,6 +573,17 @@ struct IPADownloadManagerView: View {
             }
             .tint(.orange)
         }
+        // 长按安装包 → 「查看图标 / 提取图标」。菜单项与该行 `iconView` 用**同一个**图标地址；
+        // 没有图标（地址为空）时整组置灰，不让用户点下去才发现没图可看.
+        // 「保存图标」不在这里：进预览后长按图片即可（`ImageGalleryViewer` 自带），不重复一份.
+        .contextMenu {
+            let iconURL = item.iconURL ?? icons[item.bundleId ?? ""]
+            iconMenuItems(iconURL: iconURL,
+                          fileNameBase: item.bundleId ?? item.title) {
+                showIconPreview(iconURL, target: $previewTarget)
+            }
+            .disabled((iconURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
     }
 
     @ViewBuilder
@@ -641,30 +660,21 @@ struct IPADownloadManagerView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("加密状态")
                         .font(.caption.weight(.semibold))
-                    guideRow("明文包", .secondary, "包本身没加密，直接安装即可.")
+                    guideRow("明文包", .secondary, "明文包未加密，可直接安装.")
                     guideRow("加密包 · 带 sinf", .secondary, "已校验：包内 sinf 结构完整，可直接安装.")
-                    guideRow("加密包 · 带 sinf（未校验）", .secondary, "只是「不知道」，不是有问题：sinf 在，但我们没校验过它的结构（旧记录没这一位，或格式不认识）.")
-                    guideRow("加密包 · 缺 sinf", .orange, "包内确实没有 sinf，装不上.")
-                    guideRow("加密包 · sinf 异常", .orange, "有 sinf，但结构写坏了，同样装不上.与「缺 sinf」是两回事：一个要补 sinf，一个要重下.")
+                    guideRow("加密包 · 带 sinf（未校验）", .secondary, "存疑：sinf 存在，但未校验过结构（无记录，或格式未知）.")
+                    guideRow("加密包 · 缺 sinf", .orange, "安装包缺失 sinf，需补 sinf.")
+                    guideRow("加密包 · sinf 异常", .orange, "sinf 存在，但结构异常/未知可能无法安装.")
 
                     Divider()
 
                     Text("来源")
                         .font(.caption.weight(.semibold))
                     guideRow("Apple ID", .secondary, "从 App Store 商店下载.")
-                    guideRow("本地", .secondary, "手动放进下载目录、或从文件导入的包，不是商店下载.")
+                    guideRow("本地", .secondary, "手动从文件导入的包，非商店来源.")
                     guideRow("爱思免登录", .secondary, "爱思源下载，服务端已签名.")
                     guideRow("NB免登录", .secondary, "NB 源下载.")
                     guideRow("牛蛙免登录", .secondary, "牛蛙源下载.")
-
-                    Divider()
-
-                    Text("为什么标签变了")
-                        .font(.caption.weight(.semibold))
-                    Text("v0.3.570 起，加密状态从两态改为三态：以前「读不出加密状态」会被当成「未加密」，误标成「明文包」.现在只有确定是明文才显示「明文包」，其余按真实状态显示，所以「明文包」会比以前少.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 4)
             } label: {

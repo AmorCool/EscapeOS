@@ -5,17 +5,18 @@ import Foundation
 // 数据来源是 `Imports/` 目录的**磁盘现状**，不依赖持久化台账（本仓当前没有导入台账落盘）。
 // 因此每一行的「状态」都由**磁盘证据**推出，不做无据推断。
 //
-// 两个块，按**原件是否还在**区分（用户需求 #17/#18/#19/#20）：
-//   · 「已导入」= 目录里还有 `original.ipa`（可修补；批量修补只作用于这个块）；
-//   · 「已修补」= 原件已被删除、只剩 `repaired.ipa`（修补成功后原件被删，条目落到这里）。
-// 判据就是磁盘上 `original.ipa` 在不在，不引入新的持久化状态。
+// 两个块，按**有没有修补产物**区分（用户需求 #5/#17/#18/#19/#20）：
+//   · 「已导入」= 只有原件 `original.ipa`、**还没有** `repaired.ipa`（可修补；批量修补只作用于这个块）；
+//   · 「已修补」= **存在** `repaired.ipa`（不论原件是否还在 —— 修补成功即归此块）。
+//
+// 为什么判据是「产物存在」而不是「原件已删」：
+//   原件只在**安装成功**后才删。若按「原件已删」归块，则「修补成功但用户取消安装」
+//   的包会一直卡在「已导入」，而「已修补」块才是安装/导出入口 ⇒ 用户会以为包丢了。
+//   判据与「是否安装」解绑后，修补与安装不再互相绑架。
 //
 // 两种落点形态都要列出（老平铺包不能被落下）：
-//   · 老平铺：`Imports/<包名>.ipa`
+//   · 老平铺：`Imports/<包名>.ipa`（产物落 `Imports/repaired/<包名>.ipa`，按包名归属）
 //   · 新落点：`Imports/<包名>/original.ipa`（+ 同目录 `repaired.ipa`）
-//
-// 老平铺的 `Imports/repaired.ipa` 落在共享根目录、**无法归因到具体包名**，故不单独成行。
-// 「只有 repaired.ipa、没有 original.ipa」的新落点目录 = 已修补块（原件已按 #17 删除）。
 
 /// 一个已导入包（从 `Imports/` 磁盘现状推导，不依赖持久化台账）。
 struct ImportedPackage: Identifiable, Hashable, Sendable {
@@ -47,6 +48,7 @@ struct ImportedPackage: Identifiable, Hashable, Sendable {
     let originalPath: String? // 原件路径（进入修补流程用；已修补块为 nil）
     let repairedPath: String? // 修补产物路径（有产物时非 nil）
     let bundleId: String?     // 包内应用标识（已修补块安装时要用）
+    let version: String?      // 包内应用版本（CFBundleVersion / 短版本）；读不出为 nil，界面不臆造
     /// 本机是否已装同 bundleId 的应用。`nil` = 查不到清单（未配对 / 隧道不可用），不做断言。
     let isInstalled: Bool?
     let sizeBytes: Int64
@@ -81,25 +83,41 @@ enum ImportedPackageList {
         var imported: [ImportedPackage] = []
         var repaired: [ImportedPackage] = []
 
+        // 老平铺包产物仓库：`Imports/repaired/<包名>.ipa`（按包名归属，避免多个老平铺包互相覆盖）。
+        let productStoreName = "repaired"
+        var productStore: [String: URL] = [:]   // 包名（去扩展名）-> 产物 URL
+        let storeDir = dir.appendingPathComponent(productStoreName, isDirectory: true)
+        if let products = try? fm.contentsOfDirectory(at: storeDir,
+                includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            for p in products where p.pathExtension.lowercased() == "ipa" {
+                productStore[p.deletingPathExtension().lastPathComponent] = p
+            }
+        }
+
         for u in items {
             let isDir = (try? u.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
             if isDir {
+                // 产物仓库目录本身不是包，跳过（其内容按包名归属到老平铺包，见下方）。
+                if u.lastPathComponent == productStoreName { continue }
                 // 形态二（新落点）：`Imports/<包名>/original.ipa` 与 `Imports/<包名>/repaired.ipa`。
                 let original = u.appendingPathComponent("original.ipa")
                 let product = u.appendingPathComponent("repaired.ipa")
                 let hasOriginal = fm.fileExists(atPath: original.path)
                 let hasProduct = fm.fileExists(atPath: product.path)
                 let name = u.lastPathComponent
-                if hasOriginal {
-                    // 有原件 ⇒ 已导入块（即便已有产物，仍可重新修补 / 安装）。
-                    imported.append(make(name: name, kind: .imported,
-                                         original: original,
-                                         product: hasProduct ? product : nil,
-                                         installedBundleIds: installedBundleIds, fm: fm))
-                } else if hasProduct {
-                    // 原件已删、只剩产物 ⇒ 已修补块（用户需求 #17）。
+                if hasProduct {
+                    // **有产物 ⇒ 已修补块**（不论原件在不在）。
+                    // 用户需求 #5：修补成功就该进「已修补」，不能被「是否安装成功」绑架 ——
+                    // 旧判据是「原件已删」，而原件只在安装成功后才删，
+                    // 于是「修补成功但取消安装」的包会一直卡在「已导入」，用户以为丢了。
                     repaired.append(make(name: name, kind: .repaired,
-                                         original: nil, product: product,
+                                         original: hasOriginal ? original : nil,
+                                         product: product,
+                                         installedBundleIds: installedBundleIds, fm: fm))
+                } else if hasOriginal {
+                    // 无产物、有原件 ⇒ 已导入块（待修补）。
+                    imported.append(make(name: name, kind: .imported,
+                                         original: original, product: nil,
                                          installedBundleIds: installedBundleIds, fm: fm))
                 }
                 // 两者都没有 ⇒ 残留空目录，跳过。
@@ -108,8 +126,25 @@ enum ImportedPackageList {
             // 形态一（老平铺）：`Imports/*.ipa`。排除修补产物 repaired.ipa。
             guard u.pathExtension.lowercased() == "ipa",
                   u.lastPathComponent != "repaired.ipa" else { continue }
-            imported.append(make(name: u.deletingPathExtension().lastPathComponent,
-                                 kind: .imported, original: u, product: nil,
+            let flatName = u.deletingPathExtension().lastPathComponent
+            // 老平铺产物落 `Imports/repaired/<包名>.ipa`，按包名归属到这一行。
+            // 与形态二同口径：**有产物就归「已修补」**（不论原件是否还在）。
+            if let product = productStore[flatName] {
+                repaired.append(make(name: flatName, kind: .repaired, original: nil,
+                                     product: product,
+                                     installedBundleIds: installedBundleIds, fm: fm))
+            } else {
+                imported.append(make(name: flatName, kind: .imported, original: u,
+                                     product: nil,
+                                     installedBundleIds: installedBundleIds, fm: fm))
+            }
+        }
+
+        // 产物仓库里那些**原件已不存在**的包：一并归「已修补」（原件还在的已在上面按行归属）。
+        for (name, product) in productStore {
+            let flatOriginal = dir.appendingPathComponent("\(name).ipa")
+            if fm.fileExists(atPath: flatOriginal.path) { continue }
+            repaired.append(make(name: name, kind: .repaired, original: nil, product: product,
                                  installedBundleIds: installedBundleIds, fm: fm))
         }
 
@@ -135,8 +170,11 @@ enum ImportedPackageList {
         let size = Int64(vals?.fileSize ?? 0)
         let when = vals?.creationDate ?? vals?.contentModificationDate ?? .distantPast
 
-        // bundle id：原件在就用原件，否则用产物（产物是原件的整包副本，Info.plist 一致）。
-        let bundleId = meta.flatMap { IPAPackageInspector.inspect(ipaPath: $0.path)?.bundleIdentifier }
+        // bundle id / 版本：原件在就用原件，否则用产物（产物是原件的整包副本，Info.plist 一致）。
+        // 只 inspect 一次，bundleId 与 version 同源取，避免重复读 ZIP 中央目录。
+        let inspected = meta.flatMap { IPAPackageInspector.inspect(ipaPath: $0.path) }
+        let bundleId = inspected?.bundleIdentifier
+        let version = inspected?.bundleVersion
 
         // 已安装证据：能查到清单（非 nil）且 bundleId 命中。查不到时保持 nil，不做断言。
         let installed: Bool? = {
@@ -158,6 +196,7 @@ enum ImportedPackageList {
                                originalPath: original?.path,
                                repairedPath: product?.path,
                                bundleId: bundleId,
+                               version: version,
                                isInstalled: installed,
                                sizeBytes: size, importedAt: when, status: status)
     }

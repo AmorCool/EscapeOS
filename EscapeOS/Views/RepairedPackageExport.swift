@@ -4,8 +4,8 @@ import SwiftUI
 //
 // 目标始终是 `RepairResult.repairedIPAPath` —— 即**修补产物**，绝不导出原件：
 //   · 新落点：`Imports/<包名>/repaired.ipa`
-//   · 老平铺：`Imports/repaired.ipa`（`RepairService.repairedOutputPath` 与原件同目录、不同名）
-// 明文包无需修补，其产物即原件，页脚据实说明。
+//   · 老平铺：`Imports/repaired/<包名>.ipa`（按包名归属，不与其它包的产物重名）
+// 明文包无需修补，其产物是原件的整包副本，页脚据实说明。
 //
 // 三种可导出状态，一律「先给结论，不让用户点了才报错」：
 //   · 尚未修补 / 修补失败 ⇒ 入口**禁用**，页脚写清原因；
