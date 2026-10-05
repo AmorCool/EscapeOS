@@ -80,6 +80,17 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .escSelectHomeTab)) { _ in
             selectedTab = .home
         }
+        // AirDrop /「用其他应用打开」兜底：`.ipa` 交给共享转换。
+        // LC 下安全作用域 URL 可能读不了 → `handleOpenURL` 内部降级到「请手动从文件选择」。
+        .onOpenURL { url in
+            ImportService.handleOpenURL(url, fallbackToPicker: {
+                selectedTab = .more
+                ToastCenter.shared.show("请到 更多 → 应用安装 → 共享转换 里手动选择文件")
+            }, completion: { r in
+                selectedTab = .more
+                ToastCenter.shared.show(r.message)
+            })
+        }
         .onAppear {
             // 预热不等免责声明确认：免 2FA 的静默会话恢复，越早启动
             // 用户进入「IPA 侧载 / 证书管理」页时越可能已完成（幂等，内部有 guard）.

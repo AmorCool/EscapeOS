@@ -620,8 +620,10 @@ struct IPADownloadManagerView: View {
     }
 
     /// 包类型只在「有风险」时着色：缺 sinf 的加密包装不上，必须显眼。
+    /// v0.3.568：`sinf 异常`（有 sinf 但结构写坏了）同样装不上，一并着色。
     private func kindTint(_ item: IPADownloadItem) -> Color {
-        item.isEncrypted == true && item.hasSINF != true ? .orange : .secondary
+        guard item.isEncrypted == true else { return .secondary }
+        return (item.hasSINF != true || item.sinfStructurallyValid == false) ? .orange : .secondary
     }
 
     // MARK: - 数据与安装

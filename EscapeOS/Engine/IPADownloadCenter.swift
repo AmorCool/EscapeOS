@@ -549,6 +549,9 @@ final class IPADownloadCenter: ObservableObject {
         Task.detached(priority: .userInitiated) {
             if let sinfBase64 {
                 PackageSINFWriter.writeIfNeeded(sinfBase64: sinfBase64, ipaPath: path)
+                // v0.3.568：写回后台账的 hasSINF 仍是「写回前」的旧快照 → 现读包内定正，
+                // 否则这一行会一直显示「缺 sinf」（见 `syncLedgerSinf`）。
+                await Self.syncLedgerSinf(fileName: fileName, ipaPath: path)
             }
             do {
                 try await AppStoreInstallService.installLocalIPA(
@@ -768,6 +771,8 @@ final class IPADownloadCenter: ObservableObject {
                     let ipaPath = dest.path
                     Task.detached(priority: .userInitiated) {
                         PackageSINFWriter.writeIfNeeded(sinfBase64: sinf, ipaPath: ipaPath)
+                        // v0.3.568：写回成功后把台账 hasSINF 定正（`record()` 记的是写回前的旧值）。
+                        await Self.syncLedgerSinf(fileName: safeName, ipaPath: ipaPath)
                     }
                 }
                 update(id) {
@@ -839,6 +844,26 @@ final class IPADownloadCenter: ObservableObject {
     // （用户点"安装"/"重装"按钮触发），不再由下载完成自动启动。
     //
     // 牛蛙源的 sinf 写入也由手动安装流程接管（见 `installLocal` 里的处理）。
+
+    /// v0.3.568：sinf 写回包内之后，把台账的 `hasSINF` / `sinfStructurallyValid` **定正**。
+    ///
+    /// 为什么需要：`record()` 是在「写回之前」记的（见 `handle` 的落盘段），所以走写回链路的
+    /// 加密包一开始必然是 `hasSINF == false`；写回成功后若不更新，下载管理会一直显示
+    /// 「缺 sinf」（本仓实测的假阳性来源）。`IPADownloadLibrary.items()` 的现算能兜住
+    /// **历史**记录，这里让**新下载 / 重装**当场就正确，不必等下一次列表重算。
+    ///
+    /// 现读包内字节判定（不猜）：`extractSINF` 只判存在性，结构交给 `isStructurallyValidSinf`。
+    ///
+    /// **`nonisolated`**：本类是 `@MainActor`，静态方法默认继承主 actor 隔离；
+    /// 而这里要**开包读几百 MB 的 IPA** —— 若在主 actor 上跑会卡 UI。标 `nonisolated`
+    /// 让它留在调用方（detached 后台任务）的线程上，只有写台账那一步回主 actor。
+    nonisolated private static func syncLedgerSinf(fileName: String, ipaPath: String) async {
+        guard let sinf = IPAPackageInspector.extractSINF(ipaPath: ipaPath) else { return }
+        let valid = PackageSINFWriter.isStructurallyValidSinf(sinf)
+        await MainActor.run {
+            IPADownloadLibrary.shared.markSinf(fileName: fileName, structurallyValid: valid)
+        }
+    }
 }
 
 // MARK: - v0.3.407：把外部下发的 sinf 写回包内（牛蛙源专用）
@@ -900,7 +925,10 @@ final class IPADownloadCenter: ObservableObject {
 /// 被替换的那条写新内容。产物与「苹果自己压的包」同构，无孤儿字节、无属性差异。
 ///
 /// 每次写包的每一步（成功 / 跳过 / 失败原因）都写 `[下载中心]` 日志 —— 不许静默。
-private enum PackageSINFWriter {
+///
+/// v0.3.568：由 `private` 改为 `internal` —— 多路径注入 `injectAllPaths(sinf:ipaPath:)`
+/// 需要被 `RepairService`（共享修补线）复用，避免两套注入逻辑。`writeIfNeeded` 行为不变。
+enum PackageSINFWriter {
 
     static func writeIfNeeded(sinfBase64: String?, ipaPath: String) {
         // 1) 必须有 sinf
@@ -937,48 +965,167 @@ private enum PackageSINFWriter {
         }
 
         do {
-            let archive = try ApplePackageArchive(url: URL(fileURLWithPath: ipaPath), accessMode: .update)
-            // 目标路径由包内 Info.plist 的 CFBundleExecutable 决定（不硬编码、不猜）
-            guard let infoEntry = archive.entries.first(where: {
-                $0.path.hasPrefix("Payload/") && $0.path.hasSuffix(".app/Info.plist")
-            }) else {
-                log("包内找不到 Payload/….app/Info.plist，无法定位 SC_Info（未写入）")
-                return
-            }
-            var plistData = Data()
-            try archive.extract(infoEntry) { plistData.append($0) }
-            let plistValue = try? PropertyListSerialization.propertyList(
-                from: plistData, options: [], format: nil)
-            guard let plist = plistValue,
-                  let info = plist as? [String: Any],
-                  let exe = info["CFBundleExecutable"] as? String, !exe.isEmpty,
-                  let appPrefix = infoEntry.path.components(separatedBy: ".app/").first,
-                  !appPrefix.isEmpty else {
-                log("Info.plist 里读不到 CFBundleExecutable，无法确定 sinf 文件名（未写入）")
-                return
-            }
-
-            let target = "\(appPrefix).app/SC_Info/\(exe).sinf"
-
-            // v0.3.560：整包重写替换。
-            //
-            // 旧做法（0.3.546 → 0.3.559）是「摘中央目录记录 + 在旧中央目录起点追加新条目」：
-            // 原地改。真机上加密包**一直**报
-            // `PackageExtractionFailed (Could not extract archive)`，
-            // 从 3.5MB 的 Via 到 230MB 的 ChatGPT 全都是（0.4~11 秒）。
-            //
-            // 原地改法在 ZIP 层会留下两个苹果解压通道不吃的痕迹：
-            //   ① 旧 sinf 那条的 local header + 数据块还在文件里（只摘了索引），
-            //      文件里多出一个**没有中央目录记录指向的 `PK\x03\x04`**；
-            //   ② 新条目的属性是自己拼的（`version made by = 20`、无 extra），
-            //      与苹果自己的条目（`0x314` = Unix + 2.0，带 extra）不同源。
-            //
-            // 整包重写后产物与「苹果自己压的包」同构：条目顺序、属性、偏移全部连续，
-            // 无孤儿字节，无自拼属性差异。代价是整包按字节复制一遍，不解压不重压缩。
-            try archive.replaceEntry(with: target, data: sinf)
-            log("已把 sinf 写进包内：\(target)（\(sinf.count) 字节）")
+            let written = try injectAllPaths(sinf: sinf, ipaPath: ipaPath)
+            log("已把 sinf 写进包内 \(written.count) 条路径（每条 \(sinf.count) 字节）："
+                + written.joined(separator: ", "))
         } catch {
             log("写 sinf 失败（\(error.localizedDescription)），包内不会带 sinf")
+        }
+    }
+
+    /// **把同一份 sinf 写进包内全部 `SC_Info/*.sinf` 路径**（v0.3.568：主包单路径 → 全部路径）。
+    ///
+    /// ## 为什么必须全铺
+    ///
+    /// Apple CDN 的包对 `SC_Info` 是「每个二进制一套」（主包 + 每个 framework + 每个 appex），
+    /// 而同一 IPA 内所有 sinf **逐字节相同**（一份会话 sinf 被复制到各路径）。
+    /// 旧实现只写主包一条，framework / appex 仍是包内另一份 → 若两份不一致则 `dlopen` 时
+    /// 解密失败 → 崩。这是**既有缺陷**，同时影响 NB 下载路径与共享修补路径。
+    ///
+    /// ## 目标路径来源（按优先级）
+    ///
+    ///   1. `Payload/<App>.app/SC_Info/Manifest.plist` 的 `SinfReplicationPaths`
+    ///      （权威；缺失回退 `SinfPaths`）；
+    ///   2. 兜底扫描中央目录里**所有** `Payload/…/SC_Info/*.sinf`
+    ///      （Apple CDN 包不带 `Manifest.plist` 也可能有多份）；
+    ///   3. **始终并入主路径** `SC_Info/<exe>.sinf`。
+    ///
+    /// ## 写入方式
+    ///
+    /// 一次整包重写批量替换（`ApplePackageArchive.replaceEntries`）—— `replaceEntry`
+    /// 一次只能安全换一条，逐条各开一次 = N 次整包重写，性能不可接受。
+    /// 写后**逐条复读**长度与内容（须重开新实例，原实例偏移已失效）；不一致则抛错，**不静默**。
+    ///
+    /// - Returns: 实际写入的路径（相对 IPA 根）。
+    @discardableResult
+    static func injectAllPaths(sinf: Data, ipaPath: String) throws -> [String] {
+        let archive = try ApplePackageArchive(url: URL(fileURLWithPath: ipaPath), accessMode: .update)
+        // 目标路径由包内 Info.plist 的 CFBundleExecutable 决定（不硬编码、不猜）
+        guard let infoEntry = archive.entries.first(where: {
+            $0.path.hasPrefix("Payload/") && $0.path.hasSuffix(".app/Info.plist")
+        }) else {
+            throw SinfInjectError.noInfoPlist
+        }
+        var plistData = Data()
+        try archive.extract(infoEntry) { plistData.append($0) }
+        let plistValue = try? PropertyListSerialization.propertyList(
+            from: plistData, options: [], format: nil)
+        guard let plist = plistValue,
+              let info = plist as? [String: Any],
+              let exe = info["CFBundleExecutable"] as? String, !exe.isEmpty,
+              let appPrefix = infoEntry.path.components(separatedBy: ".app/").first,
+              !appPrefix.isEmpty else {
+            throw SinfInjectError.noExecutable
+        }
+
+        let mainPath = "\(appPrefix).app/SC_Info/\(exe).sinf"
+        // `collectSinfTargets` **始终**并入 `mainPath`（见其步骤 3）⇒ 返回集至少 1 条、绝不为空。
+        // 即便包里连主路径那条都不存在，`replaceEntries` 也会**追加**它（不是跳过）——
+        // 所以「收集不到」不会导致「静默不写」；本 guard 只是防御性断言。
+        let targets = collectSinfTargets(archive: archive, appPrefix: appPrefix, mainPath: mainPath)
+        guard !targets.isEmpty else { throw SinfInjectError.noTargets }
+
+        // **入口校验（硬约束）**：这些路径来自**不可信**的包内容（`CFBundleExecutable` /
+        // `SinfReplicationPaths` / 中央目录条目名），会被 `replaceEntries` **原样**写成 ZIP
+        // 条目名。若不校验，恶意包可注入 `../` 或绝对路径条目，产出一个带越界条目的 IPA。
+        // 复用仓库唯一的 ZIP-slip 防线 `ArchiveEntryPath.resolve`，并补上它不覆盖的
+        // NUL 与绝对路径判定。**任一非法 → 抛错，不写包**。
+        for t in targets { try validateSinfTarget(t) }
+
+        // v0.3.568：一次整包重写批量替换。
+        let written = try archive.replaceEntries(with: targets, data: sinf)
+
+        // 写后逐条复读（必须重开新实例：`replaceEntries` 后原实例的 entries 偏移已失效）
+        try verifyWritten(targets: targets, sinf: sinf, ipaPath: ipaPath)
+        return written
+    }
+
+    /// 收集「要铺 sinf 的全部路径」（相对 IPA 根）。优先级见 `injectAllPaths`。
+    private static func collectSinfTargets(archive: ApplePackageArchive,
+                                           appPrefix: String,
+                                           mainPath: String) -> [String] {
+        var paths: [String] = []
+        var seen = Set<String>()
+        func add(_ p: String) {
+            if !p.isEmpty, seen.insert(p).inserted { paths.append(p) }
+        }
+
+        // 1) Manifest.plist 的 SinfReplicationPaths（权威；缺失回退 SinfPaths）
+        let manifestPath = "\(appPrefix).app/SC_Info/Manifest.plist"
+        if let mEntry = archive[manifestPath] {
+            var data = Data()
+            if (try? archive.extract(mEntry) { data.append($0) }) != nil,
+               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+               let dict = plist as? [String: Any] {
+                let rep = (dict["SinfReplicationPaths"] as? [String]) ?? []
+                let single = (dict["SinfPaths"] as? [String]) ?? []
+                for p in rep { add("\(appPrefix).app/\(p)") }
+                if rep.isEmpty { for p in single { add("\(appPrefix).app/\(p)") } }
+            }
+        }
+
+        // 2) 兜底：扫描包内**所有** `.sinf`（忽略大小写，且**不要求**在 `/SC_Info/` 目录下）
+        //
+        // 为什么放宽（独立验证实测）：原来写 `contains("/SC_Info/") && hasSuffix(".sinf")`，
+        // 大小写敏感 + 依赖目录名 ⇒ `.SINF` / `sc_info` / **不在 SC_Info/ 下的 .sinf 全漏**。
+        // 漏一条的后果是那条不被替换 ⇒ 换机后加载到旧 sinf 而崩。**宁可多收，不可漏收。**
+        // 注：与上面 Manifest 那步是**并集**（不是「优先级回退」）——
+        //     「只要发现多于一条 SC_Info/*.sinf 就必须全部替换」。
+        for e in archive.entries {
+            let lower = e.path.lowercased()
+            if lower.hasPrefix("payload/") && lower.hasSuffix(".sinf") {
+                add(e.path)
+            }
+        }
+
+        // 3) 始终并入主路径
+        add(mainPath)
+        return paths
+    }
+
+    /// 校验一条「将被写成 ZIP 条目名」的目标路径。**来源不可信**，必须全部过关才允许写入。
+    ///
+    /// 拒绝：空串 / 含 NUL / 绝对路径 / `..` / 标准化后逃逸。前两项 `ArchiveEntryPath.resolve`
+    /// 不覆盖，故在此显式判定；后两项复用该函数（本仓唯一的 ZIP-slip 防线）。
+    /// 路径是「ZIP 条目名（相对 IPA 根）」，故传入一个固定哨兵根，仅用于触发其越界判定。
+    private static func validateSinfTarget(_ path: String) throws {
+        guard !path.isEmpty,
+              !path.contains("\0"),
+              !path.hasPrefix("/") else {
+            throw SinfInjectError.unsafeTarget(path)
+        }
+        do {
+            _ = try ArchiveEntryPath.resolve(path, under: "/__sinf_target_root__")
+        } catch {
+            throw SinfInjectError.unsafeTarget(path)
+        }
+    }
+
+    /// 写后逐条复读：每条目标路径的字节必须 == 传入的 sinf。不一致 → 抛错（不静默）。
+    private static func verifyWritten(targets: [String], sinf: Data, ipaPath: String) throws {
+        // ⚠️ 必须重开新实例：`replaceEntries` 调用后原实例的 `entries` 偏移已失效。
+        let verify = try ApplePackageArchive(url: URL(fileURLWithPath: ipaPath), accessMode: .read)
+        var bad: [String] = []
+        for p in targets {
+            guard let e = verify[p] else { bad.append("\(p)（缺失）"); continue }
+            var got = Data()
+            try verify.extract(e) { got.append($0) }
+            if got != sinf { bad.append("\(p)（\(got.count) 字节 ≠ \(sinf.count)）") }
+        }
+        guard bad.isEmpty else { throw SinfInjectError.verifyFailed(bad) }
+        log("写后复读：\(targets.count) 条 sinf 全部 == 传入数据（\(sinf.count) 字节）")
+    }
+
+    enum SinfInjectError: LocalizedError {
+        case noInfoPlist, noExecutable, noTargets, verifyFailed([String]), unsafeTarget(String)
+        var errorDescription: String? {
+            switch self {
+            case .noInfoPlist: return "包内找不到 Payload/….app/Info.plist，无法定位 SC_Info"
+            case .noExecutable: return "Info.plist 里读不到 CFBundleExecutable，无法确定 sinf 文件名"
+            case .noTargets: return "没有可写入的 SC_Info 目标路径"
+            case .verifyFailed(let bad): return "写后复读发现 \(bad.count) 条不一致：\(bad.joined(separator: "；"))"
+            case .unsafeTarget(let p): return "拒绝写入越界条目名：\(p)"
+            }
         }
     }
 

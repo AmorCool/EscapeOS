@@ -36,6 +36,12 @@ struct IPADownloadItem: Codable, Identifiable, Hashable {
     var packageName: String?      // 包内 Info.plist 的显示名
     var isEncrypted: Bool?
     var hasSINF: Bool?
+    /// v0.3.568：包内 sinf 的**结构**是否自洽（nil = 未检测 / 包内无 sinf）。
+    ///
+    /// 为什么单靠 `hasSINF` 不够：`extractSINF` **只判存在性、不判有效性** ——
+    /// 一个写坏的 sinf（例如 hex-as-base64 的 1.5 倍垃圾）也会让 `hasSINF == true`。
+    /// 有了这一位，标签才能把「带 sinf」「sinf 写坏了」「真的没有」三件事分开。
+    var sinfStructurallyValid: Bool? = nil
     var lastInstalledAt: Date?
     /// v0.3.413（D8 修法 B）：**下载时拿到的 sinf**（base64 的标准 `.sinf` 容器）。
     ///
@@ -60,9 +66,15 @@ struct IPADownloadItem: Codable, Identifiable, Hashable {
     var sizeText: String { IPADownloadLibrary.sizeText(sizeBytes) }
 
     /// 加密状态文案（加密包靠包内 sinf 安装）
+    ///
+    /// v0.3.568：加密包再细分一层 —— 「缺 sinf」（真没有，装不上）与
+    /// 「sinf 异常」（有、但结构写坏了，同样装不上/装后崩）是**两件不同的处置**，
+    /// 不能再都显示成「缺 sinf」。
     var kindText: String {
         switch isEncrypted {
-        case true: return hasSINF == true ? "加密包 · 带 sinf" : "加密包 · 缺 sinf"
+        case true:
+            if hasSINF != true { return "加密包 · 缺 sinf" }
+            return sinfStructurallyValid == false ? "加密包 · sinf 异常" : "加密包 · 带 sinf"
         case false: return "明文包"
         default: return "未检测"
         }
@@ -128,7 +140,23 @@ final class IPADownloadLibrary: @unchecked Sendable {
                 index[i].bundleId = index[i].bundleId ?? ins?.bundleIdentifier
                 index[i].version = index[i].version ?? ins?.bundleVersion
                 index[i].isEncrypted = ins?.isEncrypted ?? index[i].isEncrypted
-                index[i].hasSINF = IPAPackageInspector.extractSINF(ipaPath: path(for: index[i])) != nil
+            }
+            // v0.3.568：加密包的 `hasSINF` **必须现算** —— 台账里的值是个「下载瞬间」的旧快照。
+            //
+            // 为什么它会旧：`IPADownloadCenter.handle` 是**先** `record()`（此刻包内还没写回 sinf）
+            // **后**才异步 `PackageSINFWriter.writeIfNeeded()` 写回包内（两步紧邻，顺序就是如此）。
+            // 于是每个走写回链路的加密包（NB / 牛蛙源）都被记成 `false`，而写回成功后
+            // **没有任何代码把它改回 true** ⇒ 下载管理永久显示「缺 sinf」（假阳性）。
+            //
+            // 性能取舍：只在「还不是 true」时开包（修正后即持久化，后续不再开）；
+            // 明文包的标签不看 `hasSINF`，直接跳过。真正缺 sinf 的包会每次重开 ——
+            // 但这类包本就少见（本机 20 条里 2 条），且它们正需要被标出来。
+            if index[i].isEncrypted == true, index[i].hasSINF != true {
+                let sinf = IPAPackageInspector.extractSINF(ipaPath: path(for: index[i]))
+                index[i].hasSINF = sinf != nil
+                index[i].sinfStructurallyValid = sinf.map {
+                    PackageSINFWriter.isStructurallyValidSinf($0)
+                }
             }
         }
         saveIndex(index)
@@ -175,6 +203,22 @@ final class IPADownloadLibrary: @unchecked Sendable {
     /// 让「下载管理 → 重装」也能过 FairPlay 验证（以前必然报「缺少 SC_Info/*.sinf」）。
     func sinf(forFileName fileName: String) -> String? {
         loadIndex().first { $0.fileName == fileName }?.sinfBase64
+    }
+
+    /// v0.3.568：**sinf 写回包内成功后**，把台账的 `hasSINF` / `sinfStructurallyValid` 定正。
+    ///
+    /// 为什么需要：`record()` 是在「写回之前」记的（见 `IPADownloadCenter.handle`），
+    /// 所以新下载的加密包一开始必然是 `hasSINF == false`。写完不更新，标签就会一直
+    /// 显示「缺 sinf」（本仓实测的假阳性来源）。`items()` 的现算能兜住历史记录，
+    /// 这里让**新下载**当场就正确、不必等下一次重算。
+    func markSinf(fileName: String, structurallyValid: Bool) {
+        var index = loadIndex()
+        guard let i = index.firstIndex(where: { $0.fileName == fileName }) else { return }
+        // 幂等：值没变就不写盘
+        guard index[i].hasSINF != true || index[i].sinfStructurallyValid != structurallyValid else { return }
+        index[i].hasSINF = true
+        index[i].sinfStructurallyValid = structurallyValid
+        saveIndex(index)
     }
 
     /// 安装成功后打时间戳
@@ -263,6 +307,8 @@ final class IPADownloadLibrary: @unchecked Sendable {
         let created = (attrs?[.creationDate] as? Date)
             ?? (attrs?[.modificationDate] as? Date)
             ?? Date()
+        // 读一次 sinf，同时定「有没有」与「结构对不对」（避免开两次包）
+        let sinf = IPAPackageInspector.extractSINF(ipaPath: url.path)
         return IPADownloadItem(fileName: fileName,
                                displayName: nil,
                                bundleId: ins?.bundleIdentifier,
@@ -273,7 +319,10 @@ final class IPADownloadLibrary: @unchecked Sendable {
                                source: "本地",
                                packageName: ins?.displayName,
                                isEncrypted: ins?.isEncrypted,
-                               hasSINF: IPAPackageInspector.extractSINF(ipaPath: url.path) != nil,
+                               hasSINF: sinf != nil,
+                               sinfStructurallyValid: sinf.map {
+                                   PackageSINFWriter.isStructurallyValidSinf($0)
+                               },
                                lastInstalledAt: nil)
     }
 

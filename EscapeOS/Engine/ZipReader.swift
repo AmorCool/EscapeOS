@@ -463,6 +463,17 @@ final class ZipReader {
             centralOffset = Int(try source.readUInt64(at: zip64Offset + 48))
         }
 
+        // Central directory size cap. A malicious package can declare a
+        // multi-gigabyte `centralSize`; the read below allocates it in one go
+        // (`ZipFileByteSource.read` reserves `length` bytes), which is a
+        // jetsam kill. The 20,000-entry limit lives in the caller and is only
+        // checked *after* parsing, so it cannot stop the allocation. Reject
+        // before reading; 64 MiB is far above any real IPA's directory.
+        let maxCentralSize = 64 * 1024 * 1024
+        guard centralSize <= maxCentralSize else {
+            throw ZipReaderError.invalidArchive("Central directory too large (\(centralSize) bytes)")
+        }
+
         guard centralOffset >= 0, centralSize >= 0, centralOffset + centralSize <= source.size else {
             throw ZipReaderError.invalidArchive("Central directory out of range")
         }

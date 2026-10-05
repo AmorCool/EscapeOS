@@ -51,6 +51,27 @@ import NIO
 /// SFTP 允许**短读**（返回少于请求量，客户端会再发一次读），所以这里直接截断。
 private let sftpMaxReadBytes = 256 * 1024
 
+// MARK: - 读写合并（把「每包一次隧道」降为「每窗口 / 每 1MB 一次隧道」）
+
+/// 预读窗口：一次 AFC 往返（= 新建并销毁一条 RSD 隧道 + AFC 连接）搬多少字节。
+///
+/// ## 根因（2026-10-05 真机实测，见交付说明）
+/// AFC 后端的**每次** provider 调用都是一次 `AFCService.batch`，即
+/// **新建并销毁一条 RSD 隧道 + AFC 连接**（实测约 0.16s）。
+/// 而客户端（paramiko）按 **8KiB** 发 READ 包 ⇒ 3MiB 读回要 ~384 次隧道 ≈ **63s**，
+/// 超过验收脚本的单操作硬超时（40s）⇒ 客户端熔断，并打印**通用**的
+/// 「设备 SSH 服务疑似已被打死」提示（实测设备全程存活、sha256 一致）。
+///
+/// 修法：**预读窗口**把连续读包合并成一次隧道；**写合并**把连续写包合并成一次隧道。
+/// 两者都只复用既有 `AFCService.batch` —— **不持有长连接、不新建队列**
+/// （遵守 `SSHFileProvider.swift` 的 RSD 隧道铁律：绝不自建隧道、绝不并发）。
+private let sftpReadAheadBytes = 256 * 1024
+
+/// 写合并阈值：攒够这么多才落盘一次（每次落盘 = 一次 RSD 隧道）。
+/// 客户端按 32KiB 发 WRITE 包 ⇒ 3MiB 上传从 96 次隧道降到 3 次。
+private let sftpWriteCoalesceBytes = 1 << 20
+
+
 // MARK: - FileProviderError → SFTP 状态码
 
 extension FileProviderError {
@@ -273,12 +294,33 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
 
 // MARK: - 文件句柄
 
-/// 一个打开的 SFTP 文件：每次 read/write 直接落到 FileProvider。
+/// 一个打开的 SFTP 文件：把连续 read/write 包**合并**后落到 FileProvider。
 ///
-/// 不缓存文件内容、不持有连接 —— 这样即使客户端打开大文件也只按请求块搬运。
+/// ## 为什么必须合并（2026-10-05 真机实测的根因）
+/// AFC 后端每次 provider 调用 = 一次 `AFCService.batch` = 新建并销毁一条 RSD 隧道 +
+/// AFC 连接（实测约 0.16s）。客户端按 8KiB 发 READ 包、32KiB 发 WRITE 包，
+/// 若**逐包**落到 provider，则 3MiB 往返要 ~384 次（读）/ 96 次（写）隧道 ⇒ 读回约 63s，
+/// 超过验收脚本的单操作硬超时（40s）⇒ 客户端熔断并**误报**「设备被打死」（实测设备存活）。
+///
+/// 合并只发生在本句柄的内存里：**不持有隧道、不持有 AFC 连接**，
+/// 每次落盘仍是既有 `AFCService.batch`（遵守 RSD 隧道铁律，绝不并发建隧道）。
+/// 代价（如实标注）：未落盘的数据在 `close()` 之前只在内存中；若会话异常中断且
+/// 客户端未发 CLOSE，最后不足一个窗口/阈值的数据会丢 —— 与常规写缓冲语义一致。
 final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     private let provider: FileProvider
     private let path: String
+
+    /// 保护下面三个缓冲状态。Citadel 已用 `previousTask` 把同一会话的
+    /// read/write/close 串行化，这里的锁只为满足 Swift 6 的 Sendable 检查。
+    private let bufferLock = NSLock()
+    /// 预读窗口（一次 AFC 往返取一个窗口，后续读包命中缓存）。
+    private var readWindow = Data()
+    private var readWindowStart: UInt64 = 0
+    private var readWindowValid = false
+    /// 写合并缓冲（连续写包攒到阈值才落盘一次）。
+    private var writeBuffer = Data()
+    private var writeBufferStart: UInt64 = 0
+    private var writeBufferActive = false
 
     init(provider: FileProvider, path: String) {
         self.provider = provider
@@ -295,21 +337,34 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
         // 刻意**不**把「读不到」转成空 buffer —— 那会被 Citadel 当作 EOF，
         // 客户端会生成一个 0 字节文件 = 假成功，比断连更糟。
         let want = min(Int(length), sftpMaxReadBytes)
-        let data = try await runFileOpWithTimeout(provider.operationTimeout, "read \(path)@\(offset)") {
-            try self.provider.read(self.path, offset: offset, length: want)
+        guard want > 0 else { return Self.makeBuffer(Data()) }
+
+        if let hit = cachedRead(offset: offset, length: want) {
+            return Self.makeBuffer(hit)
         }
-        var buffer = NIOCore.ByteBufferAllocator().buffer(capacity: data.count)
-        buffer.writeBytes(data)
-        return buffer
+        // 未命中：一次取满一个预读窗口，后续读包都命中缓存。
+        let window = max(want, sftpReadAheadBytes)
+        let data = try await runFileOpWithTimeout(provider.operationTimeout, "read \(path)@\(offset)") {
+            try self.provider.read(self.path, offset: offset, length: window)
+        }
+        storeReadWindow(data, start: offset)
+        return Self.makeBuffer(Data(data.prefix(want)))
     }
 
     func write(_ data: NIOCore.ByteBuffer, atOffset offset: UInt64) async throws -> SFTPStatusCode {
         // 用 `readableBytesView` 而不是 `getBytes(at:length:)`：后者在新版 NIO 上已不推荐，
         // 而这里要的就是「当前可读区间的全部字节」。
         let payload = Data(data.readableBytesView)
+        guard !payload.isEmpty else { return .ok }
         do {
-            try await runFileOpWithTimeout(provider.operationTimeout, "write \(path)@\(offset)") {
-                try self.provider.write(self.path, offset: offset, data: payload)
+            // 偏移不连续 ⇒ 先落盘旧缓冲（保证 offset 语义正确）。
+            if shouldFlushBeforeAppending(offset: offset) {
+                try await flushWriteBuffer()
+            }
+            appendToWriteBuffer(offset: offset, payload: payload)
+            // 攒够阈值 ⇒ 落盘一次（一次隧道写整段）。
+            if shouldFlushWriteBuffer() {
+                try await flushWriteBuffer()
             }
             return .ok
         } catch let e as FileProviderError {
@@ -322,7 +377,86 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     }
 
     func close() async throws -> SFTPStatusCode {
-        .ok
+        // 收尾：把不足一个阈值的尾巴落盘（文件大小/内容以此刻为准）。
+        do {
+            try await flushWriteBuffer()
+            return .ok
+        } catch let e as FileProviderError {
+            return e.sftpStatus
+        } catch {
+            return .failure
+        }
+    }
+
+    // MARK: - 读缓存
+
+    /// 命中预读窗口就切片返回（零 AFC 往返）；未命中返回 nil。
+    private func cachedRead(offset: UInt64, length: Int) -> Data? {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        guard readWindowValid, offset >= readWindowStart else { return nil }
+        let rel = Int(offset - readWindowStart)
+        guard rel < readWindow.count else { return nil }
+        let n = min(length, readWindow.count - rel)
+        return readWindow.subdata(in: rel..<(rel + n))
+    }
+
+    private func storeReadWindow(_ data: Data, start: UInt64) {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        readWindow = data
+        readWindowStart = start
+        readWindowValid = true
+    }
+
+    // MARK: - 写合并
+
+    private func shouldFlushBeforeAppending(offset: UInt64) -> Bool {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        return writeBufferActive && offset != writeBufferStart + UInt64(writeBuffer.count)
+    }
+
+    private func shouldFlushWriteBuffer() -> Bool {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        return writeBufferActive && writeBuffer.count >= sftpWriteCoalesceBytes
+    }
+
+    private func appendToWriteBuffer(offset: UInt64, payload: Data) {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        readWindowValid = false          // 写过之后读缓存可能过期
+        if !writeBufferActive {
+            writeBufferStart = offset
+            writeBuffer = Data()
+            writeBufferActive = true
+        }
+        writeBuffer.append(payload)
+    }
+
+    /// 把写缓冲落盘一次；**成功才清空**，失败保留（下次 write/close 可重试，绝不静默丢）。
+    private func flushWriteBuffer() async throws {
+        bufferLock.lock()
+        guard writeBufferActive, !writeBuffer.isEmpty else {
+            bufferLock.unlock()
+            return
+        }
+        let base = writeBufferStart
+        let bytes = writeBuffer
+        bufferLock.unlock()
+
+        try await runFileOpWithTimeout(provider.operationTimeout, "write \(path)@\(base)") {
+            try self.provider.write(self.path, offset: base, data: bytes)
+        }
+
+        bufferLock.lock()
+        if writeBufferActive && writeBufferStart == base && writeBuffer.count == bytes.count {
+            writeBuffer = Data()
+            writeBufferActive = false
+        }
+        bufferLock.unlock()
+    }
+
+    private static func makeBuffer(_ data: Data) -> NIOCore.ByteBuffer {
+        var buffer = NIOCore.ByteBufferAllocator().buffer(capacity: data.count)
+        buffer.writeBytes(data)
+        return buffer
     }
 
     func readFileAttributes() async throws -> SFTPFileAttributes {
