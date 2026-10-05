@@ -3,20 +3,23 @@ import SwiftUI
 // 共享转换 ·「已修补」二级页（用户需求 #1 / #3 / #4）.
 //
 // 从「共享转换」主页的「已修补」栏目**点击进入**（不再在原页展开 / 收拢）。
-// 左上角是**向上箭头**，支持搜索；每行**只给两个操作**：在线安装 / 覆盖升级安装
+// 左上角**系统返回键 + 额外向上箭头并存**（两者都返回上一级，用户明确接受两个入口）；
+// **不隐藏返回键** —— 隐藏会连带禁掉系统左滑返回手势。支持搜索；
+// 每行**只给两个操作**：在线安装 / 覆盖升级安装
 // （**不给重新修补** —— 已修补的包无需再修，且原件已按需求 #17 删除，无从下手）。
 //
-// 骨架与「已导入」页一致（向上箭头 / 搜索栏 / 多选 + 全选 / 底部批量条），实现见 `ImportedListPage.swift` 顶部注释。
+// 骨架与「已导入」页一致（搜索栏 / 多选 + 全选 / 底部批量条），实现见 `ImportedListPage.swift` 顶部注释。
 //
 // 数据源：`ImportedPackageList.scanListing(...).repaired`（磁盘证据）。
 //
 // 用户需求 #4：批量操作**选中 ≥2 时去掉「在线安装」** —— 在线安装是 OTA 单包通道，
 // 多选时语义不成立，故仅在恰好选中 1 个时给出（见 `batchBar` 里的 `selected.count == 1` 判断）。
 //
-// 导出入口：`RepairedPackageExportSection` 绑定的是**单条** `ImportRecord` / `RepairResult`
-// （见 `RepairedPackageExport.swift:18-24`），列表页拿不到该上下文，无法按行内嵌。
-// 故本页复用同一套导出机制（`ShareTarget` + `ShareSheet`，见 `DesignSystem.swift:133-149`）按行导出，
-// 导出对象同为 `package.repairedPath`（修补产物，不是原件）。
+// 批量导出（用户需求）：已修补产物额外镜像一份到**专属目录** `Documents/Repaired/`
+// （见 `RepairedProductStore`）；选中 ≥2 时底条主按钮变为「导出选中的 N 个」，
+// 一次把所选 IPA **全部**交给系统分享面板（`UIActivityViewController` 原生支持多 URL）
+// —— **不逐个导出、不先压缩成 zip**。
+// 单条导出仍走同一套 `ShareSheet` 机制（对象同为 `package.repairedPath`，修补产物，不是原件）。
 
 struct RepairedListPage: View {
 
@@ -36,7 +39,8 @@ struct RepairedListPage: View {
 
     /// 单条安装进行中的包 id（在线安装 / 覆盖升级各自一条在跑）。
     @State private var workingId: String?
-    @State private var shareTarget: ShareTarget?
+    /// 单条 / 批量导出共用一个分享入口（多 URL 一次交给系统面板）。
+    @State private var sharePayload: RepairedSharePayload?
 
     private var visible: [ImportedPackage] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -82,14 +86,16 @@ struct RepairedListPage: View {
                         row(p)
                     }
                 } footer: {
-                    Text("已修补的包只支持在线安装与覆盖 / 升级安装；原件已删除，不再提供重新修补.")
+                    Text("已修补的包支持在线安装、覆盖 / 升级安装与导出；原件已删除，不再提供重新修补.")
                 }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("已修补")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        // 刻意**不隐藏**系统返回键：隐藏返回键会连带禁掉系统左滑返回手势
+        // （用户反馈「删了返回键还会导致无法左滑返回」）。系统返回键与额外向上箭头并存，
+        // 两者都返回上一级（用户明确接受两个返回入口）。
         .searchable(text: $searchText,
                     placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "搜索包名 / 应用标识")
@@ -120,8 +126,10 @@ struct RepairedListPage: View {
                 Color.clear.frame(height: 12)
             }
         }
-        .sheet(item: $shareTarget) { target in
-            ShareSheet(items: [target.url])
+        .sheet(item: $sharePayload) { payload in
+            // 单条 / 批量同一入口：`UIActivityViewController` 支持一次传入多个 URL，
+            // 批量导出即「一次把所选 IPA 全部交给分享面板」，不逐个、不压缩。
+            ShareSheet(items: payload.urls)
         }
         .onAppear { reload() }
     }
@@ -134,16 +142,21 @@ struct RepairedListPage: View {
             .foregroundStyle(.secondary)
     }
 
-    /// 底部批量条：主按钮「覆盖 / 升级安装（N）」；
-    /// **恰好选中 1 个**时另给「在线安装」与「导出」（需求 #4：选中 ≥2 去掉在线安装）。
+    /// 底部批量条。
+    /// · 恰好选中 1 个：主按钮「覆盖 / 升级安装（1）」，另给「在线安装」「导出」。
+    /// · 选中 ≥2：主按钮变为「导出选中的 N 个」—— 一次导出所选全部，**不逐个、不压缩**；
+    ///   「覆盖 / 升级安装（N）」退为附加动作（需求 #4：≥2 去掉在线安装）。
     private var batchBar: some View {
         BatchActionBar(selectedCount: selected.count,
                        subtitle: selectedSizeText,
-                       primaryTitle: "覆盖 / 升级安装（\(selected.count)）",
-                       primaryDisabled: selected.isEmpty
-                           || selectedPackages.contains { !canOverwriteInstall($0) }
-                           || busy,
-                       primaryAction: { runOverwriteInstall(selectedPackages) }) {
+                       primaryTitle: selected.count >= 2
+                           ? "导出选中的 \(selected.count) 个"
+                           : "覆盖 / 升级安装（\(selected.count)）",
+                       primaryDisabled: batchPrimaryDisabled,
+                       primaryAction: {
+                           if selected.count >= 2 { exportSelected() }
+                           else { runOverwriteInstall(selectedPackages) }
+                       }) {
             if selected.count == 1, let p = selectedPackages.first {
                 Button("在线安装") { runOnlineInstall(p) }
                     .buttonStyle(.bordered)
@@ -152,8 +165,19 @@ struct RepairedListPage: View {
                 Button("导出") { export(p) }
                     .buttonStyle(.bordered)
                     .disabled(busy)
+            } else if selected.count >= 2 {
+                Button("覆盖 / 升级安装（\(selected.count)）") { runOverwriteInstall(selectedPackages) }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedPackages.contains { !canOverwriteInstall($0) } || busy)
             }
         }
+    }
+
+    private var batchPrimaryDisabled: Bool {
+        if selected.isEmpty || busy { return true }
+        // ≥2 只做导出：已修补块的产物路径来自磁盘扫描（必有产物），有产物即可导出。
+        if selected.count >= 2 { return false }
+        return selectedPackages.contains { !canOverwriteInstall($0) }
     }
 
     @ViewBuilder
@@ -306,6 +330,10 @@ struct RepairedListPage: View {
             packages = listing.repaired
             loading = false
             selected.formIntersection(Set(packages.map(\.id)))
+            // 产物落进专属目录 `Documents/Repaired/`：进页面即同步，批量导出时直接取用。
+            // 放后台（硬链接优先、不占额外空间），大包镜像不卡主线程。
+            let snapshot = packages
+            Task.detached(priority: .utility) { RepairedProductStore.sync(snapshot) }
         }
     }
 
@@ -364,13 +392,115 @@ struct RepairedListPage: View {
         }
     }
 
-    // MARK: - 导出（复用 ShareTarget + ShareSheet，与 RepairedPackageExport 同一套机制）
+    // MARK: - 导出（专属目录 + ShareSheet，多选一次导出全部）
 
+    /// 单条导出：把该包的产物镜像进专属目录后，单独分享它。
     private func export(_ p: ImportedPackage) {
-        guard let path = p.repairedPath, FileManager.default.fileExists(atPath: path) else {
-            ToastCenter.shared.show("没有可导出的安装包")
-            return
+        busy = true
+        Task {
+            let url = await Task.detached(priority: .userInitiated) {
+                RepairedProductStore.ensure(p)
+            }.value
+            busy = false
+            guard let url else {
+                ToastCenter.shared.show("没有可导出的安装包")
+                return
+            }
+            sharePayload = RepairedSharePayload(urls: [url])
         }
-        shareTarget = ShareTarget(url: URL(fileURLWithPath: path))
+    }
+
+    /// 批量导出：把所选全部产物镜像进专属目录，**一次**交给系统分享面板（不逐个、不压缩）。
+    private func exportSelected() {
+        let targets = selectedPackages
+        guard !targets.isEmpty else { return }
+        busy = true
+        Task {
+            let urls = await Task.detached(priority: .userInitiated) {
+                RepairedProductStore.sync(targets)
+            }.value
+            busy = false
+            guard !urls.isEmpty else {
+                ToastCenter.shared.show("没有可导出的安装包")
+                return
+            }
+            sharePayload = RepairedSharePayload(urls: urls)
+        }
+    }
+}
+
+// MARK: - 一次分享的载荷（单条 / 批量共用一个 `.sheet` 入口）
+
+/// 分享目标集合。单条时 1 个 URL，批量时 N 个 —— 同一入口，避免同一视图挂两个 `.sheet`。
+private struct RepairedSharePayload: Identifiable {
+    let id = UUID()
+    let urls: [URL]
+}
+
+// MARK: - 「已修补」产物专属目录
+
+/// 「已修补」产物的**专属目录**：`Documents/Repaired/`。
+///
+/// 需求：已修补的产物单独放一个目录，多选时能直接一次批量导出，不逐个压缩、不逐个 ipa 导出。
+/// 多选导出 = 把这个目录里的多个文件**一次性**交给系统分享面板（`UIActivityViewController` 支持多 URL）。
+///
+/// 与 `Imports/` 的关系：**只镜像、不搬移**。
+/// `ImportedPackageList.scanListing` 按 `Imports/<包名>/repaired.ipa`（老平铺为
+/// `Imports/repaired/<包名>.ipa`）判定「已修补」块 —— 把产物搬走会让该块当场清空。
+/// 故这里优先**硬链接**（同卷、不额外占空间），失败再退**复制**。
+/// 目录本身是 Documents 下的一级子目录，`ImportService.scanForNewImports` 只下探 `Imports/`、
+/// 不递归子目录，故镜像进来的 `.ipa` 不会被当成「新导入」重复捞回。
+enum RepairedProductStore {
+
+    /// 专属目录：`Documents/Repaired/`（不存在则创建）。
+    static func directory() -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("Repaired", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    /// 确保该包的产物已落在专属目录里，返回其 URL；无产物 / 落盘失败返回 nil。
+    static func ensure(_ package: ImportedPackage) -> URL? {
+        guard let src = package.repairedPath, !src.isEmpty else { return nil }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: src) else { return nil }
+        let leaf = FileNameRules.sanitize("\(package.name).ipa") ?? "\(package.name).ipa"
+        let dest = directory().appendingPathComponent(leaf)
+        return mirror(from: URL(fileURLWithPath: src), to: dest, fm: fm) ? dest : nil
+    }
+
+    /// 把 `packages` 的产物**全部**镜像进专属目录，返回落点 URL（进页面 / 导出前调用）。
+    @discardableResult
+    static func sync(_ packages: [ImportedPackage]) -> [URL] {
+        packages.compactMap { ensure($0) }
+    }
+
+    /// 镜像单个文件：专属目录里已有且不旧于源 → 直接用；否则硬链接优先、复制兜底。
+    private static func mirror(from src: URL, to dest: URL, fm: FileManager) -> Bool {
+        if fm.fileExists(atPath: dest.path) {
+            let srcDate = (try? src.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            let dstDate = (try? dest.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            if let s = srcDate, let d = dstDate, d >= s { return true }
+            try? fm.removeItem(at: dest)
+        }
+        do {
+            try fm.linkItem(at: src, to: dest)   // 硬链接：同卷、不额外占空间
+            return true
+        } catch {
+            do {
+                try fm.copyItem(at: src, to: dest)
+                return true
+            } catch {
+                LoginLogger.shared.log(
+                    "[共享修补] 镜像产物到 Repaired/ 失败：\(error.localizedDescription)",
+                    category: .shareConvert)
+                return false
+            }
+        }
     }
 }

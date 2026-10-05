@@ -2,23 +2,40 @@ import SwiftUI
 
 // 共享转换 ·「待修补」二级页（用户需求 #2，新增栏目）.
 //
-// 从「共享转换」主页新增的「待修补」栏目**点击进入**。左上角是**向上箭头**，支持搜索；
-// 多选 + 全选后走底部批量条：主按钮「批量修补（N）」+「移除（N）」。
+// 从「共享转换」主页新增的「待修补」栏目**点击进入**。左上角在系统返回按钮之外**额外**挂一个向上箭头
+//（不隐藏返回键，左滑返回照常可用），支持搜索；多选 + 全选后走底部批量条：主按钮「批量修补（N）」+「移除（N）」。
 //
 // 骨架与「已导入」页一致（向上箭头 / 搜索栏 / 多选 + 全选 / 底部批量条），实现见 `ImportedListPage.swift` 顶部注释。
 //
-// 数据源：`ImportedPackageList.scanListing(...).imported` 中 `status == .awaitingRepair` 的子集。
+// 数据源（两种，见 `init(packages:)`）：
+//   · **注入模式** —— 「共享转换」主界面把它的**会话队列**（本次会话刚导入的那几个）传进来，
+//     本页只显示这几个，**不再扫盘**。主界面计数也用同一份队列，故点进去数量对得上。
+//   · **磁盘模式**（默认）—— `ImportedPackageList.scanListing(...).imported` 中
+//     `status == .awaitingRepair` 的子集；供其它入口使用。
 //   · 「已导入」= imported 全量（含已安装）；「待修补」= 其中还没修补、还没安装、正等着动手的那些。
-//   · 两个栏目是**同一份磁盘现状的两种视角**，不引入新的持久化状态。
 //
-// 「移除」语义（用户需求 #2）：**仅从「待修补」列表移除，不删安装包**。
-//   实现：把包落点整体**移动**到 `Imports/.removed/`（移动 ≠ 删除，可恢复），
-//   两处扫描都用 `.skipsHiddenFiles` ⇒ 移走后即刻从列表消失，且不会被「扫描新文件」捞回来。
-//   详见 `ImportedPackageMover`。这与「已导入」页的「移除 = 删除」是**两种语义**，刻意分开。
+// 「移除」语义（用户需求 #2）：**仅从「待修补」列表移除，不删安装包**，两种模式各有落法：
+//   · 磁盘模式：把包落点整体**移动**到 `Imports/.removed/`（移动 ≠ 删除，可恢复），
+//     两处扫描都用 `.skipsHiddenFiles` ⇒ 移走后即刻从列表消失，且不会被「扫描新文件」捞回来。
+//     详见 `ImportedPackageMover`。
+//   · 注入模式：**只从会话队列拿掉，不碰磁盘文件** —— 队列是会话级的临时列表，包还没被用户确认丢弃，
+//     没必要为它去挪文件；包仍在「已导入」里，可继续修补。
+//   这与「已导入」页的「移除 = 删除」是**两种语义**，刻意分开。
 
 struct PendingRepairPage: View {
 
     @Environment(\.dismiss) private var dismiss
+
+    /// 会话级注入的包（非 nil ⇒ 只显示这些，不再扫盘）。见 `init(packages:)`.
+    private let injectedPackages: [ImportedPackage]?
+
+    /// - Parameter packages: 「共享转换」主界面把它的**会话队列**传进来 ⇒ 只显示这些、不扫盘；
+    ///   不传（`nil`，默认）⇒ 保持磁盘全量语义，自己扫盘 —— 现有无参调用不受影响。
+    init(packages: [ImportedPackage]? = nil) {
+        self.injectedPackages = packages
+        _packages = State(initialValue: packages ?? [])
+        _loading = State(initialValue: packages == nil)
+    }
 
     @State private var packages: [ImportedPackage] = []
     @State private var loading = true
@@ -27,6 +44,14 @@ struct PendingRepairPage: View {
     @State private var selected: Set<String> = []
 
     @State private var busy = false
+    /// 本页已处理掉、应从列表消失的包 id。磁盘模式下 `reload()` 靠重新扫盘自然剔除，用不到它；
+    /// **注入模式不扫盘**，靠它把「已移出 / 已修补成功」的项从会话队列里扣掉。
+    @State private var droppedIds: Set<String> = []
+    /// 包 id → 图标 `file://` 地址（从 IPA 提取后落 Caches）。读不出就没有这一项，行首回落首字母块.
+    @State private var iconURLs: [String: String] = [:]
+    /// 长按一行 → 「查看图标」打开的全屏预览。图数组随 target 一起写（`ImagePreviewTarget`），
+    /// 页面上不再单独留一份预览数组 —— 两次独立写入会让弹窗读到旧的空数组.
+    @State private var previewTarget: ImagePreviewTarget?
     /// 需求 #5：流程 banner 的 N/M 进度（如 `(current: 1, total: 14)`）与补充说明。
     @State private var flowProgress: (current: Int, total: Int)?
     @State private var flowCaption: String?
@@ -106,11 +131,12 @@ struct PendingRepairPage: View {
         .listStyle(.insetGrouped)
         .navigationTitle("待修补")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
         .searchable(text: $searchText,
                     placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "搜索包名 / 应用标识")
         .toolbar {
+            // 向上箭头是**额外**入口；系统返回按钮与左滑手势都保留
+            //（不隐藏返回键，否则会禁掉左滑）.
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
                     dismiss()
@@ -150,6 +176,12 @@ struct PendingRepairPage: View {
             }
         }
         .alert(item: $alert) { alertContent($0) }
+        // 长按一行 → 「查看图标」→ 全屏预览；长按图片「保存到相册」由 `ImageGalleryViewer` 自带
+        //（二次确认 → `MediaSaver`，无权限自动回落 `Documents/AppIcons`），这里只负责把 target 递进去.
+        .fullScreenCover(item: $previewTarget) { target in
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
+        }
+        .toastHost()
         .onAppear { viewActive = true; reload() }
         .onDisappear { viewActive = false; resumeInstall(false) }
     }
@@ -174,7 +206,7 @@ struct PendingRepairPage: View {
                                          ? AppTheme.accent
                                          : Color.secondary.opacity(0.5))
                 }
-                ImportedPackageMonogram(name: p.name)
+                ImportedPackageIconView(name: p.name, url: iconURLs[p.id])
                 VStack(alignment: .leading, spacing: 3) {
                     Text(p.name)
                         .font(.subheadline.weight(.medium))
@@ -198,6 +230,15 @@ struct PendingRepairPage: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
+        // 长按一行 → 「查看图标 / 提取图标」。菜单项与行首缩略图用**同一个**图标地址；
+        // 没有图标（地址为空）时整组置灰，不让用户点下去才发现没图可看.
+        // 「保存图标」不在这里：进预览后长按图片即可（`ImageGalleryViewer` 自带），不重复一份.
+        .contextMenu {
+            iconMenuItems(iconURL: iconURLs[p.id], fileNameBase: p.bundleId ?? p.name) {
+                showIconPreview(iconURLs[p.id], target: $previewTarget)
+            }
+            .disabled((iconURLs[p.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
     }
 
     // MARK: - 弹窗
@@ -255,13 +296,36 @@ struct PendingRepairPage: View {
     // MARK: - 数据刷新
 
     private func reload() {
+        // 注入模式：列表就是会话队列（扣掉本页已处理掉的），**不扫盘** —— 与主界面计数同源。
+        if let injected = injectedPackages {
+            packages = injected.filter { !droppedIds.contains($0.id) }
+            loading = false
+            selected.formIntersection(Set(packages.map(\.id)))
+            Task { await loadIcons() }
+            return
+        }
         Task {
             let listing = await ImportedPackageScanner.scan()
             // 只留「还没修补、还没安装」的：即 imported 块里 status == .awaitingRepair 的那些。
             packages = listing.imported.filter { $0.status == .awaitingRepair }
             loading = false
             selected.formIntersection(Set(packages.map(\.id)))
+            await loadIcons()
         }
+    }
+
+    /// 逐条解析图标（读 zip 成本高，放后台**串行**；已落盘的直接命中缓存文件）.
+    /// 与 `IPADownloadManagerView.loadIcons` 同型：图标只是锦上添花，读不出就留空、界面回落首字母块.
+    private func loadIcons() async {
+        let targets = packages
+        var resolved: [String: String] = [:]
+        for p in targets {
+            let url = await Task.detached(priority: .utility) {
+                ImportedPackageIconStore.iconURL(for: p)
+            }.value
+            if let url { resolved[p.id] = url }
+        }
+        iconURLs = resolved
     }
 
     // MARK: - 批量修补（需求 #2 / #5）
@@ -292,6 +356,7 @@ struct PendingRepairPage: View {
 
                 if r.status == .ok {
                     ImportService.deleteOriginalAfterRepairSuccess(rec)
+                    droppedIds.insert(p.id)   // 修补成功的包不再属于「待修补」，从会话队列扣掉
                     ok += 1
                 } else {
                     failed += 1
@@ -309,13 +374,27 @@ struct PendingRepairPage: View {
 
     // MARK: - 移除（需求 #2：仅从列表移除，不删安装包）
 
+    /// 两种模式各有落法（见文件头「移除」语义）：
+    /// · 磁盘模式：`ImportedPackageMover.moveToRemoved`（移动 ≠ 删除，可恢复）.
+    /// · 注入模式：**只从会话队列拿掉，不碰磁盘文件** —— 队列是临时列表，包还没被确认丢弃.
+    /// 两种模式都记进 `droppedIds`：磁盘模式本可省（`reload()` 会重扫），但记上无害且让「移除结果」
+    /// 在同一帧内即可见，不必等扫盘回来.
     private func performRemove(_ items: [ImportedPackage]) {
         busy = true
         resultText = nil
         var ok = 0
         var failed = 0
+        let queueOnly = injectedPackages != nil
         for p in items {
-            if ImportedPackageMover.moveToRemoved(p) { ok += 1 } else { failed += 1 }
+            if queueOnly {
+                droppedIds.insert(p.id)
+                ok += 1
+            } else if ImportedPackageMover.moveToRemoved(p) {
+                droppedIds.insert(p.id)
+                ok += 1
+            } else {
+                failed += 1
+            }
         }
         busy = false
         selected.removeAll()

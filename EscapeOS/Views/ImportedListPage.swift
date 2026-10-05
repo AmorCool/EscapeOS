@@ -3,17 +3,21 @@ import SwiftUI
 // 共享转换 ·「已导入」二级页（用户需求 #1 / #3）.
 //
 // 从「共享转换」主页的「已导入」栏目**点击进入**（不再在原页展开 / 收拢）。
-// 左上角是**向上箭头**（不是返回键），支持搜索；多选 + 全选后走底部批量条。
+// 左上角在**系统返回按钮**之外**额外**挂一个向上箭头（不隐藏返回键，左滑返回照常可用）；
+// 支持搜索；多选 + 全选后走底部批量条。
 //
 // 骨架照仓库现成范式拼（不另造）：
-//   · 向上箭头：`.navigationBarBackButtonHidden(true)` + leading `ToolbarItem{ Image(systemName: "arrow.up") }`
-//     + `dismiss()` —— 箭头画法见 `AFCBrowserView.swift:86-96`。
+//   · 向上箭头：leading `ToolbarItem{ Image(systemName: "arrow.up") }` + `dismiss()`
+//     —— 箭头画法见 `AFCBrowserView.swift:86-96`。
+//     **刻意不隐藏返回键**：隐藏它会连带禁掉系统左滑返回手势（用户明确要求保留左滑）.
 //   · 搜索栏：`.searchable(placement: .navigationBarDrawer(displayMode: .always), prompt:)`
 //     —— 见 `ModuleManagerView.swift:292-293` / `AppListView.swift:523`。
 //   · 多选 + 全选：`selected: Set<String>` + 导航栏「选择 / 全选」
 //     —— 见 `AppListView.swift:412/484/524-549` / `ReclaimTabView.swift:41-59`（全选在导航栏，不在底条）。
 //   · 底部批量条：`.safeAreaInset(edge: .bottom)` 挂 `BatchActionBar`；未进选择态用 `Color.clear.frame(height: 12)` 占位
 //     —— 见 `ReclaimTabView.swift:61-69`。
+//   · 行首真图标 + 长按菜单：`ImportedPackageIconView` + `.contextMenu { iconMenuItems(...) }`
+//     —— 图标提取 / 缓存见 `Shared/ImportedPackageUI.swift`；菜单项复用 `ImagePreviewSupport.iconMenuItems`.
 //
 // 数据源：`ImportedPackageList.scanListing(...).imported`（磁盘证据，本页不另做推断）。
 //
@@ -34,6 +38,11 @@ struct ImportedListPage: View {
     @State private var selected: Set<String> = []
 
     @State private var busy = false
+    /// 包 id → 图标 `file://` 地址（从 IPA 提取后落 Caches）。读不出就没有这一项，行首回落首字母块.
+    @State private var iconURLs: [String: String] = [:]
+    /// 长按一行 → 「查看图标」打开的全屏预览。图数组随 target 一起写（`ImagePreviewTarget`），
+    /// 页面上不再单独留一份预览数组 —— 两次独立写入会让弹窗读到旧的空数组.
+    @State private var previewTarget: ImagePreviewTarget?
     /// 需求 #5：流程 banner 的 N/M 进度（如 `(current: 1, total: 14)`）与补充说明。
     @State private var flowProgress: (current: Int, total: Int)?
     @State private var flowCaption: String?
@@ -115,11 +124,12 @@ struct ImportedListPage: View {
         .listStyle(.insetGrouped)
         .navigationTitle("已导入")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
         .searchable(text: $searchText,
                     placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "搜索包名 / 应用标识")
         .toolbar {
+            // 向上箭头是**额外**入口；系统返回按钮与左滑手势都保留
+            //（不隐藏返回键，否则会禁掉左滑）.
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
                     dismiss()
@@ -160,6 +170,12 @@ struct ImportedListPage: View {
             }
         }
         .alert(item: $alert) { alertContent($0) }
+        // 长按一行 → 「查看图标」→ 全屏预览；长按图片「保存到相册」由 `ImageGalleryViewer` 自带
+        //（二次确认 → `MediaSaver`，无权限自动回落 `Documents/AppIcons`），这里只负责把 target 递进去.
+        .fullScreenCover(item: $previewTarget) { target in
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
+        }
+        .toastHost()
         .onAppear { viewActive = true; reload() }
         .onDisappear { viewActive = false; resumeInstall(false) }
     }
@@ -184,7 +200,7 @@ struct ImportedListPage: View {
                                          ? AppTheme.accent
                                          : Color.secondary.opacity(0.5))
                 }
-                ImportedPackageMonogram(name: p.name)
+                ImportedPackageIconView(name: p.name, url: iconURLs[p.id])
                 VStack(alignment: .leading, spacing: 3) {
                     Text(p.name)
                         .font(.subheadline.weight(.medium))
@@ -208,6 +224,15 @@ struct ImportedListPage: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
+        // 长按一行 → 「查看图标 / 提取图标」。菜单项与行首缩略图用**同一个**图标地址；
+        // 没有图标（地址为空）时整组置灰，不让用户点下去才发现没图可看.
+        // 「保存图标」不在这里：进预览后长按图片即可（`ImageGalleryViewer` 自带），不重复一份.
+        .contextMenu {
+            iconMenuItems(iconURL: iconURLs[p.id], fileNameBase: p.bundleId ?? p.name) {
+                showIconPreview(iconURLs[p.id], target: $previewTarget)
+            }
+            .disabled((iconURLs[p.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
     }
 
     // MARK: - 弹窗
@@ -271,7 +296,22 @@ struct ImportedListPage: View {
             loading = false
             // 选择集只保留仍在列表里的条目，避免悬空选择。
             selected.formIntersection(Set(packages.map(\.id)))
+            await loadIcons()
         }
+    }
+
+    /// 逐条解析图标（读 zip 成本高，放后台**串行**；已落盘的直接命中缓存文件）.
+    /// 与 `IPADownloadManagerView.loadIcons` 同型：图标只是锦上添花，读不出就留空、界面回落首字母块.
+    private func loadIcons() async {
+        let targets = packages
+        var resolved: [String: String] = [:]
+        for p in targets {
+            let url = await Task.detached(priority: .utility) {
+                ImportedPackageIconStore.iconURL(for: p)
+            }.value
+            if let url { resolved[p.id] = url }
+        }
+        iconURLs = resolved
     }
 
     // MARK: - 批量修补（需求 #3 / #5）
