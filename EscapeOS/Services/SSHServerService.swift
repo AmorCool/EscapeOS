@@ -313,9 +313,64 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
         // 忽略环境变量设置
     }
 
+    /// 单次 exec 回传的**硬上限**。
+    ///
+    /// 为什么必须有：`stdoutPipe` 是**管道**，缓冲约 64KB。超过缓冲的部分，
+    /// 写端会阻塞到读端把管道排空为止 —— 而排空管道的 handler 跑在**同一个事件循环线程**上。
+    /// 于是写端把线程占住、读端永远没机会跑 ⇒ **死锁**。
+    ///
+    /// ⚠️ 2026-10-05 实测事故：在设备上 `cat` 一个 10MB 文件，**SSH 服务被直接打死**
+    /// （端口从 OPEN 变成 Connection refused，只能重启 App 恢复）。
+    /// 当时 `catLimitBytes` 被设成了 0（无限制），所以没被 `cat` 自己的上限拦住。
+    ///
+    /// 4MB 的取值依据：合法的最大用途是 `cap fs.read` 单块 1MB，base64 后约 1.4MB，
+    /// 留足余量。超过这个量级就该改成分块拉，而不是一次回传。
+    static let maxResponseBytes = 4 << 20            // 4 MB
+
+    /// 分块大小。**必须远小于管道缓冲（约 64KB）**，否则单块就可能把管道写满。
+    private static let responseChunkBytes = 8 << 10  // 8 KB
+
     func start(command: String, outputHandler: ExecOutputHandler) async throws -> ExecCommandContext {
-        let output = Self.execute(command)
-        try outputHandler.stdoutPipe.fileHandleForWriting.write(Data(output.utf8))
+        var output = Self.execute(command)
+
+        // 1) 硬截断。按**字符**累加而不是按字节切，避免把一个多字节 UTF-8 字符切成两半。
+        var truncated = false
+        if output.utf8.count > Self.maxResponseBytes {
+            var kept = ""
+            kept.reserveCapacity(Self.maxResponseBytes)
+            var used = 0
+            for ch in output {
+                let w = String(ch).utf8.count
+                if used + w > Self.maxResponseBytes { break }
+                kept.append(ch)
+                used += w
+            }
+            output = kept
+            truncated = true
+        }
+
+        // 2) 分块写 + 每块之间**让出执行权**，给事件循环排空管道的机会。
+        //    这是本函数唯一能防死锁的地方：写端与读端共用一条线程，
+        //    必须主动「停一下」让读端跑，否则大输出必死。
+        let data = Data(output.utf8)
+        var off = data.startIndex
+        while off < data.endIndex {
+            let end = data.index(off, offsetBy: Self.responseChunkBytes,
+                                 limitedBy: data.endIndex) ?? data.endIndex
+            try outputHandler.stdoutPipe.fileHandleForWriting.write(Data(data[off..<end]))
+            off = end
+            if off < data.endIndex {
+                try await Task.sleep(nanoseconds: 1_000_000)   // 1ms，给读端排空的机会
+            }
+        }
+
+        if truncated {
+            let note = "\n\n[已截断] 本次输出超过上限 \(Self.maxResponseBytes / 1024 / 1024)MB，"
+                     + "只回传了前面部分。请缩小范围重试："
+                     + "`logs 100` / `cat` 小文件 / `cap fs.read` 用 offset+length 分块。\n"
+            try? outputHandler.stdoutPipe.fileHandleForWriting.write(Data(note.utf8))
+        }
+
         outputHandler.succeed(exitCode: 0)
         return NoopExecContext()
     }
