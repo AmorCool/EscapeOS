@@ -17,7 +17,7 @@ struct PairingGuideCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                AppRowIcon(systemName: "exclamationmark.triangle.fill",
+                AppRowIcon(systemName: "info.circle",
                            tint: .orange, symbolSize: 20, frameSize: 40)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("配对文件未导入")

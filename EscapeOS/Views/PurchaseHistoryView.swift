@@ -40,7 +40,7 @@ struct PurchaseHistoryView: View {
                     }
                 } else if let errorText {
                     Section {
-                        Label(errorText, systemImage: "exclamationmark.triangle.fill")
+                        Label(errorText, systemImage: "info.circle")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
                         Button("重试") { Task { await load() } }

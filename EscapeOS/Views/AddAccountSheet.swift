@@ -67,7 +67,7 @@ struct AddAccountSheet: View {
 
                 if !assetsReady {
                     Section {
-                        Label("SAP 资产缺失，登录会失败", systemImage: "exclamationmark.triangle.fill")
+                        Label("SAP 资产缺失，登录会失败", systemImage: "info.circle")
                             .font(.footnote)
                             .foregroundStyle(.orange)
                     }

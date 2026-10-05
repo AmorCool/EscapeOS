@@ -22,7 +22,7 @@ struct AfcTextEditorView: View {
                     ProgressView("正在打开…")
                 } else if let errorText {
                     VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle")
+                        Image(systemName: "info.circle")
                             .font(.largeTitle).foregroundStyle(.orange)
                         Text(errorText).font(.callout).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)

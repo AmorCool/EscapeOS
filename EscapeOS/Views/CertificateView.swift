@@ -47,7 +47,7 @@ struct CertificateView: View {
                 if let error = manager.lastError, manager.teamState == .loaded {
                     Section {
                         InfoActionCard(
-                            icon: manager.lastErrorIsSessionExpired ? "person.badge.key.fill" : "exclamationmark.triangle.fill",
+                            icon: manager.lastErrorIsSessionExpired ? "person.badge.key.fill" : "xmark.circle.fill",
                             iconTint: manager.lastErrorIsSessionExpired ? .orange : .red,
                             title: manager.lastErrorIsSessionExpired ? "需要重新登录" : "出错了",
                             message: error
@@ -382,7 +382,7 @@ struct CertificateView: View {
                     .font(.footnote)
                     .foregroundColor(.green)
             } else {
-                Label("未设置本地签名证书", systemImage: "exclamationmark.triangle")
+                Label("未设置本地签名证书", systemImage: "info.circle")
                     .font(.footnote)
                     .foregroundColor(.orange)
             }

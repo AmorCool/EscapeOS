@@ -70,7 +70,7 @@ struct PlistEditorView: View {
             ProgressView("正在解析…")
         } else if vm.errorMessage != nil {
             InfoActionCard(
-                icon: "exclamationmark.triangle.fill",
+                icon: "info.circle",
                 iconTint: .orange,
                 title: "无法解析这个 plist",
                 message: vm.errorMessage ?? ""

@@ -396,7 +396,7 @@ struct GestaltView: View {
                         )
                     }
                 } header: {
-                    Label("Warning", systemImage: "exclamationmark.triangle")
+                    Label("Warning", systemImage: "info.circle")
                 } footer: {
                     Text("Rebooting now might cause a bootloop. Try 'Revert Tweaks'.")
                 }
@@ -615,7 +615,7 @@ struct GestaltView: View {
 
     private func warningRow(title: String, text: String) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            Image(systemName: "info.circle")
                 .foregroundStyle(.yellow)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline).bold()

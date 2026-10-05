@@ -119,7 +119,7 @@ struct BackupsListView: View {
             } else if let error = vm.errorMessage, vm.records.isEmpty {
                 Section {
                     InfoActionCard(
-                        icon: "exclamationmark.triangle.fill",
+                        icon: "info.circle",
                         iconTint: .orange,
                         title: "无法读取备份",
                         message: error,
@@ -637,7 +637,7 @@ struct RestoreView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(warnings, id: \.self) { warning in
-                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        Label(warning, systemImage: "info.circle")
                             .font(.footnote)
                             .foregroundColor(.orange)
                     }

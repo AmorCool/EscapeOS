@@ -302,7 +302,7 @@ struct AppStoreDetailView: View {
         } else if let failed = center.lastFinishedJob(bundleId: item.bundleId, name: item.name),
                   failed.phase == .failed, let err = failed.error {
             VStack(alignment: .leading, spacing: 6) {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
+                Label(err, systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

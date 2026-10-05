@@ -29,7 +29,7 @@ struct FileViewerView: View {
                 ProgressView("正在打开…")
             } else if let error = vm.errorMessage {
                 VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
+                    Image(systemName: "info.circle")
                         .font(.largeTitle)
                         .foregroundColor(.orange)
                     Text(error)

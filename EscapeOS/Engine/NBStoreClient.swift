@@ -243,7 +243,7 @@ enum NBStoreClient {
     /// ② `LocalDeviceIdentity.load()`（冷缓存，同步读一次、建隧道秒级 —— 值得）
     /// ③ **拿不到就返回 nil，不发请求**（v0.3.550 起，不再有伪值兜底）。
     ///
-    /// ★ v0.3.554 修了一个上游 bug：`LocalDeviceIdentity` 之前把 lockdown 的键名
+    /// v0.3.554 修了一个上游 bug：`LocalDeviceIdentity` 之前把 lockdown 的键名
     /// 写成了 `UniqueDeviceIdentifier`（真实键是 `UniqueDeviceID`），导致 ① ②
     /// **两条路都必然取不到**，`no-udid` 是这么来的，不是隧道没起来。
     /// 现在键名已修正，这里的兜底路径不会再被误触发。
@@ -305,7 +305,7 @@ enum NBStoreClient {
         // 与请求体里的 appVersion 是同一个值，服务端会校验，勿随意改小。
         var p: [String: Any] = [
             "mainBundleID": "com.nbmaster.app",
-            // ★ v0.3.554：真机发的是**布尔** `false`，原来写的是整数 `0`。
+            // v0.3.554：真机发的是**布尔** `false`，原来写的是整数 `0`。
             // 逐字段对齐真机抓包，别让类型差异成为服务端判参数不合法的理由。
             "mainEmbedded": false,
             "apiVersion": "1.0",
@@ -315,7 +315,7 @@ enum NBStoreClient {
             "osVersion": UIDevice.current.systemVersion,
             "udid": realUDID,
             "lang": "zh-cn",
-            // ★ v0.3.554：真机两次抓包都是字面量 `"iPhone"`（不是设备名「XX的 iPhone」）。
+            // v0.3.554：真机两次抓包都是字面量 `"iPhone"`（不是设备名「XX的 iPhone」）。
             // 我们原来发 `UIDevice.current.name`，取值随用户改设备名而变 ——
             // 这属于**身份字段**，客户端自己发的是固定字面量，跟着对齐。
             "phoneName": "iPhone",
@@ -400,7 +400,7 @@ enum NBStoreClient {
     ///
     /// `path` 是 `pav`（如 `/nb/appstore-plus`）；为空时服务端回落 `/nb/app`。
     ///
-    /// ## ★ v0.3.554 修：`iPad` 默认值从 `true` 改成**自动判定**
+    /// ## v0.3.554 修：`iPad` 默认值从 `true` 改成**自动判定**
     ///
     /// 原来 `iPad: Bool = true`，而四个调用点**没有一个传这个参数** ——
     /// 于是所有 NB 请求都发 `"deviceType":"iPad"`。
@@ -574,7 +574,7 @@ enum NBStoreClient {
                           method: "recordDownload",
                           params: ["appID": appID, "appExtID": appExtID,
                                    "bundleId": bundleId, "name": name, "version": version,
-                                   // ★ v0.3.554：原来是写死的 `false`，改成按设备判定 ——
+                                   // v0.3.554：原来是写死的 `false`，改成按设备判定 ——
                                    // 与 `deviceType` 同源，别让同一发请求里两个字段互相矛盾。
                                    "isPad": UIDevice.current.userInterfaceIdiom == .pad,
                                    "cacheKey": "appHistoryVersion_\(appID)_\(appExtID)",
@@ -646,7 +646,7 @@ enum NBStoreClient {
         var lookupVersion: String?
         var lookupArtwork: String?
 
-        /// ★★ v0.3.559：`lookupData` 里**本来就带完整详情**（43 个键），原样承载.
+        /// v0.3.559：`lookupData` 里**本来就带完整详情**（43 个键），原样承载.
         ///
         /// 下架应用在 Apple 的 `/lookup` 里查不到 —— 它就是因为下架才搜不到，
         /// 但 NB 在收录时把当初那份 lookup 响应**整段存了下来**，字段与 Apple 官方
@@ -661,7 +661,7 @@ enum NBStoreClient {
         /// Apple 的 external version identifier（下架取包要当 `appExtID` 发出去）.
         var appExtID: String?
 
-        /// ★★ v0.3.556：**下架包的直链与 sinf 就在搜索响应里**，不用再调第二个接口.
+        /// v0.3.556：**下架包的直链与 sinf 就在搜索响应里**，不用再调第二个接口.
         ///
         /// 搜索响应的每条记录带一个 `appStoreData`（**JSON 字符串**），里面是完整的包信息：
         /// ```json
@@ -766,12 +766,12 @@ enum NBStoreClient {
                 lookupVersion = string(o["version"])
                 lookupArtwork = string(o["artworkUrl512"]) ?? string(o["artworkUrl100"])
                     ?? string(o["artworkUrl60"])
-                // ★★ v0.3.559：整段映射成详情模型，详情页直接用它渲染.
+                // v0.3.559：整段映射成详情模型，详情页直接用它渲染.
                 lookupDetail = NBStoreRankClient.detail(fromLookup: o,
                                                         fallbackTrackID: lookupTrackID ?? "")
             }
 
-            // ★★ v0.3.556：从 `appStoreData`（内嵌 JSON 字符串）里直接取**包直链与 sinf**。
+            // v0.3.556：从 `appStoreData`（内嵌 JSON 字符串）里直接取**包直链与 sinf**。
             // 这是「下架取包」的正确来源 —— 不用再调 `getOffSaleAppHistoryList`。
             var pkgURL: String?
             var pkgMD5: String?
@@ -856,7 +856,7 @@ enum NBStoreClient {
     /// 「下架列表」在 NB 那边是本地 SQLite 表 `load_list` 缓存的。
     /// 我们的做法：**下架状态由 lookup 结果判定 + 用本方法取包**，不建本地库。
     ///
-    /// ## ★★ v0.3.556 重写：优先用**搜索结果里自带的包**，不走第二个接口
+    /// ## v0.3.556 重写：优先用**搜索结果里自带的包**，不走第二个接口
     ///
     /// 真机抓包 + 直连实测发现：`searchOffSaleApp` 的每条记录里都带一个
     /// `appStoreData`（内嵌 JSON 字符串），**包直链和 sinf 就在里面** ——

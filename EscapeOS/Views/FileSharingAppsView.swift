@@ -35,7 +35,7 @@ struct FileSharingAppsView: View {
                 } else if let err = errorText {
                     Section {
                         HStack(spacing: 8) {
-                            Label(err, systemImage: "exclamationmark.triangle")
+                            Label(err, systemImage: "info.circle")
                                 .foregroundStyle(.orange)
                             Spacer(minLength: 0)
                             // v0.3.378：超时/失败态下必须能一键重来

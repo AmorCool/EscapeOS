@@ -291,7 +291,7 @@ struct PairingSetupView: View {
             VStack(spacing: 22) {
                 Spacer(minLength: 8)
                 if let error = wirelessError {
-                    Image(systemName: "exclamationmark.triangle.fill")
+                    Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 44))
                         .foregroundStyle(.red)
                     Text("配对失败").font(.title3).bold()
@@ -350,7 +350,7 @@ struct PairingSetupView: View {
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                         if let code = wirelessBroadcastErrorCode {
-                            Text("⚠️ 广播未确认（Bonjour code \(code)）")
+                            Text("广播未确认（Bonjour code \(code)）")
                                 .font(.caption)
                                 .foregroundColor(.orange)
                                 .multilineTextAlignment(.center)

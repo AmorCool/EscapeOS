@@ -149,6 +149,10 @@ final class SSHServerService: NSObject, ObservableObject, @unchecked Sendable {
                 let hostKey = try Self.loadOrCreateHostKey()
                 let auth = PasswordAuthDelegate(username: username, password: password)
                 let exec = BuiltinCommandExecDelegate()
+                // SFTP 子系统（v0.3.63x）：把统一 FileProvider 接到 Citadel 的 SFTP v3 服务端。
+                // ⚠️ 认证不受影响 —— SFTP 只在**已通过 PasswordAuthDelegate 的会话**上开放，
+                //    不存在免密/匿名路径。文件域见 SSHFileProvider.swift。
+                let sftp = SFTPFileSystemDelegate(provider: SSHFileProviderFactory.makeDefault())
 
                 let server = try await Citadel.SSHServer.host(
                     host: "0.0.0.0",
@@ -157,6 +161,7 @@ final class SSHServerService: NSObject, ObservableObject, @unchecked Sendable {
                     authenticationDelegate: auth
                 )
                 server.enableExec(withDelegate: exec)
+                server.enableSFTP(withDelegate: sftp)
 
                 guard let self else { return }
                 // Swift 6：server（非 Sendable）不再传进主 actor 闭包 —— 句柄直接写入

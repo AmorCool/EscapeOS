@@ -330,7 +330,7 @@ struct ModuleManagerView: View {
             }
 
             if let err = runner.startErrors[module.id] {
-                Label(err, systemImage: "exclamationmark.triangle.fill")
+                Label(err, systemImage: "xmark.circle.fill")
                     .font(.caption)
                     .foregroundColor(.red)
             }
@@ -394,7 +394,7 @@ struct ModuleManagerView: View {
             // 加前缀会重复成「缺少宿主能力：缺少宿主能力：fs.read」.
             if !module.blockingIssues.isEmpty {
                 Label(module.blockingIssues.joined(separator: "；") + "（请升级 EscapeSpace）",
-                      systemImage: "exclamationmark.triangle.fill")
+                      systemImage: "info.circle")
                     .font(.caption)
                     .foregroundColor(.orange)
             }

@@ -313,7 +313,7 @@ struct I4StoreFreeDetailView: View {
 
     private func errorSection(_ text: String) -> some View {
         Section {
-            Label(text, systemImage: "exclamationmark.triangle.fill")
+            Label(text, systemImage: "info.circle")
                 .font(.subheadline).foregroundStyle(.orange)
         }
     }

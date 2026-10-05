@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.3.566] - 2026-10-05
+
+> **SSH 文件域（SFTP）上线 + 宿主能力补齐 + 界面规则合规。**
+
+### 新增
+
+**SFTP 文件域**（`SSHServerService` / `SSHFileProvider` / `SFTPDelegateImpl`）
+
+SSH 服务在 exec 通道之外新增 SFTP 子系统，三个后端统一到一个 `FileProvider` 接口：
+本 App 沙盒 `Documents/`、设备 AFC `media`、设备 AFC `crash`。
+
+- **认证不受影响**：SFTP 只在**已通过 `PasswordAuthDelegate` 的会话**上开放，
+  不引入任何免密 / 匿名路径。
+- 已知限制：错误路径上的 `readFile` 在 Citadel 上游会**关闭整条通道**（断连），
+  不是挂起、也不是静默损坏。修它需要给 Citadel 打补丁，本版不做。
+
+**宿主能力**：新增 `pkg.list` / `pkg.stat` / `ui.screenshot`。
+`ui.screenshot` 走 **DVT** —— 本设备 RSD 服务表里没有 `screenshotr`（iOS 17 起截图迁到 DVT），
+与 `sysmontap` 同一条路。返回 PNG，默认落盘 `Documents/Screenshots/`。
+
+### 修复
+
+**SFTP 上传必然损坏**（`SSHFileProvider.write`）
+
+分块写每块都用 `AfcWrOnly`（= `O_WRONLY | O_CREAT | O_TRUNC`），而 SFTP **每个写包调一次**
+`write` ⇒ 每包都把前面的块截断，**只有最后一块存活**（单块小文件反而正常，最难发现）。
+改用 `AfcRw`（`O_RDWR | O_CREAT`，**不截断**）；截断语义上移到 `openFile` 一次性处理。
+
+**`rmdir` / `unlink` 会递归删除**（数据丢失级）
+
+两者都走同一个递归删除原语 ⇒ 对**非空目录**发 `rmdir` 会**静默删掉整棵目录树**
+（SFTP 规范要求必须失败）。拆成两个方法：`removeFile` 只删文件（目标是目录 ⇒ 报错）、
+`removeDirectory` 只删**空**目录（非空 ⇒ 报错），底层换**非递归**原语。
+
+**0 字节上传丢文件**
+
+`openFile` 在 `.write && .truncate` 时先删文件，而文件只由后续第一个 `write` 重建
+⇒ 0 字节上传后文件不存在。改为 `openFile` 时先建出空文件。
+
+**不存在路径会让客户端永久挂起**
+
+`fileAttributes` / `openDirectory` 让错误外抛，而 Citadel 在这两处是
+`.flatMapErrorThrowing { _ in }`（**吞错、不回任何包**）⇒ 客户端**永久挂起**。
+改为**不外抛**：回空 attributes / 空 listing。这是「避免挂起的兜底」，
+**不是协议级状态码** —— 客户端据此判「不存在」。
+
+### 界面
+
+- 清除界面上的三角警示图标 `exclamationmark.triangle`（31 个文件、37 处）与用户可见字符串里的
+  `⚠️`，改用项目既有的 `xmark.circle.fill`（错误）/ `info.circle`（警告）。
+- 清除全部 `★` 符号。
+
+### 文档更正
+
+**v0.3.544 的归因不成立**：当时把 NB 源「装后闪退」归因为「伪 UDID → sinf 与本机不匹配」。
+受控实验（固定 App，只改请求 `udid`，含**空串**与**畸形串**）显示 **NB 服务端完全忽略 `udid`**，
+同一 App 返回**逐字节相同**的 sinf ⇒ 该归因不成立；真凶更可能是「hex 被当 base64」的静默损坏
+（v0.3.557 / v0.3.563 修复）。
+
+### 未验证（如实标注）
+
+- **SFTP 真机用例一条未跑**：SFTP 子系统是本版新增，设备上现为 0.3.564，没有该子系统。
+- `ui.screenshot` 的 DVT 取图、`pkg.stat` 的坏包误转换命中率、截图与并发 DVT/AFC 能力的
+  RSD 通道争用 —— **均未真机校准**。
+
 ## [0.3.565] - 2026-10-05
 
 > **修 sinf 自检只认一种格式 —— 误杀 SuperBlob 导致「缺 sinf」误报。**

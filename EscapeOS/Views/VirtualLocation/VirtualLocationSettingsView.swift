@@ -27,7 +27,7 @@ struct VirtualLocationSettingsView: View {
                     Label {
                         Text(session.hasPairing ? "已导入配对文件" : "未导入配对文件")
                     } icon: {
-                        Image(systemName: session.hasPairing ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        Image(systemName: session.hasPairing ? "checkmark.seal.fill" : "info.circle")
                             .foregroundStyle(session.hasPairing ? LocusTheme.statusGood : LocusTheme.statusWarn)
                     }
 

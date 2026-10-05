@@ -39,7 +39,7 @@ enum LocalDeviceIdentity {
 
         /// 是否拿到了可用的本机身份
         ///
-        /// ★ v0.3.554：判据从「序列号非空」改成「序列号**且** UDID 都非空」。
+        /// v0.3.554：判据从「序列号非空」改成「序列号**且** UDID 都非空」。
         /// 旧判据让一个拼错的键（`UniqueDeviceIdentifier`）藏了很久 ——
         /// 序列号读得到就把快照写进缓存，`udid` 是 nil 也没人管，
         /// 直到 NB 链路因为缺 UDID 报 `no-udid` 才暴露。
@@ -120,7 +120,7 @@ enum LocalDeviceIdentity {
         var s = Snapshot()
         if let root = try? DeviceInfoService.lockdownFullDict() {
             s.serialNumber = root["SerialNumber"] as? String
-            // ★ v0.3.554 修：这里原写作 `UniqueDeviceIdentifier`（多一个 `ifier`），
+            // v0.3.554 修：这里原写作 `UniqueDeviceIdentifier`（多一个 `ifier`），
             // 而 lockdown 根字典里的真实键名是 **`UniqueDeviceID`**
             // （同一仓的 `DeviceInfoService.swift:299` 用的就是正确拼写）。
             // 写错键 → `as? String` 静默返回 nil → `udid` 恒为 nil →

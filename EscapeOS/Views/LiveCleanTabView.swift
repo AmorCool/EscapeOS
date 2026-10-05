@@ -163,7 +163,7 @@ struct LiveCleanTabView: View {
                 } else if vm.rows.isEmpty && !vm.isScanning {
                     Section {
                         InfoActionCard(
-                            icon: vm.discoveryError != nil ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+                            icon: vm.discoveryError != nil ? "info.circle" : "checkmark.circle.fill",
                             iconTint: vm.discoveryError != nil ? .orange : .green,
                             title: vm.discoveryError != nil ? "扫描失败" : "未找到应用",
                             message: vm.discoveryError ?? "LiveContainer 内未找到已安装的应用."

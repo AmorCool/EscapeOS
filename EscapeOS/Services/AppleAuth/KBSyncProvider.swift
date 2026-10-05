@@ -75,7 +75,7 @@ enum KBSyncProvider {
         guard let assets = SAPAssetsLocator.url else {
             throw KBSyncError.assetsMissing
         }
-        // ★ v0.3.548 定案：**ObjC 的 `NSError **` 出参在 Swift 侧就是 `throws`** ——
+        // v0.3.548 定案：**ObjC 的 `NSError **` 出参在 Swift 侧就是 `throws`** ——
         //   调用时写 `try`、**不要**再显式传 `error:` 实参。
         //
         //   这个坑连着坑了三版（v0.3.544/545/546 全是同一条

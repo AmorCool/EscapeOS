@@ -53,7 +53,7 @@ struct PairingInstallView: View {
             if let error = errorMessage {
                 Section {
                     InfoActionCard(
-                        icon: "exclamationmark.triangle.fill",
+                        icon: "xmark.circle.fill",
                         iconTint: .red,
                         title: "出错了",
                         message: error

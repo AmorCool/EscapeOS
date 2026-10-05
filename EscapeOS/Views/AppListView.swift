@@ -625,7 +625,7 @@ struct AppListView: View {
         let n = pendingUninstall.count
         let prefix = "将卸载 \(n) 个应用.iOS 可能会弹出系统确认对话框."
         if !viewModel.canUninstall {
-            return prefix + "（⚠️ 配对文件未导入 — 请到「更多 → 配对文件导入」重新导入.）"
+            return prefix + "（配对文件未导入 — 请到「更多 → 配对文件导入」重新导入.）"
         }
         return prefix
     }

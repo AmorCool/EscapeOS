@@ -680,7 +680,7 @@ struct I4StoreFreeView: View {
     @MainActor
     private func installViaNBRank(_ item: NBStoreRankClient.RankItem) async {
         do {
-            // ★ v0.3.556：这里只走**上架**通道（`getAppHistoryList`）。
+            // v0.3.556：这里只走**上架**通道（`getAppHistoryList`）。
             // 下架态已经不摆榜单了（榜单来自 Apple RSS，里面没有下架应用），
             // 下架应用一律从搜索结果取包 —— 原来的下架分支是死代码，
             // 而且它调的 `getOffSaleAppHistoryList` 已被证明取不到包，删掉。

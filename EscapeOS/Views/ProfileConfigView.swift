@@ -51,7 +51,7 @@ struct ProfileConfigView: View {
                         PairingGuideCard(showsBackground: false)
                             .listRowInsets(EdgeInsets())
                     } else {
-                        Label(err, systemImage: "exclamationmark.triangle")
+                        Label(err, systemImage: "info.circle")
                             .foregroundStyle(.orange)
                     }
                 }

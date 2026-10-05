@@ -602,7 +602,7 @@ struct NBStoreDetailView: View {
 
     /// 取某个版本的包并交给统一下载中心。
     ///
-    /// ★ v0.3.556：历史版本这条链路**只对在架应用有效**。
+    /// v0.3.556：历史版本这条链路**只对在架应用有效**。
     /// 下架应用的包只能在**搜索结果**里拿（`searchOffSaleApp` 的 `appStoreData`），
     /// 用 trackId + externalVersionID 去查是查不到的（实测 `getOffSaleAppHistoryList`
     /// 对任何参数组合都取不到包）。所以下架态直接如实说明，不发这一发。

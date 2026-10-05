@@ -128,7 +128,7 @@ struct RestrictionTweaksView: View {
                                         warningText = warning
                                         showWarning = true
                                     } label: {
-                                        Image(systemName: "exclamationmark.triangle.fill")
+                                        Image(systemName: "info.circle")
                                             .foregroundColor(.orange)
                                     }
                                     .buttonStyle(.borderless)

@@ -153,7 +153,7 @@ struct FileBrowserView: View {
                 List {
                     Section {
                         InfoActionCard(
-                            icon: "exclamationmark.triangle.fill",
+                            icon: "info.circle",
                             iconTint: .orange,
                             title: "无法打开目录",
                             message: error,

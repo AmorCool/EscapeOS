@@ -133,6 +133,7 @@ enum HostCapabilityService {
         "fs.copy",            // 沙盒内复制
         "pkg.list",           // 列 IPA/ZIP 内条目（含偏移，配合 fs.read 取单个文件）
         "pkg.read",           // 读 IPA/ZIP 内单个条目（stored 直读 / deflate 解压）
+        "pkg.stat",           // 一次拿全 IPA 体检摘要（ZIP + Mach-O cryptid + sinf），零字节搬运
         "apps.lookup",
         "afc.list",
         "afc.stat",
@@ -143,6 +144,7 @@ enum HostCapabilityService {
         "proc.list",
         "proc.signal",
         "notify.post",
+        "ui.screenshot",      // 经隧道取屏幕截图（PNG；默认返回 base64，可落盘到沙盒）
     ]
 
     // MARK: 当前模块上下文（供 @convention(c) 闭包读取）
@@ -259,6 +261,7 @@ enum HostCapabilityService {
         case "fs.copy":               return fsCopy(args)
         case "pkg.list":              return pkgList(args)
         case "pkg.read":              return pkgRead(args)
+        case "pkg.stat":              return pkgStat(args)
         case "apps.lookup":           return appsLookup(args)
         case "afc.list":              return afcList(args)
         case "afc.stat":              return afcStat(args)
@@ -269,6 +272,7 @@ enum HostCapabilityService {
         case "proc.list":             return procList()
         case "proc.signal":           return procSignal(args)
         case "notify.post":           return notifyPost(args)
+        case "ui.screenshot":         return uiScreenshot(args)
         default:
             return fail("未知能力「\(capability)」",
                         extra: ["supported": capabilityList])
@@ -814,6 +818,7 @@ enum HostCapabilityService {
                 "compressedSize": Int(csize),
                 "size": Int(usize),
                 "localHeaderOffset": Int(lho),
+                "flags": le16(cd, p + 8),            // 通用位标志（bit3 = 0x08：用了 data descriptor）
             ])
             p += 46 + nameLen + extraLen + commentLen
         }
@@ -944,6 +949,563 @@ enum HostCapabilityService {
         return dst.prefix(n)
     }
 
+    // MARK: - pkg.stat（IPA 体检：ZIP 摘要 + Mach-O cryptid + sinf）
+
+    /// `pkg.stat` —— 一次拿全 IPA 体检摘要，**零字节搬运**（响应里没有任何文件字节）.
+    ///
+    /// 入参：`path`（App 沙盒内的 IPA/ZIP 路径，规则同 `pkg.list`）。
+    ///
+    /// 返回（详见 `pkgStatSync`）：中央目录条目数 / 重复条目名 / 孤儿 local header /
+    /// data descriptor 计数 / bit3 条目数；`Payload/*.app` 结构；主二进制 `cryptid`
+    /// （Mach-O `LC_ENCRYPTION_INFO(_64)`，支持 thin 与 fat）；`SC_Info/*.sinf` 的
+    /// 格式判定（sinf-TLV 容器 / SuperBlob / 疑似 hex 被当 base64 解码）。
+    ///
+    /// ## 硬超时
+    /// 整个分析（含全文件扫描）包在 **30s 硬超时** 里：超时明确报错、不挂住调用线程。
+    /// 扫描是**分块**的（4MB/块），**不会把 230MB 的整包读进内存**。
+    private static func pkgStat(_ args: [String: Any]) -> (Int32, String) {
+        guard let rawPath = args["path"] as? String, !rawPath.isEmpty else {
+            return fail("pkg.stat 缺少 path")
+        }
+        let path = resolvePath(rawPath)
+        guard isInSandbox(path) else {
+            return fail("pkg.stat 只支持 App 沙盒内路径",
+                        extra: ["resolved": path, "home": homeDir])
+        }
+        guard FileManager.default.fileExists(atPath: path) else {
+            return fail("文件不存在：\(path)", extra: ["resolved": path])
+        }
+
+        let timeout: TimeInterval = 30
+        let sem = DispatchSemaphore(value: 0)
+        let box = StatBox()
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.result = pkgStatSync(path: path)
+            sem.signal()
+        }
+        if sem.wait(timeout: .now() + timeout) == .timedOut {
+            return fail("pkg.stat 超时（\(Int(timeout)) 秒）：已放弃等待，避免阻塞调用线程。"
+                        + "大包请改用 pkg.list / pkg.read 分步做。",
+                        extra: ["resolved": path, "timeoutSeconds": Int(timeout)])
+        }
+        guard let result = box.result else {
+            return fail("pkg.stat 失败（后台未产生结果）", extra: ["resolved": path])
+        }
+        return result
+    }
+
+    /// 后台结果盒子（写入在 `sem.signal()` 之前、读取在 `sem.wait()` 之后，有 happens-before）
+    private final class StatBox: @unchecked Sendable {
+        var result: (Int32, String)?
+    }
+
+    /// `pkg.stat` 的真正实现（阻塞；由 `pkgStat` 放到后台队列并加超时）.
+    private static func pkgStatSync(path: String) -> (Int32, String) {
+        let (entries, err) = zipEntries(path: path)
+        guard let entries else {
+            return fail("解析 zip 失败：\(err)", extra: ["resolved": path])
+        }
+        let totalEntries = entries.count
+
+        // ── 重复条目名 ──
+        var seen = Set<String>()
+        var dupNames: [String] = []
+        for e in entries {
+            let n = (e["name"] as? String) ?? ""
+            if !seen.insert(n).inserted, !dupNames.contains(n) { dupNames.append(n) }
+        }
+
+        // ── 扫描 local header（**做结构校验**，避免数据里碰巧的 PK\x03\x04 误报，F4）──
+        let localScan = scanLocalHeaders(path: path, cap: 20000)
+        // data descriptor：PK\x07\x08 只是 4 字节签名、无结构可校验 ⇒ 按原始出现次数报（如实标注）
+        let ddScan = scanSignature(path: path, sig: Data([0x50, 0x4B, 0x07, 0x08]), cap: 20000)
+
+        // 孤儿 local header：结构自洽、但偏移不被任何中央目录条目引用（返回**文件名**，最多 64 个）
+        var cdOffsets = Set<Int>()
+        for e in entries { if let o = e["localHeaderOffset"] as? Int { cdOffsets.insert(o) } }
+        var orphanLocal: [String] = []
+        var orphanLocalCount = 0
+        for (i, off) in localScan.offsets.enumerated() where !cdOffsets.contains(off) {
+            orphanLocalCount += 1
+            if orphanLocal.count < 64 { orphanLocal.append(localScan.names[i]) }
+        }
+
+        // 宣称 bit3（用了 data descriptor）的条目数
+        let bit3Entries = entries.filter { ((($0["flags"] as? Int) ?? 0) & 0x08) != 0 }.count
+
+        // 中央目录驱动的结构校验（**不是**逐条 CRC 校验）
+        let testzipOk = verifyLocalHeaders(path: path, entries: entries)
+
+        // ── Payload 结构 ──
+        let payload = payloadSummary(entries: entries, path: path)
+        let appName = (payload["app"] as? String) ?? ""
+        let exe = (payload["exe"] as? String) ?? ""
+        let exeEntryName = (appName.isEmpty || exe.isEmpty) ? "" : "Payload/\(appName)/\(exe)"
+
+        // ── 主二进制 cryptid ──
+        let macho = machOCryptid(path: path, exeEntryName: exeEntryName, entries: entries)
+        // F2/F6：cryptid 未知时给 null，**不要给 0** —— 否则与「未加密（读到 LC 且 cryptid=0）」混淆
+        let cryptidKnown = (macho.source != "unknown")
+        let cryptidValue: Any = cryptidKnown ? macho.cryptid : NSNull()
+
+        // ── sinf 判定 ──
+        let sinf = sinfSummary(entries: entries, path: path, exe: exe)
+
+        var extra: [String: Any] = [
+            "totalEntries": totalEntries,
+            "centralCount": totalEntries,     // schema 字段；与 totalEntries 同源（都来自中央目录）
+            "dupNames": dupNames,
+            "orphanLocal": orphanLocal,
+            "orphanLocalCount": orphanLocalCount,
+            "payload": payload,
+            "exe": exe,                       // schema 顶层也有 exe
+            "cryptid": cryptidValue,          // int|null（schema）
+            "cryptidKnown": cryptidKnown,     // 显式区分「未加密=0」与「无法判定」
+            "cryptidSource": macho.source,
+            "sinf": sinf,
+            "zip": [
+                "testzipOk": testzipOk,
+                "localHeaders": localScan.offsets.count,        // 结构自洽的 local header 数
+                "localHeaderCandidates": localScan.candidates,  // 原始 PK\x03\x04 命中数（含误报）
+                "descriptors": ddScan.count,
+                "bit3Entries": bit3Entries,
+            ],
+            "resolved": path,
+        ]
+        if !macho.note.isEmpty { extra["cryptidNote"] = macho.note }
+        return ok(extra)
+    }
+
+    /// local header 扫描结果
+    private struct LocalHeaderScan {
+        var candidates: Int        // 原始 PK\x03\x04 命中数（含数据里碰巧出现的）
+        var offsets: [Int]         // 通过结构校验的偏移
+        var names: [String]        // 与 offsets 一一对应的文件名
+    }
+
+    /// 扫描 local header：先用字节签名找候选，再对每个候选做**结构校验**
+    /// （签名 / version-needed ∈ 10..63 / nameLen ∈ 1..255 / 文件名可打印），
+    /// **只保留结构自洽的** —— 这样 stored/deflate 数据里碰巧出现的 `PK\x03\x04`
+    /// 不会被误报成孤儿头（F4）。
+    private static func scanLocalHeaders(path: String, cap: Int) -> LocalHeaderScan {
+        let cand = scanSignature(path: path, sig: Data([0x50, 0x4B, 0x03, 0x04]), cap: cap)
+        guard let fh = FileHandle(forReadingAtPath: path) else {
+            return LocalHeaderScan(candidates: cand.count, offsets: [], names: [])
+        }
+        defer { try? fh.close() }
+        var offsets: [Int] = []
+        var names: [String] = []
+        for off in cand.positions {
+            if let name = localHeaderName(fh: fh, offset: off) {
+                offsets.append(off)
+                names.append(name)
+            }
+        }
+        return LocalHeaderScan(candidates: cand.count, offsets: offsets, names: names)
+    }
+
+    /// 读 `offset` 处的 local file header 并做结构校验；通过返回文件名，否则 nil.
+    /// local file header 布局：签名(4) / version-needed(2)@4 / flags(2)@6 / method(2)@8 …
+    ///                        / nameLen(2)@26 / extraLen(2)@28 / name@30
+    private static func localHeaderName(fh: FileHandle, offset: Int) -> String? {
+        guard offset >= 0, (try? fh.seek(toOffset: UInt64(offset))) != nil,
+              let h = try? fh.read(upToCount: 30), h.count == 30 else { return nil }
+        let b = h.startIndex
+        guard h[b] == 0x50, h[b + 1] == 0x4B, h[b + 2] == 0x03, h[b + 3] == 0x04 else { return nil }
+        let versionNeeded = le16(h, 4)
+        let nameLen = le16(h, 26)
+        guard versionNeeded >= 10, versionNeeded <= 63, nameLen >= 1, nameLen <= 255 else { return nil }
+        guard let nameData = try? fh.read(upToCount: nameLen), nameData.count == nameLen,
+              let name = String(data: nameData, encoding: .utf8), !name.isEmpty else { return nil }
+        // 文件名应可打印（UTF-8 多字节中文也算；排除控制字符）
+        guard name.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7F }) else { return nil }
+        return name
+    }
+
+    /// 分块扫描整个文件，统计 4 字节签名的出现次数并记录起始偏移（最多记 `cap` 个）。
+    /// 块间保留 3 字节重叠，避免签名跨块漏计；用 `Data.range(of:)` 走底层优化搜索。
+    private static func scanSignature(path: String, sig: Data, cap: Int) -> (count: Int, positions: [Int]) {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return (0, []) }
+        defer { try? fh.close() }
+        let chunkSize = 4 << 20
+        var count = 0
+        var positions: [Int] = []
+        var fileOffset = 0
+        var carry = Data()
+        while true {
+            let chunk = (try? fh.read(upToCount: chunkSize)) ?? Data()
+            if chunk.isEmpty { break }
+            var buf = carry
+            buf.append(chunk)
+            let base = fileOffset - carry.count
+            var search = buf.startIndex
+            while search < buf.endIndex,
+                  let r = buf.range(of: sig, options: [], in: search..<buf.endIndex) {
+                count += 1
+                if positions.count < cap { positions.append(base + (r.lowerBound - buf.startIndex)) }
+                search = r.lowerBound + sig.count
+            }
+            carry = buf.count >= 3 ? buf.suffix(3) : buf
+            fileOffset += chunk.count
+        }
+        return (count, positions)
+    }
+
+    /// 中央目录驱动的结构校验：每个条目在其 `localHeaderOffset` 处都应能找到
+    /// `PK\x03\x04` 本地头签名。
+    ///
+    /// ⚠️ 这**不是** `zip.testzip()` 的等价物，也**不是**完整校验 ——
+    /// 它只看「中央目录 ↔ 本地头」是否对齐，**看不到** local header 与真实数据的
+    /// 边界错位、也不逐条验 CRC。所以它通过**不等于**包是好的。
+    private static func verifyLocalHeaders(path: String, entries: [[String: Any]]) -> Bool {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? fh.close() }
+        for e in entries {
+            guard let off = e["localHeaderOffset"] as? Int, off >= 0 else { return false }
+            guard (try? fh.seek(toOffset: UInt64(off))) != nil,
+                  let head = try? fh.read(upToCount: 4), head.count == 4 else { return false }
+            let b = head.startIndex
+            guard head[b] == 0x50, head[b + 1] == 0x4B,
+                  head[b + 2] == 0x03, head[b + 3] == 0x04 else { return false }
+        }
+        return true
+    }
+
+    /// 读出 ZIP 条目**解压后前 `maxOut` 字节**。
+    ///
+    /// - stored（method 0）：直读。
+    /// - deflate（method 8）：读入至多 `maxOut` 压缩字节后用 `compression_decode_buffer`
+    ///   只解到 `maxOut` —— 与 `IPAPackageInspector.inflatePrefix` 同一手法，
+    ///   **不把几十 MB 的主二进制整个展开**。
+    private static func zipEntryPrefix(path: String, entry: [String: Any], maxOut: Int) -> Data? {
+        guard maxOut > 0,
+              let lho = entry["localHeaderOffset"] as? Int,
+              let method = entry["method"] as? Int,
+              let csize = entry["compressedSize"] as? Int else { return nil }
+        guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? fh.close() }
+        try? fh.seek(toOffset: UInt64(max(0, lho)))
+        guard let lh = try? fh.read(upToCount: 30), lh.count >= 30 else { return nil }
+        let dataStart = UInt64(lho + 30 + le16(lh, 26) + le16(lh, 28))
+        try? fh.seek(toOffset: dataStart)
+
+        if method == 0 {
+            let want = min(csize, maxOut)
+            guard want > 0 else { return Data() }
+            return (try? fh.read(upToCount: want)) ?? nil
+        }
+        if method == 8 {
+            let wantComp = min(csize, maxOut)   // 压缩数据必然 <= 解压后，读这么多足够
+            guard wantComp > 0, let comp = try? fh.read(upToCount: wantComp), !comp.isEmpty else {
+                return nil
+            }
+            return inflatePrefixCapped(comp, maxOut: maxOut)
+        }
+        return nil
+    }
+
+    /// raw DEFLATE 解压，只取前 `maxOut` 字节（`COMPRESSION_ZLIB` = 无 zlib 头的 raw deflate）
+    private static func inflatePrefixCapped(_ input: Data, maxOut: Int) -> Data? {
+        var out = Data(count: maxOut)
+        let written: Int = out.withUnsafeMutableBytes { dst -> Int in
+            guard let dstBase = dst.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return input.withUnsafeBytes { src -> Int in
+                guard let srcBase = src.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(dstBase, maxOut, srcBase, input.count,
+                                                 nil, COMPRESSION_ZLIB)
+            }
+        }
+        guard written > 0 else { return nil }
+        return Data(out.prefix(written))
+    }
+
+    /// 解析 `Payload/*.app` 结构（app 名 / 是否有 Info.plist / _CodeSignature / SC_Info / 可执行名）.
+    private static func payloadSummary(entries: [[String: Any]], path: String) -> [String: Any] {
+        var appName = ""
+        for e in entries {
+            let n = (e["name"] as? String) ?? ""
+            guard n.hasPrefix("Payload/") else { continue }
+            let rest = String(n.dropFirst("Payload/".count))
+            if let r = rest.range(of: ".app/") {
+                appName = String(rest[rest.startIndex..<r.lowerBound]) + ".app"
+                break
+            }
+        }
+
+        var hasInfo = false, hasCS = false, hasSC = false
+        if !appName.isEmpty {
+            let prefix = "Payload/\(appName)/"
+            for e in entries {
+                let n = (e["name"] as? String) ?? ""
+                guard n.hasPrefix(prefix) else { continue }
+                let tail = String(n.dropFirst(prefix.count))
+                if tail == "Info.plist" { hasInfo = true }
+                if tail.hasPrefix("_CodeSignature/") { hasCS = true }
+                if tail.hasPrefix("SC_Info/") { hasSC = true }
+            }
+        }
+
+        // exe 优先取 Info.plist 的 CFBundleExecutable；取不到就退回 app 名去扩展名
+        var exe = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
+        if hasInfo, !appName.isEmpty {
+            let infoName = "Payload/\(appName)/Info.plist"
+            if let entry = entries.first(where: { ($0["name"] as? String) == infoName }),
+               let data = zipEntryPrefix(path: path, entry: entry, maxOut: 1 << 20),
+               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+               let dict = plist as? [String: Any],
+               let real = dict["CFBundleExecutable"] as? String, !real.isEmpty {
+                exe = real
+            }
+        }
+
+        return ["app": appName, "hasInfoPlist": hasInfo, "hasCodeSignature": hasCS,
+                "hasSCInfo": hasSC, "exe": exe]
+    }
+
+    /// 从主二进制解析 `cryptid`（Mach-O `LC_ENCRYPTION_INFO` 0x21 / `LC_ENCRYPTION_INFO_64` 0x2C），
+    /// **支持 thin 与 fat**.
+    ///
+    /// 返回 `(cryptid, source, note)`：`source` 是命中的加载命令名（或 `none` / `unknown`），
+    /// `note` 是补充说明（fat 切片信息 / 解析失败原因），空串表示无补充。
+    private static func machOCryptid(path: String, exeEntryName: String,
+                                     entries: [[String: Any]]) -> (cryptid: Int, source: String, note: String) {
+        guard !exeEntryName.isEmpty,
+              let entry = entries.first(where: { ($0["name"] as? String) == exeEntryName }) else {
+            return (0, "unknown", "主二进制不在包内（entry=\(exeEntryName.isEmpty ? "<未识别>" : exeEntryName)）")
+        }
+        guard let head = zipEntryPrefix(path: path, entry: entry, maxOut: 256 * 1024), head.count >= 8 else {
+            return (0, "unknown", "主二进制解压失败或过短")
+        }
+
+        let le = le32(head, 0)
+        let be = be32(head, 0)
+
+        // thin（本机序或字节序反转都认）
+        if le == 0xFEEDFACE || be == 0xFEEDFACE || le == 0xFEEDFACF || be == 0xFEEDFACF {
+            let is64 = (le == 0xFEEDFACF || be == 0xFEEDFACF)
+            let bigEndian = (be == 0xFEEDFACE || be == 0xFEEDFACF)
+            if let r = parseThinMachOCryptid(head, base: 0, is64: is64, bigEndian: bigEndian) {
+                return (r.0, r.1, "")
+            }
+            return (0, "unknown", "Mach-O 加载命令解析失败")
+        }
+
+        // fat（big-endian）
+        if be == 0xCAFEBABE || be == 0xCAFEBABF {
+            let fat64 = (be == 0xCAFEBABF)
+            let nArch = Int(be32(head, 4))
+            guard nArch > 0, nArch <= 64 else { return (0, "unknown", "fat 头 nArch 异常：\(nArch)") }
+            let archSize = fat64 ? 32 : 20
+            guard 8 + nArch * archSize <= head.count else {
+                return (0, "unknown", "fat 架构表超出已读头部")
+            }
+            // 优先 arm64（cputype 0x0100000C），否则第一片
+            var sliceOffset = 0
+            var chosenCPU: UInt32 = 0
+            for i in 0..<nArch {
+                let e = 8 + i * archSize
+                let cputype = be32(head, e)
+                let off = Int(be32(head, e + 8))
+                if i == 0 { sliceOffset = off; chosenCPU = cputype }
+                if cputype == 0x0100000C { sliceOffset = off; chosenCPU = cputype; break }
+            }
+            // 需要把解压流推进到 slice 偏移 + 64KB；上限 16MB 防极端 fat 撑爆内存
+            let cap = min(sliceOffset + 64 * 1024, 16 * 1024 * 1024)
+            guard let all = zipEntryPrefix(path: path, entry: entry, maxOut: cap),
+                  all.count >= sliceOffset + 8 else {
+                return (0, "unknown", "fat 的切片偏移 \(sliceOffset) 超出可解出范围（上限 16MB）")
+            }
+            let slice = Data(all[sliceOffset...])
+            let sLE = le32(slice, 0), sBE = be32(slice, 0)
+            let is64 = (sLE == 0xFEEDFACF || sBE == 0xFEEDFACF)
+            let bigEndian = (sBE == 0xFEEDFACE || sBE == 0xFEEDFACF)
+            if let r = parseThinMachOCryptid(slice, base: 0, is64: is64, bigEndian: bigEndian) {
+                return (r.0, r.1, "fat/\(fat64 ? "64" : "32")，切片 cputype=0x\(String(chosenCPU, radix: 16))，sliceOffset=\(sliceOffset)")
+            }
+            return (0, "unknown", "fat 切片加载命令解析失败")
+        }
+
+        return (0, "unknown",
+                "不是可识别的 Mach-O（magic le=0x\(String(le, radix: 16)) be=0x\(String(be, radix: 16))）")
+    }
+
+    /// 解析 thin Mach-O 的加密加载命令；返回 `(cryptid, 命令名)`。
+    /// 解析成功但无加密命令 ⇒ `(0, "none")`；结构异常 ⇒ nil。
+    private static func parseThinMachOCryptid(_ data: Data, base: Int, is64: Bool,
+                                              bigEndian: Bool) -> (Int, String)? {
+        let headerSize = is64 ? 32 : 28
+        guard base + headerSize <= data.count else { return nil }
+        let ncmds = Int(read32(data, base + 16, bigEndian: bigEndian))
+        var p = base + headerSize
+        for _ in 0..<ncmds {
+            guard p + 8 <= data.count else { return nil }
+            let cmd = read32(data, p, bigEndian: bigEndian)
+            let cmdsize = Int(read32(data, p + 4, bigEndian: bigEndian))
+            if cmd == 0x2C || cmd == 0x21 {
+                guard p + 20 <= data.count else { return nil }
+                let cryptid = Int(read32(data, p + 16, bigEndian: bigEndian))
+                return (cryptid, cmd == 0x2C ? "LC_ENCRYPTION_INFO_64" : "LC_ENCRYPTION_INFO")
+            }
+            guard cmdsize >= 8 else { return nil }
+            p += cmdsize
+        }
+        return (0, "none")
+    }
+
+    /// 读 32 位（可选字节序）
+    private static func read32(_ d: Data, _ o: Int, bigEndian: Bool) -> UInt32 {
+        return bigEndian ? be32(d, o) : UInt32(le32(d, o))
+    }
+
+    /// 判定 `SC_Info/*.sinf` 的存在与格式（**两种格式都认**）.
+    private static func sinfSummary(entries: [[String: Any]], path: String, exe: String) -> [String: Any] {
+        let sinfEntries = entries.filter { e in
+            let name = (e["name"] as? String) ?? ""
+            return name.hasPrefix("Payload/") && name.contains(".app/SC_Info/") && name.hasSuffix(".sinf")
+        }
+        guard !sinfEntries.isEmpty else {
+            return ["present": false, "reason": "包内无 Payload/*.app/SC_Info/*.sinf"]
+        }
+        // 优先与可执行文件同名的那一个
+        let preferred = sinfEntries.first {
+            (($0["name"] as? String) ?? "").hasSuffix("/\(exe).sinf")
+        } ?? sinfEntries[0]
+        let fullName = (preferred["name"] as? String) ?? ""
+        let shortName = fullName.split(separator: "/").last.map(String.init) ?? fullName
+
+        guard let data = zipEntryPrefix(path: path, entry: preferred, maxOut: 64 * 1024), !data.isEmpty else {
+            return ["present": true, "name": shortName, "len": 0, "format": "unknown",
+                    "verdict": "sinf 存在但读不出来", "structurallyValid": false,
+                    "hexOrBase64Misdecode": false]
+        }
+        let (format, verdict, valid) = classifySinf(data)
+        let misdecoded = looksLikeHexAsBase64(data)
+        var out: [String: Any] = ["present": true, "name": shortName, "len": data.count,
+                                  "format": format, "verdict": verdict,
+                                  "structurallyValid": valid,
+                                  "hexOrBase64Misdecode": misdecoded]
+        if misdecoded {
+            out["misdecodeNote"] = "长度≈合法 sinf 长度×1.5 且 base64 再编码后全为 hex 字符："
+                + "疑似 hex 文本被当 base64 解码（判据未用真机样本校准）"
+        }
+        return out
+    }
+
+    /// sinf 格式判定（**不要**把 `00 00 04 30` 之类的长度当固定魔数）.
+    ///
+    /// 返回 `(format, verdict, structurallyValid)`：
+    /// - `format ∈ superblob | container | unknown`（对齐 schema）；
+    /// - `verdict`：人读的判定（以「结构自洽」开头 = 好；「可疑」/「垃圾/损坏」= 坏）；
+    /// - `structurallyValid`：机器可读的**质量门**信号（消费方应据此拒收坏包）。
+    ///
+    /// ## 判据（F3：不只看顶层长度，还要递归验子结构）
+    /// - **superblob**：`magic 0xFADE0CC0` + 声明长度 == 实际 + `count` 与索引表条数一致（0<count≤32）
+    ///   + 每个 blob 偏移在界内 + 含 CodeDirectory(type=0)。
+    /// - **container**：`{4B 大端总长}` + `"sinf"` + 递归 TLV；顶层长度 == 实际，
+    ///   且**递归聚合**「子项恰好铺满」（内层越界/空洞也算坏），并含 `frma` 或 `schi`。
+    ///
+    /// 为什么必须递归：只验顶层会让「顶层长度对、内层块长度错」的坏包被判成自洽 —— 漏报坏包
+    /// 比误报更危险（用户装上去会闪退）。
+    private static func classifySinf(_ data: Data) -> (format: String, verdict: String, valid: Bool) {
+        let len = data.count
+        if len < 8 {
+            return ("unknown", "垃圾：长度不足 8 字节", false)
+        }
+
+        // ---- SuperBlob：magic(4) + length(4) + count(4) + count×(type(4)+offset(4)) + blobs ----
+        if be32(data, 0) == 0xFADE0CC0 {
+            let declared = Int(be32(data, 4))
+            let count = len >= 12 ? Int(be32(data, 8)) : 0
+            // 索引表是**定长 8 字节步进**（type 4B + offset 4B），不能用 offset 推进指针
+            var blobTypes: [UInt32] = []
+            var blobOffsets: [Int] = []
+            var p = 12
+            for _ in 0..<min(count, 64) {
+                guard p + 8 <= len else { break }
+                blobTypes.append(be32(data, p))
+                blobOffsets.append(Int(be32(data, p + 4)))
+                p += 8
+            }
+            let countOk = (count == blobOffsets.count) && count > 0 && count <= 32
+            let offsetsOk = !blobOffsets.isEmpty && blobOffsets.allSatisfy { $0 > 0 && $0 < len }
+            let hasCodeDirectory = blobTypes.contains(0)
+
+            if declared != len {
+                return ("superblob", "垃圾/损坏：声明长度 \(declared) != 实际 \(len)", false)
+            }
+            if !countOk {
+                return ("superblob", "垃圾/损坏：blob 计数 \(count) 与索引不一致（实际索引 \(blobOffsets.count) 条）", false)
+            }
+            if !offsetsOk {
+                return ("superblob", "垃圾/损坏：blob 偏移越界", false)
+            }
+            if !hasCodeDirectory {
+                return ("superblob", "可疑：无 CodeDirectory(type=0) blob", false)
+            }
+            return ("superblob", "结构自洽，疑似有效 sinf（SuperBlob，count=\(count)）", true)
+        }
+
+        // ---- container：{4B 大端总长} + "sinf" + 递归 TLV ----
+        if be32(data, 4) == 0x73696E66 {   // "sinf"
+            let declared = Int(be32(data, 0))
+            var tiled = true
+            var tags: [String] = []
+            walkSinfTLV(data, start: 0, end: len, depth: 0, tiled: &tiled, tags: &tags)
+
+            if declared != len {
+                return ("container", "垃圾/损坏：顶层声明长度 \(declared) != 实际 \(len)", false)
+            }
+            if !tiled {
+                return ("container", "垃圾/损坏：TLV 子项未能恰好铺满（越界/空洞）", false)
+            }
+            if !(tags.contains("frma") || tags.contains("schi")) {
+                return ("container", "可疑：缺少 frma/schi 关键子项", false)
+            }
+            return ("container", "结构自洽（sinf-TLV 容器，子项完整）", true)
+        }
+
+        return ("unknown", "垃圾：非 SuperBlob 也非 sinf-TLV 容器", false)
+    }
+
+    /// 递归遍历 sinf TLV 列表。块 = `{4B 大端长度}{4B tag}{长度-8 字节值}`；
+    /// tag 为 `sinf`/`schi` 时**递归进其值**。
+    ///
+    /// `tiled` 必须**递归聚合**：只要任一层子项越界或没铺满，整体就不是自洽 ——
+    /// 否则「顶层恰好铺满、内层越界」的坏包会被漏判（F3）。
+    private static func walkSinfTLV(_ d: Data, start: Int, end: Int, depth: Int,
+                                    tiled: inout Bool, tags: inout [String]) {
+        guard depth < 8 else { return }        // 防病态深嵌套
+        var off = start
+        while off + 8 <= end {
+            let ln = Int(be32(d, off))
+            if ln < 8 || off + ln > end {
+                tiled = false
+                return
+            }
+            let tag = String(data: Data(d[(off + 4)..<(off + 8)]), encoding: .ascii) ?? ""
+            tags.append(tag)
+            if tag == "sinf" || tag == "schi" {
+                walkSinfTLV(d, start: off + 8, end: off + ln, depth: depth + 1, tiled: &tiled, tags: &tags)
+            }
+            off += ln
+        }
+        if off != end { tiled = false }
+    }
+
+    /// 疑似「hex 文本被当 base64 解码」的启发式判据。
+    ///
+    /// ⚠️ **该阈值尚未用真机样本校准**（实现时设备 SSH 不可用，见交付报告）：
+    /// 判据 = 长度恰为某已知合法 sinf 长度（1032/1048/1056/1072）× 1.5，
+    /// 且把内容 base64 再编码后**全是 hex 字符**。
+    /// 若日后拿到真机样本发现误报/漏报，可改成「按已知合法长度表比对」。
+    private static func looksLikeHexAsBase64(_ data: Data) -> Bool {
+        let legalLengths = [1032, 1048, 1056, 1072]
+        guard legalLengths.contains(where: { Int(Double($0) * 1.5) == data.count }) else { return false }
+        let b64 = data.base64EncodedString()
+        guard !b64.isEmpty else { return false }
+        return b64.allSatisfy { $0.isHexDigit }
+    }
+
     // MARK: - proc.*
 
     /// 进程接口不需要跳主线程：`ProcessManagerService` 是 `Sendable` 的非 MainActor
@@ -1056,6 +1618,106 @@ enum HostCapabilityService {
         }
         if sem.wait(timeout: .now() + timeout) == .timedOut { return false }
         return box.value
+    }
+
+    // MARK: - ui.screenshot
+
+    /// `ui.screenshot` —— 经 RSD 隧道 + DVT 取设备当前屏幕（PNG）.
+    ///
+    /// ## 契约（对齐 `capability-schema.json` 的 `ui.screenshot`）
+    /// - 入参：`toFile`（可选，落盘相对路径）、`overwrite`（可选，默认 `true`）、
+    ///   `inline`（可选，默认 `false`；**本实现的扩展**，用来显式要 base64）。
+    ///   `path` 作为 `toFile` 的兼容别名仍被接受。
+    /// - **默认落盘**（设计正文：截图默认落盘，内联才 base64）：`toFile` 缺省时落到
+    ///   `Documents/Screenshots/shot-<ts>.png`；只有 `inline:true` 才回传 base64。
+    /// - 返回：落盘 `{ok,toFile,bytes,width,height,via}`；内联 `{ok,bytes,data,width,height,via}`。
+    ///
+    /// ## 底层与超时
+    /// 走 `ScreenshotService`（**DVT 三连**，不是 screenshotr —— 本设备无 screenshotr 服务），
+    /// **硬超时 15s**：超时返回明确错误，绝不挂住调用线程。不需要越狱，只需配对隧道。
+    ///
+    /// ## 为什么内联要设上限
+    /// 真机 PNG 常 1–5MB，base64 后 1.3–6.6MB。能力通道有「响应被截断」的历史问题，
+    /// 故内联超过 2MB 直接拒绝，要求改用 `toFile`。
+    private static func uiScreenshot(_ args: [String: Any]) -> (Int32, String) {
+        // toFile 优先；path 作兼容别名（老调用方不至于静默失效）
+        let toFileRaw = (args["toFile"] as? String) ?? (args["path"] as? String)
+        let overwrite = (args["overwrite"] as? Bool) ?? true
+        let inline = (args["inline"] as? Bool) ?? false
+
+        // 目标路径：给了 toFile 就归一化；没给就默认 Documents/Screenshots/shot-<ts>.png
+        let resolved: String
+        if let toFileRaw, !toFileRaw.isEmpty {
+            let p = resolvePath(toFileRaw)
+            guard isInSandbox(p) else {
+                return fail("ui.screenshot 的 toFile 只支持 App 沙盒内路径",
+                            extra: ["toFile": p, "home": homeDir])
+            }
+            resolved = p
+        } else {
+            let ts = Int(Date().timeIntervalSince1970)
+            resolved = homeDir + "/Documents/Screenshots/shot-\(ts).png"
+        }
+
+        // 落盘模式下才做 overwrite 检查（内联不落盘）
+        if !inline, !overwrite, FileManager.default.fileExists(atPath: resolved) {
+            return fail("目标已存在且 overwrite=false：\(resolved)",
+                        extra: ["toFile": resolved])
+        }
+
+        let png: Data
+        do {
+            png = try ScreenshotService.shared.capturePNG(timeout: 15)
+        } catch {
+            return fail("截图失败：\(error.localizedDescription)",
+                        extra: ["via": "dvt.screenshot", "timeoutSeconds": 15])
+        }
+
+        let dims = pngDimensions(png)
+        let width = dims?.0 ?? 0
+        let height = dims?.1 ?? 0
+
+        if inline {
+            let cap = 2 * 1024 * 1024
+            guard png.count <= cap else {
+                return fail("PNG 超过内联上限 2MB，请改用 toFile 落盘",
+                            extra: ["bytes": png.count, "width": width, "height": height,
+                                    "via": "dvt.screenshot"])
+            }
+            return ok(["bytes": png.count, "data": png.base64EncodedString(),
+                       "width": width, "height": height, "via": "dvt.screenshot"])
+        }
+
+        do {
+            let parent = (resolved as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
+            try png.write(to: URL(fileURLWithPath: resolved))
+            return ok(["toFile": resolved, "bytes": png.count,
+                       "width": width, "height": height, "via": "dvt.screenshot"])
+        } catch {
+            return fail("截图已拿到，但落盘失败：\(error.localizedDescription)",
+                        extra: ["bytes": png.count, "via": "dvt.screenshot"])
+        }
+    }
+
+    /// 读 PNG 的 IHDR 取宽高.
+    /// 标准 PNG 签名是 **8 字节** `89 50 4E 47 0D 0A 1A 0A`（F7：此前只校验前 4 字节）。
+    /// 之后：块长 4B + `"IHDR"` 4B ⇒ 宽在偏移 16、高在 20，均**大端** 32 位.
+    private static func pngDimensions(_ data: Data) -> (Int, Int)? {
+        guard data.count >= 24 else { return nil }
+        let sig: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        guard Array(data.prefix(8)) == sig else { return nil }
+        guard data[12] == 0x49, data[13] == 0x48, data[14] == 0x44, data[15] == 0x52 else {
+            return nil   // 第 12..16 字节应是 "IHDR"
+        }
+        return (Int(be32(data, 16)), Int(be32(data, 20)))
+    }
+
+    /// 大端读 32 位（越界返回 0，不崩）
+    private static func be32(_ d: Data, _ o: Int) -> UInt32 {
+        guard o >= 0, o + 4 <= d.count else { return 0 }
+        return UInt32(d[o]) << 24 | UInt32(d[o + 1]) << 16
+            | UInt32(d[o + 2]) << 8 | UInt32(d[o + 3])
     }
 
     // MARK: - afc.*（AFC 文件操作，支持多个根）

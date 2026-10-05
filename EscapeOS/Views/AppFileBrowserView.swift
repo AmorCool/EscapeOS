@@ -345,7 +345,7 @@ struct AppFileBrowserView: View {
                 }
             } else if let err = errorText {
                 Section {
-                    Label(err, systemImage: "exclamationmark.triangle")
+                    Label(err, systemImage: "info.circle")
                         .foregroundStyle(.orange)
                 }
             } else if filteredEntries.isEmpty {
@@ -394,7 +394,7 @@ struct AppFileBrowserView: View {
         List {
             if let err = errorText {
                 Section {
-                    Label(err, systemImage: "exclamationmark.triangle")
+                    Label(err, systemImage: "info.circle")
                         .foregroundStyle(.orange)
                 }
             } else if filteredEntries.isEmpty {

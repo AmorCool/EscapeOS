@@ -296,7 +296,7 @@ struct BatteryHealthView: View {
             batteryCardRow("电池电流", info.instantAmperage.map { "\($0) mA" }, icon: "waveform.path.ecg")
             batteryCardRow("电池功率", info.batteryPowerMW.map { "\($0) mW" }, icon: "bolt.circle")
             batteryCardRow("电池温度", temperatureText(info), icon: "thermometer.medium")
-            batteryCardRow("电池处于警告水平", warnLevelText(info), icon: "exclamationmark.triangle")
+            batteryCardRow("电池处于警告水平", warnLevelText(info), icon: "info.circle")
             batteryCardRow("电池处于临界水平", boolText(info.atCriticalLevel), icon: "exclamationmark.octagon")
         }
         .padding(.horizontal, 16)

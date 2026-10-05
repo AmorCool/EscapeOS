@@ -117,7 +117,7 @@ struct DeviceSlimView: View {
             }
             if let sizeNote {
                 Section {
-                    Label(sizeNote, systemImage: "exclamationmark.triangle")
+                    Label(sizeNote, systemImage: "info.circle")
                         .font(.footnote).foregroundStyle(.orange)
                 }
             }
@@ -211,7 +211,7 @@ struct DeviceSlimView: View {
     private var warningBanner: some View {
         Section {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
+                Image(systemName: "info.circle")
                     .foregroundStyle(.orange).font(.footnote)
                 Text("瘦身前请备份好重要数据，谨防数据丢失")
                     .font(.footnote).foregroundStyle(.orange)

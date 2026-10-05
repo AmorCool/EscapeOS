@@ -152,7 +152,7 @@ struct ErrorStateView: View {
         ScrollView {
             VStack(spacing: 16) {
                 InfoActionCard(
-                    icon: "exclamationmark.triangle.fill",
+                    icon: "info.circle",
                     iconTint: .orange,
                     title: "出现问题",
                     message: message + (message.contains("tunnel") || message.contains("LocalDevVPN") || message.contains("Heartbeat")

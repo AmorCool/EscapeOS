@@ -36,7 +36,7 @@ struct SecurityCheckResult: Identifiable {
         uncertain ? 0 : (passed ? 0 : (warn ? 4 : 12))
     }
     var iconName: String {
-        uncertain ? "questionmark.circle" : (passed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+        uncertain ? "questionmark.circle" : (passed ? "checkmark.circle.fill" : (warn ? "info.circle" : "xmark.circle.fill"))
     }
     var color: Color {
         uncertain ? .gray : (passed ? .green : (warn ? .yellow : .orange))
@@ -366,7 +366,7 @@ extension SecurityScanner {
                 detail: "主可执行文件未被篡改（哈希与基线一致）", passed: true, warn: false)
         }
         return SecurityCheckResult(id: "mainExe", title: "主可执行文件",
-            detail: "⚠️ 主可执行文件哈希与基线不一致——可能被重签或篡改", passed: false, warn: false)
+            detail: "主可执行文件哈希与基线不一致——可能被重签或篡改", passed: false, warn: false)
     }
 }
 

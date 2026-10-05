@@ -148,7 +148,7 @@ struct KernelCacheView: View {
                         .font(.footnote)
                         .foregroundStyle(.red)
                 } header: {
-                    Label("错误", systemImage: "exclamationmark.triangle")
+                    Label("错误", systemImage: "xmark.circle.fill")
                 }
             }
 

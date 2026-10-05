@@ -383,7 +383,7 @@ struct DialerThemeView: View {
                 }
             } else {
                 InfoActionCard(
-                    icon: "exclamationmark.triangle.fill",
+                    icon: "info.circle",
                     iconTint: .orange,
                     title: "未定位到电话容器",
                     message: "请确认设备可使用电话功能，并打开一次拨号键盘让系统生成缓存，然后点右上角刷新重试.",
