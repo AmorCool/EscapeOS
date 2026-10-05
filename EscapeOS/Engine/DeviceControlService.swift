@@ -114,7 +114,7 @@ final class DeviceControlService {
 
     /// connect 失败自动重试（最多 3 次、短退避）。
     ///
-    /// ## ⚠️ 这条注释已经被改过三次 —— 前两版「成因」都是猜的，**全部作废**
+    /// ## 注意： 这条注释已经被改过三次 —— 前两版「成因」都是猜的，**全部作废**
     /// ① 原版「RSD 服务发现**偶发** `ServiceNotFound` —— 多页面并发建隧道竞争导致」：作废；
     /// ② 第二版「设备未挂 DDI ⇒ CoreDevice 整块不广播」：作废（见 `CHANGELOG.md` `[0.3.462]`）；
     /// ③ 第三版「接错隧道 —— CoreDevice 族只在 CoreDeviceProxy 隧道里的第二个 RSD 握手上」：
@@ -230,7 +230,7 @@ final class DeviceControlService {
         }
         var appService: OpaquePointer?
         var connectError: NSError?
-        // ⚠️ 同 `withAppService`：这里的 3 次重试**覆盖不了任何东西** ——
+        // 注意： 同 `withAppService`：这里的 3 次重试**覆盖不了任何东西** ——
         // 失败是设备侧 `app_service` 服务偶尔不可用（`ServiceNotFound`，**重启手机即恢复**），
         // 重试只是白等 0.9s（详见 `withAppService` 注释）。
         for attempt in 0..<3 {

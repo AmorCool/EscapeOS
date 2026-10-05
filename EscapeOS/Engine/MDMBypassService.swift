@@ -325,17 +325,17 @@ enum MDMBypass {
                     Darwin.write(wfd, ptr.baseAddress!, empty.count) == empty.count
                 }
                 Darwin.close(wfd)
-                log("✓ 覆盖 \(fileName)")
+                log("[完成] 覆盖 \(fileName)")
                 return ok ? .overwritten : .denied(String(cString: strerror(errno)))
             }
             return .denied(String(cString: strerror(errno)))
         }
         let e = errno
         if e == ENOENT {
-            log("○ \(fileName) 未预置（未加入 MDM 监管）")
+            log("[提示] \(fileName) 未预置（未加入 MDM 监管）")
             return .notPresent
         }
-        log("✗ 打开 \(fileName) 失败：\(String(cString: strerror(e)))")
+        log("[失败] 打开 \(fileName) 失败：\(String(cString: strerror(e)))")
         return .denied(String(cString: strerror(e)))
     }
 

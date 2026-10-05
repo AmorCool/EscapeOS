@@ -153,7 +153,7 @@ struct AppleIDLoginSheet: View {
     private func signIn() async {
         ctrl.isAuthenticating = true
         ctrl.authError = nil
-        LoginLogger.shared.log("▶ 用户点击登录: \(email.lowercased())")
+        LoginLogger.shared.log("[开始] 用户点击登录: \(email.lowercased())")
         // SRP 自检：只跑一次并缓存结果（PASS 后不再重复跑，避免每次登录的 PBKDF2 开销）
         // v2：BigInt 除法更换实现后强制重跑一次，验证新除法
         if UserDefaults.standard.string(forKey: "SRPTestResult_v2") == nil {
@@ -168,7 +168,7 @@ struct AppleIDLoginSheet: View {
             // provisioning，遇到服务器侧 -45025 / -45003 / WebSocket 断开时自动换
             // 下一个 Anisette 服务器重试，而不是直接把错误抛给用户.
             let anisette = try await AnisetteProvider.shared.getAnisetteDataWithFallback()
-            LoginLogger.shared.log("✓ Anisette 获取成功，进入 GrandSlam 握手")
+            LoginLogger.shared.log("[完成] Anisette 获取成功，进入 GrandSlam 握手")
             let (account, session) = try await AppleAuthenticator.authenticate(
                 appleID: email,
                 password: password,
@@ -191,14 +191,14 @@ struct AppleIDLoginSheet: View {
             if !rememberAccount {
                 MemoryLimitSettings.shared.removeLoginHistory(email)
             }
-            LoginLogger.shared.log("✓ 登录成功，凭据已保存: \(account.appleID)")
+            LoginLogger.shared.log("[完成] 登录成功，凭据已保存: \(account.appleID)")
             await MainActor.run {
                 ctrl.isAuthenticating = false
                 dismiss()
             }
         } catch {
             let message = (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
-            LoginLogger.shared.log("❌ 登录失败: \(message)")
+            LoginLogger.shared.log("[失败] 登录失败: \(message)")
             await MainActor.run {
                 ctrl.isAuthenticating = false
                 ctrl.authError = message
@@ -249,7 +249,7 @@ struct LoginLogView: View {
     /// 只显示这些分类的日志（板块隔离）。
     ///
     /// `nil` = 全量（不按分类过滤）——**只保留给将来的「导出全部日志」**。
-    /// ⚠️ **任何 UI 入口都不许再传 nil**：`RootView` 曾经用无参 `LoginLogView()` 进来，
+    /// 注意： **任何 UI 入口都不许再传 nil**：`RootView` 曾经用无参 `LoginLogView()` 进来，
     /// `nil` 会走不过滤的全量读取，于是商店 / 证书 / 侧载各板块的日志全串到这一页（用户实测指正）。
     var categories: [LoginLogger.Category]? = nil
 

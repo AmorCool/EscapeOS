@@ -247,7 +247,7 @@ final class MemoryLimitSettings: ObservableObject {
         LoginLogger.shared.log("… 凭据快照：isLoggedIn=\(isLoggedIn) owner=\(owner) "
             + "Swift会话=\(swiftOK ? "有" : "无") 侧载凭据=\(sideloadOK ? "有" : "无")")
         if isLoggedIn && !swiftOK {
-            LoginLogger.shared.log("⚠ 已登录但 Swift 会话缺失 —— 证书管理/增加内存限制无法建 session."
+            LoginLogger.shared.log("[注意] 已登录但 Swift 会话缺失 —— 证书管理/增加内存限制无法建 session."
                 + "请在「设置」重新登录 Apple ID.")
         }
     }

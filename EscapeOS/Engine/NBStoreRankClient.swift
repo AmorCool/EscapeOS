@@ -169,7 +169,7 @@ enum NBStoreRankClient {
         }
 
         let items = try parse(data)
-        LoginLogger.shared.log("\(logTag) ✓ \(rank.title) \(cc.uppercased()) · \(items.count) 条",
+        LoginLogger.shared.log("\(logTag) [完成] \(rank.title) \(cc.uppercased()) · \(items.count) 条",
                                category: .appStore)
         return items
     }
@@ -239,7 +239,7 @@ enum NBStoreRankClient {
                 summary: nil
             )
         }
-        LoginLogger.shared.log("\(logTag) ✓ 搜索「\(kw)」\(cc.uppercased()) · \(items.count) 条",
+        LoginLogger.shared.log("\(logTag) [完成] 搜索「\(kw)」\(cc.uppercased()) · \(items.count) 条",
                                category: .appStore)
         return items
     }
@@ -459,12 +459,12 @@ enum NBStoreRankClient {
             throw StoreError.decode("lookup 响应里没有 results 数组")
         }
         guard let obj = results.first else {
-            LoginLogger.shared.log("\(logTag) ○ lookup 无结果（id=\(tid) cc=\(cc)）", category: .appStore)
+            LoginLogger.shared.log("\(logTag) [提示] lookup 无结果（id=\(tid) cc=\(cc)）", category: .appStore)
             return nil
         }
 
         let detail = Self.detail(fromLookup: obj, fallbackTrackID: tid)
-        LoginLogger.shared.log("\(logTag) ✓ lookup「\(detail.name)」"
+        LoginLogger.shared.log("\(logTag) [完成] lookup「\(detail.name)」"
                                + "截图 \(detail.screenshotURLs.count) 张"
                                + (detail.descriptionText == nil ? " · 无简介" : ""),
                                category: .appStore)

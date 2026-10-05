@@ -179,7 +179,7 @@ struct PreviewImageView: View {
 /// 交互：
 /// · 左右翻页（`TabView` + `.page`，底部页码点），进入时定位到点开的那一张；
 /// · **长按** 图片 → 二次确认 → 「保存到相册」（失败回落 App 沙盒 `Documents/AppIcons`，见 `MediaSaver`）；
-/// · 右上角 ✕ 关闭。
+/// · 右上角关闭按钮。
 ///
 /// v0.3.404：**不再用 `AsyncImage`**（失败静默 → 纯黑一片），改走 `PreviewImageView`
 /// （环形加载 / 加载失败 + 重试）与 `PreviewImageLoader`（候选地址链 + 内存缓存）。

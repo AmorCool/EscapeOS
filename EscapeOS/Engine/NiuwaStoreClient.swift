@@ -47,7 +47,7 @@ private enum NiuwaCrypto {
 
     /// 前缀 A（**32 字节**）：`~!@#$%^&*()_+` + **3 个空格** + `+_)(*&^%$#@!~` + **3 个空格**
     ///
-    /// ⚠️ 空格**必须显式拼接**：直接写在一行里极易被格式化/编辑器吃掉，而**差一个空格整个算法就废**。
+    /// 注意： 空格**必须显式拼接**：直接写在一行里极易被格式化/编辑器吃掉，而**差一个空格整个算法就废**。
     static let prefixA = ["~!@#$%^&*()_+", "   ", "+_)(*&^%$#@!~", "   "].joined()
 
     /// 前缀 B（**12 字节**）：`%$#@!` + **2 个空格** + `^&*()`
@@ -133,7 +133,7 @@ private enum NiuwaCrypto {
                                        category: .appStore)
                 continue
             }
-            LoginLogger.shared.log("[牛蛙源·诊断] ✓ 命中 N候选[\(label)]=\(nCandidate)"
+            LoginLogger.shared.log("[牛蛙源·诊断] [完成] 命中 N候选[\(label)]=\(nCandidate)"
                                    + "（尾部=\(tailN) T=\(t ?? "nil")）", category: .appStore)
             return plain
         }
@@ -201,7 +201,7 @@ private enum NiuwaCrypto {
 /// 因此本版不再赌单一个键/单一形态，而是：
 /// - **数组键按序逐个试**（`listKeyCandidates`），命中即用；
 /// - **`region` 只发整数索引**（有 `Tq` 证据，且真机已确证 `0/1/2` 生效）；
-///   ⚠️ **v0.3.389 起已收窄成"只发一种形态"**（`withRegionShapes` 里只剩数字形态）——
+///   注意： **v0.3.389 起已收窄成"只发一种形态"**（`withRegionShapes` 里只剩数字形态）——
 ///   此处旧文写的「双形态各试一次」**已作废**，别照它改回去（原因见 `withRegionShapes` 的注释）；
 /// - **失败时把服务端实际返回的键名写进错误与日志** —— 这样用户截图一次就能定案，
 ///   不用再赌（上一版就是只弹 toast、界面留空，白丢一轮证据）。
@@ -253,9 +253,9 @@ enum NiuwaStoreClient {
     /// ### ▸▸ 实测证据（2026-09-14 真机日志，同一个 `com.tuyafeng.Via`）
     /// | region | `/appstore/search` | `/appstore/download` |
     /// |---|---|---|
-    /// | `0`（中国） | ✓ 15/15、16/16 | 失败 1~2 次后重试**成功**（`sinf 1376 字符`） |
-    /// | `1`（美国） | ✓ 19/19、18/18 | 失败 1~2 次后重试**成功** |
-    /// | `2`（香港） | ✓ 17/17（英文名：Via Browser / Viu / Microsoft Edge…） | **20 秒内连试 8 次全部空直链**，一次没成功 |
+    /// | `0`（中国） | 成功 15/15、16/16 | 失败 1~2 次后重试**成功**（`sinf 1376 字符`） |
+    /// | `1`（美国） | 成功 19/19、18/18 | 失败 1~2 次后重试**成功** |
+    /// | `2`（香港） | 成功 17/17（英文名：Via Browser / Viu / Microsoft Edge…） | **20 秒内连试 8 次全部空直链**，一次没成功 |
     ///
     /// 香港档失败时的解密响应（逐字）：
     /// `{"pub_code":0,"pub_desc":"接口调用成功","body":{"ba_sinfs":"","ba_ipaURL":""}}`
@@ -263,7 +263,7 @@ enum NiuwaStoreClient {
     /// 既然点了「获取」必然失败，就不该把它摆给用户 → 本枚举**去掉 `.hk`**，
     /// `allCases` 只剩两项，界面分段控件（`ForEach(...allCases)`）自动跟着收敛。
     ///
-    /// ⚠️ **将来若要恢复香港档，用 `index = 2`**（数值语义未变，只是没暴露）。
+    /// 注意： **将来若要恢复香港档，用 `index = 2`**（数值语义未变，只是没暴露）。
     /// 旧持久化值 `"hk"` 由 `NiuwaRegion(rawValue:) ?? .cn` 兜底回落成 `.cn`
     /// （见 `Views/I4StoreFreeView.swift` 的 `region` 计算属性）。
     enum NiuwaRegion: String, CaseIterable, Identifiable {
@@ -311,7 +311,7 @@ enum NiuwaStoreClient {
         var iconURL: String?
         /// 安装包直链（`nwcore_ipaURL` / `nwcore_url` / `downloadURL` / 下载接口的 `ba_ipaURL`）。
         ///
-        /// ⚠️ v0.3.407：这条直链**指向 `iosapps.itunes.apple.com` 是正常的、不是"抓错了源"** ——
+        /// 注意： v0.3.407：这条直链**指向 `iosapps.itunes.apple.com` 是正常的、不是"抓错了源"** ——
         /// 牛蛙服务器自己用它的账号向 Apple 取包，再把 Apple 签发的 CDN 地址（形如
         /// `…/signed.dpkg.ipa?accessKey=…`）连同**针对本机 UDID 的 sinf**（`ba_sinfs`）一起下发。
         /// 所以「包来自 Apple CDN + sinf 由牛蛙给」这两件事同时成立，别把它当成爱思那种
@@ -532,7 +532,7 @@ enum NiuwaStoreClient {
 
     /// 本 App 的 build 号（`CFBundleVersion`）—— 牛蛙的 `pub_version` 量级与之相符。
     ///
-    /// ⚠️ **不能用 `Bundle.main`**：本 App 常以侧载 / LiveContainer 方式运行，那时
+    /// 注意： **不能用 `Bundle.main`**：本 App 常以侧载 / LiveContainer 方式运行，那时
     /// `Bundle.main` 可能指向**宿主**的 bundle，取到的是与牛蛙无关的 build 号
     /// （项目铁律：一律 `Bundle(for: SomeClass.self)`，见 `SAPAssetsLocator`）。
     private final class BundleToken {}
@@ -606,7 +606,7 @@ enum NiuwaStoreClient {
 
     // MARK: - region 双形态
 
-    /// ⚠️ **v0.3.389 临时收窄成「只发一种形态」**。
+    /// 注意： **v0.3.389 临时收窄成「只发一种形态」**。
     ///
     /// 原因（真机实测）：`region=cn` 与 `region=us` 两次请求**返回的都是 base64 密文**，不是 JSON ——
     /// 说明「搜不到」的**瓶颈不在 region 取值**，而在**响应体本身要解密**。
@@ -614,7 +614,7 @@ enum NiuwaStoreClient {
     /// 表现为「一直卡在加载中」，用户实测正是这个现象）。
     ///
     /// 所以本版**只发数字形态**（证据最强：`nwcore_region` 的 objc 类型是 `Tq` = `NSInteger`），
-    /// 快速失败、快速给用户信息。**等响应解密做完**（见 `[牛蛙源] ✗ 响应不是 JSON 对象` 的那条链路），
+    /// 快速失败、快速给用户信息。**等响应解密做完**（见 `[牛蛙源] 失败 响应不是 JSON 对象` 的那条链路），
     /// 再决定要不要把候选形态加回来。
     private static func withRegionShapes(
         region: NiuwaRegion,
@@ -656,7 +656,7 @@ enum NiuwaStoreClient {
     /// 电脑侧取回：`python ssh_run.py niuwa`（会打印长度 + 尾部 + T，并把全文存到本地，
     /// 再当场按 `尾部+T` → `尾部` → `T` 顺序试解）。
     ///
-    /// ⚠️ 它属于 `NiuwaStoreClient` 而不是 `NiuwaCrypto` —— v0.3.399 曾把它放进
+    /// 注意： 它属于 `NiuwaStoreClient` 而不是 `NiuwaCrypto` —— v0.3.399 曾把它放进
     /// `NiuwaCrypto`（private），结果客户端侧调用不到，CI 报
     /// `error: cannot find 'dumpResponse' in scope`。诊断落盘是客户端的职责，放这里。
     private static func dumpResponse(_ raw: String) {
@@ -679,10 +679,10 @@ enum NiuwaStoreClient {
         do {
             data = try await postJSON(path, body: body)
         } catch let e as StoreError {
-            log.log("\(logTag) ✗ \(e.localizedDescription)", category: .appStore)
+            log.log("\(logTag) [失败] \(e.localizedDescription)", category: .appStore)
             throw e
         } catch {
-            log.log("\(logTag) ✗ 网络失败 \(error.localizedDescription)", category: .appStore)
+            log.log("\(logTag) [失败] 网络失败 \(error.localizedDescription)", category: .appStore)
             throw StoreError.network(error.localizedDescription)
         }
 
@@ -699,7 +699,7 @@ enum NiuwaStoreClient {
         // ▸ v0.3.392：响应是**加密体**，先解密再解析。
         // 解密失败时把原始体前 200 字符留档（否则以后又是「什么都看不到」）。
         guard let plain = NiuwaCrypto.decrypt(raw) else {
-            log.log("\(logTag) ✗ 响应解密失败；原始体（前 200）：\(String(raw.prefix(200)))",
+            log.log("\(logTag) [失败] 响应解密失败；原始体（前 200）：\(String(raw.prefix(200)))",
                     category: .appStore)
             throw StoreError.crypto("响应解密失败")
         }
@@ -707,7 +707,7 @@ enum NiuwaStoreClient {
         log.log("\(logTag) ← 解密后 \(truncate(plainText))", category: .appStore)
 
         guard let obj = (try? JSONSerialization.jsonObject(with: plain)) as? [String: Any] else {
-            log.log("\(logTag) ✗ 解密后仍不是 JSON 对象", category: .appStore)
+            log.log("\(logTag) [失败] 解密后仍不是 JSON 对象", category: .appStore)
             throw StoreError.decode
         }
 
@@ -741,19 +741,19 @@ enum NiuwaStoreClient {
                 if let rawIPA = envelope["ba_ipaURL"] {
                     if (string(rawIPA) ?? "").isEmpty {
                         let sinfLength = string(envelope["ba_sinfs"])?.count ?? 0
-                        log.log("\(logTag) ⚠ 下载响应 ba_ipaURL 取不到可用值（\(requestTarget)；"
+                        log.log("\(logTag) [注意] 下载响应 ba_ipaURL 取不到可用值（\(requestTarget)；"
                                 + "值类型 \(type(of: rawIPA))；ba_sinfs \(sinfLength) 字符；"
                                 + "\(udidNote)"
                                 + "code=\(code) desc=\(desc)）", category: .appStore)
                     }
                 } else {
-                    log.log("\(logTag) ⚠ 下载响应 body 没有 ba_ipaURL 键（\(requestTarget)；"
+                    log.log("\(logTag) [注意] 下载响应 body 没有 ba_ipaURL 键（\(requestTarget)；"
                             + "\(udidNote)"
                             + "body 键：\(envelope.keys.sorted().joined(separator: ", "))；"
                             + "code=\(code) desc=\(desc)）", category: .appStore)
                 }
             } else if let rawBody = obj["body"] {
-                log.log("\(logTag) ⚠ 下载响应 body 不是对象（\(requestTarget)；"
+                log.log("\(logTag) [注意] 下载响应 body 不是对象（\(requestTarget)；"
                         + "\(udidNote)类型 \(type(of: rawBody))）",
                         category: .appStore)
             }
@@ -768,7 +768,7 @@ enum NiuwaStoreClient {
         if let body = obj["body"] as? [String: Any],
            let ipa = string(body["ba_ipaURL"]), !ipa.isEmpty {
             let sinfB64 = string(body["ba_sinfs"])
-            log.log("\(logTag) ✓ 下载接口返回直链（sinf \(sinfB64?.count ?? 0) 字符）（region=\(shape)）",
+            log.log("\(logTag) [完成] 下载接口返回直链（sinf \(sinfB64?.count ?? 0) 字符）（region=\(shape)）",
                     category: .appStore)
             return [NiuwaApp(appId: string(body["app_id"]),
                              bundleId: string(body["bundleid"]) ?? "",
@@ -800,10 +800,10 @@ enum NiuwaStoreClient {
                     // 把服务端首条记录的**实际键名**打出来，一次真机搜索就能定死键名
                     // （上一版就是静默丢弃，白丢了一轮）。
                     let firstKeys = arr[0].keys.sorted().joined(separator: ", ")
-                    log.log("\(logTag) ⚠ 命中数组键「\(key)」但 0 条解析成功（服务端给了 \(arr.count) 条）；"
+                    log.log("\(logTag) [注意] 命中数组键「\(key)」但 0 条解析成功（服务端给了 \(arr.count) 条）；"
                             + "首条记录的键=[\(firstKeys)]（region=\(shape)）", category: .appStore)
                 } else {
-                    log.log("\(logTag) ✓ 命中数组键「\(key)」code=\(code) 解析 \(apps.count)/\(arr.count) 条（region=\(shape)）",
+                    log.log("\(logTag) [完成] 命中数组键「\(key)」code=\(code) 解析 \(apps.count)/\(arr.count) 条（region=\(shape)）",
                             category: .appStore)
                 }
                 return apps
@@ -814,7 +814,7 @@ enum NiuwaStoreClient {
         let actualKeys = obj.keys.sorted().joined(separator: ", ")
         let bodyKeys = (obj["body"] as? [String: Any])?.keys.sorted().joined(separator: ", ")
         let detail = "响应键：\(actualKeys)" + (bodyKeys.map { "；body 键：\($0)" } ?? "")
-        log.log("\(logTag) ✗ 无候选数组键命中（code=\(code) messages=\(message.isEmpty ? "-" : message)）；\(detail)",
+        log.log("\(logTag) [失败] 无候选数组键命中（code=\(code) messages=\(message.isEmpty ? "-" : message)）；\(detail)",
                 category: .appStore)
         throw StoreError.server(code: code, message: message.isEmpty ? detail : message)
     }

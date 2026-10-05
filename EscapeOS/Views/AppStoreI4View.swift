@@ -283,7 +283,7 @@ struct I4SpecialAppsView: View {
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
                         .foregroundStyle(.secondary)
-                    Text("说明：签名请求已被服务端接受（同接口在其它参数下会返回 {\"app\":…} 结构），但该专题未返回应用条目。")
+                    Text("说明：服务端已接受签名请求，但该专题暂未返回应用条目.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

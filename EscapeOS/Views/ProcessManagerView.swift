@@ -158,7 +158,7 @@ enum ProcessControlAction: String {
 /// `let` 的串行队列（`DispatchQueue` 本身是 `Sendable`），所有进程状态都在
 /// 方法内局部变量里、并已被这两条队列串行化。
 ///
-/// ⚠️ **本条注释已经被改过三次 —— 前两版「成因」都是猜的，全部作废**：
+/// 注意： **本条注释已经被改过三次 —— 前两版「成因」都是猜的，全部作废**：
 /// ① 上面「3 次退避重试覆盖**偶发** `ServiceNotFound`」：作废；
 /// ② 第二版「设备未挂 DDI（Developer Disk Image）⇒ CoreDevice 整块不广播」：作废；
 /// ③ 第三版「接错隧道（CoreDevice 族只在 CoreDeviceProxy 隧道的第二个 RSD 握手上）」：
@@ -183,7 +183,7 @@ final class ProcessManagerService: Sendable {
     /// 串行队列：保证 listProcesses / sendSignal 不并发建隧道.
     /// 同一 hostname 并发 `tunnel_create_rppairing` 会互相抢占（RSD 通道竞争），
     /// 因此这里必须串行 —— 这条约束本身成立。
-    /// ⚠️ 2026-09-19 更正：但它是**通道被抢占**的根因，**不是** `ServiceNotFound` 的根因 ——
+    /// 注意： 2026-09-19 更正：但它是**通道被抢占**的根因，**不是** `ServiceNotFound` 的根因 ——
     /// 后者是**设备侧的服务状态问题**（该服务偶尔不可用，**重启手机即恢复**），与并发无关。
     /// 见上方注释。
     private let operationQueue = DispatchQueue(label: "com.ipaside.escapeos.processmgr", qos: .userInitiated)
@@ -285,7 +285,7 @@ final class ProcessManagerService: Sendable {
 
     /// 连接 app_service，失败自动重试 3 次.
     ///
-    /// ⚠️ 这 3 次重试**覆盖不了任何东西**：失败是设备侧 `app_service` 服务偶尔不可用
+    /// 注意： 这 3 次重试**覆盖不了任何东西**：失败是设备侧 `app_service` 服务偶尔不可用
     /// （`ServiceNotFound`，**重启手机即恢复**），重试只是白等 0.9s。见类头注释。
     private func connectAppService(adapter: OpaquePointer, handshake: OpaquePointer) throws -> OpaquePointer {
         var lastError: NSError?
@@ -880,7 +880,7 @@ struct ProcessManagerView: View {
                 } header: {
                     Text("运行中的进程（\(viewModel.processes.count)）")
                 } footer: {
-                    Text("恢复（SIGCONT）/ 挂起（SIGSTOP）/ 结束（SIGKILL）经设备隧道下发，仅对当前设备生效.对系统关键进程发结束信号可能因权限不足失败.")
+                    Text("恢复 / 挂起 / 结束经设备隧道下发，仅对当前设备生效.对系统关键进程发结束信号可能因权限不足失败.")
                 }
             }
         }
@@ -1075,7 +1075,7 @@ struct SysmonLogView: View {
 
     /// `SysmonLogger` **没有按行取数的接口**，所以在 View 层取数。
     ///
-    /// ⚠️ **不能写成 `fullLog()` + `suffix(maxRenderedLines)`**（虽然那样最短）：
+    /// 注意： **不能写成 `fullLog()` + `suffix(maxRenderedLines)`**（虽然那样最短）：
     /// `fullLog()` 的合并顺序是 `内存缓冲（最新 500 行）+ 更早的文件行`，即**最新的一块在最前面**。
     /// 对它取 `suffix()` 拿到的是**最旧**的那批行；而日志页把最后一行当「最新」去自动滚底，
     /// 结果会停在最旧的一行上 —— 顺序反了。

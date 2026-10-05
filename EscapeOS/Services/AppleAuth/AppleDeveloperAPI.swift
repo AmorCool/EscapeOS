@@ -92,7 +92,7 @@ enum AppleDeveloperAPI {
 
     /// 获取账号下的开发者团队列表.
     static func fetchTeams(session: AppleAPISession) async throws -> [DeveloperTeam] {
-        LoginLogger.shared.log("▶ 获取团队列表")
+        LoginLogger.shared.log("[开始] 获取团队列表")
         var headers = try await makeHeaders(session: session)
         headers["Content-Type"] = "text/x-xml-plist"
         let body: [String: String] = [
@@ -107,7 +107,7 @@ enum AppleDeveloperAPI {
               let teamsArray = dict["teams"] as? [[String: Any]] else {
             try throwIfSessionExpired(data)
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
-            LoginLogger.shared.log("❌ 团队列表解析失败: \(preview)")
+            LoginLogger.shared.log("[失败] 团队列表解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "团队列表解析失败: \(preview)")
         }
         var teams: [DeveloperTeam] = []
@@ -119,7 +119,7 @@ enum AppleDeveloperAPI {
         guard !teams.isEmpty else {
             throw AppleAPIError.customError(code: -1, message: "账号下没有可用团队")
         }
-        LoginLogger.shared.log("✓ 团队 \(teams.count) 个")
+        LoginLogger.shared.log("[完成] 团队 \(teams.count) 个")
         return teams
     }
 
@@ -127,7 +127,7 @@ enum AppleDeveloperAPI {
 
     /// 获取团队下的 App ID 列表.
     static func fetchAppIDs(team: DeveloperTeam, session: AppleAPISession) async throws -> [DeveloperAppID] {
-        LoginLogger.shared.log("▶ 获取 App ID 列表（team=\(team.identifier)）")
+        LoginLogger.shared.log("[开始] 获取 App ID 列表（team=\(team.identifier)）")
         var headers = try await makeHeaders(session: session)
         headers["Content-Type"] = "text/x-xml-plist"
         var body: [String: String] = [
@@ -143,7 +143,7 @@ enum AppleDeveloperAPI {
               let appIdsArray = dict["appIds"] as? [[String: Any]] else {
             try throwIfSessionExpired(data)
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
-            LoginLogger.shared.log("❌ App ID 列表解析失败: \(preview)")
+            LoginLogger.shared.log("[失败] App ID 列表解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "App ID 列表解析失败: \(preview)")
         }
         let apps = appIdsArray.compactMap { d -> DeveloperAppID? in
@@ -153,7 +153,7 @@ enum AppleDeveloperAPI {
             let features = d["enabledFeatures"] as? [String] ?? []
             return DeveloperAppID(identifier: id, name: name, bundleIdentifier: bundleId, enabledFeatures: features)
         }
-        LoginLogger.shared.log("✓ App ID \(apps.count) 个")
+        LoginLogger.shared.log("[完成] App ID \(apps.count) 个")
         return apps
     }
 
@@ -162,7 +162,7 @@ enum AppleDeveloperAPI {
     /// PATCH /v1/bundleIds/<appIdId>，为 App ID 开启 INCREASED_MEMORY_LIMIT 能力.
     /// 返回服务器响应原文（成功时包含更新后的 data）.
     static func enableIncreasedMemory(appID: DeveloperAppID, team: DeveloperTeam, session: AppleAPISession) async throws -> String {
-        LoginLogger.shared.log("▶ 开启 INCREASED_MEMORY_LIMIT: \(appID.bundleIdentifier)")
+        LoginLogger.shared.log("[开始] 开启 INCREASED_MEMORY_LIMIT: \(appID.bundleIdentifier)")
         var headers = try await makeHeaders(session: session)
         headers["Content-Type"] = "application/vnd.api+json"
         headers["Accept"] = "application/vnd.api+json"
@@ -221,7 +221,7 @@ enum AppleDeveloperAPI {
     /// 端点与请求格式对齐 isideload 的 CertificatesApi：
     /// POST .../ios/listAllDevelopmentCerts.action，body 含 teamId.
     static func fetchCertificates(team: DeveloperTeam, session: AppleAPISession) async throws -> [DeveloperCertificate] {
-        LoginLogger.shared.log("▶ 获取证书列表（team=\(team.identifier)）")
+        LoginLogger.shared.log("[开始] 获取证书列表（team=\(team.identifier)）")
         var headers = try await makeHeaders(session: session)
         headers["Content-Type"] = "text/x-xml-plist"
         var body: [String: Any] = [
@@ -237,7 +237,7 @@ enum AppleDeveloperAPI {
               let certsArray = dict["certificates"] as? [[String: Any]] else {
             try throwIfSessionExpired(data)
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
-            LoginLogger.shared.log("❌ 证书列表解析失败: \(preview)")
+            LoginLogger.shared.log("[失败] 证书列表解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "证书列表解析失败: \(preview)")
         }
         let certs = certsArray.compactMap { d -> DeveloperCertificate? in
@@ -269,7 +269,7 @@ enum AppleDeveloperAPI {
                 expiration: expiration
             )
         }
-        LoginLogger.shared.log("✓ 证书 \(certs.count) 个")
+        LoginLogger.shared.log("[完成] 证书 \(certs.count) 个")
         return certs
     }
 
@@ -283,7 +283,7 @@ enum AppleDeveloperAPI {
                                          csrPEM: String,
                                          machineName: String,
                                          session: AppleAPISession) async throws -> Data {
-        LoginLogger.shared.log("▶ 提交 CSR 创建开发证书（team=\(team.identifier)）")
+        LoginLogger.shared.log("[开始] 提交 CSR 创建开发证书（team=\(team.identifier)）")
         var headers = try await makeHeaders(session: session)
         headers["Content-Type"] = "text/x-xml-plist"
         let body: [String: Any] = [
@@ -304,16 +304,16 @@ enum AppleDeveloperAPI {
             // 特殊错误码提示（plist 顶层 resultCode）
             if let resultCode = plist(data)?["resultCode"] as? Int {
                 if resultCode == 3250 {
-                    LoginLogger.shared.log("❌ Apple 拒绝 CSR（3250）")
+                    LoginLogger.shared.log("[失败] Apple 拒绝 CSR（3250）")
                     throw AppleAPIError.customError(code: 3250, message: "Apple 拒绝了证书请求（3250：CSR 无效）")
                 }
                 if resultCode == 7460 {
-                    LoginLogger.shared.log("❌ 证书数量达上限（7460）")
+                    LoginLogger.shared.log("[失败] 证书数量达上限（7460）")
                     throw AppleAPIError.customError(code: 7460, message: "开发证书数量已达上限（7460）.请到「更多 → 证书管理」吊销一旧证书.")
                 }
             }
             let preview = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
-            LoginLogger.shared.log("❌ 证书创建响应解析失败: \(preview)")
+            LoginLogger.shared.log("[失败] 证书创建响应解析失败: \(preview)")
             throw AppleAPIError.customError(code: -1, message: "证书创建响应解析失败: \(preview)")
         }
         // certContent 在 plist 响应里是 <data> 类型（解析后即 Data 对象，非字符串）；
@@ -332,10 +332,10 @@ enum AppleDeveloperAPI {
         } else {
             let status = (certRequest["certRequestStatusCode"] as? String)
                 ?? (certRequest["statusCode"] as? String) ?? "?"
-            LoginLogger.shared.log("⏳ CSR 已受理（异步签发，certRequestStatusCode=\(status)）→ 进入轮询")
+            LoginLogger.shared.log("[等待] CSR 已受理（异步签发，certRequestStatusCode=\(status)）→ 进入轮询")
             certDER = Data()                                    // 空标记 = 受理成功，待轮询
         }
-        LoginLogger.shared.log("✓ 开发证书创建成功（\(certDER.count) 字节）")
+        LoginLogger.shared.log("[完成] 开发证书创建成功（\(certDER.count) 字节）")
         return certDER
     }
 
@@ -343,7 +343,7 @@ enum AppleDeveloperAPI {
     /// 端点对齐 isideload：POST .../ios/revokeDevelopmentCert.action，
     /// body 含 teamId + serialNumber.
     static func revokeCertificate(team: DeveloperTeam, serialNumber: String, session: AppleAPISession) async throws {
-        LoginLogger.shared.log("▶ 吊销证书（team=\(team.identifier), serial=\(serialNumber)）")
+        LoginLogger.shared.log("[开始] 吊销证书（team=\(team.identifier), serial=\(serialNumber)）")
         var headers = try await makeHeaders(session: session)
         headers["Content-Type"] = "text/x-xml-plist"
         let body: [String: Any] = [
@@ -355,7 +355,7 @@ enum AppleDeveloperAPI {
         ]
         let url = qhURL.appendingPathComponent("ios/revokeDevelopmentCert.action").appendingQueryItem("clientId", clientID)
         _ = try await post(url: url, headers: headers, plistBody: body, method: "POST")
-        LoginLogger.shared.log("✓ 吊销请求已接受")
+        LoginLogger.shared.log("[完成] 吊销请求已接受")
     }
 
     // MARK: - Helpers
@@ -371,7 +371,7 @@ enum AppleDeveloperAPI {
             ?? (dict["resultCode"] as? String).flatMap { Int($0) }
         guard code == 1100 else { return }
         let reason = (dict["userString"] as? String) ?? "Your session has expired. Please log in."
-        LoginLogger.shared.log("❌ 会话已过期（resultCode 1100）: \(reason)")
+        LoginLogger.shared.log("[失败] 会话已过期（resultCode 1100）: \(reason)")
         throw AppleAPIError.sessionExpired
     }
 

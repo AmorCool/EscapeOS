@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// A single entry in a directory listing.
 struct FileItem: Identifiable, Hashable {
@@ -319,6 +320,12 @@ final class FileService {
 
     /// Next unused path in `directory` for `preferredName` (`foo.txt` → `foo 2.txt`).
     /// Uses only the last path component so `/abs` or `../x` cannot leave `directory`.
+    ///
+    /// 注意： 本方法是 **check-then-act（非原子）** —— 先 `exists()` 探测、返回一个「当下未被占用」
+    ///    的候选名，调用方随后才 `createDirectory` / `copyItem`。探测与创建之间有窗口，
+    ///    **两个并发调用可能算到同一个名字**。仅可用于**单飞 / 串行**的 UI 路径
+    ///    （如文件浏览器：受 `isZipping` / `mutate` 串行保护）。
+    ///    需要「原子抢占、可并发」的场景，改用 `reserveUniqueDirectory(in:preferredName:)`。
     func uniqueDestination(in directory: String, preferredName: String) -> String {
         let leaf = (preferredName as NSString).lastPathComponent
         let preferredName = FileNameRules.sanitize(leaf) ?? "extracted"
@@ -340,6 +347,44 @@ final class FileService {
                 return candidate
             }
             index += 1
+        }
+    }
+
+    /// **原子地**在 `directory` 下为 `preferredName` 抢占一个新目录并返回它。
+    ///
+    /// 与 `uniqueDestination` 的关键区别：这里用 `mkdir(2)` 直接**创建**候选目录，
+    /// 已存在时内核返回 `EEXIST` → 换下一个候选名（`foo` → `foo 2` …）。
+    /// 「探测 + 创建」是同一个不可分割的系统调用，因此**并发安全**：两个并发调用
+    /// 不可能拿到同一个目录（先到者成功，后到者拿到 `EEXIST` 换名）。
+    ///
+    /// 返回的目录**已由本方法创建**，调用方**不得再 `createDirectory`**，直接往里写即可。
+    /// 非 `EEXIST` 的失败（权限 / 磁盘满 …）原样抛出，调用方据此报错。
+    func reserveUniqueDirectory(in directory: String, preferredName: String) throws -> URL {
+        let leaf = (preferredName as NSString).lastPathComponent
+        let cleanName = FileNameRules.sanitize(leaf) ?? "extracted"
+        let ns = cleanName as NSString
+        let base = ns.deletingPathExtension
+        let ext = ns.pathExtension
+        var index = 1
+        while true {
+            let name: String
+            if index == 1 {
+                name = cleanName
+            } else if ext.isEmpty {
+                name = "\(base) \(index)"
+            } else {
+                name = "\(base) \(index).\(ext)"
+            }
+            let candidate = (directory as NSString).appendingPathComponent(name)
+            if Darwin.mkdir(candidate, 0o755) == 0 {
+                return URL(fileURLWithPath: candidate)
+            }
+            if errno == EEXIST {
+                index += 1
+                continue
+            }
+            throw FileServiceError.operationFailed(
+                "mkdir(\(candidate)) failed: \(String(cString: strerror(errno)))")
         }
     }
 

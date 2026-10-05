@@ -92,7 +92,7 @@ struct DeviceInfoView: View {
             errorText = nil
             // v0.3.531：保修期限只在爱思服务端（按设备 SN 查表，不是 MLB）.
             // 面板出完后异步取，不阻塞渲染；失败保持「—」.
-            // ⚠️ 该请求会把设备序列号发到爱思服务器（见 `I4WarrantyClient` 顶部隐私说明）.
+            // 注意： 该请求会把设备序列号发到爱思服务器（见 `I4WarrantyClient` 顶部隐私说明）.
             let serialNumber = boxed.value.serialNumber
             Task { @MainActor in
                 if let warranty = await I4WarrantyClient.fetch(serialNumber: serialNumber) {

@@ -217,7 +217,7 @@ struct AppStoreAccountsView: View {
     private var deviceSection: some View {
         Section {
             HStack {
-                Text("设备标识（guid）").font(.subheadline)
+                Text("设备标识").font(.subheadline)
                 Spacer()
                 Text(String(Configuration.deviceIdentifier.prefix(14)) + "…")
                     .font(.system(.footnote, design: .monospaced))
@@ -237,7 +237,7 @@ struct AppStoreAccountsView: View {
         } header: {
             Text("设备与认证")
         } footer: {
-            Text("设备标识（guid）是下载请求携带的身份；异常时可重置后重新登录下载。")
+            Text("设备标识是下载请求携带的身份；异常时可重置后重新登录下载.")
                 .font(.caption2)
         }
     }

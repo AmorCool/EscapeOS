@@ -404,7 +404,7 @@ final class ModuleService {
                 let dataRoot = modulesRoot.appendingPathComponent(id, isDirectory: true)
                 if FileManager.default.fileExists(atPath: dest.path) {
                     // 旧版落盘副本清理：只删残留的 bin/（旧 dylib，现已编译进 App）.
-                    // ⚠️ v0.3.80 修复：此前这里执行 removeItem(dest)，而 dest 与 dataRoot
+                    // 注意： v0.3.80 修复：此前这里执行 removeItem(dest)，而 dest 与 dataRoot
                     // 对内置原地模块是同一目录 —— 等于每次启动都把模块数据目录（日志/配置/
                     // 数据库）整个删掉，既导致模块数据无法留存，也销毁了排障日志.
                     let legacyBin = dest.appendingPathComponent("bin", isDirectory: true)
@@ -580,7 +580,7 @@ final class ModuleService {
         guard module.spec == "escape.module.v1" else {
             throw ModuleError.badSpec("规范版本不支持：\(module.spec)")
         }
-        log?("- 规范 \(module.spec) ✓")
+        log?("- 规范 \(module.spec) [完成]")
 
         // module.json 所在目录（"" 表示 zip 根）——signature.sig 必须与 module.json 同目录
         // 用纯字符串切分（NSString.deletingLastPathComponent 返回值斜杠语义不可靠，
@@ -592,7 +592,7 @@ final class ModuleService {
             manifestDir = ""                          // zip 根
         }
         // 安装根 = module.json 所在目录（支持任意嵌套：modules/<id>/、module-esc-main/modules/<id>/ 均可）
-        // ⚠️ 根级 module.json 时 manifestDir 为空 → 直接用 tmp 本身，
+        // 注意： 根级 module.json 时 manifestDir 为空 → 直接用 tmp 本身，
         //    不能拼出 "tmp/."（"/." 后缀会让 moveItem 报"未能将 . 移到…"——v0.3.99 实测）
         let extractedRoot: URL
         if manifestDir.isEmpty {
@@ -617,12 +617,12 @@ final class ModuleService {
                 log!("! 签名校验失败（签名文件存在但与官方公钥不匹配）")
                 throw ModuleError.badSpec("热补丁/二进制模块签名校验失败——仅接受 EscapeSpace 官方签名")
             }
-            log?("- 签名验证 ✓")
+            log?("- 签名验证 [完成]")
         }
 
         // actions 为空是合法的 —— 前提是模块有**别的入口**：
         // binary（自启动服务）/ lua（脚本）/ ui（原生 SwiftUI 界面）。
-        // ⚠️ v0.3.482 修：原来漏了 `hasNativeUI`，导致「功能全在原生界面里、
+        // 注意： v0.3.482 修：原来漏了 `hasNativeUI`，导致「功能全在原生界面里、
         // 不声明任何 action」的模块在导入时被拒
         //（真机报「模块未声明任何 action」）。模块仓库的 validate.py 早就允许了，
         // 宿主这里没跟上 —— 两处校验必须同步改。
@@ -664,10 +664,10 @@ final class ModuleService {
                 if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
                 try fm.moveItem(at: extractedRoot.appendingPathComponent(item), to: dst)
             }
-            log?("- 安装到 Documents/Modules/\(module.id) ✓")
+            log?("- 安装到 Documents/Modules/\(module.id) [完成]")
         } else {
             try FileManager.default.moveItem(at: extractedRoot, to: dest)
-            log?("- 安装到 Documents/Modules/\(module.id) ✓")
+            log?("- 安装到 Documents/Modules/\(module.id) [完成]")
         }
         print("[Module] 导入成功: \(module.id) v\(module.version)")
 

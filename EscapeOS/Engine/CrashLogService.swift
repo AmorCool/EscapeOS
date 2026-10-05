@@ -145,7 +145,7 @@ final class CrashLogService {
     /// 后者只有本服务知道怎么连（`crash_report_client_connect_rsd` → `to_afc`），
     /// 所以把会话借出去比在能力层重写一遍连接逻辑更稳。
     ///
-    /// ⚠️ 与 `afc.list/read/...` 的 `root: "crash"` 对应；调用方拿到的 `path`
+    /// 注意： 与 `afc.list/read/...` 的 `root: "crash"` 对应；调用方拿到的 `path`
     /// 是**相对 CrashReporter 根**的。
     func withAfc<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         try syncOnQueue { try withAfcClient { try body($0) } }

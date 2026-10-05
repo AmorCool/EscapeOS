@@ -148,13 +148,13 @@ final class IPCCInstallService: Sendable {
         do {
             try IPAInstallService.shared.installIPCC(ipccURL.path, log: { step($0) })
             let detail = "已通过 installation_proxy 安装（PackageType=CarrierBundle）"
-            step("✔ \(detail)")
+            step("[完成] \(detail)")
             appendRecord(InstallRecord(fileName: ipccURL.lastPathComponent,
                                        bundleName: parsed.bundleName,
                                        date: Date(), success: true, detail: detail, steps: steps))
             return parsed.bundleName
         } catch {
-            step("✘ 失败：\(error.localizedDescription)")
+            step("[失败] 失败：\(error.localizedDescription)")
             appendRecord(InstallRecord(fileName: ipccURL.lastPathComponent,
                                        bundleName: parsed.bundleName,
                                        date: Date(), success: false,

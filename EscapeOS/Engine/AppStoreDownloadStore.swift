@@ -29,7 +29,7 @@ final class AppStoreDownloadStore {
     /// 关键：这个值必须**持久化**.原版注释明确要求 "use random and save it"，
     /// 若每次冷启动都随机，等于每次换一台虚拟机器，Apple 会按多设备风控处理.
     ///
-    /// ⚠️ v0.3.330：**改存 Documents 的 `device_guid.txt`（不再只存 UserDefaults）**。
+    /// 注意： v0.3.330：**改存 Documents 的 `device_guid.txt`（不再只存 UserDefaults）**。
     /// 真机实锤：覆盖安装新版本后购买直接回 `failureType 2034` /
     /// `Sign In to the iTunes Store` —— 因为 UserDefaults 落在 Library/Preferences，
     /// **重装/覆盖安装会被重建**，而 Documents 下的 `appstore_accounts.json` 还在。

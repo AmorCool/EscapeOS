@@ -98,7 +98,7 @@ struct I4StoreFreeView: View {
     ///   用 `NBStoreClient.offSalePackage` 取包 —— 也就是说这条路能装到
     ///   App Store 已经搜不到的老应用。
     ///
-    /// ⚠️ 刻意**不建本地库**：NB 那边下架列表是本地 SQLite 表 `load_list` 缓存的，
+    /// 注意： 刻意**不建本地库**：NB 那边下架列表是本地 SQLite 表 `load_list` 缓存的，
     /// 我们没有必要复刻一份会过期的缓存；状态以实时探测为准。
     enum AppStateFilter: String, CaseIterable, Identifiable {
         case onSale = "上架"
@@ -303,8 +303,8 @@ struct I4StoreFreeView: View {
             }
         } footer: {
             Text(source == .nb
-                 ? "榜单来自 Apple 官方排行榜（与 NB 助手同一来源）。点「获取」由 NB 通道取包。"
-                 : "数据来自爱思 PC 端同款公开接口，安装包由服务端提供（已签名），无需登录 Apple ID。")
+                 ? "榜单来自 Apple 官方排行榜（与 NB 助手同一来源）.点「获取」由 NB 通道取包."
+                 : "数据来自爱思 PC 端同款公开接口，安装包由服务端提供（已签名），无需登录 Apple ID.")
                 .font(.caption2)
         }
     }
@@ -1133,7 +1133,7 @@ func startNBDownload(trackID: String,
 /// —— 全项目只有这一套下载/安装实现（`ref-客户端常见坑`：禁止新建第二个下载管理器），
 /// 牛蛙不另开一条，也不在本函数里做任何文件/安装动作。
 ///
-/// ⚠️ `ba_ipaURL` **指向 `iosapps.itunes.apple.com` 是正常的**：牛蛙服务器代我们向 Apple 取包，
+/// 注意： `ba_ipaURL` **指向 `iosapps.itunes.apple.com` 是正常的**：牛蛙服务器代我们向 Apple 取包，
 /// 回来的是 Apple 签发的 CDN 地址，不是"抓错了源"。
 ///
 /// v0.3.407：随直链回来的 `ba_sinfs`（base64 的标准 `.sinf`）也一并交给下载中心
@@ -1189,9 +1189,9 @@ func startNiuwaDownload(_ app: NiuwaStoreClient.NiuwaApp,
 /// 真机日志（同一个 `com.tuyafeng.Via`）证明空直链是**限流/抖动**、不是"真没包"：
 /// ```
 /// 21:46:36 region=1 download → 空（ba_ipaURL=""）
-/// 21:46:40 region=1 download → ✓ 直链（sinf 1376 字符）      ← 隔 4 秒重试就成功
+/// 21:46:40 region=1 download → 成功 直链（sinf 1376 字符）      ← 隔 4 秒重试就成功
 /// 18:47:20 / 18:47:41 region=0 → 空
-/// 18:47:43 region=0 → ✓ 直链                                  ← 第 3 次成功
+/// 18:47:43 region=0 → 成功 直链                                  ← 第 3 次成功
 /// ```
 /// ⇒ 对空直链做**有界重试**：最多再试 **2 次**、每次间隔 **~600ms**。
 ///
@@ -1214,7 +1214,7 @@ private func fetchNiuwaPackage(_ app: NiuwaStoreClient.NiuwaApp,
         hit = try await fetchNiuwaPackageOnce(app, region: region)
     }
     if retries > 0, let hit, !(hit.downloadURL ?? "").isEmpty {
-        LoginLogger.shared.log("[牛蛙源] ✓ 空直链重试成功（\(app.bundleId)，第 \(retries) 次）",
+        LoginLogger.shared.log("[牛蛙源] [完成] 空直链重试成功（\(app.bundleId)，第 \(retries) 次）",
                                category: .appStore)
     }
     return hit
@@ -1235,7 +1235,7 @@ private func fetchNiuwaPackageOnce(_ app: NiuwaStoreClient.NiuwaApp,
         // 短等一下：失败的成因是"同一时刻设备隧道在重配"，立刻重发多半还在同一次抖动里
         try? await Task.sleep(for: .milliseconds(400))
         let retried = try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region)
-        LoginLogger.shared.log("[牛蛙源] ✓ 重试成功（\(app.bundleId)）", category: .appStore)
+        LoginLogger.shared.log("[牛蛙源] [完成] 重试成功（\(app.bundleId)）", category: .appStore)
         return retried
     }
 }

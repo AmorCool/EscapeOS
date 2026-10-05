@@ -150,7 +150,7 @@ final class SSHServerService: NSObject, ObservableObject, @unchecked Sendable {
                 let auth = PasswordAuthDelegate(username: username, password: password)
                 let exec = BuiltinCommandExecDelegate()
                 // SFTP 子系统（v0.3.63x）：把统一 FileProvider 接到 Citadel 的 SFTP v3 服务端。
-                // ⚠️ 认证不受影响 —— SFTP 只在**已通过 PasswordAuthDelegate 的会话**上开放，
+                // 注意： 认证不受影响 —— SFTP 只在**已通过 PasswordAuthDelegate 的会话**上开放，
                 //    不存在免密/匿名路径。文件域见 SSHFileProvider.swift。
                 let sftp = SFTPFileSystemDelegate(provider: SSHFileProviderFactory.makeDefault())
 
@@ -324,7 +324,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     /// 写端会阻塞到读端把管道排空为止 —— 而排空管道的 handler 跑在**同一个事件循环线程**上。
     /// 于是写端把线程占住、读端永远没机会跑 ⇒ **死锁**。
     ///
-    /// ⚠️ 2026-10-05 实测事故：在设备上 `cat` 一个 10MB 文件，**SSH 服务被直接打死**
+    /// 注意： 2026-10-05 实测事故：在设备上 `cat` 一个 10MB 文件，**SSH 服务被直接打死**
     /// （端口从 OPEN 变成 Connection refused，只能重启 App 恢复）。
     /// 当时 `catLimitBytes` 被设成了 0（无限制），所以没被 `cat` 自己的上限拦住。
     ///
@@ -341,7 +341,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     /// 而排空管道的 handler 跑在**同一个事件循环线程**上。
     /// 写端把线程占住、读端永远没机会跑 ⇒ **死锁**（见 `maxResponseBytes` 的注释里的实测事故）。
     ///
-    /// ⚠️ **任何**往 `stdoutPipe` / `stderrPipe` 写输出的地方都必须走这个函数，
+    /// 注意： **任何**往 `stdoutPipe` / `stderrPipe` 写输出的地方都必须走这个函数，
     /// 不要直接 `pipe.fileHandleForWriting.write(...)`。
     /// 目前只有 stdout 在用（仓库里没有任何 stderr 写入），
     /// 但 Citadel 的 `ExecOutputHandler` 同时提供 `stderrPipe`，将来要分离 stderr 时
@@ -418,7 +418,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 为什么需要：主页两个内置模块（locache / wifirefresh）走
             // `app_service_connect_rsd` 时会出现 `ServiceNotFound`(21)。
             //
-            // ⚠️ 关于 `ServiceNotFound` 的成因，本项目先后写过两版**都已作废**：
+            // 注意： 关于 `ServiceNotFound` 的成因，本项目先后写过两版**都已作废**：
             //    ①「DDI 门控」（见 `CHANGELOG.md` `[0.3.462]`）；②「接错隧道」。
             //    **事实（用户实测 + PC 侧交叉验证）**：`ServiceNotFound`(21) 是**设备侧的服务状态
             //    问题**，不是本 App 的缺陷 —— 该服务偶尔不可用，**重启手机即恢复**；
@@ -428,7 +428,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             //    只是**不再用来解释 `ServiceNotFound`**。
             // 本命令只回答一个问题：`image_mounter_copy_devices` 返回空还是非空。
             //
-            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
+            // 注意： 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建 RSD 隧道，
             //    而且它开的服务连接**每次只允许一条**。
             // 安全约束全部落在 `DDIMountProbe` 头注释里（复用 AFC 串行队列 / 单连接 / 只读）。
             // 用法：ddiprobe   （同步阻塞执行，结束后直接读结果）
@@ -440,7 +440,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 为什么需要：主页两个内置模块（locache / wifirefresh）与「进程管理」走
             // `app_service_connect_rsd` 时会出现 `ServiceNotFound`(21)。
             //
-            // ⚠️ 关于 `ServiceNotFound` 的成因，本项目先后写过两版**都已作废**
+            // 注意： 关于 `ServiceNotFound` 的成因，本项目先后写过两版**都已作废**
             //    （①「DDI 门控」；②「接错隧道」）。**事实（用户实测 + PC 侧交叉验证）**：
             //    `ServiceNotFound`(21) 是**设备侧的服务状态问题**，不是本 App 的缺陷 ——
             //    该服务偶尔不可用，**重启手机即恢复**；与 DDI、与「用哪条隧道」都无关
@@ -453,7 +453,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             // 这条路在本仓**能不能**走通（上游 `tools/src/app_service.rs:69-85`），
             // 并如实报告每一步的错误原文。
             //
-            // ⚠️ 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建隧道 + 真开一条
+            // 注意： 只给 SSH 调试用。**不要挂到任何 UI 路径上** —— 它会真建隧道 + 真开一条
             //    app_service 连接（RSD 隧道并发铁律；v0.3.419/420 事故见 `MY-FAULTS.md` 缺陷 17）。
             // 安全约束全部落在 `CDProbe` 头注释里（复用 AFC 串行队列 / 单连接 / 只读）。
             // 用法：cdprobe   （同步阻塞执行，结束后直接读结果）
@@ -507,7 +507,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let std = target.standardizedFileURL.path
             let docsStd = docs.standardizedFileURL.path
             guard std == docsStd || std.hasPrefix(docsStd + "/") else {
-                return "❌ 路径越界（仅限 Documents 内）"
+                return "[失败] 路径越界（仅限 Documents 内）"
             }
             var isDir: ObjCBool = false
             guard FileManager.default.fileExists(atPath: std, isDirectory: &isDir) else {
@@ -521,11 +521,11 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 let p = (std as NSString).appendingPathComponent(name)
                 var d: ObjCBool = false
                 FileManager.default.fileExists(atPath: p, isDirectory: &d)
-                if d.boolValue { return "📁 \(name)/" }
+                if d.boolValue { return "[目录] \(name)/" }
                 var sz: UInt64 = 0
                 if let attr = try? FileManager.default.attributesOfItem(atPath: p),
                    let s = attr[.size] as? UInt64 { sz = s }
-                return "📄 \(name)  (\(ByteCountFormatter.string(fromByteCount: Int64(sz), countStyle: .file)))"
+                return "[文件] \(name)  (\(ByteCountFormatter.string(fromByteCount: Int64(sz), countStyle: .file)))"
             }.joined(separator: "\n")
         case "cat":
             // 查看 Documents 内文本文件（限 256KB）
@@ -534,7 +534,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             let rel = parts.dropFirst().joined(separator: " ")
             let target = docs.appendingPathComponent(rel).standardizedFileURL
             let docsStd = docs.standardizedFileURL.path
-            guard target.path.hasPrefix(docsStd + "/") else { return "❌ 路径越界（仅限 Documents 内）" }
+            guard target.path.hasPrefix(docsStd + "/") else { return "[失败] 路径越界（仅限 Documents 内）" }
             guard let attr = try? FileManager.default.attributesOfItem(atPath: target.path),
                   let size = attr[.size] as? UInt64 else { return "不存在: \(rel)" }
             // v0.3.434：上限改为**用户可配置**（「更多 → 设置 → 日志」，默认 1024KB，填 0 = 无限制）
@@ -563,7 +563,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             setenv("MODULE_DATA_DIR", dataDir.path, 1)   // 通用兜底：数据目录传给模块
 
             guard let sym = BinaryModuleRunner.resolveBinaryModuleSymbol(symName, moduleDir: moduleDir, moduleId: binID) else {
-                return "❌ 符号未找到: \(symName)\n"
+                return "[失败] 符号未找到: \(symName)\n"
                      + "   模块: \(binID)\n"
                      + "   可能原因：dylib 加载失败（dyld 库校验拒绝 ad-hoc 签名）或符号未导出\n"
                      + "   详情: runlog 25"
@@ -628,9 +628,9 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             Task {
                 do {
                     try await DeveloperCertStore.shared.createCertificateWithStoredAccount()
-                    devcertBox.set("✓ 开发证书创建成功（已存 DeveloperCert/，原生模块将用真证书签名加载）")
+                    devcertBox.set("[完成] 开发证书创建成功（已存 DeveloperCert/，原生模块将用真证书签名加载）")
                 } catch {
-                    devcertBox.set("❌ 开发证书创建失败: \((error as NSError).localizedDescription)")
+                    devcertBox.set("[失败] 开发证书创建失败: \((error as NSError).localizedDescription)")
                 }
                 sem.signal()
             }
@@ -656,7 +656,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                         var sub: ObjCBool = false
                         fm.fileExists(atPath: target.appendingPathComponent(it).path, isDirectory: &sub)
                         let size = (try? fm.attributesOfItem(atPath: target.appendingPathComponent(it).path)[.size] as? Int) ?? nil
-                        listing.append(sub.boolValue ? "📁 \(it)/" : "📄 \(it)\((size.map { " (\($0)B)" }) ?? "")")
+                        listing.append(sub.boolValue ? "[目录] \(it)/" : "[文件] \(it)\((size.map { " (\($0)B)" }) ?? "")")
                     }
                 }
                 return listing.joined(separator: "\n")
@@ -669,7 +669,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                     for it in items.sorted() {
                         var sub: ObjCBool = false
                         fm.fileExists(atPath: dataDir.appendingPathComponent(it).path, isDirectory: &sub)
-                        listing.append(sub.boolValue ? "📁 \(it)/" : "📄 \(it)")
+                        listing.append(sub.boolValue ? "[目录] \(it)/" : "[文件] \(it)")
                     }
                 }
                 return listing.joined(separator: "\n")
@@ -708,7 +708,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 var isDir: ObjCBool = false
                 FileManager.default.fileExists(atPath: full.path, isDirectory: &isDir)
                 let size = (try? FileManager.default.attributesOfItem(atPath: full.path)[.size] as? Int) ?? nil
-                lines.append(isDir.boolValue ? "📁 \(it)/" : "📄 \(it)\((size.map { " (\($0)B)" }) ?? "")")
+                lines.append(isDir.boolValue ? "[目录] \(it)/" : "[文件] \(it)\((size.map { " (\($0)B)" }) ?? "")")
             }
             return lines.joined(separator: "\n")
         case "modcat":
@@ -740,7 +740,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             //     cap afc.list '{"path":"/DCIM"}'
             //     cap proc.list
             //
-            // ⚠️ 同步阻塞：有些能力会真的连设备，一次可能十几秒。
+            // 注意： 同步阻塞：有些能力会真的连设备，一次可能十几秒。
             guard parts.count > 1 else {
                 return "用法: cap <能力名> [JSON]\n"
                     + "例: cap host.version\n"

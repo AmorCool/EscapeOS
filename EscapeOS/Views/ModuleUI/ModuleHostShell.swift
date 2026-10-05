@@ -17,7 +17,7 @@
 //    · 出口改成**图标按钮**（返回 = `chevron.left`，主页 = `house`），放左右两侧
 //    · 不再自绘 Divider —— 导航栏自带分隔
 //
-//  ⚠️ 为什么现在**可以**套 NavigationStack 了（旧注释说不能）
+//  注意： 为什么现在**可以**套 NavigationStack 了（旧注释说不能）
 //  旧注释的理由是「外壳已有自绘顶栏，再叠系统导航栏会变双层栏」.
 //  现在自绘顶栏**已经删掉**，系统导航栏就是唯一那条 ⇒ 不存在双层问题.
 //  而且模块的 tab 内容正好需要它（NavigationLink 下钻、`.navigationTitle`）.
@@ -84,7 +84,7 @@ struct ModuleHostShell: View {
             ContentUnavailableView(
                 "该模块没有可用的原生界面",
                 systemImage: "square.grid.2x2",
-                description: Text("模块声明的原生界面未在宿主内注册。")
+                description: Text("模块声明的原生界面未在宿主内注册.")
             )
         } else {
             TabView(selection: $selection) {

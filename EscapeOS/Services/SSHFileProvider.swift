@@ -552,7 +552,7 @@ final class AfcFileProvider: FileProvider, @unchecked Sendable {
         guard !data.isEmpty else { return }
         try withClient { client in
             var handle: OpaquePointer?
-            // ⚠️ 必须用 AfcRw("r+", O_RDWR|O_CREAT，**不截断**)而不是 AfcWrOnly("w", O_TRUNC)。
+            // 注意： 必须用 AfcRw("r+", O_RDWR|O_CREAT，**不截断**)而不是 AfcWrOnly("w", O_TRUNC)。
             //    否则每个分块 open 都会把文件截成 0 ⇒ 多块上传必损坏（P0-1）。
             //    文件的存在/清空由 `prepareForWrite` 在 openFile 时一次性处理。
             if let e = p.withCString({ afc_file_open(client, $0, AfcRw, &handle) }) {

@@ -347,7 +347,7 @@ final class IncreaseMemoryController: ObservableObject {
             let reason = MemoryLimitSettings.shared.isLoggedIn
                 ? "已登录但 Swift 会话缺失（dsid/authToken 为空）"
                 : "尚未登录 Apple ID"
-            LoginLogger.shared.log("⚠ 增加内存限制：团队列表未发起 —— \(reason)")
+            LoginLogger.shared.log("[注意] 增加内存限制：团队列表未发起 —— \(reason)")
             teamState = .failed("\(reason).请到「更多 → 设置」重新登录 Apple ID.")
             return
         }
@@ -358,7 +358,7 @@ final class IncreaseMemoryController: ObservableObject {
             guard let self else { return }
             if case .loading = self.teamState {
                 self.teamState = .failed("加载超时.请下拉刷新重试，或到「更多 → 设置 → Anisette 服务器」换一个服务器.")
-                LoginLogger.shared.log("❌ 增加内存限制：团队列表加载看门狗超时")
+                LoginLogger.shared.log("[失败] 增加内存限制：团队列表加载看门狗超时")
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: watchdog)

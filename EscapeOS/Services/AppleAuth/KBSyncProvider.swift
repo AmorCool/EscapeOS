@@ -89,7 +89,7 @@ enum KBSyncProvider {
         //     `try signer.exchangeData(cert, version: 200)`（不带 error）
         //   照着它的写法就对了。
         //
-        //   ⚠️ 不要去改 `.h` 里 `NSError **` 的写法（v0.3.545/546 试过
+        //   注意： 不要去改 `.h` 里 `NSError **` 的写法（v0.3.545/546 试过
         //   `NSError * _Nullable * _Nullable`，不仅没用、还让 `.h` 与 `.mm` 不一致）。
         //   出参类型保持全文件统一的 `NSError **` 即可。
         let blob = try SAPStoreAgentContext.generateKBSync(

@@ -134,7 +134,7 @@ struct CertificateView: View {
             SharedDocumentPicker.present(allowedTypes: [.data]) { urls in
                 guard let url = urls.first,
                       let data = try? Data(contentsOf: url) else {
-                    p12Message = "✗ p12 文件读取失败"
+                    p12Message = "[失败] p12 文件读取失败"
                     return
                 }
                 pendingP12Data = data
@@ -149,7 +149,7 @@ struct CertificateView: View {
             Button("导入") {
                 guard let data = pendingP12Data else { return }
                 let result = certStore.importP12(data: data, password: p12Password)
-                p12Message = result.ok ? "✓ \(result.message)" : "✗ \(result.message)"
+                p12Message = result.ok ? "[完成] \(result.message)" : "[失败] \(result.message)"
                 pendingP12Data = nil
             }
             Button("取消", role: .cancel) { pendingP12Data = nil }
@@ -159,7 +159,7 @@ struct CertificateView: View {
         .alert("删除本地签名证书？", isPresented: $showRemoveCertConfirm) {
             Button("删除", role: .destructive) {
                 let result = certStore.removeLocalCert()
-                p12Message = result.ok ? "✓ \(result.message)" : "✗ \(result.message)"
+                p12Message = result.ok ? "[完成] \(result.message)" : "[失败] \(result.message)"
             }
             Button("取消", role: .cancel) {}
         } message: {
@@ -350,7 +350,7 @@ struct CertificateView: View {
 
     @ViewBuilder
     private func p12MessageText(_ msg: String) -> some View {
-        let isOK = msg.hasPrefix("✓")
+        let isOK = msg.hasPrefix("[完成]")
         Text(msg)
             .font(.caption)
             .foregroundStyle(isOK ? Color.green : Color.orange)

@@ -26,7 +26,7 @@ static NSMutableArray<NSString *> *AssetNotes(void) {
 
 /// 描述尾部多出来的字节：若确为追加的代码签名则说明清楚，否则只报字节数。
 ///
-/// ⚠️ v0.3.332：**必须支持 fat（universal）二进制**。官方资产里
+/// 注意： v0.3.332：**必须支持 fat（universal）二进制**。官方资产里
 /// `CoreFP` 与 `CommerceCore` 都是 fat（magic `0xCAFEBABE`，2 个切片），
 /// 只有 `CommerceKit` 是 thin Mach-O 64。老实现只认 thin 头，
 /// 于是 fat 的那两个被误报成「不是可识别的代码签名」（用户看到日志后当场指出）。
@@ -217,7 +217,7 @@ static void SetError(NSError **error, const std::exception &exception) {
 /// 解密器与 kbsync 都要它，所以抽出来 —— 两处的资产清单必须**逐字一致**，
 /// 否则一个能跑一个报「资产缺失」，排查时极易误导。
 ///
-/// ⚠️ **不要**给这一个函数加 `@synchronized`：它只在调用方已经做过参数校验后跑，
+/// 注意： **不要**给这一个函数加 `@synchronized`：它只在调用方已经做过参数校验后跑，
 /// 且内部只做只读资产加载，没有共享状态。
 static std::unique_ptr<SapMachine> MakeStoreAgentMachine(NSURL *directory,
                                                          NSData *hardwareID) {

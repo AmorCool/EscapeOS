@@ -248,7 +248,7 @@ struct KernelCacheView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("输入要下载 kernelcache 的机型标识（hw.machine，如 iPhone13,1 / iPhone15,2）.")
+            Text("输入要下载 kernelcache 的机型标识，如 iPhone13,1.")
         }
         .sheet(item: $shareURL) { item in
             ShareSheet(items: [item.url])

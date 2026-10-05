@@ -7,7 +7,7 @@ import SwiftUI
 /// 卫星小球、安全分进度环（分数变化时平滑增长）.算法与视觉对标
 /// D:\Zcode\liquid-glass\index-v2.html 的 WebGL 样板.
 ///
-/// ⚠️ 着色器在 LiquidGlassOrb.metal，需一并加入 App target.
+/// 注意： 着色器在 LiquidGlassOrb.metal，需一并加入 App target.
 /// iOS 17 以下：自动回退为旧的圆环进度样式.
 struct LiquidGlassOrbView: View {
     var score: Int

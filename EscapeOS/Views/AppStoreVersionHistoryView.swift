@@ -95,7 +95,7 @@ struct AppStoreVersionHistoryView: View {
                 }
             } else if versions.isEmpty {
                 Section {
-                    Text("没有可读取的版本记录。")
+                    Text("没有可读取的版本记录.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }

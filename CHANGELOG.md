@@ -12,7 +12,8 @@
   （实现：值 + 通知双通道。**必须是双通道** —— 只轮询会在「通知早于写入」时丢事件，只发通知会在「页面尚未挂载」时丢事件。）
 
 **SFTP 文件域**
-- **大目录不再「静默假空」。** 列举失败时目录里会出现一条 `!!_ESCAPESPACE_LISTING_FAILED`，**不再是一个没有报错的空文件夹**；超过 3000 条时出现 `!!_ESCAPESPACE_TRUNCATED_3000_OF_<total>`。
+- **大目录不再「静默假空」。** 列举失败时目录里会出现一条 `!!_ESCAPESPACE_LISTING_FAILED`，**不再是一个没有报错的空文件夹**；超过 3000 条时出现 `!!_ESCAPESPACE_NOTICE_TRUNCATED_SHOWING_<n>_OF_<m>_DIRECT_PATH_ONLY`。
+  这些标记是**保留命名空间**：客户端对它们的写/删会被明确拒绝（见 README 的「SFTP file access」节）。
 - **目录排序不再随系统语言变化。** 以前用 locale 相关比较器 —— 实测同一目录在英文与瑞典文下截断出的前 3000 条**完全不相交**。现在固定 `en_US_POSIX` + 自然数字序，并用 UTF-8 字节序打破并列（不依赖非稳定排序）。
 - **客户端发超大 offset 不再让 App 崩溃。** 以前 `offset` / `length` 直接参与 `Int` 运算，无上界校验 —— 已认证客户端发一个 `UInt64.max` 就能触发溢出陷阱（SIGILL）。现在入口校验**整个访问区间** `offset + length`，越界拒绝（读抛错、写回状态码），区间右端轻微越界时**收窄为短读**而不是误杀。
 
@@ -79,7 +80,7 @@
 - **列举失败**（provider 报错）：现在返回一条 `!!_ESCAPESPACE_LISTING_FAILED`。
   **用户看到**：该目录里出现一个名为 `!!_ESCAPESPACE_LISTING_FAILED` 的条目 —— **不再是「无报错的空文件夹」**，避免把「读取失败」误当成「目录为空」。
 - **条目数超过 3000**：只返回**按名字排序后的前 3000 条**，并追加一条
-  `!!_ESCAPESPACE_TRUNCATED_3000_OF_<total>`（`<total>` 为实际总数）。
+  `!!_ESCAPESPACE_NOTICE_TRUNCATED_SHOWING_<n>_OF_<m>_DIRECT_PATH_ONLY`（`<m>` 为实际总数；SFTP v3 的 READDIR 无 offset，超过 3000 条的部分请按完整路径直取）。
   **用户看到**：列表里出现该标记条目，一眼可知「被截断了、总共多少条」，而不是以为「就这么多」。
 
 ### 行为变化：单条目 `fileInfo` 失败 ⇒ **整个目录列举失败**

@@ -33,15 +33,15 @@ typedef NS_ENUM(NSInteger, SAPStoreAgentErrorCode) {
 //  必须是**独立的一次性会话**：加载 `storeagent` 镜像 + 用 dpInfo 初始化，
 //  然后按 0x8000 分块原地解密，最后 close。
 //
-//  ⚠️ 与上面的 `SAPContext`（SAP 签名会话）**不共用**机器 ——
+//  注意： 与上面的 `SAPContext`（SAP 签名会话）**不共用**机器 ——
 //     `storeagent` 是额外挂载的镜像，需要一个带它的新 SapMachine。
 //
-//  ⚠️ v0.3.545：本类的**解密会话**部分（`-initWithAssetsURL:hardwareID:dpInfo:error:`
+//  注意： v0.3.545：本类的**解密会话**部分（`-initWithAssetsURL:hardwareID:dpInfo:error:`
 //     / `-decryptChunk:error:` / `-closeDecrypter`）在 Swift 侧**目前没有任何调用点**
 //     —— 也就是说这部分还没真正接进下载链，只有下面的 kbsync 在用 storeagent。
 //     留着是为了下一步接包解密；不要据此以为解密已经通了。
 //
-//  ⚠️ v0.3.548 定案（前三版都在这里栽了，写清楚免得再踩）：
+//  注意： v0.3.548 定案（前三版都在这里栽了，写清楚免得再踩）：
 //
 //     v0.3.544 / 545 / 546 连续三版 CI 都报同一条
 //     `KBSyncProvider.swift: error: extra argument 'error' in call`。
@@ -82,7 +82,7 @@ typedef NS_ENUM(NSInteger, SAPStoreAgentErrorCode) {
 //
 //  对齐上游 ipatool `internal/sap/machine/kbsync.go` 的 `GenerateKBSync`。
 //
-//  ⚠️ **与解密器不是同一条路径**：kbsync 不需要 `dpInfo`、也**不开解密会话**，
+//  注意： **与解密器不是同一条路径**：kbsync 不需要 `dpInfo`、也**不开解密会话**，
 //     只要「带 storeagent 的机器 + hardwareID + DSID」就能算出来。
 //     上游注释原话：
 //       > creates the account and hardware bound FairPlay data required by the

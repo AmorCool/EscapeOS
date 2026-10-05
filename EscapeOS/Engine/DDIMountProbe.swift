@@ -2,7 +2,7 @@ import Foundation
 
 /// ▸ 只读诊断探针（svc-notfound / 2026-09-19）：回答「设备上到底挂没挂 DDI」这个**独立**问题。
 ///
-/// ## ⚠️ 先读这段：这份探针当初是为一个**已被推翻的假设**写的
+/// ## 注意： 先读这段：这份探针当初是为一个**已被推翻的假设**写的
 /// 它当初要验证的**主导假设**是「CoreDevice 那块是 **DDI 门控**的 —— 设备没挂 DDI ⇒
 /// RSD 不广播整块 ⇒ app_service 必现 `ServiceNotFound`(21)」。**该假设已作废。**
 /// 后来写过的第三版归因「接错隧道」**也作废**（与 PC 侧 `pymobiledevice3` 的交叉验证矛盾）。
@@ -90,7 +90,7 @@ enum DDIMountProbe {
             let body = try AFCService.shared.runExclusively { try probeBody() }
             lines.append(contentsOf: body)
         } catch {
-            lines.append("❌ 探针失败：\(error.localizedDescription)")
+            lines.append("[失败] 探针失败：\(error.localizedDescription)")
         }
 
         let text = lines.joined(separator: "\n")
@@ -124,18 +124,18 @@ enum DDIMountProbe {
             try buildTunnel(into: &tunnel, pairingPath: pairingPath)
             out.append("  · 隧道 OK（adapter + handshake 均已就绪）")
         } catch {
-            out.append("  ❌ 建隧道失败：\(error.localizedDescription)")
+            out.append("  [失败] 建隧道失败：\(error.localizedDescription)")
             out.append("")
             out.append("结论：隧道没建起来 —— 本次探针无法回答 DDI 问题（先解决 LocalDevVPN / 配对文件）。")
             return out
         }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
-            out.append("  ❌ 隧道句柄为空")
+            out.append("  [失败] 隧道句柄为空")
             return out
         }
 
         // 2) 读 RSD 服务表（**只读内存结构，不建连**）
-        //    ⚠️ 下面 dump 出来的「coredevice 整块不在表里」**不解释 `ServiceNotFound`** ——
+        //    注意： 下面 dump 出来的「coredevice 整块不在表里」**不解释 `ServiceNotFound`** ——
         //       既不是 DDI 造成的，也不是「接错隧道」造成的（两版归因都已作废）。
         //       `dumpServiceTable` 的判据 A/B/C 仍有参考价值（判据 C 是「DDI 挂没挂」的旁证），
         //       但**不要把它读成 `ServiceNotFound` 的解释**。
@@ -148,7 +148,7 @@ enum DDIMountProbe {
         out.append("[3] ▸ 判据 esc_ddi_copy_devices（C 垫片）")
         out.append("    垫片内部：image_mounter_connect_rsd → copy_devices → image_mounter_free")
         //
-        // ⚠️ 这里**刻意不出现任何 FFI 指针** —— 理由见本文件头注释「为什么走 C 垫片」。
+        // 注意： 这里**刻意不出现任何 FFI 指针** —— 理由见本文件头注释「为什么走 C 垫片」。
         //    一句话：`ImageMounterHandle **` / `plist_t **` 这两个 opaque 指针数组出参
         //    在 Swift 侧烧掉过八轮 CI（271~278），垫片是本仓唯一被验证过的路（run 453 SUCCESS）。
         var byteLen: UInt32 = 0
@@ -158,7 +158,7 @@ enum DDIMountProbe {
         guard let bytes else {
             let message = errorCStr.map { String(cString: $0) } ?? "（垫片未给出原因）"
             if let errorCStr { free(errorCStr) }        // 垫片的失败字符串是 malloc 的 ⇒ free
-            out.append("  ❌ 垫片失败：\(message)")
+            out.append("  [失败] 垫片失败：\(message)")
             out.append("")
             out.append("结论：连不上 / 查询失败 ⇒ 无法判定 DDI 挂载状态。")
             return out
@@ -168,7 +168,7 @@ enum DDIMountProbe {
 
         // ▸ 解析失败必须与「列表为空」区分开 —— 否则会把「查不了」误报成「没挂 DDI」。
         guard let images = parsePlistArray(bytes, byteLen) else {
-            out.append("  ❌ 垫片返回的字节解析失败（length=\(byteLen)）")
+            out.append("  [失败] 垫片返回的字节解析失败（length=\(byteLen)）")
             out.append("")
             out.append("结论：解析失败 ⇒ DDI 挂载状态仍未定（既不能确认也不能否证假设）。")
             return out
@@ -187,7 +187,7 @@ enum DDIMountProbe {
 
         out.append("")
         out.append("[5] 结论")
-        // ⚠️ 下面两个分支只报告「设备挂没挂 DDI」这个**独立事实**。
+        // 注意： 下面两个分支只报告「设备挂没挂 DDI」这个**独立事实**。
         //    不要再把它当成 `ServiceNotFound` 的解释（DDI 与「接错隧道」两版归因都已作废），
         //    **也不要照着它去挂 DDI**。
         if !images.isEmpty {
@@ -279,11 +279,11 @@ enum DDIMountProbe {
             let message = ffiError.pointee.message.map { String(cString: $0) } ?? ""
             let code = Int(ffiError.pointee.code)
             idevice_error_free(ffiError)
-            out.append("  ❌ rsd_get_services 失败 code=\(code) \(message)")
+            out.append("  [失败] rsd_get_services 失败 code=\(code) \(message)")
             return
         }
         guard let servicesArray else {
-            out.append("  ❌ rsd_get_services 返回空")
+            out.append("  [失败] rsd_get_services 返回空")
             return
         }
         defer { rsd_free_services(servicesArray) }
@@ -301,7 +301,7 @@ enum DDIMountProbe {
 
         // 判据 A：本探针要连的服务在不在
         let mounterName = "com.apple.mobile.mobile_image_mounter.shim.remote"
-        out.append("  · [判据 A] \(mounterName) → \(names.contains(mounterName) ? "在表里" : "❌ 不在表里")")
+        out.append("  · [判据 A] \(mounterName) → \(names.contains(mounterName) ? "在表里" : "[失败] 不在表里")")
 
         // 判据 B：CoreDevice 整块（当初以为它是本次问题的主角，**该归因已作废**）
         let coreDevice = names.filter { $0.hasPrefix("com.apple.coredevice") }.sorted()
@@ -325,7 +325,7 @@ enum DDIMountProbe {
     /// 把垫片返回的 bplist 字节解析成「镜像字典」数组。
     ///
     /// - Returns: 解析成功返回数组（**空数组 = 设备未挂 DDI**）；解析失败返回 `nil`。
-    ///   ⚠️ 失败与「空」**必须区分**，否则会把「查不了」误报成「没挂 DDI」。
+    ///   注意： 失败与「空」**必须区分**，否则会把「查不了」误报成「没挂 DDI」。
     private static func parsePlistArray(_ bytes: UnsafeMutablePointer<UInt8>,
                                         _ length: UInt32) -> [[String: Any]]? {
         guard length > 0 else { return nil }

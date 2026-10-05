@@ -24,7 +24,7 @@
 //  （`SSHServerService` 现有密码认证）。`enableSFTP` 只在**已认证的 session**上
 //  额外开放一个子系统。**本文件不引入任何免密/匿名路径。**
 //
-//  ## ⚠️ Citadel 上游缺陷与应对（逐行核对 SFTPServerInboundHandler 后确认）
+//  ## 注意： Citadel 上游缺陷与应对（逐行核对 SFTPServerInboundHandler 后确认）
 //  Citadel 入站处理器在**错误路径**上的行为不一致，直接抛错会导致：
 //   - `remove / rename / setstat / symlink / stat / lstat / opendir` →
 //     `.flatMapErrorThrowing { _ in }`（**吞错、不回 status**）→ 客户端**永久挂起**；
@@ -42,6 +42,28 @@
 //         （`read` 仍 throw、写失败仍回状态码）。
 //     彻底修好（回真正的 `SSH_FX_NO_SUCH_FILE` / 状态码）仍需给 Citadel 打补丁
 //     （补丁文本见 `P0_工作产物标准区/EscapeSpace-SSH升级/impl-sftp/citadel_patch_sftp_error_status.md`）。
+//
+//  ## 标记命名空间（保留名，2026-10-05 对抗审计修复）
+//  `openDirectory` 在列举失败 / 截断时会往 listing 里塞一条**合成条目**（见
+//  `markerListing`），把「失败 / 截断」显式告诉客户端 —— 这是本项目最忌讳的
+//  「静默假空 / 静默截断」的对立面，**必须保留**。
+//
+//  但合成条目若被客户端当成真文件参与文件操作，就会出问题：`stat` 谎报「存在」、
+//  `delete` 真删同名的真实文件、`put` 真建同名文件、下载命中不存在的路径而触发
+//  Citadel 关通道（会话断连）。四处**同一根因**：标记名没有自己的命名空间，
+//  被所有文件操作一视同仁。
+//
+//  修法：把前缀 `!!_ESCAPESPACE_` 声明为**保留命名空间**。凡**末级名**命中该前缀的
+//  路径（只看末级名；中间路径段含该串，如 `foo/!!_ESCAPESPACE_bar/baz.txt`，**不受影响**），
+//  一律按「标记」处理：
+//   - `stat` 回标记自身属性（目录型，与 listing 自洽），不再走 `.none` 随机兜底；
+//   - `removeFile` 回 `.noSuchFile`；`mkdir` / `rmdir` / `rename` 回 `.unsupportedOperation`；
+//   - 写打开回标记句柄，其 `write` 回 `.failure`（**绝不**建文件）；
+//   - 标记条目做成**目录型**：客户端不会下载目录 ⇒ 绕开「下载标记导致断连」。
+//
+//  **代价（如实声明）**：真名以 `!!_ESCAPESPACE_` 开头的文件会被当成标记 ——
+//  不可写、不可删、不可改名，`stat` 也回标记属性。这是让标记「可区分」的必要代价：
+//  宁可保留一个几乎不可能撞名的小命名空间，也不把失败 / 截断伪装成空 / 完整目录。
 //
 
 import Citadel
@@ -98,7 +120,26 @@ private let sftpMaxDirectoryEntries = 3000
 
 /// 标记条目的名字前缀：用**醒目的 `!!_`**（而非 `.` 开头）确保不会被客户端
 /// 当隐藏文件过滤掉 —— 标记若被隐藏就失去了「可区分」的意义。
+///
+/// 该前缀是**保留命名空间**（详见文件头「标记命名空间」）：末级名命中它的路径
+/// 一律按标记处理，不可写 / 不可删 / 不可改名。代价已如实声明。
 private let sftpMarkerPrefix = "!!_ESCAPESPACE_"
+
+/// 判断一个**末级名字**是否落在保留的标记命名空间内。
+///
+/// 只检查名字本身，**不检查中间路径段**：`foo/!!_ESCAPESPACE_bar/baz.txt` 的末级名是
+/// `baz.txt`，不受影响 —— 保留的是「名字」，不是「路径里出现过这个串」。
+func isReservedMarkerName(_ name: String) -> Bool {
+    name.hasPrefix(sftpMarkerPrefix)
+}
+
+/// 判断一个**路径**的末级名是否落在保留命名空间内（见 `isReservedMarkerName`）。
+///
+/// 用 `SSHPath.lastComponent` 取末级名：它先归一化路径（折叠 `.`、拒绝 `..` 与 NUL），
+/// 因此 `foo/!!_ESCAPESPACE_bar/baz.txt` 这类中间段含前缀的路径**不会**被误判。
+func isReservedMarkerPath(_ path: String) -> Bool {
+    isReservedMarkerName(SSHPath.lastComponent(path))
+}
 
 
 // MARK: - FileProviderError → SFTP 状态码
@@ -167,12 +208,12 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
     /// 且 `openDirectory` 返回的是 handle，**协议上无法回状态码**（见文件头）。
     /// 因此唯一能传「这不是空目录 / 这不是完整目录」的通道，就是 **listing 的内容本身**。
     ///
-    /// - Note: 标记是**普通文件条目**（size 0、非目录），故客户端可能尝试下载/删除它 ——
-    ///   它会失败（该路径并不真实存在）。这是「可区分」的必要代价：宁可让用户看到一条
-    ///   打不开的标记，也不要把失败伪装成空目录。名字前缀 `!!_ESCAPESPACE_` 使其一眼可辨。
+    /// - Note: 标记做成**目录型**（`isDirectory: true`，见文件头「标记命名空间」）：
+    ///   客户端（Finder / FileZilla）不会对目录发起下载，从而绕开
+    ///   「下载标记 → `read` 命中不存在的路径 → Citadel 关通道 = 会话断连」这一死结。
+    ///   写 / 删 / 改名由保留命名空间在 delegate 层直接拒绝（不触 provider）。
     private static func markerListing(_ name: String, formatter: DateFormatter) -> SFTPFileListing {
-        let entry = FileEntry(path: "/" + name, name: name, isDirectory: false, size: 0,
-                              modified: nil, permissions: 0o100644)
+        let entry = markerEntry(name)
         return SFTPFileListing(path: [
             SFTPPathComponent(
                 filename: name,
@@ -182,9 +223,31 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
         ])
     }
 
+    /// 一条标记条目的后端口径表示（目录型、size 0、权限 0o040755）。
+    private static func markerEntry(_ name: String) -> FileEntry {
+        FileEntry(path: "/" + name, name: name, isDirectory: true, size: 0,
+                  modified: nil, permissions: 0o040755)
+    }
+
+    /// 标记路径的 `stat` 属性：与 listing 自洽（目录型），供 `fileAttributes` 使用。
+    ///
+    /// 为什么回这个而不是 `.none`：`.none` 是「存在、属性未知」的随机兜底，语义上在
+    /// 谎报「存在」。标记是保留命名空间，回它**自身的**属性至少自洽、可观测。
+    /// 回真正的 `SSH_FX_NO_SUCH_FILE` 需给 Citadel 打补丁（stat 处理器吞错、协议无法回状态码），
+    /// 本层做不到 —— 如实标注。
+    static var markerAttributes: SFTPFileAttributes {
+        attributes(for: markerEntry(sftpMarkerPrefix + "NOTICE"))
+    }
+
     // MARK: SFTPDelegate
 
     func fileAttributes(atPath path: String, context: SSHContext) async throws -> SFTPFileAttributes {
+        // 保留命名空间：末级名命中前缀 ⇒ 回标记自身属性（目录型，与 listing 自洽），
+        // 不触 provider、也不走下面的 `.none` 兜底（详见文件头「标记命名空间」）。
+        if isReservedMarkerPath(path) {
+            LoginLogger.shared.log("[SFTP] stat 命中标记命名空间 → 回标记属性（目录型）：\(path)")
+            return Self.markerAttributes
+        }
         do {
             let entry = try await runFileOpWithTimeout(provider.operationTimeout, "stat \(path)") {
                 try self.provider.stat(path)
@@ -213,7 +276,7 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
 
     /// 把 provider 调用收敛成 SFTP 状态码，**绝不外抛**。
     ///
-    /// ⚠️ 为什么必须这样（已逐行核对 Citadel `SFTPServerInboundHandler`）：
+    /// 注意： 为什么必须这样（已逐行核对 Citadel `SFTPServerInboundHandler`）：
     /// 这些操作的错误路径在 Citadel 里是
     ///   - `.flatMapErrorThrowing { _ in }`（remove / rename / setstat / symlink / stat / lstat / opendir）
     ///     → **吞错、不回 status → 客户端永久挂起**；
@@ -235,11 +298,21 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
                   withAttributes: SFTPFileAttributes,
                   flags: SFTPOpenFileFlags,
                   context: SSHContext) async throws -> SFTPFileHandle {
+        // 保留命名空间：标记路径**绝不**建 / 清文件（该路径并非真实文件）。
+        // `openFile` 协议上只能回 handle、无法回状态码，故这里回一个「标记句柄」：
+        // 其 `write` 回 `.failure`（不触 provider）、`read` 抛错、写打开的 `close` 也回 `.failure`
+        // （避免 `touch` 静默假成功）。这样既不建文件，又让客户端拿到明确错误
+        // （与「准备阶段错误由 write 暴露」一致）。
+        if isReservedMarkerPath(filePath) {
+            LoginLogger.shared.log("[SFTP] openFile 命中标记命名空间 → 回标记句柄（不建文件）：\(filePath)")
+            return ProviderFileHandle(provider: provider, path: filePath, isMarker: true,
+                                      markerWriteOpen: flags.contains(.write))
+        }
         // 写打开：**一次性**把目标建好/清空（P0-1）。
         // 之后每个分块的 write 用不截断的模式（AFC 用 AfcRw）逐块写，
         // 否则每块 open 都 O_TRUNC ⇒ 多块上传被逐块截断。
         //
-        // ⚠️ 用 `try?` 吞掉准备阶段的错误：Citadel 的 openFile 处理器**没有任何错误处理**，
+        // 注意： 用 `try?` 吞掉准备阶段的错误：Citadel 的 openFile 处理器**没有任何错误处理**，
         //    一旦 openFile 抛错 → 客户端挂起。真正的失败（如父目录不存在）
         //    由后续 write 以状态码暴露（write 已 catch 成状态码，不挂起）。
         if flags.contains(.write) {
@@ -252,7 +325,13 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
     }
 
     func removeFile(_ filePath: String, context: SSHContext) async throws -> SFTPStatusCode {
-        await status("remove \(filePath)") {
+        // 保留命名空间：标记不是真实文件 ⇒ 回 `.noSuchFile`，**不触 provider**
+        // （否则 AfcFileProvider.removeFile 会先 stat，若恰有同名真实文件就把它删掉）。
+        if isReservedMarkerPath(filePath) {
+            LoginLogger.shared.log("[SFTP] removeFile 命中标记命名空间 → 回 .noSuchFile（不删真文件）：\(filePath)")
+            return .noSuchFile
+        }
+        return await status("remove \(filePath)") {
             try await runFileOpWithTimeout(self.provider.operationTimeout, "remove \(filePath)") {
                 try self.provider.removeFile(filePath)
             }
@@ -262,7 +341,12 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
     func createDirectory(_ filePath: String,
                          withAttributes: SFTPFileAttributes,
                          context: SSHContext) async throws -> SFTPStatusCode {
-        await status("mkdir \(filePath)") {
+        // 保留命名空间：不允许用标记名建目录（该名字属于标记，不是用户可用名）。
+        if isReservedMarkerPath(filePath) {
+            LoginLogger.shared.log("[SFTP] mkdir 命中标记命名空间 → 回 .unsupportedOperation：\(filePath)")
+            return .unsupportedOperation
+        }
+        return await status("mkdir \(filePath)") {
             try await runFileOpWithTimeout(self.provider.operationTimeout, "mkdir \(filePath)") {
                 try self.provider.mkdir(filePath)
             }
@@ -270,7 +354,12 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
     }
 
     func removeDirectory(_ filePath: String, context: SSHContext) async throws -> SFTPStatusCode {
-        await status("rmdir \(filePath)") {
+        // 保留命名空间：标记不是真实目录 ⇒ 不触 provider（同样避免误删同名真实目录）。
+        if isReservedMarkerPath(filePath) {
+            LoginLogger.shared.log("[SFTP] rmdir 命中标记命名空间 → 回 .unsupportedOperation：\(filePath)")
+            return .unsupportedOperation
+        }
+        return await status("rmdir \(filePath)") {
             try await runFileOpWithTimeout(self.provider.operationTimeout, "rmdir \(filePath)") {
                 try self.provider.removeDirectory(filePath)
             }
@@ -279,6 +368,10 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
 
     func realPath(for canonicalUrl: String, context: SSHContext) async throws -> [SFTPPathComponent] {
         let norm = (try? SSHPath.normalize(canonicalUrl)) ?? "/"
+        // 保留命名空间：与 `fileAttributes` 自洽，回标记属性而非 `.none`。
+        if isReservedMarkerPath(norm) {
+            return [SFTPPathComponent(filename: norm, longname: norm, attributes: Self.markerAttributes)]
+        }
         let attrs = (try? await runFileOpWithTimeout(provider.operationTimeout, "realpath \(canonicalUrl)") {
             try self.provider.stat(norm)
         }).map(Self.attributes) ?? .none
@@ -299,6 +392,15 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "MMM d HH:mm"
+
+        // 保留命名空间：标记条目是合成目录，背后没有真实目录可列 ⇒ 不触 provider，
+        // 直接回一条可见标记（否则会去 list 一个不存在的路径）。
+        if isReservedMarkerPath(path) {
+            LoginLogger.shared.log("[SFTP] opendir 命中标记命名空间 → 回 LISTING_FAILED 标记：\(path)")
+            return ProviderDirectoryHandle(listings: [
+                Self.markerListing("\(sftpMarkerPrefix)LISTING_FAILED", formatter: formatter)
+            ])
+        }
 
         // 有界列举：最多 stat `sftpMaxDirectoryEntries` 条（AFC 后端会先廉价取名字、
         // 超限即停止逐条 stat ⇒ 单次 opendir 成本封在超时内）。
@@ -325,10 +427,16 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
         }
         if result.total > result.entries.count {
             // 截断：把已取到的前 N 条 + 一条**可见的截断标记**回给客户端。
-            // 标记里带上「已回条数 / 全部条数」，让用户知道被截断了多少。
-            LoginLogger.shared.log("[SFTP] opendir 截断：\(path) 共 \(result.total) 条，超过上限 \(sftpMaxDirectoryEntries)，只回前 \(result.entries.count) 条（已追加截断标记）")
+            //
+            // 这是**设计限制**而非 bug：SFTP v3 的 READDIR **没有 offset**，协议层不支持分页，
+            // 本 provider 的目录句柄一次性回全部（见 `ProviderDirectoryHandle`）⇒ 超过上限的
+            // 尾巴列不出来，只能由客户端**按完整路径直取**（如「转到路径」框）。
+            //
+            // 文案刻意写成**一句人话**（NOTICE / TRUNCATED / SHOWING n OF m / DIRECT_PATH_ONLY），
+            // 而不是 `TRUNCATED_n_OF_m` 这种像文件名的串 —— 让用户一眼看出这是**提示**、不是文件。
+            LoginLogger.shared.log("[SFTP] opendir 截断：\(path) 共 \(result.total) 条，超过上限 \(sftpMaxDirectoryEntries)，只回前 \(result.entries.count) 条（已追加截断标记；v3 无分页，尾巴请按完整路径直取）")
             listings.append(Self.markerListing(
-                "\(sftpMarkerPrefix)TRUNCATED_\(result.entries.count)_OF_\(result.total)",
+                "\(sftpMarkerPrefix)NOTICE_TRUNCATED_SHOWING_\(result.entries.count)_OF_\(result.total)_DIRECT_PATH_ONLY",
                 formatter: formatter
             ))
         }
@@ -356,7 +464,12 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
     }
 
     func rename(oldPath: String, newPath: String, flags: UInt32, context: SSHContext) async throws -> SFTPStatusCode {
-        await status("rename \(oldPath) → \(newPath)") {
+        // 保留命名空间：源或目标末级名命中前缀 ⇒ 拒绝（不触 provider，避免把标记当真实文件搬动）。
+        if isReservedMarkerPath(oldPath) || isReservedMarkerPath(newPath) {
+            LoginLogger.shared.log("[SFTP] rename 命中标记命名空间 → 回 .unsupportedOperation：\(oldPath) → \(newPath)")
+            return .unsupportedOperation
+        }
+        return await status("rename \(oldPath) → \(newPath)") {
             try await runFileOpWithTimeout(self.provider.operationTimeout, "rename \(oldPath) → \(newPath)") {
                 try self.provider.rename(oldPath, to: newPath)
             }
@@ -377,7 +490,7 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
 /// 合并只发生在本句柄的内存里：**不持有隧道、不持有 AFC 连接**，
 /// 每次落盘仍是既有 `AFCService.batch`（遵守 RSD 隧道铁律，绝不并发建隧道）。
 ///
-/// ## ⚠️ 耐久性已知限制（R2，2026-10-05 评估，**刻意保留、如实标注**）
+/// ## 注意： 耐久性已知限制（R2，2026-10-05 评估，**刻意保留、如实标注**）
 /// `write` 返回 `.ok` 只表示「已进入内存缓冲」，**不表示已落盘** —— 最多
 /// `sftpWriteCoalesceBytes`（1 MiB）仍在内存。后果：
 /// - **优雅关闭（客户端发 `CLOSE`）：正确**。`close()` 强制 flush 尾巴，文件完整；
@@ -395,6 +508,17 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
 final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     private let provider: FileProvider
     private let path: String
+    /// 该句柄是否指向**保留命名空间**的标记路径（并非真实文件，见文件头「标记命名空间」）。
+    ///
+    /// 标记句柄：`write` 一律回 `.failure`、`read` 抛错、`readFileAttributes` 回标记属性，
+    /// **绝不触 provider**，因而**绝不建文件**。
+    private let isMarker: Bool
+    /// 该句柄是否由**写打开**产生（仅对标记句柄有意义）。
+    ///
+    /// 用途：写打开的标记句柄在 `close` 时回 `.failure` —— 否则客户端做
+    /// `open(write) → close`（即 `touch`）会拿到「成功」，但文件其实**并未创建**
+    /// （静默假成功，正是本项目要消灭的那类）。
+    private let markerWriteOpen: Bool
 
     /// 保护下面的读窗口 / 写缓冲状态。Citadel 已用 `previousTask` 把同一会话的
     /// read/write/close 串行化，这里的锁只为满足 Swift 6 的 Sendable 检查。
@@ -411,9 +535,11 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     private var writeBufferStart: UInt64 = 0
     private var writeBufferActive = false
 
-    init(provider: FileProvider, path: String) {
+    init(provider: FileProvider, path: String, isMarker: Bool = false, markerWriteOpen: Bool = false) {
         self.provider = provider
         self.path = path
+        self.isMarker = isMarker
+        self.markerWriteOpen = markerWriteOpen
     }
 
     // 必须写 `NIOCore.ByteBuffer`：`vendor/ApplePackage/Supplement/AsyncHTTPClientShim.swift:22`
@@ -422,11 +548,16 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     // （同一个 shim 还导出 `HTTPHeaders` / `HTTPResponseStatus` / `TLSConfiguration` /
     //  `EventLoopGroupProvider` —— 引用 NIO 同名类型时一并限定。）
     func read(at offset: UInt64, length: UInt32) async throws -> NIOCore.ByteBuffer {
+        // 标记句柄：标记是合成目录、并非真实文件 ⇒ 抛错（**不**回空 buffer，
+        // 那会被当作 EOF = 0 字节假成功）。正常客户端不会读目录，故此路径极少触发。
+        if isMarker {
+            throw FileProviderError.notFound("标记条目不是真实文件：\(path)")
+        }
         // 真错误只能抛（Citadel 的 readFile 处理器会关通道 = 断连，不是挂起）。
         // 刻意**不**把「读不到」转成空 buffer —— 那会被 Citadel 当作 EOF，
         // 客户端会生成一个 0 字节文件 = 假成功，比断连更糟。
         //
-        // ⚠️⚠️ 入口校验的对象是**整个访问区间 `[offset, offset + length)`**，
+        // 注意：注意： 入口校验的对象是**整个访问区间 `[offset, offset + length)`**，
         //      **不是 `offset` 单值**。只校验 `offset <= Int64.max` 是**不够**的：
         //      `offset == Int64.max` 能通过单值校验，但其后 helper 里的
         //      `rel + length`（即 `offset - base + length`）与 provider 侧的
@@ -438,7 +569,7 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
         //
         // offset 单值就超出 Int64（> 8 EiB）⇒ 不可能是合法文件位置。
         //
-        // ⚠️ 这里**有意抛错**，**不是**返回空 buffer / 0 字节 —— **不要**改成回空：
+        // 注意： 这里**有意抛错**，**不是**返回空 buffer / 0 字节 —— **不要**改成回空：
         //    越界读返回空会被 Citadel 当作 EOF ⇒ 客户端可能据此生成 0 字节文件 = 假成功
         //    （正是本函数开头禁止的那类静默截断）。抛错会让 Citadel 关闭通道（断连），
         //    这是**刻意**的取舍：宁可断连也不给出「看起来确定的错误答案」。
@@ -460,7 +591,7 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
         // 不这样做的话，`appendToWriteBuffer` 已把读窗口置为失效，读会退回 provider，
         // 而此刻磁盘尚未更新 ⇒ 返回**旧字节**（独立验证报告的反例 1）。
         //
-        // ⚠️ 这里 `flushWriteBuffer` **不 catch**：落盘失败即让 read 抛错（Citadel 关通道）。
+        // 注意： 这里 `flushWriteBuffer` **不 catch**：落盘失败即让 read 抛错（Citadel 关通道）。
         //    与写路径（catch 成状态码）**刻意不一致** —— 读侧宁可断连也**绝不**返回过期字节。
         if let hit = bufferedWriteRead(offset: offset, length: want) {
             return Self.makeBuffer(hit)
@@ -487,6 +618,12 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     }
 
     func write(_ data: NIOCore.ByteBuffer, atOffset offset: UInt64) async throws -> SFTPStatusCode {
+        // 标记句柄：写打开时已判定为标记（见 `openFile`），这里**绝不触 provider**，
+        // 因而不建文件；回明确状态码 `.failure` 让客户端收到错误（不抛错，避免断连）。
+        if isMarker {
+            LoginLogger.shared.log("[SFTP] write 命中标记命名空间 → 回 .failure（不建文件）：\(path)")
+            return .failure
+        }
         // 用 `readableBytesView` 而不是 `getBytes(at:length:)`：后者在新版 NIO 上已不推荐，
         // 而这里要的就是「当前可读区间的全部字节」。
         let payload = Data(data.readableBytesView)
@@ -520,6 +657,9 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     }
 
     func close() async throws -> SFTPStatusCode {
+        // 标记句柄：没有写缓冲可落、不触 provider。写打开回 `.failure`（文件从未创建，
+        // 回成功就是静默假成功）；只读打开回 `.ok`（无副作用）。
+        if isMarker { return markerWriteOpen ? .failure : .ok }
         // 收尾：把不足一个阈值的尾巴落盘（文件大小/内容以此刻为准）。
         //
         // 失败时**重试一次**，但**只对 `.io`**（隧道抖动这类瞬态故障）：落盘是幂等的
@@ -687,6 +827,8 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
     }
 
     func readFileAttributes() async throws -> SFTPFileAttributes {
+        // 标记句柄：回标记自身属性（与 listing / delegate.stat 自洽），不触 provider。
+        if isMarker { return SFTPFileSystemDelegate.markerAttributes }
         let entry = try await runFileOpWithTimeout(provider.operationTimeout, "fstat \(path)") {
             try self.provider.stat(self.path)
         }

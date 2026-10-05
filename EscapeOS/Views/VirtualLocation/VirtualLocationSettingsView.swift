@@ -113,7 +113,7 @@ struct VirtualLocationSettingsView: View {
                 Section("关于") {
                     LabeledContent("版本", value: appVersion)
                     LabeledContent("引擎", value: "idevice DVT 定位模拟")
-                    Text("虚拟定位功能移植自开源项目 locus（MIT）：定位注入通过 idevice FFI 调用 Apple 开发者定位模拟服务.")
+                    Text("移植自开源项目 locus（MIT）.定位注入调用 Apple 开发者定位模拟服务.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

@@ -297,7 +297,7 @@ struct ConfigurationsView: View {
         .alert("监督模式警告", isPresented: $showSupervisionWarning) {
             Button("好", role: .cancel) {}
         } message: {
-            Text("若设备已由 MDM 配置管理，请勿改动此开关.启用后重新启动（Respring）可能出现设置引导页，风险自负.")
+            Text("若设备已由 MDM 配置管理，请勿改动此开关.启用后重新启动可能出现设置引导页，风险自负.")
         }
         .alert("如何开启监督模式", isPresented: $showSuperviseHelp) {
             Button("好", role: .cancel) {}

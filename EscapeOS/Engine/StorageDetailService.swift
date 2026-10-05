@@ -157,7 +157,7 @@ enum StorageDetailService {
 
     /// v0.3.305/308：按 IORegistry **节点名（EntryName）或类名（EntryClass）** 取原始字典 —— 供设备信息补全复用.
     ///
-    /// ⚠️ 两者不可混用（真机实测）：`AppleEmbeddedNVMeController` 只能用 **EntryClass** 查到
+    /// 注意： 两者不可混用（真机实测）：`AppleEmbeddedNVMeController` 只能用 **EntryClass** 查到
     /// （用 EntryName 查返回空 → 硬盘详情/硬盘类型全部读不到，v0.3.305 引入的回归）；
     /// 而设备树的 `product` 节点只能用 **EntryName** 查（它是 IODeviceTree 里的节点名，不是类名）。
     static func queryNode(client: OpaquePointer,

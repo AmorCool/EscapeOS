@@ -232,7 +232,7 @@ enum BatteryHealthService {
 
     /// 按 `EntryName` 取一个 IORegistry 节点 → 字典（节点不存在返回 nil，出错抛错）。
     ///
-    /// ⚠️ `diagnostics_relay_client_ioregistry(client, current_plane, entry_name, entry_class, res)`
+    /// 注意： `diagnostics_relay_client_ioregistry(client, current_plane, entry_name, entry_class, res)`
     /// —— `DeviceEnrichService` 把节点名放第 3 参（entry_name），本文件历史上放第 4 参（entry_class）。
     ///
     /// ▸▸ v0.3.455 修：**两种查法都要试，判据是「有没有拿到节点」，不是「有没有报错」。**
@@ -421,7 +421,7 @@ enum BatteryHealthService {
             //   截断会给 81、四舍五入给 82 —— 差 1 就可能跨过评级档位边界。
             //   （「爱思是否真的四舍五入」仍标**未验证**：实机样本落在两法同结果的区间。）
             //
-            // ⚠️ 必须拆成中间变量：写成一句
+            // 注意： 必须拆成中间变量：写成一句
             //   `min(100, max(0, Int((Double(healthBase) / Double(design)) * 100).rounded()))`
             //   会让 Swift 类型检查器超时（CI 实锤 v0.3.457 构建失败：
             //   `the compiler is unable to type-check this expression in reasonable time`）。

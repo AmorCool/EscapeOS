@@ -4,7 +4,7 @@
 //
 //  v0.3.5xx：宿主能力 `ui.screenshot` 的底层实现 —— 经 RSD 隧道 + DVT 取屏幕截图。
 //
-//  ## ⚠️ 为什么不是 screenshotr（2026-10-05 更正）
+//  ## 注意： 为什么不是 screenshotr（2026-10-05 更正）
 //  原实现走 `screenshotr_*`，**在本设备必现 `ServiceNotFound(21)`**：
 //  本设备的 RSD 服务表里**根本没有 screenshotr 服务**（真机服务表 dump `grep -ic screenshot == 0`；
 //  PC 侧 pymobiledevice3 交叉验证一致；`rsd.rs:171-189` 是纯 HashMap 查表、**无回退**）。

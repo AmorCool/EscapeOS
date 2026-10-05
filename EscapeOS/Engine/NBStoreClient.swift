@@ -257,7 +257,7 @@ enum NBStoreClient {
     ///
     /// 为什么把兜底伪值这条删掉：真机日志（2026-10-02）实证伪值仍在被用 ——
     /// ```
-    /// [11:45:04] ○ 本次请求用历史伪 UDID（非本机真值）：c497e4c8…
+    /// [11:45:04] 本次请求用历史伪 UDID（非本机真值）：c497e4c8…
     /// ```
     /// 后果是**用户白下一个 100MB+ 的包**。删掉的理由是**身份字段不应出现非真值**
     /// （与 sinf 是否匹配无关）。
@@ -273,7 +273,7 @@ enum NBStoreClient {
         if let real = LocalDeviceIdentity.load().udid, !real.isEmpty {
             return real
         }
-        LoginLogger.shared.log("\(logTag) ✕ 拿不到本机真 UDID（RSD 隧道未就绪）—— 不发这一发",
+        LoginLogger.shared.log("\(logTag) [失败] 拿不到本机真 UDID（RSD 隧道未就绪）—— 不发这一发",
                                category: .appStore)
         return nil
     }
@@ -459,7 +459,7 @@ enum NBStoreClient {
               let obj = (try? JSONSerialization.jsonObject(with: dec)) as? [String: Any] else {
             let preview = String(data: data.prefix(200), encoding: .utf8)
                 ?? data.prefix(200).map { String(format: "%02x", $0) }.joined()
-            LoginLogger.shared.log("\(logTag) ✗ 响应解密失败；原始前 200：\(preview)",
+            LoginLogger.shared.log("\(logTag) [失败] 响应解密失败；原始前 200：\(preview)",
                                    category: .appStore)
             throw StoreError.decode
         }
@@ -524,7 +524,7 @@ enum NBStoreClient {
 
         // sinfs 优先取 dataHex（实测字段名），退回 data。
         //
-        // ⚠️ 2026-10-05 真机定案：**这两个字段的编码不同，必须分别处理，不能混在一句 `??` 里。**
+        // 注意： 2026-10-05 真机定案：**这两个字段的编码不同，必须分别处理，不能混在一句 `??` 里。**
         //   · `dataHex` 是 **hex**（2144 字符 = 1072 字节）→ 必须 hex→base64
         //   · `data`    是 **base64**（原样透传）
         //
@@ -545,7 +545,7 @@ enum NBStoreClient {
             if let hex = string(first["dataHex"]) {
                 sinf = hexToBase64(hex)
                 if sinf == nil {
-                    LoginLogger.shared.log("\(logTag) ✕ sinf 的 dataHex 不是合法 hex（\(hex.count) 字符）"
+                    LoginLogger.shared.log("\(logTag) [失败] sinf 的 dataHex 不是合法 hex（\(hex.count) 字符）"
                                            + " —— 这份 sinf 不可用，不会写进包内",
                                            category: .appStore)
                 }
@@ -555,7 +555,7 @@ enum NBStoreClient {
         }
         // v0.3.545：拿不到 sinf 不许静默 —— 加密包缺 sinf 装不上，这条日志是唯一的线索
         if sinf == nil {
-            LoginLogger.shared.log("\(logTag) ○ 直链已取到，但服务端没回 sinf（udid=\(udid ?? "?")）"
+            LoginLogger.shared.log("\(logTag) [提示] 直链已取到，但服务端没回 sinf（udid=\(udid ?? "?")）"
                                    + " —— 若包是加密的，安装会报「缺少 SC_Info/*.sinf」",
                                    category: .appStore)
         }
@@ -828,7 +828,7 @@ enum NBStoreClient {
         }
         // 日志只说结论：命中几条、其中几条**可直接取包**（带直链）
         let ready = apps.filter { ($0.packageURL ?? "").isEmpty == false }.count
-        LoginLogger.shared.log("\(logTag) ✓ 下架搜索「\(kw)」· \(apps.count) 条"
+        LoginLogger.shared.log("\(logTag) [完成] 下架搜索「\(kw)」· \(apps.count) 条"
                                + "（其中 \(ready) 条带包直链）", category: .appStore)
         return apps
     }
@@ -856,7 +856,7 @@ enum NBStoreClient {
     /// 1. `method` 换成 `getOffSaleAppHistoryList`；
     /// 2. 应用 ID 的键名是 **`ipaID`**（不是 `appID`），区域键是 **`countryCode`**（不是 `country`）。
     ///
-    /// ⚠️ **别去找 `nb9527_search_offsale_app`** —— 那个字符串确实存在，
+    /// 注意： **别去找 `nb9527_search_offsale_app`** —— 那个字符串确实存在，
     /// 但它是本地弹窗菜单项的标识符，**服务端没有这个 action**（报告第十二/十三节）。
     /// 「下架列表」在 NB 那边是本地 SQLite 表 `load_list` 缓存的。
     /// 我们的做法：**下架状态由 lookup 结果判定 + 用本方法取包**，不建本地库。
@@ -884,7 +884,7 @@ enum NBStoreClient {
     /// 现在本函数只做一件事：把搜索结果里那份现成的包**翻译成 `NBPackage`**。
     static func offSalePackage(from app: OffSaleApp) -> NBPackage? {
         guard let url = app.packageURL, !url.isEmpty else {
-            LoginLogger.shared.log("\(logTag) ○ 这条下架记录没带包直链（\(app.name)）",
+            LoginLogger.shared.log("\(logTag) [提示] 这条下架记录没带包直链（\(app.name)）",
                                    category: .appStore)
             return nil
         }
@@ -893,7 +893,7 @@ enum NBStoreClient {
         // 包内写不进 sinf → 安装报「缺少 SC_Info/*.sinf」。
         let sinfB64 = app.packageSinf.flatMap { hexToBase64($0) }
         if sinfB64 == nil, (app.packageSinf ?? "").isEmpty == false {
-            LoginLogger.shared.log("\(logTag) ✕ sinf hex 转 base64 失败（\(app.name)）",
+            LoginLogger.shared.log("\(logTag) [失败] sinf hex 转 base64 失败（\(app.name)）",
                                    category: .appStore)
         }
         return NBPackage(ipaURL: normalizeAsset(url),

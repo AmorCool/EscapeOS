@@ -19,7 +19,7 @@ import CoreMedia
 /// - 列表改为**扫描 media 内多个常见位置**的音频文件（iTunes_Control/Ringtones、
 ///   PublicStaging、Downloads、media 根），解决"用户铃声不显示"的问题.
 ///
-/// ⚠️ 硬限制：系统铃声库 `/var/mobile/Library/Ringtones` 在 AFC 根（media）
+/// 注意： 硬限制：系统铃声库 `/var/mobile/Library/Ringtones` 在 AFC 根（media）
 /// 之外，隧道不可达，无法直接读取 —— 只能管理 media 内的铃声文件.
 /// `@unchecked Sendable`：本类**没有可变存储属性**——唯一存储属性是只读的
 /// `afc`（`AFCService` 单例，其隧道访问自身串行化）；所有方法只用局部变量。

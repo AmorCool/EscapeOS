@@ -7,7 +7,7 @@ import Foundation
 /// 主页两个内置模块（`com.escapeos.locache` / `com.escapeos.wifirefresh`，`type: "signal"`）
 /// 与「更多 → 进程管理」执行时会出现 `ServiceNotFound`（错误码 21）。
 ///
-/// ⚠️ **成因尚未定论，本项目写过的两版归因都已作废**：①「设备未挂 DDI」；
+/// 注意： **成因尚未定论，本项目写过的两版归因都已作废**：①「设备未挂 DDI」；
 /// ②「本仓接错了握手（CoreDevice 族只在 CoreDeviceProxy 隧道的第二个 RSD 握手上）」。
 /// **事实（用户实测 + PC 侧交叉验证）**：`ServiceNotFound`(21) 是**设备侧的服务状态问题**，
 /// 不是本 App 的缺陷 —— 该服务偶尔不可用，**重启手机即恢复**；与 DDI、与「用哪条隧道」
@@ -38,7 +38,7 @@ import Foundation
 /// `core_device_proxy_connect(provider)`。**真机在第一步就失败**：
 /// ```
 /// [1] idevice_pairing_file_read
-///   ❌ 失败：code=13 sub_code=0 message=UnexpectedResponse("failed to parse raw pairing file from bytes")
+///   失败 失败：code=13 sub_code=0 message=UnexpectedResponse("failed to parse raw pairing file from bytes")
 /// ```
 /// ⇒ `Documents/pairingFile.plist` 是 **RpPairingFile**（RSD/无线配对格式），
 /// **不是** lockdown 配对文件（旁证：`rp_pairing_file_read` 对它一直正常 —— RP 隧道能建）。
@@ -111,7 +111,7 @@ enum CDProbe {
             // ▸ 唯一入口：整段跑在 AFCService 的串行队列上（RSD 隧道并发铁律）
             lines.append(try AFCService.shared.runExclusively { probeBody() })
         } catch {
-            lines.append("❌ 探针失败：\(error.localizedDescription)")
+            lines.append("[失败] 探针失败：\(error.localizedDescription)")
         }
 
         let text = lines.joined(separator: "\n")
@@ -154,7 +154,7 @@ enum CDProbe {
         guard let bytes else {
             let message = errorCStr.map { String(cString: $0) } ?? "（垫片未给出原因）"
             if let errorCStr { free(errorCStr) }      // 垫片的失败字符串是 malloc 的 ⇒ free
-            out.append("❌ 垫片未能产出报告：\(message)")
+            out.append("[失败] 垫片未能产出报告：\(message)")
             return out.joined(separator: "\n")
         }
         defer { free(bytes) }                          // 报告文本是 malloc 的 ⇒ free（不是 plist_mem_free）
@@ -174,16 +174,16 @@ enum CDProbe {
             "com.apple.coredevice.appservice →",
             "com.apple.coredevice.* 共",
             "▸ 返回进程条数 =",
-            "❌ app_service_connect_rsd",
-            "❌ app_service_list_processes",
-            "❌ rsd_get_services",
-            "❌ rsd_handshake_new",
-            "❌ adapter_connect",
-            "❌ core_device_proxy",
-            "❌ idevice_new_tcp_socket",
-            "❌ rsd_get_service_info",
-            "❌ tunnel_create_rppairing",
-            "❌ rp_pairing_file_read",
+            "[失败] app_service_connect_rsd",
+            "[失败] app_service_list_processes",
+            "[失败] rsd_get_services",
+            "[失败] rsd_handshake_new",
+            "[失败] adapter_connect",
+            "[失败] core_device_proxy",
+            "[失败] idevice_new_tcp_socket",
+            "[失败] rsd_get_service_info",
+            "[失败] tunnel_create_rppairing",
+            "[失败] rp_pairing_file_read",
         ]
         var picked: [String] = []
         for line in text.components(separatedBy: "\n") {

@@ -126,7 +126,7 @@ struct PairingInstallView: View {
                 } header: {
                     Text("支持的应用（\(targets.count)）")
                 } footer: {
-                    Text("配对文件会写入各应用的 Documents 目录（SideStore 等以各自约定的文件名读取）.")
+                    Text("配对文件会写入各应用的 Documents 目录，供 SideStore 等读取.")
                 }
             }
         }

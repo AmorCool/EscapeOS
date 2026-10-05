@@ -20,13 +20,14 @@ import CryptoKit
 //     所以当前不触发；但注入必须排在签名之前（若将来引入整包重签）。
 //
 // 依赖（均已存在，直接复用）：IPAPackageInspector / PackageSINFWriter /
-//   AppStoreInstallService / IPADownloadLibrary / HostCapabilityService / JITEnableService。
+//   AppStoreInstallService / HostCapabilityService / JITEnableService。
 
 // MARK: - 输入 / 输出模型
 
 /// 修补请求。落盘后的 IPA 路径 + 发送端 / 导入侧 manifest 里的关键字段。
 struct RepairRequest {
-    /// `Documents/Imports/<name>.ipa`（导入路径落盘处）
+    /// **原件**路径 `Documents/Imports/<包名>/original.ipa`（导入落盘处；也兼容老平铺 `Imports/<name>.ipa`）。
+    /// 修补**只读**它，产物另落同目录的 `repaired.ipa`（见 `repairedOutputPath(forOriginal:)`）。
     let ipaPath: String
     let manifest: RepairManifest
     /// 安装完成后是否做「实装实跑」自检（默认 true）
@@ -102,12 +103,17 @@ struct RepairResult {
     /// 各步骤原始细节（日志 / 字节数 / 错误原文），供「详情」折叠区展示
     let details: [String]
     let sinf: SinfInfo?
+    /// 修补产物路径（加密包 = 同目录 `repaired.ipa`；明文包无需修补 = 原件）。
+    /// **绝不指向被就地改写的原件** —— 原件始终是 `req.ipaPath` 指向的那份。
     let repairedIPAPath: String?
+    /// 修补产物的 sha256（与 `ImportRecord.sha256`（原件指纹）**分开**，不覆盖它）。
+    let repairedIPASha256: String?
 
     static func failure(_ stage: Stage, code: String, message: String,
                         suggestion: String, details: [String] = []) -> RepairResult {
         RepairResult(status: .failed, stage: stage, code: code, message: message,
-                     suggestion: suggestion, details: details, sinf: nil, repairedIPAPath: nil)
+                     suggestion: suggestion, details: details, sinf: nil,
+                     repairedIPAPath: nil, repairedIPASha256: nil)
     }
 }
 
@@ -118,11 +124,15 @@ enum RepairService {
 
     /// 把共享来的 IPA 修补成「本机能装的包」。
     ///
-    /// 全程不吞异常、不静默：每一步都写 `LoginLogger`（category: `.appStore`）并回报 `RepairResult`。
+    /// 全程不吞异常、不静默：每一步都写 `LoginLogger`（category: `.shareConvert`）并回报 `RepairResult`。
+    ///
+    /// **原件只读、产物另存**：`req.ipaPath`（原件 `original.ipa`）全程不被就地改写；
+    /// 加密包把 sinf 注入**同目录的 `repaired.ipa`** 再安装。这样「修补后取消安装」也不会破坏原件，
+    /// 且再次修补仍能过 sha256 完整性校验（E2 不再误报）。
     ///
     /// - Parameter confirmInstall: 「安装前确认」钩子（三步确认的第三步）。
-    ///   在**注入 sinf 之后、调用 installd 之前** `await`；返回 `false` 表示用户取消安装，
-    ///   此时函数返回 `.skipped`（包已被注入，但**不安装**）。为 `nil` 时不做安装前确认。
+    ///   在**写出修补产物之后、调用 installd 之前** `await`；返回 `false` 表示用户取消安装，
+    ///   此时函数返回 `.skipped`（产物已生成，但**不安装**；原件未动）。为 `nil` 时不做安装前确认。
     static func repair(_ req: RepairRequest,
                        progress: (@Sendable (Double, String) -> Void)? = nil,
                        onLog: (@Sendable (String) -> Void)? = nil,
@@ -132,7 +142,7 @@ enum RepairService {
         func note(_ s: String) {
             log.append(s)
             onLog?(s)
-            LoginLogger.shared.log("[共享修补] \(s)", category: .appStore)
+            LoginLogger.shared.log("[共享修补] \(s)", category: .shareConvert)
         }
 
         // ── (1) 落盘确认 ─────────────────────────────────────────────
@@ -234,11 +244,29 @@ enum RepairService {
         note("sinf 自检通过：\(sinfData.count) 字节 · \(parsed.format)"
              + (parsed.song.map { " · song=\($0)" } ?? ""))
 
-        // ── (7) 替换 sinf（包内已有路径全替换 + 补写主路径）──────────
-        // 复用 PackageSINFWriter.injectAllPaths（一次整包重写批量替换 + 写后逐条复读）。
+        // ── (7) 落产物 + 注入 sinf（**原件只读**）────────────────────
+        // 先把原件整包复制成同目录的 repaired.ipa，再对**产物**注入。
+        // 关键：绝不就地改写 original.ipa —— 否则「修补后取消安装」会破坏原件、无副本可退，
+        // 且再次修补会因 sha256 与台账不符而误报 E2「安装包不完整」。
+        let outputPath = repairedOutputPath(forOriginal: req.ipaPath)
+        do {
+            if FileManager.default.fileExists(atPath: outputPath) {
+                try FileManager.default.removeItem(atPath: outputPath)
+            }
+            try FileManager.default.copyItem(atPath: req.ipaPath, toPath: outputPath)
+        } catch {
+            return .failure(.injectSinf, code: "E6",
+                message: "生成修补产物时失败.",
+                suggestion: "确认存储空间充足后重试；持续失败请反馈.",
+                details: log + ["\(error)"])
+        }
+        note("已从原件复制出修补产物：\((outputPath as NSString).lastPathComponent)")
+
+        // 复用 PackageSINFWriter.injectAllPaths（一次整包重写批量替换 + 写后逐条复读），
+        // 但注入对象是**产物**，不是原件。
         let written: [String]
         do {
-            written = try PackageSINFWriter.injectAllPaths(sinf: sinfData, ipaPath: req.ipaPath)
+            written = try PackageSINFWriter.injectAllPaths(sinf: sinfData, ipaPath: outputPath)
         } catch {
             return .failure(.injectSinf, code: "E6",
                 message: "把解密授权写进安装包时失败.",
@@ -247,21 +275,26 @@ enum RepairService {
         }
         note("已写入 \(written.count) 条 sinf 路径：\(written.joined(separator: ", "))")
 
+        // 修补产物指纹：**另存**，供调用方回填 `ImportRecord.repairedSha256`（不覆盖原件指纹）。
+        let repairedSha = sha256Hex(ofFileAt: outputPath)
+
         // ── (8) 加密包：不重签（保留 Apple 原始签名，走 Customer 通道）──
         // 依据：installWithSINF 用 PackageType=Customer + ApplicationSINF，不校验 _CodeSignature。
         // 顺序铁律（若将来引入整包重签）：先换 sinf、后签名 —— 见文件头注释。
 
         // ── (9) 安装（三步确认的第三步：安装前确认）────────────────────
+        // 取消安装：产物已生成（原件**未动**），返回 .skipped 供稍后重试。
         if let confirmInstall, !(await confirmInstall()) {
-            note("用户在安装前取消")
+            note("用户在安装前取消（原件未动，产物已保留）")
             return RepairResult(status: .skipped, stage: .install, code: nil,
                 message: "已取消安装（安装包已修补，可稍后重试）.",
                 suggestion: "如需继续，请重新点一次安装.",
-                details: log, sinf: nil, repairedIPAPath: req.ipaPath)
+                details: log, sinf: nil,
+                repairedIPAPath: outputPath, repairedIPASha256: repairedSha)
         }
         do {
             try await AppStoreInstallService.installLocalIPA(
-                req.ipaPath,
+                outputPath,
                 progress: { p in progress?(p, "安装中") },
                 onLog: { note($0) })
         } catch {
@@ -280,15 +313,14 @@ enum RepairService {
         }
         note("安装完成")
 
-        // ── (10) 台账（「重装不用重下」）─────────────────────────────
-        IPADownloadLibrary.shared.record(
-            fileURL: URL(fileURLWithPath: req.ipaPath),
-            displayName: ins.displayName, bundleId: ins.bundleIdentifier,
-            version: ins.bundleVersion, iconURL: nil,
-            source: "共享", sourceURL: nil,
-            storeItemId: req.manifest.storeItemId,
-            sinfBase64: sinfData.base64EncodedString())
-        note("已记台账（source=共享，含包内那份 sinf）")
+        // ── (10) 台账：**不写下载台账** ─────────────────────────────
+        // 共享包的生命周期在 `Documents/Imports/`，不在 `AppStoreDownloads/`：
+        // 状态由 `ImportedPackageList`（扫磁盘 repaired.ipa）承载，修补产物指纹由调用方
+        // 回填 `ImportRecord.repairedSha256`（见 `ImportView.runRepair`）。
+        // 下载台账（`IPADownloadLibrary`）的契约是「文件在 AppStoreDownloads、fileName 即磁盘文件名」，
+        // 下载管理又用 `path(for:)` 去该目录取包安装 —— 共享包两样都不满足，写进去只会被
+        // 下一次 `items()` 当场剔除（假成功），故这里不写。
+        note("修补记录由导入清单承载，不写下载台账")
 
         // ── (11) 实装实跑、逐层定位阻断 ─────────────────────────────
         // 安装返回成功 ≠ 能跑（形态 B：装得上、启动崩）。
@@ -325,13 +357,13 @@ enum RepairService {
             sinf: SinfInfo(length: sinfData.count, format: parsed.format,
                            song: parsed.song, accountName: parsed.name,
                            sha256: sha256Hex(of: sinfData), writtenPaths: written),
-            repairedIPAPath: req.ipaPath)
+            repairedIPAPath: outputPath, repairedIPASha256: repairedSha)
     }
 
     // MARK: 明文包分支
 
     /// cryptid=0：跳过 sinf，直接安装。
-    /// ⚠️ 现状：设备内没有「整包 zsign」（`ZSign/zsign.mm` 只逐 Mach-O ad-hoc，不产
+    /// 注意： 现状：设备内没有「整包 zsign」（`ZSign/zsign.mm` 只逐 Mach-O ad-hoc，不产
     /// `_CodeSignature/CodeResources`）⇒ 需要重签的明文包这条分支**当前落不实**。
     /// 顺序铁律（若未来落地）：先换 sinf、后签名。
     ///
@@ -344,12 +376,14 @@ enum RepairService {
                                             progress: (@Sendable (Double, String) -> Void)?,
                                             confirmInstall: (@MainActor () async -> Bool)?) async -> RepairResult {
         // 安装前确认（与加密包分支一致）：用户取消 → 不安装，返回 .skipped。
+        // 明文包无需修补，原件即产物，**不存在就地改写**。
         if let confirmInstall, !(await confirmInstall()) {
             note("用户在安装前取消")
             return RepairResult(status: .skipped, stage: .install, code: nil,
                 message: "已取消安装（明文包无需修补，可稍后重试）.",
                 suggestion: "如需继续，请重新点一次安装.",
-                details: log, sinf: nil, repairedIPAPath: req.ipaPath)
+                details: log, sinf: nil,
+                repairedIPAPath: req.ipaPath, repairedIPASha256: nil)
         }
         do {
             try await AppStoreInstallService.installLocalIPA(
@@ -362,12 +396,9 @@ enum RepairService {
                 suggestion: "重试；若持续失败请反馈日志.",
                 details: log + [error.localizedDescription])
         }
-        IPADownloadLibrary.shared.record(
-            fileURL: URL(fileURLWithPath: req.ipaPath),
-            displayName: ins.displayName, bundleId: ins.bundleIdentifier,
-            version: ins.bundleVersion, iconURL: nil,
-            source: "共享", storeItemId: req.manifest.storeItemId, sinfBase64: nil)
-        note("已记台账（source=共享）")
+        // 不写下载台账：共享包在 `Imports/`，不在 `AppStoreDownloads/`，写进去会被下一次
+        // `items()` 当场剔除（假成功）。状态由导入清单承载（见加密包分支同处注释）。
+        note("修补记录由导入清单承载，不写下载台账")
 
         // 实装实跑自检（与加密包分支一致）：安装返回成功 ≠ 能跑。
         var launchStage: RepairResult.Stage = .ledger
@@ -398,10 +429,22 @@ enum RepairService {
 
         return RepairResult(status: .ok, stage: launchStage, code: launchCode,
             message: launchMsg, suggestion: launchSuggest,
-            details: log, sinf: nil, repairedIPAPath: req.ipaPath)
+            details: log, sinf: nil,
+            repairedIPAPath: req.ipaPath, repairedIPASha256: nil)
     }
 
     // MARK: 小工具
+
+    /// 修补产物落点：与**原件同目录**、固定名 `repaired.ipa`。
+    ///
+    ///   · 新落点：`Imports/<包名>/original.ipa` ⇒ `Imports/<包名>/repaired.ipa`
+    ///   · 老平铺：`Imports/<name>.ipa`         ⇒ `Imports/repaired.ipa`
+    ///
+    /// 无论哪种形态都**绝不覆盖原件**（同目录不同名）。
+    static func repairedOutputPath(forOriginal ipaPath: String) -> String {
+        let dir = (ipaPath as NSString).deletingLastPathComponent
+        return (dir as NSString).appendingPathComponent("repaired.ipa")
+    }
 
     /// trackId 低 32 位（用于 `song` 校验）；manifest 没有就兜底读包内 `iTunesMetadata.itemId`。
     private static func trackIdLow32(req: RepairRequest,
@@ -466,7 +509,7 @@ enum RepairService {
             }
         } catch {
             LoginLogger.shared.log("[共享] 读取失败，已中止 sha256（不返回部分哈希）：\(error)",
-                                   category: .appStore)
+                                   category: .shareConvert)
             return nil
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()

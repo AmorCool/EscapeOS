@@ -54,6 +54,7 @@ struct IPADownloadManagerView: View {
                                 set: { if isEditing { selection = $0 } })) {
             summarySection
             mergedSection
+            labelGuideSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle(listTitle)
@@ -624,6 +625,68 @@ struct IPADownloadManagerView: View {
     private func kindTint(_ item: IPADownloadItem) -> Color {
         guard item.isEncrypted == true else { return .secondary }
         return (item.hasSINF != true || item.sinfStructurallyValid == false) ? .orange : .secondary
+    }
+
+    // MARK: - 标签说明
+
+    /// v0.3.571：**标签说明** —— 补上「标签口径」的界面说明缺口（用户需求 #6 / #7 / #8）。
+    ///
+    /// 用户看不懂三件事：「明文包」怎么变少了、「带 sinf（未校验）」是什么、「本地」是什么。
+    /// 这三件都只是**说明没写**，不是判定错 —— 所以这里**一个字都不动判定逻辑**，
+    /// 尤其「未校验」绝不能改成「带 sinf」（那会让标签给出的确定性超过实际掌握）。
+    /// 放在列表**下方**（而不是给每行加长按）：行点击已被「操作面板」占用，图例更省事也更全.
+    private var labelGuideSection: some View {
+        Section {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("加密状态")
+                        .font(.caption.weight(.semibold))
+                    guideRow("明文包", .secondary, "包本身没加密，直接安装即可.")
+                    guideRow("加密包 · 带 sinf", .secondary, "已校验：包内 sinf 结构完整，可直接安装.")
+                    guideRow("加密包 · 带 sinf（未校验）", .secondary, "只是「不知道」，不是有问题：sinf 在，但我们没校验过它的结构（旧记录没这一位，或格式不认识）.")
+                    guideRow("加密包 · 缺 sinf", .orange, "包内确实没有 sinf，装不上.")
+                    guideRow("加密包 · sinf 异常", .orange, "有 sinf，但结构写坏了，同样装不上.与「缺 sinf」是两回事：一个要补 sinf，一个要重下.")
+
+                    Divider()
+
+                    Text("来源")
+                        .font(.caption.weight(.semibold))
+                    guideRow("Apple ID", .secondary, "从 App Store 商店下载.")
+                    guideRow("本地", .secondary, "手动放进下载目录、或从文件导入的包，不是商店下载.")
+                    guideRow("爱思免登录", .secondary, "爱思源下载，服务端已签名.")
+                    guideRow("NB免登录", .secondary, "NB 源下载.")
+                    guideRow("牛蛙免登录", .secondary, "牛蛙源下载.")
+
+                    Divider()
+
+                    Text("为什么标签变了")
+                        .font(.caption.weight(.semibold))
+                    Text("v0.3.570 起，加密状态从两态改为三态：以前「读不出加密状态」会被当成「未加密」，误标成「明文包」.现在只有确定是明文才显示「明文包」，其余按真实状态显示，所以「明文包」会比以前少.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 4)
+            } label: {
+                Text("标签说明")
+                    .font(.subheadline)
+            }
+        } footer: {
+            Text("点开看每种标签的含义.")
+        }
+    }
+
+    /// 图例的一行：标签原文按列表里的着色，下面一句人话解释.
+    private func guideRow(_ label: String, _ tint: Color, _ detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: - 数据与安装

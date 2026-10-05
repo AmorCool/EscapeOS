@@ -200,7 +200,7 @@ enum IconCleanupService {
 
     /// 建隧道 + 连主屏服务。`body` 拿到客户端句柄，返回前自动释放.
     ///
-    /// ⚠️ 整段必须在**后台线程**跑（建隧道是秒级 IO）。
+    /// 注意： 整段必须在**后台线程**跑（建隧道是秒级 IO）。
     private static func withClient<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         var tunnel = try makeTunnel(hostname: "EscapeSpaceIconClean")
         defer { tunnel.free() }

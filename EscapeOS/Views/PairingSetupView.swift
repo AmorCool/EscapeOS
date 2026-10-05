@@ -350,7 +350,7 @@ struct PairingSetupView: View {
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                         if let code = wirelessBroadcastErrorCode {
-                            Text("广播未确认（Bonjour code \(code)）")
+                            Text("广播未确认（错误码 \(code)）")
                                 .font(.caption)
                                 .foregroundColor(.orange)
                                 .multilineTextAlignment(.center)

@@ -7,7 +7,7 @@ import SwiftUI
 ///   （diagnostics relay / lockdownd），需要已连接隧道.
 /// - 所有危险操作均弹确认框；恢复模式额外强调风险.
 ///
-/// ⚠️ 已知坑（v0.2.104 修复）：同一视图链上不要挂两个 `.alert(item:)`——
+/// 注意： 已知坑（v0.2.104 修复）：同一视图链上不要挂两个 `.alert(item:)`——
 /// 后注册的会覆盖先注册的，导致确认弹窗不弹、点击无反应.这里统一走
 /// 单个 `alertItem` 通道（确认 / 结果两种形态）.
 struct DeviceControlView: View {

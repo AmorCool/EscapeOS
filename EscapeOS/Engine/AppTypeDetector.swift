@@ -173,7 +173,7 @@ enum AppTypeDetector {
 
         // 5. 无 profile、无 iTunesMetadata → 不是 App Store 下发的包。
         //
-        //    ⚠️ v0.3.367：**只有拿到「确实没有 FairPlay 加密」这个正面证据才判越狱版**。
+        //    注意： v0.3.367：**只有拿到「确实没有 FairPlay 加密」这个正面证据才判越狱版**。
         //    已装应用读不到包内 `SC_Info/*.sinf`（AFC 只到媒体域）→ `isFairPlayEncrypted` 是
         //    **nil = 未知**，而「未知」绝不能被当成「破解」。
         //    v0.3.364 就是在这里把「未知」当成了越狱版，加上应用板块没传 `hasITunesMetadata`，

@@ -129,14 +129,14 @@ struct DeviceSlimView: View {
             Button("删除选中的 \(selectedItems.count) 项", role: .destructive) { startClean() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将永久删除选中的缓存与临时文件（预计释放 \(DeviceSlimService.formatBytes(selectedBytes))）。")
+            Text("将永久删除选中的缓存与临时文件，预计释放 \(DeviceSlimService.formatBytes(selectedBytes)).")
         }
         .confirmationDialog("确定重装选中的 \(reinstallTargets.count) 款应用？",
                             isPresented: $confirmReinstall, titleVisibility: .visible) {
             Button("卸载并重装", role: .destructive) { startReinstall() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("卸载重装会清除这些应用的文稿与数据（约 \(DeviceSlimService.formatBytes(reinstallDocBytes))），无法恢复。")
+            Text("卸载重装会清除这些应用的文稿与数据，约 \(DeviceSlimService.formatBytes(reinstallDocBytes))，且无法恢复.")
         }
         .toastHost()
         .task { await bootstrap() }

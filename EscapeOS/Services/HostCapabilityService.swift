@@ -116,7 +116,7 @@ enum HostCapabilityService {
 
     /// 本机支持的宿主能力清单.
     ///
-    /// ⚠️ `EscapeModule.missingCapabilities` 依赖这个符号（`static let` / `[String]`
+    /// 注意： `EscapeModule.missingCapabilities` 依赖这个符号（`static let` / `[String]`
     /// 的签名不能改）；模块仓库的 `validate.py` 里 `KNOWN_CAPABILITIES` 也对应这一份，
     /// **两边必须同步改**.
     static let capabilityList: [String] = [
@@ -1154,7 +1154,7 @@ enum HostCapabilityService {
     /// 中央目录驱动的结构校验：每个条目在其 `localHeaderOffset` 处都应能找到
     /// `PK\x03\x04` 本地头签名。
     ///
-    /// ⚠️ 这**不是** `zip.testzip()` 的等价物，也**不是**完整校验 ——
+    /// 注意： 这**不是** `zip.testzip()` 的等价物，也**不是**完整校验 ——
     /// 它只看「中央目录 ↔ 本地头」是否对齐，**看不到** local header 与真实数据的
     /// 边界错位、也不逐条验 CRC。所以它通过**不等于**包是好的。
     private static func verifyLocalHeaders(path: String, entries: [[String: Any]]) -> Bool {
@@ -1494,7 +1494,7 @@ enum HostCapabilityService {
 
     /// 疑似「hex 文本被当 base64 解码」的启发式判据。
     ///
-    /// ⚠️ **该阈值尚未用真机样本校准**（实现时设备 SSH 不可用，见交付报告）：
+    /// 注意： **该阈值尚未用真机样本校准**（实现时设备 SSH 不可用，见交付报告）：
     /// 判据 = 长度恰为某已知合法 sinf 长度（1032/1048/1056/1072）× 1.5，
     /// 且把内容 base64 再编码后**全是 hex 字符**。
     /// 若日后拿到真机样本发现误报/漏报，可改成「按已知合法长度表比对」。

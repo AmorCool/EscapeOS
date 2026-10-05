@@ -168,7 +168,7 @@ final class DeveloperCertStore: ObservableObject {
             // 5) 同步拿到内容则直接用；异步受理（空内容）则轮询证书列表（最多 30 秒）
             var newCert: DeveloperCertificate?
             if !certDER.isEmpty {
-                LoginLogger.shared.log("✓ 提交响应即含证书内容（同步签发）")
+                LoginLogger.shared.log("[完成] 提交响应即含证书内容（同步签发）")
             } else {
                 for attempt in 1...10 {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
@@ -180,10 +180,10 @@ final class DeveloperCertStore: ObservableObject {
                         guard let content = cand.certContent else { continue }
                         if Self.checkPair(certPem: Self.derToPEM(content), keyPem: pendingKeyPem) {
                             newCert = cand
-                            LoginLogger.shared.log("✓ 新证书已签发且与本地私钥配对（第 \(attempt) 次轮询，serial=\(cand.serialNumber)）")
+                            LoginLogger.shared.log("[完成] 新证书已签发且与本地私钥配对（第 \(attempt) 次轮询，serial=\(cand.serialNumber)）")
                             break
                         }
-                        LoginLogger.shared.log("⚠ 跳过不配对的新证书 serial=\(cand.serialNumber)（历史提交的延迟签发）")
+                        LoginLogger.shared.log("[注意] 跳过不配对的新证书 serial=\(cand.serialNumber)（历史提交的延迟签发）")
                     }
                     if newCert != nil { break }
                 }
@@ -250,7 +250,7 @@ final class DeveloperCertStore: ObservableObject {
         guard hasCert,
               let certData = try? Data(contentsOf: certURL),
               let keyData = try? Data(contentsOf: keyURL) else {
-            LoginLogger.shared.log("❌ signDylib：cert/key 文件读取失败")
+            LoginLogger.shared.log("[失败] signDylib：cert/key 文件读取失败")
             return false
         }
         var effectiveBundleId = bundleId
@@ -262,7 +262,7 @@ final class DeveloperCertStore: ObservableObject {
             if rc == 0 {
                 let ident = String(cString: buf)
                 if !ident.isEmpty, ident != bundleId {
-                    LoginLogger.shared.log("✓ 签名 identifier 采用主程序 ident（\(ident))")
+                    LoginLogger.shared.log("[完成] 签名 identifier 采用主程序 ident（\(ident))")
                     effectiveBundleId = ident
                 }
             }
@@ -284,9 +284,9 @@ final class DeveloperCertStore: ObservableObject {
             let ms = String(cString: mainSerial)
             let cs = String(cString: curSerial)
             if ms != cs {
-                LoginLogger.shared.log("⚠ 证书不同源：主程序 serial=\(ms.suffix(12)) 当前=\(cs.suffix(12))——iOS 27 beta 疑似要求同证书. 请在「证书管理 → 导入 p12」导入主程序同款证书")
+                LoginLogger.shared.log("[注意] 证书不同源：主程序 serial=\(ms.suffix(12)) 当前=\(cs.suffix(12))——iOS 27 beta 疑似要求同证书. 请在「证书管理 → 导入 p12」导入主程序同款证书")
             } else {
-                LoginLogger.shared.log("✓ 证书同源 serial=\(cs.suffix(12))")
+                LoginLogger.shared.log("[完成] 证书同源 serial=\(cs.suffix(12))")
             }
         }
         // v0.3.140 前置配对校验：历史错位（证书对应旧私钥）在此给出明确指引，不让 zsign 模糊失败
@@ -298,7 +298,7 @@ final class DeveloperCertStore: ObservableObject {
             }
         }
         if paired != 1 {
-            LoginLogger.shared.log("❌ signDylib：证书与私钥不配对（历史创建错位遗留）. 请到「更多 → 证书管理」吊销并重新创建证书")
+            LoginLogger.shared.log("[失败] signDylib：证书与私钥不配对（历史创建错位遗留）. 请到「更多 → 证书管理」吊销并重新创建证书")
             return false
         }
         let dbg = debugLog?.path
@@ -332,7 +332,7 @@ final class DeveloperCertStore: ObservableObject {
                 try FileManager.default.removeItem(at: keyURL)
             }
             hasCert = false
-            LoginLogger.shared.log("✓ 已删除本地签名证书（Apple 侧未吊销）")
+            LoginLogger.shared.log("[完成] 已删除本地签名证书（Apple 侧未吊销）")
             return (true, "已删除本地签名证书（Apple 侧未吊销. 模块签名不可用，重新导入 p12 或登录创建后恢复）")
         } catch {
             return (false, "删除失败: \(error.localizedDescription)")
@@ -385,7 +385,7 @@ final class DeveloperCertStore: ObservableObject {
             try keyPem.write(to: keyURL, options: .atomic)
             try certPem.write(to: certURL, options: .atomic)
             hasCert = true
-            LoginLogger.shared.log("✓ p12 导入成功 serial=\(serialHex.suffix(12))（重启模块后生效）")
+            LoginLogger.shared.log("[完成] p12 导入成功 serial=\(serialHex.suffix(12))（重启模块后生效）")
             return (true, "导入成功 serial=\(serialHex.suffix(12))（重启模块后生效）")
         } catch {
             return (false, "落盘失败: \(error.localizedDescription)")
@@ -407,7 +407,7 @@ final class DeveloperCertStore: ObservableObject {
     func revokeAllForModuleLoading(team: DeveloperTeam,
                                    session: AppleAPISession) async -> (revoked: Int, blocked: Bool) {
         guard autoRevokeEnabled else {
-            LoginLogger.shared.log("⚠ 未设置自动撤销证书，请手动撤销（更多 → 证书管理）")
+            LoginLogger.shared.log("[注意] 未设置自动撤销证书，请手动撤销（更多 → 证书管理）")
             return (0, true)
         }
         let whitelist = revokeWhitelist.trimmingCharacters(in: .whitespaces)
@@ -418,26 +418,26 @@ final class DeveloperCertStore: ObservableObject {
                 let name = cert.name
                 let lowered = name.lowercased()
                 if !whitelist.isEmpty, name.contains(whitelist) {
-                    LoginLogger.shared.log("⏭ 白名单放行：\(name)")
+                    LoginLogger.shared.log("[跳过] 白名单放行：\(name)")
                     continue
                 }
                 if lowered.contains("sidestore") || lowered.contains("altstore") {
-                    LoginLogger.shared.log("⏭ SideStore/AltStore 标识放行：\(name)")
+                    LoginLogger.shared.log("[跳过] SideStore/AltStore 标识放行：\(name)")
                     continue
                 }
                 do {
                     try await AppleDeveloperAPI.revokeCertificate(
                         team: team, serialNumber: cert.serialNumber, session: session)
-                    LoginLogger.shared.log("✓ 已吊销旧证书：\(name)（serial=\(cert.serialNumber)）")
+                    LoginLogger.shared.log("[完成] 已吊销旧证书：\(name)（serial=\(cert.serialNumber)）")
                     revoked += 1
                 } catch {
-                    LoginLogger.shared.log("❌ 吊销失败：\(name)——\((error as NSError).localizedDescription)")
+                    LoginLogger.shared.log("[失败] 吊销失败：\(name)——\((error as NSError).localizedDescription)")
                 }
             }
-            LoginLogger.shared.log("✓ 统一撤销完成：吊销 \(revoked)/\(certs.count) 张（白名单与 SideStore/AltStore 放行不计）")
+            LoginLogger.shared.log("[完成] 统一撤销完成：吊销 \(revoked)/\(certs.count) 张（白名单与 SideStore/AltStore 放行不计）")
             return (revoked, false)
         } catch {
-            LoginLogger.shared.log("❌ 统一撤销失败（获取证书列表）：\((error as NSError).localizedDescription)")
+            LoginLogger.shared.log("[失败] 统一撤销失败（获取证书列表）：\((error as NSError).localizedDescription)")
             return (0, false)
         }
     }

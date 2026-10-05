@@ -105,7 +105,7 @@ enum DeviceCatalog {
 
     /// v0.3.305：机身颜色代码（lockdown `DeviceColor`，设备侧只给数字）→ 中文名.
     ///
-    /// ⚠️ **只收录有真机/爱思对照实证的映射**：iPhone15,4（`DeviceColor = 1`）爱思显示「黑色」。
+    /// 注意： **只收录有真机/爱思对照实证的映射**：iPhone15,4（`DeviceColor = 1`）爱思显示「黑色」。
     /// 其余代码（2/3/4…）没有实证，一律返回 nil 由 UI 显示原始代码，**不编造颜色表**
     /// （爱思的颜色名来自它自己的服务端，本地资源里没有该表）。
     static let deviceColors: [String: String] = [

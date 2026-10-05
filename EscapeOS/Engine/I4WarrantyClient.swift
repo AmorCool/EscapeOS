@@ -32,11 +32,11 @@ import Security
 ///    避免拼出服务端不认的报文）.
 /// 5. 公钥与 `getProdate` **完全同一把** —— PC 端 `QCommonPlugins.dll` 里
 ///    `createPKeyDevValidation(false)` 返回的 1024-bit 公钥.
-///    ⚠️ 那个函数有**两把** key，`true` 是另一把，别取错.
+///    注意： 那个函数有**两把** key，`true` 是另一把，别取错.
 ///    这里**内置**公钥，**不要**改成运行时去读 DLL / 反查偏移（偏移随爱思版本漂移）.
 ///
 /// ## 隐私与合规（重要）
-/// ⚠️ 调用本接口会把设备的**整机序列号（`SerialNumber`）发送到爱思（第三方，非 Apple）
+/// 注意： 调用本接口会把设备的**整机序列号（`SerialNumber`）发送到爱思（第三方，非 Apple）
 /// 的服务器 `app4.i4.cn`**. 这属于设备标识信息外发.
 /// 本客户端**只调用只读查询接口**，**绝不**调用 `putSerialWarrantyTime.xhtml`（写库接口）.
 ///
@@ -175,7 +175,7 @@ enum I4WarrantyClient {
 
     /// 取 `data.warrantyTime`. 失败/异常响应（`data` 为空串或非字典）返回 nil.
     ///
-    /// ⚠️ 只做 trim + 非空判断，**不解析日期、不重新格式化**：
+    /// 注意： 只做 trim + 非空判断，**不解析日期、不重新格式化**：
     /// 未过保的格式本机没有设备可验（只有一台已过保真机），原样透传才能保证与爱思显示逐字一致.
     private static func parseWarrantyTime(_ data: Data) -> String? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

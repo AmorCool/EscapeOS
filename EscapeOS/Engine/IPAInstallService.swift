@@ -192,9 +192,9 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
             let data = try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
             try data.write(to: target)
             let shortID = identifier.base64EncodedString().prefix(8)
-            LoginLogger.shared.log("✓ 已同步 Anisette 机器标识给 IPA 侧载（id=\(shortID)… 服务器=\(provider.currentServer)）")
+            LoginLogger.shared.log("[完成] 已同步 Anisette 机器标识给 IPA 侧载（id=\(shortID)… 服务器=\(provider.currentServer)）")
         } catch {
-            LoginLogger.shared.log("⚠ 同步 Anisette 机器标识失败：\(error.localizedDescription)")
+            LoginLogger.shared.log("[注意] 同步 Anisette 机器标识失败：\(error.localizedDescription)")
         }
     }
 
@@ -240,11 +240,11 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
     private func verifySharedAnisetteState() {
         let target = URL(fileURLWithPath: storageDir).appendingPathComponent("anisette_state")
         guard let data = try? Data(contentsOf: target) else {
-            LoginLogger.shared.log("⚠ 机器标识校验：IPA 侧载未落盘 anisette_state")
+            LoginLogger.shared.log("[注意] 机器标识校验：IPA 侧载未落盘 anisette_state")
             return
         }
         guard let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
-            LoginLogger.shared.log("⚠ 机器标识校验：anisette_state 无法解析")
+            LoginLogger.shared.log("[注意] 机器标识校验：anisette_state 无法解析")
             return
         }
         let rustIDData: Data? = {
@@ -256,17 +256,17 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
             return nil
         }()
         guard let rustID = rustIDData else {
-            LoginLogger.shared.log("⚠ 机器标识校验：anisette_state 缺少 keychain_identifier（键：\(dict.keys.sorted().joined(separator: ","))）")
+            LoginLogger.shared.log("[注意] 机器标识校验：anisette_state 缺少 keychain_identifier（键：\(dict.keys.sorted().joined(separator: ","))）")
             return
         }
         guard let swiftID = AnisetteProvider.shared.sharedMachineIdentifier else {
-            LoginLogger.shared.log("⚠ 机器标识校验：Swift 侧暂无 identifier（Rust=\(rustID.base64EncodedString().prefix(8))…）")
+            LoginLogger.shared.log("[注意] 机器标识校验：Swift 侧暂无 identifier（Rust=\(rustID.base64EncodedString().prefix(8))…）")
             return
         }
         if rustID == swiftID {
-            LoginLogger.shared.log("✓ 机器标识校验一致（id=\(swiftID.base64EncodedString().prefix(8))…），两套流程同一台虚拟机器")
+            LoginLogger.shared.log("[完成] 机器标识校验一致（id=\(swiftID.base64EncodedString().prefix(8))…），两套流程同一台虚拟机器")
         } else {
-            LoginLogger.shared.log("❌ 机器标识不一致！Swift=\(swiftID.base64EncodedString().prefix(8))… Rust=\(rustID.base64EncodedString().prefix(8))… —— 会被 Apple 当成两台设备")
+            LoginLogger.shared.log("[失败] 机器标识不一致！Swift=\(swiftID.base64EncodedString().prefix(8))… Rust=\(rustID.base64EncodedString().prefix(8))… —— 会被 Apple 当成两台设备")
         }
     }
 
@@ -305,7 +305,7 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
         if rc == 0, let newSession {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
-            LoginLogger.shared.log("✓ IPA 侧载登录成功: \(teamSummary ?? "（无团队摘要）")")
+            LoginLogger.shared.log("[完成] IPA 侧载登录成功: \(teamSummary ?? "（无团队摘要）")")
             // v0.2.119：核对 Rust 是否真的复用了 Swift 共享的机器标识.
             verifySharedAnisetteState()
             // 取出 dsid + xcode.auth token（isideload fork 暴露），供调用方
@@ -316,7 +316,7 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
             sessionRestoreFailed = false
         } else {
             let msg = error.map { String(cString: $0) } ?? "rc=\(rc)"
-            LoginLogger.shared.log("❌ IPA 侧载登录失败: \(msg)")
+            LoginLogger.shared.log("[失败] IPA 侧载登录失败: \(msg)")
             throw makeError(msg)
         }
     }
@@ -358,7 +358,7 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
         if rc == 0, let newSession {
             session = newSession
             teamSummary = summary.map { String(cString: $0) }
-            LoginLogger.shared.log("✓ IPA 侧载会话恢复成功: \(teamSummary ?? "（无团队摘要）")")
+            LoginLogger.shared.log("[完成] IPA 侧载会话恢复成功: \(teamSummary ?? "（无团队摘要）")")
             // v0.2.119：核对 Rust 是否真的复用了 Swift 共享的机器标识.
             verifySharedAnisetteState()
             sessionRestoreFailed = false
@@ -366,7 +366,7 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
             // token 失效等恢复失败：标记，下次自动登录直接走完整登录.
             sessionRestoreFailed = true
             let msg = error.map { String(cString: $0) } ?? "rc=\(rc)"
-            LoginLogger.shared.log("❌ IPA 侧载会话恢复失败: \(msg)")
+            LoginLogger.shared.log("[失败] IPA 侧载会话恢复失败: \(msg)")
             throw makeError(msg)
         }
     }
@@ -816,7 +816,7 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
     /// · 上传段 = 已写进 AFC 的字节 / 文件总字节（`uploadFile` 逐块统计，v0.3.388 起才有）；
     /// · 安装段 = installd 自己回报的 0~100。
     ///
-    /// ⚠️ 但这个 75/25 的**权重本身是声明式的估计**（与下载中心既有的「下载 75% / 安装 25%」
+    /// 注意： 但这个 75/25 的**权重本身是声明式的估计**（与下载中心既有的「下载 75% / 安装 25%」
     /// 同一口径），不是系统给的「整体百分比」—— 别把它当测量结果。
     /// 在它之前，上传段**完全没有回调**，界面只能干等，所以叠了个分母让它动起来。
     private static let uploadWeight = 0.75

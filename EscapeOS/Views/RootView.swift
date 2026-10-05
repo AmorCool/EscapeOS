@@ -295,7 +295,7 @@ struct SettingsForm: View {
                     set: { certStore.jitFreeMode = $0 }))
             }
 
-            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证（Anisette Data）.")) {
+            Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证.")) {
                 Picker("服务器", selection: $anisetteServer) {
                     ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
                         Text(MemoryLimitSettings.host(from: server)).tag(server)
@@ -335,7 +335,7 @@ struct SettingsForm: View {
             //  · 不再显示 "= 1024 KB" 之类的换算数值；
             //  · 输入框**允许留空**（留空 = 默认值，不会强行回填文本）。
             Section(header: Text("日志"),
-                    footer: Text("单位 MB。填 0 = 无限制；留空 = 默认 \(LogLimitSettings.defaultMB) MB。")) {
+                    footer: Text("单位 MB.填 0 = 无限制；留空 = 默认 \(LogLimitSettings.defaultMB) MB.")) {
                 HStack {
                     Text("日志存储上限")
                     Spacer()

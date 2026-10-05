@@ -207,7 +207,7 @@ public:
     //     agent->Decrypt(ctx, dst, src);   // 流式，按 0x8000 分块
     //     agent->Close();
     //
-    // ⚠️ 必须先经 `CreateWithStoreAgent(...)` 创建机器，否则三个入口都是 0。
+    // 注意： 必须先经 `CreateWithStoreAgent(...)` 创建机器，否则三个入口都是 0。
 
     /// StoreAgent 会话。持有机器引用，**机器必须先于它存活**。
     class StoreAgent {
@@ -249,7 +249,7 @@ public:
     //
     // 对齐上游 ipatool `internal/sap/machine/kbsync.go` 的 `GenerateKBSync`。
     //
-    // ⚠️ **和 `StoreAgent::Open` 不是一回事**：kbsync **不开会话**（不需要 dpInfo），
+    // 注意： **和 `StoreAgent::Open` 不是一回事**：kbsync **不开会话**（不需要 dpInfo），
     // 只要全局上下文 + DSID 就能算出来。上游注释原话：
     //   > creates the account and hardware bound FairPlay data required by the bag's
     //   > ent/download endpoint, **without opening a decryption session**.

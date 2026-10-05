@@ -147,7 +147,7 @@ enum LocalDeviceIdentity {
 
     /// 读取本机身份（缓存命中 → 0 成本；未命中 → **会建隧道，秒级**）。
     ///
-    /// ⚠️ 不要在下载启动这类关键路径上同步调用 —— 那里要用
+    /// 注意： 不要在下载启动这类关键路径上同步调用 —— 那里要用
     /// `warmUpInBackground()` + `applyIfCached()`。
     static func load() -> Snapshot {
         loadIntoCache()

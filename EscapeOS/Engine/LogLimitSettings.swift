@@ -11,7 +11,7 @@ import Combine
 /// 现在两项都可调，**单位 MB，默认 1 MB**；输入框留空 = 用默认值（文本保持为空，不回填）；
 /// **填 `0` 表示无限制**。
 ///
-/// ⚠️ 本类是 `@MainActor`，所以**所有被 `nonisolated` 方法引用的 static 常量
+/// 注意： 本类是 `@MainActor`，所以**所有被 `nonisolated` 方法引用的 static 常量
 /// 都必须显式标 `nonisolated`**（否则会报
 /// "main actor-isolated static property ... can not be referenced from a nonisolated context"）。
 @MainActor

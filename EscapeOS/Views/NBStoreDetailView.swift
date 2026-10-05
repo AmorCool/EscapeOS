@@ -528,7 +528,7 @@ struct NBStoreDetailView: View {
             detail = try await NBStoreRankClient.detail(trackID: trackID, country: country)
         } catch {
             detailErrorText = error.localizedDescription
-            LoginLogger.shared.log("[NB详情] ○ 详情拉取失败：\(error.localizedDescription)",
+            LoginLogger.shared.log("[NB详情] [提示] 详情拉取失败：\(error.localizedDescription)",
                                    category: .appStore)
         }
         // 这一跳拿到 → 直接结束.

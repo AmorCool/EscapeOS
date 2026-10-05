@@ -315,7 +315,7 @@ final class BinaryModuleRunner: ObservableObject {
                         appendLog(logFile, "[host] 真证书签名完成: \(signURL.lastPathComponent)")
                         if let h = dlopen(signURL.path, RTLD_NOW | RTLD_GLOBAL) {
                             handle = h
-                            appendLog(logFile, "[host] 真证书签名后 dlopen 成功 ✓")
+                            appendLog(logFile, "[host] 真证书签名后 dlopen 成功 [完成]")
                         } else {
                             let e2 = dlerror().map { String(cString: $0) } ?? "未知错误"
                             appendLog(logFile, "[host] 真证书签名后 dlopen 仍失败: \(e2.suffix(500))")
@@ -344,7 +344,7 @@ final class BinaryModuleRunner: ObservableObject {
                         sym = s
                         dylibName = target.lastPathComponent
                         Self.cacheUloaderImage(img)   // 常驻，不卸载（Go runtime）
-                        appendLog(logFile, "[host] 用户态加载器解析 \(entrySymbol) 成功 ✓")
+                        appendLog(logFile, "[host] 用户态加载器解析 \(entrySymbol) 成功 [完成]")
                     } else {
                         uloaderErrorText = "映射成功但未找到 \(entrySymbol)（符号表可能仅 trie）"
                     appendLog(logFile, "[host] 用户态加载器未找到 \(entrySymbol)（符号表可能仅 trie）")
@@ -423,7 +423,7 @@ final class BinaryModuleRunner: ObservableObject {
         }
         var api = HostCapabilityService.makeAPI(moduleDataDir: dataDir.path,
                                                moduleDir: moduleDir.path)
-        // ⚠️ 形参必须是 `UnsafeMutableRawPointer?`（= C 的 `void *`），**不能**写
+        // 注意： 形参必须是 `UnsafeMutableRawPointer?`（= C 的 `void *`），**不能**写
         // `UnsafeMutablePointer<EscapeHostAPI>?` —— 后者会被编译器判
         // 「not representable in Objective-C, so it cannot be used with '@convention(c)'」：
         // EscapeHostAPI 里有 `@convention(c)` 函数指针字段，Swift 不认为它 C 可表示.
@@ -506,7 +506,7 @@ final class BinaryModuleRunner: ObservableObject {
                         if let h = dlopen(signURL.path, RTLD_NOW | RTLD_GLOBAL) {
                             cacheBinaryModuleHandle(h)
                             if let resolved = dlsym(h, name) {
-                                note("真证书签名后解析到符号 \(name) ✓")
+                                note("真证书签名后解析到符号 \(name) [完成]")
                                 return resolved
                             }
                             note("真证书签名后 dlopen 成功但无符号 \(name)")
@@ -533,7 +533,7 @@ final class BinaryModuleRunner: ObservableObject {
                     note("用户态加载器映射成功（内存足迹 \(currentFootprintMB())MB）")
                     if let s = uloader_symbol(img, name) {
                         cacheUloaderImage(img)
-                        note("用户态加载器解析到符号 \(name) ✓")
+                        note("用户态加载器解析到符号 \(name) [完成]")
                         return s
                     }
                     note("用户态加载器未找到符号 \(name)")

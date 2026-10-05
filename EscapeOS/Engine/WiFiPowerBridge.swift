@@ -20,7 +20,7 @@ final class WiFiPowerBridge: @unchecked Sendable {
     private var handlerRegistered = false
 
     private func makeError(_ message: String) -> NSError {
-        stepLog("❌ " + message)
+        stepLog("[失败] " + message)
         return NSError(domain: "WiFiPower", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
@@ -61,7 +61,7 @@ final class WiFiPowerBridge: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
             throw makeError("未检测到配对文件（需 LocalDevVPN + 开发者模式）")
         }
-        stepLog("步骤1 配对文件 ✓")
+        stepLog("步骤1 配对文件 [完成]")
 
         // 2) 隧道 IP
         let deviceIP = LocalDevVPN.targetIP
@@ -119,7 +119,7 @@ final class WiFiPowerBridge: @unchecked Sendable {
         guard let (adapter, handshake) = created else {
             throw lastError ?? makeError("创建开发者隧道失败（请确认 LocalDevVPN 已连接）")
         }
-        stepLog("步骤2 隧道创建 ✓（IP=\(deviceIP)）")
+        stepLog("步骤2 隧道创建 [完成]（IP=\(deviceIP)）")
 
         // 4) 所有权移交 Rust（此后 Swift 不再释放；Rust 用完自行释放）
         // 移交 adapter/handshake 所有权 + 配对文件路径（Rust 侧用它起 lockdownd 会话）
@@ -127,7 +127,7 @@ final class WiFiPowerBridge: @unchecked Sendable {
             lua_host_set_mcinstall_handles(
                 UnsafeMutableRawPointer(adapter), UnsafeMutableRawPointer(handshake), p)
         }
-        stepLog("步骤3 adapter/handshake 所有权已移交 Rust ✓")
+        stepLog("步骤3 adapter/handshake 所有权已移交 Rust [完成]")
     }
 }
 

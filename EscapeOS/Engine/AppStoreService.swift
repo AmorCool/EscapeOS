@@ -26,7 +26,7 @@ enum AppStoreService {
     /// 榜单 RSS、搜索、详情 lookup、版本历史全部走这个区域 —— 不同区域的
     /// 商品池完全不同（美区没有国区应用，反之亦然）。
     ///
-    /// ⚠️ `"auto"` 只存在于 `rawShopRegion`，**绝不**从这里漏出：读到 `"auto"` 时
+    /// 注意： `"auto"` 只存在于 `rawShopRegion`，**绝不**从这里漏出：读到 `"auto"` 时
     /// 立刻解析成账号区（未登录/无账号 → 兜底 `cn`），保证所有消费点拿到的都是具体国家码。
     static var countryCode: String {
         get { resolveRegion(rawShopRegion) }

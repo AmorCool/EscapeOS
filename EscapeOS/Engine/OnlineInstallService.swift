@@ -21,7 +21,7 @@ import SwiftUI
 /// · OTA 只要求：清单在 HTTPS、安装包签名有效、且本设备/账号对该应用有许可。
 /// · **是否 FairPlay 加密（`cryptid=1`）不影响 OTA 通道本身**：App Store 自己的安装
 ///   走的就是 itms-services，同类工具也在装 App Store 下载的加密包。
-///   ⚠️ 曾据「加密包装不了」的说法在 `prepare` 里提前拦截 —— 该假设**无证据，已撤回**，
+///   注意： 曾据「加密包装不了」的说法在 `prepare` 里提前拦截 —— 该假设**无证据，已撤回**，
 ///   现在加密包照常走完整链路（只记一条非阻断日志）。别再把这条当规则写回来。
 enum OnlineInstallService {
 
@@ -89,7 +89,7 @@ enum OnlineInstallService {
             } catch {
                 // 这次 OTA 没跑起来 → 清掉可能已经开始的进度会话（别让列表里挂个假进度）
                 OnlineInstallProgress.shared.reset()
-                LoginLogger.shared.log("[在线安装] ❌ 失败：\(reasonText(error))", category: logCategory)
+                LoginLogger.shared.log("[在线安装] [失败] 失败：\(reasonText(error))", category: logCategory)
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return
             }
@@ -100,7 +100,7 @@ enum OnlineInstallService {
             } catch {
                 if prepared.localFile != nil { IPALocalHTTPServer.shared.stop() }
                 OnlineInstallProgress.shared.reset()
-                LoginLogger.shared.log("[在线安装] ❌ 失败：\(reasonText(error))", category: logCategory)
+                LoginLogger.shared.log("[在线安装] [失败] 失败：\(reasonText(error))", category: logCategory)
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return
             }
@@ -112,7 +112,7 @@ enum OnlineInstallService {
                                        category: logCategory)
             }
             // v0.3.388：进度会话同样在保活到期时收尾。
-            // ⚠️ 这只是「我们的观测窗口结束了」，**不是「系统装完了」** —— 系统安装阶段不可观测。
+            // 注意： 这只是「我们的观测窗口结束了」，**不是「系统装完了」** —— 系统安装阶段不可观测。
             OnlineInstallProgress.shared.scheduleIdleReset(after: serverLifetime)
 
             DispatchQueue.main.async {
@@ -221,7 +221,7 @@ enum OnlineInstallService {
                 break
             }
         } else if ipaPath != nil {
-            LoginLogger.shared.log("[在线安装] ⚠ 未能解析包内 Info.plist，将用台账里的 bundleId 兜底",
+            LoginLogger.shared.log("[在线安装] [注意] 未能解析包内 Info.plist，将用台账里的 bundleId 兜底",
                                    category: logCategory)
         }
 
@@ -313,7 +313,7 @@ enum OnlineInstallService {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         guard let encoded = manifestURL.addingPercentEncoding(withAllowedCharacters: allowed),
               let itmsURL = URL(string: "itms-services://?action=download-manifest&url=\(encoded)") else {
-            LoginLogger.shared.log("[在线安装] ❌ itms-services 链接拼装失败", category: logCategory)
+            LoginLogger.shared.log("[在线安装] [失败] itms-services 链接拼装失败", category: logCategory)
             OnlineInstallProgress.shared.reset()
             completion(.failure(OnlineInstallError.openFailed))
             return

@@ -203,7 +203,7 @@ struct IPADownloadActionsSheet: View {
     /// 2. 本机服务器当前被 `.share` 会话占用时不可点
     ///    （单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那份会话）；
     /// 3. **v0.3.396（A 项）**：前置检查进行中 → 灰 + 行内转圈（免得用户连点两次）。
-    /// ⚠️ v0.3.386 起「提取下载链接」已改为纯读台账、不再起本机服务 →
+    /// 注意： v0.3.386 起「提取下载链接」已改为纯读台账、不再起本机服务 →
     /// `blockedByShare` **恒为 `false`**（判断有意保留，见 `IPALocalHTTPServer` 类型注释）。
     private var onlineInstallRow: RowSpec {
         if !OnlineInstallService.isImplemented {

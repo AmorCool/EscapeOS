@@ -68,6 +68,13 @@ On-device sideloading and device-management suite for iOS 18 and later. It reach
 - **SSH debug server**: connects over the LAN for log and diagnostic access. **PiP keep-alive** keeps the app alive in the background.
 - **Device toggles**: developer mode (enable only — iOS has no remote way to turn it off) and LAN Wi-Fi pairing.
 
+### SFTP file access
+
+The SSH debug server also exposes its three mounts over SFTP v3 — `/sandbox`, `/media`, and `/crash` — for Finder, FileZilla, and similar clients. Password auth is still required; SFTP adds no unauthenticated path.
+
+- **Reserved names.** A listing marks a failed or truncated read with a synthetic entry under the reserved namespace `!!_ESCAPESPACE_*` (a directory-style marker, so clients do not try to download it). A real file whose name begins with `!!_ESCAPESPACE_` is treated as a marker: it cannot be written, deleted, or renamed over SFTP, and `stat` reports it as a marker. Use a different name.
+- **Large directories.** SFTP v3 `READDIR` has no offset, so one listing returns at most 3000 entries; the tail is replaced by a `!!_ESCAPESPACE_NOTICE_TRUNCATED_SHOWING_3000_OF_<total>_DIRECT_PATH_ONLY` marker. Reach entries past the cap by their full path (for example, in the client's "go to path" box).
+
 ### Gestalt & modules
 
 - **Gestalt**: reads and edits MobileGestalt values with automatic backup before each apply.

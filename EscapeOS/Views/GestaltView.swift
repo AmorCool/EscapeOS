@@ -331,7 +331,7 @@ struct GestaltView: View {
                 Image(systemName: "info.circle")
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("运行身份（SecTaskCopySigningIdentifier）")
+                    Text("运行身份")
                         .font(.caption2).foregroundStyle(.secondary)
                     Text(MCMIntegration.signedCodeIdentifier)
                         .font(.caption.monospaced())
@@ -343,7 +343,7 @@ struct GestaltView: View {
                 Image(systemName: "info.circle")
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Bundle ID（CFBundleIdentifier）")
+                    Text("Bundle ID")
                         .font(.caption2).foregroundStyle(.secondary)
                     Text(Bundle.main.bundleIdentifier ?? "(unknown)")
                         .font(.caption.monospaced())

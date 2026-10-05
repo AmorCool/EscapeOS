@@ -177,7 +177,7 @@ struct BluetoothLocationPayload {
 /// 设计上**不新增特征**，直接复用既有的「状态」write 特征（`E5C0A102-…`）：
 /// 所有上行消息共用它，靠**首字节的类型标签**区分。
 ///
-/// ## ⚠️ 类型标签为什么从 0x80 起（不能从 0/1 起）
+/// ## 注意： 类型标签为什么从 0x80 起（不能从 0/1 起）
 ///
 /// 历史线格式里，状态消息的首字节是**状态码 0~4**（idle / connecting / active /
 /// reconnecting / dropped）。若把 `requestPush` 的标签取成 `1`，就会和

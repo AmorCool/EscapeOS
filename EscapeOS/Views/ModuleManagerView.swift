@@ -600,7 +600,7 @@ struct ModuleManagerView: View {
                 let module = try ModuleService.shared.importZip(at: url, log: appendLog)
                 DispatchQueue.main.async {
                     self.reload()
-                    self.installLog.append("✓ 导入成功：\(module.name) v\(module.version)")
+                    self.installLog.append("[完成] 导入成功：\(module.name) v\(module.version)")
                     if module.isBinaryModule, module.autoStart == true || module.binary?.autoStart == true {
                         self.installLog.append("- 二进制模块随宿主自启动")
                     }
@@ -798,7 +798,7 @@ struct ModuleInstallSheet: View {
 
     private func color(for line: String) -> Color {
         if line.hasPrefix("!") { return .red }
-        if line.hasPrefix("✓") { return .green }
+        if line.hasPrefix("[完成]") { return .green }
         return .primary
     }
 }
@@ -811,7 +811,7 @@ struct ModuleInstallSheet: View {
 /// 排版走共享的 `LogConsoleView`（逐行 `Text` + 行间 `Divider` + 自动滚底 + 复制带元信息头）——
 /// 此前是**一整块 `Text`**。
 ///
-/// ⚠️ 统一到「四件套工具栏」带来的两处能力变化（有意为之，供上层知情）：
+/// 注意： 统一到「四件套工具栏」带来的两处能力变化（有意为之，供上层知情）：
 /// ① 「清空」不再区分两份文件，一次清掉两个（旧版是二选一的 `confirmationDialog`）；
 /// ② 旧版可用 `ShareLink` 单独导出 `run.log` / `go_stderr.log` 两个**文件**，
 ///    现在分享的是**合并后的文本**（带元信息头）。需要原文件时请走文件浏览器。

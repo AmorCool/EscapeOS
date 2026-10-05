@@ -172,7 +172,7 @@ final class IPADownloadCenter: ObservableObject {
     /// 某应用当前正在进行的任务（**按 bundleId 口径**）。
     ///
     /// 适用：商店列表 / 详情页 —— 那里一行 = 一个应用，只关心「这个应用有没有在装/在下」。
-    /// ⚠️ **不要**拿它给「同一个应用的多个版本行」判状态：它只认 bundleId，
+    /// 注意： **不要**拿它给「同一个应用的多个版本行」判状态：它只认 bundleId，
     /// 会把同一个活跃任务挂到所有版本行上（v0.3.381 修的「多版本一起显示安装中」就是这个坑）。
     /// 下载管理页请用 `activeJob(fileName:bundleId:version:name:allowBundleIdFallback:)`。
     func activeJob(bundleId: String?, name: String) -> Job? {
@@ -400,7 +400,7 @@ final class IPADownloadCenter: ObservableObject {
         }
         // v0.3.387：直链与版本刚开始确定 → 也立刻落盘一次（此刻台账多半还没有这一行，属 no-op；
         // 重下同版本时才真正生效）。真正写入在 `startDownload` 与 `handle` 两处。
-        // ⚠️ 必须写 `self.job(id)`：本函数开头有 `var job = Job(...)`（`:242` 附近），
+        // 注意： 必须写 `self.job(id)`：本函数开头有 `var job = Job(...)`（`:242` 附近），
         // 裸写 `job(id)` 会被那个局部变量遮蔽 →
         // `error: cannot call value of non-function type 'IPADownloadCenter.Job'`（v0.3.387 CI 实测）。
         if let name = self.job(id)?.expectedFileName {
@@ -751,7 +751,7 @@ final class IPADownloadCenter: ObservableObject {
                                                  version: current.version,
                                                  iconURL: current.iconURL,
                                                  source: current.source.rawValue,
-                                                 // ⚠️ 必须**重新取一次** job，不能用上面的 `current`：
+                                                 // 注意： 必须**重新取一次** job，不能用上面的 `current`：
                                                  // `current` 是本函数开头取的值类型快照，而直链是下载过程中
                                                  // 才由 `onResolvedURL` 回填到 job 上的（AppleID 通道尤其如此）
                                                  // → 用快照会**永远写进 nil**。
@@ -940,7 +940,7 @@ enum PackageSINFWriter {
 
         // 2) 归一化成 Data，并做**结构自检**。
         //
-        // ⚠️ 2026-10-05 真机定案：这一步**不能**只判「base64 解码有没有返回 nil」。
+        // 注意： 2026-10-05 真机定案：这一步**不能**只判「base64 解码有没有返回 nil」。
         // hex 字符串（NB 的 `dataHex`，以及 v0.3.562 及以前落进台账的旧值）的字符集
         // `[0-9a-f]` 恰好全在 base64 字母表内，长度又是 4 的倍数 ⇒ 解码**静默成功**，
         // 产出 1.5 倍长度的垃圾（1056 字节正确件 → 1584 字节垃圾），全程无一行报错。
@@ -1131,7 +1131,7 @@ enum PackageSINFWriter {
         //    的条目，它就会落进兜底规则：覆盖已封存文件 = 封存失配；新增 = 包内出现未封存内容。
         //    两者都会**破坏代码签名**。过滤即把这类目标挡在写入之前（fail closed，不静默）。
         //
-        // ## ⚠️ 本判据是「近似」，**不是** `CodeResources` omit 规则的实现
+        // ## 注意： 本判据是「近似」，**不是** `CodeResources` omit 规则的实现
         // 上面三条判据（父目录 `SC_Info` / 小写 `.sinf` / 兄弟二进制存在）**只是**对
         // `CodeResources` omit 规则的**结构近似** —— 本函数**从不读** `_CodeSignature/CodeResources`，
         // 更不解析其 omit 正则。为什么这样是安全的（而非偷懒）：
@@ -1230,7 +1230,7 @@ enum PackageSINFWriter {
 
     /// 写后逐条复读：每条目标路径的字节必须 == 传入的 sinf。不一致 → 抛错（不静默）。
     private static func verifyWritten(targets: [String], sinf: Data, ipaPath: String) throws {
-        // ⚠️ 必须重开新实例：`replaceEntries` 调用后原实例的 `entries` 偏移已失效。
+        // 注意： 必须重开新实例：`replaceEntries` 调用后原实例的 `entries` 偏移已失效。
         let verify = try ApplePackageArchive(url: URL(fileURLWithPath: ipaPath), accessMode: .read)
         var bad: [String] = []
         for p in targets {
@@ -1323,11 +1323,11 @@ enum PackageSINFWriter {
     ///   `SuperBlob` = `{4B magic 0xFADE0CC0}{4B 大端总长}{4B 大端 count}` + BlobIndex[]
     ///   判据：magic 命中 **且** 长度字段 == 实际长度
     ///
-    /// ⚠️ **不能**把 `00 00 04 30` 当固定魔数 —— 前 4 字节是**长度**。
+    /// 注意： **不能**把 `00 00 04 30` 当固定魔数 —— 前 4 字节是**长度**。
     /// 1056 字节的合法 sinf 头是 `00 00 04 20 73 69 6e 66`；
     /// 拿 `00000430` 去校验会**误杀合法件**。
     ///
-    /// ⚠️ 2026-10-05 修正：本函数**最初只认格式一**，结果把合法的 SuperBlob sinf
+    /// 注意： 2026-10-05 修正：本函数**最初只认格式一**，结果把合法的 SuperBlob sinf
     /// 判成「不合法」⇒ 跳过写入 + 打出「缺 sinf」的日志（真机反馈的现象）。
     /// 两种格式都实测存在于 `SC_Info` 里，必须都放行。
     ///
@@ -1418,7 +1418,7 @@ private final class RemoteDownloader: NSObject, URLSessionDownloadDelegate {
         // 两条线程（delegate 队列 vs 主 actor）之间必须有锁，
         // 否则用户「暂停后马上继续」很可能读到 nil → 白白从头重下.
         //
-        // ⚠️ `cancel(byProducingResumeData:)` **可能在当前线程同步执行回调**，
+        // 注意： `cancel(byProducingResumeData:)` **可能在当前线程同步执行回调**，
         // 所以它必须在**不持锁**的状态下调 —— 否则回调里的 `lock.lock()` 会自锁死.
         t.cancel(byProducingResumeData: { [weak self] data in
             guard let self else { return }

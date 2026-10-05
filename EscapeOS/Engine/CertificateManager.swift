@@ -103,7 +103,7 @@ final class CertificateManager: ObservableObject {
             let reason = settings.isLoggedIn
                 ? "已登录但 Swift 会话缺失（dsid/authToken 为空）"
                 : "尚未登录 Apple ID"
-            LoginLogger.shared.log("⚠ 团队列表未发起：\(reason)")
+            LoginLogger.shared.log("[注意] 团队列表未发起：\(reason)")
             let text = "\(reason).请到「更多 → 设置」重新登录 Apple ID."
             lastError = text
             teamState = .failed(text)
@@ -147,7 +147,7 @@ final class CertificateManager: ObservableObject {
             self.isLoadingTeams = false
             self.autoChainCerts = false
             self.teamState = .failed("加载超时.请检查网络后点「重试」，或到「更多 → 设置 → Anisette 服务器」换一个服务器.")
-            LoginLogger.shared.log("❌ 团队列表加载看门狗超时，已强制切失败态")
+            LoginLogger.shared.log("[失败] 团队列表加载看门狗超时，已强制切失败态")
         }
         teamWatchdog = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: item)
@@ -219,7 +219,7 @@ final class CertificateManager: ObservableObject {
         let live = Set(certs.map { $0.serialNumber })
         guard !live.contains(wl) else { return }
         store.revokeWhitelist = ""
-        LoginLogger.shared.log("⚠ 白名单自动清除：serial \(wl) 已不在当前证书列表（已吊销/不存在）")
+        LoginLogger.shared.log("[注意] 白名单自动清除：serial \(wl) 已不在当前证书列表（已吊销/不存在）")
     }
 
     /// 吊销一张证书并刷新列表.

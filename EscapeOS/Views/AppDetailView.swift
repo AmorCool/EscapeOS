@@ -153,7 +153,7 @@ struct AppDetailView: View {
                         .foregroundColor(.red)
                 } else if appBackups.records.isEmpty {
                     if appBackups.unreadableCount > 0 {
-                        Text("暂无 \(app.name) 的备份。另有 \(appBackups.unreadableCount) 个归档无法读取（无法判断所属应用）。")
+                        Text("暂无 \(app.name) 的备份.另有 \(appBackups.unreadableCount) 个归档无法读取.")
                             .foregroundColor(.secondary)
                     } else {
                         Text("暂无 \(app.name) 的备份.")

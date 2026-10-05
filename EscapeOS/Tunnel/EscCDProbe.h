@@ -9,7 +9,7 @@
 //  主页两个内置模块（`com.escapeos.locache` / `com.escapeos.wifirefresh`）与
 //  「更多 → 进程管理」执行时会出现 `ServiceNotFound`（错误码 21）。
 //
-//  ⚠️ **成因尚未定论，本项目写过的两版归因都已作废**：①「设备未挂 DDI」；
+//  注意： **成因尚未定论，本项目写过的两版归因都已作废**：①「设备未挂 DDI」；
 //  ②「本仓接错了握手」。**事实（用户实测 + PC 侧交叉验证）**：`ServiceNotFound`(21)
 //  是**设备侧的服务状态问题**，不是本 App 的缺陷 —— 该服务偶尔不可用，**重启手机即恢复**；
 //  与 DDI、与「用哪条隧道」都无关（PC 侧标准工具 `pymobiledevice3` 拿到的 RSD 服务表
@@ -63,11 +63,11 @@
 //    [3] `rsd_get_service_info(handshake, "com.apple.internal.devicecompute.CoreDeviceProxy", &info)`
 //                                                  —— 取 `info->port`；不在表里就如实报并终止
 //    [4] `idevice_new_tcp_socket(ip:info->port, ...)`  —— 直连该端口，包成 `Idevice`
-//    [5] `core_device_proxy_new(idevice, &proxy)`  —— ⚠️ **消费 idevice**，此后不再 free
+//    [5] `core_device_proxy_new(idevice, &proxy)`  —— 注意： **消费 idevice**，此后不再 free
 //    [6] `core_device_proxy_get_server_rsd_port`   —— 必须在 [7] 之前（[7] 消费 proxy）
-//    [7] `core_device_proxy_create_tcp_adapter`    —— ⚠️ **消费 proxy**，此后不再 free 它
+//    [7] `core_device_proxy_create_tcp_adapter`    —— 注意： **消费 proxy**，此后不再 free 它
 //    [8] `adapter_connect(cdAdapter, rsdPort)`     —— 拿 `struct ReadWriteOpaque *`
-//    [9] `rsd_handshake_new(stream)`               —— ⚠️ **消费 stream**；这就是第二个 RSD 握手
+//    [9] `rsd_handshake_new(stream)`               —— 注意： **消费 stream**；这就是第二个 RSD 握手
 //    [10] `rsd_get_services`                       —— 只读内存结构，不建连；全量列 name/port/remoteXPC
 //    [11] `app_service_connect_rsd` → `app_service_list_processes` —— 端到端，报进程条数
 //
@@ -81,7 +81,7 @@
 //    调用方用 **`free`** 释放（**不是** `plist_mem_free`，也**不是** `idevice_data_free`）。
 //  - **失败**：只有当连报告缓冲都分配不出来时才返回 NULL；此时 `*out_err` 是 `malloc`
 //    的 C 字符串，调用方用 **`free`** 释放。
-//    ⚠️ 「某一步失败」**不等于**「返回 NULL」—— 失败原因写在报告正文里（调用方按文本展示）。
+//    注意： 「某一步失败」**不等于**「返回 NULL」—— 失败原因写在报告正文里（调用方按文本展示）。
 //  - **句柄**：全部在本垫片内创建并在返回前释放；被消费的四个（`pairing` 由 [2] 的
 //    `rp_pairing_file_free` 归还、`idevice` 被 [5] 消费、`proxy` 被 [7] 消费、
 //    `stream` 被 [9] 消费）**故意不再释放**（头文件明写 "consumed may not be used again"，

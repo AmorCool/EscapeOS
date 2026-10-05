@@ -2,7 +2,7 @@ import Foundation
 
 // 共享转换 · 导入服务
 //
-// 职责：**接住**用户自己传进来的 IPA → **落盘** `Documents/Imports/` → **校验** → 生成
+// 职责：**接住**用户自己传进来的 IPA → **落盘** `Documents/Imports/<包名>/original.ipa` → **校验** → 生成
 // `ImportRecord` → **交给修补流程**（`RepairService`）。
 //
 // 边界（重要）：
@@ -14,7 +14,7 @@ import Foundation
 //   · 关卡 A（是不是 IPA）：`IPAPackageInspector.inspect`（走中央目录，不解整包）。
 //   · 关卡 B（越界防护）：`ArchiveEntryPath.resolve`（复用 `FileKind.swift`，本仓唯一的 ZIP slip 防线）。
 //
-// ⚠️ 硬约束：条目名从**中央目录读出**到**落盘**之间，不得再经任何解码 / 规范化 / URL 处理；
+// 注意： 硬约束：条目名从**中央目录读出**到**落盘**之间，不得再经任何解码 / 规范化 / URL 处理；
 //    落盘必须使用 `ArchiveEntryPath.resolve` 已判定的那个路径。本服务**不做条目级解压**
 //    （只整包复制 + 只读体检），因此天然规避；若将来加「预览 / 剥离后重打包」，必须走已判定路径。
 
@@ -26,10 +26,13 @@ struct ImportRecord: Codable {
     let importedAt: Date
     let sourceKind: SourceKind
     let originalFileName: String        // 净化前（仅展示）
-    let storedFileName: String          // 净化 + 去重后
-    let storedPath: String              // Documents/Imports/<storedFileName>
+    let storedFileName: String          // 净化 + 去重后的目录名（一个包一个文件夹）
+    let storedPath: String              // Documents/Imports/<storedFileName>/original.ipa
     let sizeBytes: Int64
-    let sha256: String                  // 落盘后（整包原样复制，不做剥离 / 重打包）
+    let sha256: String                  // 原件 original.ipa 落盘后的整包 sha256（原件指纹；修补**不改它**）
+    /// 修补产物 repaired.ipa 的 sha256（与原件指纹**分开存**，绝不覆盖 `sha256`）。
+    /// 默认 nil = 尚未修补过；修补成功后由调用方回填（见 `RepairResult.repairedIPASha256`）。
+    var repairedSha256: String? = nil
 
     let app: AppInfo
     let payload: PayloadInfo
@@ -117,7 +120,7 @@ enum ImportService {
         var log: [String] = []
         func note(_ s: String) {
             log.append(s)
-            LoginLogger.shared.log("[导入] \(s)", category: .appStore)
+            LoginLogger.shared.log("[导入] \(s)", category: .shareConvert)
         }
 
         // ── (1) 存在性 ──────────────────────────────────────────────
@@ -138,7 +141,7 @@ enum ImportService {
                          suggestion: "确认这是一个正常的 .ipa 安装包.", record: nil, details: log)
         }
 
-        // ── (3) 文件名净化 + 唯一名（复用现有工具，不自己拼路径）────
+        // ── (3) 文件名净化 + 唯一目录名（复用现有工具，不自己拼路径）────
         let rawName = url.lastPathComponent
         guard let safeLeaf = FileNameRules.sanitize(rawName) else {
             return .init(status: .rejected, code: "I3",
@@ -146,17 +149,35 @@ enum ImportService {
                          suggestion: "重命名后重试.", record: nil, details: log)
         }
         let destDir = importsDirectory()
-        let storedName = FileService().uniqueDestination(in: destDir.path, preferredName: safeLeaf)
-        let destURL = URL(fileURLWithPath: storedName)
-
-        // ── (4) 复制到 Imports/（不移动源文件，避免破坏用户原件）────
+        // 落点：新导入不再平铺到 Imports/，而是「一个包一个文件夹」：
+        //   Imports/<净化包名>/original.ipa
+        // 这样修补产物可落在同目录的 repaired.ipa，**原件 original.ipa 永不被就地改写**
+        // （否则「修补后取消安装」会破坏原件、且无副本可退，见 RepairService）。
+        //
+        // 并发安全：这里用 `reserveUniqueDirectory` **原子抢占**目录名（`mkdir(2)`，EEXIST 换名），
+        // 不再用 `uniqueDestination` 的 check-then-act —— 后者在 `handleOpenURL` 的 nonisolated
+        // `Task` 与 picker 的 `startImport` 并发进 `importFile` 时，会让两者算到**同一目录**，
+        // 互相覆写 `original.ipa`，并在复制失败时删掉对方已落盘的目录（跨任务误删 / 静默损坏）。
+        let folderURL: URL
         do {
-            if FileManager.default.fileExists(atPath: destURL.path) {
-                try FileManager.default.removeItem(at: destURL)
-            }
-            try FileManager.default.copyItem(at: url, to: destURL)
-            note("已落盘：\(destURL.lastPathComponent)")
+            folderURL = try FileService().reserveUniqueDirectory(in: destDir.path, preferredName: safeLeaf)
         } catch {
+            return .init(status: .rejected, code: "I4",
+                         message: "创建导入目录失败.",
+                         suggestion: "确认存储空间充足后重试.",
+                         record: nil, details: log + ["\(error)"])
+        }
+        let destURL = folderURL.appendingPathComponent("original.ipa")
+
+        // ── (4) 复制到 Imports/<包名>/original.ipa（不移动源文件，避免破坏用户原件）────
+        // 目录是本次导入**原子独占**的（见上），故：
+        //   · 无需再判断 / 删除已存在的 original.ipa —— 本目录内不可能有别人的文件；
+        //   · 失败清理只删**本次占位目录**（cleanupOwnFolder），绝不误删并发对方已落盘的目录。
+        do {
+            try FileManager.default.copyItem(at: url, to: destURL)
+            note("已落盘：\(folderURL.lastPathComponent)/original.ipa")
+        } catch {
+            cleanupOwnFolder(folderURL)
             return .init(status: .rejected, code: "I4",
                          message: "复制文件失败.",
                          suggestion: "确认存储空间充足后重试.",
@@ -165,7 +186,7 @@ enum ImportService {
 
         // ── (5) 关卡 A：是不是 IPA（复用 IPAPackageInspector，不解整包）──
         guard let ins = IPAPackageInspector.inspect(ipaPath: destURL.path) else {
-            try? FileManager.default.removeItem(at: destURL)
+            cleanupOwnFolder(folderURL)
             return .init(status: .rejected, code: "I5",
                          message: "这不是一个可安装的 IPA（缺 Payload/Info.plist）.",
                          suggestion: "确认对方分享的是 .ipa 而不是别的文件（zip 改后缀也不行）.",
@@ -183,7 +204,7 @@ enum ImportService {
             let names = reader.entryNames()
             entryCount = names.count
             if names.count > 20_000 {
-                try? FileManager.default.removeItem(at: destURL)
+                cleanupOwnFolder(folderURL)
                 return .init(status: .rejected, code: "I6",
                              message: "安装包条目过多（可能异常）.",
                              suggestion: "让对方用未改动的原始包重传.", record: nil, details: log)
@@ -192,7 +213,7 @@ enum ImportService {
                 // 命中 `..` / 绝对路径 / 标准化后逃逸 → 抛错 → 拒收
                 do { _ = try ArchiveEntryPath.resolve(name, under: destDir.path) }
                 catch {
-                    try? FileManager.default.removeItem(at: destURL)
+                    cleanupOwnFolder(folderURL)
                     return .init(status: .rejected, code: "I6",
                                  message: "安装包内含越界路径，已拒绝导入.",
                                  suggestion: "让对方用未改动的原始包重传；本机不做「将就装」.",
@@ -203,7 +224,7 @@ enum ImportService {
             if dupCount > 0 { warnings.append("包内有 \(dupCount) 个重复条目名（结构可疑）") }
         } catch {
             // 中央目录读不出来 —— 与「不是 IPA」分开报（这是「ZIP 结构异常」）
-            try? FileManager.default.removeItem(at: destURL)
+            cleanupOwnFolder(folderURL)
             return .init(status: .rejected, code: "I6",
                          message: "安装包 ZIP 结构异常，无法解析.",
                          suggestion: "让对方用未改动的原始包重传.", record: nil, details: log + ["\(error)"])
@@ -239,7 +260,7 @@ enum ImportService {
             // v0.3.570：读失败必须**清掉已落盘的副本**。
             // 否则 `Imports/` 里会留一个**无台账记录的孤儿包**（用户看不到、也不会被清理）。
             // 其余拒收分支（I4 / I5 / I6）都清理，唯独这处漏了 —— 审计 D2。
-            try? FileManager.default.removeItem(at: destURL)
+            cleanupOwnFolder(folderURL)
             return .init(status: .rejected, code: "I6",
                          message: "读取文件失败.", suggestion: "重试.",
                          record: nil, details: log)
@@ -267,8 +288,8 @@ enum ImportService {
             importedAt: Date(),
             sourceKind: sourceKind,
             originalFileName: rawName,
-            storedFileName: destURL.lastPathComponent,
-            storedPath: destURL.path,
+            storedFileName: folderURL.lastPathComponent,   // 净化 + 去重后的目录名（= 包名）
+            storedPath: destURL.path,                      // …/Imports/<包名>/original.ipa
             sizeBytes: size,
             sha256: sha,
             app: .init(bundleId: ins.bundleIdentifier,
@@ -291,34 +312,81 @@ enum ImportService {
         note("导入完成，准备交给修补流程")
 
         return .init(status: .ok, code: "I0",
-                     message: "已导入：\(ins.displayName ?? destURL.lastPathComponent).",
+                     message: "已导入：\(ins.displayName ?? folderURL.lastPathComponent).",
                      suggestion: payloadSuggestion,
                      record: record, details: log)
     }
 
     // MARK: 目录扫描（文件 App 拖入路径）
 
-    /// 扫描 `Documents/Imports/`（可选连 `Documents/` 根）发现新增 `.ipa`。
+    /// 目录扫描结果：**区分「确实没有新包」与「目录读不出来」**。
+    ///
+    /// 为什么不能只返回裸 `[URL]`：旧实现用 `try?` 吞掉 `contentsOfDirectory` 的枚举错误后
+    /// 返回空数组，于是「读不出来」和「确实没有」在调用方看来完全一样 —— 用户看到的是
+    /// 「没有发现新的安装包」，而真相是**没能观察到**（本轮要清的静默失败）。
+    /// `unreadableDirectories` 非空时，「没有新包」这个结论**不可信**，调用方必须让用户察觉。
+    struct ScanResult {
+        /// 发现的新包（已按最近修改优先排序）。
+        let urls: [URL]
+        /// 枚举失败、因而无法确认是否含新包的目录。
+        let unreadableDirectories: [URL]
+    }
+
+    /// 扫描 `Documents/Imports/`（可选连 `Documents/` 根）发现新增包。
     /// **文件 App 拖入不会给 App 任何回调**，只能主动扫描（启动 / 回前台 / 手动刷新）。
     ///
-    /// 返回按「最近修改优先」排序（`contentsOfDirectory` 顺序不保证，调用方取 `.first`
-    /// 必须得到确定结果）；`known` 命中的（已导入的）会被过滤掉。
+    /// 双形态兼容（一个包一个文件夹的新落点上线后，老平铺包**必须仍能列出**）：
+    ///   · 老平铺：`Imports/*.ipa`（直接认这个 .ipa 文件）
+    ///   · 新落点：`Imports/<包名>/original.ipa`（认目录里的 original.ipa）
+    /// 修补产物 `repaired.ipa` **一律排除** —— 它不是新导入的包，认了会被重复导入。
+    ///
+    /// 返回 `ScanResult`（`urls` 按「最近修改优先」排序 —— `contentsOfDirectory` 顺序不保证，
+    /// 调用方取 `.first` 必须得到确定结果）；`known` 命中的（已导入的）会被过滤掉。
+    ///
+    /// 注意： 枚举失败**不再**被吞成空数组：失败的目录会记进 `unreadableDirectories`，
+    /// 调用方据此提示「读不出来」而不是「没有新包」（见 `ScanResult` 的说明）。
     static func scanForNewImports(alsoScanDocumentsRoot: Bool = true,
-                                  known: [ImportRecord]) -> [URL] {
+                                  known: [ImportRecord]) -> ScanResult {
         let fm = FileManager.default
-        let dirs: [URL] = [importsDirectory()] + (alsoScanDocumentsRoot
+        let importsDir = importsDirectory()
+        let dirs: [URL] = [importsDir] + (alsoScanDocumentsRoot
             ? [fm.urls(for: .documentDirectory, in: .userDomainMask)[0]] : [])
         var out: [URL] = []
+        var unreadable: [URL] = []
         for dir in dirs {
-            let items = (try? fm.contentsOfDirectory(at: dir,
-                        includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
-                        options: [.skipsHiddenFiles])) ?? []
-            for u in items where u.pathExtension.lowercased() == "ipa" {
-                if known.contains(where: { $0.storedPath == u.path }) { continue }
-                out.append(u)
+            let items: [URL]
+            do {
+                items = try fm.contentsOfDirectory(at: dir,
+                            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+                            options: [.skipsHiddenFiles])
+            } catch {
+                // 读不出来 ≠ 确定没有：记下失败目录并留痕，**不**当作空目录继续。
+                unreadable.append(dir)
+                LoginLogger.shared.log(
+                    "[导入] 目录枚举失败：\(dir.lastPathComponent)（\(error.localizedDescription)）",
+                    category: .shareConvert)
+                continue
+            }
+            for u in items {
+                // 形态一（老平铺）：`Imports/*.ipa`。排除修补产物 repaired.ipa。
+                if u.pathExtension.lowercased() == "ipa" {
+                    if u.lastPathComponent == "repaired.ipa" { continue }
+                    if known.contains(where: { $0.storedPath == u.path }) { continue }
+                    out.append(u)
+                    continue
+                }
+                // 形态二（新落点）：`Imports/<包名>/original.ipa`。
+                // 只对 Imports/ 目录做一级下探；Documents/ 根不做（新落点只会在 Imports/ 下）。
+                guard dir.path == importsDir.path else { continue }
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                let original = u.appendingPathComponent("original.ipa")
+                guard fm.fileExists(atPath: original.path) else { continue }
+                if known.contains(where: { $0.storedPath == original.path }) { continue }
+                out.append(original)
             }
         }
-        return out.sorted { a, b in
+        let sorted = out.sorted { a, b in
             let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey])
                         .contentModificationDate) ?? .distantPast
             let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey])
@@ -326,18 +394,19 @@ enum ImportService {
             if da != db { return da > db }
             return a.lastPathComponent < b.lastPathComponent
         }
+        return ScanResult(urls: sorted, unreadableDirectories: unreadable)
     }
 
     // MARK: onOpenURL（AirDrop /「用其他应用打开」）
 
     /// 处理 `CFBundleDocumentTypes` 声明的类型被打开时的 URL。
     ///
-    /// ⚠️ LiveContainer 下 `LSSupportsOpeningDocumentsInPlace=true` 可能给**安全作用域 URL**
+    /// 注意： LiveContainer 下 `LSSupportsOpeningDocumentsInPlace=true` 可能给**安全作用域 URL**
     ///    （而非 `Inbox/` 副本），安全作用域访问在 LC guest 下常被拒 ⇒ **先试，失败降级**。
     ///    降级动作由调用方通过 `fallbackToPicker` 决定（当前实现：切到共享转换页并提示手动选择，
     ///    **不会**自动弹出文件选择器）。
     ///
-    /// ⚠️ 两个回调都声明为 `@MainActor`（它们本就是 UI 回调）。这同时解决 Swift 6 严格并发：
+    /// 注意： 两个回调都声明为 `@MainActor`（它们本就是 UI 回调）。这同时解决 Swift 6 严格并发：
     ///    全局 actor 隔离的闭包**隐式 `Sendable`**，因此可以合法地被下方 `Task {}` 捕获并送进
     ///    `MainActor.run`，无需 `@unchecked Sendable` / `nonisolated(unsafe)` 之类的逃生舱。
     static func handleOpenURL(_ url: URL,
@@ -351,7 +420,7 @@ enum ImportService {
         } catch {
             if scoped { url.stopAccessingSecurityScopedResource() }
             LoginLogger.shared.log("[导入] onOpenURL 读取失败（可能是 LC 安全作用域限制），降级到应用内选择",
-                                   category: .appStore)
+                                   category: .shareConvert)
             // 两个回调都是 UI 回调（切 tab + toast），签名上已是 `@MainActor`。
             // 本函数**刻意保持 nonisolated**（理由见下方 Task 处），所以这里显式回主 actor 再调。
             Task { @MainActor in
@@ -365,7 +434,7 @@ enum ImportService {
         }
         if scoped { url.stopAccessingSecurityScopedResource() }
 
-        // ⚠️ 本函数**必须保持 nonisolated**，且这里**必须**是 `Task {}`（不是 `Task.detached`）。
+        // 注意： 本函数**必须保持 nonisolated**，且这里**必须**是 `Task {}`（不是 `Task.detached`）。
         //    原因：`Task {}` 只在**非隔离**上下文里才不会被主 actor 继承 —— 而 `importFile`
         //    要做几百 MB 的整包复制 + 流式 sha256 + 解 ZIP 中央目录，必须留在主线程之外。
         //    若把本函数标成 `@MainActor`（或在 `@MainActor` 上下文里 `Task {}`），在
@@ -395,7 +464,118 @@ enum ImportService {
                                           confirmInstall: confirmInstall)
     }
 
+    // MARK: 从磁盘重建记录（已导入包列表 → 进入修补流程）
+
+    /// 为 `Imports/` 里**已存在**的原件重建一条 `ImportRecord`，
+    /// 让「已导入的包」列表点某一行时复用既有的「包信息 → 开始修补」入口。
+    ///
+    /// 与 `importFile` 的差别：不落盘、不净化文件名、不写台账，只**重读原件**补齐修补所需字段。
+    /// `repairHandoff.payloadSha256` 用**现场重算的原件 sha256** —— 与 `RepairService` 的完整性
+    /// 校验同源，必然自洽。
+    ///
+    /// 返回 `nil` 表示原件读不出（缺失 / 不是 IPA / 哈希失败），调用方据此提示，不静默。
+    static func rebuildRecord(forOriginalAt path: String) -> ImportRecord? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else { return nil }
+        let url = URL(fileURLWithPath: path)
+
+        let attrs = try? fm.attributesOfItem(atPath: path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        let when = (attrs?[.creationDate] as? Date)
+            ?? (attrs?[.modificationDate] as? Date) ?? Date()
+
+        guard let ins = IPAPackageInspector.inspect(ipaPath: path) else { return nil }
+        guard let sha = RepairService.sha256Hex(ofFileAt: path) else { return nil }
+
+        let sinfData = IPAPackageInspector.extractSINF(ipaPath: path)
+        let sinfSha = sinfData.map { RepairService.sha256Hex(of: $0) }
+        let purchase = inspectPurchaseMeta(ipaPath: path, note: { _ in })
+        let itemId = extractStoreItemId(ipaPath: path)
+
+        let payloadKind: String
+        switch ins.encryption {
+        case .encrypted: payloadKind = "encryptedIPA"
+        case .plaintext: payloadKind = "decryptedIPA"
+        case .unknown:   payloadKind = "unknownIPA"
+        }
+
+        // 展示名：新落点取目录名（= 包名），老平铺取去扩展名的文件名。
+        let storedName = url.lastPathComponent == "original.ipa"
+            ? url.deletingLastPathComponent().lastPathComponent
+            : url.deletingPathExtension().lastPathComponent
+
+        return ImportRecord(
+            id: UUID().uuidString,
+            importedAt: when,
+            // 来源类型从磁盘现状不可考（列表只反推落点形态）—— 仅台账字段，不参与修补与展示。
+            sourceKind: .picker,
+            originalFileName: url.lastPathComponent,
+            storedFileName: storedName,
+            storedPath: path,
+            sizeBytes: size,
+            sha256: sha,
+            app: .init(bundleId: ins.bundleIdentifier,
+                       version: ins.bundleVersion,
+                       displayName: ins.displayName,
+                       storeItemId: itemId),
+            payload: .init(kind: payloadKind,
+                           encrypted: ins.isEncrypted,
+                           cryptid: ins.cryptid),
+            sinf: .init(present: sinfData != nil, sha256: sinfSha,
+                        accountHint: purchase.appleIdRedacted),
+            purchaseMeta: purchase,
+            trust: .init(sourceUntrusted: true, entryCount: nil, notes: []),
+            repairHandoff: .init(bundleId: ins.bundleIdentifier,
+                                 storeItemId: itemId,
+                                 payloadKind: payloadKind,
+                                 payloadSha256: sha,
+                                 sourceHint: nil)
+        )
+    }
+
+    // MARK: 修补成功后删除原件（用户需求 #17）
+
+    /// 修补成功后删除**原件 `original.ipa`**（需求 #17：修好后自动删掉那份待修补的包）。
+    ///
+    /// **只删原件，`repaired.ipa` 保留** —— 产物才是后续安装 / 导出的对象。
+    /// 原件删掉后，该包目录只剩 `repaired.ipa`，`ImportedPackageList` 会把它归到「已修补」块。
+    ///
+    /// 只在**修补成功**（`RepairResult.status == .ok`）后由调用方调用；失败 / 取消（`.skipped`）
+    /// **绝不**调用 —— 那两种情形原件必须完好（与需求 #10 一致）。
+    ///
+    /// 只处理**新落点** `Imports/<包名>/original.ipa`：文件名恰为 `original.ipa` 才删。
+    /// 老平铺的 `<包名>.ipa` 不删 —— 它的 `repaired.ipa` 落在共享的 `Imports/` 根目录、无法归因到
+    /// 具体包名，删了原件会让该条目从两个列表里都消失，反而丢失产物。
+    ///
+    /// - Returns: 确实删掉了原件返回 `true`；非新落点或删除失败返回 `false`（不抛、不静默阻断）。
+    @discardableResult
+    static func deleteOriginalAfterRepairSuccess(_ record: ImportRecord) -> Bool {
+        let path = record.storedPath
+        guard (path as NSString).lastPathComponent == "original.ipa" else { return false }
+        do {
+            try FileManager.default.removeItem(atPath: path)
+            LoginLogger.shared.log("[共享修补] 修补成功，已删除原件 original.ipa（保留 repaired.ipa）",
+                                   category: .shareConvert)
+            return true
+        } catch {
+            LoginLogger.shared.log("[共享修补] 删除原件 original.ipa 失败：\(error)",
+                                   category: .shareConvert)
+            return false
+        }
+    }
+
     // MARK: 小工具
+
+    /// 清掉**本次导入原子占位**的那个目录（`reserveUniqueDirectory` 保证它归本任务独占）。
+    ///
+    /// 只删这一个目录 —— 绝不触碰其它并发导入的目录。旧实现用裸 `removeItem(folderURL)` 时，
+    /// 因占位是 check-then-act（非独占），复制失败会删掉**并发对方已落盘的目录**（跨任务误删，
+    /// 进而让对方的 `record.sha256` 与实际文件不符 → 静默损坏 / 误报 E2）。原子占位后本目录
+    /// 必为己有，删除才安全。
+    private static func cleanupOwnFolder(_ folderURL: URL) {
+        try? FileManager.default.removeItem(at: folderURL)
+    }
 
     /// 购买者元数据体检（日志**只记脱敏值**）。
     private static func inspectPurchaseMeta(ipaPath: String,

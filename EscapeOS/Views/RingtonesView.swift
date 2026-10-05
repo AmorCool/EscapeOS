@@ -36,7 +36,7 @@ final class RingtonePlayer: NSObject, AVAudioPlayerDelegate, ObservableObject {
 /// 铃声管理：经 RSD 隧道（AFC）管理 /var/mobile/media 内的铃声文件，
 /// 支持导入 / 导出 / 删除 / 重命名 / 在线播放 / 刷新.
 ///
-/// ⚠️ 硬限制说明（页面 footer 会展示）：系统铃声库
+/// 注意： 硬限制说明（页面 footer 会展示）：系统铃声库
 /// /var/mobile/Library/Ringtones 在 AFC 根（= /var/mobile/media）之外，
 /// 隧道不可达，因此只能管理媒体目录内的铃声文件.
 struct RingtonesView: View {
@@ -92,7 +92,7 @@ struct RingtonesView: View {
             } header: {
                 Text("铃声（/var/mobile/media）")
             } footer: {
-                Text("导入音频（mp3/wav/m4a，超 40 秒自动截取）→ 转 .m4r 上传至 iTunes_Control/Ringtones 并注册铃声库.导入后到「设置 → 声音 → 铃声」查看；未立即出现可重启设备.")
+                Text("导入音频（mp3/wav/m4a，超 40 秒自动截取）后转为 .m4r 注册铃声库.到「设置 → 声音 → 铃声」查看，未立即出现可重启设备.")
             }
         }
         .listStyle(.insetGrouped)

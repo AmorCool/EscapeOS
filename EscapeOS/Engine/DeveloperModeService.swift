@@ -9,7 +9,7 @@
 //    · 开启：RSD 的 amfi 服务（com.apple.amfi.lockdown）：
 //        action 0 = reveal_developer_mode_option_in_ui（让「设置」里出现开关）
 //        action 1 = enable_developer_mode（真正打开）
-//  ⚠️ **关闭没有接口**：amfi 只有 0/1/2/3/4 五个 action（无 disable），
+//  注意： **关闭没有接口**：amfi 只有 0/1/2/3/4 五个 action（无 disable），
 //     关闭只能去设备「设置 → 隐私与安全性 → 开发者模式」手动关。
 //
 import Foundation

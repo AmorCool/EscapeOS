@@ -27,7 +27,131 @@ permissions:
   actions: read
 
 jobs:
+  # ── 转正判定（promote）────────────────────────────────────────────────────────
+  # tag 触发时先查：同一 commit SHA 是否已有一次「成功构建」，且其 IPA artifact
+  # 仍在保留期内、且源码 hash 一致。四条全满足 ⇒ 直接复用那次产物发 Release，
+  # 下面的 xcode-build 被 job 级 if 整体跳过 —— 不再重复烧一遍 15~30 分钟的编译。
+  # 任一条不确定 ⇒ 老实重新构建（宁可多编一次，不发错产物）。
+  # 用独立 job 做门控（而非给每个 build step 加 if）：job 级 if 是原子的，
+  # 不可能出现「漏给某个 step 加 if ⇒ 半跳过 ⇒ 编译中途失败」。
+  promote:
+    # 与 xcode-build 同 runner label：本仓库用的是自建镜像标签（xcode-27），
+    # 写成 ubuntu-latest 不保证有机器，风险是永久排队。
+    runs-on: xcode-27
+    permissions:
+      contents: write   # 复用成功时要发 Release
+      actions: read     # 读 runs / artifacts API（gh run list / gh api .../artifacts）
+    outputs:
+      reuse: ${{ steps.resolve.outputs.reuse }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve reusable build (promote tag without rebuilding)
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 只对 v* tag 做转正判定；workflow_dispatch 一律正常构建。
+          case "${GITHUB_REF:-}" in
+            refs/tags/v*) ;;
+            *)
+              echo "非 v* tag 触发（ref=${GITHUB_REF:-}），跳过复用判定，走正常构建。"
+              echo "reuse=false" >> "$GITHUB_OUTPUT"
+              { echo "### Promote 判定：未复用"
+                echo "- ref = \`${GITHUB_REF:-}\`（非 v* tag）⇒ 正常构建，不做复用。"; } >> "$GITHUB_STEP_SUMMARY"
+              exit 0 ;;
+          esac
+
+          SHA="${GITHUB_SHA}"
+          echo "tag=${GITHUB_REF_NAME} sha=${SHA}"
+
+          # 本次提交树里「参与编译的路径」的内容 hash。与 xcode-build 写入 artifact 的
+          # promote-hash.txt 用同一条命令；git ls-tree 只读提交树、与工作区状态无关，
+          # 因此两个 job 各自算出的值天然可比。
+          CUR_HASH="$(git ls-tree -r HEAD -- EscapeOS project.yml | shasum -a 256 | cut -d' ' -f1)"
+          echo "current source hash: $CUR_HASH"
+
+          REUSE=false
+          # 找同 SHA 的 success run（新→旧），逐个验证 artifact 存在 / 未过期 / hash 一致。
+          RUNS="$(gh run list --workflow build-xcode.yml -L 100 \
+            --json databaseId,headSha,conclusion \
+            --jq "[.[] | select(.headSha == \"${SHA}\" and .conclusion == \"success\")] | .[].databaseId" \
+            2>/dev/null || true)"
+          echo "同 SHA 的 success run: ${RUNS:-<无>}"
+
+          for RUN in ${RUNS:-}; do
+            # 判据 1：artifact 必须存在且【未过期】（保留期过了 gh 取不到）。
+            ART="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN}/artifacts" \
+              --jq '[.artifacts[] | select(.name == "escapeos-xcode-ipa" and .expired == false)] | .[0].id // empty' \
+              2>/dev/null || true)"
+            if [ -z "${ART:-}" ]; then
+              echo "run $RUN: 无「未过期」的 escapeos-xcode-ipa artifact ⇒ 不可复用"
+              continue
+            fi
+            rm -rf /tmp/reuse && mkdir -p /tmp/reuse
+            if ! gh run download "$RUN" -n escapeos-xcode-ipa -D /tmp/reuse >/dev/null 2>&1; then
+              echo "run $RUN: artifact 下载失败 ⇒ 不可复用"
+              continue
+            fi
+            IPA="$(find /tmp/reuse -name 'EscapeSpace-*.ipa' -type f | head -n1)"
+            HASHF="$(find /tmp/reuse -name 'promote-hash.txt' -type f | head -n1)"
+            if [ -z "${IPA:-}" ]; then
+              echo "run $RUN: 产物里没有 IPA ⇒ 不可复用"; continue
+            fi
+            # 判据 2：产物必须携带 hash 标记（旧产物没有 ⇒ 无法确认 ⇒ 不复用）。
+            if [ -z "${HASHF:-}" ]; then
+              echo "run $RUN: 产物未携带 promote-hash.txt（旧产物）⇒ 无法确认 hash，不可复用"; continue
+            fi
+            CACHED_HASH="$(tr -d '[:space:]' < "$HASHF")"
+            # 判据 3：hash 必须一致（保证产物确由这份源码编出）。
+            if [ "${CACHED_HASH:-}" != "$CUR_HASH" ]; then
+              echo "run $RUN: hash 不一致（cached=${CACHED_HASH:-空} current=$CUR_HASH）⇒ 不可复用"
+              continue
+            fi
+
+            # ── 四条件全满足：复用 ──
+            echo "=== 复用 run ${RUN} 的产物（同 SHA / success / artifact 未过期 / hash 一致），跳过编译 ==="
+            REUSE=true
+            TAG="${GITHUB_REF_NAME}"
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG 已存在，仅追加/覆盖 asset"
+              gh release upload "$TAG" "$IPA" --clobber
+            else
+              gh release create "$TAG" \
+                --title "EscapeSpace $TAG (Xcode native)" \
+                --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA。**复用 run ${RUN} 的成功构建产物，未重复编译**。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.ipaside.escapeos。" \
+                "$IPA"
+            fi
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+            echo "reuse_run=${RUN}" >> "$GITHUB_OUTPUT"
+            { echo "### Promote 判定：已复用（跳过编译）"
+              echo "- tag = \`${TAG}\`，commit = \`${SHA}\`"
+              echo "- 复用 run [${RUN}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${RUN}) 的成功产物"
+              echo "- 源码 hash 一致：\`${CUR_HASH}\`"
+              echo "- 已发布 Release \`${TAG}\`（asset = \`$(basename "$IPA")\`）"; } >> "$GITHUB_STEP_SUMMARY"
+            break
+          done
+
+          if [ "$REUSE" != "true" ]; then
+            echo "未找到可安全复用的构建 ⇒ 正常编译。"
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+            { echo "### Promote 判定：未复用（走正常构建）"
+              echo "- tag = \`${GITHUB_REF_NAME}\`，commit = \`${SHA}\`"
+              echo "- 原因：同 SHA 无 success run / artifact 缺失或已过期 / hash 不一致（任一不满足即重新构建）"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   xcode-build:
+    needs: promote
+    # promote 判定可复用时，整个构建 job 跳过（不重复编译）。
+    # ⚠️ 必须显式写 !cancelled()：GitHub 会给「不含状态检查函数」的 if 隐式附加
+    # success()。若只写 `needs.promote.outputs.reuse != 'true'`，一旦 promote 失败
+    # （gh API 抖动 / runner 异常）本 job 会被隐式 success() 判假而【整体跳过】
+    # ⇒ 既不构建也不发 Release，违背「宁可多编一次」。加上 !cancelled() 覆盖默认
+    # success() 后：promote 失败 ⇒ reuse 输出为空 ⇒ 条件为真 ⇒ 照常构建出包；
+    # 仅在 promote 成功且明确复用（reuse=true）时才跳过。
+    if: ${{ !cancelled() && needs.promote.outputs.reuse != 'true' }}
     runs-on: xcode-27
     env:
       UNICORN_TAG: "2.1.0"
@@ -463,12 +587,23 @@ jobs:
           unzip -l EscapeSpace-*.ipa | grep -E "SAPAssets/(CommerceKit|CoreFP)" || {
             echo "::error::SAPAssets 缺失 —— Apple ID 登录会失败"; exit 1; }
 
+      - name: Write promote hash marker
+        # 把「本次产物对应的源码 hash」随 IPA artifact 一起上传：tag 触发的 promote job
+        # 靠它校验「同 SHA 复用」时的 hash 一致（见 promote job）。git ls-tree 只读提交树，
+        # 不受本 job 之前/之后对工作区的任何改动影响，故两个 job 算出的值可比。
+        run: |
+          set -euo pipefail
+          git ls-tree -r HEAD -- EscapeOS project.yml | shasum -a 256 | cut -d' ' -f1 > promote-hash.txt
+          echo "promote-hash: $(cat promote-hash.txt)"
+
       - name: Upload IPA
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: escapeos-xcode-ipa
-          path: EscapeSpace-*.ipa
+          path: |
+            EscapeSpace-*.ipa
+            promote-hash.txt
 
 
       - name: Publish Release (on tag)

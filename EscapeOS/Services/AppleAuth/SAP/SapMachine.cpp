@@ -957,7 +957,7 @@ void SapMachine::Teardown(uint64_t ctx) {
 //    decryptChunk          → 0x0ee700(session, buf, len, buf, 0)
 //    Close                 → 0x1212d0(session)
 //
-//  ⚠️ 上游 openStoreAgent 还会给 shims 加一组 `zeroReturnAliases`
+//  注意： 上游 openStoreAgent 还会给 shims 加一组 `zeroReturnAliases`
 //     （`_pthread_rwlock_rdlock` / `_pthread_mutex_init` / `_pthread_mutex_destroy`
 //      / `_pthread_rwlock_destroy` 及 `$UNIX2003` 变体）。
 //     我们的 `SapShims` 是否已实现这些 symbol 决定要不要补 ——

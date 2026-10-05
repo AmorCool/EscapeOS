@@ -16,7 +16,7 @@ import Security
 /// 3. **匿名、免账号**候选（仅在没填上面两项时），逐个上传 + **GET 回读校验**，失败静默换下一个：
 ///    `litterbox.catbox.moe`（1h）→ `0x0.st` → `tmpfiles.org`（1h）→ `uguu.se`（3h）→ `paste.rs`。
 ///    临时件排前（清单只活几分钟，且含 bundleId/版本，少留痕）；**单候选超时 8s**。
-///    ⚠️ `envs.sh` 已删除：真机回读被劫持到广告域名（`ob.sd559908.js.2gnc.com`），有安全风险。
+///    注意： `envs.sh` 已删除：真机回读被劫持到广告域名（`ob.sd559908.js.2gnc.com`），有安全风险。
 ///
 /// **回读校验**：内容必须一致；匿名候选另需 `Content-Type` 属 XML 家族
 /// （`application/xml` / `text/xml` / `application/x-plist` / 任意 `*+xml`）。
@@ -91,7 +91,7 @@ enum ManifestPublisher {
                 let url = try publishToUserEndpoint(manifest: manifest, endpoint: endpoint)
                 completion(.success(url))
             } catch {
-                LoginLogger.shared.log("[在线安装] ❌ 自有托管不可用（不回落匿名服务）", category: .appStore)
+                LoginLogger.shared.log("[在线安装] [失败] 自有托管不可用（不回落匿名服务）", category: .appStore)
                 completion(.failure(PublishError.endpointUnavailable))
             }
             return
@@ -273,7 +273,7 @@ enum ManifestPublisher {
                                    + "（\(outcome.ok ? "可用" : (outcome.reason ?? "不可用"))）",
                                    category: .appStore)
             if outcome.ok {
-                LoginLogger.shared.log("[在线安装] ✓ 匿名托管成功：\(candidate.name) → \(shortURL(url))",
+                LoginLogger.shared.log("[在线安装] [完成] 匿名托管成功：\(candidate.name) → \(shortURL(url))",
                                        category: .appStore)
                 return url
             }
@@ -283,15 +283,15 @@ enum ManifestPublisher {
         }
 
         // 兜底：所有候选的 Content-Type 都不是 XML 时，用第一个「内容一致」的。
-        // ⚠️ **iOS 的 OTA 安装器是否接受非 XML 清单未验证** —— 这里只陈述事实：
+        // 注意： **iOS 的 OTA 安装器是否接受非 XML 清单未验证** —— 这里只陈述事实：
         //    内容校验通过、只是 Content-Type 不是 XML，比直接失败更值得一赌。
         if let fallback = contentOnlyFallback {
-            LoginLogger.shared.log("[在线安装] ⚠ 无 XML 类型候选可用，兜底使用 \(fallback.name)"
+            LoginLogger.shared.log("[在线安装] [注意] 无 XML 类型候选可用，兜底使用 \(fallback.name)"
                                    + "（Content-Type=\(fallback.contentType)，内容一致；iOS 是否接受未验证）→ \(shortURL(fallback.url))",
                                    category: .appStore)
             return fallback.url
         }
-        LoginLogger.shared.log("[在线安装] ❌ 所有匿名托管候选均不可用", category: .appStore)
+        LoginLogger.shared.log("[在线安装] [失败] 所有匿名托管候选均不可用", category: .appStore)
         return nil
     }
 

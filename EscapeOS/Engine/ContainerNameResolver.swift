@@ -7,7 +7,7 @@ import UIKit
 /// 完全无法辨认.这里读容器根的 containermanager 元数据，拿 `MCMMetadataIdentifier`
 /// （bundle id）作为显示名——**与 Erosion 原版 `folderLabel` 完全一致**.
 ///
-/// ⚠️ 为什么不做 bundle id → App 显示名（LSApplicationWorkspace）的二级解析：
+/// 注意： 为什么不做 bundle id → App 显示名（LSApplicationWorkspace）的二级解析：
 /// v0.2.98 在后台线程批量调用私有 LaunchServices API → 打开容器根直接闪退；
 /// v0.2.99 挪到主线程后仍延迟闪退（该环境批量查询不稳定）.Erosion 原版只显示
 /// bundle id，从不上 LS 查询.对齐原版，容器行显示 bundle id（仍比 UUID 好认）.

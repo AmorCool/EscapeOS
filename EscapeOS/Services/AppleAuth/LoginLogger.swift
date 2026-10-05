@@ -32,6 +32,13 @@ final class LoginLogger: @unchecked Sendable {
         case i4Store = "爱思源"
         case sideload = "侧载签名"
         case certificate = "证书管理"
+        /// **共享转换**（导入他人分享的 IPA → 修补 → 安装）。
+        ///
+        /// 为什么必须从 `.appStore` 拆出：共享转换整条链（`ImportService` / `RepairService`）
+        /// 此前全部写 `.appStore`，于是「AppStore 日志」页里混着导入 / 修补 / 安装的记录，
+        /// 两边都过滤不干净。拆开后共享转换页（`ImportView` 右上角日志按钮）只读这一类，
+        /// 与商店日志互不串台。
+        case shareConvert = "共享转换"
     }
 
     private struct Entry {
@@ -40,6 +47,13 @@ final class LoginLogger: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    /// 串行化**文件追加**（`appendToFile`）—— 保证一次追加是原子的。
+    ///
+    /// 为什么不复用上面的 `lock`：追加要落盘，而 `lock` 被日志页 **2s 轮询**的
+    /// `recentLines` / `fullLog` 频繁获取；两者共用一把锁会让轮询被磁盘 I/O 拖住。
+    /// 独立成锁后，文件写与缓冲读互不阻塞，粒度也保持最小（只覆盖一次追加）。
+    /// 顺带：即使将来有人在持 `lock` 时调 `appendToFile`，也不会自锁。
+    private let fileLock = NSLock()
     private var buffer: [Entry] = []
     private let maxBufferLines = 500
 
@@ -124,7 +138,7 @@ final class LoginLogger: @unchecked Sendable {
 
         // 顺序 = 时间顺序（**最新的在最后**）：文件尾部（旧的在前）→ 再补上内存里
         // 还没落盘的行（正常为空；只有写文件失败时才可能非空，那时它本来就是最新的）。
-        // ⚠️ 不要照 `fullLog()` 的 `mem + 文件` 顺序 —— 那是「最新的一块在最前」，
+        // 注意： 不要照 `fullLog()` 的 `mem + 文件` 顺序 —— 那是「最新的一块在最前」，
         // 日志页会把最后一行当作最新去自动滚底，顺序反了就会停在**最旧**的一行上。
         var all = tailLines()
         let inFile = Set(all)
@@ -181,6 +195,12 @@ final class LoginLogger: @unchecked Sendable {
 
     private func appendToFile(_ line: String) {
         guard let data = (line + "\n").data(using: .utf8) else { return }
+        // 一次追加必须原子：无锁时两个线程会各自 seekToEnd 到同一偏移再写，
+        // 后写者覆盖先写者，或两条日志的字节互相交错（用户实测的日志串行错乱）。
+        // 锁只覆盖「检查 / 截断 / 打开句柄 / seek / write」这一小段，不含 `log()` 的
+        // 缓冲写入与 `print`，所以不会拖慢高频写日志路径。
+        fileLock.lock()
+        defer { fileLock.unlock() }
         if FileManager.default.fileExists(atPath: logFileURL.path) {
             // v0.3.434：超过用户设定的上限时**滚动截断**（保留最新部分），
             // 避免日志文件无限增长（此前实测涨到 683KB）。
