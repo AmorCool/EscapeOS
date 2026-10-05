@@ -243,7 +243,7 @@ struct ImportedListPage: View {
             return Alert(title: Text("安装前确认"),
                          message: Text("即将把这个应用安装到本机."),
                          primaryButton: .default(Text("继续安装")) { resumeInstall(true) },
-                         secondaryButton: .cancel(Text("取消")) { resumeInstall(false) })
+                         secondaryButton: .cancel(Text("只修补，不安装")) { resumeInstall(false) })
         case .batchRepair(let n):
             return Alert(title: Text("修补前确认"),
                          message: Text("将对选中的 \(n) 个安装包逐个修补并安装；每个在安装前还会再确认一次. 仅适用于来源可信、且与你登录相同 Apple ID 的设备分享的包."),
@@ -303,15 +303,22 @@ struct ImportedListPage: View {
     /// 逐条解析图标（读 zip 成本高，放后台**串行**；已落盘的直接命中缓存文件）.
     /// 与 `IPADownloadManagerView.loadIcons` 同型：图标只是锦上添花，读不出就留空、界面回落首字母块.
     private func loadIcons() async {
+        // 先清掉「`Imports/` 里已无对应包」的旧图标缓存（判据见 `ImportedPackageIconStore.pruneStaleIcons`）.
+        await Task.detached(priority: .utility) {
+            ImportedPackageIconStore.pruneStaleIcons()
+        }.value
         let targets = packages
         var resolved: [String: String] = [:]
         for p in targets {
             let url = await Task.detached(priority: .utility) {
                 ImportedPackageIconStore.iconURL(for: p)
             }.value
-            if let url { resolved[p.id] = url }
+            if let url {
+                resolved[p.id] = url
+                // 每解析出一个就发布一次 ⇒ 图标逐个出现，不等全部完成（本方法在主 actor 上，直接写 @State）.
+                iconURLs = resolved
+            }
         }
-        iconURLs = resolved
     }
 
     // MARK: - 批量修补（需求 #3 / #5）

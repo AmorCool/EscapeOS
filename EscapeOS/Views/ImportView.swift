@@ -23,6 +23,9 @@ struct ImportView: View {
     @State private var showImportConfirm = false
 
     @State private var importing = false
+    // 单包导入进度（0-1）。**当前恒为 nil** —— `ImportService` 无法上报（`copyItem` 是系统调用，
+    // 拿不到内部进度；流式 sha256 同理）。此位与 `ImportFlowBanner.fraction` 的传参**保留为将来的接口**：
+    // 若日后改为分块复制，往这里写值即可 —— **不要为了「有进度」而写死一个常量**（曾写死 0.5，是假进度）。
     @State private var importProgress: Double?     // nil = 不确定态（复制/解析阶段无进度上报）
     @State private var importProgressText = ""
     @State private var importResult: ImportResult?
@@ -101,8 +104,10 @@ struct ImportView: View {
             Text("你要导入的是别人给的安装包，不是从 App Store 下载的. 它可能被篡改或伪装，也可能带有别人的账号信息. 只导入来源可信的包.")
         }
         // 导入成功后自动进入「待修补」页（用户需求：导入的 IPA 暂时进「待修补」，不停在主界面）。
+        // 队列所有权在本页：把 `sessionPendingNames` 的回写口一并传下去，二级页移除 / 修补成功
+        // 才能把包名从队列里扣掉（否则计数不变、重进页面被移除的包会复活）。
         .navigationDestination(isPresented: $showPendingRepair) {
-            PendingRepairPage(packages: sessionPendingPackages)
+            PendingRepairPage(packages: sessionPendingPackages, pendingNames: $sessionPendingNames)
         }
         // D4：消费 onOpenURL 交接过来的导入记录（一次性，见 `PendingImportHandoff`）。
         // 三处互补，覆盖全部挂载/时序状态：
@@ -115,9 +120,9 @@ struct ImportView: View {
         .onReceive(NotificationCenter.default.publisher(for: .escPendingImportHandoff)) { _ in
             consumePendingImport()
         }
-        .onAppear { consumePendingImport(); reloadPackages() }
+        .onAppear { consumePendingImport(); Task { await reloadPackages() } }
         .onChange(of: scenePhase) { _, _ in
-            consumePendingImport(); reloadPackages()
+            consumePendingImport(); Task { await reloadPackages() }
         }
         .toastHost()
     }
@@ -184,10 +189,18 @@ struct ImportView: View {
 
     /// 本次会话导入、且还没修补掉的包 —— 传给 `PendingRepairPage` 的**会话队列**。
     ///
-    /// 与 `PendingRepairPage(packages:)` 的注入模式对接：传了它，那一页就**不扫盘**，
+    /// 与 `PendingRepairPage(packages:pendingNames:)` 的注入模式对接：传了它，那一页就**不扫盘**，
     /// 只显示这几个 —— 这样**主界面的计数与点进去看到的数量一致**。
+    /// 队列的**真值在本页**（`sessionPendingNames`），二级页经 `pendingNames` 回写口扣名，
+    /// 所以这里派生出的 `count` 会**同帧**跟着降.
     private var sessionPendingPackages: [ImportedPackage] {
-        packages.filter { $0.status == .awaitingRepair && sessionPendingNames.contains($0.name) }
+        // 判据只有「本次会话导入过」一条 —— `sessionPendingNames` 本身就是该判据.
+        // 不再叠加 `status == .awaitingRepair`：本机已装同 bundleId 时导入的包 status == .installed，
+        // 叠加后会被滤掉 ⇒ 导入后自动进入的「待修补」页是空的 ⇒ 用户以为包丢了.
+        // 已修补的包不会出现在这里：`packages` 是 `scanListing().imported` 块，其 status 只可能是
+        // .awaitingRepair / .installed（该块 product 恒为 nil，见 `ImportedPackageList.make`）；
+        // 包一经修补即整行移出该块（进 `repairedPackages`），故无需额外排除 .repaired.
+        packages.filter { sessionPendingNames.contains($0.name) }
     }
 
     /// 「待修补」栏目入口：点进去是二级页 `PendingRepairPage`。
@@ -195,7 +208,7 @@ struct ImportView: View {
     private var pendingLinkSection: some View {
         Section {
             NavigationLink {
-                PendingRepairPage(packages: sessionPendingPackages)
+                PendingRepairPage(packages: sessionPendingPackages, pendingNames: $sessionPendingNames)
             } label: {
                 blockLabel("待修补", count: sessionPendingCount,
                            symbol: "clock", tint: .orange)
@@ -332,8 +345,13 @@ struct ImportView: View {
         importResult = nil      // 清掉上一轮的导入结果，避免旧消息与刚接上的包对不上
         record = rec            // 进入「待修补」态
         sessionPendingNames.insert(rec.storedFileName)   // 进本次会话的「待修补」队列
-        reloadPackages()
-        showPendingRepair = true   // 自动进入「待修补」页
+        // 等扫盘完成再导航（缺陷 1）：`sessionPendingPackages` 由 `packages` 派生，抢在扫盘前导航会把
+        // **空数组**注进二级页 ⇒ 页面开成空的。扫盘完成后本页计数会变，但二级页的注入数组是 init 时
+        // 定格的，不会自己回补（直到退出重进）—— 所以必须在 `packages` 就绪后再置位 `showPendingRepair`.
+        Task {
+            await reloadPackages()
+            showPendingRepair = true   // 自动进入「待修补」页
+        }
     }
 
     /// 发起一次「从文件导入」：记下待导入 URL 并弹出导入前确认。
@@ -355,24 +373,21 @@ struct ImportView: View {
         importResult = nil
         record = nil
         Task {
-            // Swift 6：progress 回调以 `@Sendable` 显式标注（非 MainActor 隔离），
-            // 回主线程再写 @State —— 与 DeviceSlimView 的写法同型。
-            let r = await ImportService.importFile(at: url, sourceKind: .picker) { @Sendable p, s in
-                Task { @MainActor in
-                    importProgress = p
-                    importProgressText = s
-                }
-            }
+            // 不传 progress 回调：导入阶段无可测的确定进度（复制 / 流式 sha256 都拿不到内部进度），
+            // 传一个永不触发的闭包只会让下一个人以为「这里有进度上报」。UI 无进度时走 indeterminate（见 flowSection）。
+            let r = await ImportService.importFile(at: url, sourceKind: .picker)
             importing = false
             importProgress = nil
             importResult = r
             record = r.record
-            reloadPackages()
+            await reloadPackages()   // 先等扫盘完成，`packages` 就绪后再决定是否导航（见下）
             if r.status == .ok {
                 // 导入成功：收进「待修补」队列，自动进入「待修补」页（用户需求）。
                 if let rec = r.record { sessionPendingNames.insert(rec.storedFileName) }
                 // 已进系统的候选从候选区移除，避免「已导入」还挂在候选里。
                 scanCandidates.removeAll { $0 == url }
+                // 缺陷 1：必须等扫盘完成再导航 —— `sessionPendingPackages` 由 `packages` 派生，
+                // 若在扫盘前就置位，注入的是空数组，二级页会开成空的（见 `reloadPackages` 注释）.
                 showPendingRepair = true
             } else {
                 ToastCenter.shared.show(r.message)
@@ -428,17 +443,19 @@ struct ImportView: View {
     ///
     /// 「已安装」判定需要本机应用清单（`AppDiscovery`，依赖配对 / 隧道）；**查不到就传 nil**，
     /// `isInstalled` 保持 nil，绝不凭空断言已安装。扫描（判已安装时会解包读 bundleId）放后台。
-    private func reloadPackages() {
-        Task {
-            let installed: Set<String>? = await Task.detached(priority: .userInitiated) { () -> Set<String>? in
-                do { return Set(try AppDiscovery().fetchInstalledApps().map(\.bundleIdentifier)) }
-                catch { return nil }
-            }.value
-            let listing = await Task.detached(priority: .userInitiated) {
-                ImportedPackageList.scanListing(installedBundleIds: installed)
-            }.value
-            packages = listing.imported
-            repairedPackages = listing.repaired
-        }
+    ///
+    /// **async**：导入 / 接续成功后要「等它完成再导航」（见 `startImport` / `consumePendingImport`）——
+    /// `sessionPendingPackages` 由 `packages` 派生，不等它跑完就置位 `showPendingRepair` 会把空数组
+    /// 注进二级页。调用方在后台即可 `await`；`onAppear` / `onChange` 里用 `Task { await ... }` 兜住.
+    private func reloadPackages() async {
+        let installed: Set<String>? = await Task.detached(priority: .userInitiated) { () -> Set<String>? in
+            do { return Set(try AppDiscovery().fetchInstalledApps().map(\.bundleIdentifier)) }
+            catch { return nil }
+        }.value
+        let listing = await Task.detached(priority: .userInitiated) {
+            ImportedPackageList.scanListing(installedBundleIds: installed)
+        }.value
+        packages = listing.imported
+        repairedPackages = listing.repaired
     }
 }

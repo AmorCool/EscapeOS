@@ -1,8 +1,9 @@
 # Releasing EscapeOS
 
 The shipping IPA is built by GitHub Actions. Nothing is built locally, and a `v*` tag is the only
-thing that starts a build. Pushing the tag is what produces, in one run, the unsigned IPA and the
-GitHub Release.
+thing that starts a run. A tag run either **reuses a successful build of the same commit** (no
+recompilation — see step 5) or compiles from scratch; either way it ends by publishing the
+unsigned IPA and the GitHub Release.
 
 Follow the steps in order.
 
@@ -111,6 +112,16 @@ RID=$(gh api "repos/AmorCool/EscapeOS/actions/runs?head_sha=$SHA" --jq '.workflo
 gh api "repos/AmorCool/EscapeOS/actions/runs/$RID" --jq '"\(.status)/\(.conclusion)"'
 ```
 
+A tag run has **two jobs**: `promote` and `xcode-build`.
+
+- `promote` runs first. If a *successful* build of the same commit already exists (same source
+  hash, artifact still inside its retention window), it reuses that build's IPA and publishes the
+  Release itself — `xcode-build` is then skipped entirely and nothing is recompiled.
+- Otherwise `xcode-build` compiles, packages, and publishes as usual.
+
+So read the `promote` job's step summary first: it states either "已复用（跳过编译）" or
+"未复用（走正常构建）".
+
 On failure, find the step first, then read the annotations, which carry the file, line, and
 compiler message:
 
@@ -123,6 +134,9 @@ CUR=$(gh api "repos/AmorCool/EscapeOS/actions/runs/$RID/jobs" \
 gh api "repos/AmorCool/EscapeOS/check-runs/$CUR/annotations" \
   --jq '.[]|select(.annotation_level=="failure")|"\(.path):\(.start_line) \(.message)"'
 ```
+
+If `xcode-build` was skipped (promote reused a build), there are no compile annotations to read —
+inspect the `promote` job instead.
 
 The workflow also uploads `xcodegen-and-build-logs` and `xcode-package-log` artifacts, as a
 fallback when the job log itself cannot be fetched.

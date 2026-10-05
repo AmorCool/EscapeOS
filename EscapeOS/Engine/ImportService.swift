@@ -113,6 +113,8 @@ enum ImportService {
     /// - Parameters:
     ///   - url: 源 URL（`SharedDocumentPicker` 已 `asCopy` 到沙盒；`onOpenURL` 可能读不了 → 见 `handleOpenURL`）。
     ///   - sourceKind: 来源类型（落台账用）。
+    ///   - progress: **当前不触发**。导入阶段无可测的确定进度（复制 / 流式 sha256 都拿不到内部进度），
+    ///     故不再上报；UI 无进度时走 `indeterminate`。保留该参数以便将来接入真实进度，**不得**再写死数值。
     static func importFile(at url: URL,
                            sourceKind: ImportRecord.SourceKind,
                            progress: (@Sendable (Double, String) -> Void)? = nil) async -> ImportResult {
@@ -262,7 +264,9 @@ enum ImportService {
         }
 
         // ── (10) 算 sha256（流式，不整包读内存）──────────────────────
-        progress?(0.5, "校验中")
+        // 导入阶段**不上报进度**：复制走系统 `copyItem`（拿不到内部进度），流式 sha256 也无廉价进度可报。
+        // 曾在此写死 `progress?(0.5, ...)` ⇒ 进度条恒走 0 → 50% → 结束，是**假进度**（比没有更糟）。
+        // 无确定进度时 UI 走 `indeterminate` 转圈 —— 转圈是真的，写死的进度条是假的。
         guard let sha = RepairService.sha256Hex(ofFileAt: destURL.path) else {
             // v0.3.570：读失败必须**清掉已落盘的副本**。
             // 否则 `Imports/` 里会留一个**无台账记录的孤儿包**（用户看不到、也不会被清理）。

@@ -53,9 +53,27 @@ enum MediaSaver {
 
     // MARK: - 下载
 
-    /// 下载图片并解码（长按保存用；比 AsyncImage 更好控质量）
+    /// 下载图片并解码（长按保存用；比 AsyncImage 更好控质量）。
+    ///
+    /// v0.3.573：`file://`（如从 IPA 提取的图标，`ImportedPackageIconStore` 给的地址）**走本地文件读取**，
+    /// 不走 `URLSession`。理由**不是**「`URLSession` 不支持 `file` scheme」（Apple 文档写明原生支持
+    /// `data` / `file` / `ftp` / `http` / `https`），而是：**本地文件用本地 API 更直接**，
+    /// 且**与缩略图统一成一条路** —— `ImportedPackageIconView.load()`（`ImportedPackageUI.swift`）
+    /// 读的就是 `UIImage(contentsOfFile:)`。同一个文件不再「缩略图走本地、查看走 URLSession」两条路，
+    /// 也不再依赖「`URLSession` 在真机上如何处理 `file` scheme」这个本仓无法真机验证的假设。
+    ///
+    /// `http(s)://` 一字不动，仍走 `URLSession`（商店网络图、截图预览都在这条路上）。
+    ///
+    /// 这是「查看图标 / 提取图标」两条菜单的**唯一汇合点**：二者都经
+    /// `PreviewImageLoader.image(for:)` → 本方法，别处不再有第二个 URL 取图实现。
     static func downloadImage(_ urlString: String) async throws -> UIImage {
         guard let url = URL(string: urlString) else { throw Failure(message: "图片地址无效") }
+        if url.isFileURL {
+            guard let image = UIImage(contentsOfFile: url.path) else {
+                throw Failure(message: "图片解码失败")
+            }
+            return image
+        }
         var req = URLRequest(url: url)
         req.timeoutInterval = 30
         let (data, _) = try await URLSession.shared.data(for: req)

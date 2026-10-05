@@ -150,11 +150,11 @@ Without the pairing file there is no app list and no container paths to open. Ke
 
 One track builds this tree. Details in `docs/BUILD.md`.
 
-**GitHub Actions — the shipping path.** Push a `v*` tag and `.github/workflows/build-xcode.yml` runs on `macos-latest` with Xcode 26 (iOS 26 SDK): `xcodegen generate` → `xcodebuild` → unsigned IPA → GitHub Release, all inside one workflow. The artifact is `EscapeSpace-<version>-xcode-unsigned.ipa`. No `ldid` pass is applied; `EscapeSpace.entitlements` ships inside the `.app` for the sideloading tool to apply.
+**GitHub Actions — the shipping path.** Push a `v*` tag and `.github/workflows/build-xcode.yml` runs on `xcode-27` with Xcode 27 (iOS 26 SDK): `xcodegen generate` → `xcodebuild` → unsigned IPA → GitHub Release, all inside one workflow. A tag whose commit already has a successful build reuses that build's IPA instead of recompiling. The artifact is `EscapeSpace-<version>-xcode-unsigned.ipa`. No `ldid` pass is applied; `EscapeSpace.entitlements` ships inside the `.app` for the sideloading tool to apply.
 
 It is also the **only** workflow in the repository — the old Theos and MHA (MobileHouseArrest) tracks have been removed, so a tag starts exactly one build.
 
-**Native Xcode 26 on macOS.** Open the project on a Mac with Xcode 26 and archive against the iOS 26 SDK; linking against that SDK is what enables Liquid Glass. The deployment target stays at iOS 18.0.
+**Native Xcode 27 on macOS.** Open the project on a Mac with Xcode 27 and archive against the iOS 26 SDK; linking against that SDK is what enables Liquid Glass. The deployment target stays at iOS 18.0.
 
 `EscapeOS/Tunnel/libidevice_ffi.a` (~93 MB) is not in git — fetch it from the matching GitHub Release or rebuild `jkcoxson/idevice` for `aarch64-apple-ios` before building.
 

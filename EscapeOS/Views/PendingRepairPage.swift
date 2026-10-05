@@ -7,32 +7,47 @@ import SwiftUI
 //
 // 骨架与「已导入」页一致（向上箭头 / 搜索栏 / 多选 + 全选 / 底部批量条），实现见 `ImportedListPage.swift` 顶部注释。
 //
-// 数据源（两种，见 `init(packages:)`）：
+// 数据源（两种，见 `init(packages:pendingNames:)`）：
 //   · **注入模式** —— 「共享转换」主界面把它的**会话队列**（本次会话刚导入的那几个）传进来，
 //     本页只显示这几个，**不再扫盘**。主界面计数也用同一份队列，故点进去数量对得上。
-//   · **磁盘模式**（默认）—— `ImportedPackageList.scanListing(...).imported` 中
-//     `status == .awaitingRepair` 的子集；供其它入口使用。
-//   · 「已导入」= imported 全量（含已安装）；「待修补」= 其中还没修补、还没安装、正等着动手的那些。
+//     队列的**所有权在主界面**（`@State sessionPendingNames`）：本页额外拿一个
+//     `pendingNames: Binding<Set<String>>` **回写口**，移除 / 修补成功即把包名从队列里扣掉，
+//     主界面计数**同帧**跟着降 —— 否则本页改动传不回去，重进本页时被移除的包会「复活」。
+//   · **磁盘模式**（默认）—— `ImportedPackageList.scanListing(...).imported` 全量；供其它入口使用。
+//   · 「已导入」= imported 全量（含已安装）；「待修补」= 其中还没修补、正等着动手的那些。
+//     「是否已安装」与「是否待修补」**解耦**：本机已装同 bundleId 的包 status == .installed，
+//     但它仍是一件**没修补过**的包，故也属于「待修补」，不能按 status 滤掉（会凭空少项 / 空列表）。
 //
 // 「移除」语义（用户需求 #2）：**仅从「待修补」列表移除，不删安装包**，两种模式各有落法：
 //   · 磁盘模式：把包落点整体**移动**到 `Imports/.removed/`（移动 ≠ 删除，可恢复），
 //     两处扫描都用 `.skipsHiddenFiles` ⇒ 移走后即刻从列表消失，且不会被「扫描新文件」捞回来。
 //     详见 `ImportedPackageMover`。
 //   · 注入模式：**只从会话队列拿掉，不碰磁盘文件** —— 队列是会话级的临时列表，包还没被用户确认丢弃，
-//     没必要为它去挪文件；包仍在「已导入」里，可继续修补。
+//     没必要为它去挪文件；包仍在「已导入」里，可继续修补。拿掉动作**经 `pendingNames` 回写主界面**。
 //   这与「已导入」页的「移除 = 删除」是**两种语义**，刻意分开。
 
 struct PendingRepairPage: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    /// 会话级注入的包（非 nil ⇒ 只显示这些，不再扫盘）。见 `init(packages:)`.
+    /// 会话级注入的包（非 nil ⇒ 只显示这些，不再扫盘）。见 `init(packages:pendingNames:)`.
     private let injectedPackages: [ImportedPackage]?
 
-    /// - Parameter packages: 「共享转换」主界面把它的**会话队列**传进来 ⇒ 只显示这些、不扫盘；
-    ///   不传（`nil`，默认）⇒ 保持磁盘全量语义，自己扫盘 —— 现有无参调用不受影响。
-    init(packages: [ImportedPackage]? = nil) {
+    /// 会话队列的**回写口**（队列所有权在「共享转换」主界面 `@State sessionPendingNames`）。
+    ///
+    /// 为什么需要它：队列是主界面的状态，本页若只拿到一份**值拷贝**，本页的移除 / 修补成功就传不回去
+    /// —— 主界面计数不变，且重进本页时队列里那个包会「复活」。传了它，本页改动直接落到主界面队列上
+    /// （计数同帧变化，重进也不再出现）。`nil` ⇒ 磁盘模式，本页改动只作用于本地列表。
+    private let pendingNames: Binding<Set<String>>?
+
+    /// - Parameters:
+    ///   - packages: 「共享转换」主界面把它的**会话队列**传进来 ⇒ 只显示这些、不扫盘；
+    ///     不传（`nil`，默认）⇒ 保持磁盘全量语义，自己扫盘 —— 现有无参调用不受影响.
+    ///   - pendingNames: 会话队列的**回写口**（队列所有权在主界面）；`nil` ⇒ 磁盘模式.
+    init(packages: [ImportedPackage]? = nil,
+         pendingNames: Binding<Set<String>>? = nil) {
         self.injectedPackages = packages
+        self.pendingNames = pendingNames
         _packages = State(initialValue: packages ?? [])
         _loading = State(initialValue: packages == nil)
     }
@@ -44,8 +59,10 @@ struct PendingRepairPage: View {
     @State private var selected: Set<String> = []
 
     @State private var busy = false
-    /// 本页已处理掉、应从列表消失的包 id。磁盘模式下 `reload()` 靠重新扫盘自然剔除，用不到它；
-    /// **注入模式不扫盘**，靠它把「已移出 / 已修补成功」的项从会话队列里扣掉。
+    /// 本页已处理掉、应从本地列表立刻消失的包 id（**本地视图态**，只影响本页这一帧的渲染）。
+    /// 磁盘模式下 `reload()` 靠重新扫盘自然剔除，用不到它；注入模式不扫盘，靠它让「已移出 /
+    /// 已修补成功」的项在本页立刻消失。**队列本身的扣除另经 `pendingNames` 回写主界面**
+    ///（见该属性注释）—— 两者分工：`droppedIds` 管本页渲染，`pendingNames` 管跨页真值。
     @State private var droppedIds: Set<String> = []
     /// 包 id → 图标 `file://` 地址（从 IPA 提取后落 Caches）。读不出就没有这一项，行首回落首字母块.
     @State private var iconURLs: [String: String] = [:]
@@ -184,6 +201,11 @@ struct PendingRepairPage: View {
         .toastHost()
         .onAppear { viewActive = true; reload() }
         .onDisappear { viewActive = false; resumeInstall(false) }
+        // 防御回补：注入数组变化时把本地列表跟着同步一次。
+        // 为什么需要：注入模式只在 `onAppear` 同步过一次；若主界面在扫盘完成前就导航（旧缺陷 1），
+        // 注入数组会是空的、页面开成空。导航侧已改成「扫盘后再导航」，这里再兜一道 ——
+        // 主界面任何一次重扫让注入数组变了，本页都跟着回补，不会停在旧快照上.
+        .onChange(of: injectedPackages) { _, _ in reload() }
     }
 
     // MARK: - 子视图
@@ -249,7 +271,7 @@ struct PendingRepairPage: View {
             return Alert(title: Text("安装前确认"),
                          message: Text("即将把这个应用安装到本机."),
                          primaryButton: .default(Text("继续安装")) { resumeInstall(true) },
-                         secondaryButton: .cancel(Text("取消")) { resumeInstall(false) })
+                         secondaryButton: .cancel(Text("只修补，不安装")) { resumeInstall(false) })
         case .batchRepair(let n):
             return Alert(title: Text("修补前确认"),
                          message: Text("将对选中的 \(n) 个安装包逐个修补并安装；每个在安装前还会再确认一次. 仅适用于来源可信、且与你登录相同 Apple ID 的设备分享的包."),
@@ -306,8 +328,13 @@ struct PendingRepairPage: View {
         }
         Task {
             let listing = await ImportedPackageScanner.scan()
-            // 只留「还没修补、还没安装」的：即 imported 块里 status == .awaitingRepair 的那些。
-            packages = listing.imported.filter { $0.status == .awaitingRepair }
+            // 判据只有「有原件、还没修补」一条 —— `imported` 块本身就是该判据，**不再叠加 status 过滤**.
+            // 为什么删掉 `status == .awaitingRepair`：`imported` 块的 status 只可能是 .awaitingRepair /
+            // .installed（该块 `product` 恒为 nil，见 `ImportedPackageList.make`）；本机已装同 bundleId 的包
+            // status == .installed，叠加过滤会被滤掉 ⇒ 「待修补」列表凭空少项 / 空（与 `ImportView`
+            // `sessionPendingPackages` 同一类 bug，f4 已修那处）。
+            // 已修补的包不会出现在这里：包一经修补即整行移出 `imported` 块（进 `repaired` 块），无需额外排除.
+            packages = listing.imported
             loading = false
             selected.formIntersection(Set(packages.map(\.id)))
             await loadIcons()
@@ -356,7 +383,8 @@ struct PendingRepairPage: View {
 
                 if r.status == .ok {
                     ImportService.deleteOriginalAfterRepairSuccess(rec)
-                    droppedIds.insert(p.id)   // 修补成功的包不再属于「待修补」，从会话队列扣掉
+                    droppedIds.insert(p.id)   // 修补成功的包不再属于「待修补」，从本地列表扣掉
+                    dropFromQueue(p.name)     // 回写主界面队列 ⇒ 计数同帧降
                     ok += 1
                 } else {
                     failed += 1
@@ -376,7 +404,8 @@ struct PendingRepairPage: View {
 
     /// 两种模式各有落法（见文件头「移除」语义）：
     /// · 磁盘模式：`ImportedPackageMover.moveToRemoved`（移动 ≠ 删除，可恢复）.
-    /// · 注入模式：**只从会话队列拿掉，不碰磁盘文件** —— 队列是临时列表，包还没被确认丢弃.
+    /// · 注入模式：**只从会话队列拿掉，不碰磁盘文件** —— 队列是临时列表，包还没被确认丢弃；
+    ///   拿掉动作经 `pendingNames` **回写主界面队列**，主界面计数同帧降、重进本页不再出现.
     /// 两种模式都记进 `droppedIds`：磁盘模式本可省（`reload()` 会重扫），但记上无害且让「移除结果」
     /// 在同一帧内即可见，不必等扫盘回来.
     private func performRemove(_ items: [ImportedPackage]) {
@@ -388,6 +417,7 @@ struct PendingRepairPage: View {
         for p in items {
             if queueOnly {
                 droppedIds.insert(p.id)
+                dropFromQueue(p.name)   // 回写主界面队列 ⇒ 计数同帧降，重进不再复活
                 ok += 1
             } else if ImportedPackageMover.moveToRemoved(p) {
                 droppedIds.insert(p.id)
@@ -403,6 +433,17 @@ struct PendingRepairPage: View {
             ? "已从列表移除 \(ok) 个安装包（文件仍在，可恢复）."
             : "已移除 \(ok) 个，\(failed) 个移除失败."
         reload()
+    }
+
+    /// 把包名从**主界面会话队列**里扣掉（经 `pendingNames` 回写口；`nil` ⇒ 磁盘模式，no-op）。
+    ///
+    /// 为什么经一个 helper：`Binding.wrappedValue` 是 `nonmutating set` 的计算属性，
+    /// 直接 `pendingNames?.wrappedValue.remove(...)` 走「可选链 + 可变方法」写回，语义绕；
+    /// 这里显式「读 - 改 - 写」，既确定能编译，也把「队列真值在主界面」这件事写明.
+    private func dropFromQueue(_ name: String) {
+        guard var names = pendingNames?.wrappedValue else { return }
+        names.remove(name)
+        pendingNames?.wrappedValue = names
     }
 
     // MARK: - 安装前确认（三步确认第三步）

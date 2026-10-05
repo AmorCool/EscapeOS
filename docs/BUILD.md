@@ -4,7 +4,7 @@ This repository carries exactly **one** build track.
 
 | Track | Defined by | Status | Output |
 |---|---|---|---|
-| **Xcode 26 native** | `.github/workflows/build-xcode.yml` | **Active** | `EscapeSpace-<version>-xcode-unsigned.ipa` |
+| **Xcode 27 native** | `.github/workflows/build-xcode.yml` | **Active** | `EscapeSpace-<version>-xcode-unsigned.ipa` |
 
 `.github/workflows/build-xcode.yml` is the **only** workflow in the tree, so a `v*` tag starts
 exactly one run.
@@ -16,7 +16,7 @@ ever produced the shipping IPA.
 
 ---
 
-## 1. Xcode 26 native — the shipping track
+## 1. Xcode 27 native — the shipping track
 
 ### Trigger
 
@@ -25,19 +25,24 @@ ever produced the shipping IPA.
 produce no CI run.
 
 A `v*` tag therefore starts exactly one workflow, and that workflow does everything in a single
-run: build, package the unsigned IPA, and publish the GitHub Release.
+run: it either reuses a successful build of the same commit or compiles from scratch, then
+packages the unsigned IPA and publishes the GitHub Release.
 
 ### What the job does
 
-Runner: `macos-latest`. Job name: `xcode-build`. Permissions: `contents: write` and
-`actions: read`.
+Runner: `xcode-27` (a self-hosted image label — **not** `macos-latest`). The workflow has two
+jobs: `promote` (decides whether a prior successful build of the same commit can be reused) and
+`xcode-build` (compile + package). Permissions: `contents: write` and `actions: read`.
 
 1. **Checkout**, then **restore file mtimes** from commit history (`git-restore-mtime`). Without
    this, every checkout gives all sources "now" as mtime, Xcode considers the cached
    `DerivedData` stale, and the incremental build cache is worthless.
-2. **Select Xcode 26** — newest `/Applications/Xcode_26*.app`, falling back to the newest
-   `Xcode*.app`.
-3. **Install tooling** via Homebrew: `xcodegen`, `ldid`, `cmake`.
+2. **Select Xcode 27** — prefer the newest `/Applications/Xcode_27*.app`, falling back to the
+   newest `Xcode_26*.app`, then to any `Xcode*.app`. A following step installs the Metal
+   toolchain, which Xcode 27 ships as a separate component
+   (`xcodebuild -downloadComponent MetalToolchain`; the repo has `EscapeOS/Views/LiquidGlassOrb.metal`).
+3. **Install tooling** via Homebrew: `xcodegen`, `cmake` (no `ldid` — it was removed from the
+   dependency list).
 4. **Restore caches** — SAP assets + `DerivedData`, the Rust toolchain, the Cargo registry, and
    sccache. The Cargo and sccache caches use the shared `escapeos-build-cache` scope.
 5. **Build `libidevice_ffi.a`** for `aarch64-apple-ios` from the vendored `rust/idevice-ffi`
@@ -74,10 +79,10 @@ The build deliberately skips code signing:
 
 - `CODE_SIGNING_ALLOWED=NO` and friends mean no Apple certificate or provisioning profile is
   involved anywhere in the pipeline.
-- `ldid` is installed by the setup step but is **never invoked**. The step name is stale — an
-  earlier revision applied entitlements with it, and the current script explicitly does not,
-  because the Homebrew `ldid` asserts on the main binary in CI (`ldid.cpp(852)`) and the shipped
-  artifact is not meant to be signed.
+- `ldid` is **not installed at all** — it was dropped from the Homebrew install step on
+  2026-09-18 because nothing in the pipeline ever invoked it. An earlier revision applied
+  entitlements with it, but the Homebrew `ldid` asserts on the main binary in CI
+  (`ldid.cpp(852)`) and the shipped artifact is not meant to be signed.
 - Instead, `EscapeSpace.entitlements` is copied into the `.app` next to the binary, so the
   sideloading tool you use (Sideloadly, ESign, TrollStore) applies it. The file grants
   `get-task-allow`, `com.apple.wifi.manager-access`, and `com.apple.wifi.join-any`.
@@ -85,7 +90,7 @@ The build deliberately skips code signing:
 ### Building locally on a Mac
 
 CI is the supported path; a local build needs three generated artifacts that only the CI steps
-produce. With Xcode 26 and `brew install xcodegen`:
+produce. With Xcode 27 and `brew install xcodegen`:
 
 ```sh
 # 1. Rust FFI (see the workflow's "Build libidevice_ffi.a" and "Assemble ... xcframework" steps)
@@ -139,7 +144,8 @@ there is no `.a` to download from them.
 ## 3. iOS 26 SDK and the tab bar
 
 The floating Liquid Glass tab bar is applied automatically when the app is **linked against the
-iOS 26 SDK**, which means Xcode 26. This is an OS-level "linked on or after" rule; runtime hacks
+iOS 26 SDK**, which in this repo means building with **Xcode 27** (its Swift 6.4 compiler; the
+language mode stays at Swift 6.0). This is an OS-level "linked on or after" rule; runtime hacks
 and custom blur styling cannot substitute for it.
 
 The build SDK is raised to 26 while the deployment target stays at 18.0, so iOS 18 devices can

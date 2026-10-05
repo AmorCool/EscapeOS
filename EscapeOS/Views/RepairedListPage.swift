@@ -68,8 +68,12 @@ struct RepairedListPage: View {
 
     var body: some View {
         List {
-            // 需求 #5：流程 banner 常驻（二级页也显示），批量安装时以 N/M 显示进度。
-            ImportFlowBanner(stage: .install, progress: flowProgress, caption: flowCaption)
+            // 需求 #5：流程 banner 常驻（二级页也显示）。
+            //   · 批量覆盖安装 ⇒ `progress` 以 N/M 显示确定进度；
+            //   · 单条在线安装 ⇒ 无确定进度可报（OTA 只等系统回调），以 `indeterminate` 转圈显示在「安装」段。
+            ImportFlowBanner(stage: .install, progress: flowProgress,
+                             indeterminate: workingId != nil && flowProgress == nil,
+                             caption: flowCaption)
             if let resultText {
                 Section {
                     Text(resultText)
@@ -333,21 +337,30 @@ struct RepairedListPage: View {
             // 产物落进专属目录 `Documents/Repaired/`：进页面即同步，批量导出时直接取用。
             // 放后台（硬链接优先、不占额外空间），大包镜像不卡主线程。
             let snapshot = packages
-            Task.detached(priority: .utility) { RepairedProductStore.sync(snapshot) }
+            Task.detached(priority: .utility) {
+                RepairedProductStore.sync(snapshot)
+                // 镜像落盘后才知道「哪些包还在」——此刻清掉 `Repaired/` 里已无对应包的孤儿镜像，
+                // 否则该目录只增不减（见 `RepairedProductStore.prune`）。
+                RepairedProductStore.prune(keeping: snapshot)
+            }
         }
     }
 
     // MARK: - 安装
 
     /// 在线安装（OTA / `itms-services`）：装的正是这份修补产物（`OnlineInstallService` 是本地路径驱动）。
+    /// `OnlineInstallService` 只给最终结果、**不给中间进度**，故 banner 以 `indeterminate` 转圈呈现（见 `body`），
+    /// 不伪造确定进度条。
     private func runOnlineInstall(_ p: ImportedPackage) {
         guard canOnlineInstall(p), let path = p.repairedPath, let bundleId = p.bundleId else { return }
         workingId = p.id
         resultText = nil
+        flowCaption = "正在安装：\(p.name)"
         let url = URL(fileURLWithPath: path)
         OnlineInstallService.install(ipaURL: url, bundleId: bundleId) { result in
             Task { @MainActor in
                 workingId = nil
+                flowCaption = nil
                 switch result {
                 case .success: ToastCenter.shared.show("正在安装")
                 case .failure(let error): ToastCenter.shared.show(error.localizedDescription)
@@ -393,6 +406,12 @@ struct RepairedListPage: View {
     }
 
     // MARK: - 导出（专属目录 + ShareSheet，多选一次导出全部）
+
+    // 导出**不上报 banner 进度**，理由：
+    //   · 真正的导出是 `UIActivityViewController`（系统分享面板），进度归系统、本页无从上报；
+    //   · 前置的镜像到 `Documents/Repaired/` 优先**硬链接**（O(1)、瞬间完成），退化复制也无确定进度；
+    //   · 本页 banner 固定在「安装」段 —— 把导出进度画在「安装」段上语义也不对（导出 ≠ 安装）。
+    // 故不画：与其画个测不出来的东西，不如不画。
 
     /// 单条导出：把该包的产物镜像进专属目录后，单独分享它。
     private func export(_ p: ImportedPackage) {
@@ -450,6 +469,9 @@ private struct RepairedSharePayload: Identifiable {
 /// 故这里优先**硬链接**（同卷、不额外占空间），失败再退**复制**。
 /// 目录本身是 Documents 下的一级子目录，`ImportService.scanForNewImports` 只下探 `Imports/`、
 /// 不递归子目录，故镜像进来的 `.ipa` 不会被当成「新导入」重复捞回。
+///
+/// 只增不减的问题：镜像若不清理，包被移除后 `Repaired/` 仍留着（硬链接还让数据无法释放）。
+/// 故在镜像之后调用 `prune(keeping:)`，按包名集合删掉无主镜像（见该方法注释）。
 enum RepairedProductStore {
 
     /// 专属目录：`Documents/Repaired/`（不存在则创建）。
@@ -467,8 +489,7 @@ enum RepairedProductStore {
         guard let src = package.repairedPath, !src.isEmpty else { return nil }
         let fm = FileManager.default
         guard fm.fileExists(atPath: src) else { return nil }
-        let leaf = FileNameRules.sanitize("\(package.name).ipa") ?? "\(package.name).ipa"
-        let dest = directory().appendingPathComponent(leaf)
+        let dest = directory().appendingPathComponent(leafName(for: package))
         return mirror(from: URL(fileURLWithPath: src), to: dest, fm: fm) ? dest : nil
     }
 
@@ -476,6 +497,50 @@ enum RepairedProductStore {
     @discardableResult
     static func sync(_ packages: [ImportedPackage]) -> [URL] {
         packages.compactMap { ensure($0) }
+    }
+
+    /// 清理**孤儿镜像**：扫 `Repaired/`，删掉「在 `Imports/` 里找不到对应包」的镜像文件。
+    ///
+    /// 判据用**镜像文件名**：`ensure` 落盘名恒为 `leafName(for:)`（即 `<包名>.ipa`），
+    /// 而 `packages` 来自对 `Imports/` 的磁盘扫描（`ImportedPackageList.scanListing().repaired`），
+    /// 是「当前仍有修补产物的包」的权威集合。两个名字集合一比对，不在集合内的即为孤儿：
+    /// 该包已被「从列表移除」（移进 `Imports/.removed/`）或「彻底删除」，镜像不该再留着占空间。
+    ///
+    /// 删除安全性：`removeItem` 只摘掉 `Repaired/` 这一个目录项，**不会**动 `Imports/` 里的源。
+    /// 硬链接是两个目录项指向同一 inode，摘掉其中一个不影响另一个；复制兜底本就是独立文件，
+    /// 删它也只是删掉这份副本，源产物仍在 `Imports/`（或在 `.removed/` 里可恢复）。
+    /// 故「删镜像」永不波及源产物，最坏情况也只是镜像没了、下次进页面重新镜像。
+    ///
+    /// - Parameter packages: 当前仍存在的已修补包（**全量**，不是导出选中的子集 —— 传子集会误删未选中的镜像）。
+    /// - Returns: 实际删掉的孤儿镜像数。
+    @discardableResult
+    static func prune(keeping packages: [ImportedPackage]) -> Int {
+        // 扫描为空可能是 `Imports/` 瞬时不可读，而非「用户删光了」。此时宁可不删：
+        // 孤儿镜像非破坏性（源在 `Imports/` 或 `.removed/` 都还在），留到下次非空扫描再清更稳。
+        guard !packages.isEmpty else { return 0 }
+        let fm = FileManager.default
+        let keep = Set(packages.map { leafName(for: $0) })
+        guard let items = try? fm.contentsOfDirectory(at: directory(),
+                includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return 0 }
+        var removed = 0
+        for item in items {
+            guard item.pathExtension.lowercased() == "ipa" else { continue }
+            guard !keep.contains(item.lastPathComponent) else { continue }
+            do {
+                try fm.removeItem(at: item)
+                removed += 1
+            } catch {
+                LoginLogger.shared.log(
+                    "[共享修补] 清理无主产物 \(item.lastPathComponent) 失败：\(error.localizedDescription)",
+                    category: .shareConvert)
+            }
+        }
+        return removed
+    }
+
+    /// 镜像落盘名：`ensure` 与 `prune` 必须用**同一个**名字口径，否则清理会误判。
+    private static func leafName(for package: ImportedPackage) -> String {
+        FileNameRules.sanitize("\(package.name).ipa") ?? "\(package.name).ipa"
     }
 
     /// 镜像单个文件：专属目录里已有且不旧于源 → 直接用；否则硬链接优先、复制兜底。
@@ -494,6 +559,11 @@ enum RepairedProductStore {
         } catch {
             do {
                 try fm.copyItem(at: src, to: dest)
+                // 硬链接失败（跨卷等）才退到复制：这是唯一让磁盘占用翻倍的路径，必须让用户知道。
+                // 进页面即镜像，若此处静默，用户只会在空间告急时才发现。
+                Task { @MainActor in
+                    ToastCenter.shared.show("已复制一份产物，磁盘占用会翻倍.")
+                }
                 return true
             } catch {
                 LoginLogger.shared.log(
