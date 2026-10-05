@@ -330,6 +330,31 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     /// 分块大小。**必须远小于管道缓冲（约 64KB）**，否则单块就可能把管道写满。
     private static let responseChunkBytes = 8 << 10  // 8 KB
 
+    /// 把一段文本**分块**写进某个输出通道。
+    ///
+    /// 为什么必须分块：`Pipe` 的缓冲约 64KB。超过缓冲的部分，写端会阻塞到读端把管道排空 ——
+    /// 而排空管道的 handler 跑在**同一个事件循环线程**上。
+    /// 写端把线程占住、读端永远没机会跑 ⇒ **死锁**（见 `maxResponseBytes` 的注释里的实测事故）。
+    ///
+    /// ⚠️ **任何**往 `stdoutPipe` / `stderrPipe` 写输出的地方都必须走这个函数，
+    /// 不要直接 `pipe.fileHandleForWriting.write(...)`。
+    /// 目前只有 stdout 在用（仓库里没有任何 stderr 写入），
+    /// 但 Citadel 的 `ExecOutputHandler` 同时提供 `stderrPipe`，将来要分离 stderr 时
+    /// 直接用这个助手即可，不要再写一遍。
+    private func writeChunked(_ text: String, to pipe: Pipe) async throws {
+        let data = Data(text.utf8)
+        var off = data.startIndex
+        while off < data.endIndex {
+            let end = data.index(off, offsetBy: Self.responseChunkBytes,
+                                 limitedBy: data.endIndex) ?? data.endIndex
+            pipe.fileHandleForWriting.write(Data(data[off..<end]))
+            off = end
+            if off < data.endIndex {
+                try await Task.sleep(nanoseconds: 1_000_000)   // 1ms，给读端排空的机会
+            }
+        }
+    }
+
     func start(command: String, outputHandler: ExecOutputHandler) async throws -> ExecCommandContext {
         var output = Self.execute(command)
 
@@ -349,27 +374,13 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
             truncated = true
         }
 
-        // 2) 分块写 + 每块之间**让出执行权**，给事件循环排空管道的机会。
-        //    这是本函数唯一能防死锁的地方：写端与读端共用一条线程，
-        //    必须主动「停一下」让读端跑，否则大输出必死。
-        let data = Data(output.utf8)
-        var off = data.startIndex
-        while off < data.endIndex {
-            let end = data.index(off, offsetBy: Self.responseChunkBytes,
-                                 limitedBy: data.endIndex) ?? data.endIndex
-            try outputHandler.stdoutPipe.fileHandleForWriting.write(Data(data[off..<end]))
-            off = end
-            if off < data.endIndex {
-                try await Task.sleep(nanoseconds: 1_000_000)   // 1ms，给读端排空的机会
-            }
-        }
-
+        // 2) 分块写（内部会让出执行权，这是防死锁的关键）
         if truncated {
-            let note = "\n\n[已截断] 本次输出超过上限 \(Self.maxResponseBytes / 1024 / 1024)MB，"
-                     + "只回传了前面部分。请缩小范围重试："
-                     + "`logs 100` / `cat` 小文件 / `cap fs.read` 用 offset+length 分块。\n"
-            try? outputHandler.stdoutPipe.fileHandleForWriting.write(Data(note.utf8))
+            output += "\n\n[已截断] 本次输出超过上限 \(Self.maxResponseBytes / 1024 / 1024)MB，"
+                    + "只回传了前面部分。请缩小范围重试："
+                    + "`logs 100` / `cat` 小文件 / `cap fs.read` 用 offset+length 分块。\n"
         }
+        try await writeChunked(output, to: outputHandler.stdoutPipe)
 
         outputHandler.succeed(exitCode: 0)
         return NoopExecContext()
