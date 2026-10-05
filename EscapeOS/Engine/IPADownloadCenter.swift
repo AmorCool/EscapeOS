@@ -909,9 +909,19 @@ private enum PackageSINFWriter {
             return
         }
 
-        // 2) base64 → Data（标准 base64；失败要说清长度，便于比对真机日志）
-        guard let sinf = Data(base64Encoded: raw) else {
-            log("sinf base64 解码失败（\(raw.count) 字符），包内不会带 sinf")
+        // 2) 归一化成 Data，并做**结构自检**。
+        //
+        // ⚠️ 2026-10-05 真机定案：这一步**不能**只判「base64 解码有没有返回 nil」。
+        // hex 字符串（NB 的 `dataHex`，以及 v0.3.562 及以前落进台账的旧值）的字符集
+        // `[0-9a-f]` 恰好全在 base64 字母表内，长度又是 4 的倍数 ⇒ 解码**静默成功**，
+        // 产出 1.5 倍长度的垃圾（1056 字节正确件 → 1584 字节垃圾），全程无一行报错。
+        //
+        // 判据因此换成**结构**：头 4 字节大端 == 实际长度，且第 5-8 字节 == `"sinf"`。
+        // 顺序：先按 base64 解，结构不对再按 hex 解（兼容旧台账里的 hex 值）；
+        // 两个都不对就**明确报错不写** —— 宁可装不上报「缺少 SC_Info/*.sinf」，也不写垃圾进包。
+        guard let sinf = decodeSinfPayload(raw) else {
+            log("sinf 载荷解不出合法结构（\(raw.count) 字符）—— base64 与 hex 都不成立，"
+                + "包内不会带 sinf")
             return
         }
 
@@ -965,6 +975,50 @@ private enum PackageSINFWriter {
         } catch {
             log("写 sinf 失败（\(error.localizedDescription)），包内不会带 sinf")
         }
+    }
+
+    /// 把 sinf 载荷归一化成 `Data`，并校验它真的是一个 sinf 容器。
+    ///
+    /// 输入可能是两种编码之一（历史原因）：
+    ///   · **base64** —— 牛蛙的 `ba_sinfs`、AppleID 的 plist、以及修好之后的新值
+    ///   · **hex**    —— NB 的 `dataHex`，以及 v0.3.562 及以前落进台账的旧值
+    ///
+    /// **不靠猜**：谁解出来的东西结构自洽就用谁；两个都不对返回 nil。
+    /// 这样即使上游某个调用点又漏了编码转换，这里也不会把垃圾写进包内。
+    private static func decodeSinfPayload(_ raw: String) -> Data? {
+        if let d = Data(base64Encoded: raw), isStructurallyValidSinf(d) { return d }
+        if let d = hexDecoded(raw), isStructurallyValidSinf(d) { return d }
+        return nil
+    }
+
+    /// sinf 容器结构自检。判据两条，**都要满足**：
+    ///   ① 头 4 字节大端值 == 数据实际长度
+    ///   ② 第 5-8 字节 == `"sinf"`
+    ///
+    /// 注意**不能**把 `00 00 04 30` 当固定魔数 —— 前 4 字节是**长度**。
+    /// 1056 字节的合法 sinf 头是 `00 00 04 20 73 69 6e 66`；
+    /// 拿 `00000430` 去校验会**误杀合法件**。
+    static func isStructurallyValidSinf(_ d: Data) -> Bool {
+        let b = [UInt8](d)
+        guard b.count >= 8 else { return false }
+        let declared = (Int(b[0]) << 24) | (Int(b[1]) << 16) | (Int(b[2]) << 8) | Int(b[3])
+        return declared == b.count && Array(b[4..<8]) == Array("sinf".utf8)
+    }
+
+    /// hex 字符串 → Data。容忍空格/换行（服务端偶尔分行发）。
+    private static func hexDecoded(_ s: String) -> Data? {
+        let cleaned = s.filter { !$0.isWhitespace }
+        guard !cleaned.isEmpty, cleaned.count % 2 == 0 else { return nil }
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(cleaned.count / 2)
+        var i = cleaned.startIndex
+        while i < cleaned.endIndex {
+            let j = cleaned.index(i, offsetBy: 2)
+            guard let v = UInt8(cleaned[i..<j], radix: 16) else { return nil }
+            bytes.append(v)
+            i = j
+        }
+        return Data(bytes)
     }
 
     private static func log(_ message: String) {

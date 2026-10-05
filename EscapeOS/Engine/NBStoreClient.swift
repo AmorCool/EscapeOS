@@ -517,10 +517,36 @@ enum NBStoreClient {
         let d = (obj["data"] as? [String: Any]) ?? obj
         guard let url = string(d["url"]), !url.isEmpty else { return nil }
 
-        // sinfs 优先取 dataHex（实测字段名），退回 data
+        // sinfs 优先取 dataHex（实测字段名），退回 data。
+        //
+        // ⚠️ 2026-10-05 真机定案：**这两个字段的编码不同，必须分别处理，不能混在一句 `??` 里。**
+        //   · `dataHex` 是 **hex**（2144 字符 = 1072 字节）→ 必须 hex→base64
+        //   · `data`    是 **base64**（原样透传）
+        //
+        // 以前写成 `string(first["dataHex"]) ?? string(first["data"])`，hex 被当 base64 解。
+        // 而 **hex 字符集 [0-9a-f] 恰好全在 base64 字母表内**、2144 又是 4 的倍数 ⇒
+        // `Data(base64Encoded:)` **静默成功**，产出 1.5 倍长度的垃圾（1056 字节 → 1584 字节），
+        // 全程没有一行报错。
+        //
+        // 真机实证（2026-10-05，设备 iPhone15,4 / iOS 27）：
+        //   设备上 NB 源下的 `Via 浏览器-x.ipa`，其 `SC_Info/Via.sinf` 是 **1584 字节垃圾**
+        //   （头声明 3545052371、无 sinf 魔数）；而 NB 原版工具下的同一 App 是 **1056 字节正确件**。
+        //   同一天走 AppleID 通道下的同一 App 是 1032 字节且结构自洽 ⇒ 只有 NB 这条路径中招。
+        //
+        // 同一份 hex 在**下架路径** `offSalePackage()` 里早就转了（见本文件 `hexToBase64`），
+        // 主路径漏了 —— `hexToBase64` 由 v0.3.557 引入时只补了下架路径。
         var sinf: String?
         if let arr = d["sinfs"] as? [[String: Any]], let first = arr.first {
-            sinf = string(first["dataHex"]) ?? string(first["data"])
+            if let hex = string(first["dataHex"]) {
+                sinf = hexToBase64(hex)
+                if sinf == nil {
+                    LoginLogger.shared.log("\(logTag) ✕ sinf 的 dataHex 不是合法 hex（\(hex.count) 字符）"
+                                           + " —— 这份 sinf 不可用，不会写进包内",
+                                           category: .appStore)
+                }
+            } else if let b64 = string(first["data"]) {
+                sinf = b64   // 该字段本来就是 base64，**不要**再跑 hexToBase64（会二次解坏）
+            }
         }
         // v0.3.545：拿不到 sinf 不许静默 —— 加密包缺 sinf 装不上，这条日志是唯一的线索
         if sinf == nil {
