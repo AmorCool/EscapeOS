@@ -1,6 +1,35 @@
 # Changelog
 
+## [0.3.567] - 2026-10-05
+
+> **修 v0.3.566 的构建失败。内容与 0.3.566 相同，另加下述修复。**
+
+`v0.3.566` 的 tag 已推但**构建失败、未产出任何发布产物**，故本版为修复重切。
+
+### 修复（构建）
+
+- **`ByteBuffer` 命名冲突**：`vendor/ApplePackage/Supplement/AsyncHTTPClientShim.swift:22`
+  定义了自己的 `public struct ByteBuffer`，与 NIO 的 `NIOCore.ByteBuffer` 在 app 模块内同时可见。
+  `SFTPDelegateImpl.swift` 里未限定的 `ByteBuffer` 解析到了前者 ⇒ `ProviderFileHandle`
+  不满足 `SFTPFileHandle`、且 `ByteBuffer` 上找不到 `getBytes`。
+  改为显式限定 `NIOCore.ByteBuffer` / `NIOCore.ByteBufferAllocator`，并把 `getBytes` 换成
+  `Data(data.readableBytesView)`。
+  （同一个 shim 还导出 `HTTPHeaders` / `HTTPResponseStatus` / `TLSConfiguration` /
+  `EventLoopGroupProvider` —— 引用 NIO 同名类型时需一并限定。）
+
+### 说明（SFTP 错误路径的取舍已写明）
+
+- `fileAttributes` / `openDirectory` 失败时**回空 attributes / 空 listing**（不抛）。
+  准确语义是**假阳性「存在」**（`SSH_FXP_ATTRS` 的 `flags == 0`），**不是**「不存在」。
+- 取舍理由：Citadel 上游在这两处吞错不回包，抛错会让客户端**挂起到自身超时** ——
+  对文件浏览器来说「拼错一次路径就卡死」比「答错」更糟。
+- **这一档不产生数据损坏**（`read` 仍会 throw，不会退化成 0 字节假成功；写失败由 `write`
+  回状态码），故与「禁止伪造成功」那条不冲突 —— 那条针对的是**数据损坏类**
+  （空 buffer 被当 EOF ⇒ 静默截断）。已加日志使其可观测。
+
 ## [0.3.566] - 2026-10-05
+
+> 注意：本版 tag 已推但**构建失败、未产出发布产物**；修复版见 0.3.567。
 
 > **SSH 文件域（SFTP）上线 + 宿主能力补齐 + 界面规则合规。**
 

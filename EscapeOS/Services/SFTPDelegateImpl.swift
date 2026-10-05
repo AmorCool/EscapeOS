@@ -113,17 +113,28 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
     // MARK: SFTPDelegate
 
     func fileAttributes(atPath path: String, context: SSHContext) async throws -> SFTPFileAttributes {
-        // 错误**不外抛**：Citadel 的 STAT/LSTAT 处理器是 `.flatMapErrorThrowing { _ in }`
-        // （吞错、不回任何包）⇒ 抛错会让客户端**永久挂起**。
-        // 返回空 attributes 是「避免挂起的兜底」——客户端据此判「不存在」。
-        // 注意：这**不是**协议级状态码。彻底修好需给 Citadel 打补丁，回真正的
-        // `SSH_FX_NO_SUCH_FILE`（见 design-fileprovider/FORK.md）。
         do {
             let entry = try await runFileOpWithTimeout(provider.operationTimeout, "stat \(path)") {
                 try self.provider.stat(path)
             }
             return Self.attributes(for: entry)
         } catch {
+            // 兜底：回空 attributes，**不抛**。
+            //
+            // 为什么：Citadel 的 STAT/LSTAT 处理器是 `.flatMapErrorThrowing { _ in }`
+            // （吞错、不回包）⇒ 抛错会让客户端**挂起**到它自己的超时。对文件浏览器
+            // （Finder / FileZilla）来说，**拼错一次路径就卡死**，比「答错」更糟。
+            //
+            // 兜底的准确语义：`.none` 被编码成一个**合法的 `SSH_FXP_ATTRS`**（`flags == 0`）
+            // = 「条目存在、属性未知」⇒ 对不存在的路径会得到一次**假阳性「存在」**。
+            //
+            // 这不违背「禁止伪造成功」那条：那条针对的是**数据损坏类**
+            // （空 buffer = EOF ⇒ 静默截断）。这里是**存在性检查**这一档，
+            // **不产生数据损坏** —— `read` 仍然 throw（不会退化成 0 字节假成功），
+            // 写失败由 `write` 回状态码。
+            //
+            // 已加日志让这个行为**可观测**；fork 后应换成真正的 `SSH_FX_NO_SUCH_FILE`。
+            LoginLogger.shared.log("[SFTP] stat 失败 → 回空 attributes（假阳性存在，已知限制）：\(path) — \(error)")
             return .none
         }
     }
@@ -203,14 +214,17 @@ final class SFTPFileSystemDelegate: SFTPDelegate, @unchecked Sendable {
     }
 
     func openDirectory(atPath path: String, context: SSHContext) async throws -> SFTPDirectoryHandle {
-        // 同 `fileAttributes`：Citadel 的 OPENDIR 处理器吞错 ⇒ 抛错会让客户端永久挂起。
-        // 兜底为**空 listing**（客户端看到空目录，而不是挂死）。同样不是协议级状态码。
+        // 同 `fileAttributes`：兜底为**空 listing**，**不抛**（抛错会让客户端挂起）。
+        // 准确语义：空 listing 是一个**合法的 OPENDIR 成功**（零条目）=「该目录存在但为空」
+        // ⇒ 对不存在的路径会**显示为空目录**（假阳性，非协议级状态码）。
+        // 与「禁止伪造成功」不冲突 —— 那条针对**数据损坏类**；这一档不产生数据损坏。
         let entries: [FileEntry]
         do {
             entries = try await runFileOpWithTimeout(provider.operationTimeout, "list \(path)") {
                 try self.provider.list(path)
             }
         } catch {
+            LoginLogger.shared.log("[SFTP] opendir 失败 → 回空 listing（假阳性空目录，已知限制）：\(path) — \(error)")
             return ProviderDirectoryHandle(listings: [])
         }
         let formatter = DateFormatter()
@@ -271,7 +285,12 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
         self.path = path
     }
 
-    func read(at offset: UInt64, length: UInt32) async throws -> ByteBuffer {
+    // 必须写 `NIOCore.ByteBuffer`：`vendor/ApplePackage/Supplement/AsyncHTTPClientShim.swift:22`
+    // 定义了一个**自己的** `public struct ByteBuffer`，与本文件同时可见 ⇒ 不限定模块会解析到它，
+    // 表现为「`ByteBuffer` 没有 `getBytes`」+「`ProviderFileHandle` 不满足 `SFTPFileHandle`」。
+    // （同一个 shim 还导出 `HTTPHeaders` / `HTTPResponseStatus` / `TLSConfiguration` /
+    //  `EventLoopGroupProvider` —— 引用 NIO 同名类型时一并限定。）
+    func read(at offset: UInt64, length: UInt32) async throws -> NIOCore.ByteBuffer {
         // 真错误只能抛（Citadel 的 readFile 处理器会关通道 = 断连，不是挂起）。
         // 刻意**不**把「读不到」转成空 buffer —— 那会被 Citadel 当作 EOF，
         // 客户端会生成一个 0 字节文件 = 假成功，比断连更糟。
@@ -279,14 +298,15 @@ final class ProviderFileHandle: SFTPFileHandle, @unchecked Sendable {
         let data = try await runFileOpWithTimeout(provider.operationTimeout, "read \(path)@\(offset)") {
             try self.provider.read(self.path, offset: offset, length: want)
         }
-        var buffer = ByteBufferAllocator().buffer(capacity: data.count)
+        var buffer = NIOCore.ByteBufferAllocator().buffer(capacity: data.count)
         buffer.writeBytes(data)
         return buffer
     }
 
-    func write(_ data: ByteBuffer, atOffset offset: UInt64) async throws -> SFTPStatusCode {
-        let bytes = data.getBytes(at: data.readerIndex, length: data.readableBytes) ?? []
-        let payload = Data(bytes)
+    func write(_ data: NIOCore.ByteBuffer, atOffset offset: UInt64) async throws -> SFTPStatusCode {
+        // 用 `readableBytesView` 而不是 `getBytes(at:length:)`：后者在新版 NIO 上已不推荐，
+        // 而这里要的就是「当前可读区间的全部字节」。
+        let payload = Data(data.readableBytesView)
         do {
             try await runFileOpWithTimeout(provider.operationTimeout, "write \(path)@\(offset)") {
                 try self.provider.write(self.path, offset: offset, data: payload)
