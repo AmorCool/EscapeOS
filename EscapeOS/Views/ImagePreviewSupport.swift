@@ -350,6 +350,25 @@ func showIconPreview(_ iconURL: String?,
     target.wrappedValue = ImagePreviewTarget(index: 0, urls: [raw])
 }
 
+/// 从 IPA **现取**图标再开预览（共享转换三页共用）。
+///
+/// 与 `showIconPreview` 的区别：先经 `ImportedPackageIconStore.previewIconURL(for:)` **强制**重新提取，
+/// **不复用**列表缩略图那份缓存文件 —— 预览是全屏放大，要的是当前提取器能取到的最大图。
+/// 取图是阻塞 I/O，放后台；完成后把地址交给 `showIconPreview` 这个统一入口（空地址只 toast）。
+///
+/// `@MainActor` 的理由同 `showIconPreview`（顶层自由函数 + 直接驱动 `ToastCenter`）。
+@MainActor
+func showPackageIconPreview(_ package: ImportedPackage,
+                            target: Binding<ImagePreviewTarget?>) {
+    ToastCenter.shared.show("正在准备预览")
+    Task { @MainActor in
+        let url = await Task.detached(priority: .userInitiated) {
+            ImportedPackageIconStore.previewIconURL(for: package)
+        }.value
+        showIconPreview(url, target: target)
+    }
+}
+
 /// v0.3.399：**「提取图标」的共用实现** —— 下载图标 → 优先存相册（失败回落 `Documents/AppIcons`）。
 ///
 /// v0.3.399 从 App Store 详情页图标长按的私有实现里抽出来；v0.3.403 起四个页面的

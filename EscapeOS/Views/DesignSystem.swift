@@ -10,6 +10,24 @@ enum AppTheme {
     static let accent = Color(uiColor: .systemBlue)
     static let pageInset: CGFloat = 16
     static let appIconSize: CGFloat = 44
+
+    // MARK: - 语义状态色
+    //
+    // 全部取 UIKit 语义色，自动适配明暗模式. 此前共享转换模块跨模块借用了
+    // `LocusTheme`（虚拟定位页主题），而 `LocusTheme` 是硬编码 sRGB、不随明暗
+    // 模式变化，深色下对比度不足. 这四个 token 是让共享转换退出 `LocusTheme`
+    // 的落点 —— 只新增实际用到的，不建完整的 spacing / typography / radius 体系.
+
+    /// 已完成 / 已修补.
+    static let success = Color(uiColor: .systemGreen)
+    /// 待处理 / 待修补.
+    static let pending = Color(uiColor: .systemOrange)
+    /// 失败 / 错误.
+    static let danger = Color(uiColor: .systemRed)
+    /// 未选中态的图标灰（选择圈、占位图形）.
+    static let unselected = Color.secondary.opacity(0.5)
+    /// 选择圈图标尺寸（已导入 / 待修补 / 已修补三页共用）.
+    static let selectionIconSize: CGFloat = 20
 }
 
 /// Tinted rounded-rectangle icon used for category rows in the reclaim views.

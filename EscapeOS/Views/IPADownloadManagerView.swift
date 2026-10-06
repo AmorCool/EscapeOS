@@ -1,6 +1,11 @@
 import SwiftUI
 import UIKit
 
+/// 本模块的强调色 —— `systemTeal` 是 UIKit 语义色，随明暗模式自动调整，
+/// 深浅两端都满足可读性；保留「青」的视觉身份（不是系统蓝）。
+/// 不能用虚拟定位页的 `LocusTheme.accent`：那是硬编码 sRGB，压在浅色底上对比度只有 1.6:1–3.6:1。
+private let downloadAccent = Color(uiColor: .systemTeal)
+
 /// v0.3.305：IPA 下载管理 —— 管理已下载的安装包并直接安装.
 ///
 /// 列表来自 `Documents/AppStoreDownloads`（免登录下载 / App Store 下载都落在这里），
@@ -272,7 +277,7 @@ struct IPADownloadManagerView: View {
             // 进度：横向条 + 百分比（等宽数字，跳动时不会左右抖）
             HStack(spacing: 8) {
                 ProgressView(value: min(1, max(0, job.overall)))
-                    .tint(LocusTheme.accent)
+                    .tint(downloadAccent)
                 Text("\(Int((min(1, max(0, job.overall)) * 100).rounded()))%")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -871,7 +876,7 @@ struct IPADownloadManagerView: View {
 
 /// v0.3.388：行内**安装进度圆环**（44pt，与行首 48pt 图标等高，不动行高）。
 ///
-/// · `fraction != nil` → 圆环 + 环内等宽百分比：12 点起画、圆头 3pt、主题青（`LocusTheme.accent`）；
+/// · `fraction != nil` → 圆环 + 环内等宽百分比：12 点起画、圆头 3pt、主题青（`downloadAccent`）；
 /// · `fraction == nil` → **不确定态**：一段持续旋转的弧，**不写百分比**
 ///   —— 这是「在线安装进了系统阶段、App 量不到进度」时唯一诚实的画法。
 private struct InstallProgressRing: View {
@@ -883,23 +888,23 @@ private struct InstallProgressRing: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(LocusTheme.accent.opacity(0.18), lineWidth: 3)
+                .stroke(downloadAccent.opacity(0.18), lineWidth: 3)
 
             if let fraction {
                 let clamped = min(1, max(0, fraction))
                 Circle()
                     .trim(from: 0, to: max(0.02, clamped))
-                    .stroke(LocusTheme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .stroke(downloadAccent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Text("\(Int((clamped * 100).rounded()))%")
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(LocusTheme.accent)
+                    .foregroundStyle(downloadAccent)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             } else {
                 Circle()
                     .trim(from: 0, to: 0.22)
-                    .stroke(LocusTheme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .stroke(downloadAccent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .rotationEffect(.degrees(spinning ? 360 : 0))
                     .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
             }

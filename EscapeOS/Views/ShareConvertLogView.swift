@@ -21,7 +21,8 @@ struct ShareConvertLogView: View {
             lines: lines,
             title: "共享转换日志",
             onClear: {
-                LoginLogger.shared.clear()
+                // 只清「共享转换」这一类：不能调无参 clear()，那会穿透清掉全部板块的历史日志.
+                LoginLogger.shared.clear(categories: [.shareConvert])
                 refresh()
             },
             // 不传 onDone：本页是 `ImportView` 工具栏 `NavigationLink` push 出来的，

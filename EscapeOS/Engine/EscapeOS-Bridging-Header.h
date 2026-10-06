@@ -26,6 +26,9 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #import "MCM/MCMBridge.h"
 #import "MCM/BQMCMIntegration.h"
 
+// 「共享转换」图标：从 IPA 内 Assets.car 取高清应用图标（CoreUI 私有 API，取不到返回 nil）
+#import "AssetCatalogIcon.h"
+
 // iOS 27 device-initiated wireless pairing host wrapper
 #import "../Tunnel/WirelessPairing.h"
 

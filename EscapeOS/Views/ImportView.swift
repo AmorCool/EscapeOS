@@ -53,6 +53,7 @@ struct ImportView: View {
 
     var body: some View {
         List {
+            heroSection
             flowSection
             if !scanCandidates.isEmpty { candidateSection }
             pendingLinkSection
@@ -129,6 +130,27 @@ struct ImportView: View {
 
     // MARK: Sections
 
+    /// 主视觉 hero：只立模块身份（大号 tinted 图标 + 标题 + 一句说明），
+    /// **不放**「从文件导入 / 扫描新文件」CTA —— 那两个动作的唯一入口是右上角 toolbar.
+    private var heroSection: some View {
+        Section {
+            HStack(spacing: 12) {
+                AppRowIcon(systemName: "square.and.arrow.down.on.square",
+                           tint: AppTheme.accent, symbolSize: 26, frameSize: 54)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("共享转换")
+                        .font(.title3.weight(.semibold))
+                    Text("导入他人分享的 IPA，修补后安装到本机.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
     /// 步骤条 —— 用共享组件（与三个二级页同一套观感，避免两处各画一份）。
     /// 只做可视化，不承担任何动作语义。
     ///
@@ -161,7 +183,7 @@ struct ImportView: View {
         Section {
             ForEach(scanCandidates, id: \.self) { url in
                 HStack(spacing: 12) {
-                    AppRowIcon(systemName: "clock", tint: .orange, symbolSize: 16, frameSize: 30)
+                    AppRowIcon(systemName: "clock", tint: AppTheme.pending, symbolSize: 16, frameSize: 30)
                     Text(url.lastPathComponent)
                         .font(.subheadline)
                         .lineLimit(1)
@@ -210,8 +232,8 @@ struct ImportView: View {
             NavigationLink {
                 PendingRepairPage(packages: sessionPendingPackages, pendingNames: $sessionPendingNames)
             } label: {
-                blockLabel("待修补", count: sessionPendingCount,
-                           symbol: "clock", tint: .orange)
+                entryRow(title: "待修补", count: sessionPendingCount,
+                         symbol: "clock", tint: AppTheme.pending)
             }
         } footer: {
             Text("本次会话导入的包暂存在这里，可来回切换. 退出「共享转换」后这个临时列表会清空，包仍在本机，可在「已导入」里继续修补.")
@@ -225,8 +247,8 @@ struct ImportView: View {
             NavigationLink {
                 ImportedListPage()
             } label: {
-                blockLabel("已导入", count: packages.count,
-                           symbol: "tray.and.arrow.down", tint: AppTheme.accent)
+                entryRow(title: "已导入", count: packages.count,
+                         symbol: "tray.and.arrow.down", tint: AppTheme.accent)
             }
         } footer: {
             Text("点一行进入二级页：查看、选择、批量修补、移除.")
@@ -240,22 +262,25 @@ struct ImportView: View {
             NavigationLink {
                 RepairedListPage()
             } label: {
-                blockLabel("已修补", count: repairedPackages.count,
-                           symbol: "checkmark.seal.fill", tint: LocusTheme.accent)
+                entryRow(title: "已修补", count: repairedPackages.count,
+                         symbol: "checkmark.seal.fill", tint: AppTheme.success)
             }
         } footer: {
-            Text("点一行进入二级页：在线安装 / 覆盖升级安装、导出.")
+            Text("点一行进入二级页：安装或导出已修补的包.")
         }
     }
 
-    /// 栏目入口标题：图标 + 「标题 (条数)」。
-    private func blockLabel(_ title: String, count: Int, symbol: String, tint: Color) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(tint)
-            Text("\(title) (\(count))")
+    /// 入口行：tinted 圆角图标 + 标题 + 尾部次要计数。
+    /// 与 `HomeView` 卡片图标、`statusRow` 同源，避免入口行长得像系统设置项.
+    private func entryRow(title: String, count: Int, symbol: String, tint: Color) -> some View {
+        HStack(spacing: 12) {
+            AppRowIcon(systemName: symbol, tint: tint)
+            Text(title)
                 .font(.subheadline.weight(.semibold))
+            Spacer(minLength: 0)
+            Text("\(count)")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -313,8 +338,8 @@ struct ImportView: View {
 
     private func importTint(_ s: ImportResult.Status) -> Color {
         switch s {
-        case .ok:             return LocusTheme.statusGood
-        case .rejected:       return LocusTheme.statusBad
+        case .ok:             return AppTheme.success
+        case .rejected:       return AppTheme.danger
         case .needsUserChoice: return AppTheme.accent
         }
     }

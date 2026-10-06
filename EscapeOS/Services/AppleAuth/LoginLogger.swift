@@ -93,6 +93,41 @@ final class LoginLogger: @unchecked Sendable {
         try? FileManager.default.removeItem(at: logFileURL)
     }
 
+    /// 按分类清除：只删掉属于 `categories` 的日志（内存缓冲 + 磁盘文件），
+    /// 其它板块的日志原样保留.
+    ///
+    /// 修复「共享转换页点清空会穿透清掉全部板块」的缺陷：此前该页调用无参 `clear()`，
+    /// 把 AppStore / AppleID / 爱思源 / 侧载 / 证书 / 通用 的历史一并清空，与「不混在一起」相悖.
+    /// 无参 `clear()`（全局清空）保持不变，与本接口并存.
+    ///
+    /// 磁盘侧**可**按分类清除：`log(_:category:)` 从 v0.3.310 起把分类写进行首
+    /// （`[HH:mm:ss.SSS][分类] 正文`），逐行用 `category(of:)` 反推分类即可，不靠字符串猜测.
+    func clear(categories: Set<Category>) {
+        guard !categories.isEmpty else { return }
+        let wanted = Set(categories.map(\.rawValue))
+
+        // 1) 内存缓冲：`Entry` 自带 `category` 字段，直接按它过滤（无需再解析行文本）.
+        lock.lock()
+        buffer.removeAll { wanted.contains($0.category.rawValue) }
+        lock.unlock()
+
+        // 2) 磁盘文件：只重写「非目标分类」的行，不整文件删除.
+        //    与 `appendToFile` 共用 `fileLock`，避免重写与并发追加互相交错.
+        fileLock.lock()
+        defer { fileLock.unlock() }
+        guard let data = try? Data(contentsOf: logFileURL),
+              let text = String(data: data, encoding: .utf8) else { return }
+        let kept = text.components(separatedBy: "\n").filter { line in
+            guard !line.isEmpty else { return false }
+            // 无法判类（如 v0.3.310 之前无分类前缀的历史行）→ 保守保留，绝不误删.
+            guard let raw = Self.category(of: line) else { return true }
+            return !wanted.contains(raw)
+        }
+        // 即使全被清空也只写空内容，**保留文件本身**（语义与「清空」一致，不删文件）.
+        let out = kept.isEmpty ? "" : kept.joined(separator: "\n") + "\n"
+        try? out.data(using: .utf8)?.write(to: logFileURL)
+    }
+
     /// 全部日志文本（内存缓冲 + 文件内容合并，去重）.
     func fullLog() -> String {
         lock.lock()

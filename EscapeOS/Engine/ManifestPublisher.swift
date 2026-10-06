@@ -83,15 +83,20 @@ enum ManifestPublisher {
     /// 1. **用户自定义的 HTTPS 地址**（设置项）→ 只用它，不向任何第三方发请求；
     /// 2. **GitHub Token（下载管理右上角设置）**→ 只用 gist，失败才回落匿名候选；
     /// 3. 匿名候选链。
-    static func publish(manifest: Data, completion: @escaping (Result<String, Error>) -> Void) {
+    ///
+    /// - Parameter logCategory: 本次发布所有日志写入的板块分类。**默认 `.appStore`** ——
+    ///   App Store 板块的既有调用方行为不变；共享转换等板块由调用方显式传入自己的分类。
+    static func publish(manifest: Data,
+                        logCategory: LoginLogger.Category = .appStore,
+                        completion: @escaping (Result<String, Error>) -> Void) {
         if let endpoint = OnlineInstallConfig.endpoint {
             // 用户自有托管：只用它，不向任何第三方发请求。
-            LoginLogger.shared.log("[在线安装] 托管方式：自有 HTTPS 地址（未对外发起任何第三方请求）", category: .appStore)
+            LoginLogger.shared.log("[在线安装] 托管方式：自有 HTTPS 地址（未对外发起任何第三方请求）", category: logCategory)
             do {
-                let url = try publishToUserEndpoint(manifest: manifest, endpoint: endpoint)
+                let url = try publishToUserEndpoint(manifest: manifest, endpoint: endpoint, logCategory: logCategory)
                 completion(.success(url))
             } catch {
-                LoginLogger.shared.log("[在线安装] [失败] 自有托管不可用（不回落匿名服务）", category: .appStore)
+                LoginLogger.shared.log("[在线安装] [失败] 自有托管不可用（不回落匿名服务）", category: logCategory)
                 completion(.failure(PublishError.endpointUnavailable))
             }
             return
@@ -99,20 +104,20 @@ enum ManifestPublisher {
 
         if let token = OnlineInstallConfig.githubToken {
             LoginLogger.shared.log("[在线安装] 托管方式：gist（token \(OnlineInstallConfig.tokenPrefix ?? "?")…）",
-                                   category: .appStore)
-            let gist = publishToGist(manifest: manifest, token: token)
+                                   category: logCategory)
+            let gist = publishToGist(manifest: manifest, token: token, logCategory: logCategory)
             if let url = gist.url {
                 completion(.success(url))
                 return
             }
             // 失败日志必须带 HTTP 状态码：真机一次就能分清「鉴权 401/403」还是别的。
             let codeText = gist.status.map { "HTTP \($0)" } ?? "无 HTTP 响应"
-            LoginLogger.shared.log("[在线安装] gist 失败（\(codeText)），回落匿名", category: .appStore)
+            LoginLogger.shared.log("[在线安装] gist 失败（\(codeText)），回落匿名", category: logCategory)
         } else {
-            LoginLogger.shared.log("[在线安装] 托管方式：匿名候选（未配置 GitHub Token）", category: .appStore)
+            LoginLogger.shared.log("[在线安装] 托管方式：匿名候选（未配置 GitHub Token）", category: logCategory)
         }
 
-        guard let url = publishToAnonymous(manifest: manifest) else {
+        guard let url = publishToAnonymous(manifest: manifest, logCategory: logCategory) else {
             completion(.failure(PublishError.noHosting))
             return
         }
@@ -139,7 +144,8 @@ enum ManifestPublisher {
         var status: Int?
     }
 
-    private static func publishToGist(manifest: Data, token: String) -> GistOutcome {
+    private static func publishToGist(manifest: Data, token: String,
+                                      logCategory: LoginLogger.Category) -> GistOutcome {
         guard let content = String(data: manifest, encoding: .utf8),
               let endpoint = URL(string: "https://api.github.com/gists"),
               let body = try? JSONSerialization.data(withJSONObject: [
@@ -147,7 +153,7 @@ enum ManifestPublisher {
                   "public": false,
                   "files": ["install.plist": ["content": content]]
               ]) else {
-            LoginLogger.shared.log("[在线安装] gist 请求构造失败", category: .appStore)
+            LoginLogger.shared.log("[在线安装] gist 请求构造失败", category: logCategory)
             return GistOutcome(url: nil, status: nil)
         }
 
@@ -162,10 +168,10 @@ enum ManifestPublisher {
         request.httpBody = body
 
         guard let result = try? perform(request) else {
-            LoginLogger.shared.log("[在线安装] gist 网络失败（无 HTTP 响应）", category: .appStore)
+            LoginLogger.shared.log("[在线安装] gist 网络失败（无 HTTP 响应）", category: logCategory)
             return GistOutcome(url: nil, status: nil)
         }
-        LoginLogger.shared.log("[在线安装] gist POST 状态码=\(result.status)", category: .appStore)
+        LoginLogger.shared.log("[在线安装] gist POST 状态码=\(result.status)", category: logCategory)
 
         guard (200...299).contains(result.status),
               let json = try? JSONSerialization.jsonObject(with: result.body) as? [String: Any],
@@ -174,27 +180,28 @@ enum ManifestPublisher {
               let raw = entry["raw_url"] as? String,
               raw.lowercased().hasPrefix("https://") else {
             LoginLogger.shared.log("[在线安装] gist 未返回可用 raw_url（HTTP \(result.status)）",
-                                   category: .appStore)
+                                   category: logCategory)
             return GistOutcome(url: nil, status: result.status)
         }
-        LoginLogger.shared.log("[在线安装] gist raw_url=\(shortURL(raw))", category: .appStore)
+        LoginLogger.shared.log("[在线安装] gist raw_url=\(shortURL(raw))", category: logCategory)
 
         let outcome = verify(url: raw, expected: manifest, requireXML: false)
         let shownType = outcome.contentType.isEmpty ? "缺失" : outcome.contentType
         LoginLogger.shared.log("[在线安装] gist 回读 Content-Type=\(shownType)"
                                + "（\(outcome.ok ? "内容一致" : (outcome.reason ?? "校验未过"))）",
-                               category: .appStore)
+                               category: logCategory)
         guard outcome.ok else { return GistOutcome(url: nil, status: result.status) }
         return GistOutcome(url: raw, status: result.status)
     }
 
     // MARK: - 用户自有托管
 
-    private static func publishToUserEndpoint(manifest: Data, endpoint raw: String) throws -> String {
+    private static func publishToUserEndpoint(manifest: Data, endpoint raw: String,
+                                              logCategory: LoginLogger.Category) throws -> String {
         guard let url = URL(string: raw),
               url.scheme?.lowercased() == "https",
               let host = url.host, !host.isEmpty else {
-            LoginLogger.shared.log("[在线安装] 自有托管地址无效（必须是 https://…）", category: .appStore)
+            LoginLogger.shared.log("[在线安装] 自有托管地址无效（必须是 https://…）", category: logCategory)
             throw PublishError.endpointUnavailable
         }
 
@@ -210,9 +217,9 @@ enum ManifestPublisher {
             request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
             request.httpBody = manifest
             LoginLogger.shared.log("[在线安装] 自有托管：POST 基址 \(shortURL(target.absoluteString))",
-                                   category: .appStore)
+                                   category: logCategory)
             let result = try perform(request)
-            LoginLogger.shared.log("[在线安装] 自有托管 POST 状态码=\(result.status)", category: .appStore)
+            LoginLogger.shared.log("[在线安装] 自有托管 POST 状态码=\(result.status)", category: logCategory)
             guard (200...299).contains(result.status) else { throw PublishError.endpointUnavailable }
             finalURL = target.absoluteString
         } else {
@@ -222,9 +229,9 @@ enum ManifestPublisher {
             request.setValue("application/xml", forHTTPHeaderField: "Content-Type")
             request.httpBody = manifest
             LoginLogger.shared.log("[在线安装] 自有托管：PUT 完整地址 \(shortURL(url.absoluteString))",
-                                   category: .appStore)
+                                   category: logCategory)
             let result = try perform(request)
-            LoginLogger.shared.log("[在线安装] 自有托管 PUT 状态码=\(result.status)", category: .appStore)
+            LoginLogger.shared.log("[在线安装] 自有托管 PUT 状态码=\(result.status)", category: logCategory)
             guard (200...299).contains(result.status) else { throw PublishError.endpointUnavailable }
             finalURL = url.absoluteString
         }
@@ -234,7 +241,7 @@ enum ManifestPublisher {
         let shownType = verified.contentType.isEmpty ? "缺失" : verified.contentType
         LoginLogger.shared.log("[在线安装] 自有托管校验\(verified.ok ? "通过" : "未通过（仍按自有地址使用）")"
                                + "：Content-Type=\(shownType) \(shortURL(finalURL))",
-                               category: .appStore)
+                               category: logCategory)
         return finalURL
     }
 
@@ -243,7 +250,8 @@ enum ManifestPublisher {
     /// 单候选超时：一个候选最长只等这么久（实测 litterbox 会拖满 25s，把用户晾住）
     private static let candidateTimeout: TimeInterval = 8
 
-    private static func publishToAnonymous(manifest: Data) -> String? {
+    private static func publishToAnonymous(manifest: Data,
+                                           logCategory: LoginLogger.Category) -> String? {
         let candidates: [(name: String, upload: (Data) throws -> String)] = [
             // 临时件优先（清单只活几分钟，少留痕）
             ("litterbox.catbox.moe", { try uploadLitterbox(data: $0) }),
@@ -258,23 +266,23 @@ enum ManifestPublisher {
         var contentOnlyFallback: (name: String, url: String, contentType: String)?
 
         for candidate in candidates {
-            LoginLogger.shared.log("[在线安装] 尝试匿名托管：\(candidate.name)", category: .appStore)
+            LoginLogger.shared.log("[在线安装] 尝试匿名托管：\(candidate.name)", category: logCategory)
             let url: String
             do {
                 url = try candidate.upload(manifest)
             } catch {
                 LoginLogger.shared.log("[在线安装] \(candidate.name) 上传失败，换下一个（单候选超时 \(Int(candidateTimeout))s）",
-                                       category: .appStore)
+                                       category: logCategory)
                 continue
             }
             let outcome = verify(url: url, expected: manifest)
             let shownType = outcome.contentType.isEmpty ? "缺失" : outcome.contentType
             LoginLogger.shared.log("[在线安装] \(candidate.name) 回读 Content-Type=\(shownType)"
                                    + "（\(outcome.ok ? "可用" : (outcome.reason ?? "不可用"))）",
-                                   category: .appStore)
+                                   category: logCategory)
             if outcome.ok {
                 LoginLogger.shared.log("[在线安装] [完成] 匿名托管成功：\(candidate.name) → \(shortURL(url))",
-                                       category: .appStore)
+                                       category: logCategory)
                 return url
             }
             if outcome.reason == reasonContentType, contentOnlyFallback == nil {
@@ -288,10 +296,10 @@ enum ManifestPublisher {
         if let fallback = contentOnlyFallback {
             LoginLogger.shared.log("[在线安装] [注意] 无 XML 类型候选可用，兜底使用 \(fallback.name)"
                                    + "（Content-Type=\(fallback.contentType)，内容一致；iOS 是否接受未验证）→ \(shortURL(fallback.url))",
-                                   category: .appStore)
+                                   category: logCategory)
             return fallback.url
         }
-        LoginLogger.shared.log("[在线安装] [失败] 所有匿名托管候选均不可用", category: .appStore)
+        LoginLogger.shared.log("[在线安装] [失败] 所有匿名托管候选均不可用", category: logCategory)
         return nil
     }
 

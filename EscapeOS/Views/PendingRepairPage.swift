@@ -174,23 +174,27 @@ struct PendingRepairPage: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if selecting {
-                BatchActionBar(selectedCount: selected.count,
-                               subtitle: selectedSizeText,
-                               primaryTitle: "批量修补（\(selected.count)）",
-                               primaryDisabled: selected.isEmpty || busy,
-                               primaryAction: { alert = .batchRepair(count: selected.count) }) {
-                    // 待修补页的「移除」= 仅从列表移除（移到 Imports/.removed/），不删安装包。
-                    // 这里**不提供在线安装**：待修补的包还没有修补产物。
-                    Button("移除（\(selected.count)）") {
-                        alert = .remove(items: selectedPackages)
+            VStack(spacing: 0) {
+                if selecting {
+                    BatchActionBar(selectedCount: selected.count,
+                                   subtitle: selectedSizeText,
+                                   primaryTitle: "批量修补（\(selected.count)）",
+                                   primaryDisabled: selected.isEmpty || busy,
+                                   primaryAction: { alert = .batchRepair(count: selected.count) }) {
+                        // 待修补页的「移除」= 仅从列表移除（移到 Imports/.removed/），不删安装包。
+                        // 这里**不提供在线安装**：待修补的包还没有修补产物。
+                        Button("移除（\(selected.count)）") {
+                            alert = .remove(items: selectedPackages)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(selected.isEmpty || busy)
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(selected.isEmpty || busy)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    Color.clear.frame(height: 12)
                 }
-            } else {
-                Color.clear.frame(height: 12)
             }
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selecting)
         }
         .alert(item: $alert) { alertContent($0) }
         // 长按一行 → 「查看图标」→ 全屏预览；长按图片「保存到相册」由 `ImageGalleryViewer` 自带
@@ -211,9 +215,12 @@ struct PendingRepairPage: View {
     // MARK: - 子视图
 
     private var emptyRow: some View {
-        Text(searchText.isEmpty ? "没有待修补的安装包." : "没有匹配 “\(searchText)” 的安装包.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+        // 空态与主页 `ImportView.emptySection` 同一套视觉语言（`InfoActionCard`），图标取本栏目自己的入口图标.
+        InfoActionCard(
+            icon: "clock",
+            iconTint: AppTheme.pending,
+            title: searchText.isEmpty ? "没有待修补的安装包." : "没有匹配 “\(searchText)” 的安装包.",
+            message: "")
     }
 
     private func row(_ p: ImportedPackage) -> some View {
@@ -223,10 +230,10 @@ struct PendingRepairPage: View {
             HStack(spacing: 12) {
                 if selecting {
                     Image(systemName: selected.contains(p.id) ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 20))
+                        .font(.system(size: AppTheme.selectionIconSize))
                         .foregroundStyle(selected.contains(p.id)
                                          ? AppTheme.accent
-                                         : Color.secondary.opacity(0.5))
+                                         : AppTheme.unselected)
                 }
                 ImportedPackageIconView(name: p.name, url: iconURLs[p.id])
                 VStack(alignment: .leading, spacing: 3) {
@@ -235,7 +242,7 @@ struct PendingRepairPage: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     HStack(spacing: 6) {
-                        if let v = p.version { PackageChip(text: "v\(v)", tint: .blue) }
+                        if let v = p.version { PackageChip(text: "v\(v)", tint: AppTheme.accent) }
                         Text(p.sizeText)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -255,9 +262,10 @@ struct PendingRepairPage: View {
         // 长按一行 → 「查看图标 / 提取图标」。菜单项与行首缩略图用**同一个**图标地址；
         // 没有图标（地址为空）时整组置灰，不让用户点下去才发现没图可看.
         // 「保存图标」不在这里：进预览后长按图片即可（`ImageGalleryViewer` 自带），不重复一份.
+        // 「查看图标」走 `showPackageIconPreview`：从 IPA **现取**原图，不复用列表缩略图那份缓存.
         .contextMenu {
             iconMenuItems(iconURL: iconURLs[p.id], fileNameBase: p.bundleId ?? p.name) {
-                showIconPreview(iconURLs[p.id], target: $previewTarget)
+                showPackageIconPreview(p, target: $previewTarget)
             }
             .disabled((iconURLs[p.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }

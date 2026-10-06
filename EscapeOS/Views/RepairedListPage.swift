@@ -5,20 +5,19 @@ import SwiftUI
 // 从「共享转换」主页的「已修补」栏目**点击进入**（不再在原页展开 / 收拢）。
 // 左上角**系统返回键 + 额外向上箭头并存**（两者都返回上一级，用户明确接受两个入口）；
 // **不隐藏返回键** —— 隐藏会连带禁掉系统左滑返回手势。支持搜索；
-// 每行**只给两个操作**：在线安装 / 覆盖升级安装
+// 行内**不常驻按钮**，单条动作收进 `.swipeActions`：导出 / 在线安装 / 覆盖升级安装
 // （**不给重新修补** —— 已修补的包无需再修，且原件已按需求 #17 删除，无从下手）。
 //
 // 骨架与「已导入」页一致（搜索栏 / 多选 + 全选 / 底部批量条），实现见 `ImportedListPage.swift` 顶部注释。
 //
 // 数据源：`ImportedPackageList.scanListing(...).repaired`（磁盘证据）。
 //
-// 用户需求 #4：批量操作**选中 ≥2 时去掉「在线安装」** —— 在线安装是 OTA 单包通道，
-// 多选时语义不成立，故仅在恰好选中 1 个时给出（见 `batchBar` 里的 `selected.count == 1` 判断）。
+// 底栏恒 2 个按钮：主按钮「覆盖 / 升级安装（N）」+ 附加「导出（N）」，主按钮语义不随选中数翻转。
+// 在线安装是 OTA 单包通道，多选语义不成立，只在行内 `.swipeActions` 提供（见 `batchBar`）。
 //
 // 批量导出（用户需求）：已修补产物额外镜像一份到**专属目录** `Documents/Repaired/`
-// （见 `RepairedProductStore`）；选中 ≥2 时底条主按钮变为「导出选中的 N 个」，
-// 一次把所选 IPA **全部**交给系统分享面板（`UIActivityViewController` 原生支持多 URL）
-// —— **不逐个导出、不先压缩成 zip**。
+// （见 `RepairedProductStore`）；一次把所选 IPA **全部**交给系统分享面板
+// （`UIActivityViewController` 原生支持多 URL）—— **不逐个导出、不先压缩成 zip**。
 // 单条导出仍走同一套 `ShareSheet` 机制（对象同为 `package.repairedPath`，修补产物，不是原件）。
 
 struct RepairedListPage: View {
@@ -30,6 +29,12 @@ struct RepairedListPage: View {
     @State private var searchText = ""
     @State private var selecting = false
     @State private var selected: Set<String> = []
+
+    /// 包 id → 图标 `file://` 地址（从 IPA 提取后落 Caches）。读不出就没有这一项，行首回落首字母块.
+    @State private var iconURLs: [String: String] = [:]
+    /// 长按一行 → 「查看图标」打开的全屏预览。图数组随 target 一起写（`ImagePreviewTarget`），
+    /// 页面上不再单独留一份预览数组 —— 两次独立写入会让弹窗读到旧的空数组.
+    @State private var previewTarget: ImagePreviewTarget?
 
     @State private var busy = false
     /// 需求 #5：流程 banner 的 N/M 进度（如 `(current: 1, total: 14)`）与补充说明。
@@ -124,115 +129,141 @@ struct RepairedListPage: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if selecting {
-                batchBar
-            } else {
-                Color.clear.frame(height: 12)
+            // 底栏自成一个 `VStack`，动画**只挂在这条底栏上** ——
+            // 挂到外层 `List` 上会让整张列表随选择态一起动（切换时「突兀」的根因）.
+            VStack(spacing: 0) {
+                if selecting {
+                    batchBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    Color.clear.frame(height: 12)
+                }
             }
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selecting)
         }
         .sheet(item: $sharePayload) { payload in
             // 单条 / 批量同一入口：`UIActivityViewController` 支持一次传入多个 URL，
             // 批量导出即「一次把所选 IPA 全部交给分享面板」，不逐个、不压缩。
             ShareSheet(items: payload.urls)
         }
+        // 长按一行 → 「查看图标」→ 全屏预览；长按图片「保存到相册」由 `ImageGalleryViewer` 自带
+        //（二次确认 → `MediaSaver`，无权限自动回落 `Documents/AppIcons`），这里只负责把 target 递进去.
+        .fullScreenCover(item: $previewTarget) { target in
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
+        }
+        // 本页已在多处调用 `ToastCenter.shared.show`，必须挂上展示层，否则这些提示全部静默.
+        .toastHost()
         .onAppear { reload() }
     }
 
     // MARK: - 子视图
 
     private var emptyRow: some View {
-        Text(searchText.isEmpty ? "还没有修补过的安装包." : "没有匹配 “\(searchText)” 的安装包.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+        // 空态与主页 `ImportView.emptySection` / 「已导入」「待修补」两页同一套视觉语言（`InfoActionCard`）.
+        // 无按钮形态（不传 `actionTitle` / `action`）；`message` 必填且**不传空串**，避免多渲染一个空 `Text`.
+        InfoActionCard(
+            icon: "checkmark.seal.fill",
+            iconTint: AppTheme.success,
+            title: "已修补",
+            message: searchText.isEmpty ? "还没有修补过的安装包." : "没有匹配 “\(searchText)” 的安装包."
+        )
     }
 
-    /// 底部批量条。
-    /// · 恰好选中 1 个：主按钮「覆盖 / 升级安装（1）」，另给「在线安装」「导出」。
-    /// · 选中 ≥2：主按钮变为「导出选中的 N 个」—— 一次导出所选全部，**不逐个、不压缩**；
-    ///   「覆盖 / 升级安装（N）」退为附加动作（需求 #4：≥2 去掉在线安装）。
+    /// 底部批量条。底栏恒 2 个按钮：主按钮「覆盖 / 升级安装（N）」+ 附加「导出（N）」。
+    /// 主按钮语义稳定，不随选中数翻转；在线安装是单包通道，只在行内 `.swipeActions` 提供。
     private var batchBar: some View {
         BatchActionBar(selectedCount: selected.count,
-                       subtitle: selectedSizeText,
-                       primaryTitle: selected.count >= 2
-                           ? "导出选中的 \(selected.count) 个"
-                           : "覆盖 / 升级安装（\(selected.count)）",
+                       subtitle: batchSubtitle,
+                       primaryTitle: "覆盖 / 升级安装（\(selected.count)）",
                        primaryDisabled: batchPrimaryDisabled,
-                       primaryAction: {
-                           if selected.count >= 2 { exportSelected() }
-                           else { runOverwriteInstall(selectedPackages) }
-                       }) {
-            if selected.count == 1, let p = selectedPackages.first {
-                Button("在线安装") { runOnlineInstall(p) }
-                    .buttonStyle(.bordered)
-                    .disabled(!canOnlineInstall(p) || busy)
-
-                Button("导出") { export(p) }
-                    .buttonStyle(.bordered)
-                    .disabled(busy)
-            } else if selected.count >= 2 {
-                Button("覆盖 / 升级安装（\(selected.count)）") { runOverwriteInstall(selectedPackages) }
-                    .buttonStyle(.bordered)
-                    .disabled(selectedPackages.contains { !canOverwriteInstall($0) } || busy)
-            }
+                       primaryAction: { runOverwriteInstall(selectedPackages) }) {
+            Button("导出（\(selected.count)）") { exportSelection() }
+                .buttonStyle(.bordered)
+                .disabled(selected.isEmpty || busy)
         }
     }
 
     private var batchPrimaryDisabled: Bool {
         if selected.isEmpty || busy { return true }
-        // ≥2 只做导出：已修补块的产物路径来自磁盘扫描（必有产物），有产物即可导出。
-        if selected.count >= 2 { return false }
-        return selectedPackages.contains { !canOverwriteInstall($0) }
+        return selectedPackages.contains { !canInstallOrOverwrite($0) }
     }
 
-    @ViewBuilder
+    /// 底栏副标题：合计大小；含状态未知的包时追加降级说明（不再静默置灰）。
+    private var batchSubtitle: String? {
+        var parts: [String] = []
+        if let size = selectedSizeText { parts.append(size) }
+        if selectedPackages.contains(where: { $0.isInstalled == nil }) {
+            parts.append("无法确认本机安装状态，将按全新安装处理")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// 底栏「导出（N）」：单条走单条、多选走批量。
+    private func exportSelection() {
+        if selected.count == 1, let p = selectedPackages.first {
+            export(p)
+        } else {
+            exportSelected()
+        }
+    }
+
     private func row(_ p: ImportedPackage) -> some View {
-        if selecting {
+        // 行**恒为 `Button`**：`selecting` 只控制勾选圈显不显示（见 `rowBody`），
+        // 首次点按由 `handleTap` 自动进入选择态 —— 与「已导入」「待修补」两页同一口径.
+        // `.swipeActions` 与 `.contextMenu` 挂在行外层，与这个 `Button` 并存.
+        VStack(alignment: .leading, spacing: 6) {
             Button {
                 handleTap(p)
             } label: {
-                rowBody(p, showsSelection: true)
+                rowBody(p, showsSelection: selecting)
             }
             .buttonStyle(.plain)
             .disabled(busy)
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                rowBody(p, showsSelection: false)
-                HStack(spacing: 8) {
-                    Button {
-                        runOnlineInstall(p)
-                    } label: {
-                        Label("在线安装", systemImage: "icloud.and.arrow.down")
-                    }
-                    .disabled(!canOnlineInstall(p) || busy)
 
-                    Button {
-                        runOverwriteInstall([p])
-                    } label: {
-                        Label("覆盖 / 升级安装", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(!canOverwriteInstall(p) || busy)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            // 行内不常驻大按钮：安装 / 导出收进下方 `.swipeActions`，
+            // 行回归「图标 + 标题 + chip」的干净形态。
+            if workingId == p.id {
+                ProgressView().controlSize(.small)
+            } else if let reason = installBlockReason(p) {
+                Text(reason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 2)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button {
+                export(p)
+            } label: {
+                Label("导出", systemImage: "square.and.arrow.up")
+            }
+            .tint(AppTheme.accent)
 
-                if workingId == p.id {
-                    ProgressView().controlSize(.small)
-                } else if let reason = installBlockReason(p) {
-                    Text(reason)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            Button {
+                runOnlineInstall(p)
+            } label: {
+                Label("在线安装", systemImage: "icloud.and.arrow.down")
             }
-            .padding(.vertical, 2)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                Button {
-                    export(p)
-                } label: {
-                    Label("导出", systemImage: "square.and.arrow.up")
-                }
-                .tint(AppTheme.accent)
+            .disabled(!canOnlineInstall(p) || busy)
+
+            Button {
+                runOverwriteInstall([p])
+            } label: {
+                Label("覆盖 / 升级安装", systemImage: "arrow.triangle.2.circlepath")
             }
+            .tint(AppTheme.accent)
+            .disabled(!canInstallOrOverwrite(p) || busy)
+        }
+        // 长按一行 → 「查看图标 / 提取图标」。菜单项与行首缩略图用**同一个**图标地址；
+        // 没有图标（地址为空）时整组置灰，不让用户点下去才发现没图可看.
+        // 「保存图标」不在这里：进预览后长按图片即可（`ImageGalleryViewer` 自带），不重复一份.
+        // 「查看图标」走 `showPackageIconPreview`：从 IPA **现取**原图，不复用列表缩略图那份缓存.
+        .contextMenu {
+            iconMenuItems(iconURL: iconURLs[p.id], fileNameBase: p.bundleId ?? p.name) {
+                showPackageIconPreview(p, target: $previewTarget)
+            }
+            .disabled((iconURLs[p.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
@@ -240,19 +271,19 @@ struct RepairedListPage: View {
         HStack(spacing: 12) {
             if showsSelection {
                 Image(systemName: selected.contains(p.id) ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20))
+                    .font(.system(size: AppTheme.selectionIconSize))
                     .foregroundStyle(selected.contains(p.id)
                                      ? AppTheme.accent
-                                     : Color.secondary.opacity(0.5))
+                                     : AppTheme.unselected)
             }
-            ImportedPackageMonogram(name: p.name)
+            ImportedPackageIconView(name: p.name, url: iconURLs[p.id])
             VStack(alignment: .leading, spacing: 3) {
                 Text(p.name)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    if let v = p.version { PackageChip(text: "v\(v)", tint: .blue) }
+                    if let v = p.version { PackageChip(text: "v\(v)", tint: AppTheme.accent) }
                     Text(p.sizeText)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -267,7 +298,7 @@ struct RepairedListPage: View {
         .contentShape(Rectangle())
     }
 
-    // MARK: - 前置检查（照 ImportView.canOnlineInstall / canOverwriteInstall）
+    // MARK: - 前置检查（照 ImportView.canOnlineInstall / canInstallOrOverwrite）
 
     /// 在线安装前置：包内有应用标识（bundle id）。
     private func canOnlineInstall(_ p: ImportedPackage) -> Bool {
@@ -275,32 +306,27 @@ struct RepairedListPage: View {
         return !(p.bundleId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// 覆盖 / 升级安装前置：本机已装同 bundleId 的应用（否则无「已装」可覆盖）。
-    /// `isInstalled == nil`（查不到清单）时不可点，不让用户点了才报错。
-    private func canOverwriteInstall(_ p: ImportedPackage) -> Bool {
+    /// 安装 / 覆盖升级前置：只要有修补产物就能装。
+    /// 已装同款走 Upgrade，未装 / 状态未知走 Install，查不到清单不再是阻断理由。
+    private func canInstallOrOverwrite(_ p: ImportedPackage) -> Bool {
         guard let path = p.repairedPath, !path.isEmpty else { return false }
-        return p.isInstalled == true
+        return true
     }
 
     private func installBlockReason(_ p: ImportedPackage) -> String? {
         guard let path = p.repairedPath, !path.isEmpty else {
             return "找不到修补产物，无法安装."
         }
-        if canOnlineInstall(p) || canOverwriteInstall(p) { return nil }
-        var reasons: [String] = []
-        if !canOnlineInstall(p) { reasons.append("包内读不出应用标识，无法在线安装") }
-        if !canOverwriteInstall(p) {
-            reasons.append(p.isInstalled == nil
-                           ? "无法确认本机安装状态，覆盖升级不可用"
-                           : "本机未安装同款应用，无法覆盖升级")
-        }
-        return reasons.joined(separator: "；") + "."
+        if canOnlineInstall(p) || canInstallOrOverwrite(p) { return nil }
+        return "包内读不出应用标识，无法在线安装."
     }
 
     // MARK: - 选择
 
     private func handleTap(_ p: ImportedPackage) {
         guard !busy else { return }
+        // 非选择态首次点按即进入选择态（行恒为 `Button`，故任何一次点按都会到这里）.
+        if !selecting { selecting = true }
         if selected.contains(p.id) {
             selected.remove(p.id)
         } else {
@@ -334,6 +360,7 @@ struct RepairedListPage: View {
             packages = listing.repaired
             loading = false
             selected.formIntersection(Set(packages.map(\.id)))
+            await loadIcons()
             // 产物落进专属目录 `Documents/Repaired/`：进页面即同步，批量导出时直接取用。
             // 放后台（硬链接优先、不占额外空间），大包镜像不卡主线程。
             let snapshot = packages
@@ -342,6 +369,27 @@ struct RepairedListPage: View {
                 // 镜像落盘后才知道「哪些包还在」——此刻清掉 `Repaired/` 里已无对应包的孤儿镜像，
                 // 否则该目录只增不减（见 `RepairedProductStore.prune`）。
                 RepairedProductStore.prune(keeping: snapshot)
+            }
+        }
+    }
+
+    /// 逐条解析图标（读 zip 成本高，放后台**串行**；已落盘的直接命中缓存文件）.
+    /// 与 `ImportedListPage.loadIcons` 同型：图标只是锦上添花，读不出就留空、界面回落首字母块.
+    private func loadIcons() async {
+        // 先清掉「`Imports/` 里已无对应包」的旧图标缓存（判据见 `ImportedPackageIconStore.pruneStaleIcons`）.
+        await Task.detached(priority: .utility) {
+            ImportedPackageIconStore.pruneStaleIcons()
+        }.value
+        let targets = packages
+        var resolved: [String: String] = [:]
+        for p in targets {
+            let url = await Task.detached(priority: .utility) {
+                ImportedPackageIconStore.iconURL(for: p)
+            }.value
+            if let url {
+                resolved[p.id] = url
+                // 每解析出一个就发布一次 ⇒ 图标逐个出现，不等全部完成（本方法在主 actor 上，直接写 @State）.
+                iconURLs = resolved
             }
         }
     }
@@ -357,7 +405,7 @@ struct RepairedListPage: View {
         resultText = nil
         flowCaption = "正在安装：\(p.name)"
         let url = URL(fileURLWithPath: path)
-        OnlineInstallService.install(ipaURL: url, bundleId: bundleId) { result in
+        OnlineInstallService.install(ipaURL: url, bundleId: bundleId, logCategory: .shareConvert) { result in
             Task { @MainActor in
                 workingId = nil
                 flowCaption = nil
@@ -369,11 +417,10 @@ struct RepairedListPage: View {
         }
     }
 
-    /// 覆盖 / 升级安装：本地装这份产物，覆盖本机已装的同 bundleId 应用。
-    /// `allowDowngrade: true` 走 installd 的 Upgrade 命令，正是「覆盖 / 升级」语义。
-    /// 多选时**逐条串行**，进度以 `N/M` 显示。
+    /// 安装 / 覆盖升级：本地装这份产物。已装同款走 Upgrade（覆盖 / 升级），
+    /// 未装或状态未知走 Install（全新安装）。多选时**逐条串行**，进度以 `N/M` 显示。
     private func runOverwriteInstall(_ targets: [ImportedPackage]) {
-        let valid = targets.filter { canOverwriteInstall($0) }
+        let valid = targets.filter { canInstallOrOverwrite($0) }
         guard !valid.isEmpty else { return }
         busy = true
         resultText = nil
@@ -384,12 +431,18 @@ struct RepairedListPage: View {
                 flowProgress = (current: idx + 1, total: valid.count)
                 flowCaption = "正在安装：\(p.name)"
                 guard let path = p.repairedPath else { failed += 1; continue }
+                // 已装同款 → Upgrade（覆盖 / 升级）；未装 / 状态未知 → Install（全新安装）。
+                let upgrade = (p.isInstalled == true)
                 do {
                     try await AppStoreInstallService.installLocalIPA(
                         path,
-                        allowDowngrade: true,
+                        allowDowngrade: upgrade,
                         progress: { _ in },
-                        onLog: { _ in })
+                        onLog: { line in
+                            // 日志归共享转换分类：installLocalIPA 自身不写日志，此前这里传 `{ _ in }`
+                            // 把步骤全丢了，导致覆盖/升级安装无论成败在本页日志里零记录.
+                            LoginLogger.shared.log("[共享安装] \(line)", category: .shareConvert)
+                        })
                     ok += 1
                 } catch {
                     failed += 1

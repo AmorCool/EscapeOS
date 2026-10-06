@@ -109,7 +109,7 @@ struct ImportFlowBanner: View {
             switch self {
             case .idle:   return .secondary
             case .active: return AppTheme.accent
-            case .done:   return LocusTheme.statusGood
+            case .done:   return AppTheme.success
             }
         }
     }
@@ -127,7 +127,7 @@ struct ImportFlowBanner: View {
         return VStack(spacing: 5) {
             ZStack {
                 Circle()
-                    .fill(s.tint.opacity(0.14))
+                    .fill(s.tint.opacity(0.12))
                     .frame(width: 34, height: 34)
                 Image(systemName: s == .done ? "checkmark" : target.symbol)
                     .font(.system(size: 14, weight: .semibold))

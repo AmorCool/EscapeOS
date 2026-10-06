@@ -34,8 +34,6 @@ enum OnlineInstallService {
     /// v0.3.396（B 项）：「系统没来拉包」的判定窗口（一次性看门狗）。
     private static let noBytesWindow: TimeInterval = 60
 
-    private static let logCategory = LoginLogger.Category.appStore
-
     enum OnlineInstallError: Error, LocalizedError {
         /// 没有任何可用的包地址
         case noPackage
@@ -74,18 +72,23 @@ enum OnlineInstallService {
     ///             只有在本地文件缺失时才退回传远端 `http(s)` 直链（跳过本机服务器）。
     ///   - bundleId: 目标应用标识（本地包读不到 Info.plist 时兜底）
     ///   - alternatePackageURL: 台账里的远端 `https` 直链，作为清单里的备选 `software-package`
+    ///   - logCategory: 本次安装所有日志写入的板块分类。**默认 `.appStore`** —— App Store 板块
+    ///     的既有调用方行为不变；共享转换（`.shareConvert`）等板块显式传入自己的分类，
+    ///     免得这些步骤写进 App Store 日志、用户在共享转换的日志页里看不到。
     ///   - completion: 主线程回调（Swift 6：标 @Sendable 以跨调度队列传递；
     ///     方法内部所有回调都经 DispatchQueue.main.async 触发，行为不变）
     static func install(ipaURL: URL?,
                         bundleId: String?,
                         alternatePackageURL: String? = nil,
+                        logCategory: LoginLogger.Category = .appStore,
                         completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let prepared: Prepared
             do {
                 prepared = try prepare(ipaURL: ipaURL,
                                        bundleId: bundleId,
-                                       alternatePackageURL: alternatePackageURL)
+                                       alternatePackageURL: alternatePackageURL,
+                                       logCategory: logCategory)
             } catch {
                 // 这次 OTA 没跑起来 → 清掉可能已经开始的进度会话（别让列表里挂个假进度）
                 OnlineInstallProgress.shared.reset()
@@ -96,7 +99,7 @@ enum OnlineInstallService {
 
             let manifestURL: String
             do {
-                manifestURL = try publish(prepared)
+                manifestURL = try publish(prepared, logCategory: logCategory)
             } catch {
                 if prepared.localFile != nil { IPALocalHTTPServer.shared.stop() }
                 OnlineInstallProgress.shared.reset()
@@ -116,12 +119,12 @@ enum OnlineInstallService {
             OnlineInstallProgress.shared.scheduleIdleReset(after: serverLifetime)
 
             DispatchQueue.main.async {
-                open(manifestURL: manifestURL, completion: completion)
+                open(manifestURL: manifestURL, logCategory: logCategory, completion: completion)
                 // v0.3.396（B 项）：清单已发起 → 挂一次性「系统没来拉包」看门狗。
                 // 只在**经本机服务器发包**（localFile != nil）时挂：远端直链路径我们一个字节都量不到，
                 // 那里挂这个看门狗会在 60 秒时误报「系统未开始下载」，反而是假信号 —— 那条路径的
                 // 兜底交给 `OnlineInstallProgress` 的 3 分钟 `.installing` 窗口。
-                if prepared.localFile != nil { armNoBytesWatchdog() }
+                if prepared.localFile != nil { armNoBytesWatchdog(logCategory: logCategory) }
             }
         }
     }
@@ -143,7 +146,7 @@ enum OnlineInstallService {
     ///   否则同一个包连点两次时，第一次留下的看门狗会把**第二次**的进度环误收掉；
     /// · `stage != .idle && sentBytes == 0` —— 期间已被别的路径（手动点环 / 传输完成进入系统安装）
     ///   清空或推进 → 不作声、不重复提示。`reset()` 本身不涨会话号，所以这道状态守卫是第二层。
-    private static func armNoBytesWatchdog() {
+    private static func armNoBytesWatchdog(logCategory: LoginLogger.Category) {
         let token = OnlineInstallProgress.shared.sessionToken
         DispatchQueue.main.asyncAfter(deadline: .now() + noBytesWindow) {
             let progress = OnlineInstallProgress.shared
@@ -171,7 +174,8 @@ enum OnlineInstallService {
 
     private static func prepare(ipaURL: URL?,
                                 bundleId: String?,
-                                alternatePackageURL: String?) throws -> Prepared {
+                                alternatePackageURL: String?,
+                                logCategory: LoginLogger.Category) throws -> Prepared {
         guard let ipaURL else {
             LoginLogger.shared.log("[在线安装] 没有可用的安装包地址", category: logCategory)
             throw OnlineInstallError.noPackage
@@ -278,7 +282,7 @@ enum OnlineInstallService {
 
     // MARK: - 发布清单
 
-    private static func publish(_ prepared: Prepared) throws -> String {
+    private static func publish(_ prepared: Prepared, logCategory: LoginLogger.Category) throws -> String {
         let info = ManifestPublisher.ManifestInfo(bundleId: prepared.bundleId,
                                                   version: prepared.version,
                                                   title: prepared.title,
@@ -288,7 +292,7 @@ enum OnlineInstallService {
 
         var published: Result<String, Error>?
         let semaphore = DispatchSemaphore(value: 0)
-        ManifestPublisher.publish(manifest: manifest) { result in
+        ManifestPublisher.publish(manifest: manifest, logCategory: logCategory) { result in
             published = result
             semaphore.signal()
         }
@@ -308,7 +312,9 @@ enum OnlineInstallService {
 
     // MARK: - 打开 itms-services（三级兜底）
 
-    private static func open(manifestURL: String, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+    private static func open(manifestURL: String,
+                             logCategory: LoginLogger.Category,
+                             completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         // 只保留 unreserved 字符，避免清单地址里的 &/? 之类破坏 query
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         guard let encoded = manifestURL.addingPercentEncoding(withAllowedCharacters: allowed),
@@ -331,7 +337,7 @@ enum OnlineInstallService {
             // `UIApplication.open` 的 completion 由系统在**主队列**回调，但闭包本身不是
             // `@MainActor` 隔离的 → 用 `assumeIsolated` 同步进入主 actor（不做异步跳转，
             // 行为与原来一致）。
-            MainActor.assumeIsolated { presentBrowserFallback(itmsURL) }
+            MainActor.assumeIsolated { presentBrowserFallback(itmsURL, logCategory: logCategory) }
             // 兜底 2：复制清单链接，让用户去 Safari 打开
             UIPasteboard.general.string = manifestURL
             LoginLogger.shared.log("[在线安装] 系统未受理，已回退内置浏览器并复制链接（可改用 Safari 打开）",
@@ -346,7 +352,7 @@ enum OnlineInstallService {
     /// `@MainActor`：本方法全程驱动 UIKit（取顶层控制器 / present），必须与
     /// `topViewController()` 同在主 actor 上。
     @MainActor
-    private static func presentBrowserFallback(_ url: URL) {
+    private static func presentBrowserFallback(_ url: URL, logCategory: LoginLogger.Category) {
         guard let top = topViewController() else {
             LoginLogger.shared.log("[在线安装] 无可用控制器，跳过内置浏览器兜底", category: logCategory)
             return
