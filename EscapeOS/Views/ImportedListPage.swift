@@ -356,9 +356,12 @@ struct ImportedListPage: View {
                     progress: nil,
                     confirmInstall: { await awaitInstallConfirm() })
 
-                if r.status == .ok {
-                    // 修补成功后删原件（与 ImportView 同语义）；条目随即按磁盘现状移入「已修补」块。
-                    ImportService.deleteOriginalAfterRepairSuccess(rec)
+                // 修补出产物即删原件（不再要求安装成功）—— 删与不删由
+                // `deleteOriginalAfterRepairSuccess` 自证安全决定：产物不存在 / 非独立文件时不删.
+                // `.skipped`（用户选择「只修补、不安装」）是**正常结束**且产物已生成，同样适用；
+                // 原实现把它归进 else 报成失败，与 `RepairService` 的语义相反.
+                ImportService.deleteOriginalAfterRepairSuccess(rec)
+                if r.status == .ok || r.status == .skipped {
                     ok += 1
                 } else {
                     failed += 1
