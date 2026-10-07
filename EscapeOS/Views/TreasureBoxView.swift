@@ -22,6 +22,8 @@ struct TreasureBoxView: View {
     let onOpenIconCleanup: () -> Void
     /// 打开「反激活设备」页.同样走「先关 sheet 再 push」的中转，理由同上.
     let onOpenDeactivate: () -> Void
+    /// 打开「软件源管理」页.同样走「先关 sheet 再 push」的中转，理由同上.
+    let onOpenSignSource: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -317,6 +319,31 @@ struct TreasureBoxView: View {
                         Text("反激活设备")
                             .font(.subheadline)
                         Text("让设备回到激活界面（不可逆，需先关查找）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
+            // 软件源管理：添加 / 管理第三方软件源。进源列表页后，右上角另有「软件源下载管理」入口.
+            Button {
+                onOpenSignSource()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "shippingbox.circle.fill")
+                        .foregroundStyle(.purple)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("软件源管理")
+                            .font(.subheadline)
+                        Text("添加 / 管理第三方软件源")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

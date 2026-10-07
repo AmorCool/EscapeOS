@@ -17,6 +17,13 @@ private let downloadAccent = Color(uiColor: .systemTeal)
 /// v0.3.378：点任意一行弹出操作面板（`IPADownloadActionsSheet`）。
 struct IPADownloadManagerView: View {
 
+    /// 可选**来源过滤**。`nil`（默认）= 既有「下载管理」全量行为，**既有调用点零影响**；
+    /// 传 `.thirdPartySource` 时本页即「**软件源下载管理**」：只列第三方软件源来源的任务与台账，
+    /// 标题也换成「软件源下载管理」。复用同一套下载中心/台账/UI（D1=A，不新建第二个下载管理器）。
+    ///
+    /// 非 private 且有默认值 ⇒ 可直接用成员逐一初始化器 `IPADownloadManagerView(filterSource:)`。
+    var filterSource: IPADownloadCenter.Source? = nil
+
     @State private var items: [IPADownloadItem] = []
     /// 正在弹操作面板的条目
     @State private var actionItem: IPADownloadItem?
@@ -137,7 +144,8 @@ struct IPADownloadManagerView: View {
     /// 标题带总数（形如「下载管理 (5)」）；一条都没有时不带数字。
     private var listTitle: String {
         let count = mergedRows.count
-        return count == 0 ? "下载管理" : "下载管理 (\(count))"
+        let base = filterSource == .thirdPartySource ? "软件源下载管理" : "下载管理"
+        return count == 0 ? base : "\(base) (\(count))"
     }
 
     // MARK: - 合并列表
@@ -166,7 +174,10 @@ struct IPADownloadManagerView: View {
     /// 最后按下载时间倒序 —— 与参考图「新动静在上面」一致。
     private var mergedRows: [ListRow] {
         let known = Set(items.map(\.fileName))
-        let orphanJobs = center.jobs.filter { job in
+        // 来源过滤：`filterSource == nil` 时原样用全部任务（既有「下载管理」行为不变）。
+        // `items` 已在 `reload()` 里按同一来源过滤，故 `known` 与 `allJobs` 口径一致。
+        let allJobs = filterSource.map { src in center.jobs.filter { $0.source == src } } ?? center.jobs
+        let orphanJobs = allJobs.filter { job in
             // ▸▸▸ v0.3.413 真机 bug 修复（用户截图）：「显示已完成 100%，但没有安装按钮」。
             //
             // 根因：下载完成的那一刻，台账**已经写盘**，但页面 `items` 是**上一次 reload 的
@@ -708,8 +719,13 @@ struct IPADownloadManagerView: View {
 
     private func reload() {
         syncSourceURLs()
-        items = IPADownloadLibrary.shared.items()
-        // 同一个 bundleId 在列表里出现两次以上 → 记下来：任务版本未知时不允许按 bundleId 认行
+        let allItems = IPADownloadLibrary.shared.items()
+        // 来源过滤：`filterSource == nil` 时原样用全部台账（既有「下载管理」行为不变）。
+        // `IPADownloadItem.source` 是字符串，故与 `Source.rawValue` 比较（同一常量，防漂移）。
+        items = filterSource.map { src in allItems.filter { $0.source == src.rawValue } } ?? allItems
+        // 同一个 bundleId 在列表里出现两次以上 → 记下来：任务版本未知时不允许按 bundleId 认行。
+        // 必须用**过滤后**的 items 计算，否则软件源页里本不显示的其它来源条目会把 bundleId 记成「重复」，
+        // 导致进度认行失败（`activeJob` 的 `allowBundleIdFallback`）。
         duplicatedBundleIds = Set(
             Dictionary(grouping: items.compactMap { $0.bundleId }, by: { $0 })
                 .filter { $0.value.count > 1 }

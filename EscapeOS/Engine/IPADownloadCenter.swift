@@ -26,6 +26,15 @@ final class IPADownloadCenter: ObservableObject {
         /// v0.3.414：免登录商店的**第三个来源**（NB Pro，bundle id `com.nbmaster.app`）。
         /// 与牛蛙同构：服务端随直链下发 `sinfs[].dataHex`，安装前必须写回包内 `SC_Info/`。
         case nb = "NB免登录"
+        /// 软件源管理（用户自加 URL 的**第三方软件源**）。
+        ///
+        /// 与前三档硬编码免登录来源是两回事：这里的源由用户在「软件源管理」里自行添加。
+        /// 显示名**严禁含「牛蛙」**（用户明确划界：这不是牛蛙官方源、也不是牛蛙 AppStore）。
+        /// 与既有 `.niuwa`（「牛蛙免登录」= 内置商店）在枚举值上本就可区分。
+        ///
+        /// 本轮边界：软件源**只负责下载**，不签名/不安装 ⇒ 下载传 `sinfBase64: nil`，
+        /// 故 `needsSinfWriteback` 取 `false`（见下）。
+        case thirdPartySource = "第三方软件源"
         case appleID = "Apple ID"
 
         /// 安装前是否需要把服务端下发的 sinf 写回包内 `SC_Info/`。
@@ -36,7 +45,8 @@ final class IPADownloadCenter: ObservableObject {
         var needsSinfWriteback: Bool {
             switch self {
             case .niuwa, .nb: return true
-            case .i4Free, .appleID: return false
+            // 软件源（`.thirdPartySource`）：本轮只下载、不签名，下载层不做 sinf 写回。
+            case .i4Free, .appleID, .thirdPartySource: return false
             }
         }
     }

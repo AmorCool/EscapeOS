@@ -23,6 +23,12 @@ struct HomeView: View {
     /// 反激活设备页（同一套「sheet 关闭后再 push」的中转）
     @State private var showDeactivate = false
     @State private var pendingDeactivate = false
+    /// 软件源管理页（同一套「sheet 关闭后再 push」的中转）
+    @State private var showSignSource = false
+    @State private var pendingSignSource = false
+    /// 软件源下载管理页 —— 从软件源页右上角进入；复用既有 `IPADownloadManagerView`，
+    /// 只把来源口径过滤到「第三方软件源」（D1=A：不新建第二个下载管理器）。
+    @State private var showSignSourceDownloads = false
 
     var body: some View {
         ScrollView {
@@ -53,6 +59,10 @@ struct HomeView: View {
                 pendingDeactivate = false
                 showDeactivate = true
             }
+            if pendingSignSource {
+                pendingSignSource = false
+                showSignSource = true
+            }
         }) {
             // 原生 sheet：0.4↔1.0 detent 上拉展开、下拉关闭
             TreasureBoxView(onOpenGestalt: {
@@ -63,6 +73,9 @@ struct HomeView: View {
                 treasureOpen = false
             }, onOpenDeactivate: {
                 pendingDeactivate = true
+                treasureOpen = false
+            }, onOpenSignSource: {
+                pendingSignSource = true
                 treasureOpen = false
             })
             .presentationDetents([.fraction(0.4), .large])
@@ -80,6 +93,14 @@ struct HomeView: View {
         }
         .navigationDestination(isPresented: $showDeactivate) {
             ActivationView()
+        }
+        // 软件源管理（源列表）。右上角「软件源下载管理」由 `onOpenDownloadManager` 接线：
+        // 进入的仍是既有 `IPADownloadManagerView`，只过滤到第三方软件源（不新建下载页）。
+        .navigationDestination(isPresented: $showSignSource) {
+            SignSourceListView(onOpenDownloadManager: { showSignSourceDownloads = true })
+        }
+        .navigationDestination(isPresented: $showSignSourceDownloads) {
+            IPADownloadManagerView(filterSource: .thirdPartySource)
         }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {
