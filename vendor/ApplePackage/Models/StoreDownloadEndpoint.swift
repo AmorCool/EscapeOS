@@ -64,6 +64,18 @@ extension StoreDownloadEndpoint {
     )
 
     /// redownload 端点（PR #84 fallback 目标）。注意 payload 字段名换为 `appExtVrsId`。
+    ///
+    /// ## v0.3.5xx：默认不再走（保留常量 + 实现，供 `ent/download` 不可用时兜底）
+    ///
+    /// 调研结论（`P4_全能签逆向/_impl/调研_redownload废弃.md`）：
+    /// - **[实] 上游未废弃**：ipatool HEAD `cde7d00` 与 Asspp 分叉仍把它作为 fallback；
+    ///   Apple 在**已认证 bag** 里仍下发 `redownloadProduct`（只是不在公开 bag 里，见 ipatool #538）；
+    ///   ipatool #547 实测「同一 redownload 端点带 `appExtVrsId` 后**能成功**」。
+    /// - **[实] 本环境 100% 裸 HTTP 500**（真机 2/2 次，白等 8.863s / 11.427s），
+    ///   真机里能出包的始终是「带版本重打 `ent/download`」。
+    ///
+    /// ⇒ 采取档②「条件跳过」：`fetchProductWithFallback` 里当 `ent/download` 可用时**默认跳过**；
+    /// 仅当 `ent/download` 不可用（bag 无端点 / kbsync 未装配）才走它。
     public static let redownload = StoreDownloadEndpoint(
         host: "downloaddispatch.itunes.apple.com",
         path: "/r/redownload",

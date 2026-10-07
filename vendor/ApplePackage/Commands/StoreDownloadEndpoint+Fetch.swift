@@ -48,13 +48,30 @@ extension StoreDownloadEndpoint {
     ///
     /// 1. 打 volumeStore（带调用方给的 `externalVersionID`，可能为空）；
     /// 2. 有包 → 立即返回；
-    /// 3. 无包且 `fallbackReason` 判定为「Apple 没给包」→ 解析版本后打 **一次** redownload；
+    /// 3. 无包且 `fallbackReason` 判定为「Apple 没给包」→ **默认跳过 redownload**（见下）；
     ///    - 调用方给了版本 → **一直用它**（历史版本请求必须保留 version ID）；
     ///    - 没给 → 调 `resolveVersion()`；解析失败或为空 → 抛 `catalogUnavailable`；
     ///      **绝不发出不带版本号的 redownload**（那种请求会走「现算授权」并超时）；
     /// 4. redownload 若回「裸 HTTP 500（无 body）」或「`no longer available` 消息」→
     ///    用**同一个版本**打 **一次** `updateProduct`（上游 4 个必要条件见 `fetchViaUpdateProduct`）；
     /// 5. 其余一切（含带 body 的 5xx）→ 抛 `transportFailure`，原样上抛、不补救。
+    ///
+    /// ## redownload 默认跳过（v0.3.5xx · 调研档②「条件跳过」）
+    ///
+    /// 结论见 `P4_全能签逆向/_impl/调研_redownload废弃.md`：**redownload 未被上游废弃**
+    /// （ipatool HEAD `cde7d00` 与 Asspp 分叉仍用它；Apple 在**已认证 bag** 里仍下发
+    /// `redownloadProduct`），但在本环境**100% 裸 HTTP 500**（真机 2/2 次，白等
+    /// 8.863s / 11.427s），且真机里能出包的一直是「**带版本重打 ent/download**」。
+    ///
+    /// 因此这里**不再无条件走 redownload**：
+    /// - `ent/download` 这一跳**可用**（bag 有端点 + kbsync 已装配）⇒ **默认跳过** redownload，
+    ///   直接抛 `emptyPackage`；上层（`AppStoreLocalInstallService`）会据此换历史版本、
+    ///   **带版本重进 `ent/download`**（= 真机验证过的那条 200 路径），省掉那 8.9~11.4s；
+    /// - `ent/download` **不可用**（bag 无端点 / kbsync 未装配）⇒ 才走 redownload 作**最后兜底**
+    ///   （此时它是唯一还可能出包的旧链，保留不动）。
+    ///
+    /// 回退保证：redownload / updateProduct 的实现与调用**一行未删**，只是「何时进入」多了一道门；
+    /// 无论跳过与否都打日志说明原因，**不会静默失败**。
     static func fetchProductWithFallback(
         client: HTTPClient,
         account: inout AppStoreAccount,
@@ -64,6 +81,15 @@ extension StoreDownloadEndpoint {
         resolveVersion: (() async throws -> String)? = nil,
         entDownloadEndpoint: String? = nil
     ) async throws -> [String: Any] {
+        // v0.3.5xx：**整体耗时** —— 补上「一次 fetchProductWithFallback 到底花了多久」这个盲区。
+        // 格式与 `EntDownload` / `KBSyncProvider` 的 `[计时]` 一致；函数任一出口（含 throw）都打印。
+        let overallStarted = Date()
+        var overallOutcome = "未完成"
+        defer {
+            storeLog("[计时] fetchProductWithFallback 整体 耗时="
+                + "\(Self.elapsedMs(since: overallStarted))ms \(overallOutcome)")
+        }
+
         // ⓪ **首选 `ent/download`** —— 上游把它贴在整条链的**最前面**，且是
         //    「可失败退出的附加一跳」：资产缺失 / 网络失败 / 响应不合规都**静默**
         //    落回下面的旧链，**不报错**（`appstore_download_product.go:31-70`）。
@@ -114,6 +140,7 @@ extension StoreDownloadEndpoint {
                     endpoint: endpoint
                 ) {
                     storeLog("[计时] ent/download 首轮命中 耗时=\(Self.elapsedMs(since: entStarted))ms")
+                    overallOutcome = "ent/download 命中"
                     return preferred
                 }
                 storeLog("[计时] ent/download 未命中 耗时=\(Self.elapsedMs(since: entStarted))ms"
@@ -134,9 +161,26 @@ extension StoreDownloadEndpoint {
         storeLog("[计时] volumeStore 耗时=\(Self.elapsedMs(since: volumeStarted))ms")
 
         // 有包就直接回去 —— 这是绝大多数正常路径，一次请求结束。
-        guard let reason = fallbackReason(primary) else { return primary }
+        guard let reason = fallbackReason(primary) else {
+            overallOutcome = "volumeStore 命中"
+            return primary
+        }
 
-        storeLog("volumeStore 没有包（\(reason)）→ 换 redownload；\(summary(primary))")
+        storeLog("volumeStore 没有包（\(reason)）→ 判定；\(summary(primary))")
+
+        // ── redownload 默认跳过（调研档②「条件跳过」，见文件头 ## redownload 默认跳过）──────
+        // `ent/download` 这一跳可用 = bag 给了端点 **且** 宿主装配了 kbsync 生成器。
+        // 可用时：redownload 在本环境 100% 裸 500，纯浪费 8.9~11.4s，且上层会换历史版本后
+        // 带版本重进 `ent/download`（真机验证过的 200 路径）⇒ 直接判空包、跳过 redownload。
+        // 不可用时：redownload 是唯一还可能出包的旧链 ⇒ 原样保留（下面的实现一行未改）。
+        let entUsable = (entDownloadEndpoint?.isEmpty == false) && (Configuration.kbsyncGenerator != nil)
+        if entUsable {
+            storeLog("redownload 默认跳过（ent/download 可用：bag 有端点 + kbsync 已装配）"
+                + " → 直接判空包，交上层带版本重进 ent/download")
+            overallOutcome = "跳过 redownload（ent/download 可用）→ emptyPackage"
+            throw ApplePackageError.emptyPackage
+        }
+        storeLog("ent/download 不可用（bag 无端点 或 kbsync 未装配）→ 保留 redownload 作最后兜底")
 
         // 版本解析：调用方给了就**一直用它**（Asspp: "historical requests must
         // keep their version ID"）；没给才去查目录，查不到就明确报错。
@@ -147,19 +191,25 @@ extension StoreDownloadEndpoint {
             do {
                 resolved = try await resolveVersion()
             } catch is CancellationError {
+                overallOutcome = "取消"
                 throw CancellationError()
             } catch {
                 storeLog("目录版本解析失败：\(error.localizedDescription)")
+                overallOutcome = "catalogUnavailable"
                 throw ApplePackageError.catalogUnavailable
             }
         } else {
+            overallOutcome = "catalogUnavailable"
             throw ApplePackageError.catalogUnavailable
         }
 
         // Asspp 同款硬门：**空版本号绝不允许发出 redownload**。
         // 不带版本号的 redownload 有两个后果：可能返回 tvOS/macOS 包；
         // 而且（真机实测）会走 Apple 的「现算授权」路径，10 秒后网关兜底 502。
-        guard !resolved.isEmpty else { throw ApplePackageError.catalogUnavailable }
+        guard !resolved.isEmpty else {
+            overallOutcome = "catalogUnavailable"
+            throw ApplePackageError.catalogUnavailable
+        }
         storeLog("redownload 使用版本 \(resolved)")
 
         // ③ 第三跳：updateProduct。**严格按上游的 4 个条件触发**（见下方的 shouldTryUpdateProduct）。
@@ -184,10 +234,13 @@ extension StoreDownloadEndpoint {
                 externalVersionID: resolved
             )
         } catch let error as ApplePackageError {
+            overallOutcome = "redownload 抛 ApplePackageError"
             throw error
         } catch let error as StoreAuthenticationError {
+            overallOutcome = "redownload 抛 StoreAuthenticationError"
             throw error
         } catch is CancellationError {
+            overallOutcome = "取消"
             throw CancellationError()
         } catch {
             // 走到这里 = HTTP 层失败。我们只关心「裸 500」这一档，其余原样上抛。
@@ -208,16 +261,20 @@ extension StoreDownloadEndpoint {
                     deviceIdentifier: deviceIdentifier, externalVersionID: resolved
                 ) {
                     storeLog("updateProduct 命中；\(summary(rescued))")
+                    overallOutcome = "updateProduct 命中"
                     return rescued
                 }
                 storeLog("updateProduct 也没有包 → 判定为缺少下载授权")
+                overallOutcome = "emptyPackage"
                 throw ApplePackageError.emptyPackage
             }
             // 普通业务性空包 → 没有第三跳（上游同款）。
             if let reason = fallbackReason(response) {
                 storeLog("redownload 同样没有包（\(reason)）→ 判定为缺少下载授权")
+                overallOutcome = "emptyPackage"
                 throw ApplePackageError.emptyPackage
             }
+            overallOutcome = "redownload 命中"
             return response
         }
 
@@ -229,9 +286,11 @@ extension StoreDownloadEndpoint {
                 deviceIdentifier: deviceIdentifier, externalVersionID: resolved
             ) {
                 storeLog("updateProduct 命中；\(summary(rescued))")
+                overallOutcome = "updateProduct 命中"
                 return rescued
             }
             storeLog("updateProduct 也没有包 → 判定为缺少下载授权")
+            overallOutcome = "emptyPackage"
             throw ApplePackageError.emptyPackage
         }
 
@@ -239,6 +298,7 @@ extension StoreDownloadEndpoint {
         // 它们是传输层/服务端状态，不是「Apple 没包给你」，伪装成 emptyPackage 只会
         // 诱发上层刷新会话 / 获取许可的连环补救（真机一次点击放大成 4 次 5xx + 10 次 volumeStore）。
         storeLog("redownload HTTP \(redownloadHTTPStatus) → 原样上抛（带 body 的失败不换端点）")
+        overallOutcome = "transportFailure(\(redownloadHTTPStatus))"
         throw ApplePackageError.transportFailure(status: redownloadHTTPStatus)
     }
 
@@ -309,6 +369,13 @@ extension StoreDownloadEndpoint {
         deviceIdentifier: String,
         externalVersionID: String
     ) async throws -> [String: Any]? {
+        // v0.3.5xx：**补计时** —— 此前 updateProduct 这一跳没有耗时读数（真机日志里只有
+        // 「试 updateProduct」与结果，看不到它花了多久）。格式对齐 `EntDownload` 的 `[计时]`。
+        let started = Date()
+        var outcome = "未命中"
+        defer {
+            storeLog("[计时] updateProduct 耗时=\(Self.elapsedMs(since: started))ms \(outcome)")
+        }
         do {
             let dict = try await StoreDownloadEndpoint.updateProduct.fetchProduct(
                 client: client,
@@ -344,11 +411,14 @@ extension StoreDownloadEndpoint {
                 storeLog("updateProduct 响应的 bundleID 不匹配")
                 return nil
             }
+            outcome = "命中"
             return dict
         } catch is CancellationError {
+            outcome = "取消"
             throw CancellationError()
         } catch {
             storeLog("updateProduct 请求失败：\(error.localizedDescription)")
+            outcome = "请求失败"
             return nil
         }
     }
@@ -400,6 +470,16 @@ extension StoreDownloadEndpoint {
         deviceIdentifier: String,
         externalVersionID: String
     ) async throws -> [String: Any] {
+        // v0.3.5xx：**补耗时** —— 单端点请求（volumeStore / redownload / updateProduct 共用）
+        // 此前只有一行「响应头行」，没有「这次请求本身花了多久」（含重定向与 plist 解析）。
+        // 格式对齐 `EntDownload` 的 `[计时]`；函数任一出口（含 throw）都打印。
+        let requestStarted = Date()
+        var requestOutcome = "未完成"
+        defer {
+            storeLog("[计时] \(self.host)\(path) 单端点请求 耗时="
+                + "\(StoreDownloadEndpoint.elapsedMs(since: requestStarted))ms \(requestOutcome)")
+        }
+
         var currentURL = try url(pod: account.pod, deviceIdentifier: deviceIdentifier)
         var redirectAttempt = 0
         var finalResponse: HTTPClient.Response?
@@ -439,7 +519,11 @@ extension StoreDownloadEndpoint {
             break
         }
 
-        guard let finalResponse else { try ensureFailed("no response received") }
+        guard let finalResponse else {
+            requestOutcome = "无响应"
+            try ensureFailed("no response received")
+        }
+        requestOutcome = "HTTP \(finalResponse.status.code)"
 
         // v0.3.336：把 Apple 侧能表明原因的响应头记下来（App 内日志）。
         // 排查「静默空包」时最有用的是 `X-Apple-Request-Store-Front`（Apple 回显它认到的
@@ -481,6 +565,7 @@ extension StoreDownloadEndpoint {
         guard var body = finalResponse.body,
               let data = body.readData(length: body.readableBytes)
         else {
+            requestOutcome = "HTTP 200 响应体为空"
             try ensureFailed("response body is empty")
         }
 
@@ -489,8 +574,12 @@ extension StoreDownloadEndpoint {
             options: [],
             format: nil
         ) as? [String: Any]
-        guard let dict = plist else { try ensureFailed("invalid plist response") }
+        guard let dict = plist else {
+            requestOutcome = "HTTP 200 响应不是合法 plist"
+            try ensureFailed("invalid plist response")
+        }
 
+        requestOutcome = "HTTP 200 解析成功"
         return dict
     }
 
