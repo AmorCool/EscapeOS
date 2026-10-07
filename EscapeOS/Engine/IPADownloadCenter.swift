@@ -51,6 +51,16 @@ final class IPADownloadCenter: ObservableObject {
         }
     }
 
+    /// 日志板块：按包的**来源**选分类 —— 三方软件源独立成「软件源」，其余保持既有行为（AppStore）。
+    ///
+    /// 只给「记录这个包从哪来 / 它的下载安装」的日志用。本机环境（隧道 / IPv4 接口）与
+    /// 静态工具函数（`PackageSINFWriter`）的日志与来源无关，仍写 `.appStore`。
+    /// 只从主 actor 调用（`handle` / `installLocal` 体内）；安装链在 detached 里用的是
+    /// 主 actor 上预先算好的 `LoginLogger.Category`，不把 `Source` 带过隔离边界。
+    private func logCategory(for source: Source) -> LoginLogger.Category {
+        source == .thirdPartySource ? .signSource : .appStore
+    }
+
     enum Phase: Equatable {
         case waiting
         case downloading
@@ -582,19 +592,25 @@ final class IPADownloadCenter: ObservableObject {
     }
 
     /// 安装库里已有的包（下载管理页用）
+    ///
+    /// `source`：这个包**从哪来** —— 决定它的安装日志写进哪个板块（三方软件源 → 「软件源」，
+    /// 其余 → AppStore）。默认 `.i4Free` 与历史行为一致（旧调用方不传即零变化）。
+    /// 想让三方软件源的安装日志正确分板，调用方需把台账里那条的 `source` 传进来。
     @discardableResult
     func installLocal(fileName: String, displayName: String, bundleId: String?,
-                      version: String?, iconURL: String?) -> UUID {
+                      version: String?, iconURL: String?,
+                      source: Source = .i4Free) -> UUID {
         // v0.3.383：文件不在（被外部删除/移走）→ 属「下载/文件类」，**不是**安装失败
         let path = IPADownloadLibrary.shared.path(forFileName: fileName)
         guard FileManager.default.fileExists(atPath: path) else {
-            LoginLogger.shared.log("[下载中心] 本地包不存在 \(fileName)", category: .appStore)
+            LoginLogger.shared.log("[下载中心] 本地包不存在 \(fileName)",
+                                   category: logCategory(for: source))
             return recordFileFailure(fileName: fileName, displayName: displayName,
                                      bundleId: bundleId, version: version,
                                      iconURL: iconURL, reason: "文件不存在")
         }
         var job = Job(name: displayName, bundleId: bundleId, version: version, iconURL: iconURL,
-                      remoteURL: nil, source: .i4Free, accountEmail: nil)
+                      remoteURL: nil, source: source, accountEmail: nil)
         job.phase = .installing
         job.stageText = "安装中"
         job.localFileName = fileName
@@ -611,40 +627,37 @@ final class IPADownloadCenter: ObservableObject {
         // 这里读回来写进包内即可 —— **不需要重下**。
         // 写包是几百 MB 的 ZIP 操作，必须在 detached 里跑（不能占主线程）。
         let sinfBase64 = IPADownloadLibrary.shared.sinf(forFileName: fileName)
+        // 安装日志的板块按来源**在主 actor 上先算好**，再带进后台安装链 ——
+        // 避免在 detached 里引用 `Source`（跨隔离边界）。`LoginLogger.Category` 是 Sendable。
+        let sourceCategory = logCategory(for: source)
         Task.detached(priority: .userInitiated) {
-            // ▸▸▸ v0.3.578（修订）：**隧道探测从「安装硬门」降级为「提示」**。
+            // ▸▸▸ v0.3.581：**隧道探测全部降级为提示，不再有任何安装硬门**。
             //
             // 背景：安装的第一步是建 RSD 隧道，而 Rust 侧 `tunnel_create_rppairing` 的首个
             // `TcpStream::connect` **没有超时**（`rust/idevice-ffi/src/tunnel_provider.rs:873`）。
             // LocalDevVPN 未连接时目标地址是黑洞，`connect` 只能等操作系统的 TCP 建连超时 ——
             // 真机实测「下载完成 17:03:29 → 安装报错 17:08:14」（约 4m45s），期间进度、文案、
-            // 错误全不动，用户看到的就是「卡住」（诊断 §1.5 / §1.6）。所以上一版在这里加了一次
-            // 49152 端口探测，想把它变成「1 秒明确报错」。
+            // 错误全不动，用户看到的就是「卡住」（诊断 §1.5 / §1.6）。所以前几版在这里加探测，
+            // 想把它变成「1 秒明确报错」。
             //
-            // 但那个写法把探测结果当成了**安装硬门**：探一次失败即 `return`，把整个安装判死，
-            // **无重试、无绕过**。而它守着的安装链 `IPAInstallService.createTunnel()`
-            // **自己已经重试 3 次**（`IPAInstallService.swift:906-936`，300ms/600ms 退避，
-            // 同一 `targetIP:49152`）⇒ 硬门比它守的链路更脆。任何「首次探测瞬时失败、
-            // 重试就能成」的场景（隧道刚建好、对端 RPPairing 尚未开始 accept、utun 路由刚装上
-            // 还没收敛、accept 队列瞬时占满）都会把一次**本可成功**的安装直接标成红色
-            // 「安装失败」—— 比原来的「卡住」更糟。故降级为提示：
-            //
-            // · 探测失败只记一条日志，**仍继续尝试安装**，由 `createTunnel()` 的重试兜底；
-            // · 只保留一个**不产生假阴性**的快速失败：本机连 10.7.0.x 的 utun 地址都不存在
-            //   （`isConnected == false`）时，去 `targetIP` 根本无路可走，安装**必然**失败 ——
-            //   这正是上面「黑洞 → 卡 4m45s」那类场景的成因，此时快速失败才是安全的。
+            // v0.3.578 曾把探测降级为「提示」，但**保留了 `!isConnected` 这个硬门**，理由写在
+            // 当时的注释里：「本机连 10.7.0.x 的 utun 地址都不存在时安装必然失败」。**那个理由
+            // 是错的** —— 真机探针（`P4_全能签逆向/_devicelog3/ddi_probe.txt:7` /
+            // `cd_probe.txt:8`，2026-10-05）两次都出现 `isConnected=false` 而
+            // `tunnel_create_rppairing(10.7.0.1:49152)` **成功**（隧道 OK）；根因是
+            // `isConnected` 假设 utun 地址落在 10.7.0.x，而真机 utun 上没有该网段的 IPv4 地址。
+            // 后果：连续 6 条安装全部被这条硬门误判为「隧道未连接」并直接标失败
+            // （`_devicelog3/login.log:48-54`，用户「明明连了 LocalDevVPN」）。
+            // ⇒ 判据是**间接推断**、且已被证伪 ⇒ 不再设硬门。`isConnected` /
+            //   `isTunnelReachable` 一律只记日志、继续尝试安装，由 `IPAInstallService.createTunnel()`
+            //   自己的 3 次退避重试兜底；真的连不上时，安装链会给出**真实**错误.
             if !LocalDevVPN.isConnected {
-                let reason = "隧道未连接：请确认 LocalDevVPN 已连接（目标 \(LocalDevVPN.targetIP)）."
-                LoginLogger.shared.log("[下载中心] 安装失败 \(fileName)：\(reason)", category: .appStore)
-                await MainActor.run {
-                    self.update(id) {
-                        $0.failureStage = .install
-                        $0.phase = .failed
-                        $0.error = reason
-                        $0.stageText = "失败"
-                    }
-                }
-                return
+                LoginLogger.shared.log(
+                    "[下载中心] 未检测到本机 utun 接口（可能未连接 LocalDevVPN），仍继续尝试安装：\(fileName).",
+                    category: .appStore)
+                LoginLogger.shared.log(
+                    "[下载中心] 本机 IPv4 接口地址：\(LocalDevVPN.ipv4InterfaceSummary()).",
+                    category: .appStore)
             }
             if !LocalDevVPN.isTunnelReachable() {
                 LoginLogger.shared.log(
@@ -663,7 +676,7 @@ final class IPADownloadCenter: ObservableObject {
                     progress: { p in
                         Task { @MainActor in self.update(id) { $0.progress = p } }
                     },
-                    onLog: { LoginLogger.shared.log("[下载中心] \($0)", category: .appStore) })
+                    onLog: { LoginLogger.shared.log("[下载中心] \($0)", category: sourceCategory) })
                 await MainActor.run { IPADownloadLibrary.shared.markInstalled(fileName: fileName) }
                 await MainActor.run {
                     self.update(id) { $0.phase = .done; $0.progress = 1; $0.stageText = "已完成" }
@@ -671,7 +684,12 @@ final class IPADownloadCenter: ObservableObject {
             } catch {
                 // v0.3.382：失败原因只进日志 —— 界面行上只显示「安装失败」四个字，不把长错误塞进 UI
                 LoginLogger.shared.log("[下载中心] 安装失败 \(fileName)：\(error.localizedDescription)",
-                                       category: .appStore)
+                                       category: sourceCategory)
+                // v0.3.581：把本机实际的 IPv4 接口地址一并落日志（纯事实枚举）。
+                // 用途：下次失败时一眼分清「真的没连隧道」还是「接口枚举/网段判断漏了」。
+                LoginLogger.shared.log(
+                    "[下载中心] 本机 IPv4 接口地址：\(LocalDevVPN.ipv4InterfaceSummary()).",
+                    category: .appStore)
                 await MainActor.run {
                     self.update(id) {
                         // 走到了这里就是安装链路本身失败（文件存在且可读）
@@ -878,7 +896,8 @@ final class IPADownloadCenter: ObservableObject {
                 let writeSID = self.job(id)?.storeItemId ?? current.storeItemId
                 LoginLogger.shared.log("[下载中心] 落盘写台账 \(dest.lastPathComponent)："
                                        + "sourceURL=\(writeURL.map { String($0.prefix(40)) + "…" } ?? "nil") "
-                                       + "storeItemId=\(writeSID ?? "nil")", category: .appStore)
+                                       + "storeItemId=\(writeSID ?? "nil")",
+                                       category: logCategory(for: current.source))
                 IPADownloadLibrary.shared.record(fileURL: dest,
                                                  displayName: current.name,
                                                  bundleId: current.bundleId,
@@ -1488,6 +1507,8 @@ enum PackageSINFWriter {
         return Data(bytes)
     }
 
+    /// sinf 注入的日志固定走 `.appStore`：本类型是**静态工具**（没有 Job / 来源上下文），
+    /// 且只有 `.niuwa` / `.nb` 两个来源会触发写回 —— 二者按来源映射本就落在 `.appStore`。
     private static func log(_ message: String) {
         LoginLogger.shared.log("[下载中心] sinf 注入：\(message)", category: .appStore)
     }

@@ -23,16 +23,35 @@ enum LocalDevVPN {
         UIApplication.shared.canOpenURL(detectURL)
     }
 
-    /// LocalDevVPN 连接时会在本机放置 10.7.0.x（或自定义）的 utun 地址.
+    /// 本机是否存在 LocalDevVPN 建起的隧道接口.
+    ///
+    /// ⚠️ v0.3.581 修正（真机实证）：旧实现以「本机存在 `targetIP` 的 /24 网段 IPv4 地址」
+    /// 为**唯一**判据，假设 LocalDevVPN 会把 utun 地址放在 `10.7.0.x`。但真机探针
+    /// （`P4_全能签逆向/_devicelog3/ddi_probe.txt:7` 与 `cd_probe.txt:8`，2026-10-05）
+    /// 两次都出现 `isConnected=false` 而 `tunnel_create_rppairing(10.7.0.1:49152)`
+    /// **成功** —— 隧道通了，本机却没有 `10.7.0.x` 的 IPv4 地址（utun 可能只给 IPv6，
+    /// 或本机侧地址在别的网段）⇒ 网段假设不成立，旧判据**必然假阴性**。
+    /// 现改为**不假设网段**：存在任意 `utun*` 接口（IPv4 或 IPv6）即算已连接；仅当
+    /// 连 utun 都没有时，才退回按网段再判一次（命中才为真 ⇒ 不会新增假阴性）.
     static var isConnected: Bool {
-        let addresses = ipv4InterfaceAddresses()
-        let target = targetIP
-        if addresses.contains(target) { return true }
+        let interfaces = interfaceAddresses()
+        if interfaces.contains(where: { $0.name.hasPrefix("utun") }) { return true }
 
+        // 兜底：万一某版本的隧道接口不叫 utun，仍按 targetIP 网段判一次.
+        let target = targetIP
+        if interfaces.contains(where: { $0.address == target }) { return true }
         let parts = target.split(separator: ".")
         guard parts.count == 4 else { return false }
         let prefix = parts.dropLast().joined(separator: ".") + "."
-        return addresses.contains { $0.hasPrefix(prefix) }
+        return interfaces.contains { $0.address.hasPrefix(prefix) }
+    }
+
+    /// 诊断用：本机全部 IPv4 接口的 `接口名=地址` 列表（纯事实枚举，无判断）.
+    /// 供安装失败时打进日志 —— 下次一看即知「真的没连」还是「枚举漏了」.
+    static func ipv4InterfaceSummary() -> String {
+        let ipv4 = interfaceAddresses().filter { $0.family == AF_INET }
+        if ipv4.isEmpty { return "（无）" }
+        return ipv4.map { "\($0.name)=\($0.address)" }.joined(separator: ", ")
     }
 
     /// 探测隧道端口（49152，RPPairing 服务）是否可达（1 秒超时）.
@@ -80,31 +99,30 @@ enum LocalDevVPN {
         }
     }
 
-    private static func ipv4InterfaceAddresses() -> [String] {
+    /// 枚举本机接口地址（IPv4 与 IPv6 都收，带接口名与地址族）.
+    /// 旧实现只看 `AF_INET` ⇒ LocalDevVPN 的 utun 若只给 IPv6 就会整条漏掉；
+    /// 这里两个地址族都收，且**不过滤接口名**（utun / en0 / pdp_ip0 一视同仁）.
+    private static func interfaceAddresses() -> [(name: String, family: Int32, address: String)] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
         defer { freeifaddrs(ifaddr) }
 
-        var results: [String] = []
+        var results: [(name: String, family: Int32, address: String)] = []
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let current = ptr {
             let interface = current.pointee
-            if interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
-                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                let nameLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-                if getnameinfo(
-                    interface.ifa_addr,
-                    nameLen,
-                    &host,
-                    socklen_t(host.count),
-                    nil,
-                    0,
-                    NI_NUMERICHOST
-                ) == 0 {
-                    results.append(String(cString: host))
-                }
-            }
             ptr = interface.ifa_next
+            guard let sockAddr = interface.ifa_addr else { continue }
+            let family = Int32(sockAddr.pointee.sa_family)
+            guard family == AF_INET || family == AF_INET6 else { continue }
+            let name = String(cString: interface.ifa_name)
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let nameLen = (family == AF_INET)
+                ? socklen_t(MemoryLayout<sockaddr_in>.size)
+                : socklen_t(MemoryLayout<sockaddr_in6>.size)
+            guard getnameinfo(sockAddr, nameLen, &host, socklen_t(host.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            results.append((name: name, family: family, address: String(cString: host)))
         }
         return results
     }
