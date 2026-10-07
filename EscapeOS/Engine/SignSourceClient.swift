@@ -79,7 +79,7 @@ enum SignSourceClient {
             throw SignSourceError.invalidURL(sourceURL)
         }
         LoginLogger.shared.log("\(logTag) → GET \(url.absoluteString)（udid=\(udid ?? "省略")）",
-                               category: .appStore)
+                               category: .signSource)
         let data = try await getJSON(url)
         return try parse(data, origin: sourceURL)
     }
@@ -106,7 +106,7 @@ enum SignSourceClient {
         guard let url = URL(string: urlString) else {
             throw SignSourceError.unlockFailed("解锁地址无效")
         }
-        LoginLogger.shared.log("\(logTag) → GET（解锁）\(url.absoluteString)", category: .appStore)
+        LoginLogger.shared.log("\(logTag) → GET（解锁）\(url.absoluteString)", category: .signSource)
         let data: Data
         do {
             data = try await getJSON(url)
@@ -169,7 +169,7 @@ enum SignSourceClient {
             guard let d = try? JSONSerialization.data(withJSONObject: obj),
                   let app = try? decoder.decode(SignSourceApp.self, from: d) else {
                 LoginLogger.shared.log("\(logTag) apps[\(i)] 解析失败：键=[\(obj.keys.sorted().joined(separator: ","))]",
-                                       category: .appStore)
+                                       category: .signSource)
                 continue
             }
             apps.append(app)
@@ -201,7 +201,7 @@ enum SignSourceClient {
             throw SignSourceError.missingFields("apps 全部解析失败")
         }
         LoginLogger.shared.log("\(logTag) 解析完成：\(source.name)（\(source.apps.count) 个 App）",
-                               category: .appStore)
+                               category: .signSource)
         return source
     }
 

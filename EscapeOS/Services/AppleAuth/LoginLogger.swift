@@ -21,6 +21,15 @@ final class LoginLogger: @unchecked Sendable {
         /// **AppStore 商店**（主页商店：登录 / 获取 / 下载 / 安装 / 账号管理）
         /// —— v0.3.311：原「更多 → AppStore 下载」板块已整体移除，AppStore 只剩这一个板块
         case appStore = "AppStore"
+        /// **下载**（下载链路：启动 / 进度 / 落盘 / 注入 sinf / 安装 / 失败 / 重试 / 暂停 / 取消）。
+        ///
+        /// 为什么必须从 `.appStore` 拆出：下载链路（`IPADownloadCenter` / `IPADownloadActionsSheet` /
+        /// 商店页与详情页的许可获取）此前全写 `.appStore`，于是「AppStore 日志」页里混着下载记录，
+        /// 两边都过滤不干净。拆开后下载管理页（右上角日志入口）只读这一类，与商店日志互不串台。
+        ///
+        /// 中文名与既有分类无前缀歧义：`category(of:)` 取行首方括号内容后用 `Set.contains`
+        /// **精确等值**匹配（非 `hasPrefix`），且「下载」与「通用 / AppStore / 软件源」等互不相同。
+        case download = "下载"
         /// **AppleID 登录 / 认证引擎**（SAP / GrandSlam / Anisette / 会话）。
         ///
         /// 为什么必须和 `.appStore` 拆开：这个分类此前被**两个板块共用** ——
@@ -39,6 +48,16 @@ final class LoginLogger: @unchecked Sendable {
         /// 两边都过滤不干净。拆开后共享转换页（`ImportView` 右上角日志按钮）只读这一类，
         /// 与商店日志互不串台。
         case shareConvert = "共享转换"
+        /// **软件源**（用户自定义第三方源：拉源 / 解析 / RSA 解密 / 图标 / 解锁 / 源清单增删）。
+        ///
+        /// 为什么必须从 `.appStore` 拆出：整条软件源链路（`SignSourceClient` / `SignSourceRSA` /
+        /// `SignSourceStore` / 软件源视图）此前全写 `.appStore`，于是「AppStore 日志」页里混着
+        /// 拉源 / 解析 / 解锁的记录（用户实测指正：「三方软件源的日志」不该出现在 AppStore 板块）。
+        /// 拆开后软件源页（左上角日志入口）只读这一类，与商店日志互不串台。
+        ///
+        /// 中文名与既有分类无前缀歧义：`category(of:)` 取行首方括号内容后用 `Set.contains`
+        /// **精确等值**匹配（非 `hasPrefix`），且「软件源」与「爱思源 / 共享转换 / 通用」互不相同。
+        case signSource = "软件源"
     }
 
     private struct Entry {

@@ -301,7 +301,7 @@ struct SignSourceAppListView: View {
         guard let trimmed, !trimmed.isEmpty else { return nil }
         guard let text = DateText.string(from: trimmed, style: .compact) else {
             LoginLogger.shared.log("\(SignSourceClient.logTag) versionDate 解析失败：\(trimmed)",
-                                   category: .appStore)
+                                   category: .signSource)
             return nil
         }
         return text

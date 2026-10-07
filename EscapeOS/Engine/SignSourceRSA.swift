@@ -79,7 +79,7 @@ enum SignSourceRSA {
         if let body, let key = literalEnvelopeKey(in: body),
            let b64 = root[key] as? String, !b64.isEmpty {
             LoginLogger.shared.log("\(SignSourceClient.logTag) 信封键 \(key) 由前 8KB 字面量扫描命中（辅判据）",
-                                   category: .appStore)
+                                   category: .signSource)
             return try unwrapOrDecrypt(key: key, base64: b64)
         }
         return nil
@@ -91,7 +91,7 @@ enum SignSourceRSA {
         if let decoded = Data(base64Encoded: b64, options: .ignoreUnknownCharacters),
            looksLikePlainJSON(decoded) {
             LoginLogger.shared.log("\(SignSourceClient.logTag) 信封键 \(key) = base64(json) 明文封装（C1）",
-                                   category: .appStore)
+                                   category: .signSource)
             return decoded
         }
         // ② 否则走 RSA（A/B）；非 256 对齐 → decrypt 内抛 .unsupportedCipher（C2/D）
@@ -146,13 +146,13 @@ enum SignSourceRSA {
         // ② 第一轮：全块 PKCS#1 v1.5 → 拼接 → 整源 JSON
         if let plain = assemblePKCS1(blocks), isJSON(plain) {
             LoginLogger.shared.log("\(SignSourceClient.logTag) RSA 解密完成：mode=pkcs1, \(blocks.count) 块",
-                                   category: .appStore)
+                                   category: .signSource)
             return plain
         }
         // ③ 第二轮：全块 raw（扫首个 0x00）→ 拼接 → 整源 JSON
         if let plain = assembleRaw(blocks), isJSON(plain) {
             LoginLogger.shared.log("\(SignSourceClient.logTag) RSA 解密完成：mode=raw, \(blocks.count) 块",
-                                   category: .appStore)
+                                   category: .signSource)
             return plain
         }
         // ④ 两轮都失败 → 判「源格式不支持」，区分三种失败

@@ -253,6 +253,15 @@ struct LoginLogView: View {
     /// `nil` 会走不过滤的全量读取，于是商店 / 证书 / 侧载各板块的日志全串到这一页（用户实测指正）。
     var categories: [LoginLogger.Category]? = nil
 
+    /// 导航标题（同时作为复制 / 分享文本的抬头）。默认沿用「登录诊断日志」；
+    /// 复用方（如软件源页）传自己的板块名（「软件源日志」），避免页头张冠李戴。
+    var title: String = "登录诊断日志"
+
+    /// 「清除」要清哪些分类。`nil`（默认）= 沿用旧行为，**全局清空**（`clear()`）。
+    /// 非 `nil` = 只清这些分类（`clear(categories:)`）—— 供复用方做到「清空只清本板块」，
+    /// 不穿透 AppStore / AppleID 等其它板块的历史日志（与「不混在一起」的初衷一致）。
+    var clearCategories: Set<LoginLogger.Category>? = nil
+
     @Environment(\.dismiss) private var dismiss
     @State private var lines: [String] = []
 
@@ -262,14 +271,19 @@ struct LoginLogView: View {
         NavigationStack {
             LogConsoleView(
                 lines: lines,
-                title: "登录诊断日志",
+                title: title,
                 onClear: {
-                    LoginLogger.shared.clear()
+                    // 传了 clearCategories ⇒ 只清本板块；未传 ⇒ 沿用旧行为（全局清空）。
+                    if let clearCategories {
+                        LoginLogger.shared.clear(categories: clearCategories)
+                    } else {
+                        LoginLogger.shared.clear()
+                    }
                     refresh()
                 },
                 // 本页是 `.sheet` 弹出来的 → 需要「完成」按钮关闭（3105 同款）
                 onDone: { dismiss() },
-                clearConfirmTitle: "确定清空登录日志？"
+                clearConfirmTitle: "确定清空\(title)？"
             )
             .task {
                 refresh()

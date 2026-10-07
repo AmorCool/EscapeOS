@@ -218,7 +218,7 @@ final class SignSourceStore {
         let enc = JSONEncoder()
         guard let data = try? enc.encode(list) else {
             LoginLogger.shared.log("\(Self.logTag) 源清单编码失败，未写盘（\(list.count) 条）",
-                                   category: .appStore)
+                                   category: .signSource)
             return
         }
         do {
@@ -226,7 +226,7 @@ final class SignSourceStore {
         } catch {
             // 写失败**不能静默**：调用方以为已持久化。
             LoginLogger.shared.log("\(Self.logTag) 源清单写盘失败：\(error)（\(list.count) 条未持久化）",
-                                   category: .appStore)
+                                   category: .signSource)
         }
     }
 
@@ -241,7 +241,7 @@ final class SignSourceStore {
     /// 台账没完整读出来时的统一日志（说明本次为何只读、不回写）。
     private func logReadOnly(_ note: String?) {
         guard let note else { return }
-        LoginLogger.shared.log("\(Self.logTag) \(note)", category: .appStore)
+        LoginLogger.shared.log("\(Self.logTag) \(note)", category: .signSource)
     }
 
     /// 写被拒时给**用户可见**的反馈（`remove` / `update` 无返回值，静默失败会让用户以为「点了没反应」）。

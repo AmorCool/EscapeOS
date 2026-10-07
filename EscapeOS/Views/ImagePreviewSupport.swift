@@ -70,9 +70,14 @@ enum PreviewImageLoader {
     /// 取图：命中缓存直接返回；否则按候选链逐个试，成功即写缓存。
     ///
     /// **每一次尝试都落日志**：v0.3.404 之前这条路径一条日志都没有，出问题只能靠猜。
-    /// 日志归在「通用」板块，行首是 `[预览]`，取的是「主机 + 末段路径」——
-    /// 尺寸变体（`392x696bb`）就在末段，够定位又不刷屏。
-    static func image(for raw: String) async throws -> UIImage {
+    /// 日志行首是 `[预览]`，取的是「主机 + 末段路径」——尺寸变体（`392x696bb`）就在末段，
+    /// 够定位又不刷屏。
+    ///
+    /// `logCategory`：日志写进哪个板块。本组件全页共用，默认 `nil` ⇒ 沿用既有的「通用」板块
+    /// （调用方不传即零变化）；哪一页希望这些取图日志归到自己那一类，就由**该页**传进来
+    /// （例如软件源侧传 `.signSource`）。
+    static func image(for raw: String,
+                      logCategory: LoginLogger.Category? = nil) async throws -> UIImage {
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw Failure(message: "图片地址为空") }
         if let hit = PreviewImageCache.image(for: key) { return hit }
@@ -83,11 +88,13 @@ enum PreviewImageLoader {
             do {
                 let image = try await MediaSaver.downloadImage(candidate)
                 PreviewImageCache.store(image, for: key)
-                log("取图成功（候选 \(index + 1)/\(candidates.count) · \(short(candidate))）")
+                log("取图成功（候选 \(index + 1)/\(candidates.count) · \(short(candidate))）",
+                    category: logCategory)
                 return image
             } catch {
                 lastMessage = error.localizedDescription
-                log("取图失败（候选 \(index + 1)/\(candidates.count) · \(short(candidate))）：\(lastMessage)")
+                log("取图失败（候选 \(index + 1)/\(candidates.count) · \(short(candidate))）：\(lastMessage)",
+                    category: logCategory)
             }
         }
         throw Failure(message: lastMessage)
@@ -103,8 +110,9 @@ enum PreviewImageLoader {
         return (u.host ?? "") + "/" + u.lastPathComponent
     }
 
-    private static func log(_ message: String) {
-        LoginLogger.shared.log("[预览] \(message)")
+    /// `category` 为 `nil` ⇒ 落既有的「通用」板块（历史行为）；非 `nil` ⇒ 由调用方指定板块。
+    private static func log(_ message: String, category: LoginLogger.Category? = nil) {
+        LoginLogger.shared.log("[预览] \(message)", category: category ?? .general)
     }
 }
 
@@ -114,6 +122,8 @@ enum PreviewImageLoader {
 /// 在纯黑背景上用户看到的就是"点开是黑的、也没转圈"。
 struct PreviewImageView: View {
     let url: String
+    /// 取图日志的板块；`nil` ⇒ 沿用「通用」（既有行为）。
+    var logCategory: LoginLogger.Category? = nil
 
     private enum Phase { case loading, loaded(UIImage), failed }
     @State private var phase: Phase = .loading
@@ -155,7 +165,7 @@ struct PreviewImageView: View {
     @MainActor
     private func load() async {
         do {
-            let image = try await PreviewImageLoader.image(for: url)
+            let image = try await PreviewImageLoader.image(for: url, logCategory: logCategory)
             phase = .loaded(image)
         } catch {
             // 具体原因（超时/404/解码失败）只进日志；界面上只给一句短提示，不放长句
@@ -193,6 +203,8 @@ struct PreviewImageView: View {
 struct ImageGalleryViewer: View {
     let urls: [String]
     @State var startIndex: Int
+    /// 取图日志的板块；`nil` ⇒ 沿用「通用」（既有行为）。各页按自己归属传入。
+    var logCategory: LoginLogger.Category? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var current: Int = 0
     @State private var confirmSave = false
@@ -212,7 +224,7 @@ struct ImageGalleryViewer: View {
             } else {
                 TabView(selection: $current) {
                     ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
-                        PreviewImageView(url: url)
+                        PreviewImageView(url: url, logCategory: logCategory)
                             .tag(index)
                             .onLongPressGesture(minimumDuration: 0.4) {
                                 pendingURL = url
@@ -248,7 +260,7 @@ struct ImageGalleryViewer: View {
             do {
                 // v0.3.404：走**同一份取图逻辑** —— 刚看过的图直接命中缓存，不再重下；
                 // 也不会再去要那个被"图标高清改写"改坏的地址（旧版存图同样会拿到 404）。
-                let image = try await PreviewImageLoader.image(for: url)
+                let image = try await PreviewImageLoader.image(for: url, logCategory: logCategory)
                 let outcome = try await MediaSaver.save(image, fileName: "screenshot-\(current + 1)")
                 switch outcome {
                 case .photos: ToastCenter.shared.show("已保存到相册")
@@ -306,6 +318,10 @@ struct ImagePreviewTarget: Identifiable {
 ///
 /// `viewIcon` 由调用方传入：预览状态是各页自己的 `@State`，这里只负责触发，不持有状态。
 ///
+/// `logCategory`：「提取图标」取图失败/成功的日志板块；`nil` ⇒ 沿用「通用」（既有行为）。
+/// 「查看图标」那一项的日志板块由 `viewIcon` 闭包自己的页面决定（它走的是页面构造的
+/// `ImageGalleryViewer`，那里有同名的可选参数）。
+///
 /// 外面这层 `Group` 不是装饰：菜单项由「返回 `some View` 的函数」给出时，包一层 `Group`
 /// 才能被确定地摊平成多条菜单项 —— 本仓库 `FileBrowserView.itemMenu(for:)` 是同样的写法。
 ///
@@ -315,6 +331,7 @@ struct ImagePreviewTarget: Identifiable {
 @MainActor
 @ViewBuilder
 func iconMenuItems(iconURL: String?, fileNameBase: String,
+                   logCategory: LoginLogger.Category? = nil,
                    viewIcon: @escaping @MainActor () -> Void) -> some View {
     Group {
         Button {
@@ -323,7 +340,7 @@ func iconMenuItems(iconURL: String?, fileNameBase: String,
             Label("查看图标", systemImage: "photo")
         }
         Button {
-            IconExporter.save(iconURL: iconURL, fileNameBase: fileNameBase)
+            IconExporter.save(iconURL: iconURL, fileNameBase: fileNameBase, logCategory: logCategory)
         } label: {
             Label("提取图标", systemImage: "square.and.arrow.down")
         }
@@ -382,7 +399,9 @@ enum IconExporter {
     /// - Parameters:
     ///   - iconURL: 图标地址（空 → 只提示，不做任何事）
     ///   - fileNameBase: 落沙盒时的文件名（不含扩展名）。调用方给 bundleId 或应用名。
-    static func save(iconURL: String?, fileNameBase: String) {
+    ///   - logCategory: 取图日志的板块；`nil` ⇒ 沿用「通用」（既有行为）。
+    static func save(iconURL: String?, fileNameBase: String,
+                     logCategory: LoginLogger.Category? = nil) {
         let raw = (iconURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else {
             ToastCenter.shared.show("没有可提取的图标")
@@ -392,7 +411,7 @@ enum IconExporter {
         Task { @MainActor in
             do {
                 // v0.3.404：图标也走**同一份取图逻辑**（正方形变体升高清、失败回落原址、命中缓存）
-                let image = try await PreviewImageLoader.image(for: raw)
+                let image = try await PreviewImageLoader.image(for: raw, logCategory: logCategory)
                 let outcome = try await MediaSaver.save(image, fileName: fileNameBase)
                 switch outcome {
                 case .photos: ToastCenter.shared.show("图标已存到相册")

@@ -379,11 +379,12 @@ struct IPADownloadActionsSheet: View {
             case .ok(let apps):
                 return apps.contains { $0.bundleId.caseInsensitiveCompare(bid) == .orderedSame }
             case .failed(let message):
-                LoginLogger.shared.log("[下载面板] 在线安装前置检查失败：\(message)（不阻断安装）",
-                                       category: .appStore)
+                // 前置检查失败 / 超时不阻断安装（设备未配对、隧道不可用都可能发生）。
+                LoginLogger.shared.log("[下载面板] 在线安装前置检查失败：\(message)",
+                                       category: .download)
                 return nil
             case .timedOut:
-                LoginLogger.shared.log("[下载面板] 在线安装前置检查超时（不阻断安装）", category: .appStore)
+                LoginLogger.shared.log("[下载面板] 在线安装前置检查超时", category: .download)
                 return nil
             }
         }.value
@@ -391,8 +392,9 @@ struct IPADownloadActionsSheet: View {
         await MainActor.run {
             onlineCheck = .reminded
             if installed == true {
-                LoginLogger.shared.log("[下载面板] 在线安装：设备已装 \(bid ?? "?")，先提示一次（再点一次才重装）",
-                                       category: .appStore)
+                // 已装：只提示一次（onlineCheck = .reminded），再点一次才走重装。
+                LoginLogger.shared.log("[下载面板] 在线安装：设备已装 \(bid ?? "?")，先提示一次",
+                                       category: .download)
                 ToastCenter.shared.show("设备上已安装")
             } else {
                 performOnlineInstall()
@@ -441,7 +443,7 @@ struct IPADownloadActionsSheet: View {
             let link = Self.storeLink(itemId: storeId)
             UIPasteboard.general.string = link
             LoginLogger.shared.log("[下载面板] 复制商店链接（来自台账商品号 \(storeId)）"
-                                   + " → \(Self.masked(link))", category: .appStore)
+                                   + " → \(Self.masked(link))", category: .download)
             ToastCenter.shared.show("已复制商店链接")
             return
         }
@@ -457,7 +459,7 @@ struct IPADownloadActionsSheet: View {
         let metaData = IPAPackageInspector.extractiTunesMetadata(ipaPath: path)
         LoginLogger.shared.log("[下载面板] iTunesMetadata 读取："
                                + (metaData.map { "\($0.count) 字节" } ?? "取不到（包内无此条目，或 zip 解析失败）"),
-                               category: .appStore)
+                               category: .download)
         guard let data = metaData,
               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
               let meta = plist as? [String: Any] else {
@@ -466,19 +468,19 @@ struct IPADownloadActionsSheet: View {
         }
         guard let itemId = Self.itemIdString(meta["itemId"]) else {
             LoginLogger.shared.log("[下载面板] iTunesMetadata 里没有 itemId；实际键=["
-                                   + meta.keys.sorted().joined(separator: ", ") + "]", category: .appStore)
+                                   + meta.keys.sorted().joined(separator: ", ") + "]", category: .download)
             ToastCenter.shared.show("无商店链接")
             return
         }
         if let bid = meta["softwareVersionBundleId"] as? String,
            let expect = item.bundleId, !expect.isEmpty, bid != expect {
             // 只记日志、不阻断：商品号仍可用，归属对不上属于诊断信息
-            LoginLogger.shared.log("[下载面板] 包内 bundleId \(bid) 与台账 \(expect) 不一致", category: .appStore)
+            LoginLogger.shared.log("[下载面板] 包内 bundleId \(bid) 与台账 \(expect) 不一致", category: .download)
         }
         let link = Self.storeLink(itemId: itemId)
         UIPasteboard.general.string = link
         LoginLogger.shared.log("[下载面板] 复制商店链接，来自包内 iTunesMetadata（itemId \(itemId)）"
-                               + " → \(Self.masked(link))", category: .appStore)
+                               + " → \(Self.masked(link))", category: .download)
         ToastCenter.shared.show("已复制商店链接")
     }
 
@@ -503,7 +505,7 @@ struct IPADownloadActionsSheet: View {
     /// 与下载/安装状态**完全无关**：任何阶段都恒可点。没有直链 → 提示「无下载链接」。
     private func extractDownloadLink() {
         guard let link = sourceLink else {
-            LoginLogger.shared.log("[下载面板] 台账无 sourceURL，给不出 IPA 原链接", category: .appStore)
+            LoginLogger.shared.log("[下载面板] 台账无 sourceURL，给不出 IPA 原链接", category: .download)
             // v0.3.390：文案改准。AppleID 通道的地址是 Apple 按会话动态签发、必须带授权头才有效，
             // **单独一个 URL 没有意义** → 这类包本来就给不出「可用的下载直链」，不是我们没查到。
             ToastCenter.shared.show("该来源无公开直链")
@@ -511,7 +513,7 @@ struct IPADownloadActionsSheet: View {
         }
         UIPasteboard.general.string = link
         LoginLogger.shared.log("[下载面板] 提取下载链接，来自台账 sourceURL → \(Self.masked(link))",
-                               category: .appStore)
+                               category: .download)
         ToastCenter.shared.show("链接已复制")
     }
 
