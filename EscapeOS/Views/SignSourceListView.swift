@@ -53,6 +53,12 @@ struct SignSourceListView: View {
     @State private var showAddSheet = false
     /// 右上角「下载管理」入口的 push 状态（目标页由接线方经 `downloadManagerDestination` 提供）。
     @State private var showDownloadManager = false
+    /// 左上角「日志」入口的呈现状态。
+    ///
+    /// 用 `.sheet` 而非 push：复用的既有日志页 `LoginLogView` 自带 `NavigationStack` +
+    /// 「完成」按钮（它是为 sheet 设计的）—— 若再 push 一层，会嵌出第二套导航栏、
+    /// 与系统返回箭头重复（该页的 `onDone` 与返回是同一件事）。sheet 呈现与其设计一致。
+    @State private var showLog = false
     @State private var addText = ""
     /// 正在「更新」的源（按 `sourceURL`）—— 行上显示转圈。
     ///
@@ -82,6 +88,19 @@ struct SignSourceListView: View {
         .navigationTitle("软件源管理")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // ⓪ 日志（**左上角**，用户指定位置）
+            //
+            // ⚠️ 本页是 push 进来的，左上角已有**系统返回箭头**。`.topBarLeading` 的自定义项
+            // **不会**挤掉返回箭头 —— iOS 会把返回箭头留在最左、自定义项排在其右侧，两者共存，
+            // 故「左上角」这一位置可用，无需退让到右上角。
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showLog = true
+                } label: {
+                    Image(systemName: "doc.text.magnifyingglass")
+                }
+                .accessibilityLabel("软件源日志")
+            }
             // ① 下载管理（**接线点**，见 `downloadManagerDestination`）
             if downloadManagerDestination != nil {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -110,6 +129,13 @@ struct SignSourceListView: View {
         }
         // 下拉刷新：刷新**全部**源（规格 §4.1）
         .refreshable { await refreshAll() }
+        // 左上角「日志」入口 → 复用既有日志页 `LoginLogView`，只显示「软件源」这一类
+        // （`categories: [.signSource]` 按分类预筛）。清除也限定本分类，不穿透其它板块。
+        .sheet(isPresented: $showLog) {
+            LoginLogView(categories: [.signSource],
+                         title: "软件源日志",
+                         clearCategories: [.signSource])
+        }
         // 添加源对话框（规格 §4.1：title「添加软件源」/ message 提示 JSON 地址 / 按钮 添加·取消）
         .alert("添加软件源", isPresented: $showAddSheet) {
             TextField("请输入源地址", text: $addText)
@@ -359,7 +385,7 @@ struct SignSourceListView: View {
             group.addTask {
                 try await Task.sleep(for: signSourceUpdateTimeout)
                 LoginLogger.shared.log("\(SignSourceClient.logTag) 更新超时：\(sourceURL)（\(signSourceUpdateTimeout)）",
-                                       category: .appStore)
+                                       category: .signSource)
                 throw SignSourceError.network("请求超时")
             }
             defer { group.cancelAll() }

@@ -45,6 +45,12 @@ struct IPADownloadManagerView: View {
     @State private var previewTarget: ImagePreviewTarget?
     /// v0.3.383：右上角「在线安装设置」sheet（GitHub Token）
     @State private var showOnlineInstallSettings = false
+    /// 右上角「日志」入口的呈现状态。
+    ///
+    /// 用 `.sheet` 而非 push：复用的既有日志页 `LoginLogView` 自带 `NavigationStack` +
+    /// 「完成」按钮（它是为 sheet 设计的）—— 再 push 一层会嵌出第二套导航栏、与系统返回箭头重复。
+    /// 这与软件源页的日志入口（`SignSourceListView.swift` 的 `.sheet(isPresented:)`）**同一种呈现方式**。
+    @State private var showLog = false
     /// v0.3.382：在列表里出现**多于一次**的 bundleId。
     /// 用途：行状态判定时，若某个任务的版本还未知（只能按 bundleId 认行），
     /// 而这些行共享同一个 bundleId，就**宁可都不显示**进行中/失败 —— 不能显示错（见 activeJob 注释）。
@@ -62,6 +68,22 @@ struct IPADownloadManagerView: View {
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return f
     }()
+
+    // MARK: - 日志入口
+
+    /// 本页「日志」入口只筛的日志分类 —— **「下载」专属**（与软件源页只筛「软件源」对称）。
+    ///
+    /// 为什么不用 `.appStore`：下载链路（`IPADownloadCenter` / `AppStoreLocalInstallService` /
+    /// 下载与安装）当前全部写 `.appStore`，而 `.appStore` **同时还装**着商店浏览 / 版本历史 /
+    /// 账号管理等非下载日志 —— 只筛 `.appStore` 会把这些一起带进来，板块就不纯了；而且复用页的
+    /// 「清空」会按同一分类清除（`clearCategories`），拿 `.appStore` 当下载板块还会连累商店板块。
+    /// 本页要的是「下载管理**自己**的日志板块」，故新增 `.download` 分类、把下载链路的写入点
+    /// 单独归拢（清单见简报 §④）。
+    ///
+    /// 依赖（本文件**不定义**）：`LoginLogger.Category.download` 由另一位同事在
+    /// `EscapeOS/Services/AppleAuth/LoginLogger.swift` 的枚举里新增（该文件不在本文件范围）；
+    /// 落盘前本行无法编译 —— 这是刻意保留的跨人依赖（由协调人转交）。
+    private var downloadLogCategories: [LoginLogger.Category] { [.download] }
 
     var body: some View {
         // 只有进入「编辑」才允许勾选（否则点一下就会被选中）
@@ -89,6 +111,22 @@ struct IPADownloadManagerView: View {
                 }
                 .accessibilityLabel("在线安装设置")
             }
+            // 「日志」入口 —— 复用**既有**日志页 `LoginLogView`（不新建第二套日志页），
+            // 用与软件源页**完全相同**的做法：同一个 `LoginLogView`、同一种「传分类数组预筛 +
+            // 传同分类做按板块清空」的机制，只是分类换成「下载」。见 body 末尾的 `.sheet`。
+            //
+            // 为什么放**右上角**（而软件源页按用户要求放左上角）：本页是**二级 push** 进来的
+            // （`HomeView` → `SignSourceListView` → 本页），左上角恒为系统返回箭头 —— 在左上角
+            // 再加一项会与返回箭头挤占 / 重叠，破坏返回手势的视觉与命中区。右上角本轮已清空
+            // （刷新按钮已按用户要求删除），把日志入口放这里既不抢返回箭头、也不与齿轮 / 编辑冲突。
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showLog = true
+                } label: {
+                    Image(systemName: "doc.text.magnifyingglass")
+                }
+                .accessibilityLabel("下载日志")
+            }
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
             // 刷新走下拉（见 body 上的 `.refreshable`）；右上角不设刷新按钮（用户要求）.
             // 返回箭头由系统提供（本页 push 进来时左上角自带），不重复自绘.
@@ -96,6 +134,15 @@ struct IPADownloadManagerView: View {
         .toastHost()
         .sheet(isPresented: $showOnlineInstallSettings) {
             OnlineInstallSettingsSheet()
+        }
+        // 右上角「日志」入口 → 复用既有日志页 `LoginLogView`，只显示「下载」这一类
+        // （`categories: [.download]` 按分类预筛），清空也只清这一类（`clearCategories: [.download]`），
+        // 不穿透商店 / 登录 / 软件源等其它板块 —— 与软件源页日志入口**同一种写法**（见该页 `.sheet`）。
+        // 标题用「下载日志」而不是页内默认的「登录诊断日志」，免得页头张冠李戴（该页已支持 `title:`）。
+        .sheet(isPresented: $showLog) {
+            LoginLogView(categories: downloadLogCategories,
+                         title: "下载日志",
+                         clearCategories: Set(downloadLogCategories))
         }
         .sheet(item: $actionItem) { item in
             IPADownloadActionsSheet(
@@ -503,8 +550,10 @@ struct IPADownloadManagerView: View {
             return
         }
         UIPasteboard.general.string = raw
+        // 分类改为 `.download`（下载专属）—— 本文件自己的下载面板日志也归到「下载」板块，
+        // 否则它留在 `.appStore` 会漏出这个板块（见 `downloadLogCategories` 的取舍说明）。
         LoginLogger.shared.log("[下载面板] 提取下载链接（下载中任务）：\(String(raw.prefix(64)))…",
-                               category: .appStore)
+                               category: .download)
         ToastCenter.shared.show("链接已复制")
     }
 
