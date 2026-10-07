@@ -417,9 +417,27 @@ public final class HTTPClient {
                 urlRequest.httpBody = body
             }
 
-            let (data, response) = try await self.session.data(for: urlRequest)
+            // v0.3.5xx：**统一逐请求耗时**（唯一一处，覆盖全部 ApplePackage 网络往返：
+            // ent/download、bag.xml、volumeStore / redownload / updateProduct、
+            // VersionFinder、Lookup、Search、Purchase）。
+            // 只打 host + path，**不打 query / header / body**（其中可能含凭据）。
+            let started = Date()
+            let pair: (Data, URLResponse)
+            do {
+                pair = try await self.session.data(for: urlRequest)
+            } catch {
+                storeLog("[计时] HTTP \(request.method.rawValue) \(url.host ?? "?")\(url.path)"
+                    + " 耗时=\(Int(Date().timeIntervalSince(started) * 1000))ms"
+                    + " 失败=\(error.localizedDescription)")
+                throw error
+            }
+            let data = pair.0
+            let response = pair.1
             let http = response as? HTTPURLResponse
             let code = UInt(http?.statusCode ?? 0)
+            storeLog("[计时] HTTP \(request.method.rawValue) \(url.host ?? "?")\(url.path)"
+                + " 耗时=\(Int(Date().timeIntervalSince(started) * 1000))ms"
+                + " 状态=\(code) 响应字节=\(data.count)")
 
             var headers = HTTPHeaders()
             for (name, value) in http?.allHeaderFields ?? [:] {

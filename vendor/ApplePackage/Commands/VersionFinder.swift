@@ -9,7 +9,39 @@ import Foundation
 
 public enum VersionFinder {
     /// v0.3.364：`externalVersionID` 可选 —— 静默空包时由调用方用候选版本重打（见下方说明）。
+    ///
+    /// v0.3.5xx：本文件此前**零日志**。补「入口 / 出口 / 耗时」三条 ——
+    /// 让「历史版本候选」这一跳可单独归因（原先是黑盒合计的一部分）。
+    /// 每次网络往返的耗时由 shim 的统一逐请求日志覆盖，这里不重复打。
     public nonisolated static func list(
+        account: inout AppStoreAccount,
+        bundleIdentifier: String,
+        externalVersionID: String? = nil
+    ) async throws -> [String] {
+        let started = Date()
+        storeLog("[计时] VersionFinder.list 入口 bundle=\(bundleIdentifier) externalVersionID=\(externalVersionID ?? "(空)")")
+        do {
+            let versions = try await performList(
+                account: &account,
+                bundleIdentifier: bundleIdentifier,
+                externalVersionID: externalVersionID
+            )
+            storeLog("[计时] VersionFinder.list 出口 版本数=\(versions.count)")
+            storeLog("[计时] VersionFinder.list 耗时=\(elapsedMs(since: started))ms")
+            return versions
+        } catch {
+            storeLog("[计时] VersionFinder.list 出口 失败=\(error.localizedDescription)")
+            storeLog("[计时] VersionFinder.list 耗时=\(elapsedMs(since: started))ms")
+            throw error
+        }
+    }
+
+    /// `[计时]` 日志用 —— 与锚点的毫秒差。
+    private nonisolated static func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    private nonisolated static func performList(
         account: inout AppStoreAccount,
         bundleIdentifier: String,
         externalVersionID: String? = nil

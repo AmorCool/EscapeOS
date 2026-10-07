@@ -139,6 +139,11 @@ public enum EntDownload {
     /// `Configurator/2.17` **不同**，是 2.18）。
     static let userAgent = "Configurator/2.18 (Macintosh; OS X 15.3.2; 24D81) AppleWebKit/0620.2.4.11.6"
 
+    /// `[计时]` 日志用 —— 与锚点的毫秒差（`LoginLogger` 自带绝对时间戳，这里只让每段耗时一眼可见）。
+    static func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
+    }
+
     /// 取包的完整流程。**失败一律返回 nil，由调用方落回旧链。**
     ///
     /// - Parameters:
@@ -199,6 +204,11 @@ public enum EntDownload {
         }
 
         // ── 生成 kbsync（跑 Unicorn，可能要几秒）───────────────────────────────
+        //
+        // v0.3.5xx：这一段是本任务的核心盲区 —— 29.6s 的 `ent/download` 到底花在
+        // kbsync 冷缓存（跑 Unicorn）还是网络，此前无埋点、答不了。这里计时；
+        // 「冷/热缓存」的判定由 `KBSyncProvider.generate` 在 AppleID 板块打。
+        let kbsyncStarted = Date()
         let blob: Data
         do {
             blob = try await generator(hardwareID, dsid)
@@ -208,12 +218,14 @@ public enum EntDownload {
             storeLog("ent/download 跳过：kbsync 生成失败（\(error.localizedDescription)）")
             return nil
         }
+        storeLog("[计时] ent/download kbsync 生成 耗时=\(Self.elapsedMs(since: kbsyncStarted))ms 字节=\(blob.count)")
         guard !blob.isEmpty else {
             storeLog("ent/download 跳过：kbsync 为空")
             return nil
         }
 
         // ── 组 serialNumber：5 个固定字节 + hardwareID 后 4 位 → base64 ─────────
+        let buildStarted = Date()
         var serial = serialPrefix
         serial.append(contentsOf: hardwareID.dropFirst(2))
         let serialBase64 = Data(serial).base64EncodedString()
@@ -264,7 +276,11 @@ public enum EntDownload {
             headers: HTTPHeaders(headers),
             body: .data(body)
         )
+        storeLog("[计时] ent/download 请求构造 耗时=\(Self.elapsedMs(since: buildStarted))ms")
 
+        // 网络往返本身由 shim 的统一逐请求耗时日志覆盖
+        // （`[计时] HTTP POST downloaddispatch.itunes.apple.com/… 耗时=…ms 状态=…`），
+        // 这里只标记「响应解析」段的起点。
         let response: HTTPClient.Response
         do {
             response = try await client.execute(request: request).get()
@@ -274,6 +290,7 @@ public enum EntDownload {
             storeLog("ent/download 请求失败：\(error.localizedDescription)")
             return nil
         }
+        let parseStarted = Date()
 
         account.cookie.mergeCookies(response.cookies)
         if let pod = response.headers.first(name: "pod"), Int(pod) != nil { account.pod = pod }
@@ -337,6 +354,7 @@ public enum EntDownload {
             return nil
         }
 
+        storeLog("[计时] ent/download 响应解析 耗时=\(Self.elapsedMs(since: parseStarted))ms 命中")
         storeLog("ent/download 命中；\(StoreDownloadEndpoint.summary(dict)) 包地址 \(packageURL.prefix(60))…")
         return dict
     }

@@ -92,7 +92,14 @@ actor SignedStoreAuthenticator {
             return UInt8(guid[start ..< guid.index(start, offsetBy: 2)], radix: 16)
         }
         guard hardware.count == 6 else { throw StoreAuthenticationError.invalidConfiguration }
+        // v0.3.5xx：SAPContext 构造要读 + 校验 4 个 SAP 资产（约 38 MB）—— 此前**零耗时日志**，
+        // 重登慢时这一段成本一直不可见。补「读资产大小 + 构造耗时」。
+        let sapStarted = Date()
         let signer = try SAPContext(assetsURL: assets, hardwareID: Data(hardware))
+        LoginLogger.shared.log(
+            "[SAP] SAPContext 构造 耗时=\(Int(Date().timeIntervalSince(sapStarted) * 1000))ms"
+            + " 资产目录=\(assets.path) 资产大小=\(Self.assetSizeSummary(assets))",
+            category: .appleID)
         let assetNotes = SAPContext.assetNotes()
         if !assetNotes.isEmpty {
             LoginLogger.shared.log("[SAP] 资产 \(assetNotes)", category: .appleID)
@@ -332,6 +339,27 @@ actor SignedStoreAuthenticator {
             try await Task.sleep(for: StoreAuthenticationProtocol.retryDelay(attempt: attempt))
         }
         throw StoreAuthenticationError.tooManyAttempts
+    }
+
+    /// SAPContext 构造要读的 4 个资产的大小摘要（清单与 `SAPContext.mm` 的
+    /// `ReadVerifiedAsset` 逐字一致：CoreFP / CommerceCore / CommerceKit / CoreFP.icxs），
+    /// 供「读 + 校验约 38 MB 资产」的耗时归因。缺失的资产显式标出（构造会因此抛错）。
+    private static func assetSizeSummary(_ directory: URL) -> String {
+        let names = ["CoreFP", "CommerceCore", "CommerceKit", "CoreFP.icxs"]
+        let fm = FileManager.default
+        var parts: [String] = []
+        var total = 0
+        for name in names {
+            let size = (try? fm.attributesOfItem(
+                atPath: directory.appendingPathComponent(name).path)[.size] as? Int) ?? nil
+            if let size {
+                total += size
+                parts.append("\(name)=\(size)")
+            } else {
+                parts.append("\(name)=缺失")
+            }
+        }
+        return parts.joined(separator: " ") + " 合计=\(total)B"
     }
 
     /// 只接受 https + Apple 自有域 + 443 + 无 userinfo/fragment 的 SAP 端点。

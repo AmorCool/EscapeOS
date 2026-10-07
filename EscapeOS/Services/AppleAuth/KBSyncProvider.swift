@@ -68,9 +68,19 @@ enum KBSyncProvider {
         //
         // 键选择：上游用 (DSID, GUID) 双键。我们这边 hardwareID 就来自本机
         // （唯一），所以 DSID 单独做键已经够区分（换账号 = 换 DSID）。
+        //
+        // v0.3.5xx：命中/未命中都打日志 —— 这是「29.6s 到底是不是冷缓存跑 Unicorn」
+        // 的直接判据（此前命中与否零日志，只能靠首尾锚点推断）。
+        let started = Date()
         if let cached = cache.value(for: dsid) {
+            LoginLogger.shared.log(
+                "[kbsync] 缓存命中 耗时=\(elapsedMs(since: started))ms DSID=\(dsid) 字节=\(cached.count)（未跑 Unicorn）",
+                category: .appleID)
             return cached
         }
+        LoginLogger.shared.log(
+            "[kbsync] 缓存未命中 → 冷启动跑 Unicorn（纯 CPU，可能要几秒）DSID=\(dsid)",
+            category: .appleID)
 
         guard let assets = SAPAssetsLocator.url else {
             throw KBSyncError.assetsMissing
@@ -102,7 +112,15 @@ enum KBSyncProvider {
         }
         let data = blob as Data
         cache.store(data, for: dsid)
+        LoginLogger.shared.log(
+            "[kbsync] 生成完成 耗时=\(elapsedMs(since: started))ms DSID=\(dsid) 字节=\(data.count)",
+            category: .appleID)
         return data
+    }
+
+    /// `[计时]` 日志用 —— 与锚点的毫秒差。
+    private nonisolated static func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 
     // MARK: - kbsync 缓存
