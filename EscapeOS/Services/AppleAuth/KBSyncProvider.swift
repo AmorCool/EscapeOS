@@ -73,13 +73,15 @@ enum KBSyncProvider {
         // 的直接判据（此前命中与否零日志，只能靠首尾锚点推断）。
         let started = Date()
         if let cached = cache.value(for: dsid) {
+            // 命中缓存 = 未跑 Unicorn（省掉几秒纯 CPU 的 guest 执行），耗时只是查表。
             LoginLogger.shared.log(
-                "[kbsync] 缓存命中 耗时=\(elapsedMs(since: started))ms DSID=\(dsid) 字节=\(cached.count)（未跑 Unicorn）",
+                "[kbsync] 缓存命中 耗时=\(elapsedMs(since: started))ms DSID=\(dsid) 字节=\(cached.count)",
                 category: .appleID)
             return cached
         }
+        // 未命中 = 冷启动要跑 Unicorn（纯 CPU，真机约数秒）—— kbsync 段的主要耗时来源。
         LoginLogger.shared.log(
-            "[kbsync] 缓存未命中 → 冷启动跑 Unicorn（纯 CPU，可能要几秒）DSID=\(dsid)",
+            "[kbsync] 缓存未命中 DSID=\(dsid)",
             category: .appleID)
 
         guard let assets = SAPAssetsLocator.url else {

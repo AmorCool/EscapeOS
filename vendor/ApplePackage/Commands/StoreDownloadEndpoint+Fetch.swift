@@ -48,7 +48,8 @@ extension StoreDownloadEndpoint {
     ///
     /// 1. 打 volumeStore（带调用方给的 `externalVersionID`，可能为空）；
     /// 2. 有包 → 立即返回；
-    /// 3. 无包且 `fallbackReason` 判定为「Apple 没给包」→ **默认跳过 redownload**（见下）；
+    /// 3. 无包且 `fallbackReason` 判定为「Apple 没给包」→ 解析固定版本号，进入兜底链
+    ///    （redownload / updateProduct；`ent/download` 可用时只跳过 redownload 的**网络请求**，见下）；
     ///    - 调用方给了版本 → **一直用它**（历史版本请求必须保留 version ID）；
     ///    - 没给 → 调 `resolveVersion()`；解析失败或为空 → 抛 `catalogUnavailable`；
     ///      **绝不发出不带版本号的 redownload**（那种请求会走「现算授权」并超时）；
@@ -56,22 +57,30 @@ extension StoreDownloadEndpoint {
     ///    用**同一个版本**打 **一次** `updateProduct`（上游 4 个必要条件见 `fetchViaUpdateProduct`）；
     /// 5. 其余一切（含带 body 的 5xx）→ 抛 `transportFailure`，原样上抛、不补救。
     ///
-    /// ## redownload 默认跳过（v0.3.5xx · 调研档②「条件跳过」）
+    /// ## redownload 条件跳过（v0.3.5xx · 调研档②「条件跳过」）
     ///
     /// 结论见 `P4_全能签逆向/_impl/调研_redownload废弃.md`：**redownload 未被上游废弃**
     /// （ipatool HEAD `cde7d00` 与 Asspp 分叉仍用它；Apple 在**已认证 bag** 里仍下发
     /// `redownloadProduct`），但在本环境**100% 裸 HTTP 500**（真机 2/2 次，白等
     /// 8.863s / 11.427s），且真机里能出包的一直是「**带版本重打 ent/download**」。
     ///
-    /// 因此这里**不再无条件走 redownload**：
-    /// - `ent/download` 这一跳**可用**（bag 有端点 + kbsync 已装配）⇒ **默认跳过** redownload，
-    ///   直接抛 `emptyPackage`；上层（`AppStoreLocalInstallService`）会据此换历史版本、
-    ///   **带版本重进 `ent/download`**（= 真机验证过的那条 200 路径），省掉那 8.9~11.4s；
-    /// - `ent/download` **不可用**（bag 无端点 / kbsync 未装配）⇒ 才走 redownload 作**最后兜底**
-    ///   （此时它是唯一还可能出包的旧链，保留不动）。
+    /// 因此**跳过 redownload 这一跳的网络往返**，但**不跳过整条兜底链**：
+    /// - `ent/download` 可用（bag 有端点 + kbsync 已装配）⇒ 把 redownload 的结果直接当作
+    ///   「裸 HTTP 500（无 snippet）」（与真机观测一致），据此进入第三跳 `updateProduct`
+    ///   （exactly once）—— 兜底仍然可达；
+    /// - `ent/download` 不可用（bag 无端点 / kbsync 未装配）⇒ 原样走 redownload，
+    ///   由它的失败形态决定是否 updateProduct。
     ///
-    /// 回退保证：redownload / updateProduct 的实现与调用**一行未删**，只是「何时进入」多了一道门；
-    /// 无论跳过与否都打日志说明原因，**不会静默失败**。
+    /// ## v0.3.580 修正（v0.3.579 回归）
+    ///
+    /// v0.3.579 曾把「跳过」写成 `entUsable` 时**提前 `throw emptyPackage`**，而该 throw 位于
+    /// ②redownload / ③updateProduct **之前** ⇒ 这两条兜底在 `entUsable` 时**同时不可达**。
+    /// 一旦 `ent/download` 结构性失败（端点字符串在、generator 在，但资产缺失 / 响应不合规），
+    /// 下载即无任何兜底 —— 这正是「AppStore 默认 AppleID 渠道下载不了」的根因。
+    /// 现在把跳过决策**下移到兜底链入口**：只跳过 redownload 的**网络请求**，兜底链保留。
+    ///
+    /// 回退保证：redownload / updateProduct 的实现**一行未删**；`entUsable` 时至少
+    /// `updateProduct` 可达，`!entUsable` 时 redownload 可达 ⇒ **任何输入下 ≥1 条兜底可达**。
     static func fetchProductWithFallback(
         client: HTTPClient,
         account: inout AppStoreAccount,
@@ -123,10 +132,9 @@ extension StoreDownloadEndpoint {
                 let lookupMs = Self.elapsedMs(since: lookupStarted)
                 if let cached, !cached.isEmpty {
                     preferredVersion = cached
-                    storeLog("[计时] 首轮版本预解析 耗时=\(lookupMs)ms 命中缓存版本 \(cached)"
-                        + " → 跳过 volumeStore + redownload")
+                    storeLog("[计时] 首轮版本预解析 耗时=\(lookupMs)ms 命中版本 \(cached)")
                 } else {
-                    storeLog("[计时] 首轮版本预解析 耗时=\(lookupMs)ms 未命中缓存 → 仍走 volumeStore 链")
+                    storeLog("[计时] 首轮版本预解析 耗时=\(lookupMs)ms 未命中")
                 }
             }
             if !preferredVersion.isEmpty {
@@ -143,8 +151,7 @@ extension StoreDownloadEndpoint {
                     overallOutcome = "ent/download 命中"
                     return preferred
                 }
-                storeLog("[计时] ent/download 未命中 耗时=\(Self.elapsedMs(since: entStarted))ms"
-                    + " → 落回 volumeStore 链")
+                storeLog("[计时] ent/download 未命中 耗时=\(Self.elapsedMs(since: entStarted))ms")
             } else {
                 storeLog("ent/download 跳过：版本号为空")
             }
@@ -166,21 +173,7 @@ extension StoreDownloadEndpoint {
             return primary
         }
 
-        storeLog("volumeStore 没有包（\(reason)）→ 判定；\(summary(primary))")
-
-        // ── redownload 默认跳过（调研档②「条件跳过」，见文件头 ## redownload 默认跳过）──────
-        // `ent/download` 这一跳可用 = bag 给了端点 **且** 宿主装配了 kbsync 生成器。
-        // 可用时：redownload 在本环境 100% 裸 500，纯浪费 8.9~11.4s，且上层会换历史版本后
-        // 带版本重进 `ent/download`（真机验证过的 200 路径）⇒ 直接判空包、跳过 redownload。
-        // 不可用时：redownload 是唯一还可能出包的旧链 ⇒ 原样保留（下面的实现一行未改）。
-        let entUsable = (entDownloadEndpoint?.isEmpty == false) && (Configuration.kbsyncGenerator != nil)
-        if entUsable {
-            storeLog("redownload 默认跳过（ent/download 可用：bag 有端点 + kbsync 已装配）"
-                + " → 直接判空包，交上层带版本重进 ent/download")
-            overallOutcome = "跳过 redownload（ent/download 可用）→ emptyPackage"
-            throw ApplePackageError.emptyPackage
-        }
-        storeLog("ent/download 不可用（bag 无端点 或 kbsync 未装配）→ 保留 redownload 作最后兜底")
+        storeLog("volumeStore 没有包（\(reason)）\(summary(primary))")
 
         // 版本解析：调用方给了就**一直用它**（Asspp: "historical requests must
         // keep their version ID"）；没给才去查目录，查不到就明确报错。
@@ -210,52 +203,70 @@ extension StoreDownloadEndpoint {
             overallOutcome = "catalogUnavailable"
             throw ApplePackageError.catalogUnavailable
         }
-        storeLog("redownload 使用版本 \(resolved)")
 
-        // ③ 第三跳：updateProduct。**严格按上游的 4 个条件触发**（见下方的 shouldTryUpdateProduct）。
+        // ── redownload 跳过决策（下移到兜底链入口，**绝不提前 throw**）────────────────
         //
-        // 为什么要把它包在 do/catch 里单独判定而不是直接 `try await`：
-        // redownload 的失败**有两种形态**，只有其中一种该走 updateProduct ——
-        //   · 裸 HTTP 500（`snippet == ""`）                       → 走 ✓
-        //   · 带 body 的 5xx（如真机那个 `kngx` 502 HTML 页）      → **不走** ✗
-        //   · 200 + `no longer available` 消息                    → 走 ✓
-        // 上游 `isEmptyRedownloadError` 明确要求 `Snippet == ""`，
-        // 所以「带 body 的 502」在标准语义里是**服务端/网关故障**，不是「Apple 想换个端点给你包」。
+        // `ent/download` 可用 = bag 给了端点 **且** 宿主装配了 kbsync 生成器。
+        // 可用时：redownload 在本环境 100% 裸 HTTP 500（真机 2/2，白等 8.9~11.4s），
+        // 跳过它**这一跳的网络请求**；但**整条兜底链必须保留** —— 直接按「redownload 回
+        // 裸 500（无 snippet）」这一既知结果进入第三跳 updateProduct（exactly once）。
+        //
+        // ⚠️ v0.3.579 回归教训：曾在此处提前 `throw emptyPackage`，而它位于 ②redownload /
+        // ③updateProduct 之前 ⇒ 两条兜底在 `entUsable` 时同时不可达。一旦 ent/download
+        // 结构性失败即无任何兜底。所以「跳过」只能跳过**请求本身**，不能跳过**兜底链**。
+        let entUsable = (entDownloadEndpoint?.isEmpty == false) && (Configuration.kbsyncGenerator != nil)
+
+        // redownload 的失败有两种形态，只有其中一种该走 updateProduct：
+        //   · 裸 HTTP 500（`snippet == ""`）                  → 走 ✓
+        //   · 带 body 的 5xx（如真机那个 `kngx` 502 HTML 页） → **不走** ✗
+        //   · 200 + `no longer available` 消息               → 走 ✓
+        // 上游 `isEmptyRedownloadError` 明确要求 `Snippet == ""`。
         var redownloadResponse: [String: Any]?
-        var redownloadBodySnippet: String?   // nil 表示「裸 5xx，无 snippet」（上游称 empty redownload error）
+        var redownloadBodySnippet: String?   // nil 表示「裸 5xx，无 snippet」（上游 empty redownload error）
         var redownloadHTTPStatus = 200
-        let redownloadStarted = Date()
-        do {
-            redownloadResponse = try await StoreDownloadEndpoint.redownload.fetchProduct(
-                client: client,
-                account: &account,
-                app: app,
-                deviceIdentifier: deviceIdentifier,
-                externalVersionID: resolved
-            )
-        } catch let error as ApplePackageError {
-            overallOutcome = "redownload 抛 ApplePackageError"
-            throw error
-        } catch let error as StoreAuthenticationError {
-            overallOutcome = "redownload 抛 StoreAuthenticationError"
-            throw error
-        } catch is CancellationError {
-            overallOutcome = "取消"
-            throw CancellationError()
-        } catch {
-            // 走到这里 = HTTP 层失败。我们只关心「裸 500」这一档，其余原样上抛。
-            let (status, snippet) = Self.classifyBareHTTPFailure(error)
-            redownloadHTTPStatus = status
-            redownloadBodySnippet = snippet
+
+        if entUsable {
+            // 跳过 redownload 的网络往返：把结果直接当作「裸 HTTP 500」——
+            // 与真机观测（本环境 redownload 100% 裸 500）一致，从而保住 updateProduct 兜底。
+            storeLog("redownload 跳过（ent/download 可用）")
+            redownloadHTTPStatus = 500
+            redownloadBodySnippet = nil
+        } else {
+            storeLog("redownload 兜底（ent/download 不可用）")
+            storeLog("redownload 使用版本 \(resolved)")
+            let redownloadStarted = Date()
+            do {
+                redownloadResponse = try await StoreDownloadEndpoint.redownload.fetchProduct(
+                    client: client,
+                    account: &account,
+                    app: app,
+                    deviceIdentifier: deviceIdentifier,
+                    externalVersionID: resolved
+                )
+            } catch let error as ApplePackageError {
+                overallOutcome = "redownload 抛 ApplePackageError"
+                throw error
+            } catch let error as StoreAuthenticationError {
+                overallOutcome = "redownload 抛 StoreAuthenticationError"
+                throw error
+            } catch is CancellationError {
+                overallOutcome = "取消"
+                throw CancellationError()
+            } catch {
+                // 走到这里 = HTTP 层失败。我们只关心「裸 500」这一档，其余原样上抛。
+                let (status, snippet) = Self.classifyBareHTTPFailure(error)
+                redownloadHTTPStatus = status
+                redownloadBodySnippet = snippet
+            }
+            storeLog("[计时] redownload 耗时=\(Self.elapsedMs(since: redownloadStarted))ms"
+                + "（HTTP \(redownloadHTTPStatus)）")
         }
-        storeLog("[计时] redownload 耗时=\(Self.elapsedMs(since: redownloadStarted))ms"
-            + "（HTTP \(redownloadHTTPStatus)）")
 
         if let response = redownloadResponse {
             storeLog("redownload 返回；\(summary(response))")
             // 200 + `no longer available` 消息 → 还有一次 updateProduct 机会。
             if Self.isNoLongerAvailable(response) {
-                storeLog("redownload 回 No Longer Available → 试 updateProduct（exactly once）")
+                storeLog("redownload 回 No Longer Available")
                 if let rescued = try await fetchViaUpdateProduct(
                     client: client, account: &account, app: app,
                     deviceIdentifier: deviceIdentifier, externalVersionID: resolved
@@ -264,13 +275,13 @@ extension StoreDownloadEndpoint {
                     overallOutcome = "updateProduct 命中"
                     return rescued
                 }
-                storeLog("updateProduct 也没有包 → 判定为缺少下载授权")
+                storeLog("updateProduct 没有包")
                 overallOutcome = "emptyPackage"
                 throw ApplePackageError.emptyPackage
             }
             // 普通业务性空包 → 没有第三跳（上游同款）。
             if let reason = fallbackReason(response) {
-                storeLog("redownload 同样没有包（\(reason)）→ 判定为缺少下载授权")
+                storeLog("redownload 没有包（\(reason)）")
                 overallOutcome = "emptyPackage"
                 throw ApplePackageError.emptyPackage
             }
@@ -280,7 +291,7 @@ extension StoreDownloadEndpoint {
 
         // HTTP 层失败：只有「裸 500（无 snippet）」按上游语义有资格走 updateProduct。
         if redownloadHTTPStatus == 500, redownloadBodySnippet == nil {
-            storeLog("redownload 裸 HTTP 500（无 body）→ 试 updateProduct（exactly once）")
+            storeLog("redownload 裸 HTTP 500（无 body）")
             if let rescued = try await fetchViaUpdateProduct(
                 client: client, account: &account, app: app,
                 deviceIdentifier: deviceIdentifier, externalVersionID: resolved
@@ -289,7 +300,7 @@ extension StoreDownloadEndpoint {
                 overallOutcome = "updateProduct 命中"
                 return rescued
             }
-            storeLog("updateProduct 也没有包 → 判定为缺少下载授权")
+            storeLog("updateProduct 没有包")
             overallOutcome = "emptyPackage"
             throw ApplePackageError.emptyPackage
         }
@@ -297,7 +308,7 @@ extension StoreDownloadEndpoint {
         // 其余 HTTP 失败（带 body 的 4xx/5xx 如 kngx 502、429、网络错误）**原样上抛** ——
         // 它们是传输层/服务端状态，不是「Apple 没包给你」，伪装成 emptyPackage 只会
         // 诱发上层刷新会话 / 获取许可的连环补救（真机一次点击放大成 4 次 5xx + 10 次 volumeStore）。
-        storeLog("redownload HTTP \(redownloadHTTPStatus) → 原样上抛（带 body 的失败不换端点）")
+        storeLog("redownload HTTP \(redownloadHTTPStatus) 原样上抛")
         overallOutcome = "transportFailure(\(redownloadHTTPStatus))"
         throw ApplePackageError.transportFailure(status: redownloadHTTPStatus)
     }
@@ -391,7 +402,7 @@ extension StoreDownloadEndpoint {
             guard let items = dict["songList"] as? [[String: Any]], items.count == 1,
                   let metadata = items[0]["metadata"] as? [String: Any]
             else {
-                storeLog("updateProduct 响应不合规（songList 必须恰好 1 项）")
+                storeLog("updateProduct 响应 songList 不是恰好 1 项")
                 return nil
             }
             // itemId 与请求 app 一致
@@ -547,7 +558,7 @@ extension StoreDownloadEndpoint {
                 // 直接抛可识别的限流错误：上层不重试、不降级，把准确原因交给用户。
                 let retryAfter = StoreAuthenticationProtocol.retryAfter(
                     finalResponse.headers.first(name: "Retry-After"))
-                storeLog("Apple 下载服务限流（HTTP 429），不再重试")
+                storeLog("Apple 下载服务限流 HTTP 429")
                 throw StoreAuthenticationError.rateLimited(retryAfter: retryAfter)
             }
             if code == 401 || code == 403 {

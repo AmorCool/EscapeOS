@@ -96,9 +96,11 @@ actor SignedStoreAuthenticator {
         // 重登慢时这一段成本一直不可见。补「读资产大小 + 构造耗时」。
         let sapStarted = Date()
         let signer = try SAPContext(assetsURL: assets, hardwareID: Data(hardware))
+        // 资产目录已在上面 `[SAP] 资产目录 …` 打过，这里只补构造耗时 + 各资产大小
+        // （4 个资产约 38 MB；侧载宿主重签会让长度偏大，所以逐个列出便于归因）。
         LoginLogger.shared.log(
             "[SAP] SAPContext 构造 耗时=\(Int(Date().timeIntervalSince(sapStarted) * 1000))ms"
-            + " 资产目录=\(assets.path) 资产大小=\(Self.assetSizeSummary(assets))",
+            + " 资产大小=\(Self.assetSizeSummary(assets))",
             category: .appleID)
         let assetNotes = SAPContext.assetNotes()
         if !assetNotes.isEmpty {

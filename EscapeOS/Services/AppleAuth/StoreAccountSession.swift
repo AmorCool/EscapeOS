@@ -51,9 +51,10 @@ enum StoreAccountSession {
         let gateKey = email.lowercased()
         let forcedByTimeout = await gate.acquire(gateKey)
         if forcedByTimeout {
+            // 强制接管：上一个持有者很可能因 App 进后台被挂起/回收而未释放租约；
+            // 本次结束时 release 会把它清掉，所以一次超时之后链路自行恢复。
             LoginLogger.shared.log(
-                "[会话] 账号租约等待超过 \(Int(StoreAccountRequestGate.acquireTimeout))s，已强制接管继续 —— "
-                + "上一个持有者很可能因 App 进后台被挂起而未释放（本次结束时会把它清掉）.",
+                "[会话] 账号租约等待超过 \(Int(StoreAccountRequestGate.acquireTimeout))s，已强制接管继续.",
                 category: .appleID)
         }
         do {
@@ -87,10 +88,11 @@ actor StoreLoginBackoff {
         let key = email.lowercased()
         if let until = blockedUntil[key], until > Date() {
             // v0.3.5xx：此前这里**静默抛错** —— 日志里一行都没有，用户只看到「点了没反应」。
-            // 补一条明确日志（含剩余冷却时长）；不写 email，避免 PII 进日志。
+            // 补一条明确日志（含剩余冷却时长）；冷却窗口内直接失败、不重试（避免重复发送密码），
+            // 且不写 email，避免 PII 进日志。
             let remaining = Int(ceil(until.timeIntervalSinceNow))
             LoginLogger.shared.log(
-                "[会话] 登录退避冷却中，还剩约 \(remaining)s 才允许重登；本次直接失败不重试（避免重复发送密码）.",
+                "[会话] 登录退避冷却中 剩余=\(remaining)s",
                 category: .appleID)
             throw StoreAuthenticationError.cooldown(remaining)
         }
@@ -100,9 +102,9 @@ actor StoreLoginBackoff {
     func record(_ error: StoreAuthenticationError, email: String) {
         guard let interval = error.backoffInterval else { return }
         blockedUntil[email.lowercased()] = Date().addingTimeInterval(interval)
-        // v0.3.5xx：退避**开始**也补一条日志（原只在 UI 显示），含冷却时长。
+        // v0.3.5xx：退避**开始**也补一条日志（原只在 UI 显示）；冷却期间自动重登会被直接拒绝。
         LoginLogger.shared.log(
-            "[会话] 登录失败触发退避：冷却 \(Int(interval))s，期间自动重登会被直接拒绝.",
+            "[会话] 登录失败触发退避 冷却=\(Int(interval))s",
             category: .appleID)
     }
 
