@@ -139,17 +139,10 @@ struct PurchaseHistoryView: View {
         parts.append(app.idText)
         if !app.bundleId.isEmpty { parts.append(app.bundleId) }
         if let date = app.purchaseDate {
-            parts.append(Self.dayFormatter.string(from: date))
+            parts.append(DateText.string(from: date, style: .day))
         }
         return parts.joined(separator: " · ")
     }
-
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
 
     @ViewBuilder
     private func icon(for app: OwnedApp) -> some View {

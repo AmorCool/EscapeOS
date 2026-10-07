@@ -106,10 +106,7 @@ struct AppStoreVersion: Identifiable, Hashable {
     /// 展示用日期 `2026-09-08`
     var dateText: String {
         guard let d = date else { return dateRaw ?? "—" }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: d)
+        return DateText.string(from: d, style: .day)
     }
 
     /// 相对时间（如 `2 个月前`）

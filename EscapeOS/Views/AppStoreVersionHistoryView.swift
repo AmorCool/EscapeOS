@@ -63,13 +63,6 @@ struct AppStoreVersionHistoryView: View {
 
     private var canLoadMore: Bool { channel == .account && loadedIDs.count < identifiers.count }
 
-    private static let dayText: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
     private static func relativeText(_ d: Date) -> String {
         let f = RelativeDateTimeFormatter()
         f.locale = Locale(identifier: "zh_CN")
@@ -198,7 +191,7 @@ struct AppStoreVersionHistoryView: View {
                 // 拿它当版本日期会整列显示同一个错误日期 —— 所以宁可留空。
                 if let date = v.date {
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(Self.dayText.string(from: date))
+                        Text(DateText.string(from: date, style: .day))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                         Text(Self.relativeText(date))

@@ -145,18 +145,12 @@ struct IconCleanupView: View {
             .disabled(!IconCleanupService.hasBackup || isBusy)
 
             if let backupDate {
-                Text("备份时间 " + Self.formatter.string(from: backupDate))
+                Text("备份时间 " + DateText.string(from: backupDate))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
     }
-
-    private static let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MM-dd HH:mm"
-        return f
-    }()
 
     // MARK: - 动作
 

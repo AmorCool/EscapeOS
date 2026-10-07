@@ -57,6 +57,12 @@ enum DateText {
         return formatter(for: style).string(from: date)
     }
 
+    /// 直接格式化一个**已有 `Date`**（不经解析）—— 供「数据源本身就是 `Date`」的展示点收敛到本工具
+    /// （版本历史 / 收藏栏等原先各自持有 `DateFormatter`）。与 `string(from:style:)` 口径完全一致.
+    static func string(from date: Date, style: Style = .compact) -> String {
+        formatter(for: style).string(from: date)
+    }
+
     // MARK: - 私有
 
     /// Swift 6 并发检查：`ISO8601DateFormatter` / `DateFormatter` 都不是 Sendable，
