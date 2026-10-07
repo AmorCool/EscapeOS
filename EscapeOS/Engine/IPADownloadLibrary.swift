@@ -7,7 +7,8 @@ import Foundation
 /// （应用名/来源/图标地址），这些信息只有在商店列表里才有，包本身读不出来。
 ///
 /// 索引与磁盘**双向对齐**：
-/// · 磁盘上有、索引里没有（例如早期版本下载的包）→ 现场用 `IPAPackageInspector` 读包补登记；
+/// · 磁盘上有、索引里没有（例如早期版本下载的包）→ 现场用 `IPAPackageInspector` 读包补登记，
+///   来源标记为「来源未知」（该目录只收下载产物；真·本地导入在 `Imports/`、不进本台账）；
 /// · 索引里有、磁盘上已删 → 从索引剔除。所以任何来源放进该目录的 IPA 都会出现在下载管理里。
 struct IPADownloadItem: Codable, Identifiable, Hashable {
     var fileName: String          // 唯一键，也是磁盘文件名
@@ -98,6 +99,23 @@ final class IPADownloadLibrary: @unchecked Sendable {
 
     static let shared = IPADownloadLibrary()
     private init() {}
+
+    /// 磁盘扫描现场构造条目时的**占位来源**（`makeItem`）.
+    ///
+    /// 为什么不能写「本地」：本库只扫 `Documents/AppStoreDownloads/`（下载落点），
+    /// 真·本地导入走 `Documents/Imports/`，且明确**从不写本台账**（`ImportService` /
+    /// `RepairService` 的契约：台账 = 「文件在 `AppStoreDownloads`、`fileName` 即磁盘文件名」）。
+    /// 所以「盘上有、台账没有」的包**一律是下载产物**，只是当初没能登记
+    /// （`record()` 未执行，例如 AppleID 通道下载成功后安装失败/超时）。
+    /// 旧实现把它们写死成 `"本地"`，于是 AppleID 的孤儿包被误标成「本地导入」，
+    /// 用户会把它当来路不明的包删掉。改用中性文案后，孤儿不再冒充任何具体来源。
+    ///
+    /// 注意：这不是一个真实来源，故**不进 `IPADownloadCenter.Source` 枚举**
+    /// （加 case 属于另一个文件的范围）。`record()` 拿到真实来源时会覆盖它。
+    private static let unrecordedSource = "来源未知"
+
+    /// 旧版 `makeItem` 写死的误标来源（v0.3.5xx 起不再产生，仅在 `items()` 里回改历史值）.
+    private static let legacyLocalSource = "本地"
 
     /// 删除结果 —— 让调用方能给**真实**反馈，而不是无条件报「已删除」。
     ///
@@ -191,6 +209,13 @@ final class IPADownloadLibrary: @unchecked Sendable {
         index.removeAll { !onDisk.contains($0.fileName) }
         // 3) 顺手补齐容量/包信息（索引可能来自更早版本，字段不全）
         for i in index.indices {
+            // v0.3.5xx：回改**历史误标**。旧版 `makeItem` 把磁盘扫描捡到的孤儿包写死成
+            // `"本地"` 并持久化；但本库只扫 `AppStoreDownloads/`，真·本地导入在 `Imports/`
+            // 且从不写本台账 ⇒ 台账里的 `"本地"` 只可能是这个误标，改回中性文案即可。
+            // 这里只改内存里的值，是否落盘仍由下方 `load.writable` 决定（只读时绝不回写）。
+            if index[i].source == Self.legacyLocalSource {
+                index[i].source = Self.unrecordedSource
+            }
             if index[i].sizeBytes <= 0 { index[i].sizeBytes = fileSize(index[i].fileName) }
             if index[i].packageName == nil || index[i].isEncrypted == nil {
                 let ins = IPAPackageInspector.inspect(ipaPath: path(for: index[i]))
@@ -468,7 +493,7 @@ final class IPADownloadLibrary: @unchecked Sendable {
                                sizeBytes: (attrs?[.size] as? NSNumber)?.int64Value ?? 0,
                                downloadedAt: created,
                                iconURL: nil,
-                               source: "本地",
+                               source: Self.unrecordedSource,
                                packageName: ins?.displayName,
                                isEncrypted: ins?.isEncrypted,
                                hasSINF: sinf != nil,
