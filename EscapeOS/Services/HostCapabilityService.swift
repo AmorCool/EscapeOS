@@ -417,7 +417,7 @@ enum HostCapabilityService {
             // 沙盒外**没有**可用原语了：宿主唯一能碰沙盒外的机制是 airlift 漏洞利用，
             // 而它已整体移除（用户 2026-09-25 决定不再使用）。如实报错，不假装知道.
             return fail(
-                "fs.read 只支持 App 沙盒内路径：沙盒外的读取原语（airlift）已从宿主移除。",
+                "fs.read 只支持 App 沙盒内路径：沙盒外的读取原语（airlift）已从宿主移除.",
                 extra: ["via": "none", "resolved": path, "home": homeDir])
         }
 
@@ -472,7 +472,7 @@ enum HostCapabilityService {
         guard isInSandbox(path) else {
             // 沙盒外**没有**可用原语了（见 `fsRead`）.
             return fail(
-                "fs.write 只支持 App 沙盒内路径：沙盒外的写入原语（airlift）已从宿主移除。",
+                "fs.write 只支持 App 沙盒内路径：沙盒外的写入原语（airlift）已从宿主移除.",
                 extra: ["via": "none", "resolved": path, "home": homeDir])
         }
 
@@ -512,7 +512,7 @@ enum HostCapabilityService {
         let path = resolvePath(rawPath)
         guard isInSandbox(path) else {
             return fail(
-                "fs.delete 只支持 App 沙盒内路径：沙盒外的删除原语（airlift）已从宿主移除。",
+                "fs.delete 只支持 App 沙盒内路径：沙盒外的删除原语（airlift）已从宿主移除.",
                 extra: ["via": "none", "resolved": path, "home": homeDir])
         }
         do {
@@ -531,7 +531,7 @@ enum HostCapabilityService {
         let path = resolvePath(rawPath)
         guard isInSandbox(path) else {
             return fail(
-                "fs.exists 只支持 App 沙盒内路径：沙盒外的查询原语已从宿主移除。",
+                "fs.exists 只支持 App 沙盒内路径：沙盒外的查询原语已从宿主移除.",
                 extra: ["via": "none", "resolved": path, "home": homeDir])
         }
         var isDir: ObjCBool = false
@@ -551,7 +551,7 @@ enum HostCapabilityService {
         guard isInSandbox(path) else {
             // 宿主没有沙盒外目录枚举原语，如实报错.
             return fail(
-                "fs.list 只支持 App 沙盒内路径：沙盒外的枚举原语已从宿主移除。",
+                "fs.list 只支持 App 沙盒内路径：沙盒外的枚举原语已从宿主移除.",
                 extra: ["via": "none", "resolved": path, "home": homeDir])
         }
         let url = URL(fileURLWithPath: path)
@@ -984,8 +984,8 @@ enum HostCapabilityService {
             sem.signal()
         }
         if sem.wait(timeout: .now() + timeout) == .timedOut {
-            return fail("pkg.stat 超时（\(Int(timeout)) 秒）：已放弃等待，避免阻塞调用线程。"
-                        + "大包请改用 pkg.list / pkg.read 分步做。",
+            return fail("pkg.stat 超时（\(Int(timeout)) 秒）：已放弃等待，避免阻塞调用线程，"
+                        + "大包请改用 pkg.list / pkg.read 分步做.",
                         extra: ["resolved": path, "timeoutSeconds": Int(timeout)])
         }
         guard let result = box.result else {
@@ -1957,10 +1957,10 @@ enum HostCapabilityService {
             //   误导性的 hint 会让人去改 recursive，白试一轮。
             if text.contains("PermDenied") {
                 return fail("删除被拒（权限）：该条目不属于当前身份，"
-                            + "AFC 无权删除它。",
+                            + "AFC 无权删除它.",
                             extra: ["root": root.rawValue, "path": path,
                                     "note": "这类条目通常由系统账号创建（如 sysdiagnose 归档内容），"
-                                          + "读/列通常仍可用，但删/写不行。"])
+                                          + "读/列通常仍可用，但删/写不行."])
             }
             return fail("删除失败：\(text)",
                         extra: ["root": root.rawValue, "path": path,

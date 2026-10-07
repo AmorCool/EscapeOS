@@ -82,7 +82,7 @@ enum DDIMountProbe {
         lines.append("=== DDI 挂载只读探针 @ \(stamp) ===")
         lines.append("目的：判定设备上是否已挂载 Developer Disk Image（DDI）")
         // 依据行（用户可见输出）：只写事实与恢复办法，**不写任何成因推测**。
-        lines.append("依据：ServiceNotFound(21) 是设备侧的服务状态问题，不是本 App 的缺陷；该服务偶尔不可用，重启手机即恢复（用户实测）。与 DDI、与「用哪条隧道」均无关")
+        lines.append("依据：ServiceNotFound(21) 是设备侧的服务状态问题，不是本 App 的缺陷；该服务偶尔不可用，重启手机即恢复（用户实测），与 DDI、与「用哪条隧道」均无关")
         lines.append("")
 
         do {
@@ -111,7 +111,7 @@ enum DDIMountProbe {
         out.append("  · LocalDevVPN targetIP=\(LocalDevVPN.targetIP) isConnected=\(LocalDevVPN.isConnected)")
         guard FileManager.default.fileExists(atPath: pairingPath) else {
             out.append("")
-            out.append("结论：未导入配对文件，探针终止（无法建隧道）。")
+            out.append("结论：未导入配对文件，探针终止（无法建隧道）.")
             return out
         }
 
@@ -126,7 +126,7 @@ enum DDIMountProbe {
         } catch {
             out.append("  [失败] 建隧道失败：\(error.localizedDescription)")
             out.append("")
-            out.append("结论：隧道没建起来 —— 本次探针无法回答 DDI 问题（先解决 LocalDevVPN / 配对文件）。")
+            out.append("结论：隧道没建起来 —— 本次探针无法回答 DDI 问题（先解决 LocalDevVPN / 配对文件）.")
             return out
         }
         guard let adapter = tunnel.adapter, let handshake = tunnel.handshake else {
@@ -160,7 +160,7 @@ enum DDIMountProbe {
             if let errorCStr { free(errorCStr) }        // 垫片的失败字符串是 malloc 的 ⇒ free
             out.append("  [失败] 垫片失败：\(message)")
             out.append("")
-            out.append("结论：连不上 / 查询失败 ⇒ 无法判定 DDI 挂载状态。")
+            out.append("结论：连不上 / 查询失败 ⇒ 无法判定 DDI 挂载状态.")
             return out
         }
         defer { plist_mem_free(bytes) }                 // bplist 字节由 libplist 分配 ⇒ plist_mem_free
@@ -170,7 +170,7 @@ enum DDIMountProbe {
         guard let images = parsePlistArray(bytes, byteLen) else {
             out.append("  [失败] 垫片返回的字节解析失败（length=\(byteLen)）")
             out.append("")
-            out.append("结论：解析失败 ⇒ DDI 挂载状态仍未定（既不能确认也不能否证假设）。")
+            out.append("结论：解析失败 ⇒ DDI 挂载状态仍未定（既不能确认也不能否证假设）.")
             return out
         }
 
@@ -191,13 +191,13 @@ enum DDIMountProbe {
         //    不要再把它当成 `ServiceNotFound` 的解释（DDI 与「接错隧道」两版归因都已作废），
         //    **也不要照着它去挂 DDI**。
         if !images.isEmpty {
-            out.append("  ⇒ **已挂 DDI**：设备侧已挂载开发者镜像（与 ServiceNotFound 无关）。")
+            out.append("  ⇒ **已挂 DDI**：设备侧已挂载开发者镜像（与 ServiceNotFound 无关）.")
             out.append("     ServiceNotFound(21) 是设备侧服务状态问题，该服务偶尔不可用，")
-            out.append("     重启手机即恢复（用户实测）——与本探针报告的 DDI 状态没有关系。")
+            out.append("     重启手机即恢复（用户实测）——与本探针报告的 DDI 状态没有关系.")
         } else {
-            out.append("  ⇒ **未挂 DDI**（列表为空）：设备侧未挂载开发者镜像（与 ServiceNotFound 无关）。")
+            out.append("  ⇒ **未挂 DDI**（列表为空）：设备侧未挂载开发者镜像（与 ServiceNotFound 无关）.")
             out.append("     ServiceNotFound(21) 是设备侧服务状态问题，该服务偶尔不可用，")
-            out.append("     重启手机即恢复（用户实测）——与本探针报告的 DDI 状态没有关系。")
+            out.append("     重启手机即恢复（用户实测）——与本探针报告的 DDI 状态没有关系.")
         }
         return out
     }

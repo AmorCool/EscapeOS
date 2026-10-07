@@ -382,8 +382,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
         // 2) 分块写（内部会让出执行权，这是防死锁的关键）
         if truncated {
             output += "\n\n[已截断] 本次输出超过上限 \(Self.maxResponseBytes / 1024 / 1024)MB，"
-                    + "只回传了前面部分。请缩小范围重试："
-                    + "`logs 100` / `cat` 小文件 / `cap fs.read` 用 offset+length 分块。\n"
+                    + "只回传了前面部分，请缩小范围重试："
+                    + "`logs 100` / `cat` 小文件 / `cap fs.read` 用 offset+length 分块.\n"
         }
         try await writeChunked(output, to: outputHandler.stdoutPipe)
 
@@ -802,7 +802,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
       logs [n]        登录日志末尾 n 行（默认 30，最多 5000）
       runlog [n]      二进制模块运行日志末尾 n 行（默认 40）
       caplog [n]      **宿主能力调用日志**末尾 n 行（默认 60）—— 任何模块（原生界面 / dylib / lua）调宿主能力的入参与返回原文，排障「模块为什么没生效」看这个
-      cap <能力名> [JSON]   直接调一次宿主能力（与模块同一个分发器，也会进 caplog）。例: cap host.version / cap afc.list '{"path":"/DCIM"}'
+      cap <能力名> [JSON]   直接调一次宿主能力（与模块同一个分发器，也会进 caplog），例: cap host.version / cap afc.list '{"path":"/DCIM"}'
       modls [模块id]  列任意模块的数据目录（省略 id = 第一个二进制模块）
       modcat <模块id> <相对路径> [n]   读任意模块数据目录下的文本文件（默认 80 行）
       invoke <符号>  调用当前二进制模块的导出符号（通用，取代旧专用命令）

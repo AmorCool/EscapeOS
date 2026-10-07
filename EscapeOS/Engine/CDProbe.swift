@@ -134,7 +134,7 @@ enum CDProbe {
         out.append("  · LocalDevVPN isConnected=\(LocalDevVPN.isConnected)")
         out.append("")
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            out.append("结论：未导入配对文件，探针终止（无法建 provider）。")
+            out.append("结论：未导入配对文件，探针终止（无法建 provider）.")
             return out.joined(separator: "\n")
         }
 
