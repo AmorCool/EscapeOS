@@ -1,4 +1,14 @@
 import SwiftUI
+import UIKit   // `UIPasteboard`（左滑「复制」源地址）
+
+/// 单源拉取的**超时上限**（秒）。
+///
+/// 取值 30s 的理由：`SignSourceClient` 的 URLSession 是 `timeoutIntervalForRequest = 15` /
+/// `timeoutIntervalForResource = 30`（`SignSourceClient.swift:212-213`）—— 正常情况下 URLSession
+/// 会先抛 `.network("请求超时")`；本上限与资源超时同量级，只兜「URLSession 自身超时未触发」的
+/// 病态挂起（连接卡死 / 协程未被唤醒）。它的存在意义：让 `await` **一定会退出**，
+/// 从而 `updating` 的 `defer` 移除一定会执行（挂起 = `defer` 永不执行 = 永久转圈）。
+private let signSourceUpdateTimeout: Duration = .seconds(30)
 
 /// 软件源管理页（源列表）—— 对应规格 `EscapeSpace_软件源管理_实现规格.md` §4.1（截图 1）。
 ///
@@ -45,6 +55,9 @@ struct SignSourceListView: View {
     @State private var showDownloadManager = false
     @State private var addText = ""
     /// 正在「更新」的源（按 `sourceURL`）—— 行上显示转圈。
+    ///
+    /// **不变式**：成员只在 `updateOne(_:)` / `refreshAll()` 里成对地「插入 → 移除」，
+    /// 且有 `fetchWithTimeout` 的硬超时兜底 ⇒ **任何情况下都会回到空集**（论证见 `updateOne` 注释）。
     @State private var updating: Set<String> = []
     /// 正在「添加」（拉源 + 解析）—— 期间禁用 `+`，防重复提交。
     @State private var adding = false
@@ -109,7 +122,12 @@ struct SignSourceListView: View {
             Text("请输入软件源 JSON 地址（http/https）")
         }
         .toastHost()
-        .task { reload() }
+        .task {
+            // 进页面复位「更新中」集合：清掉历史残留 —— 旧实现里泄漏的成员会让该源
+            // 被 `refreshAll` 的过滤条件永久跳过（转圈永不清），此处一并抹掉。
+            updating.removeAll()
+            reload()
+        }
     }
 
     // MARK: - 空态 / 免责声明
@@ -137,7 +155,7 @@ struct SignSourceListView: View {
 
     // MARK: - 源行
 
-    /// 一行：源图标 + 源名 + 源地址；更新中显示转圈；左滑「删除 / 更新」；点行进源内 App 列表。
+    /// 一行：源图标 + 源名 + 源地址；更新中显示转圈；左滑「复制 / 更新 / 删除」；点行进源内 App 列表。
     private func sourceRow(_ source: SignSource) -> some View {
         NavigationLink {
             SignSourceAppListView(source: source)
@@ -162,43 +180,35 @@ struct SignSourceListView: View {
             .padding(.vertical, 2)
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) {
-                remove(source)
+            // 复制源地址（非破坏性，排在删除之前）
+            Button {
+                copy(source)
             } label: {
-                Label("删除", systemImage: "trash")
+                Label("复制", systemImage: "doc.on.doc")
             }
+            .tint(.indigo)
             Button {
                 update(source)
             } label: {
                 Label("更新", systemImage: "arrow.clockwise")
             }
             .tint(.blue)
+            // 删除是破坏性操作，排在最后
+            Button(role: .destructive) {
+                remove(source)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
         }
     }
 
     /// 源图标（模型属性名是 `sourceIcon`，JSON 键才是小写 `sourceicon` —— 见
     /// `SignSourceModels.swift` 的 `CodingKeys`）。
-    /// 没有图标地址时给一个静态占位块，**不要**用一个永远转圈的 `AsyncImage`。
-    @ViewBuilder
+    ///
+    /// 渲染交给 `SourceIconView`：它给「加载中」的转圈加了**超时上限**，
+    /// 不会再出现「图标地址不返回 ⇒ 行内一直转圈」（详见该类型注释）。
     private func sourceIcon(_ urlString: String?) -> some View {
-        if let s = urlString, !s.isEmpty, let url = URL(string: s) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFit()
-                case .failure: Image(systemName: "shippingbox.fill").foregroundStyle(.secondary)
-                default: ProgressView().controlSize(.mini)
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else {
-            Image(systemName: "shippingbox.fill")
-                .font(.title3)
-                .foregroundStyle(.purple)
-                .frame(width: 44, height: 44)
-                .background(Color.purple.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
+        SourceIconView(urlString: urlString)
     }
 
     // MARK: - 动作
@@ -246,34 +256,119 @@ struct SignSourceListView: View {
         reload()
     }
 
+    /// 复制该源的地址到剪贴板（左滑「复制」）。
+    ///
+    /// 复制内容 = 该源的 `sourceURL`（归一化后的地址，与列表显示一致）。
+    private func copy(_ source: SignSource) {
+        UIPasteboard.general.string = source.sourceURL
+        ToastCenter.shared.show("已复制源地址")
+    }
+
     /// 更新单个源：重拉后覆盖（规格 §2.2 `update(_:)`）。
+    ///
+    /// 「进入 / 退出 `updating`」的配对收口在 `updateOne(_:)`（见该函数注释）。
     private func update(_ source: SignSource) {
-        guard !updating.contains(source.sourceURL) else { return }
-        updating.insert(source.sourceURL)
-        Task {
-            defer { updating.remove(source.sourceURL) }
-            do {
-                let fresh = try await SignSourceClient.fetch(sourceURL: source.sourceURL)
-                SignSourceStore.shared.update(fresh)
-                reload()
-                ToastCenter.shared.show("已更新")
-            } catch {
-                ToastCenter.shared.show("更新失败")
-            }
+        Task { await updateOne(source.sourceURL) }
+    }
+
+    /// 单源「重拉 + 覆盖」的**唯一实现** —— 保证「进入 `updating`」必有「移出 `updating`」。
+    ///
+    /// ## 一进一出的出口清单（「一定回到空集」论证 · 上半）
+    /// · 进入：本函数的 `updating.insert`（**唯一**单源进入点；`update(_:)` 只调它）。
+    ///   进入前的 `guard` 与 `insert` 之间**无 `await`**（同一段主 actor 同步代码）⇒ 不会重复拉。
+    /// · 退出：`defer` 里的 `updating.remove`，三条路径**都会**执行：
+    ///   ① 拉取成功 → 落库 + `reload()`，函数正常返回 → `defer` 执行；
+    ///   ② 拉取失败 → `catch` 弹 Toast，函数返回 → `defer` 执行；
+    ///   ③ 任务取消（页面消失 / 下拉刷新被中断）→ `await` 抛出 → `catch` 返回 → `defer` 执行。
+    /// · 第 ④ 条兜底：`fetchWithTimeout` 在 `signSourceUpdateTimeout` 秒后**强制**抛出，
+    ///   保证 `await` 不会永远挂起（挂起 = 函数不退出 = `defer` 不执行 = 永久转圈）。
+    private func updateOne(_ sourceURL: String) async {
+        guard !updating.contains(sourceURL) else { return }   // 已在更新 ⇒ 幂等跳过
+        updating.insert(sourceURL)
+        defer { updating.remove(sourceURL) }   // ← 唯一出口
+        do {
+            let fresh = try await Self.fetchWithTimeout(sourceURL)
+            SignSourceStore.shared.update(fresh)
+            reload()
+            ToastCenter.shared.show("已更新")
+        } catch {
+            // 取消不是失败：页面消失 / 刷新被中断时不弹「更新失败」。
+            if !Task.isCancelled { ToastCenter.shared.show("更新失败") }
         }
     }
 
-    /// 下拉刷新：逐个重拉全部源（串行，避免同时压满网络）。
+    /// 下拉刷新：重拉全部源。
+    ///
+    /// ## 串行 → 受限并发
+    /// 旧实现串行 `await`：N 个源 = Σ 单源耗时（真机实测 2 源 ≈ 5s），转圈逐个亮。
+    /// 现按 `maxConcurrentRefreshes` 路并发：墙钟 ≈ ⌈N/上限⌉ × 最慢单源；上限用于压住
+    /// 「瞬时网络压力」与「主线程落库（`SignSourceStore` 同步全量读写）的堆积」。
+    ///
+    /// ## 与 `updating` 的关系（「一定回到空集」论证 · 下半）
+    /// · 进入：`for url in targets { updating.insert(url) }`（**唯一**批量进入点）；
+    /// · 退出：`while let finished = await group.next() { updating.remove(finished) }` ——
+    ///   每个目标**完成即移除**；子任务 `refreshOne` 不抛错（失败被 `try?` 吞掉后仍**返回 url**），
+    ///   故 `group.next()` 一定把全部目标逐个交回 ⇒ 全部移除；
+    /// · 子任务受 `fetchWithTimeout` 硬上限约束，不会永久挂起 ⇒ 上面的 `while` 一定会结束。
+    /// 所有 `updating` 读写都在主 actor（本 View 的隔离域）内，多源并发更新 UI 状态无数据竞争。
     private func refreshAll() async {
         reload()
-        for source in sources where !updating.contains(source.sourceURL) {
-            updating.insert(source.sourceURL)
-            if let fresh = try? await SignSourceClient.fetch(sourceURL: source.sourceURL) {
-                SignSourceStore.shared.update(fresh)
+        let targets = sources.map(\.sourceURL).filter { !updating.contains($0) }
+        guard !targets.isEmpty else { return }
+
+        for url in targets { updating.insert(url) }   // 并发 ⇒ 多个转圈同时亮
+
+        await withTaskGroup(of: String.self) { group in
+            var next = 0
+            let limit = min(Self.maxConcurrentRefreshes, targets.count)
+            while next < limit {
+                let url = targets[next]
+                group.addTask { await Self.refreshOne(url) }
+                next += 1
             }
-            updating.remove(source.sourceURL)
+            while let finished = await group.next() {
+                updating.remove(finished)              // 该源完成 ⇒ 立即停转圈
+                if next < targets.count {
+                    let url = targets[next]
+                    group.addTask { await Self.refreshOne(url) }
+                    next += 1
+                }
+            }
         }
         reload()
+    }
+
+    /// 并发刷新时**同时在途的源数上限**：压瞬时网络压力 + 压主线程落库的堆积。
+    private static let maxConcurrentRefreshes = 4
+
+    /// 并发子任务：拉单源并落库，返回 `sourceURL`（供父任务按「完成事件」移除 `updating`）。
+    ///
+    /// `nonisolated`：网络与解码在后台执行；落库切回主 actor（`SignSourceStore` 按设计只在主线程用）。
+    /// 失败静默（与旧 `try?` 语义一致）—— **不抛错**，保证父任务的 `group.next()` 一定收得到结果。
+    nonisolated private static func refreshOne(_ sourceURL: String) async -> String {
+        if let fresh = try? await fetchWithTimeout(sourceURL) {
+            await MainActor.run { SignSourceStore.shared.update(fresh) }
+        }
+        return sourceURL
+    }
+
+    /// 拉单源，**带独立超时**：超过 `signSourceUpdateTimeout` 仍未返回 ⇒ 抛超时错误（并取消底层请求）。
+    nonisolated private static func fetchWithTimeout(_ sourceURL: String) async throws -> SignSource {
+        try await withThrowingTaskGroup(of: SignSource.self) { group in
+            group.addTask { try await SignSourceClient.fetch(sourceURL: sourceURL) }
+            group.addTask {
+                try await Task.sleep(for: signSourceUpdateTimeout)
+                LoginLogger.shared.log("\(SignSourceClient.logTag) 更新超时：\(sourceURL)（\(signSourceUpdateTimeout)）",
+                                       category: .appStore)
+                throw SignSourceError.network("请求超时")
+            }
+            defer { group.cancelAll() }
+            // 先到者胜：成功 → 返回源；超时 → 抛错（另一子任务被 `cancelAll` 取消）。
+            guard let first = try await group.next() else {
+                throw SignSourceError.network("请求超时")
+            }
+            return first
+        }
     }
 
     // MARK: - 源地址归一化 + 校验（规格 §4.1「添加源校验」，对齐全能签的严格规则）
@@ -320,5 +415,73 @@ struct SignSourceListView: View {
         if host.contains(".") && host.count > 3 { return true }
         if host.contains(":") && host.count > 1 { return true }   // IPv6 字面量
         return false
+    }
+}
+
+// MARK: - 源图标（带超时兜底）
+
+/// 源图标：异步加载 + **转圈超时兜底**。
+///
+/// ## 为什么需要它（现象）
+/// 用户报「软件源管理页第 2 条源左侧一直有个灰色 spinner 不消失」。
+/// 左侧那个 spinner 就是 `AsyncImage` 的 `default`（`.empty` / `.loading`）相位渲染的 `ProgressView`：
+/// 图标地址来自第三方源（如 `qnq.nuosike.cn` 的 `sourceicon`），当它长时间不返回时，
+/// `AsyncImage` 会**一直停在 `default` 相位**（底层 `URLSession` 默认超时很长，≈60s），
+/// 表现为行内一个几乎永不消失的小转圈。
+///
+/// ## 修法
+/// 给「转圈」加一个**上限** `spinnerTimeout` 秒：到点无论相位如何都落静态占位。
+/// 于是三条出口齐备，spinner **一定会终止**：
+/// · 成功 → `.success` 渲染图片；
+/// · 失败 → `.failure` 渲染静态图标；
+/// · 超时 → 本条 `.task` 置 `timedOut`，渲染静态图标。
+private struct SourceIconView: View {
+
+    /// 图标地址（源的 `sourceIcon`；空 / 非法则直接落静态占位）。
+    let urlString: String?
+
+    /// 转圈最长可见时长（秒）。超时后转静态占位 —— **不再有永久 spinner**。
+    private static let spinnerTimeout: Double = 15
+
+    @State private var timedOut = false
+
+    var body: some View {
+        if let s = urlString, !s.isEmpty, let url = URL(string: s) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFit()
+                case .failure:
+                    failedIcon
+                default:
+                    // empty / loading：未超时才转圈；超时后落静态占位
+                    if timedOut { failedIcon } else { ProgressView().controlSize(.mini) }
+                }
+            }
+            .frame(width: 44, height: 44)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .task {
+                // 超时兜底：到点即停转圈（视图消失时任务被取消，则不置状态）
+                try? await Task.sleep(for: .seconds(Self.spinnerTimeout))
+                if !Task.isCancelled { timedOut = true }
+            }
+        } else {
+            placeholder
+        }
+    }
+
+    /// 加载失败 / 超时的静态占位（灰底图标）—— **不转圈**。
+    private var failedIcon: some View {
+        Image(systemName: "shippingbox.fill").foregroundStyle(.secondary)
+    }
+
+    /// 无图标地址时的静态占位（紫色卡片）。
+    private var placeholder: some View {
+        Image(systemName: "shippingbox.fill")
+            .font(.title3)
+            .foregroundStyle(.purple)
+            .frame(width: 44, height: 44)
+            .background(Color.purple.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
