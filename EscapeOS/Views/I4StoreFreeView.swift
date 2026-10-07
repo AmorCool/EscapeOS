@@ -534,11 +534,11 @@ struct I4StoreFreeView: View {
                             .font(.subheadline.weight(.medium)).lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                         ChipFlow(spacing: 6) {
-                            chip("下架", .red)
+                            PackageChip(text: "下架", tint: .red, horizontalPadding: 5)
                             if let v = app.displayVersion, !v.isEmpty {
-                                chip("v\(v)", .blue)
+                                PackageChip(text: "v\(v)", tint: .blue, horizontalPadding: 5)
                             }
-                            if let s = app.sizeText { chip(s, .green) }
+                            if let s = app.sizeText { PackageChip(text: s, tint: .green, horizontalPadding: 5) }
                         }
                         if let b = app.bundleID, !b.isEmpty {
                             Text(b).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -632,7 +632,7 @@ struct I4StoreFreeView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         ChipFlow(spacing: 6) {
                             ForEach(nbChips(item), id: \.text) { c in
-                                chip(c.text, c.tint)
+                                PackageChip(text: c.text, tint: c.tint, horizontalPadding: 5)
                             }
                         }
                         if !item.subtitle.isEmpty {
@@ -727,7 +727,7 @@ struct I4StoreFreeView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         ChipFlow(spacing: 6) {
                             ForEach(chips(app), id: \.text) { item in
-                                chip(item.text, item.tint)
+                                PackageChip(text: item.text, tint: item.tint, horizontalPadding: 5)
                             }
                         }
                         if let s = app.slogan, !s.isEmpty {
@@ -784,7 +784,21 @@ struct I4StoreFreeView: View {
                 .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
                 .disabled(!job.canPause)
                 Button {
-                    center.cancel(job.id)
+                    // 按**实际结果**提示：台账只读 / 文件被占用时删除被拒，不能默默当成功
+                    // （口径同 `IPADownloadManagerView.reportRemoval`）。
+                    if let result = center.cancel(job.id) {
+                        switch result {
+                        case .removed:
+                            ToastCenter.shared.show("已删除安装包")
+                        case .rejectedReadOnly:
+                            ToastCenter.shared.show("未删除安装包：下载台账文件损坏，本次改动未保存")
+                        case .fileRemovalFailed:
+                            ToastCenter.shared.show("未删除安装包：文件无法删除（可能被占用）")
+                        }
+                    } else {
+                        // `nil` = 还没有落地文件（任务还在下载）→ 只是取消，没有删除动作。
+                        ToastCenter.shared.show("已取消下载")
+                    }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.body)
@@ -820,17 +834,6 @@ struct I4StoreFreeView: View {
         return out
     }
 
-    /// 胶囊：**单行 + 定宽**，绝不被压缩折行（真机截图里 `v8.0.` / `78` 折成两行就是这个毛病）
-    private func chip(_ text: String, _ tint: Color) -> some View {
-        Text(text)
-            .font(.caption2)
-            .lineLimit(1)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(tint.opacity(0.12), in: Capsule())
-            .foregroundStyle(tint)
-            .fixedSize()
-    }
-
     // MARK: - 行（牛蛙源，v0.3.382）
 
     /// 牛蛙源的行：与爱思行同款排版（图标 + 名称 + 胶囊 + 简介），
@@ -860,7 +863,7 @@ struct I4StoreFreeView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         ChipFlow(spacing: 6) {
                             ForEach(chips(app), id: \.text) { item in
-                                chip(item.text, item.tint)
+                                PackageChip(text: item.text, tint: item.tint, horizontalPadding: 5)
                             }
                         }
                         if let d = app.desc, !d.isEmpty {
@@ -1237,62 +1240,5 @@ private func fetchNiuwaPackageOnce(_ app: NiuwaStoreClient.NiuwaApp,
         let retried = try await NiuwaStoreClient.download(bundleId: app.bundleId, region: region)
         LoginLogger.shared.log("[牛蛙源] [完成] 重试成功（\(app.bundleId)）", category: .appStore)
         return retried
-    }
-}
-
-// MARK: - 胶囊自动换行布局
-
-/// 一颗胶囊（文本 + 着色），供 `ChipFlow` 使用
-private struct ChipItem {
-    let text: String
-    let tint: Color
-}
-
-/// v0.3.367：一行放得下就横排，放不下就把**整个胶囊**挪到下一行 ——
-/// 不缩字号、不折行内文字、不截断。
-///
-/// 用 `HStack` 做不到这件事：空间不足时它会把 `Text` 压成竖排（真机截图里
-/// `v8.0.78` 变成 `v8.0.` / `78` 两行就是这个原因）。
-private struct ChipFlow: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let limit = proposal.width ?? .infinity
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalHeight: CGFloat = 0
-        var widest: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if rowWidth > 0, rowWidth + spacing + size.width > limit {
-                totalHeight += rowHeight + spacing
-                widest = max(widest, rowWidth)
-                rowWidth = size.width
-                rowHeight = size.height
-            } else {
-                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
-                rowHeight = max(rowHeight, size.height)
-            }
-        }
-        widest = max(widest, rowWidth)
-        totalHeight += rowHeight
-        return CGSize(width: min(widest, limit), height: totalHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            sub.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
     }
 }

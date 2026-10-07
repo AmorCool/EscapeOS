@@ -329,7 +329,21 @@ struct NBStoreDetailView: View {
                     .disabled(!job.canPause)
 
                     Button {
-                        center.cancel(job.id)
+                        // 按**实际结果**提示：台账只读 / 文件被占用时删除被拒，不能默默当成功
+                        // （口径同 `IPADownloadManagerView.reportRemoval`）。
+                        if let result = center.cancel(job.id) {
+                            switch result {
+                            case .removed:
+                                ToastCenter.shared.show("已删除安装包")
+                            case .rejectedReadOnly:
+                                ToastCenter.shared.show("未删除安装包：下载台账文件损坏，本次改动未保存")
+                            case .fileRemovalFailed:
+                                ToastCenter.shared.show("未删除安装包：文件无法删除（可能被占用）")
+                            }
+                        } else {
+                            // `nil` = 还没有落地文件（任务还在下载）→ 只是取消，没有删除动作。
+                            ToastCenter.shared.show("已取消下载")
+                        }
                     } label: {
                         Label("删除安装包", systemImage: "trash")
                             .font(.caption.weight(.medium))
