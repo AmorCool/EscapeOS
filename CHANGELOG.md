@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.579] - 2026-10-07
+
+> **一句话**：删除下载包的「假成功」彻底收口 —— 取消/删除失败（文件被占用、台账只读）现在都会如实提示、任务行不再凭空消失；AppleID 下载跳过一段稳定返回 500 的无效请求（每次约省 9-11 秒）；并收敛日期格式化与重复的胶囊布局实现。
+
+### 下载管理
+
+- **修复「取消/删除失败却提示成功」的假成功**：旧实现丢弃 `IPADownloadLibrary.remove` 的删除结果，无论删除成败都无条件弹「已取消并删除该安装包」，并把任务从列表抹掉 —— 台账只读（损坏）或安装包文件被占用时，磁盘上的包与台账条目其实都还在。现在 `cancel` 返回删除结果，调用方按**实际结果**提示：只有 `.removed` 才说「已删除安装包」，`.rejectedReadOnly` / `.fileRemovalFailed` 分别提示「下载台账文件损坏，本次改动未保存」「文件无法删除（可能被占用）」。
+- **删除失败时任务不再凭空从列表消失**：删除被拒（台账只读）/ 文件删不掉时不再 `jobs.removeAll` —— 进行中的任务收成「删除失败」（留在列表、可重试），终态任务保持原态（其落地文件确实还在磁盘，台账行照常出现）。全仓 8 个 `cancel` 调用点（下载管理 / 商店页 / 源列表 / 详情页）口径统一。
+
+### 下载加速
+
+- **AppleID 下载跳过一段稳定返回 500 的无效请求**：`ent/download` 可用（bag 有端点 + kbsync 已装配）时，不再无条件走 `redownload` —— 该端点在当前环境 100% 返回裸 HTTP 500（真机 2/2 次，白等 8.9 / 11.4 秒），真机里能出包的一直是「带版本重打 `ent/download`」。现在直接判空包、交上层换历史版本后带版本重进 `ent/download`，每次约省 9-11 秒；`ent/download` 不可用时仍保留 `redownload` 作最后兜底（实现一行未删，只是何时进入多了一道门）。
+
+### 观测
+
+- **下载链路补齐 3 处分段计时埋点**：新增 `fetchProductWithFallback` 整体耗时、`updateProduct` 单跳耗时、单端点请求（volumeStore / redownload / updateProduct 共用）耗时，均用 `defer` 保证任一出口（含 `throw`）都打印，格式对齐既有 `[计时]` 口径。
+
+### 代码质量
+
+- **日期格式化统一走共享工具**：4(+1) 处各自持有的 `DateFormatter` 收敛到 `DateText`（新增 `string(from: Date, style:)` 重载直接格式化已有 `Date`），顺带移除 3 个 View 内非 Sendable 的 `static let DateFormatter`。
+- **重复的 `ChipFlow` 提为共享组件**：`I4StoreFreeView` 与 `SignSourceAppListView` 内逐字节相同的 `ChipFlow` / `ChipItem` 提升为 `Views/Shared/ChipFlow.swift`（实现体逐字节不变 ⇒ 渲染零变化）；另有 3 处重复的 `chip` 胶囊迁移到既有共享 `PackageChip`（新增 `horizontalPadding` 参数，默认 6 保既有调用点零变化）。
+
 ## [0.3.578] - 2026-10-07
 
 > **一句话**：下载链路的可用性与可观测性大收口 —— 软件源进度不再串台、AppleID 下载不再自动安装（下载完停在「已下载」）、不再卡 75%、来源标签与图例对齐、AppleID 下载跳过可确定性跳过的弯路（每次约省 10 秒），并补齐下载链路分段计时埋点。
