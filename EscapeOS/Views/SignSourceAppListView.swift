@@ -321,8 +321,9 @@ struct SignSourceAppListView: View {
                     }
                 }
                 if let d = app.versionDescription ?? app.localizedDescription, !d.isEmpty {
-                    // 可换行 + 「展开 / 收起」；默认 3 行、**不画省略号**（见 `ExpandableDescription`）。
-                    ExpandableDescription(text: d)
+                    // 可换行 + 「展开 / 收起」；默认 3 行、**不画省略号**（见共享 `ExpandableText`）。
+                    // 组件默认值与旧私有实现逐项一致 ⇒ 视觉零变化（首帧 3 行、不画 `…`、仅真截断出「展开」）。
+                    ExpandableText(text: d)
                 }
             }
             Spacer(minLength: 6)
@@ -384,6 +385,40 @@ struct SignSourceAppListView: View {
             .fixedSize()
     }
 
+    // MARK: - 行键与状态认行（修「一个任务挂到多行」）
+
+    /// 本行的**唯一行键** —— 该行的 `downloadURL`。
+    ///
+    /// 为什么用它：源里可能有多条**同名** App（真机样本 `qnq.nuosike.cn` 有 3 条「全能签」，
+    /// 且整源 `bundleIdentifier` 恒为 nil），而**同一个源里每条 App 的 `downloadURL` 唯一**。
+    /// 用 `downloadURL` 当行键 ⇒ 行与任务一一对应，不再靠 `name` / `bundleId` 这种会撞车的字段。
+    ///
+    /// 无 `downloadURL` 的行返回 `nil`：这类行**不能下载**（`download(_:)` 里有 guard），
+    /// 也**绝不允许**退化成「同名即命中」—— 返回 nil 后该行恒走「获取 / 解锁」分支。
+    private func rowKey(_ app: SignSourceApp) -> String? {
+        guard let s = app.downloadURL, !s.isEmpty else { return nil }
+        return s
+    }
+
+    /// 本行正在进行的任务 —— **只按行键（`downloadURL`）匹配**。
+    ///
+    /// 关键：`download(_:)` 起任务时把本行的 `downloadURL` **原样**写进 `Job.remoteURL`
+    /// （`start(remoteURL:)`），且第三方软件源这条链路**不会改写**它
+    /// ⇒ `job.remoteURL == 本行 downloadURL` 就是「这个任务由这一行发起」的精确判据。
+    ///
+    /// 由此得到两个保证：
+    /// · **一个任务只挂一行**：一个 `Job` 只有一个 `remoteURL`，而行键逐行唯一
+    ///   ⇒ 至多命中「`downloadURL` 等于它的那一行」；
+    /// · **取消 / 暂停作用在自己那个任务上**：按钮拿到的 `job` 就是本行发起的那一个，
+    ///   `cancel(job.id)` / `pause(job.id)` 只作用于它。
+    ///
+    /// ⚠️ 这里**刻意不复用** `center.activeJob(bundleId:name:)`：那个重载在 `bundleId == nil`
+    /// 时退化成 `job.name == name`，正是「3 条同名全能签同时显示下载中」的根因。
+    private func activeJob(for app: SignSourceApp) -> IPADownloadCenter.Job? {
+        guard let key = rowKey(app) else { return nil }
+        return center.jobs.first { $0.phase.isBusy && $0.remoteURL == key }
+    }
+
     // MARK: - 右侧控件（文案由 `lock` 决定）
 
     /// 有任务 → 进度 + 暂停 / 删除；否则按 `lock` 给「解锁」或「获取」。
@@ -395,7 +430,7 @@ struct SignSourceAppListView: View {
     ///   （ESign / AltStore 家族无源级 `unlockURL`，规格 §4.2 / R8）。
     @ViewBuilder
     private func trailingControl(_ app: SignSourceApp) -> some View {
-        if let job = center.activeJob(bundleId: app.bundleIdentifier, name: displayName(app)) {
+        if let job = activeJob(for: app) {
             HStack(spacing: 6) {
                 ProgressView(value: min(1, max(0, job.overall)))
                     .frame(width: 40)
@@ -475,7 +510,8 @@ struct SignSourceAppListView: View {
     }
 
     /// 行标题 / 下载任务名：`name` 在模型里是 `String?` ⇒ 退回 bundleId，再退回占位。
-    /// 行与下载任务必须用**同一个**名字，否则 `activeJob` 按名字匹配时挂不上进度。
+    /// **仅用于展示与任务名**；状态认行已改为按行键（`downloadURL`，见 `activeJob(for:)`），
+    /// 不再依赖「行与任务同名」。
     private func displayName(_ app: SignSourceApp) -> String {
         if let n = app.name, !n.isEmpty { return n }
         if let b = app.bundleIdentifier, !b.isEmpty { return b }
@@ -577,100 +613,6 @@ struct SignSourceAppListView: View {
         }
         .presentationDetents([.medium])
     }
-}
-
-// MARK: - 可展开描述（可换行 + 「展开 / 收起」，**不画省略号**）
-
-/// 描述默认最多显示 3 行、**把超出部分直接裁掉**（不画 `…`），并在**确实被截断**时
-/// 才给出「展开」小字按钮，展开后显示全文。
-///
-/// 用户硬要求（仓库既有注释）：「可以换行显示但不能显示不全」—— 所以这里既不单行省略，
-/// 也不无条件挂「展开」：是否被截断用**实测高度**判定（见 `heightProbe`），
-/// 而不是拿字符数猜（`NBStoreDetailView` / `AppStoreVersionHistoryView` 用的是 `count > N`，
-/// 那条启发式会误判：短文本也可能占满 3 行、长文本也可能只占 2 行）。
-private struct ExpandableDescription: View {
-
-    let text: String
-    /// 折叠时最多显示的行数。
-    private let collapsedLines = 3
-
-    @State private var expanded = false
-    /// 全文（不限行数）的真实高度。
-    @State private var fullHeight: CGFloat = 0
-    /// 限 3 行时的真实高度 —— 同时是折叠时允许的**上限**高度。
-    @State private var collapsedHeight: CGFloat = 0
-
-    /// 只有「不限行」比「限 3 行」更高时，才说明被截断了。
-    private var isTruncated: Bool { fullHeight > collapsedHeight + 0.5 }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(text)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                // 折叠时把高度夹到「3 行」；超出部分由 `clipped()` 直接裁掉（**不画省略号**）。
-                .frame(height: expanded ? nil : clampedHeight, alignment: .top)
-                .clipped()
-
-            if isTruncated {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
-                } label: {
-                    Text(expanded ? "收起" : "展开")
-                        .font(.caption2.weight(.medium))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.blue)
-            }
-        }
-        .background(heightProbe)
-    }
-
-    /// 折叠时的显示高度：取「3 行高度」与「全文高度」的较小者
-    /// —— 全文本来就 ≤ 3 行时不额外留白。首帧还没测到（= 0）时先不夹（宁可全显，也不闪空）。
-    private var clampedHeight: CGFloat? {
-        guard collapsedHeight > 0, fullHeight > 0 else { return nil }
-        return min(collapsedHeight, fullHeight)
-    }
-
-    /// 用两份**隐藏**文本实测高度（同宽、同字体、同换行规则），供 `isTruncated` 判定。
-    /// 放在 `.background` 里 ⇒ 拿到与可见文本**完全相同**的宽度，量出的行高才对得上。
-    private var heightProbe: some View {
-        ZStack(alignment: .topLeading) {
-            Text(text)
-                .font(.caption2)
-                .fixedSize(horizontal: false, vertical: true)
-                .hidden()
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: FullDescriptionHeightKey.self, value: g.size.height)
-                })
-            Text(text)
-                .font(.caption2)
-                .lineLimit(collapsedLines)
-                .fixedSize(horizontal: false, vertical: true)
-                .hidden()
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: CollapsedDescriptionHeightKey.self, value: g.size.height)
-                })
-        }
-        .onPreferenceChange(FullDescriptionHeightKey.self) { fullHeight = $0 }
-        .onPreferenceChange(CollapsedDescriptionHeightKey.self) { collapsedHeight = $0 }
-    }
-}
-
-private struct FullDescriptionHeightKey: PreferenceKey {
-    /// Swift 6 并发检查：`PreferenceKey.defaultValue` 协议要求是 `{ get }`，
-    /// 用 `static let` 即可满足，且避免「可变静态存储」报错（`CGFloat` 是 Sendable）。
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
-private struct CollapsedDescriptionHeightKey: PreferenceKey {
-    /// Swift 6 并发检查：`PreferenceKey.defaultValue` 协议要求是 `{ get }`，
-    /// 用 `static let` 即可满足，且避免「可变静态存储」报错（`CGFloat` 是 Sendable）。
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 // MARK: - 胶囊自动换行布局（**复制**自 `I4StoreFreeView`，D4 = 复制，规格 §7.2）
