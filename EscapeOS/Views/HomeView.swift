@@ -26,9 +26,6 @@ struct HomeView: View {
     /// 软件源管理页（同一套「sheet 关闭后再 push」的中转）
     @State private var showSignSource = false
     @State private var pendingSignSource = false
-    /// 软件源下载管理页 —— 从软件源页右上角进入；复用既有 `IPADownloadManagerView`，
-    /// 只把来源口径过滤到「第三方软件源」（D1=A：不新建第二个下载管理器）。
-    @State private var showSignSourceDownloads = false
 
     var body: some View {
         ScrollView {
@@ -94,13 +91,15 @@ struct HomeView: View {
         .navigationDestination(isPresented: $showDeactivate) {
             ActivationView()
         }
-        // 软件源管理（源列表）。右上角「软件源下载管理」由 `onOpenDownloadManager` 接线：
-        // 进入的仍是既有 `IPADownloadManagerView`，只过滤到第三方软件源（不新建下载页）。
+        // 软件源管理（源列表）。右上角「下载管理」入口由 `SignSourceListView` **自己** push
+        // （`downloadManagerDestination` 接线）：二级页是标准子级 push，才有系统返回箭头。
+        // ⚠️ 不要再在**本根级**另挂一个 `navigationDestination(isPresented:)` 去 push 二级页 ——
+        // 一级页的 `isPresented` 绑定此时仍为 `true`，两个「钉在栈顶」的 `isPresented` 目的地
+        // 会让二级页失去返回箭头（用户实测「进下载管理没有返回按钮」）。
         .navigationDestination(isPresented: $showSignSource) {
-            SignSourceListView(onOpenDownloadManager: { showSignSourceDownloads = true })
-        }
-        .navigationDestination(isPresented: $showSignSourceDownloads) {
-            IPADownloadManagerView(filterSource: .thirdPartySource)
+            SignSourceListView(downloadManagerDestination: {
+                AnyView(IPADownloadManagerView(filterSource: .thirdPartySource))
+            })
         }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {

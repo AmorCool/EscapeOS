@@ -8,10 +8,14 @@ import Foundation
 // 出处：`P3_爱思助手_逆向/EscapeSpace_软件源网络层_规格.md` §3.1 / §3.2 / §3.2.1 / §3.2.2。
 // 真实抓包验证（同规格 §3.3）：顶层 8 键 + App 16 JSON 键，与静态推断逐键一致。
 //
-// 两条「字段缺失/类型不稳」的硬规则（**不要把正常形态当解析失败**）：
+// 三条「字段缺失/类型不稳」的硬规则（**不要把正常形态当解析失败**）：
 //   · 缺 `lock` ⇒ false（ESign/AltStore 家族根本没有该键，不可据此判死整个家族）；
 //   · 缺 `downloadURL` ⇒ **不丢弃**该 App（`napi.ltd/pan` 这类瘦身变体改用 `suffix`），
-//     仅 `isInstallable == false`（列表灰显/不可装）。
+//     仅 `isInstallable == false`（列表灰显/不可装）；
+//   · 缺 `bundleIdentifier` ⇒ **不影响可下载性**：它只是「apps[] 字段并集」里的一项，很多真实源
+//     整源都不提供（实测 `qnq.nuosike.cn` 34/34、`hujiao.xyz` 1991/1991、`xiaoxin.kaluo.xyz`
+//     28026/28026 均无该键）。`isInstallable` **只看 `downloadURL`**，绝不可绑到可选字段上
+//     （否则可下载的源整源判死 ⇒ 整页灰显）。
 
 /// 顶层源对象（8 个 JSON 键）。
 struct SignSource: Codable, Identifiable, Hashable {
@@ -92,9 +96,20 @@ struct SignSourceApp: Codable, Identifiable, Hashable {
     /// 行标识（列表用）。真实源 `bundleIdentifier` 可能重复 ⇒ 用 `bundleIdentifier@version` 更稳。
     var id: String { "\(bundleIdentifier ?? name ?? "?")@\(version ?? "")" }
 
-    /// 能否安装（列表过滤用）。缺 `downloadURL` 的 App **保留在列表**、仅 `false`（灰显/不可装）。
+    /// 能否下载（列表过滤/灰显用）。**只取决于 `downloadURL` 是否可用**（非空且能构成合法 URL）。
+    ///
+    /// ⚠️ **刻意不看 `bundleIdentifier`**：它只是「apps[] 字段并集」里的一项，很多真实源整源都不提供
+    /// （实测 `qnq.nuosike.cn` 34/34、`hujiao.xyz` 1991/1991、`xiaoxin.kaluo.xyz` 28026/28026 均无该键，
+    /// 而 `pgyy.github.io` 却有 —— 见 `P4_全能签逆向/第三方源生态普查.md`）。把「能否下载」绑到一个
+    /// **可选**字段上，会把可下载的源整源判死（恒 `false` ⇒ 每行灰显 + 「获取」恒禁用）。`bundleIdentifier`
+    /// 只用于「去重/识别同一 App」这类次要能力，缺失**不应**影响可下载性。
+    ///
+    /// 缺 `downloadURL` 的 App **保留在列表**、仅 `false`（灰显/不可装），不丢弃。
     var isInstallable: Bool {
-        !(bundleIdentifier ?? "").isEmpty && !(downloadURL ?? "").isEmpty
+        guard let s = downloadURL?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else {
+            return false
+        }
+        return URL(string: s) != nil
     }
 
     enum CodingKeys: String, CodingKey {

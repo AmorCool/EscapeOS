@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 /// 源内 App 列表页 —— 对应规格 `EscapeSpace_软件源管理_实现规格.md` §4.2（截图 2）。
 ///
@@ -258,6 +259,66 @@ struct SignSourceAppListView: View {
         .presentationDetents([.medium, .large])
     }
 
+    // MARK: - 可操作性判定（**只看真正需要的字段**）
+
+    /// 能否下载：**只要求 `downloadURL` 非空**，不看 `bundleIdentifier`。
+    ///
+    /// 根因（用户截图「整页朦胧灰 + 获取点不动」）：模型 `SignSourceApp.isInstallable`
+    /// （`Engine/SignSourceModels.swift:96`）要求 `bundleIdentifier` 与 `downloadURL` **同时非空**；
+    /// 但全能签 / 牛蛙这一支 `appstore` schema 家族（实测 `qnq.nuosike.cn` 34/34、
+    /// `hujiao.xyz` 1991/1991、`xiaoxin.kaluo.xyz` 28026/28026）**整源都没有 `bundleIdentifier` 键**
+    /// ⇒ 恒为 nil ⇒ 每行都 `isInstallable == false` ⇒ 整页 `.opacity(0.45)` + 「获取」恒禁用。
+    /// 而下载真正需要的只有 `downloadURL`（这些源都有值）。故视图层改按 `downloadURL` 判定。
+    private func canDownload(_ app: SignSourceApp) -> Bool {
+        !(app.downloadURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 本行是否还有可用动作：需解锁 → 看解锁入口；否则 → 看能否下载。
+    /// 与 `trailingControl` 里按钮各自的 `.disabled(...)` **同一判据**，避免「按钮可点但整行发灰」。
+    private func rowEnabled(_ app: SignSourceApp) -> Bool {
+        app.lock ? (app.unlockURL != nil) : canDownload(app)
+    }
+
+    // MARK: - 日期格式化（口径照抄 `IPADownloadManagerView`）
+
+    /// 源里的 `versionDate` 是 ISO8601，且**带时区偏移**（`2026-09-13T16:59:22+08:00`）；
+    /// 少数源带毫秒（`...T08:51:55.070Z`）⇒ 两种格式都试。
+    private static let iso8601Fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let iso8601Plain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    /// 显示口径 = `IPADownloadManagerView.dateFormatter`（`MM-dd HH:mm`，如 `10-05 16:11`）。
+    private static let versionDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f
+    }()
+
+    /// `versionDate`（ISO8601 串）→ `MM-dd HH:mm`。
+    ///
+    /// · 字段缺失 / 空串 → `nil`（**不记日志**，属正常缺省）；
+    /// · 有值但解析失败 → 记一条日志并返回 `nil`（**绝不把原始串丢到界面上**）。
+    private func formattedVersionDate(_ raw: String?) -> String? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        let date = Self.iso8601Fractional.date(from: raw) ?? Self.iso8601Plain.date(from: raw)
+        guard let date else {
+            LoginLogger.shared.log("\(SignSourceClient.logTag) versionDate 解析失败：\(raw)",
+                                   category: .appStore)
+            return nil
+        }
+        return Self.versionDateFormatter.string(from: date)
+    }
+
     // MARK: - App 行
 
     /// 一行：图标 + 名称 + 胶囊（版本 / 大小 / 日期）+ 描述 + 右侧控件。
@@ -278,19 +339,20 @@ struct SignSourceAppListView: View {
                     }
                 }
                 if let d = app.versionDescription ?? app.localizedDescription, !d.isEmpty {
-                    Text(d)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // 可换行 + 「展开 / 收起」；默认 3 行、**不画省略号**（见 `ExpandableDescription`）。
+                    ExpandableDescription(text: d)
                 }
             }
             Spacer(minLength: 6)
             trailingControl(app)
         }
         .padding(.vertical, 3)
-        // 缺 downloadURL ⇒ 整行灰显（按钮在 `trailingControl` 里另外禁用）
-        .opacity(app.isInstallable ? 1 : 0.45)
+        // 该行没有任何可用动作（既不能下载、也不能解锁）⇒ 整行灰显
+        // （按钮在 `trailingControl` 里用同一判据另外禁用）。
+        // ⚠️ 判据**不是** `app.isInstallable`：那个属性还要求 `bundleIdentifier` 非空，
+        // 而全能签 / 牛蛙这一支 `appstore` schema 家族**整源没有 `bundleIdentifier` 键**
+        // ⇒ 会让整页每行都恒灰、「获取」恒禁用（用户截图）。详见 `rowEnabled(_:)`。
+        .opacity(rowEnabled(app) ? 1 : 0.45)
     }
 
     /// App 图标；无地址时给静态占位（不要一个永远转圈的 `AsyncImage`）。
@@ -323,7 +385,9 @@ struct SignSourceAppListView: View {
         if let s = app.size, s > 0 {
             out.append(ChipItem(text: IPADownloadLibrary.sizeText(Int64(s)), tint: .green))
         }
-        if let d = app.versionDate, !d.isEmpty { out.append(ChipItem(text: d, tint: .orange)) }
+        if let d = formattedVersionDate(app.versionDate) {
+            out.append(ChipItem(text: d, tint: .orange))
+        }
         return out
     }
 
@@ -406,7 +470,7 @@ struct SignSourceAppListView: View {
                     .foregroundStyle(.blue)
             }
             .buttonStyle(.plain)
-            .disabled(!app.isInstallable)
+            .disabled(!canDownload(app))
         }
     }
 
@@ -531,6 +595,96 @@ struct SignSourceAppListView: View {
         }
         .presentationDetents([.medium])
     }
+}
+
+// MARK: - 可展开描述（可换行 + 「展开 / 收起」，**不画省略号**）
+
+/// 描述默认最多显示 3 行、**把超出部分直接裁掉**（不画 `…`），并在**确实被截断**时
+/// 才给出「展开」小字按钮，展开后显示全文。
+///
+/// 用户硬要求（仓库既有注释）：「可以换行显示但不能显示不全」—— 所以这里既不单行省略，
+/// 也不无条件挂「展开」：是否被截断用**实测高度**判定（见 `heightProbe`），
+/// 而不是拿字符数猜（`NBStoreDetailView` / `AppStoreVersionHistoryView` 用的是 `count > N`，
+/// 那条启发式会误判：短文本也可能占满 3 行、长文本也可能只占 2 行）。
+private struct ExpandableDescription: View {
+
+    let text: String
+    /// 折叠时最多显示的行数。
+    private let collapsedLines = 3
+
+    @State private var expanded = false
+    /// 全文（不限行数）的真实高度。
+    @State private var fullHeight: CGFloat = 0
+    /// 限 3 行时的真实高度 —— 同时是折叠时允许的**上限**高度。
+    @State private var collapsedHeight: CGFloat = 0
+
+    /// 只有「不限行」比「限 3 行」更高时，才说明被截断了。
+    private var isTruncated: Bool { fullHeight > collapsedHeight + 0.5 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(text)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                // 折叠时把高度夹到「3 行」；超出部分由 `clipped()` 直接裁掉（**不画省略号**）。
+                .frame(height: expanded ? nil : clampedHeight, alignment: .top)
+                .clipped()
+
+            if isTruncated {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                } label: {
+                    Text(expanded ? "收起" : "展开")
+                        .font(.caption2.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
+        }
+        .background(heightProbe)
+    }
+
+    /// 折叠时的显示高度：取「3 行高度」与「全文高度」的较小者
+    /// —— 全文本来就 ≤ 3 行时不额外留白。首帧还没测到（= 0）时先不夹（宁可全显，也不闪空）。
+    private var clampedHeight: CGFloat? {
+        guard collapsedHeight > 0, fullHeight > 0 else { return nil }
+        return min(collapsedHeight, fullHeight)
+    }
+
+    /// 用两份**隐藏**文本实测高度（同宽、同字体、同换行规则），供 `isTruncated` 判定。
+    /// 放在 `.background` 里 ⇒ 拿到与可见文本**完全相同**的宽度，量出的行高才对得上。
+    private var heightProbe: some View {
+        ZStack(alignment: .topLeading) {
+            Text(text)
+                .font(.caption2)
+                .fixedSize(horizontal: false, vertical: true)
+                .hidden()
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: FullDescriptionHeightKey.self, value: g.size.height)
+                })
+            Text(text)
+                .font(.caption2)
+                .lineLimit(collapsedLines)
+                .fixedSize(horizontal: false, vertical: true)
+                .hidden()
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: CollapsedDescriptionHeightKey.self, value: g.size.height)
+                })
+        }
+        .onPreferenceChange(FullDescriptionHeightKey.self) { fullHeight = $0 }
+        .onPreferenceChange(CollapsedDescriptionHeightKey.self) { collapsedHeight = $0 }
+    }
+}
+
+private struct FullDescriptionHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct CollapsedDescriptionHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 // MARK: - 胶囊自动换行布局（**复制**自 `I4StoreFreeView`，D4 = 复制，规格 §7.2）

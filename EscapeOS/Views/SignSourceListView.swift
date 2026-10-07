@@ -14,25 +14,35 @@ import SwiftUI
 ///   本文件实际引用的成员见简报「依赖的外部接口清单」。
 ///
 /// ## 右上角工具栏（**接线点**）
-/// 规格 §4.1 要求右上角放「**软件源下载管理**」入口（D1=A：进入后默认过滤到软件源）。
-/// 该项需要 `IPADownloadManagerView` 先支持 `filterSource:`（规格 §3 #8，属**另一位同事**的改动），
-/// 所以本文件**不**直接引用 `IPADownloadManagerView(filterSource: .thirdPartySource)`，
-/// 只留一个回调点 `onOpenDownloadManager`：接线方传入后该项才渲染。
+/// 规格 §4.1 要求右上角放「**下载管理**」入口（D1=A：进入后默认过滤到软件源）。
+/// 本文件**不**直接引用 `IPADownloadManagerView(filterSource: .thirdPartySource)`，
+/// 只留一个目标页回调 `downloadManagerDestination`：接线方传入后该项才渲染，
+/// 并由**本页自己** `navigationDestination(isPresented:)` 把目标页 push 上去
+/// （二级页因此是标准子级 push，带系统返回箭头；详见该属性注释）。
 struct SignSourceListView: View {
 
     // MARK: - 接线点（由另一位同事接线）
 
-    /// 右上角「软件源下载管理」入口 —— **接线点**（规格 §4.1 / §2.5 / D1）。
+    /// 右上角「下载管理」入口的目标页 —— **接线点**（规格 §4.1 / §2.5 / D1）。
     ///
-    /// 传 `nil`（默认）时该工具栏项**不渲染**，本文件因此不依赖尚未落地的
-    /// `IPADownloadManagerView(filterSource: .thirdPartySource)`，可独立编译。
-    /// 接线方（在 `HomeView` 的 `navigationDestination` 处）传入跳转闭包即可。
-    var onOpenDownloadManager: (() -> Void)? = nil
+    /// 传 `nil`（默认）时该工具栏项**不渲染**，本文件因此不依赖 `IPADownloadManagerView`，
+    /// 可独立编译。接线方传入目标页（如 `IPADownloadManagerView(filterSource: .thirdPartySource)`）
+    /// 后，本页右上角渲染「下载管理」入口，点它时**由本页自己**把目标页 push 上去。
+    ///
+    /// ⚠️ 为什么这个 push 必须声明在**本页**、不能交给 `HomeView` 的根级
+    /// `navigationDestination(isPresented:)` 代劳：`isPresented` 目的地在其绑定为 `true` 期间
+    /// 会被系统**钉在栈顶**。一级页（本页）自己的 `isPresented` 绑定此时仍为 `true`，
+    /// 若再从根级另挂一个 `isPresented` 目的地去 push 二级页，二级页就不是本页的正常子级 push ——
+    /// 表现为「二级页没有系统返回箭头、不像二级界面」。把 push 声明在本页即恢复标准子级 push
+    /// （系统自动给左上角返回箭头，跟随系统惯例）。
+    var downloadManagerDestination: (() -> AnyView)? = nil
 
     // MARK: - State
 
     @State private var sources: [SignSource] = []
     @State private var showAddSheet = false
+    /// 右上角「下载管理」入口的 push 状态（目标页由接线方经 `downloadManagerDestination` 提供）。
+    @State private var showDownloadManager = false
     @State private var addText = ""
     /// 正在「更新」的源（按 `sourceURL`）—— 行上显示转圈。
     @State private var updating: Set<String> = []
@@ -59,15 +69,15 @@ struct SignSourceListView: View {
         .navigationTitle("软件源管理")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // ① 软件源下载管理（**接线点**，见 `onOpenDownloadManager`）
-            if let onOpenDownloadManager {
+            // ① 下载管理（**接线点**，见 `downloadManagerDestination`）
+            if downloadManagerDestination != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        onOpenDownloadManager()
+                        showDownloadManager = true
                     } label: {
                         Image(systemName: "shippingbox")
                     }
-                    .accessibilityLabel("软件源下载管理")
+                    .accessibilityLabel("下载管理")
                 }
             }
             // ② 添加源（对应牛蛙截图 1 的右上角 `+`）
@@ -80,6 +90,10 @@ struct SignSourceListView: View {
                 .disabled(adding)
                 .accessibilityLabel("添加软件源")
             }
+        }
+        // 二级页 push 声明在**本页**（而非 `HomeView` 根级）—— 保证是标准子级 push，带系统返回箭头。
+        .navigationDestination(isPresented: $showDownloadManager) {
+            downloadManagerDestination?() ?? AnyView(EmptyView())
         }
         // 下拉刷新：刷新**全部**源（规格 §4.1）
         .refreshable { await refreshAll() }
@@ -106,7 +120,7 @@ struct SignSourceListView: View {
                 icon: "shippingbox",
                 iconTint: .purple,
                 title: "还没有添加软件源",
-                message: "点右上角 + 添加软件源。软件源内容由第三方提供，请自行确认源的合法性与有效性。",
+                message: "点右上角 + 添加软件源，软件源内容由第三方提供，请自行确认源的合法性与有效性.",
                 actionTitle: "添加软件源",
                 action: { showAddSheet = true },
                 disabled: adding)
@@ -117,7 +131,7 @@ struct SignSourceListView: View {
 
     /// 页脚免责声明（规格 §4.1，合规必做）。
     private var disclaimer: some View {
-        Text("软件源内容由第三方提供，与 EscapeSpace 无关；请自行确认源的合法性与有效性，勿添加非法应用源。")
+        Text("软件源内容由第三方提供，与 EscapeSpace 无关；请自行确认源的合法性与有效性，勿添加非法应用源.")
             .font(.caption2)
     }
 
