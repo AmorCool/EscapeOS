@@ -93,8 +93,39 @@ struct SignSourceApp: Codable, Identifiable, Hashable {
     /// 所属源名
     var sourceName: String?
 
-    /// 行标识（列表用）。真实源 `bundleIdentifier` 可能重复 ⇒ 用 `bundleIdentifier@version` 更稳。
-    var id: String { "\(bundleIdentifier ?? name ?? "?")@\(version ?? "")" }
+    /// 行标识（列表用）。**同一源内唯一** —— 内容指纹 =
+    /// `downloadURL` + `name` + `version` + `versionDate` + `size`（各字段缺失记空串，ASCII 31 分隔）。
+    ///
+    /// 根因（真机 `qnq.nuosike.cn`，见 `P4_全能签逆向/_impl/诊断_软件源转圈与牵扯.md` §3）：
+    /// 该源**整源无 `bundleIdentifier`**（34/34），旧规则 `bundleIdentifier ?? name` `@version`
+    /// 退化成 `name@version` ⇒ 前两条都是 `全能签@27.1.0` ⇒ `ForEach` 两行共享 SwiftUI 视图身份
+    /// ⇒「点一条、另一条也变」（用户说的「牵扯」）。旧注释只防了「`bundleIdentifier` 重复」，
+    /// 漏了「`bundleIdentifier` **缺失** ⇒ 退化成 name」这一支。
+    ///
+    /// 为什么取这五个字段：`downloadURL` 区分「同名不同包」（真机前两条 `downloadURL` 就不同）；
+    /// `name` / `version` / `versionDate` / `size` 逐项兜住「同一 URL 被重复列出但元数据不同」的行。
+    /// 语义参照全能签原版 `ais_downloadContentStampForApp:` 的 `ss|URL|name|version|versionDate|size`
+    /// （`P4_全能签逆向/全能签271_列表与下载状态对照.md` §1.1），两处**刻意加强**：
+    /// · 用**原始 URL** 而非 `canonicalDownloadURL`：原版做规范化是为了把「同资源、仅 fragment/大小写
+    ///   不同」归到同一个**下载任务**；而 `id` 是**行身份**，目标相反 —— 任何两行都应可区分，
+    ///   规范化反而会合并它们、重新制造「共享视图身份」。原始 URL 区分力更强，且与视图
+    ///   `rowKey(_:)`（同为原始 `downloadURL`）一致。
+    /// · 用 ASCII 31（US）而非 `|` 作分隔符：`|` 可能出现在字段内容里 ⇒ 拼接歧义；US 不会。
+    ///
+    /// 唯一性：只有**五个字段全部逐字相同**的两行才共享 `id`。实测（42 个源 / 50440 条，
+    /// 脚本 `_verify/v6_id_size_fix_probe.py`）旧规则撞车 9315 条 ⇒ 新规则 14 条，且这 14 条
+    /// **全部是 `downloadURL` 为空、其余四项逐字相同**的「源里重复列出的同一条」——它们本就
+    /// 不可下载（`isInstallable == false`），共享身份无副作用、且正是「同一包同一状态」的正确语义。
+    var id: String {
+        let fields = [
+            downloadURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            name ?? "",
+            version ?? "",
+            versionDate ?? "",
+            size.map { String($0) } ?? "",
+        ]
+        return fields.joined(separator: "\u{1F}")
+    }
 
     /// 能否下载（列表过滤/灰显用）。**只取决于 `downloadURL` 是否可用**（非空且能构成合法 URL）。
     ///
@@ -159,6 +190,9 @@ extension SignSourceApp {
     }
 
     /// `Bool | Int | String` → `Bool?`；**非 0 ⇒ true**（`true` / `1` / `"1"` / `"true"` / `2`）。
+    ///
+    /// 排查结论（同批 `lossy*` 审查）：`lock` / `isLanZouCloud` 的实测值域只有 `bool` / `int` /
+    /// `string` 三种载体（`lock ∈ {0,1,2}`、`isLanZouCloud ∈ {0,1}`），**无小数形态** ⇒ 无需补分支。
     private static func lossyBool(_ c: KeyedDecodingContainer<CodingKeys>,
                                   _ k: CodingKeys) -> Bool? {
         if let v = (try? c.decodeIfPresent(Bool.self, forKey: k)) ?? nil { return v }
@@ -173,24 +207,58 @@ extension SignSourceApp {
         return nil
     }
 
-    /// `Int | String` → `Int?`（含大值，勿截断 —— `type` 可能是纳秒时间戳）。
+    /// `Int | Double | String` → `Int?`（含大值，勿截断 —— `type` 可能是纳秒时间戳）。
+    ///
+    /// 排查（与 `lossyUInt` 同类的形态问题）：旧实现认 `Int` / **整数**串 / JSON 小数（`Double`），
+    /// 但**漏了小数串**（`Int("1.5")` 失败且无 `Double` 回退）；且旧的 `Int(d)` 在 `d` 为
+    /// `NaN` / `±∞` / 越界时会 **trap**（`type` 来自不可信源 JSON）⇒ 一并补上。
     private static func lossyInt(_ c: KeyedDecodingContainer<CodingKeys>,
                                  _ k: CodingKeys) -> Int? {
         if let v = (try? c.decodeIfPresent(Int.self, forKey: k)) ?? nil { return v }
-        if let s = (try? c.decodeIfPresent(String.self, forKey: k)) ?? nil,
-           let v = Int(s.trimmingCharacters(in: .whitespaces)) { return v }
-        if let d = (try? c.decodeIfPresent(Double.self, forKey: k)) ?? nil { return Int(d) }
+        if let d = (try? c.decodeIfPresent(Double.self, forKey: k)) ?? nil { return intFromDouble(d) }
+        if let s = (try? c.decodeIfPresent(String.self, forKey: k)) ?? nil {
+            let t = s.trimmingCharacters(in: .whitespaces)
+            if let v = Int(t) { return v }
+            if let d = Double(t) { return intFromDouble(d) }
+        }
         return nil
     }
 
-    /// `UInt | String` → `UInt?`（`size` 可能是数字或字符串 `"54489484"`）。
+    /// `UInt | Int | Double | String` → `UInt?`（`size` = 字节数）。
+    ///
+    /// 真实形态（实测 50440 条 `size`，见 `P4_全能签逆向/_impl/修复_应用大小丢失.md` §①）：
+    /// 整数字符串 60.1% / **小数字符串 38.2%** / JSON 数字 1.3% / 空串 0.4% / 脏值 4 条。
+    /// 旧实现只认 `UInt` / `Int≥0` / **整数**串，**漏了占 38.2% 的小数串**（如截图那条
+    /// `"9384755.2"` = 8.95 MB）⇒ `size = nil` ⇒ 视图不显示大小胶囊。此修复补上 `Double` 分支。
+    ///
+    /// 语义对齐全能签原版 `ais_formatBytes:`：`size` 字符串 → `double`（小数截断）；`≤ 0` 视为无效
+    /// （模型返回 `0`，由视图 `s > 0` 决定不显示 —— 原版显示 `—` 属视图口径，本次只改模型）。
+    /// lossy 语义不变：缺字段 / 空串 / 非数值 / 负值 / `NaN` / `±∞` / 越界 → `nil`（**不崩**）。
     private static func lossyUInt(_ c: KeyedDecodingContainer<CodingKeys>,
                                   _ k: CodingKeys) -> UInt? {
         if let v = (try? c.decodeIfPresent(UInt.self, forKey: k)) ?? nil { return v }
         if let i = (try? c.decodeIfPresent(Int.self, forKey: k)) ?? nil, i >= 0 { return UInt(i) }
-        if let s = (try? c.decodeIfPresent(String.self, forKey: k)) ?? nil,
-           let v = UInt(s.trimmingCharacters(in: .whitespaces)) { return v }
+        if let d = (try? c.decodeIfPresent(Double.self, forKey: k)) ?? nil { return uintFromDouble(d) }
+        if let s = (try? c.decodeIfPresent(String.self, forKey: k)) ?? nil {
+            let t = s.trimmingCharacters(in: .whitespaces)
+            if let v = UInt(t) { return v }
+            if let d = Double(t) { return uintFromDouble(d) }
+        }
         return nil
+    }
+
+    /// `Double` → `UInt`，**截断小数**；`NaN` / `±∞` / 负值 / 越界 → `nil`
+    /// （`size` 来自不可信源 JSON，绝不让 `UInt(_:)` 因 `inf` / 越界 trap）。
+    private static func uintFromDouble(_ d: Double) -> UInt? {
+        guard d.isFinite, d >= 0, d < 18_446_744_073_709_551_616.0 else { return nil }   // 2^64
+        return UInt(d)
+    }
+
+    /// `Double` → `Int`，**截断小数**；`NaN` / `±∞` / 越界 → `nil`（同上，防 `Int(_:)` trap）。
+    private static func intFromDouble(_ d: Double) -> Int? {
+        guard d.isFinite, d >= -9_223_372_036_854_775_808.0,
+              d < 9_223_372_036_854_775_808.0 else { return nil }                        // [-2^63, 2^63)
+        return Int(d)
     }
 }
 
