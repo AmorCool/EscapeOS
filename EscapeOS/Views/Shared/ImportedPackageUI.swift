@@ -56,15 +56,19 @@ struct ImportedPackageMonogram: View {
 }
 
 /// 胶囊标签（画法复用 `ImportView.chip`）。
+///
+/// `horizontalPadding` 默认 6 —— 与既有三个二级页调用点一致，故不传即零变化；
+/// 部分商店页的胶囊口径为 5，显式传入即可，无需另写一份 `chip`。
 struct PackageChip: View {
     let text: String
     var tint: Color = AppTheme.accent
+    var horizontalPadding: CGFloat = 6
 
     var body: some View {
         Text(text)
             .font(.caption2)
             .lineLimit(1)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, horizontalPadding)
             .padding(.vertical, 1)
             .background(Capsule().fill(tint.opacity(0.12)))
             .foregroundStyle(tint)

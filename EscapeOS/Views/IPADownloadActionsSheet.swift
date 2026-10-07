@@ -129,8 +129,8 @@ struct IPADownloadActionsSheet: View {
                     // 换行、不省略
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 6) {
-                    if let v = item.version, !v.isEmpty { chip("v\(v)", .blue) }
-                    chip(item.sizeText, .green)
+                    if let v = item.version, !v.isEmpty { PackageChip(text: "v\(v)", tint: .blue) }
+                    PackageChip(text: item.sizeText, tint: .green)
                 }
             }
 
@@ -165,16 +165,6 @@ struct IPADownloadActionsSheet: View {
                 .foregroundStyle(.blue)
         }
         .frame(width: 48, height: 48)
-    }
-
-    private func chip(_ text: String, _ tint: Color) -> some View {
-        Text(text)
-            .font(.caption2)
-            .lineLimit(1)
-            .padding(.horizontal, 6).padding(.vertical, 1)
-            .background(tint.opacity(0.12), in: Capsule())
-            .foregroundStyle(tint)
-            .fixedSize()
     }
 
     // MARK: - 动作行
