@@ -24,6 +24,9 @@ struct IPADownloadManagerView: View {
     /// 两个名字会让用户以为是两个不同的东西）。`filterSource` 仍用于过滤，不再影响标题。
     /// 复用同一套下载中心/台账/UI（D1=A，不新建第二个下载管理器）。
     ///
+    /// v0.3.578：标题不改，但**过滤时**在列表顶部补**一行来源说明**（`sourceFilterNoteSection`）——
+    /// 免得过滤视图的「下载管理 (18)」被误读成「全部下载只有 18」（全局入口其实是另一个计数口径）。
+    ///
     /// 非 private 且有默认值 ⇒ 可直接用成员逐一初始化器 `IPADownloadManagerView(filterSource:)`。
     var filterSource: IPADownloadCenter.Source? = nil
 
@@ -70,13 +73,17 @@ struct IPADownloadManagerView: View {
         // 只有进入「编辑」才允许勾选（否则点一下就会被选中）
         List(selection: Binding(get: { isEditing ? selection : [] },
                                 set: { if isEditing { selection = $0 } })) {
+            // 来源说明（仅过滤视图显示）；`filterSource == nil` 时整块不渲染 ⇒ 既有入口零变化.
+            sourceFilterNoteSection
             summarySection
             mergedSection
             labelGuideSection
         }
         .listStyle(.insetGrouped)
         // 刷新走下拉；右上角不设刷新按钮（用户要求）；返回箭头由系统提供，不重复自绘.
-        .refreshable { reload() }
+        // v0.3.578：包一层 async —— `reload()` 是**同步**读台账、调用即返回，直接塞进 `.refreshable`
+        // 会让系统指示器**还没转起来就被收掉**（用户看不出「刷新过了」，见 `refresh()` 注释）.
+        .refreshable { await refresh() }
         .navigationTitle(listTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -184,9 +191,8 @@ struct IPADownloadManagerView: View {
     /// 排序：进行中的在最上面（未完成的先看到），然后是刚结束（失败的那条还能重试），
     /// 最后按下载时间倒序 —— 与参考图「新动静在上面」一致。
     private var mergedRows: [ListRow] {
-        let known = Set(items.map(\.fileName))
         // 来源过滤：`filterSource == nil` 时原样用全部任务（既有「下载管理」行为不变）。
-        // `items` 已在 `reload()` 里按同一来源过滤，故 `known` 与 `allJobs` 口径一致。
+        // `items` 已在 `reload()` 里按同一来源过滤，故去重口径与 `allJobs` 一致。
         let allJobs = filterSource.map { src in center.jobs.filter { $0.source == src } } ?? center.jobs
         let orphanJobs = allJobs.filter { job in
             // ▸▸▸ v0.3.413 真机 bug 修复（用户截图）：「显示已完成 100%，但没有安装按钮」。
@@ -207,12 +213,56 @@ struct IPADownloadManagerView: View {
             // `IPAPackageInspector.inspect`（要解 IPA 包），每次渲染都调会卡界面。
             // 失败的任务**必须保留**（用户要能重试），所以只过滤 `.done`。
             if job.phase == .done, job.localFileName != nil { return false }
-            return !known.contains(job.localFileName ?? job.expectedFileName)
+            // v0.3.579：去重口径从「只比一个名字」改成 `isRepresented` 多键判同。
+            // 旧口径拿 `job.localFileName ?? job.expectedFileName` 对 `item.fileName`，
+            // 而 `expectedFileName` 是**按请求版本预测**的名字，与落盘真实名（Apple 回包版本 /
+            // 磁盘扫描名）可能对不上 ⇒ 同一个包被列成两行（用户截图 IMG_6692：
+            // `VPN cat` 同时出现「下载中 75%」和「本地」）。多键判同见 `isRepresented(_:by:)`。
+            return !items.contains { isRepresented(job, by: $0) }
         }
         let busy = orphanJobs.filter { $0.phase.isBusy }.map(ListRow.job)
         let settled = orphanJobs.filter { !$0.phase.isBusy }.map(ListRow.job)
         let files = items.sorted { $0.downloadedAt > $1.downloadedAt }.map(ListRow.file)
         return busy + settled + files
+    }
+
+    /// 「进行中的任务」与「台账条目」是否描述**同一个包**（是 → 任务不再单独成行）。
+    ///
+    /// 旧口径只比一个名字：`job.localFileName ?? job.expectedFileName` 对 `item.fileName`。
+    /// 但 `expectedFileName` 是**按我们请求的版本预测**出来的（`<bundleId|name>-<version>.ipa`），
+    /// 而台账 `fileName` 是**落盘时的真实文件名**（Apple 回包里的版本号 / 磁盘扫描得到的名字）
+    /// —— 两者对不上时（用户截图 IMG_6692），同一个包会被列成两行（一行 job、一行台账）。
+    ///
+    /// 这里改成**多键判同**，任一命中即视为同一个包：
+    /// 1. **文件名**：`localFileName`（落地后的真实名）或 `expectedFileName`（未落地的预测名）
+    ///    等于台账 `fileName`；
+    /// 2. **下载直链**：`job.remoteURL` == 台账 `sourceURL`（下载时与落盘时都写进台账的同一条链接
+    ///    —— 这条对「预测名与真实名不一致」最有效，因为链接与名字、版本号都无关）；
+    /// 3. **bundleId**（**版本无关**，但仅当该 bundleId 在台账里**唯一**时）——
+    ///    专门覆盖「预测名与落盘名因版本号不同而对不上」这一根因。
+    ///    该 bundleId 在台账里出现多行（同一 App 多版本）时不合并，
+    ///    避免把不同版本行错误并成一行（宁可分开，不能显示错）。
+    ///    **无 `bundleId` 时**（第三方软件源整源常无 `bundleIdentifier`）退回**行键**兜底：
+    ///    `job.rowKey`（即该行 `downloadURL`）与台账 `sourceURL` 比对 —— 行键同样是
+    ///    「版本无关、逐行唯一」的身份，补上键 3 在无 bundleId 时的空缺。
+    ///
+    /// ⚠️ 键 3 **只对进行中（`phase.isBusy`）的任务生效**：失败任务要能被用户看到并重试，
+    /// 不参与这个版本无关的合并（失败态的展示仍走 `finishedJob(for:)` 的旧口径）。
+    private func isRepresented(_ job: IPADownloadCenter.Job, by item: IPADownloadItem) -> Bool {
+        if job.localFileName == item.fileName { return true }
+        if job.expectedFileName == item.fileName { return true }
+        if let url = job.remoteURL, !url.isEmpty, url == item.sourceURL { return true }
+        if job.phase.isBusy {
+            if let bid = job.bundleId, !bid.isEmpty {
+                // 有 bundleId：按 bundleId 判同（要求它在台账里唯一，避免并掉多版本行）。
+                if bid == item.bundleId, !duplicatedBundleIds.contains(bid) { return true }
+            } else if let rk = job.rowKey, !rk.isEmpty, rk == item.sourceURL {
+                // 无 bundleId 的兜底键（见上方文档注释）：第三方软件源整源常无 `bundleIdentifier`，
+                // 此时 bundleId 分支恒失效 —— 退回行键（该行 `downloadURL`）与台账直链比对。
+                return true
+            }
+        }
+        return false
     }
 
     @ViewBuilder
@@ -454,6 +504,26 @@ struct IPADownloadManagerView: View {
 
     // MARK: - 概览
 
+    /// v0.3.578：**来源过滤说明**（只在过滤视图显示）—— 用**一行次要文字**消除标题歧义。
+    ///
+    /// 为什么需要它：标题统一成「下载管理」后，从软件源进来时本页**只列第三方软件源**的任务
+    /// （`filterSource == .thirdPartySource`），标题却与全局「下载管理」完全同名，而后者列**全部**来源
+    /// ⇒ 两页计数口径不同却看不出区别（用户会困惑「为什么这里 18、那里 50」，见复核 §3-F）。
+    /// 这里点明来源，**不改标题**（用户明确要求标题就叫「下载管理」）。
+    ///
+    /// 零变化保证：`filterSource == nil`（AppStore / 全局入口）时**整块不渲染** —— 连 Section 都不产生，
+    /// 故既有入口的列表内容、间距、顺序完全不变.
+    @ViewBuilder
+    private var sourceFilterNoteSection: some View {
+        if let src = filterSource {
+            Section {
+                Text("仅显示\(src.rawValue)的任务.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     /// 编辑态当前勾选、且**确实可删**的**原始文件名**（`remove(fileNames:)` 期望的口径）。
     ///
     /// 为什么用 `mergedRows` 反查，而不是给 `ListRow.id` 去 `"file-"` 前缀：
@@ -688,7 +758,7 @@ struct IPADownloadManagerView: View {
 
     /// v0.3.571：**标签说明** —— 补上「标签口径」的界面说明缺口（用户需求 #6 / #7 / #8）。
     ///
-    /// 用户看不懂三件事：「明文包」怎么变少了、「带 sinf（未校验）」是什么、「本地」是什么。
+    /// 用户看不懂三件事：「明文包」怎么变少了、「带 sinf（未校验）」是什么、「来源未知」是什么。
     /// 这三件都只是**说明没写**，不是判定错 —— 所以这里**一个字都不动判定逻辑**，
     /// 尤其「未校验」绝不能改成「带 sinf」（那会让标签给出的确定性超过实际掌握）。
     /// 放在列表**下方**（而不是给每行加长按）：行点击已被「操作面板」占用，图例更省事也更全.
@@ -709,10 +779,11 @@ struct IPADownloadManagerView: View {
                     Text("来源")
                         .font(.caption.weight(.semibold))
                     guideRow("Apple ID", .secondary, "从 App Store 商店下载.")
-                    guideRow("本地", .secondary, "手动从文件导入的包，非商店来源.")
+                    guideRow("来源未知", .secondary, "盘上有、台账未登记的下载产物，未能确认来源.")
                     guideRow("爱思免登录", .secondary, "爱思源下载，服务端已签名.")
                     guideRow("NB免登录", .secondary, "NB 源下载.")
                     guideRow("牛蛙免登录", .secondary, "牛蛙源下载.")
+                    guideRow("第三方软件源", .secondary, "从自加软件源下载.")
                 }
                 .padding(.vertical, 4)
             } label: {
@@ -752,6 +823,22 @@ struct IPADownloadManagerView: View {
             Dictionary(grouping: items.compactMap { $0.bundleId }, by: { $0 })
                 .filter { $0.value.count > 1 }
                 .keys)
+    }
+
+    /// v0.3.578：下拉刷新的 async 包装 —— 让系统指示器**真的转得出来**。
+    ///
+    /// 根因：`reload()` 是**同步**读台账（`IPADownloadLibrary.shared.items()`），调用即返回。
+    /// `.refreshable` 的闭包是 `async`，但同步闭包会让这次「刷新」瞬间完成 ⇒ 指示器**还没转就被收掉**，
+    /// 用户以为没刷新（复核 §3-D）。
+    ///
+    /// 做法：`reload()` 之后**刻意**等一个最短可见时长（0.5s）。这是 iOS 上让刷新反馈可见的常规做法，
+    /// **不是伪造耗时**：真实读盘就在上一句发生，若真实刷新更慢，总时长会自然超过 0.5s ——
+    /// 这里只兜住「刷新太快、看不见」这一种情况。`Task.sleep` 是**挂起**不是阻塞，主线程照常响应，不会卡顿.
+    @MainActor
+    private func refresh() async {
+        reload()
+        // 0.5s 最短可见时长（刻意，理由见上）.
+        try? await Task.sleep(nanoseconds: 500_000_000)
     }
 
     /// 本行当前正在进行的任务（文件名优先；bundleId 只有在列表里唯一时才允许用来认行）
