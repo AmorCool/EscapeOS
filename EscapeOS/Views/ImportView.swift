@@ -19,7 +19,7 @@ import UniformTypeIdentifiers
 struct ImportView: View {
 
     @State private var showPicker = false
-    @State private var pendingURL: URL?            // 待确认导入
+    @State private var pendingURLs: [URL] = []     // 待确认导入（批量：一次可选多个）
     @State private var showImportConfirm = false
 
     @State private var importing = false
@@ -30,6 +30,11 @@ struct ImportView: View {
     @State private var importProgressText = ""
     @State private var importResult: ImportResult?
     @State private var record: ImportRecord?
+
+    // 批量导入的**包级**进度（第 N / 共 M 个）。批量时由 `startImport` 的串行循环逐条推进，
+    // 经 `flowSection` 传给 `ImportFlowBanner.progress`（`progress` 优先于单包 `fraction`）。
+    // nil = 非批量（走单包 indeterminate）。与 `ImportedListPage.flowProgress` 同型。
+    @State private var batchProgress: (current: Int, total: Int)?
 
     // 已导入 / 已修补的包。主页**只**用它们给「已导入 (N)」「已修补 (N)」两个入口计数；
     // 列表、选择、批量修补、移除、安装、导出全部在二级页里。
@@ -94,15 +99,20 @@ struct ImportView: View {
                 .accessibilityLabel("共享转换日志")
             }
         }
-        .documentPicker(isPresented: $showPicker, allowedTypes: [.data]) { urls in
-            requestImport(urls.first)
+        .documentPicker(isPresented: $showPicker,
+                        allowedTypes: [UTType(filenameExtension: "ipa") ?? .data],
+                        allowsMultipleSelection: true) { urls in
+            requestImport(urls)
         }
         // 导入前确认（三步确认第一步）。修补 / 安装在二级页的修补流程里各自再确认一次。
         .alert("导入前确认", isPresented: $showImportConfirm) {
             Button("继续导入") { startImport() }
-            Button("取消", role: .cancel) { pendingURL = nil }
+            Button("取消", role: .cancel) { pendingURLs = [] }
         } message: {
-            Text("你要导入的是别人给的安装包，不是从 App Store 下载的. 它可能被篡改或伪装，也可能带有别人的账号信息. 只导入来源可信的包.")
+            let n = pendingURLs.count
+            Text(n <= 1
+                 ? "你要导入的是别人给的安装包，不是从 App Store 下载的. 它可能被篡改或伪装，也可能带有别人的账号信息. 只导入来源可信的包."
+                 : "你将一次导入 \(n) 个安装包，它们都不是从 App Store 下载的. 它们可能被篡改或伪装，也可能带有别人的账号信息. 只导入来源可信的包.")
         }
         // 导入成功后自动进入「待修补」页（用户需求：导入的 IPA 暂时进「待修补」，不停在主界面）。
         // 队列所有权在本页：把 `sessionPendingNames` 的回写口一并传下去，二级页移除 / 修补成功
@@ -158,8 +168,9 @@ struct ImportView: View {
     ///   · 有确定进度 ⇒ `fraction`；复制 / 解析阶段无进度上报 ⇒ `indeterminate` 转圈。
     private var flowSection: some View {
         ImportFlowBanner(stage: flowStage,
+                         progress: batchProgress,
                          fraction: importProgress,
-                         indeterminate: importing && importProgress == nil,
+                         indeterminate: importing && batchProgress == nil && importProgress == nil,
                          caption: importProgressText.isEmpty ? nil : importProgressText)
     }
 
@@ -190,7 +201,7 @@ struct ImportView: View {
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
                     Button("导入") {
-                        requestImport(url)
+                        requestImport([url])
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -381,43 +392,128 @@ struct ImportView: View {
 
     /// 发起一次「从文件导入」：记下待导入 URL 并弹出导入前确认。
     ///
-    /// **唯一**设置 `showImportConfirm` 的地方 —— 文件选择器与「扫描到的新文件」候选的「导入」都走这里。
+    /// **唯一**设置 `showImportConfirm` 的地方 —— 文件选择器（可多选，整批进来）与
+    /// 「扫描到的新文件」候选的「导入」（单个 `[url]`）都走这里。
     /// 「扫描新文件」**不**经过此函数（扫描只列举、不复制，见 `scanNew`）。
-    private func requestImport(_ url: URL?) {
-        guard let url else { return }
-        pendingURL = url
+    ///
+    /// 批内按 path 去重：文件选择器本身不会给重复 URL，但候选区 / 将来的入口可能重入。
+    private func requestImport(_ urls: [URL]) {
+        var seen = Set<String>()
+        let valid = urls.filter { !$0.path.isEmpty && seen.insert($0.path).inserted }
+        guard !valid.isEmpty else { return }
+        pendingURLs = valid
         showImportConfirm = true
     }
 
     private func startImport() {
-        guard let url = pendingURL else { return }
-        pendingURL = nil
+        let urls = pendingURLs
+        pendingURLs = []
+        guard !urls.isEmpty else { return }
+
+        // 磁盘守卫（`asCopy: true` 的代价）：系统在回调前已把**每个**选中包各拷了一份进沙盒，
+        // 导入时 `ImportService.importFile` 还会再拷一份到 `Imports/`，故整批峰值 ≈ 2 × 总量。
+        // 超水位就整批中止，让用户分批来 —— 否则中途写满盘会留下半批残包。
+        if let guardMessage = diskGuardMessage(for: urls) {
+            importResult = ImportResult(status: .rejected, code: "I8",
+                                        message: guardMessage,
+                                        suggestion: "请分批导入：先导入一部分，完成后再选剩下的.",
+                                        record: nil, details: [])
+            ToastCenter.shared.show(guardMessage)
+            return
+        }
+
         importing = true
         importProgress = nil
         importProgressText = ""
         importResult = nil
         record = nil
+        batchProgress = urls.count > 1 ? (current: 0, total: urls.count) : nil
         Task {
-            // 不传 progress 回调：导入阶段无可测的确定进度（复制 / 流式 sha256 都拿不到内部进度），
-            // 传一个永不触发的闭包只会让下一个人以为「这里有进度上报」。UI 无进度时走 indeterminate（见 flowSection）。
-            let r = await ImportService.importFile(at: url, sourceKind: .picker)
+            var okRecords: [ImportRecord] = []
+            var failed: [(name: String, result: ImportResult)] = []
+
+            // 串行导入：与 `ImportedListPage.startBatchRepair` 同型 —— 导入是重 I/O（copyItem + 流式
+            // sha256），不并发；串行才能报「第 N/M 个」并把磁盘峰值压在单包级别。
+            for (idx, url) in urls.enumerated() {
+                // 1-based：与 ImportedListPage.startBatchRepair 的 (idx + 1) 口径一致，首包显示 1/N 而不是 0/N.
+                if urls.count > 1 { batchProgress = (current: idx + 1, total: urls.count) }
+                importProgressText = "正在导入：\(url.lastPathComponent)"
+                // 不传 progress 回调：导入阶段无可测的确定进度（复制 / 流式 sha256 都拿不到内部进度），
+                // 传一个永不触发的闭包只会让下一个人以为「这里有进度上报」。批量进度由 batchProgress 表达。
+                let r = await ImportService.importFile(at: url, sourceKind: .picker)
+                if r.status == .ok, let rec = r.record {
+                    okRecords.append(rec)
+                    // 导入成功：收进「待修补」队列（Set，批量天然支持）；已进系统的候选从候选区移除。
+                    sessionPendingNames.insert(rec.storedFileName)
+                    scanCandidates.removeAll { $0 == url }
+                } else {
+                    failed.append((url.lastPathComponent, r))
+                }
+                if urls.count > 1 { batchProgress = (current: idx + 1, total: urls.count) }
+            }
+
             importing = false
+            batchProgress = nil
             importProgress = nil
-            importResult = r
-            record = r.record
-            await reloadPackages()   // 先等扫盘完成，`packages` 就绪后再决定是否导航（见下）
-            if r.status == .ok {
-                // 导入成功：收进「待修补」队列，自动进入「待修补」页（用户需求）。
-                if let rec = r.record { sessionPendingNames.insert(rec.storedFileName) }
-                // 已进系统的候选从候选区移除，避免「已导入」还挂在候选里。
-                scanCandidates.removeAll { $0 == url }
-                // 缺陷 1：必须等扫盘完成再导航 —— `sessionPendingPackages` 由 `packages` 派生，
-                // 若在扫盘前就置位，注入的是空数组，二级页会开成空的（见 `reloadPackages` 注释）.
+            importProgressText = ""
+            record = okRecords.last   // 兼容既有「record != nil ⇒ 待修补态」判据（flowStage / emptySection）
+            importResult = aggregate(okCount: okRecords.count, failed: failed)
+            await reloadPackages()   // 先等扫盘完成，`packages` 就绪后再导航（见下）
+            if !okRecords.isEmpty {
+                // 批量全部导完后**一次性**导航到「待修补」（不边导边 push）。必须等扫盘完成再置位 ——
+                // `sessionPendingPackages` 由 `packages` 派生，若在扫盘前置位，注入的是空数组，二级页会开成空的。
                 showPendingRepair = true
             } else {
-                ToastCenter.shared.show(r.message)
+                ToastCenter.shared.show(importResult?.message ?? "导入失败")
             }
         }
+    }
+
+    /// 磁盘守卫：估算整批导入的峰值占用，与可用空间比较；超水位则返回中止提示，否则返回 nil。
+    ///
+    /// 峰值 = 2 × 选中总量（沙盒里的系统副本 + `Imports/` 里的导入副本）。可用空间取自
+    /// `BackupLimits.availableCapacity`（优先 `volumeAvailableCapacityForImportantUsage`）；
+    /// 拿不到可用空间时**不拦**（宁可让后续写入报错，也不误拦）。
+    private func diskGuardMessage(for urls: [URL]) -> String? {
+        var totalBytes: Int64 = 0
+        for url in urls {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
+            totalBytes += max(0, size)
+        }
+        guard totalBytes > 0 else { return nil }
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        guard let available = BackupLimits.availableCapacity(at: docs), available > 0 else { return nil }
+        let needed = totalBytes
+        // 安全余量：峰值不得超过可用空间的 80%.
+        guard needed > Int64(Double(available) * 0.8) else { return nil }
+        return "选中的 \(urls.count) 个包共 \(Self.byteText(totalBytes))，导入过程需要约 \(Self.byteText(needed)) 临时空间，当前可用 \(Self.byteText(available)). 请分批导入."
+    }
+
+    /// 整批导入结果 → 1 条汇总（复用既有 `ImportResult`，`importStatusSection` 直接能渲染 message + suggestion + details）。
+    private func aggregate(okCount: Int, failed: [(name: String, result: ImportResult)]) -> ImportResult {
+        if failed.isEmpty {
+            return ImportResult(status: .ok, code: "I0",
+                                message: "已导入 \(okCount) 个安装包.",
+                                suggestion: "下一步在「待修补」里逐个修补.",
+                                record: nil, details: [])
+        }
+        let details = failed.map { "\($0.name)：\($0.result.code) \($0.result.message)" }
+        let allRejected = failed.allSatisfy { $0.result.status == .rejected }
+        let message = okCount == 0
+            ? "导入失败：\(failed.count) 个都没能导入."
+            : "成功 \(okCount) 个，失败 \(failed.count) 个."
+        // 部分成功时不能用 .rejected —— 那会渲染成红色的「拒绝」图标，与「成功 X 个」的文案矛盾.
+        // 只有「一个都没成功、且失败项全是被拒」才用 .rejected.
+        let status: ImportResult.Status = (okCount == 0 && allRejected) ? .rejected : .needsUserChoice
+        return ImportResult(status: status,
+                            code: "IB",
+                            message: message,
+                            suggestion: "失败项见下方详情，可单独重试.",
+                            record: nil, details: details)
+    }
+
+    private static func byteText(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     /// 「扫描新文件」：**只列举、不复制**。
