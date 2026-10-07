@@ -284,7 +284,9 @@ struct NBStoreDetailView: View {
                 Text("新功能")
                 if let v = d.version, !v.isEmpty { Text("· v\(v)").foregroundStyle(.secondary) }
                 Spacer()
-                if let date = d.releaseDate, !date.isEmpty {
+                // 源串是 ISO8601（Apple `currentVersionReleaseDate`），交给共享工具；
+                // 解析失败即不显示，绝不回退原始串.
+                if let date = DateText.string(from: d.releaseDate) {
                     Text(date).font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -369,7 +371,8 @@ struct NBStoreDetailView: View {
                                 .font(.subheadline.weight(.medium))
                                 .lineLimit(1)
                             HStack(spacing: 6) {
-                                if let t = v.releaseTime, !t.isEmpty { chip(t, .gray) }
+                                // 版本快照日：源数据本就是纯日期（无时刻），故用 `.day` 保留年份.
+                                if let t = DateText.string(from: v.releaseTime, style: .day) { chip(t, .gray) }
                                 if let s = v.sizeText, !s.isEmpty { chip(s, .green) }
                             }
                         }

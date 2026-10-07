@@ -395,8 +395,8 @@ struct AppStoreDetailView: View {
             infoRow("兼容性", item.minimumOS.map { "需要 iOS \($0) 或更高版本" })
             infoRow("语言", item.languages.isEmpty ? nil : "\(item.languages.count) 种语言")
             infoRow("年龄分级", item.contentRating)
-            infoRow("上架时间", Self.fmtDate(item.releaseDate))
-            infoRow("更新时间", Self.fmtDate(item.updatedDate))
+            infoRow("上架时间", DateText.string(from: item.releaseDate, style: .day))
+            infoRow("更新时间", DateText.string(from: item.updatedDate, style: .day))
             infoRow("支持设备", item.supportedDevicesCount > 0 ? "\(item.supportedDevicesCount) 款" : nil)
             infoRow("Bundle ID", item.bundleId)
             infoRow("AppID", item.id)
@@ -581,16 +581,6 @@ struct AppStoreDetailView: View {
         if privacyGroups.isEmpty, AppStoreService.countryCode != region {
             privacyGroups = (try? await AppStoreService.privacyDetail(appId: appId)) ?? []
         }
-    }
-
-    private static func fmtDate(_ iso: String?) -> String? {
-        guard let iso else { return nil }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        guard let d = f.date(from: iso) else { return String(iso.prefix(10)) }
-        let out = DateFormatter()
-        out.dateFormat = "yyyy-MM-dd"
-        return out.string(from: d)
     }
 }
 

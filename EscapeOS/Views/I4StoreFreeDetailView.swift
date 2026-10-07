@@ -133,7 +133,9 @@ struct I4StoreFreeDetailView: View {
         Section {
             if let v = d.version { infoRow("版本", v) }
             if let s = d.sizeText { infoRow("大小", s) }
-            if let t = d.updateTime { infoRow("更新日期", t) }
+            // 「更新日期」：字段形态未实测，用 `.day` 既贴合「日期」语义，
+            // 又避免源为纯日期时凭空造出 `00:00`；解析失败即整行不显示.
+            if let t = DateText.string(from: d.updateTime, style: .day) { infoRow("更新日期", t) }
             if let c = d.category { infoRow("类别", c) }
             if let c = d.company { infoRow("作者", c) }
             if let m = d.minOS { infoRow("系统要求", "iOS \(m) 或更高版本") }
@@ -238,7 +240,8 @@ struct I4StoreFreeDetailView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("v\(v.version)").font(.subheadline.weight(.medium)).lineLimit(1)
                             HStack(spacing: 6) {
-                                if let t = v.releaseTime, !t.isEmpty { chip(t, .gray) }
+                                // 版本快照日：源数据本就是纯日期（无时刻），故用 `.day` 保留年份.
+                                if let t = DateText.string(from: v.releaseTime, style: .day) { chip(t, .gray) }
                                 if let s = v.sizeText { chip(s, .green) }
                             }
                             if let n = v.note, !n.isEmpty {
