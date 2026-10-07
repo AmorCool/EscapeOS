@@ -18,8 +18,11 @@ private let downloadAccent = Color(uiColor: .systemTeal)
 struct IPADownloadManagerView: View {
 
     /// 可选**来源过滤**。`nil`（默认）= 既有「下载管理」全量行为，**既有调用点零影响**；
-    /// 传 `.thirdPartySource` 时本页即「**软件源下载管理**」：只列第三方软件源来源的任务与台账，
-    /// 标题也换成「软件源下载管理」。复用同一套下载中心/台账/UI（D1=A，不新建第二个下载管理器）。
+    /// 传 `.thirdPartySource` 时只列第三方软件源来源的任务与台账。
+    ///
+    /// 标题**统一为「下载管理」**（不再随来源改名 —— 它只是同一个下载管理的来源过滤视图，
+    /// 两个名字会让用户以为是两个不同的东西）。`filterSource` 仍用于过滤，不再影响标题。
+    /// 复用同一套下载中心/台账/UI（D1=A，不新建第二个下载管理器）。
     ///
     /// 非 private 且有默认值 ⇒ 可直接用成员逐一初始化器 `IPADownloadManagerView(filterSource:)`。
     var filterSource: IPADownloadCenter.Source? = nil
@@ -72,6 +75,8 @@ struct IPADownloadManagerView: View {
             labelGuideSection
         }
         .listStyle(.insetGrouped)
+        // 刷新走下拉；右上角不设刷新按钮（用户要求）；返回箭头由系统提供，不重复自绘.
+        .refreshable { reload() }
         .navigationTitle(listTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -84,13 +89,8 @@ struct IPADownloadManagerView: View {
                 .accessibilityLabel("在线安装设置")
             }
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    reload()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-            }
+            // 刷新走下拉（见 body 上的 `.refreshable`）；右上角不设刷新按钮（用户要求）.
+            // 返回箭头由系统提供（本页 push 进来时左上角自带），不重复自绘.
         }
         .toastHost()
         .sheet(isPresented: $showOnlineInstallSettings) {
@@ -144,8 +144,9 @@ struct IPADownloadManagerView: View {
     /// 标题带总数（形如「下载管理 (5)」）；一条都没有时不带数字。
     private var listTitle: String {
         let count = mergedRows.count
-        let base = filterSource == .thirdPartySource ? "软件源下载管理" : "下载管理"
-        return count == 0 ? base : "\(base) (\(count))"
+        // 标题统一为「下载管理」：`filterSource` 仍用于**过滤**（见 `mergedRows` / `reload`），
+        // 但不再影响标题 —— 软件源来源只是同一个下载管理的过滤视图，不必另起一个名字.
+        return count == 0 ? "下载管理" : "下载管理 (\(count))"
     }
 
     // MARK: - 合并列表
@@ -160,6 +161,16 @@ struct IPADownloadManagerView: View {
             case .job(let job): return "job-\(job.id.uuidString)"
             case .file(let item): return "file-\(item.fileName)"
             }
+        }
+
+        /// 批量删除只作用于 file 行 —— 把 `ListRow` 还原成 `remove(fileNames:)` 期望的**原始文件名**。
+        ///
+        /// 为什么要有它：`selection` 里存的是 `ListRow.id`（`"file-<文件名>"`），
+        /// 旧代码直接把它当原始文件名传给 `remove(fileNames:)` ⇒ 一个都匹配不上 ⇒ 静默删不掉。
+        /// job 行返回 nil（下载中任务不参与批量删除，见 `mergedSection` 里的 `.selectionDisabled(true)`）。
+        var fileNameForDeletion: String? {
+            if case .file(let item) = self { return item.fileName }
+            return nil
         }
     }
 
@@ -210,13 +221,23 @@ struct IPADownloadManagerView: View {
             if mergedRows.isEmpty {
                 emptyRow
             } else {
+                // 不挂 `.onDelete`：那会在编辑态给每一行渲染一个红色 ⊖ 移除标，
+                // 与 `List(selection:)` 的选择圆圈**并排重复**（用户嫌突兀）。
+                // 单条删除走**左滑**（各行 `.swipeActions`，与 `onDelete` 无关）；
+                // 批量删除走概览卡的「选择 + 删除(N)」按钮 —— 所以不需要 onDelete 的 ⊖ 标.
                 ForEach(mergedRows) { row in
                     switch row {
-                    case .job(let job): jobRow(job)
-                    case .file(let item): fileRow(item)
+                    case .job(let job):
+                        // 下载中的任务**不参与批量删除**：它有行内「暂停/继续/重试 + 删除安装包」
+                        // 与左滑取消，语义是「取消这次下载」，与「删除已下载的包」不是一件事，
+                        // 混进一个「删除(N)」会误导。`.selectionDisabled(true)` 同时收掉编辑态的选择圆圈
+                        // （iOS 17+，本仓部署目标 18.0）。
+                        jobRow(job)
+                            .selectionDisabled(true)
+                    case .file(let item):
+                        fileRow(item)
                     }
                 }
-                .onDelete(perform: deleteRows)
             }
         }
     }
@@ -231,25 +252,6 @@ struct IPADownloadManagerView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
-    }
-
-    /// 左滑删除：任务行 = 取消这次下载（半成品一并丢弃），条目行 = 删文件 + 删台账。
-    private func deleteRows(_ offsets: IndexSet) {
-        let rows = mergedRows
-        var names = Set<String>()
-        for index in offsets where rows.indices.contains(index) {
-            switch rows[index] {
-            case .job(let job):
-                center.cancel(job.id)
-            case .file(let item):
-                names.insert(item.fileName)
-            }
-        }
-        if !names.isEmpty {
-            IPADownloadLibrary.shared.remove(fileNames: names)
-            selection.subtract(names)
-        }
-        reload()
     }
 
     // MARK: - 下载中那一行
@@ -452,6 +454,17 @@ struct IPADownloadManagerView: View {
 
     // MARK: - 概览
 
+    /// 编辑态当前勾选、且**确实可删**的**原始文件名**（`remove(fileNames:)` 期望的口径）。
+    ///
+    /// 为什么用 `mergedRows` 反查，而不是给 `ListRow.id` 去 `"file-"` 前缀：
+    /// · ID 是「渲染快照」的产物，台账/任务一变（例如下载完成、`reload()` 后行被去重）
+    ///   旧 ID 就落空；反查天然把过期选择过滤掉，不会误删、也不会把 N 算多；
+    /// · job 行在这里返回 nil（见 `ListRow.fileNameForDeletion`），所以计数只统计文件行.
+    private var selectedFileNames: Set<String> {
+        Set(mergedRows.filter { selection.contains($0.id) }
+                       .compactMap { $0.fileNameForDeletion })
+    }
+
     /// v0.3.394：这张卡只说**磁盘占用**。原来第一行是「N 个安装包」，
     /// 而「N」现在由标题（「下载管理 (N)」）承担，两个 N 含义还不一样（台账数 vs 列表行数）
     /// 放在一屏里会像 bug，所以这里去掉了。
@@ -467,11 +480,16 @@ struct IPADownloadManagerView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                if !selection.isEmpty {
-                    Button("删除(\(selection.count))") {
-                        IPADownloadLibrary.shared.remove(fileNames: selection)
+                if !selectedFileNames.isEmpty {
+                    // 修复（用户：编辑-删除无法正常删除安装包）：
+                    // 旧代码把 `selection`（`ListRow.id`，形如 `"file-xxx.ipa"`）直接当**原始文件名**
+                    // 传给 `remove(fileNames:)` ⇒ 一个都匹配不上 ⇒ 静默删不掉（左滑走的是另一条路，故正常）。
+                    // 这里改用 `selectedFileNames` 把 ID 还原成原始文件名；并**检查返回值**按实际结果提示.
+                    Button("删除(\(selectedFileNames.count))") {
+                        let result = IPADownloadLibrary.shared.remove(fileNames: selectedFileNames)
                         selection.removeAll()
                         reload()
+                        reportRemoval(result)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
@@ -577,8 +595,12 @@ struct IPADownloadManagerView: View {
         .padding(.vertical, 3)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                IPADownloadLibrary.shared.remove(item)
+                // 左滑删除同样必须**看返回值**：台账只读（损坏）/ 文件被占用时删除会失败，
+                // 旧代码丢弃了 `remove(_:)` 的返回值、无条件当成功 —— 用户以为删了，
+                // `reload()` 后条目原样还在，只会以为「删除按钮坏了」。口径与 `delete(_:)` 一致。
+                let result = IPADownloadLibrary.shared.remove(item)
                 reload()
+                reportRemoval(result)
             } label: {
                 Label("删除", systemImage: "trash")
             }
@@ -834,6 +856,15 @@ struct IPADownloadManagerView: View {
     private func delete(_ item: IPADownloadItem) {
         let result = IPADownloadLibrary.shared.remove(item)
         reload()
+        reportRemoval(result)
+    }
+
+    /// 按 `remove(fileNames:)` / `remove(_:)` 的实际结果提示 —— 批量删除与单条删除**同一口径**。
+    ///
+    /// 为什么要检查返回值：删除是「文件 + 台账」两件事，台账只读时两件都做不了。
+    /// 旧批量删除代码丢弃了返回值、无条件当成功 ⇒ **假成功**（这正是本 bug 藏很久没被发现的原因）：
+    /// 用户以为删了，`reload()` 后条目却原样还在.
+    private func reportRemoval(_ result: IPADownloadLibrary.RemoveResult) {
         switch result {
         case .removed:
             ToastCenter.shared.show("已删除安装包")
