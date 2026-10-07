@@ -59,27 +59,32 @@ enum DateText {
 
     // MARK: - 私有
 
-    private static let isoFractional: ISO8601DateFormatter = {
+    /// Swift 6 并发检查：`ISO8601DateFormatter` / `DateFormatter` 都不是 Sendable，
+    /// 无法作为共享静态实例（否则报 `#MutableGlobalVariable` / 非 Sendable 静态存储）。
+    /// 与 `AppleAuthenticator.dateFormatter` 同款规避：改为**按需构造的计算属性**。
+    /// 这些 formatter 原本就是「构造后不再修改」，输出与配置完全一致，只是不再共享同一个对象。
+    /// 调用点在列表行渲染里，单次构造开销可忽略。
+    private static var isoFractional: ISO8601DateFormatter {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
-    }()
+    }
 
-    private static let isoPlain: ISO8601DateFormatter = {
+    private static var isoPlain: ISO8601DateFormatter {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
         return f
-    }()
+    }
 
     /// 非严格 ISO 的兜底（`en_US_POSIX` 固定历法，避免用户设备日历干扰）.
-    private static let fallbacks: [DateFormatter] = {
+    private static var fallbacks: [DateFormatter] {
         ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"].map { fmt in
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX")
             f.dateFormat = fmt
             return f
         }
-    }()
+    }
 
     /// 输出格式化器：时区留空 = 设备本地，与 `IPADownloadManagerView` 的惯例一致.
     private static func formatter(for style: Style) -> DateFormatter {

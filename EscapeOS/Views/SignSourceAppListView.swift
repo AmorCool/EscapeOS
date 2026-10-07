@@ -279,44 +279,26 @@ struct SignSourceAppListView: View {
         app.lock ? (app.unlockURL != nil) : canDownload(app)
     }
 
-    // MARK: - 日期格式化（口径照抄 `IPADownloadManagerView`）
-
-    /// 源里的 `versionDate` 是 ISO8601，且**带时区偏移**（`2026-09-13T16:59:22+08:00`）；
-    /// 少数源带毫秒（`...T08:51:55.070Z`）⇒ 两种格式都试。
-    private static let iso8601Fractional: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
-    private static let iso8601Plain: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
-
-    /// 显示口径 = `IPADownloadManagerView.dateFormatter`（`MM-dd HH:mm`，如 `10-05 16:11`）。
-    private static let versionDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MM-dd HH:mm"
-        return f
-    }()
+    // MARK: - 日期格式化
 
     /// `versionDate`（ISO8601 串）→ `MM-dd HH:mm`。
+    ///
+    /// 解析与显示统一交给共享工具 `DateText`（`Engine/DateText.swift`）。本页原先自写了一套
+    /// 等价实现（两个 `ISO8601DateFormatter` + 一个 `DateFormatter`），那是全仓第 4 份重复的
+    /// 日期解析；且 Swift 6 并发检查下 `ISO8601DateFormatter` 非 Sendable，不能作静态实例。
+    /// 收敛到 `DateText` 后，口径与各详情页一致，也一并消掉了那三个静态实例。
     ///
     /// · 字段缺失 / 空串 → `nil`（**不记日志**，属正常缺省）；
     /// · 有值但解析失败 → 记一条日志并返回 `nil`（**绝不把原始串丢到界面上**）。
     private func formattedVersionDate(_ raw: String?) -> String? {
-        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-            return nil
-        }
-        let date = Self.iso8601Fractional.date(from: raw) ?? Self.iso8601Plain.date(from: raw)
-        guard let date else {
-            LoginLogger.shared.log("\(SignSourceClient.logTag) versionDate 解析失败：\(raw)",
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else { return nil }
+        guard let text = DateText.string(from: trimmed, style: .compact) else {
+            LoginLogger.shared.log("\(SignSourceClient.logTag) versionDate 解析失败：\(trimmed)",
                                    category: .appStore)
             return nil
         }
-        return Self.versionDateFormatter.string(from: date)
+        return text
     }
 
     // MARK: - App 行
@@ -678,12 +660,16 @@ private struct ExpandableDescription: View {
 }
 
 private struct FullDescriptionHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    /// Swift 6 并发检查：`PreferenceKey.defaultValue` 协议要求是 `{ get }`，
+    /// 用 `static let` 即可满足，且避免「可变静态存储」报错（`CGFloat` 是 Sendable）。
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private struct CollapsedDescriptionHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    /// Swift 6 并发检查：`PreferenceKey.defaultValue` 协议要求是 `{ get }`，
+    /// 用 `static let` 即可满足，且避免「可变静态存储」报错（`CGFloat` 是 Sendable）。
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
