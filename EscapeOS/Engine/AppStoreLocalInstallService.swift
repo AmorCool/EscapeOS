@@ -1,6 +1,14 @@
 import Foundation
 
-/// Download an account-authorized App Store package and install it locally.
+/// 下载一个账号授权的 App Store 包，并把 Apple 签发的 sinf 写回包内 —— **到此为止，不安装**。
+///
+/// v0.3.578：**去掉「下载完成自动安装」**（与 v0.3.412 对免登录通道做的事对齐）。
+/// 旧入口叫 `downloadAndInstall`，把「下载 → 注入 sinf → 安装」焊在同一个函数里 ——
+/// 下载一完成就 `installLocalIPA`，无开关、无确认；而 installd 的 `Install` 对同 bundleId
+/// 的已装应用**天然覆盖**，等于**未经用户同意替换他已装的 App**（诊断：`诊断_自动安装与本地标签.md`）。
+/// v0.3.412 只删了免登录通道的自动装（那条走 `IPADownloadCenter.handle`），AppleID 通道
+/// **不走 `handle`**，于是被整条漏掉。现在安装统一由用户在「下载管理」点「安装」触发
+/// （`IPADownloadCenter.installLocal`）。
 enum AppStoreLocalInstallService {
     enum LocalError: Error, LocalizedError {
         case noAccount
@@ -18,15 +26,15 @@ enum AppStoreLocalInstallService {
         }
     }
 
+    /// 下载 + 注入 sinf。**不安装** —— 安装是用户后来在「下载管理」点「安装」时另起的事。
+    ///
+    /// 返回值是落盘的 IPA 路径，供调用方写下载台账（`IPADownloadLibrary.record`）。
     @discardableResult
-    static func downloadAndInstall(item: AppStoreItem, email: String,
-                                   externalVersionID: String? = nil,
-                                   downloadProgress: ((Double) -> Void)? = nil,
-                                   // Swift 6：本闭包会传进 AppStoreInstallService.installLocalIPA
-                                   // 的 @Sendable 参数，这里也要对齐标 @Sendable（CI 实测 :84）。
-                                   installProgress: (@Sendable (Double) -> Void)? = nil,
-                                   onResolvedURL: ((String) -> Void)? = nil,
-                                   onLog: ((String) -> Void)? = nil) async throws -> URL {
+    static func download(item: AppStoreItem, email: String,
+                         externalVersionID: String? = nil,
+                         downloadProgress: ((Double) -> Void)? = nil,
+                         onResolvedURL: ((String) -> Void)? = nil,
+                         onLog: ((String) -> Void)? = nil) async throws -> URL {
         let t0 = Date()
         let software = try makeSoftware(item)
 
@@ -86,9 +94,14 @@ enum AppStoreLocalInstallService {
             suggestedName: name, progress: downloadProgress,
             hostPolicy: StoreAuthenticationProtocol.isAppleHost, onLog: onLog)
         try Task.checkCancellation()
+        // v0.3.578：注入 sinf 保留 —— 它是「**安装前的准备**」，与「是否自动装」无关
+        // （与 v0.3.412 保留牛蛙源 sinf 写回同理）。注入后包才具备被 `installLocalIPA` 安装的条件，
+        // 用户在「下载管理」点「安装」时直接用它，不必重下。
+        //
+        // 注意： 这里**不再**调用 `AppStoreInstallService.installLocalIPA` —— 那是 v0.3.578 删掉的
+        // 「自动安装」。安装现在只发生在用户显式点击时（`IPADownloadCenter.installLocal`）。
         onLog?("[注入] 写入 SC_Info…")
         try await SignatureInjector.inject(sinfs: output.sinfs, into: dest.path)
-        try await AppStoreInstallService.installLocalIPA(dest.path, progress: installProgress, onLog: onLog)
         return dest
     }
 

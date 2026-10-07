@@ -101,6 +101,26 @@ final class IPADownloadCenter: ObservableObject {
         var storeItemId: String?
         var source: Source
         var accountEmail: String?
+        /// v0.3.578：**逐行唯一的行键** —— 专治「同名多行串台」。
+        ///
+        /// 背景（真机 bug）：软件源列表一行 = 源 JSON 里的一条 `apps[]`，同一个 App 可以有多行
+        /// （样本里 3 条 `name == "全能签"`，且该 schema 家族**整源没有 `bundleIdentifier`**）。
+        /// 旧的 `activeJob(bundleId:name:)` 在 `bundleId == nil` 时退化成「同名即命中」，
+        /// 于是一个进行中的任务被同时挂到全部同名行上：3 行齐显「下载中」，
+        /// 而任一行点「取消 / 暂停」都作用在**同一个**真实任务上（误操作，见诊断 §1.5）。
+        ///
+        /// 行键取值：**源列表那一行的 `downloadURL`**（逐行唯一；`start(...)` 收到的
+        /// `remoteURL` 就是它）。只有 `.thirdPartySource` 的任务带行键 ——
+        /// 其它来源（爱思 / 牛蛙 / NB / AppleID）的列表是「一行一个 App」，
+        /// `bundleId` 已能唯一认行，不需要行键，也就不会改变它们既有的匹配语义。
+        ///
+        /// **用途（v0.3.578 修订）**：行键的**匹配**由源列表视图自己做
+        /// （`SignSourceAppListView.activeJob(for:)` 按 `remoteURL` 比），引擎侧**没有**按行键
+        /// 认行的 API —— `activeJob(bundleId:name:)` / `lastFinishedJob(bundleId:name:)` 只把它当
+        /// 「这是源列表任务」的标记：`job.rowKey == nil` 的任务才参与 bundleId / 名称口径匹配。
+        /// 保留这个字段是因为那条 `guard` 是**防止源列表任务被商店页按 `name` 误认**的保险 ——
+        /// 别删（删了源列表里 `name` 与某个商店页 App 同名的任务会跨页串台）。
+        var rowKey: String? = nil
         /// v0.3.407：**牛蛙源**随直链一起下发的 sinf（`ba_sinfs`，base64 的标准 `.sinf` 容器）。
         ///
         /// 为什么它得跟着任务走：这类包是 Apple 的**原始加密包**，安装前必须把这份 sinf 写回
@@ -144,15 +164,20 @@ final class IPADownloadCenter: ObservableObject {
         }
         /// 整条链路的进度（0~1），给界面画进度环用。
         ///
-        /// v0.3.388 起 `progress` 的**口径统一**为「链路进度」：
-        /// · 下载阶段写入的是「下载分数」（0~1），故这里乘 0.75（下载占链路 75%）；
-        /// · 安装阶段写入的**已经是链路 0~1**（`AppStoreInstallService.installLocalIPA` 内部
-        ///   把 AFC 上传 0~0.75、installd 0.75~1 拼好；下载完再装的链路由调用方折算），
-        ///   所以这里直接返回 `progress` —— 再乘一次权重会把安装段压扁。
+        /// v0.3.578：**修正进度模型** —— 下载与安装现在是**两条独立的任务**，不再共享一条
+        /// 0~1 的链路：v0.3.412 起「下载完成不再自动安装」，`handle` 与 AppleID 通道都在
+        /// 下载完成后把任务收在 `.done`（文案「已下载」），安装是用户后来点「安装」时
+        /// **另起**一个 `.installing` 任务（`installLocal`）。所以：
+        /// · `.downloading` / `.paused` 的 `progress` 就是**下载分数**（0~1），直接返回 ——
+        ///   以前乘 0.75 是「下载占链路 75%、安装占 25%」那套已被废弃的模型留下的；
+        ///   它会让下载条全程只走到 75%、完成瞬间跳到 100%，正是用户看到的
+        ///   「下载完成却停在 75%」（诊断 §1.5）。
+        /// · `.installing` 的 `progress` 是安装链自己的 0~1（`AppStoreInstallService.installLocalIPA`
+        ///   内部把 AFC 上传 0~0.75、installd 0.75~1 拼好），直接返回。
+        /// · `.done` 恒 1（终态「已下载」/「已完成」）。
         var overall: Double {
             switch phase {
-            case .downloading, .paused: return progress * 0.75
-            case .installing: return progress
+            case .downloading, .paused, .installing: return progress
             case .done: return 1
             default: return 0
             }
@@ -179,15 +204,22 @@ final class IPADownloadCenter: ObservableObject {
 
     func job(_ id: UUID) -> Job? { jobs.first { $0.id == id } }
 
-    /// 某应用当前正在进行的任务（**按 bundleId 口径**）。
+    /// 某应用当前正在进行的任务（**行键优先 → bundleId → 名称**）。
     ///
     /// 适用：商店列表 / 详情页 —— 那里一行 = 一个应用，只关心「这个应用有没有在装/在下」。
     /// 注意： **不要**拿它给「同一个应用的多个版本行」判状态：它只认 bundleId，
     /// 会把同一个活跃任务挂到所有版本行上（v0.3.381 修的「多版本一起显示安装中」就是这个坑）。
     /// 下载管理页请用 `activeJob(fileName:bundleId:version:name:allowBundleIdFallback:)`。
+    ///
+    /// v0.3.578：**带行键的任务（源列表发起）不在这里认领** ——
+    /// 软件源列表里 3 行同名（且该源整源没有 `bundleIdentifier`）会同时命中同一个任务
+    /// （真机 bug：3 行齐显「下载中」，任一行「取消 / 暂停」都作用在那**唯一**的真实任务上）。
+    /// 源列表行由它自己的 `activeJob(for:)` 按 `remoteURL`（= 该行 `downloadURL`）精确认行
+    /// （`SignSourceAppListView.swift:416`），所以这里只要**排除**带行键的任务即可 ——
+    /// 宁可少显示（这一行暂时不显示进度），也不能显示错、更不能让按钮作用到别的行。
     func activeJob(bundleId: String?, name: String) -> Job? {
         jobs.first { job in
-            guard job.phase.isBusy else { return false }
+            guard job.phase.isBusy, job.rowKey == nil else { return false }
             if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
             return job.name == name
         }
@@ -201,10 +233,10 @@ final class IPADownloadCenter: ObservableObject {
     /// `Job.localFileName`），所以按文件名匹配才对得上唯一一行。
     ///
     /// 回落规则（**只对「还没落地」的任务生效**，即 `job.localFileName == nil`）：
-    /// · 任务**自带 version** → 版本不一致就不是这一行；
-    /// · 任务**version 未知**（`startFromI4Source` 的「查找安装包」阶段）→ 只能按 bundleId 认行，
-    ///   而这只在**该 bundleId 在列表里只有一行**时才是安全的 —— 多行时必须传
-    ///   `allowBundleIdFallback: false`，此时**不匹配任何行**（宁可少显示，不能显示错）。
+    /// · `allowBundleIdFallback == false` → **只按 fileName**，整个回落段直接拒绝
+    ///   （v0.3.578：拦截提到版本判断之前，见下方实现处的说明）；
+    /// · `allowBundleIdFallback == true` 时：任务**自带 version** 则要求版本一致；
+    ///   任务 version 未知（`startFromI4Source` 的「查找安装包」阶段）则按 bundleId / 名称认行。
     ///
     /// - Parameter allowBundleIdFallback: 该 bundleId 在列表里是否唯一（唯一才允许按 bundleId 认行）。
     ///   由调用方按台账算；列表页 `IPADownloadManagerView` 会传 `false` 表示「这个 bundleId 有多行」。
@@ -221,22 +253,28 @@ final class IPADownloadCenter: ObservableObject {
         // 2) 回落：只考虑还没有文件名的进行中任务
         return jobs.first { job in
             guard job.phase.isBusy, job.localFileName == nil else { return false }
+            // v0.3.578（诊断方案 C）：`allowBundleIdFallback == false` 现在**真正**意味着
+            // 「只按 fileName」—— 拦截提到版本判断**之前**，整个回落段直接拒绝。
+            //
+            // 旧实现在 `else if !allowBundleIdFallback` 里才拦截，于是任务**自带版本**时
+            // （第三方软件源 `start(version:)` 必带版本）流程会跳过那条 `else`，
+            // 照样落到 `bid == jbid` / `job.name == name` —— 开关名不副实，
+            // 下载管理页仍可能把同一个任务挂到多行（诊断 §1.4）。
+            guard allowBundleIdFallback else { return false }
             if let jv = job.version, !jv.isEmpty {
                 // 任务自带版本：版本对不上就不是这一行
                 if let v = version, !v.isEmpty, v != jv { return false }
-            } else if !allowBundleIdFallback {
-                // v0.3.382：任务版本未知、只能按 bundleId 认行 —— 该 bundleId 有多行时宁可不匹配
-                return false
             }
             if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
             return job.name == name
         }
     }
 
-    /// 某应用最近一次结束的任务（失败提示用，**按 bundleId 口径**）
+    /// 某应用最近一次结束的任务（失败提示用，bundleId → 名称）。
+    /// 口径与 `activeJob(bundleId:name:)` 完全一致（同样**排除带行键的源列表任务**）。
     func lastFinishedJob(bundleId: String?, name: String) -> Job? {
         jobs.first { job in
-            guard !job.phase.isBusy else { return false }
+            guard !job.phase.isBusy, job.rowKey == nil else { return false }
             if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
             return job.name == name
         }
@@ -256,10 +294,10 @@ final class IPADownloadCenter: ObservableObject {
         }
         return jobs.first { job in
             guard !job.phase.isBusy, job.localFileName == nil else { return false }
+            // v0.3.578：与 `activeJob(fileName:…)` 同口径 —— 不允许兜底 = 只按 fileName
+            guard allowBundleIdFallback else { return false }
             if let jv = job.version, !jv.isEmpty {
                 if let v = version, !v.isEmpty, v != jv { return false }
-            } else if !allowBundleIdFallback {
-                return false
             }
             if let bid = bundleId, let jbid = job.bundleId { return bid == jbid }
             return job.name == name
@@ -358,6 +396,10 @@ final class IPADownloadCenter: ObservableObject {
     /// 牛蛙源要能在下载管理页显示成「牛蛙免登录」，不能借用爱思那一档。
     /// v0.3.407：加 `sinfBase64`（**默认 nil**）—— 牛蛙源把 `ba_sinfs` 一起带进来，
     /// 落盘后由 `PackageSINFWriter` 写回包内再安装；不传即与从前完全一致。
+    /// v0.3.578：源列表（第三方软件源）任务**自动**带上行键 = `remoteURL`（= 该行 downloadURL）。
+    /// 其它来源保持 `nil` —— 它们的列表「一行一个 App」，bundleId 已能唯一认行。
+    /// 行键的**认行**由源列表视图按 `remoteURL` 自己做（`SignSourceAppListView.activeJob(for:)`）；
+    /// 引擎侧只用它把源列表任务**排除**出 bundleId / 名称口径（见 `Job.rowKey`）。
     @discardableResult
     // v0.3.412：彻底去掉自动装（用户明确要求），所以不再接受也不需要 autoInstall 参数。
     // 旧的「autoInstall: Bool = true」默认参数也一并删除 —— 没有调用方再传它。
@@ -371,6 +413,9 @@ final class IPADownloadCenter: ObservableObject {
         var job = Job(name: name, bundleId: bundleId, version: version, iconURL: iconURL,
                       remoteURL: remoteURL, source: source, accountEmail: nil,
                       sinfBase64: sinfBase64)
+        // 行键：源列表（第三方软件源）任务用 downloadURL（= `remoteURL`）当行键。
+        // 其它来源保持 `nil` —— 它们的列表「一行一个 App」，bundleId 已能唯一认行。
+        job.rowKey = source == .thirdPartySource ? remoteURL : nil
         job.stageText = "排队中"
         jobs.insert(job, at: 0)
         pump()
@@ -423,6 +468,8 @@ final class IPADownloadCenter: ObservableObject {
     /// Apple ID 通道（预留）：用指定账号从 App Store 官方源取包
     ///
     /// v0.3.335：`externalVersionID` 非空时取**指定历史版本**（版本历史页用）。
+    /// v0.3.578：**不再自动安装** —— 下载 + 注入 sinf 后停在「已下载」，
+    /// 由用户在「下载管理」点「安装」手动装（与 v0.3.412 对免登录通道的改动对齐）。
     @discardableResult
     func startWithAppleID(item: AppStoreItem,
                           email: String,
@@ -444,24 +491,23 @@ final class IPADownloadCenter: ObservableObject {
 
         Task.detached(priority: .userInitiated) { [item, email] in
             do {
-                let dest = try await AppStoreLocalInstallService.downloadAndInstall(
+                // v0.3.578：AppleID 通道**不再自动安装**（与 v0.3.412 对免登录通道的改动对齐）。
+                //
+                // 旧实现走 `AppStoreLocalInstallService.downloadAndInstall` —— 「下载 → 注入 sinf →
+                // 安装」焊在同一个调用里，下载一完成就自动 `installLocalIPA`：无开关、无确认。
+                // 而 installd 的 `Install` 对同 bundleId 的已装应用**天然覆盖**，等于**未经用户同意
+                // 替换他已装的 App**（诊断：`诊断_自动安装与本地标签.md` §1.1/§4.1）。
+                // v0.3.412 只删了免登录通道的自动装（那条走 `handle`），AppleID 通道不走 `handle`，
+                // 于是被整条漏掉。现在只下载 + 注入 sinf，安装交给用户手动点「安装」。
+                //
+                // 注意： 没有 `installProgress` 回调了 —— 这条链路里**不存在**安装段。
+                let dest = try await AppStoreLocalInstallService.download(
                     item: item,
                     email: email,
                     externalVersionID: externalVersionID,
                     downloadProgress: { p in
                         Task { @MainActor in
                             self.update(id) { $0.progress = p; $0.stageText = "下载中" }
-                        }
-                    },
-                    installProgress: { p in
-                        Task { @MainActor in
-                            self.update(id) {
-                                $0.phase = .installing
-                                // v0.3.388：`p` 是**安装链自己的 0~1**（上传 0~0.75 + installd 0.75~1），
-                                // 而这条链路的前 75% 是下载 → 折算到链路的后 25%，保证 `overall` 只增不减。
-                                $0.progress = 0.75 + min(1, max(0, p)) * 0.25
-                                $0.stageText = "安装中"
-                            }
                         }
                     },
                     onResolvedURL: { url in
@@ -504,22 +550,31 @@ final class IPADownloadCenter: ObservableObject {
                                            + "sourceURL=\(live?.remoteURL.map { String($0.prefix(40)) + "…" } ?? "nil") "
                                            + "storeItemId=\(live?.storeItemId ?? "nil")", category: .appStore)
                     self.update(id) {
+                        // v0.3.578：**终态 = 「已下载」**，与免登录通道 `handle` 的收尾完全一致。
+                        // 不再自动进入安装 ⇒ 也不会再出现「下载完成却停在 75%」那种状态：
+                        // `phase == .done` ⇒ `overall == 1`（见 `Job.overall`），
+                        // 进度环走满、文案「已下载」，用户在「下载管理」点该行的「安装」才装。
                         $0.phase = .done
                         $0.progress = 1
-                        $0.stageText = "已完成"
+                        $0.stageText = "已下载"
                         $0.localFileName = dest.lastPathComponent
                     }
                 }
             } catch {
                 await MainActor.run {
                     self.update(id) {
-                        // v0.3.383：这条链路「下载 + 安装」在同一个调用里，按**抛错时的 phase**打标
-                        // （已进 .installing 才算安装失败，否则是下载阶段没走完）
-                        $0.failureStage = $0.phase == .installing ? .install : .download
+                        // v0.3.578：这条链路只剩「下载 + 注入 sinf」，**没有安装段** ⇒
+                        // 失败一律属下载链路。旧的 `$0.phase == .installing ? .install : .download`
+                        // 已无意义（phase 不会再进 `.installing`），留着会把下载失败错标成「安装失败」。
+                        $0.failureStage = .download
                         $0.phase = .failed
                         $0.error = error.localizedDescription
                         $0.stageText = "失败"
                     }
+                    // v0.3.578：**失败必须可见** —— 以前这里只改内存状态、一行日志都不写，
+                    // 真机上表现为「点了下载、什么都不发生」。与 `installLocal` / `handle` 同口径落日志。
+                    LoginLogger.shared.log("[下载中心] AppleID 下载失败：\(error.localizedDescription)",
+                                           category: .appStore)
                 }
             }
         }
@@ -557,6 +612,45 @@ final class IPADownloadCenter: ObservableObject {
         // 写包是几百 MB 的 ZIP 操作，必须在 detached 里跑（不能占主线程）。
         let sinfBase64 = IPADownloadLibrary.shared.sinf(forFileName: fileName)
         Task.detached(priority: .userInitiated) {
+            // ▸▸▸ v0.3.578（修订）：**隧道探测从「安装硬门」降级为「提示」**。
+            //
+            // 背景：安装的第一步是建 RSD 隧道，而 Rust 侧 `tunnel_create_rppairing` 的首个
+            // `TcpStream::connect` **没有超时**（`rust/idevice-ffi/src/tunnel_provider.rs:873`）。
+            // LocalDevVPN 未连接时目标地址是黑洞，`connect` 只能等操作系统的 TCP 建连超时 ——
+            // 真机实测「下载完成 17:03:29 → 安装报错 17:08:14」（约 4m45s），期间进度、文案、
+            // 错误全不动，用户看到的就是「卡住」（诊断 §1.5 / §1.6）。所以上一版在这里加了一次
+            // 49152 端口探测，想把它变成「1 秒明确报错」。
+            //
+            // 但那个写法把探测结果当成了**安装硬门**：探一次失败即 `return`，把整个安装判死，
+            // **无重试、无绕过**。而它守着的安装链 `IPAInstallService.createTunnel()`
+            // **自己已经重试 3 次**（`IPAInstallService.swift:906-936`，300ms/600ms 退避，
+            // 同一 `targetIP:49152`）⇒ 硬门比它守的链路更脆。任何「首次探测瞬时失败、
+            // 重试就能成」的场景（隧道刚建好、对端 RPPairing 尚未开始 accept、utun 路由刚装上
+            // 还没收敛、accept 队列瞬时占满）都会把一次**本可成功**的安装直接标成红色
+            // 「安装失败」—— 比原来的「卡住」更糟。故降级为提示：
+            //
+            // · 探测失败只记一条日志，**仍继续尝试安装**，由 `createTunnel()` 的重试兜底；
+            // · 只保留一个**不产生假阴性**的快速失败：本机连 10.7.0.x 的 utun 地址都不存在
+            //   （`isConnected == false`）时，去 `targetIP` 根本无路可走，安装**必然**失败 ——
+            //   这正是上面「黑洞 → 卡 4m45s」那类场景的成因，此时快速失败才是安全的。
+            if !LocalDevVPN.isConnected {
+                let reason = "隧道未连接：请确认 LocalDevVPN 已连接（目标 \(LocalDevVPN.targetIP)）."
+                LoginLogger.shared.log("[下载中心] 安装失败 \(fileName)：\(reason)", category: .appStore)
+                await MainActor.run {
+                    self.update(id) {
+                        $0.failureStage = .install
+                        $0.phase = .failed
+                        $0.error = reason
+                        $0.stageText = "失败"
+                    }
+                }
+                return
+            }
+            if !LocalDevVPN.isTunnelReachable() {
+                LoginLogger.shared.log(
+                    "[下载中心] 隧道预检未通过（\(LocalDevVPN.targetIP):49152），仍继续尝试安装：\(fileName).",
+                    category: .appStore)
+            }
             if let sinfBase64 {
                 PackageSINFWriter.writeIfNeeded(sinfBase64: sinfBase64, ipaPath: path)
                 // v0.3.568：写回后台账的 hasSINF 仍是「写回前」的旧快照 → 现读包内定正，
