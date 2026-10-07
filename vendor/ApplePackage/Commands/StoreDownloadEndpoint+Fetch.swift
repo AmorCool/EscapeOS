@@ -76,23 +76,54 @@ extension StoreDownloadEndpoint {
             // 补不到就报错。我们这里沿用调用方给的版本；为空时**不试**这一跳
             // （`EntDownload.fetchProduct` 内部也会再拦一次），让旧链按它自己的
             // 有界回退去处理。
-            if !externalVersionID.isEmpty {
+            //
+            // v0.3.5xx（本次新增）：**调用方没给版本号时，先向宿主要「上次成功用过的
+            // 版本号」，拿到就把它交给首选的 `ent/download`** —— 这样首轮就能一步到位，
+            // 不必先发一次注定空包的 `volumeStore`、再白等 `redownload` 的裸 500。
+            //
+            // 依据（真机实测，`P4_全能签逆向/_impl/分析_前期慢时间线.md`）：
+            // 首轮 `externalVersionID` 为空 ⇒ `ent/download` 被跳过 ⇒ 必然掉进
+            // `volumeStore`（≈1.5s）→ `redownload` 裸 HTTP 500（白等 8.9~11.4s）；
+            // 而**同一个版本号一旦带上**，`ent/download` 一次就 200 —— 两轮链路唯一
+            // 差别就是版本号有无。所以「已知版本」时不该再走那段弯路。
+            //
+            // 保守性：宿主没装 provider / 缓存没命中 ⇒ `preferredVersion` 仍为空 ⇒
+            // 下面**原样**落回旧的 `volumeStore → redownload` 链（含其内部回退），
+            // 行为与改动前一致。
+            var preferredVersion = externalVersionID
+            if preferredVersion.isEmpty, let provider = Configuration.preferredDownloadVersionProvider {
+                let lookupStarted = Date()
+                let cached = await provider(account.directoryServicesIdentifier, app.bundleID)
+                let lookupMs = Self.elapsedMs(since: lookupStarted)
+                if let cached, !cached.isEmpty {
+                    preferredVersion = cached
+                    storeLog("[计时] 首轮版本预解析 耗时=\(lookupMs)ms 命中缓存版本 \(cached)"
+                        + " → 跳过 volumeStore + redownload")
+                } else {
+                    storeLog("[计时] 首轮版本预解析 耗时=\(lookupMs)ms 未命中缓存 → 仍走 volumeStore 链")
+                }
+            }
+            if !preferredVersion.isEmpty {
+                let entStarted = Date()
                 if let preferred = try await EntDownload.fetchProduct(
                     client: client,
                     account: &account,
                     app: app,
                     deviceIdentifier: deviceIdentifier,
-                    externalVersionID: externalVersionID,
+                    externalVersionID: preferredVersion,
                     endpoint: endpoint
                 ) {
+                    storeLog("[计时] ent/download 首轮命中 耗时=\(Self.elapsedMs(since: entStarted))ms")
                     return preferred
                 }
-                storeLog("ent/download 没拿到包 → 落回 volumeStore 链")
+                storeLog("[计时] ent/download 未命中 耗时=\(Self.elapsedMs(since: entStarted))ms"
+                    + " → 落回 volumeStore 链")
             } else {
                 storeLog("ent/download 跳过：版本号为空")
             }
         }
 
+        let volumeStarted = Date()
         let primary = try await StoreDownloadEndpoint.volumeStore.fetchProduct(
             client: client,
             account: &account,
@@ -100,6 +131,7 @@ extension StoreDownloadEndpoint {
             deviceIdentifier: deviceIdentifier,
             externalVersionID: externalVersionID
         )
+        storeLog("[计时] volumeStore 耗时=\(Self.elapsedMs(since: volumeStarted))ms")
 
         // 有包就直接回去 —— 这是绝大多数正常路径，一次请求结束。
         guard let reason = fallbackReason(primary) else { return primary }
@@ -142,6 +174,7 @@ extension StoreDownloadEndpoint {
         var redownloadResponse: [String: Any]?
         var redownloadBodySnippet: String?   // nil 表示「裸 5xx，无 snippet」（上游称 empty redownload error）
         var redownloadHTTPStatus = 200
+        let redownloadStarted = Date()
         do {
             redownloadResponse = try await StoreDownloadEndpoint.redownload.fetchProduct(
                 client: client,
@@ -162,6 +195,8 @@ extension StoreDownloadEndpoint {
             redownloadHTTPStatus = status
             redownloadBodySnippet = snippet
         }
+        storeLog("[计时] redownload 耗时=\(Self.elapsedMs(since: redownloadStarted))ms"
+            + "（HTTP \(redownloadHTTPStatus)）")
 
         if let response = redownloadResponse {
             storeLog("redownload 返回；\(summary(response))")
@@ -205,6 +240,12 @@ extension StoreDownloadEndpoint {
         // 诱发上层刷新会话 / 获取许可的连环补救（真机一次点击放大成 4 次 5xx + 10 次 volumeStore）。
         storeLog("redownload HTTP \(redownloadHTTPStatus) → 原样上抛（带 body 的失败不换端点）")
         throw ApplePackageError.transportFailure(status: redownloadHTTPStatus)
+    }
+
+    /// v0.3.5xx：`[计时]` 日志用 —— 与锚点的毫秒差（`LoginLogger` 自己已带绝对时间戳，
+    /// 这里只让「每段耗时」一眼可见，补上「全链路逐请求耗时=0」这个盲区）。
+    private static func elapsedMs(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 
     /// 把 HTTP 层错误分类成「裸 5xx（无 body） / 带 body 的失败」。

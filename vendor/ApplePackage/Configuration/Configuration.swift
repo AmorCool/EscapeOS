@@ -116,6 +116,23 @@ public enum Configuration {
     /// 退回未签名行为（会被 Apple 403，保留可诊断的错误路径）。
     public nonisolated(unsafe) static var sapSignerFactory: ((SAPConfig) async throws -> SAPActionSigning)?
 
+    /// v0.3.5xx：宿主注入的「首轮下载版本号」预解析器 —— 与 `kbsyncGenerator` 同一个模式
+    /// （vendor 只依赖抽象，宿主在启动时装配一次）。
+    ///
+    /// 用途：`ent/download` 是 AppleID 下载链的**首选**端点，但它硬性要求固定版本号
+    /// （`EntDownload.fetchProduct` 硬门 ③）。首轮 `externalVersionID` 为空时旧链会掉进
+    /// `volumeStore` → `redownload`（真机实测白等 8.9~11.4s，见
+    /// `P4_全能签逆向/_impl/分析_前期慢时间线.md`）。这里让宿主把「上次成功用过的
+    /// externalVersionId」提前交上来，首轮就能走 `ent/download`，跳过那段弯路。
+    ///
+    /// 返回 nil（未装配 / 没缓存）⇒ 调用方原样落回旧的 `volumeStore → redownload` 链，
+    /// 行为与改动前完全一致（**不新增硬失败**）。
+    public typealias PreferredDownloadVersionProvider = @Sendable (
+        _ dsid: String, _ bundleID: String
+    ) async -> String?
+
+    public nonisolated(unsafe) static var preferredDownloadVersionProvider: PreferredDownloadVersionProvider?
+
     public nonisolated(unsafe) static var tlsConfiguration: TLSConfiguration = {
         precondition(!deviceIdentifier.isEmpty, "deviceIdentifier must be set")
         #if DEBUG
