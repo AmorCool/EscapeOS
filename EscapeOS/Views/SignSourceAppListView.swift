@@ -344,9 +344,9 @@ struct SignSourceAppListView: View {
         .opacity(rowEnabled(app) ? 1 : 0.45)
     }
 
-    /// App 图标；无地址 / 加载中 / 失败一律静态占位（见 `AppIconView`），**不转圈**。
+    /// App 图标；无地址 / 加载中 / 失败一律静态占位（见 `SourceAppIconView`），**不转圈**。
     private func appIcon(_ urlString: String?) -> some View {
-        AppIconView(urlString: urlString)
+        SourceAppIconView(urlString: urlString)
     }
 
     /// 版本 / 大小 / 日期 —— 一行放不下由 `ChipFlow` 整块换行（与 `I4StoreFreeView` 同款）。
@@ -710,7 +710,7 @@ private final class SourceIconLoader {
 /// 唯一差异：本页按全能签的做法把「加载中」也画成**静态占位**（那页保留 spinner）。
 /// 组件**无法直接复用** —— 那个 `SourceIconView` 是同事文件内的 `private` 类型，跨文件不可见；
 /// 待后续把图标组件提升为共享件（`Shared/…`）后两页可收敛为一份实现。
-private struct AppIconView: View {
+private struct SourceAppIconView: View {
 
     /// 图标地址（空 / 非法则直接落静态占位）。
     let urlString: String?
