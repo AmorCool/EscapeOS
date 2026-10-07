@@ -750,19 +750,49 @@ final class IPADownloadCenter: ObservableObject {
     }
 
     /// 取消并**删除安装包**（下载中的部分文件一并丢弃）
-    func cancel(_ id: UUID) {
-        guard let job = job(id) else { return }
+    ///
+    /// v0.3.580（一致性修复）：**返回删除结果**，不再丢弃 —— 旧实现无论删除成败都
+    /// `jobs.removeAll`，台账只读（损坏）/ 文件被占用时用户以为「已取消并删除该安装包」，
+    /// 磁盘上的包与台账条目却都还在 ⇒ **假成功**。现在：删除失败时**保留任务行**
+    /// （进行中的收成 `.failed`，让用户看得见、能重试），调用方拿返回值按实际结果提示。
+    ///
+    /// `@discardableResult`：既有调用方（商店页 / 源列表 / 下载管理）不关心结果时可照旧忽略，
+    /// 不必一次性改动全部 8 个调用点。
+    /// 返回 `nil` 表示「没有落地文件可删」（任务还在下载、或 id 不存在）—— 此时任务照旧移除。
+    @discardableResult
+    func cancel(_ id: UUID) -> IPADownloadLibrary.RemoveResult? {
+        guard let job = job(id) else { return nil }
         pausingIDs.remove(id)
         if let r = runners[id] {
             r.abort()
             runners[id] = nil
             resetSpeedWindow()
         }
+        var result: IPADownloadLibrary.RemoveResult?
         if let fileName = job.localFileName {
-            IPADownloadLibrary.shared.remove(fileName: fileName)
+            result = IPADownloadLibrary.shared.remove(fileName: fileName)
         }
-        jobs.removeAll { $0.id == id }
+        // 删除被拒（台账只读）/ 文件删不掉时，**不能把任务从 `jobs` 抹掉**：
+        // 文件与台账都还在，任务凭空消失就是假成功（旧行为）。
+        if result == .rejectedReadOnly || result == .fileRemovalFailed {
+            // 只把**还在进行中**的任务收成 `.failed`：终态（`.done` / `.failed`）保持原样，
+            // 别把一次「下载成功但没删掉」误标成下载失败。
+            if job.phase.isBusy {
+                update(id) {
+                    $0.phase = .failed
+                    $0.failureStage = .download
+                    $0.stageText = "删除失败"
+                    $0.error = result == .rejectedReadOnly
+                        ? "下载台账文件损坏，安装包未删除"
+                        : "安装包文件无法删除（可能被占用）"
+                    $0.speedBytesPerSecond = 0
+                }
+            }
+        } else {
+            jobs.removeAll { $0.id == id }
+        }
         pump()
+        return result
     }
 
     /// 失败的重新来一次

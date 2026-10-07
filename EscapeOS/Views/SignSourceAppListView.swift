@@ -22,8 +22,8 @@ import Foundation
 ///
 /// ## 行排版
 /// 行排版与右侧进度控件**复制**自 `I4StoreFreeView`（D4 = 复制，规格 §7.2）：
-/// `ChipFlow` / `ChipItem` / `chip` / `trailingControl` 在那份文件里是 file-private，
-/// 跨文件用不了，所以在本文件内写一份等价实现，**不改** `I4StoreFreeView`。
+/// `ChipFlow` / `ChipItem` 已提升为共享件（`Shared/ChipFlow.swift`），本文件直接用；
+/// 胶囊 `chip` 已改用共享 `PackageChip`；`trailingControl` 仍是本文件内的等价实现。
 struct SignSourceAppListView: View {
 
     /// 当前源（由源列表页 push 进来）。
@@ -317,7 +317,7 @@ struct SignSourceAppListView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 ChipFlow(spacing: 6) {
                     ForEach(chips(app), id: \.text) { item in
-                        chip(item.text, item.tint)
+                        PackageChip(text: item.text, tint: item.tint, horizontalPadding: 5)
                     }
                 }
                 if let d = app.versionDescription ?? app.localizedDescription, !d.isEmpty {
@@ -372,17 +372,6 @@ struct SignSourceAppListView: View {
             out.append(ChipItem(text: d, tint: .orange))
         }
         return out
-    }
-
-    /// 胶囊：单行 + 定宽，绝不折行（复制自 `I4StoreFreeView.chip`）。
-    private func chip(_ text: String, _ tint: Color) -> some View {
-        Text(text)
-            .font(.caption2)
-            .lineLimit(1)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(tint.opacity(0.12), in: Capsule())
-            .foregroundStyle(tint)
-            .fixedSize()
     }
 
     // MARK: - 行键与状态认行（修「一个任务挂到多行」）
@@ -451,7 +440,21 @@ struct SignSourceAppListView: View {
                 .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
                 .disabled(!job.canPause)
                 Button {
-                    center.cancel(job.id)
+                    // 按**实际结果**提示：台账只读 / 文件被占用时删除被拒，不能默默当成功
+                    // （口径同 `IPADownloadManagerView.reportRemoval`）。
+                    if let result = center.cancel(job.id) {
+                        switch result {
+                        case .removed:
+                            ToastCenter.shared.show("已删除安装包")
+                        case .rejectedReadOnly:
+                            ToastCenter.shared.show("未删除安装包：下载台账文件损坏，本次改动未保存")
+                        case .fileRemovalFailed:
+                            ToastCenter.shared.show("未删除安装包：文件无法删除（可能被占用）")
+                        }
+                    } else {
+                        // `nil` = 还没有落地文件（任务还在下载）→ 只是取消，没有删除动作。
+                        ToastCenter.shared.show("已取消下载")
+                    }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.body)
@@ -615,57 +618,3 @@ struct SignSourceAppListView: View {
     }
 }
 
-// MARK: - 胶囊自动换行布局（**复制**自 `I4StoreFreeView`，D4 = 复制，规格 §7.2）
-
-/// 一颗胶囊（文本 + 着色），供 `ChipFlow` 使用。
-private struct ChipItem {
-    let text: String
-    let tint: Color
-}
-
-/// 一行放得下就横排，放不下就把**整个胶囊**挪到下一行 —— 不缩字号、不折行内文字、不截断。
-///
-/// 与 `I4StoreFreeView.swift` 里的同名类型**各自 file-private**，互不可见，故可同名共存。
-private struct ChipFlow: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let limit = proposal.width ?? .infinity
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalHeight: CGFloat = 0
-        var widest: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if rowWidth > 0, rowWidth + spacing + size.width > limit {
-                totalHeight += rowHeight + spacing
-                widest = max(widest, rowWidth)
-                rowWidth = size.width
-                rowHeight = size.height
-            } else {
-                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
-                rowHeight = max(rowHeight, size.height)
-            }
-        }
-        widest = max(widest, rowWidth)
-        totalHeight += rowHeight
-        return CGSize(width: min(widest, limit), height: totalHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            sub.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-    }
-}

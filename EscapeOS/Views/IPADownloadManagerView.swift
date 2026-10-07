@@ -56,12 +56,6 @@ struct IPADownloadManagerView: View {
     @Environment(\.editMode) private var editMode
     private var isEditing: Bool { editMode?.wrappedValue == .active }
 
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MM-dd HH:mm"
-        return f
-    }()
-
     /// v0.3.394：「下载中」那一行用的时间戳 —— 参考图是 `2026-09-14 12:06:43`（带秒）
     private static let stampFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -120,8 +114,10 @@ struct IPADownloadManagerView: View {
                 iconURL: icons[job.bundleId ?? ""] ?? job.iconURL,
                 onOverwriteInstall: {},
                 onDelete: {
-                    center.cancel(job.id)
+                    // 按**实际结果**提示：删除被拒（台账只读）/ 文件被占用时不能默默当成功。
+                    let result = center.cancel(job.id)
                     reload()
+                    if let result { reportRemoval(result) }
                 },
                 // v0.3.413：只有**真的还在进行中**才把「覆盖安装 / 在线安装」置灰标「下载中」。
                 // 以前这里写死 `true` —— 于是一个**已完成**的任务行（若因去重时序残留）
@@ -362,8 +358,11 @@ struct IPADownloadManagerView: View {
         .padding(.vertical, 3)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                center.cancel(job.id)
+                // 左滑「删除」= 取消这次下载并丢弃半成品；删除被拒（台账只读）/ 文件被占用时
+                // 任务行会留下（见 `cancel` 的注释），这里按实际结果提示，不无条件当成功。
+                let result = center.cancel(job.id)
                 reload()
+                if let result { reportRemoval(result) }
             } label: {
                 Label("删除", systemImage: "trash")
             }
@@ -447,8 +446,15 @@ struct IPADownloadManagerView: View {
         HStack(spacing: 14) {
             jobToggleButton(job)
             Button {
-                center.cancel(job.id)
-                ToastCenter.shared.show("已取消并删除该安装包")
+                // 旧代码无条件弹「已取消并删除该安装包」—— 台账只读 / 文件被占用时**没删成**，
+                // 这是假成功。现在按 `cancel` 返回的实际结果提示（口径同 `reportRemoval`）。
+                let result = center.cancel(job.id)
+                if let result {
+                    reportRemoval(result)
+                } else {
+                    // `nil` = 还没有落地文件（任务还在下载）→ 只是取消，没有删除动作。
+                    ToastCenter.shared.show("已取消下载")
+                }
             } label: {
                 Label("删除安装包", systemImage: "trash")
                     .font(.caption)
@@ -588,8 +594,8 @@ struct IPADownloadManagerView: View {
                         .font(.subheadline.weight(.medium))
                         .lineLimit(2)
                     HStack(spacing: 6) {
-                        if let v = item.version { chip("v\(v)", .blue) }
-                        chip(item.sizeText, .green)
+                        if let v = item.version { PackageChip(text: "v\(v)", tint: .blue) }
+                        PackageChip(text: item.sizeText, tint: .green)
                     }
                     // v0.3.363：包类型从胶囊同行里挪到**独立一行**。
                     // 原来和两个胶囊挤同一个 HStack，空间不够时被压成竖排窄列
@@ -730,21 +736,11 @@ struct IPADownloadManagerView: View {
         var parts: [String] = []
         if let b = item.bundleId, !b.isEmpty { parts.append(b) }
         parts.append(item.source)
-        parts.append(Self.dateFormatter.string(from: item.downloadedAt))
+        parts.append(DateText.string(from: item.downloadedAt))
         if let t = item.lastInstalledAt {
-            parts.append("已安装 \(Self.dateFormatter.string(from: t))")
+            parts.append("已安装 \(DateText.string(from: t))")
         }
         return parts.joined(separator: " · ")
-    }
-
-    private func chip(_ text: String, _ tint: Color) -> some View {
-        Text(text)
-            .font(.caption2)
-            .lineLimit(1)
-            .padding(.horizontal, 6).padding(.vertical, 1)
-            .background(tint.opacity(0.12), in: Capsule())
-            .foregroundStyle(tint)
-            .fixedSize()
     }
 
     /// 包类型只在「有风险」时着色：缺 sinf 的加密包装不上，必须显眼。
