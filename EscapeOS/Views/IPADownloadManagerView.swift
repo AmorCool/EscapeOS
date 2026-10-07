@@ -732,6 +732,14 @@ struct IPADownloadManagerView: View {
         .frame(width: 48, height: 48)
     }
 
+    /// v0.3.576 这里曾是本页私有 `static let dateFormatter`（缓存一次、复用 N 次）。
+    /// 上一轮收敛到共享 `DateText` 时，`DateText` 的 formatter 是「按需构造」⇒ 一度变成**每行新建**，
+    /// 是相对 v0.3.576 的**回退**（诊断 §2 表 #4）。
+    /// `DateText` 现已把 formatter 改回**缓存**（`Engine/DateText.swift` 的 `nonisolated(unsafe) static let`）
+    /// ⇒ 这里**保留** `DateText` 即可：性能与旧 `static let` **等价**（都是一次构造、N 次复用），
+    /// 又保持全 App 日期口径单一。**无需**退回本页私有 formatter（那会重新引入一份可能漂移的 `MM-dd HH:mm`）。
+    /// 口径：旧私有 formatter 未设 locale（设备默认），`DateText` 用 `en_US_POSIX`；纯数字格式两者输出一致，
+    /// 后者更稳定。
     private func subtitle(_ item: IPADownloadItem) -> String {
         var parts: [String] = []
         if let b = item.bundleId, !b.isEmpty { parts.append(b) }
