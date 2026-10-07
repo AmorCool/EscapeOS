@@ -12,8 +12,8 @@ enum AppStoreLocalInstallService {
             switch self {
             case .noAccount: return "没有可用的 Apple ID 账号，请先在 AppStore 商店里登录"
             case .badItemId: return "应用 ID 无效（需要数字形式的 trackId）"
-            case let .accountIncomplete(what): return "账号信息不完整（缺少 \(what)），请重新登录 Apple ID。"
-            case .reloginNeedsCode: return "登录已过期且 Apple 要求验证码，请到商店账号管理中重新登录。"
+            case let .accountIncomplete(what): return "账号信息不完整（缺少 \(what)），请重新登录 Apple ID."
+            case .reloginNeedsCode: return "登录已过期且 Apple 要求验证码，请到商店账号管理中重新登录."
             }
         }
     }

@@ -28,7 +28,7 @@ enum PurchaseHistoryError: Error, LocalizedError {
         case .signerUnavailable: return "SAP 资产不可用，无法签名"
         case let .badResponse(what): return "已购列表响应异常（\(what)）"
         case let .rejected(message): return message
-        case .tokenExpired: return "已购列表认证未通过，请在账号管理中检查登录状态。"
+        case .tokenExpired: return "已购列表认证未通过，请在账号管理中检查登录状态."
         }
     }
 }

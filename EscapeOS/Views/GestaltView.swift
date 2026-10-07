@@ -422,7 +422,7 @@ struct GestaltView: View {
                     Label("Revert Tweaks", systemImage: "arrow.uturn.backward")
                 }
             } footer: {
-                Text("**WARNING:** These tweaks can break features or softbrick your device!")
+                Text("WARNING:").bold() + Text(" These tweaks can break features or softbrick your device!")
             }
 
             // Device Artwork

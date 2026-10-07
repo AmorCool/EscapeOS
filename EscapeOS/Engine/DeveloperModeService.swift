@@ -102,7 +102,7 @@ enum DeveloperModeService {
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("pairingFile.plist").path
         guard FileManager.default.fileExists(atPath: pairingPath) else {
-            throw makeError("未检测到配对文件。请先导入配对文件.")
+            throw makeError("未检测到配对文件，请先导入配对文件.")
         }
 
         var pairingFile: OpaquePointer?

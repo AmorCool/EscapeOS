@@ -43,24 +43,24 @@ enum StoreAuthenticationError: LocalizedError, Sendable {
         case .invalidRedirect:
             return "Apple 返回了不受信任的商店跳转，凭据未被转发"
         case let .serviceResponse(status):
-            return "登录服务响应异常（HTTP \(status)）。仅凭此响应无法判断账号、网络或服务端原因，请查看商店日志。"
+            return "登录服务响应异常（HTTP \(status)），仅凭此响应无法判断账号、网络或服务端原因，请查看商店日志."
         case let .missingRedirect(status):
-            return "Apple 登录返回 HTTP \(status)，但缺少有效的 Location 跳转地址。已停止自动重试并保留现有账号；这不能单独证明是 IP 限流或密码错误。"
+            return "Apple 登录返回 HTTP \(status)，但缺少有效的 Location 跳转地址，已停止自动重试并保留现有账号；这不能单独证明是 IP 限流或密码错误."
         case let .unstructuredResponse(status, empty):
-            return "Apple 登录返回 HTTP \(status)（\(empty ? "空响应" : "非预期响应")），没有提供可识别的认证结果。已保留现有账号，请稍后重试并查看商店日志。"
+            return "Apple 登录返回 HTTP \(status)（\(empty ? "空响应" : "非预期响应")），没有提供可识别的认证结果，已保留现有账号，请稍后重试并查看商店日志."
         case let .rateLimited(delay):
-            if let delay { return "Apple 登录请求受限（HTTP 429），请至少等待 \(Int(ceil(delay))) 秒后再试。" }
-            return "Apple 登录请求受限（HTTP 429），请稍后再试。"
+            if let delay { return "Apple 登录请求受限（HTTP 429），请至少等待 \(Int(ceil(delay))) 秒后再试." }
+            return "Apple 登录请求受限（HTTP 429），请稍后再试."
         case let .cooldown(seconds):
-            return "上次登录响应异常，为避免重复发送密码，本应用暂缓自动登录；请约 \(seconds) 秒后重试。现有账号未被删除。"
+            return "上次登录响应异常，为避免重复发送密码，本应用暂缓自动登录；请约 \(seconds) 秒后重试，现有账号未被删除."
         case .accountChanged:
-            return "操作期间账号已退出或更换，请重新选择账号。"
+            return "操作期间账号已退出或更换，请重新选择账号."
         case .credentialsRequired:
-            return "保存的凭据不完整，请到账号管理重新登录 Apple ID。"
+            return "保存的凭据不完整，请到账号管理重新登录 Apple ID."
         case let .rejected(message):
             return message
         case .tooManyAttempts:
-            return "登录跳转或协议重试次数过多，已停止请求，请稍后再试。"
+            return "登录跳转或协议重试次数过多，已停止请求，请稍后再试."
         }
     }
 }

@@ -31,17 +31,17 @@ enum AppStoreInstallService {
             case .badTemplate: return "源模板拼出的地址无效"
             case .requestFailed(let m): return "源接口请求失败：\(m)"
             case .untrustedHost(let h):
-                return "下载地址不在 Apple 自有域内（\(h)），已拒绝下载（防止下载源被篡改）。"
+                return "下载地址不在 Apple 自有域内（\(h)），已拒绝下载（防止下载源被篡改）."
             case .missingSINF(let bid):
                 let who = bid.map { "（\($0)）" } ?? ""
-                return "该 IPA\(who) 是加密包，但缺少 SC_Info/*.sinf，installd 无法解密安装。"
-                     + "App Store 原始包需要由安装它的同一 Apple ID 在本机下载，才会带可用 sinf。"
+                return "该 IPA\(who) 是加密包，但缺少 SC_Info/*.sinf，installd 无法解密安装，"
+                     + "App Store 原始包需要由安装它的同一 Apple ID 在本机下载，才会带可用 sinf."
             case .indeterminateEncryption(let bid):
                 let who = bid.map { "（\($0)）" } ?? ""
-                return "无法判定该 IPA\(who) 的加密状态（主二进制读不出），且包内没有 SC_Info/*.sinf。"
+                return "无法判定该 IPA\(who) 的加密状态（主二进制读不出），且包内没有 SC_Info/*.sinf，"
                      + "无法安全安装：既不能按加密包走 ApplicationSINF 通道（缺 sinf），"
-                     + "也不能按明文包安装（可能是加密包，装不上或装后闪退）。"
-                     + "请改用未加密（已解密 / 已重签）的包，或用带 sinf 的正版包。"
+                     + "也不能按明文包安装（可能是加密包，装不上或装后闪退），"
+                     + "请改用未加密（已解密 / 已重签）的包，或用带 sinf 的正版包."
             }
         }
     }

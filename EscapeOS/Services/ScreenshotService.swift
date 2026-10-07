@@ -164,7 +164,7 @@ final class ScreenshotService: Sendable {
         }
         if sem.wait(timeout: .now() + timeout) == .timedOut {
             // 面向调用方/用户只给一句可行动的短句；「C 调用无法取消、只能放弃」的细节留在文件头注释里。
-            throw makeError("截图超时（\(Int(timeout)) 秒）：设备未返回，请确认 LocalDevVPN 已连接后重试。")
+            throw makeError("截图超时（\(Int(timeout)) 秒）：设备未返回，请确认 LocalDevVPN 已连接后重试.")
         }
         guard let result = box.result else {
             throw makeError("截图失败（后台未产生结果）")
