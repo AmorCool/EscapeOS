@@ -141,7 +141,7 @@ struct PendingRepairPage: View {
                         row(p)
                     }
                 } footer: {
-                    Text("勾选后可批量修补或移除；移除只从本列表拿掉，不删除安装包.")
+                    Text("勾选后可修补或移除；移除只从本列表拿掉，不删除安装包.")
                 }
             }
         }
@@ -178,7 +178,7 @@ struct PendingRepairPage: View {
                 if selecting {
                     BatchActionBar(selectedCount: selected.count,
                                    subtitle: selectedSizeText,
-                                   primaryTitle: "批量修补（\(selected.count)）",
+                                   primaryTitle: "修补（\(selected.count)）",
                                    primaryDisabled: selected.isEmpty || busy,
                                    primaryAction: { alert = .batchRepair(count: selected.count) }) {
                         // 待修补页的「移除」= 仅从列表移除（移到 Imports/.removed/），不删安装包。
@@ -407,7 +407,7 @@ struct PendingRepairPage: View {
             flowCaption = nil
             selected.removeAll()
             selecting = false
-            resultText = "批量修补完成：成功 \(ok) 个，失败 \(failed) 个."
+            resultText = "修补完成：成功 \(ok) 个，失败 \(failed) 个."
             reload()
         }
     }

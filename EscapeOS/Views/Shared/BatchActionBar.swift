@@ -3,11 +3,13 @@ import SwiftUI
 // 通用批量操作底条（用户需求 #4：批量操作参考「空间回收」的底部设计）.
 //
 // 从 `ReclaimTabView.batchBar`（`Views/ReclaimTabView.swift:245-267`）抽出，**视觉原样保留**：
-//   左侧「已选 N 项」+ 副标题（如合计字节），右侧主按钮 `.borderedProminent` + `.tint(AppTheme.accent)`；
+//   左侧「已选 N 项」+ 副标题（如合计字节），右侧主按钮 `TintedButtonStyle`（透明淡蓝，见 `DesignSystem`）；
 //   容器 `.padding()` + `.padding(.bottom, 18)` + `.frame(maxWidth: .infinity)` + `.background(.bar)`.
 //
-// 抽出而非改 `ReclaimTabView`：后者继续用自己的私有 `batchBar`，行为与观感**零改动**；
-// 本组件只服务新二级页（已导入 / 待修补 / 已修补）。
+// 主按钮样式：原为 `.borderedProminent` + `.tint(AppTheme.accent)`（纯蓝实底），
+// 用户审美要求「不要纯蓝背景、要透明淡蓝」⇒ 改用 `TintedButtonStyle`。
+// 本组件**只被共享转换三个二级页使用**（`grep BatchActionBar(` 只命中已导入 / 待修补 / 已修补），
+// 故这里换样式不影响别的页面；`ReclaimTabView` 继续用自己的私有 `batchBar`，观感零改动.
 //
 // 挂载方式（照 `ReclaimTabView.swift:61-69`）：在页面的 `.safeAreaInset(edge: .bottom)` 里，
 // **仅在选择态**挂本组件；未进选择态用 `Color.clear.frame(height: 12)` 占位（避免列表末项顶到底栏）。
@@ -59,8 +61,7 @@ struct BatchActionBar<Actions: View>: View {
             actions()
             Button(primaryTitle, action: primaryAction)
                 .disabled(primaryDisabled)
-                .buttonStyle(.borderedProminent)
-                .tint(AppTheme.accent)
+                .buttonStyle(TintedButtonStyle())
         }
         .padding()
         .padding(.bottom, 18)
