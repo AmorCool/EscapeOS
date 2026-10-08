@@ -133,6 +133,25 @@ public enum Configuration {
 
     public nonisolated(unsafe) static var preferredDownloadVersionProvider: PreferredDownloadVersionProvider?
 
+    /// v0.3.5xx：宿主注入的「记录这次成功用到的版本号」回调 —— 与上面的 provider **配对**
+    /// （一个读、一个写，同一个缓存键）。
+    ///
+    /// 调用点：`Download.download` 在下载信息校验通过、准备返回 `DownloadOutput` 时，把响应里
+    /// `metadata.softwareVersionExternalIdentifier`（Apple 权威的 externalVersionId —— 本仓
+    /// 的 `fetchViaUpdateProduct` 与 `EntDownload` 都用它校验「响应版本 == 请求版本」）交给宿主。
+    ///
+    /// 为什么需要它：provider 的缓存此前只在宿主的 `emptyPackage → 候选版本` 补救支路里被写入，
+    /// 而正常成功路径（供应商层 `updateProduct` / `ent/download` 首轮命中）从不经过那条支路 ⇒
+    /// 缓存恒空、provider 永远未命中。把写入点挪到「所有成功支路汇合的唯一出口」后才真正生效。
+    ///
+    /// 宿主实现必须**幂等且轻**（同值不重复写盘）：本回调每次成功下载调用一次。
+    /// 未装配 ⇒ 不记录，读侧一直未命中，行为与改动前一致（**不新增硬失败**）。
+    public typealias DownloadVersionRecorder = @Sendable (
+        _ dsid: String, _ bundleID: String, _ versionID: String
+    ) -> Void
+
+    public nonisolated(unsafe) static var downloadVersionRecorder: DownloadVersionRecorder?
+
     public nonisolated(unsafe) static var tlsConfiguration: TLSConfiguration = {
         precondition(!deviceIdentifier.isEmpty, "deviceIdentifier must be set")
         #if DEBUG

@@ -140,6 +140,18 @@ public enum Download {
         storeLog("下载信息就绪：\(app.bundleID) v\(version)(\(bundleVersion)) "
             + "sinf=\(sinfs.count) serialNumber=\(Configuration.deviceSerialNumber)")
 
+        // v0.3.5xx：把这次**成功用到的版本号**交给宿主落缓存（键：dsid + bundleId）。
+        //
+        // 位置依据：`metadata.softwareVersionExternalIdentifier` 是 Apple 权威的
+        // externalVersionId（上方与 `fetchViaUpdateProduct` / `EntDownload` 都用它校验
+        // 「响应版本 == 请求版本」），而这里（返回 `DownloadOutput` 之前）是**所有成功支路**
+        // （ent/download / volumeStore / redownload / updateProduct）汇合后的唯一出口。
+        // 宿主据此让下次首轮 ent/download 直接带版本，跳过 volumeStore + 目录解析。
+        if let ext = metadata["softwareVersionExternalIdentifier"] {
+            Configuration.downloadVersionRecorder?(
+                account.directoryServicesIdentifier, app.bundleID, "\(ext)")
+        }
+
         return DownloadOutput(
             downloadURL: url,
             sinfs: sinfs,

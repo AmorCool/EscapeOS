@@ -13,10 +13,16 @@ import Foundation
 /// （`Configuration.preferredDownloadVersionProvider`），让**首轮**就能走
 /// `ent/download`，跳过 `volumeStore + redownload` 那两步弯路。
 ///
-/// ## 键格式（**必须与 `AppStoreLocalInstallService` 同口径**）
-/// `AppStore.LastGoodVersion.<dsid>.<bundleId>` —— 与
-/// `AppStoreLocalInstallService.cachedVersionID / rememberVersionID` 完全一致。
-/// 那边是 private，这里只能同口径复读；**改动任一处的键格式都要同步改另一处**。
+/// ## 键格式（**本文件是唯一权威定义**）
+/// `AppStore.LastGoodVersion.<dsid>.<bundleId>`
+///
+/// 精度评估（换账号 / 换 storefront 会不会串）：
+/// - **换账号**：`dsid` 是 `directoryServicesIdentifier`（每个 Apple ID 唯一）⇒ 不同账号不同键，
+///   **不串**。
+/// - **换 storefront**：键里没有 storefront，但 storefront 是**账号的属性**（一个 dsid 只对应
+///   一个账号地区），所以 dsid 已经把它区分开了；且 externalVersionId 是 Apple 的**全局**版本
+///   计数器（同一 ID = 同一版本），跨区不产生歧义。用户极少数情况下改了账号地区时，若缓存版本
+///   在新区不可得，下载链会照常落回 `volumeStore → 目录解析`，**自愈**。⇒ 键够精确，不追加 storefront。
 ///
 /// ## 保守性
 /// 缓存没命中（该 App 首次成功下载之前）时返回 nil，vendor 层会原样落回旧的
@@ -27,6 +33,16 @@ enum AppStorePreferredVersion {
         Configuration.preferredDownloadVersionProvider = { dsid, bundleID in
             Self.cachedLastGoodVersion(dsid: dsid, bundleID: bundleID)
         }
+        // 写入侧：vendor 层每次**成功**下载后回传它实际用到的 externalVersionId
+        // （`Download.download` 的返回出口）。这是缓存唯一真正会执行的写入点。
+        Configuration.downloadVersionRecorder = { dsid, bundleID, versionID in
+            Self.rememberLastGoodVersion(dsid: dsid, bundleID: bundleID, versionID: versionID)
+        }
+    }
+
+    /// 缓存键的**唯一**构造处 —— 读写两侧都必须走它（避免键格式漂移）。
+    nonisolated static func cacheKey(dsid: String, bundleID: String) -> String {
+        "AppStore.LastGoodVersion.\(dsid).\(bundleID)"
     }
 
     /// 读「上次成功用过的 externalVersionId」。纯本地 UserDefaults 读取，零网络。
@@ -35,8 +51,19 @@ enum AppStorePreferredVersion {
     /// `AppStoreLocalInstallService` 的补救状态机里，这里不重复、也不放大请求。
     nonisolated static func cachedLastGoodVersion(dsid: String, bundleID: String) -> String? {
         guard !dsid.isEmpty, !bundleID.isEmpty else { return nil }
-        let key = "AppStore.LastGoodVersion.\(dsid).\(bundleID)"
-        let value = UserDefaults.standard.string(forKey: key)
+        let value = UserDefaults.standard.string(forKey: cacheKey(dsid: dsid, bundleID: bundleID))
         return (value?.isEmpty == false) ? value : nil
+    }
+
+    /// 幂等写入：与已存值相同则**不写盘**（成功下载每次都回调，避免反复刷 UserDefaults）。
+    /// - Returns: 是否真的发生了写入。
+    @discardableResult
+    nonisolated static func rememberLastGoodVersion(dsid: String, bundleID: String,
+                                                   versionID: String) -> Bool {
+        guard !dsid.isEmpty, !bundleID.isEmpty, !versionID.isEmpty else { return false }
+        let key = cacheKey(dsid: dsid, bundleID: bundleID)
+        if UserDefaults.standard.string(forKey: key) == versionID { return false }
+        UserDefaults.standard.set(versionID, forKey: key)
+        return true
     }
 }

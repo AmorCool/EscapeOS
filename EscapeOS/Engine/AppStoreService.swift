@@ -283,13 +283,26 @@ enum AppStoreService {
     ///   隐私分组数量**随应用不同**（微信只有 1 组 `LINKED_TO_YOU`，淘宝 3 组），
     ///   不要假设一定是 3 组。
     ///
-    /// 只缓存**确实拿到该应用详情页**的结果；拿不到详情页（重定向到 `/xx/iphone/today`
-    /// 的 200 降级页、HTTP/网络失败）一律不写缓存，下次进入会重新抓 —— 否则「取不到 =
-    /// 空隐私」会被当成该区域的成功结果钉住，表现为第一次进详情看不到、刷新后才有。
+    /// ## 缓存策略（v0.3.5xx 起含**负缓存**）
+    ///
+    /// - **详情页**：存整段 HTML，TTL = `htmlCacheTTL`。
+    /// - **平台限制类失败**：拿到了页面但**不是该应用的详情页**（典型：大陆出口 IP 下
+    ///   `/us/app/idX` 被 302 到 `/xx/iphone/today`，回落 `cn` 又 404）—— 这类失败在同一
+    ///   出口 IP + 同一 App 下是**确定性**的、不会自愈，所以也落缓存（**负缓存**：html 留空
+    ///   省内存），窗口内不再重发网络请求。否则每次进详情页都白跑两轮（实测 `us` + `cn`
+    ///   各一发 0.6–1.6MB 页面）。TTL = `htmlNegativeCacheTTL`（比成功缓存短）。
+    /// - **传输层失败**（`loadProductPage` 抛错：超时 / 断网 / 全部区域都没拿到 200）：
+    ///   **不落缓存**，下次进入直接重试 —— 它是**非确定性**的，缓存会把一次抖动放大成
+    ///   「窗口内一直看不到」；而重试成本有界（≤2 次请求）。
     ///
     /// 单份 HTML 是 0.6–1.6MB，所以除了 TTL 还给个条数上限：写入前清掉过期项，
     /// 仍超上限就丢最旧的一条 —— 避免连续浏览多个应用把内存堆起来。
     private static let htmlCacheTTL: TimeInterval = 10 * 60
+    /// 负缓存 TTL（秒）。取 **5 分钟**：
+    ///   · 审计实测「连续进出详情页」的重复打点间隔 44s，5 分钟足以全部吸收；
+    ///   · 又足够短 —— 用户换网络 / 挂代理 / 换账号后最多 5 分钟自愈，不会长期误判；
+    ///   · 另有 `clearProductPageCache()` 供下拉刷新即时清空。
+    private static let htmlNegativeCacheTTL: TimeInterval = 5 * 60
     private static let htmlCacheLimit = 3
 
     /// 被出口 IP 地理重定向时的回落区域（v0.3.369）。
@@ -298,15 +311,27 @@ enum AppStoreService {
     /// 请求区与账号区都抓不到时最后回落 `cn`；CN 上架的应用因此能拿到 `privacyDetail`。
     private static let productFallbackRegion = "cn"
 
-    /// 缓存值：整段 HTML + **实际服务这张页面的区域**。
+    /// 缓存值：整段 HTML + **实际服务这张页面的区域** + **是否为该应用详情页**。
     ///
-    /// 正常时它可能不等于请求区域：被地理重定向后回落了账号区 / `cn`，或 Apple 直接把
+    /// 正常时 `served` 可能不等于请求区域：被地理重定向后回落了账号区 / `cn`，或 Apple 直接把
     /// `/us/app/idX` 302 成 `/cn/app/idX`。记下来，命中缓存时能说清「数据为何来自别的区」。
-    /// 降级页面（都没拿到应用页）没有可用区域，就记请求区域。
+    /// 降级页面（都没拿到应用页）没有可用区域，就记请求区域，`html` 留空、`isAppPage = false`
+    /// —— 这就是负缓存条目。
     private struct CachedProductPage {
         let html: String
         let served: String
         let at: Date
+        let isAppPage: Bool
+    }
+
+    /// 缓存项是否仍在有效期内 —— 详情页用 `htmlCacheTTL`，负缓存用更短的 `htmlNegativeCacheTTL`。
+    private static func isFresh(_ entry: CachedProductPage, now: Date) -> Bool {
+        now.timeIntervalSince(entry.at) < (entry.isAppPage ? htmlCacheTTL : htmlNegativeCacheTTL)
+    }
+
+    /// 手动清空商品页缓存（含负缓存）—— 下拉刷新时调用，让用户能立刻重试取数。
+    static func clearProductPageCache() {
+        htmlLock.withLock { htmlCache.removeAll() }
     }
 
     /// 抓取结果：HTML + 实际服务区域 + 是否为「该应用的详情页」。
@@ -345,7 +370,8 @@ enum AppStoreService {
         // （Swift 6：NSLock.lock()/unlock() 在异步上下文不可用，改用作用域式的 withLock；
         //   这里的锁本来就没有跨 await 持有，语义完全不变。）
         let lookup: ProductPageLookup = htmlLock.withLock {
-            if let hit = htmlCache[key], Date().timeIntervalSince(hit.at) < htmlCacheTTL {
+            let now = Date()
+            if let hit = htmlCache[key], isFresh(hit, now: now) {
                 return .cached(hit)
             }
             if let running = htmlInflight[key] {
@@ -358,6 +384,12 @@ enum AppStoreService {
 
         switch lookup {
         case .cached(let hit):
+            // 负缓存命中（上次是平台限制类失败）：窗口内不再发网络，直接回交空壳结果。
+            guard hit.isAppPage else {
+                LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 未取到详情页（负缓存命中，跳过网络）",
+                                       category: .appStore)
+                return ProductPage(html: "", served: hit.served, isAppPage: false)
+            }
             // 命中「回落过」的条目：说明请求区域在这台设备上必然被重定向，
             // 直接复用实际区域那份 HTML，不再撞一次重定向（也解释清了数据为何来自别的区）。
             if hit.served != cc {
@@ -373,20 +405,22 @@ enum AppStoreService {
             do {
                 let page = try await task.value
                 htmlLock.withLock {
-                    if page.isAppPage {
-                        let now = Date()
-                        htmlCache = htmlCache.filter { now.timeIntervalSince($0.value.at) < htmlCacheTTL }
-                        if htmlCache.count >= htmlCacheLimit,
-                           let oldest = htmlCache.min(by: { $0.value.at < $1.value.at })?.key {
-                            htmlCache[oldest] = nil
-                        }
-                        htmlCache[key] = CachedProductPage(html: page.html, served: page.served, at: now)
+                    let now = Date()
+                    htmlCache = htmlCache.filter { isFresh($0.value, now: now) }
+                    if htmlCache.count >= htmlCacheLimit,
+                       let oldest = htmlCache.min(by: { $0.value.at < $1.value.at })?.key {
+                        htmlCache[oldest] = nil
                     }
+                    // 详情页存整段 HTML（供隐私 / 版本历史解析）；平台限制类失败存**负缓存空壳**
+                    // （html 留空省内存，`isFresh` 用更短的 TTL）。抛错（传输层失败）不进这里 —— 见 catch。
+                    htmlCache[key] = CachedProductPage(html: page.isAppPage ? page.html : "",
+                                                       served: page.served,
+                                                       at: now,
+                                                       isAppPage: page.isAppPage)
                     htmlInflight[key] = nil
                 }
-                // 不是详情页就不落缓存，下次进入重新抓（本次仍把页面交回去解析，行为不变）。
                 if !page.isAppPage {
-                    LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 未取到详情页，本次结果不缓存，下次重试",
+                    LoginLogger.shared.log("商品页 HTML：\(cc)/\(appId) 未取到详情页，已记负缓存 \(Int(htmlNegativeCacheTTL))s",
                                            category: .appStore)
                 }
                 return page
@@ -822,7 +856,7 @@ enum AppStoreService {
         if groups.isEmpty {
             LoginLogger.shared.log(page.isAppPage
                                    ? "App 隐私：\(page.served)/\(appId) 详情页里没有 privacyDetail（该应用未提供隐私标签）"
-                                   : "App 隐私：\(page.served)/\(appId) 没取到详情页，本次无数据且不缓存",
+                                   : "App 隐私：\(page.served)/\(appId) 没取到详情页，无数据",
                                    category: .appStore)
         }
         return groups

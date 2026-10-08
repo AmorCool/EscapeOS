@@ -135,6 +135,12 @@ struct AppStoreDetailView: View {
         .toastHost()
         .task { await loadDetail() }
         .onAppear { refreshFavorite() }
+        // 下拉刷新：先清掉商品页缓存（含平台限制类失败的负缓存）再重新取数 ——
+        // 用户换网络 / 挂代理 / 换账号后能立刻重试，不必等负缓存 TTL 到期。
+        .refreshable {
+            AppStoreService.clearProductPageCache()
+            await loadDetail()
+        }
     }
 
     /// 同步星号状态（收藏栏按次计数，同一应用可能有多条）

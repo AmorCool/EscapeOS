@@ -128,8 +128,6 @@ enum AppStoreLocalInstallService {
         /// v0.3.361：候选里「最新版」的版本号 —— 仅用于最终日志说明
         /// （拿到包后版本号 != 它，才说明真的改用了旧版）。
         var newestCatalogVersion: String?
-        /// v0.3.362：版本号 → `externalVersionId`，用于把「命中那一版」记进缓存
-        var versionByNumber: [String: String] = [:]
         var attempt = 0
         while true {
             attempt += 1
@@ -144,11 +142,13 @@ enum AppStoreLocalInstallService {
                                                          externalVersionID: effectiveVersion)
                 if let newest = newestCatalogVersion, output.bundleShortVersionString != newest {
                     onLog?("[AppleID] Apple 拒绝了最新版，已改用该账号可下的版本 \(output.bundleShortVersionString)")
-                    // 记住这一版，下次直接先试它（否则窗口滑走后又变回空包）
-                    rememberVersionID(versionByNumber[output.bundleShortVersionString],
-                                      dsid: account.directoryServicesIdentifier,
-                                      bundleId: software.bundleID)
                 }
+                // v0.3.5xx：「记住这次成功用到的版本号」的写入点已**挪到真正成功的支路** ——
+                // vendor 层 `Download.download` 返回前用 `downloadVersionRecorder` 回传
+                // `metadata.softwareVersionExternalIdentifier`（覆盖 ent/download / volumeStore /
+                // redownload / updateProduct 全部成功支路），宿主幂等落缓存。
+                // 原来在这里写缓存，它位于 emptyPackage → 候选版本补救支路内，而正常成功路径
+                // 从不经过那条支路 ⇒ 缓存恒空、provider 永远未命中（见 `AppStorePreferredVersion.swift`）。
                 return output
             } catch ApplePackageError.transportFailure {
                 // v0.3.539：**传输层失败绝不补救，直接上抛。**
@@ -180,7 +180,6 @@ enum AppStoreLocalInstallService {
                     onLog?("[AppleID] 没有可用的历史版本候选")
                 }
                 newestCatalogVersion = candidates.newestVersion
-                versionByNumber = candidates.byVersion
             } catch ApplePackageError.passwordTokenExpired where !refreshed {
                 refreshed = true
                 try await refreshAccount(email: email, account: &account, onLog: onLog)
@@ -231,7 +230,7 @@ enum AppStoreLocalInstallService {
     /// 缓存只影响「先试哪个」，丢了最多多撞一轮，所以放 UserDefaults 足够（Documents 留给凭据）。
     private static func candidateVersionIDs(software: Software, dsid: String,
                                             onLog: ((String) -> Void)?)
-        async -> (ids: [String], newestVersion: String?, byVersion: [String: String]) {
+        async -> (ids: [String], newestVersion: String?) {
         // 两条来源归一成同一种形状：(externalVersionId, 版本号)，随后的排序/裁剪只写一处。
         var pairs: [(id: String, version: String)] = []
         var source = "目录"
@@ -262,16 +261,15 @@ enum AppStoreLocalInstallService {
 
         guard !pairs.isEmpty else {
             onLog?("[AppleID] 历史版本候选 0 个")
-            return ([], nil, [:])
+            return ([], nil)
         }
 
         // 统一按 versionid 数值降序（等价于「最新在前」）；非数值 id 排到最后。
         pairs.sort { (Int64($0.id) ?? 0) > (Int64($1.id) ?? 0) }
 
-        let byVersion = Dictionary(pairs.map { ($0.version, $0.id) },
-                                   uniquingKeysWith: { first, _ in first })
         var ids = pairs.map { $0.id }
-        if let cached = cachedVersionID(dsid: dsid, bundleId: software.bundleID),
+        if let cached = AppStorePreferredVersion.cachedLastGoodVersion(
+            dsid: dsid, bundleID: software.bundleID),
            let index = ids.firstIndex(of: cached) {
             ids.remove(at: index)
             ids.insert(cached, at: 0)
@@ -279,20 +277,7 @@ enum AppStoreLocalInstallService {
         let window = Array(ids.prefix(6))
         // 日志要一眼看出候选来自哪条来源（目录 / 爱思）、几个、最新是哪版。
         onLog?("[AppleID] 历史版本候选 \(window.count) 个（\(source) · 最新 \(pairs.first?.version ?? "?")）")
-        return (window, pairs.first?.version, byVersion)
-    }
-
-    /// 上次成功下到包用的 `externalVersionId`（按 dsid + bundleId）。
-    private static func cachedVersionID(dsid: String, bundleId: String) -> String? {
-        guard !dsid.isEmpty, !bundleId.isEmpty else { return nil }
-        let key = "AppStore.LastGoodVersion.\(dsid).\(bundleId)"
-        let value = UserDefaults.standard.string(forKey: key)
-        return (value?.isEmpty == false) ? value : nil
-    }
-
-    private static func rememberVersionID(_ id: String?, dsid: String, bundleId: String) {
-        guard let id, !id.isEmpty, !dsid.isEmpty, !bundleId.isEmpty else { return }
-        UserDefaults.standard.set(id, forKey: "AppStore.LastGoodVersion.\(dsid).\(bundleId)")
+        return (window, pairs.first?.version)
     }
 
     /// 获取一次许可；票据失效时**先用已保存凭据刷新会话再买一次**。
