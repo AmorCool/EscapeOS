@@ -767,7 +767,7 @@ struct I4StoreFreeView: View {
             HStack(spacing: 6) {
                 ProgressView(value: min(1, max(0, job.overall)))
                     .frame(width: 40)
-                Text(job.phase == .paused ? "已暂停" : job.stageText)
+                Text(job.displayStage)
                     .font(.caption2).foregroundStyle(.secondary)
                     .lineLimit(1)
                 Button {
@@ -813,7 +813,7 @@ struct I4StoreFreeView: View {
             } label: {
                 // v0.3.408：文案「安装」→「获取」（用户要求）。
                 // 只改**发起获取**这一个动作的文案 —— 这一列里的「暂停 / 删除」是**不同语义**
-                // （对已存在的任务操作），一字不动；正在跑的任务显示的是 `job.stageText`。
+                // （对已存在的任务操作），一字不动；正在跑的任务显示的是 `job.displayStage`。
                 // 同理没动 AppleID 商店那边的按钮（用户说的是免登录/牛蛙这处）。
                 Text("获取")
                     .font(.caption.weight(.semibold))

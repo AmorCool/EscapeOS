@@ -177,10 +177,15 @@ struct IPADownloadManagerView: View {
                     reload()
                     if let result { reportRemoval(result) }
                 },
-                // v0.3.413：只有**真的还在进行中**才把「覆盖安装 / 在线安装」置灰标「下载中」。
+                // v0.3.413：只有**真的还在进行中**才把「覆盖安装 / 在线安装」置灰。
                 // 以前这里写死 `true` —— 于是一个**已完成**的任务行（若因去重时序残留）
                 // 点开会显示"下载中"，与行上的「已完成 100%」自相矛盾（用户截图）。
-                isPendingDownload: job.phase.isBusy)
+                //
+                // `isPendingDownload` 的语义是「占用中」（`phase.isBusy`），只用来**置灰**；
+                // 右侧标的**状态字**另取 `job.displayStage`（唯一真源）—— 否则暂停任务
+                // （`isBusy` 也为 true）会被标成「下载中」，与行上「已暂停」同屏矛盾（审计发现）。
+                isPendingDownload: job.phase.isBusy,
+                pendingStageText: job.displayStage)
         }
         // 长按安装包 → 「查看图标」→ 全屏预览。长按图片「保存到相册」由 `ImageGalleryViewer` 自带
         //（二次确认 → `MediaSaver`，无权限自动回落 `Documents/AppIcons`），这里只负责把 target 递进去.
@@ -380,7 +385,7 @@ struct IPADownloadManagerView: View {
                 }
                 .layoutPriority(1)
                 Spacer(minLength: 0)
-                Text(job.phase == .paused ? "已暂停" : job.stageText)
+                Text(job.displayStage)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -734,8 +739,12 @@ struct IPADownloadManagerView: View {
                 // 不是磁盘台账字段（`IPADownloadItem` 没有失败字段）。它随进程存活，下拉刷新会
                 // 清掉它（见 `refresh()`），所以徽标不会长期挂着 —— 用户不会一直以为「现在还是坏的」。
                 let last = finishedJob(for: item)
+                // 这不是「状态行文案」，而是「失败**阶段**徽标」：`displayStage` 对 `.failed` 只透出
+                // `stageText`（「失败 / 文件不存在 / 未找到安装包 / 删除失败」），**给不出**「哪一段失败」；
+                // 换成 `displayStage` 会把「下载失败 / 安装失败」这个区分丢掉（错标比不标更糟）。
+                // 故**有意**保留按 `failureStage` 取，并在本行登记防复发脚本豁免（行内抑制 + 脚本 ALLOW 表）。
                 let failText: String? = last?.phase == .failed
-                    ? (last?.failureStage == .download ? "下载失败" : "安装失败")
+                    ? (last?.failureStage == .download ? "下载失败" : "安装失败")   // state-guard: allow
                     : nil
                 let isFailed = failText != nil
                 Button {
@@ -999,10 +1008,11 @@ struct IPADownloadManagerView: View {
             }
         }
         guard let job = activeJob(for: item) else { return nil }
+        // 阶段文案统一取 `job.displayStage`（唯一真源）—— 不再按 `phase` 各自拼「已暂停」/ `stageText`。
+        // 这里只区分**进度是否已知**：`.waiting` 尚未开始 → 环走不确定态（`nil`），其余按 `overall`。
         switch job.phase {
-        case .waiting: return (nil, job.stageText)
-        case .paused: return (job.overall, "已暂停")
-        default: return (job.overall, job.stageText)
+        case .waiting: return (nil, job.displayStage)
+        default: return (job.overall, job.displayStage)
         }
     }
 

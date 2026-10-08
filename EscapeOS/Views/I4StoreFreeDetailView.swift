@@ -504,7 +504,7 @@ private struct DownloadJobSection: View {
         Section("下载中") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Text(job.phase == .paused ? "已暂停" : job.stageText)
+                    Text(job.displayStage)
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                     if let v = job.version, !v.isEmpty {

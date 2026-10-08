@@ -229,17 +229,21 @@ struct AppStoreDetailView: View {
             VStack(alignment: .leading, spacing: 10) {
                 // ▸▸▸ v0.3.583（用户截图 IMG_6740）：**与其它 5 个下载渲染页统一**。
                 //
-                // 本页此前把「阶段胶囊」与「额外一行 stageText」并排画，只靠「两者文案相等
-                // 就不画」去重 —— 当 `phase == .paused` 而 `stageText` 仍被底层进度回调刷成
-                // 「下载中」时，这个判重反而把两个互斥状态同时画出（灰胶囊「已暂停」+ 黑字
-                //「下载中」）。改成与下载管理页 / 免登录详情页等 5 页**同一句防御式取值**：
-                // 暂停态一律取「已暂停」、不读 stageText。于是该取值在暂停时恒等于胶囊文案
-                // ⇒ 下面判重把它抑制掉 ⇒ 不会再同屏出现「已暂停」与「下载中」。
-                let statusText = job.phase == .paused ? "已暂停" : job.stageText
+                // 「阶段文案」的唯一真源是 `job.displayStage`（见 `IPADownloadCenter.Job.displayStage`）：
+                // 它**只特判 `.paused`**（该态恒返回「已暂停」），其余阶段一律原样透出 `stageText`；
+                // `.failed` / `.done` **不**归一 —— 归一会把「文件不存在」「已下载」这类具体原因
+                // 抹成「失败」「已完成」，丢信息。本页此前各自拼 `phase == .paused ? "已暂停" : stageText`
+                // 去遮「暂停态却被滞后回调刷成『下载中』」的矛盾 —— 现在直接读这一个取值，不再推导。
+                //
+                // 胶囊画的是 `phase.title`（阶段名）；「额外一行」只在文案与胶囊**不同**时才画，
+                // 免得同屏出现两遍相同文字（如「下载中」）。所以「等待中 + 排队中」「下载中 + 准备中」
+                // 这种**两段**是有意的（胶囊 = 阶段、黑字 = 细节），与改前一致，**不是**回归。
+                // 本页状态行由 `activeJob`（只认 `phase.isBusy`）驱动 ⇒ 实际只会落到
+                // `.waiting / .downloading / .paused / .installing` 四态（`.done` / `.failed` 走下面另一分支）。
                 HStack(spacing: 8) {
                     phaseChip(job.phase)
-                    if statusText != job.phase.title {
-                        Text(statusText)
+                    if job.displayStage != job.phase.title {
+                        Text(job.displayStage)
                             .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                     }

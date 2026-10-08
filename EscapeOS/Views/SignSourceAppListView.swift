@@ -384,7 +384,7 @@ struct SignSourceAppListView: View {
                 } header: {
                     Text("类型")
                 } footer: {
-                    Text("开启后隐藏网页 / 书签等深链，以及没有下载链接的条目.")
+                    Text("开启后隐藏网页 / 书签等深链、没有下载链接的条目，以及顶部公告.")
                 }
                 Section("排序") {
                     Picker("排序", selection: $sortFilter) {
@@ -706,7 +706,7 @@ struct SignSourceAppListView: View {
             HStack(spacing: 6) {
                 ProgressView(value: min(1, max(0, job.overall)))
                     .frame(width: 40)
-                Text(job.phase == .paused ? "已暂停" : job.stageText)
+                Text(job.displayStage)
                     .font(.caption2).foregroundStyle(.secondary)
                     .lineLimit(1)
                 Button {

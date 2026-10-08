@@ -21,8 +21,13 @@ import SwiftUI
 ///
 /// ## 与另外两个免登录详情页的关系
 ///
-/// 「下载中」区块与安装按钮**复用**同款共用组件（`DownloadJobSection` / `InstallButton`），
-/// 全项目仍然只有一套下载/安装实现。
+/// 「下载中」区块与安装按钮的**布局**与爱思/牛蛙详情页同款，但**不是同一份实现**：
+/// 本页用的是自己的 `jobSection(_:)`（`:299`）与版本行里的安装入口，
+/// 而爱思/牛蛙详情页用的那两个组件（`DownloadJobSection` / `InstallButton`）是
+/// `I4StoreFreeDetailView.swift` 里的 `private` 类型，**本文件根本引用不到**。
+/// （旧注释曾谎称「复用」它们 —— 与事实不符，已更正。）
+/// 真正共用的是**下游**：三处的「下载中」区块都读同一份阶段真源 `Job.displayStage`，
+/// 且下载/安装都走 `IPADownloadCenter` —— 全项目仍然只有一套下载/安装实现。
 ///
 /// ## 取包链路（没变）
 /// 1. **版本列表** → `NBStoreClient.versionList(trackID:)`（走 bilin 目录）
@@ -300,7 +305,7 @@ struct NBStoreDetailView: View {
         Section("下载中") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Text(job.phase == .paused ? "已暂停" : job.stageText)
+                    Text(job.displayStage)
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                     if let v = job.version, !v.isEmpty {
