@@ -227,10 +227,19 @@ struct AppStoreDetailView: View {
             // 原先只有「一行文字 + 一条百分比 + 细进度条」，看不出当前处于哪个阶段
             //（下载与安装共用同一条 0→100% 的总体进度，光看数字分不清是在下包还是在装包）。
             VStack(alignment: .leading, spacing: 10) {
+                // ▸▸▸ v0.3.583（用户截图 IMG_6740）：**与其它 5 个下载渲染页统一**。
+                //
+                // 本页此前把「阶段胶囊」与「额外一行 stageText」并排画，只靠「两者文案相等
+                // 就不画」去重 —— 当 `phase == .paused` 而 `stageText` 仍被底层进度回调刷成
+                // 「下载中」时，这个判重反而把两个互斥状态同时画出（灰胶囊「已暂停」+ 黑字
+                //「下载中」）。改成与下载管理页 / 免登录详情页等 5 页**同一句防御式取值**：
+                // 暂停态一律取「已暂停」、不读 stageText。于是该取值在暂停时恒等于胶囊文案
+                // ⇒ 下面判重把它抑制掉 ⇒ 不会再同屏出现「已暂停」与「下载中」。
+                let statusText = job.phase == .paused ? "已暂停" : job.stageText
                 HStack(spacing: 8) {
                     phaseChip(job.phase)
-                    if job.stageText != job.phase.title {
-                        Text(job.stageText)
+                    if statusText != job.phase.title {
+                        Text(statusText)
                             .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                     }
