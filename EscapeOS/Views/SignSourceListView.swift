@@ -231,10 +231,28 @@ struct SignSourceListView: View {
     /// 源图标（模型属性名是 `sourceIcon`，JSON 键才是小写 `sourceicon` —— 见
     /// `SignSourceModels.swift` 的 `CodingKeys`）。
     ///
-    /// 渲染交给 `SourceIconView`：它给「加载中」的转圈加了**超时上限**，
-    /// 不会再出现「图标地址不返回 ⇒ 行内一直转圈」（详见该类型注释）。
+    /// 渲染交给共享件 `RemoteIconView`：**加载中不再转圈**（旧 `SourceIconView` 加载中画 spinner、
+    /// 靠 15s 超时兜底；现统一为静态占位，从根上消除「图标地址不返回 ⇒ 行内一直转圈」）。
+    /// 尺寸 / 圆角 / 占位样式按本页旧观感传入（44pt / 圆角 10 / 「无地址」紫底 `shippingbox.fill`、
+    /// 「加载中·失败·超时」裸 `shippingbox.fill`）⇒ 除「加载中不转圈」外逐像素不变。
     private func sourceIcon(_ urlString: String?) -> some View {
-        SourceIconView(urlString: urlString)
+        RemoteIconView(
+            urlString: urlString,
+            side: 44,
+            cornerRadius: 10,
+            placeholderStyle: IconPlaceholderStyle(
+                icon: "shippingbox.fill",
+                tint: .secondary,
+                background: nil,
+                font: .body
+            ),
+            emptyStyle: IconPlaceholderStyle(
+                icon: "shippingbox.fill",
+                tint: .purple,
+                background: Color.purple.opacity(0.12)
+            ),
+            keepsPlaceholderBehindImage: false
+        )
     }
 
     // MARK: - 动作
@@ -441,73 +459,5 @@ struct SignSourceListView: View {
         if host.contains(".") && host.count > 3 { return true }
         if host.contains(":") && host.count > 1 { return true }   // IPv6 字面量
         return false
-    }
-}
-
-// MARK: - 源图标（带超时兜底）
-
-/// 源图标：异步加载 + **转圈超时兜底**。
-///
-/// ## 为什么需要它（现象）
-/// 用户报「软件源管理页第 2 条源左侧一直有个灰色 spinner 不消失」。
-/// 左侧那个 spinner 就是 `AsyncImage` 的 `default`（`.empty` / `.loading`）相位渲染的 `ProgressView`：
-/// 图标地址来自第三方源（如 `qnq.nuosike.cn` 的 `sourceicon`），当它长时间不返回时，
-/// `AsyncImage` 会**一直停在 `default` 相位**（底层 `URLSession` 默认超时很长，≈60s），
-/// 表现为行内一个几乎永不消失的小转圈。
-///
-/// ## 修法
-/// 给「转圈」加一个**上限** `spinnerTimeout` 秒：到点无论相位如何都落静态占位。
-/// 于是三条出口齐备，spinner **一定会终止**：
-/// · 成功 → `.success` 渲染图片；
-/// · 失败 → `.failure` 渲染静态图标；
-/// · 超时 → 本条 `.task` 置 `timedOut`，渲染静态图标。
-private struct SourceIconView: View {
-
-    /// 图标地址（源的 `sourceIcon`；空 / 非法则直接落静态占位）。
-    let urlString: String?
-
-    /// 转圈最长可见时长（秒）。超时后转静态占位 —— **不再有永久 spinner**。
-    private static let spinnerTimeout: Double = 15
-
-    @State private var timedOut = false
-
-    var body: some View {
-        if let s = urlString, !s.isEmpty, let url = URL(string: s) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFit()
-                case .failure:
-                    failedIcon
-                default:
-                    // empty / loading：未超时才转圈；超时后落静态占位
-                    if timedOut { failedIcon } else { ProgressView().controlSize(.mini) }
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .task {
-                // 超时兜底：到点即停转圈（视图消失时任务被取消，则不置状态）
-                try? await Task.sleep(for: .seconds(Self.spinnerTimeout))
-                if !Task.isCancelled { timedOut = true }
-            }
-        } else {
-            placeholder
-        }
-    }
-
-    /// 加载失败 / 超时的静态占位（灰底图标）—— **不转圈**。
-    private var failedIcon: some View {
-        Image(systemName: "shippingbox.fill").foregroundStyle(.secondary)
-    }
-
-    /// 无图标地址时的静态占位（紫色卡片）。
-    private var placeholder: some View {
-        Image(systemName: "shippingbox.fill")
-            .font(.title3)
-            .foregroundStyle(.purple)
-            .frame(width: 44, height: 44)
-            .background(Color.purple.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }

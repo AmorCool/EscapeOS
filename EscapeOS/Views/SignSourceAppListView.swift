@@ -5,8 +5,10 @@ import UIKit
 /// 源内 App 列表页 —— 对应规格 `EscapeSpace_软件源管理_实现规格.md` §4.2（截图 2）。
 ///
 /// 职责：展示**某个源**里的 App（图标 / 名称 / 版本 / 大小 / 日期 / 描述）；
-/// 搜索框 + 筛选弹层（分类 / 价格 / 排序，**全部本地过滤**）；
-/// 每行右侧控件由 `lock` 决定文案 —— `lock == true` → 「解锁」，否则「获取」。
+/// 顶部渲染**源公告 banner**（`SignSource.message`，照全能签原版；见 `announcementSection(_:)`）；
+/// 搜索框 + 筛选弹层（分类 / 价格 / 排序 / **类型排除**，**全部本地过滤**）；
+/// 每行右侧控件由 `lock` 与 `downloadURL` 的 scheme 共同决定 —— `lock == true` → 「解锁」；
+/// http(s) 直链 → 「获取」；自定义 scheme 深链（`nsk-sign://web|bookmark…`）→ 「跳转」（见 `RowKind`）。
 ///
 /// ## 依赖（本文件**只引用**，不定义）
 /// · `SignSource` / `SignSourceApp`（模型）：`EscapeOS/Engine/SignSourceModels.swift`（**已落地**，
@@ -31,15 +33,21 @@ struct SignSourceAppListView: View {
     let source: SignSource
 
     /// 用 `source.apps` 作为 `apps` 初值 —— 避免首帧先渲染一次空态再填数据（源已带 `apps` 缓存）。
+    /// 公告同理由 `source.message` 起头（见 `announcementText`）。
     init(source: SignSource) {
         self.source = source
         _apps = State(initialValue: source.apps)
+        _announcementText = State(initialValue: source.message)
     }
 
     // MARK: - State
 
     /// 源内 App。初值取 `source.apps`（见 `init`），解锁成功后重拉源时更新。
     @State private var apps: [SignSourceApp] = []
+    /// 源公告原文（`SignSource.message`）。初值取 `source.message`，重拉源时随 `apps` 一起更新
+    /// —— 对标全能签在网络刷新回调里重刷公告（`applyAnnouncementText:` @`0x1003631c8` 的两个调用点
+    /// 之一即 `ais_startManifestNetworkRefreshFromUserPull:` 的 block）。
+    @State private var announcementText: String?
     @State private var keyword = ""
     /// 分类分段索引（0 = 全部）。**与 `type` 等值匹配**，不是语义映射（规格 §6 ★）。
     @State private var typeFilter: AppTypeFilter = .all
@@ -47,6 +55,15 @@ struct SignSourceAppListView: View {
     /// 排序段（抄全能签新增，规格 §6 / §0.1 裁决 4）。
     @State private var sortFilter: SortFilter = .sourceOrder
     @State private var showFilter = false
+
+    /// 类型筛选（**否定式**）：开启后**排除**不可下载的行（网页 / 书签深链 + 无下载链接）。
+    ///
+    /// ⚠️ 与上面三个**等值匹配**筛选（分类 / 价格 / 排序）**语义不同** —— 那三个是「选一个值去相等」，
+    /// 这个是「布尔否定」。故它在弹层里**独立成组**、用 `Toggle` 而非 `Picker`，不与等值筛选混在一起。
+    @State private var excludeNonDownloadable = false
+
+    /// 深链「跳转」的内置浏览器目标（复用既有 `InAppBrowserView`，即用户说的「EscapeSpace 弹出界面」）。
+    @State private var browserTarget: LinkShareTarget?
 
     /// 正在解锁的那一行（sheet item；规格 §2.4 的 `showUnlock` 用 item 形式表达，见简报）。
     @State private var unlockTarget: SignSourceApp?
@@ -127,6 +144,11 @@ struct SignSourceAppListView: View {
 
     var body: some View {
         List {
+            // 源公告 banner —— 搜索框下方、App 列表上方（照全能签原版：公告是表格的 header，
+            // 见 `announcementSection(_:)`）。`message` 为空 ⇒ 不渲染，不留空块。
+            if let notice = announcement {
+                announcementSection(notice)
+            }
             if filteredApps.isEmpty {
                 emptySection
             } else {
@@ -153,6 +175,10 @@ struct SignSourceAppListView: View {
         }
         .sheet(isPresented: $showFilter) { filterSheet }
         .sheet(item: $unlockTarget) { app in unlockSheet(app) }
+        // 深链「跳转」：用内置浏览器打开内层 http(s) 地址（不是跳到外部 App）。
+        .sheet(item: $browserTarget) { target in
+            InAppBrowserView(title: target.title, url: target.url)
+        }
         .toastHost()
     }
 
@@ -185,6 +211,13 @@ struct SignSourceAppListView: View {
         case .paid: result = result.filter { $0.lock }
         }
 
+        // 类型（**否定式**，独立于上面三个**等值**筛选）：开启后排除**不可下载**的行 ——
+        // 网页 / 书签深链（`nsk-sign://web|bookmark…`）与无 `downloadURL` 的条目。
+        // 判据 = `rowKind(_:) != .downloadable`，与「跳转」按钮同一套分类，避免两处口径漂移。
+        if excludeNonDownloadable {
+            result = result.filter { rowKind($0) == .downloadable }
+        }
+
         // 排序（本地；默认 = 源序）
         switch sortFilter {
         case .sourceOrder: break
@@ -209,7 +242,66 @@ struct SignSourceAppListView: View {
         }
     }
 
-    // MARK: - 筛选弹层（分类 / 价格 / 排序，三段）
+    // MARK: - 源公告 banner（照全能签原版）
+
+    /// 源公告的「标题 + 正文」两段。
+    ///
+    /// 全能签把 `message` 用**第一个换行**切成两段分别渲染（`_AISSoftwareSourceSplitAnnouncementTitleBody`
+    /// @`0x100363550`）：首行 = 标题、其余 = 正文。无换行 ⇒ 标题为空、整段作正文。
+    private struct Announcement: Equatable {
+        /// 首行（原版 17pt semibold 居中）。可为空。
+        let title: String
+        /// 其余行（原版 13pt regular 次级色居中）。可为空。
+        let body: String
+    }
+
+    /// 源公告原文 → 标题 / 正文；空或全空白 ⇒ `nil`（不显示 banner）。
+    ///
+    /// 归一化：先把 `\r\n` / `\r` 统一成 `\n`（源 JSON 用 `\r\n` 断行），再按**第一个换行**切分。
+    /// 出处：全能签 `_AISSoftwareSourceSplitAnnouncementTitleBody` @`0x100363550`
+    /// （反编译与字符串解码见 `P4_全能签逆向/_impl/功能_软件源公告banner.md`）。
+    private var announcement: Announcement? {
+        guard let raw = announcementText else { return nil }
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let text = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        guard let nl = text.firstIndex(of: "\n") else {
+            return Announcement(title: "", body: text)
+        }
+        let title = String(text[..<nl]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = String(text[text.index(after: nl)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return Announcement(title: title, body: body)
+    }
+
+    /// 公告卡片 —— 居中多行文字，首行加重、其余次级色（对齐全能签观感，落在本仓 `List` 的分组卡片里）。
+    ///
+    /// 原版把它设成 `tableView.tableHeaderView`（`applyAnnouncementText:` @`0x1003631c8`），
+    /// 即**列表之上、随内容滚动**；这里用 `List` 顶部的独立 `Section` 表达同一层级。
+    /// **刻意不做折叠 / 限行**：原版全量显示，且它随列表滚动、不会长期占屏（判断见简报 §③）。
+    private func announcementSection(_ notice: Announcement) -> some View {
+        Section {
+            VStack(spacing: 6) {
+                if !notice.title.isEmpty {
+                    Text(notice.title)
+                        .font(.subheadline.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                }
+                if !notice.body.isEmpty {
+                    Text(notice.body)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - 筛选弹层（分类 / 价格 / 类型 / 排序，四段）
 
     private var filterSheet: some View {
         NavigationStack {
@@ -232,6 +324,15 @@ struct SignSourceAppListView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                 }
+                // 类型：**独立分组 + 布尔开关**（否定式），刻意不用 `Picker` ——
+                // 避免与上面两个等值筛选混淆（规格 §6 ★ 的等值匹配只适用于分类 / 价格）。
+                Section {
+                    Toggle("排除不可下载", isOn: $excludeNonDownloadable)
+                } header: {
+                    Text("类型")
+                } footer: {
+                    Text("开启后隐藏网页 / 书签等深链，以及没有下载链接的条目.")
+                }
                 Section("排序") {
                     Picker("排序", selection: $sortFilter) {
                         ForEach(SortFilter.allCases) { f in
@@ -250,6 +351,7 @@ struct SignSourceAppListView: View {
                         typeFilter = .all
                         priceFilter = .all
                         sortFilter = .sourceOrder
+                        excludeNonDownloadable = false
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -281,8 +383,105 @@ struct SignSourceAppListView: View {
 
     /// 本行是否还有可用动作：需解锁 → 看解锁入口；否则 → 看能否下载。
     /// 与 `trailingControl` 里按钮的**渲染条件同一判据**，避免「有按钮可点但整行发灰」。
+    ///
+    /// ⚠️ 深链行（`nsk-sign://web|bookmark…`）此处仍为 `false` ⇒ 左侧内容保持灰显（用户要求
+    /// 「这种状态可以保持」）；但它有「跳转」按钮，故右侧控件**不参与灰显**（见 `rowContentOpacity(_:)`）。
     private func rowEnabled(_ app: SignSourceApp) -> Bool {
         app.lock ? (app.unlockURL != nil) : canDownload(app)
+    }
+
+    // MARK: - 深链分类（网页 / 书签 / 其它）与「跳转」
+
+    /// 行类型 —— 分类依据是 `downloadURL` 的 **scheme**（真实数据统计见
+    /// `P4_全能签逆向/_impl/修复_深链跳转与筛选排除.md` ①）。
+    ///
+    /// ⚠️ 本枚举**只服务视图层的按钮选择与「排除」筛选**，**不改动**模型层 `isInstallable`
+    /// （那个属性还被别处引用）。分档：
+    /// · `.downloadable`：`http` / `https` 直链 → 现有「获取」；
+    /// · `.web`：`nsk-sign://web?url=…`（全能签「访问网址」，共 10 条）→ 「跳转」；
+    /// · `.bookmark`：`nsk-sign://bookmark?url=…`（全能签「添加书签」，共 1 条）→ 「跳转」；
+    /// · `.otherScheme`：其它自定义 scheme 深链 → 「跳转」（交系统处理）；
+    /// · `.none`：无 `downloadURL`（或脏值）→ 无按钮（灰显）。
+    private enum RowKind: Equatable {
+        case downloadable
+        case web
+        case bookmark
+        case otherScheme
+        case none
+
+        /// 是否**深链**（非 http(s) 的自定义 scheme）—— 「跳转」按钮与「排除」筛选都按它判定。
+        var isDeepLink: Bool {
+            switch self {
+            case .web, .bookmark, .otherScheme: return true
+            case .downloadable, .none:          return false
+            }
+        }
+    }
+
+    /// 归类某一行（判据见 `RowKind` 注释）。
+    private func rowKind(_ app: SignSourceApp) -> RowKind {
+        if canDownload(app) { return .downloadable }
+        guard let raw = deepLinkString(app) else { return .none }
+        switch deepLinkAction(raw) {
+        case "web":      return .web
+        case "bookmark": return .bookmark
+        default:         return .otherScheme
+        }
+    }
+
+    /// 深链原始串 —— `downloadURL` 非空、且 scheme **不是** http(s) 时返回它。
+    ///
+    /// 额外要求「含 `://` 且能解析出 scheme」：源里存在**脏值**（实测 `yy.v9z.xyz` 有一条
+    /// `downloadURL = "220000.1.192"`，是版本号被误填），它不是一个可打开的链接 ⇒ 归 `.none`。
+    private func deepLinkString(_ app: SignSourceApp) -> String? {
+        guard let raw = app.downloadURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+        let lower = raw.lowercased()
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") { return nil }
+        guard raw.range(of: "://") != nil,
+              let scheme = URLComponents(string: raw)?.scheme, !scheme.isEmpty else { return nil }
+        return raw
+    }
+
+    /// 深链的「动作」段 —— `nsk-sign://<动作>?url=…` 里的 `<动作>`（`web` / `bookmark` / …）。
+    /// 取不到（无动作段）→ `""`，调用方归到 `.otherScheme`。
+    private func deepLinkAction(_ raw: String) -> String {
+        guard let range = raw.range(of: "://") else { return "" }
+        let rest = raw[range.upperBound...]
+        let action = rest.prefix { $0 != "?" && $0 != "/" }
+        return action.lowercased()
+    }
+
+    /// 从深链里取出**内层 http(s) 地址** —— `nsk-sign://web?url=<URL>` / `…bookmark?url=<URL>`。
+    /// 取不到（无 `url=` / 内层非 http(s)）→ `nil`，调用方退回系统打开原始深链。
+    private func deepLinkInnerURL(_ raw: String) -> URL? {
+        guard let range = raw.range(of: "url=") else { return nil }
+        let trimmed = String(raw[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        guard lower.hasPrefix("http://") || lower.hasPrefix("https://"),
+              let url = URL(string: trimmed) else { return nil }
+        return url
+    }
+
+    /// 深链行「跳转」—— 优先把**内层 http(s) 地址**交给内置浏览器（`InAppBrowserView`，
+    /// 即用户说的「跳转后 EscapeSpace 弹出界面」）；取不到内层地址时退回**系统打开原始深链**
+    /// （如 `nsk-sign://bookmark…`，交给全能签之类的宿主处理）。
+    private func jump(_ app: SignSourceApp) {
+        guard let raw = deepLinkString(app) else { return }
+        if let inner = deepLinkInnerURL(raw) {
+            browserTarget = LinkShareTarget(title: displayName(app), url: inner)
+            return
+        }
+        guard let url = URL(string: raw) else {
+            ToastCenter.shared.show("这个链接无法打开")
+            return
+        }
+        UIApplication.shared.open(url, options: [:]) { ok in
+            // 系统 open 的完成回调**不在** MainActor 隔离下 ⇒ 显式回主线程再弹 toast。
+            Task { @MainActor in
+                if !ok { ToastCenter.shared.show("这个链接无法打开") }
+            }
+        }
     }
 
     // MARK: - 日期格式化
@@ -315,7 +514,11 @@ struct SignSourceAppListView: View {
     /// —— 否则 `napi.ltd/pan` 这类「瘦身变体」会让整个源看起来是空的。
     private func appRow(_ app: SignSourceApp) -> some View {
         HStack(alignment: .center, spacing: 12) {
+            // 灰显**只作用在左侧内容**（图标 + 文本）：深链行要保持「灰」的观感（用户要求
+            // 「这种状态可以保持」），但右侧「跳转」按钮必须**清晰可点** ⇒ 不参与灰显。
+            // 其余行：可下载 → 1；无下载链接 → 0.45（与旧观感逐像素一致，`trailingControl` 此时为空）。
             appIcon(app.iconURL)
+                .opacity(rowContentOpacity(app))
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName(app))
                     .font(.subheadline.weight(.medium))
@@ -332,21 +535,37 @@ struct SignSourceAppListView: View {
                     ExpandableText(text: d)
                 }
             }
+            .opacity(rowContentOpacity(app))
             Spacer(minLength: 6)
             trailingControl(app)
         }
         .padding(.vertical, 3)
-        // 该行没有任何可用动作（既不能下载、也不能解锁）⇒ 整行灰显
-        // （按钮在 `trailingControl` 里用同一判据另外禁用）。
-        // ⚠️ 判据**不是** `app.isInstallable`：那个属性还要求 `bundleIdentifier` 非空，
-        // 而全能签 / 牛蛙这一支 `appstore` schema 家族**整源没有 `bundleIdentifier` 键**
-        // ⇒ 会让整页每行都恒灰、「获取」恒禁用（用户截图）。详见 `rowEnabled(_:)`。
-        .opacity(rowEnabled(app) ? 1 : 0.45)
     }
 
-    /// App 图标；无地址 / 加载中 / 失败一律静态占位（见 `SourceAppIconView`），**不转圈**。
+    /// 左侧内容（图标 + 文本）的灰显透明度 —— 该行**没有任何可用动作**时压暗到 0.45。
+    ///
+    /// ⚠️ 判据**不是** `app.isInstallable`：那个属性还要求 `bundleIdentifier` 非空，
+    /// 而全能签 / 牛蛙这一支 `appstore` schema 家族**整源没有 `bundleIdentifier` 键**
+    /// ⇒ 会让整页每行都恒灰、「获取」恒禁用（用户截图）。详见 `rowEnabled(_:)`。
+    private func rowContentOpacity(_ app: SignSourceApp) -> Double {
+        rowEnabled(app) ? 1 : 0.45
+    }
+
+    /// App 图标；无地址 / 加载中 / 失败一律静态占位（见共享件 `RemoteIconView`），**不转圈**。
+    ///
+    /// 尺寸 / 圆角 / 占位样式按本页旧观感传入（54pt / 圆角 12 / 灰底 `app.dashed`）⇒ 逐像素不变；
+    /// 本页原本就「加载中画静态占位」，故迁到共享件后**本页观感零变化**。
     private func appIcon(_ urlString: String?) -> some View {
-        SourceAppIconView(urlString: urlString)
+        RemoteIconView(
+            urlString: urlString,
+            side: 54,
+            cornerRadius: 12,
+            placeholderStyle: IconPlaceholderStyle(
+                icon: "app.dashed",
+                tint: .secondary,
+                background: Color.secondary.opacity(0.12)
+            )
+        )
     }
 
     /// 版本 / 大小 / 日期 —— 一行放不下由 `ChipFlow` 整块换行（与 `I4StoreFreeView` 同款）。
@@ -417,13 +636,14 @@ struct SignSourceAppListView: View {
         }
     }
 
-    // MARK: - 右侧控件（文案由 `lock` 决定）
+    // MARK: - 右侧控件（文案由 `lock` 与 `downloadURL` 的 scheme 决定）
 
-    /// 有任务 → 进度 + 暂停 / 删除；否则按 `lock` 给「解锁」或「获取」。
+    /// 有任务 → 进度 + 暂停 / 删除；否则按 `lock` 给「解锁」/「获取」/「跳转」。
     ///
     /// · `lock == true` → 「解锁」（规格 §4.2 / D6）；
     /// · `lock == false` 且可下载 → 「获取」（全能签文案，规格 §0.1 裁决 4）；
-    /// · 空直链 / 深链（`nsk-sign://…`）→ **不渲染「获取」**（见 `canDownload(_:)`）；
+    /// · `lock == false` 且是深链（`nsk-sign://web|bookmark…`）→ 「跳转」（本轮新增，见 `jump(_:)`）；
+    /// · 空直链（`.none`）→ **不渲染任何按钮**（见 `rowKind(_:)`）；
     /// · `lock == true` 但 App 级与源级 `unlockURL` **都为空** → **禁用解锁入口**
     ///   （ESign / AltStore 家族无源级 `unlockURL`，规格 §4.2 / R8）。
     @ViewBuilder
@@ -499,8 +719,22 @@ struct SignSourceAppListView: View {
                     .foregroundStyle(.blue)
             }
             .buttonStyle(.plain)
+        } else if rowKind(app).isDeepLink {
+            // 深链行（`nsk-sign://web|bookmark?url=…` 等）→ 「跳转」。
+            // 文案统一用「跳转」（用户原话）—— 不再区分「访问 / 书签」：后者会暗示我们实现了
+            // 书签功能（实际没有，只是把内层地址交给内置浏览器打开）。
+            Button {
+                jump(app)
+            } label: {
+                Text("跳转")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Color.teal.opacity(0.16), in: Capsule())
+                    .foregroundStyle(.teal)
+            }
+            .buttonStyle(.plain)
         }
-        // 深链（`nsk-sign://…`）/ 空直链行：**不给「获取」**（不是安装包直链，见 `canDownload(_:)`）。
+        // 空直链行（`.none`）：**不给按钮**（没有任何可跳转目标，见 `rowKind(_:)`）。
     }
 
     // MARK: - 下载（**只调下载中心**，不签名 / 不安装）
@@ -579,6 +813,7 @@ struct SignSourceAppListView: View {
     private func reloadSource() async {
         guard let fresh = try? await SignSourceClient.fetch(sourceURL: source.sourceURL) else { return }
         apps = fresh.apps
+        announcementText = fresh.message
         SignSourceStore.shared.update(fresh)
     }
 
@@ -624,128 +859,6 @@ struct SignSourceAppListView: View {
             }
         }
         .presentationDetents([.medium])
-    }
-}
-
-// MARK: - App 图标（静态占位 + 超时 + 内存缓存）
-
-/// App 图标加载器 —— 内存缓存 + 在途去重 + 请求超时。
-///
-/// 对标全能签 `-[AISSoftwareSourceStore imageForRemoteURLString:completion:]` @`0x100380440`
-/// （对照报告 §2.2）：命中缓存即时回调；未命中才发起下载；**同一地址并发只下一次**
-/// （两行引用同一张图时不会重复下载）。
-///
-/// 并发：整类 `@MainActor` 隔离 —— `UIImage` 非 Sendable，所有图片状态只在主线程读写；
-/// `URLSession` 的完成回调只把 `Data`（Sendable）交回主线程，`UIImage` 在主线程才解码，
-/// 因此没有「非 Sendable 类型跨隔离传递」的问题（Swift 6 严格并发）。
-@MainActor
-private final class SourceIconLoader {
-
-    static let shared = SourceIconLoader()
-
-    /// 单次请求时限（秒）。取 **15** —— 与 `SignSourceListView.SourceIconView`（15s）及
-    /// `SignSourceClient`（`timeoutIntervalForRequest = 15`）同一口径。**必须有上限**：
-    /// 全能签是 45s/候选（`tryDownloadImageAtCandidateIndex:` @`0x10036da80`），
-    /// 我们不做多候选，取更短的 15s 保证「最迟 15s 一定落静态占位」。
-    private static let timeout: TimeInterval = 15
-
-    /// 已解码图片的内存缓存（key = 图标地址）。`NSCache` 线程安全、系统吃紧时自动回收。
-    private let images = NSCache<NSString, UIImage>()
-    /// 在途请求的等待者（key = 图标地址）：同址并发只下一次，其余挂起等同一结果。
-    private var waiters: [String: [(UIImage?) -> Void]] = [:]
-    private let session: URLSession
-
-    private init() {
-        // `.default` 复用 `URLCache.shared`：源图标响应带 `Cache-Control: max-age` ⇒ 首次落地后
-        // 跨启动仍可命中（等价于一份磁盘级缓存）；本类再加一层「已解码图片」的内存缓存。
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = Self.timeout
-        config.timeoutIntervalForResource = Self.timeout * 2
-        session = URLSession(configuration: config)
-        images.countLimit = 200
-    }
-
-    /// 同步查内存缓存（命中即无需异步；视图首帧用它避免旧图残留）。
-    func cached(_ url: String) -> UIImage? { images.object(forKey: url as NSString) }
-
-    /// 取图：命中缓存即时返回；否则下载（同址去重）；失败 / 超时返回 `nil`。
-    func image(for url: String) async -> UIImage? {
-        if let hit = images.object(forKey: url as NSString) { return hit }
-        return await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
-            enqueue(url) { continuation.resume(returning: $0) }
-        }
-    }
-
-    /// 入队一个请求；同址已有在途请求则只登记等待者（不重复下载）。
-    private func enqueue(_ url: String, _ completion: @escaping (UIImage?) -> Void) {
-        if waiters[url] != nil {
-            waiters[url]?.append(completion)
-            return
-        }
-        waiters[url] = [completion]
-        guard let target = URL(string: url) else { finish(url, nil); return }
-        session.dataTask(with: target) { [weak self] data, _, _ in
-            // 只把 `Data` 交回主线程，`UIImage` 在主线程解码 —— 见类注释的并发说明。
-            Task { @MainActor in
-                self?.finish(url, data.flatMap { UIImage(data: $0) })
-            }
-        }.resume()
-    }
-
-    /// 收口：写缓存（成功时）+ 唤醒全部等待者。`waiters` 至多被唤醒一次，保证 continuation 只 resume 一次。
-    private func finish(_ url: String, _ image: UIImage?) {
-        if let image { images.setObject(image, forKey: url as NSString) }
-        for waiter in waiters.removeValue(forKey: url) ?? [] { waiter(image) }
-    }
-}
-
-/// App 图标视图 —— **加载中 / 失败 / 超时一律静态占位**，绝不转圈（照全能签，对照报告 §2.1）。
-///
-/// 三条出口（保证一定会终止，不存在「一直转圈」）：
-/// · **成功** → 显示真图（`SourceIconLoader` 回调图片）；
-/// · **失败** → 静态占位（回调 `nil`）；
-/// · **超时** → 静态占位（`SourceIconLoader` 单请求 15s 时限，最迟 15s 回调 `nil`）。
-///
-/// ⚠️ 与 `SignSourceListView` 的 `SourceIconView` 是**同一套「超时兜底」思路、同一 15s 口径**，
-/// 唯一差异：本页按全能签的做法把「加载中」也画成**静态占位**（那页保留 spinner）。
-/// 组件**无法直接复用** —— 那个 `SourceIconView` 是同事文件内的 `private` 类型，跨文件不可见；
-/// 待后续把图标组件提升为共享件（`Shared/…`）后两页可收敛为一份实现。
-private struct SourceAppIconView: View {
-
-    /// 图标地址（空 / 非法则直接落静态占位）。
-    let urlString: String?
-
-    private static let side: CGFloat = 54
-    @State private var image: UIImage?
-
-    var body: some View {
-        ZStack {
-            placeholder
-            if let image {
-                Image(uiImage: image).resizable().scaledToFit()
-            }
-        }
-        .frame(width: Self.side, height: Self.side)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        // `id:` 绑定地址：行被复用成另一条 App 时重跑，不会残留上一张图。
-        .task(id: urlString) {
-            let trimmed = urlString?.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let key = trimmed, !key.isEmpty else { image = nil; return }
-            // 命中缓存即时落地；未命中先清空（回到静态占位，不显示上一张图），再异步替换。
-            image = SourceIconLoader.shared.cached(key)
-            let loaded = await SourceIconLoader.shared.image(for: key)
-            if !Task.isCancelled { image = loaded }
-        }
-    }
-
-    /// 静态占位（灰底 + `app.dashed`）—— 加载中、失败、无地址**共用同一张**，绝不转圈。
-    private var placeholder: some View {
-        ZStack {
-            Color.secondary.opacity(0.12)
-            Image(systemName: "app.dashed")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-        }
     }
 }
 
