@@ -706,8 +706,23 @@ struct IPADownloadManagerView: View {
                 // 一直转下去只是「卡住」的错觉。没有说明文字、没有额外按钮，点环本身就是那个动作。
                 // 只有环**确实是 OTA 画出来的**才接这个手势（见 `otaRingIsActive`）：
                 // 覆盖安装 / 下载中的环背后是下载中心的真任务，点一下绝不能把它们悄悄取消。
+                //
+                // ▸▸▸ v0.3.583（用户截图 IMG_6737）：**覆盖安装的环以前点了完全没反应**。
+                // 旧手势只处理 `isOTA`；而「全能签」这类本地包走的是 RSD 覆盖安装
+                // （`IPADownloadCenter.installLocal` → `installLocalIPA`），环由下载中心的
+                // `.installing` 任务画出，`isOTA == false` ⇒ 点下去什么都不发生（用户抱怨的那一下）。
+                //
+                // 底层**无法取消安装**，所以这里**不假装能取消**，只把事实说清楚 ——
+                // 依据：`AppStoreInstallService.installLocalIPA` 是**同步阻塞**的
+                // （`IPAInstallService` 的 AFC 上传 `uploadFile` 逐块写 + installd 的
+                // `Install`/`Upgrade` 命令），全程不检查 `Task.isCancelled`，也没有任何中止接口；
+                // 一旦提交给 installd 就停不下来。故点击 = 一句明确说明（至少「有反应」且不撒谎）。
                 .onTapGesture {
-                    if isOTA { otaProgress.reset() }
+                    if isOTA {
+                        otaProgress.reset()
+                    } else if activeJob(for: item)?.phase == .installing {
+                        ToastCenter.shared.show("安装已提交给系统，无法中止.")
+                    }
                 }
             } else {
                 // v0.3.383：这一行上一次失败 → 红字标出**失败阶段**，**仍可点**（点了就是重试）。

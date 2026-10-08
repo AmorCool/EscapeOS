@@ -8,6 +8,9 @@ import Foundation
 ///   `IPADownloadLibrary`（下载管理页看到的就是它），可选自动安装（RSD 隧道）；
 /// · 暂停用 `URLSessionDownloadTask.cancel(byProducingResumeData:)`，恢复用 resumeData
 ///   （爱思 CDN 支持 Range，实测可续传）。
+///   v0.3.583：两条下载通道都能暂停 / 继续 / 取消 —— 免登录直链走 `runners`
+///   （`RemoteDownloader`），AppleID 通道走 `appleIDControls`（`IPADownloadControl` →
+///   `IPAFileDownloader`）。中心对两者一视同仁地触达底层传输。
 @MainActor
 final class IPADownloadCenter: ObservableObject {
 
@@ -332,6 +335,29 @@ final class IPADownloadCenter: ObservableObject {
     /// 改成字典后可以同时跑多个；上限见 `maxConcurrentDownloads`。
     private var runners: [UUID: RemoteDownloader] = [:]
 
+    /// v0.3.583：**AppleID 通道的传输控制面**，按 job id 索引 —— 与 `runners` 并列的第二张表。
+    ///
+    /// `startWithAppleID` 的字节传输在 `IPAFileDownloader` 里（那条链不登记 `runners`），
+    /// 它把控制面登记到这里 ⇒ `pause` / `resume` / `cancel` 同时查两张表，两条通道一套口径。
+    /// 不并进 `runners` 的原因：`runners.count` 被 `pump()` 当作**并发下载槽**在用
+    /// （`maxConcurrentDownloads`），AppleID 任务不走 `pump()`，混进去会干扰调度计数。
+    private var appleIDControls: [UUID: IPADownloadControl] = [:]
+
+    /// v0.3.583：**安装看门狗的常量**（机制见 `installLocal`）。
+    ///
+    /// `installWatchdogTimeout` = 「连续多少秒**一次进度都没有**」就判安装失败。
+    /// 取 120s 的理由：判据是「无进展」而非「总时长」—— 安装链的进度回调（AFC 上传逐块 /
+    /// installd 逐档）会刷新心跳，所以只有**真正卡住**才会连续这么久没有一次回调；
+    /// 而 120s 仍比真机实测的卡死时长（约 4m45s）小 2.4 倍，够快报错又留足余量不误杀慢包。
+    private static let installWatchdogTimeout: TimeInterval = 120
+    /// 看门狗轮询间隔（15s）：只读一个时间戳，代价可忽略。
+    private static let installWatchdogPoll: TimeInterval = 15
+
+    /// 每个 `.installing` 任务「最近一次有进展」的时刻（`installLocal` 的进度回调刷新它）。
+    private var installHeartbeats: [UUID: Date] = [:]
+    /// 每个 `.installing` 任务的看门狗；任务结束 / 取消时停掉，避免后台空转。
+    private var installWatchdogs: [UUID: Task<Void, Never>] = [:]
+
     /// 同时进行的下载数上限。
     ///
     /// 用户要求「并发下载」；加上限是为了不把网络 / 内存打满 ——
@@ -500,6 +526,12 @@ final class IPADownloadCenter: ObservableObject {
         jobs.insert(job, at: 0)
         let id = job.id
 
+        // ▸▸▸ v0.3.583：**建控制面并登记** —— 让中心的暂停 / 继续 / 删除安装包能触达这条链的
+        // `IPAFileDownloader`。旧实现这条链不登记任何句柄 ⇒ `runners[id]` 恒 nil ⇒ 三个动作
+        // 全是空操作（暂停无效、删除安装包假成功，见 `诊断_暂停无效_底层角度` §①/§4.3）。
+        let control = IPADownloadControl()
+        appleIDControls[id] = control
+
         Task.detached(priority: .userInitiated) { [item, email] in
             do {
                 // v0.3.578：AppleID 通道**不再自动安装**（与 v0.3.412 对免登录通道的改动对齐）。
@@ -518,7 +550,19 @@ final class IPADownloadCenter: ObservableObject {
                     externalVersionID: externalVersionID,
                     downloadProgress: { p in
                         Task { @MainActor in
-                            self.update(id) { $0.progress = p; $0.stageText = "下载中" }
+                            // ▸▸▸ v0.3.583（用户截图 IMG_6740）：**只在仍处「下载中」时写进度**。
+                            //
+                            // 这条下载跑在一个 detached 任务里（`AppStoreLocalInstallService.download`
+                            // → `IPAFileDownloader`），它的进度回调**不受主 actor 控制**：以前无条件
+                            // `$0.stageText = "下载中"`，于是任何离开 `.downloading` 的状态（取消 /
+                            // 失败 / 用户以为暂停了）都会被这一句改回去 —— 界面就会出现「已暂停」
+                            // 旁边还挂着「下载中」且百分比继续涨的自相矛盾（截图那一帧）。
+                            // 加这道 phase 判据后，回调再也改不动已经落定的状态。
+                            self.update(id) {
+                                guard $0.phase == .downloading else { return }
+                                $0.progress = p
+                                $0.stageText = "下载中"
+                            }
                         }
                     },
                     onResolvedURL: { url in
@@ -535,10 +579,23 @@ final class IPADownloadCenter: ObservableObject {
                             self.update(id) { $0.remoteURL = url }
                         }
                     },
+                    control: control,
                     onLog: { line in
                         LoginLogger.shared.log("[下载中心] \(line)", category: .download)
                     })
                 await MainActor.run {
+                    // 下载已结束（成功）→ 控制面使命完成，摘掉。
+                    self.appleIDControls[id] = nil
+                    // v0.3.583：若这期间用户点了「删除安装包」（job 已被 `cancel` 移除），
+                    // **不要再写台账**，并把刚落盘的包删掉 —— 否则会留下一个「列表里看不到、
+                    // 磁盘上还在」的孤儿文件（`cancel` 对「还没落地」的任务不会删文件）。
+                    guard self.job(id) != nil else {
+                        try? FileManager.default.removeItem(at: dest)
+                        LoginLogger.shared.log(
+                            "[下载中心] AppleID 通道下载完成时任务已被删除，丢弃安装包 \(dest.lastPathComponent).",
+                            category: .download)
+                        return
+                    }
                     // ▸▸▸ v0.3.392 根因修复：**这条链路必须自己写台账**。
                     //
                     // AppleID 通道**不走 `startDownload` → 从不经过 `handle`**，
@@ -573,6 +630,11 @@ final class IPADownloadCenter: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    self.appleIDControls[id] = nil
+                    // v0.3.583：用户点「删除安装包」会**先**把 job 从 `jobs` 移除、**再**取消底层
+                    // task ⇒ 这里回调到达时 job 已不在。此时什么都不做：既无 job 可改，也不该
+                    // 写「下载失败」—— 用户主动取消不是失败（`abort()` 抛的是 `CancellationError`）。
+                    guard self.job(id) != nil else { return }
                     self.update(id) {
                         // v0.3.578：这条链路只剩「下载 + 注入 sinf」，**没有安装段** ⇒
                         // 失败一律属下载链路。旧的 `$0.phase == .installing ? .install : .download`
@@ -631,6 +693,48 @@ final class IPADownloadCenter: ObservableObject {
         // 安装日志的板块按来源**在主 actor 上先算好**，再带进后台安装链 ——
         // 避免在 detached 里引用 `Source`（跨隔离边界）。`LoginLogger.Category` 是 Sendable。
         let sourceCategory = logCategory(for: source)
+
+        // ▸▸▸ v0.3.583：**安装看门狗**。安装确实会卡：安装链第一步是建 RSD 隧道，Rust 侧
+        // `tunnel_create_rppairing` 的首个 `connect` **没有超时**（见下段注释），LocalDevVPN
+        // 不通时会一直等到 OS 的 TCP 建连超时 —— 真机实测「下载完成 → 安装报错」隔了约 **4m45s**
+        // （`_devicelog/LoginLogs__login.log:607` 的 `connect: Operation timed out (os error 60)`），
+        // 期间进度 / 文案 / 错误全不动，用户看到的就是「永远转圈」。
+        //
+        // 判据是「**无进展**」而不是「总时长」：安装大包本身可能要几十秒甚至更久，只要 AFC 上传
+        // （逐块回调）/ installd（逐档回调）还在回报进度，心跳就被刷新（见下面的 `progress` 闭包）；
+        // 只有连续 `installWatchdogTimeout` 秒**一次进度都没有**才判死 —— 正常安装不可能出现
+        // 这么长的空档，所以不会误杀「慢慢传的大包」。超时后是**可重试**的失败：行上显示
+        // 「安装失败」，点那一行即可重新安装（`IPADownloadManagerView` 的失败行按钮）。
+        installHeartbeats[id] = Date()
+        installWatchdogs[id] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.installWatchdogPoll))
+                // 行已被删除 / 取消，或心跳已被清 → 收工，并把自己从字典摘掉（不留残留项）。
+                guard self.job(id) != nil, self.installHeartbeats[id] != nil else {
+                    self.installWatchdogs[id] = nil
+                    self.installHeartbeats[id] = nil
+                    return
+                }
+                guard let beat = self.installHeartbeats[id] else { return }
+                guard Date().timeIntervalSince(beat) >= Self.installWatchdogTimeout else { continue }
+                LoginLogger.shared.log(
+                    "[下载中心] 安装无进展超时（\(Int(Self.installWatchdogTimeout)) 秒）：\(fileName).",
+                    category: sourceCategory)
+                self.installHeartbeats[id] = nil
+                self.installWatchdogs[id] = nil
+                self.update(id) {
+                    guard $0.phase == .installing else { return }
+                    $0.failureStage = .install
+                    $0.phase = .failed
+                    $0.stageText = "失败"
+                    $0.error = "安装长时间无进展（\(Int(Self.installWatchdogTimeout)) 秒），请检查本地隧道后重试"
+                    $0.speedBytesPerSecond = 0
+                }
+                return
+            }
+        }
+
         Task.detached(priority: .userInitiated) {
             // ▸▸▸ v0.3.581：**隧道探测全部降级为提示，不再有任何安装硬门**。
             //
@@ -675,10 +779,20 @@ final class IPADownloadCenter: ObservableObject {
                 try await AppStoreInstallService.installLocalIPA(
                     path,
                     progress: { p in
-                        Task { @MainActor in self.update(id) { $0.progress = p } }
+                        Task { @MainActor in
+                            // 有进展 → 刷新看门狗心跳（这是「不误杀」的关键：只有真卡住才不刷新）。
+                            self.installHeartbeats[id] = Date()
+                            self.update(id) { $0.progress = p }
+                        }
                     },
                     onLog: { LoginLogger.shared.log("[下载中心] \($0)", category: sourceCategory) })
-                await MainActor.run { IPADownloadLibrary.shared.markInstalled(fileName: fileName) }
+                await MainActor.run {
+                    // 安装结束 → 停掉看门狗。
+                    self.installWatchdogs[id]?.cancel()
+                    self.installWatchdogs[id] = nil
+                    self.installHeartbeats[id] = nil
+                    IPADownloadLibrary.shared.markInstalled(fileName: fileName)
+                }
                 await MainActor.run {
                     self.update(id) { $0.phase = .done; $0.progress = 1; $0.stageText = "已完成" }
                 }
@@ -692,6 +806,10 @@ final class IPADownloadCenter: ObservableObject {
                     "[下载中心] 本机 IPv4 接口地址：\(LocalDevVPN.ipv4InterfaceSummary()).",
                     category: .download)
                 await MainActor.run {
+                    // 安装结束（失败）→ 停掉看门狗。
+                    self.installWatchdogs[id]?.cancel()
+                    self.installWatchdogs[id] = nil
+                    self.installHeartbeats[id] = nil
                     self.update(id) {
                         // 走到了这里就是安装链路本身失败（文件存在且可读）
                         $0.failureStage = .install
@@ -727,6 +845,17 @@ final class IPADownloadCenter: ObservableObject {
 
     func pause(_ id: UUID) {
         guard let job = job(id), job.canPause, job.phase == .downloading else { return }
+        // ▸▸▸ v0.3.583：**真正能停住传输的只有两条通道各自的下载器** ——
+        // 免登录直链走 `runners`（`RemoteDownloader`），AppleID 走 `appleIDControls`
+        // （`IPADownloadControl` → `IPAFileDownloader`）。两条都没有 = 这条下载**根本无法暂停**：
+        // 那就**一个状态位都不改**、如实告知，绝不制造「显示已暂停但传输还在跑」的自相矛盾
+        // （宁可功能少，不能显示错 —— 用户截图 IMG_6740 的「已暂停 + 下载中 + 64%」就是这么来的）。
+        guard runners[id] != nil || appleIDControls[id] != nil else {
+            LoginLogger.shared.log("[下载中心] 该任务没有本地下载器，无法暂停：\(job.name)",
+                                   category: logCategory(for: job.source))
+            ToastCenter.shared.show("该下载不支持暂停.")
+            return
+        }
         // v0.3.398（②，两层防护的第一层）：**先记意图、再写状态、最后才动下载流**。
         //
         // 原来的顺序是 `runner?.pause()` → 最后才写 `.paused`。而「暂停」是靠
@@ -737,6 +866,7 @@ final class IPADownloadCenter: ObservableObject {
         pausingIDs.insert(id)
         update(id) { $0.phase = .paused; $0.stageText = "已暂停"; $0.speedBytesPerSecond = 0 }
         runners[id]?.pause()
+        appleIDControls[id]?.pause()
         resetSpeedWindow()
     }
 
@@ -746,6 +876,16 @@ final class IPADownloadCenter: ObservableObject {
         if let r = runners[id] {
             r.resume()
             // v0.3.394：续传要重新起窗口（见 `resetSpeedWindow` 注释）
+            resetSpeedWindow()
+            update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
+            return
+        }
+        // v0.3.583：AppleID 通道 —— 传输在 `IPAFileDownloader` 里，控制面同样是「续传」
+        // （`resumeData` 接着下）。**绝不能**落到下面的兜底：那条会把任务当「排队」重新
+        // `pump()`，而 AppleID 任务的 `remoteURL` 已被 `onResolvedURL` 写入 ⇒ 会再起一个
+        // `RemoteDownloader` 下载同一个 URL ⇒ 两个任务写同一个文件（诊断 §③ 的重复下载风险）。
+        if let c = appleIDControls[id] {
+            c.resume()
             resetSpeedWindow()
             update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
             return
@@ -787,6 +927,18 @@ final class IPADownloadCenter: ObservableObject {
             runners[id] = nil
             resetSpeedWindow()
         }
+        // ▸▸▸ v0.3.583：AppleID 通道 —— 旧实现只查 `runners`（对这条链恒为 nil）⇒ `abort()`
+        // 是空操作，「删除安装包」变成**假成功**：行没了、传输照跑、跑完还落盘写台账（诊断 §4.3）。
+        // 现在控制面负责取消底层 `URLSessionDownloadTask` 并清掉半成品 / 目标文件。
+        if let c = appleIDControls[id] {
+            c.abort()
+            appleIDControls[id] = nil
+            resetSpeedWindow()
+        }
+        // 安装看门狗：这一行要没了 → 停掉（否则会对着一个不存在的 job 空转）。
+        installWatchdogs[id]?.cancel()
+        installWatchdogs[id] = nil
+        installHeartbeats[id] = nil
         var result: IPADownloadLibrary.RemoveResult?
         if let fileName = job.localFileName {
             result = IPADownloadLibrary.shared.remove(fileName: fileName)

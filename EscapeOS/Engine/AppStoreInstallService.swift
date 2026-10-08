@@ -61,6 +61,14 @@ enum AppStoreInstallService {
                             // 本应来自 Apple 正版包）。若下载地址能被引到第三方域，那份 Manifest 就不可信，
                             // 进而可驱动任意 ZIP 条目名。本校验就是把那个「输入可信」前提锁死。
                             hostPolicy: ((String) -> Bool)? = nil,
+                            // v0.3.583：可选的**传输控制面**（AppleID 通道专用）。
+                            //
+                            // 传 nil（默认）= 与从前完全一致（爱思等调用方不受影响）。
+                            // AppleID 通道传一个 `IPADownloadControl`，`IPAFileDownloader` 会把
+                            // 底层 `URLSessionDownloadTask` 登记进去 —— 于是下载中心的
+                            // 暂停 / 继续 / 删除安装包能真正触达这条链（旧实现这条链没有任何句柄，
+                            // 三个动作全是空操作，见 `IPADownloadControl` 的说明）。
+                            control: IPADownloadControl? = nil,
                             onLog: ((String) -> Void)? = nil) async throws -> URL {
         guard let url = URL(string: urlString) else { throw InstallError.badTemplate }
         if let hostPolicy {
@@ -80,7 +88,8 @@ enum AppStoreInstallService {
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            IPAFileDownloader(hostPolicy: hostPolicy, progress: progress, completion: { result in
+            IPAFileDownloader(control: control, destination: dest,
+                              hostPolicy: hostPolicy, progress: progress, completion: { result in
                 switch result {
                 case .success(let tmp):
                     do {
@@ -222,10 +231,77 @@ enum AppStoreInstallService {
     }
 }
 
+/// AppleID 通道的**传输控制面** —— 把 `IPADownloadCenter` 的「暂停 / 继续 / 删除安装包」
+/// 接到 `IPAFileDownloader` 的 `URLSessionDownloadTask` 上。
+///
+/// 为什么需要它：`startWithAppleID` 把字节传输委托给
+/// `AppStoreLocalInstallService.download` → `AppStoreInstallService.downloadIPA`（内部是
+/// `IPAFileDownloader`），这条链**不登记** `IPADownloadCenter.runners`
+/// ⇒ 中心的 `pause` / `resume` / `cancel` 对它是**空操作**（`runners[id]` 恒为 nil）。
+/// 历史两次「暂停无效」的修复（v0.3.398 `393651f` / v0.3.549 `0ee476d`）都只改了免登录直链
+/// 通道的 `RemoteDownloader`，从未触及这里 —— 所以同一问题在 AppleID 通道上原样存在。
+///
+/// 本对象是那条链与中心之间的**唯一控制通道**：中心按 job id 建它、登记进 `appleIDControls`，
+/// 再随 `download` 一路传到 `IPAFileDownloader`；下载器拿到 task 后 `attach(self)`。
+/// 于是中心的三件事都能真正触达底层传输。
+///
+/// 线程模型：`pause` / `resume` / `abort` 从主 actor 调；`attach` 来自下载启动的那个任务。
+/// 用一把 `NSLock` 收口，并标 `@unchecked Sendable` 以便跨隔离边界传递（Swift 6 严格并发）。
+final class IPADownloadControl: @unchecked Sendable {
+
+    private let lock = NSLock()
+    /// 底层下载器（`attach` 时设入）。**strong**：下载器本身是 `downloadIPA` 里的临时对象，
+    /// 靠 URLSession 以 delegate 身份持有；这里再持一份，保证「中心 → 控制面 → 下载器」
+    /// 这条链在下载期间不断（下载器对控制面是 `weak`，不成环）。
+    private var downloader: IPAFileDownloader?
+    /// 在 `attach` **之前**就先到的意图 —— 用户可能在下载器建好之前就点了暂停 / 删除。
+    private var pendingPause = false
+    private var pendingAbort = false
+
+    /// 下载器建好后把自己登记进来；此前若有暂停 / 取消意图，立刻补做。
+    /// `fileprivate`：参数是文件私有的 `IPAFileDownloader`，只有同文件的下载器会调它。
+    fileprivate func attach(_ d: IPAFileDownloader) {
+        lock.lock()
+        downloader = d
+        let pause = pendingPause
+        let abort = pendingAbort
+        pendingPause = false
+        pendingAbort = false
+        lock.unlock()
+        if abort { d.abort() } else if pause { d.pause() }
+    }
+
+    func pause() {
+        lock.lock()
+        guard let d = downloader else { pendingPause = true; lock.unlock(); return }
+        lock.unlock()
+        d.pause()
+    }
+
+    func resume() {
+        lock.lock()
+        let d = downloader
+        lock.unlock()
+        d?.resume()
+    }
+
+    func abort() {
+        lock.lock()
+        guard let d = downloader else { pendingAbort = true; lock.unlock(); return }
+        lock.unlock()
+        d.abort()
+    }
+}
+
 /// v0.3.300：带进度的 IPA 文件下载器（`URLSessionDownloadTask` + delegate）
 ///
 /// 用回调式下载而非 `URLSession.download(for:)`，目的只有一个：**拿到字节级进度**。
 /// 每次实例化创建一个独立 `URLSession`（用完即释放），互不干扰，可在多个安装任务中并发使用。
+///
+/// v0.3.583：**补上「暂停 / 继续 / 取消」**。旧实现不持有 task 句柄、也没有任何暂停接口
+/// ⇒ AppleID 通道的暂停 / 取消全是空操作。现在照 `RemoteDownloader`
+/// （`IPADownloadCenter.swift`）的做法收口：持 task 句柄、用 `cancel(byProducingResumeData:)`
+/// 暂停、用 `downloadTask(withResumeData:)` 续传、用 `cancel()` 取消。
 private final class IPAFileDownloader: NSObject, URLSessionDownloadDelegate {
 
     private let onProgress: ((Double) -> Void)?
@@ -235,12 +311,35 @@ private final class IPAFileDownloader: NSObject, URLSessionDownloadDelegate {
     private let hostPolicy: ((String) -> Bool)?
     /// 被本下载器拒绝跟随的重定向目标 host（用于给出可诊断的错误，而不是笼统的「HTTP 302」）。
     private var rejectedRedirectHost: String?
-    private var session: URLSession?
-    private var finished = false
+    /// 「删除安装包」时要清掉的落盘目标（`downloadIPA` 的 `dest`）。取消时一并删除 ——
+    /// 旧实现删了行、文件与传输都还在，是**假成功**。
+    private let destination: URL?
 
-    init(hostPolicy: ((String) -> Bool)?,
+    private var request: URLRequest?
+    private var session: URLSession?
+    /// v0.3.583：**持有 task 句柄** —— 这是能暂停 / 取消的前提（旧实现 `s.downloadTask(...)`
+    /// 直接 resume，句柄丢掉，想停也停不了）。
+    private var task: URLSessionDownloadTask?
+    private var resumeData: Data?
+    private var finished = false
+    private var paused = false
+    /// 用户主动取消（删除安装包）。与暂停不同：要让 `downloadIPA` 的 continuation 以取消错误收尾。
+    private var aborted = false
+
+    /// 控制面（中心 → 本下载器）。`weak`：控制面由中心持有；本类不反向强持有，避免成环。
+    private weak var control: IPADownloadControl?
+
+    /// v0.3.549 同款：`paused` / `finished` / `task` / `resumeData` 会被 URLSession 的 delegate
+    /// 队列与主 actor 上的 `pause` / `resume` / `abort` 两条线程碰，用一把锁收口。
+    private let lock = NSLock()
+
+    init(control: IPADownloadControl?,
+         destination: URL?,
+         hostPolicy: ((String) -> Bool)?,
          progress: ((Double) -> Void)?,
          completion: @escaping (Result<URL, Error>) -> Void) {
+        self.control = control
+        self.destination = destination
         self.hostPolicy = hostPolicy
         self.onProgress = progress
         self.completion = completion
@@ -251,15 +350,80 @@ private final class IPAFileDownloader: NSObject, URLSessionDownloadDelegate {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 120
         let s = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
+        lock.lock()
+        self.request = request
         session = s
-        s.downloadTask(with: request).resume()
+        let t = s.downloadTask(with: request)
+        task = t
+        lock.unlock()
+        // 先把控制面接上（用户可能在下载器建好前就点了暂停 / 删除），再真正开始传输。
+        control?.attach(self)
+        t.resume()
+    }
+
+    /// 暂停：`cancel(byProducingResumeData:)` 取消底层 task 并留下续传数据
+    /// （对齐 `RemoteDownloader.pause`）。
+    func pause() {
+        lock.lock()
+        guard !finished, !aborted, let t = task else { lock.unlock(); return }
+        paused = true
+        lock.unlock()
+        // 注意：`cancel(byProducingResumeData:)` **可能同步执行回调**，必须在**不持锁**时调，
+        // 否则回调里的 `lock.lock()` 会自锁死（同 `RemoteDownloader.pause` 的注释）。
+        t.cancel(byProducingResumeData: { [weak self] data in
+            guard let self else { return }
+            self.lock.lock(); self.resumeData = data; self.lock.unlock()
+        })
+    }
+
+    /// 继续：用 `resumeData` 建新 task 续传；服务器不支持 Range（拿不到 resumeData）时从头下。
+    func resume() {
+        lock.lock()
+        guard !finished, !aborted else { lock.unlock(); return }
+        paused = false
+        let data = resumeData
+        resumeData = nil
+        let req = request
+        let t: URLSessionDownloadTask?
+        if let data {
+            t = session?.downloadTask(withResumeData: data)
+        } else {
+            t = req.flatMap { session?.downloadTask(with: $0) }
+        }
+        task = t
+        lock.unlock()
+        t?.resume()
+    }
+
+    /// 取消：停掉传输、清掉半成品 / 目标文件、让 `downloadIPA` 以取消错误收尾。
+    /// 用户「删除安装包」走这里 —— 旧实现对 AppleID 通道是空操作（行删了、传输照跑）。
+    func abort() {
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
+        finished = true
+        aborted = true
+        paused = true
+        let t = task
+        let s = session
+        session = nil
+        lock.unlock()
+        t?.cancel()
+        s?.finishTasksAndInvalidate()
+        if let destination { try? FileManager.default.removeItem(at: destination) }
+        // 让 `downloadIPA` 的 continuation 以取消错误收尾 —— 否则 detached 任务会一直挂在
+        // 那个 continuation 上。取消**不是**失败：中心已先把 job 从 `jobs` 移除，
+        // `startWithAppleID` 的 catch 会因「job 已不存在」而跳过失败处理。
+        completion(.failure(CancellationError()))
     }
 
     private func finish(_ result: Result<URL, Error>) {
-        guard !finished else { return }
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
         finished = true
-        session?.finishTasksAndInvalidate()
+        let s = session
         session = nil
+        lock.unlock()
+        s?.finishTasksAndInvalidate()
         completion(result)
     }
 
@@ -270,6 +434,13 @@ private final class IPAFileDownloader: NSObject, URLSessionDownloadDelegate {
                     didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
+        // v0.3.583：**暂停 / 取消后不再上报进度**（对齐 `RemoteDownloader.didWriteData`）。
+        // 暂停靠 `cancel(byProducingResumeData:)` 实现，取消是异步生效的 —— 在它落地前，
+        // 已在网络上的数据包仍会送到这里；不看 `paused` 的话界面进度会在暂停后继续爬。
+        lock.lock()
+        let stop = paused || finished
+        lock.unlock()
+        guard !stop else { return }
         guard totalBytesExpectedToWrite > 0 else { return }
         let p = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
         onProgress?(min(1.0, max(0.0, p)))
@@ -278,6 +449,16 @@ private final class IPAFileDownloader: NSObject, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession,
                     downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
+        // v0.3.583：**暂停 / 取消期间落地的文件不算下载完成**（对齐 `RemoteDownloader`）。
+        // 「暂停」与「刚好下完」可能撞在一起：`cancel(byProducingResumeData:)` 对**已完成**
+        // 的任务是 no-op，而文件已经躺在 `location` 了 —— 不挡的话这次暂停等于没发生。
+        lock.lock()
+        let stop = paused || finished
+        lock.unlock()
+        if stop {
+            try? FileManager.default.removeItem(at: location)
+            return
+        }
         // 先看有没有「被拒绝跟随的重定向」——那种情况下这个回调拿到的只是 3xx 响应体，
         // 不是 IPA。给出明确错误，别让它落到下面的状态码分支里报成笼统的「HTTP 302」。
         if let bad = rejectedRedirectHost {
@@ -330,6 +511,15 @@ private final class IPAFileDownloader: NSObject, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession,
                     task: URLSessionTask,
                     didCompleteWithError error: Error?) {
+        lock.lock()
+        let done = finished
+        let isPaused = paused
+        lock.unlock()
+        if done { return }
+        // v0.3.583：暂停靠 `cancel(byProducingResumeData:)` 实现，必然产生 `URLError.cancelled` ——
+        // 那是暂停的一部分（`resume` 会用 resumeData 接着下），**不是**失败，直接丢弃。
+        if let urlError = error as? URLError, urlError.code == .cancelled { return }
+        if isPaused { return }
         if let error { finish(.failure(error)) }
     }
 }
