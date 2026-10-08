@@ -301,6 +301,11 @@ struct ImageGalleryViewer: View {
 struct ImagePreviewTarget: Identifiable {
     let index: Int
     let urls: [String]
+    /// 打开这组预览时的日志板块（取图成功 / 失败写进这里）；`nil` ⇒ 沿用「通用」（既有行为）。
+    ///
+    /// 与 `urls` 一起写在**同一个 target** 里（一次写入）—— 若另开一个 `@State`，
+    /// `fullScreenCover(item:)` 构建时可能读到旧值，正是下面 `urls` 踩过的时序坑。
+    var logCategory: LoginLogger.Category? = nil
 
     /// **既不能只用 `index`，也不能用 `UUID()`**：
     /// · 只用 `index` —— 同一个 index 配不同 urls 是常态（图标预览恒 0；不同应用/不同组的
@@ -356,15 +361,19 @@ func iconMenuItems(iconURL: String?, fileNameBase: String,
 /// v0.3.408：**`images:` 那个 `Binding` 撤掉了** —— 图数组不再挂在页面上，而是**写进 target**
 /// （理由见 `ImagePreviewTarget` 的注释：两次独立写入会让弹窗读到旧的空数组）。
 /// 现在只剩「图片地址 + 触发器」两个参数，**一次写入**。
+///
+/// `logCategory`：取图日志的板块；`nil` ⇒ 沿用「通用」（既有行为）。由调用方按该图标归属传入，
+/// 与 `urls` 一起写进 target（一次写入）。
 @MainActor
 func showIconPreview(_ iconURL: String?,
-                     target: Binding<ImagePreviewTarget?>) {
+                     target: Binding<ImagePreviewTarget?>,
+                     logCategory: LoginLogger.Category? = nil) {
     let raw = (iconURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     guard !raw.isEmpty else {
         ToastCenter.shared.show("没有可查看的图标")
         return
     }
-    target.wrappedValue = ImagePreviewTarget(index: 0, urls: [raw])
+    target.wrappedValue = ImagePreviewTarget(index: 0, urls: [raw], logCategory: logCategory)
 }
 
 /// 从 IPA **现取**图标再开预览（共享转换三页共用）。

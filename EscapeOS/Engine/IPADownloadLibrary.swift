@@ -395,7 +395,7 @@ final class IPADownloadLibrary: @unchecked Sendable {
             // 删不掉时**不动台账**：条目仍原样保留，磁盘与台账继续一致。
             if FileManager.default.fileExists(atPath: filePath) {
                 LoginLogger.shared.log("[下载库] 安装包删除失败：\(error)（\(item.fileName)）",
-                                       category: .appStore)
+                                       category: .download)
                 return .fileRemovalFailed
             }
         }
@@ -421,7 +421,7 @@ final class IPADownloadLibrary: @unchecked Sendable {
         } catch {
             if FileManager.default.fileExists(atPath: filePath.path) {
                 LoginLogger.shared.log("[下载库] 安装包删除失败：\(error)（\(fileName)）",
-                                       category: .appStore)
+                                       category: .download)
                 return .fileRemovalFailed
             }
         }
@@ -452,7 +452,7 @@ final class IPADownloadLibrary: @unchecked Sendable {
             } catch {
                 if FileManager.default.fileExists(atPath: filePath.path) {
                     LoginLogger.shared.log("[下载库] 安装包删除失败：\(error)（\(name)）",
-                                           category: .appStore)
+                                           category: .download)
                     anyFailed = true
                     continue
                 }
@@ -568,7 +568,7 @@ final class IPADownloadLibrary: @unchecked Sendable {
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         guard let data = try? enc.encode(list) else {
-            LoginLogger.shared.log("[下载库] 台账编码失败，未写盘（\(list.count) 条）", category: .appStore)
+            LoginLogger.shared.log("[下载库] 台账编码失败，未写盘（\(list.count) 条）", category: .download)
             return
         }
         do {
@@ -577,14 +577,14 @@ final class IPADownloadLibrary: @unchecked Sendable {
             // 写失败**不能静默**：调用方（record / markSinf / markInstalled…）都以为已持久化，
             // 用户以为「重装不用重下」可用，实际台账没写。
             LoginLogger.shared.log("[下载库] 台账写盘失败：\(error)（\(list.count) 条未持久化）",
-                                   category: .appStore)
+                                   category: .download)
         }
     }
 
     /// 台账没完整读出来时的统一日志（说明本次为何只读、不回写）。
     private func logReadOnly(_ note: String?) {
         guard let note else { return }
-        LoginLogger.shared.log("[下载库] \(note)", category: .appStore)
+        LoginLogger.shared.log("[下载库] \(note)", category: .download)
     }
 
     /// 字节数 → 可读文本

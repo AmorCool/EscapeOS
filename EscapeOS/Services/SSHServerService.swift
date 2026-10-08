@@ -609,10 +609,10 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                         return
                     }
                     LoginLogger.shared.log("[SSH] 触发下载：\(item.name)（\(item.bundleId ?? "-")）trackId=\(trackId) 账号=\(email)",
-                                           category: .appStore)
+                                           category: .download)
                     _ = IPADownloadCenter.shared.startWithAppleID(item: item, email: email)
                 } catch {
-                    LoginLogger.shared.log("[SSH] 触发下载失败：\(error.localizedDescription)", category: .appStore)
+                    LoginLogger.shared.log("[SSH] 触发下载失败：\(error.localizedDescription)", category: .download)
                 }
             }
             return "已触发下载 trackId=\(trackId)；用 logs 200 查看过程"

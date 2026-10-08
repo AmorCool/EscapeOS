@@ -80,8 +80,18 @@ enum SignSourceClient {
         }
         LoginLogger.shared.log("\(logTag) → GET \(url.absoluteString)（udid=\(udid ?? "省略")）",
                                category: .signSource)
-        let data = try await getJSON(url)
-        return try parse(data, origin: sourceURL)
+        let start = Date()
+        do {
+            let data = try await getJSON(url)
+            let source = try parse(data, origin: sourceURL)
+            LoginLogger.shared.log("\(logTag) ← 拉源完成 \(sourceURL)：\(data.count) 字节 耗时 \(Int(Date().timeIntervalSince(start) * 1000))ms",
+                                   category: .signSource)
+            return source
+        } catch {
+            LoginLogger.shared.log("\(logTag) ← 拉源失败 \(sourceURL)：\(error.localizedDescription)（\(Int(Date().timeIntervalSince(start) * 1000))ms）",
+                                   category: .signSource)
+            throw error
+        }
     }
 
     /// E2 解锁校验：`GET {unlockURL}?udid={UDID}&code={code}`。
@@ -111,11 +121,15 @@ enum SignSourceClient {
         do {
             data = try await getJSON(url)
         } catch {
-            throw SignSourceError.unlockFailed(error.localizedDescription)
+            let message = error.localizedDescription
+            LoginLogger.shared.log("\(logTag) ← 解锁失败：\(message)", category: .signSource)
+            throw SignSourceError.unlockFailed(message)
         }
         guard (try? JSONSerialization.jsonObject(with: data)) != nil else {
+            LoginLogger.shared.log("\(logTag) ← 解锁失败：数据错误", category: .signSource)
             throw SignSourceError.unlockFailed("数据错误")
         }
+        LoginLogger.shared.log("\(logTag) ← 解锁成功", category: .signSource)
         // 成功：什么都不做（真正的状态在服务端，规格 §5.2）
     }
 

@@ -51,14 +51,15 @@ final class IPADownloadCenter: ObservableObject {
         }
     }
 
-    /// 日志板块：按包的**来源**选分类 —— 三方软件源独立成「软件源」，其余保持既有行为（AppStore）。
+    /// 日志板块：按包的**来源**选分类 —— 三方软件源独立成「软件源」，其余一律归「下载」。
     ///
-    /// 只给「记录这个包从哪来 / 它的下载安装」的日志用。本机环境（隧道 / IPv4 接口）与
-    /// 静态工具函数（`PackageSINFWriter`）的日志与来源无关，仍写 `.appStore`。
+    /// 为什么其余不再写 `.appStore`：下载链路（下载中心 / 下载面板 / 落盘 / 注入 sinf /
+    /// 安装 / 重试 / 暂停 / 取消）与 AppStore 商店业务**无关**，只是**调用了**同一条下载管理
+    /// 接口；写进 `.appStore` 会让「AppStore 日志」页混着下载记录（用户实测指正）。
     /// 只从主 actor 调用（`handle` / `installLocal` 体内）；安装链在 detached 里用的是
     /// 主 actor 上预先算好的 `LoginLogger.Category`，不把 `Source` 带过隔离边界。
     private func logCategory(for source: Source) -> LoginLogger.Category {
-        source == .thirdPartySource ? .signSource : .appStore
+        source == .thirdPartySource ? .signSource : .download
     }
 
     enum Phase: Equatable {
@@ -529,13 +530,13 @@ final class IPADownloadCenter: ObservableObject {
                         // 落盘后台账里却是空」的现象，而光读代码看不出原因（链路看着都对）。
                         // 这条日志 + `handle` 里那条，一次就能定位到底哪一步断掉。
                         LoginLogger.shared.log("[下载中心] 拿到直链 → 写入任务：\(String(url.prefix(56)))…",
-                                               category: .appStore)
+                                               category: .download)
                         Task { @MainActor in
                             self.update(id) { $0.remoteURL = url }
                         }
                     },
                     onLog: { line in
-                        LoginLogger.shared.log("[下载中心] \(line)", category: .appStore)
+                        LoginLogger.shared.log("[下载中心] \(line)", category: .download)
                     })
                 await MainActor.run {
                     // ▸▸▸ v0.3.392 根因修复：**这条链路必须自己写台账**。
@@ -558,7 +559,7 @@ final class IPADownloadCenter: ObservableObject {
                         storeItemId: live?.storeItemId)
                     LoginLogger.shared.log("[下载中心] AppleID 通道落盘写台账 \(dest.lastPathComponent)："
                                            + "sourceURL=\(live?.remoteURL.map { String($0.prefix(40)) + "…" } ?? "nil") "
-                                           + "storeItemId=\(live?.storeItemId ?? "nil")", category: .appStore)
+                                           + "storeItemId=\(live?.storeItemId ?? "nil")", category: .download)
                     self.update(id) {
                         // v0.3.578：**终态 = 「已下载」**，与免登录通道 `handle` 的收尾完全一致。
                         // 不再自动进入安装 ⇒ 也不会再出现「下载完成却停在 75%」那种状态：
@@ -584,7 +585,7 @@ final class IPADownloadCenter: ObservableObject {
                     // v0.3.578：**失败必须可见** —— 以前这里只改内存状态、一行日志都不写，
                     // 真机上表现为「点了下载、什么都不发生」。与 `installLocal` / `handle` 同口径落日志。
                     LoginLogger.shared.log("[下载中心] AppleID 下载失败：\(error.localizedDescription)",
-                                           category: .appStore)
+                                           category: .download)
                 }
             }
         }
@@ -653,16 +654,16 @@ final class IPADownloadCenter: ObservableObject {
             //   自己的 3 次退避重试兜底；真的连不上时，安装链会给出**真实**错误.
             if !LocalDevVPN.isConnected {
                 LoginLogger.shared.log(
-                    "[下载中心] 未检测到本机 utun 接口（可能未连接 LocalDevVPN），仍继续尝试安装：\(fileName).",
-                    category: .appStore)
+                    "[下载中心] 未检测到本机 utun 接口，仍继续尝试安装：\(fileName).",
+                    category: .download)
                 LoginLogger.shared.log(
                     "[下载中心] 本机 IPv4 接口地址：\(LocalDevVPN.ipv4InterfaceSummary()).",
-                    category: .appStore)
+                    category: .download)
             }
             if !LocalDevVPN.isTunnelReachable() {
                 LoginLogger.shared.log(
                     "[下载中心] 隧道预检未通过（\(LocalDevVPN.targetIP):49152），仍继续尝试安装：\(fileName).",
-                    category: .appStore)
+                    category: .download)
             }
             if let sinfBase64 {
                 PackageSINFWriter.writeIfNeeded(sinfBase64: sinfBase64, ipaPath: path)
@@ -689,7 +690,7 @@ final class IPADownloadCenter: ObservableObject {
                 // 用途：下次失败时一眼分清「真的没连隧道」还是「接口枚举/网段判断漏了」。
                 LoginLogger.shared.log(
                     "[下载中心] 本机 IPv4 接口地址：\(LocalDevVPN.ipv4InterfaceSummary()).",
-                    category: .appStore)
+                    category: .download)
                 await MainActor.run {
                     self.update(id) {
                         // 走到了这里就是安装链路本身失败（文件存在且可读）
@@ -1507,10 +1508,11 @@ enum PackageSINFWriter {
         return Data(bytes)
     }
 
-    /// sinf 注入的日志固定走 `.appStore`：本类型是**静态工具**（没有 Job / 来源上下文），
-    /// 且只有 `.niuwa` / `.nb` 两个来源会触发写回 —— 二者按来源映射本就落在 `.appStore`。
+    /// sinf 注入的日志固定走 `.download`：本类型是**静态工具**（没有 Job / 来源上下文），
+    /// 但唯一入口 `writeIfNeeded` 只被下载链路调用（`handle` / `installLocal`）；
+    /// 共享修补线（`RepairService`）只调 `injectAllPaths`（不写日志），故不会串进「共享转换」。
     private static func log(_ message: String) {
-        LoginLogger.shared.log("[下载中心] sinf 注入：\(message)", category: .appStore)
+        LoginLogger.shared.log("[下载中心] sinf 注入：\(message)", category: .download)
     }
 }
 
