@@ -26,14 +26,26 @@ struct IPADownloadActionsSheet: View {
     /// 删除（删文件 + 删台账，列表侧负责刷新与提示）
     let onDelete: () -> Void
 
-    /// v0.3.387：「下载中」任务弹这个面板时为 true。
+    /// v0.3.387：任务**占用中**（`job.phase.isBusy`）时弹这个面板为 true。
     ///
     /// v0.3.394 改法（用户参考图是「点一行 → 展开这个包的详情」）：**不再裁剪行**，
     /// 全部动作照原样渲染，只把**需要本地包文件**的两行使灰 —— 「覆盖安装」「在线安装」。
     /// 其余照常：「提取下载链接」用任务直链、「复制商店链接」用台账商品号、
     /// 打开/分享/删除在真缺文件时会给出各自的提示（不再是「点下去没反应」）。
     /// 已下载条目走原样（默认 false）。
+    ///
+    /// 语义是「**占用中**」（`waiting / downloading / paused / installing` 都为 true），
+    /// **不是**「正在下载」。所以它只配用来**置灰**这两行，**不配**用来推右侧的状态字 ——
+    /// 那会把暂停也标成「下载中」，见 `pendingStageText`。
     var isPendingDownload: Bool = false
+
+    /// 占用中的任务**当前真实阶段文案**（= `Job.displayStage`，阶段文案唯一真源）。
+    ///
+    /// 「覆盖安装 / 在线安装」置灰时右侧标的就是它。以前这里硬编码「下载中」，而
+    /// `isPendingDownload` 由 `job.phase.isBusy` 推出、`.paused` 也为 true ⇒
+    /// **暂停任务在面板标「下载中」，与行上的「已暂停」同屏矛盾**（独立审计发现）。
+    /// 台账行（无任务）不传，保持 `nil`。
+    var pendingStageText: String? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -169,17 +181,28 @@ struct IPADownloadActionsSheet: View {
 
     // MARK: - 动作行
 
+    /// 占用中的任务，「覆盖安装 / 在线安装」两行右侧要标的状态字。
+    ///
+    /// 取值是任务的 **`Job.displayStage`**（阶段文案唯一真源），**不**由 `isPendingDownload`
+    /// 反推成「下载中」：`isPendingDownload` 的语义是 `phase.isBusy`（占用中），`.paused`
+    /// 也为 true —— 写死「下载中」会让暂停任务标「下载中」，与行上的「已暂停」同屏矛盾。
+    /// 非占用中（或未传 `pendingStageText`）→ 无状态字。
+    private var pendingStageTrailing: RowTrailing {
+        guard isPendingDownload, let text = pendingStageText else { return .none }
+        return .text(text)
+    }
+
     /// 安装：覆盖安装（原来的本地安装方式）+ 在线安装
     ///
-    /// v0.3.394：「下载中」的任务**把这两行置灰**（右侧标「下载中」）——
-    /// 本地还没有包文件，覆盖安装必然落到 `installLocal` 的「文件不存在」分支，
-    /// 而那条分支会给**这个文件名**记一条失败（`recordFileFailure`），
+    /// v0.3.394：占用中（`isPendingDownload`）的任务**把这两行置灰**（右侧标出**真实阶段**，
+    /// 见 `pendingStageTrailing`）—— 本地还没有包文件，覆盖安装必然落到 `installLocal` 的
+    /// 「文件不存在」分支，而那条分支会给**这个文件名**记一条失败（`recordFileFailure`），
     /// 之后真正下好的同名条目就会被标成红色「下载失败」（v0.3.390 专门修过这个坑）。
     /// 在线安装同样不该在包还没落地时另起一次。所以这两行只在有本地文件时可点。
     private var installRows: [RowSpec] {
         [
             RowSpec(icon: "arrow.down.app.fill", tint: .blue, title: "覆盖安装",
-                    trailing: isPendingDownload ? .text("下载中") : RowTrailing.none,
+                    trailing: pendingStageTrailing,
                     disabled: isPendingDownload) {
                 onOverwriteInstall()
                 dismiss()
@@ -189,7 +212,7 @@ struct IPADownloadActionsSheet: View {
     }
 
     /// 「在线安装」行。三条置灰规则：
-    /// 1. **v0.3.394**：下载中的任务（本地还没有包）→ 灰 + 「下载中」（理由见 `installRows`）；
+    /// 1. **v0.3.394**：占用中的任务（本地还没有包）→ 灰 + 真实阶段（理由见 `installRows`）；
     /// 2. 本机服务器当前被 `.share` 会话占用时不可点
     ///    （单例 server 一次只服务一份文件，再 `start()` 会先 `stop()` 掉那份会话）；
     /// 3. **v0.3.396（A 项）**：前置检查进行中 → 灰 + 行内转圈（免得用户连点两次）。
@@ -203,7 +226,7 @@ struct IPADownloadActionsSheet: View {
             }
         }
         let blockedByShare = IPALocalHTTPServer.shared.currentPurpose == .share
-        let note: String? = isPendingDownload ? "下载中" : (blockedByShare ? "分享中" : nil)
+        let note: String? = isPendingDownload ? pendingStageText : (blockedByShare ? "分享中" : nil)
         var trailing: RowTrailing = note.map { RowTrailing.text($0) } ?? RowTrailing.none
         var disabled = isPendingDownload || blockedByShare
         if onlineCheck == .checking {
