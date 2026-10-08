@@ -115,17 +115,28 @@ struct IPADownloadManagerView: View {
             // 用与软件源页**完全相同**的做法：同一个 `LoginLogView`、同一种「传分类数组预筛 +
             // 传同分类做按板块清空」的机制，只是分类换成「下载」。见 body 末尾的 `.sheet`。
             //
+            // ⚠️ 只在**全量**下载管理（`filterSource == nil`）显示本入口；来源过滤视图
+            // （`filterSource == .thirdPartySource`，即从「软件源管理」右上角进入的那个「下载管理」）
+            // **不显示**。用户要求「软件源只需要一个日志板块，只留一个软件源日志」：软件源板块
+            // 已经有它自己的唯一日志入口（`SignSourceListView` 左上角「软件源日志」，只读
+            // `.signSource`），而软件源侧下载的日志本就写 `.signSource`
+            // （见 `IPADownloadCenter.logCategory(for:)`）⇒ 在这个软件源子页里再挂一个「下载日志」
+            // 就是同一功能里的第二个日志板块。全量下载管理（AppStore / 爱思源的「下载管理」入口）
+            // 仍保留本入口，读 `.download` —— 那是下载板块自己的日志，与软件源板块互不相干。
+            //
             // 为什么放**右上角**（而软件源页按用户要求放左上角）：本页是**二级 push** 进来的
             // （`HomeView` → `SignSourceListView` → 本页），左上角恒为系统返回箭头 —— 在左上角
             // 再加一项会与返回箭头挤占 / 重叠，破坏返回手势的视觉与命中区。右上角本轮已清空
             // （刷新按钮已按用户要求删除），把日志入口放这里既不抢返回箭头、也不与齿轮 / 编辑冲突。
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showLog = true
-                } label: {
-                    Image(systemName: "doc.text.magnifyingglass")
+            if filterSource == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showLog = true
+                    } label: {
+                        Image(systemName: "doc.text.magnifyingglass")
+                    }
+                    .accessibilityLabel("下载日志")
                 }
-                .accessibilityLabel("下载日志")
             }
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
             // 刷新走下拉（见 body 上的 `.refreshable`）；右上角不设刷新按钮（用户要求）.
@@ -174,7 +185,8 @@ struct IPADownloadManagerView: View {
         // 长按安装包 → 「查看图标」→ 全屏预览。长按图片「保存到相册」由 `ImageGalleryViewer` 自带
         //（二次确认 → `MediaSaver`，无权限自动回落 `Documents/AppIcons`），这里只负责把 target 递进去.
         .fullScreenCover(item: $previewTarget) { target in
-            ImageGalleryViewer(urls: target.urls, startIndex: target.index)
+            ImageGalleryViewer(urls: target.urls, startIndex: target.index,
+                               logCategory: target.logCategory)
         }
         // v0.3.394（用户硬要求）：**装完不用退出这一页就能自己刷新**。
         //
@@ -557,6 +569,12 @@ struct IPADownloadManagerView: View {
         ToastCenter.shared.show("链接已复制")
     }
 
+    /// 「这个包从哪来」→ 取图日志板块：三方软件源 ⇒ 「软件源」，其余 ⇒ 「下载」。
+    /// 与 `IPADownloadCenter.logCategory(for:)` 同一口径（那个是 private，视图侧自持一份）。
+    private func logCategory(forSource raw: String) -> LoginLogger.Category {
+        raw == IPADownloadCenter.Source.thirdPartySource.rawValue ? .signSource : .download
+    }
+
     // MARK: - 概览
 
     /// v0.3.578：**来源过滤说明**（只在过滤视图显示）—— 用**一行次要文字**消除标题歧义。
@@ -696,6 +714,10 @@ struct IPADownloadManagerView: View {
                 // 「下载失败」（文件可能不完整/不存在）与「安装失败」（文件是好的、卡在安装环节）
                 // 对用户是两件事，不能都报「安装失败」——错标比不标更糟。
                 // 不再静默变回「重装」按钮：用户点了安装、什么都没发生、按钮又变回去，他根本不知道失败了。
+                //
+                // 状态来源：这条失败记录活在 `IPADownloadCenter.jobs`（**内存**，`@Published`）里，
+                // 不是磁盘台账字段（`IPADownloadItem` 没有失败字段）。它随进程存活，下拉刷新会
+                // 清掉它（见 `refresh()`），所以徽标不会长期挂着 —— 用户不会一直以为「现在还是坏的」。
                 let last = finishedJob(for: item)
                 let failText: String? = last?.phase == .failed
                     ? (last?.failureStage == .download ? "下载失败" : "安装失败")
@@ -741,9 +763,13 @@ struct IPADownloadManagerView: View {
         // 「保存图标」不在这里：进预览后长按图片即可（`ImageGalleryViewer` 自带），不重复一份.
         .contextMenu {
             let iconURL = item.iconURL ?? icons[item.bundleId ?? ""]
+            // 取图日志按包的来源分板：三方软件源 ⇒ 「软件源」，其余 ⇒ 「下载」。
+            // 该图标在「下载管理」里被查看，以前取图失败落「通用」、与来源无关（用户实测指正）。
+            let iconLogCategory = logCategory(forSource: item.source)
             iconMenuItems(iconURL: iconURL,
-                          fileNameBase: item.bundleId ?? item.title) {
-                showIconPreview(iconURL, target: $previewTarget)
+                          fileNameBase: item.bundleId ?? item.title,
+                          logCategory: iconLogCategory) {
+                showIconPreview(iconURL, target: $previewTarget, logCategory: iconLogCategory)
             }
             .disabled((iconURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
@@ -826,6 +852,7 @@ struct IPADownloadManagerView: View {
                     guideRow("加密包 · 带 sinf（未校验）", .secondary, "存疑：sinf 存在，但未校验过结构（无记录，或格式未知）.")
                     guideRow("加密包 · 缺 sinf", .orange, "安装包缺失 sinf，需补 sinf.")
                     guideRow("加密包 · sinf 异常", .orange, "sinf 存在，但结构异常/未知可能无法安装.")
+                    guideRow("未检测", .secondary, "尚未读到包内加密状态，重进本页会重新检测.")
 
                     Divider()
 
@@ -889,6 +916,20 @@ struct IPADownloadManagerView: View {
     /// 这里只兜住「刷新太快、看不见」这一种情况。`Task.sleep` 是**挂起**不是阻塞，主线程照常响应，不会卡顿.
     @MainActor
     private func refresh() async {
+        // 下拉刷新 = 「重读磁盘台账」+「丢掉内存里那些**一次性**的结束记录」。
+        //
+        // 为什么必须丢：行上的「安装失败」徽标（`fileRow` 里的 `failText`）来自
+        // `finishedJob(for:)` → `IPADownloadCenter.lastFinishedJob`，也就是 `center.jobs`
+        // 这条**内存**数组里一条 `phase == .failed` 的记录（`Job.failureStage` 决定显示
+        // 「安装失败」还是「下载失败」）。`reload()` 只重读磁盘台账
+        // （`IPADownloadLibrary.shared.items()`），**碰不到** `center.jobs` ——
+        // 所以旧实现里下拉刷新对「安装失败」徽标毫无作用（用户原话：上滑刷新状态不会刷新，
+        // 状态还持久化）。失败是一次性事件，刷新即视为用户已确认、该清掉：
+        // 清掉后 `finishedJob(for:)` 返回 nil ⇒ 徽标消失，按钮按台账现算回「安装 / 重装」。
+        //
+        // 只清「已结束」的记录：`clearFinished()` = `jobs.removeAll { !$0.phase.isBusy }`，
+        // 进行中的下载 / 安装（busy）一律不动，不会被这次刷新打断。
+        center.clearFinished()
         reload()
         // 0.5s 最短可见时长（刻意，理由见上）.
         try? await Task.sleep(nanoseconds: 500_000_000)
