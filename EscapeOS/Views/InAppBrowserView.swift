@@ -3,7 +3,7 @@ import WebKit
 
 /// App 内置网页浏览器（WKWebView）—— **不再静默跳转到外部 App / Safari**。
 ///
-/// 顶部栏：标题 + 「分享链接」（`UIActivityViewController`）+ 关闭。
+/// 顶部栏：标题 + 「用系统浏览器打开」（右上角 `safari`）+ 「分享链接」（`UIActivityViewController`）+ 关闭。
 /// 自带加载进度条与返回上一页。
 struct InAppBrowserView: View {
 
@@ -34,6 +34,17 @@ struct InAppBrowserView: View {
                     } label: {
                         Image(systemName: "xmark")
                     }
+                    .accessibilityLabel("关闭")
+                }
+                // 「用系统浏览器打开」—— 排在分享之前，分享图标保持在最右侧原位（与截图一致）。
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        openInSystemBrowser()
+                    } label: {
+                        Image(systemName: "safari")
+                    }
+                    .disabled(systemBrowserURL == nil)
+                    .accessibilityLabel("用系统浏览器打开")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -41,10 +52,35 @@ struct InAppBrowserView: View {
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
+                    .accessibilityLabel("分享链接")
                 }
             }
             .sheet(item: $shareTarget) { ShareSheet(items: $0.items) }
         }
+    }
+
+    /// 交给系统浏览器打开的地址（右上角 `safari` 按钮）。
+    ///
+    /// · 取**导航后**的当前页地址（`WKWebView.url`，由 `BrowserModel.currentURL` 承接）；尚未加载完
+    ///   （`currentURL == nil`）时退回初始 `url`。
+    /// · 只认 http(s)：`itms-services://`（在线安装兜底）与 `nsk-sign://` 深链这类**非 http(s)**
+    ///   地址，交给系统浏览器打开没有意义（深链的「跳转」归导航策略 `decidePolicyFor` 处理），
+    ///   故此时返回 `nil` ⇒ 按钮置灰不可点。
+    private var systemBrowserURL: URL? {
+        let candidate = model.currentURL ?? url
+        guard let scheme = candidate.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return nil }
+        return candidate
+    }
+
+    /// 用系统浏览器（Safari）打开当前页。
+    ///
+    /// 用户说的「加速」：系统浏览器有独立的持久缓存与内容拦截器，同一文档页在那边往往比内置
+    /// `WKWebView` 更快；这也是本次只加按钮、不改 `WKWebViewConfiguration` 的原因（内置侧没有
+    /// 明显且低风险的提速点，见简报）。
+    private func openInSystemBrowser() {
+        guard let target = systemBrowserURL else { return }
+        UIApplication.shared.open(target, options: [:], completionHandler: nil)
     }
 }
 
@@ -114,6 +150,15 @@ private struct WebViewContainer: UIViewRepresentable {
             }
             let scheme = target.scheme?.lowercased() ?? ""
             if scheme == "http" || scheme == "https" || scheme == "about" {
+                // v0.3.583：**主框架导航一发起就把当前地址换成目标页**。
+                //
+                // 原先只在 `didFinish` 更新 `currentURL` ⇒ 二次导航的**加载期间**它仍是上一页，
+                // 此时点右上角「用系统浏览器打开」会打开**上一页**（复核发现的反例）。
+                // 这里用 `navigationAction.request.url`（真实请求地址）而不是 `webView.url`
+                // —— 后者在导航完成前不保证已切换。`about:` 是空白页，不作为可外开的地址。
+                if navigationAction.targetFrame?.isMainFrame != false, scheme != "about" {
+                    model.currentURL = target
+                }
                 decisionHandler(.allow)
             } else {
                 UIApplication.shared.open(target, options: [:], completionHandler: nil)
