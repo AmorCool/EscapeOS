@@ -144,7 +144,10 @@ final class IPADownloadCenter: ObservableObject {
         var sinfBase64: String? = nil
         var phase: Phase = .waiting
         var progress: Double = 0
-        var stageText = "等待中"
+        /// v0.3.583：**对外只读** —— 唯一写入口是 `Job.setStage(_:phase:)`（见文件末尾的
+        /// `Job` extension）。设为 `private(set)` 是为了让「只有引擎内部能写 `stageText`」
+        /// 成为**编译器强制**：视图层再想直接改它，编译不过。
+        private(set) var stageText = "等待中"
         var localFileName: String?
         var error: String?
         /// 仅当 `phase == .failed` 时有意义；按**失败发生在哪个阶段**打标，不去猜错误码
@@ -453,7 +456,7 @@ final class IPADownloadCenter: ObservableObject {
         // 行键：源列表（第三方软件源）任务用 downloadURL（= `remoteURL`）当行键。
         // 其它来源保持 `nil` —— 它们的列表「一行一个 App」，bundleId 已能唯一认行。
         job.rowKey = source == .thirdPartySource ? remoteURL : nil
-        job.stageText = "排队中"
+        job.setStage("排队中")
         jobs.insert(job, at: 0)
         pump()
         return job.id
@@ -470,15 +473,14 @@ final class IPADownloadCenter: ObservableObject {
         var job = Job(name: name, bundleId: bundleId, version: nil, iconURL: iconURL,
                       remoteURL: nil, source: .i4Free, accountEmail: nil)
         job.storeItemId = storeItemId
-        job.stageText = "查找安装包"
+        job.setStage("查找安装包")
         jobs.insert(job, at: 0)
         let id = job.id
         guard let hit = await SourcePackageLocator.find(bundleId: bundleId, name: name) else {
             update(id) {
-                $0.phase = .failed
                 // 还没拿到直链就失败了 → 属下载/取包链路，不是安装链路
                 $0.failureStage = .download
-                $0.stageText = "未找到安装包"
+                $0.setStage("未找到安装包", phase: .failed)
                 $0.error = "免登录源里没有该应用"
             }
             return id
@@ -488,7 +490,7 @@ final class IPADownloadCenter: ObservableObject {
             $0.version = hit.version
             // 调用点没给商品号时，用爱思接口返回的那个兜底（它就是 App Store trackId）
             if ($0.storeItemId ?? "").isEmpty { $0.storeItemId = hit.itemId }
-            $0.stageText = "排队中"
+            $0.setStage("排队中")
         }
         // v0.3.387：直链与版本刚开始确定 → 也立刻落盘一次（此刻台账多半还没有这一行，属 no-op；
         // 重下同版本时才真正生效）。真正写入在 `startDownload` 与 `handle` 两处。
@@ -521,8 +523,7 @@ final class IPADownloadCenter: ObservableObject {
         // 而 `AppStoreItem.id` 本身就是 `trackId` —— 根本不需要去读包内 `iTunesMetadata`
         // （重签包那个文件会被删掉，读包必然失败）。
         job.storeItemId = item.id
-        job.stageText = "准备中"
-        job.phase = .downloading
+        job.setStage("准备中", phase: .downloading)
         jobs.insert(job, at: 0)
         let id = job.id
 
@@ -561,7 +562,7 @@ final class IPADownloadCenter: ObservableObject {
                             self.update(id) {
                                 guard $0.phase == .downloading else { return }
                                 $0.progress = p
-                                $0.stageText = "下载中"
+                                $0.setStage("下载中")
                             }
                         }
                     },
@@ -622,9 +623,8 @@ final class IPADownloadCenter: ObservableObject {
                         // 不再自动进入安装 ⇒ 也不会再出现「下载完成却停在 75%」那种状态：
                         // `phase == .done` ⇒ `overall == 1`（见 `Job.overall`），
                         // 进度环走满、文案「已下载」，用户在「下载管理」点该行的「安装」才装。
-                        $0.phase = .done
                         $0.progress = 1
-                        $0.stageText = "已下载"
+                        $0.setStage("已下载", phase: .done)
                         $0.localFileName = dest.lastPathComponent
                     }
                 }
@@ -640,9 +640,8 @@ final class IPADownloadCenter: ObservableObject {
                         // 失败一律属下载链路。旧的 `$0.phase == .installing ? .install : .download`
                         // 已无意义（phase 不会再进 `.installing`），留着会把下载失败错标成「安装失败」。
                         $0.failureStage = .download
-                        $0.phase = .failed
                         $0.error = error.localizedDescription
-                        $0.stageText = "失败"
+                        $0.setStage("失败", phase: .failed)
                     }
                     // v0.3.578：**失败必须可见** —— 以前这里只改内存状态、一行日志都不写，
                     // 真机上表现为「点了下载、什么都不发生」。与 `installLocal` / `handle` 同口径落日志。
@@ -674,8 +673,7 @@ final class IPADownloadCenter: ObservableObject {
         }
         var job = Job(name: displayName, bundleId: bundleId, version: version, iconURL: iconURL,
                       remoteURL: nil, source: source, accountEmail: nil)
-        job.phase = .installing
-        job.stageText = "安装中"
+        job.setStage("安装中", phase: .installing)
         job.localFileName = fileName
         jobs.insert(job, at: 0)
         let id = job.id
@@ -726,8 +724,7 @@ final class IPADownloadCenter: ObservableObject {
                 self.update(id) {
                     guard $0.phase == .installing else { return }
                     $0.failureStage = .install
-                    $0.phase = .failed
-                    $0.stageText = "失败"
+                    $0.setStage("失败", phase: .failed)
                     $0.error = "安装长时间无进展（\(Int(Self.installWatchdogTimeout)) 秒），请检查本地隧道后重试"
                     $0.speedBytesPerSecond = 0
                 }
@@ -794,7 +791,7 @@ final class IPADownloadCenter: ObservableObject {
                     IPADownloadLibrary.shared.markInstalled(fileName: fileName)
                 }
                 await MainActor.run {
-                    self.update(id) { $0.phase = .done; $0.progress = 1; $0.stageText = "已完成" }
+                    self.update(id) { $0.progress = 1; $0.setStage("已完成", phase: .done) }
                 }
             } catch {
                 // v0.3.382：失败原因只进日志 —— 界面行上只显示「安装失败」四个字，不把长错误塞进 UI
@@ -813,9 +810,8 @@ final class IPADownloadCenter: ObservableObject {
                     self.update(id) {
                         // 走到了这里就是安装链路本身失败（文件存在且可读）
                         $0.failureStage = .install
-                        $0.phase = .failed
                         $0.error = error.localizedDescription
-                        $0.stageText = "失败"
+                        $0.setStage("失败", phase: .failed)
                     }
                 }
             }
@@ -832,9 +828,8 @@ final class IPADownloadCenter: ObservableObject {
         jobs.removeAll { $0.localFileName == fileName && !$0.phase.isBusy }
         var job = Job(name: displayName, bundleId: bundleId, version: version, iconURL: iconURL,
                       remoteURL: nil, source: .i4Free, accountEmail: nil)
-        job.phase = .failed
         job.failureStage = .download
-        job.stageText = "文件不存在"
+        job.setStage("文件不存在", phase: .failed)
         job.error = reason
         job.localFileName = fileName
         jobs.insert(job, at: 0)
@@ -864,7 +859,7 @@ final class IPADownloadCenter: ObservableObject {
         // `handle` 的失败分支看到的就是 `phase == .downloading` → 把「暂停」判成「下载失败」
         // → 用户实测的「暂停后几率变失败、进度归 0」（`.failed` 的 `overall` 恒为 0）。
         pausingIDs.insert(id)
-        update(id) { $0.phase = .paused; $0.stageText = "已暂停"; $0.speedBytesPerSecond = 0 }
+        update(id) { $0.setStage("已暂停", phase: .paused); $0.speedBytesPerSecond = 0 }
         runners[id]?.pause()
         appleIDControls[id]?.pause()
         resetSpeedWindow()
@@ -877,7 +872,7 @@ final class IPADownloadCenter: ObservableObject {
             r.resume()
             // v0.3.394：续传要重新起窗口（见 `resetSpeedWindow` 注释）
             resetSpeedWindow()
-            update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
+            update(id) { $0.setStage("下载中", phase: .downloading) }
             return
         }
         // v0.3.583：AppleID 通道 —— 传输在 `IPAFileDownloader` 里，控制面同样是「续传」
@@ -887,7 +882,7 @@ final class IPADownloadCenter: ObservableObject {
         if let c = appleIDControls[id] {
             c.resume()
             resetSpeedWindow()
-            update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
+            update(id) { $0.setStage("下载中", phase: .downloading) }
             return
         }
         // v0.3.398：下载流已经不在了 → 当**重新排队**处理。
@@ -899,8 +894,7 @@ final class IPADownloadCenter: ObservableObject {
         // 走这条兜底说明流已断（`resumeData` 也随流一起没了）→ 只能从头下，
         // 所以把进度归零：界面显示 44% 却从头传是在骗人。
         update(id) {
-            $0.phase = .waiting
-            $0.stageText = "排队中"
+            $0.setStage("排队中", phase: .waiting)
             $0.progress = 0
             $0.receivedBytes = 0
             $0.speedBytesPerSecond = 0
@@ -950,9 +944,8 @@ final class IPADownloadCenter: ObservableObject {
             // 别把一次「下载成功但没删掉」误标成下载失败。
             if job.phase.isBusy {
                 update(id) {
-                    $0.phase = .failed
                     $0.failureStage = .download
-                    $0.stageText = "删除失败"
+                    $0.setStage("删除失败", phase: .failed)
                     $0.error = result == .rejectedReadOnly
                         ? "下载台账文件损坏，安装包未删除"
                         : "安装包文件无法删除（可能被占用）"
@@ -970,7 +963,7 @@ final class IPADownloadCenter: ObservableObject {
     func retry(_ id: UUID) {
         guard let job = job(id), job.phase == .failed else { return }
         update(id) {
-            $0.phase = .waiting
+            $0.setStage("排队中", phase: .waiting)
             $0.progress = 0
             // v0.3.398：已下字节也要归零。`applyDownloadProgress` 只在 `written > receivedBytes`
             // 时才写，留着上次的 120 MB 会让「进度条 0%」和「已下 120 MB/271 MB」自相矛盾，
@@ -979,7 +972,6 @@ final class IPADownloadCenter: ObservableObject {
             $0.speedBytesPerSecond = 0
             $0.error = nil
             $0.failureStage = nil
-            $0.stageText = "排队中"
         }
         pump()
     }
@@ -1004,7 +996,7 @@ final class IPADownloadCenter: ObservableObject {
 
     private func startDownload(_ id: UUID) {
         guard let job = job(id), let urlString = job.remoteURL, let url = URL(string: urlString) else { return }
-        update(id) { $0.phase = .downloading; $0.stageText = "下载中" }
+        update(id) { $0.setStage("下载中", phase: .downloading) }
 
         var req = URLRequest(url: url)
         req.timeoutInterval = 120
@@ -1087,8 +1079,7 @@ final class IPADownloadCenter: ObservableObject {
                     // v0.3.412：彻底去掉自动装 —— 用户明确要求「以后安装都不能自动安装
                     // 否则怕出bug」。下载完成永远停在「已下载」，由用户在「下载管理」
                     // 里点对应行的「安装」手动装。
-                    $0.phase = .done
-                    $0.stageText = "已下载"
+                    $0.setStage("已下载", phase: .done)
                     // v0.3.394：收工了 → 速度归零、已下字节对齐总量（别留个 99.8% 的尾巴）
                     if $0.totalBytes > 0 { $0.receivedBytes = $0.totalBytes }
                     $0.speedBytesPerSecond = 0
@@ -1134,9 +1125,8 @@ final class IPADownloadCenter: ObservableObject {
         update(id) {
             // 下载链路（取流/落盘/HTTP 状态码）失败 —— 文件可能根本不完整
             $0.failureStage = .download
-            $0.phase = .failed
             $0.error = error.localizedDescription
-            $0.stageText = "失败"
+            $0.setStage("失败", phase: .failed)
             // v0.3.394：失败 → 速度归零（界面上不该挂着一个速度数字）
             $0.speedBytesPerSecond = 0
         }
@@ -1170,6 +1160,51 @@ final class IPADownloadCenter: ObservableObject {
         await MainActor.run {
             IPADownloadLibrary.shared.markSinf(fileName: fileName, structurallyValid: structure)
         }
+    }
+}
+
+// MARK: - v0.3.583：阶段文案的**唯一真源**与**唯一写入口**
+
+extension IPADownloadCenter.Job {
+
+    /// 对外显示的阶段文案 —— **唯一真源**。
+    ///
+    /// 视图**只读这个**，不得再自行用 `phase` / `stageText` 推导。
+    ///
+    /// 规则：**只特判 `.paused`，其余一律用 `stageText`**。
+    /// 这与迁移前 6 个视图里逐字重复的防御式写法
+    /// （`job.phase == .paused ? "已暂停" : job.stageText`）**逐字等价**。
+    ///
+    /// 为什么只特判 `.paused`（而不是把 `.failed` / `.done` 也归一）：
+    ///   - `.paused` 时 `stageText` 可能被滞后回调刷成「下载中」（历史 bug）——
+    ///     用 `phase` 写死「已暂停」才能盖住那条滞后写入。
+    ///   - `.failed` / `.done` 时 `stageText` 里带**具体原因**：
+    ///     失败态会写「文件不存在」/「未找到安装包」/「删除失败」，
+    ///     完成态会写「已下载」。把这些归一成「失败」/「已完成」会**丢掉信息**，
+    ///     是观感回归 —— 故这里**必须**原样透出 `stageText`。
+    var displayStage: String {
+        phase == .paused ? "已暂停" : stageText
+    }
+
+    /// **唯一的状态写入口** —— 「改阶段」与「改文案」从此只能一起写。
+    ///
+    /// 为什么必须收敛：`phase`（枚举）与 `stageText`（自由字符串）本是**同一阶段的两个描述**。
+    /// 以前引擎里允许各写各的（20+ 处单独写 `stageText`），于是会出现
+    /// 「`phase == .paused` 而 `stageText == "下载中"`」这种自相矛盾 ——
+    /// 视图只能各自打补丁（`phase == .paused ? "已暂停" : stageText`）去遮，
+    /// 6 个视图各补一次，补到哪个漏哪个。
+    ///
+    /// 现在两者**只能一起写**：显式给 `phase` 表示「这次要迁移阶段」；
+    /// 传 `nil` 表示「只更新文案、阶段不变」（例如 AppleID 通道的进度回调：
+    /// 仍在 `.downloading`，只是把文案刷成「下载中」）。
+    /// 不存在「只改一个、另一个偷偷留在旧值」的写法。
+    ///
+    /// - Parameters:
+    ///   - text: 本次写入的 `stageText`。
+    ///   - phase: 本次要迁移到的阶段；`nil` = 沿用当前 `phase`。
+    mutating func setStage(_ text: String, phase: Phase? = nil) {
+        if let phase { self.phase = phase }
+        self.stageText = text
     }
 }
 
