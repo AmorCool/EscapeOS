@@ -62,6 +62,14 @@ struct SignSourceAppListView: View {
     /// 这个是「布尔否定」。故它在弹层里**独立成组**、用 `Toggle` 而非 `Picker`，不与等值筛选混在一起。
     @State private var excludeNonDownloadable = false
 
+    /// 「屏蔽公告」—— 开启后**整个公告 `Section` 不渲染**（用户原话「开启了后公告位 banner 隐藏」）。
+    ///
+    /// 存储：用 `@AppStorage`（`UserDefaults`）**持久化**，与同弹层里三个等值筛选 + `excludeNonDownloadable`
+    /// 的 `@State`（临时、退出即复位）**刻意不同**。理由见 `filterSheet` 里该开关的注释：
+    /// 它们是「本次检索的条件」，本开关是「我是否要看公告」这一**长期偏好**，语义不同故存法不同。
+    /// 键名沿用本仓 `@AppStorage` 的「模块.项」点号惯例（如 `AppStore.ShopRegion`）。
+    @AppStorage("SignSource.HideAnnouncement") private var hideAnnouncement = false
+
     /// 深链「跳转」的内置浏览器目标（复用既有 `InAppBrowserView`，即用户说的「EscapeSpace 弹出界面」）。
     @State private var browserTarget: LinkShareTarget?
 
@@ -145,8 +153,9 @@ struct SignSourceAppListView: View {
     var body: some View {
         List {
             // 源公告 banner —— 搜索框下方、App 列表上方（照全能签原版：公告是表格的 header，
-            // 见 `announcementSection(_:)`）。`message` 为空 ⇒ 不渲染，不留空块。
-            if let notice = announcement {
+            // 见 `announcementSection(_:)`）。`message` 为空 ⇒ 不渲染，不留空块；
+            // 用户开启「屏蔽公告」(`hideAnnouncement`) ⇒ 同样不渲染（`Section` 整块消失）。
+            if !hideAnnouncement, let notice = announcement {
                 announcementSection(notice)
             }
             if filteredApps.isEmpty {
@@ -253,6 +262,9 @@ struct SignSourceAppListView: View {
         let title: String
         /// 其余行（原版 13pt regular 次级色居中）。可为空。
         let body: String
+        /// **整段原文**（归一化换行 + 去首尾空白后的全文，含内部换行）—— 「复制」按钮复制的就是它，
+        /// 而非 `title` / `body` 的拼接：后者在首行为空时会丢一个换行，且拼接无法还原原始分段。
+        let plain: String
     }
 
     /// 源公告原文 → 标题 / 正文；空或全空白 ⇒ `nil`（不显示 banner）。
@@ -268,11 +280,11 @@ struct SignSourceAppListView: View {
         let text = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         guard let nl = text.firstIndex(of: "\n") else {
-            return Announcement(title: "", body: text)
+            return Announcement(title: "", body: text, plain: text)
         }
         let title = String(text[..<nl]).trimmingCharacters(in: .whitespacesAndNewlines)
         let body = String(text[text.index(after: nl)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return Announcement(title: title, body: body)
+        return Announcement(title: title, body: body, plain: text)
     }
 
     /// 公告卡片 —— 居中多行文字，首行加重、其余次级色（对齐全能签观感，落在本仓 `List` 的分组卡片里）。
@@ -280,6 +292,17 @@ struct SignSourceAppListView: View {
     /// 原版把它设成 `tableView.tableHeaderView`（`applyAnnouncementText:` @`0x1003631c8`），
     /// 即**列表之上、随内容滚动**；这里用 `List` 顶部的独立 `Section` 表达同一层级。
     /// **刻意不做折叠 / 限行**：原版全量显示，且它随列表滚动、不会长期占屏（判断见简报 §③）。
+    ///
+    /// 本轮新增「选择 + 复制」：
+    /// · `.textSelection(.enabled)` —— 公告文字可**长按选择**（用户原话「支持选择复制公告文字内容」）。
+    ///   iOS 15+ 起可用；本仓 `Resources/Info.plist` 的 `MinimumOSVersion` 是 **18.0**，
+    ///   且全仓已有 10+ 处 `.textSelection(.enabled)` 均未加守卫 ⇒ 这里同样**无需** `#available`。
+    /// · 右上角「复制」按钮 —— 一键复制**整段原文**（`notice.plain`）。`textSelection` 只能复制
+    ///   「用户选中的片段」，与「整段一键复制」互补，故两者都保留。
+    ///
+    /// 手势冲突评估：公告是**独立 `Section`**，不是带 `NavigationLink` 的行 ⇒ 可选中**不会**
+    /// 影响任何行点击（那些行的 `Text` 并未开启 textSelection）。卡片自身也没有点击 / 长按手势，
+    /// 故 `.textSelection` 只接管「长按选中」，无既有手势被覆盖。
     private func announcementSection(_ notice: Announcement) -> some View {
         Section {
             VStack(spacing: 6) {
@@ -298,7 +321,31 @@ struct SignSourceAppListView: View {
                 }
             }
             .padding(.vertical, 4)
+            .textSelection(.enabled)
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    copyAnnouncement(notice)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("复制公告")
+            }
         }
+    }
+
+    /// 「复制」按钮 —— 把**整段公告原文**（`notice.plain`，保留内部换行）写入剪贴板并提示。
+    ///
+    /// 写剪贴板沿用本仓既有写法 `UIPasteboard.general.string = …`
+    /// （如 `SignSourceListView` 复制源地址、`IPADownloadActionsSheet` 复制商店链接）。
+    /// 反馈文案 `已复制公告` 对齐全仓「已复制源地址 / 已复制商店链接」句式。
+    private func copyAnnouncement(_ notice: Announcement) {
+        UIPasteboard.general.string = notice.plain
+        ToastCenter.shared.show("已复制公告")
     }
 
     // MARK: - 筛选弹层（分类 / 价格 / 类型 / 排序，四段）
@@ -328,6 +375,12 @@ struct SignSourceAppListView: View {
                 // 避免与上面两个等值筛选混淆（规格 §6 ★ 的等值匹配只适用于分类 / 价格）。
                 Section {
                     Toggle("排除不可下载", isOn: $excludeNonDownloadable)
+                    // 「屏蔽公告」：开启后顶部公告 `Section` 不渲染（用户原话「开启了后公告位 banner 隐藏」）。
+                    // 与上面「排除不可下载」同属**否定式布尔开关**，故并入同一「类型」分组。
+                    // ⚠️ 它**持久化**（`@AppStorage`），而上面三个等值筛选与「排除不可下载」是 `@State`（临时）：
+                    // 那些是「本次检索条件」，本开关是「我是否要看公告」的**长期偏好**（用户语气是「我不喜欢公告」），
+                    // 下次进来应自动隐藏 ⇒ 必须持久化。两者语义不同，故存法不同、互不干扰。
+                    Toggle("屏蔽公告", isOn: $hideAnnouncement)
                 } header: {
                     Text("类型")
                 } footer: {
@@ -352,6 +405,7 @@ struct SignSourceAppListView: View {
                         priceFilter = .all
                         sortFilter = .sourceOrder
                         excludeNonDownloadable = false
+                        hideAnnouncement = false
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
