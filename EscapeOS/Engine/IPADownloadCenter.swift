@@ -1202,7 +1202,12 @@ extension IPADownloadCenter.Job {
     /// - Parameters:
     ///   - text: 本次写入的 `stageText`。
     ///   - phase: 本次要迁移到的阶段；`nil` = 沿用当前 `phase`。
-    mutating func setStage(_ text: String, phase: Phase? = nil) {
+    ///
+    /// 注意参数类型必须写全限定名 `IPADownloadCenter.Phase`：`Phase` 是
+    /// `IPADownloadCenter` 的**直接成员**（与 `Job` 平级），而 Swift 在
+    /// `extension Outer.Inner` 里做名字查找时**只往 `Inner` 与模块作用域找、不往 `Outer` 找**
+    /// ⇒ 裸写 `Phase` 会报 `cannot find type 'Phase' in scope`（v0.3.584 首次 CI 实测）。
+    mutating func setStage(_ text: String, phase: IPADownloadCenter.Phase? = nil) {
         if let phase { self.phase = phase }
         self.stageText = text
     }
