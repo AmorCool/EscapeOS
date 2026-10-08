@@ -33,6 +33,68 @@ enum ImportedPackageScanner {
     }
 }
 
+/// 三个二级页共用的「删除安装包」入口。
+///
+/// 把该包在本机的**全部落点**删掉：原件、修补产物、以及 `Documents/Repaired/` 里的镜像副本。
+/// 返回**真实结果**给调用方，由它按结果提示（不做「假成功」——见 `IPADownloadLibrary.RemoveResult`
+/// 的同一取向）。本仓「已导入」没有持久化台账，列表由 `ImportedPackageList.scanListing` **扫盘推导**
+/// ⇒ 文件删掉即等于清单记录随之消失，无需另删一份台账；唯一需要单独清的是 `Documents/Repaired/`
+/// 那份镜像（它不在 `Imports/` 下，扫盘看不到）.
+///
+/// 为什么不复用 `ImportedPackageMover.delete`：后者的落点只认 `originalPath`（原件），
+/// 「已修补」块的包常常没有原件（原件在安装成功后即删，或老平铺产物本就无原件路径）⇒ 它会直接
+/// 返回 `false`，删不掉。本组件按**包名**列举落点，新落点目录 / 老平铺两种形态都能覆盖.
+///
+/// 图标缓存不在此删：它是 Caches 下「按包 id 的 MD5 命名」的文件，删完文件后两页的 `loadIcons()`
+/// 会调 `ImportedPackageIconStore.pruneStaleIcons()` 统一清掉无主缓存（见该方法的判据）。
+enum ImportedPackageDeleter {
+
+    /// 删除结果 —— 让调用方能给**真实**反馈，而不是无条件报「已删除」。
+    enum Result: Equatable {
+        /// 至少删掉了一处落点（文件 / 目录 / 镜像）。
+        case removed
+        /// 磁盘上已找不到该包的任何落点（可能已被删）—— 视为「已不存在」，不算失败。
+        case notFound
+        /// 有落点存在但删不掉（被占用 / 权限）—— 必须如实上报。
+        case failed
+    }
+
+    /// 删除该包的全部落点，返回实际结果。
+    static func delete(_ package: ImportedPackage) -> Result {
+        let fm = FileManager.default
+        let imports = ImportService.importsDirectory()
+        // 镜像落盘名与 `RepairedProductStore.leafName` 同口径（同一个 `sanitize`），否则清不到。
+        let leaf = FileNameRules.sanitize("\(package.name).ipa") ?? "\(package.name).ipa"
+        let targets = [
+            // 新落点：`Imports/<包名>/`（整目录，内含 original.ipa / repaired.ipa）。
+            imports.appendingPathComponent(package.name, isDirectory: true),
+            // 老平铺原件：`Imports/<包名>.ipa`。
+            imports.appendingPathComponent("\(package.name).ipa"),
+            // 老平铺产物仓库：`Imports/repaired/<包名>.ipa`。
+            imports.appendingPathComponent("repaired", isDirectory: true)
+                .appendingPathComponent("\(package.name).ipa"),
+            // 「已修补」专属目录镜像：`Documents/Repaired/<包名>.ipa`。
+            RepairedProductStore.directory().appendingPathComponent(leaf),
+        ]
+
+        var anyExisted = false
+        var anyFailed = false
+        for url in targets where fm.fileExists(atPath: url.path) {
+            anyExisted = true
+            do {
+                try fm.removeItem(at: url)
+            } catch {
+                anyFailed = true
+                LoginLogger.shared.log(
+                    "[共享修补] 删除安装包落点失败：\(error.localizedDescription)（\(url.lastPathComponent)）",
+                    category: .shareConvert)
+            }
+        }
+        if anyFailed { return .failed }
+        return anyExisted ? .removed : .notFound
+    }
+}
+
 /// 无真图标时的首字母块（画法复用 `ImportView.monogram` / IPADownloadManagerView 的 monogram）。
 ///
 /// 它是 `ImportedPackageIconView` 的**回落项**：从包内读不出图标时用它，绝不显示空白或

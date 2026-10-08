@@ -5,14 +5,14 @@ import SwiftUI
 // 从「共享转换」主页的「已修补」栏目**点击进入**（不再在原页展开 / 收拢）。
 // 左上角**系统返回键 + 额外向上箭头并存**（两者都返回上一级，用户明确接受两个入口）；
 // **不隐藏返回键** —— 隐藏会连带禁掉系统左滑返回手势。支持搜索；
-// 行内**不常驻按钮**，单条动作收进 `.swipeActions`：导出 / 在线安装 / 覆盖升级安装
+// 行内**不常驻按钮**，单条动作收进 `.swipeActions`：导出 / 在线安装 / 覆盖安装 / 删除安装包
 // （**不给重新修补** —— 已修补的包无需再修，且原件已按需求 #17 删除，无从下手）。
 //
 // 骨架与「已导入」页一致（搜索栏 / 多选 + 全选 / 底部批量条），实现见 `ImportedListPage.swift` 顶部注释。
 //
 // 数据源：`ImportedPackageList.scanListing(...).repaired`（磁盘证据）。
 //
-// 底栏恒 2 个按钮：主按钮「覆盖 / 升级安装（N）」+ 附加「导出（N）」，主按钮语义不随选中数翻转。
+// 底栏：主按钮「覆盖安装（N）」+ 附加「删除（N）」「导出（N）」，主按钮语义不随选中数翻转。
 // 在线安装是 OTA 单包通道，多选语义不成立，只在行内 `.swipeActions` 提供（见 `batchBar`）。
 //
 // 批量导出（用户需求）：已修补产物额外镜像一份到**专属目录** `Documents/Repaired/`
@@ -46,6 +46,15 @@ struct RepairedListPage: View {
     @State private var workingId: String?
     /// 单条 / 批量导出共用一个分享入口（多 URL 一次交给系统面板）。
     @State private var sharePayload: RepairedSharePayload?
+    /// 待二次确认的「删除安装包」目标（非空即弹确认）。删除是破坏性操作（落盘文件不可恢复），
+    /// 必须先确认再动手 —— 与「已导入」页的删除同一取向.
+    @State private var pendingDelete: DeleteConfirm?
+
+    /// 删除确认的载荷（`Identifiable` ⇒ 直接喂给 `.alert(item:)`）。
+    private struct DeleteConfirm: Identifiable {
+        let id = UUID()
+        let items: [ImportedPackage]
+    }
 
     private var visible: [ImportedPackage] {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -95,7 +104,7 @@ struct RepairedListPage: View {
                         row(p)
                     }
                 } footer: {
-                    Text("已修补的包支持在线安装、覆盖 / 升级安装与导出；原件已删除，不再提供重新修补.")
+                    Text("已修补的包支持在线安装、覆盖安装与导出；原件已删除，不再提供重新修补.")
                 }
             }
         }
@@ -146,6 +155,13 @@ struct RepairedListPage: View {
             // 批量导出即「一次把所选 IPA 全部交给分享面板」，不逐个、不压缩。
             ShareSheet(items: payload.urls)
         }
+        // 「删除安装包」的二次确认。破坏性操作（落盘文件 + 专属目录镜像不可恢复），先确认再动手.
+        .alert(item: $pendingDelete) { confirm in
+            Alert(title: Text("删除确认"),
+                  message: Text("将从本机删除这 \(confirm.items.count) 个安装包及其修补产物，并清除专属目录里的副本. 删除后无法恢复."),
+                  primaryButton: .destructive(Text("删除")) { performDelete(confirm.items) },
+                  secondaryButton: .cancel(Text("取消")))
+        }
         // 长按一行 → 「查看图标」→ 全屏预览；长按图片「保存到相册」由 `ImageGalleryViewer` 自带
         //（二次确认 → `MediaSaver`，无权限自动回落 `Documents/AppIcons`），这里只负责把 target 递进去.
         .fullScreenCover(item: $previewTarget) { target in
@@ -169,33 +185,31 @@ struct RepairedListPage: View {
         )
     }
 
-    /// 底部批量条。底栏恒 2 个按钮：主按钮「覆盖 / 升级安装（N）」+ 附加「导出（N）」。
+    /// 底部批量条。主按钮「覆盖安装（N）」+ 附加「删除（N）」「导出（N）」。
     /// 主按钮语义稳定，不随选中数翻转；在线安装是单包通道，只在行内 `.swipeActions` 提供。
     private var batchBar: some View {
         BatchActionBar(selectedCount: selected.count,
-                       subtitle: batchSubtitle,
-                       primaryTitle: "覆盖 / 升级安装（\(selected.count)）",
+                       subtitle: selectedSizeText,
+                       primaryTitle: "覆盖安装（\(selected.count)）",
                        primaryDisabled: batchPrimaryDisabled,
                        primaryAction: { runOverwriteInstall(selectedPackages) }) {
-            Button("导出（\(selected.count)）") { exportSelection() }
+            HStack(spacing: 8) {
+                // 「删除安装包」：批量入口（左滑是单条入口）。破坏性操作，先二次确认。
+                Button("删除（\(selected.count)）", role: .destructive) {
+                    pendingDelete = DeleteConfirm(items: selectedPackages)
+                }
                 .buttonStyle(.bordered)
                 .disabled(selected.isEmpty || busy)
+                Button("导出（\(selected.count)）") { exportSelection() }
+                    .buttonStyle(.bordered)
+                    .disabled(selected.isEmpty || busy)
+            }
         }
     }
 
     private var batchPrimaryDisabled: Bool {
         if selected.isEmpty || busy { return true }
         return selectedPackages.contains { !canInstallOrOverwrite($0) }
-    }
-
-    /// 底栏副标题：合计大小；含状态未知的包时追加降级说明（不再静默置灰）。
-    private var batchSubtitle: String? {
-        var parts: [String] = []
-        if let size = selectedSizeText { parts.append(size) }
-        if selectedPackages.contains(where: { $0.isInstalled == nil }) {
-            parts.append("无法确认本机安装状态，将按全新安装处理")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// 底栏「导出（N）」：单条走单条、多选走批量。
@@ -250,10 +264,18 @@ struct RepairedListPage: View {
             Button {
                 runOverwriteInstall([p])
             } label: {
-                Label("覆盖 / 升级安装", systemImage: "arrow.triangle.2.circlepath")
+                Label("覆盖安装", systemImage: "arrow.triangle.2.circlepath")
             }
             .tint(AppTheme.accent)
             .disabled(!canInstallOrOverwrite(p) || busy)
+
+            // 「删除安装包」：单条入口（批量入口在底栏）。破坏性 ⇒ 不整滑删除，必须走二次确认。
+            Button(role: .destructive) {
+                pendingDelete = DeleteConfirm(items: [p])
+            } label: {
+                Label("删除安装包", systemImage: "trash")
+            }
+            .disabled(busy)
         }
         // 长按一行 → 「查看图标 / 提取图标」。菜单项与行首缩略图用**同一个**图标地址；
         // 没有图标（地址为空）时整组置灰，不让用户点下去才发现没图可看.
@@ -456,6 +478,37 @@ struct RepairedListPage: View {
             resultText = "安装完成：成功 \(ok) 个，失败 \(failed) 个."
             reload()
         }
+    }
+
+    // MARK: - 删除安装包（需求：已修补页也能删）
+
+    /// 「删除安装包」：把所选包在本机的**全部落点**删掉（原件 / 修补产物 / 专属目录镜像），
+    /// 并按**实际结果**提示 —— 不做假成功（见 `ImportedPackageDeleter`）。
+    ///
+    /// 删除前已由弹窗二次确认（见 `body` 的 `.alert`），此处不再确认、直接动手.
+    /// `.notFound`（磁盘上已无落点）计入成功：结果与「删掉了」一致，不该报失败.
+    private func performDelete(_ items: [ImportedPackage]) {
+        guard !items.isEmpty else { return }
+        busy = true
+        resultText = nil
+        var ok = 0
+        var failed = 0
+        for p in items {
+            switch ImportedPackageDeleter.delete(p) {
+            case .removed, .notFound: ok += 1
+            case .failed:           failed += 1
+            }
+        }
+        busy = false
+        selecting = false
+        selected.removeAll()
+        resultText = failed == 0
+            ? "已删除 \(ok) 个安装包."
+            : "已删除 \(ok) 个安装包，\(failed) 个删除失败."
+        ToastCenter.shared.show(failed == 0
+            ? "已删除安装包"
+            : "未删除安装包：\(failed) 个文件删除失败")
+        reload()
     }
 
     // MARK: - 导出（专属目录 + ShareSheet，多选一次导出全部）
