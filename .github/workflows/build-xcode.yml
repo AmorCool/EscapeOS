@@ -27,6 +27,26 @@ permissions:
   actions: read
 
 jobs:
+  # ── 防复发静态检查（guard）────────────────────────────────────────────────────
+  # 把「视图层各自推导下载状态文案 / 顶层类型重名」这类**只有全量编译或人工 review 才
+  # 发现**的问题，挡在发版之前。脚本纯标准库、秒级跑完，故**独立成一个轻量 job**：
+  # 不拖慢 8~11 分钟的 xcode-build，且失败信号独立清晰（不再混在编译日志里）。
+  # ⚠️ 它失败必须**阻止发版**：Release 有两条发布路径 —— promote（复用产物时）与
+  #    xcode-build 末尾的 Publish Release 步骤 —— 两处都门控在 guard 成功上（见各自 needs）。
+  guard:
+    # 与其它 job 同 runner label（自建镜像 xcode-27）；写成 ubuntu-latest 不保证有机器。
+    runs-on: xcode-27
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Guard — 视图层状态文案推导 + 顶层类型重名（防复发）
+        # 统一入口依次跑两项检查（与本地 `python3 Resources/Scripts/swift_precommit_check.py .` 同口径）：
+        #   1) swift_top_level_type_collision.py —— 顶层类型重名（`swiftc -parse` 单文件解析查不出）
+        #   2) swift_view_state_derivation.py    —— 视图层「自行推导下载状态文案」
+        # 退出码：0 = 通过；非 0 = 有 ERROR（默认 R1/R2/R4/R5 致命，R3 为 WARN 不致命）。
+        run: python3 Resources/Scripts/swift_precommit_check.py .
+
   # ── 转正判定（promote）────────────────────────────────────────────────────────
   # tag 触发时先查：同一 commit SHA 是否已有一次「成功构建」，且其 IPA artifact
   # 仍在保留期内、且源码 hash 一致。四条全满足 ⇒ 直接复用那次产物发 Release，
@@ -35,6 +55,8 @@ jobs:
   # 用独立 job 做门控（而非给每个 build step 加 if）：job 级 if 是原子的，
   # 不可能出现「漏给某个 step 加 if ⇒ 半跳过 ⇒ 编译中途失败」。
   promote:
+    # 门控：防复发检查（guard）不过就不转正 —— 「发版前拦住」是 guard 存在的意义。
+    needs: [guard]
     # 与 xcode-build 同 runner label：本仓库用的是自建镜像标签（xcode-27），
     # 写成 ubuntu-latest 不保证有机器，风险是永久排队。
     runs-on: xcode-27
@@ -143,7 +165,7 @@ jobs:
           fi
 
   xcode-build:
-    needs: promote
+    needs: [promote, guard]
     # promote 判定可复用时，整个构建 job 跳过（不重复编译）。
     # ⚠️ 必须显式写 !cancelled()：GitHub 会给「不含状态检查函数」的 if 隐式附加
     # success()。若只写 `needs.promote.outputs.reuse != 'true'`，一旦 promote 失败
@@ -151,7 +173,11 @@ jobs:
     # ⇒ 既不构建也不发 Release，违背「宁可多编一次」。加上 !cancelled() 覆盖默认
     # success() 后：promote 失败 ⇒ reuse 输出为空 ⇒ 条件为真 ⇒ 照常构建出包；
     # 仅在 promote 成功且明确复用（reuse=true）时才跳过。
-    if: ${{ !cancelled() && needs.promote.outputs.reuse != 'true' }}
+    # ⚠️ 另加 `needs.guard.result == 'success'`：guard 失败 ⇒ 本 job 跳过 ⇒ 绝不发版。
+    #    必须加在**本 job**（而非只门控 promote）：本 job 末尾的 Publish Release 步骤
+    #    自己也会发 Release；而上面的 !cancelled() 会覆盖「依赖被跳过 ⇒ 本 job 跳过」的
+    #    默认行为 ⇒ 只门控 promote 的话，guard 失败时本 job 仍会跑并发版。
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.promote.outputs.reuse != 'true' }}
     runs-on: xcode-27
     env:
       UNICORN_TAG: "2.1.0"
