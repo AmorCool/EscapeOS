@@ -11,12 +11,29 @@ enum LocalDevVPN {
     /// 启动隧道后通过 scheme 回到 EscapeSpace.
     static let enableURL = URL(string: "localdevvpn://enable?scheme=escapeos")!
 
-    /// 隧道目标 IP（默认 10.7.0.1，与「设置 → 本地隧道」共用）.
+    /// 隧道目标 IP —— 即 LocalDevVPN 的**对端地址**（不是本机 utun 的接口地址）.
+    ///
+    /// ⚠️ 关键事实（2026-10-08 取证）：**对端地址与本机 utun 地址本来就是两个不同的地址**.
+    /// LocalDevVPN 建的是**点对点** utun：
+    ///   · 接口地址（本机侧） = ifaceIP，出厂 `10.7.1.1/32`
+    ///   · 对端地址（要连的） = peerIP， 出厂 `10.7.0.1/32`
+    /// 依据 `marcinmajsc/LocalDevVPN` 源码：
+    ///   · `LocalDevVPN/Constants.swift`：`defaultIfaceIP = "10.7.1.1/32"`、`defaultPeerIP = "10.7.0.1/32"`
+    ///   · `TunnelProv/PacketTunnelProvider.swift`：`NEIPv4Settings(addresses: [ifaceIP])`、
+    ///     `includedRoutes = [NEIPv4Route(peerIP/32)]`、`NEPacketTunnelNetworkSettings(tunnelRemoteAddress: peerIP)`
+    /// 真机日志 `P4_全能签逆向/_devicelog4/login.log:69` 的 `utun4=10.7.1.1` 正是 ifaceIP
+    /// ⇒ 对端应取 **peerIP（10.7.0.1）**，把目标改成 `10.7.1.1` 反而会连到本机接口地址、必然失败.
+    ///
+    /// 解析优先级（**不再依赖写死的默认值**）：
+    ///   1. 用户显式覆盖：`UserDefaults["TunnelDeviceIP"]`（「设置 → 本地隧道」）.
+    ///   2. 自动推导：本机 `utun*` 点对点接口的**对端地址**（`getifaddrs` 的 `ifa_dstaddr`）.
+    ///   3. 兜底默认：`10.7.0.1`（LocalDevVPN 出厂 peerIP；仅在 1、2 都拿不到时使用）.
     static var targetIP: String {
         let stored = UserDefaults.standard.string(forKey: "TunnelDeviceIP")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let stored, !stored.isEmpty else { return "10.7.0.1" }
-        return stored
+        if let stored, !stored.isEmpty { return stored }
+        if let peer = utunPeerIPv4() { return peer }
+        return "10.7.0.1"
     }
 
     static var isInstalled: Bool {
@@ -96,6 +113,66 @@ enum LocalDevVPN {
             openInstalled()
         } else {
             openAppStore()
+        }
+    }
+
+    /// 自动推导隧道**对端地址**：取本机 `utun*` 点对点接口的 IPv4 目的地址（`ifa_dstaddr`）.
+    ///
+    /// 为什么读 `ifa_dstaddr` 而不是接口地址：见 `targetIP` 注释 —— LocalDevVPN 把
+    /// `tunnelRemoteAddress` 设成 peerIP，iOS 据此把 utun 配成点对点接口，
+    /// `ifconfig` 显示为 `inet <ifaceIP> --> <peerIP>`：`ifa_addr` 是 ifaceIP，
+    /// `ifa_dstaddr` 才是 peerIP.
+    ///
+    /// 返回 `nil` 的几种情况（都**安全退回**默认值，不改变现状、不新增假阴性）：
+    ///   · 没有 utun 接口（隧道没起）；· utun 没有 IPv4 目的地址（非点对点 / 只有 IPv6）；
+    ///   · 推出来的地址不像隧道对端（非私有地址、或等于本机接口地址）.
+    private static func utunPeerIPv4() -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+
+        var loose: String?   // 次选：任意合格的点对点 utun 对端
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let current = ptr {
+            let interface = current.pointee
+            ptr = interface.ifa_next
+            guard String(cString: interface.ifa_name).hasPrefix("utun") else { continue }
+
+            // 点对点接口才有「目的地址」；非点对点的 `ifa_dstaddr` 是广播地址，必须排除.
+            guard interface.ifa_flags & UInt32(IFF_POINTOPOINT) != 0 else { continue }
+            guard let dstPtr = interface.ifa_dstaddr,
+                  dstPtr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+            guard let peer = numericIPv4(dstPtr), isPrivateIPv4(peer) else { continue }
+
+            let local: String? = (interface.ifa_addr?.pointee.sa_family == sa_family_t(AF_INET))
+                ? interface.ifa_addr.flatMap { numericIPv4($0) } : nil
+            if let local, peer == local { continue }          // 对端 == 本机 ⇒ 不是点对点对端
+
+            // 首选：与本机 utun 地址同处 `10.0.0.0/8`（LocalDevVPN 的隧道就是 10.x）.
+            if let local, local.hasPrefix("10."), peer.hasPrefix("10.") { return peer }
+            if loose == nil { loose = peer }
+        }
+        return loose
+    }
+
+    /// 把已确认 `AF_INET` 的 `sockaddr` 转成点分十进制 IPv4 字符串.
+    private static func numericIPv4(_ addr: UnsafePointer<sockaddr>) -> String? {
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(addr, socklen_t(MemoryLayout<sockaddr_in>.size),
+                          &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
+        let value = String(cString: host)
+        return value.isEmpty ? nil : value
+    }
+
+    /// 是否私有 IPv4（`10/8`、`172.16/12`、`192.168/16`）—— 隧道对端必为私有地址.
+    private static func isPrivateIPv4(_ ip: String) -> Bool {
+        let parts = ip.split(separator: ".").compactMap { UInt8($0) }
+        guard parts.count == 4 else { return false }
+        switch (parts[0], parts[1]) {
+        case (10, _): return true
+        case (172, 16...31): return true
+        case (192, 168): return true
+        default: return false
         }
     }
 
