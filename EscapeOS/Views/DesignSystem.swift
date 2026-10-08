@@ -49,13 +49,22 @@ enum AppTheme {
 struct TintedButtonStyle: ButtonStyle {
     var tint: Color = AppTheme.accent
 
-    func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration, tint: tint)
+    /// 参数类型必须写具体名 `ButtonStyleConfiguration`、不能写 `Configuration`：
+    /// 本模块里 `vendor/ApplePackage` 另有一个 `public enum Configuration`，它在模块作用域里
+    /// **盖过**了 `ButtonStyle.Configuration` ⇒ 裸写 `Configuration` 会解析成那个枚举，
+    /// 报「cannot convert value of type 'Configuration' to expected argument type
+    /// 'ButtonStyleConfiguration'」（v0.3.585 首次 CI 实测）。
+    func makeBody(configuration: ButtonStyleConfiguration) -> some View {
+        TintedBody(configuration: configuration, tint: tint)
     }
 
     /// 样式体单独成一个 `View`：只有 `View` 能读 `@Environment`，用它在**禁用**时降透明度
     /// （自定义 `ButtonStyle` 不会像 `.borderedProminent` 那样自动置灰）.
-    private struct Body: View {
+    ///
+    /// 名字**不能**叫 `Body`：`ButtonStyle` 有名为 `Body` 的关联类型，同名嵌套类型会被当成
+    /// 那个关联类型去匹配协议要求，而它又是 `private` ⇒ 报
+    /// 「struct 'Body' must be as accessible as its enclosing type」（同一次 CI 实测）。
+    private struct TintedBody: View {
         let configuration: ButtonStyleConfiguration
         let tint: Color
         @Environment(\.isEnabled) private var isEnabled
