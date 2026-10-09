@@ -307,6 +307,10 @@ struct SettingsForm: View {
                 }
             }
 
+            // 隧道方式三选一（LocalDevVPN / Shadowrocket / 内置隧道）。
+            // 放在「本地隧道」设备 IP 之前：先选隧道方式，再填对端 IP。
+            TunnelPickerView()
+
             Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致.保持默认的 10.7.0.1，除非你修改过 LocalDevVPN.")) {
                 TextField("设备 IP（默认 10.7.0.1）", text: $tunnelIP)
                     .keyboardType(.numbersAndPunctuation)

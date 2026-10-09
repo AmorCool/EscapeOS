@@ -58,6 +58,12 @@ final class LoginLogger: @unchecked Sendable {
         /// 中文名与既有分类无前缀歧义：`category(of:)` 取行首方括号内容后用 `Set.contains`
         /// **精确等值**匹配（非 `hasPrefix`），且「软件源」与「爱思源 / 共享转换 / 通用」互不相同。
         case signSource = "软件源"
+        /// **爱思应用修复**（读设备现有 `i4tool2.acc` / 构造 8 键 plist / AFC 写入 / 读回校验）。
+        ///
+        /// 为什么独立成板块：它与 `.i4Store`（爱思源下载）是两回事 —— 这条链**不联网、不下载**，
+        /// 只读写设备上的一个文件，混进「爱思源」板块会让排障时两边互相干扰。
+        /// 中文名与既有分类无前缀歧义：`category(of:)` 用精确等值匹配，「爱思修复」与「爱思源」互不相同。
+        case i4Fix = "爱思修复"
     }
 
     private struct Entry {

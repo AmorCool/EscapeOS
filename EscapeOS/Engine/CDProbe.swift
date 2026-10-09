@@ -130,8 +130,8 @@ enum CDProbe {
 
         out.append("[前置]")
         out.append("  · 配对文件：\(FileManager.default.fileExists(atPath: pairingPath) ? "存在" : "缺失")  \(pairingPath)")
-        out.append("  · 目标 IP = \(LocalDevVPN.targetIP)（与 TunnelContext.m 的 _targetIP 同源：NSUserDefaults TunnelDeviceIP 可覆盖）")
-        out.append("  · LocalDevVPN isConnected=\(LocalDevVPN.isConnected)")
+        out.append("  · 目标 IP = \(TunnelManager.targetIP)（与 TunnelContext.m 的 _targetIP 同源：NSUserDefaults TunnelDeviceIP 可覆盖）")
+        out.append("  · 隧道（\(TunnelManager.selectedKind.title)）isConnected=\(TunnelManager.isConnected)")
         out.append("")
         guard FileManager.default.fileExists(atPath: pairingPath) else {
             out.append("结论：未导入配对文件，探针终止（无法建 provider）.")
@@ -144,7 +144,7 @@ enum CDProbe {
         var byteLen: UInt32 = 0
         var errorCStr: UnsafeMutablePointer<CChar>?
         let bytes = pairingPath.withCString { path in
-            LocalDevVPN.targetIP.withCString { ip in
+            TunnelManager.targetIP.withCString { ip in
                 connectLabel.withCString { label in
                     esc_cd_probe_run(path, ip, rppairingPort, label, &byteLen, &errorCStr)
                 }

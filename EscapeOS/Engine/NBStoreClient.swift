@@ -483,6 +483,20 @@ enum NBStoreClient {
 
     /// 取指定 App、指定历史版本的安装包信息（IPA 直链 + sinf）。
     ///
+    /// ## 这就是「按 `appVerId` 取指定版本」的入口
+    /// - 只传 `appID`：回**最新版**的包（实测 2026-10-09 直连：`code=0` + 完整 `url`/`sinf`）。
+    /// - 传 `appID` + `appVerId`：回**那个指定版本**的包。
+    ///
+    /// **对下架 App 一样可用**（此前注释里「那条路是错的」指的是另一个名字相近的
+    /// `getOffSaleAppHistoryList`，不是本方法；本方法就是上架通道在用的 `getAppHistoryList`）。
+    /// 实测（2026-10-09）：`appID=1517062289` + `appVerId=891589210` → 版本 6.6.0，
+    /// 直链 HEAD → HTTP 200。
+    ///
+    /// ## 典型用法：导入一个 IPA → 用它的 `externalVersionId` 取同版本
+    /// 包内 `iTunesMetadata.plist` 的 `softwareVersionExternalIdentifier` 就是 `appVerId`，
+    /// `itemId` 就是 `appID` —— 拿这两个值调本方法即可取回**同版本**的包 + sinf，
+    /// **不需要任何版本列表**。语义化入口见 `packageByVersion(appID:appVerId:...)`。
+    ///
     /// ## 实测报文（2026-10-01 抓包，非推测）
     /// ```
     /// POST http://47.243.71.210:9527/nb/app-downgrade
@@ -562,6 +576,28 @@ enum NBStoreClient {
         return NBPackage(ipaURL: normalizeAsset(url),
                          sinfBase64: sinf,
                          version: appVerId)
+    }
+
+    /// **按 `appID` + `appVerId` 取指定版本的包**（语义化入口，v0.3.586）。
+    ///
+    /// 与 `package(appID:appVerId:bundleID:country:)` 是**同一发请求**
+    /// （`nb9527_getAppHistoryList`，见 `/nb/app-downgrade`）—— 这里只是给它一个
+    /// 语义明确的入口名，供「导入一个 IPA → 用它的 `softwareVersionExternalIdentifier`
+    /// 去 NB 取同版本的包 + sinf」这类场景调用。
+    ///
+    /// **实测（2026-10-09 直连）：对下架 App 也完全可用**，`code=0` 且回完整 `url`/`sinf`。
+    ///
+    /// - Parameters:
+    ///   - appID: App Store `trackId`（包内 `iTunesMetadata.itemId`）。
+    ///   - appVerId: 版本的 `externalVersionId`（包内 `softwareVersionExternalIdentifier`）。
+    ///   - bundleID: 可省；服务端不强制。
+    ///   - country: 区域（`cn` / `us` / `hk`）。
+    static func packageByVersion(appID: String,
+                                 appVerId: String,
+                                 bundleID: String = "",
+                                 country: String = "cn") async throws -> NBPackage? {
+        try await package(appID: appID, appVerId: appVerId,
+                          bundleID: bundleID, country: country)
     }
 
     /// 上报下载（NB 客户端在下载时调，用于它自己的统计；移植时可省）。
@@ -677,10 +713,19 @@ enum NBStoreClient {
         /// 实测（2026-10-02 直连）：`url` 499 字符、`dataHex` 2144 字符（1072 字节，
         /// magic 头 `\x00\x00\x040sinf\x00\x00\x00\x0cfrma`，与上架取包同格式）。
         ///
-        /// ⇒ **`getOffSaleAppHistoryList` 那条路是错的**：那个 action 语义是
-        /// 「查某个版本的历史记录」，不是取包；实测它对任何参数组合都只回
-        /// `code=7 未获取到数据 / 参数不合法`，NB 官方客户端点「获取」也一样失败。
-        /// 真正取包只需要这一发搜索。**别再走那条路**。
+        /// ⇒ **注意区分两个名字相近的 action**（v0.3.586 实测澄清）：
+        /// · `getOffSaleAppHistoryList`（NB 助手下架页用的那个）**取不到包**：
+        ///   实测它对任何参数组合都只回 `code=7 未获取到数据 / 参数不合法`，
+        ///   NB 官方客户端点「获取」也一样失败。**别再走那条路**。
+        /// · `getAppHistoryList`（上架通道用的同一个 action）**对下架 App 完全可用**：
+        ///   实测（2026-10-09 直连）传 `appID`（或再加 `appVerId`）回 `code=0` 且
+        ///   `data` 完整（含 `url` + `sinfs[0].dataHex`），直链 HEAD → HTTP 200。
+        ///   见 `package(appID:appVerId:...)` 与 `offSalePackage(from:country:)`。
+        ///
+        /// ⚠️ 但 `appStoreData` **并非每条都有**：实测搜「哔哩哔哩」10 条里只有 4 条带它，
+        /// 另外 6 条既没有 `appStoreData`、`appExtID` 也为空 —— 在搜索响应里就是**没有包**。
+        /// ⇒ 那些条目必须回退到 `getAppHistoryList` 取包（见 `offSalePackage(from:country:)`），
+        /// 否则界面只能报「这个版本暂时取不到安装包」。
         var packageURL: String?
         /// 服务端算好的包 MD5（`appStoreData.hashMD5`）.
         var packageMD5: String?
@@ -833,7 +878,7 @@ enum NBStoreClient {
         return apps
     }
 
-    /// **下架应用**的取包。
+    /// **下架应用**的取包（v0.3.586：补上 `getAppHistoryList` 回退）。
     ///
     /// ## 怎么找到这条路的（反编译 NB 助手，不是猜的）
     ///
@@ -852,45 +897,75 @@ enum NBStoreClient {
     /// // path = "/nb/app-downgrade"，method = "nb9527_getOffSaleAppHistoryList"
     /// ```
     ///
-    /// ⇒ **与上架应用走同一个端点，差别只有两处**：
-    /// 1. `method` 换成 `getOffSaleAppHistoryList`；
-    /// 2. 应用 ID 的键名是 **`ipaID`**（不是 `appID`），区域键是 **`countryCode`**（不是 `country`）。
-    ///
     /// 注意： **别去找 `nb9527_search_offsale_app`** —— 那个字符串确实存在，
     /// 但它是本地弹窗菜单项的标识符，**服务端没有这个 action**（报告第十二/十三节）。
     /// 「下架列表」在 NB 那边是本地 SQLite 表 `load_list` 缓存的。
-    /// 我们的做法：**下架状态由 lookup 结果判定 + 用本方法取包**，不建本地库。
     ///
-    /// ## v0.3.556 重写：优先用**搜索结果里自带的包**，不走第二个接口
+    /// ## v0.3.556：优先用**搜索结果里自带的包**，不走第二个接口
     ///
-    /// 真机抓包 + 直连实测发现：`searchOffSaleApp` 的每条记录里都带一个
-    /// `appStoreData`（内嵌 JSON 字符串），**包直链和 sinf 就在里面** ——
-    /// 也就是说搜索这一发已经把包给了，根本不需要再来第二发。
+    /// 真机抓包 + 直连实测发现：`searchOffSaleApp` 的每条记录里带一个
+    /// `appStoreData`（内嵌 JSON 字符串），**包直链和 sinf 就在里面**：
     ///
     /// ```
-    /// appStoreData.url              → 499 字符的 Apple CDN 直链（带 accessKey）
+    /// appStoreData.url              → Apple CDN 直链（带 accessKey）
     /// appStoreData.sinfs[0].dataHex → 2144 字符 hex = 1072 字节 sinf
     ///                                 （magic `\x00\x00\x040sinf\x00\x00\x00\x0cfrma`）
     /// appStoreData.hashMD5          → 服务端算好的包 MD5
     /// ```
     ///
-    /// ## 那条走不通的路（留档，别再重踩）
-    /// `getOffSaleAppHistoryList` 曾经是唯一的取包尝试，**实测无论怎么传都取不到**：
-    /// `ipaID` 传 NB 行号回 `未获取到数据`，传 `"0"` 回 `参数不合法`；
-    /// 真机抓包显示 NB 官方客户端点「获取」发出的参数与我们**一字不差**，
-    /// 服务端同样只回 `code=7`。⇒ **这个 action 不是取包用的**（语义是查版本历史），
-    /// 早先「下架取包是付费通道」「c 密钥是凭据」那些推断**全部作废**。
+    /// ## ⚠️ 两个名字相近的 action，别搞混（v0.3.586 实测澄清）
     ///
-    /// 现在本函数只做一件事：把搜索结果里那份现成的包**翻译成 `NBPackage`**。
-    static func offSalePackage(from app: OffSaleApp) -> NBPackage? {
-        guard let url = app.packageURL, !url.isEmpty else {
-            LoginLogger.shared.log("\(logTag) [提示] 这条下架记录没带包直链（\(app.name)）",
+    /// - `getOffSaleAppHistoryList`（NB 助手下架页用的那个）**取不到包**：实测无论怎么传
+    ///   都取不到 —— `ipaID` 传 NB 行号回 `未获取到数据`、传 `"0"` 回 `参数不合法`；
+    ///   真机抓包显示 NB 官方客户端点「获取」发出的参数与我们**一字不差**，服务端同样只回
+    ///   `code=7`。⇒ **这个 action 不是取包用的**（语义是查版本历史），别再走。
+    /// - `getAppHistoryList`（上架通道用的同一个 action）**对下架 App 完全可用**：
+    ///   实测（2026-10-09 直连）传 `appID`（或再加 `appVerId`）回 `code=0` 且 `data` 完整
+    ///   （含 `url` + `sinfs[0].dataHex`），直链 HEAD → HTTP 200。
+    ///   **这才是内嵌包缺失时该走的那条路**（见 `package(appID:appVerId:...)`）。
+    ///
+    /// ## v0.3.586：修「NB 源无论什么下架 App 都下载获取不了」
+    ///
+    /// v0.3.556 起本函数**只吃搜索结果内嵌的 `appStoreData`**。但实测（2026-10-09 直连）
+    /// 那个字段**不是每条都有**：搜「哔哩哔哩」10 条里只有 4 条带它，另外 6 条既没有
+    /// `appStoreData`、`appExtID` 也为空 —— 旧代码对它们直接 `return nil`，界面只报
+    /// 「这个版本暂时取不到安装包」。**大多数下架条目都落在这一支**，这就是那个 bug 的根因。
+    ///
+    /// 现在改成两段：
+    /// ① 内嵌包在 → 直接用（`embeddedOffSalePackage`，零额外请求）；
+    /// ② 内嵌包不在 → 用 `appStoreID`（+ `appExtID`）打 `getAppHistoryList` 取包。
+    static func offSalePackage(from app: OffSaleApp, country: String) async throws -> NBPackage? {
+        // ① 搜索响应里内嵌的包 —— 有就直接用，不多发一发请求。
+        if let embedded = embeddedOffSalePackage(from: app) { return embedded }
+
+        // ② 回退：按 appID(+appVerId) 打 getAppHistoryList。
+        guard let storeID = app.storeID, !storeID.isEmpty else {
+            LoginLogger.shared.log("\(logTag) [失败] 下架记录既没带包、也拿不到 App Store ID，"
+                                   + "无法回退取包（\(app.name)）",
                                    category: .appStore)
             return nil
         }
-        // `dataHex` 是 **hex**，而下游 `PackageSINFWriter` 吃的是 **base64** —— 这里必须转。
-        // 以前直接把 hex 塞进 `sinfBase64`，`Data(base64Encoded:)` 必然失败 →
-        // 包内写不进 sinf → 安装报「缺少 SC_Info/*.sinf」。
+        LoginLogger.shared.log("\(logTag) [提示] 这条下架记录没带内嵌包，回退 getAppHistoryList 取包"
+                               + "（appID=\(storeID) appVerId=\(app.appExtID ?? "")）",
+                               category: .appStore)
+        let pkg = try await package(appID: storeID,
+                                    appVerId: app.appExtID ?? "",
+                                    bundleID: app.bundleID ?? "",
+                                    country: country)
+        if pkg == nil {
+            LoginLogger.shared.log("\(logTag) [失败] 回退取包也没拿到直链（\(app.name) appID=\(storeID)）",
+                                   category: .appStore)
+        }
+        return pkg
+    }
+
+    /// 下架取包的**第一段**：把搜索结果里内嵌的那份 `appStoreData` 翻成 `NBPackage`（没有则 nil）。
+    ///
+    /// `dataHex` 是 **hex**，而下游 `PackageSINFWriter` 吃的是 **base64** —— 这里必须转。
+    /// 以前直接把 hex 塞进 `sinfBase64`，`Data(base64Encoded:)` 必然失败 →
+    /// 包内写不进 sinf → 安装报「缺少 SC_Info/*.sinf」。
+    private static func embeddedOffSalePackage(from app: OffSaleApp) -> NBPackage? {
+        guard let url = app.packageURL, !url.isEmpty else { return nil }
         let sinfB64 = app.packageSinf.flatMap { hexToBase64($0) }
         if sinfB64 == nil, (app.packageSinf ?? "").isEmpty == false {
             LoginLogger.shared.log("\(logTag) [失败] sinf hex 转 base64 失败（\(app.name)）",

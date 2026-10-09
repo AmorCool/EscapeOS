@@ -487,7 +487,7 @@ final class SpoofSession: ObservableObject {
             latitude: systemCoordinate.latitude,
             longitude: systemCoordinate.longitude,
             pairingPath: pairingPath,
-            deviceIP: LocalDevVPN.targetIP
+            deviceIP: TunnelManager.targetIP
         )
         isBusy = false
         switch result {
@@ -615,7 +615,7 @@ final class SpoofSession: ObservableObject {
             latitude: systemCoordinate.latitude,
             longitude: systemCoordinate.longitude,
             pairingPath: pairingPath,
-            deviceIP: LocalDevVPN.targetIP
+            deviceIP: TunnelManager.targetIP
         )
         guard locationGuard else { return }
         var ok = false

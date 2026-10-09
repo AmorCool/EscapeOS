@@ -106,6 +106,12 @@ extension StoreDownloadEndpoint {
         //    为什么它不是替代而是附加：`ent/download` 需要 storeagent + kbsync，
         //    这两样依赖 JIT 与本地资产，实在跑不了时就该退回旧链 ——
         //    否则一个环境问题会把整条下载链拖死。
+        //
+        // v0.3.5xx（本次新增）：记「首轮是否已用**非空版本**真正打过 `ent/download`」——
+        // 供下方「拿到解析版本后回头重试」判定：首轮**因版本号为空被跳过** ⇒ 那次重试是
+        // **首次**真正发出 ent/download 请求（不重复）；首轮已带版本打过且失败 ⇒ 不再重试
+        // （避免对同一个版本重复请求）。
+        var entTriedWithVersion = false
         if let endpoint = entDownloadEndpoint, !endpoint.isEmpty {
             // 版本必须固定：上游在 `sendPreferredDownload` 里，空版本会去查目录补，
             // 补不到就报错。我们这里沿用调用方给的版本；为空时**不试**这一跳
@@ -138,6 +144,7 @@ extension StoreDownloadEndpoint {
                 }
             }
             if !preferredVersion.isEmpty {
+                entTriedWithVersion = true
                 let entStarted = Date()
                 if let preferred = try await EntDownload.fetchProduct(
                     client: client,
@@ -215,6 +222,50 @@ extension StoreDownloadEndpoint {
         // ③updateProduct 之前 ⇒ 两条兜底在 `entUsable` 时同时不可达。一旦 ent/download
         // 结构性失败即无任何兜底。所以「跳过」只能跳过**请求本身**，不能跳过**兜底链**。
         let entUsable = (entDownloadEndpoint?.isEmpty == false) && (Configuration.kbsyncGenerator != nil)
+
+        // ⓪-b **拿到解析版本后，回头重试 `ent/download`**（v0.3.5xx 本次核心修法）。
+        //
+        // 场景（真机 `login.log:3-4,10-15`）：首轮 `externalVersionID` 为空 ⇒ 上面那一跳
+        // 被「版本号为空」挡掉；随后 `volumeStore` 回空包，直到这里才由 `resolveVersion()`
+        // 解析出真正的版本号（`StoreCatalog.externalVersionID`，真机 `版本=892324676`）。
+        // **旧代码从此再没回头试 `ent/download`** —— 而是掉进 `redownload`（本环境 100% 裸
+        // HTTP 500，白等 8.9~11.4s）再靠 `updateProduct` 兜底，等于把「对下架 App 最可能
+        // 出包的那一跳」白白跳过。
+        //
+        // 现在：版本号一到手，**用同一个版本再试一次 `ent/download`**（至多一次网络往返）。
+        // 命中就直接返回；未命中则**原样落回**下面的 `redownload → updateProduct` 链 ——
+        // 既有兜底一行未删，所以「加了重试反而弄坏 updateProduct」不可能发生。
+        //
+        // 不重复请求：只在「首轮确实因版本号为空被跳过」时重试（`!entTriedWithVersion`）；
+        // 首轮已带版本打过 `ent/download`（含缓存命中的版本）且失败 ⇒ 跳过重试。
+        //
+        // 失败一律**静默落回兜底链**（与首轮「可失败退出的附加一跳」同语义）：只有取消才上抛。
+        if entUsable, !entTriedWithVersion, !resolved.isEmpty, let endpoint = entDownloadEndpoint {
+            let entRetryStarted = Date()
+            let rescued: [String: Any]?
+            do {
+                rescued = try await EntDownload.fetchProduct(
+                    client: client,
+                    account: &account,
+                    app: app,
+                    deviceIdentifier: deviceIdentifier,
+                    externalVersionID: resolved,
+                    endpoint: endpoint
+                )
+            } catch is CancellationError {
+                overallOutcome = "取消"
+                throw CancellationError()
+            } catch {
+                storeLog("ent/download 用解析版本回试失败：\(error.localizedDescription)")
+                rescued = nil
+            }
+            if let rescued {
+                storeLog("[计时] ent/download 用解析版本回试命中 耗时=\(Self.elapsedMs(since: entRetryStarted))ms 版本=\(resolved)")
+                overallOutcome = "ent/download 命中（解析版本回试）"
+                return rescued
+            }
+            storeLog("[计时] ent/download 用解析版本回试未命中 耗时=\(Self.elapsedMs(since: entRetryStarted))ms 版本=\(resolved)")
+        }
 
         // redownload 的失败有两种形态，只有其中一种该走 updateProduct：
         //   · 裸 HTTP 500（`snippet == ""`）                  → 走 ✓

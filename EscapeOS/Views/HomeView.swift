@@ -26,6 +26,12 @@ struct HomeView: View {
     /// 软件源管理页（同一套「sheet 关闭后再 push」的中转）
     @State private var showSignSource = false
     @State private var pendingSignSource = false
+    /// 爱思应用修复安装页（同一套「sheet 关闭后再 push」的中转）
+    @State private var showI4Fix = false
+    @State private var pendingI4Fix = false
+    /// 安装爱思移动端页（同一套「sheet 关闭后再 push」的中转）
+    @State private var showMobileInstall = false
+    @State private var pendingMobileInstall = false
 
     var body: some View {
         ScrollView {
@@ -60,6 +66,14 @@ struct HomeView: View {
                 pendingSignSource = false
                 showSignSource = true
             }
+            if pendingI4Fix {
+                pendingI4Fix = false
+                showI4Fix = true
+            }
+            if pendingMobileInstall {
+                pendingMobileInstall = false
+                showMobileInstall = true
+            }
         }) {
             // 原生 sheet：0.4↔1.0 detent 上拉展开、下拉关闭
             TreasureBoxView(onOpenGestalt: {
@@ -73,6 +87,12 @@ struct HomeView: View {
                 treasureOpen = false
             }, onOpenSignSource: {
                 pendingSignSource = true
+                treasureOpen = false
+            }, onOpenI4Fix: {
+                pendingI4Fix = true
+                treasureOpen = false
+            }, onOpenMobileInstall: {
+                pendingMobileInstall = true
                 treasureOpen = false
             })
             .presentationDetents([.fraction(0.4), .large])
@@ -100,6 +120,20 @@ struct HomeView: View {
             SignSourceListView(downloadManagerDestination: {
                 AnyView(IPADownloadManagerView(filterSource: .thirdPartySource))
             })
+        }
+        // 爱思应用修复安装（读 + 可选写设备 i4tool2.acc，含读回校验）
+        .navigationDestination(isPresented: $showI4Fix) {
+            I4AppFixView()
+        }
+        // 安装爱思移动端（爱思 9.0 对话框移植；内嵌 IPA 为 FairPlay 加密包）
+        .navigationDestination(isPresented: $showMobileInstall) {
+            // 把 Service 的安装动作注入 View：不注入则 installAction 恒为 nil，
+            // 页面恒显「本页未接入安装动作」且主按钮 .disabled(true)（接线断裂）。
+            // 用 makeInstallAllAction（装全部内嵌包，与「安装爱思移动端」语义一致）；
+            // 其返回类型 () async throws -> Void 与 I4MobileInstallView.installAction 精确匹配。
+            // onLog 转发到 LoginLogger(.i4Fix)，与 I4AppFixView 同一板块。
+            I4MobileInstallView(installAction: I4MobileInstallService.makeInstallAllAction(
+                onLog: { LoginLogger.shared.log($0, category: .i4Fix) }))
         }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {

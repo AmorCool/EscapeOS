@@ -6,9 +6,9 @@ struct VirtualLocationSettingsView: View {
     @ObservedObject private var session = SpoofSession.shared
     @Environment(\.dismiss) private var dismiss
 
-    @State private var tunnelIP = LocalDevVPN.targetIP
+    @State private var tunnelIP = TunnelManager.targetIP
     @State private var localDevVPNInstalled = LocalDevVPN.isInstalled
-    @State private var tunnelConnected = LocalDevVPN.isConnected
+    @State private var tunnelConnected = TunnelManager.isConnected
     @State private var showImportGuide = false
     @State private var clearAlertMessage: String?
     @State private var isClearing = false
@@ -130,12 +130,12 @@ struct VirtualLocationSettingsView: View {
             }
             .onAppear {
                 localDevVPNInstalled = LocalDevVPN.isInstalled
-                tunnelConnected = LocalDevVPN.isConnected
+                tunnelConnected = TunnelManager.isConnected
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
                     localDevVPNInstalled = LocalDevVPN.isInstalled
-                    tunnelConnected = LocalDevVPN.isConnected
+                    tunnelConnected = TunnelManager.isConnected
                 }
             }
             .alert("导入配对文件", isPresented: $showImportGuide) {
@@ -151,6 +151,6 @@ struct VirtualLocationSettingsView: View {
         if !trimmed.isEmpty {
             UserDefaults.standard.set(trimmed, forKey: "TunnelDeviceIP")
         }
-        tunnelIP = LocalDevVPN.targetIP
+        tunnelIP = TunnelManager.targetIP
     }
 }

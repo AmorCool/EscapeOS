@@ -58,6 +58,9 @@ settings:
       - "-lresolv"
       - "-framework Security"
       - "-framework Network"
+      # 内置隧道（v0.3.586）：NETunnelProviderManager 走 NetworkExtension.
+      # 显式列出以对齐其余 framework 的写法（Swift 自动链接本也会加，列出更稳）.
+      - "-framework NetworkExtension"
       - "-framework SystemConfiguration"
       - "-framework QuickLook"
       - "-framework PDFKit"
@@ -113,9 +116,12 @@ targets:
         # 会与生成的 Info.plist 冲突（Multiple commands produce Info.plist）。
         # 排除 BundledModules：模块清单都以 module.json 命名，平铺进 bundle 根会互相冲突，
         # 改用下方 folder reference（蓝色文件夹）保留目录结构。
+        # 排除 I4Mobile：内嵌的爱思移动端 IPA 改用下方 folder reference 保留
+        # `I4Mobile/<name>.ipa` 层级（运行时按目录读取；平铺到 bundle 根既乱又易重名）。
         excludes:
           - "Info.plist"
           - "BundledModules"
+          - "I4Mobile"
           # 脚本与许可证由 prepare.sap.py 处理（许可证它自己拷进 bundle/SAPAssets），
           # 不再作为普通资源重复打包
           - "Scripts"
@@ -123,6 +129,13 @@ targets:
       - path: Resources/BundledModules
         # v0.3.48：内置模块清单，folder reference 保留 <id>/module.json 层级，
         # 运行时经 Bundle.main.url(forResource: "BundledModules", withExtension: nil) 读取。
+        type: folder
+        buildPhase: resources
+      - path: Resources/I4Mobile
+        # v0.3.585：爱思移动端内嵌 IPA（217 / 220 / photo）——「安装爱思移动端」的移植材料。
+        # folder reference 保留 `I4Mobile/<name>.ipa` 层级，运行时经
+        # Bundle.main.url(forResource: "I4Mobile", withExtension: nil) 定位后拼文件名读取。
+        # 注：IPA 本体被 .gitignore 的 `*.ipa` 忽略，需在打包前物理放入该目录（见其 README.md）。
         type: folder
         buildPhase: resources
       - path: vendor/BitByteData/Sources

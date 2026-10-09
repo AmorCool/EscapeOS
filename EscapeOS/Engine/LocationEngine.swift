@@ -315,7 +315,7 @@ enum LocationEngine {
             // 不经 SpoofSession 取值——其属性挂在 @MainActor，queue.sync 内不可跨.
             let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("pairingFile.plist").path
-            let connectCode = connectLocked(pairingPath: pairingPath, deviceIP: LocalDevVPN.targetIP)
+            let connectCode = connectLocked(pairingPath: pairingPath, deviceIP: TunnelManager.targetIP)
             guard connectCode == ok else { return connectCode }
         }
         guard let locationSimulation else { return locationClear }

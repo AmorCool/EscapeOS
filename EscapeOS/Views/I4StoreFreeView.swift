@@ -78,17 +78,19 @@ struct I4StoreFreeView: View {
     /// v0.3.549：NB 源**下架**搜索结果。
     ///
     /// 与 `nbSearchResults` 分开存：两者数据源、字段、可做的动作都不同 ——
-    /// 下架项只能走 `getOffSaleAppHistoryList` 取包，混在一个数组里会让「这一行该走哪条链路」
-    /// 变成靠猜。分开存则行类型本身就决定了链路（见 `nbOffSaleRow`）。
+    /// 下架项取包要走「内嵌 `appStoreData` → 缺则 `getAppHistoryList` 回退」这条专用链路，
+    /// 混在一个数组里会让「这一行该走哪条链路」变成靠猜。分开存则行类型本身就决定了链路
+    /// （见 `nbOffSaleRow`）。
     @State private var nbOffSaleResults: [NBStoreClient.OffSaleApp] = []
 
     /// v0.3.545：NB 源的**上架 / 下架**筛选（对应 NB 助手的 `DXSTOffSaleController`）。
     ///
     /// ## 怎么判定「下架」
     /// 反编译 NB 助手确认它有独立的下架应用页（`DXSTOffSaleController` +
-    /// `DXSTOffSaleDetailController` + `DXSTOffSaleHistoryListController`），
-    /// 取包走同一个端点 `/nb/app-downgrade`，只把 `method` 换成
-    /// `getOffSaleAppHistoryList`、应用 ID 键换成 `ipaID`（见 `NBStoreClient.offSalePackage`）。
+    /// `DXSTOffSaleDetailController` + `DXSTOffSaleHistoryListController`）。
+    /// 取包走 `/nb/app-downgrade`：搜索响应里内嵌 `appStoreData` 时直接用它，
+    /// 没有时回退 `nb9527_getAppHistoryList`（`appID` + 可选 `appVerId`）——
+    /// **对下架 App 实测可用**（见 `NBStoreClient.offSalePackage(from:country:)`）。
     ///
     /// ## 所以「筛」这个动作怎么做
     /// 应用列表来自 Apple RSS/search，这两条**只回上架应用**，天然没有下架项。
@@ -506,12 +508,12 @@ struct I4StoreFreeView: View {
     /// （`nb9527_searchOffSaleApp`），字段也就跟着 NB 的 `DXSTOffSaleAppModel` 走 ——
     /// 名字 / 图标 / 版本 / 大小都有，所以按前两源同款排版渲染，不是「只有一串数字」.
     ///
-    /// 右侧「获取」直接走 `installOffSale` → `NBStoreClient.offSalePackage`（`getOffSaleAppHistoryList`），
-    /// 与上架链路（`getAppHistoryList`）分开 —— 两条路的 method 不同，不能混.
+    /// 右侧「获取」直接走 `installOffSale` → `NBStoreClient.offSalePackage(from:country:)`
+    /// （内嵌 `appStoreData` 优先，缺则回退 `getAppHistoryList`）.
     private func nbOffSaleRow(_ app: NBStoreClient.OffSaleApp) -> some View {
         HStack(alignment: .center, spacing: 12) {
             NavigationLink {
-                // 下架详情：`offSale: true` 决定详情页里取包走 `getOffSaleAppHistoryList`.
+                // 下架详情：`offSale: true` 决定详情页里取包走 NB 下架链路（按 appVerId 取指定版本）.
                 NBStoreDetailView(trackID: app.storeID ?? "",
                                   country: regionRaw,
                                   displayName: app.displayName,
@@ -566,22 +568,29 @@ struct I4StoreFreeView: View {
         }
     }
 
-    /// 下架行「获取」：把**搜索结果里自带的包**交给统一下载中心.
+    /// 下架行「获取」：取包 → 交给统一下载中心.
     ///
-    /// 不需要再发第二个请求 —— `searchOffSaleApp` 的每条记录里已经带了
-    /// `appStoreData`（包直链 + sinf）。见 `NBStoreClient.offSalePackage(from:)`.
+    /// v0.3.556 起这里只吃 `searchOffSaleApp` 每条记录里内嵌的 `appStoreData`（包直链 + sinf）。
+    /// v0.3.586：那个字段**不是每条都有**（实测 10 条里 6 条没有），旧代码对它们直接失败，
+    /// 就是「NB 源无论什么下架 App 都下载获取不了」的根因。现在交给
+    /// `NBStoreClient.offSalePackage(from:country:)`：内嵌包缺失时自动回退 `getAppHistoryList`。
     @MainActor
     private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
-        guard let pkg = NBStoreClient.offSalePackage(from: app) else {
-            ToastCenter.shared.show("这个版本暂时取不到安装包")
-            return
+        do {
+            guard let pkg = try await NBStoreClient.offSalePackage(from: app, country: regionRaw) else {
+                ToastCenter.shared.show("这个版本暂时取不到安装包")
+                return
+            }
+            let sid = app.storeID ?? String(app.id)
+            await startNBDownload(trackID: sid,
+                                  package: pkg,
+                                  name: app.displayName,
+                                  version: app.displayVersion,
+                                  iconURL: app.displayIcon)
+        } catch {
+            // 失败不许静默：界面给一句短提示，具体原因在日志里（`[NB源]` 前缀）
+            ToastCenter.shared.show("NB 下架取包失败：\(error.localizedDescription)")
         }
-        let sid = app.storeID ?? String(app.id)
-        await startNBDownload(trackID: sid,
-                              package: pkg,
-                              name: app.displayName,
-                              version: app.displayVersion,
-                              iconURL: app.displayIcon)
     }
 
     // MARK: - 行

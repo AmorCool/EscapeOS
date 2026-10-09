@@ -85,6 +85,8 @@
 		<string>itms-services</string>
 		<string>App-Prefs</string>
 		<string>prefs</string>
+		<!-- v0.3.586：隧道方式「Shadowrocket 连接」需 canOpenURL 探测是否已安装（仅跳转目标） -->
+		<string>shadowrocket</string>
 	</array>
 	<key>CFBundleIdentifier</key>
 	<string>com.ipaside.escapeos</string>

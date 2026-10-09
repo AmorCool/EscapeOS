@@ -108,7 +108,7 @@ enum DDIMountProbe {
 
         out.append("[0] 前置")
         out.append("  · 配对文件：\(FileManager.default.fileExists(atPath: pairingPath) ? "存在" : "缺失")  \(pairingPath)")
-        out.append("  · LocalDevVPN targetIP=\(LocalDevVPN.targetIP) isConnected=\(LocalDevVPN.isConnected)")
+        out.append("  · 隧道（\(TunnelManager.selectedKind.title)）targetIP=\(TunnelManager.targetIP) isConnected=\(TunnelManager.isConnected)")
         guard FileManager.default.fileExists(atPath: pairingPath) else {
             out.append("")
             out.append("结论：未导入配对文件，探针终止（无法建隧道）.")
@@ -228,7 +228,7 @@ enum DDIMountProbe {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = in_port_t(49152).bigEndian
-        let deviceIP = LocalDevVPN.targetIP
+        let deviceIP = TunnelManager.targetIP
         guard deviceIP.withCString({ inet_pton(AF_INET, $0, &addr.sin_addr) }) == 1 else {
             throw probeError("隧道 IP 无效：\(deviceIP)")
         }

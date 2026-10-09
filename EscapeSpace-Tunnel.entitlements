@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  「内置隧道版」可选签名配置（opt-in，默认构建**不使用**本文件）.
+
+	  为什么单开一个文件、而不是直接写进 EscapeSpace.entitlements：
+	  · com.apple.developer.networking.networkextension 属**受管 entitlement**，
+	    只有 Apple Developer Program 的证书 / 巨魔（TrollStore）安装才拿得到；
+	    免费账号 / 个人团队（SideStore / AltStore 自签）的 provisioning profile 不含它.
+	  · 一旦默认签名配置请求了该权限，codesign 会直接失败
+	    （「entitlements not allowed」）⇒ 连 App 都装不上，整包回归.
+	  ⇒ 默认 EscapeSpace.entitlements 保持不含该权限；有权限的用户改用本文件签名.
+	    用法：把 CODE_SIGN_ENTITLEMENTS 指向本文件，或用它作为侧载工具的 entitlements 输入.
+
+	  完整的内置隧道还需独立的 Network Extension target（NEPacketTunnelProvider 子类 +
+	  PlugIns/*.appex），见简报「实现_三种隧道方式.md」的 Phase 2.
+	-->
+	<key>get-task-allow</key>
+	<true/>
+	<key>com.apple.wifi.manager-access</key>
+	<true/>
+	<key>com.apple.wifi.join-any</key>
+	<true/>
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel</string>
+	</array>
+</dict>
+</plist>

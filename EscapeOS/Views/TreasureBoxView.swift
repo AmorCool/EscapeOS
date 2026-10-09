@@ -24,6 +24,10 @@ struct TreasureBoxView: View {
     let onOpenDeactivate: () -> Void
     /// 打开「软件源管理」页.同样走「先关 sheet 再 push」的中转，理由同上.
     let onOpenSignSource: () -> Void
+    /// 打开「爱思应用修复安装」页.同样走「先关 sheet 再 push」的中转，理由同上.
+    let onOpenI4Fix: () -> Void
+    /// 打开「安装爱思移动端」页.同样走「先关 sheet 再 push」的中转，理由同上.
+    let onOpenMobileInstall: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -344,6 +348,59 @@ struct TreasureBoxView: View {
                         Text("软件源管理")
                             .font(.subheadline)
                         Text("添加 / 管理第三方软件源")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
+            // 爱思应用修复安装：把爱思 9.0 的「修复应用」入口移植过来.
+            // 移植范围仅「经 AFC 写设备 i4tool2.acc + 读回校验」，不含联网授权，
+            // 且与 App Store 加密包的 -42112 不同层（详见 I4AppFixView 顶部注释）.
+            Button {
+                onOpenI4Fix()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "bandage.fill")
+                        .foregroundStyle(.pink)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("爱思应用修复安装")
+                            .font(.subheadline)
+                        Text("重写爱思授权凭据 · 仅爱思源应用")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
+            // 安装爱思移动端：把爱思 9.0 的「安装爱思移动端」对话框移植过来.
+            // 内嵌 IPA 是 FairPlay 加密包（cryptid=1），装前有诚实提示（见 I4MobileInstallView）.
+            Button {
+                onOpenMobileInstall()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.down.app.fill")
+                        .foregroundStyle(.teal)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("安装爱思移动端")
+                            .font(.subheadline)
+                        Text("爱思 9.0 移动端安装向导（加密包，可能装不上）")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

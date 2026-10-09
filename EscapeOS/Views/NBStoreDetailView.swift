@@ -624,22 +624,23 @@ struct NBStoreDetailView: View {
 
     /// 取某个版本的包并交给统一下载中心。
     ///
-    /// v0.3.556：历史版本这条链路**只对在架应用有效**。
-    /// 下架应用的包只能在**搜索结果**里拿（`searchOffSaleApp` 的 `appStoreData`），
-    /// 用 trackId + externalVersionID 去查是查不到的（实测 `getOffSaleAppHistoryList`
-    /// 对任何参数组合都取不到包）。所以下架态直接如实说明，不发这一发。
+    /// v0.3.556 曾把历史版本这条链路限定为「只对在架应用有效」，理由当时写成
+    /// 「下架应用只能从搜索结果取包」。**该结论已被推翻**（2026-10-09 直连实测）：
+    /// `getAppHistoryList`（本方法走的 action）**对下架 App 完全可用** —— 传
+    /// `appID` + `appVerId` 回 `code=0` 且 `data` 完整（直链 + sinf），直链 HEAD → HTTP 200。
+    /// 早先取不到的是**另一个**名字相近的 `getOffSaleAppHistoryList`，别再混为一谈。
+    ///
+    /// ⇒ v0.3.586 起下架态也能用本方法按 `appVerId` 取指定版本（版本列表走
+    /// `versionList(trackID:)`，即 bilin 目录，对下架 App 同样有数据）。
     @MainActor
     private func installVersion(_ v: NBStoreClient.NBVersion) async {
-        guard !offSale else {
-            ToastCenter.shared.show("下架应用请回列表页点「获取」")
-            return
-        }
         fetchingID = v.externalIdentifier
         defer { fetchingID = nil }
         do {
-            let pkg = try await NBStoreClient.package(appID: trackID,
-                                                      appVerId: v.externalIdentifier,
-                                                      country: country)
+            let pkg = try await NBStoreClient.packageByVersion(appID: trackID,
+                                                               appVerId: v.externalIdentifier,
+                                                               bundleID: detail?.bundleID ?? "",
+                                                               country: country)
             guard let pkg else {
                 ToastCenter.shared.show("该版本没有可用的安装包")
                 return

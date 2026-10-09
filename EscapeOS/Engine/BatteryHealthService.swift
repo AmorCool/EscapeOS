@@ -85,7 +85,7 @@ enum BatteryHealthService {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = in_port_t(49152).bigEndian
-        let deviceIP = LocalDevVPN.targetIP
+        let deviceIP = TunnelManager.targetIP
         let parseResult = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
         guard parseResult == 1 else {
             throw makeError("隧道 IP 无效：\(deviceIP)")

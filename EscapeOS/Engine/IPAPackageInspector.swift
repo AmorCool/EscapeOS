@@ -129,8 +129,27 @@ enum IPAPackageInspector {
     }
 
     /// 提取 `Payload/<name>.app/iTunesMetadata.plist`（作为安装选项 `iTunesMetadata`）
+    /// 取包内 `iTunesMetadata.plist`。
+    ///
+    /// ## 为什么试两个位置（v0.3.585 实测修正）
+    ///
+    /// **真实 App Store 包的 `iTunesMetadata.plist` 在 IPA 顶层**（与 `Payload/` 平级），
+    /// **不在 `.app` 里**。旧实现只找 `\(appPrefix).app/iTunesMetadata.plist`
+    /// ⇒ 对真实包**恒返回 nil**。
+    ///
+    /// 实测（`哔哩哔哩3.20.1.ipa`）：顶层条目为
+    /// `META-INF / Payload / iTunesArtwork / iTunesMetadata.plist` —— 确认在顶层。
+    /// 而该包**确实含** `itemId` 与 `softwareVersionExternalIdentifier`，
+    /// 是旧实现**找错位置**才读不到（连带让「按账号现取 sinf」在第一步就放弃、静默回退）。
+    ///
+    /// ⇒ 顶层优先（真实包），再退回 `.app` 内（部分重打包的包会把它放进去）。
     static func extractiTunesMetadata(ipaPath: String) -> Data? {
-        extract(ipaPath: ipaPath, suffixProvider: { _, appPrefix in
+        if let atRoot = extract(ipaPath: ipaPath,
+                                suffixProvider: { _, _ in "iTunesMetadata.plist" },
+                                maxBytes: 4 << 20) {
+            return atRoot
+        }
+        return extract(ipaPath: ipaPath, suffixProvider: { _, appPrefix in
             "\(appPrefix).app/iTunesMetadata.plist"
         }, maxBytes: 4 << 20)
     }
