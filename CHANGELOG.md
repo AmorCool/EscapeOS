@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.587] - 2026-10-10
+
+> **一句话**：修用户报的五个 bug —— NB 搜索确认后全局卡死、NB 下架取包、爱思移动端三条、下载管理来源区分、隧道四问题。
+
+### 修复
+
+- **NB 搜索下架应用确认后全局卡死（P0）**：`NBStoreClient.udid` 原先同步调 `LocalDeviceIdentity.load()` 建 RSD 隧道；因 `SWIFT_APPROACHABLE_CONCURRENCY`（SE-0461）该函数跑在 MainActor 上，**真机实测单次阻塞 150~225 秒**。照牛蛙源 `NiuwaStoreClient` 的既有修法移植：去掉同步 `load()`，改「只吃缓存 + `warmUpInBackground()`」。签名不变，调用方零改动。代价：冷缓存首次请求失败，重试即成功。
+- **NB 下架取包 `code=7` 分流**：实测稳定 `code=7` 的是「Mac App Store 应用」（无 iOS 包），换参数救不了；偶发 `code=7` 是服务端上游超时。加 catch 分流，UI 文案不再暴露内部码。
+- **爱思移动端页**：① 每条来源下显示地址（只读 + 可复制）② 加「下载管理」入口 ③ 修「爱思云端恒灰」—— 根因是 UDID 异步预热完成后没人再刷新可用性，加幂等预热 + 就绪后刷新。
+- **统一下载管理**：加行内来源胶囊（`sourceTint` + `sourceBadge`），让每条能看出所属来源。过滤 / 排序 / 计数 / 标题逐字未动，三个入口语义不变。
+- **隧道**：① 修「跳 AppStore」—— 真凶是 `localdevvpn` 不在 `LSApplicationQueriesSchemes`，已补 ② Shadowrocket scheme 改用已确证的 `sub://` ③ 检测文案改语义（我们测的是**签名是否含 Packet Tunnel 权限**，与 VPN 是否已连接无关）。
+
+### 已知边界
+
+- **内置隧道本轮未做**：需 NE target + `.appex` + 受管 entitlement（免费签名签不了）。UI 已如实标「本版本暂未提供」，不再看起来像能用。
+- **NB 取包对「NB 库里确实没有 iOS 包」的条目仍取不到**（例如微信 / 抖音的 Mac 版本记录）—— 这是数据侧事实，不是代码问题。
+- 全盘扫描另有 **P0 5 条 / P1 12 条 / P2 20 条**未修（`ManifestPublisher`、`OnlineInstallService`、`SSHServerService` 无超时信号量、`JITEnableService` 的 `main.sync`、隧道 `connect` 无超时）。
+
 ## [0.3.586] - 2026-10-10
 
 > **一句话**：百宝箱新增「爱思应用修复安装」与「安装爱思移动端」；隧道新增 Shadowrocket / 内置隧道两种方式；IPA 改走云端下载不再内置。
