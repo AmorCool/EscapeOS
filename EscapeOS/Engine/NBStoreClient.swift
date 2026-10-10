@@ -218,82 +218,53 @@ enum NBStoreClient {
 
     // MARK: - 公共参数
 
-    /// 请求体里的 `udid` —— 只允许**本机真 UDID**。
+    /// 冷缓存时的**占位 UDID**（不阻塞、发出去也算合法请求）。
+    ///
+    /// ## 为什么可以有占位（本会话受控实验复现）
+    /// NB 服务端对 `searchOffSaleApp`（下架搜索）与 `getAppHistoryList`（取包）
+    /// **完全忽略 `udid`**：
+    /// - 搜索：真 / 假A / 假B / 空 / 畸形 五种输入 **5/5 均 `code=0`**，结果**逐字段相同**；
+    /// - 取包：五种输入 **5/5 均 `code=0`**；url/sinf 的差异经「同一真 udid 连发 3 次」
+    ///   验证为**每次请求的随机量**（3 次 url/sinf 各不相同），与 udid 无关；
+    ///   偶发的 `code=7` 在真 udid 上也会出现 ⇒ 服务端偶发，非 udid 所致。
+    /// （脚本：`P4_全能签逆向/_工作区/验证脚本/nb_search_udid_probe.py`）
+    ///
+    /// ⇒ **搜索、取包都不需要真设备身份**。占位值只需「非空」，用全 0 便于日志一眼识别。
+    private static let placeholderUDID = "00000000-0000000000000000"
+
+    /// 请求体里的 `udid` —— 有本机真值就用真值，取不到就由调用方回落到 `placeholderUDID`。
     ///
     /// ## 取值链路（与全项目其它地方一致，都走 `LocalDeviceIdentity`）
-    /// ① 缓存已热 → `cachedRealUDID()` 直接返回（0 成本）；
-    /// ② 缓存冷 → `awaitRealUDID()` **等后台预热完成**（带超时；内部 `Task.sleep` 让出执行器）；
-    /// ③ 超时仍拿不到 → 调用方抛 `StoreError.deviceNotReady`（**文案里不含内部码**）。
+    /// ① 缓存已热 → 本函数返回真 UDID；
+    /// ② 缓存冷 → 本函数返回 nil，调用方（`perform`）**用 `placeholderUDID` 直接发出**，
+    ///    **不 await、不等隧道**（这是本会话的核心修复，见下）。
     ///
-    /// ## v0.3.545：不再造假 UDID
-    ///
-    /// **更正（2026-10-05，受控实验）**：v0.3.545 当时把「NB 源下的包装上闪退」归因为
-    /// 「伪 UDID → 换回的 sinf 与本机硬件不匹配」。**该归因已被推翻** ——
-    /// 受控实验（真 / 假 / 空 / 畸形 udid 各发一次）显示 **NB 服务端完全忽略 `udid`**，
-    /// 四种请求换回的 sinf **逐字节相同**（见 `verification/q1_tier2_实测证据.json`）。
-    /// 那次「装后闪退」的真因是 **hex 被当 base64** 的编码损坏（sinf 被写成 1.5 倍垃圾字节，
-    /// v0.3.563 修复）。**与 udid / 本机硬件无关。**
-    ///
-    /// 旧实现（v0.3.53x）随便生成一个 40 位 hex 冒充 UDID。抓包对照过 NB 助手真机：
-    /// 它发的是**真 UDID**（`00008030-001A446A0260402E`）。
-    ///
-    /// 现在仍**只用真 UDID**（v0.3.550 收紧）：这是**工程决策**（对齐真机抓包、避免身份字段
-    /// 出现非真值），**不是因为「伪 UDID 会让 sinf 无效」**——该因果已被上述实验证伪。
-    ///
-    /// ## 修 P0（两轮）
+    /// ## 修 P0（三轮）
     ///
     /// - **第一轮（不完整）**：这里原来同步调 `LocalDeviceIdentity.load()` 建 RSD 隧道。
     ///   本工程开了 `SWIFT_APPROACHABLE_CONCURRENCY`（SE-0461 `NonisolatedNonsendingByDefault`，
     ///   `project.yml:172`）⇒ `nonisolated async` 的 `perform` 跑在调用者 MainActor 上
     ///   ⇒ 建隧道落在主线程 ⇒ UI 全局卡死（真机实测单次阻塞 150,311ms / 225,070ms，进程未崩）。
     ///   照牛蛙源 `NiuwaStoreClient.swift:433-441` 的先例改成「只吃缓存」，冷缓存直接返回 nil。
-    /// - **第二轮（本轮）**：只吃缓存 ⇒ **冷缓存首次搜索必失败**（`no-udid`），用户不接受。
-    ///   现改为**异步等待就绪** —— 照 `I4MobileInstallService.warmUpDeviceIdentityForI4()`
-    ///   （`I4MobileInstallService.swift:695`）同款做法：轮询进程内缓存、等
-    ///   `warmUpInBackground()` 已挂的那一次隧道，**不另建隧道、不阻塞主线程**；超时如实报错。
+    /// - **第二轮（过度）**：只吃缓存 ⇒ 冷缓存首次搜索必失败，用户不接受；遂改为
+    ///   **异步等待就绪**（`awaitRealUDID()` 最多 12s，超时抛 `.deviceNotReady`）。
+    /// - **第三轮（本会话，正解）**：等待把「搜个下架应用」这种**不需要身份**的操作
+    ///   绑死在「隧道是否就绪」上 —— 隧道起不来时搜索被一起拖死（用户原话：
+    ///   「之前只是下架应用无法下载，你改了之后越改越差」）。**既然服务端忽略 udid，
+    ///   搜索就不该等隧道** ⇒ 删掉 `awaitRealUDID()` 与 `.deviceNotReady`，
+    ///   冷缓存直接用占位发出；后台仍挂一次 `warmUpInBackground()`（幂等、不 await），
+    ///   让下一次请求自然用上真 udid。
     ///
-    /// **牛蛙源没有同样的问题**：它的 `pubUDID`（`NiuwaStoreClient.swift:433`）冷缓存时
-    /// **回退伪 UDID**（`UserDefaults` 持久化），所以永不失败。NB 源**不伪造身份**
-    /// （v0.3.550 收紧），所以只能「等」，不能「顶替」。
-    ///
-    /// v0.3.554 修了一个上游 bug：`LocalDeviceIdentity` 之前把 lockdown 的键名
-    /// 写成了 `UniqueDeviceIdentifier`（真实键是 `UniqueDeviceID`），导致两条路
-    /// **都必然取不到**，`no-udid` 是这么来的，不是隧道没起来。现在键名已修正。
-    ///
-    /// 为什么把兜底伪值这条删掉：真机日志（2026-10-02）实证伪值仍在被用 ——
-    /// ```
-    /// [11:45:04] 本次请求用历史伪 UDID（非本机真值）：c497e4c8…
-    /// ```
-    /// 后果是**用户白下一个 100MB+ 的包**。删掉的理由是**身份字段不应出现非真值**
-    /// （与 sinf 是否匹配无关）。伪值只会让包看起来「有 sinf」，
-    /// 把「缺 sinf」这个明确错误伪饰成「装后闪退」这种难查的形态。
+    /// ## 旧归因的更正（保留以免重犯）
+    /// v0.3.545 曾把「NB 源下的包装上闪退」归因为「伪 UDID → sinf 与本机不匹配」，
+    /// **已被实验推翻**：服务端忽略 udid，真因是 **hex 被当 base64** 的编码损坏
+    /// （sinf 被写成 1.5 倍垃圾字节，v0.3.563 修复）。**与 udid / 本机硬件无关。**
+    /// v0.3.554 另修了一个上游 bug：`LocalDeviceIdentity` 曾把 lockdown 键名写成
+    /// `UniqueDeviceIdentifier`（真实键 `UniqueDeviceID`），两条路都取不到 —— 已修正。
     private static func cachedRealUDID() -> String? {
         guard let udid = LocalDeviceIdentity.cachedSnapshot()?.udid,
               !udid.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         return udid
-    }
-
-    /// 等本机真 UDID 就绪（缓存命中 → 立即返回；冷缓存 → 等后台预热，最多 `seconds` 秒）。
-    ///
-    /// 照 `I4MobileInstallService.warmUpDeviceIdentityForI4()` 同款：**轮询进程内缓存**，
-    /// 只等 `warmUpInBackground()` 已挂的那一次隧道，**不另建隧道**（后者会与预热并发、白建一轮）。
-    /// 内部是 `await Task.sleep`（让出执行器）⇒ **不阻塞 MainActor**。超时返回 nil，由调用方报错。
-    ///
-    /// 超时取 12s（0.2s × 60）：比 `warmUpDeviceIdentityForI4()` 的 10s 略宽，给隧道首次建立
-    /// 留一点余量；同时仍明显小于 `session` 的 15s 请求超时 —— 首次搜索最坏也就等这么久。
-    private static func awaitRealUDID(timeout seconds: Double = 12) async -> String? {
-        if let real = cachedRealUDID() { return real }
-        LocalDeviceIdentity.warmUpInBackground()   // 幂等：已在跑则不重复建隧道
-        let stepNs: UInt64 = 200_000_000           // 0.2s
-        let attempts = max(1, Int((seconds / 0.2).rounded()))
-        for _ in 0..<attempts {
-            if Task.isCancelled { break }
-            try? await Task.sleep(nanoseconds: stepNs)
-            if let real = cachedRealUDID() { return real }
-            // 预热若已结束却没结果（隧道没起来），再挂一次 —— 给自愈一次机会。
-            LocalDeviceIdentity.warmUpInBackground()
-        }
-        return cachedRealUDID()
     }
 
     /// 公共参数 —— 就是 NB 的"免登录"身份，没有 token / Authorization / uid。
@@ -314,16 +285,15 @@ enum NBStoreClient {
     ///
     /// 改为在**构造后再赋值**：先建好不发重复键的基底，缺省值用下标写回，
     /// 这样即使将来再加字段也不会重复触发这个坑。
-    /// - Parameter realUDID: 调用方（`perform`）**已 await 到**的本机真 UDID；
-    ///   本函数不再自己取、不再判空 —— 判空与超时统一在 `perform` 处理。
+    /// - Parameter realUDID: 调用方（`perform`）传入的 `udid` —— 有本机真值就是真值，
+    ///   冷缓存则是 `placeholderUDID`；本函数只负责塞进参数，不判空、不阻塞。
     private static func pubParams(iPad: Bool, udid realUDID: String) -> [String: Any] {
-        // v0.3.550：**没有真 UDID 就不发这一发** —— 该判断已上移到 `perform`
-        // （冷缓存先 `awaitRealUDID()` 等就绪，超时抛 `.deviceNotReady`），
-        // 传进来的 `realUDID` 必然非空。
+        // v0.3.590：`udid` 由 `perform` 决定 —— 有缓存用真值，否则用 `placeholderUDID`。
+        // 服务端**完全忽略 udid**（搜索/取包 5/5 code=0，见 `placeholderUDID` 注释），
+        // 所以这里不再要求非空、更不在这里等隧道。
         //
-        // 决策依据是「身份字段不应出现非真值」（对齐真机抓包），
-        // **不是**「伪 UDID 换回的 sinf 与本机不匹配」——该因果已被受控实验证伪
-        // （NB 服务端忽略 udid，四种输入返回同一份 sinf，见 q1_tier2_实测证据.json）。
+        // 旧归因更正：曾担心「伪 UDID 换回的 sinf 与本机不匹配」，该因果已被受控实验证伪
+        // （NB 服务端忽略 udid）。真机闪退的真因是 hex 被当 base64 的编码损坏（v0.3.563 修复）。
         // 实测抓包值（2026-10-01 / 10-02）：客户端 3.9.1 / build 1。
         // 与请求体里的 appVersion 是同一个值，服务端会校验，勿随意改小。
         var p: [String: Any] = [
@@ -394,12 +364,6 @@ enum NBStoreClient {
         case http(Int)
         case decode
         case crypto(String)
-        /// 本机设备身份（UDID）在超时内仍未就绪。
-        ///
-        /// **独立于 `.server`**：`.server` 的 `errorDescription` 会把内部码拼进界面
-        /// （`"\(msg)（\(code)）"`），而设备身份的等待超时**不是服务端返回**，
-        /// 不该带任何内部码 —— `no-udid` 一类的字眼只允许进日志。
-        case deviceNotReady
         case server(code: String, message: String)
         case network(String)
 
@@ -409,7 +373,6 @@ enum NBStoreClient {
             case .http(let c): return "请求失败（HTTP \(c)）"
             case .decode: return "响应解析失败"
             case .crypto(let m): return "报文加解密异常：\(m)"
-            case .deviceNotReady: return "本机设备身份未就绪，请稍后重试"
             case .server(let code, let msg):
                 return msg.isEmpty ? "服务端返回码 \(code)" : "\(msg)（\(code)）"
             case .network(let m): return "网络错误：\(m)"
@@ -441,6 +404,12 @@ enum NBStoreClient {
     /// 命中数为 0 —— 表现就是「下架应用怎么搜都搜不到」。
     ///
     /// 现在默认走 `UIDevice` 判定（iPad 才发 iPad），调用方无需再传。
+    ///
+    /// ## v0.3.590 修：`udid` **不再等待隧道**
+    ///
+    /// 服务端忽略 `udid`（实验见 `placeholderUDID` 注释）⇒ 本方法**绝不**为取 `udid`
+    /// 而 `await` 隧道：缓存热就用真值，冷就用 `placeholderUDID` 直接发。
+    /// 这样「搜个下架应用」不再被「隧道是否就绪」拖死（详见下方内联注释）。
     private static func perform(path: String,
                                 method: String,
                                 params: [String: Any],
@@ -449,12 +418,27 @@ enum NBStoreClient {
         let url = path.isEmpty ? (host + "/nb/app") : (host + path)
         guard let u = URL(string: url) else { throw StoreError.badURL }
 
-        // 冷缓存时**先等设备身份就绪**（带超时、不阻塞主线程），拿不到才报错 ——
-        // 这样「第一次搜索」不再必失败，也绝不把内部码甩给用户（见 `awaitRealUDID`）。
-        guard let realUDID = await awaitRealUDID() else {
-            LoginLogger.shared.log("\(logTag) [失败] 等待本机真 UDID 超时（身份缓存仍未热）—— 不发这一发.",
-                                   category: .appStore)
-            throw StoreError.deviceNotReady
+        // v0.3.590：**不再等隧道**。udid 有缓存就用真值，没有就用占位，**永不阻塞这一发**。
+        //
+        // 依据（受控实验，本会话复现，见 `nb_search_udid_probe.py`）：
+        // NB 服务端对 `searchOffSaleApp`（下架搜索）与 `getAppHistoryList`（取包）
+        // **完全忽略 `udid`** —— 真 / 假 / 空 / 畸形五种输入，搜索 5/5 均 `code=0`
+        // 且结果逐字段相同；取包 5/5 均 `code=0`（url/sinf 的差异经同 udid 连发验证
+        // 来自每次请求的随机量，与 udid 无关）。
+        //
+        // ⇒ **搜索、取包都不需要真设备身份**，也就**不该把「隧道是否就绪」放在关键路径上**：
+        //   原来冷缓存时 `await awaitRealUDID()` 最多等 12s，隧道起不来就抛
+        //   `.deviceNotReady`，把「搜个下架应用」这种不需要身份的操作也一起弄挂了。
+        //   现在改成「有缓存用真值、没有用占位」，后台仍挂 `warmUpInBackground()`（幂等、
+        //   不 await），让**下一次**请求能自然用上真 udid。
+        let realUDID: String
+        if let cached = cachedRealUDID() {
+            realUDID = cached
+        } else {
+            realUDID = placeholderUDID
+            LocalDeviceIdentity.warmUpInBackground()   // 幂等：只为下一次请求热缓存，不 await
+            LoginLogger.shared.log("\(logTag) [提示] 身份缓存未热，本次请求用占位 UDID 发出"
+                                   + "（服务端忽略 udid，不影响搜索/取包）.", category: .appStore)
         }
         var merged = pubParams(iPad: isPad, udid: realUDID)
         for (k, v) in params { merged[k] = v }
@@ -967,6 +951,21 @@ enum NBStoreClient {
     /// ① 内嵌包在 → 直接用（`embeddedOffSalePackage`，零额外请求）；
     /// ② 内嵌包不在 → 用 `appStoreID`（+ `appExtID`）打 `getAppHistoryList` 取包。
     ///
+    /// ## v0.3.588：内嵌直链的 `accessKey` 会过期 —— 过期就现取（2026-10-10 实测定案）
+    ///
+    /// v0.3.586 的「内嵌包优先」是一处硬伤：`searchOffSaleApp` 每条记录里内嵌的
+    /// `appStoreData.url` 是 NB **收录那一刻**的快照，而 Apple CDN 的 `accessKey` 带
+    /// **过期时间**（`accessKey=<过期unix秒>_<num>_<签名>`）。快照一过那点就必然 403。
+    ///
+    /// **实测（2026-10-10 直连，脚本 `nb_offsale_freshness.py` / `nb_offsale_url_compare.py`）**：
+    /// · 搜索内嵌 URL：accessKey 过期时间戳跨 2023-09-29 … 2026-10-09（**全部已过期**），
+    ///   逐条 Range 前 1MB 一律 `HTTP 403 Forbidden` —— 搜「哔哩哔哩」/「抖音」/「微信」
+    ///   共 8 条内嵌包，**8/8 全 403**。
+    /// · 同一 App 走 `getAppHistoryList`：accessKey 是**未来**时间（如 2026-10-12），
+    ///   Range 前 1MB 一律 `206 Partial Content` + 头部 `PK\x03\x04`（真 IPA）。
+    /// ⇒ **内嵌包不再无条件优先**：先看它的 `accessKey` 过没过期，没过期才用（省一次请求）；
+    ///   过期（或拿不到过期时间）就现取新鲜直链。旧行为正是「无条件用内嵌包」⇒ 403 ⇒ 下载必失败。
+    ///
     /// ## v0.3.587：`code=7` 如实处理（不再把内部码甩给用户）
     ///
     /// 回退仍会回 `code=7`，实测（2026-10-10）**不是参数问题** —— 换 `appVerId` / `plusID` /
@@ -974,18 +973,26 @@ enum NBStoreClient {
     /// `code=7` 的两种成因见 catch 内注释：一条「NB 库里没 iOS 包」（回 nil），一条「服务端
     /// 上游临时超时」（抛出、提示重试）。**原始码与 msg 只进日志，界面文案由调用方给**。
     static func offSalePackage(from app: OffSaleApp, country: String) async throws -> NBPackage? {
-        // ① 搜索响应里内嵌的包 —— 有就直接用，不多发一发请求。
-        if let embedded = embeddedOffSalePackage(from: app) { return embedded }
+        // ① 内嵌快照直链 —— **仅在 accessKey 未过期时**直接用（省一次请求）。
+        //    过期即 HTTP 403（见头注释实测 8/8），此时必须现取，不能拿一条注定失败的链接去下。
+        if let embedded = embeddedOffSalePackage(from: app) {
+            if !accessKeyExpired(embedded.ipaURL) {
+                return embedded
+            }
+            LoginLogger.shared.log("\(logTag) [提示] 内嵌快照直链的 accessKey 已过期，改现取新鲜直链"
+                                   + "（\(app.name)）.",
+                                   category: .appStore)
+        }
 
-        // ② 回退：按 appID(+appVerId) 打 getAppHistoryList。
+        // ② 现取：按 appID(+appVerId) 打 getAppHistoryList，拿**新鲜**直链。
         guard let storeID = app.storeID, !storeID.isEmpty else {
-            LoginLogger.shared.log("\(logTag) [失败] 下架记录既没带包、也拿不到 App Store ID，"
-                                   + "无法回退取包（\(app.name)）",
+            LoginLogger.shared.log("\(logTag) [失败] 下架记录没有可用的快照直链、也拿不到 App Store ID，"
+                                   + "无法取包（\(app.name)）.",
                                    category: .appStore)
             return nil
         }
-        LoginLogger.shared.log("\(logTag) [提示] 这条下架记录没带内嵌包，回退 getAppHistoryList 取包"
-                               + "（appID=\(storeID) appVerId=\(app.appExtID ?? "")）",
+        LoginLogger.shared.log("\(logTag) [提示] 现取新鲜直链 getAppHistoryList"
+                               + "（appID=\(storeID) appVerId=\(app.appExtID ?? "")）.",
                                category: .appStore)
         let pkg: NBPackage?
         do {
@@ -1004,17 +1011,34 @@ enum NBStoreClient {
             // 判据：只认「上游临时故障」的特征串，其余 code=7 一律按「库里没包」处理。
             // 参数无关：换 appVerId / plusID / bundleID / country 的组合实验**没有一种**能把
             // code=7 变成 code=0（同一个 appID 反复打仍是 7）。原始码与 msg 一律进日志。
-            LoginLogger.shared.log("\(logTag) [失败] 回退取包 code=7（\(app.name) appID=\(storeID)）：\(message)",
+            LoginLogger.shared.log("\(logTag) [失败] 现取直链 code=7（\(app.name) appID=\(storeID)）：\(message)",
                                    category: .appStore)
             let upstreamFailed = message.contains("dialing") || message.contains("请求异常")
             if upstreamFailed { throw StoreError.server(code: code, message: message) }
             return nil
         }
         if pkg == nil {
-            LoginLogger.shared.log("\(logTag) [失败] 回退取包也没拿到直链（\(app.name) appID=\(storeID)）",
+            LoginLogger.shared.log("\(logTag) [失败] 现取也没拿到直链（\(app.name) appID=\(storeID)）.",
                                    category: .appStore)
         }
         return pkg
+    }
+
+    /// Apple CDN 直链的 `accessKey` 是否已过期。
+    ///
+    /// `accessKey` 形如 `<过期unix秒>_<num>_<base64签名>` —— 首个 `_` 前就是**过期时间**。
+    /// 实测（2026-10-10）：过期时间戳（过去）→ `HTTP 403`；未来时间戳 → `206`。
+    /// **判不出时间戳时按「已过期」处理** —— 现取那条路恒新鲜，宁可多打一发，
+    /// 也不要用一条注定 403 的链接去下载（旧行为就是这样白下一个失败）。
+    private static func accessKeyExpired(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString),
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let value = comps.queryItems?.first(where: { $0.name == "accessKey" })?.value,
+              let head = value.split(separator: "_").first,
+              let epoch = TimeInterval(head) else {
+            return true
+        }
+        return Date().timeIntervalSince1970 >= epoch
     }
 
     /// 下架取包的**第一段**：把搜索结果里内嵌的那份 `appStoreData` 翻成 `NBPackage`（没有则 nil）。

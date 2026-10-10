@@ -86,9 +86,10 @@
 		<string>App-Prefs</string>
 		<string>prefs</string>
 		<!-- 2026-10-10：隧道方式「Shadowrocket 连接」需 canOpenURL 探测是否已安装（仅跳转目标）。
-		     改用已确证的 scheme `sub`（Shadowrocket 订阅导入用，见 TunnelProvider.ShadowrocketTunnel 注释）；
-		     原 `shadowrocket` scheme 未获一手来源证实，已移除。 -->
-		<string>sub</string>
+		     用 Shadowrocket 官方 wiki URL-Schemes 一节确证的 `shadowrocket` scheme
+		     （`shadowrocket://open` = 启动 VPN 隧道），见 TunnelProvider.ShadowrocketTunnel 注释。
+		     此前误用的 `sub` 已移除：`sub://` 是订阅导入用途，实测 canOpenURL 结果不可靠。 -->
+		<string>shadowrocket</string>
 		<!-- 2026-10-10：隧道方式「LocalDevVPN」需 canOpenURL 探测是否已安装。
 		     此前漏登本项 ⇒ LocalDevVPN.isInstalled 恒 false ⇒ openOrInstall 永远跳 App Store。 -->
 		<string>localdevvpn</string>

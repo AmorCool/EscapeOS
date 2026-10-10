@@ -753,7 +753,7 @@ final class IPADownloadCenter: ObservableObject {
             // ⇒ 判据是**间接推断**、且已被证伪 ⇒ 不再设硬门。`isConnected` /
             //   `isTunnelReachable` 一律只记日志、继续尝试安装，由 `IPAInstallService.createTunnel()`
             //   自己的 3 次退避重试兜底；真的连不上时，安装链会给出**真实**错误.
-            if !TunnelManager.isConnected {
+            if !LocalDevVPN.isConnected {
                 LoginLogger.shared.log(
                     "[下载中心] 未检测到本机 utun 接口，仍继续尝试安装：\(fileName).",
                     category: .download)
@@ -763,7 +763,7 @@ final class IPADownloadCenter: ObservableObject {
             }
             if !LocalDevVPN.isTunnelReachable() {
                 LoginLogger.shared.log(
-                    "[下载中心] 隧道预检未通过（\(TunnelManager.targetIP):49152），仍继续尝试安装：\(fileName).",
+                    "[下载中心] 隧道预检未通过（\(LocalDevVPN.targetIP):49152），仍继续尝试安装：\(fileName).",
                     category: .download)
             }
             if let sinfBase64 {

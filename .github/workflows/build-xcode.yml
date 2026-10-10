@@ -33,6 +33,10 @@ on:
     #
     #   复用判据在 xcode-build 的 REUSE 段：同 headSha + success + artifact 未过期 +
     #   产物内 promote-hash.txt 与本次 CUR_HASH 一致。四条件全满足才跳过编译。
+    #   CUR_HASH = `git ls-tree -r HEAD -- EscapeOS EscapeOSTunnel project.yml | shasum -a 256`
+    #   —— 含 project.yml 完整 blob，故改版本号必变；这正是「验证后改号」无法复用的原因。
+    #   完整机制与优化 B（改 CI 让 hash 忽略版本号）的取舍见 docs/releasing.md §3b 与
+    #   简报《优化_消除重复构建.md》。
     tags: ['v*']
   workflow_dispatch:
 

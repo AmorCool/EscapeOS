@@ -94,7 +94,7 @@ struct StatusBarView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
 
-    @State private var tunnelConnected = TunnelManager.isConnected
+    @State private var tunnelConnected = LocalDevVPN.isConnected
     @State private var showSettings = false
 
     private enum Display {
@@ -225,7 +225,7 @@ struct StatusBarView: View {
     }
 
     private func refreshTunnel() {
-        tunnelConnected = TunnelManager.isConnected
+        tunnelConnected = LocalDevVPN.isConnected
     }
 }
 

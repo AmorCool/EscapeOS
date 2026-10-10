@@ -64,7 +64,7 @@ final class WiFiPowerBridge: @unchecked Sendable {
         stepLog("步骤1 配对文件 [完成]")
 
         // 2) 隧道 IP
-        let deviceIP = TunnelManager.targetIP
+        let deviceIP = LocalDevVPN.targetIP
         guard !deviceIP.isEmpty else {
             throw makeError("隧道 IP 为空（请检查「设置 → 本地隧道」）")
         }

@@ -59,6 +59,27 @@ enum AppTheme {
         startPoint: .top,
         endPoint: .bottom
     )
+
+    // MARK: - TRApp 实测语义色（本轮从 Assets.car 解出）
+    //
+    // 上一轮只拿到命名色的**名称**；本轮用 `car-unpacker-py`（纯 Python，BOMStore + RLOC
+    // float64 分量）解 `Assets.car`，拿到 TRApp 7 个命名色的**真实 RGB**（取自 flat-ui 调色板）。
+    // 这是品牌实测值，故直接写死 sRGB；**仅供新页面使用**，不动既有 `success/pending/danger/
+    // warning/mark`（那四个仍走系统语义色，全 App 影响面大）.
+    // 证据：`P4_全能签逆向/_简报/实现_TRApp风格落地爱思移动端页.md` §①.
+
+    /// TRApp 强调色（实测 `#005493`）.
+    static let trAccent = Color(red: 0x00 / 255, green: 0x54 / 255, blue: 0x93 / 255)
+    /// TRApp 成功色（实测 `#6AB04C`）.
+    static let trSuccess = Color(red: 0x6A / 255, green: 0xB0 / 255, blue: 0x4C / 255)
+    /// TRApp 失败色（实测 `#E74C3C`）.
+    static let trDanger = Color(red: 0xE7 / 255, green: 0x4C / 255, blue: 0x3C / 255)
+    /// TRApp 警示色（实测 `#F9CA24`）.
+    static let trWarning = Color(red: 0xF9 / 255, green: 0xCA / 255, blue: 0x24 / 255)
+    /// TRApp 可恢复色（实测 `#008974`）.
+    static let trRecoverable = Color(red: 0x00 / 255, green: 0x89 / 255, blue: 0x74 / 255)
+    /// TRApp 标记色（实测 `#F9CA24`，与警示同值）.
+    static let trMark = Color(red: 0xF9 / 255, green: 0xCA / 255, blue: 0x24 / 255)
 }
 
 /// 「透明淡蓝」按钮样式（用户审美：不要纯蓝实底，要淡一点的蓝底）.
@@ -131,6 +152,46 @@ struct TintedButtonStyle: ButtonStyle {
                         .strokeBorder(tint.opacity(strokeOpacity), lineWidth: 0.5)
                 )
                 .opacity(isEnabled ? 1 : 0.4)
+                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        }
+    }
+}
+
+/// 品牌渐变主按钮（TRApp 深藏青渐变底 + 白字 + 连续圆角）.
+///
+/// 用于 hero / 主行动（如本页「开始安装」）。**不是纯蓝实底**：底是品牌深藏青渐变
+/// `#2C3A6A → #161F2E`（取自 TRApp AppIcon 实测），符合「不要纯蓝实底按钮」的规则.
+/// 按下时轻微缩放 + 降透明度作为反馈（替代实底样式的自动变暗）.
+struct BrandProminentButtonStyle: ButtonStyle {
+    var radius: CGFloat = 14
+
+    func makeBody(configuration: ButtonStyleConfiguration) -> some View {
+        BrandBody(configuration: configuration, radius: radius)
+    }
+
+    /// 样式体单独成 View：只有 View 能读 `@Environment`，用于禁用态置灰.
+    private struct BrandBody: View {
+        let configuration: ButtonStyleConfiguration
+        let radius: CGFloat
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .font(AppFont.bodyEmphasis)
+                .foregroundStyle(.white)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .fill(AppTheme.brandGradient)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                )
+                .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1) : 0.4)
+                .scaleEffect(configuration.isPressed ? 0.985 : 1)
                 .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
     }
@@ -246,6 +307,9 @@ enum AppFont {
     static let number = Font.system(.body, design: .rounded).monospacedDigit()
     static let numberEmphasis = Font.system(.body, design: .rounded).weight(.semibold).monospacedDigit()
     static let numberSmall = Font.system(.caption, design: .rounded).monospacedDigit()
+    /// 次标题号等宽数字（机型序列号 / 版本号等「值」列）.
+    static let numberSubheadline = Font.system(.subheadline, design: .rounded).monospacedDigit()
+    static let numberSubheadlineEmphasis = Font.system(.subheadline, design: .rounded).weight(.semibold).monospacedDigit()
 }
 
 /// 圆角层：连续圆角（`RoundedCornerStyle.continuous`），与既有卡片口径对齐.

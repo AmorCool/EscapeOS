@@ -88,6 +88,34 @@ git rev-parse HEAD
 
 The two hashes must match.
 
+## 3b. (Optional) Pre-flight validation — bump the version *first*
+
+CI publishes the Release at tag time (step 7), so validation normally happens *after* the run. If you
+nevertheless want to compile before tagging — to catch a build error early — run the build on the
+**commit you are about to tag**, i.e. *after* steps 1–3:
+
+```sh
+gh workflow run build-xcode.yml --ref migrate-xcode
+```
+
+Then tag that same commit (step 4).
+
+**Do not validate an earlier commit and bump the version afterwards.** The tag run decides reuse from
+`CUR_HASH`, computed as
+
+```sh
+git ls-tree -r HEAD -- EscapeOS EscapeOSTunnel project.yml | shasum -a 256
+```
+
+which hashes `project.yml` **in full** — including the `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`
+lines. Bumping the version changes `CUR_HASH`, so a tag on the new commit can no longer reuse the
+validation build and compiles from scratch a second time (this is the "two full builds per release"
+waste).
+
+Same commit ⇒ same `CUR_HASH` ⇒ the tag run finds the successful `workflow_dispatch` run by `headSha`
+(artifacts are readable across runs), reuses its `escapeos-xcode-ipa`, and skips `xcode-build`
+entirely.
+
 ## 4. Tag and push the tag
 
 ```sh

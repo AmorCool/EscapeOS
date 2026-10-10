@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """NB 下架取包链路防复发检查（v0.3.587）.
 
-对应两轮修复（v0.3.586 补回退 / v0.3.587 把 code=7 如实处理 + 界面去内部码），
-把三条**只有人工 review 才看得出**的不变量机械守住，防「拆东补西」式回归：
+对应三轮修复（v0.3.586 补回退 / v0.3.587 把 code=7 如实处理 + 界面去内部码 /
+v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review 才看得出**的不变量机械守住，
+防「拆东补西」式回归：
 
   G1  `EscapeOS/Engine/NBStoreClient.swift` 的 `offSalePackage` 必须保留
       「内嵌包缺失 → 回退 `getAppHistoryList` 取包」这条回退（有人删回退即报）。
@@ -12,6 +13,8 @@
   G3  `EscapeOS/Views/I4StoreFreeView.swift` 的 `installOffSale` 里，面向用户的
       `ToastCenter.shared.show` 不得直接插 `error.localizedDescription`
       （NB 的 `StoreError.server` 会把它格式化成 `msg（7）`，内部码会随之漏给用户）。
+  G4  同 `offSalePackage` 必须对**内嵌快照直链**做 `accessKeyExpired(...)` 过期判断
+      （v0.3.588）—— 快照直链的 accessKey 过期即 HTTP 403，无条件用它会导致下载必失败。
 
 判据全部**只认结构/符号**（函数体里出现哪个调用 / 哪个字面量），不绑死行号、不绑死文案，
 以免将来改文案就误报。函数体用逐字符状态机按大括号配对提取（跳过字符串/注释）。
@@ -197,6 +200,10 @@ def check(root):
             if '"7"' not in body:
                 errs.append("[G2] offSalePackage 没有处理服务端 code=7"
                             " —— StoreError.server(code:\"7\") 会直接冒到界面（内部码漏给用户）")
+            if "accessKeyExpired(" not in body:
+                errs.append("[G4] offSalePackage 直接用了内嵌快照直链而没做 accessKey 过期判断"
+                            " —— 快照直链的 accessKey 过期即 HTTP 403，下载必失败"
+                            "（v0.3.588 实测 8/8 全 403；过期/判不出都必须改现取）")
 
     # ── G3：界面不得把原始 error 甩给用户 ──
     if not os.path.isfile(view):
@@ -228,11 +235,12 @@ def main():
     if errs:
         for e in errs:
             print("ERROR %s" % e)
-        print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码）" % len(errs))
+        print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码 / G4 快照过期）" % len(errs))
         return 1
     print("G1 回退 getAppHistoryList：OK")
     print("G2 code=7 处理：OK")
     print("G3 界面无内部码泄漏：OK")
+    print("G4 内嵌快照 accessKey 过期判断：OK")
     print("命中：0")
     return 0
 

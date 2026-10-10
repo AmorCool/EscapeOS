@@ -57,25 +57,47 @@ struct TreasureBoxView: View {
     }
 
     private var heroCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "shippingbox.and.arrow.backward.fill")
-                .font(.title2)
-                .foregroundStyle(.white)
-                .appSymbol()
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 14) {
+            // 图标底改白色半透明圆角块（TRApp AppIcon 语言）：置于品牌深藏青渐变上对比清晰.
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.16))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
+                Image(systemName: "shippingbox.and.arrow.backward.fill")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(.white)
+                    .appSymbol()
+            }
+            .frame(width: 58, height: 58)
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text("百宝箱")
                     .font(AppFont.title3)
                     .foregroundStyle(.white)
                 Text("小工具集 · 持续补充")
                     .font(AppFont.caption)
-                    .foregroundStyle(.white.opacity(0.8))
+                    .foregroundStyle(.white.opacity(0.82))
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(AppMetrics.cardPadding)
+        .padding(18)
         .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                    .fill(AppTheme.brandGradient)
+                // 右上角柔光（装饰，营造渐变纵深）.
+                Circle()
+                    .fill(Color.white.opacity(0.10))
+                    .frame(width: 180, height: 180)
+                    .blur(radius: 48)
+                    .offset(x: 110, y: -60)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous))
+        )
+        .overlay(
             RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                .fill(AppTheme.brandGradient)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
         )
     }
 
@@ -252,19 +274,23 @@ struct TreasureBoxView: View {
 
     private var itemsCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("工具")
-                .font(AppFont.headline)
-                .padding(.bottom, 6)
+            HStack(spacing: 6) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.trAccent)
+                    .appSymbol()
+                Text("工具").font(AppFont.captionEmphasis).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.bottom, 6)
             // v0.3.441：Gestalt 入口。样式与下方各行保持一致，右侧 chevron 表示「可进入」。
             Button {
                 AppHaptics.tap()
                 onOpenGestalt()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "gearshape.2.fill")
-                        .foregroundStyle(.blue)
-                        .frame(width: 26)
-                        .appSymbol()
+                    AppRowIcon(systemName: "gearshape.2.fill", tint: AppTheme.trAccent,
+                               symbolSize: 16, frameSize: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Gestalt 编辑")
                             .font(AppFont.subheadline)
@@ -287,10 +313,8 @@ struct TreasureBoxView: View {
                 onOpenIconCleanup()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "trash.slash")
-                        .foregroundStyle(.orange)
-                        .frame(width: 26)
-                        .appSymbol()
+                    AppRowIcon(systemName: "trash.slash", tint: AppTheme.trRecoverable,
+                               symbolSize: 16, frameSize: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("顽固图标清理")
                             .font(AppFont.subheadline)
@@ -315,10 +339,8 @@ struct TreasureBoxView: View {
                 onOpenDeactivate()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "bolt.slash")
-                        .foregroundStyle(.red)
-                        .frame(width: 26)
-                        .appSymbol()
+                    AppRowIcon(systemName: "bolt.slash", tint: AppTheme.trDanger,
+                               symbolSize: 16, frameSize: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("反激活设备")
                             .font(AppFont.subheadline)
@@ -342,10 +364,8 @@ struct TreasureBoxView: View {
                 onOpenSignSource()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "shippingbox.circle.fill")
-                        .foregroundStyle(.purple)
-                        .frame(width: 26)
-                        .appSymbol()
+                    AppRowIcon(systemName: "shippingbox.circle.fill", tint: AppTheme.trAccent,
+                               symbolSize: 16, frameSize: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("软件源管理")
                             .font(AppFont.subheadline)
@@ -371,10 +391,8 @@ struct TreasureBoxView: View {
                 onOpenI4Fix()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "bandage.fill")
-                        .foregroundStyle(.pink)
-                        .frame(width: 26)
-                        .appSymbol()
+                    AppRowIcon(systemName: "bandage.fill", tint: AppTheme.trSuccess,
+                               symbolSize: 16, frameSize: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("爱思应用修复安装")
                             .font(AppFont.subheadline)
@@ -399,10 +417,8 @@ struct TreasureBoxView: View {
                 onOpenMobileInstall()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "arrow.down.app.fill")
-                        .foregroundStyle(.teal)
-                        .frame(width: 26)
-                        .appSymbol()
+                    AppRowIcon(systemName: "arrow.down.app.fill", tint: AppTheme.trAccent,
+                               symbolSize: 16, frameSize: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("安装爱思移动端")
                             .font(AppFont.subheadline)

@@ -5,10 +5,17 @@ import UIKit
 
 /// 隧道抽象层.
 ///
-/// 背景（2026-10-09）：此前全仓的「隧道入口」就是 `LocalDevVPN.targetIP` /
-/// `LocalDevVPN.isConnected` 两个静态属性（约 35 处调用点，遍布 RSD 服务层）.
-/// 现在引入本文件，把「用哪种隧道」这件事从硬编码的 `LocalDevVPN` 抽出来，
-/// 由用户在「更多 → 设置 → 隧道」里选择，调用点改从 `TunnelManager` 取.
+/// 背景（2026-10-09）：全仓的「设备地址入口」一直是 `LocalDevVPN.targetIP` /
+/// `LocalDevVPN.isConnected` 两个静态属性（约 40 处调用点，遍布 RSD 服务层）.
+/// 本文件把「用哪种方式建隧道」抽成用户可选项，在「更多 → 设置 → 隧道」里选择.
+///
+/// ⚠️ 关键纪律（2026-10-10 修正，勿违反）：**设备地址始终由 `LocalDevVPN` 提供**.
+/// 上一版把 40 处调用点改走 `TunnelManager.targetIP` / `TunnelManager.isConnected`，
+/// 结果用户一旦选中 Shadowrocket（其 `isConnected` 恒 `false`、不提供设备连接）⇒
+/// AFC / lockdown / 安装 / 电池健康等**全部失效**。故本文件**不再暴露** `targetIP` /
+/// `isConnected` 转发；`LocalDevVPN.targetIP` 读的是本机 utun 的**对端地址**，
+/// `LocalDevVPN.isConnected` 读的是「本机是否有 utun」，二者与「用哪个 App 建隧道」无关，
+/// 因此对 LocalDevVPN 与内置隧道同样成立. 本文件只决定**跳转目标**与**内置隧道启停**.
 ///
 /// 三种方式（照 WrapPin 的口径）：
 ///   · `.localDevVPN` —— 现状，外部 LocalDevVPN 应用建 utun，本应用只读它的对端地址.
@@ -18,9 +25,8 @@ import UIKit
 ///   · `.builtIn` —— 新增，用 Network Extension 自己建隧道. 开启前**先检测当前签名
 ///     是否含 Packet Tunnel 权限**，无权限则置灰（见 `VPNPermissionProbe`）.
 ///
-/// ⚠️ 兼容纪律：默认方式仍是 `.localDevVPN`，且三种方式的 `targetIP` 都走
-/// `LocalDevVPN.targetIP` 的同一套推导（`TunnelDeviceIP` 覆盖 → utun 对端自动推导 →
-/// 兜底 10.7.0.1）. 因此把调用点改走 `TunnelManager` 后，**默认链路的行为逐字节不变**.
+/// ⚠️ 兼容纪律：默认方式仍是 `.localDevVPN`（`UserDefaults` 无值时回落到它），
+/// 且切换方式**不改变任何设备连接功能的行为**（它们都直读 `LocalDevVPN`）.
 
 // MARK: - 隧道类型
 
@@ -80,9 +86,6 @@ enum TunnelAvailability: Equatable, Sendable {
 protocol TunnelProviding {
     var kind: TunnelKind { get }
 
-    /// RSD 目标地址（隧道**对端** IP，不是本机 utun 接口地址）.
-    var targetIP: String { get }
-
     /// 尽力而为的「是否已连接」判断. 语义与能否探测见 `canProbeConnection`.
     var isConnected: Bool { get }
 
@@ -106,7 +109,6 @@ protocol TunnelProviding {
 struct LocalDevVPNTunnel: TunnelProviding {
     let kind: TunnelKind = .localDevVPN
 
-    var targetIP: String { LocalDevVPN.targetIP }
     var isConnected: Bool { LocalDevVPN.isConnected }
     var canProbeConnection: Bool { true }
 
@@ -134,28 +136,23 @@ struct LocalDevVPNTunnel: TunnelProviding {
 struct ShadowrocketTunnel: TunnelProviding {
     let kind: TunnelKind = .shadowrocket
 
-    /// 无法确知 Shadowrocket 的隧道对端，沿用与 LocalDevVPN 同一套推导（`TunnelDeviceIP`
-    /// 覆盖 / utun 对端 / 兜底）——这样「用户手动填的地址」在三种方式下语义一致.
-    var targetIP: String { LocalDevVPN.targetIP }
-
     /// 恒 `false`：跳转目标不构成连接承诺，见类型注释.
     var isConnected: Bool { false }
     var canProbeConnection: Bool { false }
 
     /// 打开 Shadowrocket 用的 scheme.
     ///
-    /// 为什么是 `sub://` 而不是早期写的 `shadowrocket://`：`shadowrocket://` 是**未经验证的猜测**
-    /// （旧注释自认「猜的」）；2026-10-10 联网检索**未取到任何一手来源**证实它是 Shadowrocket 已注册的
-    /// scheme。已确证的是 `sub://` —— Shadowrocket 用它做订阅导入，系统能把它派发给 Shadowrocket
-    /// 就说明该 scheme 已在 Shadowrocket 的 `CFBundleURLSchemes` 里注册（未注册则系统不派发）。
-    /// 依据：konekuto.org/ios「手动复制链接：sub://aHR0cHM6…」；
-    /// vpn07.com「Shadowrocket 专用订阅链接（以 sub:// 或 https:// 开头）」。
-    /// 语义差异如实说明：`sub://` 的用途是「导入订阅」，本处只用它把 App 拉起（不附带订阅内容）。
-    private static let openURL = URL(string: "sub://")!
+    /// 为什么是 `shadowrocket://open`：Shadowrocket 官方 wiki 的 URL-Schemes 一节
+    /// （github.com/LOWERTOP/Shadowrocket，README「URL-Schemes」）明确列出
+    /// `shadowrocket://connect` 与 `shadowrocket://open`，均标注为「启动 VPN 隧道」。
+    /// 这证明 `shadowrocket` 已注册在其 `CFBundleURLSchemes` 里（未注册则系统不派发）。
+    /// 取 `open` 而非 `connect`：两者同为「启动 VPN 隧道」，`open` 更贴近「把 App 拉起」的本意。
+    /// 反例说明：早期写的 `sub://` 是订阅导入用途，实测 `canOpenURL(sub://)` 不可靠，已弃用.
+    private static let openURL = URL(string: "shadowrocket://open")!
 
     var availability: TunnelAvailability {
         // `canOpenURL` 只认 `Info.plist` 的 `LSApplicationQueriesSchemes` 白名单；
-        // 白名单里已放 `sub`，且 `sub` 是已确证的已注册 scheme ⇒ 这里才能真实反映「装没装 Shadowrocket」.
+        // 白名单里已放 `shadowrocket`，且它是官方 wiki 确证的已注册 scheme ⇒ 这里才能真实反映「装没装 Shadowrocket」.
         if UIApplication.shared.canOpenURL(Self.openURL) { return .available }
         return .unavailable("未检测到 Shadowrocket，请先在 App Store 安装.")
     }
@@ -165,7 +162,7 @@ struct ShadowrocketTunnel: TunnelProviding {
             LoginLogger.shared.log("[隧道] Shadowrocket 未安装，跳过跳转.", category: .general)
             return
         }
-        LoginLogger.shared.log("[隧道] 请求打开 Shadowrocket（scheme=sub://，仅跳转，不保证提供设备连接）.", category: .general)
+        LoginLogger.shared.log("[隧道] 请求打开 Shadowrocket（scheme=shadowrocket://open，仅跳转，不保证提供设备连接）.", category: .general)
         // 为什么必须走 `MainActor.run`（三次 CI 实测，逐层退让）：
         //   ① 只写 `open(url)` ⇒ async 上下文推断成 async 重载 ⇒ 报
         //      「expression is 'async' but is not marked with 'await'」；
@@ -180,7 +177,7 @@ struct ShadowrocketTunnel: TunnelProviding {
         await MainActor.run {
             UIApplication.shared.open(Self.openURL, options: [:]) { accepted in
                 if !accepted {
-                    LoginLogger.shared.log("[隧道] 系统未受理 sub:// 打开请求，Shadowrocket 可能未安装.", category: .general)
+                    LoginLogger.shared.log("[隧道] 系统未受理 shadowrocket://open 打开请求，Shadowrocket 可能未安装.", category: .general)
                 }
             }
         }
@@ -216,9 +213,6 @@ struct BuiltInTunnel: TunnelProviding {
         guard let bundle = Bundle(url: appex) else { return false }
         return bundle.bundleIdentifier == Self.providerBundleID
     }
-
-    /// 内置隧道的对端地址沿用同一套推导（`TunnelDeviceIP` / utun 对端 / 兜底）.
-    var targetIP: String { LocalDevVPN.targetIP }
 
     /// 内置隧道建出来的也是 utun ⇒ 复用「存在任意 utun 即算已连接」的判据
     /// （与 LocalDevVPN 同源，不假设网段）.
@@ -490,11 +484,15 @@ enum VPNPermissionProbe {
 
 // MARK: - 入口
 
-/// 全仓隧道入口. 调用点用 `TunnelManager.targetIP` / `TunnelManager.isConnected`
-/// 取代原先写死的 `LocalDevVPN.targetIP` / `LocalDevVPN.isConnected`.
+/// 全仓隧道**选择**入口（只表达用户偏好，不是设备地址的来源）.
 ///
-/// ⚠️ 默认方式仍是 `.localDevVPN`（`UserDefaults` 无值时回落到它），且三种方式的
-/// `targetIP` 同源 ⇒ 改造不改变既有行为.
+/// ⚠️ 设计纪律（2026-10-10 修正）：**设备地址不从这里取**。此前把全仓
+/// `LocalDevVPN.targetIP` / `LocalDevVPN.isConnected` 的调用点改走本类型，导致用户一旦
+/// 选中 Shadowrocket（其 `isConnected` 恒 `false`、且不提供设备连接）⇒ AFC / lockdown /
+/// 安装 / 电池健康 / 崩溃日志等**全部失效**。现明确：
+///   · 依赖设备连接的功能**一律直接读** `LocalDevVPN.targetIP` / `LocalDevVPN.isConnected`
+///     —— 它读的是本机 utun 的**对端地址**与「本机是否有 utun」，与「用哪个 App 建隧道」无关.
+///   · 本类型只用于设置页呈现、跳转目标（Shadowrocket）与内置隧道的启停.
 enum TunnelManager {
     /// `UserDefaults` 键. 沿用本仓「模块.项」点号惯例（如 `AppStore.ShopRegion`），
     /// 与设置页 `TunnelPickerView` 的 `@AppStorage` 同键.
@@ -520,10 +518,4 @@ enum TunnelManager {
 
     /// 当前选中的实现.
     static var current: any TunnelProviding { provider(for: selectedKind) }
-
-    /// 当前隧道的 RSD 目标地址（既有 `LocalDevVPN.targetIP` 调用点的替代）.
-    static var targetIP: String { current.targetIP }
-
-    /// 当前隧道是否已连接（既有 `LocalDevVPN.isConnected` 调用点的替代）.
-    static var isConnected: Bool { current.isConnected }
 }

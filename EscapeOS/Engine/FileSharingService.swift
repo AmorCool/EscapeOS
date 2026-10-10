@@ -1191,7 +1191,7 @@ enum FileSharingService {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = in_port_t(49152).bigEndian
-        let deviceIP = TunnelManager.targetIP
+        let deviceIP = LocalDevVPN.targetIP
         let _ = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
 
         var lastError: NSError?
