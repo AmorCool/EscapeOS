@@ -267,10 +267,23 @@ final class JITEnableService: Sendable {
         // 目标应用会一直停在 SIGSTOP（黑屏无反应）.持有后台租约保证
         // 整个会话期间本应用不被挂起（对齐 StikDebug 的 DebugKeepAliveLease）.
         // Swift 6：JITBackgroundLease 已收敛主线程（@MainActor）；本方法可能在后台
-        // 线程跑，创建/释放同步跳主线程（与旧版内部 DispatchQueue.main.sync 行为一致；
-        // 主线程调用本方法时 main.sync 会死锁，与旧版约束相同，调用点均在后台 Task）.
-        let keepAliveLease = DispatchQueue.main.sync { JITBackgroundLease() }
-        defer { DispatchQueue.main.sync { keepAliveLease.invalidate() } }
+        // 线程跑，创建/释放需跳主线程。**若本方法本身就在主线程调用**，直接 `main.sync`
+        // 会死锁 —— 故先判 `Thread.isMainThread`：在主线程用 `MainActor.assumeIsolated`
+        // 原地创建/释放，否则再 `DispatchQueue.main.sync` 跳过去（与 OnlineInstallService
+        // / LocalDevVPN 的 assumeIsolated 同款处理）。
+        let keepAliveLease: JITBackgroundLease
+        if Thread.isMainThread {
+            keepAliveLease = MainActor.assumeIsolated { JITBackgroundLease() }
+        } else {
+            keepAliveLease = DispatchQueue.main.sync { JITBackgroundLease() }
+        }
+        defer {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { keepAliveLease.invalidate() }
+            } else {
+                DispatchQueue.main.sync { keepAliveLease.invalidate() }
+            }
+        }
 
         var tunnel = try createTunnel(hostname: "EscapeSpaceJIT")
         defer { tunnel.free() }

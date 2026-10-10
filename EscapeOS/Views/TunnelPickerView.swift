@@ -25,7 +25,7 @@ struct TunnelPickerView: View {
         } header: {
             Text("隧道")
         } footer: {
-            Text("选择设备连接方式.切换后，依赖隧道的功能都按此方式取设备地址.")
+            Text("选择设备连接方式.切换后，依赖隧道的功能都按此方式取设备地址.不可用的方式仍可选中，下方会给出原因.")
         }
         .task {
             // 同步判定「不确定」时，异步实测一次（只可能把结果升级为可用）.
@@ -35,7 +35,12 @@ struct TunnelPickerView: View {
 
     // MARK: - 行
 
-    /// 单条可选行：单选圆点 + 标题 + 一行说明. 无权限 / 未安装的行传 `enabled: false` ⇒ 置灰不可点.
+    /// 单条可选行：单选圆点 + 标题 + 一行说明.
+    ///
+    /// **选择与可用性解耦**：任何方式都能被选中并写入偏好；`enabled` 只决定说明文字是否用
+    /// 警示色标出「当前不可用」，**不再 `disabled` 整行** —— 旧写法把「不可用」与「不能选」
+    /// 混为一谈，导致未安装 Shadowrocket / 无 VPN 权限时用户根本点不动这两行（这正是
+    /// 「为什么不能选择其它隧道连接方式」的直接原因）.
     @ViewBuilder
     private func row(for kind: TunnelKind, subtitle: String, enabled: Bool = true) -> some View {
         Button {
@@ -49,10 +54,12 @@ struct TunnelPickerView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(kind.title)
                         .font(.body)
-                        .foregroundStyle(enabled ? Color.primary : Color.secondary)
+                        // 标题恒主色：行本身可选，不靠置灰表达「不可点」.
+                        .foregroundStyle(Color.primary)
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        // 不可用时用警示色（而非灰）：告诉用户「能选中，但当前不可启用」.
+                        .foregroundStyle(enabled ? Color.secondary : AppTheme.pending)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -62,7 +69,6 @@ struct TunnelPickerView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
     }
 
     // MARK: - 状态与动作
@@ -71,8 +77,15 @@ struct TunnelPickerView: View {
     @ViewBuilder
     private var statusAndAction: some View {
         let kind = selectedKind
-        let enabled = availability(for: kind).isAvailable
+        let avail = availability(for: kind)
         VStack(alignment: .leading, spacing: 8) {
+            // 选中的方式当前不可启用时，把原因放到最显眼的位置（不再只埋在行内小字里）.
+            if let reason = avail.reason {
+                Text("该方式当前不可用：\(reason)")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.pending)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text(statusLine(kind))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -81,7 +94,8 @@ struct TunnelPickerView: View {
                 Task { await runAction(kind) }
             }
             .buttonStyle(TintedButtonStyle())
-            .disabled(!enabled)
+            // 动作仍按可用性门控：能选中，但不假装能开启.
+            .disabled(!avail.isAvailable)
         }
         .padding(.vertical, 2)
     }
@@ -120,9 +134,8 @@ struct TunnelPickerView: View {
         case .shadowrocket:
             return "无法探测连接状态.此方式仅作为跳转目标，不保证能提供设备连接."
         case .builtIn:
-            // 这里判定的是签名里的权限，与 VPN 开关无关 —— 文案写明「当前签名」，避免被读成连接状态.
-            let state = builtInAvailability.reason ?? "当前签名含 VPN 权限，可开启内置隧道."
-            return state + "该判定来自当前签名，与 VPN 是否已连接无关."
+            // 不可用原因已由状态区单独展示，这里只讲连接语义，避免重复.
+            return "连接状态：内置隧道建出的也是 utun，判据与 LocalDevVPN 相同."
         }
     }
 
@@ -138,15 +151,17 @@ struct TunnelPickerView: View {
     // MARK: - 行为
 
     private func select(_ kind: TunnelKind) {
-        // 无权限 / 未安装的行本身已 disabled，这里再兜一次（防程序化触发）.
-        guard availability(for: kind).isAvailable else { return }
+        // 选择与可用性解耦：任何方式都能被选中并写入偏好（旧写法在这里 guard 掉，
+        // 叠加行上的 `.disabled` ⇒ 未安装 / 无权限的方式永远选不了，即用户报的「不能选择其它方式」）.
         let previous = selectedKind
         kindRaw = kind.rawValue
         // 离开内置隧道时顺手断开，避免隧道继续挂着.
         if previous == .builtIn, kind != .builtIn {
             Task { await TunnelManager.provider(for: .builtIn).stop() }
         }
-        // 选中即触发该方式的首个动作（跳转 / 开启）；LocalDevVPN 需用户在该应用内连接，无需动作.
+        // 只有当前可用时才触发该方式的首个动作（跳转 / 开启）；不可用时不假装成功，
+        // 由状态区如实说明原因. LocalDevVPN 需用户在该应用内连接，无需动作.
+        guard availability(for: kind).isAvailable else { return }
         switch kind {
         case .shadowrocket, .builtIn:
             Task { await TunnelManager.provider(for: kind).start() }

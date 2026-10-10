@@ -218,7 +218,12 @@ enum NBStoreClient {
 
     // MARK: - 公共参数
 
-    /// 请求体里的 `udid`。
+    /// 请求体里的 `udid` —— 只允许**本机真 UDID**。
+    ///
+    /// ## 取值链路（与全项目其它地方一致，都走 `LocalDeviceIdentity`）
+    /// ① 缓存已热 → `cachedRealUDID()` 直接返回（0 成本）；
+    /// ② 缓存冷 → `awaitRealUDID()` **等后台预热完成**（带超时；内部 `Task.sleep` 让出执行器）；
+    /// ③ 超时仍拿不到 → 调用方抛 `StoreError.deviceNotReady`（**文案里不含内部码**）。
     ///
     /// ## v0.3.545：不再造假 UDID
     ///
@@ -234,61 +239,61 @@ enum NBStoreClient {
     ///
     /// 现在仍**只用真 UDID**（v0.3.550 收紧）：这是**工程决策**（对齐真机抓包、避免身份字段
     /// 出现非真值），**不是因为「伪 UDID 会让 sinf 无效」**——该因果已被上述实验证伪。
-    /// 历史上观察到的两种失败形态**都不是**「udid 决定 sinf」造成的：
     ///
-    /// - 服务端对某些输入直接给空 `sinfs` → 客户端记「这一份没有 sinf，跳过」
-    ///   → 装时报「该 IPA 是加密包，但缺少 SC_Info/*.sinf」。（与 udid 无关，实测四值同返回。）
-    /// - 「装得上，一启动就崩」→ 已查明是 **hex-as-base64 编码损坏**写坏了 sinf，
-    ///   **不是**「sinf 与本机硬件不匹配」。
+    /// ## 修 P0（两轮）
     ///
-    /// 「运行期使用 sinf 是否绑设备」这一问题至今**未证实**（受控实验只覆盖了
-    /// 「请求 udid 是否影响返回的 sinf 字节」，结论：不影响）。
+    /// - **第一轮（不完整）**：这里原来同步调 `LocalDeviceIdentity.load()` 建 RSD 隧道。
+    ///   本工程开了 `SWIFT_APPROACHABLE_CONCURRENCY`（SE-0461 `NonisolatedNonsendingByDefault`，
+    ///   `project.yml:172`）⇒ `nonisolated async` 的 `perform` 跑在调用者 MainActor 上
+    ///   ⇒ 建隧道落在主线程 ⇒ UI 全局卡死（真机实测单次阻塞 150,311ms / 225,070ms，进程未崩）。
+    ///   照牛蛙源 `NiuwaStoreClient.swift:433-441` 的先例改成「只吃缓存」，冷缓存直接返回 nil。
+    /// - **第二轮（本轮）**：只吃缓存 ⇒ **冷缓存首次搜索必失败**（`no-udid`），用户不接受。
+    ///   现改为**异步等待就绪** —— 照 `I4MobileInstallService.warmUpDeviceIdentityForI4()`
+    ///   （`I4MobileInstallService.swift:695`）同款做法：轮询进程内缓存、等
+    ///   `warmUpInBackground()` 已挂的那一次隧道，**不另建隧道、不阻塞主线程**；超时如实报错。
     ///
-    /// ## 取值顺序（与全项目其它地方一致，都走 `LocalDeviceIdentity`）
-    /// ① `LocalDeviceIdentity.cachedSnapshot()`（缓存已热 → 0 成本）
-    /// ② **冷缓存只后台预热、不建隧道**（`warmUpInBackground()`），本次返回 nil
-    /// ③ **拿不到就返回 nil，不发请求**（v0.3.550 起，不再有伪值兜底）。
-    ///
-    /// ## 修 P0：请求路径上**绝不**同步建隧道
-    ///
-    /// 这里原来在 ② 调 `LocalDeviceIdentity.load()` —— 那是**会现场建 RSD 隧道**的入口
-    /// （真机实测单次阻塞 150,311ms / 225,070ms）。本工程开了
-    /// `SWIFT_APPROACHABLE_CONCURRENCY`（SE-0461 `NonisolatedNonsendingByDefault`，
-    /// `project.yml:172`）⇒ `nonisolated async` 的 `perform` 跑在调用者 MainActor 上
-    /// ⇒ 建隧道落在主线程 ⇒ UI 全局卡死（进程未崩）。
-    /// 同款 bug v0.3.402 在 AppleID 下载链路修过（`CHANGELOG.md:7619`），
-    /// 牛蛙源也单独修过（`NiuwaStoreClient.swift:433-441`），**唯独 NB 源漏网**。
-    ///
-    /// 现照牛蛙源的先例改：**只吃缓存**；冷缓存时挂 `warmUpInBackground()` 后台预热，
-    /// 本次如实返回 nil（不发这一发）。缓存一热，后面的请求自然拿到真值 ——
-    /// 与「首次失败、重试成功」的既有现象一致，但主线程全程零设备 IO。
+    /// **牛蛙源没有同样的问题**：它的 `pubUDID`（`NiuwaStoreClient.swift:433`）冷缓存时
+    /// **回退伪 UDID**（`UserDefaults` 持久化），所以永不失败。NB 源**不伪造身份**
+    /// （v0.3.550 收紧），所以只能「等」，不能「顶替」。
     ///
     /// v0.3.554 修了一个上游 bug：`LocalDeviceIdentity` 之前把 lockdown 的键名
     /// 写成了 `UniqueDeviceIdentifier`（真实键是 `UniqueDeviceID`），导致两条路
-    /// **都必然取不到**，`no-udid` 是这么来的，不是隧道没起来。
-    /// 现在键名已修正。**只有真 UDID 才允许取包**（v0.3.550 收紧）。
+    /// **都必然取不到**，`no-udid` 是这么来的，不是隧道没起来。现在键名已修正。
     ///
     /// 为什么把兜底伪值这条删掉：真机日志（2026-10-02）实证伪值仍在被用 ——
     /// ```
     /// [11:45:04] 本次请求用历史伪 UDID（非本机真值）：c497e4c8…
     /// ```
     /// 后果是**用户白下一个 100MB+ 的包**。删掉的理由是**身份字段不应出现非真值**
-    /// （与 sinf 是否匹配无关）。
-    ///
-    /// 伪值本身也不再生成/复用：它只会让包看起来「有 sinf」，
+    /// （与 sinf 是否匹配无关）。伪值只会让包看起来「有 sinf」，
     /// 把「缺 sinf」这个明确错误伪饰成「装后闪退」这种难查的形态。
+    private static func cachedRealUDID() -> String? {
+        guard let udid = LocalDeviceIdentity.cachedSnapshot()?.udid,
+              !udid.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return udid
+    }
+
+    /// 等本机真 UDID 就绪（缓存命中 → 立即返回；冷缓存 → 等后台预热，最多 `seconds` 秒）。
     ///
-    /// 返回 `nil` 时调用方直接报错，提示先让设备身份就绪（隧道起来）再重试。
-    private static var udid: String? {
-        if let real = LocalDeviceIdentity.cachedSnapshot()?.udid, !real.isEmpty {
-            return real
+    /// 照 `I4MobileInstallService.warmUpDeviceIdentityForI4()` 同款：**轮询进程内缓存**，
+    /// 只等 `warmUpInBackground()` 已挂的那一次隧道，**不另建隧道**（后者会与预热并发、白建一轮）。
+    /// 内部是 `await Task.sleep`（让出执行器）⇒ **不阻塞 MainActor**。超时返回 nil，由调用方报错。
+    ///
+    /// 超时取 12s（0.2s × 60）：比 `warmUpDeviceIdentityForI4()` 的 10s 略宽，给隧道首次建立
+    /// 留一点余量；同时仍明显小于 `session` 的 15s 请求超时 —— 首次搜索最坏也就等这么久。
+    private static func awaitRealUDID(timeout seconds: Double = 12) async -> String? {
+        if let real = cachedRealUDID() { return real }
+        LocalDeviceIdentity.warmUpInBackground()   // 幂等：已在跑则不重复建隧道
+        let stepNs: UInt64 = 200_000_000           // 0.2s
+        let attempts = max(1, Int((seconds / 0.2).rounded()))
+        for _ in 0..<attempts {
+            if Task.isCancelled { break }
+            try? await Task.sleep(nanoseconds: stepNs)
+            if let real = cachedRealUDID() { return real }
+            // 预热若已结束却没结果（隧道没起来），再挂一次 —— 给自愈一次机会。
+            LocalDeviceIdentity.warmUpInBackground()
         }
-        // 冷缓存：**不建隧道**（照牛蛙源 NiuwaStoreClient.swift:433-441 的先例），
-        // 只把预热挂到后台；本次不发这一发.
-        LocalDeviceIdentity.warmUpInBackground()
-        LoginLogger.shared.log("\(logTag) [失败] 拿不到本机真 UDID（身份缓存未热）—— 不发这一发，已转后台预热.",
-                               category: .appStore)
-        return nil
+        return cachedRealUDID()
     }
 
     /// 公共参数 —— 就是 NB 的"免登录"身份，没有 token / Authorization / uid。
@@ -309,16 +314,16 @@ enum NBStoreClient {
     ///
     /// 改为在**构造后再赋值**：先建好不发重复键的基底，缺省值用下标写回，
     /// 这样即使将来再加字段也不会重复触发这个坑。
-    private static func pubParams(iPad: Bool) throws -> [String: Any] {
-        // v0.3.550：**没有真 UDID 就不发这一发**。
+    /// - Parameter realUDID: 调用方（`perform`）**已 await 到**的本机真 UDID；
+    ///   本函数不再自己取、不再判空 —— 判空与超时统一在 `perform` 处理。
+    private static func pubParams(iPad: Bool, udid realUDID: String) -> [String: Any] {
+        // v0.3.550：**没有真 UDID 就不发这一发** —— 该判断已上移到 `perform`
+        // （冷缓存先 `awaitRealUDID()` 等就绪，超时抛 `.deviceNotReady`），
+        // 传进来的 `realUDID` 必然非空。
         //
         // 决策依据是「身份字段不应出现非真值」（对齐真机抓包），
         // **不是**「伪 UDID 换回的 sinf 与本机不匹配」——该因果已被受控实验证伪
         // （NB 服务端忽略 udid，四种输入返回同一份 sinf，见 q1_tier2_实测证据.json）。
-        guard let realUDID = udid else {
-            throw StoreError.server(code: "no-udid",
-                                    message: "本机设备身份未就绪，请稍后重试")
-        }
         // 实测抓包值（2026-10-01 / 10-02）：客户端 3.9.1 / build 1。
         // 与请求体里的 appVersion 是同一个值，服务端会校验，勿随意改小。
         var p: [String: Any] = [
@@ -389,6 +394,12 @@ enum NBStoreClient {
         case http(Int)
         case decode
         case crypto(String)
+        /// 本机设备身份（UDID）在超时内仍未就绪。
+        ///
+        /// **独立于 `.server`**：`.server` 的 `errorDescription` 会把内部码拼进界面
+        /// （`"\(msg)（\(code)）"`），而设备身份的等待超时**不是服务端返回**，
+        /// 不该带任何内部码 —— `no-udid` 一类的字眼只允许进日志。
+        case deviceNotReady
         case server(code: String, message: String)
         case network(String)
 
@@ -398,6 +409,7 @@ enum NBStoreClient {
             case .http(let c): return "请求失败（HTTP \(c)）"
             case .decode: return "响应解析失败"
             case .crypto(let m): return "报文加解密异常：\(m)"
+            case .deviceNotReady: return "本机设备身份未就绪，请稍后重试"
             case .server(let code, let msg):
                 return msg.isEmpty ? "服务端返回码 \(code)" : "\(msg)（\(code)）"
             case .network(let m): return "网络错误：\(m)"
@@ -437,7 +449,14 @@ enum NBStoreClient {
         let url = path.isEmpty ? (host + "/nb/app") : (host + path)
         guard let u = URL(string: url) else { throw StoreError.badURL }
 
-        var merged = try pubParams(iPad: isPad)
+        // 冷缓存时**先等设备身份就绪**（带超时、不阻塞主线程），拿不到才报错 ——
+        // 这样「第一次搜索」不再必失败，也绝不把内部码甩给用户（见 `awaitRealUDID`）。
+        guard let realUDID = await awaitRealUDID() else {
+            LoginLogger.shared.log("\(logTag) [失败] 等待本机真 UDID 超时（身份缓存仍未热）—— 不发这一发.",
+                                   category: .appStore)
+            throw StoreError.deviceNotReady
+        }
+        var merged = pubParams(iPad: isPad, udid: realUDID)
         for (k, v) in params { merged[k] = v }
         let body: [String: Any] = ["method": "nb9527_" + method, "params": merged]
 
@@ -582,7 +601,7 @@ enum NBStoreClient {
         }
         // v0.3.545：拿不到 sinf 不许静默 —— 加密包缺 sinf 装不上，这条日志是唯一的线索
         if sinf == nil {
-            LoginLogger.shared.log("\(logTag) [提示] 直链已取到，但服务端没回 sinf（udid=\(udid ?? "?")）"
+            LoginLogger.shared.log("\(logTag) [提示] 直链已取到，但服务端没回 sinf（udid=\(cachedRealUDID() ?? "?")）"
                                    + " —— 若包是加密的，安装会报「缺少 SC_Info/*.sinf」",
                                    category: .appStore)
         }

@@ -335,6 +335,11 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     /// 分块大小。**必须远小于管道缓冲（约 64KB）**，否则单块就可能把管道写满。
     private static let responseChunkBytes = 8 << 10  // 8 KB
 
+    /// `devcert` 命令等待开发证书创建的硬上限（秒）—— 流程实测最多约 40 秒，
+    /// 这里留足余量作**硬兜底**，防止 `sem.wait()` 在底层卡住时永久挂起 SSH 命令线程
+    /// （照 `I4AppFixService.writeTimeoutSeconds` 的超时写法）。
+    private static let devcertTimeoutSeconds: TimeInterval = 60
+
     /// 把一段文本**分块**写进某个输出通道。
     ///
     /// 为什么必须分块：`Pipe` 的缓冲约 64KB。超过缓冲的部分，写端会阻塞到读端把管道排空 ——
@@ -620,7 +625,8 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
         case "devcert":
             // v0.3.130：远程触发开发证书创建（诊断/自测用）.
             // 流程：生成密钥+CSR → 提交 Apple →（7460 自动吊销重试）→ 轮询取证书.
-            // execute 是同步函数 → 信号量等 Task 完成（整流程最多 ~40 秒）.
+            // execute 是同步函数 → 信号量等 Task 完成（整流程最多 ~40 秒）；
+            // 等 `devcertTimeoutSeconds` 秒仍无结果即放弃等待（硬兜底，不静默）.
             // Swift 6：Task（@Sendable）不能捕获可变局部变量 —— 结果装进锁保护的
             // 盒子（sem.wait/signal 已建立 happens-before，锁只满足类型系统）.
             let sem = DispatchSemaphore(value: 0)
@@ -634,7 +640,10 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
                 }
                 sem.signal()
             }
-            sem.wait()
+            if sem.wait(timeout: .now() + Self.devcertTimeoutSeconds) == .timedOut {
+                return "devcert: [超时] 等待开发证书创建超时（\(Int(Self.devcertTimeoutSeconds)) 秒），已放弃等待"
+                    + "（后台任务可能仍在进行，用 logs 查看）\n详情: logs"
+            }
             return "devcert: \(devcertBox.get())\n详情: logs"
 
         case "mlog":

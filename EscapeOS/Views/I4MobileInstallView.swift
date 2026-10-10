@@ -66,7 +66,6 @@ struct I4MobileInstallView: View {
                 ipaSourceCard
                 downloadManagerCard
                 statusCard
-                disclaimerCard
             }
             .padding(16)
         }
@@ -482,44 +481,6 @@ struct I4MobileInstallView: View {
         case .installing: return "正在安装…"
         case .succeeded: return "安装成功"
         case .failed(let message): return "安装未完成：\(message)"
-        }
-    }
-
-    // MARK: - 诚实说明（装之前的边界提示）
-
-    private var disclaimerCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("安装前须知", systemImage: "info.circle")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.pending)
-
-            bullet("「爱思移动端」是一组伪装成笔记/工具类的 iOS App（React Native 马甲包），"
-                   + "官方不经 App Store 分发，必须由爱思 PC 端推送安装.")
-            bullet("爱思 PC 端安装时不是直接用包内自带的 sinf，而是先往包里写入从 Apple 服务端现取的 sinf，"
-                   + "再重打包安装.")
-            bullet("包内自带的 sinf 属原始购买者（217 属「李 明」、220 属「小 敏」、"
-                   + "photo 属「chongwei stven」），不是爱思共享账号；"
-                   + "直接用会因本机未授权而装不上或启动闪退（-42112 一类）.")
-            bullet("本服务只走一条路：向 NB 服务端现取 sinf 覆盖包内再装；取不到即明确报错，"
-                   + "不回退到包内自带；每次用的账号会写进安装报告.")
-            bullet("本页不含任何分发包内容；IPA 的安装地址（仓库 Release 直链 / 爱思云端接口）"
-                   + "已在来源行如实标出，仅供查看与复制.")
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-    }
-
-    private func bullet(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 7) {
-            Text("•").foregroundStyle(.secondary)
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

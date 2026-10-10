@@ -118,7 +118,7 @@ struct HomeView: View {
         // 会让二级页失去返回箭头（用户实测「进下载管理没有返回按钮」）。
         .navigationDestination(isPresented: $showSignSource) {
             SignSourceListView(downloadManagerDestination: {
-                AnyView(IPADownloadManagerView(filterSource: .thirdPartySource))
+                AnyView(IPADownloadManagerView(filterSource: [.thirdPartySource]))
             })
         }
         // 爱思应用修复安装（读 + 可选写设备 i4tool2.acc，含读回校验）

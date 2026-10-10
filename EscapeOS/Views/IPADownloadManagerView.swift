@@ -17,23 +17,29 @@ private let downloadAccent = Color(uiColor: .systemTeal)
 /// v0.3.378：点任意一行弹出操作面板（`IPADownloadActionsSheet`）。
 struct IPADownloadManagerView: View {
 
-    /// 可选**来源过滤**。`nil`（默认）= 既有「下载管理」全量行为，**既有调用点零影响**；
-    /// 传 `.thirdPartySource` 时只列第三方软件源来源的任务与台账。
+    /// 本入口允许显示的**来源集合**。`nil`（默认）= 全量（既有「下载管理」行为，任何来源都列）；
+    /// 非 `nil` 时**只列**来源落在集合内的任务与台账（来源是 `Source` 枚举，可多选）。
     ///
-    /// 标题**统一为「下载管理」**（不再随来源改名 —— 它只是同一个下载管理的来源过滤视图，
-    /// 两个名字会让用户以为是两个不同的东西）。`filterSource` 仍用于过滤，不再影响标题。
+    /// v0.3.588（用户纠正上一轮的方向）：用户原话「你不能把别的地方下载的东西区分开来吗 比如第三方
+    /// 软件源下载的东西 你跑去AppStore商店下载管理列表出现」—— 要的是**每个入口只显示自己来源的东西**
+    /// （「看不到」），不是上一轮做的「看得出」。故三个入口各传自己的来源集合：
+    /// · AppStore 商店详情页 ⇒ `[.appleID]`（该页只走 Apple ID 通道）；
+    /// · 爱思免登录商店 ⇒ `[.i4Free, .niuwa, .nb]`（该页三个免登录来源）；
+    /// · 软件源管理 ⇒ `[.thirdPartySource]`。
+    /// 台账里**未登记来源**（「来源未知」等非枚举值，见 `IPADownloadLibrary`）不属任何具体来源
+    /// ⇒ **各入口都不显示**（见 `allowsLedgerSource(_:)`）。它仍留在磁盘（文件 App）与全量入口里。
+    ///
+    /// 标题**统一为「下载管理」**（不随来源改名 —— 它只是同一个下载管理的来源过滤视图）。
     /// 复用同一套下载中心/台账/UI（D1=A，不新建第二个下载管理器）。
     ///
-    /// v0.3.578：标题不改，但**过滤时**在列表顶部补**一行来源说明**（`sourceFilterNoteSection`）——
-    /// 免得过滤视图的「下载管理 (18)」被误读成「全部下载只有 18」（全局入口其实是另一个计数口径）。
+    /// v0.3.578：**过滤时**在列表顶部补**一行来源说明**（`sourceFilterNoteSection`）——
+    /// 免得过滤视图的「下载管理 (18)」被误读成「全部下载只有 18」（另一个入口是另一个计数口径）。
     ///
-    /// v0.3.587（用户 bug）：「统一的下载管理会把第三方软件源的下载的东西也显示在列表 你没有做好区分吗」。
-    /// 本页是**统一**下载管理器 —— `nil` 时列全部来源是**既有设计**（D1=A），不动；缺的是「区分」：
-    /// 来源此前只是灰色小字，扫一眼看不见。现在**每条行**都带一个**有色来源胶囊**（`sourceBadge`），
-    /// 无论哪个入口进来都能一眼看出每条属于哪个源。**不改过滤 / 排序 / 计数** ⇒ 既有入口语义不变。
+    /// v0.3.587：来源此前只是灰色小字，扫一眼看不见。**每条行**都带一个**有色来源胶囊**
+    /// （`sourceBadge`），无论哪个入口进来都能一眼确认每条属于哪个源（本轮的过滤改动**保留**它）。
     ///
     /// 非 private 且有默认值 ⇒ 可直接用成员逐一初始化器 `IPADownloadManagerView(filterSource:)`。
-    var filterSource: IPADownloadCenter.Source? = nil
+    var filterSource: Set<IPADownloadCenter.Source>? = nil
 
     @State private var items: [IPADownloadItem] = []
     /// 正在弹操作面板的条目
@@ -90,11 +96,23 @@ struct IPADownloadManagerView: View {
     /// 落盘前本行无法编译 —— 这是刻意保留的跨人依赖（由协调人转交）。
     private var downloadLogCategories: [LoginLogger.Category] { [.download] }
 
+    /// 本入口是否挂右上角「下载日志」入口。
+    ///
+    /// v0.3.588：改成**按来源推导**（原来是 `filterSource == nil` 才挂）。因为本轮起三个入口都带了
+    /// 来源集合（不再有 `nil` 入口），若仍按 `nil` 判断，AppStore / 爱思免登录商店的日志入口会**一起消失**。
+    /// 判据：本入口的来源里**至少有一个**的下载日志写 `.download`（见 `logCategory(forSource:)`）。
+    /// 只筛第三方软件源时全部来源写 `.signSource` ⇒ 返回 `false`，不挂（软件源有自己的唯一日志入口）；
+    /// `nil`（全量）时挂。
+    private var showsDownloadLog: Bool {
+        guard let set = filterSource else { return true }
+        return set.contains { logCategory(forSource: $0.rawValue) == .download }
+    }
+
     var body: some View {
         // 只有进入「编辑」才允许勾选（否则点一下就会被选中）
         List(selection: Binding(get: { isEditing ? selection : [] },
                                 set: { if isEditing { selection = $0 } })) {
-            // 来源说明（仅过滤视图显示）；`filterSource == nil` 时整块不渲染 ⇒ 既有入口零变化.
+            // 来源说明（仅过滤视图显示）；`filterSource == nil` 时整块不渲染.
             sourceFilterNoteSection
             summarySection
             mergedSection
@@ -120,20 +138,20 @@ struct IPADownloadManagerView: View {
             // 用与软件源页**完全相同**的做法：同一个 `LoginLogView`、同一种「传分类数组预筛 +
             // 传同分类做按板块清空」的机制，只是分类换成「下载」。见 body 末尾的 `.sheet`。
             //
-            // ⚠️ 只在**全量**下载管理（`filterSource == nil`）显示本入口；来源过滤视图
-            // （`filterSource == .thirdPartySource`，即从「软件源管理」右上角进入的那个「下载管理」）
-            // **不显示**。用户要求「软件源只需要一个日志板块，只留一个软件源日志」：软件源板块
-            // 已经有它自己的唯一日志入口（`SignSourceListView` 左上角「软件源日志」，只读
-            // `.signSource`），而软件源侧下载的日志本就写 `.signSource`
-            // （见 `IPADownloadCenter.logCategory(for:)`）⇒ 在这个软件源子页里再挂一个「下载日志」
-            // 就是同一功能里的第二个日志板块。全量下载管理（AppStore / 爱思源的「下载管理」入口）
-            // 仍保留本入口，读 `.download` —— 那是下载板块自己的日志，与软件源板块互不相干。
+            // ⚠️ 本入口是否挂「下载日志」由 `showsDownloadLog` 决定：只筛**第三方软件源**时不挂
+            // （即从「软件源管理」右上角进入的那个「下载管理」）。用户要求「软件源只需要一个
+            // 日志板块，只留一个软件源日志」：软件源板块已经有它自己的唯一日志入口
+            // （`SignSourceListView` 左上角「软件源日志」，只读 `.signSource`），而软件源侧下载的
+            // 日志本就写 `.signSource`（见 `IPADownloadCenter.logCategory(for:)`）⇒ 在这个软件源
+            // 子页里再挂一个「下载日志」就是同一功能里的第二个日志板块。其余入口（AppStore 商店 /
+            // 爱思免登录商店）的下载写 `.download`，仍挂本入口 —— 那是下载板块自己的日志，与
+            // 软件源板块互不相干。
             //
             // 为什么放**右上角**（而软件源页按用户要求放左上角）：本页是**二级 push** 进来的
             // （`HomeView` → `SignSourceListView` → 本页），左上角恒为系统返回箭头 —— 在左上角
             // 再加一项会与返回箭头挤占 / 重叠，破坏返回手势的视觉与命中区。右上角本轮已清空
             // （刷新按钮已按用户要求删除），把日志入口放这里既不抢返回箭头、也不与齿轮 / 编辑冲突。
-            if filterSource == nil {
+            if showsDownloadLog {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showLog = true
@@ -256,9 +274,9 @@ struct IPADownloadManagerView: View {
     /// 排序：进行中的在最上面（未完成的先看到），然后是刚结束（失败的那条还能重试），
     /// 最后按下载时间倒序 —— 与参考图「新动静在上面」一致。
     private var mergedRows: [ListRow] {
-        // 来源过滤：`filterSource == nil` 时原样用全部任务（既有「下载管理」行为不变）。
-        // `items` 已在 `reload()` 里按同一来源过滤，故去重口径与 `allJobs` 一致。
-        let allJobs = filterSource.map { src in center.jobs.filter { $0.source == src } } ?? center.jobs
+        // 来源过滤：`filterSource == nil` 时原样用全部任务（全量入口行为不变）。
+        // 任务一定带 `Source` 枚举，直接按集合判；`items` 已在 `reload()` 里按同一集合过滤，故去重口径一致。
+        let allJobs = filterSource.map { set in center.jobs.filter { set.contains($0.source) } } ?? center.jobs
         let orphanJobs = allJobs.filter { job in
             // ▸▸▸ v0.3.413 真机 bug 修复（用户截图）：「显示已完成 100%，但没有安装按钮」。
             //
@@ -384,7 +402,7 @@ struct IPADownloadManagerView: View {
                         .font(.subheadline.weight(.medium))
                         .lineLimit(2)
                     // 来源胶囊 + 元信息（版本 · 时间）：来源从灰色小字升级为**有色胶囊**，
-                    // 让统一列表里一眼看出这条来自哪个源（见 `sourceTint` / `sourceBadge`）。
+                    // 让列表里一眼看出这条来自哪个源（见 `sourceTint` / `sourceBadge`）。
                     HStack(spacing: 6) {
                         sourceBadge(job.source.rawValue)
                         Text(jobMeta(job))
@@ -596,14 +614,12 @@ struct IPADownloadManagerView: View {
 
     /// 每个**来源**一种颜色 —— 同一套配色同时给「行内来源胶囊」与页脚「来源」图例用，两处不会漂移。
     ///
-    /// 用户 bug 原文：「统一的下载管理会把第三方软件源的下载的东西也显示在列表 你没有做好区分吗」。
-    /// 本页是**统一**下载管理器：`filterSource == nil` 时列**全部来源**（见 `mergedRows` / `reload`），
-    /// 这是既有设计（D1=A，不新建第二个下载管理器）。此前来源只作为**灰色小字**混在元信息里
-    /// （`jobMeta` / `subtitle`），扫一眼分不出哪条来自哪个源 —— 这就是用户说的「没做好区分」。
-    /// 现把来源提成**行内彩色胶囊**（`sourceBadge`），让「区分」一眼可见。
+    /// v0.3.587：来源此前只作为**灰色小字**混在元信息里（`jobMeta` / `subtitle`），扫一眼分不出哪条
+    /// 来自哪个源。现把来源提成**行内彩色胶囊**（`sourceBadge`），让「区分」一眼可见。
     ///
-    /// ⚠️ 本改动**只影响行的渲染**：不动 `filterSource` 过滤、不动排序、不动计数
-    /// ⇒ 三个既有入口（AppStore 详情页 / 爱思商店 / 软件源）的**语义与列表内容完全不变**。
+    /// v0.3.588：各入口改成**只列自己的来源**（见 `filterSource`），胶囊仍**保留** —— 多来源入口
+    /// （爱思免登录商店 = 爱思 / 牛蛙 / NB）靠它区分，单来源入口靠它一眼确认，并让行上的颜色
+    /// 对得回页脚图例。
     ///
     /// 入参是 `source.rawValue` 口径的字符串：任务行传 `job.source.rawValue`，台账行传 `item.source`
     /// （台账侧是字符串、不是枚举，见 `IPADownloadItem.source`）。同一函数 ⇒ 两侧口径一致。
@@ -618,27 +634,45 @@ struct IPADownloadManagerView: View {
     }
 
     /// 行内**来源胶囊** —— 复用既有 `PackageChip`（与本页版本 / 体积胶囊同款画法），
-    /// 只是把来源从「灰色小字」升级成「有色胶囊」，让统一列表里每条都能一眼看出所属来源。
+    /// 只是把来源从「灰色小字」升级成「有色胶囊」，让列表里每条都能一眼看出所属来源。
     private func sourceBadge(_ raw: String) -> some View {
         PackageChip(text: raw, tint: sourceTint(raw), horizontalPadding: 5)
+    }
+
+    /// 台账条目的来源是否属于本入口。
+    ///
+    /// · `filterSource == nil`（全量入口）⇒ 全显示；
+    /// · 台账 `source` 是字符串（`IPADownloadItem.source`），能转成 `Source` 枚举就按集合判；
+    /// · **转不成枚举**（「来源未知」等未登记值）⇒ **不属任何具体入口**，各入口都**不显示** ——
+    ///   它没有被归到「别的地方」，但也没法确认属于本入口；按本仓「显示错 > 显示少」的口径，
+    ///   宁可不在窄入口里列它，也不把一条来路不明的包塞进「仅显示第三方软件源」这种列表里
+    ///   （那会让顶部来源说明与列表自相矛盾）。它仍留在磁盘（文件 App）与全量入口里，不会真丢。
+    private func allowsLedgerSource(_ raw: String) -> Bool {
+        guard let set = filterSource else { return true }
+        guard let source = IPADownloadCenter.Source(rawValue: raw) else { return false }
+        return set.contains(source)
+    }
+
+    /// 来源集合 → 界面文案（按固定顺序拼「 / 」，避免 `Set` 顺序不定导致文案抖动）。
+    private func sourceNamesText(_ set: Set<IPADownloadCenter.Source>) -> String {
+        let order: [IPADownloadCenter.Source] = [.appleID, .i4Free, .niuwa, .nb, .thirdPartySource]
+        return order.filter { set.contains($0) }.map(\.rawValue).joined(separator: " / ")
     }
 
     // MARK: - 概览
 
     /// v0.3.578：**来源过滤说明**（只在过滤视图显示）—— 用**一行次要文字**消除标题歧义。
     ///
-    /// 为什么需要它：标题统一成「下载管理」后，从软件源进来时本页**只列第三方软件源**的任务
-    /// （`filterSource == .thirdPartySource`），标题却与全局「下载管理」完全同名，而后者列**全部**来源
-    /// ⇒ 两页计数口径不同却看不出区别（用户会困惑「为什么这里 18、那里 50」，见复核 §3-F）。
-    /// 这里点明来源，**不改标题**（用户明确要求标题就叫「下载管理」）。
+    /// 为什么需要它：标题统一成「下载管理」后，各入口**只列自己来源**的任务（见 `filterSource`），
+    /// 标题却都叫「下载管理」⇒ 不同入口计数口径不同却看不出区别（用户会困惑「为什么这里 18、那里 50」）。
+    /// 这里点明本入口列的是哪些来源，**不改标题**（用户明确要求标题就叫「下载管理」）。
     ///
-    /// 零变化保证：`filterSource == nil`（AppStore / 全局入口）时**整块不渲染** —— 连 Section 都不产生，
-    /// 故既有入口的列表内容、间距、顺序完全不变.
+    /// `filterSource == nil`（全量入口）时**整块不渲染** —— 连 Section 都不产生.
     @ViewBuilder
     private var sourceFilterNoteSection: some View {
-        if let src = filterSource {
+        if let set = filterSource {
             Section {
-                Text("仅显示\(src.rawValue)的任务.")
+                Text("仅显示\(sourceNamesText(set))的任务.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -720,7 +754,7 @@ struct IPADownloadManagerView: View {
                         .foregroundStyle(kindTint(item))
                         .fixedSize(horizontal: false, vertical: true)
                     // 来源胶囊 + 副信息（bundleId · 时间 · 已安装）：与任务行同一种「来源可见」口径，
-                    // 让统一列表里每条都能一眼看出所属来源（见 `sourceTint` / `sourceBadge`）。
+                    // 让列表里每条都能一眼看出所属来源（见 `sourceTint` / `sourceBadge`）。
                     HStack(spacing: 6) {
                         sourceBadge(item.source)
                         Text(subtitle(item))
@@ -971,9 +1005,9 @@ struct IPADownloadManagerView: View {
     private func reload() {
         syncSourceURLs()
         let allItems = IPADownloadLibrary.shared.items()
-        // 来源过滤：`filterSource == nil` 时原样用全部台账（既有「下载管理」行为不变）。
-        // `IPADownloadItem.source` 是字符串，故与 `Source.rawValue` 比较（同一常量，防漂移）。
-        items = filterSource.map { src in allItems.filter { $0.source == src.rawValue } } ?? allItems
+        // 来源过滤：`filterSource == nil` 时原样用全部台账（全量入口行为不变）。
+        // 台账 `source` 是字符串，经 `allowsLedgerSource` 转枚举判集合（未登记来源各入口都显示）。
+        items = filterSource == nil ? allItems : allItems.filter { allowsLedgerSource($0.source) }
         // 同一个 bundleId 在列表里出现两次以上 → 记下来：任务版本未知时不允许按 bundleId 认行。
         // 必须用**过滤后**的 items 计算，否则软件源页里本不显示的其它来源条目会把 bundleId 记成「重复」，
         // 导致进度认行失败（`activeJob` 的 `allowBundleIdFallback`）。

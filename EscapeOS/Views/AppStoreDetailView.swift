@@ -88,7 +88,10 @@ struct AppStoreDetailView: View {
         }
         .sheet(isPresented: $showDownloadManager) {
             NavigationStack {
-                IPADownloadManagerView()
+                // v0.3.588：AppStore 商店的「下载管理」**只列 Apple ID 通道**的下载
+                // （用户要求「每个入口只显示自己来源的东西」）—— 第三方软件源 / 免登录源的
+                // 下载不再混进本页（它们各自在自己商店的下载管理里）。
+                IPADownloadManagerView(filterSource: [.appleID])
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button("完成") { showDownloadManager = false }

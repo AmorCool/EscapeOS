@@ -44,12 +44,15 @@ enum ManifestPublisher {
         case noHosting
         /// 用户自有托管不可用
         case endpointUnavailable
+        /// 单次 HTTP 请求超时（信号量等待上限，硬兜底；照 `I4AppFixService.writeTimedOut`）
+        case requestTimedOut(TimeInterval)
 
         var errorDescription: String? {
             switch self {
             case .badManifest: return "清单生成失败"
             case .noHosting: return "无可用托管"
             case .endpointUnavailable: return "托管不可用"
+            case .requestTimedOut(let seconds): return "请求超时（\(Int(seconds)) 秒）"
             }
         }
     }
@@ -453,6 +456,11 @@ enum ManifestPublisher {
         return ["application/xml", "text/xml", "application/x-plist"].contains(value)
     }
 
+    /// 单次 HTTP 请求的信号量等待上限（秒）—— 比 `candidateTimeout` 多留 2 秒：
+    /// 正常情况下由 URLSession 自己的 `request.timeoutInterval` 先触发，这里只是**硬兜底**，
+    /// 防止完成回调因任何原因不回来时把调用线程永久挂住（照 `I4AppFixService.writeOnceWithTimeout`）。
+    private static let performTimeoutSeconds: TimeInterval = candidateTimeout + 2
+
     private static func perform(_ request: URLRequest) throws -> HTTPResult {
         var result = HTTPResult(status: -1, headers: [:], body: Data())
         var failure: Error?
@@ -471,7 +479,9 @@ enum ManifestPublisher {
             result.body = data ?? Data()
             semaphore.signal()
         }.resume()
-        semaphore.wait()
+        if semaphore.wait(timeout: .now() + performTimeoutSeconds) == .timedOut {
+            throw PublishError.requestTimedOut(performTimeoutSeconds)
+        }
 
         if let failure { throw failure }
         return result

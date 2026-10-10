@@ -880,6 +880,35 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// 隧道端口（RPPairing 49152）建连预检的超时（秒）.
+    ///
+    /// Rust 侧 `tunnel_create_rppairing` 的首个 `TcpStream::connect` **没有超时**
+    /// （`rust/idevice-ffi/src/tunnel_provider.rs:873`）：LocalDevVPN 不通时目标地址是黑洞，
+    /// `connect` 只能等操作系统的 TCP 建连超时（真机实测约 4m45s，`os error 60`），
+    /// 期间安装链全程无进展，用户看到的就是「永远转圈」。这里先用**带超时**的 socket
+    /// `connect` 预检一次，不通就快速失败，不把调用线程挂在那儿
+    /// （与 `LocalDevVPN.isTunnelReachable` 同款：`SO_SNDTIMEO`/`SO_RCVTIMEO` + `connect`）.
+    private static let tunnelProbeTimeoutSeconds: TimeInterval = 3
+
+    /// 用带超时的 socket `connect` 探测 `addr`（RPPairing 端口）是否可达.
+    /// 与 `LocalDevVPN.isTunnelReachable` 同款实现，地址取本函数已构造好的 `sockaddr_in`.
+    private func probeTunnelReachable(_ addr: inout sockaddr_in) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+
+        var tv = timeval(tv_sec: Int(Self.tunnelProbeTimeoutSeconds), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
+
+        let result = withUnsafePointer(to: &addr) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.stride))
+            }
+        }
+        return result == 0
+    }
+
     private func createTunnel() throws -> TunnelHandles {
         guard FileManager.default.fileExists(atPath: pairingPath) else {
             throw makeError("未检测到配对文件.请到「更多 → 配对文件导入」导入配对文件（需 LocalDevVPN + 开发者模式）.")
@@ -900,6 +929,13 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
         let parseResult = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
         guard parseResult == 1 else {
             throw makeError("隧道 IP 无效：\(deviceIP)（请检查「设置 → 本地隧道」）")
+        }
+
+        // 带超时的可达性预检：Rust 侧首个 connect 无超时，隧道不通时会阻塞约 4m45s，
+        // 这里不通就快速失败（见 tunnelProbeTimeoutSeconds 注释）.
+        guard probeTunnelReachable(&addr) else {
+            throw makeError("隧道端口不可达（\(deviceIP):49152 预检 \(Int(Self.tunnelProbeTimeoutSeconds)) 秒无响应）."
+                + "请确认 LocalDevVPN 已连接，然后重试.")
         }
 
         var lastError: NSError?

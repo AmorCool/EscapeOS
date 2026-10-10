@@ -25,7 +25,7 @@ private let signSourceUpdateTimeout: Duration = .seconds(30)
 ///
 /// ## 右上角工具栏（**接线点**）
 /// 规格 §4.1 要求右上角放「**下载管理**」入口（D1=A：进入后默认过滤到软件源）。
-/// 本文件**不**直接引用 `IPADownloadManagerView(filterSource: .thirdPartySource)`，
+/// 本文件**不**直接引用 `IPADownloadManagerView(filterSource: [.thirdPartySource])`，
 /// 只留一个目标页回调 `downloadManagerDestination`：接线方传入后该项才渲染，
 /// 并由**本页自己** `navigationDestination(isPresented:)` 把目标页 push 上去
 /// （二级页因此是标准子级 push，带系统返回箭头；详见该属性注释）。
@@ -36,7 +36,7 @@ struct SignSourceListView: View {
     /// 右上角「下载管理」入口的目标页 —— **接线点**（规格 §4.1 / §2.5 / D1）。
     ///
     /// 传 `nil`（默认）时该工具栏项**不渲染**，本文件因此不依赖 `IPADownloadManagerView`，
-    /// 可独立编译。接线方传入目标页（如 `IPADownloadManagerView(filterSource: .thirdPartySource)`）
+    /// 可独立编译。接线方传入目标页（如 `IPADownloadManagerView(filterSource: [.thirdPartySource])`）
     /// 后，本页右上角渲染「下载管理」入口，点它时**由本页自己**把目标页 push 上去。
     ///
     /// ⚠️ 为什么这个 push 必须声明在**本页**、不能交给 `HomeView` 的根级

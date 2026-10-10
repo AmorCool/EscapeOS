@@ -34,6 +34,11 @@ enum OnlineInstallService {
     /// v0.3.396（B 项）：「系统没来拉包」的判定窗口（一次性看门狗）。
     private static let noBytesWindow: TimeInterval = 60
 
+    /// 等待清单发布回调的上限（秒）—— 发布链内部每个请求已由
+    /// `ManifestPublisher.performTimeoutSeconds` 兜底，这里再给整体等待加一道**硬上限**，
+    /// 防止 `semaphore.wait()` 永久挂住调用线程（照 `I4AppFixService.writeOnceWithTimeout`）。
+    private static let publishTimeoutSeconds: TimeInterval = 120
+
     enum OnlineInstallError: Error, LocalizedError {
         /// 没有任何可用的包地址
         case noPackage
@@ -49,6 +54,8 @@ enum OnlineInstallService {
         case openFailed
         /// 三种打开方式都不被系统受理（已复制链接）
         case fallbackClipboard
+        /// 等待清单发布回调超时（硬兜底，不静默）
+        case publishTimedOut(TimeInterval)
 
         var errorDescription: String? {
             switch self {
@@ -59,6 +66,7 @@ enum OnlineInstallService {
             case .serverFailed: return "本机服务启动失败"
             case .openFailed: return "无法调起安装"
             case .fallbackClipboard: return "已复制，请在 Safari 打开"
+            case .publishTimedOut(let seconds): return "清单发布超时（\(Int(seconds)) 秒）"
             }
         }
     }
@@ -296,7 +304,9 @@ enum OnlineInstallService {
             published = result
             semaphore.signal()
         }
-        semaphore.wait()
+        if semaphore.wait(timeout: .now() + publishTimeoutSeconds) == .timedOut {
+            throw OnlineInstallError.publishTimedOut(publishTimeoutSeconds)
+        }
 
         guard let published else {
             throw ManifestPublisher.PublishError.noHosting

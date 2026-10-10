@@ -253,7 +253,9 @@ struct I4StoreFreeView: View {
     private var downloadManagerSection: some View {
         Section {
             NavigationLink {
-                IPADownloadManagerView()
+                // v0.3.588：爱思免登录商店的「下载管理」**只列本页三个免登录来源**
+                // （爱思 / 牛蛙 / NB）的下载 —— 第三方软件源 / Apple ID 通道的下载不再混进本页。
+                IPADownloadManagerView(filterSource: [.i4Free, .niuwa, .nb])
             } label: {
                 HStack(spacing: 12) {
                     AppRowIcon(systemName: "shippingbox.fill", tint: .blue,
