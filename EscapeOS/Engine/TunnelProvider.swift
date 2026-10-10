@@ -157,14 +157,19 @@ struct ShadowrocketTunnel: TunnelProviding {
             return
         }
         LoginLogger.shared.log("[隧道] 跳转 Shadowrocket（仅跳转，不保证提供设备连接）.", category: .general)
-        // 必须用**带 options + completionHandler 的同步重载**：
-        //   · 只写 `open(url)` 在 async 上下文里会被推断成 async 重载 ⇒ 报
-        //     「expression is 'async' but is not marked with 'await'」；
-        //   · 加了 `await` 之后，async 重载又把非 Sendable 的
-        //     `[UIApplication.OpenExternalURLOptionsKey: Any]` 跨隔离传 ⇒ 报
-        //     「sending value of non-Sendable type ... risks causing data races」。
-        // 显式给全三个参数即锁定同步重载，两个坑都绕开（两次 CI 实测）。
-        UIApplication.shared.open(Self.openURL, options: [:], completionHandler: nil)
+        // 为什么必须走 `MainActor.run`（三次 CI 实测，逐层退让）：
+        //   ① 只写 `open(url)` ⇒ async 上下文推断成 async 重载 ⇒ 报
+        //      「expression is 'async' but is not marked with 'await'」；
+        //   ② 加 `await` ⇒ async 重载把非 Sendable 的
+        //      `[UIApplication.OpenExternalURLOptionsKey: Any]` 跨隔离传 ⇒ 报
+        //      「sending value of non-Sendable type ... risks causing data races」；
+        //   ③ 显式写全三参（同步重载）⇒ **仍被判成 async**（该重载的 `options` 默认值与
+        //      async 版本重载解析歧义）。
+        // 正解：把调用整体放进 MainActor —— `UIApplication.shared` 本就是 MainActor 隔离的，
+        // 字典在闭包内就地构造、不跨隔离传递。闭包只捕获 `Self.openURL`（static let URL，Sendable）。
+        await MainActor.run {
+            UIApplication.shared.open(Self.openURL, options: [:], completionHandler: nil)
+        }
     }
 
     func stop() async {
