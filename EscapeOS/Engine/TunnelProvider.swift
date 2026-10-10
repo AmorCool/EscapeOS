@@ -157,7 +157,9 @@ struct ShadowrocketTunnel: TunnelProviding {
             return
         }
         LoginLogger.shared.log("[隧道] 跳转 Shadowrocket（仅跳转，不保证提供设备连接）.", category: .general)
-        UIApplication.shared.open(Self.openURL)
+        // 必须 `await`：iOS 17 SDK 起 `open(_:)` 有 async 重载，Swift 6 会选它；
+        // 不写 `await` 报「expression is 'async' but is not marked with 'await'」（CI 实测）。
+        await UIApplication.shared.open(Self.openURL)
     }
 
     func stop() async {
