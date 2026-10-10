@@ -131,6 +131,7 @@ struct IPADownloadManagerView: View {
                     showOnlineInstallSettings = true
                 } label: {
                     Image(systemName: "gearshape")
+                        .appSymbol()
                 }
                 .accessibilityLabel("在线安装设置")
             }
@@ -157,6 +158,7 @@ struct IPADownloadManagerView: View {
                         showLog = true
                     } label: {
                         Image(systemName: "doc.text.magnifyingglass")
+                            .appSymbol()
                     }
                     .accessibilityLabel("下载日志")
                 }
@@ -380,8 +382,9 @@ struct IPADownloadManagerView: View {
             Image(systemName: "shippingbox")
                 .font(.title2)
                 .foregroundStyle(.secondary)
+                .appSymbol()
             Text("还没有下载过安装包")
-                .font(.subheadline.weight(.medium))
+                .font(AppFont.subheadlineEmphasis)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
@@ -399,14 +402,14 @@ struct IPADownloadManagerView: View {
                 jobIcon(job)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(job.name)
-                        .font(.subheadline.weight(.medium))
+                        .font(AppFont.subheadlineEmphasis)
                         .lineLimit(2)
                     // 来源胶囊 + 元信息（版本 · 时间）：来源从灰色小字升级为**有色胶囊**，
                     // 让列表里一眼看出这条来自哪个源（见 `sourceTint` / `sourceBadge`）。
                     HStack(spacing: 6) {
                         sourceBadge(job.source.rawValue)
                         Text(jobMeta(job))
-                            .font(.caption2)
+                            .font(AppFont.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -414,7 +417,7 @@ struct IPADownloadManagerView: View {
                 .layoutPriority(1)
                 Spacer(minLength: 0)
                 Text(job.displayStage)
-                    .font(.caption2)
+                    .font(AppFont.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .fixedSize()
@@ -430,7 +433,7 @@ struct IPADownloadManagerView: View {
                 ProgressView(value: min(1, max(0, job.overall)))
                     .tint(downloadAccent)
                 Text("\(Int((min(1, max(0, job.overall)) * 100).rounded()))%")
-                    .font(.caption2.monospacedDigit())
+                    .font(AppFont.numberSmall)
                     .foregroundStyle(.secondary)
                     .fixedSize()
             }
@@ -439,7 +442,7 @@ struct IPADownloadManagerView: View {
             let traffic = jobTraffic(job)
             if !traffic.isEmpty {
                 Text(traffic)
-                    .font(.caption2.monospacedDigit())
+                    .font(AppFont.numberSmall)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
@@ -507,7 +510,7 @@ struct IPADownloadManagerView: View {
                 center.retry(job.id)
             } label: {
                 Label("重试", systemImage: "arrow.clockwise")
-                    .font(.caption)
+                    .font(AppFont.caption)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.orange)
@@ -516,7 +519,7 @@ struct IPADownloadManagerView: View {
             // 用**同宽占位**（`.hidden()`）而不是直接不渲染 —— 否则后面的「删除安装包」「提取链接」
             // 会往左跳一格，正是用户之前抱怨的「整行图标左右位移」。
             Label("暂停", systemImage: "pause.fill")
-                .font(.caption)
+                .font(AppFont.caption)
                 .hidden()
         } else {
             Button {
@@ -528,7 +531,7 @@ struct IPADownloadManagerView: View {
             } label: {
                 Label(job.phase == .paused ? "继续" : "暂停",
                       systemImage: job.phase == .paused ? "play.fill" : "pause.fill")
-                    .font(.caption)
+                    .font(AppFont.caption)
             }
             .buttonStyle(.plain)
             .foregroundStyle(job.canPause ? Color.blue : Color.secondary)
@@ -551,7 +554,7 @@ struct IPADownloadManagerView: View {
                 }
             } label: {
                 Label("删除安装包", systemImage: "trash")
-                    .font(.caption)
+                    .font(AppFont.caption)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.red)
@@ -562,7 +565,7 @@ struct IPADownloadManagerView: View {
                 extractLinkOfActiveJob(job)
             } label: {
                 Label("提取链接", systemImage: "link")
-                    .font(.caption)
+                    .font(AppFont.caption)
             }
             .buttonStyle(.plain)
             .foregroundStyle(hasLink ? Color.teal : Color.secondary)
@@ -699,9 +702,9 @@ struct IPADownloadManagerView: View {
                 AppRowIcon(systemName: "shippingbox.fill", tint: .blue, symbolSize: 20, frameSize: 40)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("本地安装包")
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppFont.subheadlineEmphasis)
                     Text("共占用 \(IPADownloadLibrary.sizeText(items.reduce(0) { $0 + max(0, $1.sizeBytes) }))")
-                        .font(.caption)
+                        .font(AppFont.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
@@ -716,8 +719,7 @@ struct IPADownloadManagerView: View {
                         reload()
                         reportRemoval(result)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                    .buttonStyle(TintedButtonStyle(tint: AppTheme.danger))
                     .controlSize(.small)
                 }
             }
@@ -740,7 +742,7 @@ struct IPADownloadManagerView: View {
                 // 用户明确要求「可以换行显示但不能显示不全」。
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title)
-                        .font(.subheadline.weight(.medium))
+                        .font(AppFont.subheadlineEmphasis)
                         .lineLimit(2)
                     HStack(spacing: 6) {
                         if let v = item.version { PackageChip(text: "v\(v)", tint: .blue) }
@@ -750,7 +752,7 @@ struct IPADownloadManagerView: View {
                     // 原来和两个胶囊挤同一个 HStack，空间不够时被压成竖排窄列
                     // （真机截图里「加密 / 包 · / 带 / sinf」一列一个字的那个别扭样式）。
                     Text(item.kindText)
-                        .font(.caption2)
+                        .font(AppFont.caption)
                         .foregroundStyle(kindTint(item))
                         .fixedSize(horizontal: false, vertical: true)
                     // 来源胶囊 + 副信息（bundleId · 时间 · 已安装）：与任务行同一种「来源可见」口径，
@@ -758,7 +760,7 @@ struct IPADownloadManagerView: View {
                     HStack(spacing: 6) {
                         sourceBadge(item.source)
                         Text(subtitle(item))
-                            .font(.caption2)
+                            .font(AppFont.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -782,7 +784,7 @@ struct IPADownloadManagerView: View {
                 HStack(spacing: 8) {
                     InstallProgressRing(fraction: progress.fraction)
                     Text(progress.text)
-                        .font(.caption2)
+                        .font(AppFont.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
@@ -833,7 +835,7 @@ struct IPADownloadManagerView: View {
                     install(item)
                 } label: {
                     Text(failText ?? (item.lastInstalledAt == nil ? "安装" : "重装"))
-                        .font(.caption.weight(.semibold))
+                        .font(AppFont.captionEmphasis)
                         .lineLimit(1)
                         .frame(minWidth: 40)
                         .padding(.horizontal, 12)
@@ -953,7 +955,7 @@ struct IPADownloadManagerView: View {
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("加密状态")
-                        .font(.caption.weight(.semibold))
+                        .font(AppFont.captionEmphasis)
                     guideRow("明文包", .secondary, "明文包未加密，可直接安装.")
                     guideRow("加密包 · 带 sinf", .secondary, "已校验：包内 sinf 结构完整，可直接安装.")
                     guideRow("加密包 · 带 sinf（未校验）", .secondary, "存疑：sinf 存在，但未校验过结构（无记录，或格式未知）.")
@@ -964,11 +966,11 @@ struct IPADownloadManagerView: View {
                     Divider()
 
                     Text("来源")
-                        .font(.caption.weight(.semibold))
+                        .font(AppFont.captionEmphasis)
                     // v0.3.587：图例的**颜色与行内来源胶囊一致**（同一 `sourceTint`），
                     // 这样这张图例同时是「来源配色表」，用户能把行上的胶囊对回来源名。
                     Text("颜色与列表行上的来源胶囊一致.")
-                        .font(.caption2)
+                        .font(AppFont.caption)
                         .foregroundStyle(.secondary)
                     guideRow("Apple ID", sourceTint(IPADownloadCenter.Source.appleID.rawValue), "从 App Store 商店下载.")
                     guideRow("来源未知", .secondary, "盘上有、台账未登记的下载产物，未能确认来源.")
@@ -980,7 +982,7 @@ struct IPADownloadManagerView: View {
                 .padding(.vertical, 4)
             } label: {
                 Text("标签说明")
-                    .font(.subheadline)
+                    .font(AppFont.subheadline)
             }
         } footer: {
             Text("点开看每种标签的含义.")
@@ -991,10 +993,10 @@ struct IPADownloadManagerView: View {
     private func guideRow(_ label: String, _ tint: Color, _ detail: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-                .font(.caption.weight(.semibold))
+                .font(AppFont.captionEmphasis)
                 .foregroundStyle(tint)
             Text(detail)
-                .font(.caption)
+                .font(AppFont.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1238,7 +1240,7 @@ private struct InstallProgressRing: View {
                     .stroke(downloadAccent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Text("\(Int((clamped * 100).rounded()))%")
-                    .font(.caption2.monospacedDigit())
+                    .font(AppFont.numberSmall)
                     .foregroundStyle(downloadAccent)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -1276,7 +1278,7 @@ struct OnlineInstallSettingsSheet: View {
                         .font(.footnote)
                 } footer: {
                     Text("仅用于托管安装清单.")
-                        .font(.caption2)
+                        .font(AppFont.caption)
                 }
 
                 Section {

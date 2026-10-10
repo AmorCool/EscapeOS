@@ -28,6 +28,37 @@ enum AppTheme {
     static let unselected = Color.secondary.opacity(0.5)
     /// 选择圈图标尺寸（已导入 / 待修补 / 已修补三页共用）.
     static let selectionIconSize: CGFloat = 20
+
+    // MARK: - TRApp 风格语义色（新增）
+    //
+    // 对照 TRApp 逆向结论（`P4_全能签逆向/_简报/逆向_TRApp的UI.md`）：TRApp 只有 7 个
+    // 自定义语义色，其余全走系统语义色。本仓已有 success / pending / danger，这里补齐
+    // warning / mark 两个缺口，口径与既有四个 token 一致（`Color(uiColor:)` 语义色，随
+    // 明暗模式自适应，不写死 RGB）.
+
+    /// 警示 / 需注意.
+    static let warning = Color(uiColor: .systemYellow)
+    /// 高亮 / 标记（强调性标注、关键数值底色）.
+    static let mark = Color(uiColor: .systemPink)
+
+    // MARK: - 品牌渐变（新增）
+    //
+    // 取自 TRApp AppIcon 解码实测：深藏青竖向渐变 `#2C3A6A → #161F2E` + 纯白图形.
+    // **仅新增常量供新页面的 hero 区块使用，不替换既有 `accent`**：全 App 主色替换
+    // 会牵动 `TintedButtonStyle` / `AppRowIcon` / `SizePill` 等已锚定语义色的组件，
+    // 影响面大且非本次目标，故保持 `accent` 为 `systemBlue` 不变.
+
+    /// 品牌深藏青（TRApp AppIcon 实测主色 `#2C3A6A`）.
+    static let brandNavy = Color(red: 0x2C / 255, green: 0x3A / 255, blue: 0x6A / 255)
+    /// 品牌渐变（`#2C3A6A → #161F2E`，竖向）.
+    static let brandGradient = LinearGradient(
+        colors: [
+            Color(red: 0x2C / 255, green: 0x3A / 255, blue: 0x6A / 255),
+            Color(red: 0x16 / 255, green: 0x1F / 255, blue: 0x2E / 255)
+        ],
+        startPoint: .top,
+        endPoint: .bottom
+    )
 }
 
 /// 「透明淡蓝」按钮样式（用户审美：不要纯蓝实底，要淡一点的蓝底）.
@@ -190,6 +221,136 @@ struct SizePill: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(tint.opacity(0.12), in: Capsule())
+    }
+}
+
+// MARK: - TRApp 风格 token 层（新增）
+//
+// 对照 TRApp 逆向结论：全站 SF Rounded（`design: .rounded`）+ Dynamic Type、
+// 连续圆角、毛玻璃、数字等宽、分层符号渲染。以下把字号/圆角/间距收成命名 token，
+// 供**新页面**使用；既有页面内联的字号与圆角**保持不变**（不一次全改，避免大范围回归）.
+
+/// 字体层：SF Rounded + Dynamic Type，数字场景走等宽.
+enum AppFont {
+    static let largeTitle = Font.system(.largeTitle, design: .rounded).weight(.bold)
+    static let title = Font.system(.title2, design: .rounded).weight(.bold)
+    static let title3 = Font.system(.title3, design: .rounded).weight(.semibold)
+    static let headline = Font.system(.headline, design: .rounded).weight(.semibold)
+    static let body = Font.system(.body, design: .rounded)
+    static let bodyEmphasis = Font.system(.body, design: .rounded).weight(.semibold)
+    static let subheadline = Font.system(.subheadline, design: .rounded)
+    static let subheadlineEmphasis = Font.system(.subheadline, design: .rounded).weight(.semibold)
+    static let caption = Font.system(.caption, design: .rounded)
+    static let captionEmphasis = Font.system(.caption, design: .rounded).weight(.semibold)
+    /// 数字等宽：进度百分比、体积、倒计时等数字场景（TRApp 用 `.monospacedDigit()`）.
+    static let number = Font.system(.body, design: .rounded).monospacedDigit()
+    static let numberEmphasis = Font.system(.body, design: .rounded).weight(.semibold).monospacedDigit()
+    static let numberSmall = Font.system(.caption, design: .rounded).monospacedDigit()
+}
+
+/// 圆角层：连续圆角（`RoundedCornerStyle.continuous`），与既有卡片口径对齐.
+enum AppRadius {
+    /// 卡片圆角（对齐既有 heroCard 的 16）.
+    static let card: CGFloat = 16
+    /// 内层容器 / 次级卡片.
+    static let inner: CGFloat = 12
+    /// chip / 小控件（对齐 `TintedButtonStyle` 常规号 8）.
+    static let chip: CGFloat = 8
+    /// 行内图标底（对齐 `AppRowIcon` 的 7）.
+    static let icon: CGFloat = 7
+}
+
+/// 间距层：区块 / 行 / 紧凑三档.
+enum AppSpacing {
+    /// 区块之间.
+    static let section: CGFloat = 16
+    /// 行内元素之间.
+    static let row: CGFloat = 12
+    /// 紧凑元素之间.
+    static let tight: CGFloat = 6
+}
+
+/// 尺寸层：卡片内边距与图标尺寸.
+enum AppMetrics {
+    /// 卡片内边距.
+    static let cardPadding: CGFloat = 16
+    /// 行内图标底边长（对齐 `AppRowIcon` 默认 30）.
+    static let iconSize: CGFloat = 30
+    /// hero 区块图标边长.
+    static let heroIconSize: CGFloat = 44
+}
+
+/// 触觉层：方法在**调用侧**执行，不持有非 Sendable 的静态生成器实例（Swift 6 严格并发）.
+enum AppHaptics {
+    /// 轻点反馈（工具行点击等）：瞬时、较强.
+    @MainActor
+    static func tap() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred(intensity: 0.8)
+    }
+
+    /// 成功反馈.
+    @MainActor
+    static func success() {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    /// 失败反馈.
+    @MainActor
+    static func error() {
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+    }
+}
+
+/// 卡片底：语义分组背景 + 连续圆角 + 统一内边距.
+struct AppCardBackground: ViewModifier {
+    var radius: CGFloat = AppRadius.card
+    var padding: CGFloat = AppMetrics.cardPadding
+
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .background(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
+            )
+    }
+}
+
+/// 毛玻璃底（TRApp `Material.ultraThin` 语言），用于浮层 / 悬浮条.
+struct AppGlassBackground: ViewModifier {
+    var radius: CGFloat = AppRadius.card
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: radius, style: .continuous)
+            )
+    }
+}
+
+/// SF Symbol 分层渲染（TRApp `.symbolRenderingMode(.hierarchical)` 语言）.
+struct AppSymbol: ViewModifier {
+    func body(content: Content) -> some View {
+        content.symbolRenderingMode(.hierarchical)
+    }
+}
+
+extension View {
+    /// 统一卡片外观（语义背景 + 连续圆角 + 内边距）.
+    func appCard(radius: CGFloat = AppRadius.card, padding: CGFloat = AppMetrics.cardPadding) -> some View {
+        modifier(AppCardBackground(radius: radius, padding: padding))
+    }
+
+    /// 统一毛玻璃外观.
+    func appGlass(radius: CGFloat = AppRadius.card) -> some View {
+        modifier(AppGlassBackground(radius: radius))
+    }
+
+    /// SF Symbol 分层渲染.
+    func appSymbol() -> some View {
+        modifier(AppSymbol())
     }
 }
 

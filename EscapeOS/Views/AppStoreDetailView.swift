@@ -91,7 +91,10 @@ struct AppStoreDetailView: View {
                 // v0.3.588：AppStore 商店的「下载管理」**只列 Apple ID 通道**的下载
                 // （用户要求「每个入口只显示自己来源的东西」）—— 第三方软件源 / 免登录源的
                 // 下载不再混进本页（它们各自在自己商店的下载管理里）。
-                IPADownloadManagerView(filterSource: [.appleID])
+                // 来源集合要覆盖**本页自己能发起的全部下载**：`:123` / `:555` 走
+                // `startWithAppleID`（.appleID），`:592` 走 `startFromI4Source`（.i4Free）。
+                // 原先只传 `[.appleID]` ⇒ 本页发起的爱思源下载在自己的下载管理里看不到。
+                IPADownloadManagerView(filterSource: [.appleID, .i4Free])
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button("完成") { showDownloadManager = false }

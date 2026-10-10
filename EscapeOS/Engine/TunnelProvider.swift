@@ -193,24 +193,29 @@ struct ShadowrocketTunnel: TunnelProviding {
 
 // MARK: - 实现 3：内置隧道（Network Extension）
 
-/// 新增方式：用 Network Extension 自建 Packet Tunnel.
+/// 用 Network Extension 自建 Packet Tunnel.
 ///
 /// 分阶段（用户确认的路线）：
-///   · Phase 1（本次）：**权限检测 + UI 门槛 + 抽象**. `availability` 由
-///     `VPNPermissionProbe` 决定；`start()` 尝试驱动 `NETunnelProviderManager`.
-///   · Phase 2：加独立的 Network Extension target（`NEPacketTunnelProvider` 子类 +
-///     `PlugIns/*.appex`），并把 Packet Tunnel 权限写进签名. 在那之前本机没有可加载的
-///     provider，`start()` 会如实报「尚未创建内置隧道配置」.
+///   · Phase 1：**权限检测 + UI 门槛 + 抽象**. `availability` 由 `VPNPermissionProbe` 决定.
+///   · Phase 2（本次）：独立 Network Extension target（`EscapeOSTunnel`：`NEPacketTunnelProvider`
+///     子类 + `PlugIns/*.appex`），主 App 侧 `start()` 建配置并拉起扩展.
+///     扩展是一个**回环反射器**（与 LocalDevVPN 同口径），让本机自己的开发者服务
+///     （RSD 49152 等）通过对端地址可达，不提供出口代理、不改公网 IP.
 struct BuiltInTunnel: TunnelProviding {
     let kind: TunnelKind = .builtIn
 
-    /// 本版本是否已内置真正的 Network Extension 扩展（Phase 2）.
+    /// 本版本是否**真的**把 Network Extension 扩展打进了 App bundle.
     ///
-    /// Phase 2 未落地前，本机没有可加载的 `NEPacketTunnelProvider`（无 `.appex`），
-    /// 即便签名带 Packet Tunnel 权限也无处可加载 ⇒ 本版本内置隧道**恒不可用**，
-    /// UI 必须如实说明，不能让它看起来像能用（否则用户点亮后只会拿到一句失败日志）.
-    /// Phase 2 落地后置 `true`，`availability` 即恢复为「按签名权限判定」.
-    static let isExtensionBundled = false
+    /// 如实判定：只有 `PlugIns/EscapeOSTunnel.appex` 存在、且其 bundle id 与本类约定的
+    /// `providerBundleID` 一致时才为 `true`. 这样「内置隧道」的可用性才不会在扩展缺失时
+    /// 谎称可用（例如别人去掉扩展 target 重新构建时，UI 必须如实显示不可用）.
+    static var isExtensionBundled: Bool {
+        guard let plugIns = Bundle.main.builtInPlugInsURL else { return false }
+        let appex = plugIns.appendingPathComponent("EscapeOSTunnel.appex")
+        guard FileManager.default.fileExists(atPath: appex.path) else { return false }
+        guard let bundle = Bundle(url: appex) else { return false }
+        return bundle.bundleIdentifier == providerBundleID
+    }
 
     /// 内置隧道的对端地址沿用同一套推导（`TunnelDeviceIP` / utun 对端 / 兜底）.
     var targetIP: String { LocalDevVPN.targetIP }
@@ -266,16 +271,82 @@ struct BuiltInTunnel: TunnelProviding {
             LoginLogger.shared.log("[隧道] 内置隧道未启用：\(availability.reason ?? "无 VPN 权限").", category: .general)
             return
         }
-        // 全程只在 completion 内使用 NE 对象，跨 await 只回传 String（避免把非 Sendable
-        // 的 NETunnelProviderManager 带过隔离域 —— Swift 6 严格并发）.
-        let outcome: String = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+        let outcome = await Self.ensureConfiguredAndStart()
+        if outcome.isEmpty {
+            LoginLogger.shared.log("[隧道] 内置隧道启动请求已发送（provider=\(Self.providerBundleID)）.", category: .general)
+        } else {
+            LoginLogger.shared.log("[隧道] \(outcome)", category: .general)
+        }
+    }
+
+    /// 建立（或复用）内置隧道配置并拉起扩展.
+    ///
+    /// Swift 6 严格并发约束：`NETunnelProviderManager` 非 Sendable，**不**能跨 `await`
+    /// 传回调用方，也**不**宜被嵌套完成回调捕获 ⇒ 拆成两步、每步一个 `loadAllFromPreferences`
+    /// 往返，闭包体内只使用**本闭包内新建**的值，跨隔离域只回传一个 `String`
+    /// （空串 = 成功；非空 = 失败原因，英文句点结尾）.
+    /// 这样写对「完成回调是否为 `@Sendable`」不敏感：两种情形都编得过.
+    private static func ensureConfiguredAndStart() async -> String {
+        let saveOutcome = await saveConfiguredManager()
+        if !saveOutcome.isEmpty { return saveOutcome }
+        return await startExistingManager()
+    }
+
+    /// 第 1 步：读取 → 建/复用配置 → `saveToPreferences`.
+    private static func saveConfiguredManager() async -> String {
+        await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
             NETunnelProviderManager.loadAllFromPreferences { managers, error in
                 if let error {
                     cont.resume(returning: "读取内置隧道配置失败：\(error.localizedDescription).")
                     return
                 }
-                guard let manager = managers?.first else {
-                    cont.resume(returning: "尚未创建内置隧道配置（本版本未内置隧道扩展，见 Phase 2）.")
+                // 复用已存在的「本扩展」配置；找不到就新建一条.
+                let existing = managers?.first {
+                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleID
+                }
+                let manager = existing ?? NETunnelProviderManager()
+
+                let proto = NETunnelProviderProtocol()
+                proto.providerBundleIdentifier = providerBundleID
+                // Packet Tunnel 里 serverAddress 只是「设置 → VPN」显示的占位；
+                // 真正的对端地址经 providerConfiguration 的 peerIP 传给扩展
+                // （扩展 PacketTunnelProvider 读该键，缺省回落到 10.7.0.1）.
+                let peerIP = LocalDevVPN.targetIP
+                proto.serverAddress = peerIP
+                proto.providerConfiguration = ["peerIP": peerIP]
+
+                manager.protocolConfiguration = proto
+                manager.localizedDescription = "EscapeSpace 内置隧道"
+                manager.isEnabled = true
+
+                // 本闭包体内不引用 `manager` ⇒ 不把它捕获进来.
+                manager.saveToPreferences { saveError in
+                    if let saveError {
+                        cont.resume(returning: "保存内置隧道配置失败：\(saveError.localizedDescription).")
+                        return
+                    }
+                    cont.resume(returning: "")
+                }
+            }
+        }
+    }
+
+    /// 第 2 步：重新读取（save 之后的）配置并 `startVPNTunnel`.
+    ///
+    /// 用一次全新的 `loadAllFromPreferences` 取代 `saveToPreferences` 之后对同一对象的
+    /// `loadFromPreferences`：读回的 manager 已是「从偏好设置加载过」的状态，其 `connection`
+    /// 有效，可直接拉起；同时避免把非 Sendable 的 manager 捕获进嵌套闭包.
+    private static func startExistingManager() async -> String {
+        await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            NETunnelProviderManager.loadAllFromPreferences { managers, error in
+                if let error {
+                    cont.resume(returning: "读取内置隧道配置失败：\(error.localizedDescription).")
+                    return
+                }
+                guard let manager = managers?.first(where: {
+                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleID
+                }) else {
+                    cont.resume(returning: "保存后未能重新找到内置隧道配置.")
                     return
                 }
                 do {
@@ -286,11 +357,6 @@ struct BuiltInTunnel: TunnelProviding {
                 }
             }
         }
-        if outcome.isEmpty {
-            LoginLogger.shared.log("[隧道] 内置隧道启动请求已发送（provider=\(Self.providerBundleID)）.", category: .general)
-        } else {
-            LoginLogger.shared.log("[隧道] \(outcome)", category: .general)
-        }
     }
 
     func stop() async {
@@ -300,7 +366,16 @@ struct BuiltInTunnel: TunnelProviding {
                     cont.resume(returning: "读取内置隧道配置失败：\(error.localizedDescription).")
                     return
                 }
-                managers?.forEach { $0.connection.stopVPNTunnel() }
+                // 只断**本应用创建**的配置（providerBundleIdentifier 命中），
+                // 不动系统里用户其它 VPN / 隧道的配置.
+                let own = managers?.filter {
+                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleID
+                } ?? []
+                guard !own.isEmpty else {
+                    cont.resume(returning: "未发现由本应用创建的内置隧道配置.")
+                    return
+                }
+                own.forEach { $0.connection.stopVPNTunnel() }
                 cont.resume(returning: "")
             }
         }
@@ -316,7 +391,8 @@ struct BuiltInTunnel: TunnelProviding {
 
 /// 「当前签名是否含 Packet Tunnel 权限」的探测.
 ///
-/// 要探测的 key：`com.apple.developer.networking.networkextension`（值为 `packet-tunnel`）.
+/// 要探测的 key：`com.apple.developer.networking.networkextension`
+/// （数组里代表分组隧道的值是 `packet-tunnel-provider`，**不是** `packet-tunnel`）.
 ///
 /// 两条通道（先同步、必要时再异步复核）：
 ///
@@ -341,6 +417,9 @@ struct BuiltInTunnel: TunnelProviding {
 enum VPNPermissionProbe {
     /// Packet Tunnel 权限的 entitlement key.
     static let packetTunnelKey = "com.apple.developer.networking.networkextension"
+
+    /// 上述 key 下代表「分组隧道」的数组值.
+    static let packetTunnelProviderValue = "packet-tunnel-provider"
 
     /// 探测结论.
     enum Presence: Equatable, Sendable {
@@ -374,6 +453,14 @@ enum VPNPermissionProbe {
             if error == nil { return .absent("entitlement 不在当前签名里") }
             return .unknown
         }
+        // ★ Packet Tunnel 权限：必须校验数组里**含** packet-tunnel-provider.
+        //   只看 key 在不在，会把「数组里只有 dns-proxy 之类」的签名误判成可用.
+        if key == packetTunnelKey {
+            let values = (value as? [String]) ?? []
+            guard values.contains(packetTunnelProviderValue) else {
+                return .absent("数组里没有 \(packetTunnelProviderValue)（实为 \(describe(value))）")
+            }
+        }
         return .granted(describe(value))
     }
 
@@ -390,7 +477,7 @@ enum VPNPermissionProbe {
         }
     }
 
-    /// 把读到的 entitlement 值转成一句可读事实（数组会拼出 packet-tunnel 之类的元素）.
+    /// 把读到的 entitlement 值转成一句可读事实（数组会拼出 packet-tunnel-provider 之类的元素）.
     private static func describe(_ value: CFTypeRef) -> String {
         if let array = value as? [String] {
             return array.isEmpty ? "（空数组）" : array.joined(separator: ",")

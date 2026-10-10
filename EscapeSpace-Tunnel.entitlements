@@ -15,7 +15,9 @@
 	    用法：把 CODE_SIGN_ENTITLEMENTS 指向本文件，或用它作为侧载工具的 entitlements 输入.
 
 	  完整的内置隧道还需独立的 Network Extension target（NEPacketTunnelProvider 子类 +
-	  PlugIns/*.appex），见简报「实现_三种隧道方式.md」的 Phase 2.
+	  PlugIns/*.appex）：该 target 已于 Phase 2 落地为 EscapeOSTunnel（见 project.yml），
+	  扩展自身另有一份 EscapeOSTunnel/EscapeOSTunnel.entitlements，同样只声明
+	  packet-tunnel-provider. 主 App 与扩展**都要**带该权限，隧道版才跑得起来.
 	-->
 	<key>get-task-allow</key>
 	<true/>
@@ -25,7 +27,7 @@
 	<true/>
 	<key>com.apple.developer.networking.networkextension</key>
 	<array>
-		<string>packet-tunnel</string>
+		<string>packet-tunnel-provider</string>
 	</array>
 </dict>
 </plist>

@@ -95,6 +95,11 @@ targets:
       - framework: rust-libs/libidevice_ffi.xcframework
         embed: false
         link: true
+      # 内置隧道扩展（Phase 2）：作为 App Extension 嵌入主 App 的 PlugIns/.
+      # embed 默认为 true（依赖方是 application），显式写出以自证意图；XcodeGen 会据此
+      # 生成 "Embed App Extensions" 阶段，把 EscapeOSTunnel.appex 拷进 EscapeSpace.app/PlugIns/.
+      - target: EscapeOSTunnel
+        embed: true
     sources:
       # 模块原生 UI 源码（生成目录，见 EscapeOS/Modules/README.md）——
       # 由 Resources/Scripts/sync_bundled_modules.py 在 xcodegen **之前**从
@@ -186,3 +191,36 @@ targets:
         outputFiles:
           - "$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a"
           - "$(DERIVED_FILE_DIR)/SAP/source/include/unicorn/unicorn.h"
+
+  # 内置隧道扩展（Phase 2）：一个「回环反射器」Packet Tunnel Provider.
+  # 语义与设计见 EscapeOSTunnel/PacketTunnelProvider.swift 头注释，以及简报
+  # 「调研_VPN权限检测与内置隧道.md」§2.1–§2.2.
+  #
+  # ⚠️ 本 target **不改变默认签名**：默认构建（EscapeSpace.entitlements）不含 NE 权限，
+  #    免费账号照旧可签主 App；本扩展的 entitlements（packet-tunnel-provider）只在做
+  #    「隧道版」签名时才施加（免费账号签不了，见调研简报 §2.3）. CI 以
+  #    CODE_SIGNING_ALLOWED=NO 编译验证，产物 .appex 供隧道版侧载签名使用.
+  EscapeOSTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      # 只收本目录；扩展源码**不在** EscapeOS/ 下，故不会被主 App target 重复编译.
+      - path: EscapeOSTunnel
+    settings:
+      base:
+        # Network Extension 要求扩展 bundle id 以主 App bundle id 为前缀；
+        # 这里取主 bundle id + ".tunnel"，与 BuiltInTunnel.providerBundleID 的约定一致.
+        PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos.tunnel
+        PRODUCT_NAME: EscapeOSTunnel
+        MARKETING_VERSION: "0.3.587"
+        CURRENT_PROJECT_VERSION: "881"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        # 与主 target 同口径的 Swift 6 严格并发（详见主 target 的说明）.
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_APPROACHABLE_CONCURRENCY: "YES"
+        INFOPLIST_FILE: EscapeOSTunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: EscapeOSTunnel/EscapeOSTunnel.entitlements
+        # 扩展只用到 NetworkExtension，显式链接（对齐主 target 的写法）.
+        OTHER_LDFLAGS:
+          - "-framework NetworkExtension"

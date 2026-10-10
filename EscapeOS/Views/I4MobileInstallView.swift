@@ -60,14 +60,14 @@ struct I4MobileInstallView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: AppSpacing.section) {
                 heroCard
                 deviceInfoCard
                 ipaSourceCard
                 downloadManagerCard
                 statusCard
             }
-            .padding(16)
+            .padding(AppTheme.pageInset)
         }
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
@@ -91,44 +91,47 @@ struct I4MobileInstallView: View {
     private var heroCard: some View {
         HStack(spacing: 14) {
             // 爱思 logo 是第三方商标：用 SF Symbol + 圆角色块占位，不盗图.
+            // 底改白色半透明：置于品牌深藏青渐变上，白图形对比清晰（TRApp AppIcon 语言）.
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.teal.opacity(0.12))
+                RoundedRectangle(cornerRadius: AppRadius.inner, style: .continuous)
+                    .fill(Color.white.opacity(0.16))
                 Image(systemName: "arrow.down.app.fill")
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(.teal)
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(.white)
+                    .appSymbol()
             }
             .frame(width: 56, height: 56)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("安装爱思移动端")
-                    .font(.title3.weight(.semibold))
+                    .font(AppFont.title3)
+                    .foregroundStyle(.white)
                 Text("爱思 9.0 移动端安装向导")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(AppFont.caption)
+                    .foregroundStyle(.white.opacity(0.8))
             }
             Spacer()
         }
-        .padding(16)
+        .padding(AppMetrics.cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(AppTheme.brandGradient)
         )
     }
 
     // MARK: - 设备信息卡（机型 / 容量·颜色 / 序列号 / 系统版本）
 
     private var deviceInfoCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("设备信息").font(.headline)
+        VStack(alignment: .leading, spacing: AppSpacing.row) {
+            Text("设备信息").font(AppFont.headline)
 
             if loading {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("正在读取设备信息…").font(.caption).foregroundStyle(.secondary)
+                    Text("正在读取设备信息…").font(AppFont.caption).foregroundStyle(.secondary)
                 }
             } else if let errorText {
-                Text(errorText).font(.caption).foregroundStyle(.red)
+                Text(errorText).font(AppFont.caption).foregroundStyle(.red)
             } else if let info {
                 infoRow("机型", info.deviceName ?? info.modelName)
                 infoRow("容量 / 颜色", capacityColorText(info) ?? "未知")
@@ -136,20 +139,16 @@ struct I4MobileInstallView: View {
                 infoRow("系统版本", "iOS \(info.systemVersion)")
             }
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .appCard()
     }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Text(label).font(AppFont.subheadline).foregroundStyle(.secondary)
             Spacer()
             Text(value)
-                .font(.subheadline)
+                .font(AppFont.subheadline)
                 .multilineTextAlignment(.trailing)
         }
     }
@@ -170,21 +169,21 @@ struct I4MobileInstallView: View {
     /// 两条云端**并存**、用户可选；各来源可用性**如实显示**（不可用给原因，不静默跳过）.
     /// 只显示缓存状态与入口，不做隐式下载 —— 安装按钮消费的就是这里落盘的 IPA.
     private var ipaSourceCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("IPA 来源").font(.headline)
+        VStack(alignment: .leading, spacing: AppSpacing.row) {
+            Text("IPA 来源").font(AppFont.headline)
 
             sourceSelector
 
             if packStatuses.isEmpty {
-                Text("尚未读取缓存状态.").font(.caption).foregroundStyle(.secondary)
+                Text("尚未读取缓存状态.").font(AppFont.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(packStatuses) { status in
                     HStack(spacing: 8) {
                         Text(status.pack.fileName)
-                            .font(.subheadline.monospaced())
+                            .font(AppFont.subheadline.monospaced())
                         Spacer()
                         Text(ipaStatusText(status))
-                            .font(.caption)
+                            .font(AppFont.caption)
                             .foregroundStyle(status.cached ? AppTheme.success : .secondary)
                     }
                 }
@@ -193,7 +192,7 @@ struct I4MobileInstallView: View {
             if downloading {
                 ProgressView(value: downloadProgress).progressViewStyle(.linear)
                 Text("正在下载… \(Int((downloadProgress * 100).rounded()))%")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(AppFont.numberSmall).foregroundStyle(.secondary)
             }
 
             HStack(spacing: 10) {
@@ -212,33 +211,29 @@ struct I4MobileInstallView: View {
 
             if !selectedSourceHasAny && !packStatuses.isEmpty {
                 Text("\(selectedSource.displayName)当前不可用：\(selectedSourceUnavailableReason)")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(AppFont.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if packStatuses.contains(where: { $0.cached }) {
                 Button("清理缓存") { clearCache() }
-                    .font(.caption)
+                    .font(AppFont.caption)
                     .foregroundStyle(AppTheme.danger)
                     .disabled(downloading || importing)
             }
             if let ipaMessage {
-                Text(ipaMessage).font(.caption2).foregroundStyle(.secondary)
+                Text(ipaMessage).font(AppFont.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .appCard()
     }
 
     /// 两条云端来源的**可用性 + 单选**（用户选从哪下）.
     /// 不可用来源置灰（显示原因），可选来源点一下即切换；每条来源行**下面**只读展示该来源的安装地址.
     private var sourceSelector: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("云端来源").font(.subheadline.weight(.medium))
+        VStack(alignment: .leading, spacing: AppSpacing.tight) {
+            Text("云端来源").font(AppFont.subheadlineEmphasis)
             ForEach(I4MobileInstallService.CloudSource.allCases) { source in
                 let available = sourceAvailability(source).isAvailable
                 VStack(alignment: .leading, spacing: 4) {
@@ -246,10 +241,11 @@ struct I4MobileInstallView: View {
                         HStack(spacing: 10) {
                             Image(systemName: selectedSource == source ? "largecircle.fill.circle" : "circle")
                                 .foregroundStyle(selectedSource == source ? AppTheme.accent : AppTheme.unselected)
+                                .appSymbol()
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(source.displayName).font(.subheadline).foregroundStyle(.primary)
+                                Text(source.displayName).font(AppFont.subheadline).foregroundStyle(.primary)
                                 Text(sourceAvailabilityText(source))
-                                    .font(.caption2)
+                                    .font(AppFont.caption)
                                     .foregroundStyle(available ? AppTheme.success : .secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -275,10 +271,10 @@ struct I4MobileInstallView: View {
         if let address = I4MobileInstallService.addressSummary(for: source) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(sourceAddressLabel(source))
-                    .font(.caption2)
+                    .font(AppFont.caption)
                     .foregroundStyle(.secondary)
                 Text(address)
-                    .font(.caption2.monospaced())
+                    .font(AppFont.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -286,7 +282,7 @@ struct I4MobileInstallView: View {
                     UIPasteboard.general.string = address
                     ipaMessage = "已复制 \(source.displayName) 的地址."
                 } label: {
-                    Image(systemName: "doc.on.doc").font(.caption2)
+                    Image(systemName: "doc.on.doc").font(AppFont.caption)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(AppTheme.accent)
@@ -364,26 +360,26 @@ struct I4MobileInstallView: View {
                 AppRowIcon(systemName: "shippingbox.fill", tint: .blue,
                            symbolSize: 18, frameSize: 34)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("下载管理").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
-                    Text("管理已下载的 IPA 并安装").font(.caption2).foregroundStyle(.secondary)
+                    Text("下载管理").font(AppFont.subheadlineEmphasis).foregroundStyle(.primary)
+                    Text("管理已下载的 IPA 并安装").font(AppFont.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 6)
                 if downloadedCount > 0 {
                     Text("\(downloadedCount)")
-                        .font(.caption.weight(.semibold))
+                        .font(AppFont.numberSmall)
                         .foregroundStyle(.secondary)
                 }
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(AppFont.captionEmphasis)
                     .foregroundStyle(.tertiary)
             }
-            .padding(16)
+            .padding(AppMetrics.cardPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
                     .fill(Color(.secondarySystemGroupedBackground))
             )
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -391,13 +387,13 @@ struct I4MobileInstallView: View {
     // MARK: - 状态区（尚未开始 / 正在安装 / 安装成功 / 安装未完成）
 
     private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("安装状态").font(.headline)
+        VStack(alignment: .leading, spacing: AppSpacing.row) {
+            Text("安装状态").font(AppFont.headline)
 
             HStack(spacing: 10) {
                 statusIcon
                 Text(stageText)
-                    .font(.subheadline.weight(.medium))
+                    .font(AppFont.subheadlineEmphasis)
                     .foregroundStyle(stageTint)
                 Spacer()
                 if case .installing = stage {
@@ -408,19 +404,15 @@ struct I4MobileInstallView: View {
             if installAction == nil {
                 Text("本页未接入安装动作：安装服务（I4MobileInstallService）按爱思做法，"
                      + "用服务端现取的 sinf 覆盖包内再装，并在报告里写明用的是哪个账号的 sinf.")
-                    .font(.caption2)
+                    .font(AppFont.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             primaryButton
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .appCard()
     }
 
     @ViewBuilder
@@ -454,7 +446,10 @@ struct I4MobileInstallView: View {
 
     private var statusIcon: some View {
         Image(systemName: stageIconName)
+            .font(AppFont.body)
             .foregroundStyle(stageTint)
+            .appSymbol()
+            .symbolEffect(.bounce, value: stage)
     }
 
     private var stageIconName: String {

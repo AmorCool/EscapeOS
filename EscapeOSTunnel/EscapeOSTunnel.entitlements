@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  EscapeSpace 内置隧道扩展（.appex）的签名配置.
+
+	  只声明一项：`com.apple.developer.networking.networkextension` = `packet-tunnel-provider`.
+	  与 LocalDevVPN 扩展的 entitlements 完全同口径
+	  （https://github.com/jkcoxson/LocalDevVPN/blob/main/TunnelProv/TunnelProv.entitlements）：
+	  扩展要驱动 `NEPacketTunnelProvider`，凭的就是这一项，别的都不需要.
+
+	  注意：本文件**不参与默认构建**（默认 target 只签主 App 的 EscapeSpace.entitlements），
+	  只有做「隧道版」签名时才用它 —— 免费账号的 provisioning profile 不含该权限，
+	  请求它会直接签不过.
+	-->
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+	</array>
+</dict>
+</plist>
