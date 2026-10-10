@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.589] - 2026-10-10
+
+> **一句话**：删爱思云端（后端实测不可用）；仓库云端支持自定义包体；移植爱思「按 iOS 版本瀑布自动选包」；CI 源码 hash 纳入扩展目录。
+
+### 新增
+
+- **移植爱思「自动选包」机制**：逆向定案 —— 爱思装移动端**不是随机挑包**，而是按**设备 iOS 版本瀑布降级**选一个包体（选择函数 `0x1401db840`）：
+  ⓪ **已装 `com.ownbook.notes` ⇒ 短路跳过** → ① iOS ≥ 15.1 → ② iOS ≥ 13.0 → ③ iOS ≥ 10.0 → ④ iOS ≥ 9.0 且机型 `iPhone4,1` → ⑤ 兜底。
+  本仓只有 3 个包体，**能覆盖 ② ③ 两档 + ⓪ 已装判定层**；① ④ ⑤ 命中时**如实回落**（同爱思 `policy==0` 行为），不伪造不顶替。
+  UI 采用**软推荐**：顶部「本机推荐」卡显示推荐包体 + 依据 + 逐档轨迹，用户仍可手动改。
+- **仓库云端支持自定义包体**：改为「内置三包 + 用户自定义包体」统一列表，逐个可下载 / 可安装 / 可删除（用户可填任意 IPA 直链）。
+
+### 移除
+
+- **爱思云端（`app4.i4.cn`）整块删除**：实测该接口恒回 `{"code":1,"msg":"exception"}`，穷举 key / 算法 / 填充 / 编码 / 参数 / UA / 域名 / pcver **全矩阵 0 命中** ⇒ **后端侧问题，App 侧无法修**。
+  删除 `I4CloudResolver` 协议 / `UnavailableI4CloudResolver` / `I4CloudResolverImpl` / `CloudSource` 的 `.i4` case / `PackStatus.i4Availability` / `warmUpDeviceIdentityForI4` 及 UI 来源行，仅留历史注释。
+
+### 构建
+
+- **CI 源码 hash 纳入 `EscapeOSTunnel`**：Phase 2 新增的扩展源码目录不在 `EscapeOS/` 下，必须一并纳入，否则「只改扩展源码」的提交会与旧产物 hash 相同 ⇒ 误判可复用。三处：guard 的 `CUR_HASH`、xcode-build 的 `SRC_HASH`、promote 的 `promote-hash`。
+
+### 已知边界
+
+- 爱思瀑布里的 `305`（`com.best.vaultnotes`）/ `213`（`com.pd.A4Player`）/ `723`（`com.diary.mood`）**本仓没有包体**，命中这些档位时如实回落。
+- ① 档的 `v9items["305"].policy ≠ 0` 条件**无法评估**（本仓无 `v9items` 服务端配置）⇒ 按「该档位不可用」处理。
+- `photo`（`com.MK.AwsomeFiles`）**不在瀑布内** —— 爱思那侧它是独立分支（`0x1401de440`，iOS ≥ 13.0），属「相册/文件」另一功能。
+
 ## [0.3.588] - 2026-10-10
 
 > **一句话**：修上一轮修复引入的 no-udid 必失败、隧道能选、下载管理按来源分开、百宝箱清理、剩余 P0 五条、内置隧道 Phase 2、UI 按 TRApp 风格改进。
