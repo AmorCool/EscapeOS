@@ -1,3 +1,0 @@
-name: probe
-on: workflow_dispatch
-jobs: {}
