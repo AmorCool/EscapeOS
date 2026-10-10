@@ -43,18 +43,17 @@ struct I4MobileInstallView: View {
     @State private var stage: Stage = .idle
     @State private var advancedShown = false
 
-    /// IPA 来源区（两条云端下载 / 手动导入）：各包缓存状态 + 下载进度 + 导入选择器.
+    /// IPA 来源区（仓库云端下载 / 自定义包体 / 手动导入）：各包缓存状态 + 下载进度 + 导入选择器.
     @State private var packStatuses: [I4MobileInstallService.PackStatus] = []
     @State private var downloading = false
     @State private var downloadProgress: Double = 0
     @State private var importing = false
     @State private var showImporter = false
     @State private var ipaMessage: String?
-    /// 当前选中的云端下载来源（用户可选；默认仓库云端）.
-    @State private var selectedSource: I4MobileInstallService.CloudSource = .warehouse
-    /// 爱思云端解析器（可注入；默认用**真实实现** —— 契约已坐实，见 `I4CloudResolverImpl`）.
-    private let i4Resolver: I4MobileInstallService.I4CloudResolver =
-        I4MobileInstallService.I4CloudResolverImpl()
+    /// 自定义包体输入框内容（IPA 直链）.
+    @State private var customURLText = ""
+    /// 正在安装的包体 id（用于禁用该行安装按钮；`nil` = 空闲）.
+    @State private var installingPackId: String?
     /// 已下载 IPA 数量（下载管理入口的数量徽标；进页面时读一次磁盘台账）.
     @State private var downloadedCount = 0
 
@@ -163,31 +162,26 @@ struct I4MobileInstallView: View {
         return cap
     }
 
-    // MARK: - IPA 来源卡（云端下载 / 手动导入）
+    // MARK: - IPA 来源卡（仓库云端 / 自定义包体 / 手动导入）
 
-    /// 三条 IPA 来源：① 仓库云端下载 · ② 爱思云端下载 · ③ 手动导入（选文件，拷进缓存目录）.
-    /// 两条云端**并存**、用户可选；各来源可用性**如实显示**（不可用给原因，不静默跳过）.
-    /// 只显示缓存状态与入口，不做隐式下载 —— 安装按钮消费的就是这里落盘的 IPA.
+    /// IPA 来源：① 仓库云端（内置三包 + 用户自定义包体，逐个可下载 / 可安装）· ② 手动导入.
+    /// 各包可用性**如实显示**（不可用给原因，不静默跳过）；只显示缓存状态与入口，不做隐式下载 ——
+    /// 安装消费的就是这里落盘的 IPA.
     private var ipaSourceCard: some View {
         VStack(alignment: .leading, spacing: AppSpacing.row) {
             Text("IPA 来源").font(AppFont.headline)
 
-            sourceSelector
+            warehouseSourceLine
 
             if packStatuses.isEmpty {
                 Text("尚未读取缓存状态.").font(AppFont.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(packStatuses) { status in
-                    HStack(spacing: 8) {
-                        Text(status.pack.fileName)
-                            .font(AppFont.subheadline.monospaced())
-                        Spacer()
-                        Text(ipaStatusText(status))
-                            .font(AppFont.caption)
-                            .foregroundStyle(status.cached ? AppTheme.success : .secondary)
-                    }
+                    packRow(status)
                 }
             }
+
+            customPackEntry
 
             if downloading {
                 ProgressView(value: downloadProgress).progressViewStyle(.linear)
@@ -197,10 +191,10 @@ struct I4MobileInstallView: View {
 
             HStack(spacing: 10) {
                 Button { Task { await downloadAllMissing() } } label: {
-                    Text("下载").frame(maxWidth: .infinity)
+                    Text("下载全部").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(TintedButtonStyle())
-                .disabled(downloading || importing || !selectedSourceHasAny)
+                .disabled(downloading || importing || !hasAnyDownloadable)
 
                 Button { showImporter = true } label: {
                     Text("手动导入").frame(maxWidth: .infinity)
@@ -209,11 +203,6 @@ struct I4MobileInstallView: View {
                 .disabled(downloading || importing)
             }
 
-            if !selectedSourceHasAny && !packStatuses.isEmpty {
-                Text("\(selectedSource.displayName)当前不可用：\(selectedSourceUnavailableReason)")
-                    .font(AppFont.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             if packStatuses.contains(where: { $0.cached }) {
                 Button("清理缓存") { clearCache() }
                     .font(AppFont.caption)
@@ -229,107 +218,114 @@ struct I4MobileInstallView: View {
         .appCard()
     }
 
-    /// 两条云端来源的**可用性 + 单选**（用户选从哪下）.
-    /// 不可用来源置灰（显示原因），可选来源点一下即切换；每条来源行**下面**只读展示该来源的安装地址.
-    private var sourceSelector: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.tight) {
-            Text("云端来源").font(AppFont.subheadlineEmphasis)
-            ForEach(I4MobileInstallService.CloudSource.allCases) { source in
-                let available = sourceAvailability(source).isAvailable
-                VStack(alignment: .leading, spacing: 4) {
-                    Button { selectedSource = source } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: selectedSource == source ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(selectedSource == source ? AppTheme.accent : AppTheme.unselected)
-                                .appSymbol()
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(source.displayName).font(AppFont.subheadline).foregroundStyle(.primary)
-                                Text(sourceAvailabilityText(source))
-                                    .font(AppFont.caption)
-                                    .foregroundStyle(available ? AppTheme.success : .secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer()
-                        }
+    /// 仓库云端的**下载地址**（只读展示 + 可点复制）—— 内置包直链同处一个 Release 目录.
+    ///
+    /// 只读而非可编辑：地址是编译期常量（`Pack.cloudURL`），做成可编辑而不被下载链路消费就是假配置；
+    /// 用户要指定自己的 IPA，走下方「自定义包体」入口.
+    @ViewBuilder
+    private var warehouseSourceLine: some View {
+        if let address = I4MobileInstallService.addressSummary(for: .warehouse) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("仓库云端").font(AppFont.subheadlineEmphasis)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("地址：").font(AppFont.caption).foregroundStyle(.secondary)
+                    Text(address)
+                        .font(AppFont.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button {
+                        UIPasteboard.general.string = address
+                        ipaMessage = "已复制仓库云端的地址."
+                    } label: {
+                        Image(systemName: "doc.on.doc").font(AppFont.caption)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!available)
-
-                    sourceAddressLine(source)
+                    .foregroundStyle(AppTheme.accent)
+                    Spacer(minLength: 0)
                 }
             }
         }
     }
 
-    /// 来源的**安装地址**（只读展示 + 可点复制），显示在该来源行**下面**.
-    ///
-    /// 只读而非可编辑：见 `I4MobileInstallService.addressSummary(for:)` 的注释 ——
-    /// 地址是编译期常量（仓库直链）/ 服务端按设备解析（爱思），做成可编辑而不被下载链路消费就是假配置.
-    /// 复制按钮放在选择按钮**外面**（不能嵌进 `Button` 的 label —— 嵌套按钮点击会互相吞掉）.
+    /// 单个包体行：文件名 + 缓存状态 + 单独「下载」/「安装」+（自定义包体可移除）.
     @ViewBuilder
-    private func sourceAddressLine(_ source: I4MobileInstallService.CloudSource) -> some View {
-        if let address = I4MobileInstallService.addressSummary(for: source) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(sourceAddressLabel(source))
+    private func packRow(_ status: I4MobileInstallService.PackStatus) -> some View {
+        let pack = status.pack
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pack.fileName).font(AppFont.subheadline.monospaced())
+                Text(ipaStatusText(status))
                     .font(AppFont.caption)
-                    .foregroundStyle(.secondary)
-                Text(address)
-                    .font(AppFont.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Button {
-                    UIPasteboard.general.string = address
-                    ipaMessage = "已复制 \(source.displayName) 的地址."
-                } label: {
-                    Image(systemName: "doc.on.doc").font(AppFont.caption)
+                    .foregroundStyle(status.cached ? AppTheme.success : .secondary)
+            }
+            Spacer(minLength: 6)
+            if status.cached {
+                if installAction != nil {
+                    Button { Task { await installPack(pack) } } label: {
+                        Text("安装").font(AppFont.caption)
+                    }
+                    .buttonStyle(TintedButtonStyle())
+                    .disabled(installingPackId != nil || downloading)
+                }
+            } else if status.warehouseAvailability.isAvailable {
+                Button { Task { await downloadPack(pack) } } label: {
+                    Text("下载").font(AppFont.caption)
+                }
+                .buttonStyle(TintedButtonStyle())
+                .disabled(downloading || importing)
+            }
+            if pack.isCustom {
+                Button { removeCustom(pack) } label: {
+                    Image(systemName: "trash").font(AppFont.caption)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(AppTheme.accent)
-                Spacer(minLength: 0)
+                .foregroundStyle(AppTheme.danger)
+                .disabled(downloading || importing || installingPackId != nil)
             }
-            .padding(.leading, 30)   // 与来源选择圈对齐缩进
         }
     }
 
-    /// 来源地址的前缀标签（仓库云端给目录前缀，爱思云端给接口端点）.
-    private func sourceAddressLabel(_ source: I4MobileInstallService.CloudSource) -> String {
-        switch source {
-        case .warehouse: return "地址："
-        case .i4: return "接口："
+    /// 「自定义包体」入口：填任意 IPA 直链 ⇒ 加入列表 ⇒ 走同一下载链路 ⇒ 逐个可安装.
+    private var customPackEntry: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("自定义包体").font(AppFont.subheadlineEmphasis)
+            Text("填入任意 IPA 直链（http / https），下载后按同一安装链路安装.")
+                .font(AppFont.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                TextField("https://example.com/app.ipa", text: $customURLText)
+                    .font(AppFont.caption)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .textFieldStyle(.roundedBorder)
+                Button {
+                    customURLText = UIPasteboard.general.string ?? ""
+                } label: {
+                    Text("粘贴").font(AppFont.caption)
+                }
+                .buttonStyle(TintedButtonStyle())
+                .disabled(downloading || importing)
+            }
+            Button { Task { await addCustom() } } label: {
+                Text("添加并下载").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TintedButtonStyle())
+            .disabled(downloading || importing
+                      || customURLText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
     /// 单个包的缓存状态文案（未缓存 / 已缓存 + 大小）.
     private func ipaStatusText(_ status: I4MobileInstallService.PackStatus) -> String {
         if status.cached { return "已缓存 \(status.bytes / 1024 / 1024) MB" }
-        return status.availability(of: selectedSource).isAvailable ? "未下载" : "未下载 · 来源不可用"
+        return status.warehouseAvailability.isAvailable ? "未下载" : "未下载 · 来源不可用"
     }
 
-    /// 某来源对**全部包**的可用性：全部可用 ⇒ `.available`；否则 `.unavailable`（给原因）.
-    private func sourceAvailability(_ source: I4MobileInstallService.CloudSource)
-        -> I4MobileInstallService.CloudAvailability {
-        guard !packStatuses.isEmpty else { return .unavailable(reason: "尚未读取缓存状态.") }
-        let perPack = packStatuses.map { $0.availability(of: source) }
-        if perPack.allSatisfy({ $0.isAvailable }) { return .available(detail: nil) }
-        return .unavailable(reason: perPack.compactMap { $0.unavailableReason }.first ?? "部分包不可用.")
-    }
-
-    /// 来源可用性文案（供来源行显示）.
-    private func sourceAvailabilityText(_ source: I4MobileInstallService.CloudSource) -> String {
-        let availability = sourceAvailability(source)
-        if availability.isAvailable { return "可用 · \(packStatuses.count) 个包." }
-        return "不可用 · \(availability.unavailableReason ?? "不可用.")"
-    }
-
-    /// 当前选中来源是否至少有一个包可用（决定「下载」按钮可用性）.
-    private var selectedSourceHasAny: Bool {
-        packStatuses.contains { $0.availability(of: selectedSource).isAvailable }
-    }
-
-    /// 当前选中来源的不可用原因（供提示文案）.
-    private var selectedSourceUnavailableReason: String {
-        sourceAvailability(selectedSource).unavailableReason ?? "不可用."
+    /// 是否至少有一个包可下载（决定「下载全部」按钮可用性）.
+    private var hasAnyDownloadable: Bool {
+        packStatuses.contains { !$0.cached && $0.warehouseAvailability.isAvailable }
     }
 
     /// 清理缓存目录里的 IPA（可再下载 / 再导入，故直接删）.
@@ -496,35 +492,21 @@ struct I4MobileInstallView: View {
             errorText = error.localizedDescription
         }
         loading = false
-        // 爱思云端可用性依赖本机 UDID（异步预热）：首屏先如实显示当前态，
-        // 等身份预热完成后**再刷新一次**，让爱思云端从灰变可点（修本页「爱思云端无法点击」）.
-        await warmUpI4Availability()
     }
 
-    /// 等本机设备身份预热完成后刷新来源可用性（修「爱思云端一直灰着」）.
-    ///
-    /// 放在 `load()` 末尾、`loading = false` 之后：设备信息先出，再等身份就绪；
-    /// 本方法挂在 `.task` 的结构化任务里，页面消失会随之取消（`warmUpDeviceIdentityForI4` 内部
-    /// 用 `Task.isCancelled` 提前退出，不会空转）.
-    private func warmUpI4Availability() async {
-        let ready = await I4MobileInstallService.warmUpDeviceIdentityForI4()
-        if ready { refreshPackStatuses() }
-    }
-
-    /// 刷新各包的缓存状态 + 两条云端可用性（只查本地文件 / 调用解析器，同步、廉价）.
+    /// 刷新各包（内置 + 自定义）的缓存状态 + 仓库云端可用性（只查本地文件，同步、廉价）.
     private func refreshPackStatuses() {
-        packStatuses = I4MobileInstallService.packStatuses(resolver: i4Resolver)
+        packStatuses = I4MobileInstallService.packStatuses()
     }
 
-    /// 从**当前选中来源**下载所有「未缓存且该来源可用」的包，逐个汇报总进度.
+    /// 从**仓库云端**下载所有「未缓存且可用」的包，逐个汇报总进度.
     private func downloadAllMissing() async {
         downloading = true
         ipaMessage = nil
         downloadProgress = 0
-        let source = selectedSource
-        let missing = packStatuses.filter { !$0.cached && $0.availability(of: source).isAvailable }
+        let missing = packStatuses.filter { !$0.cached && $0.warehouseAvailability.isAvailable }
         guard !missing.isEmpty else {
-            ipaMessage = "没有需要下载的包（\(source.displayName)：未缓存且可用的包为空）."
+            ipaMessage = "没有需要下载的包（未缓存且可用的包为空）."
             downloading = false
             return
         }
@@ -533,8 +515,7 @@ struct I4MobileInstallView: View {
                 let count = missing.count
                 try await I4MobileInstallService.downloadCloudIPA(
                     pack: status.pack,
-                    from: source,
-                    resolver: i4Resolver,
+                    from: .warehouse,
                     progress: { p in
                         // 进度回调来自后台下载线程：回主 actor 再改 @State.
                         Task { @MainActor in
@@ -549,6 +530,81 @@ struct I4MobileInstallView: View {
         }
         refreshPackStatuses()
         downloading = false
+    }
+
+    /// 下载**单个**包（内置包 / 自定义包体共用）；自定义包体下载后再校验确为 IPA，不合规即删残包.
+    private func downloadPack(_ pack: I4MobileInstallService.Pack) async {
+        downloading = true
+        ipaMessage = nil
+        downloadProgress = 0
+        do {
+            try await I4MobileInstallService.downloadCloudIPA(
+                pack: pack,
+                from: .warehouse,
+                progress: { p in
+                    Task { @MainActor in downloadProgress = p }
+                },
+                onLog: { LoginLogger.shared.log($0, category: .i4Fix) })
+            if pack.isCustom {
+                // 校验读包（解 Info.plist），放后台；返回 (bundleId, version) 是 Sendable.
+                let info = try await Task.detached(priority: .userInitiated) {
+                    try I4MobileInstallService.verifyCachedIPA(pack)
+                }.value
+                ipaMessage = "已下载 \(pack.fileName)（\(info.bundleId)）."
+            } else {
+                ipaMessage = "已下载 \(pack.fileName)."
+            }
+        } catch {
+            // 自定义包体校验不过：删掉残包，避免留下不可安装的文件.
+            if pack.isCustom { try? I4MobileInstallService.removeCachedIPA(pack) }
+            ipaMessage = "下载未完成：\(error.localizedDescription)"
+        }
+        refreshPackStatuses()
+        downloading = false
+    }
+
+    /// 加入并下载一个自定义包体（填的 IPA 直链）；校验失败如实报错，不加入.
+    private func addCustom() async {
+        let pack: I4MobileInstallService.Pack
+        do {
+            pack = try I4MobileInstallService.addCustomPack(urlString: customURLText)
+        } catch {
+            ipaMessage = "添加失败：\(error.localizedDescription)"
+            return
+        }
+        customURLText = ""
+        refreshPackStatuses()
+        if I4MobileInstallService.isCached(pack) {
+            ipaMessage = "\(pack.fileName) 已在缓存，可直接安装."
+            return
+        }
+        await downloadPack(pack)
+    }
+
+    /// 移除一个自定义包体（含其缓存文件）.
+    private func removeCustom(_ pack: I4MobileInstallService.Pack) {
+        do {
+            try I4MobileInstallService.removeCustomPack(pack)
+            ipaMessage = "已移除 \(pack.fileName)."
+        } catch {
+            ipaMessage = "移除失败：\(error.localizedDescription)"
+        }
+        refreshPackStatuses()
+    }
+
+    /// 安装**单个**包（走既有 sinf 链路：服务端现取 sinf → 覆盖包内 → 装副本）.
+    private func installPack(_ pack: I4MobileInstallService.Pack) async {
+        installingPackId = pack.id
+        stage = .installing
+        do {
+            _ = try await I4MobileInstallService.install(
+                pack: pack,
+                onLog: { LoginLogger.shared.log($0, category: .i4Fix) })
+            stage = .succeeded
+        } catch {
+            stage = .failed(error.localizedDescription)
+        }
+        installingPackId = nil
     }
 
     /// 处理手动导入：`SharedDocumentPicker`（asCopy）已把文件拷进沙盒，直接认领并落缓存.
