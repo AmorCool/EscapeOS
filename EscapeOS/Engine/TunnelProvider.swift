@@ -157,9 +157,14 @@ struct ShadowrocketTunnel: TunnelProviding {
             return
         }
         LoginLogger.shared.log("[隧道] 跳转 Shadowrocket（仅跳转，不保证提供设备连接）.", category: .general)
-        // 必须 `await`：iOS 17 SDK 起 `open(_:)` 有 async 重载，Swift 6 会选它；
-        // 不写 `await` 报「expression is 'async' but is not marked with 'await'」（CI 实测）。
-        await UIApplication.shared.open(Self.openURL)
+        // 必须用**带 options + completionHandler 的同步重载**：
+        //   · 只写 `open(url)` 在 async 上下文里会被推断成 async 重载 ⇒ 报
+        //     「expression is 'async' but is not marked with 'await'」；
+        //   · 加了 `await` 之后，async 重载又把非 Sendable 的
+        //     `[UIApplication.OpenExternalURLOptionsKey: Any]` 跨隔离传 ⇒ 报
+        //     「sending value of non-Sendable type ... risks causing data races」。
+        // 显式给全三个参数即锁定同步重载，两个坑都绕开（两次 CI 实测）。
+        UIApplication.shared.open(Self.openURL, options: [:], completionHandler: nil)
     }
 
     func stop() async {
