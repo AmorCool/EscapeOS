@@ -1,6 +1,26 @@
 import Foundation
+import CommonCrypto
+import SystemConfiguration
 
 /// 爱思「安装移动端」服务层（只做逻辑，不含 UI）—— 移植自爱思助手 PC 端 9.0.
+///
+/// ## IPA 从哪来（v4：两条云端 + 手动导入）
+/// 本服务**不再读 app bundle 里的内嵌 IPA**，来源共**三条**（用户指定），都落盘到同一个缓存目录
+/// `Caches/I4MobileIPA/`：
+///   ① **仓库云端** —— `downloadCloudIPA(pack:from:.warehouse)` 按 `pack.cloudURL` 下到缓存目录；
+///   ② **爱思云端** —— `downloadCloudIPA(pack:from:.i4)` 经注入的 `I4CloudResolver` 解析地址后下载
+///      （默认实现 `I4CloudResolverImpl`，按已挖清的契约走 `app4.i4.cn` 的 3DES 接口，见下）；
+///   ③ **手动导入** —— `importIPA(from:)` 把用户选中的 IPA 拷进缓存目录.
+/// 安装时**只认缓存目录**（`resolveURL`）；缓存缺失即 `packResourceMissing`，
+/// **不做隐式下载、不兜底到 bundle** —— 用户明确要求去掉「内置进 app bundle」.
+///
+/// `pack.cloudURL` = **仓库云端**直链（模块仓库 `AmorCool/module-esc` 的 `edge` Release），
+/// 三个包均已填好（见 `P3_爱思助手_逆向/_简报/实现_模块仓库托管IPA.md` ④，下载后 md5 已核）.
+///
+/// **爱思云端**接口（`app4.i4.cn/getipaformobiledevice.xhtml`）的请求 / 响应契约已由逆向坐实
+/// （见 `P3_爱思助手_逆向/_简报/逆向_爱思云端下载IPA接口.md`）：`POST` + 3DES-ECB + Base64 + URL 转义.
+/// 真实现 = `I4CloudResolverImpl`（**默认**）；`UnavailableI4CloudResolver` 保留作**降级 / 测试**用
+/// （显式传它即让爱思云端一律不可用）.
 ///
 /// ## 移植的是什么（v2：修正 sinf 来源）
 /// 爱思 PC 端「安装爱思移动端」的真实做法**不是**「把包内自带的 sinf 直接递给 installd」：
@@ -14,7 +34,7 @@ import Foundation
 /// 重取路径 `WriteAppSignature start` → 轮询 → 下载解析 → `addSinfToZip`。
 ///
 /// ## 为什么必须现取 sinf（决定性证据）
-/// 三个内嵌 IPA 包内自带的 sinf，其 `schi.name` 属**原始购买者**，**不是**爱思共享账号
+/// 三个爱思移动端 IPA 包内自带的 sinf，其 `schi.name` 属**原始购买者**，**不是**爱思共享账号
 /// `share_appleid003@163.com`（三包 `iTunesMetadata.appleId` 才是该共享账号）：
 ///   · `217.ipa`   `schi.user=0xab6d95d8` `schi.name=李 明`
 ///   · `220.ipa`   `schi.user=0xa775eea7` `schi.name=小 敏`
@@ -34,7 +54,7 @@ import Foundation
 /// 而不是**明确报错** —— 那比不做更糟。故只有服务端这一条路。
 ///
 /// ## 实现（照爱思）
-/// 复制 IPA 到临时目录（**绝不改 bundle 内原件**）→ `PackageSINFWriter.injectAllPaths`
+/// 复制 IPA 到临时目录（**绝不改缓存原件**）→ `PackageSINFWriter.injectAllPaths`
 /// 把 sinf 写进副本的 `SC_Info/*.sinf` → `IPAInstallService.installWithSINF` 装那份副本
 /// （同一份 sinf 同时作为 `ApplicationSINF` 递交，与爱思「写进包再读回」等价）。
 ///
@@ -54,35 +74,43 @@ enum I4MobileInstallService {
 
     // MARK: - 常量
 
-    /// App bundle 内的资源目录名（`project.yml` 以 folder reference 打进 bundle，见其注释）.
-    static let bundleDirectoryName = "I4Mobile"
-
-    /// 导入兜底目录名（`Documents/I4Mobile/`；bundle 内缺失时按此回退）.
-    static let importedDirectoryName = "I4Mobile"
+    /// IPA 缓存目录名（`Caches/I4MobileIPA/`）：云端下载与手动导入的 IPA 都落在这里.
+    ///
+    /// 为什么用 `Caches` 而不是 `Documents`：这些 IPA 是可再下载的派生物、不属于用户数据，
+    /// 放 Caches 符合 Apple 存储指引，系统在空间紧张时可回收（回收后重新下载 / 重新导入即可）.
+    static let cacheDirectoryName = "I4MobileIPA"
 
     /// 爱思共享 Apple ID（三包 `iTunesMetadata` 的 `appleId`，见 `爱思9_安装移动端.md` §②）.
     static let sharedAccountEmail = "share_appleid003@163.com"
 
-    /// 内嵌的 3 个「爱思移动端」IPA（移植材料，元数据见 `Resources/I4Mobile/README.md`）.
+    /// 3 个「爱思移动端」IPA 的元数据（`fileName` 同时是缓存目录里的落盘名）.
     ///
-    /// `expectedBundleId` / `expectedVersion` 只用于**安装前后探测设备上的同名 App**；
-    /// 实际安装用的 bundle id 以**包内 Info.plist** 为准（`install` 会先 `inspect` 取真值）.
+    /// `expectedBundleId` / `expectedVersion` 用于**安装前后探测设备上的同名 App**，
+    /// 以及**手动导入时按包内 bundle id 认领**；实际安装用的 bundle id 仍以**包内 Info.plist** 为准.
+    ///
+    /// `cloudURL` = 该包的**仓库云端**下载直链（模块仓库 `AmorCool/module-esc` 的 `edge` Release），
+    /// 三个包均已填好（md5 已核，见 `实现_模块仓库托管IPA.md` ④）.
     static let packs: [Pack] = [
-        Pack(fileName: "217.ipa",   expectedBundleId: "rn.notes.best",      expectedVersion: "2.1.7"),
-        Pack(fileName: "220.ipa",   expectedBundleId: "com.ownbook.notes",  expectedVersion: "2.2.0"),
-        Pack(fileName: "photo.ipa", expectedBundleId: "com.MK.AwsomeFiles", expectedVersion: "1.5"),
+        Pack(fileName: "217.ipa",   expectedBundleId: "rn.notes.best",      expectedVersion: "2.1.7",
+             cloudURL: "https://github.com/AmorCool/module-esc/releases/download/edge/217.ipa"),
+        Pack(fileName: "220.ipa",   expectedBundleId: "com.ownbook.notes",  expectedVersion: "2.2.0",
+             cloudURL: "https://github.com/AmorCool/module-esc/releases/download/edge/220.ipa"),
+        Pack(fileName: "photo.ipa", expectedBundleId: "com.MK.AwsomeFiles", expectedVersion: "1.5",
+             cloudURL: "https://github.com/AmorCool/module-esc/releases/download/edge/photo.ipa"),
     ]
 
     // MARK: - 模型
 
-    /// 一个内嵌包（对应 `Resources/I4Mobile/` 里的一个 IPA）.
+    /// 一个「爱思移动端」IPA（`fileName` 同时是缓存目录里的落盘名）.
     struct Pack: Identifiable, Hashable, Sendable {
-        /// 资源目录内的文件名（如 `217.ipa`）.
+        /// 缓存目录内的文件名（如 `217.ipa`）.
         let fileName: String
-        /// 期望的 bundle id（用于探测设备上的同名 App；实际以包内 Info.plist 为准）.
+        /// 期望的 bundle id（探测设备同名 App / 手动导入认领用；实际以包内 Info.plist 为准）.
         let expectedBundleId: String
         /// 期望版本（仅供参考，实际以包内 Info.plist 为准）.
         let expectedVersion: String
+        /// **仓库云端**下载直链（模块仓库 `edge` Release）. 空串 = 未配置.
+        let cloudURL: String
         var id: String { fileName }
     }
 
@@ -102,14 +130,391 @@ enum I4MobileInstallService {
         let account: SinfAccount?
     }
 
-    /// 内嵌包的**资源就位情况**（供 UI 展示；只查本地文件，不读设备）.
+    /// 云端下载来源（用户可选）—— **只有这两条**（用户指定），不增第三条.
+    ///
+    ///   · `.warehouse` 仓库云端 —— 本模块仓库 `AmorCool/module-esc` 的 `edge` Release 直链
+    ///     （`pack.cloudURL`，URL 已知）；
+    ///   · `.i4` 爱思云端 —— 爱思自家服务端接口 `app4.i4.cn/getipaformobiledevice.xhtml`
+    ///     （契约已坐实，由 `I4CloudResolverImpl` 解析；需设备 UDID）.
+    enum CloudSource: String, CaseIterable, Identifiable, Sendable {
+        case warehouse
+        case i4
+
+        var id: String { rawValue }
+
+        /// 展示名（界面用；中文，标点用英文句点）.
+        var displayName: String {
+            switch self {
+            case .warehouse: return "仓库云端"
+            case .i4: return "爱思云端"
+            }
+        }
+    }
+
+    /// 某来源对某个包的可用性（供 UI **如实显示**，不静默跳过）.
+    enum CloudAvailability: Sendable, Equatable {
+        /// 可用（`detail` 为展示用说明，如直链；可为空）.
+        case available(detail: String?)
+        /// 不可用 + **原因**（UI 必须把原因显示出来）.
+        case unavailable(reason: String)
+
+        var isAvailable: Bool {
+            if case .available = self { return true }
+            return false
+        }
+
+        /// 不可用原因（可用时为 `nil`）.
+        var unavailableReason: String? {
+            if case .unavailable(let reason) = self { return reason }
+            return nil
+        }
+    }
+
+    /// 爱思云端下载解析器（**可注入**）.
+    ///
+    /// ## 为什么是协议
+    /// 爱思云端接口的请求 / 响应契约已由逆向坐实（见
+    /// `P3_爱思助手_逆向/_简报/逆向_爱思云端下载IPA接口.md`）。真实现 `I4CloudResolverImpl`
+    /// 是**默认**；`UnavailableI4CloudResolver` 保留作**降级 / 测试**用（显式传入即让爱思云端
+    /// 一律不可用，便于离线开发与对照）。
+    ///
+    /// ## 为什么 `downloadURL` 是 `async`
+    /// 真实现要发一次 HTTPS 请求（秒级）；本仓开启 SE-0461（`nonisolated` async 默认跟随调用方
+    /// executor），若做成同步，从 `MainActor` 调进来会**阻塞主线程**。改成 `async` 后由
+    /// `URLSession` 的异步 API 承担，主线程不被占住。`availability` 保持同步且**零阻塞**
+    /// （只读进程内缓存 + 廉价本地探测）。
+    protocol I4CloudResolver: Sendable {
+        /// 该包在爱思云端是否可用（不可用须给原因，UI 如实显示）.
+        func availability(for pack: Pack) -> CloudAvailability
+        /// 解析该包的爱思云端下载地址；不可用抛 `I4MobileError.cloudSourceUnavailable`.
+        func downloadURL(for pack: Pack) async throws -> URL
+    }
+
+    /// **降级 / 测试**用实现：对一切包返回 `.unavailable`（不猜地址）。默认**不是**它.
+    struct UnavailableI4CloudResolver: I4CloudResolver {
+        func availability(for pack: Pack) -> CloudAvailability {
+            .unavailable(reason: "爱思云端已按降级开关关闭（UnavailableI4CloudResolver）.")
+        }
+
+        func downloadURL(for pack: Pack) async throws -> URL {
+            throw I4MobileError.cloudSourceUnavailable(
+                pack: pack.fileName, source: CloudSource.i4.displayName,
+                reason: "爱思云端已按降级开关关闭（UnavailableI4CloudResolver）.")
+        }
+    }
+
+    /// **爱思云端的真实实现** —— 协议层照 `逆向_爱思云端下载IPA接口.md` 逐条落地，不发明字段.
+    ///
+    /// ## 请求（严格照契约）
+    ///   · 端点：`POST https://app4.i4.cn/getipaformobiledevice.xhtml?pcver=9.09.026`
+    ///     （测试域 `test-app4.i4.cn` 只在爱思客户端内部调试时用，此处走生产域）.
+    ///   · 头：`Content-Type: application/json`（契约如此；**体并不是 JSON**，见下）.
+    ///   · 体：`urlencode(base64(3DES_ECB_PKCS7(json, key)))`
+    ///     —— 3DES-**ECB**（无 IV / 无链式）、PKCS#7 填充、Base64、逐字节 `%XX` URL 转义.
+    ///   · key：`2014aisi1234567890mobileclient29`，**只取前 24 字节**（`DESStream3` ctor 截断）.
+    ///   · JSON：`{"apps":[{udid,model,ios,bundleid,md5,versionid,shortversion,longversion}]}`.
+    ///
+    /// ## 请求 JSON 字段来源
+    ///   · `udid`  —— 设备真实 UDID（`LocalDeviceIdentity` 的进程内缓存；冷缓存才真读一次，且放在
+    ///     后台任务里，不占主线程）.
+    ///   · `model` —— `hw.machine`（如 `iPhone13,1`，与 lockdown `ProductType` 同值）.
+    ///   · `ios`   —— `ProcessInfo.processInfo.operatingSystemVersion` 拼成的版本串
+    ///     （本 App 与目标设备同机，值一致；与 `DeviceInfoService.systemVersion` 同源）.
+    ///   · `bundleid` / `shortversion` / `longversion` —— 取自 `Pack`
+    ///     （`expectedBundleId` / `expectedVersion`；我们只有一个版本串，两处同值）.
+    ///   · `md5` / `versionid` —— **恒为空串**（照客户端行为：`versionid` 客户端恒空；
+    ///     `md5` 客户端取自本地应用对象，我们无该对象 ⇒ 留空，由服务端按设备选版本）.
+    ///
+    /// ## 响应（逐字段按契约）
+    ///   · 顶层 `code`：**`== 0` 才处理 `data`**；非 0 即抛（带 code）.
+    ///   · `data.apps[0].status`：**只有 `2` 才带 `url`**（下载直链，**原样使用，不拼接 / 不改写**）；
+    ///     `1` / `3` / 其它一律抛错并带 `msg`（**不静默回落到仓库云端** —— 用户选了哪条就哪条）.
+    ///
+    /// ## 诚实边界（未实测；**写进注释与简报，不写成 UI 免责长文**）
+    ///   · 该接口**是否真能免账号拿到 `.ipa`** 未真机实测（逆向报告结论：须真机实测）.
+    ///   · 拿到的 `url` 是否**绑定 UDID / 有时效 / 有 IP 限制**未知 ⇒ 能否直接 GET 到 `.ipa` 未验证.
+    ///   · 爱思私有加密接口、无版本协商 ⇒ 服务端随时可改；`urlencode` 的确切转义集也未见动态验证.
+    struct I4CloudResolverImpl: I4CloudResolver {
+
+        // MARK: 契约常量（逆向取得，照抄不改）
+
+        /// 端点（生产域）.
+        static let endpoint = "https://app4.i4.cn/getipaformobiledevice.xhtml?pcver=9.09.026"
+        /// 3DES key（客户端硬编码；`DESStream3` ctor 只取**前 24 字节**）.
+        static let desKey = "2014aisi1234567890mobileclient29"
+        /// key 截断长度（3DES 密钥长度）.
+        static let desKeyLength = 24
+
+        // MARK: 可用性（同步、零阻塞）
+
+        /// 可用性判据（**不假装可用**）：
+        ///   ① 无 bundle id ⇒ 不可用；
+        ///   ② 读不到设备 UDID ⇒ 不可用（并顺手后台预热，下一次可能就绪）；
+        ///   ③ 无网络 ⇒ 不可用；
+        ///   ④ 否则 ⇒ 可用.
+        func availability(for pack: Pack) -> CloudAvailability {
+            guard !pack.expectedBundleId.isEmpty else {
+                return .unavailable(reason: "该包未配置 bundle id.")
+            }
+            guard let udid = Self.cachedUDID(), !udid.isEmpty else {
+                // 冷缓存：**不阻塞**，挂后台预热；本次如实报不可用.
+                LocalDeviceIdentity.warmUpInBackground()
+                return .unavailable(reason: "读不到设备 UDID（设备身份缓存未就绪，请稍后重试）.")
+            }
+            guard Self.networkReachable() else {
+                return .unavailable(reason: "网络不可用（当前无可用网络连接）.")
+            }
+            return .available(detail: "需设备 UDID · 第三方来源.")
+        }
+
+        // MARK: 解析下载地址
+
+        /// 按契约取该包的下载直链；任一步失败即抛 `cloudSourceUnavailable`（含原因），**不静默**.
+        func downloadURL(for pack: Pack) async throws -> URL {
+            guard !pack.expectedBundleId.isEmpty else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "该包未配置 bundle id.")
+            }
+            // udid：优先进程内缓存；冷缓存才真读一次（放后台任务，不占主线程）.
+            var udid = Self.cachedUDID()
+            if udid == nil {
+                udid = await Task.detached(priority: .utility) { I4CloudResolverImpl.readUDID() }.value
+            }
+            guard let udid, !udid.isEmpty else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "读不到设备 UDID（设备身份不可用）.")
+            }
+
+            let json = try Self.buildRequestJSON(pack: pack, udid: udid)
+            let body = try Self.encryptedBody(json: json, pack: pack)
+            let data = try await Self.post(body: body, pack: pack)
+            let entry = try Self.parseResponse(data, pack: pack)
+
+            // status == 2 才带 url；其它值（含 1 / 3 / 未知）如实抛错并带 msg.
+            guard entry.status == 2 else {
+                let msgSuffix = entry.msg.map { " · msg=\($0)" } ?? ""
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "服务端 status=\(entry.status)\(msgSuffix).")
+            }
+            guard let raw = entry.url, !raw.isEmpty, let url = URL(string: raw) else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "服务端 status=2 但未给出可用的 url.")
+            }
+            return url
+        }
+
+        // MARK: 请求构造
+
+        /// 组请求 JSON：`{"apps":[{udid,model,ios,bundleid,md5,versionid,shortversion,longversion}]}`.
+        static func buildRequestJSON(pack: Pack, udid: String) throws -> String {
+            let app: [String: Any] = [
+                "udid": udid,
+                "model": hardwareModel(),
+                "ios": osVersion(),
+                "bundleid": pack.expectedBundleId,
+                "md5": "",
+                "versionid": "",
+                "shortversion": pack.expectedVersion,
+                "longversion": pack.expectedVersion,
+            ]
+            let root: [String: Any] = ["apps": [app]]
+            guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]),
+                  let text = String(data: data, encoding: .utf8) else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "请求 JSON 编码失败.")
+            }
+            return text
+        }
+
+        /// `urlencode(base64(3DES_ECB_PKCS7(plain, key)))`.
+        static func encryptedBody(json: String, pack: Pack) throws -> String {
+            guard let plain = json.data(using: .utf8) else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "请求 JSON 非 UTF-8.")
+            }
+            let key = Data(desKey.utf8).prefix(desKeyLength)     // 截前 24 字节
+            guard key.count == desKeyLength, let cipher = encrypt3DESECB(plain, key: Data(key)) else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "3DES 加密失败.")
+            }
+            let base64 = cipher.base64EncodedString()
+            guard let encoded = base64.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "URL 转义失败.")
+            }
+            return encoded
+        }
+
+        /// 3DES-**ECB** + PKCS#7（`CommonCrypto`，与客户端 `DESStream3` 同款：ECB、无 IV）.
+        static func encrypt3DESECB(_ plain: Data, key: Data) -> Data? {
+            let outCap = plain.count + kCCBlockSize3DES
+            var out = Data(count: outCap)
+            var moved = 0
+            let status = out.withUnsafeMutableBytes { outBuf -> CCCryptorStatus in
+                plain.withUnsafeBytes { inBuf in
+                    key.withUnsafeBytes { keyBuf in
+                        CCCrypt(CCOperation(kCCEncrypt),
+                                CCAlgorithm(kCCAlgorithm3DES),
+                                CCOptions(kCCOptionECBMode | kCCOptionPKCS7Padding),
+                                keyBuf.baseAddress, key.count,
+                                nil,                              // ECB：无 IV
+                                inBuf.baseAddress, plain.count,
+                                outBuf.baseAddress, outCap,
+                                &moved)
+                    }
+                }
+            }
+            guard status == kCCSuccess else { return nil }
+            out.removeSubrange(moved..<out.count)
+            return out
+        }
+
+        // MARK: 网络
+
+        /// 发 POST，返回响应体原始字节；HTTP 非 2xx 即抛.
+        static func post(body: String, pack: Pack) async throws -> Data {
+            guard let url = URL(string: endpoint) else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "端点 URL 非法.")
+            }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 30
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = body.data(using: .utf8)
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    throw I4MobileError.cloudSourceUnavailable(
+                        pack: pack.fileName, source: CloudSource.i4.displayName,
+                        reason: "服务端返回 HTTP \(http.statusCode).")
+                }
+                return data
+            } catch let e as I4MobileError {
+                throw e
+            } catch {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "请求失败：\(error.localizedDescription)")
+            }
+        }
+
+        // MARK: 响应解析
+
+        /// 一条 `data.apps[i]` 的解析结果（只取解析下载地址所需的字段）.
+        struct ResponseEntry: Sendable {
+            let status: Int
+            let msg: String?
+            let url: String?
+        }
+
+        /// 解析响应：校验 `code == 0`，取 `data.apps[0]`；结构不合法即抛.
+        static func parseResponse(_ data: Data, pack: Pack) throws -> ResponseEntry {
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "响应不是合法 JSON.")
+            }
+            let code = (root["code"] as? NSNumber)?.intValue ?? -1
+            guard code == 0 else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "服务端 code=\(code).")
+            }
+            guard let dataDict = root["data"] as? [String: Any],
+                  let apps = dataDict["apps"] as? [[String: Any]],
+                  let first = apps.first else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.i4.displayName,
+                    reason: "响应缺 data.apps.")
+            }
+            let status = (first["status"] as? NSNumber)?.intValue ?? -1
+            return ResponseEntry(status: status,
+                                 msg: first["msg"] as? String,
+                                 url: first["url"] as? String)
+        }
+
+        // MARK: 设备参数
+
+        /// 进程内缓存的 UDID（**绝不建隧道**）；冷缓存返回 nil.
+        static func cachedUDID() -> String? {
+            guard let snap = LocalDeviceIdentity.cachedSnapshot() else { return nil }
+            let udid = snap.udid?.trimmingCharacters(in: .whitespaces)
+            return (udid?.isEmpty == false) ? udid : nil
+        }
+
+        /// 真读一次 UDID（**会建隧道，秒级**）—— 只在下载链路的后台任务里调用.
+        static func readUDID() -> String? {
+            let snap = LocalDeviceIdentity.load()
+            let udid = snap.udid?.trimmingCharacters(in: .whitespaces)
+            return (udid?.isEmpty == false) ? udid : nil
+        }
+
+        /// `hw.machine`（设备机型标识，如 `iPhone13,1`）；读不到返回空串.
+        static func hardwareModel() -> String {
+            var size = 0
+            sysctlbyname("hw.machine", nil, &size, nil, 0)
+            guard size > 0 else { return "" }
+            var buf = [CChar](repeating: 0, count: size)
+            sysctlbyname("hw.machine", &buf, &size, nil, 0)
+            return String(cString: buf)
+        }
+
+        /// 设备 iOS 版本串（`major.minor.patch`）.
+        static func osVersion() -> String {
+            let v = ProcessInfo.processInfo.operatingSystemVersion
+            return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        }
+
+        /// 廉价的同步可达性探测（零地址，不做 DNS）：无可用网络连接时返回 `false`.
+        ///
+        /// 判不出（建不出句柄 / 取不到 flags）时**返回 `true`** —— 宁可让下载去试，
+        /// 也不误报「不可用」.
+        static func networkReachable() -> Bool {
+            var zero = sockaddr_in()
+            zero.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            zero.sin_family = sa_family_t(AF_INET)
+            let reach = withUnsafePointer(to: &zero) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    SCNetworkReachabilityCreateWithAddress(nil, $0)
+                }
+            }
+            guard let reach else { return true }
+            var flags = SCNetworkReachabilityFlags()
+            guard SCNetworkReachabilityGetFlags(reach, &flags) else { return true }
+            return flags.contains(.reachable)
+        }
+    }
+
+    /// 一个包的**缓存就位情况 + 两条云端各自的可用性**（供 UI 展示；只查本地文件，不读设备）.
     struct PackStatus: Identifiable, Sendable {
         let pack: Pack
-        /// 资源是否已就位（bundle 或导入目录里有该 IPA）.
-        let present: Bool
-        /// 来源：`"bundle"` / `"imported"` / `nil`（缺失）.
-        let origin: String?
+        /// 缓存目录里是否已有该 IPA（且非空）.
+        let cached: Bool
+        /// 已缓存 IPA 的字节数（未缓存为 0）.
+        let bytes: Int
+        /// **仓库云端**可用性（`cloudURL` 非空且可解析为 URL 即可用）.
+        let warehouseAvailability: CloudAvailability
+        /// **爱思云端**可用性（由注入的 resolver 决定；默认不可用）.
+        let i4Availability: CloudAvailability
         var id: String { pack.fileName }
+
+        /// 按来源取该包的可用性.
+        func availability(of source: CloudSource) -> CloudAvailability {
+            switch source {
+            case .warehouse: return warehouseAvailability
+            case .i4: return i4Availability
+            }
+        }
     }
 
     /// 设备侧探测快照（安装前/后各取一次；探测失败**不抛错**，如实记 `error`）.
@@ -165,8 +570,14 @@ enum I4MobileInstallService {
     // MARK: - 错误
 
     enum I4MobileError: LocalizedError {
-        /// 资源缺失（bundle 与导入目录都没有该 IPA）.
+        /// 缓存里没有该 IPA（既未下载也未导入）.
         case packResourceMissing(String)
+        /// 某云端来源对该包不可用（未配置地址 / 契约未定）；`reason` 如实说明.
+        case cloudSourceUnavailable(pack: String, source: String, reason: String)
+        /// 写缓存失败（下载落盘 / 导入拷贝 / 删除旧文件）.
+        case cacheWriteFailed(String)
+        /// 导入的 IPA 认不出属于哪个包（包内 bundle id 读不出，或不属于这组）.
+        case importUnrecognized(String)
         /// 服务端取 sinf 失败（缺 store id / 服务端没回 sinf / 结构不合法）.
         case serverSinfUnavailable(reason: String)
         /// 复制工作副本失败（临时目录 / 复制 IPA）.
@@ -177,7 +588,13 @@ enum I4MobileInstallService {
         var errorDescription: String? {
             switch self {
             case .packResourceMissing(let name):
-                return "找不到内嵌 IPA \(name)：App 资源目录（\(bundleDirectoryName)/）与导入目录都没有该文件."
+                return "缓存里没有 \(name)：请先在云端下载，或手动导入该 IPA."
+            case .cloudSourceUnavailable(let pack, let source, let reason):
+                return "\(source) 对 \(pack) 不可用：\(reason)"
+            case .cacheWriteFailed(let reason):
+                return "写入 IPA 缓存失败：\(reason)"
+            case .importUnrecognized(let reason):
+                return "导入的 IPA 不属于爱思移动端这组：\(reason)"
             case .serverSinfUnavailable(let reason):
                 return "服务端未取到可用的 sinf：\(reason)"
             case .workCopyFailed(let reason):
@@ -188,63 +605,195 @@ enum I4MobileInstallService {
         }
     }
 
-    // MARK: - ① 列包 / 定位资源
+    // MARK: - ① 缓存目录 / 来源（云端下载 · 手动导入）/ 定位
 
-    /// App bundle 内的资源目录（folder reference，见 `project.yml`）.
-    static func bundleDirectory() -> URL? {
-        Bundle.main.url(forResource: bundleDirectoryName, withExtension: nil)
+    /// IPA 缓存目录 `Caches/I4MobileIPA/`（云端下载与手动导入的共同落盘处）.
+    ///
+    /// 只算路径，不建目录（`isCached` 等只读查询不该有副作用）；需要写入时由
+    /// `downloadCloudIPA` / `importIPA` 显式创建.
+    static func cacheDirectory() -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(cacheDirectoryName, isDirectory: true)
     }
 
-    /// 导入兜底目录 `Documents/I4Mobile/`（bundle 内缺失时用）.
-    static func importedDirectory() -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(importedDirectoryName, isDirectory: true)
+    /// 某个包在缓存目录里的落盘位置（`Caches/I4MobileIPA/<fileName>`）.
+    static func cachedIPAURL(for pack: Pack) -> URL {
+        cacheDirectory().appendingPathComponent(pack.fileName)
     }
 
-    /// 定位包资源：App bundle 内 `I4Mobile/` 优先，其次导入目录 `Documents/I4Mobile/`.
-    /// 都没有则返回 `nil`（调用方抛 `packResourceMissing`）.
+    /// 该包的 IPA 是否已缓存（文件存在且非空）.
+    static func isCached(_ pack: Pack) -> Bool {
+        fileSize(at: cachedIPAURL(for: pack).path) > 0
+    }
+
+    /// 定位包资源：**只在缓存目录里找**（云端下载与手动导入都写这里）.
+    /// 没有则返回 `nil`（调用方抛 `packResourceMissing`）.
     static func resolveURL(for pack: Pack) -> URL? {
-        if let dir = bundleDirectory() {
-            let url = dir.appendingPathComponent(pack.fileName)
-            if FileManager.default.fileExists(atPath: url.path) { return url }
-        }
-        let imported = importedDirectory().appendingPathComponent(pack.fileName)
-        if FileManager.default.fileExists(atPath: imported.path) { return imported }
-        return nil
+        let url = cachedIPAURL(for: pack)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// 列出内嵌包 + 各自资源是否就位（供 UI 展示；不读设备）.
-    static func packStatuses() -> [PackStatus] {
-        let bundleDir = bundleDirectory()
-        let importedDir = importedDirectory()
-        return packs.map { pack in
-            let inBundle = bundleDir.map {
-                FileManager.default.fileExists(atPath: $0.appendingPathComponent(pack.fileName).path)
-            } ?? false
-            let inImported = FileManager.default.fileExists(
-                atPath: importedDir.appendingPathComponent(pack.fileName).path)
-            let origin: String? = inBundle ? "bundle" : (inImported ? "imported" : nil)
-            return PackStatus(pack: pack, present: origin != nil, origin: origin)
+    /// 删除某个包的缓存 IPA（清理用）.
+    static func removeCachedIPA(_ pack: Pack) throws {
+        let url = cachedIPAURL(for: pack)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            throw I4MobileError.cacheWriteFailed(error.localizedDescription)
         }
     }
 
-    // MARK: - ② 安装（定 sinf 来源 → 复制副本 → 注入 → 装副本 → 如实报告）
+    /// 列出各包缓存是否就位 + 两条云端各自的可用性（供 UI 展示）.
+    ///
+    /// - Parameter resolver: 爱思云端解析器（**默认真实现** `I4CloudResolverImpl`；可注入降级实现）.
+    static func packStatuses(resolver: I4CloudResolver = I4CloudResolverImpl()) -> [PackStatus] {
+        packs.map { pack in
+            let bytes = fileSize(at: cachedIPAURL(for: pack).path)
+            let warehouse: CloudAvailability =
+                (!pack.cloudURL.isEmpty && URL(string: pack.cloudURL) != nil)
+                ? .available(detail: pack.cloudURL)
+                : .unavailable(reason: "未配置仓库 Release 直链.")
+            return PackStatus(pack: pack, cached: bytes > 0, bytes: bytes,
+                              warehouseAvailability: warehouse,
+                              i4Availability: resolver.availability(for: pack))
+        }
+    }
 
-    /// 安装一个内嵌包（移植自爱思 PC 端：**往包里写服务端 sinf，再装那个包**）.
+    // MARK: - ② IPA 来源 · 云端下载（仓库云端 / 爱思云端）
+
+    /// 按来源解析某包的云端下载地址.
+    ///
+    /// 仓库云端取 `pack.cloudURL`；爱思云端交注入的 `resolver`（**默认真实现**）.
+    /// 不可用一律抛 `cloudSourceUnavailable`（含来源名与原因，**不静默跳过**）.
+    static func cloudURL(for pack: Pack,
+                         source: CloudSource,
+                         resolver: I4CloudResolver = I4CloudResolverImpl()) async throws -> URL {
+        switch source {
+        case .warehouse:
+            guard !pack.cloudURL.isEmpty, let url = URL(string: pack.cloudURL) else {
+                throw I4MobileError.cloudSourceUnavailable(
+                    pack: pack.fileName, source: CloudSource.warehouse.displayName,
+                    reason: "未配置仓库 Release 直链.")
+            }
+            return url
+        case .i4:
+            return try await resolver.downloadURL(for: pack)
+        }
+    }
+
+    /// 从**指定云端来源**下载某个包的 IPA 到缓存目录（**已缓存则跳过**，避免重复下载 60+ MB）.
+    ///
+    /// 传输复用 `AppStoreInstallService.downloadIPA`（`URLSessionDownloadTask`，
+    /// 自带重定向 / UA / 超时 / 断点续传），它落盘到 `Documents/AppStoreDownloads/`；
+    /// 本服务再把结果**移入**缓存目录 `Caches/I4MobileIPA/`（同一容器内，重命名即可）——
+    /// 既复用成熟下载器，又把可回收的 IPA 放在 Caches.
+    ///
+    /// - Parameters:
+    ///   - source: 下载来源（`.warehouse` 仓库云端 / `.i4` 爱思云端）.
+    ///   - resolver: 爱思云端解析器（仅 `.i4` 时用；**默认真实现** `I4CloudResolverImpl`）.
+    /// - Throws: `cloudSourceUnavailable`（来源不可用）/ `cacheWriteFailed`（落盘失败）/ 底层下载错误.
+    static func downloadCloudIPA(pack: Pack,
+                                 from source: CloudSource = .warehouse,
+                                 resolver: I4CloudResolver = I4CloudResolverImpl(),
+                                 progress: (@Sendable (Double) -> Void)? = nil,
+                                 onLog: (@Sendable (String) -> Void)? = nil) async throws {
+        if isCached(pack) {
+            onLog?("[i4移动端] \(pack.fileName) 已在缓存，跳过下载")
+            return
+        }
+        let url = try await cloudURL(for: pack, source: source, resolver: resolver)
+        onLog?("[i4移动端] \(source.displayName) 下载 \(pack.fileName)：\(url.absoluteString)")
+        let downloaded = try await AppStoreInstallService.downloadIPA(
+            urlString: url.absoluteString,
+            suggestedName: pack.fileName,
+            progress: progress,
+            onLog: onLog)
+        let dst = cachedIPAURL(for: pack)
+        do {
+            try FileManager.default.createDirectory(at: cacheDirectory(),
+                                                    withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: dst.path) {
+                try FileManager.default.removeItem(at: dst)
+            }
+            try FileManager.default.moveItem(at: downloaded, to: dst)
+        } catch {
+            throw I4MobileError.cacheWriteFailed(error.localizedDescription)
+        }
+        onLog?("[i4移动端] 已缓存 \(pack.fileName) · \(fileSize(at: dst.path) / 1024 / 1024) MB")
+    }
+
+    /// 从指定来源下载所有**未缓存**的包（顺序 = `packs`）.
+    ///
+    /// 诚实边界：任一包失败即抛错，**不回滚**已下载的包（与 `installAll` 一致）.
+    /// 调用方（UI）应先用 `packStatuses(resolver:)` 过滤出该来源**可用**的包，避免对不可用包空转报错.
+    static func downloadAllMissingCloudIPAs(from source: CloudSource = .warehouse,
+                                            resolver: I4CloudResolver = I4CloudResolverImpl(),
+                                            progress: (@Sendable (Double) -> Void)? = nil,
+                                            onLog: (@Sendable (String) -> Void)? = nil) async throws {
+        let missing = packs.filter { !isCached($0) }
+        for (idx, pack) in missing.enumerated() {
+            onLog?("[i4移动端] (\(idx + 1)/\(missing.count)) 下载 \(pack.fileName)")
+            try await downloadCloudIPA(pack: pack, from: source, resolver: resolver,
+                                       progress: progress, onLog: onLog)
+        }
+    }
+
+    // MARK: - ③ IPA 来源 · 手动导入
+
+    /// 把用户手动选中的 IPA 拷进缓存目录.
+    ///
+    /// 认领规则：读包内 `CFBundleIdentifier`，在 `packs` 里按 `expectedBundleId` 匹配；
+    /// 读不出或匹配不到即抛 `importUnrecognized`（**不猜、不按文件名硬套**）.
+    /// 落盘名 = 匹配到的 `pack.fileName`，因此导入后 `resolveURL` / `install` 直接可用.
+    ///
+    /// - Parameter sourceURL: 已在本 App 沙盒内的可读 URL（`SharedDocumentPicker` 的 `asCopy`
+    ///   已把用户选中的文件拷进沙盒，无需 security-scoped 访问）.
+    /// - Returns: 认领到的 `Pack`.
+    static func importIPA(from sourceURL: URL,
+                          onLog: (@Sendable (String) -> Void)? = nil) throws -> Pack {
+        let inspection = IPAPackageInspector.inspect(ipaPath: sourceURL.path)
+        guard let bundleId = inspection?.bundleIdentifier, !bundleId.isEmpty else {
+            throw I4MobileError.importUnrecognized("读不出包内 bundle id（文件可能不是有效 IPA）")
+        }
+        guard let pack = packs.first(where: { $0.expectedBundleId == bundleId }) else {
+            let known = packs.map(\.expectedBundleId).joined(separator: ", ")
+            throw I4MobileError.importUnrecognized("包内 bundle id=\(bundleId) 不在爱思移动端这组（\(known)）")
+        }
+        let dst = cachedIPAURL(for: pack)
+        do {
+            try FileManager.default.createDirectory(at: cacheDirectory(),
+                                                    withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: dst.path) {
+                try FileManager.default.removeItem(at: dst)
+            }
+            try FileManager.default.copyItem(at: sourceURL, to: dst)
+        } catch {
+            throw I4MobileError.cacheWriteFailed(error.localizedDescription)
+        }
+        onLog?("[i4移动端] 手动导入 \(pack.fileName)（bundle id=\(bundleId)）"
+               + " · \(fileSize(at: dst.path) / 1024 / 1024) MB")
+        return pack
+    }
+
+    // MARK: - ④ 安装（定 sinf 来源 → 复制副本 → 注入 → 装副本 → 如实报告）
+
+    /// 安装一个包（移植自爱思 PC 端：**往包里写服务端 sinf，再装那个包**）.
     ///
     /// 流程（每步失败**必抛**，不静默）：
-    ///   ① 定位 IPA（bundle → 导入目录）；缺失即 `packResourceMissing`.
+    ///   ① 定位缓存里的 IPA（`Caches/I4MobileIPA/`）；缺失即 `packResourceMissing`
+    ///      （**不做隐式下载、不兜底到 bundle**）.
     ///   ② `inspect` 读包内真值；`extractiTunesMetadata` 取 metadata（供 store id 与安装选项）.
     ///   ③ **向服务端现取 sinf**（`NBStoreClient.packageByVersion`）；取不到即
     ///      `serverSinfUnavailable`（**明确失败，不回退到包内自带**）.
-    ///   ④ **复制 IPA 到临时目录**（绝不改 bundle 内原件）；复制失败即 `workCopyFailed`.
+    ///   ④ **复制 IPA 到临时目录**（绝不改缓存原件）；复制失败即 `workCopyFailed`.
     ///   ⑤ `PackageSINFWriter.injectAllPaths` 把 sinf 写进副本；失败即 `sinfInjectFailed`.
     ///   ⑥ `IPAInstallService.installWithSINF` 装**副本**（同一份 sinf 作 `ApplicationSINF`）；
     ///      安装失败**原样抛出**（含 `ApplicationVerificationFailed` 等）.
     ///   ⑦ 安装后回读设备，组装 `Report`（含 sinf 账号名等诚实边界）.
     ///
     /// - Parameters:
-    ///   - pack: 要安装的内嵌包（见 `packs`）.
+    ///   - pack: 要安装的包（见 `packs`；IPA 须已在缓存目录，先下载或导入）.
     ///   - allowUpgrade: `true` = 用 `Upgrade` 命令覆盖安装（同 bundle id 已存在时）.
     ///   - progress: 整条链 0~1 的进度回调（AFC 上传段 0~0.75 + installd 段 0.75~1）.
     ///   - onLog: 逐条事实日志回调（调用方可转发到 `LoginLogger`）.
@@ -255,13 +804,13 @@ enum I4MobileInstallService {
                         allowUpgrade: Bool = false,
                         progress: (@Sendable (Double) -> Void)? = nil,
                         onLog: (@Sendable (String) -> Void)? = nil) async throws -> Report {
-        // ① 定位资源.
+        // ① 定位缓存里的资源.
         guard let url = resolveURL(for: pack) else {
             throw I4MobileError.packResourceMissing(pack.fileName)
         }
         let ipaPath = url.path
         let ipaBytes = fileSize(at: ipaPath)
-        onLog?("[i4移动端] 定位 \(pack.fileName)：\(originLabel(for: url)) · \(ipaBytes / 1024 / 1024) MB")
+        onLog?("[i4移动端] 定位 \(pack.fileName)：cache · \(ipaBytes / 1024 / 1024) MB")
 
         // ② 检测包 + 取 metadata（metadata 既作安装选项，也用于服务端取 sinf 的 store id）.
         let inspection = IPAPackageInspector.inspect(ipaPath: ipaPath)
@@ -327,7 +876,7 @@ enum I4MobileInstallService {
         return report
     }
 
-    /// 依次安装全部内嵌包（顺序 = `packs`）.
+    /// 依次安装全部包（顺序 = `packs`）.
     ///
     /// 诚实边界：**任一步失败即抛错**，不静默跳过后续包 —— 与 `install` 的「每步失败必抛」一致.
     /// 已成功安装的包**不会回滚**（installd 无批量事务）；调用方按返回数组自行处置.
@@ -345,10 +894,10 @@ enum I4MobileInstallService {
         return reports
     }
 
-    // MARK: - ③ UI 对接（`I4MobileInstallView.installAction`）
+    // MARK: - ⑤ UI 对接（`I4MobileInstallView.installAction`）
 
     /// 生成与 `I4MobileInstallView.installAction`（`() async throws -> Void`）匹配的动作：
-    /// **安装全部内嵌包**.
+    /// **安装全部包**.
     ///
     /// 注：闭包体内用 `_ =` 显式丢弃 `[Report]` 返回值，让闭包返回类型确定为 `Void`
     /// （单表达式闭包会把返回类型推断成 `[Report]`，与 UI 期望的 `Void` 不符）.
@@ -372,7 +921,7 @@ enum I4MobileInstallService {
         }
     }
 
-    // MARK: - ④ 向服务端现取 sinf（只有这一条路）
+    // MARK: - ⑥ 向服务端现取 sinf（只有这一条路）
 
     /// 向 NB 服务端按版本现取 sinf.
     ///
@@ -409,7 +958,7 @@ enum I4MobileInstallService {
                 stringValue(dict["softwareVersionExternalIdentifier"]))
     }
 
-    // MARK: - ⑤ schi 解析（sinf 里「这份授权属于谁」）
+    // MARK: - ⑦ schi 解析（sinf 里「这份授权属于谁」）
 
     /// 解析 sinf 里的 `schi` 块，取账号名 / user / crdt.
     ///
@@ -558,12 +1107,6 @@ enum I4MobileInstallService {
     private static func accountLogSuffix(_ account: SinfAccount?) -> String {
         guard let account else { return "" }
         return " · schi.name=\(account.name ?? "?") schi.user=\(account.userHex ?? "?")"
-    }
-
-    /// 资源来源标签（`bundle` / `imported`），用于日志.
-    private static func originLabel(for url: URL) -> String {
-        if let dir = bundleDirectory(), url.path.hasPrefix(dir.path) { return "bundle" }
-        return "imported"
     }
 
     /// plist 值为字符串 / 数字时统一成字符串.
