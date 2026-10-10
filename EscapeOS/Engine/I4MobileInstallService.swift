@@ -29,7 +29,15 @@ import Foundation
 ///   ③ 重打包；
 ///   ④ `idm_app.dll` 再从包里**读回**这份 sinf，作为 `ApplicationSINF` 参数交 installd。
 /// 核心函数 `addSinfToZip()`（VA `0x1407dd6b0`），目标路径模板 `Payload/%1/SC_Info/%2.sinf`；
-/// 重取路径 `WriteAppSignature start` → 轮询 → 下载解析 → `addSinfToZip`。
+/// 重取路径 `WriteAppSignature start` → 轮询 → 下载解析 → `addSinfToZip`.
+///
+/// ## 自动选包（v6：移植爱思「按 iOS 版本瀑布降级选一个包」）
+/// 爱思选包不是随机挑，而是按设备 iOS 版本瀑布降级（函数 `0x1401db840`，见
+/// `P3_爱思助手_逆向/_简报/逆向_爱思自动选包机制.md`）：⓪ 已装 `com.ownbook.notes` 短路 →
+/// ① iOS ≥ 15.1 且 `v9items["305"].policy ≠ 0` → 305 → ② iOS ≥ 13.0 → 220 →
+/// ③ iOS ≥ 10.0 → 217 → ④ iOS ≥ 9.0 且机型 `iPhone4,1` → 213 → ⑤ 兜底 → 723.
+/// 本仓内置只有 `220` / `217` / `photo`（`photo` 不在瀑布内）；`305` / `213` / `723` **无包体**
+/// ⇒ 命中时如实回落（同爱思 `policy==0` 的行为），见 `autoPick(profile:)`.
 ///
 /// ## 为什么必须现取 sinf（决定性证据）
 /// 三个爱思移动端 IPA 包内自带的 sinf，其 `schi.name` 属**原始购买者**，**不是**爱思共享账号
@@ -705,6 +713,185 @@ enum I4MobileInstallService {
             _ = try await install(pack: pack, allowUpgrade: allowUpgrade,
                                   progress: progress, onLog: onLog)
         }
+    }
+
+    // MARK: - ⑧ 自动选包（移植爱思「安装移动端」的瀑布降级选择）
+
+    /// 选包输入：设备画像（iOS 版本 + 机型 + 已装 App 的 bundle id 集合）.
+    ///
+    /// 为什么是这三项：爱思的选择函数 `0x1401db840` 的输入只有 **iOS 版本**（`[this+0x88]`）
+    /// 与 **机型**（`[this+0x128]`）；「已装列表」用于 ⓪ 层短路（见 `autoPick`）.
+    struct DeviceProfile: Sendable {
+        /// 设备 iOS 版本（如 `15.1`）；来源 = `DeviceInfoModel.systemVersion`.
+        let iosVersion: String
+        /// 机型（`hw.machine`，如 `iPhone13,1`）；来源 = `DeviceInfoModel.productType`.
+        let model: String
+        /// 设备已装 App 的 bundle id 集合（best-effort；读不到时为空集合）.
+        let installedBundleIds: Set<String>
+    }
+
+    /// 瀑布档位（照爱思 `0x1401db840` 的判定顺序；命中即停）.
+    ///
+    /// ⚠️ `alreadyInstalledMain`（⓪）**不产出包体**，只做短路判定（跳过 ① 直接进 ②），
+    /// 故它不会是 `AutoPick.tier` 的**结果**档位，保留仅为让瀑布顺序自解释.
+    enum Tier: String, Sendable {
+        /// ⓪ 设备已装 `com.ownbook.notes`（爱思移动端主 App）⇒ 短路跳过 ①，直接进 ②.
+        case alreadyInstalledMain
+        /// ① iOS ≥ 15.1 且 `v9items["305"].policy ≠ 0` → 305（com.best.vaultnotes）.
+        case ios15_1
+        /// ② iOS ≥ 13.0 → 220（com.ownbook.notes）.
+        case ios13_0
+        /// ③ iOS ≥ 10.0 → 217（rn.notes.best）.
+        case ios10_0
+        /// ④ iOS ≥ 9.0 且机型 == `iPhone4,1` → 213（com.pd.A4Player）.
+        case ios9_0_iphone41
+        /// ⑤ 兜底 → 723（com.diary.mood）.
+        case fallback
+
+        /// 档位依据（UI 展示用；中文，标点用英文句点）.
+        var basis: String {
+            switch self {
+            case .alreadyInstalledMain: return "已装 com.ownbook.notes"
+            case .ios15_1: return "iOS ≥ 15.1"
+            case .ios13_0: return "iOS ≥ 13.0"
+            case .ios10_0: return "iOS ≥ 10.0"
+            case .ios9_0_iphone41: return "iOS ≥ 9.0 且机型 iPhone4,1"
+            case .fallback: return "兜底（以上档位都不满足）"
+            }
+        }
+    }
+
+    /// 自动选包结果（如实：选中的包体或「无可用」，并附逐档判定轨迹）.
+    struct AutoPick: Sendable {
+        let profile: DeviceProfile
+        /// 选中的档位；`pack == nil` 时为瀑布落到的最后一档.
+        let tier: Tier
+        /// 选中的包体；`nil` = 该档位在本仓**无对应 IPA**（不假装可用）.
+        let pack: Pack?
+        /// ⓪ 是否命中（设备已装 `com.ownbook.notes`）.
+        let alreadyInstalledMain: Bool
+        /// 逐档判定轨迹（供 UI 说明「为什么落到这一档」；每行一个事实）.
+        let trace: [String]
+
+        /// 是否选出了可用包体.
+        var hasPack: Bool { pack != nil }
+    }
+
+    /// 按爱思的瀑布顺序（⓪①②③④⑤）选一个包体.
+    ///
+    /// ## 判定顺序（严格照 `0x1401db840`）
+    /// ⓪ 设备已装 `com.ownbook.notes` ⇒ 短路跳过 ①，直接进 ②.
+    /// ① iOS ≥ 15.1 **且** `v9items["305"].policy ≠ 0` → 305（com.best.vaultnotes）.
+    /// ② iOS ≥ 13.0 → 220（com.ownbook.notes）.
+    /// ③ iOS ≥ 10.0 → 217（rn.notes.best）.
+    /// ④ iOS ≥ 9.0 且机型 == `iPhone4,1` → 213（com.pd.A4Player）.
+    /// ⑤ 兜底 → 723（com.diary.mood）.
+    ///
+    /// ## 本仓的诚实边界（不发明、不假装）
+    /// - 本仓内置包只有 `220` / `217` / `photo`（`photo` 不在瀑布内，是爱思的独立「相册/文件」
+    ///   分支）；`305` / `213` / `723` **均无包体** ⇒ ①④⑤ 命中条件时**如实回落**（与爱思
+    ///   `policy==0` 时从 ① 落到 ② 的行为一致），不伪造、不借别的包顶替.
+    /// - `v9items` 是爱思服务端下发的配置数组（含 `policy`）；本仓**没有** `v9items`，故 ① 的
+    ///   `policy ≠ 0` 条件**无法评估** ⇒ 按「该档位不可用」处理并回落.
+    /// - ①④⑤ 无包体时不报「装不了」，而是**继续按爱思顺序往下一档走**；全部落空才返回
+    ///   `pack == nil`（调用方据此如实显示「无可用包体」）.
+    ///
+    /// ## 纯函数
+    /// 只读入参、无副作用、不触设备 ⇒ 可离线单测（输入 `DeviceProfile`，输出 `AutoPick`）.
+    static func autoPick(profile: DeviceProfile) -> AutoPick {
+        var trace: [String] = []
+        let installedMain = profile.installedBundleIds.contains("com.ownbook.notes")
+
+        // ⓪ 已装 com.ownbook.notes ⇒ 跳过 ①，直接进 ②（照爱思 0x1401dbac9 jne 0x1401dbb38）.
+        if installedMain {
+            trace.append("本机已装 com.ownbook.notes，按爱思做法跳过 iOS ≥ 15.1 档，直接进 iOS ≥ 13.0 档.")
+        }
+
+        // ① iOS ≥ 15.1 且 v9items["305"].policy ≠ 0 → 305.
+        // ⓪ 命中时不评估 ①；否则评估：本仓无 305 包体、且无 v9items ⇒ 该档位不可用，回落.
+        if !installedMain, compareVersion(profile.iosVersion, "15.1") >= 0 {
+            if let p = pack(forBundleId: "com.best.vaultnotes") {
+                return AutoPick(profile: profile, tier: .ios15_1, pack: p,
+                                alreadyInstalledMain: installedMain, trace: trace)
+            }
+            trace.append("iOS ≥ 15.1 档需 305（com.best.vaultnotes），本仓无该包体，"
+                         + "且无 v9items 配置（policy 条件无法评估），按爱思做法回落.")
+        }
+
+        // ② iOS ≥ 13.0 → 220.
+        if compareVersion(profile.iosVersion, "13.0") >= 0 {
+            if let p = pack(forBundleId: "com.ownbook.notes") {
+                return AutoPick(profile: profile, tier: .ios13_0, pack: p,
+                                alreadyInstalledMain: installedMain, trace: trace)
+            }
+            trace.append("iOS ≥ 13.0 档需 220（com.ownbook.notes），本仓无该包体，回落.")
+        }
+
+        // ③ iOS ≥ 10.0 → 217.
+        if compareVersion(profile.iosVersion, "10.0") >= 0 {
+            if let p = pack(forBundleId: "rn.notes.best") {
+                return AutoPick(profile: profile, tier: .ios10_0, pack: p,
+                                alreadyInstalledMain: installedMain, trace: trace)
+            }
+            trace.append("iOS ≥ 10.0 档需 217（rn.notes.best），本仓无该包体，回落.")
+        }
+
+        // ④ iOS ≥ 9.0 且机型 == iPhone4,1 → 213.
+        if compareVersion(profile.iosVersion, "9.0") >= 0, profile.model == "iPhone4,1" {
+            if let p = pack(forBundleId: "com.pd.A4Player") {
+                return AutoPick(profile: profile, tier: .ios9_0_iphone41, pack: p,
+                                alreadyInstalledMain: installedMain, trace: trace)
+            }
+            trace.append("iOS ≥ 9.0 且机型 iPhone4,1 档需 213（com.pd.A4Player），本仓无该包体，回落.")
+        }
+
+        // ⑤ 兜底 → 723.
+        trace.append("兜底档需 723（com.diary.mood），本仓无该包体，无可用包体.")
+        return AutoPick(profile: profile, tier: .fallback, pack: nil,
+                        alreadyInstalledMain: installedMain, trace: trace)
+    }
+
+    /// 在本仓**内置包**里按 bundle id 找包体（自定义包体不参与瀑布 —— 瀑布是爱思内置集合的语义）.
+    private static func pack(forBundleId bundleId: String) -> Pack? {
+        packs.first { $0.expectedBundleId == bundleId }
+    }
+
+    /// 比较两个点分版本号（如 `"15.1"` vs `"13.0"`）；`a` 小于 / 等于 / 大于 `b` 返回 -1 / 0 / 1.
+    ///
+    /// 逐段按整数比；缺段按 0；非数字段取前缀数字（取不到按 0）—— 不抛错，尽量给出可比结果.
+    static func compareVersion(_ a: String, _ b: String) -> Int {
+        let pa = versionParts(a), pb = versionParts(b)
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i] : 0
+            let y = i < pb.count ? pb[i] : 0
+            if x != y { return x < y ? -1 : 1 }
+        }
+        return 0
+    }
+
+    private static func versionParts(_ s: String) -> [Int] {
+        s.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+    }
+
+    /// 读设备已装 App 的 bundle id 集合（best-effort；读不到返回空集合，不抛错）.
+    ///
+    /// 阻塞调用（建 RSD 隧道 + instproxy 枚举），放后台；只把 Sendable 的 `Set<String>` 带回边界
+    /// （与 `probeDevice` 同一模式）.
+    static func installedBundleIds() async -> Set<String> {
+        await Task.detached(priority: .utility) {
+            guard let apps = try? AppDiscovery().fetchInstalledApps() else { return Set<String>() }
+            return Set(apps.map(\.bundleIdentifier))
+        }.value
+    }
+
+    /// 用已读到的设备 iOS 版本 + 机型补上「已装列表」，组装瀑布输入 `DeviceProfile`.
+    ///
+    /// iOS 版本 / 机型来自 `DeviceInfoModel`（`DeviceInfoService.collectFull()` 读出的
+    /// `systemVersion` / `productType`，本 App 运行在设备上，即为本机值），调用方（UI）已有，
+    /// 无需重复读设备；此处只补一次「已装列表」（best-effort）.
+    static func deviceProfile(iosVersion: String, model: String) async -> DeviceProfile {
+        let installed = await installedBundleIds()
+        return DeviceProfile(iosVersion: iosVersion, model: model, installedBundleIds: installed)
     }
 
     // MARK: - ⑥ 向服务端现取 sinf（只有这一条路）

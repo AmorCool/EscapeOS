@@ -56,12 +56,17 @@ struct I4MobileInstallView: View {
     @State private var installingPackId: String?
     /// 已下载 IPA 数量（下载管理入口的数量徽标；进页面时读一次磁盘台账）.
     @State private var downloadedCount = 0
+    /// 本机推荐（移植爱思瀑布自动选包的结果；`nil` = 设备信息不可用，未算出）.
+    @State private var autoPick: I4MobileInstallService.AutoPick?
+    /// 是否正在识别本机（读已装列表）并选包.
+    @State private var picking = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: AppSpacing.section) {
                 heroCard
                 deviceInfoCard
+                autoPickCard
                 ipaSourceCard
                 downloadManagerCard
                 statusCard
@@ -162,6 +167,88 @@ struct I4MobileInstallView: View {
         return cap
     }
 
+    // MARK: - 本机推荐卡（移植爱思「按 iOS 版本瀑布降级选包」）
+
+    /// 本机推荐：按爱思的瀑布顺序（⓪①②③④⑤）给出一个**软推荐**包体 ——
+    /// 只高亮/给一个默认入口，**不强制**；用户仍可在下方 IPA 来源里手动选别的包.
+    ///
+    /// 诚实边界：本仓内置只有 `220` / `217`；`305` / `213` / `723` 无包体 ⇒ 命中时如实回落，
+    /// 全部落空时显示「无可用包体」并附逐档轨迹（说明为什么落不到包体）.
+    private var autoPickCard: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.row) {
+            Text("本机推荐").font(AppFont.headline)
+
+            if picking {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在识别本机并选包…").font(AppFont.caption).foregroundStyle(.secondary)
+                }
+            } else if let autoPick {
+                autoPickContent(autoPick)
+            } else {
+                Text("设备信息不可用，无法给出本机推荐；可在下方 IPA 来源手动选择包体.")
+                    .font(AppFont.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .appCard()
+    }
+
+    /// 本机推荐的内容：推荐包体（或「无可用包体」）+ 依据 + 逐档轨迹 + 一键下载并安装.
+    @ViewBuilder
+    private func autoPickContent(_ pick: I4MobileInstallService.AutoPick) -> some View {
+        if let pack = pick.pack {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "wand.and.stars")
+                    .font(AppFont.body)
+                    .foregroundStyle(AppTheme.accent)
+                    .appSymbol()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(pack.fileName) · \(pack.expectedBundleId) \(pack.expectedVersion)")
+                        .font(AppFont.subheadlineEmphasis)
+                    Text("依据：\(pick.tier.basis).")
+                        .font(AppFont.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 6)
+            }
+
+            if installAction != nil {
+                if I4MobileInstallService.isCached(pack) {
+                    Button { Task { await installPack(pack) } } label: {
+                        Text("安装推荐包").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(TintedButtonStyle())
+                    .disabled(installingPackId != nil || downloading || importing)
+                } else {
+                    Button { Task { await downloadAndInstall(pack) } } label: {
+                        Text("下载并安装推荐包").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(TintedButtonStyle())
+                    .disabled(downloading || importing || installingPackId != nil)
+                }
+            }
+        } else {
+            Text("本机推荐：无可用包体.")
+                .font(AppFont.subheadlineEmphasis)
+                .foregroundStyle(AppTheme.danger)
+            Text("依据：\(pick.tier.basis).")
+                .font(AppFont.caption).foregroundStyle(.secondary)
+        }
+
+        if pick.alreadyInstalledMain {
+            Text("本机已装 com.ownbook.notes：按爱思做法不再优先选高版本包体.")
+                .font(AppFont.caption).foregroundStyle(AppTheme.success)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        ForEach(pick.trace, id: \.self) { line in
+            Text(line)
+                .font(AppFont.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - IPA 来源卡（仓库云端 / 自定义包体 / 手动导入）
 
     /// IPA 来源：① 仓库云端（内置三包 + 用户自定义包体，逐个可下载 / 可安装）· ② 手动导入.
@@ -254,7 +341,12 @@ struct I4MobileInstallView: View {
         let pack = status.pack
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(pack.fileName).font(AppFont.subheadline.monospaced())
+                HStack(spacing: 4) {
+                    Text(pack.fileName).font(AppFont.subheadline.monospaced())
+                    if isRecommended(pack) {
+                        Text("推荐").font(AppFont.caption).foregroundStyle(AppTheme.accent)
+                    }
+                }
                 Text(ipaStatusText(status))
                     .font(AppFont.caption)
                     .foregroundStyle(status.cached ? AppTheme.success : .secondary)
@@ -326,6 +418,11 @@ struct I4MobileInstallView: View {
     /// 是否至少有一个包可下载（决定「下载全部」按钮可用性）.
     private var hasAnyDownloadable: Bool {
         packStatuses.contains { !$0.cached && $0.warehouseAvailability.isAvailable }
+    }
+
+    /// 该包是否是本机推荐（用于在包体行加「推荐」标记）.
+    private func isRecommended(_ pack: I4MobileInstallService.Pack) -> Bool {
+        autoPick?.pack?.fileName == pack.fileName
     }
 
     /// 清理缓存目录里的 IPA（可再下载 / 再导入，故直接删）.
@@ -488,6 +585,7 @@ struct I4MobileInstallView: View {
                 I4MobileDeviceBox(value: try DeviceInfoService.collectFull())
             }.value
             info = boxed.value
+            await refreshAutoPick()
         } catch {
             errorText = error.localizedDescription
         }
@@ -497,6 +595,19 @@ struct I4MobileInstallView: View {
     /// 刷新各包（内置 + 自定义）的缓存状态 + 仓库云端可用性（只查本地文件，同步、廉价）.
     private func refreshPackStatuses() {
         packStatuses = I4MobileInstallService.packStatuses()
+    }
+
+    /// 读设备已装列表并按爱思瀑布算本机推荐（best-effort：设备信息缺失时给出「无法推荐」）.
+    ///
+    /// iOS 版本 / 机型直接取已读到的 `DeviceInfoModel`（`systemVersion` / `productType`），
+    /// 只补一次「已装列表」（阻塞的隧道读，放后台，见 `deviceProfile`）.
+    private func refreshAutoPick() async {
+        guard let info else { autoPick = nil; return }
+        picking = true
+        let profile = await I4MobileInstallService.deviceProfile(
+            iosVersion: info.systemVersion, model: info.productType)
+        autoPick = I4MobileInstallService.autoPick(profile: profile)
+        picking = false
     }
 
     /// 从**仓库云端**下载所有「未缓存且可用」的包，逐个汇报总进度.
@@ -561,6 +672,15 @@ struct I4MobileInstallView: View {
         }
         refreshPackStatuses()
         downloading = false
+    }
+
+    /// 「下载并安装」本机推荐包：先下（未缓存时）再装（走既有 sinf 链路）；任一步失败即止.
+    private func downloadAndInstall(_ pack: I4MobileInstallService.Pack) async {
+        if !I4MobileInstallService.isCached(pack) {
+            await downloadPack(pack)
+            guard I4MobileInstallService.isCached(pack) else { return }
+        }
+        await installPack(pack)
     }
 
     /// 加入并下载一个自定义包体（填的 IPA 直链）；校验失败如实报错，不加入.
