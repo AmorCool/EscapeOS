@@ -2,24 +2,27 @@ import Foundation
 
 /// 爱思「应用修复安装」服务层（**只做逻辑，不含 UI**）.
 ///
-/// ## 移植范围（严格限定，照设计报告《设计_爱思应用修复安装.md》）
-/// 只复刻爱思修复链里的 **「经 AFC 写设备 `/iTunes_Control/iTunes/i4tool2.acc` + 读回校验」**
-/// 这一段（设计报告 §①：可移植 = A 入口 + B 设备身份 + D 落盘①）。**不移植**：
+/// ## 这个功能做什么
+/// 按爱思修复流程的做法，经 AFC 把设备授权文件 `/iTunes_Control/iTunes/i4tool2.acc` 写进设备，
+/// 并读回校验；用于修复爱思源应用的弹窗.
+///
+/// ## 移植范围（照设计报告《设计_爱思应用修复安装.md》与机制报告《爱思9_i4tool2acc机制.md》）
+/// 复刻爱思修复链里的 **「经 AFC 写设备 `/iTunes_Control/iTunes/i4tool2.acc` + 读回校验」**，
+/// 并按爱思的重试口径：**循环 3 次 / 单次超时 60 秒 / 失败等 5 秒重试**
+/// （`CDeviceAppMgr::0x14080E510`：`msleep(5000)` 后重试，共 3 次）。**不移植**：
 ///   - 联网 `XX-AUTH` 授权：协议在 `idm_sync.dll` + 爱思服务端，iOS 侧拿不到（设计报告 §1.2 A/C）；
 ///   - 代理 App 容器里的 `AppInstall_SyncInfo.dat`：落点是 FairPlay 马甲包容器、读者不在我们手里
 ///     （设计报告 §1.1′ / §④，本轮不做）；
 ///   - 「兜底安装代理 App」：代理 App 是 FairPlay 加密马甲包，我们装不了（设计报告 §1.3）。
 ///
 /// ## `auth` 字段
-/// 用 i4 自己的硬编码兜底 `"1,2,3,4"`（设计报告 §1.2 选项 B）。**能写、效用未证实** ——
-/// 设备端读者是爱思代理 App，大概率不在本机；本服务在**返回值**里如实标注，不承诺「能修好」。
+/// 照爱思的兜底逻辑用常量 `"1,2,3,4"` —— 爱思在「sync 成功但输出为空」时就是写这个值
+/// （机制报告 §1.3，VA `0x14116c148`）。服务端 `XX-AUTH` 真值拿不到，故直接用爱思自己的兜底。
+/// 这是照搬爱思行为，不承诺「能修好」：是否生效取决于设备端爱思代理 App（读者）.
 ///
-/// ## 诚实边界（写进返回值，不只在注释里）
-/// - 本服务**不能**解 App Store 加密包的 `-42112`：`i4tool2.acc` 是爱思私有 plist，
-///   iOS/installd/fairplay **不读它**，其内容**不含 FairPlay 密钥**（机制报告 §1.5 / §4.1）。
-///   ⇒ `Report.canResolveFairPlay42112` 恒为 `false`。
-/// - 写入分支**默认关**（`allowWrite: Bool = false`）：默认只做「读 + 展示」，零副作用。
-/// - 效用**未证实** ⇒ `Report.effectVerified` 恒为 `false`。
+/// ## 写入默认开（照爱思：爱思没有「只读模式」）
+/// `repair(allowWrite:)` 默认 `true`。调用方显式传 `false` 时退化为「只读展示」
+/// —— 这不是爱思行为，仅用于排查，不在默认路径上.
 ///
 /// ## 为什么是 `enum` + `static` 方法（而非单例）
 /// 底层 `AFCService.shared` / `DeviceInfoService` 都是**同步阻塞**且各自管着自己的 RSD 串行队列；
@@ -39,6 +42,15 @@ enum I4AppFixService {
     /// `auth` 硬编码兜底 —— i4 在「sync 成功但输出为空」时写的值（机制报告 §1.3，VA `0x14116c148`）.
     /// **不是**服务端 `XX-AUTH` 签发的真值（那份拿不到）.
     static let authFallback = "1,2,3,4"
+
+    /// 写入最大尝试次数 —— 照爱思修复流程「循环 3 次」（`CDeviceAppMgr::0x14080E510`）.
+    static let writeMaxAttempts = 3
+
+    /// 单次写入的超时（秒）—— 照爱思修复流程「单次超时 60 秒」.
+    static let writeTimeoutSeconds: TimeInterval = 60
+
+    /// 失败后的重试间隔 —— 照爱思 `msleep(5000)`（5 秒）；Swift 侧用 `Task.sleep` 实现.
+    static let writeRetryDelay: Duration = .seconds(5)
 
     /// 爱思移动端（代理 App）bundle id 候选（9 个）.
     ///
@@ -66,6 +78,10 @@ enum I4AppFixService {
         case identityIncomplete([String])
         /// AFC 写入失败 —— 原样带上底层错误，**不静默**.
         case writeFailed(String, Error)
+        /// 单次写入超时（照爱思 60 秒）—— 已放弃等待，不静默.
+        case writeTimedOut(String, TimeInterval)
+        /// 写后读回时设备上不存在该文件 —— 写入未生效，不静默.
+        case readBackMissing(String)
         /// plist 构造失败.
         case plistBuildFailed(String)
 
@@ -75,6 +91,10 @@ enum I4AppFixService {
                 return "设备身份不完整，缺少必填键 \(fields.joined(separator: ", "))，已拒绝写入."
             case .writeFailed(let path, let underlying):
                 return "写入 \(path) 失败：\(underlying.localizedDescription)"
+            case .writeTimedOut(let path, let seconds):
+                return "写入 \(path) 超时（\(Int(seconds)) 秒），已放弃等待."
+            case .readBackMissing(let path):
+                return "写后读回失败：设备上不存在 \(path)，写入未生效."
             case .plistBuildFailed(let reason):
                 return "构造 i4tool2.acc plist 失败：\(reason)"
             }
@@ -159,15 +179,14 @@ enum I4AppFixService {
     }
 
     /// 一次「修复」的**如实结果**（不美化）.
-    ///
-    /// 诚实边界在这里显式暴露：`canResolveFairPlay42112` 与 `effectVerified` 恒为 `false`，
-    /// 让 UI 层无法把它当成「修好了」来展示.
     struct Report {
         let identity: DeviceIdentity
         /// 请求写入（= 传入的 `allowWrite`）.
         let writeRequested: Bool
         /// 是否真的写了（`writeRequested == false` 时恒为 `false`）.
         let didWrite: Bool
+        /// 写入成功时的尝试序号（1 起；只读分支为 0）—— 照爱思最多 3 次.
+        let writeAttempts: Int
         let writePath: String
         let bytesWritten: Int?
         /// 读回内容：写入分支 = 写后读回；只读分支 = 设备上现有的（不存在则 nil）.
@@ -178,14 +197,10 @@ enum I4AppFixService {
         let proxyAppBundleId: String?
         /// 未写入的原因（只读分支）.
         let notWrittenReason: String?
-        /// 如实的补充说明（逐条事实 + 边界）.
+        /// 如实的补充说明（逐条事实）.
         let notes: [String]
-        /// 一句话结论（含边界）.
+        /// 一句话结论.
         let verdict: String
-        /// **恒为 false**：本功能不能解 App Store 加密包的 `-42112`.
-        let canResolveFairPlay42112: Bool
-        /// **恒为 false**：效用未证实（读者是设备端爱思代理 App，不在我们手里）.
-        let effectVerified: Bool
     }
 
     // MARK: - 前置条件（事实查询，供 UI 常驻提示）
@@ -352,19 +367,22 @@ enum I4AppFixService {
         return identity
     }
 
-    // MARK: - ⑤ 修复（读 + 可选写 + 读回校验）
+    // MARK: - ⑤ 修复（写 + 读回校验；写入默认开，照爱思）
 
     /// 执行一次「修复」.
     ///
     /// - Parameters:
-    ///   - allowWrite: **写入开关，默认关**. `false` = 只读 + 展示（确定可交付、零副作用）；
-    ///     `true` = 构造 8 键 plist → 经 AFC 写设备 → 写后读回比对（实验性，效用未证实）.
+    ///   - allowWrite: **写入开关，默认开**（照爱思：爱思没有「只读模式」）. `true` = 构造 8 键 plist
+    ///     → 经 AFC 写设备（失败重试 3 次、每次间隔 5 秒、单次超时 60 秒）→ 写后读回比对；
+    ///     `false` = 只读 + 展示（非爱思行为，仅供排查）.
     ///   - installedApps: 已安装应用列表，用于检测本机是否装了爱思代理 App（读者）.
-    /// - Returns: `Report`（含读回内容与诚实边界；`canResolveFairPlay42112` / `effectVerified` 恒 false）.
-    /// - Throws: 身份读取失败、必填键缺失（`allowWrite == true` 时）、plist 构造失败、AFC 写入失败.
-    ///   写入失败**必抛**，绝不静默.
-    static func repair(allowWrite: Bool = false,
-                       installedApps: [InstalledApp] = []) throws -> Report {
+    /// - Returns: `Report`（含读回内容与逐条事实）.
+    /// - Throws: 身份读取失败、必填键缺失（`allowWrite == true` 时）、plist 构造失败、
+    ///   AFC 写入失败（3 次都失败）、写后读回失败. 失败**必抛**，绝不静默.
+    /// - Note: 可取消 —— 每次尝试前与重试间隔前检查 `Task.isCancelled`，取消时抛 `CancellationError`.
+    static func repair(allowWrite: Bool = true,
+                       installedApps: [InstalledApp] = []) async throws -> Report {
+        if Task.isCancelled { throw CancellationError() }
         let identity = try deviceIdentity()
         let proxy = proxyAppBundleId(in: installedApps)
 
@@ -377,6 +395,7 @@ enum I4AppFixService {
         }
 
         var didWrite = false
+        var attempts = 0
         var bytesWritten: Int? = nil
         var readBack: AccContent? = nil
         var matches: Bool? = nil
@@ -384,27 +403,24 @@ enum I4AppFixService {
 
         if allowWrite {
             let data = try makeAccData(identity)
-            do {
-                try AFCService.shared.writeFile(data, to: accAFCPath)
-            } catch {
-                LoginLogger.shared.log("[i4修复] 写入失败：\(accAFCPath), error=\(error.localizedDescription)",
-                                       category: .i4Fix)
-                throw I4FixError.writeFailed(accAFCPath, error)
-            }
+            // 照爱思修复流程：最多 3 次 / 单次 60 秒超时 / 失败等 5 秒重试. 3 次都失败则抛错（不静默）.
+            attempts = try await writeAccWithRetry(data)
             didWrite = true
             bytesWritten = data.count
             LoginLogger.shared.log(
-                "[i4修复] 已写入 \(accAFCPath)：\(data.count) bytes, "
+                "[i4修复] 已写入 \(accAFCPath)：\(data.count) bytes, attempt=\(attempts)/\(writeMaxAttempts), "
                 + "keys=\(accDictionary(identity).keys.sorted().joined(separator: ","))",
                 category: .i4Fix)
 
-            // 写后读回校验.
-            readBack = try readExistingAcc()
-            let written = accDictionary(identity)
-            matches = readBack.map { $0.dictionary == written }
+            // 写后读回校验：读失败、或写完读不到文件 ⇒ 抛错（不静默）.
+            guard let back = try readExistingAcc() else {
+                LoginLogger.shared.log("[i4修复] 写后读回：设备上不存在 \(accAFCPath)", category: .i4Fix)
+                throw I4FixError.readBackMissing(accAFCPath)
+            }
+            readBack = back
+            matches = back.dictionary == accDictionary(identity)
             LoginLogger.shared.log(
-                "[i4修复] 写后读回：keys=\(readBack?.keys.joined(separator: ",") ?? "nil"), "
-                + "matches=\(matches.map { String($0) } ?? "nil")",
+                "[i4修复] 写后读回：keys=\(back.keys.joined(separator: ",")), matches=\(String(matches ?? false))",
                 category: .i4Fix)
         } else {
             readBack = try readExistingAcc()
@@ -412,7 +428,7 @@ enum I4AppFixService {
             LoginLogger.shared.log("[i4修复] 只读分支：allowWrite=false，未写入", category: .i4Fix)
         }
 
-        // 如实的补充说明（事实 + 边界）.
+        // 如实的补充说明（逐条事实）.
         var notes: [String] = []
         if let reason = notWrittenReason { notes.append(reason) }
         if proxy == nil {
@@ -421,24 +437,22 @@ enum I4AppFixService {
         } else {
             notes.append("本机检测到爱思代理 App：\(proxy ?? "").")
         }
-        notes.append("auth 使用硬编码兜底 \(authFallback)（非服务端 XX-AUTH 真值），效用未证实.")
-        notes.append("i4tool2.acc 是爱思私有 plist，iOS/installd/fairplay 不读它，其内容不含 FairPlay 密钥，"
-                     + "不能解决 App Store 加密包的 -42112.")
+        notes.append("auth 使用爱思无网兜底值 \(authFallback)（服务端 XX-AUTH 应答本机拿不到），照爱思行为写入.")
 
         let verdict: String
         if allowWrite {
-            verdict = "已写入 \(accAFCPath)（\(bytesWritten ?? 0) bytes，读回一致=\(matches.map { String($0) } ?? "nil"))."
-                + "是否生效取决于设备端爱思代理 App，本机\(proxy == nil ? "未检测到" : "检测到")该 App."
-                + "本功能不能解决 App Store 加密包的 -42112 问题."
+            verdict = "已按爱思做法写入 \(accAFCPath)（\(bytesWritten ?? 0) bytes，"
+                + "第 \(attempts)/\(writeMaxAttempts) 次成功，读回一致=\(matches.map { String($0) } ?? "nil")），"
+                + "用于修复爱思源应用的弹窗."
         } else {
-            verdict = "本次未写入，仅读取并展示设备上的 \(accAFCPath).写入分支默认关闭."
-                + "本功能不能解决 App Store 加密包的 -42112 问题."
+            verdict = "本次未写入，仅读取并展示设备上的 \(accAFCPath)."
         }
 
         return Report(
             identity: identity,
             writeRequested: allowWrite,
             didWrite: didWrite,
+            writeAttempts: attempts,
             writePath: accAFCPath,
             bytesWritten: bytesWritten,
             readBack: readBack,
@@ -446,10 +460,62 @@ enum I4AppFixService {
             proxyAppBundleId: proxy,
             notWrittenReason: notWrittenReason,
             notes: notes,
-            verdict: verdict,
-            canResolveFairPlay42112: false,
-            effectVerified: false
+            verdict: verdict
         )
+    }
+
+    // MARK: - 写入（照爱思：最多 3 次 / 单次 60 秒超时 / 失败等 5 秒）
+
+    /// 照爱思修复流程写入 `i4tool2.acc`：最多 `writeMaxAttempts` 次，单次 `writeTimeoutSeconds` 秒超时，
+    /// 失败等 `writeRetryDelay`（5 秒）重试；每次尝试前检查 `Task.isCancelled`，可取消.
+    /// - Returns: 成功时的尝试序号（1 起）.
+    /// - Throws: 3 次都失败时抛 `writeFailed`（包最后一次错误）；被取消时抛 `CancellationError`.
+    private static func writeAccWithRetry(_ data: Data) async throws -> Int {
+        for attempt in 1...writeMaxAttempts {
+            if Task.isCancelled { throw CancellationError() }
+            do {
+                try writeOnceWithTimeout(data)
+                return attempt
+            } catch {
+                LoginLogger.shared.log(
+                    "[i4修复] 写入第 \(attempt)/\(writeMaxAttempts) 次失败：\(error.localizedDescription)",
+                    category: .i4Fix)
+                guard attempt < writeMaxAttempts else {
+                    // 第 3 次仍失败：抛最后一次错误，不静默.
+                    throw I4FixError.writeFailed(accAFCPath, error)
+                }
+                // 照爱思 msleep(5000)：失败等 5 秒再重试. Task.sleep 可被取消（抛出即中止）.
+                try await Task.sleep(for: writeRetryDelay)
+            }
+        }
+        // 循环体在最后一次尝试已 return 或 throw，此处不可达；仅为满足编译器.
+        throw I4FixError.writeFailed(accAFCPath, CancellationError())
+    }
+
+    /// 单次写入，最多等待 `writeTimeoutSeconds` 秒（照爱思单次超时）.
+    ///
+    /// AFC 写入是**同步阻塞且不可中断**的（底层 `AFCService` 走自己的 RSD 串行队列），
+    /// 故超时只做「调用方放弃等待」：到点抛 `writeTimedOut`，后台线程仍会跑到结束.
+    private static func writeOnceWithTimeout(_ data: Data) throws {
+        let sem = DispatchSemaphore(value: 0)
+        let box = WriteOutcomeBox()
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try AFCService.shared.writeFile(data, to: accAFCPath)
+            } catch {
+                box.error = error
+            }
+            sem.signal()
+        }
+        if sem.wait(timeout: .now() + writeTimeoutSeconds) == .timedOut {
+            throw I4FixError.writeTimedOut(accAFCPath, writeTimeoutSeconds)
+        }
+        if let error = box.error { throw error }
+    }
+
+    /// 单次写入的结果盒子（写入在 `sem.signal()` 之前、读取在 `sem.wait()` 之后，有 happens-before）.
+    private final class WriteOutcomeBox: @unchecked Sendable {
+        var error: Error?
     }
 
     // MARK: - 内部

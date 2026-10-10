@@ -14,27 +14,27 @@ private struct I4AccRow: Identifiable {
 /// 爱思「应用修复安装」页 —— 把爱思 9.0 的「修复应用」入口移植过来.
 ///
 /// ## 这个页面做什么
-/// 只复刻爱思修复链里**可移植的那一段**：读设备上的 `/iTunes_Control/iTunes/i4tool2.acc`
-/// （爱思授权凭据文件），并可选地按设备身份重写它（写入分支**默认关**）。**不移植**：
+/// 按爱思修复流程的做法，经 AFC 把设备授权文件 `/iTunes_Control/iTunes/i4tool2.acc` 写进设备
+/// （写入**默认开**，失败重试 3 次、每次间隔 5 秒、单次超时 60 秒），并读回校验；
+/// 用于修复爱思源应用的弹窗。**不移植**：
 ///   - 联网 `XX-AUTH` 授权（协议在 `idm_sync.dll` + 爱思服务端，iOS 侧拿不到）；
 ///   - 代理 App 容器里的 `AppInstall_SyncInfo.dat`（落点是 FairPlay 马甲包容器，读者不在我们手里）；
 ///   - 「兜底安装代理 App」（代理 App 是 FairPlay 加密马甲包，我们装不了）。
 ///
-/// ## 诚实边界（页面必须如实展示，不美化）
-/// 本功能**不能**解决 App Store 加密包的 `-42112`：`i4tool2.acc` 是爱思私有 plist，
-/// iOS/installd/fairplay 不读它，其内容不含 FairPlay 密钥。写入分支用硬编码兜底 `auth`
-/// （`"1,2,3,4"`），**效用未证实** —— 读者是设备端爱思代理 App，大概率不在本机.
+/// ## `auth` 字段
+/// 照爱思的兜底逻辑用常量 `"1,2,3,4"`（爱思在「sync 成功但输出为空」时写这个值）；服务端
+/// `XX-AUTH` 真值拿不到，故直接用爱思自己的兜底。是否生效取决于设备端爱思代理 App（读者）.
 ///
 /// ## 数据来源
-/// 列表与修复逻辑都在 `I4AppFixService`（服务层，另一位同事实现；本页只**调用**、不修改）.
+/// 列表与修复逻辑都在 `I4AppFixService`（服务层；本页只**调用**、不修改）.
 /// 列表口径：只列「疑似爱思源安装」的应用（下载台账 ∩ 共享账号白名单，取并集）.
 struct I4AppFixView: View {
     @State private var installed: [InstalledApp] = []
     @State private var candidates: [I4AppFixService.Candidate] = []
     @State private var proxyBundleId: String?
     @State private var selectedId: String?
-    /// 写入开关，**默认关**（与服务层 `repair(allowWrite:)` 的默认一致）：默认只读 + 展示.
-    @State private var writeEnabled = false
+    /// 写入开关，**默认开**（照爱思：爱思没有「只读模式」）：默认写入设备授权文件.
+    @State private var writeEnabled = true
     @State private var confirmShown = false
     @State private var loading = true
     @State private var busy = false
@@ -189,11 +189,11 @@ struct I4AppFixView: View {
         Section {
             Toggle(isOn: $writeEnabled) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("同时写入授权凭据（实验性）")
+                    Text("写入设备授权文件")
                         .font(.subheadline)
                     Text(writeEnabled
-                         ? "将构造 8 键 plist 经 AFC 写入设备并读回校验.效用未证实."
-                         : "默认只读：仅读取并展示设备上现有的凭据文件，零副作用.")
+                         ? "按爱思的做法构造授权文件写入设备并读回校验；失败重试 3 次，每次间隔 5 秒."
+                         : "只读取并展示设备上现有的授权文件，不写入（非爱思行为，仅供排查）.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -203,7 +203,7 @@ struct I4AppFixView: View {
             Button {
                 confirmShown = true
             } label: {
-                Text(writeEnabled ? "修复并写入" : "读取并展示")
+                Text(writeEnabled ? "开始修复" : "读取并展示")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(TintedButtonStyle())
@@ -246,12 +246,12 @@ struct I4AppFixView: View {
     private var confirmMessage: String {
         let target = selectedCandidate.map { "\($0.name)（\($0.bundleId)）" } ?? "所选应用"
         if writeEnabled {
-            return "将对设备写入爱思授权凭据文件 /\(I4AppFixService.accAFCPath)."
-                + "写入内容用硬编码兜底 auth，效用未证实，是否生效取决于设备端爱思代理 App."
-                + "本功能不能解决 App Store 加密包的 -42112 问题."
+            return "将按爱思的做法，把设备授权文件写入 /\(I4AppFixService.accAFCPath)，"
+                + "用于修复 \(target) 等爱思源应用的弹窗.写入用硬编码兜底 auth，"
+                + "失败会重试 3 次（每次间隔 5 秒）."
         }
-        return "将读取并展示设备上的 /\(I4AppFixService.accAFCPath)（不写入，零副作用），"
-            + "用于确认 \(target) 是否已有爱思授权凭据.本功能不能解决 App Store 加密包的 -42112 问题."
+        return "将读取并展示设备上的 /\(I4AppFixService.accAFCPath)（不写入），"
+            + "用于确认 \(target) 是否已有爱思授权凭据."
     }
 
     // MARK: - 进度
@@ -260,7 +260,7 @@ struct I4AppFixView: View {
         Section {
             HStack(spacing: 10) {
                 ProgressView()
-                Text(writeEnabled ? "正在写入并读回校验…" : "正在读取设备凭据文件…")
+                Text(writeEnabled ? "正在写入设备授权文件并读回校验…" : "正在读取设备授权文件…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -321,14 +321,6 @@ struct I4AppFixView: View {
                 }
             }
             .padding(.vertical, 2)
-
-            // ④ 显式标注不能解 -42112（服务层恒为 false，这里如实转述）
-            Label(report.canResolveFairPlay42112
-                  ? "可解决 -42112"
-                  : "不能解决 App Store 加密包的 -42112",
-                  systemImage: report.canResolveFairPlay42112 ? "checkmark.circle" : "xmark.circle")
-                .font(.caption)
-                .foregroundStyle(report.canResolveFairPlay42112 ? AppTheme.success : AppTheme.danger)
         } header: {
             Label("结果", systemImage: "doc.text.magnifyingglass")
         }
@@ -338,7 +330,7 @@ struct I4AppFixView: View {
         if report.didWrite {
             let bytes = report.bytesWritten ?? 0
             let match = report.readBackMatchesWritten.map { $0 ? "读回一致" : "读回不一致" } ?? "未读回"
-            return "已写入设备 /\(report.writePath)（\(bytes) bytes，\(match)）."
+            return "已写入设备 /\(report.writePath)（\(bytes) bytes，第 \(report.writeAttempts) 次成功，\(match)）."
         }
         if let reason = report.notWrittenReason {
             return "未写入设备文件.\(reason)"
@@ -346,18 +338,17 @@ struct I4AppFixView: View {
         return "未写入设备文件（本次为只读分支）."
     }
 
-    // MARK: - 常驻诚实说明
+    // MARK: - 常驻说明
 
     private var disclaimerSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 6) {
-                Label("本功能不能解决 App Store 加密包的 -42112", systemImage: "xmark.circle")
+                Label("按爱思的做法写入设备授权文件", systemImage: "bandage")
                     .font(.subheadline)
-                    .foregroundStyle(AppTheme.danger)
-                Text("i4tool2.acc 是爱思私有 plist，iOS/installd/fairplay 不读它，其内容不含 FairPlay 密钥."
-                     + "写入分支用硬编码兜底 auth（\(I4AppFixService.authFallback)），效用未证实，"
+                Text("本功能按爱思修复流程，把设备授权文件 /\(I4AppFixService.accAFCPath) 写进设备，"
+                     + "用于修复爱思源应用的弹窗.写入用硬编码兜底 auth（\(I4AppFixService.authFallback)），"
                      + "是否生效取决于设备端爱思代理 App（本机\(proxyBundleId == nil ? "未检测到" : "检测到")."
-                     + "若只是想让应用能跑，请走自签重装或本机 sinf 通道.")
+                     + "需要已连接本地隧道并导入配对文件.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -405,7 +396,7 @@ struct I4AppFixView: View {
         do {
             // 服务层是阻塞调用（建隧道 + 读写 AFC），放后台；Report 经薄包装转移回主线程.
             let boxed = try await Task.detached(priority: .userInitiated) {
-                I4FixTransferBox(value: try I4AppFixService.repair(allowWrite: allowWrite, installedApps: apps))
+                I4FixTransferBox(value: try await I4AppFixService.repair(allowWrite: allowWrite, installedApps: apps))
             }.value
             report = boxed.value
             // 读回后刷新前置状态（隧道可能在过程中断开）.
