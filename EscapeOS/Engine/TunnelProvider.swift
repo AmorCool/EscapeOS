@@ -207,14 +207,14 @@ struct BuiltInTunnel: TunnelProviding {
     /// 本版本是否**真的**把 Network Extension 扩展打进了 App bundle.
     ///
     /// 如实判定：只有 `PlugIns/EscapeOSTunnel.appex` 存在、且其 bundle id 与本类约定的
-    /// `providerBundleID` 一致时才为 `true`. 这样「内置隧道」的可用性才不会在扩展缺失时
+    /// `Self.providerBundleID` 一致时才为 `true`. 这样「内置隧道」的可用性才不会在扩展缺失时
     /// 谎称可用（例如别人去掉扩展 target 重新构建时，UI 必须如实显示不可用）.
     static var isExtensionBundled: Bool {
         guard let plugIns = Bundle.main.builtInPlugInsURL else { return false }
         let appex = plugIns.appendingPathComponent("EscapeOSTunnel.appex")
         guard FileManager.default.fileExists(atPath: appex.path) else { return false }
         guard let bundle = Bundle(url: appex) else { return false }
-        return bundle.bundleIdentifier == providerBundleID
+        return bundle.bundleIdentifier == Self.providerBundleID
     }
 
     /// 内置隧道的对端地址沿用同一套推导（`TunnelDeviceIP` / utun 对端 / 兜底）.
@@ -302,12 +302,12 @@ struct BuiltInTunnel: TunnelProviding {
                 }
                 // 复用已存在的「本扩展」配置；找不到就新建一条.
                 let existing = managers?.first {
-                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleID
+                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == Self.providerBundleID
                 }
                 let manager = existing ?? NETunnelProviderManager()
 
                 let proto = NETunnelProviderProtocol()
-                proto.providerBundleIdentifier = providerBundleID
+                proto.providerBundleIdentifier = Self.providerBundleID
                 // Packet Tunnel 里 serverAddress 只是「设置 → VPN」显示的占位；
                 // 真正的对端地址经 providerConfiguration 的 peerIP 传给扩展
                 // （扩展 PacketTunnelProvider 读该键，缺省回落到 10.7.0.1）.
@@ -344,7 +344,7 @@ struct BuiltInTunnel: TunnelProviding {
                     return
                 }
                 guard let manager = managers?.first(where: {
-                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleID
+                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == Self.providerBundleID
                 }) else {
                     cont.resume(returning: "保存后未能重新找到内置隧道配置.")
                     return
@@ -369,7 +369,7 @@ struct BuiltInTunnel: TunnelProviding {
                 // 只断**本应用创建**的配置（providerBundleIdentifier 命中），
                 // 不动系统里用户其它 VPN / 隧道的配置.
                 let own = managers?.filter {
-                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleID
+                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == Self.providerBundleID
                 } ?? []
                 guard !own.isEmpty else {
                     cont.resume(returning: "未发现由本应用创建的内置隧道配置.")
