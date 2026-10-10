@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.586] - 2026-10-10
+
+> **一句话**：百宝箱新增「爱思应用修复安装」与「安装爱思移动端」；隧道新增 Shadowrocket / 内置隧道两种方式；IPA 改走云端下载不再内置。
+
+### 爱思功能移植（百宝箱）
+
+- **「爱思应用修复安装」**：照爱思 9.09.026 的行为实现 —— 经 AFC 往设备写 `/iTunes_Control/iTunes/i4tool2.acc`（plist 含 `auth`/`serial`/`imei`/`productiondate`/`region`/`modelnumber`/`udid`/`cid`），带**写入重试**（3 次 / 单次 60 秒 / 失败间隔 5 秒，可取消）与**写后读回校验**。
+- **「安装爱思移动端」**：3 个内嵌包（`rn.notes.best` / `com.ownbook.notes` / `com.MK.AwsomeFiles`）改走**云端下载** —— **仓库云端**（模块仓库 Release 附件）+ **爱思云端**（`app4.i4.cn/getipaformobiledevice.xhtml`，3DES-ECB + Base64 + URL 转义）+ **手动导入**三条来源，由用户单选，不可用如实显示。
+- **sinf 走单一路径**：服务端现取 → 覆盖包内 `SC_Info/*.sinf` → 装副本。取不到即**明确失败**，不回退包内自带（包内 sinf 属原始购买者，回退会让「装上了但跑不了」变成常态）。
+
+### 隧道（参考 WrapPin）
+
+- 新增 `TunnelProvider` / `TunnelManager`，设置里三选一：**LocalDevVPN**（默认）/ **Shadowrocket**（**仅作为跳转目标，不保证提供设备连接**）/ **内置隧道**（开启前检测 VPN 权限，无权限置灰并说明原因）。
+- 全仓 32 处 `LocalDevVPN.targetIP` 改走 `TunnelManager`，默认链路零行为变化。
+- entitlements 默认文件不动，另出 opt-in `EscapeSpace-Tunnel.entitlements`（加 VPN 权限会让免费账号签不了）。
+
+### 其它
+
+- **AirFair 骨架**：新增 `AirFairSyncService`（6 步流程 + `AirFairSigningService` 抽象），默认实现诚实抛错。
+- **NB 下架 App 下载修复**：原先只吃搜索响应内嵌的 `appStoreData`（实测 10 条里 6 条为空），改为缺则回退 `getAppHistoryList`。
+- **NB 按版本取包**：新增 `packageByVersion`，可按下架 App 的 `externalVersionId` 取指定版本的「包 + sinf」。
+- **`iTunesMetadata` 顶层修正**：真实 App Store 包的 `iTunesMetadata.plist` 在 **IPA 顶层**（不在 `.app` 内），原实现恒返回 nil。
+- **`ent/download` 版本号回试**：首轮因版本号为空被跳过，拿到 `StoreCatalog` 解析出的版本号后**回头重试一次**。
+
+### 已知边界
+
+- 爱思「修复应用」写入的 `auth` 字段用爱思自己的兜底常量（`sync` 空输出时的硬编码值）；**不涉及 sinf / FairPlay**。
+- 爱思云端的下载接口**未做真机实测**（`url` 是否绑定 UDID / 有时效，未知）。
+
 ## [0.3.585] - 2026-10-08
 
 > **一句话**：共享转换可对**未修补的原件**直接安装（在线 / 覆盖），便于对比「修补前 vs 修补后」的行为；补齐删除安装包；文案与按钮样式收口。
