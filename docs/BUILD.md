@@ -4,7 +4,7 @@ This repository carries exactly **one** build track.
 
 | Track | Defined by | Status | Output |
 |---|---|---|---|
-| **Xcode 27 native** | `.github/workflows/build-xcode.yml` | **Active** | `EscapeSpace-<version>-xcode-unsigned.ipa` |
+| **Xcode 27 native** | `.github/workflows/build-xcode.yml` | **Active** | `EscapeSpace-<version>-xcode-unsigned.ipa` + `EscapeSpace-Tunnel-<version>-xcode-unsigned.ipa` |
 
 `.github/workflows/build-xcode.yml` is the **only** workflow in the tree, so a `v*` tag starts
 exactly one run.
@@ -56,22 +56,33 @@ jobs: `promote` (decides whether a prior successful build of the same commit can
 9. **`xcodebuild build`** with `CODE_SIGNING_ALLOWED=NO`, `CODE_SIGN_IDENTITY=""`,
    `CODE_SIGNING_REQUIRED=NO`, `-derivedDataPath build`. Compiled errors are re-emitted as
    `::error::` annotations, because the anonymous API can read annotations but not the job log.
-10. **Package the IPA** — move `EscapeSpace.app` into `Payload/` and `zip -r` from the parent
-    directory, so the archive root is `Payload/EscapeSpace.app/...`.
-11. **Verify SAP assets** inside the IPA (`SAPAssets/CommerceKit`, `SAPAssets/CoreFP`); a missing
-    bundle means Apple ID sign-in will fail at runtime.
+10. **Package the IPAs (dual version)** — from the one compiled `EscapeSpace.app`, produce two
+    archives by copying the app into `Payload/` and `zip -r` from the parent directory, so each
+    archive root is `Payload/EscapeSpace.app/...`:
+    - **standard**: bundle `EscapeSpace.entitlements` (no Network Extension rights);
+    - **tunnel**: bundle `EscapeSpace-Tunnel.entitlements` on the app **and**
+      `EscapeOSTunnel.entitlements` inside `PlugIns/EscapeOSTunnel.appex`, both granting
+      `packet-tunnel-provider`.
+
+    The two IPAs are byte-identical except for the entitlements files they carry — no second
+    compile happens.
+11. **Verify SAP assets** inside *both* IPAs (`SAPAssets/CommerceKit`, `SAPAssets/CoreFP`); a
+    missing bundle means Apple ID sign-in will fail at runtime. The tunnel IPA is additionally
+    checked for the Network Extension entitlement on both the app and the `.appex`.
 12. **Publish the Release** — only on a `v*` tag. Creates
-    `EscapeSpace <tag> (Xcode native)` if absent, otherwise re-uploads the asset with
-    `--clobber`.
+    `EscapeSpace <tag> (Xcode native)` if absent, otherwise re-uploads the assets with
+    `--clobber`. Both IPAs are attached.
 
 ### Output
 
 ```
 EscapeSpace-<MARKETING_VERSION>-xcode-unsigned.ipa
+EscapeSpace-Tunnel-<MARKETING_VERSION>-xcode-unsigned.ipa
 ```
 
-The version in the file name is read from the `MARKETING_VERSION` line of `project.yml`. For
-reference, `v0.3.410` published a single asset of 50,595,671 bytes.
+The version in each file name is read from the `MARKETING_VERSION` line of `project.yml`. For
+reference, `v0.3.410` published a single asset of 50,595,671 bytes (before the tunnel build
+existed).
 
 ### Why the IPA is unsigned
 
@@ -83,9 +94,15 @@ The build deliberately skips code signing:
   2026-09-18 because nothing in the pipeline ever invoked it. An earlier revision applied
   entitlements with it, but the Homebrew `ldid` asserts on the main binary in CI
   (`ldid.cpp(852)`) and the shipped artifact is not meant to be signed.
-- Instead, `EscapeSpace.entitlements` is copied into the `.app` next to the binary, so the
-  sideloading tool you use (Sideloadly, ESign, TrollStore) applies it. The file grants
-  `get-task-allow`, `com.apple.wifi.manager-access`, and `com.apple.wifi.join-any`.
+- Instead, an entitlements file is copied into the `.app` next to the binary, so the sideloading
+  tool you use (Sideloadly, ESign, TrollStore) applies it:
+  - the standard IPA carries `EscapeSpace.entitlements`, granting `get-task-allow`,
+    `com.apple.wifi.manager-access`, and `com.apple.wifi.join-any`;
+  - the tunnel IPA carries `EscapeSpace-Tunnel.entitlements` (the same three **plus**
+    `com.apple.developer.networking.networkextension` = `packet-tunnel-provider`) on the app, and
+    `EscapeOSTunnel/EscapeOSTunnel.entitlements` inside the embedded `.appex`. Signing the tunnel
+    build therefore needs a certificate that includes the Network Extension capability, and the
+    signer must apply the extension's entitlements too.
 
 ### Building locally on a Mac
 

@@ -3,7 +3,8 @@
 The shipping IPA is built by GitHub Actions. Nothing is built locally, and a `v*` tag is the only
 thing that starts a run. A tag run either **reuses a successful build of the same commit** (no
 recompilation — see step 5) or compiles from scratch; either way it ends by publishing the
-unsigned IPA and the GitHub Release.
+GitHub Release. Each release carries **two** unsigned IPAs — a standard build and a tunnel build —
+produced by a single compile (see step 6).
 
 Follow the steps in order.
 
@@ -175,8 +176,35 @@ fallback when the job log itself cannot be fetched.
 gh release view v0.x.y --json assets --jq '.assets[]|"\(.name) \(.size)"'
 ```
 
-Expected: a single asset named `EscapeSpace-0.x.y-xcode-unsigned.ipa`. The version in the file
-name comes from `MARKETING_VERSION`; if it does not match the tag, step 1 was done wrong.
+Expected: **two** assets, one build of the app each:
+
+- `EscapeSpace-0.x.y-xcode-unsigned.ipa` — the **standard** build. Its bundled
+  `EscapeSpace.entitlements` has no Network Extension rights, so an ordinary certificate (free or
+  paid) can sign it.
+- `EscapeSpace-Tunnel-0.x.y-xcode-unsigned.ipa` — the **tunnel** build. It bundles
+  `EscapeSpace-Tunnel.entitlements` on the app *and* `EscapeOSTunnel.entitlements` inside the
+  embedded `.appex`, both granting `com.apple.developer.networking.networkextension`
+  (`packet-tunnel-provider`).
+
+The version in each file name comes from `MARKETING_VERSION`; if it does not match the tag, step 1
+was done wrong.
+
+Both IPAs come from a **single** compile — the two are byte-identical except for which entitlements
+files travel inside the `.app`. Pick the standard one unless the tester needs the built-in tunnel.
+
+### Signing the tunnel build
+
+The tunnel build only works if the signer applies Network Extension rights to **both** binaries:
+
+- The certificate/provisioning profile must include the `packet-tunnel-provider` capability. Most
+  free and enterprise certificates do not; a personal developer certificate that has the capability
+  does. A sideloader that ignores the bundled entitlements (and signs with a certificate lacking the
+  capability) produces an app that launches but cannot start the tunnel.
+- The signing tool must apply `EscapeOSTunnel.entitlements` to `PlugIns/EscapeOSTunnel.appex` as
+  well as the app entitlements to the main binary. ESign/Sideloadly read the bundled
+  `<name>.entitlements` files next to each binary; TrollStore applies entitlements via `ldid` and
+  works on the supported iOS range only (TrollStore officially caps at iOS 17.0, while this app
+  targets iOS 18.0 — see the double-version research brief).
 
 ## 7. Verify on a device
 
@@ -184,6 +212,10 @@ CI publishes the Release at tag time, so verification happens after the run, not
 the unsigned IPA with a sideloader (Sideloadly, ESign, TrollStore — the entitlements travel inside
 the `.app` for this purpose) and confirm the build starts and the changed behaviour is actually
 present.
+
+Install the **standard** IPA by default. Use the **tunnel** IPA only to exercise the built-in
+tunnel; if it installs but the tunnel will not start, the signer did not grant Network Extension
+rights to both the app and the `.appex` (see step 6).
 
 If verification fails, fix the code and go back to step 1 with a **new** version number.
 

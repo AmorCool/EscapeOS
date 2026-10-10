@@ -129,7 +129,9 @@ Also required:
 ## Sideload
 
 1. Install [iPASide](https://github.com/pwnapplehat/iPASide/releases/latest) on Windows.
-2. Download `EscapeSpace-<version>-xcode-unsigned.ipa` from this repo's [Releases](https://github.com/AmorCool/EscapeOS/releases). The IPA is **unsigned** — your sideloading tool applies the bundled entitlements.
+2. Download an IPA from this repo's [Releases](https://github.com/AmorCool/EscapeOS/releases). Each release has two, both **unsigned** — your sideloading tool applies the bundled entitlements:
+   - `EscapeSpace-<version>-xcode-unsigned.ipa` — **standard**. Needs only an ordinary certificate.
+   - `EscapeSpace-Tunnel-<version>-xcode-unsigned.ipa` — **tunnel**. Carries the `packet-tunnel-provider` Network Extension entitlement; needs a certificate with that capability, and the signer must apply the extension's entitlements too.
 3. Sideload it with iPASide.
 4. Trust the developer profile on the iPhone.
 5. iPASide places `pairingFile.plist` automatically after sideload. To do it later: Settings → Pairing file → Place.
@@ -150,7 +152,7 @@ Without the pairing file there is no app list and no container paths to open. Ke
 
 One track builds this tree. Details in `docs/BUILD.md`.
 
-**GitHub Actions — the shipping path.** Push a `v*` tag and `.github/workflows/build-xcode.yml` runs on `xcode-27` with Xcode 27 (iOS 26 SDK): `xcodegen generate` → `xcodebuild` → unsigned IPA → GitHub Release, all inside one workflow. A tag whose commit already has a successful build reuses that build's IPA instead of recompiling. The artifact is `EscapeSpace-<version>-xcode-unsigned.ipa`. No `ldid` pass is applied; `EscapeSpace.entitlements` ships inside the `.app` for the sideloading tool to apply.
+**GitHub Actions — the shipping path.** Push a `v*` tag and `.github/workflows/build-xcode.yml` runs on `xcode-27` with Xcode 27 (iOS 26 SDK): `xcodegen generate` → `xcodebuild` → unsigned IPAs → GitHub Release, all inside one workflow. A tag whose commit already has a successful build reuses that build's artifacts instead of recompiling. Each release gets **two** IPAs from one compile: the standard `EscapeSpace-<version>-xcode-unsigned.ipa` and the tunnel `EscapeSpace-Tunnel-<version>-xcode-unsigned.ipa` (identical build, only the bundled entitlements differ). No `ldid` pass is applied; the entitlements ship inside the `.app` for the sideloading tool to apply.
 
 It is also the **only** workflow in the repository — the old Theos and MHA (MobileHouseArrest) tracks have been removed, so a tag starts exactly one build.
 
