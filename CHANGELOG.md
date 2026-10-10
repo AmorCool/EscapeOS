@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.588] - 2026-10-10
+
+> **一句话**：修上一轮修复引入的 no-udid 必失败、隧道能选、下载管理按来源分开、百宝箱清理、剩余 P0 五条、内置隧道 Phase 2、UI 按 TRApp 风格改进。
+
+### 修复
+
+- **no-udid 首次搜索必失败**（上一轮修复引入）：上一版把 NB 的 UDID 改成「只吃缓存 + 后台预热」⇒ 冷缓存直接失败。改为在 `perform` 里 `await` UDID 就绪（超时 12s，轮询用 `Task.sleep` 让出执行器）。真机实测建隧道仅 302ms，第一次搜索可成功。
+- **隧道不能选**：根因是 `.disabled(!enabled)` 把「不可用」和「不能选」混为一谈。去掉行的 `.disabled` ⇒ 任何方式可选中；不可用行改用警示色 + 显著原因；动作按钮仍按可用性门控。
+- **下载管理按来源分开**：`filterSource` 从 `Source?` 改为 `Set<Source>?`。AppStore 商店 `[.appleID, .i4Free]`、爱思免登录商店 `[.i4Free,.niuwa,.nb]`、软件源管理 `[.thirdPartySource]`。修复 `AppStoreDetailView` 只传 `[.appleID]` 导致「自己发起的爱思源下载自己看不到」。
+- **百宝箱**：删 4 条「即将上线」占位（保留 6 条真实入口）；删「安装前须知」整块。
+- **剩余 P0 五条**：`ManifestPublisher` 10s / `OnlineInstallService` 120s / `SSHServerService` 60s 三处裸 `semaphore.wait` 加超时；`JITEnableService` 两处 `main.sync` 先判 `Thread.isMainThread`；`IPAInstallService.createTunnel` 加 3s socket 预检。
+- **`BuiltInTunnel` 实例方法里裸用 static 成员**（CI 实测）：`providerBundleID` 是 `static var`，6 处裸引用统一加 `Self.` 前缀。
+
+### 新增
+
+- **内置隧道 Phase 2**：新增 `EscapeOSTunnel` app-extension target + `PacketTunnelProvider.swift`（回环反射器）+ 两份 entitlements + 主 App 走 `NETunnelProviderManager`。`isExtensionBundled` 改为真检。默认签名未动，免费账号仍可签。
+- **UI 按 TRApp（巨魔录音机）风格改进**：`DesignSystem` 补 `warning` / `mark` / `brandNavy` / `brandGradient`（#2C3A6A→#161F2E）；新增 `AppFont`（SF Rounded + 等宽数字）/ `AppRadius` / `AppSpacing` / `AppMetrics` / `AppHaptics` 与 `.appCard()` / `.appGlass()` / `.appSymbol()`。三页示范：爱思移动端 / 百宝箱 / 下载管理。
+
+### 已知边界
+
+- **爱思云端接口实测不可用**：直连 `app4.i4.cn/getipaformobiledevice.xhtml` 恒回 `{"code":1,"msg":"exception"}`，穷举 key / 算法 / 填充 / 编码 / 参数 / UA / 域名 / pcver 全矩阵 0 命中 ⇒ 后端侧问题。
+- **CI 的 hash 计算不含 `EscapeOSTunnel`**（token 缺 `workflow` scope，那 3 行改动未能推送）⇒ 只改扩展源码的提交会被误判「源码没变」而复用旧产物。
+- **P0-6 根因在 Rust**（`tunnel_provider.rs:873` 无超时），本轮只在安装链缓解。
+
 ## [0.3.587] - 2026-10-10
 
 > **一句话**：修用户报的五个 bug —— NB 搜索确认后全局卡死、NB 下架取包、爱思移动端三条、下载管理来源区分、隧道四问题。
