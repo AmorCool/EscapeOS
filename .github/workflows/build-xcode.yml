@@ -17,6 +17,22 @@ on:
     # 此前同时监听 migrate-xcode 分支，导致「先推分支、再推 tag」会跑两条内容完全相同的
     # 构建（各 15~30 分钟），纯粹浪费 CI 且第一条失败后第二条必然同样失败。现去掉分支触发，
     # 日常提交不再自动构建；如需临时验证用 workflow_dispatch 手动触发。
+    #
+    # ★★ 发版流程（2026-10-10 定，照做可省掉一次全量构建）★★
+    #
+    #   正确顺序 —— 版本号在「验证」之前就改好：
+    #     ① 改 MARKETING_VERSION / CURRENT_PROJECT_VERSION / CHANGELOG
+    #     ② commit + push
+    #     ③ gh workflow run build-xcode.yml --ref migrate-xcode     ← 验证（这一次真构建）
+    #     ④ 验证绿了 ⇒ git tag vX.Y.Z <同一个 commit> && git push origin vX.Y.Z
+    #        ⇒ tag 那次会命中「同 headSha 的 success run + hash 一致」⇒ 复用产物 ⇒ 秒级出包
+    #
+    #   错误顺序 —— 会白跑一次全量构建（各 8~11 分钟）：
+    #     ✗ 先 workflow_dispatch 验证 → 再改版本号 → 再 tag
+    #       （改版本号改了 project.yml 的 blob ⇒ CUR_HASH 变 ⇒ tag 那次 hash 对不上 ⇒ 只能全量重建）
+    #
+    #   复用判据在 xcode-build 的 REUSE 段：同 headSha + success + artifact 未过期 +
+    #   产物内 promote-hash.txt 与本次 CUR_HASH 一致。四条件全满足才跳过编译。
     tags: ['v*']
   workflow_dispatch:
 
