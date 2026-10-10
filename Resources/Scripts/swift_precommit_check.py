@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """提交前自检 —— 把本仓现有的「防复发」脚本一次跑完。
 
-现有两项检查（都在本目录）：
+现有三项检查（都在本目录）：
   1) swift_top_level_type_collision.py  —— 顶层类型重名普查（因 CI 炸过才写）
   2) swift_view_state_derivation.py     —— 视图层「下载状态文案」推导检查（本轮新增）
+  3) swift_nb_offsale_guard.py          —— NB 下架取包链路（回退 / code=7 / 界面内部码）
 
 为什么合并成「一个入口」而不是「一个脚本」：
   两项检查的**输入、口径、退出码**都独立，各自的报告/豁免表也各管一摊；把逻辑塞进
@@ -26,6 +27,7 @@ PY = sys.executable or "python"
 CHECKS = [
     ("顶层类型重名普查", "swift_top_level_type_collision.py", False),
     ("视图层状态文案推导", "swift_view_state_derivation.py", True),
+    ("NB 下架取包链路", "swift_nb_offsale_guard.py", False),
 ]
 
 

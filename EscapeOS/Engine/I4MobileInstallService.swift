@@ -660,6 +660,49 @@ enum I4MobileInstallService {
         }
     }
 
+    // MARK: - ⑤ 页面展示辅助（来源安装地址 / 设备身份预热）
+
+    /// 某来源的**安装地址摘要**（供页面**只读展示**，不参与下载 —— 真正的下载地址由
+    /// `cloudURL(for:source:)` 现解析）.
+    ///
+    /// · `.warehouse`：三个包的仓库 Release 直链同处一个目录，返回该目录（前缀）；
+    ///   某个包的实际地址 = 前缀 + `pack.fileName`（如 `…/edge/217.ipa`）.
+    /// · `.i4`：返回爱思云端**接口端点**；该来源的下载地址由**服务端按设备 UDID 现解析**，
+    ///   无固定直链，故此处只给端点（页面另注明「按设备解析」）.
+    ///
+    /// 为什么只读、不做成可编辑：这两条地址都不是「用户改了就生效」的配置 ——
+    /// 仓库直链是编译期常量（`Pack.cloudURL`），爱思地址由服务端按设备算；
+    /// 做成可编辑却不被 `downloadCloudIPA` 消费，就是**假配置**（改了没用，反误导）.
+    static func addressSummary(for source: CloudSource) -> String? {
+        switch source {
+        case .warehouse:
+            guard let first = packs.first, !first.cloudURL.isEmpty else { return nil }
+            guard let slash = first.cloudURL.lastIndex(of: "/") else { return first.cloudURL }
+            return String(first.cloudURL[...slash])
+        case .i4:
+            return I4CloudResolverImpl.endpoint
+        }
+    }
+
+    /// 预热本机设备身份（爱思云端可用性依赖 UDID）并**等到就绪**；返回是否已就绪.
+    ///
+    /// 为什么需要它：`I4CloudResolverImpl.availability` 是**同步零阻塞**的 —— 冷缓存时它只挂一次
+    /// 后台预热就返回「读不到设备 UDID」；页面若只刷新一次，爱思云端会**一直灰着**（本页 bug 的根因）.
+    /// 故页面在首屏后调本方法：等后台预热（建 RSD 隧道，秒级）完成，再刷新来源可用性.
+    ///
+    /// 为什么用**轮询进程内缓存**而不是直接 `LocalDeviceIdentity.load()`：后者会**再建一次隧道**，
+    /// 与 `warmUpInBackground` 已挂的那次并发 ⇒ 白建一轮. 轮询只等那一次的结果.
+    static func warmUpDeviceIdentityForI4() async -> Bool {
+        if let snap = LocalDeviceIdentity.cachedSnapshot(), snap.isUsable { return true }
+        LocalDeviceIdentity.warmUpInBackground()   // 幂等：已在跑则不重复建隧道
+        for _ in 0..<50 {                          // 最多约 10s（0.2s × 50）
+            if let snap = LocalDeviceIdentity.cachedSnapshot(), snap.isUsable { return true }
+            if Task.isCancelled { return false }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return false
+    }
+
     // MARK: - ② IPA 来源 · 云端下载（仓库云端 / 爱思云端）
 
     /// 按来源解析某包的云端下载地址.

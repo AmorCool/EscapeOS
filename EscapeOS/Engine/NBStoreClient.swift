@@ -246,14 +246,27 @@ enum NBStoreClient {
     ///
     /// ## 取值顺序（与全项目其它地方一致，都走 `LocalDeviceIdentity`）
     /// ① `LocalDeviceIdentity.cachedSnapshot()`（缓存已热 → 0 成本）
-    /// ② `LocalDeviceIdentity.load()`（冷缓存，同步读一次、建隧道秒级 —— 值得）
+    /// ② **冷缓存只后台预热、不建隧道**（`warmUpInBackground()`），本次返回 nil
     /// ③ **拿不到就返回 nil，不发请求**（v0.3.550 起，不再有伪值兜底）。
     ///
+    /// ## 修 P0：请求路径上**绝不**同步建隧道
+    ///
+    /// 这里原来在 ② 调 `LocalDeviceIdentity.load()` —— 那是**会现场建 RSD 隧道**的入口
+    /// （真机实测单次阻塞 150,311ms / 225,070ms）。本工程开了
+    /// `SWIFT_APPROACHABLE_CONCURRENCY`（SE-0461 `NonisolatedNonsendingByDefault`，
+    /// `project.yml:172`）⇒ `nonisolated async` 的 `perform` 跑在调用者 MainActor 上
+    /// ⇒ 建隧道落在主线程 ⇒ UI 全局卡死（进程未崩）。
+    /// 同款 bug v0.3.402 在 AppleID 下载链路修过（`CHANGELOG.md:7619`），
+    /// 牛蛙源也单独修过（`NiuwaStoreClient.swift:433-441`），**唯独 NB 源漏网**。
+    ///
+    /// 现照牛蛙源的先例改：**只吃缓存**；冷缓存时挂 `warmUpInBackground()` 后台预热，
+    /// 本次如实返回 nil（不发这一发）。缓存一热，后面的请求自然拿到真值 ——
+    /// 与「首次失败、重试成功」的既有现象一致，但主线程全程零设备 IO。
+    ///
     /// v0.3.554 修了一个上游 bug：`LocalDeviceIdentity` 之前把 lockdown 的键名
-    /// 写成了 `UniqueDeviceIdentifier`（真实键是 `UniqueDeviceID`），导致 ① ②
-    /// **两条路都必然取不到**，`no-udid` 是这么来的，不是隧道没起来。
-    /// 现在键名已修正，这里的兜底路径不会再被误触发。
-    /// **只有真 UDID 才允许取包**（v0.3.550 收紧）。
+    /// 写成了 `UniqueDeviceIdentifier`（真实键是 `UniqueDeviceID`），导致两条路
+    /// **都必然取不到**，`no-udid` 是这么来的，不是隧道没起来。
+    /// 现在键名已修正。**只有真 UDID 才允许取包**（v0.3.550 收紧）。
     ///
     /// 为什么把兜底伪值这条删掉：真机日志（2026-10-02）实证伪值仍在被用 ——
     /// ```
@@ -270,10 +283,10 @@ enum NBStoreClient {
         if let real = LocalDeviceIdentity.cachedSnapshot()?.udid, !real.isEmpty {
             return real
         }
-        if let real = LocalDeviceIdentity.load().udid, !real.isEmpty {
-            return real
-        }
-        LoginLogger.shared.log("\(logTag) [失败] 拿不到本机真 UDID（RSD 隧道未就绪）—— 不发这一发",
+        // 冷缓存：**不建隧道**（照牛蛙源 NiuwaStoreClient.swift:433-441 的先例），
+        // 只把预热挂到后台；本次不发这一发.
+        LocalDeviceIdentity.warmUpInBackground()
+        LoginLogger.shared.log("\(logTag) [失败] 拿不到本机真 UDID（身份缓存未热）—— 不发这一发，已转后台预热.",
                                category: .appStore)
         return nil
     }
@@ -934,6 +947,13 @@ enum NBStoreClient {
     /// 现在改成两段：
     /// ① 内嵌包在 → 直接用（`embeddedOffSalePackage`，零额外请求）；
     /// ② 内嵌包不在 → 用 `appStoreID`（+ `appExtID`）打 `getAppHistoryList` 取包。
+    ///
+    /// ## v0.3.587：`code=7` 如实处理（不再把内部码甩给用户）
+    ///
+    /// 回退仍会回 `code=7`，实测（2026-10-10）**不是参数问题** —— 换 `appVerId` / `plusID` /
+    /// `bundleID` / `country` 的任意组合都不能把 7 变成 0，同一 `appID` 反复打还是 7。
+    /// `code=7` 的两种成因见 catch 内注释：一条「NB 库里没 iOS 包」（回 nil），一条「服务端
+    /// 上游临时超时」（抛出、提示重试）。**原始码与 msg 只进日志，界面文案由调用方给**。
     static func offSalePackage(from app: OffSaleApp, country: String) async throws -> NBPackage? {
         // ① 搜索响应里内嵌的包 —— 有就直接用，不多发一发请求。
         if let embedded = embeddedOffSalePackage(from: app) { return embedded }
@@ -948,10 +968,29 @@ enum NBStoreClient {
         LoginLogger.shared.log("\(logTag) [提示] 这条下架记录没带内嵌包，回退 getAppHistoryList 取包"
                                + "（appID=\(storeID) appVerId=\(app.appExtID ?? "")）",
                                category: .appStore)
-        let pkg = try await package(appID: storeID,
+        let pkg: NBPackage?
+        do {
+            pkg = try await package(appID: storeID,
                                     appVerId: app.appExtID ?? "",
                                     bundleID: app.bundleID ?? "",
                                     country: country)
+        } catch StoreError.server(let code, let message) where code == "7" {
+            // `code=7` 有**两种**成因（2026-10-10 直连实测，脚本 nb_offsale_param_probe.py）：
+            //  · 该条目在 NB 库里根本没有 iOS 包 —— msg「未获取到iOS版本数据」。实测命中的
+            //    都是 Mac App Store 应用（微信 836500024 / 抖音 1640407382，iTunes lookup
+            //    的 kind=mac-software）⇒ 回 nil，界面如实说「库里没有」，不假装能取。
+            //  · NB 服务端自己去 Apple 取包时上游失败 —— msg 形如
+            //    「请求异常，参数：，错误：dialing to the given TCP address timed out」。
+            //    属临时故障，包其实存在 ⇒ 原样抛出去，让上层提示「稍后重试」。
+            // 判据：只认「上游临时故障」的特征串，其余 code=7 一律按「库里没包」处理。
+            // 参数无关：换 appVerId / plusID / bundleID / country 的组合实验**没有一种**能把
+            // code=7 变成 code=0（同一个 appID 反复打仍是 7）。原始码与 msg 一律进日志。
+            LoginLogger.shared.log("\(logTag) [失败] 回退取包 code=7（\(app.name) appID=\(storeID)）：\(message)",
+                                   category: .appStore)
+            let upstreamFailed = message.contains("dialing") || message.contains("请求异常")
+            if upstreamFailed { throw StoreError.server(code: code, message: message) }
+            return nil
+        }
         if pkg == nil {
             LoginLogger.shared.log("\(logTag) [失败] 回退取包也没拿到直链（\(app.name) appID=\(storeID)）",
                                    category: .appStore)

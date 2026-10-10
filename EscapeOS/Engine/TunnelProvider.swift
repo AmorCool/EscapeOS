@@ -142,11 +142,20 @@ struct ShadowrocketTunnel: TunnelProviding {
     var isConnected: Bool { false }
     var canProbeConnection: Bool { false }
 
-    private static let openURL = URL(string: "shadowrocket://")!
+    /// 打开 Shadowrocket 用的 scheme.
+    ///
+    /// 为什么是 `sub://` 而不是早期写的 `shadowrocket://`：`shadowrocket://` 是**未经验证的猜测**
+    /// （旧注释自认「猜的」）；2026-10-10 联网检索**未取到任何一手来源**证实它是 Shadowrocket 已注册的
+    /// scheme。已确证的是 `sub://` —— Shadowrocket 用它做订阅导入，系统能把它派发给 Shadowrocket
+    /// 就说明该 scheme 已在 Shadowrocket 的 `CFBundleURLSchemes` 里注册（未注册则系统不派发）。
+    /// 依据：konekuto.org/ios「手动复制链接：sub://aHR0cHM6…」；
+    /// vpn07.com「Shadowrocket 专用订阅链接（以 sub:// 或 https:// 开头）」。
+    /// 语义差异如实说明：`sub://` 的用途是「导入订阅」，本处只用它把 App 拉起（不附带订阅内容）。
+    private static let openURL = URL(string: "sub://")!
 
     var availability: TunnelAvailability {
         // `canOpenURL` 只认 `Info.plist` 的 `LSApplicationQueriesSchemes` 白名单；
-        // 已把 `shadowrocket` 加进去（否则永远返回 false，误判「未安装」）.
+        // 白名单里已放 `sub`，且 `sub` 是已确证的已注册 scheme ⇒ 这里才能真实反映「装没装 Shadowrocket」.
         if UIApplication.shared.canOpenURL(Self.openURL) { return .available }
         return .unavailable("未检测到 Shadowrocket，请先在 App Store 安装.")
     }
@@ -156,7 +165,7 @@ struct ShadowrocketTunnel: TunnelProviding {
             LoginLogger.shared.log("[隧道] Shadowrocket 未安装，跳过跳转.", category: .general)
             return
         }
-        LoginLogger.shared.log("[隧道] 跳转 Shadowrocket（仅跳转，不保证提供设备连接）.", category: .general)
+        LoginLogger.shared.log("[隧道] 请求打开 Shadowrocket（scheme=sub://，仅跳转，不保证提供设备连接）.", category: .general)
         // 为什么必须走 `MainActor.run`（三次 CI 实测，逐层退让）：
         //   ① 只写 `open(url)` ⇒ async 上下文推断成 async 重载 ⇒ 报
         //      「expression is 'async' but is not marked with 'await'」；
@@ -167,8 +176,13 @@ struct ShadowrocketTunnel: TunnelProviding {
         //      async 版本重载解析歧义）。
         // 正解：把调用整体放进 MainActor —— `UIApplication.shared` 本就是 MainActor 隔离的，
         // 字典在闭包内就地构造、不跨隔离传递。闭包只捕获 `Self.openURL`（static let URL，Sendable）。
+        // 带 completion 则明确落到 completion 重载（不会歧义到 async 版），用它如实记下「系统有没有受理」。
         await MainActor.run {
-            UIApplication.shared.open(Self.openURL, options: [:], completionHandler: nil)
+            UIApplication.shared.open(Self.openURL, options: [:]) { accepted in
+                if !accepted {
+                    LoginLogger.shared.log("[隧道] 系统未受理 sub:// 打开请求，Shadowrocket 可能未安装.", category: .general)
+                }
+            }
         }
     }
 
@@ -190,6 +204,14 @@ struct ShadowrocketTunnel: TunnelProviding {
 struct BuiltInTunnel: TunnelProviding {
     let kind: TunnelKind = .builtIn
 
+    /// 本版本是否已内置真正的 Network Extension 扩展（Phase 2）.
+    ///
+    /// Phase 2 未落地前，本机没有可加载的 `NEPacketTunnelProvider`（无 `.appex`），
+    /// 即便签名带 Packet Tunnel 权限也无处可加载 ⇒ 本版本内置隧道**恒不可用**，
+    /// UI 必须如实说明，不能让它看起来像能用（否则用户点亮后只会拿到一句失败日志）.
+    /// Phase 2 落地后置 `true`，`availability` 即恢复为「按签名权限判定」.
+    static let isExtensionBundled = false
+
     /// 内置隧道的对端地址沿用同一套推导（`TunnelDeviceIP` / utun 对端 / 兜底）.
     var targetIP: String { LocalDevVPN.targetIP }
 
@@ -200,14 +222,27 @@ struct BuiltInTunnel: TunnelProviding {
 
     /// 同步判定：读**当前进程签名**里的 Packet Tunnel 权限.
     /// 依据与取舍见 `VPNPermissionProbe`.
+    ///
+    /// 语义（对应「关闭了还显示已检测到」）：这里判定的是**签名里有没有该权限**，
+    /// 与「VPN 开关有没有关」「隧道连没连上」无关 —— 签名在安装时即固定，用户在系统里
+    /// 断开任何 VPN 都不会改变它，故文案必须写明是「当前签名」，不能写会被读成连接状态的「已检测到」.
     var availability: TunnelAvailability {
-        switch VPNPermissionProbe.readOwnEntitlement(VPNPermissionProbe.packetTunnelKey) {
+        let permission = VPNPermissionProbe.readOwnEntitlement(VPNPermissionProbe.packetTunnelKey)
+        let permissionState: String
+        switch permission {
+        case .granted(let detail): permissionState = "当前签名含 VPN 权限（\(detail)）"
+        case .absent(let why):     permissionState = "当前签名不含 VPN 权限（\(why)）"
+        case .unknown:             permissionState = "无法确认当前签名是否含 VPN 权限"
+        }
+        guard Self.isExtensionBundled else {
+            // 本版本没做 Phase 2 ⇒ 不谎称可用（同时把签名权限现状一并讲清）.
+            return .unavailable("本版本暂未提供内置隧道扩展.\(permissionState)，内置隧道需带 Packet Tunnel 权限的签名.")
+        }
+        switch permission {
         case .granted:
             return .available
-        case .absent(let why):
-            return .unavailable("当前签名不含 VPN 权限（\(why)），需用带 Packet Tunnel 权限的证书或巨魔安装.")
-        case .unknown:
-            return .unavailable("无法确认当前签名是否含 VPN 权限，内置隧道默认关闭.")
+        case .absent, .unknown:
+            return .unavailable("\(permissionState).需用带 Packet Tunnel 权限的证书或巨魔安装.")
         }
     }
 

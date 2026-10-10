@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit   // `UIPasteboard`（复制来源安装地址，沿用本仓既有写法）
 
 /// Swift 6：把非 Sendable 的 `DeviceInfoModel`（含 `raw: [String: Any]`）从 `Task.detached`
 /// 边界**转移**回主线程时用的薄包装（与 DeviceInfoView 的 DeviceInfoBox 同款，命名避开重名）.
@@ -54,6 +55,8 @@ struct I4MobileInstallView: View {
     /// 爱思云端解析器（可注入；默认用**真实实现** —— 契约已坐实，见 `I4CloudResolverImpl`）.
     private let i4Resolver: I4MobileInstallService.I4CloudResolver =
         I4MobileInstallService.I4CloudResolverImpl()
+    /// 已下载 IPA 数量（下载管理入口的数量徽标；进页面时读一次磁盘台账）.
+    @State private var downloadedCount = 0
 
     var body: some View {
         ScrollView {
@@ -61,6 +64,7 @@ struct I4MobileInstallView: View {
                 heroCard
                 deviceInfoCard
                 ipaSourceCard
+                downloadManagerCard
                 statusCard
                 disclaimerCard
             }
@@ -232,29 +236,72 @@ struct I4MobileInstallView: View {
     }
 
     /// 两条云端来源的**可用性 + 单选**（用户选从哪下）.
-    /// 不可用来源置灰（显示原因），可选来源点一下即切换.
+    /// 不可用来源置灰（显示原因），可选来源点一下即切换；每条来源行**下面**只读展示该来源的安装地址.
     private var sourceSelector: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("云端来源").font(.subheadline.weight(.medium))
             ForEach(I4MobileInstallService.CloudSource.allCases) { source in
                 let available = sourceAvailability(source).isAvailable
-                Button { selectedSource = source } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: selectedSource == source ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(selectedSource == source ? AppTheme.accent : AppTheme.unselected)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(source.displayName).font(.subheadline).foregroundStyle(.primary)
-                            Text(sourceAvailabilityText(source))
-                                .font(.caption2)
-                                .foregroundStyle(available ? AppTheme.success : .secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Button { selectedSource = source } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: selectedSource == source ? "largecircle.fill.circle" : "circle")
+                                .foregroundStyle(selectedSource == source ? AppTheme.accent : AppTheme.unselected)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.displayName).font(.subheadline).foregroundStyle(.primary)
+                                Text(sourceAvailabilityText(source))
+                                    .font(.caption2)
+                                    .foregroundStyle(available ? AppTheme.success : .secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
                         }
-                        Spacer()
                     }
+                    .buttonStyle(.plain)
+                    .disabled(!available)
+
+                    sourceAddressLine(source)
+                }
+            }
+        }
+    }
+
+    /// 来源的**安装地址**（只读展示 + 可点复制），显示在该来源行**下面**.
+    ///
+    /// 只读而非可编辑：见 `I4MobileInstallService.addressSummary(for:)` 的注释 ——
+    /// 地址是编译期常量（仓库直链）/ 服务端按设备解析（爱思），做成可编辑而不被下载链路消费就是假配置.
+    /// 复制按钮放在选择按钮**外面**（不能嵌进 `Button` 的 label —— 嵌套按钮点击会互相吞掉）.
+    @ViewBuilder
+    private func sourceAddressLine(_ source: I4MobileInstallService.CloudSource) -> some View {
+        if let address = I4MobileInstallService.addressSummary(for: source) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(sourceAddressLabel(source))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(address)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button {
+                    UIPasteboard.general.string = address
+                    ipaMessage = "已复制 \(source.displayName) 的地址."
+                } label: {
+                    Image(systemName: "doc.on.doc").font(.caption2)
                 }
                 .buttonStyle(.plain)
-                .disabled(!available)
+                .foregroundStyle(AppTheme.accent)
+                Spacer(minLength: 0)
             }
+            .padding(.leading, 30)   // 与来源选择圈对齐缩进
+        }
+    }
+
+    /// 来源地址的前缀标签（仓库云端给目录前缀，爱思云端给接口端点）.
+    private func sourceAddressLabel(_ source: I4MobileInstallService.CloudSource) -> String {
+        switch source {
+        case .warehouse: return "地址："
+        case .i4: return "接口："
         }
     }
 
@@ -297,6 +344,49 @@ struct I4MobileInstallView: View {
         }
         ipaMessage = "已清理缓存."
         refreshPackStatuses()
+    }
+
+    // MARK: - 下载管理入口（统一入口，照 I4StoreFreeView.downloadManagerSection 写法）
+
+    /// 已下载安装包的**统一下载管理**入口（列表 + 安装 + 删除）.
+    ///
+    /// 照 `I4StoreFreeView.downloadManagerSection` 的写法（`NavigationLink` + `AppRowIcon` +
+    /// 标题/副标题 + 数量徽标）；`IPADownloadManagerView()` 走**全量**（`filterSource == nil`，
+    /// 即用户说的「那个统一的下载管理」，不按来源过滤）.
+    ///
+    /// 用 `NavigationLink`（子级 push）而**不是** `navigationDestination(isPresented:)`：
+    /// 本页已在 `HomeView` 的 `NavigationStack` 里，再挂 `navigationDestination` 会让二级页丢返回箭头
+    /// （见 `HomeView.swift` 该处注释）.
+    private var downloadManagerCard: some View {
+        NavigationLink {
+            IPADownloadManagerView()
+        } label: {
+            HStack(spacing: 12) {
+                AppRowIcon(systemName: "shippingbox.fill", tint: .blue,
+                           symbolSize: 18, frameSize: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("下载管理").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                    Text("管理已下载的 IPA 并安装").font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 6)
+                if downloadedCount > 0 {
+                    Text("\(downloadedCount)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 状态区（尚未开始 / 正在安装 / 安装成功 / 安装未完成）
@@ -412,7 +502,8 @@ struct I4MobileInstallView: View {
                    + "直接用会因本机未授权而装不上或启动闪退（-42112 一类）.")
             bullet("本服务只走一条路：向 NB 服务端现取 sinf 覆盖包内再装；取不到即明确报错，"
                    + "不回退到包内自带；每次用的账号会写进安装报告.")
-            bullet("本页不含任何分发包内容，也不内置爱思的安装地址.")
+            bullet("本页不含任何分发包内容；IPA 的安装地址（仓库 Release 直链 / 爱思云端接口）"
+                   + "已在来源行如实标出，仅供查看与复制.")
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -438,6 +529,7 @@ struct I4MobileInstallView: View {
         loading = true
         errorText = nil
         refreshPackStatuses()
+        downloadedCount = IPADownloadLibrary.shared.items().count
         do {
             // collectFull 是阻塞调用（建 RSD 隧道 + 读 lockdown），放后台；非 Sendable 值经薄包装转移.
             let boxed = try await Task.detached(priority: .userInitiated) {
@@ -448,6 +540,19 @@ struct I4MobileInstallView: View {
             errorText = error.localizedDescription
         }
         loading = false
+        // 爱思云端可用性依赖本机 UDID（异步预热）：首屏先如实显示当前态，
+        // 等身份预热完成后**再刷新一次**，让爱思云端从灰变可点（修本页「爱思云端无法点击」）.
+        await warmUpI4Availability()
+    }
+
+    /// 等本机设备身份预热完成后刷新来源可用性（修「爱思云端一直灰着」）.
+    ///
+    /// 放在 `load()` 末尾、`loading = false` 之后：设备信息先出，再等身份就绪；
+    /// 本方法挂在 `.task` 的结构化任务里，页面消失会随之取消（`warmUpDeviceIdentityForI4` 内部
+    /// 用 `Task.isCancelled` 提前退出，不会空转）.
+    private func warmUpI4Availability() async {
+        let ready = await I4MobileInstallService.warmUpDeviceIdentityForI4()
+        if ready { refreshPackStatuses() }
     }
 
     /// 刷新各包的缓存状态 + 两条云端可用性（只查本地文件 / 调用解析器，同步、廉价）.

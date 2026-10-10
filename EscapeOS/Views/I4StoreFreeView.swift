@@ -574,11 +574,15 @@ struct I4StoreFreeView: View {
     /// v0.3.586：那个字段**不是每条都有**（实测 10 条里 6 条没有），旧代码对它们直接失败，
     /// 就是「NB 源无论什么下架 App 都下载获取不了」的根因。现在交给
     /// `NBStoreClient.offSalePackage(from:country:)`：内嵌包缺失时自动回退 `getAppHistoryList`。
+    ///
+    /// v0.3.587：界面**只给用户看得懂的话**，不再显示 `未获取到数据（7）` 这种内部码。
+    /// - 回 `nil` = NB 库里没有这条记录的可用 iOS 包 → 「没有可用的安装包」。
+    /// - 抛错（网络/服务端临时故障）→ 「请稍后重试」，原始 error 进日志（`[NB源]` 前缀）。
     @MainActor
     private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
         do {
             guard let pkg = try await NBStoreClient.offSalePackage(from: app, country: regionRaw) else {
-                ToastCenter.shared.show("这个版本暂时取不到安装包")
+                ToastCenter.shared.show("该应用在 NB 下架库里没有可用的安装包")
                 return
             }
             let sid = app.storeID ?? String(app.id)
@@ -588,8 +592,10 @@ struct I4StoreFreeView: View {
                                   version: app.displayVersion,
                                   iconURL: app.displayIcon)
         } catch {
-            // 失败不许静默：界面给一句短提示，具体原因在日志里（`[NB源]` 前缀）
-            ToastCenter.shared.show("NB 下架取包失败：\(error.localizedDescription)")
+            // 界面只给一句用户看得懂的话；内部码 / 服务端原话进日志排查用，不甩给用户.
+            LoginLogger.shared.log("\(NBStoreClient.logTag) [失败] 下架取包：\(error.localizedDescription)",
+                                   category: .appStore)
+            ToastCenter.shared.show("NB 下架取包失败，请稍后重试")
         }
     }
 

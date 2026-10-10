@@ -27,6 +27,11 @@ struct IPADownloadManagerView: View {
     /// v0.3.578：标题不改，但**过滤时**在列表顶部补**一行来源说明**（`sourceFilterNoteSection`）——
     /// 免得过滤视图的「下载管理 (18)」被误读成「全部下载只有 18」（全局入口其实是另一个计数口径）。
     ///
+    /// v0.3.587（用户 bug）：「统一的下载管理会把第三方软件源的下载的东西也显示在列表 你没有做好区分吗」。
+    /// 本页是**统一**下载管理器 —— `nil` 时列全部来源是**既有设计**（D1=A），不动；缺的是「区分」：
+    /// 来源此前只是灰色小字，扫一眼看不见。现在**每条行**都带一个**有色来源胶囊**（`sourceBadge`），
+    /// 无论哪个入口进来都能一眼看出每条属于哪个源。**不改过滤 / 排序 / 计数** ⇒ 既有入口语义不变。
+    ///
     /// 非 private 且有默认值 ⇒ 可直接用成员逐一初始化器 `IPADownloadManagerView(filterSource:)`。
     var filterSource: IPADownloadCenter.Source? = nil
 
@@ -378,10 +383,15 @@ struct IPADownloadManagerView: View {
                     Text(job.name)
                         .font(.subheadline.weight(.medium))
                         .lineLimit(2)
-                    Text(jobMeta(job))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // 来源胶囊 + 元信息（版本 · 时间）：来源从灰色小字升级为**有色胶囊**，
+                    // 让统一列表里一眼看出这条来自哪个源（见 `sourceTint` / `sourceBadge`）。
+                    HStack(spacing: 6) {
+                        sourceBadge(job.source.rawValue)
+                        Text(jobMeta(job))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .layoutPriority(1)
                 Spacer(minLength: 0)
@@ -433,11 +443,13 @@ struct IPADownloadManagerView: View {
         }
     }
 
-    /// 「下载中」的元信息：版本 · 来源 · 时间（参考图的 `v153.8010.24  2026-09-14 12:06:43`）
+    /// 「下载中」的元信息：版本 · 时间（参考图的 `v153.8010.24  2026-09-14 12:06:43`）。
+    ///
+    /// v0.3.587：**来源**从这里移出，改由行内**来源胶囊**承担（`sourceBadge`）——
+    /// 灰色小字里的来源扫一眼看不见，提成胶囊才能「区分」。其余（版本 / 时间）不变。
     private func jobMeta(_ job: IPADownloadCenter.Job) -> String {
         var parts: [String] = []
         if let v = job.version, !v.isEmpty { parts.append("v\(v)") }
-        parts.append(job.source.rawValue)
         parts.append(Self.stampFormatter.string(from: job.createdAt))
         return parts.joined(separator: " · ")
     }
@@ -580,6 +592,37 @@ struct IPADownloadManagerView: View {
         raw == IPADownloadCenter.Source.thirdPartySource.rawValue ? .signSource : .download
     }
 
+    // MARK: - 来源标识
+
+    /// 每个**来源**一种颜色 —— 同一套配色同时给「行内来源胶囊」与页脚「来源」图例用，两处不会漂移。
+    ///
+    /// 用户 bug 原文：「统一的下载管理会把第三方软件源的下载的东西也显示在列表 你没有做好区分吗」。
+    /// 本页是**统一**下载管理器：`filterSource == nil` 时列**全部来源**（见 `mergedRows` / `reload`），
+    /// 这是既有设计（D1=A，不新建第二个下载管理器）。此前来源只作为**灰色小字**混在元信息里
+    /// （`jobMeta` / `subtitle`），扫一眼分不出哪条来自哪个源 —— 这就是用户说的「没做好区分」。
+    /// 现把来源提成**行内彩色胶囊**（`sourceBadge`），让「区分」一眼可见。
+    ///
+    /// ⚠️ 本改动**只影响行的渲染**：不动 `filterSource` 过滤、不动排序、不动计数
+    /// ⇒ 三个既有入口（AppStore 详情页 / 爱思商店 / 软件源）的**语义与列表内容完全不变**。
+    ///
+    /// 入参是 `source.rawValue` 口径的字符串：任务行传 `job.source.rawValue`，台账行传 `item.source`
+    /// （台账侧是字符串、不是枚举，见 `IPADownloadItem.source`）。同一函数 ⇒ 两侧口径一致。
+    /// 非枚举占位来源（「来源未知」/「本地」，见 `IPADownloadLibrary`）与任何未知值统一回落次级色。
+    private func sourceTint(_ raw: String) -> Color {
+        if raw == IPADownloadCenter.Source.i4Free.rawValue { return .blue }
+        if raw == IPADownloadCenter.Source.niuwa.rawValue { return .orange }
+        if raw == IPADownloadCenter.Source.nb.rawValue { return .indigo }
+        if raw == IPADownloadCenter.Source.thirdPartySource.rawValue { return .purple }
+        // Apple ID / 来源未知 / 本地 / 任何未知值 —— 中性次级色（不抢眼，但仍在场）。
+        return .secondary
+    }
+
+    /// 行内**来源胶囊** —— 复用既有 `PackageChip`（与本页版本 / 体积胶囊同款画法），
+    /// 只是把来源从「灰色小字」升级成「有色胶囊」，让统一列表里每条都能一眼看出所属来源。
+    private func sourceBadge(_ raw: String) -> some View {
+        PackageChip(text: raw, tint: sourceTint(raw), horizontalPadding: 5)
+    }
+
     // MARK: - 概览
 
     /// v0.3.578：**来源过滤说明**（只在过滤视图显示）—— 用**一行次要文字**消除标题歧义。
@@ -676,10 +719,15 @@ struct IPADownloadManagerView: View {
                         .font(.caption2)
                         .foregroundStyle(kindTint(item))
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(subtitle(item))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // 来源胶囊 + 副信息（bundleId · 时间 · 已安装）：与任务行同一种「来源可见」口径，
+                    // 让统一列表里每条都能一眼看出所属来源（见 `sourceTint` / `sourceBadge`）。
+                    HStack(spacing: 6) {
+                        sourceBadge(item.source)
+                        Text(subtitle(item))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .layoutPriority(1)
 
@@ -839,10 +887,11 @@ struct IPADownloadManagerView: View {
     /// 又保持全 App 日期口径单一。**无需**退回本页私有 formatter（那会重新引入一份可能漂移的 `MM-dd HH:mm`）。
     /// 口径：旧私有 formatter 未设 locale（设备默认），`DateText` 用 `en_US_POSIX`；纯数字格式两者输出一致，
     /// 后者更稳定。
+    /// v0.3.587：**来源**从这里移出，改由行内**来源胶囊**承担（`sourceBadge`）——
+    /// 灰色小字里的来源扫一眼看不见，提成胶囊才能「区分」。其余（bundleId / 时间 / 已安装）不变。
     private func subtitle(_ item: IPADownloadItem) -> String {
         var parts: [String] = []
         if let b = item.bundleId, !b.isEmpty { parts.append(b) }
-        parts.append(item.source)
         parts.append(DateText.string(from: item.downloadedAt))
         if let t = item.lastInstalledAt {
             parts.append("已安装 \(DateText.string(from: t))")
@@ -882,12 +931,17 @@ struct IPADownloadManagerView: View {
 
                     Text("来源")
                         .font(.caption.weight(.semibold))
-                    guideRow("Apple ID", .secondary, "从 App Store 商店下载.")
+                    // v0.3.587：图例的**颜色与行内来源胶囊一致**（同一 `sourceTint`），
+                    // 这样这张图例同时是「来源配色表」，用户能把行上的胶囊对回来源名。
+                    Text("颜色与列表行上的来源胶囊一致.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    guideRow("Apple ID", sourceTint(IPADownloadCenter.Source.appleID.rawValue), "从 App Store 商店下载.")
                     guideRow("来源未知", .secondary, "盘上有、台账未登记的下载产物，未能确认来源.")
-                    guideRow("爱思免登录", .secondary, "爱思源下载，服务端已签名.")
-                    guideRow("NB免登录", .secondary, "NB 源下载.")
-                    guideRow("牛蛙免登录", .secondary, "牛蛙源下载.")
-                    guideRow("第三方软件源", .secondary, "从自加软件源下载.")
+                    guideRow("爱思免登录", sourceTint(IPADownloadCenter.Source.i4Free.rawValue), "爱思源下载，服务端已签名.")
+                    guideRow("NB免登录", sourceTint(IPADownloadCenter.Source.nb.rawValue), "NB 源下载.")
+                    guideRow("牛蛙免登录", sourceTint(IPADownloadCenter.Source.niuwa.rawValue), "牛蛙源下载.")
+                    guideRow("第三方软件源", sourceTint(IPADownloadCenter.Source.thirdPartySource.rawValue), "从自加软件源下载.")
                 }
                 .padding(.vertical, 4)
             } label: {

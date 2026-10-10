@@ -85,8 +85,13 @@
 		<string>itms-services</string>
 		<string>App-Prefs</string>
 		<string>prefs</string>
-		<!-- v0.3.586：隧道方式「Shadowrocket 连接」需 canOpenURL 探测是否已安装（仅跳转目标） -->
-		<string>shadowrocket</string>
+		<!-- 2026-10-10：隧道方式「Shadowrocket 连接」需 canOpenURL 探测是否已安装（仅跳转目标）。
+		     改用已确证的 scheme `sub`（Shadowrocket 订阅导入用，见 TunnelProvider.ShadowrocketTunnel 注释）；
+		     原 `shadowrocket` scheme 未获一手来源证实，已移除。 -->
+		<string>sub</string>
+		<!-- 2026-10-10：隧道方式「LocalDevVPN」需 canOpenURL 探测是否已安装。
+		     此前漏登本项 ⇒ LocalDevVPN.isInstalled 恒 false ⇒ openOrInstall 永远跳 App Store。 -->
+		<string>localdevvpn</string>
 	</array>
 	<key>CFBundleIdentifier</key>
 	<string>com.ipaside.escapeos</string>

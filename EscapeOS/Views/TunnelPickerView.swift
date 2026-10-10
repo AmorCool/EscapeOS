@@ -17,7 +17,7 @@ struct TunnelPickerView: View {
         Section {
             row(for: .localDevVPN, subtitle: TunnelKind.localDevVPN.detail)
             row(for: .shadowrocket,
-                subtitle: TunnelKind.shadowrocket.detail,
+                subtitle: shadowrocketSubtitle,
                 enabled: TunnelManager.provider(for: .shadowrocket).availability.isAvailable)
             row(for: .builtIn, subtitle: builtInSubtitle, enabled: builtInAvailability.isAvailable)
 
@@ -99,31 +99,30 @@ struct TunnelPickerView: View {
         kind == .builtIn ? builtInAvailability : TunnelManager.provider(for: kind).availability
     }
 
-    /// 内置隧道说明：固定前缀 + 检测结果（有权限 / 无权限 + 原因）.
+    /// Shadowrocket 行说明：可用时给通用定位说明，不可用时直接给「为什么灰」（未安装）.
+    private var shadowrocketSubtitle: String {
+        TunnelManager.provider(for: .shadowrocket).availability.reason ?? TunnelKind.shadowrocket.detail
+    }
+
+    /// 内置隧道说明：直接给可用性结论（本版本恒为「暂未提供 + 签名权限现状」，见 `BuiltInTunnel.availability`）.
     private var builtInSubtitle: String {
-        let prefix = "需带 VPN 权限的签名."
-        if builtInAvailability.isAvailable {
-            return prefix + "当前签名已具备 VPN 权限."
-        }
-        return prefix + (builtInAvailability.reason ?? "当前签名未包含 VPN 权限.")
+        builtInAvailability.reason ?? "当前签名含 VPN 权限，可开启内置隧道."
     }
 
     private func statusLine(_ kind: TunnelKind) -> String {
         switch kind {
         case .localDevVPN:
             let connected = TunnelManager.provider(for: .localDevVPN).isConnected
+            // 「检测到隧道接口」≠「连上了目标隧道」：判据只查本机有没有 utun（见 LocalDevVPN.isConnected）.
             return connected
-                ? "连接状态：已检测到隧道接口."
+                ? "连接状态：检测到本机存在隧道接口，不保证是 LocalDevVPN 的目标隧道."
                 : "连接状态：未检测到隧道接口，请先在 LocalDevVPN 里连接."
         case .shadowrocket:
             return "无法探测连接状态.此方式仅作为跳转目标，不保证能提供设备连接."
         case .builtIn:
-            switch builtInAvailability {
-            case .available:
-                return "已检测到 VPN 权限，可以尝试开启内置隧道."
-            case .unavailable(let reason):
-                return reason
-            }
+            // 这里判定的是签名里的权限，与 VPN 开关无关 —— 文案写明「当前签名」，避免被读成连接状态.
+            let state = builtInAvailability.reason ?? "当前签名含 VPN 权限，可开启内置隧道."
+            return state + "该判定来自当前签名，与 VPN 是否已连接无关."
         }
     }
 

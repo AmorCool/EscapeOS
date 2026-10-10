@@ -107,12 +107,22 @@ enum LocalDevVPN {
         UIApplication.shared.open(appStoreURL)
     }
 
-    /// 已安装则打开 LocalDevVPN 连接，否则跳 App Store.
+    /// 打开 LocalDevVPN（深链）；系统未受理再兜底跳 App Store.
+    ///
+    /// 为什么不再用 `isInstalled`（`canOpenURL`）决定分支：`canOpenURL` 依赖
+    /// `Info.plist` 的 `LSApplicationQueriesSchemes` 白名单 —— 白名单漏登 `localdevvpn` 时
+    /// 它**恒返回 false**，于是无论装没装都跳 App Store（本轮修的正是这个）。
+    /// `open` 的 completion 才是「系统到底受理了没有」的直接证据，故改用它兜底；
+    /// 白名单照旧补上 `localdevvpn`（`VirtualLocationSettingsView` 仍用 `isInstalled` 显示状态）.
     static func openOrInstall() {
-        if isInstalled {
-            openInstalled()
-        } else {
-            openAppStore()
+        // completion 由系统在主队列回调，但闭包本身不是 `@MainActor` 隔离的
+        // ⇒ 二次 `open`（MainActor 隔离）用 `assumeIsolated` 同步进主 actor
+        // （与 OnlineInstallService 同款处理）.
+        UIApplication.shared.open(enableURL, options: [:]) { accepted in
+            guard !accepted else { return }
+            MainActor.assumeIsolated {
+                UIApplication.shared.open(appStoreURL, options: [:], completionHandler: nil)
+            }
         }
     }
 
