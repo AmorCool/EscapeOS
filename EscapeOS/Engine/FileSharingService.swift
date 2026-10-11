@@ -891,8 +891,23 @@ enum FileSharingService {
         return result
     }
 
+    /// house_arrest 会话的根是**数据容器**；载体 Documents 在其下（`/Documents`）.
+    ///
+    /// v0.3.xxx 真机 iPhone 11 实证（`pymobiledevice3` house_arrest）：
+    /// `VendDocuments` 会话里 `listdir("/")` 报 OBJECT_NOT_FOUND、`listdir("/Documents")` 正常；
+    /// 写 `/pair.config`（容器根）⇒ AFC `FILE_OPEN` status 10、写 `/Documents/pair.config` ⇒ 成功.
+    /// 与 `AppFileBrowserView` 的 `/Documents` 口径一致. 所有针对「载体 Documents」的路径都须带此前缀.
+    static let appDocumentsPath = "/Documents"
+
     /// 为指定 bundle id 建立 Documents 容器 AFC 会话（house_arrest vend_documents）.
     /// 返回 AFC handle（caller 负责 free）.失败 throw.
+    ///
+    /// v0.3.xxx：**vend 失败必须在此拦下**. 底层 `idevice` crate 的
+    /// `HouseArrestClient::vend` 只 `read_plist` 拿应答、**不判 Status**
+    /// （见其 `src/services/house_arrest.rs`），设备返回 `{Error: ...}` 时仍会返回一个
+    /// AFC 句柄 —— 失败因此被推迟到第一次 AFC 命令，表现为误导性的「创建文件失败」。
+    /// 真机 iPhone 11 实证：载体 App 从未启动 ⇒ 无数据容器 ⇒ vend 被拒 ⇒ 写授权标记 /
+    /// pair.config 全报「创建文件失败」。这里在返回前列一次根目录，列得通才算真拿到沙盒.
     static func openAppDocuments(bundleId: String) throws -> OpaquePointer {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }
@@ -910,6 +925,18 @@ enum FileSharingService {
         }
         guard rc == nil, let afc else {
             throw makeError("无法为 \(bundleId) 取得 Documents AFC（可能未开启文档共享或未配对）")
+        }
+        return try verifiedSession(afc: afc, bundleId: bundleId)
+    }
+
+    /// vend 之后验活：列一次 Documents 目录，列不通即认为 vend 实际被拒（应答被底层丢弃）。
+    /// 失败时释放该 AFC 并抛出**能指明原因**的错误，绝不让调用方拿到一个用不了的句柄.
+    private static func verifiedSession(afc: OpaquePointer, bundleId: String) throws -> OpaquePointer {
+        do {
+            _ = try listDirectory(afc: afc, path: appDocumentsPath)
+        } catch {
+            afc_client_free(afc)
+            throw makeError("\(bundleId) 的 Documents 打不开（house_arrest 未授到沙盒）.")
         }
         return afc
     }
@@ -934,7 +961,7 @@ enum FileSharingService {
         guard rc == nil, let afc else {
             throw makeError("该应用不允许访问完整容器（无权限）")
         }
-        return afc
+        return try verifiedSession(afc: afc, bundleId: bundleId)
     }
 
     /// v0.3.270：计算指定 App Documents 容器的总大小（字节）.
@@ -943,7 +970,7 @@ enum FileSharingService {
     static func computeDocumentsSize(bundleId: String) throws -> Int64 {
         let afc = try openAppDocuments(bundleId: bundleId)
         defer { afc_client_free(afc) }
-        return try documentsSizeRecursively(afc: afc, path: "/")
+        return try documentsSizeRecursively(afc: afc, path: appDocumentsPath)
     }
 
     private static func documentsSizeRecursively(afc: OpaquePointer, path: String) throws -> Int64 {

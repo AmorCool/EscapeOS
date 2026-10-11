@@ -36,6 +36,34 @@
   G10 `EscapeOS/Views/I4AdvancedView.swift` 必须暴露现场配对入口并渲染结果
       （判据：同时出现 `attemptLockdownPair` 与 `livePairResultCard`）.
 
+第四版新增（守住「写入失败」的真根因修复）：
+
+  G11 `EscapeOS/Engine/FileSharingService.swift` 必须在 house_arrest vend 之后**验活**
+      （判据：出现 `verifiedSession`）—— 底层 crate 的 vend 只读应答不判 Status，
+      不验活就会把 vend 失败推迟成误导性的「创建文件失败」.
+  G12 `EscapeOS/Engine/I4PairingService.swift` 必须在写入前**确保载体有数据容器**
+      （判据：同时出现 `ensureCarrierContainer` 与 `launchApp`）—— 载体从未启动时
+      iOS 不给数据容器，直接写必失败；必须先启动一次让它建容器.
+
+第五版新增（守住「未受信 lockdown 服务优先 + 受信回退」的真实现）：
+
+  G13 `EscapeOS/Engine/I4PairingService.swift` 必须**先连未受信 lockdown 服务**
+      （判据：同时出现 `com.apple.mobile.lockdown.remote.untrusted` 与
+      `lockdownd_connect_rsd_named`）—— 配对（`Pair`）本该走未受信那条；
+      退回只连受信版（上游写死）即报.
+  G14 同文件必须保留**受信版回退**（判据：出现 `com.apple.mobile.lockdown.remote.trusted`）——
+      旧系统 / 服务表无未受信版时仍需回退，删掉回退即报.
+
+第六版新增（守住「载体 Documents 路径必须带 /Documents 前缀」的真根因修复）：
+
+  G15 `EscapeOS/Engine/FileSharingService.swift` 必须定义 `static let appDocumentsPath = "/Documents"`
+      且 `EscapeOS/Engine/I4PairingService.swift` 必须经 `FileSharingService.appDocumentsPath`
+      拼载体文件路径（判据：两文件分别出现 `appDocumentsPath`）.
+      真机 iPhone 11 实证：house_arrest `VendDocuments` 会话的 **AFC 根是数据容器**，
+      载体 Documents 在其下（`/Documents`）；写 `/pair.config`（容器根）⇒ AFC `FILE_OPEN`
+      status 10、写 `/Documents/pair.config` ⇒ 成功. I4 曾用容器根路径直写，故报「创建文件失败」.
+      退回硬编码容器根路径即报.
+
 判据只认结构 / 符号，不绑死行号与展示文案，改文案不会误报。
 
 用法：python3 swift_i4_advanced_guard.py <仓库根>
@@ -145,6 +173,7 @@ def check(root):
     view = os.path.join(root, "EscapeOS", "Views", "I4MobileInstallView.swift")
     engine = os.path.join(root, "EscapeOS", "Engine", "I4MobileInstallService.swift")
     pairing = os.path.join(root, "EscapeOS", "Engine", "I4PairingService.swift")
+    file_sharing = os.path.join(root, "EscapeOS", "Engine", "FileSharingService.swift")
     adv_view = os.path.join(root, "EscapeOS", "Views", "I4AdvancedView.swift")
     treasure = os.path.join(root, "EscapeOS", "Views", "TreasureBoxView.swift")
     home = os.path.join(root, "EscapeOS", "Views", "HomeView.swift")
@@ -180,6 +209,43 @@ def check(root):
         if "deviceError" not in pcode:
             errs.append("[G9] I4PairingService.swift 未如实回报设备错误（缺 deviceError）——"
                         "设备拒绝 Pair 会被吞掉，可能假装成功")
+        # G12：写入前确保载体有数据容器 —— 载体从未启动时 house_arrest 拿不到 Documents.
+        if "ensureCarrierContainer" not in pcode or "launchApp" not in pcode:
+            errs.append("[G12] I4PairingService.swift 未在写入前确保载体有数据容器"
+                        "（需同时出现 ensureCarrierContainer 与 launchApp）——"
+                        "载体从未启动时会直接写、报「创建文件失败」")
+        # G13：先连未受信 lockdown 服务（配对本该走的那条）—— 防退回只连受信版.
+        if "com.apple.mobile.lockdown.remote.untrusted" not in pcode or "lockdownd_connect_rsd_named" not in pcode:
+            errs.append("[G13] I4PairingService.swift 未先连未受信 lockdown 服务"
+                        "（需同时出现 com.apple.mobile.lockdown.remote.untrusted 与 "
+                        "lockdownd_connect_rsd_named）—— 配对本该走未受信那条，"
+                        "退回只连受信版（上游写死）即报")
+        # G14：保留受信版回退 —— 旧系统 / 服务表无未受信版时仍需回退.
+        if "com.apple.mobile.lockdown.remote.trusted" not in pcode:
+            errs.append("[G14] I4PairingService.swift 缺受信版回退"
+                        "（需出现 com.apple.mobile.lockdown.remote.trusted）——"
+                        "服务表无未受信版时需回退受信版，删掉回退即报")
+        # G15：载体文件路径必须带 /Documents 前缀（经 FileSharingService.appDocumentsPath）.
+        if "FileSharingService.appDocumentsPath" not in pcode:
+            errs.append("[G15] I4PairingService.swift 未经 FileSharingService.appDocumentsPath "
+                        "拼载体文件路径 —— house_arrest VendDocuments 的 AFC 根是数据容器，"
+                        "载体 Documents 在其下（/Documents）；用容器根路径直写会报「创建文件失败」")
+
+    # ---- FileSharingService.swift（house_arrest vend 后必须验活）----
+    fsrc = _read(file_sharing)
+    if fsrc is None:
+        errs.append("[G11] 找不到 %s" % file_sharing)
+    else:
+        fcode = _strip_comments(fsrc)
+        if "verifiedSession" not in fcode:
+            errs.append("[G11] FileSharingService.swift 的 house_arrest vend 后未验活"
+                        "（缺 verifiedSession）—— 底层 vend 只读应答不判 Status，"
+                        "失败会被推迟成误导性的「创建文件失败」")
+        # G15：必须定义载体 Documents 路径常量（I4 依赖它拼路径）.
+        if 'static let appDocumentsPath = "/Documents"' not in fcode:
+            errs.append("[G15] FileSharingService.swift 未定义 "
+                        'static let appDocumentsPath = "/Documents" ——'
+                        "载体 Documents 在容器根之下，缺此常量 I4 会退回容器根路径")
 
     # ---- I4AdvancedView.swift（独立页连到引擎）----
     vsrc = _read(adv_view)
@@ -245,6 +311,11 @@ def main():
     print("G8 现场配对真实现存在：OK")
     print("G9 如实回报设备错误：OK")
     print("G10 独立页有现场配对入口 / 结果卡：OK")
+    print("G11 house_arrest vend 后验活：OK")
+    print("G12 写入前确保载体有数据容器：OK")
+    print("G13 先连未受信 lockdown 服务：OK")
+    print("G14 保留受信版回退：OK")
+    print("G15 载体 Documents 路径带 /Documents 前缀：OK")
     print("命中：0")
     return 0
 

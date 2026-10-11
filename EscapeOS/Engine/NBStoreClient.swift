@@ -677,7 +677,9 @@ enum NBStoreClient {
     /// - 成功（`code=0` 且带 url）→ 立即返回；`i > 0` 时把 `fellBack` 标上（界面提示一次）。
     /// - **稳定** `code=7`（`未获取到数据` 之类）→ 记一行
     ///   `[NB源] appVerId=… 回 code=7，回退到下一个`，继续试下一个候选。
-    /// - **上游临时故障**（`code=7` 且 msg 含 `dialing`/`请求异常`）→ 立即抛出，不空转（换版本也救不了）。
+    /// - **上游临时故障**（`code=7` 且 msg 含 `dialing`/`请求异常`）→ **不中断**，记下继续试
+    ///   —— 实测这类超时是**随机落在某一步**的（`nb_fallback_chain_probe.py`），换版本可能就躲开；
+    ///   全链都没命中且没遇到过稳定 7 时，才把它抛出（界面提示重试）。
     /// - 非 `code=7`（网络 / HTTP / 解码）→ 记下、继续试；全失败且**一次稳定 7 都没遇到**才抛出（提示重试）。
     ///
     /// - Parameter primaryVerID: 首选版本号；空串 = 不传 `appVerId`（服务端回最新版）。
@@ -717,7 +719,20 @@ enum NBStoreClient {
                     lastOtherError = e
                     continue
                 }
-                if isUpstreamBusy(message) { throw e }   // 上游临时故障：立即抛出
+                if isUpstreamBusy(message) {
+                    // 上游临时故障：**不中断整条链**。实测（`nb_fallback_chain_probe.py`）
+                    // 这类 `dialing … timed out` 是**随机落在某一步**的 —— 换一个版本就可能躲开。
+                    // 原来在此直接 `throw`，一次抽风就废掉整条回退链（本该走到后面某步命中，
+                    // 却当场把「请稍后重试」甩给用户）。记下来继续试，全链都没命中再抛（见函数尾）。
+                    lastOtherError = e
+                    if i + 1 < tries.count {
+                        LoginLogger.shared.log("\(logTag) appVerId=\(vid) 上游临时故障"
+                                               + "（\(truncate(message))），仍试下一个"
+                                               + "（\(i + 2)/\(tries.count)）.",
+                                               category: .appStore)
+                    }
+                    continue
+                }
                 sawStable7 = true
                 lastOtherError = e
                 stable7 = true

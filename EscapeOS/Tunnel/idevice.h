@@ -4242,6 +4242,33 @@ struct IdeviceFfiError *lockdownd_connect_rsd(struct AdapterHandle *provider,
                                               struct LockdowndClientHandle **client);
 
 /**
+ * Creates a new LockdownClient via RSD using an explicitly named RSD service
+ *
+ * 上游 `idevice` crate 把 RSD 上的 lockdown 服务名写死为
+ * `com.apple.mobile.lockdown.remote.trusted`；本函数把服务名参数化，可改连
+ * `com.apple.mobile.lockdown.remote.untrusted`。端口从 RSD 服务表按名查表取得（不硬编码）。
+ *
+ * # Arguments
+ * * [`provider`] - An adapter created by this library
+ * * [`handshake`] - An RSD handshake from the same provider
+ * * [`service_name`] - The RSD service name to connect to (null-terminated string)
+ * * [`client`] - On success, will be set to point to a newly allocated LockdownClient handle
+ *
+ * # Returns
+ * An IdeviceFfiError on error, null on success
+ *
+ * # Safety
+ * `provider` must be a valid pointer to a handle allocated by this library
+ * `handshake` must be a valid pointer to a handle allocated by this library
+ * `service_name` must be a valid null-terminated string
+ * `client` must be a valid, non-null pointer to a location where the handle will be stored
+ */
+struct IdeviceFfiError *lockdownd_connect_rsd_named(struct AdapterHandle *provider,
+                                                    struct RsdHandshakeHandle *handshake,
+                                                    const char *service_name,
+                                                    struct LockdowndClientHandle **client);
+
+/**
  * Creates a new LockdowndClient from an existing Idevice connection
  *
  * # Arguments

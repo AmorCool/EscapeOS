@@ -146,7 +146,7 @@ struct I4AdvancedView: View {
                         .frame(width: 22)
                     Text(carrier.hasContainer
                          ? "数据容器：\(carrier.containerPath)"
-                         : "该 App 尚无数据容器（可能从未启动）；写入仍可能成功.")
+                         : "尚无数据容器（从未启动）；写入前会先启动它一次.")
                         .font(AppFont.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

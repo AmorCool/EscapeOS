@@ -3,7 +3,7 @@
 use std::ptr::null_mut;
 
 use idevice::{
-    IdeviceError, IdeviceService, RsdService as _, lockdown::LockdownClient,
+    Idevice, IdeviceError, IdeviceService, ReadWrite, RsdService as _, lockdown::LockdownClient,
     provider::IdeviceProvider,
 };
 use plist_ffi::plist_t;
@@ -82,6 +82,119 @@ pub unsafe extern "C" fn lockdownd_connect_rsd(
         let provider_ref = unsafe { &mut (*provider).0 };
         let handshake_ref = unsafe { &mut (*handshake).0 };
         LockdownClient::connect_rsd(provider_ref, handshake_ref).await
+    });
+
+    match res {
+        Ok(r) => {
+            let boxed = Box::new(LockdowndClientHandle(r));
+            unsafe { *client = Box::into_raw(boxed) };
+            null_mut()
+        }
+        Err(e) => ffi_err!(e),
+    }
+}
+
+/// Creates a new LockdownClient via RSD using an **explicitly named** RSD service.
+///
+/// ## 为什么需要它
+/// 上游 `idevice` crate 里 `LockdownClient` 实现的 `RsdService::rsd_service_name()` **写死**
+/// 为 `com.apple.mobile.lockdown.remote.trusted`（受信版），该常量在 crate 内部，外部无法
+/// 覆盖 —— `lockdownd_connect_rsd` 走的就是它。本函数把服务名**参数化**，让调用方能改连
+/// `com.apple.mobile.lockdown.remote.untrusted`（未受信版；RSD 服务表里给「尚未配对的对端」
+/// 用的那条，见 pymobiledevice3 `misc/RemoteXPC.md`）。
+///
+/// ## 实现范式（照 `mobileactivationd_deactivate_rsd` 的「RSD 服务表查表」路线）
+/// RSD 通道**不支持** lockdownd 的 `StartService` RPC（本项目 v0.3.414~417 真机实证：
+/// 设备对 StartService 直接关连接 ⇒ `BrokenPipe`），所以不能复用 `connect_rsd` 内部那条
+/// `RsdHandshake::connect::<LockdownClient>`，必须自己走四步：
+/// 1. RSD 服务表**本地查表**拿端口（按调用方给的服务名，不发 StartService）。
+/// 2. `adapter.connect(port)` —— 在隧道内新开一条流（非裸 TCP）。
+/// 3. `Idevice::new(stream, service_name)` + `rsd_checkin()` —— RSD 语义下的启动握手
+///    （不发它设备会直接关连接；与上游 `from_stream` 逐句同构）。
+/// 4. `LockdownClient::new(dev)` —— 包成 lockdown 客户端，此后 `lockdownd_pair` /
+///    `lockdownd_get_value` 等既有 FFI 均可直接作用其上。
+///
+/// 端口**不硬编码**：一律从设备回的服务表里取（不同 iOS 版本可能不同；文档里的 52288
+/// 只是一个参考值）。服务名不在表里时返回可定位的错误（列出表内含 "lockdown" 的服务名）。
+///
+/// # Arguments
+/// * [`provider`] - An adapter created by this library
+/// * [`handshake`] - An RSD handshake from the same provider
+/// * [`service_name`] - The RSD service name to connect to (null-terminated string),
+///   e.g. `com.apple.mobile.lockdown.remote.untrusted`
+/// * [`client`] - On success, will be set to point to a newly allocated LockdownClient handle
+///
+/// # Returns
+/// An IdeviceFfiError on error, null on success
+///
+/// # Safety
+/// `provider` must be a valid pointer to a handle allocated by this library
+/// `handshake` must be a valid pointer to a handle allocated by this library
+/// `service_name` must be a valid null-terminated string
+/// `client` must be a valid, non-null pointer to a location where the handle will be stored
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lockdownd_connect_rsd_named(
+    provider: *mut AdapterHandle,
+    handshake: *mut RsdHandshakeHandle,
+    service_name: *const libc::c_char,
+    client: *mut *mut LockdowndClientHandle,
+) -> *mut IdeviceFfiError {
+    if provider.is_null() || handshake.is_null() || service_name.is_null() || client.is_null() {
+        return ffi_err!(IdeviceError::FfiInvalidArg);
+    }
+
+    let service_name = match unsafe { std::ffi::CStr::from_ptr(service_name) }.to_str() {
+        Ok(s) => s.to_owned(),
+        Err(_) => return ffi_err!(IdeviceError::FfiInvalidString),
+    };
+
+    let res: Result<LockdownClient, IdeviceError> = run_sync_local(async move {
+        let adapter_ref = unsafe { &mut (*provider).0 };
+        let handshake_ref = unsafe { &mut (*handshake).0 };
+
+        // 1) RSD 服务表本地查表拿端口 —— 不发 lockdownd 的 StartService RPC.
+        let port = match handshake_ref.services.get(&service_name) {
+            Some(s) => s.port,
+            None => {
+                let mut related: Vec<String> = handshake_ref
+                    .services
+                    .keys()
+                    .filter(|k| k.to_ascii_lowercase().contains("lockdown"))
+                    .cloned()
+                    .collect();
+                related.sort();
+                return Err(IdeviceError::UnexpectedResponse(format!(
+                    "[lockdown配对][步骤1-服务表] RSD 服务表里找不到 {service_name}\
+                     （表内共 {} 个服务；含 lockdown 的: {:?}）",
+                    handshake_ref.services.len(),
+                    related
+                )));
+            }
+        };
+        tracing::info!("lockdownd_connect_rsd_named: RSD 服务表命中 {service_name}, port={port}");
+
+        // 2) 隧道内新开一条流连到该端口.
+        let stream: Box<dyn ReadWrite> = match adapter_ref.connect(port).await {
+            Ok(s) => Box::new(s),
+            Err(e) => {
+                return Err(IdeviceError::UnexpectedResponse(format!(
+                    "[lockdown配对][步骤2-connect] adapter.connect({port}) 失败\
+                     （服务 {service_name}）: {e:?}"
+                )));
+            }
+        };
+
+        // 3) RSDCheckin —— RSD 语义下真正的「启动服务」；与上游 `from_stream` 同构
+        //    （`Idevice::new(stream, "")` + `rsd_checkin()`）。
+        let mut dev = Idevice::new(stream, "");
+        if let Err(e) = dev.rsd_checkin().await {
+            return Err(IdeviceError::UnexpectedResponse(format!(
+                "[lockdown配对][步骤3-RSDCheckin] rsd_checkin 失败（服务 {service_name}）: {e:?}"
+            )));
+        }
+
+        // 4) 包成 lockdown 客户端.
+        Ok(LockdownClient::new(dev))
     });
 
     match res {

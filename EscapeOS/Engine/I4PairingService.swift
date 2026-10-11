@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// 爱思「开启高级功能」服务层（**只做逻辑，不含 UI**）.
 ///
@@ -90,6 +91,19 @@ enum I4PairingService {
     /// 现场配对使用的 SystemBUID（照 pymobiledevice3 `lockdown.py` 的 `SYSTEM_BUID` 常量）.
     static let pairSystemBUID = "30142955-444094379208051516"
 
+    /// 现场配对优先连的 lockdown RSD 服务名 —— **未受信版**.
+    ///
+    /// RSD 服务表里 lockdown 有两条（pymobiledevice3 `misc/RemoteXPC.md`）：
+    /// - `com.apple.mobile.lockdown.remote.trusted`：受信版，上游 `idevice` crate 写死的那条，
+    ///   期待「已受信的 host」；
+    /// - `com.apple.mobile.lockdown.remote.untrusted`：未受信版，**给尚未配对的对端用** ——
+    ///   配对（`Pair`）本该走这条。设备侧不接电脑时回 `InvalidHostID` 的成因与「连了受信版」相关，
+    ///   故本服务改为**先连未受信版**.
+    static let untrustedLockdownService = "com.apple.mobile.lockdown.remote.untrusted"
+
+    /// 现场配对的回退 lockdown 服务名 —— **受信版**（旧系统 / 服务表无未受信版时回退）.
+    static let trustedLockdownService = "com.apple.mobile.lockdown.remote.trusted"
+
     /// RSD 隧道并发铁律（`AFCService` / `WirelessLockdownService` 同款）：同一 hostname 并发
     /// `tunnel_create_rppairing` 会互相抢占；本服务所有隧道操作经此队列串行.
     private static let pairQueue = DispatchQueue(label: "com.ipaside.escapeos.i4-pair")
@@ -128,6 +142,9 @@ enum I4PairingService {
         case markerBuildFailed(String)
         /// 打不开载体 App 的 Documents 沙盒（未配对 / 未开启文档共享 / App 无数据容器）.
         case sandboxOpenFailed(String, String)
+        /// 载体 App 从未启动过，没有数据容器（house_arrest 因此拿不到 Documents）.
+        /// v0.3.xxx：真机 iPhone 11 实证 —— 这正是「创建文件失败」的根因.
+        case carrierNotLaunched(String, String)
         /// 写入失败.
         case writeFailed(String, String)
         /// 写后读回：设备上不存在该文件.
@@ -146,6 +163,8 @@ enum I4PairingService {
                 return "构造授权标记失败：\(reason)"
             case .sandboxOpenFailed(let bundleId, let reason):
                 return "打不开 \(bundleId) 的 Documents 沙盒：\(reason)"
+            case .carrierNotLaunched(let name, let bundleId):
+                return "\(name)（\(bundleId)）尚未启动过，没有数据容器；请先在设备上打开它一次，再回来重试."
             case .writeFailed(let name, let reason):
                 return "写入 \(name) 失败：\(reason)"
             case .readBackMissing(let name):
@@ -269,11 +288,19 @@ enum I4PairingService {
                 return Probe(carrier: nil, candidates: pick.candidates, files: [], error: nil,
                              tunnelConnected: tunnel, hasPairingFile: pairing)
             }
-            let files = try await Task.detached(priority: .utility) {
-                try readFileStatuses(carrier: carrier)
-            }.value
-            return Probe(carrier: carrier, candidates: pick.candidates, files: files, error: nil,
-                         tunnelConnected: tunnel, hasPairingFile: pairing)
+            // 载体已选中，但沙盒读不出来（如从未启动、无数据容器）时**保留载体信息**，
+            // 只把原因记进 error —— 否则载体卡片会整块消失，用户看不到「装了什么」.
+            do {
+                let files = try await Task.detached(priority: .utility) {
+                    try readFileStatuses(carrier: carrier)
+                }.value
+                return Probe(carrier: carrier, candidates: pick.candidates, files: files, error: nil,
+                             tunnelConnected: tunnel, hasPairingFile: pairing)
+            } catch {
+                return Probe(carrier: carrier, candidates: pick.candidates, files: [],
+                             error: error.localizedDescription,
+                             tunnelConnected: tunnel, hasPairingFile: pairing)
+            }
         } catch {
             return Probe(carrier: nil, candidates: [], files: [], error: error.localizedDescription,
                          tunnelConnected: tunnel, hasPairingFile: pairing)
@@ -302,13 +329,22 @@ enum I4PairingService {
         let pick = try await Task.detached(priority: .userInitiated) {
             try discoverCarrier()
         }.value
-        guard let carrier = pick.carrier else {
+        guard let picked = pick.carrier else {
             log("[i4高级] 未找到任何载体马甲包，中止")
             throw PairingError.noCarrier(carrierPreference)
         }
+        log("[i4高级] 载体：\(picked.bundleId)（\(picked.name)），"
+            + "版本=\(picked.version ?? "?"), 数据容器=\(picked.hasContainer ? picked.containerPath : "无")")
+
+        // 1.5 载体若无数据容器（从未启动），先启动一次让 iOS 建容器；仍无则如实报错 ——
+        //     house_arrest 的 vend_documents 依赖数据容器，缺容器时底层应答被丢弃，
+        //     只在第一次 AFC 写时炸成误导性的「创建文件失败」（v0.3.xxx 真机实证）.
+        let carrier = try await ensureCarrierContainer(picked)
+        guard carrier.hasContainer else {
+            log("[i4高级] 启动后仍无数据容器，中止")
+            throw PairingError.carrierNotLaunched(carrier.name, carrier.bundleId)
+        }
         let markerName = Self.markerName(for: carrier.bundleId)
-        log("[i4高级] 载体：\(carrier.bundleId)（\(carrier.name)），"
-            + "版本=\(carrier.version ?? "?"), 数据容器=\(carrier.hasContainer ? carrier.containerPath : "无")")
 
         // 2. 构造授权标记（= i4tool2.acc 的 auth plist；复用 I4AppFixService 的身份 + 8 键构造器）.
         if Task.isCancelled { throw CancellationError() }
@@ -334,8 +370,10 @@ enum I4PairingService {
             writtenSize = try await Task.detached(priority: .userInitiated) {
                 let afc = try FileSharingService.openAppDocuments(bundleId: carrier.bundleId)
                 defer { afc_client_free(afc) }
-                try FileSharingService.uploadFile(afc: afc, data: markerData, to: "/" + markerName)
-                return FileSharingService.fileSize(afc: afc, path: "/" + markerName) ?? -1
+                try FileSharingService.uploadFile(afc: afc, data: markerData,
+                                                   to: FileSharingService.appDocumentsPath + "/" + markerName)
+                return FileSharingService.fileSize(afc: afc,
+                                                   path: FileSharingService.appDocumentsPath + "/" + markerName) ?? -1
             }.value
         } catch {
             log("[i4高级] 写入 \(markerName) 失败：\(error.localizedDescription)")
@@ -352,7 +390,8 @@ enum I4PairingService {
         let verified = try await Task.detached(priority: .userInitiated) { () -> Bool in
             let afc = try FileSharingService.openAppDocuments(bundleId: carrier.bundleId)
             defer { afc_client_free(afc) }
-            let back = try FileSharingService.downloadFile(afc: afc, path: "/" + markerName)
+            let back = try FileSharingService.downloadFile(afc: afc,
+                                                           path: FileSharingService.appDocumentsPath + "/" + markerName)
             return back == markerData
         }.value
         log("[i4高级] 写后读回：/\(markerName) 与写入内容一致=\(verified)")
@@ -361,9 +400,6 @@ enum I4PairingService {
         var warnings: [String] = []
         if !verified {
             warnings.append("授权标记写后读回不一致（写入 \(markerData.count) bytes，设备侧 \(writtenSize) bytes）.")
-        }
-        if !carrier.hasContainer {
-            warnings.append("该 App 在设备上尚无数据容器（可能从未启动）；house_arrest 仍成功写入了 Documents.")
         }
         if !isTunnelConnected {
             warnings.append("写入时本地隧道未连接（LocalDevVPN.isConnected=false）；若写入成功，说明经其它通道完成.")
@@ -442,20 +478,20 @@ enum I4PairingService {
         }.value
 
         switch outcome {
-        case .refused(let deviceError):
-            log("[i4配对] 设备拒绝了 Pair：\(deviceError)")
+        case .refused(let deviceError, let service):
+            log("[i4配对] 设备拒绝了 Pair（服务 \(service)）：\(deviceError)")
             return LivePairReport(
                 paired: false,
                 deviceError: deviceError,
                 pairConfigBytes: nil,
                 wroteToCarrier: nil,
                 verified: false,
-                detail: "设备拒绝了 lockdown Pair 请求（原始错误：\(deviceError)）。"
+                detail: "设备拒绝了 lockdown Pair 请求（服务 \(service)，原始错误：\(deviceError)）。"
                     + "路径 A 在此设备 / 系统上不通；\(pairConfigUnavailableReason)"
             )
 
-        case .paired(let pairConfig):
-            log("[i4配对] 设备已签发配对记录，pair.config \(pairConfig.count) bytes")
+        case .paired(let pairConfig, let service):
+            log("[i4配对] 设备已签发配对记录（服务 \(service)），pair.config \(pairConfig.count) bytes")
             guard let carrier else {
                 return LivePairReport(
                     paired: true,
@@ -468,17 +504,25 @@ enum I4PairingService {
                 )
             }
 
+            // 载体若从未启动（无数据容器），先启动一次让 iOS 建容器；仍无则如实报错.
+            let activeCarrier = try await ensureCarrierContainer(carrier)
+            guard activeCarrier.hasContainer else {
+                throw PairingError.carrierNotLaunched(activeCarrier.name, activeCarrier.bundleId)
+            }
+
             // 经 house_arrest 写进载体 Documents，并读回校验.
             if Task.isCancelled { throw CancellationError() }
             let name = pairConfigName
-            log("[i4配对] 经 house_arrest 写 /\(name) 到 \(carrier.bundleId)")
+            log("[i4配对] 经 house_arrest 写 /\(name) 到 \(activeCarrier.bundleId)")
             let wroteSize: Int64
             do {
                 wroteSize = try await Task.detached(priority: .userInitiated) {
-                    let afc = try FileSharingService.openAppDocuments(bundleId: carrier.bundleId)
+                    let afc = try FileSharingService.openAppDocuments(bundleId: activeCarrier.bundleId)
                     defer { afc_client_free(afc) }
-                    try FileSharingService.uploadFile(afc: afc, data: pairConfig, to: "/" + name)
-                    return FileSharingService.fileSize(afc: afc, path: "/" + name) ?? -1
+                    try FileSharingService.uploadFile(afc: afc, data: pairConfig,
+                                                       to: FileSharingService.appDocumentsPath + "/" + name)
+                    return FileSharingService.fileSize(afc: afc,
+                                                       path: FileSharingService.appDocumentsPath + "/" + name) ?? -1
                 }.value
             } catch {
                 log("[i4配对] 写入 \(name) 失败：\(error.localizedDescription)")
@@ -489,9 +533,10 @@ enum I4PairingService {
                 throw PairingError.readBackMissing(name)
             }
             let verified = try await Task.detached(priority: .userInitiated) { () -> Bool in
-                let afc = try FileSharingService.openAppDocuments(bundleId: carrier.bundleId)
+                let afc = try FileSharingService.openAppDocuments(bundleId: activeCarrier.bundleId)
                 defer { afc_client_free(afc) }
-                let back = try FileSharingService.downloadFile(afc: afc, path: "/" + name)
+                let back = try FileSharingService.downloadFile(afc: afc,
+                                                               path: FileSharingService.appDocumentsPath + "/" + name)
                 return back == pairConfig
             }.value
             log("[i4配对] 写后读回：/\(name) 一致=\(verified)")
@@ -499,9 +544,9 @@ enum I4PairingService {
                 paired: true,
                 deviceError: nil,
                 pairConfigBytes: pairConfig.count,
-                wroteToCarrier: carrier.bundleId,
+                wroteToCarrier: activeCarrier.bundleId,
                 verified: verified,
-                detail: "设备已签发配对记录并写入 \(carrier.bundleId) 的 Documents/\(name)"
+                detail: "设备已签发配对记录并写入 \(activeCarrier.bundleId) 的 Documents/\(name)"
                     + "（\(pairConfig.count) bytes，读回一致=\(verified)）。"
                     + "这是路径 A 的完整产物；设备端 VPN 能否起，仍取决于设备端 Agent 的校验."
             )
@@ -511,9 +556,10 @@ enum I4PairingService {
     // MARK: - 现场配对内部
 
     /// 现场配对的结果：设备签发（`paired`）或设备拒绝（`refused`，带原始错误）.
+    /// 两者都带**实际用到的 lockdown RSD 服务名**（未受信 / 受信），供如实上报.
     private enum PairOutcome: Sendable {
-        case paired(Data)
-        case refused(String)
+        case paired(Data, service: String)
+        case refused(String, service: String)
     }
 
     /// RSD 隧道句柄对（构造成功即两者非空，随后免 force unwrap）.
@@ -578,9 +624,10 @@ enum I4PairingService {
             "创建 RSD 隧道失败（请确认 LocalDevVPN 已连接）：\(lastError ?? "未知")")
     }
 
-    /// 阻塞执行一次现场配对：读 RSD 配对文件 → 建隧道 → 连 lockdownd → `Pair` → 序列化.
-    /// - Returns: `.paired(XML bytes)` 或 `.refused(设备原始错误)`.
-    /// - Throws: 读文件 / 建隧道 / 连 lockdownd / 序列化失败（传输层问题）.
+    /// 阻塞执行一次现场配对：读 RSD 配对文件 → 建隧道 → 连 lockdownd（**先未受信版**，
+    /// 服务表无它再回退受信版）→ `Pair` → 序列化.
+    /// - Returns: `.paired(XML bytes, service)` 或 `.refused(设备原始错误, service)`（`service` 为实际用到的服务名）.
+    /// - Throws: 读文件 / 建隧道 / 连 lockdownd（两条服务名均失败）/ 序列化失败（传输层问题）.
     /// - Note: 阻塞调用；调用方保证已在 `pairQueue` 上.
     private static func performPair() throws -> PairOutcome {
         let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -602,12 +649,34 @@ enum I4PairingService {
         defer { tunnel.release() }
 
         // 3. 连 lockdownd（RSD 隧道即信任边界，无 StartSession）.
+        //    先连**未受信版**（`com.apple.mobile.lockdown.remote.untrusted`，配对本该走的那条），
+        //    服务表里没有它时回退**受信版**（`…remote.trusted`，上游写死的那条，旧系统兼容）.
+        //    端口一律由 FFI 从设备回的服务表按名查表取得，不在此硬编码.
         var client: OpaquePointer?
-        if let ffiError = lockdownd_connect_rsd(tunnel.adapter, tunnel.handshake, &client) {
-            throw PairingError.pairTransportFailed("连接 lockdownd 失败：\(ffiMessage(ffiError))")
+        var usedService = ""
+        var lastConnectError: String?
+        for service in [untrustedLockdownService, trustedLockdownService] {
+            var candidate: OpaquePointer?
+            let ffiError = service.withCString { name in
+                lockdownd_connect_rsd_named(tunnel.adapter, tunnel.handshake, name, &candidate)
+            }
+            if let ffiError {
+                lastConnectError = "\(service)：\(ffiMessage(ffiError))"
+                if let candidate { lockdownd_client_free(candidate) }
+            } else if let candidate {
+                client = candidate
+                usedService = service
+                break
+            } else {
+                lastConnectError = "\(service)：客户端创建为空"
+            }
         }
-        guard let client else { throw PairingError.pairTransportFailed("lockdownd 客户端创建为空") }
+        guard let client else {
+            throw PairingError.pairTransportFailed(
+                "连接 lockdownd 失败（未受信 / 受信两条均失败）：\(lastConnectError ?? "未知")")
+        }
         defer { lockdownd_client_free(client) }
+        LoginLogger.shared.log("[i4配对] 已连 lockdown 服务：\(usedService)", category: .i4Fix)
 
         // 4. 发 Pair（HostID 现场生成；SystemBUID 照 pymobiledevice3）.
         let hostID = UUID().uuidString
@@ -621,9 +690,9 @@ enum I4PairingService {
         }
         if let pairError {
             // 设备拒绝（或协议层报错）—— 如实回报，不抛错.
-            return .refused(ffiMessage(pairError))
+            return .refused(ffiMessage(pairError), service: usedService)
         }
-        guard let pairFile else { return .refused("lockdownd_pair 返回空记录") }
+        guard let pairFile else { return .refused("lockdownd_pair 返回空记录", service: usedService) }
         defer { idevice_pairing_file_free(pairFile) }
 
         // 5. 序列化成 XML（= pair.config 内容）.
@@ -637,7 +706,7 @@ enum I4PairingService {
         }
         let data = Data(bytes: dataPtr, count: Int(size))
         idevice_data_free(dataPtr, size)
-        return .paired(data)
+        return .paired(data, service: usedService)
     }
 
     // MARK: - 内部
@@ -663,6 +732,48 @@ enum I4PairingService {
         return CarrierPick(carrier: candidates.first, candidates: candidates)
     }
 
+    /// 载体 App 从未启动时 iOS 不会给它建数据容器，house_arrest 因此拿不到 Documents
+    /// （表现为误导性的「创建文件失败」）。这里先启动一次载体让 iOS 建容器，再重探容器路径.
+    ///
+    /// - 启动复用本工程既有的普通启动原语 `JITEnableService.launchApp(bundleID:)`
+    ///   （RSD 隧道 → process_control，与「拉起应用」页同一条，不启用 JIT）。
+    /// - 启动后本应用会退到后台、数秒内被挂起，故先取后台租约，保证随后的重探跑得完.
+    /// - 容器已存在则原样返回（正常路径零副作用）。
+    /// - 启动失败 / 容器仍缺时**不抛错**，原样返回，由调用方按 `carrierNotLaunched` 如实上报.
+    /// - Note: 阻塞（启动 + 重探都走 RSD 隧道）；可取消.
+    private static func ensureCarrierContainer(_ carrier: CarrierInfo) async throws -> CarrierInfo {
+        if carrier.hasContainer { return carrier }
+        LoginLogger.shared.log(
+            "[i4高级] \(carrier.bundleId) 尚无数据容器（从未启动），先启动一次让它建容器",
+            category: .i4Fix)
+
+        let lease = await MainActor.run { CarrierLaunchLease() }
+        let pick: CarrierPick?
+        do {
+            // 启动本身失败不抛错：容器是否出现由下面的重探说了算.
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try JITEnableService.shared.launchApp(bundleID: carrier.bundleId)
+                }.value
+            } catch {
+                LoginLogger.shared.log(
+                    "[i4高级] 启动载体失败：\(error.localizedDescription)", category: .i4Fix)
+            }
+            try await Task.sleep(nanoseconds: 2_500_000_000)
+            pick = try await Task.detached(priority: .utility) { try discoverCarrier() }.value
+        } catch {
+            await MainActor.run { lease.invalidate() }
+            throw error
+        }
+        await MainActor.run { lease.invalidate() }
+
+        let updated = pick?.candidates.first { $0.bundleId == carrier.bundleId } ?? carrier
+        LoginLogger.shared.log(
+            "[i4高级] 启动后数据容器：\(updated.hasContainer ? updated.containerPath : "仍无")",
+            category: .i4Fix)
+        return updated
+    }
+
     /// 打开载体 Documents，点查三个文件的如实状态（标记 / pair.config / RTD.cfg）.
     /// - Note: 阻塞调用（house_arrest 打开沙盒 + AFC stat）.
     private static func readFileStatuses(carrier: CarrierInfo) throws -> [PairFileStatus] {
@@ -670,9 +781,10 @@ enum I4PairingService {
         defer { afc_client_free(afc) }
 
         let marker = markerName(for: carrier.bundleId)
-        let markerSize = FileSharingService.fileSize(afc: afc, path: "/" + marker)
-        let pairSize = FileSharingService.fileSize(afc: afc, path: "/" + pairConfigName)
-        let rtdSize = FileSharingService.fileSize(afc: afc, path: "/" + rtdConfigName)
+        let docs = FileSharingService.appDocumentsPath
+        let markerSize = FileSharingService.fileSize(afc: afc, path: docs + "/" + marker)
+        let pairSize = FileSharingService.fileSize(afc: afc, path: docs + "/" + pairConfigName)
+        let rtdSize = FileSharingService.fileSize(afc: afc, path: docs + "/" + rtdConfigName)
 
         return [
             PairFileStatus(name: marker, kind: "授权标记", constructible: true, reason: nil,
@@ -684,5 +796,32 @@ enum I4PairingService {
                            reason: rtdConfigUnavailableReason, note: nil,
                            exists: rtdSize != nil, bytes: rtdSize),
         ]
+    }
+}
+
+/// 启动载体 App 期间的后台存活租约：iOS 会把发起方切后台并在数秒内挂起，
+/// 没有它「重探数据容器」可能来不及跑完。与 `JITBackgroundLease` 同款收敛到主线程，
+/// 到期回调里自动续期（会话只有几秒，最多续一两次，不会触发系统惩罚）。
+@MainActor
+private final class CarrierLaunchLease {
+    private var taskID: UIBackgroundTaskIdentifier = .invalid
+    private var active = true
+
+    init() { renew() }
+
+    private func renew() {
+        guard active else { return }
+        taskID = UIApplication.shared.beginBackgroundTask(withName: "i4-carrier-launch") { [weak self] in
+            guard let self, self.active else { return }
+            self.renew()
+        }
+    }
+
+    func invalidate() {
+        active = false
+        if taskID != .invalid {
+            UIApplication.shared.endBackgroundTask(taskID)
+            taskID = .invalid
+        }
     }
 }

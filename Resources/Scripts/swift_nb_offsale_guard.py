@@ -24,6 +24,10 @@ v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review �
       且里面**真的打接口**（`package(appID:...)`）、**遍历候选版本**（`candidates`）、
       **有尝试上限**（`maxAttempts`）、**回退时记日志**（含「回退」字样）；
       并且 `offSalePackage` 必须走它 —— 最新版 `code=7` 时不再一次失败就报「库里没包」。
+  G7  `packageWithFallback` 遇**上游临时故障**（`isUpstreamBusy(...)`）**不得中途 `throw`**
+      （v0.3.592 补）—— 实测（`nb_fallback_chain_probe.py`）这类 `dialing … timed out`
+      是**随机落在某一步**的：若在此 `throw`，一次抽风就废掉整条回退链（本该走到后面某步
+      命中，却当场把「请稍后重试」甩给用户）。必须记下并 `continue`，全链都没命中再抛。
 
 判据全部**只认结构/符号**（函数体里出现哪个调用 / 哪个字面量），不绑死行号、不绑死文案，
 以免将来改文案就误报。函数体用逐字符状态机按大括号配对提取（跳过字符串/注释）。
@@ -33,6 +37,7 @@ v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review �
 """
 import io
 import os
+import re
 import sys
 
 BS = chr(92)   # 反斜杠
@@ -232,6 +237,18 @@ def check(root):
             if "回退" not in fb:
                 errs.append("[G6] packageWithFallback 回退时不记日志（缺「回退」字样）"
                             " —— 出问题无法排查")
+
+            # ── G7：上游临时故障不得中途中断回退链（v0.3.592 补）──
+            # 实测（nb_fallback_chain_probe.py）dialing 超时是**随机落在某一步**的：
+            # 若在 `isUpstreamBusy(...)` 分支里直接 `throw`，一次抽风就废掉整条链
+            # （本该走到后面某步命中却当场报错）。必须记下并 `continue`。
+            if "isUpstreamBusy(" not in fb:
+                errs.append("[G7] packageWithFallback 不再区分「上游临时故障」"
+                            " —— 会把临时故障当成「库里没包」如实报错（用户重试也没用）")
+            elif re.search(r"isUpstreamBusy\([^)]*\)\s*\{\s*throw", fb):
+                errs.append("[G7] packageWithFallback 在「上游临时故障」分支里 throw"
+                            " —— 中途中断整条回退链；一次抽风就废掉本该成功的回退"
+                            "（应记下并 continue，见 nb_fallback_chain_probe.py 实测）")
         if body is not None and "packageWithFallback(" not in body:
             errs.append("[G6] offSalePackage 没走 packageWithFallback"
                         " —— 最新版 code=7 时不会回退旧版本，一次失败就报「库里没包」")
@@ -282,7 +299,7 @@ def main():
         for e in errs:
             print("ERROR %s" % e)
         print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码 / G4 快照过期 / G5 详情页内部码"
-              " / G6 版本回退）" % len(errs))
+              " / G6 版本回退 / G7 上游故障不中断）" % len(errs))
         return 1
     print("G1 回退 getAppHistoryList：OK")
     print("G2 code=7 处理：OK")
@@ -290,6 +307,7 @@ def main():
     print("G4 内嵌快照 accessKey 过期判断：OK")
     print("G5 详情页无内部码泄漏：OK")
     print("G6 版本回退（code=7 换旧版本）：OK")
+    print("G7 上游临时故障不中断回退链：OK")
     print("命中：0")
     return 0
 

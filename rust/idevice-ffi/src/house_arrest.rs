@@ -145,11 +145,13 @@ pub unsafe extern "C" fn house_arrest_vend_container(
         return ffi_err!(IdeviceError::FfiInvalidArg);
     }
 
-    let bundle_id = unsafe { CStr::from_ptr(bundle_id) }.to_string_lossy();
+    let bundle_id = unsafe { CStr::from_ptr(bundle_id) }.to_string_lossy().to_string();
     let client_ref = unsafe { Box::from_raw(client) }.0; // take ownership and drop
 
+    // v0.3.xxx：vend 必须判应答（见 vend_checked 注释）——上游 vend 丢弃应答，
+    // 失败会被推迟到第一次 AFC 命令，报成误导性的「创建文件失败」.
     let res: Result<AfcClient, IdeviceError> =
-        run_sync_local(async move { client_ref.vend_container(bundle_id).await });
+        run_sync_local(async move { vend_checked(client_ref, bundle_id, "VendContainer").await });
 
     match res {
         Ok(a) => {
@@ -187,11 +189,13 @@ pub unsafe extern "C" fn house_arrest_vend_documents(
         return ffi_err!(IdeviceError::FfiInvalidArg);
     }
 
-    let bundle_id = unsafe { CStr::from_ptr(bundle_id) }.to_string_lossy();
+    let bundle_id = unsafe { CStr::from_ptr(bundle_id) }.to_string_lossy().to_string();
     let client_ref = unsafe { Box::from_raw(client) }.0; // take ownership and drop
 
+    // v0.3.xxx：vend 必须判应答（见 vend_checked 注释）——上游 vend 丢弃应答，
+    // 失败会被推迟到第一次 AFC 命令，报成误导性的「创建文件失败」.
     let res: Result<AfcClient, IdeviceError> =
-        run_sync_local(async move { client_ref.vend_documents(bundle_id).await });
+        run_sync_local(async move { vend_checked(client_ref, bundle_id, "VendDocuments").await });
 
     match res {
         Ok(a) => {
@@ -203,6 +207,67 @@ pub unsafe extern "C" fn house_arrest_vend_documents(
             ffi_err!(e)
         }
     }
+}
+
+/// 发 house_arrest vend 并**判应答**，成功才返回 AFC 会话.
+///
+/// 上游 `idevice` crate 的 `HouseArrestClient::vend`
+/// （`src/services/house_arrest.rs:92-102`）只 `send_plist` + `read_plist` 就
+/// `AfcClient::new`，**丢弃应答** —— 设备回 `{Error: ...}`（如
+/// `InstallationLookupFailed` / `ApplicationLookupFailed`）时仍给出一个 AFC 句柄，
+/// 失败被推迟到第一次 AFC 命令，最终报成误导性的「创建文件失败」
+/// （`FileSharingService.swift:1069`）。
+///
+/// 因 `Idevice::send_plist`/`read_plist` 是 crate 私有（E0624 实锤），此处照
+/// `installation_proxy.rs` / `mobileactivationd.rs` 的既有范式，改用 pub 的
+/// `send_raw`/`read_raw` + 4 字节大端长度前缀 plist 帧（= property_list_service 线格式）。
+/// 收到应答后判 `Error`：有则返回真错误，绝不返回坏句柄.
+async fn vend_checked(
+    client: HouseArrestClient,
+    bundle_id: String,
+    command: &str,
+) -> Result<AfcClient, IdeviceError> {
+    let mut dev = client.idevice;
+    let xml = format!(
+        "{header}<dict><key>Command</key><string>{cmd}</string>\
+         <key>Identifier</key><string>{bid}</string></dict></plist>",
+        header = crate::mcinstall::PLIST_HEADER,
+        cmd = command,
+        bid = bundle_id
+    );
+    let mut frame = Vec::with_capacity(4 + xml.len());
+    frame.extend_from_slice(&(xml.len() as u32).to_be_bytes());
+    frame.extend_from_slice(xml.as_bytes());
+    dev.send_raw(&frame).await?;
+
+    let len_buf = dev.read_raw(4).await?;
+    let len = u32::from_be_bytes([len_buf[0], len_buf[1], len_buf[2], len_buf[3]]) as usize;
+    if len == 0 || len > 8 * 1024 * 1024 {
+        return Err(IdeviceError::UnexpectedResponse(format!(
+            "house_arrest 应答长度异常: {len}"
+        )));
+    }
+    let body = dev.read_raw(len).await?;
+    let value: plist::Value = plist::from_bytes(&body).map_err(|e| {
+        IdeviceError::UnexpectedResponse(format!("house_arrest 应答解析失败: {e}"))
+    })?;
+    let mut dict = match value {
+        plist::Value::Dictionary(d) => d,
+        _ => {
+            return Err(IdeviceError::UnexpectedResponse(
+                "house_arrest 应答非字典".to_string(),
+            ))
+        }
+    };
+    if let Some(err) = dict
+        .remove("Error")
+        .and_then(|x| x.as_string().map(|s| s.to_string()))
+    {
+        return Err(IdeviceError::UnexpectedResponse(format!(
+            "house_arrest vend 被拒（{command}）：{err}"
+        )));
+    }
+    Ok(AfcClient::new(dev))
 }
 
 /// Frees an HouseArrestClient handle
