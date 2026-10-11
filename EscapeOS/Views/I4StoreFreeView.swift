@@ -711,7 +711,11 @@ struct I4StoreFreeView: View {
             await startNBDownload(trackID: item.trackID, package: pkg,
                                   name: item.name, version: nil, iconURL: item.icon)
         } catch {
-            ToastCenter.shared.show("NB 取包失败：\(error.localizedDescription)")
+            // 统一走 `packageFailure`：`code=7` 的两种情形给用户看得懂的话，
+            // 其余错误才回落 `localizedDescription`。绝不把 `（7）` 这类内部码弹给用户。
+            let text = NBStoreClient.packageFailure(from: error)?.userMessage
+                ?? "NB 取包失败：\(error.localizedDescription)"
+            ToastCenter.shared.show(text)
         }
     }
 
@@ -1101,7 +1105,9 @@ struct I4StoreFreeView: View {
             nbPackage = try await NBStoreClient.package(appID: tid, country: regionRaw)
             if nbPackage == nil { errorText = "该应用没有可用的安装包" }
         } catch {
-            errorText = "NB 源取包失败：\(error.localizedDescription)"
+            // 同 `installOffSale`：`code=7` 走 `packageFailure` 的面向用户文案，不外泄内部码。
+            errorText = NBStoreClient.packageFailure(from: error)?.userMessage
+                ?? "NB 源取包失败：\(error.localizedDescription)"
         }
         nbFetching = false
         searching = false

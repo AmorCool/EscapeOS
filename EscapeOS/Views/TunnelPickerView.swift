@@ -113,7 +113,8 @@ struct TunnelPickerView: View {
         kind == .builtIn ? builtInAvailability : TunnelManager.provider(for: kind).availability
     }
 
-    /// Shadowrocket 行说明：可用时给通用定位说明，不可用时直接给「为什么灰」（未安装）.
+    /// Shadowrocket 行说明. `ShadowrocketTunnel.availability` 恒可用（探测不可靠，见其注释）⇒
+    /// 这里恒给通用定位说明；「装没装」不再由本行文案断言，改由点按后 `open` 的受理结果如实反馈.
     private var shadowrocketSubtitle: String {
         TunnelManager.provider(for: .shadowrocket).availability.reason ?? TunnelKind.shadowrocket.detail
     }

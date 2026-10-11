@@ -59,8 +59,6 @@ struct I4MobileInstallView: View {
     @State private var customURLText = ""
     /// 正在安装的包体 id（用于禁用该行安装按钮；`nil` = 空闲）.
     @State private var installingPackId: String?
-    /// 已下载 IPA 数量（下载管理入口的数量徽标；进页面时读一次磁盘台账）.
-    @State private var downloadedCount = 0
     /// 本机推荐（移植爱思瀑布自动选包的结果；`nil` = 设备信息不可用，未算出）.
     @State private var autoPick: I4MobileInstallService.AutoPick?
     /// 是否正在识别本机（读已装列表）并选包.
@@ -69,7 +67,7 @@ struct I4MobileInstallView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: AppSpacing.section) {
-                heroCard
+                brandHeader
                 deviceInfoSection
                 autoPickSection
                 ipaSourceSection
@@ -117,20 +115,22 @@ struct I4MobileInstallView: View {
         Divider().padding(.leading, 56)
     }
 
-    /// hero 上的白色半透明胶囊小标签（机型 / 系统 / 包体缓存数）.
+    /// 头部信息胶囊（机型 / 系统 / 包体缓存数）：浅色底 + 主 / 次字色.
+    /// 页面头部不再是深色 banner ⇒ 胶囊底改语义浅灰，符号用强调色，文字用次字色.
     private func heroChip(_ symbol: String, _ text: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: symbol)
                 .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(AppTheme.accent)
                 .appSymbol()
             Text(text)
                 .font(AppFont.numberSmall)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .foregroundStyle(.white.opacity(0.95))
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color.white.opacity(0.14), in: Capsule())
+        .background(Color(uiColor: .secondarySystemFill), in: Capsule())
     }
 
     /// 设备信息行：彩色图标底 + 标签 + 值（值可走等宽数字）.
@@ -148,32 +148,23 @@ struct I4MobileInstallView: View {
         .padding(.vertical, 11)
     }
 
-    // MARK: - 顶部 hero（品牌渐变，不内嵌第三方图片）
+    // MARK: - 顶部头部（品牌图标块，不内嵌第三方图片）
 
-    private var heroCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+    /// 页面头部：品牌图标块 + 标题 + 副标题 + 信息胶囊（**不是全宽方块 banner**）。
+    ///
+    /// v0.3.xxx：用户反馈「banner 是方块状的，不喜欢这种方块」⇒ 去掉全宽深藏青渐变实心 banner，
+    /// 深色品牌色只保留在**紧凑的连续圆角图标块**（`AppBrandTile`）里。爱思 logo 是第三方商标，
+    /// 用 SF Symbol + 圆角色块占位，不盗图。
+    private var brandHeader: some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
-                // 爱思 logo 是第三方商标：用 SF Symbol + 圆角色块占位，不盗图.
-                // 底改白色半透明：置于品牌深藏青渐变上，白图形对比清晰（TRApp AppIcon 语言）.
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.16))
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
-                    Image(systemName: "arrow.down.app.fill")
-                        .font(.system(size: 28, weight: .medium))
-                        .foregroundStyle(.white)
-                        .appSymbol()
-                }
-                .frame(width: 62, height: 62)
-
-                VStack(alignment: .leading, spacing: 4) {
+                AppBrandTile(systemName: "arrow.down.app.fill", size: 62, symbolSize: 28)
+                VStack(alignment: .leading, spacing: 3) {
                     Text("安装爱思移动端")
-                        .font(AppFont.title3)
-                        .foregroundStyle(.white)
+                        .font(AppFont.title)
                     Text("爱思 9.0 移动端安装向导")
                         .font(AppFont.caption)
-                        .foregroundStyle(.white.opacity(0.82))
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
@@ -185,24 +176,6 @@ struct I4MobileInstallView: View {
                 heroChip("shippingbox", "IPA \(cachedPackCount)/\(packStatuses.count)")
             }
         }
-        .padding(18)
-        .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                    .fill(AppTheme.brandGradient)
-                // 右上角柔光（装饰，营造渐变纵深）.
-                Circle()
-                    .fill(Color.white.opacity(0.10))
-                    .frame(width: 180, height: 180)
-                    .blur(radius: 48)
-                    .offset(x: 110, y: -60)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
-        )
     }
 
     // MARK: - 设备信息（机型 / 容量·颜色 / 序列号 / 系统版本）
@@ -589,20 +562,24 @@ struct I4MobileInstallView: View {
         refreshPackStatuses()
     }
 
-    // MARK: - 下载管理入口（统一入口，照 I4StoreFreeView.downloadManagerSection 写法）
+    // MARK: - 下载管理入口（本页专属，只列本页自己的 IPA）
 
-    /// 已下载安装包的**统一下载管理**入口（列表 + 安装 + 删除）.
+    /// 本页**专属**下载管理入口（列表 + 安装 + 删除），只列「安装爱思移动端」页自己
+    /// 下载 / 导入的 IPA.
     ///
-    /// 照 `I4StoreFreeView.downloadManagerSection` 的写法（`NavigationLink` + `AppRowIcon` +
-    /// 标题/副标题 + 数量徽标）；`IPADownloadManagerView()` 走**全量**（`filterSource == nil`，
-    /// 即用户说的「那个统一的下载管理」，不按来源过滤）.
+    /// v0.3.xxx：**不再**复用 `IPADownloadManagerView()`。那个视图读的是**共享下载台账**
+    /// （`Documents/AppStoreDownloads` + `Documents/ipa_downloads.json`），本页的 IPA 落
+    /// `Caches/I4MobileIPA/` 且不进台账 ⇒ 台账里全是 AppStore / 免登录商店 / 软件源的东西
+    /// （用户原话：「AppStore商店下载的东西进入我'安装爱思移动端'的下载管理列表干什么
+    /// 你没有做好区分！」）. 故改指本页专属列表 `I4MobileDownloadManagerView`（见文件末尾），
+    /// 它只读 `I4MobileInstallService.packStatuses()` 里 `cached` 的包.
     ///
     /// 用 `NavigationLink`（子级 push）而**不是** `navigationDestination(isPresented:)`：
     /// 本页已在 `HomeView` 的 `NavigationStack` 里，再挂 `navigationDestination` 会让二级页丢返回箭头
     /// （见 `HomeView.swift` 该处注释）.
     private var downloadManagerCard: some View {
         NavigationLink {
-            IPADownloadManagerView()
+            I4MobileDownloadManagerView(installAction: installAction)
         } label: {
             HStack(spacing: 12) {
                 AppRowIcon(systemName: "shippingbox.fill", tint: AppTheme.trAccent,
@@ -612,8 +589,8 @@ struct I4MobileInstallView: View {
                     Text("管理已下载的 IPA 并安装").font(AppFont.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 6)
-                if downloadedCount > 0 {
-                    Text("\(downloadedCount)")
+                if cachedPackCount > 0 {
+                    Text("\(cachedPackCount)")
                         .font(AppFont.numberSmall)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
@@ -764,7 +741,6 @@ struct I4MobileInstallView: View {
         loading = true
         errorText = nil
         refreshPackStatuses()
-        downloadedCount = IPADownloadLibrary.shared.items().count
         do {
             // collectFull 是阻塞调用（建 RSD 隧道 + 读 lockdown），放后台；非 Sendable 值经薄包装转移.
             let boxed = try await Task.detached(priority: .userInitiated) {
@@ -941,5 +917,144 @@ struct I4MobileInstallView: View {
         } catch {
             stage = .failed(error.localizedDescription)
         }
+    }
+}
+
+// MARK: - 本页专属下载管理
+
+/// 本页专属下载管理 —— **只列「安装爱思移动端」页自己下载 / 导入的 IPA**.
+///
+/// 为什么不复用 `IPADownloadManagerView`：那个视图读的是**共享下载台账**
+/// （`Documents/AppStoreDownloads` + `Documents/ipa_downloads.json`），本页的 IPA 落
+/// `Caches/I4MobileIPA/` 且**不进台账** ⇒ 台账里全是 AppStore / 免登录商店 / 软件源的东西，
+/// 与本页无关（用户原话：「AppStore商店下载的东西进入我'安装爱思移动端'的下载管理列表
+/// 干什么 你没有做好区分！」）. 故本页自建一个只读自己缓存目录的列表 —— 本页下载的 IPA
+/// 在这里，别的来源的 IPA 不会出现.
+///
+/// 与页面「IPA 来源」区的分工：来源区管**下载**（未缓存的包可下），本页管**已下载的**
+/// （只列 `cached`，可安装 / 删除）.
+private struct I4MobileDownloadManagerView: View {
+    /// 安装动作（与主页注入给 `I4MobileInstallView` 的一致）；`nil` = 未接入，不显示安装按钮.
+    var installAction: (() async throws -> Void)? = nil
+
+    @State private var statuses: [I4MobileInstallService.PackStatus] = []
+    @State private var installingId: String?
+    @State private var message: String?
+
+    /// 只列**已缓存**的包（未下载的不进「下载管理」—— 它们归页面的「IPA 来源」区）.
+    private var cached: [I4MobileInstallService.PackStatus] {
+        statuses.filter { $0.cached }
+    }
+
+    var body: some View {
+        List {
+            if cached.isEmpty {
+                emptySection
+            } else {
+                Section {
+                    ForEach(cached) { status in
+                        row(status)
+                    }
+                } header: {
+                    Text("本页已下载（\(cached.count)）")
+                } footer: {
+                    Text("这里只显示「安装爱思移动端」页下载 / 导入的 IPA（Caches/I4MobileIPA）."
+                         + "App Store 商店、免登录商店、软件源下载的包不在此列，各自由其入口管理.")
+                }
+            }
+            if let message {
+                Section {
+                    Text(message).font(AppFont.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("下载管理")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { reload() }
+        .refreshable { reload() }
+    }
+
+    private var emptySection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("本页还没有下载任何 IPA", systemImage: "shippingbox")
+                    .font(AppFont.subheadline)
+                Text("在「安装爱思移动端」页的「IPA 来源」里下载或手动导入后，会出现在这里.")
+                    .font(AppFont.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ status: I4MobileInstallService.PackStatus) -> some View {
+        let pack = status.pack
+        HStack(spacing: 12) {
+            AppRowIcon(systemName: "shippingbox.fill", tint: AppTheme.trSuccess,
+                       symbolSize: 15, frameSize: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pack.fileName).font(AppFont.subheadlineEmphasis)
+                Text("已缓存 \(status.bytes / 1024 / 1024) MB")
+                    .font(AppFont.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 6)
+            if installAction != nil {
+                Button {
+                    AppHaptics.tap()
+                    Task { await install(pack) }
+                } label: {
+                    if installingId == pack.id {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("安装").font(AppFont.caption)
+                    }
+                }
+                .buttonStyle(TintedButtonStyle(tint: AppTheme.trAccent))
+                .controlSize(.small)
+                .disabled(installingId != nil)
+            }
+            Button {
+                AppHaptics.tap()
+                remove(pack)
+            } label: {
+                Image(systemName: "trash").font(AppFont.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppTheme.trDanger)
+            .disabled(installingId != nil)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func reload() {
+        statuses = I4MobileInstallService.packStatuses()
+    }
+
+    private func install(_ pack: I4MobileInstallService.Pack) async {
+        installingId = pack.id
+        message = nil
+        do {
+            _ = try await I4MobileInstallService.install(
+                pack: pack,
+                onLog: { LoginLogger.shared.log($0, category: .i4Fix) })
+            message = "已安装 \(pack.fileName)."
+        } catch {
+            message = "安装未完成：\(error.localizedDescription)"
+        }
+        installingId = nil
+        reload()
+    }
+
+    private func remove(_ pack: I4MobileInstallService.Pack) {
+        do {
+            try I4MobileInstallService.removeCachedIPA(pack)
+            message = "已删除 \(pack.fileName) 的缓存."
+        } catch {
+            message = "删除失败：\(error.localizedDescription)"
+        }
+        reload()
     }
 }

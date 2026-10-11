@@ -103,29 +103,6 @@ enum I4AppFixService {
 
     // MARK: - 模型
 
-    /// 候选 App 的命中来源（两条识别路径取并集，各带诚实口径）.
-    enum MatchSource: String {
-        /// P1：本 App 的爱思源下载台账里有该 bundleId（覆盖「经本 App 下载过」的包）.
-        case downloadLedger = "下载台账"
-        /// P2：已安装 App 的购买邮箱属于爱思共享账号白名单（覆盖「任何用爱思共享账号签的包」）.
-        case sharedAccount = "共享账号"
-    }
-
-    /// 一个候选 App（设备上「疑似爱思源安装」的应用）.
-    struct Candidate: Identifiable, Hashable {
-        var bundleId: String
-        var name: String
-        var version: String?
-        var iconURL: String?
-        /// 命中的识别路径（可能两条都命中）.
-        var matchedBy: Set<MatchSource>
-
-        var id: String { bundleId }
-
-        /// 仅由 P2（共享账号）命中 —— 白名单口径未证实 100% 等价于「爱思源安装」，界面上标「疑似」.
-        var isSuspected: Bool { matchedBy == [.sharedAccount] }
-    }
-
     /// 设备身份（供构造 plist 与 UI 展示）；每个字段可空 = 该来源这次没读到，**不编默认值**.
     struct DeviceIdentity {
         var serial: String?
@@ -215,62 +192,7 @@ enum I4AppFixService {
         return FileManager.default.fileExists(atPath: path)
     }
 
-    // MARK: - ① 列出候选 App（P1 台账 × P2 白名单，取并集）
-
-    /// 列出设备上「疑似爱思源安装」的 App.
-    ///
-    /// - Parameter installed: 已安装应用列表（由 `AppDiscovery.fetchInstalledApps()` 取得；调用方传入，
-    ///   使本方法保持纯逻辑、不自己建隧道）.
-    /// - Note: 会读 `IPADownloadLibrary.shared.items()`（下载台账）. 该方法按既有约定在主线程调用.
-    static func candidates(installed: [InstalledApp]) -> [Candidate] {
-        let ledger = IPADownloadLibrary.shared.items()
-        let i4Source = IPADownloadCenter.Source.i4Free.rawValue
-
-        // P1：爱思源台账里的 bundleId → 图标地址（顺带把图标回填给候选）.
-        var ledgerIcons: [String: String] = [:]
-        var ledgerBundleIds: Set<String> = []
-        for item in ledger where item.source == i4Source {
-            guard let bundleId = item.bundleId, !bundleId.isEmpty else { continue }
-            ledgerBundleIds.insert(bundleId)
-            if let icon = item.iconURL, !icon.isEmpty, ledgerIcons[bundleId] == nil {
-                ledgerIcons[bundleId] = icon
-            }
-        }
-
-        var result: [Candidate] = []
-        for app in installed {
-            var matched: Set<MatchSource> = []
-            if ledgerBundleIds.contains(app.bundleIdentifier) {
-                matched.insert(.downloadLedger)
-            }
-            // P2：购买邮箱 ∈ 爱思共享账号白名单（用 AppTypeDetector 的既有口径判定）.
-            let type = AppTypeDetector.detect(
-                entitlements: [:],
-                applicationType: app.applicationType,
-                iTunesAppleID: app.iTunesAppleID,
-                hasITunesMetadata: app.hasITunesMetadata
-            )
-            if type == .appStoreShared {
-                matched.insert(.sharedAccount)
-            }
-            guard !matched.isEmpty else { continue }
-            result.append(Candidate(
-                bundleId: app.bundleIdentifier,
-                name: app.name,
-                version: app.version,
-                iconURL: ledgerIcons[app.bundleIdentifier],
-                matchedBy: matched
-            ))
-        }
-
-        let sorted = result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        LoginLogger.shared.log(
-            "[i4修复] 候选 \(sorted.count) 个（台账命中 \(sorted.filter { $0.matchedBy.contains(.downloadLedger) }.count)，"
-            + "共享账号命中 \(sorted.filter { $0.matchedBy.contains(.sharedAccount) }.count)），"
-            + "bundleIds=\(sorted.map(\.bundleId).joined(separator: ","))",
-            category: .i4Fix)
-        return sorted
-    }
+    // MARK: - ① 检测本机是否装了爱思代理 App（读者）
 
     /// 本机是否装了爱思代理 App（读者强候选）；返回命中的 bundle id，没有则 nil.
     static func proxyAppBundleId(in installed: [InstalledApp]) -> String? {
@@ -428,8 +350,12 @@ enum I4AppFixService {
             LoginLogger.shared.log("[i4修复] 只读分支：allowWrite=false，未写入", category: .i4Fix)
         }
 
-        // 如实的补充说明（逐条事实）.
+        // 如实的补充说明（逐条事实，供界面「技术详情」折叠区展示）.
         var notes: [String] = []
+        if allowWrite {
+            notes.append("落盘路径 \(accAFCPath)，\(bytesWritten ?? 0) bytes，"
+                         + "读回一致=\(matches.map { String($0) } ?? "nil").")
+        }
         if let reason = notWrittenReason { notes.append(reason) }
         if proxy == nil {
             notes.append("本机未检测到爱思代理 App（\(i4MobileBundleIds.count) 个候选 bundle id 均不在已安装列表），"
@@ -441,11 +367,10 @@ enum I4AppFixService {
 
         let verdict: String
         if allowWrite {
-            verdict = "已按爱思做法写入 \(accAFCPath)（\(bytesWritten ?? 0) bytes，"
-                + "第 \(attempts)/\(writeMaxAttempts) 次成功，读回一致=\(matches.map { String($0) } ?? "nil")），"
-                + "用于修复爱思源应用的弹窗."
+            let matchNote = matches == true ? "" : "（读回不一致）"
+            verdict = "已写入设备授权文件，第 \(attempts)/\(writeMaxAttempts) 次成功\(matchNote)."
         } else {
-            verdict = "本次未写入，仅读取并展示设备上的 \(accAFCPath)."
+            verdict = "未写入，仅读取设备上的授权文件."
         }
 
         return Report(

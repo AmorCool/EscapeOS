@@ -1,6 +1,18 @@
 import SwiftUI
 
-/// v0.3.197：主页（手机管家形态）— 顶部灵动球 hero + 卡片网格.
+/// v0.3.xxx：主页按**巨魔录音机（TRApp）设计语言**重做（原 2×N 网格卡片 → inset-grouped 分组列表）.
+///
+/// 设计口径（对照 `P4_全能签逆向/_简报/逆向_巨魔录音机UI完整规范.md`，只借**结构 / 节奏**，
+/// 不照抄内容）：
+/// - **页边距 20**（`AppTheme.pageInset`，原 16）；**大标题**走系统 `.large`（34pt bold）.
+/// - **功能入口改 inset-grouped 卡片分组**（连续圆角 + 分段标题），行 =
+///   连续圆角图标底 + **17pt semibold** 标题 + **13pt footnote** 副标题 + 右 chevron
+///   （TRApp 设置列表行语言；分隔线左缩进对齐标题）.
+/// - **强调色**用 TRApp 实测 `#005493`（`AppTheme.trAccent`）；**不全局改** `AppTheme.accent`
+///   （全 App 影响面大，决定与理由见简报 §③）.
+/// - **不用纯蓝实底按钮**：hero 的「立即体检」改 `TintedButtonStyle` 淡蓝底（圆角 `AppRadius.button`）.
+/// - 图标 `.hierarchical` 分层渲染；百宝箱入口 `.symbolEffect(.bounce)` + 触觉.
+///
 /// v0.3.219：Hero 换装 Metal 实时液态玻璃球（LiquidGlassOrbView + LiquidGlassOrb.metal）.
 /// v0.3.207：百宝箱 = 系统原生 sheet（presentationDetents 0.4↔1.0，原生上拉展开/
 /// 下拉关闭——跟手流畅，返回不必点横线；把手区点击或上滑触发）.
@@ -10,6 +22,8 @@ struct HomeView: View {
     @State private var securityScore: Int = 92
     /// v0.3.207：百宝箱 sheet
     @State private var treasureOpen = false
+    /// 百宝箱入口图标弹跳动效触发值（TRApp `Symbols18BounceSymbolEffect` 语言）.
+    @State private var treasureBounce = 0
 
     /// v0.3.441：Gestalt 不再占底部 tab，改从百宝箱进入。
     /// 为什么要 pendingGestalt 这个中转：直接在 sheet 里 push 会套第二层导航栈（页面没返回按钮），
@@ -37,11 +51,13 @@ struct HomeView: View {
         ScrollView {
             VStack(spacing: 20) {
                 heroCard
-                cardsGrid
-                treasureHandleBar   // v0.3.207：底部把手（点击/上滑开 sheet）
+                cleanupSection
+                deviceSection
+                extensionSection
+                treasureCard
                 Spacer(minLength: 8)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, AppTheme.pageInset)
             .padding(.top, 4)
             .padding(.bottom, 32)
         }
@@ -129,10 +145,12 @@ struct HomeView: View {
         .navigationDestination(isPresented: $showMobileInstall) {
             // 把 Service 的安装动作注入 View：不注入则 installAction 恒为 nil，
             // 页面恒显「本页未接入安装动作」且主按钮 .disabled(true)（接线断裂）。
-            // 用 makeInstallAllAction（装全部内嵌包，与「安装爱思移动端」语义一致）；
+            // 用 makeInstallCachedAction（**只装已缓存的包**，跳过未缓存的）—— 页面主按钮要的是
+            // 「把已经下好的包装上」；旧接线用 makeInstallAllAction（要求内置三包全缓存，缺一即抛），
+            // 用户实测只缓存了 220.ipa 时点「开始安装」却报「缓存里没有 217.ipa」，已缓存的 220 也不装。
             // 其返回类型 () async throws -> Void 与 I4MobileInstallView.installAction 精确匹配。
             // onLog 转发到 LoginLogger(.i4Fix)，与 I4AppFixView 同一板块。
-            I4MobileInstallView(installAction: I4MobileInstallService.makeInstallAllAction(
+            I4MobileInstallView(installAction: I4MobileInstallService.makeInstallCachedAction(
                 onLog: { LoginLogger.shared.log($0, category: .i4Fix) }))
         }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
@@ -146,174 +164,131 @@ struct HomeView: View {
         .navigationBarTitleDisplayMode(.large)
     }
 
-    /// 打开百宝箱 sheet（把手点击/上滑触发）
+    /// 打开百宝箱 sheet（点击/上滑触发）：触觉 + 图标弹跳.
     private func openTreasure() {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        AppHaptics.tap()
+        treasureBounce += 1
         treasureOpen = true
     }
 
     // MARK: Hero —— 灵动球 + 分数 + 立即体检
+
     // v0.3.219：Metal 实时液态玻璃球（折射 + RGB 色散 + 菲涅尔 + 焦散 + 液态轮廓，
     // 移植自 liquid-glass v2 WebGL 样板；组件见 LiquidGlassOrbView.swift，
-    // 着色器见 LiquidGlassOrb.metal；iOS 17 以下回退旧版圆环进度样式）
+    // 着色器见 LiquidGlassOrb.metal；iOS 17 以下回退旧版圆环进度样式）.
     private var heroCard: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
             LiquidGlassOrbView(score: securityScore, tint: scoreColor)
             Text(scoreSubtitle)
-                .font(.footnote)
+                .font(AppFont.footnote)
                 .foregroundStyle(.secondary)
-            // 立即体检按钮
+            // 立即体检：淡蓝底按钮（**不是纯蓝实底**），圆角对齐 TRApp 大按钮（12）.
             NavigationLink {
                 HealthCheckView(score: $securityScore)
             } label: {
                 Label("立即体检", systemImage: "stethoscope")
-                    .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.blue.opacity(0.92))
-                    )
-                    .foregroundStyle(.white)
             }
+            .buttonStyle(TintedButtonStyle(tint: AppTheme.trAccent, radius: AppRadius.button))
         }
         .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-    }
-
-    // MARK: 功能卡片网格（v0.3.213：参考系统管家 2×3 = 6 卡布局）
-    private var cardsGrid: some View {
-        let columns = [
-            GridItem(.flexible(), spacing: 12),
-            GridItem(.flexible(), spacing: 12),
-        ]
-        return LazyVGrid(columns: columns, spacing: 12) {
-            NavigationLink {
-                SpaceReclaimView(appList: appList)
-                    .navigationBarTitleDisplayMode(.inline)
-            } label: {
-                HomeCard(title: "空间回收",
-                         subtitle: "扫描可清理的应用缓存",
-                         icon: "internaldrive",
-                         tint: .blue)
-            }
-            .buttonStyle(.plain)
-
-            // v0.3.313：设备瘦身（爱思助手 8.0「设备瘦身」移植——
-            // 空间占用 7 项分析 + 系统缓存/临时文件清理，口径与爱思一致）
-            NavigationLink {
-                DeviceSlimView()
-                    .navigationBarTitleDisplayMode(.inline)
-            } label: {
-                HomeCard(title: "设备瘦身",
-                         subtitle: "空间占用分析 / 缓存清理",
-                         icon: "arrow.down.to.line",
-                         tint: .mint)
-            }
-            .buttonStyle(.plain)
-
-            NavigationLink {
-                AppListView(viewModel: appList)
-            } label: {
-                HomeCard(title: "应用管理",
-                         subtitle: "管理已安装应用",
-                         icon: "square.grid.2x2.fill",
-                         tint: .indigo)
-            }
-            .buttonStyle(.plain)
-
-            NavigationLink {
-                ModuleManagerView()
-                    .navigationBarTitleDisplayMode(.inline)
-            } label: {
-                HomeCard(title: "模块",
-                         subtitle: "模块管理",
-                         icon: "shippingbox.fill",
-                         tint: .orange)
-            }
-            .buttonStyle(.plain)
-
-            // v0.3.199：电池健康（iDescriptor BatteryInfo 移植）
-            NavigationLink {
-                BatteryHealthView()
-            } label: {
-                HomeCard(title: "电池健康",
-                         subtitle: "循环次数 / 容量 / 健康度",
-                         icon: "battery.75percent",
-                         tint: .green)
-            }
-            .buttonStyle(.plain)
-
-            // v0.3.207：设备信息（iDescriptor DeviceInfo 面板移植）
-            NavigationLink {
-                DeviceInfoView()
-            } label: {
-                HomeCard(title: "设备信息",
-                         subtitle: "机型 / 系统 / CPU / 存储",
-                         icon: "iphone.gen3",
-                         tint: .teal)
-            }
-            .buttonStyle(.plain)
-
-            // v0.3.208：文档浏览（iDescriptor FileSharing 移植——开启文档共享的应用文件树）
-            NavigationLink {
-                FileSharingAppsView()
-            } label: {
-                HomeCard(title: "文档浏览",
-                         subtitle: "开启文件共享的 App 文档目录",
-                         icon: "folder.fill",
-                         tint: .indigo)
-            }
-            .buttonStyle(.plain)
-
-            // v0.3.295：AppStore 商店（榜单 / 搜索 / 详情；安装走系统 App Store）
-            NavigationLink {
-                AppStoreView()
-            } label: {
-                HomeCard(title: "AppStore 商店",
-                         subtitle: "榜单 / 搜索 / 应用详情",
-                         icon: "app.badge.fill",
-                         tint: .blue)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    // MARK: 百宝箱把手（v0.3.206：底部上拉抽屉——小米管家式，非嵌内容非简单切换）
-
-    /// 主页底部把手条：点击或上滑手势进入百宝箱抽屉（面板从底部滑动进入）.
-    private var treasureHandleBar: some View {
-        VStack(spacing: 10) {
-            Capsule()
-                .fill(Color(.separator))
-                .frame(width: 40, height: 5)
-            HStack(spacing: 8) {
-                Image(systemName: "shippingbox.and.arrow.backward.fill")
-                    .foregroundStyle(.purple)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("百宝箱")
-                        .font(.subheadline.weight(.semibold))
-                    Text("上拉查看小工具 · 更多工具持续补充")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.up")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 14)
-        .padding(.horizontal, 16)
         .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        )
+    }
+
+    // MARK: 功能分组（inset-grouped 卡片，TRApp 设置列表语言）
+
+    private var cleanupSection: some View {
+        featureSection(title: "清理与优化", symbol: "sparkles") {
+            navRow(title: "空间回收", subtitle: "扫描可清理的应用缓存",
+                   icon: "internaldrive", tint: AppTheme.trAccent) {
+                SpaceReclaimView(appList: appList)
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+            rowDivider
+            navRow(title: "设备瘦身", subtitle: "空间占用分析 / 缓存清理",
+                   icon: "arrow.down.to.line", tint: AppTheme.trRecoverable) {
+                DeviceSlimView()
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+    }
+
+    private var deviceSection: some View {
+        featureSection(title: "设备与系统", symbol: "iphone.gen3") {
+            navRow(title: "应用管理", subtitle: "管理已安装应用",
+                   icon: "square.grid.2x2.fill", tint: AppTheme.trAccent) {
+                AppListView(viewModel: appList)
+            }
+            rowDivider
+            navRow(title: "电池健康", subtitle: "循环次数 / 容量 / 健康度",
+                   icon: "battery.75percent", tint: AppTheme.trSuccess) {
+                BatteryHealthView()
+            }
+            rowDivider
+            navRow(title: "设备信息", subtitle: "机型 / 系统 / CPU / 存储",
+                   icon: "iphone.gen3", tint: AppTheme.trRecoverable) {
+                DeviceInfoView()
+            }
+            rowDivider
+            navRow(title: "文档浏览", subtitle: "开启文件共享的 App 文档目录",
+                   icon: "folder.fill", tint: AppTheme.trAccent) {
+                FileSharingAppsView()
+            }
+        }
+    }
+
+    private var extensionSection: some View {
+        featureSection(title: "扩展与商店", symbol: "shippingbox.fill") {
+            navRow(title: "模块", subtitle: "模块管理",
+                   icon: "shippingbox.fill", tint: AppTheme.trAccent) {
+                ModuleManagerView()
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+            rowDivider
+            navRow(title: "AppStore 商店", subtitle: "榜单 / 搜索 / 应用详情",
+                   icon: "app.badge.fill", tint: AppTheme.trAccent) {
+                AppStoreView()
+            }
+        }
+    }
+
+    // MARK: 百宝箱入口（上拉抽屉；点击/上滑触发）
+
+    /// 主页底部百宝箱入口：点击或上滑手势进入百宝箱抽屉（面板从底部滑动进入）.
+    ///
+    /// 用 `onTapGesture` + `highPriorityGesture`（沿用真机验证过的旧实现），**不套 Button** ——
+    /// Button 的点击手势与这里的高优先级 DragGesture 并存时，真机上点击可能被拖拽手势吞掉.
+    private var treasureCard: some View {
+        HStack(spacing: 12) {
+            AppRowIcon(systemName: "shippingbox.and.arrow.backward.fill",
+                       tint: AppTheme.trAccent, symbolSize: 16, frameSize: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("百宝箱")
+                    .font(AppFont.bodyEmphasis)
+                    .foregroundStyle(.primary)
+                Text("小工具集 · 点击或上拉展开")
+                    .font(AppFont.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 6)
+            Image(systemName: "chevron.up")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .appSymbol()
+                .symbolEffect(.bounce, value: treasureBounce)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
         .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
         .onTapGesture { openTreasure() }
         .highPriorityGesture(
             // 上滑手势进入抽屉（与点击并存；只响应向上滑动）
@@ -324,6 +299,53 @@ struct HomeView: View {
                     openTreasure()
                 }
         )
+    }
+
+    // MARK: - 通用视觉件（TRApp inset-grouped 语言）
+
+    /// 分段标题：SF Symbol + 次级字色小标题，位于卡片**上方**（inset-grouped 分段口径）.
+    private func sectionHeader(_ title: String, _ symbol: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AppTheme.trAccent)
+                .appSymbol()
+            Text(title)
+                .font(AppFont.captionEmphasis)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    /// 行分隔线：左缩进对齐到图标底右侧（图标 30 + 间距 12 + 左内边距 14 = 56）.
+    private var rowDivider: some View {
+        Divider().padding(.leading, 56)
+    }
+
+    /// 功能分组：分段标题 + 连续圆角卡片（行内 0 间距，靠 `rowDivider` 分隔）.
+    private func featureSection<Content: View>(
+        title: String, symbol: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader(title, symbol)
+            VStack(spacing: 0) { content() }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .appCard(padding: 0)
+        }
+    }
+
+    /// 功能行：`HomeRowLabel` 作 label 的 `NavigationLink`（`.plain` 样式，保留整行点击）.
+    private func navRow<Destination: View>(
+        title: String, subtitle: String, icon: String, tint: Color,
+        @ViewBuilder destination: () -> Destination
+    ) -> some View {
+        NavigationLink {
+            destination()
+        } label: {
+            HomeRowLabel(icon: icon, tint: tint, title: title, subtitle: subtitle)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: 视觉辅助
@@ -343,31 +365,34 @@ struct HomeView: View {
     }
 }
 
-/// 主页功能卡片
-struct HomeCard: View {
-    let title: String
-    let subtitle: String
+/// 主页功能行标签（TRApp inset-grouped 行语言）：连续圆角图标底 + 17pt semibold 标题 +
+/// 13pt footnote 副标题 + 右侧 chevron. 仅作 `HomeView.navRow` 的 label 使用.
+private struct HomeRowLabel: View {
     let icon: String
     let tint: Color
+    let title: String
+    let subtitle: String
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(tint)
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 12) {
+            AppRowIcon(systemName: icon, tint: tint, symbolSize: 16, frameSize: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(AppFont.bodyEmphasis)
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(AppFont.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .appSymbol()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .contentShape(Rectangle())
     }
 }

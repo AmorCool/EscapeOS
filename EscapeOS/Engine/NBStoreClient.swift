@@ -380,6 +380,60 @@ enum NBStoreClient {
         }
     }
 
+    /// 取包失败时，把 NB 的 `code=7` 翻成**用户可读**的结论 —— 界面绝不出现 `code=7` 这类内部码。
+    ///
+    /// ## 两类成因（2026-10-11 定点实测，StikDebug / appID=6744045754）
+    ///
+    /// 脚本 `P4_全能签逆向/_工作区/验证脚本/nb_stikdebug_retry.py`：对 `getAppHistoryList`
+    /// 的各参数组合各连打 6 次，结果**全部 `code=7`**，msg 只有两种：
+    /// - **`未获取到数据`（稳定，主因）** —— NB 库里没有这条 App 的可用 iOS 包。
+    ///   StikDebug 的内嵌快照直链（`appStoreData.url`）accessKey 到期 **2025-12-13**、
+    ///   实下 `HTTP 403`；现取也回空。⇒ **真的拿不到**，不是 bug、重试无用。
+    /// - **`请求异常，参数：，错误：dialing to the given TCP address timed out`（偶发）**
+    ///   —— NB 服务端去上游取包时 TCP 超时，属临时故障 ⇒ 稍后重试可能成功。
+    ///
+    /// ## 更正 v0.3.587 的窄化归因
+    ///
+    /// v0.3.587 把稳定 `code=7` 归成「都是 Mac App Store 应用（无 iOS 包）」。
+    /// **StikDebug 是 iOS 应用**（bundleID `com.stik.sj`、iOS 安装包），同样稳定 `code=7`
+    /// ⇒ 稳定 `code=7` 的真实含义是「**NB 库里这条 App 没有可取的包**」，
+    /// 与平台无关（快照过期 / 上游无货都会落到这一支）。
+    ///
+    /// ## 对照组（同一时刻，证「按 App 区分」而非全局故障）
+    ///
+    /// `appID=6451407032`（官方抓包那条）与 `appID=1517062289` 均 `code=0` 且带**新鲜**直链
+    /// （accessKey 到期在未来）；换 `udid` / `osVersion` / `productType` / `country` /
+    /// `User-Agent` / 官方抓包身份 / 4 台 host **没有一种**能把 StikDebug 的 7 变成 0。
+    enum PackageFailure: Equatable {
+        /// NB 库里没有这条 App 的可用安装包（含快照直链已过期）—— 重试无用。
+        case notInLibrary
+        /// 服务端上游临时故障 —— 稍后重试可能成功。
+        case upstreamBusy
+
+        /// 面向用户的文案（英文句点结尾；不含任何内部码）。
+        var userMessage: String {
+            switch self {
+            case .notInLibrary: return "该应用在 NB 下架库里没有可用的安装包."
+            case .upstreamBusy: return "NB 服务端暂时取不到这个包，请稍后重试."
+            }
+        }
+    }
+
+    /// 把取包抛出的错误归类成 `PackageFailure`；**不是 `code=7` 就回 nil**（交调用方原样处理）。
+    ///
+    /// 界面侧统一走这里，避免每个页面各自判 `code=7` 时漏判（详情页就曾漏判、把
+    /// `未获取到数据（7）` 原样弹给用户）。
+    static func packageFailure(from error: Error) -> PackageFailure? {
+        guard case StoreError.server(let code, let message) = error, code == "7" else { return nil }
+        return isUpstreamBusy(message) ? .upstreamBusy : .notInLibrary
+    }
+
+    /// `code=7` 是否属「上游临时故障」——**唯一判据是 msg 里的特征串**。
+    /// 其余 `code=7`（含 `未获取到数据`）一律按「库里没包」处理。
+    private static func isUpstreamBusy(_ message: String) -> Bool {
+        message.contains("dialing") || message.contains("请求异常")
+    }
+
     // MARK: - 请求
 
     private static let session: URLSession = {
@@ -1001,20 +1055,16 @@ enum NBStoreClient {
                                     bundleID: app.bundleID ?? "",
                                     country: country)
         } catch StoreError.server(let code, let message) where code == "7" {
-            // `code=7` 有**两种**成因（2026-10-10 直连实测，脚本 nb_offsale_param_probe.py）：
-            //  · 该条目在 NB 库里根本没有 iOS 包 —— msg「未获取到iOS版本数据」。实测命中的
-            //    都是 Mac App Store 应用（微信 836500024 / 抖音 1640407382，iTunes lookup
-            //    的 kind=mac-software）⇒ 回 nil，界面如实说「库里没有」，不假装能取。
-            //  · NB 服务端自己去 Apple 取包时上游失败 —— msg 形如
-            //    「请求异常，参数：，错误：dialing to the given TCP address timed out」。
-            //    属临时故障，包其实存在 ⇒ 原样抛出去，让上层提示「稍后重试」。
-            // 判据：只认「上游临时故障」的特征串，其余 code=7 一律按「库里没包」处理。
-            // 参数无关：换 appVerId / plusID / bundleID / country 的组合实验**没有一种**能把
-            // code=7 变成 code=0（同一个 appID 反复打仍是 7）。原始码与 msg 一律进日志。
+            // `code=7` 的**两类成因与判据**见 `PackageFailure`（2026-10-11 定点实测更正）：
+            //  · 稳定「未获取到数据」= NB 库里没有这条 App 的可用 iOS 包（快照过期 / 上游无货）
+            //    ⇒ 回 nil，界面如实说「库里没有」，不假装能取。**不限于 Mac 应用**
+            //    （iOS 的 StikDebug 也落这一支，见 `PackageFailure` 头注释）。
+            //  · 偶发「请求异常…dialing…timed out」= 服务端上游临时超时 ⇒ 抛出，上层提示重试。
+            // 参数 / 身份无关：换 appVerId / plusID / bundleID / country / udid / osVersion /
+            // UA 的组合实验**没有一种**能把 StikDebug 的 7 变成 0。原始码与 msg 一律进日志。
             LoginLogger.shared.log("\(logTag) [失败] 现取直链 code=7（\(app.name) appID=\(storeID)）：\(message)",
                                    category: .appStore)
-            let upstreamFailed = message.contains("dialing") || message.contains("请求异常")
-            if upstreamFailed { throw StoreError.server(code: code, message: message) }
+            if isUpstreamBusy(message) { throw StoreError.server(code: code, message: message) }
             return nil
         }
         if pkg == nil {

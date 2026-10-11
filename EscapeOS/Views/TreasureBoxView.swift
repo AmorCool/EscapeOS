@@ -31,16 +31,11 @@ struct TreasureBoxView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部标题区（sheet 拖动指示条由 presentationDragIndicator 提供）
-            // v0.3.208：拖动指示条与"百宝箱"文字挨太近 → 加 padding 撑开
-            Text("百宝箱")
-                .font(AppFont.headline)
-                .padding(.top, 18)
-                .padding(.bottom, 10)
-
+            // 顶部标题区：v0.3.xxx 起标题改由页内 `brandHeader` 承担（不再是固定居中标题 +
+            // 全宽渐变 banner 两处重复）。sheet 拖动指示条由 presentationDragIndicator 提供。
             ScrollView {
                 VStack(spacing: AppSpacing.row) {
-                    heroCard
+                    brandHeader
                     // v0.3.441：把「工具」卡提到设备控制卡**之前**。
                     // 为什么：本 sheet 默认 detent 只有 0.4，排在第三张的卡片在折叠区之外 ——
                     // 「Gestalt 编辑」这个**真实可点的入口**会看不见，得先上拉才找得到。
@@ -56,49 +51,24 @@ struct TreasureBoxView: View {
         .background(Color(.systemBackground))
     }
 
-    private var heroCard: some View {
+    /// 页面头部：品牌图标块 + 标题 + 副标题（**不是全宽方块 banner**）。
+    ///
+    /// v0.3.xxx：用户反馈「banner 是方块状的，不喜欢这种方块」⇒ 去掉全宽深藏青渐变实心 banner，
+    /// 深色品牌色只保留在**紧凑的连续圆角图标块**（`AppBrandTile`）里，标题 / 副标题走页面背景上的
+    /// 主 / 次字色。对照 TRApp（设置页无 hero、直接大标题 + 卡片分组；欢迎页 App 图标是深色大圆角方块）。
+    private var brandHeader: some View {
         HStack(spacing: 14) {
-            // 图标底改白色半透明圆角块（TRApp AppIcon 语言）：置于品牌深藏青渐变上对比清晰.
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white.opacity(0.16))
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
-                Image(systemName: "shippingbox.and.arrow.backward.fill")
-                    .font(.system(size: 26, weight: .medium))
-                    .foregroundStyle(.white)
-                    .appSymbol()
-            }
-            .frame(width: 58, height: 58)
-
-            VStack(alignment: .leading, spacing: 4) {
+            AppBrandTile(systemName: "shippingbox.and.arrow.backward.fill", size: 56, symbolSize: 26)
+            VStack(alignment: .leading, spacing: 3) {
                 Text("百宝箱")
-                    .font(AppFont.title3)
-                    .foregroundStyle(.white)
+                    .font(AppFont.title)
                 Text("小工具集 · 持续补充")
                     .font(AppFont.caption)
-                    .foregroundStyle(.white.opacity(0.82))
+                    .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
-        .padding(18)
-        .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                    .fill(AppTheme.brandGradient)
-                // 右上角柔光（装饰，营造渐变纵深）.
-                Circle()
-                    .fill(Color.white.opacity(0.10))
-                    .frame(width: 180, height: 180)
-                    .blur(radius: 48)
-                    .offset(x: 110, y: -60)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
-        )
+        .padding(.top, 10)
     }
 
     // MARK: - 设备控制
@@ -384,8 +354,8 @@ struct TreasureBoxView: View {
             .buttonStyle(.plain)
             Divider()
             // 爱思应用修复安装：把爱思 9.0 的「修复应用」入口移植过来.
-            // 移植范围仅「经 AFC 写设备 i4tool2.acc + 读回校验」，不含联网授权，
-            // 且与 App Store 加密包的 -42112 不同层（详见 I4AppFixView 顶部注释）.
+            // 设备级一键修复（照爱思：无应用选择、无台账），经 AFC 写设备 i4tool2.acc + 读回校验，
+            // 不含联网授权（详见 I4AppFixView 顶部注释）.
             Button {
                 AppHaptics.tap()
                 onOpenI4Fix()

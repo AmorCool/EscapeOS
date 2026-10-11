@@ -85,9 +85,12 @@
 		<string>itms-services</string>
 		<string>App-Prefs</string>
 		<string>prefs</string>
-		<!-- 2026-10-10：隧道方式「Shadowrocket 连接」需 canOpenURL 探测是否已安装（仅跳转目标）。
-		     用 Shadowrocket 官方 wiki URL-Schemes 一节确证的 `shadowrocket` scheme
+		<!-- 2026-10-11：隧道方式「Shadowrocket 连接」的白名单登记（仅跳转目标）。
+		     `shadowrocket` 是 Shadowrocket 官方 wiki URL-Schemes 一节确证的 scheme
 		     （`shadowrocket://open` = 启动 VPN 隧道），见 TunnelProvider.ShadowrocketTunnel 注释。
+		     ⚠️ 本项**不再用于 canOpenURL 门控**：真机实测 canOpenURL 在 TrollStore / 越狱环境下会因
+		     lsd（LaunchServices）缓存未同步而假阴性（白名单与注册都正确仍偶发 false），故
+		     ShadowrocketTunnel.availability 恒可用，探测改由 open 回调承担。白名单保留仅为「已登记」事实。
 		     此前误用的 `sub` 已移除：`sub://` 是订阅导入用途，实测 canOpenURL 结果不可靠。 -->
 		<string>shadowrocket</string>
 		<!-- 2026-10-10：隧道方式「LocalDevVPN」需 canOpenURL 探测是否已安装。

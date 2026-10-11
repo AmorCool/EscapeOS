@@ -11,396 +11,185 @@ private struct I4AccRow: Identifiable {
     let value: String
 }
 
-/// 爱思「应用修复安装」页 —— 把爱思 9.0 的「修复应用」入口移植过来.
+/// 爱思「应用修复安装」页 —— 照爱思 9.0 的「修复应用」入口，**设备级一键修复**.
 ///
 /// ## 这个页面做什么
-/// 按爱思修复流程的做法，经 AFC 把设备授权文件 `/iTunes_Control/iTunes/i4tool2.acc` 写进设备
-/// （写入**默认开**，失败重试 3 次、每次间隔 5 秒、单次超时 60 秒），并读回校验；
-/// 用于修复爱思源应用的弹窗。**不移植**：
+/// 点一次「开始修复」，按爱思修复流程经 AFC 把设备授权文件
+/// `/iTunes_Control/iTunes/i4tool2.acc` 写进设备（失败重试 3 次、每次间隔 5 秒、单次超时 60 秒），
+/// 并读回校验；用于修复爱思源应用的弹窗.
+///
+/// ## 为什么没有应用列表、没有下载台账
+/// 爱思这个入口是**设备级**的：`QDialogFixApp` 没有应用选择列表，`CDeviceAppMgr` 拿到设备对象后
+/// **无条件**写授权文件（plist 是设备级键：serial / udid / imei…，不是应用级）。
+/// 故本页照此实现：不选应用、不查下载台账、不看共享账号白名单。
+/// （证据：`P3_爱思助手_逆向/_简报/爱思9_修复弹窗_完整实现.md` §2.2）
+///
+/// ## 不移植
 ///   - 联网 `XX-AUTH` 授权（协议在 `idm_sync.dll` + 爱思服务端，iOS 侧拿不到）；
 ///   - 代理 App 容器里的 `AppInstall_SyncInfo.dat`（落点是 FairPlay 马甲包容器，读者不在我们手里）；
 ///   - 「兜底安装代理 App」（代理 App 是 FairPlay 加密马甲包，我们装不了）。
 ///
 /// ## `auth` 字段
 /// 照爱思的兜底逻辑用常量 `"1,2,3,4"`（爱思在「sync 成功但输出为空」时写这个值）；服务端
-/// `XX-AUTH` 真值拿不到，故直接用爱思自己的兜底。是否生效取决于设备端爱思代理 App（读者）.
+/// `XX-AUTH` 真值拿不到，故直接用爱思自己的兜底。是否生效取决于设备端爱思代理 App（读者）。
 ///
-/// ## 数据来源
-/// 列表与修复逻辑都在 `I4AppFixService`（服务层；本页只**调用**、不修改）.
-/// 列表口径：只列「疑似爱思源安装」的应用（下载台账 ∩ 共享账号白名单，取并集）.
+/// ## 界面口径
+/// 只留必要操作与结论；路径 / `auth` 值 / 重试次数等**技术细节折叠进「技术详情」**，
+/// 不铺在页面上（事实同时进 `LoginLogger`）.
 struct I4AppFixView: View {
-    @State private var installed: [InstalledApp] = []
-    @State private var candidates: [I4AppFixService.Candidate] = []
-    @State private var proxyBundleId: String?
-    @State private var selectedId: String?
-    /// 写入开关，**默认开**（照爱思：爱思没有「只读模式」）：默认写入设备授权文件.
-    @State private var writeEnabled = true
-    @State private var confirmShown = false
-    @State private var loading = true
     @State private var busy = false
-    @State private var loadError: String?
     @State private var repairError: String?
     @State private var report: I4AppFixService.Report?
+    @State private var confirmShown = false
     /// 前置条件（事实查询，进入页与每次刷新时重读）.
     @State private var tunnelConnected = false
     @State private var hasPairing = false
 
     var body: some View {
         List {
-            precheckSection
-            candidatesSection
+            statusSection
             actionSection
             if busy { progressSection }
             if let report { resultSection(report) }
-            disclaimerSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("爱思应用修复安装")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                Button { refresh() } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(busy)
             }
         }
-        .task { await load() }
+        .task { refresh() }
         .alert("确认修复", isPresented: $confirmShown) {
             Button("取消", role: .cancel) {}
             Button("开始修复") { Task { await runRepair() } }
         } message: {
-            Text(confirmMessage)
+            Text("将按爱思的做法写入设备授权文件，用于修复爱思源应用的弹窗.")
         }
     }
 
-    // MARK: - 前置状态
+    // MARK: - 状态（就绪时一行；缺什么列什么）
 
-    private var precheckSection: some View {
+    private var statusSection: some View {
         Section {
+            if tunnelConnected && hasPairing {
+                Label("设备已就绪", systemImage: "checkmark.circle.fill")
+                    .font(AppFont.subheadline)
+                    .foregroundStyle(AppTheme.trSuccess)
+            }
             if !tunnelConnected {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("未连接本地隧道（LocalDevVPN）", systemImage: "wifi.slash")
-                        .font(.subheadline)
-                    Text("本功能整条链依赖 RSD 隧道.请先打开 LocalDevVPN 连接后再试.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button { LocalDevVPN.openOrInstall() } label: {
-                        Text("打开 LocalDevVPN")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                HStack(spacing: AppSpacing.row) {
+                    Label("未连接本地隧道", systemImage: "wifi.slash")
+                        .font(AppFont.subheadline)
+                    Spacer()
+                    Button("打开") { LocalDevVPN.openOrInstall() }
+                        .buttonStyle(TintedButtonStyle())
+                        .controlSize(.small)
                 }
-                .padding(.vertical, 2)
             }
             if !hasPairing {
-                Label("尚未导入配对文件", systemImage: "doc.badge.ellipsis")
-                    .font(.subheadline)
+                Label("未导入配对文件", systemImage: "doc.badge.ellipsis")
+                    .font(AppFont.subheadline)
             }
-            if tunnelConnected && hasPairing {
-                Label("隧道与配对文件就绪", systemImage: "checkmark.circle")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        } header: {
-            Text("前置状态")
         }
     }
 
-    // MARK: - 候选应用
-
-    private var candidatesSection: some View {
-        Section {
-            if loading {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("正在读取已安装应用…").font(.caption).foregroundStyle(.secondary)
-                }
-            } else if let loadError {
-                Text(loadError)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            } else if candidates.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("本机没有检测到爱思源安装的应用.")
-                        .font(.subheadline)
-                    Text("识别口径：下载台账（经本 App 的爱思源下载记录）∪ 共享账号白名单"
-                         + "（购买邮箱命中爱思共享账号）.两者都未命中则不列出.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 2)
-            } else {
-                ForEach(candidates) { candidate in
-                    candidateRow(candidate)
-                }
-            }
-        } header: {
-            Text("疑似爱思源应用（\(candidates.count)）")
-        } footer: {
-            Text("修复写入的是设备级授权凭据文件 /\(I4AppFixService.accAFCPath)，与所选应用无关；"
-                 + "选择仅用于确认目标确为爱思源应用.")
-        }
-    }
-
-    private func candidateRow(_ candidate: I4AppFixService.Candidate) -> some View {
-        let selected = candidate.bundleId == selectedId
-        return Button {
-            selectedId = selected ? nil : candidate.bundleId
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? AppTheme.accent : AppTheme.unselected)
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(candidate.name)
-                        .font(.subheadline)
-                    Text(candidate.bundleId)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    if let version = candidate.version {
-                        Text("v\(version)").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Text(sourceTag(candidate))
-                        .font(.caption2)
-                        .foregroundStyle(candidate.isSuspected ? AppTheme.pending : .secondary)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// 命中来源标签：两条都命中 = 已确证；仅共享账号 = 疑似.
-    private func sourceTag(_ candidate: I4AppFixService.Candidate) -> String {
-        if candidate.matchedBy.contains(.downloadLedger) && candidate.matchedBy.contains(.sharedAccount) {
-            return "下载台账 + 共享账号"
-        }
-        if candidate.matchedBy.contains(.downloadLedger) {
-            return "下载台账"
-        }
-        return "疑似（仅共享账号）"
-    }
-
-    // MARK: - 修复动作
+    // MARK: - 修复（一键）
 
     private var actionSection: some View {
         Section {
-            Toggle(isOn: $writeEnabled) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("写入设备授权文件")
-                        .font(.subheadline)
-                    Text(writeEnabled
-                         ? "按爱思的做法构造授权文件写入设备并读回校验；失败重试 3 次，每次间隔 5 秒."
-                         : "只读取并展示设备上现有的授权文件，不写入（非爱思行为，仅供排查）.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .disabled(busy)
-
             Button {
                 confirmShown = true
             } label: {
-                Text(writeEnabled ? "开始修复" : "读取并展示")
-                    .frame(maxWidth: .infinity)
+                Text("开始修复").frame(maxWidth: .infinity)
             }
             .buttonStyle(TintedButtonStyle())
-            .disabled(!canRepair)
+            .disabled(!ready || busy)
 
-            if let hint = disabledHint {
-                Text(hint).font(.caption2).foregroundStyle(.secondary)
-            }
             if let repairError {
-                Text(repairError).font(.footnote).foregroundStyle(.red)
+                Text(repairError)
+                    .font(AppFont.caption)
+                    .foregroundStyle(AppTheme.danger)
             }
-        } header: {
-            Label("修复", systemImage: "bandage")
         }
     }
 
-    /// 为什么「修复」按钮不可点（前置校验未过时的如实提示）.
-    private var disabledHint: String? {
-        if busy { return nil }
-        guard let candidate = selectedCandidate else {
-            return "请先在上方选择要修复的爱思源应用."
-        }
-        if candidate.isSuspected {
-            return "该应用仅由共享账号白名单命中，未确证为爱思源安装，已禁用修复."
-        }
-        if !tunnelConnected { return "未连接本地隧道（LocalDevVPN），已禁用修复." }
-        if !hasPairing { return "尚未导入配对文件，已禁用修复." }
-        return nil
-    }
-
-    private var selectedCandidate: I4AppFixService.Candidate? {
-        candidates.first { $0.bundleId == selectedId }
-    }
-
-    private var canRepair: Bool {
-        guard let candidate = selectedCandidate, !busy else { return false }
-        return !candidate.isSuspected && tunnelConnected && hasPairing
-    }
-
-    private var confirmMessage: String {
-        let target = selectedCandidate.map { "\($0.name)（\($0.bundleId)）" } ?? "所选应用"
-        if writeEnabled {
-            return "将按爱思的做法，把设备授权文件写入 /\(I4AppFixService.accAFCPath)，"
-                + "用于修复 \(target) 等爱思源应用的弹窗.写入用硬编码兜底 auth，"
-                + "失败会重试 3 次（每次间隔 5 秒）."
-        }
-        return "将读取并展示设备上的 /\(I4AppFixService.accAFCPath)（不写入），"
-            + "用于确认 \(target) 是否已有爱思授权凭据."
-    }
+    private var ready: Bool { tunnelConnected && hasPairing }
 
     // MARK: - 进度
 
     private var progressSection: some View {
         Section {
-            HStack(spacing: 10) {
+            HStack(spacing: AppSpacing.row) {
                 ProgressView()
-                Text(writeEnabled ? "正在写入设备授权文件并读回校验…" : "正在读取设备授权文件…")
-                    .font(.caption)
+                Text("正在修复，请稍候…")
+                    .font(AppFont.caption)
                     .foregroundStyle(.secondary)
             }
-        } header: {
-            Text("进度")
         }
     }
 
-    // MARK: - 结果
+    // MARK: - 结果（结论一行 + 折叠的技术详情）
 
     private func resultSection(_ report: I4AppFixService.Report) -> some View {
         Section {
-            // ① 这次做了什么（如实）
-            VStack(alignment: .leading, spacing: 4) {
-                Text("这次做了什么")
-                    .font(.subheadline.weight(.semibold))
-                Text(actionSummary(report))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, 2)
+            Label(report.verdict,
+                  systemImage: report.didWrite ? "checkmark.circle.fill" : "info.circle")
+                .font(AppFont.subheadline)
+                .foregroundStyle(report.didWrite ? AppTheme.trSuccess : .primary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            // ② 读回内容
-            if let readBack = report.readBack {
-                if readBack.entries.isEmpty {
-                    Text("读回内容为空（未解析出键值；format=\(readBack.format)，\(readBack.byteCount) bytes）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
+            DisclosureGroup("技术详情") {
+                if let readBack = report.readBack, !readBack.entries.isEmpty {
                     ForEach(readBack.entries.map { I4AccRow(id: $0.key, value: $0.value) }) { row in
                         HStack(alignment: .top, spacing: 8) {
-                            Text(row.id).font(.caption).foregroundStyle(.secondary)
+                            Text(row.id).font(AppFont.caption).foregroundStyle(.secondary)
                             Spacer()
                             Text(row.value)
-                                .font(.caption.monospaced())
+                                .font(AppFont.caption.monospaced())
                                 .multilineTextAlignment(.trailing)
-                                .foregroundStyle(.primary)
                         }
                     }
+                } else {
+                    Text("无读回内容.")
+                        .font(AppFont.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } else {
-                Text("设备上不存在 /\(I4AppFixService.accAFCPath)，无读回内容.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // ③ 结论与补充说明（逐条事实 + 边界）
-            VStack(alignment: .leading, spacing: 6) {
-                Text(report.verdict)
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
                 ForEach(report.notes, id: \.self) { note in
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("•").foregroundStyle(.secondary)
-                        Text(note).font(.caption2).foregroundStyle(.secondary)
-                    }
+                    Text(note)
+                        .font(AppFont.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.vertical, 2)
-        } header: {
-            Label("结果", systemImage: "doc.text.magnifyingglass")
+            .font(AppFont.caption)
         }
     }
 
-    private func actionSummary(_ report: I4AppFixService.Report) -> String {
-        if report.didWrite {
-            let bytes = report.bytesWritten ?? 0
-            let match = report.readBackMatchesWritten.map { $0 ? "读回一致" : "读回不一致" } ?? "未读回"
-            return "已写入设备 /\(report.writePath)（\(bytes) bytes，第 \(report.writeAttempts) 次成功，\(match)）."
-        }
-        if let reason = report.notWrittenReason {
-            return "未写入设备文件.\(reason)"
-        }
-        return "未写入设备文件（本次为只读分支）."
-    }
+    // MARK: - 数据加载 / 执行修复
 
-    // MARK: - 常驻说明
-
-    private var disclaimerSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("按爱思的做法写入设备授权文件", systemImage: "bandage")
-                    .font(.subheadline)
-                Text("本功能按爱思修复流程，把设备授权文件 /\(I4AppFixService.accAFCPath) 写进设备，"
-                     + "用于修复爱思源应用的弹窗.写入用硬编码兜底 auth（\(I4AppFixService.authFallback)），"
-                     + "是否生效取决于设备端爱思代理 App（本机\(proxyBundleId == nil ? "未检测到" : "检测到")."
-                     + "需要已连接本地隧道并导入配对文件.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.vertical, 2)
-        } header: {
-            Text("说明")
-        }
-    }
-
-    // MARK: - 数据加载
-
-    private func load() async {
-        loading = true
-        loadError = nil
+    /// 只读前置条件（同步事实查询；进入页与刷新时调用）.
+    private func refresh() {
         tunnelConnected = I4AppFixService.isTunnelConnected
         hasPairing = I4AppFixService.hasPairingFile
-        do {
-            // 枚举已安装应用是阻塞调用（建 RSD 隧道 + instproxy），放后台.
-            let apps = try await Task.detached(priority: .userInitiated) {
-                try AppDiscovery().fetchInstalledApps()
-            }.value
-            installed = apps
-            // 台账读取按既有约定在主线程调用.
-            candidates = I4AppFixService.candidates(installed: apps)
-            proxyBundleId = I4AppFixService.proxyAppBundleId(in: apps)
-            if let selectedId, !candidates.contains(where: { $0.bundleId == selectedId }) {
-                self.selectedId = nil
-            }
-        } catch {
-            loadError = error.localizedDescription
-        }
-        loading = false
     }
 
-    // MARK: - 执行修复
-
     private func runRepair() async {
-        guard canRepair else { return }
+        guard ready, !busy else { return }
         busy = true
         repairError = nil
         report = nil
-        let allowWrite = writeEnabled
-        let apps = installed
         do {
             // 服务层是阻塞调用（建隧道 + 读写 AFC），放后台；Report 经薄包装转移回主线程.
+            // 已安装应用仅用于检测本机是否装了爱思代理 App（读者）——枚举也在后台做.
             let boxed = try await Task.detached(priority: .userInitiated) {
-                I4FixTransferBox(value: try await I4AppFixService.repair(allowWrite: allowWrite, installedApps: apps))
+                let apps = (try? AppDiscovery().fetchInstalledApps()) ?? []
+                return I4FixTransferBox(value: try await I4AppFixService.repair(installedApps: apps))
             }.value
             report = boxed.value
-            // 读回后刷新前置状态（隧道可能在过程中断开）.
-            tunnelConnected = I4AppFixService.isTunnelConnected
+            refresh()
         } catch {
             repairError = error.localizedDescription
         }

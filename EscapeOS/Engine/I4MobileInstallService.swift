@@ -260,6 +260,8 @@ enum I4MobileInstallService {
         case sinfInjectFailed(String)
         /// 自定义包体的 URL 不合法（空 / 非 http(s) / 无主机名）.
         case customPackInvalid(reason: String)
+        /// 缓存目录里一个 IPA 都没有（既未下载也未导入）—— 「只装已缓存包」时无可装.
+        case noCachedPack
 
         var errorDescription: String? {
             switch self {
@@ -279,6 +281,8 @@ enum I4MobileInstallService {
                 return "把 sinf 写进安装包副本失败：\(reason)"
             case .customPackInvalid(let reason):
                 return "自定义包体地址不可用：\(reason)"
+            case .noCachedPack:
+                return "本页还没有已缓存的 IPA：请先在下方「IPA 来源」里下载，或手动导入."
             }
         }
     }
@@ -688,6 +692,33 @@ enum I4MobileInstallService {
         return reports
     }
 
+    /// 安装**所有已缓存**的包（跳过未缓存的，**不**抛 `packResourceMissing`）.
+    ///
+    /// 为什么需要它：`installAll` 依次装内置三包，**只要有一个没下载就整条链失败**。
+    /// 用户实测：只缓存了 `220.ipa`，点「开始安装」却报「缓存里没有 217.ipa」——
+    /// 已缓存的 220 反而一个都没装上。主按钮要的是「把本页**已经下好的**包装上」，
+    /// 故这里只遍历**缓存目录里确实存在**的包（内置 + 自定义，见 `allPacks`）.
+    ///
+    /// - Throws: 一个都没缓存时抛 `noCachedPack`（如实告诉用户先去下载 / 导入）；
+    ///   其余错误原样上抛（与 `install` 的「每步失败必抛」一致，不回滚已装成功的包）.
+    @discardableResult
+    static func installCached(allowUpgrade: Bool = false,
+                              progress: (@Sendable (Double) -> Void)? = nil,
+                              onLog: (@Sendable (String) -> Void)? = nil) async throws -> [Report] {
+        let cached = allPacks.filter { isCached($0) }
+        guard !cached.isEmpty else {
+            throw I4MobileError.noCachedPack
+        }
+        var reports: [Report] = []
+        for (idx, pack) in cached.enumerated() {
+            onLog?("[i4移动端] (\(idx + 1)/\(cached.count)) 安装已缓存 \(pack.fileName)")
+            let report = try await install(pack: pack, allowUpgrade: allowUpgrade,
+                                           progress: progress, onLog: onLog)
+            reports.append(report)
+        }
+        return reports
+    }
+
     // MARK: - ⑤ UI 对接（`I4MobileInstallView.installAction`）
 
     /// 生成与 `I4MobileInstallView.installAction`（`() async throws -> Void`）匹配的动作：
@@ -701,6 +732,20 @@ enum I4MobileInstallService {
         return {
             _ = try await installAll(allowUpgrade: allowUpgrade,
                                      progress: progress, onLog: onLog)
+        }
+    }
+
+    /// 生成与 `I4MobileInstallView.installAction`（`() async throws -> Void`）匹配的动作：
+    /// **安装所有已缓存的包**（跳过未缓存的；一个都没缓存时抛 `noCachedPack`）.
+    ///
+    /// 与 `makeInstallAllAction` 的区别：后者要求**每个**内置包都已缓存（缺一即抛），
+    /// 本动作只装**已经下好的**，是「安装爱思移动端」页主按钮的期望语义（见 `installCached`）.
+    static func makeInstallCachedAction(allowUpgrade: Bool = false,
+                                        progress: (@Sendable (Double) -> Void)? = nil,
+                                        onLog: (@Sendable (String) -> Void)? = nil) -> () async throws -> Void {
+        return {
+            _ = try await installCached(allowUpgrade: allowUpgrade,
+                                        progress: progress, onLog: onLog)
         }
     }
 

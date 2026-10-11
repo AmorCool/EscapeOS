@@ -632,6 +632,16 @@ struct NBStoreDetailView: View {
     ///
     /// ⇒ v0.3.586 起下架态也能用本方法按 `appVerId` 取指定版本（版本列表走
     /// `versionList(trackID:)`，即 bilin 目录，对下架 App 同样有数据）。
+    ///
+    /// ## v0.3.590：取包失败**不再把内部码弹给用户**
+    ///
+    /// 原来这里 `catch` 直接 `ToastCenter.shared.show("取包失败：\(error.localizedDescription)")`，
+    /// 而 NB 的 `StoreError.server` 会把它格式化成 `msg（7）` ⇒ 用户看到
+    /// 「取包失败：未获取到数据（7）」这种内部码（用户 2026-10-11 截图原话）。
+    /// 现改为走 `NBStoreClient.packageFailure(from:)` 分类：
+    /// - 库里没包（稳定 `code=7`）→「该应用在 NB 下架库里没有可用的安装包.」
+    /// - 上游临时故障（偶发 `code=7`）→「NB 服务端暂时取不到这个包，请稍后重试.」
+    /// 原始 error 只进 `[NB源]` 日志。
     @MainActor
     private func installVersion(_ v: NBStoreClient.NBVersion) async {
         fetchingID = v.externalIdentifier
@@ -651,7 +661,11 @@ struct NBStoreDetailView: View {
                                   version: v.version,
                                   iconURL: iconURL)
         } catch {
-            ToastCenter.shared.show("取包失败：\(error.localizedDescription)")
+            // 界面只给用户看得懂的话；内部码 / 服务端原话进日志（`[NB源]` 前缀）排查用。
+            LoginLogger.shared.log("\(NBStoreClient.logTag) [失败] 详情取包：\(error.localizedDescription)",
+                                   category: .appStore)
+            ToastCenter.shared.show(NBStoreClient.packageFailure(from: error)?.userMessage
+                                    ?? "取包失败，请稍后重试.")
         }
     }
 }

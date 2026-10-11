@@ -1,14 +1,31 @@
+import CoreHaptics
 import SwiftUI
 import UIKit
 
 /// Shared visual language for EscapeOS. Ported and adapted from 3105's
 /// DesignSystem: a blue accent, a tinted rounded icon, and reclaim-specific
 /// category styling. Uses EscapeOS's own model fields (no localization system).
+///
+/// ## 界面硬规则（用户明确要求，永久生效）
+/// 1. **不要全宽实心色块 banner**（用户原话：「为什么那个 banner 是方块状的，我不喜欢这种方块」）。
+///    深色品牌色**只出现在紧凑的连续圆角图标块**（`AppBrandTile`）里，不做全宽渐变填充 banner。
+/// 2. **一律连续圆角**（`RoundedCornerStyle.continuous`）：卡片 `AppRadius.card`、图标块
+///    `AppRadius.appIcon`、行内图标底 `AppRadius.icon`；不要直角、不要纯方。
+/// 3. 不用纯蓝实底按钮（用 `TintedButtonStyle` 淡底；主行动用 `BrandProminentButtonStyle` 渐变）。
+/// 4. 界面文案一律英文句点 `.`，不用中文句号，不用符号化标记 / 星形符号。
+/// 5. **设置类列表用全宽行 + 发丝分隔**（`AppSettingsRow` + `AppHairline`），**不要套 16 圆角卡片**
+///    （TRApp 设置页实测：行底 / 分隔线均全宽 0–828px；规范 §1.4 / §③组件 5）。
 enum AppTheme {
     /// Brand accent. System blue (semantic), adapts to light/dark mode.
     /// 之前是暖橙，在浅色玻璃背景下显脏棕，按用户审美改为系统蓝.
+    ///
+    /// ⚠️ **不改为 TRApp 实测 `#005493`**（决定见简报 §③）：`AppTheme.accent` 被全仓 30+ 文件
+    /// 引用（`AppRowIcon` / `TintedButtonStyle` / `SizePill` / 各页 tint），且它是**语义色**、随
+    /// 明暗模式自适应；`#005493` 是写死 sRGB，深色模式下是暗藏青、对比度不足。故新页面（如主页）
+    /// 的强调色改用下方 `trAccent`（`#005493`），**不动全局 accent**.
     static let accent = Color(uiColor: .systemBlue)
-    static let pageInset: CGFloat = 16
+    /// 页面内容左右边距。TRApp 列表页实测 **20**（此前 16，见规范 §1.3）.
+    static let pageInset: CGFloat = 20
     static let appIconSize: CGFloat = 44
 
     // MARK: - 语义状态色
@@ -76,10 +93,35 @@ enum AppTheme {
     static let trDanger = Color(red: 0xE7 / 255, green: 0x4C / 255, blue: 0x3C / 255)
     /// TRApp 警示色（实测 `#F9CA24`）.
     static let trWarning = Color(red: 0xF9 / 255, green: 0xCA / 255, blue: 0x24 / 255)
-    /// TRApp 可恢复色（实测 `#008974`）.
+    /// TRApp `#008974`（**规范更名**：`Assets.car` 里此值实名 `BetaBadgeColor`，不是「可恢复」语义）.
+    /// 本仓既有代码把它当**青绿强调色**用（图标底 / 次级强调），此名保留以不改动既有引用；
+    /// 语义上它是 TRApp 的 Beta 徽章色，非状态色.
     static let trRecoverable = Color(red: 0x00 / 255, green: 0x89 / 255, blue: 0x74 / 255)
+    /// TRApp Beta 徽章色（实测 `#008974`，与 `trRecoverable` 同值；此名为规范正名）.
+    static let trBetaBadge = Color(red: 0x00 / 255, green: 0x89 / 255, blue: 0x74 / 255)
     /// TRApp 标记色（实测 `#F9CA24`，与警示同值）.
     static let trMark = Color(red: 0xF9 / 255, green: 0xCA / 255, blue: 0x24 / 255)
+
+    // MARK: - 完整规范补充色（本轮落「巨魔录音机完整规范」）
+    //
+    // 下列 token 取自规范 §1.1 / §1.4 / §③：开关 ON 色、品牌青绿、空状态配色。均为 `.car`
+    // 实测 sRGB（品牌实测值，故写死）。语义状态色 `success/pending/danger/warning/mark`
+    // 维持系统语义色不动：它们被既有页面引用、且是随明暗模式自适应的语义色，全 App 替换
+    // 影响面大且非本次目标（规范亦承认「新页面用 tr* 实测值」）。
+
+    /// 开关 ON 色（TRApp 实测 `#005493`，`UISwitch.onTintColor` = Accent；规范 §③组件 6）.
+    /// 与 `trAccent` 同值；单独命名以便设置页 `Toggle.tint(AppTheme.switchOnTint)` 语义清晰.
+    static let switchOnTint = Color(red: 0x00 / 255, green: 0x54 / 255, blue: 0x93 / 255)
+
+    /// 品牌青绿（TRApp 实测 `#008974`，`Assets.car` 内实名 `BetaBadgeColor`；规范 §1.1）.
+    /// 与 `brandNavy`（深藏青）并列的次级品牌强调色；与 `trBetaBadge` / `trRecoverable` 同值.
+    static let brand = Color(red: 0x00 / 255, green: 0x89 / 255, blue: 0x74 / 255)
+
+    /// 空状态大圆底色（TRApp IMG_0079 实测 ≈ `#E0EBFE` 浅蓝；规范 §1.1 / §③组件 3）.
+    static let emptyStateCircleFill = Color(red: 0xE0 / 255, green: 0xEB / 255, blue: 0xFE / 255)
+
+    /// 空状态圆内字形色（TRApp IMG_0079 实测 ≈ `#56A376` 青绿；规范 §1.1 / §③组件 3）.
+    static let emptyStateGlyph = Color(red: 0x56 / 255, green: 0xA3 / 255, blue: 0x76 / 255)
 }
 
 /// 「透明淡蓝」按钮样式（用户审美：不要纯蓝实底，要淡一点的蓝底）.
@@ -100,6 +142,9 @@ enum AppTheme {
 /// （使总高 ≈ `.bordered` 的 34pt）。小号（卡片内动作，无 `.bordered` 同排）维持原度量.
 struct TintedButtonStyle: ButtonStyle {
     var tint: Color = AppTheme.accent
+    /// 圆角覆盖：`nil` 时按 `controlSize` 取既有默认（小号 7 / 常规 8）. 传 `AppRadius.button`
+    /// （12）可对齐 TRApp 大按钮口径（如主页 hero 的「立即体检」）.
+    var radius: CGFloat? = nil
 
     /// 参数类型必须写具体名 `ButtonStyleConfiguration`、不能写 `Configuration`：
     /// 本模块里 `vendor/ApplePackage` 另有一个 `public enum Configuration`，它在模块作用域里
@@ -107,7 +152,7 @@ struct TintedButtonStyle: ButtonStyle {
     /// 报「cannot convert value of type 'Configuration' to expected argument type
     /// 'ButtonStyleConfiguration'」（v0.3.585 首次 CI 实测）。
     func makeBody(configuration: ButtonStyleConfiguration) -> some View {
-        TintedBody(configuration: configuration, tint: tint)
+        TintedBody(configuration: configuration, tint: tint, radiusOverride: radius)
     }
 
     /// 样式体单独成一个 `View`：只有 `View` 能读 `@Environment`，用它在**禁用**时降透明度
@@ -119,14 +164,16 @@ struct TintedButtonStyle: ButtonStyle {
     private struct TintedBody: View {
         let configuration: ButtonStyleConfiguration
         let tint: Color
+        var radiusOverride: CGFloat? = nil
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.controlSize) private var controlSize
         @Environment(\.colorScheme) private var colorScheme
 
         /// 尺寸随 `controlSize` 缩放：小号用于卡片内动作，常规号用于批量底条.
         private var small: Bool { controlSize == .small }
-        /// 圆角与同排 `.bordered` 次要按钮对齐：常规号取 8（系统 `.bordered` 常规号口径）.
-        private var radius: CGFloat { small ? 7 : 8 }
+        /// 圆角与同排 `.bordered` 次要按钮对齐：常规号取 8（系统 `.bordered` 常规号口径）；
+        /// 显式传入 `radiusOverride` 时以覆盖值为准.
+        private var radius: CGFloat { radiusOverride ?? (small ? 7 : 8) }
         private var hPad: CGFloat { small ? 10 : 14 }
         /// 常规号 6：配合 `body` 字号使总高 ≈ `.bordered` 常规号的 34pt，同排不显高矮不齐.
         private var vPad: CGFloat { small ? 5 : 6 }
@@ -217,6 +264,36 @@ struct AppRowIcon: View {
     }
 }
 
+/// 品牌图标块（TRApp AppIcon 语言）：深藏青渐变底 + 连续圆角的**紧凑方图块**，内嵌白色 SF Symbol.
+///
+/// **用途**：页面头部替代「全宽渐变 banner」——深色品牌色只出现在这个小的圆角图标块里，
+/// 不做全宽实心填充（用户明确不喜欢全宽方块 banner）。对照 TRApp：设置页无 hero、直接大标题 +
+/// 卡片分组；欢迎页 App 图标就是一个深色大圆角方块。标题 / 副标题走页面背景上的主 / 次字色。
+struct AppBrandTile: View {
+    let systemName: String
+    /// 图标块边长（默认 `AppMetrics.appIconTile`）.
+    var size: CGFloat = AppMetrics.appIconTile
+    /// 内嵌 SF Symbol 字号.
+    var symbolSize: CGFloat = 26
+    /// 圆角（默认 `AppRadius.appIcon`）.
+    var radius: CGFloat = AppRadius.appIcon
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(AppTheme.brandGradient)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+            Image(systemName: systemName)
+                .font(.system(size: symbolSize, weight: .medium))
+                .foregroundStyle(.white)
+                .appSymbol()
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
 /// A card with a tinted icon, title, message, and optional action button.
 /// Used for empty / error / prompt states across the app so every tab shares
 /// the same visual language.
@@ -285,6 +362,131 @@ struct SizePill: View {
     }
 }
 
+/// 全宽发丝分隔线（TRApp 设置列表语言）：全宽、`0.5pt` 级细线.
+///
+/// 对照规范 §1.4 / §③组件 5：TRApp 设置列表是**全宽行 + ~2px 发丝分隔**（行底 `#F1EFF3` /
+/// 分隔 `#E6E4E8`，均全宽 0–828px），**非内缩圆角卡片**. 本组件即那条分隔线，默认取系统分隔色.
+struct AppHairline: View {
+    /// 线高（默认 0.5pt = @2x 下 1px 真发丝；TRApp 实测约 1pt，可按需传 1）.
+    var height: CGFloat = 0.5
+    var color: Color = Color(uiColor: .separator)
+
+    var body: some View {
+        Rectangle()
+            .fill(color)
+            .frame(height: height)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+/// 设置行（TRApp 设置列表语言，IMG_0081 / IMG_0083）：**全宽行 + 发丝分隔**，非内缩圆角卡片.
+///
+/// 结构（规范 §③组件 5 / 组件 6）：左图标（≈22pt）→ 标题（17pt semibold）+ 关键词副标题
+/// （13pt 次字色，多值用「 / 」连接）→ 右侧 chevron（次字色，右边距 22pt）。行高参考
+/// `AppMetrics.rowHeight`（≈84，含 1 行副标题），内容左右边距 `AppSpacing.settingsInset`（22）。
+/// 行底可附一条全宽发丝分隔 `AppHairline`.
+struct AppSettingsRow: View {
+    /// 左侧 SF Symbol 名.
+    let icon: String
+    let title: String
+    /// 关键词副标题（多值，组件内用「 / 」连接）.
+    var keywords: [String] = []
+    /// 是否显示右箭头（TRApp 设置行默认显示）.
+    var showsChevron: Bool = true
+    /// 右侧小徽章文案（如付费「$」；TRApp 为 19pt 灰圆徽章）.
+    var badge: String? = nil
+    /// 行底是否附全宽发丝分隔.
+    var showsSeparator: Bool = true
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: AppSpacing.titleToSubtitle) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 28, alignment: .center)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(AppFont.rowTitle)
+                        .foregroundStyle(.primary)
+                    if !keywords.isEmpty {
+                        Text(keywords.joined(separator: " / "))
+                            .font(AppFont.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: AppSpacing.row)
+                if let badge {
+                    Text(badge)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 19, height: 19)
+                        .background(Circle().fill(Color(uiColor: .tertiarySystemFill)))
+                }
+                if showsChevron {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                }
+            }
+            .padding(.horizontal, AppSpacing.settingsInset)
+            .frame(minHeight: AppMetrics.rowHeight)
+            .contentShape(Rectangle())
+            .onTapGesture { action?() }
+            if showsSeparator {
+                AppHairline()
+            }
+        }
+    }
+}
+
+/// 空状态（TRApp IMG_0079 语言）：**118pt 浅蓝圆 + 青绿字形 + 20pt 标题 + 一句俏皮副标题**，垂直居中.
+///
+/// 对照规范 §③组件 3：`.car` 内**无** placeholder 图片资源 ⇒ 空状态插画是**运行时 SF Symbols
+/// 组合**（`waveform` + `magnifyingglass`）。本组件即用两层 SF Symbol 叠加还原该「波形 + 放大镜」。
+/// 文案由调用方传入（副标题可俏皮，如 TRApp 原味「这里，只有空气」）.
+struct AppEmptyState: View {
+    /// 主字形（默认 `waveform`）.
+    var icon: String = "waveform"
+    /// 右下角次级字形（默认 `magnifyingglass`；传 `nil` 只显示主字形）.
+    var secondaryIcon: String? = "magnifyingglass"
+    let title: String
+    /// 一句俏皮副标题.
+    let message: String
+
+    var body: some View {
+        VStack(spacing: AppSpacing.section) {
+            ZStack {
+                Circle()
+                    .fill(AppTheme.emptyStateCircleFill)
+                    .frame(width: AppMetrics.emptyStateIcon, height: AppMetrics.emptyStateIcon)
+                Image(systemName: icon)
+                    .font(.system(size: 44, weight: .medium))
+                    .foregroundStyle(AppTheme.emptyStateGlyph)
+                if let secondaryIcon {
+                    Image(systemName: secondaryIcon)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(AppTheme.emptyStateGlyph)
+                        .offset(x: 18, y: 18)
+                }
+            }
+            .accessibilityHidden(true)
+            VStack(spacing: AppSpacing.tight) {
+                Text(title)
+                    .font(AppFont.emptyStateTitle)
+                Text(message)
+                    .font(AppFont.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, AppSpacing.section)
+    }
+}
+
 // MARK: - TRApp 风格 token 层（新增）
 //
 // 对照 TRApp 逆向结论：全站 SF Rounded（`design: .rounded`）+ Dynamic Type、
@@ -301,8 +503,19 @@ enum AppFont {
     static let bodyEmphasis = Font.system(.body, design: .rounded).weight(.semibold)
     static let subheadline = Font.system(.subheadline, design: .rounded)
     static let subheadlineEmphasis = Font.system(.subheadline, design: .rounded).weight(.semibold)
+    /// 副标题号（13pt，TRApp 设置列表副标题实测值，规范 §1.2）.
+    static let footnote = Font.system(.footnote, design: .rounded)
+    static let footnoteEmphasis = Font.system(.footnote, design: .rounded).weight(.semibold)
     static let caption = Font.system(.caption, design: .rounded)
     static let captionEmphasis = Font.system(.caption, design: .rounded).weight(.semibold)
+    /// 行 / 卡片标题号（17pt semibold，TRApp 设置行实测；规范 §1.2）. 与 `headline` 同值，
+    /// 此名为语义正名，供设置行等场景使用.
+    static let rowTitle = Font.system(.headline, design: .rounded).weight(.semibold)
+    /// Tab 标签号（10pt，TRApp Tab bar 实测；规范 §1.2 / §③组件 4）. Tab 标签为固定字号，
+    /// 不随 Dynamic Type 缩放（与系统 Tab bar 行为一致）.
+    static let tabLabel = Font.system(size: 10, weight: .medium, design: .rounded)
+    /// 空状态标题号（20pt bold，TRApp 空态实测；规范 §1.2 / §③组件 3）.
+    static let emptyStateTitle = Font.system(.title3, design: .rounded).weight(.bold)
     /// 数字等宽：进度百分比、体积、倒计时等数字场景（TRApp 用 `.monospacedDigit()`）.
     static let number = Font.system(.body, design: .rounded).monospacedDigit()
     static let numberEmphasis = Font.system(.body, design: .rounded).weight(.semibold).monospacedDigit()
@@ -322,9 +535,17 @@ enum AppRadius {
     static let chip: CGFloat = 8
     /// 行内图标底（对齐 `AppRowIcon` 的 7）.
     static let icon: CGFloat = 7
+    /// 品牌图标块（`AppBrandTile`）圆角：紧凑方图块，比行内图标底更圆（TRApp AppIcon 比例）.
+    static let appIcon: CGFloat = 16
+    /// 大按钮圆角（TRApp「继续」按钮实测 ≈12，规范 §1.4）.
+    static let button: CGFloat = 12
+    /// 搜索框圆角（TRApp 搜索框实测 ≈10，规范 §1.4）.
+    static let searchField: CGFloat = 10
+    /// 底部 Sheet 顶角圆角（TRApp 欢迎页 Sheet 实测 ≈26，规范 §1.4）.
+    static let sheet: CGFloat = 26
 }
 
-/// 间距层：区块 / 行 / 紧凑三档.
+/// 间距层：区块 / 行 / 紧凑三档 + 完整规范实测间距.
 enum AppSpacing {
     /// 区块之间.
     static let section: CGFloat = 16
@@ -332,6 +553,12 @@ enum AppSpacing {
     static let row: CGFloat = 12
     /// 紧凑元素之间.
     static let tight: CGFloat = 6
+    /// 卡片 / 行标题 → 副标题（TRApp 实测 14；规范 §1.3）.
+    static let titleToSubtitle: CGFloat = 14
+    /// 开关行右侧留白（TRApp 实测 18；规范 §1.3 / §③组件 6）.
+    static let switchTrailing: CGFloat = 18
+    /// 设置列表内容左右边距（TRApp 实测 22；规范 §1.3 / §③组件 5）.
+    static let settingsInset: CGFloat = 22
 }
 
 /// 尺寸层：卡片内边距与图标尺寸.
@@ -342,6 +569,14 @@ enum AppMetrics {
     static let iconSize: CGFloat = 30
     /// hero 区块图标边长.
     static let heroIconSize: CGFloat = 44
+    /// 品牌图标块边长（页面头部 `AppBrandTile` 默认值）.
+    static let appIconTile: CGFloat = 56
+    /// 列表行高参考值（TRApp 设置列表行实测 ≈85，含 1 行副标题；规范 §1.4）.
+    static let rowHeight: CGFloat = 84
+    /// 空状态圆形大图标直径（TRApp 空态实测 118，浅蓝底 + 青绿字形；规范 §1.4）.
+    static let emptyStateIcon: CGFloat = 118
+    /// 大按钮高度（TRApp「继续」按钮实测 44；规范 §1.4 / §③组件 1）.
+    static let buttonHeight: CGFloat = 44
 }
 
 /// 触觉层：方法在**调用侧**执行，不持有非 Sendable 的静态生成器实例（Swift 6 严格并发）.
@@ -363,6 +598,83 @@ enum AppHaptics {
     @MainActor
     static func error() {
         UINotificationFeedbackGenerator().notificationOccurred(.error)
+    }
+
+    /// 关键动作反馈（安装开始 / 录音开始 / 成功确认等）：照 TRApp `RecordingStarts.ahap` 曲线 ——
+    /// **Transient(intensity 0.8 / sharpness 0.4) + Continuous(0.25s, 0.8 / 0.4)**，叠加强度衰减曲线
+    /// `1 → 0.5 → 0` 与锐度曲线 `0 → -0.3`（规范 §1.5）。硬件不支持 CoreHaptics 时退回 `.rigid`
+    /// 单次冲击，保证始终有反馈.
+    @MainActor
+    static func keyAction() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
+            UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.8)
+            return
+        }
+        do {
+            let engine = try sharedEngine()
+            try engine.start()
+            let player = try engine.makePlayer(with: Self.keyActionPattern())
+            try player.start(atTime: CHHapticTimeImmediate)
+        } catch {
+            UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.8)
+        }
+    }
+
+    /// CoreHaptics 引擎单例. `@MainActor` 隔离：`CHHapticEngine` 非 `Sendable`，Swift 6 严格并发下
+    /// 只能在主 actor 上持有；`isAutoShutdownEnabled` 让引擎空闲自动停机，无需手动 `stop()`.
+    @MainActor private static var engine: CHHapticEngine?
+
+    @MainActor
+    private static func sharedEngine() throws -> CHHapticEngine {
+        if let existing = engine { return existing }
+        let newEngine = try CHHapticEngine()
+        newEngine.playsHapticsOnly = true
+        newEngine.isAutoShutdownEnabled = true
+        engine = newEngine
+        return newEngine
+    }
+
+    /// TRApp `RecordingStarts.ahap` 曲线：瞬时 + 0.25s 连续，强度 / 锐度各一条控制曲线.
+    @MainActor
+    private static func keyActionPattern() throws -> CHHapticPattern {
+        let transient = CHHapticEvent(
+            eventType: .hapticTransient,
+            parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.8),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.4)
+            ],
+            relativeTime: 0
+        )
+        let continuous = CHHapticEvent(
+            eventType: .hapticContinuous,
+            parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.8),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.4)
+            ],
+            relativeTime: 0,
+            duration: 0.25
+        )
+        let intensityCurve = CHHapticParameterCurve(
+            parameterID: .hapticIntensityControl,
+            controlPoints: [
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0, value: 1.0),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.125, value: 0.5),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.25, value: 0.0)
+            ],
+            relativeTime: 0
+        )
+        let sharpnessCurve = CHHapticParameterCurve(
+            parameterID: .hapticSharpnessControl,
+            controlPoints: [
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0, value: 0.0),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.25, value: -0.3)
+            ],
+            relativeTime: 0
+        )
+        return try CHHapticPattern(
+            events: [transient, continuous],
+            parameterCurves: [intensityCurve, sharpnessCurve]
+        )
     }
 }
 

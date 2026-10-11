@@ -15,6 +15,9 @@ v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review �
       （NB 的 `StoreError.server` 会把它格式化成 `msg（7）`，内部码会随之漏给用户）。
   G4  同 `offSalePackage` 必须对**内嵌快照直链**做 `accessKeyExpired(...)` 过期判断
       （v0.3.588）—— 快照直链的 accessKey 过期即 HTTP 403，无条件用它会导致下载必失败。
+  G5  `EscapeOS/Views/NBStoreDetailView.swift` 的 `installVersion`（详情页按版本取包）里，
+      `ToastCenter.shared.show` 同样不得插 `error.localizedDescription`
+      （v0.3.590）—— 详情页原先漏了这条约束，用户看到「取包失败：未获取到数据（7）」这种内部码。
 
 判据全部**只认结构/符号**（函数体里出现哪个调用 / 哪个字面量），不绑死行号、不绑死文案，
 以免将来改文案就误报。函数体用逐字符状态机按大括号配对提取（跳过字符串/注释）。
@@ -219,6 +222,21 @@ def check(root):
                 errs.append("[G3] installOffSale 把原始 error 直接弹给用户（内部码会漏出）："
                             "ToastCenter.shared.show(%s)" % arg)
 
+    # ── G5：NB 详情页取包也不得把原始 error 甩给用户（v0.3.590 补）──
+    detail = os.path.join(root, "EscapeOS", "Views", "NBStoreDetailView.swift")
+    if not os.path.isfile(detail):
+        errs.append("[G5] 找不到 %s" % detail)
+    else:
+        src = io.open(detail, encoding="utf-8").read()
+        body = _extract_function_body(src, "func installVersion(")
+        if body is None:
+            errs.append("[G5] NBStoreDetailView.swift 里找不到 installVersion")
+        else:
+            leaks = _toast_show_arg_leaks_localized(body)
+            for arg in leaks:
+                errs.append("[G5] installVersion 把原始 error 直接弹给用户（内部码会漏出）："
+                            "ToastCenter.shared.show(%s)" % arg)
+
     return errs
 
 
@@ -235,12 +253,13 @@ def main():
     if errs:
         for e in errs:
             print("ERROR %s" % e)
-        print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码 / G4 快照过期）" % len(errs))
+        print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码 / G4 快照过期 / G5 详情页内部码）" % len(errs))
         return 1
     print("G1 回退 getAppHistoryList：OK")
     print("G2 code=7 处理：OK")
     print("G3 界面无内部码泄漏：OK")
     print("G4 内嵌快照 accessKey 过期判断：OK")
+    print("G5 详情页无内部码泄漏：OK")
     print("命中：0")
     return 0
 

@@ -150,18 +150,23 @@ struct ShadowrocketTunnel: TunnelProviding {
     /// 反例说明：早期写的 `sub://` 是订阅导入用途，实测 `canOpenURL(sub://)` 不可靠，已弃用.
     private static let openURL = URL(string: "shadowrocket://open")!
 
-    var availability: TunnelAvailability {
-        // `canOpenURL` 只认 `Info.plist` 的 `LSApplicationQueriesSchemes` 白名单；
-        // 白名单里已放 `shadowrocket`，且它是官方 wiki 确证的已注册 scheme ⇒ 这里才能真实反映「装没装 Shadowrocket」.
-        if UIApplication.shared.canOpenURL(Self.openURL) { return .available }
-        return .unavailable("未检测到 Shadowrocket，请先在 App Store 安装.")
-    }
+    /// Shadowrocket 在 App Store 的页面. 仅当系统未受理 `shadowrocket://open` 时兜底跳转，
+    /// 给「其实没装」的用户一条明确的安装路径（App Store id 932747118，Shadowrocket 官方条目）.
+    private static let appStoreURL = URL(string: "https://apps.apple.com/app/shadowrocket/id932747118")!
+
+    /// 恒 `.available` —— 与 `LocalDevVPNTunnel` 同口径：**不拿 `canOpenURL` 挡路**.
+    ///
+    /// 为什么不检测（真机取证，2026-10-11）：
+    ///   · `canOpenURL` 只回答「白名单里有这个 scheme **且** 有 App 注册了它」，
+    ///     **不证明目标 App 已安装**；反过来，它在 TrollStore / 越狱环境下还会因
+    ///     `lsd`（LaunchServices）缓存未同步而**假阴性**（白名单与注册都正确，仍偶发 false）.
+    ///   · 实测：iPhone 11（iOS 26.0.1）上 Shadowrocket 2.2.90 已安装、`shadowrocket`
+    ///     在 `CFBundleURLSchemes` 首位，本应用白名单也含它，但旧实现仍报「未检测到」.
+    ///   · 结论：探测不可靠 ⇒ 不设门槛，改由 `start()` 的 `open` 回调如实反馈「系统有没有受理」.
+    var availability: TunnelAvailability { .available }
 
     func start() async {
-        guard availability.isAvailable else {
-            LoginLogger.shared.log("[隧道] Shadowrocket 未安装，跳过跳转.", category: .general)
-            return
-        }
+        // 无条件跳转（不再被 `availability` 门控）：探测不可靠，故不设门槛，让系统的受理回调给出事实.
         LoginLogger.shared.log("[隧道] 请求打开 Shadowrocket（scheme=shadowrocket://open，仅跳转，不保证提供设备连接）.", category: .general)
         // 为什么必须走 `MainActor.run`（三次 CI 实测，逐层退让）：
         //   ① 只写 `open(url)` ⇒ async 上下文推断成 async 重载 ⇒ 报
@@ -172,12 +177,22 @@ struct ShadowrocketTunnel: TunnelProviding {
         //   ③ 显式写全三参（同步重载）⇒ **仍被判成 async**（该重载的 `options` 默认值与
         //      async 版本重载解析歧义）。
         // 正解：把调用整体放进 MainActor —— `UIApplication.shared` 本就是 MainActor 隔离的，
-        // 字典在闭包内就地构造、不跨隔离传递。闭包只捕获 `Self.openURL`（static let URL，Sendable）。
-        // 带 completion 则明确落到 completion 重载（不会歧义到 async 版），用它如实记下「系统有没有受理」。
+        // 字典在闭包内就地构造、不跨隔离传递。闭包只捕获 `Self.openURL` / `Self.appStoreURL`
+        // （均为 static let URL，Sendable）。带 completion 则明确落到 completion 重载
+        // （不会歧义到 async 版），用它如实记下「系统有没有受理」。
         await MainActor.run {
             UIApplication.shared.open(Self.openURL, options: [:]) { accepted in
-                if !accepted {
-                    LoginLogger.shared.log("[隧道] 系统未受理 shadowrocket://open 打开请求，Shadowrocket 可能未安装.", category: .general)
+                if accepted {
+                    LoginLogger.shared.log("[隧道] 系统已受理 shadowrocket://open.", category: .general)
+                } else {
+                    // 系统未受理 = 没有任何 App 认领该 scheme（多为未安装）.
+                    // 不据此改 `availability`（探测本就不可靠），只如实记事实并兜底跳 App Store.
+                    // completion 未必被声明为 MainActor 隔离 ⇒ 用 `Task { @MainActor in }` 回到主隔离域
+                    // 再碰 `UIApplication.shared`（闭包只捕获 Sendable 的 static let URL）.
+                    LoginLogger.shared.log("[隧道] 系统未受理 shadowrocket://open，可能未安装 Shadowrocket，转跳 App Store.", category: .general)
+                    Task { @MainActor in
+                        UIApplication.shared.open(Self.appStoreURL, options: [:], completionHandler: nil)
+                    }
                 }
             }
         }
@@ -241,7 +256,12 @@ struct BuiltInTunnel: TunnelProviding {
         case .granted:
             return .available
         case .absent, .unknown:
-            return .unavailable("\(permissionState).需用带 Packet Tunnel 权限的证书或巨魔安装.")
+            // 精确说明（真机取证，2026-10-11）：TrollStore（含巨魔 lite）按自身**固定权限集**签名
+            // （`application-identifier = TROLLTROLL.*`、`platform-application`、`get-task-allow` …），
+            // **不读**随包的 `.entitlements` 文件、**不施加** Network Extension 权限 ⇒ 巨魔装不上该权限.
+            // 设备上所有含 NE 权限的 App 全是 App Store 原始签名，无一个 TrollStore 签名带 NE 权限.
+            // 唯一可行：用带 Packet Tunnel 权限的 Apple 开发者证书（有 NE 权限的 provisioning profile）重签.
+            return .unavailable("\(permissionState).巨魔（TrollStore）按自身固定权限集签名，不施加 Network Extension 权限.需用带 Packet Tunnel 权限的 Apple 开发者证书重签本应用与扩展.")
         }
     }
 
