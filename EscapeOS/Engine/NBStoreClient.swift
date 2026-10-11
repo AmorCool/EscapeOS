@@ -418,8 +418,7 @@ enum NBStoreClient {
         var userMessage: String {
             switch self {
             case .notInLibrary:
-                return "该应用在 NB 下架库里没有可用的安装包（NB 只存了这条 App 的过期快照，"
-                     + "现取也回空），重试无效. 可改用牛蛙源或爱思源搜同名 App."
+                return "该应用在 NB 下架库里没有可用的安装包."
             case .upstreamBusy: return "NB 服务端暂时取不到这个包，请稍后重试."
             }
         }
