@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.3.591] - 2026-10-11
+
+> **一句话**：暗黑模式全盘修（32 处写死色 + 6 处对比度崩坏）；爱思「开启高级功能」改成真读设备；Surge / Loon 隧道；UI 大整改方案。
+
+### 修复
+
+- **暗黑模式对比度崩坏（用户报「回收安全项按钮怎么这样的颜色」）**：`ReclaimTabView` 等 **6 处**用 `.buttonStyle(.borderedProminent)` + `.tint(AppTheme.accent)` —— accent 改成自适应后，暗色下用亮蓝 `#76D6FF` 做**实底**并自动叠浅字 ⇒ **对比度 1.64:1**（HIG 要求 4.5:1）。全改 `TintedButtonStyle` ⇒ **8.51:1**。其中 `InfoActionCard` 默认分支**被 30 个页面隐式调用**。
+- **空态大圆突兀（用户报「中间那个大圆圈颜色好看吗」）**：`emptyStateCircleFill` / `emptyStateGlyph` 是**写死浅色** ⇒ 暗色下仍是一大块浅蓝（≈17.5:1）。改自适应：圆底 亮 `#E0EBFE` / 暗 `#1C2C3E`，字形 亮 `#56A376` / 暗 `#7DD6A9`（暗色 8.16:1）。
+- **按钮被白卡包裹（用户报「包裹着的按钮显得突兀」）**：`I4AppFixView.actionSection` 是单按钮 `Section`，外层 `List` 走 `.insetGrouped` ⇒ SwiftUI 自动渲染白色圆角卡底包住按钮。改 `.listRowBackground(Color.clear)` + 按钮升为 `BrandProminentButtonStyle()`。
+- **全盘扫出 32 处写死色**（`Color(red:` 25 + `UIColor(red:` 7）；顺手清掉 **14 处 `Color.blue.opacity`**（第二套蓝归零）。
+- **爱思「开启高级功能」（用户报「为什么不能开启」）**：根因是**按钮纯占位** —— 只弹一句写死的免责声明，**从不读设备**，故必然与「安装状态：安装成功」自相矛盾。真机实测 `com.ownbook.notes` 已装但无数据容器（从未启动）、`pair.config` / `8es1421dg.be` / `RTD.cfg` 全缺。改：真读设备，按「装了 / 没装 / 读不到」三态如实回话，并**明说配对未实现**（pair record 需 PC 端 wireless-lockdown 身份，App 侧造不出）。
+- **NB 下架答复明确化**：实测该 App 21 个版本全 `code=7`、内嵌快照直链 403 ⇒ **NB 库里确实没包**。UI 文案改为明确版并给出替代源（牛蛙源 / 爱思源）。
+
+### 新增
+
+- **Surge / Loon 隧道**（照 WrapPin 移植）：`TunnelKind` 加 `.surge` / `.loon`；通用 `JumpTargetTunnel`（恒 `.available` + 受理回调 + App Store 兜底）；`TunnelPickerView` 两行；`Info.plist` 白名单 +`surge` / +`loon`。scheme 经三证据核验：`surge:///start`（**三斜杠**）、`loon://on`。既有三选项未动。
+
+### 防复发
+
+- `swift_theme_blue_guard.py` 加 **G4**（空态色须含暗色分支）/ **G5**（禁 `.borderedProminent` + `.tint(AppTheme.accent)` 同现）/ **G6**（禁 `Color.blue.opacity` 做淡底）
+- 新增 `swift_i4_advanced_guard.py`（G1-G4）/ `swift_tunnel_jump_target_guard.py`
+
+### 已知边界
+
+- **EsHelper 未加** —— 四条替代路径全堵死（setuid / `posix_spawn` root / `NSFileManager` / 直接造 utun）⇒ iOS 18 侧载无路，加了是死物。唯一正路仍是带 NE 权限的证书。
+- **爱思配对未实现** —— 需 PC 端 wireless-lockdown 身份。
+- **UI 整改仍有 P1/P2 未做**（见 `方案_UI大整改.md`）。
+
+## [0.3.590] - 2026-10-11
+
+> **一句话**：主页按巨魔录音机规范重设计；统一「两套蓝」；巨魔规范推广到 5 个页面；接线三个设计组件（消除死代码）；清掉 NB 内部码残留；爱思移动端 sinf 改走包内自带。
+
+### 修复
+
+- **NB 内部码残留**：`I4StoreFreeView:1029`（下架搜索）/ `NBStoreDetailView:620`（读取版本列表）原先直接送 `error.localizedDescription` ⇒ 会带 `（7）`。统一走 `NBStoreClient.packageFailure(from:)?.userMessage`。
+- **爱思移动端安装 100% 失败**：sinf 原先只有一条路 —— NB 服务端现取，取不到即抛 `serverSinfUnavailable`。实测三包：NB `getAppHistoryList` 全 `code=7`、`searchOffSaleApp` 按 bundleID/中文名 0 命中、Apple `lookup?id=` 三 trackId 全 `resultCount=0`（已下架）⇒ **现取必然失败**。而三包包内自带 `SC_Info/*.sinf`（1056 B，结构自检通过）⇒ **改：sinf 来源唯一 = 包内自带**。
+
+### 新增
+
+- **主页按巨魔录音机规范重设计**：页边距 16→20；2×N 网格 → 3 个 inset-grouped 分组；行结构改 17pt semibold + 13pt footnote + chevron；hero 纯蓝实底 → 淡蓝底。
+- **统一「两套蓝」**：`accent` 改自适应（亮 `#005493` / 暗 `#76D6FF`），删掉 `trAccent`，31 处使用点全改；新增 `swift_theme_blue_guard.py`。
+- **巨魔规范推广到 5 个页面**：`MoreView` / `DeviceInfoView` + `DeviceInfoSections` / `BatteryHealthView` / `StorageDetailView` / `HealthCheckView`（去掉纯蓝实底按钮）。
+- **接线三个设计组件**（原为死代码）：`AppEmptyState`(2) / `AppSettingsRow`(6) / `AppHairline`(2)。
+
 ## [0.3.589] - 2026-10-10
 
 > **一句话**：删爱思云端（后端实测不可用）；仓库云端支持自定义包体；移植爱思「按 iOS 版本瀑布自动选包」；CI 源码 hash 纳入扩展目录。
