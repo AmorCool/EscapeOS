@@ -1144,6 +1144,20 @@ enum NBStoreClient {
     /// ⇒ **内嵌包不再无条件优先**：先看它的 `accessKey` 过没过期，没过期才用（省一次请求）；
     ///   过期（或拿不到过期时间）就现取新鲜直链。旧行为正是「无条件用内嵌包」⇒ 403 ⇒ 下载必失败。
     ///
+    /// ## v0.3.593：现取失败回落内嵌快照 —— 恢复「能获取到下载任务」（2026-10-11）
+    ///
+    /// v0.3.588 引入了一处**回归**：把内嵌快照降成「过期/判不出即弃用」，且现取失败
+    /// （`code=7` → nil、或上游故障 → throw）后**不再回落内嵌快照** ⇒ 有快照的 App 也
+    /// 拿不到任何链接，用户看到「**获取不到下载任务**」（原来是「有链接、只是下载 403」）。
+    ///
+    /// 修法（**现取优先 + 内嵌快照最后兜底**，保证「有 url」优先）：
+    /// ① 内嵌快照 `accessKey` 未过期 ⇒ 直接用它（新鲜、省一次请求）；
+    /// ② 否则现取 `getAppHistoryList`（含版本回退）——**现取成功用它**（新鲜直链）；
+    /// ③ 现取回 nil / 抛错 / 连 storeID 都没有 ⇒ **回落到内嵌快照**（哪怕它可能 403，
+    ///   也先把「下载任务」给出来，让下载阶段再决定），只有连快照都没有才回 nil。
+    /// `accessKeyExpired` 判不出时间戳时仍返回 `true`（触发**优先现取**），但语义已从
+    /// 「这条链接不能用」改成「优先去现取」——现取失败会兜底，不会再丢链接。
+    ///
     /// ## v0.3.587：`code=7` 如实处理（不再把内部码甩给用户）
     ///
     /// 回退仍会回 `code=7`，实测（2026-10-10）**不是参数问题** —— 换 `appVerId` / `plusID` /
@@ -1151,20 +1165,29 @@ enum NBStoreClient {
     /// `code=7` 的两种成因见 catch 内注释：一条「NB 库里没 iOS 包」（回 nil），一条「服务端
     /// 上游临时超时」（抛出、提示重试）。**原始码与 msg 只进日志，界面文案由调用方给**。
     static func offSalePackage(from app: OffSaleApp, country: String) async throws -> NBPackage? {
-        // ① 内嵌快照直链 —— **仅在 accessKey 未过期时**直接用（省一次请求）。
-        //    过期即 HTTP 403（见头注释实测 8/8），此时必须现取，不能拿一条注定失败的链接去下。
-        if let embedded = embeddedOffSalePackage(from: app) {
-            if !accessKeyExpired(embedded.ipaURL) {
-                return embedded
-            }
-            LoginLogger.shared.log("\(logTag) [提示] 内嵌快照直链的 accessKey 已过期，改现取新鲜直链"
-                                   + "（\(app.name)）.",
+        // ① 先把内嵌快照备好 —— 它现在是**最后兜底**（v0.3.593 恢复，见头注释）。
+        //    v0.3.588 把它降成「过期即弃」，现取一失败就回 nil ⇒ 用户「获取不到下载任务」。
+        let embedded = embeddedOffSalePackage(from: app)
+
+        // ② 内嵌快照 accessKey 未过期 ⇒ 直接用它（新鲜，省一次请求）。
+        if let embedded = embedded, !accessKeyExpired(embedded.ipaURL) {
+            return embedded
+        }
+        if embedded != nil {
+            LoginLogger.shared.log("\(logTag) [提示] 内嵌快照直链的 accessKey 已过期（或无法判定），"
+                                   + "先现取新鲜直链，取不到再回落到它（\(app.name)）.",
                                    category: .appStore)
         }
 
-        // ② 现取：按 appID(+appVerId) 打 getAppHistoryList，拿**新鲜**直链。
+        // ③ 现取：按 appID(+appVerId) 打 getAppHistoryList，拿**新鲜**直链。
         guard let storeID = app.storeID, !storeID.isEmpty else {
-            LoginLogger.shared.log("\(logTag) [失败] 下架记录没有可用的快照直链、也拿不到 App Store ID，"
+            if let embedded = embedded {
+                LoginLogger.shared.log("\(logTag) [提示] 下架记录拿不到 App Store ID、无法现取，"
+                                       + "改用内嵌快照直链兜底（\(app.name)）.",
+                                       category: .appStore)
+                return embedded
+            }
+            LoginLogger.shared.log("\(logTag) [失败] 下架记录既没有可用的快照直链、也拿不到 App Store ID，"
                                    + "无法取包（\(app.name)）.",
                                    category: .appStore)
             return nil
@@ -1190,21 +1213,39 @@ enum NBStoreClient {
                 LoginLogger.shared.log("\(logTag) [失败] 现取直链 code=7（\(app.name) appID=\(storeID)）：\(message)",
                                        category: .appStore)
             }
+            // v0.3.593：现取抛错也要回落内嵌快照 —— 先让用户「看到有下载任务」，
+            // 链接新不新鲜留到下载阶段再决定（v0.3.588 这里直接 throw，导致有快照也拿不到链接）。
+            if let embedded = embedded {
+                LoginLogger.shared.log("\(logTag) [提示] 现取失败，回落到内嵌快照直链兜底（\(app.name)）.",
+                                       category: .appStore)
+                return embedded
+            }
             throw e
         }
-        if pkg == nil {
-            LoginLogger.shared.log("\(logTag) [失败] 现取（含版本回退）都没拿到直链（\(app.name) appID=\(storeID)）.",
-                                   category: .appStore)
+        if let pkg = pkg {
+            return pkg
         }
-        return pkg
+        // ④ 现取（含版本回退）也没拿到 ⇒ 回落到内嵌快照兜底（**保证「有 url」优先**）。
+        if let embedded = embedded {
+            LoginLogger.shared.log("\(logTag) [提示] 现取（含版本回退）都没拿到直链，"
+                                   + "回落到内嵌快照直链兜底（\(app.name) appID=\(storeID)）.",
+                                   category: .appStore)
+            return embedded
+        }
+        LoginLogger.shared.log("\(logTag) [失败] 现取（含版本回退）都没拿到直链，且无内嵌快照可兜底"
+                               + "（\(app.name) appID=\(storeID)）.",
+                               category: .appStore)
+        return nil
     }
 
-    /// Apple CDN 直链的 `accessKey` 是否已过期。
+    /// Apple CDN 直链的 `accessKey` 是否**该让位给现取**（过期，或判不出过期时间）。
     ///
     /// `accessKey` 形如 `<过期unix秒>_<num>_<base64签名>` —— 首个 `_` 前就是**过期时间**。
     /// 实测（2026-10-10）：过期时间戳（过去）→ `HTTP 403`；未来时间戳 → `206`。
-    /// **判不出时间戳时按「已过期」处理** —— 现取那条路恒新鲜，宁可多打一发，
-    /// 也不要用一条注定 403 的链接去下载（旧行为就是这样白下一个失败）。
+    ///
+    /// **判不出时间戳时返回 `true`（按「可能已过期」处理）** —— 语义是「**优先去现取**」，
+    /// **不是**「这条链接一定不能用」：现取失败时 `offSalePackage` 会回落到这条内嵌快照兜底
+    /// （v0.3.593），保证用户至少「看到有下载任务」。返回 `false`（判出且未过期）才直接用它。
     private static func accessKeyExpired(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString),
               let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),

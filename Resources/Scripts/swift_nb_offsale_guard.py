@@ -28,6 +28,10 @@ v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review �
       （v0.3.592 补）—— 实测（`nb_fallback_chain_probe.py`）这类 `dialing … timed out`
       是**随机落在某一步**的：若在此 `throw`，一次抽风就废掉整条回退链（本该走到后面某步
       命中，却当场把「请稍后重试」甩给用户）。必须记下并 `continue`，全链都没命中再抛。
+  G8  `offSalePackage` 现取之后必须**回落到内嵌快照**（v0.3.593 补）—— 内嵌快照要一直持有
+      （`embeddedOffSalePackage(...)`），且 `packageWithFallback(...)` **之后**必须出现
+      `return embedded`。防 v0.3.588 那处回归重演：内嵌快照过期/判不出即弃用、现取失败又
+      不回落 ⇒ 有快照的 App 也拿不到任何链接，用户「获取不到下载任务」。
 
 判据全部**只认结构/符号**（函数体里出现哪个调用 / 哪个字面量），不绑死行号、不绑死文案，
 以免将来改文案就误报。函数体用逐字符状态机按大括号配对提取（跳过字符串/注释）。
@@ -220,6 +224,21 @@ def check(root):
                             " —— 快照直链的 accessKey 过期即 HTTP 403，下载必失败"
                             "（v0.3.588 实测 8/8 全 403；过期/判不出都必须改现取）")
 
+            # ── G8：现取之后必须回落到内嵌快照（v0.3.593 补）──
+            # v0.3.588 的回归：内嵌快照过期/判不出即弃用，现取失败（nil / throw）又不回落
+            # ⇒ 有快照的 App 也拿不到链接，用户「获取不到下载任务」。这里机械守住两点：
+            #   ① 内嵌快照要一直持有（`embeddedOffSalePackage(...)`）；
+            #   ② `packageWithFallback(...)` **之后**必须出现 `return embedded`。
+            if "embeddedOffSalePackage(" not in body:
+                errs.append("[G8] offSalePackage 不再持有内嵌快照（缺 embeddedOffSalePackage(...)）"
+                            " —— 快照兜底被删，现取失败就回 nil，用户「获取不到下载任务」")
+            else:
+                idx_fb = body.find("packageWithFallback(")
+                if idx_fb >= 0 and "return embedded" not in body[idx_fb:]:
+                    errs.append("[G8] offSalePackage 现取之后没有回落到内嵌快照"
+                                "（packageWithFallback(...) 之后缺 return embedded）"
+                                " —— 现取一失败又回 nil（v0.3.588 回归：有快照也拿不到链接）")
+
         # ── G6：getAppHistoryList 取包必须带「版本回退」（v0.3.592）──
         fb = _extract_function_body(src, "func packageWithFallback(")
         if fb is None:
@@ -299,7 +318,7 @@ def main():
         for e in errs:
             print("ERROR %s" % e)
         print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码 / G4 快照过期 / G5 详情页内部码"
-              " / G6 版本回退 / G7 上游故障不中断）" % len(errs))
+              " / G6 版本回退 / G7 上游故障不中断 / G8 快照兜底）" % len(errs))
         return 1
     print("G1 回退 getAppHistoryList：OK")
     print("G2 code=7 处理：OK")
@@ -308,6 +327,7 @@ def main():
     print("G5 详情页无内部码泄漏：OK")
     print("G6 版本回退（code=7 换旧版本）：OK")
     print("G7 上游临时故障不中断回退链：OK")
+    print("G8 现取失败回落内嵌快照：OK")
     print("命中：0")
     return 0
 
