@@ -25,17 +25,22 @@ import Foundation
 ///   `Documents/`。**为什么走 house_arrest 而不是 `AFCService`**：`AFCService` 的根是设备级
 ///   `/var/mobile/media`（`com.apple.afc`），够不到 App 沙盒；App 沙盒只能经 house_arrest
 ///   （`com.apple.mobile.house_arrest`）的 `vend_documents` 进。两者是同一 AFC 协议、不同服务。
-/// - ❌ **`pair.config`：造不出。** 它是 PC ↔ 设备的「无线锁定配对记录」，由 PC 端在做完一次
-///   带锁屏密码 / 开发者模式 / 设备点「信任」的配对后 `ios_repair_record` 产出。本应用持有的是
-///   **RSD 远程配对文件**（`RpPairingFile`，Ed25519，见 `rust/idevice-ffi/src/rp_pairing_file.rs`），
-///   与 lockdown 的无线配对记录是**两套不同机制**，前者不含后者的 HostCertificate / RootCertificate /
-///   EscrowBag 等字段 ⇒ 无法拼出真值。**宁可不写，也不写一份假的。**
+/// - ⚙️ **`pair.config`：可尝试「现场配对」（路径 A）。** 见 `attemptLockdownPair` —— 经 RSD
+///   隧道连设备本机的 `lockdownd`，用 `idevice-ffi` 的 `lockdownd_pair` 发一次真 lockdown
+///   `Pair` 请求；**设备接受**则拿到它签发的配对记录（`idevice_pairing_file_serialize` 出 XML），
+///   再经 house_arrest 写进载体 `Documents/pair.config`。**能不能成，取决于设备认不认** ——
+///   这是唯一真正的未知，所以本步把设备返回的**原始错误**（如 `InvalidHostID` /
+///   `UserDeniedPairing` / `PasswordProtected`）如实摆出来，绝不把「请求已发出」说成「已配对」。
+///   （对照：`pair.config` 的**离线**构造不可能 —— 本应用只有 RSD 远程配对文件 `RpPairingFile`
+///   （Ed25519，见 `rust/idevice-ffi/src/rp_pairing_file.rs`），不含 lockdown 记录的
+///   HostCertificate / RootCertificate / EscrowBag 等字段。）
 /// - ❌ **`RTD.cfg`：造不出。** 它是 PC 本地 `/files/other/RTD.cfg` 的资源清单（字段 `//config/v711/file`、
 ///   `items/item/name/size`、`minos`、`maxos`），本应用没有这份文件，格式亦未完全解出。
 ///
-/// ⇒ 结论：本服务能把**授权标记**如实写进去并校验，但 `pair.config` 缺位 ⇒ 设备端 Agent 的
-/// VPN 起不来 ⇒ **完整「高级功能」仍无法开启**。这一点在 `Report.verdict` 与 `notConstructed`
-/// 里逐条写明，不假装能开.
+/// ⇒ 结论：本服务能把**授权标记**如实写进去并校验；`pair.config` 走「现场配对」**尝试**，
+/// 成败以设备对 `Pair` 的应答为准。两者齐备后设备端 Agent 才可能起 VPN ⇒ **完整「高级功能」
+/// 是否可开，由设备对 `Pair` 的应答决定**。这一点在 `Report.verdict`、`LivePairReport.detail`
+/// 与 `notConstructed` 里逐条写明，不假装能开.
 ///
 /// ## 为什么是 `enum` + `static` 方法
 /// 底层 `AppDiscovery` / `DeviceInfoService` / `FileSharingService` 都是**同步阻塞**且各自管着
@@ -76,11 +81,33 @@ enum I4PairingService {
         "com.MK.AwsomeFiles",
     ]
 
-    /// `pair.config` 造不出的原因（逐条事实，供 UI / 简报直接引用）.
+    /// RSD 远程配对文件名（本应用持有；「现场配对」的隧道入口）.
+    static let rsdPairingFileName = "pairingFile.plist"
+
+    /// 现场配对写入配对记录时的主机名（写进 Pair 请求的 `HostName`）.
+    static let pairHostName = "EscapeOS"
+
+    /// 现场配对使用的 SystemBUID（照 pymobiledevice3 `lockdown.py` 的 `SYSTEM_BUID` 常量）.
+    static let pairSystemBUID = "30142955-444094379208051516"
+
+    /// RSD 隧道并发铁律（`AFCService` / `WirelessLockdownService` 同款）：同一 hostname 并发
+    /// `tunnel_create_rppairing` 会互相抢占；本服务所有隧道操作经此队列串行.
+    private static let pairQueue = DispatchQueue(label: "com.ipaside.escapeos.i4-pair")
+
+    /// `pair.config` **离线**构造不可能的原因（逐条事实，供 UI / 简报直接引用）.
     static let pairConfigUnavailableReason =
         "pair.config 是 PC 与设备做过一次「无线锁定配对」后由 ios_repair_record 生成的配对记录；"
         + "本应用只有 RSD 远程配对文件（Ed25519），不含 lockdown 无线配对身份（HostCertificate / "
-        + "EscrowBag 等），无法构造真值."
+        + "EscrowBag 等），无法离线拼出真值."
+
+    /// `pair.config` 的**运行时前提**（它只能靠现场配对拿到）.
+    static let pairConfigLiveNote =
+        "需现场配对：经 RSD 隧道向设备发起 lockdown Pair，设备接受后才拿得到真记录."
+
+    /// `pair.config` 在「写授权标记」那一步不写的原因（它有独立的现场配对入口）.
+    static let pairConfigDeferredReason =
+        "pair.config 需走独立的「尝试现场配对」一步（经 RSD 隧道向设备发起 lockdown Pair）；"
+        + "本步只写授权标记."
 
     /// `RTD.cfg` 造不出的原因.
     static let rtdConfigUnavailableReason =
@@ -105,6 +132,10 @@ enum I4PairingService {
         case writeFailed(String, String)
         /// 写后读回：设备上不存在该文件.
         case readBackMissing(String)
+        /// 未导入 RSD 配对文件（现场配对的隧道入口缺失）.
+        case noPairingFile
+        /// 现场配对的传输层失败（建隧道 / 连 lockdownd / 序列化）.
+        case pairTransportFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -119,6 +150,10 @@ enum I4PairingService {
                 return "写入 \(name) 失败：\(reason)"
             case .readBackMissing(let name):
                 return "写后读回失败：设备沙盒里不存在 \(name)，写入未生效."
+            case .noPairingFile:
+                return "未检测到配对文件（Documents/\(rsdPairingFileName)），请先导入或生成配对文件."
+            case .pairTransportFailed(let reason):
+                return "现场配对传输失败：\(reason)"
             }
         }
     }
@@ -146,6 +181,8 @@ enum I4PairingService {
         let constructible: Bool
         /// 不可构造时的原因（可构造则为 nil）.
         let reason: String?
+        /// 可构造但**有运行时前提**时的补充说明（无则 nil）.
+        let note: String?
         /// 设备沙盒里当前是否存在.
         let exists: Bool
         /// 存在时的字节数（不存在为 nil）.
@@ -190,6 +227,22 @@ enum I4PairingService {
     struct SkippedFile: Sendable {
         let name: String
         let reason: String
+    }
+
+    /// 一次「现场配对」（路径 A）的如实结果（不美化）.
+    struct LivePairReport: Sendable {
+        /// 设备是否签发了配对记录（lockdown `Pair` 成功）.
+        let paired: Bool
+        /// 配对失败时设备返回的原始错误（如 `InvalidHostID` / `UserDeniedPairing` / `PasswordProtected`）.
+        let deviceError: String?
+        /// 序列化后的 `pair.config` 字节数（配对成功才有）.
+        let pairConfigBytes: Int?
+        /// 已写入的载体 bundleId（写入成功才有）.
+        let wroteToCarrier: String?
+        /// 写后读回是否一致.
+        let verified: Bool
+        /// 一句话如实结论.
+        let detail: String
     }
 
     // MARK: - 前置条件（供 UI 常驻提示）
@@ -317,16 +370,17 @@ enum I4PairingService {
         }
 
         let notConstructed: [SkippedFile] = [
-            SkippedFile(name: pairConfigName, reason: pairConfigUnavailableReason),
+            SkippedFile(name: pairConfigName, reason: pairConfigDeferredReason),
             SkippedFile(name: rtdConfigName, reason: rtdConfigUnavailableReason),
         ]
 
         let verdict: String
         if verified {
             verdict = "已写入授权标记 /\(markerName)（\(markerData.count) bytes，读回一致）；"
-                + "但 \(pairConfigName) / \(rtdConfigName) 无法构造 ⇒ 设备端 VPN 高级功能仍未完整开启."
+                + "\(pairConfigName) 需另走「尝试现场配对」一步，\(rtdConfigName) 无法构造 ⇒ "
+                + "设备端 VPN 高级功能仍未完整开启."
         } else {
-            verdict = "授权标记已写入但读回不一致；且 \(pairConfigName) / \(rtdConfigName) 无法构造，"
+            verdict = "授权标记已写入但读回不一致；\(pairConfigName) / \(rtdConfigName) 亦未就绪，"
                 + "高级功能未开启."
         }
 
@@ -339,6 +393,251 @@ enum I4PairingService {
             warnings: warnings,
             verdict: verdict
         )
+    }
+
+    // MARK: - ③ 现场配对（路径 A：经 RSD 隧道向设备发起 lockdown Pair）
+
+    /// 现场配对（路径 A）：经 RSD 隧道连设备本机 `lockdownd`，发一次真 lockdown `Pair`；
+    /// 设备接受则把签发的配对记录序列化后写进载体 App 的 `Documents/pair.config`，并读回校验.
+    ///
+    /// - Important: **成败取决于设备是否接受来自它自身隧道的 `Pair` 请求** —— 这是唯一真正的未知。
+    ///   本方法把设备返回的**原始错误**如实放进 `LivePairReport.deviceError`，绝不把「请求已发出」
+    ///   说成「已配对」.
+    /// - Parameter onLog: 逐条事实日志回调（调用方可转发到 `LoginLogger`）.
+    /// - Returns: `LivePairReport`（配对 / 写入 / 读回的逐条事实）.
+    /// - Throws: 无 RSD 配对文件（`noPairingFile`）、建隧道 / 连 lockdownd / 序列化失败
+    ///   （`pairTransportFailed`）、写入失败 / 写后读回缺失（`writeFailed` / `readBackMissing`）。
+    ///   **设备拒绝 Pair 不抛错**，而以 `paired=false` + `deviceError` 如实返回.
+    /// - Note: 可取消 —— 各阻塞步骤前检查 `Task.isCancelled`.
+    static func attemptLockdownPair(
+        onLog: (@Sendable (String) -> Void)? = nil
+    ) async throws -> LivePairReport {
+        func log(_ line: String) {
+            onLog?(line)
+            LoginLogger.shared.log(line, category: .i4Fix)
+        }
+
+        if Task.isCancelled { throw CancellationError() }
+        guard hasPairingFile else {
+            log("[i4配对] 未导入配对文件，无法建隧道，中止")
+            throw PairingError.noPairingFile
+        }
+
+        log("[i4配对] 开始：尝试现场 lockdown 配对（路径 A，经 RSD 隧道 → lockdownd Pair）")
+        if !isTunnelConnected {
+            log("[i4配对] 注意：本地隧道未连接（LocalDevVPN.isConnected=false），建隧道大概率失败")
+        }
+
+        // 载体（可选）：没装也照样做配对实验，只是无处写入.
+        let carrier = (try? await Task.detached(priority: .utility) {
+            try discoverCarrier()
+        }.value)?.carrier
+        log("[i4配对] 载体：\(carrier.map { "\($0.bundleId)（\($0.name)）" } ?? "未安装爱思移动端")")
+
+        if Task.isCancelled { throw CancellationError() }
+
+        // 现场配对（阻塞：读文件 + 建隧道 + 连 lockdownd + Pair + 序列化）；经 pairQueue 串行，尊重 RSD 铁律.
+        let outcome = try await Task.detached(priority: .userInitiated) {
+            try pairQueue.sync { try performPair() }
+        }.value
+
+        switch outcome {
+        case .refused(let deviceError):
+            log("[i4配对] 设备拒绝了 Pair：\(deviceError)")
+            return LivePairReport(
+                paired: false,
+                deviceError: deviceError,
+                pairConfigBytes: nil,
+                wroteToCarrier: nil,
+                verified: false,
+                detail: "设备拒绝了 lockdown Pair 请求（原始错误：\(deviceError)）。"
+                    + "路径 A 在此设备 / 系统上不通；\(pairConfigUnavailableReason)"
+            )
+
+        case .paired(let pairConfig):
+            log("[i4配对] 设备已签发配对记录，pair.config \(pairConfig.count) bytes")
+            guard let carrier else {
+                return LivePairReport(
+                    paired: true,
+                    deviceError: nil,
+                    pairConfigBytes: pairConfig.count,
+                    wroteToCarrier: nil,
+                    verified: false,
+                    detail: "设备已签发配对记录（\(pairConfig.count) bytes），"
+                        + "但设备上没装爱思移动端载体，无处写入 \(pairConfigName)."
+                )
+            }
+
+            // 经 house_arrest 写进载体 Documents，并读回校验.
+            if Task.isCancelled { throw CancellationError() }
+            let name = pairConfigName
+            log("[i4配对] 经 house_arrest 写 /\(name) 到 \(carrier.bundleId)")
+            let wroteSize: Int64
+            do {
+                wroteSize = try await Task.detached(priority: .userInitiated) {
+                    let afc = try FileSharingService.openAppDocuments(bundleId: carrier.bundleId)
+                    defer { afc_client_free(afc) }
+                    try FileSharingService.uploadFile(afc: afc, data: pairConfig, to: "/" + name)
+                    return FileSharingService.fileSize(afc: afc, path: "/" + name) ?? -1
+                }.value
+            } catch {
+                log("[i4配对] 写入 \(name) 失败：\(error.localizedDescription)")
+                throw PairingError.writeFailed(name, error.localizedDescription)
+            }
+            guard wroteSize >= 0 else {
+                log("[i4配对] 写后 stat 不到 /\(name)")
+                throw PairingError.readBackMissing(name)
+            }
+            let verified = try await Task.detached(priority: .userInitiated) { () -> Bool in
+                let afc = try FileSharingService.openAppDocuments(bundleId: carrier.bundleId)
+                defer { afc_client_free(afc) }
+                let back = try FileSharingService.downloadFile(afc: afc, path: "/" + name)
+                return back == pairConfig
+            }.value
+            log("[i4配对] 写后读回：/\(name) 一致=\(verified)")
+            return LivePairReport(
+                paired: true,
+                deviceError: nil,
+                pairConfigBytes: pairConfig.count,
+                wroteToCarrier: carrier.bundleId,
+                verified: verified,
+                detail: "设备已签发配对记录并写入 \(carrier.bundleId) 的 Documents/\(name)"
+                    + "（\(pairConfig.count) bytes，读回一致=\(verified)）。"
+                    + "这是路径 A 的完整产物；设备端 VPN 能否起，仍取决于设备端 Agent 的校验."
+            )
+        }
+    }
+
+    // MARK: - 现场配对内部
+
+    /// 现场配对的结果：设备签发（`paired`）或设备拒绝（`refused`，带原始错误）.
+    private enum PairOutcome: Sendable {
+        case paired(Data)
+        case refused(String)
+    }
+
+    /// RSD 隧道句柄对（构造成功即两者非空，随后免 force unwrap）.
+    private struct PairTunnel {
+        let adapter: OpaquePointer
+        let handshake: OpaquePointer
+
+        func release() {
+            rsd_handshake_free(handshake)
+            adapter_free(adapter)
+        }
+    }
+
+    /// 取 FFI 错误正文并释放该错误对象（与 `WirelessLockdownService.error(from:)` 同口径）.
+    /// Rust 侧用 `{:?}` 序列化 `IdeviceError`，`UnexpectedResponse("正文")` 的调试外壳在此剥掉，只留正文.
+    private static func ffiMessage(_ ffiError: UnsafeMutablePointer<IdeviceFfiError>) -> String {
+        var message = ffiError.pointee.message.map { String(cString: $0) } ?? ""
+        if message.hasPrefix("UnexpectedResponse(\""), message.hasSuffix("\")") {
+            message = String(message.dropFirst("UnexpectedResponse(\"".count).dropLast(2))
+        }
+        let code = Int(ffiError.pointee.code)
+        idevice_error_free(ffiError)
+        return message.isEmpty ? "code=\(code)" : message
+    }
+
+    /// 建 RSD 隧道（重试 3 次，与 `WirelessLockdownService.createTunnel` 同款）.
+    /// - Note: 阻塞调用；调用方保证已在 `pairQueue` 上.
+    private static func createPairTunnel(rpFile: OpaquePointer) throws -> PairTunnel {
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(49152).bigEndian
+        let deviceIP = LocalDevVPN.targetIP
+        guard deviceIP.withCString({ inet_pton(AF_INET, $0, &addr.sin_addr) }) == 1 else {
+            throw PairingError.pairTransportFailed(
+                "隧道 IP 无效：\(deviceIP)（请检查「设置 → 本地隧道」）")
+        }
+
+        var lastError: String?
+        for attempt in 0..<3 {
+            var adapter: OpaquePointer?
+            var handshake: OpaquePointer?
+            let ffiError = pairHostName.withCString { hostname in
+                withUnsafePointer(to: &addr) { pointer in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        tunnel_create_rppairing($0, socklen_t(MemoryLayout<sockaddr_in>.stride),
+                                                hostname, rpFile, nil, nil, &adapter, &handshake)
+                    }
+                }
+            }
+            if let ffiError {
+                lastError = ffiMessage(ffiError)
+                if let handshake { rsd_handshake_free(handshake) }
+                if let adapter { adapter_free(adapter) }
+            } else if let adapter, let handshake {
+                return PairTunnel(adapter: adapter, handshake: handshake)
+            } else {
+                lastError = "隧道句柄为空"
+            }
+            if attempt < 2 { usleep(useconds_t(300_000 * (attempt + 1))) }
+        }
+        throw PairingError.pairTransportFailed(
+            "创建 RSD 隧道失败（请确认 LocalDevVPN 已连接）：\(lastError ?? "未知")")
+    }
+
+    /// 阻塞执行一次现场配对：读 RSD 配对文件 → 建隧道 → 连 lockdownd → `Pair` → 序列化.
+    /// - Returns: `.paired(XML bytes)` 或 `.refused(设备原始错误)`.
+    /// - Throws: 读文件 / 建隧道 / 连 lockdownd / 序列化失败（传输层问题）.
+    /// - Note: 阻塞调用；调用方保证已在 `pairQueue` 上.
+    private static func performPair() throws -> PairOutcome {
+        let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(rsdPairingFileName).path
+        guard FileManager.default.fileExists(atPath: pairingPath) else {
+            throw PairingError.noPairingFile
+        }
+
+        // 1. 读 RSD 远程配对文件（隧道入口）.
+        var rpFile: OpaquePointer?
+        if let ffiError = pairingPath.withCString({ rp_pairing_file_read($0, &rpFile) }) {
+            throw PairingError.pairTransportFailed("读取 RSD 配对文件失败：\(ffiMessage(ffiError))")
+        }
+        guard let rpFile else { throw PairingError.pairTransportFailed("RSD 配对文件解析为空") }
+        defer { rp_pairing_file_free(rpFile) }
+
+        // 2. 建隧道.
+        let tunnel = try createPairTunnel(rpFile: rpFile)
+        defer { tunnel.release() }
+
+        // 3. 连 lockdownd（RSD 隧道即信任边界，无 StartSession）.
+        var client: OpaquePointer?
+        if let ffiError = lockdownd_connect_rsd(tunnel.adapter, tunnel.handshake, &client) {
+            throw PairingError.pairTransportFailed("连接 lockdownd 失败：\(ffiMessage(ffiError))")
+        }
+        guard let client else { throw PairingError.pairTransportFailed("lockdownd 客户端创建为空") }
+        defer { lockdownd_client_free(client) }
+
+        // 4. 发 Pair（HostID 现场生成；SystemBUID 照 pymobiledevice3）.
+        let hostID = UUID().uuidString
+        var pairFile: OpaquePointer?
+        let pairError = pairHostName.withCString { hostName in
+            hostID.withCString { h in
+                pairSystemBUID.withCString { b in
+                    lockdownd_pair(client, h, b, hostName, &pairFile)
+                }
+            }
+        }
+        if let pairError {
+            // 设备拒绝（或协议层报错）—— 如实回报，不抛错.
+            return .refused(ffiMessage(pairError))
+        }
+        guard let pairFile else { return .refused("lockdownd_pair 返回空记录") }
+        defer { idevice_pairing_file_free(pairFile) }
+
+        // 5. 序列化成 XML（= pair.config 内容）.
+        var dataPtr: UnsafeMutablePointer<UInt8>?
+        var size: UInt = 0
+        if let ffiError = idevice_pairing_file_serialize(pairFile, &dataPtr, &size) {
+            throw PairingError.pairTransportFailed("序列化配对记录失败：\(ffiMessage(ffiError))")
+        }
+        guard let dataPtr, size > 0 else {
+            throw PairingError.pairTransportFailed("序列化配对记录为空")
+        }
+        let data = Data(bytes: dataPtr, count: Int(size))
+        idevice_data_free(dataPtr, size)
+        return .paired(data)
     }
 
     // MARK: - 内部
@@ -377,12 +676,12 @@ enum I4PairingService {
 
         return [
             PairFileStatus(name: marker, kind: "授权标记", constructible: true, reason: nil,
-                           exists: markerSize != nil, bytes: markerSize),
-            PairFileStatus(name: pairConfigName, kind: "VPN 配对记录", constructible: false,
-                           reason: pairConfigUnavailableReason,
+                           note: nil, exists: markerSize != nil, bytes: markerSize),
+            PairFileStatus(name: pairConfigName, kind: "VPN 配对记录", constructible: true, reason: nil,
+                           note: pairConfigLiveNote,
                            exists: pairSize != nil, bytes: pairSize),
             PairFileStatus(name: rtdConfigName, kind: "资源清单", constructible: false,
-                           reason: rtdConfigUnavailableReason,
+                           reason: rtdConfigUnavailableReason, note: nil,
                            exists: rtdSize != nil, bytes: rtdSize),
         ]
     }

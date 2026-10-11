@@ -580,6 +580,9 @@ struct I4StoreFreeView: View {
     /// v0.3.587：界面**只给用户看得懂的话**，不再显示 `未获取到数据（7）` 这种内部码。
     /// - 回 `nil` = NB 库里没有这条记录的可用 iOS 包 → `PackageFailure.notInLibrary.userMessage`。
     /// - 抛错（网络/服务端临时故障）→ 「请稍后重试」，原始 error 进日志（`[NB源]` 前缀）。
+    ///
+    /// v0.3.592：取包走 `offSalePackage` 的**版本回退** —— 最新版 `code=7` 时自动换旧版本；
+    /// 回退命中时给一行轻提示（`已回退到 vX.Y.Z.`），静默回退、不刷屏。
     @MainActor
     private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
         do {
@@ -588,6 +591,12 @@ struct I4StoreFreeView: View {
                 // 明确回答「为什么一直修复不了」并给出可走的替代源（v0.3.591）.
                 ToastCenter.shared.show(NBStoreClient.PackageFailure.notInLibrary.userMessage)
                 return
+            }
+            // v0.3.592：若走了版本回退（最新版取不到、换了旧版本命中），提示一次 —— 静默回退，
+            // 只在成功时给一行轻提示，不刷屏.
+            if pkg.fellBack {
+                let v = (pkg.displayVersion?.isEmpty == false) ? pkg.displayVersion! : nil
+                ToastCenter.shared.show(v.map { "已回退到 v\($0)." } ?? "已回退到旧版本.")
             }
             let sid = app.storeID ?? String(app.id)
             await startNBDownload(trackID: sid,

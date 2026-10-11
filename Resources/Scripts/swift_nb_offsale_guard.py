@@ -8,6 +8,8 @@ v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review �
 
   G1  `EscapeOS/Engine/NBStoreClient.swift` 的 `offSalePackage` 必须保留
       「内嵌包缺失 → 回退 `getAppHistoryList` 取包」这条回退（有人删回退即报）。
+      取包调用现落在 `packageWithFallback(...)`（v0.3.592 起），故 `package(appID:...)` 与
+      `packageWithFallback(...)` 二者出现其一即算通过。
   G2  同函数必须处理服务端 `code=7`（不得让 `StoreError.server(code:"7")` 直接
       冒到界面）—— 要么回 `nil`、要么转成用户看得懂的结果。
   G3  `EscapeOS/Views/I4StoreFreeView.swift` 的 `installOffSale` 里，面向用户的
@@ -18,6 +20,10 @@ v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review �
   G5  `EscapeOS/Views/NBStoreDetailView.swift` 的 `installVersion`（详情页按版本取包）里，
       `ToastCenter.shared.show` 同样不得插 `error.localizedDescription`
       （v0.3.590）—— 详情页原先漏了这条约束，用户看到「取包失败：未获取到数据（7）」这种内部码。
+  G6  `getAppHistoryList` 取包必须带**版本回退**（v0.3.592）：`packageWithFallback` 存在，
+      且里面**真的打接口**（`package(appID:...)`）、**遍历候选版本**（`candidates`）、
+      **有尝试上限**（`maxAttempts`）、**回退时记日志**（含「回退」字样）；
+      并且 `offSalePackage` 必须走它 —— 最新版 `code=7` 时不再一次失败就报「库里没包」。
 
 判据全部**只认结构/符号**（函数体里出现哪个调用 / 哪个字面量），不绑死行号、不绑死文案，
 以免将来改文案就误报。函数体用逐字符状态机按大括号配对提取（跳过字符串/注释）。
@@ -197,8 +203,9 @@ def check(root):
         if body is None:
             errs.append("[G1] NBStoreClient.swift 里找不到 offSalePackage —— 下架取包入口被删？")
         else:
-            if "package(appID:" not in body:
-                errs.append("[G1] offSalePackage 没有回退调用 package(appID:...)（getAppHistoryList 取包）"
+            if ("package(appID:" not in body) and ("packageWithFallback(" not in body):
+                errs.append("[G1] offSalePackage 没有回退调用 getAppHistoryList 取包"
+                            "（package(appID:...) / packageWithFallback(...) 都找不到）"
                             " —— 内嵌包缺失时又会直接失败")
             if '"7"' not in body:
                 errs.append("[G2] offSalePackage 没有处理服务端 code=7"
@@ -207,6 +214,27 @@ def check(root):
                 errs.append("[G4] offSalePackage 直接用了内嵌快照直链而没做 accessKey 过期判断"
                             " —— 快照直链的 accessKey 过期即 HTTP 403，下载必失败"
                             "（v0.3.588 实测 8/8 全 403；过期/判不出都必须改现取）")
+
+        # ── G6：getAppHistoryList 取包必须带「版本回退」（v0.3.592）──
+        fb = _extract_function_body(src, "func packageWithFallback(")
+        if fb is None:
+            errs.append("[G6] NBStoreClient.swift 里找不到 packageWithFallback"
+                        " —— 「最新版 code=7 自动换旧版本」的回退被删了？")
+        else:
+            if "package(appID:" not in fb:
+                errs.append("[G6] packageWithFallback 没有真正打 getAppHistoryList"
+                            "（缺 package(appID:...)）")
+            if "candidates" not in fb:
+                errs.append("[G6] packageWithFallback 没有遍历候选版本（缺 candidates）"
+                            " —— 回退链断了")
+            if "maxAttempts" not in fb:
+                errs.append("[G6] packageWithFallback 没有尝试上限（缺 maxAttempts）—— 会无限试")
+            if "回退" not in fb:
+                errs.append("[G6] packageWithFallback 回退时不记日志（缺「回退」字样）"
+                            " —— 出问题无法排查")
+        if body is not None and "packageWithFallback(" not in body:
+            errs.append("[G6] offSalePackage 没走 packageWithFallback"
+                        " —— 最新版 code=7 时不会回退旧版本，一次失败就报「库里没包」")
 
     # ── G3：界面不得把原始 error 甩给用户 ──
     if not os.path.isfile(view):
@@ -253,13 +281,15 @@ def main():
     if errs:
         for e in errs:
             print("ERROR %s" % e)
-        print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码 / G4 快照过期 / G5 详情页内部码）" % len(errs))
+        print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码 / G4 快照过期 / G5 详情页内部码"
+              " / G6 版本回退）" % len(errs))
         return 1
     print("G1 回退 getAppHistoryList：OK")
     print("G2 code=7 处理：OK")
     print("G3 界面无内部码泄漏：OK")
     print("G4 内嵌快照 accessKey 过期判断：OK")
     print("G5 详情页无内部码泄漏：OK")
+    print("G6 版本回退（code=7 换旧版本）：OK")
     print("命中：0")
     return 0
 

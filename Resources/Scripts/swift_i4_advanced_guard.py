@@ -26,6 +26,16 @@
   G7  `EscapeOS/Engine/I4MobileInstallService.swift` 必须定义载体常量
       `static let agentBundleId = "com.ownbook.notes"`.
 
+第三版新增（守住「现场配对（路径 A）」的真实现与如实回报）：
+
+  G8  `EscapeOS/Engine/I4PairingService.swift` 必须含现场配对**真实现**
+      （判据：同时出现 `lockdownd_pair` 与 `idevice_pairing_file_serialize`）——
+      缺任一即报，防止「现场配对」被删成空壳.
+  G9  同文件必须**如实回报设备错误**（判据：出现 `deviceError`）——
+      防止把「设备拒绝 Pair」吞掉、假装成功.
+  G10 `EscapeOS/Views/I4AdvancedView.swift` 必须暴露现场配对入口并渲染结果
+      （判据：同时出现 `attemptLockdownPair` 与 `livePairResultCard`）.
+
 判据只认结构 / 符号，不绑死行号与展示文案，改文案不会误报。
 
 用法：python3 swift_i4_advanced_guard.py <仓库根>
@@ -161,13 +171,28 @@ def check(root):
         if "openAppDocuments" not in pcode or "8es1421dg.be" not in pcode:
             errs.append("[G3] I4PairingService.swift 未真的经 house_arrest 写沙盒"
                         "（缺 openAppDocuments 或 8es1421dg.be）—— 会退回「只说不做」")
+        # G8：现场配对（路径 A）真实现 —— 缺任一 FFI 符号即报，防删成空壳.
+        if "lockdownd_pair" not in pcode or "idevice_pairing_file_serialize" not in pcode:
+            errs.append("[G8] I4PairingService.swift 缺现场配对真实现"
+                        "（需同时出现 lockdownd_pair 与 idevice_pairing_file_serialize）——"
+                        "「尝试现场配对」会退回空壳")
+        # G9：如实回报设备错误 —— 防把「设备拒绝 Pair」吞掉、假装成功.
+        if "deviceError" not in pcode:
+            errs.append("[G9] I4PairingService.swift 未如实回报设备错误（缺 deviceError）——"
+                        "设备拒绝 Pair 会被吞掉，可能假装成功")
 
     # ---- I4AdvancedView.swift（独立页连到引擎）----
     vsrc = _read(adv_view)
     if vsrc is None:
         errs.append("[G4] 找不到 %s（独立入口页缺失）" % adv_view)
-    elif "I4PairingService" not in _strip_comments(vsrc):
-        errs.append("[G4] I4AdvancedView.swift 未连到引擎 I4PairingService —— 独立页会是空壳")
+    else:
+        vcode = _strip_comments(vsrc)
+        if "I4PairingService" not in vcode:
+            errs.append("[G4] I4AdvancedView.swift 未连到引擎 I4PairingService —— 独立页会是空壳")
+        # G10：现场配对入口 + 结果卡 —— 防入口被删回「只写标记」.
+        if "attemptLockdownPair" not in vcode or "livePairResultCard" not in vcode:
+            errs.append("[G10] I4AdvancedView.swift 未暴露现场配对入口 / 结果卡"
+                        "（需同时出现 attemptLockdownPair 与 livePairResultCard）")
 
     # ---- TreasureBoxView.swift（独立入口回调）----
     tsrc = _read(treasure)
@@ -217,6 +242,9 @@ def main():
     print("G5 百宝箱有独立入口：OK")
     print("G6 HomeView 接进导航栈：OK")
     print("G7 载体常量存在：OK")
+    print("G8 现场配对真实现存在：OK")
+    print("G9 如实回报设备错误：OK")
+    print("G10 独立页有现场配对入口 / 结果卡：OK")
     print("命中：0")
     return 0
 

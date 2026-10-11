@@ -357,6 +357,12 @@ enum NBStoreClient {
         /// base64 的 `.sinf`（安装加密包时必须写回包内 `SC_Info/`）
         var sinfBase64: String?
         var version: String?
+        /// v0.3.592：服务端回的真实版本号（`data.metadata.bundleShortVersionString`）。
+        /// 供「已回退到 vX.Y.Z」这类提示用；取不到就 nil（界面回落 `version`）。
+        var displayVersion: String? = nil
+        /// v0.3.592：本包是否**经版本回退**取得（最新版 `code=7` → 换了旧版本命中）。
+        /// 界面据此决定要不要给一次「已回退」轻提示（false 时静默，不刷屏）。
+        var fellBack: Bool = false
     }
 
     enum StoreError: Error, LocalizedError {
@@ -648,9 +654,86 @@ enum NBStoreClient {
                                    + " —— 若包是加密的，安装会报「缺少 SC_Info/*.sinf」",
                                    category: .appStore)
         }
+        // v0.3.592：把服务端回的真实版本号也带出去（`data.metadata.bundleShortVersionString`），
+        // 供「回退到旧版本」时界面提示「已回退到 vX.Y.Z」用。取不到就不带，界面回落 `version`。
+        let displayVersion = string((d["metadata"] as? [String: Any])?["bundleShortVersionString"])
         return NBPackage(ipaURL: normalizeAsset(url),
                          sinfBase64: sinf,
-                         version: appVerId)
+                         version: appVerId,
+                         displayVersion: displayVersion)
+    }
+
+    /// 按「主版本 + 候选版本（新→旧）」逐个取包；遇**稳定** `code=7` 自动回退到下一个版本。
+    ///
+    /// ## 为什么需要（2026-10-11 实测定案）
+    ///
+    /// App 侧此前只发**一个** `appVerId`（= 搜索结果的 `appExtID` = 最新版）。服务端把最新版
+    /// 清出库存时稳定回 `code=7 未获取到数据` —— 界面直接报「库里没包」，但**同 App 的旧版本
+    /// 可能仍在库**。脚本遍历版本数组时：bilibili 退 3 步（`891589210`→…→`889351059`）即
+    /// `code=0` + 新鲜直链（已实下 547MB 整包、MD5 与 API 一致）。⇒ 加版本回退即可修。
+    /// （StikDebug 整条 21 个版本链全 `code=7` ⇒ 库里确无包，回退也救不了 —— 如实报「没有」。）
+    ///
+    /// ## 判据（与 `PackageFailure` 同源）
+    /// - 成功（`code=0` 且带 url）→ 立即返回；`i > 0` 时把 `fellBack` 标上（界面提示一次）。
+    /// - **稳定** `code=7`（`未获取到数据` 之类）→ 记一行
+    ///   `[NB源] appVerId=… 回 code=7，回退到下一个`，继续试下一个候选。
+    /// - **上游临时故障**（`code=7` 且 msg 含 `dialing`/`请求异常`）→ 立即抛出，不空转（换版本也救不了）。
+    /// - 非 `code=7`（网络 / HTTP / 解码）→ 记下、继续试；全失败且**一次稳定 7 都没遇到**才抛出（提示重试）。
+    ///
+    /// - Parameter primaryVerID: 首选版本号；空串 = 不传 `appVerId`（服务端回最新版）。
+    /// - Parameter candidates: 候选版本号（**新→旧**）。空数组 = 单发主版本（与旧行为一致）。
+    /// - Parameter maxAttempts: 尝试上限（主版本 + 回退合计），防无限试。
+    /// - Returns: 取到包；`nil` = 所有候选都取不到（库里没包）。
+    private static func packageWithFallback(appID: String,
+                                            primaryVerID: String,
+                                            candidates: [String],
+                                            bundleID: String,
+                                            country: String,
+                                            maxAttempts: Int = 6) async throws -> NBPackage? {
+        // 主版本在前（空串 = 不传 appVerId，服务端回最新版），其余按新→旧补齐并去重。
+        var ordered: [String] = [primaryVerID]
+        for c in candidates where !c.isEmpty && !ordered.contains(c) { ordered.append(c) }
+        let tries = Array(ordered.prefix(max(1, maxAttempts)))
+
+        var sawStable7 = false
+        var lastOtherError: StoreError?
+        for (i, vid) in tries.enumerated() {
+            var stable7 = false
+            do {
+                let pkg = try await package(appID: appID, appVerId: vid,
+                                            bundleID: bundleID, country: country)
+                if var got = pkg {
+                    if i > 0 {
+                        got.fellBack = true   // 命中在回退步上 → 界面给一次轻提示
+                        LoginLogger.shared.log("\(logTag) [回退] 命中 appVerId=\(vid)"
+                                               + "（第 \(i + 1) 次尝试）.",
+                                               category: .appStore)
+                    }
+                    return got
+                }
+                // code=0 但没有 url —— 当作这一版没包，继续回退。
+            } catch let e as StoreError {
+                guard case .server(let code, let message) = e, code == "7" else {
+                    lastOtherError = e
+                    continue
+                }
+                if isUpstreamBusy(message) { throw e }   // 上游临时故障：立即抛出
+                sawStable7 = true
+                lastOtherError = e
+                stable7 = true
+            } catch {
+                lastOtherError = .network(error.localizedDescription)
+                continue
+            }
+            if stable7, i + 1 < tries.count {
+                LoginLogger.shared.log("\(logTag) appVerId=\(vid) 回 code=7，回退到下一个"
+                                       + "（\(i + 2)/\(tries.count)）.",
+                                       category: .appStore)
+            }
+        }
+        // 全试完：遇到过稳定 code=7 ⇒ 库里没包（回 nil）；否则把最后一次错误抛出去（提示重试）。
+        if sawStable7 || lastOtherError == nil { return nil }
+        throw lastOtherError!
     }
 
     /// **按 `appID` + `appVerId` 取指定版本的包**（语义化入口，v0.3.586）。
@@ -667,12 +750,18 @@ enum NBStoreClient {
     ///   - appVerId: 版本的 `externalVersionId`（包内 `softwareVersionExternalIdentifier`）。
     ///   - bundleID: 可省；服务端不强制。
     ///   - country: 区域（`cn` / `us` / `hk`）。
+    ///   - fallbackCandidates: 可选回退版本号（**新→旧**）。**默认空 = 不回退** ——
+    ///     详情页是「用户明确点了某个版本」，按他点的那个取，不擅自换版本。
     static func packageByVersion(appID: String,
                                  appVerId: String,
                                  bundleID: String = "",
-                                 country: String = "cn") async throws -> NBPackage? {
-        try await package(appID: appID, appVerId: appVerId,
-                          bundleID: bundleID, country: country)
+                                 country: String = "cn",
+                                 fallbackCandidates: [String] = []) async throws -> NBPackage? {
+        try await packageWithFallback(appID: appID,
+                                      primaryVerID: appVerId,
+                                      candidates: fallbackCandidates,
+                                      bundleID: bundleID,
+                                      country: country)
     }
 
     /// 上报下载（NB 客户端在下载时调，用于它自己的统计；移植时可省）。
@@ -809,6 +898,13 @@ enum NBStoreClient {
         /// 内嵌包信息的原始 JSON 字符串，原样留着备查.
         var appStoreDataRaw: String?
 
+        /// v0.3.592：`appStoreData.metadata.softwareVersionExternalIdentifiers` ——
+        /// 该 App 的**全量版本号**（外部标识，**旧→新**排列）。用于「最新版取不到时按新→旧回退」
+        /// （见 `packageWithFallback`）。实测（2026-10-11）：bilibili 34 个、StikDebug 21 个；
+        /// bilibili 退到第 4 个（`889351059`）即 `code=0` + 新鲜直链。
+        /// **没有 `appStoreData` 的记录此数组为空**，那时只能单发（无版本可退）。
+        var versionIDs: [String]
+
         /// 给取包/详情用的 App Store ID —— 先 `appStoreID`，退回 `lookupData.trackId`.
         var storeID: String? {
             if let s = appStoreID, !s.isEmpty { return s }
@@ -902,6 +998,7 @@ enum NBStoreClient {
             var pkgMD5: String?
             var rawStoreData: String?
             var pkgSinf: String?
+            var versionIDs: [String] = []
             if let raw = item["appStoreData"] as? String, !raw.isEmpty {
                 rawStoreData = raw
                 if let d = raw.data(using: .utf8),
@@ -912,9 +1009,12 @@ enum NBStoreClient {
                         pkgSinf = string(first["dataHex"]) ?? string(first["data"])
                     }
                     // 版本号也以内嵌 metadata 为准（实测 top-level `version` 有时比它新一档）
-                    if let md = o["metadata"] as? [String: Any],
-                       let v = string(md["bundleShortVersionString"]), !v.isEmpty {
-                        lookupVersion = v
+                    if let md = o["metadata"] as? [String: Any] {
+                        if let v = string(md["bundleShortVersionString"]), !v.isEmpty {
+                            lookupVersion = v
+                        }
+                        // v0.3.592：全量版本号数组（旧→新），供「最新版 code=7 时按新→旧回退」
+                        versionIDs = stringArray(md["softwareVersionExternalIdentifiers"])
                     }
                 }
             }
@@ -923,6 +1023,9 @@ enum NBStoreClient {
                 pkgMD5 = string(inline["hashMD5"])
                 if let arr2 = inline["sinfs"] as? [[String: Any]], let first = arr2.first {
                     pkgSinf = string(first["dataHex"]) ?? string(first["data"])
+                }
+                if versionIDs.isEmpty, let md = inline["metadata"] as? [String: Any] {
+                    versionIDs = stringArray(md["softwareVersionExternalIdentifiers"])
                 }
             }
 
@@ -944,7 +1047,8 @@ enum NBStoreClient {
                 packageURL: pkgURL,
                 packageMD5: pkgMD5,
                 packageSinf: pkgSinf,
-                appStoreDataRaw: rawStoreData)
+                appStoreDataRaw: rawStoreData,
+                versionIDs: versionIDs)
         }
         // 日志只说结论：命中几条、其中几条**可直接取包**（带直链）
         let ready = apps.filter { ($0.packageURL ?? "").isEmpty == false }.count
@@ -1055,25 +1159,26 @@ enum NBStoreClient {
                                category: .appStore)
         let pkg: NBPackage?
         do {
-            pkg = try await package(appID: storeID,
-                                    appVerId: app.appExtID ?? "",
-                                    bundleID: app.bundleID ?? "",
-                                    country: country)
-        } catch StoreError.server(let code, let message) where code == "7" {
-            // `code=7` 的**两类成因与判据**见 `PackageFailure`（2026-10-11 定点实测更正）：
-            //  · 稳定「未获取到数据」= NB 库里没有这条 App 的可用 iOS 包（快照过期 / 上游无货）
-            //    ⇒ 回 nil，界面如实说「库里没有」，不假装能取。**不限于 Mac 应用**
-            //    （iOS 的 StikDebug 也落这一支，见 `PackageFailure` 头注释）。
-            //  · 偶发「请求异常…dialing…timed out」= 服务端上游临时超时 ⇒ 抛出，上层提示重试。
-            // 参数 / 身份无关：换 appVerId / plusID / bundleID / country / udid / osVersion /
-            // UA 的组合实验**没有一种**能把 StikDebug 的 7 变成 0。原始码与 msg 一律进日志。
-            LoginLogger.shared.log("\(logTag) [失败] 现取直链 code=7（\(app.name) appID=\(storeID)）：\(message)",
-                                   category: .appStore)
-            if isUpstreamBusy(message) { throw StoreError.server(code: code, message: message) }
-            return nil
+            // v0.3.592：主版本（最新版）回 `code=7` 时，按 `softwareVersionExternalIdentifiers`
+            // **新→旧**自动回退 —— 最新版可能已被服务端清出，但旧版本仍在库（bilibili 退 3 步即命中）。
+            // 稳定 `code=7` 在 `packageWithFallback` 里被吞掉、全试完回 nil；这里只会收到
+            // 「上游临时故障 / 网络错误」两类**值得重试**的抛出。
+            pkg = try await packageWithFallback(appID: storeID,
+                                                primaryVerID: app.appExtID ?? "",
+                                                candidates: Array(app.versionIDs.reversed()),
+                                                bundleID: app.bundleID ?? "",
+                                                country: country)
+        } catch let e as StoreError {
+            // 走到这里 = 上游临时故障（`code=7` 且 msg 含 `dialing`/`请求异常`）或网络错误。
+            // 原始码与 msg 一律进日志；界面文案由调用方给（见 `PackageFailure`）。
+            if case .server(let code, let message) = e, code == "7" {
+                LoginLogger.shared.log("\(logTag) [失败] 现取直链 code=7（\(app.name) appID=\(storeID)）：\(message)",
+                                       category: .appStore)
+            }
+            throw e
         }
         if pkg == nil {
-            LoginLogger.shared.log("\(logTag) [失败] 现取也没拿到直链（\(app.name) appID=\(storeID)）.",
+            LoginLogger.shared.log("\(logTag) [失败] 现取（含版本回退）都没拿到直链（\(app.name) appID=\(storeID)）.",
                                    category: .appStore)
         }
         return pkg
@@ -1140,5 +1245,11 @@ enum NBStoreClient {
         if let s = v as? String, !s.isEmpty { return s }
         if let n = v as? NSNumber { return n.stringValue }
         return nil
+    }
+
+    /// 把「元素是数字/字符串的数组」（如 `softwareVersionExternalIdentifiers`）翻成 `[String]`。
+    private static func stringArray(_ v: Any?) -> [String] {
+        guard let arr = v as? [Any] else { return [] }
+        return arr.compactMap { string($0) }
     }
 }
