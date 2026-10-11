@@ -164,10 +164,10 @@ struct PurchaseHistoryView: View {
         let letter = String((app.name.isEmpty ? app.bundleId : app.name).prefix(1)).uppercased()
         return ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.blue.opacity(0.14))
+                .fill(AppTheme.accent.opacity(0.14))
             Text(letter.isEmpty ? "?" : letter)
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.blue)
+                .foregroundStyle(AppTheme.accent)
         }
         .frame(width: 36, height: 36)
     }

@@ -93,6 +93,14 @@
 		     ShadowrocketTunnel.availability 恒可用，探测改由 open 回调承担。白名单保留仅为「已登记」事实。
 		     此前误用的 `sub` 已移除：`sub://` 是订阅导入用途，实测 canOpenURL 结果不可靠。 -->
 		<string>shadowrocket</string>
+		<!-- 2026-10-11：隧道方式「Surge 连接」「Loon 连接」的白名单登记（仅跳转目标）。
+		     Surge 官方 URL Scheme 文档（manual.nssurge.com/tools/url-scheme.html）列
+		     `surge:///start` = iOS 上以当前配置启动；Loon 官方 URL Scheme 文档
+		     （nsloon.app/docs/Scheme）列 `loon://on` = 开启 VPN。两者与 WrapPin 的
+		     TunnelHandoffApp.launchURL 一致。
+		     ⚠️ 同 Shadowrocket：open() 不要求白名单，本项仅为「已登记」事实，不做 canOpenURL 门控。 -->
+		<string>surge</string>
+		<string>loon</string>
 		<!-- 2026-10-10：隧道方式「LocalDevVPN」需 canOpenURL 探测是否已安装。
 		     此前漏登本项 ⇒ LocalDevVPN.isInstalled 恒 false ⇒ openOrInstall 永远跳 App Store。 -->
 		<string>localdevvpn</string>

@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// 「更多 → 设置」里的「隧道」三选一（渲染在 `SettingsForm` 的 `Form` 里，本身是一个 `Section`）.
+/// 「更多 → 设置」里的「隧道」五选一（渲染在 `SettingsForm` 的 `Form` 里，本身是一个 `Section`）.
 ///
-/// 三种方式的定位与诚实说明见 `EscapeOS/Engine/TunnelProvider.swift` 的 `TunnelKind`.
+/// 各方式的定位与诚实说明见 `EscapeOS/Engine/TunnelProvider.swift` 的 `TunnelKind`.
 /// 本视图只负责呈现与选择：模型 `TunnelKind`、持久化键 `TunnelManager.kindKey`、
 /// 权限探测 `VPNPermissionProbe` 全部来自引擎层 —— **本视图不另造同名类型**
 /// （原脚手架里的占位 `TunnelKind` / `BuiltInTunnelEntitlement` 已并入抽象层）.
@@ -19,6 +19,12 @@ struct TunnelPickerView: View {
             row(for: .shadowrocket,
                 subtitle: shadowrocketSubtitle,
                 enabled: TunnelManager.provider(for: .shadowrocket).availability.isAvailable)
+            row(for: .surge,
+                subtitle: TunnelKind.surge.detail,
+                enabled: TunnelManager.provider(for: .surge).availability.isAvailable)
+            row(for: .loon,
+                subtitle: TunnelKind.loon.detail,
+                enabled: TunnelManager.provider(for: .loon).availability.isAvailable)
             row(for: .builtIn, subtitle: builtInSubtitle, enabled: builtInAvailability.isAvailable)
 
             statusAndAction
@@ -132,7 +138,7 @@ struct TunnelPickerView: View {
             return connected
                 ? "连接状态：检测到本机存在隧道接口，不保证是 LocalDevVPN 的目标隧道."
                 : "连接状态：未检测到隧道接口，请先在 LocalDevVPN 里连接."
-        case .shadowrocket:
+        case .shadowrocket, .surge, .loon:
             return "无法探测连接状态.此方式仅作为跳转目标，不保证能提供设备连接."
         case .builtIn:
             // 不可用原因已由状态区单独展示，这里只讲连接语义，避免重复.
@@ -144,6 +150,8 @@ struct TunnelPickerView: View {
         switch kind {
         case .localDevVPN: return "打开 LocalDevVPN"
         case .shadowrocket: return "打开 Shadowrocket"
+        case .surge: return "打开 Surge"
+        case .loon: return "打开 Loon"
         case .builtIn:
             return TunnelManager.provider(for: .builtIn).isConnected ? "断开内置隧道" : "开启内置隧道"
         }
@@ -164,7 +172,7 @@ struct TunnelPickerView: View {
         // 由状态区如实说明原因. LocalDevVPN 需用户在该应用内连接，无需动作.
         guard availability(for: kind).isAvailable else { return }
         switch kind {
-        case .shadowrocket, .builtIn:
+        case .shadowrocket, .surge, .loon, .builtIn:
             Task { await TunnelManager.provider(for: kind).start() }
         case .localDevVPN:
             break

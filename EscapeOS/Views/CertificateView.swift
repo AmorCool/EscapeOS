@@ -464,8 +464,8 @@ struct CertificateView: View {
                                 .font(.caption2.weight(.bold))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.blue.opacity(0.15)))
-                                .foregroundColor(.blue)
+                                .background(Capsule().fill(AppTheme.accent.opacity(0.15)))
+                                .foregroundColor(AppTheme.accent)
 
                         }
                     }

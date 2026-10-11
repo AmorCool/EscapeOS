@@ -410,10 +410,16 @@ enum NBStoreClient {
         /// 服务端上游临时故障 —— 稍后重试可能成功。
         case upstreamBusy
 
-        /// 面向用户的文案（英文句点结尾；不含任何内部码）。
+        /// 面向用户的文案（英文句点结尾；不含任何内部码）.
+        ///
+        /// `.notInLibrary` 直接回答「为什么一直修复不了」：**NB 库里这条 App 确实没有可取的包**
+        /// （快照直链已过期 + 现取回空），重试无意义，并给一条可走的替代路（另两个源）.
+        /// 这是本 App 能给出的最明确答复 —— 不是 bug、不是参数、不是身份问题（见头注释实测）.
         var userMessage: String {
             switch self {
-            case .notInLibrary: return "该应用在 NB 下架库里没有可用的安装包."
+            case .notInLibrary:
+                return "该应用在 NB 下架库里没有可用的安装包（NB 只存了这条 App 的过期快照，"
+                     + "现取也回空），重试无效. 可改用牛蛙源或爱思源搜同名 App."
             case .upstreamBusy: return "NB 服务端暂时取不到这个包，请稍后重试."
             }
         }

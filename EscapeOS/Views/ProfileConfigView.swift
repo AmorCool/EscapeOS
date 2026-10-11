@@ -75,7 +75,7 @@ struct ProfileConfigView: View {
                     ForEach(filtered) { p in
                         profileRow(p)
                             .listRowBackground(selectionMode && selectedUUIDs.contains(p.uuid)
-                                               ? Color.blue.opacity(0.08)
+                                               ? AppTheme.accent.opacity(0.08)
                                                : nil)
                     }
                 } header: {
@@ -191,8 +191,8 @@ struct ProfileConfigView: View {
                     Text(p.isProvisioning ? "预置描述" : (p.type ?? "配置描述"))
                         .font(.caption2)
                         .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.blue.opacity(0.10)))
-                        .foregroundStyle(.blue)
+                        .background(Capsule().fill(AppTheme.accent.opacity(0.10)))
+                        .foregroundStyle(AppTheme.accent)
                     if let team = p.teamName, !team.isEmpty {
                         Text(team).font(.caption2).foregroundStyle(.secondary)
                             .lineLimit(1)

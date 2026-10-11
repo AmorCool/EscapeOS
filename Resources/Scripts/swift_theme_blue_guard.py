@@ -15,9 +15,17 @@
       `userInterfaceStyle` + `.dark` 分支）—— 退回写死单值（`systemBlue` 或裸 sRGB）即报。
   G3  同文件的 `switchOnTint` 不得是独立写死的 sRGB 蓝字面量（须引用 `accent` 或走
       `userInterfaceStyle` 自适应）—— 防止经由开关色再次分叉出第二套蓝。
+  G4  同文件的空态色 `emptyStateCircleFill` / `emptyStateGlyph` 必须是**自适应色**（定义体
+      内出现 `userInterfaceStyle` + `.dark`）—— 退回写死浅色字面量（如 `#E0EBFE`）会在深色
+      模式出现刺眼亮块即报。
+  G5  `.borderedProminent` 不得与 `.tint(AppTheme.accent)` 同现（同一按钮修饰链内）—— 那是
+      **实底纯蓝按钮**，深色模式下 accent（亮 `#76D6FF`）会变成亮蓝实底（对比突兀）；应改
+      `TintedButtonStyle()`（透明淡蓝）。
+  G6  不得用 `Color.blue.opacity(...)` 做淡底 —— systemBlue 与品牌蓝 `AppTheme.accent`
+      不一致（第二套蓝残留）；应改 `AppTheme.accent.opacity(...)`。
 
 判据只认**符号/结构**，不绑行号、不绑文案。扫描前先用状态机把注释屏蔽为空白（字符串保留），
-故注释里提 `trAccent` 不会误报。
+故注释里提 `trAccent` / `.borderedProminent` 不会误报。
 
 用法：python3 swift_theme_blue_guard.py <仓库根>
 退出码：0 = 通过；1 = 有违规；2 = 路径错。
@@ -173,15 +181,30 @@ def check(root):
     views = os.path.join(root, "EscapeOS", "Views")
     design = os.path.join(views, "DesignSystem.swift")
 
-    # ── G1：trAccent 不得在代码里复现 ──
+    # ── G1 / G5 / G6：全仓符号扫描（一次遍历）──
     for path in _iter_swift_files(os.path.join(root, "EscapeOS")):
         raw = io.open(path, encoding="utf-8").read()
         masked = _mask_comments(raw)
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+
+        # G1：trAccent 不得在代码里复现
         for k in _find_all(masked, "trAccent"):
-            rel = os.path.relpath(path, root)
             errs.append("[G1] %s:%d 出现 `trAccent` —— 第二套蓝回归"
                         "（已统一到 `AppTheme.accent`：亮 #005493 / 暗 #76D6FF）"
-                        % (rel.replace(os.sep, "/"), _line_of(masked, k)))
+                        % (rel, _line_of(masked, k)))
+
+        # G5：`.borderedProminent` 不得与 `.tint(AppTheme.accent)` 同现（实底纯蓝）
+        for k in _find_all(masked, ".borderedProminent"):
+            if ".tint(AppTheme.accent)" in masked[k:k + 200]:
+                errs.append("[G5] %s:%d `.borderedProminent` 与 `.tint(AppTheme.accent)` 同现"
+                            " —— 实底纯蓝按钮，深色下 accent 变亮蓝实底（对比突兀）；"
+                            "应改 `TintedButtonStyle()`" % (rel, _line_of(masked, k)))
+
+        # G6：不得用 `Color.blue.opacity(...)` 做淡底（第二套蓝残留）
+        for k in _find_all(masked, "Color.blue.opacity("):
+            errs.append("[G6] %s:%d 用 `Color.blue.opacity(...)` 做淡底 —— systemBlue 与品牌蓝"
+                        "（`AppTheme.accent`）不一致（第二套蓝残留）；"
+                        "应改 `AppTheme.accent.opacity(...)`" % (rel, _line_of(masked, k)))
 
     # ── G2 / G3：DesignSystem.swift 里 accent 必须自适应、switchOnTint 不得写死蓝 ──
     if not os.path.isfile(design):
@@ -212,6 +235,17 @@ def check(root):
             errs.append("[G3] `switchOnTint` 是独立写死值（未引用 `accent`、也未走自适应）"
                         " —— 会从开关色分叉出第二套蓝；应为 `= accent` 或自适应写法")
 
+    # G4：空态色必须自适应（防止退回写死浅色字面量，深色模式出现刺眼亮块）
+    for token in ("static let emptyStateCircleFill", "static let emptyStateGlyph"):
+        pos = masked.find(token)
+        name = token.replace("static let ", "")
+        if pos < 0:
+            errs.append("[G4] DesignSystem.swift 里找不到 `%s` —— 空态色被删？" % name)
+            continue
+        if "userInterfaceStyle" not in masked[pos:pos + 400] or ".dark" not in masked[pos:pos + 400]:
+            errs.append("[G4] `%s` 不是自适应色（定义里缺 `userInterfaceStyle` / `.dark` 分支）"
+                        " —— 退回写死浅色字面量会在深色模式出现刺眼亮块（如 `#E0EBFE`）" % name)
+
     return errs
 
 
@@ -228,11 +262,16 @@ def main():
     if errs:
         for e in errs:
             print("ERROR %s" % e)
-        print("命中：%d（G1 trAccent 复现 / G2 accent 非自适应 / G3 switchOnTint 写死蓝）" % len(errs))
+        print("命中：%d（G1 trAccent 复现 / G2 accent 非自适应 / G3 switchOnTint 写死蓝 / "
+              "G4 空态色非自适应 / G5 borderedProminent+accent 实底 / G6 Color.blue.opacity 淡底）"
+              % len(errs))
         return 1
     print("G1 无 trAccent 复现：OK")
     print("G2 accent 自适应（亮 #005493 / 暗 #76D6FF）：OK")
     print("G3 switchOnTint 未写死蓝：OK")
+    print("G4 空态色自适应（emptyStateCircleFill / emptyStateGlyph）：OK")
+    print("G5 无 `.borderedProminent` + `.tint(AppTheme.accent)` 实底按钮：OK")
+    print("G6 无 `Color.blue.opacity(...)` 淡底：OK")
     print("命中：0")
     return 0
 

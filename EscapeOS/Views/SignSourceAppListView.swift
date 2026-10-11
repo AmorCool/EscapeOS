@@ -769,8 +769,8 @@ struct SignSourceAppListView: View {
                 Text("获取")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.14), in: Capsule())
-                    .foregroundStyle(.blue)
+                    .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                    .foregroundStyle(AppTheme.accent)
             }
             .buttonStyle(.plain)
         } else if rowKind(app).isDeepLink {

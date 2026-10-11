@@ -406,8 +406,8 @@ struct NBStoreDetailView: View {
                                     .font(.caption.weight(.semibold))
                                     .lineLimit(1)
                                     .padding(.horizontal, 12).padding(.vertical, 6)
-                                    .background(Color.blue.opacity(0.14), in: Capsule())
-                                    .foregroundStyle(.blue)
+                                    .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                                    .foregroundStyle(AppTheme.accent)
                             }
                             .buttonStyle(.plain)
                             .fixedSize()
@@ -641,7 +641,8 @@ struct NBStoreDetailView: View {
     /// 而 NB 的 `StoreError.server` 会把它格式化成 `msg（7）` ⇒ 用户看到
     /// 「取包失败：未获取到数据（7）」这种内部码（用户 2026-10-11 截图原话）。
     /// 现改为走 `NBStoreClient.packageFailure(from:)` 分类：
-    /// - 库里没包（稳定 `code=7`）→「该应用在 NB 下架库里没有可用的安装包.」
+    /// - 库里没包（稳定 `code=7`）→ `PackageFailure.notInLibrary.userMessage`
+    ///   （「没有可用的安装包……重试无效，可改用牛蛙源或爱思源」）.
     /// - 上游临时故障（偶发 `code=7`）→「NB 服务端暂时取不到这个包，请稍后重试.」
     /// 原始 error 只进 `[NB源]` 日志。
     @MainActor

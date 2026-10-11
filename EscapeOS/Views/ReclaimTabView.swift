@@ -257,8 +257,7 @@ struct ReclaimTabView: View {
                 vm.confirmBatch = true
             }
             .disabled(vm.selected.isEmpty || bytes == 0)
-            .buttonStyle(.borderedProminent)
-            .tint(AppTheme.accent)
+            .buttonStyle(TintedButtonStyle())
         }
         .padding()
         .padding(.bottom, 18)

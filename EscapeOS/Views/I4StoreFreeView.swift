@@ -578,13 +578,15 @@ struct I4StoreFreeView: View {
     /// `NBStoreClient.offSalePackage(from:country:)`：内嵌包缺失时自动回退 `getAppHistoryList`。
     ///
     /// v0.3.587：界面**只给用户看得懂的话**，不再显示 `未获取到数据（7）` 这种内部码。
-    /// - 回 `nil` = NB 库里没有这条记录的可用 iOS 包 → 「没有可用的安装包」。
+    /// - 回 `nil` = NB 库里没有这条记录的可用 iOS 包 → `PackageFailure.notInLibrary.userMessage`。
     /// - 抛错（网络/服务端临时故障）→ 「请稍后重试」，原始 error 进日志（`[NB源]` 前缀）。
     @MainActor
     private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
         do {
             guard let pkg = try await NBStoreClient.offSalePackage(from: app, country: regionRaw) else {
-                ToastCenter.shared.show("该应用在 NB 下架库里没有可用的安装包")
+                // 文案与详情页共用同一份（`PackageFailure.userMessage`）—— 一处改、两处一致，
+                // 明确回答「为什么一直修复不了」并给出可走的替代源（v0.3.591）.
+                ToastCenter.shared.show(NBStoreClient.PackageFailure.notInLibrary.userMessage)
                 return
             }
             let sid = app.storeID ?? String(app.id)
@@ -839,8 +841,8 @@ struct I4StoreFreeView: View {
                 Text("获取")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.14), in: Capsule())
-                    .foregroundStyle(.blue)
+                    .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                    .foregroundStyle(AppTheme.accent)
             }
             .buttonStyle(.plain)
         }

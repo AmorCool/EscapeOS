@@ -207,8 +207,7 @@ struct ReclaimAppView: View {
             Button("回收") {
                 vm.confirmReclaim = true
             }
-            .buttonStyle(.borderedProminent)
-            .tint(AppTheme.accent)
+            .buttonStyle(TintedButtonStyle())
         }
         .padding()
         .background(.bar)

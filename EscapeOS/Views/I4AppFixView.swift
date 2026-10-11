@@ -103,9 +103,9 @@ struct I4AppFixView: View {
             Button {
                 confirmShown = true
             } label: {
-                Text("开始修复").frame(maxWidth: .infinity)
+                Text("开始修复")
             }
-            .buttonStyle(TintedButtonStyle())
+            .buttonStyle(BrandProminentButtonStyle())
             .disabled(!ready || busy)
 
             if let repairError {
@@ -114,6 +114,13 @@ struct I4AppFixView: View {
                     .foregroundStyle(AppTheme.danger)
             }
         }
+        // 去掉 insetGrouped 给「单按钮 Section」自动套的圆角卡片底：那层卡把按钮包在中间、
+        // 四周留白，观感突兀（用户反馈「包裹着的按钮显得突兀」）。行背景置透明 + 主行动改用
+        // 全宽品牌渐变按钮（硬规则 3：主行动用 `BrandProminentButtonStyle`），按钮直接落在
+        // 页面背景上，不再有包裹容器.
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 8, leading: AppSpacing.settingsInset,
+                                  bottom: 8, trailing: AppSpacing.settingsInset))
     }
 
     private var ready: Bool { tunnelConnected && hasPairing }

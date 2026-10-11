@@ -171,10 +171,10 @@ struct IPADownloadActionsSheet: View {
         let letter = String(source.prefix(1)).uppercased()
         return ZStack {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Color.blue.opacity(0.14))
+                .fill(AppTheme.accent.opacity(0.14))
             Text(letter.isEmpty ? "?" : letter)
                 .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.blue)
+                .foregroundStyle(AppTheme.accent)
         }
         .frame(width: 48, height: 48)
     }

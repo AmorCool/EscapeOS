@@ -594,8 +594,8 @@ private struct InstallButton: View {
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
                 .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(Color.blue.opacity(0.14), in: Capsule())
-                .foregroundStyle(.blue)
+                .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                .foregroundStyle(AppTheme.accent)
         }
         .buttonStyle(.plain)
         .fixedSize()

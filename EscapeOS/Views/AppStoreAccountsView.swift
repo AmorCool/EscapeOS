@@ -189,8 +189,8 @@ struct AppStoreAccountsView: View {
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(Color.blue.opacity(0.12), in: Capsule())
-            .foregroundStyle(.blue)
+            .background(AppTheme.accent.opacity(0.12), in: Capsule())
+            .foregroundStyle(AppTheme.accent)
         }
         .buttonStyle(.plain)
         .disabled(reloginBusyEmail != nil)

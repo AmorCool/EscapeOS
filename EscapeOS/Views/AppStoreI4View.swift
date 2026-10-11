@@ -149,8 +149,8 @@ struct AppStoreI4View: View {
                             // 与免登录商店统一为「获取」（这里是"定位包 → 下载 → 安装"，不是装已下载的包）
                             Text("获取").font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(Color.blue.opacity(0.14), in: Capsule())
-                                .foregroundStyle(.blue)
+                                .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                                .foregroundStyle(AppTheme.accent)
                         }
                         .buttonStyle(.plain)
                     }
@@ -314,8 +314,8 @@ struct I4SpecialAppsView: View {
                                 // 与免登录商店统一为「获取」（这里是"定位包 → 下载 → 安装"，不是装已下载的包）
                                 Text("获取").font(.caption.weight(.semibold))
                                     .padding(.horizontal, 10).padding(.vertical, 5)
-                                    .background(Color.blue.opacity(0.14), in: Capsule())
-                                    .foregroundStyle(.blue)
+                                    .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                                    .foregroundStyle(AppTheme.accent)
                             }
                             .buttonStyle(.plain)
                         }

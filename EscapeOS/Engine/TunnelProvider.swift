@@ -17,12 +17,16 @@ import UIKit
 /// `LocalDevVPN.isConnected` 读的是「本机是否有 utun」，二者与「用哪个 App 建隧道」无关，
 /// 因此对 LocalDevVPN 与内置隧道同样成立. 本文件只决定**跳转目标**与**内置隧道启停**.
 ///
-/// 三种方式（照 WrapPin 的口径）：
+/// 五种方式（照 WrapPin 的口径）：
 ///   · `.localDevVPN` —— 现状，外部 LocalDevVPN 应用建 utun，本应用只读它的对端地址.
 ///   · `.shadowrocket` —— **只是跳转目标**：点了跳去 Shadowrocket. 它**不保证**能提供
 ///     设备连接所需的 utun（WrapPin README 原文：「设置中的 Shadowrocket 选项只决定
 ///     跳转目标，不保证普通代理配置能提供所需的设备连接」）⇒ 本实现**不谎称**已连接.
-///   · `.builtIn` —— 新增，用 Network Extension 自己建隧道. 开启前**先检测当前签名
+///   · `.surge` —— **只是跳转目标**：照 WrapPin 的 Surge 集成，用官方 scheme
+///     `surge:///start` 拉起当前配置，随后继续检测设备通道是否可达，本实现同样不谎称已连接.
+///   · `.loon` —— **只是跳转目标**：照 WrapPin 的 Loon 集成，用官方 scheme `loon://on`
+///     请求开启 VPN，随后继续检测设备通道是否可达，本实现同样不谎称已连接.
+///   · `.builtIn` —— 用 Network Extension 自己建隧道. 开启前**先检测当前签名
 ///     是否含 Packet Tunnel 权限**，无权限则置灰（见 `VPNPermissionProbe`）.
 ///
 /// ⚠️ 兼容纪律：默认方式仍是 `.localDevVPN`（`UserDefaults` 无值时回落到它），
@@ -34,6 +38,8 @@ import UIKit
 enum TunnelKind: String, CaseIterable, Identifiable, Sendable {
     case localDevVPN
     case shadowrocket
+    case surge
+    case loon
     case builtIn
 
     var id: String { rawValue }
@@ -43,6 +49,8 @@ enum TunnelKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .localDevVPN: return "LocalDevVPN"
         case .shadowrocket: return "Shadowrocket 连接"
+        case .surge: return "Surge 连接"
+        case .loon: return "Loon 连接"
         case .builtIn: return "内置隧道"
         }
     }
@@ -53,6 +61,10 @@ enum TunnelKind: String, CaseIterable, Identifiable, Sendable {
         case .localDevVPN:
             return "需在 LocalDevVPN 应用里连接隧道，再回到本应用使用."
         case .shadowrocket:
+            return "仅作为跳转目标，不保证能提供所需的设备连接."
+        case .surge:
+            return "仅作为跳转目标，不保证能提供所需的设备连接."
+        case .loon:
             return "仅作为跳转目标，不保证能提供所需的设备连接."
         case .builtIn:
             return "由本应用内置的 Network Extension 建隧道，需带 Packet Tunnel 权限的签名."
@@ -201,6 +213,81 @@ struct ShadowrocketTunnel: TunnelProviding {
     func stop() async {
         // 跳转目标没有可断开的连接 ⇒ 空操作.
     }
+}
+
+// MARK: - 实现 2b/2c：Surge / Loon（跳转目标）
+
+/// 照 `ShadowrocketTunnel` 的口径实现的外部「跳转目标」（Surge / Loon）：
+/// 只决定跳转目标，不建隧道、也不声称已连接.
+///
+/// 为什么做成**一个通用类型**而不是给 Surge / Loon 各写一份：
+/// 二者与 Shadowrocket 的语义**完全一致** —— `isConnected` 恒 `false`、
+/// `canProbeConnection` 恒 `false`、`availability` 恒 `.available`，
+/// `start()` 只做「跳转 + 受理回调 + 未受理时兜底跳 App Store」，差别仅在 URL Scheme
+/// 与 App Store 兜底页. 把这段（含 Swift 6 严格并发下的 `MainActor.run` 写法）收在一处，
+/// 免得再复制两份易错的并发代码. `ShadowrocketTunnel` 保持原样**不动**（既有行为零变化）.
+struct JumpTargetTunnel: TunnelProviding, Sendable {
+    let kind: TunnelKind
+
+    /// 请求目标应用「启动 / 开启隧道」用的 URL（官方 URL Scheme，见各静态工厂注释）.
+    let launchURL: URL
+
+    /// 系统未受理 `launchURL` 时兜底跳转的 App Store 页面.
+    let appStoreURL: URL
+
+    /// 恒 `false`：跳转目标不构成连接承诺（同 `ShadowrocketTunnel`）.
+    var isConnected: Bool { false }
+    var canProbeConnection: Bool { false }
+
+    /// 恒 `.available` —— 与 `LocalDevVPNTunnel` / `ShadowrocketTunnel` 同口径：
+    /// **不拿 `canOpenURL` 挡路**（探测不可靠，见 `ShadowrocketTunnel` 的取证注释）.
+    var availability: TunnelAvailability { .available }
+
+    func start() async {
+        // 无条件跳转：探测不可靠，故不设门槛，让系统的受理回调给出事实.
+        LoginLogger.shared.log("[隧道] 请求打开 \(kind.title)（scheme=\(launchURL.absoluteString)，仅跳转，不保证提供设备连接）.", category: .general)
+        // 并发写法与理由**逐字同 `ShadowrocketTunnel.start()`**：把调用整体放进 MainActor，
+        // 字典就地构造不跨隔离传递，闭包只捕获 Sendable 的 `URL`（见那里的三段退让记录）.
+        await MainActor.run {
+            UIApplication.shared.open(launchURL, options: [:]) { accepted in
+                if accepted {
+                    LoginLogger.shared.log("[隧道] 系统已受理 \(launchURL.absoluteString).", category: .general)
+                } else {
+                    // 系统未受理 = 没有任何 App 认领该 scheme（多为未安装）.
+                    // 不据此改 `availability`（探测本就不可靠），只如实记事实并兜底跳 App Store.
+                    LoginLogger.shared.log("[隧道] 系统未受理 \(launchURL.absoluteString)，可能未安装 \(kind.title)，转跳 App Store.", category: .general)
+                    Task { @MainActor in
+                        UIApplication.shared.open(appStoreURL, options: [:], completionHandler: nil)
+                    }
+                }
+            }
+        }
+    }
+
+    func stop() async {
+        // 跳转目标没有可断开的连接 ⇒ 空操作.
+    }
+}
+
+extension JumpTargetTunnel {
+    /// Surge. scheme 取证：Surge 官方 URL Scheme 文档（manual.nssurge.com/tools/url-scheme.html）
+    /// 明确列出 iOS 上 `surge:///start` = 「以当前配置启动」（注意是三斜杠 `surge:///`）；
+    /// WrapPin 的 `TunnelHandoffApp.launchURL` 亦用同一 scheme. App Store 兜底页取 id 1442620678
+    /// （「Surge 5」，开发者 Surge Networks Inc.，经 iTunes Lookup 核验）.
+    static let surge = JumpTargetTunnel(
+        kind: .surge,
+        launchURL: URL(string: "surge:///start")!,
+        appStoreURL: URL(string: "https://apps.apple.com/app/surge-5/id1442620678")!
+    )
+
+    /// Loon. scheme 取证：Loon 官方 URL Scheme 文档（nsloon.app/docs/Scheme）列出 `loon://on`
+    /// = 「开启 VPN」；WrapPin 的 `TunnelHandoffApp.launchURL` 亦用同一 scheme.
+    /// App Store 兜底页取 id 1373567447（「Loon」，开发者 Loon Lab Limited，经 iTunes Lookup 核验）.
+    static let loon = JumpTargetTunnel(
+        kind: .loon,
+        launchURL: URL(string: "loon://on")!,
+        appStoreURL: URL(string: "https://apps.apple.com/app/loon/id1373567447")!
+    )
 }
 
 // MARK: - 实现 3：内置隧道（Network Extension）
@@ -512,7 +599,7 @@ enum VPNPermissionProbe {
 /// 安装 / 电池健康 / 崩溃日志等**全部失效**。现明确：
 ///   · 依赖设备连接的功能**一律直接读** `LocalDevVPN.targetIP` / `LocalDevVPN.isConnected`
 ///     —— 它读的是本机 utun 的**对端地址**与「本机是否有 utun」，与「用哪个 App 建隧道」无关.
-///   · 本类型只用于设置页呈现、跳转目标（Shadowrocket）与内置隧道的启停.
+///   · 本类型只用于设置页呈现、跳转目标（Shadowrocket / Surge / Loon）与内置隧道的启停.
 enum TunnelManager {
     /// `UserDefaults` 键. 沿用本仓「模块.项」点号惯例（如 `AppStore.ShopRegion`），
     /// 与设置页 `TunnelPickerView` 的 `@AppStorage` 同键.
@@ -532,6 +619,8 @@ enum TunnelManager {
         switch kind {
         case .localDevVPN: return LocalDevVPNTunnel()
         case .shadowrocket: return ShadowrocketTunnel()
+        case .surge: return JumpTargetTunnel.surge
+        case .loon: return JumpTargetTunnel.loon
         case .builtIn: return BuiltInTunnel()
         }
     }

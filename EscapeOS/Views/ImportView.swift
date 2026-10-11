@@ -305,9 +305,7 @@ struct ImportView: View {
                 message: "从「文件」导入一个别人分享的 .ipa，或点「扫描新文件」找本机已有的包. 导入后会自动进入「待修补」.",
                 actionTitle: "从文件导入",
                 action: { showPicker = true },
-                disabled: importing,
-                // 用户审美：共享转换里的按钮不要纯蓝实底，用透明淡蓝（`TintedButtonStyle`）.
-                actionTinted: true)
+                disabled: importing)
         }
     }
 

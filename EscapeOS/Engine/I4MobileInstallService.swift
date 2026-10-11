@@ -91,6 +91,17 @@ enum I4MobileInstallService {
     /// 爱思共享 Apple ID（三包 `iTunesMetadata` 的 `appleId`，见 `爱思9_安装移动端.md` §②）.
     static let sharedAccountEmail = "share_appleid003@163.com"
 
+    /// **高级功能的设备端载体** —— 爱思移动端主 App 的 bundle id.
+    ///
+    /// 值 `com.ownbook.notes`（`220.ipa`，`Runner.app`，显示名「爱思全能版」）—— 据
+    /// `P3_爱思助手_逆向/_简报/爱思9_配对与设备端Agent.md` §2.1：它是一组伪装成笔记 / 工具类的
+    /// React Native 马甲包里的主包，高级功能（APP 更新 / 验机 / 导入铃声）由它起 VPN 转发
+    /// Apple 流量提供. 该 VPN 的开关判据是 `Documents/pair.config` 是否存在（§2.2）.
+    ///
+    /// 用途：**只做「设备上有没有装这个 App」的检测**（供「开启高级功能」入口如实回话），
+    /// 不参与写入 —— 写 `pair.config` / `RTD.cfg` / `8es1421dg.be` 的配对链路本仓**尚未实现**.
+    static let agentBundleId = "com.ownbook.notes"
+
     /// 3 个「爱思移动端」IPA 的元数据（`fileName` 同时是缓存目录里的落盘名）.
     ///
     /// `expectedBundleId` / `expectedVersion` 用于**安装前后探测设备上的同名 App**，

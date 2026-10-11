@@ -15,6 +15,9 @@ import UIKit
 /// 4. 界面文案一律英文句点 `.`，不用中文句号，不用符号化标记 / 星形符号。
 /// 5. **设置类列表用全宽行 + 发丝分隔**（`AppSettingsRow` + `AppHairline`），**不要套 16 圆角卡片**
 ///    （TRApp 设置页实测：行底 / 分隔线均全宽 0–828px；规范 §1.4 / §③组件 5）。
+/// 6. **颜色一律明暗两套值**：品牌实测色写死 sRGB 时必须用 `Color(UIColor { trait in ... })`
+///    给出深色分支；浅色专用的浅底（如空态圆 `emptyStateCircleFill`）在深色下必须换深色值，
+///    不得沿用浅色字面量（否则深色模式出现刺眼亮块）。防复发见 `swift_theme_blue_guard.py` G4。
 enum AppTheme {
     /// Brand accent. Unified blue: TRApp-measured `#005493` in light mode,
     /// a brightened `#76D6FF` in dark mode for contrast.
@@ -125,10 +128,22 @@ enum AppTheme {
     static let brand = Color(red: 0x00 / 255, green: 0x89 / 255, blue: 0x74 / 255)
 
     /// 空状态大圆底色（TRApp IMG_0079 实测 ≈ `#E0EBFE` 浅蓝；规范 §1.1 / §③组件 3）.
-    static let emptyStateCircleFill = Color(red: 0xE0 / 255, green: 0xEB / 255, blue: 0xFE / 255)
+    /// **明暗两套值**：浅色用 TRApp 实测 `#E0EBFE`；深色不得沿用浅蓝（在深背景上是一块刺眼亮斑），
+    /// 改用**低饱和深蓝灰** `#1C2C3E`，与深色分组背景有轻微层次又不抢视线.
+    static let emptyStateCircleFill = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x1C / 255, green: 0x2C / 255, blue: 0x3E / 255, alpha: 1)
+            : UIColor(red: 0xE0 / 255, green: 0xEB / 255, blue: 0xFE / 255, alpha: 1)
+    })
 
     /// 空状态圆内字形色（TRApp IMG_0079 实测 ≈ `#56A376` 青绿；规范 §1.1 / §③组件 3）.
-    static let emptyStateGlyph = Color(red: 0x56 / 255, green: 0xA3 / 255, blue: 0x76 / 255)
+    /// **明暗两套值**：浅色用 TRApp 实测 `#56A376`；深色提亮到 `#7DD6A9`，在 `#1C2C3E` 圆底上
+    /// 对比充分（相对亮度比 ≈ 8.9:1）.
+    static let emptyStateGlyph = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x7D / 255, green: 0xD6 / 255, blue: 0xA9 / 255, alpha: 1)
+            : UIColor(red: 0x56 / 255, green: 0xA3 / 255, blue: 0x76 / 255, alpha: 1)
+    })
 }
 
 /// 「透明淡蓝」按钮样式（用户审美：不要纯蓝实底，要淡一点的蓝底）.
@@ -312,9 +327,6 @@ struct InfoActionCard: View {
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
     var disabled: Bool = false
-    /// 动作按钮是否用「透明淡蓝」（`TintedButtonStyle`）。默认 `false` ⇒ 维持系统
-    /// `.borderedProminent` 实底，**不动其它页面**的既有观感；共享转换的空态按钮传 `true`.
-    var actionTinted: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -327,26 +339,17 @@ struct InfoActionCard: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let actionTitle = actionTitle, let action = action {
-                    // 两种样式各写一遍（而非改全局默认）：只有显式要求淡蓝的调用点变，
-                    // 其余页面的空态按钮维持 `.borderedProminent` 实底不变.
-                    if actionTinted {
-                        Button(action: action) {
-                            Text(actionTitle)
-                        }
-                        .buttonStyle(TintedButtonStyle())
-                        .controlSize(.small)
-                        .disabled(disabled)
-                        .padding(.top, 2)
-                    } else {
-                        Button(action: action) {
-                            Text(actionTitle)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(AppTheme.accent)
-                        .disabled(disabled)
-                        .padding(.top, 2)
+                    // 统一「透明淡蓝」（本轮修正）：此前默认走 `.borderedProminent` + `.tint(accent)`
+                    // 实底，深色模式下 accent（亮 `#76D6FF`）会变成**亮蓝实底**（对比突兀、违反
+                    // 「不用纯蓝实底按钮」硬规则）。故本卡动作按钮一律用 `TintedButtonStyle`，
+                    // 并去掉了原 `actionTinted` 开关（两分支等价，开关已无意义）.
+                    Button(action: action) {
+                        Text(actionTitle)
                     }
+                    .buttonStyle(TintedButtonStyle())
+                    .controlSize(.small)
+                    .disabled(disabled)
+                    .padding(.top, 2)
                 }
             }
         }

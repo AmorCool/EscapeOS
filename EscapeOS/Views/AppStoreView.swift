@@ -453,8 +453,8 @@ struct AppStoreView: View {
                     Text(app.priceText == "免费" ? "获取" : app.priceText)
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Color.blue.opacity(0.14), in: Capsule())
-                        .foregroundStyle(.blue)
+                        .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                        .foregroundStyle(AppTheme.accent)
                 }
             }
             .buttonStyle(.plain)
