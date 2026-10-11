@@ -617,7 +617,9 @@ struct NBStoreDetailView: View {
         do {
             versions = try await NBStoreClient.versionList(trackID: trackID)
         } catch {
-            errorText = "读取版本列表失败：\(error.localizedDescription)"
+            // 同取包：`code=7` 走面向用户文案，不外泄内部码。
+            errorText = NBStoreClient.packageFailure(from: error)?.userMessage
+                ?? "读取版本列表失败：\(error.localizedDescription)"
         }
         loading = false
     }

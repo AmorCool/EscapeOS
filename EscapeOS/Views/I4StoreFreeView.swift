@@ -1026,7 +1026,9 @@ struct I4StoreFreeView: View {
                         nbOffSaleResults = try await NBStoreClient.searchOffSaleApp(keyword: kw)
                     } catch {
                         nbOffSaleResults = []
-                        errorText = "NB 下架搜索失败：\(error.localizedDescription)"
+                        // 同取包：`code=7` 走面向用户文案，不外泄内部码。
+                        errorText = NBStoreClient.packageFailure(from: error)?.userMessage
+                            ?? "NB 下架搜索失败：\(error.localizedDescription)"
                         ToastCenter.shared.show("搜索失败")
                     }
                 } else if nbParseTrackIDOnly(kw) != nil || kw.lowercased().contains("apple.com") {

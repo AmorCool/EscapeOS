@@ -20,16 +20,14 @@ import Foundation
 /// > 用户决定删除。相关实现（`I4CloudResolver` / `I4CloudResolverImpl` / `UnavailableI4CloudResolver`）
 /// > 已整块移除，见 `P4_全能签逆向/_简报/实现_删爱思云端与仓库云端自选包体.md`.
 ///
-/// ## 移植的是什么（v2：修正 sinf 来源）
-/// 爱思 PC 端「安装爱思移动端」的真实做法**不是**「把包内自带的 sinf 直接递给 installd」：
-///   ① 解压内嵌 IPA（libzip）；
-///   ② 往包里**写一份 sinf**（覆盖 `Payload/<X>.app/SC_Info/<exe>.sinf`）——
-///      这份 sinf 来自 **Apple 服务端**（`MZFinance` 响应 `songList[].sinfs[0]`），
-///      **不是**包内原有的那份；
-///   ③ 重打包；
-///   ④ `idm_app.dll` 再从包里**读回**这份 sinf，作为 `ApplicationSINF` 参数交 installd。
-/// 核心函数 `addSinfToZip()`（VA `0x1407dd6b0`），目标路径模板 `Payload/%1/SC_Info/%2.sinf`；
-/// 重取路径 `WriteAppSignature start` → 轮询 → 下载解析 → `addSinfToZip`.
+/// ## 移植的是什么（v7：sinf 来源改回包内自带）
+/// 爱思 PC 端「安装爱思移动端」的真实做法是：解压内嵌 IPA（libzip）→ 往包里**写一份 sinf**
+/// 覆盖 `Payload/<X>.app/SC_Info/<exe>.sinf`（核心函数 `addSinfToZip()`，VA `0x1407dd6b0`，
+/// 路径模板 `Payload/%1/SC_Info/%2.sinf`）→ 重打包 → `idm_app.dll` 再从包里**读回**
+/// 这份 sinf 作 `ApplicationSINF` 交 installd。即「**装的就是包里那份 sinf**」。
+/// 爱思写进包里的那份来自 Apple 服务端（`MZFinance` 响应 `songList[].sinfs[0]`）；
+/// 但本 App 侧两条现取路**实测都取不到**（见下），故本服务**只用包内自带那份**——
+/// 与爱思「装包内 sinf」的落地形态一致。
 ///
 /// ## 自动选包（v6：移植爱思「按 iOS 版本瀑布降级选一个包」）
 /// 爱思选包不是随机挑，而是按设备 iOS 版本瀑布降级（函数 `0x1401db840`，见
@@ -39,25 +37,22 @@ import Foundation
 /// 本仓内置只有 `220` / `217` / `photo`（`photo` 不在瀑布内）；`305` / `213` / `723` **无包体**
 /// ⇒ 命中时如实回落（同爱思 `policy==0` 的行为），见 `autoPick(profile:)`.
 ///
-/// ## 为什么必须现取 sinf（决定性证据）
-/// 三个爱思移动端 IPA 包内自带的 sinf，其 `schi.name` 属**原始购买者**，**不是**爱思共享账号
-/// `share_appleid003@163.com`（三包 `iTunesMetadata.appleId` 才是该共享账号）：
-///   · `217.ipa`   `schi.user=0xab6d95d8` `schi.name=李 明`
-///   · `220.ipa`   `schi.user=0xa775eea7` `schi.name=小 敏`
-///   · `photo.ipa` `schi.user=0xab5c9f49` `schi.name=chongwei stven`
-/// ⇒ 包内 sinf 与「本设备」无关，直接递交 installd **必然**过不了 FairPlay（装不上，
-/// 或装上后运行期 `fairplayOpen()` 失败而闪退，即 `-42112` 一类）。
-/// 这正是本服务 v1 的错误：它 `extractSINF` 取包内自带、直接装。
+/// ## 为什么 sinf 只取包内自带（实测，v7 修正）
+/// v2~v6 走「向服务端现取 sinf」的单一路径（`NBStoreClient.packageByVersion`），
+/// 取不到即抛 `serverSinfUnavailable` —— 真机报「安装失败」即由此而来。实测三包：
+///   · NB `nb9527_getAppHistoryList`（appID=包内 itemId、appVerId=包内
+///     softwareVersionExternalIdentifier）⇒ 三包**全 `code=7 未获取到数据`**；
+///     `nb9527_searchOffSaleApp` 按 bundleID / 中文名搜 ⇒ **0 命中**.
+///   · Apple `itunes.apple.com/lookup?id=<trackId>`（cn / us）⇒ 三 trackId **resultCount=0**
+///     （已下架）⇒ 连「按 Apple ID 现取」也不可行.
+/// ⇒ **现取这条路在本设备上取不到任何 sinf**；唯一可取的是**包内自带那份**
+///   （三包均带 `Payload/<X>.app/SC_Info/<exe>.sinf`，1056 字节，结构自检通过）.
 ///
-/// ## sinf 来源（只有一条路，照爱思）
-/// **NB 服务端** —— `NBStoreClient.packageByVersion(appID:appVerId:bundleID:country:)`
-/// 按「包内 `iTunesMetadata` 的 `itemId` + `softwareVersionExternalIdentifier`」
-/// 现取该版本的 sinf，**写进包内覆盖**，再装。
-/// 取不到即**明确失败**（抛 `serverSinfUnavailable`），**不回退到包内自带**。
-///
-/// **为什么不做「优先级 + 兜底」**：包内自带 sinf 属**原始购买者**（实测 `schi.name`
-/// = 李 明 / 小 敏 / chongwei stven），把它当兜底会让「装上了但闪退」变成常态，
-/// 而不是**明确报错** —— 那比不做更糟。故只有服务端这一条路。
+/// ## sinf 来源（v7：只有一条路 = 包内自带）
+/// `IPAPackageInspector.extractSINF(ipaPath:)` 取 `Payload/<X>.app/SC_Info/<exe>.sinf`
+/// → `PackageSINFWriter.isStructurallyValidSinf` 自检（不过即**明确抛错**，宁可装不上也不写坏包）
+/// → 复制工作副本 → `PackageSINFWriter.injectAllPaths` 覆盖副本内 `SC_Info/*.sinf`
+/// → `IPAInstallService.installWithSINF` 装副本（同一份 sinf 作 `ApplicationSINF`）.
 ///
 /// ## 实现（照爱思）
 /// 复制 IPA 到临时目录（**绝不改缓存原件**）→ `PackageSINFWriter.injectAllPaths`
@@ -65,10 +60,14 @@ import Foundation
 /// （同一份 sinf 同时作为 `ApplicationSINF` 递交，与爱思「写进包再读回」等价）。
 ///
 /// ## 诚实边界（写进返回值，不只在注释里）
-/// - `Report.sinfSource` 恒为 `"server"`（本服务只有服务端这一条路）；
-///   `Report.sinfAccountName` / `sinfAccountUser` 由 `schi` 解析得出
-///   （让用户看到「这是谁的授权」）。
-/// - `Report.launchVerified` **恒为 `false`**（本服务只做安装，不验证能否启动）。
+/// - 包内自带 sinf 的 `schi.name` 属**原始购买者**（实测 `217`=李 明 / `220`=小 敏 /
+///   `photo`=chongwei stven），**不是**爱思共享账号 `share_appleid003@163.com`。
+///   因 sinf 绑「服务端账号 + 内容密钥」而非设备硬件（见 `RepairService` 文件头），
+///   把它递给 installd **可能**装得上、也**可能**装上后启动期 FairPlay 校验失败而闪退；
+///   本服务只做安装、不验证启动 ⇒ 由 `Report.launchVerified`（恒 `false`）与
+///   `mayCrashAtLaunch` 如实暴露这一风险，不夸大也不隐瞒。
+/// - `Report.sinfSource` 恒为 `"bundle"`；`sinfAccountName` / `sinfAccountUser` 由 `schi`
+///   解析得出（让用户看到「这是谁的授权」）。
 /// - 日志走 `onLog` 闭包（不直接写 `LoginLogger`）；调用方可转发到
 ///   `LoginLogger.shared.log(_:category: .i4Fix)`。
 ///
@@ -201,7 +200,7 @@ enum I4MobileInstallService {
 
     /// 一次安装的**如实结果**（不美化）.
     ///
-    /// 诚实边界在这里显式暴露：`sinfSource`（恒为 `"server"`）/ `sinfAccountName`
+    /// 诚实边界在这里显式暴露：`sinfSource`（恒为 `"bundle"`）/ `sinfAccountName`
     /// 让用户看到「用的是谁的授权」；`launchVerified` 恒为 `false`.
     struct Report: Sendable {
         let pack: Pack
@@ -210,7 +209,7 @@ enum I4MobileInstallService {
         let ipaBytes: Int
         /// **实际安装的那份**临时副本路径（注入了 sinf；不改原件）.
         let workIPAPath: String
-        /// sinf 来源：固定 `"server"`（本服务只有服务端这一条路）.
+        /// sinf 来源：固定 `"bundle"`（本服务只有「包内自带」这一条路）.
         let sinfSource: String
         /// sinf 的 `schi` 账号名 / user（解析出来展示；解析失败为 `nil`）.
         let sinfAccountName: String?
@@ -252,8 +251,8 @@ enum I4MobileInstallService {
         case cacheWriteFailed(String)
         /// 导入的 IPA 认不出属于哪个包（包内 bundle id 读不出，或不属于这组）.
         case importUnrecognized(String)
-        /// 服务端取 sinf 失败（缺 store id / 服务端没回 sinf / 结构不合法）.
-        case serverSinfUnavailable(reason: String)
+        /// 取包内自带 sinf 失败（包内无 sinf / 结构不合法）.
+        case bundleSinfUnavailable(reason: String)
         /// 复制工作副本失败（临时目录 / 复制 IPA）.
         case workCopyFailed(String)
         /// 把 sinf 写进副本失败.
@@ -273,8 +272,8 @@ enum I4MobileInstallService {
                 return "写入 IPA 缓存失败：\(reason)"
             case .importUnrecognized(let reason):
                 return "导入的 IPA 不属于爱思移动端这组：\(reason)"
-            case .serverSinfUnavailable(let reason):
-                return "服务端未取到可用的 sinf：\(reason)"
+            case .bundleSinfUnavailable(let reason):
+                return "安装包里没有可用的 sinf（解密授权）：\(reason)"
             case .workCopyFailed(let reason):
                 return "准备工作副本失败：\(reason)"
             case .sinfInjectFailed(let reason):
@@ -576,14 +575,14 @@ enum I4MobileInstallService {
 
     // MARK: - ④ 安装（定 sinf 来源 → 复制副本 → 注入 → 装副本 → 如实报告）
 
-    /// 安装一个包（移植自爱思 PC 端：**往包里写服务端 sinf，再装那个包**）.
+    /// 安装一个包（移植自爱思 PC 端：**往包里写 sinf，再装那个包**）.
     ///
     /// 流程（每步失败**必抛**，不静默）：
     ///   ① 定位缓存里的 IPA（`Caches/I4MobileIPA/`）；缺失即 `packResourceMissing`
     ///      （**不做隐式下载、不兜底到 bundle**）.
-    ///   ② `inspect` 读包内真值；`extractiTunesMetadata` 取 metadata（供 store id 与安装选项）.
-    ///   ③ **向服务端现取 sinf**（`NBStoreClient.packageByVersion`）；取不到即
-    ///      `serverSinfUnavailable`（**明确失败，不回退到包内自带**）.
+    ///   ② `inspect` 读包内真值；`extractiTunesMetadata` 取 metadata（作安装选项）.
+    ///   ③ **取包内自带 sinf**（`IPAPackageInspector.extractSINF`）并结构自检；无 sinf 或
+    ///      结构不合法即 `bundleSinfUnavailable`（**明确失败**，不凭空签发）.
     ///   ④ **复制 IPA 到临时目录**（绝不改缓存原件）；复制失败即 `workCopyFailed`.
     ///   ⑤ `PackageSINFWriter.injectAllPaths` 把 sinf 写进副本；失败即 `sinfInjectFailed`.
     ///   ⑥ `IPAInstallService.installWithSINF` 装**副本**（同一份 sinf 作 `ApplicationSINF`）；
@@ -595,7 +594,7 @@ enum I4MobileInstallService {
     ///   - allowUpgrade: `true` = 用 `Upgrade` 命令覆盖安装（同 bundle id 已存在时）.
     ///   - progress: 整条链 0~1 的进度回调（AFC 上传段 0~0.75 + installd 段 0.75~1）.
     ///   - onLog: 逐条事实日志回调（调用方可转发到 `LoginLogger`）.
-    /// - Returns: `Report`（含 `sinfSource="server"` / `sinfAccountName` / `launchVerified=false` 等）.
+    /// - Returns: `Report`（含 `sinfSource="bundle"` / `sinfAccountName` / `launchVerified=false` 等）.
     /// - Throws: `I4MobileError` 或底层安装错误.
     @discardableResult
     static func install(pack: Pack,
@@ -610,7 +609,7 @@ enum I4MobileInstallService {
         let ipaBytes = fileSize(at: ipaPath)
         onLog?("[i4移动端] 定位 \(pack.fileName)：cache · \(ipaBytes / 1024 / 1024) MB")
 
-        // ② 检测包 + 取 metadata（metadata 既作安装选项，也用于服务端取 sinf 的 store id）.
+        // ② 检测包 + 取 metadata（metadata 作安装选项；sinf 取包内自带）.
         let inspection = IPAPackageInspector.inspect(ipaPath: ipaPath)
         let bundleId = inspection?.bundleIdentifier ?? pack.expectedBundleId
         let bundleVersion = inspection?.bundleVersion ?? pack.expectedVersion
@@ -622,9 +621,9 @@ enum I4MobileInstallService {
         let meta = IPAPackageInspector.extractiTunesMetadata(ipaPath: ipaPath)
         onLog?("[i4移动端] 包内 iTunesMetadata：\(meta != nil ? "有" : "无")")
 
-        // ③ 向服务端现取 sinf（只有这一条路；取不到即明确失败，不回退到包内自带）.
-        let resolved = try await serverSinf(bundleId: bundleId, metadata: meta, onLog: onLog)
-        onLog?("[i4移动端] sinf 来源：服务端现取 · \(resolved.sinf.count) 字节"
+        // ③ 取包内自带 sinf（唯一可取；无 sinf / 结构不合法即明确失败）.
+        let resolved = try bundleSinf(ipaPath: ipaPath, onLog: onLog)
+        onLog?("[i4移动端] sinf 来源：包内自带 · \(resolved.sinf.count) 字节"
                + accountLogSuffix(resolved.account))
 
         // ④ 复制到临时目录（原件只读，绝不被改写）.
@@ -939,41 +938,26 @@ enum I4MobileInstallService {
         return DeviceProfile(iosVersion: iosVersion, model: model, installedBundleIds: installed)
     }
 
-    // MARK: - ⑥ 向服务端现取 sinf（只有这一条路）
+    // MARK: - ⑥ 取包内自带 sinf（唯一可取）
 
-    /// 向 NB 服务端按版本现取 sinf.
+    /// 取包内自带 sinf（`Payload/<X>.app/SC_Info/<exe>.sinf`）并结构自检.
     ///
-    /// 取不到（无 metadata / 缺 store id / 服务端没回 sinf / 结构不合法）一律抛
-    /// `serverSinfUnavailable` —— **不回退到包内自带**（包内 sinf 属原始购买者，
-    /// 用它会把「装上但闪退」变成常态）.
-    private static func serverSinf(bundleId: String, metadata: Data?,
-                                   onLog: (@Sendable (String) -> Void)?) async throws -> SinfResolution {
-        guard let metadata else {
-            throw I4MobileError.serverSinfUnavailable(reason: "包内无 iTunesMetadata，拿不到 itemId / appVerId")
+    /// 为什么只有这一条路：NB 服务端按 store id 现取**三包全 `code=7`**，Apple lookup
+    /// 三 trackId **resultCount=0**（已下架）⇒ 现取取不到；唯一可取的是包内自带那份.
+    /// 取不到（包内无 sinf / 结构不合法）一律抛 `bundleSinfUnavailable` ——
+    /// **不凭空签发、不静默兜底**（宁可明确报错，也不把坏包递给 installd）.
+    private static func bundleSinf(ipaPath: String,
+                                   onLog: (@Sendable (String) -> Void)?) throws -> SinfResolution {
+        guard let data = IPAPackageInspector.extractSINF(ipaPath: ipaPath) else {
+            throw I4MobileError.bundleSinfUnavailable(reason: "包内没有 SC_Info/<可执行文件>.sinf")
         }
-        let identity = storeIdentity(from: metadata)
-        guard let itemId = identity.itemId, let appVerId = identity.appVerId else {
-            throw I4MobileError.serverSinfUnavailable(
-                reason: "metadata 缺 store id（itemId=\(identity.itemId ?? "无") appVerId=\(identity.appVerId ?? "无")）")
+        guard PackageSINFWriter.isStructurallyValidSinf(data) else {
+            throw I4MobileError.bundleSinfUnavailable(reason: "包内 sinf 结构不合法（\(data.count) 字节）")
         }
-        onLog?("[i4移动端] 向服务端取 sinf：appID=\(itemId) appVerId=\(appVerId)")
-        let pkg = try await NBStoreClient.packageByVersion(appID: itemId, appVerId: appVerId,
-                                                            bundleID: bundleId)
-        guard let b64 = pkg?.sinfBase64, !b64.isEmpty else {
-            throw I4MobileError.serverSinfUnavailable(reason: "服务端响应未含 sinf")
-        }
-        guard let data = Data(base64Encoded: b64), PackageSINFWriter.isStructurallyValidSinf(data) else {
-            throw I4MobileError.serverSinfUnavailable(reason: "服务端 sinf 不是合法 base64 / 结构不合法")
-        }
-        return SinfResolution(sinf: data, account: parseSinfAccount(data))
-    }
-
-    /// 从 `iTunesMetadata.plist` 读 `itemId`（trackId）与 `softwareVersionExternalIdentifier`.
-    static func storeIdentity(from metadata: Data) -> (itemId: String?, appVerId: String?) {
-        guard let plist = try? PropertyListSerialization.propertyList(from: metadata, options: [], format: nil),
-              let dict = plist as? [String: Any] else { return (nil, nil) }
-        return (stringValue(dict["itemId"]),
-                stringValue(dict["softwareVersionExternalIdentifier"]))
+        let account = parseSinfAccount(data)
+        onLog?("[i4移动端] 包内 sinf 自检通过：\(data.count) 字节"
+               + (account?.name.map { " · schi.name=\($0)" } ?? ""))
+        return SinfResolution(sinf: data, account: account)
     }
 
     // MARK: - ⑦ schi 解析（sinf 里「这份授权属于谁」）
@@ -1076,14 +1060,15 @@ enum I4MobileInstallService {
         let confirmed: Bool? = after.error != nil ? nil : (after.existingVersion != nil)
 
         var notes: [String] = []
-        notes.append("sinf 来源：服务端现取并覆盖包内（本服务只有这一条路）.")
+        notes.append("sinf 来源：包内自带并覆盖回包内（本服务只有这一条路）.")
         if let account = resolution.account {
             notes.append("sinf 的 schi.name=\(account.name ?? "?")，schi.user=\(account.userHex ?? "?")，"
                          + "schi.crdt=\(account.crdtHex ?? "?")：这是该授权所属的账号.")
         } else {
             notes.append("sinf 的 schi 未解析出账号信息（结构可能非标准）.")
         }
-        notes.append("sinf 由服务端按版本现取并覆盖包内；是否已授权本机仍无法验证.")
+        notes.append("包内自带 sinf 属原始购买者；sinf 绑账号与内容密钥而非设备硬件，"
+                     + "是否已授权本机仍无法验证.")
         notes.append("本服务只做安装，不验证启动：install 成功不等于能启动.")
         if confirmed == false {
             notes.append("安装后未在设备上回读到该 bundle id（\(bundleId)），"
@@ -1095,11 +1080,11 @@ enum I4MobileInstallService {
         if confirmed == false {
             verdict = "已向 installd 递交安装，但未回读到该 App，安装结果存疑."
         } else {
-            verdict = "已安装 \(bundleId) \(bundleVersion)，sinf 来自服务端；启动未验证."
+            verdict = "已安装 \(bundleId) \(bundleVersion)，sinf 来自包内自带；启动未验证."
         }
 
         return Report(pack: pack, ipaPath: ipaPath, ipaBytes: ipaBytes, workIPAPath: workIPAPath,
-                      sinfSource: "server",
+                      sinfSource: "bundle",
                       sinfAccountName: resolution.account?.name,
                       sinfAccountUser: resolution.account?.userHex,
                       sinfBytes: resolution.sinf.count, injectedPaths: injectedPaths,
@@ -1125,13 +1110,6 @@ enum I4MobileInstallService {
     private static func accountLogSuffix(_ account: SinfAccount?) -> String {
         guard let account else { return "" }
         return " · schi.name=\(account.name ?? "?") schi.user=\(account.userHex ?? "?")"
-    }
-
-    /// plist 值为字符串 / 数字时统一成字符串.
-    private static func stringValue(_ any: Any?) -> String? {
-        if let s = any as? String, !s.isEmpty { return s }
-        if let n = any as? NSNumber { return n.stringValue }
-        return nil
     }
 
     /// 文件大小（读不到返回 0）.

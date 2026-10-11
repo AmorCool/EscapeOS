@@ -23,8 +23,9 @@ private struct I4MobileDeviceBox<T>: @unchecked Sendable { let value: T }
 /// ## 诚实边界（装之前必须让用户看到）
 /// 「爱思移动端」是一组伪装成笔记/工具类的 iOS App（React Native 马甲包，bundle id 如
 /// `com.ownbook.notes` / `rn.notes.best`）。爱思 PC 安装包里内嵌的 3 个 IPA（`217` / `220` / `photo`）
-/// 是 **FairPlay 加密包（`cryptid=1`）**，依赖爱思的共享 Apple ID 授权；本仓现有通道**装不了它**，
-/// 即便装上也可能在启动时 `fairplayOpen()` 失败而闪退（即 `-42112` 一类）。
+/// 是 **FairPlay 加密包（`cryptid=1`）**，安装时必须递交 sinf（解密授权）；本仓取**包内自带**的 sinf
+/// 覆盖回包内再装（现取路实测取不到，见 `I4MobileInstallService` 文件头）。包内 sinf 属**原始购买者**
+/// 而非爱思共享账号 ⇒ 即便装上，也可能在启动时 `fairplayOpen()` 失败而闪退（即 `-42112` 一类）。
 /// ⇒ 本页是**界面移植**，默认**不含可用安装后端**（`installAction == nil`），状态区如实标注.
 ///
 /// ## 不内嵌第三方资源
@@ -637,7 +638,7 @@ struct I4MobileInstallView: View {
 
                 if installAction == nil {
                     Text("本页未接入安装动作：安装服务（I4MobileInstallService）按爱思做法，"
-                         + "用服务端现取的 sinf 覆盖包内再装，并在报告里写明用的是哪个账号的 sinf.")
+                         + "用包内自带的 sinf 覆盖回包内再装，并在报告里写明用的是哪个账号的 sinf.")
                         .font(AppFont.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -874,7 +875,7 @@ struct I4MobileInstallView: View {
         refreshPackStatuses()
     }
 
-    /// 安装**单个**包（走既有 sinf 链路：服务端现取 sinf → 覆盖包内 → 装副本）.
+    /// 安装**单个**包（走既有 sinf 链路：取包内自带 sinf → 覆盖回包内 → 装副本）.
     private func installPack(_ pack: I4MobileInstallService.Pack) async {
         installingPackId = pack.id
         stage = .installing
