@@ -21,20 +21,20 @@ struct HealthCheckView: View {
                 case .done:
                     scoreCard
                     resultsCard
+                    // 淡蓝底（`TintedButtonStyle`），**不用纯蓝实底**；圆角对齐 TRApp 大按钮（12）
                     Button {
+                        AppHaptics.tap()
                         startScan()
                     } label: {
                         Label("重新体检", systemImage: "arrow.clockwise")
-                            .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color.blue.opacity(0.92)))
-                            .foregroundStyle(.white)
                     }
+                    .buttonStyle(TintedButtonStyle(tint: AppTheme.accent, radius: AppRadius.button))
                 }
             }
-            .padding(16)
+            .padding(.horizontal, AppTheme.pageInset)
+            .padding(.top, 4)
+            .padding(.bottom, 32)
         }
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
@@ -53,7 +53,7 @@ struct HealthCheckView: View {
                     .stroke(Color(.systemGray5), lineWidth: 8)
                 Circle()
                     .trim(from: 0, to: progress)
-                    .stroke(Color.blue, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                    .stroke(AppTheme.accent, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                     .animation(.easeInOut(duration: 0.25), value: progress)
                 VStack(spacing: 2) {
@@ -61,19 +61,19 @@ struct HealthCheckView: View {
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                         .contentTransition(.numericText())
                     Text(phase == .scanning ? currentCheckName : "准备体检…")
-                        .font(.caption2)
+                        .font(AppFont.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             .frame(width: 160, height: 160)
             Text("正在扫描 \(currentCheckIndex)/\(SecurityScanner.checkIDs.count)")
-                .font(.footnote)
+                .font(AppFont.footnote)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 
     private var progress: CGFloat {
@@ -104,41 +104,42 @@ struct HealthCheckView: View {
                 .contentTransition(.numericText())
                 .foregroundStyle(scoreColor)
             Text(scoreLabel)
-                .font(.subheadline)
+                .font(AppFont.subheadline)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 
     private var resultsCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("检测明细")
-                .font(.headline)
+                .font(AppFont.headline)
                 .padding(.bottom, 6)
             ForEach(results) { item in
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: item.iconName)
                         .foregroundStyle(item.color)
                         .frame(width: 24)
+                        .appSymbol()
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.title)
-                            .font(.subheadline.weight(.medium))
+                            .font(AppFont.subheadlineEmphasis)
                         Text(item.detail)
-                            .font(.caption)
+                            .font(AppFont.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                 }
                 .padding(.vertical, 8)
-                Divider().opacity(item.id == results.last?.id ? 0 : 1)
+                AppHairline().opacity(item.id == results.last?.id ? 0 : 1)
             }
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .padding(AppMetrics.cardPadding)
+        .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 
     private var scoreColor: Color {

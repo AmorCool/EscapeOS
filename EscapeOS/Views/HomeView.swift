@@ -8,8 +8,8 @@ import SwiftUI
 /// - **功能入口改 inset-grouped 卡片分组**（连续圆角 + 分段标题），行 =
 ///   连续圆角图标底 + **17pt semibold** 标题 + **13pt footnote** 副标题 + 右 chevron
 ///   （TRApp 设置列表行语言；分隔线左缩进对齐标题）.
-/// - **强调色**用 TRApp 实测 `#005493`（`AppTheme.trAccent`）；**不全局改** `AppTheme.accent`
-///   （全 App 影响面大，决定与理由见简报 §③）.
+/// - **强调色**统一到 `AppTheme.accent`（亮 `#005493` / 暗 `#76D6FF`，自适应）；
+///   原 `AppTheme.trAccent` 已删除（它与 `accent` 构成「两套蓝」，决定见简报 §③）.
 /// - **不用纯蓝实底按钮**：hero 的「立即体检」改 `TintedButtonStyle` 淡蓝底（圆角 `AppRadius.button`）.
 /// - 图标 `.hierarchical` 分层渲染；百宝箱入口 `.symbolEffect(.bounce)` + 触觉.
 ///
@@ -189,7 +189,7 @@ struct HomeView: View {
                 Label("立即体检", systemImage: "stethoscope")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(TintedButtonStyle(tint: AppTheme.trAccent, radius: AppRadius.button))
+            .buttonStyle(TintedButtonStyle(tint: AppTheme.accent, radius: AppRadius.button))
         }
         .padding(20)
         .frame(maxWidth: .infinity)
@@ -204,7 +204,7 @@ struct HomeView: View {
     private var cleanupSection: some View {
         featureSection(title: "清理与优化", symbol: "sparkles") {
             navRow(title: "空间回收", subtitle: "扫描可清理的应用缓存",
-                   icon: "internaldrive", tint: AppTheme.trAccent) {
+                   icon: "internaldrive", tint: AppTheme.accent) {
                 SpaceReclaimView(appList: appList)
                     .navigationBarTitleDisplayMode(.inline)
             }
@@ -220,7 +220,7 @@ struct HomeView: View {
     private var deviceSection: some View {
         featureSection(title: "设备与系统", symbol: "iphone.gen3") {
             navRow(title: "应用管理", subtitle: "管理已安装应用",
-                   icon: "square.grid.2x2.fill", tint: AppTheme.trAccent) {
+                   icon: "square.grid.2x2.fill", tint: AppTheme.accent) {
                 AppListView(viewModel: appList)
             }
             rowDivider
@@ -235,7 +235,7 @@ struct HomeView: View {
             }
             rowDivider
             navRow(title: "文档浏览", subtitle: "开启文件共享的 App 文档目录",
-                   icon: "folder.fill", tint: AppTheme.trAccent) {
+                   icon: "folder.fill", tint: AppTheme.accent) {
                 FileSharingAppsView()
             }
         }
@@ -244,13 +244,13 @@ struct HomeView: View {
     private var extensionSection: some View {
         featureSection(title: "扩展与商店", symbol: "shippingbox.fill") {
             navRow(title: "模块", subtitle: "模块管理",
-                   icon: "shippingbox.fill", tint: AppTheme.trAccent) {
+                   icon: "shippingbox.fill", tint: AppTheme.accent) {
                 ModuleManagerView()
                     .navigationBarTitleDisplayMode(.inline)
             }
             rowDivider
             navRow(title: "AppStore 商店", subtitle: "榜单 / 搜索 / 应用详情",
-                   icon: "app.badge.fill", tint: AppTheme.trAccent) {
+                   icon: "app.badge.fill", tint: AppTheme.accent) {
                 AppStoreView()
             }
         }
@@ -265,7 +265,7 @@ struct HomeView: View {
     private var treasureCard: some View {
         HStack(spacing: 12) {
             AppRowIcon(systemName: "shippingbox.and.arrow.backward.fill",
-                       tint: AppTheme.trAccent, symbolSize: 16, frameSize: 30)
+                       tint: AppTheme.accent, symbolSize: 16, frameSize: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text("百宝箱")
                     .font(AppFont.bodyEmphasis)
@@ -308,7 +308,7 @@ struct HomeView: View {
         HStack(spacing: 6) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(AppTheme.trAccent)
+                .foregroundStyle(AppTheme.accent)
                 .appSymbol()
             Text(title)
                 .font(AppFont.captionEmphasis)

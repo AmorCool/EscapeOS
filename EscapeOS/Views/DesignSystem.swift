@@ -16,14 +16,19 @@ import UIKit
 /// 5. **设置类列表用全宽行 + 发丝分隔**（`AppSettingsRow` + `AppHairline`），**不要套 16 圆角卡片**
 ///    （TRApp 设置页实测：行底 / 分隔线均全宽 0–828px；规范 §1.4 / §③组件 5）。
 enum AppTheme {
-    /// Brand accent. System blue (semantic), adapts to light/dark mode.
-    /// 之前是暖橙，在浅色玻璃背景下显脏棕，按用户审美改为系统蓝.
+    /// Brand accent. Unified blue: TRApp-measured `#005493` in light mode,
+    /// a brightened `#76D6FF` in dark mode for contrast.
     ///
-    /// ⚠️ **不改为 TRApp 实测 `#005493`**（决定见简报 §③）：`AppTheme.accent` 被全仓 30+ 文件
-    /// 引用（`AppRowIcon` / `TintedButtonStyle` / `SizePill` / 各页 tint），且它是**语义色**、随
-    /// 明暗模式自适应；`#005493` 是写死 sRGB，深色模式下是暗藏青、对比度不足。故新页面（如主页）
-    /// 的强调色改用下方 `trAccent`（`#005493`），**不动全局 accent**.
-    static let accent = Color(uiColor: .systemBlue)
+    /// 统一「两套蓝」（决定见简报 §③）：此前全局 `accent` 是 `systemBlue`、新页面另用写死的
+    /// `trAccent`（`#005493`），同页出现两套蓝（`I4MobileInstallView` heroChip 用 accent、
+    /// sectionHeader 用 trAccent）。现合并为**单一自适应 token**：亮 `#005493`（TRApp 实测
+    /// Accent）、暗 `#76D6FF`（提亮保证对比度）；`trAccent` 已删除，调用点全部改用 `accent`.
+    /// 仍走 `Color(UIColor { trait in ... })` 随明暗模式自适应，不写死单值.
+    static let accent = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x76 / 255, green: 0xD6 / 255, blue: 0xFF / 255, alpha: 1)
+            : UIColor(red: 0x00 / 255, green: 0x54 / 255, blue: 0x93 / 255, alpha: 1)
+    })
     /// 页面内容左右边距。TRApp 列表页实测 **20**（此前 16，见规范 §1.3）.
     static let pageInset: CGFloat = 20
     static let appIconSize: CGFloat = 44
@@ -61,9 +66,8 @@ enum AppTheme {
     // MARK: - 品牌渐变（新增）
     //
     // 取自 TRApp AppIcon 解码实测：深藏青竖向渐变 `#2C3A6A → #161F2E` + 纯白图形.
-    // **仅新增常量供新页面的 hero 区块使用，不替换既有 `accent`**：全 App 主色替换
-    // 会牵动 `TintedButtonStyle` / `AppRowIcon` / `SizePill` 等已锚定语义色的组件，
-    // 影响面大且非本次目标，故保持 `accent` 为 `systemBlue` 不变.
+    // **仅供新页面的 hero 区块使用，不作为全局 accent**：hero 是深色品牌底，与蓝色强调色
+    // 并存，不参与「两套蓝」的统一（那是 `accent` 与 `trAccent` 的事，现已合并到 `accent`）.
 
     /// 品牌深藏青（TRApp AppIcon 实测主色 `#2C3A6A`）.
     static let brandNavy = Color(red: 0x2C / 255, green: 0x3A / 255, blue: 0x6A / 255)
@@ -84,9 +88,11 @@ enum AppTheme {
     // 这是品牌实测值，故直接写死 sRGB；**仅供新页面使用**，不动既有 `success/pending/danger/
     // warning/mark`（那四个仍走系统语义色，全 App 影响面大）.
     // 证据：`P4_全能签逆向/_简报/实现_TRApp风格落地爱思移动端页.md` §①.
+    //
+    // ⚠️ `trAccent`（原 `#005493`）已删除：它与全局 `accent` 构成「两套蓝」，现统一到
+    // `accent`（亮 `#005493` / 暗 `#76D6FF`），全部调用点改用 `accent`；防复发见
+    // `Resources/Scripts/swift_theme_blue_guard.py`.
 
-    /// TRApp 强调色（实测 `#005493`）.
-    static let trAccent = Color(red: 0x00 / 255, green: 0x54 / 255, blue: 0x93 / 255)
     /// TRApp 成功色（实测 `#6AB04C`）.
     static let trSuccess = Color(red: 0x6A / 255, green: 0xB0 / 255, blue: 0x4C / 255)
     /// TRApp 失败色（实测 `#E74C3C`）.
@@ -110,8 +116,9 @@ enum AppTheme {
     // 影响面大且非本次目标（规范亦承认「新页面用 tr* 实测值」）。
 
     /// 开关 ON 色（TRApp 实测 `#005493`，`UISwitch.onTintColor` = Accent；规范 §③组件 6）.
-    /// 与 `trAccent` 同值；单独命名以便设置页 `Toggle.tint(AppTheme.switchOnTint)` 语义清晰.
-    static let switchOnTint = Color(red: 0x00 / 255, green: 0x54 / 255, blue: 0x93 / 255)
+    /// 即统一后的 `accent`（亮 `#005493` / 暗 `#76D6FF`）；单独命名以便设置页
+    /// `Toggle.tint(AppTheme.switchOnTint)` 语义清晰.
+    static let switchOnTint = accent
 
     /// 品牌青绿（TRApp 实测 `#008974`，`Assets.car` 内实名 `BetaBadgeColor`；规范 §1.1）.
     /// 与 `brandNavy`（深藏青）并列的次级品牌强调色；与 `trBetaBadge` / `trRecoverable` 同值.
@@ -126,8 +133,8 @@ enum AppTheme {
 
 /// 「透明淡蓝」按钮样式（用户审美：不要纯蓝实底，要淡一点的蓝底）.
 ///
-/// 只加这一个样式，不另造体系：前景取品牌蓝 `AppTheme.accent`（`Color(uiColor: .systemBlue)`，
-/// 语义色、随明暗模式自适应），背景取**同一色低透明度** —— 与 `AppRowIcon` / `SizePill` /
+/// 只加这一个样式，不另造体系：前景取品牌蓝 `AppTheme.accent`（自适应 `#005493` / `#76D6FF`），
+/// 背景取**同一色低透明度** —— 与 `AppRowIcon` / `SizePill` /
 /// `PackageChip` / `ImportFlowBanner` 的 `tint.opacity(...)` 是同一口径（本仓既有的
 /// 「淡底 + 同色前景」语言）。全程**不写死 RGB**，只用语义色 + 不透明度.
 ///

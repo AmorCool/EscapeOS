@@ -42,7 +42,9 @@ struct BatteryHealthView: View {
                     errorCard
                 }
             }
-            .padding(16)
+            .padding(.horizontal, AppTheme.pageInset)
+            .padding(.top, 4)
+            .padding(.bottom, 32)
         }
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
@@ -51,6 +53,7 @@ struct BatteryHealthView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    AppHaptics.tap()
                     Task { await load() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
@@ -115,20 +118,20 @@ struct BatteryHealthView: View {
                         .contentTransition(.numericText())
                         .foregroundStyle(color)
                     Text("电池健康度")
-                        .font(.caption)
+                        .font(AppFont.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             .frame(width: 150, height: 150)
             Text(healthLabel(health))
-                .font(.footnote.weight(.medium))
+                .font(AppFont.footnoteEmphasis)
                 .foregroundStyle(color)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
 
@@ -178,14 +181,14 @@ struct BatteryHealthView: View {
                         .lineLimit(1)
                         .foregroundStyle(.primary)
                     Text(row.0)
-                        .font(.caption2)
+                        .font(AppFont.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(.tertiarySystemGroupedBackground))
+                    RoundedRectangle(cornerRadius: AppRadius.inner, style: .continuous)
+                        .fill(Color(uiColor: .tertiarySystemGroupedBackground))
                 )
             }
         }
@@ -198,22 +201,23 @@ struct BatteryHealthView: View {
             Image(systemName: "battery.25percent")
                 .font(.title2)
                 .foregroundStyle(lpm ? .yellow : .green)
+                .appSymbol()
             VStack(alignment: .leading, spacing: 3) {
                 Text(lpm ? "低电量模式开启" : "低电量模式关闭")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppFont.subheadlineEmphasis)
                 Text(lpm ? "系统正在省电，部分后台活动已暂停" : "正常用电模式")
-                    .font(.caption)
+                    .font(AppFont.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Text(lpm ? "开" : "关")
-                .font(.subheadline.weight(.bold))
+                .font(AppFont.subheadlineEmphasis)
                 .foregroundStyle(lpm ? .yellow : .green)
         }
-        .padding(16)
+        .padding(AppMetrics.cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
 
@@ -225,30 +229,31 @@ struct BatteryHealthView: View {
         return HStack(spacing: 12) {
             Image(systemName: "powerplug.fill")
                 .font(.title2)
-                .foregroundStyle(.blue)
+                .foregroundStyle(AppTheme.accent)
                 .frame(width: 36)
+                .appSymbol()
             VStack(alignment: .leading, spacing: 4) {
                 Text("适配器")
-                    .font(.footnote)
+                    .font(AppFont.footnote)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 16) {
                     Label(watts, systemImage: "bolt.fill")
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppFont.subheadlineEmphasis)
                     Label(volts, systemImage: "waveform.path.ecg")
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppFont.subheadlineEmphasis)
                 }
                 if let desc, !desc.isEmpty {
                     Text(desc)
-                        .font(.caption2)
+                        .font(AppFont.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
         }
-        .padding(16)
+        .padding(AppMetrics.cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
 
@@ -262,8 +267,9 @@ struct BatteryHealthView: View {
                 Image(systemName: "number.circle")
                     .foregroundStyle(.secondary)
                     .frame(width: 24)
+                    .appSymbol()
                 Text("电池序列号")
-                    .font(.subheadline)
+                    .font(AppFont.subheadline)
                 Spacer()
                 Text(showSerial ? (info.serial ?? "未知") : String(repeating: "•", count: min(info.serial?.count ?? 6, 10)))
                     .font(.system(.footnote, design: .monospaced))
@@ -273,7 +279,8 @@ struct BatteryHealthView: View {
                 } label: {
                     Image(systemName: showSerial ? "eye.slash" : "eye")
                         .font(.caption)
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(AppTheme.accent)
+                        .appSymbol()
                 }
             }
             .padding(.vertical, 10)
@@ -299,10 +306,10 @@ struct BatteryHealthView: View {
             batteryCardRow("电池处于警告水平", warnLevelText(info), icon: "info.circle")
             batteryCardRow("电池处于临界水平", boolText(info.atCriticalLevel), icon: "exclamationmark.octagon")
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, AppMetrics.cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
 
@@ -324,16 +331,17 @@ struct BatteryHealthView: View {
     /// 卡片行（带分隔线，与序列号行同款尺寸）
     private func batteryCardRow(_ label: String, _ value: String?, icon: String) -> some View {
         VStack(spacing: 0) {
-            Divider()
+            AppHairline()
             HStack(spacing: 12) {
                 Image(systemName: icon)
                     .foregroundStyle(.secondary)
                     .frame(width: 24)
+                    .appSymbol()
                 Text(label)
-                    .font(.subheadline)
+                    .font(AppFont.subheadline)
                 Spacer()
                 Text(value ?? "—")
-                    .font(.subheadline)
+                    .font(AppFont.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -388,23 +396,24 @@ struct BatteryHealthView: View {
                            tint: Color.secondary, symbolSize: 20, frameSize: 40)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("无法读取电池数据")
-                        .font(.subheadline.weight(.semibold))
+                        .font(AppFont.subheadlineEmphasis)
                     if let err = errorText, !PairingGate.isPairingError(err) {
                         Text(err)
-                            .font(.caption)
+                            .font(AppFont.caption)
                             .foregroundStyle(Color.secondary)
                             .lineLimit(2)
                     }
                 }
                 Spacer(minLength: 8)
+                // 淡蓝底（`TintedButtonStyle`），**不用纯蓝实底**
                 Button("重试") {
+                    AppHaptics.tap()
                     Task { await load() }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
+                .buttonStyle(TintedButtonStyle())
                 .controlSize(.small)
             }
-            .padding(16)
+            .padding(AppMetrics.cardPadding)
             .background(errorCardBackground)
 
             if let err = errorText, PairingGate.isPairingError(err) {
@@ -416,8 +425,8 @@ struct BatteryHealthView: View {
     }
 
     private var errorCardBackground: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground))
+        RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground))
     }
 
     /// 调试：原始字段（字段缺失时可排查 iOS 版本差异）
@@ -425,7 +434,7 @@ struct BatteryHealthView: View {
         let keys = Array(info.raw.keys).sorted().prefix(14)
         return VStack(alignment: .leading, spacing: 6) {
             Text("原始数据")
-                .font(.caption.weight(.semibold))
+                .font(AppFont.captionEmphasis)
                 .foregroundStyle(.secondary)
             ForEach(Array(keys), id: \.self) { key in
                 HStack {
@@ -441,10 +450,10 @@ struct BatteryHealthView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(AppMetrics.cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+            RoundedRectangle(cornerRadius: AppRadius.inner, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
 }

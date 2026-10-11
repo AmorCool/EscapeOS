@@ -252,14 +252,14 @@ struct TreasureBoxView: View {
     /// 故本区**不套** `pageInset`（分隔线全宽），仅分组标题单独加 `pageInset` 与卡片左缘对齐；
     /// 标题与首行之间另加一条全宽 `AppHairline` 作组首规则.
     ///
-    /// ⚠️ `AppSettingsRow` 图标恒用 `AppTheme.accent`（systemBlue），**不接**行级 tint ⇒ 原先
+    /// ⚠️ `AppSettingsRow` 图标恒用 `AppTheme.accent`（统一蓝 `#005493` / `#76D6FF`），**不接**行级 tint ⇒ 原先
     /// `trRecoverable` / `trDanger` / `trSuccess` 的语义着色统一为 accent（TRApp 设置行即单色图标）.
     private var itemsCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "square.grid.2x2")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AppTheme.trAccent)
+                    .foregroundStyle(AppTheme.accent)
                     .appSymbol()
                 Text("工具").font(AppFont.captionEmphasis).foregroundStyle(.secondary)
                 Spacer(minLength: 0)

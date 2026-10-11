@@ -54,7 +54,9 @@ struct DeviceInfoView: View {
                     errorCard
                 }
             }
-            .padding(16)
+            .padding(.horizontal, AppTheme.pageInset)
+            .padding(.top, 4)
+            .padding(.bottom, 32)
         }
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
@@ -66,7 +68,10 @@ struct DeviceInfoView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if info != nil {
-                    Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                    Button {
+                        AppHaptics.tap()
+                        Task { await load() }
+                    } label: { Image(systemName: "arrow.clockwise") }
                 }
             }
             ToolbarItem(placement: .topBarLeading) {
@@ -127,14 +132,22 @@ struct DeviceInfoView: View {
 
     private func hero(_ info: DeviceInfoModel) -> some View {
         VStack(spacing: 10) {
-            Image(systemName: "iphone.gen3").font(.system(size: 42)).foregroundStyle(.blue)
-            Text(info.deviceName ?? info.modelName).font(.title3.weight(.semibold))
+            Image(systemName: "iphone.gen3")
+                .font(.system(size: 42))
+                .foregroundStyle(AppTheme.accent)
+                .appSymbol()
+            Text(info.deviceName ?? info.modelName)
+                .font(AppFont.title3)
             Text("\(info.productType) · iOS \(info.systemVersion)")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(AppFont.footnote)
+                .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 18)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 18)
+        .background(
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        )
     }
 
     // MARK: - 数据组装（行序对齐爱思「设备详情」）
@@ -361,17 +374,30 @@ struct DeviceInfoView: View {
         return String(format: "%.0f MB", mb)
     }
 
+    /// 错误态：保留原「居中图标 + 文案 + 重试」布局，仅换 token 与按钮样式.
+    /// 按钮走 `TintedButtonStyle` 淡蓝底（**不用纯蓝实底** `borderedProminent`）.
     private var errorCard: some View {
         VStack(spacing: 10) {
-            Image(systemName: "info.circle").font(.title).foregroundStyle(.secondary)
-            Text("无法读取").font(.headline)
-            Text(errorText ?? "未知错误").font(.caption).foregroundStyle(.secondary)
+            Image(systemName: "info.circle")
+                .font(.title)
+                .foregroundStyle(.secondary)
+                .appSymbol()
+            Text("无法读取").font(AppFont.headline)
+            Text(errorText ?? "未知错误")
+                .font(AppFont.caption)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("重试") { Task { await load() } }
-                .buttonStyle(.borderedProminent).tint(.blue)
+            Button("重试") {
+                AppHaptics.tap()
+                Task { await load() }
+            }
+            .buttonStyle(TintedButtonStyle())
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 30)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
+        .background(
+            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        )
     }
 }

@@ -51,7 +51,7 @@ private struct DeviceInfoRowView: View {
     var body: some View {
         HStack(alignment: .top) {
             Text(row.label)
-                .font(.subheadline)
+                .font(AppFont.subheadline)
                 .foregroundStyle(.secondary)
                 .frame(width: 110, alignment: .leading)
             if row.sensitive {
@@ -71,8 +71,9 @@ private struct DeviceInfoRowView: View {
                     HStack(spacing: 2) {
                         Text("查询").font(.caption)
                         Image(systemName: "chevron.right").font(.caption2)
+                            .appSymbol()
                     }
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(AppTheme.accent)
                 }
                 .buttonStyle(.plain)
             }
@@ -119,25 +120,31 @@ struct DeviceInfoSectionCard: View {
     var onOpenLink: ((String) -> Void)? = nil
 
     var body: some View {
+        // v0.3.308：没有值的行直接不显示（此前一律渲染成「—」，整页出现大量空行）；
+        // 没有值但有链接的行照样显示（如「保修期限 → 查询」）.
+        let rows = section.rows.filter {
+            ($0.value ?? "").isEmpty == false || ($0.link ?? "").isEmpty == false
+        }
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: section.icon).foregroundStyle(.blue)
-                Text(section.title).font(.headline)
+                Image(systemName: section.icon)
+                    .foregroundStyle(AppTheme.accent)
+                    .appSymbol()
+                Text(section.title).font(AppFont.headline)
             }
             .padding(.bottom, 8)
-            // v0.3.308：没有值的行直接不显示（此前一律渲染成「—」，整页出现大量空行）
-            ForEach(section.rows) { row in
-                // 没有值但有链接的行照样显示（如「保修期限 → 查询」）；
-                // 既没值也没链接的行才隐藏（此前一律渲染成「—」）
-                if (row.value ?? "").isEmpty == false || (row.link ?? "").isEmpty == false {
-                    DeviceInfoRowView(row: row, showSensitive: showSensitive,
-                                      onCopy: onCopy, onOpenLink: onOpenLink)
+            ForEach(rows) { row in
+                DeviceInfoRowView(row: row, showSensitive: showSensitive,
+                                  onCopy: onCopy, onOpenLink: onOpenLink)
+                // 行间全宽发丝分隔（TRApp 数据表语言；末行不附）
+                if row.id != rows.last?.id {
+                    AppHairline()
                 }
             }
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .padding(AppMetrics.cardPadding)
+        .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 }
 
@@ -150,18 +157,20 @@ struct DeviceInfoTextCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: icon).foregroundStyle(.blue)
-                Text(title).font(.headline)
+                Image(systemName: icon)
+                    .foregroundStyle(AppTheme.accent)
+                    .appSymbol()
+                Text(title).font(AppFont.headline)
             }
             Text(text)
-                .font(.caption)
+                .font(AppFont.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .padding(AppMetrics.cardPadding)
+        .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 }
 
@@ -190,15 +199,17 @@ struct DeviceInfoRawCard: View {
                 .padding(.top, 8)
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "list.bullet.rectangle").foregroundStyle(.blue)
-                    Text("设备原始数据（\(values.count) 项）").font(.headline)
+                    Image(systemName: "list.bullet.rectangle")
+                        .foregroundStyle(AppTheme.accent)
+                        .appSymbol()
+                    Text("设备原始数据（\(values.count) 项）").font(AppFont.headline)
                 }
             }
             .tint(.primary)
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .padding(AppMetrics.cardPadding)
+        .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 }
 
@@ -209,16 +220,20 @@ struct StorageDetailLinkCard: View {
             StorageDetailView()
         } label: {
             HStack(spacing: 12) {
-                AppRowIcon(systemName: "internaldrive.fill", tint: .blue, symbolSize: 17, frameSize: 32)
+                AppRowIcon(systemName: "internaldrive.fill", tint: AppTheme.accent, symbolSize: 17, frameSize: 32)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("硬盘详情").font(.subheadline.weight(.medium))
-                    Text("闪存颗粒 / 控制器 / 擦写参数").font(.caption2).foregroundStyle(.secondary)
+                    Text("硬盘详情").font(AppFont.subheadlineEmphasis)
+                    Text("闪存颗粒 / 控制器 / 擦写参数").font(AppFont.footnote).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 6)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .appSymbol()
             }
-            .padding(16)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground)))
+            .padding(AppMetrics.cardPadding)
+            .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground)))
         }
         .buttonStyle(.plain)
     }

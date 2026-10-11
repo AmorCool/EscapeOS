@@ -28,7 +28,9 @@ struct StorageDetailView: View {
                     errorCard()
                 }
             }
-            .padding(16)
+            .padding(.horizontal, AppTheme.pageInset)
+            .padding(.top, 4)
+            .padding(.bottom, 32)
         }
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
@@ -36,7 +38,10 @@ struct StorageDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                Button {
+                    AppHaptics.tap()
+                    Task { await load() }
+                } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(loading)
             }
         }
@@ -124,23 +129,25 @@ struct StorageDetailView: View {
             HStack(spacing: 12) {
                 AppRowIcon(systemName: "internaldrive", tint: .secondary, symbolSize: 20, frameSize: 40)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("无法读取硬盘详情").font(.subheadline.weight(.semibold))
+                    Text("无法读取硬盘详情").font(AppFont.subheadlineEmphasis)
                     if let err = errorText, !PairingGate.isPairingError(err) {
-                        Text(err).font(.caption).foregroundStyle(Color.secondary).lineLimit(3)
+                        Text(err).font(AppFont.caption).foregroundStyle(Color.secondary).lineLimit(3)
                     }
                 }
                 Spacer()
             }
+            // 淡蓝底（`TintedButtonStyle`），**不用纯蓝实底**
             Button {
+                AppHaptics.tap()
                 Task { await load() }
             } label: {
                 Text("重试").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(TintedButtonStyle())
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .padding(AppMetrics.cardPadding)
+        .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 
     @ViewBuilder
@@ -148,23 +155,25 @@ struct StorageDetailView: View {
                                            @ViewBuilder _ body: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: icon).foregroundStyle(.blue)
-                Text(title).font(.headline)
+                Image(systemName: icon)
+                    .foregroundStyle(AppTheme.accent)
+                    .appSymbol()
+                Text(title).font(AppFont.headline)
             }
             .padding(.bottom, 8)
             body()
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .padding(AppMetrics.cardPadding)
+        .background(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 
     private func infoRow(_ label: String, _ value: String?) -> some View {
         VStack(spacing: 0) {
-            Divider()
+            AppHairline()
             HStack(alignment: .top, spacing: 8) {
                 Text(label)
-                    .font(.caption)
+                    .font(AppFont.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
