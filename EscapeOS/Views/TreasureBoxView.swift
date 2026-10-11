@@ -36,14 +36,18 @@ struct TreasureBoxView: View {
             ScrollView {
                 VStack(spacing: AppSpacing.row) {
                     brandHeader
-                    // v0.3.441：把「工具」卡提到设备控制卡**之前**。
+                        .padding(.horizontal, AppTheme.pageInset)
+                    // v0.3.441：把「工具」区提到设备控制卡**之前**。
                     // 为什么：本 sheet 默认 detent 只有 0.4，排在第三张的卡片在折叠区之外 ——
                     // 「Gestalt 编辑」这个**真实可点的入口**会看不见，得先上拉才找得到。
-                    // 工具卡里是唯一能跳转的条目，优先级高于两个开关，故上移。
+                    // 工具区里是唯一能跳转的条目，优先级高于两个开关，故上移。
+                    // 工具区改用「全宽行 + 发丝分隔」（`AppSettingsRow` + `AppHairline`，
+                    // 见 `DesignSystem.swift` 硬规则 5），故**不套** `pageInset` —— 行内自带
+                    // `AppSpacing.settingsInset`(22) 边距、分隔线全宽，与 TRApp 设置列表一致.
                     itemsCard
                     deviceControlCard
+                        .padding(.horizontal, AppTheme.pageInset)
                 }
-                .padding(.horizontal, AppTheme.pageInset)
                 .padding(.bottom, 24)
             }
             .scrollContentBackground(.hidden)
@@ -242,6 +246,14 @@ struct TreasureBoxView: View {
         .onAppear(perform: refreshDeviceStates)
     }
 
+    /// 工具入口区。改用 DesignSystem 的**全宽行 + 发丝分隔**语言（`AppSettingsRow` + `AppHairline`，
+    /// 见 `DesignSystem.swift` 硬规则 5）—— 原先是 16 圆角卡片（`.appCard()`）+ 手写行 + `Divider()`，
+    /// 与本仓设置列表规范不符. 行内自带 `AppSpacing.settingsInset`(22) 边距与行底发丝分隔，
+    /// 故本区**不套** `pageInset`（分隔线全宽），仅分组标题单独加 `pageInset` 与卡片左缘对齐；
+    /// 标题与首行之间另加一条全宽 `AppHairline` 作组首规则.
+    ///
+    /// ⚠️ `AppSettingsRow` 图标恒用 `AppTheme.accent`（systemBlue），**不接**行级 tint ⇒ 原先
+    /// `trRecoverable` / `trDanger` / `trSuccess` 的语义着色统一为 accent（TRApp 设置行即单色图标）.
     private var itemsCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -252,160 +264,52 @@ struct TreasureBoxView: View {
                 Text("工具").font(AppFont.captionEmphasis).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
+            .padding(.horizontal, AppTheme.pageInset)
             .padding(.bottom, 6)
-            // v0.3.441：Gestalt 入口。样式与下方各行保持一致，右侧 chevron 表示「可进入」。
-            Button {
+            // 组首规则：本组已脱离卡片、直接落在页面背景上，用一条全宽发丝分隔界定分组起点
+            // （与各行行底分隔同一语言；`AppHairline` 的独立调用点，不再只被 `AppSettingsRow` 内部引用）.
+            AppHairline()
+            // v0.3.441：Gestalt 入口。右侧 chevron 表示「可进入」.
+            AppSettingsRow(icon: "gearshape.2.fill", title: "Gestalt 编辑",
+                           keywords: ["查询 / 修改 MobileGestalt 键值（含备份）"]) {
                 AppHaptics.tap()
                 onOpenGestalt()
-            } label: {
-                HStack(spacing: 12) {
-                    AppRowIcon(systemName: "gearshape.2.fill", tint: AppTheme.trAccent,
-                               symbolSize: 16, frameSize: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Gestalt 编辑")
-                            .font(AppFont.subheadline)
-                        Text("查询 / 修改 MobileGestalt 键值（含备份）")
-                            .font(AppFont.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(AppFont.captionEmphasis)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            Divider()
-            Button {
+            AppSettingsRow(icon: "trash.slash", title: "顽固图标清理",
+                           keywords: ["删除装 App 失败残留的图标（含备份）"]) {
                 AppHaptics.tap()
                 onOpenIconCleanup()
-            } label: {
-                HStack(spacing: 12) {
-                    AppRowIcon(systemName: "trash.slash", tint: AppTheme.trRecoverable,
-                               symbolSize: 16, frameSize: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("顽固图标清理")
-                            .font(AppFont.subheadline)
-                        Text("删除装 App 失败残留的图标（含备份）")
-                            .font(AppFont.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(AppFont.captionEmphasis)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            Divider()
             // 反激活设备：不可逆操作，安全闸（激活锁检测 + 不可跳过确认）在 ActivationView 里.
             // 图标用 `bolt.slash`（不用黄色感叹号，项目铁律）.
-            Button {
+            AppSettingsRow(icon: "bolt.slash", title: "反激活设备",
+                           keywords: ["让设备回到激活界面（不可逆，需先关查找）"]) {
                 AppHaptics.tap()
                 onOpenDeactivate()
-            } label: {
-                HStack(spacing: 12) {
-                    AppRowIcon(systemName: "bolt.slash", tint: AppTheme.trDanger,
-                               symbolSize: 16, frameSize: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("反激活设备")
-                            .font(AppFont.subheadline)
-                        Text("让设备回到激活界面（不可逆，需先关查找）")
-                            .font(AppFont.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(AppFont.captionEmphasis)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            Divider()
             // 软件源管理：添加 / 管理第三方软件源。进源列表页后，右上角另有「软件源下载管理」入口.
-            Button {
+            AppSettingsRow(icon: "shippingbox.circle.fill", title: "软件源管理",
+                           keywords: ["添加 / 管理第三方软件源"]) {
                 AppHaptics.tap()
                 onOpenSignSource()
-            } label: {
-                HStack(spacing: 12) {
-                    AppRowIcon(systemName: "shippingbox.circle.fill", tint: AppTheme.trAccent,
-                               symbolSize: 16, frameSize: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("软件源管理")
-                            .font(AppFont.subheadline)
-                        Text("添加 / 管理第三方软件源")
-                            .font(AppFont.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(AppFont.captionEmphasis)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            Divider()
             // 爱思应用修复安装：把爱思 9.0 的「修复应用」入口移植过来.
             // 设备级一键修复（照爱思：无应用选择、无台账），经 AFC 写设备 i4tool2.acc + 读回校验，
             // 不含联网授权（详见 I4AppFixView 顶部注释）.
-            Button {
+            AppSettingsRow(icon: "bandage.fill", title: "爱思应用修复安装",
+                           keywords: ["重写爱思授权凭据 · 仅爱思源应用"]) {
                 AppHaptics.tap()
                 onOpenI4Fix()
-            } label: {
-                HStack(spacing: 12) {
-                    AppRowIcon(systemName: "bandage.fill", tint: AppTheme.trSuccess,
-                               symbolSize: 16, frameSize: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("爱思应用修复安装")
-                            .font(AppFont.subheadline)
-                        Text("重写爱思授权凭据 · 仅爱思源应用")
-                            .font(AppFont.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(AppFont.captionEmphasis)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            Divider()
             // 安装爱思移动端：把爱思 9.0 的「安装爱思移动端」对话框移植过来.
             // 内嵌 IPA 是 FairPlay 加密包（cryptid=1），装前有诚实提示（见 I4MobileInstallView）.
-            Button {
+            // 末行不附发丝分隔（组尾）.
+            AppSettingsRow(icon: "arrow.down.app.fill", title: "安装爱思移动端",
+                           keywords: ["爱思 9.0 移动端安装向导（加密包，可能装不上）"],
+                           showsSeparator: false) {
                 AppHaptics.tap()
                 onOpenMobileInstall()
-            } label: {
-                HStack(spacing: 12) {
-                    AppRowIcon(systemName: "arrow.down.app.fill", tint: AppTheme.trAccent,
-                               symbolSize: 16, frameSize: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("安装爱思移动端")
-                            .font(AppFont.subheadline)
-                        Text("爱思 9.0 移动端安装向导（加密包，可能装不上）")
-                            .font(AppFont.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(AppFont.captionEmphasis)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
         }
-        .appCard()
     }
 }

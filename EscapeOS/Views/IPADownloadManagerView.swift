@@ -378,16 +378,14 @@ struct IPADownloadManagerView: View {
     }
 
     private var emptyRow: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "shippingbox")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-                .appSymbol()
-            Text("还没有下载过安装包")
-                .font(AppFont.subheadlineEmphasis)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
+        // 空状态改用 DesignSystem 的 `AppEmptyState`（118pt 浅蓝圆 + 青绿字形 + 俏皮副标题），
+        // 替换原先手写的 `VStack` + 小号 `shippingbox` 图标.
+        AppEmptyState(
+            icon: "shippingbox",
+            secondaryIcon: nil,
+            title: "还没有下载过安装包",
+            message: "从软件源下载的安装包会出现在这里.")
+            .listRowBackground(Color.clear)
     }
 
     // MARK: - 下载中那一行

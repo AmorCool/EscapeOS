@@ -57,24 +57,18 @@ struct ProfileConfigView: View {
                 }
             } else if profiles.isEmpty {
                 Section {
-                    VStack(spacing: 10) {
-                        Image(systemName: "checkmark.shield").font(.system(size: 40)).foregroundStyle(.secondary)
-                        Text(rawCount > 0
-                             ? "检测到 \(rawCount) 个描述文件，但 \(parseFailed) 个无法解析"
-                             : "设备上没有配置描述文件")
-                            .font(.headline)
-                        Text(rawCount > 0
-                             ? "解析失败的描述文件多为 DER/CMS 格式，请联系开发者扩展解析."
-                             : "点击右上角导入 .mobileconfig / .mobileprofile")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
-                    .background(
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .fill(Color(.secondarySystemGroupedBackground))
-                    )
-                    .padding(.horizontal, 4)
+                    // 空状态改用 DesignSystem 的 `AppEmptyState`（118pt 浅蓝圆 + 青绿字形 +
+                    // 俏皮副标题），替换原先手写的 `VStack` + 22 圆角卡片.
+                    AppEmptyState(
+                        icon: "checkmark.shield",
+                        secondaryIcon: nil,
+                        title: rawCount > 0
+                            ? "检测到 \(rawCount) 个描述文件，但 \(parseFailed) 个无法解析"
+                            : "设备上没有配置描述文件",
+                        message: rawCount > 0
+                            ? "解析失败的描述文件多为 DER/CMS 格式，请联系开发者扩展解析."
+                            : "点击右上角导入 .mobileconfig / .mobileprofile")
+                        .listRowBackground(Color.clear)
                 }
             } else {
                 Section {
