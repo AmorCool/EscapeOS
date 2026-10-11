@@ -23,6 +23,15 @@
       `TintedButtonStyle()`（透明淡蓝）。
   G6  不得用 `Color.blue.opacity(...)` 做淡底 —— systemBlue 与品牌蓝 `AppTheme.accent`
       不一致（第二套蓝残留）；应改 `AppTheme.accent.opacity(...)`。
+  G7  `BrandProminentButtonStyle` 不得在任何 `EscapeOS/**/*.swift` 的**代码**里复现 ——
+      那是**全宽深色渐变实底按钮**（`brandGradient` 铺满一整行），用户已明确反馈「那个开始修复
+      按钮颜色太丑了」。主行动按钮应改 `TintedButtonStyle(tint: AppTheme.accent,
+      radius: AppRadius.button)`（半透明着色 + 发丝描边）。
+  G8  多色板系统新增的色 token（模块色 `categoryXxx` / 表面层 `surfaceXxx` / 强调变体
+      `accentSoft` / `accentBorder`）在 `DesignSystem.swift` 里必须都是**自适应色**（定义体内
+      出现 `userInterfaceStyle` + `.dark` 分支）—— 用户要求「更不要单一的颜色」而新增色彩层次，
+      但硬规则 6 要求新增色一律明暗两套；有人退回写死单值（浅色字面量）即在深色模式出现
+      刺眼亮块 / 对比不足，此条机械守住。
 
 判据只认**符号/结构**，不绑行号、不绑文案。扫描前先用状态机把注释屏蔽为空白（字符串保留），
 故注释里提 `trAccent` / `.borderedProminent` 不会误报。
@@ -206,6 +215,13 @@ def check(root):
                         "（`AppTheme.accent`）不一致（第二套蓝残留）；"
                         "应改 `AppTheme.accent.opacity(...)`" % (rel, _line_of(masked, k)))
 
+        # G7：`BrandProminentButtonStyle` 不得复现（全宽深色渐变实底按钮，用户已反馈太丑）
+        for k in _find_all(masked, "BrandProminentButtonStyle"):
+            errs.append("[G7] %s:%d 出现 `BrandProminentButtonStyle` —— 全宽深色渐变实底按钮回归"
+                        "（`brandGradient` 铺满一整行，用户反馈「开始修复按钮太丑」）；"
+                        "主行动应改 `TintedButtonStyle(tint: AppTheme.accent, radius: AppRadius.button)`"
+                        % (rel, _line_of(masked, k)))
+
     # ── G2 / G3：DesignSystem.swift 里 accent 必须自适应、switchOnTint 不得写死蓝 ──
     if not os.path.isfile(design):
         errs.append("[G2] 找不到 %s" % design)
@@ -246,6 +262,41 @@ def check(root):
             errs.append("[G4] `%s` 不是自适应色（定义里缺 `userInterfaceStyle` / `.dark` 分支）"
                         " —— 退回写死浅色字面量会在深色模式出现刺眼亮块（如 `#E0EBFE`）" % name)
 
+    # G8：多色板系统新增色 token 必须自适应（防复发：新增色彩层次退回写死单值）
+    MULTI_PALETTE_TOKENS = (
+        # ① 模块色（一个功能模块一个颜色）
+        "static let categoryClean",
+        "static let categoryDevice",
+        "static let categoryStore",
+        "static let categoryTreasure",
+        "static let categorySettings",
+        "static let categoryDownload",
+        "static let categorySign",
+        "static let categoryAdvanced",
+        # ② 表面层（四级背景）
+        "static let surfaceBase",
+        "static let surfaceCard",
+        "static let surfaceElevated",
+        "static let surfaceSunken",
+        # ③ 强调变体
+        "static let accentSoft",
+        "static let accentBorder",
+    )
+    for token in MULTI_PALETTE_TOKENS:
+        pos = masked.find(token)
+        name = token.replace("static let ", "")
+        if pos < 0:
+            errs.append("[G8] DesignSystem.swift 里找不到 `%s` —— 多色板 token 被删？" % name)
+            continue
+        # 以「下一个 `static let`」为界取定义窗口：固定 400 字符窗口会跨到下个 token 的
+        # 自适应分支，从而把「写死单值」误判为自适应（漏报）.
+        nxt = masked.find("static let", pos + len(token))
+        window = masked[pos:nxt if nxt >= 0 else len(masked)]
+        if "userInterfaceStyle" not in window or ".dark" not in window:
+            errs.append("[G8] `%s` 不是自适应色（定义里缺 `userInterfaceStyle` / `.dark` 分支）"
+                        " —— 多色板新增色必须明暗两套（硬规则 6）；"
+                        "退回写死单值会在深色模式出现刺眼亮块 / 对比不足" % name)
+
     return errs
 
 
@@ -263,7 +314,8 @@ def main():
         for e in errs:
             print("ERROR %s" % e)
         print("命中：%d（G1 trAccent 复现 / G2 accent 非自适应 / G3 switchOnTint 写死蓝 / "
-              "G4 空态色非自适应 / G5 borderedProminent+accent 实底 / G6 Color.blue.opacity 淡底）"
+              "G4 空态色非自适应 / G5 borderedProminent+accent 实底 / G6 Color.blue.opacity 淡底 / "
+              "G7 BrandProminentButtonStyle 全宽深色实底 / G8 多色板新增色非自适应）"
               % len(errs))
         return 1
     print("G1 无 trAccent 复现：OK")
@@ -272,6 +324,8 @@ def main():
     print("G4 空态色自适应（emptyStateCircleFill / emptyStateGlyph）：OK")
     print("G5 无 `.borderedProminent` + `.tint(AppTheme.accent)` 实底按钮：OK")
     print("G6 无 `Color.blue.opacity(...)` 淡底：OK")
+    print("G7 无 `BrandProminentButtonStyle` 全宽深色实底按钮：OK")
+    print("G8 多色板新增色自适应（8 模块色 / 4 表面层 / accentSoft / accentBorder）：OK")
     print("命中：0")
     return 0
 

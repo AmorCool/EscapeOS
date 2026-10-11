@@ -28,12 +28,13 @@ private struct I4MobileDeviceBox<T>: @unchecked Sendable { let value: T }
 /// 而非爱思共享账号 ⇒ 即便装上，也可能在启动时 `fairplayOpen()` 失败而闪退（即 `-42112` 一类）。
 /// ⇒ 本页是**界面移植**，默认**不含可用安装后端**（`installAction == nil`），状态区如实标注.
 ///
-/// ## 「开启高级功能」的诚实边界（2026-10-11 实测更正）
-/// 该入口**不是**本页能完成的事：高级功能由设备端爱思移动端（`com.ownbook.notes`）起 VPN 提供，
-/// 前提是把配对文件（`Documents/pair.config` / `RTD.cfg`）写进它的沙盒 —— 本应用**尚未实现**
-/// 这一步（只有设备级 `i4tool2.acc` 可写，见 `I4AppFixService`）。故 `openAdvanced()` 只
-/// **如实检测该 App 装没装**并说明「为什么开不了」，不假装能开（旧版弹的是一句写死的免责声明，
-/// 与「安装成功」自相矛盾 —— 用户截图 IMG_6873）.
+/// ## 「开启高级功能」的去向（2026-10-11 再更正）
+/// 用户原话：「爱思「开启高级功能」你没做好而且这个是单独一个功能」⇒ 该功能已从本对话框**拆出去**，
+/// 做成百宝箱里的**独立入口**（百宝箱 → 「开启高级功能」，见 `I4AdvancedView` / `I4PairingService`）。
+/// 本页 `.succeeded` 态的那个按钮现在**只负责 push 到那个独立页**，不再弹任何「尚未实现」的窗
+/// （旧版弹的是一句写死的免责声明，与「安装成功」自相矛盾 —— 用户截图 IMG_6873）。
+/// 真实现（读设备身份 → 构造授权标记 → 经 house_arrest 写进载体沙盒 → 读回校验，并如实说明
+/// pair.config / RTD.cfg 构造不出）全部落在 `I4PairingService` 里.
 ///
 /// ## 不内嵌第三方资源
 /// 爱思 logo 是第三方商标，本页**不内嵌其图片资源**；顶部用 SF Symbol 圆角色块占位.
@@ -54,9 +55,10 @@ struct I4MobileInstallView: View {
     @State private var loading = true
     @State private var errorText: String?
     @State private var stage: Stage = .idle
-    @State private var advancedShown = false
-    /// 「开启高级功能」弹窗的正文 —— 由 `openAdvanced()` 读设备实际状态后填入（不是写死的免责声明）.
-    @State private var advancedMessage = ""
+    /// 「开启高级功能」独立页的 push 开关 —— 该功能已从本对话框**拆出去**做成独立入口
+    /// （用户原话「这个是单独一个功能」）。本按钮现在只把它 push 出来，真实现见
+    /// `I4AdvancedView` / `I4PairingService`（本页不再弹任何「尚未实现」的窗）.
+    @State private var showAdvanced = false
 
     /// IPA 来源区（仓库云端下载 / 自定义包体 / 手动导入）：各包缓存状态 + 下载进度 + 导入选择器.
     @State private var packStatuses: [I4MobileInstallService.PackStatus] = []
@@ -96,10 +98,8 @@ struct I4MobileInstallView: View {
             guard let url = urls.first else { return }
             Task { await importPicked(url) }
         }
-        .alert("开启高级功能", isPresented: $advancedShown) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(advancedMessage)
+        .navigationDestination(isPresented: $showAdvanced) {
+            I4AdvancedView()
         }
     }
 
@@ -679,16 +679,16 @@ struct I4MobileInstallView: View {
         case .succeeded:
             Button {
                 AppHaptics.tap()
-                Task { await openAdvanced() }
+                showAdvanced = true
             } label: {
                 Text("开启高级功能").frame(maxWidth: .infinity)
             }
-            .buttonStyle(BrandProminentButtonStyle())
+            .buttonStyle(TintedButtonStyle(tint: AppTheme.accent, radius: AppRadius.button))
         case .installing:
             Button { } label: {
                 Text("正在安装…").frame(maxWidth: .infinity)
             }
-            .buttonStyle(BrandProminentButtonStyle())
+            .buttonStyle(TintedButtonStyle(tint: AppTheme.accent, radius: AppRadius.button))
             .disabled(true)
         default:
             Button {
@@ -697,7 +697,7 @@ struct I4MobileInstallView: View {
             } label: {
                 Text(isFailed ? "重试" : "开始安装").frame(maxWidth: .infinity)
             }
-            .buttonStyle(BrandProminentButtonStyle())
+            .buttonStyle(TintedButtonStyle(tint: AppTheme.accent, radius: AppRadius.button))
             .disabled(installAction == nil)
         }
     }
@@ -927,38 +927,6 @@ struct I4MobileInstallView: View {
         } catch {
             stage = .failed(error.localizedDescription)
         }
-    }
-
-    /// 「开启高级功能」被点：**先读设备实际状态**，再据此给一句真话.
-    ///
-    /// 之前这里是 `advancedShown = true` 直接弹一句写死的
-    /// 「本机未安装该 App 时，此入口无法生效」—— 那句是**无条件的免责声明**，从不检测、
-    /// 也从不开启任何东西. 它与同页的「安装状态：安装成功」自相矛盾（用户截图 IMG_6873
-    /// 报的就是这个），根因不是「装错了包」，而是那句话根本没看设备.
-    ///
-    /// 事实（真机实测 2026-10-11，iPhone11 / iOS 26）：高级功能 = 把配对文件
-    /// （`/Documents/pair.config` + `RTD.cfg`，外加每个马甲包的 `8es1421dg.be`）写进
-    /// 爱思移动端（`com.ownbook.notes`）沙盒，由它起 VPN 转发 Apple 流量
-    /// （见 `爱思9_配对与设备端Agent.md`）. 本应用**尚未实现这一步写入**（只有设备级
-    /// `i4tool2.acc` 可写，那是另一个入口 `I4AppFixService`）⇒ 无论装没装，高级功能都开不起来.
-    /// 这里按实测如实说明，不假装能开.
-    private func openAdvanced() async {
-        let carrier = I4MobileInstallService.agentBundleId
-        let probe = await I4MobileInstallService.probeDevice(bundleId: carrier)
-        if let error = probe.error {
-            advancedMessage = "无法读取设备已装列表：\(error)."
-                + "高级功能由设备端爱思移动端（\(carrier)）提供，"
-                + "需要把配对文件写进该 App 沙盒，本应用尚未实现这一步，因此无法开启."
-        } else if let version = probe.existingVersion {
-            advancedMessage = "设备上已安装爱思移动端（\(carrier)，版本 \(version)）."
-                + "高级功能需要把配对文件（pair.config / RTD.cfg）写进该 App 沙盒，"
-                + "本应用尚未实现这一步，因此无法开启."
-        } else {
-            advancedMessage = "设备上未安装爱思移动端（\(carrier)）. "
-                + "高级功能由该 App 提供，请先在下方安装它再回来；"
-                + "注意：本应用目前也还不会写配对文件，装上后同样无法开启."
-        }
-        advancedShown = true
     }
 }
 

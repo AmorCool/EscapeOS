@@ -46,6 +46,9 @@ struct HomeView: View {
     /// 安装爱思移动端页（同一套「sheet 关闭后再 push」的中转）
     @State private var showMobileInstall = false
     @State private var pendingMobileInstall = false
+    /// 开启高级功能页（同一套「sheet 关闭后再 push」的中转）
+    @State private var showI4Advanced = false
+    @State private var pendingI4Advanced = false
 
     var body: some View {
         ScrollView {
@@ -90,6 +93,10 @@ struct HomeView: View {
                 pendingMobileInstall = false
                 showMobileInstall = true
             }
+            if pendingI4Advanced {
+                pendingI4Advanced = false
+                showI4Advanced = true
+            }
         }) {
             // 原生 sheet：0.4↔1.0 detent 上拉展开、下拉关闭
             TreasureBoxView(onOpenGestalt: {
@@ -109,6 +116,9 @@ struct HomeView: View {
                 treasureOpen = false
             }, onOpenMobileInstall: {
                 pendingMobileInstall = true
+                treasureOpen = false
+            }, onOpenI4Advanced: {
+                pendingI4Advanced = true
                 treasureOpen = false
             })
             .presentationDetents([.fraction(0.4), .large])
@@ -152,6 +162,10 @@ struct HomeView: View {
             // onLog 转发到 LoginLogger(.i4Fix)，与 I4AppFixView 同一板块。
             I4MobileInstallView(installAction: I4MobileInstallService.makeInstallCachedAction(
                 onLog: { LoginLogger.shared.log($0, category: .i4Fix) }))
+        }
+        // 开启高级功能（写设备端爱思移动端沙盒的配对 / 授权文件；独立入口，不再藏在安装流程里）
+        .navigationDestination(isPresented: $showI4Advanced) {
+            I4AdvancedView()
         }
         // v0.3.200：进入主页自动静默体检（灵动球分数即时显示）
         .task(id: "auto-check") {

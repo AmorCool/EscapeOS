@@ -12,6 +12,8 @@ import SwiftUI
 ///   （与主页 `HomeRowLabel` 同一度量；分隔线左缩进对齐标题）.
 /// - **强调色**统一到 `AppTheme.accent`（亮 `#005493` / 暗 `#76D6FF`，自适应）.
 /// - 图标 `.hierarchical` 分层渲染；工具栏动作补触觉 `AppHaptics.tap()`.
+/// - **布局**：分段标题统一用 `AppSectionHeader`（品牌色竖条 + 主标题）；「设备工具」6 项平级工具
+///   改用 **2 列卡片网格**（`AppCardGrid` + `AppGridTile`，布局 B），其余分组仍走全宽行（布局 A）.
 ///
 /// ⚠️ 仅改样式：`isVisible(_:)` 热补丁过滤、`NavigationLazyView(item.destination)` 懒加载、
 /// 两个 toolbar sheet（设备控制 / 设置）与 `MoreItem` 数据定义均**原样保留**.
@@ -219,32 +221,51 @@ struct MoreView: View {
         }
     }
 
-    // MARK: - 分组渲染（TRApp inset-grouped 语言，与主页 `featureSection` 同款）
+    // MARK: - 分组渲染（两种布局：网格 / 全宽行）
 
-    /// 单个功能分组：分段标题 + 连续圆角卡片（行内 0 间距，靠 `rowDivider` 分隔）+ 可选脚注.
+    /// 用**卡片网格**（布局 B，`AppCardGrid` + `AppGridTile`）渲染的分组标题集合.
+    ///
+    /// 「设备工具」是 6 个**平级、并列**的工具入口，无主次之分 —— 用 2 列格子比 6 条全宽横条
+    /// 更紧凑、更像「工具箱」，也是本仓区别于 TRApp「全用横条」的地方。其余分组是「词条 + 说明」，
+    /// 仍用全宽行（布局 A），各得其所.
+    private let gridSectionHeaders: Set<String> = ["设备工具"]
+
+    /// 单个功能分组：分段标题（`AppSectionHeader`，带品牌色竖条）+ 内容 + 可选脚注.
+    /// 内容按 `gridSectionHeaders` 二选一：卡片网格（布局 B）或全宽行卡片（布局 A）.
     /// 热补丁把整组都隐藏时不渲染该组（避免只剩一个空标题）.
     @ViewBuilder
     private func moreSection(_ section: (header: String, symbol: String, footer: String?, items: [MoreItem])) -> some View {
         let items = section.items.filter(isVisible)
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                sectionHeader(section.header, section.symbol)
-                VStack(spacing: 0) {
-                    ForEach(items) { item in
+            VStack(alignment: .leading, spacing: 10) {
+                AppSectionHeader(section.header, symbol: section.symbol)
+                if gridSectionHeaders.contains(section.header) {
+                    AppCardGrid(items: items, columns: 2) { item in
                         NavigationLink {
                             NavigationLazyView(item.destination)
                         } label: {
-                            MoreRowLabel(icon: item.icon, title: item.title, subtitle: item.subtitle)
+                            AppGridTile(icon: item.icon, title: item.title, subtitle: item.subtitle)
                         }
-                        .buttonStyle(.plain)
-                        // 末行不附分隔线（组尾）
-                        if item.id != items.last?.id {
-                            rowDivider
+                        .appPressable()
+                    }
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(items) { item in
+                            NavigationLink {
+                                NavigationLazyView(item.destination)
+                            } label: {
+                                MoreRowLabel(icon: item.icon, title: item.title, subtitle: item.subtitle)
+                            }
+                            .buttonStyle(.plain)
+                            // 末行不附分隔线（组尾）
+                            if item.id != items.last?.id {
+                                rowDivider
+                            }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .appCard(padding: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .appCard(padding: 0)
                 if let footer = section.footer {
                     Text(footer)
                         .font(AppFont.caption)
@@ -253,21 +274,6 @@ struct MoreView: View {
                 }
             }
         }
-    }
-
-    /// 分段标题：SF Symbol + 次级字色小标题，位于卡片**上方**（inset-grouped 分段口径）.
-    private func sectionHeader(_ title: String, _ symbol: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(AppTheme.accent)
-                .appSymbol()
-            Text(title)
-                .font(AppFont.captionEmphasis)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 4)
     }
 
     /// 行分隔线：全宽发丝（`AppHairline`），左缩进对齐到图标底右侧

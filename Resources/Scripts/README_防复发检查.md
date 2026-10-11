@@ -1,6 +1,6 @@
 # 防复发检查 · 约定与用法
 
-本目录的脚本是「**以后不会再有人犯同样的错**」的机制化守门人。目前两项检查，
+本目录的脚本是「**以后不会再有人犯同样的错**」的机制化守门人。目前八项检查，
 统一入口：`swift_precommit_check.py`。
 
 > **⚠️ 仓库内 / 仓库外两份**
@@ -57,7 +57,7 @@ Python 解释器（本机）：`C:\Users\xcrad\.workbuddy-ai\binaries\python\env
 
 ---
 
-## 3. 两项检查分别管什么
+## 3. 各项检查分别管什么
 
 ### 3.1 `swift_top_level_type_collision.py` —— 顶层类型重名
 Swift 同一 module 内顶层类型**不许重名**（`swiftc -parse` 单文件解析查不出来）⇒ 只有
@@ -109,6 +109,26 @@ CI 全量编译才发现。本项目已因此炸过一次 CI（`AppIconView` 被
   （该处正由 `job.phase.isBusy` 驱动），且代码已改成读 `displayStage`、正则不再命中 ⇒ 既错又失效，删除。
 - **#7 / #8 是「入库接 CI」轮新增**：为让脚本在**当前干净代码**上 EXIT 0。两条正则都收窄到该具体形状
   （反控实测：同文件里 `Text(job.phase.title)` 仍报 R3、`Text("安装中")` 仍报 R4 ⇒ 未过度放行）。
+
+---
+
+### 3.8 `swift_layout_motion_guard.py` —— 布局与动效（第 8 项检查）
+
+为「布局不好看」补的布局 / 动效组件层 `EscapeOS/Views/AppLayout.swift`（`AppCardGrid` /
+`AppAdaptiveGrid` / `AppHScrollSection` / `AppHeroHeader` / `AppSectionHeader` / `AppGridTile`
++ `AppMotion` + `.appAppear` / `.appPressable` / `.appSymbolBounce`）配套的守门人 ——
+防止有人**绕过组件重造**，把设计语言重新打散。扫描 `EscapeOS/**/*.swift`（注释屏蔽后）：
+
+| 规则 | 拦什么 | 正解 |
+|---|---|---|
+| L1 | 手写等宽多列网格（`Array(repeating: GridItem(.flexible(` / `LazyVGrid(columns: [GridItem(.flexible(`） | 固定列数用 `AppCardGrid(items:columns:)`，自适应用 `AppAdaptiveGrid(items:minimum:)` |
+| L2 | 直接读 `isPressed` 手搓按压反馈 | `.appPressable()` / `TintedButtonStyle()` |
+| L3 | 在 `DesignSystem.swift` 之外引用 `AppTheme.brandGradient` | 深色品牌渐变只允许在紧凑图标块 `AppBrandTile` 内（硬规则 1 / 7）；别处要用直接用 `AppBrandTile` |
+
+**豁免（`ALLOW` 表，脚本内）**：L1 放行 `AppLayout.swift`（组件实现处）与 `WallpaperView.swift` /
+`BatteryHealthView.swift`（组件层**之前**的手写网格，本轮不迁移）；L2 放行 `AppLayout.swift` 与
+`DesignSystem.swift`（两个按压样式实现处）；L3 放行 `DesignSystem.swift`（`brandGradient` 定义处）。
+三条规则在当前干净代码上 EXIT 0；正控实验（临时文件）实测 L1×2 / L2×1 / L3×1 全部命中。
 
 ---
 

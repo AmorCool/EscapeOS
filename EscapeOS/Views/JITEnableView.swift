@@ -226,6 +226,8 @@ struct JITEnableView: View {
 /// 第三方应用经常取不到图标 → 灰图标（v0.2.71 修复）.
 struct JITAppIconView: View {
     let bundleID: String
+    /// 图标边长（默认 36，行内用；网格大图标传 60）.
+    var size: CGFloat = 36
     @State private var icon: UIImage?
 
     var body: some View {
@@ -238,8 +240,8 @@ struct JITAppIconView: View {
                     .resizable()
             }
         }
-        .frame(width: 36, height: 36)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * (8.0 / 36.0)))
         .task(id: bundleID) {
             guard icon == nil else { return }
             if let cached = JITAppIconLoader.shared.cached(for: bundleID) {

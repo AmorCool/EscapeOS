@@ -8,6 +8,9 @@ private struct StorageDetailBox<T>: @unchecked Sendable { let value: T }
 
 /// v0.3.293：硬盘详情面板（移植爱思「硬盘详情」）
 /// 数据源：diagnostics_relay IORegistry → AppleEmbeddedNVMeController（真机实测 46 键）
+///
+/// 布局（本轮）：**布局 D（Hero + 内容）** —— 顶部 `AppHeroHeader`（品牌图标块 + 型号 +
+/// 容量/NVMe/加密 三个 stat），下方明细卡片（`AppSectionHeader` 分段标题），卡片带阶梯入场动画.
 struct StorageDetailView: View {
     @State private var info: StorageDetailInfo?
     @State private var errorText: String?
@@ -21,9 +24,15 @@ struct StorageDetailView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 60)
                 } else if let info {
+                    // 布局 D：先给「这是什么」（品牌图标块 + 型号 + 关键 stat），再往下是明细卡片.
+                    heroHeader(info)
+                        .appAppear(index: 0)
                     overviewCard(info)
+                        .appAppear(index: 1)
                     ioCard(info)
+                        .appAppear(index: 2)
                     geometryCard(info)
+                        .appAppear(index: 3)
                 } else {
                     errorCard()
                 }
@@ -61,6 +70,29 @@ struct StorageDetailView: View {
         } catch {
             errorText = error.localizedDescription
         }
+    }
+
+    // MARK: 页头（布局 D：Hero + 内容）
+    /// 详情页首屏：品牌图标块 + 硬盘型号 + 供应商/类型副标题 + 一排关键 stat（容量 / NVMe / 加密）.
+    /// 深色品牌色只出现在紧凑的 `AppBrandTile` 里，不做全宽深色 banner（硬规则 1 / 7）.
+    private func heroHeader(_ info: StorageDetailInfo) -> some View {
+        var stats: [AppStat] = []
+        if let cap = info.capacityBytes {
+            stats.append(AppStat("容量", formatBytes(cap)))
+        }
+        if let nvme = info.nvmeRevision {
+            stats.append(AppStat("NVMe 版本", nvme))
+        }
+        if let enc = info.encryptionType {
+            stats.append(AppStat("加密类型", enc))
+        }
+        let subtitleParts = [info.flashVendor, info.cellType].compactMap { $0 }
+        return AppHeroHeader(
+            title: info.modelNumber ?? "硬盘详情",
+            subtitle: subtitleParts.isEmpty ? nil : subtitleParts.joined(separator: " / "),
+            symbol: "internaldrive.fill",
+            stats: Array(stats.prefix(3))
+        )
     }
 
     // MARK: 基本信息（两列，对齐爱思左侧 8 项）
@@ -154,13 +186,8 @@ struct StorageDetailView: View {
     private func sectionCard<Content: View>(title: String, icon: String,
                                            @ViewBuilder _ body: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .foregroundStyle(AppTheme.accent)
-                    .appSymbol()
-                Text(title).font(AppFont.headline)
-            }
-            .padding(.bottom, 8)
+            AppSectionHeader(title, symbol: icon)
+                .padding(.bottom, 10)
             body()
         }
         .padding(AppMetrics.cardPadding)

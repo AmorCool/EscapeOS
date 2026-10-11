@@ -28,6 +28,9 @@ struct TreasureBoxView: View {
     let onOpenI4Fix: () -> Void
     /// 打开「安装爱思移动端」页.同样走「先关 sheet 再 push」的中转，理由同上.
     let onOpenMobileInstall: () -> Void
+    /// 打开「开启高级功能」页（把写设备端爱思移动端沙盒的配对 / 授权文件独立成一个入口）.
+    /// 同样走「先关 sheet 再 push」的中转，理由同上.
+    let onOpenI4Advanced: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -300,6 +303,14 @@ struct TreasureBoxView: View {
                            keywords: ["重写爱思授权凭据 · 仅爱思源应用"]) {
                 AppHaptics.tap()
                 onOpenI4Fix()
+            }
+            // 开启高级功能：把爱思「开启高级功能」从安装对话框里**拆出来**做成独立入口（用户原话
+            // 「这个是单独一个功能」）。真写设备端爱思移动端沙盒的授权标记（8es1421dg.be），
+            // pair.config / RTD.cfg 构造不出会如实说明（详见 I4AdvancedView / I4PairingService）.
+            AppSettingsRow(icon: "lock.shield.fill", title: "开启高级功能",
+                           keywords: ["写爱思移动端沙盒的配对 / 授权文件"]) {
+                AppHaptics.tap()
+                onOpenI4Advanced()
             }
             // 安装爱思移动端：把爱思 9.0 的「安装爱思移动端」对话框移植过来.
             // 内嵌 IPA 是 FairPlay 加密包（cryptid=1），装前有诚实提示（见 I4MobileInstallView）.

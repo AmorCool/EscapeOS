@@ -11,13 +11,19 @@ import UIKit
 ///    深色品牌色**只出现在紧凑的连续圆角图标块**（`AppBrandTile`）里，不做全宽渐变填充 banner。
 /// 2. **一律连续圆角**（`RoundedCornerStyle.continuous`）：卡片 `AppRadius.card`、图标块
 ///    `AppRadius.appIcon`、行内图标底 `AppRadius.icon`；不要直角、不要纯方。
-/// 3. 不用纯蓝实底按钮（用 `TintedButtonStyle` 淡底；主行动用 `BrandProminentButtonStyle` 渐变）。
+/// 3. **按钮一律「半透明着色 + 发丝描边」**（`TintedButtonStyle`）：主行动用
+///    `TintedButtonStyle(tint: AppTheme.accent, radius: AppRadius.button)`，次要动作用默认号。
+///    不用纯蓝实底，**也不用全宽深色渐变实底**（见硬规则 7）。
 /// 4. 界面文案一律英文句点 `.`，不用中文句号，不用符号化标记 / 星形符号。
 /// 5. **设置类列表用全宽行 + 发丝分隔**（`AppSettingsRow` + `AppHairline`），**不要套 16 圆角卡片**
 ///    （TRApp 设置页实测：行底 / 分隔线均全宽 0–828px；规范 §1.4 / §③组件 5）。
 /// 6. **颜色一律明暗两套值**：品牌实测色写死 sRGB 时必须用 `Color(UIColor { trait in ... })`
 ///    给出深色分支；浅色专用的浅底（如空态圆 `emptyStateCircleFill`）在深色下必须换深色值，
 ///    不得沿用浅色字面量（否则深色模式出现刺眼亮块）。防复发见 `swift_theme_blue_guard.py` G4。
+/// 7. **不用全宽深色实底按钮**（用户原话：「那个开始修复按钮颜色太丑了」）。大面积深色 +
+///    全宽 ⇒ 突兀，尤其深藏青渐变（`brandGradient`）铺满一整行时像一块「深色板」。深色品牌色
+///    只允许出现在**紧凑的连续圆角图标块**（`AppBrandTile`）里。主行动按钮改用
+///    `TintedButtonStyle`（半透明着色 + 发丝描边）。防复发见 `swift_theme_blue_guard.py` G7。
 enum AppTheme {
     /// Brand accent. Unified blue: TRApp-measured `#005493` in light mode,
     /// a brightened `#76D6FF` in dark mode for contrast.
@@ -69,8 +75,10 @@ enum AppTheme {
     // MARK: - 品牌渐变（新增）
     //
     // 取自 TRApp AppIcon 解码实测：深藏青竖向渐变 `#2C3A6A → #161F2E` + 纯白图形.
-    // **仅供新页面的 hero 区块使用，不作为全局 accent**：hero 是深色品牌底，与蓝色强调色
-    // 并存，不参与「两套蓝」的统一（那是 `accent` 与 `trAccent` 的事，现已合并到 `accent`）.
+    // **仅供紧凑的连续圆角图标块 `AppBrandTile` 使用**（硬规则 1 / 7）：不作为全局 accent，
+    // **更不用于按钮填充**（大面积深色 + 全宽 ⇒ 突兀，用户已明确反馈）。hero 是深色品牌底，
+    // 与蓝色强调色并存，不参与「两套蓝」的统一（那是 `accent` 与 `trAccent` 的事，现已合并到
+    // `accent`）.
 
     /// 品牌深藏青（TRApp AppIcon 实测主色 `#2C3A6A`）.
     static let brandNavy = Color(red: 0x2C / 255, green: 0x3A / 255, blue: 0x6A / 255)
@@ -144,6 +152,165 @@ enum AppTheme {
             ? UIColor(red: 0x7D / 255, green: 0xD6 / 255, blue: 0xA9 / 255, alpha: 1)
             : UIColor(red: 0x56 / 255, green: 0xA3 / 255, blue: 0x76 / 255, alpha: 1)
     })
+
+    // MARK: - 多色板系统（本轮新增：解决「颜色单一」）
+    //
+    // 背景：用户反馈「全面改造 EscapeSpace 的 UI 风格…更不要单一的颜色」。此前全站只有
+    // 一个强调蓝（`accent`）+ 少量系统语义色，各功能模块之间没有颜色区分 ⇒ 观感单一。
+    // 本组 token 建立**三层色彩层次**，全部 `Color(UIColor { trait in ... })` 明暗两套：
+    //   ① 模块色 `categoryXxx` —— 一个功能模块一个颜色，用于该模块的图标底 / 标题强调；
+    //   ② 表面层 `surfaceXxx` —— base / card / elevated / sunken 四级背景，撑起卡片层次；
+    //   ③ 强调变体 `accentSoft` / `accentBorder` —— 主强调色的淡填充与描边。
+    // 硬规则（见文件头 1 / 7）：仍不做全宽深色实底；模块色只用于**紧凑图标块 / 小控件**，
+    // 不铺满整行。防复发：`Resources/Scripts/swift_theme_blue_guard.py` G8 校验下列新增
+    // 色 token 均为自适应色（定义体内出现 `userInterfaceStyle` + `.dark`）.
+
+    // ── ① 模块色（一个功能模块一个颜色）──
+    //
+    // 取值口径：浅色用中深饱和（在浅背景上有对比），深色用同色相**提亮版**（在深背景上不糊）.
+    // 用法：`AppRowIcon(tint:)` / `SizePill(tint:)` / 标题强调；只作用于紧凑控件.
+
+    /// 清理与优化模块色（青绿）.
+    static let categoryClean = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x4F / 255, green: 0xD8 / 255, blue: 0xC4 / 255, alpha: 1)
+            : UIColor(red: 0x0E / 255, green: 0x8F / 255, blue: 0x7E / 255, alpha: 1)
+    })
+    /// 设备与系统模块色（靛蓝）.
+    static let categoryDevice = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x9D / 255, green: 0xAA / 255, blue: 0xFF / 255, alpha: 1)
+            : UIColor(red: 0x3B / 255, green: 0x4C / 255, blue: 0xC0 / 255, alpha: 1)
+    })
+    /// 扩展与商店模块色（橙）.
+    static let categoryStore = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0xFF / 255, green: 0xB0 / 255, blue: 0x61 / 255, alpha: 1)
+            : UIColor(red: 0xC2 / 255, green: 0x62 / 255, blue: 0x0E / 255, alpha: 1)
+    })
+    /// 百宝箱模块色（紫）.
+    static let categoryTreasure = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0xC3 / 255, green: 0xA6 / 255, blue: 0xFF / 255, alpha: 1)
+            : UIColor(red: 0x7A / 255, green: 0x3B / 255, blue: 0xE0 / 255, alpha: 1)
+    })
+    /// 设置模块色（石板灰）.
+    static let categorySettings = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0xA9 / 255, green: 0xB3 / 255, blue: 0xC2 / 255, alpha: 1)
+            : UIColor(red: 0x5A / 255, green: 0x64 / 255, blue: 0x72 / 255, alpha: 1)
+    })
+    /// 下载管理模块色（蓝）.
+    static let categoryDownload = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x6F / 255, green: 0xC3 / 255, blue: 0xFF / 255, alpha: 1)
+            : UIColor(red: 0x0A / 255, green: 0x6B / 255, blue: 0xD1 / 255, alpha: 1)
+    })
+    /// 签名 / 安装模块色（粉）.
+    static let categorySign = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0xFF / 255, green: 0x8F / 255, blue: 0xB4 / 255, alpha: 1)
+            : UIColor(red: 0xCE / 255, green: 0x32 / 255, blue: 0x68 / 255, alpha: 1)
+    })
+    /// 高级功能 / 逆向模块色（红）.
+    static let categoryAdvanced = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0xFF / 255, green: 0x8C / 255, blue: 0x7C / 255, alpha: 1)
+            : UIColor(red: 0xBF / 255, green: 0x3A / 255, blue: 0x2B / 255, alpha: 1)
+    })
+
+    // ── ② 表面层（四级背景，撑起卡片层次）──
+    //
+    // base → sunken → card → elevated，从最底到最浮；相邻两级有**轻微**明度差，够分层但不抢眼.
+
+    /// 页面底色（最底层）.
+    static let surfaceBase = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x0E / 255, green: 0x11 / 255, blue: 0x16 / 255, alpha: 1)
+            : UIColor(red: 0xF2 / 255, green: 0xF3 / 255, blue: 0xF7 / 255, alpha: 1)
+    })
+    /// 卡片底（内容层）.
+    static let surfaceCard = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x1B / 255, green: 0x1F / 255, blue: 0x26 / 255, alpha: 1)
+            : UIColor(red: 0xFF / 255, green: 0xFF / 255, blue: 0xFF / 255, alpha: 1)
+    })
+    /// 浮起层（Sheet / 悬浮条，比卡片更亮）.
+    static let surfaceElevated = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x25 / 255, green: 0x2A / 255, blue: 0x33 / 255, alpha: 1)
+            : UIColor(red: 0xFF / 255, green: 0xFF / 255, blue: 0xFF / 255, alpha: 1)
+    })
+    /// 下沉层（内嵌槽 / 分组头，比卡片更暗）.
+    static let surfaceSunken = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x15 / 255, green: 0x18 / 255, blue: 0x1E / 255, alpha: 1)
+            : UIColor(red: 0xE9 / 255, green: 0xEB / 255, blue: 0xF0 / 255, alpha: 1)
+    })
+
+    // ── ③ 强调变体（主强调色的淡填充与描边）──
+    //
+    // 与 `accent.opacity(...)` 同色相，但**写死明暗两套**，避免深色下低透明度叠加出脏色.
+
+    /// 强调色淡填充（图标底 / 按钮低饱和底）.
+    static let accentSoft = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x16 / 255, green: 0x30 / 255, blue: 0x3D / 255, alpha: 1)
+            : UIColor(red: 0xDC / 255, green: 0xEB / 255, blue: 0xFA / 255, alpha: 1)
+    })
+    /// 强调色描边（给淡底补一条清晰边界）.
+    static let accentBorder = Color(UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x4C / 255, green: 0x7E / 255, blue: 0x9C / 255, alpha: 1)
+            : UIColor(red: 0x8A / 255, green: 0xB4 / 255, blue: 0xD6 / 255, alpha: 1)
+    })
+
+    // ── ④ 渐变组（仅用于紧凑图标块 / hero 强调，不做全宽实底）──
+    //
+    // 三组渐变，全部由**已自适应的模块色**构成 ⇒ 明暗两套自动成立，不新增写死字面量.
+    // 用途边界（硬规则 1 / 7）：只用于紧凑连续圆角图标块（类 `AppBrandTile`）、hero 内小色块；
+    // **不用于全宽按钮 / 全宽 banner**（`brandGradient` 仍是唯一深色品牌渐变，仅供 `AppBrandTile`）.
+
+    /// 冷色渐变组（蓝 → 青）：hero / 大图标块.
+    static let gradientCool = LinearGradient(
+        colors: [categoryDownload, categoryClean],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+    /// 暖色渐变组（橙 → 粉）：暖色模块图标块.
+    static let gradientWarm = LinearGradient(
+        colors: [categoryStore, categorySign],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+    /// 紫靛渐变组（靛 → 紫）：次级模块图标块.
+    static let gradientViolet = LinearGradient(
+        colors: [categoryDevice, categoryTreasure],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+
+/// 功能模块 → 模块色（多色板系统）：供页面按模块取色，避免各处手挑颜色.
+///
+/// 每个 case 对应 App 的一个功能板块，`tint` 即该模块的主色（取自 `AppTheme.categoryXxx`，
+/// 全部明暗两套）。用法示例：`AppRowIcon(systemName: "sparkles", tint: AppModule.clean.tint)`。
+enum AppModule {
+    case clean, device, store, treasure, settings, download, sign, advanced
+
+    /// 该模块的主色（明暗自适应）.
+    var tint: Color {
+        switch self {
+        case .clean: return AppTheme.categoryClean
+        case .device: return AppTheme.categoryDevice
+        case .store: return AppTheme.categoryStore
+        case .treasure: return AppTheme.categoryTreasure
+        case .settings: return AppTheme.categorySettings
+        case .download: return AppTheme.categoryDownload
+        case .sign: return AppTheme.categorySign
+        case .advanced: return AppTheme.categoryAdvanced
+        }
+    }
 }
 
 /// 「透明淡蓝」按钮样式（用户审美：不要纯蓝实底，要淡一点的蓝底）.
@@ -221,46 +388,6 @@ struct TintedButtonStyle: ButtonStyle {
                         .strokeBorder(tint.opacity(strokeOpacity), lineWidth: 0.5)
                 )
                 .opacity(isEnabled ? 1 : 0.4)
-                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        }
-    }
-}
-
-/// 品牌渐变主按钮（TRApp 深藏青渐变底 + 白字 + 连续圆角）.
-///
-/// 用于 hero / 主行动（如本页「开始安装」）。**不是纯蓝实底**：底是品牌深藏青渐变
-/// `#2C3A6A → #161F2E`（取自 TRApp AppIcon 实测），符合「不要纯蓝实底按钮」的规则.
-/// 按下时轻微缩放 + 降透明度作为反馈（替代实底样式的自动变暗）.
-struct BrandProminentButtonStyle: ButtonStyle {
-    var radius: CGFloat = 14
-
-    func makeBody(configuration: ButtonStyleConfiguration) -> some View {
-        BrandBody(configuration: configuration, radius: radius)
-    }
-
-    /// 样式体单独成 View：只有 View 能读 `@Environment`，用于禁用态置灰.
-    private struct BrandBody: View {
-        let configuration: ButtonStyleConfiguration
-        let radius: CGFloat
-        @Environment(\.isEnabled) private var isEnabled
-
-        var body: some View {
-            configuration.label
-                .font(AppFont.bodyEmphasis)
-                .foregroundStyle(.white)
-                .padding(.vertical, 12)
-                .padding(.horizontal, 16)
-                .frame(maxWidth: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(AppTheme.brandGradient)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
-                )
-                .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1) : 0.4)
-                .scaleEffect(configuration.isPressed ? 0.985 : 1)
                 .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
     }
