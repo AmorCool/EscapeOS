@@ -672,6 +672,18 @@ enum AppStoreService {
     /// 于是目录一旦 429，每次进页面都会再打一发（账号通道恢复 + 回退三方 API 各一次），
     /// 429 永远冷却不下来 —— 这是审计出来的自持放大点。负缓存与 6h 成功缓存**分开记**，
     /// 失败绝不写进成功缓存，窗口一过自然恢复。
+    /// ## v0.3.596：**抖动 / 限流要重试一次**（2026-10-12 实测定案）
+    ///
+    /// 本接口是**第三方**（`apis.bilin.eu.org`），实测两处不稳：
+    /// · **抖动**：连打 11 个不同 trackId，**2 次 15s 无响应超时**
+    ///   （`秒剪 1530922601` / `抖音精选 6444170965`），其余 200；同一 id 稍后再打又正常。
+    /// · **限流**：同一 IP 连续请求，第 14 次回 `429`（Cloudflare `error code: 1015`），停 30s 恢复。
+    ///
+    /// 旧实现**单发失败就落 3 分钟负缓存**（`storeCatalogFailure`）⇒ 一次抖动 = 历史版本页
+    /// 3 分钟内一直「读取版本列表失败」（用户报「无法搜索历史版本」的真因之一）。
+    /// 现在：**先重试一次（400ms 退避）**，仍失败才落负缓存 —— 抖动被吸收，真故障仍快速冷却。
+    ///
+    /// UA 无关：iOS 的 `CFNetwork` UA 实测 200；只有 `Python-urllib` 那类 UA 被 403。
     static func versionHistoryFromCatalog(appId: String) async throws -> [AppStoreVersion] {
         if let data = catalogCache(appId: appId), let versions = parseCatalogHistory(data), !versions.isEmpty {
             return versions
@@ -683,6 +695,28 @@ enum AppStoreService {
         guard let url = URL(string: "https://apis.bilin.eu.org/history/\(appId)") else {
             throw AppStoreError.badURL
         }
+        // v0.3.596：重试一次 —— 只对**同一次调用**重试，不放大（负缓存仍是唯一的长效闸门）。
+        var lastError: Error = AppStoreError.decode
+        for attempt in 0..<2 {
+            do {
+                return try await fetchCatalogOnce(appId: appId, url: url)
+            } catch {
+                lastError = error
+                guard attempt == 0 else { break }
+                LoginLogger.shared.log("三方 API 通道：首次失败（\(error.localizedDescription)），"
+                                       + "400ms 后重试一次", category: .appStore)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
+        // 两次都失败才记负缓存（原来单发失败就记 ⇒ 一次抖动冻 3 分钟）
+        storeCatalogFailure(appId: appId)
+        LoginLogger.shared.log("三方 API 通道：重试后仍失败（\(lastError.localizedDescription)）",
+                               category: .appStore)
+        throw lastError
+    }
+
+    /// 版本目录的**单发**请求：成功即落成功缓存并清负缓存；失败把原因抛给调用方去决定要不要重试。
+    private static func fetchCatalogOnce(appId: String, url: URL) async throws -> [AppStoreVersion] {
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         let data: Data
@@ -692,19 +726,15 @@ enum AppStoreService {
             data = body
             code = (response as? HTTPURLResponse)?.statusCode ?? 0
         } catch {
-            // 网络层失败（超时/断网）同样记负缓存，否则连续进出页面会反复重打
-            storeCatalogFailure(appId: appId)
             LoginLogger.shared.log("三方 API 通道：网络失败（\(error.localizedDescription)）",
                                    category: .appStore)
             throw error
         }
         guard code == 200 else {
-            storeCatalogFailure(appId: appId)
             LoginLogger.shared.log("三方 API 通道 HTTP \(code)", category: .appStore)
             throw AppStoreError.http(code)
         }
         guard let versions = parseCatalogHistory(data), !versions.isEmpty else {
-            storeCatalogFailure(appId: appId)
             throw AppStoreError.decode
         }
         storeCatalogCache(appId: appId, data: data)

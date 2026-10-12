@@ -445,6 +445,77 @@ enum NBStoreClient {
         message.contains("dialing") || message.contains("请求异常")
     }
 
+    /// 内嵌快照直链的存活判定（HEAD 探一次）—— v0.3.596.
+    ///
+    /// 三态**缺一不可**：`.unknown` 存在的意义就是「**判不出绝不判死**」——
+    /// 防「判不出 ⇒ 当失败」这类回归（v0.3.588 就是拿 accessKey 时间戳判不出即弃用，
+    /// 结果把还能用的链接也丢了，用户「获取不到下载任务」）。
+    enum SnapshotLiveness {
+        /// 直链还能下（HEAD 200/206）—— 可以用。
+        case live
+        /// 直链已失效（HEAD 403/404）—— 不能发（发了就是「任务建了、包下不动」）。
+        case dead
+        /// 判不出（超时 / 网络错 / 其它状态码）—— **保留**，不因判不出而丢弃。
+        case unknown
+    }
+
+    /// 用 HEAD 探 Apple CDN 直链是否还能下 —— v0.3.596.
+    ///
+    /// ## 为什么（2026-10-12 实测定案）
+    /// `offSalePackage` 现取失败时回落的那条内嵌快照直链，其 `accessKey` **全部已过期**：
+    /// 实测（`nb_offsale_url_compare.py`）StikDebug / com.bilibili.inter / live.bilibili.com
+    /// 三条 `Range: bytes=0-1048575` **一律 HTTP 403**。而 v0.3.593 无条件 `return embedded`
+    /// ⇒ 界面照样建下载任务、URL 是这条死链 ⇒ 进度条出来、包下不动 ⇒ 用户看到「无法下载」。
+    ///
+    /// ## 探法
+    /// 只发 **HEAD**（不拉 body，代价极小）；判据（`t12_probe_head.py` 实测）：
+    /// - `200` / `206` ⇒ `.live`（活链 HEAD 200，Range GET 206）
+    /// - `403` / `404` ⇒ `.dead`（死链 HEAD 403）
+    /// - 其它（超时 / 网络错 / 405 之类）⇒ `.unknown` —— **判不出绝不判死**（防回归）
+    private static func probeSnapshot(_ urlString: String) async -> SnapshotLiveness {
+        guard let url = URL(string: urlString), !urlString.isEmpty else { return .unknown }
+        var req = URLRequest(url: url)
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 8
+        do {
+            let (_, resp) = try await session.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200 || code == 206 { return .live }
+            if code == 403 || code == 404 { return .dead }
+            return .unknown
+        } catch {
+            return .unknown
+        }
+    }
+
+    /// 把「内嵌快照」当**兜底链接**返回 —— **先 HEAD 探活**，死链不发给用户 —— v0.3.596.
+    ///
+    /// 这是 v0.3.593「现取失败回落内嵌快照」的**收紧版**：保留「有链接优先」的初衷
+    /// （探不出就仍给），但**死链（403/404）不再发**（发了 = 有任务下不动 = 用户眼里的「无法下载」）。
+    /// 死链返回 `nil`，由调用方按「库里没包」如实处理（与 `PackageFailure.notInLibrary`
+    /// 自己的定义「含快照直链已过期」一致 —— v0.3.593 把过期快照当链接发出去，与定义自相矛盾）。
+    ///
+    /// - Returns: 活链或判不出的快照；**死链返回 `nil`**。
+    private static func snapshotFallback(_ embedded: NBPackage?,
+                                         app: OffSaleApp,
+                                         reason: String) async -> NBPackage? {
+        guard let embedded = embedded else { return nil }
+        switch await probeSnapshot(embedded.ipaURL) {
+        case .live:
+            LoginLogger.shared.log("\(logTag) [提示] \(reason)，回落内嵌快照直链"
+                                   + "（HEAD 200，可用）（\(app.name)）.", category: .appStore)
+            return embedded
+        case .unknown:
+            LoginLogger.shared.log("\(logTag) [提示] \(reason)，回落内嵌快照直链"
+                                   + "（HEAD 判不出，保留）（\(app.name)）.", category: .appStore)
+            return embedded
+        case .dead:
+            LoginLogger.shared.log("\(logTag) [失败] \(reason)，内嵌快照直链已失效（HEAD 403/404），"
+                                   + "不再发这条死链（\(app.name)）.", category: .appStore)
+            return nil
+        }
+    }
+
     // MARK: - 请求
 
     private static let session: URLSession = {
@@ -684,14 +755,18 @@ enum NBStoreClient {
     ///
     /// - Parameter primaryVerID: 首选版本号；空串 = 不传 `appVerId`（服务端回最新版）。
     /// - Parameter candidates: 候选版本号（**新→旧**）。空数组 = 单发主版本（与旧行为一致）。
-    /// - Parameter maxAttempts: 尝试上限（主版本 + 回退合计），防无限试。
+    /// - Parameter maxAttempts: 尝试的**版本**上限（主版本 + 回退合计），防无限试。
+    /// - Parameter sameVersionRetries: 同一版本遇**稳定** `code=7` 时的重试次数（v0.3.596 补）。
+    /// - Parameter maxRequests: **总请求**上限（含同版本重试），防「库里全没包」时把用户晾太久。
     /// - Returns: 取到包；`nil` = 所有候选都取不到（库里没包）。
     private static func packageWithFallback(appID: String,
                                             primaryVerID: String,
                                             candidates: [String],
                                             bundleID: String,
                                             country: String,
-                                            maxAttempts: Int = 6) async throws -> NBPackage? {
+                                            maxAttempts: Int = 6,
+                                            sameVersionRetries: Int = 1,
+                                            maxRequests: Int = 10) async throws -> NBPackage? {
         // 主版本在前（空串 = 不传 appVerId，服务端回最新版），其余按新→旧补齐并去重。
         var ordered: [String] = [primaryVerID]
         for c in candidates where !c.isEmpty && !ordered.contains(c) { ordered.append(c) }
@@ -699,46 +774,68 @@ enum NBStoreClient {
 
         var sawStable7 = false
         var lastOtherError: StoreError?
-        for (i, vid) in tries.enumerated() {
+        var requests = 0
+        outer: for (i, vid) in tries.enumerated() {
             var stable7 = false
-            do {
-                let pkg = try await package(appID: appID, appVerId: vid,
-                                            bundleID: bundleID, country: country)
-                if var got = pkg {
-                    if i > 0 {
-                        got.fellBack = true   // 命中在回退步上 → 界面给一次轻提示
-                        LoginLogger.shared.log("\(logTag) [回退] 命中 appVerId=\(vid)"
-                                               + "（第 \(i + 1) 次尝试）.",
-                                               category: .appStore)
+            var retried = 0
+            attempt: while true {
+                if requests >= maxRequests {
+                    // 请求预算用尽 —— 不再试（防「库里全没包」时把用户晾太久）。已得出的结论仍有效。
+                    break outer
+                }
+                requests += 1
+                do {
+                    let pkg = try await package(appID: appID, appVerId: vid,
+                                                bundleID: bundleID, country: country)
+                    if var got = pkg {
+                        if i > 0 {
+                            got.fellBack = true   // 命中在回退步上 → 界面给一次轻提示
+                            LoginLogger.shared.log("\(logTag) [回退] 命中 appVerId=\(vid)"
+                                                   + "（第 \(i + 1) 次尝试）.",
+                                                   category: .appStore)
+                        }
+                        return got
                     }
-                    return got
-                }
-                // code=0 但没有 url —— 当作这一版没包，继续回退。
-            } catch let e as StoreError {
-                guard case .server(let code, let message) = e, code == "7" else {
-                    lastOtherError = e
-                    continue
-                }
-                if isUpstreamBusy(message) {
-                    // 上游临时故障：**不中断整条链**。实测（`nb_fallback_chain_probe.py`）
-                    // 这类 `dialing … timed out` 是**随机落在某一步**的 —— 换一个版本就可能躲开。
-                    // 原来在此直接 `throw`，一次抽风就废掉整条回退链（本该走到后面某步命中，
-                    // 却当场把「请稍后重试」甩给用户）。记下来继续试，全链都没命中再抛（见函数尾）。
-                    lastOtherError = e
-                    if i + 1 < tries.count {
-                        LoginLogger.shared.log("\(logTag) appVerId=\(vid) 上游临时故障"
-                                               + "（\(truncate(message))），仍试下一个"
-                                               + "（\(i + 2)/\(tries.count)）.",
-                                               category: .appStore)
+                    break attempt   // code=0 但没有 url —— 当作这一版没包，换下一个。
+                } catch let e as StoreError {
+                    guard case .server(let code, let message) = e, code == "7" else {
+                        lastOtherError = e
+                        break attempt
                     }
-                    continue
+                    if isUpstreamBusy(message) {
+                        // 上游临时故障：**不中断整条链**。实测（`nb_fallback_chain_probe.py`）
+                        // 这类 `dialing … timed out` 是**随机落在某一步**的 —— 换一个版本就可能躲开。
+                        // 原来在此直接 `throw`，一次抽风就废掉整条回退链（本该走到后面某步命中，
+                        // 却当场把「请稍后重试」甩给用户）。记下来继续试，全链都没命中再抛（见函数尾）。
+                        lastOtherError = e
+                        if i + 1 < tries.count {
+                            LoginLogger.shared.log("\(logTag) appVerId=\(vid) 上游临时故障"
+                                                   + "（\(truncate(message))），仍试下一个"
+                                                   + "（\(i + 2)/\(tries.count)）.",
+                                                   category: .appStore)
+                        }
+                        break attempt
+                    }
+                    // **稳定** `code=7`（`未获取到数据` 之类）—— 实测（2026-10-12，`nb_offsale_query.py`）
+                    // **同一发请求会 `code=7 → code=0`**：首测 `code=7`，随后连打 8/8、15/15 全 `code=0`
+                    // ⇒ 这类 7 是**瞬时抖动**。对齐牛蛙源「空直链重试」（`fetchNiuwaPackage` 对空直链
+                    // 重试同一发最多 2 次），先**重试同一版本**一次，仍 7 才换下一个版本 ——
+                    // 一次抖动不再白烧一个候选名额（原来遇 7 只换版本、绝不重试同一版本）。
+                    if retried < sameVersionRetries {
+                        retried += 1
+                        LoginLogger.shared.log("\(logTag) appVerId=\(vid) 回 code=7，同版本重试"
+                                               + "（\(retried + 1)/\(sameVersionRetries + 1)）.",
+                                               category: .appStore)
+                        continue attempt
+                    }
+                    sawStable7 = true
+                    lastOtherError = e
+                    stable7 = true
+                    break attempt
+                } catch {
+                    lastOtherError = .network(error.localizedDescription)
+                    break attempt
                 }
-                sawStable7 = true
-                lastOtherError = e
-                stable7 = true
-            } catch {
-                lastOtherError = .network(error.localizedDescription)
-                continue
             }
             if stable7, i + 1 < tries.count {
                 LoginLogger.shared.log("\(logTag) appVerId=\(vid) 回 code=7，回退到下一个"
@@ -1158,6 +1255,16 @@ enum NBStoreClient {
     /// `accessKeyExpired` 判不出时间戳时仍返回 `true`（触发**优先现取**），但语义已从
     /// 「这条链接不能用」改成「优先去现取」——现取失败会兜底，不会再丢链接。
     ///
+    /// ## v0.3.596：兜底快照**先探活**、候选版本**用 bilin 补**（2026-10-12，治「无法下载」）
+    ///
+    /// 用户报「最新构建下**无法下载**」—— 上一版的两处修复盖不住真实场景：
+    /// 1. **版本回退空转**：`candidates` 只来自内嵌 `appStoreData`，而 7/10 下架条目没有它
+    ///    ⇒ `candidates=[]` ⇒ 回退链只有 1 步。**现在** `offSaleCandidates` 在内嵌没有时
+    ///    用 bilin 目录的 `external_identifier` 补（带缓存、失败不阻塞）。
+    /// 2. **兜底发的是 403 死链**：现取失败无条件 `return embedded`，而这些快照 accessKey 全部
+    ///    已过期、HEAD/Range 一律 403 ⇒ 任务建了、包下不动。**现在** `snapshotFallback` 先
+    ///    HEAD 探活：死链（403/404）返回 `nil`（如实报「库里没包」），活链/判不出才给。
+    ///
     /// ## v0.3.587：`code=7` 如实处理（不再把内部码甩给用户）
     ///
     /// 回退仍会回 `code=7`，实测（2026-10-10）**不是参数问题** —— 换 `appVerId` / `plusID` /
@@ -1165,8 +1272,7 @@ enum NBStoreClient {
     /// `code=7` 的两种成因见 catch 内注释：一条「NB 库里没 iOS 包」（回 nil），一条「服务端
     /// 上游临时超时」（抛出、提示重试）。**原始码与 msg 只进日志，界面文案由调用方给**。
     static func offSalePackage(from app: OffSaleApp, country: String) async throws -> NBPackage? {
-        // ① 先把内嵌快照备好 —— 它现在是**最后兜底**（v0.3.593 恢复，见头注释）。
-        //    v0.3.588 把它降成「过期即弃」，现取一失败就回 nil ⇒ 用户「获取不到下载任务」。
+        // ① 先把内嵌快照备好 —— 它现在是**最后兜底**（v0.3.593 恢复；v0.3.596 收紧为「探活后才发」）。
         let embedded = embeddedOffSalePackage(from: app)
 
         // ② 内嵌快照 accessKey 未过期 ⇒ 直接用它（新鲜，省一次请求）。
@@ -1175,35 +1281,41 @@ enum NBStoreClient {
         }
         if embedded != nil {
             LoginLogger.shared.log("\(logTag) [提示] 内嵌快照直链的 accessKey 已过期（或无法判定），"
-                                   + "先现取新鲜直链，取不到再回落到它（\(app.name)）.",
+                                   + "先现取新鲜直链，取不到再探活兜底（\(app.name)）.",
                                    category: .appStore)
         }
 
         // ③ 现取：按 appID(+appVerId) 打 getAppHistoryList，拿**新鲜**直链。
         guard let storeID = app.storeID, !storeID.isEmpty else {
-            if let embedded = embedded {
-                LoginLogger.shared.log("\(logTag) [提示] 下架记录拿不到 App Store ID、无法现取，"
-                                       + "改用内嵌快照直链兜底（\(app.name)）.",
+            // v0.3.596：兜底快照**先 HEAD 探活** —— 死链不发给用户（死链 = 任务建了、包下不动）。
+            let fb = await snapshotFallback(embedded, app: app,
+                                            reason: "拿不到 App Store ID、无法现取")
+            if fb == nil {
+                LoginLogger.shared.log("\(logTag) [失败] 下架记录既没有可用的快照直链、也拿不到 App Store ID，"
+                                       + "无法取包（\(app.name)）.",
                                        category: .appStore)
-                return embedded
             }
-            LoginLogger.shared.log("\(logTag) [失败] 下架记录既没有可用的快照直链、也拿不到 App Store ID，"
-                                   + "无法取包（\(app.name)）.",
-                                   category: .appStore)
-            return nil
+            return fb
         }
+
+        // v0.3.596：候选版本 —— 内嵌 `metadata` 有就用它；**没有（多数条目）用 bilin 目录补**。
+        // 原来只认内嵌数组，而 7/10 下架条目没有 `appStoreData` ⇒ `candidates=[]` ⇒ 回退链只有
+        // 1 步 = 等于没回退（见 `offSaleCandidates`）。这是症状 2「无法下载」的结构性主因。
+        let candidates = await offSaleCandidates(for: app, storeID: storeID)
         LoginLogger.shared.log("\(logTag) [提示] 现取新鲜直链 getAppHistoryList"
-                               + "（appID=\(storeID) appVerId=\(app.appExtID ?? "")）.",
+                               + "（appID=\(storeID) appVerId=\(app.appExtID ?? "")"
+                               + " 候选 \(candidates.count) 个）.",
                                category: .appStore)
         let pkg: NBPackage?
         do {
-            // v0.3.592：主版本（最新版）回 `code=7` 时，按 `softwareVersionExternalIdentifiers`
-            // **新→旧**自动回退 —— 最新版可能已被服务端清出，但旧版本仍在库（bilibili 退 3 步即命中）。
-            // 稳定 `code=7` 在 `packageWithFallback` 里被吞掉、全试完回 nil；这里只会收到
-            // 「上游临时故障 / 网络错误」两类**值得重试**的抛出。
+            // v0.3.592：主版本（最新版）回 `code=7` 时按候选**新→旧**自动回退 —— 最新版可能已被
+            // 服务端清出，但旧版本仍在库（bilibili 退 3 步即命中）。v0.3.596 起同一版本遇稳定 7
+            // 还会**重试一次**（瞬时抖动，见 `packageWithFallback`）。稳定 `code=7` 在
+            // `packageWithFallback` 里被吞掉、全试完回 nil；这里只会收到「上游临时故障 / 网络错误」
+            // 两类**值得重试**的抛出。
             pkg = try await packageWithFallback(appID: storeID,
                                                 primaryVerID: app.appExtID ?? "",
-                                                candidates: Array(app.versionIDs.reversed()),
+                                                candidates: candidates,
                                                 bundleID: app.bundleID ?? "",
                                                 country: country)
         } catch let e as StoreError {
@@ -1213,30 +1325,74 @@ enum NBStoreClient {
                 LoginLogger.shared.log("\(logTag) [失败] 现取直链 code=7（\(app.name) appID=\(storeID)）：\(message)",
                                        category: .appStore)
             }
-            // v0.3.593：现取抛错也要回落内嵌快照 —— 先让用户「看到有下载任务」，
-            // 链接新不新鲜留到下载阶段再决定（v0.3.588 这里直接 throw，导致有快照也拿不到链接）。
-            if let embedded = embedded {
-                LoginLogger.shared.log("\(logTag) [提示] 现取失败，回落到内嵌快照直链兜底（\(app.name)）.",
-                                       category: .appStore)
-                return embedded
+            // v0.3.596：现取抛错也回落内嵌快照，但**先探活** —— 死链不发给用户。
+            if let fb = await snapshotFallback(embedded, app: app, reason: "现取失败") {
+                return fb
             }
             throw e
         }
         if let pkg = pkg {
             return pkg
         }
-        // ④ 现取（含版本回退）也没拿到 ⇒ 回落到内嵌快照兜底（**保证「有 url」优先**）。
-        if let embedded = embedded {
-            LoginLogger.shared.log("\(logTag) [提示] 现取（含版本回退）都没拿到直链，"
-                                   + "回落到内嵌快照直链兜底（\(app.name) appID=\(storeID)）.",
-                                   category: .appStore)
-            return embedded
+        // ④ 现取（含版本回退）也没拿到 ⇒ 回落内嵌快照兜底（**先探活**）。
+        if let fb = await snapshotFallback(embedded, app: app,
+                                           reason: "现取（含版本回退）都没拿到直链") {
+            return fb
         }
-        LoginLogger.shared.log("\(logTag) [失败] 现取（含版本回退）都没拿到直链，且无内嵌快照可兜底"
+        LoginLogger.shared.log("\(logTag) [失败] 现取（含版本回退）都没拿到直链，且无可用内嵌快照可兜底"
                                + "（\(app.name) appID=\(storeID)）.",
                                category: .appStore)
         return nil
     }
+
+    /// 取包候选版本（**新→旧**）—— 优先内嵌 `metadata`，缺了用 bilin 目录补 —— v0.3.596.
+    ///
+    /// ## 为什么（2026-10-12 实测定案）
+    /// 版本回退链原来只有内嵌 `appStoreData.metadata.softwareVersionExternalIdentifiers`
+    /// 一个来源，而**多数下架条目没有 `appStoreData`**（实测搜「哔哩哔哩」10 条里 **7 条**
+    /// `versionIDs=[]`）⇒ `candidates=[]` ⇒ 回退链只有 1 步 = **等于没回退**。这些条目
+    /// 「最新版被清出库存」时一步都退不动（`tv.danmaku.biliim` 首测即 `code=7`）。
+    ///
+    /// ## 怎么补
+    /// 内嵌没有时走 `versionList(trackID:)`（= `AppStoreService.versionHistoryFromCatalog`，
+    /// 本项目**已在用**的 bilin 目录，不新增任何外部依赖）取全量版本，用它的
+    /// `external_identifier`（= NB 要的 `appVerId`）当候选。实测 `tv.danmaku.biliim` 用
+    /// bilin 候选第 1 步即 `code=0`（`841714489`，新鲜直链）。
+    ///
+    /// ## 两道保险（bilin 限流实测 4~6 发/窗口：16 连打 6×429 + 2×超时）
+    /// - **缓存**：目录自带 **6h 成功缓存 + 3min 负缓存**（`AppStoreService`），重复取包不打网络；
+    /// - **非阻塞**：这里 `do/catch` 吞掉任何失败，补不到就回 `[]`、**照常单发**，
+    ///   绝不因 bilin 失败把取包整体判死。
+    ///
+    /// - Note: bilin 目录实测**新→旧**排列（`t13_bilin_order.py`：`1517062289` 是
+    ///   2026-09-27 → … → 2020-07-11），与 NB 要的候选方向一致，**不再反转**；
+    ///   内嵌数组是**旧→新**，才需要 `.reversed()`。
+    private static func offSaleCandidates(for app: OffSaleApp, storeID: String) async -> [String] {
+        // 内嵌 `metadata` 有全量版本数组 ⇒ 直接用它（旧→新 ⇒ 反转为新→旧）。
+        if !app.versionIDs.isEmpty {
+            return Array(app.versionIDs.reversed())
+        }
+        // 内嵌没有（多数条目）⇒ 用 bilin 目录的 `external_identifier` 补候选。
+        // 失败**不阻塞**取包 —— 只当没补到，照常单发。
+        do {
+            let list = try await versionList(trackID: storeID)
+            let ids = list.map { $0.externalIdentifier }.filter { !$0.isEmpty }
+            let capped = Array(ids.prefix(offSaleCandidateLimit))
+            if !capped.isEmpty {
+                LoginLogger.shared.log("\(logTag) [提示] 内嵌无版本数组，用 bilin 目录补 \(capped.count) 个候选"
+                                       + "（\(app.name) appID=\(storeID)）.", category: .appStore)
+            }
+            return capped
+        } catch {
+            LoginLogger.shared.log("\(logTag) [提示] bilin 目录补候选失败（\(error.localizedDescription)），"
+                                   + "照常单发（\(app.name)）.", category: .appStore)
+            return []
+        }
+    }
+
+    /// bilin 补候选的**数量上限**：`packageWithFallback` 只用到前 `maxAttempts`（6）个版本，
+    /// 目录对某些 App 能回 473 个（如 `736536022`）—— 截断到 8 个足够覆盖回退链，少建长数组。
+    private static let offSaleCandidateLimit = 8
 
     /// Apple CDN 直链的 `accessKey` 是否**该让位给现取**（过期，或判不出过期时间）。
     ///

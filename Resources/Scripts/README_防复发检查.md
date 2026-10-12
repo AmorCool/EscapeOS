@@ -124,11 +124,20 @@ CI 全量编译才发现。本项目已因此炸过一次 CI（`AppIconView` 被
 | L1 | 手写等宽多列网格（`Array(repeating: GridItem(.flexible(` / `LazyVGrid(columns: [GridItem(.flexible(`） | 固定列数用 `AppCardGrid(items:columns:)`，自适应用 `AppAdaptiveGrid(items:minimum:)` |
 | L2 | 直接读 `isPressed` 手搓按压反馈 | `.appPressable()` / `TintedButtonStyle()` |
 | L3 | 在 `DesignSystem.swift` 之外引用 `AppTheme.brandGradient` | 深色品牌渐变只允许在紧凑图标块 `AppBrandTile` 内（硬规则 1 / 7）；别处要用直接用 `AppBrandTile` |
+| L4 | `AppLayout.swift` 丢掉「阶梯入场有界」不变量（缺 `min(index,` 或 `staggerWindow`） | 保持 `AppMotion.stagger` 对序号封顶 + `AppAppear` 的懒加载入场窗口；见下方说明 |
+
+**L4 背景（用户报「更多-拉起应用 上滑下滑反应一会」的根因）**：`AppAdaptiveGrid` / `AppCardGrid`
+是**懒加载**容器（单元格**滚入视野才创建**），而 `.appAppear(index:)` 的 `index` 是**绝对序号**。
+若入场延迟按 `index × 步长` **无界**累加，应用列表（可达上百项）滚到第 150 项时该格要等
+`150 × 0.045 = 6.75s` 才淡入 ⇒ 整屏格子空白数秒。修法：`AppMotion.stagger` 对序号**封顶**
+（`staggerLimit = 12`）+ `AppAppear` 引入 `staggerWindow`（窗口外项**零延迟、立即可见**）。
+L4 是**组件契约探针**（tripwire）：只检查这两个不变量是否仍在 `AppLayout.swift`，不做语义求值。
 
 **豁免（`ALLOW` 表，脚本内）**：L1 放行 `AppLayout.swift`（组件实现处）与 `WallpaperView.swift` /
 `BatteryHealthView.swift`（组件层**之前**的手写网格，本轮不迁移）；L2 放行 `AppLayout.swift` 与
 `DesignSystem.swift`（两个按压样式实现处）；L3 放行 `DesignSystem.swift`（`brandGradient` 定义处）。
-三条规则在当前干净代码上 EXIT 0；正控实验（临时文件）实测 L1×2 / L2×1 / L3×1 全部命中。
+四条规则在当前干净代码上 EXIT 0；正控实验实测 L1×2 / L2×1 / L3×1 / L4×2（分别删 `min(index,` 与
+`staggerWindow`）全部命中。
 
 ---
 

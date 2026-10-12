@@ -5,7 +5,11 @@ import UIKit
 /// 列出全部已安装应用（含系统应用），点击即以普通方式启动（不启用 JIT）.
 ///
 /// 布局（本轮）：**布局 E（自适应网格）** —— 应用是「尺寸一致的图标条目流」，用 `AppAdaptiveGrid`
-/// 按最小宽度自动决定列数（横竖屏 / 不同机型都铺满），比一列横条更像「启动台」；每格带阶梯入场动画.
+/// 按最小宽度自动决定列数（横竖屏 / 不同机型都铺满），比一列横条更像「启动台」.
+///
+/// 滚动性能：应用列表可达上百项，`AppAdaptiveGrid` 的单元格是**滚入视野才创建**；阶梯入场
+/// 只作用于首屏窗口（见 `AppAppear.staggerWindow`），窗口外立即可见 —— 否则「绝对序号 × 步长」
+/// 的延迟会让滚到后面的格子空白数秒，表现就是「上滑下滑反应一会」.
 struct LaunchAppsView: View {
     @State private var apps: [JITAppInfo] = []
     @State private var isLoading = false
@@ -76,7 +80,13 @@ struct LaunchAppsView: View {
         .background(Color(.systemBackground))
         .navigationTitle("拉起应用")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索应用或 Bundle ID")
+        // 搜索框必须用 `.automatic`，不能用 `.always`.
+        // 本页容器是 `ScrollView`（全仓唯一一个「滚动容器 + 搜索框」的页面，其余同款搜索框页面
+        // 都是 `List`）：`.always` 会把搜索框做成**常驻浮层压在滚动内容上**，网格第一行被盖住，
+        // 顶部滚动时也没有任何收起反馈，表现就是「滑动跟没反应过来一样」（用户 2026-10-12 报）。
+        // `.automatic` 让搜索框随滚动收起，滚动内容按安全区内缩，第一行完整可见。
+        // 与 `FileSharingAppsView.swift` v0.3.289 同一根因、同一修法.
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索应用或 Bundle ID")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {

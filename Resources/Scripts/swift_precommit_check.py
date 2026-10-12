@@ -11,6 +11,7 @@
   7) swift_i4_advanced_guard.py         —— 「开启高级功能」入口防复发（不得退回写死免责声明）
   8) swift_layout_motion_guard.py       —— 布局与动效防复发（手写等宽网格 / 手搓按压 / 品牌渐变越界）
  10) swift_delisted_download_guard.py   —— 已购/下架下载链路（三 media kind / storefront 轮询 / 搜索回落 / 目录查不到不中止）
+ 11) swift_searchbar_guard.py          —— 搜索框显示模式（滚动容器页禁 `.always` 常驻浮层搜索框）
 
 为什么合并成「一个入口」而不是「一个脚本」：
   两项检查的**输入、口径、退出码**都独立，各自的报告/豁免表也各管一摊；把逻辑塞进
@@ -40,6 +41,7 @@ CHECKS = [
     ("爱思高级功能入口", "swift_i4_advanced_guard.py", False),
     ("布局与动效防复发", "swift_layout_motion_guard.py", False),
     ("已购/下架下载链路", "swift_delisted_download_guard.py", False),
+    ("搜索框显示模式防复发", "swift_searchbar_guard.py", False),
 ]
 
 

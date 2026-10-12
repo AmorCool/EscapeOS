@@ -51,9 +51,17 @@ enum AppMotion {
     /// 布局变化：网格 / 展开收起.
     static var smooth: Animation { .spring(response: 0.52, dampingFraction: 0.92) }
 
-    /// 阶梯延迟：第 `index` 项的入场延迟（默认每项 45ms，逐项递增）.
+    /// 阶梯延迟的**项数上限**：超过它的项不再继续累加延迟.
+    ///
+    /// ⚠️ 为什么必须有上限（用户报「更多-拉起应用 上滑下滑都要反应一会」的根因之一）：
+    /// 入场延迟按**绝对序号**累加，而懒加载容器是**滚入视野才创建单元格**。长列表（应用列表
+    /// 可达上百项）滚到第 150 项时，延迟已是 `150 × 0.045 = 6.75s` —— 格子空白数秒才淡入。
+    /// 封顶后最大延迟恒为 `staggerLimit × step`（默认 12 × 45ms ≈ 0.54s），与列表长度无关.
+    static let staggerLimit = 12
+
+    /// 阶梯延迟：第 `index` 项的入场延迟（默认每项 45ms，逐项递增，但**封顶** `staggerLimit` 项）.
     static func stagger(_ index: Int, step: Double = 0.045) -> Double {
-        Double(max(0, index)) * step
+        Double(max(0, min(index, staggerLimit))) * step
     }
 
     /// 第 `index` 项的入场动画（`snappy` + 阶梯延迟）.
@@ -65,11 +73,26 @@ enum AppMotion {
 /// 入场修饰符：从下方 14pt 淡入 + 上移到位，按 `index` 阶梯延迟.
 ///
 /// 用法：列表 / 网格里 `content(item).appAppear(index: index)`，形成「依次浮现」的节奏.
-/// 懒加载容器中滚入视野时才触发，正好让长列表滚动时也有入场感.
+///
+/// ⚠️ 阶梯入场**只作用于首屏窗口内**的前 `staggerWindow` 项；窗口外的项**立即可见**.
+/// 原因：本修饰符会用在 `AppAdaptiveGrid` / `AppCardGrid` 这类**懒加载**容器的单元格上 ——
+/// 单元格是**滚入视野才创建**，而 `index` 是**绝对序号**。若对每个单元格都按 `index × 步长`
+/// 延迟入场，长列表（应用列表可达上百项）滚到第 150 项时该格要等 ~6.75s 才淡入，表现就是
+/// 「上滑下滑反应一会」（用户 2026-10-12 报「更多-拉起应用」）。故窗口外零延迟.
 struct AppAppear: ViewModifier {
     var index: Int = 0
     var offset: CGFloat = 14
-    @State private var shown = false
+    /// 参与阶梯入场的项数窗口（首屏量级）；`index >= staggerWindow` 的项不做「隐藏 → 延迟淡入」.
+    var staggerWindow: Int = 12
+    @State private var shown: Bool
+
+    init(index: Int = 0, offset: CGFloat = 14, staggerWindow: Int = 12) {
+        self.index = index
+        self.offset = offset
+        self.staggerWindow = staggerWindow
+        // 窗口外的项从创建起即「已显示」：不经历 透明度 0 → 延迟淡入，滚动时零等待.
+        _shown = State(initialValue: index >= staggerWindow)
+    }
 
     func body(content: Content) -> some View {
         content

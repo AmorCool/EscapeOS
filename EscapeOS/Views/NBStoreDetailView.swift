@@ -640,10 +640,16 @@ struct NBStoreDetailView: View {
     /// 原来这里 `catch` 直接 `ToastCenter.shared.show("取包失败：\(error.localizedDescription)")`，
     /// 而 NB 的 `StoreError.server` 会把它格式化成 `msg（7）` ⇒ 用户看到
     /// 「取包失败：未获取到数据（7）」这种内部码（用户 2026-10-11 截图原话）。
-    /// 现改为走 `NBStoreClient.packageFailure(from:)` 分类：
-    /// - 库里没包（稳定 `code=7`）→ `PackageFailure.notInLibrary.userMessage`（单行提示语）.
-    /// - 上游临时故障（偶发 `code=7`）→「NB 服务端暂时取不到这个包，请稍后重试.」
-    /// 原始 error 只进 `[NB源]` 日志。
+    /// 现改为走 `NBStoreClient.packageFailure(from:)` 分类，原始 error 只进 `[NB源]` 日志。
+    ///
+    /// ## v0.3.596：两处失败分支各归其位（本轮校正）
+    ///
+    /// v0.3.592 起 `packageWithFallback` 把**稳定** `code=7` 吞成 `nil`（不再抛）⇒ 语义落点是：
+    /// - **`nil`（`guard let pkg else`）= 库里没包**（稳定 `code=7`）。这里给用户文案；
+    ///   若这一版**不是最新版**，追加一句「可试试最新版」的替代路（`isLatestVersion`）。
+    /// - **`catch` = 上游临时故障**（`code=7` 且 msg 含 `dialing`/`请求异常`）或网络错误
+    ///   → `PackageFailure.upstreamBusy.userMessage`（「请稍后重试.」）。
+    /// （v0.3.590 的注释把「库里没包」记在 `catch` —— 那是 v0.3.592 之前的行为，已按上面校正。）
     @MainActor
     private func installVersion(_ v: NBStoreClient.NBVersion) async {
         fetchingID = v.externalIdentifier
@@ -654,7 +660,16 @@ struct NBStoreDetailView: View {
                                                                bundleID: detail?.bundleID ?? "",
                                                                country: country)
             guard let pkg else {
-                ToastCenter.shared.show("该版本没有可用的安装包")
+                // v0.3.596：`nil` = 稳定 `code=7`（**这一版库里没包**；v0.3.592 起
+                // `packageWithFallback` 把稳定 7 吞成 nil、不再抛，故这里才是「没包」那一支）。
+                // 详情页不擅自换版本（`packageByVersion` 的 `fallbackCandidates` 仍为空），
+                // 但若这一版**不是最新版**，给一句「可试最新版」的替代路 ——
+                // 别让用户对着一个取不到的旧版本干等。
+                if isLatestVersion(v) {
+                    ToastCenter.shared.show("该版本在 NB 下架库里没有可用的安装包.")
+                } else {
+                    ToastCenter.shared.show("该版本在 NB 下架库里没有可用的安装包，可试试最新版.")
+                }
                 return
             }
             await startNBDownload(trackID: trackID,
@@ -664,10 +679,20 @@ struct NBStoreDetailView: View {
                                   iconURL: iconURL)
         } catch {
             // 界面只给用户看得懂的话；内部码 / 服务端原话进日志（`[NB源]` 前缀）排查用。
+            // 走到这里 = 上游临时故障（`code=7` 且 msg 含 `dialing`/`请求异常`）或网络错误。
             LoginLogger.shared.log("\(NBStoreClient.logTag) [失败] 详情取包：\(error.localizedDescription)",
                                    category: .appStore)
             ToastCenter.shared.show(NBStoreClient.packageFailure(from: error)?.userMessage
                                     ?? "取包失败，请稍后重试.")
         }
+    }
+
+    /// 这一版是不是历史版本列表里的**最新版** —— v0.3.596.
+    ///
+    /// bilin 目录实测**新→旧**排列（`t13_bilin_order.py`），故 `versions.first` 即最新版。
+    /// 供「点旧版本取不到包时提示可试最新版」判断用（最新版本身取不到就不给这句，免得自相矛盾）。
+    private func isLatestVersion(_ v: NBStoreClient.NBVersion) -> Bool {
+        guard let first = versions.first else { return false }
+        return first.externalIdentifier == v.externalIdentifier
     }
 }

@@ -5,7 +5,7 @@
 背景：本轮为「布局不好看」补了一层布局 / 动效组件（`EscapeOS/Views/AppLayout.swift`）——
 `AppCardGrid` / `AppAdaptiveGrid` / `AppHScrollSection` / `AppHeroHeader` / `AppSectionHeader` /
 `AppGridTile` 与动效 `AppMotion` + `.appAppear` / `.appPressable` / `.appSymbolBounce`。
-组件有了，就有人可能**绕过组件重造**，把「设计语言」重新打散成各页各写一套。本脚本把三条
+组件有了，就有人可能**绕过组件重造**，把「设计语言」重新打散成各页各写一套。本脚本把四条
 不变量机械守住：
 
   L1  **手写等宽多列网格**（禁）：视图层出现 `Array(repeating: GridItem(.flexible(` 或
@@ -20,6 +20,12 @@
       `DesignSystem.swift`（仅供紧凑图标块 `AppBrandTile` 使用）。铺到别处（尤其全宽 banner /
       全宽按钮）即违反硬规则 1 / 7（用户已明确反馈「方块 banner」「开始修复按钮太丑」）；
       要在别处用深色品牌色，请直接用 `AppBrandTile`。
+  L4  **阶梯入场延迟无界 / 懒加载入场无窗口**（禁）：`AppLayout.swift` 的入场动效必须保持两个
+      不变量 —— ① `AppMotion.stagger` 对序号**封顶**（含 `min(index,`）；② `AppAppear` 有
+      `staggerWindow`（窗口外项零延迟、立即可见）。原因：网格是**懒加载**（滚入视野才创建单元格），
+      入场延迟若按**绝对序号**无界累加，长列表（应用列表可达上百项）滚到后面格子会空白数秒 ——
+      这是用户 2026-10-12 报「更多-拉起应用 上滑下滑反应一会」的根因。删掉任一不变量该 bug 即复发。
+      （L4 是「组件契约」探针：它只检查这两个不变量是否仍在，属 tripwire，不做语义求值。）
 
 判据只认**符号/结构**，不绑行号、不绑文案。扫描前先用状态机把注释屏蔽为空白（字符串保留），
 故注释 / 文档里提 `AppCardGrid` 或 `isPressed` 不会误报。
@@ -48,6 +54,15 @@ ALLOW = {
 L1_FINGERPRINTS = (
     "Array(repeating: GridItem(.flexible(",
     "LazyVGrid(columns: [GridItem(.flexible(",
+)
+
+# L4：布局动效组件（AppLayout.swift）必须保持的「阶梯入场有界」不变量.
+# 任一指纹缺失即视为该不变量被删 ⇒ 长列表（懒加载网格）滚动时格子会空白数秒
+# （用户 2026-10-12 报「更多-拉起应用 上滑下滑反应一会」的根因）。
+L4_FILE = "EscapeOS/Views/AppLayout.swift"
+L4_REQUIRED = (
+    ("min(index,", "AppMotion.stagger 对序号封顶（clamp index）"),
+    ("staggerWindow", "AppAppear 的懒加载入场窗口（窗口外项零延迟）"),
 )
 
 
@@ -195,6 +210,7 @@ def _allowed(rel, rule):
 
 def check(root):
     errs = []
+    l4_seen = False
 
     for path in _iter_swift_files(os.path.join(root, "EscapeOS")):
         raw = io.open(path, encoding="utf-8").read()
@@ -226,6 +242,19 @@ def check(root):
                             "要在别处用深色品牌色请直接用 `AppBrandTile`"
                             % (rel, _line_of(masked, k)))
 
+        # L4：布局动效组件的「阶梯入场有界」不变量（组件契约探针）
+        if rel == L4_FILE:
+            l4_seen = True
+            for needle, desc in L4_REQUIRED:
+                if needle not in masked:
+                    errs.append("[L4] %s 缺少不变量「%s」—— 指纹 `%s` 未出现. "
+                                "删掉它会让长列表滚动时格子空白数秒"
+                                "（用户报「更多-拉起应用 上滑下滑反应一会」）"
+                                % (rel, desc, needle))
+
+    if not l4_seen:
+        errs.append("[L4] 找不到布局动效组件 %s —— L4 无法校验（文件被改名 / 删除？）" % L4_FILE)
+
     return errs
 
 
@@ -242,11 +271,13 @@ def main():
     if errs:
         for e in errs:
             print("ERROR %s" % e)
-        print("命中：%d（L1 手写等宽网格 / L2 手搓按压反馈 / L3 brandGradient 越界）" % len(errs))
+        print("命中：%d（L1 手写等宽网格 / L2 手搓按压反馈 / L3 brandGradient 越界 / "
+              "L4 阶梯入场有界）" % len(errs))
         return 1
     print("L1 无手写等宽多列网格（改用 AppCardGrid / AppAdaptiveGrid）：OK")
     print("L2 无手搓按压反馈（改用 .appPressable() / TintedButtonStyle）：OK")
     print("L3 无 brandGradient 越界（仅供 AppBrandTile）：OK")
+    print("L4 阶梯入场有界（stagger 封顶 + AppAppear 窗口）：OK")
     print("命中：0")
     return 0
 

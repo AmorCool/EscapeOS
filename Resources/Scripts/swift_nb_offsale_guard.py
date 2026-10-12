@@ -30,8 +30,23 @@ v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review �
       命中，却当场把「请稍后重试」甩给用户）。必须记下并 `continue`，全链都没命中再抛。
   G8  `offSalePackage` 现取之后必须**回落到内嵌快照**（v0.3.593 补）—— 内嵌快照要一直持有
       （`embeddedOffSalePackage(...)`），且 `packageWithFallback(...)` **之后**必须出现
-      `return embedded`。防 v0.3.588 那处回归重演：内嵌快照过期/判不出即弃用、现取失败又
-      不回落 ⇒ 有快照的 App 也拿不到任何链接，用户「获取不到下载任务」。
+      `return embedded` **或** `snapshotFallback(...)`（v0.3.596 起兜底收紧为「探活后经
+      `snapshotFallback` 返回」，两者任一即算保留兜底）。防 v0.3.588 那处回归重演：
+      内嵌快照过期/判不出即弃用、现取失败又不回落 ⇒ 有快照的 App 也拿不到任何链接，
+      用户「获取不到下载任务」。
+  G9  `offSalePackage` 必须用 `offSaleCandidates(...)` 补候选版本（v0.3.596 补）——
+      版本回退链原来只认内嵌 `appStoreData` 的数组，而**实测 7/10 下架条目没有它**
+      ⇒ `candidates=[]` ⇒ 回退链只有 1 步 = 等于没回退（症状 2 结构性主因）。且
+      `offSaleCandidates` 必须**复用 bilin 目录**（`versionList(trackID:...)`）、**失败不阻塞**
+      （`catch` → `return []`）—— bilin 限流实测 4~6 发/窗口，补不到也得照常单发。
+  G10 `offSalePackage` 的兜底快照必须**先探活**（v0.3.596 补）—— 必须出现 `probeSnapshot(...)`；
+      且 `probeSnapshot` **三态齐全**（`.live` / `.dead` / `.unknown`）。防 v0.3.593 式回归：
+      无条件 `return embedded` 把过期 403 死链发出去 ⇒ 任务建了、包下不动；也防「探活退化成
+      两态」把「判不出」误当「死链」（v0.3.588 式回归：还能用的链接被丢）。
+  G11 `packageWithFallback` 遇**稳定** `code=7` 必须**重试同一版本一次**（v0.3.596 补）——
+      必须出现 `sameVersionRetries`；且必须有**总请求上限** `maxRequests`（加同版本重试后
+      不能把请求放大到失控）。实测同一发请求会 `code=7 → code=0`（瞬时抖动），对齐牛蛙源
+      「空直链重试」（`fetchNiuwaPackage`）。
 
 判据全部**只认结构/符号**（函数体里出现哪个调用 / 哪个字面量），不绑死行号、不绑死文案，
 以免将来改文案就误报。函数体用逐字符状态机按大括号配对提取（跳过字符串/注释）。
@@ -234,10 +249,28 @@ def check(root):
                             " —— 快照兜底被删，现取失败就回 nil，用户「获取不到下载任务」")
             else:
                 idx_fb = body.find("packageWithFallback(")
-                if idx_fb >= 0 and "return embedded" not in body[idx_fb:]:
+                after = body[idx_fb:] if idx_fb >= 0 else ""
+                # v0.3.596：兜底从「无条件 return embedded」收紧为「探活后经 snapshotFallback 返回」，
+                # 故两者任一出现即算保留兜底。
+                if idx_fb >= 0 and ("return embedded" not in after
+                                    and "snapshotFallback(" not in after):
                     errs.append("[G8] offSalePackage 现取之后没有回落到内嵌快照"
-                                "（packageWithFallback(...) 之后缺 return embedded）"
+                                "（packageWithFallback(...) 之后缺 return embedded / snapshotFallback(...)）"
                                 " —— 现取一失败又回 nil（v0.3.588 回归：有快照也拿不到链接）")
+
+            # ── G9：候选版本必须能补（v0.3.596 补）──
+            # 版本回退链原来只认内嵌 `appStoreData` 的数组，而实测 7/10 下架条目没有它
+            # ⇒ candidates=[] ⇒ 回退链只有 1 步。现在必须经 `offSaleCandidates(...)` 补。
+            if "offSaleCandidates(" not in body:
+                errs.append("[G9] offSalePackage 不再用 offSaleCandidates(...) 补候选版本"
+                            " —— 内嵌无版本数组的条目（实测 7/10）回退链只剩 1 步 = 等于没回退")
+
+            # ── G10：兜底快照必须探活（v0.3.596 补）──
+            # v0.3.593 无条件 `return embedded` 把过期 403 死链发出去 ⇒ 任务建了、包下不动。
+            # 现在兜底统一走 `snapshotFallback(...)`（内部再 `probeSnapshot(...)`）。
+            if "snapshotFallback(" not in body:
+                errs.append("[G10] offSalePackage 的兜底不再探活（缺 snapshotFallback(...)）"
+                            " —— 过期快照直链（实测 HEAD/Range 一律 403）会当可用链接发给用户")
 
         # ── G6：getAppHistoryList 取包必须带「版本回退」（v0.3.592）──
         fb = _extract_function_body(src, "func packageWithFallback(")
@@ -268,6 +301,48 @@ def check(root):
                 errs.append("[G7] packageWithFallback 在「上游临时故障」分支里 throw"
                             " —— 中途中断整条回退链；一次抽风就废掉本该成功的回退"
                             "（应记下并 continue，见 nb_fallback_chain_probe.py 实测）")
+
+            # ── G11：同一版本遇稳定 code=7 必须重试一次 + 总请求上限（v0.3.596 补）──
+            # 实测同一发请求会 code=7 → code=0（瞬时抖动）；原来遇 7 只换版本、绝不重试同一版本。
+            if "sameVersionRetries" not in fb:
+                errs.append("[G11] packageWithFallback 不再重试同一版本（缺 sameVersionRetries）"
+                            " —— 瞬时 code=7 会白烧一个候选名额（对齐牛蛙源「空直链重试」）")
+            if "maxRequests" not in fb:
+                errs.append("[G11] packageWithFallback 没有总请求上限（缺 maxRequests）"
+                            " —— 加同版本重试后可能把请求放大到失控")
+
+        # ── G9 续：offSaleCandidates 必须复用 bilin 目录且失败不阻塞（v0.3.596 补）──
+        cand = _extract_function_body(src, "func offSaleCandidates(")
+        if cand is None:
+            errs.append("[G9] NBStoreClient.swift 里找不到 offSaleCandidates"
+                        " —— bilin 补候选被删，内嵌无版本数组的条目回退链只剩 1 步")
+        else:
+            if "versionList(trackID:" not in cand:
+                errs.append("[G9] offSaleCandidates 不再走 bilin 目录（缺 versionList(trackID:...)）"
+                            " —— 补候选失去唯一来源（本项目已在用这条目录，不该新增依赖）")
+            if "catch" not in cand or "return []" not in cand:
+                errs.append("[G9] offSaleCandidates 失败会阻塞取包（缺 catch → return []）"
+                            " —— bilin 限流（实测 6×429/16 发）时会把取包整体判死")
+
+        # ── G10 续：probeSnapshot 三态必须齐全 + snapshotFallback 真的探活（防「判不出 ⇒ 当失败」回归）──
+        probe = _extract_function_body(src, "func probeSnapshot(")
+        if probe is None:
+            errs.append("[G10] NBStoreClient.swift 里找不到 probeSnapshot"
+                        " —— 快照探活被删，过期死链又会当可用链接发出去")
+        else:
+            for case_name in (".live", ".dead", ".unknown"):
+                if case_name not in probe:
+                    errs.append("[G10] probeSnapshot 缺 %s 分支 —— 探活退化成两态，"
+                                "会把「判不出」误当「死链」（v0.3.588 式回归：还能用的链接被丢）"
+                                % case_name)
+        snap = _extract_function_body(src, "func snapshotFallback(")
+        if snap is None:
+            errs.append("[G10] NBStoreClient.swift 里找不到 snapshotFallback"
+                        " —— 探活兜底被删，过期死链又会当可用链接发出去")
+        elif "probeSnapshot(" not in snap:
+            errs.append("[G10] snapshotFallback 不再探活（缺 probeSnapshot(...)）"
+                        " —— 兜底又会把过期 403 死链当可用链接发出去")
+
         if body is not None and "packageWithFallback(" not in body:
             errs.append("[G6] offSalePackage 没走 packageWithFallback"
                         " —— 最新版 code=7 时不会回退旧版本，一次失败就报「库里没包」")
@@ -318,7 +393,8 @@ def main():
         for e in errs:
             print("ERROR %s" % e)
         print("命中：%d（G1 回退 / G2 code=7 / G3 界面内部码 / G4 快照过期 / G5 详情页内部码"
-              " / G6 版本回退 / G7 上游故障不中断 / G8 快照兜底）" % len(errs))
+              " / G6 版本回退 / G7 上游故障不中断 / G8 快照兜底 / G9 bilin 补候选 / G10 快照探活"
+              " / G11 同版本重试）" % len(errs))
         return 1
     print("G1 回退 getAppHistoryList：OK")
     print("G2 code=7 处理：OK")
@@ -328,6 +404,9 @@ def main():
     print("G6 版本回退（code=7 换旧版本）：OK")
     print("G7 上游临时故障不中断回退链：OK")
     print("G8 现取失败回落内嵌快照：OK")
+    print("G9 bilin 补候选（内嵌无版本数组时）：OK")
+    print("G10 兜底快照 HEAD 探活（三态齐全）：OK")
+    print("G11 稳定 code=7 同版本重试一次（带总上限）：OK")
     print("命中：0")
     return 0
 

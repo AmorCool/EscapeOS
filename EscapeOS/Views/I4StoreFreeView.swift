@@ -83,6 +83,17 @@ struct I4StoreFreeView: View {
     /// （见 `nbOffSaleRow`）。
     @State private var nbOffSaleResults: [NBStoreClient.OffSaleApp] = []
 
+    /// v0.3.596：正在「取包」的那条下架行（存 `OffSaleApp.id`）。
+    ///
+    /// ## 为什么必须有（用户报「点了获取没有反应」）
+    /// `installOffSale` 要先 `await NBStoreClient.offSalePackage(...)` 把包取回来，
+    /// **之后**才 `startNBDownload` 建下载任务。而右侧控件（`trailingControl`）只在
+    /// `center.activeJob(...)` 非空时才显示进度 —— 取包这段**没有任何视觉反馈**。
+    /// 实测这一段耗时：单发 `getAppHistoryList` ≈ 1.7s；带版本回退最多 6 次 ≈ 14s
+    /// （服务端卡住时每次最长 15s 超时 ⇒ 最坏近 90s）⇒ 用户看到的就是「点了没反应」。
+    /// 现在取包期间这一行右侧显示「获取中…」菊花，取完（成功/失败）即清。
+    @State private var offSaleFetchingID: Int?
+
     /// v0.3.545：NB 源的**上架 / 下架**筛选（对应 NB 助手的 `DXSTOffSaleController`）。
     ///
     /// ## 怎么判定「下架」
@@ -553,12 +564,24 @@ struct I4StoreFreeView: View {
             }
             .buttonStyle(.plain)
 
-            // v0.3.549：`bundleId` 传 **nil**，与 `startNBDownload`（它以 `bundleId: nil` 建任务）
-            // 保持同一口径 —— `activeJob(bundleId:name:)` 在「行有 bundleId、任务没有」时
-            // 会直接判不等，进度控件就永远挂不上这一行（用户看到的是「点了获取，行里没反应」）。
-            // 传 nil 则退化成按**名字**匹配，与任务侧对得上。
-            trailingControl(name: app.displayName, bundleId: nil) {
-                Task { await installOffSale(app) }
+            // v0.3.596：取包期间先显示「获取中…」——`installOffSale` 要先 `await` 取包
+            // （实测 1.7s ~ 14s，见 `offSaleFetchingID` 注释），这段原先**没有任何反馈**，
+            // 用户看到的就是「点了获取没反应」。取到包后任务一建，`trailingControl`
+            // 自己会切成下载进度控件，故这里只覆盖「取包中」这一小段。
+            if offSaleFetchingID == app.id {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("获取中…").font(.caption2).foregroundStyle(.secondary)
+                }
+                .fixedSize()
+            } else {
+                // v0.3.549：`bundleId` 传 **nil**，与 `startNBDownload`（它以 `bundleId: nil` 建任务）
+                // 保持同一口径 —— `activeJob(bundleId:name:)` 在「行有 bundleId、任务没有」时
+                // 会直接判不等，进度控件就永远挂不上这一行（用户看到的是「点了获取，行里没反应」）。
+                // 传 nil 则退化成按**名字**匹配，与任务侧对得上。
+                trailingControl(name: app.displayName, bundleId: nil) {
+                    Task { await installOffSale(app) }
+                }
             }
         }
         .padding(.vertical, 3)
@@ -583,8 +606,13 @@ struct I4StoreFreeView: View {
     ///
     /// v0.3.592：取包走 `offSalePackage` 的**版本回退** —— 最新版 `code=7` 时自动换旧版本；
     /// 回退命中时给一行轻提示（`已回退到 vX.Y.Z.`），静默回退、不刷屏。
+    ///
+    /// v0.3.596：取包期间给这一行挂「获取中…」菊花（`offSaleFetchingID`）—— 取包发生在
+    /// `startNBDownload` **之前**，原先这段没有任何视觉反馈，用户报「点了获取没有反应」。
     @MainActor
     private func installOffSale(_ app: NBStoreClient.OffSaleApp) async {
+        offSaleFetchingID = app.id
+        defer { offSaleFetchingID = nil }
         do {
             guard let pkg = try await NBStoreClient.offSalePackage(from: app, country: regionRaw) else {
                 // 文案与详情页共用同一份（`PackageFailure.userMessage`）—— 一处改、两处一致，
