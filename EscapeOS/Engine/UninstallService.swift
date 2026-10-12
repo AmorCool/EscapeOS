@@ -57,6 +57,10 @@ final class UninstallService: @unchecked Sendable {
         guard tunnel.hasPairingFile else {
             throw UninstallServiceError.notConfigured
         }
+        // Cellular隧道支持（默认关）：与 `AppDiscovery.fetchInstalledApps` 同一接线，
+        // 蜂窝模式下先关蜂窝再建隧道，卸载结束（含失败）后恢复。开关关时是 no-op。
+        CellularTunnelManager.shared.prepareForTunnel()
+        defer { CellularTunnelManager.shared.restoreAfterTunnel() }
         // `uninstallAppWithBundleId:error:` is imported as a throwing method
         // `uninstallApp(withBundleId:)` that returns Void (the BOOL result is
         // folded into the throw — a non-throwing return means success). Same

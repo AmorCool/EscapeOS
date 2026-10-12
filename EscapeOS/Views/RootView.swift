@@ -174,7 +174,7 @@ struct ErrorStateView: View {
                     iconTint: .orange,
                     title: "出现问题",
                     message: message + (message.contains("tunnel") || message.contains("LocalDevVPN") || message.contains("Heartbeat")
-                        ? "\n\n提示：将 LocalDevVPN 重置为默认的 10.7.0.1 地址，保持 Wi-Fi 连接，并让 iPASide 放置配对文件（或在此导入）.iOS 26.5 上不需要自定义局域网 IP."
+                        ? "\n\n提示：将 LocalDevVPN 重置为默认的 10.7.0.1 地址，并让 iPASide 放置配对文件（或在此导入）.蜂窝网络下需在「更多 - 设置」开启「Cellular隧道支持」.iOS 26.5 上不需要自定义局域网 IP."
                         : ""),
                     actionTitle: "重试",
                     action: onRetry
@@ -224,6 +224,9 @@ struct SettingsForm: View {
     /// v0.2.112：左上角登录日志入口（排查Apple 登录 / Anisette 失败用）.
     @State private var showLoginLog = false
     @AppStorage(KeepAliveManager.enabledKey) private var keepAliveEnabled = false
+    /// 「Cellular隧道支持」（移植自 SideStore 的 cellular refresh）：默认关 ⇒ 零行为变化.
+    /// 键与引擎层同源（`CellularTunnelManager.enabledKey`），对齐 `TunnelManager.kindKey` 的用法.
+    @AppStorage(CellularTunnelManager.enabledKey) private var cellularTunnelSupport = false
     // v0.3.434：日志上限（可配置）+ 一键清空
     @StateObject private var logLimit = LogLimitSettings.shared
     @State private var fileLimitText = ""
@@ -310,6 +313,14 @@ struct SettingsForm: View {
             // 隧道方式三选一（LocalDevVPN / Shadowrocket / 内置隧道）。
             // 放在「本地隧道」设备 IP 之前：先选隧道方式，再填对端 IP。
             TunnelPickerView()
+
+            // Cellular隧道支持（移植自 SideStore 的 cellular refresh）：蜂窝网络（无 Wi-Fi）
+            // 下用自建的 TurnOffData / TurnOnData 快捷指令临时切换网络状态，让回环隧道可连。
+            // 默认关 ⇒ 开关不开时引擎层全部方法都是 no-op，不改变 Wi-Fi 下既有行为。
+            Section(header: Text("Cellular隧道支持"),
+                    footer: Text("蜂窝网络（无 Wi-Fi）下也能建立隧道连接.需先在「快捷指令」App 自建 TurnOffData / TurnOnData 两个快捷指令.iOS 26.4 及以上不支持.")) {
+                Toggle("Cellular隧道支持", isOn: $cellularTunnelSupport)
+            }
 
             Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致.保持默认的 10.7.0.1，除非你修改过 LocalDevVPN.")) {
                 TextField("设备 IP（默认 10.7.0.1）", text: $tunnelIP)
