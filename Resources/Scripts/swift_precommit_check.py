@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """提交前自检 —— 把本仓现有的「防复发」脚本一次跑完。
 
-现有八项检查（都在本目录）：
+现有十项检查（都在本目录）：
   1) swift_top_level_type_collision.py  —— 顶层类型重名普查（因 CI 炸过才写）
   2) swift_view_state_derivation.py     —— 视图层「下载状态文案」推导检查（本轮新增）
   3) swift_nb_offsale_guard.py          —— NB 下架取包链路（回退 / code=7 / 界面内部码）
@@ -10,6 +10,8 @@
   6) swift_theme_blue_guard.py          —— 主题「两套蓝」防复发（trAccent 复现 / accent 非自适应）
   7) swift_i4_advanced_guard.py         —— 「开启高级功能」入口防复发（不得退回写死免责声明）
   8) swift_layout_motion_guard.py       —— 布局与动效防复发（手写等宽网格 / 手搓按压 / 品牌渐变越界）
+  9) swift_bluetooth_pairing_guard.py   —— 蓝牙定位「免配对」防复发（注入路径不得再拿配对文件做门控）
+ 10) swift_delisted_download_guard.py   —— 已购/下架下载链路（三 media kind / storefront 轮询 / 搜索回落 / 目录查不到不中止）
 
 为什么合并成「一个入口」而不是「一个脚本」：
   两项检查的**输入、口径、退出码**都独立，各自的报告/豁免表也各管一摊；把逻辑塞进
@@ -38,6 +40,8 @@ CHECKS = [
     ("主题两套蓝防复发", "swift_theme_blue_guard.py", False),
     ("爱思高级功能入口", "swift_i4_advanced_guard.py", False),
     ("布局与动效防复发", "swift_layout_motion_guard.py", False),
+    ("蓝牙定位免配对", "swift_bluetooth_pairing_guard.py", False),
+    ("已购/下架下载链路", "swift_delisted_download_guard.py", False),
 ]
 
 

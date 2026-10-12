@@ -3,7 +3,7 @@
 //  EscapeOS
 //
 //  「已购列表」—— 某个已登录 Apple ID 在 App Store 里的购买记录（DMAP）。
-//  支持按 名称 / Bundle ID / App ID 搜索；数据只读。
+//  支持按 名称 / Bundle ID / App ID 搜索；每条可直接下载（含已下架应用 —— 只要买过）。
 //
 
 import SwiftUI
@@ -20,6 +20,7 @@ struct PurchaseHistoryView: View {
     @State private var keyword = ""
     @State private var loading = false
     @State private var errorText: String?
+    @ObservedObject private var center = IPADownloadCenter.shared
 
     private var filtered: [OwnedApp] {
         keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -84,6 +85,7 @@ struct PurchaseHistoryView: View {
             .refreshable { await load() }
         }
         .task { if apps.isEmpty { await load() } }
+        .toastHost()
     }
 
     private var summaryText: String {
@@ -114,6 +116,7 @@ struct PurchaseHistoryView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+            downloadButton(app)
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
@@ -131,6 +134,36 @@ struct PurchaseHistoryView: View {
                 Label("复制 App ID", systemImage: "number")
             }
         }
+    }
+
+    /// 已购条目 → AppleID 通道下载。已购（含已下架）都能下：许可在账号里，Apple 仍发直链。
+    private func downloadButton(_ app: OwnedApp) -> some View {
+        let bid = app.bundleId.isEmpty ? nil : app.bundleId
+        let busy = center.activeJob(bundleId: bid, name: app.name) != nil
+        return Button {
+            download(app)
+        } label: {
+            if busy {
+                ProgressView().controlSize(.mini).frame(width: 32)
+            } else {
+                Text("下载")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                    .foregroundStyle(AppTheme.accent)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+    }
+
+    private func download(_ app: OwnedApp) {
+        let item = AppStoreItem(id: app.idText,
+                                name: app.name.isEmpty ? app.bundleId : app.name,
+                                bundleId: app.bundleId.isEmpty ? nil : app.bundleId,
+                                version: app.version.isEmpty ? nil : app.version)
+        IPADownloadCenter.shared.startWithAppleID(item: item, email: email)
+        ToastCenter.shared.show("已开始下载")
     }
 
     /// 副标题：`App ID · Bundle ID`（有购买日期再补一段）

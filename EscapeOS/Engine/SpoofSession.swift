@@ -177,28 +177,23 @@ final class SpoofSession: ObservableObject {
         return false
     }
 
+    /// v0.3.594：去掉 `hasPairing` 事前拦截。不再要求「先导入配对文件」才放行，
+    /// 注入能否成功由 `LocationEngine.set` 如实上报（失败写 `lastError` / `.dropped`），
+    /// 用户不会卡在配对这一步.
     func teleport(to coordinate: CLLocationCoordinate2D) {
-        guard hasPairing else {
-            lastError = "未检测到配对文件.请先在「设置 → 配对文件」导入（或使用 iPASide 安装时附带）."
-            return
-        }
         pin = coordinate
         apply(coordinate, markRecent: true)
     }
 
     /// 蓝牙链路下发的坐标入口（v0.3.540）.
     ///
-    /// 与 `teleport` 的差别只有**错误文案**：链路场景下用户是在 B 机上等着看结果，
-    /// 一句「请先在设置里导入配对文件」比 `teleport` 的通用提示更直接
-    /// （用户实测就是「收得到但应用不了，也不知道为什么」）.
+    /// v0.3.594：同样去掉 `hasPairing` 事前拦截 —— 蓝牙下行不因缺配对文件被丢弃，
+    /// 真正的失败由 `LocationEngine.set` 上报.
     ///
-    /// 行为完全一致 —— 都写 `pin` 并 `apply`，所以 A 机侧的「图钉变化即下发」
+    /// 与 `teleport` 的差别仅 `markRecent`（下行不写「最近」列表），
+    /// 两者都写 `pin` 并 `apply`，所以 A 机侧的「图钉变化即下发」
     /// 与 B 机侧的回环抑制都仍然成立.
     func applyRemoteCoordinate(_ coordinate: CLLocationCoordinate2D) {
-        guard hasPairing else {
-            lastError = "信号端需要配对文件才能应用坐标.请在「设置 → 配对文件」导入后重试."
-            return
-        }
         pin = coordinate
         apply(coordinate, markRecent: false)
     }
@@ -276,10 +271,6 @@ final class SpoofSession: ObservableObject {
     }
 
     func startJoystick() {
-        guard hasPairing else {
-            lastError = "未检测到配对文件.请先在「设置 → 配对文件」导入."
-            return
-        }
         routeTask?.cancel()
         routeTask = nil
         routeActive = false
@@ -335,7 +326,7 @@ final class SpoofSession: ObservableObject {
     }
 
     func followRoute(_ coordinates: [CLLocationCoordinate2D]) {
-        guard hasPairing, coordinates.count >= 2 else { return }
+        guard coordinates.count >= 2 else { return }
         activeRoute = coordinates
         routeProgress = 0
         routeLap = 0

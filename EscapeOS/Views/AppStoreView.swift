@@ -13,6 +13,9 @@ struct AppStoreView: View {
     @State private var errorText: String?
     @State private var keyword = ""
     @State private var searchResults: [AppStoreItem] = []
+    /// 搜不到时回落到**已购列表**的匹配项 —— 下架应用在公开 search/lookup 里天然缺席，
+    /// 但只要买过（许可在账号里）就仍能下载。
+    @State private var ownedMatches: [AppStoreItem] = []
     @State private var searching = false
     @State private var showDisclaimer = false
     @State private var showI4 = false
@@ -145,6 +148,7 @@ struct AppStoreView: View {
         .onChange(of: shopRegion) { _, code in
             AppStoreService.countryCode = code
             searchResults = []
+            ownedMatches = []
             Task { await loadCharts() }
         }
         .onChange(of: genre) { _, _ in Task { await loadCharts() } }
@@ -345,14 +349,23 @@ struct AppStoreView: View {
             Section {
                 HStack { Spacer(); ProgressView("搜索中…"); Spacer() }.padding(.vertical, 40)
             }
-        } else if searchResults.isEmpty {
+        } else if searchResults.isEmpty && ownedMatches.isEmpty {
             Section {
                 ContentUnavailableView.search(text: keyword)
             }
         } else {
-            Section("\(regionTitle) 搜索结果 · \(searchResults.count) 款") {
-                ForEach(searchResults) { app in
-                    storeRow(app, rank: nil)
+            if !searchResults.isEmpty {
+                Section("\(regionTitle) 搜索结果 · \(searchResults.count) 款") {
+                    ForEach(searchResults) { app in
+                        storeRow(app, rank: nil)
+                    }
+                }
+            }
+            if !ownedMatches.isEmpty {
+                Section("已购 · \(ownedMatches.count) 款") {
+                    ForEach(ownedMatches) { app in
+                        ownedRow(app)
+                    }
                 }
             }
         }
@@ -478,6 +491,44 @@ struct AppStoreView: View {
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
     }
 
+    /// 已购（含已下架）匹配行：标「已购」，点「下载」走 AppleID 通道。
+    private func ownedRow(_ app: AppStoreItem) -> some View {
+        let busy = center.activeJob(bundleId: app.bundleId, name: app.name) != nil
+        return HStack(spacing: 12) {
+            iconView(app, size: 54)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(app.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                    Text("已购")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                        .foregroundStyle(AppTheme.accent)
+                }
+                if let bid = app.bundleId, !bid.isEmpty {
+                    Text(bid).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 6)
+            Button {
+                chooseAppleIDAndInstall(app)
+            } label: {
+                if busy {
+                    ProgressView().controlSize(.mini).frame(width: 36)
+                } else {
+                    Text("下载")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(AppTheme.accent.opacity(0.14), in: Capsule())
+                        .foregroundStyle(AppTheme.accent)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+        }
+        .padding(.vertical, 2)
+    }
+
     // MARK: 加载
 
     private func loadCharts() async {
@@ -495,7 +546,7 @@ struct AppStoreView: View {
 
     private func runSearch() {
         let term = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty else { searchResults = []; return }
+        guard !term.isEmpty else { searchResults = []; ownedMatches = []; return }
         searching = true
         Task {
             do {
@@ -504,7 +555,23 @@ struct AppStoreView: View {
                 searchResults = []
                 errorText = error.localizedDescription
             }
+            // 回落：公开 search 查不到（含已下架）时，用当前下载账号的已购列表按关键词再找一次。
+            ownedMatches = searchResults.isEmpty ? await fallbackOwnedMatches(for: term) : []
             searching = false
+        }
+    }
+
+    /// 已购回落查询：未登录 / 查询失败一律返回空，不打断搜索本身。
+    private func fallbackOwnedMatches(for term: String) async -> [AppStoreItem] {
+        guard let email = AppStoreDownloadStore.shared.selectedAccount?.email, !email.isEmpty else {
+            return []
+        }
+        guard let owned = try? await PurchaseHistoryService.ownedApps(email: email) else { return [] }
+        return owned.filter { $0.matches(term) }.map { app in
+            AppStoreItem(id: app.idText,
+                         name: app.name.isEmpty ? app.bundleId : app.name,
+                         bundleId: app.bundleId.isEmpty ? nil : app.bundleId,
+                         version: app.version.isEmpty ? nil : app.version)
         }
     }
 

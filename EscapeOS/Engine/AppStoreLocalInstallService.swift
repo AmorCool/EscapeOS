@@ -119,6 +119,7 @@ enum AppStoreLocalInstallService {
         //                 不再把 6 个候选交给下层循环重打）→ 仍为空 → 刷新会话一次
         //                → 仍为空 → 获取许可一次 → 再下载
         //        → 9610 → 获取许可一次 → 再下载
+        //        → 目录查不到版本（多为**已下架**）→ 改用历史版本候选再打一次（对齐 ipatool 不中止）
         //        → **传输层失败（502/带 body 的 5xx/网络错误）→ 直接上抛，不补救**
         // Apple 的两种「没有下载权」表达方式（`failureType 9610` 与 HTTP 200 + 空 songList）
         // 都必须触发同一段补救逻辑。而 5xx 是**基础设施状态**，与许可无关，不参与补救。
@@ -169,22 +170,18 @@ enum AppStoreLocalInstallService {
                 // 不需要刷新会话也不需要购买）。候选为空会自动落到下面「刷新会话」那条分支。
                 triedVersionCandidates = true
                 onLog?("[AppleID] Apple 未返回可下载内容 → 换该账号可下的历史版本重试")
-                let candidates = await candidateVersionIDs(
-                    software: software, dsid: account.directoryServicesIdentifier, onLog: onLog)
-                // v0.3.539：候选改为**在调用方选一个**，作为下一轮的主体版本下发。
-                //
-                // 原来是把 6 个候选塞进 `versionCandidates` 让 ApplePackage 内部逐个重打 ——
-                // 「一层循环套在另一层循环」，真机日志显示 6 个候选全被拒后还要退回
-                // redownload 撞 10 秒网关超时，一次点击放大成 14 次请求。
-                // 现在 `candidateVersionIDs` 回来的列表已经把「缓存命中」排在第 1 位，
-                // 所以取 `.first` 就是「最可能可下的那一个」。
-                selectedVersionID = candidates.ids.first
-                if let picked = selectedVersionID {
-                    onLog?("[AppleID] 历史版本候选 \(candidates.ids.count) 个，本轮先用 \(picked)")
-                } else {
-                    onLog?("[AppleID] 没有可用的历史版本候选")
-                }
-                newestCatalogVersion = candidates.newestVersion
+                let picked = await pickVersionCandidate(software: software, account: account, onLog: onLog)
+                selectedVersionID = picked.id
+                newestCatalogVersion = picked.newest
+            } catch ApplePackageError.catalogUnavailable where !triedVersionCandidates {
+                // 对齐 ipatool `cmd/download.go:79`「**Delisted apps may still be downloadable
+                // by their numeric ID**」—— 目录里查不到（多半是**已下架**）**不中止**：
+                // 只要 appID 有效就继续，改用候选版本（目录空时自动落到爱思缓存的历史版本）再打一次。
+                triedVersionCandidates = true
+                onLog?("[AppleID] 目录查不到该应用（多为已下架）→ 改用历史版本候选重试")
+                let picked = await pickVersionCandidate(software: software, account: account, onLog: onLog)
+                selectedVersionID = picked.id
+                newestCatalogVersion = picked.newest
             } catch ApplePackageError.passwordTokenExpired where !refreshed {
                 refreshed = true
                 try await refreshAccount(email: email, account: &account, onLog: onLog)
@@ -209,6 +206,25 @@ enum AppStoreLocalInstallService {
                 }
             }
         }
+    }
+
+    /// 取候选并**在调用方选一个**作为下一轮的主体版本下发（v0.3.539 语义）。
+    ///
+    /// 原来是把 6 个候选塞进 `versionCandidates` 让 ApplePackage 内部逐个重打 ——
+    /// 「一层循环套在另一层循环」，真机日志显示 6 个候选全被拒后还要退回 redownload
+    /// 撞 10 秒网关超时，一次点击放大成 14 次请求。现在 `candidateVersionIDs` 回来的
+    /// 列表已把「缓存命中」排在第 1 位，取 `.first` 就是「最可能可下的那一个」。
+    /// 空包与「目录查不到（已下架）」两条补救支路共用它，避免同段逻辑写两份。
+    private static func pickVersionCandidate(software: Software, account: AppStoreAccount,
+                                             onLog: ((String) -> Void)?) async -> (id: String?, newest: String?) {
+        let candidates = await candidateVersionIDs(
+            software: software, dsid: account.directoryServicesIdentifier, onLog: onLog)
+        if let picked = candidates.ids.first {
+            onLog?("[AppleID] 历史版本候选 \(candidates.ids.count) 个，本轮先用 \(picked)")
+        } else {
+            onLog?("[AppleID] 没有可用的历史版本候选")
+        }
+        return (candidates.ids.first, candidates.newestVersion)
     }
 
     /// v0.3.361 / v0.3.362 / v0.3.366：取该应用的 `externalVersionId` 候选（**有序、有界**）。

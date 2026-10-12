@@ -38,7 +38,13 @@ enum PurchaseHistoryError: Error, LocalizedError {
 enum PurchaseHistoryService {
     private static let base = "https://pd.itunes.apple.com/WebObjects/MZPurchaseDaap.woa/purchase"
     private static let userAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
-    static let query = "('com.apple.itunes.extended\\-media\\-kind:131072')"
+    // 三种 media kind 并列 AND：移动应用 131072、Arcade 262144、Mac 应用 67108864。
+    // 只带 131072 时 Mac 端已购与部分 Arcade 条目会整条缺席（对齐 ipatool appstore_owned_apps.go:184）。
+    static let query = "('com.apple.itunes.extended\\-media\\-kind:131072',"
+        + "'com.apple.itunes.extended\\-media\\-kind:262144',"
+        + "'com.apple.itunes.extended\\-media\\-kind:67108864')"
+    // Configurator (34) 列移动应用；Mac App Store (13) 另列 Mac 软件与 Apple silicon 上可跑的移动应用。
+    static let storefronts = ["34", "13"]
 
     static func ownedApps(email: String) async throws -> [OwnedApp] {
         try await StoreAccountSession.withAccount(email: email) { account in
@@ -72,7 +78,45 @@ enum PurchaseHistoryService {
         }
     }
 
+    /// 逐 store 轮询已购库再按 `id` 合并去重（对齐 ipatool `fetchOwnedApps`）。
+    /// 单一 storefront 失败不中止（Mac 端 store 失败不该丢掉移动端已购）；
+    /// 但 `tokenExpired` 直接上抛，交给外层换票重试；两个 store 全败则上抛最后一次错误，
+    /// 避免把「整轮失败」伪装成「空已购列表」。
     private static func list(account: inout AppStoreAccount) async throws -> [OwnedApp] {
+        // storefront 形如 `<region>-1,<store>`，取逗号前一段作前缀（对齐 Go 的 strings.Cut）。
+        let prefix = account.requestStoreFront.split(separator: ",", maxSplits: 1).first.map(String.init) ?? ""
+        guard !prefix.isEmpty else { throw PurchaseHistoryError.badResponse("无有效的账号 storefront") }
+        let original = account.fullStoreFront
+        defer { account.fullStoreFront = original }
+        var merged: [Int64: OwnedApp] = [:]
+        var succeeded = false
+        var lastError: Error?
+        for store in storefronts {
+            account.fullStoreFront = "\(prefix),\(store)"
+            do {
+                let apps = try await listForStorefront(account: &account)
+                succeeded = true
+                for app in apps {
+                    guard let existing = merged[app.id] else { merged[app.id] = app; continue }
+                    var kept = existing
+                    if let date = app.purchaseDate, date > (existing.purchaseDate ?? .distantPast) {
+                        kept.purchaseDate = date
+                    }
+                    merged[app.id] = kept
+                }
+            } catch PurchaseHistoryError.tokenExpired {
+                throw PurchaseHistoryError.tokenExpired
+            } catch {
+                lastError = error
+                LoginLogger.shared.log("[已购] storefront \(store) 未取到（\(error.localizedDescription)），继续",
+                                       category: .appStore)
+            }
+        }
+        if !succeeded, let lastError { throw lastError }
+        return merged.values.sorted { ($0.purchaseDate ?? .distantPast) > ($1.purchaseDate ?? .distantPast) }
+    }
+
+    private static func listForStorefront(account: inout AppStoreAccount) async throws -> [OwnedApp] {
         let session = PurchaseHistorySession(account: account)
         defer { account = session.account; session.close() }
         try await session.prepare()

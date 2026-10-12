@@ -34,9 +34,6 @@ struct BluetoothPanelView: View {
                 statusSection
                 if !coordinator.isActive {
                     roleSection
-                    if role == .receiver && !session.hasPairing {
-                        pairingNoticeSection
-                    }
                 }
                 if coordinator.isActive && role == .receiver {
                     nearbySection
@@ -100,7 +97,6 @@ struct BluetoothPanelView: View {
                     Label("启用蓝牙模拟", systemImage: "play.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .disabled(role == .receiver && !session.hasPairing)
             }
 
             if let error = coordinator.lastError {
@@ -112,7 +108,7 @@ struct BluetoothPanelView: View {
         } footer: {
             Text(coordinator.isActive
                  ? "停止后链路立即断开，两台设备的坐标同步随之中止."
-                 : "两台设备各装本 App：A 机选「模拟终端」，B 机选「信号端」.")
+                 : "两台设备各装本 App：A 机选「模拟终端」，B 机选「信号端」.应用坐标仍需开发隧道与配对文件.")
         }
     }
 
@@ -129,15 +125,6 @@ struct BluetoothPanelView: View {
             .onChange(of: role) { _, newValue in
                 UserDefaults.standard.set(newValue.rawValue, forKey: Self.roleKey)
             }
-        }
-    }
-
-    private var pairingNoticeSection: some View {
-        Section {
-            Text("信号端需要配对文件才能应用坐标，请先在「设置」里导入.")
-                .font(.caption)
-                .foregroundStyle(LocusTheme.statusWarn)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
