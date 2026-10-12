@@ -42,7 +42,7 @@ enum AppDiscoveryError: LocalizedError {
         case .noPairingFile:
             return "尚未导入配对文件.需要配对文件才能列出设备上的应用."
         case .heartbeatFailed(let m):
-            return "无法连接本地隧道：\(m).请将 LocalDevVPN 的设备 IP / 隧道 IP 保持默认（10.7.0.1），并使用 iPASide 生成的配对文件.蜂窝网络下需在「更多 - 设置」开启「Cellular隧道支持」."
+            return "无法连接本地隧道：\(m).请将 LocalDevVPN 的设备 IP / 隧道 IP 保持默认（10.7.0.1），并使用 iPASide 生成的配对文件."
         case .enumerationFailed(let m):
             return "枚举应用失败：\(m)"
         }
@@ -65,14 +65,18 @@ final class AppDiscovery {
             throw AppDiscoveryError.noPairingFile
         }
 
-        // Cellular隧道支持（默认关，移植自 SideStore 的 cellular refresh）：开关开 + 当前无
-        // Wi-Fi 时，先关蜂窝把网络逼成「只有回环 VPN」，建完隧道再开回蜂窝。开关关时是 no-op。
+        // Cellular隧道支持（默认关）：开关开 + 当前无 Wi-Fi（蜂窝）时，建隧道前有界等隧道就绪，
+        // **不碰蜂窝开关**. 开关关 / 有 Wi-Fi 时是 no-op（`prepareForTunnel` 直接返回 false）。
         CellularTunnelManager.shared.prepareForTunnel()
-        defer { CellularTunnelManager.shared.restoreAfterTunnel() }
 
         do {
             try tunnel.ensureHeartbeat()
         } catch {
+            // 如实报错：蜂窝模式下隧道不可达时点明原因，不谎称「开个开关就能好」。
+            if CellularTunnelManager.shared.isCellularMode {
+                throw AppDiscoveryError.heartbeatFailed(
+                    "蜂窝网络下本地隧道不可达.请确认 LocalDevVPN 已连接.底层错误：\(error.localizedDescription)")
+            }
             throw AppDiscoveryError.heartbeatFailed(error.localizedDescription)
         }
 

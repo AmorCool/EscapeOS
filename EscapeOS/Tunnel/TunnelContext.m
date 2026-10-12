@@ -207,7 +207,7 @@
 
     if (dispatch_semaphore_wait(firstBeat, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(4 * NSEC_PER_SEC))) != 0) {
         globalHeartbeatToken++;
-        if (error) *error = [self _error:@"Timed out on the LocalDevVPN lockdown tunnel (4s). Enable LocalDevVPN and use a pairing file from iPASide or iLoader. On cellular, enable Cellular Tunnel Support in Settings." code:-9];
+        if (error) *error = [self _error:@"Timed out on the LocalDevVPN lockdown tunnel (4s). Enable LocalDevVPN and use a pairing file from iPASide or iLoader." code:-9];
         return NO;
     }
     if (hbCode != 0 || provider == NULL) {
@@ -242,7 +242,7 @@
     NSString *rpText = rpErr.localizedDescription ?: @"Remote Pairing did not connect";
     NSString *classicText = classicErr.localizedDescription ?: @"lockdown loopback did not connect";
     if (error) {
-        *error = [self _error:[NSString stringWithFormat:@"%@ (iOS 26.4+ path). %@ (iOS 18 path). Enable LocalDevVPN on 10.7.0.1. On cellular, enable Cellular Tunnel Support in Settings. The PC is not needed after the pairing file is placed.", rpText, classicText] code:-1];
+        *error = [self _error:[NSString stringWithFormat:@"%@ (iOS 26.4+ path). %@ (iOS 18 path). Enable LocalDevVPN on 10.7.0.1. The PC is not needed after the pairing file is placed.", rpText, classicText] code:-1];
     }
     return NO;
 }
@@ -282,7 +282,7 @@
     intptr_t timedOut = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(4 * NSEC_PER_SEC)));
     if (timedOut && !done) {
         done = YES;
-        blockErr = [self _error:@"Timed out connecting to the local tunnel (4s). Enable LocalDevVPN with its default Device/Tunnel IPs (10.7.0.1) and use a pairing file from iPASide. On cellular, enable Cellular Tunnel Support in Settings." code:-9];
+        blockErr = [self _error:@"Timed out connecting to the local tunnel (4s). Enable LocalDevVPN with its default Device/Tunnel IPs (10.7.0.1) and use a pairing file from iPASide." code:-9];
         self->_lastTunnelError = blockErr;
     }
 

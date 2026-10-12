@@ -58,9 +58,8 @@ final class UninstallService: @unchecked Sendable {
             throw UninstallServiceError.notConfigured
         }
         // Cellular隧道支持（默认关）：与 `AppDiscovery.fetchInstalledApps` 同一接线，
-        // 蜂窝模式下先关蜂窝再建隧道，卸载结束（含失败）后恢复。开关关时是 no-op。
+        // 蜂窝（开关开 + 无 Wi-Fi）下建隧道前有界等隧道就绪，**不碰蜂窝开关**. 开关关时是 no-op。
         CellularTunnelManager.shared.prepareForTunnel()
-        defer { CellularTunnelManager.shared.restoreAfterTunnel() }
         // `uninstallAppWithBundleId:error:` is imported as a throwing method
         // `uninstallApp(withBundleId:)` that returns Void (the BOOL result is
         // folded into the throw — a non-throwing return means success). Same
@@ -68,6 +67,11 @@ final class UninstallService: @unchecked Sendable {
         do {
             try tunnel.uninstallApp(withBundleId: bundleId)
         } catch {
+            // 蜂窝模式下隧道不可达时如实点明（其余情况原样上报 installd 的错误）。
+            if CellularTunnelManager.shared.isCellularMode {
+                throw UninstallServiceError.tunnelFailed(
+                    "蜂窝网络下本地隧道不可达.请确认 LocalDevVPN 已连接.底层错误：\(error.localizedDescription)")
+            }
             throw UninstallServiceError.callFailed(error.localizedDescription)
         }
     }
