@@ -10,7 +10,6 @@
   6) swift_theme_blue_guard.py          —— 主题「两套蓝」防复发（trAccent 复现 / accent 非自适应）
   7) swift_i4_advanced_guard.py         —— 「开启高级功能」入口防复发（不得退回写死免责声明）
   8) swift_layout_motion_guard.py       —— 布局与动效防复发（手写等宽网格 / 手搓按压 / 品牌渐变越界）
-  9) swift_bluetooth_pairing_guard.py   —— 蓝牙定位「免配对」防复发（注入路径不得再拿配对文件做门控）
  10) swift_delisted_download_guard.py   —— 已购/下架下载链路（三 media kind / storefront 轮询 / 搜索回落 / 目录查不到不中止）
 
 为什么合并成「一个入口」而不是「一个脚本」：
@@ -40,7 +39,6 @@ CHECKS = [
     ("主题两套蓝防复发", "swift_theme_blue_guard.py", False),
     ("爱思高级功能入口", "swift_i4_advanced_guard.py", False),
     ("布局与动效防复发", "swift_layout_motion_guard.py", False),
-    ("蓝牙定位免配对", "swift_bluetooth_pairing_guard.py", False),
     ("已购/下架下载链路", "swift_delisted_download_guard.py", False),
 ]
 
