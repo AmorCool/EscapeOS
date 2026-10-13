@@ -46,22 +46,22 @@ struct LaunchAppsView: View {
                     if !hasPairing {
                         PairingGuideCard(showsBackground: false, note: "拉起应用还需要 LocalDevVPN 已连接.")
                     } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("未获取到应用列表.")
-                                .foregroundStyle(.secondary)
-                            Text("点击右上角刷新重试；仍为空请确认 LocalDevVPN 已连接、配对文件有效.")
-                                .font(AppFont.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                        // 空态 banner：与「空间回收」同款（`InfoActionCard` 白底圆角卡）.
+                        InfoActionCard(
+                            icon: "arrow.clockwise",
+                            title: "未获取到应用列表",
+                            message: "点击右上角刷新重试；仍为空请确认 LocalDevVPN 已连接、配对文件有效."
+                        )
+                        .appCard()
                     }
                 } else if !searchText.isEmpty && filteredApps.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("没有匹配的应用.")
-                            .foregroundStyle(.secondary)
-                        Text("换个名称或 Bundle ID 试试.")
-                            .font(AppFont.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+                    // 搜索无结果 banner：与「空间回收」的「立即扫描」同款视觉（白底圆角卡 + 左侧图标）.
+                    InfoActionCard(
+                        icon: "magnifyingglass",
+                        title: "没有匹配的应用",
+                        message: "换个名称或 Bundle ID 试试."
+                    )
+                    .appCard()
                 } else {
                     AppSectionHeader("全部应用",
                                      subtitle: "共 \(filteredApps.count) 个",
@@ -228,15 +228,19 @@ private struct LaunchFeedback: Identifiable {
 
 // MARK: - 常驻搜索框遮挡高度探针
 
-/// 实测「常驻搜索框底边 − 本页滚动视口顶边」，把这段高度交给 `.safeAreaInset(edge: .top)` 占位.
+/// 实测「常驻搜索框压在滚动内容上的高度」，把这段高度交给 `.safeAreaInset(edge: .top)` 占位.
 ///
 /// 为什么需要：`.searchable(placement: .navigationBarDrawer(displayMode: .always))` 的常驻搜索框
 /// 在 `List` 里由系统计入内容安全区；本页容器是 `ScrollView`，系统不做这一步，搜索框会浮在
 /// 滚动内容上、网格第一行被压住。这里自己从 UIKit 视图树量出真实遮挡高度。
 ///
-/// 高度**不写死**：量的是 `UISearchBar` / `UISearchTextField` 自身的高度（随机型、横竖屏、
-/// 动态字号变化），量不到搜索框时退回量同页导航栏底边。两者都量不到（例如页面被包在没有
-/// 导航栏的容器里）则回 0 —— 此时也不存在常驻搜索框，0 正是正确值。
+/// ⚠️ 遮挡量 = **搜索框底边 − 导航栏底边**（= 搜索框自身占的那一条），**不是**「搜索框底边 −
+/// 滚动视口顶边」：`ScrollView` 的 frame 全出血顶到屏幕顶，而系统已把「状态栏 + 导航栏」这段
+/// 高度算进了内容安全区，内容实际从**导航栏底边**开始。旧算法没扣掉这段 ⇒ 顶部多出一大片空白
+/// （2026-10-13 用户报「拉起应用 空旷的地方」）.
+///
+/// 高度**不写死**：量的是 `UISearchBar` / `UISearchTextField` 相对同页导航栏的高度（随机型、
+/// 横竖屏、动态字号变化）。量不到搜索框则回 0 —— 此时也不存在常驻搜索框，0 正是正确值。
 ///
 /// 布局期不直接改 SwiftUI 状态（会触发「在视图更新中改状态」），一律下一轮主线程回填；
 /// 且只在数值真正变化时回填，避免「回填 → 重排 → 再回填」的自激循环.
@@ -281,41 +285,71 @@ private struct SearchBarInsetProbe: UIViewRepresentable {
             var node: UIView? = superview
             while let current = node, !(current is UIScrollView) { node = current.superview }
             guard let scrollView = node as? UIScrollView else { return }
-            let viewportTop = scrollView.convert(scrollView.bounds, to: window).minY
 
             // ② 同一页的导航栏 / 搜索框：沿滚动视口上溯，找到第一层含导航 chrome 的祖先即停
             //    （避免上溯到 window 根、误取其它页面的搜索框）.
-            var bottom = viewportTop
+            var searchFrame: CGRect?
+            var navBottom: CGFloat?
             var ancestor = scrollView.superview
             while let current = ancestor {
-                if let chrome = Self.navigationChrome(in: current, skipping: scrollView) {
-                    bottom = max(bottom, chrome.convert(chrome.bounds, to: window).maxY)
+                let chrome = Self.navigationChrome(in: current, skipping: scrollView)
+                if chrome.search != nil || chrome.navBar != nil {
+                    if let search = chrome.search {
+                        searchFrame = search.convert(search.bounds, to: window)
+                    }
+                    if let navBar = chrome.navBar {
+                        navBottom = navBar.convert(navBar.bounds, to: window).maxY
+                    }
                     break
                 }
                 ancestor = current.superview
             }
 
-            let value = max(0, bottom - viewportTop)
+            // ③ 真实遮挡量 = 搜索框底边 − **导航栏底边**（不是滚动视口顶边）.
+            //
+            //    关键：`ScrollView` 的 frame 全出血顶到屏幕顶，系统已把「状态栏 + 导航栏」这段
+            //    高度算进了内容安全区 —— 内容实际从**导航栏底边**开始。故需要额外让出的只是
+            //    「搜索框自身高度」这一条。旧实现量「搜索框底边 − 滚动视口顶边」，把系统已经让过
+            //    的「状态栏 + 导航栏」又加了一遍 ⇒ 顶部多出一大片空白（2026-10-13 用户报）.
+            let value: CGFloat
+            if let searchFrame {
+                if let navBottom {
+                    value = max(0, searchFrame.maxY - navBottom)
+                } else {
+                    // 无导航栏兜底：搜索框自身高度即它压在内容上的高度.
+                    value = max(0, searchFrame.height)
+                }
+            } else {
+                // 没有常驻搜索框 ⇒ 无需让位.
+                value = 0
+            }
             Task { @MainActor [weak self] in
                 self?.onMeasure?(value)
             }
         }
 
-        /// 在 `root` 子树里找搜索框（优先）或导航栏；`skip` 及其子树跳过，避免误取本页滚动内容.
-        private static func navigationChrome(in root: UIView, skipping skip: UIView) -> UIView? {
+        /// 在 `root` 子树里找**搜索框**与**导航栏**；`skip` 及其子树跳过，避免误取本页滚动内容.
+        ///
+        /// 两者都要：搜索框底边给出它压到哪，导航栏底边给出系统已经让过的内容顶边 —— 二者相减
+        /// 才是需要额外让出的高度（见 `measure()` ③）。`UISearchBar` 优先于 `UISearchTextField`
+        /// （前者含内边距，高度更接近真实占位）。
+        private static func navigationChrome(in root: UIView, skipping skip: UIView) -> (search: UIView?, navBar: UIView?) {
+            var searchBar: UIView?
             var searchField: UIView?
             var navBar: UIView?
             var stack: [UIView] = [root]
             while let current = stack.popLast() {
                 if current === skip { continue }
-                if current is UISearchBar || current is UISearchTextField {
-                    searchField = current
-                    break
+                if current is UISearchBar {
+                    if searchBar == nil { searchBar = current }
+                } else if current is UISearchTextField {
+                    if searchField == nil { searchField = current }
+                } else if current is UINavigationBar, navBar == nil {
+                    navBar = current
                 }
-                if current is UINavigationBar, navBar == nil { navBar = current }
                 stack.append(contentsOf: current.subviews)
             }
-            return searchField ?? navBar
+            return (searchBar ?? searchField, navBar)
         }
     }
 }

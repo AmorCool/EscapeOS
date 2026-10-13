@@ -28,7 +28,7 @@ enum LocationEngineError: LocalizedError {
         switch self {
         case .invalidIP: return "隧道 IP 无效.请检查设置 → 本地隧道（默认 10.7.0.1）."
         case .pairingRead: return "无法读取配对文件.请用 idevice_pair 生成 RPPairing 格式的配对文件并导入."
-        case .tunnelCreate: return "无法建立开发隧道.请确认 LocalDevVPN 已连接（Wi-Fi 下）."
+        case .tunnelCreate: return "无法建立开发隧道.请确认 LocalDevVPN 已连接."
         case .remoteServer: return "已连接隧道，但 RemoteXPC 握手失败."
         case .simulationCreate: return "无法打开 Apple 的定位模拟服务."
         case .locationSet: return "设置模拟坐标失败."
@@ -210,6 +210,10 @@ enum LocationEngine {
     /// v0.3.245：从 setLocked 抽出——clear 在无活动会话时也要能建会话下发清除
     /// （App 重启后内存句柄为空，但设备 locationd 里可能残留上次注入的模拟坐标）.
     private static func connectLocked(pairingPath: String, deviceIP: String) -> Int32 {
+        // 蜂窝隧道支持（默认关）：开关开 + 当前无 Wi-Fi 时，建隧道前有界等本地隧道就绪，
+        // **不碰蜂窝开关**. 开关关 / 有 Wi-Fi 时为 no-op，不改变既有行为.
+        CellularTunnelManager.shared.prepareForTunnel()
+
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = in_port_t(49152).bigEndian
@@ -231,23 +235,36 @@ enum LocationEngine {
         }
         defer { rp_pairing_file_free(pairingHandle) }
 
-        let providerError = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                tunnel_create_rppairing(
-                    $0,
-                    socklen_t(MemoryLayout<sockaddr_in>.stride),
-                    "EscapeSpaceLocation",
-                    pairingHandle,
-                    nil,
-                    nil,
-                    &adapter,
-                    &handshake
-                )
+        // 建隧道：最多 3 次、短退避. Wi-Fi↔蜂窝切换等瞬时抖动会令 RPPairing 握手失败，
+        // 重试后通常成功（与 JITEnableService / AFCService 等服务同款，见本仓既有模式）.
+        var created = false
+        for attempt in 0..<3 {
+            let providerError = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    tunnel_create_rppairing(
+                        $0,
+                        socklen_t(MemoryLayout<sockaddr_in>.stride),
+                        "EscapeSpaceLocation",
+                        pairingHandle,
+                        nil,
+                        nil,
+                        &adapter,
+                        &handshake
+                    )
+                }
+            }
+            if let providerError {
+                idevice_error_free(providerError)
+                cleanup()
+            } else {
+                created = true
+                break
+            }
+            if attempt < 2 {
+                usleep(useconds_t(300_000 * (attempt + 1)))
             }
         }
-        if let providerError {
-            idevice_error_free(providerError)
-            cleanup()
+        guard created else {
             setChannelStatus(.noTunnel)
             return tunnelCreate
         }

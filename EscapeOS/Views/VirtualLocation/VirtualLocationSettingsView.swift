@@ -101,7 +101,7 @@ struct VirtualLocationSettingsView: View {
                 } header: {
                     Text("隧道")
                 } footer: {
-                    Text("传送前先连接 LocalDevVPN.默认隧道 IP 为 10.7.0.1.建议在 Wi-Fi 下开始模拟，之后可切回蜂窝网络继续.")
+                    Text("传送前先连接 LocalDevVPN.默认隧道 IP 为 10.7.0.1.蜂窝网络下会先等待本地隧道就绪，无需切换到 Wi-Fi.")
                 }
 
                 Section("隐私") {

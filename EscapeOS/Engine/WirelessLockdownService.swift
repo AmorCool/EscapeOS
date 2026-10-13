@@ -86,6 +86,8 @@ enum WirelessLockdownService {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = in_port_t(49152).bigEndian
+        // 蜂窝隧道支持（默认关）：开关开 + 无 Wi-Fi 时先等本地隧道就绪；其余情况为 no-op.
+        CellularTunnelManager.shared.prepareForTunnel()
         let deviceIP = LocalDevVPN.targetIP
         guard deviceIP.withCString({ inet_pton(AF_INET, $0, &addr.sin_addr) }) == 1 else {
             throw makeError("隧道 IP 无效：\(deviceIP)（请检查「设置 → 本地隧道」）")

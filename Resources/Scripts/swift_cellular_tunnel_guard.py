@@ -22,9 +22,11 @@
 检查范围：
   · EscapeOS/Engine/CellularTunnelManager.swift        （引擎文件）
   · EscapeOS/Views/RootView.swift                       （设置页开关）
-  · EscapeOS/Engine/AppDiscovery.swift                  （接线点 1）
-  · EscapeOS/Engine/UninstallService.swift              （接线点 2）
+  · EscapeOS/Engine/AppDiscovery.swift                  （接线点：应用列表，走 TunnelContext）
+  · EscapeOS/Engine/UninstallService.swift              （接线点：卸载，走 TunnelContext）
+  · EscapeOS/Engine/LocationEngine.swift                （接线点：虚拟定位，本次报障核心）
   · 全 EscapeOS/ 目录                                    （快捷指令硬依赖 / 误导文案 / Wi-Fi 硬信念文案）
+  · 全部含 `let deviceIP = LocalDevVPN.targetIP` 的隧道入口（23 个引擎/服务/视图文件）
 
 检查规则：
   R1 [ERROR] CellularTunnelManager.swift 缺失，或未定义 enabledKey = "EscapeOS.CellularTunnelSupport".
@@ -33,8 +35,10 @@
   R4 [ERROR] 全仓实际代码重新出现「快捷指令硬依赖」
              （shortcuts:// / run-shortcut / TurnOffData / TurnOnData）.
   R5 [ERROR] 全仓用户可见文案重新出现「快捷指令」（即「让用户自建快捷指令」的误导文案）.
-  R6 [ERROR] 两个接线点未调用 CellularTunnelManager.shared.prepareForTunnel()（接线断了）.
-  R7 [ERROR] 全仓重新出现 "stay on Wi-Fi" / "保持 Wi-Fi" 的 Wi-Fi 硬信念文案.
+  R6 [ERROR] 任一「真正建隧道」的入口文件（含 `let deviceIP = LocalDevVPN.targetIP` 锚点）
+             未调用 CellularTunnelManager.shared.prepareForTunnel()（接线断了）.
+  R7 [ERROR] 全仓重新出现「把 Wi-Fi 说成前提条件」的误导文案
+             （如「（Wi-Fi 下）」「建议在 Wi-Fi 下」「请连 Wi-Fi」）.
 
 误报处理：Swift/ObjC 匹配前先剥离**注释**、保留字符串字面量 ——
 R4/R5 要抓的 `shortcuts://…` 与「快捷指令」正是出现在字符串/文案里；
@@ -54,6 +58,7 @@ MANAGER_REL = os.path.join("EscapeOS", "Engine", "CellularTunnelManager.swift")
 ROOTVIEW_REL = os.path.join("EscapeOS", "Views", "RootView.swift")
 DISCOVERY_REL = os.path.join("EscapeOS", "Engine", "AppDiscovery.swift")
 UNINSTALL_REL = os.path.join("EscapeOS", "Engine", "UninstallService.swift")
+LOCATION_REL = os.path.join("EscapeOS", "Engine", "LocationEngine.swift")
 
 ENABLED_KEY = "EscapeOS.CellularTunnelSupport"
 
@@ -61,8 +66,22 @@ ENABLED_KEY = "EscapeOS.CellularTunnelSupport"
 SHORTCUT_DEP_PATTERNS = ("shortcuts://", "run-shortcut", "TurnOffData", "TurnOnData")
 # R5：让用户自建快捷指令的误导文案.
 SHORTCUT_TEXT_MARKER = "快捷指令"
-# R7：Wi-Fi 硬信念文案.
-WIFI_STRICT_PATTERNS = ("stay on Wi-Fi", "保持 Wi-Fi", "保持Wi-Fi")
+# R7：Wi-Fi 硬信念文案（即「告诉用户必须/建议连 Wi-Fi 才能用」）.
+#   补充（本轮修复）：199aae2 删掉了「保持 Wi-Fi」等，却漏了 LocationEngine.swift 的
+#   「（Wi-Fi 下）」与 VirtualLocationSettingsView 的「建议在 Wi-Fi 下」——
+#   因为旧模式集不含它们。这里补齐：凡把 Wi-Fi 说成前提条件的措辞一律拦下.
+#   注意：不能笼统禁止「Wi-Fi」二字（如「不影响 Wi-Fi 下的连接」是如实说明，应放行），
+#   故只列「Wi-Fi 作前提」的具体措辞.
+WIFI_STRICT_PATTERNS = (
+    "stay on Wi-Fi", "保持 Wi-Fi", "保持Wi-Fi",
+    "建议在 Wi-Fi", "请连 Wi-Fi", "请连接 Wi-Fi", "需要 Wi-Fi", "需 Wi-Fi",
+    "（Wi-Fi 下）", "(Wi-Fi 下)", "Wi-Fi 下才能", "只能在 Wi-Fi",
+)
+
+# R6：隧道设备地址解析的锚点行 —— 凡出现此行的文件都是「真正建隧道」的入口，
+#   必须在建隧道前调用 CellularTunnelManager.shared.prepareForTunnel().
+TUNNEL_DEVICEIP_ANCHOR = "let deviceIP = LocalDevVPN.targetIP"
+PREPARE_CALL = "CellularTunnelManager.shared.prepareForTunnel()"
 
 SOURCE_EXTS = (".swift", ".m", ".h", ".mm")
 
@@ -222,6 +241,29 @@ def check_wiring(path, label):
     return findings
 
 
+def check_wiring_all_tunnel_entries(root):
+    """R6（泛化）：所有「真正建隧道」的入口文件都必须调用 prepareForTunnel().
+
+    判据：文件含锚点 `let deviceIP = LocalDevVPN.targetIP`（即该处解析设备地址去建隧道）.
+    只看**实际代码**（strip_comments 后），避免被注释里的说明误报.
+    """
+    findings = []
+    for rel, full in iter_source_files(root):
+        if not rel.endswith(".swift"):
+            continue
+        try:
+            stripped = strip_comments(read(full))
+        except OSError:
+            continue
+        if TUNNEL_DEVICEIP_ANCHOR not in stripped:
+            continue
+        if PREPARE_CALL not in stripped:
+            findings.append(("R6", "%s 含隧道入口锚点「%s」，却未调用 %s —— "
+                                   "蜂窝下建隧道前必须先有界等隧道就绪." % (
+                                       rel, TUNNEL_DEVICEIP_ANCHOR, PREPARE_CALL)))
+    return findings
+
+
 def check_wifi_strict_text(root):
     """R7：全 EscapeOS/ 不得再出现 Wi-Fi 硬信念文案."""
     findings = []
@@ -255,6 +297,8 @@ def main():
     findings += check_no_shortcut_text(root)
     findings += check_wiring(os.path.join(root, DISCOVERY_REL), "应用列表")
     findings += check_wiring(os.path.join(root, UNINSTALL_REL), "卸载")
+    findings += check_wiring(os.path.join(root, LOCATION_REL), "虚拟定位")
+    findings += check_wiring_all_tunnel_entries(root)
     findings += check_wifi_strict_text(root)
 
     for rule, msg in findings:
@@ -262,11 +306,11 @@ def main():
 
     print("-" * 72)
     print("检查：Cellular隧道支持（引擎文件 / 设置开关 / 无快捷指令硬依赖 / 无误导文案 / "
-          "两个接线点 / 无 Wi-Fi 硬信念文案）")
+          "全部隧道入口接线 / 无 Wi-Fi 硬信念文案）")
     print("命中: %d" % len(findings))
     if not findings:
         print("✓ 引擎文件与键名齐备、开关默认关且已接上、无快捷指令硬依赖与误导文案、"
-              "两个接线点均已调用 prepareForTunnel、无 Wi-Fi 硬信念文案 —— 合规")
+              "全部隧道入口均已调用 prepareForTunnel、无 Wi-Fi 硬信念文案 —— 合规")
     return 1 if findings else 0
 
 
