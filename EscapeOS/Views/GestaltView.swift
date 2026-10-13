@@ -900,13 +900,13 @@ struct ValueEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Key") {
+                Section("键") {
                     Text(key)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                 }
 
-                Section("Value") {
+                Section("值") {
                     if isComplex {
                         Text(complexDisplay)
                             .font(.caption)
@@ -921,10 +921,10 @@ struct ValueEditor: View {
                         case .bool:
                             Toggle("Enabled", isOn: $boolValue)
                         case .integer:
-                            TextField("Value", value: $intValue, format: .number)
+                            TextField("值", value: $intValue, format: .number)
                                 .keyboardType(.numberPad)
                         case .string:
-                            TextField("Value", text: $stringValue)
+                            TextField("值", text: $stringValue)
                                 .autocorrectionDisabled()
                         }
                     }
@@ -1019,14 +1019,14 @@ struct AddCacheExtraFieldEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Key") {
-                    TextField("Key", text: $key)
+                Section("键") {
+                    TextField("键", text: $key)
                         .font(.system(.body, design: .monospaced))
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
 
-                Section("Value") {
+                Section("值") {
                     Picker("Type", selection: $valueType) {
                         ForEach(GestaltValueType.allCases, id: \.self) { type in
                             Text(type.rawValue).tag(type)
@@ -1036,10 +1036,10 @@ struct AddCacheExtraFieldEditor: View {
                     case .bool:
                         Toggle("Enabled", isOn: $boolValue)
                     case .integer:
-                        TextField("Value", value: $intValue, format: .number)
+                        TextField("值", value: $intValue, format: .number)
                             .keyboardType(.numberPad)
                     case .string:
-                        TextField("Value", text: $stringValue)
+                        TextField("值", text: $stringValue)
                             .autocorrectionDisabled()
                     }
                 }

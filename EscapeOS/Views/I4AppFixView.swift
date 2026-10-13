@@ -104,30 +104,30 @@ struct I4AppFixView: View {
     /// （`InfoActionCard` 内部即 `TintedButtonStyle`，不用纯蓝实底）。只改样式，功能与 `confirmShown`
     /// 流程不变；文案精简到「修复什么 + 何时写入」.
     private var actionSection: some View {
+        // 与「空间回收」（`ReclaimTabView` 的「立即扫描」）**同款写法**：`Section` 里直接放
+        // `InfoActionCard`，由 `insetGrouped` 出系统卡片（左右边距与同页 `statusSection`
+        // 的「设备已就绪」完全一致）。
+        //
+        // v0.3.602 之前的写法是 `VStack { InfoActionCard }.appCard()` 再叠
+        // `.listRowInsets(leading/trailing: pageInset)` —— 等于**套了两层内缩**
+        // （insetGrouped 一层 + listRowInsets 一层 + appCard 自己还有 padding），
+        // 卡片比同页的「设备已就绪」窄一大截，用户 2026-10-13 报「banner 都没对齐」。
         Section {
-            VStack(alignment: .leading, spacing: AppSpacing.tight) {
-                InfoActionCard(
-                    icon: "wrench.and.screwdriver.fill",
-                    title: "修复应用弹窗闪退",
-                    message: "写入设备授权文件，修复爱思源应用的弹窗闪退.确认后才会写入，可随时重试.",
-                    actionTitle: "开始修复",
-                    action: { confirmShown = true },
-                    disabled: !ready || busy
-                )
-                if let repairError {
-                    Text(repairError)
-                        .font(AppFont.caption)
-                        .foregroundStyle(AppTheme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            InfoActionCard(
+                icon: "wrench.and.screwdriver.fill",
+                title: "修复应用弹窗闪退",
+                message: "写入设备授权文件，修复爱思源应用的弹窗闪退.确认后才会写入，可随时重试.",
+                actionTitle: "开始修复",
+                action: { confirmShown = true },
+                disabled: !ready || busy
+            )
+            if let repairError {
+                Text(repairError)
+                    .font(AppFont.caption)
+                    .foregroundStyle(AppTheme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .appCard()
         }
-        // 置透明行背景、改用自带 `appCard` 的白卡：卡圆角由 `AppRadius.card`（16）决定，
-        // 而不是 insetGrouped 自动套的系统圆角.
-        .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 8, leading: AppTheme.pageInset,
-                                  bottom: 8, trailing: AppTheme.pageInset))
     }
 
     private var ready: Bool { tunnelConnected && hasPairing }

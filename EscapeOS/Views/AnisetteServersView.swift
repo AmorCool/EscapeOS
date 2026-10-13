@@ -5,7 +5,7 @@ import SwiftUI
 ///
 /// 对照 AltStore Classic 的 Remote AltServer 页（参考截图 5）分区：
 ///   · **Status**：当前服务器连通性（检测中 / 已连接 / 失败原因）；
-///   · **Popular**：常用服务器列表，选中打勾；
+///   · **常用**：常用服务器列表，选中打勾；
 ///   · **Custom**：自定义地址输入 + 打勾选用；
 ///   · **本机 Anisette**：ODA 模式开关 + 就绪状态 + 元数据源（详见 `OnDeviceAnisetteManager`）.
 ///
@@ -64,7 +64,7 @@ struct AnisetteServersView: View {
     // MARK: - Status
 
     private var statusSection: some View {
-        Section(header: Text("Status")) {
+        Section(header: Text("状态")) {
             HStack {
                 Text("状态")
                 Spacer()
@@ -91,7 +91,7 @@ struct AnisetteServersView: View {
         case .connected:
             HStack(spacing: 6) {
                 Circle().fill(AppTheme.success).frame(width: 8, height: 8)
-                Text("Connected").foregroundColor(.secondary)
+                Text("已连接").foregroundColor(.secondary)
             }
         case .failed(let reason):
             HStack(spacing: 6) {
@@ -104,7 +104,7 @@ struct AnisetteServersView: View {
     // MARK: - Popular
 
     private var popularSection: some View {
-        Section(header: Text("Popular")) {
+        Section(header: Text("常用")) {
             ForEach(Self.popular) { server in
                 Button {
                     select(server.url)
@@ -119,7 +119,7 @@ struct AnisetteServersView: View {
     // MARK: - Custom
 
     private var customSection: some View {
-        Section(header: Text("Custom"),
+        Section(header: Text("自定义"),
                 footer: Text("填主机名或完整地址均可，留空表示不使用自定义地址.")) {
             HStack(spacing: 10) {
                 TextField("ani.example.com", text: $customText)
