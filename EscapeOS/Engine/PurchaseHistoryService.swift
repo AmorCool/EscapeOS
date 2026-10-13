@@ -410,8 +410,13 @@ enum PurchaseHistoryService {
         guard returned == UInt64(recordCount), total >= returned else {
             throw PurchaseHistoryError.badResponse("条目数与 DAAP 计数不一致")
         }
-        guard total == returned else {
-            throw PurchaseHistoryError.badResponse("Apple 只返回部分记录（\(returned)/\(total)），不能当作完整已购列表")
+        // DAAP 已购库**不做服务端分页**（对齐 ipatool：`ownedAppsPage` 只是对已取回数组做本地切片，
+        // `fetchOwnedAppsForStorefront` 一次性取全量，且完全不校验 mtco/mrco）。
+        // 这里若 Apple 只回了一部分（returned < total），按已返回的条目继续，不再硬失败 ——
+        // 否则一个被截断的响应会让整个「已购列表」打不开，用户连已下架的都看不到、更下不了。
+        if total != returned {
+            LoginLogger.shared.log("[已购] Apple 只返回部分记录（\(returned)/\(total)），按已返回 \(apps.count) 条继续",
+                                   category: .appStore)
         }
         return apps.sorted { ($0.purchaseDate ?? .distantPast) > ($1.purchaseDate ?? .distantPast) }
     }

@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.599] - 2026-10-13
+
+> **一句话**：修「主页-模块 执行报 `ServiceNotFound`」——不再赌 `app_service` 在不在，改为**先查 RSD 服务表再选路**；不在表里就走 DVT 回退（与截图 / 内存查询同族、**不依赖 CoreDevice**）。
+
+### 修复
+
+- **主页-模块「执行」必现「执行失败：ServiceNotFound」**（用户报「主页-模块 不知道什么时候开始出现 server not found 功能 之前版本不会的 我怀疑是隧道哪里出问题了」）：
+  两个内置模块（`com.escapeos.locache` 结束 `locationd` / `com.escapeos.wifirefresh` 结束 `wifid`）的动作是 `type: "signal"`，链路为
+  `ModuleService.runSignal → ProcessManagerService.listProcesses → connectAppService → app_service_connect_rsd`。
+  `app_service` 属 **CoreDevice 族**（RSD 名 `com.apple.coredevice.appservice`），未挂 DDI 时**不在 RSD 服务表里** ⇒ `RsdHandshake::connect` 的 `services.get(name)` 返回 `ServiceNotFound`(21)，`errors.rs` 再 `format!("{:?}", err)` 把它变成弹窗里那串英文。
+  **修法（照 `ScreenshotService` 先例）**：`ProcessManagerService` 新增 `appServiceAvailable(handshake:)` 预检 —— `rsd_service_available` 只做 `services.contains_key(name)`、**不连设备**，且与 `connect` 读**同一张表** ⇒ 结果精确预测会不会抛 21：
+  - 表里有 ⇒ 走原 CoreDevice 路径（行为不变）；
+  - 表里没有（或连接失败）⇒ 走 **DVT 回退**：`remote_server_connect_rsd` → `device_info_running_processes` 列进程；`process_control_new` + `process_control_kill_app(pid)` 结束进程。DVT 族（`com.apple.instruments.dtservicehub`）**不依赖 CoreDevice**，本设备截图 / sysmontap 已真机验证可用。
+  - **名字核对**：DVT 杀进程前，若调用方给了期望名，先用 `device_info_execname_for_pid` 核对一次，防 PID 复用误杀。
+- **错误文案不再裸奔**：`ModuleService.runSignal` 把 FFI 码 21 映射成人话（「设备的进程服务（app_service）未广播，且 DVT 回退通道也不可用…」），不再把 Rust 枚举 Debug 名弹给用户。
+- **`LocationEngine.killLocationd` 兼容两条通道**：原先按 `executablePath.hasSuffix("/locationd")` 过滤；DVT 通道下 `executablePath` 只含 execname（**无 `/` 前缀**）会漏 ⇒ 改用 `displayName` 匹配。
+
+### 已知边界（诚实标注，需真机复测）
+
+- DVT 的进程表是否包含 `locationd` / `wifid` 这类**系统守护进程**、以及 `killPid:` 对守护进程是否放行 —— 源码层已确认 DVT 族可连（截图 / sysmontap 真机可用），但「守护进程可见性 / 可杀性」**本轮未真机验证**。失败时模块如实报「未找到 xxx」，**不假装成功**。
+- DVT 的 processcontrol 只有 `killPid:`（上游 `kill_app` 直接发 `killPid:` + pid，**不做名字查表**）⇒ **只能结束进程**；恢复 / 挂起在 DVT 通道下如实报错。
+
+### 防复发
+
+- `ProcessManagerService` 类头注释补「v0.3.599 修复」段，写明**源码实证**依据（`RsdHandshake::connect` = `services.get`；`rsd_service_available` = `services.contains_key`），并把「守护进程可见性未验证」列入已知边界（**不再写成因推测**）。
+
 ## [0.3.591] - 2026-10-11
 
 > **一句话**：暗黑模式全盘修（32 处写死色 + 6 处对比度崩坏）；爱思「开启高级功能」改成真读设备；Surge / Loon 隧道；UI 大整改方案。

@@ -24,6 +24,14 @@
   D5  `AppStoreView.runSearch` 搜不到时必须回落查已购（`fallbackOwnedMatches`）。
   D6  `AppStoreLocalInstallService.downloadInformation` 必须处理 `catalogUnavailable`
       （目录查不到 = 多为已下架）—— 对齐 ipatool「不中止」。
+  D7  `PurchaseHistoryView` 必须能标出「已下架」（`delistedIds` + 文案「已下架」）
+      —— 判据「已购里有、lookup 查不到 ⇒ 下架」，且仍保留下载入口。
+  D8  `AppStoreView.runSearch` 必须**无条件**并入已购匹配：`ownedMatches` 那行必须来自
+      `fallbackOwnedMatches` 且**不得**再用 `searchResults.isEmpty` 把回落门控起来
+      —— 否则同名的在架应用一命中，下架那条永远搜不到。
+  D9  `PurchaseHistoryService.parseItems` 不得对「Apple 只回部分记录」硬失败
+      （DAAP 已购库无服务端分页，对齐 ipatool 不校验 mtco/mrco）——
+      否则一个被截断的响应会让整个已购列表打不开。
 
 用法：python3 swift_delisted_download_guard.py <仓库根>
 退出码：0 = 通过；1 = 有违规；2 = 路径错。
@@ -335,15 +343,21 @@ def check(root):
             if "merged" not in body:
                 errs.append("[D3] list(account:) 没有按 id 合并（merged）—— 退回「只取一个 store 的结果」会丢条目")
 
-    # ── D4：已购条目 → 下载入口 ──
+    # ── D4 / D7：已购条目 → 下载入口 + 「已下架」标记 ──
     if not os.path.isfile(history_view):
         errs.append("[D4] 找不到 %s" % history_view)
     else:
         masked = _mask_comments(io.open(history_view, encoding="utf-8").read())
         if "startWithAppleID" not in masked:
             errs.append("[D4] PurchaseHistoryView 没有接 startWithAppleID —— 已购列表又退回「只读」")
+        # D7：「已下架」标记（判据 = 已购里有、lookup 查不到 ⇒ 下架；仍保留下载）
+        if "delistedIds" not in masked:
+            errs.append("[D7] PurchaseHistoryView 没有 delistedIds —— "
+                        "「已购里有 / lookup 查不到 ⇒ 已下架」的判定被删")
+        elif "已下架" not in masked:
+            errs.append("[D7] PurchaseHistoryView 没有「已下架」文案 —— 下架应用在列表里看不出来")
 
-    # ── D5：搜索回落已购 ──
+    # ── D5 / D8：搜索回落已购（且必须无条件并入）──
     if not os.path.isfile(store_view):
         errs.append("[D5] 找不到 %s" % store_view)
     else:
@@ -351,9 +365,21 @@ def check(root):
         body = _extract_function_body(masked, "func runSearch()")
         if body is None:
             errs.append("[D5] 找不到 AppStoreView.runSearch() —— 搜索入口被删？")
-        elif "fallbackOwnedMatches" not in body:
-            errs.append("[D5] runSearch 没有回落查已购（fallbackOwnedMatches）"
-                        " —— 下架应用在公开 search 里天然缺席，搜不到就永远搜不到")
+        else:
+            call = body.find("fallbackOwnedMatches")
+            if call < 0:
+                errs.append("[D5] runSearch 没有回落查已购（fallbackOwnedMatches）"
+                            " —— 下架应用在公开 search 里天然缺席，搜不到就永远搜不到")
+            else:
+                # D8：回落那一行必须直接并入 ownedMatches，且不得再被 searchResults.isEmpty 门控
+                line_start = body.rfind("\n", 0, call) + 1
+                line_end = body.find("\n", call)
+                line = body[line_start: line_end if line_end >= 0 else len(body)]
+                if "ownedMatches" not in line:
+                    errs.append("[D8] runSearch 的回落结果没有赋给 ownedMatches —— 搜到的已购项没进列表")
+                if "isEmpty" in line:
+                    errs.append("[D8] runSearch 仍用 searchResults.isEmpty 门控回落 —— "
+                                "同名在架应用一命中，下架那条永远搜不到（必须无条件并入并按 id 去重）")
 
     # ── D6：目录查不到（已下架）不中止 ──
     if not os.path.isfile(install):
@@ -366,6 +392,20 @@ def check(root):
         elif "catalogUnavailable" not in body:
             errs.append("[D6] downloadInformation 没有处理 catalogUnavailable"
                         " —— 目录查不到（多为已下架）会硬失败，违背 ipatool「ErrAppNotFound 不中止」")
+
+    # ── D9：已购响应被截断时不硬失败（DAAP 无服务端分页）──
+    if os.path.isfile(engine):
+        masked = _mask_comments(io.open(engine, encoding="utf-8").read())
+        body = _extract_function_body(masked, "static func parseItems(")
+        if body is None:
+            errs.append("[D9] 找不到 PurchaseHistoryService.parseItems —— DAAP 解析被删？")
+        else:
+            if "guard total == returned" in body:
+                errs.append("[D9] parseItems 又对「只回部分记录」硬失败（guard total == returned）"
+                            " —— 被截断的响应会让整个已购列表打不开，对齐 ipatool 应接受部分结果")
+            elif "total != returned" not in body:
+                errs.append("[D9] parseItems 没有处理「部分记录」（total != returned）"
+                            " —— 需降级为记录日志并按已返回条目继续")
 
     return errs
 
@@ -384,7 +424,8 @@ def main():
         for e in errs:
             print("ERROR %s" % e)
         print("命中：%d（D1 三 media kind / D2 storefront 轮询 34+13 / D3 按 id 合并 / "
-              "D4 已购→下载入口 / D5 搜索回落已购 / D6 目录查不到不中止）" % len(errs))
+              "D4 已购→下载入口 / D5 搜索回落已购 / D6 目录查不到不中止 / "
+              "D7 已下架标记 / D8 搜索无条件并入已购 / D9 截断不硬失败）" % len(errs))
         return 1
     print("D1 已购 query 带三种 media kind（131072 / 262144 / 67108864）：OK")
     print("D2 storefront 轮询 34 + 13：OK")
@@ -392,6 +433,9 @@ def main():
     print("D4 已购条目接 startWithAppleID（下载入口）：OK")
     print("D5 搜索搜不到时回落查已购：OK")
     print("D6 目录查不到（已下架）不中止：OK")
+    print("D7 已购列表标「已下架」（delistedIds + 文案）：OK")
+    print("D8 搜索无条件并入已购匹配（不再被 searchResults.isEmpty 门控）：OK")
+    print("D9 已购响应截断时不硬失败（对齐 ipatool 无服务端分页）：OK")
     print("命中：0")
     return 0
 

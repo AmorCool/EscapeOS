@@ -298,15 +298,20 @@ struct SettingsForm: View {
                     set: { certStore.jitFreeMode = $0 }))
             }
 
+            // 「Anisette 服务器」改成二级页入口（对齐 AltStore Classic 的 Remote AltServer 页）：
+            // 点进来是 `AnisetteServersView`（Status / Popular / Custom / 本机 Anisette）.
+            // 保留原来的「恢复默认服务器」动作，挪进二级页.
             Section(header: Text("Anisette 服务器"), footer: Text("用于 Apple ID 设备认证.")) {
-                Picker("服务器", selection: $anisetteServer) {
-                    ForEach(MemoryLimitSettings.anisetteServers, id: \.self) { server in
-                        Text(MemoryLimitSettings.host(from: server)).tag(server)
+                NavigationLink {
+                    AnisetteServersView()
+                } label: {
+                    HStack {
+                        Text("服务器")
+                        Spacer()
+                        Text(MemoryLimitSettings.host(from: anisetteServer))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
                     }
-                }
-                .pickerStyle(.menu)
-                Button("恢复默认服务器（ani.stikstore.app）") {
-                    anisetteServer = "https://ani.stikstore.app"
                 }
             }
 

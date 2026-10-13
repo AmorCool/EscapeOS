@@ -790,7 +790,15 @@ final class ModuleService {
         }
         let sig = parseSignal(action.signal)
 
-        let entries = try ProcessManagerService.shared.listProcesses()
+        // 枚举进程：宿主内部会**先查 RSD 服务表再选路**（app_service 不在就自动走 DVT 回退），
+        // 这里只需把「连不上」翻译成人话，不再把裸 ServiceNotFound 弹给用户。
+        let entries: [ProcessEntry]
+        do {
+            entries = try ProcessManagerService.shared.listProcesses()
+        } catch {
+            throw ModuleError.badAction(Self.humanizeProcessError(error, phase: "枚举设备进程"))
+        }
+
         let matched = entries.filter {
             $0.displayName.localizedCaseInsensitiveContains(procName) ||
             $0.executablePath.localizedCaseInsensitiveContains(procName)
@@ -805,10 +813,12 @@ final class ModuleService {
         var failed: [String] = []
         for entry in matched {
             do {
-                try ProcessManagerService.shared.sendSignal(sig, toPID: Int(entry.pid))
+                // 带上期望名：宿主走 DVT 回退时会用它核对 PID，避免复用误杀。
+                try ProcessManagerService.shared.sendSignal(
+                    sig, toPID: Int(entry.pid), expectedName: entry.displayName)
                 killed.append("\(entry.displayName)(\(entry.pid))")
             } catch {
-                failed.append("\(entry.displayName): \(error.localizedDescription)")
+                failed.append("\(entry.displayName): \(Self.humanizeProcessError(error, phase: "结束进程"))")
             }
         }
 
@@ -816,6 +826,22 @@ final class ModuleService {
         if !killed.isEmpty { summary += "：\(killed.joined(separator: "、"))" }
         if !failed.isEmpty { summary += "；失败 \(failed.count)：\(failed.joined(separator: "、"))" }
         return summary
+    }
+
+    /// 把宿主进程管理层的 FFI 错误翻译成用户能看懂、能行动的中文。
+    ///
+    /// `ServiceNotFound` 是 Rust 枚举的 Debug 名（由 `errors.rs` 的 `format!("{:?}", err)` 生成），
+    /// 直接弹给用户毫无信息量。错误码 21 的成因见 `ProcessManagerView.swift` 类头注释。
+    private static func humanizeProcessError(_ error: Error, phase: String) -> String {
+        let ns = error as NSError
+        let raw = ns.localizedDescription
+        // 码 21 = `IdeviceError::ServiceNotFound`（`errors.rs` 用 `format!("{:?}")` 生成 message，
+        // 所以弹窗里会看到裸枚举名）。domain 判定兜底 message 为空的情形。
+        if ns.domain == "ProcessManager", ns.code == 21 || raw.contains("ServiceNotFound") {
+            return "\(phase)失败：设备的进程服务（app_service）未广播，且 DVT 回退通道也不可用."
+                + "请确认 LocalDevVPN 已连接后重试；若持续失败，重启设备通常可恢复."
+        }
+        return "\(phase)失败：\(raw)"
     }
 
     private func parseSignal(_ s: String?) -> ProcessControlAction {

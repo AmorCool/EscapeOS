@@ -59,7 +59,7 @@ struct MoreView: View {
             ]),
             ("配对文件", "key.horizontal", "重置/更换配对文件后从这里重新导入", [
                 MoreItem("pairing-import", "key.horizontal", "配对文件导入",
-                         "文件导入 / 剪贴板粘贴 / iOS 27 无线配对",
+                         "文件导入 / 剪贴板 / 无线配对",
                          PairingSetupView(viewModel: appList)),
             ]),
             ("设备工具", "wrench.and.screwdriver", "需要配对文件 + LocalDevVPN 隧道", [
@@ -93,7 +93,7 @@ struct MoreView: View {
                          "导入他人分享的 IPA 并修补安装",
                          ImportView()),
                 MoreItem("pairing-install", "tray.and.arrow.down.fill", "管理配对文件",
-                         "把配对文件写入其它侧载工具（复用同一配对身份）",
+                         "写入其它侧载工具，复用配对身份",
                          PairingInstallView()),
             ]),
             ("文件管理", "folder.fill", nil, [
@@ -117,13 +117,13 @@ struct MoreView: View {
             ]),
             ("系统工具", "gearshape.2.fill", nil, [
                 MoreItem("app-expiry", "calendar.badge.clock", "预置描述管理",
-                         "App描述文件过期管理(.mobileprovision)",
+                         "过期描述管理（.mobileprovision）",
                          AppExpiryView()),
                 MoreItem("profile-install", "shield.lefthalf.filled", "发送描述文件",
                          "导入描述文件到本机",
                          ProfileInstallView()),
                 MoreItem("profile-config", "list.bullet.rectangle.portrait.fill", "配置描述管理",
-                         "iOS设置描述文件管理(.mobileprofile)",
+                         "描述文件管理（.mobileprofile）",
                          ProfileConfigView()),
                 MoreItem("ipcc", "antenna.radiowaves.left.and.right", "IPCC 安装",
                          "导入运营商 .ipcc 配置",
@@ -137,13 +137,16 @@ struct MoreView: View {
                 MoreItem("domain-blocker", "shield.fill", "屏蔽域名",
                          "DNS 屏蔽域名",
                          DomainBlockerView()),
+                MoreItem("call-recording", "speaker.slash.fill", "禁用通话录音",
+                         "静音通话录音提示音",
+                         CallRecordingToneView()),
             ]),
             ("账户与安全", "lock.shield.fill", nil, [
                 MoreItem("certificates", "checkmark.seal.fill", "证书管理",
                          "管理开发证书",
                          CertificateView()),
                 MoreItem("mdm-manage", "shield.lefthalf.filled.badge.checkmark", "MDM 管理",
-                         "MDM 沙盒逃逸 / 描述文件备份还原（个人测试）",
+                         "沙盒逃逸 / 描述文件备份还原",
                          MDMManageView()),
                 MoreItem("memory", "memorychip", "增加内存限制",
                          "提高内存上限",
@@ -286,6 +289,9 @@ struct MoreView: View {
 /// 更多页功能行标签（TRApp inset-grouped 行语言）：连续圆角图标底 + 17pt semibold 标题 +
 /// 13pt footnote 副标题 + 右侧 chevron. 与主页 `HomeRowLabel` 同一度量，仅作本页 `NavigationLink`
 /// 的 label 使用.
+///
+/// v0.3.xxx：**副标题不再截断** —— 原先 `.lineLimit(1)` 让较长介绍（如「过期描述管理
+/// （.mobileprovision）」）显示成省略号；现改为按内容完整换行，行高随文字行数自适应.
 private struct MoreRowLabel: View {
     let icon: String
     let title: String
@@ -301,7 +307,10 @@ private struct MoreRowLabel: View {
                 Text(subtitle)
                     .font(AppFont.footnote)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    // 介绍完整显示：不设 lineLimit，行高按文字行数自适应.
+                    // `fixedSize(vertical:)` 让 Text 在 VStack 内拿到真实高度，避免被压成单行省略.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
             }
             Spacer(minLength: 6)
             Image(systemName: "chevron.right")

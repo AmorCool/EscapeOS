@@ -34,10 +34,10 @@ v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review �
       `snapshotFallback` 返回」，两者任一即算保留兜底）。防 v0.3.588 那处回归重演：
       内嵌快照过期/判不出即弃用、现取失败又不回落 ⇒ 有快照的 App 也拿不到任何链接，
       用户「获取不到下载任务」。
-  G9  `offSalePackage` 必须用 `offSaleCandidates(...)` 补候选版本（v0.3.596 补）——
+  G9  `offSalePackage` 必须用 `bilinCandidates(...)` 补候选版本（v0.3.596 补）——
       版本回退链原来只认内嵌 `appStoreData` 的数组，而**实测 7/10 下架条目没有它**
       ⇒ `candidates=[]` ⇒ 回退链只有 1 步 = 等于没回退（症状 2 结构性主因）。且
-      `offSaleCandidates` 必须**复用 bilin 目录**（`versionList(trackID:...)`）、**失败不阻塞**
+      `bilinCandidates` 必须**复用 bilin 目录**（`versionList(trackID:...)`）、**失败不阻塞**
       （`catch` → `return []`）—— bilin 限流实测 4~6 发/窗口，补不到也得照常单发。
   G10 `offSalePackage` 的兜底快照必须**先探活**（v0.3.596 补）—— 必须出现 `probeSnapshot(...)`；
       且 `probeSnapshot` **三态齐全**（`.live` / `.dead` / `.unknown`）。防 v0.3.593 式回归：
@@ -260,9 +260,9 @@ def check(root):
 
             # ── G9：候选版本必须能补（v0.3.596 补）──
             # 版本回退链原来只认内嵌 `appStoreData` 的数组，而实测 7/10 下架条目没有它
-            # ⇒ candidates=[] ⇒ 回退链只有 1 步。现在必须经 `offSaleCandidates(...)` 补。
-            if "offSaleCandidates(" not in body:
-                errs.append("[G9] offSalePackage 不再用 offSaleCandidates(...) 补候选版本"
+            # ⇒ candidates=[] ⇒ 回退链只有 1 步。现在必须经 `bilinCandidates(...)` 补。
+            if "bilinCandidates(" not in body:
+                errs.append("[G9] offSalePackage 不再用 bilinCandidates(...) 补候选版本"
                             " —— 内嵌无版本数组的条目（实测 7/10）回退链只剩 1 步 = 等于没回退")
 
             # ── G10：兜底快照必须探活（v0.3.596 补）──
@@ -281,7 +281,10 @@ def check(root):
             if "package(appID:" not in fb:
                 errs.append("[G6] packageWithFallback 没有真正打 getAppHistoryList"
                             "（缺 package(appID:...)）")
-            if "candidates" not in fb:
+            # v0.3.597：候选来源改「内嵌 embeddedCandidates + 惰性 fallbackProvider」两个
+            # 来源（治「获取变慢」）—— 旧判据只认字面量 "candidates"，会把正确实现误判成
+            # 「回退链断了」。判据改为：两个来源至少有一个，且真的被遍历。
+            if ("candidates" not in fb and "fallbackProvider" not in fb):
                 errs.append("[G6] packageWithFallback 没有遍历候选版本（缺 candidates）"
                             " —— 回退链断了")
             if "maxAttempts" not in fb:
@@ -311,17 +314,17 @@ def check(root):
                 errs.append("[G11] packageWithFallback 没有总请求上限（缺 maxRequests）"
                             " —— 加同版本重试后可能把请求放大到失控")
 
-        # ── G9 续：offSaleCandidates 必须复用 bilin 目录且失败不阻塞（v0.3.596 补）──
-        cand = _extract_function_body(src, "func offSaleCandidates(")
+        # ── G9 续：bilinCandidates 必须复用 bilin 目录且失败不阻塞（v0.3.596 补）──
+        cand = _extract_function_body(src, "func bilinCandidates(")
         if cand is None:
-            errs.append("[G9] NBStoreClient.swift 里找不到 offSaleCandidates"
+            errs.append("[G9] NBStoreClient.swift 里找不到 bilinCandidates"
                         " —— bilin 补候选被删，内嵌无版本数组的条目回退链只剩 1 步")
         else:
             if "versionList(trackID:" not in cand:
-                errs.append("[G9] offSaleCandidates 不再走 bilin 目录（缺 versionList(trackID:...)）"
+                errs.append("[G9] bilinCandidates 不再走 bilin 目录（缺 versionList(trackID:...)）"
                             " —— 补候选失去唯一来源（本项目已在用这条目录，不该新增依赖）")
             if "catch" not in cand or "return []" not in cand:
-                errs.append("[G9] offSaleCandidates 失败会阻塞取包（缺 catch → return []）"
+                errs.append("[G9] bilinCandidates 失败会阻塞取包（缺 catch → return []）"
                             " —— bilin 限流（实测 6×429/16 发）时会把取包整体判死")
 
         # ── G10 续：probeSnapshot 三态必须齐全 + snapshotFallback 真的探活（防「判不出 ⇒ 当失败」回归）──

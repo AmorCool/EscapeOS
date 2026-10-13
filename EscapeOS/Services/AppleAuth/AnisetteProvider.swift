@@ -150,6 +150,13 @@ final class AnisetteProvider {
     }
 
     func getAnisetteData(refresh: Bool = false) async throws -> AnisetteData {
+        // 「本机 Anisette」（ODA）模式：开关开启时走本地生成 headers，不依赖 anisette 服务器.
+        // 但本构建**未内置** iOS 可加载的 ADI 引擎（见 OnDeviceAnisetteManager 顶部注释），
+        // 故这里先把「为何回退远程」**显式**写进日志再走远程路径，绝不静默.
+        // 引擎就位后，只需把这一分支换成真实的本地取数实现即可，调用方无需改动.
+        if let reason = OnDeviceAnisetteManager.shared.remoteFallbackReason {
+            LoginLogger.shared.log("[本机Anisette] \(reason)", category: .appleID)
+        }
         if refresh {
             // v0.3.166：refresh = 强制重签 provisioning 票据（作废 adiPb 保留 identifier）.
             // 背景：ani.846969.xyz 对同一 (identifier, adiPb) 缓存 get_headers 结果，

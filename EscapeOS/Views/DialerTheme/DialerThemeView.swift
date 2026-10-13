@@ -219,7 +219,7 @@ final class DialerThemeViewModel: ObservableObject {
                     outcome = .failure(DialerTaskFailure(message: "当前没有正在运行的电话进程，直接打开电话 App 即可."))
                 } else {
                     for process in targets {
-                        try? ProcessManagerService.shared.sendSignal(.kill, toPID: process.pid)
+                        try? ProcessManagerService.shared.sendSignal(.kill, toPID: process.pid, expectedName: process.displayName)
                     }
                     outcome = .success("已结束电话进程（\(targets.count) 个），重新打开电话 App 即可看到新主题.")
                 }

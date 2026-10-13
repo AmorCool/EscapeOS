@@ -147,16 +147,19 @@ enum LocationEngine {
     /// 调同一个服务同样失败）。**原理未知。**
     /// 此时 `listProcesses()` 会抛错 ⇒ 本方法返回 `false`；**重试没有意义**
     /// （`RsdHandshake::connect` 无回退），**重启手机即可恢复**。
+    ///
+    /// v0.3.599：`listProcesses()` 内部已改为「先查服务表再选路」——`app_service` 不在表里时
+    /// 自动走 DVT 回退，且 DVT 通道下 `executablePath` 只含 execname（如 `locationd`，
+    /// **不带 `/` 前缀**）。故这里改用 `displayName` 匹配（两条通道下都等于末段名）。
     @discardableResult
     static func killLocationd() -> Bool {
         guard let entries = try? ProcessManagerService.shared.listProcesses() else { return false }
-        let pids = entries
-            .filter { $0.executablePath.hasSuffix("/locationd") }
-            .map { $0.pid }
-        guard !pids.isEmpty else { return false }
+        let targets = entries.filter { $0.displayName == "locationd" }
+        guard !targets.isEmpty else { return false }
         var killed = false
-        for pid in pids {
-            if (try? ProcessManagerService.shared.sendSignal(.kill, toPID: pid)) != nil {
+        for entry in targets {
+            if (try? ProcessManagerService.shared.sendSignal(
+                .kill, toPID: entry.pid, expectedName: entry.displayName)) != nil {
                 killed = true
             }
         }

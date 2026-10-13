@@ -11,7 +11,7 @@
   7) swift_i4_advanced_guard.py         —— 「开启高级功能」入口防复发（不得退回写死免责声明）
   8) swift_layout_motion_guard.py       —— 布局与动效防复发（手写等宽网格 / 手搓按压 / 品牌渐变越界）
  10) swift_delisted_download_guard.py   —— 已购/下架下载链路（三 media kind / storefront 轮询 / 搜索回落 / 目录查不到不中止）
- 11) swift_searchbar_guard.py          —— 搜索框显示模式（滚动容器页禁 `.always` 常驻浮层搜索框）
+ 11) swift_searchbar_guard.py          —— 搜索框显示模式（滚动容器页用 `.always` 必须同时给顶部让位）
  12) swift_cellular_tunnel_guard.py    —— Cellular隧道支持（默认关 / 接线不断 / 禁快捷指令硬依赖与误导文案 / 无 Wi-Fi 硬信念文案）
 
 为什么合并成「一个入口」而不是「一个脚本」：

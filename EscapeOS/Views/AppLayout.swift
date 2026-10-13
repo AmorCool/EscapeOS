@@ -169,32 +169,39 @@ extension AppHaptics {
 /// 让分组在页面里**立得起来**（本仓自己的分段语言，不照抄 TRApp 的灰字小标题）.
 ///
 /// 泛型 `Trailing` 让调用方挂右侧动作（如「全部」按钮）；不传时用 `EmptyView` 重载.
+///
+/// `tint`：竖条与符号的取色，**默认品牌蓝 `AppTheme.accent`**（既有调用点行为不变）。主页各分组
+/// 传入**该分组自己的模块色**（`AppModule.xxx.tint`），让分段标题与组内内容**同色** —— 这是
+/// 「全面改造」的抓手：改前所有分组头都是蓝竖条，而组内图标底五颜六色，标题与内容脱节.
 struct AppSectionHeader<Trailing: View>: View {
     private let title: String
     private let subtitle: String?
     private let symbol: String?
+    private let tint: Color
     private let trailing: Trailing
 
     init(_ title: String,
          subtitle: String? = nil,
          symbol: String? = nil,
+         tint: Color = AppTheme.accent,
          @ViewBuilder trailing: () -> Trailing) {
         self.title = title
         self.subtitle = subtitle
         self.symbol = symbol
+        self.tint = tint
         self.trailing = trailing()
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             Capsule()
-                .fill(AppTheme.accent)
+                .fill(tint)
                 .frame(width: 3, height: 16)
             HStack(spacing: 6) {
                 if let symbol {
                     Image(systemName: symbol)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(AppTheme.accent)
+                        .foregroundStyle(tint)
                         .appSymbol()
                 }
                 VStack(alignment: .leading, spacing: 1) {
@@ -216,8 +223,9 @@ struct AppSectionHeader<Trailing: View>: View {
 }
 
 extension AppSectionHeader where Trailing == EmptyView {
-    init(_ title: String, subtitle: String? = nil, symbol: String? = nil) {
-        self.init(title, subtitle: subtitle, symbol: symbol) { EmptyView() }
+    init(_ title: String, subtitle: String? = nil, symbol: String? = nil,
+         tint: Color = AppTheme.accent) {
+        self.init(title, subtitle: subtitle, symbol: symbol, tint: tint) { EmptyView() }
     }
 }
 

@@ -182,11 +182,17 @@ enum AppTheme {
             ? UIColor(red: 0x9D / 255, green: 0xAA / 255, blue: 0xFF / 255, alpha: 1)
             : UIColor(red: 0x3B / 255, green: 0x4C / 255, blue: 0xC0 / 255, alpha: 1)
     })
-    /// 扩展与商店模块色（橙）.
+    /// 扩展与商店模块色（青蓝）.
+    ///
+    /// ⚠️ 此前为**橙棕** `#C2620E`（HSL 28° / 86% / 41%）——用户原话「我不喜欢棕色的颜色
+    /// 主页你踩雷了，特别是你看"扩展与商店"那两个选区的颜色，你不许用棕色」。棕 = 低明度暖橙，
+    /// 且本 token 常以 ~15% 透明度铺在浅底上（`AppRowIcon` 图标底）⇒ 叠出**米褐色**，正是用户
+    /// 看到的「棕」。修法：整族移出暖区，改用**冷青蓝** `#0B8FC9`（HSL 198° / 90% / 42%），
+    /// 低透明度铺底得到浅蓝，彻底去棕；与「设备与系统」被认可的冷色语言同源.
     static let categoryStore = Color(UIColor { trait in
         trait.userInterfaceStyle == .dark
-            ? UIColor(red: 0xFF / 255, green: 0xB0 / 255, blue: 0x61 / 255, alpha: 1)
-            : UIColor(red: 0xC2 / 255, green: 0x62 / 255, blue: 0x0E / 255, alpha: 1)
+            ? UIColor(red: 0x5C / 255, green: 0xC6 / 255, blue: 0xF0 / 255, alpha: 1)
+            : UIColor(red: 0x0B / 255, green: 0x8F / 255, blue: 0xC9 / 255, alpha: 1)
     })
     /// 百宝箱模块色（紫）.
     static let categoryTreasure = Color(UIColor { trait in
@@ -212,11 +218,15 @@ enum AppTheme {
             ? UIColor(red: 0xFF / 255, green: 0x8F / 255, blue: 0xB4 / 255, alpha: 1)
             : UIColor(red: 0xCE / 255, green: 0x32 / 255, blue: 0x68 / 255, alpha: 1)
     })
-    /// 高级功能 / 逆向模块色（红）.
+    /// 高级功能 / 逆向模块色（正红）.
+    ///
+    /// ⚠️ 此前为**砖红** `#BF3A2B`（HSL 6° / 63% / 46%）—— 低明度砖红在浅底上显**陶土棕**，
+    /// 同属用户禁用的暖棕族。改用**正红** `#E5342B`（HSL 3° / 78% / 53%）：提高明度与饱和度，
+    /// 落在「鲜明红」而非「棕红」区间；深色分支维持提亮的珊瑚红 `#FF8C7C`.
     static let categoryAdvanced = Color(UIColor { trait in
         trait.userInterfaceStyle == .dark
             ? UIColor(red: 0xFF / 255, green: 0x8C / 255, blue: 0x7C / 255, alpha: 1)
-            : UIColor(red: 0xBF / 255, green: 0x3A / 255, blue: 0x2B / 255, alpha: 1)
+            : UIColor(red: 0xE5 / 255, green: 0x34 / 255, blue: 0x2B / 255, alpha: 1)
     })
 
     // ── ② 表面层（四级背景，撑起卡片层次）──
@@ -277,9 +287,13 @@ enum AppTheme {
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )
-    /// 暖色渐变组（橙 → 粉）：暖色模块图标块.
+    /// 暖色渐变组（粉 → 红）：暖色模块图标块.
+    ///
+    /// ⚠️ 此前为 `[categoryStore, categorySign]`（橙 → 粉）；`categoryStore` 已去棕改为冷青蓝，
+    /// 若沿用则「暖色渐变」名不副实（青→粉）。故改由**两个仍在暖区、且都已去棕**的模块色构成：
+    /// 签名粉 `categorySign`（HSL 338°）→ 高级正红 `categoryAdvanced`（HSL 3°），保持暖色语义.
     static let gradientWarm = LinearGradient(
-        colors: [categoryStore, categorySign],
+        colors: [categorySign, categoryAdvanced],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )

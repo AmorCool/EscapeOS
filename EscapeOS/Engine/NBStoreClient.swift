@@ -754,34 +754,46 @@ enum NBStoreClient {
     /// - 非 `code=7`（网络 / HTTP / 解码）→ 记下、继续试；全失败且**一次稳定 7 都没遇到**才抛出（提示重试）。
     ///
     /// - Parameter primaryVerID: 首选版本号；空串 = 不传 `appVerId`（服务端回最新版）。
-    /// - Parameter candidates: 候选版本号（**新→旧**）。空数组 = 单发主版本（与旧行为一致）。
+    /// - Parameter embeddedCandidates: **内嵌**候选版本号（**新→旧**）。空数组 = 先只发主版本。
+    /// - Parameter fallbackProvider: **惰性**补候选（v0.3.597）—— 主版本/内嵌候选都未命中时才调
+    ///   一次（下架路径传 bilin 目录补；上架/详情路径传 `nil` 表示不补）。命中路径因此 0 次外呼。
     /// - Parameter maxAttempts: 尝试的**版本**上限（主版本 + 回退合计），防无限试。
     /// - Parameter sameVersionRetries: 同一版本遇**稳定** `code=7` 时的重试次数（v0.3.596 补）。
     /// - Parameter maxRequests: **总请求**上限（含同版本重试），防「库里全没包」时把用户晾太久。
     /// - Returns: 取到包；`nil` = 所有候选都取不到（库里没包）。
     private static func packageWithFallback(appID: String,
                                             primaryVerID: String,
-                                            candidates: [String],
+                                            embeddedCandidates: [String] = [],
+                                            fallbackProvider: (@Sendable () async -> [String])? = nil,
                                             bundleID: String,
                                             country: String,
                                             maxAttempts: Int = 6,
                                             sameVersionRetries: Int = 1,
-                                            maxRequests: Int = 10) async throws -> NBPackage? {
-        // 主版本在前（空串 = 不传 appVerId，服务端回最新版），其余按新→旧补齐并去重。
+                                            maxRequests: Int = 8) async throws -> NBPackage? {
+        // 主版本在前（空串 = 不传 appVerId，服务端回最新版），内嵌候选按新→旧补齐并去重。
         var ordered: [String] = [primaryVerID]
-        for c in candidates where !c.isEmpty && !ordered.contains(c) { ordered.append(c) }
-        let tries = Array(ordered.prefix(max(1, maxAttempts)))
+        for c in embeddedCandidates where !c.isEmpty && !ordered.contains(c) { ordered.append(c) }
+        var tries = Array(ordered.prefix(max(1, maxAttempts)))
 
         var sawStable7 = false
         var lastOtherError: StoreError?
         var requests = 0
-        outer: for (i, vid) in tries.enumerated() {
+        // v0.3.597：候选**惰性补** —— 主版本/内嵌候选都试完仍未命中时，才调 `fallbackProvider`
+        // 去 bilin 补（见 `offSalePackage`）。主版本能命中 ⇒ 整次 bilin（实测 ~1.4s、限流紧）全省。
+        var providerUsed = false
+        var idx = 0
+        scan: while idx < tries.count {
+            if requests >= maxRequests {
+                // 请求预算用尽 —— 不再试（防「库里全没包」时把用户晾太久）。已得出的结论仍有效。
+                break scan
+            }
+            let vid = tries[idx]
+            let i = idx
             var stable7 = false
             var retried = 0
             attempt: while true {
                 if requests >= maxRequests {
-                    // 请求预算用尽 —— 不再试（防「库里全没包」时把用户晾太久）。已得出的结论仍有效。
-                    break outer
+                    break scan
                 }
                 requests += 1
                 do {
@@ -842,6 +854,22 @@ enum NBStoreClient {
                                        + "（\(i + 2)/\(tries.count)）.",
                                        category: .appStore)
             }
+            idx += 1
+            // 内嵌候选试完、仍未命中、且还没补过 ⇒ 惰性调 provider（bilin）补候选，追加进 tries 继续回退。
+            if idx >= tries.count, !providerUsed, let provider = fallbackProvider {
+                providerUsed = true
+                let extra = await provider()
+                var appended = false
+                for c in extra where !c.isEmpty && !ordered.contains(c) {
+                    ordered.append(c)
+                    appended = true
+                }
+                if appended {
+                    tries = Array(ordered.prefix(max(1, maxAttempts)))
+                    LoginLogger.shared.log("\(logTag) 内嵌候选试完未命中，补 \(tries.count - idx) 个候选继续回退.",
+                                           category: .appStore)
+                }
+            }
         }
         // 全试完：遇到过稳定 code=7 ⇒ 库里没包（回 nil）；否则把最后一次错误抛出去（提示重试）。
         if sawStable7 || lastOtherError == nil { return nil }
@@ -871,7 +899,7 @@ enum NBStoreClient {
                                  fallbackCandidates: [String] = []) async throws -> NBPackage? {
         try await packageWithFallback(appID: appID,
                                       primaryVerID: appVerId,
-                                      candidates: fallbackCandidates,
+                                      embeddedCandidates: fallbackCandidates,
                                       bundleID: bundleID,
                                       country: country)
     }
@@ -1259,11 +1287,18 @@ enum NBStoreClient {
     ///
     /// 用户报「最新构建下**无法下载**」—— 上一版的两处修复盖不住真实场景：
     /// 1. **版本回退空转**：`candidates` 只来自内嵌 `appStoreData`，而 7/10 下架条目没有它
-    ///    ⇒ `candidates=[]` ⇒ 回退链只有 1 步。**现在** `offSaleCandidates` 在内嵌没有时
+    ///    ⇒ `candidates=[]` ⇒ 回退链只有 1 步。**现在** `bilinCandidates` 在内嵌没有时
     ///    用 bilin 目录的 `external_identifier` 补（带缓存、失败不阻塞）。
     /// 2. **兜底发的是 403 死链**：现取失败无条件 `return embedded`，而这些快照 accessKey 全部
     ///    已过期、HEAD/Range 一律 403 ⇒ 任务建了、包下不动。**现在** `snapshotFallback` 先
     ///    HEAD 探活：死链（403/404）返回 `nil`（如实报「库里没包」），活链/判不出才给。
+    ///
+    /// ## v0.3.597：bilin 补候选从**前置**改**惰性**（2026-10-13，治「获取变慢」）
+    ///
+    /// 用户报「NB 源获取下架应用**变慢**」—— 实测定案（`nb_perf_probe.py`）：v0.3.596 在取包**前**
+    /// 无条件 `await offSaleCandidates(...)`，而 bilin median ~1.4s、3 连打即 429 ⇒ 主版本本来能
+    /// 命中的条目也白等一整次 bilin。**现在**改由 `packageWithFallback` 在**主版本/内嵌候选都未命中
+    /// 时**才调 `bilinCandidates` ⇒ 命中路径 0 次 bilin（回到改前速度），失败路径仍补候选（能力不丢）。
     ///
     /// ## v0.3.587：`code=7` 如实处理（不再把内部码甩给用户）
     ///
@@ -1298,13 +1333,17 @@ enum NBStoreClient {
             return fb
         }
 
-        // v0.3.596：候选版本 —— 内嵌 `metadata` 有就用它；**没有（多数条目）用 bilin 目录补**。
-        // 原来只认内嵌数组，而 7/10 下架条目没有 `appStoreData` ⇒ `candidates=[]` ⇒ 回退链只有
-        // 1 步 = 等于没回退（见 `offSaleCandidates`）。这是症状 2「无法下载」的结构性主因。
-        let candidates = await offSaleCandidates(for: app, storeID: storeID)
+        // v0.3.597：候选**惰性补** —— 内嵌 `metadata` 有就直接当候选；没有（多数条目）**不预打 bilin**，
+        // 改成把 bilin 补候选包成 provider，只有主版本/内嵌候选都 `code=7` 时 `packageWithFallback`
+        // 才去调（见 `bilinCandidates`）。这样主版本能命中时省掉整次 bilin（实测 ~1.4s，且限流紧易 429），
+        // 而主版本 7 时仍能靠 bilin 补候选退到旧版本（**不丢「调出链接」的能力**）。
+        let embeddedCandidates: [String] = app.versionIDs.isEmpty ? [] : Array(app.versionIDs.reversed())
+        let fallbackProvider: (@Sendable () async -> [String])? = app.versionIDs.isEmpty
+            ? { await bilinCandidates(storeID: storeID, appName: app.name) }
+            : nil
         LoginLogger.shared.log("\(logTag) [提示] 现取新鲜直链 getAppHistoryList"
                                + "（appID=\(storeID) appVerId=\(app.appExtID ?? "")"
-                               + " 候选 \(candidates.count) 个）.",
+                               + " 内嵌候选 \(embeddedCandidates.count) 个）.",
                                category: .appStore)
         let pkg: NBPackage?
         do {
@@ -1315,7 +1354,8 @@ enum NBStoreClient {
             // 两类**值得重试**的抛出。
             pkg = try await packageWithFallback(appID: storeID,
                                                 primaryVerID: app.appExtID ?? "",
-                                                candidates: candidates,
+                                                embeddedCandidates: embeddedCandidates,
+                                                fallbackProvider: fallbackProvider,
                                                 bundleID: app.bundleID ?? "",
                                                 country: country)
         } catch let e as StoreError {
@@ -1345,21 +1385,27 @@ enum NBStoreClient {
         return nil
     }
 
-    /// 取包候选版本（**新→旧**）—— 优先内嵌 `metadata`，缺了用 bilin 目录补 —— v0.3.596.
+    /// bilin 目录补候选（**惰性**：只在主版本/内嵌候选都 `code=7` 时才被 `packageWithFallback` 调）—— v0.3.597.
     ///
-    /// ## 为什么（2026-10-12 实测定案）
+    /// ## 为什么（2026-10-13 实测复核）
     /// 版本回退链原来只有内嵌 `appStoreData.metadata.softwareVersionExternalIdentifiers`
     /// 一个来源，而**多数下架条目没有 `appStoreData`**（实测搜「哔哩哔哩」10 条里 **7 条**
     /// `versionIDs=[]`）⇒ `candidates=[]` ⇒ 回退链只有 1 步 = **等于没回退**。这些条目
     /// 「最新版被清出库存」时一步都退不动（`tv.danmaku.biliim` 首测即 `code=7`）。
     ///
     /// ## 怎么补
-    /// 内嵌没有时走 `versionList(trackID:)`（= `AppStoreService.versionHistoryFromCatalog`，
+    /// 走 `versionList(trackID:)`（= `AppStoreService.versionHistoryFromCatalog`，
     /// 本项目**已在用**的 bilin 目录，不新增任何外部依赖）取全量版本，用它的
     /// `external_identifier`（= NB 要的 `appVerId`）当候选。实测 `tv.danmaku.biliim` 用
     /// bilin 候选第 1 步即 `code=0`（`841714489`，新鲜直链）。
     ///
-    /// ## 两道保险（bilin 限流实测 4~6 发/窗口：16 连打 6×429 + 2×超时）
+    /// ## v0.3.597：从「无条件前置」改成「惰性」—— 这是「获取变慢」的根因修法
+    /// v0.3.596 在 `offSalePackage` 里**先** `await offSaleCandidates(...)` 再取包 ⇒ 主版本本来
+    /// 能命中的条目也要先等 bilin（实测 median ~1.4s；且 bilin 限流紧、3 连打即 429，失败还触发
+    /// `AppStoreService` 的 400ms 退避重试）。改后由 `packageWithFallback` 在**主版本/内嵌候选都
+    /// 未命中时**才调本函数 ⇒ 命中路径 0 次 bilin（回到改前速度），失败路径仍能补候选（能力不丢）。
+    ///
+    /// ## 两道保险（bilin 限流实测：3 连打第 3 发即 `429`）
     /// - **缓存**：目录自带 **6h 成功缓存 + 3min 负缓存**（`AppStoreService`），重复取包不打网络；
     /// - **非阻塞**：这里 `do/catch` 吞掉任何失败，补不到就回 `[]`、**照常单发**，
     ///   绝不因 bilin 失败把取包整体判死。
@@ -1367,32 +1413,27 @@ enum NBStoreClient {
     /// - Note: bilin 目录实测**新→旧**排列（`t13_bilin_order.py`：`1517062289` 是
     ///   2026-09-27 → … → 2020-07-11），与 NB 要的候选方向一致，**不再反转**；
     ///   内嵌数组是**旧→新**，才需要 `.reversed()`。
-    private static func offSaleCandidates(for app: OffSaleApp, storeID: String) async -> [String] {
-        // 内嵌 `metadata` 有全量版本数组 ⇒ 直接用它（旧→新 ⇒ 反转为新→旧）。
-        if !app.versionIDs.isEmpty {
-            return Array(app.versionIDs.reversed())
-        }
-        // 内嵌没有（多数条目）⇒ 用 bilin 目录的 `external_identifier` 补候选。
-        // 失败**不阻塞**取包 —— 只当没补到，照常单发。
+    private static func bilinCandidates(storeID: String, appName: String) async -> [String] {
         do {
             let list = try await versionList(trackID: storeID)
             let ids = list.map { $0.externalIdentifier }.filter { !$0.isEmpty }
             let capped = Array(ids.prefix(offSaleCandidateLimit))
             if !capped.isEmpty {
                 LoginLogger.shared.log("\(logTag) [提示] 内嵌无版本数组，用 bilin 目录补 \(capped.count) 个候选"
-                                       + "（\(app.name) appID=\(storeID)）.", category: .appStore)
+                                       + "（\(appName) appID=\(storeID)）.", category: .appStore)
             }
             return capped
         } catch {
             LoginLogger.shared.log("\(logTag) [提示] bilin 目录补候选失败（\(error.localizedDescription)），"
-                                   + "照常单发（\(app.name)）.", category: .appStore)
+                                   + "照常单发（\(appName)）.", category: .appStore)
             return []
         }
     }
 
     /// bilin 补候选的**数量上限**：`packageWithFallback` 只用到前 `maxAttempts`（6）个版本，
-    /// 目录对某些 App 能回 473 个（如 `736536022`）—— 截断到 8 个足够覆盖回退链，少建长数组。
-    private static let offSaleCandidateLimit = 8
+    /// 目录对某些 App 能回 473 个（如 `736536022`）—— 截断到 6 个（与 `maxAttempts` 对齐）
+    /// 足够覆盖回退链，少建长数组（v0.3.597：8 → 6）。
+    private static let offSaleCandidateLimit = 6
 
     /// Apple CDN 直链的 `accessKey` 是否**该让位给现取**（过期，或判不出过期时间）。
     ///

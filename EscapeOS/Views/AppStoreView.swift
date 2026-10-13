@@ -362,7 +362,7 @@ struct AppStoreView: View {
                 }
             }
             if !ownedMatches.isEmpty {
-                Section("已购 · \(ownedMatches.count) 款") {
+                Section("已购（含下架）· \(ownedMatches.count) 款") {
                     ForEach(ownedMatches) { app in
                         ownedRow(app)
                     }
@@ -555,8 +555,12 @@ struct AppStoreView: View {
                 searchResults = []
                 errorText = error.localizedDescription
             }
-            // 回落：公开 search 查不到（含已下架）时，用当前下载账号的已购列表按关键词再找一次。
-            ownedMatches = searchResults.isEmpty ? await fallbackOwnedMatches(for: term) : []
+            // 已购（含下架）**无条件**并入：公开 search 天然查不到已下架应用，
+            // 若只在 searchResults 为空时才回落，同名的在架应用一命中，下架那条就永远搜不到。
+            // 与在架结果按 id 去重，避免同一个 App 出现两次。
+            let listedIds = Set(searchResults.map(\.id))
+            ownedMatches = await fallbackOwnedMatches(for: term)
+                .filter { !listedIds.contains($0.id) }
             searching = false
         }
     }

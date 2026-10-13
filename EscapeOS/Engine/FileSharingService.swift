@@ -13,17 +13,20 @@ struct FileSharingApp: Identifiable {
     var applicationType: String // "User" / "System"
     var supportsFileSharing: Bool
     var path: String?       // ApplicationPath（可选展示）
-    /// v0.3.408：**数据容器路径**（instproxy 默认响应里的 `Container`，形如
+    /// v0.3.408：**数据容器路径**（instproxy 的 `Container` 键，形如
     /// `/var/mobile/Containers/Data/Application/<UUID>`）。
     ///
     /// 它是设备瘦身量 `docSize` 的**入口**（见 `DeviceSlimService` 的文档大小通道）：
     /// 有了它就能在**本机**用 `SandboxEscape` + `FileService.countTree` 递归求和，
     /// 不必走 house_arrest AFC（那条路要求应用开启文档共享，微信/游戏这类恰恰没开）。
     ///
-    /// 白拿的：`get_apps`（**不带** ReturnAttributes）的默认响应本来就带这个键 ——
-    /// `AppDiscovery` 正是从同一份响应里取的它（空间回收已经在用）。带属性 Lookup
-    /// 的响应**不含**此键（不在请求字段里），所以那里的值为 nil；而它恰好是设备瘦身
-    /// 的**快路径**，拿得到。
+    /// **两个来源都带这个键**（v0.3.600 起）：
+    ///   - `get_apps`（**不带** ReturnAttributes）：默认响应本来就带 —— `AppDiscovery`
+    ///     正是从同一份响应里取的它（空间回收已经在用）；
+    ///   - 带属性 Lookup：**v0.3.600 把 `Container` 加进请求字段后才带**（此前不在
+    ///     `attributeRequestFields` / Rust `attrs` 里 ⇒ 值为 nil）。而带属性 Lookup
+    ///     恰好是设备瘦身的**快路径** ⇒ 此前 `containerPath` 恒 nil ⇒ docSize 通道
+    ///     整条死掉 ⇒ 「较大应用」漏判文档重的应用（这就是用户报的那个 bug）。
     /// 系统应用可能给空串（与 `AppDiscovery` 同口径），所以判空后一律当 nil 用。
     var containerPath: String? = nil
     var appSize: Int64?     // 应用大小（StaticDiskUsage / CFBundleSize，字节；未返回则为 nil）
@@ -254,10 +257,15 @@ enum FileSharingService {
     /// 改一处务必改另一处，否则日志会骗人.
     /// v0.3.406：已加回 `StaticDiskUsage`（恢复应用大小）；`DynamicDiskUsage` /
     /// `CFBundleSize` 仍不在列表里（前者疑为 25 秒卡死的元凶）.
+    /// v0.3.600：**加回 `Container`**（数据容器路径）—— 修「设备瘦身-较大应用查询有问题」：
+    /// 它是 `DeviceSlimService` 文档大小通道的唯一入口（见 `FileSharingApp.containerPath`），
+    /// 此前不在请求里 ⇒ `containerPath` 恒 nil ⇒ docSize 恒 0 ⇒ 文档重的应用漏判.
+    /// `Container` 是静态字段（不遍历目录树），不会把 25 秒卡死引回来.
     private static let attributeRequestFields = [
         "CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName",
         "CFBundleShortVersionString", "ApplicationType", "UIFileSharingEnabled",
-        "Path", "StaticDiskUsage", "iTunesMetadata", "ApplicationDSID", "SignerIdentity",
+        "Path", "Container", "StaticDiskUsage", "iTunesMetadata", "ApplicationDSID",
+        "SignerIdentity",
     ]
 
     /// v0.3.401：带属性 Lookup 的执行额度上限（秒）——主路径与可选增强
@@ -738,6 +746,8 @@ enum FileSharingService {
     /// ReturnAttributes 收紧、**v0.3.406 加回 `StaticDiskUsage`**（Rust 侧 `attrs` 常量），
     /// 所以它返回 `StaticDiskUsage` 而**不返回** `DynamicDiskUsage` / `CFBundleSize`
     /// （即：有 `appSize`、没有 `docSize`）.
+    /// v0.3.600：**加回 `Container`** —— 它因此也是 `containerPath` 的来源（设备瘦身
+    /// 文档大小通道的入口），详见 `attributeRequestFields` 与 `FileSharingApp.containerPath`.
     private static func lookupAppsWithAttributes() throws -> [FileSharingApp] {
         var tunnel = try makeTunnel()
         defer { tunnel.free() }

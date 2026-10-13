@@ -1561,7 +1561,7 @@ enum HostCapabilityService {
         var failed: [String] = []
         for entry in matched {
             do {
-                try ProcessManagerService.shared.sendSignal(action, toPID: entry.pid)
+                try ProcessManagerService.shared.sendSignal(action, toPID: entry.pid, expectedName: entry.displayName)
                 affected.append("\(entry.displayName)(\(entry.pid))")
             } catch {
                 failed.append("\(entry.displayName)(\(entry.pid)): \(error.localizedDescription)")

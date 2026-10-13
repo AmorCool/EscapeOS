@@ -301,7 +301,8 @@ enum DeviceSlimService {
     ///     会退化，页面必须明确提示「应用大小不可用」（判据见 sizeComplete）.
     ///   - **文档大小** `docSize`（`DynamicDiskUsage`）：**不再从请求里拿**（疑为「带属性 Lookup
     ///     卡 ~25 秒」的元凶，见 FileSharingService / installation_proxy.rs 注释）——
-    ///     v0.3.408 起改走**本机通道**按需量：`containerPath`（`get_apps` 默认响应自带）
+    ///     v0.3.408 起改走**本机通道**按需量：`containerPath`（`Container` 键；v0.3.600 起
+    ///     带属性 Lookup 也返回，见 `FileSharingApp.containerPath`）
     ///     + `SandboxEscape` + `FileService.countTree`，与「空间回收」页同一套，
     ///     每轮后台补一批、跨轮累积。落地与代价见 `startDocSizePass`.
     private static func readAppsForSlim() -> AppReadResult {
@@ -314,16 +315,20 @@ enum DeviceSlimService {
         appReadLock.unlock()
 
         var result = AppReadResult()
-        // ① 快路径：get_apps
+        // ① 快路径：**带属性 Lookup**（额度 ≥ 10s 时 `listAppsWithFileSharing(timeout:)` 的主路径
+        //    就是它，失败/超时才降级 `get_apps`；见 FileSharingService
+        //    `listAppsWithAttributesWithFallback`）。它同时给出 `appSize`（StaticDiskUsage）
+        //    与 `containerPath`（Container，v0.3.600 起）—— 后者是下面文档大小通道的入口，
+        //    所以这一条命令必须能拿到 `Container`，否则 docSize 恒 0（v0.3.600 修的正是它）.
         switch FileSharingService.listAppsWithFileSharing(timeout: 20) {
         case .ok(let found):
             result.apps = found
             result.usable = !found.isEmpty
-            LoginLogger.shared.log("[设备瘦身] get_apps 快路径：\(found.count) 条")
+            LoginLogger.shared.log("[设备瘦身] 快路径（带属性 Lookup → get_apps 降级）：\(found.count) 条")
         case .failed(let message):
-            LoginLogger.shared.log("[设备瘦身] get_apps 快路径失败：\(message)")
+            LoginLogger.shared.log("[设备瘦身] 快路径失败：\(message)")
         case .timedOut:
-            LoginLogger.shared.log("[设备瘦身] get_apps 快路径超时（排队与执行分开计）")
+            LoginLogger.shared.log("[设备瘦身] 快路径超时（排队与执行分开计）")
         }
         // ①' v0.3.408：拿到列表就**立刻**发起「文档大小」（本机通道）——它要真的把每个应用
         //     的容器文件树走一遍，所以放在这里与后面（最长 15 秒的带属性 Lookup + 空间快照）
@@ -470,8 +475,9 @@ enum DeviceSlimService {
     ///
     /// ## 实际通道：本机沙盒扩展 + 递归求和（与「空间回收」页同一套）
     /// `escape.withHandle(for: 容器路径)` 消费沙盒扩展 → `files.countTree` 递归求和.
-    /// 只要 instproxy 给了 `Container`（`get_apps` 默认响应自带，见
-    /// `FileSharingApp.containerPath`）就能量 —— 不需要应用配合，也不需要额外隧道.
+    /// 只要 instproxy 给了 `Container`（`get_apps` 默认响应自带；带属性 Lookup 自
+    /// v0.3.600 起也在请求里，见 `FileSharingApp.containerPath`）就能量 ——
+    /// 不需要应用配合，也不需要额外隧道.
     /// 量的是**整个数据容器**（Documents + Library + tmp），与 `DynamicDiskUsage` 的口径一致
     ///（不是只量 Documents）.
     ///

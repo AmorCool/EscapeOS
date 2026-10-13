@@ -11,12 +11,12 @@ import SwiftUI
 /// - 已定义好的 14 个新色 token（8 模块色 / 4 表面层 / 2 强调变体 / 3 渐变）**一个都没用上**。
 ///
 /// ## 改后（Hero + Bento 网格 + 分组行）
-/// - **Hero**：orb 卡片加冷色渐变晕（呼应 orb 的极光语言）+ 发丝描边，不再是灰板。
+/// - **Hero**：orb 卡片 = `surfaceCard` + 发丝描边（**不再叠加任何渐变 banner**，见下）。
 /// - **设备与系统 → 2 列 Bento 网格**（4 个平级工具入口）：每格是**自己的模块色**的淡色
 ///   渐变卡 + 模块色图标底，是页面的「彩色中心」。
 /// - **清理与优化 / 扩展与商店 → 全宽行**（保持「词条 + 说明」的列表语言），
 ///   但每行图标底换用**自己的模块色**（不再全蓝）。
-/// - **分段标题**统一 `AppSectionHeader`（品牌色竖条 + 主标题）。
+/// - **分段标题**统一 `AppSectionHeader`，且**竖条 / 符号取该分组自己的模块色**（与组内内容同色）。
 /// - **百宝箱**入口换紫色身份，保留点击 / 上滑手势。
 /// - 页面底 `surfaceBase`、卡片 `surfaceCard` —— 用上新表面层，撑起层次。
 ///
@@ -25,6 +25,12 @@ import SwiftUI
 /// - 模块色只出现在**紧凑图标底 / 淡色卡底**（不透明度 ≤14%），不做全宽深色实底。
 /// - 界面文案一律英文句点 `.`。
 ///
+/// v0.3.599：**去棕 + 去悬浮球 banner**（用户原话：「我不喜欢棕色的颜色 主页你踩雷了 特别是你看
+/// "扩展与商店"那两个选区的颜色 你不许用棕色」「主页那个悬浮球背景还叠加一层 banner 看着怪别扭」）。
+/// - `categoryStore` 橙棕 `#C2620E` → 冷青蓝 `#0B8FC9`（「扩展与商店」两行随之去棕）。
+/// - `categoryAdvanced` 砖红 `#BF3A2B` → 正红 `#E5342B`（同属暖棕族，一并去棕）。
+/// - hero 卡片删除叠加的冷色渐变 banner 层。
+/// - 分组头竖条改用各分组模块色（不再统一蓝）。
 /// v0.3.219：Hero 换装 Metal 实时液态玻璃球（LiquidGlassOrbView + LiquidGlassOrb.metal）。
 /// v0.3.207：百宝箱 = 系统原生 sheet（presentationDetents 0.4↔1.0，原生上拉展开 /
 /// 下拉关闭，跟手流畅，返回不必点横线；把手区点击或上滑触发）。
@@ -203,8 +209,11 @@ struct HomeView: View {
     // 移植自 liquid-glass v2 WebGL 样板；组件见 LiquidGlassOrbView.swift，
     // 着色器见 LiquidGlassOrb.metal；iOS 17 以下回退旧版圆环进度样式）。
     //
-    // 卡片底从「纯灰板」改为 `surfaceCard` + **冷色渐变晕**（download 蓝 → clean 青绿，
-    // 顶 → 底 10% → 3%）：让 orb 的极光语言向上蔓延到卡片，不再是一块孤立的黑块。
+    // ⚠️ 改前本卡在 `surfaceCard` 之上**又叠了一层冷色渐变 banner**（download 蓝 10% → clean 青 3%，
+    // 顶→底）。用户原话「主页那个悬浮球背景还叠加一层 banner 看着怪别扭 我不喜欢」—— 那层渐变
+    // 与球体自身的极光语言**互相打架**（两层冷色叠加，边界糊成一条脏带），且违背硬规则 1 的
+    // 「不做全宽 banner」精神。现**整层删除**：只留 `surfaceCard` + 一条发丝描边，让球体自己
+    // 成为唯一焦点，卡片回归干净.
     private var heroCard: some View {
         VStack(spacing: 14) {
             LiquidGlassOrbView(score: securityScore, tint: scoreColor)
@@ -225,17 +234,6 @@ struct HomeView: View {
         .background(
             RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
                 .fill(AppTheme.surfaceCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                        .fill(LinearGradient(
-                            colors: [
-                                AppTheme.categoryDownload.opacity(0.10),
-                                AppTheme.categoryClean.opacity(0.03)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ))
-                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
@@ -246,10 +244,10 @@ struct HomeView: View {
     // MARK: 功能分组（分段标题 + 分组内容）
 
     /// 清理与优化：2 项「扫描 + 瘦身」，保持全宽行（词条 + 说明语言），
-    /// 图标底换用**清理模块色**（青绿），不再是全蓝。
+    /// 图标底换用**清理模块色**（青绿），不再是全蓝。分组头竖条同用清理模块色.
     private var cleanupSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            AppSectionHeader("清理与优化", symbol: "sparkles")
+            AppSectionHeader("清理与优化", symbol: "sparkles", tint: AppModule.clean.tint)
             VStack(spacing: 0) {
                 navRow(title: "空间回收", subtitle: "扫描可清理的应用缓存",
                        icon: "internaldrive", tint: AppModule.clean.tint) {
@@ -271,9 +269,10 @@ struct HomeView: View {
     /// 设备与系统：4 个**平级**工具入口（无主次），改 **2 列 Bento 网格**（`AppCardGrid`），
     /// 每格用**自己的模块色**做淡色渐变卡 + 模块色图标底 —— 这是页面的「彩色中心」。
     /// 4 项用 4 个不同色相（靛蓝 / 绿 / 石板灰 / 蓝），一屏之内就看出「不再单一」。
+    /// 分组头竖条用设备模块色（靛蓝），与组内主色呼应.
     private var deviceSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            AppSectionHeader("设备与系统", symbol: "iphone.gen3")
+            AppSectionHeader("设备与系统", symbol: "iphone.gen3", tint: AppModule.device.tint)
             AppCardGrid(items: deviceTools, columns: 2) { tool in
                 NavigationLink {
                     NavigationLazyView(tool.destination)
@@ -286,10 +285,13 @@ struct HomeView: View {
         }
     }
 
-    /// 扩展与商店：2 项「模块 + 商店」，保持全宽行，图标底换用**商店模块色**（橙）。
+    /// 扩展与商店：2 项「模块 + 商店」，保持全宽行。
+    ///
+    /// ⚠️ 改前两行图标底均为**橙棕** `AppModule.store.tint`（`#C2620E`）—— 用户点名的「棕色踩雷」处。
+    /// `categoryStore` 已去棕改为**冷青蓝**，故此处两行随之变青蓝；分组头竖条同用商店模块色.
     private var extensionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            AppSectionHeader("扩展与商店", symbol: "shippingbox.fill")
+            AppSectionHeader("扩展与商店", symbol: "shippingbox.fill", tint: AppModule.store.tint)
             VStack(spacing: 0) {
                 navRow(title: "模块", subtitle: "模块管理",
                        icon: "shippingbox.fill", tint: AppModule.store.tint) {

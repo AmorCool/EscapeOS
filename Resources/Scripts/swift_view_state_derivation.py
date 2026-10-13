@@ -97,6 +97,10 @@ ALLOW = [
     ("**/AppStoreDetailView.swift", r'displayStage\s*!=\s*job\.phase\.title',
      "去重**比较**（非渲染 phase.title）：判断「黑字」与「阶段胶囊」文案是否相同来决定是否多画一行；"
      "换成 displayStage 会让条件恒 false ⇒ 额外一行永不渲染（审计明确『勿替换』）"),
+    ("**/CallRecordingToneView.swift", r'ToneAlert\(title: "失败"',
+     "操作结果 alert 的标题，非任务阶段状态行 —— CallRecordingToneService.ToneState 只有 "
+     "original/silenced/unreachable 三个 case，本就没有 displayStage 这个源；"
+     "错误正文来自 error.localizedDescription，标题只是「这次操作没成功」的分类词"),
     ("**/IPADownloadManagerView.swift", r'case\s+\.installing:\s*return\s*\(nil,\s*"安装中"\)',
      "OTA **在线安装**进度环文案：来源是 otaProgress.stage（OnlineInstallProgress.Stage，另一套状态机），"
      "与 IPADownloadCenter.Job 无关 ⇒ displayStage 不是它的源（脚本默认提示『应来自 displayStage』对它是错的）"),

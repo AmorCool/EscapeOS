@@ -16,17 +16,25 @@
 
   - v0.3.289 `FileSharingAppsView.swift`：「always 时搜索框常驻悬浮，列表首行会被压在搜索框
     下面（用户截图实锤「显示不全」）」，改 `.automatic` 修好；
-  - 2026-10-12 `LaunchAppsView.swift`（本轮）：`b48aed1` 把该页从 `List` 换成
+  - 2026-10-12 `LaunchAppsView.swift`：`b48aed1` 把该页从 `List` 换成
     `ScrollView + AppAdaptiveGrid`，但搜索框仍留在 `.always` ⇒ 网格第一行被盖住，用户报
     「滑动跟没反应过来一样 原来不是那样的」。
 
+2026-10-13 用户又要求该页搜索框「回到之前那样常驻」，于是修法升级为
+**「常驻 + 自己给滚动内容让位」**：`.always` 与 `.safeAreaInset(edge: .top)` 成对出现，
+让位高度由 `SearchBarInsetProbe` 从系统视图树实测（不写死）。不变量因此从
+「滚动容器页禁 `.always`」精确化为「滚动容器页用 `.always` 必须同时给顶部让位」。
+
 本脚本把这条不变量机械守住：
 
-  S1  **滚动容器页不得用 `.always` 搜索框**：任何 `EscapeOS/` 下的 `.swift`，只要出现
-      `displayMode: .always`，就必须是 `List` 容器页（同文件内出现 `List {` 或 `List(`）。
-      否则视为「搜索框浮在滚动内容上」⇒ 报错，提示改 `.automatic`。
-  S2  **回归 tripwire**：`EscapeOS/Views/LaunchAppsView.swift` 必须保留
-      `displayMode: .automatic`。它是本轮修复的落点，被改回 `.always`（或删掉该档）即报错。
+  S1  **滚动容器页用 `.always` 搜索框必须同时给内容让位**：任何 `EscapeOS/` 下的 `.swift`，
+      只要出现 `displayMode: .always`，就必须满足二者之一 ——
+        (a) 是 `List` 容器页（同文件内出现 `List {` 或 `List(`，系统会自动内缩）；
+        (b) 同文件内出现 `.safeAreaInset(edge: .top`（自己把搜索框高度让出来）。
+      两条都不满足 ⇒ 视为「搜索框浮在滚动内容上、第一行被盖住」⇒ 报错。
+  S2  **本页 tripwire**：`EscapeOS/Views/LaunchAppsView.swift` 必须**同时**保留
+      `displayMode: .always`（常驻）与 `.safeAreaInset(edge: .top`（让位）。少任一条即报错 ——
+      少 `.always` 就退回「搜索框会收起」，少让位就让网格第一行被压住。
 
 判据只认**符号/结构**，不绑行号、不绑文案。扫描前先用状态机把注释屏蔽为空白（字符串保留），
 故注释 / 文档里写 `displayMode: .always` 不会误报。
@@ -40,7 +48,7 @@ import sys
 
 ALWAYS_FP = "displayMode: .always"
 LIST_FPS = ("List {", "List(")
-AUTO_FP = "displayMode: .automatic"
+TOP_INSET_FP = ".safeAreaInset(edge: .top"
 LAUNCH_FILE = "EscapeOS/Views/LaunchAppsView.swift"
 
 
@@ -140,22 +148,29 @@ def check(root):
         masked = mask_comments(raw)
         rel = os.path.relpath(path, root).replace(os.sep, "/")
 
-        # S1：滚动容器页不得用常驻浮层搜索框（`.always` 只允许出现在 `List` 容器页）
-        if ALWAYS_FP in masked and not any(fp in masked for fp in LIST_FPS):
+        # S1：滚动容器页用 `.always` 必须同时给内容让位（`List` 容器 或 顶部 safeAreaInset 占位）
+        has_list = any(fp in masked for fp in LIST_FPS)
+        has_top_inset = TOP_INSET_FP in masked
+        if ALWAYS_FP in masked and not has_list and not has_top_inset:
             k = masked.find(ALWAYS_FP)
-            errs.append("[S1] %s:%d 用了 `.always` 搜索框，但本文件不是 `List` 容器页 —— "
-                        "滚动容器（`ScrollView`）下 `.always` 的搜索框会**常驻悬浮压在内容上**，"
-                        "内容第一行被盖住且滚动无反馈（用户报「滑动跟没反应过来一样」）。"
-                        "请改 `displayMode: .automatic`"
+            errs.append("[S1] %s:%d 用了 `.always` 搜索框，但既不是 `List` 容器页、也没有给"
+                        "滚动内容让位 —— 滚动容器（`ScrollView`）下 `.always` 的搜索框会"
+                        "**常驻悬浮压在内容上**，内容第一行被盖住。请二选一：① 改回 "
+                        "`displayMode: .automatic`（搜索框随滚动收起）；② 保留 `.always` 但"
+                        "补 `.safeAreaInset(edge: .top)`（或 `.contentMargins(.top, _, for: "
+                        ".scrollContent)`）把搜索框高度让出来"
                         % (rel, _line_of(masked, k)))
 
-        # S2：本轮修复落点的回归 tripwire
+        # S2：本页修复落点的回归 tripwire —— 常驻（.always）与让位（顶部 safeAreaInset）必须成对
         if rel == LAUNCH_FILE:
             launch_seen = True
-            if AUTO_FP not in masked:
-                errs.append("[S2] %s 缺少 `%s` —— 本页是 `ScrollView` 容器，搜索框必须用 "
-                            "`.automatic`；改回 `.always` 会让网格第一行被搜索框盖住"
-                            % (rel, AUTO_FP))
+            if ALWAYS_FP not in masked:
+                errs.append("[S2] %s 缺少 `%s` —— 用户要求搜索框常驻；改掉它搜索框就会收起"
+                            % (rel, ALWAYS_FP))
+            if not has_top_inset:
+                errs.append("[S2] %s 缺少 `%s` —— 本页是 `ScrollView` 容器，常驻搜索框必须"
+                            "配一个顶部让位，否则网格第一行会被搜索框盖住"
+                            % (rel, TOP_INSET_FP))
 
     if not launch_seen:
         errs.append("[S2] 找不到 %s —— S2 无法校验（文件被改名 / 删除？）" % LAUNCH_FILE)
@@ -176,10 +191,10 @@ def main():
     if errs:
         for e in errs:
             print("ERROR %s" % e)
-        print("命中：%d（S1 滚动容器禁 .always 搜索框 / S2 拉起应用页回归 tripwire）" % len(errs))
+        print("命中：%d（S1 滚动容器用 .always 必须让位 / S2 拉起应用页常驻与让位成对）" % len(errs))
         return 1
-    print("S1 滚动容器页未用常驻浮层搜索框（`.always` 仅限 List 容器）：OK")
-    print("S2 拉起应用页搜索框为 `.automatic`（第一行不被盖住）：OK")
+    print("S1 滚动容器页的 `.always` 均已让位（List 容器 或 顶部 safeAreaInset）：OK")
+    print("S2 拉起应用页 `.always`（常驻）+ `.safeAreaInset(edge: .top)`（让位）成对：OK")
     print("命中：0")
     return 0
 

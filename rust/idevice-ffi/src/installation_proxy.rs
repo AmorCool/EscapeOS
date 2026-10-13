@@ -784,9 +784,20 @@ pub unsafe extern "C" fn installation_proxy_lookup_apps(
         //（是否开启文件共享）、以及基础标识字段（CFBundleIdentifier / CFBundleDisplayName
         // / CFBundleName / CFBundleShortVersionString / Path）、ApplicationDSID /
         // SignerIdentity（Swift 侧解析这两个字段，读它们是零成本的、已随 dict 返回）。
+        // v0.3.600：**加回 `Container`（数据容器路径）** —— 修「主页-设备瘦身 较大应用
+        //   查询有问题」（用户报）。根因：v0.3.401 起「设备瘦身」的快路径走的**就是本
+        //   函数**（带属性 Lookup），而本 attrs 里**没有 `Container`** ⇒
+        //   `FileSharingApp.containerPath` 恒为 nil ⇒ `DeviceSlimService.startDocSizePass`
+        //   的 `containerPath` 判空把全部应用滤掉 ⇒ 文档大小（docSize）通道从不运行 ⇒
+        //   `bigApps()` 的 `appSize + docSize` 里那一半恒为 0，只有 App 本体
+        //   （StaticDiskUsage）够 500MB 的才进「较大应用」，**微信 / 游戏这类
+        //   「本体不大、文档几十 GB」的永远漏判**。
+        //   `Container` 与 `Path` 一样是**静态**字段（installd 直接给，不遍历目录树），
+        //   所以它**不会**把 v0.3.401 那个「~25 秒卡死」引回来（那是 `DynamicDiskUsage`
+        //   的锅，仍未请求）。加它同时惠及「应用管理 / 文档浏览」两个共用本路径的板块。
         // ⚠️ 与 Swift 侧日志字段表 `FileSharingService.attributeRequestFields` 必须一致：
         //    改这里就同步改那里，否则日志会骗人。
-        let attrs = "<string>CFBundleIdentifier</string><string>CFBundleDisplayName</string><string>CFBundleName</string><string>CFBundleShortVersionString</string><string>ApplicationType</string><string>UIFileSharingEnabled</string><string>Path</string><string>StaticDiskUsage</string><string>iTunesMetadata</string><string>ApplicationDSID</string><string>SignerIdentity</string>";
+        let attrs = "<string>CFBundleIdentifier</string><string>CFBundleDisplayName</string><string>CFBundleName</string><string>CFBundleShortVersionString</string><string>ApplicationType</string><string>UIFileSharingEnabled</string><string>Path</string><string>Container</string><string>StaticDiskUsage</string><string>iTunesMetadata</string><string>ApplicationDSID</string><string>SignerIdentity</string>";
 
         let mut xml = String::new();
         xml.push_str(crate::mcinstall::PLIST_HEADER);
