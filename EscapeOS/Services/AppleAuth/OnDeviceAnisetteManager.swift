@@ -233,8 +233,12 @@ final class OnDeviceAnisetteManager: ObservableObject {
 
         // sha256 校验：`s` = sha256(base64 载荷 + "\n")（实测确认）.
         // 对齐 SideSign：不匹配只记日志、不中断 —— 最终以解压出的库文件（存在 + ELF 魔数）为准.
-        if let expected = meta.sha, let base64String {
-            let actual = SHA256.hash(data: Data((base64String + "\n").utf8))
+        //
+        // 用显式绑定名（`let b64 = base64String`）而不是 `let base64String` 简写：
+        // CI 上后者报「value of optional type 'String?' must be unwrapped」
+        // （简写在部分工具链 / 与同名形参共存时会退化为恒真绑定）。
+        if let expected = meta.sha, let b64 = base64String {
+            let actual = SHA256.hash(data: Data((b64 + "\n").utf8))
                 .map { String(format: "%02x", $0) }.joined()
             if actual != expected.lowercased() {
                 LoginLogger.shared.log(
@@ -331,14 +335,20 @@ final class OnDeviceAnisetteManager: ObservableObject {
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            sha = try c.decodeIfPresent(String.self, forKey: .s)
-                ?? c.decodeIfPresent(String.self, forKey: .sha)
-                ?? c.decodeIfPresent(String.self, forKey: .sha256)
-            payload = try c.decodeIfPresent(String.self, forKey: .l)
-                ?? c.decodeIfPresent(String.self, forKey: .payload)
-                ?? c.decodeIfPresent(String.self, forKey: .data)
-                ?? c.decodeIfPresent(String.self, forKey: .libraries)
-                ?? c.decodeIfPresent(String.self, forKey: .url)
+            // 拆成多步：CI 上链式 `??` 太长会报
+            // 「the compiler is unable to type-check this expression in reasonable time」
+            // —— 编译器自己建议「break up the expression into distinct sub-expressions」。
+            let shaA = try c.decodeIfPresent(String.self, forKey: .s)
+            let shaB = try c.decodeIfPresent(String.self, forKey: .sha)
+            let shaC = try c.decodeIfPresent(String.self, forKey: .sha256)
+            sha = shaA ?? shaB ?? shaC
+
+            let p1 = try c.decodeIfPresent(String.self, forKey: .l)
+            let p2 = try c.decodeIfPresent(String.self, forKey: .payload)
+            let p3 = try c.decodeIfPresent(String.self, forKey: .data)
+            let p4 = try c.decodeIfPresent(String.self, forKey: .libraries)
+            let p5 = try c.decodeIfPresent(String.self, forKey: .url)
+            payload = p1 ?? p2 ?? p3 ?? p4 ?? p5
         }
     }
 
