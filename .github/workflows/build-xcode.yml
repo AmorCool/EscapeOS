@@ -491,6 +491,71 @@ jobs:
           ls -la libcrypto.a
           echo "=== OpenSSL built ==="
 
+      - name: Restore AirliftFFI product (artifact, cross-run)
+        # AirLift（AirTraffic 沙盒逃逸）的 Rust 库**不能** vendor 预编译产物：
+        # AirBeep 仓库里提交的是**补丁前旧产物**（不含 al_exploit_read_file /
+        # al_bytes_free / al_set_target_host）。故每轮从 AirCard-iOS（钉死 commit）+
+        # 补丁现场编。为省时间，套用与 libidevice_ffi 同款的 artifact 缓存
+        # （AirCard commit 由脚本钉死，补丁内容变化即 hash 变化 ⇒ 自动失效）。
+        id: airlift_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CUR_HASH=${{ hashFiles('Resources/Scripts/airlift-read-file.patch', 'Resources/Scripts/build-airlift-xcframework.sh') }}
+          echo "current airlift hash: $CUR_HASH"
+          HIT=false
+          ART_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=escapeos-airlift-ffi-v1&per_page=100" \
+            --jq "[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)"
+          if [ -n "${ART_ID:-}" ]; then
+            rm -rf /tmp/airlift-cache && mkdir -p /tmp/airlift-cache
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}/zip" > /tmp/airlift-cache/cache.zip
+            unzip -oq /tmp/airlift-cache/cache.zip -d /tmp/airlift-cache
+            CACHED_HASH="$(cat /tmp/airlift-cache/airlift-hash.txt 2>/dev/null || true)"
+            FOUND_DIR="$(find /tmp/airlift-cache -type d -name 'AirliftFFI.xcframework' 2>/dev/null | head -n1)"
+            if [ "${CACHED_HASH:-}" = "$CUR_HASH" ] && [ -n "$FOUND_DIR" ]; then
+              mkdir -p rust-libs
+              rm -rf rust-libs/AirliftFFI.xcframework
+              cp -R "$FOUND_DIR" rust-libs/AirliftFFI.xcframework
+              HIT=true
+              echo "=== AirliftFFI cache HIT (skip AirCard cargo build) ==="
+            else
+              echo "=== AirliftFFI cache stale (cached=${CACHED_HASH:-empty} current=$CUR_HASH) ==="
+            fi
+          else
+            echo "=== AirliftFFI cache artifact not found (first run or expired) ==="
+          fi
+          echo "hit=$HIT" >> "$GITHUB_OUTPUT"
+
+      - name: Build patched AirliftFFI.xcframework
+        # clone AirCard-iOS（钉死 commit）→ 打 airlift-read-file.patch → build-ios.sh
+        # （双 target cargo：aarch64-apple-ios / aarch64-apple-ios-sim）→ xcframework
+        # 落到 rust-libs/（xcodegen source 树之外）。
+        # 必须在 xcodegen generate **之前**完成，project.yml 的 framework 依赖才能解析。
+        if: steps.airlift_cache.outputs.hit != 'true'
+        run: |
+          set -euo pipefail
+          # 显式覆盖 DEVELOPER_DIR：AirCard 的 build-ios.sh 默认指向
+          # /Applications/Xcode-beta.app（runner 上不存在）；脚本内
+          # `${DEVELOPER_DIR:-...}` 尊重既有值 ⇒ 用 setup-xcode 选好的正式 Xcode。
+          export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
+          bash Resources/Scripts/build-airlift-xcframework.sh
+          echo "${{ hashFiles('Resources/Scripts/airlift-read-file.patch', 'Resources/Scripts/build-airlift-xcframework.sh') }}" > airlift-hash.txt
+
+      - name: Verify AirliftFFI symbols
+        # 无论产物来自缓存还是现场编译，都校验补丁符号在场
+        # （防「拿补丁前旧产物当新产物」—— 这正是 AirBeep 仓库的坑）。
+        run: bash Resources/Scripts/verify-airlift.sh
+
+      - name: Save AirliftFFI product (artifact, cross-run)
+        if: steps.airlift_cache.outputs.hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: escapeos-airlift-ffi-v1
+          path: |
+            rust-libs/AirliftFFI.xcframework
+            airlift-hash.txt
+
       - name: Generate Xcode project (xcodegen)
         run: |
           set -euo pipefail

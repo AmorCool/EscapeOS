@@ -3,9 +3,9 @@ import SwiftUI
 /// 「禁用通话录音」控制台 —— 「更多 → 禁用通话录音」的二级页。
 ///
 /// 参考项目 AirBeep（原名 Placard，仓库 `LinkPass888/AirBeep`）：把通话录音的开始 /
-/// 结束**披露提示音**替换成等长静音，录音本身不受影响。替换写入经 `SandboxFileAccess`
-/// （设备侧任意路径文件访问原语），走**设备上真正可用的漏洞利用**（默认 `bad_query`），
-/// **不依赖 AirLift**（airlift 是配对 Mac 侧的 PoC，iOS 侧无法独立工作）。
+/// 结束**披露提示音**替换成等长静音，录音本身不受影响。替换写入经 `AirLiftService`
+/// —— 真 airlift：配对文件 + LocalDevVPN 隧道在设备上直接驱动 AirTraffic
+/// （Rust `libairlift_ffi.a`，见 `Engine/Airlift/`）。
 ///
 /// 界面只保留必要信息：原理说明卡片 + 当前状态 + 两个动作（禁用 / 恢复）。
 struct CallRecordingToneView: View {
@@ -33,7 +33,7 @@ struct CallRecordingToneView: View {
             } header: {
                 Label("状态", systemImage: "waveform")
             } footer: {
-                Text("需先在「更多 → 漏洞利用」启用可用的漏洞利用，才能写入系统提示音文件.")
+                Text("需先导入配对文件并连接 LocalDevVPN，才能写入系统提示音文件.支持 iOS/iPadOS 18.0–27.2 B2.")
             }
 
             Section {
@@ -88,10 +88,10 @@ struct CallRecordingToneView: View {
         case disable
         case restore
 
-        func perform() throws {
+        func perform() async throws {
             switch self {
-            case .disable: try CallRecordingToneService.disable()
-            case .restore: try CallRecordingToneService.restore()
+            case .disable: try await CallRecordingToneService.disable()
+            case .restore: try await CallRecordingToneService.restore()
             }
         }
 
@@ -103,8 +103,7 @@ struct CallRecordingToneView: View {
         }
     }
 
-    /// 在后台线程执行文件 IO + 音频生成（含 `SandboxEscape.consume`，会阻塞），
-    /// 完成后回主线程刷新状态。
+    /// 在后台线程执行 airlift 传输（含建隧道与文件 IO，会阻塞），完成后回主线程刷新状态.
     private func run(_ action: ToneAction) {
         guard !busy else { return }
         busy = true
@@ -112,7 +111,7 @@ struct CallRecordingToneView: View {
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try action.perform()
+                    try await action.perform()
                 }.value
                 state = await loadState()
                 busy = false
@@ -125,10 +124,10 @@ struct CallRecordingToneView: View {
         }
     }
 
-    /// 状态查询含一次文件读取（阻塞），放到后台执行.
+    /// 状态查询含一次 airlift 读取（阻塞），放到后台执行.
     private func loadState() async -> CallRecordingToneService.ToneState {
         await Task.detached(priority: .utility) {
-            CallRecordingToneService.currentState()
+            await CallRecordingToneService.currentState()
         }.value
     }
 }

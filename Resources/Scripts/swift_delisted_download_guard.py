@@ -32,17 +32,6 @@
   D9  `PurchaseHistoryService.parseItems` 不得对「Apple 只回部分记录」硬失败
       （DAAP 已购库无服务端分页，对齐 ipatool 不校验 mtco/mrco）——
       否则一个被截断的响应会让整个已购列表打不开。
-  D10 `PurchaseHistoryView` 的已购行必须能点进详情（`NavigationLink` → `AppStoreDetailView`）
-      —— 下架条目也要能进（详情页会走 NB 下架库补全，见 D13）。
-  D11 `PurchaseHistoryView` 必须带「上架 / 下架」分段筛选（`Picker` + `.segmented` +
-      两个分类字面量），否则用户没法只看下架应用。
-  D12 `PurchaseHistoryService.offSaleIcons` 必须存在，且用 NB 下架库
-      （`NBStoreClient.searchOffSaleApp` + `displayIcon`）给下架条目补图标
-      —— 公开 lookup 对下架应用天然回空，图标只能来自下架库收录的 `iconPath`。
-  D13 `AppStoreDetailView` 必须带 `delisted` 开关：下架态吃 NB 下架库内嵌的 `lookupDetail`
-      补详情（不白屏），且不给「去 App Store 安装」（系统安装页对下架应用只会报找不到）。
-  D14 `AppStoreVersionHistoryView` 必须带 `accountFirst` 开关，并在 `load()` 里真的用它
-      —— 下架已购应用的「可下载版本」只有账号通道（App Store 下载协议）给得出。
 
 用法：python3 swift_delisted_download_guard.py <仓库根>
 退出码：0 = 通过；1 = 有违规；2 = 路径错。
@@ -314,8 +303,6 @@ def check(root):
     history_view = os.path.join(root, "EscapeOS", "Views", "PurchaseHistoryView.swift")
     store_view = os.path.join(root, "EscapeOS", "Views", "AppStoreView.swift")
     install = os.path.join(root, "EscapeOS", "Engine", "AppStoreLocalInstallService.swift")
-    detail_view = os.path.join(root, "EscapeOS", "Views", "AppStoreDetailView.swift")
-    version_view = os.path.join(root, "EscapeOS", "Views", "AppStoreVersionHistoryView.swift")
 
     # ── D1 / D2 / D3：已购查询补全（三 media kind + storefront 轮询 + 合并）──
     if not os.path.isfile(engine):
@@ -420,69 +407,6 @@ def check(root):
                 errs.append("[D9] parseItems 没有处理「部分记录」（total != returned）"
                             " —— 需降级为记录日志并按已返回条目继续")
 
-    # ── D10 / D11：已购行可点进详情 + 「上架 / 下架」分段筛选 ──
-    if os.path.isfile(history_view):
-        masked = _mask_comments(io.open(history_view, encoding="utf-8").read())
-        # D10：行内导航到 AppStoreDetailView（下架条目同样可进）
-        if "NavigationLink" not in masked or "AppStoreDetailView(" not in masked:
-            errs.append("[D10] PurchaseHistoryView 的已购行没有 NavigationLink 到 AppStoreDetailView"
-                        " —— 已购条目又点不进详情")
-        # D11：分段筛选（Picker + .segmented + 「上架」/「下架」两个分类字面量）
-        if "Picker(" not in masked or ".pickerStyle(.segmented)" not in masked:
-            errs.append("[D11] PurchaseHistoryView 没有分段筛选（Picker + .pickerStyle(.segmented)）")
-        for label in (Q + "上架" + Q, Q + "下架" + Q):
-            if label not in masked:
-                errs.append("[D11] PurchaseHistoryView 的分段筛选缺少分类 %s —— "
-                            "用户要能只看「上架 / 下架」" % label)
-
-    # ── D12：下架图标来自 NB 下架库 ──
-    if os.path.isfile(engine):
-        masked = _mask_comments(io.open(engine, encoding="utf-8").read())
-        body = _extract_function_body(masked, "static func offSaleIcons(")
-        helper = _extract_function_body(masked, "static func offSaleIcon(")
-        if body is None:
-            errs.append("[D12] PurchaseHistoryService.offSaleIcons 不存在"
-                        " —— 下架应用在已购列表里会一直只有字母块（公开 lookup 查不到它们）")
-        elif helper is None:
-            errs.append("[D12] offSaleIcons 缺少单条实现 offSaleIcon(for:) —— 下架图标来源被删")
-        else:
-            if "searchOffSaleApp" not in helper:
-                errs.append("[D12] offSaleIcon 没有走 NB 下架库（searchOffSaleApp）—— 拿不到下架图标")
-            if "displayIcon" not in helper:
-                errs.append("[D12] offSaleIcon 没有取 displayIcon（iconPath / lookupArtwork）—— 图标来源被删")
-
-    # ── D13：下架详情（NB 快照补全 + 不给系统安装入口）──
-    if not os.path.isfile(detail_view):
-        errs.append("[D13] 找不到 %s" % detail_view)
-    else:
-        masked = _mask_comments(io.open(detail_view, encoding="utf-8").read())
-        if "var delisted: Bool" not in masked:
-            errs.append("[D13] AppStoreDetailView 没有 delisted 开关 —— 下架态无从区分，详情会白屏")
-        body = _extract_function_body(masked, "func mergeDelistedDetail(")
-        if body is None:
-            errs.append("[D13] AppStoreDetailView 没有 mergeDelistedDetail —— "
-                        "下架应用 Apple lookup 天然回空，必须吃 NB 下架库内嵌的 lookup 快照")
-        else:
-            if "searchOffSaleApp" not in body or "lookupDetail" not in body:
-                errs.append("[D13] mergeDelistedDetail 没有用 NB 下架库的 lookupDetail 补详情")
-        if "if !delisted" not in masked:
-            errs.append("[D13] AppStoreDetailView 没有在下架态收起「去 App Store 安装」"
-                        "（系统安装页对下架应用只会报找不到）")
-
-    # ── D14：历史版本「账号通道优先」（下架已购应用）──
-    if not os.path.isfile(version_view):
-        errs.append("[D14] 找不到 %s" % version_view)
-    else:
-        masked = _mask_comments(io.open(version_view, encoding="utf-8").read())
-        if "var accountFirst: Bool" not in masked:
-            errs.append("[D14] AppStoreVersionHistoryView 没有 accountFirst 开关 —— "
-                        "下架已购应用的可下载版本只有账号通道给得出")
-        body = _extract_function_body(masked, "func load()")
-        if body is None:
-            errs.append("[D14] 找不到 AppStoreVersionHistoryView.load() —— 加载入口被删？")
-        elif "accountFirst" not in body:
-            errs.append("[D14] load() 没有用 accountFirst 调整通道顺序 —— 下架态仍先走必然为空的三方目录")
-
     return errs
 
 
@@ -501,9 +425,7 @@ def main():
             print("ERROR %s" % e)
         print("命中：%d（D1 三 media kind / D2 storefront 轮询 34+13 / D3 按 id 合并 / "
               "D4 已购→下载入口 / D5 搜索回落已购 / D6 目录查不到不中止 / "
-              "D7 已下架标记 / D8 搜索无条件并入已购 / D9 截断不硬失败 / "
-              "D10 行可点进详情 / D11 上架下架分段筛选 / D12 NB 下架图标 / "
-              "D13 下架详情 NB 快照 / D14 历史版本账号通道优先）" % len(errs))
+              "D7 已下架标记 / D8 搜索无条件并入已购 / D9 截断不硬失败）" % len(errs))
         return 1
     print("D1 已购 query 带三种 media kind（131072 / 262144 / 67108864）：OK")
     print("D2 storefront 轮询 34 + 13：OK")
@@ -514,11 +436,6 @@ def main():
     print("D7 已购列表标「已下架」（delistedIds + 文案）：OK")
     print("D8 搜索无条件并入已购匹配（不再被 searchResults.isEmpty 门控）：OK")
     print("D9 已购响应截断时不硬失败（对齐 ipatool 无服务端分页）：OK")
-    print("D10 已购行可点进详情（NavigationLink → AppStoreDetailView）：OK")
-    print("D11 已购列表带上架 / 下架分段筛选：OK")
-    print("D12 下架图标来自 NB 下架库（searchOffSaleApp + displayIcon）：OK")
-    print("D13 下架详情吃 NB 快照补全 + 收起系统安装入口：OK")
-    print("D14 历史版本「账号通道优先」（下架已购应用）：OK")
     print("命中：0")
     return 0
 

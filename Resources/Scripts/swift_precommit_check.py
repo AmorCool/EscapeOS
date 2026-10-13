@@ -10,9 +10,10 @@
   6) swift_theme_blue_guard.py          —— 主题「两套蓝」防复发（trAccent 复现 / accent 非自适应）
   7) swift_i4_advanced_guard.py         —— 「开启高级功能」入口防复发（不得退回写死免责声明）
   8) swift_layout_motion_guard.py       —— 布局与动效防复发（手写等宽网格 / 手搓按压 / 品牌渐变越界）
- 10) swift_delisted_download_guard.py   —— 已购/下架下载链路（三 media kind / storefront 轮询 / 搜索回落 / 目录查不到不中止 / 行可点进详情 / 上架下架筛选 / NB 下架图标 / 下架详情 NB 快照 / 历史版本账号通道优先）
+ 10) swift_delisted_download_guard.py   —— 已购/下架下载链路（三 media kind / storefront 轮询 / 搜索回落 / 目录查不到不中止）
  11) swift_searchbar_guard.py          —— 搜索框显示模式（滚动容器页用 `.always` 必须同时给顶部让位）
  12) swift_cellular_tunnel_guard.py    —— Cellular隧道支持（默认关 / 接线不断 / 禁快捷指令硬依赖与误导文案 / 无 Wi-Fi 硬信念文案）
+ 13) swift_airlift_guard.py            —— 禁用通话录音走 airlift（移植件齐备 / FFI 符号 / 目标主机自适应 / 不经 bad_query / 写后校验 / 无「依赖 Mac」错误结论）
 
 为什么合并成「一个入口」而不是「一个脚本」：
   两项检查的**输入、口径、退出码**都独立，各自的报告/豁免表也各管一摊；把逻辑塞进
@@ -44,6 +45,7 @@ CHECKS = [
     ("已购/下架下载链路", "swift_delisted_download_guard.py", False),
     ("搜索框显示模式防复发", "swift_searchbar_guard.py", False),
     ("Cellular隧道支持防复发", "swift_cellular_tunnel_guard.py", False),
+    ("禁用通话录音走 airlift 防复发", "swift_airlift_guard.py", False),
 ]
 
 

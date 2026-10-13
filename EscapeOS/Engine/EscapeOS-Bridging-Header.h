@@ -120,4 +120,9 @@ struct IdeviceFfiError *mcinstall_request_rsd(struct AdapterHandle *adapter,
 // 不需要 anisette / 不需要第三方服务器）。Swift 侧只看到 SAPContext 这一个类。
 #include "../Services/AppleAuth/SAP/SAPContext.h"
 
+// AirLift（AirTraffic 沙盒逃逸，CVE-2026-43689）：Grappa 会话令牌生成（Obj-C runtime
+// 调 ATGrappaSession + 硬编码真 CoreFP token 兜底）。逐字移植自 LinkPass888/AirBeep。
+// 由 Rust 侧（libairlift_ffi.a）经 dlsym 调用，Swift 侧不直接调用，但必须编进 App。
+#include "Airlift/GrappaHelper.h"
+
 #endif /* EscapeOS_Bridging_Header_h */

@@ -27,8 +27,8 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
     PRODUCT_NAME: EscapeSpace
-    MARKETING_VERSION: "0.3.605"
-    CURRENT_PROJECT_VERSION: "899"
+    MARKETING_VERSION: "0.3.606"
+    CURRENT_PROJECT_VERSION: "900"
     # 注：这里**刻意不写** `SWIFT_VERSION` —— 实测顶层 `settings.base` 的它**不被 xcodegen 采纳**，
     # 真正生效的是下面 target 层那一份（当前 `"6.0"` = Swift 6 语言模式）。
     # 另注：**编译器版本 ≠ 语言模式** —— CI 用 Xcode 27 自带的 Swift 6.4 编译器，
@@ -93,6 +93,16 @@ targets:
     dependencies:
       - package: Citadel
       - framework: rust-libs/libidevice_ffi.xcframework
+        embed: false
+        link: true
+      # AirLift（AirTraffic 沙盒逃逸，CVE-2026-43689）：Rust `libairlift_ffi.a` 以
+      # xcframework 形式链接（静态库，无需 embed/runpath）。**不是**预编译 vendor ——
+      # 由 Resources/Scripts/build-airlift-xcframework.sh 在 xcodegen 之前从
+      # AirCard-iOS（钉死 commit）+ airlift-read-file.patch 现场编出（见 build-xcode.yml），
+      # 并由 verify-airlift.sh 校验补丁符号（al_exploit_read_file / al_bytes_free /
+      # al_set_target_host / al_exploit_write_dir）。落在 rust-libs/（xcodegen source 树之外），
+      # 避免 .a 被当资源拷进 .app。
+      - framework: rust-libs/AirliftFFI.xcframework
         embed: false
         link: true
       # 内置隧道扩展（Phase 2）：作为 App Extension 嵌入主 App 的 PlugIns/.
