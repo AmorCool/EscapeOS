@@ -1338,8 +1338,13 @@ enum NBStoreClient {
         // 才去调（见 `bilinCandidates`）。这样主版本能命中时省掉整次 bilin（实测 ~1.4s，且限流紧易 429），
         // 而主版本 7 时仍能靠 bilin 补候选退到旧版本（**不丢「调出链接」的能力**）。
         let embeddedCandidates: [String] = app.versionIDs.isEmpty ? [] : Array(app.versionIDs.reversed())
+        // v0.3.600：闭包**显式标 `@Sendable`** —— 三元表达式 `cond ? { … } : nil` 不会把
+        // 上下文类型 `(@Sendable () async -> [String])?` 传进闭包分支，闭包被推断成 non-Sendable
+        // ⇒ CI（Xcode 27 / Swift 6.2）报 "converting non-Sendable function value … may introduce
+        // data races"（本地 Swift 6.1.3 同根因，措辞为 "cannot convert … to (@Sendable () async …)?"）。
+        // 直接赋值（无三元）或 if/else 都能让上下文类型传导，这里保持三元、给闭包自己标 Sendable。
         let fallbackProvider: (@Sendable () async -> [String])? = app.versionIDs.isEmpty
-            ? { await bilinCandidates(storeID: storeID, appName: app.name) }
+            ? { @Sendable in await bilinCandidates(storeID: storeID, appName: app.name) }
             : nil
         LoginLogger.shared.log("\(logTag) [提示] 现取新鲜直链 getAppHistoryList"
                                + "（appID=\(storeID) appVerId=\(app.appExtID ?? "")"
