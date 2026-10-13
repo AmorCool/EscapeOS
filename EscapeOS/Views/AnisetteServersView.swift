@@ -33,13 +33,16 @@ struct AnisetteServersView: View {
         let url: String
     }
 
-    private static let popular: [PopularServer] = [
-        PopularServer(name: "SideStore", url: "https://ani.sidestore.io"),
-        PopularServer(name: "SideStore (.app)", url: "https://ani.sidestore.app"),
-        PopularServer(name: "SideStore (.zip)", url: "https://ani.sidestore.zip"),
-        PopularServer(name: "SideStore (.xyz)", url: "https://ani.846969.xyz"),
-        PopularServer(name: "nythepegasus", url: "https://ani.npeg.us"),
-    ]
+    /// 常用服务器 —— **直接取 `MemoryLimitSettings.anisetteServers`（15 个）**，不再另维护一份。
+    ///
+    /// v0.3.603 之前这里硬编码了 5 个（对照参考截图 5 的 AltStore Popular 列表），
+    /// 而设置层 `MemoryLimitSettings.anisetteServers` 有 15 个（原有 4 + 合并 SideInstaller
+    /// 社区列表 11）—— 两处不一致，用户 2026-10-13 报「原来几十个去哪里了」。
+    /// **唯一真相源**：列表归 `MemoryLimitSettings`，本页只负责渲染。
+    private static let popular: [PopularServer] = MemoryLimitSettings.anisetteServers.map { url in
+        let host = MemoryLimitSettings.host(from: url)
+        return PopularServer(name: host, url: url)
+    }
 
     private static let defaultServer = "https://ani.stikstore.app"
 
