@@ -761,6 +761,36 @@ enum NBStoreClient {
     /// - Parameter sameVersionRetries: 同一版本遇**稳定** `code=7` 时的重试次数（v0.3.596 补）。
     /// - Parameter maxRequests: **总请求**上限（含同版本重试），防「库里全没包」时把用户晾太久。
     /// - Returns: 取到包；`nil` = 所有候选都取不到（库里没包）。
+    /// 给一段异步工作套「总超时」——超时即抛 `StoreError.server("timeout", …)`。
+    ///
+    /// ## 为什么需要它（v0.3.601，用户报「NB 卡在获取中」）
+    ///
+    /// `packageWithFallback` 的最坏路径是：主版本 1 次 + 同版本重试 1 次 + bilin 补候选 1 次
+    /// + 候选回退最多 5 次 + 快照 HEAD 1 次，而 `session.timeoutIntervalForRequest = 15` ⇒
+    /// **最坏 ≈113 秒**。用户看到的就是「获取中…」一直转。
+    ///
+    /// **不改成「缩短单项超时」的原因**：单项超时缩短会把「本来就慢但能成功」的请求误杀
+    /// （实测 bilin 在限流下会跑到 10s+，但最终能返回版本列表）——那会退回到「调不出链接」。
+    /// **总超时只封顶「用户等待时长」**，不改任何单次请求的行为 ⇒ 快路径不受影响，
+    /// 只有「真的取不到」时提前收尾并如实报「暂时取不到」。
+    private static func withTotalTimeout<T: Sendable>(
+        seconds: Double,
+        _ work: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await work() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw StoreError.server(code: "timeout", message: "总超时 \(Int(seconds))s")
+            }
+            guard let first = try await group.next() else {
+                throw StoreError.server(code: "timeout", message: "总超时 \(Int(seconds))s")
+            }
+            group.cancelAll()
+            return first
+        }
+    }
+
     private static func packageWithFallback(appID: String,
                                             primaryVerID: String,
                                             embeddedCandidates: [String] = [],
@@ -1357,12 +1387,14 @@ enum NBStoreClient {
             // 还会**重试一次**（瞬时抖动，见 `packageWithFallback`）。稳定 `code=7` 在
             // `packageWithFallback` 里被吞掉、全试完回 nil；这里只会收到「上游临时故障 / 网络错误」
             // 两类**值得重试**的抛出。
-            pkg = try await packageWithFallback(appID: storeID,
-                                                primaryVerID: app.appExtID ?? "",
-                                                embeddedCandidates: embeddedCandidates,
-                                                fallbackProvider: fallbackProvider,
-                                                bundleID: app.bundleID ?? "",
-                                                country: country)
+            pkg = try await withTotalTimeout(seconds: 25) {
+                try await packageWithFallback(appID: storeID,
+                                              primaryVerID: app.appExtID ?? "",
+                                              embeddedCandidates: embeddedCandidates,
+                                              fallbackProvider: fallbackProvider,
+                                              bundleID: app.bundleID ?? "",
+                                              country: country)
+            }
         } catch let e as StoreError {
             // 走到这里 = 上游临时故障（`code=7` 且 msg 含 `dialing`/`请求异常`）或网络错误。
             // 原始码与 msg 一律进日志；界面文案由调用方给（见 `PackageFailure`）。
