@@ -3,8 +3,9 @@ import SwiftUI
 /// 「禁用通话录音」控制台 —— 「更多 → 禁用通话录音」的二级页。
 ///
 /// 参考项目 AirBeep（原名 Placard，仓库 `LinkPass888/AirBeep`）：把通话录音的开始 /
-/// 结束**披露提示音**替换成等长静音，录音本身不受影响。替换写入经 `AirLiftService`
-/// （AirLift 文件接口），与 AirBeep 基于 airlift 的做法同构。
+/// 结束**披露提示音**替换成等长静音，录音本身不受影响。替换写入经 `SandboxFileAccess`
+/// （设备侧任意路径文件访问原语），走**设备上真正可用的漏洞利用**（默认 `bad_query`），
+/// **不依赖 AirLift**（airlift 是配对 Mac 侧的 PoC，iOS 侧无法独立工作）。
 ///
 /// 界面只保留必要信息：原理说明卡片 + 当前状态 + 两个动作（禁用 / 恢复）。
 struct CallRecordingToneView: View {

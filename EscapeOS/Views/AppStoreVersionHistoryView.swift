@@ -13,6 +13,14 @@ struct AppStoreVersionHistoryView: View {
     let item: AppStoreItem
     let country: String
 
+    /// 下架已购应用：Apple 的 `lookup` 与商品页都查不到它，版本目录（bilin）也常常没有 ——
+    /// 但**账号通道**（App Store 下载协议）对「已购」的下架应用仍能给出全量版本身份，
+    /// 且能直接下载指定版本。所以从下架详情进来时把它提到第一跳。
+    var accountFirst: Bool = false
+    /// 从「已购列表」进来时带上的账号邮箱：历史版本要走**持有该已购的那个账号**
+    /// （下载指定版本必须用同一账号），不能默认拿全局「当前下载账号」。
+    var preferredEmail: String? = nil
+
     private enum Channel { case account, web, catalog }
 
     /// 查询方式：两条来源各有所长，让用户自己选（失败会自动回退另一条）。
@@ -277,8 +285,14 @@ struct AppStoreVersionHistoryView: View {
         // 最后兜底商品页通道（免登录，覆盖不全）。
         // 每步之后都确认没被取消：取消时各通道会立刻返回 false，收尾交给接棒的那次。
         if source == .catalog {
-            if await loadCatalog(), !Task.isCancelled { loading = false; return }
-            if await loadAccount(), !Task.isCancelled { loading = false; return }
+            // 下架已购应用：账号通道是唯一还能给出「可下载版本」的来源，优先它。
+            if accountFirst {
+                if await loadAccount(), !Task.isCancelled { loading = false; return }
+                if await loadCatalog(), !Task.isCancelled { loading = false; return }
+            } else {
+                if await loadCatalog(), !Task.isCancelled { loading = false; return }
+                if await loadAccount(), !Task.isCancelled { loading = false; return }
+            }
         } else {
             if await loadAccount(), !Task.isCancelled { loading = false; return }
             if await loadCatalog(), !Task.isCancelled { loading = false; return }
@@ -322,8 +336,10 @@ struct AppStoreVersionHistoryView: View {
             bundleId = full.bundleId
         }
         if Task.isCancelled { return false }
+        // 从已购列表进来时用**持有该已购的账号**，否则回落到全局「当前下载账号」。
+        let preferred = (preferredEmail?.isEmpty == false) ? preferredEmail : nil
         guard let bundleId, !bundleId.isEmpty,
-              let email = AppStoreDownloadStore.shared.selectedEmail
+              let email = preferred ?? AppStoreDownloadStore.shared.selectedEmail
         else { return false }
         // v0.3.365：整次加载唯一的重登额度**先给身份通道** —— 无论它是否真的用到，
         // 后面的 metadata 批次都不再重登，保证整次加载 rotate 上界 = 1

@@ -12,7 +12,8 @@ import AVFoundation
 // 系统照常播放「一个文件」，只是听不到提示音；**录音本身不受影响**。
 //
 // ## 本仓怎么落地
-// 替换写入经 `AirLiftService`（AirLift 文件接口）—— 与 AirBeep 基于 airlift 的做法同构。
+// 替换写入经 `SandboxFileAccess`（设备侧任意路径文件访问原语）—— 它走**设备上真正
+// 可用的漏洞利用**（默认 `bad_query`）取沙盒扩展，**不依赖 AirLift**。
 // 原始提示音在首次禁用时**备份到 App 自己的 Documents**，可一键恢复。
 //
 // ## 诚实边界
@@ -119,11 +120,11 @@ enum CallRecordingToneService {
 
     /// 查询当前状态。
     ///
-    /// 先探**可达性**（经 `AirLiftService` 读一次开始提示音）：读不出即 `.unreachable`，
+    /// 先探**可达性**（经 `SandboxFileAccess` 读一次开始提示音）：读不出即 `.unreachable`，
     /// 不拿持久化标记冒充成功。可达时以持久化标记为准（判据说明见文件头「诚实边界」）。
     static func currentState() -> ToneState {
         do {
-            _ = try AirLiftService.readFile(at: startTone.path)
+            _ = try SandboxFileAccess.readFile(at: startTone.path)
         } catch {
             return .unreachable
         }
@@ -137,7 +138,7 @@ enum CallRecordingToneService {
         try ensureBackup()
         for tone in allTones {
             let silent = try silentData(for: tone)
-            try AirLiftService.placeFile(silent, at: tone.path)
+            try SandboxFileAccess.placeFile(silent, at: tone.path)
         }
         UserDefaults.standard.set(true, forKey: disabledKey)
     }
@@ -152,7 +153,7 @@ enum CallRecordingToneService {
             let backup = backupDirectory.appendingPathComponent(tone.name)
             guard fm.fileExists(atPath: backup.path) else { continue }
             let data = try Data(contentsOf: backup)
-            try AirLiftService.placeFile(data, at: tone.path)
+            try SandboxFileAccess.placeFile(data, at: tone.path)
             restored += 1
         }
         guard restored > 0 else { throw ToneError.noBackup }
@@ -168,7 +169,7 @@ enum CallRecordingToneService {
         for tone in allTones {
             let backup = backupDirectory.appendingPathComponent(tone.name)
             guard !fm.fileExists(atPath: backup.path) else { continue }
-            let data = try AirLiftService.readFile(at: tone.path)
+            let data = try SandboxFileAccess.readFile(at: tone.path)
             try data.write(to: backup, options: .atomic)
         }
     }

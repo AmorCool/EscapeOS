@@ -420,4 +420,48 @@ enum PurchaseHistoryService {
         }
         return apps.sorted { ($0.purchaseDate ?? .distantPast) > ($1.purchaseDate ?? .distantPast) }
     }
+
+    // MARK: - 下架图标（NB 下架库）
+
+    /// 下架应用的图标：Apple 的 `lookup` 对下架应用**天然返回空**（它就是因为下架才缺席），
+    /// 所以这些行在已购列表里一直只显示字母块。NB 下架库收录时留下了 `iconPath`
+    /// （mzstatic CDN 直链），按 **App Store ID → Bundle ID → 名称** 依次认领，
+    /// 认不到就不写（宁缺勿错 —— 图标配错比字母块更糟）。
+    ///
+    /// 只在**已判定下架**的条目上调用（调用方要先跑完 `lookup` 才知道哪些下架），
+    /// 并发 4、总量封顶 30，避免把已购列表拖慢。
+    static func offSaleIcons(for apps: [OwnedApp], limit: Int = 30) async -> [Int64: String] {
+        let targets = Array(apps.prefix(limit)).filter { !$0.name.isEmpty || !$0.bundleId.isEmpty }
+        guard !targets.isEmpty else { return [:] }
+        var table: [Int64: String] = [:]
+        var index = 0
+        while index < targets.count {
+            let slice = Array(targets[index ..< min(index + 4, targets.count)])
+            index += 4
+            await withTaskGroup(of: (Int64, String?).self) { group in
+                for app in slice {
+                    group.addTask { await offSaleIcon(for: app) }
+                }
+                for await (id, icon) in group {
+                    if let icon, !icon.isEmpty { table[id] = icon }
+                }
+            }
+        }
+        return table
+    }
+
+    /// 单个下架应用 → 图标直链。搜不到 / 认不出身份 ⇒ `nil`（不猜）。
+    private static func offSaleIcon(for app: OwnedApp) async -> (Int64, String?) {
+        let key = app.name.isEmpty ? app.bundleId : app.name
+        guard !key.isEmpty,
+              let hits = try? await NBStoreClient.searchOffSaleApp(keyword: key),
+              !hits.isEmpty else { return (app.id, nil) }
+        let byID = hits.first { ($0.storeID ?? "") == app.idText }
+        let byBundle = app.bundleId.isEmpty
+            ? nil
+            : hits.first { ($0.bundleID ?? "").caseInsensitiveCompare(app.bundleId) == .orderedSame }
+        let byName = hits.first { $0.displayName.caseInsensitiveCompare(key) == .orderedSame }
+        guard let match = byID ?? byBundle ?? byName else { return (app.id, nil) }
+        return (app.id, match.displayIcon)
+    }
 }

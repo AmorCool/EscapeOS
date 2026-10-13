@@ -1,26 +1,40 @@
 import Foundation
+import CryptoKit
 
 /// 本机 Anisette（On-Device Anisette，ODA）模式管理器.
 ///
-/// ## 机制（据 SideStore 源码 + 实测载荷，详见简报 §③）
-/// SideStore 的 `AnisetteProvider.fetch()`（`SideStore/Core/Anisette/AnisetteProvider.swift`）
-/// 按 `UserDefaults.standard.useOnDeviceAnisette` 分两条路：
-///   · 关 → `fetchRemote`：把 `identifier` + `adi_pb` 发给远程 anisette 服务器取 headers；
-///   · 开 → `OnDeviceAnisetteManager.shared.fetchAnisetteData()`：本地生成 headers.
-/// 本地路径仍会**下载**一份元数据载荷（`AnisetteMode.remoteODA(sourceURL:fallbackURL:)`，
-/// `sourceURL` 取服务器列表源、`fallbackURL` = `https://zzz.haus/oda.json`），
-/// 解出 ADI 引擎库后在**本机**跑 ADI 模拟，故它**不依赖 anisette header 服务器**，
-/// 但依赖那个元数据 URL 来取引擎载荷. 它**不依赖设备配对文件** ——
-/// `grep -rn "pairing" SideStore/Core/Anisette/ SideStore/Core/Auth/` 命中为空.
+/// ## 机制（据 SideStore / SideSign 源码 + 实测载荷）
+/// ODA 的开关分两条路：
+///   · 关 → 远程：把 `identifier` + `adi_pb` 发给 anisette 服务器取 headers；
+///   · 开 → 本机：下载一份**元数据载荷**（`https://zzz.haus/oda.json`），解出 ADI 引擎库，
+///     在**本机**跑 ADI 模拟生成 headers. 故它**不依赖 anisette header 服务器**，
+///     也不依赖设备配对文件（身份来自 16 字节 `identifier` + `adi.pb`）.
 ///
-/// ## 本仓现状（诚实边界）
-/// 本仓**未内置** iOS 可加载的 ADI 引擎（全仓 `grep -rl "CoreADI\|storeservicescore"` 命中 0，
-/// 也无 `AnisetteKit` / `SideSign` 依赖）. 实测 `https://zzz.haus/oda.json` 解出的两份库是
-/// **ELF64 AArch64**（`libCoreADI.so` / `libstoreservicescore.so`），与 iOS 的 Mach-O 不可互换，
-/// 无法直接加载. 故本开关的作用是**如实切换模式并做就绪检测**：开关开启但引擎缺件时，
-/// `AnisetteProvider` 会**显式回退远程**并记录原因（绝不静默），等引擎就位后即可转本地.
+/// ## ADI 引擎库是什么（实测，2026-10-13）
+/// `zzz.haus/oda.json` 的字段是 `{"s": <sha256>, "l": <base64>}`：
+///   · `l` = 一个 ZIP 的 base64（解出 2609673 字节），内含且仅含两份库：
+///       `libCoreADI.so`（2156064 字节）、`libstoreservicescore.so`（2388480 字节），
+///       另有两份 `__MACOSX/._*` AppleDouble 边车（163 字节，需跳过）；
+///   · `s` = `sha256(base64 载荷字符串 + "\n")`（实测逐字命中
+///       `9d412b76953098ad5b4dccb9337e31652b9f29140ab2ec554bd9003ae226ee3f`）.
+///   两份库的魔数都是 `7f 45 4c 46`（ELF），即 **ELF64 AArch64 Linux 共享库**.
 ///
-/// Swift 6：本类无并发写风险（`@Published` 写全部来自主线程 UI；后台仅只读 Bool / 文件探测），
+/// ## 为什么能用（关键更正）
+/// 旧版本这里写着「ELF 与 iOS 的 Mach-O 不可互换，无法直接加载」—— **这句是错的**.
+/// ELF AArch64 不必被 iOS 的 `dlopen` 直接加载：它由 **Unicorn Engine 的 TCI 后端
+/// 在进程内解释执行 AArch64 指令**（AnisetteKit 即此方案；无需 JIT 权限、无需调试器）.
+/// 本仓**已经静态链接了 Unicorn TCI**（`project.yml` 的 `$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a`，
+/// 现用于 SAP 的 x86-64 本地登录），故「引擎缺件」不是「引擎不可用」，而是**从未被下载安装过**.
+///
+/// ## 本类职责与诚实边界
+/// 本类实现**引擎的获取与安装**：下载 `oda.json` → 解 base64 → 校验 `s` → 解压 → 校验两份库
+/// 存在且为 ELF → 落盘到 `.anisette/libs`. 安装完成后 `readiness()` 变为就绪.
+/// **仍未接线**的是「本机 ADI 取数」这一步 —— 即在 Unicorn 的 AArch64 解释器里加载这两份库、
+/// 走 Apple 的 ADI 协议产出 headers（等价于移植 AnisetteKit 的 `AnisetteClient`）.
+/// 该部分在本仓尚无源码（全仓 `AnisetteKit` / `AnisetteClient` 命中 0），故本类**不臆造**其接口；
+/// 在它接线之前，`AnisetteProvider` 对已就绪的本机模式仍会**显式回退远程**并记录原因（绝不静默）.
+///
+/// Swift 6：本类无并发写风险（`@Published` 写全部来自主线程 UI；后台仅只读文件探测），
 /// 与 `DeveloperCertStore` 同款范式，故 `shared` 走 `nonisolated(unsafe)`.
 final class OnDeviceAnisetteManager: ObservableObject {
     nonisolated(unsafe) static let shared = OnDeviceAnisetteManager()
@@ -35,13 +49,28 @@ final class OnDeviceAnisetteManager: ObservableObject {
     /// 元数据源主机（供 UI 展示）.
     static let metadataHost = "zzz.haus"
 
+    /// 引擎载荷内的两份库文件名（与 `oda.json` 解出的 ZIP 内一致）.
+    static let coreADIFileName = "libCoreADI.so"
+    static let storesServicesFileName = "libstoreservicescore.so"
+
+    /// 已安装引擎的元数据 sha256 持久化键（供跨启动显示版本）.
+    private static let engineVersionKey = "EscapeOS.OnDeviceAnisette.EngineVersion"
+
     /// 用户是否开启「本机 Anisette」（默认关）.
     @Published var isEnabled: Bool {
         didSet { UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey) }
     }
 
+    /// 引擎是否正在下载（供 UI 显示进度并禁用按钮）.
+    @Published private(set) var isDownloading = false
+    /// 最近一次引擎操作失败原因（供 UI 显示）；成功或未操作为 `nil`.
+    @Published private(set) var lastError: String?
+    /// 已安装引擎的元数据 sha256 前缀（供 UI 展示）；未安装为空.
+    @Published private(set) var engineVersion: String = ""
+
     private init() {
         isEnabled = UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? false
+        engineVersion = String((UserDefaults.standard.string(forKey: Self.engineVersionKey) ?? "").prefix(12))
     }
 
     // MARK: - 目录（对齐 SideStore 的 `.anisette` 隐藏目录命名）
@@ -63,6 +92,212 @@ final class OnDeviceAnisetteManager: ObservableObject {
         return support
             .appendingPathComponent("EscapeOS", isDirectory: true)
             .appendingPathComponent(".anisette", isDirectory: true)
+    }
+
+    // MARK: - 引擎获取与安装
+
+    /// 引擎安装失败原因.
+    enum EngineError: LocalizedError {
+        case badMetadataURL
+        case metadataHTTP(Int)
+        case malformedMetadata
+        case malformedPayload
+        case missingLibrary(String)
+        case notELF(String)
+        case unzipFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .badMetadataURL:
+                return "元数据地址无效."
+            case .metadataHTTP(let code):
+                return "元数据源返回 HTTP \(code)."
+            case .malformedMetadata:
+                return "元数据格式无法识别（缺 s / l 字段）."
+            case .malformedPayload:
+                return "引擎载荷既不是 base64 也不是 ZIP."
+            case .missingLibrary(let name):
+                return "解压后缺少引擎库 \(name)."
+            case .notELF(let name):
+                return "\(name) 不是 ELF 引擎库."
+            case .unzipFailed(let detail):
+                return "引擎载荷解压失败：\(detail)"
+            }
+        }
+    }
+
+    /// 一次成功安装的产物（供 `Task.detached` 跨隔离域回传）.
+    private struct InstalledEngine: Sendable {
+        let sha256: String
+        let files: [String]
+    }
+
+    /// 下载并安装 ADI 引擎. 全程：拉元数据 → 解出载荷 → 校验 `s` → 解压两份库 → 校验 ELF 魔数.
+    ///
+    /// 网络与解压放到 `Task.detached` 后台执行，只有 `@Published` 状态回主线程写，避免卡 UI.
+    @MainActor
+    func downloadEngine() async {
+        guard !isDownloading else { return }
+        isDownloading = true
+        lastError = nil
+        defer { isDownloading = false }
+        let directory = engineDirectory
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try await Self.fetchAndInstallEngine(into: directory)
+            }.value
+            UserDefaults.standard.set(result.sha256, forKey: Self.engineVersionKey)
+            engineVersion = String(result.sha256.prefix(12))
+            LoginLogger.shared.log(
+                "[本机Anisette] ADI 引擎已安装：\(result.files.joined(separator: "、"))，sha256=\(result.sha256.prefix(12))…",
+                category: .appleID)
+        } catch {
+            lastError = error.localizedDescription
+            LoginLogger.shared.log("[本机Anisette] ADI 引擎安装失败：\(error.localizedDescription)", category: .appleID)
+        }
+    }
+
+    /// 移除已安装的引擎（回到「未下载」状态）.
+    @MainActor
+    func removeEngine() {
+        try? FileManager.default.removeItem(at: engineDirectory)
+        UserDefaults.standard.removeObject(forKey: Self.engineVersionKey)
+        engineVersion = ""
+        lastError = nil
+        LoginLogger.shared.log("[本机Anisette] ADI 引擎已移除", category: .appleID)
+    }
+
+    /// 引擎库是否已安装（供 UI 决定显示「下载」还是「移除」）.
+    var hasEngineInstalled: Bool { Self.hasEngineLibraries() }
+
+    // MARK: - 引擎下载流水线（后台执行）
+
+    /// 长超时 session：元数据约 3.4 MB，实测在慢网络下耗时可达 90s 以上.
+    nonisolated(unsafe) private static let engineSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 600
+        return URLSession(configuration: config)
+    }()
+
+    private nonisolated static func fetchAndInstallEngine(into directory: URL) async throws -> InstalledEngine {
+        let meta = try await fetchMetadata()
+        let (zipData, base64String) = try await resolvePayload(meta.payload)
+
+        // sha256 校验：`s` = sha256(base64 载荷 + "\n")（实测确认）.
+        // 对齐 SideSign：不匹配只记日志、不中断 —— 最终以解压出的库文件（存在 + ELF 魔数）为准.
+        if let expected = meta.sha, let base64String {
+            let actual = SHA256.hash(data: Data((base64String + "\n").utf8))
+                .map { String(format: "%02x", $0) }.joined()
+            if actual != expected.lowercased() {
+                LoginLogger.shared.log(
+                    "[本机Anisette] 引擎载荷 sha256 不匹配（期望 \(expected.prefix(12))… 实际 \(actual.prefix(12))…），继续安装",
+                    category: .appleID)
+            }
+        }
+
+        let entries: [ZipEntry]
+        do {
+            entries = try ZipContainer.open(container: zipData)
+        } catch {
+            throw EngineError.unzipFailed(error.localizedDescription)
+        }
+
+        let fm = FileManager.default
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        var installed: [String] = []
+        for entry in entries {
+            let name = entry.info.name
+            // 跳过 macOS 的 AppleDouble 边车（`__MACOSX/._*`），它们不是库.
+            if name.hasPrefix("__MACOSX/") { continue }
+            let leaf = (name as NSString).lastPathComponent
+            guard leaf == coreADIFileName || leaf == storesServicesFileName else { continue }
+            guard let payload = entry.data, !payload.isEmpty else { continue }
+            try payload.write(to: directory.appendingPathComponent(leaf), options: .atomic)
+            installed.append(leaf)
+        }
+
+        // 两份库必须齐全，且都是 ELF（`7f 45 4c 46`）.
+        for required in [coreADIFileName, storesServicesFileName] {
+            let url = directory.appendingPathComponent(required)
+            guard fm.fileExists(atPath: url.path) else { throw EngineError.missingLibrary(required) }
+            guard isELF(url) else { throw EngineError.notELF(required) }
+        }
+        return InstalledEngine(sha256: meta.sha ?? "", files: installed)
+    }
+
+    /// 拉取并解析 `oda.json`. 兼容两种形态：顶层即 `{s,l}`，或 `{..., "oda":{s,l}}`.
+    private nonisolated static func fetchMetadata() async throws -> ODAMetadata {
+        guard let url = URL(string: metadataURL) else { throw EngineError.badMetadataURL }
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await engineSession.data(for: request)
+        let http = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard http == 200 else { throw EngineError.metadataHTTP(http) }
+        let decoder = JSONDecoder()
+        if let direct = try? decoder.decode(ODAMetadata.self, from: data), direct.payload != nil {
+            return direct
+        }
+        if let wrapper = try? decoder.decode(ODAMetadataWrapper.self, from: data), let oda = wrapper.oda {
+            return oda
+        }
+        throw EngineError.malformedMetadata
+    }
+
+    /// 把 `l` 字段解析成 ZIP 数据：`http(s)` 前缀视为 URL（可能是 base64 文本或原始 ZIP），
+    /// 否则按 base64 解码. 同时回传原始 base64 字符串（供 sha256 校验；URL 形态下为 nil）.
+    private nonisolated static func resolvePayload(_ payload: String) async throws -> (zip: Data, base64: String?) {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            guard let url = URL(string: trimmed) else { throw EngineError.malformedMetadata }
+            let (data, response) = try await engineSession.data(from: url)
+            let http = (response as? HTTPURLResponse)?.statusCode ?? -1
+            guard http == 200 else { throw EngineError.metadataHTTP(http) }
+            if data.starts(with: [0x50, 0x4B]) { return (data, nil) }
+            if let text = String(data: data, encoding: .utf8),
+               let zip = Data(base64Encoded: text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return (zip, text)
+            }
+            throw EngineError.malformedPayload
+        }
+        guard let zip = Data(base64Encoded: trimmed) else { throw EngineError.malformedPayload }
+        return (zip, trimmed)
+    }
+
+    /// 读文件头 4 字节判 ELF 魔数（`7f 45 4c 46`）.
+    private nonisolated static func isELF(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let head = (try? handle.read(upToCount: 4)) ?? nil
+        return head == Data([0x7F, 0x45, 0x4C, 0x46])
+    }
+
+    /// ODA 元数据. 键名兼容 SideSign 的 `ODAInfo`：`s` / `sha` / `sha256`，`l` / `payload` / `data` / `libraries` / `url`.
+    private struct ODAMetadata: Decodable {
+        let sha: String?
+        let payload: String?
+
+        enum CodingKeys: String, CodingKey {
+            case s, sha, sha256
+            case l, payload, data, libraries, url
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            sha = try c.decodeIfPresent(String.self, forKey: .s)
+                ?? c.decodeIfPresent(String.self, forKey: .sha)
+                ?? c.decodeIfPresent(String.self, forKey: .sha256)
+            payload = try c.decodeIfPresent(String.self, forKey: .l)
+                ?? c.decodeIfPresent(String.self, forKey: .payload)
+                ?? c.decodeIfPresent(String.self, forKey: .data)
+                ?? c.decodeIfPresent(String.self, forKey: .libraries)
+                ?? c.decodeIfPresent(String.self, forKey: .url)
+        }
+    }
+
+    /// 服务器列表形态的外层（`{"servers":[…],"oda":{…}}`）.
+    private struct ODAMetadataWrapper: Decodable {
+        let oda: ODAMetadata?
     }
 
     // MARK: - 就绪检测
@@ -114,7 +349,7 @@ final class OnDeviceAnisetteManager: ObservableObject {
         case .notReady(let missing):
             return "未就绪（缺 \(missing.joined(separator: "、"))）"
         case .ready:
-            return "已就绪"
+            return "引擎已就绪"
         }
     }
 
@@ -122,7 +357,7 @@ final class OnDeviceAnisetteManager: ObservableObject {
 
     /// 供 `AnisetteProvider` 记录「本次为何回退远程」的可读原因；`nil` = 开关未开、无需说明.
     ///
-    /// 本构建**未内置 ADI 取数实现**，故只要开关是开的，就一定有回退原因 ——
+    /// 本构建的「本机 ADI 取数」尚未接线，故只要开关是开的，就一定有回退原因 ——
     /// 这样「开了本机 Anisette 却仍走远程」这件事在日志里是**显式**的，不会静默.
     var remoteFallbackReason: String? {
         switch readiness() {
@@ -131,7 +366,7 @@ final class OnDeviceAnisetteManager: ObservableObject {
         case .notReady(let missing):
             return "本机 Anisette 已开启，但引擎未就绪（缺 \(missing.joined(separator: "、"))），本次显式回退远程服务器."
         case .ready:
-            return "本机 Anisette 已开启且引擎就位，但本构建未内置 ADI 取数实现，本次显式回退远程服务器."
+            return "本机 Anisette 已开启且 ADI 引擎已安装，但本机 ADI 取数尚未接线，本次显式回退远程服务器."
         }
     }
 }

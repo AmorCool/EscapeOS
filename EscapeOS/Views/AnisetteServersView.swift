@@ -148,7 +148,7 @@ struct AnisetteServersView: View {
 
     private var onDeviceSection: some View {
         Section(header: Text("本机 Anisette"),
-                footer: Text("本机 Anisette 在本机跑 ADI 模拟，不依赖 Anisette header 服务器，也不依赖设备配对文件.它仍需一个元数据地址来取引擎载荷；引擎缺件时会显式回退远程服务器.")) {
+                footer: Text("本机 Anisette 在本机跑 ADI 模拟，不依赖 Anisette header 服务器，也不依赖设备配对文件.引擎从元数据地址下载并校验后装入本机；本机 ADI 取数尚未接线，就绪前后都会显式回退远程服务器.")) {
             Toggle("本机 Anisette", isOn: $oda.isEnabled)
             HStack {
                 Text("就绪状态")
@@ -163,6 +163,45 @@ struct AnisetteServersView: View {
                 Text(OnDeviceAnisetteManager.metadataHost)
                     .foregroundColor(.secondary)
             }
+            engineRow
+        }
+    }
+
+    /// ADI 引擎行：未安装显示「下载」；下载中显示进度；已安装显示版本 + 「移除」.
+    @ViewBuilder
+    private var engineRow: some View {
+        if oda.isDownloading {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("正在下载 ADI 引擎").foregroundColor(.secondary)
+            }
+        } else if oda.hasEngineInstalled {
+            HStack {
+                Text("ADI 引擎")
+                Spacer()
+                Text(oda.engineVersion.isEmpty ? "已安装" : "已安装 \(oda.engineVersion)")
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                Button {
+                    AppHaptics.tap()
+                    oda.removeEngine()
+                } label: {
+                    Text("移除").foregroundColor(AppTheme.danger)
+                }
+                .buttonStyle(.borderless)
+            }
+        } else {
+            Button {
+                AppHaptics.tap()
+                Task { await oda.downloadEngine() }
+            } label: {
+                Text("下载 ADI 引擎")
+            }
+        }
+        if let error = oda.lastError {
+            Text(error)
+                .font(.footnote)
+                .foregroundColor(AppTheme.danger)
         }
     }
 

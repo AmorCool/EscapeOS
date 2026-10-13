@@ -5,6 +5,13 @@ import UIKit
 struct AppStoreDetailView: View {
     @State var item: AppStoreItem
 
+    /// 从「已购列表」的下架条目进来时为 true：App Store 已查不到它 ——
+    /// 详情改吃 NB 下架库内嵌的那份 lookup 快照（不白屏），且不给「去 App Store 安装」。
+    var delisted: Bool = false
+    /// 从「已购列表」进来时带上的账号邮箱：历史版本 / 下载要用**持有该已购的那个账号**，
+    /// 不能默认拿全局「当前下载账号」（两者可能不是同一个）。
+    var accountEmail: String? = nil
+
     @ObservedObject private var center = IPADownloadCenter.shared
     @State private var expanded = false
     @State private var isFavorite = false
@@ -33,6 +40,7 @@ struct AppStoreDetailView: View {
 
     var body: some View {
         List {
+            if delisted { delistedSection }
             headerSection
             if !item.screenshots.isEmpty { screenshotsSection }
             infoSection
@@ -165,6 +173,16 @@ struct AppStoreDetailView: View {
 
     private var activeJob: IPADownloadCenter.Job? {
         center.activeJob(bundleId: item.bundleId, name: item.name)
+    }
+
+    /// 下架提示：这些条目 Apple 已经搜不到，页面信息来自下架库收录的快照。
+    private var delistedSection: some View {
+        Section {
+            Label("该应用已从 App Store 下架，此页信息来自下架库收录的快照.",
+                  systemImage: "exclamationmark.triangle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: 头部（图标 + 信息 + 获取按钮：同一张卡）
@@ -522,14 +540,22 @@ struct AppStoreDetailView: View {
     private var moreSection: some View {
         Section {
             NavigationLink {
-                AppStoreVersionHistoryView(item: item, country: AppStoreService.countryCode)
+                // 下架已购应用：账号通道（App Store 下载协议）对「已购」的下架应用仍能给出
+                // 全量版本身份且能直接下载指定版本，所以下架态把它提到第一跳。
+                AppStoreVersionHistoryView(item: item,
+                                           country: AppStoreService.countryCode,
+                                           accountFirst: delisted,
+                                           preferredEmail: accountEmail)
             } label: {
                 Label("历史版本", systemImage: "clock.arrow.circlepath")
             }
-            Button {
-                _ = AppStoreInstaller.openInAppStore(item)
-            } label: {
-                Label("去 App Store 安装", systemImage: "arrow.up.forward.app")
+            // 下架应用在 App Store 里已经搜不到，系统安装页会直接报「找不到」——不给这个入口。
+            if !delisted {
+                Button {
+                    _ = AppStoreInstaller.openInAppStore(item)
+                } label: {
+                    Label("去 App Store 安装", systemImage: "arrow.up.forward.app")
+                }
             }
             if let u = item.webURL {
                 Button {
@@ -606,6 +632,8 @@ struct AppStoreDetailView: View {
         // 抓取区域在发起时就定死：URL 与缓存键都用它，免得和「进商店时跟随账号区」的
         // 时机错开，抓到一个空结果的区（第一次进详情看不到、刷新才有）。
         let region = AppStoreService.countryCode
+        // 下架应用：Apple lookup 天然回空，先吃 NB 下架库内嵌的那份 lookup 快照把页面填满。
+        if delisted { await mergeDelistedDetail(appId: appId) }
         async let lookup = AppStoreService.lookup(id: appId, country: region)
         async let privacy = AppStoreService.privacyDetail(appId: appId, country: region)
 
@@ -620,6 +648,40 @@ struct AppStoreDetailView: View {
         if privacyGroups.isEmpty, AppStoreService.countryCode != region {
             privacyGroups = (try? await AppStoreService.privacyDetail(appId: appId)) ?? []
         }
+    }
+
+    /// 下架应用：Apple 的 `lookup` 与商品页都查不到它。NB 下架库收录时把当初那份
+    /// 完整 lookup 整段存了下来（`lookupData`，43 个键），直接映射成详情填满页面 —— 不白屏。
+    /// 按 **App Store ID → Bundle ID → 名称** 认领，认不出就不动（保持已购那点已知信息）。
+    private func mergeDelistedDetail(appId: String) async {
+        let key = item.name.isEmpty ? (item.bundleId ?? appId) : item.name
+        guard !key.isEmpty,
+              let hits = try? await NBStoreClient.searchOffSaleApp(keyword: key),
+              !hits.isEmpty else { return }
+        let byID = hits.first { ($0.storeID ?? "") == appId }
+        let byBundle = (item.bundleId?.isEmpty == false)
+            ? hits.first { ($0.bundleID ?? "").caseInsensitiveCompare(item.bundleId ?? "") == .orderedSame }
+            : nil
+        let byName = hits.first { $0.displayName.caseInsensitiveCompare(key) == .orderedSame }
+        guard let detail = (byID ?? byBundle ?? byName)?.lookupDetail else { return }
+
+        var merged = item
+        if merged.iconURL == nil { merged.iconURL = detail.artwork512 ?? detail.artwork100 }
+        if merged.iconSmallURL == nil { merged.iconSmallURL = detail.artwork100 }
+        if merged.seller == nil { merged.seller = detail.sellerName ?? detail.artistName }
+        if merged.version == nil { merged.version = detail.version }
+        if merged.releaseNotes == nil { merged.releaseNotes = detail.releaseNotes }
+        if merged.summary == nil { merged.summary = detail.descriptionText }
+        if merged.screenshots.isEmpty { merged.screenshots = detail.screenshotURLs }
+        if merged.minimumOS == nil { merged.minimumOS = detail.minimumOSVersion }
+        if merged.fileSizeBytes == nil { merged.fileSizeBytes = detail.fileSizeBytes }
+        if merged.genres.isEmpty { merged.genres = detail.genres }
+        if merged.rating == nil { merged.rating = detail.averageRating }
+        if merged.ratingCount == nil { merged.ratingCount = detail.ratingCount }
+        if merged.formattedPrice == nil { merged.formattedPrice = detail.formattedPrice }
+        if merged.bundleId == nil { merged.bundleId = detail.bundleID }
+        item = merged
+        LoginLogger.shared.log("[已购] 下架详情命中 NB 快照：「\(detail.name)」", category: .appStore)
     }
 }
 
