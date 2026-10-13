@@ -67,15 +67,20 @@ final class AppDiscovery {
 
         // Cellular隧道支持（默认关）：开关开 + 当前无 Wi-Fi（蜂窝）时，建隧道前有界等隧道就绪，
         // **不碰蜂窝开关**. 开关关 / 有 Wi-Fi 时是 no-op（`prepareForTunnel` 直接返回 false）。
-        CellularTunnelManager.shared.prepareForTunnel()
+        // 返回值要用起来：蜂窝模式下它区分「等到了、但心跳仍失败」与「等待超时、根本没等到」——
+        // 两者的下一步动作不同，不能都笼统报「隧道不可达」。
+        let tunnelReady = CellularTunnelManager.shared.prepareForTunnel()
 
         do {
             try tunnel.ensureHeartbeat()
         } catch {
-            // 如实报错：蜂窝模式下隧道不可达时点明原因，不谎称「开个开关就能好」。
+            // 如实报错：蜂窝模式下点明究竟是「没等到隧道」还是「隧道在、心跳失败」。
             if CellularTunnelManager.shared.isCellularMode {
+                let reason = tunnelReady
+                    ? "本地隧道已就绪但心跳失败（LocalDevVPN 可能已断开）"
+                    : "等待本地隧道就绪超时（请确认 LocalDevVPN 已连接）"
                 throw AppDiscoveryError.heartbeatFailed(
-                    "蜂窝网络下本地隧道不可达.请确认 LocalDevVPN 已连接.底层错误：\(error.localizedDescription)")
+                    "蜂窝网络下\(reason).底层错误：\(error.localizedDescription)")
             }
             throw AppDiscoveryError.heartbeatFailed(error.localizedDescription)
         }

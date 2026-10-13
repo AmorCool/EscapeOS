@@ -59,7 +59,8 @@ final class UninstallService: @unchecked Sendable {
         }
         // Cellular隧道支持（默认关）：与 `AppDiscovery.fetchInstalledApps` 同一接线，
         // 蜂窝（开关开 + 无 Wi-Fi）下建隧道前有界等隧道就绪，**不碰蜂窝开关**. 开关关时是 no-op。
-        CellularTunnelManager.shared.prepareForTunnel()
+        // 返回值要用起来：蜂窝模式下区分「等到了、但卸载仍失败」与「等待超时、根本没等到」。
+        let tunnelReady = CellularTunnelManager.shared.prepareForTunnel()
         // `uninstallAppWithBundleId:error:` is imported as a throwing method
         // `uninstallApp(withBundleId:)` that returns Void (the BOOL result is
         // folded into the throw — a non-throwing return means success). Same
@@ -67,10 +68,13 @@ final class UninstallService: @unchecked Sendable {
         do {
             try tunnel.uninstallApp(withBundleId: bundleId)
         } catch {
-            // 蜂窝模式下隧道不可达时如实点明（其余情况原样上报 installd 的错误）。
+            // 蜂窝模式下如实点明是「没等到隧道」还是「隧道在、卸载失败」（其余情况原样上报 installd 的错误）。
             if CellularTunnelManager.shared.isCellularMode {
+                let reason = tunnelReady
+                    ? "本地隧道已就绪但卸载失败（LocalDevVPN 可能已断开）"
+                    : "等待本地隧道就绪超时（请确认 LocalDevVPN 已连接）"
                 throw UninstallServiceError.tunnelFailed(
-                    "蜂窝网络下本地隧道不可达.请确认 LocalDevVPN 已连接.底层错误：\(error.localizedDescription)")
+                    "蜂窝网络下\(reason).底层错误：\(error.localizedDescription)")
             }
             throw UninstallServiceError.callFailed(error.localizedDescription)
         }

@@ -39,6 +39,9 @@
              未调用 CellularTunnelManager.shared.prepareForTunnel()（接线断了）.
   R7 [ERROR] 全仓重新出现「把 Wi-Fi 说成前提条件」的误导文案
              （如「（Wi-Fi 下）」「建议在 Wi-Fi 下」「请连 Wi-Fi」）.
+  R8 [ERROR] CellularTunnelManager.swift 的就绪轮询退回**单地址**探测
+             （不得只用 `LocalDevVPN.isTunnelReachable()`；必须用多候选并行的
+              `LocalDevVPN.isAnyCandidateReachable(timeout:)`）.
 
 误报处理：Swift/ObjC 匹配前先剥离**注释**、保留字符串字面量 ——
 R4/R5 要抓的 `shortcuts://…` 与「快捷指令」正是出现在字符串/文案里；
@@ -82,6 +85,13 @@ WIFI_STRICT_PATTERNS = (
 #   必须在建隧道前调用 CellularTunnelManager.shared.prepareForTunnel().
 TUNNEL_DEVICEIP_ANCHOR = "let deviceIP = LocalDevVPN.targetIP"
 PREPARE_CALL = "CellularTunnelManager.shared.prepareForTunnel()"
+
+# R8：蜂窝就绪轮询必须走多候选并行探测.
+#   本机可能同时装着 Surge / Loon / Shadowrocket 等（各起一条 utun），
+#   只探第一条 utun（`isTunnelReachable()` = `targetIP` 单地址）会探错隧道 ⇒
+#   必须用 `LocalDevVPN.isAnyCandidateReachable(timeout:)`（并行探全部候选，取第一个可达）.
+REQUIRED_MULTI_CANDIDATE_PROBE = "LocalDevVPN.isAnyCandidateReachable"
+FORBIDDEN_SINGLE_ADDRESS_PROBE = "LocalDevVPN.isTunnelReachable()"
 
 SOURCE_EXTS = (".swift", ".m", ".h", ".mm")
 
@@ -164,6 +174,24 @@ def check_manager(path):
     if not re.search(r'enabledKey\s*=\s*"%s"' % re.escape(ENABLED_KEY), read(path)):
         findings.append(("R1", "%s 未定义 enabledKey = \"%s\"." % (
             MANAGER_REL.replace("\\", "/"), ENABLED_KEY)))
+    return findings
+
+
+def check_multi_candidate_probe(path):
+    """R8：就绪轮询必须走多候选并行探测（不得退回单地址 `isTunnelReachable()`）."""
+    findings = []
+    if not os.path.isfile(path):
+        return findings
+    stripped = strip_comments(read(path))
+    if REQUIRED_MULTI_CANDIDATE_PROBE not in stripped:
+        findings.append(("R8", "%s 未使用 %s —— 蜂窝轮询必须并行探**全部**候选对端"
+                               "（本机可能同时装着 Surge / Loon / Shadowrocket，各起一条 utun；"
+                               "只探第一条 utun 会探错隧道）." % (
+                                   MANAGER_REL.replace("\\", "/"), REQUIRED_MULTI_CANDIDATE_PROBE)))
+    if FORBIDDEN_SINGLE_ADDRESS_PROBE in stripped:
+        findings.append(("R8", "%s 出现 %s —— 单地址探测只覆盖 `targetIP` 一个候选，"
+                               "禁止用于蜂窝就绪轮询." % (
+                                   MANAGER_REL.replace("\\", "/"), FORBIDDEN_SINGLE_ADDRESS_PROBE)))
     return findings
 
 
@@ -292,6 +320,7 @@ def main():
 
     findings = []
     findings += check_manager(os.path.join(root, MANAGER_REL))
+    findings += check_multi_candidate_probe(os.path.join(root, MANAGER_REL))
     findings += check_settings_toggle(os.path.join(root, ROOTVIEW_REL))
     findings += check_no_shortcut_dependency(root)
     findings += check_no_shortcut_text(root)

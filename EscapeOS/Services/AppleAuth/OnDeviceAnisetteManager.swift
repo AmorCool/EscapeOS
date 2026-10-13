@@ -26,13 +26,32 @@ import CryptoKit
 /// 本仓**已经静态链接了 Unicorn TCI**（`project.yml` 的 `$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a`，
 /// 现用于 SAP 的 x86-64 本地登录），故「引擎缺件」不是「引擎不可用」，而是**从未被下载安装过**.
 ///
+/// ## 参考实现（本轮实证）
+/// SideStore 的 `SideStore/Core/Anisette/OnDeviceAnisetteManager.swift` 只是薄壳，
+/// 真逻辑在 SPM 依赖 **`SideSign`** 的 `Sources/Anisette/AnisetteDataManager.swift`
+/// （`github.com/SideStore/SideSign`，main @ `6b68651697f99791ef85404b7aea1891a26a285d`）：
+///   · 模式枚举 `AnisetteMode.remoteODA(sourceURL:fallbackURL:)`；
+///   · `getClient(for:)` 的 `remoteODA` 分支：`createDirectory(libsDir)` 后，
+///     **若 `validateLibrariesExist(libsDir)` 为假就自动 `setupFromRemote(...)`**
+///     —— 即「进入该模式就确保引擎就位」，不是等用户去点按钮；
+///   · `setupFromRemote` → `fetchODAInfo` → `downloadAndCacheLibs`：base64/URL 取 ZIP →
+///     sha256 校验（**只记日志、不中断**）→ `unzipArchive` 到 libsDir → `validateLibrariesExist`.
+/// 本类的「开关一开就自动装引擎」即对齐该 `remoteODA` 惰性安装语义.
+///
 /// ## 本类职责与诚实边界
 /// 本类实现**引擎的获取与安装**：下载 `oda.json` → 解 base64 → 校验 `s` → 解压 → 校验两份库
-/// 存在且为 ELF → 落盘到 `.anisette/libs`. 安装完成后 `readiness()` 变为就绪.
+/// 存在且为 ELF → 落盘到 `.anisette/libs`. 开关打开时**自动**执行（见 `installEngineIfNeeded()`），
+/// 安装完成后 `readiness()` 变为就绪.
 /// **仍未接线**的是「本机 ADI 取数」这一步 —— 即在 Unicorn 的 AArch64 解释器里加载这两份库、
-/// 走 Apple 的 ADI 协议产出 headers（等价于移植 AnisetteKit 的 `AnisetteClient`）.
-/// 该部分在本仓尚无源码（全仓 `AnisetteKit` / `AnisetteClient` 命中 0），故本类**不臆造**其接口；
-/// 在它接线之前，`AnisetteProvider` 对已就绪的本机模式仍会**显式回退远程**并记录原因（绝不静默）.
+/// 走 Apple 的 ADI 协议产出 headers（等价于移植 SideSign 的 `AnisetteDataManager` +
+/// AnisetteKit 的 C++ `anisette_core_uc` / `EmulatorVM` / `elf_loader_emulator`）.
+/// 卡点有二（均已实证，非推测）：
+///   1. **Unicorn 架构**：本仓 `prepare.sap.py` 只编 `-DUNICORN_ARCH=x86`，AArch64 需另编
+///      `-DUNICORN_ARCH=aarch64`（`project.yml` / 构建脚本属他人正在改，本轮不动）；
+///   2. **许可**：AnisetteKit 为 **AGPLv3**（App Store 分发与闭源商用均被禁止），
+///      其 C++ 取数层不能原样并入本宿主 App.
+/// 故本类**不臆造**取数接口；在它接线之前，`AnisetteProvider` 对已就绪的本机模式仍会
+/// **显式回退远程**并记录原因（绝不静默）.
 ///
 /// Swift 6：本类无并发写风险（`@Published` 写全部来自主线程 UI；后台仅只读文件探测），
 /// 与 `DeveloperCertStore` 同款范式，故 `shared` 走 `nonisolated(unsafe)`.
@@ -57,8 +76,15 @@ final class OnDeviceAnisetteManager: ObservableObject {
     private static let engineVersionKey = "EscapeOS.OnDeviceAnisette.EngineVersion"
 
     /// 用户是否开启「本机 Anisette」（默认关）.
+    ///
+    /// 打开时**自动**确保引擎就位（对齐 SideSign `remoteODA` 的惰性安装语义）：
+    /// 若尚未安装且未在下载，就立刻起一个下载 —— 「未就绪（缺 ADI 引擎库）」因此
+    /// 不再需要用户另找按钮.
     @Published var isEnabled: Bool {
-        didSet { UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey) }
+        didSet {
+            UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey)
+            if isEnabled { Self.scheduleAutoInstall() }
+        }
     }
 
     /// 引擎是否正在下载（供 UI 显示进度并禁用按钮）.
@@ -154,6 +180,27 @@ final class OnDeviceAnisetteManager: ObservableObject {
         } catch {
             lastError = error.localizedDescription
             LoginLogger.shared.log("[本机Anisette] ADI 引擎安装失败：\(error.localizedDescription)", category: .appleID)
+        }
+    }
+
+    /// 引擎未安装且未在下载时，**自动下载安装**（供开关打开 / 进入本机模式时调用）.
+    ///
+    /// 对齐 SideSign `AnisetteDataManager.getClient(for:)` 的 `remoteODA` 分支：该分支在
+    /// 进入 ODA 模式且 `validateLibrariesExist` 失败时自动 `setupFromRemote` —— 即
+    /// 「进入该模式就确保引擎就位」，而非等用户去点按钮. 本仓据此把「怎么补」做成**自动**：
+    /// 开关一打开就装；装好后 `readiness()` 由 `未就绪（缺 ADI 引擎库）` 变为 `引擎已就绪`.
+    @MainActor
+    func installEngineIfNeeded() async {
+        guard isEnabled, !isDownloading, !hasEngineInstalled else { return }
+        LoginLogger.shared.log("[本机Anisette] 引擎未安装，自动开始下载安装", category: .appleID)
+        await downloadEngine()
+    }
+
+    /// 把「自动安装」安全投递到主线程. `didSet` 是 `nonisolated`，不能在其中直接跨域调用
+    /// `@MainActor` 方法，故经 `Task { @MainActor in … }` 显式跳到主线程再执行.
+    private static func scheduleAutoInstall() {
+        Task { @MainActor in
+            await Self.shared.installEngineIfNeeded()
         }
     }
 

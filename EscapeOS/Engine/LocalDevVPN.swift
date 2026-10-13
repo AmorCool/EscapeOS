@@ -71,11 +71,14 @@ enum LocalDevVPN {
         return ipv4.map { "\($0.name)=\($0.address)" }.joined(separator: ", ")
     }
 
-    /// 探测隧道端口（49152，RPPairing 服务）是否可达（1 秒超时）.
+    /// 探测**单个**地址的隧道端口（49152，RPPairing 服务）是否可达.
     /// 用于自动重试前的预检：隧道未起时不建 RSD 隧道，避免反复失败
     /// 与 ServiceNotFound 竞争（v0.2.106）.
-    static func isTunnelReachable() -> Bool {
-        let ip = targetIP
+    ///
+    /// - Parameter timeout: 连接超时（秒）. 默认调用点用 1.0（保持既有行为不变）；
+    ///   蜂窝轮询由 `CellularTunnelManager` 传 0.25 —— 对齐 SideStore
+    ///   `MinimuxerConstants.defaultTCPProbeTimeoutMs`（250ms），使 2 秒预算内能试更多次.
+    static func isReachable(ip: String, timeout: TimeInterval) -> Bool {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = in_port_t(49152).bigEndian
@@ -86,8 +89,9 @@ enum LocalDevVPN {
         guard fd >= 0 else { return false }
         defer { close(fd) }
 
-        // 连接超时 1 秒.
-        var tv = timeval(tv_sec: 1, tv_usec: 0)
+        let whole = Int(max(0, timeout))
+        let fraction = Int32(max(0, timeout - Double(whole)) * 1_000_000)
+        var tv = timeval(tv_sec: whole, tv_usec: fraction)
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
 
@@ -97,6 +101,64 @@ enum LocalDevVPN {
             }
         }
         return result == 0
+    }
+
+    /// 探测当前推导出的对端地址（`targetIP`）是否可达（1 秒超时）.
+    /// 单地址版，保持既有调用点（下载中心预检等）行为不变.
+    static func isTunnelReachable() -> Bool {
+        isReachable(ip: targetIP, timeout: 1.0)
+    }
+
+    /// 探测**任一候选对端**是否可达（并行，取第一个成功）.
+    ///
+    /// 对齐 SideStore `DeviceConnectionManager.resolveLocalVPNTunnel`：把所有候选对端
+    /// 丢进 `withTaskGroup` **并行**探测，谁先回谁胜出（`group.cancelAll()`）.
+    /// 本机可能同时装着 Surge / Loon / Shadowrocket 等（各起一条 utun），
+    /// 只探「第一条 utun」会探错隧道 ⇒ 必须多候选并行.
+    ///
+    /// - Parameter timeout: 每个候选的连接超时（秒）.
+    static func isAnyCandidateReachable(timeout: TimeInterval) -> Bool {
+        let peers = candidateTunnelPeers()
+        guard !peers.isEmpty else { return false }
+        if peers.count == 1 { return isReachable(ip: peers[0], timeout: timeout) }
+
+        // `concurrentPerform` 是同步阻塞的（全部迭代跑完才返回），
+        // 每个候选各自带 `timeout`，所以整体耗时约等于单个候选的超时.
+        let flag = TunnelProbeFlag()
+        DispatchQueue.concurrentPerform(iterations: peers.count) { index in
+            if !flag.value, isReachable(ip: peers[index], timeout: timeout) { flag.set() }
+        }
+        return flag.value
+    }
+
+    /// 候选隧道对端地址（有序、去重、已按 SideStore `isValidCandidatePeer` 规则过滤）.
+    ///
+    /// 顺序：用户显式覆盖（`UserDefaults["TunnelDeviceIP"]`）→ 各 utun 点对点对端
+    /// （同处 `10.0.0.0/8` 的排前）→ 出厂默认 `10.7.0.1`.
+    ///
+    /// 对齐 SideStore：候选集合 ≈ `DeviceConnectionManager.resolveCandidatePeers`
+    /// （route gateway → route destination → link-layer destination），
+    /// 过滤规则 = `isValidCandidatePeer`；用户覆盖 ≈ `overridePeerIp`.
+    static func candidateTunnelPeers() -> [String] {
+        var peers: [String] = []
+        let stored = UserDefaults.standard.string(forKey: "TunnelDeviceIP")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let stored, !stored.isEmpty { peers.append(stored) }
+        peers.append(contentsOf: utunPeerIPv4Candidates())
+        peers.append("10.7.0.1")
+
+        var seen = Set<String>()
+        return peers.filter { isValidCandidatePeer($0) && seen.insert($0).inserted }
+    }
+
+    /// 候选地址合法性 —— 对齐 SideStore `isValidCandidatePeer`：
+    /// 拒空、拒 `0.0.0.0` / `default` / `255.255.255.255`、拒回环（`127.*`）、
+    /// 拒组播（`224.*`、`239.*`），且必须是合法 IPv4.
+    static func isValidCandidatePeer(_ ip: String) -> Bool {
+        guard !ip.isEmpty, ip != "0.0.0.0", ip != "default", ip != "255.255.255.255",
+              !ip.hasPrefix("127."), !ip.hasPrefix("224."), !ip.hasPrefix("239.") else { return false }
+        var addr = in_addr()
+        return ip.withCString { inet_pton(AF_INET, $0, &addr) } == 1
     }
 
     static func openInstalled() {
@@ -126,29 +188,41 @@ enum LocalDevVPN {
         }
     }
 
-    /// 自动推导隧道**对端地址**：取本机 `utun*` 点对点接口的 IPv4 目的地址（`ifa_dstaddr`）.
+    /// 首个合格的点对点 utun 对端地址（= `utunPeerIPv4Candidates()` 的第一项）.
+    /// 单地址版；蜂窝就绪轮询改走多候选 `isAnyCandidateReachable(timeout:)`.
+    ///
+    /// 返回 `nil` 的几种情况（都**安全退回**默认值，不改变现状、不新增假阴性）：
+    ///   · 没有 utun 接口（隧道没起）；· utun 没有 IPv4 目的地址（非点对点 / 只有 IPv6）；
+    ///   · 推出来的地址不像隧道对端（非私有地址、或等于本机接口地址）.
+    private static func utunPeerIPv4() -> String? {
+        utunPeerIPv4Candidates().first
+    }
+
+    /// 收集**全部**合格的点对点 utun 对端地址（不止第一条）.
     ///
     /// 为什么读 `ifa_dstaddr` 而不是接口地址：见 `targetIP` 注释 —— LocalDevVPN 把
     /// `tunnelRemoteAddress` 设成 peerIP，iOS 据此把 utun 配成点对点接口，
     /// `ifconfig` 显示为 `inet <ifaceIP> --> <peerIP>`：`ifa_addr` 是 ifaceIP，
     /// `ifa_dstaddr` 才是 peerIP.
     ///
-    /// 返回 `nil` 的几种情况（都**安全退回**默认值，不改变现状、不新增假阴性）：
-    ///   · 没有 utun 接口（隧道没起）；· utun 没有 IPv4 目的地址（非点对点 / 只有 IPv6）；
-    ///   · 推出来的地址不像隧道对端（非私有地址、或等于本机接口地址）.
-    private static func utunPeerIPv4() -> String? {
+    /// 判据与 `utunPeerIPv4()` 原实现完全一致（只是不再「取到第一条就 return」）：
+    ///   · 接口名以 `utun` 开头；· 是点对点（`IFF_POINTOPOINT`；非点对点的
+    ///     `ifa_dstaddr` 是广播地址，必须排除）；· 目的地址是私有 IPv4；· 对端 ≠ 本机.
+    /// 排序：与本机 utun 地址同处 `10.0.0.0/8` 的排前（LocalDevVPN 的隧道就是 10.x），
+    /// 其余（其它 VPN 起的 utun）排后.
+    private static func utunPeerIPv4Candidates() -> [String] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
         defer { freeifaddrs(ifaddr) }
 
-        var loose: String?   // 次选：任意合格的点对点 utun 对端
+        var preferred: [String] = []   // 首选：与本机 utun 同处 10/8
+        var loose: [String] = []       // 次选：其余合格的点对点 utun 对端
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let current = ptr {
             let interface = current.pointee
             ptr = interface.ifa_next
             guard String(cString: interface.ifa_name).hasPrefix("utun") else { continue }
 
-            // 点对点接口才有「目的地址」；非点对点的 `ifa_dstaddr` 是广播地址，必须排除.
             guard interface.ifa_flags & UInt32(IFF_POINTOPOINT) != 0 else { continue }
             guard let dstPtr = interface.ifa_dstaddr,
                   dstPtr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
@@ -158,11 +232,13 @@ enum LocalDevVPN {
                 ? interface.ifa_addr.flatMap { numericIPv4($0) } : nil
             if let local, peer == local { continue }          // 对端 == 本机 ⇒ 不是点对点对端
 
-            // 首选：与本机 utun 地址同处 `10.0.0.0/8`（LocalDevVPN 的隧道就是 10.x）.
-            if let local, local.hasPrefix("10."), peer.hasPrefix("10.") { return peer }
-            if loose == nil { loose = peer }
+            if let local, local.hasPrefix("10."), peer.hasPrefix("10.") {
+                preferred.append(peer)
+            } else {
+                loose.append(peer)
+            }
         }
-        return loose
+        return preferred + loose
     }
 
     /// 把已确认 `AF_INET` 的 `sockaddr` 转成点分十进制 IPv4 字符串.
@@ -212,5 +288,23 @@ enum LocalDevVPN {
             results.append((name: name, family: family, address: String(cString: host)))
         }
         return results
+    }
+}
+
+/// 并行探测的「已命中」标志.
+///
+/// Swift 6 严格并发下不允许在 `@Sendable` 闭包里改写捕获的 `var`，
+/// 故用带锁的引用类型（与 `CellularTunnelManager` 里的 `BoolBox` 同款）.
+private final class TunnelProbeFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+
+    func set() {
+        lock.lock(); stored = true; lock.unlock()
+    }
+
+    var value: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stored
     }
 }

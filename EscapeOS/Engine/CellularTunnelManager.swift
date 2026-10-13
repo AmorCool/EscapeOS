@@ -15,7 +15,8 @@ import Network
 /// 与 SideStore 的逐项对应（保留部分）：
 ///   · `isCellularRefreshEnabled`（UserDefaults）   → `EscapeOS.CellularTunnelSupport`
 ///   · `minimuxer.network.isWifiSatisfied`           → `NWPathMonitor` 的 `usesInterfaceType(.wifi)`
-///   · `waitForMinimuxerReady(timeout: 2.0)`         → `LocalDevVPN.isTunnelReachable()` 有界轮询
+///   · `waitForMinimuxerReady(timeout: 2.0)`         → 有界轮询（250ms 并行探多候选，见 `waitForTunnelReady`）
+///   · `core.isReady(withNetworkCheck: false)`       → 本仓无「Wi-Fi 网络门」，天然等价于 `false`
 ///
 /// ⚠️ 默认关（`UserDefaults` 无值即 `false`）⇒ 开关不开时本类全部方法都是 no-op，
 /// **不改变 Wi-Fi 下既有行为**（兼容纪律，与 `TunnelManager` 同款）.
@@ -28,10 +29,16 @@ final class CellularTunnelManager: @unchecked Sendable {
     /// `UserDefaults` 键. 沿用本仓「模块.项」点号惯例（与 `TunnelManager.kindKey` 同款）.
     static let enabledKey = "EscapeOS.CellularTunnelSupport"
 
-    /// 轮询隧道就绪的超时（对齐 SideStore `waitForMinimuxerReady(timeout: 2.0)`）.
+    /// 轮询隧道就绪的总预算（对齐 SideStore `waitForMinimuxerReady(timeout: 2.0)`）.
     private static let readyTimeout: TimeInterval = 2.0
     /// 轮询间隔（对齐 SideStore `200_000_000` ns = 200ms）.
     private static let pollInterval: TimeInterval = 0.2
+    /// 单次 TCP 探测超时（对齐 SideStore `MinimuxerConstants.defaultTCPProbeTimeoutMs` = 250ms）.
+    ///
+    /// 为什么不沿用 `LocalDevVPN.isTunnelReachable()` 的 1 秒：1s 探测 + 0.2s 间隔，
+    /// 在 2 秒预算里只能试约 2 次；换成 250ms 后同样预算能试 4~8 次，
+    /// 与 SideStore 的节奏一致（隧道刚起的那零点几秒正是关键窗口）.
+    private static let probeTimeout: TimeInterval = 0.25
 
     // MARK: - 开关与判据
 
@@ -55,16 +62,29 @@ final class CellularTunnelManager: @unchecked Sendable {
     func prepareForTunnel() -> Bool {
         guard isCellularMode else { return false }
         let ready = waitForTunnelReady(timeout: Self.readyTimeout)
-        LoginLogger.shared.log("[Cellular] 蜂窝模式，隧道就绪=\(ready).", category: .general)
+        // 诊断：把「隧道到底在不在、候选对端是哪些、本机接口长什么样」如实打进日志.
+        // 对齐 SideStore `DeviceConnectionManager.refresh()` 的那段多行 debugLog
+        // （probable-vpn host / derived peer IP / reachable）—— 没有这段，
+        // 日志只能看到「就绪=false」，分不清「根本没有 utun」还是「utun 在但端口被拒」
+        // （后者在真机日志里表现为 `connect: Connection refused (os error 61)`）.
+        let peers = LocalDevVPN.candidateTunnelPeers()
+        LoginLogger.shared.log(
+            "[Cellular] 蜂窝模式，隧道就绪=\(ready). utun=\(LocalDevVPN.isConnected) "
+            + "候选对端=[\(peers.joined(separator: ", "))] 本机接口=\(LocalDevVPN.ipv4InterfaceSummary()).",
+            category: .general)
         return ready
     }
 
     /// 有界轮询「隧道端口（49152）可达」，最多等 `timeout`.
-    /// 复用 `LocalDevVPN.isTunnelReachable()`（探测 `targetIP:49152`，其自身 1s 超时）.
+    ///
+    /// 每一轮都调 `LocalDevVPN.isAnyCandidateReachable(timeout:)` **并行**探全部候选对端
+    /// （对齐 SideStore `DeviceConnectionManager.resolveLocalVPNTunnel` 的并行 `tcpProbe`；
+    /// 本机可能同时装着 Surge / Loon / Shadowrocket，各起一条 utun，
+    /// 只探第一条 utun 会探错隧道）.
     func waitForTunnelReady(timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if LocalDevVPN.isTunnelReachable() { return true }
+            if LocalDevVPN.isAnyCandidateReachable(timeout: Self.probeTimeout) { return true }
             Thread.sleep(forTimeInterval: Self.pollInterval)
         }
         return false

@@ -60,6 +60,9 @@ struct AnisetteServersView: View {
         .task {
             customText = Self.isPopular(anisetteServer) ? "" : MemoryLimitSettings.host(from: anisetteServer)
             await refreshStatus()
+            // 自愈：开关已开但引擎缺件（上次下载失败 / 进程被杀）时，进入本页自动补装.
+            // 不阻塞本页渲染 —— 引擎下载在 OnDeviceAnisetteManager 内部走 detached 后台任务.
+            Task { await oda.installEngineIfNeeded() }
         }
         .onDisappear { statusTask?.cancel() }
     }
@@ -148,7 +151,7 @@ struct AnisetteServersView: View {
 
     private var onDeviceSection: some View {
         Section(header: Text("本机 Anisette"),
-                footer: Text("本机 Anisette 在本机跑 ADI 模拟，不依赖 Anisette header 服务器，也不依赖设备配对文件.引擎从元数据地址下载并校验后装入本机；本机 ADI 取数尚未接线，就绪前后都会显式回退远程服务器.")) {
+                footer: Text("本机 Anisette 在本机跑 ADI 模拟，不依赖 Anisette header 服务器，也不依赖设备配对文件.打开开关会自动从元数据地址下载并校验引擎；本机 ADI 取数尚未接线，就绪前后都会显式回退远程服务器.")) {
             Toggle("本机 Anisette", isOn: $oda.isEnabled)
             HStack {
                 Text("就绪状态")
@@ -164,6 +167,17 @@ struct AnisetteServersView: View {
                     .foregroundColor(.secondary)
             }
             engineRow
+            // 引擎就绪后仍要如实标明：本机 ADI 取数这一步本构建未接线，本次仍走远程服务器.
+            // 避免把「引擎已就绪」误读成「已在本机生成 headers」.
+            if oda.hasEngineInstalled {
+                HStack {
+                    Text("本机取数")
+                    Spacer()
+                    Text("未接线（回退远程）")
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
     }
 
