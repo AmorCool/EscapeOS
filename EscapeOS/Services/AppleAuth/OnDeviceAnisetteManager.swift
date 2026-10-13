@@ -229,7 +229,12 @@ final class OnDeviceAnisetteManager: ObservableObject {
 
     private nonisolated static func fetchAndInstallEngine(into directory: URL) async throws -> InstalledEngine {
         let meta = try await fetchMetadata()
-        let (zipData, base64String) = try await resolvePayload(meta.payload)
+        // `resolvePayload(_:)` 形参是非可选 `String`，而 `meta.payload` 是 `String?`
+        // ⇒ 必须先解包（CI 报的正是这一行：value of optional type 'String?' must be unwrapped）。
+        guard let rawPayload = meta.payload, !rawPayload.isEmpty else {
+            throw EngineError.malformedMetadata
+        }
+        let (zipData, base64String) = try await resolvePayload(rawPayload)
 
         // sha256 校验：`s` = sha256(base64 载荷 + "\n")（实测确认）.
         // 对齐 SideSign：不匹配只记日志、不中断 —— 最终以解压出的库文件（存在 + ELF 魔数）为准.
