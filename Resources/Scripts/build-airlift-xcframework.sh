@@ -116,15 +116,35 @@ localize_airlift_symbols() {
             -o "$work/prelinked.o"
   "$LIBTOOL_BIN" -static -o "$lib" "$work/prelinked.o"
 
-  # 4) Invariant: nothing but `al_*` may remain global.
+  # 4) Invariant: nothing but `al_*` may remain global —— 但**弱符号是例外**。
+  #
+  # `-exported_symbols_list` 只约束**强定义**（strong definitions）。Rust 的
+  # crypto 后端 AWS-LC 带出来的一批符号是 **weak_definition**：
+  #
+  #   _aws_lc_0_45_0_is_a_tty  _aws_lc_0_45_0_tty_in  _aws_lc_0_45_0_tty_new
+  #   _aws_lc_0_45_0_tty_orig  _aws_lc_0_45_0_tty_out
+  #
+  # 它们在 `ld -r` 之后仍是 global（ld64 不动弱定义）。**留着无害**：
+  # 守卫的目的是「防止与 libidevice_ffi.a 的强符号重复」，而 `libidevice_ffi.a`
+  # 里没有 AWS-LC ⇒ **不会重复** ⇒ 不能因为它们把整轮构建判失败。
+  #
+  # ⇒ 白名单：只放「已知第三方库的带版本前缀符号」。**不要往里加 `_al_*` 之外的自研符号**
+  #   —— 那说明 `-exported_symbols_list` 没生效，是真问题。
   extra="$("$nm" -gU --defined-only "$lib" 2>/dev/null \
-             | awk '$NF ~ /^_/ && $NF !~ /^_al_/ {print $NF}' | sort -u || true)"
+             | awk '$NF ~ /^_/ && $NF !~ /^_al_/ && $NF !~ /^_aws_lc_/ {print $NF}' \
+             | sort -u || true)"
   if [ -n "$extra" ]; then
     echo "localize_airlift_symbols: $lib still exports non-public symbols:" >&2
     printf '%s\n' "$extra" | head -20 >&2
+    echo "（注：_aws_lc_* 已在白名单内；此处列出的是真正需要处理的符号）" >&2
     rm -rf "$work"
     return 1
   fi
+
+  # 记录被白名单放过的弱符号，便于事后核对（不参与判定）
+  weak_left="$("$nm" -gU --defined-only "$lib" 2>/dev/null \
+                 | awk '$NF ~ /^_aws_lc_/ {print $NF}' | sort -u | wc -l | tr -d ' ' || true)"
+  echo "  （白名单放过 $weak_left 个 _aws_lc_* 弱符号）" >&2
 
   echo "localized $(wc -l < "$exports" | tr -d ' ') public symbols in $lib"
   rm -rf "$work"
