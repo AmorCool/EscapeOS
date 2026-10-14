@@ -1,4 +1,4 @@
-# Building EscapeOS
+# Building TequilaDash
 
 This repository carries exactly **one** build track.
 

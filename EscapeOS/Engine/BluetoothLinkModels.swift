@@ -74,8 +74,8 @@ enum BluetoothLink {
     /// UI 展示名.
     static func displayName(for role: BluetoothLinkRole?) -> String {
         switch role {
-        case .broadcaster: return "EscapeSpace（模拟终端）"
-        case .receiver: return "EscapeSpace（信号端）"
+        case .broadcaster: return "TequilaDash（模拟终端）"
+        case .receiver: return "TequilaDash（信号端）"
         case nil: return "未知设备"
         }
     }

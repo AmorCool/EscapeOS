@@ -1,4 +1,4 @@
-# Releasing EscapeOS
+# Releasing TequilaDash
 
 The shipping IPA is built by GitHub Actions. Nothing is built locally, and a `v*` tag is the only
 thing that starts a run. A tag run either **reuses a successful build of the same commit** (no

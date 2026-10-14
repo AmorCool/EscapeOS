@@ -417,7 +417,7 @@ struct BuiltInTunnel: TunnelProviding {
                 proto.providerConfiguration = ["peerIP": peerIP]
 
                 manager.protocolConfiguration = proto
-                manager.localizedDescription = "EscapeSpace 内置隧道"
+                manager.localizedDescription = "TequilaDash 内置隧道"
                 manager.isEnabled = true
 
                 // 本闭包体内不引用 `manager` ⇒ 不把它捕获进来.
