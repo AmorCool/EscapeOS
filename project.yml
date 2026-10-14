@@ -123,6 +123,10 @@ targets:
           - "**/README.md"
       # ZSign 引擎（LC 同款签名器，v0.3.101：ad-hoc 重签名可拆卸 dylib 模块）
       - path: ZSign
+        # 排除 README.md：它会平铺进 .app 根，与其它 source 的 README.md 撞车
+        # （Multiple commands produce .../TequilaDash.app/README.md）
+        excludes:
+          - "**/README.md"
       - path: Resources
         # 把 Resources/ 内资源（AppIcon PNG、Supervised 的 .mobileconfig、solarium.jpg 等）
         # 打进 .app bundle。此前漏把 Resources/ 纳入 xcodegen source 树，导致切到 Xcode 后
@@ -141,6 +145,9 @@ targets:
           # 不再作为普通资源重复打包
           - "Scripts"
           - "Licenses"
+          # 排除 README.md：Resources/README.md 会平铺进 .app 根，与 TequilaDash/ 下
+          # 的 README.md 撞车（Multiple commands produce .../TequilaDash.app/README.md）
+          - "**/README.md"
       - path: Resources/BundledModules
         # v0.3.48：内置模块清单，folder reference 保留 <id>/module.json 层级，
         # 运行时经 Bundle.main.url(forResource: "BundledModules", withExtension: nil) 读取。
@@ -171,6 +178,8 @@ targets:
       - path: vendor/ApplePackage
         excludes:
           - "**/PrivacyInfo.xcprivacy"
+          # 同 Resources/ZSign：README.md 平铺进 .app 根会互相撞车
+          - "**/README.md"
     settings:
       base:
         # Swift 6 语言模式迁移（原 `swift6-migration` 分支，2026-09-18 已合入 `migrate-xcode`）。
