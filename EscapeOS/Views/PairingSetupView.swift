@@ -50,7 +50,7 @@ struct PairingSetupView: View {
                     SetupStep(number: 2, title: "获取配对文件",
                                text: "在 Windows 上用 iPASide 侧载，生成 pairingFile.plist 并自动放置.也可在此导入 iLoader 文件.之后可拔线（走 LocalDevVPN，不走 USB）.iOS 26.4+ 需远程配对密钥，iOS 18 只需 USB 信任部分.")
                     SetupStep(number: 3, title: "加载应用",
-                               text: "EscapeSpace 随后列出你已安装的应用，可浏览或备份其数据.")
+                               text: "TequilaDash 随后列出你已安装的应用，可浏览或备份其数据.")
                 }
                 .padding(.horizontal)
 
@@ -98,7 +98,7 @@ struct PairingSetupView: View {
                             .font(.headline)
                             .foregroundStyle(.blue)
 
-                        Text("iOS 27 支持无线配对，且配对码会直接显示在 App 内（而不是系统通知）.点击「开始无线配对」后，在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并把此处显示的配对码输入到该设备即可完成.")
+                        Text("iOS 27 支持无线配对，且配对码会直接显示在 App 内（而不是系统通知）.点击「开始无线配对」后，在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 TequilaDash 配对」，并把此处显示的配对码输入到该设备即可完成.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
 
@@ -333,7 +333,7 @@ struct PairingSetupView: View {
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                                     .fill(Color(.secondarySystemGroupedBackground))
                             )
-                        Text("在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 EscapeOS 配对」，并输入上方配对码.")
+                        Text("在另一台设备的 设置 › 隐私与安全性 › 开发者模式 中选择「与 TequilaDash 配对」，并输入上方配对码.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)

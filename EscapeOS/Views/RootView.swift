@@ -484,6 +484,6 @@ struct SettingsForm: View {
     private static var aboutLine: String {
         let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        return "EscapeSpace \(short) (\(build))"
+        return "TequilaDash \(short) (\(build))"
     }
 }

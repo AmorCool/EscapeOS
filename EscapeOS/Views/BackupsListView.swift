@@ -113,7 +113,7 @@ struct BackupsListView: View {
                     InfoActionCard(
                         icon: "externaldrive.fill.badge.timemachine",
                         title: "正在加载备份…",
-                        message: "读取 EscapeSpace/Backups 目录中的备份归档."
+                        message: "读取 TequilaDash/Backups 目录中的备份归档."
                     )
                 }
             } else if let error = vm.errorMessage, vm.isEmpty {
@@ -132,7 +132,7 @@ struct BackupsListView: View {
                     InfoActionCard(
                         icon: "tray.full",
                         title: "暂无备份",
-                        message: "在「应用管理」或「容器管理」进入任意应用，点「备份数据」导出.归档保存在「文件 → 我的iPhone → EscapeSpace → Backups」."
+                        message: "在「应用管理」或「容器管理」进入任意应用，点「备份数据」导出.归档保存在「文件 → 我的iPhone → TequilaDash → Backups」."
                     )
                 }
             } else {
@@ -249,7 +249,7 @@ struct BackupsListView: View {
             let record = try BackupCatalog().loadRecord(at: dest)
             importRecord = record
         } catch {
-            importError = IdentifiedAlert(message: "该文件不是有效的 EscapeSpace 备份（缺少 backup.json），或读取失败：\(error.localizedDescription)")
+            importError = IdentifiedAlert(message: "该文件不是有效的 TequilaDash 备份（缺少 backup.json），或读取失败：\(error.localizedDescription)")
         }
     }
 }

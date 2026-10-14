@@ -615,7 +615,7 @@ final class ModuleService {
             }
             guard HotfixService.verifySignature(manifestData: mData, signatureB64: sigB64) else {
                 log!("! 签名校验失败（签名文件存在但与官方公钥不匹配）")
-                throw ModuleError.badSpec("热补丁/二进制模块签名校验失败——仅接受 EscapeSpace 官方签名")
+                throw ModuleError.badSpec("热补丁/二进制模块签名校验失败——仅接受 TequilaDash 官方签名")
             }
             log?("- 签名验证 [完成]")
         }
@@ -762,7 +762,7 @@ final class ModuleService {
         let issues = module.blockingIssues
         if !issues.isEmpty {
             throw ModuleError.badAction(
-                "模块「\(module.name)」不可用：\(issues.joined(separator: "；"))（请升级 EscapeSpace）")
+                "模块「\(module.name)」不可用：\(issues.joined(separator: "；"))（请升级 TequilaDash）")
         }
         if action.type == "signal" {
             return try runSignal(action)

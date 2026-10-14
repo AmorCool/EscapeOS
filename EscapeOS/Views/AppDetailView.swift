@@ -100,7 +100,7 @@ struct AppDetailView: View {
                 }
             }
 
-            Section(footer: Text("备份 Documents、Library 与 tmp 到「文件 → 我的iPhone → EscapeSpace → Backups」.不含 Keychain.请先关闭 \(app.name) 以获得一致快照.")) {
+            Section(footer: Text("备份 Documents、Library 与 tmp 到「文件 → 我的iPhone → TequilaDash → Backups」.不含 Keychain.请先关闭 \(app.name) 以获得一致快照.")) {
                 NavigationLink(destination: FileBrowserView(app: app)) {
                     Label("浏览文件", systemImage: "folder.fill")
                 }
@@ -297,7 +297,7 @@ struct AppDetailView: View {
                 Text("\(result.fileCount) 个文件 · \(formatBytes(result.totalBytes))")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text("已保存到 EscapeSpace → Backups")
+                Text("已保存到 TequilaDash → Backups")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

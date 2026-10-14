@@ -435,7 +435,7 @@ struct MapHomeView: View {
             return
         }
         let gpx = GPXCodec.export(path)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("EscapeSpace-Route.gpx")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("TequilaDash-Route.gpx")
         do {
             try gpx.data(using: .utf8)?.write(to: url)
             let av = UIActivityViewController(activityItems: [url], applicationActivities: nil)

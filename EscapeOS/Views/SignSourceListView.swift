@@ -175,7 +175,7 @@ struct SignSourceListView: View {
 
     /// 页脚免责声明（规格 §4.1，合规必做）。
     private var disclaimer: some View {
-        Text("软件源内容由第三方提供，与 EscapeSpace 无关；请自行确认源的合法性与有效性，勿添加非法应用源.")
+        Text("软件源内容由第三方提供，与 TequilaDash 无关；请自行确认源的合法性与有效性，勿添加非法应用源.")
             .font(.caption2)
     }
 

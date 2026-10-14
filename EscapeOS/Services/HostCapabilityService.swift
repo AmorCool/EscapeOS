@@ -1579,7 +1579,7 @@ enum HostCapabilityService {
         let body = (args["body"] as? String) ?? ""
 
         guard notificationAuthorized() else {
-            return fail("通知未授权：请在系统设置里允许 EscapeSpace 发送通知后重试")
+            return fail("通知未授权：请在系统设置里允许 TequilaDash 发送通知后重试")
         }
 
         let content = UNMutableNotificationContent()

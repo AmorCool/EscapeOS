@@ -152,7 +152,7 @@ enum ManifestPublisher {
         guard let content = String(data: manifest, encoding: .utf8),
               let endpoint = URL(string: "https://api.github.com/gists"),
               let body = try? JSONSerialization.data(withJSONObject: [
-                  "description": "EscapeSpace OTA manifest",
+                  "description": "TequilaDash OTA manifest",
                   "public": false,
                   "files": ["install.plist": ["content": content]]
               ]) else {

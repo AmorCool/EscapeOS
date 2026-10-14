@@ -214,7 +214,7 @@ struct LogConsoleView: View {
         let bundle = Bundle(for: BundleAnchor.self)
         let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
             ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
-            ?? "EscapeOS"
+            ?? "TequilaDash"
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         return "\(name) \(version)"
     }

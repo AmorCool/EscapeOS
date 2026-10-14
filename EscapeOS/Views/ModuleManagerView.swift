@@ -393,7 +393,7 @@ struct ModuleManagerView: View {
             // 每条 issue 自带说明（「缺少宿主能力：…」/「需要宿主 v…，当前 v…」），
             // 加前缀会重复成「缺少宿主能力：缺少宿主能力：fs.read」.
             if !module.blockingIssues.isEmpty {
-                Label(module.blockingIssues.joined(separator: "；") + "（请升级 EscapeSpace）",
+                Label(module.blockingIssues.joined(separator: "；") + "（请升级 TequilaDash）",
                       systemImage: "info.circle")
                     .font(.caption)
                     .foregroundColor(.orange)

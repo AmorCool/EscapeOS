@@ -43,7 +43,7 @@ struct EscapeSpaceApp: App {
         AppStorePreferredVersion.install()
         // v0.3.361：启动就在日志里写下版本号 —— 排查时先看这一行，别再靠截图猜用户跑的是哪个包
         // （2026-09-13 真就为「界面改了没生效」来回确认过一轮版本）。
-        LoginLogger.shared.log("EscapeSpace "
+        LoginLogger.shared.log("TequilaDash "
             + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")
             + " (" + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?") + ") 启动",
             category: .general)

@@ -411,7 +411,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
         case "help":
             return Self.helpText
         case "status":
-            var lines = ["EscapeSpace 运行状态:"]
+            var lines = ["TequilaDash 运行状态:"]
             lines.append("  PiP 保活: \(PiPKeepAliveService.shared.isPiPActive ? "运行中" : "未启动")")
             lines.append("  全局高刷: \(HighRefreshService.shared.isRunning ? "\(HighRefreshService.shared.maxFPS)Hz 强制" : "关闭")")
             lines.append("  模块数量: \(ModuleService.shared.listModules().count)")
@@ -803,7 +803,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
     }
 
     static let helpText = """
-    EscapeSpace SSH 调试 · 可用命令:
+    TequilaDash SSH 调试 · 可用命令:
       status          运行状态总览
       ddiprobe        只读诊断：查设备是否已挂 DDI（结果 → LoginLogs/ddi_probe.txt）
       cdprobe         只读诊断：CoreDeviceProxy 隧道内第二个 RSD 握手 + app_service 端到端（结果 → LoginLogs/cd_probe.txt）

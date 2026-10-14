@@ -155,7 +155,7 @@ enum ConfigurationsStore {
 
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let zipURL = backupDir.appendingPathComponent("EscapeSpace-Configs-\(formatter.string(from: Date())).zip")
+        let zipURL = backupDir.appendingPathComponent("TequilaDash-Configs-\(formatter.string(from: Date())).zip")
 
         let writer = ZipWriter()
         try writer.begin(at: zipURL)
@@ -171,7 +171,7 @@ enum ConfigurationsStore {
 
         let current = readCurrent()
         let note = """
-        EscapeSpace 配置备份
+        TequilaDash 配置备份
 
         导出时间：\(Date())
         设备：\(UIDevice.current.name)（iOS \(UIDevice.current.systemVersion)）

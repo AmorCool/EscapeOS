@@ -102,10 +102,10 @@ enum GPXCodec {
         return coords
     }
 
-    static func export(_ coordinates: [CLLocationCoordinate2D], name: String = "EscapeSpace Route") -> String {
+    static func export(_ coordinates: [CLLocationCoordinate2D], name: String = "TequilaDash Route") -> String {
         var body = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <gpx version="1.1" creator="EscapeSpace" xmlns="http://www.topografix.com/GPX/1/1">
+        <gpx version="1.1" creator="TequilaDash" xmlns="http://www.topografix.com/GPX/1/1">
           <trk>
             <name>\(name)</name>
             <trkseg>

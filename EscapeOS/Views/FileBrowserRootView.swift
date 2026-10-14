@@ -53,7 +53,7 @@ struct FileBrowserRootView: View {
                 NavigationLink {
                     FileBrowserView(
                         rootPath: FileSystemRoots.appDocuments,
-                        title: "EscapeSpace 文档"
+                        title: "TequilaDash 文档"
                     )
                 } label: {
                     RootRow(
