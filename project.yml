@@ -74,6 +74,19 @@ settings:
       # Asspp 本地 SAP 登录：静态链接 Unicorn TCI 解释器（无 dylib、无需嵌入）
       - "$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a"
       - "-lc++"
+      # 禁用 compact unwind 表。
+      # 根因：TequilaDash 同时链接两个 Rust 静态库（libidevice_ffi.a +
+      # libairlift_ffi.a），二者各带一份 `_rust_eh_personality`；加上 ObjC 的
+      # `___objc_personality_v0` 与 C++ 的 `___gxx_personality_v0`，超过 ld64
+      # compact unwind 能编码的 4 个上限，报：
+      #   ld: Too many personality routines for compact unwind to encode.
+      # 注：libairlift_ffi.a 已由 build-airlift-xcframework.sh 的
+      # localize_airlift_symbols() 把非 `_al_` 全局符号降级为 local（那解决的是
+      # 1032 个 duplicate symbols），但 personality routine 是**链接期**由两个
+      # 库各自的 unwind 段提供的，本地化管不到。
+      # -no_compact_unwind 让 ld 不生成该表，改用 DWARF unwind 信息，
+      # 异常/栈展开行为不变，仅二进制略大。
+      - "-Wl,-no_compact_unwind"
     SWIFT_OBJC_BRIDGING_HEADER: "TequilaDash/Engine/TequilaDash-Bridging-Header.h"
     # SapMachine.cpp 用了 std::format → 必须 C++20（原分叉同理）
     CLANG_CXX_LANGUAGE_STANDARD: "gnu++20"
