@@ -20,16 +20,16 @@
 本脚本是「以后不会再有人把快捷指令硬依赖加回来」的守门人，在提交前拦住.
 
 检查范围：
-  · EscapeOS/Engine/CellularTunnelManager.swift        （引擎文件）
-  · EscapeOS/Views/RootView.swift                       （设置页开关）
-  · EscapeOS/Engine/AppDiscovery.swift                  （接线点：应用列表，走 TunnelContext）
-  · EscapeOS/Engine/UninstallService.swift              （接线点：卸载，走 TunnelContext）
-  · EscapeOS/Engine/LocationEngine.swift                （接线点：虚拟定位，本次报障核心）
-  · 全 EscapeOS/ 目录                                    （快捷指令硬依赖 / 误导文案 / Wi-Fi 硬信念文案）
+  · TequilaDash/Engine/CellularTunnelManager.swift        （引擎文件）
+  · TequilaDash/Views/RootView.swift                       （设置页开关）
+  · TequilaDash/Engine/AppDiscovery.swift                  （接线点：应用列表，走 TunnelContext）
+  · TequilaDash/Engine/UninstallService.swift              （接线点：卸载，走 TunnelContext）
+  · TequilaDash/Engine/LocationEngine.swift                （接线点：虚拟定位，本次报障核心）
+  · 全 TequilaDash/ 目录                                    （快捷指令硬依赖 / 误导文案 / Wi-Fi 硬信念文案）
   · 全部含 `let deviceIP = LocalDevVPN.targetIP` 的隧道入口（23 个引擎/服务/视图文件）
 
 检查规则：
-  R1 [ERROR] CellularTunnelManager.swift 缺失，或未定义 enabledKey = "EscapeOS.CellularTunnelSupport".
+  R1 [ERROR] CellularTunnelManager.swift 缺失，或未定义 enabledKey = "TequilaDash.CellularTunnelSupport".
   R2 [ERROR] 设置页开关的 @AppStorage 默认值不是 false（必须默认关 ⇒ 零行为变化）.
   R3 [ERROR] 设置页找不到绑定该 @AppStorage 的 Toggle（开关没接上）.
   R4 [ERROR] 全仓实际代码重新出现「快捷指令硬依赖」
@@ -50,20 +50,20 @@ R4/R5 要抓的 `shortcuts://…` 与「快捷指令」正是出现在字符串/
 
 用法：
     python swift_cellular_tunnel_guard.py [仓库根，默认 .]
-    仓库根 = 含 EscapeOS/ 的那一层（即 P1_EscapeOS_宿主仓库）
+    仓库根 = 含 TequilaDash/ 的那一层（即 P1_TequilaDash_宿主仓库）
 退出码：0 = 全部通过；1 = 有 ERROR；2 = 参数/路径错误。
 """
 import os
 import re
 import sys
 
-MANAGER_REL = os.path.join("EscapeOS", "Engine", "CellularTunnelManager.swift")
-ROOTVIEW_REL = os.path.join("EscapeOS", "Views", "RootView.swift")
-DISCOVERY_REL = os.path.join("EscapeOS", "Engine", "AppDiscovery.swift")
-UNINSTALL_REL = os.path.join("EscapeOS", "Engine", "UninstallService.swift")
-LOCATION_REL = os.path.join("EscapeOS", "Engine", "LocationEngine.swift")
+MANAGER_REL = os.path.join("TequilaDash", "Engine", "CellularTunnelManager.swift")
+ROOTVIEW_REL = os.path.join("TequilaDash", "Views", "RootView.swift")
+DISCOVERY_REL = os.path.join("TequilaDash", "Engine", "AppDiscovery.swift")
+UNINSTALL_REL = os.path.join("TequilaDash", "Engine", "UninstallService.swift")
+LOCATION_REL = os.path.join("TequilaDash", "Engine", "LocationEngine.swift")
 
-ENABLED_KEY = "EscapeOS.CellularTunnelSupport"
+ENABLED_KEY = "TequilaDash.CellularTunnelSupport"
 
 # R4：快捷指令硬依赖的实际代码痕迹.
 SHORTCUT_DEP_PATTERNS = ("shortcuts://", "run-shortcut", "TurnOffData", "TurnOnData")
@@ -153,8 +153,8 @@ def read(path):
 
 
 def iter_source_files(root):
-    """遍历 EscapeOS/ 下所有 Swift/ObjC 源文件，产出 (相对路径, 绝对路径)."""
-    base = os.path.join(root, "EscapeOS")
+    """遍历 TequilaDash/ 下所有 Swift/ObjC 源文件，产出 (相对路径, 绝对路径)."""
+    base = os.path.join(root, "TequilaDash")
     for dirpath, _dirnames, filenames in os.walk(base):
         for name in filenames:
             if not name.endswith(SOURCE_EXTS):
@@ -293,7 +293,7 @@ def check_wiring_all_tunnel_entries(root):
 
 
 def check_wifi_strict_text(root):
-    """R7：全 EscapeOS/ 不得再出现 Wi-Fi 硬信念文案."""
+    """R7：全 TequilaDash/ 不得再出现 Wi-Fi 硬信念文案."""
     findings = []
     for rel, full in iter_source_files(root):
         try:
@@ -313,8 +313,8 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     root = args[0] if args else "."
 
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         print("用法: python swift_cellular_tunnel_guard.py [仓库根]")
         return 2
 

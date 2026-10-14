@@ -11,43 +11,43 @@
 
 本版守住的不变量（第一版只守「不许退回写死声明」，本版加守「必须真实现 + 独立入口」）：
 
-  G1  `EscapeOS/Views/I4MobileInstallView.swift` 不得再出现那句写死的免责声明
+  G1  `TequilaDash/Views/I4MobileInstallView.swift` 不得再出现那句写死的免责声明
       （判据：代码里不出现「本机未安装该 App 时」）.
   G2  同文件必须**引用独立页** `I4AdvancedView(` —— 那个按钮必须连到真实现，
       不得再自己弹窗回话（删掉接线即报）.
-  G3  `EscapeOS/Engine/I4PairingService.swift` 必须存在，且真的走 house_arrest 写沙盒
+  G3  `TequilaDash/Engine/I4PairingService.swift` 必须存在，且真的走 house_arrest 写沙盒
       （判据：同时出现 `openAppDocuments` 与 `8es1421dg.be`）.
-  G4  `EscapeOS/Views/I4AdvancedView.swift` 必须存在，且连到引擎
+  G4  `TequilaDash/Views/I4AdvancedView.swift` 必须存在，且连到引擎
       （判据：出现 `I4PairingService`）.
-  G5  `EscapeOS/Views/TreasureBoxView.swift` 必须含独立入口回调
+  G5  `TequilaDash/Views/TreasureBoxView.swift` 必须含独立入口回调
       （判据：出现 `onOpenI4Advanced`）.
-  G6  `EscapeOS/Views/HomeView.swift` 必须把独立页接进导航栈
+  G6  `TequilaDash/Views/HomeView.swift` 必须把独立页接进导航栈
       （判据：出现 `I4AdvancedView(`）.
-  G7  `EscapeOS/Engine/I4MobileInstallService.swift` 必须定义载体常量
+  G7  `TequilaDash/Engine/I4MobileInstallService.swift` 必须定义载体常量
       `static let agentBundleId = "com.ownbook.notes"`.
 
 第三版新增（守住「现场配对（路径 A）」的真实现与如实回报）：
 
-  G8  `EscapeOS/Engine/I4PairingService.swift` 必须含现场配对**真实现**
+  G8  `TequilaDash/Engine/I4PairingService.swift` 必须含现场配对**真实现**
       （判据：同时出现 `lockdownd_pair` 与 `idevice_pairing_file_serialize`）——
       缺任一即报，防止「现场配对」被删成空壳.
   G9  同文件必须**如实回报设备错误**（判据：出现 `deviceError`）——
       防止把「设备拒绝 Pair」吞掉、假装成功.
-  G10 `EscapeOS/Views/I4AdvancedView.swift` 必须暴露现场配对入口并渲染结果
+  G10 `TequilaDash/Views/I4AdvancedView.swift` 必须暴露现场配对入口并渲染结果
       （判据：同时出现 `attemptLockdownPair` 与 `livePairResultCard`）.
 
 第四版新增（守住「写入失败」的真根因修复）：
 
-  G11 `EscapeOS/Engine/FileSharingService.swift` 必须在 house_arrest vend 之后**验活**
+  G11 `TequilaDash/Engine/FileSharingService.swift` 必须在 house_arrest vend 之后**验活**
       （判据：出现 `verifiedSession`）—— 底层 crate 的 vend 只读应答不判 Status，
       不验活就会把 vend 失败推迟成误导性的「创建文件失败」.
-  G12 `EscapeOS/Engine/I4PairingService.swift` 必须在写入前**确保载体有数据容器**
+  G12 `TequilaDash/Engine/I4PairingService.swift` 必须在写入前**确保载体有数据容器**
       （判据：同时出现 `ensureCarrierContainer` 与 `launchApp`）—— 载体从未启动时
       iOS 不给数据容器，直接写必失败；必须先启动一次让它建容器.
 
 第五版新增（守住「未受信 lockdown 服务优先 + 受信回退」的真实现）：
 
-  G13 `EscapeOS/Engine/I4PairingService.swift` 必须**先连未受信 lockdown 服务**
+  G13 `TequilaDash/Engine/I4PairingService.swift` 必须**先连未受信 lockdown 服务**
       （判据：同时出现 `com.apple.mobile.lockdown.remote.untrusted` 与
       `lockdownd_connect_rsd_named`）—— 配对（`Pair`）本该走未受信那条；
       退回只连受信版（上游写死）即报.
@@ -56,8 +56,8 @@
 
 第六版新增（守住「载体 Documents 路径必须带 /Documents 前缀」的真根因修复）：
 
-  G15 `EscapeOS/Engine/FileSharingService.swift` 必须定义 `static let appDocumentsPath = "/Documents"`
-      且 `EscapeOS/Engine/I4PairingService.swift` 必须经 `FileSharingService.appDocumentsPath`
+  G15 `TequilaDash/Engine/FileSharingService.swift` 必须定义 `static let appDocumentsPath = "/Documents"`
+      且 `TequilaDash/Engine/I4PairingService.swift` 必须经 `FileSharingService.appDocumentsPath`
       拼载体文件路径（判据：两文件分别出现 `appDocumentsPath`）.
       真机 iPhone 11 实证：house_arrest `VendDocuments` 会话的 **AFC 根是数据容器**，
       载体 Documents 在其下（`/Documents`）；写 `/pair.config`（容器根）⇒ AFC `FILE_OPEN`
@@ -170,13 +170,13 @@ def _strip_comments(src):
 
 def check(root):
     errs = []
-    view = os.path.join(root, "EscapeOS", "Views", "I4MobileInstallView.swift")
-    engine = os.path.join(root, "EscapeOS", "Engine", "I4MobileInstallService.swift")
-    pairing = os.path.join(root, "EscapeOS", "Engine", "I4PairingService.swift")
-    file_sharing = os.path.join(root, "EscapeOS", "Engine", "FileSharingService.swift")
-    adv_view = os.path.join(root, "EscapeOS", "Views", "I4AdvancedView.swift")
-    treasure = os.path.join(root, "EscapeOS", "Views", "TreasureBoxView.swift")
-    home = os.path.join(root, "EscapeOS", "Views", "HomeView.swift")
+    view = os.path.join(root, "TequilaDash", "Views", "I4MobileInstallView.swift")
+    engine = os.path.join(root, "TequilaDash", "Engine", "I4MobileInstallService.swift")
+    pairing = os.path.join(root, "TequilaDash", "Engine", "I4PairingService.swift")
+    file_sharing = os.path.join(root, "TequilaDash", "Engine", "FileSharingService.swift")
+    adv_view = os.path.join(root, "TequilaDash", "Views", "I4AdvancedView.swift")
+    treasure = os.path.join(root, "TequilaDash", "Views", "TreasureBoxView.swift")
+    home = os.path.join(root, "TequilaDash", "Views", "HomeView.swift")
 
     # ---- I4MobileInstallView.swift ----
     src = _read(view)
@@ -291,8 +291,8 @@ def main():
         print("用法：swift_i4_advanced_guard.py <仓库根>")
         return 2
     root = sys.argv[1]
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         return 2
     errs = check(root)
     print("-" * 72)

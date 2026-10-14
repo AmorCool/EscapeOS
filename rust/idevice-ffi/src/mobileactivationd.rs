@@ -312,7 +312,7 @@ pub unsafe extern "C" fn mobileactivationd_deactivate_rsd(
         //    （v0.3.465 已定案）. 与 mcinstall 的 RSDCheckin **握手语义**相同
         //    （都发 XML plist {Label, ProtocolVersion:2, Request:RSDCheckin} 并读两条应答），
         //    但**机制不同**：mcinstall 在**裸流**上手写 XML（`rsd_checkin(&mut stream)`，
-        //    Label 固定 `EscapeSpaceMCInstall`，见 mcinstall.rs:122-151）；
+        //    Label 固定 `TequilaDashMCInstall`，见 mcinstall.rs:122-151）；
         //    这里走上游 crate 的 **`Idevice::rsd_checkin()`**（Label 用 Idevice 的服务名）.
         if let Err(e) = dev.rsd_checkin().await {
             return Err(IdeviceError::UnexpectedResponse(format!(

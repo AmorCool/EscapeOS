@@ -1,4 +1,4 @@
-# xcodegen spec — EscapeSpace Xcode 原生工程（方案 A 双轨迁移脚手架）
+# xcodegen spec — TequilaDash Xcode 原生工程（方案 A 双轨迁移脚手架）
 #
 # 设计原则（来自 _build/THEOS-MIGRATION-ASSESSMENT.md）：
 #   1. **本文件是唯一的构建定义。** Theos 轨道（Makefile / control / build.yml / mha-build.yml）
@@ -10,9 +10,9 @@
 #      的 CFBundleShortVersionString / CFBundleVersion 一致（**只有这两处**，见 docs/releasing.md）。
 #   4. 本机（Windows）无法跑 xcodebuild，本 spec 仅保证语法正确；真实编译由 macos-latest CI 验证。
 #
-# 用法（CI 内）：xcodegen generate  →  产出 EscapeSpace.xcodeproj
+# 用法（CI 内）：xcodegen generate  →  产出 TequilaDash.xcodeproj
 
-name: EscapeSpace
+name: TequilaDash
 
 options:
   bundleIdPrefix: com.ipaside
@@ -25,8 +25,8 @@ options:
 
 settings:
   base:
-    PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos
-    PRODUCT_NAME: EscapeSpace
+    PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.tequiladash
+    PRODUCT_NAME: TequilaDash
     MARKETING_VERSION: "0.3.612"
     CURRENT_PROJECT_VERSION: "906"
     # 注：这里**刻意不写** `SWIFT_VERSION` —— 实测顶层 `settings.base` 的它**不被 xcodegen 采纳**，
@@ -42,9 +42,9 @@ settings:
     CLANG_ENABLE_MODULES: "YES"
     # 对齐 Theos 的 -I 搜索路径（桥接头引用 bad_query.h / Tunnel/*.h / MCM/*.h）
     HEADER_SEARCH_PATHS:
-      - "$(SRCROOT)/EscapeOS"
-      - "$(SRCROOT)/EscapeOS/Engine"
-      - "$(SRCROOT)/EscapeOS/Tunnel"
+      - "$(SRCROOT)/TequilaDash"
+      - "$(SRCROOT)/TequilaDash/Engine"
+      - "$(SRCROOT)/TequilaDash/Tunnel"
       # ZSign 引擎（v0.3.101）+ CI 预编译的 OpenSSL 头文件
       - "$(SRCROOT)/ZSign"
       - "$(SRCROOT)/ZSign/common"
@@ -74,7 +74,7 @@ settings:
       # Asspp 本地 SAP 登录：静态链接 Unicorn TCI 解释器（无 dylib、无需嵌入）
       - "$(DERIVED_FILE_DIR)/SAP/lib/libunicorn.a"
       - "-lc++"
-    SWIFT_OBJC_BRIDGING_HEADER: "EscapeOS/Engine/EscapeOS-Bridging-Header.h"
+    SWIFT_OBJC_BRIDGING_HEADER: "TequilaDash/Engine/TequilaDash-Bridging-Header.h"
     # SapMachine.cpp 用了 std::format → 必须 C++20（原分叉同理）
     CLANG_CXX_LANGUAGE_STANDARD: "gnu++20"
 
@@ -84,7 +84,7 @@ packages:
     from: 0.8.0
 
 targets:
-  EscapeSpace-iOS:
+  TequilaDash-iOS:
     type: application
     platform: iOS
     # 方案 A #317：Rust FFI 以 xcframework 形式链接（静态库，无需 embed/runpath）。
@@ -107,18 +107,18 @@ targets:
         link: true
       # 内置隧道扩展（Phase 2）：作为 App Extension 嵌入主 App 的 PlugIns/.
       # embed 默认为 true（依赖方是 application），显式写出以自证意图；XcodeGen 会据此
-      # 生成 "Embed App Extensions" 阶段，把 EscapeOSTunnel.appex 拷进 EscapeSpace.app/PlugIns/.
-      - target: EscapeOSTunnel
+      # 生成 "Embed App Extensions" 阶段，把 TequilaDashTunnel.appex 拷进 TequilaDash.app/PlugIns/.
+      - target: TequilaDashTunnel
         embed: true
     sources:
-      # 模块原生 UI 源码（生成目录，见 EscapeOS/Modules/README.md）——
+      # 模块原生 UI 源码（生成目录，见 TequilaDash/Modules/README.md）——
       # 由 Resources/Scripts/sync_bundled_modules.py 在 xcodegen **之前**从
       # module-esc 仓库拷进来. **不要**再单独列 ：
       # 这一行是递归的，已经包含它；重复列会让同一批文件被编两次 ⇒ 重复符号.
-      - path: EscapeOS
+      - path: TequilaDash
         # v0.3.508：排除所有 README.md —— 它们只是文档，但会被当资源拷进
         # .app 根目录；两个同名 README 直接报
-        # 「Multiple commands produce .../EscapeSpace.app/README.md」。
+        # 「Multiple commands produce .../TequilaDash.app/README.md」。
         excludes:
           - "**/README.md"
       # ZSign 引擎（LC 同款签名器，v0.3.101：ad-hoc 重签名可拆卸 dylib 模块）
@@ -190,7 +190,7 @@ targets:
         # 注：xcodegen 的 info/entitlements 是 Plist 类型，要求 path+properties 子键，
         # 这里改为用 build setting 直接引用现有文件，绕过该限制。
         INFOPLIST_FILE: Resources/Info.plist
-        CODE_SIGN_ENTITLEMENTS: EscapeSpace.entitlements
+        CODE_SIGN_ENTITLEMENTS: TequilaDash.entitlements
     preBuildScripts:
       # Asspp 本地 SAP 登录（v0.3.323）：拉 Unicorn 源码 + 4 个 Apple SAP 资产，
       # 编出 libunicorn.a 并把 SAPAssets 拷进 bundle。必须在 Link 之前完成。
@@ -203,25 +203,25 @@ targets:
           - "$(DERIVED_FILE_DIR)/SAP/source/include/unicorn/unicorn.h"
 
   # 内置隧道扩展（Phase 2）：一个「回环反射器」Packet Tunnel Provider.
-  # 语义与设计见 EscapeOSTunnel/PacketTunnelProvider.swift 头注释，以及简报
+  # 语义与设计见 TequilaDashTunnel/PacketTunnelProvider.swift 头注释，以及简报
   # 「调研_VPN权限检测与内置隧道.md」§2.1–§2.2.
   #
-  # ⚠️ 本 target **不改变默认签名**：默认构建（EscapeSpace.entitlements）不含 NE 权限，
+  # ⚠️ 本 target **不改变默认签名**：默认构建（TequilaDash.entitlements）不含 NE 权限，
   #    免费账号照旧可签主 App；本扩展的 entitlements（packet-tunnel-provider）只在做
   #    「隧道版」签名时才施加（免费账号签不了，见调研简报 §2.3）. CI 以
   #    CODE_SIGNING_ALLOWED=NO 编译验证，产物 .appex 供隧道版侧载签名使用.
-  EscapeOSTunnel:
+  TequilaDashTunnel:
     type: app-extension
     platform: iOS
     sources:
-      # 只收本目录；扩展源码**不在** EscapeOS/ 下，故不会被主 App target 重复编译.
-      - path: EscapeOSTunnel
+      # 只收本目录；扩展源码**不在** TequilaDash/ 下，故不会被主 App target 重复编译.
+      - path: TequilaDashTunnel
     settings:
       base:
         # Network Extension 要求扩展 bundle id 以主 App bundle id 为前缀；
         # 这里取主 bundle id + ".tunnel"，与 BuiltInTunnel.providerBundleID 的约定一致.
-        PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.escapeos.tunnel
-        PRODUCT_NAME: EscapeOSTunnel
+        PRODUCT_BUNDLE_IDENTIFIER: com.ipaside.tequiladash.tunnel
+        PRODUCT_NAME: TequilaDashTunnel
         MARKETING_VERSION: "0.3.587"
         CURRENT_PROJECT_VERSION: "881"
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
@@ -229,8 +229,8 @@ targets:
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         SWIFT_APPROACHABLE_CONCURRENCY: "YES"
-        INFOPLIST_FILE: EscapeOSTunnel/Info.plist
-        CODE_SIGN_ENTITLEMENTS: EscapeOSTunnel/EscapeOSTunnel.entitlements
+        INFOPLIST_FILE: TequilaDashTunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: TequilaDashTunnel/TequilaDashTunnel.entitlements
         # 扩展只用到 NetworkExtension，显式链接（对齐主 target 的写法）.
         OTHER_LDFLAGS:
           - "-framework NetworkExtension"

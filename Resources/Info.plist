@@ -40,7 +40,7 @@
 		</dict>
 	</dict>
 	<key>CFBundleExecutable</key>
-	<string>EscapeSpace</string>
+	<string>TequilaDash</string>
 	<key>CFBundleName</key>
 	<string>TequilaDash</string>
 	<key>CFBundleIcons</key>
@@ -108,7 +108,7 @@
 		<string>localdevvpn</string>
 	</array>
 	<key>CFBundleIdentifier</key>
-	<string>com.ipaside.escapeos</string>
+	<string>com.ipaside.tequiladash</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundlePackageType</key>

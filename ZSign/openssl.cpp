@@ -633,7 +633,7 @@ bool ZSignAsset::Init(
 		}
 	}
 
-	// EscapeOS fallback（v0.3.134）：开发证书场景下无 CMS 信封的裸 plist provision。
+	// TequilaDash fallback（v0.3.134）：开发证书场景下无 CMS 信封的裸 plist provision。
 	// TeamIdentifier/AppID 前缀由调用方（DeveloperCertStore）以真实 TeamID 写入。
 	if (m_strTeamId.empty()) {
 		jvalue jvRaw;
@@ -733,7 +733,7 @@ bool ZSignAsset::Init(
 		return false;
 	}
 
-	// EscapeOS（v0.3.144）：LC 配方——无 provision 时 TeamID 从证书 OU 直读
+	// TequilaDash（v0.3.144）：LC 配方——无 provision 时 TeamID 从证书 OU 直读
 	// （LiveContainer ZSign/openssl.cpp InitSimple 同款逻辑）
 	if (m_strTeamId.empty()) {
 		GetCertOU(x509Cert, m_strTeamId);

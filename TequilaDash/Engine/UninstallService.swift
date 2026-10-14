@@ -1,0 +1,82 @@
+import Foundation
+
+/// Uninstalls user-installed apps by routing the request through the
+/// pairing-file + LocalDevVPN tunnel — the **same authenticated channel the
+/// app list uses** — instead of calling `MobileInstallationUninstall` in
+/// process.
+///
+/// Why not `libmis` / `MobileInstallationUninstall`?
+/// That call is rejected on iOS 18/26 because `installd` (which it routes
+/// through over XPC) checks the caller's entitlement. TequilaDash only carries
+/// `get-task-allow` — NOT
+/// `com.apple.private.mobileinstallation.allow-uninstall` — so the in-process
+/// call returns -1 ("权限被拒绝"). On iOS 26.5 the operation must instead be
+/// authenticated via the trusted pairing file over the LocalDevVPN tunnel.
+///
+/// The fix below delegates to `TunnelContext.uninstallAppWithBundleId:` which
+/// opens an `InstallationProxyClient` over the RPPairing (iOS 26.4+) or
+/// lockdown (iOS 18) tunnel and calls `installation_proxy_uninstall`. The
+/// pairing-file trust makes `installd` accept it without the in-process
+/// entitlement. iOS may still surface a system "Delete App" confirmation
+/// alert — that's intentional and treated as success.
+///
+/// We only ever target `ApplicationType == "User"` apps; the caller
+/// (`AppListViewModel`) rejects anything else before invoking `uninstall`.
+enum UninstallServiceError: LocalizedError {
+    case notConfigured
+    case tunnelFailed(String)
+    case callFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConfigured:
+            return "尚未导入配对文件.请先在「设置」导入配对文件并开启 LocalDevVPN，再卸载应用."
+        case .tunnelFailed(let m):
+            return "连接本地隧道失败：\(m)"
+        case .callFailed(let m):
+            return "卸载失败：\(m)"
+        }
+    }
+}
+
+/// `@unchecked Sendable`：本类**没有可变存储属性**，唯一存储属性是只读的
+/// `tunnel`（`TunnelContext` 自身负责其线程安全）；`uninstall` 全程用局部变量。
+/// 因为 `tunnel` 的类型未标注 `Sendable`，编译器无法自动推导，故用 unchecked 显式声明。
+final class UninstallService: @unchecked Sendable {
+    static let shared = UninstallService()
+
+    /// The pairing-file + LocalDevVPN tunnel that authenticates the uninstall.
+    private let tunnel = TunnelContext.shared
+
+    private init() {}
+
+    /// Uninstall a User-installed app by bundle id, routed through the tunnel.
+    /// - Throws: `UninstallServiceError` when no pairing file is present or
+    ///   `installd` reports a failure (surfaced as `callFailed`).
+    func uninstall(bundleId: String) throws {
+        guard tunnel.hasPairingFile else {
+            throw UninstallServiceError.notConfigured
+        }
+        // Cellular隧道支持（默认关）：与 `AppDiscovery.fetchInstalledApps` 同一接线，
+        // 蜂窝（开关开 + 无 Wi-Fi）下建隧道前有界等隧道就绪，**不碰蜂窝开关**. 开关关时是 no-op。
+        // 返回值要用起来：蜂窝模式下区分「等到了、但卸载仍失败」与「等待超时、根本没等到」。
+        let tunnelReady = CellularTunnelManager.shared.prepareForTunnel()
+        // `uninstallAppWithBundleId:error:` is imported as a throwing method
+        // `uninstallApp(withBundleId:)` that returns Void (the BOOL result is
+        // folded into the throw — a non-throwing return means success). Same
+        // pattern as `getAppIconWithBundleId:error:` -> `getAppIcon(withBundleId:)`.
+        do {
+            try tunnel.uninstallApp(withBundleId: bundleId)
+        } catch {
+            // 蜂窝模式下如实点明是「没等到隧道」还是「隧道在、卸载失败」（其余情况原样上报 installd 的错误）。
+            if CellularTunnelManager.shared.isCellularMode {
+                let reason = tunnelReady
+                    ? "本地隧道已就绪但卸载失败（LocalDevVPN 可能已断开）"
+                    : "等待本地隧道就绪超时（请确认 LocalDevVPN 已连接）"
+                throw UninstallServiceError.tunnelFailed(
+                    "蜂窝网络下\(reason).底层错误：\(error.localizedDescription)")
+            }
+            throw UninstallServiceError.callFailed(error.localizedDescription)
+        }
+    }
+}

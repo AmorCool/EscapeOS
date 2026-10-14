@@ -13,7 +13,7 @@
                 <key>PayloadVersion</key>
                 <integer>1</integer>
                 <key>PayloadIdentifier</key>
-                <string>com.escapeos.supervised.notifications.payload</string>
+                <string>com.tequiladash.supervised.notifications.payload</string>
                 <key>PayloadUUID</key>
                 <string>a6b3401c-48bb-4ca5-8e91-01d0d2101e58</string>
             </dict>
@@ -21,11 +21,11 @@
         <key>PayloadDisplayName</key>
         <string>通知管理</string>
         <key>PayloadOrganization</key>
-        <string>EscapeSpace</string>
+        <string>TequilaDash</string>
         <key>PayloadDescription</key>
         <string>完全关闭你指定 App 的通知（包括可能的关键提醒）。</string>
         <key>PayloadIdentifier</key>
-        <string>com.escapeos.supervised.notifications</string>
+        <string>com.tequiladash.supervised.notifications</string>
         <key>PayloadType</key>
         <string>Configuration</string>
         <key>PayloadUUID</key>

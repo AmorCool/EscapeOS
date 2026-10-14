@@ -1,8 +1,8 @@
 # Resources/I4Mobile —— 爱思移动端内嵌 IPA（移植材料）
 
 本目录存放从爱思助手 PC 端 9.0 安装包中提取的 3 个「爱思移动端」IPA，
-用于把爱思 PC 端「安装爱思移动端」这套做法**移植**进 EscapeSpace
-（见 `EscapeOS/Engine/I4MobileInstallService.swift`）。
+用于把爱思 PC 端「安装爱思移动端」这套做法**移植**进 TequilaDash
+（见 `TequilaDash/Engine/I4MobileInstallService.swift`）。
 
 ## 为什么本文件存在
 

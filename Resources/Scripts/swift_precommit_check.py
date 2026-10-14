@@ -22,7 +22,7 @@
 
 用法：
     python swift_precommit_check.py [仓库根，默认 .] [--strict]
-    （仓库根 = 含 EscapeOS/ 的那一层，即 P1_EscapeOS_宿主仓库）
+    （仓库根 = 含 TequilaDash/ 的那一层，即 P1_TequilaDash_宿主仓库）
 退出码：0 = 全部通过；1 = 有任一检查失败；2 = 参数/路径错误。
 """
 import os
@@ -53,8 +53,8 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     strict = "--strict" in sys.argv[1:]
     root = args[0] if args else "."
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         return 2
 
     failed = []

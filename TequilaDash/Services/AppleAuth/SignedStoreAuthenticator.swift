@@ -1,0 +1,381 @@
+//
+//  SignedStoreAuthenticator.swift
+//  移植来源：CloudOfEquality/Asspp（提交 595fdbf / 01eda33 / 01037b0）
+//  适配：TequilaDash —— 去掉 `import ApplePackage`（本项目 vendor 源码同 target 编译）、
+//        日志改走 LoginLogger、账号类型改 AppStoreAccount（非可选 init）。
+//
+//  作用：**不依赖任何 anisette 服务器**，用本地 Unicorn 解释执行 Apple 的
+//  CommerceKit/CoreFP（`SAPAssets/`），对登录请求体做 SAP 签名放
+//  `X-Apple-ActionSignature`，从而绕开 Apple 认证边缘对第三方客户端的 503/404 软拒绝。
+//
+import Foundation
+
+/// 一次登录使用一套独立的 transport + signer；凭据只发往已验证的 Apple 域名。
+actor SignedStoreAuthenticator {
+
+    private final class NoRedirect: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
+
+    private let session: URLSession
+    private var cookies: [Cookie] = []
+    private let userAgent = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
+
+    init() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 60
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        session = URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
+    }
+
+    /// - Parameters:
+    ///   - guid: 12–32 位偶数长度十六进制设备标识（与下载链路用的 deviceIdentifier 必须一致；
+    ///     硬件 ID 取前 12 位 = 6 字节。放宽口径见 `StoreAuthenticationProtocol.isDeviceGUID`）
+    ///   - cookies: 轮换（rotate）时带上旧 cookie，避免每次都要验证码
+    func authenticate(email: String, password: String, code: String,
+                      guid: String, cookies: [Cookie]) async throws -> AppStoreAccount {
+        defer { session.invalidateAndCancel() }
+        try Task.checkCancellation()
+        let normalizedCode = code.filter { !$0.isWhitespace }
+        self.cookies = cookies
+
+        let bagURL = URL(string: "https://init.itunes.apple.com/bag.xml?guid=\(guid)")!
+        let (bagData, bagResponse) = try await send(URLRequest(url: bagURL))
+        guard bagResponse.statusCode == 200, let bag = StoreAuthenticationProtocol.plist(bagData) else {
+            throw StoreAuthenticationError.serviceResponse(bagResponse.statusCode)
+        }
+        let nested = bag["urlBag"] as? [String: Any] ?? [:]
+        func value(_ key: String) -> Any? { bag[key] ?? nested[key] }
+        let endpoint = try StoreAuthenticationProtocol.authenticationURL(
+            StoreAuthenticationProtocol.string(value("authenticateAccount")))
+        // v0.3.357：SAP 端点走硬编码兜底（参考 Jsbox-Ipa `sap.js`）。bag 缺字段或版本号不是 200
+        // 时不再直接放弃登录 —— 先回退到 Apple 固定的两个端点，只有连资产/guid 也不可用才失败。
+        // v0.3.358：兜底前先放宽 bag 端点的 host 校验（只要求 Apple 域，不再 pin 具体主机名），
+        // 对齐上游 `appstore_bag.go:89-94`（它只查 https + host 非空）。硬编码兜底降级为最后手段。
+        let bagVersion = StoreAuthenticationProtocol.string(value("sign-sap-version"))
+        if !bagVersion.isEmpty, bagVersion != "200" {
+            LoginLogger.shared.log("[SAP] bag 的 sign-sap-version=\(bagVersion)（非 200），按 200 处理",
+                                   category: .appleID)
+        }
+        let certificateValue = value("sign-sap-setup-cert")
+        let setupValue = value("sign-sap-setup")
+        let bagCertificateURL = publicSAPURL(certificateValue)
+        let bagSetupURL = publicSAPURL(setupValue)
+        let certificateURL = bagCertificateURL ?? URL(string: StoreAuthenticationProtocol.fallbackSAPCertURL)
+        let setupURL = bagSetupURL ?? URL(string: StoreAuthenticationProtocol.fallbackSAPSetupURL)
+        if bagCertificateURL == nil || bagSetupURL == nil {
+            let reason = (certificateValue == nil || setupValue == nil)
+                ? "bag 缺少 SAP 端点" : "bag 的 SAP 端点不在 Apple 域内"
+            LoginLogger.shared.log("[SAP] \(reason) → 使用内置兜底端点", category: .appleID)
+        }
+        guard let certificateURL, let setupURL,
+              let assets = SAPAssetsLocator.url,
+              StoreAuthenticationProtocol.isDeviceGUID(guid)
+        else {
+            LoginLogger.shared.log("[SAP] SAP 资产未找到：\(SAPAssetsLocator.describe())",
+                                   category: .appleID)
+            throw StoreAuthenticationError.invalidConfiguration
+        }
+        LoginLogger.shared.log("[SAP] 资产目录 \(assets.path)", category: .appleID)
+
+        let hardware = stride(from: 0, to: 12, by: 2).compactMap { offset -> UInt8? in
+            let start = guid.index(guid.startIndex, offsetBy: offset)
+            return UInt8(guid[start ..< guid.index(start, offsetBy: 2)], radix: 16)
+        }
+        guard hardware.count == 6 else { throw StoreAuthenticationError.invalidConfiguration }
+        // v0.3.5xx：SAPContext 构造要读 + 校验 4 个 SAP 资产（约 38 MB）—— 此前**零耗时日志**，
+        // 重登慢时这一段成本一直不可见。补「读资产大小 + 构造耗时」。
+        let sapStarted = Date()
+        let signer = try SAPContext(assetsURL: assets, hardwareID: Data(hardware))
+        // 资产目录已在上面 `[SAP] 资产目录 …` 打过，这里只补构造耗时 + 各资产大小
+        // （4 个资产约 38 MB；侧载宿主重签会让长度偏大，所以逐个列出便于归因）。
+        LoginLogger.shared.log(
+            "[SAP] SAPContext 构造 耗时=\(Int(Date().timeIntervalSince(sapStarted) * 1000))ms"
+            + " 资产大小=\(Self.assetSizeSummary(assets))",
+            category: .appleID)
+        let assetNotes = SAPContext.assetNotes()
+        if !assetNotes.isEmpty {
+            LoginLogger.shared.log("[SAP] 资产 \(assetNotes)", category: .appleID)
+        }
+
+        // ① 取 SAP setup 证书 → 交给本地解释器交换
+        let (certificateData, certificateResponse) = try await send(URLRequest(url: certificateURL))
+        guard certificateResponse.statusCode == 200,
+              let certificate = StoreAuthenticationProtocol.plist(certificateData)?["sign-sap-setup-cert"] as? Data
+        else { throw StoreAuthenticationError.serviceResponse(certificateResponse.statusCode) }
+        let exchange = try signer.exchangeData(certificate, version: 200)
+        var setup = URLRequest(url: setupURL)
+        setup.httpMethod = "POST"
+        setup.setValue("application/x-apple-plist", forHTTPHeaderField: "Content-Type")
+        setup.httpBody = try PropertyListSerialization.data(
+            fromPropertyList: ["sign-sap-setup-buffer": exchange], format: .xml, options: 0)
+        let (setupData, setupResponse) = try await send(setup)
+        guard setupResponse.statusCode == 200,
+              let reply = StoreAuthenticationProtocol.plist(setupData)?["sign-sap-setup-buffer"] as? Data
+        else { throw StoreAuthenticationError.serviceResponse(setupResponse.statusCode) }
+        _ = try signer.exchangeData(reply, version: 200)
+        guard signer.complete else { throw StoreAuthenticationError.invalidConfiguration }
+
+        // ② 正式登录（-5000 是协议挑战，换一次 body 重来）
+        var protocolAttempt = 1
+        var redirects = 0
+        var storefront = ""
+        var pod: String?
+        var body = try StoreAuthenticationProtocol.body(email: email, password: password,
+                                                       code: normalizedCode, guid: guid,
+                                                       attempt: protocolAttempt)
+
+        // v0.3.357：**候选顺序对齐 JAsspp —— native/fast 第一，bag 给的 legacy 端点其后。**
+        //
+        // 真机日志实证（`_tmp_ssh/login_full.log`，2026-09-12 真机）：bag 返回的
+        // `buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate` 被 Apple 前置
+        // 一路拒——204 空响应 ×3、404 + 146 B、301 + 162 B、500 + 170 B、503 + 190 B，
+        // **一次都没进到认证应用**；而同一账号、同一时刻的下载端点
+        // `p25-buy.itunes.apple.com/…/volumeStoreDownloadProduct` 是 HTTP 200。
+        // 说明不是账号/网络/IP 的问题，是这个端点形态本身被拒。
+        // JAsspp `auth.js:193-202` 的注释原话：「bag 给出的 legacy 端点最近常被 Apple
+        // 直接拒绝（空 403）」，所以它把官方 native 端点放**第一候选**。
+        // 我们此前把 native 放在**最后一档**，真机上永远走不到 → 每次登录必失败。
+        //
+        // v0.3.358 更正归属：**native-first 是 JAsspp 独有的放宽，不是 ipatool 上游行为。**
+        // 上游 `appstore_bag.go:103-118` 的 `validateAuthenticationEndpoint` 只放行
+        // `buy.itunes.apple.com` / `*-buy.itunes.apple.com` + 路径恰好
+        // `/WebObjects/MZFinance.woa/wa/authenticate` —— native 端点反而进不去；`appstore_login.go:29-31`
+        // 还把 `LoginInput.Endpoint` 标记为 deprecated。所以「候选顺序」这一层不要写成上游依据，
+        // 它只是与参考客户端（JAsspp / 老 ipatool-sapfix）对齐的额外形状探测。
+        //
+        // 梯子固定有限档、每档只打一次，仍是「同一份 body + 新签名」：
+        //   ① native/fast · form-urlencoded（JAsspp 的第一候选）
+        //   ② bag 端点 · form-urlencoded
+        //   ③ bag 端点 · x-apple-plist（边缘按 Content-Type 路由）
+        //   ④ bag 端点尾斜杠 · form-urlencoded
+        var ladder: [(url: URL, contentType: String)] = []
+        if let native = StoreAuthenticationProtocol.nativeFastAuthenticationURL(guid: guid) {
+            ladder.append((native, StoreAuthenticationProtocol.primaryContentType))
+        }
+        ladder.append((endpoint, StoreAuthenticationProtocol.primaryContentType))
+        ladder.append((endpoint, StoreAuthenticationProtocol.alternateContentType))
+        if let slashed = StoreAuthenticationProtocol.trailingSlashVariant(endpoint) {
+            ladder.append((slashed, StoreAuthenticationProtocol.primaryContentType))
+        }
+        var rung = 0
+
+        // v0.3.360：**「3xx 但拿不到可用 Location」不再是终点，而是边缘拒绝 → 进下一档。**
+        //
+        // 真机报错实证：用户看到的是 `missingRedirect` 的文案（「Apple 登录返回 HTTP 302，
+        // 但缺少有效的 Location 跳转地址」），而商店日志里**完全没有**「认证入口 HTTP …（无 plist）」
+        // 那行 —— 后者是「换档」路径才打的。说明循环是被 3xx 分支当场 `throw` 打死，
+        // ②③④ 档（bag·form / bag·plist / bag 尾斜杠）一次都没被尝试。而 legacy 端点回
+        // Location-less 3xx 恰恰是 v0.3.357 起要逃离的形态（PC 复现：301 + 162 字节 HTML，
+        // Location 头为 None）—— 于是本该靠换档绕开的拒绝，反而把换档本身掐断了。
+        //
+        // 安全性质不退化：换档只发往我们自己白名单内的候选（native host / bag 端点 / 尾斜杠变体），
+        // **从不把凭据重放到未经验证的 Location**；有合法 Location 且过白名单时仍照旧手动跟随。
+        func advanceRung() throws -> Bool {
+            rung += 1
+            guard rung < ladder.count else { return false }
+            protocolAttempt = 1
+            redirects = 0
+            body = try StoreAuthenticationProtocol.body(email: email, password: password,
+                                                       code: normalizedCode, guid: guid,
+                                                       attempt: protocolAttempt)
+            return true
+        }
+
+        while protocolAttempt <= 2, redirects <= 3 {
+            try Task.checkCancellation()
+            let candidate = ladder[rung]
+            let url = candidate.url
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.httpBody = body
+            request.setValue(candidate.contentType, forHTTPHeaderField: "Content-Type")
+            let (data, response) = try await sendAuthentication(request, signer: signer)
+            if let v = response.value(forHTTPHeaderField: "X-Set-Apple-Store-Front") { storefront = v }
+            if let v = response.value(forHTTPHeaderField: "pod") { pod = v }
+            if (300 ... 399).contains(response.statusCode) {
+                // 只有「有 Location、非空、是合法 URL、且过白名单」才手动跟随。
+                // 拿不到 / 非法（`authenticationURL` 抛 `invalidRedirect`）都算边缘拒绝 → 进下一档，
+                // 复用下面「无 plist 换档」的同一段逻辑。
+                let location = response.value(forHTTPHeaderField: "Location")?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let location, !location.isEmpty,
+                   let next = URL(string: location, relativeTo: url)?.absoluteURL,
+                   let target = try? StoreAuthenticationProtocol.authenticationURL(next.absoluteString) {
+                    guard redirects < 3, next != url else { throw StoreAuthenticationError.tooManyAttempts }
+                    ladder[rung] = (target, candidate.contentType)
+                    redirects += 1
+                    continue
+                }
+                guard (try advanceRung()) else {
+                    throw StoreAuthenticationError.missingRedirect(response.statusCode)
+                }
+                let next = ladder[rung]
+                LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（无可用 Location）"
+                    + " → 换 \(next.url.host ?? "?")\(next.url.path)（\(next.contentType)）重打一次",
+                    category: .appleID)
+                continue
+            }
+            guard let plist = StoreAuthenticationProtocol.plist(data) else {
+                if response.statusCode == 429 {
+                    throw StoreAuthenticationError.rateLimited(retryAfter: StoreAuthenticationProtocol.retryAfter(
+                        response.value(forHTTPHeaderField: "Retry-After")))
+                }
+                // 没有 plist 说明请求没进认证应用；沿梯子换下一档重打一次。
+                guard (try advanceRung()) else {
+                    throw StoreAuthenticationError.unstructuredResponse(response.statusCode, empty: data.isEmpty)
+                }
+                let next = ladder[rung]
+                LoginLogger.shared.log("[SAP] 认证入口 HTTP \(response.statusCode)（\(data.count) 字节，无 plist）"
+                    + " → 换 \(next.url.host ?? "?")\(next.url.path)（\(next.contentType)）重打一次",
+                    category: .appleID)
+                continue
+            }
+            if protocolAttempt == 1, StoreAuthenticationProtocol.string(plist["failureType"]) == "-5000" {
+                protocolAttempt += 1
+                body = try StoreAuthenticationProtocol.body(email: email, password: password,
+                                                           code: normalizedCode, guid: guid,
+                                                           attempt: protocolAttempt)
+                continue
+            }
+            if let error = StoreAuthenticationProtocol.rejection(plist, code: normalizedCode) { throw error }
+            guard response.statusCode == 200,
+                  let info = plist["accountInfo"] as? [String: Any],
+                  let address = info["address"] as? [String: Any],
+                  let token = plist["passwordToken"] as? String, !token.isEmpty,
+                  !StoreAuthenticationProtocol.string(plist["dsPersonId"]).isEmpty
+            else { throw StoreAuthenticationError.serviceResponse(response.statusCode) }
+
+            let store = StoreAuthenticationProtocol.storeIdentifier(storefront)
+            guard !store.isEmpty else {
+                LoginLogger.shared.log("[SAP] 未取到 X-Set-Apple-Store-Front", category: .appleID)
+                throw StoreAuthenticationError.invalidConfiguration
+            }
+            return AppStoreAccount(
+                email: email,
+                password: password,
+                appleId: (info["appleId"] as? String) ?? email,
+                store: store,
+                firstName: (address["firstName"] as? String) ?? "",
+                lastName: (address["lastName"] as? String) ?? "",
+                passwordToken: token,
+                directoryServicesIdentifier: StoreAuthenticationProtocol.string(plist["dsPersonId"]),
+                cookie: self.cookies,
+                pod: pod,
+                fullStoreFront: storefront,
+                // v0.3.354：记下这份会话是在哪个机器身份下签发的；换身份后不能再带它的 Cookie 登录。
+                deviceGuid: guid)
+        }
+        throw StoreAuthenticationError.tooManyAttempts
+    }
+
+    // MARK: - 网络
+
+    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        var request = request
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        // 与上游 Asspp 一致：客户端保真度（缺它更容易被边缘软拒绝）
+        request.setValue(Locale.preferredLanguages.prefix(3).joined(separator: ", "),
+                         forHTTPHeaderField: "Accept-Language")
+        // v0.3.356：参考客户端（AssppPro 4.2.5）的登录请求带这条 Accept，我们此前没有。
+        // 它影响 Apple 前置的路由（PC 实测带不带它返回的状态码不同）。
+        //
+        // v0.3.359：**native/fast 的 path 不是 /authenticate**，原来这条判断会让梯子第一档
+        // 同时缺「host 是 native」和「没带 Accept」两个变量 → ①档失败无法归因于 host
+        // （jsbox-re 发现的归因污染）。凡是发往认证端点的请求都统一带上。
+        let authPath = request.url?.path ?? ""
+        let authHost = request.url?.host ?? ""
+        if authPath.hasSuffix("/authenticate") || authPath.hasSuffix("/authenticate/")
+            || StoreAuthenticationProtocol.isNativeFastHost(authHost) {
+            request.setValue(StoreAuthenticationProtocol.storeClientAccept, forHTTPHeaderField: "Accept")
+        }
+        request.httpShouldHandleCookies = false
+        if let url = request.url {
+            for (name, value) in cookies.buildCookieHeader(url) {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse, let url = response.url else {
+            throw StoreAuthenticationError.serviceResponse(0)
+        }
+        let received = HTTPClientCookie.parseResponse(response.allHeaderFields, for: url)
+        cookies.mergeCookies(received)
+        // Log only shape/status, never body, credentials, signatures, cookie values or redirect queries.
+        let location = response.value(forHTTPHeaderField: "Location")
+        let targetHost = location.flatMap { URL(string: $0, relativeTo: url)?.host } ?? "none"
+        LoginLogger.shared.log("[SAP] \(request.url?.host ?? "?") → HTTP \(response.statusCode)，\(data.count) 字节；LocationHost=\(targetHost)；Set-Cookie=\(received.count)", category: .appleID)
+        return (data, response)
+    }
+
+    /// 每次重试都**用同一份 body + 新签名**（与 ipatool 一致）。
+    ///
+    /// v0.3.353：重试条件与次数都对齐 ipatool —— **204 / 404 / 5xx / 3xx 无 Location**，
+    /// 最多 3 次，延迟 250ms × 第几次。`Retry-After` 存在时按 429 语义交给上层，不重发。
+    private func sendAuthentication(_ request: URLRequest,
+                                    signer: SAPContext) async throws -> (Data, HTTPURLResponse) {
+        let maxAttempts = 3
+        for attempt in 1 ... maxAttempts {
+            var signedRequest = request
+            signedRequest.setValue(try signer.sign(request.httpBody ?? Data()).base64EncodedString(),
+                                   forHTTPHeaderField: "X-Apple-ActionSignature")
+            let result = try await send(signedRequest)
+            let status = result.1.statusCode
+            let location = result.1.value(forHTTPHeaderField: "Location")
+            let hasRedirect = !(location ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let shouldRetry = attempt < maxAttempts
+                && result.1.value(forHTTPHeaderField: "Retry-After") == nil
+                && StoreAuthenticationProtocol.retryable(status: status, hasRedirect: hasRedirect)
+            if !shouldRetry { return result }
+            LoginLogger.shared.log("[SAP] 认证请求 HTTP \(status)（第 \(attempt) 次，重发同一 body + 新签名）",
+                                   category: .appleID)
+            try await Task.sleep(for: StoreAuthenticationProtocol.retryDelay(attempt: attempt))
+        }
+        throw StoreAuthenticationError.tooManyAttempts
+    }
+
+    /// SAPContext 构造要读的 4 个资产的大小摘要（清单与 `SAPContext.mm` 的
+    /// `ReadVerifiedAsset` 逐字一致：CoreFP / CommerceCore / CommerceKit / CoreFP.icxs），
+    /// 供「读 + 校验约 38 MB 资产」的耗时归因。缺失的资产显式标出（构造会因此抛错）。
+    private static func assetSizeSummary(_ directory: URL) -> String {
+        let names = ["CoreFP", "CommerceCore", "CommerceKit", "CoreFP.icxs"]
+        let fm = FileManager.default
+        var parts: [String] = []
+        var total = 0
+        for name in names {
+            let size = (try? fm.attributesOfItem(
+                atPath: directory.appendingPathComponent(name).path)[.size] as? Int) ?? nil
+            if let size {
+                total += size
+                parts.append("\(name)=\(size)")
+            } else {
+                parts.append("\(name)=缺失")
+            }
+        }
+        return parts.joined(separator: " ") + " 合计=\(total)B"
+    }
+
+    /// 只接受 https + Apple 自有域 + 443 + 无 userinfo/fragment 的 SAP 端点。
+    ///
+    /// v0.3.358：不再 pin 具体主机名（原来是 `s.mzstatic.com` / `fpinit.itunes.apple.com`）。
+    /// 上游 ipatool 对 SAP 端点只要求 `https` + host 非空（`appstore_bag.go:89-94`），**不 pin**；
+    /// 我们比上游严，会让 bag 换到同域其它主机名时被无谓丢弃。这里保持「Apple 域」这一层收紧。
+    private func publicSAPURL(_ value: Any?) -> URL? {
+        guard let text = value as? String, let url = URL(string: text),
+              url.scheme?.lowercased() == "https", let host = url.host?.lowercased(),
+              url.user == nil, url.password == nil, url.fragment == nil,
+              url.port == nil || url.port == 443,
+              StoreAuthenticationProtocol.isAppleHost(host) else { return nil }
+        return url
+    }
+
+}

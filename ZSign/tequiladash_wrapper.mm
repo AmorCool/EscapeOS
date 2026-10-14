@@ -1,0 +1,1036 @@
+// TequilaDash 桥接：zsign ad-hoc 签名（对齐 LC adhocSignMachOAtPath 的引擎路径）。
+// 输入：dylib 路径 + bundleId（可选 entitlements XML）。原文件就地重签
+// —— 调用方必须先复制到全新路径（内核按 vnode 缓存校验判决，见 MachoReSign.swift）。
+#import <Foundation/Foundation.h>
+#include <string.h>
+#include <fcntl.h>
+#include <arpa/inet.h>
+#include <openssl/pkcs12.h>
+#include "openssl.h"
+#include "macho.h"
+#include "common/log.h"
+
+extern "C" int zsign_adhoc_file(const char* path,
+                                const char* bundleId,
+                                const char* entXml,
+                                int entLen) {
+    if (!path || !bundleId) return -2;
+    ZLog::logs.clear();
+    ZSignAsset asset;
+    if (!asset.InitAdhoc(entXml, entLen)) return -1;   // ad-hoc 模式（无证书）
+    ZMachO* macho = new ZMachO();
+    if (!macho->Init(path)) { delete macho; return -2; }
+    std::string info1, info256, res;
+    bool ok = macho->Sign(&asset, /*bForce*/ true, bundleId, info1, info256, res);
+    delete macho;
+    return ok ? 0 : -3;
+}
+
+// ═════════ v0.3.122：开发证书支持（SideStore/AltSign CertificatesManager 同款流程）═════════
+#include <openssl/rsa.h>
+#include <openssl/bn.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/evp.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <functional>
+
+// v0.3.146：LC 同款 refreshFile（LiveContainer ZSign/zsign.mm L23-34 逐字对照）——
+// copy→remove→rename 回原路径 = 换新 inode，让内核丢弃该 vnode 的旧签名校验缓存。
+// LC 原注释：copy, remove and rename back the file to prevent crash due to
+// kernel signature cache。缺这步时 dlopen 返回缓存判决（v0.3.145 真机实锤：
+// zsign Sign ✓ 后 dlopen 报错与签名前逐字节一致，同一 blobOffset/Size/UUID）。
+static bool escRefreshFile(const std::string& path, std::string* err) {
+    @autoreleasepool {
+        NSString* p = [NSString stringWithUTF8String:path.c_str()];
+        if (![NSFileManager.defaultManager fileExistsAtPath:p]) {
+            if (err) *err = "file not exists";
+            return false;
+        }
+        NSString* tmp = [p stringByAppendingString:@".escsigtmp"];
+        [NSFileManager.defaultManager removeItemAtPath:tmp error:nil]; // 清残留
+        NSError* e = nil;
+        if (![NSFileManager.defaultManager copyItemAtPath:p toPath:tmp error:&e]) {
+            if (err) *err = e.localizedDescription.UTF8String;
+            return false;
+        }
+        e = nil;
+        if (![NSFileManager.defaultManager removeItemAtPath:p error:&e]) {
+            if (err) *err = e.localizedDescription.UTF8String;
+            [NSFileManager.defaultManager removeItemAtPath:tmp error:nil];
+            return false;
+        }
+        e = nil;
+        if (![NSFileManager.defaultManager moveItemAtPath:tmp toPath:p error:&e]) {
+            if (err) *err = e.localizedDescription.UTF8String;
+            return false;
+        }
+        return true;
+    }
+}
+
+// 签名自证：输出文件 size/mtime，用于真机日志确认落盘与换 inode 生效
+static void escStatDiag(const std::string& path, const char* tag,
+                        const std::function<void(const std::string&)>& diagWrite) {
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    if (0 != stat(path.c_str(), &st)) {
+        diagWrite(std::string("[") + tag + "] stat 失败 errno=" + std::to_string(errno) + "\n");
+        return;
+    }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "[%s] size=%lld mtime=%lld\n", tag,
+             (long long)st.st_size, (long long)st.st_mtime);
+    diagWrite(buf);
+}
+
+// ═════════ v0.3.148：签名内容级诊断 ═════════
+// 目的：主程序(exec 校验已过审)与模块 dylib(dlopen 被拒) 的签名字段级对照 +
+// CDHash 抽样自检，定位 AMFI 拒绝的确切层（结构/页hash/证书/TeamID）。
+// 注意：host(arm64) 与 Mach-O 均为小端，全部字段直接读取，不做字节交换。
+#include "common/mach-o.h"
+#include <openssl/pkcs7.h>
+#include <vector>
+
+static void escDumpBlob(const uint8_t* base, size_t size, uint32_t dataoff,
+                        uint32_t datasize, const char* tag,
+                        const std::function<void(const std::string&)>& diag) {
+    char buf[512];
+    if ((uint64_t)dataoff + datasize > size) {
+        snprintf(buf, sizeof(buf), "  [%s] ⚠ blob 越界: dataoff=%u datasize=%u filesize=%zu\n",
+                 tag, dataoff, datasize, size);
+        diag(buf);
+        return;
+    }
+    const uint8_t* sb = base + dataoff;
+    // v0.3.150：CS blob 头字段是 big-endian（Mach-O load command 才是 LE），必须 ntohl
+    uint32_t magic = ntohl(*(const uint32_t*)(sb));
+    uint32_t length = ntohl(*(const uint32_t*)(sb + 4));
+    uint32_t count = ntohl(*(const uint32_t*)(sb + 8));
+    snprintf(buf, sizeof(buf), "  [%s] blob magic=0x%08x length=%u count=%u (cmd datasize=%u)\n",
+             tag, magic, length, count, datasize);
+    diag(buf);
+    if (magic != CSMAGIC_EMBEDDED_SIGNATURE) {
+        diag("  ⚠ SuperBlob magic 异常\n");
+        return;
+    }
+    for (uint32_t i = 0; i < count && i < 16; i++) {
+        const uint8_t* idx = sb + 12 + i * 8;
+        uint32_t type = ntohl(*(const uint32_t*)idx);
+        uint32_t off = ntohl(*(const uint32_t*)(idx + 4));
+        const uint8_t* slot = sb + off;
+        uint32_t slotMagic = ntohl(*(const uint32_t*)slot);
+        uint32_t slotLen = ntohl(*(const uint32_t*)(slot + 4));
+        snprintf(buf, sizeof(buf), "    slot[%u] type=0x%x off=%u magic=0x%08x len=%u\n",
+                 i, type, off, slotMagic, slotLen);
+        diag(buf);
+        if (slotMagic == CSMAGIC_CODEDIRECTORY) {
+            const CS_CodeDirectory* cd = (const CS_CodeDirectory*)slot;
+            std::string ident((const char*)slot + ntohl(cd->identOffset));
+            std::string team;
+            if (ntohl(cd->version) >= 0x20200 && ntohl(cd->teamOffset) > 0)
+                team = std::string((const char*)slot + ntohl(cd->teamOffset));
+            snprintf(buf, sizeof(buf),
+                     "      CD: ver=0x%x flags=0x%x hashSize=%u hashType=%u pageSize=1<<%u\n"
+                     "          nSpecial=%u nCode=%u codeLimit=%u ident=\"%.64s\" team=\"%.32s\"\n",
+                     ntohl(cd->version), ntohl(cd->flags), cd->hashSize, cd->hashType, cd->pageSize,
+                     ntohl(cd->nSpecialSlots), ntohl(cd->nCodeSlots), ntohl(cd->codeLimit), ident.c_str(), team.c_str());
+            diag(buf);
+            // CDHash 抽样自检（SHA256：hashType=2 hashSize=32）
+            if (cd->hashType == 2 && cd->hashSize == 32 && (uint64_t)ntohl(cd->codeLimit) <= size) {
+                uint32_t pageSz = 1u << cd->pageSize;
+                uint32_t nCode = ntohl(cd->nCodeSlots);
+                const uint8_t* hashes = slot + ntohl(cd->hashOffset);
+                int okN = 0, badN = 0;
+                uint32_t picks[14];
+                int np = 0;
+                for (int k = 0; k < 2 && k < (int)nCode; k++) picks[np++] = (uint32_t)k;
+                for (int k = 0; k < 10 && np < 12; k++)
+                    picks[np++] = (uint32_t)((uint64_t)(nCode - 1) * (k + 1) / 11);
+                for (int k = 0; k < 2 && np < 14; k++) picks[np++] = nCode - 1 - (uint32_t)k;
+                for (int k = 0; k < np; k++) {
+                    uint32_t s = picks[k];
+                    if (s >= nCode) continue;
+                    uint64_t foff = (uint64_t)s * pageSz;
+                    uint32_t chunk = (s == nCode - 1) ? (uint32_t)(ntohl(cd->codeLimit) - foff) : pageSz;
+                    if (foff + chunk > size || chunk == 0 || chunk > pageSz) { badN++; continue; }
+                    uint8_t h[EVP_MAX_MD_SIZE]; unsigned int hl = 0;
+                    EVP_Digest(base + foff, chunk, h, &hl, EVP_sha256(), NULL);
+                    if (hl == 32 && 0 == memcmp(h, hashes + (size_t)s * 32, 32)) okN++;
+                    else {
+                        badN++;
+                        snprintf(buf, sizeof(buf), "      ⚠ 页 hash 不匹配 slot#%u (foff=%llu)\n",
+                                 s, (unsigned long long)foff);
+                        diag(buf);
+                    }
+                }
+                snprintf(buf, sizeof(buf), "      CD256 页hash自检: %d/%d OK (nCode=%u)\n", okN, np, nCode);
+                diag(buf);
+            }
+        } else if (slotMagic == CSMAGIC_BLOBWRAPPER) {
+            const uint8_t* der = slot + 8;
+            uint32_t derLen = slotLen - 8;
+            BIO* bio = derLen > 0 ? BIO_new_mem_buf(der, (int)derLen) : NULL;
+            PKCS7* p7 = bio ? d2i_PKCS7_bio(bio, NULL) : NULL;
+            if (!p7) {
+                diag("      CMS: d2i_PKCS7 解析失败\n");
+            } else {
+                STACK_OF(X509)* certs = p7->d.sign ? p7->d.sign->cert : NULL;
+                int nc = certs ? sk_X509_num(certs) : 0;
+                snprintf(buf, sizeof(buf), "      CMS: len=%u 证书数=%d\n", derLen, nc);
+                diag(buf);
+                for (int c = 0; c < nc && c < 6; c++) {
+                    X509* x = sk_X509_value(certs, c);
+                    char* s1 = X509_NAME_oneline(X509_get_subject_name(x), NULL, 0);
+                    char* s2 = X509_NAME_oneline(X509_get_issuer_name(x), NULL, 0);
+                    ASN1_TIME* na = X509_get_notAfter(x);
+                    snprintf(buf, sizeof(buf), "        cert[%d] subj=%.160s\n                 issuer=%.160s\n",
+                             c, s1 ? s1 : "?", s2 ? s2 : "?");
+                    diag(buf);
+                    if (na && na->data && na->length > 0 && na->type == V_ASN1_GENERALIZEDTIME) {
+                        snprintf(buf, sizeof(buf), "                 notAfter=%.15s\n", (const char*)na->data);
+                        diag(buf);
+                    } else if (na && na->data && na->length > 0) {
+                        snprintf(buf, sizeof(buf), "                 notAfter(utc)=%.13s\n", (const char*)na->data);
+                        diag(buf);
+                    }
+                    OPENSSL_free(s1); OPENSSL_free(s2);
+                }
+            }
+            if (p7) PKCS7_free(p7);
+            if (bio) BIO_free(bio);
+        }
+    }
+}
+
+// Mach-O 头 + load commands + 签名 blob 全量诊断
+// sigOffOut/sigSizeOut：返回 LC_CODE_SIGNATURE 的 dataoff/datasize（供内核判决用）
+static void escDumpMachO(const std::string& path, const char* tag,
+                         const std::function<void(const std::string&)>& diag,
+                         uint32_t* sigOffOut = NULL, uint32_t* sigSizeOut = NULL) {
+    char buf[512];
+    if (sigOffOut) *sigOffOut = 0;
+    if (sigSizeOut) *sigSizeOut = 0;
+    diag(std::string("[") + tag + "] path=" + path + "\n");
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) {
+        snprintf(buf, sizeof(buf), "[%s] 打开失败 errno=%d\n", tag, errno);
+        diag(buf);
+        return;
+    }
+    fseek(fp, 0, SEEK_END);
+    long fsize = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    std::vector<uint8_t> hdr(4096);
+    size_t rd = fread(hdr.data(), 1, hdr.size(), fp);
+    fclose(fp);
+    if (rd < 32) { diag("  文件过小\n"); return; }
+    uint32_t magic = *(const uint32_t*)hdr.data();
+    snprintf(buf, sizeof(buf), "[%s] size=%ld magic=0x%08x\n", tag, fsize, magic);
+    diag(buf);
+    if (magic != MH_MAGIC_64) { diag("  非 MH_MAGIC_64（FAT/其他），不深入解析\n"); return; }
+    struct mach_header_64 mh;
+    memcpy(&mh, hdr.data() + 0, sizeof(mh));
+    snprintf(buf, sizeof(buf), "  filetype=%u flags=0x%x ncmds=%u sizeofcmds=%u\n",
+             mh.filetype, mh.flags, mh.ncmds, mh.sizeofcmds);
+    diag(buf);
+    if (mh.sizeofcmds > (64u << 20)) { diag("  sizeofcmds 异常\n"); return; }
+    std::vector<uint8_t> lcb(mh.sizeofcmds);
+    fp = fopen(path.c_str(), "rb");
+    if (!fp) return;
+    fseek(fp, 32, SEEK_SET);
+    size_t got = fread(lcb.data(), 1, mh.sizeofcmds, fp);
+    fclose(fp);
+    if (got != mh.sizeofcmds) { diag("  load commands 读取不完整\n"); return; }
+    int sigCount = 0;
+    uint32_t sigOff = 0, sigSize = 0;
+    uint8_t* p = lcb.data();
+    long consumed = 0;
+    for (uint32_t i = 0; i < mh.ncmds && consumed + 8 <= (long)mh.sizeofcmds; i++) {
+        struct load_command lc;
+        memcpy(&lc, p, sizeof(lc));
+        if (lc.cmdsize < 8) break;
+        if (lc.cmd == LC_CODE_SIGNATURE) {
+            // linkedit_data_command = {cmd(4), cmdsize(4), dataoff(4), datasize(4)}
+            // （vendored mach-o.h 无该结构体定义，按字段偏移直接取）
+            uint32_t doff = 0, dsz = 0;
+            memcpy(&doff, p + 8, 4);
+            memcpy(&dsz, p + 12, 4);
+            snprintf(buf, sizeof(buf), "  LC_CODE_SIGNATURE#%d dataoff=%u datasize=%u\n",
+                     ++sigCount, doff, dsz);
+            diag(buf);
+            sigOff = doff; sigSize = dsz;
+        } else if (lc.cmd == LC_SEGMENT_64) {
+            struct segment_command_64 seg;
+            memcpy(&seg, p, sizeof(seg));
+            snprintf(buf, sizeof(buf), "  SEG \"%.16s\" fileoff=%llu filesize=%llu vmsize=%llu nsects=%u flags=0x%x\n",
+                     seg.segname, (unsigned long long)seg.fileoff, (unsigned long long)seg.filesize,
+                     (unsigned long long)seg.vmsize, seg.nsects, seg.flags);
+            diag(buf);
+        }
+        p += lc.cmdsize;
+        consumed += lc.cmdsize;
+    }
+    if (sigCount == 0) diag("  （无 LC_CODE_SIGNATURE）\n");
+    else if (sigCount > 1) diag("  ⚠ 多个 LC_CODE_SIGNATURE！\n");
+    else {
+        if (sigOffOut) *sigOffOut = sigOff;
+        if (sigSizeOut) *sigSizeOut = sigSize;
+    }
+    if (sigCount >= 1) {
+        int fd = open(path.c_str(), O_RDONLY);
+        if (fd >= 0) {
+            void* m = mmap(NULL, (size_t)fsize, PROT_READ, MAP_PRIVATE, fd, 0);
+            if (m && m != MAP_FAILED) {
+                escDumpBlob((const uint8_t*)m, (size_t)fsize, sigOff, sigSize, tag, diag);
+                munmap(m, (size_t)fsize);
+            } else diag("  mmap 失败，无法解析 blob\n");
+            close(fd);
+        }
+    }
+}
+
+// v0.3.156：读 Mach-O 文件 CodeDirectory 的 identifier（主程序 vs dylib 对照用）。
+// 返回 0=成功（out 拷贝 identifier）；<0 失败。
+extern "C" int zsign_file_ident(const char* path, char* out, int outLen) {
+    if (!path || !out || outLen < 16) return -2;
+    out[0] = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -2;
+    struct stat st;
+    if (0 != fstat(fd, &st) || st.st_size < 4096) { close(fd); return -2; }
+    void* m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (!m || m == MAP_FAILED) return -2;
+    int ret = -2;
+    uint8_t* base = (uint8_t*)m;
+    struct mach_header_64 mh;
+    memcpy(&mh, base, sizeof(mh));
+    uint8_t* p = base + sizeof(mh);
+    long consumed = 0;
+    for (uint32_t i = 0; i < mh.ncmds && consumed + 8 <= (long)mh.sizeofcmds; i++) {
+        uint32_t cmd = *(const uint32_t*)p;
+        uint32_t cmdsize = *(const uint32_t*)(p + 4);
+        if (cmdsize < 8) break;
+        if (cmd == LC_CODE_SIGNATURE) {
+            uint32_t dataoff = *(const uint32_t*)(p + 8);
+            uint32_t datasize = *(const uint32_t*)(p + 12);
+            if ((uint64_t)dataoff + datasize <= (uint64_t)st.st_size) {
+                const uint8_t* sb = base + dataoff;
+                if (ntohl(*(const uint32_t*)sb) == CSMAGIC_EMBEDDED_SIGNATURE) {
+                    uint32_t count = ntohl(*(const uint32_t*)(sb + 8));
+                    for (uint32_t k = 0; k < count && k < 16; k++) {
+                        const uint8_t* idx = sb + 12 + k * 8;
+                        uint32_t off = ntohl(*(const uint32_t*)(idx + 4));
+                        const uint8_t* slot = sb + off;
+                        if (ntohl(*(const uint32_t*)slot) == CSMAGIC_CODEDIRECTORY) {
+                            const CS_CodeDirectory* cd = (const CS_CodeDirectory*)slot;
+                            uint32_t identOff = ntohl(cd->identOffset);
+                            if (identOff > 0 && identOff < datasize) {
+                                snprintf(out, outLen, "%s", (const char*)slot + identOff);
+                                ret = 0;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        p += cmdsize;
+        consumed += cmdsize;
+    }
+    munmap(m, (size_t)st.st_size);
+    return ret;
+}
+
+// v0.3.152：p12 导入（同源证书方案）——真机 dump 实锤主程序（LC 签，能过校验）
+// 用的是 LC 导入的 p12 证书（notAfter=2027-08-24），而 TequilaDash 登录新签的
+// 证书（notAfter=2027-09-04）签的 dylib 被 AMFI 拒——iOS 27 beta 疑似要求
+// dlopen 库与进程签名证书严格同源。提供 p12 提取：PKCS12_parse → cert/key PEM。
+// 返回 0 成功（*certPemOut/*keyPemOut 由调用方 free）；-1 解析失败；-2 参数。
+extern "C" int zsign_p12_extract(const char* p12Data, int p12Len,
+                                 const char* password,
+                                 char** certPemOut, int* certPemLen,
+                                 char** keyPemOut, int* keyPemLen) {
+    if (!p12Data || p12Len <= 0 || !certPemOut || !keyPemOut) return -2;
+    *certPemOut = NULL; *keyPemOut = NULL;
+    BIO* bio = BIO_new_mem_buf(p12Data, p12Len);
+    if (!bio) return -2;
+    PKCS12* p12 = d2i_PKCS12_bio(bio, NULL);
+    BIO_free(bio);
+    if (!p12) return -1;
+    EVP_PKEY* pkey = NULL;
+    X509* cert = NULL;
+    if (0 == PKCS12_parse(p12, password ? password : "", &pkey, &cert, NULL)) {
+        ZSignAsset::CMSError();
+        PKCS12_free(p12);
+        return -1;
+    }
+    PKCS12_free(p12);
+    if (!pkey || !cert) {
+        if (pkey) EVP_PKEY_free(pkey);
+        if (cert) X509_free(cert);
+        return -1;
+    }
+    BIO* certBIO = BIO_new(BIO_s_mem());
+    BIO* keyBIO = BIO_new(BIO_s_mem());
+    bool ok = certBIO && keyBIO
+        && PEM_write_bio_X509(certBIO, cert) == 1
+        && PEM_write_bio_PrivateKey(keyBIO, pkey, NULL, NULL, 0, NULL, NULL) == 1;
+    if (ok) {
+        char* certPtr = NULL; long certLen = BIO_get_mem_data(certBIO, &certPtr);
+        char* keyPtr = NULL; long keyLen = BIO_get_mem_data(keyBIO, &keyPtr);
+        if (certLen > 0 && keyLen > 0) {
+            *certPemOut = (char*)malloc(certLen + 1);
+            *keyPemOut = (char*)malloc(keyLen + 1);
+            memcpy(*certPemOut, certPtr, certLen); (*certPemOut)[certLen] = 0;
+            memcpy(*keyPemOut, keyPtr, keyLen); (*keyPemOut)[keyLen] = 0;
+            *certPemLen = (int)certLen; *keyPemLen = (int)keyLen;
+        } else ok = false;
+    }
+    if (certBIO) BIO_free(certBIO);
+    if (keyBIO) BIO_free(keyBIO);
+    X509_free(cert);
+    EVP_PKEY_free(pkey);
+    return ok ? 0 : -1;
+}
+
+// v0.3.152：证书 serial 匹配——真机 dump 实锤主程序（LC 签，能过校验）叶子
+// notAfter=2027-08-24（旧证书），dylib（新证书 notAfter=2027-09-04）被拒——
+// iOS 27 beta AMFI 疑似要求 dlopen 库与进程签名证书严格同源（同 serial）。
+// 导出叶子证书 serial（hex）用于 Swift 侧匹配 DeveloperCertStore 里的同名证书。
+extern "C" int zsign_cert_serial(const char* certPem, int certLen,
+                                 char* outHex, int outHexLen) {
+    if (!certPem || certLen <= 0 || !outHex || outHexLen < 48) return -2;
+    BIO* cbio = BIO_new_mem_buf(certPem, certLen);
+    if (!cbio) return -2;
+    X509* cert = PEM_read_bio_X509(cbio, NULL, 0, NULL);
+    BIO_free(cbio);
+    if (!cert) return -2;
+    const ASN1_INTEGER* sn = X509_get0_serialNumber(cert);
+    BIGNUM* bn = ASN1_INTEGER_to_BN(sn, NULL);
+    int ret = -2;
+    if (bn) {
+        char* hex = BN_bn2hex(bn);
+        if (hex) {
+            snprintf(outHex, outHexLen, "%s", hex);
+            ret = (int)strlen(outHex);
+            OPENSSL_free(hex);
+        }
+        BN_free(bn);
+    }
+    X509_free(cert);
+    return ret;
+}
+
+// 读 Mach-O 文件 CMS 叶子证书的 serial（hex）。主程序与 dylib 的对比通道。
+// 叶子取 CMS 证书数组最后一张（zsign/苹果惯例：链在前叶子在后）。
+extern "C" int zsign_file_leaf_serial(const char* path, char* outHex, int outHexLen) {
+    if (!path || !outHex || outHexLen < 48) return -2;
+    outHex[0] = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -2;
+    struct stat st;
+    if (0 != fstat(fd, &st) || st.st_size < 4096) { close(fd); return -2; }
+    void* m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (!m || m == MAP_FAILED) return -2;
+    int ret = -2;
+    uint8_t* base = (uint8_t*)m;
+    struct mach_header_64 mh;
+    memcpy(&mh, base, sizeof(mh));
+    uint8_t* p = base + sizeof(mh);
+    long consumed = 0;
+    for (uint32_t i = 0; i < mh.ncmds && consumed + 8 <= (long)mh.sizeofcmds; i++) {
+        uint32_t cmd = *(const uint32_t*)p;
+        uint32_t cmdsize = *(const uint32_t*)(p + 4);
+        if (cmdsize < 8) break;
+        if (cmd == LC_CODE_SIGNATURE) {
+            uint32_t dataoff = *(const uint32_t*)(p + 8);
+            uint32_t datasize = *(const uint32_t*)(p + 12);
+            if ((uint64_t)dataoff + datasize <= (uint64_t)st.st_size) {
+                const uint8_t* sb = base + dataoff;
+                if (ntohl(*(const uint32_t*)sb) == CSMAGIC_EMBEDDED_SIGNATURE) {
+                    uint32_t count = ntohl(*(const uint32_t*)(sb + 8));
+                    for (uint32_t k = 0; k < count && k < 16; k++) {
+                        const uint8_t* idx = sb + 12 + k * 8;
+                        uint32_t off = ntohl(*(const uint32_t*)(idx + 4));
+                        const uint8_t* slot = sb + off;
+                        if (ntohl(*(const uint32_t*)slot) == CSMAGIC_BLOBWRAPPER) {
+                            uint32_t slotLen = ntohl(*(const uint32_t*)(slot + 4));
+                            BIO* bio = slotLen > 8 ? BIO_new_mem_buf(slot + 8, (int)(slotLen - 8)) : NULL;
+                            PKCS7* p7 = bio ? d2i_PKCS7_bio(bio, NULL) : NULL;
+                            if (p7 && p7->d.sign && p7->d.sign->cert && sk_X509_num(p7->d.sign->cert) > 0) {
+                                X509* leaf = sk_X509_value(p7->d.sign->cert, sk_X509_num(p7->d.sign->cert) - 1);
+                                const ASN1_INTEGER* sn = X509_get0_serialNumber(leaf);
+                                BIGNUM* bn = ASN1_INTEGER_to_BN(sn, NULL);
+                                if (bn) {
+                                    char* hex = BN_bn2hex(bn);
+                                    if (hex) {
+                                        snprintf(outHex, outHexLen, "%s", hex);
+                                        ret = (int)strlen(outHex);
+                                        OPENSSL_free(hex);
+                                    }
+                                    BN_free(bn);
+                                }
+                            }
+                            if (p7) PKCS7_free(p7);
+                            if (bio) BIO_free(bio);
+                            break;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        p += cmdsize;
+        consumed += cmdsize;
+    }
+    munmap(m, (size_t)st.st_size);
+    return ret;
+}
+
+// v0.3.151：签名前改 UUID（LC LCChangeMachOUUID 同款，uuid[0]+=1）。
+// 150 真机实锤：文件完全自洽（dataoff=134,626,672+datasize=1,728,512=文件尾、
+// CDHash 自检 14/14）但 dlopen 仍报 codeBlobOffset=134,650,608（旧位置的缓存）
+// ——iOS/dyld 按 LC_UUID 缓存签名元数据，UUID 不变就一直用缓存旧位置。
+// LC 注释原文："We have to change executable's UUID so iOS won't consider
+// 2 executables the same"。改 UUID 必须在签名前（新内容会被页 hash 覆盖）。
+static bool escChangeUUID(const std::string& path,
+                          const std::function<void(const std::string&)>& diag) {
+    char buf[256];
+    int fd = open(path.c_str(), O_RDWR);
+    if (fd < 0) {
+        snprintf(buf, sizeof(buf), "[UUID] open 失败 errno=%d\n", errno);
+        diag(buf);
+        return false;
+    }
+    struct stat st;
+    if (0 != fstat(fd, &st)) { close(fd); return false; }
+    void* m = mmap(NULL, (size_t)st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (!m || m == MAP_FAILED) {
+        snprintf(buf, sizeof(buf), "[UUID] mmap 失败 errno=%d\n", errno);
+        diag(buf);
+        close(fd);
+        return false;
+    }
+    close(fd);
+    uint8_t* base = (uint8_t*)m;
+    uint32_t magic = *(const uint32_t*)base;
+    bool changed = false;
+    uint8_t oldFirst = 0;
+    if (magic == MH_MAGIC_64) {
+        struct mach_header_64 mh;
+        memcpy(&mh, base, sizeof(mh));
+        uint8_t* p = base + sizeof(mh);
+        long consumed = 0;
+        for (uint32_t i = 0; i < mh.ncmds && consumed + 8 <= (long)mh.sizeofcmds; i++) {
+            uint32_t cmd = *(const uint32_t*)p;
+            uint32_t cmdsize = *(const uint32_t*)(p + 4);
+            if (cmdsize < 8) break;
+            if (cmd == LC_UUID && cmdsize >= 24) { // uuid_command: cmd+cmdsize+16B uuid
+                uint8_t* u = p + 8;
+                oldFirst = u[0];
+                u[0] += 1; // LC 同款：首字节 +1
+                changed = true;
+                snprintf(buf, sizeof(buf), "[UUID] %02X%02X%02X%02X... → %02X%02X%02X%02X...（首字节+1）\n",
+                         oldFirst, u[1], u[2], u[3], u[0], u[1], u[2], u[3]);
+                diag(buf);
+                break;
+            }
+            p += cmdsize;
+            consumed += cmdsize;
+        }
+    }
+    if (changed) {
+        if (0 != msync(m, (size_t)st.st_size, MS_SYNC)) {
+            diag("[UUID] msync 失败\n");
+            changed = false;
+        }
+    } else {
+        diag("[UUID] 未找到 LC_UUID load command\n");
+    }
+    munmap(m, (size_t)st.st_size);
+    return changed;
+}
+
+// v0.3.150：读文件签名区声明（load command LE）+ 可选自愈损坏文件。
+// heal=true：若 dataoff+datasize > filesize（Realloc 写文件 padding 缺失的
+// 历史损坏，真机实锤内核报 "mapped file has no cdhash, completely
+// unsigned"），补零到声明长度。heal=false 仅校验输出结果。
+static bool escGetSigRange(const std::string& path, uint32_t* dataoffOut,
+                           uint32_t* datasizeOut, long* fileSizeOut, bool heal,
+                           const std::function<void(const std::string&)>& diag) {
+    char buf[512];
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    fseek(fp, 0, SEEK_END);
+    long fsize = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    uint8_t hdr[64];
+    if (fread(hdr, 1, 64, fp) < 64) { fclose(fp); return false; }
+    uint32_t magic = *(const uint32_t*)hdr;
+    if (magic != MH_MAGIC_64) { fclose(fp); return false; }
+    uint32_t ncmds = *(const uint32_t*)(hdr + 16);
+    uint32_t sizeofcmds = *(const uint32_t*)(hdr + 20);
+    std::vector<uint8_t> lcb(sizeofcmds);
+    // v0.3.154 修复：load commands 从偏移 32 开始（hdr 读到 64 后必须 seek 回 32，
+    // 否则 lcb 错位 32 字节 → LC_CODE_SIGNATURE 解析失败 → 对照/自愈静默跳过）
+    if (fseek(fp, 32, SEEK_SET) != 0) { fclose(fp); return false; }
+    if (fread(lcb.data(), 1, sizeofcmds, fp) != sizeofcmds) { fclose(fp); return false; }
+    fclose(fp);
+    uint8_t* p = lcb.data();
+    long consumed = 0;
+    for (uint32_t i = 0; i < ncmds && consumed + 8 <= (long)sizeofcmds; i++) {
+        uint32_t cmd = *(const uint32_t*)p;
+        uint32_t cmdsize = *(const uint32_t*)(p + 4);
+        if (cmdsize < 8) break;
+        if (cmd == LC_CODE_SIGNATURE) {
+            uint32_t doff = *(const uint32_t*)(p + 8);
+            uint32_t dsz = *(const uint32_t*)(p + 12);
+            *dataoffOut = doff; *datasizeOut = dsz; *fileSizeOut = fsize;
+            if ((uint64_t)doff + dsz > (uint64_t)fsize) {
+                long need = (long)((uint64_t)doff + dsz - (uint64_t)fsize);
+                snprintf(buf, sizeof(buf),
+                         "[自愈] ⚠ blob 声明尾部越界 %ld 字节 (dataoff=%u datasize=%u 文件=%ld)\n",
+                         need, doff, dsz, fsize);
+                diag(buf);
+                if (!heal) return true;
+                diag("[自愈] → 补零修复\n");
+                FILE* fa = fopen(path.c_str(), "ab");
+                if (!fa) { diag("[自愈] append 打开失败\n"); return true; }
+                std::vector<char> zeros((size_t)need, 0);
+                size_t w = fwrite(zeros.data(), 1, (size_t)need, fa);
+                fclose(fa);
+                snprintf(buf, sizeof(buf), "[自愈] 补零 %zu/%ld 字节 %s\n",
+                         w, need, w == (size_t)need ? "✓" : "✗");
+                diag(buf);
+            }
+            return true;
+        }
+        p += cmdsize;
+        consumed += cmdsize;
+    }
+    return false;
+}
+
+// v0.3.149：内核判决（LC checkCodeSignature 同款，LCMachOUtils.m L520-560）——
+// F_ADDFILESIGS_RETURN 把签名 blob 喂给内核；F_CHECK_LV 让内核做 Library
+// Validation 并返回 lv_error_message（内核视角的确切拒绝原因）。
+// LC 在 validateJITLessSetup 里用它验证证书签名是否真实有效。
+static void escKernelCheck(const std::string& path, uint32_t sigOff, uint32_t sigSize,
+                           const std::function<void(const std::string&)>& diag) {
+    char buf[640];
+    if (sigSize == 0) { diag("[内核判决] 无签名可喂\n"); return; }
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        snprintf(buf, sizeof(buf), "[内核判决] open 失败 errno=%d\n", errno);
+        diag(buf);
+        return;
+    }
+    // 1) 喂签名（LC 同款：fs_file_start=0 单架构；成功后 fs_file_start 被内核更新为覆盖长度）
+    fsignatures_t siginfo;
+    memset(&siginfo, 0, sizeof(siginfo));
+    siginfo.fs_file_start = 0;
+    siginfo.fs_blob_start = (void*)(long)sigOff;
+    siginfo.fs_blob_size = (size_t)sigSize;
+    int r1 = fcntl(fd, F_ADDFILESIGS_RETURN, &siginfo);
+    snprintf(buf, sizeof(buf), "[内核判决] F_ADDFILESIGS_RETURN=%d (errno=%d) 覆盖长度=%lld/%u\n",
+             r1, r1 == 0 ? 0 : errno, (long long)siginfo.fs_file_start, sigSize);
+    diag(buf);
+    // 2) Library Validation 判决（内核给出错误消息）
+    char lvmsg[512] = {0};
+    fchecklv_t lv;
+    memset(&lv, 0, sizeof(lv));
+    lv.lv_error_message_size = sizeof(lvmsg);
+    lv.lv_error_message = lvmsg;
+    lv.lv_file_start = 0;
+    int r2 = fcntl(fd, F_CHECK_LV, &lv);
+    snprintf(buf, sizeof(buf), "[内核判决] F_CHECK_LV=%d (errno=%d) LV消息=\"%s\"\n",
+             r2, r2 == 0 ? 0 : errno, lvmsg[0] ? lvmsg : "(空)");
+    diag(buf);
+    close(fd);
+}
+
+// 生成 RSA2048 私钥(PEM) + CSR(PEM)。Apple 免费证书流程与 SideStore/AltSign 一致：
+// X509_REQ 用 EVP_sha1 签名（AltSign CertificatesManager.generateCSR 同款）。
+// 返回 0 成功；输出 buffer 由调用方 free()。
+extern "C" int zsign_gen_key_csr(char** csrPemOut, int* csrPemLen,
+                                 char** keyPemOut, int* keyPemLen) {
+    if (!csrPemOut || !csrPemLen || !keyPemOut || !keyPemLen) return -2;
+    *csrPemOut = NULL; *keyPemOut = NULL;
+
+    BIGNUM* bignum = BN_new();
+    RSA* rsa = RSA_new();
+    EVP_PKEY* pkey = EVP_PKEY_new();
+    X509_REQ* req = X509_REQ_new();
+    if (!bignum || !rsa || !pkey || !req) {
+        if (bignum) BN_free(bignum);
+        if (rsa) RSA_free(rsa);
+        if (pkey) EVP_PKEY_free(pkey);
+        if (req) X509_REQ_free(req);
+        return -1;
+    }
+    bool ok = BN_set_word(bignum, 65537) == 1
+           && RSA_generate_key_ex(rsa, 2048, bignum, NULL) == 1
+           && EVP_PKEY_assign_RSA(pkey, rsa) == 1;   // ⚠ assign 转移所有权：此后 pkey 负责
+                                                      //    释放 rsa，切勿再 RSA_free（双重释放闪退）
+    if (ok) {
+        X509_REQ_set_version(req, 0);
+        X509_NAME* name = X509_REQ_get_subject_name(req);
+        // 主题字段仅占位（Apple 以下发证书为准）
+        ok = X509_NAME_add_entry_by_txt(name, "CN", 0x1001 /*MBSTRING_ASC*/,
+                                        (const unsigned char*)"TequilaDash", -1, -1, 0) == 1
+          && X509_REQ_set_pubkey(req, pkey) == 1
+          && X509_REQ_sign(req, pkey, EVP_sha1()) > 0;
+    }
+    if (ok) {
+        BIO* csrBIO = BIO_new(BIO_s_mem());
+        BIO* keyBIO = BIO_new(BIO_s_mem());
+        ok = PEM_write_bio_X509_REQ(csrBIO, req) == 1
+          && PEM_write_bio_PrivateKey(keyBIO, pkey, NULL, NULL, 0, NULL, NULL) == 1;
+        if (ok) {
+            char* csrPtr = NULL; long csrLen = BIO_get_mem_data(csrBIO, &csrPtr);
+            char* keyPtr = NULL; long keyLen = BIO_get_mem_data(keyBIO, &keyPtr);
+            if (csrLen > 0 && keyLen > 0) {
+                *csrPemOut = (char*)malloc(csrLen + 1);
+                *keyPemOut = (char*)malloc(keyLen + 1);
+                memcpy(*csrPemOut, csrPtr, csrLen); (*csrPemOut)[csrLen] = 0;
+                memcpy(*keyPemOut, keyPtr, keyLen); (*keyPemOut)[keyLen] = 0;
+                *csrPemLen = (int)csrLen; *keyPemLen = (int)keyLen;
+                ok = true;
+            } else ok = false;
+        }
+        BIO_free(csrBIO); BIO_free(keyBIO);
+    }
+    BN_free(bignum); EVP_PKEY_free(pkey); X509_REQ_free(req);
+    // rsa 已由 EVP_PKEY_assign_RSA 移交给 pkey，EVP_PKEY_free 时一并释放——
+    // 这里绝不能再 RSA_free（双重释放 = 点击创建证书即闪退，v0.3.123 实锤）
+    return ok ? 0 : -1;
+}
+
+// 验证证书 PEM 与私钥 PEM 是否配对（X509_check_private_key）。
+// 返回 1 = 配对，0 = 不配对/解析失败。用于签名前校验与证书创建轮询筛选。
+extern "C" int zsign_check_pair(const char* certPem, int certLen,
+                                const char* keyPem, int keyLen) {
+    if (!certPem || !keyPem || certLen <= 0 || keyLen <= 0) return 0;
+    BIO* cbio = BIO_new_mem_buf(certPem, certLen);
+    if (!cbio) return 0;
+    X509* cert = PEM_read_bio_X509(cbio, NULL, 0, NULL);
+    BIO_free(cbio);
+    if (!cert) return 0;
+    BIO* kbio = BIO_new_mem_buf(keyPem, keyLen);
+    if (!kbio) { X509_free(cert); return 0; }
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(kbio, NULL, NULL, NULL);
+    BIO_free(kbio);
+    if (!pkey) { X509_free(cert); return 0; }
+    int ok = X509_check_private_key(cert, pkey);
+    X509_free(cert);
+    EVP_PKEY_free(pkey);
+    return (ok == 1) ? 1 : 0;
+}
+
+// 用真实开发证书（PEM）+ 私钥(PEM) 对 dylib 就地签名（与 SideStore 签的 App 同 TeamID → 库验证通过）
+// dbgPath：诊断日志落盘路径（zsign 全部日志 + 分步结果），可为 NULL
+extern "C" int zsign_sign_file_with_cert(const char* path,
+                                         const char* bundleId,
+                                         const char* certPem, int certLen,
+                                         const char* keyPem, int keyLen,
+                                         const char* entXml, int entLen,
+                                         const char* dbgPath,
+                                         const char* teamId) {
+    auto diagWrite = [dbgPath](const std::string& text) {
+        if (!dbgPath) return;
+        FILE* f = fopen(dbgPath, "a");
+        if (!f) return;
+        fwrite(text.data(), 1, text.size(), f);
+        fclose(f);
+    };
+    diagWrite("\n=== zsign 真证书签名开始 ===\n");
+    diagWrite(std::string("target=") + (path ? path : "(null)") + "\n");
+    diagWrite(std::string("bundleId=") + (bundleId ? bundleId : "(null)") + "\n");
+    // v0.3.150：签名前自愈历史损坏（blob 声明尾部越界 → 补零到声明长度）
+    {
+        uint32_t d0 = 0, d1 = 0; long fsz = 0;
+        if (escGetSigRange(path, &d0, &d1, &fsz, /*heal*/ true, diagWrite)) {
+            char b2[160];
+            snprintf(b2, sizeof(b2), "[签名前] 签名区 dataoff=%u datasize=%u 文件=%ld\n", d0, d1, fsz);
+            diagWrite(b2);
+        }
+    }
+    // v0.3.151：签名前改 UUID（破 per-UUID 签名元数据缓存，LC 同款）。
+    // 150 实锤：文件自洽 + CDHash 14/14 但 dlopen 仍用旧缓存位置（差 23,936）
+    escChangeUUID(path, diagWrite);
+    // v0.3.148：先 dump 主程序签名做"过审对照基线"（exec 校验已通过）
+    @autoreleasepool {
+        NSString* exePath = [NSBundle mainBundle].executablePath;
+        if (exePath) {
+            escDumpMachO(exePath.fileSystemRepresentation, "主程序(exec过审对照)", diagWrite);
+        }
+    }
+    if (!path || !bundleId || !certPem || !keyPem) {
+        diagWrite("FAIL: 参数为空\n");
+        return -2;
+    }
+    // 写临时文件（ZSignAsset::Init 接收路径）。⚠ 不能用 /tmp——LC 访客沙盒
+    // 对 /tmp 无写权限（mkstemp 必败，v0.3.130 实锤「证书/私钥不可用」），用 App 自身 tmp。
+    NSString* tmpDir = NSTemporaryDirectory();
+    if (!tmpDir) { diagWrite("FAIL: NSTemporaryDirectory 为空\n"); return -2; }
+    char certTpl[512], keyTpl[512];
+    snprintf(certTpl, sizeof(certTpl), "%sesc-cert-XXXXXX.pem",
+             tmpDir.fileSystemRepresentation);
+    snprintf(keyTpl,  sizeof(keyTpl),  "%sesc-key-XXXXXX.pem",
+             tmpDir.fileSystemRepresentation);
+    int cfd = mkstemp(certTpl), kfd = mkstemp(keyTpl);
+    if (cfd < 0 || kfd < 0) {
+        diagWrite(std::string("FAIL: mkstemp 失败 errno=") + std::to_string(errno) + "\n");
+        if (cfd >= 0) close(cfd);
+        if (kfd >= 0) close(kfd);
+        return -2;
+    }
+    bool wok = write(cfd, certPem, certLen) == certLen
+            && write(kfd, keyPem, keyLen) == keyLen;
+    close(cfd); close(kfd);
+    if (!wok) {
+        unlink(certTpl); unlink(keyTpl);
+        diagWrite("FAIL: 临时文件写入失败\n");
+        return -2;
+    }
+
+    // v0.3.144：LC 配方（LiveContainer ZSign/zsign.mm signMachOPathArr 同款）——
+    // 不传 provision、不嵌 entitlements。真机实锤：dylib 带 entitlements blob
+    // （get-task-allow 等）会触发 AMFI 按 App 规则要求 profile 匹配 →
+    // code signature invalid errno=1。TeamID 由 openssl.cpp Init 在证书加载后
+    // 从证书 OU 直读（GetCertOU，LiveContainer InitSimple L887 同款）。
+    diagWrite(std::string("teamId=") + std::string(teamId ? teamId : "(null)")
+              + "（LC 配方：无 provision/entitlements，TeamID 取自证书 OU）\n");
+
+    ZLog::logs.clear();
+    ZSignAsset asset;
+    // v0.3.147：参数对齐 LC。LC InitSimple 不设置 m_bSHA256Only/m_bSingleBinary，
+    // 构造默认 false/false → 双 CodeDirectory（SHA1 主 + SHA256 alternate）。
+    // iOS AMFI 只接受双目录 blob；v0.3.141-146 传 bSHA256Only=true 生成
+    // 单 SHA256 目录 blob（archo.cpp "make it the primary (and only)"）→
+    // code signature invalid errno=1（真机 6 版实锤，refreshFile 换 inode 无效
+    // 证明非缓存问题）。bSingleBinary 仅影响 MH_EXECUTE 的 execSegFlags，
+    // 对 dylib 无效，一并归 false。
+    bool inited = asset.Init(certTpl, keyTpl, "", "", "", /*bAdhoc*/ false,
+                             /*bSHA256Only*/ false, /*bSingleBinary*/ false);
+    if (!inited) {
+        diagWrite("FAIL: ZSignAsset::Init 失败（读取证书/私钥）\n");
+        for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
+        unlink(certTpl); unlink(keyTpl);
+        return -1;
+    }
+    diagWrite("Init ✓（证书/私钥/profile 读取成功）\n");
+    // v0.3.146：签名前先换 inode（LC 同款 refreshFile-before），丢掉旧 vnode 缓存判决
+    {
+        std::string rfErr;
+        bool rfBefore = escRefreshFile(path, &rfErr);
+        diagWrite(std::string("refreshFile(before)=") + (rfBefore ? "✓" : ("✗ " + rfErr)) + "\n");
+        if (!rfBefore) {
+            for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
+            unlink(certTpl); unlink(keyTpl);
+            return -4;
+        }
+    }
+    escStatDiag(path, "签名前", diagWrite);
+
+    ZMachO* macho = new ZMachO();
+    if (!macho->Init(path)) {
+        delete macho;
+        diagWrite("FAIL: ZMachO::Init 失败（解析 dylib）\n");
+        for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
+        unlink(certTpl); unlink(keyTpl);
+        return -2;
+    }
+    std::string info1, info256, res;
+    bool ok = macho->Sign(&asset, /*bForce*/ true, bundleId, info1, info256, res);
+    if (!ok) {
+        diagWrite("FAIL: Sign 失败\n");
+    } else {
+        diagWrite("Sign ✓\n");
+        escStatDiag(path, "签名后", diagWrite);
+        // v0.3.146：签名后再换 inode（LC 同款 refreshFile-after）——
+        // dlopen 见到全新 vnode 才会重新做签名校验，不吃缓存判决
+        std::string rfErr2;
+        bool rfAfter = escRefreshFile(path, &rfErr2);
+        diagWrite(std::string("refreshFile(after)=") + (rfAfter ? "✓" : ("✗ " + rfErr2)) + "\n");
+        if (rfAfter) escStatDiag(path, "refreshFile后", diagWrite);
+        // v0.3.148：签名后独立回读解析（验证落盘 + 结构 + CDHash 自检）
+        uint32_t kSigOff = 0, kSigSize = 0;
+        escDumpMachO(path, "模块dylib(签名后回读)", diagWrite, &kSigOff, &kSigSize);
+        ok = rfAfter;
+        // v0.3.150：签名后强制自洽校验（blob 声明必须落在文件内，不再允许假成功）
+        {
+            uint32_t d0 = 0, d1 = 0; long fsz = 0;
+            if (escGetSigRange(path, &d0, &d1, &fsz, /*heal*/ false, diagWrite)) {
+                char b2[200];
+                bool coherent = ((uint64_t)d0 + d1 <= (uint64_t)fsz);
+                snprintf(b2, sizeof(b2), "[自洽校验] dataoff=%u datasize=%u 文件=%ld → %s\n",
+                         d0, d1, fsz, coherent ? "✓ 自洽" : "✗ 损坏（blob 越界，签名无效）");
+                diagWrite(b2);
+                if (!coherent) ok = false;
+            }
+        }
+        // v0.3.149：喂签名给内核 + F_CHECK_LV 拿内核判决（LC validateJITLessSetup 同款）
+        escKernelCheck(path, kSigOff, kSigSize, diagWrite);
+        // v0.3.153：主程序对照判决——若主程序（exec 已过审）在 fcntl 通道也
+        // errno=1，说明 guest 沙盒禁用签名 fcntl，F_CHECK_LV 判决不可信，
+        // 问题须回到 dlopen 本身（同源证书假设）分析
+        @autoreleasepool {
+            NSString* exePath2 = [NSBundle mainBundle].executablePath;
+            if (exePath2) {
+                uint32_t mOff = 0, mSize = 0; long mFsz = 0;
+                std::string exePathStr = exePath2.fileSystemRepresentation;
+                if (escGetSigRange(exePathStr, &mOff, &mSize, &mFsz, /*heal*/ false, diagWrite)) {
+                    diagWrite("[对照] 对主程序执行同一内核判决通道：\n");
+                    escKernelCheck(exePathStr, mOff, mSize, diagWrite);
+                }
+            }
+        }
+    }
+    for (auto& lg : ZLog::logs) diagWrite("  [zlog] " + lg + "\n");
+    if (!res.empty()) diagWrite("  [res] " + res + "\n");
+    delete macho;
+    unlink(certTpl); unlink(keyTpl);
+    int rc = ok ? 0 : -3;
+    diagWrite("=== 签名结束 rc=" + std::to_string(rc) + " ===\n");
+    return rc;
+}
+
+
+// ===== 监督（Supervision）身份与 PKCS7 签名（v0.3.249） =====
+// MCInstall 的 Escalate 需要监督身份：自签证书注册进设备 CloudConfiguration 的
+// SupervisorHostCertificates，设备下发 Challenge，再用 PKCS7 附签回传。
+// 对齐 pymobiledevice3 MobileConfigService.escalate/supervise
+// （PKCS7SignatureBuilder 默认 attached + Binary，故用 PKCS7_BINARY|PKCS7_NOSMIMECAP）。
+
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/evp.h>
+#include <openssl/pkcs7.h>
+
+// 生成自签监督身份。三个输出均为 malloc 分配，调用方负责 free。
+// certDer 供 SupervisorHostCertificates / Escalate 直接内嵌（pmd3 用整张证书 DER）。
+extern "C" int zsign_gen_supervision_identity(const char* orgCN,
+                                              char** certPemOut, int* certPemLen,
+                                              char** keyPemOut, int* keyPemLen,
+                                              unsigned char** certDerOut, int* certDerLen) {
+    if (!orgCN || !certPemOut || !certPemLen || !keyPemOut || !keyPemLen
+        || !certDerOut || !certDerLen) return -2;
+    *certPemOut = NULL; *keyPemOut = NULL; *certDerOut = NULL;
+    *certPemLen = 0; *keyPemLen = 0; *certDerLen = 0;
+
+    BIGNUM* bn = BN_new();
+    RSA* rsa = RSA_new();
+    EVP_PKEY* pkey = EVP_PKEY_new();
+    X509* x = X509_new();
+    if (!bn || !rsa || !pkey || !x) {
+        if (bn) BN_free(bn);
+        if (rsa) RSA_free(rsa);
+        if (pkey) EVP_PKEY_free(pkey);
+        if (x) X509_free(x);
+        return -1;
+    }
+    bool ok = BN_set_word(bn, 65537) == 1
+           && RSA_generate_key_ex(rsa, 2048, bn, NULL) == 1
+           && EVP_PKEY_assign_RSA(pkey, rsa) == 1;   // assign 转移所有权：rsa 由 pkey 释放
+    if (ok) {
+        X509_set_version(x, 2);                       // v3
+        ASN1_INTEGER_set(X509_get_serialNumber(x), (long)time(NULL));
+        X509_gmtime_adj(X509_getm_notBefore(x), 0);
+        X509_gmtime_adj(X509_getm_notAfter(x), 60L * 60 * 24 * 3650);
+        X509_NAME* nm = X509_get_subject_name(x);
+        ok = X509_NAME_add_entry_by_txt(nm, "CN", 0x1001 /*MBSTRING_ASC*/,
+                                        (const unsigned char*)orgCN, -1, -1, 0) == 1
+          && X509_set_issuer_name(x, nm) == 1
+          && X509_set_pubkey(x, pkey) == 1
+          && X509_sign(x, pkey, EVP_sha256()) > 0;
+    }
+    if (ok) {
+        BIO* cB = BIO_new(BIO_s_mem());
+        BIO* kB = BIO_new(BIO_s_mem());
+        BIO* dB = BIO_new(BIO_s_mem());
+        ok = cB && kB && dB
+          && PEM_write_bio_X509(cB, x) == 1
+          && PEM_write_bio_PrivateKey(kB, pkey, NULL, NULL, 0, NULL, NULL) == 1
+          && i2d_X509_bio(dB, x) == 1;
+        if (ok) {
+            char* cp = NULL; long cl = BIO_get_mem_data(cB, &cp);
+            char* kp = NULL; long kl = BIO_get_mem_data(kB, &kp);
+            char* dp = NULL; long dl = BIO_get_mem_data(dB, &dp);
+            if (cl > 0 && kl > 0 && dl > 0) {
+                *certPemOut = (char*)malloc(cl + 1);
+                *keyPemOut = (char*)malloc(kl + 1);
+                *certDerOut = (unsigned char*)malloc(dl);
+                if (*certPemOut && *keyPemOut && *certDerOut) {
+                    memcpy(*certPemOut, cp, cl); (*certPemOut)[cl] = 0;
+                    memcpy(*keyPemOut, kp, kl); (*keyPemOut)[kl] = 0;
+                    memcpy(*certDerOut, dp, dl);
+                    *certPemLen = (int)cl; *keyPemLen = (int)kl; *certDerLen = (int)dl;
+                } else {
+                    free(*certPemOut); free(*keyPemOut); free(*certDerOut);
+                    *certPemOut = NULL; *keyPemOut = NULL; *certDerOut = NULL;
+                    ok = false;
+                }
+            } else ok = false;
+        }
+        if (cB) BIO_free(cB);
+        if (kB) BIO_free(kB);
+        if (dB) BIO_free(dB);
+    }
+    BN_free(bn); EVP_PKEY_free(pkey); X509_free(x);
+    return ok ? 0 : -1;
+}
+
+// PKCS7 附签（attached）/二进制/SHA-256。输出 DER（malloc），调用方负责 free。
+// 与 pymobiledevice3 PKCS7SignatureBuilder(...).sign(Encoding.DER, [Binary]) 对齐。
+extern "C" int zsign_pkcs7_sign_data(const char* certPem, int certLen,
+                                     const char* keyPem, int keyLen,
+                                     const unsigned char* data, int dataLen,
+                                     unsigned char** derOut, int* derLen) {
+    if (!certPem || certLen <= 0 || !keyPem || keyLen <= 0
+        || !data || dataLen <= 0 || !derOut || !derLen) return -2;
+    *derOut = NULL; *derLen = 0;
+
+    BIO* cbio = BIO_new_mem_buf(certPem, certLen);
+    if (!cbio) return -1;
+    X509* cert = PEM_read_bio_X509(cbio, NULL, 0, NULL);
+    BIO_free(cbio);
+    if (!cert) return -1;
+
+    BIO* kbio = BIO_new_mem_buf(keyPem, keyLen);
+    if (!kbio) { X509_free(cert); return -1; }
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(kbio, NULL, NULL, NULL);
+    BIO_free(kbio);
+    if (!pkey) { X509_free(cert); return -1; }
+
+    int rc = -1;
+    BIO* dbio = BIO_new_mem_buf(data, dataLen);
+    // PKCS7_BINARY=附签内容原样；不加 PKCS7_DETACHED=attached；NOSMIMECAP 去掉 S/MIME 能力表
+    PKCS7* p7 = dbio ? PKCS7_sign(cert, pkey, NULL, dbio, PKCS7_BINARY | PKCS7_NOSMIMECAP) : NULL;
+    if (p7) {
+        BIO* obio = BIO_new(BIO_s_mem());
+        if (obio && i2d_PKCS7_bio(obio, p7) == 1) {
+            char* ptr = NULL; long len = BIO_get_mem_data(obio, &ptr);
+            if (len > 0) {
+                *derOut = (unsigned char*)malloc(len);
+                if (*derOut) {
+                    memcpy(*derOut, ptr, len);
+                    *derLen = (int)len;
+                    rc = 0;
+                }
+            }
+        }
+        if (obio) BIO_free(obio);
+        PKCS7_free(p7);
+    }
+    if (dbio) BIO_free(dbio);
+    EVP_PKEY_free(pkey);
+    X509_free(cert);
+    return rc;
+}

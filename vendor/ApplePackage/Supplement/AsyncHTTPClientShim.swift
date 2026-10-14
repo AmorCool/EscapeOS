@@ -1,9 +1,9 @@
 import Foundation
 
-// MARK: - AsyncHTTPClient 兼容层（EscapeSpace / Theos 适配）
+// MARK: - AsyncHTTPClient 兼容层（TequilaDash / Theos 适配）
 //
 // ApplePackage 原本依赖 `async-http-client`（SwiftPM），而它又拖着 swift-nio
-// 全家桶（几十个包）。EscapeSpace 用 Theos 构建，**不支持 SwiftPM**，无法引入。
+// 全家桶（几十个包）。TequilaDash 用 Theos 构建，**不支持 SwiftPM**，无法引入。
 //
 // 与其改动 23 个文件里的每一处网络调用，这里提供一个**签名兼容的 shim**：
 // 底层用 `URLSession` 实现，调用点代码一行都不用改。

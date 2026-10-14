@@ -5,7 +5,7 @@ pairingFile.plist
 idevice_log.txt
 _scratch/
 Payload/
-EscapeOS/Tunnel/libidevice_ffi.a
+TequilaDash/Tunnel/libidevice_ffi.a
 
 # Rust vendored crate: keep sources + Cargo.lock, ignore build artifacts
 rust/idevice-ffi/target/
@@ -49,5 +49,5 @@ _fw_out/
 
 # 模块原生 UI 源码是**生成目录**（由 Resources/Scripts/sync_bundled_modules.py
 # 从 module-esc 仓库拷来）—— 不重复入库，只保留说明文件
-EscapeOS/Modules/*
-!EscapeOS/Modules/README.md
+TequilaDash/Modules/*
+!TequilaDash/Modules/README.md

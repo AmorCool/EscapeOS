@@ -116,11 +116,11 @@ def walk(data: bytes, depth: int = 0):
 
 
 def main() -> None:
-    history = source("EscapeOS/Engine/PurchaseHistoryService.swift")
-    install = source("EscapeOS/Engine/AppStoreLocalInstallService.swift")
-    auth = source("EscapeOS/Services/AppleAuth/SignedStoreAuthenticator.swift")
-    protocol = source("EscapeOS/Services/AppleAuth/StoreAuthenticationProtocol.swift")
-    gate = source("EscapeOS/Services/AppleAuth/StoreAccountSession.swift")
+    history = source("TequilaDash/Engine/PurchaseHistoryService.swift")
+    install = source("TequilaDash/Engine/AppStoreLocalInstallService.swift")
+    auth = source("TequilaDash/Services/AppleAuth/SignedStoreAuthenticator.swift")
+    protocol = source("TequilaDash/Services/AppleAuth/StoreAuthenticationProtocol.swift")
+    gate = source("TequilaDash/Services/AppleAuth/StoreAccountSession.swift")
     cookies = source("vendor/ApplePackage/Supplement/Cookie.swift")
     shim = source("vendor/ApplePackage/Supplement/AsyncHTTPClientShim.swift")
     purchase = source("vendor/ApplePackage/Commands/Purchase.swift")
@@ -198,9 +198,9 @@ def main() -> None:
     require("cachedVersionID" in install and "rememberVersionID" in install,
             "the last good externalVersionId is cached and tried first")
     # v0.3.367：越狱版必须有正面证据（isFairPlayEncrypted == false）；未知不得判为越狱版。
-    require("isFairPlayEncrypted == false { return .jailbroken }" in source("EscapeOS/Engine/AppTypeDetector.swift"),
+    require("isFairPlayEncrypted == false { return .jailbroken }" in source("TequilaDash/Engine/AppTypeDetector.swift"),
             "jailbroken requires positive evidence, never mere absence of metadata")
-    require("hasITunesMetadata: hasMetadataMap[id] ?? false" in source("EscapeOS/Views/AppListView.swift"),
+    require("hasITunesMetadata: hasMetadataMap[id] ?? false" in source("TequilaDash/Views/AppListView.swift"),
             "the app list passes iTunesMetadata existence into the type detector")
     # v0.3.364：账号版本通道必须支持带 externalVersionId，并把静默空包归一成 emptyPackage；
     # 且不得再出现「可能缺少此应用的获取记录」这种把接口行为说成「你没买过」的假结论。
@@ -229,8 +229,8 @@ def main() -> None:
     require("status == 403" not in protocol and "status == 429" not in protocol,
             "403 / 429 are not replayed (no evidence they are transient)")
     # v0.3.358：native-first 是 JAsspp 的放宽，不是 ipatool 上游行为，代码里要写明这一点。
-    require("不是 ipatool 上游行为" in raw_source("EscapeOS/Services/AppleAuth/StoreAuthenticationProtocol.swift")
-            and "不是 ipatool 上游行为" in raw_source("EscapeOS/Services/AppleAuth/SignedStoreAuthenticator.swift"),
+    require("不是 ipatool 上游行为" in raw_source("TequilaDash/Services/AppleAuth/StoreAuthenticationProtocol.swift")
+            and "不是 ipatool 上游行为" in raw_source("TequilaDash/Services/AppleAuth/SignedStoreAuthenticator.swift"),
             "the native-first ladder is documented as a JAsspp-only divergence")
     # v0.3.354：换过机器身份后不能再把旧会话的 Cookie 当自己的发出去。
     require("deviceGuid" in source("vendor/ApplePackage/Models/Account.swift"),

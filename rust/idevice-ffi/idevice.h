@@ -9069,7 +9069,7 @@ extern "C"
 #endif
 #endif
 
-/* ---- EscapeOS 扩展：MCInstall SetWiFiPowerState over RSD 隧道（v0.3.247） ----
+/* ---- TequilaDash 扩展：MCInstall SetWiFiPowerState over RSD 隧道（v0.3.247） ----
  *
  * 由 rust/idevice-ffi/src/mcinstall.rs 导出。此前该符号只有 Rust 实现、没有 C 声明，
  * Swift 侧（WirelessLockdownService）调用不到——这也是 v0.3.246 本地代码编不过、

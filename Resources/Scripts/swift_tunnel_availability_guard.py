@@ -18,7 +18,7 @@
 本脚本是「以后不会再有人把 canOpenURL 门控加回来」的守门人，在提交前拦住。
 
 检查范围：
-  · `EscapeOS/Engine/TunnelProvider.swift` 的 `ShadowrocketTunnel` 类型体
+  · `TequilaDash/Engine/TunnelProvider.swift` 的 `ShadowrocketTunnel` 类型体
   · `Resources/Info.plist` 的 `LSApplicationQueriesSchemes` 数组
 
 检查规则：
@@ -32,14 +32,14 @@
 
 用法：
     python swift_tunnel_availability_guard.py [仓库根，默认 .]
-    仓库根 = 含 EscapeOS/ 的那一层（即 P1_EscapeOS_宿主仓库）
+    仓库根 = 含 TequilaDash/ 的那一层（即 P1_TequilaDash_宿主仓库）
 退出码：0 = 全部通过；1 = 有 ERROR；2 = 参数/路径错误。
 """
 import os
 import re
 import sys
 
-SWIFT_REL = os.path.join("EscapeOS", "Engine", "TunnelProvider.swift")
+SWIFT_REL = os.path.join("TequilaDash", "Engine", "TunnelProvider.swift")
 PLIST_REL = os.path.join("Resources", "Info.plist")
 
 STRUCT_NAME = "ShadowrocketTunnel"

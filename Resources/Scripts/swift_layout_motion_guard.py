@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """布局与动效防复发检查（新增 `AppLayout.swift` 组件层之后）.
 
-背景：本轮为「布局不好看」补了一层布局 / 动效组件（`EscapeOS/Views/AppLayout.swift`）——
+背景：本轮为「布局不好看」补了一层布局 / 动效组件（`TequilaDash/Views/AppLayout.swift`）——
 `AppCardGrid` / `AppAdaptiveGrid` / `AppHScrollSection` / `AppHeroHeader` / `AppSectionHeader` /
 `AppGridTile` 与动效 `AppMotion` + `.appAppear` / `.appPressable` / `.appSymbolBounce`。
 组件有了，就有人可能**绕过组件重造**，把「设计语言」重新打散成各页各写一套。本脚本把四条
@@ -43,11 +43,11 @@ Q = chr(34)    # 双引号
 # L1 / L2 / L3 的豁免文件（相对仓库根，正斜杠）。每一项都写明「为什么豁免」.
 ALLOW = {
     # L1：组件实现处 + 组件层之前的手写网格（本轮不迁移）
-    "EscapeOS/Views/AppLayout.swift": ("L1", "L2"),
-    "EscapeOS/Views/Wallpaper/WallpaperView.swift": ("L1",),
-    "EscapeOS/Views/BatteryHealthView.swift": ("L1",),
+    "TequilaDash/Views/AppLayout.swift": ("L1", "L2"),
+    "TequilaDash/Views/Wallpaper/WallpaperView.swift": ("L1",),
+    "TequilaDash/Views/BatteryHealthView.swift": ("L1",),
     # L2：两个按压样式实现处
-    "EscapeOS/Views/DesignSystem.swift": ("L2", "L3"),
+    "TequilaDash/Views/DesignSystem.swift": ("L2", "L3"),
 }
 
 # L1 指纹：手写等宽多列网格
@@ -59,7 +59,7 @@ L1_FINGERPRINTS = (
 # L4：布局动效组件（AppLayout.swift）必须保持的「阶梯入场有界」不变量.
 # 任一指纹缺失即视为该不变量被删 ⇒ 长列表（懒加载网格）滚动时格子会空白数秒
 # （用户 2026-10-12 报「更多-拉起应用 上滑下滑反应一会」的根因）。
-L4_FILE = "EscapeOS/Views/AppLayout.swift"
+L4_FILE = "TequilaDash/Views/AppLayout.swift"
 L4_REQUIRED = (
     ("min(index,", "AppMotion.stagger 对序号封顶（clamp index）"),
     ("staggerWindow", "AppAppear 的懒加载入场窗口（窗口外项零延迟）"),
@@ -212,7 +212,7 @@ def check(root):
     errs = []
     l4_seen = False
 
-    for path in _iter_swift_files(os.path.join(root, "EscapeOS")):
+    for path in _iter_swift_files(os.path.join(root, "TequilaDash")):
         raw = io.open(path, encoding="utf-8").read()
         masked = _mask_comments(raw)
         rel = os.path.relpath(path, root).replace(os.sep, "/")
@@ -263,8 +263,8 @@ def main():
         print("用法：swift_layout_motion_guard.py <仓库根>")
         return 2
     root = sys.argv[1]
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         return 2
     errs = check(root)
     print("-" * 72)

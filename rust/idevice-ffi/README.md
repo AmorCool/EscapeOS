@@ -1,11 +1,11 @@
 # idevice-ffi
 
-C ABI bindings that let the EscapeOS app drive an iPhone over **Remote Pairing / RSD** and the
+C ABI bindings that let the TequilaDash app drive an iPhone over **Remote Pairing / RSD** and the
 lockdown service family — from Swift, with no jailbreak.
 
 This crate is the only Rust component that ends up inside the app. It is compiled as a **single
 `staticlib`** (see `[lib] crate-type` in `Cargo.toml`) and linked into the app as
-`EscapeOS/Tunnel/libidevice_ffi.a`. The app-side declarations live in
+`TequilaDash/Tunnel/libidevice_ffi.a`. The app-side declarations live in
 [`idevice.h`](idevice.h) and [`plist.h`](plist.h).
 
 ## What it wraps
@@ -39,7 +39,7 @@ Two things that are easy to get wrong:
 
 `libidevice_ffi.a` is **not committed** (see `.gitignore`). Either download it from the GitHub
 Release that ships the IPA, or build it yourself and place it at
-`EscapeOS/Tunnel/libidevice_ffi.a` before building the app.
+`TequilaDash/Tunnel/libidevice_ffi.a` before building the app.
 
 ```sh
 cd rust/idevice-ffi

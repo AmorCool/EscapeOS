@@ -1,8 +1,8 @@
 // Jackson Coxson
 //
-// 注：airlift 漏洞利用（EscapeOS/Engine/Exploits/AirliftExploit.swift）已整体删除。
+// 注：airlift 漏洞利用（TequilaDash/Engine/Exploits/AirliftExploit.swift）已整体删除。
 // 本文件**不再属于 airlift**，只保留 `adapter_connect` —— 它是通用 adapter API 的一部分：
-// SSH 只读诊断探针 `EscapeOS/Tunnel/EscCDProbe.c`（`cdprobe` 命令）依赖它，
+// SSH 只读诊断探针 `TequilaDash/Tunnel/EscCDProbe.c`（`cdprobe` 命令）依赖它，
 // 在 CoreDeviceProxy 隧道内新开一条流给 `rsd_handshake_new`。
 // 原先只服务 airlift 的 adapter_send / adapter_recv / adapter_close / adapter_pcap /
 // adapter_stream_close 与全部 stream_* 函数已随 airlift 一并删除。

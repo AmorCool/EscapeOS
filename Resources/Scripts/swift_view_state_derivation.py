@@ -9,7 +9,7 @@
 收口方案：`Job.displayStage` 是**唯一真源**，视图层只读它；`stageText` 关成 `private(set)`。
 本脚本就是「以后不会再有人犯同样的错」的**守门人**：在提交前拦住「又有人自己推导」。
 
-检查范围：仓库里 `EscapeOS/Views/**` 下的所有 .swift（视图层）。
+检查范围：仓库里 `TequilaDash/Views/**` 下的所有 .swift（视图层）。
 
 检查规则：
   R1 [ERROR] 视图层读取 `.stageText`        —— 视图不得读它，应读 `.displayStage`
@@ -41,7 +41,7 @@
 
 用法：
     python swift_view_state_derivation.py [仓库根，默认 .] [--strict]
-    仓库根 = 含 EscapeOS/Views 的那一层（即 P1_EscapeOS_宿主仓库）
+    仓库根 = 含 TequilaDash/Views 的那一层（即 P1_TequilaDash_宿主仓库）
 退出码：0 = 无 ERROR；1 = 有 ERROR（R1/R2/R4/R5 任一即致命；--strict 时 R3 的 WARN 也算）。
 """
 import os
@@ -50,7 +50,7 @@ import sys
 import fnmatch
 
 # ── 视图层根目录（相对仓库根）─────────────────────────────────────────────
-VIEWS_SUBDIR = os.path.join("EscapeOS", "Views")
+VIEWS_SUBDIR = os.path.join("TequilaDash", "Views")
 
 # ── R4：认定为「下载状态文案」的字面量集合（精确整串匹配，非子串）──────────
 STATUS_LITERALS = {

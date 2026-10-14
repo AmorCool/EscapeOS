@@ -10,7 +10,7 @@
 > EXIT 0（见 §3.2.1）。**以仓库内这份为准。**
 
 > **给后来者的一句话约定（最重要）**
-> **视图层（`EscapeOS/Views/**`）不得自行推导「下载状态文案」；一律读 `Job.displayStage`。**
+> **视图层（`TequilaDash/Views/**`）不得自行推导「下载状态文案」；一律读 `Job.displayStage`。**
 > `Job` 的 `phase`（枚举）与 `stageText`（自由字符串）是两个独立字段，视图各自推导
 > 就会「修一个漏一个」——这正是用户说的「拆东补西」的根源。`displayStage` 是**唯一真源**。
 
@@ -19,7 +19,7 @@
 ## 1. 怎么跑
 
 ```bash
-# 仓库根 = 含 EscapeOS/ 的那一层（P1_EscapeOS_宿主仓库）
+# 仓库根 = 含 TequilaDash/ 的那一层（P1_TequilaDash_宿主仓库）
 python3 Resources/Scripts/swift_precommit_check.py .          # 在仓库根直接跑
 python3 Resources/Scripts/swift_precommit_check.py <仓库根> [--strict]
 ```
@@ -65,7 +65,7 @@ CI 全量编译才发现。本项目已因此炸过一次 CI（`AppIconView` 被
 只看**行首无缩进**的顶层声明，缩进的嵌套类型（如 `enum CodingKeys`）不误报。
 
 ### 3.2 `swift_view_state_derivation.py` —— 视图层状态文案推导
-扫描 `EscapeOS/Views/**`：
+扫描 `TequilaDash/Views/**`：
 
 | 规则 | 级别 | 拦什么 |
 |---|---|---|
@@ -114,10 +114,10 @@ CI 全量编译才发现。本项目已因此炸过一次 CI（`AppIconView` 被
 
 ### 3.8 `swift_layout_motion_guard.py` —— 布局与动效（第 8 项检查）
 
-为「布局不好看」补的布局 / 动效组件层 `EscapeOS/Views/AppLayout.swift`（`AppCardGrid` /
+为「布局不好看」补的布局 / 动效组件层 `TequilaDash/Views/AppLayout.swift`（`AppCardGrid` /
 `AppAdaptiveGrid` / `AppHScrollSection` / `AppHeroHeader` / `AppSectionHeader` / `AppGridTile`
 + `AppMotion` + `.appAppear` / `.appPressable` / `.appSymbolBounce`）配套的守门人 ——
-防止有人**绕过组件重造**，把设计语言重新打散。扫描 `EscapeOS/**/*.swift`（注释屏蔽后）：
+防止有人**绕过组件重造**，把设计语言重新打散。扫描 `TequilaDash/**/*.swift`（注释屏蔽后）：
 
 | 规则 | 拦什么 | 正解 |
 |---|---|---|

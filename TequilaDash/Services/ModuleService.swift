@@ -1,0 +1,884 @@
+//
+//  ModuleService.swift
+//  TequilaDash
+//
+//  TequilaDash 模块系统（v0.3.48）.
+//  参考 KernelSU 的模块管理形态（module.prop + 声明式动作），升级为 JSON 规范：
+//
+//    escape.module.v1 规范
+//    ├── module.json      模块清单（spec/id/name/icon/version/author/description/actions）
+//    └── actions[]        声明式动作，由宿主（TequilaDash）通过 Rust FFI 管道执行
+//
+//  动作类型（v1 支持 signal；后续版本扩展）：
+//    - signal          按进程名查找 PID 并下发信号（listProcesses + send_signal，Rust FFI）
+//    - kill_top_memory （预留）按内存占用排序结束高占用后台应用
+//    - notify          （预留）本地通知
+//    - script          （预留）设备侧脚本执行
+//
+//  模块以 .zip 分发（根目录必须含 module.json），安装到
+//  Documents/Modules/<id>/.宿主内置两个官方模块（首次启动自动安装）.
+//
+
+import Foundation
+
+// MARK: - 宿主版本
+
+/// 宿主版本读取与比较（用于 `minHostVersion` 门禁）.
+///
+/// 版本号格式是 semver（`0.3.481` / `1.2.3` / 可带 `-rc1` 后缀）。这里**不引入
+/// 第三方 semver 库**，只做够用的事：按 `.` 切段比数值，段数不等时缺的当 0，
+/// 后缀（`-` 之后）按「有后缀 < 无后缀」处理（`1.0.0-rc1` 早于 `1.0.0`）。
+///
+/// 为什么不用 `String.compare(options: .numeric)`：它对 `0.3.10` vs `0.3.9` 是对的，
+/// 但对 `1.0` vs `1.0.0` 会判不等（段数不同），而我们要的是相等。
+enum HostVersion {
+    /// 当前宿主版本（CFBundleShortVersionString）
+    static var current: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    }
+
+    /// 比较两个版本号：a < b 返回 -1，相等返回 0，a > b 返回 1
+    static func compare(_ a: String, _ b: String) -> Int {
+        let (aCore, aSuffix) = split(a)
+        let (bCore, bSuffix) = split(b)
+        let count = max(aCore.count, bCore.count)
+        for i in 0..<count {
+            let x = i < aCore.count ? aCore[i] : 0
+            let y = i < bCore.count ? bCore[i] : 0
+            if x != y { return x < y ? -1 : 1 }
+        }
+        // 主版本相同：有后缀的算更早（1.0.0-rc1 < 1.0.0）
+        switch (aSuffix, bSuffix) {
+        case (nil, nil): return 0
+        case (.some, nil): return -1
+        case (nil, .some): return 1
+        case (.some(let s1), .some(let s2)): return s1 == s2 ? 0 : (s1 < s2 ? -1 : 1)
+        }
+    }
+
+    /// 拆成「数值段数组」+「后缀」
+    private static func split(_ v: String) -> ([Int], String?) {
+        let trimmed = v.trimmingCharacters(in: .whitespaces)
+        let head: String
+        let suffix: String?
+        if let idx = trimmed.firstIndex(where: { $0 == "-" || $0 == "+" }) {
+            head = String(trimmed[trimmed.startIndex..<idx])
+            suffix = String(trimmed[trimmed.index(after: idx)...])
+        } else {
+            head = trimmed
+            suffix = nil
+        }
+        let parts = head.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) ?? 0 }
+        return (parts.isEmpty ? [0] : parts, suffix)
+    }
+}
+
+// MARK: - 模块模型
+
+/// 热补丁声明（hotfix.patches[]）
+struct HotfixPatch: Codable {
+    let type: String       // "feature_flag" | "text"
+    let key: String
+    var valueBool: Bool?
+    var valueText: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, key, value
+    }
+
+    init(type: String, key: String, valueBool: Bool? = nil, valueText: String? = nil) {
+        self.type = type
+        self.key = key
+        self.valueBool = valueBool
+        self.valueText = valueText
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        key = try c.decode(String.self, forKey: .key)
+        valueBool = try? c.decode(Bool.self, forKey: .value)
+        valueText = try? c.decode(String.self, forKey: .value)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(type, forKey: .type)
+        try c.encode(key, forKey: .key)
+        if let b = valueBool { try c.encode(b, forKey: .value) }
+        else if let t = valueText { try c.encode(t, forKey: .value) }
+    }
+}
+
+/// 热补丁配置（module.json "hotfix" 键）
+struct HotfixConfig: Codable {
+    var patches: [HotfixPatch]?
+    /// JS 补丁文件名（默认 hotfix.js）
+    var script: String?
+
+    var hasScript: Bool { true }  // script 字段存在即尝试加载 hotfix.js
+    var scriptName: String { script ?? "hotfix.js" }
+}
+
+/// 二进制模块配置（module.json "binary" 键）
+struct BinaryConfig: Codable {
+    /// 相对模块目录的可执行文件路径（bin/alist）
+    var executable: String
+    /// 启动参数（相对路径会在启动时自动拼接模块目录）
+    var args: [String]?
+    /// WebUI 端口
+    var port: Int?
+    /// WebUI 路径（默认 /）
+    var webPath: String?
+    /// 是否随宿主自启动
+    var autoStart: Bool?
+    /// 入口符号名（v0.3.112：模块化——引擎默认自动扫描 dylib 符号表里 "*Main"
+    /// 结尾的导出，只有模块想显式指定时才在 module.json 里声明，避免引擎耦合模块符号名）
+    var entrySymbol: String?
+}
+
+/// Lua 模块配置（v1.2）：纯脚本模块，无签名要求
+struct LuaModuleConfig: Codable {
+    /// 入口脚本（相对模块目录）；默认 "main.lua"
+    var entry: String?
+}
+
+/// 原生 SwiftUI 界面配置（module.json "ui" 键，v1.3）
+///
+/// 模块想自带**原生**界面（而不是 `webroot` 的 WKWebView）时声明这个键。
+/// 视图实现必须编译进宿主（SwiftUI 视图没法从 zip 里加载），所以 `view` 是一个
+/// **注册名**：宿主在启动时把内置视图按名字注册进 `ModuleUIRegistry`，
+/// 模块只声明"我要用哪个视图"。注册名缺失 ⇒ 模块卡片不显示「打开」按钮
+/// （不会崩，也不会给用户一个点进去是空白的入口）。
+struct ModuleUIConfig: Codable {
+    /// 界面形态，目前只有 "native"
+    var style: String
+    /// 视图注册名（见 ModuleUIRegistry）
+    var view: String
+    /// 二级界面标题；为空则用模块 name
+    var title: String?
+
+    var isNative: Bool { style == "native" }
+}
+
+struct EscapeModuleAction: Identifiable, Codable {
+    let id: String
+    let label: String
+    var icon: String?
+    /// 动作类型（宿主只识别 "signal"，其余值一律走通用桥调用——语义由模块决定）
+    let type: String
+    /// signal: 进程名（对 displayName / executablePath 做大小写不敏感包含匹配）
+    var process: String?
+    /// signal: "SIGKILL" | "SIGTERM" | "SIGSTOP" | "SIGCONT"
+    var signal: String?
+    /// 通用桥调用: 模块 dylib 导出的符号名
+    var symbol: String?
+    /// 通用桥调用: 实参来源声明（按序对应符号参数）：
+    /// randomPassword=生成 8 位随机密码 / dataDir=模块数据目录 / moduleDir=模块目录 / "str:xxx"=字面量
+    var args: [String]?
+    /// 通用桥调用: 成功消息模板（{0}/{1} 替换实际实参）
+    var success: String?
+    /// 通用桥调用: 成功后宿主是否把模块标记为已停止（用于停止类 action 的状态刷新）
+    var marksStopped: Bool?
+    /// 执行前确认文案；为空则直接执行
+    var confirm: String?
+    /// 超时秒数（预留）
+    var timeoutSec: Int?
+}
+
+struct EscapeModule: Identifiable, Codable {
+    /// 规范版本，固定 "escape.module.v1"
+    let spec: String
+    /// 模块唯一标识（反向域名）
+    let id: String
+    let name: String
+    var icon: String?
+    var accent: String?
+    let version: String
+    var versionCode: Int?
+    var author: String?
+    var description: String
+    var notes: String?
+    var category: String?
+    var minHostVersion: String?
+    /// v1.1：可选.zip 内相对目录名（须含 index.html）——
+    /// 模块自带 WebView 界面（对齐 KernelSU 的 webroot 机制），
+    /// 有此字段时模块卡片显示「打开」按钮，用内嵌 WKWebView 加载本地页.
+    var webroot: String?
+    /// v1.1：可选.热补丁配置——存在即要求官方签名（signature.sig）
+    var hotfix: HotfixConfig?
+    /// v1.1：可选.二进制模块——随宿主自启动的后台服务（如 alist）
+    var binary: BinaryConfig?
+    /// v1.2：可选.Lua 模块——纯脚本（数据，无签名要求），entry 为模块目录内脚本路径
+    var lua: LuaModuleConfig?
+    /// v1.3：可选.原生 SwiftUI 界面（view 为宿主内的注册名，见 ModuleUIRegistry）
+    var ui: ModuleUIConfig?
+    /// v1.3：可选.声明需要的宿主能力（见 HostCapabilityService.capabilityList）
+    ///
+    /// 宿主装载时校验：缺任何一项 ⇒ 模块视为「不可用」（卡片显示缺哪一项，
+    /// actions 与原生界面都不给入口）。这样能力缺失是**装载期可见**的，
+    /// 而不是用户点下去才在运行时静默失败。
+    var requires: [String]?
+    /// 二进制模块是否随宿主自启动（默认读 binary.autoStart）
+    var autoStart: Bool?
+    let actions: [EscapeModuleAction]
+
+    /// 是否热补丁模块（导入时强制验签）
+    var isHotfixModule: Bool { hotfix != nil }
+    /// 是否二进制模块
+    var isBinaryModule: Bool { binary != nil }
+    /// 是否 Lua 脚本模块
+    var isLuaModule: Bool { lua != nil }
+    /// Lua 模块入口脚本路径（相对模块目录；默认 main.lua）
+    var luaEntry: String { lua?.entry ?? "main.lua" }
+    /// 是否自带原生 SwiftUI 界面
+    var hasNativeUI: Bool { ui?.isNative == true }
+    /// 原生界面视图注册名
+    var nativeUIViewName: String? { hasNativeUI ? ui?.view : nil }
+
+    /// 缺失的宿主能力（空 = 全部满足）
+    var missingCapabilities: [String] {
+        let needed = requires ?? []
+        guard !needed.isEmpty else { return [] }
+        let have = Set(HostCapabilityService.capabilityList)
+        return needed.filter { !have.contains($0) }
+    }
+
+    /// 宿主版本是否低于模块要求（module.json 的 minHostVersion）
+    ///
+    /// v0.3.481 起才真正强制。此前 `minHostVersion` 只是被读进来存着，
+    /// 从未参与任何判断 —— 于是「模块声明了需要 0.3.481，却装在 0.3.480 上」
+    /// 会一路放行到运行时才出问题。
+    var isHostTooOld: Bool {
+        guard let need = minHostVersion, !need.isEmpty else { return false }
+        return HostVersion.compare(HostVersion.current, need) < 0
+    }
+
+    /// 阻断使用的问题清单（人话，直接给 UI 显示）；空 = 模块可用
+    ///
+    /// 两类问题合成一处：缺宿主能力、宿主版本太老。UI 只认这一个属性，
+    /// 免得以后再加一类阻断原因时漏改界面。
+    var blockingIssues: [String] {
+        var issues: [String] = []
+        let missing = missingCapabilities
+        if !missing.isEmpty {
+            issues.append("缺少宿主能力：\(missing.joined(separator: "、"))")
+        }
+        if isHostTooOld {
+            issues.append("需要宿主 v\(minHostVersion ?? "?")+，当前 v\(HostVersion.current)")
+        }
+        return issues
+    }
+
+    /// 是否可用（能力齐备 且 宿主版本够新）
+    var isUsable: Bool { blockingIssues.isEmpty }
+
+    /// 安装目录（内置原地模块指向 bundle）
+    var installURL: URL {
+        ModuleService.shared.installURL(for: id)
+    }
+
+    var accentColorName: String { accent ?? "blue" }
+}
+
+// MARK: - 服务
+
+final class ModuleService {
+    /// Swift 6 并发检查：本类型非 Sendable。可变状态只有 `inPlaceBundled`（内置原地模块表），
+    /// 仅在 `bootstrapBundledModules()` / 内置模块安装流程里写入、之后只读；
+    /// 其余全是计算属性或对 UserDefaults / 文件系统的无状态操作。
+    nonisolated(unsafe) static let shared = ModuleService()
+
+    /// 模块安装根目录：Documents/Modules
+    let modulesRoot: URL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Documents/Modules", isDirectory: true)
+
+    private init() {
+        try? FileManager.default.createDirectory(at: modulesRoot, withIntermediateDirectories: true)
+        bootstrapBundledModules()
+    }
+
+    // MARK: 内置模块首次安装
+
+    /// 用户主动卸载过的模块 id（防止内置模块重启后自动回归）
+    private static let uninstalledKey = "Module.uninstalled.ids"
+    /// 安装版本锚点：CFBundleVersion（build 号，每次发版必变）
+    private static let hostInstallVersionKey = "Module.hostInstall.version"
+
+    private var uninstalledIds: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: Self.uninstalledKey) ?? [])
+    }
+
+    /// 首次启动时把 bundle 内置模块安装到 Documents/Modules.
+    /// 幂等：目录已存在 或 用户曾主动卸载过 → 跳过.
+    /// v0.3.164：已删除「覆盖安装后自动恢复内置模块」——覆盖安装（含升级）
+    /// 一律尊重卸载记录；需要恢复时用模块设置的「立即恢复内置模块」手动按钮.
+
+    /// 内置且不落盘（bundle 原地加载）的二进制模块：id → bundle 内模块目录
+    private var inPlaceBundled: [String: URL] = [:]
+
+    /// 内置原地模块不可卸载
+    func isInPlaceBundled(_ id: String) -> Bool { inPlaceBundled[id] != nil }
+
+    /// 模块安装根：内置原地模块指向 bundle，其余在 Documents/Modules
+    func installURL(for id: String) -> URL {
+        if let url = inPlaceBundled[id] { return url }
+        return modulesRoot.appendingPathComponent(id, isDirectory: true)
+    }
+
+    /// 模块数据目录（始终可写，与二进制分离）：<modulesRoot>/<id>/data
+    func dataURL(for id: String) -> URL {
+        modulesRoot.appendingPathComponent(id, isDirectory: true).appendingPathComponent("data", isDirectory: true)
+    }
+
+    // MARK: Lua 模块执行（v1.2：纯脚本模块，走内置 Rust+mlua 解释器）
+
+    /// `lua_host_exec` 的结果盒：用于把返回值从并发闭包带回同步调用方。
+    ///
+    /// 线程安全论证：`value` 的写发生在 `sem.signal()` **之前**、读发生在 `sem.wait()`
+    /// 返回**之后**，两者之间由 `DispatchSemaphore` 建立 happens-before 关系，
+    /// 且期间不存在第二个访问者 —— 故 `@unchecked Sendable` 成立。
+    private final class LuaResultBox: @unchecked Sendable {
+        var value: Int32 = -99
+    }
+
+    /// 执行 Lua 模块入口脚本.返回 (返回码, 输出文本)；码 0=成功 -1=Lua 错误 -9=参数错.
+    func runLuaModule(_ module: EscapeModule,
+                      onProgress: ((String) -> Void)? = nil) -> (Int32, String) {
+        guard module.isLuaModule else { return (-9, "非 Lua 模块") }
+        let scriptURL = installURL(for: module.id).appendingPathComponent(module.luaEntry)
+        guard let code = try? String(contentsOf: scriptURL, encoding: .utf8) else {
+            return (-9, "找不到入口脚本 \(module.luaEntry)")
+        }
+        let dataDir = dataURL(for: module.id)
+        try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let outFile = dataDir.appendingPathComponent("lua_out.txt")
+        WiFiPowerBridge.shared.ensureRegistered()   // 注册隧道 wifi handler（幂等）
+        onProgress?("执行 \(module.luaEntry)（\(code.count) 字符）…")
+        // Swift 6：结果经引用盒回传（不能在被捕获的局部 `var` 上跨并发闭包写入），
+        // 线程安全论证见 `LuaResultBox`。
+        let retBox = LuaResultBox()
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            code.withCString { c in
+                outFile.path.withCString { o in
+                    retBox.value = lua_host_exec(
+                        UnsafeMutablePointer(mutating: c),
+                        UnsafeMutablePointer(mutating: o))
+                }
+            }
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 15)
+        let output = (try? String(contentsOf: outFile, encoding: .utf8)) ?? "（无输出）"
+        return (retBox.value, output)
+    }
+
+    private func bootstrapBundledModules() {
+        // 安装版本锚点：CFBundleVersion（build 号）.
+        // 旧方案（bundle 目录/可执行文件 mtime）在 LC 环境会漂移——卸载后重启模块"复活"的 bug 根因.
+        // CFBundleVersion 每次发版必变、同版本内永远稳定（v0.3.72 修复）.
+        // v0.3.164：不再随覆盖安装/升级自动恢复内置模块（尊重卸载记录）——
+        // 需要恢复时用模块设置里的「立即恢复内置模块」手动按钮.
+        let installVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        let recorded = UserDefaults.standard.string(forKey: Self.hostInstallVersionKey)
+        if recorded == nil {
+            UserDefaults.standard.set(installVersion, forKey: Self.hostInstallVersionKey)
+        } else if recorded != installVersion {
+            UserDefaults.standard.set(installVersion, forKey: Self.hostInstallVersionKey)
+            print("[Module] 检测到覆盖安装（CFBundleVersion \(recorded ?? "?") → \(installVersion)）")
+        }
+
+        guard let bundledURL = Bundle.main.url(forResource: "BundledModules", withExtension: nil) else { return }
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: bundledURL.path) else { return }
+        let uninstalled = uninstalledIds
+        for id in ids where !id.hasPrefix(".") {
+            guard !uninstalled.contains(id) else { continue }
+            let src = bundledURL.appendingPathComponent(id, isDirectory: true)
+            let dest = modulesRoot.appendingPathComponent(id, isDirectory: true)
+            // 二进制模块（binary 键）不落盘：直接从 bundle 原地加载（137MB 级 dylib
+            // 拷贝进 Documents 白白吃磁盘写入配额）.数据目录仍在 modulesRoot/<id>/data.
+            if let data = try? Data(contentsOf: src.appendingPathComponent("module.json")),
+               let m = try? JSONDecoder().decode(EscapeModule.self, from: data),
+               m.isBinaryModule {
+                let dataRoot = modulesRoot.appendingPathComponent(id, isDirectory: true)
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    // 旧版落盘副本清理：只删残留的 bin/（旧 dylib，现已编译进 App）.
+                    // 注意： v0.3.80 修复：此前这里执行 removeItem(dest)，而 dest 与 dataRoot
+                    // 对内置原地模块是同一目录 —— 等于每次启动都把模块数据目录（日志/配置/
+                    // 数据库）整个删掉，既导致模块数据无法留存，也销毁了排障日志.
+                    let legacyBin = dest.appendingPathComponent("bin", isDirectory: true)
+                    if FileManager.default.fileExists(atPath: legacyBin.path) {
+                        do {
+                            try FileManager.default.removeItem(at: legacyBin)
+                            print("[Module] \(id) 已清理旧版落盘二进制副本 bin/（data/ 保留）")
+                        } catch {
+                            print("[Module] \(id) 清理 bin/ 失败: \(error)")
+                        }
+                    }
+                    try? FileManager.default.createDirectory(
+                        at: dataRoot.appendingPathComponent("data"), withIntermediateDirectories: true)
+                } else {
+                    try? FileManager.default.createDirectory(
+                        at: dataRoot.appendingPathComponent("data"), withIntermediateDirectories: true)
+                }
+                inPlaceBundled[id] = src
+                continue
+            }
+            guard !FileManager.default.fileExists(atPath: dest.path) else { continue }
+            try? FileManager.default.copyItem(at: src, to: dest)
+            print("[Module] 内置模块安装: \(id)")
+        }
+
+        // 启动钩子：热补丁聚合 + 二进制自启动（延迟 2s 避开启动高峰）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            HotfixService.shared.reload()
+            BinaryModuleRunner.shared.autoStartAll()
+        }
+    }
+
+    // MARK: 列举
+
+    func listModules() -> [EscapeModule] {
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: modulesRoot.path) else { return [] }
+        var modules: [EscapeModule] = []
+        var seen = Set<String>()
+        for id in ids.sorted() where !id.hasPrefix(".") {
+            let manifest = modulesRoot.appendingPathComponent(id).appendingPathComponent("module.json")
+            guard let data = try? Data(contentsOf: manifest),
+                  let m = try? JSONDecoder().decode(EscapeModule.self, from: data) else { continue }
+            modules.append(m)
+            seen.insert(id)
+        }
+        // 内置原地二进制模块（bundle 内，不落盘）
+        for (id, url) in inPlaceBundled.sorted(by: { $0.key < $1.key }) where !seen.contains(id) {
+            guard let data = try? Data(contentsOf: url.appendingPathComponent("module.json")),
+                  let m = try? JSONDecoder().decode(EscapeModule.self, from: data) else { continue }
+            modules.append(m)
+        }
+        return modules
+    }
+
+    func module(id: String) -> EscapeModule? {
+        listModules().first { $0.id == id }
+    }
+
+    // MARK: 容器迁移修复（v0.3.195）
+
+    /// v0.3.195：App 重装 / LiveContainer 容器 UUID 变化后，Go 二进制模块（OpenList 等）
+    /// 的 config.json 仍写着旧容器的绝对路径（temp_dir/db_file/bleve_dir/log.name）——
+    /// Go 启动时 mkdir 旧路径 → operation not permitted → log.Fatal → os.Exit 杀宿主.
+    /// 这里按 OpenList internal/conf.DefaultConfig(dataDir) 的语义重写这 4 个路径字段为
+    /// 「当前 dataDir 派生值」（与用户其它配置互不影响；仅在字段值确实指向旧容器时改）.
+    ///
+    /// 数据目录可写性由调用方（BinaryModuleRunner.runBinaryModule）已门禁.
+    static func repairContainerMigratedConfig(moduleId: String, dataDir: URL) {
+        let cfgURL = dataDir.appendingPathComponent("config.json")
+        guard FileManager.default.fileExists(atPath: cfgURL.path),
+              let data = try? Data(contentsOf: cfgURL),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+
+        var changed = false
+
+        // 判定"绝对路径是否指向旧容器"：当前 dataDir 前缀（进程容器 → Documents）下不存在该路径
+        func isStalePath(_ p: String) -> Bool {
+            guard p.hasPrefix("/var/mobile/Containers/Data/Application/") else { return false }
+            return !p.hasPrefix(dataDir.path) && !FileManager.default.fileExists(atPath: p)
+        }
+        func fixPath(_ p: String, sub: String) -> String {
+            // 期望值 = dataDir/<sub>；旧值是 dataDir 之外任何绝对路径
+            let expected = dataDir.appendingPathComponent(sub).path
+            if p != expected, isStalePath(p) { changed = true; return expected }
+            return p
+        }
+
+        // temp_dir / bleve_dir（顶层）
+        if let t = json["temp_dir"] as? String {
+            json["temp_dir"] = fixPath(t, sub: "temp")
+        }
+        if let b = json["bleve_dir"] as? String {
+            json["bleve_dir"] = fixPath(b, sub: "bleve")
+        }
+        // database.db_file（子字典）
+        if var db = json["database"] as? [String: Any], let f = db["db_file"] as? String {
+            db["db_file"] = fixPath(f, sub: "data.db")
+            json["database"] = db
+        }
+        // log.name（子字典）
+        if var log = json["log"] as? [String: Any], let n = log["name"] as? String {
+            log["name"] = fixPath(n, sub: "log/log.log")
+            json["log"] = log
+        }
+
+        guard changed else { return }
+        if let out = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
+            try? out.write(to: cfgURL, options: .atomic)
+            NSLog("[Module] %@ config.json 容器路径已迁移修复 (dataDir=%@)", moduleId, dataDir.path)
+        }
+    }
+
+    // MARK: 导入 .zip
+
+    /// 导入 .zip 模块.zip 内任意层级（含 modules/<id>/ 前缀、GitHub 源码 zip 的多层嵌套）均可识别
+    /// module.json，并安装其所在目录的内容.spec = escape.module.v1.
+    /// log：安装详情日志回调（KernelSU 风格安装界面逐行输出）.
+    /// 返回解析后的模块；spec 不符 / 清单缺失会抛错.
+    func importZip(at url: URL, log: ((String) -> Void)? = nil) throws -> EscapeModule {
+        log?("- 导入模块：\(url.lastPathComponent)")
+        let data = try Data(contentsOf: url)
+        log?("- 读取 zip（\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))）")
+        let entries: [ZipEntry]
+        do {
+            entries = try ZipContainer.open(container: data)
+        } catch {
+            throw ModuleError.badArchive("ZIP 解析失败：\(error.localizedDescription)")
+        }
+        log?("- 解析出 \(entries.count) 个条目")
+
+        // 解压到临时目录
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("module-import-\(Int(Date().timeIntervalSince1970))", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        var manifestData: Data?
+        var manifestName: String?      // module.json 在 zip 内的完整路径（推导同目录 signature.sig / 安装根）
+        var extractedFiles: [String: Data] = [:]   // 全部 regular 文件字节（签名校验用）
+        for entry in entries {
+            let name = entry.info.name
+            // 跳过 macOS 垃圾与目录项
+            if name.contains("__MACOSX") || name.hasPrefix(".") || name.contains("/.") { continue }
+            switch entry.info.type {
+            case .directory:
+                try FileManager.default.createDirectory(
+                    at: tmp.appendingPathComponent(name),
+                    withIntermediateDirectories: true)
+            case .regular:
+                guard let d = entry.data else { continue }
+                let dest = tmp.appendingPathComponent(name)
+                try FileManager.default.createDirectory(
+                    at: dest.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try d.write(to: dest)
+                if name == "module.json" || name.hasSuffix("/module.json") {
+                    manifestData = d
+                    manifestName = name
+                }
+                extractedFiles[name] = d
+            default:
+                break
+            }
+        }
+
+        // 校验清单
+        guard let mData = manifestData,
+              let module = try? JSONDecoder().decode(EscapeModule.self, from: mData) else {
+            throw ModuleError.missingManifest("zip 内缺少合法的 module.json")
+        }
+        log?("- 清单：\(module.id) v\(module.version)（\(module.name)）")
+        guard module.spec == "escape.module.v1" else {
+            throw ModuleError.badSpec("规范版本不支持：\(module.spec)")
+        }
+        log?("- 规范 \(module.spec) [完成]")
+
+        // module.json 所在目录（"" 表示 zip 根）——signature.sig 必须与 module.json 同目录
+        // 用纯字符串切分（NSString.deletingLastPathComponent 返回值斜杠语义不可靠，
+        // 之前 dropLast() 掐掉真实字符导致 extractedRoot/签名 key 双双找错——v0.3.68 修复）
+        let manifestDir: String
+        if let mn = manifestName, let idx = mn.lastIndex(of: "/") {
+            manifestDir = String(mn[...idx])          // 保留末尾 "/"，如 "modules/<id>/"
+        } else {
+            manifestDir = ""                          // zip 根
+        }
+        // 安装根 = module.json 所在目录（支持任意嵌套：modules/<id>/、module-esc-main/modules/<id>/ 均可）
+        // 注意： 根级 module.json 时 manifestDir 为空 → 直接用 tmp 本身，
+        //    不能拼出 "tmp/."（"/." 后缀会让 moveItem 报"未能将 . 移到…"——v0.3.99 实测）
+        let extractedRoot: URL
+        if manifestDir.isEmpty {
+            extractedRoot = tmp
+        } else {
+            extractedRoot = tmp.appendingPathComponent(String(manifestDir.dropLast()), isDirectory: true)
+        }
+
+        // 热补丁 / 二进制模块必须携带官方签名（signature.sig = 对 module.json 的 ed25519 签名 base64 文本）
+        if module.isHotfixModule || module.isBinaryModule {
+            log?("- 热补丁/二进制模块：验证官方签名…")
+            let sigB64 = extractedFiles[manifestDir + "signature.sig"]
+                .flatMap { String(data: $0, encoding: .utf8) }?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !sigB64.isEmpty else {
+                log?("- 签名文件查找 key：\(manifestDir)signature.sig")
+                log?("- zip 内已知文件：\(extractedFiles.keys.sorted().joined(separator: ", "))")
+                log!("! 签名缺失")
+                throw ModuleError.badSpec("热补丁/二进制模块签名缺失——zip 内未找到 \(manifestDir)signature.sig")
+            }
+            guard HotfixService.verifySignature(manifestData: mData, signatureB64: sigB64) else {
+                log!("! 签名校验失败（签名文件存在但与官方公钥不匹配）")
+                throw ModuleError.badSpec("热补丁/二进制模块签名校验失败——仅接受 TequilaDash 官方签名")
+            }
+            log?("- 签名验证 [完成]")
+        }
+
+        // actions 为空是合法的 —— 前提是模块有**别的入口**：
+        // binary（自启动服务）/ lua（脚本）/ ui（原生 SwiftUI 界面）。
+        // 注意： v0.3.482 修：原来漏了 `hasNativeUI`，导致「功能全在原生界面里、
+        // 不声明任何 action」的模块在导入时被拒
+        //（真机报「模块未声明任何 action」）。模块仓库的 validate.py 早就允许了，
+        // 宿主这里没跟上 —— 两处校验必须同步改。
+        guard !module.actions.isEmpty
+                || module.isBinaryModule
+                || module.isLuaModule
+                || module.hasNativeUI else {
+            throw ModuleError.badSpec("模块未声明任何 action，也没有 binary / lua / ui 入口")
+        }
+        // 校验动作声明（v0.3.159：type 自由——非 signal 一律走通用桥调用，语义由模块决定；
+        // 只校验字段完备性：signal 需 process，桥调用需 symbol）
+        for action in module.actions {
+            if action.type == "signal" {
+                guard action.process != nil, !action.process!.isEmpty else {
+                    throw ModuleError.badSpec("signal 动作「\(action.label)」缺少 process 字段")
+                }
+            } else {
+                guard action.symbol != nil, !action.symbol!.isEmpty else {
+                    throw ModuleError.badSpec("动作「\(action.label)」缺少 symbol 字段（桥调用必需）")
+                }
+            }
+        }
+
+        // 安装：Modules/<id>/（同 id 覆盖升级）
+        guard FileManager.default.fileExists(atPath: extractedRoot.appendingPathComponent("module.json").path) else {
+            throw ModuleError.missingManifest("zip 内缺少合法的 module.json")
+        }
+        let dest = modulesRoot.appendingPathComponent(module.id, isDirectory: true)
+        if FileManager.default.fileExists(atPath: dest.path) {
+            // v0.3.93 升级导入：data/ 原位保留（用户数据库/配置在里面），
+            // 只清掉 data/ 以外的旧内容，再把新版本逐项并入——不做暂存/还原.
+            log?("- 检测到旧版本，覆盖升级（data/ 原位保留）")
+            let fm = FileManager.default
+            for item in try fm.contentsOfDirectory(atPath: dest.path) where item != "data" {
+                try fm.removeItem(at: dest.appendingPathComponent(item))
+            }
+            for item in try fm.contentsOfDirectory(atPath: extractedRoot.path) where item != "data" {
+                let dst = dest.appendingPathComponent(item)
+                if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
+                try fm.moveItem(at: extractedRoot.appendingPathComponent(item), to: dst)
+            }
+            log?("- 安装到 Documents/Modules/\(module.id) [完成]")
+        } else {
+            try FileManager.default.moveItem(at: extractedRoot, to: dest)
+            log?("- 安装到 Documents/Modules/\(module.id) [完成]")
+        }
+        print("[Module] 导入成功: \(module.id) v\(module.version)")
+
+        // 导入后钩子：热补丁聚合刷新 + 二进制模块自启动
+        DispatchQueue.main.async {
+            HotfixService.shared.reload()
+            if module.isBinaryModule, module.autoStart == true || module.binary?.autoStart == true {
+                BinaryModuleRunner.shared.start(module: module)
+            }
+        }
+        return module
+    }
+
+    // MARK: 删除
+
+    func delete(id: String) {
+        guard inPlaceBundled[id] == nil else {
+            print("[Module] \(id) 为内置原地模块，不可卸载")
+            return
+        }
+        let dir = modulesRoot.appendingPathComponent(id, isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        // 若是内置模块，记录用户卸载意愿——重启后不再自动回归
+        if Bundle.main.url(forResource: "BundledModules/\(id)/module.json", withExtension: nil) != nil {
+            var ids = uninstalledIds
+            ids.insert(id)
+            UserDefaults.standard.set(Array(ids), forKey: Self.uninstalledKey)
+        }
+    }
+
+    // MARK: 启用 / 禁用（.disabled 标记文件；内置原地模块存 UserDefaults——bundle 只读）
+
+    private static let disabledInPlaceKey = "Module.disabled.inplace"
+
+    private var disabledInPlace: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: Self.disabledInPlaceKey) ?? [])
+    }
+
+    func isEnabled(id: String) -> Bool {
+        if inPlaceBundled[id] != nil {
+            // bundle 只读：禁用状态存 UserDefaults（修复禁用后重启自动恢复启用的 bug）
+            return !disabledInPlace.contains(id)
+        }
+        let marker = modulesRoot.appendingPathComponent(id).appendingPathComponent(".disabled")
+        return !FileManager.default.fileExists(atPath: marker.path)
+    }
+
+    func setEnabled(id: String, _ enabled: Bool) {
+        if inPlaceBundled[id] != nil {
+            var s = disabledInPlace
+            if enabled { s.remove(id) } else { s.insert(id) }
+            UserDefaults.standard.set(Array(s), forKey: Self.disabledInPlaceKey)
+            return
+        }
+        let marker = modulesRoot.appendingPathComponent(id).appendingPathComponent(".disabled")
+        if enabled {
+            try? FileManager.default.removeItem(at: marker)
+        } else {
+            FileManager.default.createFile(atPath: marker.path, contents: nil)
+        }
+    }
+
+    /// 手动恢复全部内置模块（清空卸载记录 + 重新安装缺失的）——双锚点都不变时的兜底
+    func restoreBundledModules() {
+        UserDefaults.standard.removeObject(forKey: Self.uninstalledKey)
+        bootstrapBundledModules()
+    }
+
+    // MARK: WebView 支持（对齐 KernelSU webroot 机制）
+
+    /// 模块 webroot 目录（须含 index.html）；未声明或目录缺失返回 nil.
+    func webrootURL(for module: EscapeModule) -> URL? {
+        guard let wr = module.webroot, !wr.isEmpty else { return nil }
+        let dir = module.installURL.appendingPathComponent(wr, isDirectory: true)
+        guard FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("index.html").path) else { return nil }
+        return dir
+    }
+
+    // MARK: 执行动作（Rust FFI 管道 + 通用桥调用 v0.3.159）
+
+    /// 执行模块动作.宿主只提供执行接口，动作语义完全由模块声明决定：
+    /// - type == "signal"：按进程名下发信号（原有，Rust FFI 进程列表）
+    /// - 其他 type（如 "bridge"）：通用桥调用——dlsym action.symbol，按
+    ///   action.args 声明解析实参（randomPassword/dataDir/moduleDir/"str:xxx"），
+    ///   按 args 数量分派符号签名（0 → fn()；1 → fn(a)；2 → fn(a, b)），
+    ///   rc==0 时用 action.success 模板组装结果消息（{0}/{1} 替换实际实参）.
+    ///   功能是什么、界面展示什么，全部由模块自行决定，宿主零适配.
+    func run(action: EscapeModuleAction, module: EscapeModule) throws -> String {
+        // v1.3：门禁——模块声明的宿主能力 / 最低宿主版本不满足就拒绝执行，
+        // 而不是让它跑到一半在运行时静默失败
+        let issues = module.blockingIssues
+        if !issues.isEmpty {
+            throw ModuleError.badAction(
+                "模块「\(module.name)」不可用：\(issues.joined(separator: "；"))（请升级 TequilaDash）")
+        }
+        if action.type == "signal" {
+            return try runSignal(action)
+        }
+        // 通用桥调用（type 任意非 signal 值均走此接口，模块自定义语义）
+        guard let symbol = action.symbol, !symbol.isEmpty else {
+            throw ModuleError.badAction("动作「\(action.label)」缺少 symbol 字段")
+        }
+        let (rc, actual) = try BinaryModuleRunner.bridgeCall(
+            module: module, symbol: symbol, argSpecs: action.args ?? [])
+        guard rc == 0 else {
+            throw ModuleError.badAction("「\(action.label)」执行失败 rc=\(rc)（详见模块日志）")
+        }
+        var message = action.success ?? "执行成功"
+        for (idx, value) in actual.enumerated() {
+            message = message.replacingOccurrences(of: "{\(idx)}", with: value)
+        }
+        return message
+    }
+
+    /// signal 子流程（原有）
+    private func runSignal(_ action: EscapeModuleAction) throws -> String {
+        guard let procName = action.process, !procName.isEmpty else {
+            throw ModuleError.badAction("signal 动作缺少 process 字段")
+        }
+        let sig = parseSignal(action.signal)
+
+        // 枚举进程：宿主内部会**先查 RSD 服务表再选路**（app_service 不在就自动走 DVT 回退），
+        // 这里只需把「连不上」翻译成人话，不再把裸 ServiceNotFound 弹给用户。
+        let entries: [ProcessEntry]
+        do {
+            entries = try ProcessManagerService.shared.listProcesses()
+        } catch {
+            throw ModuleError.badAction(Self.humanizeProcessError(error, phase: "枚举设备进程"))
+        }
+
+        let matched = entries.filter {
+            $0.displayName.localizedCaseInsensitiveContains(procName) ||
+            $0.executablePath.localizedCaseInsensitiveContains(procName)
+        }
+
+        guard !matched.isEmpty else {
+            throw ModuleError.processNotFound(
+                "设备进程列表中未找到「\(procName)」（系统守护进程可能对宿主不可见）")
+        }
+
+        var killed: [String] = []
+        var failed: [String] = []
+        for entry in matched {
+            do {
+                // 带上期望名：宿主走 DVT 回退时会用它核对 PID，避免复用误杀。
+                try ProcessManagerService.shared.sendSignal(
+                    sig, toPID: Int(entry.pid), expectedName: entry.displayName)
+                killed.append("\(entry.displayName)(\(entry.pid))")
+            } catch {
+                failed.append("\(entry.displayName): \(Self.humanizeProcessError(error, phase: "结束进程"))")
+            }
+        }
+
+        var summary = "已下发 \(sigName(sig)) → \(killed.count) 个进程"
+        if !killed.isEmpty { summary += "：\(killed.joined(separator: "、"))" }
+        if !failed.isEmpty { summary += "；失败 \(failed.count)：\(failed.joined(separator: "、"))" }
+        return summary
+    }
+
+    /// 把宿主进程管理层的 FFI 错误翻译成用户能看懂、能行动的中文。
+    ///
+    /// `ServiceNotFound` 是 Rust 枚举的 Debug 名（由 `errors.rs` 的 `format!("{:?}", err)` 生成），
+    /// 直接弹给用户毫无信息量。错误码 21 的成因见 `ProcessManagerView.swift` 类头注释。
+    private static func humanizeProcessError(_ error: Error, phase: String) -> String {
+        let ns = error as NSError
+        let raw = ns.localizedDescription
+        // 码 21 = `IdeviceError::ServiceNotFound`（`errors.rs` 用 `format!("{:?}")` 生成 message，
+        // 所以弹窗里会看到裸枚举名）。domain 判定兜底 message 为空的情形。
+        if ns.domain == "ProcessManager", ns.code == 21 || raw.contains("ServiceNotFound") {
+            return "\(phase)失败：设备的进程服务（app_service）未广播，且 DVT 回退通道也不可用."
+                + "请确认 LocalDevVPN 已连接后重试；若持续失败，重启设备通常可恢复."
+        }
+        return "\(phase)失败：\(raw)"
+    }
+
+    private func parseSignal(_ s: String?) -> ProcessControlAction {
+        // 宿主 sendSignal 支持三种信号；SIGTERM 按 terminate 语义映射到 SIGKILL
+        switch (s ?? "SIGKILL").uppercased() {
+        case "SIGSTOP": return .pause
+        case "SIGCONT": return .resume
+        case "SIGTERM", "SIGKILL": return .kill
+        default: return .kill
+        }
+    }
+
+    private func sigName(_ a: ProcessControlAction) -> String {
+        switch a {
+        case .kill: return "SIGKILL"
+        case .pause: return "SIGSTOP"
+        case .resume: return "SIGCONT"
+        }
+    }
+}
+
+// MARK: - 错误
+
+enum ModuleError: LocalizedError {
+    case badArchive(String)
+    case missingManifest(String)
+    case badSpec(String)
+    case badAction(String)
+    case processNotFound(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .badArchive(let m): return m
+        case .missingManifest(let m): return m
+        case .badSpec(let m): return m
+        case .badAction(let m): return m
+        case .processNotFound(let m): return m
+        }
+    }
+}

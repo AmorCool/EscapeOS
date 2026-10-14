@@ -124,7 +124,7 @@ async fn rsd_checkin(stream: &mut Box<dyn ReadWrite>) -> Result<(), IdeviceError
     send_xml(
         stream,
         &format!(
-            "{}<dict><key>Label</key><string>EscapeSpaceMCInstall</string>\
+            "{}<dict><key>Label</key><string>TequilaDashMCInstall</string>\
              <key>ProtocolVersion</key><string>2</string>\
              <key>Request</key><string>RSDCheckin</string></dict></plist>",
             PLIST_HEADER

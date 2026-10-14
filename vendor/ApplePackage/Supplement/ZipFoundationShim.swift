@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - ZIPFoundation 兼容层（EscapeSpace / Theos 适配）
+// MARK: - ZIPFoundation 兼容层（TequilaDash / Theos 适配）
 //
 // ApplePackage 用 ZIPFoundation 往下载的 IPA 里注入 sinf（App Store 的
 // FairPlay 签名数据，缺它 IPA 装不上）。Theos 不能引 SwiftPM，所以这里用

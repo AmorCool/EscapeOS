@@ -15,7 +15,7 @@
 本脚本是「以后不会再有人把 scheme 写错、把白名单删掉、把 case 漏接」的守门人.
 
 检查范围：
-  · `EscapeOS/Engine/TunnelProvider.swift`
+  · `TequilaDash/Engine/TunnelProvider.swift`
   · `Resources/Info.plist` 的 `LSApplicationQueriesSchemes` 数组
 
 检查规则：
@@ -30,14 +30,14 @@
 
 用法：
     python swift_tunnel_jump_target_guard.py [仓库根，默认 .]
-    仓库根 = 含 EscapeOS/ 的那一层（即 P1_EscapeOS_宿主仓库）
+    仓库根 = 含 TequilaDash/ 的那一层（即 P1_TequilaDash_宿主仓库）
 退出码：0 = 全部通过；1 = 有 ERROR；2 = 参数/路径错误。
 """
 import os
 import re
 import sys
 
-SWIFT_REL = os.path.join("EscapeOS", "Engine", "TunnelProvider.swift")
+SWIFT_REL = os.path.join("TequilaDash", "Engine", "TunnelProvider.swift")
 PLIST_REL = os.path.join("Resources", "Info.plist")
 
 SURGE_SCHEME = "surge:///start"

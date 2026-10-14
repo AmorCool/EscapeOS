@@ -10,7 +10,7 @@
                 <key>IfLostReturnToMessage</key>
                 <string></string>
                 <key>PayloadIdentifier</key>
-                <string>com.escapeos.supervised.footnote.payload</string>
+                <string>com.tequiladash.supervised.footnote.payload</string>
                 <key>PayloadType</key>
                 <string>com.apple.shareddeviceconfiguration</string>
                 <key>PayloadUUID</key>
@@ -22,11 +22,11 @@
         <key>PayloadDisplayName</key>
         <string>锁屏页脚（监管）</string>
         <key>PayloadOrganization</key>
-        <string>EscapeSpace</string>
+        <string>TequilaDash</string>
         <key>PayloadDescription</key>
         <string>在锁屏底部添加一段页脚文字（如丢失返还信息 / 资产标签）。</string>
         <key>PayloadIdentifier</key>
-        <string>com.escapeos.supervised.footnote</string>
+        <string>com.tequiladash.supervised.footnote</string>
         <key>PayloadType</key>
         <string>Configuration</string>
         <key>PayloadUUID</key>

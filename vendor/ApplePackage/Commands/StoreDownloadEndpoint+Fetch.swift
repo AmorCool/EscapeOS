@@ -383,7 +383,7 @@ extension StoreDownloadEndpoint {
     /// 其它任何情况返回 `(status, snippet非nil)`。
     private static func classifyBareHTTPFailure(_ error: Error) -> (Int, String?) {
         let ns = error as NSError
-        guard ns.domain == "EscapeOS.Ensure" else {
+        guard ns.domain == "TequilaDash.Ensure" else {
             // 非 Ensure 域（网络层等）→ 没有可信状态码，按「不可用第三跳」处理。
             let code = ns.code > 0 ? ns.code : -1
             return (code, "(non-ensure)")

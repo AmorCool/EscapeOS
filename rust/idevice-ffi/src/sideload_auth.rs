@@ -119,7 +119,7 @@ pub unsafe fn apple_signin(
     let apple_id = opt(apple_id, "");
     let password = opt(password, "");
     let anisette_url = opt(anisette_url, "https://ani.sidestore.io");
-    let machine_name = opt(machine_name, "EscapeSpace");
+    let machine_name = opt(machine_name, "TequilaDash");
     let storage_dir = opt(storage_dir, ".");
     let twofa = make_2fa(twofa_cb, TwoFaCtx(ctx));
 
@@ -169,7 +169,7 @@ pub unsafe fn apple_signin(
             );
 
             // 取出本次登录的 dsid + xcode.auth token，供调用方持久化后免登录恢复。
-            // 依赖 EscapeOS 的 isideload fork 暴露的 DeveloperSession::get_adsid /
+            // 依赖 TequilaDash 的 isideload fork 暴露的 DeveloperSession::get_adsid /
             // get_token（上游未公开这两个字段）。
             let (dsid, auth_token) = {
                 let dev = sideloader.get_dev_session();
@@ -291,7 +291,7 @@ pub unsafe fn sign_ipa(
 
 /// 用已有的 dsid + xcode.auth token 恢复签名会话——**跳过登录与 2FA**。
 ///
-/// 为什么可行：EscapeOS「更多 → 设置」的 Apple ID 登录（AppleAuthenticator，
+/// 为什么可行：TequilaDash「更多 → 设置」的 Apple ID 登录（AppleAuthenticator，
 /// GrandSlam 协议）保存的 authToken 就是 `com.apple.gs.xcode.auth` 的 app token。
 /// isideload 的 `DeveloperSession::new(AppToken, adsid, GrandSlam, anisette)`
 /// 可以直接用 token + dsid 构造，无需重新走 SRP 握手/2FA。
@@ -317,7 +317,7 @@ pub unsafe fn signin_with_session(
     let token = opt(auth_token, "");
     let anisette_url = opt(anisette_url, "https://ani.sidestore.io");
     let storage_dir = opt(storage_dir, ".");
-    let machine_name = opt(machine_name, "EscapeSpace");
+    let machine_name = opt(machine_name, "TequilaDash");
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         let rt = tokio::runtime::Builder::new_multi_thread()

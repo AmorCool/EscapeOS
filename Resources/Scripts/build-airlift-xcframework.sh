@@ -1,12 +1,12 @@
 #!/bin/bash
-# Build the patched AirliftFFI.xcframework for EscapeOS.
+# Build the patched AirliftFFI.xcframework for TequilaDash.
 #
 # Why this exists (research finding, not a guess):
 #   The binary that AirBeep commits under Vendor/AirCard is a *pre-patch* build:
 #   it does not contain al_exploit_read_file / al_bytes_free / al_set_target_host.
 #   AirBeep's own CI rebuilds the xcframework from AirCard-iOS source every run
 #   (clone @ pinned commit + apply airlift-read-file.patch + build-ios.sh), then
-#   runs verify-airlift.sh.  EscapeOS follows the exact same path so the shipped
+#   runs verify-airlift.sh.  TequilaDash follows the exact same path so the shipped
 #   library always carries the patched symbols.
 #
 # Output: rust-libs/AirliftFFI.xcframework  (consumed by project.yml, kept out of
@@ -19,7 +19,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AIRCARD_REPO="${AIRCARD_REPO:-https://github.com/mak5er/AirCard-iOS.git}"
 AIRCARD_COMMIT="${AIRCARD_COMMIT:-40640c4d827aeab8d798285b57d24fcf6be070d0}"
 BUILD_PARENT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-BUILD_ROOT="$BUILD_PARENT/escapeos-aircard-$AIRCARD_COMMIT"
+BUILD_ROOT="$BUILD_PARENT/tequiladash-aircard-$AIRCARD_COMMIT"
 PATCH_FILE="$ROOT/Resources/Scripts/airlift-read-file.patch"
 OUTPUT_DIR="$ROOT/rust-libs"
 
@@ -53,7 +53,7 @@ find_nm() {
 #
 # Problem this fixes: `airlift_ffi` is a Rust `staticlib`, so rustc archives
 # *every* transitive dependency into the .a — std, core, alloc, the upstream
-# `idevice` crate and a vendored `idevice_ffi` fork.  EscapeOS links its OWN
+# `idevice` crate and a vendored `idevice_ffi` fork.  TequilaDash links its OWN
 # Rust staticlib next to it (rust-libs/libidevice_ffi.xcframework, built from
 # rust/idevice-ffi), which embeds the same std/core and an `idevice_ffi` of the
 # same name but a different build.  Both archives therefore define the same
@@ -65,7 +65,7 @@ find_nm() {
 #     (ld64/src/ld/Options.cpp: the "-multiply_defined" branch only does `++i`),
 #     so -Wl,-multiply_defined,suppress is a no-op.
 #   * -allow_dead_duplicates only downgrades the diagnostic, and would let ld64
-#     bind airlift's calls to *EscapeOS's* idevice_ffi fork arbitrarily.
+#     bind airlift's calls to *TequilaDash's* idevice_ffi fork arbitrarily.
 #   * SymbolTable.cpp::checkDuplicateSymbols() throws unconditionally.
 #   * `-C link-arg=-Wl,-exported_symbols_list` at cargo-build time does nothing:
 #     for crate-type=staticlib rustc archives objects with its own writer and
@@ -95,7 +95,7 @@ localize_airlift_symbols() {
   "$nm" -gU --defined-only "$lib" 2>/dev/null \
     | awk '$NF ~ /^_al_/ {print $NF}' | sort -u > "$exports" || true
 
-  # 2) Refuse to ship a library that hides symbols EscapeOS calls.
+  # 2) Refuse to ship a library that hides symbols TequilaDash calls.
   for required in _al_exploit_read_file _al_exploit_write_dir _al_set_target_host \
                   _al_bytes_free _al_string_free; do
     if ! grep -qx "$required" "$exports"; then
@@ -176,7 +176,7 @@ rm -rf "$OUTPUT_DIR/AirliftFFI.xcframework"
 cp -R "$BUILD_ROOT/AirliftFFI.xcframework" "$OUTPUT_DIR/AirliftFFI.xcframework"
 
 # Reduce airlift_ffi's public surface to the `al_*` ABI before it reaches the app
-# link, so it no longer collides with EscapeOS's own libidevice_ffi.a.
+# link, so it no longer collides with TequilaDash's own libidevice_ffi.a.
 while IFS= read -r airlift_lib; do
   localize_airlift_symbols "$airlift_lib" "$NM_BIN"
 done < <(find "$OUTPUT_DIR/AirliftFFI.xcframework" -name 'libairlift_ffi.a' -print)

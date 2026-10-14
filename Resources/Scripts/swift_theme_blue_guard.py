@@ -9,9 +9,9 @@
 修复：合并为**单一自适应 token** `AppTheme.accent` —— 亮 `#005493`（TRApp 实测 Accent）、
 暗 `#76D6FF`（提亮保证对比度），并删除 `trAccent`。本脚本把三条不变量机械守住：
 
-  G1  `trAccent` 不得在任何 `EscapeOS/**/*.swift` 的**代码**里复现（注释里的历史说明
+  G1  `trAccent` 不得在任何 `TequilaDash/**/*.swift` 的**代码**里复现（注释里的历史说明
       不计）—— 一旦有人再引入第二套蓝即报。
-  G2  `EscapeOS/Views/DesignSystem.swift` 的 `accent` 必须是**自适应色**（定义体内出现
+  G2  `TequilaDash/Views/DesignSystem.swift` 的 `accent` 必须是**自适应色**（定义体内出现
       `userInterfaceStyle` + `.dark` 分支）—— 退回写死单值（`systemBlue` 或裸 sRGB）即报。
   G3  同文件的 `switchOnTint` 不得是独立写死的 sRGB 蓝字面量（须引用 `accent` 或走
       `userInterfaceStyle` 自适应）—— 防止经由开关色再次分叉出第二套蓝。
@@ -23,7 +23,7 @@
       `TintedButtonStyle()`（透明淡蓝）。
   G6  不得用 `Color.blue.opacity(...)` 做淡底 —— systemBlue 与品牌蓝 `AppTheme.accent`
       不一致（第二套蓝残留）；应改 `AppTheme.accent.opacity(...)`。
-  G7  `BrandProminentButtonStyle` 不得在任何 `EscapeOS/**/*.swift` 的**代码**里复现 ——
+  G7  `BrandProminentButtonStyle` 不得在任何 `TequilaDash/**/*.swift` 的**代码**里复现 ——
       那是**全宽深色渐变实底按钮**（`brandGradient` 铺满一整行），用户已明确反馈「那个开始修复
       按钮颜色太丑了」。主行动按钮应改 `TintedButtonStyle(tint: AppTheme.accent,
       radius: AppRadius.button)`（半透明着色 + 发丝描边）。
@@ -187,11 +187,11 @@ def _find_all(hay, needle):
 
 def check(root):
     errs = []
-    views = os.path.join(root, "EscapeOS", "Views")
+    views = os.path.join(root, "TequilaDash", "Views")
     design = os.path.join(views, "DesignSystem.swift")
 
     # ── G1 / G5 / G6：全仓符号扫描（一次遍历）──
-    for path in _iter_swift_files(os.path.join(root, "EscapeOS")):
+    for path in _iter_swift_files(os.path.join(root, "TequilaDash")):
         raw = io.open(path, encoding="utf-8").read()
         masked = _mask_comments(raw)
         rel = os.path.relpath(path, root).replace(os.sep, "/")
@@ -305,8 +305,8 @@ def main():
         print("用法：swift_theme_blue_guard.py <仓库根>")
         return 2
     root = sys.argv[1]
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         return 2
     errs = check(root)
     print("-" * 72)

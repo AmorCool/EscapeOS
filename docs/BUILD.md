@@ -4,7 +4,7 @@ This repository carries exactly **one** build track.
 
 | Track | Defined by | Status | Output |
 |---|---|---|---|
-| **Xcode 27 native** | `.github/workflows/build-xcode.yml` | **Active** | `EscapeSpace-<version>-xcode-unsigned.ipa` + `EscapeSpace-Tunnel-<version>-xcode-unsigned.ipa` |
+| **Xcode 27 native** | `.github/workflows/build-xcode.yml` | **Active** | `TequilaDash-<version>-xcode-unsigned.ipa` + `TequilaDash-Tunnel-<version>-xcode-unsigned.ipa` |
 
 `.github/workflows/build-xcode.yml` is the **only** workflow in the tree, so a `v*` tag starts
 exactly one run.
@@ -40,28 +40,28 @@ jobs: `promote` (decides whether a prior successful build of the same commit can
 2. **Select Xcode 27** — prefer the newest `/Applications/Xcode_27*.app`, falling back to the
    newest `Xcode_26*.app`, then to any `Xcode*.app`. A following step installs the Metal
    toolchain, which Xcode 27 ships as a separate component
-   (`xcodebuild -downloadComponent MetalToolchain`; the repo has `EscapeOS/Views/LiquidGlassOrb.metal`).
+   (`xcodebuild -downloadComponent MetalToolchain`; the repo has `TequilaDash/Views/LiquidGlassOrb.metal`).
 3. **Install tooling** via Homebrew: `xcodegen`, `cmake` (no `ldid` — it was removed from the
    dependency list).
 4. **Restore caches** — SAP assets + `DerivedData`, the Rust toolchain, the Cargo registry, and
-   sccache. The Cargo and sccache caches use the shared `escapeos-build-cache` scope.
+   sccache. The Cargo and sccache caches use the shared `tequiladash-build-cache` scope.
 5. **Build `libidevice_ffi.a`** for `aarch64-apple-ios` from the vendored `rust/idevice-ffi`
    source, unless the cross-run artifact cache reports a source-hash hit. Then assemble
-   `rust-libs/libidevice_ffi.xcframework` and copy `idevice.h` to `EscapeOS/Tunnel/`.
+   `rust-libs/libidevice_ffi.xcframework` and copy `idevice.h` to `TequilaDash/Tunnel/`.
 6. **Sync bundled modules** — shallow-clone `AmorCool/module-esc` and copy `modules/*` into
    `Resources/BundledModules/`.
 7. **Build `libcrypto.a`** from OpenSSL 3.3.2 (`iphoneos-cross no-asm`), cached in
    `openssl-build/`. ZSign's ad-hoc re-signing needs it.
-8. **`xcodegen generate`** — `project.yml` produces `EscapeSpace.xcodeproj`.
+8. **`xcodegen generate`** — `project.yml` produces `TequilaDash.xcodeproj`.
 9. **`xcodebuild build`** with `CODE_SIGNING_ALLOWED=NO`, `CODE_SIGN_IDENTITY=""`,
    `CODE_SIGNING_REQUIRED=NO`, `-derivedDataPath build`. Compiled errors are re-emitted as
    `::error::` annotations, because the anonymous API can read annotations but not the job log.
-10. **Package the IPAs (dual version)** — from the one compiled `EscapeSpace.app`, produce two
+10. **Package the IPAs (dual version)** — from the one compiled `TequilaDash.app`, produce two
     archives by copying the app into `Payload/` and `zip -r` from the parent directory, so each
-    archive root is `Payload/EscapeSpace.app/...`:
-    - **standard**: bundle `EscapeSpace.entitlements` (no Network Extension rights);
-    - **tunnel**: bundle `EscapeSpace-Tunnel.entitlements` on the app **and**
-      `EscapeOSTunnel.entitlements` inside `PlugIns/EscapeOSTunnel.appex`, both granting
+    archive root is `Payload/TequilaDash.app/...`:
+    - **standard**: bundle `TequilaDash.entitlements` (no Network Extension rights);
+    - **tunnel**: bundle `TequilaDash-Tunnel.entitlements` on the app **and**
+      `TequilaDashTunnel.entitlements` inside `PlugIns/TequilaDashTunnel.appex`, both granting
       `packet-tunnel-provider`.
 
     The two IPAs are byte-identical except for the entitlements files they carry — no second
@@ -70,14 +70,14 @@ jobs: `promote` (decides whether a prior successful build of the same commit can
     missing bundle means Apple ID sign-in will fail at runtime. The tunnel IPA is additionally
     checked for the Network Extension entitlement on both the app and the `.appex`.
 12. **Publish the Release** — only on a `v*` tag. Creates
-    `EscapeSpace <tag> (Xcode native)` if absent, otherwise re-uploads the assets with
+    `TequilaDash <tag> (Xcode native)` if absent, otherwise re-uploads the assets with
     `--clobber`. Both IPAs are attached.
 
 ### Output
 
 ```
-EscapeSpace-<MARKETING_VERSION>-xcode-unsigned.ipa
-EscapeSpace-Tunnel-<MARKETING_VERSION>-xcode-unsigned.ipa
+TequilaDash-<MARKETING_VERSION>-xcode-unsigned.ipa
+TequilaDash-Tunnel-<MARKETING_VERSION>-xcode-unsigned.ipa
 ```
 
 The version in each file name is read from the `MARKETING_VERSION` line of `project.yml`. For
@@ -96,11 +96,11 @@ The build deliberately skips code signing:
   (`ldid.cpp(852)`) and the shipped artifact is not meant to be signed.
 - Instead, an entitlements file is copied into the `.app` next to the binary, so the sideloading
   tool you use (Sideloadly, ESign, TrollStore) applies it:
-  - the standard IPA carries `EscapeSpace.entitlements`, granting `get-task-allow`,
+  - the standard IPA carries `TequilaDash.entitlements`, granting `get-task-allow`,
     `com.apple.wifi.manager-access`, and `com.apple.wifi.join-any`;
-  - the tunnel IPA carries `EscapeSpace-Tunnel.entitlements` (the same three **plus**
+  - the tunnel IPA carries `TequilaDash-Tunnel.entitlements` (the same three **plus**
     `com.apple.developer.networking.networkextension` = `packet-tunnel-provider`) on the app, and
-    `EscapeOSTunnel/EscapeOSTunnel.entitlements` inside the embedded `.appex`. Signing the tunnel
+    `TequilaDashTunnel/TequilaDashTunnel.entitlements` inside the embedded `.appex`. Signing the tunnel
     build therefore needs a certificate that includes the Network Extension capability, and the
     signer must apply the extension's entitlements too.
 
@@ -117,8 +117,8 @@ produce. With Xcode 27 and `brew install xcodegen`:
 
 xcodegen generate
 xcodebuild build \
-  -project EscapeSpace.xcodeproj \
-  -scheme EscapeSpace-iOS \
+  -project TequilaDash.xcodeproj \
+  -scheme TequilaDash-iOS \
   -configuration Release \
   -sdk iphoneos \
   -destination 'generic/platform=iOS' \
@@ -126,11 +126,11 @@ xcodebuild build \
   CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
 ```
 
-Key settings, all in `project.yml`: `PRODUCT_NAME = EscapeSpace`,
-`PRODUCT_BUNDLE_IDENTIFIER = com.ipaside.escapeos`, `IPHONEOS_DEPLOYMENT_TARGET = 18.0`,
+Key settings, all in `project.yml`: `PRODUCT_NAME = TequilaDash`,
+`PRODUCT_BUNDLE_IDENTIFIER = com.ipaside.tequiladash`, `IPHONEOS_DEPLOYMENT_TARGET = 18.0`,
 `SWIFT_VERSION = 6.0`, `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` for the version.
 
-Sources are declared at **directory** level (`EscapeOS`, `ZSign`, `Resources`, and the vendored
+Sources are declared at **directory** level (`TequilaDash`, `ZSign`, `Resources`, and the vendored
 packages), so new `.swift` files need no project registration. (`ZSign` is a **runtime**
 dependency of the app — it signs native modules — so it stays even though the Theos track is
 gone.)
@@ -144,16 +144,16 @@ second IPA into the same Release.
 
 | Item | Where it comes from | Notes |
 |---|---|---|
-| `EscapeOS/Tunnel/libidevice_ffi.a` | Built from `rust/idevice-ffi` in CI | **Git-ignored** (`.gitignore`). Never committed. |
+| `TequilaDash/Tunnel/libidevice_ffi.a` | Built from `rust/idevice-ffi` in CI | **Git-ignored** (`.gitignore`). Never committed. |
 | `rust/idevice-ffi/` | Vendored `jkcoxson/idevice` FFI (BSD-3) plus the `si_run_host` engine | Built for `aarch64-apple-ios`; `IPHONEOS_DEPLOYMENT_TARGET` is pinned to 18.0 to match the app. |
 | `rust-libs/libidevice_ffi.xcframework` | Assembled by the Xcode workflow before `xcodegen generate` | Referenced by `project.yml`; absent from a fresh clone. |
 | `openssl-build/libcrypto.a` | OpenSSL 3.3.2, `iphoneos-cross no-asm` | Needed by ZSign. Cached across runs. |
 | `Resources/BundledModules/` | `AmorCool/module-esc`, cloned during the Xcode build | Folder reference in the bundle, so the `<id>/module.json` layout is preserved. |
 | `Resources/SAPAssets/` | `Resources/Scripts/prepare.sap.py` (preBuildScript) | Unicorn + Apple SAP assets. Missing assets break Apple ID sign-in. |
-| `Resources/AppIcon*.png`, `docs/brand/icon.png` | `python3 tools/generate_icons.py` | Regenerates the PNG set from `assets/EscapeOS-icon-master.png` (1024x1024, transparent corners). Requires Pillow. |
+| `Resources/AppIcon*.png`, `docs/brand/icon.png` | `python3 tools/generate_icons.py` | Regenerates the PNG set from `assets/TequilaDash-icon-master.png` (1024x1024, transparent corners). Requires Pillow. |
 
 A prebuilt `libidevice_ffi.a` (97,089,368 bytes) still exists as an asset of the legacy
-`pwnapplehat/EscapeOS` v0.1.5 release. The current repository's Releases carry **only the IPA** —
+`pwnapplehat/TequilaDash` v0.1.5 release. The current repository's Releases carry **only the IPA** —
 there is no `.a` to download from them.
 
 ---

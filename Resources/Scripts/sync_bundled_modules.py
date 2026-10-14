@@ -10,7 +10,7 @@
 所以「哪些内置」必须由**模块自己声明**，不能靠 CI 里硬编码。
 
 v0.3.481 真机踩到的坑：旧实现是 `cp -R _module-esc/modules/*` + 硬编码
-`rm -rf .../com.escapeos.alist`，于是新加的模块被自动打包成了内置模块
+`rm -rf .../com.tequiladash.alist`，于是新加的模块被自动打包成了内置模块
 （而那个模块用户明确要求它是独立的）。而且每加一个不内置的模块都要回来改一次 workflow ——
 典型的「为模块适配构建脚本」。
 
@@ -35,7 +35,7 @@ v0.3.481 真机踩到的坑：旧实现是 `cp -R _module-esc/modules/*` + 硬�
 （宿主的 `ModuleUIRegistry` 头注释写的就是这件事.）
 
 **所以采取的折中**：UI **源码**放进模块仓库的 `modules/<id>/ui/`，
-本脚本在 **xcodegen 之前**把它拷到 `EscapeOS/Modules/<id>/`，
+本脚本在 **xcodegen 之前**把它拷到 `TequilaDash/Modules/<id>/`，
 于是宿主编译时自然带上 —— 模块仓库成为 UI 的唯一数据源，宿主仓库不再持有副本.
 
 代价：改 UI 仍需**重编宿主**（做不到热更新）. 要热更新只能走 `webroot`（HTML）那条路.
@@ -45,7 +45,7 @@ v0.3.481 真机踩到的坑：旧实现是 `cp -R _module-esc/modules/*` + 硬�
     python3 Resources/Scripts/sync_bundled_modules.py <module-esc 克隆目录> [目标目录]
 
 目标目录默认 `Resources/BundledModules`（相对仓库根，脚本会自己找根）。
-⚠️ **本地开发也要跑一次**，否则 `EscapeOS/Modules/` 是空的、
+⚠️ **本地开发也要跑一次**，否则 `TequilaDash/Modules/` 是空的、
 内置模块的原生界面符号找不到、编译失败.
 
 退出码：0 成功；1 参数/IO 错误。
@@ -63,13 +63,13 @@ def repo_root() -> str:
 
 
 def sync_ui_sources(src_root: str, root: str) -> list:
-    """把每个模块 `ui/` 下的 .swift 拷到 `EscapeOS/Modules/<id>/`.
+    """把每个模块 `ui/` 下的 .swift 拷到 `TequilaDash/Modules/<id>/`.
 
     ## 为什么要**先清空再拷**
     模块改名 / 删文件后，旧副本会留在宿主源码树里继续参与编译 ——
     那是最难查的一类「幽灵编译错误」. 所以每个模块目录整体重建.
     """
-    dst_root = os.path.join(root, "EscapeOS", "Modules")
+    dst_root = os.path.join(root, "TequilaDash", "Modules")
     os.makedirs(dst_root, exist_ok=True)
 
     synced = []
@@ -87,7 +87,7 @@ def sync_ui_sources(src_root: str, root: str) -> list:
         os.makedirs(dst_ui, exist_ok=True)
         # 只拷 .swift —— ui/ 里的 README.md 之类**不能**进宿主源码树：
         #   它们会被当资源拷进 .app 根目录，两个同名 README 直接报
-        #   「Multiple commands produce .../EscapeSpace.app/README.md」（v0.3.506 实锤）.
+        #   「Multiple commands produce .../TequilaDash.app/README.md」（v0.3.506 实锤）.
         count = 0
         for f in sorted(os.listdir(src_ui)):
             if not f.endswith(".swift"):

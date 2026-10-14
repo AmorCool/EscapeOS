@@ -6,18 +6,18 @@
 v0.3.588 内嵌快照直链过期即现取），把四条**只有人工 review 才看得出**的不变量机械守住，
 防「拆东补西」式回归：
 
-  G1  `EscapeOS/Engine/NBStoreClient.swift` 的 `offSalePackage` 必须保留
+  G1  `TequilaDash/Engine/NBStoreClient.swift` 的 `offSalePackage` 必须保留
       「内嵌包缺失 → 回退 `getAppHistoryList` 取包」这条回退（有人删回退即报）。
       取包调用现落在 `packageWithFallback(...)`（v0.3.592 起），故 `package(appID:...)` 与
       `packageWithFallback(...)` 二者出现其一即算通过。
   G2  同函数必须处理服务端 `code=7`（不得让 `StoreError.server(code:"7")` 直接
       冒到界面）—— 要么回 `nil`、要么转成用户看得懂的结果。
-  G3  `EscapeOS/Views/I4StoreFreeView.swift` 的 `installOffSale` 里，面向用户的
+  G3  `TequilaDash/Views/I4StoreFreeView.swift` 的 `installOffSale` 里，面向用户的
       `ToastCenter.shared.show` 不得直接插 `error.localizedDescription`
       （NB 的 `StoreError.server` 会把它格式化成 `msg（7）`，内部码会随之漏给用户）。
   G4  同 `offSalePackage` 必须对**内嵌快照直链**做 `accessKeyExpired(...)` 过期判断
       （v0.3.588）—— 快照直链的 accessKey 过期即 HTTP 403，无条件用它会导致下载必失败。
-  G5  `EscapeOS/Views/NBStoreDetailView.swift` 的 `installVersion`（详情页按版本取包）里，
+  G5  `TequilaDash/Views/NBStoreDetailView.swift` 的 `installVersion`（详情页按版本取包）里，
       `ToastCenter.shared.show` 同样不得插 `error.localizedDescription`
       （v0.3.590）—— 详情页原先漏了这条约束，用户看到「取包失败：未获取到数据（7）」这种内部码。
   G6  `getAppHistoryList` 取包必须带**版本回退**（v0.3.592）：`packageWithFallback` 存在，
@@ -215,8 +215,8 @@ def _toast_show_arg_leaks_localized(body):
 
 def check(root):
     errs = []
-    engine = os.path.join(root, "EscapeOS", "Engine", "NBStoreClient.swift")
-    view = os.path.join(root, "EscapeOS", "Views", "I4StoreFreeView.swift")
+    engine = os.path.join(root, "TequilaDash", "Engine", "NBStoreClient.swift")
+    view = os.path.join(root, "TequilaDash", "Views", "I4StoreFreeView.swift")
 
     # ── G1 / G2：引擎侧回退 + code=7 处理 ──
     if not os.path.isfile(engine):
@@ -365,7 +365,7 @@ def check(root):
                             "ToastCenter.shared.show(%s)" % arg)
 
     # ── G5：NB 详情页取包也不得把原始 error 甩给用户（v0.3.590 补）──
-    detail = os.path.join(root, "EscapeOS", "Views", "NBStoreDetailView.swift")
+    detail = os.path.join(root, "TequilaDash", "Views", "NBStoreDetailView.swift")
     if not os.path.isfile(detail):
         errs.append("[G5] 找不到 %s" % detail)
     else:
@@ -387,8 +387,8 @@ def main():
         print("用法：swift_nb_offsale_guard.py <仓库根>")
         return 2
     root = sys.argv[1]
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         return 2
     errs = check(root)
     print("-" * 72)

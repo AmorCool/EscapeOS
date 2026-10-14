@@ -299,10 +299,10 @@ def _line_span(masked, start_needle):
 
 def check(root):
     errs = []
-    engine = os.path.join(root, "EscapeOS", "Engine", "PurchaseHistoryService.swift")
-    history_view = os.path.join(root, "EscapeOS", "Views", "PurchaseHistoryView.swift")
-    store_view = os.path.join(root, "EscapeOS", "Views", "AppStoreView.swift")
-    install = os.path.join(root, "EscapeOS", "Engine", "AppStoreLocalInstallService.swift")
+    engine = os.path.join(root, "TequilaDash", "Engine", "PurchaseHistoryService.swift")
+    history_view = os.path.join(root, "TequilaDash", "Views", "PurchaseHistoryView.swift")
+    store_view = os.path.join(root, "TequilaDash", "Views", "AppStoreView.swift")
+    install = os.path.join(root, "TequilaDash", "Engine", "AppStoreLocalInstallService.swift")
 
     # ── D1 / D2 / D3：已购查询补全（三 media kind + storefront 轮询 + 合并）──
     if not os.path.isfile(engine):
@@ -415,8 +415,8 @@ def main():
         print("用法：swift_delisted_download_guard.py <仓库根>")
         return 2
     root = sys.argv[1]
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         return 2
     errs = check(root)
     print("-" * 72)

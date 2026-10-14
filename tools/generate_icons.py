@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-MASTER = ROOT / "assets" / "EscapeOS-icon-master.png"
+MASTER = ROOT / "assets" / "TequilaDash-icon-master.png"
 OUT = ROOT / "Resources"
 BRAND = ROOT / "docs" / "brand" / "icon.png"
 

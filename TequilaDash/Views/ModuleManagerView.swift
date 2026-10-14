@@ -1,0 +1,872 @@
+//
+//  ModuleManagerView.swift
+//  TequilaDash
+//
+//  模块管理主界面（v0.3.48，底栏第五个 tab；v0.3.49 卡片化重构）.
+//  卡片风格对齐 KernelSU / 爱思模块市场：名称 + 启用 Toggle + 版本/作者 +
+//  描述 + 动作按钮 + 底部「打开(WebView) / 卸载」胶囊按钮.
+//
+
+import SwiftUI
+import UniformTypeIdentifiers
+import WebKit
+
+struct ModuleManagerView: View {
+    @State private var modules: [EscapeModule] = []
+    @State private var enabledMap: [String: Bool] = [:]
+    @State private var isImporting = false
+    @State private var runningActionID: String? = nil
+    @State private var resultAlert: ModuleRunResult? = nil
+    @State private var showingLogFor: EscapeModule? = nil
+    // 安装详情（KernelSU 风格终端日志）
+    @State private var showInstallSheet = false
+    @State private var installLog: [String] = []
+    @State private var installFinished = false
+    @State private var installSucceeded = false
+    @State private var confirmAction: (module: EscapeModule, action: EscapeModuleAction)? = nil
+    @State private var uninstallTarget: EscapeModule? = nil
+    @State private var actionMenuModule: EscapeModule? = nil
+    @State private var showModuleSettings = false
+    // v0.3.197：自动恢复容器迁移 — 全屏修复进度 + 结果
+    @State private var repairInProgress: Bool = false
+    @State private var repairResult: String? = nil
+    @State private var webviewModule: EscapeModule? = nil
+    @State private var searchText = ""
+
+    var body: some View {
+        Group {
+            if modules.isEmpty {
+                emptyState
+            } else {
+                moduleList
+            }
+        }
+        .navigationTitle("模块")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                // 对齐更多板块右上角设置：齿轮 → 弹窗设置页
+                Button {
+                    showModuleSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .imageScale(.large)
+                }
+                .accessibilityLabel("模块设置")
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    isImporting = true
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                }
+                .accessibilityLabel("导入模块")
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                // v0.3.163：右上角刷新——重扫模块列表与运行状态
+                Button {
+                    reload()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("刷新模块列表")
+            }
+        }
+        .sheet(isPresented: $showModuleSettings) {
+            NavigationView {
+                List {
+                    // v0.3.164：已删除「覆盖安装后恢复内置模块」开关——内置模块
+                    // 卸载后不会随任何覆盖安装自动回归；恢复走下方手动按钮.
+                    Section {
+                        Button {
+                            ModuleService.shared.restoreBundledModules()
+                            reload()
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.clockwise")
+                                Text("立即恢复内置模块")
+                            }
+                        }
+                        .tint(.blue)
+                    } footer: {
+                        Text("内置模块被卸载后想恢复时点此（清空卸载记录并重新安装内置模块）.")
+                    }
+
+                    // v0.3.197：自动恢复容器迁移 — OpenList 等 Go 模块的 config.json
+                    // 若残留旧容器绝对路径，启动时会 mkdir 失败→ log.Fatal→杀宿主.
+                    // 这里扫所有模块的 config.json，检测到残留就按当前 dataDir
+                    // 语义重写 4 个路径字段（temp/bleve/data.db/log）.
+                    Section {
+                        Button {
+                            runContainerRepairFlow()
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                Text("检测并修复容器路径变更")
+                            }
+                        }
+                        .tint(.orange)
+                    } header: {
+                        Text("数据路径修复")
+                    } footer: {
+                        Text("App 重装或 LiveContainer 容器 UUID 变化后，模块 config.json 里的旧容器绝对路径会让 Go 模块启动时崩溃.本工具会按当前容器重写 temp/bleve/data.db/log 四个路径字段，保留网盘账号等用户配置.")
+                    }
+                }
+                .navigationTitle("模块设置")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("完成") { showModuleSettings = false }
+                    }
+                }
+            }
+        }
+        .onAppear(perform: reload)
+
+        .sheet(item: $showingLogFor) { mod in
+            ModuleLogView(module: mod) { showingLogFor = nil }
+        }
+        .refreshable { reload() }
+        // v0.3.197：容器路径修复全屏进度（阻断其它操作）
+        .fullScreenCover(isPresented: $repairInProgress) {
+            VStack(spacing: 16) {
+                ProgressView().controlSize(.large)
+                Text("正在修复容器路径…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("扫描所有模块 config.json 中残留的旧容器绝对路径，按当前 dataDir 语义重写.\n期间不启动任何模块，完成前请勿操作.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemBackground))
+            .interactiveDismissDisabled(true)
+        }
+        // 修复完成结果
+        .alert("容器路径修复", isPresented: Binding(
+            get: { repairResult != nil },
+            set: { if !$0 { repairResult = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(repairResult ?? "")
+        }
+        .background(
+            ModuleImportPicker(isPresented: $isImporting) { urls in
+                handleImport(urls)
+            }
+        )
+        .sheet(isPresented: $showInstallSheet, onDismiss: { installLog = [] }) {
+            ModuleInstallSheet(
+                lines: installLog,
+                finished: installFinished,
+                succeeded: installSucceeded,
+                onClose: { showInstallSheet = false }
+            )
+            .interactiveDismissDisabled(!installFinished)
+        }
+        .alert("执行结果", isPresented: Binding(
+            get: { resultAlert != nil },
+            set: { if !$0 { resultAlert = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(resultAlert?.message ?? "")
+        }
+        .confirmationDialog(
+            confirmAction?.action.confirm ?? "",
+            isPresented: Binding(
+                get: { confirmAction != nil },
+                set: { if !$0 { confirmAction = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("执行") {
+                if let pair = confirmAction {
+                    run(module: pair.module, action: pair.action)
+                }
+                confirmAction = nil
+            }
+            Button("取消", role: .cancel) { confirmAction = nil }
+        }
+        .confirmationDialog(
+            "确定卸载模块「\(uninstallTarget?.name ?? "")」？",
+            isPresented: Binding(
+                get: { uninstallTarget != nil },
+                set: { if !$0 { uninstallTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {Button("卸载", role: .destructive) {
+                if let m = uninstallTarget {
+                    ModuleService.shared.delete(id: m.id)
+                    reload()
+                }
+                uninstallTarget = nil
+            }
+            Button("取消", role: .cancel) { uninstallTarget = nil }
+        }
+        .confirmationDialog(
+            "选择要执行的动作",
+            isPresented: Binding(
+                get: { actionMenuModule != nil },
+                set: { if !$0 { actionMenuModule = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            ForEach(actionMenuModule?.actions ?? []) { act in
+                Button(act.label) {
+                    if let m = actionMenuModule {
+                        run(module: m, action: act)
+                    }
+                    actionMenuModule = nil
+                }
+            }
+            Button("取消", role: .cancel) { actionMenuModule = nil }
+        }
+        .sheet(isPresented: Binding(
+            get: { webviewModule != nil },
+            set: { if !$0 { webviewModule = nil } }
+        )) {
+            if let m = webviewModule {
+                // 统一内嵌打开：静态 webroot 优先，否则 binary.port 的本地 HTTP 服务页
+                let root = ModuleService.shared.webrootURL(for: m)
+                let remote = root == nil ? BinaryModuleRunner.shared.webURL(for: m) : nil
+                if let page = root?.appendingPathComponent("index.html") ?? remote {
+                    NavigationView {
+                        ModuleWebView(startPage: page, readAccessRoot: root)
+                            .ignoresSafeArea(edges: .bottom)
+                            .navigationTitle(m.name)
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .navigationBarLeading) {
+                                    Button("关闭") { webviewModule = nil }
+                                }
+                            }
+                    }
+                } else {
+                    // 模块未声明任何可打开页面（理论上不会到这：按钮只在有页面时出现）
+                    Text("该模块没有可打开的 Web 页面")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                Button("关闭") { webviewModule = nil }
+                            }
+                        }
+                }
+            }
+        }
+    }
+
+    // MARK: 子视图
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("暂无模块", systemImage: "shippingbox")
+        } description: {
+            Text("点击右上角导入 .zip 模块\n（规范 escape.module.v1）")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var moduleList: some View {
+        List {
+            // 搜索无结果时也必须保留 List（.searchable 挂在上面，
+            // 切换视图会把搜索框整个卸载）
+            if filteredModules.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else {
+                ForEach(filteredModules) { module in
+                    Section {
+                        moduleCard(module)
+                    }
+                    .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .listSectionSpacing(.compact)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "搜索模块 / 作者 / 描述")
+    }
+
+    /// KernelSU 风格模块卡片：名称+Toggle / 版本作者 / 描述 / 动作 / 打开+卸载
+    /// 二进制模块控制区：运行状态 + WebUI + 停止/启动
+    @ViewBuilder
+    private func binaryControls(_ module: EscapeModule) -> some View {
+        let runner = BinaryModuleRunner.shared
+        let running = runner.isRunning(module: module)
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(running ? Color.green : Color.secondary)
+                    .frame(width: 8, height: 8)
+                Text(running
+                     ? "后台运行中\(runner.runningProcesses[module.id].map { " (pid \($0))" } ?? "")"
+                     : (module.autoStart == true || module.binary?.autoStart == true) ? "自启动待命" : "未运行")
+                    .font(.footnote)
+                    .foregroundColor(running ? .green : .secondary)
+                Spacer()
+                if running {
+                    if runner.webURL(for: module) != nil {
+                        Button {
+                            // v0.3.157：当前界面内嵌打开（对齐 KernelSU WebUI 体验，不再跳 Safari）
+                            webviewModule = module
+                        } label: {
+                            Label("WebUI", systemImage: "globe")
+                                .font(.footnote.weight(.medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.blue)
+                    }
+                    // v0.3.159：停止等模块功能全部由「执行」菜单（actions 声明）承载，
+                    // 宿主不再内置停止按钮——动作语义完全由模块决定
+                }
+                // 启动按钮移至底栏左侧（与卸载对称，用户规范）——此处不再重复
+            }
+
+            if let err = runner.startErrors[module.id] {
+                Label(err, systemImage: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+    }
+
+    /// 模块卡片（逐像素对齐截图：白卡片 / 黑粗标题 / 灰版本作者描述 / 蓝Toggle / 灰胶囊底栏）
+    private func moduleCard(_ module: EscapeModule) -> some View {
+        let enabled = enabledMap[module.id] ?? true
+        let hasWeb = ModuleService.shared.webrootURL(for: module) != nil
+        // v0.3.481：模块自带原生 SwiftUI 二级界面（注册名已在宿主内注册）时，
+        // 「打开」走原生界面而不是 WKWebView —— 两者都有时**原生优先**.
+        let hasNativeUI = ModuleUIRegistry.shared.hasTabs(named: module.nativeUIViewName)
+        let running = BinaryModuleRunner.shared.isRunning(module: module)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            // 标题 + Toggle
+            HStack(alignment: .top) {
+                Text(module.name)
+                    .font(.title2.weight(.bold))
+                    .foregroundColor(.primary)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { enabledMap[module.id] ?? true },
+                    set: { newValue in
+                        ModuleService.shared.setEnabled(id: module.id, newValue)
+                        enabledMap[module.id] = newValue
+                    }
+                ))
+                .labelsHidden()
+                .tint(.blue)
+            }
+
+            // 版本 / 作者（灰字两行）
+            Text("版本: v\(module.version)")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Text("作者: \(module.author ?? "未知")")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            // 描述（灰字自动换行）
+            Text(module.description)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            // 签名徽章（热补丁/二进制模块）
+            if module.isHotfixModule || module.isBinaryModule {
+                Label("签名已验证", systemImage: "checkmark.seal.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
+            // v1.3：模块被阻断（缺宿主能力 / 宿主版本太老）—— 装载期就明说原因，
+            // 同时把下面的「执行 / 打开」入口置灰（而不是让用户点下去在运行时静默失败）.
+            // 这里用 `blockingIssues`（人话清单）而不是 `missingCapabilities`：后者只覆盖
+            // 能力缺失，漏掉了 minHostVersion 版本门禁。**不加「缺少宿主能力：」前缀** ——
+            // 每条 issue 自带说明（「缺少宿主能力：…」/「需要宿主 v…，当前 v…」），
+            // 加前缀会重复成「缺少宿主能力：缺少宿主能力：fs.read」.
+            if !module.blockingIssues.isEmpty {
+                Label(module.blockingIssues.joined(separator: "；") + "（请升级 TequilaDash）",
+                      systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            // 二进制模块运行区（自启动服务）
+            if module.isBinaryModule && enabled {
+                binaryControls(module)
+            }
+
+            Divider()
+
+            // 底栏：启动/执行 + 打开 在左，卸载在右（截图同款灰胶囊黑字）
+            // v0.3.161：二进制模块未运行显示「启动」，运行后同位置变「执行」（互斥）；
+            // 非二进制模块（热补丁/Lua）无运行态，始终显示「执行」.
+            HStack(spacing: 12) {
+                let showStart = enabled && module.isBinaryModule && !running
+                let showRun = enabled && !module.actions.isEmpty && (!module.isBinaryModule || running)
+                // v1.3：宿主能力缺失 → 「执行 / 打开」类入口一律置灰（.disabled 挡点击，
+                // .opacity 让「为什么点不动」一眼可见）
+                let usable = module.isUsable
+                if showStart {
+                    pill(label: "启动", icon: "play.fill") {
+                        BinaryModuleRunner.shared.start(module: module, automatic: false)
+                    }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
+                }
+                if showRun {
+                    pill(label: "执行", icon: "play.fill") {
+                        handleRun(module: module)
+                    }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
+                }
+                if enabled && module.isLuaModule {
+                    pill(label: "运行", icon: "play.fill") {
+                        runLua(module: module)
+                    }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
+                }
+                // v0.3.481：原生 SwiftUI 二级界面优先；没有再退回 webroot 的 WKWebView
+                if hasNativeUI && enabled {
+                    pill(label: "打开", icon: "square.grid.2x2") {
+                        ModuleUIRouter.shared.open(module)
+                    }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
+                } else if hasWeb && enabled {
+                    pill(label: "打开", icon: "chevron.left.forwardslash.chevron.right") {
+                        webviewModule = module
+                    }
+                    .disabled(!usable)
+                    .opacity(usable ? 1 : 0.5)
+                }
+                Spacer()
+                if ModuleService.shared.isInPlaceBundled(module.id) {
+                    // 内置原地模块不可卸载（用户规范：置灰）
+                    HStack(spacing: 6) {
+                        Image(systemName: "trash")
+                        Text("卸载")
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.secondary.opacity(0.4))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 9)
+                    .background(Capsule().fill(Color(.systemGray6)))
+                } else {
+                    // v0.3.113：日志 pill（导入模块也显示；内置模块用上面的禁用 卸载 HStack）
+                    pill(label: "日志", icon: "doc.text.magnifyingglass") {
+                        showingLogFor = module
+                    }
+
+                    pill(label: "卸载", icon: "trash") {
+                        uninstallTarget = module
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 6)
+        .opacity(enabled ? 1 : 0.55)
+    }
+
+    /// 动作分发：单动作直接跑；多动作弹选单
+    private func handleRun(module: EscapeModule) {
+        if module.actions.count == 1 {
+            run(module: module, action: module.actions[0])
+        } else {
+            actionMenuModule = module
+        }
+    }
+
+    /// 灰底胶囊（截图风格：systemGray6 底 + 黑字黑图标 + .plain）
+    private func pill(label: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                Text(label)
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundColor(.primary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
+            .background(Capsule().fill(Color(.systemGray6)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func actionKey(_ module: EscapeModule, _ action: EscapeModuleAction) -> String {
+        "\(module.id)/\(action.id)"
+    }
+
+    // MARK: 逻辑
+
+    /// 搜索过滤：模块名 / 作者 / 描述
+    private var filteredModules: [EscapeModule] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return modules }
+        return modules.filter {
+            $0.name.localizedCaseInsensitiveContains(q) ||
+            ($0.author ?? "").localizedCaseInsensitiveContains(q) ||
+            $0.description.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    private func reload() {
+        modules = ModuleService.shared.listModules()
+        enabledMap = Dictionary(uniqueKeysWithValues: modules.map {
+            ($0.id, ModuleService.shared.isEnabled(id: $0.id))
+        })
+    }
+
+    /// v0.3.197：检测并修复所有模块 config.json 的容器路径残留——OpenList 等
+    /// Go 模块的 config.json 在容器 UUID 变化后会含旧路径，导致 Go mkdir 失败→Fatal→宿主崩.
+    /// 这里用 ModuleService.repairContainerMigratedConfig 修复（仅改路径字段，
+    /// 保留用户配置如 jwt_secret / 数据库账号）.
+    private func runContainerRepairFlow() {
+        showModuleSettings = false
+        repairInProgress = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            var fixed: [String] = []
+            var scanned = 0
+            for m in ModuleService.shared.listModules() {
+                guard m.isBinaryModule, let bin = m.binary else { continue }
+                scanned += 1
+                let dataDir = ModuleService.shared.dataURL(for: m.id)
+                // 修复前再检查一次是否需要修复（避免无谓 IO）
+                let cfgURL = dataDir.appendingPathComponent("config.json")
+                guard FileManager.default.fileExists(atPath: cfgURL.path) else { continue }
+                let needsFix = Self.configJSONNeedsRepair(cfgURL: cfgURL, dataDir: dataDir)
+                if needsFix {
+                    ModuleService.repairContainerMigratedConfig(moduleId: m.id, dataDir: dataDir)
+                    fixed.append(m.id)
+                }
+            }
+            repairInProgress = false
+            repairResult = fixed.isEmpty
+                ? "扫描了 \(scanned) 个模块，未发现残留旧容器路径."
+                : "已修复 \(fixed.count) 个模块：\(fixed.joined(separator: "、"))"
+        }
+    }
+
+    /// 读取 config.json 文本，检查是否含旧容器绝对路径（路径以 dataDir.path 为前缀则无残留）
+    private static func configJSONNeedsRepair(cfgURL: URL, dataDir: URL) -> Bool {
+        guard let data = try? Data(contentsOf: cfgURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        func isStale(_ p: String) -> Bool {
+            guard p.hasPrefix("/var/mobile/Containers/Data/Application/") else { return false }
+            return !p.hasPrefix(dataDir.path) && !FileManager.default.fileExists(atPath: p)
+        }
+        let pathKeys: [(String, String)] = [
+            ("temp_dir", "temp"),
+            ("bleve_dir", "bleve"),
+            ("database.db_file", "data.db"),
+            ("log.name", "log/log.log"),
+        ]
+        func check(_ val: String?, sub: String) -> Bool {
+            guard let val, val.hasPrefix("/var/mobile/Containers/Data/Application/") else { return false }
+            let expected = dataDir.appendingPathComponent(sub).path
+            return val != expected && isStale(val)
+        }
+        if check(json["temp_dir"] as? String, sub: "temp") { return true }
+        if check(json["bleve_dir"] as? String, sub: "bleve") { return true }
+        if let db = json["database"] as? [String: Any],
+           check(db["db_file"] as? String, sub: "data.db") { return true }
+        if let log = json["log"] as? [String: Any],
+           check(log["name"] as? String, sub: "log/log.log") { return true }
+        return false
+    }
+
+    private func handleImport(_ urls: [URL]) {
+        guard let url = urls.first else { return }
+        // KernelSU 风格：弹出安装详情（终端日志），完成后右下角关闭
+        installLog = ["- 开始导入：\(url.lastPathComponent)"]
+        installFinished = false
+        installSucceeded = false
+        showInstallSheet = true
+        let appendLog: (String) -> Void = { line in
+            DispatchQueue.main.async { self.installLog.append(line) }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let module = try ModuleService.shared.importZip(at: url, log: appendLog)
+                DispatchQueue.main.async {
+                    self.reload()
+                    self.installLog.append("[完成] 导入成功：\(module.name) v\(module.version)")
+                    if module.isBinaryModule, module.autoStart == true || module.binary?.autoStart == true {
+                        self.installLog.append("- 二进制模块随宿主自启动")
+                    }
+                    self.installFinished = true
+                    self.installSucceeded = true
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.installLog.append("! 导入失败：\(error.localizedDescription)")
+                    self.installFinished = true
+                    self.installSucceeded = false
+                }
+            }
+        }
+    }
+
+    private func run(module: EscapeModule, action: EscapeModuleAction) {
+        let key = actionKey(module, action)
+        runningActionID = key
+        Task.detached(priority: .userInitiated) {
+            var result: ModuleRunResult
+            do {
+                let summary = try ModuleService.shared.run(action: action, module: module)
+                result = ModuleRunResult(message: summary)
+            } catch {
+                result = ModuleRunResult(message: "执行失败：\(error.localizedDescription)")
+            }
+            await MainActor.run {
+                runningActionID = nil
+                resultAlert = result
+                // v0.3.163：桥 action 声明 marksStopped → 成功/失败都收口宿主状态并刷新
+                if action.marksStopped == true {
+                    BinaryModuleRunner.shared.markStopped(module: module)
+                }
+                reload()
+            }
+        }
+    }
+
+    /// Lua 模块运行（v1.2）：调用内置解释器执行入口脚本，结果弹窗展示
+    private func runLua(module: EscapeModule) {
+        runningActionID = module.id
+        Task.detached(priority: .userInitiated) {
+            let (ret, output) = ModuleService.shared.runLuaModule(module)
+            await MainActor.run {
+                runningActionID = nil
+                let message = ret == 0
+                    ? "Lua 模块运行完成\n\(output)"
+                    : "Lua 模块运行失败（码 \(ret)）\n\(output)"
+                resultAlert = ModuleRunResult(message: message)
+            }
+        }
+    }
+}
+
+struct ModuleRunResult {
+    let message: String
+}
+
+/// 模块 WebView 页（KernelSU webroot 对齐）：
+/// - file:// 静态页（模块 webroot 目录内 index.html，读权限限模块目录）
+/// - http(s):// 模块自起本地服务（binary.port 声明的 127.0.0.1 管理页）
+/// v0.3.157：统一在 App 内打开，不再跳 Safari.
+struct ModuleWebView: UIViewRepresentable {
+    let startPage: URL
+    let readAccessRoot: URL?
+    private var isRemote: Bool {
+        guard let scheme = startPage.scheme?.lowercased() else { return false }
+        return scheme == "http" || scheme == "https"
+    }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = .default()
+        let wv = WKWebView(frame: .zero, configuration: cfg)
+        wv.navigationDelegate = context.coordinator
+        if isRemote {
+            // 本地 HTTP 服务：直接 load（ATS 已放行本地网络）
+            wv.load(URLRequest(url: startPage))
+        } else {
+            // 静态页：时间戳查询参数破缓存，保证升级模块后加载新内容
+            var comps = URLComponents(url: startPage, resolvingAgainstBaseURL: false)!
+            comps.queryItems = [URLQueryItem(name: "_t", value: String(Int(Date().timeIntervalSince1970)))]
+            if let busted = comps.url {
+                wv.loadFileURL(busted, allowingReadAccessTo: readAccessRoot ?? startPage.deletingLastPathComponent())
+            } else {
+                wv.loadFileURL(startPage, allowingReadAccessTo: readAccessRoot ?? startPage.deletingLastPathComponent())
+            }
+        }
+        return wv
+    }
+
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// 拦截 http 跳转（页面内跳转继续，外部 target 也留在 webview 内）.
+    /// 目标页仍在本 App 内，不弹 Safari.
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(_ webView: WKWebView,
+                     decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            decisionHandler(.allow)
+        }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation: WKNavigation?, withError error: Error) {
+            // 本地服务未启动等场景：页面留白，交由上层提示（此处静默）
+        }
+    }
+}
+
+/// SharedDocumentPicker 的 SwiftUI 包装（模块导入专用，限 .zip）.
+struct ModuleImportPicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let onPicked: ([URL]) -> Void
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        UIViewController()
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        guard isPresented else { return }
+        DispatchQueue.main.async {
+            guard self.isPresented else { return }
+            self.isPresented = false
+            // Swift 6：本闭包是 @Sendable 的非隔离上下文，而 present 已收敛到
+            // @MainActor。这里确实已经在主队列上，用 assumeIsolated 断言即可
+            //（不会真的切线程，语义与改动前完全一致）。
+            MainActor.assumeIsolated {
+                SharedDocumentPicker.present(
+                    allowedTypes: [UTType.zip],
+                    allowsMultipleSelection: false,
+                    asCopy: true,
+                    onPicked: { urls in
+                        self.onPicked(urls)
+                    },
+                    onCancelled: nil
+                )
+            }
+        }
+    }
+}
+
+/// 安装界面（对齐 KernelSU 官方 FlashScreen Material 版）：
+/// 普通页面背景 + 等宽小字日志整页滚动 + 自动滚底，
+/// 标题随状态变化（安装中/安装成功/安装失败），完成后右下角悬浮「关闭」按钮.
+struct ModuleInstallSheet: View {
+    let lines: [String]
+    let finished: Bool
+    let succeeded: Bool
+    let onClose: () -> Void
+
+    private var title: String {
+        if !finished { return "安装中" }
+        return succeeded ? "安装成功" : "安装失败"
+    }
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                ScrollViewReader { proxy in
+                    // 官方为单段 Monospace bodySmall 文本 + 8dp padding，页面默认背景
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { idx, line in
+                            Text(line)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(color(for: line))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .id(idx)
+                        }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onChange(of: lines.count) { _ in
+                        // 官方：日志更新即滚到底部
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(lines.count - 1, anchor: .bottom)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if finished {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("完成") { onClose() }
+                    }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func color(for line: String) -> Color {
+        if line.hasPrefix("!") { return .red }
+        if line.hasPrefix("[完成]") { return .green }
+        return .primary
+    }
+}
+
+
+// v0.3.111：模块日志查看器（v0.3.111：每个已安装模块可查看/导出/复制/清空运行日志）
+/// 模块运行日志（查看 / 复制 / 分享 / 清空）.
+///
+/// 数据源 = 模块目录下的 `run.log` + `data/go_stderr.log` 两份文件，按行合并展示。
+/// 排版走共享的 `LogConsoleView`（逐行 `Text` + 行间 `Divider` + 自动滚底 + 复制带元信息头）——
+/// 此前是**一整块 `Text`**。
+///
+/// 注意： 统一到「四件套工具栏」带来的两处能力变化（有意为之，供上层知情）：
+/// ① 「清空」不再区分两份文件，一次清掉两个（旧版是二选一的 `confirmationDialog`）；
+/// ② 旧版可用 `ShareLink` 单独导出 `run.log` / `go_stderr.log` 两个**文件**，
+///    现在分享的是**合并后的文本**（带元信息头）。需要原文件时请走文件浏览器。
+struct ModuleLogView: View {
+    let module: EscapeModule
+    var onClose: () -> Void
+    @State private var lines: [String] = []
+
+    private var logFile: URL { ModuleService.shared.installURL(for: module.id).appendingPathComponent("run.log") }
+    private var goStderr: URL { ModuleService.shared.installURL(for: module.id).appendingPathComponent("data/go_stderr.log") }
+
+    var body: some View {
+        // 本页由父级的 `.sheet(item:)` 弹出，**必须自带导航容器** —— 否则 `LogConsoleView` 的
+        // `navigationTitle` 与工具栏（清除/复制/分享/完成）没有导航栏可挂，整条工具栏都不会出现。
+        NavigationStack {
+            LogConsoleView(
+                lines: lines,
+                title: "\(module.name) 日志",
+                onClear: {
+                    clearAll()
+                    reload()
+                },
+                // 本页由父级用闭包弹出（`onClose`）→ 直接用父级给的关闭动作当「完成」
+                onDone: onClose,
+                clearConfirmTitle: "确定清空模块日志？"
+            )
+            .task {
+                reload()
+                // 2s 轮询：模块安装/运行过程中能实时看到输出
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    guard !Task.isCancelled else { break }
+                    reload()
+                }
+            }
+        }
+    }
+
+    /// 两份文件按行合并（每份前面加一行 `[文件名]` 便于区分来源），只留最后 `maxRenderedLines` 行。
+    private func reload() {
+        let all = [logFile, goStderr].flatMap { url -> [String] in
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+            let body = text.components(separatedBy: "\n").filter { !$0.isEmpty }
+            return body.isEmpty ? [] : ["[\(url.lastPathComponent)]"] + body
+        }
+        let fresh = all.count > LogConsoleView.maxRenderedLines
+            ? Array(all.suffix(LogConsoleView.maxRenderedLines))
+            : all
+        // 内容没变就不重新赋值（避免白触发 body 重算）
+        guard fresh != lines else { return }
+        lines = fresh
+    }
+
+    private func clearAll() {
+        try? FileManager.default.removeItem(at: logFile)
+        try? FileManager.default.removeItem(at: goStderr)
+    }
+}

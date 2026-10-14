@@ -20,7 +20,7 @@
             <key>URL</key>
             <string></string>
             <key>PayloadIdentifier</key>
-            <string>com.escapeos.supervised.webclip.payload</string>
+            <string>com.tequiladash.supervised.webclip.payload</string>
             <key>PayloadType</key>
             <string>com.apple.webClip.managed</string>
             <key>PayloadUUID</key>
@@ -32,11 +32,11 @@
     <key>PayloadDisplayName</key>
     <string>网页快捷方式</string>
     <key>PayloadOrganization</key>
-    <string>EscapeSpace</string>
+    <string>TequilaDash</string>
     <key>PayloadDescription</key>
     <string>在主屏幕添加一个图标，像使用 App 一样打开某个网页。</string>
     <key>PayloadIdentifier</key>
-    <string>com.escapeos.supervised.webclip</string>
+    <string>com.tequiladash.supervised.webclip</string>
     <key>PayloadType</key>
     <string>Configuration</string>
     <key>PayloadUUID</key>

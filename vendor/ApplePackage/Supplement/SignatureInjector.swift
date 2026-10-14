@@ -23,7 +23,7 @@ public enum SignatureInjector {
         } else {
             try ensureFailed("could not read manifest or info plist")
         }
-        // EscapeSpace 适配：shim 的追加条目在 flush 时统一落盘（重写中央目录）。
+        // TequilaDash 适配：shim 的追加条目在 flush 时统一落盘（重写中央目录）。
         try archive.flush()
     }
 

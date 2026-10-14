@@ -18,7 +18,7 @@
 在提交前拦住.
 
 检查规则：
-  R1  [ERROR] `EscapeOS/Engine/Airlift/` 必需文件缺失（传输层 / 日志 / 配对解析 / 版本门 /
+  R1  [ERROR] `TequilaDash/Engine/Airlift/` 必需文件缺失（传输层 / 日志 / 配对解析 / 版本门 /
               GrappaHelper 头与实现）.
   R2  [ERROR] `AirliftToneTransport.swift` 未调用某个必需 FFI 符号
               （al_exploit_read_file / al_exploit_write_dir / al_set_target_host / al_bytes_free）.
@@ -44,19 +44,19 @@ R3/R4/R5 要抓的是**实际代码**；而注释里解释「为什么不该写�
 
 用法：
     python swift_airlift_guard.py [仓库根，默认 .]
-    仓库根 = 含 EscapeOS/ 的那一层（即 P1_EscapeOS_宿主仓库）
+    仓库根 = 含 TequilaDash/ 的那一层（即 P1_TequilaDash_宿主仓库）
 退出码：0 = 全部通过；1 = 有 ERROR；2 = 参数/路径错误。
 """
 import os
 import re
 import sys
 
-AIRLIFT_DIR = os.path.join("EscapeOS", "Engine", "Airlift")
+AIRLIFT_DIR = os.path.join("TequilaDash", "Engine", "Airlift")
 TRANSPORT_REL = os.path.join(AIRLIFT_DIR, "AirliftToneTransport.swift")
-AIRLIFT_EXPLOIT_REL = os.path.join("EscapeOS", "Engine", "Exploits", "AirLiftExploit.swift")
-EXPLOIT_KIND_REL = os.path.join("EscapeOS", "Engine", "ExploitKind.swift")
-TONE_SERVICE_REL = os.path.join("EscapeOS", "Engine", "CallRecordingToneService.swift")
-BRIDGING_REL = os.path.join("EscapeOS", "Engine", "EscapeOS-Bridging-Header.h")
+AIRLIFT_EXPLOIT_REL = os.path.join("TequilaDash", "Engine", "Exploits", "AirLiftExploit.swift")
+EXPLOIT_KIND_REL = os.path.join("TequilaDash", "Engine", "ExploitKind.swift")
+TONE_SERVICE_REL = os.path.join("TequilaDash", "Engine", "CallRecordingToneService.swift")
+BRIDGING_REL = os.path.join("TequilaDash", "Engine", "TequilaDash-Bridging-Header.h")
 SILENT_TONES_DIR = os.path.join("Resources", "SilentTones")
 PROJECT_YML_REL = "project.yml"
 WORKFLOW_REL = os.path.join(".github", "workflows", "build-xcode.yml")
@@ -216,7 +216,7 @@ def check_tone_service(root):
 def check_wrong_mac_claims(root):
     """R7：全仓不得再把「依赖 Mac」类错误结论**当事实**写回（纠正性表述不算）."""
     findings = []
-    base = os.path.join(root, "EscapeOS")
+    base = os.path.join(root, "TequilaDash")
     for dirpath, _dirnames, filenames in os.walk(base):
         for name in filenames:
             if not name.endswith((".swift", ".m", ".h", ".mm")):
@@ -307,8 +307,8 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     root = args[0] if args else "."
 
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         print("用法: python swift_airlift_guard.py [仓库根]")
         return 2
 

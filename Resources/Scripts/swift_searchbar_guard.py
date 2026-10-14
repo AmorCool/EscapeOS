@@ -27,12 +27,12 @@
 
 本脚本把这条不变量机械守住：
 
-  S1  **滚动容器页用 `.always` 搜索框必须同时给内容让位**：任何 `EscapeOS/` 下的 `.swift`，
+  S1  **滚动容器页用 `.always` 搜索框必须同时给内容让位**：任何 `TequilaDash/` 下的 `.swift`，
       只要出现 `displayMode: .always`，就必须满足二者之一 ——
         (a) 是 `List` 容器页（同文件内出现 `List {` 或 `List(`，系统会自动内缩）；
         (b) 同文件内出现 `.safeAreaInset(edge: .top`（自己把搜索框高度让出来）。
       两条都不满足 ⇒ 视为「搜索框浮在滚动内容上、第一行被盖住」⇒ 报错。
-  S2  **本页 tripwire**：`EscapeOS/Views/LaunchAppsView.swift` 必须**同时**保留
+  S2  **本页 tripwire**：`TequilaDash/Views/LaunchAppsView.swift` 必须**同时**保留
       `displayMode: .always`（常驻）与 `.safeAreaInset(edge: .top`（让位）。少任一条即报错 ——
       少 `.always` 就退回「搜索框会收起」，少让位就让网格第一行被压住。
 
@@ -49,7 +49,7 @@ import sys
 ALWAYS_FP = "displayMode: .always"
 LIST_FPS = ("List {", "List(")
 TOP_INSET_FP = ".safeAreaInset(edge: .top"
-LAUNCH_FILE = "EscapeOS/Views/LaunchAppsView.swift"
+LAUNCH_FILE = "TequilaDash/Views/LaunchAppsView.swift"
 
 
 def mask_comments(src):
@@ -143,7 +143,7 @@ def check(root):
     errs = []
     launch_seen = False
 
-    for path in _iter_swift_files(os.path.join(root, "EscapeOS")):
+    for path in _iter_swift_files(os.path.join(root, "TequilaDash")):
         raw = io.open(path, encoding="utf-8").read()
         masked = mask_comments(raw)
         rel = os.path.relpath(path, root).replace(os.sep, "/")
@@ -183,8 +183,8 @@ def main():
         print("用法：swift_searchbar_guard.py <仓库根>")
         return 2
     root = sys.argv[1]
-    if not os.path.isdir(os.path.join(root, "EscapeOS")):
-        print("仓库根下找不到 EscapeOS/ ：%s" % os.path.abspath(root))
+    if not os.path.isdir(os.path.join(root, "TequilaDash")):
+        print("仓库根下找不到 TequilaDash/ ：%s" % os.path.abspath(root))
         return 2
     errs = check(root)
     print("-" * 72)

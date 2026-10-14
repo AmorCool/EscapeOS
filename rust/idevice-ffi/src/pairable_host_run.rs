@@ -120,7 +120,7 @@ pub unsafe extern "C" fn si_run_host(
     *out = SiPairResult::empty();
 
     let bind_addr = opt_str(bind_addr, "0.0.0.0");
-    let name = opt_str(name, "EscapeOS");
+    let name = opt_str(name, "TequilaDash");
     let model = opt_str(model, "Mac17,7");
     let out_path = opt_str(out_path, "rp_pairing_file.plist");
     let saved_alt_irk = parse_alt_irk(&opt_str(host_alt_irk_hex, ""));

@@ -28,7 +28,7 @@ tag that is already on the remote is not.
 
 - `.github/workflows/build-xcode.yml` is the **only** workflow in the tree. A `v*` tag therefore
   starts exactly one workflow.
-- You need push access to `AmorCool/EscapeOS` and the development branch is `migrate-xcode`.
+- You need push access to `AmorCool/TequilaDash` and the development branch is `migrate-xcode`.
 - Version numbers only ever increase within `0.x.y`.
 
 Set up a token for the `gh` commands below:
@@ -105,7 +105,7 @@ Then tag that same commit (step 4).
 `CUR_HASH`, computed as
 
 ```sh
-git ls-tree -r HEAD -- EscapeOS EscapeOSTunnel project.yml | shasum -a 256
+git ls-tree -r HEAD -- TequilaDash TequilaDashTunnel project.yml | shasum -a 256
 ```
 
 which hashes `project.yml` **in full** — including the `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`
@@ -114,7 +114,7 @@ validation build and compiles from scratch a second time (this is the "two full 
 waste).
 
 Same commit ⇒ same `CUR_HASH` ⇒ the tag run finds the successful `workflow_dispatch` run by `headSha`
-(artifacts are readable across runs), reuses its `escapeos-xcode-ipa`, and skips `xcode-build`
+(artifacts are readable across runs), reuses its `tequiladash-xcode-ipa`, and skips `xcode-build`
 entirely.
 
 ## 4. Tag and push the tag
@@ -137,8 +137,8 @@ stale run:
 
 ```sh
 SHA=$(git rev-parse HEAD)
-RID=$(gh api "repos/AmorCool/EscapeOS/actions/runs?head_sha=$SHA" --jq '.workflow_runs[0].id')
-gh api "repos/AmorCool/EscapeOS/actions/runs/$RID" --jq '"\(.status)/\(.conclusion)"'
+RID=$(gh api "repos/AmorCool/TequilaDash/actions/runs?head_sha=$SHA" --jq '.workflow_runs[0].id')
+gh api "repos/AmorCool/TequilaDash/actions/runs/$RID" --jq '"\(.status)/\(.conclusion)"'
 ```
 
 A tag run has **two jobs**: `promote` and `xcode-build`.
@@ -155,12 +155,12 @@ On failure, find the step first, then read the annotations, which carry the file
 compiler message:
 
 ```sh
-gh api "repos/AmorCool/EscapeOS/actions/runs/$RID/jobs" \
+gh api "repos/AmorCool/TequilaDash/actions/runs/$RID/jobs" \
   --jq '.jobs[]|.steps[]|select(.conclusion=="failure")|.name'
 
-CUR=$(gh api "repos/AmorCool/EscapeOS/actions/runs/$RID/jobs" \
+CUR=$(gh api "repos/AmorCool/TequilaDash/actions/runs/$RID/jobs" \
   --jq '.jobs[]|select(.name=="xcode-build")|.check_run_url' | sed 's|.*/||')
-gh api "repos/AmorCool/EscapeOS/check-runs/$CUR/annotations" \
+gh api "repos/AmorCool/TequilaDash/check-runs/$CUR/annotations" \
   --jq '.[]|select(.annotation_level=="failure")|"\(.path):\(.start_line) \(.message)"'
 ```
 
@@ -178,11 +178,11 @@ gh release view v0.x.y --json assets --jq '.assets[]|"\(.name) \(.size)"'
 
 Expected: **two** assets, one build of the app each:
 
-- `EscapeSpace-0.x.y-xcode-unsigned.ipa` — the **standard** build. Its bundled
-  `EscapeSpace.entitlements` has no Network Extension rights, so an ordinary certificate (free or
+- `TequilaDash-0.x.y-xcode-unsigned.ipa` — the **standard** build. Its bundled
+  `TequilaDash.entitlements` has no Network Extension rights, so an ordinary certificate (free or
   paid) can sign it.
-- `EscapeSpace-Tunnel-0.x.y-xcode-unsigned.ipa` — the **tunnel** build. It bundles
-  `EscapeSpace-Tunnel.entitlements` on the app *and* `EscapeOSTunnel.entitlements` inside the
+- `TequilaDash-Tunnel-0.x.y-xcode-unsigned.ipa` — the **tunnel** build. It bundles
+  `TequilaDash-Tunnel.entitlements` on the app *and* `TequilaDashTunnel.entitlements` inside the
   embedded `.appex`, both granting `com.apple.developer.networking.networkextension`
   (`packet-tunnel-provider`).
 
@@ -200,7 +200,7 @@ The tunnel build only works if the signer applies Network Extension rights to **
   free and enterprise certificates do not; a personal developer certificate that has the capability
   does. A sideloader that ignores the bundled entitlements (and signs with a certificate lacking the
   capability) produces an app that launches but cannot start the tunnel.
-- The signing tool must apply `EscapeOSTunnel.entitlements` to `PlugIns/EscapeOSTunnel.appex` as
+- The signing tool must apply `TequilaDashTunnel.entitlements` to `PlugIns/TequilaDashTunnel.appex` as
   well as the app entitlements to the main binary. ESign/Sideloadly read the bundled
   `<name>.entitlements` files next to each binary; TrollStore applies entitlements via `ldid` and
   works on the supported iOS range only (TrollStore officially caps at iOS 17.0, while this app
@@ -237,7 +237,7 @@ infrastructure error such as `Failed to FinalizeArtifact: ETIMEDOUT` while the b
 steps succeeded, do **not** re-push the tag. Re-run the failed jobs in place:
 
 ```sh
-gh api -X POST "repos/AmorCool/EscapeOS/actions/runs/$RID/rerun-failed-jobs"
+gh api -X POST "repos/AmorCool/TequilaDash/actions/runs/$RID/rerun-failed-jobs"
 ```
 
 **Compilation failure.** Fix the source, bump to a new version, and tag again. Never reuse the

@@ -1,0 +1,352 @@
+import Foundation
+
+// 虚拟定位：DVT 定位模拟引擎（移植自 Bellaboy/locus-ZH，MIT）.
+//
+// 原理：通过 LocalDevVPN 本机隧道（10.7.0.1:49152）+ RPPairing 配对文件，
+// 走 Apple 开发者工具用的 DVT location simulation 服务（Xcode「模拟位置」
+// 同一机制），把模拟坐标注入 locationd——不需要越狱 / 漏洞.
+// FFI 符号（location_simulation_* 等）由 rust/idevice-ffi 提供，
+// 经 TunnelContext.h → idevice.h 暴露给 Swift（见 TequilaDash-Bridging-Header.h）.
+
+enum LocationEngineError: LocalizedError {
+    case invalidIP
+    case pairingRead
+    case tunnelCreate
+    case remoteServer
+    case simulationCreate
+    case locationSet
+    case locationClear
+    case notActive
+    /// 设备服务表里没有定位通道，与「隧道通了但握手失败」区分开，
+    /// 避免用户看到泛化的超时/远端错误.
+    ///
+    /// **预留**：当前不由预检返回（预检已降级为纯诊断）。等真机实测确认我们实际走的
+    /// 入口服务（dtservicehub 还是 remoteserver）后，再决定是否启用硬门槛.
+    case channelUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidIP: return "隧道 IP 无效.请检查设置 → 本地隧道（默认 10.7.0.1）."
+        case .pairingRead: return "无法读取配对文件.请用 idevice_pair 生成 RPPairing 格式的配对文件并导入."
+        case .tunnelCreate: return "无法建立开发隧道.请确认 LocalDevVPN 已连接."
+        case .remoteServer: return "已连接隧道，但 RemoteXPC 握手失败."
+        case .simulationCreate: return "无法打开 Apple 的定位模拟服务."
+        case .locationSet: return "设置模拟坐标失败."
+        case .locationClear: return "清除模拟定位失败."
+        case .notActive: return "当前没有活动的模拟会话."
+        case .channelUnavailable: return "定位通道不可用"
+        }
+    }
+
+    static func from(code: Int32) -> LocationEngineError {
+        switch code {
+        case 1: return .invalidIP
+        case 2: return .pairingRead
+        case 3: return .tunnelCreate
+        case 9: return .remoteServer
+        case 10: return .simulationCreate
+        case 11: return .locationSet
+        case 12: return .locationClear
+        case 13: return .channelUnavailable
+        default: return .locationSet
+        }
+    }
+}
+
+/// idevice DVT 定位模拟的薄封装（注入 locationd）.
+enum LocationEngine {
+    private static let queue = DispatchQueue(label: "com.tequiladash.location", qos: .userInitiated)
+
+    /// Swift 6 并发检查：下面四个 FFI 句柄的**全部读写都在串行队列 `queue` 上** ——
+    /// 公开入口 `set` / `clear` 一律 `queue.sync` 进入，其余 `*Locked` 私有方法只由它们调用。
+    /// （`isSessionActive` 是对 `locationSimulation` 的跨线程只读，属既有行为，未改。）
+    nonisolated(unsafe) private static var adapter: OpaquePointer?
+    nonisolated(unsafe) private static var handshake: OpaquePointer?
+    nonisolated(unsafe) private static var remoteServer: OpaquePointer?
+    nonisolated(unsafe) private static var locationSimulation: OpaquePointer?
+
+    private static let ok: Int32 = 0
+    private static let invalidIP: Int32 = 1
+    private static let pairingRead: Int32 = 2
+    private static let tunnelCreate: Int32 = 3
+    private static let remoteServerCode: Int32 = 9
+    private static let simulationCreate: Int32 = 10
+    private static let locationSet: Int32 = 11
+    private static let locationClear: Int32 = 12
+    /// 预留错误码：预检已降级为纯诊断、暂不返回；`from(code:)` 的映射保留备用.
+    private static let channelUnavailableCode: Int32 = 13
+
+    /// iOS 17+ 定位通道的 RSD 服务名（DTX/Instruments 入口）.
+    private static let channelServiceName = "com.apple.instruments.dtservicehub"
+
+    static var isSessionActive: Bool { locationSimulation != nil }
+
+    /// 定位通道预检结果（供 UI 直接读「是否就绪」）.
+    enum ChannelStatus: Equatable {
+        case unknown
+        case noTunnel
+        case unavailable
+        case ready
+
+        var label: String {
+            switch self {
+            case .unknown: return "未检测"
+            case .noTunnel: return "隧道未连接"
+            case .unavailable: return "定位通道不可用"
+            case .ready: return "定位通道就绪"
+            }
+        }
+    }
+
+    private static let statusLock = NSLock()
+    /// Swift 6 并发检查：`storedChannelStatus` 的**全部**读写都在上面的 `statusLock` 内
+    /// （见 `channelStatus` getter 与 `setChannelStatus`），本身线程安全。
+    nonisolated(unsafe) private static var storedChannelStatus: ChannelStatus = .unknown
+
+    /// 最近一次通道预检结果（跨线程读取安全）.
+    static var channelStatus: ChannelStatus {
+        statusLock.lock()
+        defer { statusLock.unlock() }
+        return storedChannelStatus
+    }
+
+    private static func setChannelStatus(_ status: ChannelStatus) {
+        statusLock.lock()
+        storedChannelStatus = status
+        statusLock.unlock()
+    }
+
+    static func set(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String) -> Result<Void, LocationEngineError> {
+        var result: Result<Void, LocationEngineError> = .failure(.locationSet)
+        queue.sync {
+            let code = setLocked(latitude: latitude, longitude: longitude, pairingPath: pairingPath, deviceIP: deviceIP)
+            result = code == ok ? .success(()) : .failure(.from(code: code))
+        }
+        return result
+    }
+
+    static func clear() -> Result<Void, LocationEngineError> {
+        var result: Result<Void, LocationEngineError> = .failure(.notActive)
+        queue.sync {
+            let code = clearLocked()
+            result = code == ok ? .success(()) : .failure(.from(code: code))
+        }
+        return result
+    }
+
+    /// v0.3.254：结束设备侧 locationd —— **走 RSD 隧道**（app_service 枚举进程 + 发信号）.
+    ///
+    /// 方向修正：设备**没有越狱**，App 在沙盒里本地 kill 守护进程必被拒
+    /// （v0.3.253 的 setuid 提权方案作废——把「有越狱」当前提是搞错了）。
+    /// 「进程管理」页结束设备进程用的就是这套 FFI（app_service_list_processes +
+    /// app_service_send_signal），这里直接复用：枚举进程 → 找 locationd → SIGKILL.
+    ///
+    /// 注意： **服务不可用时的行为**（2026-09-19 更正）：`ServiceNotFound`(21) 是**设备侧的服务
+    /// 状态问题**，不是本 App 的缺陷 —— 该服务偶尔不可用，**重启手机即恢复**（用户实测）。
+    /// 与 DDI、与「用哪条隧道」都无关（PC 侧 `pymobiledevice3` 交叉验证：服务表逐条一致、
+    /// 调同一个服务同样失败）。**原理未知。**
+    /// 此时 `listProcesses()` 会抛错 ⇒ 本方法返回 `false`；**重试没有意义**
+    /// （`RsdHandshake::connect` 无回退），**重启手机即可恢复**。
+    ///
+    /// v0.3.599：`listProcesses()` 内部已改为「先查服务表再选路」——`app_service` 不在表里时
+    /// 自动走 DVT 回退，且 DVT 通道下 `executablePath` 只含 execname（如 `locationd`，
+    /// **不带 `/` 前缀**）。故这里改用 `displayName` 匹配（两条通道下都等于末段名）。
+    @discardableResult
+    static func killLocationd() -> Bool {
+        guard let entries = try? ProcessManagerService.shared.listProcesses() else { return false }
+        let targets = entries.filter { $0.displayName == "locationd" }
+        guard !targets.isEmpty else { return false }
+        var killed = false
+        for entry in targets {
+            if (try? ProcessManagerService.shared.sendSignal(
+                .kill, toPID: entry.pid, expectedName: entry.displayName)) != nil {
+                killed = true
+            }
+        }
+        return killed
+    }
+
+    private static func cleanup() {
+        if let locationSimulation {
+            location_simulation_free(locationSimulation)
+            self.locationSimulation = nil
+        }
+        if let remoteServer {
+            remote_server_free(remoteServer)
+            self.remoteServer = nil
+        }
+        if let handshake {
+            rsd_handshake_free(handshake)
+            self.handshake = nil
+        }
+        if let adapter {
+            adapter_free(adapter)
+            self.adapter = nil
+        }
+    }
+
+    private static func setLocked(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String) -> Int32 {
+        if let locationSimulation {
+            if let err = location_simulation_set(locationSimulation, latitude, longitude) {
+                idevice_error_free(err)
+                cleanup()
+            } else {
+                return ok
+            }
+        }
+        // 无活动会话（或旧会话已失效被清）→ 建立新会话再设值
+        let connectCode = connectLocked(pairingPath: pairingPath, deviceIP: deviceIP)
+        guard connectCode == ok else { return connectCode }
+        guard let locationSimulation else { return simulationCreate }
+        if let setError = location_simulation_set(locationSimulation, latitude, longitude) {
+            idevice_error_free(setError)
+            cleanup()
+            return locationSet
+        }
+        return ok
+    }
+
+    /// 建立 隧道→RemoteXPC→DVT 定位模拟会话（不动设备状态）.
+    /// v0.3.245：从 setLocked 抽出——clear 在无活动会话时也要能建会话下发清除
+    /// （App 重启后内存句柄为空，但设备 locationd 里可能残留上次注入的模拟坐标）.
+    private static func connectLocked(pairingPath: String, deviceIP: String) -> Int32 {
+        // 蜂窝隧道支持（默认关）：开关开 + 当前无 Wi-Fi 时，建隧道前有界等本地隧道就绪，
+        // **不碰蜂窝开关**. 开关关 / 有 Wi-Fi 时为 no-op，不改变既有行为.
+        CellularTunnelManager.shared.prepareForTunnel()
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(49152).bigEndian
+        let inetResult = deviceIP.withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+        guard inetResult == 1 else {
+            setChannelStatus(.noTunnel)
+            return invalidIP
+        }
+
+        var pairingHandle: OpaquePointer?
+        if let pairingError = pairingPath.withCString({ rp_pairing_file_read($0, &pairingHandle) }) {
+            idevice_error_free(pairingError)
+            setChannelStatus(.noTunnel)
+            return pairingRead
+        }
+        guard let pairingHandle else {
+            setChannelStatus(.noTunnel)
+            return pairingRead
+        }
+        defer { rp_pairing_file_free(pairingHandle) }
+
+        // 建隧道：最多 3 次、短退避. Wi-Fi↔蜂窝切换等瞬时抖动会令 RPPairing 握手失败，
+        // 重试后通常成功（与 JITEnableService / AFCService 等服务同款，见本仓既有模式）.
+        var created = false
+        for attempt in 0..<3 {
+            let providerError = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    tunnel_create_rppairing(
+                        $0,
+                        socklen_t(MemoryLayout<sockaddr_in>.stride),
+                        "TequilaDashLocation",
+                        pairingHandle,
+                        nil,
+                        nil,
+                        &adapter,
+                        &handshake
+                    )
+                }
+            }
+            if let providerError {
+                idevice_error_free(providerError)
+                cleanup()
+            } else {
+                created = true
+                break
+            }
+            if attempt < 2 {
+                usleep(useconds_t(300_000 * (attempt + 1)))
+            }
+        }
+        guard created else {
+            setChannelStatus(.noTunnel)
+            return tunnelCreate
+        }
+
+        // 定位通道预检：**只诊断、不拦截**；依据 = crate `RsdService::rsd_service_name()`
+        // 返回 dtservicehub，但**尚未真机实测**，而反方旁证（牛蛙 / iAnyGo 家族）指向
+        // remoteserver —— 故不做硬门槛，避免赌坏现有可用路径。无论可用与否都继续握手.
+        if let handshakeHandle = handshake {
+            preflightChannelLocked(handshakeHandle)
+        }
+
+        if let remoteServerError = remote_server_connect_rsd(adapter, handshake, &remoteServer) {
+            idevice_error_free(remoteServerError)
+            cleanup()
+            return remoteServerCode
+        }
+
+        if let simError = location_simulation_new(remoteServer, &locationSimulation) {
+            idevice_error_free(simError)
+            cleanup()
+            return simulationCreate
+        }
+        // location_simulation_new 接管 remote server 生命周期
+        remoteServer = nil
+        return ok
+    }
+
+    /// 定位通道预检（**只诊断、不拦截**）：查 RSD 握手自带的服务表里有没有 dtservicehub，
+    /// 并把 port / remoteXPC 写进日志，供判断方案二到底该走哪个入口。
+    /// 不做硬门槛：结论尚未真机实测，且反方旁证指向 remoteserver，拦错会打断现有可用路径.
+    /// 必须挂在本条已成型的隧道上，绝不另开（同 hostname 并发建隧道会互抢）.
+    private static func preflightChannelLocked(_ handshake: OpaquePointer) {
+        var available = false
+        if let error = channelServiceName.withCString({ rsd_service_available(handshake, $0, &available) }) {
+            idevice_error_free(error)
+            setChannelStatus(.unavailable)
+            LoginLogger.shared.log("[定位通道] 预检：服务表查询失败")
+            return
+        }
+        guard available else {
+            setChannelStatus(.unavailable)
+            LoginLogger.shared.log("[定位通道] 预检：\(channelServiceName) 不可用（设备未暴露）")
+            return
+        }
+
+        var info: UnsafeMutablePointer<CRsdService>?
+        if let error = channelServiceName.withCString({ rsd_get_service_info(handshake, $0, &info) }) {
+            idevice_error_free(error)
+            LoginLogger.shared.log("[定位通道] 预检：\(channelServiceName) 可用，但取详情失败")
+        } else if let info {
+            defer { rsd_free_service(info) }
+            LoginLogger.shared.log(
+                "[定位通道] 预检：\(channelServiceName) 可用（port \(info.pointee.port)，remoteXPC \(info.pointee.uses_remote_xpc)）"
+            )
+        }
+        setChannelStatus(.ready)
+    }
+
+    private static func clearLocked() -> Int32 {
+        // v0.3.245 修复「清除模拟定位失败」：旧实现在无活动会话时直接报错——
+        // App 重启后内存句柄必为空，一点清除就失败，而设备侧残留的模拟定位
+        // 恰恰需要经 DVT 会话才能清掉（pmd3 `location clear` 同款：新建会话再
+        // clear）.现在无会话时先建会话再清除；新建会话后清除报错按成功处理
+        // （目标态即「无模拟」，幂等——设备重启后本就无残留，clear 被拒亦无妨）.
+        let hadSession = locationSimulation != nil
+        if !hadSession {
+            // 与 SpoofSession.pairingPath 同一路径（共用 Documents/pairingFile.plist），
+            // 不经 SpoofSession 取值——其属性挂在 @MainActor，queue.sync 内不可跨.
+            let pairingPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("pairingFile.plist").path
+            let connectCode = connectLocked(pairingPath: pairingPath, deviceIP: LocalDevVPN.targetIP)
+            guard connectCode == ok else { return connectCode }
+        }
+        guard let locationSimulation else { return locationClear }
+        let err = location_simulation_clear(locationSimulation)
+        cleanup()
+        if let err {
+            idevice_error_free(err)
+            // 会话是本次新建的：清除失败多为设备本无活动模拟（重启后），按幂等成功处理；
+            // 旧会话路径的清除失败仍是真失败（隧道断开等）.
+            return hadSession ? locationClear : ok
+        }
+        return ok
+    }
+}

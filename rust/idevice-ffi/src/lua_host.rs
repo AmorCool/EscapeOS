@@ -1,4 +1,4 @@
-//! EscapeOS Lua 模块宿主（v0.3.95 起步）。
+//! TequilaDash Lua 模块宿主（v0.3.95 起步）。
 //!
 //! 架构（用户拍板）：解释器编进 App（跟随 App 签名），模块 = 纯 Lua 脚本
 //! （数据，无代码签名问题，可热更新）。本 crate = 最小可用 Lua 5.4 (mlua vendored)。
@@ -47,7 +47,7 @@ fn run(code: &str, out_path: &str, eval_mode: bool) -> c_int {
                 Err(e) => Err(format!("EVAL_ERR {}", e)),
             }
         } else {
-            lua.load(code).set_name("escapeos_module").exec()
+            lua.load(code).set_name("tequiladash_module").exec()
                 .map_err(|e| format!("EXEC_ERR {}", e))?;
             Ok("OK".to_string())
         }

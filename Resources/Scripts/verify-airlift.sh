@@ -1,5 +1,5 @@
 #!/bin/bash
-# Verify that the built AirliftFFI.xcframework carries the symbols EscapeOS
+# Verify that the built AirliftFFI.xcframework carries the symbols TequilaDash
 # relies on.  Run after build-airlift-xcframework.sh.
 #
 # Symbol names in a Mach-O static archive are stored as plain null-terminated

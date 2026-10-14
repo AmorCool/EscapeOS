@@ -7,7 +7,7 @@
 ### 修复
 
 - **主页-模块「执行」必现「执行失败：ServiceNotFound」**（用户报「主页-模块 不知道什么时候开始出现 server not found 功能 之前版本不会的 我怀疑是隧道哪里出问题了」）：
-  两个内置模块（`com.escapeos.locache` 结束 `locationd` / `com.escapeos.wifirefresh` 结束 `wifid`）的动作是 `type: "signal"`，链路为
+  两个内置模块（`com.tequiladash.locache` 结束 `locationd` / `com.tequiladash.wifirefresh` 结束 `wifid`）的动作是 `type: "signal"`，链路为
   `ModuleService.runSignal → ProcessManagerService.listProcesses → connectAppService → app_service_connect_rsd`。
   `app_service` 属 **CoreDevice 族**（RSD 名 `com.apple.coredevice.appservice`），未挂 DDI 时**不在 RSD 服务表里** ⇒ `RsdHandshake::connect` 的 `services.get(name)` 返回 `ServiceNotFound`(21)，`errors.rs` 再 `format!("{:?}", err)` 把它变成弹窗里那串英文。
   **修法（照 `ScreenshotService` 先例）**：`ProcessManagerService` 新增 `appServiceAvailable(handshake:)` 预检 —— `rsd_service_available` 只做 `services.contains_key(name)`、**不连设备**，且与 `connect` 读**同一张表** ⇒ 结果精确预测会不会抛 21：
@@ -89,7 +89,7 @@
 
 ### 构建
 
-- **CI 源码 hash 纳入 `EscapeOSTunnel`**：Phase 2 新增的扩展源码目录不在 `EscapeOS/` 下，必须一并纳入，否则「只改扩展源码」的提交会与旧产物 hash 相同 ⇒ 误判可复用。三处：guard 的 `CUR_HASH`、xcode-build 的 `SRC_HASH`、promote 的 `promote-hash`。
+- **CI 源码 hash 纳入 `TequilaDashTunnel`**：Phase 2 新增的扩展源码目录不在 `TequilaDash/` 下，必须一并纳入，否则「只改扩展源码」的提交会与旧产物 hash 相同 ⇒ 误判可复用。三处：guard 的 `CUR_HASH`、xcode-build 的 `SRC_HASH`、promote 的 `promote-hash`。
 
 ### 已知边界
 
@@ -112,13 +112,13 @@
 
 ### 新增
 
-- **内置隧道 Phase 2**：新增 `EscapeOSTunnel` app-extension target + `PacketTunnelProvider.swift`（回环反射器）+ 两份 entitlements + 主 App 走 `NETunnelProviderManager`。`isExtensionBundled` 改为真检。默认签名未动，免费账号仍可签。
+- **内置隧道 Phase 2**：新增 `TequilaDashTunnel` app-extension target + `PacketTunnelProvider.swift`（回环反射器）+ 两份 entitlements + 主 App 走 `NETunnelProviderManager`。`isExtensionBundled` 改为真检。默认签名未动，免费账号仍可签。
 - **UI 按 TRApp（巨魔录音机）风格改进**：`DesignSystem` 补 `warning` / `mark` / `brandNavy` / `brandGradient`（#2C3A6A→#161F2E）；新增 `AppFont`（SF Rounded + 等宽数字）/ `AppRadius` / `AppSpacing` / `AppMetrics` / `AppHaptics` 与 `.appCard()` / `.appGlass()` / `.appSymbol()`。三页示范：爱思移动端 / 百宝箱 / 下载管理。
 
 ### 已知边界
 
 - **爱思云端接口实测不可用**：直连 `app4.i4.cn/getipaformobiledevice.xhtml` 恒回 `{"code":1,"msg":"exception"}`，穷举 key / 算法 / 填充 / 编码 / 参数 / UA / 域名 / pcver 全矩阵 0 命中 ⇒ 后端侧问题。
-- **CI 的 hash 计算不含 `EscapeOSTunnel`**（token 缺 `workflow` scope，那 3 行改动未能推送）⇒ 只改扩展源码的提交会被误判「源码没变」而复用旧产物。
+- **CI 的 hash 计算不含 `TequilaDashTunnel`**（token 缺 `workflow` scope，那 3 行改动未能推送）⇒ 只改扩展源码的提交会被误判「源码没变」而复用旧产物。
 - **P0-6 根因在 Rust**（`tunnel_provider.rs:873` 无超时），本轮只在安装链缓解。
 
 ## [0.3.587] - 2026-10-10
@@ -153,7 +153,7 @@
 
 - 新增 `TunnelProvider` / `TunnelManager`，设置里三选一：**LocalDevVPN**（默认）/ **Shadowrocket**（**仅作为跳转目标，不保证提供设备连接**）/ **内置隧道**（开启前检测 VPN 权限，无权限置灰并说明原因）。
 - 全仓 32 处 `LocalDevVPN.targetIP` 改走 `TunnelManager`，默认链路零行为变化。
-- entitlements 默认文件不动，另出 opt-in `EscapeSpace-Tunnel.entitlements`（加 VPN 权限会让免费账号签不了）。
+- entitlements 默认文件不动，另出 opt-in `TequilaDash-Tunnel.entitlements`（加 VPN 权限会让免费账号签不了）。
 
 ### 其它
 
@@ -247,7 +247,7 @@
 ### 第三方软件源
 
 - **新增源公告 banner**：把源 JSON 的 `message` 渲染为列表顶部的公告卡片（居中多行、首行加重、其余次级色，照全能签原版），`message` 为空则不显示。
-- **网页 / 书签类条目新增「跳转」**：`nsk-sign://web|bookmark?url=…` 这类非安装包直链此前整行灰显、无任何按钮；现给出「跳转」按钮，用内置浏览器打开内层网址（EscapeSpace 内弹出），取不到内层网址时退回系统打开原始深链。
+- **网页 / 书签类条目新增「跳转」**：`nsk-sign://web|bookmark?url=…` 这类非安装包直链此前整行灰显、无任何按钮；现给出「跳转」按钮，用内置浏览器打开内层网址（TequilaDash 内弹出），取不到内层网址时退回系统打开原始深链。
 - **筛选新增「排除不可下载」**：独立「类型」分组下的布尔开关，开启后隐藏网页 / 书签深链及无下载链接的条目（与「跳转」按钮同一套分类判据）。
 
 ### 下载加速
@@ -555,7 +555,7 @@
   （实现：值 + 通知双通道。**必须是双通道** —— 只轮询会在「通知早于写入」时丢事件，只发通知会在「页面尚未挂载」时丢事件。）
 
 **SFTP 文件域**
-- **大目录不再「静默假空」。** 列举失败时目录里会出现一条 `!!_ESCAPESPACE_LISTING_FAILED`，**不再是一个没有报错的空文件夹**；超过 3000 条时出现 `!!_ESCAPESPACE_NOTICE_TRUNCATED_SHOWING_<n>_OF_<m>_DIRECT_PATH_ONLY`。
+- **大目录不再「静默假空」。** 列举失败时目录里会出现一条 `!!_TEQUILADASH_LISTING_FAILED`，**不再是一个没有报错的空文件夹**；超过 3000 条时出现 `!!_TEQUILADASH_NOTICE_TRUNCATED_SHOWING_<n>_OF_<m>_DIRECT_PATH_ONLY`。
   这些标记是**保留命名空间**：客户端对它们的写/删会被明确拒绝（见 README 的「SFTP file access」节）。
 - **目录排序不再随系统语言变化。** 以前用 locale 相关比较器 —— 实测同一目录在英文与瑞典文下截断出的前 3000 条**完全不相交**。现在固定 `en_US_POSIX` + 自然数字序，并用 UTF-8 字节序打破并列（不依赖非稳定排序）。
 - **客户端发超大 offset 不再让 App 崩溃。** 以前 `offset` / `length` 直接参与 `Int` 运算，无上界校验 —— 已认证客户端发一个 `UInt64.max` 就能触发溢出陷阱（SIGILL）。现在入口校验**整个访问区间** `offset + length`，越界拒绝（读抛错、写回状态码），区间右端轻微越界时**收窄为短读**而不是误杀。
@@ -620,10 +620,10 @@
 
 ### 行为变化：SFTP 目录列举的「失败 / 截断」现在**可见**（原为静默假空）
 
-- **列举失败**（provider 报错）：现在返回一条 `!!_ESCAPESPACE_LISTING_FAILED`。
-  **用户看到**：该目录里出现一个名为 `!!_ESCAPESPACE_LISTING_FAILED` 的条目 —— **不再是「无报错的空文件夹」**，避免把「读取失败」误当成「目录为空」。
+- **列举失败**（provider 报错）：现在返回一条 `!!_TEQUILADASH_LISTING_FAILED`。
+  **用户看到**：该目录里出现一个名为 `!!_TEQUILADASH_LISTING_FAILED` 的条目 —— **不再是「无报错的空文件夹」**，避免把「读取失败」误当成「目录为空」。
 - **条目数超过 3000**：只返回**按名字排序后的前 3000 条**，并追加一条
-  `!!_ESCAPESPACE_NOTICE_TRUNCATED_SHOWING_<n>_OF_<m>_DIRECT_PATH_ONLY`（`<m>` 为实际总数；SFTP v3 的 READDIR 无 offset，超过 3000 条的部分请按完整路径直取）。
+  `!!_TEQUILADASH_NOTICE_TRUNCATED_SHOWING_<n>_OF_<m>_DIRECT_PATH_ONLY`（`<m>` 为实际总数；SFTP v3 的 READDIR 无 offset，超过 3000 条的部分请按完整路径直取）。
   **用户看到**：列表里出现该标记条目，一眼可知「被截断了、总共多少条」，而不是以为「就这么多」。
 
 ### 行为变化：单条目 `fileInfo` 失败 ⇒ **整个目录列举失败**
@@ -741,7 +741,7 @@
 
 - `fileAttributes` / `openDirectory` 失败时**回空 attributes / 空 listing**（不抛）。
   准确语义是**假阳性「存在」**（`SSH_FXP_ATTRS` 的 `flags == 0`），**不是**「不存在」。
-  > **（2026-10-05 补注）**：`openDirectory` 的这条行为**已在 v0.3.570 变更** —— 失败时回**可见标记**（`!!_ESCAPESPACE_LISTING_FAILED`）而非空 listing，见文件顶部 `## [未发布]`。本节其余描述为该版本当时的取舍，保留不改。
+  > **（2026-10-05 补注）**：`openDirectory` 的这条行为**已在 v0.3.570 变更** —— 失败时回**可见标记**（`!!_TEQUILADASH_LISTING_FAILED`）而非空 listing，见文件顶部 `## [未发布]`。本节其余描述为该版本当时的取舍，保留不改。
 - 取舍理由：Citadel 上游在这两处吞错不回包，抛错会让客户端**挂起到自身超时** ——
   对文件浏览器来说「拼错一次路径就卡死」比「答错」更糟。
 - **这一档不产生数据损坏**（`read` 仍会 throw，不会退化成 0 字节假成功；写失败由 `write`
@@ -1355,7 +1355,7 @@ compressionMethod: ApplePackageArchive.ZipCompressionMethod.none // ✓
 
 ⇒ 口诀：**跨文件引用嵌套类型 → 从最外层类型名开始写全**。
 
-> 这两条都已写进 `escapeos-release` skill 的「本机自检」清单。
+> 这两条都已写进 `tequiladash-release` skill 的「本机自检」清单。
 
 ## [0.3.551] - 2026-10-02
 
@@ -1731,7 +1731,7 @@ kbsync 要在 Unicorn 里解释执行 `storeagent`（纯 CPU，几秒），
 | 文件 | 改动 |
 |---|---|
 | `vendor/…/ZipFoundationShim.swift` | 新增 `removeEntry(with:)`：从**中央目录**摘除同名条目（ZIP 的权威索引是中央目录，摘掉即可让解压器看不到旧数据；不做字节级前移，避免搬 200MB） |
-| `EscapeOS/Engine/IPADownloadCenter.swift` | `PackageSINFWriter.writeIfNeeded` 命中「包内已有」时改为 **先 `removeEntry` 再 `addEntry`**，不再跳过 |
+| `TequilaDash/Engine/IPADownloadCenter.swift` | `PackageSINFWriter.writeIfNeeded` 命中「包内已有」时改为 **先 `removeEntry` 再 `addEntry`**，不再跳过 |
 
 顺序约束（写进代码注释了）：**必须先 remove 再 add** —— 反了会产出重名条目，
 比不删更糟。
@@ -1796,7 +1796,7 @@ Swift importer 直接把该参数从签名里丢掉，于是调用处永远报�
 ### 修复：`KBSyncProvider.swift:70` `extra argument 'error' in call`（v0.3.544 CI 报错）
 
 ```
-EscapeOS/Services/AppleAuth/KBSyncProvider.swift:70:20: error: extra argument 'error' in call
+TequilaDash/Services/AppleAuth/KBSyncProvider.swift:70:20: error: extra argument 'error' in call
 70 |             error: &error
 ```
 
@@ -1934,7 +1934,7 @@ ent/download 的完整 URL**（host = `downloaddispatch.itunes.apple.com`，
 
 kbsync 要跑 Unicorn 解释 `storeagent`，这是宿主能力；而请求构造在 vendor。
 所以走依赖注入：新增 `Configuration.kbsyncGenerator`（`@Sendable` 闭包类型），
-宿主在 `EscapeOSApp.init` 装配一次。跑在 `Task.detached` 里（纯 CPU，可能几秒，
+宿主在 `TequilaDashApp.init` 装配一次。跑在 `Task.detached` 里（纯 CPU，可能几秒，
 不能占主线程）。
 
 装配失败（资产不在）只写日志、不抛错 —— 下载照常走旧链。
@@ -1959,7 +1959,7 @@ v0.3.542 的 CI 在 Build 阶段失败：
 
 ```
 SAPContext.h:25:1: error: missing '@end'
-failed to emit precompiled header ... EscapeOS-Bridging-header.pch
+failed to emit precompiled header ... TequilaDash-Bridging-header.pch
 ```
 
 真因：新增 `SAPStoreAgentContext` 时，`@interface` 被插在了 `SAPContext` 的
@@ -2126,7 +2126,7 @@ Fatal error: Dictionary literal contains duplicate keys
 **美区同样出数据**（Muse from Meta / ChatGPT / Vinted）—— 原先「美区一个搜不到、
 国区那么点软件」的病根就是**借了爱思的接口**，接 Apple 后自动消失。
 
-新增 `EscapeOS/Engine/NBStoreRankClient.swift`（`fetch` / `search` / `RankItem`）；
+新增 `TequilaDash/Engine/NBStoreRankClient.swift`（`fetch` / `search` / `RankItem`）；
 `I4StoreFreeView` 加 `nbRank` 分组 Picker、榜单行 `nbRankRow`（图标 / 名次角标 /
 价格与分类胶囊 / 开发者与分类副标题 / 可进详情）。同时**删掉**「NB 关键词搜索借
 爱思」的分支与随之失去调用点的 `installViaNB`。
@@ -2398,7 +2398,7 @@ App Group / 容器根这类目录的属性会被沙盒裁剪，`attributesOfItem
 
 ### 三、文件预览：只在需要时落盘
 
-`FileViewerView` 以前**无条件**把打开的文件复制到 `Caches/EscapeOSPreviews/`，
+`FileViewerView` 以前**无条件**把打开的文件复制到 `Caches/TequilaDashPreviews/`，
 并且把这次写入的成败当成整个打开流程的成败：
 
 - 只有 `.pdf` / `.media` / `.preview` 三种模式吃 URL，`.text` / `.plist` / `.hex` /
@@ -2435,7 +2435,7 @@ v0.3.531 解决了**导出** >4 GB，但**恢复**那一侧还留着洞：
   **只对「store + 未加密」流式**（备份正是 store-only）；deflate / AES / ZipCrypto **原样回落 `readEntry`**，
   **不新造第二套解码器**。
 - **`RestoreService`** 改成 `writeEntryStreaming(...)`：
-  在**目标同目录**建 `.escapeos-restore-<uuid>.tmp` → 分块写 temp 并**增量 SHA256**
+  在**目标同目录**建 `.tequiladash-restore-<uuid>.tmp` → 分块写 temp 并**增量 SHA256**
   → 流结束才跑两道 guard → 通过后**原子 `rename(2)`** 替换 → 任一失败路径 `defer` 删 temp。
 
 **恢复的校验一点没削弱**（逐条保留）：`manifest.json` + `backup.json` 存在性、bundleId 匹配、
@@ -2445,7 +2445,7 @@ v0.3.531 解决了**导出** >4 GB，但**恢复**那一侧还留着洞：
 
 > **待真机验证**（这是本次唯一没被静态覆盖到的路径）：
 > ① **目标文件已存在**时恢复（走 `rename` **覆盖**）② 目标文件不存在时恢复（首次创建）
-> ③ **故意改坏 manifest 里某个 `sha256`** ⇒ 应报校验失败，且**原文件内容不变、目录下无 `.escapeos-restore-*.tmp` 残留**
+> ③ **故意改坏 manifest 里某个 `sha256`** ⇒ 应报校验失败，且**原文件内容不变、目录下无 `.tequiladash-restore-*.tmp` 残留**
 
 ### 二、修两处过期注释（不影响编译）
 
@@ -2640,7 +2640,7 @@ json = {"ProductType":…, "SerialNumber":…, "mlbSerial":…}
 **`ExploitRegistry.run`（漏洞利用注册表）** —— 已被用户当场纠正并**全部回退**.
 本版**没有**引入任何新的漏洞依赖.
 
-### 改动（3 个文件，全在 EscapeSpace）
+### 改动（3 个文件，全在 TequilaDash）
 
 | 文件 | 改动 |
 |---|---|
@@ -2668,7 +2668,7 @@ json = {"ProductType":…, "SerialNumber":…, "mlbSerial":…}
 | `AirliftExploit.swift`（6676 行） | 漏洞利用本体 |
 | `AirliftChangeLog` / `AirliftBackupStore` / `PlistTweakService` / `PreferencesSettle` | 只服务 airlift 的辅助 |
 | 宿主能力 `airlift.*`(9) / `plist.tweak` / `sys.supervised.*` / `exploit.status` | `HostCapabilityService` **2285 → 947 行** |
-| `com.escapeos.airlift-poc` 模块 | 宿主内置副本 + 模块仓库整目录 |
+| `com.tequiladash.airlift-poc` 模块 | 宿主内置副本 + 模块仓库整目录 |
 | `MobileDeviceStub` 桩 / AirTrafficHost 移植脚本 / a64 Grappa 验证工作流 | 整套构建配套 |
 | Rust `adapter.rs` 的 12 个函数 + 两个 `idevice.h` 的声明 | **保留 `adapter_connect`**（`cdprobe` 在调）|
 
@@ -3028,7 +3028,7 @@ cfprefsd 会把**内存里的旧副本**刷回磁盘，把刚还原的内容**�
 
 - **tab 从 6 个减到 5 个**（概览 / 文件 / 写入 / 主题 / 更多）—— iOS 的 `TabView` 超过 5 个
   会**自动**加一个系统溢出「更多」项，那个页面跟主程序完全不一样.
-- **新增「更多」页**，照 `EscapeOS/Views/MoreView.swift`：`List` + `.insetGrouped` +
+- **新增「更多」页**，照 `TequilaDash/Views/MoreView.swift`：`List` + `.insetGrouped` +
   `.scrollContentBackground(.hidden)` + Section header 用 `.footnote.weight(.semibold)`
   + `.textCase(nil)`；行**直接复用主程序的 `MoreCard`**（不重画）.
 - 监督模式 / 调用日志 / 关于 收进「更多」；另加「清理临时文件」（兜底用）.
@@ -3063,7 +3063,7 @@ cfprefsd 会把**内存里的旧副本**刷回磁盘，把刚还原的内容**�
 ⇒ 之前以为「`afcPath` 放开 `..` 就能探到 Media 之外」是**错的** ——
 真正的边界有两层：AFC 自己的路径校验（越根 = `InvalidArg`）+ 沙盒（越权 = `PermDenied`）.
 
-模块 `com.escapeos.airlift-poc` → **1.8.0**（`minHostVersion` 0.3.512）.
+模块 `com.tequiladash.airlift-poc` → **1.8.0**（`minHostVersion` 0.3.512）.
 
 ## [0.3.501] - 2026-09-20
 
@@ -3107,7 +3107,7 @@ cfprefsd 会把**内存里的旧副本**刷回磁盘，把刚还原的内容**�
 
 模块界面里 66 处 `。` 全改成 `.`。同时删掉了上一版遗留的感叹号三角与死代码。
 
-模块 `com.escapeos.airlift-poc` → **1.4.0**（`requires` 17 项，`minHostVersion` 0.3.501）。
+模块 `com.tequiladash.airlift-poc` → **1.4.0**（`requires` 17 项，`minHostVersion` 0.3.501）。
 
 ## [0.3.500] - 2026-09-20
 
@@ -3161,7 +3161,7 @@ cfprefsd 会把**内存里的旧副本**刷回磁盘，把刚还原的内容**�
 **不校验落点**（真实目标在 Media 之外，AFC 读不回来）。要确认内容请对任意一个文件
 调 `airlift.pull` 读回比对。
 
-模块 `com.escapeos.airlift-poc` → **1.3.0**（`requires` 18 项，`minHostVersion` 0.3.499）。
+模块 `com.tequiladash.airlift-poc` → **1.3.0**（`requires` 18 项，`minHostVersion` 0.3.499）。
 
 > 下一步：把 AirCard 的「密码键盘主题（`.passthm`）」做成模块 tab ——
 > 选主题 → 预览 12 键 → 用 `airlift.writeMany` 一次写进 `TelephonyUI-{8,9,10}`。
@@ -3260,7 +3260,7 @@ target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是�
   · Logs / Preferences ⇒ 提醒「可能被守护进程重建 ⇒ 搬回时冲突」
 - 警告同时出现在 `steps` 与返回的 `warning` 字段里，界面直接显示
 
-模块 `com.escapeos.airlift-poc` → **1.2.0**（`requires` 17 项，`minHostVersion` 0.3.497）。
+模块 `com.tequiladash.airlift-poc` → **1.2.0**（`requires` 17 项，`minHostVersion` 0.3.497）。
 
 ## [0.3.496] - 2026-09-20
 
@@ -3325,7 +3325,7 @@ afc.read  /airlift-recovered-38EC6637/a.txt → 内容正确
   （条目名从 `LoginLogs/airlift_pending_restore.txt` 取）。搬回失败时界面会给按钮。
 - **`airlift.delete {path}`** —— 删掉沙盒外的一个已知文件（**先确认备份落盘、再删**）。
 
-新增「目录浏览」tab（模块 `com.escapeos.airlift-poc` → **1.1.1**）。
+新增「目录浏览」tab（模块 `com.tequiladash.airlift-poc` → **1.1.1**）。
 
 ### 修「自定义覆盖 → 从本机选择文件导入到 AIR」选完没反应
 
@@ -3384,7 +3384,7 @@ airlift-src-DB9A2FD1/payload 已被搬走 = 否（第 2 次 move 没发生）
 真机实测第 6 次 AT 会话会卡在 conduit 建连、之后整条 `protocolQueue` 堵死
 ⇒ **操作次数本身就是风险，能省则省**。
 
-模块 `com.escapeos.airlift-poc` → **1.0.1**（`minHostVersion` = 0.3.495）。
+模块 `com.tequiladash.airlift-poc` → **1.0.1**（`minHostVersion` = 0.3.495）。
 
 ## [0.3.494] - 2026-09-20
 
@@ -3794,7 +3794,7 @@ airlift 默认未启用 ⇒ 模块概览 tab 会显示橙色的「airlift 不可
 真机现象（装 airlift-poc 的 zip）：
 
 ```
-- 清单: com.escapeos.airlift-poc v1.0.0 (Airlift PoC)
+- 清单: com.tequiladash.airlift-poc v1.0.0 (Airlift PoC)
 - 规范: escape.module.v1 ✓
 ! 导入失败: 模块未声明任何 action
 ```
@@ -4011,7 +4011,7 @@ SwiftUI 视图没法从 zip 里加载，所以 `view` 是**宿主内的注册名
 - `autoStartAll()` 也跳过 `blockingIssues` 非空的模块 —— 它跑起来也只会失败，
   而在启动期炸掉（Go 侧 `log.Fatal` → `os.Exit`）会连宿主一起带走。
 
-#### ⑥ 第一个用它的模块：`com.escapeos.airlift-poc`（原生界面）
+#### ⑥ 第一个用它的模块：`com.tequiladash.airlift-poc`（原生界面）
 
 三个 tab：**概览**（宿主版本 / 模块可用性 / airlift 状态 / 逐条标注声明能力是否支持）、
 **监督模式**（本次唯一功能）、**日志**（宿主能力调用的原始 JSON 往来，排障用）。
@@ -4960,7 +4960,7 @@ v0.3.464 的两趟拆分跑通了，真机结论：
 **修法**（只改 `AirliftExploit.swift`，+75/-2）：
 
 - 新增 `sendConduitCheckin(stream:note:)`：形状照抄已跑通的 `runProtocolProbe`
-  （`Label` = `EscapeSpaceAirliftStage` / `ProtocolVersion` = `2` / `Request` = `RSDCheckin`）。
+  （`Label` = `TequilaDashAirliftStage` / `ProtocolVersion` = `2` / `Request` = `RSDCheckin`）。
 - **每一条连接都发**（两趟 × 四种帧格式 = 8 条，无一例外），位置在 `openConduit()` 之后、
   `sendConduitPlist` 之前。
 - 新增 `readConduitCheckinResponses(stream:note:record:)`：**有界 + 失败绝不中止** ——
@@ -4977,7 +4977,7 @@ v0.3.464 的两趟拆分跑通了，真机结论：
 
 **事实（用户实测 + PC 侧标准工具交叉验证）**：
 
-- 主页两个内置模块（`com.escapeos.locache` / `com.escapeos.wifirefresh`）、进程管理、
+- 主页两个内置模块（`com.tequiladash.locache` / `com.tequiladash.wifirefresh`）、进程管理、
   虚拟定位停止、拨号器主题「重启电话 App」、IPCC「重启 CommCenter」、设备控制「重启 SpringBoard」
   —— **这些功能本身一直是对的**，代码没有问题。
 - `ServiceNotFound`(21) 出现时，**重启手机即恢复**（用户实测；同类工具也是这么处理的）。
@@ -5033,7 +5033,7 @@ pymobiledevice3 amfi developer-mode-status   # → true
 ### 修 v0.3.462 的 CI 编译错：`AppStoreLogView` 参数列表少一个逗号
 
 ```
-EscapeOS/Views/AppStoreLogView.swift:29:14: error: Expected ',' separator
+TequilaDash/Views/AppStoreLogView.swift:29:14: error: Expected ',' separator
 ```
 
 给 `LogConsoleView` 补 `clearConfirmTitle` 参数时，`onClear:` 闭包结尾的 `}` 后面漏了逗号
@@ -5048,7 +5048,7 @@ EscapeOS/Views/AppStoreLogView.swift:29:14: error: Expected ',' separator
 > 而紧邻的下一个有效行形如 `标识符:`（参数标签）⇒ 这两行之间必然少了一个逗号。
 
 已用 v0.3.462 那份出错的文件验证：**准确报出 `:29 → :32`**，修复后报干净。
-全仓 `EscapeOS/**/*.swift` 扫过一遍，**没有其它同类位置**。
+全仓 `TequilaDash/**/*.swift` 扫过一遍，**没有其它同类位置**。
 
 ## [0.3.462] - 2026-09-19
 
@@ -5081,7 +5081,7 @@ EscapeOS/Views/AppStoreLogView.swift:29:14: error: Expected ',' separator
 
 结果 → `Documents/LoginLogs/cd_probe.txt`（日志里只留一行摘要）。
 
-实现照 `EscDDIProbe` 的先例走 **C 垫片**（`EscapeOS/Tunnel/EscCDProbe.h/.c` + `EscapeOS/Engine/CDProbe.swift`）：
+实现照 `EscDDIProbe` 的先例走 **C 垫片**（`TequilaDash/Tunnel/EscCDProbe.h/.c` + `TequilaDash/Engine/CDProbe.swift`）：
 本 FFI 头里 `typedef void *` 的指针参数在 Swift 侧不可靠（v0.3.271~278 烧掉 8 轮 CI），
 所以整条链关在 C 层，Swift 侧只传四个标量、拿回文本。
 
@@ -5206,7 +5206,7 @@ CoreDevice 那批服务（`com.apple.coredevice.*`）是 DDI 门控的，没挂 
 > 「browse 改走 C 垫片(**终结 8 轮 Swift 指针类型战**)……
 >  依据：271~278 八轮 CI 实测 Clang Importer 对 `typedef void*` 的指针参数推断不可靠」
 
-⇒ **两个指针形状全部关在 C 层**（新增 `EscapeOS/Tunnel/EscDDIProbe.h/.c`，
+⇒ **两个指针形状全部关在 C 层**（新增 `TequilaDash/Tunnel/EscDDIProbe.h/.c`，
 形状照抄 `EscBrowseApps`）：**Swift 侧只传两个 `OpaquePointer`、拿回 bplist 字节，
 零 `plist_t` / 零 opaque 指针出参。**
 
@@ -5258,7 +5258,7 @@ Apple 内置用 UUID，我们自己导入的用整数（`randomizeWallpaperIDs(_
 
 #### 2. 日志页：照 3105 的控制台排版重做 `AppStoreLogView`
 
-**新增共享视图 `EscapeOS/Views/LogConsoleView.swift`**：逐行 `Text` + 行间 `Divider()` 的
+**新增共享视图 `TequilaDash/Views/LogConsoleView.swift`**：逐行 `Text` + 行间 `Divider()` 的
 `LazyVStack`、**新日志自动滚底**（尊重 `reduceMotion`）、控制台底色、工具栏四件套
 （清除 / 复制带成功反馈 / 分享 / 完成）、复制内容带**元信息头**（App 名 + iOS 版本 build + 机型 + 生成时间）。
 
@@ -5289,7 +5289,7 @@ Apple 内置用 UUID，我们自己导入的用整数（`randomizeWallpaperIDs(_
 11:46:36.417  LC_SYMTAB 命中：_uhO2GULXwfgKwPcp4YR2 → AirFairSyncGrappaCreate @ 0x000000007af6f914
 11:46:36.420  Grappa 输入 12 字节 = 01 00 00 00 00 00 00 00 01 00 00 00
               ← 崩在这里（下一句就是 create(...)）
-11:46:37.038  EscapeSpace 0.3.457 (753) 启动   ← 0.6 秒后重启
+11:46:37.038  TequilaDash 0.3.457 (753) 启动   ← 0.6 秒后重启
 ```
 
 **根因：地址是错的。** `0x7af6f914` ≈ 2 GB，而 iOS 的 App 镜像不会加载在那里
@@ -5471,7 +5471,7 @@ AirTrafficHost，`LC_ID_DYLIB` 原本是系统那个名字
 而调用方按「bundle 路径」判出的 `fileBacked` 仍是 true ⇒ **护栏被静默绕过**。
 iOS 现在没有 AirTrafficHost（已受控枚举），但这是**结构上不该留的口子**。
 
-改法：`--unique-id`（默认 `@rpath/EscapeOSAirTrafficHost`），更短 ⇒ 原地覆写、`cmdsize` 不变。
+改法：`--unique-id`（默认 `@rpath/TequilaDashAirTrafficHost`），更短 ⇒ 原地覆写、`cmdsize` 不变。
 我们一律**按路径 dlopen**、从不按名字查它；且这份二进制在 CI 里是**未签名**的
 （签名由侧载工具施加）⇒ 改 load command 不破坏任何有效签名。
 
@@ -5482,9 +5482,9 @@ iOS 现在没有 AirTrafficHost（已受控枚举），但这是**结构上不�
             新: .../AirTrafficHost.framework/AirTrafficHost
 补丁 D  LC_ID_DYLIB   @0x0550 cmdsize=112（未变）
             旧: .../AirTrafficHost.framework/AirTrafficHost
-            新: @rpath/EscapeOSAirTrafficHost
+            新: @rpath/TequilaDashAirTrafficHost
 ```
-独立复核产物：`ID_DYLIB=@rpath/EscapeOSAirTrafficHost`、`platform=2(iOS) minos=18.0.0`、
+独立复核产物：`ID_DYLIB=@rpath/TequilaDashAirTrafficHost`、`platform=2(iOS) minos=18.0.0`、
 桩路径正确、`CoreFoundation` 扁平、**全文件无 `/Versions/` 残留**、**不再自称系统 install name**、
 大小不变 332176 → 332176。
 
@@ -5550,7 +5550,7 @@ guard let node else { return nil }    // ← name 形式「没报错但返回空
 真机日志：
 ```
 10:32:52.049  [airlift] dlopen 成功          ← 断在这里
-10:32:52.716  EscapeSpace 0.3.454 (750) 启动  ← 0.7 秒后重启 = 崩了
+10:32:52.716  TequilaDash 0.3.454 (750) 启动  ← 0.7 秒后重启 = 崩了
 ```
 崩溃点在 `note("dlopen 成功")` 的**下一句** —— 解析 bundle 里那份 AirTrafficHost 的符号表。
 
@@ -5650,7 +5650,7 @@ v0.3.453 把四个探测**全部接回**自动路径，其中三条会 `withTunn
 - 但它**被重跑过**（第 2 次尝试），而重跑 **`failure`** —— 不是取消，是**编译不过**。
   真正的编译错误（CI 实锤）：
   ```
-  EscapeOS/Engine/Exploits/AirliftExploit.swift:1051:25:
+  TequilaDash/Engine/Exploits/AirliftExploit.swift:1051:25:
       error: cannot find 'mach_vm_region' in scope
   ```
 - ⇒ 结论：v0.3.453 **不是「被拦下没发」，是「根本编不出来」**。两个原因都要记，
@@ -6061,7 +6061,7 @@ Apple 自己的 dyld 源码把该路径包在 `#if TARGET_OS_OSX` 里）。若�
 
 日志实锤（`CpResource`）：
 ```
-CpResource .../EscapeSpace.app/libMobileDeviceStub.dylib   ← 拷到了 **bundle 根**
+CpResource .../TequilaDash.app/libMobileDeviceStub.dylib   ← 拷到了 **bundle 根**
 ```
 **根因**：xcodegen 对 `library.dynamic` 的 **`embed: true` 没有生成「Embed Frameworks」阶段**，
 而是当**普通资源**拷到了 bundle 根。而框架里那条 `LC_LOAD_DYLIB` 要的是
@@ -6080,7 +6080,7 @@ CpResource .../EscapeSpace.app/libMobileDeviceStub.dylib   ← 拷到了 **bundl
 - 产物名**确实是 `libMobileDeviceStub.dylib`**（`productName` 修法生效 ✓）；
 - **补丁脚本在 runner 上跑通**：`框架源: /System/Library/.../AirTrafficHost`、
   `补丁后: offset=24(未变) cmdsize=112(未变) 新路径(53 字节)`、`ordinal 1 -> 17 个符号`、
-  `AirTrafficHost embedded at .../EscapeSpace.app/Frameworks/AirTrafficHost` ✓。
+  `AirTrafficHost embedded at .../TequilaDash.app/Frameworks/AirTrafficHost` ✓。
 
 ### 加「iOS 原生 AirTrafficHost」探测 + export trie 枚举
 
@@ -6592,7 +6592,7 @@ struct IdeviceFfiError *stream_recv_frame_raw(struct ReadWriteOpaque *, uint8_t 
   自带一层会套出第二层栈、页面没有返回按钮）。`git diff --ignore-all-space` 确认**只删了那 2 行**。
 - **导航时序**：百宝箱是 sheet，不能在里面直接 push，也不能「关 sheet 的同时 push」（会被吞）。
   用 `sheet(isPresented:onDismiss:)` 做中转 —— `onDismiss` 里再置 `showGestalt`，此时 sheet 已完全消失。
-- `EscapeOS/Tunnel/idevice.h`（CI 会从 `rust/idevice-ffi/idevice.h` 拷过去的**跟踪副本**）已同步，
+- `TequilaDash/Tunnel/idevice.h`（CI 会从 `rust/idevice-ffi/idevice.h` 拷过去的**跟踪副本**）已同步，
   免得以后读头文件时找不到这些新函数。
 
 ## [0.3.440] - 2026-09-19
@@ -6995,7 +6995,7 @@ stream_recv_xml(stream, &out)  // 先读 4 字节长度，再读正文
 **安全边界**（照 AFCService 规格，不重演 419）：
 专用串行队列 + 单飞标记 + 用完立即释放连接。
 
-**改动范围**：`AirliftExploit.swift`(+210)、`EscapeOS/Tunnel/idevice.h`(+41)、
+**改动范围**：`AirliftExploit.swift`(+210)、`TequilaDash/Tunnel/idevice.h`(+41)、
 `rust/idevice-ffi/idevice.h`(+41)、`rust/idevice-ffi/src/adapter.rs`(+95)。
 
 > 注：Rust 侧新增 FFI 需 CI 编译验证；若 `Box<dyn ReadWrite>` 不满足 `run_sync`
@@ -7043,7 +7043,7 @@ stream_recv_xml(stream, &out)  // 先读 4 字节长度，再读正文
 
 **改法**：
 - 撤掉 `ExploitSelectionView` 的 `onAppear`；
-- 新增 `AirliftExploit.scheduleSelfTestAfterLaunch()`，在 `EscapeSpaceApp.init` 里调用：
+- 新增 `AirliftExploit.scheduleSelfTestAfterLaunch()`，在 `TequilaDashApp.init` 里调用：
   **只要 airlift 处于勾选状态**（`ExploitSettings.snapshot()` 含 `.airlift`），
   启动后**延迟 5 秒**自动跑一次自检。
 
@@ -7058,7 +7058,7 @@ stream_recv_xml(stream, &out)  // 先读 4 字节长度，再读正文
 这样你用空间回收 / 文件浏览时，就能在日志里看到 `[airlift] 被调用（…）`，
 证明它确实参与了分发（只记第一条，避免淹日志）。
 
-**改动范围**：`AirliftExploit.swift`（+15）、`EscapeOSApp.swift`（+3）、`ExploitSelectionView.swift`（−10）。
+**改动范围**：`AirliftExploit.swift`（+15）、`TequilaDashApp.swift`（+3）、`ExploitSelectionView.swift`（−10）。
 
 ## [0.3.427] - 2026-09-18
 
@@ -7097,7 +7097,7 @@ stream_recv_xml(stream, &out)  // 先读 4 字节长度，再读正文
 
 **本次实现（只加触发，不加任何"自动"逻辑）：**
 - `AirliftExploit.runConnectivitySelfTestIfIdle()` —— 新增的显式入口：
-  - 走 airlift **自己的串行队列**（`com.ipaside.escapeos.airlift.selftest`），不占主线程；
+  - 走 airlift **自己的串行队列**（`com.ipaside.tequiladash.airlift.selftest`），不占主线程；
   - **单飞标记**：已有自检在跑时直接返回，快速连点勾选也不会并发；
   - 结果照旧写 `[airlift]` 日志，SSH 可取回。
 - `ExploitSelectionView.toggle()`：**只在「勾上」airlift 时**调用该入口；
@@ -7149,7 +7149,7 @@ v0.3.420 更做了完整会话握手（`idevice_new_tcp_socket` + `idevice_rsd_c
 排查方法：`git diff 2aa47a7 cf0e032`（418 → 419 的完整代码差异）。
 
 **结论：418 → 419 的代码差异只有一处** ——
-`EscapeOS/Engine/Exploits/AirliftExploit.swift` 的 `connectivitySelfTest()`
+`TequilaDash/Engine/Exploits/AirliftExploit.swift` 的 `connectivitySelfTest()`
 从「只读 RSD 服务表」变成了「**真的去建连**」：
 
 ```
@@ -7273,7 +7273,7 @@ v0.3.423 给 `enabled()` 加了缓存 —— 这三项与本条根因是**不同
 2. **airlift 的入口服务 `com.apple.streaming_zip_conduit.shim.remote` 确实存在，且建连成功。**
 
 **本版补齐第 ③ 环 —— `RSDCheckin`**：
-- `idevice_new_tcp_socket(sockaddr(10.7.0.1:port), …, "EscapeSpaceAirlift", &device)`
+- `idevice_new_tcp_socket(sockaddr(10.7.0.1:port), …, "TequilaDashAirlift", &device)`
   —— 连到服务端口并包成 `IdeviceHandle`；
 - **`idevice_rsd_checkin(device)`** —— 发 `RSDCheckin` plist 完成握手（RSD 语义下真正的"启动服务"）；
 - `idevice_free(device)` 释放。
@@ -7404,7 +7404,7 @@ start_service(com.apple.atc)                               → BrokenPipe
   - **先澄清**：那份 PoC **跑在 Mac 上** —— `device_helper` / `airtraffic_host` 链接的是
     macOS 私有框架 `MobileDevice.framework` + `AirTrafficHost.framework`（见其 Makefile），
     且 `Sources/` 里只剩 `airlift_target.h`、两个 `.m` 被 gitignore，**无法直接移植**。
-  - **但设备自连这条路是通的**：EscapeOS 已有 RSD 隧道（`LocalDevVPN 10.7.0.1:49152` +
+  - **但设备自连这条路是通的**：TequilaDash 已有 RSD 隧道（`LocalDevVPN 10.7.0.1:49152` +
     RPPairing，见 `AFCService`）与 `lockdownd_start_service`（FFI 已导出、`mcinstall.rs` 已在用），
     可以**自己扮演 AT 主机端**，不需要 Mac。
   - **本版只做第一步：连通性验证**。勾选 airlift 时自动跑
@@ -7442,7 +7442,7 @@ start_service(com.apple.atc)                               → BrokenPipe
 - **airlift**（`github.com/0xjohnnydev/airlift`）是**跑在 Mac 上**的 PoC：
   `make` + `./airlift.py`，用 macOS 的 `MobileDevice.framework` / `AirTrafficHost.framework`，
   路径为 Mac → USB/Wi-Fi → iPhone，攻击 iOS 27 的 AirTraffic/ATAirlock（Books 同步路径校验缺陷）。
-  **iOS 侧 app 拿不到那两个 macOS 框架**，无法作为 EscapeOS 内的漏洞利用实现。
+  **iOS 侧 app 拿不到那两个 macOS 框架**，无法作为 TequilaDash 内的漏洞利用实现。
 
 ## [0.3.412] - 2026-09-18
 
@@ -7874,7 +7874,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 - **③ 免登录商店详情页截图板块 → 点图预览 + 长按保存**（`I4StoreFreeDetailView`）：
   缩略图改为可点，点开走与 AppleID 详情页**完全同一套** `ImageGalleryViewer`，
   长按存图因此不必另写。缩略图尺寸 / 圆角保持原样，只加交互。
-- **共用组件抽取**（新增 `EscapeOS/Views/ImagePreviewSupport.swift`，全工程仅此一个新文件）：
+- **共用组件抽取**（新增 `TequilaDash/Views/ImagePreviewSupport.swift`，全工程仅此一个新文件）：
   - `ImageGalleryViewer`：由 `AppStoreDetailView` 里的 `AppStoreScreenshotViewer` **原样搬出改名**
     （实现未改），供三个调用点共用；
   - `ImagePreviewTarget`：`.fullScreenCover(item:)` 的 `Identifiable` 包装（原私有 `ScreenshotTarget`）；
@@ -8230,9 +8230,9 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 > **请直接安装本版**，本版包含它们全部改动。
 
 ### 修复（编译失败：v0.3.384 无产物的真因）
-- `EscapeOS/Views/I4StoreFreeView.swift:25`
+- `TequilaDash/Views/I4StoreFreeView.swift:25`
   `error: cannot find 'NiuwaRegion' in scope`。
-  根因：`NiuwaRegion` 是 `NiuwaStoreClient`（`EscapeOS/Engine/NiuwaStoreClient.swift:44`）**内部的嵌套 enum**，
+  根因：`NiuwaRegion` 是 `NiuwaStoreClient`（`TequilaDash/Engine/NiuwaStoreClient.swift:44`）**内部的嵌套 enum**，
   裸名引用找不到 → 改为全限定名 `NiuwaStoreClient.NiuwaRegion(rawValue:)`。
 
 ### 变更（下载管理操作面板：「两行」语义按口径对齐）
@@ -8363,7 +8363,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 - **补齐重试入口**：文档浏览错误态新增**「重试」按钮** + **下拉刷新**（此前超时态没有任何重试入口，等于不可用）。
 - **设备瘦身不再静默变空**：超时/失败时仍用快路径出数据；区分「应用读取超时」（错误态 + 重试）与
   「应用大小不可用」（有数据、只是不精确，非致命提示）。
-- 一并修 `EscapeSpaceProfiles` 同 hostname 无串行保护（`ProvisioningProfileStore` 与 `ProfileConfigService` 共享同一条队列）。
+- 一并修 `TequilaDashProfiles` 同 hostname 无串行保护（`ProvisioningProfileStore` 与 `ProfileConfigService` 共享同一条队列）。
 
 ### 新增
 - **虚拟定位右上角「增强守护」开关**：ON 档 = 重发 **8s → 3s**、健康检查 **12s → 5s**、**回前台立即重发**、
@@ -8396,8 +8396,8 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
   **反证**：若只是失败，`try?` 会退化成空数组、代码会继续跑完、胶囊仍在 → **胶囊消失只可能是「卡住」而非「失败」**。
   现在 Lookup 超时/失败时按「无 Lookup 数据」**继续**用 `get_apps + profile` 判定 → 胶囊最多 20 秒后照常出现。
 - **同 hostname 并发建隧道的两处违规**（项目实测铁律：同 hostname 并发 `tunnel_create_rppairing` 会互抢）：
-  · `EscapeSpaceFileShare`：应用管理与文档浏览会**各自**建隧道且无串行保护 → 加串行队列（只锁「建隧道」这一步，不锁调用方生命周期）；
-  · `EscapeSpaceProfiles`：`ProvisioningProfileStore` 与 `ProfileConfigService` 共用同一 hostname 却无保护 → 共享**同一条**串行队列。
+  · `TequilaDashFileShare`：应用管理与文档浏览会**各自**建隧道且无串行保护 → 加串行队列（只锁「建隧道」这一步，不锁调用方生命周期）；
+  · `TequilaDashProfiles`：`ProvisioningProfileStore` 与 `ProfileConfigService` 共用同一 hostname 却无保护 → 共享**同一条**串行队列。
 - **设备瘦身两条无超时读取入口**：改用带超时的入口；超时按空数据降级（「应用」分片按 0、「较大应用」为空），
   页面底部显示 `应用读取超时`，不再无限「正在读取空间占用…」。
 
@@ -8415,7 +8415,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 - **DDI 挂载也不需要**：要挂 DDI 的只有那条 lockdown 老路；现走的 **RSD → `dtservicehub` → DTX 在 iOS 17+ 不需要 DDI**
   （这也是虚拟定位一直能直接用的原因）。App 至今从不挂 DDI（`DDIDownloadView` 只下载+打包，`image_mounter` 从未被调用）。
 > **⚠️ 更正（2026-09-19）** —— 用户报告「主页模块板块的两个内置模块执行时 ServiceNotFound」
-> （`com.escapeos.locache` 定位缓存清理 / `com.escapeos.wifirefresh` WLAN 连接刷新，两者都是 `"type": "signal"`，
+> （`com.tequiladash.locache` 定位缓存清理 / `com.tequiladash.wifirefresh` WLAN 连接刷新，两者都是 `"type": "signal"`，
 > 走 `app_service_list_processes` → `app_service_send_signal`）。核实后确认上面这条「**DDI 挂载也不需要**」**结论有误**：
 >
 > 1. **原文是什么**（上面那条，一字未删）：要挂 DDI 的只有那条 lockdown 老路；现走的 RSD → `dtservicehub` → DTX
@@ -8447,7 +8447,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 > **v0.3.373 的包不存在**（tag 构建在编译阶段失败，release 未发布）。请直接安装本版，本版包含 0.3.373 的全部改动。
 
 ### 修复（编译错误）
-- `EscapeOS/Engine/BLECoordinator.swift:603`：`CBATTError.Code` **没有** `.notPermitted` 这个 case，
+- `TequilaDash/Engine/BLECoordinator.swift:603`：`CBATTError.Code` **没有** `.notPermitted` 这个 case，
   编译报 `type 'CBATTError.Code' has no case 'notPermitted'`（CI 退出码 65）。
   该处是**写请求**的应答，改为 `.writeNotPermitted`。
   （原写法意图正确但枚举名不存在；这是 v0.3.373 唯一的编译错误。）
@@ -8455,8 +8455,8 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 ## [0.3.373] - 2026-09-13
 
 ### 新增 / 变更（蓝牙位置模拟面板）
-- **设备标识**：广播名按角色 `ES-T`（模拟终端）/ `ES-S`（信号端），界面显示 `EscapeSpace（模拟终端）`。
-  **角色标签不再依赖广播名** —— 31 字节广播包里 128-bit 服务 UUID 已占 16 字节，`EscapeSpace-T` 会被 iOS 静默丢弃；
+- **设备标识**：广播名按角色 `ES-T`（模拟终端）/ `ES-S`（信号端），界面显示 `TequilaDash（模拟终端）`。
+  **角色标签不再依赖广播名** —— 31 字节广播包里 128-bit 服务 UUID 已占 16 字节，`TequilaDash-T` 会被 iOS 静默丢弃；
   而只有「模拟终端」会广播、扫描又按服务 UUID 过滤，所以列表一律按终端渲染，不再退化成「未知角色」。
 - **「附近设备」列表**：扫描只累积，不再「发现第一个就自动连」；按 identifier 去重、RSSI 降序、12 秒未出现即移除；
   点行连接，已在连接中的行禁用（不支持热切换）。
@@ -8742,7 +8742,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
   现在的顺序：volumeStore（最新版）→ 空包则用**历史版本目录**取候选（最多 6 个）逐个重打
   volumeStore → 全空才退到 redownload → 再走原有的「刷新会话 / 获取许可」流程。
   命中哪个版本会写进商店日志。
-- **启动时把版本号写进日志**：`EscapeSpace x.y.z (build) 启动`（分类「通用」）——
+- **启动时把版本号写进日志**：`TequilaDash x.y.z (build) 启动`（分类「通用」）——
   排查时先看这一行，不必再靠截图推断用户装的是哪个包。
 - 顺手清掉误入库的 `tools/__pycache__/*.pyc`（`git add -A` 带进来的），并加 `.gitignore`。
 
@@ -9121,7 +9121,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 - 百宝箱「设备控制」新增 **「监督模式（Supervision）」** 开关。开启后 Wi-Fi 射频开关走 MCInstall **Escalate 监督通道**——这是设备回 `DMCTunnelErrorDomain 14005`「Unable to set Wi-Fi power」时的正路。
 
 ### 实现链路（对齐 pymobiledevice3 `MobileConfigService.escalate` / `supervise`）
-1. **监督身份**：App 内生成 RSA-2048 + 自签证书（CN=EscapeOS），PEM/DER 持久化在 UserDefaults，跨会话同一身份（换身份 = 设备侧监督失效）。走已链接的 libcrypto（ZSign 同源），零新增依赖。
+1. **监督身份**：App 内生成 RSA-2048 + 自签证书（CN=TequilaDash），PEM/DER 持久化在 UserDefaults，跨会话同一身份（换身份 = 设备侧监督失效）。走已链接的 libcrypto（ZSign 同源），零新增依赖。
 2. **`SetCloudConfiguration`**：`IsSupervised=true` + `SupervisorHostCertificates=[证书DER]`，把设备置为受监督。
 3. **`Escalate`（同一连接内）**：`SupervisorCertificate(证书DER)` → 设备回 `Challenge` → PKCS7 附签（attached / Binary / SHA-256，`PKCS7_sign` + `PKCS7_BINARY|PKCS7_NOSMIMECAP`）→ `EscalateResponse` → `ProceedWithKeybagMigration`。
 4. **`SetWiFiPowerState`**：监督模式开启时，每次射频开关都在同一连接先 Escalate 再下发。
@@ -9130,10 +9130,10 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 - Rust 侧把「单条射频命令」泛化成 **`mcinstall_request_rsd`**（通用 MCInstall 请求 + 可选 Escalate），Swift 只组装 plist 正文，帧协议/IO 仍全在 Rust（v0.3.244 闪退教训：Swift 不碰帧协议）。
 - PKCS7 签名走 **函数指针回调**（Swift 注册 → Rust 在 Escalate 中回调），Rust 不引加密依赖、Cargo.lock 不变。
 - 手写 base64 编解码（不新增 crate）；plist 应答解析在 Swift 侧做（纯字符串处理，无指针风险）。
-- 新增文件 `EscapeOS/Engine/SupervisionService.swift`（已登记 Makefile `EscapeSpace_FILES`）。
+- 新增文件 `TequilaDash/Engine/SupervisionService.swift`（已登记 Makefile `TequilaDash_FILES`）。
 
 ### ⚠️ 须知
-- 开启会把设备置为受监督，设置里出现「此 iPhone 由 EscapeOS 监管」；**MCInstall 没有公开的撤销接口**，关闭开关只停用本 App 的监督通道，不会撤销设备侧状态。
+- 开启会把设备置为受监督，设置里出现「此 iPhone 由 TequilaDash 监管」；**MCInstall 没有公开的撤销接口**，关闭开关只停用本 App 的监督通道，不会撤销设备侧状态。
 - 若设备已被其他身份监督，`Escalate` 会失败并给出设备原文错误。
 
 ## [0.3.248] - 2026-09-08
@@ -9169,7 +9169,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### 改动
 - **协议整体下沉 Rust**：`mcinstall_set_wifi_power_rsd`（RSD 服务表取 `MCInstall.shim.remote` 端口 → 隧道内直连 → RSDCheckin → SetWiFiPowerState → 校验 `Acknowledged`）全在同一个 tokio 上下文内完成，Swift 只负责建隧道和借出句柄。
-- **补 C 声明**：`rust/idevice-ffi/idevice.h`（及 CI 会拷贝的 `EscapeOS/Tunnel/idevice.h`）新增 `mcinstall_set_wifi_power_rsd` 导出声明——这是 v0.3.246 编不过的直接原因。
+- **补 C 声明**：`rust/idevice-ffi/idevice.h`（及 CI 会拷贝的 `TequilaDash/Tunnel/idevice.h`）新增 `mcinstall_set_wifi_power_rsd` 导出声明——这是 v0.3.246 编不过的直接原因。
 - **服务可用性判定改为确定性查询**：用 `rsd_get_service_info` 直接查 RSD 握手自带的服务表，不再靠「FFI 错误码 21 == ServiceNotFound」这种未验证的映射决定要不要回退 lockdown `SetValue("WifiPowerState")`。
 - **隧道并发铁律**（与 `AFCService` 同款）：本服务所有操作走同一条串行队列；一次操作只建**一条**隧道（此前「局域网 Wi-Fi 配对」一次要建 2 条，页面 `onAppear` 还要再建 1 条）。
 - **建隧道失败退避重试**（3 次，300ms 递增），与 `AFCService` / `DeviceControlService` 对齐。
@@ -9223,7 +9223,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
   - 进度态 ProgressView + 状态文字 之前和 keepAliveCard 一起被外层 Spacer 垂直居中，keepAliveCard 较高把菊花+文字重心拉下，看起来偏下不好看。改为两段式：菊花+状态文字单独居中，keepAliveCard 贴底。
 - **iOS 27 无线配对 Bonjour 广播失败回报给 UI**：
   - `NSNetService didNotPublish` 之前只 NSLog，LiveContainer 共享应用 guest 等嵌入环境下 publish `_remotepairing-pairable-host._tcp` 被系统拒绝时用户毫无感知。v0.2.76 起把 `NSNetServicesErrorCode` 通过新通知 `WirelessPairingDidFailBroadcastNotification` 回报给 UI，在菊花下方显示「⚠️ 广播未确认（Bonjour code X）」副提示。
-  - **关于 LC 共享应用 guest 模式无法广播**：根因怀疑是 guest 进程缺失 `com.apple.developer.remotepairing` entitlement 导致 publish 被过滤/拒绝（与原版 StikDebug 在纯蜂窝 LocalDevVPN 类似的「平台/嵌入环境限制，EscapeSpace 侧无法直接修」）。本改动至少让用户能看到真因，不再静默。建议：转回普通应用或单 LC 模式。
+  - **关于 LC 共享应用 guest 模式无法广播**：根因怀疑是 guest 进程缺失 `com.apple.developer.remotepairing` entitlement 导致 publish 被过滤/拒绝（与原版 StikDebug 在纯蜂窝 LocalDevVPN 类似的「平台/嵌入环境限制，TequilaDash 侧无法直接修」）。本改动至少让用户能看到真因，不再静默。建议：转回普通应用或单 LC 模式。
 
 ## [0.2.75] - 2026-08-27
 
@@ -9237,7 +9237,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Fixed
 - **保活机制全盘审计修复**（用户补充：开启「保持后台运行」时启用 JIT 仍黑屏）：
-  - **根因链**：目标应用启动时会激活自己的 AVAudioSession，抢占/打断本应用的音频会话 → 「保持后台运行」（KeepAliveManager 静音音频保活）失效 → EscapeSpace 退后台被挂起 → attach 后 detach 未执行 → 目标应用停在 SIGSTOP 黑屏。**音频保活在「拉起其它 App 后还要继续干活」的场景天然不可靠**。
+  - **根因链**：目标应用启动时会激活自己的 AVAudioSession，抢占/打断本应用的音频会话 → 「保持后台运行」（KeepAliveManager 静音音频保活）失效 → TequilaDash 退后台被挂起 → attach 后 detach 未执行 → 目标应用停在 SIGSTOP 黑屏。**音频保活在「拉起其它 App 后还要继续干活」的场景天然不可靠**。
   - **影响面审计**：虚拟定位 / 无线配对广播（本 App 自己跑任务，不拉起其它 App）音频保活有效、不受影响；唯一受影响的是启用 JIT，v0.2.73 起已由 beginBackgroundTask 兜底修复。
   - **JIT 保活升级**：`JITBackgroundLease` 改为 beginBackgroundTask **到期自动续期**（对齐 StikDebug PR #432 续期思路），去掉对音频保活的依赖——不再受「静默音频」开关影响、不与 KeepAliveManager 抢音频会话。
   - **KeepAliveManager 增强**：纯零静音 WAV 改为 **-80dBFS 非零信号**（±1 交替 + 音量 0.01，人耳不可闻）——PR #432 实锤：纯零静音会被 iOS 判定 idle 并回收，导致保活悄悄失效（虚拟定位 / 无线配对同样受益）。
@@ -9247,7 +9247,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Fixed
 - **「启用 JIT」后目标应用永久黑屏无反应**：
-  - 根因：`process_control_launch_app` 以调试模式启动目标应用后，EscapeSpace 立即退到后台，iOS 数秒内挂起进程——QStartNoAckMode / vAttach / D（detach）流程没跑完就停摆：attach 可能已发出（T11 stop reply 已收到），但 **detach 未执行**，目标应用一直停在 SIGSTOP → 永久黑屏。
+  - 根因：`process_control_launch_app` 以调试模式启动目标应用后，TequilaDash 立即退到后台，iOS 数秒内挂起进程——QStartNoAckMode / vAttach / D（detach）流程没跑完就停摆：attach 可能已发出（T11 stop reply 已收到），但 **detach 未执行**，目标应用一直停在 SIGSTOP → 永久黑屏。
   - 修复（对齐原版 StikDebug 的 `DebugKeepAliveLease`，原版三管齐下：beginBackgroundTask + 静音音频 + 后台定位）：新增 `JITBackgroundLease`，`enableJIT` 全程持有——① `beginBackgroundTask` 争取系统后台执行宽限（核心兜底）；② 复用项目已有 `BackgroundAudioManager.requestStart()` 静音音频保活计数。defer 释放，确保 attach/detach 完整执行后目标应用正常恢复运行。
 
 ## [0.2.72] - 2026-08-27
@@ -9303,7 +9303,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Added
 - **「更多」新增「虚拟定位」入口（移植自 Bellaboy/locus-ZH，MIT）**：
-  - 原理：通过 LocalDevVPN 本机隧道 + RPPairing 配对文件，调用 Apple 开发者工具同款 DVT 定位模拟服务（Xcode「模拟位置」机制）向 locationd 注入模拟坐标——无需越狱 / 漏洞，复用 EscapeSpace 已有的 idevice FFI（Rust idevice-ffi 原生支持 location_simulation）。
+  - 原理：通过 LocalDevVPN 本机隧道 + RPPairing 配对文件，调用 Apple 开发者工具同款 DVT 定位模拟服务（Xcode「模拟位置」机制）向 locationd 注入模拟坐标——无需越狱 / 漏洞，复用 TequilaDash 已有的 idevice FFI（Rust idevice-ffi 原生支持 location_simulation）。
   - 功能：地图放置图钉 / 长按拖动、搜索地点（含坐标直搜）、定位模拟开/停、摇杆连续移动、出行方式（步行/跑步/骑行/驾车）、道路路线规划与轨迹运行（速度倍率、循环）、手绘轨迹、GPX 导入/导出、收藏与最近使用、中国地图 GCJ-02 坐标自动转换。
   - **保活（离开页面也持续运行）**：会话为全局单例（`SpoofSession.shared`），返回「更多」菜单后模拟注入与 8 秒重发 / 12 秒健康检查定时器继续运行；退到后台由「静音音频保活 + 后台定位」延续（Info.plist 已有 audio/location 后台模式）。
   - 配对文件与「应用」页共用 `Documents/pairingFile.plist`，已导入直接可用；隧道 IP 与「设置 → 本地隧道」联动。
@@ -9348,7 +9348,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
     4. **网页快捷方式**（`com.apple.webClip.managed`）：名称 / URL / 图标（相册选取 + 裁剪）/ 全屏 / 无边框，生成的 Web Clip 显示在主屏。
     5. **锁屏页脚**（`com.apple.shareddeviceconfiguration`）：监管版锁屏消息（与直接写入版双轨并存，各自独立生效）。
   - 每个工具页都有统一的底部「安装描述文件」按钮（复用项目已有的 `ProfileHTTPServer` 本机安装通道，与「屏蔽域名」同机制）与右上角菜单（导出描述文件 / 重置为默认）。
-  - 模板资源随包携带（`Resources/esc.*.mobileconfig`），首次进入复制到 `Documents/Profiles/` 作为可编辑副本，标识符已全部改为 EscapeSpace 命名，避免与真实 Lithium 安装的设备冲突。
+  - 模板资源随包携带（`Resources/esc.*.mobileconfig`），首次进入复制到 `Documents/Profiles/` 作为可编辑副本，标识符已全部改为 TequilaDash 命名，避免与真实 Lithium 安装的设备冲突。
 
 ## [0.2.64] - 2026-08-27
 
@@ -9392,14 +9392,14 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Removed
 - **日志板块整体移除**（按用户要求，后续再设计）：
-  - 删除「更多 → 日志」独立入口与 `EscapeLog` 引擎（内存 500 条 + `Documents/escapeos.log` 持久化）、`LogView` 完整日志面板（等宽字体 / 长按复制 / 导出 / 清空）。
+  - 删除「更多 → 日志」独立入口与 `EscapeLog` 引擎（内存 500 条 + `Documents/tequiladash.log` 持久化）、`LogView` 完整日志面板（等宽字体 / 长按复制 / 导出 / 清空）。
   - 删除「配置管理」页内嵌的「操作日志」区与跳转入口。
-  - 对应源码：`EscapeOS/Views/LogView.swift`、`EscapeOS/Engine/EscapeLog.swift` 已移出工程（Makefile 注销）。
+  - 对应源码：`TequilaDash/Views/LogView.swift`、`TequilaDash/Engine/EscapeLog.swift` 已移出工程（Makefile 注销）。
 - **配置管理「Respring」按钮 + 全屏黑屏覆盖层移除**：
   - 经与原版 Erosion `Respring.swift` 逐行对照，该方案是**不可靠的"假 respring"**：用 WKWebView 堆 500 层 `backdrop-filter` + 死循环 `navigator.share`/`crypto` 去"挤爆" SpringBoard，本就不保证真重启。
   - 原版之所以"很快"是因为其 `makeUIView` 里 `WKWebpagePreferences` 创建了却**没赋值给 `webView.configuration`**，JS 实际被禁、重载脚本根本没跑；本端移植时修正了该 bug 导致 JS 真执行 → WebKit 被拖死 + 我自加的 `.brightness(-1.0)` 全屏压黑 → 你看到的"黑屏 + 延迟"。
   - MDM 监督模式改动本就需要**真实重启**才生效，假 respring 既黑屏又不可靠，属于减分项。
-  - 现改为：应用 / 恢复成功后弹窗明确提示「请手动重启（Respring / 重启设备）使更改生效」，干净不黑屏。移除 `EscapeOS/Views/RespringView.swift`（Makefile 注销）。
+  - 现改为：应用 / 恢复成功后弹窗明确提示「请手动重启（Respring / 重启设备）使更改生效」，干净不黑屏。移除 `TequilaDash/Views/RespringView.swift`（Makefile 注销）。
 
 ### Changed
 - **明确配置管理不依赖 LiveContainer 访客容器扩展**：`SandboxEscape.consume` 对系统组路径（`/private/var/containers/Shared/SystemGroup/...`）走的是真实 `bad_query`，与原版 Erosion 一致；LC 访客容器扩展（`lcContainerExtensionsActive` / `lcHomePath` / `lcAppGroupPath`）只在「容器管理」功能覆盖 LC 私有/共享容器根时使用，配置管理未触碰。源码注释已写明此边界。
@@ -9416,7 +9416,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 - **配置管理 · 备份并分享**：一键将 `SharedDeviceConfiguration.plist` / `CloudConfigurationDetails.plist` 与说明.txt 打包为 zip，通过系统分享面板导出（隔空投送 / 文件 / 微信等）；不依赖写权限，任何环境可用。
 - **配置管理 · 恢复入口**：工具栏新增「恢复」按钮（gobackward，对齐原版），确认后删除页脚并取消监督。
 - **配置管理 · Respring**：应用 / 恢复成功后弹窗提供「Respring」按钮；移植原版 Erosion 的 WKWebView 内存压力方案（@neonmodder123 / @skadz108），以全屏黑屏覆盖层触发 SpringBoard 重启，适配所有 iOS 版本。
-- **日志板块**（参考原版 Erosion 日志面板样式）：「更多 → 日志」新增入口；等宽字体滚动展示、长按菜单复制 / 导出、工具栏导出（系统分享面板）与清空。配置管理探测 / 应用 / 恢复 / 备份自动记录日志（内存 500 条 + 持久化 `Documents/escapeos.log`）。
+- **日志板块**（参考原版 Erosion 日志面板样式）：「更多 → 日志」新增入口；等宽字体滚动展示、长按菜单复制 / 导出、工具栏导出（系统分享面板）与清空。配置管理探测 / 应用 / 恢复 / 备份自动记录日志（内存 500 条 + 持久化 `Documents/tequiladash.log`）。
 - **配置管理内嵌日志板块**：「配置管理」页底部新增「操作日志」区，实时显示最近 15 条操作记录（等宽字体，参考原版 LogView），并提供「查看完整日志 / 导出」跳转至完整日志面板，便于现场排查「写入被拒」等问题。
 
 ### Changed
@@ -9585,7 +9585,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Changed
 
-- **回退 v0.2.45/v0.2.46 并重新设计**：按用户反馈回退到 v0.2.44 重新做，不再强套 Lara 风格，保持 EscapeOS 原有视觉语言。
+- **回退 v0.2.45/v0.2.46 并重新设计**：按用户反馈回退到 v0.2.44 重新做，不再强套 Lara 风格，保持 TequilaDash 原有视觉语言。
 - **「更多」设置入口改为右上角齿轮**：`MoreView` 移除列表中的「设置」行，在导航栏右上角添加 `gearshape` 图标；点击后以 `.sheet` 弹出 `SettingsForm`（带「完成」按钮），不再 push 到新页面。
 - **「空间回收」分段控件压缩**：`SpaceReclaimView` 顶部 Picker 减少内边距，背景与列表一致，避免额外视觉层级。
 - **选择模式底部操作条抬高**：`ReclaimTabView` 与 `LiveCleanTabView` 的 `batchBar` 增加底部内边距，按钮不再贴底，避免被 tab bar / home indicator 遮挡；`LiveCleanTabView` 的清理按钮也统一为 `borderedProminent` 样式，减少两页割裂感。
@@ -9595,7 +9595,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 ### Changed
 
 - **「空间回收」与「容器管理」合并为单 tab + 分段（分栏）**. 原「空间回收」tab 现承载一个分段控件：`常规清理`（原系统应用回收 `ReclaimTabView`）与 `容器管理`（原 LiveContainer 内应用 `LiveCleanTabView`）。独立的「容器管理」tab 已移除，二者共用同一份底层 `ReclaimAppView` 详情页，标题统一为「空间回收」。
-- 新增 `EscapeOS/Views/SpaceReclaimView.swift` 作为合并容器；`Makefile` 注册新源文件。
+- 新增 `TequilaDash/Views/SpaceReclaimView.swift` 作为合并容器；`Makefile` 注册新源文件。
 
 ### Fixed / Optimized
 
@@ -9613,7 +9613,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Fixed
 
-- **借鉴 LiveContainer 修复配对文件导入失败**. 真机反馈在 LiveContainer 内只有开启 LC 的「修复文件选择器」才能导入配对文件。根因是 SwiftUI `.fileImporter` 返回的是 security-scoped 原始 URL，在 LC 沙盒中 `startAccessingSecurityScopedResource()` 会失败。新增 `EscapeOS/Views/PairingFilePicker.swift`：
+- **借鉴 LiveContainer 修复配对文件导入失败**. 真机反馈在 LiveContainer 内只有开启 LC 的「修复文件选择器」才能导入配对文件。根因是 SwiftUI `.fileImporter` 返回的是 security-scoped 原始 URL，在 LC 沙盒中 `startAccessingSecurityScopedResource()` 会失败。新增 `TequilaDash/Views/PairingFilePicker.swift`：
   - 使用 `UIDocumentPickerViewController` 并设置 `asCopy: true`，让系统在返回前先把文件复制到 App 沙盒，从而绕过 LC 的文件选择器 hook。
   - 用 `pairingFilePicker(isPresented:onPicked:)` 替换 `PairingSetupView` 的 `.fileImporter`。
   - 取消选择不再显示错误。
@@ -9622,16 +9622,16 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 ### Changed
 
 - 版本号 `0.2.42 → 0.2.43`（`control` 与 `Resources/Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion` 同步）。
-- `Makefile` 注册新源文件 `EscapeOS/Views/PairingFilePicker.swift`。
+- `Makefile` 注册新源文件 `TequilaDash/Views/PairingFilePicker.swift`。
 
 ## [0.2.42] - 2026-08-26
 
 ### Added
 
-- **移植 StikPair 后台保活机制到 iOS 27 无线配对页**。真机反馈 v0.2.41 广播「过一会就消失」，因此把原版 StikPair 的 **Background keep-alive** 两个开关汉化并移植到 EscapeSpace：
-  - `EscapeOS/Services/BackgroundAudioManager.swift`：持续播放 0 音量 PCM 缓冲区并占用 `AVAudioSession`，让系统认为 App「正在播放音频」，延缓 Bonjour 被 SRP sweeper 回收。
-  - `EscapeOS/Services/BackgroundLocationManager.swift`：以极低精度 + 最大距离过滤持续请求位置更新，让系统认为 App「正在使用位置服务」，同样用于后台保活。
-  - `EscapeOS/Services/WirelessKeepAlive.swift`：组合音频/位置两种机制，并申请 `beginBackgroundTask` 延长后台存活时间。
+- **移植 StikPair 后台保活机制到 iOS 27 无线配对页**。真机反馈 v0.2.41 广播「过一会就消失」，因此把原版 StikPair 的 **Background keep-alive** 两个开关汉化并移植到 TequilaDash：
+  - `TequilaDash/Services/BackgroundAudioManager.swift`：持续播放 0 音量 PCM 缓冲区并占用 `AVAudioSession`，让系统认为 App「正在播放音频」，延缓 Bonjour 被 SRP sweeper 回收。
+  - `TequilaDash/Services/BackgroundLocationManager.swift`：以极低精度 + 最大距离过滤持续请求位置更新，让系统认为 App「正在使用位置服务」，同样用于后台保活。
+  - `TequilaDash/Services/WirelessKeepAlive.swift`：组合音频/位置两种机制，并申请 `beginBackgroundTask` 延长后台存活时间。
   - 在 `RootView` 的无线配对 sheet 中新增「后台保活」卡片，含「静默音频」与「位置更新」两个开关（默认关闭，避免未授权弹窗），开关状态持久化到 `@AppStorage`。配对开始时按用户选择启动保活，配对成功 / sheet 关闭时停止。
 - **新增后台模式与权限描述**：`Resources/Info.plist` 增加 `UIBackgroundModes = [audio, location]`，并补充 `NSLocationWhenInUseUsageDescription` / `NSLocationAlwaysAndWhenInUseUsageDescription` 汉化说明。
 
@@ -9643,7 +9643,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Fixed
 
-- **Bonjour 广播 "一会就消失" / 配对设备看不到 EscapePair**. 实测 iOS 18 设备开发模式里 mDNS 注册确实出现一会儿随后被系统 SRP 清理；根因是 `EscapeOS/Tunnel/WirelessPairing.m` 里 `si_ready_cb` 的 15 秒 `dispatch_semaphore_wait` 把 Rust worker thread 给阻塞了——iOS 18 上 `NSNetService.publish` 的 delegate 回调（`netServiceDidPublish:` / `didNotPublish:`）常常不触发 / 多分钟后才触发，导致后续 `listener.accept()` 永远接不到设备连接。可观测外部表现：sheet 显示「正在广播」但设备侧开发者模式短暂亮一下「StikPair/iloader/idevice_pair-XXX」之类相邻服务，EscapePair 不可见。本版修法：
+- **Bonjour 广播 "一会就消失" / 配对设备看不到 EscapePair**. 实测 iOS 18 设备开发模式里 mDNS 注册确实出现一会儿随后被系统 SRP 清理；根因是 `TequilaDash/Tunnel/WirelessPairing.m` 里 `si_ready_cb` 的 15 秒 `dispatch_semaphore_wait` 把 Rust worker thread 给阻塞了——iOS 18 上 `NSNetService.publish` 的 delegate 回调（`netServiceDidPublish:` / `didNotPublish:`）常常不触发 / 多分钟后才触发，导致后续 `listener.accept()` 永远接不到设备连接。可观测外部表现：sheet 显示「正在广播」但设备侧开发者模式短暂亮一下「StikPair/iloader/idevice_pair-XXX」之类相邻服务，EscapePair 不可见。本版修法：
   1. **不再阻塞 Rust thread**：删掉 semaphore 等待，改成 dispatch 到主队列 publish 完就返回，Rust 持续 `accept()`。
   2. **NSTimer 30 s 心跳**：每 30 秒调一次 `stopAdvertising` + `publish`，强制 SRP 重新注册，避免系统 SRP sweeper 回收。
   3. **NSLog 关键节点**：在 `publish begin` / `netServiceDidPublish` / `didNotPublish` / `stopAdvertising` 处输出 `name= / port=`，Console.app 连真机可直接看 SRP 状态，方便定位再次出现的同类问题。
@@ -9658,7 +9658,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Changed
 
-- **iOS 27 无线配对广播名称**. 之前 `mDNS service instance name` 直接用 Rust `pairing_file.identifier` (UUID 前缀如 `7b591c…`)，在 iOS 开发者模式的「配对设备」列表里看不到（StikPair、iloader、idevice_pair-* 等可读名字都能看到）。改为 `EscapePair-{serviceID 后 6 位}`（如 `EscapePair-7b591c`），既人类可读又对单一 host 稳定，多台同 App 设备也不会撞名。涉及 `EscapeOS/Tunnel/WirelessPairing.m` (`si_ready_cb`)。
+- **iOS 27 无线配对广播名称**. 之前 `mDNS service instance name` 直接用 Rust `pairing_file.identifier` (UUID 前缀如 `7b591c…`)，在 iOS 开发者模式的「配对设备」列表里看不到（StikPair、iloader、idevice_pair-* 等可读名字都能看到）。改为 `EscapePair-{serviceID 后 6 位}`（如 `EscapePair-7b591c`），既人类可读又对单一 host 稳定，多台同 App 设备也不会撞名。涉及 `TequilaDash/Tunnel/WirelessPairing.m` (`si_ready_cb`)。
 
 ### Added
 
@@ -9669,7 +9669,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 ### Added
 
 - **真实的 iOS 27 无线配对引擎（host-pairing）**. 接入设备主动发起的无线配对：App 作为 pairable-host 通过系统 Bonjour 广播 `_remotepairing-pairable-host._tcp`，设备连接后驱动 rppairing 握手，App 内直接显示 6 位配对码（参考 SideInstaller 的 in-app PIN 卡片，区别于原版 StikPair 的系统通知），配对成功后把 `RpPairingFile` 写入 `Documents/pairingFile.plist`，`TunnelContext` 自动加载建立隧道。
-  - 引擎以 Rust 重写于 `rust/idevice-ffi/src/pairable_host_run.rs`，经 cbindgen 风格的 C 接口（`si_run_host` / `si_result_free`）暴露，由 `EscapeOS/Tunnel/WirelessPairing.{h,m}` 桥接到 SwiftUI（`RootView` 的配对设置页）。mDNS 广播走系统 `NSNetService`（规避 Rust mDNS 守护进程所需的 iOS 多播 entitlement）。
+  - 引擎以 Rust 重写于 `rust/idevice-ffi/src/pairable_host_run.rs`，经 cbindgen 风格的 C 接口（`si_run_host` / `si_result_free`）暴露，由 `TequilaDash/Tunnel/WirelessPairing.{h,m}` 桥接到 SwiftUI（`RootView` 的配对设置页）。mDNS 广播走系统 `NSNetService`（规避 Rust mDNS 守护进程所需的 iOS 多播 entitlement）。
   - `libidevice_ffi.a` 改为 **Rust 源码现场编译**：CI 在 `aarch64-apple-ios` 目标用 cargo 从 `idevice` crate（jkcoxson，BSD-3，pin `7bd551c`）构建，取代原先不含无线配对主机函数的 v0.1.5 预编译包；单一 `.a` 同时提供既有 `idevice_*` 函数与新 `si_*` 引擎函数，避免重复符号。
   - `Resources/Info.plist` 新增 `NSBonjourServices = _remotepairing-pairable-host._tcp` 与 `NSLocalNetworkUsageDescription`；host 的 `alt_irk` 持久化到 `UserDefaults`，使已配对设备下次仍能识别本机。`Pin` / 状态 / 成功 / 失败均以浅色圆角卡片 + 蓝色强调呈现（无棕色 / earthy 色调）。
 
@@ -9707,7 +9707,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Added
 
-- 新增 `EscapeOS/Engine/ProfileHTTPServer.swift`：一个极简的本地 HTTP 服务器，仅用于向 Safari 提供 `.mobileconfig` 下载；支持随机端口、自动停止、后台任务保持。
+- 新增 `TequilaDash/Engine/ProfileHTTPServer.swift`：一个极简的本地 HTTP 服务器，仅用于向 Safari 提供 `.mobileconfig` 下载；支持随机端口、自动停止、后台任务保持。
 
 ## [0.2.35] - 2026-08-25
 
@@ -9717,14 +9717,14 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
   - 默认屏蔽苹果系统更新 / 验证相关域名（`mesu.apple.com`、`gdmf.apple.com` 等共 26 个），已按用户要求移除 `www.baidu.com`；每条预设均可单独开关。
   - 新增「自定义域名」输入框，可随时添加任意要屏蔽的域名（自动去掉协议头 / 路径 / 端口，去重并小写），左滑可删除；自定义域名持久化保存在本机，重启应用后仍保留。
   - 点击「生成描述文件」后，将当前启用的域名清单写入 `Documents/DomainBlocker/blocked-domains.mobileconfig`，随后可「载入描述文件」通过 `UIDocumentInteractionController` 路由到系统「设置」安装，或「分享 / 保存到文件」后在「文件」App 中打开安装。
-  - 新增 `EscapeOS/Views/DomainBlockerView.swift`：含 `DomainBlockerStore`（持久化）、`buildProfileXML`（生成 plist）、`ProfileInstaller`（描述文件安装桥接）。
+  - 新增 `TequilaDash/Views/DomainBlockerView.swift`：含 `DomainBlockerStore`（持久化）、`buildProfileXML`（生成 plist）、`ProfileInstaller`（描述文件安装桥接）。
 
 ## [0.2.34] - 2026-08-25
 
 ### Added
 
-- **新增「更多 → 开发者镜像」：移植 StikDebug 的 Redownload DDI 功能**. 下载 Xcode_iOS_DDI_Personalized 的开发者镜像文件（`BuildManifest.plist`、`Image.dmg`、`Image.dmg.trustcache`）到 EscapeSpace 的 `Documents/DDI/` 目录，下载完成后自动打包为 `DMG.zip` 并弹出系统分享。
-  - 新增 `EscapeOS/Views/DDIDownloadView.swift`：显示下载进度、文件清单、分享入口；使用 `URLSession.download` 下载，使用项目内已有的 `ZipWriter` 打包。
+- **新增「更多 → 开发者镜像」：移植 StikDebug 的 Redownload DDI 功能**. 下载 Xcode_iOS_DDI_Personalized 的开发者镜像文件（`BuildManifest.plist`、`Image.dmg`、`Image.dmg.trustcache`）到 TequilaDash 的 `Documents/DDI/` 目录，下载完成后自动打包为 `DMG.zip` 并弹出系统分享。
+  - 新增 `TequilaDash/Views/DDIDownloadView.swift`：显示下载进度、文件清单、分享入口；使用 `URLSession.download` 下载，使用项目内已有的 `ZipWriter` 打包。
   - 在 `MoreView` 新增「开发者镜像」卡片入口，与「壁纸」「备份」「设置」保持统一卡片风格。
 - **Gestalt 右上角菜单新增「备份 MobileGestalt」**. 在 `GestaltView` 的 `ellipsis.circle` 菜单中新增「备份 MobileGestalt」选项，点击后将当前读取到的 `com.apple.MobileGestalt.plist` 复制为带时间戳的临时文件并弹出分享。
   - 在 `GestaltEngine.swift` 新增 `exportShareableBackup()`，先校验 `loaded` 与可读性，再复制到 `tmp/MobileGestalt-yyyyMMdd-HHmmss.plist`。
@@ -9756,8 +9756,8 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 ### Added
 
 - **新增「更多 → 壁纸」：移植 Erosion 的 Custom Wallpapers 功能**. 可将 `.tendies` 壁纸包导入并应用到系统 PosterBoard（支持 Collections / MercuryPoster / Videos 三类描述符）。
-  - 新增 `EscapeOS/Views/Wallpaper/WallpaperModels.swift`（`TendiesObject`、`PBPath`）。
-  - 新增 `WallpaperHandler.swift`：使用 EscapeOS 已有的 `ArchiveExtractor`/`ZipReader` 解压 `.tendies`，解析并随机化 descriptor identifier，持久化到 `Documents/Wallpapers`；通过 `bad_query_list` 自动发现 PosterBoard 容器路径。
+  - 新增 `TequilaDash/Views/Wallpaper/WallpaperModels.swift`（`TendiesObject`、`PBPath`）。
+  - 新增 `WallpaperHandler.swift`：使用 TequilaDash 已有的 `ArchiveExtractor`/`ZipReader` 解压 `.tendies`，解析并随机化 descriptor identifier，持久化到 `Documents/Wallpapers`；通过 `bad_query_list` 自动发现 PosterBoard 容器路径。
   - 新增 `WallpaperView.swift`：卡片网格展示已导入壁纸包，点击切换启用/禁用，底部「导入 .tendies」+ 右上角菜单（打开 PosterBoard / 清空导入），工具栏「应用」将选中的描述符写入 PosterBoard 容器。
   - 所有 UI 与错误提示已汉化。
   - 打开 PosterBoard 使用 runtime `NSClassFromString("LSApplicationWorkspace")` + `performSelector`，避免链接私有 framework。
@@ -9793,8 +9793,8 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Changed
 
-- **包名回退为 EscapeSpace 原始 Bundle ID**. `control` 与 `Resources/Info.plist` 的 Bundle ID 由 `com.apple.mobile.MobileHouseArrest`（MHA 分支遗留）改回 `com.ipaside.escapeos`，与原始 EscapeSpace 身份一致；`EscapeSpace.entitlements` 仅含 `get-task-allow`，无需改动。版本号 `0.2.28 → 0.2.30`（`CFBundleShortVersionString` / `CFBundleVersion` 与 `control` 同步）。
-- **「容器管理」共享应用显示真实名称 + 图标 + 绿色「共享」胶囊**. 之前共享（被 LiveContainer “转换”/converted）的容器应用只显示 UUID、无名称/图标，因为 EscapeOS 只在宿主的 `Documents/Applications` 下查 `.app`；而共享 guest 的 `.app` 实际位于 **AppGroup 的 `LiveContainer/Applications`**（文件夹名可能是裸 bundle id、无 `.app` 后缀）。现已：
+- **包名回退为 TequilaDash 原始 Bundle ID**. `control` 与 `Resources/Info.plist` 的 Bundle ID 由 `com.apple.mobile.MobileHouseArrest`（MHA 分支遗留）改回 `com.ipaside.tequiladash`，与原始 TequilaDash 身份一致；`TequilaDash.entitlements` 仅含 `get-task-allow`，无需改动。版本号 `0.2.28 → 0.2.30`（`CFBundleShortVersionString` / `CFBundleVersion` 与 `control` 同步）。
+- **「容器管理」共享应用显示真实名称 + 图标 + 绿色「共享」胶囊**. 之前共享（被 LiveContainer “转换”/converted）的容器应用只显示 UUID、无名称/图标，因为 TequilaDash 只在宿主的 `Documents/Applications` 下查 `.app`；而共享 guest 的 `.app` 实际位于 **AppGroup 的 `LiveContainer/Applications`**（文件夹名可能是裸 bundle id、无 `.app` 后缀）。现已：
   - `LiveContainerDiscovery` 在 AppGroup `LiveContainer/Applications` 下查找共享 guest 的 `.app`（放宽 `enumerateGuestBundles`：任意含 `Info.plist` 的目录均视为候选，兼容无后缀的裸 bundle id 目录），取回真实 `CFBundleDisplayName` / 图标 / Bundle ID，并标记 `isShared = true`。
   - `LiveCleanTabView` 对共享 guest 在名称旁渲染绿色「共享」胶囊，与普通（私有）guest 区分。
 
@@ -9804,14 +9804,14 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Added（LiveContainer 侧，随 LC 主分支 nightly 发布）
 
-- **LiveContainer 设置新增「Guest Container Extension」开关**. 位于设置页（默认开启），绑定到 App Group 套件 `UserDefaults` 的 `LCContainerExtensionEnabled`。关闭后，经典启动路径（`LCBootstrap`）与多任务路径（`AppSceneViewController`）都不再为 EscapeOS 签发容器沙盒扩展，并下发 `ESC_LC_GRANT_STATUS=skipped:disabled`，使 EscapeOS 诊断可见「已禁用」。
-- **多语言**. `Resources/Localizable.xcstrings` 新增 `lc.settings.containerExtension` 与 `lc.settings.containerExtensionDesc` 两键，覆盖 LC 全部 16 种 UI 语言（ar / de / en / es / fr / it / ja / ko / pl / pt-BR / ru / sv / tr / vi / zh-Hans / zh-Hant）。`LCSharedUtils` 的 `isEscapeOS` 识别同步改为 `com.ipaside.escapeos`。
+- **LiveContainer 设置新增「Guest Container Extension」开关**. 位于设置页（默认开启），绑定到 App Group 套件 `UserDefaults` 的 `LCContainerExtensionEnabled`。关闭后，经典启动路径（`LCBootstrap`）与多任务路径（`AppSceneViewController`）都不再为 TequilaDash 签发容器沙盒扩展，并下发 `ESC_LC_GRANT_STATUS=skipped:disabled`，使 TequilaDash 诊断可见「已禁用」。
+- **多语言**. `Resources/Localizable.xcstrings` 新增 `lc.settings.containerExtension` 与 `lc.settings.containerExtensionDesc` 两键，覆盖 LC 全部 16 种 UI 语言（ar / de / en / es / fr / it / ja / ko / pl / pt-BR / ru / sv / tr / vi / zh-Hans / zh-Hant）。`LCSharedUtils` 的 `isTequilaDash` 识别同步改为 `com.ipaside.tequiladash`。
 
 ## [0.2.14] - 2026-08-21
 
 ### Changed
 
-- **项目更名 EscapeOS → EscapeSpace**. 应用名（二进制 / `CFBundleExecutable` / `CFBundleDisplayName` / `control` Name / `@main` 结构体）统一改为 EscapeSpace；设置页「关于」行、各项备份路径提示文案（「文件 → 我的iPhone → EscapeSpace → Backups」）、限制说明与错误提示中的可见产品名同步更新。Bundle ID（`com.ipaside.escapeos`）保持不变，以免破坏已建立的配对文件与备份。源码目录 `EscapeOS/` 与内部错误域、日志串、`EscapeOS-Bridging-Header.h`、持久化元数据键 `escapeOSVersion` 等有意保留，避免影响既有备份兼容性与隧道认证。
+- **项目更名 TequilaDash → TequilaDash**. 应用名（二进制 / `CFBundleExecutable` / `CFBundleDisplayName` / `control` Name / `@main` 结构体）统一改为 TequilaDash；设置页「关于」行、各项备份路径提示文案（「文件 → 我的iPhone → TequilaDash → Backups」）、限制说明与错误提示中的可见产品名同步更新。Bundle ID（`com.ipaside.tequiladash`）保持不变，以免破坏已建立的配对文件与备份。源码目录 `TequilaDash/` 与内部错误域、日志串、`TequilaDash-Bridging-Header.h`、持久化元数据键 `tequilaDashVersion` 等有意保留，避免影响既有备份兼容性与隧道认证。
 - **移除设置页「诊断（调试用）」区块**. 删除 AppGroup 探测按钮、结果滚动视图、分享结果与相关状态 / 方法（`runProbe` / `shareProbeResult` / `isoTimestamp`），并删除引擎文件 `Engine/AppGroupProbe.swift`。该探测仅用于前期研究取证，对普通用户无意义。
 - **应用列表移除右侧 A–Z 字母跳转索引**. 删去覆盖在列表右侧的蓝色字母条与 `sectionIndex` / `jumpToLetter` 逻辑，列表恢复普通滚动（应用仍按名称分组）。
 - **更新 App 图标**. 替换为新的垃圾桶（回收）风格图标，重新生成 1024×1024 主图与全套 `Resources/AppIcon*.png` 尺寸。
@@ -9846,7 +9846,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Changed
 
-- **诊断结果可滚动 + 支持分享**. v0.2.9 的诊断结果以固定高度 `Text` 展示，长报告会被截断、用户无法看到下方 C/D 策略与枚举结果。现在把结果文本包进 `ScrollView(.vertical)` 并固定高度 360pt，可上下滑动查看完整报告；同时在结果下方新增「分享结果」按钮，把当前探测文本写入临时 `.txt` 文件（命名 `EscapeOS-AppGroup-Probe-<时间戳>.txt`），调用系统分享面板导出到文件 App / 隔空投送 / 微信等。
+- **诊断结果可滚动 + 支持分享**. v0.2.9 的诊断结果以固定高度 `Text` 展示，长报告会被截断、用户无法看到下方 C/D 策略与枚举结果。现在把结果文本包进 `ScrollView(.vertical)` 并固定高度 360pt，可上下滑动查看完整报告；同时在结果下方新增「分享结果」按钮，把当前探测文本写入临时 `.txt` 文件（命名 `TequilaDash-AppGroup-Probe-<时间戳>.txt`），调用系统分享面板导出到文件 App / 隔空投送 / 微信等。
 
 ## [0.2.9] - 2026-08-20
 
@@ -9872,7 +9872,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 ### Added
 
 - **备份标签页 · 批量选择删除**. 新增「选择」模式（右上角）：进入后每行左侧显示勾选圈，点按整行切换选中，底部栏显示「已选 N 项」+「删除」；删除前二次确认（不可撤销）。非选择态仍保留右滑删除与右滑分享。
-- **备份标签页 · 左上角自定义恢复**. 新增左上角「恢复」按钮，通过系统文档选择器（`UIDocumentPickerViewController`，限定 `.zip`）选任意一个 EscapeOS 备份压缩包；校验为合法备份（含 `backup.json`）后弹出**选择恢复目标**面板，分「应用」（系统已装应用）与「容器应用」（LiveContainer guest）两个区块、容器行带橙色「容器」胶囊区分。选中目标即发起恢复；可恢复到不同 UUID 沙盒的容器应用（借 v0.2.5 的 `preselectedGuest` 直接定位，不再二次弹沙盒选择）；若备份与目标应用不一致会给出覆盖风险警告。非 EscapeOS 备份或读取失败给出明确提示。
+- **备份标签页 · 左上角自定义恢复**. 新增左上角「恢复」按钮，通过系统文档选择器（`UIDocumentPickerViewController`，限定 `.zip`）选任意一个 TequilaDash 备份压缩包；校验为合法备份（含 `backup.json`）后弹出**选择恢复目标**面板，分「应用」（系统已装应用）与「容器应用」（LiveContainer guest）两个区块、容器行带橙色「容器」胶囊区分。选中目标即发起恢复；可恢复到不同 UUID 沙盒的容器应用（借 v0.2.5 的 `preselectedGuest` 直接定位，不再二次弹沙盒选择）；若备份与目标应用不一致会给出覆盖风险警告。非 TequilaDash 备份或读取失败给出明确提示。
 
 ## [0.2.5] - 2026-08-20
 
@@ -9905,15 +9905,15 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Fixed
 
-- **Apps tab · 卸载在 iOS 26 上真正可用**. v0.2.1 在进程内通过 `dlopen("/usr/lib/libmis.dylib")` 直接调用 `MobileInstallationUninstall`。`installd`（该调用经 XPC 转发的目标）以调用方权限校验拒绝：EscapeOS 仅有 `get-task-allow`，没有 `com.apple.private.mobileinstallation.allow-uninstall`，于是返回 `-1`，界面表现为「卸载目标应用失败」。现在卸载改走 **配对文件 + LocalDevVPN 隧道**（`TunnelContext` → `installation_proxy_uninstall`，iOS 26.4+ 走 RPPairing、iOS 18 走 lockdown），与应用列表走的是同一套经配对文件认证的通道。`installd` 因信任的配对文件而放行，无需进程内私有 entitlement。iOS 仍可能弹出系统「删除 App」确认框，属正常，按成功处理。
+- **Apps tab · 卸载在 iOS 26 上真正可用**. v0.2.1 在进程内通过 `dlopen("/usr/lib/libmis.dylib")` 直接调用 `MobileInstallationUninstall`。`installd`（该调用经 XPC 转发的目标）以调用方权限校验拒绝：TequilaDash 仅有 `get-task-allow`，没有 `com.apple.private.mobileinstallation.allow-uninstall`，于是返回 `-1`，界面表现为「卸载目标应用失败」。现在卸载改走 **配对文件 + LocalDevVPN 隧道**（`TunnelContext` → `installation_proxy_uninstall`，iOS 26.4+ 走 RPPairing、iOS 18 走 lockdown），与应用列表走的是同一套经配对文件认证的通道。`installd` 因信任的配对文件而放行，无需进程内私有 entitlement。iOS 仍可能弹出系统「删除 App」确认框，属正常，按成功处理。
 
 ## [0.2.1] - 2026-08-20
 
 ### Added
 
-- **Apps tab · batch uninstall**. A new `选择` button enters multi-select mode (matches the Reclaim tab UX). Long-press a row to toggle; `全选` selects everything in the current search filter; a bottom bar shows the count and a destructive `卸载` button. Confirm + `AppListViewModel.uninstallBatch` → `UninstallService.uninstall(bundleId:)`, which calls `MobileInstallationUninstall` in `/usr/lib/libmis.dylib` (loaded with `dlopen`/`dlsym` at runtime so no private SDK is needed). The pairing file already places EscapeOS in `misagent`'s trust list — `installd` accepts the call and surfaces the system "Delete App" alert only when iOS requires explicit consent. Failures keep going through the batch and are summarized in one alert.
+- **Apps tab · batch uninstall**. A new `选择` button enters multi-select mode (matches the Reclaim tab UX). Long-press a row to toggle; `全选` selects everything in the current search filter; a bottom bar shows the count and a destructive `卸载` button. Confirm + `AppListViewModel.uninstallBatch` → `UninstallService.uninstall(bundleId:)`, which calls `MobileInstallationUninstall` in `/usr/lib/libmis.dylib` (loaded with `dlopen`/`dlsym` at runtime so no private SDK is needed). The pairing file already places TequilaDash in `misagent`'s trust list — `installd` accepts the call and surfaces the system "Delete App" alert only when iOS requires explicit consent. Failures keep going through the batch and are summarized in one alert.
 - **Search bar in Reclaim**. `ReclaimTabView` now has a `.searchable` box matching app name + bundle id (and a `没有匹配 "<q>" 的应用。` placeholder). It sits next to the existing 选择 batch UI.
-- **Shared-app explanation banner in LiveClean**. LiveContainer's shared apps live under `AppGroup/LiveContainer/Shared/...` — a different iOS sandbox that EscapeOS's `bad_query` cannot escape into from inside LiveContainer's own Data container. The list now shows a `person.2.slash` banner explaining the workaround (Convert to Private inside LC → revisit), instead of pretending the apps are missing.
+- **Shared-app explanation banner in LiveClean**. LiveContainer's shared apps live under `AppGroup/LiveContainer/Shared/...` — a different iOS sandbox that TequilaDash's `bad_query` cannot escape into from inside LiveContainer's own Data container. The list now shows a `person.2.slash` banner explaining the workaround (Convert to Private inside LC → revisit), instead of pretending the apps are missing.
 
 ### Removed
 
@@ -9980,7 +9980,7 @@ Production IPA after 0.1.4. Hardware-checked on iPhone 17, iOS 26.5.1 (list, bro
 ### Added
 
 - **Reclaim** tab ranks apps by Safe cache/tmp bytes. Per-app Reclaim Space from App Detail. Batch reclaims Safe buckets only. Session buckets (cookies, WebKit, HTTP storage) are opt-in with a second confirm. Reclaim never deletes Documents, Preferences, or Application Support. Opening an app after a tab scan reuses those Safe sizes instead of measuring again. Locked cache files (permission denied) are skipped instead of failing the whole reclaim.
-- **Reset App Data** on App Detail empties Documents, Library, and tmp for that app (not Keychain). Resetting EscapeOS itself also warns that the pairing file will be deleted.
+- **Reset App Data** on App Detail empties Documents, Library, and tmp for that app (not Keychain). Resetting TequilaDash itself also warns that the pairing file will be deleted.
 
 ## [0.1.4] - 2026-08-17
 
@@ -9989,7 +9989,7 @@ Production IPA after 0.1.3. Hardware-checked on iPhone 17, iOS 26.5.1 (list, bro
 ### Added
 
 - Password prompt when extracting an encrypted zip (ZipCrypto and WinZip AES-128/192/256) or encrypted 7z (AES-256, including encrypted names).
-- Extract via vendored [SWCompression](https://github.com/tsolomko/SWCompression) 4.8.6: 7z, tar, gzip, bzip2, xz, lz4, lzma, tgz/tbz/txz, and deb. Password zip uses EscapeOS’s own reader. Password 7z uses AES-256 + SHA-256 (same as 7-Zip). RAR is not included (RARLab unrar license).
+- Extract via vendored [SWCompression](https://github.com/tsolomko/SWCompression) 4.8.6: 7z, tar, gzip, bzip2, xz, lz4, lzma, tgz/tbz/txz, and deb. Password zip uses TequilaDash’s own reader. Password 7z uses AES-256 + SHA-256 (same as 7-Zip). RAR is not included (RARLab unrar license).
 
 ### Changed
 
@@ -10036,7 +10036,7 @@ First public sideload IPA.
 
 - App list via LocalDevVPN. iOS 26.4+ uses Remote Pairing/RSD (`10.7.0.1:49152`); iOS 18 falls back to lockdown loopback (`10.7.0.1:62078`). No USB while using the app.
 - Path-scoped Data-container browse, edit, share, backup zip + restore. Select for multi-select Copy/Cut/Paste/Duplicate/Delete; Copy Path, Copy Bundle ID, and Copy SHA-256.
-- Pairing setup names EscapeOS and iPASide. iLoader is not required; iPASide writes the same merged pairing file as iLoader and places `pairingFile.plist`.
+- Pairing setup names TequilaDash and iPASide. iLoader is not required; iPASide writes the same merged pairing file as iLoader and places `pairingFile.plist`.
 - README shows the app icon with transparent corners (no black frame).
 - Supported container access follows [bad_query](https://github.com/forcequitOS/bad_query): **iOS 26.0–26.6.1** and **iOS 27.0 beta 4**. Later 26.x / 27.x builds are unsupported. IPA `MinimumOSVersion` is 18.0; iOS 18 listing is in code, untested. Hardware-verified: iPhone 17, **iOS 26.5.1**.
 - Verified on iPhone 17, iOS 26.5.1, with iPASide placing the pairing file after install (list, browse, copy-paste, backup).

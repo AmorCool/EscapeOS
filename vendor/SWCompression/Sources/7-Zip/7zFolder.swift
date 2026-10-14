@@ -192,7 +192,7 @@ class SevenZipFolder {
                         throw SevenZipError.compressionNotSupported
                     #endif
                 } else if coder.isEncryptionMethod {
-                    // EscapeOS: AES-256-CBC via SevenZipAES (SWCompression has no decrypt path).
+                    // TequilaDash: AES-256-CBC via SevenZipAES (SWCompression has no decrypt path).
                     decodedData = try SevenZipAES.decrypt(data: decodedData, coder: coder)
                     if decodedData.count > unpackSize {
                         decodedData = decodedData.subdata(in: 0..<unpackSize)
