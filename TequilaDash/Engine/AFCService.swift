@@ -18,7 +18,7 @@ final class AFCService {
 
     /// RSD 隧道并发铁律：同一 hostname 并发 `tunnel_create_rppairing` 会互相抢占，
     /// 本服务所有操作全部经 `afcQueue` 串行执行.
-    private let afcQueue = DispatchQueue(label: "com.ipaside.tequiladash.afc")
+    private let afcQueue = DispatchQueue(label: "com.tequiladash.f.afc")
 
     /// 浏览条目（对齐 FileRow 展示所需字段）.
     struct Entry: Identifiable, Equatable {

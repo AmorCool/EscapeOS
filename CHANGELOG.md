@@ -7097,7 +7097,7 @@ stream_recv_xml(stream, &out)  // 先读 4 字节长度，再读正文
 
 **本次实现（只加触发，不加任何"自动"逻辑）：**
 - `AirliftExploit.runConnectivitySelfTestIfIdle()` —— 新增的显式入口：
-  - 走 airlift **自己的串行队列**（`com.ipaside.tequiladash.airlift.selftest`），不占主线程；
+  - 走 airlift **自己的串行队列**（`com.tequiladash.f.airlift.selftest`），不占主线程；
   - **单飞标记**：已有自检在跑时直接返回，快速连点勾选也不会并发；
   - 结果照旧写 `[airlift]` 日志，SSH 可取回。
 - `ExploitSelectionView.toggle()`：**只在「勾上」airlift 时**调用该入口；
@@ -9793,7 +9793,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Changed
 
-- **包名回退为 TequilaDash 原始 Bundle ID**. `control` 与 `Resources/Info.plist` 的 Bundle ID 由 `com.apple.mobile.MobileHouseArrest`（MHA 分支遗留）改回 `com.ipaside.tequiladash`，与原始 TequilaDash 身份一致；`TequilaDash.entitlements` 仅含 `get-task-allow`，无需改动。版本号 `0.2.28 → 0.2.30`（`CFBundleShortVersionString` / `CFBundleVersion` 与 `control` 同步）。
+- **包名回退为 TequilaDash 原始 Bundle ID**. `control` 与 `Resources/Info.plist` 的 Bundle ID 由 `com.apple.mobile.MobileHouseArrest`（MHA 分支遗留）改回 `com.tequiladash.f`，与原始 TequilaDash 身份一致；`TequilaDash.entitlements` 仅含 `get-task-allow`，无需改动。版本号 `0.2.28 → 0.2.30`（`CFBundleShortVersionString` / `CFBundleVersion` 与 `control` 同步）。
 - **「容器管理」共享应用显示真实名称 + 图标 + 绿色「共享」胶囊**. 之前共享（被 LiveContainer “转换”/converted）的容器应用只显示 UUID、无名称/图标，因为 TequilaDash 只在宿主的 `Documents/Applications` 下查 `.app`；而共享 guest 的 `.app` 实际位于 **AppGroup 的 `LiveContainer/Applications`**（文件夹名可能是裸 bundle id、无 `.app` 后缀）。现已：
   - `LiveContainerDiscovery` 在 AppGroup `LiveContainer/Applications` 下查找共享 guest 的 `.app`（放宽 `enumerateGuestBundles`：任意含 `Info.plist` 的目录均视为候选，兼容无后缀的裸 bundle id 目录），取回真实 `CFBundleDisplayName` / 图标 / Bundle ID，并标记 `isShared = true`。
   - `LiveCleanTabView` 对共享 guest 在名称旁渲染绿色「共享」胶囊，与普通（私有）guest 区分。
@@ -9805,13 +9805,13 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 ### Added（LiveContainer 侧，随 LC 主分支 nightly 发布）
 
 - **LiveContainer 设置新增「Guest Container Extension」开关**. 位于设置页（默认开启），绑定到 App Group 套件 `UserDefaults` 的 `LCContainerExtensionEnabled`。关闭后，经典启动路径（`LCBootstrap`）与多任务路径（`AppSceneViewController`）都不再为 TequilaDash 签发容器沙盒扩展，并下发 `ESC_LC_GRANT_STATUS=skipped:disabled`，使 TequilaDash 诊断可见「已禁用」。
-- **多语言**. `Resources/Localizable.xcstrings` 新增 `lc.settings.containerExtension` 与 `lc.settings.containerExtensionDesc` 两键，覆盖 LC 全部 16 种 UI 语言（ar / de / en / es / fr / it / ja / ko / pl / pt-BR / ru / sv / tr / vi / zh-Hans / zh-Hant）。`LCSharedUtils` 的 `isTequilaDash` 识别同步改为 `com.ipaside.tequiladash`。
+- **多语言**. `Resources/Localizable.xcstrings` 新增 `lc.settings.containerExtension` 与 `lc.settings.containerExtensionDesc` 两键，覆盖 LC 全部 16 种 UI 语言（ar / de / en / es / fr / it / ja / ko / pl / pt-BR / ru / sv / tr / vi / zh-Hans / zh-Hant）。`LCSharedUtils` 的 `isTequilaDash` 识别同步改为 `com.tequiladash.f`。
 
 ## [0.2.14] - 2026-08-21
 
 ### Changed
 
-- **项目更名 TequilaDash → TequilaDash**. 应用名（二进制 / `CFBundleExecutable` / `CFBundleDisplayName` / `control` Name / `@main` 结构体）统一改为 TequilaDash；设置页「关于」行、各项备份路径提示文案（「文件 → 我的iPhone → TequilaDash → Backups」）、限制说明与错误提示中的可见产品名同步更新。Bundle ID（`com.ipaside.tequiladash`）保持不变，以免破坏已建立的配对文件与备份。源码目录 `TequilaDash/` 与内部错误域、日志串、`TequilaDash-Bridging-Header.h`、持久化元数据键 `tequilaDashVersion` 等有意保留，避免影响既有备份兼容性与隧道认证。
+- **项目更名 TequilaDash → TequilaDash**. 应用名（二进制 / `CFBundleExecutable` / `CFBundleDisplayName` / `control` Name / `@main` 结构体）统一改为 TequilaDash；设置页「关于」行、各项备份路径提示文案（「文件 → 我的iPhone → TequilaDash → Backups」）、限制说明与错误提示中的可见产品名同步更新。Bundle ID（`com.tequiladash.f`）保持不变，以免破坏已建立的配对文件与备份。源码目录 `TequilaDash/` 与内部错误域、日志串、`TequilaDash-Bridging-Header.h`、持久化元数据键 `tequilaDashVersion` 等有意保留，避免影响既有备份兼容性与隧道认证。
 - **移除设置页「诊断（调试用）」区块**. 删除 AppGroup 探测按钮、结果滚动视图、分享结果与相关状态 / 方法（`runProbe` / `shareProbeResult` / `isoTimestamp`），并删除引擎文件 `Engine/AppGroupProbe.swift`。该探测仅用于前期研究取证，对普通用户无意义。
 - **应用列表移除右侧 A–Z 字母跳转索引**. 删去覆盖在列表右侧的蓝色字母条与 `sectionIndex` / `jumpToLetter` 逻辑，列表恢复普通滚动（应用仍按名称分组）。
 - **更新 App 图标**. 替换为新的垃圾桶（回收）风格图标，重新生成 1024×1024 主图与全套 `Resources/AppIcon*.png` 尺寸。

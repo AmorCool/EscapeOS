@@ -20,7 +20,7 @@ enum DeveloperModeService {
     private static let statusKey = "DeveloperModeStatus"
 
     /// 本服务自己的串行队列（RSD 隧道铁律：同 hostname 并发 tunnel_create_rppairing 会互抢）
-    private static let queue = DispatchQueue(label: "com.ipaside.tequiladash.developer-mode")
+    private static let queue = DispatchQueue(label: "com.tequiladash.f.developer-mode")
 
     // MARK: - 错误
 

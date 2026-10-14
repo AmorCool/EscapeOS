@@ -397,7 +397,7 @@ final class OnDeviceAnisetteManager: ObservableObject {
 
     /// 钥匙串里是否有合法的 16 字节 `identifier`（本机模式的设备身份）.
     private static func hasDeviceIdentity() -> Bool {
-        let keychain = EscapeKeychain(service: "com.ipaside.tequiladash.memorylimit")
+        let keychain = EscapeKeychain(service: "com.tequiladash.f.memorylimit")
         guard let text = keychain.string(for: "identifier"),
               let data = Data(base64Encoded: text) else { return false }
         return data.count == 16

@@ -61,7 +61,7 @@ actor AirliftToneTransport {
 
     /// 专用串行队列：所有阻塞式 AirLift 调用都在这条队列上排队执行.
     private static let queue = DispatchQueue(
-        label: "com.ipaside.tequiladash.airlift",
+        label: "com.tequiladash.f.airlift",
         qos: .userInitiated
     )
 

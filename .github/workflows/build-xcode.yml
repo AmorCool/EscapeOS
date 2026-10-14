@@ -170,7 +170,7 @@ jobs:
             else
               gh release create "$TAG" \
                 --title "TequilaDash $TAG (Xcode native)" \
-                --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA（双版本）。**复用 run ${RUN} 的成功构建产物，未重复编译**。标准版 TequilaDash-<ver>-xcode-unsigned.ipa 仅需普通证书；隧道版 TequilaDash-Tunnel-<ver>-xcode-unsigned.ipa 随包携带 packet-tunnel-provider，需带 Network Extension 权限的证书/侧载工具给主 App 与扩展都施加 NE。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.ipaside.tequiladash。" \
+                --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA（双版本）。**复用 run ${RUN} 的成功构建产物，未重复编译**。标准版 TequilaDash-<ver>-xcode-unsigned.ipa 仅需普通证书；隧道版 TequilaDash-Tunnel-<ver>-xcode-unsigned.ipa 随包携带 packet-tunnel-provider，需带 Network Extension 权限的证书/侧载工具给主 App 与扩展都施加 NE。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.tequiladash.f。" \
                 "${IPAS[@]}"
             fi
             echo "reuse=true" >> "$GITHUB_OUTPUT"
@@ -798,6 +798,6 @@ jobs:
           else
             gh release create "$TAG" \
               --title "TequilaDash $TAG (Xcode native)" \
-              --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA（双版本）。标准版 TequilaDash-<ver>-xcode-unsigned.ipa 仅需普通证书；隧道版 TequilaDash-Tunnel-<ver>-xcode-unsigned.ipa 随包携带 packet-tunnel-provider，需带 Network Extension 权限的证书/侧载工具给主 App 与扩展都施加 NE。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.ipaside.tequiladash。" \
+              --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA（双版本）。标准版 TequilaDash-<ver>-xcode-unsigned.ipa 仅需普通证书；隧道版 TequilaDash-Tunnel-<ver>-xcode-unsigned.ipa 随包携带 packet-tunnel-provider，需带 Network Extension 权限的证书/侧载工具给主 App 与扩展都施加 NE。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.tequiladash.f。" \
               "${ASSETS[@]}"
           fi

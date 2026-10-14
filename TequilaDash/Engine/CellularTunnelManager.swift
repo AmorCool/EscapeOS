@@ -101,7 +101,7 @@ final class CellularTunnelManager: @unchecked Sendable {
     /// 「Wi-Fi 未满足即视为蜂窝」的语义一致）.
     static func isWiFiSatisfied(timeout: TimeInterval = 0.5) -> Bool {
         let monitor = NWPathMonitor()
-        let queue = DispatchQueue(label: "com.ipaside.tequiladash.cellular-path")
+        let queue = DispatchQueue(label: "com.tequiladash.f.cellular-path")
         let semaphore = DispatchSemaphore(value: 0)
         let box = BoolBox()
         monitor.pathUpdateHandler = { path in

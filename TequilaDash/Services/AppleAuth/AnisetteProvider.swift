@@ -16,7 +16,7 @@ final class AnisetteProvider {
     /// `await` 串行发起，不存在并发进入 —— 这是既有设计，本次迁移不改语义。
     nonisolated(unsafe) static let shared = AnisetteProvider()
 
-    private let keychain = EscapeKeychain(service: "com.ipaside.tequiladash.memorylimit")
+    private let keychain = EscapeKeychain(service: "com.tequiladash.f.memorylimit")
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         // v0.2.114：Anisette 服务器偶发无响应会导致整个页面卡在「正在加载团队…」.

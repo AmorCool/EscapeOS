@@ -160,11 +160,11 @@ final class MemoryLimitSettings: ObservableObject {
     /// "main actor-isolated property 'appleID' can not be referenced from a
     /// nonisolated context" 编译错误.
     nonisolated static func currentAppleIDDirect() -> String {
-        let kc = EscapeKeychain(service: "com.ipaside.tequiladash.memorylimit")
+        let kc = EscapeKeychain(service: "com.tequiladash.f.memorylimit")
         return kc.string(for: "appleID") ?? ""
     }
 
-    private let keychain = EscapeKeychain(service: "com.ipaside.tequiladash.memorylimit")
+    private let keychain = EscapeKeychain(service: "com.tequiladash.f.memorylimit")
 
     private init() {
         migrateLegacySideloadSession()

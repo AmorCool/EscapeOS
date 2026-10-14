@@ -75,7 +75,7 @@ final class IPALocalHTTPServer: @unchecked Sendable {
         var packageSize: UInt64
     }
 
-    private let queue = DispatchQueue(label: "com.ipaside.tequiladash.ota.http")
+    private let queue = DispatchQueue(label: "com.tequiladash.f.ota.http")
     private var listener: NWListener?
     private var fileURL: URL?
     private var fileSize: UInt64 = 0
