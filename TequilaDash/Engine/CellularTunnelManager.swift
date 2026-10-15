@@ -253,6 +253,24 @@ final class CellularTunnelManager: @unchecked Sendable {
         return true
         #endif
     }
+
+    // MARK: - 快捷指令自动安装（v0.3.614）
+
+    /// 用户打开「Cellular隧道支持」开关时调用：**自动把两个快捷指令装进系统**.
+    ///
+    /// 为什么加这一步：SideStore 只按名字调 `shortcuts://run-shortcut?name=TurnOffData`，
+    /// 但**自己不提供快捷指令** —— 用户没建就报「Could not find the shortcut」
+    /// （SideStore issue #1393 / #1413 / #1191 都记着这个坑）。
+    /// 本仓用 Apple 官方的 `shortcuts://import-shortcut?...&silent=true` 补上，
+    /// **用户完全不用手动建、也不会被跳转到快捷指令 App**。
+    ///
+    /// 幂等：已装过直接返回（见 `CellularShortcutInstaller.hasImported`）。
+    @MainActor
+    @discardableResult
+    func ensureShortcutsInstalled() async -> Bool {
+        guard isSupported else { return false }
+        return await CellularShortcutInstaller.ensureInstalled()
+    }
 }
 
 /// `NWPathMonitor` 回调与调用线程之间的同步盒子.

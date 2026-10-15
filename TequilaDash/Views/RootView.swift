@@ -328,8 +328,18 @@ struct SettingsForm: View {
             // 关蜂窝靠「快捷指令」App 里的两个自建快捷指令（默认名 TurnOffData / TurnOnData），
             // 名字可在此自定义（与 SideStore 同款）。默认关 ⇒ 不开开关时全部 no-op。
             Section(header: Text("Cellular隧道支持"),
-                    footer: Text("蜂窝网络（无 Wi-Fi）下，建隧道前会临时关掉蜂窝数据再等本地隧道就绪，用完立即恢复.需要在「快捷指令」App 里自建两个快捷指令：一个关闭蜂窝数据、一个打开蜂窝数据（默认名 TurnOffData / TurnOnData，可在此改名）.默认关闭，不影响 Wi-Fi 下的连接.")) {
+                    footer: Text("蜂窝网络（无 Wi-Fi）下，建隧道前会临时关掉蜂窝数据再等本地隧道就绪，用完立即恢复.打开开关时会自动把所需快捷指令装进「快捷指令」App，不需要你手动创建.默认关闭，不影响 Wi-Fi 下的连接.")) {
                 Toggle("Cellular隧道支持", isOn: $cellularTunnelSupport)
+                    .onChange(of: cellularTunnelSupport) { enabled in
+                        // v0.3.614：开关打开时**自动静默导入**两个快捷指令，
+                        // 用户不用手动建、也不会被跳到快捷指令 App。
+                        // 依据：Apple 官方 `shortcuts://import-shortcut?...&silent=true`。
+                        if enabled {
+                            Task { @MainActor in
+                                _ = await CellularTunnelManager.shared.ensureShortcutsInstalled()
+                            }
+                        }
+                    }
                 if cellularTunnelSupport {
                     TextField("关蜂窝快捷指令名（默认 TurnOffData）", text: $turnOffShortcut)
                         .autocapitalization(.none)
@@ -337,6 +347,13 @@ struct SettingsForm: View {
                     TextField("开蜂窝快捷指令名（默认 TurnOnData）", text: $turnOnShortcut)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
+                    Button("重新安装快捷指令") {
+                        CellularShortcutInstaller.resetImportedFlag()
+                        Task { @MainActor in
+                            _ = await CellularTunnelManager.shared.ensureShortcutsInstalled()
+                        }
+                    }
+                    .foregroundColor(.secondary)
                 }
             }
 
