@@ -45,11 +45,25 @@ import CryptoKit
 /// **仍未接线**的是「本机 ADI 取数」这一步 —— 即在 Unicorn 的 AArch64 解释器里加载这两份库、
 /// 走 Apple 的 ADI 协议产出 headers（等价于移植 SideSign 的 `AnisetteDataManager` +
 /// AnisetteKit 的 C++ `anisette_core_uc` / `EmulatorVM` / `elf_loader_emulator`）.
-/// 卡点有二（均已实证，非推测）：
-///   1. **Unicorn 架构**：本仓 `prepare.sap.py` 只编 `-DUNICORN_ARCH=x86`，AArch64 需另编
-///      `-DUNICORN_ARCH=aarch64`（`project.yml` / 构建脚本属他人正在改，本轮不动）；
-///   2. **许可**：AnisetteKit 为 **AGPLv3**（App Store 分发与闭源商用均被禁止），
-///      其 C++ 取数层不能原样并入本宿主 App.
+///
+/// 卡点重新评估（v0.3.613，撤回旧判断）：
+///   1. **Unicorn 架构** —— **已解**：`prepare.sap.py` 改为 `-DUNICORN_ARCH=x86;aarch64`。
+///      UNICORN_ARCH 本来就支持分号分隔多值（其 `CMakeLists.txt:88` 的默认值就是十个架构并列，
+///      `:92-95` 是 foreach 逐个开开关，不是二选一），故一个 `libunicorn.a` 同时含两个后端，
+///      无符号冲突。x86 给 SAP 的 Apple Mach-O 资产用，aarch64 给本机 Anisette 的 ELF 用。
+///   2. **许可** —— **不是卡点，本条撤回**：AnisetteKit 确是 AGPLv3，但**分发类许可只在
+///      「产物要公开」时才约束**；本项目内部自用、不公开（用户已明确多次）。
+///      ⇒ 取数层可以照它的实现搬（自用可读可参考）。
+///
+/// 参考实现（照搬对象）：
+///   · `SideStore/SideSign` → `Sources/Anisette/AnisetteDataManager.swift`（`remoteODA` 分支）
+///   · AnisetteKit 的 C++ 取数层（`anisette_core_uc` / `EmulatorVM` / `elf_loader_emulator`）
+///
+/// 相关坑（MJorb 踩过，我们也要核）：`.so` **必须真的能被打到 App 能读到的位置**，
+/// 否则本机 anisette 永远回退远程 -> machineID 漂移 -> Apple ID 失效。
+/// 本仓走的是与 SideStore 同款的**运行时惰性下载**（`remoteODA` 语义），
+/// 落盘在 App 自己的 `.anisette/libs`，不依赖 bundle 内嵌。
+///
 /// 故本类**不臆造**取数接口；在它接线之前，`AnisetteProvider` 对已就绪的本机模式仍会
 /// **显式回退远程**并记录原因（绝不静默）.
 ///

@@ -151,7 +151,21 @@ def main():
     libraries = []
     for arch in os.environ['ARCHS'].split():
         build = root / f'build-{platform}-{arch}'
-        command = [cmake, '-S', str(source), '-B', str(build), '-DUNICORN_INTERPRETER=ON', '-DUNICORN_ARCH=x86', '-DUNICORN_BUILD_TESTS=OFF', '-DUNICORN_INSTALL=OFF', '-DBUILD_SHARED_LIBS=OFF', '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_OSX_ARCHITECTURES={arch}', f'-DCMAKE_OSX_SYSROOT={os.environ["SDKROOT"]}']
+        # v0.3.613：UNICORN_ARCH 加 aarch64.
+        #
+        # 为什么需要两个架构：
+        #   · SAP（App Store 本地登录）跑的是 Apple 的 x86-64 Mach-O 资产 -> 需要 x86 后端
+        #   · 本机 Anisette 的 ADI 引擎（libCoreADI.so / libstoreservicescore.so）
+        #     是 **ELF64 AArch64**（实测 magic = 7f 45 4c 46，见 OnDeviceAnisetteManager 顶部注释）
+        #     -> 需要 aarch64 后端
+        #
+        # 为什么可以编进同一个库：
+        #   CMakeLists.txt:88 的默认值就是 `"x86;arm;aarch64;riscv;mips;sparc;m68k;ppc;s390x;tricore"`
+        #   —— UNICORN_ARCH 本来就支持分号分隔多值，foreach 逐个开开关（:92-95），
+        #   不是二选一。所以编出来的 libunicorn.a 同时含两个后端，无符号冲突。
+        #
+        # 注意：command 是 list，走 subprocess 不经 shell，分号无需转义。
+        command = [cmake, '-S', str(source), '-B', str(build), '-DUNICORN_INTERPRETER=ON', '-DUNICORN_ARCH=x86;aarch64', '-DUNICORN_BUILD_TESTS=OFF', '-DUNICORN_INSTALL=OFF', '-DBUILD_SHARED_LIBS=OFF', '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_OSX_ARCHITECTURES={arch}', f'-DCMAKE_OSX_SYSROOT={os.environ["SDKROOT"]}']
         if platform in ('iphoneos', 'iphonesimulator'):
             command += ['-DCMAKE_SYSTEM_NAME=iOS', '-DCMAKE_OSX_DEPLOYMENT_TARGET=17.0']
         else:
