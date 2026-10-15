@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import Network   // LocalShortcutServer 用 NWListener / NWParameters / NWConnection
 
 /// 把「关/开蜂窝数据」两个快捷指令**静默装进系统**，让用户完全不用手动建.
 ///
