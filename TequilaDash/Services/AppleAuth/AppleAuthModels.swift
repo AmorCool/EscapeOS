@@ -164,3 +164,39 @@ enum AppleAPIError: Error, LocalizedError {
         return false
     }
 }
+
+// MARK: - 结构化错误描述
+
+/// 把任意 `Error` 摊成「类型 / Domain / Code / 描述」四行.
+///
+/// 为什么要这样展示（v0.3.613，参考 MJorb/Seal 的登录失败弹窗形态）：
+/// 只显示一句 `localizedDescription` 时，用户报障只能给一句人话，
+/// 排查时无法区分「Apple 返回的 -80045」「URLSession 超时」「我们自己的枚举」。
+/// 把 NSError 的 domain/code 一并摊出来，用户截图即含全部判据。
+enum ErrorDetail {
+    static func describe(_ error: Error) -> String {
+        let ns = error as NSError
+        let typeName = String(describing: Swift.type(of: error))
+
+        // 描述优先用我们自己的中文文案（AppleAPIError.errorDescription 已翻译成人话），
+        // 没有再用 NSError 的 localizedDescription.
+        let desc: String
+        if let api = error as? AppleAPIError, let d = api.errorDescription {
+            desc = d
+        } else {
+            desc = ns.localizedDescription
+        }
+
+        var lines: [String] = []
+        lines.append("类型：\(typeName)")
+        lines.append("Domain：\(ns.domain)")
+        lines.append("Code：\(ns.code)")
+        lines.append("描述：\(desc)")
+
+        // NSUnderlyingError 常带真正的底层原因（如 TLS / 超时），有就补一行.
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+            lines.append("底层：\(underlying.domain) \(underlying.code) \(underlying.localizedDescription)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}

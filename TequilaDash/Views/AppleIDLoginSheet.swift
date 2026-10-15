@@ -197,8 +197,10 @@ struct AppleIDLoginSheet: View {
                 dismiss()
             }
         } catch {
-            let message = (error as? AppleAPIError)?.errorDescription ?? error.localizedDescription
-            LoginLogger.shared.log("[失败] 登录失败: \(message)")
+            // v0.3.613：弹窗与日志都用结构化描述（类型 / Domain / Code / 描述 / 底层），
+            // 用户截图即含全部判据，不必再问「报的什么错」。
+            let message = ErrorDetail.describe(error)
+            LoginLogger.shared.log("[失败] 登录失败: \(message.replacingOccurrences(of: "\n", with: " | "))")
             await MainActor.run {
                 ctrl.isAuthenticating = false
                 ctrl.authError = message
