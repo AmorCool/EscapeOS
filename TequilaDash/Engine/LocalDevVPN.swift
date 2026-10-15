@@ -51,7 +51,7 @@ enum LocalDevVPN {
     /// 现改为**不假设网段**：存在任意 `utun*` 接口（IPv4 或 IPv6）即算已连接；仅当
     /// 连 utun 都没有时，才退回按网段再判一次（命中才为真 ⇒ 不会新增假阴性）.
     static var isConnected: Bool {
-        let interfaces = interfaceAddresses()
+        let interfaces = allInterfaces()
         if interfaces.contains(where: { $0.name.hasPrefix("utun") }) { return true }
 
         // 兜底：万一某版本的隧道接口不叫 utun，仍按 targetIP 网段判一次.
@@ -66,7 +66,7 @@ enum LocalDevVPN {
     /// 诊断用：本机全部 IPv4 接口的 `接口名=地址` 列表（纯事实枚举，无判断）.
     /// 供安装失败时打进日志 —— 下次一看即知「真的没连」还是「枚举漏了」.
     static func ipv4InterfaceSummary() -> String {
-        let ipv4 = interfaceAddresses().filter { $0.family == AF_INET }
+        let ipv4 = allInterfaces().filter { $0.family == AF_INET }
         if ipv4.isEmpty { return "（无）" }
         return ipv4.map { "\($0.name)=\($0.address)" }.joined(separator: ", ")
     }
@@ -279,7 +279,8 @@ enum LocalDevVPN {
     /// 枚举本机接口地址（IPv4 与 IPv6 都收，带接口名与地址族）.
     /// 旧实现只看 `AF_INET` ⇒ LocalDevVPN 的 utun 若只给 IPv6 就会整条漏掉；
     /// 这里两个地址族都收，且**不过滤接口名**（utun / en0 / pdp_ip0 一视同仁）.
-    private static func interfaceAddresses() -> [(name: String, family: Int32, address: String)] {
+    /// v0.3.616：`internal` → 供 TunnelHealthCheckView 诊断页使用.
+    static func allInterfaces() -> [(name: String, family: Int32, address: String)] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
         defer { freeifaddrs(ifaddr) }

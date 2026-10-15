@@ -337,6 +337,9 @@ struct SettingsForm: View {
             }
 
             Section(header: Text("配对文件")) {
+                NavigationLink("连接诊断") {
+                    TunnelHealthCheckView()
+                }
                 Button("导出配对文件") {
                     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                     let url = docs.appendingPathComponent("pairingFile.plist")
