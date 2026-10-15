@@ -120,6 +120,13 @@ struct IdeviceFfiError *mcinstall_request_rsd(struct AdapterHandle *adapter,
 // 不需要 anisette / 不需要第三方服务器）。Swift 侧只看到 SAPContext 这一个类。
 #include "../Services/AppleAuth/SAP/SAPContext.h"
 
+// v0.3.613：本机 Anisette（ODA）—— 把 ADI 引擎（libCoreADI.so / libstoreservicescore.so，
+// 均为 ELF64 AArch64）加载进 Unicorn 的 AArch64 解释器，走 Apple 的 ADI 协议产出 headers。
+// C++ 实现移植自 AnisetteKit 的 Native/（anisette_core_uc.cpp + Loader/elf_loader_emulator.cpp），
+// 用的是标准 Unicorn API，与 SAP 共用同一个 libunicorn.a（v0.3.613 起含 x86 + aarch64 双后端）。
+// 对外只暴露纯 C 接口（get_anisette_headers_uc / start_provision_uc / end_provision_uc）。
+#include "Anisette/anisette_core.h"
+
 // AirLift（AirTraffic 沙盒逃逸，CVE-2026-43689）：Grappa 会话令牌生成（Obj-C runtime
 // 调 ATGrappaSession + 硬编码真 CoreFP token 兜底）。逐字移植自 LinkPass888/AirBeep。
 // 由 Rust 侧（libairlift_ffi.a）经 dlsym 调用，Swift 侧不直接调用，但必须编进 App。

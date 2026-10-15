@@ -136,6 +136,30 @@ final class AnisetteProvider {
         return AppleAPIError.customError(code: -22421, message: "Anisette \(stage)失败: \(detail)")
     }
 
+    /// v0.3.613：本机 Anisette 取数（ADI 引擎 + Unicorn AArch64 解释器）.
+    ///
+    /// 与远程 `fetchAnisetteV3` 的差别：**不经任何 anisette 服务器** ——
+    /// 直接把 `identifier` + `adiPb` 交给 C++ 层，由 Unicorn 在本进程内解释执行
+    /// ADI 引擎产出 headers。因此 machineID 不会因服务器侧变化而漂移
+    /// （MJorb 记过的坑：`.so` 拿不到 -> 回退远程 -> machineID 漂移 -> Apple ID 失效）。
+    private func fetchAnisetteLocal() throws -> AnisetteData {
+        let mgr = OnDeviceAnisetteManager.shared
+        guard let identifierStr = keychain.string(for: "identifier"),
+              let identifier = Data(base64Encoded: identifierStr),
+              identifier.count == 16 else {
+            throw fail("本机", "缺少或非法的 identifier（需 16 字节）")
+        }
+        guard let adiPbStr = keychain.string(for: "adiPb"),
+              let adiPb = Data(base64Encoded: adiPbStr), !adiPb.isEmpty else {
+            throw fail("本机", "缺少 adiPb")
+        }
+        return try OnDeviceAnisetteClient.headers(
+            identifier: identifier,
+            adiPb: adiPb,
+            libDirectory: mgr.engineDirectory,
+            provisioningDirectory: mgr.provisioningDirectory)
+    }
+
     /// 构造带 Apple 设备头的请求（对齐 GetMoreRam `buildAppleRequest`）.
     /// gsa lookup / midStartProvisioning / midFinishProvisioning 都必须带这些头，
     /// 否则 Apple 返回 404（此前裸 GET 的根因）.
@@ -163,13 +187,25 @@ final class AnisetteProvider {
     }
 
     func getAnisetteData(refresh: Bool = false) async throws -> AnisetteData {
-        // 「本机 Anisette」（ODA）模式：开关开启时走本地生成 headers，不依赖 anisette 服务器.
-        // 但本构建**未内置** iOS 可加载的 ADI 引擎（见 OnDeviceAnisetteManager 顶部注释），
-        // 故这里先把「为何回退远程」**显式**写进日志再走远程路径，绝不静默.
-        // 引擎就位后，只需把这一分支换成真实的本地取数实现即可，调用方无需改动.
+        // v0.3.613：本机 Anisette（ODA）**真正接线**。
+        //
+        // 判据（三者全满足才走本机）：
+        //   1) 开关开（OnDeviceAnisetteManager.isEnabled）
+        //   2) 引擎就绪（两份 .so 已落盘 + 有设备身份）—— remoteFallbackReason 为 nil
+        //   3) 本机取数不抛错
+        // 任一条不满足 ⇒ 显式回退远程并记日志（绝不静默）。
+        //
+        // 本机路径依赖 C++ 层（OnDeviceAnisetteClient -> anisette_core_uc.cpp ->
+        // elf_loader_emulator.cpp -> Unicorn AArch64 解释器），见 OnDeviceAnisetteClient 顶部注释。
         if let reason = OnDeviceAnisetteManager.shared.remoteFallbackReason {
-            LoginLogger.shared.log("[本机Anisette] \(reason)", category: .appleID)
+            LoginLogger.shared.log("[本机Anisette] 回退远程：\(reason)", category: .appleID)
+        } else if let local = try? fetchAnisetteLocal() {
+            LoginLogger.shared.log("[完成] 本机 Anisette 取数成功（不走远程服务器）", category: .appleID)
+            return local
+        } else {
+            LoginLogger.shared.log("[本机Anisette] 本机取数失败，回退远程", category: .appleID)
         }
+
         if refresh {
             // v0.3.166：refresh = 强制重签 provisioning 票据（作废 adiPb 保留 identifier）.
             // 背景：ani.846969.xyz 对同一 (identifier, adiPb) 缓存 get_headers 结果，
