@@ -6,18 +6,28 @@
      因为我们现有隧道连接都依赖wifi网络 蜂窝网络无法使用的 我们要适配蜂窝网络
      并在更多-设置里新增"Cellular隧道支持"按钮 开启后对隧道连接支持蜂窝网络下连接」
 
-★ 关键更正（用户批评成立）：
-    SideStore 的 cellular refresh 用 iOS 快捷指令临时关蜂窝
-    （`shortcuts://run-shortcut?name=TurnOffData` / `TurnOnData`），
-    **要求用户先在「快捷指令」App 里自建两个快捷指令** —— 这是把 App 该做的事推给用户.
-    本仓**彻底删除**这条硬依赖，改为「不碰蜂窝开关、直接尝试连隧道；连不上就如实报错」.
+★ v0.3.613 重大纠正（撤回 v0.3.612 的错误判断）：
+    v0.3.612 曾把「快捷指令」当成「把 App 该做的事推给用户」而**彻底删除**，
+    并在本 guard 里写成「用户批评成立，禁止加回」—— **这条判断是错的，用户并未批评过它**。
 
-机制（现方案）：
+    用户实测后的原话：「蜂窝隧道支持也支持了鸡毛？」（= 砍掉快捷指令后功能完全失效）。
+
+    事实（SideStore 源码 `SideStore/Core/Shortcuts/CellularRefreshManager.swift`，208 行）：
+    iOS 在**蜂窝上网**时对「回环 VPN 访问本机服务」有**系统级限制**，
+    不关蜂窝必然 `connect: Connection refused (os error 61)`。
+    SideStore 能在蜂窝下连通，**靠的正是** `shortcuts://run-shortcut?name=TurnOffData`
+    临时关掉蜂窝数据这一步。把它删掉 = 功能不存在。
+
+    ⇒ 本 guard 从「禁止快捷指令」**反转为「要求快捷指令」**（照 SideStore 移植）。
+
+机制（现方案，照 SideStore 移植）：
   · 判是否蜂窝：`NWPathMonitor` 的 `usesInterfaceType(.wifi)`（等价 SideStore 的 `isWifiSatisfied`）；
-  · 建隧道前有界轮询隧道就绪（复用 `LocalDevVPN.isTunnelReachable()`），**不碰蜂窝开关**；
+  · 建隧道前：蜂窝模式下先执行 `TurnOffData` 快捷指令临时关蜂窝 -> 等隧道就绪 -> 用完 `TurnOnData` 恢复；
+  · 快捷指令名**可自定义**（`TurnOffDataShortcutName` / `TurnOnDataShortcutName`），
+    默认 `TurnOffData` / `TurnOnData`（对齐 SideStore `AppConstants.Shortcuts`）；
   · **默认关**（`UserDefaults` 无值即 false）⇒ 开关不开时全部 no-op，不改变 Wi-Fi 下既有行为.
 
-本脚本是「以后不会再有人把快捷指令硬依赖加回来」的守门人，在提交前拦住.
+本脚本是「以后不会再有人把这条关键步骤删掉」的守门人，在提交前拦住.
 
 检查范围：
   · TequilaDash/Engine/CellularTunnelManager.swift        （引擎文件）
@@ -25,16 +35,20 @@
   · TequilaDash/Engine/AppDiscovery.swift                  （接线点：应用列表，走 TunnelContext）
   · TequilaDash/Engine/UninstallService.swift              （接线点：卸载，走 TunnelContext）
   · TequilaDash/Engine/LocationEngine.swift                （接线点：虚拟定位，本次报障核心）
-  · 全 TequilaDash/ 目录                                    （快捷指令硬依赖 / 误导文案 / Wi-Fi 硬信念文案）
+  · 全 TequilaDash/ 目录                                    （快捷指令调用是否在位 / Wi-Fi 硬信念文案）
   · 全部含 `let deviceIP = LocalDevVPN.targetIP` 的隧道入口（23 个引擎/服务/视图文件）
 
 检查规则：
   R1 [ERROR] CellularTunnelManager.swift 缺失，或未定义 enabledKey = "TequilaDash.CellularTunnelSupport".
   R2 [ERROR] 设置页开关的 @AppStorage 默认值不是 false（必须默认关 ⇒ 零行为变化）.
   R3 [ERROR] 设置页找不到绑定该 @AppStorage 的 Toggle（开关没接上）.
-  R4 [ERROR] 全仓实际代码重新出现「快捷指令硬依赖」
-             （shortcuts:// / run-shortcut / TurnOffData / TurnOnData）.
-  R5 [ERROR] 全仓用户可见文案重新出现「快捷指令」（即「让用户自建快捷指令」的误导文案）.
+  R4 [ERROR] **快捷指令调用缺失** —— CellularTunnelManager.swift 里必须同时出现
+             `shortcuts://`（或 run-shortcut）与 `TurnOffData` / `TurnOnData` 默认名，
+             且必须实现 `turnOffDataIfNeeded` / `turnOnDataIfNeeded` 两个方法。
+             （v0.3.613 反转：删掉这一步 = 蜂窝功能失效，用户已实测）
+  R5 [ERROR] 快捷指令名**不可自定义** —— 必须能通过
+             `TurnOffDataShortcutName` / `TurnOnDataShortcutName` 覆盖默认名
+             （对齐 SideStore 的 `turnOffDataShortcutName`）。
   R6 [ERROR] 任一「真正建隧道」的入口文件（含 `let deviceIP = LocalDevVPN.targetIP` 锚点）
              未调用 CellularTunnelManager.shared.prepareForTunnel()（接线断了）.
   R7 [ERROR] 全仓重新出现「把 Wi-Fi 说成前提条件」的误导文案
@@ -43,9 +57,7 @@
              （不得只用 `LocalDevVPN.isTunnelReachable()`；必须用多候选并行的
               `LocalDevVPN.isAnyCandidateReachable(timeout:)`）.
 
-误报处理：Swift/ObjC 匹配前先剥离**注释**、保留字符串字面量 ——
-R4/R5 要抓的 `shortcuts://…` 与「快捷指令」正是出现在字符串/文案里；
-而注释里提到这些词（如解释「为什么不用快捷指令」）属正常说明，不该误报.
+误报处理：Swift/ObjC 匹配前先剥离**注释**、保留字符串字面量.
 剥离保留换行 ⇒ 行号不错位.
 
 用法：
@@ -65,10 +77,9 @@ LOCATION_REL = os.path.join("TequilaDash", "Engine", "LocationEngine.swift")
 
 ENABLED_KEY = "TequilaDash.CellularTunnelSupport"
 
-# R4：快捷指令硬依赖的实际代码痕迹.
-SHORTCUT_DEP_PATTERNS = ("shortcuts://", "run-shortcut", "TurnOffData", "TurnOnData")
-# R5：让用户自建快捷指令的误导文案.
-SHORTCUT_TEXT_MARKER = "快捷指令"
+# v0.3.613：R4/R5 已反转为「必须用快捷指令」（见 check_shortcut_dependency_present /
+# check_shortcut_name_configurable）。旧的两个常量（SHORTCUT_DEP_PATTERNS /
+# SHORTCUT_TEXT_MARKER）是「禁止出现」时代的产物，已删除 —— 留着会让后来者误读规则方向。
 # R7：Wi-Fi 硬信念文案（即「告诉用户必须/建议连 Wi-Fi 才能用」）.
 #   补充（本轮修复）：199aae2 删掉了「保持 Wi-Fi」等，却漏了 LocationEngine.swift 的
 #   「（Wi-Fi 下）」与 VirtualLocationSettingsView 的「建议在 Wi-Fi 下」——
@@ -223,36 +234,59 @@ def check_settings_toggle(path):
     return findings
 
 
-def check_no_shortcut_dependency(root):
-    """R4：全仓实际代码不得再出现「快捷指令硬依赖」（注释里的说明不算）."""
+def check_shortcut_dependency_present(root):
+    """R4：CellularTunnelManager.swift **必须**实现快捷指令调用（照 SideStore 移植）.
+
+    v0.3.613 反转：v0.3.612 曾把这一步删掉，导致蜂窝下必然
+    `connect: Connection refused (os error 61)`（iOS 对蜂窝上网时的回环 VPN 有系统级限制），
+    用户实测「蜂窝隧道支持也支持了鸡毛」。
+    SideStore 能在蜂窝下连通，靠的正是 `shortcuts://run-shortcut?name=TurnOffData`。
+    """
     findings = []
-    for rel, full in iter_source_files(root):
-        try:
-            lines = strip_comments(read(full)).splitlines()
-        except OSError:
-            continue
-        for idx, line in enumerate(lines, 1):
-            for pat in SHORTCUT_DEP_PATTERNS:
-                if pat in line:
-                    findings.append(("R4", "%s:%d 出现「%s」—— 快捷指令硬依赖（用户须自建快捷指令）"
-                                           "已被彻底删除，禁止加回. 蜂窝下直接尝试连隧道、连不上如实报错即可." % (
-                                               rel, idx, pat)))
-                    break
+    full = os.path.join(root, MANAGER_REL)
+    if not os.path.exists(full):
+        return findings  # R1 已报缺失
+    body = strip_comments(read(full))
+
+    # 4.1 必须有 shortcuts:// 或 run-shortcut
+    if not any(pat in body for pat in ("shortcuts://", "run-shortcut")):
+        findings.append(("R4", "%s 缺少 `shortcuts://`（或 run-shortcut）调用 —— "
+                               "关/开蜂窝这一步是 SideStore 能在蜂窝下连通的关键，"
+                               "删掉 = 蜂窝功能失效（用户已实测）. 照 "
+                               "SideStore/Core/Shortcuts/CellularRefreshManager.swift 补回." % (
+                                   MANAGER_REL.replace("\\", "/"))))
+
+    # 4.2 必须有默认快捷指令名
+    for name in ("TurnOffData", "TurnOnData"):
+        if name not in body:
+            findings.append(("R4", "%s 缺少默认快捷指令名 `%s`（对齐 SideStore "
+                                   "AppConstants.Shortcuts.default%sShortcutName）." % (
+                                       MANAGER_REL.replace("\\", "/"), name, name)))
+
+    # 4.3 必须实现两个方法
+    for fn in ("turnOffDataIfNeeded", "turnOnDataIfNeeded"):
+        if not re.search(r'func\s+' + fn + r'\s*\(', body):
+            findings.append(("R4", "%s 未实现 `%s()` —— 必须照 SideStore "
+                                   "CellularRefreshManager 的同名方法补上." % (
+                                       MANAGER_REL.replace("\\", "/"), fn)))
     return findings
 
 
-def check_no_shortcut_text(root):
-    """R5：全仓用户可见文案不得再出现「快捷指令」（让用户自建快捷指令的误导文案）."""
+def check_shortcut_name_configurable(root):
+    """R5：快捷指令名**必须可自定义**（对齐 SideStore 的 turnOffDataShortcutName）."""
     findings = []
-    for rel, full in iter_source_files(root):
-        try:
-            lines = strip_comments(read(full)).splitlines()
-        except OSError:
-            continue
-        for idx, line in enumerate(lines, 1):
-            if SHORTCUT_TEXT_MARKER in line:
-                findings.append(("R5", "%s:%d 出现「%s」—— 「让用户自建快捷指令」的误导文案；"
-                                       "本仓已不依赖快捷指令，禁止出现." % (rel, idx, SHORTCUT_TEXT_MARKER)))
+    full = os.path.join(root, MANAGER_REL)
+    if not os.path.exists(full):
+        return findings
+    body = strip_comments(read(full))
+    for key in ("TurnOffDataShortcutName", "TurnOnDataShortcutName"):
+        if key not in body:
+            findings.append(("R5", "%s 缺少 UserDefaults key `%s` —— 快捷指令名必须可由用户覆盖"
+                                   "（对齐 SideStore 的 turnOffDataShortcutName / "
+                                   "turnOnDataShortcutName），否则用户改名后功能失效." % (
+                                       MANAGER_REL.replace("\\", "/"), key)))
+    return findings
+
     return findings
 
 
@@ -322,8 +356,8 @@ def main():
     findings += check_manager(os.path.join(root, MANAGER_REL))
     findings += check_multi_candidate_probe(os.path.join(root, MANAGER_REL))
     findings += check_settings_toggle(os.path.join(root, ROOTVIEW_REL))
-    findings += check_no_shortcut_dependency(root)
-    findings += check_no_shortcut_text(root)
+    findings += check_shortcut_dependency_present(root)
+    findings += check_shortcut_name_configurable(root)
     findings += check_wiring(os.path.join(root, DISCOVERY_REL), "应用列表")
     findings += check_wiring(os.path.join(root, UNINSTALL_REL), "卸载")
     findings += check_wiring(os.path.join(root, LOCATION_REL), "虚拟定位")
@@ -334,11 +368,11 @@ def main():
         print("ERROR %s  %s" % (rule, msg))
 
     print("-" * 72)
-    print("检查：Cellular隧道支持（引擎文件 / 设置开关 / 无快捷指令硬依赖 / 无误导文案 / "
+    print("检查：Cellular隧道支持（引擎文件 / 设置开关 / 快捷指令调用在位 / 快捷指令名可自定义 / "
           "全部隧道入口接线 / 无 Wi-Fi 硬信念文案）")
     print("命中: %d" % len(findings))
     if not findings:
-        print("✓ 引擎文件与键名齐备、开关默认关且已接上、无快捷指令硬依赖与误导文案、"
+        print("✓ 引擎文件与键名齐备、开关默认关且已接上、快捷指令调用在位且名可自定义、"
               "全部隧道入口均已调用 prepareForTunnel、无 Wi-Fi 硬信念文案 —— 合规")
     return 1 if findings else 0
 
