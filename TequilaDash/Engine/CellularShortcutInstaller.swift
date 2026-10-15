@@ -81,6 +81,14 @@ enum CellularShortcutInstaller {
     // MARK: - 导入
 
     /// 生成 `.shortcut` 文件 → 起本地 HTTP 服务提供它 → 调 `import-shortcut` 导入.
+    ///
+    /// v0.3.615 **修 bug**：不再先试 `file://`。
+    ///
+    /// 用户实测报错：「导入失败 提供的快捷指令URL无效」。
+    /// 根因：`UIApplication.shared.open(file://…)` 会返回 `true`（**系统只是受理了这个 URL**，
+    /// 不代表「快捷指令」App 接受它），于是旧代码认为成功、**永远不回落 HTTP**；
+    /// 而「快捷指令」App 拿到 `file://` 会直接判为无效 URL。
+    /// ⇒ 现在**只走 HTTP**（`http://127.0.0.1:<port>/<name>.shortcut`）。
     @MainActor
     private static func importShortcut(name: String, action: String, actionValue: Bool) async -> Bool {
         guard let fileURL = writeShortcutFile(name: name, action: action, actionValue: actionValue) else {
@@ -88,12 +96,7 @@ enum CellularShortcutInstaller {
             return false
         }
 
-        // 「快捷指令」App 需要一个可访问的 URL。优先用 file://（App 沙盒内文件），
-        // 系统不接受时再退回本地 HTTP 服务（复用 IPALocalHTTPServer）。
-        if let imported = await openImportURL(fileURL, name: name) {
-            return imported
-        }
-
+        // 「快捷指令」App 只接受可下载的 http(s) URL —— file:// 会被判「URL 无效」。
         guard let httpURL = LocalShortcutServer.shared.serve(fileURL: fileURL, as: "\(name).shortcut") else {
             LoginLogger.shared.log("[Cellular] 起本地 HTTP 服务失败，无法提供 \(name).shortcut", category: .general)
             return false

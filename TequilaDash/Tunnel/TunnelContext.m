@@ -97,67 +97,24 @@
 
 /// 隧道目标 IP（= LocalDevVPN 的**对端地址**）.
 ///
-/// v0.3.614：改为与 Swift 侧 `LocalDevVPN.targetIP` **完全同口径**的三级优先级。
+/// v0.3.615 **回滚**：撤回 v0.3.614 加的「utun 对端自动推导」。
 ///
-/// 为什么必须改（这是「Wi-Fi 隧道用不了」的一个确凿成因）：
-///   改前这里只有两级 —— 「用户显式覆盖」→ 直接兜底 `10.7.0.1`，**没有自动推导**。
-///   而 Swift 侧 `LocalDevVPN.targetIP` 是三级 —— 用户覆盖 → **utun 对端自动推导** → 兜底。
-///   ⇒ 当用户没设过 `TunnelDeviceIP` 且 LocalDevVPN 的对端**不是** `10.7.0.1` 时：
-///     · **预检**（Swift，`isAnyCandidateReachable`）探的是**推导出来的正确地址** ⇒ 通过
-///     · **建隧道**（这里）却用写死的 `10.7.0.1` ⇒ **必然失败**
-///   表现为「隧道明明连着，就是连不上」。
+/// 为什么回滚（用户实测报障：「wifi隧道连接也用不了」）：
+///   推导取的是「**第一个** utun 接口的 `ifa_dstaddr`」。设备上若同时装着
+///   Surge / Loon / Shadowrocket / WireGuard 等（各起一条 utun），**取到的很可能不是
+///   LocalDevVPN 那条** ⇒ 隧道指向错误地址 ⇒ 必然连不上。
+///   而 SideStore 那边（`Minimuxer`）**是把 `10.7.0.1` 写死**的，并没有做这种推导。
+///   ⇒ 我不该自己发明这个机制（违反「目标工具没有的就不要有」）。
 ///
-/// `LocalDevVPN.swift` 的注释早已写明「假设 utun 地址在 10.7.0.x 是错的、必然假阴性」
-/// （v0.3.581 因此给 Swift 侧加了推导），但 ObjC 侧一直没同步 —— 本次补齐。
+/// 现在的优先级（与 SideStore 对齐，两级）：
+///   1. 用户显式覆盖：`UserDefaults["TunnelDeviceIP"]`（「设置 → 本地隧道」）
+///   2. 兜底：`10.7.0.1`（LocalDevVPN 出厂 peerIP）
 - (NSString *)_targetIP {
-    // 1) 用户显式覆盖（「设置 → 本地隧道」）
     NSString *deviceIP = [[NSUserDefaults standardUserDefaults] stringForKey:@"TunnelDeviceIP"];
     if (deviceIP.length > 0) {
         return deviceIP;
     }
-
-    // 2) 自动推导：本机 utun* 点对点接口的**对端地址**（与 Swift 的 utunPeerIPv4 同口径）
-    NSString *peer = [self _utunPeerIPv4];
-    if (peer.length > 0) {
-        return peer;
-    }
-
-    // 3) 兜底：LocalDevVPN 出厂 peerIP
     return DEFAULT_TUNNEL_IP;
-}
-
-/// 首个合格的 utun 对端 IPv4（与 Swift `LocalDevVPN.utunPeerIPv4Candidates()` 同判据）.
-///
-/// 取 `getifaddrs` 里 `utun*` 接口的 `ifa_dstaddr`（点对点对端）。
-/// 过滤规则与 Swift 侧 `isValidCandidatePeer` 一致：拒空、拒 `0.0.0.0`、拒回环 `127.*`、
-/// 拒组播 `224.*`/`239.*`。取不到返回 nil（调用方安全退回默认值，不新增假阴性）。
-- (nullable NSString *)_utunPeerIPv4 {
-    struct ifaddrs *addrs = NULL;
-    if (getifaddrs(&addrs) != 0 || addrs == NULL) {
-        return nil;
-    }
-
-    NSString *result = nil;
-    for (struct ifaddrs *ifa = addrs; ifa != NULL; ifa = ifa->ifa_next) {
-        if (ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_INET) continue;
-        if (ifa->ifa_name == NULL || strncmp(ifa->ifa_name, "utun", 4) != 0) continue;
-        if (ifa->ifa_dstaddr == NULL) continue;
-
-        struct sockaddr_in *dst = (struct sockaddr_in *)ifa->ifa_dstaddr;
-        char buf[INET_ADDRSTRLEN] = {0};
-        if (inet_ntop(AF_INET, &dst->sin_addr, buf, sizeof(buf)) == NULL) continue;
-
-        NSString *ip = [NSString stringWithUTF8String:buf];
-        if (ip.length == 0) continue;
-        if ([ip isEqualToString:@"0.0.0.0"] || [ip isEqualToString:@"255.255.255.255"]) continue;
-        if ([ip hasPrefix:@"127."] || [ip hasPrefix:@"224."] || [ip hasPrefix:@"239."]) continue;
-
-        result = ip;
-        break;
-    }
-
-    freeifaddrs(addrs);
-    return result;
 }
 
 - (struct RpPairingFileHandle *)_loadPairingFile:(NSError **)error {
