@@ -34,7 +34,7 @@ enum WirelessLockdownService {
 
     /// RSD 隧道并发铁律（AFCService 同款）：同一 hostname 并发 `tunnel_create_rppairing`
     /// 会互相抢占，本服务所有操作全部经 `queue` 串行执行.
-    private static let queue = DispatchQueue(label: "com.tequiladash.f.wireless-lockdown")
+    private static let queue = DispatchQueue(label: "com.tequila.dash.wireless-lockdown")
 
     // MARK: - 错误
 

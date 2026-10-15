@@ -1,6 +1,6 @@
 {
   "spec": "escape.module.v1",
-  "id": "com.tequiladash.wifirefresh",
+  "id": "com.tequila.wifirefresh",
   "name": "WLAN 连接刷新",
   "icon": "wifi",
   "accent": "green",

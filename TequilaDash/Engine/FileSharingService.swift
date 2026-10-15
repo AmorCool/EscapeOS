@@ -128,7 +128,7 @@ enum FileSharingService {
     /// v0.3.378：当前线程在闸门上的累计排队等待秒数（threadDictionary，按线程隔离）.
     /// 为什么需要它：等待发生在 `makeTunnel` 深处，而超时记账在 `runGated`；
     /// 线程局部是两者之间最小、且不需要改动任何调用方签名的传递通道.
-    private static let queueWaitKey = "com.tequiladash.filesharing.queueWait"
+    private static let queueWaitKey = "com.tequila.dashilesharing.queueWait"
 
     private static func recordQueueWait(_ seconds: TimeInterval) {
         let dict = Thread.current.threadDictionary

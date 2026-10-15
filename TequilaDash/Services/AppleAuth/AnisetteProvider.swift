@@ -16,7 +16,7 @@ final class AnisetteProvider {
     /// `await` 串行发起，不存在并发进入 —— 这是既有设计，本次迁移不改语义。
     nonisolated(unsafe) static let shared = AnisetteProvider()
 
-    private let keychain = EscapeKeychain(service: "com.tequiladash.f.memorylimit")
+    private let keychain = EscapeKeychain(service: "com.tequila.dash.memorylimit")
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         // v0.2.114：Anisette 服务器偶发无响应会导致整个页面卡在「正在加载团队…」.
@@ -36,7 +36,20 @@ final class AnisetteProvider {
     /// `X-MMe-Client-Info` 里标识为 `com.apple.dt.Xcode` 的登录请求直接返回 503
     /// （发生在校验凭据之前，与账号无关）。修法就是把客户端标识改报成真正执行该请求的
     /// 守护进程 `akd`。公共 anisette 服务多还在用 Xcode 形态，故这里统一改写。
+    ///
+    /// v0.3.613：**用户自定义优先**。依据 SideSign PR #5「Fix 2FA failing」（2026-10-13
+    /// merged）—— GSA 开始指纹识别 adi 库，既有 anisette 服务器生成的 headers 被拒
+    /// （用户侧表现 `Code -80045`）；把 client info 换成 Android 形态可绕过。
+    /// 判据会再变，故做成可编辑（设置 -> Anisette 服务器 -> 客户端标识），
+    /// 与 SideStore 的 `customAnisetteClientInfo` 同款优先级（自定义 > 默认）.
     static func normalizedClientInfo(_ raw: String?) -> String {
+        // 1) 用户在设置里填了自定义值 -> 直接用它，不做任何改写.
+        if let custom = UserDefaults.standard.string(forKey: "CustomAnisetteClientInfo"),
+           !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return custom.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // 2) 否则按既有规则改写服务器返回值（兜底内置默认）.
         let device = UIDevice.current
         let fallback = "<\(device.model)> <iOS;\(device.systemVersion)> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
         guard var text = raw, !text.isEmpty else { return fallback }

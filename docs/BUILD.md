@@ -127,7 +127,7 @@ xcodebuild build \
 ```
 
 Key settings, all in `project.yml`: `PRODUCT_NAME = TequilaDash`,
-`PRODUCT_BUNDLE_IDENTIFIER = com.tequiladash.f`, `IPHONEOS_DEPLOYMENT_TARGET = 18.0`,
+`PRODUCT_BUNDLE_IDENTIFIER = com.tequila.dash`, `IPHONEOS_DEPLOYMENT_TARGET = 18.0`,
 `SWIFT_VERSION = 6.0`, `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` for the version.
 
 Sources are declared at **directory** level (`TequilaDash`, `ZSign`, `Resources`, and the vendored

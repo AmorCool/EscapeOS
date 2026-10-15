@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UIKit
 
 /// 「Cellular隧道支持」——蜂窝网络（无 Wi-Fi）下也能连本地隧道.
 ///
@@ -54,13 +55,38 @@ final class CellularTunnelManager: @unchecked Sendable {
 
     // MARK: - 建隧道前
 
-    /// 建隧道**前**调用. 蜂窝模式下：直接尝试等隧道就绪（有界轮询），**不关蜂窝**.
+    /// 建隧道**前**调用.
+    ///
+    /// v0.3.613 起照 SideStore `turnOffDataIfNeeded` 补全：蜂窝模式下**先临时关掉蜂窝数据**
+    /// 再等隧道就绪（用完由 `turnOnDataIfNeeded` 恢复）。此前只「等」不「关」，
+    /// 而 iOS 在蜂窝上网时对回环 VPN 有系统级限制 ⇒ 必然 `connect refused`（用户实测无效）。
     ///
     /// - Returns: 是否处于蜂窝模式且隧道已就绪（`false` = 未开开关 / 有 Wi-Fi / 轮询超时）.
     ///   未就绪时**不阻断**调用方：由后续 `ensureHeartbeat()` 如实报错（见 `AppDiscovery`）.
     @discardableResult
     func prepareForTunnel() -> Bool {
         guard isCellularMode else { return false }
+
+        // 先关蜂窝。`UIApplication.open` 必须在主线程，故派到 MainActor 执行；
+        // 本方法由 Engine 层在**后台线程**调用（如 AppListView.reload 的 global 队列），
+        // 用信号量同步等待不会死锁。若调用方恰在主线程，则跳过同步等待
+        // （否则必死锁）——此时仍继续走「等隧道就绪」，只是少了关蜂窝那步，日志如实记录。
+        if !didTurnOffData {
+            if Thread.isMainThread {
+                LoginLogger.shared.log(
+                    "[Cellular] 在主线程调用，跳过同步关蜂窝（避免死锁）；本次仍会尝试等隧道就绪.",
+                    category: .general)
+            } else {
+                let sem = DispatchSemaphore(value: 0)
+                Task { @MainActor in
+                    _ = await turnOffDataIfNeeded()
+                    sem.signal()
+                }
+                // 上限 5 秒：覆盖「拉起快捷指令 + 1s 基础延迟 + 2s 等隧道」的正常耗时.
+                _ = sem.wait(timeout: .now() + 5)
+            }
+        }
+
         let ready = waitForTunnelReady(timeout: Self.readyTimeout)
         // 诊断：把「隧道到底在不在、候选对端是哪些、本机接口长什么样」如实打进日志.
         // 对齐 SideStore `DeviceConnectionManager.refresh()` 的那段多行 debugLog
@@ -69,7 +95,7 @@ final class CellularTunnelManager: @unchecked Sendable {
         // （后者在真机日志里表现为 `connect: Connection refused (os error 61)`）.
         let peers = LocalDevVPN.candidateTunnelPeers()
         LoginLogger.shared.log(
-            "[Cellular] 蜂窝模式，隧道就绪=\(ready). utun=\(LocalDevVPN.isConnected) "
+            "[Cellular] 蜂窝模式，已关蜂窝=\(didTurnOffData)，隧道就绪=\(ready). utun=\(LocalDevVPN.isConnected) "
             + "候选对端=[\(peers.joined(separator: ", "))] 本机接口=\(LocalDevVPN.ipv4InterfaceSummary()).",
             category: .general)
         return ready
@@ -101,7 +127,7 @@ final class CellularTunnelManager: @unchecked Sendable {
     /// 「Wi-Fi 未满足即视为蜂窝」的语义一致）.
     static func isWiFiSatisfied(timeout: TimeInterval = 0.5) -> Bool {
         let monitor = NWPathMonitor()
-        let queue = DispatchQueue(label: "com.tequiladash.f.cellular-path")
+        let queue = DispatchQueue(label: "com.tequila.dash.cellular-path")
         let semaphore = DispatchSemaphore(value: 0)
         let box = BoolBox()
         monitor.pathUpdateHandler = { path in
@@ -112,6 +138,120 @@ final class CellularTunnelManager: @unchecked Sendable {
         _ = semaphore.wait(timeout: .now() + timeout)
         monitor.cancel()
         return box.value
+    }
+
+    // MARK: - 关/开蜂窝（照 SideStore CellularRefreshManager 移植，v0.3.613）
+
+    /// 快捷指令名（可自定义，与 SideStore 的 `turnOffDataShortcutName` 同款）.
+    static let turnOffShortcutKey = "TurnOffDataShortcutName"
+    static let turnOnShortcutKey = "TurnOnDataShortcutName"
+    static let defaultTurnOffShortcut = "TurnOffData"
+    static let defaultTurnOnShortcut = "TurnOnData"
+
+    /// 关/开蜂窝后各等多久再探隧道（对齐 SideStore
+    /// `defaultTurnOffDataBaseDelay` / `defaultTurnOnDataBaseDelay` = 1.0s）.
+    private static let shortcutBaseDelay: TimeInterval = 1.0
+
+    /// 本次会话内是否已经关过蜂窝. 用锁保护（`turnOff/OnDataIfNeeded` 可能被不同线程调）.
+    private let stateLock = NSLock()
+    private var cachedDidTurnOffData = false
+    private var didTurnOffData: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return cachedDidTurnOffData }
+        set { stateLock.lock(); cachedDidTurnOffData = newValue; stateLock.unlock() }
+    }
+
+    /// 清洗快捷指令名（照 SideStore `sanitizeShortcutName`：去控制字符、`/`、`:`，
+    /// 截断到 100 字符，空则回落默认名）.
+    static func sanitizeShortcutName(_ name: String, fallback: String) -> String {
+        var s = name.components(separatedBy: .controlCharacters).joined()
+        s = s.replacingOccurrences(of: "\n", with: "")
+        s = s.replacingOccurrences(of: "\r", with: "")
+        s = s.replacingOccurrences(of: "/", with: "")
+        s = s.replacingOccurrences(of: ":", with: "")
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.count > 100 {
+            s = String(s.prefix(100)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return s.isEmpty ? fallback : s
+    }
+
+    /// 用户配置的关蜂窝快捷指令名（未设或为空时回落 `TurnOffData`）.
+    var turnOffShortcutName: String {
+        Self.sanitizeShortcutName(
+            UserDefaults.standard.string(forKey: Self.turnOffShortcutKey) ?? "",
+            fallback: Self.defaultTurnOffShortcut)
+    }
+
+    /// 用户配置的开蜂窝快捷指令名（未设或为空时回落 `TurnOnData`）.
+    var turnOnShortcutName: String {
+        Self.sanitizeShortcutName(
+            UserDefaults.standard.string(forKey: Self.turnOnShortcutKey) ?? "",
+            fallback: Self.defaultTurnOnShortcut)
+    }
+
+    /// 构造 `shortcuts://run-shortcut?name=<名>`（对齐 SideStore `shortcutURL`）.
+    static func shortcutURL(for name: String) -> URL {
+        var c = URLComponents()
+        c.scheme = "shortcuts"
+        c.host = "run-shortcut"
+        c.queryItems = [URLQueryItem(name: "name", value: name)]
+        return c.url ?? URL(string: "shortcuts://run-shortcut?name=\(name)")!
+    }
+
+    /// 执行 `TurnOffData` 快捷指令（临时关掉蜂窝数据）.
+    ///
+    /// 为什么必须做这一步：iOS 在**蜂窝上网**时对「回环 VPN 访问本机服务」有系统级限制，
+    /// 不关蜂窝就必然 `connect: Connection refused (os error 61)`。
+    /// SideStore 能在蜂窝下连通，靠的正是这一步 —— 本仓 v0.3.612 之前把它砍了
+    /// （注释写「不碰蜂窝开关」），于是蜂窝支持形同虚设（用户实测「支持了鸡毛」）。
+    /// 本轮照 SideStore 补回。
+    ///
+    /// 调用方需保证在主线程（`UIApplication.shared.open` 要求）.
+    @MainActor
+    @discardableResult
+    func turnOffDataIfNeeded() async -> Bool {
+        guard isSupported, isEnabled else { return false }
+        guard !didTurnOffData else { return false }
+        guard !Self.isWiFiSatisfied() else {
+            LoginLogger.shared.log("[Cellular] 有 Wi-Fi，跳过关蜂窝.", category: .general)
+            return false
+        }
+
+        let name = turnOffShortcutName
+        let url = Self.shortcutURL(for: name)
+        LoginLogger.shared.log("[Cellular] 执行关蜂窝快捷指令「\(name)」…", category: .general)
+        let ok = await UIApplication.shared.open(url)
+        if ok {
+            didTurnOffData = true
+            try? await Task.sleep(nanoseconds: UInt64(Self.shortcutBaseDelay * 1_000_000_000))
+            _ = waitForTunnelReady(timeout: Self.readyTimeout)
+        } else {
+            LoginLogger.shared.log("[Cellular] 关蜂窝快捷指令未被系统受理（多因未在「快捷指令」App 里建同名快捷指令）.", category: .general)
+        }
+        return ok
+    }
+
+    /// 执行 `TurnOnData` 快捷指令（恢复蜂窝数据）. 用完即还，不留副作用.
+    @MainActor
+    @discardableResult
+    func turnOnDataIfNeeded() async -> Bool {
+        guard didTurnOffData else { return false }
+        let name = turnOnShortcutName
+        let url = Self.shortcutURL(for: name)
+        LoginLogger.shared.log("[Cellular] 执行开蜂窝快捷指令「\(name)」…", category: .general)
+        let ok = await UIApplication.shared.open(url)
+        if ok { didTurnOffData = false }
+        try? await Task.sleep(nanoseconds: UInt64(Self.shortcutBaseDelay * 1_000_000_000))
+        return ok
+    }
+
+    /// 平台是否支持（照 SideStore：tvOS 不支持）.
+    var isSupported: Bool {
+        #if os(tvOS)
+        return false
+        #else
+        return true
+        #endif
     }
 }
 

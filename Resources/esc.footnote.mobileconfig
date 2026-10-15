@@ -10,7 +10,7 @@
                 <key>IfLostReturnToMessage</key>
                 <string></string>
                 <key>PayloadIdentifier</key>
-                <string>com.tequiladash.supervised.footnote.payload</string>
+                <string>com.tequila.supervised.footnote.payload</string>
                 <key>PayloadType</key>
                 <string>com.apple.shareddeviceconfiguration</string>
                 <key>PayloadUUID</key>
@@ -26,7 +26,7 @@
         <key>PayloadDescription</key>
         <string>在锁屏底部添加一段页脚文字（如丢失返还信息 / 资产标签）。</string>
         <key>PayloadIdentifier</key>
-        <string>com.tequiladash.supervised.footnote</string>
+        <string>com.tequila.supervised.footnote</string>
         <key>PayloadType</key>
         <string>Configuration</string>
         <key>PayloadUUID</key>

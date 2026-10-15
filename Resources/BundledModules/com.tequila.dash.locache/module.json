@@ -1,6 +1,6 @@
 {
   "spec": "escape.module.v1",
-  "id": "com.tequiladash.locache",
+  "id": "com.tequila.locache",
   "name": "定位缓存清理",
   "icon": "location.slash.fill",
   "accent": "blue",

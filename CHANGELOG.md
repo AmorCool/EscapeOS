@@ -7,7 +7,7 @@
 ### 修复
 
 - **主页-模块「执行」必现「执行失败：ServiceNotFound」**（用户报「主页-模块 不知道什么时候开始出现 server not found 功能 之前版本不会的 我怀疑是隧道哪里出问题了」）：
-  两个内置模块（`com.tequiladash.locache` 结束 `locationd` / `com.tequiladash.wifirefresh` 结束 `wifid`）的动作是 `type: "signal"`，链路为
+  两个内置模块（`com.tequila.locache` 结束 `locationd` / `com.tequila.wifirefresh` 结束 `wifid`）的动作是 `type: "signal"`，链路为
   `ModuleService.runSignal → ProcessManagerService.listProcesses → connectAppService → app_service_connect_rsd`。
   `app_service` 属 **CoreDevice 族**（RSD 名 `com.apple.coredevice.appservice`），未挂 DDI 时**不在 RSD 服务表里** ⇒ `RsdHandshake::connect` 的 `services.get(name)` 返回 `ServiceNotFound`(21)，`errors.rs` 再 `format!("{:?}", err)` 把它变成弹窗里那串英文。
   **修法（照 `ScreenshotService` 先例）**：`ProcessManagerService` 新增 `appServiceAvailable(handshake:)` 预检 —— `rsd_service_available` 只做 `services.contains_key(name)`、**不连设备**，且与 `connect` 读**同一张表** ⇒ 结果精确预测会不会抛 21：
@@ -2668,7 +2668,7 @@ json = {"ProductType":…, "SerialNumber":…, "mlbSerial":…}
 | `AirliftExploit.swift`（6676 行） | 漏洞利用本体 |
 | `AirliftChangeLog` / `AirliftBackupStore` / `PlistTweakService` / `PreferencesSettle` | 只服务 airlift 的辅助 |
 | 宿主能力 `airlift.*`(9) / `plist.tweak` / `sys.supervised.*` / `exploit.status` | `HostCapabilityService` **2285 → 947 行** |
-| `com.tequiladash.airlift-poc` 模块 | 宿主内置副本 + 模块仓库整目录 |
+| `com.tequila.airlift-poc` 模块 | 宿主内置副本 + 模块仓库整目录 |
 | `MobileDeviceStub` 桩 / AirTrafficHost 移植脚本 / a64 Grappa 验证工作流 | 整套构建配套 |
 | Rust `adapter.rs` 的 12 个函数 + 两个 `idevice.h` 的声明 | **保留 `adapter_connect`**（`cdprobe` 在调）|
 
@@ -3063,7 +3063,7 @@ cfprefsd 会把**内存里的旧副本**刷回磁盘，把刚还原的内容**�
 ⇒ 之前以为「`afcPath` 放开 `..` 就能探到 Media 之外」是**错的** ——
 真正的边界有两层：AFC 自己的路径校验（越根 = `InvalidArg`）+ 沙盒（越权 = `PermDenied`）.
 
-模块 `com.tequiladash.airlift-poc` → **1.8.0**（`minHostVersion` 0.3.512）.
+模块 `com.tequila.airlift-poc` → **1.8.0**（`minHostVersion` 0.3.512）.
 
 ## [0.3.501] - 2026-09-20
 
@@ -3107,7 +3107,7 @@ cfprefsd 会把**内存里的旧副本**刷回磁盘，把刚还原的内容**�
 
 模块界面里 66 处 `。` 全改成 `.`。同时删掉了上一版遗留的感叹号三角与死代码。
 
-模块 `com.tequiladash.airlift-poc` → **1.4.0**（`requires` 17 项，`minHostVersion` 0.3.501）。
+模块 `com.tequila.airlift-poc` → **1.4.0**（`requires` 17 项，`minHostVersion` 0.3.501）。
 
 ## [0.3.500] - 2026-09-20
 
@@ -3161,7 +3161,7 @@ cfprefsd 会把**内存里的旧副本**刷回磁盘，把刚还原的内容**�
 **不校验落点**（真实目标在 Media 之外，AFC 读不回来）。要确认内容请对任意一个文件
 调 `airlift.pull` 读回比对。
 
-模块 `com.tequiladash.airlift-poc` → **1.3.0**（`requires` 18 项，`minHostVersion` 0.3.499）。
+模块 `com.tequila.airlift-poc` → **1.3.0**（`requires` 18 项，`minHostVersion` 0.3.499）。
 
 > 下一步：把 AirCard 的「密码键盘主题（`.passthm`）」做成模块 tab ——
 > 选主题 → 预览 12 键 → 用 `airlift.writeMany` 一次写进 `TelephonyUI-{8,9,10}`。
@@ -3260,7 +3260,7 @@ target = "/var/mobile/Library/Logs", targetIsDirectory=true // 显式声明是�
   · Logs / Preferences ⇒ 提醒「可能被守护进程重建 ⇒ 搬回时冲突」
 - 警告同时出现在 `steps` 与返回的 `warning` 字段里，界面直接显示
 
-模块 `com.tequiladash.airlift-poc` → **1.2.0**（`requires` 17 项，`minHostVersion` 0.3.497）。
+模块 `com.tequila.airlift-poc` → **1.2.0**（`requires` 17 项，`minHostVersion` 0.3.497）。
 
 ## [0.3.496] - 2026-09-20
 
@@ -3325,7 +3325,7 @@ afc.read  /airlift-recovered-38EC6637/a.txt → 内容正确
   （条目名从 `LoginLogs/airlift_pending_restore.txt` 取）。搬回失败时界面会给按钮。
 - **`airlift.delete {path}`** —— 删掉沙盒外的一个已知文件（**先确认备份落盘、再删**）。
 
-新增「目录浏览」tab（模块 `com.tequiladash.airlift-poc` → **1.1.1**）。
+新增「目录浏览」tab（模块 `com.tequila.airlift-poc` → **1.1.1**）。
 
 ### 修「自定义覆盖 → 从本机选择文件导入到 AIR」选完没反应
 
@@ -3384,7 +3384,7 @@ airlift-src-DB9A2FD1/payload 已被搬走 = 否（第 2 次 move 没发生）
 真机实测第 6 次 AT 会话会卡在 conduit 建连、之后整条 `protocolQueue` 堵死
 ⇒ **操作次数本身就是风险，能省则省**。
 
-模块 `com.tequiladash.airlift-poc` → **1.0.1**（`minHostVersion` = 0.3.495）。
+模块 `com.tequila.airlift-poc` → **1.0.1**（`minHostVersion` = 0.3.495）。
 
 ## [0.3.494] - 2026-09-20
 
@@ -3794,7 +3794,7 @@ airlift 默认未启用 ⇒ 模块概览 tab 会显示橙色的「airlift 不可
 真机现象（装 airlift-poc 的 zip）：
 
 ```
-- 清单: com.tequiladash.airlift-poc v1.0.0 (Airlift PoC)
+- 清单: com.tequila.airlift-poc v1.0.0 (Airlift PoC)
 - 规范: escape.module.v1 ✓
 ! 导入失败: 模块未声明任何 action
 ```
@@ -4011,7 +4011,7 @@ SwiftUI 视图没法从 zip 里加载，所以 `view` 是**宿主内的注册名
 - `autoStartAll()` 也跳过 `blockingIssues` 非空的模块 —— 它跑起来也只会失败，
   而在启动期炸掉（Go 侧 `log.Fatal` → `os.Exit`）会连宿主一起带走。
 
-#### ⑥ 第一个用它的模块：`com.tequiladash.airlift-poc`（原生界面）
+#### ⑥ 第一个用它的模块：`com.tequila.airlift-poc`（原生界面）
 
 三个 tab：**概览**（宿主版本 / 模块可用性 / airlift 状态 / 逐条标注声明能力是否支持）、
 **监督模式**（本次唯一功能）、**日志**（宿主能力调用的原始 JSON 往来，排障用）。
@@ -4977,7 +4977,7 @@ v0.3.464 的两趟拆分跑通了，真机结论：
 
 **事实（用户实测 + PC 侧标准工具交叉验证）**：
 
-- 主页两个内置模块（`com.tequiladash.locache` / `com.tequiladash.wifirefresh`）、进程管理、
+- 主页两个内置模块（`com.tequila.locache` / `com.tequila.wifirefresh`）、进程管理、
   虚拟定位停止、拨号器主题「重启电话 App」、IPCC「重启 CommCenter」、设备控制「重启 SpringBoard」
   —— **这些功能本身一直是对的**，代码没有问题。
 - `ServiceNotFound`(21) 出现时，**重启手机即恢复**（用户实测；同类工具也是这么处理的）。
@@ -7097,7 +7097,7 @@ stream_recv_xml(stream, &out)  // 先读 4 字节长度，再读正文
 
 **本次实现（只加触发，不加任何"自动"逻辑）：**
 - `AirliftExploit.runConnectivitySelfTestIfIdle()` —— 新增的显式入口：
-  - 走 airlift **自己的串行队列**（`com.tequiladash.f.airlift.selftest`），不占主线程；
+  - 走 airlift **自己的串行队列**（`com.tequila.dash.airlift.selftest`），不占主线程；
   - **单飞标记**：已有自检在跑时直接返回，快速连点勾选也不会并发；
   - 结果照旧写 `[airlift]` 日志，SSH 可取回。
 - `ExploitSelectionView.toggle()`：**只在「勾上」airlift 时**调用该入口；
@@ -8415,7 +8415,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 - **DDI 挂载也不需要**：要挂 DDI 的只有那条 lockdown 老路；现走的 **RSD → `dtservicehub` → DTX 在 iOS 17+ 不需要 DDI**
   （这也是虚拟定位一直能直接用的原因）。App 至今从不挂 DDI（`DDIDownloadView` 只下载+打包，`image_mounter` 从未被调用）。
 > **⚠️ 更正（2026-09-19）** —— 用户报告「主页模块板块的两个内置模块执行时 ServiceNotFound」
-> （`com.tequiladash.locache` 定位缓存清理 / `com.tequiladash.wifirefresh` WLAN 连接刷新，两者都是 `"type": "signal"`，
+> （`com.tequila.locache` 定位缓存清理 / `com.tequila.wifirefresh` WLAN 连接刷新，两者都是 `"type": "signal"`，
 > 走 `app_service_list_processes` → `app_service_send_signal`）。核实后确认上面这条「**DDI 挂载也不需要**」**结论有误**：
 >
 > 1. **原文是什么**（上面那条，一字未删）：要挂 DDI 的只有那条 lockdown 老路；现走的 RSD → `dtservicehub` → DTX
@@ -9793,7 +9793,7 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 
 ### Changed
 
-- **包名回退为 TequilaDash 原始 Bundle ID**. `control` 与 `Resources/Info.plist` 的 Bundle ID 由 `com.apple.mobile.MobileHouseArrest`（MHA 分支遗留）改回 `com.tequiladash.f`，与原始 TequilaDash 身份一致；`TequilaDash.entitlements` 仅含 `get-task-allow`，无需改动。版本号 `0.2.28 → 0.2.30`（`CFBundleShortVersionString` / `CFBundleVersion` 与 `control` 同步）。
+- **包名回退为 TequilaDash 原始 Bundle ID**. `control` 与 `Resources/Info.plist` 的 Bundle ID 由 `com.apple.mobile.MobileHouseArrest`（MHA 分支遗留）改回 `com.tequila.dash`，与原始 TequilaDash 身份一致；`TequilaDash.entitlements` 仅含 `get-task-allow`，无需改动。版本号 `0.2.28 → 0.2.30`（`CFBundleShortVersionString` / `CFBundleVersion` 与 `control` 同步）。
 - **「容器管理」共享应用显示真实名称 + 图标 + 绿色「共享」胶囊**. 之前共享（被 LiveContainer “转换”/converted）的容器应用只显示 UUID、无名称/图标，因为 TequilaDash 只在宿主的 `Documents/Applications` 下查 `.app`；而共享 guest 的 `.app` 实际位于 **AppGroup 的 `LiveContainer/Applications`**（文件夹名可能是裸 bundle id、无 `.app` 后缀）。现已：
   - `LiveContainerDiscovery` 在 AppGroup `LiveContainer/Applications` 下查找共享 guest 的 `.app`（放宽 `enumerateGuestBundles`：任意含 `Info.plist` 的目录均视为候选，兼容无后缀的裸 bundle id 目录），取回真实 `CFBundleDisplayName` / 图标 / Bundle ID，并标记 `isShared = true`。
   - `LiveCleanTabView` 对共享 guest 在名称旁渲染绿色「共享」胶囊，与普通（私有）guest 区分。
@@ -9805,13 +9805,13 @@ CI 唯一错误：`NiuwaStoreClient.swift:520: error: cannot find 'dumpResponse'
 ### Added（LiveContainer 侧，随 LC 主分支 nightly 发布）
 
 - **LiveContainer 设置新增「Guest Container Extension」开关**. 位于设置页（默认开启），绑定到 App Group 套件 `UserDefaults` 的 `LCContainerExtensionEnabled`。关闭后，经典启动路径（`LCBootstrap`）与多任务路径（`AppSceneViewController`）都不再为 TequilaDash 签发容器沙盒扩展，并下发 `ESC_LC_GRANT_STATUS=skipped:disabled`，使 TequilaDash 诊断可见「已禁用」。
-- **多语言**. `Resources/Localizable.xcstrings` 新增 `lc.settings.containerExtension` 与 `lc.settings.containerExtensionDesc` 两键，覆盖 LC 全部 16 种 UI 语言（ar / de / en / es / fr / it / ja / ko / pl / pt-BR / ru / sv / tr / vi / zh-Hans / zh-Hant）。`LCSharedUtils` 的 `isTequilaDash` 识别同步改为 `com.tequiladash.f`。
+- **多语言**. `Resources/Localizable.xcstrings` 新增 `lc.settings.containerExtension` 与 `lc.settings.containerExtensionDesc` 两键，覆盖 LC 全部 16 种 UI 语言（ar / de / en / es / fr / it / ja / ko / pl / pt-BR / ru / sv / tr / vi / zh-Hans / zh-Hant）。`LCSharedUtils` 的 `isTequilaDash` 识别同步改为 `com.tequila.dash`。
 
 ## [0.2.14] - 2026-08-21
 
 ### Changed
 
-- **项目更名 TequilaDash → TequilaDash**. 应用名（二进制 / `CFBundleExecutable` / `CFBundleDisplayName` / `control` Name / `@main` 结构体）统一改为 TequilaDash；设置页「关于」行、各项备份路径提示文案（「文件 → 我的iPhone → TequilaDash → Backups」）、限制说明与错误提示中的可见产品名同步更新。Bundle ID（`com.tequiladash.f`）保持不变，以免破坏已建立的配对文件与备份。源码目录 `TequilaDash/` 与内部错误域、日志串、`TequilaDash-Bridging-Header.h`、持久化元数据键 `tequilaDashVersion` 等有意保留，避免影响既有备份兼容性与隧道认证。
+- **项目更名 TequilaDash → TequilaDash**. 应用名（二进制 / `CFBundleExecutable` / `CFBundleDisplayName` / `control` Name / `@main` 结构体）统一改为 TequilaDash；设置页「关于」行、各项备份路径提示文案（「文件 → 我的iPhone → TequilaDash → Backups」）、限制说明与错误提示中的可见产品名同步更新。Bundle ID（`com.tequila.dash`）保持不变，以免破坏已建立的配对文件与备份。源码目录 `TequilaDash/` 与内部错误域、日志串、`TequilaDash-Bridging-Header.h`、持久化元数据键 `tequilaDashVersion` 等有意保留，避免影响既有备份兼容性与隧道认证。
 - **移除设置页「诊断（调试用）」区块**. 删除 AppGroup 探测按钮、结果滚动视图、分享结果与相关状态 / 方法（`runProbe` / `shareProbeResult` / `isoTimestamp`），并删除引擎文件 `Engine/AppGroupProbe.swift`。该探测仅用于前期研究取证，对普通用户无意义。
 - **应用列表移除右侧 A–Z 字母跳转索引**. 删去覆盖在列表右侧的蓝色字母条与 `sectionIndex` / `jumpToLetter` 逻辑，列表恢复普通滚动（应用仍按名称分组）。
 - **更新 App 图标**. 替换为新的垃圾桶（回收）风格图标，重新生成 1024×1024 主图与全套 `Resources/AppIcon*.png` 尺寸。

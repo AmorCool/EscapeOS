@@ -199,9 +199,9 @@ final class ProcessManagerService: Sendable {
     /// 注意： 2026-09-19 更正：但它是**通道被抢占**的根因，**不是** `ServiceNotFound` 的根因 ——
     /// 后者是**设备侧的服务状态问题**（该服务偶尔不可用，**重启手机即恢复**），与并发无关。
     /// 见上方注释。
-    private let operationQueue = DispatchQueue(label: "com.tequiladash.f.processmgr", qos: .userInitiated)
+    private let operationQueue = DispatchQueue(label: "com.tequila.dash.processmgr", qos: .userInitiated)
     /// v0.3.38：内存查询专用串行队列（sysmontap 阻塞式，不与其他操作争用）
-    private let memoryQueue = DispatchQueue(label: "com.tequiladash.f.processmgr.memory", qos: .utility)
+    private let memoryQueue = DispatchQueue(label: "com.tequila.dash.processmgr.memory", qos: .utility)
 
     /// TequilaDash 的配对文件路径（与「应用管理」/ 虚拟定位共用）.
     private var pairingPath: String {

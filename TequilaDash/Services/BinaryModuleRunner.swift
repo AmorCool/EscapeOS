@@ -380,7 +380,7 @@ final class BinaryModuleRunner: ObservableObject {
                     parts.append("（未记录具体失败原因，见 run.log）")
                 }
             } else {
-                parts.append("模块目录中无 bin/*.dylib——请从 module-esc edge 导入 com.tequiladash.alist 模块 zip")
+                parts.append("模块目录中无 bin/*.dylib——请从 module-esc edge 导入 com.tequila.alist 模块 zip")
             }
             parts.append("本 App 未内置 \(moduleId) 的 \(entrySymbol)，外部导入属正常现象")
             throw BinaryModuleError.spawnFailed(parts.joined(separator: "\n"))

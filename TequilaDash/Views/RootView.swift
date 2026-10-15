@@ -227,6 +227,9 @@ struct SettingsForm: View {
     /// 「Cellular隧道支持」：默认关 ⇒ 开关不开时引擎层全部 no-op，零行为变化.
     /// 键与引擎层同源（`CellularTunnelManager.enabledKey`），对齐 `TunnelManager.kindKey` 的用法.
     @AppStorage(CellularTunnelManager.enabledKey) private var cellularTunnelSupport = false
+    /// v0.3.613：关/开蜂窝所用的快捷指令名（留空 = 用默认 TurnOffData / TurnOnData）.
+    @AppStorage(CellularTunnelManager.turnOffShortcutKey) private var turnOffShortcut = ""
+    @AppStorage(CellularTunnelManager.turnOnShortcutKey) private var turnOnShortcut = ""
     // v0.3.434：日志上限（可配置）+ 一键清空
     @StateObject private var logLimit = LogLimitSettings.shared
     @State private var fileLimitText = ""
@@ -319,11 +322,22 @@ struct SettingsForm: View {
             // 放在「本地隧道」设备 IP 之前：先选隧道方式，再填对端 IP。
             TunnelPickerView()
 
-            // Cellular隧道支持：蜂窝网络（无 Wi-Fi）下建隧道前有界等隧道就绪. 不碰蜂窝开关，
-            // 也不需要任何自建快捷指令. 默认关 ⇒ 开关不开时引擎层全部方法都是 no-op。
+            // Cellular隧道支持：蜂窝网络（无 Wi-Fi）下建隧道前先临时关掉蜂窝数据再等隧道就绪.
+            // v0.3.613 照 SideStore `CellularRefreshManager` 补全 —— 此前本仓砍掉了「关蜂窝」
+            // 这一步，只剩「等隧道就绪」，于是蜂窝下必然 connect refused（用户实测无效）。
+            // 关蜂窝靠「快捷指令」App 里的两个自建快捷指令（默认名 TurnOffData / TurnOnData），
+            // 名字可在此自定义（与 SideStore 同款）。默认关 ⇒ 不开开关时全部 no-op。
             Section(header: Text("Cellular隧道支持"),
-                    footer: Text("蜂窝网络（无 Wi-Fi）下，建隧道前会先等待本地隧道就绪.默认关闭，不影响 Wi-Fi 下的连接.")) {
+                    footer: Text("蜂窝网络（无 Wi-Fi）下，建隧道前会临时关掉蜂窝数据再等本地隧道就绪，用完立即恢复.需要在「快捷指令」App 里自建两个快捷指令：一个关闭蜂窝数据、一个打开蜂窝数据（默认名 TurnOffData / TurnOnData，可在此改名）.默认关闭，不影响 Wi-Fi 下的连接.")) {
                 Toggle("Cellular隧道支持", isOn: $cellularTunnelSupport)
+                if cellularTunnelSupport {
+                    TextField("关蜂窝快捷指令名（默认 TurnOffData）", text: $turnOffShortcut)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                    TextField("开蜂窝快捷指令名（默认 TurnOnData）", text: $turnOnShortcut)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                }
             }
 
             Section(header: Text("本地隧道"), footer: Text("必须与 LocalDevVPN 的隧道/设备 IP 一致.保持默认的 10.7.0.1，除非你修改过 LocalDevVPN.")) {

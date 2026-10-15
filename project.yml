@@ -15,7 +15,7 @@
 name: TequilaDash
 
 options:
-  bundleIdPrefix: com.tequiladash
+  bundleIdPrefix: com.tequila
   deploymentTarget:
     iOS: "18.0"
   createIntermediateGroups: true
@@ -25,7 +25,7 @@ options:
 
 settings:
   base:
-    PRODUCT_BUNDLE_IDENTIFIER: com.tequiladash.f
+    PRODUCT_BUNDLE_IDENTIFIER: com.tequila.dash
     PRODUCT_NAME: TequilaDash
     MARKETING_VERSION: "0.3.612"
     CURRENT_PROJECT_VERSION: "906"
@@ -242,7 +242,7 @@ targets:
       base:
         # Network Extension 要求扩展 bundle id 以主 App bundle id 为前缀；
         # 这里取主 bundle id + ".tunnel"，与 BuiltInTunnel.providerBundleID 的约定一致.
-        PRODUCT_BUNDLE_IDENTIFIER: com.tequiladash.f.tunnel
+        PRODUCT_BUNDLE_IDENTIFIER: com.tequila.dash.tunnel
         PRODUCT_NAME: TequilaDashTunnel
         MARKETING_VERSION: "0.3.587"
         CURRENT_PROJECT_VERSION: "881"

@@ -170,7 +170,7 @@ jobs:
             else
               gh release create "$TAG" \
                 --title "TequilaDash $TAG (Xcode native)" \
-                --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA（双版本）。**复用 run ${RUN} 的成功构建产物，未重复编译**。标准版 TequilaDash-<ver>-xcode-unsigned.ipa 仅需普通证书；隧道版 TequilaDash-Tunnel-<ver>-xcode-unsigned.ipa 随包携带 packet-tunnel-provider，需带 Network Extension 权限的证书/侧载工具给主 App 与扩展都施加 NE。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.tequiladash.f。" \
+                --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA（双版本）。**复用 run ${RUN} 的成功构建产物，未重复编译**。标准版 TequilaDash-<ver>-xcode-unsigned.ipa 仅需普通证书；隧道版 TequilaDash-Tunnel-<ver>-xcode-unsigned.ipa 随包携带 packet-tunnel-provider，需带 Network Extension 权限的证书/侧载工具给主 App 与扩展都施加 NE。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.tequila.dash。" \
                 "${IPAS[@]}"
             fi
             echo "reuse=true" >> "$GITHUB_OUTPUT"
@@ -457,7 +457,7 @@ jobs:
           # 内置模块单一数据源：module-esc 仓库（modules/<id>/module.json）。
           # ⚠️ **哪些内置由模块自己声明**（module.json 的 `distribution: "bundled"`，
           # 默认 external = 独立模块走 edge zip 按需导入），**不在这里硬编码排除名单**。
-          # 旧实现是 `cp -R modules/*` + 硬编码 `rm -rf .../com.tequiladash.alist`，
+          # 旧实现是 `cp -R modules/*` + 硬编码 `rm -rf .../com.tequila.alist`，
           # 于是 v0.3.481 新加的模块被自动打成了内置模块（而那个模块要求是独立的），
           # 而且每加一个不内置的模块都要回来改一次 workflow。规则与理由见
           # Resources/Scripts/sync_bundled_modules.py 的头注释。
@@ -798,6 +798,6 @@ jobs:
           else
             gh release create "$TAG" \
               --title "TequilaDash $TAG (Xcode native)" \
-              --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA（双版本）。标准版 TequilaDash-<ver>-xcode-unsigned.ipa 仅需普通证书；隧道版 TequilaDash-Tunnel-<ver>-xcode-unsigned.ipa 随包携带 packet-tunnel-provider，需带 Network Extension 权限的证书/侧载工具给主 App 与扩展都施加 NE。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.tequiladash.f。" \
+              --notes "由 Xcode 原生工程（方案 A）构建的未签名 IPA（双版本）。标准版 TequilaDash-<ver>-xcode-unsigned.ipa 仅需普通证书；隧道版 TequilaDash-Tunnel-<ver>-xcode-unsigned.ipa 随包携带 packet-tunnel-provider，需带 Network Extension 权限的证书/侧载工具给主 App 与扩展都施加 NE。侧载时由工具（Sideloadly/ESign/TrollStore）施加 entitlements。bundle id=com.tequila.dash。" \
               "${ASSETS[@]}"
           fi

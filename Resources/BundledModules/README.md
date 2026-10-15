@@ -6,5 +6,5 @@
 
 ## 子目录
 
-- `com.tequiladash.locache/` —— 1 个文件
-- `com.tequiladash.wifirefresh/` —— 1 个文件
+- `com.tequila.locache/` —— 1 个文件
+- `com.tequila.wifirefresh/` —— 1 个文件

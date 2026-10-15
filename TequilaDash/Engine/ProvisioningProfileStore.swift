@@ -83,7 +83,7 @@ enum ProvisioningProfileStore {
     /// 保证两个模块拿到的是**同一条队列**——各建一条等于没保护.
     /// 只锁「建隧道」这一步，不锁调用方后续的隧道生命周期：一次卡死不会把
     /// 另一个入口一起拖死（理由同 v0.3.376 FileSharingService.tunnelQueue）.
-    static let tunnelQueue = DispatchQueue(label: "com.tequiladash.profiles.tunnel")
+    static let tunnelQueue = DispatchQueue(label: "com.tequila.profiles.tunnel")
 
     private static func createTunnel() throws -> (adapter: OpaquePointer, handshake: OpaquePointer) {
         try tunnelQueue.sync {

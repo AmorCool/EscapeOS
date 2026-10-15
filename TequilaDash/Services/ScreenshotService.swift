@@ -52,7 +52,7 @@ final class ScreenshotService: Sendable {
     /// 串行队列：同一时刻只跑一次隧道 + 截图，避免 RSD/DVT 通道竞争。
     /// 若某次 C 调用真的挂住，后续调用会排在它后面一起超时 —— 这是刻意选择：
     /// 宁可让调用方拿到「超时」，也不并发建多条隧道把设备侧搞乱。
-    private let operationQueue = DispatchQueue(label: "com.tequiladash.f.screenshot",
+    private let operationQueue = DispatchQueue(label: "com.tequila.dash.screenshot",
                                                qos: .userInitiated)
 
     /// TequilaDash 的配对文件路径（与「进程管理 / 设备控制」共用同一份）。

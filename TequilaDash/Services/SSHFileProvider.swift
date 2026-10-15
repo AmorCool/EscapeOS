@@ -199,7 +199,7 @@ private final class TimeoutClaim: @unchecked Sendable {
 /// 把「另一个客户端在 /sandbox 的快 ls」堵在队尾（head-of-line blocking）。
 /// AFC 的串行化由 `AFCService.afcQueue` 自己保证，这里**不需要**再串一次；
 /// sandbox 的 FileManager 操作本身线程安全。故改为并发，只保证「不占用 NIO 事件循环」。
-private let sftpBlockingQueue = DispatchQueue(label: "com.tequiladash.sftp.blocking",
+private let sftpBlockingQueue = DispatchQueue(label: "com.tequila.sftp.blocking",
                                               qos: .utility,
                                               attributes: .concurrent)
 

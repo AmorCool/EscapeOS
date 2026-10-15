@@ -515,7 +515,7 @@ enum OnlineInstallConfig {
 
     static let endpointKey = "escape.onlineInstallEndpoint"
 
-    private static let keychainService = "com.tequiladash.f.onlineinstall"
+    private static let keychainService = "com.tequila.dash.onlineinstall"
     private static let tokenAccount = "githubToken"
 
     // MARK: - 自有 HTTPS 托管地址

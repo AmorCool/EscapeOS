@@ -364,7 +364,7 @@ struct BuiltInTunnel: TunnelProviding {
     /// 内置隧道 provider 的 bundle id 约定：主 bundle id + `.tunnel`
     /// （Network Extension 扩展必须以此为主 App bundle id 的前缀）.
     static var providerBundleID: String {
-        (Bundle.main.bundleIdentifier ?? "com.tequiladash.f") + ".tunnel"
+        (Bundle.main.bundleIdentifier ?? "com.tequila.dash") + ".tunnel"
     }
 
     func start() async {

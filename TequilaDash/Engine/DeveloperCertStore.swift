@@ -243,7 +243,7 @@ final class DeveloperCertStore: ObservableObject {
     /// 150/151 真机实锤主程序用 LC 导入的旧证书（能过校验），新证书签的 dylib 被拒.
     /// v0.3.156：useMainIdent=true 时签名 identifier 用主程序 CD 的 identifier.
     /// 最终根因：iOS 27 beta AMFI 要求 dlopen 库的 identifier 与主程序一致
-    /// （真机实锤：com.tequiladash.alist 被拒，主程序 ident 通过 dlopen）.
+    /// （真机实锤：com.tequila.alist 被拒，主程序 ident 通过 dlopen）.
     func signDylib(path: String, bundleId: String, debugLog: URL? = nil,
                    useMainIdent: Bool = false) -> Bool {
         let team = (try? String(contentsOf: teamURL, encoding: .utf8)) ?? ""

@@ -319,7 +319,7 @@ struct DomainBlockerView: View {
         let dnsPayload: [String: Any] = [
             "PayloadType": "com.apple.dnsSettings.managed",
             "PayloadVersion": 1,
-            "PayloadIdentifier": "com.tequiladash.blocker.dns",
+            "PayloadIdentifier": "com.tequila.blocker.dns",
             "PayloadUUID": UUID().uuidString,
             "PayloadDisplayName": "屏蔽域名 (HTTPS DNS)",
             "DNSSettings": [
@@ -333,7 +333,7 @@ struct DomainBlockerView: View {
             "PayloadContent": [dnsPayload],
             "PayloadDisplayName": "屏蔽域名",
             "PayloadDescription": "通过屏蔽自定义域名限制访问，对其它网络流量无影响.文件未签名属正常现象，可在“设置 → 通用 → VPN 与设备管理”中安装或移除.",
-            "PayloadIdentifier": "com.tequiladash.blocker",
+            "PayloadIdentifier": "com.tequila.blocker",
             "PayloadOrganization": "TequilaDash",
             "PayloadRemovalDisallowed": false,
             "PayloadType": "Configuration",

@@ -106,9 +106,13 @@
 		<!-- 2026-10-10：隧道方式「LocalDevVPN」需 canOpenURL 探测是否已安装。
 		     此前漏登本项 ⇒ LocalDevVPN.isInstalled 恒 false ⇒ openOrInstall 永远跳 App Store。 -->
 		<string>localdevvpn</string>
+		<!-- v0.3.613：蜂窝隧道支持需要拉起「快捷指令」的 TurnOffData / TurnOnData
+		     （照 SideStore CellularRefreshManager 移植）。iOS 的 canOpenURL 对未登记
+		     scheme 返回 false，故必须在此登记，否则关/开蜂窝那步静默失败. -->
+		<string>shortcuts</string>
 	</array>
 	<key>CFBundleIdentifier</key>
-	<string>com.tequiladash.f</string>
+	<string>com.tequila.dash</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundlePackageType</key>

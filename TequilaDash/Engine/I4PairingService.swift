@@ -106,7 +106,7 @@ enum I4PairingService {
 
     /// RSD 隧道并发铁律（`AFCService` / `WirelessLockdownService` 同款）：同一 hostname 并发
     /// `tunnel_create_rppairing` 会互相抢占；本服务所有隧道操作经此队列串行.
-    private static let pairQueue = DispatchQueue(label: "com.tequiladash.f.i4-pair")
+    private static let pairQueue = DispatchQueue(label: "com.tequila.dash.i4-pair")
 
     /// `pair.config` **离线**构造不可能的原因（逐条事实，供 UI / 简报直接引用）.
     static let pairConfigUnavailableReason =

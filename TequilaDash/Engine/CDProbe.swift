@@ -4,7 +4,7 @@ import Foundation
 /// 「第二个 RSD 握手」，看 `com.apple.coredevice.appservice` 能不能连上。
 ///
 /// ## 为什么要这个探针
-/// 主页两个内置模块（`com.tequiladash.locache` / `com.tequiladash.wifirefresh`，`type: "signal"`）
+/// 主页两个内置模块（`com.tequila.locache` / `com.tequila.wifirefresh`，`type: "signal"`）
 /// 与「更多 → 进程管理」执行时会出现 `ServiceNotFound`（错误码 21）。
 ///
 /// 注意： **成因尚未定论，本项目写过的两版归因都已作废**：①「设备未挂 DDI」；

@@ -31,7 +31,7 @@ final class WiFiPowerBridge: @unchecked Sendable {
 
     private func stepLog(_ text: String) {
         let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Modules/com.tequiladash.wifitoggle/data/wifi_bridge.log")
+            .appendingPathComponent("Modules/com.tequila.wifitoggle/data/wifi_bridge.log")
         try? FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
         let line = "[" + String(describing: Date()) + "] " + text + "\n"

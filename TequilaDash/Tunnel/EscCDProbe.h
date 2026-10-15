@@ -6,7 +6,7 @@
 //  取 CoreDevice 服务表，并端到端跑一次 app_service（cdprobe / 2026-09-19）。
 //
 //  ## 为什么需要这个探针
-//  主页两个内置模块（`com.tequiladash.locache` / `com.tequiladash.wifirefresh`）与
+//  主页两个内置模块（`com.tequila.locache` / `com.tequila.wifirefresh`）与
 //  「更多 → 进程管理」执行时会出现 `ServiceNotFound`（错误码 21）。
 //
 //  注意： **成因尚未定论，本项目写过的两版归因都已作废**：①「设备未挂 DDI」；

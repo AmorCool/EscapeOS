@@ -43,7 +43,7 @@ final class BLECoordinator: NSObject, ObservableObject {
     /// 「本次要下发的目标」，走 `send(latitude:longitude:)` 推回去。
     var onPushRequest: ((CLLocationCoordinate2D) -> Void)?
 
-    private let queue = DispatchQueue(label: "com.tequiladash.ble")
+    private let queue = DispatchQueue(label: "com.tequila.ble")
     private var role: BluetoothLinkRole = .broadcaster
 
     /// A 机看门狗：超过这个时长既没成功推送、也没收到 B 的回报就判定对端消失.

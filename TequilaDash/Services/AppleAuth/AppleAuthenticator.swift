@@ -144,10 +144,20 @@ enum AppleAuthenticator {
 
         context.dsid = dsid
 
-        let authType = statusDictionary["au"] as? String
+        // v0.3.613：GSA 改了 2FA 响应形态 —— 现在**返回 409 且不带 `au` 字段**，
+        // 自己弹 2FA。此前只读 `au`，于是 authType=nil 落到 default 分支，
+        // 拿不到 sk/c 直接抛 badServerResponse，用户看到的就是
+        // 「Apple ID 验证失败 / Code -80045」。
+        // 依据：SideSign PR #5「Fix 2FA failing」（2026-10-13，merged）——
+        //   let authType = (statusDictionary?["au"] as? String)
+        //      ?? ((statusDictionary?["hsc"] as? Int) == 409 ? "pushedCode" : nil)
+        let authType = (statusDictionary["au"] as? String)
+            ?? ((statusDictionary["hsc"] as? Int) == 409 ? "pushedCode" : nil)
         LoginLogger.shared.log("[完成] complete 握手成功，au=\(authType ?? "nil") dsid=\(dsid.prefix(8))…", category: .appleID)
         switch authType {
-        case "trustedDeviceSecondaryAuth":
+        case "trustedDeviceSecondaryAuth", "pushedCode":
+            // `pushedCode` = GSA 主动推送到受信任设备的验证码（与 trustedDeviceSecondaryAuth 同一条处理链，
+            // 对齐 SideSign 把二者并入同一 case 的做法）。
             guard let verificationHandler else { throw AppleAPIError.requiresTwoFactorAuthentication }
             try await requestTrustedDeviceTwoFactorCode(dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData, verificationHandler: verificationHandler)
             // v0.3.265：2FA 通过后用【同一份 anisetteData】重新握手，禁止刷新！

@@ -13,6 +13,16 @@ import SwiftUI
 struct AnisetteServersView: View {
     /// 与设置页、`AnisetteProvider` 同源的服务器键.
     @AppStorage("AnisetteServer") private var anisetteServer: String = "https://ani.stikstore.app"
+    /// v0.3.613：用户自定义的 `X-MMe-Client-Info`（留空 = 用内置默认）.
+    ///
+    /// 为什么需要可自定义（依据 SideSign PR #5「Fix 2FA failing」，2026-10-13 merged）：
+    /// GSA 现在会**指纹识别所用的 adi 库**，导致既有 anisette 服务器生成的 headers 被拒
+    /// （用户侧表现就是 `Code -80045`）。SideSign 作者实测把 client info 换成
+    /// `<Pixel 8><Android; 14; UQ1A.240205.004><com.apple.AuthKit/1 (com.apple.android.music/4.9.6)>`
+    /// 就能让既有服务器恢复可用。但 GSA 的判据会再变，故**做成可编辑**，
+    /// 与 SideStore 的 `customAnisetteClientInfo` 同款（它的优先级是
+    /// 「UserDefaults 自定义 > 配置文件 > 默认值」，本仓取前两者）.
+    @AppStorage("CustomAnisetteClientInfo") private var customClientInfo: String = ""
     @ObservedObject private var oda = OnDeviceAnisetteManager.shared
 
     @State private var customText: String = ""
@@ -51,6 +61,7 @@ struct AnisetteServersView: View {
             statusSection
             popularSection
             customSection
+            clientInfoSection
             onDeviceSection
             resetSection
         }
@@ -144,6 +155,38 @@ struct AnisetteServersView: View {
                 .disabled(normalizedCustom == nil)
                 .accessibilityLabel("使用自定义地址")
             }
+        }
+    }
+
+    // MARK: - Client Info
+
+    /// SideSign 实测可用的 Android 形态 client info（PR #5，2026-10-13）.
+    /// GSA 指纹识别 adi 库后，这个值能让既有 anisette 服务器恢复可用.
+    private static let androidClientInfo =
+        "<Pixel 8><Android; 14; UQ1A.240205.004><com.apple.AuthKit/1 (com.apple.android.music/4.9.6)>"
+
+    private var clientInfoSection: some View {
+        Section(header: Text("客户端标识"),
+                footer: Text("发给 Apple 的 X-MMe-Client-Info.留空则用内置默认值.如果登录报 -80045，可试试点「填入 Android 形态」——该值经 SideSign 实测可绕过 GSA 对 adi 库的指纹识别.")) {
+            HStack(spacing: 10) {
+                TextField("留空 = 内置默认", text: $customClientInfo)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .font(.footnote)
+            }
+            HStack {
+                Text("当前生效")
+                Spacer()
+                Text(customClientInfo.isEmpty ? "内置默认" : "自定义")
+                    .foregroundColor(.secondary)
+            }
+            Button("填入 Android 形态") {
+                customClientInfo = Self.androidClientInfo
+            }
+            Button("恢复内置默认") {
+                customClientInfo = ""
+            }
+            .foregroundColor(.secondary)
         }
     }
 

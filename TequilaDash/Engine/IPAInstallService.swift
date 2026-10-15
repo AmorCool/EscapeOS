@@ -95,7 +95,7 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
     /// 登录/会话恢复的串行队列：Rust 调用是阻塞的，预热（app 启动后台）
     /// 与页面内自动登录可能并发，串行化保证同一时刻只有一个登录操作在跑，
     /// 避免两个调用同时读写 `_session` 造成竞态.
-    private let authQueue = DispatchQueue(label: "com.tequiladash.f.auth")
+    private let authQueue = DispatchQueue(label: "com.tequila.dash.auth")
 
     /// 「用 token 恢复会话」失败过一次（token 大概率已过期）.
     /// 为 true 时自动登录跳过免 2FA 恢复、直接走完整登录，避免每次进页面

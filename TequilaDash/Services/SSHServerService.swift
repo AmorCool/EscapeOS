@@ -398,7 +398,7 @@ final class BuiltinCommandExecDelegate: ExecDelegate, @unchecked Sendable {
 
     /// 第一个二进制模块的 id（SSH 诊断命令用）
     static func firstBinaryModuleID() -> String {
-        ModuleService.shared.listModules().first(where: { $0.isBinaryModule })?.id ?? "com.tequiladash.alist"
+        ModuleService.shared.listModules().first(where: { $0.isBinaryModule })?.id ?? "com.tequila.alist"
     }
 
     static func execute(_ raw: String) -> String {

@@ -55,7 +55,7 @@ enum LocationEngineError: LocalizedError {
 
 /// idevice DVT 定位模拟的薄封装（注入 locationd）.
 enum LocationEngine {
-    private static let queue = DispatchQueue(label: "com.tequiladash.location", qos: .userInitiated)
+    private static let queue = DispatchQueue(label: "com.tequila.location", qos: .userInitiated)
 
     /// Swift 6 并发检查：下面四个 FFI 句柄的**全部读写都在串行队列 `queue` 上** ——
     /// 公开入口 `set` / `clear` 一律 `queue.sync` 进入，其余 `*Locked` 私有方法只由它们调用。

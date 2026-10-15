@@ -18,7 +18,7 @@ final class CrashLogService {
     nonisolated(unsafe) static let shared = CrashLogService()
     private init() {}
 
-    private let queue = DispatchQueue(label: "com.tequiladash.f.crashlog")
+    private let queue = DispatchQueue(label: "com.tequila.dash.crashlog")
 
     /// 崩溃日志条目（AFC 视图路径）.
     struct Entry: Identifiable, Equatable {

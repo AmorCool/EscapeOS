@@ -63,7 +63,7 @@
                 <key>forceDelayedSoftwareUpdates</key>
                 <false/>
                 <key>PayloadIdentifier</key>
-                <string>com.tequiladash.supervised.restrictions.payload</string>
+                <string>com.tequila.supervised.restrictions.payload</string>
                 <key>PayloadType</key>
                 <string>com.apple.applicationaccess</string>
                 <key>PayloadUUID</key>
@@ -79,7 +79,7 @@
         <key>PayloadDescription</key>
         <string>通过“限制”描述文件对设备进行更细致的控制。注意：设置中“屏幕使用时间 / 限制”页显示的开关状态可能不完全准确，请以本工具为准。部分开关关闭时进入下一步可能会弹出系统警告，请留意。</string>
         <key>PayloadIdentifier</key>
-        <string>com.tequiladash.supervised.restrictions</string>
+        <string>com.tequila.supervised.restrictions</string>
         <key>PayloadType</key>
         <string>Configuration</string>
         <key>PayloadUUID</key>

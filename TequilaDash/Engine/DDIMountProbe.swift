@@ -19,7 +19,7 @@ import Foundation
 /// 只是**不要再拿它的结果去解释 `ServiceNotFound`**。
 ///
 /// ## 探针当初的依据（保留作历史记录，**归因部分已作废**）
-/// 主页两个内置模块（`com.tequiladash.locache` / `com.tequiladash.wifirefresh`，都是 `type: "signal"`）
+/// 主页两个内置模块（`com.tequila.locache` / `com.tequila.wifirefresh`，都是 `type: "signal"`）
 /// 执行时会出现 `ServiceNotFound`（错误码 21）。仍然成立的一条：
 /// - `RsdHandshake::connect` 是纯 `HashMap` 查表，查不到直接 `Err(ServiceNotFound)`，无回退
 ///   （`idevice/src/services/rsd.rs:171-189`）⇒ 失败时**重试 3 次毫无意义**；
