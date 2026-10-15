@@ -67,26 +67,8 @@ final class CellularTunnelManager: @unchecked Sendable {
     func prepareForTunnel() -> Bool {
         guard isCellularMode else { return false }
 
-        // 先关蜂窝。`UIApplication.open` 必须在主线程，故派到 MainActor 执行；
-        // 本方法由 Engine 层在**后台线程**调用（如 AppListView.reload 的 global 队列），
-        // 用信号量同步等待不会死锁。若调用方恰在主线程，则跳过同步等待
-        // （否则必死锁）——此时仍继续走「等隧道就绪」，只是少了关蜂窝那步，日志如实记录。
-        if !didTurnOffData {
-            if Thread.isMainThread {
-                LoginLogger.shared.log(
-                    "[Cellular] 在主线程调用，跳过同步关蜂窝（避免死锁）；本次仍会尝试等隧道就绪.",
-                    category: .general)
-            } else {
-                let sem = DispatchSemaphore(value: 0)
-                Task { @MainActor in
-                    _ = await turnOffDataIfNeeded()
-                    sem.signal()
-                }
-                // 上限 5 秒：覆盖「拉起快捷指令 + 1s 基础延迟 + 2s 等隧道」的正常耗时.
-                _ = sem.wait(timeout: .now() + 5)
-            }
-        }
-
+        // Do not open a different app from a synchronous tunnel primitive.
+        // A successful openURL is not proof that cellular data was changed.
         let ready = waitForTunnelReady(timeout: Self.readyTimeout)
         // 诊断：把「隧道到底在不在、候选对端是哪些、本机接口长什么样」如实打进日志.
         // 对齐 SideStore `DeviceConnectionManager.refresh()` 的那段多行 debugLog
@@ -210,25 +192,9 @@ final class CellularTunnelManager: @unchecked Sendable {
     @MainActor
     @discardableResult
     func turnOffDataIfNeeded() async -> Bool {
-        guard isSupported, isEnabled else { return false }
-        guard !didTurnOffData else { return false }
-        guard !Self.isWiFiSatisfied() else {
-            LoginLogger.shared.log("[Cellular] 有 Wi-Fi，跳过关蜂窝.", category: .general)
-            return false
-        }
-
-        let name = turnOffShortcutName
-        let url = Self.shortcutURL(for: name)
-        LoginLogger.shared.log("[Cellular] 执行关蜂窝快捷指令「\(name)」…", category: .general)
-        let ok = await UIApplication.shared.open(url)
-        if ok {
-            didTurnOffData = true
-            try? await Task.sleep(nanoseconds: UInt64(Self.shortcutBaseDelay * 1_000_000_000))
-            _ = waitForTunnelReady(timeout: Self.readyTimeout)
-        } else {
-            LoginLogger.shared.log("[Cellular] 关蜂窝快捷指令未被系统受理（多因未在「快捷指令」App 里建同名快捷指令）.", category: .general)
-        }
-        return ok
+        // Legacy entry point retained while the actual embedded workflow is
+        // audited. Never claim a radio state change based on URL acceptance.
+        return false
     }
 
     /// 执行 `TurnOnData` 快捷指令（恢复蜂窝数据）. 用完即还，不留副作用.

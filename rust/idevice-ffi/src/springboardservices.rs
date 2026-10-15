@@ -49,12 +49,9 @@ pub unsafe extern "C" fn springboard_services_connect(
             unsafe { *client = Box::into_raw(boxed) };
             null_mut()
         }
-        Err(e) => {
-            // If connection failed, the provider_box was already forgotten,
-            // so we need to reconstruct it to avoid leak
-            let _ = unsafe { Box::from_raw(provider) };
-            ffi_err!(e)
-        }
+        // The provider is borrowed, not consumed by connect(). Its owner may
+        // retry or free it later; freeing it here causes use-after-free.
+        Err(e) => ffi_err!(e),
     }
 }
 

@@ -150,7 +150,9 @@ def main():
     platform = os.environ['PLATFORM_NAME']
     libraries = []
     for arch in os.environ['ARCHS'].split():
-        build = root / f'build-{platform}-{arch}'
+        # Guest architectures are part of the artifact identity. Restoring the
+        # old x86-only cache must not satisfy the x86+aarch64 build.
+        build = root / f'build-{platform}-{arch}-x86-aarch64'
         # v0.3.613：UNICORN_ARCH 加 aarch64.
         #
         # 为什么需要两个架构：
@@ -170,9 +172,13 @@ def main():
             command += ['-DCMAKE_SYSTEM_NAME=iOS', '-DCMAKE_OSX_DEPLOYMENT_TARGET=17.0']
         else:
             command += ['-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0']
-        if not (build / 'libunicorn.a').exists():
+        stamp = build / '.build-command.sha256'
+        fingerprint = hashlib.sha256('\0'.join(command).encode()).hexdigest()
+        if (not (build / 'libunicorn.a').exists()
+                or not stamp.exists() or stamp.read_text() != fingerprint):
             subprocess.run(command, check=True)
             subprocess.run([cmake, '--build', str(build), '-j', '8'], check=True)
+            stamp.write_text(fingerprint)
         libraries.append(str(build / 'libunicorn.a'))
     (root / 'lib').mkdir(exist_ok=True)
     subprocess.run(['xcrun', 'lipo', '-create', *libraries, '-output', str(root / 'lib/libunicorn.a')], check=True)

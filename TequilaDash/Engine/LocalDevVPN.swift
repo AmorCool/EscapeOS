@@ -89,18 +89,32 @@ enum LocalDevVPN {
         guard fd >= 0 else { return false }
         defer { close(fd) }
 
-        let whole = Int(max(0, timeout))
-        let fraction = Int32(max(0, timeout - Double(whole)) * 1_000_000)
-        var tv = timeval(tv_sec: whole, tv_usec: fraction)
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
-
+        // Socket send/receive timeouts do not bound connect() on Darwin.
+        // Nonblocking connect + poll + SO_ERROR also prevents a refused socket
+        // from being reported as ready simply because it became writable.
+        guard timeout.isFinite, timeout > 0 else { return false }
+        let flags = fcntl(fd, F_GETFL, 0)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return false }
         let result = withUnsafePointer(to: &addr) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.stride))
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        return result == 0
+        if result == 0 { return true }
+        guard errno == EINPROGRESS else { return false }
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        while true {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { return false }
+            let milliseconds = Int32(min(ceil(remaining * 1000), Double(Int32.max)))
+            let ready = poll(&descriptor, 1, milliseconds)
+            if ready < 0 && errno == EINTR { continue }
+            guard ready > 0 else { return false }
+            var socketError: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            return getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length) == 0 && socketError == 0
+        }
     }
 
     /// 探测当前推导出的对端地址（`targetIP`）是否可达（1 秒超时）.
