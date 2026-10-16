@@ -79,7 +79,10 @@
 
 - (void)resetPairingFile {
     [NSFileManager.defaultManager removeItemAtURL:self._pairingFileURL error:nil];
-    [self _handleLock lock];
+    // 注意：**不要写 `[self _handleLock lock]`** —— clang 会把 `_handleLock` 当成
+    // 选择器首段、再要求 `lock` 带 `:`，报 `error: expected ':'`。
+    // 直接用 ivar（`[_handleLock lock]`）或显式 `self->_handleLock`。
+    [_handleLock lock];
     [self _freeTunnelHandles];
     [_handleLock unlock];
 }

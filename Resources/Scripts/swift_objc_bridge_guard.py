@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""防复发：ObjC 桥接调用口径 + ForEach 身份键.
+"""防复发：ObjC 桥接调用口径 + ForEach 身份键 + ObjC 选择器歧义.
 
-背景（2026-10-16，CI run 38900630319 失败）：
-  `TunnelContext.shared` 是 ObjC 类属性（`@property (class, readonly)`），
-  Swift 侧导入为**属性**；写成 `TunnelContext.shared()` 报
-  「cannot call value of non-function type 'TunnelContext'」.
-
-同类第二坑：Swift 的 **key path 不能指向元组成员**，
-`ForEach(tupleArray, id: \\.name)` 无法编译 ⇒ 诊断用的接口列表必须是结构体.
+背景（2026-10-16）：
+  · CI run 38900630319：`TunnelContext.shared()` —— ObjC 类属性
+    （`@property (class, readonly)`）在 Swift 侧是**属性**，不带括号.
+  · CI run 38902492908：`TunnelContext.m:82:23: error: expected ':'` ——
+    `[self _handleLock lock]` 被 clang 解析成多段选择器（`_handleLock:` + `lock:`），
+    因为 `_handleLock` 是 ivar 但以 `_` 开头，clang 优先当选择器首段.
+  · 同类第二坑：Swift 的 **key path 不能指向元组成员**，
+    `ForEach(tupleArray, id: \\.name)` 无法编译 ⇒ 诊断用的接口列表必须是结构体.
 
 判据：
-  R1 ObjC 桥接类（TunnelContext / 其它 `@property (class, readonly)` 声明者）
-     不得以 `.shared()` 形式调用.
-  R2 `ForEach(... id: \\.<field>)` 的对象若来自本仓 `allInterfaces()`，
-     该返回类型不得是元组数组.
+  R1 ObjC 桥接类不得以 `.shared()` 形式调用（应为属性 `.shared`）.
+  R2 `allInterfaces()` 必须返回结构体数组（非元组）.
+  R3 ObjC 里不得出现 `[self _ivar method]` 两段式（应写 `[_ivar method]` 或 `self->_ivar`）.
 """
 from __future__ import annotations
 
@@ -30,6 +30,13 @@ hits: list[str] = []
 
 def swift_files() -> list[Path]:
     return sorted(SWIFT_DIR.rglob("*.swift"))
+
+
+def objc_files() -> list[Path]:
+    out: list[Path] = []
+    for ext in ("*.m", "*.mm", "*.h"):
+        out.extend(sorted(SWIFT_DIR.rglob(ext)))
+    return out
 
 
 def check_shared_property() -> None:
@@ -64,13 +71,32 @@ def check_tuple_keypath() -> None:
         )
 
 
+def check_selector_ambiguity() -> None:
+    """R3：ObjC 里 `[self _ivar method]` 会被当多段选择器 ⇒ 报 expected ':'."""
+    for p in objc_files():
+        for i, line in enumerate(p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("*"):
+                continue
+            # 形如 [self _foo bar] / [self _foo bar:...] —— receiver 后紧跟 _ivar 再跟一个词
+            m = re.search(r"\[\s*self\s+(_\w+)\s+(\w+)", line)
+            if m:
+                hits.append(
+                    f"{p.relative_to(ROOT)}:{i} —— `[self {m.group(1)} {m.group(2)}]`："
+                    f"clang 会把 `{m.group(1)}` 当选择器首段并报 expected ':'；"
+                    f"应写 `[{m.group(1)} {m.group(2)}]` 或 `[self->{m.group(1)} {m.group(2)}]`"
+                )
+
+
 def main() -> int:
     check_shared_property()
     check_tuple_keypath()
+    check_selector_ambiguity()
 
-    print("检查：ObjC 桥接调用口径 + ForEach 身份键")
+    print("检查：ObjC 桥接调用口径 + ForEach 身份键 + ObjC 选择器歧义")
     print("  · R1 ObjC 类属性不写成 .shared()")
     print("  · R2 allInterfaces() 返回结构体数组（非元组）")
+    print("  · R3 ObjC 不写 `[self _ivar method]`（会被当多段选择器）")
     if hits:
         print(f"命中: {len(hits)}")
         for h in hits:

@@ -10,6 +10,10 @@
   `error: cannot call value of non-function type 'TunnelContext'`（`TunnelHealthCheckView.swift:52`）。
   `TunnelContext.shared` 在 ObjC 里是 `@property (class, readonly)`，Swift 侧导入为**属性**而非方法。
   改为 `TunnelContext.shared.hasPairingFile`（与本仓 `AppDiscovery` / `SpoofSession` / `JITEnableView` 既有写法一致）。
+- **ObjC 选择器歧义（CI `38902492908`）**：`TunnelContext.m:82:23: error: expected ':'`。
+  `[self _handleLock lock]` 被 clang 解析成**多段选择器**（`_handleLock:` + `lock:`）——
+  因为 `_handleLock` 虽是 ivar，但以 `_` 开头，clang 优先把它当选择器首段。
+  改为 `[_handleLock lock]`（直接用 ivar）。
 - **`ForEach(interfaces, id: \.address)` 无法编译**：Swift 的 **key path 不能指向元组成员**。
   `LocalDevVPN.allInterfaces()` 的返回类型由元组数组改为 `InterfaceInfo` 结构体
   （`Identifiable` + `Hashable` + `Sendable`，附 `isIPv4`）。
@@ -23,12 +27,14 @@
 - 新增 `Resources/Scripts/swift_objc_bridge_guard.py` 并注册进 `swift_precommit_check.py`：
   - **R1** ObjC 类属性不得写成 `.shared()`（白名单 `PHPhotoLibrary` 等 Swift 类）
   - **R2** `allInterfaces()` 必须返回结构体数组（元组不支持 key path）
-  - 已做正控：改回 `.shared()` → 守卫命中。
+  - **R3** ObjC 不得写 `[self _ivar method]`（会被当多段选择器，报 `expected ':'`）
+  - 已做正控：三条规则各自改坏 → 守卫均命中。
 
 ### 铁律
 
 - **ObjC 的 `@property (class, readonly)` 在 Swift 侧是属性**：`.shared` 不带括号。
 - **Swift 的 key path 不能指向元组成员**：需要 `ForEach` 身份键时就用结构体。
+- **ObjC 里 `[self _ivar method]` 是语法陷阱**：写 `[_ivar method]` 或 `[self->_ivar method]`。
 
 ## [0.3.616] - 2026-10-16
 
