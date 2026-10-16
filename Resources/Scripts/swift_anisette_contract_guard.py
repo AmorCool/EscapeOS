@@ -60,8 +60,14 @@ def check_provider_gate() -> None:
     text = read(ROOT / "TequilaDash/Services/AppleAuth/AnisetteProvider.swift")
     if "if let reason = OnDeviceAnisetteManager.shared.remoteFallbackReason" not in text:
         hits.append("AnisetteProvider：本机分支必须先判 remoteFallbackReason")
-    if "else if let local = try? fetchAnisetteLocal()" not in text:
-        hits.append("AnisetteProvider：本机取数必须放在 remoteFallbackReason == nil 的分支")
+    # v0.3.618 起本机取数是 async（内部要 await fetchClientInfo），
+    # 调用点必须带 await —— 同步写法 `try? fetchAnisetteLocal()` 会报
+    # "expression is 'async' but is not marked with 'await'"（CI 38918165017）.
+    if not re.search(r"else if let \w+ = try\? await fetchAnisetteLocal\(\)", text):
+        hits.append(
+            "AnisetteProvider：本机取数必须放在 remoteFallbackReason == nil 的分支，"
+            "且因 fetchAnisetteLocal 为 async 而必须带 await（`try? await fetchAnisetteLocal()`）"
+        )
 
 
 def check_end_provision_contract() -> None:
