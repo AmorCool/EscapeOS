@@ -273,16 +273,30 @@ enum LocalDevVPN {
         }
     }
 
+    /// 网络接口信息（诊断页与日志共用）.
+    ///
+    /// 用结构体而不是元组：Swift 的 **key path 不能指向元组成员**，
+    /// `ForEach(items, id: \.name)` 在元组数组上无法编译.
+    /// 显式 `Sendable`：诊断页在 `Task.detached` 里探测、把结果传回主 actor.
+    struct InterfaceInfo: Identifiable, Hashable, Sendable {
+        let name: String
+        let family: Int32
+        let address: String
+        var id: String { "\(name)|\(family)|\(address)" }
+        /// 是否 IPv4（`AF_INET`）—— 供视图显示用，避免视图层再 import Darwin.
+        var isIPv4: Bool { family == AF_INET }
+    }
+
     /// 枚举本机接口地址（IPv4 与 IPv6 都收，带接口名与地址族）.
     /// 旧实现只看 `AF_INET` ⇒ LocalDevVPN 的 utun 若只给 IPv6 就会整条漏掉；
     /// 这里两个地址族都收，且**不过滤接口名**（utun / en0 / pdp_ip0 一视同仁）.
-    /// v0.3.616：`internal` → 供 TunnelHealthCheckView 诊断页使用.
-    static func allInterfaces() -> [(name: String, family: Int32, address: String)] {
+    /// v0.3.616：`private` → 供 TunnelHealthCheckView 诊断页使用.
+    static func allInterfaces() -> [InterfaceInfo] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
         defer { freeifaddrs(ifaddr) }
 
-        var results: [(name: String, family: Int32, address: String)] = []
+        var results: [InterfaceInfo] = []
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let current = ptr {
             let interface = current.pointee
@@ -297,7 +311,7 @@ enum LocalDevVPN {
                 : socklen_t(MemoryLayout<sockaddr_in6>.size)
             guard getnameinfo(sockAddr, nameLen, &host, socklen_t(host.count),
                               nil, 0, NI_NUMERICHOST) == 0 else { continue }
-            results.append((name: name, family: family, address: String(cString: host)))
+            results.append(InterfaceInfo(name: name, family: family, address: String(cString: host)))
         }
         return results
     }
