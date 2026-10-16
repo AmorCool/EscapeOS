@@ -45,6 +45,7 @@ CHECKS = [
     ("已购/下架下载链路", "swift_delisted_download_guard.py", False),
     ("搜索框显示模式防复发", "swift_searchbar_guard.py", False),
     ("Cellular隧道支持防复发", "swift_cellular_tunnel_guard.py", False),
+    ("本机 Anisette 契约防复发", "swift_anisette_contract_guard.py", False),
     ("禁用通话录音走 airlift 防复发", "swift_airlift_guard.py", False),
 ]
 

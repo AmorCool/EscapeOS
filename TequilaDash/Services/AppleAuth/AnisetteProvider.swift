@@ -153,6 +153,10 @@ final class AnisetteProvider {
               let adiPb = Data(base64Encoded: adiPbStr), !adiPb.isEmpty else {
             throw fail("本机", "缺少 adiPb")
         }
+        // C 层只 mkdir 了 <provisioning>/<uuid>，父目录必须由 Swift 先建，
+        // 否则全新安装时写入 adi.pb 会失败（审计发现：父目录从未创建）.
+        try? FileManager.default.createDirectory(
+            at: mgr.provisioningDirectory, withIntermediateDirectories: true)
         return try OnDeviceAnisetteClient.headers(
             identifier: identifier,
             adiPb: adiPb,
@@ -187,13 +191,11 @@ final class AnisetteProvider {
     }
 
     func getAnisetteData(refresh: Bool = false) async throws -> AnisetteData {
-        // v0.3.613：本机 Anisette（ODA）**真正接线**。
+        // v0.3.613：本机 Anisette（ODA）接线；v0.3.616 修正开关判据.
         //
-        // 判据（三者全满足才走本机）：
-        //   1) 开关开（OnDeviceAnisetteManager.isEnabled）
-        //   2) 引擎就绪（两份 .so 已落盘 + 有设备身份）—— remoteFallbackReason 为 nil
-        //   3) 本机取数不抛错
-        // 任一条不满足 ⇒ 显式回退远程并记日志（绝不静默）。
+        // `remoteFallbackReason` 的契约：**nil = 可以走本机**（开关开 + 引擎就绪），
+        // 非 nil = 回退远程的原因. 因此这里只有 nil 才尝试本机 —— 旧实现在
+        // `.ready` 时返回「尚未接线」文案，导致开关打开反而永远走远程.
         //
         // 本机路径依赖 C++ 层（OnDeviceAnisetteClient -> anisette_core_uc.cpp ->
         // elf_loader_emulator.cpp -> Unicorn AArch64 解释器），见 OnDeviceAnisetteClient 顶部注释。

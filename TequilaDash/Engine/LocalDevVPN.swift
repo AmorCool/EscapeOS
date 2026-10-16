@@ -24,15 +24,12 @@ enum LocalDevVPN {
     /// 真机日志 `P4_全能签逆向/_devicelog4/login.log:69` 的 `utun4=10.7.1.1` 正是 ifaceIP
     /// ⇒ 对端应取 **peerIP（10.7.0.1）**，把目标改成 `10.7.1.1` 反而会连到本机接口地址、必然失败.
     ///
-    /// 解析优先级（**不再依赖写死的默认值**）：
-    ///   1. 用户显式覆盖：`UserDefaults["TunnelDeviceIP"]`（「设置 → 本地隧道」）.
-    ///   2. 自动推导：本机 `utun*` 点对点接口的**对端地址**（`getifaddrs` 的 `ifa_dstaddr`）.
-    ///   3. 兜底默认：`10.7.0.1`（LocalDevVPN 出厂 peerIP；仅在 1、2 都拿不到时使用）.
+    /// 与 TunnelContext / heartbeat 统一：用户配置优先，否则用默认对端.
+    /// 枚举的 utun 只作为诊断候选，不把第一个任意 VPN 接口当成实际连接目标.
     static var targetIP: String {
         let stored = UserDefaults.standard.string(forKey: "TunnelDeviceIP")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let stored, !stored.isEmpty { return stored }
-        if let peer = utunPeerIPv4() { return peer }
         return "10.7.0.1"
     }
 
@@ -78,10 +75,10 @@ enum LocalDevVPN {
     /// - Parameter timeout: 连接超时（秒）. 默认调用点用 1.0（保持既有行为不变）；
     ///   蜂窝轮询由 `CellularTunnelManager` 传 0.25 —— 对齐 SideStore
     ///   `MinimuxerConstants.defaultTCPProbeTimeoutMs`（250ms），使 2 秒预算内能试更多次.
-    static func isReachable(ip: String, timeout: TimeInterval) -> Bool {
+    static func isReachable(ip: String, timeout: TimeInterval, port: UInt16 = 49152) -> Bool {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = in_port_t(49152).bigEndian
+        addr.sin_port = in_port_t(port).bigEndian
         let parseResult = ip.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
         guard parseResult == 1 else { return false }
 

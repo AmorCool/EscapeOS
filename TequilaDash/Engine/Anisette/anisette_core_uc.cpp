@@ -67,6 +67,13 @@ static bool setup_vm_and_adi(
     }
     vm = g_shared_vm;
 
+    // v0.3.616：链接进来的 libunicorn.a 若不含 AArch64 后端，uc_open 会失败.
+    // 必须在这里返回错误（让上层回退远程），不能继续用空引擎 —— 那会崩在后续调用上.
+    if (!vm->valid) {
+        out_err = "Unicorn AArch64 backend unavailable (libunicorn.a built without aarch64)";
+        return false;
+    }
+
     if (!g_libraries_initialized) {
         std::string lib_path(lib_dir);
         if (!lib_path.empty() && lib_path.back() != '/') lib_path += "/";

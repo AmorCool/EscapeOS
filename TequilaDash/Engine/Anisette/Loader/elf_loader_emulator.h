@@ -91,6 +91,11 @@ struct EmulatorVM {
     uc_engine *uc;
     PageAllocator heap;
     PageAllocator library_alloc;
+
+    /// v0.3.616：`uc_open` 失败（例如链接进来的 libunicorn.a 不含 AArch64 后端）时
+    /// 置 false，**不再 abort()** —— 那会让宿主 App 当场崩溃，无法回退远程 Anisette.
+    /// 调用方（`setup_vm_and_adi`）必须先检查它.
+    bool valid = false;
     
     std::unordered_map<std::string, uint64_t> imported_symbols;
     std::unordered_map<uint64_t, std::string> import_stubs;

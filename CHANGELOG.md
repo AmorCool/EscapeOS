@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.3.616] - 2026-10-16
+
+> **一句话**：撤销「快捷指令关蜂窝」这条**伪造成功**的路径（iOS 没有「开关蜂窝数据」动作，飞行模式 ≠ 关蜂窝），
+> 修 10 处可证明的缺陷（含**把 Wi-Fi 隧道搞坏**的那条），并新增「连接诊断」页 —— 真机一看就知道哪一步不通。
+
+### 撤销（重要）
+
+- **`CellularShortcutInstaller` 不再生成/导入 `.shortcut`**：用户实测报「导入失败 提供的快捷指令URL无效」+ 仍会跳转。
+  根因有二：① `UIApplication.open(file://…)` 返回 true 只是「系统受理」，被旧代码当成导入成功，
+  于是**永不回落 HTTP**；② 更根本的是 **iOS 快捷指令动作库没有「开关蜂窝数据」**，
+  我们生成的 `is.workflow.actions.airplanemode.set`（飞行模式）**不等于关蜂窝**。
+  ⇒ 整条路径停用，并清除误写的 `hasImported` 标记。
+- **`CellularTunnelManager.prepareForTunnel` 不再拉起别的 App**：`open()` 受理 ≠ 蜂窝状态已变更，
+  不能拿它当「已关蜂窝」的证据。`turnOffDataIfNeeded` 保留入口但恒返 false。
+- **`RootView`** 删掉自动导入 UI 与飞行模式说明，开关只写 `UserDefaults`。
+
+### 修复
+
+- **Wi-Fi 隧道（用户报「wifi隧道连接也用不了」）**
+  - `LocalDevVPN.isReachable`：Darwin 的 `SO_SNDTIMEO` **不约束 `connect()`** ⇒ 被拒绝的连接会因「可写」被误判可达。
+    改为非阻塞 connect + `poll(POLLOUT)` + `SO_ERROR` 复核；新增 `port` 参数（默认 49152）。
+  - `LocalDevVPN.targetIP` 与 `TunnelContext._targetIP` / `heartbeat.m` 口径不一致（前者会取「第一个 utun 对端」，
+    多 VPN 并存时取错隧道）⇒ 统一为两级：用户配置 → `10.7.0.1`；枚举的 utun 只作诊断候选。
+  - `TunnelContext.startHeartbeat`：外层 4s 超时后**释放闸门**，旧 worker 仍会写入共享句柄 ⇒ 新旧握手互相覆盖。
+    改为**只有 worker 能结束尝试**；等待放宽到 35s（RP 初始 TCP + pair-verify + 18s 监听预算 > 4s）。
+  - `TunnelContext` 新增 `NSRecursiveLock _handleLock`：句柄读写与全部 FFI 入口统一持锁
+    （Rust 侧 adapter/handshake 并发复用会同时 `&mut` 借用，属 UB）；并加「建连中快速失败」避免建连期间卡 UI。
+  - classic 隧道握手超时 4s → 30s（正常设备上会假超时）；失败路径补释放 `provider`。
+  - `heartbeat.m`：`completionCalled` **从未置 true** ⇒ 首拍之后仍会再回调失败；超时分支漏 `heartbeat_client_free`。均已修。
+  - `springboardservices.rs`：`Err` 分支 `Box::from_raw(provider)` **误释放调用方的共享 provider**
+    ⇒ 后续图标/枚举/卸载 UAF。provider 是**借用**，失败不得消耗。
+- **构建**：`prepare.sap.py` 构建目录名不含 guest 架构 ⇒ 旧 x86-only 缓存被 `restore-keys` 复用，
+  aarch64 后端缺失。目录并入 `-x86-aarch64` + 命令指纹 `.build-command.sha256`。
+- **不再崩进程**：`elf_loader_emulator` 的 `uc_open(ARM64)` 失败原本直接 `abort()`（宿主 App 当场死，无法回退远程），
+  改为 `valid = false` + `setup_vm_and_adi` 返回错误。
+- **本机 Anisette 开关判据写反（P0）**：`remoteFallbackReason` 在 `.ready` 时返回「尚未接线」文案，
+  导致「开关打开 → 永远远程；开关关闭 → 反而尝试本机」。契约修正为 **`.ready → nil`（可以走本机）**。
+  另修：`fetchAnisetteLocal` 先建 provisioning 父目录（C 层只 mkdir `<uuid>` 子目录）；
+  `endProvision` 返回类型 `AnisetteData` → `Data(adiPb)`（C 层只回 `{"adi_pb_base64":…}`，旧代码按 headers 解析必抛）；
+  `startProvision` 解析 `cpim`（旧注释把 `spim`/`cpim` 方向写反）。
+- **`VirtualLocationSettingsView`**：点「完成」无论改没改都写 `TunnelDeviceIP`，会把推导值固化成用户覆盖 ⇒ 只在值真变了才写。
+
+### 新增
+
+- **连接诊断页**（移植 SideStore HealthCheckView）：**更多 → 设置 → 配对文件 → 连接诊断**。
+  逐项显示：网络 / utun 接口 / 目标对端可达（`<ip>:49152`）/ 任一候选可达 / 配对文件 /
+  本机 Anisette 就绪 / 网络接口列表（IPv4 + IPv6）。数据全部取自本仓真实代码路径。
+
+### 防复发
+
+- 新增 `Resources/Scripts/swift_anisette_contract_guard.py` 并注册进 `swift_precommit_check.py`：
+  守住「只有 `.ready` 返回 nil」「Provider 只有 nil 才试本机」「endProvision 解析 adi_pb_base64」
+  「startProvision 解析 cpim_base64」四条契约。已做正控（故意改坏 → 守卫命中）。
+
+### 已知边界（诚实标注）
+
+- **真机未验证**：本机 Anisette 取数、蜂窝下的实际连通性、诊断页各项 —— 都需装机后实测。
+- 未修（已记录）：`PageAllocator::alloc` 的 `abort()`、RSD 图标并发经锁串行化的性能影响、
+  本机/远程 Anisette 的 identity 组装不一致、C 层会话锁不保跨 await 事务。
+
+### 铁律
+
+- **`open()` 的返回值只表示「系统受理了这个 URL」，不表示动作执行成功。** 拿它当状态变更的证据 = 伪造成功。
+- **目标工具没有的机制就不要自己加**：iOS 没有「开关蜂窝」快捷指令动作，就不该自己造一个飞行模式来顶替。
+
 ## [0.3.599] - 2026-10-13
 
 > **一句话**：修「主页-模块 执行报 `ServiceNotFound`」——不再赌 `app_service` 在不在，改为**先查 RSD 服务表再选路**；不在表里就走 DVT 回退（与截图 / 内存查询同族、**不依赖 CoreDevice**）。

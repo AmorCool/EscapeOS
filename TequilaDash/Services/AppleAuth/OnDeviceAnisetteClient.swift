@@ -85,11 +85,15 @@ enum OnDeviceAnisetteClient {
     struct ProvisioningStart {
         /// C 层给的会话号，`endProvision` 要用
         let session: UInt32
-        /// 原始 JSON（含 spim 等字段，交给上层按需解析）
-        let raw: [String: Any]
+        /// C 层输出的 `cpim`（**交 Apple 的 midFinishProvisioning**）.
+        ///
+        /// 注意方向：`spim` 是 Apple `midStartProvisioning` 的**输入**，
+        /// C 层返回的 `cpim` 才是**输出**（见 `anisette_core_uc.cpp` 的 start 分支
+        /// 输出 `{"cpim_base64":…,"session":n}`）。旧注释把两者写反了.
+        let cpim: Data
     }
 
-    /// 开始配给：拿到 `spim`，交给 Apple 的 `midStartProvisioning` 换 `ptm` / `tk`.
+    /// 开始配给：拿 Apple 的 `spim` 交给 C 层，换出 `cpim` 与会话号.
     static func startProvision(identifier: Data,
                                spim: Data,
                                libDirectory: URL,
@@ -119,16 +123,26 @@ enum OnDeviceAnisetteClient {
         } else {
             throw ClientError.badResponse(json)
         }
-        return ProvisioningStart(session: session, raw: obj)
+        guard let cpimB64 = obj["cpim_base64"] as? String,
+              let cpim = Data(base64Encoded: cpimB64), !cpim.isEmpty else {
+            throw ClientError.badResponse(json)
+        }
+        return ProvisioningStart(session: session, cpim: cpim)
     }
 
-    /// 结束配给：把 Apple 回的 `ptm` / `tk` 交给 C 层，产出可长期使用的 `adiPb` 与 headers.
+    /// 结束配给：把 Apple 回的 `ptm` / `tk` 交给 C 层，产出可长期使用的 `adiPb`.
+    ///
+    /// **契约（v0.3.616 修正）**：C 层 `end_provision_uc` 只返回
+    /// `{"adi_pb_base64":"…"}`（见 `anisette_core_uc.cpp` 的 end 分支）——
+    /// **不含** `X-Apple-I-MD*` 任何字段。旧实现按 `AnisetteData` 解析，
+    /// 必然抛 `badResponse`。现改为返回原始 adiPb 字节，由调用方存 keychain 后
+    /// 再调 `headers(...)` 取 OTP.
     static func endProvision(identifier: Data,
                              session: UInt32,
                              ptm: Data,
                              tk: Data,
                              libDirectory: URL,
-                             provisioningDirectory: URL) throws -> AnisetteData {
+                             provisioningDirectory: URL) throws -> Data {
         let json = try callC { outJSON in
             identifier.withUnsafeBytes { idBuf in
                 ptm.withUnsafeBytes { ptmBuf in
@@ -147,7 +161,12 @@ enum OnDeviceAnisetteClient {
                 }
             }
         }
-        return try parseHeaders(json)
+        guard let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let base64 = obj["adi_pb_base64"] as? String,
+              let data = Data(base64Encoded: base64), !data.isEmpty else {
+            throw ClientError.badResponse(json)
+        }
+        return data
     }
 
     /// 取消配给（用户中途放弃 / 切换服务器时清会话状态）.

@@ -79,6 +79,8 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         *provider = newProvider;
     
 
+    // 首个成功/失败回调只发一次：置位后所有后续分支不再回调，
+    // 避免调用方在首拍之后又收到一条与本地状态不一致的失败.
     bool completionCalled = false;
     
     u_int64_t current_interval = 15;
@@ -89,6 +91,7 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         if (err != NULL) {
             fprintf(stderr, "Failed to get marco: [%d] %s token = %d, pthread_self = %p\n", err->code, err->message, heartbeatToken, pthread_self());
             if(!completionCalled) {
+                completionCalled = true;
                 completion(err->code, err->message);
             }
             heartbeat_client_free(client);
@@ -111,6 +114,7 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         if (err != NULL) {
             fprintf(stderr, "Failed to get marco: [%d] %s", err->code, err->message);
             if(!completionCalled) {
+                completionCalled = true;
                 completion(err->code, err->message);
             }
             heartbeat_client_free(client);
@@ -121,12 +125,15 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         
         if (lastHeartbeatDate && [[NSDate now] timeIntervalSinceDate:lastHeartbeatDate] > current_interval) {
             lastHeartbeatDate = nil;
+            // 超时退出同样要释放心跳客户端（原先直接 return 泄漏了 client）.
+            heartbeat_client_free(client);
             return;
         }
         lastHeartbeatDate = [NSDate now];
 
 
         if (!completionCalled) {
+            completionCalled = true;
             completion(0, "Heartbeat succeeded");
         }
     }

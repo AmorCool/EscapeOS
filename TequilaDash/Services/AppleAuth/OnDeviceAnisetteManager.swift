@@ -431,18 +431,21 @@ final class OnDeviceAnisetteManager: ObservableObject {
 
     // MARK: - 远程回退原因
 
-    /// 供 `AnisetteProvider` 记录「本次为何回退远程」的可读原因；`nil` = 开关未开、无需说明.
+    /// 供 `AnisetteProvider` 记录「本次为何回退远程」的可读原因.
     ///
-    /// 本构建的「本机 ADI 取数」尚未接线，故只要开关是开的，就一定有回退原因 ——
-    /// 这样「开了本机 Anisette 却仍走远程」这件事在日志里是**显式**的，不会静默.
+    /// **契约（v0.3.616 修正，此前写反）**：`nil` = **可以走本机**（开关开且引擎就绪）；
+    /// 非 nil = 回退远程的原因. 调用方 `AnisetteProvider` 的判据是
+    /// `if let reason = ... { 回退 } else if let local = try? fetch { 用本机 }`，
+    /// 所以**只有 `.ready` 才能返回 nil** —— 旧实现在 `.ready` 时返回「尚未接线」，
+    /// 导致「开关打开 → 永远远程；开关关闭 → 反而尝试本机」，与实际意图完全相反.
     var remoteFallbackReason: String? {
         switch readiness() {
         case .off:
-            return nil
+            return "本机 Anisette 开关未开启，本次走远程服务器."
         case .notReady(let missing):
-            return "本机 Anisette 已开启，但引擎未就绪（缺 \(missing.joined(separator: "、"))），本次显式回退远程服务器."
+            return "本机 Anisette 已开启，但引擎未就绪（缺 \(missing.joined(separator: "、"))），本次回退远程服务器."
         case .ready:
-            return "本机 Anisette 已开启且 ADI 引擎已安装，但本机 ADI 取数尚未接线，本次显式回退远程服务器."
+            return nil
         }
     }
 }

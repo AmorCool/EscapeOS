@@ -167,8 +167,9 @@ EmulatorVM::EmulatorVM()
 {
     uc_err err = uc_open(UC_ARCH_ARM64, UC_MODE_ARM, &uc);
     if (err != UC_ERR_OK) {
+        // 不再 abort()：缺后端时宿主必须能继续跑（回退远程 Anisette）.
         LOG_UC("[Emulator] Failed on uc_open() with error returned: %u (%s)\n", err, uc_strerror(err));
-        abort();
+        return;
     }
 
     uc_mem_map(uc, kHeapAddress, kHeapSize, UC_PROT_READ | UC_PROT_WRITE);
@@ -193,6 +194,8 @@ EmulatorVM::EmulatorVM()
                 kImportAddress, kImportAddress + kImportSize - 1);
 
     uc_hook_add(uc, &pc_trace_hook, UC_HOOK_CODE, (void *)trace_pc_hook, this, 1, 0);
+
+    valid = true;
 }
 
 EmulatorVM::~EmulatorVM() {

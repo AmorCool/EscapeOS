@@ -23,6 +23,7 @@
 @implementation TunnelContext {
     os_unfair_lock _tunnelLock;
     dispatch_semaphore_t _tunnelSemaphore;
+    NSRecursiveLock *_handleLock;
 }
 
 + (instancetype)shared {
@@ -42,6 +43,8 @@
         _tunnelLock = OS_UNFAIR_LOCK_INIT;
         _tunnelSemaphore = NULL;
         _lastTunnelError = nil;
+        _handleLock = [NSRecursiveLock new];
+        _handleLock.name = @"TequilaDash.Tunnel.handles";
 
         NSURL *docs = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
         NSString *logPath = [docs URLByAppendingPathComponent:@"idevice_log.txt"].path;
@@ -76,9 +79,12 @@
 
 - (void)resetPairingFile {
     [NSFileManager.defaultManager removeItemAtURL:self._pairingFileURL error:nil];
+    [self _handleLock lock];
     [self _freeTunnelHandles];
+    [_handleLock unlock];
 }
 
+/// 释放全部隧道句柄. **调用方必须已持有 `_handleLock`**（递归锁，允许嵌套）.
 - (void)_freeTunnelHandles {
     if (_provider) {
         globalHeartbeatToken++;
@@ -93,6 +99,25 @@
         adapter_free(_adapter);
         _adapter = NULL;
     }
+}
+
+/// 取当前可用句柄（持有 `_handleLock` 期间调用），返回 YES 表示至少有一条可用.
+/// 避免调用方直接读实例变量时与建连/释放竞态.
+- (BOOL)_hasUsableHandlesLocked {
+    return (_adapter && _handshake) || _provider != NULL;
+}
+
+/// 建连中就别抢句柄锁 —— 否则调用方（可能在主线程）会被 30 秒的握手卡住.
+/// 返回 YES 表示「正在建连，本次直接失败，请稍后重试」.
+- (BOOL)_rejectIfConnectingWithError:(NSError **)error {
+    os_unfair_lock_lock(&_tunnelLock);
+    BOOL connecting = _tunnelConnecting;
+    os_unfair_lock_unlock(&_tunnelLock);
+    if (connecting) {
+        if (error) *error = [self _error:@"Tunnel is connecting; retry shortly." code:-8];
+        return YES;
+    }
+    return NO;
 }
 
 /// 隧道目标 IP（= LocalDevVPN 的**对端地址**）.
@@ -110,7 +135,8 @@
 ///   1. 用户显式覆盖：`UserDefaults["TunnelDeviceIP"]`（「设置 → 本地隧道」）
 ///   2. 兜底：`10.7.0.1`（LocalDevVPN 出厂 peerIP）
 - (NSString *)_targetIP {
-    NSString *deviceIP = [[NSUserDefaults standardUserDefaults] stringForKey:@"TunnelDeviceIP"];
+    NSString *deviceIP = [[[NSUserDefaults standardUserDefaults] stringForKey:@"TunnelDeviceIP"]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (deviceIP.length > 0) {
         return deviceIP;
     }
@@ -224,12 +250,15 @@
         });
     });
 
-    if (dispatch_semaphore_wait(firstBeat, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(4 * NSEC_PER_SEC))) != 0) {
+    // Lockdown 握手（TCP 62078 + pairing 校验）比 RPPairing 更慢；
+    // 4s 会在正常设备上假超时。这里放宽到 30s，与 startHeartbeat 的外层预算一致。
+    if (dispatch_semaphore_wait(firstBeat, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(30 * NSEC_PER_SEC))) != 0) {
         globalHeartbeatToken++;
-        if (error) *error = [self _error:@"Timed out on the LocalDevVPN lockdown tunnel (4s). Enable LocalDevVPN and use a pairing file from iPASide or iLoader." code:-9];
+        if (error) *error = [self _error:@"Timed out on the LocalDevVPN lockdown tunnel (30s). Enable LocalDevVPN and use a pairing file from iPASide or iLoader." code:-9];
         return NO;
     }
     if (hbCode != 0 || provider == NULL) {
+        if (provider) { idevice_provider_free(provider); provider = NULL; }
         if (error) *error = [self _error:(hbMsg ?: @"Lockdown tunnel over LocalDevVPN failed.") code:hbCode];
         return NO;
     }
@@ -267,105 +296,120 @@
 }
 
 - (BOOL)startHeartbeat:(NSError **)error {
+    // Only the worker can end an in-flight attempt. A caller timing out must
+    // not release the gate and allow a second worker to overwrite its handles.
     os_unfair_lock_lock(&_tunnelLock);
-    if (_tunnelConnecting) {
-        dispatch_semaphore_t sem = _tunnelSemaphore;
-        os_unfair_lock_unlock(&_tunnelLock);
-        if (sem) { dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER); dispatch_semaphore_signal(sem); }
-        if (error) *error = _lastTunnelError;
-        return _lastTunnelError == nil;
+    BOOL launch = !_tunnelConnecting;
+    if (launch) {
+        _tunnelConnecting = YES;
+        _lastTunnelError = nil;
+        _tunnelSemaphore = dispatch_semaphore_create(0);
     }
-    _tunnelConnecting = YES;
-    _tunnelSemaphore = dispatch_semaphore_create(0);
     dispatch_semaphore_t completionSem = _tunnelSemaphore;
     os_unfair_lock_unlock(&_tunnelLock);
 
-    __block NSError *blockErr = nil;
-    __block BOOL done = NO;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        NSError *createErr = nil;
-        BOOL ok = [self _createTunnel:&createErr];
-        if (done) return;
-        done = YES;
-        if (!ok) {
-            blockErr = createErr ?: [self _error:@"Failed to connect over LocalDevVPN." code:-1];
-            self->_lastTunnelError = blockErr;
-        } else {
-            self->_lastTunnelError = nil;
-        }
-        dispatch_semaphore_signal(sem);
-    });
-
-    intptr_t timedOut = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(4 * NSEC_PER_SEC)));
-    if (timedOut && !done) {
-        done = YES;
-        blockErr = [self _error:@"Timed out connecting to the local tunnel (4s). Enable LocalDevVPN with its default Device/Tunnel IPs (10.7.0.1) and use a pairing file from iPASide." code:-9];
-        self->_lastTunnelError = blockErr;
+    if (launch) {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            @autoreleasepool {
+                NSError *createErr = nil;
+                [self->_handleLock lock];
+                BOOL ok = [self _createTunnel:&createErr];
+                [self->_handleLock unlock];
+                os_unfair_lock_lock(&self->_tunnelLock);
+                self->_lastTunnelError = ok ? nil :
+                    (createErr ?: [self _error:@"Failed to connect over LocalDevVPN." code:-1]);
+                self->_tunnelConnecting = NO;
+                self->_tunnelSemaphore = NULL;
+                os_unfair_lock_unlock(&self->_tunnelLock);
+                dispatch_semaphore_signal(completionSem);
+            }
+        });
     }
 
-    os_unfair_lock_lock(&_tunnelLock);
-    _tunnelConnecting = NO;
-    _tunnelSemaphore = NULL;
-    os_unfair_lock_unlock(&_tunnelLock);
+    // RP initial TCP + pair verify + the 18s listener budget exceed 4 seconds.
+    intptr_t timedOut = dispatch_semaphore_wait(completionSem,
+        dispatch_time(DISPATCH_TIME_NOW, (uint64_t)(35 * NSEC_PER_SEC)));
+    if (timedOut) {
+        if (error) *error = [self _error:@"Tunnel connection is still in progress (35s); no duplicate handshake was started." code:-9];
+        return NO;
+    }
+    // Pass the completion signal to other callers waiting on this attempt.
     dispatch_semaphore_signal(completionSem);
-
-    if (error) *error = blockErr;
-    return blockErr == nil;
+    os_unfair_lock_lock(&_tunnelLock);
+    NSError *resultError = _lastTunnelError;
+    os_unfair_lock_unlock(&_tunnelLock);
+    if (error) *error = resultError;
+    return resultError == nil;
 }
 
 - (BOOL)ensureHeartbeatWithError:(NSError **)error {
-    if ((_adapter && _handshake) || _provider) {
+    [_handleLock lock];
+    BOOL up = [self _hasUsableHandlesLocked];
+    [_handleLock unlock];
+    if (up) {
         return YES;
     }
     return [self startHeartbeat:error];
 }
 
 - (NSDictionary<NSString *, NSDictionary *> *)getAllAppsInfoWithError:(NSError **)error {
-    if (_adapter && _handshake) {
-        NSString *errStr = nil;
-        NSDictionary *apps = getAllAppsInfo(_adapter, _handshake, &errStr);
-        if (errStr) {
-            if (error) *error = [self _error:errStr code:-17];
-            return nil;
+    if ([self _rejectIfConnectingWithError:error]) return nil;
+    // 句柄与 FFI 调用整体串行：Rust 侧的 adapter/handshake 不是为并发复用设计的，
+    // 并发访问会让同一 _adapter 同时被 &mut 借用（UB）。
+    [_handleLock lock];
+    @try {
+        if (_adapter && _handshake) {
+            NSString *errStr = nil;
+            NSDictionary *apps = getAllAppsInfo(_adapter, _handshake, &errStr);
+            if (errStr) {
+                if (error) *error = [self _error:errStr code:-17];
+                return nil;
+            }
+            return (NSDictionary<NSString *, NSDictionary *> *)apps;
         }
-        return (NSDictionary<NSString *, NSDictionary *> *)apps;
-    }
-    if (_provider) {
-        NSString *errStr = nil;
-        NSDictionary *apps = getAllAppsInfoFromProvider(_provider, &errStr);
-        if (errStr) {
-            if (error) *error = [self _error:errStr code:-17];
-            return nil;
+        if (_provider) {
+            NSString *errStr = nil;
+            NSDictionary *apps = getAllAppsInfoFromProvider(_provider, &errStr);
+            if (errStr) {
+                if (error) *error = [self _error:errStr code:-17];
+                return nil;
+            }
+            return (NSDictionary<NSString *, NSDictionary *> *)apps;
         }
-        return (NSDictionary<NSString *, NSDictionary *> *)apps;
+        if (error) *error = [self _error:@"Tunnel not connected. Start heartbeat first." code:-1];
+        return nil;
+    } @finally {
+        [_handleLock unlock];
     }
-    if (error) *error = [self _error:@"Tunnel not connected. Start heartbeat first." code:-1];
-    return nil;
 }
 
 - (UIImage *)getAppIconWithBundleId:(NSString *)bundleId error:(NSError **)error {
-    if (_adapter && _handshake) {
-        NSString *errStr = nil;
-        UIImage *icon = getAppIcon(_adapter, _handshake, bundleId, &errStr);
-        if (errStr) {
-            if (error) *error = [self _error:errStr code:-17];
-            return nil;
+    if ([self _rejectIfConnectingWithError:error]) return nil;
+    [_handleLock lock];
+    @try {
+        if (_adapter && _handshake) {
+            NSString *errStr = nil;
+            UIImage *icon = getAppIcon(_adapter, _handshake, bundleId, &errStr);
+            if (errStr) {
+                if (error) *error = [self _error:errStr code:-17];
+                return nil;
+            }
+            return icon;
         }
-        return icon;
-    }
-    if (_provider) {
-        NSString *errStr = nil;
-        UIImage *icon = getAppIconFromProvider(_provider, bundleId, &errStr);
-        if (errStr) {
-            if (error) *error = [self _error:errStr code:-17];
-            return nil;
+        if (_provider) {
+            NSString *errStr = nil;
+            UIImage *icon = getAppIconFromProvider(_provider, bundleId, &errStr);
+            if (errStr) {
+                if (error) *error = [self _error:errStr code:-17];
+                return nil;
+            }
+            return icon;
         }
-        return icon;
+        if (error) *error = [self _error:@"Tunnel not connected." code:-1];
+        return nil;
+    } @finally {
+        [_handleLock unlock];
     }
-    if (error) *error = [self _error:@"Tunnel not connected." code:-1];
-    return nil;
 }
 
 - (BOOL)uninstallAppWithBundleId:(NSString *)bundleId error:(NSError **)error {
@@ -377,28 +421,35 @@
     if (![self ensureHeartbeatWithError:error]) {
         return NO;
     }
-    if (_adapter && _handshake) {
-        NSString *errStr = nil;
-        BOOL ok = uninstall_app(_adapter, _handshake, bundleId, &errStr);
-        if (!ok && error) {
-            *error = [self _error:(errStr ?: @"Uninstall over RPPairing tunnel failed.") code:-17];
+    [_handleLock lock];
+    @try {
+        if (_adapter && _handshake) {
+            NSString *errStr = nil;
+            BOOL ok = uninstall_app(_adapter, _handshake, bundleId, &errStr);
+            if (!ok && error) {
+                *error = [self _error:(errStr ?: @"Uninstall over RPPairing tunnel failed.") code:-17];
+            }
+            return ok;
         }
-        return ok;
-    }
-    if (_provider) {
-        NSString *errStr = nil;
-        BOOL ok = uninstall_app_from_provider(_provider, bundleId, &errStr);
-        if (!ok && error) {
-            *error = [self _error:(errStr ?: @"Uninstall over lockdown tunnel failed.") code:-17];
+        if (_provider) {
+            NSString *errStr = nil;
+            BOOL ok = uninstall_app_from_provider(_provider, bundleId, &errStr);
+            if (!ok && error) {
+                *error = [self _error:(errStr ?: @"Uninstall over lockdown tunnel failed.") code:-17];
+            }
+            return ok;
         }
-        return ok;
+        if (error) *error = [self _error:@"Tunnel not connected. Import a pairing file and enable LocalDevVPN." code:-1];
+        return NO;
+    } @finally {
+        [_handleLock unlock];
     }
-    if (error) *error = [self _error:@"Tunnel not connected. Import a pairing file and enable LocalDevVPN." code:-1];
-    return NO;
 }
 
 - (void)dealloc {
+    [_handleLock lock];
     [self _freeTunnelHandles];
+    [_handleLock unlock];
 }
 
 @end

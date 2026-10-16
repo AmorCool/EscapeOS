@@ -123,7 +123,9 @@ struct VirtualLocationSettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("完成") {
-                        saveTunnelIP()
+                        if tunnelIP.trimmingCharacters(in: .whitespacesAndNewlines) != LocalDevVPN.targetIP {
+                            saveTunnelIP()
+                        }
                         dismiss()
                     }
                 }
