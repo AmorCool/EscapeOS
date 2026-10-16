@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.617] - 2026-10-16
+
+> **一句话**：修 v0.3.616 引入的编译错（ObjC 类属性被当成方法调用），并修诊断页两处会在 Swift 6 下出问题的写法。
+
+### 修复
+
+- **编译错（CI `38900630319` 的 `xcode-build` 失败）**：
+  `error: cannot call value of non-function type 'TunnelContext'`（`TunnelHealthCheckView.swift:52`）。
+  `TunnelContext.shared` 在 ObjC 里是 `@property (class, readonly)`，Swift 侧导入为**属性**而非方法。
+  改为 `TunnelContext.shared.hasPairingFile`（与本仓 `AppDiscovery` / `SpoofSession` / `JITEnableView` 既有写法一致）。
+- **`ForEach(interfaces, id: \.address)` 无法编译**：Swift 的 **key path 不能指向元组成员**。
+  `LocalDevVPN.allInterfaces()` 的返回类型由元组数组改为 `InterfaceInfo` 结构体
+  （`Identifiable` + `Hashable` + `Sendable`，附 `isIPv4`）。
+- **诊断页卡界面**：在 `@MainActor` 上直接跑阻塞探测（`NWPathMonitor` 首个回调、TCP `poll` 最多 1s）
+  会冻住 UI ⇒ 改为 `Task.detached` 跑阻塞段、用 `Sendable` 快照回主 actor；
+  Anisette 就绪（仅文件 / 钥匙串存在性检查）留在主 actor，不依赖其隔离域假设。
+- `Row.optional` 之前声明未使用，现按 SideStore 口径生效（可选项失败显示橙色减号而非红叉）。
+
+### 防复发
+
+- 新增 `Resources/Scripts/swift_objc_bridge_guard.py` 并注册进 `swift_precommit_check.py`：
+  - **R1** ObjC 类属性不得写成 `.shared()`（白名单 `PHPhotoLibrary` 等 Swift 类）
+  - **R2** `allInterfaces()` 必须返回结构体数组（元组不支持 key path）
+  - 已做正控：改回 `.shared()` → 守卫命中。
+
+### 铁律
+
+- **ObjC 的 `@property (class, readonly)` 在 Swift 侧是属性**：`.shared` 不带括号。
+- **Swift 的 key path 不能指向元组成员**：需要 `ForEach` 身份键时就用结构体。
+
 ## [0.3.616] - 2026-10-16
 
 > **一句话**：撤销「快捷指令关蜂窝」这条**伪造成功**的路径（iOS 没有「开关蜂窝数据」动作，飞行模式 ≠ 关蜂窝），
