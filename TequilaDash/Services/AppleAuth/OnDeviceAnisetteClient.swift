@@ -63,7 +63,8 @@ enum OnDeviceAnisetteClient {
     static func headers(identifier: Data,
                         adiPb: Data,
                         libDirectory: URL,
-                        provisioningDirectory: URL) throws -> AnisetteData {
+                        provisioningDirectory: URL,
+                        identity: AnisetteIdentity? = nil) throws -> AnisetteData {
         let json = try callC { outJSON in
             identifier.withUnsafeBytes { idBuf in
                 adiPb.withUnsafeBytes { pbBuf in
@@ -77,7 +78,22 @@ enum OnDeviceAnisetteClient {
                 }
             }
         }
-        return try parseHeaders(json)
+        return try parseHeaders(json, identity: identity)
+    }
+
+    // MARK: - 虚拟设备身份
+
+    /// 与远程路径对齐的**虚拟设备身份**.
+    ///
+    /// 为什么需要：C 层 `get_anisette_headers_uc` 不输出 device-id / client-info，
+    /// 且 `X-Apple-I-MD-LU` 是「63 个 0 + 1」的**占位值**（`anisette_base.h`）；
+    /// 不传身份时 `parseHeaders` 拿 `identifierForVendor` 兜底 ⇒ 同一个 identifier
+    /// 在本机与远程产出的 LU / deviceId / clientInfo 三者不同，Apple 侧会看成两台设备.
+    /// `AnisetteProvider` 用与远程路径同一套值传入（见 `fetchAnisetteLocal`），保证一致.
+    struct AnisetteIdentity: Sendable {
+        let localUserID: String
+        let deviceUniqueIdentifier: String
+        let deviceDescription: String
     }
 
     // MARK: - 配给（首次或 adiPb 过期时用）
@@ -221,7 +237,7 @@ enum OnDeviceAnisetteClient {
     /// `X-Apple-I-MD-RINFO` / `X-Apple-I-MD-LU`），与远程 `get_headers` 的返回一致 ——
     /// 故这里复用 `AnisetteProvider.extractAnisetteData` 的同一套映射口径。
     /// 同时容忍「已经是 AnisetteData 字段名」的输入（有些实现直接吐内部结构）.
-    private static func parseHeaders(_ json: String) throws -> AnisetteData {
+    private static func parseHeaders(_ json: String, identity: AnisetteIdentity? = nil) throws -> AnisetteData {
         guard let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
             throw ClientError.badResponse(json)
         }
@@ -246,11 +262,16 @@ enum OnDeviceAnisetteClient {
         return AnisetteData(
             machineID: machineID,
             oneTimePassword: otp,
-            localUserID: str(["X-Apple-I-MD-LU", "localUserID"]) ?? "",
+            // 身份三件套：C 层值 → 调用方对齐值 → UIDeviceLike 兜底.
+            // 详见 AnisetteIdentity 的文档 —— 不传 identity 会与远程路径漂移.
+            localUserID: str(["X-Apple-I-MD-LU", "localUserID"])
+                ?? identity?.localUserID ?? "",
             routingInfo: rinfo,
-            deviceUniqueIdentifier: str(["X-Mme-Device-Id", "deviceUniqueIdentifier"]) ?? device.uniqueID,
+            deviceUniqueIdentifier: str(["X-Mme-Device-Id", "deviceUniqueIdentifier"])
+                ?? identity?.deviceUniqueIdentifier ?? device.uniqueID,
             deviceSerialNumber: str(["X-Apple-I-SRL-NO", "deviceSerialNumber"]) ?? "0",
-            deviceDescription: str(["X-MMe-Client-Info", "deviceDescription"]) ?? device.description,
+            deviceDescription: str(["X-MMe-Client-Info", "deviceDescription"])
+                ?? identity?.deviceDescription ?? device.description,
             date: Date(),
             locale: Locale.current,
             timeZone: TimeZone.current)

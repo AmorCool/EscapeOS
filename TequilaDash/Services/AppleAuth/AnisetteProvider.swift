@@ -142,7 +142,7 @@ final class AnisetteProvider {
     /// 直接把 `identifier` + `adiPb` 交给 C++ 层，由 Unicorn 在本进程内解释执行
     /// ADI 引擎产出 headers。因此 machineID 不会因服务器侧变化而漂移
     /// （MJorb 记过的坑：`.so` 拿不到 -> 回退远程 -> machineID 漂移 -> Apple ID 失效）。
-    private func fetchAnisetteLocal() throws -> AnisetteData {
+    private func fetchAnisetteLocal() async throws -> AnisetteData {
         let mgr = OnDeviceAnisetteManager.shared
         guard let identifierStr = keychain.string(for: "identifier"),
               let identifier = Data(base64Encoded: identifierStr),
@@ -157,11 +157,34 @@ final class AnisetteProvider {
         // 否则全新安装时写入 adi.pb 会失败（审计发现：父目录从未创建）.
         try? FileManager.default.createDirectory(
             at: mgr.provisioningDirectory, withIntermediateDirectories: true)
-        return try OnDeviceAnisetteClient.headers(
+
+        // v0.3.616：**身份组装与远程路径对齐**.
+        //
+        // 审计发现（P1）：C 层 `get_anisette_headers_uc` 不输出 device-id / client-info，
+        // 且 `X-Apple-I-MD-LU` 硬编码为「63 个 0 + 1」（anisette_base.h 的占位）；
+        // 而 `OnDeviceAnisetteClient.parseHeaders` 会拿 UIDeviceLike（identifierForVendor）
+        // 兜底 ⇒ 同一个 identifier，本机与远程产出的 LU / deviceId / clientInfo 三者不同，
+        // Apple 侧会看成两台不同设备.
+        //
+        // 修法：本机路径也先走 `fetchClientInfo()`（有内存缓存就**不联网**），
+        // 再把与 `extractAnisetteData` 完全相同的三个字段作为 identity 传入 ——
+        // 保证同一 identifier 在两条路径下产出**一致**的虚拟设备身份.
+        // 注意 `AnisetteData` 的字段是 `let`，不能事后覆盖，必须**在构造时**传入.
+        try await fetchClientInfo()
+        let identity = OnDeviceAnisetteClient.AnisetteIdentity(
+            localUserID: mdLu ?? "",
+            deviceUniqueIdentifier: deviceId ?? "",
+            deviceDescription: clientInfo.map(Self.normalizedClientInfo) ?? "")
+        let anisette = try OnDeviceAnisetteClient.headers(
             identifier: identifier,
             adiPb: adiPb,
             libDirectory: mgr.engineDirectory,
-            provisioningDirectory: mgr.provisioningDirectory)
+            provisioningDirectory: mgr.provisioningDirectory,
+            identity: identity)
+        LoginLogger.shared.log(
+            "[完成] 本机身份已对齐远程口径: lu=\(identity.localUserID.prefix(12))… dev=\(identity.deviceUniqueIdentifier.prefix(12))…",
+            category: .appleID)
+        return anisette
     }
 
     /// 构造带 Apple 设备头的请求（对齐 GetMoreRam `buildAppleRequest`）.
