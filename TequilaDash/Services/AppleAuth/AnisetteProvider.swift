@@ -224,7 +224,7 @@ final class AnisetteProvider {
         // elf_loader_emulator.cpp -> Unicorn AArch64 解释器），见 OnDeviceAnisetteClient 顶部注释。
         if let reason = OnDeviceAnisetteManager.shared.remoteFallbackReason {
             LoginLogger.shared.log("[本机Anisette] 回退远程：\(reason)", category: .appleID)
-        } else if let local = try? fetchAnisetteLocal() {
+        } else if let local = try? await fetchAnisetteLocal() {
             LoginLogger.shared.log("[完成] 本机 Anisette 取数成功（不走远程服务器）", category: .appleID)
             return local
         } else {
