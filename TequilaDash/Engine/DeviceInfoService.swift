@@ -218,7 +218,8 @@ enum DeviceInfoService {
         // · iCloud = `com.apple.mobile.data_sync` 的 Bookmarks/Calendars/Contacts/Notes 里
         //   `AccountNames` 含 "iCloud"（真机实测本机四项都有 iCloud，与爱思「已开启」一致）
         let activationLock = (try? Self.lockdownValueOrFallback(domain: "com.apple.fmip",
-                                                     key: "IsAssociated")) as? Bool
+                                                                 key: "IsAssociated",
+                                                                 sharedAdapter, sharedHandshake)) as? Bool
         let dataSync = (try? Self.lockdownDomainDictOrFallback("com.apple.mobile.data_sync", sharedAdapter, sharedHandshake)) ?? [:]
         var iCloudSignedIn: Bool? = nil
         if !dataSync.isEmpty {
