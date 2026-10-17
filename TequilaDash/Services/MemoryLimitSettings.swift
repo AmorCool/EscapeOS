@@ -58,7 +58,12 @@ struct EscapeKeychain {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
-            kSecAttrSynchronizable as String: kCFBooleanTrue as Any
+            // ⚠️ 必须 false：本类存的是 **Apple ID 明文密码**（applePassword / pw:<email>）、
+            // dsid、authToken、adiPb 等凭据。原先这里写 kCFBooleanTrue，
+            // 意味着这些条目会随 iCloud Keychain 同步到该用户的**其它所有设备** ——
+            // 对一个「凭据只留在本机」的侧载工具是不可接受的暴露面扩大。
+            // delete() 里用 kSecAttrSynchronizableAny 是为了兼容历史已同步条目（能删干净）。
+            kSecAttrSynchronizable as String: kCFBooleanFalse as Any
         ]
     }
 }

@@ -58,9 +58,19 @@ final class GSAAuth {
         )
         sessionKey = Data(S.bytes(paddedTo: SRP6a.sizeN))
 
-        // 中间值日志：配合 Python 参考实现可精确复算定位（u 不依赖密码）
-        let hexOf: ([UInt8]) -> String = { $0.map { String(format: "%02x", $0) }.joined() }
-        LoginLogger.shared.log("SRP 中间值 x=\(hexOf(x)) u=\(hexOf(SRP6a.sha256(SRP6a.pad(publicKey.map { $0 }, to: SRP6a.sizeN) + serverPublicKey.map { $0 }))) S=\(hexOf(S.bytes(paddedTo: SRP6a.sizeN))) K=\(hexOf(K))", category: .appleID)
+        // 中间值日志：配合 Python 参考实现可精确复算定位（u 不依赖密码）。
+        //
+        // ⚠️ 只打**前 8 位**做比对锚点，绝不打全文：
+        //   K 是本次握手的会话密钥，可解 spd/et、可伪造 M1/M2；
+        //   x 含密码的 PBKDF2 派生信息，可离线爆破。
+        //   而 Documents/LoginLogs/login.log 有两个对外出口 ——
+        //   SSH 的 `logs` 命令（SSHServerService.swift:470-474）与
+        //   SFTP 的 `/sandbox` 后端（根就是 Documents，SSHFileProvider.swift:242-254）。
+        //   打全文等于把会话密钥交给任何能登进 SSH/SFTP 的人。
+        //   对照 SignedStoreAuthenticator.swift:313 的既定口径
+        //   「Log only shape/status, never body, credentials, signatures, cookie values」。
+        let head8: ([UInt8]) -> String = { $0.prefix(8).map { String(format: "%02x", $0) }.joined() }
+        LoginLogger.shared.log("SRP 中间值(前8字节) x=\(head8(x)) u=\(head8(SRP6a.sha256(SRP6a.pad(publicKey.map { $0 }, to: SRP6a.sizeN) + serverPublicKey.map { $0 }))) S=\(head8(S.bytes(paddedTo: SRP6a.sizeN))) K=\(head8(K))", category: .appleID)
 
         let M1 = SRP6a.clientProof(
             username: username,
@@ -75,7 +85,14 @@ final class GSAAuth {
 
     func verifyServerVerificationMessage(_ serverProof: Data) -> Bool {
         guard let verificationMessage, let sessionKey, let publicKey, let serverPublicKey else { return false }
-        // sessionKey 当前是 S（256 字节），证明计算需要 K = SHA256(S)
+        // ⚠️ M2 校验必须与 M1 **用同一个 K**。
+        //
+        // M1（clientProof）用的是 `K`，而 SRP6a.swift:66-67 的契约写明
+        // 「hashSharedSecret = H(S) 只哈希一次，K 参数已是 H(S)，不得再哈希」。
+        // 这里 sessionKey 存的是 S（:59 `sessionKey = Data(S.bytes(...))`），
+        // 所以 K = SHA256(S) —— 只哈希一次，与原 clientProof 的 K 完全一致。
+        // （历史缺陷：此处曾写成 SHA256(sessionKey)，即 SHA256(SHA256(S))，
+        //  与 M1 用的 K 不同 ⇒ M2 必然校验失败。）
         let K = SRP6a.sha256(sessionKey.map { $0 })
         let computed = SRP6a.serverProof(
             A: publicKey.map { $0 },
