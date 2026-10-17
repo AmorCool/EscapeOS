@@ -10,30 +10,73 @@
 //  `destinationIPs` / `destinationGatewayIPs` / `linkLayerDestinationIP`
 //  三个都来自**路由表**。所以这里按路由表取。
 //
+//  ## 为什么自声明结构体而不是 #include <net/route.h>
+//  **iOS 公共 SDK 不含 `net/route.h`**（CI 实测：`'net/route.h' file not found`）。
+//  该头在 Darwin 里属系统内部头。所以这里只复制**实际用到的**布局：
+//  消息头前 36 字节（到 `rtm_inits`）+ `rt_metrics` 60 字节 = **96 字节**，
+//  随后才是 sockaddr 数组。字段名一律加 `esc_` 前缀，避免与任何系统头冲突。
+//
 //  ## 解析要点（BSD 路由消息布局）
 //  1. `sysctl(CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_DUMP)` 返回一串变长记录；
-//  2. 每条记录是 `struct rt_msghdr` + 最多 `RTAX_MAX` 个 sockaddr；
+//  2. 每条记录是 96 字节消息头 + 最多 `RTAX_MAX` 个 sockaddr；
 //  3. 哪些 sockaddr 存在由 `rtm_addrs` 的位掩码决定，顺序固定为
 //     DST(0) GATEWAY(1) NETMASK(2) GENMASK(3) IFP(4) IFA(5) …
 //  4. 每个 sockaddr 按 **4 字节 ROUNDUP** 推进（`sa_len` 不含填充）；
 //  5. `RTAX_IFP` 是 `sockaddr_dl`，`sdl_data` 前 `sdl_nlen` 字节是接口名；
-//     点对点链路的 `RTAX_GATEWAY` 也是 `sockaddr_dl`，其地址区（`sdl_data` 之后
-//     `sdl_nlen` 偏移处）尾部 4 字节是对端 IPv4。
+//     点对点链路的 `RTAX_GATEWAY` 也是 `sockaddr_dl`，其地址区尾部 4 字节是对端 IPv4。
 //
 
 #include "EscRoutePeers.h"
 
-#include <net/route.h>
 #include <net/if.h>
-#include <net/if_dl.h>   // sockaddr_dl / sdl_nlen / sdl_alen（RTAX_IFP 与点对点 gateway 用）
+#include <net/if_dl.h>      // sockaddr_dl / sdl_nlen / sdl_alen（公共 SDK 里**有**）
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
+#include <sys/types.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+// net/route.h 不在 iOS 公共 SDK 里，这里按 Darwin 布局自声明（见文件头说明）.
+#ifndef NET_RT_DUMP
+#define NET_RT_DUMP 4
+#endif
+#define ESC_RTAX_DST      0
+#define ESC_RTAX_GATEWAY  1
+#define ESC_RTAX_NETMASK  2
+#define ESC_RTAX_GENMASK  3
+#define ESC_RTAX_IFP      4
+#define ESC_RTAX_IFA      5
+#define ESC_RTAX_MAX      8
+
+/// `struct rt_metrics` 的等价布局（15 × uint32 = 60 字节）.
+typedef struct {
+    uint32_t esc_metrics[15];
+} esc_rt_metrics;
+
+/// `struct rt_msghdr` 的等价布局（36 + 60 = 96 字节）.
+/// 只读前两个字段（`msglen` / `addrs`），其余字段仅为**对齐占位**.
+typedef struct {
+    uint16_t esc_msglen;
+    uint8_t  esc_version;
+    uint8_t  esc_type;
+    uint16_t esc_index;
+    int32_t  esc_flags;
+    int32_t  esc_addrs;
+    int32_t  esc_pid;
+    int32_t  esc_seq;
+    int32_t  esc_errno;
+    int32_t  esc_use;
+    uint32_t esc_inits;
+    esc_rt_metrics esc_rmx;
+} esc_rt_msghdr;
+
+/// 编译期校验：与 Darwin `sizeof(struct rt_msghdr)` 一致（96）.
+/// 若某天布局变化，这里会先炸而不是静默解析错位.
+typedef char esc_rt_msghdr_size_check[(sizeof(esc_rt_msghdr) == 96) ? 1 : -1];
 
 #define ESC_MAX_PEERS 16
 #define ESC_MAX_IFNAME 32
@@ -59,7 +102,7 @@ static int esc_peer_from_dl(const struct sockaddr_dl *dl, struct in_addr *out) {
     if (dl->sdl_alen < 4) return 0;
     const unsigned char *address = (const unsigned char *)dl->sdl_data + dl->sdl_nlen;
     if (dl->sdl_alen >= 8) {
-        // 部分实现会在地址区前置 4 字节接口索引/标志；取尾部 4 字节更稳.
+        // 部分实现会在地址区前置 4 字节；取尾部 4 字节更稳.
         address += dl->sdl_alen - 4;
     }
     unsigned char bytes[4] = { address[0], address[1], address[2], address[3] };
@@ -99,13 +142,13 @@ char *esc_route_utun_peers(size_t *outCount) {
     size_t peerCount = 0;
 
     size_t offset = 0;
-    while (offset + sizeof(struct rt_msghdr) <= needed) {
-        struct rt_msghdr *header = (struct rt_msghdr *)(void *)(buffer + offset);
-        size_t messageLength = (size_t)header->rtm_msglen;
-        if (messageLength <= sizeof(struct rt_msghdr) || offset + messageLength > needed) break;
+    while (offset + sizeof(esc_rt_msghdr) <= needed) {
+        const esc_rt_msghdr *header = (const esc_rt_msghdr *)(const void *)(buffer + offset);
+        size_t messageLength = (size_t)header->esc_msglen;
+        if (messageLength <= sizeof(esc_rt_msghdr) || offset + messageLength > needed) break;
 
         // 逐条 sockaddr：RTAX 顺序，按 rtm_addrs 位掩码判断存在性.
-        const char *cursor = buffer + offset + sizeof(struct rt_msghdr);
+        const char *cursor = buffer + offset + sizeof(esc_rt_msghdr);
         const char *end = buffer + offset + messageLength;
         char interfaceName[ESC_MAX_IFNAME] = { 0 };
         struct in_addr destination = { 0 };
@@ -113,36 +156,37 @@ char *esc_route_utun_peers(size_t *outCount) {
         int hasDestination = 0;
         int hasGateway = 0;
 
-        for (int index = 0; index < RTAX_MAX && cursor + sizeof(struct sockaddr) <= end; index++) {
-            struct sockaddr *sa = (struct sockaddr *)(void *)cursor;
+        for (int index = 0; index < ESC_RTAX_MAX && cursor + sizeof(struct sockaddr) <= end; index++) {
+            const struct sockaddr *sa = (const struct sockaddr *)(const void *)cursor;
             size_t length = (size_t)sa->sa_len;
             if (length == 0) break;
 
-            if ((header->rtm_addrs & (1 << index)) != 0) {
+            if ((header->esc_addrs & (1 << index)) != 0) {
                 switch (index) {
-                    case RTAX_DST:
+                    case ESC_RTAX_DST:
                         if (sa->sa_family == AF_INET) {
-                            struct sockaddr_in *sin = (struct sockaddr_in *)(void *)sa;
+                            const struct sockaddr_in *sin = (const struct sockaddr_in *)(const void *)sa;
                             destination = sin->sin_addr;
                             hasDestination = 1;
                         }
                         break;
-                    case RTAX_GATEWAY:
+                    case ESC_RTAX_GATEWAY:
                         if (sa->sa_family == AF_INET) {
-                            struct sockaddr_in *sin = (struct sockaddr_in *)(void *)sa;
+                            const struct sockaddr_in *sin = (const struct sockaddr_in *)(const void *)sa;
                             gateway = sin->sin_addr;
                             hasGateway = 1;
                         } else if (sa->sa_family == AF_LINK) {
                             struct in_addr peer = { 0 };
-                            if (esc_peer_from_dl((struct sockaddr_dl *)(void *)sa, &peer)) {
+                            if (esc_peer_from_dl((const struct sockaddr_dl *)(const void *)sa, &peer)) {
                                 gateway = peer;
                                 hasGateway = 1;
                             }
                         }
                         break;
-                    case RTAX_IFP:
+                    case ESC_RTAX_IFP:
                         if (sa->sa_family == AF_LINK) {
-                            esc_ifname_from_dl((struct sockaddr_dl *)(void *)sa, interfaceName, sizeof(interfaceName));
+                            esc_ifname_from_dl((const struct sockaddr_dl *)(const void *)sa,
+                                               interfaceName, sizeof(interfaceName));
                         }
                         break;
                     default:
