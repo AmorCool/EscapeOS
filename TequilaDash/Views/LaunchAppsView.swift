@@ -145,7 +145,7 @@ struct LaunchAppsView: View {
                 ZStack {
                     JITAppIconView(bundleID: app.bundleID, size: 60)
                     if launchingBundleIDs.contains(app.bundleID) {
-                        RoundedRectangle(cornerRadius: 60 * (8.0 / 36.0), style: .continuous)
+                        RoundedRectangle(cornerRadius: 60 * (8.0 / 36.0, style: .continuous), style: .continuous)
                             .fill(.ultraThinMaterial)
                             .frame(width: 60, height: 60)
                         ProgressView()

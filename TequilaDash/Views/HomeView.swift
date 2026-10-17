@@ -436,20 +436,12 @@ struct HomeView: View {
     }
 
     // MARK: 视觉辅助
-    private var scoreSubtitle: String {
-        switch securityScore {
-        case 80...: return "手机很安全，可继续优化"
-        case 60..<80: return "安全状况良好"
-        default: return "建议尽快体检"
-        }
-    }
-    private var scoreColor: Color {
-        switch securityScore {
-        case 80...: return .blue
-        case 60..<80: return .yellow
-        default: return .orange
-        }
-    }
+    // v0.3.626：改走统一 token。
+    // 原先这里是「蓝 80+ / 黄 60..<80 / 橙」，而 HealthCheckView 是「蓝 90+ / 黄 70+ / 橙」——
+    // 同一个分数在主页与体检页显示成不同颜色（80 分主页蓝、体检页黄）。
+    // 现在两处都调 AppTheme.scoreColor / scoreLabel，阈值与取色只有一份。
+    private var scoreSubtitle: String { AppTheme.scoreLabel(securityScore) }
+    private var scoreColor: Color { AppTheme.scoreColor(securityScore) }
 }
 
 /// 主页功能行标签：连续圆角图标底 + 17pt semibold 标题 + 13pt footnote 副标题 + 右侧 chevron。

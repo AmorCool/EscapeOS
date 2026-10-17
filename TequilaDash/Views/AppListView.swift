@@ -520,6 +520,10 @@ struct AppListView: View {
                     }
                 }
             }
+        // v0.3.626：补上 listStyle。
+        // 全仓 65 处 listStyle 无一例外都是 .insetGrouped，只有本文件与 AppDetailView 没写 ——
+        // 结果是这两页的 List 走系统默认样式，与其余 59 个页面观感不一致。
+        .listStyle(.insetGrouped)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索应用")
         .toolbar {
             if selecting {

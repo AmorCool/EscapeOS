@@ -173,6 +173,9 @@ struct AppDetailView: View {
                 }
             }
         }
+        // v0.3.626：补上 listStyle（全仓 65 处 listStyle 无一例外都是 .insetGrouped，
+        // 只有本文件与 AppListView 漏写，导致这两页与其余 59 个页面观感不一致）。
+        .listStyle(.insetGrouped)
         .navigationTitle(app.name)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {

@@ -349,7 +349,7 @@ struct ConfigurationsView: View {
                         .foregroundColor(.blue)
                         .frame(width: 30, height: 30)
                         .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("备份并分享配置")
                             .font(.subheadline)

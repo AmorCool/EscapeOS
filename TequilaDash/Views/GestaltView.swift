@@ -615,8 +615,11 @@ struct GestaltView: View {
 
     private func warningRow(title: String, text: String) -> some View {
         HStack(spacing: 12) {
+            // 硬规则 1：不用黄色感叹号。这里原本是 info.circle + .yellow，
+            // 与同文件 :288 注释「图标用 bolt.slash（不用黄色感叹号，项目铁律）」自相矛盾。
+            // 改用 AppTheme.warning（系统语义色，明暗自适应，规则 6）+ info.circle（非感叹号）。
             Image(systemName: "info.circle")
-                .foregroundStyle(.yellow)
+                .foregroundStyle(AppTheme.warning)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline).bold()
                 Text(text).font(.caption).foregroundStyle(.secondary)

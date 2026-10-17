@@ -142,9 +142,9 @@ struct HealthCheckView: View {
             .fill(Color(uiColor: .secondarySystemGroupedBackground)))
     }
 
-    private var scoreColor: Color {
-        finalScore >= 90 ? .blue : (finalScore >= 70 ? .yellow : .orange)
-    }
+    // v0.3.626：改走统一 token（阈值 90/70 与原实现一致，但取色改为明暗自适应）。
+    // 原实现用系统 .blue/.yellow/.orange（单值色，深色模式下对比度不足，违反规则 6）。
+    private var scoreColor: Color { AppTheme.scoreColor(finalScore) }
     private var scoreLabel: String {
         switch finalScore {
         case 90...: return "设备很安全"

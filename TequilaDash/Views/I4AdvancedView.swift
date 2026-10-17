@@ -273,7 +273,7 @@ struct I4AdvancedView: View {
             .disabled(pairing || probe?.hasPairingFile != true)
 
             Text("经 RSD 隧道连设备本机的 lockdownd，发一次真 lockdown Pair；"
-                 + "设备接受才拿得到配对记录（pair.config），再写进载体 App 的 Documents。"
+                 + "设备接受才拿得到配对记录（pair.config），再写进载体 App 的 Documents"
                  + "成败以设备应答为准，结果里会如实给出设备返回的原始错误.")
                 .font(AppFont.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

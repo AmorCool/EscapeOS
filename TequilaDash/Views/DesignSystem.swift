@@ -57,6 +57,33 @@ enum AppTheme {
     static let danger = Color(uiColor: .systemRed)
     /// 未选中态的图标灰（选择圈、占位图形）.
     static let unselected = Color.secondary.opacity(0.5)
+
+    /// 安全评分色阶（v0.3.626 统一）.
+    ///
+    /// 此前「评分 → 颜色」有两套实现**且已漂移**：
+    ///   · HomeView.swift:446-452 —— 蓝档 80+、黄档 60..<80、其余橙
+    ///   · HealthCheckView.swift:145-147 —— 蓝档 90+、黄档 70+、其余橙
+    /// 用户从主页点「立即体检」进去，**同一个分数颜色会变**（80 分在主页是蓝、在体检页是黄）。
+    /// 两处还都用系统 .yellow / .orange（单值色，无明暗两套，违反规则 6）。
+    ///
+    /// 现在统一到这里：阈值取 90 / 70（体检页口径更严，且它是「评分」的权威页面），
+    /// 颜色改用自适应 token —— 深色模式下提亮以保证对比度。
+    static func scoreColor(_ score: Int) -> Color {
+        switch score {
+        case 90...: return success      // 优秀
+        case 70..<90: return pending    // 一般
+        default: return danger          // 需处理
+        }
+    }
+
+    /// 评分档位文案（与 scoreColor 同一阈值，避免再次漂移）.
+    static func scoreLabel(_ score: Int) -> String {
+        switch score {
+        case 90...: return "手机很安全，可继续优化"
+        case 70..<90: return "安全状况良好"
+        default: return "建议尽快体检"
+        }
+    }
     /// 选择圈图标尺寸（已导入 / 待修补 / 已修补三页共用）.
     static let selectionIconSize: CGFloat = 20
 
@@ -710,6 +737,62 @@ enum AppSpacing {
     static let switchTrailing: CGFloat = 18
     /// 设置列表内容左右边距（TRApp 实测 22；规范 §1.3 / §③组件 5）.
     static let settingsInset: CGFloat = 22
+}
+
+/// 阴影层（v0.3.626 新增）.
+///
+/// 此前 DesignSystem 里**没有任何阴影 token** —— 全仓只有 3 处硬编码 shadow
+/// （MapDropPin.swift:34、JoystickPad.swift:23、VirtualLocationView.swift:197）。
+/// 卡片层次全靠「底色 + 发丝描边」表达，这在浅色模式够用，
+/// 但深色模式下 surfaceCard(#1B1F26) 与 surfaceBase(#0E1116) 明度差很小，
+/// 卡片边界主要靠 accentBorder 0.30 的描边撑着，观感偏平。
+///
+/// 这里只补**两级**阴影，不做完整体系（与 AppRadius 的克制口径一致）：
+/// - card：卡片浮起（浅色下极淡，深色下几乎不可见 —— 深色靠描边，这是对的）
+/// - raised：浮层 / 拖拽中的元素（如 MapDropPin 拖拽态）
+///
+/// 判据：阴影只在**浅色模式**有意义；深色模式用描边而非阴影，
+/// 因为深色背景上的黑色阴影只会让边缘糊成一片脏带（本仓 hero 卡曾踩过同类坑）。
+enum AppShadow {
+    /// 卡片投影：浅色下极淡（黑 6%，radius 8，y 2），深色下不投影.
+    static func card(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? .clear : Color.black.opacity(0.06)
+    }
+    /// 卡片投影半径.
+    static let cardRadius: CGFloat = 8
+    /// 卡片投影垂直偏移.
+    static let cardY: CGFloat = 2
+
+    /// 浮层投影（拖拽 / 悬浮）：两种模式都用，但深色下更重一些以保证可见.
+    static func raised(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.black.opacity(0.55) : Color.black.opacity(0.18)
+    }
+    /// 浮层投影半径.
+    static let raisedRadius: CGFloat = 12
+    /// 浮层投影垂直偏移.
+    static let raisedY: CGFloat = 4
+}
+
+/// 卡片背景 token（v0.3.626 新增）.
+///
+/// 此前 `appCard()` 内部**硬取** `Color(uiColor: .secondarySystemGroupedBackground)`
+/// （DesignSystem.swift:842），于是全仓出现 4 种卡片底取色路径：
+///   · `.appCard()` —— 8 个文件
+///   · 手拼 `RoundedRectangle + Color(.secondarySystemGroupedBackground)` —— 21 个文件
+///   · `Color(.systemGroupedBackground)`（页面底色）—— 10 个文件
+///   · `AppTheme.surfaceCard` / `surfaceBase` —— 4 个文件
+/// 同一条「卡片」硬规则有两套落地方式。
+///
+/// 现在把「卡片底」提升为显式 token，`appCard()` 改为引用它；
+/// 页面若要自定义卡片底（如 HomeToolTile 的模块色渐变），
+/// 应该在**这个底之上叠加**，而不是另取一个系统色。
+enum AppSurface {
+    /// 卡片底色（跟随系统 grouped 背景，明暗自适应）.
+    static let card = Color(uiColor: .secondarySystemGroupedBackground)
+    /// 页面底色（跟随系统 grouped 背景，明暗自适应）.
+    static let page = Color(uiColor: .systemGroupedBackground)
+    /// 卡片描边（发丝，0.5pt 用）.
+    static let cardBorder = Color(uiColor: .separator)
 }
 
 /// 尺寸层：卡片内边距与图标尺寸.

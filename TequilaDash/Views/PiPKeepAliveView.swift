@@ -22,9 +22,9 @@ struct PiPKeepAliveView: View {
                     // playerLayer 宿主（PiP 源视图，必须常驻层级）
                     PlayerLayerHost()
                         .frame(width: 160, height: 90)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 10)
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                         )
 

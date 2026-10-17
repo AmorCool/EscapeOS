@@ -336,7 +336,7 @@ struct ModuleManagerView: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(.systemGray6)))
     }
 
     /// 模块卡片（逐像素对齐截图：白卡片 / 黑粗标题 / 灰版本作者描述 / 蓝Toggle / 灰胶囊底栏）

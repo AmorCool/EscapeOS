@@ -103,7 +103,7 @@ struct SupervisedInstallFooter: ViewModifier {
                     .padding(.vertical, 12)
                     .background(AppTheme.accent)
                     .foregroundColor(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                 }

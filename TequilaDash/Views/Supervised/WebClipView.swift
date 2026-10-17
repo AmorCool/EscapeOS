@@ -35,9 +35,9 @@ struct WebClipView: View {
                                 .resizable()
                                 .scaledToFit()
                                 .frame(width: 72, height: 72)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         } else {
-                            RoundedRectangle(cornerRadius: 16)
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
                                 .fill(Color(.secondarySystemGroupedBackground))
                                 .frame(width: 72, height: 72)
                                 .overlay {

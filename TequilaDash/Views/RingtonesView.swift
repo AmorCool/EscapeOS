@@ -155,7 +155,7 @@ struct RingtonesView: View {
                         .foregroundColor(.secondary)
                 }
                 .padding(28)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .shadow(radius: 8)
             }
         }

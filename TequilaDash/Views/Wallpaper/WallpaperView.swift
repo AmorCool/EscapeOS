@@ -181,7 +181,7 @@ struct WallpaperView: View {
 
             VStack(spacing: 16) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 28)
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
                         .fill(Color(.secondarySystemGroupedBackground))
                         .frame(width: 96, height: 96)
 
@@ -204,7 +204,7 @@ struct WallpaperView: View {
             }
             .padding(28)
             .background(
-                RoundedRectangle(cornerRadius: 32)
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
                     .fill(Color(.systemBackground))
             )
             .padding(.horizontal, 24)
@@ -231,12 +231,12 @@ struct WallpaperView: View {
                 } label: {
                     VStack(spacing: 10) {
                         ZStack {
-                            RoundedRectangle(cornerRadius: 24)
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
                                 .fill(Color(.systemBackground))
                                 .frame(height: 110)
                                 .overlay {
                                     if tendies.isOn {
-                                        RoundedRectangle(cornerRadius: 24)
+                                        RoundedRectangle(cornerRadius: 24, style: .continuous)
                                             .strokeBorder(AppTheme.accent, lineWidth: 2)
                                     }
                                 }
