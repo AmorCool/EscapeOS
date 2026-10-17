@@ -108,33 +108,17 @@ struct BackupsListView: View {
 
     private var mainContent: some View {
         List {
+            // v0.3.626：三态改用统一组件 AppStateSection。
+            // 本页原本就是全仓唯一把三态做一致的地方（三态都用 InfoActionCard），
+            // 现在把这份正确形态抽成公共组件，供其余 21 个文件替换裸 Text 空态。
             if vm.isLoading && vm.isEmpty {
-                Section {
-                    InfoActionCard(
-                        icon: "externaldrive.fill.badge.timemachine",
-                        title: "正在加载备份…",
-                        message: "读取 TequilaDash/Backups 目录中的备份归档."
-                    )
-                }
+                AppStateSection(state: .loading("正在加载备份…",
+                                                detail: "读取 TequilaDash/Backups 目录中的备份归档."))
             } else if let error = vm.errorMessage, vm.isEmpty {
-                Section {
-                    InfoActionCard(
-                        icon: "info.circle",
-                        iconTint: .orange,
-                        title: "无法读取备份",
-                        message: error,
-                        actionTitle: "重试",
-                        action: { vm.reload() }
-                    )
-                }
+                AppStateSection(state: .error("无法读取备份", message: error) { vm.reload() })
             } else if vm.isEmpty {
-                Section {
-                    InfoActionCard(
-                        icon: "tray.full",
-                        title: "暂无备份",
-                        message: "在「应用管理」或「容器管理」进入任意应用，点「备份数据」导出.归档保存在「文件 → 我的iPhone → TequilaDash → Backups」."
-                    )
-                }
+                AppStateSection(state: .empty("暂无备份",
+                                              message: "在「应用管理」或「容器管理」进入任意应用，点「备份数据」导出.归档保存在「文件 → 我的iPhone → TequilaDash → Backups」."))
             } else {
                 recordsSection
                 unreadableSection

@@ -525,6 +525,87 @@ struct InfoActionCard: View {
     }
 }
 
+/// 列表的「加载 / 错误 / 空」三态统一容器（v0.3.626 新增）.
+///
+/// ## 为什么要有它
+/// 全仓这三种状态有 **4 套并存**的写法（审计实证）：
+///   · `AppEmptyState`（规范组件）—— 业务只用 2 页
+///   · `ContentUnavailableView`（系统）—— 7 个文件
+///   · `InfoActionCard`（当空态用）—— 21 个文件
+///   · **裸 `Text("暂无…")` —— 26 处 / 21 文件**（最不规范的那种反而最多）
+/// 加载态更是 136 处裸 `ProgressView()` 散在 70 个文件里。
+///
+/// ## 正确形态的来源
+/// `BackupsListView.swift:109-137` 是全仓唯一把三态做得一致的地方 ——
+/// 三态**全部用 InfoActionCard**，错误态还带重试动作。本组件就是它的抽象。
+///
+/// ## 用法
+/// ```swift
+/// AppStateSection(state: .loading("正在加载备份…", detail: "读取 Backups 目录."))
+/// AppStateSection(state: .error("无法读取备份", message: error) { vm.reload() })
+/// AppStateSection(state: .empty("暂无备份", message: "…"))
+/// // 三态都不成立时返回 nil，调用方直接不渲染
+/// ```
+///
+/// 判据：**只渲染状态，不渲染内容**。调用方按
+/// `if let s = AppStateSection.state(...) { s } else { 真实内容 }` 使用。
+struct AppStateSection: View {
+    /// 三态之一。每一态都自带默认图标与色调，调用方可覆盖。
+    enum State {
+        /// 正在加载
+        case loading(_ title: String, detail: String? = nil)
+        /// 出错（可选重试动作）
+        case error(_ title: String, message: String, retry: (() -> Void)? = nil)
+        /// 空列表
+        case empty(_ title: String, message: String? = nil, icon: String = "tray.full")
+    }
+
+    let state: State
+
+    var body: some View {
+        switch state {
+        case .loading(let title, let detail):
+            card(icon: "arrow.triangle.2.circlepath",
+                 tint: AppTheme.accent,
+                 title: title,
+                 message: detail ?? "",
+                 actionTitle: nil,
+                 action: nil)
+
+        case .error(let title, let message, let retry):
+            // 错误态用 pending（橙）而不是 danger（红）：
+            // 列表读不出来通常是「隧道没通 / 配对文件缺失」这类可恢复问题，
+            // 红色会让用户以为设备坏了。真危险操作才用 danger。
+            card(icon: "info.circle",
+                 tint: AppTheme.pending,
+                 title: title,
+                 message: message,
+                 actionTitle: retry == nil ? nil : "重试",
+                 action: retry)
+
+        case .empty(let title, let message, let icon):
+            card(icon: icon,
+                 tint: AppTheme.accent,
+                 title: title,
+                 message: message ?? "",
+                 actionTitle: nil,
+                 action: nil)
+        }
+    }
+
+    private func card(icon: String, tint: Color, title: String,
+                      message: String, actionTitle: String?, action: (() -> Void)?) -> some View {
+        Section {
+            InfoActionCard(icon: icon,
+                           iconTint: tint,
+                           title: title,
+                           message: message,
+                           actionTitle: actionTitle,
+                           action: action)
+        }
+    }
+}
+
 /// A small pill that highlights a byte count with a tinted background.
 struct SizePill: View {
     let text: String
