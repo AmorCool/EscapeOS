@@ -75,7 +75,9 @@ struct AddAccountSheet: View {
 
                 if let errorText {
                     Section {
-                        Text(errorText).font(.footnote).foregroundStyle(.red)
+                        // v0.3.630：改走统一错误行（原先是裸红字 footnote，
+                        // 与全仓其它页面的灰字/橙字各不一致）。
+                        AppErrorRow(message: errorText)
                     }
                 }
 

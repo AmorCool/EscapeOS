@@ -103,16 +103,12 @@ struct DeviceSlimView: View {
             }
             if let errorText {
                 Section {
-                    HStack(spacing: 8) {
-                        Text(errorText).font(.footnote).foregroundStyle(.red)
-                        Spacer(minLength: 0)
-                        // v0.3.378：给出可见的重试入口（与「重新扫描」等价，但就近）
-                        Button("重试") {
-                            DeviceSlimService.invalidateAppReadCache()
-                            Task { await runScan(force: true) }
-                        }
-                        .font(.subheadline)
-                    }
+                    // v0.3.630：改用 AppErrorRow（自带「重试」按钮，且取色统一为 pending 橙）。
+                    // 原先是红字 + 旁边一个独立按钮，与 AppErrorRow 的形态重复。
+                    AppErrorRow(message: errorText, retry: {
+                        DeviceSlimService.invalidateAppReadCache()
+                        Task { await runScan(force: true) }
+                    })
                 }
             }
             if let sizeNote {

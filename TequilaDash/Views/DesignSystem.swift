@@ -525,6 +525,62 @@ struct InfoActionCard: View {
     }
 }
 
+/// 行内错误提示（v0.3.630 新增）.
+///
+/// ## 为什么要有它
+/// 全仓错误提示的**渲染方式**有 4 套并存（审计实证）：
+///   · \`@State errorText\` + 内联 Text —— 20 个文件
+///   · \`@State errorMessage\` + 内联 Text —— 30 个文件（且 \`String?\` 与 \`""\` 两种类型混用）
+///   · 内联 \`.foregroundStyle(.red/.orange)\` 着色 —— 63 处 / 39 文件
+///   · \`InfoActionCard\` + 重试 —— 33 处 / 21 文件（最规范）
+///
+/// 同一句「读不出来」，有的红色、有的灰色；有的 footnote、有的 callout；
+/// 有的居中、有的左对齐 —— 用户在不同页面看到不同形态。
+///
+/// ## 用法
+/// \`\`\`swift
+/// if let error = loadError {
+///     AppErrorRow(message: error)
+/// }
+/// // 或带重试：
+/// AppErrorRow(message: error, retry: { reload() })
+/// \`\`\`
+///
+/// ## 为什么用 pending（橙）而不是 danger（红）
+/// 列表/数据读不出来通常是「隧道没通 / 配对文件缺失 / 网络抖动」这类**可恢复**问题，
+/// 红色会让用户以为设备坏了或数据损坏了。真正不可恢复的才用 danger。
+/// 这与 \`AppStateSection.error\` 的取色一致。
+struct AppErrorRow: View {
+    let message: String
+    /// 可选重试动作。给了就显示「重试」按钮。
+    var retry: (() -> Void)? = nil
+    /// 是否居中。列表内的行内错误默认左对齐；整页空态场景可居中。
+    var centered: Bool = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(AppTheme.pending)
+                .appSymbol()
+            VStack(alignment: centered ? .center : .leading, spacing: 6) {
+                Text(message)
+                    .font(AppFont.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(centered ? .center : .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let retry {
+                    Button("重试", action: retry)
+                        .buttonStyle(TintedButtonStyle(tint: AppTheme.pending))
+                        .controlSize(.small)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
+    }
+}
+
 /// 列表的「加载 / 错误 / 空」三态统一容器（v0.3.626 新增）.
 ///
 /// ## 为什么要有它
