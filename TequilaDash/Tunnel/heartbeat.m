@@ -14,9 +14,12 @@
 // v0.3.614：与 TunnelContext._targetIP / Swift LocalDevVPN.targetIP 同口径地推导 utun 对端.
 #include <ifaddrs.h>
 #include <netinet/in.h>
+// v0.3.636：globalHeartbeatToken 改成 _Atomic，读写要用 atomic_load（见 heartbeat.h）。
+#include <stdatomic.h>
 @import Foundation;
 
-int globalHeartbeatToken = 0;
+// v0.3.636：_Atomic（跨线程读写，见 heartbeat.h 的说明）。
+_Atomic int globalHeartbeatToken = 0;
 NSDate* lastHeartbeatDate = nil;
 
 /// 隧道目标 IP：**与 `TunnelContext._targetIP` 同口径的两级优先级**
@@ -94,7 +97,7 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
             // 结果 TunnelContext 仍把 _provider 当可用隧道（hasActiveTunnel 返回 YES），
             // ensureHeartbeat 因「已有句柄」直接返回成功、不再重建 ——
             // 用户看到的是「一直连着，但所有操作都失败」。
-            if (heartbeatToken == globalHeartbeatToken) {
+            if (heartbeatToken == atomic_load(&globalHeartbeatToken)) {
                 completionCalled = true;
                 completion(err->code, err->message);
             }
@@ -104,10 +107,10 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         }
         
         // if a new heartbeat thread is running we quit current one
-        if (heartbeatToken != globalHeartbeatToken) {
+        if (heartbeatToken != atomic_load(&globalHeartbeatToken)) {
             heartbeat_client_free(client);
 
-            NSLog(@"Quitting %d, now token = %d", heartbeatToken, globalHeartbeatToken);
+            NSLog(@"Quitting %d, now token = %d", heartbeatToken, atomic_load(&globalHeartbeatToken));
             return;
         }
         
@@ -118,7 +121,7 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         if (err != NULL) {
             fprintf(stderr, "Failed to get marco: [%d] %s", err->code, err->message);
             // 同上：心跳中途断掉要通知，否则隧道死了没人知道.
-            if (heartbeatToken == globalHeartbeatToken) {
+            if (heartbeatToken == atomic_load(&globalHeartbeatToken)) {
                 completionCalled = true;
                 completion(err->code, err->message);
             }

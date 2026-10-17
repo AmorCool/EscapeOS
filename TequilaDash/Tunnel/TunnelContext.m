@@ -16,6 +16,8 @@
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <string.h>
+// v0.3.636：建连改为多候选，候选来源之一是路由表枚举（C 垫片）。
+#import "EscRoutePeers.h"
 
 #define RPPPAIRING_PORT 49152
 #define DEFAULT_TUNNEL_IP @"10.7.0.1"
@@ -219,46 +221,137 @@
         return NO;
     }
 
-    struct sockaddr_in addr;
-    if (![self _fillSockaddr:&addr port:RPPPAIRING_PORT error:error]) {
+    // v0.3.636：**多候选尝试**。
+    //
+    // 原先只用 `_targetIP`（单个地址，通常写死 10.7.0.1）建隧道。而真机上
+    // LocalDevVPN 的对端**并不总是 10.7.0.1** —— 用户改过设置、或系统给的 utun
+    // 对端在别的网段时，单地址必然连不上。
+    //
+    // 诊断页与就绪判定早就在用多候选（LocalDevVPN.candidateTunnelPeers），
+    // 但**建连路径一直只用单值** —— 这是「预检说通、真连就断」的结构性原因。
+    //
+    // 现在按「上次成功 → 用户覆盖 → utun/路由表 → 10.7.0.1」逐个尝试，
+    // 第一个成功的即采用。
+    NSArray<NSString *> *candidates = [self _candidateTunnelPeers];
+    if (candidates.count == 0) {
         rp_pairing_file_free(pairingFile);
+        if (error) *error = [self _error:@"No tunnel peer candidates (LocalDevVPN may not be connected)." code:-19];
         return NO;
     }
-    NSLog(@"[TequilaDash] RPPairing tunnel target %@:%d", [self _targetIP], RPPPAIRING_PORT);
 
-    struct AdapterHandle *adapter = NULL;
-    struct RsdHandshakeHandle *handshake = NULL;
-    struct IdeviceFfiError *err = tunnel_create_rppairing(
-        (const idevice_sockaddr *)&addr,
-        (idevice_socklen_t)sizeof(addr),
-        "TequilaDash",
-        pairingFile,
-        NULL,
-        NULL,
-        &adapter,
-        &handshake
-    );
+    NSError *lastError = nil;
+    NSUInteger candidateIndex = 0;
+    for (NSString *peer in candidates) {
+        candidateIndex++;
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(RPPPAIRING_PORT);
+        if (inet_pton(AF_INET, peer.UTF8String, &addr.sin_addr) != 1) {
+            continue;   // 非法 IP 直接跳过（不静默连 0.0.0.0）
+        }
+        NSLog(@"[TequilaDash] RPPairing tunnel trying %@:%d (%lu/%lu)",
+              peer, RPPPAIRING_PORT,
+              (unsigned long)candidateIndex, (unsigned long)candidates.count);
+
+        struct AdapterHandle *adapter = NULL;
+        struct RsdHandshakeHandle *handshake = NULL;
+        struct IdeviceFfiError *err = tunnel_create_rppairing(
+            (const idevice_sockaddr *)&addr,
+            (idevice_socklen_t)sizeof(addr),
+            "TequilaDash",
+            pairingFile,
+            NULL,
+            NULL,
+            &adapter,
+            &handshake
+        );
+
+        if (err) {
+            lastError = [self _error:[NSString stringWithFormat:@"%s", err->message] code:err->code];
+            NSLog(@"[TequilaDash] RPPairing tunnel failed on %@: %s (code %d)",
+                  peer, err->message, err->code);
+            idevice_error_free(err);
+            if (handshake) rsd_handshake_free(handshake);
+            if (adapter) adapter_free(adapter);
+            continue;
+        }
+
+        if (!adapter || !handshake) {
+            if (handshake) rsd_handshake_free(handshake);
+            if (adapter) adapter_free(adapter);
+            lastError = [self _error:@"Tunnel was created without valid handles." code:-1];
+            continue;
+        }
+
+        // 成功：记住这个候选，后续建连优先用它
+        [self _rememberWorkingPeer:peer];
+        rp_pairing_file_free(pairingFile);
+        [self _freeTunnelHandles];
+        _adapter = adapter;
+        _handshake = handshake;
+        NSLog(@"[TequilaDash] RPPairing tunnel established on %@", peer);
+        return YES;
+    }
+
     rp_pairing_file_free(pairingFile);
+    if (error) {
+        *error = lastError ?: [self _error:@"All tunnel peer candidates failed." code:-1];
+    }
+    return NO;
+}
 
-    if (err) {
-        if (error) *error = [self _error:[NSString stringWithFormat:@"%s", err->message] code:err->code];
-        idevice_error_free(err);
-        if (handshake) rsd_handshake_free(handshake);
-        if (adapter) adapter_free(adapter);
-        return NO;
+/// 本次要依次尝试的候选对端（v0.3.636 新增）。
+///
+/// 顺序与 Swift 侧 `LocalDevVPN.candidateTunnelPeers()` 对齐：
+///   1. 上次成功的那个（若有）—— 命中率最高，放最前
+///   2. 用户显式覆盖 `TunnelDeviceIP`
+///   3. utun 点对点对端 + 路由表枚举（`esc_route_utun_peers`）
+///   4. 兜底 10.7.0.1
+///
+/// 去重后返回。拿不到路由表就只用前两级，不影响建连。
+- (NSArray<NSString *> *)_candidateTunnelPeers {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+
+    void (^add)(NSString *) = ^(NSString *ip) {
+        if (ip.length == 0) return;
+        struct in_addr probe;
+        if (inet_pton(AF_INET, ip.UTF8String, &probe) != 1) return;   // 非法 IP 不收
+        if ([seen containsObject:ip]) return;
+        [seen addObject:ip];
+        [out addObject:ip];
+    };
+
+    // 1. 上次成功的
+    NSString *lastGood = [[NSUserDefaults standardUserDefaults] stringForKey:@"TunnelLastGoodPeer"];
+    if (lastGood.length > 0) add(lastGood);
+
+    // 2. 用户覆盖
+    add([self _targetIP]);
+
+    // 3. utun 点对点对端 + 路由表（C 垫片，失败返回 NULL）
+    size_t peerCount = 0;
+    char *peers = esc_route_utun_peers(&peerCount);
+    if (peers) {
+        NSString *joined = [NSString stringWithUTF8String:peers];
+        esc_route_utun_peers_free(peers);
+        for (NSString *part in [joined componentsSeparatedByString:@","]) {
+            add([part stringByTrimmingCharactersInSet:
+                    [NSCharacterSet whitespaceAndNewlineCharacterSet]]);
+        }
     }
 
-    if (!adapter || !handshake) {
-        if (handshake) rsd_handshake_free(handshake);
-        if (adapter) adapter_free(adapter);
-        if (error) *error = [self _error:@"Tunnel was created without valid handles." code:-1];
-        return NO;
-    }
+    // 4. 兜底
+    add(DEFAULT_TUNNEL_IP);
 
-    [self _freeTunnelHandles];
-    _adapter = adapter;
-    _handshake = handshake;
-    return YES;
+    return out;
+}
+
+/// 记住建连成功的对端，下次优先用它。
+- (void)_rememberWorkingPeer:(NSString *)peer {
+    if (peer.length == 0) return;
+    [[NSUserDefaults standardUserDefaults] setObject:peer forKey:@"TunnelLastGoodPeer"];
 }
 
 - (BOOL)_createClassicTunnel:(NSError **)error {
