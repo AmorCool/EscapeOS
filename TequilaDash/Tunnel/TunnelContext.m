@@ -67,6 +67,22 @@
     return [NSFileManager.defaultManager fileExistsAtPath:self._pairingFileURL.path];
 }
 
+/// **只读**：已有可用句柄. 不建连、不改状态.
+- (BOOL)hasActiveTunnel {
+    [_handleLock lock];
+    BOOL up = [self _hasUsableHandlesLocked];
+    [_handleLock unlock];
+    return up;
+}
+
+/// **只读**：是否正在建连.
+- (BOOL)isConnecting {
+    os_unfair_lock_lock(&_tunnelLock);
+    BOOL connecting = _tunnelConnecting;
+    os_unfair_lock_unlock(&_tunnelLock);
+    return connecting;
+}
+
 - (BOOL)savePairingFile:(NSString *)contents error:(NSError **)error {
     BOOL looksLikePairing = [contents containsString:@"DeviceCertificate"]
         || ([contents containsString:@"identifier"] && [contents containsString:@"public_key"]);
@@ -310,6 +326,15 @@
     }
     dispatch_semaphore_t completionSem = _tunnelSemaphore;
     os_unfair_lock_unlock(&_tunnelLock);
+
+    if (!launch) {
+        // 已有建连在进行 ⇒ **立即返回**，不排队等。
+        // v0.3.620：旧实现这里会 wait 最多 35s，而主界面每 3 秒重试一次，
+        // 于是等待线程越堆越多 ⇒ 用户看到「一直卡在刷新中」。
+        // 调用方拿到 -8 后自己退避重试即可。
+        if (error) *error = [self _error:@"Tunnel is already connecting; retry shortly." code:-8];
+        return NO;
+    }
 
     if (launch) {
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{

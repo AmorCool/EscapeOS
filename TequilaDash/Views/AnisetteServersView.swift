@@ -210,17 +210,30 @@ struct AnisetteServersView: View {
                     .foregroundColor(.secondary)
             }
             engineRow
-            // 引擎就绪后仍要如实标明：本机 ADI 取数这一步本构建未接线，本次仍走远程服务器.
-            // 避免把「引擎已就绪」误读成「已在本机生成 headers」.
+            // v0.3.620：本机 ADI 取数**已接线**（v0.3.613 起），这里按真实状态显示.
+            // 旧文案「未接线（回退远程）」是 v0.3.613 之前的遗留，会让用户误以为功能没做.
+            // 真实判据：`hasAdiPb`（有配给票据才可能走本机）+ `readiness()`.
             if oda.hasEngineInstalled {
                 HStack {
                     Text("本机取数")
                     Spacer()
-                    Text("未接线（回退远程）")
-                        .foregroundColor(.secondary)
+                    Text(localFetchStatus)
+                        .foregroundColor(oda.readiness().isReady ? .secondary : .secondary)
                         .lineLimit(1)
                 }
             }
+        }
+    }
+
+    /// 本机取数的真实状态（不再是固定的「未接线」）.
+    private var localFetchStatus: String {
+        switch oda.readiness() {
+        case .off:
+            return "未开启"
+        case .notReady(let missing):
+            return "未就绪（缺 \(missing.joined(separator: "、"))）"
+        case .ready:
+            return oda.hasAdiPb ? "本机生成（不连服务器）" : "首次需联网配给后转本机"
         }
     }
 

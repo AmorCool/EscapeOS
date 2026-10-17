@@ -443,9 +443,20 @@ final class OnDeviceAnisetteManager: ObservableObject {
         return hasCore && hasStores
     }
 
-    /// 钥匙串里是否有合法的 16 字节 `identifier`（本机模式的设备身份）.
-    private static func hasDeviceIdentity() -> Bool {
+    /// 钥匙串里是否有 ADI 配给票据（`adiPb`）.
+    ///
+    /// 有 `adiPb` 才能真正走本机取数；没有时第一次仍需联网做一次配给
+    /// （Apple 的 `midStartProvisioning` / `midFinishProvisioning`），之后即可离线.
+    /// 供设置页显示「本机生成 / 首次需联网配给」用.
+    var hasAdiPb: Bool {
         let keychain = EscapeKeychain(service: "com.tequila.dash.memorylimit")
+        guard let text = keychain.string(for: "adiPb"),
+              let data = Data(base64Encoded: text) else { return false }
+        return !data.isEmpty
+    }
+
+    /// 钥匙串里是否有合法的 16 字节 `identifier`（本机模式的设备身份）.
+    private static func hasDeviceIdentity() -> Bool {        let keychain = EscapeKeychain(service: "com.tequila.dash.memorylimit")
         guard let text = keychain.string(for: "identifier"),
               let data = Data(base64Encoded: text) else { return false }
         return data.count == 16

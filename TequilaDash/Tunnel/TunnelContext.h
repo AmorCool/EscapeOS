@@ -26,6 +26,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// Whether a pairing file is present on disk.
 @property (nonatomic, readonly) BOOL hasPairingFile;
 
+/// **只读**：当前是否已有可用隧道句柄（RSD 或 lockdown 任一）.
+/// 诊断页用 —— **不建连、不改状态**（v0.3.620：诊断绝不能触发握手）.
+@property (nonatomic, readonly) BOOL hasActiveTunnel;
+
+/// **只读**：是否正在建连（诊断页用，避免显示成「未连接」误导）.
+@property (nonatomic, readonly) BOOL isConnecting;
+
 /// Save a user-imported pairing file (contents of a .mobiledevicepairing plist).
 - (BOOL)savePairingFile:(NSString *)contents error:(NSError **)error;
 

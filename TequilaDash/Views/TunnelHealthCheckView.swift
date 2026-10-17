@@ -31,9 +31,10 @@ final class TunnelHealthViewModel: ObservableObject {
         var utunPeerCount = 0
         var routePeerCount = 0
         var overridePeer: String?
-        /// 实际握手结果（不是 TCP 探测）—— 真正决定能不能用.
-        var handshakeOK = false
-        var handshakeError: String?
+        /// 已有可用隧道句柄（**只读**，不建连）.
+        var tunnelActive = false
+        /// 是否正在建连（只读）.
+        var tunnelConnecting = false
     }
 
     /// 一行诊断结果.
@@ -89,18 +90,15 @@ final class TunnelHealthViewModel: ObservableObject {
         s.pairingFileExists = TunnelContext.shared.hasPairingFile
         // 接口列表
         s.interfaces = LocalDevVPN.allInterfaces()
-        // 实际握手（只读：ensureHeartbeat 只在没有句柄时才真建连）
-        // ObjC 的 `NSError **` 出参在 Swift 侧导入为 **throws**，不能传 `error:`
-        // （与 AppDiscovery.swift:75 的 `try tunnel.ensureHeartbeat()` 同口径）.
-        if s.pairingFileExists {
-            do {
-                try TunnelContext.shared.ensureHeartbeat()
-                s.handshakeOK = true
-            } catch {
-                s.handshakeOK = false
-                s.handshakeError = error.localizedDescription
-            }
-        }
+        // 隧道句柄状态 —— **只读**，绝不在这里建连.
+        //
+        // v0.3.620 修正：v0.3.619 曾在这里调 `ensureHeartbeat()`，两个后果都是回归：
+        //   1) 诊断页「正在检查…」卡死 —— 建连最多阻塞 35s（RP 预算）；
+        //   2) 主界面「一直卡在刷新中」—— 建连期间 `_tunnelConnecting = YES`，
+        //      主 App 的隧道请求被 `_rejectIfConnectingWithError` 直接拒（-8）。
+        // ⇒ 诊断只读状态；握手交给真正的业务路径.
+        s.tunnelActive = TunnelContext.shared.hasActiveTunnel
+        s.tunnelConnecting = TunnelContext.shared.isConnecting
         return s
     }
 
@@ -127,16 +125,16 @@ final class TunnelHealthViewModel: ObservableObject {
             sourceText,
             (s.utunPeerCount + s.routePeerCount) > 0, optional: true))
         result.append(Row("配对文件", s.pairingFileExists ? "已导入" : "未导入", s.pairingFileExists))
-        // 真正决定能不能用的是握手，不是 TCP 探测.
-        if s.pairingFileExists {
-            let detail: String
-            if s.handshakeOK {
-                detail = "已连通"
-            } else {
-                detail = s.handshakeError ?? "未连通"
-            }
-            result.append(Row("实际握手（RPPairing / lockdown）", detail, s.handshakeOK))
+        // 隧道句柄状态（只读）：分清「没连过」「正在连」「已就绪」.
+        let tunnelDetail: String
+        if s.tunnelActive {
+            tunnelDetail = "已就绪（句柄可用）"
+        } else if s.tunnelConnecting {
+            tunnelDetail = "正在建连…"
+        } else {
+            tunnelDetail = "未建立（回主界面刷新一次才会建）"
         }
+        result.append(Row("隧道句柄", tunnelDetail, s.tunnelActive))
         result.append(Row("本机 Anisette", s.anisetteStatus, s.anisetteReady, optional: true))
         return result
     }
