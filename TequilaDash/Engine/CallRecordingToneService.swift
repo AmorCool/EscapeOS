@@ -82,6 +82,16 @@ enum CallRecordingToneService {
         case invalidToneBundle
         /// 写入后读回校验不一致（写入未生效）。
         case verificationFailed(String)
+        /// v0.3.646 新增：设备上已是静音、且没有任何备份 ⇒ 无法恢复。
+        ///
+        /// 这个错误必须**显式存在**：它代表「用户的原始提示音可能已永久丢失」，
+        /// 绝不能被「提前返回成功」掩盖。
+        /// v0.3.646 新增：回滚失败 ⇒ 设备状态未知。
+        ///
+        /// 用两个 String 而不是 Error：enum 声明为 Sendable，
+        /// 而关联值带 Error 会让 Sendable 合成失败。
+        case rollbackFailed(original: String, rollback: String)
+        case silentWithoutBackup
 
         var errorDescription: String? {
             switch self {
@@ -91,6 +101,14 @@ enum CallRecordingToneService {
                 return "bundle 内缺少等长静音素材."
             case .verificationFailed(let name):
                 return "写入 \(name) 后校验失败（写入未生效）."
+            case .rollbackFailed(let original, let rollback):
+                return "操作失败，且回滚也失败（设备上的提示音状态未知）."
+                    + "原因：\(original)；回滚失败：\(rollback)."
+                    + "请重新打开本页读取真实状态，不要重复操作."
+            case .silentWithoutBackup:
+                return "设备上的提示音已经是静音，且本机没有备份 —— 无法恢复原始提示音."
+                    + "这种情况发生在：禁用后删除/重装过 App，或备份被清理."
+                    + "可通过 iTunes/iOS 还原或重新刷机恢复系统默认提示音."
             }
         }
     }
@@ -129,17 +147,63 @@ enum CallRecordingToneService {
     static func disable() async throws {
         let current = try await readTones()
         let silent = try silentTones()
-        if current == silent {
+
+        // ⚠️⚠️ v0.3.646 修致命缺陷：**备份必须在任何「提前返回」之前建立**。
+        //
+        // 原实现是：
+        //     if current == silent {
+        //         UserDefaults.set(true, ...)   // ← 标记成「已禁用」
+        //         return                        // ← **但没建备份**
+        //     }
+        //     try ensureBackup(current)
+        //
+        // 于是只要设备上的提示音**已经是静音**（上一次禁用后没恢复、或用户自己换过、
+        // 或某个 iOS 版本默认就是静音），第一次点「禁用」就会走这条分支：
+        //   · 标记成「已禁用」→ 界面显示「已禁用（静音）」
+        //   · **备份从未创建** → 点「恢复」永远报「没有找到备份，无法恢复」
+        //   ⇒ 用户的原始提示音**永久丢失**，且 UI 看起来一切正常。
+        //
+        // 这正是用户报的「严重 bug」。
+        //
+        // 现在的策略：**无论如何先尝试备份**。ensureBackup 内部已经处理了
+        // 「当前内容 == 静音素材」的情况（它拒绝把静音当原始音备份，抛 noBackup），
+        // 所以我们把那次判定改成「警告但不阻断」—— 见下面的处理。
+        let alreadySilent = (current == silent)
+        do {
+            try ensureBackup(current)
+        } catch ToneError.noBackup {
+            // 当前已是静音且无既有备份 ⇒ 无法建立有意义的备份。
+            // 这时**不能**静默成功（那会让用户以为可恢复），必须如实告知。
+            if alreadySilent {
+                throw ToneError.silentWithoutBackup
+            }
+            throw ToneError.noBackup
+        }
+
+        if alreadySilent {
+            // 有备份、内容已是静音：只需补标记，无需重写（避免无谓写入）。
             UserDefaults.standard.set(true, forKey: disabledKey)
             return
         }
 
-        try ensureBackup(current)
         do {
             try await writeTones(silent)
             UserDefaults.standard.set(true, forKey: disabledKey)
         } catch {
-            try? await writeTones(current)
+            // v0.3.646：回滚失败时**必须如实告知**，不能静默吞掉。
+            //
+            // 原实现是 `try? await writeTones(current)` —— 回滚失败时错误被吞，
+            // 调用方只看到「写入失败」，于是界面回到「原始提示音」状态；
+            // 而设备上可能是**静音**（写成功一半）或**半新半旧**。
+            // ⇒ 用户以为没事，实际提示音状态与 App 显示完全相反。
+            //
+            // 现在：回滚失败时抛出带说明的错误，让用户知道「状态未知，请重新读状态」。
+            do {
+                try await writeTones(current)
+            } catch let rollbackError {
+                throw ToneError.rollbackFailed(original: "(error.localizedDescription)",
+                                             rollback: "(rollbackError.localizedDescription)")
+            }
             throw error
         }
     }
@@ -147,8 +211,29 @@ enum CallRecordingToneService {
     // MARK: - 恢复
 
     /// 从备份恢复原始提示音。
+    ///
+    /// v0.3.646：备份不存在时，**先分清「设备上是什么」再报错**。
+    ///
+    /// 原实现不管三七二十一抛 `noBackup`，文案是「请先执行一次禁用提示音以生成备份」。
+    /// 这句提示在「设备上已经是静音、但备份丢了」的场景下是**有害的**：
+    /// 用户照着做 → 再禁一次 → `disable()` 看到已是静音 → 补标记返回「成功」
+    /// ⇒ 用户以为恢复了，其实系统文件还是静音，而且**永远**拿不回来了。
+    ///
+    /// 现在：设备上是静音、无备份 ⇒ 抛 `silentWithoutBackup`（如实说「可能已永久丢失」）；
+    /// 设备上是原始音、无备份 ⇒ 抛 `noBackup`（确实是还没禁用过，建议合理）。
     static func restore() async throws {
-        guard let backup = try? readBackups() else { throw ToneError.noBackup }
+        let backup: [Data]
+        do {
+            backup = try readBackups()
+        } catch ToneError.noBackup {
+            let current = (try? await readTones()) ?? []
+            let silent = (try? silentTones()) ?? []
+            if !current.isEmpty, current == silent {
+                throw ToneError.silentWithoutBackup
+            }
+            throw ToneError.noBackup
+        }
+
         let current = try await readTones()
         if current == backup {
             UserDefaults.standard.set(false, forKey: disabledKey)
@@ -159,7 +244,13 @@ enum CallRecordingToneService {
             try await writeTones(backup)
             UserDefaults.standard.set(false, forKey: disabledKey)
         } catch {
-            try? await writeTones(current)
+            // v0.3.646：同上，回滚失败必须如实告知。
+            do {
+                try await writeTones(current)
+            } catch let rollbackError {
+                throw ToneError.rollbackFailed(original: "(error.localizedDescription)",
+                                             rollback: "(rollbackError.localizedDescription)")
+            }
             throw error
         }
     }
