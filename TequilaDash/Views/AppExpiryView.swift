@@ -81,13 +81,9 @@ struct AppExpiryView: View {
                     }
                 }
             } else if matchedEntries.isEmpty && unmatchedGroups.isEmpty {
-                Section {
-                    Text("没有找到描述文件.")
-                        .foregroundStyle(.secondary)
-                    Text("可通过右上角 + 导入 .mobileprovision 描述文件；设备侧载应用的描述文件会显示在这里.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                AppStateSection(state: .empty("没有找到描述文件",
+                                              message: "可通过右上角 + 导入 .mobileprovision 描述文件；设备侧载应用的描述文件会显示在这里.",
+                                              icon: "doc.badge.plus"))
             } else {
                 if !matchedEntries.isEmpty {
                     Section {

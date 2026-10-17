@@ -233,7 +233,9 @@ struct I4StoreFreeDetailView: View {
     private func versionSection(_ d: I4PCStoreClient.I4AppDetail) -> some View {
         Section {
             if d.versions.isEmpty {
-                Text("暂无历史版本").font(.subheadline).foregroundStyle(.secondary)
+                AppStateSection(state: .empty("暂无历史版本",
+                                              message: "该应用在爱思源里没有其它版本记录.",
+                                              icon: "clock.arrow.circlepath"))
             } else {
                 ForEach(visibleVersions) { v in
                     HStack(alignment: .center, spacing: 10) {

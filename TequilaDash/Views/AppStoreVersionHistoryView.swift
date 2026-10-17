@@ -95,11 +95,9 @@ struct AppStoreVersionHistoryView: View {
                         .foregroundStyle(.orange)
                 }
             } else if versions.isEmpty {
-                Section {
-                    Text("没有可读取的版本记录.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                AppStateSection(state: .empty("没有可读取的版本记录",
+                                              message: "换一个区服或稍后重试.",
+                                              icon: "clock.arrow.circlepath"))
             } else {
                 Section {
                     ForEach(Array(versions.enumerated()), id: \.element.id) { idx, v in

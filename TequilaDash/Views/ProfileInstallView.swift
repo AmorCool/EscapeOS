@@ -39,8 +39,9 @@ struct ProfileInstallView: View {
 
             Section {
                 if profiles.isEmpty {
-                    Text("暂无描述文件")
-                        .foregroundColor(.secondary)
+                    AppStateSection(state: .empty("暂无描述文件",
+                                                  message: "导入的描述文件会显示在这里.",
+                                                  icon: "doc.badge.plus"))
                 } else {
                     ForEach(profiles, id: \.self) { name in
                         HStack(spacing: 12) {
