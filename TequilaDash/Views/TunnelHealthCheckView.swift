@@ -35,6 +35,17 @@ final class TunnelHealthViewModel: ObservableObject {
         var tunnelActive = false
         /// 是否正在建连（只读）.
         var tunnelConnecting = false
+        /// 最近一次建连失败原因（只读，v0.3.639）.
+        ///
+        /// 这是全仓唯一记录真实失败原因的地方 —— 没有它，诊断页只能显示
+        /// 「不可达 / 未建立」这类现象，用户永远拿不到「为什么」。
+        var lastTunnelError: String?
+        /// 配对文件能否被 RPPairing 解析（只读，v0.3.639）.
+        ///
+        /// `pairingFileExists` 只查文件存在性 —— 损坏 / 格式不对的文件也会打绿勾。
+        var pairingFileParsable = false
+        /// 解析失败原因（`pairingFileParsable == false` 时非空）.
+        var pairingFileParseError: String?
     }
 
     /// 一行诊断结果.
@@ -88,6 +99,10 @@ final class TunnelHealthViewModel: ObservableObject {
         // Swift 侧导入为**属性**而非方法 —— 写 `shared()` 会报
         // 「cannot call value of non-function type 'TunnelContext'」.
         s.pairingFileExists = TunnelContext.shared.hasPairingFile
+        // v0.3.639：真解析一次（纯内存，不建连）。
+        // 原实现只查 fileExistsAtPath —— 损坏文件也打绿勾，是最误导人的盲区。
+        s.pairingFileParsable = TunnelContext.shared.isPairingFileParsable
+        s.pairingFileParseError = TunnelContext.shared.pairingFileParseError
         // 接口列表
         s.interfaces = LocalDevVPN.allInterfaces()
         // 隧道句柄状态 —— **只读**，绝不在这里建连.
@@ -99,6 +114,8 @@ final class TunnelHealthViewModel: ObservableObject {
         // ⇒ 诊断只读状态；握手交给真正的业务路径.
         s.tunnelActive = TunnelContext.shared.hasActiveTunnel
         s.tunnelConnecting = TunnelContext.shared.isConnecting
+        // 只读已有 ivar，不建连（与上面两行同款）。
+        s.lastTunnelError = TunnelContext.shared.lastTunnelError?.localizedDescription
         return s
     }
 
@@ -124,7 +141,17 @@ final class TunnelHealthViewModel: ObservableObject {
             "对端来源",
             sourceText,
             (s.utunPeerCount + s.routePeerCount) > 0, optional: true))
-        result.append(Row("配对文件", s.pairingFileExists ? "已导入" : "未导入", s.pairingFileExists))
+        // v0.3.639：把「文件在」与「能解析」分成两件事显示。
+        // 损坏 / 格式不对的文件，前者绿勾后者红叉 —— 这才是可定位的。
+        if s.pairingFileExists {
+            if s.pairingFileParsable {
+                result.append(Row("配对文件", "已导入（可解析）", true))
+            } else {
+                result.append(Row("配对文件", "文件存在但无法解析：\(s.pairingFileParseError ?? "未知原因")", false))
+            }
+        } else {
+            result.append(Row("配对文件", "未导入", false))
+        }
         // 隧道句柄状态（只读）：分清「没连过」「正在连」「已就绪」.
         let tunnelDetail: String
         if s.tunnelActive {
@@ -135,6 +162,12 @@ final class TunnelHealthViewModel: ObservableObject {
             tunnelDetail = "未建立（回主界面刷新一次才会建）"
         }
         result.append(Row("隧道句柄", tunnelDetail, s.tunnelActive))
+        // v0.3.639：把真实失败原因显示出来。
+        // 在此之前，诊断页只能显示现象（不可达 / 未建立），用户永远拿不到「为什么」——
+        // 这是「完全连不上但说不清原因」的直接成因。
+        if let lastError = s.lastTunnelError, !lastError.isEmpty {
+            result.append(Row("最近一次失败原因", lastError, false, optional: true))
+        }
         result.append(Row("本机 Anisette", s.anisetteStatus, s.anisetteReady, optional: true))
         return result
     }

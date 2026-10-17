@@ -85,6 +85,53 @@
     return connecting;
 }
 
+/// **只读**：配对文件能否被 RPPairing 解析（v0.3.639 新增）.
+///
+/// `hasPairingFile` 只查文件存在性；本属性做一次**纯内存解析**：
+/// 读文件 → `rp_pairing_file_read` → 立刻 free。
+/// 不建套接字、不碰隧道状态，符合「诊断只读」纪律。
+- (BOOL)isPairingFileParsable {
+    return [self _pairingParseProbe] == nil;
+}
+
+/// **只读**：配对文件解析失败原因.
+- (NSString *)pairingFileParseError {
+    return [self _pairingParseProbe];
+}
+
+/// 解析探针：成功返回 nil，失败返回原因描述.
+///
+/// 抽成私有方法是为了让上面两个属性共用同一次解析结果语义
+/// （诊断页会连着读两次）。
+- (NSString *)_pairingParseProbe {
+    NSString *path = self._pairingFileURL.path;
+    if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+        return @"配对文件不存在";
+    }
+    struct RpPairingFileHandle *pf = NULL;
+    struct IdeviceFfiError *err = rp_pairing_file_read(path.fileSystemRepresentation, &pf);
+    if (err) {
+        NSString *msg = [NSString stringWithFormat:@"%s (code %d)", err->message, err->code];
+        idevice_error_free(err);
+        if (pf) rp_pairing_file_free(pf);
+        return msg;
+    }
+    if (pf) rp_pairing_file_free(pf);
+    return nil;
+}
+
+/// **只读**：最近一次建连失败原因（v0.3.639 新增）.
+///
+/// 与 `isConnecting` 完全同款：只读已有 ivar、**不建连、不改状态**。
+/// 诊断页靠它把「为什么连不上」显示出来 —— 在此之前，
+/// 诊断页只能看到现象（不可达 / 未建立），永远拿不到真实原因。
+- (NSError *)lastTunnelError {
+    os_unfair_lock_lock(&_tunnelLock);
+    NSError *e = _lastTunnelError;
+    os_unfair_lock_unlock(&_tunnelLock);
+    return e;
+}
+
 - (BOOL)savePairingFile:(NSString *)contents error:(NSError **)error {
     BOOL looksLikePairing = [contents containsString:@"DeviceCertificate"]
         || ([contents containsString:@"identifier"] && [contents containsString:@"public_key"]);
