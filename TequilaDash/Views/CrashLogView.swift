@@ -45,8 +45,9 @@ struct CrashLogView: View {
                         Button("重试") { reload() }
                     }
                 } else if entries.isEmpty {
-                    Text("没有日志")
-                        .foregroundColor(.secondary)
+                    AppStateSection(state: .empty("没有日志",
+                                                  message: "设备上没有可读取的崩溃日志.",
+                                                  icon: "doc.text"))
                 } else {
                     ForEach(entries) { entry in
                         row(entry)

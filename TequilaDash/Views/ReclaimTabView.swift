@@ -155,9 +155,21 @@ struct ReclaimTabView: View {
                 Text(vm.progressText)
                     .foregroundColor(.secondary)
             }
+            // v0.3.642：修「渲染空字符串」。
+            //
+            // 原写法 `Text(searchText.isEmpty ? "" : "没有匹配 …")` —— 搜索词为空时
+            // 渲染**空字符串**，用户看到一行空白（既无内容也无提示）。
+            // 现在按两种情况分别给文案：有搜索词 → 提示换关键词；无搜索词 → 说明真的没有可清理项。
             if visible.isEmpty && !vm.isScanning {
-                Text(searchText.isEmpty ? "" : "没有匹配 “\(searchText)” 的应用.")
-                    .foregroundColor(.secondary)
+                if searchText.isEmpty {
+                    AppStateSection(state: .empty("没有可清理的应用",
+                                                  message: "扫描完成，当前没有可回收缓存的项.",
+                                                  icon: "checkmark.circle"))
+                } else {
+                    AppStateSection(state: .empty("没有匹配「\(searchText)」的应用",
+                                                  message: "换个关键词试试.",
+                                                  icon: "magnifyingglass"))
+                }
             }
             ForEach(visible) { row in
                 if selecting {

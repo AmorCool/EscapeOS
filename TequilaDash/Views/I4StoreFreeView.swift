@@ -393,9 +393,9 @@ struct I4StoreFreeView: View {
             }
         } else if source == .i4 {
             if searchResults.isEmpty {
-                Section {
-                    Text("没有找到匹配的应用").font(.subheadline).foregroundStyle(.secondary)
-                }
+                AppStateSection(state: .empty("没有找到匹配的应用",
+                                              message: "换个关键词试试.",
+                                              icon: "magnifyingglass"))
             } else {
                 Section("搜索结果 · \(searchResults.count) 款") {
                     ForEach(searchResults) { app in
@@ -405,9 +405,9 @@ struct I4StoreFreeView: View {
             }
         } else if source == .niuwa {
             if niuwaSearchResults.isEmpty {
-                Section {
-                    Text("没有找到匹配的应用").font(.subheadline).foregroundStyle(.secondary)
-                }
+                AppStateSection(state: .empty("没有找到匹配的应用",
+                                              message: "换个关键词试试.",
+                                              icon: "magnifyingglass"))
             } else {
                 Section("搜索结果 · \(niuwaSearchResults.count) 款") {
                     ForEach(niuwaSearchResults) { app in

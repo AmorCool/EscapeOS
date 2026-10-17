@@ -1034,9 +1034,9 @@ struct ProcessManagerView: View {
             } else {
                 Section {
                     if viewModel.sortedProcesses.isEmpty {
-                        Text("没有匹配的进程.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        AppStateSection(state: .empty("没有匹配的进程",
+                                                      message: "换个关键词试试.",
+                                                      icon: "magnifyingglass"))
                     } else {
                         ForEach(viewModel.sortedProcesses) { process in
                             ProcessRow(
