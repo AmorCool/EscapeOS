@@ -47,10 +47,19 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
     addr.sin_family = AF_INET;
     addr.sin_port = htons(LOCKDOWN_PORT);
 
-    // v0.3.614：改走同口径的三级解析（此前只读 TunnelDeviceIP、空了直接 10.7.0.1，
-    // 与 Swift 侧会自动推导 utun 对端不一致 ⇒ 预检通过但建隧道失败）。
+    // 目标 IP 解析：用户覆盖 → 10.7.0.1（两级，与 TunnelContext._targetIP 同口径）。
+    //
+    // v0.3.640 更正注释：这里原写「三级解析」，但 v0.3.615 已把 utun 自动推导回滚了，
+    // 现在实际只有两级 —— 注释停留在旧口径会误导后续维护。
     NSString* deviceIP = tequiladash_tunnel_target_ip();
-    inet_pton(AF_INET, [deviceIP UTF8String], &addr.sin_addr);
+    // v0.3.640：必须校验 inet_pton 返回值。
+    // 失败时 addr.sin_addr 保持全 0 ⇒ 会去连 0.0.0.0:62078（必然失败），
+    // 而错误只报「连不上」，看不出是 IP 非法。
+    if (inet_pton(AF_INET, [deviceIP UTF8String], &addr.sin_addr) != 1) {
+        completion(-1, "invalid TunnelDeviceIP");
+        idevice_pairing_file_free(pairing_file);
+        return;
+    }
     
     
     err = idevice_tcp_provider_new((struct sockaddr *)&addr, pairing_file,

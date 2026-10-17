@@ -1246,7 +1246,15 @@ enum FileSharingService {
         // 蜂窝隧道支持（默认关）：开关开 + 无 Wi-Fi 时先等本地隧道就绪；其余情况为 no-op.
         CellularTunnelManager.shared.prepareForTunnel()
         let deviceIP = LocalDevVPN.targetIP
-        let _ = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+        // v0.3.640：必须校验 inet_pton 返回值（与 AFCService / IPAInstallService 对齐）。
+        //
+        // 原实现 `let _ = ...` 丢弃返回值。`sockaddr_in()` 全 0 初始化，
+        // inet_pton 失败时不写入 sin_addr ⇒ 隧道去连 **0.0.0.0:49152**（必然失败），
+        // 而失败只报「建隧道失败（已重试 3 次）」，看不出是 IP 写错。
+        let parseResult = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+        guard parseResult == 1 else {
+            throw makeError("隧道 IP 无效：\(deviceIP)（请检查「设置 → 本地隧道」）")
+        }
 
         var lastError: NSError?
         for _ in 0..<3 {
