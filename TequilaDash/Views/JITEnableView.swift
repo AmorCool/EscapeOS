@@ -241,7 +241,7 @@ struct JITAppIconView: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * (8.0 / 36.0, style: .continuous)))
+        .clipShape(RoundedRectangle(cornerRadius: size * (8.0 / 36.0), style: .continuous))
         .task(id: bundleID) {
             guard icon == nil else { return }
             if let cached = JITAppIconLoader.shared.cached(for: bundleID) {
