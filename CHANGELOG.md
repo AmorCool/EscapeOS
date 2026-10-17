@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.3.621] - 2026-10-17
+
+> **一句话**：修隧道完全连不上（4 个 P0，其中 3 个是 v0.3.621 自己引入的回归）+ 补齐 20 个版本的 CHANGELOG 缺口。
+
+### 为什么现在发版
+
+上一版正式发布是 **v0.3.600**（2026-10-13）。此后 v0.3.601 ~ v0.3.620
+共 20 个版本**只在分支上、从未打 tag 发版** —— 这是本轮发版的主要动机。
+
+### P0 修复（隧道完全连不上）
+
+用户报障：「现在是 Wi-Fi 下也连不上 完全没法连接隧道」。
+
+7 个 agent 并行排查，定位到 4 个 P0，其中 **3 个是 v0.3.621 自己引入的回归**：
+
+- **心跳线程自杀**（`TunnelContext.m:326`）：`_createClassicTunnel` 成功路径调了
+  `_freeTunnelHandles`，而它内部 `globalHeartbeatToken++` ⇒ 刚建好的隧道的 token 被推高
+  ⇒ 心跳线程下一轮 marco 返回后判定「已过期」自杀。后果链：心跳退出 → 设备侧 62078
+  被回收 → 后续 FFI 全断 → 且失败回调被同一 token 判定挡掉（永不成立）⇒
+  用户看到「完全连不上、也没有原因」；而 `_hasUsableHandlesLocked` 只看 `_provider != NULL`
+  ⇒ `ensureHeartbeat` 不重建 ⇒ 闭环死锁，只能重启 App。
+
+- **心跳超时回调拆隧道**（`heartbeat.m:131`）：`now - lastHeartbeatDate > current_interval`
+  是本地计时判定，而 `current_interval = new_interval + 5`（设备给）。只要设备给的间隔
+  略小于实际握手耗时，判断**每轮都成立**。给它加回调 ⇒ 拆隧道 ⇒ 重建 ⇒ 再拆。
+
+- **`isWiFiSatisfied` 把 Wi-Fi 误判成蜂窝**（`CellularTunnelManager.swift:110`）：
+  每次新建 `NWPathMonitor`，0.5s 抢不到首帧就返回默认 `false` ⇒ `isCellularMode` 判成 true
+  ⇒ 再白等 `waitForTunnelReady(2.0)`。而 `prepareForTunnel()` 被 **27 个建隧道调用点**调用
+  （25 个丢弃返回值），这段阻塞直接从 35s 握手预算里扣。
+
+- **建连只用单一地址**（`TunnelContext.m:218`）：候选枚举（`candidateTunnelPeers`）早已写好，
+  但**只喂给诊断与就绪判定**，建连仍只连 `10.7.0.1`。真机对端不是 10.7.0.1 时必然连不上
+  —— 这就是「预检说通、真连就断」的结构性原因。
+
+### 其他修复
+
+- **`globalHeartbeatToken` 改成 `_Atomic int`**：跨线程读写非原子 int 是数据竞争（UB），
+  且编译器可能把 `while (1)` 里的值提到寄存器，导致「换隧道时旧 worker 退出」机制失效。
+- **`DeviceInfoService` 补 `inet_pton` 校验**：19 份 createTunnel 实现里唯一漏的一份，
+  非法 IP 时会静默连 `0.0.0.0:49152`。
+- **`probeTunnelReachable` 改用非阻塞 connect**：原实现用 `SO_SNDTIMEO` 当 connect 超时，
+  但 Darwin 上它不约束 `connect`，目标不可达时会卡到内核 TCP 超时（实测约 4m45s）。
+
+### 诊断页补两个盲区
+
+- **配对文件可解析性**：`hasPairingFile` 只查 `fileExistsAtPath`，损坏文件也打绿勾。
+  新增 `isPairingFileParsable`（纯内存解析，不建连），诊断页区分「已导入（可解析）」与
+  「文件存在但无法解析：<原因>」。
+- **真实失败原因**：`_lastTunnelError` 是全仓唯一记录真实原因的地方，但此前没有对外 getter。
+  新增 `lastTunnelError` 只读属性，诊断页新增「最近一次失败原因」一行。
+
+### 工程改进
+
+- `Resources/Scripts/normalize_eol.py` —— 提交前统一换行符。本仓源文件 EOL 不统一
+  （大部分 LF、少数 CRLF），编辑工具按工作区 EOL 重写整个文件会让 diff 显示几千行。
+- `Resources/Scripts/objc_syntax_check.sh` —— **推翻**旧结论「ObjC 本机查不了」：
+  系统 clang + iOS SDK 的 `-fsyntax-only` 可用（15 个文件全过，含负控）。
+- `Resources/Scripts/swift_version_sync_guard.py` —— 守版本号**三处**一致
+  （原纪律只写两处，漏了隧道扩展 target）。
+- `Resources/Scripts/promote_hash.sh` —— promote 复用判定的唯一真相源。
+  原判据只哈希 3 个路径，实测漏掉 7 类构建输入（含 Info.plist 版本号），
+  会导致「只改这些 + 打 tag」复用旧 IPA 发 Release。
+
+---
+
 ## [0.3.617] - 2026-10-16
 
 > **一句话**：修 v0.3.616 引入的编译错（ObjC 类属性被当成方法调用），并修诊断页两处会在 Swift 6 下出问题的写法。
