@@ -50,8 +50,37 @@ enum NBStoreClient {
         "http://nbtool8.com:9666",
     ]
 
-    /// 当前使用的基址（首个可用的）
-    static var host: String { hosts[0] }
+    /// 当前使用的基址。
+    ///
+    /// 原先是写死的 `hosts[0]`，注释却写「首个可用的」—— 但**没有任何探测逻辑**：
+    /// 首条不通时整个 NB 源不可用，且日志里看不出换过 host。
+    /// 现在改成「当前命中下标」，由 `noteHostFailure()` 在请求失败时推进，
+    /// `noteHostSuccess()` 在成功时锁定 —— 一次进程内不会反复在坏 host 上重试。
+    private static let hostLock = NSLock()
+    /// 上次成功的 host 下标 —— 下一次请求从它开始试。
+    private static var hostIndex = 0
+    static var host: String {
+        hostLock.withLock { hosts[min(hostIndex, hosts.count - 1)] }
+    }
+
+    /// 本次请求要依次尝试的 host 顺序：从上次成功的那个开始，绕一圈。
+    ///
+    /// 为什么用「顺序列表」而不是「失败就推进下标」：
+    /// 后者要靠下标回绕判断「试完了」，一旦成功又失败会重新绕，容易写成无限重试。
+    /// 顺序列表天然有限（长度 = hosts.count），调用方 for 循环走完即止。
+    private static func hostOrder() -> [String] {
+        hostLock.withLock {
+            let start = min(hostIndex, hosts.count - 1)
+            return Array(hosts[start...]) + Array(hosts[..<start])
+        }
+    }
+
+    /// 请求成功：把该 host 记为「上次成功」，后续请求优先用它。
+    private static func noteHostSuccess(_ ok: String) {
+        hostLock.withLock {
+            if let idx = hosts.firstIndex(of: ok) { hostIndex = idx }
+        }
+    }
 
     static let logTag = "[NB源]"
 
@@ -551,9 +580,7 @@ enum NBStoreClient {
                                 params: [String: Any],
                                 iPad: Bool? = nil) async throws -> [String: Any] {
         let isPad = iPad ?? (UIDevice.current.userInterfaceIdiom == .pad)
-        let url = path.isEmpty ? (host + "/nb/app") : (host + path)
-        guard let u = URL(string: url) else { throw StoreError.badURL }
-
+        // URL 在下面的 failover 循环里逐条构造（每个 host 一条），此处不再预先建。
         // v0.3.590：**不再等隧道**。udid 有缓存就用真值，没有就用占位，**永不阻塞这一发**。
         //
         // 依据（受控实验，本会话复现，见 `nb_search_udid_probe.py`）：
@@ -585,24 +612,38 @@ enum NBStoreClient {
             throw StoreError.crypto("请求体加密失败")
         }
 
-        var req = URLRequest(url: u)
-        req.httpMethod = "POST"
-        req.setValue("text/plain", forHTTPHeaderField: "Content-Type")
-        req.httpBody = Data(sealed.utf8)
-
-        LoginLogger.shared.log("\(logTag) → POST \(u) method=nb9527_\(method)", category: .appStore)
-
-        let data: Data
-        do {
-            let (d, resp) = try await session.data(for: req)
-            if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw StoreError.http(http.statusCode)
+        // host failover：`hosts` 里有 4 条备选，原实现固定用 hosts[0] ——
+        // 首条不通时整个 NB 源不可用，而注释写的是「首个可用的」，名不副实。
+        // 这里按 `hosts` 顺序逐条试：失败就换下一条，全部失败才抛最后一个错误。
+        var data: Data?
+        var lastError: Error?
+        let order = hostOrder()
+        for base in order {
+            guard let attemptURL = URL(string: path.isEmpty ? (base + "/nb/app") : (base + path)) else {
+                throw StoreError.badURL
             }
-            data = d
-        } catch let e as StoreError {
-            throw e
-        } catch {
-            throw StoreError.network(error.localizedDescription)
+            var req = URLRequest(url: attemptURL)
+            req.httpMethod = "POST"
+            req.setValue("text/plain", forHTTPHeaderField: "Content-Type")
+            req.httpBody = Data(sealed.utf8)
+
+            LoginLogger.shared.log("\(logTag) → POST \(attemptURL) method=nb9527_\(method)", category: .appStore)
+            do {
+                let (d, resp) = try await session.data(for: req)
+                if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    throw StoreError.http(http.statusCode)
+                }
+                data = d
+                noteHostSuccess(base)
+                break
+            } catch {
+                lastError = error
+                LoginLogger.shared.log("\(logTag) host \(base) 失败：\(error.localizedDescription)", category: .appStore)
+            }
+        }
+        guard let data else {
+            LoginLogger.shared.log("\(logTag) 全部 host 均失败（共 \(order.count) 条）：\(order.joined(separator: ", "))", category: .appStore)
+            throw lastError ?? StoreError.badURL
         }
 
         // 响应体是 gzip(base64(AES))；decrypt(responseBody:) 自行处理 gzip 外壳，
