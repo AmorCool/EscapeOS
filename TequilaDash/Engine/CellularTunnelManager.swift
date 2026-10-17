@@ -63,12 +63,41 @@ final class CellularTunnelManager: @unchecked Sendable {
     ///
     /// - Returns: 是否处于蜂窝模式且隧道已就绪（`false` = 未开开关 / 有 Wi-Fi / 轮询超时）.
     ///   未就绪时**不阻断**调用方：由后续 `ensureHeartbeat()` 如实报错（见 `AppDiscovery`）.
+    /// 建隧道**前**调用。
+    ///
+    /// v0.3.647 起重写，**照 SideStore `CellularRefreshManager.turnOffDataIfNeeded` 的完整时序**。
+    ///
+    /// 原实现只「等」不「关」（L67-72：直接 waitForTunnelReady），而蜂窝下回环 VPN
+    /// 被 iOS 系统级限制，不关蜂窝必然 `connect refused` ⇒ 蜂窝支持形同虚设。
+    /// 且 `turnOffDataIfNeeded()` 是恒返回 false 的死函数（L219-223），从没被调用过。
+    ///
+    /// SideStore 的正确时序（`CellularRefreshManager.swift` 逐行对照）：
+    ///   1. `guard !isWifiSatisfied` —— Wi-Fi 下**直接跳过**，不跑任何快捷指令
+    ///   2. 跑 `TurnOffData` 快捷指令
+    ///   3. 成功 ⇒ `didTurnOffData = true` + `sleep(baseDelay)`（等蜂窝真正断）
+    ///   4. `waitForMinimuxerReady(timeout: 2.0)`（每 200ms 探一次）
+    ///   5. **不承诺 radio 状态**：URL 被受理 ≠ 蜂窝已关，故返回值为「隧道是否就绪」
+    /// v0.3.647：**保持同步签名**（不变）。
+    ///
+    /// 虽然内部要跑 async 的关蜂窝动作，但这个函数被 **28 个建隧道调用点**使用，
+    /// 其中多数在同步上下文里。改成 async 会波及 28 个文件的调用链，风险远大于收益。
+    /// 故内部用 `DispatchSemaphore` 等 async 结果 —— 与 `isWiFiSatisfied` 同款手法。
+    ///
+    /// ⚠️ 这样会在蜂窝模式下阻塞调用线程最多 `readyTimeout + shortcutBaseDelay`。
+    /// 蜂窝本来就是「准备阶段多等一会」的场景，可接受；Wi-Fi 下第一道闸门就返回，零开销。
     @discardableResult
     func prepareForTunnel() -> Bool {
-        guard isCellularMode else { return false }
+        // 快速闸门：平台 / 开关 / Wi-Fi。三项任一不满足直接返回，**不阻塞**。
+        guard isSupported, isEnabled else { return false }
+        guard !Self.isWiFiSatisfied() else { return false }
 
-        // Do not open a different app from a synchronous tunnel primitive.
-        // A successful openURL is not proof that cellular data was changed.
+        // 关蜂窝（幂等：已关过就不重复跑）。同步等待 async 结果。
+        let turnedOff = Self.runSync { await self.turnOffDataIfNeeded() }
+        if !turnedOff {
+            // 没关成（快捷指令没装 / 没被受理）—— 不阻断，由后续 ensureHeartbeat 如实报错。
+            LogManager.shared.debug("[Cellular] 关蜂窝未执行，继续尝试建隧道")
+        }
+
         let ready = waitForTunnelReady(timeout: Self.readyTimeout)
         // 诊断：把「隧道到底在不在、候选对端是哪些、本机接口长什么样」如实打进日志.
         // 对齐 SideStore `DeviceConnectionManager.refresh()` 的那段多行 debugLog
@@ -124,6 +153,24 @@ final class CellularTunnelManager: @unchecked Sendable {
     /// 正确取向：**判不出来就当作 Wi-Fi 放行**。因为：
     ///   · 蜂窝分支的唯一作用是多等 2 秒（不改变连通性）；
     ///   · 误判成蜂窝的代价（27 处各卡 2.25s）远大于漏判（蜂窝下少等 2s，由后续探测兜底）。
+    /// 同步等待一个 async 闭包的结果。
+    ///
+    /// 用于「内部逻辑是 async、但对外必须保持同步签名」的场合
+    /// （典型就是 `prepareForTunnel`：28 个调用点全是同步上下文）。
+    ///
+    /// ⚠️ **不可重入**：闭包内不得再调用本函数。当前唯一用途是等
+    /// `turnOffDataIfNeeded()`（其内部只跑快捷指令 + sleep），安全。
+    private static func runSync(_ body: @escaping @MainActor () async -> Bool) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = BoolBox()
+        Task { @MainActor in
+            box.set(await body())
+            semaphore.signal()
+        }
+        // 上限 = 快捷指令等待 + 就绪轮询，避免极端情况下永久挂死。
+        _ = semaphore.wait(timeout: .now() + .seconds(Int(shortcutBaseDelay + readyTimeout + 2)))
+        return box.value
+    }
     static func isWiFiSatisfied(timeout: TimeInterval = 0.5) -> Bool {
         let monitor = NWPathMonitor()
         let queue = DispatchQueue(label: "com.tequila.dash.cellular-path")
@@ -214,12 +261,42 @@ final class CellularTunnelManager: @unchecked Sendable {
     /// 本轮照 SideStore 补回。
     ///
     /// 调用方需保证在主线程（`UIApplication.shared.open` 要求）.
+    /// 执行 `TurnOffData` 快捷指令（临时关掉蜂窝数据）—— 照 SideStore 同名函数实现。
+    ///
+    /// 四道闸门（与 SideStore `turnOffDataIfNeeded` 逐行对应）：
+    ///   1. `guard isSupported && isEnabled` —— 平台 / 开关
+    ///   2. `guard !didTurnOffData` —— 已关过就不重复跑（幂等）
+    ///   3. `guard !isWifiSatisfied` —— Wi-Fi 下跳过
+    ///   4. 只有 openURL 成功才置 `didTurnOffData = true` 并进入等待
+    ///
+    /// ⚠️ **不承诺 radio 状态**：`UIApplication.open` 返回 true 只代表系统受理了这个 URL，
+    /// 不代表蜂窝数据已关闭（这正是 v0.3.616 撤销「伪造路径」的原因）。
+    /// 所以这里的返回值语义是「是否执行了关闭动作」，调用方仍需靠 TCP 探测确认真实连通性。
     @MainActor
     @discardableResult
     func turnOffDataIfNeeded() async -> Bool {
-        // Legacy entry point retained while the actual embedded workflow is
-        // audited. Never claim a radio state change based on URL acceptance.
-        return false
+        guard isSupported && isEnabled else { return false }
+        guard !didTurnOffData else { return false }
+        // Wi-Fi 下不跑快捷指令（SideStore 同款闸门）。
+        guard !Self.isWiFiSatisfied() else {
+            LogManager.shared.debug("[Cellular] Wi-Fi 已连接，跳过关闭蜂窝快捷指令")
+            return false
+        }
+
+        let name = turnOffShortcutName
+        let url = Self.shortcutURL(for: name)
+        LoginLogger.shared.log("[Cellular] 执行关蜂窝快捷指令「\(name)」…", category: .general)
+        let ok = await UIApplication.shared.open(url)
+        guard ok else {
+            LoginLogger.shared.log("[Cellular] 关蜂窝快捷指令未被系统受理（URL: \(url.absoluteString)）",
+                                  category: .general)
+            return false
+        }
+
+        didTurnOffData = true
+        // 等蜂窝真正断掉：SideStore 用 `sleep(baseDelay)`（默认值见 AppConstants.Shortcuts）。
+        try? await Task.sleep(nanoseconds: UInt64(Self.shortcutBaseDelay * 1_000_000_000))
+        return true
     }
 
     /// 执行 `TurnOnData` 快捷指令（恢复蜂窝数据）. 用完即还，不留副作用.

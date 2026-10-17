@@ -65,8 +65,14 @@ final class AppDiscovery {
             throw AppDiscoveryError.noPairingFile
         }
 
-        // Cellular隧道支持（默认关）：开关开 + 当前无 Wi-Fi（蜂窝）时，建隧道前有界等隧道就绪，
-        // **不碰蜂窝开关**. 开关关 / 有 Wi-Fi 时是 no-op（`prepareForTunnel` 直接返回 false）。
+        // Cellular隧道支持（默认关）：开关开 + 当前无 Wi-Fi（蜂窝）时，建隧道前
+        // 先跑「关蜂窝」快捷指令、再有界等隧道就绪。开关关 / 有 Wi-Fi 时是 no-op。
+        //
+        // v0.3.647 更新注释：原写「**不碰蜂窝开关**」已过时 ——
+        // 蜂窝下回环 VPN 被 iOS 系统级限制，不关蜂窝必然 connect refused，
+        // 这正是用户长期反馈「蜂窝下连不上」的原因。现照 SideStore
+        // `CellularRefreshManager.turnOffDataIfNeeded` 补回关闭动作。
+        //
         // 返回值要用起来：蜂窝模式下它区分「等到了、但心跳仍失败」与「等待超时、根本没等到」——
         // 两者的下一步动作不同，不能都笼统报「隧道不可达」。
         let tunnelReady = CellularTunnelManager.shared.prepareForTunnel()
