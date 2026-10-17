@@ -267,7 +267,10 @@ struct MoreView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .appCard(padding: 0)
+                    // 硬规则 5：设置类列表用**全宽行 + 发丝分隔**，不套 16 圆角卡片。
+                    // 原先这里 .appCard(padding: 0) 把全宽行塞进了卡片，与规则冲突；
+                    // TreasureBoxView.swift:252-259 早已改成全宽，本处对齐它。
+                    // 行内自带 padding(.horizontal, 14)，分隔线用 AppHairline 全宽。
                 }
                 if let footer = section.footer {
                     Text(footer)
@@ -281,8 +284,12 @@ struct MoreView: View {
 
     /// 行分隔线：全宽发丝（`AppHairline`），左缩进对齐到图标底右侧
     /// （图标 30 + 间距 12 + 左内边距 14 = 56）.
+    /// 行底分隔线。
+    ///
+    /// 改成**全宽**（原先 padding(.leading, 56) 是给卡片内行用的缩进线）。
+    /// 规则 5 的全宽行语言里，分隔线应当整行贯通 —— 见 TreasureBoxView.swift:273-274 同款。
     private var rowDivider: some View {
-        AppHairline().padding(.leading, 56)
+        AppHairline()
     }
 }
 

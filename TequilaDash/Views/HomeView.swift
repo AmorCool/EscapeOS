@@ -262,7 +262,8 @@ struct HomeView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .appCard(padding: 0)
+            // 硬规则 5：全宽行不套 16 圆角卡片（与 TreasureBoxView.swift:252-259 同款）。
+            // 原先这里是 .appCard(padding: 0)，把全宽行塞进了卡片。
         }
     }
 
@@ -305,7 +306,8 @@ struct HomeView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .appCard(padding: 0)
+            // 硬规则 5：全宽行不套 16 圆角卡片（与 TreasureBoxView.swift:252-259 同款）。
+            // 原先这里是 .appCard(padding: 0)，把全宽行塞进了卡片。
         }
     }
 
