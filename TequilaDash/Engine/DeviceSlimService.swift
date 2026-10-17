@@ -729,6 +729,12 @@ enum DeviceSlimService {
         try AFCService.shared.batch { client in
             for (index, item) in targets.enumerated() {
                 progress?(index + 1, targets.count)
+                // 删除前先量一次：删完路径就没了，那时再量只会得到 0。
+                //
+                // 原实现删完又量了一次（`measure(...).bytes`），而 `measure` 在路径不存在时
+                // 返回 (0, 0) —— 于是 `max(0, before - after)` 变成 `max(0, before - 0)`。
+                // 当 before 也读失败（同样是 0）时，`freed` 恒为 0：
+                // 用户看到「已释放 0 字节」，但文件其实已经删掉了 —— 会以为功能失效并反复清理。
                 let before = measure(client: client, path: item.id).bytes
                 if let ffiError = item.id.withCString({ afc_remove_path_and_contents(client, $0) }) {
                     let message = ffiError.pointee.message.map { String(cString: $0) } ?? "rc=\(ffiError.pointee.code)"
@@ -736,8 +742,8 @@ enum DeviceSlimService {
                     result.failures.append("\(item.name)：\(message)")
                     continue
                 }
-                let after = measure(client: client, path: item.id).bytes
-                result.freed += max(0, before - after)
+                // 删成功即视为释放了 before 字节，不再二次测量（路径已不存在）。
+                result.freed += before
                 result.deleted += 1
             }
         }
