@@ -230,22 +230,15 @@ struct ReclaimTabView: View {
         }
     }
 
+    /// 应用行。v0.3.645 起改用公共组件 `AppRow`（原先手写，与另外 5 处重复）。
+    ///
+    /// 选中圈走 `selection`（未进入选择模式时传 nil，不显示），
+    /// 「可回收大小」胶囊走 `trailing`。
     private func rankRow(_ row: ReclaimAppRank, selected: Bool) -> some View {
-        HStack(spacing: 12) {
-            if selecting {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundColor(selected ? AppTheme.accent : .secondary)
-            }
-            AppIconView(icon: appList.icons[row.app.bundleIdentifier], size: 44)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(row.app.name)
-                    .font(.headline)
-                Text(row.subtitle)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            Spacer(minLength: 8)
+        AppRow(icon: appList.icons[row.app.bundleIdentifier],
+               title: row.app.name,
+               subtitle: row.subtitle,
+               selection: selecting ? selected : nil) {
             if !selecting, !row.failed, row.safeBytes > 0 {
                 SizePill(text: ReclaimService.formatBytes(row.safeBytes))
             }
