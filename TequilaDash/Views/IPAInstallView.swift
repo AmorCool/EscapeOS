@@ -172,9 +172,9 @@ struct IPAInstallView: View {
             // 已下载的 IPA
             Section {
                 if savedIPAs.isEmpty {
-                    Text("暂无已下载的 IPA.导入或下载的 IPA 会保存在这里.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    AppStateSection(state: .empty("暂无已下载的 IPA",
+                                                  message: "导入或下载的 IPA 会保存在这里.",
+                                                  icon: "shippingbox"))
                 } else {
                     ForEach(savedIPAs) { item in
                         HStack(spacing: 12) {

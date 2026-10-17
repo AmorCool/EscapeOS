@@ -140,14 +140,10 @@ struct LogConsoleView: View {
     /// 空状态：**只有图标 + 一句极短占位**。
     /// 3105 这里还有一行说明句，按 `CORE.md` 铁律 4 不搬（说明文字不放界面）。
     private var emptyState: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "apple.terminal")
-                .font(.system(size: 30, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text("暂无日志")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
+        // v0.3.644：改用统一空态组件（原先手写 VStack + 图标 + 文字）。
+        AppStateSection(state: .empty("暂无日志",
+                                      message: "当前没有可显示的日志输出.",
+                                      icon: "apple.terminal"))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(32)
     }
