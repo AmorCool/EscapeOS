@@ -287,7 +287,7 @@ struct PairingSetupView: View {
     /// past the sheet's lifecycle; the cleanup hook in `.onDisappear` makes
     /// sure the heartbeat + Bonjour publish are torn down deterministically.
     private var wirelessSheetContent: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 22) {
                 Spacer(minLength: 8)
                 if let error = wirelessError {

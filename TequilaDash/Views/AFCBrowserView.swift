@@ -159,7 +159,7 @@ struct AFCBrowserView: View {
     // MARK: - 移动目标选择
 
     private func moveSheet(source: AFCService.Entry) -> some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section {
                     if let parentPath {

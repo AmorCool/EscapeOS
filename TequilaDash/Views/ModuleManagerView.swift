@@ -73,7 +73,7 @@ struct ModuleManagerView: View {
             }
         }
         .sheet(isPresented: $showModuleSettings) {
-            NavigationView {
+            NavigationStack {
                 List {
                     // v0.3.164：已删除「覆盖安装后恢复内置模块」开关——内置模块
                     // 卸载后不会随任何覆盖安装自动回归；恢复走下方手动按钮.
@@ -234,7 +234,7 @@ struct ModuleManagerView: View {
                 let root = ModuleService.shared.webrootURL(for: m)
                 let remote = root == nil ? BinaryModuleRunner.shared.webURL(for: m) : nil
                 if let page = root?.appendingPathComponent("index.html") ?? remote {
-                    NavigationView {
+                    NavigationStack {
                         ModuleWebView(startPage: page, readAccessRoot: root)
                             .ignoresSafeArea(edges: .bottom)
                             .navigationTitle(m.name)
@@ -758,7 +758,7 @@ struct ModuleInstallSheet: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
                 ScrollViewReader { proxy in
                     // 官方为单段 Monospace bodySmall 文本 + 8dp padding，页面默认背景

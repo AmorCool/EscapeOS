@@ -17,7 +17,7 @@ struct LimitsDisclaimerView: View {
     var onAcknowledge: () -> Void
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 Text(ProductLimits.title)
                     .font(.title2).bold()

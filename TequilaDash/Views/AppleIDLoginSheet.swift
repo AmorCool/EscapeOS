@@ -18,7 +18,7 @@ struct AppleIDLoginSheet: View {
     @State private var showLog = false
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
                 Section(header: Text("Apple ID")) {
                     HStack {

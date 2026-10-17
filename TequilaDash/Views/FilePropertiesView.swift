@@ -18,7 +18,7 @@ struct FilePropertiesView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section {
                     Text(item.name)

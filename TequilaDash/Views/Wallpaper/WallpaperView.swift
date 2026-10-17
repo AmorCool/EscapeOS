@@ -653,7 +653,7 @@ private struct WallpaperExtractorSheet: View {
     private let sandbox = SandboxEscape()
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Group {
                 if isLoading {
                     ProgressView("正在扫描 PosterBoard…")

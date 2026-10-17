@@ -386,7 +386,7 @@ struct CustomRestoreSheet: View {
     @State private var searchText = ""
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Group {
                 if isLoading {
                     ProgressView("正在加载应用列表…")
@@ -560,7 +560,7 @@ struct RestoreView: View {
     @StateObject private var vm = RestoreViewModel()
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 20) {
                 switch vm.state {
                 case .confirm:

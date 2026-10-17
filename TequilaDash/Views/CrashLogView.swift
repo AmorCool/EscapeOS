@@ -120,7 +120,7 @@ struct CrashLogView: View {
             }
         }
         .sheet(item: $previewEntry) { entry in
-            NavigationView {
+            NavigationStack {
                 Group {
                     if previewLoading {
                         ProgressView("正在拉取日志…")

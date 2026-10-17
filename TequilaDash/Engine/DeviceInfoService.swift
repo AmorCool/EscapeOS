@@ -437,7 +437,20 @@ enum DeviceInfoService {
         }
         var pairingFile: OpaquePointer?
         if let e = pairingPath().withCString({ rp_pairing_file_read($0, &pairingFile) }) {
-            throw NSError(domain: "DeviceInfo", code: -2, userInfo: [NSLocalizedDescriptionKey: "读取配对文件失败"])
+            // v0.3.641：不再吞掉 FFI 错误对象。
+            //
+            // 原实现拿到 `e` 就丢：既不读 `e->message`、也不 `idevice_error_free(e)`。
+            // 后果有二：
+            //   1. 配对文件格式不对 / 损坏时，用户与日志都只看到「读取配对文件失败」六个字，
+            //      拿不到 Rust 侧的真实原因（是缺 DeviceCertificate？还是 plist 解析失败？）；
+            //   2. **每次失败泄漏一个 IdeviceFfiError**。
+            // 对照：AFCService.swift:42-49 与 IPAInstallService.swift:213-219 都会提取 message 并 free。
+            let message = e.pointee.message.map { String(cString: $0) } ?? ""
+            let code = Int(e.pointee.code)
+            idevice_error_free(e)
+            throw NSError(domain: "DeviceInfo", code: code == 0 ? -2 : code,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            message.isEmpty ? "读取配对文件失败" : "读取配对文件失败：\(message)"])
         }
         guard let pairingFile else { throw NSError(domain: "DeviceInfo", code: -3, userInfo: [NSLocalizedDescriptionKey: "配对文件解析失败"]) }
         defer { rp_pairing_file_free(pairingFile) }

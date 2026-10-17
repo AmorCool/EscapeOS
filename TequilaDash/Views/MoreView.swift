@@ -204,12 +204,12 @@ struct MoreView: View {
             }
         }
         .sheet(isPresented: $showDeviceControl) {
-            NavigationView {
+            NavigationStack {
                 DeviceControlView()
             }
         }
         .sheet(isPresented: $showSettings) {
-            NavigationView {
+            NavigationStack {
                 SettingsForm(onResetPairing: onResetPairing)
                     .navigationTitle("设置")
                     .navigationBarTitleDisplayMode(.inline)

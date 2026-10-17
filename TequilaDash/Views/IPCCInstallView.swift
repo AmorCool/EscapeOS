@@ -188,7 +188,7 @@ struct IPCCInstallView: View {
             Text("将向 CommCenter 发送终止信号，系统会自动拉起该服务，蜂窝网络会短暂断开后恢复.")
         }
         .sheet(item: $detailRecord) { record in
-            NavigationView {
+            NavigationStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 6) {
