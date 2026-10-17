@@ -48,21 +48,19 @@ struct JITEnableView: View {
                         PairingGuideCard(showsBackground: false, note: "启用 JIT 还需要：① LocalDevVPN 已连接；② 应用签名带 get-task-allow.")
                             .listRowInsets(EdgeInsets())
                     } else {
-                        Text("未找到可启用 JIT 的应用.")
-                            .foregroundStyle(.secondary)
-                        Text("只有签名带 get-task-allow（开发签名 / 证书直装）的应用才能启用 JIT；App Store 应用不适用.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        AppStateSection(state: .empty(
+                            "未找到可启用 JIT 的应用",
+                            message: "只有签名带 get-task-allow（开发签名 / 证书直装）的应用才能启用 JIT；App Store 应用不适用.",
+                            icon: "bolt.slash"))
                     }
                 }
             } else {
                 if !searchText.isEmpty && filteredApps.isEmpty {
                     Section {
-                        Text("没有匹配的应用.")
-                            .foregroundStyle(.secondary)
-                        Text("换个名称或 Bundle ID 试试.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        AppStateSection(state: .empty(
+                            "没有匹配的应用",
+                            message: "换个名称或 Bundle ID 试试.",
+                            icon: "magnifyingglass"))
                     }
                 } else {
                     if !recentApps.isEmpty && searchText.isEmpty {

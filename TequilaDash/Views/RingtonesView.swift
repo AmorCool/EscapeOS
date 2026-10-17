@@ -77,13 +77,10 @@ struct RingtonesView: View {
                             .foregroundColor(.secondary)
                     }
                 } else if ringtones.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("没有找到文件")
-                            .foregroundColor(.secondary)
-                        Text("已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根.点右上角导入音频（自动转 .m4r）.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    AppStateSection(state: .empty(
+                        "没有找到文件",
+                        message: "已扫描 iTunes_Control/Ringtones、PublicStaging、Downloads 与媒体根.点右上角导入音频（自动转 .m4r）.",
+                        icon: "bell"))
                 } else {
                     ForEach(ringtones) { entry in
                         row(entry)
