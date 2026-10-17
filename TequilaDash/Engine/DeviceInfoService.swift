@@ -448,7 +448,23 @@ enum DeviceInfoService {
         // 蜂窝隧道支持（默认关）：开关开 + 无 Wi-Fi 时先等本地隧道就绪；其余情况为 no-op.
         CellularTunnelManager.shared.prepareForTunnel()
         let deviceIP = LocalDevVPN.targetIP
-        let _ = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+        // v0.3.637：必须校验 inet_pton 返回值。
+        //
+        // 原实现是 `let _ = ...` 丢弃返回值。而 `sockaddr_in()` 全 0 初始化，
+        // inet_pton 失败时**不写入** sin_addr ⇒ 隧道会去连 **0.0.0.0:49152**
+        // （必然失败），而错误只报「创建隧道失败」，用户完全看不出是 IP 写错了。
+        //
+        // 触发入口：设置页「设备 IP」是自由文本，用户填 `10.7.0.1/32`、
+        // `10.7.0`、中文全角句点 `10.7.0。1` 等都会中招。
+        //
+        // 对照：AFCService.swift:81-84 与 IPAInstallService.swift:937-940 都有这个 guard，
+        // 唯独本文件漏了（19 份 createTunnel 实现里只有这一份）。
+        let parseResult = deviceIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+        guard parseResult == 1 else {
+            throw NSError(domain: "DeviceInfo", code: -7,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "隧道 IP 无效：\(deviceIP)（请检查「设置 → 本地隧道」）"])
+        }
 
         var lastError: NSError?
         for _ in 0..<3 {
