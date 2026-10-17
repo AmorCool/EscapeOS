@@ -58,7 +58,12 @@ enum NBStoreClient {
     /// `noteHostSuccess()` 在成功时锁定 —— 一次进程内不会反复在坏 host 上重试。
     private static let hostLock = NSLock()
     /// 上次成功的 host 下标 —— 下一次请求从它开始试。
-    private static var hostIndex = 0
+    ///
+    /// 必须标 `nonisolated(unsafe)`：Swift 6 严格并发把「非隔离的全局可变状态」判为错误
+    /// （CI 39037982862 实测报 `static property 'hostIndex' is not concurrency-safe`）。
+    /// 这里的安全性由 `hostLock` 保证 —— 所有读写都在 `hostLock.withLock { }` 内，
+    /// 这正是编译器提示里说的「accesses are protected by an external synchronization mechanism」。
+    private nonisolated(unsafe) static var hostIndex = 0
     static var host: String {
         hostLock.withLock { hosts[min(hostIndex, hosts.count - 1)] }
     }
