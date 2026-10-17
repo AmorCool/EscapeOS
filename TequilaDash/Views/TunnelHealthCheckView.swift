@@ -27,6 +27,13 @@ final class TunnelHealthViewModel: ObservableObject {
         var anisetteReady = false
         var anisetteStatus = ""
         var interfaces: [LocalDevVPN.InterfaceInfo] = []
+        /// 各来源枚举到的候选数（分清「没有 utun」还是「枚举方式没覆盖到」）.
+        var utunPeerCount = 0
+        var routePeerCount = 0
+        var overridePeer: String?
+        /// 实际握手结果（不是 TCP 探测）—— 真正决定能不能用.
+        var handshakeOK = false
+        var handshakeError: String?
     }
 
     /// 一行诊断结果.
@@ -70,6 +77,11 @@ final class TunnelHealthViewModel: ObservableObject {
         s.candidatePeers = LocalDevVPN.candidateTunnelPeers()
         s.targetReachable = LocalDevVPN.isReachable(ip: s.targetIP, timeout: 1.0)
         s.anyPeerReachable = LocalDevVPN.isAnyCandidateReachable(timeout: 0.5)
+        // 对端来源分布
+        let sources = LocalDevVPN.peerSourceReport()
+        s.utunPeerCount = sources.utunPeerCount
+        s.routePeerCount = sources.routeCount
+        s.overridePeer = sources.override
         // 配对文件
         // 注意：`TunnelContext.shared` 是 ObjC 类属性（`@property (class, readonly)`），
         // Swift 侧导入为**属性**而非方法 —— 写 `shared()` 会报
@@ -77,6 +89,18 @@ final class TunnelHealthViewModel: ObservableObject {
         s.pairingFileExists = TunnelContext.shared.hasPairingFile
         // 接口列表
         s.interfaces = LocalDevVPN.allInterfaces()
+        // 实际握手（只读：ensureHeartbeat 只在没有句柄时才真建连）
+        // ObjC 的 `NSError **` 出参在 Swift 侧导入为 **throws**，不能传 `error:`
+        // （与 AppDiscovery.swift:75 的 `try tunnel.ensureHeartbeat()` 同口径）.
+        if s.pairingFileExists {
+            do {
+                try TunnelContext.shared.ensureHeartbeat()
+                s.handshakeOK = true
+            } catch {
+                s.handshakeOK = false
+                s.handshakeError = error.localizedDescription
+            }
+        }
         return s
     }
 
@@ -96,7 +120,23 @@ final class TunnelHealthViewModel: ObservableObject {
                 s.anyPeerReachable ? "可达（\(s.candidatePeers.joined(separator: " / "))）" : "全部不可达",
                 s.anyPeerReachable, optional: true))
         }
+        // 对端来源：区分「没有 utun」与「枚举方式没覆盖到」—— 这是 2026-10-17 真机暴露的盲点.
+        let sourceText = "override=\(s.overridePeer ?? "无") / utun 对端=\(s.utunPeerCount) / 路由表=\(s.routePeerCount)"
+        result.append(Row(
+            "对端来源",
+            sourceText,
+            (s.utunPeerCount + s.routePeerCount) > 0, optional: true))
         result.append(Row("配对文件", s.pairingFileExists ? "已导入" : "未导入", s.pairingFileExists))
+        // 真正决定能不能用的是握手，不是 TCP 探测.
+        if s.pairingFileExists {
+            let detail: String
+            if s.handshakeOK {
+                detail = "已连通"
+            } else {
+                detail = s.handshakeError ?? "未连通"
+            }
+            result.append(Row("实际握手（RPPairing / lockdown）", detail, s.handshakeOK))
+        }
         result.append(Row("本机 Anisette", s.anisetteStatus, s.anisetteReady, optional: true))
         return result
     }
@@ -145,9 +185,16 @@ struct TunnelHealthCheckView: View {
                         Text("未枚举到接口").foregroundColor(.secondary)
                     } else {
                         ForEach(viewModel.snapshot.interfaces) { iface in
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
                                     Text(iface.name).fontWeight(.semibold)
+                                    if iface.isPointToPoint {
+                                        Text("P2P")
+                                            .font(.caption2).fontWeight(.medium)
+                                            .padding(.horizontal, 5).padding(.vertical, 1)
+                                            .background(AppTheme.accent.opacity(0.15), in: Capsule())
+                                            .foregroundColor(AppTheme.accent)
+                                    }
                                     Spacer()
                                     Text(iface.isIPv4 ? "IPv4" : "IPv6")
                                         .font(.caption).foregroundColor(.secondary)
@@ -155,6 +202,11 @@ struct TunnelHealthCheckView: View {
                                 Text(iface.address)
                                     .font(.system(.caption, design: .monospaced))
                                     .foregroundColor(.secondary)
+                                if let peer = iface.peer {
+                                    Text("对端 \(peer)")
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
                             }
                             .padding(.vertical, 2)
                         }

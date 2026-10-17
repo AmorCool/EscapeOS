@@ -150,16 +150,150 @@ enum LocalDevVPN {
     /// 对齐 SideStore：候选集合 ≈ `DeviceConnectionManager.resolveCandidatePeers`
     /// （route gateway → route destination → link-layer destination），
     /// 过滤规则 = `isValidCandidatePeer`；用户覆盖 ≈ `overridePeerIp`.
+    ///
+    /// v0.3.619：**补上路由表来源**.
+    ///
+    /// 真机证据（用户 2026-10-17 截图）：`utun 隧道接口 = 存在`，
+    /// 但「候选对端」只剩兜底 `10.7.0.1` —— 说明 `utunPeerIPv4Candidates()`（只读
+    /// `ifa_dstaddr`）**返回空**。而 minimuxer 的日志字段是
+    /// `linkLayerDestinationIP` / `destinationIPs` / `destinationGatewayIPs`，
+    /// 那三个都来自**路由表**，不是 `ifa_dstaddr`.
+    /// ⇒ 只读 `ifa_dstaddr` 是我自己收窄了来源；这里补齐路由表与链路层目的地.
     static func candidateTunnelPeers() -> [String] {
         var peers: [String] = []
         let stored = UserDefaults.standard.string(forKey: "TunnelDeviceIP")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let stored, !stored.isEmpty { peers.append(stored) }
         peers.append(contentsOf: utunPeerIPv4Candidates())
+        peers.append(contentsOf: routeTablePeers())
         peers.append("10.7.0.1")
 
         var seen = Set<String>()
         return peers.filter { isValidCandidatePeer($0) && seen.insert($0).inserted }
+    }
+
+    /// 各来源枚举到多少个候选（诊断页用：分清「没有 utun」还是「枚举方式没覆盖到」）.
+    struct PeerSourceReport: Sendable {
+        let override: String?
+        let utunPeerCount: Int
+        let routeCount: Int
+        let defaultFallback: String
+    }
+
+    static func peerSourceReport() -> PeerSourceReport {
+        let stored = UserDefaults.standard.string(forKey: "TunnelDeviceIP")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return PeerSourceReport(
+            override: (stored?.isEmpty == false) ? stored : nil,
+            utunPeerCount: utunPeerIPv4Candidates().count,
+            routeCount: routeTablePeers().count,
+            defaultFallback: "10.7.0.1")
+    }
+
+    /// 从**路由表**枚举指向 utun 的目的地址 / 网关（对齐 minimuxer 的
+    /// `destinationIPs` / `destinationGatewayIPs` / `linkLayerDestinationIP`）.
+    ///
+    /// 实现：`sysctl(CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_DUMP)` 拿整张 IPv4 路由表，
+    /// 逐条解析 `rt_msghdr` 后的 sockaddr 序列（按 `RTAX_*` 顺序，每条按 4 字节对齐）。
+    /// 只收「出口接口是 utun*」的路由，取它的 `RTAX_DST` 与 `RTAX_GATEWAY`；
+    /// 点对点链路的 `RTAX_GATEWAY` 常是 `sockaddr_dl`，其 `sll_addr` 尾部即对端 IPv4.
+    ///
+    /// 失败（sysctl 被拒 / 解析异常）时返回空数组 —— 不抛错、不影响既有来源.
+    static func routeTablePeers() -> [String] {
+        var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_DUMP, 0]
+        var needed = 0
+        guard sysctl(&mib, u_int(mib.count), nil, &needed, nil, 0) == 0, needed > 0 else { return [] }
+        var buffer = [UInt8](repeating: 0, count: needed)
+        guard sysctl(&mib, u_int(mib.count), &buffer, &needed, nil, 0) == 0 else { return [] }
+
+        var found: [String] = []
+        buffer.withUnsafeBufferPointer { raw in
+            guard let base = raw.baseAddress else { return }
+            let total = min(needed, buffer.count)
+            var offset = 0
+            while offset + MemoryLayout<rt_msghdr>.size <= total {
+                let header = UnsafeRawPointer(base + offset).assumingMemoryBound(to: rt_msghdr.self).pointee
+                let messageLength = Int(header.rtm_msglen)
+                guard messageLength > MemoryLayout<rt_msghdr>.size,
+                      offset + messageLength <= total else { break }
+
+                // 逐条 sockaddr：RTAX 顺序 DST(0) GATEWAY(1) NETMASK(2) GENMASK(3) IFP(4) IFA(5) ...
+                var cursor = offset + MemoryLayout<rt_msghdr>.size
+                let end = offset + messageLength
+                var index = 0
+                var interfaceName = ""
+                var destination: String?
+                var gateway: String?
+                while cursor < end, index < 8 {
+                    let sa = UnsafeRawPointer(base + cursor).assumingMemoryBound(to: sockaddr.self)
+                    let length = Int(sa.pointee.sa_len)
+                    guard length > 0 else { break }
+                    if header.rtm_addrs & Int32(1 << index) != 0 {
+                        switch index {
+                        case 0: // RTAX_DST
+                            if sa.pointee.sa_family == sa_family_t(AF_INET) { destination = numericIPv4(sa) }
+                        case 1: // RTAX_GATEWAY
+                            if sa.pointee.sa_family == sa_family_t(AF_INET) {
+                                gateway = numericIPv4(sa)
+                            } else if sa.pointee.sa_family == sa_family_t(AF_LINK) {
+                                // 点对点：sockaddr_dl 的链路层地址里内嵌对端 IPv4.
+                                gateway = linkLayerEmbeddedIPv4(sa, length: length)
+                            }
+                        case 4: // RTAX_IFP
+                            interfaceName = linkLayerName(sa, length: length)
+                        default:
+                            break
+                        }
+                    }
+                    // sockaddr 在路由消息里按 4 字节对齐（ROUNDUP）.
+                    let aligned = (length + 3) & ~3
+                    cursor += aligned > 0 ? aligned : 4
+                    index += 1
+                }
+
+                if interfaceName.hasPrefix("utun") {
+                    for candidate in [destination, gateway].compactMap({ $0 }) where isValidCandidatePeer(candidate) {
+                        found.append(candidate)
+                    }
+                }
+                offset += messageLength
+            }
+        }
+
+        var seen = Set<String>()
+        return found.filter { seen.insert($0).inserted }
+    }
+
+    /// `sockaddr_dl` 里内嵌的 IPv4（点对点链路的链路层目的地）.
+    private static func linkLayerEmbeddedIPv4(_ addr: UnsafePointer<sockaddr>, length: Int) -> String? {
+        guard length >= MemoryLayout<sockaddr_dl>.size else { return nil }
+        let dl = UnsafeRawPointer(addr).assumingMemoryBound(to: sockaddr_dl.self).pointee
+        let nameLength = Int(dl.sdl_nlen)
+        let addressLength = Int(dl.sdl_alen)
+        guard addressLength >= 4, nameLength + addressLength <= 20 else { return nil }
+        // sdl_data 尾部 4 字节即对端地址（sdl_data 是柔性数组，按 offset 取）.
+        let dataStart = MemoryLayout<sockaddr_dl>.offset(of: \sockaddr_dl.sdl_data) ?? 8
+        let base = UnsafeRawPointer(addr)
+        let bytes = (0..<4).map { base.load(fromByteOffset: dataStart + nameLength + $0, as: UInt8.self) }
+        guard bytes.contains(where: { $0 != 0 }) else { return nil }
+        return "\(bytes[0]).\(bytes[1]).\(bytes[2]).\(bytes[3])"
+    }
+
+    /// `sockaddr_dl` 的接口名.
+    private static func linkLayerName(_ addr: UnsafePointer<sockaddr>, length: Int) -> String {
+        guard length >= MemoryLayout<sockaddr_dl>.size else { return "" }
+        let dl = UnsafeRawPointer(addr).assumingMemoryBound(to: sockaddr_dl.self).pointee
+        let nameLength = Int(dl.sdl_nlen)
+        guard nameLength > 0, nameLength <= 20 else { return "" }
+        let dataStart = MemoryLayout<sockaddr_dl>.offset(of: \sockaddr_dl.sdl_data) ?? 8
+        let base = UnsafeRawPointer(addr)
+        var name = ""
+        for i in 0..<nameLength {
+            let byte = base.load(fromByteOffset: dataStart + i, as: UInt8.self)
+            if byte == 0 { break }
+            name.append(Character(UnicodeScalar(byte)))
+        }
+        return name
     }
 
     /// 候选地址合法性 —— 对齐 SideStore `isValidCandidatePeer`：
@@ -282,15 +416,23 @@ enum LocalDevVPN {
         let name: String
         let family: Int32
         let address: String
-        var id: String { "\(name)|\(family)|\(address)" }
+        /// 点对点对端（`ifa_dstaddr`，仅 `IFF_POINTOPOINT` 接口有意义）.
+        var peer: String? = nil
+        /// 是否点对点接口（utun 这类 VPN 隧道）.
+        var isPointToPoint: Bool = false
+        var id: String { "\(name)|\(family)|\(address)|\(peer ?? "")" }
         /// 是否 IPv4（`AF_INET`）—— 供视图显示用，避免视图层再 import Darwin.
         var isIPv4: Bool { family == AF_INET }
+        /// 是否 utun 隧道接口.
+        var isUtun: Bool { name.hasPrefix("utun") }
     }
 
     /// 枚举本机接口地址（IPv4 与 IPv6 都收，带接口名与地址族）.
     /// 旧实现只看 `AF_INET` ⇒ LocalDevVPN 的 utun 若只给 IPv6 就会整条漏掉；
     /// 这里两个地址族都收，且**不过滤接口名**（utun / en0 / pdp_ip0 一视同仁）.
     /// v0.3.616：`private` → 供 TunnelHealthCheckView 诊断页使用.
+    /// v0.3.619：补 `peer`（`ifa_dstaddr`）与 `isPointToPoint` —— 诊断页要能直接看到
+    /// utun 的对端到底解析出来没有（真机截图显示候选只有兜底 10.7.0.1，说明枚举返回空）.
     static func allInterfaces() -> [InterfaceInfo] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
@@ -311,9 +453,31 @@ enum LocalDevVPN {
                 : socklen_t(MemoryLayout<sockaddr_in6>.size)
             guard getnameinfo(sockAddr, nameLen, &host, socklen_t(host.count),
                               nil, 0, NI_NUMERICHOST) == 0 else { continue }
-            results.append(InterfaceInfo(name: name, family: family, address: String(cString: host)))
+
+            let p2p = interface.ifa_flags & UInt32(IFF_POINTOPOINT) != 0
+            var peer: String? = nil
+            if p2p, let dst = interface.ifa_dstaddr, dst.pointee.sa_family == sa_family_t(family) {
+                peer = numericIPv4(dst) ?? numericIPv6(dst)
+            }
+            results.append(InterfaceInfo(
+                name: name, family: family, address: String(cString: host),
+                peer: peer, isPointToPoint: p2p))
         }
-        return results
+        // utun 排最前：诊断时第一眼就要看到隧道接口的真实地址与对端.
+        return results.sorted { lhs, rhs in
+            if lhs.isUtun != rhs.isUtun { return lhs.isUtun }
+            if lhs.name != rhs.name { return lhs.name < rhs.name }
+            return lhs.family < rhs.family
+        }
+    }
+
+    /// IPv6 的数值串（`numericIPv4` 只处理 AF_INET）.
+    private static func numericIPv6(_ addr: UnsafePointer<sockaddr>) -> String? {
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(addr, socklen_t(MemoryLayout<sockaddr_in6>.size),
+                          &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
+        let value = String(cString: host)
+        return value.isEmpty ? nil : value
     }
 }
 

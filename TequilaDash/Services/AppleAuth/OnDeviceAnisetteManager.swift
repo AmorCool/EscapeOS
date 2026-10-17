@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Security   // SecRandomCopyBytes / kSecRandomDefault / errSecSuccess（自动生成 identifier 用）
 
 /// 本机 Anisette（On-Device Anisette，ODA）模式管理器.
 ///
@@ -392,12 +393,45 @@ final class OnDeviceAnisetteManager: ObservableObject {
 
     /// 探测本机模式是否就绪. 判据全部是**可验证的实据**（文件存在性 / 钥匙串内容），
     /// 不是占位返回.
+    ///
+    /// v0.3.619：开关打开但缺 `identifier` 时**主动生成**.
+    ///
+    /// 真机证据（2026-10-17 诊断页）：开关已开、引擎已装，但显示
+    /// 「未就绪（缺 设备身份 identifier）」—— 因为 `identifier` 只在
+    /// `AnisetteProvider.fetchClientInfo()` 里首次登录时才生成，
+    /// 用户没走过登录流程就永远是「未就绪」，看起来像坏了.
+    /// 而 identifier 只是 16 字节随机数（**不需要 Apple 参与**），
+    /// 所以这里直接生成并写 keychain，让「开关一开就就绪」成立.
     func readiness() -> Readiness {
         guard isEnabled else { return .off }
         var missing: [String] = []
         if !Self.hasEngineLibraries() { missing.append("ADI 引擎库") }
-        if !Self.hasDeviceIdentity() { missing.append("设备身份 identifier") }
+        if !Self.hasDeviceIdentity() {
+            if Self.ensureDeviceIdentity() {
+                LoginLogger.shared.log("[本机Anisette] 已自动生成设备身份 identifier（16 字节）", category: .appleID)
+            } else {
+                missing.append("设备身份 identifier")
+            }
+        }
         return missing.isEmpty ? .ready : .notReady(missing: missing)
+    }
+
+    /// 确保 keychain 里有合法的 16 字节 `identifier`；缺则生成.
+    /// 与 `AnisetteProvider.fetchClientInfo()` 的生成口径一致（16 随机字节 → base64 存 keychain）.
+    @discardableResult
+    private static func ensureDeviceIdentity() -> Bool {
+        let keychain = EscapeKeychain(service: "com.tequila.dash.memorylimit")
+        if let text = keychain.string(for: "identifier"),
+           let data = Data(base64Encoded: text), data.count == 16 {
+            return true
+        }
+        keychain.delete("identifier")
+        var bytes = [UInt8](repeating: 0, count: 16)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            return false
+        }
+        keychain.set(Data(bytes).base64EncodedString(), for: "identifier")
+        return true
     }
 
     /// 引擎库目录里是否同时存在 `libCoreADI` 与 `libstoreservicescore`（任意扩展名）.
