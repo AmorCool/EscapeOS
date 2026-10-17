@@ -238,7 +238,18 @@ enum DDIMountProbe {
         var lastError: NSError?
         for attempt in 0..<3 {
             var candidate = TunnelHandles()
-            let ffiError = "TequilaDashDevice".withCString { hn in
+            // v0.3.643：改用**独立** hostname。
+            //
+            // 原值与 DeviceControlService 共用 `"TequilaDashDevice"`，违反本仓自己的
+            // RSD 隧道铁律（AFCService.swift:19-20）：
+            //   「同一 hostname 并发 tunnel_create_rppairing 会互相抢占」。
+            //
+            // DDIMountProbe 跑在 AFCService 的串行队列上（:90 runExclusively），
+            // 但 DeviceControlService **没有任何串行队列** —— 两者并发时同 hostname 会抢占，
+            // 表现为其中一方 ServiceNotFound / 建连失败，且没有闸门保护。
+            //
+            // 改成独立值后两条路径互不干扰。
+            let ffiError = "TequilaDashDDIProbe".withCString { hn in
                 withUnsafePointer(to: &addr) { pointer in
                     pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                         tunnel_create_rppairing(

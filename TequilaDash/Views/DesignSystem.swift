@@ -786,13 +786,21 @@ struct AppSettingsRow: View {
     /// 行底是否附全宽发丝分隔.
     var showsSeparator: Bool = true
     var action: (() -> Void)? = nil
+    /// 图标着色（v0.3.643 新增）.
+    ///
+    /// 原实现**恒用 `AppTheme.accent`**，注释还专门写了「TRApp 设置行即单色图标」。
+    /// 但实际调用点里存在需要语义着色的场景（如「危险操作」行该用 danger、
+    /// 「已完成」行该用 success），硬编码 accent 会让这些行与语义脱节。
+    ///
+    /// 默认值仍是 accent —— **向后兼容**，现有调用点行为不变。
+    var iconTint: Color = AppTheme.accent
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: AppSpacing.titleToSubtitle) {
                 Image(systemName: icon)
                     .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(AppTheme.accent)
+                    .foregroundStyle(iconTint)
                     .frame(width: 28, alignment: .center)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
