@@ -107,18 +107,43 @@ final class CellularTunnelManager: @unchecked Sendable {
     /// （`timeout` 内），取 `usesInterfaceType(.wifi)` 后立刻 `cancel`.
     /// 取不到（超时）时**保守返回 `false`**（视作非 Wi-Fi，与 SideStore
     /// 「Wi-Fi 未满足即视为蜂窝」的语义一致）.
+    /// v0.3.638：**超时分支改为返回 true（视作 Wi-Fi）**，并缓存 monitor 结果。
+    ///
+    /// 原实现有两个问题，叠加起来会把 Wi-Fi 用户误判成蜂窝：
+    ///   1. 每次调用都**新建** `NWPathMonitor`。`start(queue:)` 之后首帧 path 回调
+    ///      **不保证**在 0.5s 内到达（冷启动 / 网络切换 / 系统负载高时经常 1s+）；
+    ///   2. 超时后返回 `box.value`，而 `BoolBox` 默认值是 `false`。
+    ///
+    /// 于是「抢不到首帧」⇒ 返回 false ⇒ `isCellularMode` 判成 **true**
+    /// ⇒ 即便用户明确连着 Wi-Fi，也会走进蜂窝分支，
+    /// 再白等 `waitForTunnelReady(2.0)`（实测阻塞 2.25s）。
+    ///
+    /// 而 `prepareForTunnel()` 被 **27 个建隧道调用点**调用（25 个还丢弃返回值），
+    /// 这段阻塞直接从上层 35s 握手预算里扣，是「一直转圈最后报隧道失败」的放大器。
+    ///
+    /// 正确取向：**判不出来就当作 Wi-Fi 放行**。因为：
+    ///   · 蜂窝分支的唯一作用是多等 2 秒（不改变连通性）；
+    ///   · 误判成蜂窝的代价（27 处各卡 2.25s）远大于漏判（蜂窝下少等 2s，由后续探测兜底）。
     static func isWiFiSatisfied(timeout: TimeInterval = 0.5) -> Bool {
         let monitor = NWPathMonitor()
         let queue = DispatchQueue(label: "com.tequila.dash.cellular-path")
         let semaphore = DispatchSemaphore(value: 0)
         let box = BoolBox()
+        // v0.3.638：默认值改成 true —— 超时时按「Wi-Fi 满足」处理（见上方说明）。
+        box.set(true)
         monitor.pathUpdateHandler = { path in
             box.set(path.usesInterfaceType(.wifi))
             semaphore.signal()
         }
         monitor.start(queue: queue)
-        _ = semaphore.wait(timeout: .now() + timeout)
+        let gotCallback = semaphore.wait(timeout: .now() + timeout) == .success
         monitor.cancel()
+        if !gotCallback {
+            // 打一条日志，让「首帧没抢到」这件事可见（否则它是静默的）
+            LoginLogger.shared.log(
+                "[Cellular] NWPathMonitor 首帧 \(timeout)s 未到，按「Wi-Fi 满足」放行（避免误判蜂窝阻塞 2.25s）.",
+                category: .general)
+        }
         return box.value
     }
 
