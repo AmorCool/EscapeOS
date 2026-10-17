@@ -194,7 +194,8 @@ struct AnisetteServersView: View {
 
     private var onDeviceSection: some View {
         Section(header: Text("本机 Anisette"),
-                footer: Text("本机 Anisette 在本机跑 ADI 模拟，不依赖 Anisette header 服务器，也不依赖设备配对文件.打开开关会自动从元数据地址下载并校验引擎；本机 ADI 取数尚未接线，就绪前后都会显式回退远程服务器.")) {
+                footer: Text("本机 Anisette 在本机跑 ADI 模拟，不依赖 Anisette header 服务器，也不依赖设备配对文件."
+    + "打开开关会自动从元数据地址下载并校验引擎；首次登录时会联网做一次配给，之后即可本机生成.")) {
             Toggle("本机 Anisette", isOn: $oda.isEnabled)
             HStack {
                 Text("就绪状态")
@@ -218,7 +219,11 @@ struct AnisetteServersView: View {
                     Text("本机取数")
                     Spacer()
                     Text(localFetchStatus)
-                        .foregroundColor(oda.readiness().isReady ? .secondary : .secondary)
+                        // v0.3.648：原写法 `.foregroundColor(isReady ? .secondary : .secondary)`
+                        // 两个分支完全相同 —— 写了等于没写。这里改成真正有信息量的区分：
+                        // 能本机生成（有 adiPb）用次字色，还在等首次配给用更弱的第三字色，
+                        // 让用户一眼看出「现在是不是已经能本机取数」。
+                        .foregroundColor(oda.hasAdiPb ? Color.secondary : Color(UIColor.tertiaryLabel))
                         .lineLimit(1)
                 }
             }
@@ -233,7 +238,11 @@ struct AnisetteServersView: View {
         case .notReady(let missing):
             return "未就绪（缺 \(missing.joined(separator: "、"))）"
         case .ready:
-            return oda.hasAdiPb ? "本机生成（不连服务器）" : "首次需联网配给后转本机"
+            // v0.3.648：原文案「首次需联网配给后转本机」有歧义——
+            // 用户读到的是「功能还没做完」。真实情况是：本机取数**已接线**，
+            // 只是 Apple ID 的配给票据（adiPb）还没生成；
+            // 走一次登录流程就会自动联网配给，拿不到票据不是因为缺功能。
+            return oda.hasAdiPb ? "本机生成（不连服务器）" : "待首次登录后启用"
         }
     }
 
