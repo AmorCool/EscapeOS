@@ -44,6 +44,9 @@ int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 // 只读 CoreDeviceProxy 探针的 C 垫片（同一先例：整条 FFI 链关在 C 层，Swift 侧只拿文本）
 #include "../Tunnel/EscCDProbe.h"
 
+// 路由表 → utun 对端（`rt_msghdr` 不在 Swift Clang Importer 可见范围，必须走 C 垫片）
+#include "../Tunnel/EscRoutePeers.h"
+
 #include "../Services/MachOLoader/uloader.h"
 
 // 崩溃探针：把硬故障（SIGSEGV/BUS/ILL/FPE）的 信号/地址/PC 写入 fd 后重抛

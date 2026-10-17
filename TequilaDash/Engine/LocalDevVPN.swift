@@ -193,107 +193,21 @@ enum LocalDevVPN {
     /// 从**路由表**枚举指向 utun 的目的地址 / 网关（对齐 minimuxer 的
     /// `destinationIPs` / `destinationGatewayIPs` / `linkLayerDestinationIP`）.
     ///
-    /// 实现：`sysctl(CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_DUMP)` 拿整张 IPv4 路由表，
-    /// 逐条解析 `rt_msghdr` 后的 sockaddr 序列（按 `RTAX_*` 顺序，每条按 4 字节对齐）。
-    /// 只收「出口接口是 utun*」的路由，取它的 `RTAX_DST` 与 `RTAX_GATEWAY`；
-    /// 点对点链路的 `RTAX_GATEWAY` 常是 `sockaddr_dl`，其 `sll_addr` 尾部即对端 IPv4.
+    /// 实现走 **C 垫片** `EscRoutePeers.c`：`rt_msghdr` / `sockaddr_dl` / `RTAX_*`
+    /// 定义在 `<net/route.h>`，**不在 Swift Clang Importer 的可见范围**
+    /// （CI 实测：`error: cannot find type 'rt_msghdr' in scope`）。
+    /// 与本仓 `EscBrowseApps.c` / `EscDDIProbe.c` 同款：解析全在 C 层，Swift 只拿字符串。
     ///
-    /// 失败（sysctl 被拒 / 解析异常）时返回空数组 —— 不抛错、不影响既有来源.
+    /// 失败（sysctl 被拒 / 无 utun 路由）时返回空数组 —— 不抛错、不影响既有来源.
     static func routeTablePeers() -> [String] {
-        var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_DUMP, 0]
-        var needed = 0
-        guard sysctl(&mib, u_int(mib.count), nil, &needed, nil, 0) == 0, needed > 0 else { return [] }
-        var buffer = [UInt8](repeating: 0, count: needed)
-        guard sysctl(&mib, u_int(mib.count), &buffer, &needed, nil, 0) == 0 else { return [] }
-
-        var found: [String] = []
-        buffer.withUnsafeBufferPointer { raw in
-            guard let base = raw.baseAddress else { return }
-            let total = min(needed, buffer.count)
-            var offset = 0
-            while offset + MemoryLayout<rt_msghdr>.size <= total {
-                let header = UnsafeRawPointer(base + offset).assumingMemoryBound(to: rt_msghdr.self).pointee
-                let messageLength = Int(header.rtm_msglen)
-                guard messageLength > MemoryLayout<rt_msghdr>.size,
-                      offset + messageLength <= total else { break }
-
-                // 逐条 sockaddr：RTAX 顺序 DST(0) GATEWAY(1) NETMASK(2) GENMASK(3) IFP(4) IFA(5) ...
-                var cursor = offset + MemoryLayout<rt_msghdr>.size
-                let end = offset + messageLength
-                var index = 0
-                var interfaceName = ""
-                var destination: String?
-                var gateway: String?
-                while cursor < end, index < 8 {
-                    let sa = UnsafeRawPointer(base + cursor).assumingMemoryBound(to: sockaddr.self)
-                    let length = Int(sa.pointee.sa_len)
-                    guard length > 0 else { break }
-                    if header.rtm_addrs & Int32(1 << index) != 0 {
-                        switch index {
-                        case 0: // RTAX_DST
-                            if sa.pointee.sa_family == sa_family_t(AF_INET) { destination = numericIPv4(sa) }
-                        case 1: // RTAX_GATEWAY
-                            if sa.pointee.sa_family == sa_family_t(AF_INET) {
-                                gateway = numericIPv4(sa)
-                            } else if sa.pointee.sa_family == sa_family_t(AF_LINK) {
-                                // 点对点：sockaddr_dl 的链路层地址里内嵌对端 IPv4.
-                                gateway = linkLayerEmbeddedIPv4(sa, length: length)
-                            }
-                        case 4: // RTAX_IFP
-                            interfaceName = linkLayerName(sa, length: length)
-                        default:
-                            break
-                        }
-                    }
-                    // sockaddr 在路由消息里按 4 字节对齐（ROUNDUP）.
-                    let aligned = (length + 3) & ~3
-                    cursor += aligned > 0 ? aligned : 4
-                    index += 1
-                }
-
-                if interfaceName.hasPrefix("utun") {
-                    for candidate in [destination, gateway].compactMap({ $0 }) where isValidCandidatePeer(candidate) {
-                        found.append(candidate)
-                    }
-                }
-                offset += messageLength
-            }
-        }
-
-        var seen = Set<String>()
-        return found.filter { seen.insert($0).inserted }
-    }
-
-    /// `sockaddr_dl` 里内嵌的 IPv4（点对点链路的链路层目的地）.
-    private static func linkLayerEmbeddedIPv4(_ addr: UnsafePointer<sockaddr>, length: Int) -> String? {
-        guard length >= MemoryLayout<sockaddr_dl>.size else { return nil }
-        let dl = UnsafeRawPointer(addr).assumingMemoryBound(to: sockaddr_dl.self).pointee
-        let nameLength = Int(dl.sdl_nlen)
-        let addressLength = Int(dl.sdl_alen)
-        guard addressLength >= 4, nameLength + addressLength <= 20 else { return nil }
-        // sdl_data 尾部 4 字节即对端地址（sdl_data 是柔性数组，按 offset 取）.
-        let dataStart = MemoryLayout<sockaddr_dl>.offset(of: \sockaddr_dl.sdl_data) ?? 8
-        let base = UnsafeRawPointer(addr)
-        let bytes = (0..<4).map { base.load(fromByteOffset: dataStart + nameLength + $0, as: UInt8.self) }
-        guard bytes.contains(where: { $0 != 0 }) else { return nil }
-        return "\(bytes[0]).\(bytes[1]).\(bytes[2]).\(bytes[3])"
-    }
-
-    /// `sockaddr_dl` 的接口名.
-    private static func linkLayerName(_ addr: UnsafePointer<sockaddr>, length: Int) -> String {
-        guard length >= MemoryLayout<sockaddr_dl>.size else { return "" }
-        let dl = UnsafeRawPointer(addr).assumingMemoryBound(to: sockaddr_dl.self).pointee
-        let nameLength = Int(dl.sdl_nlen)
-        guard nameLength > 0, nameLength <= 20 else { return "" }
-        let dataStart = MemoryLayout<sockaddr_dl>.offset(of: \sockaddr_dl.sdl_data) ?? 8
-        let base = UnsafeRawPointer(addr)
-        var name = ""
-        for i in 0..<nameLength {
-            let byte = base.load(fromByteOffset: dataStart + i, as: UInt8.self)
-            if byte == 0 { break }
-            name.append(Character(UnicodeScalar(byte)))
-        }
-        return name
+        var count: Int = 0
+        guard let raw = esc_route_utun_peers(&count) else { return [] }
+        defer { esc_route_utun_peers_free(raw) }
+        let text = String(cString: raw)
+        return text
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { isValidCandidatePeer($0) }
     }
 
     /// 候选地址合法性 —— 对齐 SideStore `isValidCandidatePeer`：
