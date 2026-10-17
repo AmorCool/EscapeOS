@@ -315,15 +315,34 @@
         return NO;
     }
 
-    // 换隧道时必须停掉旧心跳线程：旧 worker 唯一的退出信号是 globalHeartbeatToken.
-    // 原先这里手写了一遍释放而漏掉 token++，导致每建一次 lockdown 隧道就多一条
-    // 永不退出的心跳线程（对照 _freeTunnelHandles 的正确实现）。
-    // 这里复用 _freeTunnelHandles —— 调用方本就在 _handleLock 内，递归锁允许嵌套。
+    // ⚠️⚠️ 这里**不能**调 `_freeTunnelHandles`（v0.3.635 修复 v0.3.621 引入的致命回归）。
+    //
+    // `globalHeartbeatToken` 承担了**两个互斥语义**：
+    //   A. 「有更新的心跳 worker 启动了吗」—— 只应由 startHeartbeat 侧的 `++globalHeartbeatToken` 推进；
+    //   B. 「句柄要释放，让旧 worker 退出」—— 由 _freeTunnelHandles 自增。
+    //
+    // 我 v0.3.621 把这里从「手写释放」改成复用 `_freeTunnelHandles`，本意是补上漏掉的
+    // token++（避免旧心跳线程永不退出）。**但调用时机错了**：
+    // 此时 `startHeartbeat` 已经成功、`provider` 已就绪，token 是 N；
+    // 调 `_freeTunnelHandles` 会把它推到 N+1 ⇒ 下一轮 marco 返回后
+    // heartbeat.m:107 的 `heartbeatToken != globalHeartbeatToken` 命中 ⇒ **刚建好的心跳线程自杀**。
+    //
+    // 后果链：
+    //   心跳线程退出 → 设备侧 62078 连接被对端回收 → 后续 FFI 全部断连；
+    //   且 heartbeat.m:97/121/135 的失败回调也被同一个 token 判定挡掉（永不成立）
+    //   ⇒ `_lastTunnelError` 拿不到真实原因 ⇒ 用户看到「完全连不上、也没有原因」；
+    //   而 `_hasUsableHandlesLocked` 只看 `_provider != NULL`，心跳死了它仍返回 YES
+    //   ⇒ `ensureHeartbeat` 直接 return YES **不重建** ⇒ 闭环死锁，只能重启 App。
+    //
+    // 正确做法：这里只释放**旧**句柄，**不动 token**。
+    // 「停掉旧心跳线程」已由本函数入口处的 `int token = ++globalHeartbeatToken;` 完成。
     if (_provider == provider) {
-        // 同一句柄重入：既不能释放它，也不能停掉正在服务它的心跳。
+        // 同一句柄重入：既不释放，也不停心跳。
         return YES;
     }
-    [self _freeTunnelHandles];
+    if (_handshake) { rsd_handshake_free(_handshake); _handshake = NULL; }
+    if (_adapter) { adapter_free(_adapter); _adapter = NULL; }
+    if (_provider && _provider != provider) { idevice_provider_free(_provider); }
     _provider = provider;
     return YES;
 }

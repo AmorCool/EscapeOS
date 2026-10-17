@@ -128,14 +128,28 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
             return;
         }
         
+        // ⚠️ 这个分支**不能回调 completion**（v0.3.635 修复 v0.3.621 引入的回归）。
+        //
+        // 为什么：
+        //   · completion 回调在 TunnelContext 里会走 `_providerDiedWithToken`，
+        //     而那里会 `_freeTunnelHandles` —— **把 provider 释放掉**。
+        //   · 而本分支的触发条件是 `now - lastHeartbeatDate > current_interval`，
+        //     `current_interval = new_interval + 5`，`new_interval` 由设备给。
+        //     只要设备给的间隔略小于实际握手耗时，这个判断**每轮都会成立**。
+        //   · 结果：隧道建好 → 心跳走一轮 → 判超时 → 回调 → 拆隧道 → 重建 → 再拆……
+        //     用户看到的就是「完全没法连接隧道」。
+        //
+        // 这个分支原本（v0.3.620 及之前）只 `return` 退出线程、**不通知任何人**，
+        // 所以是安全的 —— 隧道句柄仍在，下次业务请求会照常用。
+        // 我 v0.3.621 为了「心跳死了要让人知道」给它加了回调，反而把
+        // 「一次心跳异常」放大成了「隧道被拆」。
+        //
+        // 正确的做法（如果将来要补「心跳死亡通知」）：
+        //   只在 **marco/polo 真失败**（:91 / :118）时通知，因为那才是连接真断了；
+        //   而本分支是**本地计时判定**，不代表连接已断，不该触发拆隧道。
         if (lastHeartbeatDate && [[NSDate now] timeIntervalSinceDate:lastHeartbeatDate] > current_interval) {
             lastHeartbeatDate = nil;
             // 超时退出同样要释放心跳客户端（原先直接 return 泄漏了 client）.
-            // 同时必须回调：否则调用方只能干等 firstBeat 的 30s 超时，拿不到真实原因.
-            if (heartbeatToken == globalHeartbeatToken) {
-                completionCalled = true;
-                completion(-1, "heartbeat timeout");
-            }
             heartbeat_client_free(client);
             return;
         }

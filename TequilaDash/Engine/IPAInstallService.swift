@@ -898,21 +898,34 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
 
     /// 用带超时的 socket `connect` 探测 `addr`（RPPairing 端口）是否可达.
     /// 与 `LocalDevVPN.isTunnelReachable` 同款实现，地址取本函数已构造好的 `sockaddr_in`.
+    /// 隧道端口可达性预检.
+    ///
+    /// ⚠️ v0.3.635：**必须用非阻塞 connect + poll + SO_ERROR**，不能用 SO_SNDTIMEO。
+    ///
+    /// 原实现设了 `SO_SNDTIMEO` / `SO_RCVTIMEO` 就以为「3 秒超时」，但 Darwin 上
+    /// 这两个选项**只约束 send/recv，不约束 connect**。而这个 socket 是阻塞的，
+    /// 于是目标不可达时会一直等到内核 TCP 建连超时 ——
+    /// IPAInstallService.swift:891-896 的注释自己记着实测 **约 4m45s**（os error 60）。
+    ///
+    /// 而本函数是建连的**硬闸门**（见下方 `guard probeTunnelReachable`）：
+    /// 返回 false 就直接 throw、连重试机会都没有。
+    /// 所以「预检卡 4 分钟 + 最终抛不可达」= 用户看到的「完全没法连接隧道」。
+    ///
+    /// 同一份仓库里 `LocalDevVPN.isReachable` 早就写对了（非阻塞 + poll + SO_ERROR），
+    /// 且它的注释（LocalDevVPN.swift:89-91）明确写了「SO_SNDTIMEO 不约束 connect」。
+    /// 这里直接复用它，不再维护第二份实现。
     private func probeTunnelReachable(_ addr: inout sockaddr_in) -> Bool {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { close(fd) }
-
-        var tv = timeval(tv_sec: Int(Self.tunnelProbeTimeoutSeconds), tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.stride))
-
-        let result = withUnsafePointer(to: &addr) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.stride))
+        var ipBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        let ip = withUnsafePointer(to: &addr.sin_addr) { sinAddr in
+            sinAddr.withMemoryRebound(to: in_addr.self, capacity: 1) { ptr in
+                inet_ntop(AF_INET, ptr, &ipBuffer, socklen_t(INET_ADDRSTRLEN))
             }
         }
-        return result == 0
+        guard let ip else { return false }
+        let host = String(cString: ip)
+        return LocalDevVPN.isReachable(ip: host,
+                                     timeout: Self.tunnelProbeTimeoutSeconds,
+                                     port: UInt16(bigEndian: addr.sin_port))
     }
 
     private func createTunnel() throws -> TunnelHandles {
