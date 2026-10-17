@@ -166,7 +166,8 @@ struct AppDetailView: View {
                         }
                     }
                     if appBackups.unreadableCount > 0 {
-                        Label("另有 \(appBackups.unreadableCount) 个归档无法读取", systemImage: "exclamationmark.triangle")
+                        // 硬规则 1：不用黄色感叹号。改用 info.circle（语义一致）。
+                        Label("另有 \(appBackups.unreadableCount) 个归档无法读取", systemImage: "info.circle")
                             .font(.caption2)
                             .foregroundColor(.orange)
                     }

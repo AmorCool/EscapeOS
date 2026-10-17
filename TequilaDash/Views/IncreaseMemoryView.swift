@@ -103,7 +103,8 @@ struct IncreaseMemoryView: View {
                 // v0.2.120：`.idle` 曾与 `.loading` 渲染成同一个转圈，
                 // "没发起请求"被误认为"正在加载".现在明确区分.
                 HStack {
-                    Image(systemName: "exclamationmark.circle").foregroundColor(.orange)
+                    // 硬规则 1：不用黄色感叹号。原为 exclamationmark.circle + .orange。
+                    Image(systemName: "info.circle").foregroundStyle(AppTheme.pending)
                     Text("尚未加载团队")
                         .foregroundColor(.secondary)
                     Spacer()

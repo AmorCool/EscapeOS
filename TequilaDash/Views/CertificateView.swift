@@ -251,7 +251,9 @@ struct CertificateView: View {
                 // 导致"压根没发起请求"被误认为"正在加载"，用户永远等不到结果.
                 // 现在 `.idle` 明确显示未加载 + 给一个「加载」按钮.
                 HStack {
-                    Image(systemName: "exclamationmark.circle").foregroundColor(.orange)
+                    // 硬规则 1：不用黄色感叹号。原为 exclamationmark.circle + .orange，
+                    // 改为 info.circle + AppTheme.pending（语义相同，形态合规，且取色明暗自适应）。
+                    Image(systemName: "info.circle").foregroundStyle(AppTheme.pending)
                     Text("尚未加载团队")
                         .foregroundColor(.secondary)
                     Spacer()
