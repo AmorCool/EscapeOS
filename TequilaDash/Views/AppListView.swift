@@ -655,34 +655,34 @@ struct AppListView: View {
 
     private enum RowMode { case normal, select(isSelected: Bool) }
 
+    /// 应用行。v0.3.634 起改用公共组件 `AppRow`（原先手写在 6 个页面各一份）。
+    /// 系统标记 / 类型徽章走 `badge`，选中圈走 `selection`。
     private func appRow(_ app: InstalledApp, mode: RowMode) -> some View {
-        HStack(spacing: 12) {
-            if case let .select(checked) = mode {
-                Image(systemName: checked ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(checked ? .accentColor : .secondary)
+        let selection: Bool? = {
+            if case let .select(checked) = mode { return checked }
+            return nil
+        }()
+        let badge: AnyView? = {
+            if app.isSystem {
+                return AnyView(
+                    Text("系统")
+                        .font(AppFont.captionEmphasis)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                )
             }
-            AppIconView(icon: viewModel.icons[app.bundleIdentifier])
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(app.name).font(.body)
-                    if app.isSystem {
-                        Text("系统")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(Color(.tertiarySystemFill), in: Capsule())
-                    } else if let type = viewModel.appTypes[app.bundleIdentifier] {
-                        AppTypeBadge(type: type, compact: true)
-                    }
-                }
-                Text(app.bundleIdentifier)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            if let type = viewModel.appTypes[app.bundleIdentifier] {
+                return AnyView(AppTypeBadge(type: type, compact: true))
             }
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
+            return nil
+        }()
+        return AppRow(icon: viewModel.icons[app.bundleIdentifier],
+                      title: app.name,
+                      subtitle: app.bundleIdentifier,
+                      badge: badge,
+                      selection: selection)
     }
 
     private var emptyListMessage: String {

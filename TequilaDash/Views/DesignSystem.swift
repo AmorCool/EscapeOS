@@ -525,6 +525,79 @@ struct InfoActionCard: View {
     }
 }
 
+/// 应用行（v0.3.634 新增）.
+///
+/// ## 为什么要有它
+/// 「应用图标 + 名称 + 标识符 + 类型徽章」这个组合全仓有 **6 份独立实现**（审计实证）：
+///   · \`AppListView.swift:658-686\` —— 带选中圈 + 系统标记 + 类型徽章
+///   · \`ReclaimTabView.swift:228\` —— 44pt 图标 + 占用大小
+///   · \`ReclaimAppView.swift:92\` —— 56pt 图标 + 详情式布局
+///   · \`BackupsListView.swift:251/491\` —— 44pt / 40pt 两种
+///   · \`ImportedListPage.swift:207\` / \`RepairedListPage.swift:180\` —— 已开始复制粘贴
+///   · \`SignSourceAppListView.swift\` —— 源应用列表
+///
+/// 其中「图标回退」逻辑已经在 \`BackupsListView.swift:151-152\` 与 AppListView 里各写一遍：
+/// \`\`\`swift
+/// let rowIcon = record.metadata.iconData.flatMap { UIImage(data: $0) }
+///     ?? appList.icons[record.metadata.bundleIdentifier]
+/// \`\`\`
+///
+/// ## 设计
+/// 只抽**最通用的形态**（图标 + 标题 + 副标题 + 可选尾部件），不把每个调用方的业务字段塞进来。
+/// 各页面要显示「占用大小」「备份时间」这类，走 \`trailing\` 闭包。
+///
+/// 尺寸默认 44（AppListView 用的是默认 40 的 AppIconView，这里统一到 AppMetrics.heroIconSize 的一半）。
+struct AppRow<Trailing: View>: View {
+    let icon: UIImage?
+    let title: String
+    var subtitle: String? = nil
+    /// 标题右侧的徽章（如「系统」/ 类型胶囊）。
+    var badge: AnyView? = nil
+    /// 选中圈（可选，用于多选列表）。
+    var selection: Bool? = nil
+    /// 行尾内容（占用大小、按钮等）。
+    @ViewBuilder var trailing: () -> Trailing
+    /// 图标边长。
+    var iconSize: CGFloat = 44
+
+    var body: some View {
+        HStack(spacing: AppSpacing.row) {
+            if let selection {
+                Image(systemName: selection ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selection ? AppTheme.accent : AppTheme.unselected)
+                    .appSymbol()
+            }
+            AppIconView(icon: icon, size: iconSize)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(AppFont.body)
+                        .lineLimit(1)
+                    if let badge { badge }
+                }
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(AppFont.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 6)
+            trailing()
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+}
+
+extension AppRow where Trailing == EmptyView {
+    init(icon: UIImage?, title: String, subtitle: String? = nil,
+         badge: AnyView? = nil, selection: Bool? = nil, iconSize: CGFloat = 44) {
+        self.init(icon: icon, title: title, subtitle: subtitle, badge: badge,
+                  selection: selection, trailing: { EmptyView() }, iconSize: iconSize)
+    }
+}
+
 /// 行内错误提示（v0.3.630 新增）.
 ///
 /// ## 为什么要有它
