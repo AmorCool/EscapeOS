@@ -95,7 +95,8 @@ final class CellularTunnelManager: @unchecked Sendable {
         let turnedOff = Self.runSync { await self.turnOffDataIfNeeded() }
         if !turnedOff {
             // 没关成（快捷指令没装 / 没被受理）—— 不阻断，由后续 ensureHeartbeat 如实报错。
-            LogManager.shared.debug("[Cellular] 关蜂窝未执行，继续尝试建隧道")
+            LoginLogger.shared.log("[Cellular] 关蜂窝未执行，继续尝试建隧道",
+                                  category: .general)
         }
 
         let ready = waitForTunnelReady(timeout: Self.readyTimeout)
@@ -279,7 +280,8 @@ final class CellularTunnelManager: @unchecked Sendable {
         guard !didTurnOffData else { return false }
         // Wi-Fi 下不跑快捷指令（SideStore 同款闸门）。
         guard !Self.isWiFiSatisfied() else {
-            LogManager.shared.debug("[Cellular] Wi-Fi 已连接，跳过关闭蜂窝快捷指令")
+            LoginLogger.shared.log("[Cellular] Wi-Fi 已连接，跳过关闭蜂窝快捷指令",
+                                  category: .general)
             return false
         }
 
