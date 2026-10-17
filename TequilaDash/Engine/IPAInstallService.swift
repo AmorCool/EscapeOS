@@ -738,7 +738,13 @@ final class IPAInstallService: ObservableObject, @unchecked Sendable {
             return installation_proxy_install_with_callback(ip, p, options, progressCallback, nil)
         }
         if let result {
-            throw error(from: result, fallback: "加密包安装失败（sinf 可能与本设备不匹配）")
+            // 覆盖安装失败时必须说清后果：installd 的 Install 对同 bundleId 的已装应用天然覆盖
+            // （AppStoreLocalInstallService.swift:7-8 的注释自己承认这一点）。覆盖过程中途失败时，
+            // installd 可能已经移除了旧版本而新版本未通过校验 —— 用户原有的 App 就此丢失，
+            // 而本链路既没有备份也没有回滚能力（四个安装入口都没有）。
+            // 不能假装「装失败了，原来的还在」，所以这里把风险明确写进错误文案。
+            let base = error(from: result, fallback: "加密包安装失败（sinf 可能与本设备不匹配）")
+            throw makeError("\(base.localizedDescription) 若该应用此前已安装，系统可能已移除旧版本且无法自动恢复，请重新安装原版本.")
         }
     }
 

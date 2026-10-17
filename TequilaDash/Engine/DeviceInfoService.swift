@@ -178,7 +178,19 @@ enum DeviceInfoService {
         }
 
         // 隧道拿 lockdown 整棵字典（核心数据）
-        let lockdown = (try? Self.lockdownFullDict()) ?? [:]
+        //
+        // v0.3.621：**整个 collectFull 只建一条隧道**。
+        // 原先下面 10 处各自调 makeTunnel()，每处都是「读配对文件 + 3 次 RSD 握手重试 +
+        // CellularTunnelManager.prepareForTunnel」⇒ 一次刷新 10 条完整 RSD 隧道；
+        // 且第一条失败（如 VPN 没开）时后面 9 条仍各跑 3 次重试，失败场景 UI 长时间无响应。
+        // 现在建一条，把 adapter/handshake 传给各 lockdown 变体；建不起来就整体降级为空，
+        // 不再重复尝试。
+        var sharedTunnel: TunnelHandles? = try? Self.makeTunnel()
+        defer { sharedTunnel?.free() }
+        let sharedAdapter = sharedTunnel?.adapter
+        let sharedHandshake = sharedTunnel?.handshake
+
+        let lockdown = (try? Self.lockdownFullDictOrFallback(sharedAdapter, sharedHandshake)) ?? [:]
         let region = Self.parseRegion(lockdown["RegionInfo"] as? String)
         let isJailbroken = (try? Self.isacJailbroken()) ?? nil
         let productionSOC = lockdown["ProductionSOC"] as? Bool
@@ -197,17 +209,17 @@ enum DeviceInfoService {
         let enrich: DeviceEnrichInfo? = try? DeviceEnrichService.fetch()
 
         // v0.3.285：爱思同款域采集（逆向 idm_info.dll 得出的域清单）
-        let itunes = (try? Self.lockdownDomainDict("com.apple.mobile.iTunes")) ?? [:]
-        let batteryDomain = (try? Self.lockdownDomainDict("com.apple.mobile.battery")) ?? [:]
-        let chaperone = (try? Self.lockdownDomainDict("com.apple.mobile.chaperone")) ?? [:]
+        let itunes = (try? Self.lockdownDomainDictOrFallback("com.apple.mobile.iTunes", sharedAdapter, sharedHandshake)) ?? [:]
+        let batteryDomain = (try? Self.lockdownDomainDictOrFallback("com.apple.mobile.battery", sharedAdapter, sharedHandshake)) ?? [:]
+        let chaperone = (try? Self.lockdownDomainDictOrFallback("com.apple.mobile.chaperone", sharedAdapter, sharedHandshake)) ?? [:]
 
         // v0.3.322：激活锁 / iCloud（键与爱思 idm_info.dll 的 ios_check_fmip / ios_check_iCloud 同源）
         // · 激活锁 = `com.apple.fmip` → `IsAssociated`（真机实测 false = 未开启，与爱思一致）
         // · iCloud = `com.apple.mobile.data_sync` 的 Bookmarks/Calendars/Contacts/Notes 里
         //   `AccountNames` 含 "iCloud"（真机实测本机四项都有 iCloud，与爱思「已开启」一致）
-        let activationLock = (try? Self.lockdownValue(domain: "com.apple.fmip",
+        let activationLock = (try? Self.lockdownValueOrFallback(domain: "com.apple.fmip",
                                                      key: "IsAssociated")) as? Bool
-        let dataSync = (try? Self.lockdownDomainDict("com.apple.mobile.data_sync")) ?? [:]
+        let dataSync = (try? Self.lockdownDomainDictOrFallback("com.apple.mobile.data_sync", sharedAdapter, sharedHandshake)) ?? [:]
         var iCloudSignedIn: Bool? = nil
         if !dataSync.isEmpty {
             iCloudSignedIn = dataSync.values.contains { value in
@@ -252,7 +264,7 @@ enum DeviceInfoService {
         var totalDisk: Int64? = nil
         var totalData: Int64? = nil
         var totalSystem: Int64? = nil
-        if let du = try? Self.lockdownDomainDict("com.apple.disk_usage") {
+        if let du = try? Self.lockdownDomainDictOrFallback("com.apple.disk_usage", sharedAdapter, sharedHandshake) {
             totalDisk = (du["TotalDataCapacity"] as? Int).map(Int64.init)
                 ?? (du["TotalDiskCapacity"] as? Int).map(Int64.init)
             totalData = (du["TotalDataCapacity"] as? Int).map(Int64.init)
@@ -534,6 +546,116 @@ enum DeviceInfoService {
         defer { plist_mem_free(binPtr) }
         return try? PropertyListSerialization.propertyList(
             from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil)
+    }
+
+    // MARK: - 复用同一条隧道的变体（v0.3.621）
+    //
+    // 原先 collectFull 里 10 处 `try? Self.lockdownXxx()` 各自调 makeTunnel()，
+    // 每次都是「读配对文件 + 3 次 RSD 握手重试 + CellularTunnelManager.prepareForTunnel」。
+    // 一次设备信息刷新 = 10 条完整 RSD 隧道；而且第一条失败（比如 VPN 没开）时，
+    // 后面 9 条仍各自完整跑 3 次重试 ⇒ 失败场景 UI 长时间无响应。
+    //
+    // 下面这组变体把已建好的隧道句柄传进来，让 collectFull 全程只用一条。
+    // 语义与对应的自建隧道版本完全一致，只是不再自己建/释放隧道。
+
+    /// 用已建好的隧道读整棵 lockdown 根字典
+    static func lockdownFullDict(adapter: OpaquePointer, handshake: OpaquePointer) throws -> [String: Any] {
+        var client: OpaquePointer?
+        guard lockdownd_connect_rsd(adapter, handshake, &client) == nil, let client else {
+            throw NSError(domain: "DeviceInfo", code: -11, userInfo: [NSLocalizedDescriptionKey: "连接 lockdownd 失败"])
+        }
+        defer { lockdownd_client_free(client) }
+        var node: plist_t?
+        guard lockdownd_get_value(client, nil, nil, &node) == nil, let node else {
+            throw NSError(domain: "DeviceInfo", code: -12, userInfo: [NSLocalizedDescriptionKey: "GetValue 失败"])
+        }
+        defer { plist_free(node) }
+        return Self.dictFromPlist(node)
+    }
+
+    /// 用已建好的隧道读某个 lockdown 域
+    static func lockdownDomainDict(_ domain: String,
+                                   adapter: OpaquePointer,
+                                   handshake: OpaquePointer) throws -> [String: Any] {
+        var client: OpaquePointer?
+        guard lockdownd_connect_rsd(adapter, handshake, &client) == nil, let client else {
+            throw NSError(domain: "DeviceInfo", code: -21, userInfo: [NSLocalizedDescriptionKey: "连接失败"])
+        }
+        defer { lockdownd_client_free(client) }
+        var node: plist_t?
+        let rc = domain.withCString { domainCStr in
+            lockdownd_get_value(client, nil, domainCStr, &node)
+        }
+        guard rc == nil, let node else {
+            throw NSError(domain: "DeviceInfo", code: -22, userInfo: [NSLocalizedDescriptionKey: "GetValue 失败"])
+        }
+        defer { plist_free(node) }
+        return Self.dictFromPlist(node)
+    }
+
+    /// 用已建好的隧道读 lockdown 的单个键
+    static func lockdownValue(domain: String, key: String,
+                              adapter: OpaquePointer,
+                              handshake: OpaquePointer) throws -> Any? {
+        var client: OpaquePointer?
+        guard lockdownd_connect_rsd(adapter, handshake, &client) == nil, let client else {
+            throw NSError(domain: "DeviceInfo", code: -31,
+                          userInfo: [NSLocalizedDescriptionKey: "连接失败"])
+        }
+        defer { lockdownd_client_free(client) }
+        var node: plist_t?
+        let rc = key.withCString { keyCStr in
+            domain.withCString { domainCStr in
+                lockdownd_get_value(client, keyCStr, domainCStr, &node)
+            }
+        }
+        guard rc == nil, let node else {
+            throw NSError(domain: "DeviceInfo", code: -32,
+                          userInfo: [NSLocalizedDescriptionKey: "GetValue 失败"])
+        }
+        defer { plist_free(node) }
+        var binPtr: UnsafeMutablePointer<CChar>?
+        var binLen: UInt32 = 0
+        guard plist_to_bin(node, &binPtr, &binLen) == PLIST_ERR_SUCCESS,
+              let binPtr, binLen > 0 else { return nil }
+        defer { plist_mem_free(binPtr) }
+        return try? PropertyListSerialization.propertyList(
+            from: Data(bytes: binPtr, count: Int(binLen)), options: [], format: nil)
+    }
+
+    // MARK: - 共享隧道入口的兜底包装（v0.3.621）
+    //
+    // 隧道没建起来时（sharedAdapter/sharedHandshake 为 nil），这些包装直接抛错，
+    // 让调用方的 `try?` 拿到 nil —— 与原先「各自建隧道、失败返回 nil」的行为一致，
+    // 只是不再重复尝试建隧道。
+
+    private static func lockdownFullDictOrFallback(_ adapter: OpaquePointer?,
+                                                   _ handshake: OpaquePointer?) throws -> [String: Any] {
+        guard let adapter, let handshake else {
+            throw NSError(domain: "DeviceInfo", code: -10,
+                          userInfo: [NSLocalizedDescriptionKey: "隧道未建立"])
+        }
+        return try lockdownFullDict(adapter: adapter, handshake: handshake)
+    }
+
+    private static func lockdownDomainDictOrFallback(_ domain: String,
+                                                     _ adapter: OpaquePointer?,
+                                                     _ handshake: OpaquePointer?) throws -> [String: Any] {
+        guard let adapter, let handshake else {
+            throw NSError(domain: "DeviceInfo", code: -20,
+                          userInfo: [NSLocalizedDescriptionKey: "隧道未建立"])
+        }
+        return try lockdownDomainDict(domain, adapter: adapter, handshake: handshake)
+    }
+
+    private static func lockdownValueOrFallback(domain: String, key: String,
+                                                _ adapter: OpaquePointer?,
+                                                _ handshake: OpaquePointer?) throws -> Any? {
+        guard let adapter, let handshake else {
+            throw NSError(domain: "DeviceInfo", code: -30,
+                          userInfo: [NSLocalizedDescriptionKey: "隧道未建立"])
+        }
+        return try lockdownValue(domain: domain, key: key, adapter: adapter, handshake: handshake)
     }
 
     private static func dictFromPlist(_ node: plist_t) -> [String: Any] {

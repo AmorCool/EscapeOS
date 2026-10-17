@@ -111,6 +111,21 @@ enum FileSharingService {
         NSError(domain: "FileSharing", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
+    /// 把 FFI 错误对象转成 NSError —— 与 AFCService.error(from:fallback:) 同款.
+    ///
+    /// 为什么必须有这一层：FFI 返回的是 `IdeviceFfiError*`，里面带 `code` 和 `message`。
+    /// 旧代码在 6 处写的是「只判非 nil 就丢一句固定文案」，既丢掉了真实原因
+    /// （Afc(PermDenied) / Afc(ObjectNotFound) / 连接已断 全变成同一句「删除失败：<path>」），
+    /// 也**没有 free 那个错误对象** ⇒ 每次失败泄漏一个。
+    static func error(from ffiError: UnsafeMutablePointer<IdeviceFfiError>?, fallback: String) -> NSError {
+        guard let ffiError else { return makeError(fallback) }
+        let message = ffiError.pointee.message.map { String(cString: $0) } ?? ""
+        let code = Int(ffiError.pointee.code)
+        idevice_error_free(ffiError)
+        return NSError(domain: "FileSharing", code: code,
+                       userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? fallback : message])
+    }
+
     /// RSD 隧道并发铁律（AFCService.swift:15 同款）：**同一 hostname 并发
     /// `tunnel_create_rppairing` 会互相抢占**. 本服务建隧道用的 hostname 固定为
     /// "TequilaDashFileShare"（见下方 makeTunnel），而 v0.3.369 起：
@@ -1008,7 +1023,7 @@ enum FileSharingService {
     /// 新建目录
     static func makeDirectory(afc: OpaquePointer, path: String) throws {
         let rc = path.withCString { afc_make_directory(afc, $0) }
-        guard rc == nil else { throw makeError("新建目录失败：\(path)") }
+        guard rc == nil else { throw error(from: rc, fallback: "新建目录失败：\(path)") }
     }
 
     /// 重命名 / 移动
@@ -1016,7 +1031,7 @@ enum FileSharingService {
         let rc = from.withCString { src in
             to.withCString { dst in afc_rename_path(afc, src, dst) }
         }
-        guard rc == nil else { throw makeError("重命名失败：\(from)") }
+        guard rc == nil else { throw error(from: rc, fallback: "重命名失败：\(from)") }
     }
 
     /// 删除（目录需递归删 → 用 remove_path_and_contents）
@@ -1028,7 +1043,7 @@ enum FileSharingService {
                 afc_remove_path(afc, cstr)
             }
         }
-        guard rc == nil else { throw makeError("删除失败：\(path)") }
+        guard rc == nil else { throw error(from: rc, fallback: "删除失败：\(path)") }
     }
 
     /// 下载整个文件到内存（afc_file_read_entire 一次读，AFCService 同款范式）
@@ -1039,12 +1054,12 @@ enum FileSharingService {
         }
         var handle: OpaquePointer?
         let rc = path.withCString { afc_file_open(afc, $0, AfcRdOnly, &handle) }
-        guard rc == nil, let handle else { throw makeError("打开文件失败") }
+        guard rc == nil, let handle else { throw error(from: rc, fallback: "打开文件失败：\(path)") }
         defer { afc_file_close(handle) }
         var dataPtr: UnsafeMutablePointer<UInt8>? = nil
         var length: Int = 0
         if let r = afc_file_read_entire(handle, &dataPtr, &length) {
-            throw makeError("读取失败")
+            throw error(from: r, fallback: "读取失败：\(path)")
         }
         defer { if let dataPtr { afc_file_read_data_free(dataPtr, length) } }
         guard let dataPtr, length > 0 else { return Data() }
@@ -1057,7 +1072,7 @@ enum FileSharingService {
         let total = fileSize(afc: afc, path: path) ?? 0
         var handle: OpaquePointer?
         let rc = path.withCString { afc_file_open(afc, $0, AfcRdOnly, &handle) }
-        guard rc == nil, let handle else { throw makeError("打开文件失败：\(path)") }
+        guard rc == nil, let handle else { throw error(from: rc, fallback: "打开文件失败：\(path)") }
         defer { afc_file_close(handle) }
         FileManager.default.createFile(atPath: dest.path, contents: nil)
         guard let fh = try? FileHandle(forWritingTo: dest) else {
@@ -1075,7 +1090,7 @@ enum FileSharingService {
                 done += Int64(readLen)
                 progress(done, total)
             }
-            if r != nil { throw makeError("读取失败：\(path)") }
+            if let r { throw error(from: r, fallback: "读取失败：\(path)") }
             if readLen <= 0 { break }
         }
     }
@@ -1093,7 +1108,7 @@ enum FileSharingService {
             while offset < data.count {
                 let chunk = min(chunkSize, data.count - offset)
                 if let r = afc_file_write(handle, base.advanced(by: offset), chunk) {
-                    throw makeError("写入失败：\(path)")
+                    throw error(from: r, fallback: "写入失败：\(path)")
                 }
                 offset += chunk
             }
