@@ -114,7 +114,12 @@ jobs:
           # 因此两个 job 各自算出的值天然可比。
           # 注：TequilaDashTunnel 是 Phase 2 新增的扩展源码目录（不在 TequilaDash/ 下），
           # 必须一并纳入，否则「只改扩展源码」的提交会与旧产物 hash 相同 ⇒ 误判可复用。
-          CUR_HASH="$(git ls-tree -r HEAD -- TequilaDash TequilaDashTunnel project.yml | shasum -a 256 | cut -d' ' -f1)"
+          # 与 xcode-build job 共用同一脚本（原先两处各写一遍同一条 git ls-tree，
+          # 只覆盖 TequilaDash / TequilaDashTunnel / project.yml，实测漏掉 7 类真实构建输入：
+          # Resources/Info.plist（版本号就在里面）、两个 entitlements、BundledModules、
+          # ZSign、vendor、Resources/Scripts —— 只改这些 + 打 tag 会算出相同 hash，
+          # 导致 promote 复用旧 IPA 发 Release，而 Release 挂的是新 tag）。
+          CUR_HASH="$(bash Resources/Scripts/promote_hash.sh)"
           echo "current source hash: $CUR_HASH"
 
           REUSE=false
@@ -761,8 +766,10 @@ jobs:
         # 不受本 job 之前/之后对工作区的任何改动影响，故两个 job 算出的值可比。
         run: |
           set -euo pipefail
-          git ls-tree -r HEAD -- TequilaDash TequilaDashTunnel project.yml | shasum -a 256 | cut -d' ' -f1 > promote-hash.txt
+          # 与 promote job 共用同一脚本，杜绝两份实现再次分叉（详见脚本头注释）。
+          bash Resources/Scripts/promote_hash.sh > promote-hash.txt
           echo "promote-hash: $(cat promote-hash.txt)"
+          echo "纳入 hash 的输入文件数: $(bash Resources/Scripts/promote_hash.sh --list)"
 
       - name: Upload IPA
         if: always()

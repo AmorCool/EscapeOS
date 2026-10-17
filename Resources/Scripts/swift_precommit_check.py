@@ -32,6 +32,25 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable or "python"
 
+def _force_utf8_stdio():
+    """把自身与子进程的输出强制成 UTF-8。
+
+    中文 Windows 的默认 stdio 编码是 GBK，本脚本标题里的符号
+    以及各守卫脚本的中文报告都会触发 UnicodeEncodeError，表现为
+    「python swift_precommit_check.py . 直接抛 Traceback」——
+    而它本该是「改完就能跑」的自检入口，跑不起来等于自检不存在。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+    os.environ["PYTHONUTF8"] = "1"
+
+
+_force_utf8_stdio()
+
 # (标题, 脚本文件名, 是否支持 --strict)
 CHECKS = [
     ("顶层类型重名普查", "swift_top_level_type_collision.py", False),
@@ -48,6 +67,7 @@ CHECKS = [
     ("本机 Anisette 契约防复发", "swift_anisette_contract_guard.py", False),
     ("ObjC 桥接调用口径防复发", "swift_objc_bridge_guard.py", False),
     ("禁用通话录音走 airlift 防复发", "swift_airlift_guard.py", False),
+    ("版本号三处同步防复发", "swift_version_sync_guard.py", False),
 ]
 
 

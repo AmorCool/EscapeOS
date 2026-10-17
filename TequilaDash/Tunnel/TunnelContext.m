@@ -99,8 +99,31 @@
     // 选择器首段、再要求 `lock` 带 `:`，报 `error: expected ':'`。
     // 直接用 ivar（`[_handleLock lock]`）或显式 `self->_handleLock`。
     [_handleLock lock];
+    globalHeartbeatToken++;          // 让进行中的 worker（如有）写回时能被识别为过期
     [self _freeTunnelHandles];
     [_handleLock unlock];
+}
+
+/// 心跳线程报告隧道已死：清掉句柄，让下一次 ensureHeartbeat 真的重建.
+///
+/// 只在 token 仍然匹配时动手 —— 否则说明已经换了新隧道，这条通知属于旧 worker，
+/// 清理会误杀新句柄.
+- (void)_providerDiedWithToken:(int)token reason:(NSString *)reason code:(int)code {
+    [_handleLock lock];
+    BOOL stale = (token != globalHeartbeatToken);
+    if (!stale && _provider != NULL) {
+        NSLog(@"[TequilaDash] heartbeat died (code=%d, %@) —— 清理隧道句柄以便下次重建",
+              code, reason ?: @"");
+        [self _freeTunnelHandles];   // 内部会 globalHeartbeatToken++ 并释放 provider
+    }
+    [_handleLock unlock];
+    if (stale) {
+        return;
+    }
+    os_unfair_lock_lock(&_tunnelLock);
+    _lastTunnelError = [self _error:[NSString stringWithFormat:@"隧道心跳中断：%@", reason ?: @"unknown"]
+                               code:code];
+    os_unfair_lock_unlock(&_tunnelLock);
 }
 
 /// 释放全部隧道句柄. **调用方必须已持有 `_handleLock`**（递归锁，允许嵌套）.
@@ -261,11 +284,21 @@
     dispatch_semaphore_t firstBeat = dispatch_semaphore_create(0);
     int token = ++globalHeartbeatToken;
 
+    __block BOOL firstCallback = YES;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         startHeartbeat(pf, &provider, token, ^(int result, const char *message) {
-            hbCode = result;
-            hbMsg = message ? @(message) : nil;
-            dispatch_semaphore_signal(firstBeat);
+            if (firstCallback) {
+                firstCallback = NO;
+                hbCode = result;
+                hbMsg = message ? @(message) : nil;
+                dispatch_semaphore_signal(firstBeat);
+                return;
+            }
+            // 首拍之后的心跳死亡通知（heartbeat.m 在 marco/polo 失败与超时时回调）：
+            // 必须把句柄清掉，否则 hasActiveTunnel 仍返回 YES、ensureHeartbeat 因「已有句柄」
+            // 直接返回成功而不重建 —— 症状是「一直连着但所有操作都失败」，只能重启 App。
+            if (result == 0) { return; }
+            [self _providerDiedWithToken:token reason:(message ? @(message) : nil) code:result];
         });
     });
 
@@ -282,17 +315,15 @@
         return NO;
     }
 
-    if (_handshake) {
-        rsd_handshake_free(_handshake);
-        _handshake = NULL;
+    // 换隧道时必须停掉旧心跳线程：旧 worker 唯一的退出信号是 globalHeartbeatToken.
+    // 原先这里手写了一遍释放而漏掉 token++，导致每建一次 lockdown 隧道就多一条
+    // 永不退出的心跳线程（对照 _freeTunnelHandles 的正确实现）。
+    // 这里复用 _freeTunnelHandles —— 调用方本就在 _handleLock 内，递归锁允许嵌套。
+    if (_provider == provider) {
+        // 同一句柄重入：既不能释放它，也不能停掉正在服务它的心跳。
+        return YES;
     }
-    if (_adapter) {
-        adapter_free(_adapter);
-        _adapter = NULL;
-    }
-    if (_provider && _provider != provider) {
-        idevice_provider_free(_provider);
-    }
+    [self _freeTunnelHandles];
     _provider = provider;
     return YES;
 }
@@ -340,16 +371,28 @@
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
             @autoreleasepool {
                 NSError *createErr = nil;
-                [self->_handleLock lock];
-                BOOL ok = [self _createTunnel:&createErr];
-                [self->_handleLock unlock];
-                os_unfair_lock_lock(&self->_tunnelLock);
-                self->_lastTunnelError = ok ? nil :
-                    (createErr ?: [self _error:@"Failed to connect over LocalDevVPN." code:-1]);
-                self->_tunnelConnecting = NO;
-                self->_tunnelSemaphore = NULL;
-                os_unfair_lock_unlock(&self->_tunnelLock);
-                dispatch_semaphore_signal(completionSem);
+                BOOL ok = NO;
+                // 必须 @try/@finally：_createTunnel 内部任何一处 @throw 跳出时，
+                // 若跳过下面的 _tunnelConnecting = NO，闸门就永久卡在 YES ——
+                // 此后所有调用都走 -8（建连中，快速失败），只能重启 App 才能恢复。
+                @try {
+                    [self->_handleLock lock];
+                    ok = [self _createTunnel:&createErr];
+                    [self->_handleLock unlock];
+                } @catch (NSException *ex) {
+                    ok = NO;
+                    createErr = [self _error:[NSString stringWithFormat:@"建连时抛出异常：%@（%@）",
+                        ex.reason ?: @"", ex.name ?: @""]
+                                        code:-1];
+                } @finally {
+                    os_unfair_lock_lock(&self->_tunnelLock);
+                    self->_lastTunnelError = ok ? nil :
+                        (createErr ?: [self _error:@"Failed to connect over LocalDevVPN." code:-1]);
+                    self->_tunnelConnecting = NO;
+                    self->_tunnelSemaphore = NULL;
+                    os_unfair_lock_unlock(&self->_tunnelLock);
+                    dispatch_semaphore_signal(completionSem);
+                }
             }
         });
     }

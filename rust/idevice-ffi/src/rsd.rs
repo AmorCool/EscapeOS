@@ -228,10 +228,16 @@ pub unsafe extern "C" fn rsd_get_services(
         c_services.push(c_service);
     }
 
+    // 注意：这里必须用 c_services.len()，不能用上面预取的 count。
+    // 循环里 CString::new 失败会 continue，于是实际元素数可能少于 service_map.len()；
+    // into_boxed_slice() 会把分配收缩到真实 len，但释放端 rsd_free_services 是按
+    // CRsdServiceArray.count 遍历的 —— 若这里写预取的 count，就会越界读，
+    // 并对越界位置上的垃圾指针调 CString::from_raw，导致堆破坏。
+    let actual_count = c_services.len();
     let boxed_services = c_services.into_boxed_slice();
     let array = Box::new(CRsdServiceArray {
         services: Box::into_raw(boxed_services) as *mut CRsdService,
-        count,
+        count: actual_count,
     });
 
     unsafe { *services = Box::into_raw(array) };

@@ -244,8 +244,11 @@ targets:
         # 这里取主 bundle id + ".tunnel"，与 BuiltInTunnel.providerBundleID 的约定一致.
         PRODUCT_BUNDLE_IDENTIFIER: com.tequila.dash.tunnel
         PRODUCT_NAME: TequilaDashTunnel
-        MARKETING_VERSION: "0.3.587"
-        CURRENT_PROJECT_VERSION: "881"
+        # 版本号三处同步（HARD-RULES 22）：主 App 的 settings.base 与 Resources/Info.plist 之外，
+        # 扩展 target 是第三处 —— 原先这里停在 0.3.587/881（落后主 App 33 个版本），
+        # 会让 .appex 的 CFBundleVersion 与主 App 不一致，iOS 安装/升级可拒或把扩展判过期。
+        MARKETING_VERSION: "0.3.620"
+        CURRENT_PROJECT_VERSION: "910"
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
         # 与主 target 同口径的 Swift 6 严格并发（详见主 target 的说明）.
         SWIFT_VERSION: "6.0"

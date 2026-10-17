@@ -90,7 +90,11 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         err = heartbeat_get_marco(client, current_interval, &new_interval);
         if (err != NULL) {
             fprintf(stderr, "Failed to get marco: [%d] %s token = %d, pthread_self = %p\n", err->code, err->message, heartbeatToken, pthread_self());
-            if(!completionCalled) {
+            // 首拍之后心跳断了也必须通知：原先这里被 completionCalled 挡住，
+            // 结果 TunnelContext 仍把 _provider 当可用隧道（hasActiveTunnel 返回 YES），
+            // ensureHeartbeat 因「已有句柄」直接返回成功、不再重建 ——
+            // 用户看到的是「一直连着，但所有操作都失败」。
+            if (heartbeatToken == globalHeartbeatToken) {
                 completionCalled = true;
                 completion(err->code, err->message);
             }
@@ -113,7 +117,8 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         err = heartbeat_send_polo(client);
         if (err != NULL) {
             fprintf(stderr, "Failed to get marco: [%d] %s", err->code, err->message);
-            if(!completionCalled) {
+            // 同上：心跳中途断掉要通知，否则隧道死了没人知道.
+            if (heartbeatToken == globalHeartbeatToken) {
                 completionCalled = true;
                 completion(err->code, err->message);
             }
@@ -126,6 +131,11 @@ void startHeartbeat(IdevicePairingFile* pairing_file, IdeviceProviderHandle** pr
         if (lastHeartbeatDate && [[NSDate now] timeIntervalSinceDate:lastHeartbeatDate] > current_interval) {
             lastHeartbeatDate = nil;
             // 超时退出同样要释放心跳客户端（原先直接 return 泄漏了 client）.
+            // 同时必须回调：否则调用方只能干等 firstBeat 的 30s 超时，拿不到真实原因.
+            if (heartbeatToken == globalHeartbeatToken) {
+                completionCalled = true;
+                completion(-1, "heartbeat timeout");
+            }
             heartbeat_client_free(client);
             return;
         }

@@ -66,10 +66,10 @@ pub unsafe extern "C" fn os_trace_relay_connect(
             unsafe { *client = Box::into_raw(boxed) };
             null_mut()
         }
-        Err(e) => {
-            let _ = unsafe { Box::from_raw(provider) };
-            ffi_err!(e)
-        }
+        // The provider is borrowed, not consumed by connect(). Its owner may
+        // retry or free it later; freeing it here causes use-after-free.
+        // （v0.3.616 修 springboardservices.rs 时漏了同源的三处，此处补齐）
+        Err(e) => ffi_err!(e),
     }
 }
 
